@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>平台统计后台</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">S</div>
+        <div>
+          <h1>Stats Board</h1>
+          <p>平台统计后台</p>
+        </div>
+      </div>
+
+      <nav class="menu">
+        <a href="#" class="menu-item active">数据总览</a>
+        <a href="#" class="menu-item">平台明细</a>
+        <a href="#" class="menu-item">趋势分析</a>
+        <a href="#" class="menu-item">区间查询</a>
+      </nav>
+
+      <div class="sidebar-note">
+        <h3>当前版本</h3>
+        <p>免费静态版</p>
+        <span>先部署网页，后面再接真实数据。</span>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <h2>每日平台统计</h2>
+          <p>支持日期区间、平台筛选、金额人数统计</p>
+        </div>
+        <button id="refreshBtn" class="primary-btn">刷新演示数据</button>
+      </header>
+
+      <section class="filters card">
+        <div class="filter-group">
+          <label for="platformSelect">平台</label>
+          <select id="platformSelect"></select>
+        </div>
+        <div class="filter-group">
+          <label for="startDate">开始日期</label>
+          <input type="date" id="startDate" />
+        </div>
+        <div class="filter-group">
+          <label for="endDate">结束日期</label>
+          <input type="date" id="endDate" />
+        </div>
+        <div class="filter-actions">
+          <button id="searchBtn" class="primary-btn">查询</button>
+          <button id="resetBtn" class="ghost-btn">重置</button>
+        </div>
+      </section>
+
+      <section class="stats-grid">
+        <div class="stat-card card">
+          <span>充值金额</span>
+          <strong id="rechargeAmount">0</strong>
+        </div>
+        <div class="stat-card card">
+          <span>充值人数</span>
+          <strong id="rechargeUsers">0</strong>
+        </div>
+        <div class="stat-card card">
+          <span>提款金额</span>
+          <strong id="withdrawAmount">0</strong>
+        </div>
+        <div class="stat-card card">
+          <span>提款人数</span>
+          <strong id="withdrawUsers">0</strong>
+        </div>
+        <div class="stat-card card">
+          <span>成功笔数</span>
+          <strong id="successCount">0</strong>
+        </div>
+        <div class="stat-card card">
+          <span>失败笔数</span>
+          <strong id="failedCount">0</strong>
+        </div>
+      </section>
+
+      <section class="charts-row">
+        <div class="card chart-card">
+          <div class="section-title">
+            <h3>充值 / 提款金额趋势</h3>
+            <span>按天统计</span>
+          </div>
+          <canvas id="amountChart" height="120"></canvas>
+        </div>
+
+        <div class="card chart-card">
+          <div class="section-title">
+            <h3>成功 / 失败笔数趋势</h3>
+            <span>按天统计</span>
+          </div>
+          <canvas id="countChart" height="120"></canvas>
+        </div>
+      </section>
+
+      <section class="card table-card">
+        <div class="section-title">
+          <h3>平台每日明细</h3>
+          <span>演示数据</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>平台</th>
+                <th>充值金额</th>
+                <th>充值人数</th>
+                <th>提款金额</th>
+                <th>提款人数</th>
+                <th>成功笔数</th>
+                <th>失败笔数</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
