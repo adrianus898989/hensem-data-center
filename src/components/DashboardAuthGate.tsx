@@ -1,9 +1,12 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  changeOwnDashboardPassword,
   dashboardAuthEnabled,
+  DASHBOARD_PERMISSION_LABELS,
   fetchDashboardProfile,
+  normalizedPermissions,
   readSavedDashboardSession,
   refreshDashboardSession,
   saveDashboardSession,
@@ -36,6 +39,14 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState("");
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   function applyAuthenticated(nextSession: DashboardSession, nextProfile: DashboardProfile) {
     saveDashboardSession(nextSession);
@@ -50,6 +61,8 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     setProfile(null);
     setPassword("");
     setManageOpen(false);
+    setUserMenuOpen(false);
+    setProfileOpen(false);
     setReady(true);
   }
 
@@ -97,6 +110,15 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, session?.refresh_token]);
 
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    function onPointerDown(event: MouseEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) setUserMenuOpen(false);
+    }
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [userMenuOpen]);
+
   async function submitLogin(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -113,7 +135,44 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     }
   }
 
+  async function submitOwnPassword(event: React.FormEvent) {
+    event.preventDefault();
+    if (!session || !profile) return;
+    setPasswordMessage("");
+    if (newPassword.length < 8) {
+      setPasswordMessage("新密码至少 8 位");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordMessage("两次输入的新密码不一致");
+      return;
+    }
+    if (currentPassword === newPassword) {
+      setPasswordMessage("新密码不能和当前密码完全相同");
+      return;
+    }
+    setPasswordBusy(true);
+    try {
+      const nextSession = await changeOwnDashboardPassword(profile.username, currentPassword, newPassword);
+      const nextProfile = await fetchDashboardProfile(nextSession);
+      applyAuthenticated(nextSession, nextProfile);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordMessage("密码修改成功，新的登录会话已经生效。");
+    } catch (err) {
+      setPasswordMessage(err instanceof Error ? err.message : "修改密码失败");
+    } finally {
+      setPasswordBusy(false);
+    }
+  }
+
   const value = useMemo<AuthContextValue>(() => ({ session, profile, logout }), [session, profile]);
+  const permissionList = useMemo(() => {
+    if (!profile) return [];
+    const permissions = normalizedPermissions(profile);
+    return DASHBOARD_PERMISSION_LABELS.filter((item) => permissions[item.key]);
+  }, [profile]);
 
   if (!enabled) return <>{children}</>;
   if (!ready) {
@@ -129,15 +188,19 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       <div className="auth-login-page">
         <div className="auth-login-shell">
           <section className="auth-login-brand-panel">
-            <div className="auth-login-brand-mark">Data</div>
-            <span className="auth-login-eyebrow">HENSEM CONTROL CENTER</span>
-            <h1>数据中控平台</h1>
-            <p>统一查看业务数据、三方量与费率。账号权限由管理员集中分配。</p>
-            <div className="auth-login-feature-list">
-              <div><i>01</i><span><b>Supabase 数据层</b><small>小时自动同步，页面快速读取</small></span></div>
-              <div><i>02</i><span><b>分级账号权限</b><small>Admin 管理，Viewer 只读</small></span></div>
-              <div><i>03</i><span><b>后台操作审计</b><small>账号与手动刷新操作可追踪</small></span></div>
+            <div className="auth-login-brand-row">
+              <div className="auth-login-brand-mark">H</div>
+              <div><strong>Hensem Data Center</strong><small>Business Intelligence Workspace</small></div>
             </div>
+            <span className="auth-login-eyebrow">HENSEM CONTROL CENTER</span>
+            <h1>业务数据中控</h1>
+            <p>统一查看核心业务数据、三方量与费率。权限由管理员集中分配，访问记录可追踪。</p>
+            <div className="auth-login-feature-list">
+              <div><i>01</i><span><b>统一数据中心</b><small>后台自动同步，页面按需快速读取</small></span></div>
+              <div><i>02</i><span><b>分级账号权限</b><small>Admin 管理，Viewer 只读查看</small></span></div>
+              <div><i>03</i><span><b>安全访问控制</b><small>会话续期、权限隔离、操作审计</small></span></div>
+            </div>
+            <div className="auth-login-brand-foot">HENSEM · INTERNAL DATA SYSTEM</div>
           </section>
 
           <form className="auth-login-card" onSubmit={submitLogin}>
@@ -152,7 +215,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
             <div className="auth-input-wrap"><span>⌁</span><input type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="请输入密码" /><button type="button" onClick={() => setShowPassword((value) => !value)}>{showPassword ? "隐藏" : "显示"}</button></div>
             {error && <div className="auth-login-error">{error}</div>}
             <button className="auth-login-submit" type="submit" disabled={busy}>{busy ? "正在验证..." : "登录数据中控"}</button>
-            <div className="auth-login-security"><span>●</span>加密登录 · 权限隔离 · 会话自动续期</div>
+            <div className="auth-login-security"><span>●</span>安全登录 · 权限隔离 · 会话自动续期</div>
           </form>
         </div>
       </div>
@@ -162,11 +225,67 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   return (
     <AuthContext.Provider value={value}>
       {children}
-      <div className="auth-session-pill">
-        <div><b>{profile.username}</b><span>{profile.role === "admin" ? "Administrator" : "Viewer · 只读"}</span></div>
-        {profile.role === "admin" && <button className="admin-entry-btn" type="button" onClick={() => setManageOpen(true)}>管理后台</button>}
-        <button type="button" onClick={logout}>退出</button>
+
+      <div className="auth-user-menu-wrap" ref={menuRef}>
+        <button className={userMenuOpen ? "auth-user-trigger open" : "auth-user-trigger"} type="button" onClick={() => setUserMenuOpen((value) => !value)}>
+          <span className="auth-user-avatar">{profile.username.slice(0, 1).toUpperCase()}</span>
+          <span className="auth-user-copy"><b>{profile.username}</b><small>{profile.role === "admin" ? "Administrator" : "Viewer"}</small></span>
+          <span className="auth-user-chevron">⌄</span>
+        </button>
+        {userMenuOpen && (
+          <div className="auth-user-dropdown">
+            <div className="auth-user-dropdown-head">
+              <span className="auth-user-avatar large">{profile.username.slice(0, 1).toUpperCase()}</span>
+              <div><b>{profile.username}</b><small>{profile.role === "admin" ? "Administrator · 全部权限" : "Viewer · 只读账号"}</small></div>
+            </div>
+            <button type="button" onClick={() => { setProfileOpen(true); setUserMenuOpen(false); }}>个人资料与密码</button>
+            {profile.role === "admin" && <button type="button" onClick={() => { setManageOpen(true); setUserMenuOpen(false); }}>管理后台</button>}
+            <div className="auth-user-dropdown-line" />
+            <button className="danger" type="button" onClick={logout}>退出登录</button>
+          </div>
+        )}
       </div>
+
+      {profileOpen && (
+        <div className="profile-center-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setProfileOpen(false); }}>
+          <section className="profile-center-card">
+            <header className="profile-center-header">
+              <div><span>ACCOUNT CENTER</span><h2>个人资料</h2><p>查看账号权限并安全修改自己的登录密码。</p></div>
+              <button type="button" onClick={() => setProfileOpen(false)}>关闭</button>
+            </header>
+            <div className="profile-center-grid">
+              <div className="profile-overview-panel">
+                <div className="profile-big-avatar">{profile.username.slice(0, 1).toUpperCase()}</div>
+                <h3>{profile.username}</h3>
+                <span className={profile.role === "admin" ? "profile-role admin" : "profile-role"}>{profile.role === "admin" ? "ADMINISTRATOR" : "VIEWER"}</span>
+                <dl>
+                  <div><dt>账号状态</dt><dd>正常</dd></div>
+                  <div><dt>账号角色</dt><dd>{profile.role === "admin" ? "管理员" : "查看账号"}</dd></div>
+                  <div><dt>可查看模块</dt><dd>{profile.role === "admin" ? "全部模块" : `${permissionList.length} 个模块`}</dd></div>
+                </dl>
+                <div className="profile-permission-chips">
+                  {permissionList.map((item) => <span key={item.key}>{item.label}</span>)}
+                </div>
+              </div>
+
+              <form className="profile-password-panel" onSubmit={submitOwnPassword}>
+                <span>SECURITY</span>
+                <h3>修改登录密码</h3>
+                <p>修改前会先验证当前密码。新密码保存后，系统会自动建立新的登录会话。</p>
+                <label>当前密码</label>
+                <input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} placeholder="输入当前密码" />
+                <label>新密码</label>
+                <input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="至少 8 位" />
+                <label>确认新密码</label>
+                <input type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="再次输入新密码" />
+                {passwordMessage && <div className={passwordMessage.includes("成功") ? "profile-password-message ok" : "profile-password-message"}>{passwordMessage}</div>}
+                <button type="submit" disabled={passwordBusy}>{passwordBusy ? "正在修改..." : "保存新密码"}</button>
+              </form>
+            </div>
+          </section>
+        </div>
+      )}
+
       {profile.role === "admin" && session && (
         <AdminControlCenter open={manageOpen} session={session} profile={profile} onClose={() => setManageOpen(false)} />
       )}

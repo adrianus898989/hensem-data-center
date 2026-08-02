@@ -1,6 +1,6 @@
 {
-  "name": "auto-withdraw-dashboard",
-  "version": "2.3.8",
+  "name": "hensem-data-center",
+  "version": "2.4.6",
   "private": true,
   "scripts": {
     "dev": "next dev",

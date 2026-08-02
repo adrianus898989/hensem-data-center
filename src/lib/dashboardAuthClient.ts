@@ -193,12 +193,52 @@ export async function resetViewerPassword(session: DashboardSession, username: s
   return await callAdminFunction(session, { action: "reset-password", username, password });
 }
 
+export async function changeOwnDashboardPassword(username: string, currentPassword: string, newPassword: string): Promise<DashboardSession> {
+  if (!String(currentPassword || "")) throw new Error("请输入当前密码");
+  if (String(newPassword || "").length < 8) throw new Error("新密码至少 8 位");
+  if (String(newPassword || "").length > 128) throw new Error("新密码太长");
+
+  // 先用当前密码重新验证一次，避免仅凭浏览器里残留的会话就能直接改密码。
+  const verifiedSession = await signInDashboard(username, currentPassword);
+  const { url, anonKey } = publicConfig();
+  const response = await fetch(`${url}/auth/v1/user`, {
+    method: "PUT",
+    headers: {
+      apikey: anonKey,
+      Authorization: `Bearer ${verifiedSession.access_token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ password: newPassword }),
+  });
+  await readJson(response);
+
+  // 用新密码重新登录并保存一套新的 token，后续自动续期不会继续拿旧 refresh token。
+  return await signInDashboard(username, newPassword);
+}
+
 export async function listDashboardAudit(session: DashboardSession, limit = 50): Promise<DashboardAuditLog[]> {
   const result = await callAdminFunction(session, { action: "list-audit", limit });
   return Array.isArray(result?.logs) ? result.logs : [];
 }
 
-export type ManualSyncJob = "today_collect" | "today_payout" | "yesterday_collect" | "yesterday_payout" | "rates";
+export type ManualSyncJob = "today_collect" | "today_payout" | "yesterday_collect" | "yesterday_payout" | "rates" | "history_next";
+
+export type HistoryBackfillStatus = {
+  total: number;
+  completed: number;
+  pending: number;
+  retry: number;
+  failed: number;
+  completedPct: number;
+  rowsWritten: number;
+  lastSyncAt: string;
+  nextPendingDate: string;
+};
+
+export async function getDashboardHistoryStatus(session: DashboardSession): Promise<HistoryBackfillStatus | null> {
+  const result = await callAdminFunction(session, { action: "history-status" });
+  return result?.history || null;
+}
 
 export async function triggerDashboardSync(session: DashboardSession, job: ManualSyncJob) {
   return await callAdminFunction(session, { action: "trigger-sync", job });

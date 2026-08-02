@@ -189,8 +189,8 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   const profile = await requireActiveProfile(token);
   if (profile.role !== "admin" && profile.permissions?.third_party === false) throw new Error("这个账号没有三方量 / 费率查看权限");
   const now = new Date();
-  const today = now.toISOString().slice(0, 10);
-  const start = isoDate(startInput) || today;
+  const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+  const start = isoDate(startInput) || yesterday;
   const end = isoDate(endInput) || start;
   const queryStart = previousDate(start); // v239 的昨日比较需要额外保留前一天。
   const query = new URLSearchParams();

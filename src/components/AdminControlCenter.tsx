@@ -5,6 +5,7 @@ import {
   createViewerAccount,
   DASHBOARD_PERMISSION_LABELS,
   DEFAULT_VIEWER_PERMISSIONS,
+  getDashboardHistoryStatus,
   listDashboardAudit,
   listDashboardUsers,
   normalizedPermissions,
@@ -15,6 +16,7 @@ import {
   type DashboardPermissions,
   type DashboardProfile,
   type DashboardSession,
+  type HistoryBackfillStatus,
   type ManualSyncJob,
 } from "@/lib/dashboardAuthClient";
 
@@ -74,6 +76,8 @@ export default function AdminControlCenter({ open, session, profile, onClose }: 
   const [resetPassword, setResetPassword] = useState("");
   const [syncRunning, setSyncRunning] = useState<ManualSyncJob | "all" | "">("");
   const [syncProgress, setSyncProgress] = useState<string[]>([]);
+  const [historyStatus, setHistoryStatus] = useState<HistoryBackfillStatus | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const viewers = useMemo(() => users.filter((user) => user.role === "viewer"), [users]);
 
@@ -99,11 +103,24 @@ export default function AdminControlCenter({ open, session, profile, onClose }: 
     }
   }
 
+  async function loadHistoryStatus() {
+    setHistoryLoading(true);
+    try {
+      setHistoryStatus(await getDashboardHistoryStatus(session));
+    } catch {
+      // 历史补齐 SQL 尚未建立时保持空状态，不影响其它管理功能。
+      setHistoryStatus(null);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
     setMessage("");
     void loadUsers();
     void loadAudit();
+    void loadHistoryStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -195,6 +212,27 @@ export default function AdminControlCenter({ open, session, profile, onClose }: 
         setSyncProgress([...lines]);
       }
       await loadAudit();
+    } finally {
+      setSyncRunning("");
+    }
+  }
+
+  async function runHistoryNext() {
+    setSyncRunning("history_next");
+    setMessage("");
+    try {
+      const result = await triggerDashboardSync(session, "history_next");
+      const requested = result?.result?.requested;
+      const written = result?.result?.written;
+      setSyncProgress([
+        requested?.start
+          ? `历史补齐：${requested.start}${requested.end && requested.end !== requested.start ? ` ~ ${requested.end}` : ""} ${requested.direction || ""} 完成${written?.volume ? `（${written.volume} 行）` : ""}`
+          : (result?.result?.message || "历史补齐任务已执行")
+      ]);
+      await Promise.all([loadHistoryStatus(), loadAudit()]);
+    } catch (error) {
+      setSyncProgress([`历史补齐：${error instanceof Error ? error.message : "失败"}`]);
+      await loadHistoryStatus();
     } finally {
       setSyncRunning("");
     }
@@ -304,6 +342,26 @@ export default function AdminControlCenter({ open, session, profile, onClose }: 
               <div className="admin-panel-card admin-data-hero">
                 <div><span>MANUAL DATA SYNC</span><h3>刷新最新数据</h3><p>自动 Cron 会继续每小时运行。这里是 Admin 的手动刷新入口，适合需要马上看到最新 Google 数据时使用。</p></div>
                 <button type="button" className="admin-refresh-all" disabled={Boolean(syncRunning)} onClick={() => void runAllLatest()}>{syncRunning === "all" ? "正在刷新全部..." : "刷新全部最新数据"}</button>
+              </div>
+              <div className="admin-panel-card admin-history-card">
+                <div className="admin-history-head">
+                  <div><span>HISTORY DATABASE</span><h3>历史数据补齐</h3><p>4 月开始的历史 Google 数据会后台逐日写入 Supabase。完成的日期不会重复读取。</p></div>
+                  <button type="button" className="admin-light-btn" onClick={() => void loadHistoryStatus()} disabled={historyLoading}>{historyLoading ? "读取中..." : "刷新进度"}</button>
+                </div>
+                {historyStatus ? (
+                  <>
+                    <div className="admin-history-progress-line"><div style={{ width: `${Math.max(0, Math.min(100, historyStatus.completedPct || 0))}%` }} /></div>
+                    <div className="admin-history-stats">
+                      <div><span>完成进度</span><b>{historyStatus.completed} / {historyStatus.total}</b><small>{historyStatus.completedPct.toFixed(1)}%</small></div>
+                      <div><span>待补任务</span><b>{historyStatus.pending + historyStatus.retry}</b><small>{historyStatus.nextPendingDate || "-"}</small></div>
+                      <div><span>失败任务</span><b>{historyStatus.failed}</b><small>{historyStatus.failed ? "需要检查" : "正常"}</small></div>
+                      <div><span>历史写入</span><b>{historyStatus.rowsWritten.toLocaleString()}</b><small>{historyStatus.lastSyncAt ? formatTime(historyStatus.lastSyncAt) : "尚未开始"}</small></div>
+                    </div>
+                    <div className="admin-history-actions"><span>自动任务每 5 分钟最多补同方向连续 3 天；全部完成后自动停止。</span><button type="button" disabled={Boolean(syncRunning)} onClick={() => void runHistoryNext()}>{syncRunning === "history_next" ? "正在补齐..." : "立即补下一项"}</button></div>
+                  </>
+                ) : (
+                  <div className="admin-history-empty">历史补齐队列尚未建立。执行 V246 的“08_历史数据自动补齐_费率自动更新”SQL 后，这里会显示进度。</div>
+                )}
               </div>
               <div className="admin-sync-jobs">
                 {SYNC_JOBS.map((job) => (

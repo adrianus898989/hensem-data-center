@@ -165,6 +165,31 @@ Deno.serve(async (request) => {
       return json(request, { ok: true, username, role: "admin", permissions: ADMIN_PERMISSIONS, message: "Admin 初始化完成" });
     }
 
+    if (action === "reset-admin-password") {
+      const expected = String(Deno.env.get("SYNC_SECRET") || "");
+      const provided = String(request.headers.get("x-sync-secret") || "");
+      if (!expected || provided !== expected) {
+        return json(request, { ok: false, message: "SYNC_SECRET 不正确" }, 401);
+      }
+
+      const username = normalizeUsername(body?.username || "admin");
+      const password = validatePassword(body?.password);
+      const { data: target, error: targetError } = await admin
+        .from("dashboard_profiles")
+        .select("auth_user_id,username,role,active")
+        .eq("username", username)
+        .maybeSingle();
+      if (targetError) throw new Error(`读取 Admin 账号失败：${targetError.message}`);
+      if (!target) return json(request, { ok: false, message: "Admin 账号不存在" }, 404);
+      if (target.role !== "admin") return json(request, { ok: false, message: "这个账号不是 Admin" }, 403);
+
+      const { error: updateError } = await admin.auth.admin.updateUserById(target.auth_user_id, { password });
+      if (updateError) throw new Error(`重置 Admin 密码失败：${updateError.message}`);
+
+      await audit(null, "reset_admin_password", username, { via: "sync_secret" });
+      return json(request, { ok: true, username, role: "admin", message: "Admin 密码已重置" });
+    }
+
     if (action === "create-viewer") {
       const { caller, actor } = await requireAdmin();
       const username = normalizeUsername(body?.username);
@@ -259,6 +284,45 @@ Deno.serve(async (request) => {
       return json(request, { ok: true, logs: data || [] });
     }
 
+    if (action === "history-status") {
+      await requireAdmin();
+      const { data, error } = await admin
+        .from("third_party_history_backfill")
+        .select("data_date,direction,status,attempts,rows_written,last_error,last_sync_at")
+        .order("data_date", { ascending: true })
+        .order("direction", { ascending: true });
+      if (error) throw new Error(`读取历史补齐进度失败：${error.message}`);
+      const rows = Array.isArray(data) ? data : [];
+      const counts: Record<string, number> = { pending: 0, retry: 0, success: 0, failed: 0 };
+      let rowsWritten = 0;
+      let lastSyncAt = "";
+      let nextPendingDate = "";
+      for (const row of rows) {
+        const status = String(row.status || "pending");
+        counts[status] = (counts[status] || 0) + 1;
+        rowsWritten += Number(row.rows_written || 0);
+        const syncAt = String(row.last_sync_at || "");
+        if (syncAt && syncAt > lastSyncAt) lastSyncAt = syncAt;
+        if (!nextPendingDate && ["pending", "retry"].includes(status)) nextPendingDate = String(row.data_date || "");
+      }
+      const total = rows.length;
+      const completed = Number(counts.success || 0);
+      return json(request, {
+        ok: true,
+        history: {
+          total,
+          completed,
+          pending: Number(counts.pending || 0),
+          retry: Number(counts.retry || 0),
+          failed: Number(counts.failed || 0),
+          completedPct: total ? Math.round(completed * 10000 / total) / 100 : 0,
+          rowsWritten,
+          lastSyncAt,
+          nextPendingDate,
+        },
+      });
+    }
+
     if (action === "trigger-sync") {
       const { actor } = await requireAdmin();
       const job = String(body?.job || "").trim();
@@ -268,6 +332,8 @@ Deno.serve(async (request) => {
       let syncBody: Record<string, unknown>;
       if (job === "rates") {
         syncBody = { action: "sync-rates" };
+      } else if (job === "history_next") {
+        syncBody = { action: "sync-history-next" };
       } else {
         const map: Record<string, { date: string; direction: "代收" | "代付" }> = {
           today_collect: { date: dateInManila(0), direction: "代收" },
@@ -298,7 +364,7 @@ Deno.serve(async (request) => {
 
     return json(request, {
       ok: false,
-      message: "action 请使用 bootstrap-admin / create-viewer / list-users / update-viewer / reset-password / list-audit / trigger-sync",
+      message: "action 请使用 bootstrap-admin / reset-admin-password / create-viewer / list-users / update-viewer / reset-password / list-audit / history-status / trigger-sync",
     }, 400);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -524,6 +524,12 @@ function formatLocalDateKey(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+function yesterdayLocalDateKey(): string {
+  const date = new Date();
+  date.setDate(date.getDate() - 1);
+  return formatLocalDateKey(date);
+}
+
 type DateShortcut = "today" | "yesterday" | "beforeYesterday" | "thisWeek" | "lastWeek" | "thisMonth" | "lastMonth";
 
 function shortcutDateRange(mode: DateShortcut, selectedDateKey = ""): { start: string; end: string } {
@@ -1935,12 +1941,8 @@ export default function ThirdPartyVolumeDashboard() {
       const json = await safeReadJson(volumeRes, "三方量") as ThirdPartyVolumePayload;
       if (!volumeRes.ok) throw new Error((json as any)?.message || "读取三方量快照失败");
 
-      // V207：页面只显示最后一次成功快照，不在用户打开网页时现场重读 Google。
-      // Google 读取交给 Netlify 定时函数每小时自动更新；如果失败，继续显示旧快照。
-      if (!(json?.rows || []).length) {
-        throw new Error((json as any)?.meta?.message || "三方量没有可用快照，后台会继续自动重试");
-      }
-
+      // Supabase 某个日期暂时还没写入时，不把整页当成错误。
+      // 页面保持可用，显示“暂无数据”；后台 Cron / 历史补齐完成后再次查询即可出现。
       setPayload(json);
       payloadRef.current = json;
       // 只缓存“当前月单日/首次默认”的轻量数据。
@@ -1967,19 +1969,16 @@ export default function ThirdPartyVolumeDashboard() {
       const message = err instanceof Error ? err.message : "读取三方量快照失败";
       const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY);
       const cachedRate = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY);
-      // 历史查询失败时不能拿当前月缓存冒充历史数据；只有当前月请求才允许回退。
-      if (rangeIncludesCurrentMonth(requestedStart, requestedEnd) && cachedVolume && (cachedVolume.rows || []).length > 0) {
-        setPayload(attachClientFallbackMessage(cachedVolume, message));
+      // 只有缓存本身覆盖当前所选日期时才允许回退，避免拿其它月份的数据冒充。
+      const cachedRows = cachedVolume?.rows || [];
+      const cacheMatchesSelection = Boolean(cachedRows.length && cachedRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd)));
+      if (cachedVolume && cacheMatchesSelection) {
+        setPayload(attachClientFallbackMessage(cachedVolume, "数据接口暂时不可用，当前显示上一次成功缓存"));
         setRatePayload(cachedRate);
-        const volumeRows = cachedVolume.rows || [];
-        if (volumeRows.length) {
-          setStartDate((old) => old || defaultStart(volumeRows));
-          setEndDate((old) => old || defaultEnd(volumeRows));
-        }
         setState("ready");
         return;
       }
-      setPayload(emptyClientVolumePayload(`三方量还没有成功快照，后台会继续自动重试；本次错误：${message}`));
+      setPayload(emptyClientVolumePayload("该日期暂时没有可用数据。后台会继续自动同步，页面可以正常使用。"));
       setRatePayload(cachedRate);
       setState("ready");
     }
@@ -2000,39 +1999,32 @@ export default function ThirdPartyVolumeDashboard() {
   }
 
   useEffect(() => {
-    // V230：首次只恢复/读取当前月轻量快照，不再下载 4 月至当前月全部数据。
+    // 正式站首次进入三方量：固定默认“昨天”。昨天通常已经完整，避免今天数据尚未到齐造成误判。
+    const yesterday = yesterdayLocalDateKey();
+    setStartDate(yesterday);
+    setEndDate(yesterday);
+    startDateRef.current = yesterday;
+    endDateRef.current = yesterday;
+
     const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY);
     const cachedRate = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY);
-    const hasCachedVolume = Boolean((cachedVolume?.rows || []).length);
-    if (hasCachedVolume && cachedVolume) {
+    const cachedHasYesterday = Boolean((cachedVolume?.rows || []).some((row) => row.date === yesterday));
+    if (cachedHasYesterday && cachedVolume) {
       setPayload(cachedVolume);
       setRatePayload(cachedRate);
       setState("ready");
-      const cachedRows = cachedVolume.rows || [];
-      if (cachedRows.length) {
-        const start = defaultStart(cachedRows);
-        const end = defaultEnd(cachedRows);
-        setStartDate((old) => old || start);
-        setEndDate((old) => old || end);
-        startDateRef.current = start;
-        endDateRef.current = end;
-      }
     }
-    // V237：F5/重复打开优先显示浏览器快照，只请求一个很小的 status JSON。
-    // checksum 没变就完全不重新下载大三方量 JSON。
-    if (hasCachedVolume) {
-      void checkCurrentSnapshotAndRefresh(true);
-    } else {
-      void (async () => {
-        await loadData(false);
-        await checkCurrentSnapshotAndRefresh(true);
-      })();
-    }
+
+    // 无论有没有缓存，都只读取“昨天 + 为昨日对比保留的前一天”，不下载整月/整库。
+    void loadData(cachedHasYesterday, yesterday, yesterday);
+
     const hourlyTimer = window.setInterval(() => {
       const start = startDateRef.current;
       const end = endDateRef.current;
-      // 历史月份已封存，不做每小时请求；当前月/结算月只检查小状态，版本变化才拉大数据。
-      if (document.visibilityState === "visible" && rangeIncludesCurrentMonth(start, end)) void checkCurrentSnapshotAndRefresh(true);
+      // 当前月/上月结算期在页面可见时，每小时静默重新读取当前选择；历史封存月份不主动刷。
+      if (document.visibilityState === "visible" && rangeIncludesCurrentMonth(start, end)) {
+        void loadData(true, start, end);
+      }
     }, 60 * 60 * 1000);
     return () => window.clearInterval(hourlyTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2205,15 +2197,15 @@ export default function ThirdPartyVolumeDashboard() {
 
   return (
     <div className="work-order-module third-party-volume-module">
-      <div className="topbar">
+      <div className="topbar third-party-clean-topbar">
         <div className="title"><h1>三方量/费率</h1><p>当前位置：Hensem数据后台 &gt; 三方量/费率</p></div>
-        <div className="status-box">
-          <div className="status-line"><span>读取页签</span><strong>{payload.meta.sheets.length} 个</strong></div>
-          <div className="status-line"><span>数据行数</span><strong>{formatNumber(payload.rows.length)} 行</strong></div>
-          <div className="status-line"><span>数据来源</span><strong>Supabase</strong></div>
-          <div className="status-line"><span>数据更新</span><strong>{new Date(String(payload.meta.updatedAt)).toLocaleString("zh-CN")}</strong></div>
-        </div>
       </div>
+      {!rows.some((row) => dateMatches(row.date, startDate, endDate)) && (
+        <div className="volume-empty-notice">
+          <div className="volume-empty-icon">i</div>
+          <div><b>该日期暂时没有数据</b><span>数据库尚未收到这个日期的三方量。后台自动同步/历史补齐完成后，再次查询即可显示；页面不会报错。</span></div>
+        </div>
+      )}
       <section className="third-party-tab-panel">
         <div className="tab-group-row main-tab-row">
           <button className={cls("module-tab", mainTab === "country" && "active")} onClick={() => { setMainTab("country"); setVolumeMode("daily"); setCountryPage(""); setCountry(""); setCountrySelections([]); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }}>各国家量</button>

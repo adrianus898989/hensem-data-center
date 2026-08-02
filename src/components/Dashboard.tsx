@@ -8,7 +8,6 @@ import { monthRangeSignature, monthlyApiUrl, rangeIncludesCurrentMonthClient } f
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload } from "@/lib/monthlyStatusClient";
 import WorkOrderDashboard from "./WorkOrderDashboard";
 import ThirdPartyVolumeDashboard from "./ThirdPartyVolumeDashboard";
-import SupabaseHomeStatus from "./SupabaseHomeStatus";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { hasDashboardPermission } from "@/lib/dashboardAuthClient";
 
@@ -1627,7 +1626,6 @@ export default function Dashboard() {
           <p className="home-breadcrumb">当前位置：Hensem数据后台 &gt; 首页 / 选择模块</p>
           <h1>Hensem 数据中控</h1>
         </div>
-        <div className="home-version">实时数据看板</div>
       </div>
 
       <section className="home-card-grid">
@@ -1650,8 +1648,6 @@ export default function Dashboard() {
           <span className="home-enter">{canThirdParty ? "进入模块 →" : "无查看权限"}</span>
         </button>
       </section>
-      <SupabaseHomeStatus />
-
     </main>
   );
 
