@@ -1753,7 +1753,7 @@ async function safeReadJson(response: Response, label: string): Promise<any> {
   }
 }
 
-const THIRD_PARTY_VOLUME_CACHE_KEY = "hensem:last-good:third-party-volume:v238-active";
+const THIRD_PARTY_VOLUME_CACHE_KEY = "hensem:last-good:third-party-volume:v247-stable";
 const THIRD_PARTY_RATES_CACHE_KEY = "hensem:last-good:third-party-rates:v234";
 
 function ratePayloadFresh(payload: ThirdPartyRatePayload | null | undefined, maxAgeMs = 55 * 60 * 1000): boolean {
@@ -1876,6 +1876,7 @@ export default function ThirdPartyVolumeDashboard() {
   const [payload, setPayload] = useState<ThirdPartyVolumePayload | null>(null);
   const [ratePayload, setRatePayload] = useState<ThirdPartyRatePayload | null>(null);
   const [error, setError] = useState("");
+  const [dataNotice, setDataNotice] = useState("");
   const [syncStatus, setSyncStatus] = useState<ClientMonthlyStatus | null>(null);
   const payloadRef = useRef<ThirdPartyVolumePayload | null>(null);
   const [country, setCountry] = useState("");
@@ -1919,37 +1920,62 @@ export default function ThirdPartyVolumeDashboard() {
   }, []);
 
   async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "") {
-    // 已经有成功数据时只做静默刷新，任何点击或后台轮询都不能再盖住整页。
-    if (!silent && !(payload?.rows || []).length) setState("loading");
+    // V247：Supabase 已有数据时，任何瞬时网络/API问题都不能把整页从有数据变成 0。
+    if (!silent && !(payloadRef.current?.rows || []).length) setState("loading");
     setError("");
     try {
-      // V204：页面只读取服务端最后成功快照，不根据日期/按钮重新读 Google。
-      // 查询、上一日、下一日、快捷日期都只改前端筛选条件。
       const volumeUrl = thirdPartyVolumeApiUrl(requestedStart, requestedEnd, version);
+      const authHeaders = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
       const cachedRateBeforeFetch = ratePayload || readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY);
       const shouldFetchRates = !ratePayloadFresh(cachedRateBeforeFetch);
-      const [volumeRes, rateRes] = await Promise.all([
-        fetch(volumeUrl, {
-          cache: "no-store",
-          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}
-        }),
+
+      const [firstVolumeRes, rateRes] = await Promise.all([
+        fetch(volumeUrl, { cache: "no-store", headers: authHeaders }),
         shouldFetchRates ? fetch("/api/supabase-third-party-rates", {
           cache: "no-store",
-          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}
+          headers: authHeaders
         }).catch(() => null) : Promise.resolve(null)
       ]);
-      const json = await safeReadJson(volumeRes, "三方量") as ThirdPartyVolumePayload;
-      if (!volumeRes.ok) throw new Error((json as any)?.message || "读取三方量快照失败");
 
-      // Supabase 某个日期暂时还没写入时，不把整页当成错误。
-      // 页面保持可用，显示“暂无数据”；后台 Cron / 历史补齐完成后再次查询即可出现。
-      setPayload(json);
-      payloadRef.current = json;
-      // 只缓存“当前月单日/首次默认”的轻量数据。
-      // 本月、近 7 天等大范围查询不再写 localStorage，避免浏览器重复保存大 JSON。
-      const cacheableCurrentSlice = rangeIncludesCurrentMonth(requestedStart, requestedEnd)
-        && (!requestedStart || !requestedEnd || requestedStart === requestedEnd);
-      if (cacheableCurrentSlice) writeLocalCache(THIRD_PARTY_VOLUME_CACHE_KEY, json);
+      let volumeRes = firstVolumeRes;
+      let json = await safeReadJson(volumeRes, "三方量") as ThirdPartyVolumePayload;
+      if (!volumeRes.ok) throw new Error((json as any)?.message || "读取 Supabase 三方量失败");
+
+      // 偶发 0 行时立即轻量重试一次；不需要等下一小时，更不会去现场读取 Google。
+      if (!(json?.rows || []).length && requestedStart && requestedEnd) {
+        await new Promise((resolve) => window.setTimeout(resolve, 450));
+        const retryRes = await fetch(volumeUrl, { cache: "no-store", headers: authHeaders });
+        const retryJson = await safeReadJson(retryRes, "三方量") as ThirdPartyVolumePayload;
+        if (retryRes.ok && (retryJson?.rows || []).length) {
+          volumeRes = retryRes;
+          json = retryJson;
+        }
+      }
+
+      const volumeRows = json?.rows || [];
+      const currentPayload = payloadRef.current;
+      const currentRows = currentPayload?.rows || [];
+      const currentMatchesSelection = Boolean(currentRows.length && currentRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd)));
+      const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY);
+      const cachedRows = cachedVolume?.rows || [];
+      const cacheMatchesSelection = Boolean(cachedRows.length && cachedRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd)));
+
+      if (!volumeRows.length && (currentMatchesSelection || cacheMatchesSelection)) {
+        // 关键修复：本次异常空结果不覆盖上一份成功数据，也绝不写入 last-good cache。
+        const fallback = currentMatchesSelection ? currentPayload! : cachedVolume!;
+        const shown = attachClientFallbackMessage(fallback, "Supabase 本次返回空结果，已自动保留上一份成功数据并等待下一次刷新");
+        setPayload(shown);
+        payloadRef.current = shown;
+        setDataNotice("本次读取出现瞬时空结果，当前仍显示上一份成功数据；无需等待 Google，稍后查询会自动重试。");
+      } else {
+        setPayload(json);
+        payloadRef.current = json;
+        setDataNotice("");
+        // 只有真实非空成功数据才允许成为 last-good，彻底避免“0 行缓存”污染下一次打开。
+        const cacheableCurrentSlice = rangeIncludesCurrentMonth(requestedStart, requestedEnd)
+          && (!requestedStart || !requestedEnd || requestedStart === requestedEnd);
+        if (cacheableCurrentSlice && volumeRows.length) writeLocalCache(THIRD_PARTY_VOLUME_CACHE_KEY, json);
+      }
 
       if (rateRes && rateRes.ok) {
         const rateJson = await safeReadJson(rateRes, "三方费率") as ThirdPartyRatePayload;
@@ -1959,27 +1985,43 @@ export default function ThirdPartyVolumeDashboard() {
         setRatePayload(cachedRateBeforeFetch);
       }
 
-      const volumeRows = json?.rows || [];
       if (volumeRows.length) {
         setStartDate((old) => old || defaultStart(volumeRows));
         setEndDate((old) => old || defaultEnd(volumeRows));
       }
       setState("ready");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "读取三方量快照失败";
+      const message = err instanceof Error ? err.message : "读取 Supabase 三方量失败";
+      const currentPayload = payloadRef.current;
+      const currentRows = currentPayload?.rows || [];
+      const currentMatchesSelection = Boolean(currentRows.length && currentRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd)));
       const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY);
       const cachedRate = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY);
-      // 只有缓存本身覆盖当前所选日期时才允许回退，避免拿其它月份的数据冒充。
       const cachedRows = cachedVolume?.rows || [];
       const cacheMatchesSelection = Boolean(cachedRows.length && cachedRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd)));
-      if (cachedVolume && cacheMatchesSelection) {
-        setPayload(attachClientFallbackMessage(cachedVolume, "数据接口暂时不可用，当前显示上一次成功缓存"));
-        setRatePayload(cachedRate);
+
+      if (currentPayload && currentMatchesSelection) {
+        const shown = attachClientFallbackMessage(currentPayload, message);
+        setPayload(shown);
+        payloadRef.current = shown;
+        setRatePayload(cachedRate || ratePayload);
+        setDataNotice(`Supabase 刚才读取失败，当前保留上一份成功数据：${message}`);
         setState("ready");
         return;
       }
-      setPayload(emptyClientVolumePayload("该日期暂时没有可用数据。后台会继续自动同步，页面可以正常使用。"));
+      if (cachedVolume && cacheMatchesSelection) {
+        const shown = attachClientFallbackMessage(cachedVolume, message);
+        setPayload(shown);
+        payloadRef.current = shown;
+        setRatePayload(cachedRate);
+        setDataNotice(`Supabase 刚才读取失败，当前显示浏览器最后成功数据：${message}`);
+        setState("ready");
+        return;
+      }
+
+      setPayload(emptyClientVolumePayload("该日期数据库目前确实没有可用数据。后台同步完成后再次查询即可。"));
       setRatePayload(cachedRate);
+      setDataNotice("");
       setState("ready");
     }
   }
@@ -2200,6 +2242,12 @@ export default function ThirdPartyVolumeDashboard() {
       <div className="topbar third-party-clean-topbar">
         <div className="title"><h1>三方量/费率</h1><p>当前位置：Hensem数据后台 &gt; 三方量/费率</p></div>
       </div>
+      {dataNotice && (
+        <div className="volume-stable-notice">
+          <span className="volume-stable-dot" />
+          <div><b>已保护当前数据</b><span>{dataNotice}</span></div>
+        </div>
+      )}
       {!rows.some((row) => dateMatches(row.date, startDate, endDate)) && (
         <div className="volume-empty-notice">
           <div className="volume-empty-icon">i</div>

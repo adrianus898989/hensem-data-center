@@ -65,22 +65,54 @@ async function requireActiveProfile(token: string) {
 
 async function fetchPaged<T>(table: string, query: URLSearchParams, token: string): Promise<T[]> {
   const { url, anonKey } = config();
-  const all: T[] = [];
-  let offset = 0;
-  while (true) {
+
+  const fetchPage = async (offset: number, withCount = false): Promise<{ rows: T[]; total: number | null }> => {
     const params = new URLSearchParams(query);
     params.set("limit", String(PAGE_SIZE));
     params.set("offset", String(offset));
     const response = await fetch(`${url}/rest/v1/${table}?${params.toString()}`, {
-      headers: { apikey: anonKey, Authorization: `Bearer ${token}`, Accept: "application/json" },
+      headers: {
+        apikey: anonKey,
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+        ...(withCount ? { Prefer: "count=exact" } : {})
+      },
       cache: "no-store"
     });
     const rows = await readJson(response);
     const list = Array.isArray(rows) ? rows as T[] : [];
-    all.push(...list);
-    if (list.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
+    const contentRange = String(response.headers.get("content-range") || "");
+    const match = contentRange.match(/\/(\d+)$/);
+    return { rows: list, total: match ? Number(match[1]) : null };
+  };
+
+  // V247：第一页顺便拿 exact count。Supabase 默认单页最多 1000 行，
+  // 以前 4~5 页是串行读取；现在剩余页并行读取，数据库已有数据时页面明显更快。
+  const first = await fetchPage(0, true);
+  if (first.rows.length < PAGE_SIZE) return first.rows;
+
+  if (Number.isFinite(first.total) && Number(first.total) >= first.rows.length) {
+    const total = Math.min(Number(first.total), 500000);
+    const offsets: number[] = [];
+    for (let offset = PAGE_SIZE; offset < total; offset += PAGE_SIZE) offsets.push(offset);
+    const all: T[] = [...first.rows];
+    const CONCURRENCY = 4;
+    for (let i = 0; i < offsets.length; i += CONCURRENCY) {
+      const pages = await Promise.all(offsets.slice(i, i + CONCURRENCY).map((offset) => fetchPage(offset, false)));
+      for (const page of pages) all.push(...page.rows);
+    }
+    return all;
+  }
+
+  // count 取不到时保留旧的安全分页逻辑。
+  const all: T[] = [...first.rows];
+  let offset = PAGE_SIZE;
+  while (true) {
     if (offset > 500000) throw new Error(`Supabase ${table} 分页超过安全上限`);
+    const page = await fetchPage(offset, false);
+    all.push(...page.rows);
+    if (page.rows.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
   }
   return all;
 }
