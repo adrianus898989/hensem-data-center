@@ -1,0 +1,24 @@
+[build]
+  command = "pnpm exec next build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+  PNPM_FLAGS = "--no-frozen-lockfile --shamefully-hoist"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+
+[functions."sync-monthly-history-background"]
+  background = true
+
+[functions."sync-work-orders-background"]
+  background = true
+
+[functions."sync-third-party-monthly-background"]
+  background = true

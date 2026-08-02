@@ -1,0 +1,43 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+  .:
+    dependencies:
+      googleapis:
+        specifier: ^144.0.0
+        version: 144.0.0
+      next:
+        specifier: 14.2.16
+        version: 14.2.16
+      react:
+        specifier: 18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: 18.3.1
+        version: 18.3.1
+    devDependencies:
+      @netlify/plugin-nextjs:
+        specifier: ^5.8.1
+        version: 5.8.1
+      @types/node:
+        specifier: ^20.17.6
+        version: 20.17.6
+      @types/react:
+        specifier: ^18.3.12
+        version: 18.3.12
+      @types/react-dom:
+        specifier: ^18.3.1
+        version: 18.3.1
+      eslint:
+        specifier: ^8.57.1
+        version: 8.57.1
+      eslint-config-next:
+        specifier: ^14.2.16
+        version: 14.2.16
+      typescript:
+        specifier: ^5.6.3
+        version: 5.6.3

@@ -1,0 +1,3374 @@
+"use client";
+
+// V98_THIRD_PARTY_LAYOUT_AND_RATE_MATCH: 总览移除异常提醒；各国家量结构统计下移到底部；费率匹配严格跟随谷歌费率表。
+
+// V94_RATE_MATCH_STRICT: 越南别名/币种后缀统一，同三方合并，费率列不再把代收/代付状态列误当费率。
+
+// V90_DIRECT_RATE_AND_STATS: 代收/代付费率严格分开读取三方费率表；顶部补页面统计，底部保留结构统计图。
+
+// V87_TNG_DUITNOW_QR_FIX: 马来 TNG/Touch n Go 归 DUITNOW/QR；Shopee/Grab/Boost 不再吃 TNG。
+
+// V86_FORCE_PNPM_NETLIFY: 加 pnpm-lock.yaml，让 Netlify 依赖安装阶段使用 pnpm，不再 npm install。
+
+// V85_FEE_TOTAL_MALAYSIA_TYPE_FIX: 只加合计手续费列；马来类型只显示 银行代付 / TNG代付，不显示 DUITNOW。
+
+// V84_PNPM_BUILD_FIX: Netlify 改用 pnpm 构建，业务逻辑沿用 V83。
+
+// V83_NETLIFY_CLEAN_INSTALL: 构建前删除 node_modules，修复 Netlify axe-core ENOTEMPTY。
+
+// V82_LABEL_BUILD_FIX: 三方量仅改页签名字：月合计->合计，日合计->所有明细；恢复 package-lock 与 npm install 构建。
+
+// V80_NETLIFY_BUILD_FIX: 仅修复 Netlify 构建命令；业务逻辑沿用 V79。
+
+// V79_VERIFIED_BUILD: 所有明细第一、合计第二、移除平台明细、NPG/马来/印尼费率匹配修复。
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ThirdPartyPlatformStatusRow, ThirdPartyRatePayload, ThirdPartyRateRow, ThirdPartyVolumePayload, ThirdPartyVolumeRow } from "@/lib/types";
+import { formatNumber, formatPercent } from "@/lib/format";
+import { canonicalThirdPartyName, inferThirdPartyChannelType } from "@/lib/thirdPartyNameMap";
+import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload, type ClientMonthlyStatus } from "@/lib/monthlyStatusClient";
+import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
+import { useDashboardAuth } from "./DashboardAuthGate";
+
+type LoadState = "loading" | "ready" | "error";
+type VolumeTab = "daily" | "anomaly";
+type FeeTab = "feeOverview" | "feeDetail" | "feeAnomaly";
+type TabKey = VolumeTab | FeeTab;
+type VolumeMainTab = "country" | "rates";
+type CountrySubTab = "daily" | "platform" | "anomaly";
+type PageSize = 20 | 50 | 100 | 200;
+
+type ComboSummary = {
+  key: string;
+  labelParts: string[];
+  collectAmount: number;
+  collectCount: number;
+  payoutAmount: number;
+  payoutCount: number;
+  totalAmount: number;
+  totalCount: number;
+  collectPct: number;
+  payoutPct: number;
+  totalPct: number;
+  rows: ThirdPartyVolumeRow[];
+};
+
+type DirectionSummary = {
+  key: string;
+  parts: string[];
+  amount: number;
+  count: number;
+  rows: ThirdPartyVolumeRow[];
+};
+
+type FeeCompareRow = {
+  key: string;
+  date?: string;
+  country: string;
+  platform: string;
+  channel: string;
+  channelType: string;
+  collectAmount: number;
+  collectCount: number;
+  payoutAmount: number;
+  payoutCount: number;
+  totalAmount: number;
+  totalCount: number;
+  collectShare: number;
+  payoutShare: number;
+  totalShare: number;
+  collectFeeRate: number;
+  payoutFeeRate: number;
+  totalFeeRate: number;
+  effectiveTotalFeeRate: number;
+  collectSingleFee: number;
+  payoutSingleFee: number;
+  collectFeeAmount: number;
+  payoutFeeAmount: number;
+  // 人工确认等明确业务通道：费率表没有对应费用时按 0 展示，而不是误显示“未匹配 -”。
+  collectFeeKnownZero?: boolean;
+  payoutFeeKnownZero?: boolean;
+  estimatedFee: number;
+  advice: string;
+  level: "normal" | "warning" | "danger" | "missing";
+};
+
+type DailyCompareRow = ComboSummary & {
+  date: string;
+  country: string;
+  platform: string;
+  channel: string;
+  channelType: string;
+  previousAmount: number;
+  previousCount: number;
+  previousCollectAmount: number;
+  previousPayoutAmount: number;
+  collectDiffPercent: number | null;
+  payoutDiffPercent: number | null;
+  diffAmount: number;
+  diffPercent: number | null;
+};
+
+type PlatformCompareRow = ComboSummary & {
+  date: string;
+  country: string;
+  platform: string;
+};
+
+type FeeAnomalyPeriod = "day" | "week" | "month";
+
+function uniq(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
+}
+
+function filterLabel(values: string[], placeholder = "全部"): string {
+  if (!values.length) return placeholder;
+  if (values.length <= 2) return values.join("、");
+  return `${values.slice(0, 2).join("、")} 等 ${values.length} 项`;
+}
+
+
+const ALL_USDT_COUNTRY_PAGE = "所有国家USDT";
+const COUNTRY_PRIORITY = ["印度", "巴西", "巴基斯坦", "印尼", "越南", "菲律宾", "马来", "缅甸", "哥伦比亚", "墨西哥", "智利", "尼日利亚", "胖虎巴西", "巴西原生", ALL_USDT_COUNTRY_PAGE, "南美", "USDT通道", "USDT"];
+
+function isHiddenCountry(country: string): boolean {
+  return String(country || "").includes("埃及");
+}
+
+function isAllUsdtCountryPage(country: string): boolean {
+  return String(country || "") === ALL_USDT_COUNTRY_PAGE;
+}
+
+function isUsdtVolumeRow(row: ThirdPartyVolumeRow): boolean {
+  const text = `${row.country || ""} ${row.platform || ""} ${row.channel || ""} ${row.rawChannel || ""} ${row.channelType || ""} ${row.sheetName || ""}`.toLowerCase();
+  const compact = text.replace(/[^a-z0-9]+/g, "");
+  return /(^|[^a-z0-9])(usdt|trc20|erc20|tron|trx)([^a-z0-9]|$)/i.test(text)
+    || /usdt|usdtu|usdtcu|trc20|erc20|tronpay|unipayusdt|upay13usdt|aypayusdt|uupayusdt/.test(compact);
+}
+
+function isUsdtFeeTarget(country: string, platform: string, channel: string, channelType?: string): boolean {
+  const text = `${country || ""} ${platform || ""} ${channel || ""} ${channelType || ""}`.toLowerCase();
+  const compact = text.replace(/[^a-z0-9]+/g, "");
+  return /(^|[^a-z0-9])(usdt|trc20|erc20|tron|trx)([^a-z0-9]|$)/i.test(text)
+    || /usdt|usdtu|usdtcu|trc20|erc20|tronpay|unipayusdt|upay13usdt|aypayusdt|uupayusdt/.test(compact);
+}
+
+function rowMatchesCountryPage(row: ThirdPartyVolumeRow, page: string): boolean {
+  if (!page) return true;
+  if (isAllUsdtCountryPage(page)) return isUsdtVolumeRow(row);
+  return row.country === page;
+}
+
+function feeRowMatchesCountryPage(row: FeeCompareRow, page: string): boolean {
+  if (!page) return true;
+  if (isAllUsdtCountryPage(page)) {
+    const text = `${row.country || ""} ${row.platform || ""} ${row.channel || ""} ${row.channelType || ""}`.toLowerCase();
+    const compact = text.replace(/[^a-z0-9]+/g, "");
+    return /(^|[^a-z0-9])(usdt|trc20|erc20|tron|trx)([^a-z0-9]|$)/i.test(text)
+      || /usdt|usdtu|usdtcu|trc20|erc20|tronpay|unipayusdt|upay13usdt|aypayusdt|uupayusdt/.test(compact);
+  }
+  return row.country === page;
+}
+
+function countryRank(country: string): number {
+  const normalized = country.replace(/原生|盘口|线下|地区/g, "").trim();
+  const exact = COUNTRY_PRIORITY.findIndex((item) => normalized === item || country === item);
+  if (exact >= 0) return exact;
+
+  // 避免“胖虎巴西”因为包含“巴西”而被插到巴西盘口前面。
+  if (country.includes("胖虎巴西")) {
+    const idx = COUNTRY_PRIORITY.indexOf("胖虎巴西");
+    return idx >= 0 ? idx : COUNTRY_PRIORITY.length + 1;
+  }
+
+  const includes = COUNTRY_PRIORITY
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item !== ALL_USDT_COUNTRY_PAGE && country.includes(item))
+    .sort((a, b) => b.item.length - a.item.length || a.index - b.index)[0];
+  return includes ? includes.index : COUNTRY_PRIORITY.length + 1;
+}
+
+function sortCountries(values: string[]): string[] {
+  return uniq(values).sort((a, b) => countryRank(a) - countryRank(b) || a.localeCompare(b, "zh-CN", { numeric: true }));
+}
+
+function normalizeCountryLabel(value: string): string {
+  const raw = String(value || "").trim();
+  const lower = raw.toLowerCase();
+  if (!raw) return "";
+
+  if (/巴基斯坦|pakistan|pkr/.test(lower)) return "巴基斯坦";
+  if (/胖虎巴西/.test(raw)) return "巴西";
+  if (/巴西|brazil|brasil|brl/.test(lower)) return "巴西";
+  if (/印度|india|inr/.test(lower)) return "印度";
+  if (/印度尼西亚|印尼|indonesia|idr/.test(lower)) return "印尼";
+  if (/越南|vietnam|vnd/.test(lower)) return "越南";
+  if (/菲律宾|philippines|philippine|php/.test(lower)) return "菲律宾";
+  if (/马来西亚|马来|malaysia|myr/.test(lower)) return "马来";
+  if (/缅甸|myanmar|mmk/.test(lower)) return "缅甸";
+  if (/尼日利亚|nigeria|ngn/.test(lower)) return "尼日利亚";
+  if (/哥伦比亚|colombia|columbia|npg[-_\s]*(co|col)\b|\bcop\b/.test(lower)) return "哥伦比亚";
+  if (/墨西哥|mexico|npg[-_\s]*(me|mx|mex)\b|\bmxn\b/.test(lower)) return "墨西哥";
+  if (/智利|chile|npg[-_\s]*(cl|chl|chi)\b|\bclp\b/.test(lower)) return "智利";
+  if (/南美|south\s*america/.test(lower)) return "南美";
+  if (/usdt|trc20|trx|u通道/.test(lower)) return "USDT";
+
+  return raw
+    .replace(/胖虎/g, "")
+    .replace(/线下盘口|线上盘口|原生盘口|盘口|原生|线下|国家|地区/g, "")
+    .trim();
+}
+
+const SOUTH_AMERICA_RATE_COUNTRIES = ["南美", "墨西哥", "哥伦比亚", "智利"];
+
+function expandRateCountries(value: string): string[] {
+  const normalized = normalizeCountryLabel(value);
+  const set = new Set<string>();
+  const add = (x?: string) => {
+    const v = normalizeCountryLabel(String(x || ""));
+    if (v) set.add(v);
+  };
+  add(value);
+  add(normalized);
+  if (normalized === "南美") {
+    SOUTH_AMERICA_RATE_COUNTRIES.forEach(add);
+  } else if (["墨西哥", "哥伦比亚", "智利"].includes(normalized)) {
+    // 具体国家不能互相串费率：墨西哥只用墨西哥，哥伦比亚只用哥伦比亚，智利用智利。
+    // 只保留“南美”作为兜底，不再把三个国家互相写入。
+    add("南美");
+  }
+  return Array.from(set);
+}
+
+function normalizeFeeTypeToken(country: string, value?: string): string {
+  const raw = normalizeRateCategory(country, value) || String(value || "").trim();
+  return raw.replace(/\s+/g, " ").trim();
+}
+
+function feeTypeCandidates(country: string, value?: string): string[] {
+  const normalizedCountry = normalizeCountryLabel(country);
+  const base = normalizeFeeTypeToken(country, value);
+  const set = new Set<string>();
+  const add = (x?: string) => {
+    const token = normalizeFeeTypeToken(country, x);
+    if (token) set.add(token);
+  };
+  add(base);
+  add(value);
+
+  const keys = Array.from(set).map((x) => normalizeMatchKey(x)).join("|");
+
+  if (normalizedCountry.includes("越南")) {
+    const baseKey = normalizeMatchKey(base);
+    const hasMomo = /momo/.test(keys) || baseKey === "momo";
+    if (hasMomo) { add("MOMO"); add("MoMo"); add("MoMo钱包"); add("钱包"); }
+    if (/1vnpay/.test(keys)) {
+      add("1VNPay"); add("1VNPay-MoMo"); add("1VNPay MoMo");
+      if (hasMomo) { add("MOMO"); add("MoMo"); }
+      else { add("银行"); add("BANK"); add("THẺ CÀO"); }
+    }
+    if (/fastpay|fastmomo|fastpaymomo/.test(keys)) {
+      add("FASTPay"); add("FastPay"); add("FASTPAY");
+      if (hasMomo) { add("MOMO"); add("MoMo"); }
+    }
+  }
+
+  if (normalizedCountry.includes("马来")) {
+    if (["银行", "银行代付", "代付类型"].includes(base)) {
+      add("银行");
+      add("银行代付");
+      add("代付类型");
+      add("FPX-BANK");
+      add("Bank");
+      add("BANK");
+      add("Tng-DuitNow-TP");
+      add("TNG-DuitNow-TP");
+      add("TNG DUITNOW TP");
+      add("FPXDUITNOW-TP");
+      add("DuitNow-TP");
+      add("其他类型");
+    }
+    if (base === "DUITNOW/QR") {
+      add("DUITNOW/QR");
+      add("Touch n Go");
+      add("TNG");
+      add("TouchGo");
+      add("Touch 'n Go");
+      add("Touch n Go-TP");
+      add("Touch n Go - TP");
+      add("DuitNow");
+      add("DuitNow QR");
+      add("FPXDUITNOW");
+      add("FPXDUITNOW-TP");
+    }
+    if (base === "FPX-BANK") {
+      add("银行");
+      add("银行代付");
+      add("Bank");
+    }
+  }
+
+  if (normalizedCountry.includes("印尼")) {
+    const baseKey = normalizeMatchKey(base);
+    if (["银行代付", "Virtual Account", "代付类型"].includes(base) || ["virtualaccount", "va", "bank", "bni", "bri", "brin", "bnin", "bmri", "cena", "mandiri", "permata", "bca", "cimb"].includes(baseKey)) {
+      // 银行类型候选放银行代付最前，优先匹配银行单笔费；不要误吃钱包单笔费。
+      add("银行代付");
+      add("Virtual Account");
+      add("VA");
+      add("BANK");
+      add("Bank");
+      add("银行");
+      add("其他类型");
+    }
+    if (["钱包代付", "代付类型"].includes(base) || ["dana", "ovo", "gopay", "gojek", "linkaja", "linkajaewallet", "ewallet", "wallet", "钱包", "其他钱包"].includes(baseKey)) {
+      // DANA / OVO / GOPAY / LINKAJA 都按钱包代付同类比较；费率优先匹配钱包代付。
+      add("钱包代付");
+      add("钱包");
+      add("其他钱包");
+      add("E-Wallet");
+      add("Wallet");
+      add("DANA");
+      add("OVO");
+      add("GOPAY");
+      add("GoPay");
+      add("LINKAJA");
+      add("LinkAja");
+      add("LinkAja钱包");
+    }
+    if (base === "Virtual Account") add("银行代付");
+  }
+  if (/usdt|trx|trc20|tron/i.test(keys) || normalizedCountry.includes("USDT")) {
+    // USDT 通道不能把所有 USDT 三方互相加入候选，否则 UNIPAY 会误匹配到 TRONPAY 的 4TRX。
+    // 按名称精确扩展：UNIPAY=2.9/3.5TRX，TRONPAY=3/4TRX，UPay13/AYPay/UUPay 各走自己的行。
+    if (/unipay|uni[-_ ]?pay/.test(keys)) ["UniPayUSDT", "UNIPAY-USDT", "UNIPAY", "UniPay", "UniPayUSDTCU"].forEach(add);
+    if (/tronpay|tron[-_ ]?pay/.test(keys)) ["TronPayUSDT", "TRONPAY-USDT", "TRONPAY", "TronPay", "TronPayUSDTCU"].forEach(add);
+    if (/uupay|uu[-_ ]?pay/.test(keys)) ["UUPayUSDT", "UUPAY-USDT", "UUPAY", "UUPay", "UUPayUSDTCU"].forEach(add);
+    if (/upay13|upay[-_ ]?13/.test(keys)) ["UPay13USDT", "UPay13USDTCU", "UPay13", "UPAY13"].forEach(add);
+    if (/aypay|ay[-_ ]?pay/.test(keys)) ["AYPayUSDT", "AYPayUSDTCU", "AYPAY", "AYPay"].forEach(add);
+    if (/\bupay\b|^upay$/.test(keys)) ["UPayUSDT", "UPAY", "UPay"].forEach(add);
+    if (/^usdt$|trc20/.test(keys)) ["USDT", "TRC20"].forEach(add);
+  }
+
+
+  if (normalizedCountry.includes("印度")) {
+    // 印度类型按用户确认只分：UPI / 银行卡 / USDT。未明确时默认走 UPI，避免显示“印度线下/其他类型”。
+    if (/usdt|trx|trc20|tron/.test(keys)) { add("USDT"); add("USDT通道"); }
+    if (/bank|银行卡|银行|card|arbpay|arbbank/.test(keys)) { add("银行卡"); add("BANK"); add("Bank"); }
+    if (!base || /upi|paytm|phonepe|qr|扫码|其他类型|印度线下/.test(keys) || base === "UPI") { add("UPI"); add("QR"); add("扫码"); }
+    if (/wepay/.test(keys)) ["WePay", "WEPAY唤醒", "PAYTM-WePay", "QR-WePay", "WePay-QR"].forEach(add);
+    if (/movpay/.test(keys)) ["MovPay", "MovPay-QR"].forEach(add);
+    if (/magicpay/.test(keys)) ["MagicPay", "MagicPay-QR"].forEach(add);
+    if (/upipay/.test(keys)) ["UpiPay", "UpiPay-QR"].forEach(add);
+    if (/ninepay|ninepayinr191|ninepayinr213/.test(keys)) ["NinePay", "NinePay-QR", "NinePayINR 191", "NinePayINR 213", "PAYTM-NinePay"].forEach(add);
+  }
+
+  if (["墨西哥", "哥伦比亚"].some((item) => normalizedCountry.includes(item))) {
+    if (/beacon|okeypay|okpay|okaypay/.test(keys)) ["BeaconPay", "Beaconpay", "OKEYPAY", "OkeyPay", "OKPAY", "OkPay", "OKAYPAY", "OkayPay"].forEach(add);
+  }
+  if (["墨西哥", "哥伦比亚", "智利"].some((item) => normalizedCountry.includes(item))) {
+    if (/tod|todaypay|todpay/.test(keys)) ["TodayPay", "TOD", "TODPAY", "TODPay", "todpay", "TODPAY-NEW"].forEach(add);
+    if (/starpago/.test(keys)) ["STARPAGO", "StarPago", "starpago"].forEach(add);
+    if (/epay/.test(keys)) ["EPay", "EPAY", "Epay", "epay"].forEach(add);
+    if (/supefina/.test(keys)) ["Supefina", "SUPEFINA", "supefina", "SUPEFINAPAY", "SUPEFINA-transfiya"].forEach(add);
+  }
+
+  if (normalizedCountry.includes("巴基斯坦")) {
+    if (["代付", "代付类型", "其他钱包", "钱包", "银行代付"].includes(base)) {
+      add("代付");
+      add("代付类型");
+      add("EASYPAISA");
+      add("EasyPaisa");
+      add("EasyPisa");
+      add("JazzCash");
+      add("JAZZCASH");
+      add("其他钱包");
+      add("Wallet");
+      add("Bank");
+    }
+  }
+
+
+  if (normalizedCountry.includes("菲律宾")) {
+    const baseKey = normalizeMatchKey(base);
+    if (["代付", "代付类型", "其他钱包", "其他类型"].includes(base)) {
+      add("代付");
+      add("代付类型");
+      add("其他钱包");
+      add("其他类型");
+      add("GCASH");
+      add("PAYMAYA");
+      add("GOTYME");
+      add("GRABPAY");
+      add("银行代付");
+      add("BANK");
+    }
+    if (["gcash"].includes(baseKey)) { add("GCASH"); add("GCash"); add("Gcash"); }
+    if (["paymaya", "maya"].includes(baseKey)) { add("PAYMAYA"); add("PayMaya"); add("Maya"); }
+    if (["gotyme", "gotymepay"].includes(baseKey)) { add("GOTYME"); add("GoTyme"); add("GOtyMe"); }
+    if (["grabpay", "grab"].includes(baseKey)) { add("GRABPAY"); add("GrabPay"); }
+    if (["银行代付", "bank", "bankpayout", "bankcard"].includes(baseKey)) { add("银行代付"); add("代付"); add("BANK"); add("Bank"); }
+  }
+
+  if (["墨西哥", "哥伦比亚", "智利", "南美"].some((item) => normalizedCountry.includes(item))) {
+    const baseKey = normalizeMatchKey(base);
+    add(base);
+    if (!base || ["其他类型", "代付类型", "其他钱包"].includes(base)) {
+      ["SPEI", "PSE", "Nequi", "BRE-B", "BRE_B", "BRE-KEY", "BRE_KEY", "Transfiya", "Cash", "OXXO", "OXXO Pay", "CoDi", "CLABE", "Bank", "Bank Card", "Card(Webpay)", "Card", "Bank(Khipu)", "E-Wallet(Mach)", "E-Wallet", "Cash(Pago46)"].forEach(add);
+    }
+    if (["breb", "breb"].includes(baseKey)) { add("BRE-B"); add("BRE_B"); }
+    if (["brekey"].includes(baseKey)) { add("BRE-KEY"); add("BRE_KEY"); }
+    if (["bank", "bankcard", "banktarjeta", "card"].includes(baseKey)) { add("Bank"); add("Bank Card"); add("Card"); }
+    if (["oxxo", "oxxopay"].includes(baseKey)) { add("OXXO"); add("OXXO Pay"); }
+    if (["cardwebpay", "webpay"].includes(baseKey)) { add("Card(Webpay)"); add("Card"); }
+    if (["bankkhipu", "khipu"].includes(baseKey)) { add("Bank(Khipu)"); add("Bank"); }
+    if (["ewalletmach", "ewallet", "mach"].includes(baseKey)) { add("E-Wallet(Mach)"); add("E-Wallet"); }
+    if (["cashpago46", "pago46"].includes(baseKey)) { add("Cash(Pago46)"); add("Cash"); }
+  }
+
+
+  if (normalizedCountry.includes("印度")) {
+    const baseKey = normalizeMatchKey(base);
+    if (/ninepayinr191|ninepayqr/.test(baseKey)) { add("NinePayINR 191"); add("NinePayINR191"); add("NinePay-QR"); }
+    if (/ninepayinr213|paytmninepay/.test(baseKey)) { add("NinePayINR 213"); add("NinePayINR213"); add("PAYTM-NinePay"); }
+    if (/wepay/.test(keys)) { add("WePay"); add("WEPAY唤醒"); add("PAYTM-WePay"); add("QR-WePay"); }
+    if (/movpay/.test(keys)) { add("MovPay"); add("MovPay-QR"); }
+    if (/magicpay/.test(keys)) { add("MagicPay"); add("MagicPay-QR"); }
+    if (/upipay/.test(keys)) { add("UpiPay"); add("UpiPay-QR"); }
+  }
+
+  add("");
+  return Array.from(set);
+}
+
+function feeTypeMatches(country: string, expectedType: string, actualType: string): boolean {
+  const expected = new Set(feeTypeCandidates(country, expectedType));
+  const actual = normalizeFeeTypeToken(country, actualType);
+  return !expected.size || !actual || expected.has(actual);
+}
+
+function sumRows(rows: ThirdPartyVolumeRow[]) {
+  const collectRows = rows.filter((row) => row.direction === "代收");
+  const payoutRows = rows.filter((row) => row.direction === "代付");
+  const collectAmount = collectRows.reduce((sum, row) => sum + row.amount, 0);
+  const collectCount = collectRows.reduce((sum, row) => sum + row.count, 0);
+  const payoutAmount = payoutRows.reduce((sum, row) => sum + row.amount, 0);
+  const payoutCount = payoutRows.reduce((sum, row) => sum + row.count, 0);
+  return {
+    amount: collectAmount + payoutAmount,
+    count: collectCount + payoutCount,
+    collectAmount,
+    collectCount,
+    payoutAmount,
+    payoutCount
+  };
+}
+
+function aggregateCombo(rows: ThirdPartyVolumeRow[], keyFn: (row: ThirdPartyVolumeRow) => string[]): ComboSummary[] {
+  const map = new Map<string, { parts: string[]; rows: ThirdPartyVolumeRow[] }>();
+  for (const row of rows) {
+    const parts = keyFn(row);
+    const key = parts.join("|||");
+    const current = map.get(key) || { parts, rows: [] };
+    current.rows.push(row);
+    map.set(key, current);
+  }
+
+  const totalCollectAmount = rows.filter((row) => row.direction === "代收").reduce((sum, row) => sum + row.amount, 0);
+  const totalPayoutAmount = rows.filter((row) => row.direction === "代付").reduce((sum, row) => sum + row.amount, 0);
+  const totalAmount = rows.reduce((sum, row) => sum + row.amount, 0);
+
+  return Array.from(map.entries()).map(([key, item]) => {
+    const collectRows = item.rows.filter((row) => row.direction === "代收");
+    const payoutRows = item.rows.filter((row) => row.direction === "代付");
+    const collectAmount = collectRows.reduce((sum, row) => sum + row.amount, 0);
+    const collectCount = collectRows.reduce((sum, row) => sum + row.count, 0);
+    const payoutAmount = payoutRows.reduce((sum, row) => sum + row.amount, 0);
+    const payoutCount = payoutRows.reduce((sum, row) => sum + row.count, 0);
+    const rowTotalAmount = collectAmount + payoutAmount;
+    const rowTotalCount = collectCount + payoutCount;
+    return {
+      key,
+      labelParts: item.parts,
+      collectAmount,
+      collectCount,
+      payoutAmount,
+      payoutCount,
+      totalAmount: rowTotalAmount,
+      totalCount: rowTotalCount,
+      collectPct: totalCollectAmount ? collectAmount / totalCollectAmount : 0,
+      payoutPct: totalPayoutAmount ? payoutAmount / totalPayoutAmount : 0,
+      totalPct: totalAmount ? rowTotalAmount / totalAmount : 0,
+      rows: item.rows
+    };
+  }).sort((a, b) => b.totalAmount - a.totalAmount || b.totalCount - a.totalCount);
+}
+
+function aggregateDirection(rows: ThirdPartyVolumeRow[], keyFn: (row: ThirdPartyVolumeRow) => string[]): DirectionSummary[] {
+  const map = new Map<string, DirectionSummary>();
+  for (const row of rows) {
+    const parts = keyFn(row);
+    const key = parts.join("|||");
+    const current = map.get(key) || { key, parts, amount: 0, count: 0, rows: [] };
+    current.amount += row.amount;
+    current.count += row.count;
+    current.rows.push(row);
+    map.set(key, current);
+  }
+  return Array.from(map.values()).sort((a, b) => b.amount - a.amount || b.count - a.count);
+}
+
+function formatLocalDateKey(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+type DateShortcut = "today" | "yesterday" | "beforeYesterday" | "thisWeek" | "lastWeek" | "thisMonth" | "lastMonth";
+
+function shortcutDateRange(mode: DateShortcut, selectedDateKey = ""): { start: string; end: string } {
+  const now = new Date();
+  const start = new Date(now);
+  const end = new Date(now);
+
+  if (mode === "yesterday") {
+    start.setDate(now.getDate() - 1);
+    end.setDate(now.getDate() - 1);
+  } else if (mode === "beforeYesterday") {
+    start.setDate(now.getDate() - 2);
+    end.setDate(now.getDate() - 2);
+  } else if (mode === "thisWeek" || mode === "lastWeek") {
+    const day = now.getDay() || 7;
+    start.setDate(now.getDate() - day + 1);
+    if (mode === "lastWeek") start.setDate(start.getDate() - 7);
+    end.setTime(start.getTime());
+    end.setDate(start.getDate() + 6);
+  } else if (mode === "thisMonth" || mode === "lastMonth") {
+    const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(selectedDateKey)
+      ? new Date(`${selectedDateKey}T12:00:00`)
+      : new Date(now);
+    const base = mode === "lastMonth" && !Number.isNaN(selectedDate.getTime()) ? selectedDate : now;
+    start.setFullYear(base.getFullYear(), base.getMonth(), 1);
+    if (mode === "lastMonth") start.setMonth(start.getMonth() - 1);
+    end.setFullYear(start.getFullYear(), start.getMonth() + 1, 0);
+  }
+
+  return { start: formatLocalDateKey(start), end: formatLocalDateKey(end) };
+}
+
+function monthDateRange(dateKey: string): { start: string; end: string } {
+  const match = String(dateKey || "").match(/^(\d{4})-(\d{2})/);
+  const fallback = formatLocalDateKey(new Date());
+  const [year, month] = match ? [Number(match[1]), Number(match[2])] : [Number(fallback.slice(0, 4)), Number(fallback.slice(5, 7))];
+  const endDay = new Date(year, month, 0).getDate();
+  const ym = `${year}-${String(month).padStart(2, "0")}`;
+  return { start: `${ym}-01`, end: `${ym}-${String(endDay).padStart(2, "0")}` };
+}
+
+function preferredDefaultDate(rows: ThirdPartyVolumeRow[]): string {
+  const dates = uniq(rows.map((row) => row.date));
+  if (!dates.length) return "";
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayKey = formatLocalDateKey(yesterday);
+  return dates.includes(yesterdayKey) ? yesterdayKey : dates[dates.length - 1];
+}
+
+function defaultStart(rows: ThirdPartyVolumeRow[]): string {
+  return preferredDefaultDate(rows);
+}
+
+function defaultEnd(rows: ThirdPartyVolumeRow[]): string {
+  return preferredDefaultDate(rows);
+}
+
+function dateMatches(date: string, start: string, end: string): boolean {
+  if (start && date < start) return false;
+  if (end && date > end) return false;
+  return true;
+}
+
+function dateAdd(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return date;
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function currentMonthPrefix(): string {
+  return formatLocalDateKey(new Date()).slice(0, 7);
+}
+
+function rangeIncludesCurrentMonth(start = "", end = ""): boolean {
+  const now = new Date();
+  const current = currentMonthPrefix();
+  const previousDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const previous = `${previousDate.getFullYear()}-${String(previousDate.getMonth() + 1).padStart(2, "0")}`;
+  const activeMonths = new Set([current]);
+  if (now.getDate() <= 7) activeMonths.add(previous);
+  const safeStart = (start || `${current}-01`).slice(0, 7);
+  const safeEnd = (end || `${current}-31`).slice(0, 7);
+  return Array.from(activeMonths).some((month) => safeStart <= month && safeEnd >= month);
+}
+
+function thirdPartyVolumeApiUrl(start = "", end = "", version = ""): string {
+  const params = new URLSearchParams();
+  if (start) params.set("start", start);
+  if (end) params.set("end", end);
+  // V237：checksum 变化时 URL 才变化，避免旧 CDN 缓存挡住刚完成的小时更新。
+  if (version) params.set("v", version);
+  const query = params.toString();
+  return query ? `/api/supabase-third-party-volume?${query}` : "/api/supabase-third-party-volume";
+}
+
+function weekKey(date: string): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return date;
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() - day + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function periodKeyFor(date: string, period: FeeAnomalyPeriod): string {
+  if (period === "month") return date.slice(0, 7);
+  if (period === "week") return weekKey(date);
+  return date;
+}
+
+function buildDailyCompareRows(rows: ThirdPartyVolumeRow[], lookupRows: ThirdPartyVolumeRow[] = rows): DailyCompareRow[] {
+  // 所有明细改成按「日期 + 国家 + 统一三方」汇总，下面展开再看各类型总量（跨平台合并）。
+  const grouped = aggregateCombo(rows, (row) => [row.date, row.country, row.channel]);
+  const lookupGrouped = aggregateCombo(lookupRows, (row) => [row.date, row.country, row.channel]);
+  const byKey = new Map<string, ComboSummary>();
+  for (const row of lookupGrouped) {
+    const [date = "", country = "", channel = ""] = row.labelParts;
+    byKey.set(`${date}|||${country}|||${channel}`, row);
+  }
+  return grouped.map((row) => {
+    const [date = "", country = "", channel = ""] = row.labelParts;
+    const prevDate = dateAdd(date, -1);
+    const prev = byKey.get(`${prevDate}|||${country}|||${channel}`);
+    const previousAmount = prev?.totalAmount || 0;
+    const previousCount = prev?.totalCount || 0;
+    const previousCollectAmount = prev?.collectAmount || 0;
+    const previousPayoutAmount = prev?.payoutAmount || 0;
+    const diffAmount = row.totalAmount - previousAmount;
+    const diffPercent = previousAmount ? diffAmount / previousAmount : null;
+    const collectDiffPercent = previousCollectAmount ? (row.collectAmount - previousCollectAmount) / previousCollectAmount : null;
+    const payoutDiffPercent = previousPayoutAmount ? (row.payoutAmount - previousPayoutAmount) / previousPayoutAmount : null;
+    return { ...row, date, country, platform: "", channel, channelType: "", previousAmount, previousCount, previousCollectAmount, previousPayoutAmount, collectDiffPercent, payoutDiffPercent, diffAmount, diffPercent };
+  }).sort((a, b) => b.date.localeCompare(a.date) || b.totalAmount - a.totalAmount || b.totalCount - a.totalCount);
+}
+
+function buildPlatformCompareRows(rows: ThirdPartyVolumeRow[]): PlatformCompareRow[] {
+  const grouped = aggregateCombo(rows, (row) => [row.date, row.country, row.platform]);
+  return grouped.map((row) => {
+    const [date = "", country = "", platform = ""] = row.labelParts;
+    return { ...row, date, country, platform };
+  }).sort((a, b) => b.date.localeCompare(a.date) || b.totalAmount - a.totalAmount || b.totalCount - a.totalCount || a.platform.localeCompare(b.platform, "zh-CN", { numeric: true }));
+}
+
+function cleanRateTextForParse(value: string): string {
+  return String(value || "")
+    .trim()
+    .replace(/，/g, " ")
+    .replace(/；/g, " ")
+    .replace(/;/g, " ")
+    .replace(/　/g, " ")
+    .replace(/(\d),(\d)(?=\s*%|\s*$)/g, "$1.$2")
+    .replace(/,/g, "");
+}
+
+type TierFee = { threshold: number; op: "above" | "below"; rate: number; single: number };
+
+function extractTierFees(value: string): TierFee[] {
+  const raw = cleanRateTextForParse(value);
+  if (!raw || !raw.includes("%")) return [];
+  const compactText = raw.replace(/\s+/g, " ");
+  const tiers: TierFee[] = [];
+  const pushTier = (thresholdRaw: string, word: string, rateRaw: string, singleRaw?: string) => {
+    const threshold = Number(thresholdRaw);
+    const ratePercent = Number(rateRaw);
+    const single = singleRaw ? Number(singleRaw) : 0;
+    if (!Number.isFinite(threshold) || !Number.isFinite(ratePercent) || ratePercent < 0 || ratePercent > 50) return;
+    const tier: TierFee = {
+      threshold,
+      op: /以上|above|>=/i.test(word || "") ? "above" : "below",
+      rate: ratePercent / 100,
+      single: Number.isFinite(single) ? single : 0
+    };
+    const key = `${tier.threshold}|||${tier.op}|||${tier.rate}|||${tier.single}`;
+    if (!tiers.some((item) => `${item.threshold}|||${item.op}|||${item.rate}|||${item.single}` === key)) tiers.push(tier);
+  };
+
+  const thresholdFirst = /(\d+(?:\.\d+)?)\s*(以上|以下|以内|以內|below|above|>=|<=)\s*[^\d%]{0,20}?(\d+(?:\.\d+)?)\s*%\s*(?:[+＋]\s*(?:单笔|每笔|笔费)?\s*(\d+(?:\.\d+)?))?/gi;
+  let match: RegExpExecArray | null;
+  while ((match = thresholdFirst.exec(compactText)) !== null) pushTier(match[1], match[2] || "", match[3], match[4]);
+
+  const rateFirst = /(\d+(?:\.\d+)?)\s*%\s*(?:[+＋]\s*(?:单笔|每笔|笔费)?\s*(\d+(?:\.\d+)?))?\s*[^\d%]{0,30}?(\d+(?:\.\d+)?)\s*(以上|以下|以内|以內|below|above|>=|<=)/gi;
+  while ((match = rateFirst.exec(compactText)) !== null) pushTier(match[3], match[4] || "", match[1], match[2]);
+  return tiers;
+}
+
+function pickTierFee(value: string, avgAmount = 0): TierFee | null {
+  const tiers = extractTierFees(value);
+  if (!tiers.length) return null;
+  if (avgAmount > 0) {
+    const matched = tiers.find((tier) => tier.op === "above" ? avgAmount >= tier.threshold : avgAmount <= tier.threshold);
+    if (matched) return matched;
+  }
+  // 没有平均金额时，只取第一个真实百分比，不把“2001以上/3000以下”这些门槛当成 2001%。
+  return tiers[0];
+}
+
+function parseFeeRate(value: string): number {
+  const raw = cleanRateTextForParse(value);
+  if (!raw || raw === "-" || raw === "—" || /没有|无|关闭|暂停/.test(raw)) return 0;
+  // USDT/TRX 通道表里的 2.9TRX / 3.5TRX / 4TRX 是单笔 TRX 手续费，不是百分比。
+  // 这里必须返回 0，让 singleFeeFor() 去当“单笔费用”计算，不能误算成 2.9% / 4%。
+  if (/\btrx\b|trx|trc20|usdt/i.test(raw) && !raw.includes("%")) return 0;
+  if (raw.includes("%")) {
+    const percent = raw.match(/(-?\d+(?:\.\d+)?)\s*%/);
+    if (!percent) return 0;
+    const n = Number(percent[1]);
+    if (!Number.isFinite(n) || n < 0 || n > 50) return 0;
+    return n / 100;
+  }
+  if (/以上|以下|以内|以內|above|below|>=|<=/i.test(raw)) return 0;
+  const match = raw.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return 0;
+  const n = Number(match[0]);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  // Google 表有些单元格会把 0.70% 读成 0.7，有些会把 1.9% 读成 0.019。
+  // 规则：0.05 以下按小数率处理；0.05~50 按百分数字处理，避免 0.9 被算成 90%。
+  if (n > 50) return 0;
+  if (n >= 0.05) return n / 100;
+  return n;
+}
+
+function parseConditionalRate(value: string, avgAmount = 0): number {
+  const raw = cleanRateTextForParse(value);
+  if (!raw || raw === "-" || raw === "—" || raw.includes("没有") || raw.includes("无")) return 0;
+  if (/\btrx\b|trx|trc20|usdt/i.test(raw) && !raw.includes("%")) return 0;
+  if (raw.includes("+") && !raw.includes("%")) return 0;
+  const tier = pickTierFee(raw, avgAmount);
+  if (tier) return tier.rate;
+  return parseFeeRate(raw);
+}
+
+type RateLike = Pick<ThirdPartyRateRow, "country" | "category" | "thirdParty" | "collectFee" | "payoutFee" | "totalFee" | "collectSingleFee" | "payoutSingleFee" | "collectLimit" | "payoutLimit"> & { platform?: string; channelInfo?: string; sheetName?: string };
+
+function shouldUseTotalFeeAsRate(value: string): boolean {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "-" || raw === "—" || raw.includes("没有") || raw.includes("无")) return false;
+  // 例如巴西 TDPayBRL 的“0.1+0.1”是单笔费用，不是 10% 费率。
+  if (raw.includes("+") && !raw.includes("%")) return false;
+  return raw.includes("%");
+}
+
+function rateFor(row: RateLike | undefined, kind: "collect" | "payout" | "total", avgAmount = 0): number {
+  if (!row) return 0;
+  const conditional = (value: string) => parseConditionalRate(value, avgAmount);
+  if (kind === "collect") {
+    // 代收、代付必须分开读；不能用合计费率/代收费率去顶代付，否则会出现代付无费率却显示代收费率的问题。
+    return conditional(row.collectFee);
+  }
+  if (kind === "payout") {
+    return conditional(row.payoutFee);
+  }
+  return shouldUseTotalFeeAsRate(row.totalFee) ? conditional(row.totalFee) : conditional(row.collectFee) + conditional(row.payoutFee);
+}
+
+function parseSingleFee(value: string): number {
+  const raw = cleanRateTextForParse(value);
+  if (!raw || raw === "-" || raw === "—" || raw.includes("无") || raw.includes("没有")) return 0;
+  if (/以上|以下|以内|以內|above|below|>=|<=/i.test(raw) && !/[+＋]\s*(?:单笔|每笔|笔费)?\s*\d/i.test(raw)) return 0;
+  // 如果同一个格子写成“0.9% + 单笔1 / 3%+6”，单笔要取 + 后面或“单笔”后面的数字，不能把 0.9 当成单笔。
+  if (raw.includes("%")) {
+    // 先找明确标注的“单笔/每笔/笔费”，避免把另一段百分比（例如 +4.50%）误当成单笔 4.5。
+    const explicitSingle = raw.match(/(?:单笔|每笔|笔费)\D*(-?\d+(?:\.\d+)?)/i);
+    if (explicitSingle) return Number(explicitSingle[1]) || 0;
+    // 兼容“0.9%+6”这种没有写“单笔”的格式，但排除“+4.5%”。
+    const withoutPercents = raw.replace(/-?\d+(?:\.\d+)?\s*%/g, "");
+    const afterPlus = withoutPercents.match(/[+＋]\s*(-?\d+(?:\.\d+)?)/i);
+    if (afterPlus) return Number(afterPlus[1]) || 0;
+    return 0;
+  }
+  const match = raw.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return 0;
+  const n = Number(match[0]);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function parseConditionalSingleFee(value: string, avgAmount = 0): number {
+  const tier = pickTierFee(value, avgAmount);
+  if (tier) return tier.single || 0;
+  return parseSingleFee(value);
+}
+
+function singleFeeFor(row: RateLike | undefined, kind: "collect" | "payout", avgAmount = 0): number {
+  if (!row) return 0;
+  const explicit = parseConditionalSingleFee(kind === "collect" ? row.collectSingleFee : row.payoutSingleFee, avgAmount);
+  if (explicit) return explicit;
+  // 兼容 Google 费率表把“费率% + 单笔”放在同一个单元格的情况。
+  return parseConditionalSingleFee(kind === "collect" ? row.collectFee : row.payoutFee, avgAmount);
+}
+
+function finiteFeeNumber(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function estimateSideFee(amount: number, count: number, percentRate: number, singleFee: number): number {
+  // 任何一条异常费率数据都不能把整组三方手续费变成 NaN。
+  // 所有输入先做有限数保护；费率数值仍完全来自 Google 费率表。
+  const safeAmount = Math.max(0, finiteFeeNumber(amount));
+  const safeCount = Math.max(0, finiteFeeNumber(count));
+  const safeRate = Math.max(0, finiteFeeNumber(percentRate));
+  const safeSingle = Math.max(0, finiteFeeNumber(singleFee));
+  const fee = safeAmount * safeRate + safeCount * safeSingle;
+  return Number.isFinite(fee) && fee >= 0 ? fee : 0;
+}
+
+function normalizeRateCategory(country: string, value?: string): string {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return inferThirdPartyChannelType(text, country, text) || text;
+}
+
+function normalizeMatchKey(value: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/（/g, "(")
+    .replace(/）/g, ")")
+    .replace(/(?:brl|inr|pkr|php|vnd|mmk|ngn|mxn|cop|clp|bdt|usdt|trx)$/gi, "")
+    .replace(/[^a-z0-9一-龥]+/g, "")
+    .trim();
+}
+
+function rateNameKey(country: string, channel: string): string {
+  const canonical = canonicalThirdPartyName(channel, country);
+  return normalizeMatchKey(canonical || channel);
+}
+
+function rateTypeKey(country: string, channelType?: string): string {
+  return normalizeMatchKey(normalizeFeeTypeToken(country, channelType));
+}
+
+function rateKey(country: string, platform: string, channel: string, channelType?: string): string {
+  return `${normalizeMatchKey(normalizeCountryLabel(country))}|||${normalizeMatchKey(platform)}|||${rateNameKey(country, channel)}|||${rateTypeKey(country, channelType)}`;
+}
+
+function isCoinvidUsdtChannel(country: string, platform: string, channel: string, channelType?: string): boolean {
+  const normalizedCountry = normalizeCountryLabel(country);
+  const text = `${platform} ${channel} ${channelType || ""}`.toLowerCase();
+  return normalizedCountry.includes("越南") && /coinvid/.test(text) && /usdt|trc20|tron/.test(text);
+}
+
+function rateHasFee(row: RateLike | undefined): boolean {
+  if (!row) return false;
+  return !!(
+    parseFeeRate(row.collectFee) ||
+    parseFeeRate(row.payoutFee) ||
+    parseFeeRate(row.totalFee) ||
+    parseSingleFee(row.collectFee) ||
+    parseSingleFee(row.payoutFee) ||
+    parseSingleFee(row.collectSingleFee) ||
+    parseSingleFee(row.payoutSingleFee)
+  );
+}
+
+function rateHasSideFee(row: RateLike | undefined, side: "collect" | "payout"): boolean {
+  if (!row) return false;
+  if (side === "collect") {
+    return !!(parseFeeRate(row.collectFee) || parseSingleFee(row.collectFee) || parseSingleFee(row.collectSingleFee));
+  }
+  return !!(parseFeeRate(row.payoutFee) || parseSingleFee(row.payoutFee) || parseSingleFee(row.payoutSingleFee));
+}
+
+function rateSideScore(row: RateLike | undefined, side: "collect" | "payout"): number {
+  if (!row) return 0;
+  let score = rateScore(row);
+  if (rateHasSideFee(row, side)) score += 100;
+  const opposite = side === "collect" ? "payout" : "collect";
+  if (rateHasSideFee(row, opposite)) score += 2;
+  return score;
+}
+
+function rateScore(row: RateLike | undefined): number {
+  if (!row) return 0;
+  let score = 0;
+  if (parseFeeRate(row.collectFee)) score += 8;
+  if (parseFeeRate(row.payoutFee)) score += 8;
+  if (parseFeeRate(row.totalFee)) score += 4;
+  if (parseSingleFee(row.collectFee)) score += 4;
+  if (parseSingleFee(row.payoutFee)) score += 4;
+  if (parseSingleFee(row.collectSingleFee)) score += 3;
+  if (parseSingleFee(row.payoutSingleFee)) score += 3;
+  if (row.platform) score += 2;
+  if (row.category) score += 1;
+  if (String(row.channelInfo || "").includes("Google费率表直读")) score += 50;
+  return score;
+}
+
+function mergeRateLike(oldRow: RateLike, newRow: RateLike): RateLike {
+  return {
+    ...oldRow,
+    ...newRow,
+    collectFee: oldRow.collectFee || newRow.collectFee,
+    payoutFee: oldRow.payoutFee || newRow.payoutFee,
+    totalFee: oldRow.totalFee || newRow.totalFee,
+    collectSingleFee: oldRow.collectSingleFee || newRow.collectSingleFee,
+    payoutSingleFee: oldRow.payoutSingleFee || newRow.payoutSingleFee,
+    collectLimit: oldRow.collectLimit || newRow.collectLimit,
+    payoutLimit: oldRow.payoutLimit || newRow.payoutLimit,
+    category: oldRow.category || newRow.category,
+    channelInfo: oldRow.channelInfo || newRow.channelInfo,
+    platform: oldRow.platform || newRow.platform
+  };
+}
+
+function expandRateNameCandidates(country: string, ...values: Array<string | undefined>): string[] {
+  const normalizedCountry = normalizeCountryLabel(country);
+  const set = new Set<string>();
+  const add = (x?: string) => {
+    const raw = String(x || "").trim();
+    if (!raw) return;
+    set.add(raw);
+    const canonical = canonicalThirdPartyName(raw, normalizedCountry);
+    if (canonical) set.add(canonical);
+  };
+
+  values.forEach(add);
+
+  const keys = Array.from(set).map((x) => normalizeMatchKey(x)).join("|");
+
+  // 巴西：TOD / TDPay / TodayPay 只做名称归并；实际费率仍从 Google 费率表读取。
+  if (/tod|todaypay|tdpay|tdpaybrl/.test(keys)) ["TodayPay", "TOD", "TODPay", "TDPay", "TDPayBRL"].forEach(add);
+
+  // 越南：TopPay 不能再被识别成 OpPay；FASTPAY 只归 FASTPay。TPAY/TRUEPAY 属于马来 TruePay，不能放进越南。
+  if (normalizedCountry.includes("越南")) {
+    if (/1vnpay|momo/.test(keys)) ["1VNPay", "1VNPay-MoMo", "1VNPay MoMo", "1vnpay - momo", "1vnpay-momo", "1VNPay-QR", "1VNPay QR", "1VNPayBank"].forEach(add);
+    if (/toppay|topd|toppayd|top/.test(keys)) ["TopPay", "TopPay-QR", "TopPay QR", "TopPayD", "TopPay D", "TopPayVND-Bank", "TopPayVND Bank", "TopPay(VND)", "TopPay(VND)(四)"].forEach(add);
+    if (/fastpay|fast/.test(keys)) ["FASTPay", "FastPay", "FASTPAY", "FASTPay(VND)", "Fast-momo", "FastPay-Momo", "FastPay-MoMo", "FASTPay-MOMO"].forEach(add);
+    if (/aqfpay|aqf/.test(keys)) ["AQFPay", "AQFPayVND-Bank", "AQFPay VND Bank", "AQFPay-QR", "AQFPay QR"].forEach(add);
+  }
+
+  if (normalizedCountry.includes("印尼")) {
+    if (/payingpay|payingpayi|payingpayl|secpay/.test(keys)) ["PayIngPay", "PayIngPayI", "PayIngPayl", "PayingPay", "PayingPayI", "SecPay", "SECPAY-PAYING"].forEach(add);
+    if (/safepay|safepay2|safe2pay/.test(keys)) ["SafePay", "SAFEPAY", "SafePay2", "Safe2Pay"].forEach(add);
+    if (/yerepay/.test(keys)) ["YerePay", "yerePay", "YEREPAY"].forEach(add);
+    if (/sudalink/.test(keys)) ["SudalinkPay", "Sudalink", "sudalinkPay", "SUDALINKPAY", "QRIS (Sudalink)", "BNI-VA (Sudalink)", "BRI-VA (Sudalink)", "CIMB-VA (Sudalink)", "MANDIRI-VA (Sudalink)", "Permata-VA (Sudalink)"].forEach(add);
+  }
+
+  if (normalizedCountry.includes("巴西")) {
+    if (/vps|vpspay|pixpay21/.test(keys)) ["VPS", "vps", "VpsPay", "VPSPay", "dp-vpsPay", "wd-vpsPay", "PIXPAY21"].forEach(add);
+  }
+
+  if (normalizedCountry.includes("印度")) {
+    // 用户确认：OX2PAY 就是 OXPay。量表和费率表任一边写 OX2Pay/OXPay 都必须命中同一费率。
+    if (/ox2pay|oxpay/.test(keys)) ["OXPay", "OXPay-QR", "PAYTM-OXPay", "OX2Pay", "OX2Pay-QR", "PAYTM-OX2Pay"].forEach(add);
+    if (/arbpay|arbpayinr/.test(keys)) ["ArbPay", "ArbPayINR"].forEach(add);
+  }
+
+  if (/usdt|trx|trc20|tron/i.test(keys) || normalizedCountry.includes("USDT")) {
+    // USDT 通道不能把所有 USDT 三方互相加入候选，否则 UNIPAY 会误匹配到 TRONPAY 的 4TRX。
+    // 按名称精确扩展：UNIPAY=2.9/3.5TRX，TRONPAY=3/4TRX，UPay13/AYPay/UUPay 各走自己的行。
+    if (/unipay|uni[-_ ]?pay/.test(keys)) ["UniPayUSDT", "UNIPAY-USDT", "UNIPAY", "UniPay", "UniPayUSDTCU"].forEach(add);
+    if (/tronpay|tron[-_ ]?pay/.test(keys)) ["TronPayUSDT", "TRONPAY-USDT", "TRONPAY", "TronPay", "TronPayUSDTCU"].forEach(add);
+    if (/uupay|uu[-_ ]?pay/.test(keys)) ["UUPayUSDT", "UUPAY-USDT", "UUPAY", "UUPay", "UUPayUSDTCU"].forEach(add);
+    if (/upay13|upay[-_ ]?13/.test(keys)) ["UPay13USDT", "UPay13USDTCU", "UPay13", "UPAY13"].forEach(add);
+    if (/aypay|ay[-_ ]?pay/.test(keys)) ["AYPayUSDT", "AYPayUSDTCU", "AYPAY", "AYPay"].forEach(add);
+    if (/\bupay\b|^upay$/.test(keys)) ["UPayUSDT", "UPAY", "UPay"].forEach(add);
+    if (/^usdt$|trc20/.test(keys)) ["USDT", "TRC20"].forEach(add);
+  }
+
+  if (["墨西哥", "哥伦比亚"].some((item) => normalizedCountry.includes(item))) {
+    if (/beacon|okeypay|okpay|okaypay/.test(keys)) ["BeaconPay", "Beaconpay", "OKEYPAY", "OkeyPay", "OKPAY", "OkPay", "OKAYPAY", "OkayPay"].forEach(add);
+  }
+  if (["墨西哥", "哥伦比亚", "智利"].some((item) => normalizedCountry.includes(item))) {
+    if (/tod|todaypay|todpay/.test(keys)) ["TodayPay", "TOD", "TODPAY", "TODPay", "todpay", "TODPAY-NEW"].forEach(add);
+    if (/starpago/.test(keys)) ["STARPAGO", "StarPago", "starpago"].forEach(add);
+    if (/epay/.test(keys)) ["EPay", "EPAY", "Epay", "epay"].forEach(add);
+    if (/supefina/.test(keys)) ["Supefina", "SUPEFINA", "supefina", "SUPEFINAPAY", "SUPEFINA-transfiya"].forEach(add);
+  }
+
+  if (normalizedCountry.includes("巴基斯坦")) {
+    if (/p777|777pay/.test(keys)) ["P777Pay", "P777pay", "777Pay", "P777", "P777-EP", "P777-Jazz"].forEach(add);
+    if (/epay|newepay|new[-_ ]?epay/.test(keys)) ["EPay", "Epay", "EPAY", "newEPay", "NewEPay", "new EPay", "new-EPay", "EPay-EP", "EPay-Jazz"].forEach(add);
+    if (/deepay|depay|ablepay/.test(keys)) ["DeePay", "DePay", "AblePay"].forEach(add);
+    if (/openpay/.test(keys)) ["OpenPay", "Open-EP", "Open-Jazz"].forEach(add);
+    if (/okpay/.test(keys)) ["OkPay", "OKPAY", "Ok-EP", "Ok-Jazz"].forEach(add);
+    if (/oppay|opay/.test(keys)) ["OpPay", "OPPAY", "OPay", "OpPay-EP", "OpPay-Jazz"].forEach(add);
+  }
+
+  return Array.from(set).filter(Boolean);
+}
+
+function putRate(map: Map<string, RateLike>, country: string, platform: string, name: string, category: string, row: RateLike) {
+  const key = rateKey(country, platform, name, category);
+  const existing = map.get(key);
+  if (!existing) {
+    map.set(key, row);
+    return;
+  }
+  // 费率表经常同一个三方先出现一行“状态/备注”，后面盘口矩阵才有真正手续费。
+  // 这里不能先写入空费率后就挡住后面的数据，要优先保留有费率/单笔手续费的版本。
+  const merged = mergeRateLike(existing, row);
+  map.set(key, rateScore(row) > rateScore(existing) ? mergeRateLike(row, existing) : merged);
+}
+
+function rateCountriesCompatible(targetCountry: string, candidateCountry: string): { ok: boolean; score: number } {
+  const target = normalizeCountryLabel(targetCountry);
+  const candidate = normalizeCountryLabel(candidateCountry);
+  if (!target || !candidate) return { ok: false, score: 0 };
+  if (target === candidate) return { ok: true, score: 40 };
+  const southAmerica = new Set(["墨西哥", "哥伦比亚", "智利"]);
+  if (southAmerica.has(target) && candidate === "南美") return { ok: true, score: 12 };
+  if (target === "南美" && southAmerica.has(candidate)) return { ok: true, score: 8 };
+  return { ok: false, score: 0 };
+}
+
+function findMatchedRate(rateMap: Map<string, RateLike>, country: string, platform: string, channel: string, channelType?: string, side?: "collect" | "payout"): RateLike | undefined {
+  const isUsdtTarget = isUsdtFeeTarget(country, platform, channel, channelType);
+  const ch = canonicalThirdPartyName(channel, isUsdtTarget ? "USDT" : country);
+  const platformText = String(platform || "").trim();
+  const exactType = normalizeFeeTypeToken(country, channelType);
+  const countryCandidates = isUsdtTarget
+    ? Array.from(new Set(["USDT通道", "USDT", ...expandRateCountries(country)]))
+    : expandRateCountries(country);
+  const platformCandidates = platformText ? [platformText, ""] : [""];
+  const typeCandidates = isUsdtTarget
+    ? Array.from(new Set(["", ...feeTypeCandidates("USDT", channelType), ...feeTypeCandidates(country, channelType)]))
+    : Array.from(new Set(["", ...feeTypeCandidates(country, channelType)]));
+  const seen = new Set<string>();
+  let bestAny: { row: RateLike; score: number } | null = null;
+  let bestWithFee: { row: RateLike; score: number } | null = null;
+
+  for (const countryKey of countryCandidates) {
+    for (const platformKey of platformCandidates) {
+      for (const typeKey of typeCandidates) {
+        const key = rateKey(countryKey, platformKey, ch, typeKey);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const row = rateMap.get(key);
+        if (!row) continue;
+        let score = side ? rateSideScore(row, side) : rateScore(row);
+        if (isUsdtTarget && (countryKey === "USDT通道" || countryKey === "USDT")) score += 30;
+        else if (countryKey === normalizeCountryLabel(country)) score += 14;
+        else if (countryKey === "南美") score += 6;
+        if (platformKey && platformKey === platformText) score += 10;
+        if (typeKey && typeKey === exactType) score += 8;
+        else if (typeKey && feeTypeMatches(country, exactType, typeKey)) score += 5;
+        else if (!typeKey) score += 1;
+        if (row.category && feeTypeMatches(country, exactType, row.category)) score += 3;
+        if (!bestAny || score > bestAny.score) bestAny = { row, score };
+        const hasRequestedFee = side ? rateHasSideFee(row, side) : rateHasFee(row);
+        if (hasRequestedFee && (!bestWithFee || score > bestWithFee.score)) bestWithFee = { row, score };
+      }
+    }
+  }
+
+  if (bestWithFee?.row) return bestWithFee.row;
+
+  // 费率表页签/国家/类型名称经常有 NPG-MEXICO、墨西哥01、PSE/SPEI 等写法。
+  // 上面的精确索引没命中时，只在“同国家（或南美兜底）+ 同主三方”范围内扫描。
+  // 不允许墨西哥/哥伦比亚/智利互相串费率，也不写死任何费率数值。
+  const targetCountry = normalizeCountryLabel(country);
+  const targetNameKeys = new Set(expandRateNameCandidates(country, channel).map((name) => rateNameKey(country, name)));
+  targetNameKeys.add(rateNameKey(country, channel));
+  const targetType = normalizeFeeTypeToken(country, channelType);
+  const targetPlatform = normalizeMatchKey(platformText);
+  const uniqueRows = Array.from(new Set(rateMap.values()));
+  let fallbackWithFee: { row: RateLike; score: number } | null = null;
+  let fallbackAny: { row: RateLike; score: number } | null = null;
+
+  for (const row of uniqueRows) {
+    const rowCountryRaw = row.country || row.sheetName || "";
+    const countryMatch = rateCountriesCompatible(targetCountry, rowCountryRaw);
+    if (!countryMatch.ok) continue;
+
+    const rowName = rateNameKey(rowCountryRaw, row.thirdParty);
+    if (!targetNameKeys.has(rowName)) continue;
+
+    let score = countryMatch.score + (side ? rateSideScore(row, side) : rateScore(row));
+    const rowPlatform = normalizeMatchKey(row.platform || "");
+    if (targetPlatform && rowPlatform === targetPlatform) score += 20;
+    else if (!rowPlatform) score += 4;
+    else if (targetPlatform) score -= 3;
+
+    const rowType = normalizeFeeTypeToken(targetCountry, row.category || "");
+    if (targetType && rowType === targetType) score += 20;
+    else if (targetType && rowType && feeTypeMatches(targetCountry, targetType, rowType)) score += 12;
+    else if (!rowType) score += 6;
+    else if (!targetType || targetType === "其他类型" || targetType === "代付类型") score += 2;
+    else score -= 5;
+
+    if (!fallbackAny || score > fallbackAny.score) fallbackAny = { row, score };
+    const hasRequestedFee = side ? rateHasSideFee(row, side) : rateHasFee(row);
+    if (hasRequestedFee && (!fallbackWithFee || score > fallbackWithFee.score)) fallbackWithFee = { row, score };
+  }
+
+  return fallbackWithFee?.row || bestAny?.row || fallbackAny?.row;
+}
+
+function buildRateMap(rates: ThirdPartyRateRow[], statuses: ThirdPartyPlatformStatusRow[] = []): Map<string, RateLike> {
+  const map = new Map<string, RateLike>();
+
+  for (const row of rates) {
+    const names = expandRateNameCandidates(row.country, row.thirdParty, row.channelInfo, row.category);
+    const countryKeys = expandRateCountries(row.country);
+    for (const country of countryKeys) {
+      for (const name of names) {
+        putRate(map, country, "", name, row.category || "", row);
+        putRate(map, country, "", name, "", row);
+        // NinePay 同主三方两套费率：把费率表里的 NinePayINR 191 / 213 作为类型索引挂到 NinePay 下。
+        if (normalizeCountryLabel(country).includes("印度") && /ninepay\s*inr\s*(191|213)|ninepayinr(191|213)/i.test(`${row.thirdParty} ${row.channelInfo || ""}`)) {
+          const text = `${row.thirdParty} ${row.channelInfo || ""}`;
+          const typeKey = /213/.test(text) ? "NinePayINR 213" : "NinePayINR 191";
+          putRate(map, country, "", "NinePay", typeKey, row);
+        }
+      }
+    }
+  }
+
+  for (const row of statuses) {
+    const asRate: RateLike = {
+      country: row.country,
+      platform: row.platform,
+      category: row.category || "",
+      thirdParty: row.thirdParty,
+      collectFee: row.collectFee,
+      payoutFee: row.payoutFee,
+      totalFee: row.totalFee,
+      collectSingleFee: row.collectSingleFee,
+      payoutSingleFee: row.payoutSingleFee,
+      collectLimit: row.collectLimit,
+      payoutLimit: row.payoutLimit,
+      channelInfo: "",
+      sheetName: row.sheetName
+    };
+    const names = expandRateNameCandidates(row.country, row.thirdParty, row.category);
+    const countryKeys = expandRateCountries(row.country);
+    for (const country of countryKeys) {
+      for (const name of names) {
+        // 盘口状态表最准确：优先按 国家 + 平台 + 三方 + 类型 匹配。
+        putRate(map, country, row.platform, name, row.category || "", asRate);
+        putRate(map, country, row.platform, name, "", asRate);
+        // 再补一个不带平台的兜底，防止量表平台名和费率表平台名细微不同。
+        putRate(map, country, "", name, row.category || "", asRate);
+        putRate(map, country, "", name, "", asRate);
+      }
+    }
+  }
+
+  // 费率金额、百分比和单笔费用全部以 Google 费率表为唯一来源。
+  // 代码这里只负责国家/平台/三方/类型名称归并，不写死任何费率数值。
+  return map;
+}
+
+function groupKeyForFee(row: FeeCompareRow): string {
+  // 异常判断必须按同国家 + 同周期 + 同钱包/通道类型比较，不能把银行代付、钱包代付、QRIS、Virtual Account 混在一起。
+  const type = normalizeFeeTypeToken(row.country, row.channelType || "其他类型") || "其他类型";
+  return row.date ? `${row.date}|||${row.country}|||${type}` : `${row.country}|||${type}`;
+}
+
+function buildFeeCompareRows(comboRows: ComboSummary[], rateRows: ThirdPartyRateRow[], statusRows: ThirdPartyPlatformStatusRow[], scope: "platform" | "daily"): FeeCompareRow[] {
+  const rateMap = buildRateMap(rateRows, statusRows);
+  const rows = comboRows.filter((row) => row.totalAmount > 0 || row.totalCount > 0).map((row) => {
+    const [a = "", b = "", c = "", d = "", e = ""] = row.labelParts;
+    const date = scope === "daily" ? a : undefined;
+    const country = scope === "daily" ? b : a;
+    const platform = scope === "daily" ? c : b;
+    const rawChannelForFee = scope === "daily" ? d : c;
+    const rawTypeForFee = scope === "daily" ? e : d;
+    const usdtTarget = isUsdtFeeTarget(country, platform, rawChannelForFee, rawTypeForFee);
+    let channel = canonicalThirdPartyName(rawChannelForFee, usdtTarget ? "USDT" : country);
+    const channelType = normalizeRateCategory(usdtTarget ? "USDT" : country, rawTypeForFee);
+    // 代收、代付分别匹配 Google 费率表。不能先选一条“综合最优”费率行再同时计算两边，
+    // 否则同三方存在不同子通道/方向时，会出现费率文字有值但对应手续费为 0。
+    const collectRateRow = findMatchedRate(rateMap, country, platform, channel, channelType, "collect");
+    const payoutRateRow = findMatchedRate(rateMap, country, platform, channel, channelType, "payout");
+    const collectAvgAmount = row.collectCount ? row.collectAmount / row.collectCount : 0;
+    const payoutAvgAmount = row.payoutCount ? row.payoutAmount / row.payoutCount : 0;
+    const collectFeeRate = rateFor(collectRateRow, "collect", collectAvgAmount);
+    const payoutFeeRate = rateFor(payoutRateRow, "payout", payoutAvgAmount);
+    const totalFeeRate = collectFeeRate + payoutFeeRate;
+    const collectSingleFee = singleFeeFor(collectRateRow, "collect", collectAvgAmount);
+    const payoutSingleFee = singleFeeFor(payoutRateRow, "payout", payoutAvgAmount);
+    const collectFeeAmount = estimateSideFee(row.collectAmount, row.collectCount, collectFeeRate, collectSingleFee);
+    const payoutFeeAmount = estimateSideFee(row.payoutAmount, row.payoutCount, payoutFeeRate, payoutSingleFee);
+    const isManualHandling = channel === "人工确认" || channel === "人工充值";
+    // 先正常对应 Google 费率表；只有人工处理通道在对应方向没有任何费率/单笔费时，才明确视为 0 手续费。
+    // 这样不会给其它真实三方擅自补 0，也不会把“未匹配”伪装成正常费率。
+    const collectFeeKnownZero = isManualHandling && sideHasValue(row.collectAmount, row.collectCount) && !rateHasSideFee(collectRateRow, "collect");
+    const payoutFeeKnownZero = isManualHandling && sideHasValue(row.payoutAmount, row.payoutCount) && !rateHasSideFee(payoutRateRow, "payout");
+    const estimatedFee = collectFeeAmount + payoutFeeAmount;
+    const effectiveTotalFeeRate = row.totalAmount ? estimatedFee / row.totalAmount : totalFeeRate;
+    return {
+      key: `${row.key}|||fee`,
+      date,
+      country,
+      platform,
+      channel,
+      channelType,
+      collectAmount: row.collectAmount,
+      collectCount: row.collectCount,
+      payoutAmount: row.payoutAmount,
+      payoutCount: row.payoutCount,
+      totalAmount: row.totalAmount,
+      totalCount: row.totalCount,
+      collectShare: 0,
+      payoutShare: 0,
+      totalShare: 0,
+      collectFeeRate,
+      payoutFeeRate,
+      totalFeeRate,
+      effectiveTotalFeeRate,
+      collectSingleFee,
+      payoutSingleFee,
+      collectFeeAmount,
+      payoutFeeAmount,
+      collectFeeKnownZero,
+      payoutFeeKnownZero,
+      estimatedFee,
+      advice: "正常观察",
+      level: "normal" as FeeCompareRow["level"]
+    };
+  });
+
+  const byScope = new Map<string, FeeCompareRow[]>();
+  for (const row of rows) {
+    const key = groupKeyForFee(row);
+    const list = byScope.get(key) || [];
+    list.push(row);
+    byScope.set(key, list);
+  }
+
+  for (const list of byScope.values()) {
+    const totalCollect = list.reduce((sum, row) => sum + row.collectAmount, 0);
+    const totalPayout = list.reduce((sum, row) => sum + row.payoutAmount, 0);
+    const totalVolume = list.reduce((sum, row) => sum + row.totalAmount, 0);
+    const totalRates = list.map((row) => row.effectiveTotalFeeRate).filter((rate) => rate > 0);
+    const minTotal = totalRates.length ? Math.min(...totalRates) : 0;
+    const avgTotal = totalRates.length ? totalRates.reduce((sum, rate) => sum + rate, 0) / totalRates.length : 0;
+
+    for (const row of list) {
+      row.collectShare = totalCollect ? row.collectAmount / totalCollect : 0;
+      row.payoutShare = totalPayout ? row.payoutAmount / totalPayout : 0;
+      row.totalShare = totalVolume ? row.totalAmount / totalVolume : 0;
+      const notes: string[] = [];
+      let level: FeeCompareRow["level"] = "normal";
+
+      if (!row.collectFeeRate && !row.payoutFeeRate && !row.collectSingleFee && !row.payoutSingleFee) {
+        notes.push("未匹配到费率资料");
+        level = "missing";
+      }
+
+      // 异常提醒按“代收手续费 + 代付手续费 = 合计手续费”换算总有效费率对比。
+      // 同国家、同周期、同钱包/通道类型内比较，避免把 LINKAJA 钱包代付和银行代付混在一起。
+      const rateText = row.effectiveTotalFeeRate ? `总有效费率 ${formatPercent(row.effectiveTotalFeeRate)}` : "总有效费率 -";
+      if (totalRates.length >= 2 && row.effectiveTotalFeeRate && minTotal && row.effectiveTotalFeeRate >= minTotal + 0.0015 && row.totalShare >= 0.12 && row.totalAmount > 0) {
+        notes.push(`总费率偏高但跑量多（${rateText}，同类型最低 ${formatPercent(minTotal)}）`);
+        level = "danger";
+      }
+      if (totalRates.length >= 3 && row.effectiveTotalFeeRate && minTotal && avgTotal && row.effectiveTotalFeeRate <= minTotal + 0.0001 && row.effectiveTotalFeeRate < avgTotal - 0.001 && row.totalShare < 0.05 && row.totalAmount > 0) {
+        notes.push(`总费率低但跑量少（${rateText}，同类型平均 ${formatPercent(avgTotal)}）`);
+        if (level === "normal") level = "warning";
+      }
+
+      row.advice = notes.join("；") || "正常观察";
+      row.level = level;
+    }
+  }
+
+  return rows.sort((a, b) => {
+    const levelScore = (row: FeeCompareRow) => row.level === "danger" ? 3 : row.level === "warning" ? 2 : row.level === "missing" ? 1 : 0;
+    return levelScore(b) - levelScore(a) || b.estimatedFee - a.estimatedFee || b.totalAmount - a.totalAmount;
+  });
+}
+
+function feeWarningRows(rows: FeeCompareRow[]): FeeCompareRow[] {
+  return rows.filter((row) => row.level !== "normal");
+}
+
+function pct(value: number, total: number): string {
+  return total ? formatPercent(value / total) : "0.00%";
+}
+
+function cls(...values: Array<string | false | undefined>): string {
+  return values.filter(Boolean).join(" ");
+}
+
+function countryFromCombo(row: ComboSummary): string {
+  return row.labelParts[0] || "未知国家";
+}
+
+function countryFromDirection(row: DirectionSummary): string {
+  return row.parts[1] || row.parts[0] || "未知国家";
+}
+
+function groupCombosByCountry(rows: ComboSummary[]): Array<{ country: string; rows: ComboSummary[]; summary: ReturnType<typeof sumRows> }> {
+  return sortCountries(rows.map(countryFromCombo)).map((country) => {
+    const countryRows = rows.filter((row) => countryFromCombo(row) === country);
+    const rawRows = countryRows.flatMap((row) => row.rows);
+    return { country, rows: countryRows, summary: sumRows(rawRows) };
+  });
+}
+
+function groupDirectionsByCountry(rows: DirectionSummary[]): Array<{ country: string; rows: DirectionSummary[]; amount: number; count: number }> {
+  return sortCountries(rows.map(countryFromDirection)).map((country) => {
+    const countryRows = rows.filter((row) => countryFromDirection(row) === country);
+    return {
+      country,
+      rows: countryRows,
+      amount: countryRows.reduce((sum, row) => sum + row.amount, 0),
+      count: countryRows.reduce((sum, row) => sum + row.count, 0)
+    };
+  });
+}
+
+function countryPaneLabel(country: string): string {
+  if (isAllUsdtCountryPage(country)) return ALL_USDT_COUNTRY_PAGE;
+  if (country.includes("哥伦比亚")) return "NPG哥伦比亚盘口";
+  if (country.includes("墨西哥")) return "NPG墨西哥盘口";
+  if (country.includes("智利")) return "NPG智利盘口";
+  if (country.includes("盘口")) return country;
+  if (country.includes("印度")) return `${country}线下盘口`;
+  return `${country}盘口`;
+}
+
+function rawRowMapCode(row: ThirdPartyVolumeRow): string {
+  const raw = row.raw || {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (/映射|mapping|map/i.test(key)) return String(value || "");
+  }
+  return "";
+}
+
+function classifyIndonesiaBankWalletText(value: string): "银行代付" | "钱包代付" | "QRIS" | "Virtual Account" | "DANA" | "OVO" | "LINKAJA" | "GOPAY" | "" {
+  const original = String(value || "");
+  const lower = original.toLowerCase();
+  const text = lower.replace(/（/g, "(").replace(/）/g, ")").replace(/[\s_：:]+/g, "-");
+  const compact = text.replace(/[^a-z0-9]+/g, "");
+  // 印尼：具体钱包必须先识别。OVO / DANA / LINKAJA / GOPAY 各自可以有独立费率，不能合并成“其他类型”。
+  if (/qris|qr-is/.test(text) || /qris/.test(compact)) return "QRIS";
+  if (/link\s*aja|link-aja|linkaja/.test(text) || /linkaja/.test(compact)) return "LINKAJA";
+  if (/\bdana\b|(^|[-~_\s])dana([-~_\s]|$)/.test(text) || /dana/.test(compact)) return "DANA";
+  if (/\bovo\b|(^|[-~_\s])ovo([-~_\s]|$)/.test(text) || /ovo/.test(compact)) return "OVO";
+  if (/go\s*pay|go-pay|gopay|gojek/.test(text) || /gopay|gojek/.test(compact)) return "GOPAY";
+  // 已经归类好的中文类型。
+  if (/钱包|电子钱包|wallet|ewallet/.test(lower)) return "钱包代付";
+  if (/银行|bank|virtual|\bva\b|虚拟账户/.test(lower)) return "银行代付";
+  // B~YerePay / B-Click2Pay = 银行；E~YerePay / E-Click2Pay = 泛钱包。
+  if (/(^|[^a-z0-9])b\s*[~_-]?\s*yerepay|(^|[^a-z0-9])b\s*[~_-]?\s*paying|(^|[^a-z0-9])b\s*[~_-]?\s*kilipay|(^|[^a-z0-9])b\s*[~_-]?\s*click2?pay|bnin|bmri|brin|cena|bni|bri|mandiri|virtual|\bva\b|-va|permata|cimb|bca|bank/.test(text) || /(bnin|bmri|brin|cena|bni|bri|mandiri|virtualaccount|bank)/.test(compact)) return "银行代付";
+  if (/(^|[^a-z0-9])e\s*[~_-]?\s*yerepay|(^|[^a-z0-9])e\s*[~_-]?\s*paying|(^|[^a-z0-9])e\s*[~_-]?\s*kilipay|(^|[^a-z0-9])e\s*[~_-]?\s*click2?pay|ewallet|wallet/.test(text) || /(ewallet|wallet)/.test(compact)) return "钱包代付";
+  return "";
+}
+
+function normalizeSouthAmericaDisplayType(country: string, type: string, rawRows: ThirdPartyVolumeRow[] = []): string {
+  const c = normalizeCountryLabel(country);
+  const joined = `${type} ${rawRows.map((row) => `${rawRowMapCode(row)} ${row.channelType || ""} ${row.rawChannel || ""} ${row.channel || ""}`).join(" ")}`
+    .toLowerCase()
+    .replace(/（/g, "(")
+    .replace(/）/g, ")")
+    .replace(/[\s_：:]+/g, "-");
+  if (c.includes("墨西哥")) {
+    if (/spei/.test(joined)) return "SPEI";
+    if (/clabe/.test(joined)) return "CLABE";
+    if (/oxxo/.test(joined)) return "OXXO";
+    if (/codi/.test(joined)) return "CoDi";
+    if (/cash|efectivo/.test(joined)) return "Cash";
+    if (/bank-card|bankcard|bank|card|tarjeta/.test(joined)) return "Bank Card";
+  }
+  if (c.includes("哥伦比亚")) {
+    if (/bre[-_]?key|brekey/.test(joined)) return "BRE-KEY";
+    if (/bre[-_]?b|breb/.test(joined)) return "BRE-B";
+    if (/nequi/.test(joined)) return "Nequi";
+    if (/pse/.test(joined)) return "PSE";
+    if (/transfiya/.test(joined)) return "Transfiya";
+    if (/bank|banco/.test(joined)) return "Bank";
+    if (/cash|efectivo/.test(joined)) return "Cash";
+  }
+  if (c.includes("智利")) {
+    if (/webpay|card|tarjeta/.test(joined)) return "Card(Webpay)";
+    if (/khipu|bank|banco/.test(joined)) return "Bank(Khipu)";
+    if (/mach|e[-_ ]?wallet|ewallet|wallet/.test(joined)) return "E-Wallet(Mach)";
+    if (/pago46|cash|efectivo/.test(joined)) return "Cash(Pago46)";
+  }
+  return "";
+}
+
+function isPH19VolumeRow(row: ThirdPartyVolumeRow): boolean {
+  return /(^|[^a-z0-9])ph\s*[-_]?\s*19([^a-z0-9]|$)|菲律宾\s*19|菲\s*19/i.test(`${row.platform || ""} ${row.sheetName || ""} ${row.rawChannel || ""} ${row.channelType || ""}`);
+}
+
+function inferPH19DisplayType(text: string): string {
+  const raw = String(text || "").toLowerCase();
+  const compact = raw.replace(/[^a-z0-9一-龥]+/g, "");
+  if (/gcash/.test(raw) || compact.includes("gcash")) return "GCASH";
+  if (/pay\s*maya|paymaya|\bmaya\b/.test(raw) || compact.includes("paymaya")) return "PAYMAYA";
+  if (/go\s*tyme|gotyme/.test(raw) || compact.includes("gotyme")) return "GOTYME";
+  if (/grab\s*pay|grabpay/.test(raw) || compact.includes("grabpay")) return "GRABPAY";
+  if (/bank|银行|银行卡/.test(raw)) return "银行代付";
+  return "";
+}
+
+function normalizedDisplayChannelType(country: string, type: string, rawRows: ThirdPartyVolumeRow[] = []): string {
+  const fallback = normalizeRateCategory(country, type) || String(type || "").trim() || "其他类型";
+  const text = rawRows.map((row) => `${row.platform || ""} ${row.sheetName || ""} ${row.channelType || ""} ${row.rawChannel || ""} ${row.channel || ""} ${rawRowMapCode(row)}`).join(" ").toLowerCase();
+  const onlyPayout = rawRows.length > 0 && rawRows.every((row) => row.direction === "代付");
+  const southAmericaType = normalizeSouthAmericaDisplayType(country, type, rawRows);
+  if (southAmericaType) return southAmericaType;
+  if (country.includes("巴基斯坦") && onlyPayout) return "代付";
+  if (country.includes("印尼")) {
+    const kind = classifyIndonesiaBankWalletText(text);
+    if (["DANA", "OVO", "LINKAJA", "GOPAY", "QRIS"].includes(kind)) return kind;
+    if (kind === "银行代付") return onlyPayout ? "银行代付" : "Virtual Account";
+    if (kind === "钱包代付") return "钱包代付";
+  }
+  if (country.includes("菲律宾") && onlyPayout) {
+    // V110：只有 PH19 按 payTypeSubName/PAYTYPE 分类展示；旧菲律宾代付仍合并为「代付」。
+    if (rawRows.some(isPH19VolumeRow)) {
+      const ph19Type = inferPH19DisplayType(text);
+      if (ph19Type) return ph19Type;
+      if (fallback && !["其他类型", "其他钱包", "代付", "代付类型"].includes(fallback)) return fallback;
+    }
+    return "代付";
+  }
+  if (country.includes("越南")) {
+    if (/momo|mo-mo|ví\s*momo|vi\s*momo/.test(text)) return "MOMO";
+    if (/fast[-_ ]?momo|fastpay[-_ ]?momo|1vnpay[-_ ]?momo/.test(text)) return "MOMO";
+  }
+  if (country.includes("马来")) {
+    // V88：马来代收 Touch n Go-TP 算 DUITNOW/QR；马来所有代付统一算「银行」。
+    const hasPayout = rawRows.some((row) => row.direction === "代付");
+    const hasCollect = rawRows.some((row) => row.direction === "代收");
+    if (/telcom|telco|telkom/.test(text)) return "Telcom";
+    if (hasPayout && !hasCollect) return "银行";
+    if (/tng|touch\s*n\s*go|touchngo|touch go|duitnow|duit-now|fpxduitnow|qr|maybankqr/.test(text)) return "DUITNOW/QR";
+    if (/shopee|grab|boost/.test(text)) return "Shopee/Grab/Boost";
+    if (/fpx|bank|maybank|cimb|rhb|publicbank|ambank|hongleong/.test(text)) return "FPX-BANK";
+    if (onlyPayout && (fallback === "其他类型" || fallback === "代付类型" || fallback === "银行代付")) return "银行";
+  }
+  if (country.includes("墨西哥")) {
+    if (/spei|bank/.test(text)) return onlyPayout ? "银行代付" : "SPEI";
+    if (/oxxo/.test(text)) return "OXXO Pay";
+    if (/cash|efectivo/.test(text)) return "Cash";
+    if (onlyPayout && fallback === "其他类型") return "银行代付";
+  }
+  if (country.includes("哥伦比亚")) {
+    if (/pse|bank/.test(text)) return onlyPayout ? "银行代付" : "PSE";
+    if (/nequi/.test(text)) return "Nequi";
+    if (/transfiya/.test(text)) return "Transfiya";
+    if (/bre[-_ ]?b|breb/.test(text)) return "BRE_B";
+    if (/bre[-_ ]?key|brekey/.test(text)) return "BRE_KEY";
+    if (onlyPayout && fallback === "其他类型") return "银行代付";
+  }
+  if (country.includes("智利")) {
+    if (/webpay|card|tarjeta/.test(text)) return "Card(Webpay)";
+    if (/khipu|bank|banco/.test(text)) return onlyPayout ? "银行代付" : "Bank(Khipu)";
+    if (/mach|wallet|ewallet/.test(text)) return "E-Wallet(Mach)";
+    if (/pago46|cash|efectivo/.test(text)) return "Cash(Pago46)";
+    if (onlyPayout && fallback === "其他类型") return "银行代付";
+  }
+  if (fallback === "其他类型" && onlyPayout) return "代付类型";
+  return fallback;
+}
+
+function normalizedFeeBaseChannelType(row: ThirdPartyVolumeRow): string {
+  const inferred = row.channelType || inferThirdPartyChannelType(row.rawChannel || row.channel, row.country, `${row.channel || ""} ${row.rawChannel || ""} ${rawRowMapCode(row)}`) || "其他类型";
+  return normalizedDisplayChannelType(row.country, inferred, [row]);
+}
+
+function groupFeesByCountry(rows: FeeCompareRow[]): Array<{ country: string; rows: FeeCompareRow[]; amount: number; fee: number; warnings: number }> {
+  return sortCountries(rows.map((row) => row.country)).map((country) => {
+    const countryRows = rows.filter((row) => row.country === country);
+    return {
+      country,
+      rows: countryRows.sort((a, b) => a.platform.localeCompare(b.platform, "zh-CN", { numeric: true }) || b.estimatedFee - a.estimatedFee || b.totalAmount - a.totalAmount),
+      amount: countryRows.reduce((sum, row) => sum + row.totalAmount, 0),
+      fee: countryRows.reduce((sum, row) => sum + row.estimatedFee, 0),
+      warnings: countryRows.filter((row) => row.level !== "normal").length
+    };
+  });
+}
+
+type FeeSummary = {
+  collectFee: number;
+  payoutFee: number;
+  estimatedFee: number;
+  collectRate: number;
+  payoutRate: number;
+  collectFeeShare: number;
+  payoutFeeShare: number;
+  totalFeeShare: number;
+  collectHasFee: boolean;
+  payoutHasFee: boolean;
+  collectSingleHint: string;
+  payoutSingleHint: string;
+  collectRateHint: string;
+  payoutRateHint: string;
+  alertRows: FeeCompareRow[];
+  missing: number;
+};
+
+type FeeSummaryMode = "monthly" | "monthlyPeriod" | "platform" | "daily";
+
+function singleFeeHint(rows: FeeCompareRow[], side: "collect" | "payout"): string {
+  const values = Array.from(new Set(rows
+    .filter((row) => side === "collect" ? sideHasValue(row.collectAmount, row.collectCount) : sideHasValue(row.payoutAmount, row.payoutCount))
+    .map((row) => side === "collect" ? row.collectSingleFee : row.payoutSingleFee)
+    .filter((value) => value > 0)
+    .map((value) => Number(value.toFixed(6)))))
+    .sort((a, b) => a - b);
+  if (!values.length) return "";
+  return values.map((value) => `单笔 ${formatSingleFeeValue(value)}`).join(" / ");
+}
+
+function percentRateHint(rows: FeeCompareRow[], side: "collect" | "payout"): string {
+  const values = Array.from(new Set(rows
+    .filter((row) => side === "collect" ? sideHasValue(row.collectAmount, row.collectCount) : sideHasValue(row.payoutAmount, row.payoutCount))
+    .map((row) => side === "collect" ? row.collectFeeRate : row.payoutFeeRate)
+    .filter((value) => value > 0)
+    .map((value) => Number(value.toFixed(6)))));
+  if (!values.length) return "";
+  return values.map((value) => formatPercent(value)).join(" + ");
+}
+
+function summarizeFeeRows(rows: FeeCompareRow[], totalCollectFee = 0, totalPayoutFee = 0): FeeSummary {
+  // 忽略单条异常 NaN，不能让 TodayPay 等整组三方手续费被污染后显示为 0。
+  const collectFee = rows.reduce((sum, row) => sum + finiteFeeNumber(row.collectFeeAmount), 0);
+  const payoutFee = rows.reduce((sum, row) => sum + finiteFeeNumber(row.payoutFeeAmount), 0);
+  const collectAmount = rows.reduce((sum, row) => sum + finiteFeeNumber(row.collectAmount), 0);
+  const payoutAmount = rows.reduce((sum, row) => sum + finiteFeeNumber(row.payoutAmount), 0);
+  const estimatedFee = collectFee + payoutFee;
+  const totalFee = finiteFeeNumber(totalCollectFee) + finiteFeeNumber(totalPayoutFee);
+  const collectHasFee = rows.some((row) => sideHasValue(row.collectAmount, row.collectCount) && (row.collectFeeRate > 0 || row.collectSingleFee > 0 || row.collectFeeAmount > 0 || row.collectFeeKnownZero));
+  const payoutHasFee = rows.some((row) => sideHasValue(row.payoutAmount, row.payoutCount) && (row.payoutFeeRate > 0 || row.payoutSingleFee > 0 || row.payoutFeeAmount > 0 || row.payoutFeeKnownZero));
+  const alertRows = rows.filter((row) => row.level === "danger" || row.level === "warning").sort((a, b) => b.estimatedFee - a.estimatedFee || b.totalAmount - a.totalAmount);
+  return {
+    collectFee,
+    payoutFee,
+    estimatedFee,
+    // 合计行可能包含多个钱包/通道，用实际手续费 ÷ 金额显示有效费率，避免同三方被拆开后看不懂。
+    collectRate: collectAmount ? collectFee / collectAmount : 0,
+    payoutRate: payoutAmount ? payoutFee / payoutAmount : 0,
+    collectFeeShare: totalCollectFee ? collectFee / totalCollectFee : 0,
+    payoutFeeShare: totalPayoutFee ? payoutFee / totalPayoutFee : 0,
+    totalFeeShare: totalFee ? estimatedFee / totalFee : 0,
+    collectHasFee,
+    payoutHasFee,
+    collectSingleHint: singleFeeHint(rows, "collect"),
+    payoutSingleHint: singleFeeHint(rows, "payout"),
+    collectRateHint: percentRateHint(rows, "collect"),
+    payoutRateHint: percentRateHint(rows, "payout"),
+    alertRows,
+    missing: rows.filter((row) => row.level === "missing").length
+  };
+}
+
+function emptyFeeSummary(): FeeSummary {
+  return { collectFee: 0, payoutFee: 0, estimatedFee: 0, collectRate: 0, payoutRate: 0, collectFeeShare: 0, payoutFeeShare: 0, totalFeeShare: 0, collectHasFee: false, payoutHasFee: false, collectSingleHint: "", payoutSingleHint: "", collectRateHint: "", payoutRateHint: "", alertRows: [], missing: 0 };
+}
+
+function feeRateText(summary: FeeSummary, side: "collect" | "payout"): string {
+  const hasFee = side === "collect" ? summary.collectHasFee : summary.payoutHasFee;
+  const rateHint = side === "collect" ? summary.collectRateHint : summary.payoutRateHint;
+  const singleHint = side === "collect" ? summary.collectSingleHint : summary.payoutSingleHint;
+  if (!hasFee) return "-";
+  const parts: string[] = [];
+  if (rateHint) parts.push(rateHint);
+  if (singleHint) parts.push(singleHint.startsWith("单笔") ? singleHint : `单笔 ${singleHint}`);
+  return parts.length ? parts.join(" + ") : "0";
+}
+
+function formatSingleFeeValue(value: number): string {
+  if (!Number.isFinite(value)) return "-";
+  const rounded = Math.round(value * 1000000) / 1000000;
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 6 }).format(rounded);
+}
+
+function feeCompareRateText(row: FeeCompareRow, side: "collect" | "payout"): string {
+  const rate = side === "collect" ? row.collectFeeRate : row.payoutFeeRate;
+  const single = side === "collect" ? row.collectSingleFee : row.payoutSingleFee;
+  const knownZero = side === "collect" ? row.collectFeeKnownZero : row.payoutFeeKnownZero;
+  const parts: string[] = [];
+  if (rate) parts.push(formatPercent(rate));
+  if (single) parts.push(`单笔 ${formatSingleFeeValue(single)}`);
+  if (!parts.length && knownZero) return "0";
+  return parts.length ? parts.join(" + ") : "-";
+}
+
+function feeAmountText(summary: FeeSummary, side: "collect" | "payout"): string {
+  if (side === "collect") return summary.collectHasFee ? formatNumber(summary.collectFee) : "-";
+  return summary.payoutHasFee ? formatNumber(summary.payoutFee) : "-";
+}
+
+function feeTotalText(summary: FeeSummary): string {
+  return (summary.collectHasFee || summary.payoutHasFee) ? formatNumber(summary.estimatedFee) : "-";
+}
+
+function sumComboSummaryRows(rows: ComboSummary[]) {
+  return rows.reduce((acc, row) => {
+    acc.collectAmount += row.collectAmount;
+    acc.collectCount += row.collectCount;
+    acc.payoutAmount += row.payoutAmount;
+    acc.payoutCount += row.payoutCount;
+    acc.totalAmount += row.totalAmount;
+    acc.totalCount += row.totalCount;
+    acc.totalPct += row.totalPct;
+    return acc;
+  }, { collectAmount: 0, collectCount: 0, payoutAmount: 0, payoutCount: 0, totalAmount: 0, totalCount: 0, totalPct: 0 });
+}
+
+function sumDirectionSummaryRows(rows: DirectionSummary[]) {
+  return rows.reduce((acc, row) => {
+    acc.amount += row.amount;
+    acc.count += row.count;
+    return acc;
+  }, { amount: 0, count: 0 });
+}
+
+function sumDailyCompareSummaryRows(rows: DailyCompareRow[]) {
+  const base = sumComboSummaryRows(rows);
+  return {
+    ...base,
+    previousCollectAmount: rows.reduce((sum, row) => sum + row.previousCollectAmount, 0),
+    previousPayoutAmount: rows.reduce((sum, row) => sum + row.previousPayoutAmount, 0)
+  };
+}
+
+function sumFeeCompareSummaryRows(rows: FeeCompareRow[]) {
+  return rows.reduce((acc, row) => {
+    acc.collectAmount += finiteFeeNumber(row.collectAmount);
+    acc.payoutAmount += finiteFeeNumber(row.payoutAmount);
+    acc.totalAmount += finiteFeeNumber(row.totalAmount);
+    acc.collectFeeAmount += finiteFeeNumber(row.collectFeeAmount);
+    acc.payoutFeeAmount += finiteFeeNumber(row.payoutFeeAmount);
+    acc.estimatedFee += finiteFeeNumber(row.estimatedFee);
+    acc.collectShare += finiteFeeNumber(row.collectShare);
+    acc.payoutShare += finiteFeeNumber(row.payoutShare);
+    acc.totalShare += finiteFeeNumber(row.totalShare);
+    return acc;
+  }, { collectAmount: 0, payoutAmount: 0, totalAmount: 0, collectFeeAmount: 0, payoutFeeAmount: 0, estimatedFee: 0, collectShare: 0, payoutShare: 0, totalShare: 0 });
+}
+
+function sumRawVolumeRows(rows: ThirdPartyVolumeRow[]) {
+  return rows.reduce((acc, row) => {
+    acc.amount += row.amount;
+    acc.count += row.count;
+    return acc;
+  }, { amount: 0, count: 0 });
+}
+
+function diffPercentText(current: number, previous: number): string {
+  if (!previous) return "-";
+  return formatPercent((current - previous) / previous);
+}
+
+function sideHasValue(amount: number, count: number): boolean {
+  return Math.abs(amount || 0) > 0 || Math.abs(count || 0) > 0;
+}
+
+function sideNumberText(amount: number, count: number): string {
+  return sideHasValue(amount, count) ? formatNumber(amount) : "-";
+}
+
+function sideCountText(amount: number, count: number): string {
+  return sideHasValue(amount, count) ? formatNumber(count) : "-";
+}
+
+function sideShareNode(hasValue: boolean, value: number) {
+  return hasValue ? <ShareBar value={value} /> : <span className="muted-cell">-</span>;
+}
+
+function sideFeeRateText(summary: FeeSummary, side: "collect" | "payout", amount: number, count: number): string {
+  if (!sideHasValue(amount, count)) return "-";
+  return feeRateText(summary, side);
+}
+
+function sideFeeAmountText(summary: FeeSummary, side: "collect" | "payout", amount: number, count: number): string {
+  if (!sideHasValue(amount, count)) return "-";
+  return feeAmountText(summary, side);
+}
+
+function feeSummaryKey(row: FeeCompareRow, mode: FeeSummaryMode): string {
+  if (mode === "daily") return `${row.date || ""}|||${row.country}|||${row.platform}|||${row.channel}`;
+  if (mode === "monthlyPeriod") return `${(row.date || "").slice(0, 7)}|||${row.country}|||${row.channel}`;
+  if (mode === "platform") return `${row.country}|||${row.platform}|||${row.channel}`;
+  return `${row.country}|||${row.channel}`;
+}
+
+function comboFeeKey(row: ComboSummary, columns: string[]): string {
+  const [first = "", second = "", third = ""] = row.labelParts;
+  if (columns.includes("月份")) return `${first}|||${second}|||${third}`;
+  if (columns.includes("平台")) return `${first}|||${second}|||${third}`;
+  return `${first}|||${second}`;
+}
+
+function dailyFeeKey(row: DailyCompareRow): string {
+  return `${row.date}|||${row.country}|||${row.platform}|||${row.channel}`;
+}
+
+function buildFeeSummaryMap(rows: FeeCompareRow[], mode: FeeSummaryMode): Map<string, FeeSummary> {
+  const grouped = new Map<string, FeeCompareRow[]>();
+  for (const row of rows) {
+    const key = feeSummaryKey(row, mode);
+    const list = grouped.get(key) || [];
+    list.push(row);
+    grouped.set(key, list);
+  }
+  const totalCollectFee = rows.reduce((sum, row) => sum + finiteFeeNumber(row.collectFeeAmount), 0);
+  const totalPayoutFee = rows.reduce((sum, row) => sum + finiteFeeNumber(row.payoutFeeAmount), 0);
+  const map = new Map<string, FeeSummary>();
+  for (const [key, list] of grouped.entries()) map.set(key, summarizeFeeRows(list, totalCollectFee, totalPayoutFee));
+  return map;
+}
+
+function buildFeeStatItems(rows: FeeCompareRow[]): Array<[string, string | number]> {
+  const summary = summarizeFeeRows(rows);
+  // 顶部只保留手续费，费率放到表格每行对比，避免顶部重复占空间。
+  return [
+    ["代收手续费", feeAmountText(summary, "collect")],
+    ["代付手续费", feeAmountText(summary, "payout")],
+    ["合计手续费", feeTotalText(summary)]
+  ];
+}
+
+async function safeReadJson(response: Response, label: string): Promise<any> {
+  const text = await response.text();
+  if (!text.trim()) throw new Error(`${label}接口没有返回数据（HTTP ${response.status}）`);
+  try {
+    return JSON.parse(text);
+  } catch {
+    const preview = text.replace(/\s+/g, " ").trim().slice(0, 180);
+    throw new Error(`${label}接口返回格式异常（HTTP ${response.status}${preview ? `：${preview}` : ""}）`);
+  }
+}
+
+const THIRD_PARTY_VOLUME_CACHE_KEY = "hensem:last-good:third-party-volume:v238-active";
+const THIRD_PARTY_RATES_CACHE_KEY = "hensem:last-good:third-party-rates:v234";
+
+function ratePayloadFresh(payload: ThirdPartyRatePayload | null | undefined, maxAgeMs = 55 * 60 * 1000): boolean {
+  const updatedAt = String((payload?.meta as any)?.snapshotUpdatedAt || payload?.meta?.updatedAt || "");
+  const time = new Date(updatedAt).getTime();
+  return Number.isFinite(time) && Date.now() - time < maxAgeMs;
+}
+
+function volumePayloadFresh(payload: ThirdPartyVolumePayload | null | undefined, maxAgeMs = 10 * 60 * 1000): boolean {
+  const updatedAt = String((payload?.meta as any)?.snapshotUpdatedAt || payload?.meta?.updatedAt || "");
+  const time = new Date(updatedAt).getTime();
+  return Number.isFinite(time) && Date.now() - time < maxAgeMs;
+}
+
+function readLocalCache<T>(key: string): T | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const text = window.localStorage.getItem(key);
+    if (!text) return null;
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalCache(key: string, payload: unknown) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(payload));
+  } catch {
+    // localStorage 满了也不能影响页面展示
+  }
+}
+
+function attachClientFallbackMessage<T extends { meta?: Record<string, any> }>(payload: T, reason: string): T {
+  return {
+    ...payload,
+    meta: {
+      ...(payload.meta || {}),
+      clientFallback: true,
+      liveError: reason,
+      message: [
+        payload.meta?.message,
+        reason ? `接口临时失败，当前显示浏览器最后一次成功缓存：${reason}` : "当前显示浏览器最后一次成功缓存"
+      ].filter(Boolean).join("；")
+    }
+  };
+}
+
+function emptyClientVolumePayload(message: string): ThirdPartyVolumePayload {
+  const now = new Date();
+  return {
+    meta: {
+      year: String(now.getFullYear()),
+      month: String(now.getMonth() + 1),
+      updatedAt: now.toISOString(),
+      source: "snapshot-waiting",
+      sheets: [],
+      message
+    } as any,
+    rows: [],
+    aliasMap: {},
+    summary: { rows: 0, amount: 0, count: 0, successCount: 0, failedCount: 0, countries: 0, platforms: 0, channels: 0 },
+    anomalies: []
+  };
+}
+
+function localAliasKey(value: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/（/g, "(")
+    .replace(/）/g, ")")
+    .replace(/[^a-z0-9一-龥]+/g, "");
+}
+
+function collapseThirdPartyDisplayName(value: string, country?: string): string {
+  const canonical = canonicalThirdPartyName(value, country) || String(value || "").trim();
+  if (!canonical) return "未知三方";
+
+  // 这些本身就是主通道名称，不能错误删成 UPI / 空白。
+  const preserved = new Set([
+    "UPI-QR", "QRIS", "GCASH", "MAYA", "DANA", "OVO", "GOPAY", "LINKAJA",
+    "FPX", "DUITNOW", "SPEI", "CLABE", "PIX", "USDT", "TRC20"
+  ]);
+  if (preserved.has(canonical.toUpperCase())) return canonical;
+
+  // 统一三方下拉只显示主三方；QR/BANK/UPI/PAYTM 等留在 channelType，不再拆成多个三方。
+  let collapsed = canonical
+    .replace(/\s*[-_/]\s*(QR|BANK|UPI|PAYTM|WALLET2?|EASYPAISA|JAZZCASH|JAZZ|EP|EASY|GCASH|MAYA|DANA|OVO|GOPAY|LINKAJA|FPX|DUITNOW|CLABE|SPEI)(?:\s*\d+)?$/i, "")
+    .replace(/\s*\((QR|BANK|UPI|PAYTM|WALLET2?|EASYPAISA|JAZZCASH|JAZZ|EP|EASY|GCASH|MAYA|DANA|OVO|GOPAY|LINKAJA|FPX|DUITNOW|CLABE|SPEI)\)\s*$/i, "")
+    .trim();
+  if (!collapsed) collapsed = canonical;
+  return canonicalThirdPartyName(collapsed, country) || collapsed;
+}
+
+function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolumeRow {
+  const raw = row.rawChannel || row.channel || "";
+  const key = localAliasKey(raw);
+  const country = row.country || "";
+  const platformKey = localAliasKey(row.platform || "").toUpperCase();
+  let channel = row.channel || raw || "未知三方";
+
+  if (!["人工确认", "人工充值", "Coinvid USDT"].includes(channel)) {
+    if (country.includes("印度") && row.direction === "代付" && platformKey === "DHANIWIN" && ["upi", "upiqr", "upiqr2"].includes(key)) channel = "人工确认";
+    else if (country.includes("印度") && row.direction === "代付" && ["localbank", "bankcard"].includes(key)) channel = "人工确认";
+    else if (country.includes("印度") && ["manualrecharge", "人工充值"].includes(key)) channel = "人工充值";
+    else channel = canonicalThirdPartyName(raw || channel, country) || channel;
+  }
+
+  channel = collapseThirdPartyDisplayName(channel, country);
+  if (!channel || channel === "未知三方") channel = collapseThirdPartyDisplayName(row.channel || raw || "未知三方", country);
+  let channelType = row.channelType || inferThirdPartyChannelType(raw || channel, country, `${channel} ${raw}`) || "其他类型";
+  if (channel === "人工确认" || channel === "人工充值") channelType = channel;
+  return { ...row, channel, channelType };
+}
+
+export default function ThirdPartyVolumeDashboard() {
+  const { session } = useDashboardAuth();
+  const [state, setState] = useState<LoadState>("loading");
+  const [payload, setPayload] = useState<ThirdPartyVolumePayload | null>(null);
+  const [ratePayload, setRatePayload] = useState<ThirdPartyRatePayload | null>(null);
+  const [error, setError] = useState("");
+  const [syncStatus, setSyncStatus] = useState<ClientMonthlyStatus | null>(null);
+  const payloadRef = useRef<ThirdPartyVolumePayload | null>(null);
+  const [country, setCountry] = useState("");
+  const [platformSelections, setPlatformSelections] = useState<string[]>([]);
+  const [countrySelections, setCountrySelections] = useState<string[]>([]);
+  const [channel, setChannel] = useState("");
+  const [direction, setDirection] = useState("");
+  const [channelTypeSelections, setChannelTypeSelections] = useState<string[]>([]);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const startDateRef = useRef("");
+  const endDateRef = useRef("");
+  const [mainTab, setMainTab] = useState<VolumeMainTab>("country");
+  const [tab, setTab] = useState<TabKey>("daily");
+  const [volumeMode, setVolumeMode] = useState<"daily" | "monthly">("daily");
+  const [countryPage, setCountryPage] = useState("");
+
+  const snapshotMonthOptions = useMemo(() => {
+    const out: Array<{ key: string; label: string; start: string; end: string }> = [];
+    const start = new Date(2026, 3, 1);
+    const now = new Date();
+    const end = new Date(now.getFullYear(), now.getMonth(), 1);
+    const cursor = new Date(start);
+    while (cursor <= end && out.length < 36) {
+      const year = cursor.getFullYear();
+      const month = cursor.getMonth() + 1;
+      const ym = `${year}-${String(month).padStart(2, "0")}`;
+      const lastDay = new Date(year, month, 0).getDate();
+      const isCurrent = year === now.getFullYear() && month === now.getMonth() + 1;
+      const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const isSettling = now.getDate() <= 7 && year === prev.getFullYear() && month === prev.getMonth() + 1;
+      out.push({
+        key: ym,
+        label: `${month}月${isCurrent ? "·当前" : isSettling ? "·结算中" : ""}`,
+        start: `${ym}-01`,
+        end: `${ym}-${String(lastDay).padStart(2, "0")}`
+      });
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+    return out;
+  }, []);
+
+  async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "") {
+    // 已经有成功数据时只做静默刷新，任何点击或后台轮询都不能再盖住整页。
+    if (!silent && !(payload?.rows || []).length) setState("loading");
+    setError("");
+    try {
+      // V204：页面只读取服务端最后成功快照，不根据日期/按钮重新读 Google。
+      // 查询、上一日、下一日、快捷日期都只改前端筛选条件。
+      const volumeUrl = thirdPartyVolumeApiUrl(requestedStart, requestedEnd, version);
+      const cachedRateBeforeFetch = ratePayload || readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY);
+      const shouldFetchRates = !ratePayloadFresh(cachedRateBeforeFetch);
+      const [volumeRes, rateRes] = await Promise.all([
+        fetch(volumeUrl, {
+          cache: "no-store",
+          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}
+        }),
+        shouldFetchRates ? fetch("/api/supabase-third-party-rates", {
+          cache: "no-store",
+          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}
+        }).catch(() => null) : Promise.resolve(null)
+      ]);
+      const json = await safeReadJson(volumeRes, "三方量") as ThirdPartyVolumePayload;
+      if (!volumeRes.ok) throw new Error((json as any)?.message || "读取三方量快照失败");
+
+      // V207：页面只显示最后一次成功快照，不在用户打开网页时现场重读 Google。
+      // Google 读取交给 Netlify 定时函数每小时自动更新；如果失败，继续显示旧快照。
+      if (!(json?.rows || []).length) {
+        throw new Error((json as any)?.meta?.message || "三方量没有可用快照，后台会继续自动重试");
+      }
+
+      setPayload(json);
+      payloadRef.current = json;
+      // 只缓存“当前月单日/首次默认”的轻量数据。
+      // 本月、近 7 天等大范围查询不再写 localStorage，避免浏览器重复保存大 JSON。
+      const cacheableCurrentSlice = rangeIncludesCurrentMonth(requestedStart, requestedEnd)
+        && (!requestedStart || !requestedEnd || requestedStart === requestedEnd);
+      if (cacheableCurrentSlice) writeLocalCache(THIRD_PARTY_VOLUME_CACHE_KEY, json);
+
+      if (rateRes && rateRes.ok) {
+        const rateJson = await safeReadJson(rateRes, "三方费率") as ThirdPartyRatePayload;
+        setRatePayload(rateJson);
+        if (((rateJson as any)?.rates?.length || 0) + (((rateJson as any)?.platformStatuses?.length || 0)) > 0) writeLocalCache(THIRD_PARTY_RATES_CACHE_KEY, rateJson);
+      } else if (cachedRateBeforeFetch) {
+        setRatePayload(cachedRateBeforeFetch);
+      }
+
+      const volumeRows = json?.rows || [];
+      if (volumeRows.length) {
+        setStartDate((old) => old || defaultStart(volumeRows));
+        setEndDate((old) => old || defaultEnd(volumeRows));
+      }
+      setState("ready");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "读取三方量快照失败";
+      const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY);
+      const cachedRate = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY);
+      // 历史查询失败时不能拿当前月缓存冒充历史数据；只有当前月请求才允许回退。
+      if (rangeIncludesCurrentMonth(requestedStart, requestedEnd) && cachedVolume && (cachedVolume.rows || []).length > 0) {
+        setPayload(attachClientFallbackMessage(cachedVolume, message));
+        setRatePayload(cachedRate);
+        const volumeRows = cachedVolume.rows || [];
+        if (volumeRows.length) {
+          setStartDate((old) => old || defaultStart(volumeRows));
+          setEndDate((old) => old || defaultEnd(volumeRows));
+        }
+        setState("ready");
+        return;
+      }
+      setPayload(emptyClientVolumePayload(`三方量还没有成功快照，后台会继续自动重试；本次错误：${message}`));
+      setRatePayload(cachedRate);
+      setState("ready");
+    }
+  }
+
+  useEffect(() => {
+    startDateRef.current = startDate;
+    endDateRef.current = endDate;
+  }, [startDate, endDate]);
+
+  useEffect(() => { payloadRef.current = payload; }, [payload]);
+
+  async function checkCurrentSnapshotAndRefresh(silent = true) {
+    // V242：新 Netlify 站只读 Supabase，不再检查旧 Netlify / Google 快照状态。
+    const start = startDateRef.current;
+    const end = endDateRef.current;
+    await loadData(silent, start, end, "");
+  }
+
+  useEffect(() => {
+    // V230：首次只恢复/读取当前月轻量快照，不再下载 4 月至当前月全部数据。
+    const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY);
+    const cachedRate = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY);
+    const hasCachedVolume = Boolean((cachedVolume?.rows || []).length);
+    if (hasCachedVolume && cachedVolume) {
+      setPayload(cachedVolume);
+      setRatePayload(cachedRate);
+      setState("ready");
+      const cachedRows = cachedVolume.rows || [];
+      if (cachedRows.length) {
+        const start = defaultStart(cachedRows);
+        const end = defaultEnd(cachedRows);
+        setStartDate((old) => old || start);
+        setEndDate((old) => old || end);
+        startDateRef.current = start;
+        endDateRef.current = end;
+      }
+    }
+    // V237：F5/重复打开优先显示浏览器快照，只请求一个很小的 status JSON。
+    // checksum 没变就完全不重新下载大三方量 JSON。
+    if (hasCachedVolume) {
+      void checkCurrentSnapshotAndRefresh(true);
+    } else {
+      void (async () => {
+        await loadData(false);
+        await checkCurrentSnapshotAndRefresh(true);
+      })();
+    }
+    const hourlyTimer = window.setInterval(() => {
+      const start = startDateRef.current;
+      const end = endDateRef.current;
+      // 历史月份已封存，不做每小时请求；当前月/结算月只检查小状态，版本变化才拉大数据。
+      if (document.visibilityState === "visible" && rangeIncludesCurrentMonth(start, end)) void checkCurrentSnapshotAndRefresh(true);
+    }, 60 * 60 * 1000);
+    return () => window.clearInterval(hourlyTimer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+
+  const rows = useMemo(() => (payload?.rows || []).map(normalizeVolumeRowForDisplay).filter((row) => !isHiddenCountry(row.country)), [payload]);
+  const countries = useMemo(() => sortCountries(rows.map((row) => row.country)), [rows]);
+  // 国家页签固定按当前模块的国家范围显示。选中某个国家后，即使当前日期没有数据，也不跳回其它国家，避免平台下拉出现其它国家盘口。
+  // 额外增加“所有国家USDT”：不改变原国家，只把所有国家里 USDT/TRX/TRC20 通道集中到一个页面。
+  const countryTabs = useMemo(() => {
+    const tabs = [...countries];
+    if (rows.some(isUsdtVolumeRow) && !tabs.includes(ALL_USDT_COUNTRY_PAGE)) tabs.push(ALL_USDT_COUNTRY_PAGE);
+    return tabs;
+  }, [countries, rows]);
+  const activeCountryPage = countryPage && countryTabs.includes(countryPage) ? countryPage : (mainTab === "country" ? (countryTabs[0] || "") : "");
+  const effectiveCountryFilter = mainTab === "country" ? activeCountryPage : country;
+
+  const filteredBaseNoDate = useMemo(() => {
+    return rows.filter((row) => {
+      if (!rowMatchesCountryPage(row, effectiveCountryFilter)) return false;
+      if (countrySelections.length && !countrySelections.includes(row.country)) return false;
+      if (platformSelections.length && !platformSelections.includes(row.platform)) return false;
+      if (channel && row.channel !== channel) return false;
+      if (direction && row.direction !== direction) return false;
+      return true;
+    });
+  }, [rows, effectiveCountryFilter, countrySelections, platformSelections, channel, direction]);
+
+  const filteredBase = useMemo(() => filteredBaseNoDate.filter((row) => dateMatches(row.date, startDate, endDate)), [filteredBaseNoDate, startDate, endDate]);
+
+  const isAllDailyPage = false;
+  const isAllMonthlyPage = false;
+  const optionCountryFilter = mainTab === "country" ? activeCountryPage : country;
+  const selectedPlatformSet = useMemo(() => new Set(platformSelections), [platformSelections]);
+  const optionScopedRowsBeforeCountry = useMemo(() => rows.filter((row) => rowMatchesCountryPage(row, optionCountryFilter)), [rows, optionCountryFilter]);
+  const countryFilterOptions = useMemo(() => sortCountries(optionScopedRowsBeforeCountry.map((row) => row.country)), [optionScopedRowsBeforeCountry]);
+  const optionScopedRows = useMemo(() => optionScopedRowsBeforeCountry.filter((row) => !countrySelections.length || countrySelections.includes(row.country)), [optionScopedRowsBeforeCountry, countrySelections]);
+  const platforms = useMemo(() => uniq(optionScopedRows.map((row) => row.platform)), [optionScopedRows]);
+  const channelOptionRows = useMemo(() => optionScopedRows.filter((row) => !platformSelections.length || selectedPlatformSet.has(row.platform)), [optionScopedRows, platformSelections.length, selectedPlatformSet]);
+  const channels = useMemo(() => uniq(channelOptionRows.map((row) => row.channel)), [channelOptionRows]);
+  const channelTypeOptions = useMemo(() => uniq(optionScopedRows.filter((row) => (!platformSelections.length || selectedPlatformSet.has(row.platform))).map((row) => row.channelType || "其他类型").filter(Boolean)), [optionScopedRows, platformSelections.length, selectedPlatformSet]);
+
+
+  useEffect(() => {
+    if (!countrySelections.length) return;
+    const available = new Set(countryFilterOptions);
+    const next = countrySelections.filter((item) => available.has(item));
+    if (next.length !== countrySelections.length) {
+      setCountrySelections(next);
+      setPlatformSelections([]);
+      setChannel("");
+      setChannelTypeSelections([]);
+    }
+  }, [countryFilterOptions, countrySelections]);
+
+  useEffect(() => {
+    if (!platformSelections.length) return;
+    const available = new Set(platforms);
+    const next = platformSelections.filter((item) => available.has(item));
+    if (next.length !== platformSelections.length) {
+      setPlatformSelections(next);
+      setChannel("");
+      setChannelTypeSelections([]);
+    }
+  }, [platforms, platformSelections]);
+  const filtered = useMemo(() => filteredBase.filter((row) => !channelTypeSelections.length || channelTypeSelections.includes(row.channelType || "其他类型")), [filteredBase, channelTypeSelections]);
+  const filteredNoDate = useMemo(() => filteredBaseNoDate.filter((row) => !channelTypeSelections.length || channelTypeSelections.includes(row.channelType || "其他类型")), [filteredBaseNoDate, channelTypeSelections]);
+
+  const summary = useMemo(() => sumRows(filtered), [filtered]);
+  const countryPageRows = useMemo(() => filtered.filter((row) => activeCountryPage && rowMatchesCountryPage(row, activeCountryPage)), [filtered, activeCountryPage]);
+  const countryPageRowsNoDate = useMemo(() => filteredNoDate.filter((row) => activeCountryPage && rowMatchesCountryPage(row, activeCountryPage)), [filteredNoDate, activeCountryPage]);
+  const countryPageSummary = useMemo(() => sumRows(countryPageRows), [countryPageRows]);
+  const countryPageMonthlyRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.country, row.channel]), [countryPageRows]);
+  const countryPageMonthlyPeriodRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.date.slice(0, 7), row.country, row.channel]), [countryPageRows]);
+  const countryPagePlatformRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.country, row.platform, row.channel]), [countryPageRows]);
+  const countryPageDailyRows = useMemo(() => aggregateDirection(countryPageRows, (row) => [row.date, row.country, row.platform, row.direction, row.channel]), [countryPageRows]);
+  const countryPageDailyCompareRows = useMemo(() => buildDailyCompareRows(countryPageRows, countryPageRowsNoDate), [countryPageRows, countryPageRowsNoDate]);
+  const monthlyRows = useMemo(() => aggregateCombo(filtered, (row) => [row.country, row.channel]), [filtered]);
+  const monthlyPeriodRows = useMemo(() => aggregateCombo(filtered, (row) => [row.date.slice(0, 7), row.country, row.channel]), [filtered]);
+  const countryRows = useMemo(() => aggregateCombo(filtered, (row) => [row.country]), [filtered]);
+  const platformRows = useMemo(() => aggregateCombo(filtered, (row) => [row.country, row.platform, row.channel]), [filtered]);
+  const dailyRows = useMemo(() => aggregateDirection(filtered, (row) => [row.date, row.country, row.platform, row.direction, row.channel]), [filtered]);
+  const dailyCompareRows = useMemo(() => buildDailyCompareRows(filtered, filteredNoDate), [filtered, filteredNoDate]);
+  const dailyCompareBaseRows = useMemo(() => aggregateCombo(filtered, (row) => [row.date, row.country, row.platform, row.channel, normalizedFeeBaseChannelType(row)]), [filtered]);
+  const platformFeeBaseRows = useMemo(() => aggregateCombo(filtered, (row) => [row.country, row.platform, row.channel, normalizedFeeBaseChannelType(row)]), [filtered]);
+  const platformFeeRows = useMemo(() => buildFeeCompareRows(platformFeeBaseRows, ratePayload?.rates || [], ratePayload?.platformStatuses || [], "platform"), [platformFeeBaseRows, ratePayload]);
+  const dailyFeeRows = useMemo(() => buildFeeCompareRows(dailyCompareBaseRows, ratePayload?.rates || [], ratePayload?.platformStatuses || [], "daily"), [dailyCompareBaseRows, ratePayload]);
+  const feeWarnings = useMemo(() => feeWarningRows(dailyFeeRows), [dailyFeeRows]);
+  const countryPageFeeRows = useMemo(() => dailyFeeRows.filter((row) => activeCountryPage && feeRowMatchesCountryPage(row, activeCountryPage)), [dailyFeeRows, activeCountryPage]);
+  const dashboardFeeStatItems = useMemo(() => buildFeeStatItems(dailyFeeRows.length ? dailyFeeRows : platformFeeRows), [dailyFeeRows, platformFeeRows]);
+
+  const aliasRows = useMemo(() => {
+    return Object.entries(payload?.aliasMap || {})
+      .map(([name, aliases]) => ({ name, aliases: aliases as string[] }))
+      .filter((item) => item.name !== "未知三方" && item.aliases.length)
+      .sort((a, b) => b.aliases.length - a.aliases.length || a.name.localeCompare(b.name, "zh-CN"));
+  }, [payload]);
+
+  const anomalyRows = useMemo(() => {
+    const feeWarning = feeWarnings.slice(0, 60).map((row) => `${row.date || "累计"} ${row.country} ${row.platform} ${row.channel}${row.channelType ? ` / ${row.channelType}` : ""}：${row.advice}，总跑量占比 ${formatPercent(row.totalShare)}，总有效费率 ${row.effectiveTotalFeeRate ? formatPercent(row.effectiveTotalFeeRate) : "-"}，合计手续费 ${formatNumber(row.estimatedFee)}`);
+    const aliasWarning = aliasRows.filter((row) => row.aliases.length >= 3).map((row) => `${row.name}：识别到 ${row.aliases.length} 个别名（${row.aliases.slice(0, 8).join(" / ")}）`);
+    const volumeHigh = platformRows
+      .filter((row) => row.totalAmount >= 1000000 || row.totalCount >= 1000)
+      .slice(0, 25)
+      .map((row) => `${row.labelParts.join(" / ")}：量级较高，金额 ${formatNumber(row.totalAmount)}，笔数 ${formatNumber(row.totalCount)}`);
+    return [...feeWarning, ...aliasWarning, ...volumeHigh].slice(0, 150);
+  }, [feeWarnings, aliasRows, platformRows]);
+
+  function openSnapshotMonth(item: { start: string; end: string }) {
+    setStartDate(item.start);
+    setEndDate(item.end);
+    void loadData(true, item.start, item.end);
+  }
+
+  function switchVolumeMode(nextMode: "daily" | "monthly") {
+    setVolumeMode(nextMode);
+    setPlatformSelections([]);
+    setChannel("");
+    setChannelTypeSelections([]);
+    if (nextMode === "monthly") {
+      const range = monthDateRange(startDate || endDate || defaultEnd(rows));
+      setStartDate(range.start);
+      setEndDate(range.end);
+      void loadData(true, range.start, range.end);
+    }
+  }
+
+  function applyDateShortcut(mode: DateShortcut) {
+    const range = shortcutDateRange(mode, startDate || endDate);
+    setStartDate(range.start);
+    setEndDate(range.end);
+    void loadData(true, range.start, range.end);
+  }
+
+  function shiftDateRange(days: number) {
+    if (volumeMode === "monthly") {
+      const base = startDate || endDate || defaultEnd(rows) || formatLocalDateKey(new Date());
+      const current = new Date(`${base}T00:00:00`);
+      if (Number.isNaN(current.getTime())) return;
+      current.setMonth(current.getMonth() + days);
+      const range = monthDateRange(formatLocalDateKey(current));
+      setStartDate(range.start);
+      setEndDate(range.end);
+      void loadData(true, range.start, range.end);
+      return;
+    }
+
+    const baseStart = startDate || endDate || defaultEnd(rows) || formatLocalDateKey(new Date());
+    const baseEnd = endDate || startDate || baseStart;
+    const nextStart = dateAdd(baseStart, days);
+    const nextEnd = dateAdd(baseEnd, days);
+    setStartDate(nextStart);
+    setEndDate(nextEnd);
+    void loadData(true, nextStart, nextEnd);
+  }
+
+  if (state === "loading") return <div className="loading inner-loading">正在读取三方量...</div>;
+  if (state === "error") {
+    return (
+      <div className="error-box inner-error">
+        <h2>三方量读取失败</h2>
+        <p>{error}</p>
+        <p className="muted-text">请确认已经登录，并且新 Netlify 站已配置 Supabase URL / Anon Key。</p>
+        
+      </div>
+    );
+  }
+  if (!payload) return null;
+
+  return (
+    <div className="work-order-module third-party-volume-module">
+      <div className="topbar">
+        <div className="title"><h1>三方量/费率</h1><p>当前位置：Hensem数据后台 &gt; 三方量/费率</p></div>
+        <div className="status-box">
+          <div className="status-line"><span>读取页签</span><strong>{payload.meta.sheets.length} 个</strong></div>
+          <div className="status-line"><span>数据行数</span><strong>{formatNumber(payload.rows.length)} 行</strong></div>
+          <div className="status-line"><span>数据来源</span><strong>Supabase</strong></div>
+          <div className="status-line"><span>数据更新</span><strong>{new Date(String(payload.meta.updatedAt)).toLocaleString("zh-CN")}</strong></div>
+        </div>
+      </div>
+      <section className="third-party-tab-panel">
+        <div className="tab-group-row main-tab-row">
+          <button className={cls("module-tab", mainTab === "country" && "active")} onClick={() => { setMainTab("country"); setVolumeMode("daily"); setCountryPage(""); setCountry(""); setCountrySelections([]); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }}>各国家量</button>
+          <button className={cls("module-tab", mainTab === "rates" && "active")} onClick={() => { setMainTab("rates"); }}>各国家费率</button>
+        </div>
+        {mainTab === "country" && (
+          <>
+            <div className="tab-group-row child-tab-row country-mode-row">
+              <button className={cls("module-tab", volumeMode === "daily" && "active")} onClick={() => switchVolumeMode("daily")}>日汇总</button>
+              <button className={cls("module-tab", volumeMode === "monthly" && "active")} onClick={() => switchVolumeMode("monthly")}>月汇总</button>
+            </div>
+            <div className="tab-group-row child-tab-row country-tab-row volume-country-pane-row">
+              {countryTabs.map((item) => (
+                <button key={item} className={cls("module-tab", activeCountryPage === item && "active")} onClick={() => { setCountryPage(item); setCountrySelections([]); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }}>{countryPaneLabel(item)}</button>
+              ))}
+              {!countryTabs.length && <span className="muted-text">暂无国家数据</span>}
+            </div>
+          </>
+        )}
+      </section>
+
+      <div style={{ display: mainTab === "rates" ? "block" : "none" }}>
+        <ThirdPartyRatesDashboard embedded />
+      </div>
+
+      {mainTab !== "rates" && (
+        <>
+
+      <section className="filter-card">
+        <div className="filters work-filters">
+          <div className="field"><label>开始日期</label><input className="input" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></div>
+          <div className="field"><label>结束日期</label><input className="input" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></div>
+          
+          {isAllUsdtCountryPage(activeCountryPage) && <VolumeMultiSelect label="国家" options={countryFilterOptions} value={countrySelections} onChange={(value) => { setCountrySelections(value); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部国家" />}
+          <VolumeMultiSelect label="平台" options={platforms} value={platformSelections} onChange={(value) => { setPlatformSelections(value); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" />
+          <div className="field"><label>统一三方</label><select className="input" value={channel} onChange={(event) => { setChannel(event.target.value); setChannelTypeSelections([]); }}><option value="">全部三方</option>{channels.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
+          <VolumeMultiSelect label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" />
+          <div className="field"><label>业务方向</label><select className="input" value={direction} onChange={(event) => setDirection(event.target.value)}><option value="">全部方向</option><option value="代收">代收</option><option value="代付">代付</option></select></div>
+          <div className="action-row action-row-v2"><button className="primary-btn" type="button" onClick={() => { void loadData(true, startDate, endDate); }}>查询</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(-1)}>{volumeMode === "monthly" ? "上一月" : "上一日"}</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(1)}>{volumeMode === "monthly" ? "下一月" : "下一日"}</button></div>
+        </div>
+      </section>
+
+      <div className="quick-row date-shortcuts volume-date-shortcuts">
+        <span>快捷日期：</span>
+        <button type="button" onClick={() => applyDateShortcut("today")}>今天</button>
+        <button type="button" onClick={() => applyDateShortcut("yesterday")}>昨日</button>
+        <button type="button" onClick={() => applyDateShortcut("beforeYesterday")}>前日</button>
+        <button type="button" onClick={() => applyDateShortcut("thisWeek")}>本周</button>
+        <button type="button" onClick={() => applyDateShortcut("lastWeek")}>上周</button>
+        <button type="button" onClick={() => applyDateShortcut("thisMonth")}>本月</button>
+        <button type="button" onClick={() => applyDateShortcut("lastMonth")}>上月</button>
+      </div>
+
+
+      <div className="quick-row date-shortcuts volume-date-shortcuts snapshot-month-row">
+        <span>快照月份：</span>
+        {snapshotMonthOptions.map((item) => (
+          <button key={item.key} type="button" onClick={() => openSnapshotMonth(item)}>{item.label}</button>
+        ))}
+      </div>
+
+      {mainTab === "country" && isAllDailyPage && <DailyPage rows={dailyCompareRows} summary={summary} feeRows={dailyFeeRows} />}
+      {mainTab === "country" && isAllMonthlyPage && <MonthlyTable title="三方量月汇总" subtitle="按月份 + 国家 + 统一三方汇总。选 5 月会直接显示 5 月总量，点查看可看这个月所有盘口明细。" rows={monthlyPeriodRows} columns={["月份", "国家", "统一三方"]} feeRows={dailyFeeRows} paginated />}
+      {mainTab === "country" && !isAllDailyPage && !isAllMonthlyPage && <CountryVolumeSinglePage country={activeCountryPage} rows={countryPageRows} summary={countryPageSummary} monthlyRows={countryPageMonthlyRows} monthlyPeriodRows={countryPageMonthlyPeriodRows} platformRows={countryPagePlatformRows} dailyRows={countryPageDailyRows} dailyCompareRows={countryPageDailyCompareRows} feeRows={countryPageFeeRows} dateRangeLabel={`${startDate || "-"} 至 ${endDate || "-"}`} volumeMode={volumeMode} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+
+function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { label: string; options: string[]; value: string[]; onChange: (value: string[]) => void; placeholder: string }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const boxRef = useRef<HTMLDivElement | null>(null);
+
+  const visibleOptions = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return options.filter((item) => !q || item.toLowerCase().includes(q));
+  }, [options, search]);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleOutside(event: MouseEvent | TouchEvent) {
+      const target = event.target as Node | null;
+      if (target && boxRef.current && !boxRef.current.contains(target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleOutside);
+    document.addEventListener("touchstart", handleOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("touchstart", handleOutside);
+    };
+  }, [open]);
+
+  function toggle(item: string) {
+    if (value.includes(item)) onChange(value.filter((x) => x !== item));
+    else onChange([...value, item]);
+  }
+
+  function selectVisible() {
+    onChange(uniq([...value, ...visibleOptions]));
+  }
+
+  function clearAll() {
+    onChange([]);
+    setSearch("");
+  }
+
+  return (
+    <div ref={boxRef} className="field multi-field volume-multi-field">
+      <label>{label}</label>
+      <button className="multi-button" type="button" onClick={() => setOpen((x) => !x)}>
+        <span>{filterLabel(value, placeholder)}</span>
+        <span className="multi-caret">▾</span>
+      </button>
+      {open && (
+        <div className="multi-menu volume-multi-menu">
+          <input className="multi-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`搜索${label}`} />
+          <div className="multi-actions">
+            <button type="button" onClick={selectVisible}>全选当前</button>
+            <button type="button" onClick={clearAll}>清空</button>
+            <button type="button" onClick={() => setOpen(false)}>完成</button>
+          </div>
+          <div className="multi-list">
+            {visibleOptions.map((item) => (
+              <label className="multi-option" key={item}>
+                <input type="checkbox" checked={value.includes(item)} onChange={() => toggle(item)} />
+                <span>{item}</span>
+              </label>
+            ))}
+            {!visibleOptions.length && <div className="multi-empty">当前范围暂无选项</div>}
+          </div>
+          <div className="multi-footer">已选 {value.length} 项；会按当前国家范围提供可选项。</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CountryVolumeSinglePage({ country, rows, summary, monthlyRows, monthlyPeriodRows, platformRows, dailyRows, dailyCompareRows, feeRows, dateRangeLabel, volumeMode }: { country: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; monthlyPeriodRows: ComboSummary[]; platformRows: ComboSummary[]; dailyRows: DirectionSummary[]; dailyCompareRows: DailyCompareRow[]; feeRows: FeeCompareRow[]; dateRangeLabel: string; volumeMode: "daily" | "monthly" }) {
+  const [subTab, setSubTab] = useState<CountrySubTab>("daily");
+  const platforms = uniq(rows.map((row) => row.platform));
+  const channels = uniq(rows.map((row) => row.channel));
+  const collectRows = monthlyRows.filter((row) => row.collectAmount > 0).sort((a, b) => b.collectAmount - a.collectAmount);
+  const payoutRows = monthlyRows.filter((row) => row.payoutAmount > 0).sort((a, b) => b.payoutAmount - a.payoutAmount);
+  const countryWarnings = feeRows.filter((row) => row.level !== "normal");
+  const feeStatItems = buildFeeStatItems(feeRows);
+  const platformCompareRows = useMemo(() => buildPlatformCompareRows(rows), [rows]);
+  const subTabLabel = subTab === "daily" ? "日汇总" : subTab === "platform" ? "平台量" : "异常提醒";
+  const structureSourceRows = subTab === "daily"
+    ? dailyCompareRows.flatMap((row) => row.rows)
+    : subTab === "platform"
+      ? platformCompareRows.flatMap((row) => row.rows)
+      : rows;
+  const structureSummary = sumRows(structureSourceRows);
+
+  if (volumeMode === "monthly") {
+    return (
+      <div className="country-volume-page">
+        <div className="country-inline-title">{countryPaneLabel(country)} · 月汇总</div>
+        <PageStatStrip items={[
+          ["主三方", uniq(rows.map((row) => row.channel)).length],
+          ["平台", uniq(rows.map((row) => row.platform)).length],
+          ["代收金额", formatNumber(summary.collectAmount)],
+          ["代收笔数", formatNumber(summary.collectCount)],
+          ["代付金额", formatNumber(summary.payoutAmount)],
+          ["代付笔数", formatNumber(summary.payoutCount)],
+          ...feeStatItems
+        ]} />
+        <MonthlyTable title={`${countryPaneLabel(country)} 月汇总`} subtitle="当前国家按 月份 > 统一三方 汇总；点展开可查看这个月内各类型和平台量。" rows={monthlyPeriodRows} columns={["月份", "国家", "统一三方"]} feeRows={feeRows} paginated />
+      </div>
+    );
+  }
+
+  return (
+    <div className="country-volume-page">
+      <div className="country-inline-title">{countryPaneLabel(country)}</div>
+      <div className="tab-group-row child-tab-row country-sub-tab-row">
+        <button className={cls("module-tab", subTab === "daily" && "active")} onClick={() => setSubTab("daily")}>日汇总</button>
+        <button className={cls("module-tab", subTab === "platform" && "active")} onClick={() => setSubTab("platform")}>平台量</button>
+        <button className={cls("module-tab", subTab === "anomaly" && "active")} onClick={() => setSubTab("anomaly")}>异常提醒</button>
+      </div>
+
+      {subTab !== "anomaly" && (
+        <>
+          <PageStatStrip items={[
+            ["主三方", channels.length],
+            ["平台", platforms.length],
+            ["代收金额", formatNumber(structureSummary.collectAmount)],
+            ["代收笔数", formatNumber(structureSummary.collectCount)],
+            ["代付金额", formatNumber(structureSummary.payoutAmount)],
+            ["代付笔数", formatNumber(structureSummary.payoutCount)],
+            ...feeStatItems
+          ]} />
+
+        </>
+      )}
+
+      {subTab === "daily" && (
+        <DailyCompareTable title={`${countryPaneLabel(country)} 日汇总`} subtitle="日汇总按 日期 > 主三方 汇总；点“展开”可看当前日期下这个主三方各类型总量（跨平台合并），点“查看”可弹窗核对具体平台明细。" rows={dailyCompareRows} feeRows={feeRows} />
+      )}
+
+      {subTab === "platform" && (
+        <PlatformVolumeTable title={`${countryPaneLabel(country)} 平台量`} subtitle="按 日期 > 盘口/平台 汇总；点“展开”可看这个盘口下各三方代收、代付、手续费，点“查看”可弹窗核对平台原始明细。" rows={platformCompareRows} feeRows={feeRows} />
+      )}
+
+      {subTab === "anomaly" && (
+        <CountryFeeAnomalyPanel country={country} rows={countryWarnings} allRows={feeRows} dateRangeLabel={dateRangeLabel} />
+      )}
+
+      {subTab !== "anomaly" && (
+        <ThirdPartyStructureCard
+          title={`${countryPaneLabel(country)} ${subTabLabel}三方结构`}
+          subtitle="放在表格下方，只跟随当前国家、日期和页面筛选；异常提醒不显示这个结构块。"
+          rows={structureSourceRows}
+          summary={structureSummary}
+          feeRows={feeRows}
+        />
+      )}
+    </div>
+  );
+}
+
+function ChangeBadge({ value }: { value: number | null }) {
+  if (value === null) return <span className="change-badge neutral">无昨日</span>;
+  const clsName = value >= 0 ? "up" : "down";
+  return <span className={cls("change-badge", clsName)}>{value >= 0 ? "+" : ""}{formatPercent(value)}</span>;
+}
+
+function PlatformVolumeTable({ title, subtitle, rows, feeRows }: { title: string; subtitle: string; rows: PlatformCompareRow[]; feeRows: FeeCompareRow[] }) {
+  const [selected, setSelected] = useState<PlatformCompareRow | ComboSummary | null>(null);
+  const [selectedFeeIssues, setSelectedFeeIssues] = useState<{ title: string; rows: FeeCompareRow[] } | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const pager = usePagination(rows, true);
+  const shownSummary = sumComboSummaryRows(pager.shown);
+  const totalSummary = sumComboSummaryRows(rows);
+
+  function feeForPlatform(row: PlatformCompareRow): FeeSummary {
+    const matched = feeRows.filter((item) => item.date === row.date && item.country === row.country && item.platform === row.platform);
+    const totalCollectFee = feeRows.reduce((sum, item) => sum + item.collectFeeAmount, 0);
+    const totalPayoutFee = feeRows.reduce((sum, item) => sum + item.payoutFeeAmount, 0);
+    return summarizeFeeRows(matched, totalCollectFee, totalPayoutFee);
+  }
+
+  function childLines(row: PlatformCompareRow) {
+    const grouped = aggregateCombo(row.rows, (raw) => [raw.country, raw.platform, raw.channel]);
+    return grouped.map((child) => {
+      const [country = row.country, platform = row.platform, channel = "未知三方"] = child.labelParts;
+      const matched = feeRows.filter((item) => item.date === row.date && item.country === country && item.platform === platform && item.channel === channel);
+      const totalCollectFee = feeRows.reduce((sum, item) => sum + item.collectFeeAmount, 0);
+      const totalPayoutFee = feeRows.reduce((sum, item) => sum + item.payoutFeeAmount, 0);
+      return { ...child, displayChannel: channel, fee: summarizeFeeRows(matched, totalCollectFee, totalPayoutFee) };
+    }).filter((child) => child.totalAmount > 0 || child.totalCount > 0).sort((a, b) => b.totalAmount - a.totalAmount || b.totalCount - a.totalCount || String(a.displayChannel).localeCompare(String(b.displayChannel), "zh-CN", { numeric: true }));
+  }
+
+  return (
+    <div className="panel daily-compare-panel platform-volume-panel">
+      <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />
+      <div className="table-wrap work-table-wrap daily-compare-wrap">
+        <table>
+          <thead><tr><th>日期</th><th>国家</th><th>平台/盘口</th><th className="num">代收金额</th><th>代收占比</th><th className="num">代收笔数</th><th className="num">代付金额</th><th>代付占比</th><th className="num">代付笔数</th><th className="num">合计金额</th><th className="num">合计笔数</th><th>代收费率</th><th className="num">代收手续费</th><th>代付费率</th><th className="num">代付手续费</th><th className="num">合计手续费</th><th>手续费占比</th><th>总占比</th><th>详情</th></tr></thead>
+          <tbody>{pager.shown.flatMap((row) => {
+            const fee = feeForPlatform(row);
+            const children = childLines(row);
+            const isOpen = !!expanded[row.key];
+            const main = <tr key={row.key} className={fee.alertRows.length ? "fee-warning-main-row" : ""}><td>{row.date}</td><td>{row.country}</td><td className="strong-cell">{row.platform}</td><td className="num">{formatNumber(row.collectAmount)}</td><td><ShareBar value={row.collectPct} /></td><td className="num">{formatNumber(row.collectCount)}</td><td className="num">{formatNumber(row.payoutAmount)}</td><td><ShareBar value={row.payoutPct} /></td><td className="num">{formatNumber(row.payoutCount)}</td><td className="num strong-cell">{formatNumber(row.totalAmount)}</td><td className="num strong-cell">{formatNumber(row.totalCount)}</td><td>{feeRateText(fee, "collect")}</td><td className="num">{feeAmountText(fee, "collect")}</td><td>{feeRateText(fee, "payout")}</td><td className="num">{feeAmountText(fee, "payout")}</td><td className="num">{feeTotalText(fee)}</td><td>{feeShareNode(fee, () => setSelectedFeeIssues({ title: `${row.date} / ${row.country} / ${row.platform}`, rows: fee.alertRows }))}</td><td>{formatPercent(row.totalPct)}</td><td><div className="row-action-group">{children.length > 0 && <button className="mini-btn" onClick={() => setExpanded((old) => ({ ...old, [row.key]: !old[row.key] }))}>{isOpen ? "收起" : "展开"}</button>}<button className="mini-btn" onClick={() => setSelected(row)}>查看</button></div></td></tr>;
+            if (!isOpen || !children.length) return [main];
+            const childRows = children.map((child) => {
+              const childHasCollect = sideHasValue(child.collectAmount, child.collectCount);
+              const childHasPayout = sideHasValue(child.payoutAmount, child.payoutCount);
+              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row"><td>{row.date}</td><td>{row.country}</td><td>{`↳ ${child.displayChannel || "-"}`}</td><td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td>{sideShareNode(childHasCollect, row.collectAmount ? child.collectAmount / row.collectAmount : 0)}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td>{sideShareNode(childHasPayout, row.payoutAmount ? child.payoutAmount / row.payoutAmount : 0)}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.date} / ${row.country} / ${row.platform} / ${child.displayChannel}`, rows: child.fee.alertRows }))}</td><td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td><button className="mini-btn" onClick={() => setSelected(child)}>查看</button></td></tr>;
+            });
+            return [main, ...childRows];
+          })}{!pager.shown.length && <tr><td colSpan={19} className="empty">暂无平台量数据</td></tr>}</tbody>
+          <tfoot>
+            <tr className="summary-row page-summary-row"><td colSpan={3}>当前页汇总</td><td className="num">{formatNumber(shownSummary.collectAmount)}</td><td>{pct(shownSummary.collectAmount, shownSummary.totalAmount)}</td><td className="num">{formatNumber(shownSummary.collectCount)}</td><td className="num">{formatNumber(shownSummary.payoutAmount)}</td><td>{pct(shownSummary.payoutAmount, shownSummary.totalAmount)}</td><td className="num">{formatNumber(shownSummary.payoutCount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalCount)}</td><td>{shownSummary.collectAmount ? formatPercent((feeRows.filter((item) => pager.shown.some((row) => row.date === item.date && row.country === item.country && row.platform === item.platform)).reduce((sum, item) => sum + item.collectFeeAmount, 0)) / shownSummary.collectAmount) : '-'}</td><td className="num">{formatNumber(feeRows.filter((item) => pager.shown.some((row) => row.date === item.date && row.country === item.country && row.platform === item.platform)).reduce((sum, item) => sum + item.collectFeeAmount, 0))}</td><td>{shownSummary.payoutAmount ? formatPercent((feeRows.filter((item) => pager.shown.some((row) => row.date === item.date && row.country === item.country && row.platform === item.platform)).reduce((sum, item) => sum + item.payoutFeeAmount, 0)) / shownSummary.payoutAmount) : '-'}</td><td className="num">{formatNumber(feeRows.filter((item) => pager.shown.some((row) => row.date === item.date && row.country === item.country && row.platform === item.platform)).reduce((sum, item) => sum + item.payoutFeeAmount, 0))}</td><td className="num">{formatNumber(feeRows.filter((item) => pager.shown.some((row) => row.date === item.date && row.country === item.country && row.platform === item.platform)).reduce((sum, item) => sum + item.collectFeeAmount + item.payoutFeeAmount, 0))}</td><td>{formatPercent(totalSummary.totalAmount ? feeRows.filter((item) => pager.shown.some((row) => row.date === item.date && row.country === item.country && row.platform === item.platform)).reduce((sum, item) => sum + item.collectFeeAmount + item.payoutFeeAmount, 0) / Math.max(1, feeRows.reduce((sum, item) => sum + item.collectFeeAmount + item.payoutFeeAmount, 0)) : 0)}</td><td>{formatPercent(shownSummary.totalPct)}</td><td className="muted-cell">汇总</td></tr>
+            <tr className="summary-row overall-summary-row"><td colSpan={3}>全部汇总</td><td className="num">{formatNumber(totalSummary.collectAmount)}</td><td>{pct(totalSummary.collectAmount, totalSummary.totalAmount)}</td><td className="num">{formatNumber(totalSummary.collectCount)}</td><td className="num">{formatNumber(totalSummary.payoutAmount)}</td><td>{pct(totalSummary.payoutAmount, totalSummary.totalAmount)}</td><td className="num">{formatNumber(totalSummary.payoutCount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalCount)}</td><td>{totalSummary.collectAmount ? formatPercent(feeRows.reduce((sum, item) => sum + item.collectFeeAmount, 0) / totalSummary.collectAmount) : '-'}</td><td className="num">{formatNumber(feeRows.reduce((sum, item) => sum + item.collectFeeAmount, 0))}</td><td>{totalSummary.payoutAmount ? formatPercent(feeRows.reduce((sum, item) => sum + item.payoutFeeAmount, 0) / totalSummary.payoutAmount) : '-'}</td><td className="num">{formatNumber(feeRows.reduce((sum, item) => sum + item.payoutFeeAmount, 0))}</td><td className="num">{formatNumber(feeRows.reduce((sum, item) => sum + item.collectFeeAmount + item.payoutFeeAmount, 0))}</td><td>100.00%</td><td>100.00%</td><td className="muted-cell">汇总</td></tr>
+          </tfoot>
+        </table>
+      </div>
+      {selected && <VolumeRowsModal title={`${"date" in selected ? selected.date : ""} / ${selected.labelParts.join(" / ")}`} rows={selected.rows} onClose={() => setSelected(null)} />}
+      {selectedFeeIssues && <FeeIssueRowsModal title={selectedFeeIssues.title} rows={selectedFeeIssues.rows} onClose={() => setSelectedFeeIssues(null)} />}
+    </div>
+  );
+}
+
+function DailyCompareTable({ title, subtitle, rows, feeRows }: { title: string; subtitle: string; rows: DailyCompareRow[]; feeRows: FeeCompareRow[] }) {
+  const [selected, setSelected] = useState<DailyCompareRow | ComboSummary | null>(null);
+  const [selectedFeeIssues, setSelectedFeeIssues] = useState<{ title: string; rows: FeeCompareRow[] } | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const pager = usePagination(rows, true);
+  const shownSummary = sumDailyCompareSummaryRows(pager.shown);
+  const totalSummary = sumDailyCompareSummaryRows(rows);
+
+  function feeForRow(row: DailyCompareRow): FeeSummary {
+    // V195：日汇总主行是“日期 + 国家 + 统一三方”的总量，同一个三方下面可能同时存在 UPI / 银行卡 / 代付类型等多种类型。
+    // 之前如果当前主三方被判断成单一类型，会只匹配其中一种类型，导致页面显示有费率但手续费金额为 0。
+    // 主行必须合并这个三方当天所有类型的手续费；类型拆分只在展开子行里做。
+    const matched = feeRows.filter((item) => item.date === row.date && item.country === row.country && item.channel === row.channel);
+    const totalCollectFee = feeRows.reduce((sum, item) => sum + item.collectFeeAmount, 0);
+    const totalPayoutFee = feeRows.reduce((sum, item) => sum + item.payoutFeeAmount, 0);
+    return summarizeFeeRows(matched, totalCollectFee, totalPayoutFee);
+  }
+
+  function childLines(row: DailyCompareRow) {
+    const grouped = aggregateCombo(row.rows, (raw) => {
+      const type = normalizedDisplayChannelType(raw.country, raw.channelType || inferThirdPartyChannelType(raw.rawChannel || raw.channel, raw.country, `${raw.channel} ${raw.rawChannel}`) || "其他类型", [raw]);
+      return [raw.country, raw.channel, type];
+    });
+    return grouped.map((child) => {
+      const [country = row.country, channel = row.channel, type = "其他类型"] = child.labelParts;
+      const displayType = normalizedDisplayChannelType(country, type, child.rows);
+      const matched = feeRows.filter((item) => item.date === row.date && item.country === country && item.channel === channel && (!displayType || feeTypeMatches(country, displayType, item.channelType)));
+      const totalCollectFee = feeRows.reduce((sum, item) => sum + item.collectFeeAmount, 0);
+      const totalPayoutFee = feeRows.reduce((sum, item) => sum + item.payoutFeeAmount, 0);
+      return { ...child, displayType, fee: summarizeFeeRows(matched, totalCollectFee, totalPayoutFee) };
+    }).filter((child) => child.totalAmount > 0 || child.totalCount > 0).sort((a, b) => b.totalAmount - a.totalAmount || b.totalCount - a.totalCount);
+  }
+
+  return (
+    <div className="panel daily-compare-panel">
+      <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />
+      <div className="table-wrap work-table-wrap daily-compare-wrap">
+        <table>
+          <thead><tr><th>日期</th><th>国家</th><th>统一三方</th><th className="num">代收金额</th><th>代收占比</th><th className="num">代收笔数</th><th className="num">代付金额</th><th>代付占比</th><th className="num">代付笔数</th><th className="num">合计金额</th><th className="num">合计笔数</th><th>代收费率</th><th className="num">代收手续费</th><th>代付费率</th><th className="num">代付手续费</th><th className="num">合计手续费</th><th>手续费占比</th><th className="num">昨日代收</th><th>代收对比</th><th className="num">昨日代付</th><th>代付对比</th><th>总占比</th><th>详情</th></tr></thead>
+          <tbody>{pager.shown.flatMap((row) => {
+            const fee = feeForRow(row);
+            const children = childLines(row);
+            const isOpen = !!expanded[row.key];
+            const main = <tr key={row.key} className={fee.alertRows.length ? "fee-warning-main-row" : ""}><td>{row.date}</td><td>{row.country}</td><td className="strong-cell">{row.channel}</td><td className="num">{formatNumber(row.collectAmount)}</td><td><ShareBar value={row.collectPct} /></td><td className="num">{formatNumber(row.collectCount)}</td><td className="num">{formatNumber(row.payoutAmount)}</td><td><ShareBar value={row.payoutPct} /></td><td className="num">{formatNumber(row.payoutCount)}</td><td className="num strong-cell">{formatNumber(row.totalAmount)}</td><td className="num strong-cell">{formatNumber(row.totalCount)}</td><td>{feeRateText(fee, "collect")}</td><td className="num">{feeAmountText(fee, "collect")}</td><td>{feeRateText(fee, "payout")}</td><td className="num">{feeAmountText(fee, "payout")}</td><td className="num">{feeTotalText(fee)}</td><td>{feeShareNode(fee, () => setSelectedFeeIssues({ title: `${row.date} / ${row.country} / ${row.channel}`, rows: fee.alertRows }))}</td><td className="num">{row.previousCollectAmount ? formatNumber(row.previousCollectAmount) : "-"}</td><td><ChangeBadge value={row.collectDiffPercent} /></td><td className="num">{row.previousPayoutAmount ? formatNumber(row.previousPayoutAmount) : "-"}</td><td><ChangeBadge value={row.payoutDiffPercent} /></td><td>{formatPercent(row.totalPct)}</td><td><div className="row-action-group">{children.length > 0 && <button className="mini-btn" onClick={() => setExpanded((old) => ({ ...old, [row.key]: !old[row.key] }))}>{isOpen ? "收起" : "展开"}</button>}<button className="mini-btn" onClick={() => setSelected(row)}>查看</button></div></td></tr>;
+            if (!isOpen || !children.length) return [main];
+            const childRows = children.map((child) => {
+              const childHasCollect = sideHasValue(child.collectAmount, child.collectCount);
+              const childHasPayout = sideHasValue(child.payoutAmount, child.payoutCount);
+              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row"><td>{row.date}</td><td>{row.country}</td><td>{`↳ ${child.displayType || "-"}`}</td><td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td>{sideShareNode(childHasCollect, row.collectAmount ? child.collectAmount / row.collectAmount : 0)}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td>{sideShareNode(childHasPayout, row.payoutAmount ? child.payoutAmount / row.payoutAmount : 0)}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.date} / ${row.country} / ${row.channel} / ${child.displayType}`, rows: child.fee.alertRows }))}</td><td className="num">-</td><td className="muted-cell">-</td><td className="num">-</td><td className="muted-cell">-</td><td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td><button className="mini-btn" onClick={() => setSelected(child)}>查看</button></td></tr>;
+            });
+            return [main, ...childRows];
+          })}{!pager.shown.length && <tr><td colSpan={23} className="empty">暂无所有明细数据</td></tr>}</tbody>
+          <tfoot>
+            <tr className="summary-row page-summary-row"><td colSpan={3}>当前页汇总</td><td className="num">{formatNumber(shownSummary.collectAmount)}</td><td>{pct(shownSummary.collectAmount, shownSummary.totalAmount)}</td><td className="num">{formatNumber(shownSummary.collectCount)}</td><td className="num">{formatNumber(shownSummary.payoutAmount)}</td><td>{pct(shownSummary.payoutAmount, shownSummary.totalAmount)}</td><td className="num">{formatNumber(shownSummary.payoutCount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalCount)}</td><td>-</td><td className="num">{formatNumber(feeRows.filter((item) => pager.shown.some((row) => row.date === item.date && row.country === item.country && row.channel === item.channel)).reduce((sum, item) => sum + item.collectFeeAmount, 0))}</td><td>-</td><td className="num">{formatNumber(feeRows.filter((item) => pager.shown.some((row) => row.date === item.date && row.country === item.country && row.channel === item.channel)).reduce((sum, item) => sum + item.payoutFeeAmount, 0))}</td><td className="num">{formatNumber(feeRows.filter((item) => pager.shown.some((row) => row.date === item.date && row.country === item.country && row.channel === item.channel)).reduce((sum, item) => sum + item.collectFeeAmount + item.payoutFeeAmount, 0))}</td><td>{formatPercent(feeRows.reduce((sum, item) => sum + item.collectFeeAmount + item.payoutFeeAmount, 0) ? feeRows.filter((item) => pager.shown.some((row) => row.date === item.date && row.country === item.country && row.channel === item.channel)).reduce((sum, item) => sum + item.collectFeeAmount + item.payoutFeeAmount, 0) / feeRows.reduce((sum, item) => sum + item.collectFeeAmount + item.payoutFeeAmount, 0) : 0)}</td><td className="num">{shownSummary.previousCollectAmount ? formatNumber(shownSummary.previousCollectAmount) : '-'}</td><td>{diffPercentText(shownSummary.collectAmount, shownSummary.previousCollectAmount)}</td><td className="num">{shownSummary.previousPayoutAmount ? formatNumber(shownSummary.previousPayoutAmount) : '-'}</td><td>{diffPercentText(shownSummary.payoutAmount, shownSummary.previousPayoutAmount)}</td><td>{formatPercent(shownSummary.totalPct)}</td><td className="muted-cell">汇总</td></tr>
+            <tr className="summary-row overall-summary-row"><td colSpan={3}>全部汇总</td><td className="num">{formatNumber(totalSummary.collectAmount)}</td><td>{pct(totalSummary.collectAmount, totalSummary.totalAmount)}</td><td className="num">{formatNumber(totalSummary.collectCount)}</td><td className="num">{formatNumber(totalSummary.payoutAmount)}</td><td>{pct(totalSummary.payoutAmount, totalSummary.totalAmount)}</td><td className="num">{formatNumber(totalSummary.payoutCount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalCount)}</td><td>-</td><td className="num">{formatNumber(feeRows.reduce((sum, item) => sum + item.collectFeeAmount, 0))}</td><td>-</td><td className="num">{formatNumber(feeRows.reduce((sum, item) => sum + item.payoutFeeAmount, 0))}</td><td className="num">{formatNumber(feeRows.reduce((sum, item) => sum + item.collectFeeAmount + item.payoutFeeAmount, 0))}</td><td>100.00%</td><td className="num">{totalSummary.previousCollectAmount ? formatNumber(totalSummary.previousCollectAmount) : '-'}</td><td>{diffPercentText(totalSummary.collectAmount, totalSummary.previousCollectAmount)}</td><td className="num">{totalSummary.previousPayoutAmount ? formatNumber(totalSummary.previousPayoutAmount) : '-'}</td><td>{diffPercentText(totalSummary.payoutAmount, totalSummary.previousPayoutAmount)}</td><td>100.00%</td><td className="muted-cell">汇总</td></tr>
+          </tfoot>
+        </table>
+      </div>
+      {selected && <VolumeRowsModal title={`${"date" in selected ? selected.date : ""} / ${selected.labelParts.join(" / ")}`} rows={selected.rows} onClose={() => setSelected(null)} />}
+      {selectedFeeIssues && <FeeIssueRowsModal title={selectedFeeIssues.title} rows={selectedFeeIssues.rows} onClose={() => setSelectedFeeIssues(null)} />}
+    </div>
+  );
+}
+
+function VolumeRowsModal({ title, rows, onClose }: { title: string; rows: ThirdPartyVolumeRow[]; onClose: () => void }) {
+  const [modalKeyword, setModalKeyword] = useState("");
+  const [modalCountry, setModalCountry] = useState("");
+  const [modalPlatform, setModalPlatform] = useState("");
+  const [modalDirection, setModalDirection] = useState("");
+
+  const countryOptions = useMemo(() => sortCountries(rows.map((row) => row.country)), [rows]);
+  const platformOptions = useMemo(() => uniq(rows.filter((row) => !modalCountry || row.country === modalCountry).map((row) => row.platform)), [rows, modalCountry]);
+  const directionOptions = useMemo(() => uniq(rows.map((row) => row.direction)), [rows]);
+  const filteredRows = useMemo(() => {
+    const kw = modalKeyword.trim().toLowerCase();
+    return rows.filter((row) => {
+      if (modalCountry && row.country !== modalCountry) return false;
+      if (modalPlatform && row.platform !== modalPlatform) return false;
+      if (modalDirection && row.direction !== modalDirection) return false;
+      if (kw && !`${row.date} ${row.country} ${row.platform} ${row.direction} ${row.channelType || ""} ${row.channel} ${row.rawChannel} ${row.sheetName}`.toLowerCase().includes(kw)) return false;
+      return true;
+    });
+  }, [rows, modalKeyword, modalCountry, modalPlatform, modalDirection]);
+
+  const summary = sumRows(filteredRows);
+  const pager = usePagination<ThirdPartyVolumeRow>(filteredRows, true);
+  const amountTotal = filteredRows.reduce((sum, row) => sum + row.amount, 0);
+  const countTotal = filteredRows.reduce((sum, row) => sum + row.count, 0);
+
+  return (
+    <div className="modal-backdrop"><div className="detail-modal work-detail-modal volume-detail-modal volume-detail-modal-v209">
+      <div className="detail-modal-header"><div><h3>{title}</h3><p>可以在弹窗内按国家、平台、代收/代付、三方名称继续搜索核对，不会改变外层页面筛选。</p></div><button className="modal-close-btn" type="button" onClick={onClose}>关闭</button></div>
+      <div className="modal-filter-row">
+        <div className="field"><label>搜索</label><input className="input" value={modalKeyword} onChange={(event) => setModalKeyword(event.target.value)} placeholder="搜索平台 / 三方 / 原始名称" /></div>
+        <div className="field"><label>国家</label><select className="input" value={modalCountry} onChange={(event) => { setModalCountry(event.target.value); setModalPlatform(""); }}><option value="">全部国家</option>{countryOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
+        <div className="field"><label>平台</label><select className="input" value={modalPlatform} onChange={(event) => setModalPlatform(event.target.value)}><option value="">全部平台</option>{platformOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
+        <div className="field"><label>业务方向</label><select className="input" value={modalDirection} onChange={(event) => setModalDirection(event.target.value)}><option value="">全部方向</option>{directionOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
+        <button className="ghost-btn" type="button" onClick={() => { setModalKeyword(""); setModalCountry(""); setModalPlatform(""); setModalDirection(""); }}>清空</button>
+      </div>
+      <div className="modal-summary-grid modal-summary-grid-v209"><div><span>筛选金额</span><strong>{formatNumber(summary.amount)}</strong><p>全部 {formatNumber(rows.reduce((sum, row) => sum + row.amount, 0))}</p></div><div><span>筛选笔数</span><strong>{formatNumber(summary.count)}</strong><p>全部 {formatNumber(rows.reduce((sum, row) => sum + row.count, 0))}</p></div><div><span>代收</span><strong>{formatNumber(summary.collectAmount)}</strong><p>{pct(summary.collectAmount, summary.amount)} · {formatNumber(summary.collectCount)} 笔</p></div><div><span>代付</span><strong>{formatNumber(summary.payoutAmount)}</strong><p>{pct(summary.payoutAmount, summary.amount)} · {formatNumber(summary.payoutCount)} 笔</p></div></div>
+      <TablePager total={filteredRows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />
+      <div className="table-wrap detail-table-wrap"><table><thead><tr><th>日期</th><th>国家</th><th>平台</th><th>业务方向</th><th>钱包/通道类型</th><th>统一三方</th><th>原始名称</th><th className="num">金额</th><th>金额占比</th><th className="num">笔数</th><th>笔数占比</th><th>来源</th></tr></thead><tbody>{pager.shown.map((row) => <tr key={row.id}><td>{row.date}</td><td>{row.country}</td><td>{row.platform}</td><td>{row.direction}</td><td>{row.channelType || "其他类型"}</td><td>{row.channel}</td><td>{row.rawChannel}</td><td className="num">{formatNumber(row.amount)}</td><td><ShareBar value={amountTotal ? row.amount / amountTotal : 0} /></td><td className="num">{formatNumber(row.count)}</td><td><ShareBar value={countTotal ? row.count / countTotal : 0} /></td><td>{row.sheetName} #{row.sourceRow}</td></tr>)}{!pager.shown.length && <tr><td colSpan={12} className="empty">暂无明细</td></tr>}</tbody></table></div>
+    </div></div>
+  );
+}
+
+function CountryFeeAnomalyPanel({ country, rows, allRows, dateRangeLabel }: { country: string; rows: FeeCompareRow[]; allRows: FeeCompareRow[]; dateRangeLabel: string }) {
+  const [period, setPeriod] = useState<FeeAnomalyPeriod>("day");
+  const [selected, setSelected] = useState<FeeCompareRow | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const periodRows = useMemo<FeeCompareRow[]>(() => {
+    if (period === "day") return rows;
+    const map = new Map<string, FeeCompareRow>();
+    for (const row of allRows) {
+      if (row.country !== country) continue;
+      const key = `${periodKeyFor(row.date || "", period)}|||${row.country}|||${row.platform}|||${row.channel}|||${row.channelType}`;
+      const current = map.get(key);
+      if (!current) {
+        map.set(key, { ...row, date: periodKeyFor(row.date || "", period), collectShare: 0, payoutShare: 0, totalShare: 0 });
+      } else {
+        current.collectAmount += row.collectAmount;
+        current.collectCount += row.collectCount;
+        current.payoutAmount += row.payoutAmount;
+        current.payoutCount += row.payoutCount;
+        current.totalAmount += row.totalAmount;
+        current.totalCount += row.totalCount;
+        current.collectFeeAmount += row.collectFeeAmount;
+        current.payoutFeeAmount += row.payoutFeeAmount;
+        current.estimatedFee += row.estimatedFee;
+        if (row.level === "danger") current.level = "danger";
+        else if (row.level === "warning" && current.level === "normal") current.level = "warning";
+        else if (row.level === "missing" && current.level === "normal") current.level = "missing";
+        if (row.advice && !current.advice.includes(row.advice)) current.advice = current.advice === "正常观察" ? row.advice : `${current.advice}；${row.advice}`;
+      }
+    }
+    const combined = Array.from(map.values());
+    const totals = new Map<string, { collect: number; payout: number; total: number }>();
+    for (const row of combined) {
+      const scopeKey = `${row.date || "累计"}|||${row.country}`;
+      const current = totals.get(scopeKey) || { collect: 0, payout: 0, total: 0 };
+      current.collect += row.collectAmount;
+      current.payout += row.payoutAmount;
+      current.total += row.totalAmount;
+      totals.set(scopeKey, current);
+    }
+    const rebuilt = combined.map((row) => {
+      const total = totals.get(`${row.date || "累计"}|||${row.country}`) || { collect: 0, payout: 0, total: 0 };
+      return {
+        ...row,
+        collectShare: total.collect ? row.collectAmount / total.collect : 0,
+        payoutShare: total.payout ? row.payoutAmount / total.payout : 0,
+        totalShare: total.total ? row.totalAmount / total.total : 0,
+        effectiveTotalFeeRate: row.totalAmount ? row.estimatedFee / row.totalAmount : 0
+      };
+    });
+    return feeWarningRows(rebuilt).sort((a, b) => b.estimatedFee - a.estimatedFee || b.totalAmount - a.totalAmount);
+  }, [period, rows, allRows, country]);
+
+  type GroupedAnomaly = {
+    key: string;
+    date: string;
+    country: string;
+    channel: string;
+    channelType: string;
+    collectAmount: number;
+    collectCount: number;
+    payoutAmount: number;
+    payoutCount: number;
+    totalAmount: number;
+    totalCount: number;
+    collectFeeAmount: number;
+    payoutFeeAmount: number;
+    estimatedFee: number;
+    collectShare: number;
+    payoutShare: number;
+    totalShare: number;
+    level: FeeCompareRow["level"];
+    advice: string;
+    rows: FeeCompareRow[];
+  };
+
+  const groupedRows = useMemo<GroupedAnomaly[]>(() => {
+    const map = new Map<string, GroupedAnomaly>();
+    for (const row of periodRows) {
+      const key = `${row.date || "累计"}|||${row.country}|||${row.channel}|||${row.channelType || "其他类型"}`;
+      const current = map.get(key) || {
+        key,
+        date: row.date || "累计",
+        country: row.country,
+        channel: row.channel,
+        channelType: row.channelType || "其他类型",
+        collectAmount: 0,
+        collectCount: 0,
+        payoutAmount: 0,
+        payoutCount: 0,
+        totalAmount: 0,
+        totalCount: 0,
+        collectFeeAmount: 0,
+        payoutFeeAmount: 0,
+        estimatedFee: 0,
+        collectShare: 0,
+        payoutShare: 0,
+        totalShare: 0,
+        level: "normal" as FeeCompareRow["level"],
+        advice: "",
+        rows: []
+      };
+      current.collectAmount += row.collectAmount;
+      current.collectCount += row.collectCount;
+      current.payoutAmount += row.payoutAmount;
+      current.payoutCount += row.payoutCount;
+      current.totalAmount += row.totalAmount;
+      current.totalCount += row.totalCount;
+      current.collectFeeAmount += row.collectFeeAmount;
+      current.payoutFeeAmount += row.payoutFeeAmount;
+      current.estimatedFee += row.estimatedFee;
+      if (row.level === "danger") current.level = "danger";
+      else if (row.level === "warning" && current.level !== "danger") current.level = "warning";
+      else if (row.level === "missing" && current.level === "normal") current.level = "missing";
+      if (row.advice && !current.advice.includes(row.advice)) current.advice = current.advice ? `${current.advice}；${row.advice}` : row.advice;
+      current.rows.push(row);
+      map.set(key, current);
+    }
+    const totals = new Map<string, { collect: number; payout: number; total: number }>();
+    for (const row of map.values()) {
+      const scope = `${row.date}|||${row.country}`;
+      const current = totals.get(scope) || { collect: 0, payout: 0, total: 0 };
+      current.collect += row.collectAmount;
+      current.payout += row.payoutAmount;
+      current.total += row.totalAmount;
+      totals.set(scope, current);
+    }
+    return Array.from(map.values()).map((row) => {
+      const total = totals.get(`${row.date}|||${row.country}`) || { collect: 0, payout: 0, total: 0 };
+      return {
+        ...row,
+        collectShare: total.collect ? row.collectAmount / total.collect : 0,
+        payoutShare: total.payout ? row.payoutAmount / total.payout : 0,
+        totalShare: total.total ? row.totalAmount / total.total : 0,
+        advice: Array.from(new Set(row.advice.split("；").filter(Boolean))).join("；") || "正常观察",
+        rows: row.rows.sort((a, b) => b.estimatedFee - a.estimatedFee || b.totalAmount - a.totalAmount)
+      };
+    }).sort((a, b) => {
+      const score = (row: GroupedAnomaly) => row.level === "danger" ? 3 : row.level === "warning" ? 2 : row.level === "missing" ? 1 : 0;
+      return score(b) - score(a) || b.estimatedFee - a.estimatedFee || b.totalAmount - a.totalAmount;
+    });
+  }, [periodRows]);
+
+  const pager = usePagination<GroupedAnomaly>(groupedRows, true);
+  return (
+    <div className="panel country-fee-anomaly-panel">
+      <div className="panel-head">
+        <div><h2>{countryPaneLabel(country)} 异常提醒</h2><p>按「统一三方 + 钱包/通道类型」汇总，异常判断看合计手续费和总有效费率。当前日期范围：{dateRangeLabel}</p></div>
+        <div className="period-switch"><button className={cls(period === "day" && "active")} onClick={() => setPeriod("day")}>日</button><button className={cls(period === "week" && "active")} onClick={() => setPeriod("week")}>周</button><button className={cls(period === "month" && "active")} onClick={() => setPeriod("month")}>月</button></div>
+      </div>
+      <PageStatStrip items={[["异常三方", groupedRows.length], ["预估费用", formatNumber(groupedRows.reduce((sum, row) => sum + row.estimatedFee, 0))], ["代收金额", formatNumber(groupedRows.reduce((sum, row) => sum + row.collectAmount, 0))], ["代付金额", formatNumber(groupedRows.reduce((sum, row) => sum + row.payoutAmount, 0))]]} />
+      <TablePager total={groupedRows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />
+      <div className="table-wrap work-table-wrap fee-anomaly-table"><table><thead><tr><th>{period === "day" ? "日期" : period === "week" ? "周起始" : "月份"}</th><th>国家</th><th>统一三方</th><th>钱包/通道</th><th className="num">代收金额</th><th>代收占比</th><th className="num">代付金额</th><th>代付占比</th><th className="num">合计金额</th><th>总占比</th><th className="num">合计手续费</th><th>总有效费率</th><th>手续费占比</th><th>判断</th><th>详情</th></tr></thead><tbody>{pager.shown.flatMap((row) => {
+        const isOpen = !!expanded[row.key];
+        const feeBase = groupedRows.reduce((sum, item) => sum + item.estimatedFee, 0);
+        const mainEffectiveRate = row.totalAmount ? row.estimatedFee / row.totalAmount : 0;
+        const main = <tr key={row.key} className={row.level !== "normal" ? "warning-row" : ""}><td>{row.date}</td><td>{row.country}</td><td className="strong-cell">{row.channel}</td><td>{row.channelType || "其他类型"}</td><td className="num">{formatNumber(row.collectAmount)}</td><td><ShareBar value={row.collectShare} /></td><td className="num">{formatNumber(row.payoutAmount)}</td><td><ShareBar value={row.payoutShare} /></td><td className="num strong-cell">{formatNumber(row.totalAmount)}</td><td><ShareBar value={row.totalShare} /></td><td className="num strong-cell">{formatNumber(row.estimatedFee)}</td><td>{mainEffectiveRate ? formatPercent(mainEffectiveRate) : "-"}</td><td>{feeBase ? formatPercent(row.estimatedFee / feeBase) : "0.00%"}</td><td>{row.advice}</td><td><div className="row-action-group"><button className="mini-btn" onClick={() => setExpanded((old) => ({ ...old, [row.key]: !old[row.key] }))}>{isOpen ? "收起" : "展开"}</button></div></td></tr>;
+        if (!isOpen) return [main];
+        const children = row.rows.map((child) => <tr key={`${row.key}|||${child.key}`} className="volume-child-row"><td>{child.date || row.date}</td><td>{child.country}</td><td>{`↳ ${child.platform}`}</td><td>{child.channelType || "其他类型"}</td><td className="num">{formatNumber(child.collectAmount)}</td><td><ShareBar value={row.collectAmount ? child.collectAmount / row.collectAmount : 0} /></td><td className="num">{formatNumber(child.payoutAmount)}</td><td><ShareBar value={row.payoutAmount ? child.payoutAmount / row.payoutAmount : 0} /></td><td className="num">{formatNumber(child.totalAmount)}</td><td><ShareBar value={row.totalAmount ? child.totalAmount / row.totalAmount : 0} /></td><td className="num">{formatNumber(child.estimatedFee)}</td><td>{child.effectiveTotalFeeRate ? formatPercent(child.effectiveTotalFeeRate) : "-"}</td><td>{row.estimatedFee ? formatPercent(child.estimatedFee / row.estimatedFee) : "0.00%"}</td><td>{child.advice}</td><td><button className="mini-btn" onClick={() => setSelected(child)}>查看</button></td></tr>);
+        return [main, ...children];
+      })}{!pager.shown.length && <tr><td colSpan={15} className="empty">当前国家暂无明显异常。</td></tr>}</tbody></table></div>
+      {selected && <FeeDetailModal row={selected} onClose={() => setSelected(null)} />}
+    </div>
+  );
+}
+
+function comboThirdPartyName(row: ComboSummary): string {
+  const parts = row.labelParts.filter(Boolean);
+  if (parts.length >= 3) return parts[2];
+  if (parts.length >= 2) return parts[1];
+  return parts[0] || "未知三方";
+}
+
+type ThirdPartyStructureRow = {
+  name: string;
+  collectAmount: number;
+  collectCount: number;
+  payoutAmount: number;
+  payoutCount: number;
+  totalAmount: number;
+  totalCount: number;
+};
+
+function buildThirdPartyStructureRows(rows: ThirdPartyVolumeRow[]): ThirdPartyStructureRow[] {
+  const map = new Map<string, ThirdPartyStructureRow>();
+  for (const row of rows) {
+    const name = row.channel || canonicalThirdPartyName(row.rawChannel || "未知三方", row.country);
+    const current = map.get(name) || { name, collectAmount: 0, collectCount: 0, payoutAmount: 0, payoutCount: 0, totalAmount: 0, totalCount: 0 };
+    if (row.direction === "代收") {
+      current.collectAmount += row.amount;
+      current.collectCount += row.count;
+    } else if (row.direction === "代付") {
+      current.payoutAmount += row.amount;
+      current.payoutCount += row.count;
+    }
+    current.totalAmount = current.collectAmount + current.payoutAmount;
+    current.totalCount = current.collectCount + current.payoutCount;
+    map.set(name, current);
+  }
+  return Array.from(map.values()).sort((a, b) => b.totalAmount - a.totalAmount || b.totalCount - a.totalCount || a.name.localeCompare(b.name, "zh-CN", { numeric: true }));
+}
+
+
+type FeeStructureRow = {
+  name: string;
+  fee: number;
+  amount: number;
+  count: number;
+};
+
+function buildFeeStructureRows(rows: FeeCompareRow[]): FeeStructureRow[] {
+  const map = new Map<string, FeeStructureRow>();
+  for (const row of rows) {
+    const name = row.channel || "未知三方";
+    const current = map.get(name) || { name, fee: 0, amount: 0, count: 0 };
+    current.fee += row.estimatedFee;
+    current.amount += row.totalAmount;
+    current.count += row.totalCount;
+    map.set(name, current);
+  }
+  return Array.from(map.values()).filter((row) => row.fee > 0).sort((a, b) => b.fee - a.fee || b.amount - a.amount);
+}
+
+function FeeStructureMetricList({ rows }: { rows: FeeCompareRow[] }) {
+  const feeRows = buildFeeStructureRows(rows);
+  const total = feeRows.reduce((sum, row) => sum + row.fee, 0);
+  const shown = feeRows.slice(0, 10);
+  return (
+    <div className="third-party-structure-box fee-structure-box">
+      <h4>手续费占比</h4>
+      <div className="third-party-structure-list">
+        {shown.map((row, index) => (
+          <div className="third-party-structure-row" key={`fee-${row.name}`}>
+            <div className="rank-no">{index + 1}</div>
+            <div className="third-party-structure-name">
+              <strong>{row.name}</strong>
+              <span>手续费 {formatNumber(row.fee)} · 金额 {formatNumber(row.amount)} · 笔数 {formatNumber(row.count)}</span>
+            </div>
+            <ShareBar value={total ? row.fee / total : 0} />
+          </div>
+        ))}
+        {!shown.length && <div className="empty">暂无手续费占比</div>}
+      </div>
+    </div>
+  );
+}
+
+function StructureMetricList({
+  title,
+  rows,
+  total,
+  valueOf,
+  subValueOf,
+  valueLabel,
+  subLabel
+}: {
+  title: string;
+  rows: ThirdPartyStructureRow[];
+  total: number;
+  valueOf: (row: ThirdPartyStructureRow) => number;
+  subValueOf: (row: ThirdPartyStructureRow) => number;
+  valueLabel: string;
+  subLabel: string;
+}) {
+  const shown = rows.filter((row) => valueOf(row) > 0).sort((a, b) => valueOf(b) - valueOf(a) || subValueOf(b) - subValueOf(a)).slice(0, 10);
+  return (
+    <div className="third-party-structure-box">
+      <h4>{title}</h4>
+      <div className="third-party-structure-list">
+        {shown.map((row, index) => {
+          const value = valueOf(row);
+          const share = total ? value / total : 0;
+          return (
+            <div className="third-party-structure-row" key={`${title}-${row.name}`}>
+              <div className="rank-no">{index + 1}</div>
+              <div className="third-party-structure-name">
+                <strong>{row.name}</strong>
+                <span>{valueLabel} {formatNumber(value)} · {subLabel} {formatNumber(subValueOf(row))}</span>
+              </div>
+              <ShareBar value={share} />
+            </div>
+          );
+        })}
+        {!shown.length && <div className="empty">暂无{title}</div>}
+      </div>
+    </div>
+  );
+}
+
+function ThirdPartyStructureCard({ title, subtitle, rows, summary, feeRows = [] }: { title: string; subtitle: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; feeRows?: FeeCompareRow[] }) {
+  const structureRows = buildThirdPartyStructureRows(rows);
+  return (
+    <div className="panel third-party-structure-panel">
+      <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      <div className="third-party-structure-summary">
+        <div><span>主三方</span><strong>{formatNumber(structureRows.length)}</strong></div>
+        <div><span>代收金额</span><strong>{formatNumber(summary.collectAmount)}</strong></div>
+        <div><span>代付金额</span><strong>{formatNumber(summary.payoutAmount)}</strong></div>
+        <div><span>合计金额</span><strong>{formatNumber(summary.amount)}</strong></div>
+      </div>
+      <div className="third-party-structure-grid">
+        <StructureMetricList title="代收金额占比" rows={structureRows} total={summary.collectAmount} valueOf={(row) => row.collectAmount} subValueOf={(row) => row.collectCount} valueLabel="金额" subLabel="笔数" />
+        <StructureMetricList title="代付金额占比" rows={structureRows} total={summary.payoutAmount} valueOf={(row) => row.payoutAmount} subValueOf={(row) => row.payoutCount} valueLabel="金额" subLabel="笔数" />
+        <StructureMetricList title="代收笔数占比" rows={structureRows} total={summary.collectCount} valueOf={(row) => row.collectCount} subValueOf={(row) => row.collectAmount} valueLabel="笔数" subLabel="金额" />
+        <StructureMetricList title="代付笔数占比" rows={structureRows} total={summary.payoutCount} valueOf={(row) => row.payoutCount} subValueOf={(row) => row.payoutAmount} valueLabel="笔数" subLabel="金额" />
+        <FeeStructureMetricList rows={feeRows} />
+      </div>
+    </div>
+  );
+}
+
+function SplitDirectionTopCard({ collectRows, payoutRows }: { collectRows: ComboSummary[]; payoutRows: ComboSummary[] }) {
+  return (
+    <div className="panel split-direction-panel">
+      <div className="panel-head"><div><h2>代收 / 代付 TOP</h2><p>分开看代收、代付，避免混在一起看起来很乱。</p></div></div>
+      <div className="split-direction-grid">
+        <div>
+          <h4>代收 TOP</h4>
+          <div className="mini-list compact-mini-list">{collectRows.map((row, index) => <div className="rank-item" key={`c-${row.key}`}><div className="rank-no">{index + 1}</div><div><div className="rank-name">{row.labelParts[1] || row.labelParts[0]}</div><div className="rank-sub">笔数 {formatNumber(row.collectCount)} · 占比 {formatPercent(row.collectPct)}</div></div><div className="rank-value">{formatNumber(row.collectAmount)}</div></div>)}{!collectRows.length && <div className="empty">暂无代收</div>}</div>
+        </div>
+        <div>
+          <h4>代付 TOP</h4>
+          <div className="mini-list compact-mini-list">{payoutRows.map((row, index) => <div className="rank-item" key={`p-${row.key}`}><div className="rank-no">{index + 1}</div><div><div className="rank-name">{row.labelParts[1] || row.labelParts[0]}</div><div className="rank-sub">笔数 {formatNumber(row.payoutCount)} · 占比 {formatPercent(row.payoutPct)}</div></div><div className="rank-value">{formatNumber(row.payoutAmount)}</div></div>)}{!payoutRows.length && <div className="empty">暂无代付</div>}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OverviewPage({ summary, monthlyRows, countryRows, platformRows, aliasRows, warnings }: { summary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; countryRows: ComboSummary[]; platformRows: ComboSummary[]; aliasRows: Array<{ name: string; aliases: string[] }>; warnings: string[] }) {
+  return (
+    <>
+      <section className="chart-grid">
+        <VolumeShareCard summary={summary} />
+        <TopListCard title="平台跑量 TOP" subtitle="按国家 / 平台 / 统一三方汇总，显示代收和代付量。" rows={platformRows.slice(0, 8)} />
+      </section>
+      <section className="chart-grid">
+        <MonthlyTable title="国家三方合计 TOP" subtitle="按国家 + 统一三方汇总代收、代付、总量和占比。" rows={monthlyRows.slice(0, 40)} columns={["国家", "统一三方"]} compact />
+        <MonthlyTable title="国家总量 TOP" subtitle="先按国家分区查看，再进入合计/平台明细看各平台。" rows={countryRows.slice(0, 40)} columns={["国家"]} compact />
+      </section>
+      <section className="chart-grid">
+        <AliasCheckPanel aliasRows={aliasRows.slice(0, 18)} />
+        <TextAnomalyPanel rows={warnings.slice(0, 18)} compact />
+      </section>
+    </>
+  );
+}
+
+function MonthlyPage({ rows, summary, feeRows, allRows }: { rows: ComboSummary[]; summary: ReturnType<typeof sumRows>; feeRows: FeeCompareRow[]; allRows: ThirdPartyVolumeRow[] }) {
+  const feeStatItems = buildFeeStatItems(feeRows);
+  return (
+    <>
+      <PageStatStrip items={[["国家数量", groupCombosByCountry(rows).length], ["主三方", rows.length], ["代收金额", formatNumber(summary.collectAmount)], ["代收笔数", formatNumber(summary.collectCount)], ["代付金额", formatNumber(summary.payoutAmount)], ["代付笔数", formatNumber(summary.payoutCount)], ...feeStatItems]} />
+      <CountryMonthlySections title="合计" subtitle="按国家分区，再看每个国家下面的统一三方；同三方通道已合并，并联动三方费率。点“展开”可直接看各类型总量（跨平台合并）。" rows={rows} columns={["国家", "统一三方"]} feeRows={feeRows} />
+      <ThirdPartyStructureCard title="合计三方结构" subtitle="放在页面底部，只按当前筛选条件计算，详细区分代收 / 代付金额、笔数和手续费占比。" rows={allRows} summary={summary} feeRows={feeRows} />
+    </>
+  );
+}
+
+function PlatformPage({ rows, summary, feeRows }: { rows: ComboSummary[]; summary: ReturnType<typeof sumRows>; feeRows: FeeCompareRow[] }) {
+  const feeStatItems = buildFeeStatItems(feeRows);
+  return (
+    <>
+      <PageStatStrip items={[["国家数量", groupCombosByCountry(rows).length], ["平台三方组合", rows.length], ["代收金额", formatNumber(summary.collectAmount)], ["代收笔数", formatNumber(summary.collectCount)], ["代付金额", formatNumber(summary.payoutAmount)], ["代付笔数", formatNumber(summary.payoutCount)], ...feeStatItems]} />
+      <CountryMonthlySections title="平台明细" subtitle="按国家分区，再看国家 > 平台 > 统一三方，显示代收/代付费率、手续费和费用占比。" rows={rows} columns={["国家", "平台", "统一三方"]} feeRows={feeRows} />
+    </>
+  );
+}
+
+function DailyPage({ rows, summary, feeRows }: { rows: DailyCompareRow[]; summary: ReturnType<typeof sumRows>; feeRows: FeeCompareRow[] }) {
+  const groups = sortCountries(rows.map((row) => row.country)).map((country) => ({ country, rows: rows.filter((row) => row.country === country) }));
+  const feeStatItems = buildFeeStatItems(feeRows);
+  return (
+    <>
+      <PageStatStrip items={[["国家数量", groups.length], ["日期/主三方", rows.length], ["代收金额", formatNumber(summary.collectAmount)], ["代收笔数", formatNumber(summary.collectCount)], ["代付金额", formatNumber(summary.payoutAmount)], ["代付笔数", formatNumber(summary.payoutCount)], ...feeStatItems]} />
+      <div className="country-section-stack compact-country-section-stack">
+        {groups.map((group) => (
+          <section className="country-section-card" key={group.country}>
+            <CountrySectionHeader country={group.country} amount={sumRows(group.rows.flatMap((row) => row.rows)).amount} count={sumRows(group.rows.flatMap((row) => row.rows)).count} extra={`日期/主三方 ${uniq(group.rows.map((row) => row.date)).length} / ${uniq(group.rows.map((row) => row.channel)).length}`} />
+            <DailyCompareTable title={`${group.country} 所有明细`} subtitle="当前国家内按 日期 > 主三方 汇总；展开后看各类型总量。" rows={group.rows} feeRows={feeRows.filter((row) => row.country === group.country)} />
+          </section>
+        ))}
+        {!groups.length && <div className="panel"><div className="empty">暂无国家分区数据</div></div>}
+      </div>
+      <ThirdPartyStructureCard title="三方结构" subtitle="放在页面底部，只按当前筛选条件计算，详细区分代收 / 代付金额、笔数和手续费占比。" rows={rows.flatMap((row) => row.rows)} summary={summary} feeRows={feeRows} />
+    </>
+  );
+}
+
+function FeeOverview({ dailyRows, dailyWarnings, platformRows }: { dailyRows: FeeCompareRow[]; dailyWarnings: FeeCompareRow[]; platformRows: FeeCompareRow[] }) {
+  const totalFee = dailyRows.reduce((sum, row) => sum + row.estimatedFee, 0);
+  const missing = dailyRows.filter((row) => row.level === "missing").length;
+  const danger = dailyRows.filter((row) => row.level === "danger").length;
+  const lowRateLowVolume = dailyRows.filter((row) => row.advice.includes("总费率低但跑量少")).length;
+  return (
+    <>
+      <PageStatStrip items={[["每日高费率高跑量", danger], ["低费率低跑量", lowRateLowVolume], ["未匹配费率", missing], ["预估费用", formatNumber(totalFee)]]} />
+      <section className="chart-grid">
+        <CountryFeeSections rows={dailyWarnings.slice(0, 80)} title="每日费率风险 TOP" subtitle="按国家分区，看每天各平台高费率高量、低费率低量。" showDate compact />
+        <CountryFeeSections rows={platformRows.slice(0, 80)} title="平台累计费用 TOP" subtitle="按国家分区，看各国家平台累计预估费用。" compact />
+      </section>
+    </>
+  );
+}
+
+function PageStatStrip({ items }: { items: Array<[string, string | number]> }) {
+  return <section className="page-stat-strip">{items.map(([label, value]) => <div key={label} data-label={label} className="page-stat-card"><span>{label}</span><strong>{value}</strong></div>)}</section>;
+}
+
+function FeeStatStrip({ items }: { items: Array<[string, string | number]> }) {
+  return (
+    <section className="page-stat-strip fee-stat-strip">
+      {items.map(([label, value]) => <div key={label} className="page-stat-card fee-stat-card"><span>{label}</span><strong>{value}</strong></div>)}
+    </section>
+  );
+}
+
+function VolumeShareCard({ summary }: { summary: ReturnType<typeof sumRows> }) {
+  const collectAmountPct = summary.amount ? summary.collectAmount / summary.amount : 0;
+  const payoutAmountPct = summary.amount ? summary.payoutAmount / summary.amount : 0;
+  const collectCountPct = summary.count ? summary.collectCount / summary.count : 0;
+  const payoutCountPct = summary.count ? summary.payoutCount / summary.count : 0;
+  return (
+    <div className="panel">
+      <div className="panel-head"><div><h2>代收 / 代付结构</h2><p>当前筛选范围内金额与笔数占比，避免只看一个圆环不够直观。</p></div></div>
+      <div className="donut-chart-wrap volume-donut-wrap">
+        <div className="donut-chart" style={{ background: `conic-gradient(#2563eb 0 ${collectAmountPct * 360}deg, #f97316 ${collectAmountPct * 360}deg 360deg)` }}><div className="donut-center"><strong>{formatPercent(collectAmountPct)}</strong><span>代收金额占比</span></div></div>
+        <div className="legend-list">
+          <div className="legend-row"><span className="legend-dot blue-dot" /><span>代收金额</span><b>{formatNumber(summary.collectAmount)}</b></div>
+          <div className="legend-row"><span className="legend-dot orange-dot" /><span>代付金额</span><b>{formatNumber(summary.payoutAmount)}</b></div>
+          <div className="legend-row"><span className="legend-dot gray-dot" /><span>合计金额</span><b>{formatNumber(summary.amount)}</b></div>
+        </div>
+      </div>
+      <div className="ratio-detail-list">
+        <div className="ratio-detail-item">
+          <div className="ratio-detail-head"><strong>金额结构</strong><span>代收 {formatPercent(collectAmountPct)} · 代付 {formatPercent(payoutAmountPct)}</span></div>
+          <div className="dual-progress"><i style={{ width: `${collectAmountPct * 100}%` }} /><em style={{ width: `${payoutAmountPct * 100}%` }} /></div>
+          <div className="ratio-detail-meta"><span>代收金额 {formatNumber(summary.collectAmount)}</span><span>代付金额 {formatNumber(summary.payoutAmount)}</span></div>
+        </div>
+        <div className="ratio-detail-item">
+          <div className="ratio-detail-head"><strong>笔数结构</strong><span>代收 {formatPercent(collectCountPct)} · 代付 {formatPercent(payoutCountPct)}</span></div>
+          <div className="dual-progress"><i style={{ width: `${collectCountPct * 100}%` }} /><em style={{ width: `${payoutCountPct * 100}%` }} /></div>
+          <div className="ratio-detail-meta"><span>代收笔数 {formatNumber(summary.collectCount)}</span><span>代付笔数 {formatNumber(summary.payoutCount)}</span></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TopListCard({ title, subtitle, rows }: { title: string; subtitle: string; rows: ComboSummary[] }) {
+  return (
+    <div className="panel">
+      <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      <div className="mini-list">
+        {rows.map((row, index) => <div className="rank-item" key={row.key}><div className="rank-no">{index + 1}</div><div><div className="rank-name">{row.labelParts.join(" / ")}</div><div className="rank-sub">代收 {formatNumber(row.collectAmount)} · 代付 {formatNumber(row.payoutAmount)} · 占比 {formatPercent(row.totalPct)}</div></div><div className="rank-value">{formatNumber(row.totalAmount)}</div></div>)}
+        {!rows.length && <div className="empty">暂无数据</div>}
+      </div>
+    </div>
+  );
+}
+
+function TablePager({ total, page, pageSize, onPageChange, onPageSizeChange }: { total: number; page: number; pageSize: PageSize; onPageChange: (page: number) => void; onPageSizeChange: (pageSize: PageSize) => void }) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const start = total ? (safePage - 1) * pageSize + 1 : 0;
+  const end = Math.min(total, safePage * pageSize);
+  return (
+    <div className="table-pager-row">
+      <span>显示 {start} - {end} / 共 {formatNumber(total)} 行</span>
+      <div className="pager-controls">
+        <label>每页</label>
+        <select value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value) as PageSize)}>
+          <option value={20}>20</option>
+          <option value={50}>50</option>
+          <option value={100}>100</option>
+          <option value={200}>200</option>
+        </select>
+        <button disabled={safePage <= 1} onClick={() => onPageChange(1)}>首页</button>
+        <button disabled={safePage <= 1} onClick={() => onPageChange(safePage - 1)}>上一页</button>
+        <strong>{safePage} / {totalPages}</strong>
+        <button disabled={safePage >= totalPages} onClick={() => onPageChange(safePage + 1)}>下一页</button>
+        <button disabled={safePage >= totalPages} onClick={() => onPageChange(totalPages)}>末页</button>
+      </div>
+    </div>
+  );
+}
+
+function usePagination<T>(rows: T[], enabled = true) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<PageSize>(20);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const shown = enabled ? rows.slice((safePage - 1) * pageSize, safePage * pageSize) : rows;
+  function changePageSize(size: PageSize) {
+    setPageSize(size);
+    setPage(1);
+  }
+  return { page: safePage, pageSize, shown, setPage, setPageSize: changePageSize };
+}
+
+function CountrySectionHeader({ country, amount, count, extra }: { country: string; amount: number; count?: number; extra?: string }) {
+  return (
+    <div className="country-section-header">
+      <div>
+        <span className="country-section-label">国家分区</span>
+        <h3>{country}</h3>
+      </div>
+      <div className="country-section-metrics">
+        <span>金额 <b>{formatNumber(amount)}</b></span>
+        {count !== undefined && <span>笔数 <b>{formatNumber(count)}</b></span>}
+        {extra && <span>{extra}</span>}
+      </div>
+    </div>
+  );
+}
+
+function CountryMonthlySections({ title, subtitle, rows, columns, feeRows = [] }: { title: string; subtitle: string; rows: ComboSummary[]; columns: string[]; feeRows?: FeeCompareRow[] }) {
+  const groups = groupCombosByCountry(rows);
+  return (
+    <div className="country-section-stack compact-country-section-stack">
+      {groups.map((group) => (
+        <section className="country-section-card" key={group.country}>
+          <CountrySectionHeader country={group.country} amount={group.summary.amount} count={group.summary.count} extra={`平台/三方 ${uniq(group.rows.map((row) => row.labelParts[1] || row.labelParts[2] || "")).length} 个`} />
+          <MonthlyTable title={`${group.country} 明细`} subtitle="本国家内的数据，按金额从高到低排序；费率和手续费来自三方费率表。" rows={group.rows} columns={columns} feeRows={feeRows.filter((row) => row.country === group.country)} paginated />
+        </section>
+      ))}
+      {!groups.length && <div className="panel"><div className="empty">暂无国家分区数据</div></div>}
+    </div>
+  );
+}
+
+function CountryDirectionSections({ title, subtitle, rows, columns }: { title: string; subtitle: string; rows: DirectionSummary[]; columns: string[] }) {
+  const groups = groupDirectionsByCountry(rows);
+  return (
+    <div className="country-section-stack">
+      <div className="panel country-section-intro">
+        <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      </div>
+      {groups.map((group) => (
+        <section className="country-section-card" key={group.country}>
+          <CountrySectionHeader country={group.country} amount={group.amount} count={group.count} extra={`明细 ${formatNumber(group.rows.length)} 行`} />
+          <DirectionTable title={`${group.country} 每日明细`} subtitle="本国家内的数据，按金额从高到低排序。" rows={group.rows} columns={columns} paginated />
+        </section>
+      ))}
+      {!groups.length && <div className="panel"><div className="empty">暂无国家分区数据</div></div>}
+    </div>
+  );
+}
+
+function CountryFeeSections({ rows, title, subtitle, showDate, compact }: { rows: FeeCompareRow[]; title: string; subtitle: string; showDate?: boolean; compact?: boolean }) {
+  const [selectedCountry, setSelectedCountry] = useState<{ country: string; rows: FeeCompareRow[] } | null>(null);
+  const groups = groupFeesByCountry(rows);
+  const shownGroups = compact ? groups.slice(0, 6) : groups;
+  return (
+    <div className="country-section-stack fee-country-stack">
+      <div className="panel country-section-intro">
+        <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      </div>
+      {shownGroups.map((group) => {
+        const previewRows = group.rows.slice(0, 12);
+        return (
+          <section className="country-section-card" key={group.country}>
+            <CountrySectionHeader country={group.country} amount={group.amount} extra={`预估费用 ${formatNumber(group.fee)} · 异常 ${group.warnings} 条`} />
+            <FeeCompareTable rows={previewRows} compact title={`${group.country} 异常提醒 TOP ${previewRows.length}`} showDate={showDate} />
+            {group.rows.length > previewRows.length && (
+              <div className="table-note view-more-note">
+                这里只展示 TOP {previewRows.length} / 共 {group.rows.length} 条，
+                <button className="mini-btn" type="button" onClick={() => setSelectedCountry({ country: group.country, rows: group.rows })}>查看更多</button>
+              </div>
+            )}
+          </section>
+        );
+      })}
+      {!shownGroups.length && <div className="panel"><div className="empty">暂无费率对比数据</div></div>}
+      {selectedCountry && <FeeCountryRowsModal country={selectedCountry.country} rows={selectedCountry.rows} showDate={showDate} onClose={() => setSelectedCountry(null)} />}
+    </div>
+  );
+}
+
+function FeeCountryRowsModal({ country, rows, showDate, onClose }: { country: string; rows: FeeCompareRow[]; showDate?: boolean; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop"><div className="detail-modal work-detail-modal volume-detail-modal fee-country-modal">
+      <div className="detail-modal-header"><div><h3>{country} 异常提醒全部明细</h3><p>按当前筛选条件展示这个国家的全部异常，可继续点每行“查看”看费率和手续费细节。</p></div><button className="modal-close-btn" type="button" onClick={onClose}>关闭</button></div>
+      <FeeCompareTable rows={rows} title={`${country} 全部异常提醒`} showDate={showDate} />
+    </div></div>
+  );
+}
+
+function FeeIssueRowsModal({ title, rows, onClose }: { title: string; rows: FeeCompareRow[]; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop"><div className="detail-modal work-detail-modal volume-detail-modal fee-country-modal">
+      <div className="detail-modal-header"><div><h3>{title}</h3><p>这里列出费率高但跑量多、或便宜费率跑量少的具体平台 / 三方 / 钱包通道，方便你直接对比。</p></div><button className="modal-close-btn" type="button" onClick={onClose}>关闭</button></div>
+      <FeeCompareTable rows={rows} title="手续费占比异常来源" showDate />
+    </div></div>
+  );
+}
+
+function feeShareNode(summary: FeeSummary, onOpen: () => void) {
+  const text = summary.totalFeeShare ? formatPercent(summary.totalFeeShare) : "-";
+  if (!summary.alertRows.length) return <span>{text}</span>;
+  return <button type="button" className="fee-share-alert-btn" onClick={onOpen}>{text}</button>;
+}
+
+function MonthlyTable({ title, subtitle, rows, columns, feeRows = [], paginated, compact }: { title: string; subtitle: string; rows: ComboSummary[]; columns: string[]; feeRows?: FeeCompareRow[]; paginated?: boolean; compact?: boolean }) {
+  const [selected, setSelected] = useState<ComboSummary | null>(null);
+  const [selectedFeeIssues, setSelectedFeeIssues] = useState<{ title: string; rows: FeeCompareRow[] } | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const pager = usePagination(rows, !!paginated);
+  const shown = paginated ? pager.shown : rows;
+  const shownSummary = sumComboSummaryRows(shown);
+  const totalSummary = sumComboSummaryRows(rows);
+  const feeMode: FeeSummaryMode = columns.includes("月份") ? "monthlyPeriod" : columns.includes("平台") ? "platform" : "monthly";
+  const feeMap = useMemo(() => buildFeeSummaryMap(feeRows, feeMode), [feeRows, feeMode]);
+  const showFeeColumns = feeRows.length > 0;
+  const hasPlatformColumn = columns.includes("平台");
+  const totalCollectFee = feeRows.reduce((sum, row) => sum + row.collectFeeAmount, 0);
+  const totalPayoutFee = feeRows.reduce((sum, row) => sum + row.payoutFeeAmount, 0);
+
+  function feeForChild(country: string, platform: string, channel: string, type: string): FeeSummary {
+    const canonical = canonicalThirdPartyName(channel, country);
+    const normalizedType = normalizeRateCategory(country, type);
+    const matched = feeRows.filter((row) => {
+      if (row.country !== country) return false;
+      if (row.channel !== canonical) return false;
+      if (platform && row.platform !== platform) return false;
+      if (normalizedType && !feeTypeMatches(country, normalizedType, row.channelType)) return false;
+      return true;
+    });
+    return summarizeFeeRows(matched, totalCollectFee, totalPayoutFee);
+  }
+
+  function childLines(row: ComboSummary) {
+    const parentCountry = row.labelParts[0] || "";
+    const parentChannel = hasPlatformColumn ? (row.labelParts[2] || "") : (row.labelParts[1] || "");
+    const grouped = aggregateCombo(row.rows, (raw) => {
+      const type = normalizedDisplayChannelType(raw.country, raw.channelType || inferThirdPartyChannelType(raw.rawChannel || raw.channel, raw.country, `${raw.channel} ${raw.rawChannel}`) || "其他类型", [raw]);
+      return hasPlatformColumn
+        ? [raw.country, raw.platform, canonicalThirdPartyName(raw.channel, raw.country), type]
+        : [raw.country, canonicalThirdPartyName(raw.channel, raw.country), type];
+    });
+    return grouped.map((child) => {
+      if (hasPlatformColumn) {
+        const [country = parentCountry, platform = "", channel = parentChannel, type = ""] = child.labelParts;
+        const displayParts = [country, platform, `↳ ${normalizedDisplayChannelType(country, type, child.rows)}`];
+        return { ...child, displayParts, fee: feeForChild(country, platform, channel, normalizedDisplayChannelType(country, type, child.rows)) };
+      }
+      const [country = parentCountry, channel = parentChannel, type = ""] = child.labelParts;
+      const displayParts = [country, `↳ ${normalizedDisplayChannelType(country, type, child.rows)}`];
+      return { ...child, displayParts, fee: feeForChild(country, "", channel, normalizedDisplayChannelType(country, type, child.rows)) };
+    }).filter((child) => child.totalAmount > 0 || child.totalCount > 0).sort((a, b) => b.totalAmount - a.totalAmount || b.totalCount - a.totalCount);
+  }
+
+  return (
+    <div className="panel">
+      <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      {paginated && <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />}
+      <div className="table-wrap work-table-wrap volume-summary-table-wrap">
+        <table>
+          <thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}<th className="num">代收金额</th><th className="num">代收笔数</th><th>代收占比</th><th className="num">代付金额</th><th className="num">代付笔数</th><th>代付占比</th><th className="num">合计金额</th><th className="num">合计笔数</th>{showFeeColumns && <><th>代收费率</th><th className="num">代收手续费</th><th>代付费率</th><th className="num">代付手续费</th><th className="num">合计手续费</th><th>手续费占比</th></>}<th>总占比</th><th>详情</th></tr></thead>
+          <tbody>{shown.flatMap((row) => {
+            const fee = feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary();
+            const children = childLines(row);
+            const canExpand = children.length > 0;
+            const isOpen = !!expanded[row.key];
+            const main = <tr key={row.key} className={fee.alertRows.length ? "fee-warning-main-row" : ""}>{columns.map((_, index) => <td key={index}>{row.labelParts[index] || "-"}</td>)}<td className="num">{formatNumber(row.collectAmount)}</td><td className="num">{formatNumber(row.collectCount)}</td><td><ShareBar value={row.collectPct} /></td><td className="num">{formatNumber(row.payoutAmount)}</td><td className="num">{formatNumber(row.payoutCount)}</td><td><ShareBar value={row.payoutPct} /></td><td className="num strong-cell">{formatNumber(row.totalAmount)}</td><td className="num strong-cell">{formatNumber(row.totalCount)}</td>{showFeeColumns && <><td>{feeRateText(fee, "collect")}</td><td className="num">{feeAmountText(fee, "collect")}</td><td>{feeRateText(fee, "payout")}</td><td className="num">{feeAmountText(fee, "payout")}</td><td className="num">{feeTotalText(fee)}</td><td>{feeShareNode(fee, () => setSelectedFeeIssues({ title: row.labelParts.join(" / "), rows: fee.alertRows }))}</td></>}<td>{formatPercent(row.totalPct)}</td><td><div className="row-action-group">{canExpand && <button className="mini-btn" onClick={() => setExpanded((old) => ({ ...old, [row.key]: !old[row.key] }))}>{isOpen ? "收起" : "展开"}</button>}<button className="mini-btn" onClick={() => setSelected(row)}>查看</button></div></td></tr>;
+            if (!isOpen || !canExpand) return [main];
+            const childRows = children.map((child) => {
+              const childHasCollect = sideHasValue(child.collectAmount, child.collectCount);
+              const childHasPayout = sideHasValue(child.payoutAmount, child.payoutCount);
+              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row">{columns.map((_, index) => <td key={index}>{child.displayParts[index] || "-"}</td>)}<td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td><td>{sideShareNode(childHasCollect, row.collectAmount ? child.collectAmount / row.collectAmount : 0)}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td><td>{sideShareNode(childHasPayout, row.payoutAmount ? child.payoutAmount / row.payoutAmount : 0)}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td>{showFeeColumns && <><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.labelParts.join(" / ")} / ${child.displayParts.join(" / ")}`, rows: child.fee.alertRows }))}</td></>}<td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td className="muted-cell">子通道</td></tr>;
+            });
+            return [main, ...childRows];
+          })}{!shown.length && <tr><td colSpan={columns.length + (showFeeColumns ? 16 : 10)} className="empty">暂无数据</td></tr>}</tbody>
+          <tfoot>
+            <tr className="summary-row page-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>当前页汇总</td> : <><td>当前页汇总</td>{columns.slice(1).map((column) => <td key={`page-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(shownSummary.collectAmount)}</td><td className="num">{formatNumber(shownSummary.collectCount)}</td><td>{pct(shownSummary.collectAmount, shownSummary.totalAmount)}</td><td className="num">{formatNumber(shownSummary.payoutAmount)}</td><td className="num">{formatNumber(shownSummary.payoutCount)}</td><td>{pct(shownSummary.payoutAmount, shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).collectFee, 0))}</td><td>-</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).payoutFee, 0))}</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0))}</td><td>{formatPercent(rows.length ? shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0) / Math.max(1, rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0)) : 0)}</td></>}<td>{formatPercent(shownSummary.totalPct)}</td><td className="muted-cell">汇总</td></tr>
+            <tr className="summary-row overall-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>全部汇总</td> : <><td>全部汇总</td>{columns.slice(1).map((column) => <td key={`all-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(totalSummary.collectAmount)}</td><td className="num">{formatNumber(totalSummary.collectCount)}</td><td>{pct(totalSummary.collectAmount, totalSummary.totalAmount)}</td><td className="num">{formatNumber(totalSummary.payoutAmount)}</td><td className="num">{formatNumber(totalSummary.payoutCount)}</td><td>{pct(totalSummary.payoutAmount, totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).collectFee, 0))}</td><td>-</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).payoutFee, 0))}</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0))}</td><td>100.00%</td></>}<td>100.00%</td><td className="muted-cell">汇总</td></tr>
+          </tfoot>
+        </table>
+      </div>
+      {compact && rows.length > shown.length && <div className="table-note">这里只展示 TOP {shown.length}，更多请进入对应明细页。</div>}
+      {selected && <VolumeRowsModal title={selected.labelParts.join(" / ")} rows={selected.rows} onClose={() => setSelected(null)} />}
+      {selectedFeeIssues && <FeeIssueRowsModal title={selectedFeeIssues.title} rows={selectedFeeIssues.rows} onClose={() => setSelectedFeeIssues(null)} />}
+    </div>
+  );
+}
+
+function ShareBar({ value }: { value: number }) {
+  return <div className="share-bar"><span>{formatPercent(value)}</span><i style={{ width: `${Math.min(100, Math.max(0, value * 100))}%` }} /></div>;
+}
+
+function DirectionTable({ title, subtitle, rows, columns, paginated }: { title: string; subtitle: string; rows: DirectionSummary[]; columns: string[]; paginated?: boolean }) {
+  const pager = usePagination(rows, !!paginated);
+  const shown = paginated ? pager.shown : rows;
+  const shownSummary = sumDirectionSummaryRows(shown);
+  const totalSummary = sumDirectionSummaryRows(rows);
+  return (
+    <div className="panel">
+      <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      {paginated && <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />}
+      <div className="table-wrap work-table-wrap"><table><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}<th className="num">金额</th><th className="num">笔数</th></tr></thead><tbody>{shown.map((row) => <tr key={row.key}>{columns.map((_, index) => <td key={index}>{row.parts[index] || "-"}</td>)}<td className="num">{formatNumber(row.amount)}</td><td className="num">{formatNumber(row.count)}</td></tr>)}{!shown.length && <tr><td colSpan={columns.length + 2} className="empty">暂无数据</td></tr>}</tbody><tfoot><tr className="summary-row page-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>当前页汇总</td> : <><td>当前页汇总</td>{columns.slice(1).map((column) => <td key={`direction-page-${column}`}>-</td>)}</>}<td className="num strong-cell">{formatNumber(shownSummary.amount)}</td><td className="num strong-cell">{formatNumber(shownSummary.count)}</td></tr><tr className="summary-row overall-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>全部汇总</td> : <><td>全部汇总</td>{columns.slice(1).map((column) => <td key={`direction-all-${column}`}>-</td>)}</>}<td className="num strong-cell">{formatNumber(totalSummary.amount)}</td><td className="num strong-cell">{formatNumber(totalSummary.count)}</td></tr></tfoot></table></div>
+    </div>
+  );
+}
+
+function AliasCheckPanel({ aliasRows }: { aliasRows: Array<{ name: string; aliases: string[] }> }) {
+  return <div className="panel"><div className="panel-head"><div><h2>统一三方识别校验</h2><p>保留人工确认等业务处理通道；已过滤商户余额不足、错误文本、纯数字和 hash 映射码。</p></div></div><div className="mini-list">{aliasRows.map((row, index) => <div className="rank-item" key={row.name}><div className="rank-no">{index + 1}</div><div><div className="rank-name">{row.name}</div><div className="rank-sub">{row.aliases.slice(0, 12).join(" / ")}</div></div><div className="rank-value">{row.aliases.length}</div></div>)}{!aliasRows.length && <div className="empty">暂无需要校验的别名</div>}</div></div>;
+}
+
+function FeeCompareTable({ rows, compact, title = "费率对比明细", showDate }: { rows: FeeCompareRow[]; compact?: boolean; title?: string; showDate?: boolean }) {
+  const [selected, setSelected] = useState<FeeCompareRow | null>(null);
+  const pager = usePagination(rows, !compact);
+  const shown = compact ? rows.slice(0, 30) : pager.shown;
+  const shownSummary = sumFeeCompareSummaryRows(shown);
+  const totalSummary = sumFeeCompareSummaryRows(rows);
+  return (
+    <div className="panel fee-compare-panel">
+      <div className="panel-head"><div><h2>{title}</h2><p>重点看每天什么盘跑了什么三方：高费率高跑量、低费率低跑量、未匹配费率都会提醒。</p></div></div>
+      {!compact && <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />}
+      <div className="table-wrap work-table-wrap fee-compare-wrap">
+        <table>
+          <thead><tr>{showDate && <th>日期</th>}<th>国家</th><th>平台</th><th>统一三方</th><th>钱包/通道</th><th className="num">代收金额</th><th>代收费率</th><th className="num">代收手续费</th><th>代收占比</th><th className="num">代付金额</th><th>代付费率</th><th className="num">代付手续费</th><th>代付占比</th><th className="num">预估费用</th><th>总有效费率</th><th>判断</th><th>详情</th></tr></thead>
+          <tbody>{shown.map((row) => <tr key={row.key} className={row.level !== "normal" ? "warning-row" : ""}>{showDate && <td>{row.date || "-"}</td>}<td>{row.country}</td><td>{row.platform}</td><td>{row.channel}</td><td>{row.channelType || "-"}</td><td className="num">{formatNumber(row.collectAmount)}</td><td>{feeCompareRateText(row, "collect")}</td><td className="num">{(row.collectFeeRate || row.collectSingleFee || row.collectFeeAmount || row.collectFeeKnownZero) ? formatNumber(row.collectFeeAmount) : "-"}</td><td>{formatPercent(row.collectShare)}</td><td className="num">{formatNumber(row.payoutAmount)}</td><td>{feeCompareRateText(row, "payout")}</td><td className="num">{(row.payoutFeeRate || row.payoutSingleFee || row.payoutFeeAmount || row.payoutFeeKnownZero) ? formatNumber(row.payoutFeeAmount) : "-"}</td><td>{formatPercent(row.payoutShare)}</td><td className="num strong-cell">{formatNumber(row.estimatedFee)}</td><td>{row.effectiveTotalFeeRate ? formatPercent(row.effectiveTotalFeeRate) : "-"}</td><td>{row.advice}</td><td><button className="mini-btn" onClick={() => setSelected(row)}>查看</button></td></tr>)}{!shown.length && <tr><td colSpan={(showDate ? 17 : 16)} className="empty">暂无可对比数据</td></tr>}</tbody>
+          <tfoot>
+            <tr className="summary-row page-summary-row">{showDate && <td>当前页汇总</td>}<td>{showDate ? '-' : '当前页汇总'}</td><td>-</td><td>-</td><td>-</td><td className="num">{formatNumber(shownSummary.collectAmount)}</td><td>{shownSummary.collectAmount ? formatPercent(shownSummary.collectFeeAmount / shownSummary.collectAmount) : '-'}</td><td className="num">{formatNumber(shownSummary.collectFeeAmount)}</td><td>{formatPercent(shownSummary.collectShare)}</td><td className="num">{formatNumber(shownSummary.payoutAmount)}</td><td>{shownSummary.payoutAmount ? formatPercent(shownSummary.payoutFeeAmount / shownSummary.payoutAmount) : '-'}</td><td className="num">{formatNumber(shownSummary.payoutFeeAmount)}</td><td>{formatPercent(shownSummary.payoutShare)}</td><td className="num strong-cell">{formatNumber(shownSummary.estimatedFee)}</td><td>{shownSummary.collectAmount + shownSummary.payoutAmount ? formatPercent(shownSummary.estimatedFee / (shownSummary.collectAmount + shownSummary.payoutAmount)) : "-"}</td><td>{formatPercent(shownSummary.totalShare)}</td><td className="muted-cell">汇总</td></tr>
+            <tr className="summary-row overall-summary-row">{showDate && <td>全部汇总</td>}<td>{showDate ? '-' : '全部汇总'}</td><td>-</td><td>-</td><td>-</td><td className="num">{formatNumber(totalSummary.collectAmount)}</td><td>{totalSummary.collectAmount ? formatPercent(totalSummary.collectFeeAmount / totalSummary.collectAmount) : '-'}</td><td className="num">{formatNumber(totalSummary.collectFeeAmount)}</td><td>100.00%</td><td className="num">{formatNumber(totalSummary.payoutAmount)}</td><td>{totalSummary.payoutAmount ? formatPercent(totalSummary.payoutFeeAmount / totalSummary.payoutAmount) : '-'}</td><td className="num">{formatNumber(totalSummary.payoutFeeAmount)}</td><td>100.00%</td><td className="num strong-cell">{formatNumber(totalSummary.estimatedFee)}</td><td>{totalSummary.collectAmount + totalSummary.payoutAmount ? formatPercent(totalSummary.estimatedFee / (totalSummary.collectAmount + totalSummary.payoutAmount)) : "-"}</td><td>100.00%</td><td className="muted-cell">汇总</td></tr>
+          </tfoot>
+        </table>
+      </div>
+      {selected && <FeeDetailModal row={selected} onClose={() => setSelected(null)} />}
+    </div>
+  );
+}
+
+function FeeAnomalyPanel({ rows }: { rows: FeeCompareRow[] }) {
+  return <CountryFeeSections rows={rows} title="费率异常提醒" subtitle="按国家分区，重点看同类型内总费率贵的跑多、总费率便宜的跑少。" showDate />;
+}
+
+function FeeDetailModal({ row, onClose }: { row: FeeCompareRow; onClose: () => void }) {
+  return (
+    <div className="modal-backdrop"><div className="detail-modal rate-row-modal">
+      <div className="detail-modal-header"><div><h3>{row.date ? `${row.date} / ` : ""}{row.country} / {row.platform} / {row.channel}{row.channelType ? ` / ${row.channelType}` : ""}</h3><p>{row.advice}</p></div><button className="modal-close-btn" type="button" onClick={onClose}>关闭</button></div>
+      <div className="modal-summary-grid"><div><span>代收金额</span><strong>{formatNumber(row.collectAmount)}</strong><p>费率 {row.collectFeeRate ? formatPercent(row.collectFeeRate) : "-"} · 单笔 {row.collectSingleFee ? formatSingleFeeValue(row.collectSingleFee) : "-"} · 手续费 {(row.collectFeeRate || row.collectSingleFee || row.collectFeeAmount || row.collectFeeKnownZero) ? formatNumber(row.collectFeeAmount) : "-"}</p></div><div><span>代付金额</span><strong>{formatNumber(row.payoutAmount)}</strong><p>费率 {row.payoutFeeRate ? formatPercent(row.payoutFeeRate) : "-"} · 单笔 {row.payoutSingleFee ? formatSingleFeeValue(row.payoutSingleFee) : "-"} · 手续费 {(row.payoutFeeRate || row.payoutSingleFee || row.payoutFeeAmount || row.payoutFeeKnownZero) ? formatNumber(row.payoutFeeAmount) : "-"}</p></div><div><span>跑量占比</span><strong>{formatPercent(row.totalShare)}</strong><p>按同国家{row.date ? "同日" : "累计"}同类型三方量对比</p></div><div><span>预估费用</span><strong>{formatNumber(row.estimatedFee)}</strong><p>代收手续费 + 代付手续费</p></div><div><span>总有效费率</span><strong>{row.effectiveTotalFeeRate ? formatPercent(row.effectiveTotalFeeRate) : "-"}</strong><p>合计手续费 ÷ 合计金额</p></div></div>
+    </div></div>
+  );
+}
+
+function TextAnomalyPanel({ rows, compact }: { rows: string[]; compact?: boolean }) {
+  const list = compact ? rows.slice(0, 18) : rows;
+  return <div className="panel"><div className="panel-head"><div><h2>{compact ? "异常摘要" : "三方量异常提醒"}</h2><p>高跑量、别名过多、费率异常会在这里提示。</p></div></div><div className="alert-list">{(list.length ? list : ["当前筛选范围暂无明显异常。"]).map((item, index) => <div className="alert-item" key={index}><span className="alert-dot" /><span>{item}</span></div>)}</div></div>;
+}
+
+function DetailTable({ rows }: { rows: ThirdPartyVolumeRow[] }) {
+  const pager = usePagination(rows, true);
+  const shownSummary = sumRawVolumeRows(pager.shown);
+  const totalSummary = sumRawVolumeRows(rows);
+  return (
+    <div className="panel">
+      <div className="panel-head"><div><h2>原始明细</h2><p>显示当前筛选后的 raw 明细，方便核对；人工确认会正常保留；商户余额不足和错误文本在读取层过滤。</p></div></div>
+      <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />
+      <div className="table-wrap work-table-wrap"><table><thead><tr><th>日期</th><th>国家</th><th>平台</th><th>类型</th><th>统一三方</th><th>原始名称</th><th className="num">金额</th><th className="num">笔数</th><th>来源页签</th></tr></thead><tbody>{pager.shown.map((row) => <tr key={row.id}><td>{row.date}</td><td>{row.country}</td><td>{row.platform}</td><td>{row.direction}</td><td>{row.channel}</td><td>{row.rawChannel}</td><td className="num">{formatNumber(row.amount)}</td><td className="num">{formatNumber(row.count)}</td><td>{row.sheetName} #{row.sourceRow}</td></tr>)}{!pager.shown.length && <tr><td colSpan={9} className="empty">暂无明细数据</td></tr>}</tbody><tfoot><tr className="summary-row page-summary-row"><td colSpan={6}>当前页汇总</td><td className="num strong-cell">{formatNumber(shownSummary.amount)}</td><td className="num strong-cell">{formatNumber(shownSummary.count)}</td><td className="muted-cell">汇总</td></tr><tr className="summary-row overall-summary-row"><td colSpan={6}>全部汇总</td><td className="num strong-cell">{formatNumber(totalSummary.amount)}</td><td className="num strong-cell">{formatNumber(totalSummary.count)}</td><td className="muted-cell">汇总</td></tr></tfoot></table></div>
+    </div>
+  );
+}
