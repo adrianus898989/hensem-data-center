@@ -1,8 +1,14 @@
 "use client";
 
-export type DashboardRole = "admin" | "viewer";
+export type DashboardRole = "owner" | "admin" | "viewer";
 export type DashboardPermissionKey = "home" | "third_party" | "auto_withdraw" | "work_orders" | "customer_service";
 export type DashboardPermissions = Record<DashboardPermissionKey, boolean>;
+
+export type DashboardManagementPermissions = {
+  manage_viewers: boolean;
+  refresh_data: boolean;
+  view_audit: boolean;
+};
 
 export const DASHBOARD_PERMISSION_LABELS: Array<{ key: DashboardPermissionKey; label: string; note: string }> = [
   { key: "third_party", label: "三方量 / 费率", note: "查看三方量、费率、盘口状态" },
@@ -19,12 +25,27 @@ export const DEFAULT_VIEWER_PERMISSIONS: DashboardPermissions = {
   customer_service: false,
 };
 
+export const DEFAULT_ADMIN_PERMISSIONS: DashboardPermissions = {
+  home: true,
+  third_party: true,
+  auto_withdraw: true,
+  work_orders: true,
+  customer_service: true,
+};
+
+export const DEFAULT_ADMIN_MANAGEMENT_PERMISSIONS: DashboardManagementPermissions = {
+  manage_viewers: true,
+  refresh_data: true,
+  view_audit: true,
+};
+
 export type DashboardProfile = {
   auth_user_id: string;
   username: string;
   role: DashboardRole;
   active: boolean;
   permissions?: Partial<DashboardPermissions> | null;
+  management_permissions?: Partial<DashboardManagementPermissions> | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -76,8 +97,15 @@ export function dashboardUsernameEmail(value: string): string {
 }
 
 export function normalizedPermissions(profile?: DashboardProfile | null): DashboardPermissions {
+  if (profile?.role === "owner") return { ...DEFAULT_ADMIN_PERMISSIONS };
   if (profile?.role === "admin") {
-    return { home: true, third_party: true, auto_withdraw: true, work_orders: true, customer_service: true };
+    return {
+      home: true,
+      third_party: profile?.permissions?.third_party !== false,
+      auto_withdraw: profile?.permissions?.auto_withdraw !== false,
+      work_orders: profile?.permissions?.work_orders !== false,
+      customer_service: profile?.permissions?.customer_service !== false,
+    };
   }
   return {
     home: true,
@@ -86,6 +114,24 @@ export function normalizedPermissions(profile?: DashboardProfile | null): Dashbo
     work_orders: profile?.permissions?.work_orders === true,
     customer_service: profile?.permissions?.customer_service === true,
   };
+}
+
+export function normalizedManagementPermissions(profile?: DashboardProfile | null): DashboardManagementPermissions {
+  if (profile?.role === "owner") return { manage_viewers: true, refresh_data: true, view_audit: true };
+  if (profile?.role !== "admin") return { manage_viewers: false, refresh_data: false, view_audit: false };
+  return {
+    manage_viewers: profile?.management_permissions?.manage_viewers !== false,
+    refresh_data: profile?.management_permissions?.refresh_data !== false,
+    view_audit: profile?.management_permissions?.view_audit !== false,
+  };
+}
+
+export function canOpenAdminCenter(profile?: DashboardProfile | null): boolean {
+  if (!profile) return false;
+  if (profile.role === "owner") return true;
+  if (profile.role !== "admin") return false;
+  const p = normalizedManagementPermissions(profile);
+  return p.manage_viewers || p.refresh_data || p.view_audit;
 }
 
 export function hasDashboardPermission(profile: DashboardProfile | null | undefined, key: DashboardPermissionKey): boolean {
@@ -128,7 +174,7 @@ export async function fetchDashboardProfile(session: DashboardSession): Promise<
   const userId = String(session?.user?.id || "");
   if (!userId) throw new Error("登录状态缺少用户 ID");
   const params = new URLSearchParams();
-  params.set("select", "auth_user_id,username,role,active,permissions,created_at,updated_at");
+  params.set("select", "auth_user_id,username,role,active,permissions,management_permissions,created_at,updated_at");
   params.set("auth_user_id", `eq.${userId}`);
   params.set("limit", "1");
   const response = await fetch(`${url}/rest/v1/dashboard_profiles?${params.toString()}`, {
@@ -173,10 +219,28 @@ async function callAdminFunction(session: DashboardSession, body: Record<string,
   return await readJson(response);
 }
 
-export async function createViewerAccount(session: DashboardSession, usernameInput: string, password: string, permissions: DashboardPermissions) {
+export async function createDashboardAccount(
+  session: DashboardSession,
+  usernameInput: string,
+  password: string,
+  role: "admin" | "viewer",
+  permissions: DashboardPermissions,
+  managementPermissions?: DashboardManagementPermissions,
+) {
   const username = validateDashboardUsername(usernameInput);
   if (String(password || "").length < 8) throw new Error("密码至少 8 位");
-  return await callAdminFunction(session, { action: "create-viewer", username, password, permissions });
+  return await callAdminFunction(session, {
+    action: "create-account",
+    username,
+    password,
+    role,
+    permissions,
+    management_permissions: managementPermissions || DEFAULT_ADMIN_MANAGEMENT_PERMISSIONS,
+  });
+}
+
+export async function createViewerAccount(session: DashboardSession, usernameInput: string, password: string, permissions: DashboardPermissions) {
+  return await createDashboardAccount(session, usernameInput, password, "viewer", permissions);
 }
 
 export async function listDashboardUsers(session: DashboardSession): Promise<DashboardProfile[]> {
@@ -184,13 +248,25 @@ export async function listDashboardUsers(session: DashboardSession): Promise<Das
   return Array.isArray(result?.users) ? result.users : [];
 }
 
+export async function updateDashboardAccount(session: DashboardSession, username: string, patch: { active?: boolean; permissions?: DashboardPermissions; management_permissions?: DashboardManagementPermissions }) {
+  return await callAdminFunction(session, { action: "update-account", username, ...patch });
+}
+
 export async function updateViewerAccount(session: DashboardSession, username: string, patch: { active?: boolean; permissions?: DashboardPermissions }) {
-  return await callAdminFunction(session, { action: "update-viewer", username, ...patch });
+  return await updateDashboardAccount(session, username, patch);
+}
+
+export async function resetDashboardUserPassword(session: DashboardSession, username: string, password: string) {
+  if (String(password || "").length < 8) throw new Error("密码至少 8 位");
+  return await callAdminFunction(session, { action: "reset-password", username, password });
 }
 
 export async function resetViewerPassword(session: DashboardSession, username: string, password: string) {
-  if (String(password || "").length < 8) throw new Error("密码至少 8 位");
-  return await callAdminFunction(session, { action: "reset-password", username, password });
+  return await resetDashboardUserPassword(session, username, password);
+}
+
+export async function deleteDashboardAccount(session: DashboardSession, username: string) {
+  return await callAdminFunction(session, { action: "delete-account", username });
 }
 
 export async function changeOwnDashboardPassword(username: string, currentPassword: string, newPassword: string): Promise<DashboardSession> {

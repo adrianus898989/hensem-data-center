@@ -49,7 +49,7 @@ export default function SupabaseHomeStatus() {
   useEffect(() => { void loadStatus(); }, [loadStatus]);
 
   async function refreshLatest() {
-    if (!session || profile?.role !== "admin" || refreshing) return;
+    if (!session || profile?.role === "viewer" || refreshing) return;
     setRefreshing(true);
     setRefreshText("准备刷新...");
     try {
@@ -76,7 +76,7 @@ export default function SupabaseHomeStatus() {
         </div>
         <div className="home-supabase-head-actions">
           <span className={error ? "home-supabase-state bad" : data ? "home-supabase-state ok" : "home-supabase-state"}>{error ? "异常" : data ? "已连接" : "读取中"}</span>
-          {profile?.role === "admin" && <button className="home-supabase-refresh-btn" type="button" disabled={refreshing} onClick={() => void refreshLatest()}>{refreshing ? "刷新中..." : "刷新最新数据"}</button>}
+          {profile?.role !== "viewer" && <button className="home-supabase-refresh-btn" type="button" disabled={refreshing} onClick={() => void refreshLatest()}>{refreshing ? "刷新中..." : "刷新最新数据"}</button>}
         </div>
       </div>
       {error ? (
@@ -92,7 +92,7 @@ export default function SupabaseHomeStatus() {
         </div>
       )}
       {refreshText && <div className={refreshText.includes("失败") ? "home-refresh-progress bad" : "home-refresh-progress"}>{refreshText}</div>}
-      <p>{profile?.role === "admin" ? "自动 Cron 仍会每小时同步；上面的“刷新最新数据”仅供管理员需要立即更新时使用。" : "你的账号为只读 Viewer，只能查看管理员分配的模块。"}</p>
+      <p>{profile?.role !== "viewer" ? "自动 Cron 仍会每小时同步；上面的“刷新最新数据”仅供管理员需要立即更新时使用。" : "你的账号为只读 Viewer，只能查看管理员分配的模块。"}</p>
     </section>
   );
 }

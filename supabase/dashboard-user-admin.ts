@@ -2,6 +2,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 type PermissionKey = "home" | "third_party" | "auto_withdraw" | "work_orders" | "customer_service";
 type DashboardPermissions = Record<PermissionKey, boolean>;
+type ManagementPermissions = { manage_viewers: boolean; refresh_data: boolean; view_audit: boolean };
 
 const VIEWER_DEFAULT: DashboardPermissions = {
   home: true,
@@ -18,6 +19,9 @@ const ADMIN_PERMISSIONS: DashboardPermissions = {
   work_orders: true,
   customer_service: true,
 };
+
+const ADMIN_MANAGEMENT: ManagementPermissions = { manage_viewers: true, refresh_data: true, view_audit: true };
+const VIEWER_MANAGEMENT: ManagementPermissions = { manage_viewers: false, refresh_data: false, view_audit: false };
 
 function corsHeaders(request: Request) {
   const allowed = String(Deno.env.get("DASHBOARD_ALLOWED_ORIGIN") || "*").trim() || "*";
@@ -65,6 +69,16 @@ function sanitizePermissions(value: unknown): DashboardPermissions {
   };
 }
 
+
+function sanitizeManagementPermissions(value: unknown): ManagementPermissions {
+  const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    manage_viewers: raw.manage_viewers !== false,
+    refresh_data: raw.refresh_data !== false,
+    view_audit: raw.view_audit !== false,
+  };
+}
+
 function dateInManila(offsetDays = 0): string {
   const base = new Date(Date.now() + offsetDays * 86400000);
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -107,7 +121,7 @@ Deno.serve(async (request) => {
       }
     }
 
-    async function requireAdmin() {
+    async function requireManager() {
       const authHeader = String(request.headers.get("authorization") || "");
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
       if (!token) throw new Error("未登录");
@@ -118,12 +132,20 @@ Deno.serve(async (request) => {
 
       const { data: callerProfile, error: profileError } = await admin
         .from("dashboard_profiles")
-        .select("username,role,active,permissions")
+        .select("username,role,active,permissions,management_permissions")
         .eq("auth_user_id", caller.id)
         .maybeSingle();
       if (profileError) throw new Error(`读取管理员权限失败：${profileError.message}`);
-      if (!callerProfile?.active || callerProfile.role !== "admin") throw new Error("只有 Admin 可以执行这个操作");
+      if (!callerProfile?.active || !["owner", "admin"].includes(String(callerProfile.role || ""))) throw new Error("只有管理账号可以执行这个操作");
       return { token, caller, profile: callerProfile, actor: { id: caller.id, username: String(callerProfile.username || "admin") } };
+    }
+
+    async function requireCapability(key: keyof ManagementPermissions) {
+      const ctx = await requireManager();
+      if (ctx.profile.role === "owner") return ctx;
+      const permissions = sanitizeManagementPermissions(ctx.profile.management_permissions);
+      if (!permissions[key]) throw new Error("当前管理员没有这个后台管理权限");
+      return ctx;
     }
 
     if (action === "bootstrap-admin") {
@@ -134,7 +156,7 @@ Deno.serve(async (request) => {
       const { count, error: countError } = await admin
         .from("dashboard_profiles")
         .select("auth_user_id", { count: "exact", head: true })
-        .eq("role", "admin")
+        .in("role", ["owner", "admin"])
         .eq("active", true);
       if (countError) throw new Error(`检查管理员失败：${countError.message}`);
       if ((count || 0) > 0) return json(request, { ok: false, message: "管理员已经初始化过，禁止再次 bootstrap" }, 409);
@@ -145,24 +167,25 @@ Deno.serve(async (request) => {
         email: usernameEmail(username),
         password,
         email_confirm: true,
-        user_metadata: { username, dashboard_role: "admin" },
+        user_metadata: { username, dashboard_role: "owner" },
       });
       if (createError || !created.user) throw new Error(`建立 Admin 登录账号失败：${createError?.message || "unknown"}`);
 
       const { error: profileError } = await admin.from("dashboard_profiles").insert({
         auth_user_id: created.user.id,
         username,
-        role: "admin",
+        role: "owner",
         active: true,
         permissions: ADMIN_PERMISSIONS,
+        management_permissions: ADMIN_MANAGEMENT,
         created_by: created.user.id,
       });
       if (profileError) {
         await admin.auth.admin.deleteUser(created.user.id).catch(() => undefined);
         throw new Error(`建立 Admin 权限资料失败：${profileError.message}`);
       }
-      await audit({ id: created.user.id, username }, "bootstrap_admin", username, { role: "admin" });
-      return json(request, { ok: true, username, role: "admin", permissions: ADMIN_PERMISSIONS, message: "Admin 初始化完成" });
+      await audit({ id: created.user.id, username }, "bootstrap_owner", username, { role: "owner" });
+      return json(request, { ok: true, username, role: "owner", permissions: ADMIN_PERMISSIONS, management_permissions: ADMIN_MANAGEMENT, message: "总管理员初始化完成" });
     }
 
     if (action === "reset-admin-password") {
@@ -181,7 +204,7 @@ Deno.serve(async (request) => {
         .maybeSingle();
       if (targetError) throw new Error(`读取 Admin 账号失败：${targetError.message}`);
       if (!target) return json(request, { ok: false, message: "Admin 账号不存在" }, 404);
-      if (target.role !== "admin") return json(request, { ok: false, message: "这个账号不是 Admin" }, 403);
+      if (!["owner", "admin"].includes(String(target.role || ""))) return json(request, { ok: false, message: "这个账号不是管理账号" }, 403);
 
       const { error: updateError } = await admin.auth.admin.updateUserById(target.auth_user_id, { password });
       if (updateError) throw new Error(`重置 Admin 密码失败：${updateError.message}`);
@@ -190,8 +213,51 @@ Deno.serve(async (request) => {
       return json(request, { ok: true, username, role: "admin", message: "Admin 密码已重置" });
     }
 
+    if (action === "create-account") {
+      const ctx = await requireManager();
+      const username = normalizeUsername(body?.username);
+      const password = validatePassword(body?.password);
+      const requestedRole = String(body?.role || "viewer") === "admin" ? "admin" : "viewer";
+      if (requestedRole === "admin" && ctx.profile.role !== "owner") {
+        return json(request, { ok: false, message: "只有总管理员可以建立小管理员" }, 403);
+      }
+      if (requestedRole === "viewer" && ctx.profile.role !== "owner") {
+        const management = sanitizeManagementPermissions(ctx.profile.management_permissions);
+        if (!management.manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
+      }
+
+      const permissions = requestedRole === "admin" ? { ...ADMIN_PERMISSIONS, ...sanitizePermissions(body?.permissions) } : sanitizePermissions(body?.permissions);
+      const managementPermissions = requestedRole === "admin" ? sanitizeManagementPermissions(body?.management_permissions) : VIEWER_MANAGEMENT;
+      const { data: exists } = await admin.from("dashboard_profiles").select("auth_user_id").eq("username", username).maybeSingle();
+      if (exists) return json(request, { ok: false, message: "这个账号已经存在" }, 409);
+
+      const { data: created, error: createError } = await admin.auth.admin.createUser({
+        email: usernameEmail(username),
+        password,
+        email_confirm: true,
+        user_metadata: { username, dashboard_role: requestedRole },
+      });
+      if (createError || !created.user) throw new Error(`建立账号失败：${createError?.message || "unknown"}`);
+
+      const { error: insertError } = await admin.from("dashboard_profiles").insert({
+        auth_user_id: created.user.id,
+        username,
+        role: requestedRole,
+        active: true,
+        permissions,
+        management_permissions: managementPermissions,
+        created_by: ctx.caller.id,
+      });
+      if (insertError) {
+        await admin.auth.admin.deleteUser(created.user.id).catch(() => undefined);
+        throw new Error(`写入账号权限失败：${insertError.message}`);
+      }
+      await audit(ctx.actor, requestedRole === "admin" ? "create_admin" : "create_viewer", username, { permissions, management_permissions: managementPermissions });
+      return json(request, { ok: true, username, role: requestedRole, permissions, management_permissions: managementPermissions, message: requestedRole === "admin" ? "小管理员已建立" : "查看账号已建立" });
+    }
+
     if (action === "create-viewer") {
-      const { caller, actor } = await requireAdmin();
+      const { caller, actor } = await requireCapability("manage_viewers");
       const username = normalizeUsername(body?.username);
       const password = validatePassword(body?.password);
       const permissions = sanitizePermissions(body?.permissions);
@@ -224,17 +290,44 @@ Deno.serve(async (request) => {
     }
 
     if (action === "list-users") {
-      await requireAdmin();
+      await requireManager();
       const { data, error } = await admin
         .from("dashboard_profiles")
-        .select("auth_user_id,username,role,active,permissions,created_at,updated_at")
+        .select("auth_user_id,username,role,active,permissions,management_permissions,created_at,updated_at")
         .order("created_at", { ascending: true });
       if (error) throw new Error(`读取账号列表失败：${error.message}`);
       return json(request, { ok: true, users: data || [] });
     }
 
+    if (action === "update-account") {
+      const ctx = await requireManager();
+      const username = normalizeUsername(body?.username);
+      const { data: target, error: targetError } = await admin
+        .from("dashboard_profiles")
+        .select("auth_user_id,username,role,active,permissions,management_permissions")
+        .eq("username", username)
+        .maybeSingle();
+      if (targetError) throw new Error(`读取目标账号失败：${targetError.message}`);
+      if (!target) return json(request, { ok: false, message: "账号不存在" }, 404);
+      if (target.role === "owner") return json(request, { ok: false, message: "总管理员不能被其它账号修改" }, 403);
+      if (target.role === "admin" && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以修改小管理员" }, 403);
+      if (target.role === "viewer" && ctx.profile.role !== "owner") {
+        const management = sanitizeManagementPermissions(ctx.profile.management_permissions);
+        if (!management.manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
+      }
+
+      const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (typeof body?.active === "boolean") patch.active = body.active;
+      if (body?.permissions) patch.permissions = sanitizePermissions(body.permissions);
+      if (target.role === "admin" && body?.management_permissions) patch.management_permissions = sanitizeManagementPermissions(body.management_permissions);
+      const { error } = await admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id);
+      if (error) throw new Error(`更新账号失败：${error.message}`);
+      await audit(ctx.actor, "update_account", username, { role: target.role, ...patch });
+      return json(request, { ok: true, username, role: target.role, message: "账号权限已更新" });
+    }
+
     if (action === "update-viewer") {
-      const { actor } = await requireAdmin();
+      const { actor } = await requireCapability("manage_viewers");
       const username = normalizeUsername(body?.username);
       const { data: target, error: targetError } = await admin
         .from("dashboard_profiles")
@@ -255,7 +348,8 @@ Deno.serve(async (request) => {
     }
 
     if (action === "reset-password") {
-      const { actor } = await requireAdmin();
+      const ctx = await requireManager();
+      const { actor } = ctx;
       const username = normalizeUsername(body?.username);
       const password = validatePassword(body?.password);
       const { data: target, error: targetError } = await admin
@@ -265,15 +359,36 @@ Deno.serve(async (request) => {
         .maybeSingle();
       if (targetError) throw new Error(`读取目标账号失败：${targetError.message}`);
       if (!target) return json(request, { ok: false, message: "账号不存在" }, 404);
-      if (target.role !== "viewer") return json(request, { ok: false, message: "不能在这里重置 Admin 密码" }, 403);
+      if (target.role === "owner") return json(request, { ok: false, message: "总管理员密码请由本人在个人资料修改" }, 403);
+      if (target.role === "admin" && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以重置小管理员密码" }, 403);
+      if (target.role === "viewer" && ctx.profile.role !== "owner" && !sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
       const { error } = await admin.auth.admin.updateUserById(target.auth_user_id, { password });
       if (error) throw new Error(`重置密码失败：${error.message}`);
       await audit(actor, "reset_password", username, {});
       return json(request, { ok: true, username, message: "密码已重置" });
     }
 
+    if (action === "delete-account") {
+      const ctx = await requireManager();
+      const username = normalizeUsername(body?.username);
+      const { data: target, error: targetError } = await admin
+        .from("dashboard_profiles")
+        .select("auth_user_id,username,role")
+        .eq("username", username)
+        .maybeSingle();
+      if (targetError) throw new Error(`读取目标账号失败：${targetError.message}`);
+      if (!target) return json(request, { ok: false, message: "账号不存在" }, 404);
+      if (target.role === "owner") return json(request, { ok: false, message: "总管理员账号不能删除" }, 403);
+      if (target.role === "admin" && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以删除小管理员" }, 403);
+      if (target.role === "viewer" && ctx.profile.role !== "owner" && !sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
+      const { error } = await admin.auth.admin.deleteUser(target.auth_user_id);
+      if (error) throw new Error(`删除账号失败：${error.message}`);
+      await audit(ctx.actor, "delete_account", username, { role: target.role });
+      return json(request, { ok: true, username, role: target.role, message: "账号已删除" });
+    }
+
     if (action === "list-audit") {
-      await requireAdmin();
+      await requireCapability("view_audit");
       const limit = Math.min(100, Math.max(10, Number(body?.limit || 50)));
       const { data, error } = await admin
         .from("dashboard_audit_log")
@@ -285,7 +400,7 @@ Deno.serve(async (request) => {
     }
 
     if (action === "history-status") {
-      await requireAdmin();
+      await requireCapability("refresh_data");
       const { data, error } = await admin
         .from("third_party_history_backfill")
         .select("data_date,direction,status,attempts,rows_written,last_error,last_sync_at")
@@ -324,7 +439,7 @@ Deno.serve(async (request) => {
     }
 
     if (action === "trigger-sync") {
-      const { actor } = await requireAdmin();
+      const { actor } = await requireCapability("refresh_data");
       const job = String(body?.job || "").trim();
       const syncSecret = String(Deno.env.get("SYNC_SECRET") || "");
       if (!syncSecret) throw new Error("SYNC_SECRET 未配置");
@@ -364,11 +479,11 @@ Deno.serve(async (request) => {
 
     return json(request, {
       ok: false,
-      message: "action 请使用 bootstrap-admin / reset-admin-password / create-viewer / list-users / update-viewer / reset-password / list-audit / history-status / trigger-sync",
+      message: "action 请使用 bootstrap-admin / reset-admin-password / create-account / create-viewer / list-users / update-account / update-viewer / reset-password / delete-account / list-audit / history-status / trigger-sync",
     }, 400);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const status = /未登录|登录状态/.test(message) ? 401 : /只有 Admin|不能在这里/.test(message) ? 403 : 500;
+    const status = /未登录|登录状态/.test(message) ? 401 : /只有|没有这个后台管理权限|不能|总管理员/.test(message) ? 403 : 500;
     return json(request, { ok: false, message }, status);
   }
 });

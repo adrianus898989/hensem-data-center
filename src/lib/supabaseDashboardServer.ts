@@ -49,7 +49,7 @@ async function requireActiveProfile(token: string) {
   if (!userId) throw new Error("登录状态无效");
 
   const params = new URLSearchParams();
-  params.set("select", "auth_user_id,username,role,active,permissions");
+  params.set("select", "auth_user_id,username,role,active,permissions,management_permissions");
   params.set("auth_user_id", `eq.${userId}`);
   params.set("limit", "1");
   const profileRes = await fetch(`${url}/rest/v1/dashboard_profiles?${params.toString()}`, {
@@ -60,7 +60,7 @@ async function requireActiveProfile(token: string) {
   const profile = Array.isArray(rows) ? rows[0] : null;
   if (!profile) throw new Error("这个账号还没有后台权限");
   if (!profile.active) throw new Error("这个账号已被停用");
-  return profile as { auth_user_id: string; username: string; role: "admin" | "viewer"; active: boolean; permissions?: Record<string, boolean> | null };
+  return profile as { auth_user_id: string; username: string; role: "owner" | "admin" | "viewer"; active: boolean; permissions?: Record<string, boolean> | null; management_permissions?: Record<string, boolean> | null };
 }
 
 async function fetchPaged<T>(table: string, query: URLSearchParams, token: string): Promise<T[]> {
@@ -216,24 +216,54 @@ function mapVolume(row: DbVolumeRow): ThirdPartyVolumeRow {
   };
 }
 
-export async function readSupabaseThirdPartyVolume(request: Request, startInput = "", endInput = ""): Promise<ThirdPartyVolumePayload> {
+export async function readSupabaseThirdPartyVolume(
+  request: Request,
+  startInput = "",
+  endInput = "",
+  countryInput = ""
+): Promise<ThirdPartyVolumePayload> {
   const token = authTokenFromRequest(request);
   const profile = await requireActiveProfile(token);
-  if (profile.role !== "admin" && profile.permissions?.third_party === false) throw new Error("这个账号没有三方量 / 费率查看权限");
+  if (profile.role === "viewer" && profile.permissions?.third_party === false) throw new Error("这个账号没有三方量 / 费率查看权限");
+
   const now = new Date();
   const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
   const start = isoDate(startInput) || yesterday;
   const end = isoDate(endInput) || start;
-  const queryStart = previousDate(start); // v239 的昨日比较需要额外保留前一天。
-  const query = new URLSearchParams();
-  query.set("select", "id,sheet_name,source_row,data_date,country,platform,channel,raw_channel,channel_type,direction,amount,count,success_count,failed_count,success_rate,status,raw,updated_at");
-  query.append("data_date", `gte.${queryStart}`);
-  query.append("data_date", `lte.${end}`);
-  query.set("order", "data_date.asc,country.asc,platform.asc,channel.asc");
-  const dbRows = await fetchPaged<DbVolumeRow>("third_party_volume", query, token);
+  const country = String(countryInput || "").trim();
+  const queryStart = previousDate(start);
+  const { url, anonKey } = config();
+
+  // V250：三方量改成一次 PostgreSQL RPC。
+  // 旧版按 Supabase REST 每 1000 行分页，一个 4 万行月份会产生几十次 HTTP 请求；
+  // 现在日期/国家过滤直接在 PostgreSQL 内完成，并一次返回 JSON。
+  const rpcRes = await fetch(`${url}/rest/v1/rpc/dashboard_third_party_volume_fast`, {
+    method: "POST",
+    headers: {
+      apikey: anonKey,
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      p_start: start,
+      p_end: end,
+      p_country: country || null
+    }),
+    cache: "no-store"
+  });
+  const rpc = await readJson(rpcRes) as {
+    ok?: boolean;
+    rows?: DbVolumeRow[];
+    rowCount?: number;
+    latestWriteAt?: string | null;
+    queryCountry?: string;
+  };
+  const dbRows = Array.isArray(rpc?.rows) ? rpc.rows : [];
   const rows = dbRows.map(mapVolume);
-  const updatedAt = dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString();
+  const updatedAt = String(rpc?.latestWriteAt || "") || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString();
   const sheets = Array.from(new Set(rows.map((row) => row.sheetName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
+
   return {
     meta: {
       year: start.slice(0, 4),
@@ -241,8 +271,11 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
       updatedAt,
       source: "supabase" as any,
       sheets,
-      message: `Supabase：读取 ${queryStart} 至 ${end}；${start} 前一天只用于 v239 昨日比较。`,
-      dataSource: "supabase" as any
+      message: `Supabase FAST RPC：${queryStart} 至 ${end}${country ? ` / ${country}` : ""}；${start} 前一天只用于 v239 昨日比较。`,
+      dataSource: "supabase" as any,
+      queryMode: "postgres-rpc",
+      queryCountry: country,
+      databaseRows: Number(rpc?.rowCount || dbRows.length)
     } as any,
     rows,
     aliasMap: buildAliasMap(rows),
@@ -362,7 +395,7 @@ function buildRateSummary(rates: ThirdPartyRateRow[], statuses: ThirdPartyPlatfo
 export async function readSupabaseThirdPartyRates(request: Request): Promise<ThirdPartyRatePayload> {
   const token = authTokenFromRequest(request);
   const profile = await requireActiveProfile(token);
-  if (profile.role !== "admin" && profile.permissions?.third_party === false) throw new Error("这个账号没有三方量 / 费率查看权限");
+  if (profile.role === "viewer" && profile.permissions?.third_party === false) throw new Error("这个账号没有三方量 / 费率查看权限");
   const rateQuery = new URLSearchParams();
   rateQuery.set("select", "id,sheet_name,country,category,third_party,collect_fee,payout_fee,total_fee,collect_single_fee,payout_single_fee,collect_limit,payout_limit,channel_info,leak,whitelist,status,source_row,updated_at");
   rateQuery.set("order", "country.asc,third_party.asc");

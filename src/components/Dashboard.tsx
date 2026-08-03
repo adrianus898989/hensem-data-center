@@ -9,7 +9,7 @@ import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload
 import WorkOrderDashboard from "./WorkOrderDashboard";
 import ThirdPartyVolumeDashboard from "./ThirdPartyVolumeDashboard";
 import { useDashboardAuth } from "./DashboardAuthGate";
-import { hasDashboardPermission } from "@/lib/dashboardAuthClient";
+import { canOpenAdminCenter, hasDashboardPermission } from "@/lib/dashboardAuthClient";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 type ModuleMode = "home" | "auto" | "operator" | "volume" | "work";
@@ -896,7 +896,7 @@ function writeAutoLocalCache(payload: AutoWithdrawPayload) {
 }
 
 export default function Dashboard() {
-  const { profile } = useDashboardAuth();
+  const { profile, openAdminCenter, openProfile } = useDashboardAuth();
   const canThirdParty = hasDashboardPermission(profile, "third_party");
   const [state, setState] = useState<LoadState>("idle");
   const [payload, setPayload] = useState<AutoWithdrawPayload | null>(null);
@@ -1615,6 +1615,17 @@ export default function Dashboard() {
       <button className={activeModule === "volume" ? "nav-item active" : "nav-item"} onClick={() => switchModule("volume")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
         <span className="nav-left"><span className="nav-icon">📊</span>三方量/费率</span>
         <span className={canThirdParty ? "badge ok" : "badge"}>{canThirdParty ? "Supabase" : "无权限"}</span>
+      </button>
+
+      <div className="nav-section-title system-admin-title">系统管理</div>
+      {canOpenAdminCenter(profile) && (
+        <button className="nav-item system-admin-nav" onClick={openAdminCenter}>
+          <span className="nav-left"><span className="nav-icon">⚙</span>管理后台</span>
+          <span className="badge owner-badge">{profile?.role === "owner" ? "OWNER" : "ADMIN"}</span>
+        </button>
+      )}
+      <button className="nav-item system-admin-nav" onClick={openProfile}>
+        <span className="nav-left"><span className="nav-icon">👤</span>个人资料</span>
       </button>
     </aside>
   );

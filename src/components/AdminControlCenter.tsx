@@ -2,17 +2,23 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  createViewerAccount,
+  canOpenAdminCenter,
+  createDashboardAccount,
   DASHBOARD_PERMISSION_LABELS,
+  DEFAULT_ADMIN_MANAGEMENT_PERMISSIONS,
+  DEFAULT_ADMIN_PERMISSIONS,
   DEFAULT_VIEWER_PERMISSIONS,
+  deleteDashboardAccount,
   getDashboardHistoryStatus,
   listDashboardAudit,
   listDashboardUsers,
+  normalizedManagementPermissions,
   normalizedPermissions,
-  resetViewerPassword,
+  resetDashboardUserPassword,
   triggerDashboardSync,
-  updateViewerAccount,
+  updateDashboardAccount,
   type DashboardAuditLog,
+  type DashboardManagementPermissions,
   type DashboardPermissions,
   type DashboardProfile,
   type DashboardSession,
@@ -27,14 +33,21 @@ type Props = {
   onClose: () => void;
 };
 
-type Tab = "users" | "data" | "audit";
+type Tab = "overview" | "users" | "data" | "audit";
+type CreateRole = "admin" | "viewer";
 
 const SYNC_JOBS: Array<{ key: ManualSyncJob; label: string; note: string }> = [
-  { key: "today_collect", label: "今日代收", note: "安全增量同步，不删除暂未到齐的数据" },
-  { key: "today_payout", label: "今日代付", note: "安全增量同步，不删除暂未到齐的数据" },
-  { key: "yesterday_collect", label: "昨日代收", note: "补齐延迟录入的平台 / 国家" },
-  { key: "yesterday_payout", label: "昨日代付", note: "补齐延迟录入的平台 / 国家" },
-  { key: "rates", label: "费率 / 盘口状态", note: "重新读取最新费率与盘口状态" },
+  { key: "today_collect", label: "今日代收", note: "小时安全增量同步" },
+  { key: "today_payout", label: "今日代付", note: "小时安全增量同步" },
+  { key: "yesterday_collect", label: "昨日代收", note: "补齐延迟录入平台" },
+  { key: "yesterday_payout", label: "昨日代付", note: "补齐延迟录入平台" },
+  { key: "rates", label: "费率 / 盘口", note: "同步最新费率与盘口状态" },
+];
+
+const MANAGEMENT_OPTIONS: Array<{ key: keyof DashboardManagementPermissions; label: string; note: string }> = [
+  { key: "manage_viewers", label: "账号管理", note: "可建立、停用、删除 Viewer 与重置 Viewer 密码" },
+  { key: "refresh_data", label: "数据刷新", note: "可手动刷新今日 / 昨日 / 费率与历史补齐" },
+  { key: "view_audit", label: "操作记录", note: "可查看后台管理操作日志" },
 ];
 
 function formatTime(value?: string) {
@@ -43,17 +56,39 @@ function formatTime(value?: string) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN");
 }
 
+function roleLabel(role: DashboardProfile["role"]) {
+  if (role === "owner") return "总管理员";
+  if (role === "admin") return "管理员";
+  return "查看账号";
+}
+
+function roleEnglish(role: DashboardProfile["role"]) {
+  if (role === "owner") return "OWNER";
+  if (role === "admin") return "ADMIN";
+  return "VIEWER";
+}
+
 function permissionSummary(profile: DashboardProfile) {
-  if (profile.role === "admin") return "全部权限";
+  if (profile.role === "owner") return "全部业务模块 · 全部后台权限";
   const p = normalizedPermissions(profile);
-  return DASHBOARD_PERMISSION_LABELS.filter((item) => p[item.key]).map((item) => item.label).join("、") || "无模块权限";
+  const business = DASHBOARD_PERMISSION_LABELS.filter((item) => p[item.key]).map((item) => item.label);
+  if (profile.role === "admin") {
+    const m = normalizedManagementPermissions(profile);
+    const management = MANAGEMENT_OPTIONS.filter((item) => m[item.key]).map((item) => item.label);
+    return [...business, ...management].join(" · ") || "未分配权限";
+  }
+  return business.join(" · ") || "无模块权限";
 }
 
 function actionLabel(action: string) {
   const labels: Record<string, string> = {
-    bootstrap_admin: "初始化 Admin",
+    bootstrap_admin: "初始化管理员",
+    bootstrap_owner: "初始化总管理员",
+    create_admin: "建立管理员",
     create_viewer: "建立 Viewer",
-    update_viewer: "修改账号权限",
+    update_account: "修改账号权限",
+    update_viewer: "修改 Viewer 权限",
+    delete_account: "删除账号",
     reset_password: "重置密码",
     manual_sync: "手动刷新数据",
     manual_sync_failed: "手动刷新失败",
@@ -62,14 +97,22 @@ function actionLabel(action: string) {
 }
 
 export default function AdminControlCenter({ open, session, profile, onClose }: Props) {
-  const [tab, setTab] = useState<Tab>("users");
+  const management = normalizedManagementPermissions(profile);
+  const isOwner = profile.role === "owner";
+  const canManageUsers = isOwner || management.manage_viewers;
+  const canRefreshData = isOwner || management.refresh_data;
+  const canViewAudit = isOwner || management.view_audit;
+
+  const [tab, setTab] = useState<Tab>("overview");
   const [users, setUsers] = useState<DashboardProfile[]>([]);
   const [logs, setLogs] = useState<DashboardAuditLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [newRole, setNewRole] = useState<CreateRole>("viewer");
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newPermissions, setNewPermissions] = useState<DashboardPermissions>({ ...DEFAULT_VIEWER_PERMISSIONS });
+  const [newManagement, setNewManagement] = useState<DashboardManagementPermissions>({ ...DEFAULT_ADMIN_MANAGEMENT_PERMISSIONS });
   const [createBusy, setCreateBusy] = useState(false);
   const [savingUser, setSavingUser] = useState("");
   const [resetTarget, setResetTarget] = useState("");
@@ -79,83 +122,88 @@ export default function AdminControlCenter({ open, session, profile, onClose }: 
   const [historyStatus, setHistoryStatus] = useState<HistoryBackfillStatus | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
 
-  const viewers = useMemo(() => users.filter((user) => user.role === "viewer"), [users]);
+  const stats = useMemo(() => ({
+    owners: users.filter((u) => u.role === "owner").length,
+    admins: users.filter((u) => u.role === "admin").length,
+    viewers: users.filter((u) => u.role === "viewer").length,
+    disabled: users.filter((u) => !u.active).length,
+  }), [users]);
 
   async function loadUsers() {
     setLoading(true);
-    try {
-      setUsers(await listDashboardUsers(session));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "读取账号失败");
-    } finally {
-      setLoading(false);
-    }
+    try { setUsers(await listDashboardUsers(session)); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "读取账号失败"); }
+    finally { setLoading(false); }
   }
 
   async function loadAudit() {
-    setLoading(true);
-    try {
-      setLogs(await listDashboardAudit(session, 60));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "读取操作记录失败");
-    } finally {
-      setLoading(false);
-    }
+    if (!canViewAudit) return;
+    try { setLogs(await listDashboardAudit(session, 80)); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "读取操作记录失败"); }
   }
 
   async function loadHistoryStatus() {
+    if (!canRefreshData) return;
     setHistoryLoading(true);
-    try {
-      setHistoryStatus(await getDashboardHistoryStatus(session));
-    } catch {
-      // 历史补齐 SQL 尚未建立时保持空状态，不影响其它管理功能。
-      setHistoryStatus(null);
-    } finally {
-      setHistoryLoading(false);
-    }
+    try { setHistoryStatus(await getDashboardHistoryStatus(session)); }
+    catch { setHistoryStatus(null); }
+    finally { setHistoryLoading(false); }
   }
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !canOpenAdminCenter(profile)) return;
     setMessage("");
     void loadUsers();
-    void loadAudit();
-    void loadHistoryStatus();
+    if (canViewAudit) void loadAudit();
+    if (canRefreshData) void loadHistoryStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, profile.role]);
 
-  if (!open || profile.role !== "admin") return null;
+  useEffect(() => {
+    if (!isOwner && newRole === "admin") setNewRole("viewer");
+  }, [isOwner, newRole]);
+
+  if (!open || !canOpenAdminCenter(profile)) return null;
+
+  function resetCreateRole(role: CreateRole) {
+    setNewRole(role);
+    setNewPermissions(role === "admin" ? { ...DEFAULT_ADMIN_PERMISSIONS } : { ...DEFAULT_VIEWER_PERMISSIONS });
+    setNewManagement({ ...DEFAULT_ADMIN_MANAGEMENT_PERMISSIONS });
+  }
 
   async function submitCreate(event: React.FormEvent) {
     event.preventDefault();
+    if (!canManageUsers) return;
     setCreateBusy(true);
     setMessage("");
     try {
-      const result = await createViewerAccount(session, newUsername, newPassword, newPermissions);
-      setMessage(`账号 ${result?.username || newUsername} 已建立。`);
+      const result = await createDashboardAccount(session, newUsername, newPassword, newRole, newPermissions, newManagement);
+      setMessage(`${roleLabel(result?.role || newRole)} ${result?.username || newUsername} 已建立。`);
       setNewUsername("");
       setNewPassword("");
-      setNewPermissions({ ...DEFAULT_VIEWER_PERMISSIONS });
-      await Promise.all([loadUsers(), loadAudit()]);
+      resetCreateRole("viewer");
+      await Promise.all([loadUsers(), canViewAudit ? loadAudit() : Promise.resolve()]);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "建立账号失败");
-    } finally {
-      setCreateBusy(false);
-    }
+    } finally { setCreateBusy(false); }
   }
 
-  async function saveViewer(user: DashboardProfile, patch: { active?: boolean; permissions?: DashboardPermissions }) {
+  function canEditTarget(user: DashboardProfile) {
+    if (user.role === "owner") return false;
+    if (user.role === "admin") return isOwner;
+    return canManageUsers;
+  }
+
+  async function saveAccount(user: DashboardProfile, patch: { active?: boolean; permissions?: DashboardPermissions; management_permissions?: DashboardManagementPermissions }) {
+    if (!canEditTarget(user)) return;
     setSavingUser(user.username);
     setMessage("");
     try {
-      await updateViewerAccount(session, user.username, patch);
+      await updateDashboardAccount(session, user.username, patch);
       setMessage(`${user.username} 已更新。`);
-      await Promise.all([loadUsers(), loadAudit()]);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "更新失败");
-    } finally {
-      setSavingUser("");
-    }
+      await Promise.all([loadUsers(), canViewAudit ? loadAudit() : Promise.resolve()]);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "更新失败"); }
+    finally { setSavingUser(""); }
   }
 
   async function submitResetPassword(event: React.FormEvent) {
@@ -164,19 +212,30 @@ export default function AdminControlCenter({ open, session, profile, onClose }: 
     setSavingUser(resetTarget);
     setMessage("");
     try {
-      await resetViewerPassword(session, resetTarget, resetPassword);
+      await resetDashboardUserPassword(session, resetTarget, resetPassword);
       setMessage(`${resetTarget} 密码已重置。`);
       setResetTarget("");
       setResetPassword("");
-      await loadAudit();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "重置密码失败");
-    } finally {
-      setSavingUser("");
-    }
+      if (canViewAudit) await loadAudit();
+    } catch (error) { setMessage(error instanceof Error ? error.message : "重置密码失败"); }
+    finally { setSavingUser(""); }
+  }
+
+  async function removeAccount(user: DashboardProfile) {
+    if (!canEditTarget(user)) return;
+    if (!window.confirm(`确定删除账号 ${user.username}？删除后该账号立即无法登录。`)) return;
+    setSavingUser(user.username);
+    setMessage("");
+    try {
+      await deleteDashboardAccount(session, user.username);
+      setMessage(`${user.username} 已删除。`);
+      await Promise.all([loadUsers(), canViewAudit ? loadAudit() : Promise.resolve()]);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "删除失败"); }
+    finally { setSavingUser(""); }
   }
 
   async function runJob(job: ManualSyncJob) {
+    if (!canRefreshData) return;
     setSyncRunning(job);
     setSyncProgress([`正在刷新：${SYNC_JOBS.find((item) => item.key === job)?.label || job}`]);
     setMessage("");
@@ -185,223 +244,166 @@ export default function AdminControlCenter({ open, session, profile, onClose }: 
       const written = result?.result?.written;
       const suffix = written?.volume ? `，写入 ${written.volume} 行` : written?.rates ? `，费率 ${written.rates} / 盘口 ${written.platformStatuses}` : "";
       setSyncProgress([`${SYNC_JOBS.find((item) => item.key === job)?.label || job}：完成${suffix}`]);
-      await loadAudit();
+      if (canViewAudit) await loadAudit();
     } catch (error) {
       setSyncProgress([`${SYNC_JOBS.find((item) => item.key === job)?.label || job}：${error instanceof Error ? error.message : "失败"}`]);
-    } finally {
-      setSyncRunning("");
-    }
+    } finally { setSyncRunning(""); }
   }
 
   async function runAllLatest() {
+    if (!canRefreshData) return;
     setSyncRunning("all");
-    setMessage("");
     const lines: string[] = [];
     setSyncProgress([]);
-    try {
-      for (const job of SYNC_JOBS) {
-        setSyncProgress([...lines, `正在刷新：${job.label}...`]);
-        try {
-          const result = await triggerDashboardSync(session, job.key);
-          const written = result?.result?.written;
-          const suffix = written?.volume ? `（${written.volume} 行）` : written?.rates ? `（费率 ${written.rates} / 盘口 ${written.platformStatuses}）` : "";
-          lines.push(`✓ ${job.label} ${suffix}`);
-        } catch (error) {
-          lines.push(`✕ ${job.label}：${error instanceof Error ? error.message : "失败"}`);
-        }
-        setSyncProgress([...lines]);
-      }
-      await loadAudit();
-    } finally {
-      setSyncRunning("");
+    for (const job of SYNC_JOBS) {
+      setSyncProgress([...lines, `正在刷新：${job.label}...`]);
+      try {
+        const result = await triggerDashboardSync(session, job.key);
+        const written = result?.result?.written;
+        const suffix = written?.volume ? `（${written.volume} 行）` : written?.rates ? `（费率 ${written.rates} / 盘口 ${written.platformStatuses}）` : "";
+        lines.push(`✓ ${job.label} ${suffix}`);
+      } catch (error) { lines.push(`✕ ${job.label}：${error instanceof Error ? error.message : "失败"}`); }
+      setSyncProgress([...lines]);
     }
+    if (canViewAudit) await loadAudit();
+    setSyncRunning("");
   }
 
   async function runHistoryNext() {
+    if (!canRefreshData) return;
     setSyncRunning("history_next");
-    setMessage("");
     try {
       const result = await triggerDashboardSync(session, "history_next");
       const requested = result?.result?.requested;
       const written = result?.result?.written;
-      setSyncProgress([
-        requested?.start
-          ? `历史补齐：${requested.start}${requested.end && requested.end !== requested.start ? ` ~ ${requested.end}` : ""} ${requested.direction || ""} 完成${written?.volume ? `（${written.volume} 行）` : ""}`
-          : (result?.result?.message || "历史补齐任务已执行")
-      ]);
-      await Promise.all([loadHistoryStatus(), loadAudit()]);
+      setSyncProgress([requested?.start
+        ? `历史补齐：${requested.start}${requested.end && requested.end !== requested.start ? ` ~ ${requested.end}` : ""} ${requested.direction || ""} 完成${written?.volume ? `（${written.volume} 行）` : ""}`
+        : (result?.result?.message || "历史补齐任务已执行")]);
+      await loadHistoryStatus();
+      if (canViewAudit) await loadAudit();
     } catch (error) {
       setSyncProgress([`历史补齐：${error instanceof Error ? error.message : "失败"}`]);
-      await loadHistoryStatus();
-    } finally {
-      setSyncRunning("");
-    }
+    } finally { setSyncRunning(""); }
   }
 
+  const navItems: Array<{ key: Tab; label: string; note: string; visible: boolean; icon: string }> = [
+    { key: "overview", label: "管理概览", note: "角色与系统状态", visible: true, icon: "⌂" },
+    { key: "users", label: "账号与权限", note: "用户、角色、模块权限", visible: canManageUsers || isOwner, icon: "◎" },
+    { key: "data", label: "数据同步", note: "手动刷新与历史进度", visible: canRefreshData, icon: "↻" },
+    { key: "audit", label: "操作记录", note: "后台管理审计", visible: canViewAudit, icon: "≡" },
+  ];
+
   return (
-    <div className="admin-center-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="admin-center-shell">
-        <header className="admin-center-header">
-          <div className="admin-center-brand">
-            <div className="admin-center-logo">H</div>
-            <div>
-              <span>HENSEM CONTROL CENTER</span>
-              <h2>管理后台</h2>
-              <p>账号权限、数据刷新与操作记录</p>
-            </div>
-          </div>
-          <div className="admin-center-header-actions">
-            <span className="admin-role-chip">ADMIN · {profile.username}</span>
-            <button type="button" onClick={onClose}>关闭</button>
-          </div>
+    <div className="admin-workspace-page">
+      <aside className="admin-workspace-sidebar">
+        <div className="admin-workspace-brand"><div className="admin-workspace-logo">H</div><div><strong>Hensem Control</strong><small>Administration Center</small></div></div>
+        <div className="admin-workspace-section-label">管理中心</div>
+        <nav className="admin-workspace-nav">
+          {navItems.filter((item) => item.visible).map((item) => (
+            <button key={item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)}>
+              <span className="admin-workspace-nav-icon">{item.icon}</span><span><b>{item.label}</b><small>{item.note}</small></span>
+            </button>
+          ))}
+        </nav>
+        <div className="admin-workspace-role-card">
+          <span className={`admin-user-role ${profile.role}`}>{roleEnglish(profile.role)}</span>
+          <strong>{profile.username}</strong>
+          <small>{isOwner ? "最高权限 · 唯一总管理员" : "由总管理员分配后台权限"}</small>
+        </div>
+        <button className="admin-workspace-return" type="button" onClick={onClose}>← 返回数据后台</button>
+      </aside>
+
+      <main className="admin-workspace-main">
+        <header className="admin-workspace-topbar">
+          <div><span>HENSEM CONTROL CENTER</span><h1>{tab === "overview" ? "管理概览" : tab === "users" ? "账号与权限" : tab === "data" ? "数据同步" : "操作记录"}</h1><p>{isOwner ? "你是唯一总管理员，可建立小管理员并分配后台与业务权限。" : "仅显示总管理员为当前账号开放的管理能力。"}</p></div>
+          <div className="admin-workspace-top-actions"><button type="button" onClick={() => void loadUsers()}>刷新状态</button><button className="primary" type="button" onClick={onClose}>返回业务后台</button></div>
         </header>
 
-        <nav className="admin-center-tabs">
-          <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")}>账号与权限</button>
-          <button className={tab === "data" ? "active" : ""} onClick={() => setTab("data")}>数据刷新</button>
-          <button className={tab === "audit" ? "active" : ""} onClick={() => setTab("audit")}>操作记录</button>
-        </nav>
+        {message && <div className="admin-center-message admin-workspace-message">{message}</div>}
 
-        {message && <div className="admin-center-message">{message}</div>}
-
-        <div className="admin-center-body">
-          {tab === "users" && (
-            <div className="admin-users-layout">
-              <div className="admin-panel-card admin-create-card">
-                <div className="admin-card-title"><div><span>CREATE VIEWER</span><h3>建立查看账号</h3></div><em>Admin Only</em></div>
-                <form onSubmit={submitCreate}>
-                  <label>账号</label>
-                  <input value={newUsername} onChange={(event) => setNewUsername(event.target.value)} placeholder="例如 finance01" />
-                  <label>初始密码</label>
-                  <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="至少 8 位" />
-                  <label>允许查看的模块</label>
-                  <div className="admin-permission-list">
-                    {DASHBOARD_PERMISSION_LABELS.map((item) => (
-                      <label key={item.key} className="admin-permission-row">
-                        <input
-                          type="checkbox"
-                          checked={newPermissions[item.key]}
-                          onChange={(event) => setNewPermissions((prev) => ({ ...prev, [item.key]: event.target.checked }))}
-                        />
-                        <span><b>{item.label}</b><small>{item.note}</small></span>
-                      </label>
-                    ))}
-                  </div>
-                  <button className="admin-primary-btn" type="submit" disabled={createBusy}>{createBusy ? "建立中..." : "建立 Viewer 账号"}</button>
-                  <p className="admin-form-note">Viewer 永远没有“建立账号 / 修改权限 / 刷新数据”能力。</p>
-                </form>
-              </div>
-
-              <div className="admin-panel-card admin-user-list-card">
-                <div className="admin-card-title"><div><span>ACCOUNT ACCESS</span><h3>账号权限</h3></div><button type="button" className="admin-light-btn" onClick={() => void loadUsers()}>刷新列表</button></div>
-                {loading && !users.length ? <div className="admin-empty">正在读取账号...</div> : (
-                  <div className="admin-user-list">
-                    {users.map((user) => {
-                      const permissions = normalizedPermissions(user);
-                      return (
-                        <article className="admin-user-row" key={user.auth_user_id}>
-                          <div className="admin-user-main">
-                            <div className="admin-user-avatar">{user.username.slice(0, 1).toUpperCase()}</div>
-                            <div><h4>{user.username}</h4><p>{permissionSummary(user)}</p></div>
-                            <span className={user.role === "admin" ? "admin-user-role admin" : "admin-user-role"}>{user.role === "admin" ? "ADMIN" : "VIEWER"}</span>
-                            <span className={user.active ? "admin-user-state active" : "admin-user-state off"}>{user.active ? "正常" : "停用"}</span>
-                          </div>
-                          {user.role === "viewer" && (
-                            <div className="admin-user-controls">
-                              <div className="admin-user-permissions-inline">
-                                {DASHBOARD_PERMISSION_LABELS.map((item) => (
-                                  <label key={item.key}>
-                                    <input
-                                      type="checkbox"
-                                      checked={permissions[item.key]}
-                                      disabled={savingUser === user.username}
-                                      onChange={(event) => void saveViewer(user, { permissions: { ...permissions, [item.key]: event.target.checked } })}
-                                    />
-                                    {item.label}
-                                  </label>
-                                ))}
-                              </div>
-                              <div className="admin-user-buttons">
-                                <button type="button" onClick={() => void saveViewer(user, { active: !user.active })} disabled={savingUser === user.username}>{user.active ? "停用账号" : "启用账号"}</button>
-                                <button type="button" onClick={() => { setResetTarget(user.username); setResetPassword(""); }}>重置密码</button>
-                              </div>
-                            </div>
-                          )}
-                        </article>
-                      );
-                    })}
-                    {!users.length && <div className="admin-empty">还没有其他 Viewer 账号。</div>}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {tab === "data" && (
-            <div className="admin-data-grid">
-              <div className="admin-panel-card admin-data-hero">
-                <div><span>MANUAL DATA SYNC</span><h3>刷新最新数据</h3><p>自动 Cron 会继续每小时运行。这里是 Admin 的手动刷新入口，适合需要马上看到最新 Google 数据时使用。</p></div>
-                <button type="button" className="admin-refresh-all" disabled={Boolean(syncRunning)} onClick={() => void runAllLatest()}>{syncRunning === "all" ? "正在刷新全部..." : "刷新全部最新数据"}</button>
-              </div>
-              <div className="admin-panel-card admin-history-card">
-                <div className="admin-history-head">
-                  <div><span>HISTORY DATABASE</span><h3>历史数据补齐</h3><p>4 月开始的历史 Google 数据会后台逐日写入 Supabase。完成的日期不会重复读取。</p></div>
-                  <button type="button" className="admin-light-btn" onClick={() => void loadHistoryStatus()} disabled={historyLoading}>{historyLoading ? "读取中..." : "刷新进度"}</button>
+        <div className="admin-workspace-content">
+          {tab === "overview" && (
+            <>
+              <section className="admin-overview-hero">
+                <div><span>ROLE HIERARCHY</span><h2>三级账号权限架构</h2><p>总管理员只有 1 个；总管理员可以建立小管理员；小管理员只能在被授权时管理 Viewer，Viewer 永远只有查看权限。</p></div>
+                <div className="admin-hierarchy-flow"><div className="owner"><b>OWNER</b><strong>总管理员</strong><small>唯一最高权限</small></div><i>→</i><div className="admin"><b>ADMIN</b><strong>小管理员</strong><small>权限可细分</small></div><i>→</i><div><b>VIEWER</b><strong>查看账号</strong><small>仅查看模块</small></div></div>
+              </section>
+              <section className="admin-overview-stats">
+                <article><span>总管理员</span><strong>{stats.owners}</strong><small>系统唯一 Owner</small></article>
+                <article><span>小管理员</span><strong>{stats.admins}</strong><small>由 Owner 建立</small></article>
+                <article><span>查看账号</span><strong>{stats.viewers}</strong><small>Viewer 只读</small></article>
+                <article><span>停用账号</span><strong>{stats.disabled}</strong><small>无法登录系统</small></article>
+              </section>
+              <section className="admin-panel-card admin-overview-access">
+                <div><span>你的后台权限</span><h3>{roleLabel(profile.role)}</h3><p>{permissionSummary(profile)}</p></div>
+                <div className="admin-overview-capabilities">
+                  <span className={canManageUsers ? "on" : ""}>账号管理</span><span className={canRefreshData ? "on" : ""}>数据刷新</span><span className={canViewAudit ? "on" : ""}>操作记录</span>
                 </div>
-                {historyStatus ? (
-                  <>
-                    <div className="admin-history-progress-line"><div style={{ width: `${Math.max(0, Math.min(100, historyStatus.completedPct || 0))}%` }} /></div>
-                    <div className="admin-history-stats">
-                      <div><span>完成进度</span><b>{historyStatus.completed} / {historyStatus.total}</b><small>{historyStatus.completedPct.toFixed(1)}%</small></div>
-                      <div><span>待补任务</span><b>{historyStatus.pending + historyStatus.retry}</b><small>{historyStatus.nextPendingDate || "-"}</small></div>
-                      <div><span>失败任务</span><b>{historyStatus.failed}</b><small>{historyStatus.failed ? "需要检查" : "正常"}</small></div>
-                      <div><span>历史写入</span><b>{historyStatus.rowsWritten.toLocaleString()}</b><small>{historyStatus.lastSyncAt ? formatTime(historyStatus.lastSyncAt) : "尚未开始"}</small></div>
-                    </div>
-                    <div className="admin-history-actions"><span>自动任务每 5 分钟最多补同方向连续 3 天；全部完成后自动停止。</span><button type="button" disabled={Boolean(syncRunning)} onClick={() => void runHistoryNext()}>{syncRunning === "history_next" ? "正在补齐..." : "立即补下一项"}</button></div>
-                  </>
-                ) : (
-                  <div className="admin-history-empty">历史补齐队列尚未建立。执行 V246 的“08_历史数据自动补齐_费率自动更新”SQL 后，这里会显示进度。</div>
-                )}
-              </div>
-              <div className="admin-sync-jobs">
-                {SYNC_JOBS.map((job) => (
-                  <div className="admin-panel-card admin-sync-job" key={job.key}>
-                    <div><h4>{job.label}</h4><p>{job.note}</p></div>
-                    <button type="button" disabled={Boolean(syncRunning)} onClick={() => void runJob(job.key)}>{syncRunning === job.key ? "刷新中..." : "立即刷新"}</button>
+              </section>
+            </>
+          )}
+
+          {tab === "users" && (canManageUsers || isOwner) && (
+            <div className="admin-users-layout-v249">
+              <section className="admin-panel-card admin-create-card-v249">
+                <div className="admin-card-title"><div><span>CREATE ACCOUNT</span><h3>建立新账号</h3></div><em>{isOwner ? "OWNER CONTROL" : "ADMIN"}</em></div>
+                <div className="admin-role-picker">
+                  {isOwner && <button type="button" className={newRole === "admin" ? "active" : ""} onClick={() => resetCreateRole("admin")}><b>小管理员</b><small>可继续分配后台管理权限</small></button>}
+                  <button type="button" className={newRole === "viewer" ? "active" : ""} onClick={() => resetCreateRole("viewer")}><b>查看账号</b><small>只有业务模块查看权限</small></button>
+                </div>
+                <form onSubmit={submitCreate}>
+                  <label>账号</label><input value={newUsername} onChange={(e) => setNewUsername(e.target.value)} placeholder={newRole === "admin" ? "例如 manager01" : "例如 finance01"} />
+                  <label>初始密码</label><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="至少 8 位" />
+                  <label>业务模块权限</label>
+                  <div className="admin-permission-list">
+                    {DASHBOARD_PERMISSION_LABELS.map((item) => <label key={item.key} className="admin-permission-row"><input type="checkbox" checked={newPermissions[item.key]} onChange={(e) => setNewPermissions((prev) => ({ ...prev, [item.key]: e.target.checked }))} /><span><b>{item.label}</b><small>{item.note}</small></span></label>)}
                   </div>
-                ))}
-              </div>
-              {syncProgress.length > 0 && <div className="admin-panel-card admin-sync-progress"><h4>本次执行结果</h4>{syncProgress.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)}</div>}
+                  {newRole === "admin" && isOwner && <><label>后台管理权限</label><div className="admin-permission-list management-list">{MANAGEMENT_OPTIONS.map((item) => <label key={item.key} className="admin-permission-row"><input type="checkbox" checked={newManagement[item.key]} onChange={(e) => setNewManagement((prev) => ({ ...prev, [item.key]: e.target.checked }))} /><span><b>{item.label}</b><small>{item.note}</small></span></label>)}</div></>}
+                  <button className="admin-primary-btn" type="submit" disabled={createBusy}>{createBusy ? "建立中..." : `建立${newRole === "admin" ? "小管理员" : "查看账号"}`}</button>
+                  <p className="admin-form-note">小管理员不能建立其他管理员；只有总管理员可以建立 / 删除 / 修改小管理员。</p>
+                </form>
+              </section>
+
+              <section className="admin-panel-card admin-user-list-card-v249">
+                <div className="admin-card-title"><div><span>ACCOUNT DIRECTORY</span><h3>账号目录</h3></div><button type="button" className="admin-light-btn" onClick={() => void loadUsers()}>刷新列表</button></div>
+                {loading && !users.length ? <div className="admin-empty">正在读取账号...</div> : <div className="admin-user-list-v249">
+                  {users.map((user) => {
+                    const permissions = normalizedPermissions(user);
+                    const managerPermissions = normalizedManagementPermissions(user);
+                    const editable = canEditTarget(user);
+                    return <article className={`admin-user-row-v249 role-${user.role}`} key={user.auth_user_id}>
+                      <div className="admin-user-row-head"><div className="admin-user-avatar">{user.username.slice(0, 1).toUpperCase()}</div><div className="admin-user-identity"><div><h4>{user.username}</h4><span className={`admin-user-role ${user.role}`}>{roleEnglish(user.role)}</span><span className={user.active ? "admin-user-state active" : "admin-user-state off"}>{user.active ? "正常" : "停用"}</span></div><p>{permissionSummary(user)}</p></div></div>
+                      {editable && <div className="admin-user-edit-grid">
+                        <div><span className="admin-inline-title">业务模块</span><div className="admin-user-permissions-inline">{DASHBOARD_PERMISSION_LABELS.map((item) => <label key={item.key}><input type="checkbox" checked={permissions[item.key]} disabled={savingUser === user.username} onChange={(e) => void saveAccount(user, { permissions: { ...permissions, [item.key]: e.target.checked } })} />{item.label}</label>)}</div></div>
+                        {user.role === "admin" && isOwner && <div><span className="admin-inline-title">后台管理</span><div className="admin-user-permissions-inline management">{MANAGEMENT_OPTIONS.map((item) => <label key={item.key}><input type="checkbox" checked={managerPermissions[item.key]} disabled={savingUser === user.username} onChange={(e) => void saveAccount(user, { management_permissions: { ...managerPermissions, [item.key]: e.target.checked } })} />{item.label}</label>)}</div></div>}
+                        <div className="admin-user-buttons-v249"><button type="button" onClick={() => void saveAccount(user, { active: !user.active })}>{user.active ? "停用" : "启用"}</button><button type="button" onClick={() => { setResetTarget(resetTarget === user.username ? "" : user.username); setResetPassword(""); }}>重置密码</button><button className="danger" type="button" onClick={() => void removeAccount(user)}>删除账号</button></div>
+                        {resetTarget === user.username && <form className="admin-inline-reset" onSubmit={submitResetPassword}><input type="password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} placeholder="输入新的临时密码（至少 8 位）" autoFocus /><button type="submit" disabled={savingUser === user.username}>保存新密码</button><button type="button" onClick={() => setResetTarget("")}>取消</button></form>}
+                      </div>}
+                      {!editable && user.role === "owner" && <div className="admin-owner-lock">唯一总管理员账号 · 不能在这里停用、删除或被其他账号修改</div>}
+                    </article>;
+                  })}
+                </div>}
+              </section>
             </div>
           )}
 
-          {tab === "audit" && (
-            <div className="admin-panel-card admin-audit-card">
-              <div className="admin-card-title"><div><span>ADMIN AUDIT LOG</span><h3>后台操作记录</h3></div><button type="button" className="admin-light-btn" onClick={() => void loadAudit()}>刷新记录</button></div>
-              <div className="admin-audit-table-wrap">
-                <table className="admin-audit-table">
-                  <thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>目标</th></tr></thead>
-                  <tbody>
-                    {logs.map((log) => <tr key={log.id}><td>{formatTime(log.created_at)}</td><td>{log.actor_username || "system"}</td><td>{actionLabel(log.action)}</td><td>{log.target_username || "-"}</td></tr>)}
-                  </tbody>
-                </table>
-                {!logs.length && <div className="admin-empty">暂无操作记录。</div>}
-              </div>
+          {tab === "data" && canRefreshData && (
+            <div className="admin-data-grid">
+              <section className="admin-panel-card admin-data-hero"><div><span>MANUAL DATA SYNC</span><h3>数据同步控制</h3><p>自动 Cron 继续后台运行；这里只有需要立即获取最新数据时才手动执行。</p></div><button type="button" className="admin-refresh-all" disabled={Boolean(syncRunning)} onClick={() => void runAllLatest()}>{syncRunning === "all" ? "正在刷新全部..." : "刷新全部最新数据"}</button></section>
+              <section className="admin-panel-card admin-history-card">
+                <div className="admin-history-head"><div><span>HISTORY DATABASE</span><h3>历史数据补齐</h3><p>历史 Google 数据后台写入 Supabase；成功日期不会重复读取。</p></div><button type="button" className="admin-light-btn" onClick={() => void loadHistoryStatus()} disabled={historyLoading}>{historyLoading ? "读取中..." : "刷新进度"}</button></div>
+                {historyStatus ? <><div className="admin-history-progress-line"><div style={{ width: `${Math.max(0, Math.min(100, historyStatus.completedPct || 0))}%` }} /></div><div className="admin-history-stats"><div><span>完成进度</span><b>{historyStatus.completed} / {historyStatus.total}</b><small>{historyStatus.completedPct.toFixed(1)}%</small></div><div><span>待补任务</span><b>{historyStatus.pending + historyStatus.retry}</b><small>{historyStatus.nextPendingDate || "-"}</small></div><div><span>失败任务</span><b>{historyStatus.failed}</b><small>{historyStatus.failed ? "需要检查" : "正常"}</small></div><div><span>历史写入</span><b>{historyStatus.rowsWritten.toLocaleString()}</b><small>{historyStatus.lastSyncAt ? formatTime(historyStatus.lastSyncAt) : "尚未开始"}</small></div></div><div className="admin-history-actions"><span>历史全部完成后自动停止任务。</span><button type="button" disabled={Boolean(syncRunning)} onClick={() => void runHistoryNext()}>{syncRunning === "history_next" ? "正在补齐..." : "立即补下一项"}</button></div></> : <div className="admin-history-empty">暂时没有历史进度数据。</div>}
+              </section>
+              <section className="admin-sync-jobs">{SYNC_JOBS.map((job) => <div className="admin-panel-card admin-sync-job" key={job.key}><div><h4>{job.label}</h4><p>{job.note}</p></div><button type="button" disabled={Boolean(syncRunning)} onClick={() => void runJob(job.key)}>{syncRunning === job.key ? "刷新中..." : "立即刷新"}</button></div>)}</section>
+              {syncProgress.length > 0 && <section className="admin-panel-card admin-sync-progress"><h4>本次执行结果</h4>{syncProgress.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)}</section>}
             </div>
+          )}
+
+          {tab === "audit" && canViewAudit && (
+            <section className="admin-panel-card admin-audit-card-v249"><div className="admin-card-title"><div><span>ADMIN AUDIT LOG</span><h3>后台操作记录</h3></div><button type="button" className="admin-light-btn" onClick={() => void loadAudit()}>刷新记录</button></div><div className="admin-audit-table-wrap"><table className="admin-audit-table"><thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>目标</th></tr></thead><tbody>{logs.map((log) => <tr key={log.id}><td>{formatTime(log.created_at)}</td><td>{log.actor_username || "system"}</td><td>{actionLabel(log.action)}</td><td>{log.target_username || "-"}</td></tr>)}</tbody></table>{!logs.length && <div className="admin-empty">暂无操作记录。</div>}</div></section>
           )}
         </div>
-
-        {resetTarget && (
-          <div className="admin-reset-layer">
-            <form className="admin-reset-card" onSubmit={submitResetPassword}>
-              <h3>重置 {resetTarget} 的密码</h3>
-              <p>设置一个新的初始密码，保存后旧密码立即失效。</p>
-              <input type="password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} placeholder="至少 8 位" autoFocus />
-              <div><button type="button" onClick={() => setResetTarget("")}>取消</button><button type="submit" disabled={savingUser === resetTarget}>确认重置</button></div>
-            </form>
-          </div>
-        )}
-      </section>
+      </main>
     </div>
   );
 }

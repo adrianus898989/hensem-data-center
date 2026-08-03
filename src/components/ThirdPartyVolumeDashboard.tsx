@@ -594,6 +594,10 @@ function dateMatches(date: string, start: string, end: string): boolean {
   return true;
 }
 
+function rowsMatchRequest(rows: ThirdPartyVolumeRow[], start: string, end: string, country = ""): boolean {
+  return rows.some((row) => dateMatches(row.date, start, end) && (!country || rowMatchesCountryPage(row, country)));
+}
+
 function dateAdd(date: string, days: number): string {
   const d = new Date(`${date}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) return date;
@@ -617,11 +621,12 @@ function rangeIncludesCurrentMonth(start = "", end = ""): boolean {
   return Array.from(activeMonths).some((month) => safeStart <= month && safeEnd >= month);
 }
 
-function thirdPartyVolumeApiUrl(start = "", end = "", version = ""): string {
+function thirdPartyVolumeApiUrl(start = "", end = "", version = "", country = ""): string {
   const params = new URLSearchParams();
   if (start) params.set("start", start);
   if (end) params.set("end", end);
-  // V237：checksum 变化时 URL 才变化，避免旧 CDN 缓存挡住刚完成的小时更新。
+  if (country) params.set("country", country);
+  // V250：页面只请求当前国家切片；PostgreSQL RPC 一次返回，不再每 1000 行分页几十次。
   if (version) params.set("v", version);
   const query = params.toString();
   return query ? `/api/supabase-third-party-volume?${query}` : "/api/supabase-third-party-volume";
@@ -1885,8 +1890,20 @@ export default function ThirdPartyVolumeDashboard() {
   const [channel, setChannel] = useState("");
   const [direction, setDirection] = useState("");
   const [channelTypeSelections, setChannelTypeSelections] = useState<string[]>([]);
+  // V248：筛选条件分成「待查询」和「已应用」两套。
+  // 用户修改日期/平台/三方/类型/方向时，不再立即改变当前结果；只有点「查询」才一次性切换。
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [appliedStartDate, setAppliedStartDate] = useState("");
+  const [appliedEndDate, setAppliedEndDate] = useState("");
+  const [appliedCountrySelections, setAppliedCountrySelections] = useState<string[]>([]);
+  const [appliedPlatformSelections, setAppliedPlatformSelections] = useState<string[]>([]);
+  const [appliedChannel, setAppliedChannel] = useState("");
+  const [appliedDirection, setAppliedDirection] = useState("");
+  const [appliedChannelTypeSelections, setAppliedChannelTypeSelections] = useState<string[]>([]);
+  const [appliedCountryPage, setAppliedCountryPage] = useState("");
+  const [isQuerying, setIsQuerying] = useState(false);
+  const [lastQueryAt, setLastQueryAt] = useState("");
   const startDateRef = useRef("");
   const endDateRef = useRef("");
   const [mainTab, setMainTab] = useState<VolumeMainTab>("country");
@@ -1919,12 +1936,12 @@ export default function ThirdPartyVolumeDashboard() {
     return out;
   }, []);
 
-  async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "") {
+  async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "", requestedCountry = "") {
     // V247：Supabase 已有数据时，任何瞬时网络/API问题都不能把整页从有数据变成 0。
     if (!silent && !(payloadRef.current?.rows || []).length) setState("loading");
     setError("");
     try {
-      const volumeUrl = thirdPartyVolumeApiUrl(requestedStart, requestedEnd, version);
+      const volumeUrl = thirdPartyVolumeApiUrl(requestedStart, requestedEnd, version, requestedCountry);
       const authHeaders = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
       const cachedRateBeforeFetch = ratePayload || readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY);
       const shouldFetchRates = !ratePayloadFresh(cachedRateBeforeFetch);
@@ -1955,10 +1972,10 @@ export default function ThirdPartyVolumeDashboard() {
       const volumeRows = json?.rows || [];
       const currentPayload = payloadRef.current;
       const currentRows = currentPayload?.rows || [];
-      const currentMatchesSelection = Boolean(currentRows.length && currentRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd)));
+      const currentMatchesSelection = Boolean(currentRows.length && rowsMatchRequest(currentRows, requestedStart, requestedEnd, requestedCountry));
       const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY);
       const cachedRows = cachedVolume?.rows || [];
-      const cacheMatchesSelection = Boolean(cachedRows.length && cachedRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd)));
+      const cacheMatchesSelection = Boolean(cachedRows.length && rowsMatchRequest(cachedRows, requestedStart, requestedEnd, requestedCountry));
 
       if (!volumeRows.length && (currentMatchesSelection || cacheMatchesSelection)) {
         // 关键修复：本次异常空结果不覆盖上一份成功数据，也绝不写入 last-good cache。
@@ -1972,7 +1989,8 @@ export default function ThirdPartyVolumeDashboard() {
         payloadRef.current = json;
         setDataNotice("");
         // 只有真实非空成功数据才允许成为 last-good，彻底避免“0 行缓存”污染下一次打开。
-        const cacheableCurrentSlice = rangeIncludesCurrentMonth(requestedStart, requestedEnd)
+        const cacheableCurrentSlice = !requestedCountry
+          && rangeIncludesCurrentMonth(requestedStart, requestedEnd)
           && (!requestedStart || !requestedEnd || requestedStart === requestedEnd);
         if (cacheableCurrentSlice && volumeRows.length) writeLocalCache(THIRD_PARTY_VOLUME_CACHE_KEY, json);
       }
@@ -1994,11 +2012,11 @@ export default function ThirdPartyVolumeDashboard() {
       const message = err instanceof Error ? err.message : "读取 Supabase 三方量失败";
       const currentPayload = payloadRef.current;
       const currentRows = currentPayload?.rows || [];
-      const currentMatchesSelection = Boolean(currentRows.length && currentRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd)));
+      const currentMatchesSelection = Boolean(currentRows.length && rowsMatchRequest(currentRows, requestedStart, requestedEnd, requestedCountry));
       const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY);
       const cachedRate = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY);
       const cachedRows = cachedVolume?.rows || [];
-      const cacheMatchesSelection = Boolean(cachedRows.length && cachedRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd)));
+      const cacheMatchesSelection = Boolean(cachedRows.length && rowsMatchRequest(cachedRows, requestedStart, requestedEnd, requestedCountry));
 
       if (currentPayload && currentMatchesSelection) {
         const shown = attachClientFallbackMessage(currentPayload, message);
@@ -2027,9 +2045,10 @@ export default function ThirdPartyVolumeDashboard() {
   }
 
   useEffect(() => {
-    startDateRef.current = startDate;
-    endDateRef.current = endDate;
-  }, [startDate, endDate]);
+    // 后台小时静默刷新只刷新「已查询」范围，不能因为用户只是改了输入框就偷偷查询。
+    startDateRef.current = appliedStartDate;
+    endDateRef.current = appliedEndDate;
+  }, [appliedStartDate, appliedEndDate]);
 
   useEffect(() => { payloadRef.current = payload; }, [payload]);
 
@@ -2045,6 +2064,8 @@ export default function ThirdPartyVolumeDashboard() {
     const yesterday = yesterdayLocalDateKey();
     setStartDate(yesterday);
     setEndDate(yesterday);
+    setAppliedStartDate(yesterday);
+    setAppliedEndDate(yesterday);
     startDateRef.current = yesterday;
     endDateRef.current = yesterday;
 
@@ -2075,32 +2096,42 @@ export default function ThirdPartyVolumeDashboard() {
 
   const rows = useMemo(() => (payload?.rows || []).map(normalizeVolumeRowForDisplay).filter((row) => !isHiddenCountry(row.country)), [payload]);
   const countries = useMemo(() => sortCountries(rows.map((row) => row.country)), [rows]);
-  // 国家页签固定按当前模块的国家范围显示。选中某个国家后，即使当前日期没有数据，也不跳回其它国家，避免平台下拉出现其它国家盘口。
-  // 额外增加“所有国家USDT”：不改变原国家，只把所有国家里 USDT/TRX/TRC20 通道集中到一个页面。
+  // V250：月份查询只拉当前国家，因此国家页签不能再只依赖当前 payload。
+  // 费率/盘口状态本身很小且包含完整国家范围，用它补齐固定国家导航。
   const countryTabs = useMemo(() => {
-    const tabs = [...countries];
-    if (rows.some(isUsdtVolumeRow) && !tabs.includes(ALL_USDT_COUNTRY_PAGE)) tabs.push(ALL_USDT_COUNTRY_PAGE);
+    const rateCountries = [
+      ...(ratePayload?.rates || []).map((row) => normalizeCountryLabel(row.country || row.sheetName || "")),
+      ...(ratePayload?.platformStatuses || []).map((row) => normalizeCountryLabel(row.country || row.sheetName || ""))
+    ].filter((item) => item && !isHiddenCountry(item));
+    const tabs = sortCountries([...countries, ...rateCountries]);
+    const rateHasUsdt = (ratePayload?.rates || []).some((row) => isUsdtFeeTarget(row.country || "", "", row.thirdParty || "", row.category || ""));
+    if ((rows.some(isUsdtVolumeRow) || rateHasUsdt) && !tabs.includes(ALL_USDT_COUNTRY_PAGE)) tabs.push(ALL_USDT_COUNTRY_PAGE);
     return tabs;
-  }, [countries, rows]);
+  }, [countries, rows, ratePayload]);
   const activeCountryPage = countryPage && countryTabs.includes(countryPage) ? countryPage : (mainTab === "country" ? (countryTabs[0] || "") : "");
-  const effectiveCountryFilter = mainTab === "country" ? activeCountryPage : country;
+  const resultCountryPage = appliedCountryPage || activeCountryPage;
+  const effectiveCountryFilter = mainTab === "country" ? resultCountryPage : country;
+
+  useEffect(() => {
+    if (!appliedCountryPage && activeCountryPage) setAppliedCountryPage(activeCountryPage);
+  }, [activeCountryPage, appliedCountryPage]);
 
   const filteredBaseNoDate = useMemo(() => {
     return rows.filter((row) => {
       if (!rowMatchesCountryPage(row, effectiveCountryFilter)) return false;
-      if (countrySelections.length && !countrySelections.includes(row.country)) return false;
-      if (platformSelections.length && !platformSelections.includes(row.platform)) return false;
-      if (channel && row.channel !== channel) return false;
-      if (direction && row.direction !== direction) return false;
+      if (appliedCountrySelections.length && !appliedCountrySelections.includes(row.country)) return false;
+      if (appliedPlatformSelections.length && !appliedPlatformSelections.includes(row.platform)) return false;
+      if (appliedChannel && row.channel !== appliedChannel) return false;
+      if (appliedDirection && row.direction !== appliedDirection) return false;
       return true;
     });
-  }, [rows, effectiveCountryFilter, countrySelections, platformSelections, channel, direction]);
+  }, [rows, effectiveCountryFilter, appliedCountrySelections, appliedPlatformSelections, appliedChannel, appliedDirection]);
 
-  const filteredBase = useMemo(() => filteredBaseNoDate.filter((row) => dateMatches(row.date, startDate, endDate)), [filteredBaseNoDate, startDate, endDate]);
+  const filteredBase = useMemo(() => filteredBaseNoDate.filter((row) => dateMatches(row.date, appliedStartDate, appliedEndDate)), [filteredBaseNoDate, appliedStartDate, appliedEndDate]);
 
   const isAllDailyPage = false;
   const isAllMonthlyPage = false;
-  const optionCountryFilter = mainTab === "country" ? activeCountryPage : country;
+  const optionCountryFilter = mainTab === "country" ? resultCountryPage : country;
   const selectedPlatformSet = useMemo(() => new Set(platformSelections), [platformSelections]);
   const optionScopedRowsBeforeCountry = useMemo(() => rows.filter((row) => rowMatchesCountryPage(row, optionCountryFilter)), [rows, optionCountryFilter]);
   const countryFilterOptions = useMemo(() => sortCountries(optionScopedRowsBeforeCountry.map((row) => row.country)), [optionScopedRowsBeforeCountry]);
@@ -2133,12 +2164,12 @@ export default function ThirdPartyVolumeDashboard() {
       setChannelTypeSelections([]);
     }
   }, [platforms, platformSelections]);
-  const filtered = useMemo(() => filteredBase.filter((row) => !channelTypeSelections.length || channelTypeSelections.includes(row.channelType || "其他类型")), [filteredBase, channelTypeSelections]);
-  const filteredNoDate = useMemo(() => filteredBaseNoDate.filter((row) => !channelTypeSelections.length || channelTypeSelections.includes(row.channelType || "其他类型")), [filteredBaseNoDate, channelTypeSelections]);
+  const filtered = useMemo(() => filteredBase.filter((row) => !appliedChannelTypeSelections.length || appliedChannelTypeSelections.includes(row.channelType || "其他类型")), [filteredBase, appliedChannelTypeSelections]);
+  const filteredNoDate = useMemo(() => filteredBaseNoDate.filter((row) => !appliedChannelTypeSelections.length || appliedChannelTypeSelections.includes(row.channelType || "其他类型")), [filteredBaseNoDate, appliedChannelTypeSelections]);
 
   const summary = useMemo(() => sumRows(filtered), [filtered]);
-  const countryPageRows = useMemo(() => filtered.filter((row) => activeCountryPage && rowMatchesCountryPage(row, activeCountryPage)), [filtered, activeCountryPage]);
-  const countryPageRowsNoDate = useMemo(() => filteredNoDate.filter((row) => activeCountryPage && rowMatchesCountryPage(row, activeCountryPage)), [filteredNoDate, activeCountryPage]);
+  const countryPageRows = useMemo(() => filtered.filter((row) => resultCountryPage && rowMatchesCountryPage(row, resultCountryPage)), [filtered, resultCountryPage]);
+  const countryPageRowsNoDate = useMemo(() => filteredNoDate.filter((row) => resultCountryPage && rowMatchesCountryPage(row, resultCountryPage)), [filteredNoDate, resultCountryPage]);
   const countryPageSummary = useMemo(() => sumRows(countryPageRows), [countryPageRows]);
   const countryPageMonthlyRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.country, row.channel]), [countryPageRows]);
   const countryPageMonthlyPeriodRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.date.slice(0, 7), row.country, row.channel]), [countryPageRows]);
@@ -2156,7 +2187,7 @@ export default function ThirdPartyVolumeDashboard() {
   const platformFeeRows = useMemo(() => buildFeeCompareRows(platformFeeBaseRows, ratePayload?.rates || [], ratePayload?.platformStatuses || [], "platform"), [platformFeeBaseRows, ratePayload]);
   const dailyFeeRows = useMemo(() => buildFeeCompareRows(dailyCompareBaseRows, ratePayload?.rates || [], ratePayload?.platformStatuses || [], "daily"), [dailyCompareBaseRows, ratePayload]);
   const feeWarnings = useMemo(() => feeWarningRows(dailyFeeRows), [dailyFeeRows]);
-  const countryPageFeeRows = useMemo(() => dailyFeeRows.filter((row) => activeCountryPage && feeRowMatchesCountryPage(row, activeCountryPage)), [dailyFeeRows, activeCountryPage]);
+  const countryPageFeeRows = useMemo(() => dailyFeeRows.filter((row) => resultCountryPage && feeRowMatchesCountryPage(row, resultCountryPage)), [dailyFeeRows, resultCountryPage]);
   const dashboardFeeStatItems = useMemo(() => buildFeeStatItems(dailyFeeRows.length ? dailyFeeRows : platformFeeRows), [dailyFeeRows, platformFeeRows]);
 
   const aliasRows = useMemo(() => {
@@ -2177,9 +2208,9 @@ export default function ThirdPartyVolumeDashboard() {
   }, [feeWarnings, aliasRows, platformRows]);
 
   function openSnapshotMonth(item: { start: string; end: string }) {
+    // 月份按钮只负责填条件；像正常后台一样，等用户点击「查询」后才读取并切换结果。
     setStartDate(item.start);
     setEndDate(item.end);
-    void loadData(true, item.start, item.end);
   }
 
   function switchVolumeMode(nextMode: "daily" | "monthly") {
@@ -2188,41 +2219,82 @@ export default function ThirdPartyVolumeDashboard() {
     setChannel("");
     setChannelTypeSelections([]);
     if (nextMode === "monthly") {
-      const range = monthDateRange(startDate || endDate || defaultEnd(rows));
+      const range = monthDateRange(startDate || endDate || appliedEndDate || defaultEnd(rows));
       setStartDate(range.start);
       setEndDate(range.end);
-      void loadData(true, range.start, range.end);
     }
   }
 
   function applyDateShortcut(mode: DateShortcut) {
-    const range = shortcutDateRange(mode, startDate || endDate);
+    const range = shortcutDateRange(mode, startDate || endDate || appliedEndDate);
     setStartDate(range.start);
     setEndDate(range.end);
-    void loadData(true, range.start, range.end);
   }
 
   function shiftDateRange(days: number) {
     if (volumeMode === "monthly") {
-      const base = startDate || endDate || defaultEnd(rows) || formatLocalDateKey(new Date());
+      const base = startDate || endDate || appliedEndDate || defaultEnd(rows) || formatLocalDateKey(new Date());
       const current = new Date(`${base}T00:00:00`);
       if (Number.isNaN(current.getTime())) return;
       current.setMonth(current.getMonth() + days);
       const range = monthDateRange(formatLocalDateKey(current));
       setStartDate(range.start);
       setEndDate(range.end);
-      void loadData(true, range.start, range.end);
       return;
     }
 
-    const baseStart = startDate || endDate || defaultEnd(rows) || formatLocalDateKey(new Date());
-    const baseEnd = endDate || startDate || baseStart;
-    const nextStart = dateAdd(baseStart, days);
-    const nextEnd = dateAdd(baseEnd, days);
-    setStartDate(nextStart);
-    setEndDate(nextEnd);
-    void loadData(true, nextStart, nextEnd);
+    const baseStart = startDate || endDate || appliedStartDate || defaultEnd(rows) || formatLocalDateKey(new Date());
+    const baseEnd = endDate || startDate || appliedEndDate || baseStart;
+    setStartDate(dateAdd(baseStart, days));
+    setEndDate(dateAdd(baseEnd, days));
   }
+
+  async function runQuery() {
+    const queryStart = startDate || endDate || appliedStartDate || yesterdayLocalDateKey();
+    const queryEnd = endDate || startDate || appliedEndDate || queryStart;
+    setIsQuerying(true);
+    try {
+      const queryCountry = mainTab === "country" ? activeCountryPage : country;
+      await loadData(true, queryStart, queryEnd, "", queryCountry);
+      // 只有点击查询后才把所有筛选条件应用到结果。
+      setAppliedCountryPage(queryCountry);
+      setAppliedStartDate(queryStart);
+      setAppliedEndDate(queryEnd);
+      setAppliedCountrySelections([...countrySelections]);
+      setAppliedPlatformSelections([...platformSelections]);
+      setAppliedChannel(channel);
+      setAppliedDirection(direction);
+      setAppliedChannelTypeSelections([...channelTypeSelections]);
+      setLastQueryAt(new Date().toISOString());
+    } finally {
+      setIsQuerying(false);
+    }
+  }
+
+  const hasPendingQuery = Boolean(
+    (mainTab === "country" && activeCountryPage !== (appliedCountryPage || activeCountryPage))
+    || startDate !== appliedStartDate
+    || endDate !== appliedEndDate
+    || countrySelections.join("|||") !== appliedCountrySelections.join("|||")
+    || platformSelections.join("|||") !== appliedPlatformSelections.join("|||")
+    || channel !== appliedChannel
+    || direction !== appliedDirection
+    || channelTypeSelections.join("|||") !== appliedChannelTypeSelections.join("|||")
+  );
+
+  const appliedCoverage = useMemo(() => {
+    const start = appliedStartDate;
+    const end = appliedEndDate || start;
+    if (!start || !end) return { expected: 0, loaded: 0, incomplete: false };
+    const a = new Date(`${start}T00:00:00Z`);
+    const b = new Date(`${end}T00:00:00Z`);
+    if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime()) || b < a) return { expected: 0, loaded: 0, incomplete: false };
+    const expected = Math.floor((b.getTime() - a.getTime()) / 86400000) + 1;
+    const loaded = new Set(rows.filter((row) => dateMatches(row.date, start, end)).map((row) => row.date)).size;
+    const today = formatLocalDateKey(new Date());
+    const incomplete = expected > 1 && end < today && loaded < expected;
+    return { expected, loaded, incomplete };
+  }, [rows, appliedStartDate, appliedEndDate]);
 
   if (state === "loading") return <div className="loading inner-loading">正在读取三方量...</div>;
   if (state === "error") {
@@ -2248,7 +2320,23 @@ export default function ThirdPartyVolumeDashboard() {
           <div><b>已保护当前数据</b><span>{dataNotice}</span></div>
         </div>
       )}
-      {!rows.some((row) => dateMatches(row.date, startDate, endDate)) && (
+      <div className="volume-query-status">
+        <div className="volume-query-status-main">
+          <span className={cls("volume-query-status-dot", isQuerying && "loading")} />
+          <div>
+            <b>{isQuerying ? "正在查询 Supabase" : "当前结果"}</b>
+            <span>{resultCountryPage ? `${countryPaneLabel(resultCountryPage)} · ` : ""}{appliedStartDate || "-"} 至 {appliedEndDate || appliedStartDate || "-"}{lastQueryAt ? ` · ${new Date(lastQueryAt).toLocaleTimeString("zh-CN", { hour12: false })}` : ""}</span>
+          </div>
+        </div>
+        {hasPendingQuery && !isQuerying && <span className="volume-query-pending">条件已修改 · 点击「查询」后应用</span>}
+      </div>
+      {appliedCoverage.incomplete && (
+        <div className="volume-history-progress-notice">
+          <span className="volume-history-progress-icon">↻</span>
+          <div><b>历史数据库仍在补齐</b><span>当前查询范围已入库 {appliedCoverage.loaded}/{appliedCoverage.expected} 天。现在显示的是已进入 Supabase 的部分数据，不是在等待 Google；补齐前不要把整月汇总当作最终值。</span></div>
+        </div>
+      )}
+      {!rows.some((row) => dateMatches(row.date, appliedStartDate, appliedEndDate)) && (
         <div className="volume-empty-notice">
           <div className="volume-empty-icon">i</div>
           <div><b>该日期暂时没有数据</b><span>数据库尚未收到这个日期的三方量。后台自动同步/历史补齐完成后，再次查询即可显示；页面不会报错。</span></div>
@@ -2292,7 +2380,7 @@ export default function ThirdPartyVolumeDashboard() {
           <div className="field"><label>统一三方</label><select className="input" value={channel} onChange={(event) => { setChannel(event.target.value); setChannelTypeSelections([]); }}><option value="">全部三方</option>{channels.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
           <VolumeMultiSelect label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" />
           <div className="field"><label>业务方向</label><select className="input" value={direction} onChange={(event) => setDirection(event.target.value)}><option value="">全部方向</option><option value="代收">代收</option><option value="代付">代付</option></select></div>
-          <div className="action-row action-row-v2"><button className="primary-btn" type="button" onClick={() => { void loadData(true, startDate, endDate); }}>查询</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(-1)}>{volumeMode === "monthly" ? "上一月" : "上一日"}</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(1)}>{volumeMode === "monthly" ? "下一月" : "下一日"}</button></div>
+          <div className="action-row action-row-v2"><button className="primary-btn volume-query-btn" type="button" disabled={isQuerying} onClick={() => { void runQuery(); }}>{isQuerying ? "查询中…" : "查询"}</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(-1)}>{volumeMode === "monthly" ? "上一月" : "上一日"}</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(1)}>{volumeMode === "monthly" ? "下一月" : "下一日"}</button></div>
         </div>
       </section>
 
@@ -2317,7 +2405,7 @@ export default function ThirdPartyVolumeDashboard() {
 
       {mainTab === "country" && isAllDailyPage && <DailyPage rows={dailyCompareRows} summary={summary} feeRows={dailyFeeRows} />}
       {mainTab === "country" && isAllMonthlyPage && <MonthlyTable title="三方量月汇总" subtitle="按月份 + 国家 + 统一三方汇总。选 5 月会直接显示 5 月总量，点查看可看这个月所有盘口明细。" rows={monthlyPeriodRows} columns={["月份", "国家", "统一三方"]} feeRows={dailyFeeRows} paginated />}
-      {mainTab === "country" && !isAllDailyPage && !isAllMonthlyPage && <CountryVolumeSinglePage country={activeCountryPage} rows={countryPageRows} summary={countryPageSummary} monthlyRows={countryPageMonthlyRows} monthlyPeriodRows={countryPageMonthlyPeriodRows} platformRows={countryPagePlatformRows} dailyRows={countryPageDailyRows} dailyCompareRows={countryPageDailyCompareRows} feeRows={countryPageFeeRows} dateRangeLabel={`${startDate || "-"} 至 ${endDate || "-"}`} volumeMode={volumeMode} />}
+      {mainTab === "country" && !isAllDailyPage && !isAllMonthlyPage && <CountryVolumeSinglePage country={resultCountryPage} rows={countryPageRows} summary={countryPageSummary} monthlyRows={countryPageMonthlyRows} monthlyPeriodRows={countryPageMonthlyPeriodRows} platformRows={countryPagePlatformRows} dailyRows={countryPageDailyRows} dailyCompareRows={countryPageDailyCompareRows} feeRows={countryPageFeeRows} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} volumeMode={volumeMode} />}
         </>
       )}
     </div>

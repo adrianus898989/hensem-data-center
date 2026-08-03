@@ -10,7 +10,8 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const start = url.searchParams.get("start") || url.searchParams.get("startDate") || "";
     const end = url.searchParams.get("end") || url.searchParams.get("endDate") || start;
-    const payload = await readSupabaseThirdPartyVolume(request, start, end);
+    const country = url.searchParams.get("country") || "";
+    const payload = await readSupabaseThirdPartyVolume(request, start, end, country);
     return NextResponse.json(payload, { status: 200, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error || "Supabase 三方量读取失败");
