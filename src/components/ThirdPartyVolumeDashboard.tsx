@@ -1951,7 +1951,7 @@ export default function ThirdPartyVolumeDashboard() {
 
   async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "", requestedCountry = "", forceRates = false) {
     // V247：Supabase 已有数据时，任何瞬时网络/API问题都不能把整页从有数据变成 0。
-    if (!silent && !(payloadRef.current?.rows || []).length) setState("loading");
+    if (!silent && !payloadRef.current) setState("loading");
     setError("");
     try {
       const volumeUrl = thirdPartyVolumeApiUrl(requestedStart, requestedEnd, version, requestedCountry);
@@ -2316,12 +2316,7 @@ export default function ThirdPartyVolumeDashboard() {
     return { expected: expectedDays * 2, loaded: Math.min(status.collectDays, expectedDays) + Math.min(status.payoutDays, expectedDays), incomplete: !complete, complete, failed: 0, historical: false };
   }, [volumeSyncStatus, appliedStartDate, appliedEndDate]);
 
-  if (state === "loading") return (
-    <div className="volume-initial-loading">
-      <div className="volume-initial-spinner" />
-      <div><b>正在读取 Supabase</b><span>只查询当前所需日期，不读取 Google Sheet。</span></div>
-    </div>
-  );
+  const initialLoading = state === "loading" && !payload;
   if (state === "error") {
     return (
       <div className="error-box inner-error">
@@ -2332,13 +2327,17 @@ export default function ThirdPartyVolumeDashboard() {
       </div>
     );
   }
-  if (!payload) return null;
-
   return (
-    <div className="work-order-module third-party-volume-module">
+    <div className={cls("work-order-module third-party-volume-module", initialLoading && "is-initial-loading")}>
       <div className="topbar third-party-clean-topbar">
         <div className="title"><h1>三方量/费率</h1><p>当前位置：Hensem数据后台 &gt; 三方量/费率</p></div>
       </div>
+      {initialLoading && (
+        <div className="volume-soft-loading">
+          <span className="volume-soft-loading-spinner" />
+          <div><b>正在载入数据库数据</b><span>页面结构会保持显示，完成后原位置直接更新，不会整页空白。</span></div>
+        </div>
+      )}
       {dataNotice && (
         <div className="volume-stable-notice">
           <span className="volume-stable-dot" />

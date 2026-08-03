@@ -4913,3 +4913,24 @@ td .rate-cell,
 .admin-inline-page .admin-primary-btn{background:linear-gradient(135deg,#2f6fed,#1d4ed8);box-shadow:0 10px 22px rgba(37,99,235,.18)}.admin-inline-page .admin-refresh-all{background:linear-gradient(135deg,#2f6fed,#274bcf)}
 
 @media(max-width:900px){.admin-inline-page{padding:16px}.admin-inline-header{align-items:flex-start;flex-direction:column}.admin-inline-role{width:100%}.volume-completeness-bar{align-items:flex-start;flex-direction:column}.volume-completeness-time{white-space:normal}}
+
+
+/* =========================================================
+   V252 — no blank query transitions + clearer admin submenu
+   ========================================================= */
+.volume-soft-loading{
+  margin:10px 0 12px;padding:10px 13px;display:flex;align-items:center;gap:10px;
+  border:1px solid #d7e5f8;border-radius:12px;background:linear-gradient(135deg,#f8fbff,#fff);
+  box-shadow:0 5px 18px rgba(15,23,42,.035);color:#334155
+}
+.volume-soft-loading-spinner{width:18px;height:18px;border:2px solid #dbeafe;border-top-color:#2563eb;border-radius:50%;animation:hensem-spin .75s linear infinite;flex:0 0 auto}
+.volume-soft-loading b{display:block;font-size:11px;color:#1f3552}.volume-soft-loading span{display:block;margin-top:2px;font-size:9px;color:#7e91a7}
+.third-party-volume-module.is-initial-loading .volume-summary-grid,.third-party-volume-module.is-initial-loading .table-shell{opacity:.58;transition:opacity .18s ease}
+.volume-query-status{position:relative}
+.volume-query-status-dot.loading{box-shadow:0 0 0 4px rgba(37,99,235,.09)}
+.nav-admin-submenu{gap:5px;margin:6px 8px 12px 30px;padding-left:11px}
+.nav-admin-submenu button{padding:10px 11px;border-radius:10px}
+.nav-admin-submenu span{font-size:12px;font-weight:850;line-height:1.25}
+.nav-admin-submenu small{margin-top:3px;font-size:9px;line-height:1.35;color:#7086a0}
+.nav-admin-submenu button.active{background:linear-gradient(90deg,rgba(47,111,237,.20),rgba(47,111,237,.08));box-shadow:inset 3px 0 0 #4f8cff}
+@media(max-width:900px){.nav-admin-submenu span{font-size:11px}.nav-admin-submenu small{font-size:8px}}
