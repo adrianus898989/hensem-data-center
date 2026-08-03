@@ -2,22 +2,28 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
+  addDashboardAllowedIp,
   canOpenAdminCenter,
   createDashboardAccount,
+  deleteDashboardAllowedIp,
   DASHBOARD_PERMISSION_LABELS,
   DEFAULT_ADMIN_MANAGEMENT_PERMISSIONS,
   DEFAULT_ADMIN_PERMISSIONS,
   DEFAULT_VIEWER_PERMISSIONS,
   deleteDashboardAccount,
   getDashboardHistoryStatus,
+  getDashboardIpSettings,
   listDashboardAudit,
   listDashboardUsers,
   normalizedManagementPermissions,
   normalizedPermissions,
   resetDashboardUserPassword,
+  setDashboardIpActive,
+  setDashboardIpWhitelistMode,
   triggerDashboardSync,
   updateDashboardAccount,
   type DashboardAuditLog,
+  type DashboardIpSettings,
   type DashboardManagementPermissions,
   type DashboardPermissions,
   type DashboardProfile,
@@ -100,6 +106,11 @@ function actionLabel(action: string) {
     reset_password: "重置密码",
     manual_sync: "手动刷新数据",
     manual_sync_failed: "手动刷新失败",
+    ip_whitelist_add: "添加白名单 IP",
+    ip_whitelist_update: "修改 IP 状态",
+    ip_whitelist_delete: "删除白名单 IP",
+    ip_whitelist_mode: "切换 IP 登录限制",
+    login_ip_denied: "IP 登录拒绝",
   };
   return labels[action] || action;
 }
@@ -184,6 +195,10 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   const [auditAction, setAuditAction] = useState("all");
   const [auditStartDate, setAuditStartDate] = useState("");
   const [auditEndDate, setAuditEndDate] = useState("");
+  const [ipSettings, setIpSettings] = useState<DashboardIpSettings | null>(null);
+  const [ipLoading, setIpLoading] = useState(false);
+  const [ipInput, setIpInput] = useState("");
+  const [ipNote, setIpNote] = useState("");
 
   const stats = useMemo(() => ({
     owners: users.filter((u) => u.role === "owner").length,
@@ -263,12 +278,68 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     finally { setAutoHistoryLoading(false); }
   }
 
+  async function loadIpSettings() {
+    if (!isOwner) return;
+    setIpLoading(true);
+    try {
+      const next = await getDashboardIpSettings(session);
+      setIpSettings(next);
+      setIpInput((old) => old || next.currentIp || "");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "读取 IP 白名单失败");
+    } finally { setIpLoading(false); }
+  }
+
+  async function addIp(event?: React.FormEvent) {
+    event?.preventDefault();
+    if (!isOwner || !ipInput.trim()) return;
+    setIpLoading(true); setMessage("");
+    try {
+      await addDashboardAllowedIp(session, ipInput.trim(), ipNote.trim());
+      setIpNote("");
+      setMessage(`${ipInput.trim()} 已加入白名单。`);
+      await Promise.all([loadIpSettings(), canViewAudit ? loadAudit() : Promise.resolve()]);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "添加 IP 失败"); }
+    finally { setIpLoading(false); }
+  }
+
+  async function toggleIpMode() {
+    if (!isOwner || !ipSettings) return;
+    setIpLoading(true); setMessage("");
+    try {
+      const result = await setDashboardIpWhitelistMode(session, !ipSettings.enabled);
+      setMessage(result?.message || "IP 登录模式已更新");
+      await Promise.all([loadIpSettings(), canViewAudit ? loadAudit() : Promise.resolve()]);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "更新 IP 登录模式失败"); }
+    finally { setIpLoading(false); }
+  }
+
+  async function toggleAllowedIp(id: number, active: boolean) {
+    setIpLoading(true); setMessage("");
+    try {
+      await setDashboardIpActive(session, id, active);
+      await Promise.all([loadIpSettings(), canViewAudit ? loadAudit() : Promise.resolve()]);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "更新 IP 失败"); }
+    finally { setIpLoading(false); }
+  }
+
+  async function removeAllowedIp(id: number) {
+    if (!window.confirm("确定删除这个白名单 IP？")) return;
+    setIpLoading(true); setMessage("");
+    try {
+      await deleteDashboardAllowedIp(session, id);
+      await Promise.all([loadIpSettings(), canViewAudit ? loadAudit() : Promise.resolve()]);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "删除 IP 失败"); }
+    finally { setIpLoading(false); }
+  }
+
   useEffect(() => {
     if (!open || !canOpenAdminCenter(profile)) return;
     setMessage("");
     void loadUsers();
     if (canViewAudit) void loadAudit();
     if (canRefreshData) { void loadHistoryStatus(); void loadAutoHistoryStatus(); }
+    if (isOwner) void loadIpSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, profile.role]);
 
@@ -430,15 +501,29 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
 
   const sectionTitle = tab === "users" ? "账号与权限" : tab === "data" ? "数据同步" : "操作记录";
   const sectionSubtitle = tab === "users"
-    ? "建立账号、分配业务模块与后台权限；只有 Owner 可以管理小管理员。"
+    ? "账号、角色、权限与 IP 登录控制。"
     : tab === "data"
-      ? "查看历史补齐进度，并在需要时立即同步今日、昨日或最新费率。"
-      : "查看账号建立、权限修改、密码重置、删除账号与手动同步记录。";
+      ? "同步状态与手动刷新。"
+      : "后台操作与调整记录。";
 
   const content = (
     <>
       {tab === "users" && (canManageUsers || isOwner) && (
         <div className="admin-users-layout-v249">
+          {isOwner && <section className="admin-panel-card admin-ip-card">
+            <div className="admin-card-title"><div><span>LOGIN ACCESS</span><h3>IP 白名单</h3><p className="admin-card-subtitle">当前 IP：{ipSettings?.currentIp || "读取中..."}</p></div><button type="button" className={ipSettings?.enabled ? "admin-ip-mode on" : "admin-ip-mode"} disabled={ipLoading || !ipSettings} onClick={() => void toggleIpMode()}>{ipSettings?.enabled ? "已开启 · 必须白名单" : "未开启 · 账号密码即可"}</button></div>
+            <form className="admin-ip-add" onSubmit={addIp}>
+              <input value={ipInput} onChange={(e) => setIpInput(e.target.value)} placeholder="IPv4 / IPv6" />
+              <input value={ipNote} onChange={(e) => setIpNote(e.target.value)} placeholder="备注，例如 办公室 / 家里" />
+              <button type="submit" disabled={ipLoading}>加入白名单</button>
+              {ipSettings?.currentIp && <button type="button" className="ghost" onClick={() => setIpInput(ipSettings.currentIp)}>填入当前 IP</button>}
+            </form>
+            <div className="admin-ip-list">
+              {(ipSettings?.rows || []).map((row) => <div className="admin-ip-row" key={row.id}><div><b>{row.ip}</b><span>{row.note || "无备注"}</span></div><em className={row.active ? "on" : "off"}>{row.active ? "启用" : "停用"}</em><button type="button" onClick={() => void toggleAllowedIp(row.id, !row.active)}>{row.active ? "停用" : "启用"}</button><button type="button" className="danger" onClick={() => void removeAllowedIp(row.id)}>删除</button></div>)}
+              {!ipLoading && !(ipSettings?.rows || []).length && <div className="admin-empty">还没有白名单 IP。先加入当前 IP，再开启限制。</div>}
+            </div>
+          </section>}
+
           <section className="admin-panel-card admin-create-card-v249">
             <div className="admin-card-title"><div><span>CREATE ACCOUNT</span><h3>建立新账号</h3></div><em>{isOwner ? "OWNER CONTROL" : "ADMIN"}</em></div>
             <div className="admin-role-picker">
@@ -454,7 +539,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
               </div>
               {newRole === "admin" && isOwner && <><label>后台管理权限</label><div className="admin-permission-list management-list">{MANAGEMENT_OPTIONS.map((item) => <label key={item.key} className="admin-permission-row"><input type="checkbox" checked={newManagement[item.key]} onChange={(e) => setNewManagement((prev) => ({ ...prev, [item.key]: e.target.checked }))} /><span><b>{item.label}</b><small>{item.note}</small></span></label>)}</div></>}
               <button className="admin-primary-btn" type="submit" disabled={createBusy}>{createBusy ? "建立中..." : `建立${newRole === "admin" ? "小管理员" : "查看账号"}`}</button>
-              <p className="admin-form-note">小管理员不能建立其他管理员；只有总管理员可以建立 / 删除 / 修改小管理员。</p>
+
             </form>
           </section>
 
@@ -489,16 +574,16 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
 
       {tab === "data" && canRefreshData && (
         <div className="admin-data-grid">
-          <section className="admin-panel-card admin-data-hero"><div><span>DATA CONTROL</span><h3>数据同步中心</h3><p>网站只查询 Supabase；浏览器「刷新」不会把 Google / RAW 数据写进数据库。这里的同步按钮才会真正触发后台写库。</p></div><button type="button" className="admin-refresh-all" disabled={Boolean(syncRunning)} onClick={() => void runAllLatest()}>{syncRunning === "all" ? "正在同步全部..." : "立即同步全部最新数据"}</button></section>
+          <section className="admin-panel-card admin-data-hero"><div><span>DATA CONTROL</span><h3>数据同步</h3></div><button type="button" className="admin-refresh-all" disabled={Boolean(syncRunning)} onClick={() => void runAllLatest()}>{syncRunning === "all" ? "正在同步全部..." : "立即同步全部最新数据"}</button></section>
 
           <div className="admin-history-grid">
             <section className="admin-panel-card admin-history-card">
-              <div className="admin-history-head"><div><span>THIRD PARTY HISTORY</span><h3>三方量历史补齐</h3><p>显示三方量 / 费率模块的历史任务完成情况。</p></div><button type="button" className="admin-light-btn" onClick={() => void loadHistoryStatus()} disabled={historyLoading}>{historyLoading ? "读取中..." : "刷新进度"}</button></div>
+              <div className="admin-history-head"><div><span>THIRD PARTY HISTORY</span><h3>三方量历史补齐</h3></div><button type="button" className="admin-light-btn" onClick={() => void loadHistoryStatus()} disabled={historyLoading}>{historyLoading ? "读取中..." : "刷新进度"}</button></div>
               {historyStatus ? <><div className="admin-history-progress-line"><div style={{ width: `${Math.max(0, Math.min(100, historyStatus.completedPct || 0))}%` }} /></div><div className="admin-history-stats"><div><span>完成</span><b>{historyStatus.completed} / {historyStatus.total}</b><small>{historyStatus.completedPct.toFixed(1)}%</small></div><div><span>待补</span><b>{historyStatus.pending + historyStatus.retry}</b><small>{historyStatus.nextPendingDate || "-"}</small></div><div><span>失败</span><b>{historyStatus.failed}</b><small>{historyStatus.failed ? "需要检查" : "正常"}</small></div><div><span>写入</span><b>{historyStatus.rowsWritten.toLocaleString()}</b><small>{historyStatus.lastSyncAt ? formatTime(historyStatus.lastSyncAt) : "尚未开始"}</small></div></div><div className="admin-history-actions"><span>{historyStatus.completed === historyStatus.total && historyStatus.failed === 0 ? "✓ 已全部补齐" : "后台会继续自动补齐。"}</span><button type="button" disabled={Boolean(syncRunning)} onClick={() => void runHistoryNext()}>{syncRunning === "history_next" ? "补齐中..." : "立即补下一项"}</button></div></> : <div className="admin-history-empty">暂时没有历史进度数据。</div>}
             </section>
 
             <section className="admin-panel-card admin-history-card auto-withdraw-history-card">
-              <div className="admin-history-head"><div><span>AUTO WITHDRAW HISTORY</span><h3>自动出款 / 操作人历史</h3><p>RAW → Supabase 历史补齐状态，包含自动出款与提现操作人两套数据。</p></div><button type="button" className="admin-light-btn" onClick={() => void loadAutoHistoryStatus()} disabled={autoHistoryLoading}>{autoHistoryLoading ? "读取中..." : "刷新进度"}</button></div>
+              <div className="admin-history-head"><div><span>AUTO WITHDRAW HISTORY</span><h3>自动出款 / 操作人历史</h3></div><button type="button" className="admin-light-btn" onClick={() => void loadAutoHistoryStatus()} disabled={autoHistoryLoading}>{autoHistoryLoading ? "读取中..." : "刷新进度"}</button></div>
               {autoHistoryStatus ? <><div className="admin-history-progress-line"><div style={{ width: `${Math.max(0, Math.min(100, autoHistoryStatus.completedPct || 0))}%` }} /></div><div className="admin-history-stats"><div><span>完成</span><b>{autoHistoryStatus.completed} / {autoHistoryStatus.total}</b><small>{autoHistoryStatus.completedPct.toFixed(1)}%</small></div><div><span>待补</span><b>{autoHistoryStatus.pending + autoHistoryStatus.retry}</b><small>{autoHistoryStatus.nextPendingDate || "-"}</small></div><div><span>失败</span><b>{autoHistoryStatus.failed}</b><small>{autoHistoryStatus.failed ? "需要检查" : "正常"}</small></div><div><span>写入</span><b>{autoHistoryStatus.rowsWritten.toLocaleString()}</b><small>{autoHistoryStatus.lastSyncAt ? formatTime(autoHistoryStatus.lastSyncAt) : "尚未开始"}</small></div></div><div className="admin-history-actions"><span>{autoHistoryStatus.completed === autoHistoryStatus.total && autoHistoryStatus.failed === 0 ? "✓ 已全部补齐" : "后台会继续自动补齐。"}</span><button type="button" disabled={Boolean(syncRunning)} onClick={() => void runAutoHistoryNext()}>{syncRunning === "auto_history_next" ? "补齐中..." : "立即补下一天"}</button></div></> : <div className="admin-history-empty">暂时没有自动出款历史进度。</div>}
             </section>
           </div>

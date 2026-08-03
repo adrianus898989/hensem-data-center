@@ -2329,27 +2329,23 @@ export default function ThirdPartyVolumeDashboard() {
   }
   return (
     <div className={cls("work-order-module third-party-volume-module", initialLoading && "is-initial-loading")}>
-      <div className="volume-page-heading">
-        <div><span>THIRD PARTY DATA</span><h1>三方量 / 费率</h1><p>Supabase 高速查询 · 条件修改后点击「查询」应用</p></div>
-        <div className="volume-page-heading-badge">SUPABASE</div>
-      </div>
       {initialLoading && (
         <div className="volume-soft-loading">
           <span className="volume-soft-loading-spinner" />
-          <div><b>正在载入数据库数据</b><span>页面结构会保持显示，完成后原位置直接更新，不会整页空白。</span></div>
+          <div><b>正在载入数据</b></div>
         </div>
       )}
       {dataNotice && (
         <div className="volume-stable-notice">
           <span className="volume-stable-dot" />
-          <div><b>已保护当前数据</b><span>{dataNotice}</span></div>
+          <div><b>{dataNotice}</b></div>
         </div>
       )}
       <div className="volume-query-status">
         <div className="volume-query-status-main">
           <span className={cls("volume-query-status-dot", isQuerying && "loading")} />
           <div>
-            <b>{isQuerying ? "正在查询 Supabase" : "当前结果"}</b>
+            <b>{isQuerying ? "查询中" : "当前结果"}</b>
             <span>{appliedStartDate || "-"} 至 {appliedEndDate || appliedStartDate || "-"}{lastQueryAt ? ` · ${new Date(lastQueryAt).toLocaleTimeString("zh-CN", { hour12: false })}` : ""}</span>
           </div>
         </div>
@@ -2360,7 +2356,7 @@ export default function ThirdPartyVolumeDashboard() {
           <div className="volume-completeness-main">
             <span className="volume-completeness-icon">{appliedCoverage.complete ? "✓" : appliedCoverage.incomplete ? "↻" : "●"}</span>
             <div>
-              <b>{appliedCoverage.complete ? "数据库数据已补齐" : appliedCoverage.historical ? "历史数据正在补齐" : "当前数据同步中"}</b>
+              <b>{appliedCoverage.complete ? "数据已齐" : appliedCoverage.historical ? "历史补齐中" : "同步中"}</b>
               <span>{volumeSyncStatus.historyTasks > 0
                 ? `${volumeSyncStatus.historySuccess}/${volumeSyncStatus.historyTasks} 个历史任务${volumeSyncStatus.historyFailed ? ` · 失败 ${volumeSyncStatus.historyFailed}` : ""}`
                 : `当前范围 ${volumeSyncStatus.dataDays} 个数据日 · 代收 ${volumeSyncStatus.collectDays} 日 · 代付 ${volumeSyncStatus.payoutDays} 日`}</span>
@@ -2372,13 +2368,13 @@ export default function ThirdPartyVolumeDashboard() {
       {appliedCoverage.incomplete && appliedCoverage.historical && (
         <div className="volume-history-progress-notice">
           <span className="volume-history-progress-icon">↻</span>
-          <div><b>历史数据库仍在补齐</b><span>当前查询范围已完成 {appliedCoverage.loaded}/{appliedCoverage.expected} 个历史任务。现在显示的是已经写入 Supabase 的数据，不是在等待网页读取 Google；全部完成后这里会自动变成绿色“数据已补齐”。</span></div>
+          <div><b>历史补齐中</b><span>{appliedCoverage.loaded}/{appliedCoverage.expected}</span></div>
         </div>
       )}
       {!rows.some((row) => dateMatches(row.date, appliedStartDate, appliedEndDate)) && (
         <div className="volume-empty-notice">
           <div className="volume-empty-icon">i</div>
-          <div><b>该日期暂时没有数据</b><span>数据库尚未收到这个日期的三方量。后台自动同步/历史补齐完成后，再次查询即可显示；页面不会报错。</span></div>
+          <div><b>该日期暂无数据</b></div>
         </div>
       )}
       <section className="third-party-tab-panel">

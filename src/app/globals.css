@@ -5056,3 +5056,138 @@ td .rate-cell,
   .admin-search-field.wide{grid-column:auto}
   .admin-sync-jobs,.auto-sync-jobs{grid-template-columns:1fr}
 }
+
+/* FINAL: 三方量查询绝不占用顶部空白 */
+.third-party-volume-module > .volume-page-heading{display:none!important;height:0!important;min-height:0!important;padding:0!important;margin:0!important;border:0!important;overflow:hidden!important}
+.third-party-volume-module{min-height:0!important;height:auto!important;align-self:flex-start!important;width:100%}
+.third-party-volume-module .volume-query-status{margin-top:0!important}
+.main:has(.third-party-volume-module){padding-top:14px!important}
+.volume-soft-loading{min-height:44px!important;margin:0 0 8px!important;padding:8px 11px!important}
+.volume-query-status{padding:7px 10px!important;min-height:42px!important}
+.volume-completeness-bar{margin:7px 0 8px!important;padding:8px 10px!important}
+.volume-history-progress-notice,.volume-empty-notice{margin:7px 0!important;padding:8px 10px!important}
+
+/* FINAL — login 精简 */
+.auth-login-shell{width:min(860px,calc(100vw - 36px));grid-template-columns:.78fr 1.22fr;border-radius:24px}
+.auth-login-brand-panel.compact{min-height:520px;padding:38px;display:grid;place-items:center;background:linear-gradient(155deg,#0b1d35,#173a67)}
+.auth-login-brand-center{position:relative;z-index:2;text-align:center;display:grid;justify-items:center;gap:8px}
+.auth-login-brand-mark.large{width:70px;height:70px;border-radius:22px;font-size:21px;margin-bottom:10px}
+.auth-login-brand-center strong{font-size:20px;letter-spacing:-.02em}
+.auth-login-brand-center small{color:#9db5d1;font-size:12px;letter-spacing:.08em}
+.auth-login-card.compact{padding:58px 54px;display:flex;flex-direction:column;justify-content:center}
+.auth-login-card.compact .auth-login-card-top{margin-bottom:18px}
+.auth-login-card.compact .auth-login-card-top h2{margin-bottom:0}
+.auth-login-card.compact .auth-login-card-top>span{font-size:10px}
+.auth-login-card.compact label{font-size:13px}
+.auth-login-card.compact .auth-input-wrap{height:50px}
+.auth-login-card.compact .auth-login-submit{height:50px;font-size:14px}
+@media(max-width:760px){.auth-login-shell{grid-template-columns:1fr}.auth-login-brand-panel.compact{display:none}.auth-login-card.compact{padding:36px 26px}}
+
+/* FINAL — IP 白名单 */
+.admin-ip-card{grid-column:1/-1;padding:18px;border-radius:17px!important}
+.admin-ip-mode{border:1px solid #d7e0ea;border-radius:999px;background:#f8fafc;color:#52657a;padding:8px 12px;font-size:11px;font-weight:900}
+.admin-ip-mode.on{border-color:#86efac;background:#ecfdf3;color:#047857}
+.admin-ip-add{display:grid;grid-template-columns:minmax(220px,.8fr) minmax(260px,1.2fr) auto auto;gap:9px;margin-bottom:12px}
+.admin-ip-add input{height:40px;border:1px solid #d7e0ea;border-radius:9px;padding:0 11px;background:#fff;outline:none;font-size:12px}
+.admin-ip-add button{height:40px;border:0;border-radius:9px;background:#2563eb;color:#fff;padding:0 13px;font-size:11px;font-weight:900}
+.admin-ip-add button.ghost{border:1px solid #d7e0ea;background:#fff;color:#52657a}
+.admin-ip-list{display:grid;gap:7px}
+.admin-ip-row{display:grid;grid-template-columns:minmax(240px,1fr) 62px auto auto;align-items:center;gap:9px;padding:10px 11px;border:1px solid #e3eaf2;border-radius:10px;background:#fbfdff}
+.admin-ip-row>div{min-width:0}.admin-ip-row b{display:block;font-size:12px;color:#1f334a}.admin-ip-row span{display:block;margin-top:2px;color:#8191a3;font-size:10px}
+.admin-ip-row em{font-style:normal;text-align:center;padding:4px 7px;border-radius:999px;font-size:9px;font-weight:900}.admin-ip-row em.on{background:#ecfdf3;color:#047857}.admin-ip-row em.off{background:#f1f5f9;color:#64748b}
+.admin-ip-row button{border:1px solid #d6e0eb;border-radius:8px;background:#fff;color:#52657a;padding:6px 9px;font-size:10px;font-weight:850}.admin-ip-row button.danger{border-color:#fecaca;color:#b42318;background:#fffafa}
+@media(max-width:900px){.admin-ip-add{grid-template-columns:1fr 1fr}.admin-ip-row{grid-template-columns:1fr auto auto}.admin-ip-row em{display:none}}
+@media(max-width:620px){.admin-ip-add{grid-template-columns:1fr}.admin-ip-row{grid-template-columns:1fr auto}.admin-ip-row button.danger{grid-column:2}.admin-ip-row>button:not(.danger){display:none}}
+
+/* FINAL — 管理页再放大一点 */
+.admin-inline-page{font-size:13px}
+.admin-card-title h3{font-size:20px}
+.admin-user-identity h4{font-size:16px}
+.admin-user-permissions-inline label{font-size:11px;padding:7px 9px}
+.admin-audit-table td{font-size:12px}.admin-audit-table th{font-size:11px}
+.module-loading{min-height:180px!important;height:auto!important;border:1px solid #e2e8f0;border-radius:16px;background:#fff}
+
+
+/* =========================================================
+   FINAL2 — 强制消除三方量查询后的顶部空白
+   ========================================================= */
+html body .app-shell > main.main:has(> .third-party-volume-module){
+  display:block!important;
+  align-items:initial!important;
+  align-content:initial!important;
+  justify-content:initial!important;
+  min-height:0!important;
+  height:auto!important;
+  padding:12px 14px 26px!important;
+  overflow:visible!important;
+}
+html body .app-shell > main.main > .third-party-volume-module{
+  display:block!important;
+  position:static!important;
+  inset:auto!important;
+  top:auto!important;
+  left:auto!important;
+  right:auto!important;
+  bottom:auto!important;
+  transform:none!important;
+  translate:none!important;
+  margin:0!important;
+  padding:0!important;
+  min-height:0!important;
+  height:auto!important;
+  max-height:none!important;
+  width:100%!important;
+  align-self:auto!important;
+}
+html body .third-party-volume-module > :first-child{
+  margin-top:0!important;
+}
+html body .third-party-volume-module .volume-soft-loading,
+html body .third-party-volume-module .volume-stable-notice,
+html body .third-party-volume-module .volume-query-status,
+html body .third-party-volume-module .volume-completeness-bar,
+html body .third-party-volume-module .volume-history-progress-notice,
+html body .third-party-volume-module .volume-empty-notice,
+html body .third-party-volume-module .third-party-tab-panel{
+  position:static!important;
+  transform:none!important;
+  translate:none!important;
+}
+html body .third-party-volume-module .volume-query-status{
+  min-height:34px!important;
+  padding:5px 8px!important;
+  margin:0 0 6px!important;
+}
+html body .third-party-volume-module .volume-completeness-bar{
+  min-height:36px!important;
+  margin:0 0 7px!important;
+  padding:6px 9px!important;
+}
+html body .third-party-volume-module .third-party-tab-panel{
+  margin:0!important;
+}
+
+/* 登录页：只保留必要信息 */
+.auth-login-card.compact .auth-login-card-top>span{display:none!important}
+.auth-login-card.compact .auth-login-card-top{margin-bottom:16px!important}
+.auth-login-brand-panel.compact{min-height:430px!important}
+.auth-login-shell{width:min(760px,calc(100vw - 32px))!important}
+.auth-login-card.compact{padding:46px 44px!important}
+.auth-login-brand-center strong{font-size:18px!important}
+.auth-login-brand-center small{font-size:10px!important}
+
+/* 管理后台可读性再放大 */
+.admin-inline-page,.admin-panel-card{font-size:12px}
+.admin-user-identity h4{font-size:16px!important}
+.admin-user-identity p{font-size:12px!important}
+.admin-search-field label{font-size:11px!important}
+.admin-search-field input,.admin-search-field select{font-size:13px!important}
+.admin-audit-table th{font-size:11px!important}
+.admin-audit-table td{font-size:12px!important}
+.nav-admin-submenu span{font-size:14px!important}
+.nav-admin-submenu small{font-size:11px!important}
+
+/* 不显示没有意义的长说明 */
+.volume-query-status-main b{font-size:11px}
+.volume-query-status-main span{font-size:10px}
+.volume-completeness-main span{font-size:10px}

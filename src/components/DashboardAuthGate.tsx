@@ -12,6 +12,7 @@ import {
   refreshDashboardSession,
   saveDashboardSession,
   signInDashboard,
+  verifyDashboardAccess,
   type DashboardProfile,
   type DashboardSession,
 } from "@/lib/dashboardAuthClient";
@@ -85,6 +86,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
           active = await refreshDashboardSession(active.refresh_token);
           nextProfile = await fetchDashboardProfile(active);
         }
+        await verifyDashboardAccess(active);
         if (!cancelled) applyAuthenticated(active, nextProfile);
       } catch {
         saveDashboardSession(null);
@@ -102,6 +104,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
         try {
           const nextSession = await refreshDashboardSession(session.refresh_token);
           const nextProfile = await fetchDashboardProfile(nextSession);
+          await verifyDashboardAccess(nextSession);
           applyAuthenticated(nextSession, nextProfile);
         } catch { /* 下一轮再校验 */ }
       })();
@@ -147,6 +150,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     try {
       const nextSession = await signInDashboard(username, password);
       const nextProfile = await fetchDashboardProfile(nextSession);
+      await verifyDashboardAccess(nextSession);
       applyAuthenticated(nextSession, nextProfile);
       setPassword("");
     } catch (err) {
@@ -176,6 +180,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     try {
       const nextSession = await changeOwnDashboardPassword(profile.username, currentPassword, newPassword);
       const nextProfile = await fetchDashboardProfile(nextSession);
+      await verifyDashboardAccess(nextSession);
       applyAuthenticated(nextSession, nextProfile);
       setCurrentPassword("");
       setNewPassword("");
@@ -217,35 +222,24 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     return (
       <div className="auth-login-page">
         <div className="auth-login-shell">
-          <section className="auth-login-brand-panel">
-            <div className="auth-login-brand-row">
-              <div className="auth-login-brand-mark">H</div>
-              <div><strong>Hensem Data Center</strong><small>Business Intelligence Workspace</small></div>
+          <section className="auth-login-brand-panel compact">
+            <div className="auth-login-brand-center">
+              <div className="auth-login-brand-mark large">H</div>
+              <strong>Hensem 数据后台</strong>
+              <small>Data Center</small>
             </div>
-            <span className="auth-login-eyebrow">HENSEM CONTROL CENTER</span>
-            <h1>业务数据中控</h1>
-            <p>统一查看核心业务数据、三方量与费率。权限由管理员集中分配，访问记录可追踪。</p>
-            <div className="auth-login-feature-list">
-              <div><i>01</i><span><b>统一数据中心</b><small>后台自动同步，页面按需快速读取</small></span></div>
-              <div><i>02</i><span><b>分级账号权限</b><small>Owner 总管理员 · Admin 管理 · Viewer 只读</small></span></div>
-              <div><i>03</i><span><b>安全访问控制</b><small>会话续期、权限隔离、操作审计</small></span></div>
-            </div>
-            <div className="auth-login-brand-foot">HENSEM · INTERNAL DATA SYSTEM</div>
           </section>
 
-          <form className="auth-login-card" onSubmit={submitLogin}>
+          <form className="auth-login-card compact" onSubmit={submitLogin}>
             <div className="auth-login-card-top">
-              <span>SECURE SIGN IN</span>
-              <h2>欢迎登录</h2>
-              <p>使用管理员为你分配的账号密码进入 Hensem 数据后台。</p>
+              <h2>登录</h2>
             </div>
             <label>账号</label>
             <div className="auth-input-wrap"><span>◎</span><input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="请输入账号" /></div>
             <label>密码</label>
             <div className="auth-input-wrap"><span>⌁</span><input type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="请输入密码" /><button type="button" onClick={() => setShowPassword((value) => !value)}>{showPassword ? "隐藏" : "显示"}</button></div>
             {error && <div className="auth-login-error">{error}</div>}
-            <button className="auth-login-submit" type="submit" disabled={busy}>{busy ? "正在验证..." : "登录数据中控"}</button>
-            <div className="auth-login-security"><span>●</span>安全登录 · 权限隔离 · 1 小时无操作自动退出</div>
+            <button className="auth-login-submit" type="submit" disabled={busy}>{busy ? "正在验证..." : "登录"}</button>
           </form>
         </div>
       </div>

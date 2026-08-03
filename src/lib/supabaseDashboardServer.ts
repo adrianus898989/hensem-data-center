@@ -1,10 +1,16 @@
 import type {
+  AutoWithdrawPayload,
+  AutoWithdrawRow,
+  DailyWithdrawRow,
+  OperatorRow,
   ThirdPartyPlatformStatusRow,
   ThirdPartyRatePayload,
   ThirdPartyRateRow,
   ThirdPartyVolumePayload,
   ThirdPartyVolumeRow
 } from "@/lib/types";
+import { formatDuration, parseDurationToSeconds } from "@/lib/format";
+import { aggregateWithdrawRows } from "@/lib/parseAutoWithdraw";
 
 const PAGE_SIZE = 1000;
 
@@ -248,6 +254,201 @@ async function callRpc<T>(name: string, body: Record<string, unknown>, token: st
     cache: "no-store"
   });
   return await readJson(response) as T;
+}
+
+
+type DbAutoWithdrawRow = {
+  id: string;
+  data_date: string;
+  country: string | null;
+  platform: string | null;
+  total: number | string | null;
+  success: number | string | null;
+  rejected: number | string | null;
+  auto_count: number | string | null;
+  manual_count: number | string | null;
+  avg_seconds: number | string | null;
+  avg_time_text: string | null;
+  source_sheet: string | null;
+  raw: Record<string, unknown> | null;
+  source_updated_at: string | null;
+  updated_at: string | null;
+};
+
+type DbOperatorRow = {
+  id: string;
+  data_date: string;
+  country: string | null;
+  platform: string | null;
+  account: string | null;
+  processed: number | string | null;
+  rejected: number | string | null;
+  avg_seconds: number | string | null;
+  avg_time_text: string | null;
+  source_sheet: string | null;
+  raw: Record<string, unknown> | null;
+  source_updated_at: string | null;
+  updated_at: string | null;
+};
+
+function addIsoDays(value: string, days: number): string {
+  const d = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return value;
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function compareDurationPercent(currentSeconds: number, previousSeconds: number): string {
+  if (!currentSeconds || !previousSeconds) return "-";
+  if ((previousSeconds < 10 && currentSeconds > 600) || (currentSeconds < 10 && previousSeconds > 600)) return "-";
+  const pct = ((currentSeconds - previousSeconds) / previousSeconds) * 100;
+  if (!Number.isFinite(pct) || Math.abs(pct) > 9999) return "-";
+  return `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`;
+}
+
+function dedupeDbDaily(rows: DbAutoWithdrawRow[]): DbAutoWithdrawRow[] {
+  const sorted = [...rows].sort((a, b) => String(a.updated_at || a.source_updated_at || "").localeCompare(String(b.updated_at || b.source_updated_at || "")));
+  const map = new Map<string, DbAutoWithdrawRow>();
+  for (const row of sorted) {
+    const key = `${row.data_date}|||${row.country || ""}|||${row.platform || ""}`;
+    map.set(key, row);
+  }
+  return [...map.values()];
+}
+
+function dedupeDbOperators(rows: DbOperatorRow[]): DbOperatorRow[] {
+  const sorted = [...rows].sort((a, b) => String(a.updated_at || a.source_updated_at || "").localeCompare(String(b.updated_at || b.source_updated_at || "")));
+  const map = new Map<string, DbOperatorRow>();
+  for (const row of sorted) {
+    const key = `${row.data_date}|||${row.country || ""}|||${row.platform || ""}|||${row.account || ""}`;
+    map.set(key, row);
+  }
+  return [...map.values()];
+}
+
+function mapDbDaily(row: DbAutoWithdrawRow): DailyWithdrawRow {
+  const total = Number(row.total || 0);
+  const success = Number(row.success || 0);
+  const rejected = Number(row.rejected || 0);
+  const autoCount = Number(row.auto_count || 0);
+  const manualCount = Number(row.manual_count || 0) || Math.max(total - autoCount, 0);
+  const avgSeconds = Number(row.avg_seconds || 0) || parseDurationToSeconds(String(row.avg_time_text || ""));
+  return {
+    country: String(row.country || ""),
+    platform: String(row.platform || ""),
+    total,
+    success,
+    rejected,
+    successRate: total ? success / total : 0,
+    rejectRate: total ? rejected / total : 0,
+    autoCount,
+    manualCount,
+    autoRate: total ? autoCount / total : 0,
+    manualRate: total ? manualCount / total : 0,
+    avgTime: String(row.avg_time_text || "") || formatDuration(avgSeconds),
+    yesterdayAvgTime: "0秒",
+    comparePercent: "-",
+    sourceSheet: String(row.source_sheet || "Supabase"),
+    date: String(row.data_date || ""),
+    blockTitle: String(row.source_sheet || "Supabase"),
+  };
+}
+
+function mapDbOperator(row: DbOperatorRow): OperatorRow {
+  const avgSeconds = Number(row.avg_seconds || 0) || parseDurationToSeconds(String(row.avg_time_text || ""));
+  return {
+    country: String(row.country || ""),
+    date: String(row.data_date || ""),
+    platform: String(row.platform || ""),
+    account: String(row.account || ""),
+    processed: Number(row.processed || 0),
+    rejected: Number(row.rejected || 0),
+    avgTime: String(row.avg_time_text || "") || formatDuration(avgSeconds),
+    yesterdayAvgTime: "0秒",
+    comparePercent: "-",
+  };
+}
+
+function enrichDbDaily(rows: DailyWithdrawRow[]): DailyWithdrawRow[] {
+  const seconds = new Map<string, number>();
+  for (const row of rows) seconds.set(`${row.country}|||${row.platform}|||${row.date}`, parseDurationToSeconds(row.avgTime));
+  return rows.map((row) => {
+    const current = parseDurationToSeconds(row.avgTime);
+    const previous = seconds.get(`${row.country}|||${row.platform}|||${addIsoDays(row.date, -1)}`) || 0;
+    return {
+      ...row,
+      yesterdayAvgTime: previous ? formatDuration(previous) : "0秒",
+      comparePercent: compareDurationPercent(current, previous),
+    };
+  });
+}
+
+function enrichDbOperators(rows: OperatorRow[]): OperatorRow[] {
+  const seconds = new Map<string, number>();
+  for (const row of rows) seconds.set(`${row.country}|||${row.platform}|||${row.account}|||${row.date}`, parseDurationToSeconds(row.avgTime));
+  return rows.map((row) => {
+    const current = parseDurationToSeconds(row.avgTime);
+    const previous = seconds.get(`${row.country}|||${row.platform}|||${row.account}|||${addIsoDays(row.date, -1)}`) || 0;
+    return {
+      ...row,
+      yesterdayAvgTime: previous ? formatDuration(previous) : "0秒",
+      comparePercent: compareDurationPercent(current, previous),
+    };
+  });
+}
+
+export async function readSupabaseAutoWithdraw(request: Request, startInput: string, endInput: string): Promise<AutoWithdrawPayload> {
+  const token = authTokenFromRequest(request);
+  const profile = await requireActiveProfile(token);
+  if (profile.role === "viewer" && profile.permissions?.auto_withdraw !== true) throw new Error("这个账号没有提现 / 自动出款查看权限");
+
+  const start = isoDate(startInput);
+  const end = isoDate(endInput || startInput);
+  if (!start || !end) throw new Error("自动出款查询日期无效");
+  const queryStart = addIsoDays(start, -1);
+
+  const dailyQuery = new URLSearchParams();
+  dailyQuery.set("select", "id,data_date,country,platform,total,success,rejected,auto_count,manual_count,avg_seconds,avg_time_text,source_sheet,raw,source_updated_at,updated_at");
+  dailyQuery.set("data_date", `gte.${queryStart}`);
+  dailyQuery.append("data_date", `lte.${end}`);
+  dailyQuery.set("order", "data_date.asc,country.asc,platform.asc,updated_at.asc");
+
+  const operatorQuery = new URLSearchParams();
+  operatorQuery.set("select", "id,data_date,country,platform,account,processed,rejected,avg_seconds,avg_time_text,source_sheet,raw,source_updated_at,updated_at");
+  operatorQuery.set("data_date", `gte.${queryStart}`);
+  operatorQuery.append("data_date", `lte.${end}`);
+  operatorQuery.set("order", "data_date.asc,country.asc,platform.asc,account.asc,updated_at.asc");
+
+  const [dailyRaw, operatorRaw] = await Promise.all([
+    fetchPaged<DbAutoWithdrawRow>("auto_withdraw_daily", dailyQuery, token),
+    fetchPaged<DbOperatorRow>("withdraw_operator_daily", operatorQuery, token),
+  ]);
+
+  const dailyAll = enrichDbDaily(dedupeDbDaily(dailyRaw).map(mapDbDaily));
+  const operatorAll = enrichDbOperators(dedupeDbOperators(operatorRaw).map(mapDbOperator));
+  const dailyRows = dailyAll.filter((row) => row.date >= start && row.date <= end);
+  const operatorRows = operatorAll.filter((row) => row.date >= start && row.date <= end);
+  const monthlyRows: AutoWithdrawRow[] = aggregateWithdrawRows(dailyRows);
+
+  const updatedAt = [
+    ...dailyRaw.map((row) => String(row.updated_at || row.source_updated_at || "")),
+    ...operatorRaw.map((row) => String(row.updated_at || row.source_updated_at || "")),
+  ].filter(Boolean).sort().pop() || new Date().toISOString();
+
+  return {
+    meta: {
+      year: start.slice(0, 4),
+      month: String(Number(start.slice(5, 7))),
+      updatedAt,
+      source: "google-sheet",
+      message: `2026-08 起直读 Supabase · 自动出款 ${dailyRows.length} 行 · 操作人 ${operatorRows.length} 行`,
+      rawDailyRows: dailyRows.length,
+      rawOperatorRows: operatorRows.length,
+    },
+    monthlyRows,
+    dailyRows,
+    operatorRows,
+  };
 }
 
 export async function readSupabaseThirdPartyVolume(request: Request, startInput = "", endInput = "", countryInput = ""): Promise<ThirdPartyVolumePayload> {

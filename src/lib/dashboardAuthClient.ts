@@ -12,7 +12,7 @@ export type DashboardManagementPermissions = {
 
 export const DASHBOARD_PERMISSION_LABELS: Array<{ key: DashboardPermissionKey; label: string; note: string }> = [
   { key: "third_party", label: "三方量 / 费率", note: "查看三方量、费率、盘口状态" },
-  { key: "auto_withdraw", label: "提现 / 自动出款", note: "模块迁移后可查看" },
+  { key: "auto_withdraw", label: "提现 / 自动出款", note: "自动出款与提现操作人统计" },
   { key: "work_orders", label: "工单", note: "模块迁移后可查看" },
   { key: "customer_service", label: "客服", note: "模块迁移后可查看" },
 ];
@@ -295,6 +295,51 @@ export async function changeOwnDashboardPassword(username: string, currentPasswo
 export async function listDashboardAudit(session: DashboardSession, limit = 50): Promise<DashboardAuditLog[]> {
   const result = await callAdminFunction(session, { action: "list-audit", limit });
   return Array.isArray(result?.logs) ? result.logs : [];
+}
+
+
+export type DashboardIpWhitelistRow = {
+  id: number;
+  ip: string;
+  note: string;
+  active: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type DashboardIpSettings = {
+  enabled: boolean;
+  currentIp: string;
+  rows: DashboardIpWhitelistRow[];
+};
+
+export async function verifyDashboardAccess(session: DashboardSession) {
+  return await callAdminFunction(session, { action: "check-access" });
+}
+
+export async function getDashboardIpSettings(session: DashboardSession): Promise<DashboardIpSettings> {
+  const result = await callAdminFunction(session, { action: "ip-settings" });
+  return {
+    enabled: Boolean(result?.enabled),
+    currentIp: String(result?.currentIp || ""),
+    rows: Array.isArray(result?.rows) ? result.rows : [],
+  };
+}
+
+export async function addDashboardAllowedIp(session: DashboardSession, ip: string, note = "") {
+  return await callAdminFunction(session, { action: "add-ip", ip, note });
+}
+
+export async function setDashboardIpActive(session: DashboardSession, id: number, active: boolean) {
+  return await callAdminFunction(session, { action: "set-ip-active", id, active });
+}
+
+export async function deleteDashboardAllowedIp(session: DashboardSession, id: number) {
+  return await callAdminFunction(session, { action: "delete-ip", id });
+}
+
+export async function setDashboardIpWhitelistMode(session: DashboardSession, enabled: boolean) {
+  return await callAdminFunction(session, { action: "set-ip-mode", enabled });
 }
 
 export type ManualSyncJob = "today_collect" | "today_payout" | "yesterday_collect" | "yesterday_payout" | "rates" | "history_next" | "auto_latest" | "auto_history_next";

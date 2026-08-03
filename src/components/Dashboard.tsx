@@ -899,6 +899,7 @@ function writeAutoLocalCache(payload: AutoWithdrawPayload) {
 export default function Dashboard() {
   const { session, profile, openProfile } = useDashboardAuth();
   const canThirdParty = hasDashboardPermission(profile, "third_party");
+  const canAutoWithdraw = hasDashboardPermission(profile, "auto_withdraw");
   const managementPermissions = normalizedManagementPermissions(profile);
   const isOwner = profile?.role === "owner";
   const canAdminUsers = Boolean(profile && (isOwner || managementPermissions.manage_viewers));
@@ -974,7 +975,8 @@ export default function Dashboard() {
     setError("");
     try {
       const requestUrl = monthlyApiUrl("/api/auto-withdraw", requestedStart, requestedEnd, version);
-      const res = await fetch(requestUrl, { cache: "default" });
+      const authHeaders = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+      const res = await fetch(requestUrl, { cache: "no-store", headers: authHeaders });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.message || "读取数据失败");
       setPayload(json);
@@ -1000,21 +1002,12 @@ export default function Dashboard() {
     if (payload && loadedMonthSignatureRef.current !== requestedSignature) {
       void loadData(true, filters.startDate, filters.endDate);
     }
-    const hourlyTimer = window.setInterval(() => {
+    const currentTimer = window.setInterval(() => {
       if (document.visibilityState !== "visible" || !rangeIncludesCurrentMonthClient(filters.startDate, filters.endDate)) return;
-      void (async () => {
-        const status = await fetchPreferredMonthlyStatus("auto-withdraw");
-        if (statusMatchesPayload(status, payloadRef.current)) return;
-        if (status?.preferredMonth && status.preferredMonth !== payloadSnapshotMonth(payloadRef.current)) {
-          setFilters(blankFilters());
-          setDraftFilters(blankFilters());
-          await loadData(true, "", "", status.version);
-          return;
-        }
-        await loadData(true, filters.startDate, filters.endDate, status?.version || "");
-      })();
-    }, 60 * 60 * 1000);
-    return () => window.clearInterval(hourlyTimer);
+      // 8月起数据由 Supabase 每10分钟更新，页面打开时也每10分钟轻量刷新一次。
+      void loadData(true, filters.startDate, filters.endDate);
+    }, 10 * 60 * 1000);
+    return () => window.clearInterval(currentTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeModule, filters.startDate, filters.endDate]);
 
@@ -1410,6 +1403,7 @@ export default function Dashboard() {
 
   function switchModule(next: ModuleMode) {
     if (next === "volume" && !canThirdParty) return;
+    if ((next === "auto" || next === "operator") && !canAutoWithdraw) return;
     setActiveModule(next);
     if (next === "home") {
       setPage(1);
@@ -1624,9 +1618,9 @@ export default function Dashboard() {
       </button>
 
       <div className="nav-section-title">系统模块</div>
-      <button className="nav-item" disabled title="新站暂未迁移此模块">
+      <button className={(activeModule === "auto" || activeModule === "operator") ? "nav-item active" : "nav-item"} onClick={() => switchModule("auto")} disabled={!canAutoWithdraw} title={!canAutoWithdraw ? "管理员未开放此模块" : ""}>
         <span className="nav-left"><span className="nav-icon">💸</span>提现/自动出款统计</span>
-        <span className="badge">待迁移</span>
+        <span className={canAutoWithdraw ? "badge ok" : "badge"}>{canAutoWithdraw ? "Supabase" : "无权限"}</span>
       </button>
       <button className="nav-item" disabled title="新站暂未迁移此模块">
         <span className="nav-left"><span className="nav-icon">🎫</span>工单/客服</span>
@@ -1645,7 +1639,7 @@ export default function Dashboard() {
             <span className="nav-admin-toggle">{adminExpanded ? "⌃" : "⌄"}</span>
           </button>
           {adminExpanded && <div className="nav-admin-submenu">
-            {canAdminUsers && <button className={activeModule === "admin" && adminSection === "users" ? "active" : ""} onClick={() => { setAdminSection("users"); setActiveModule("admin"); }}><span>账号与权限</span><small>用户 / 角色 / 权限</small></button>}
+            {canAdminUsers && <button className={activeModule === "admin" && adminSection === "users" ? "active" : ""} onClick={() => { setAdminSection("users"); setActiveModule("admin"); }}><span>账号与权限</span><small>账号 / 角色 / IP</small></button>}
             {canAdminData && <button className={activeModule === "admin" && adminSection === "data" ? "active" : ""} onClick={() => { setAdminSection("data"); setActiveModule("admin"); }}><span>数据同步</span><small>完整度 / 手动刷新</small></button>}
             {canAdminAudit && <button className={activeModule === "admin" && adminSection === "audit" ? "active" : ""} onClick={() => { setAdminSection("audit"); setActiveModule("admin"); }}><span>操作记录</span><small>后台审计日志</small></button>}
           </div>}
@@ -1661,17 +1655,17 @@ export default function Dashboard() {
     <main className="main home-main">
       <div className="home-topbar">
         <div>
-          <p className="home-breadcrumb">当前位置：Hensem数据后台 &gt; 首页 / 选择模块</p>
+          
           <h1>Hensem 数据中控</h1>
         </div>
       </div>
 
       <section className="home-card-grid">
-        <button className="home-module-card home-module-blue" disabled title="新站暂未迁移此模块">
+        <button className="home-module-card home-module-blue" onClick={() => switchModule("auto")} disabled={!canAutoWithdraw} title={!canAutoWithdraw ? "管理员未开放此模块" : ""}>
           <span className="home-module-icon">💸</span>
           <strong>提现 / 自动出款统计</strong>
-          <em>新站暂未迁移，旧网站继续使用</em>
-          <span className="home-enter">待迁移</span>
+          <em>{canAutoWithdraw ? "自动出款日表、月表与提现操作人统计" : "你的账号暂未开放此模块"}</em>
+          <span className="home-enter">{canAutoWithdraw ? "进入模块 →" : "无查看权限"}</span>
         </button>
         <button className="home-module-card home-module-green" disabled title="新站暂未迁移此模块">
           <span className="home-module-icon">🎫</span>
@@ -1768,13 +1762,10 @@ export default function Dashboard() {
           <>
         <div className="topbar">
           <div className="title">
-            <h1>Hensem数据后台</h1>
-            <p>
-              当前位置：Hensem数据后台 &gt; {activeModule === "auto" ? "自动出款数据" : activeModule === "operator" ? "提现操作人统计" : activeModule === "work" ? "工单/客服" : activeModule === "volume" ? "三方量/费率" : "自动出款数据"} &gt; {activeModule === "auto" ? (autoView === "daily" ? "自动出款日表" : autoView === "month" ? "自动出款月表" : autoView === "anomaly" ? "异常提醒" : "自动出款日表") : activeModule === "operator" ? (operatorView === "summary" ? "操作人汇总表" : operatorView === "detail" ? "操作人明细" : operatorView === "compare" ? "操作人对比" : "操作人汇总表") : "独立模块"}
-            </p>
+            <h1>{activeModule === "auto" ? "自动出款" : "提现操作人"}</h1>
           </div>
           <div className="status-box">
-            <div className="status-line"><span>数据来源</span><strong>{payload.meta.source === "demo" ? "Demo" : "Google Sheet"}</strong></div>
+            <div className="status-line"><span>数据来源</span><strong>{String(payload.meta.source || "").toLowerCase().includes("supabase") ? "Supabase" : payload.meta.source === "demo" ? "Demo" : "历史快照"}</strong></div>
             <div className="status-line"><span>日期区间</span><strong>{filters.startDate || "-"} 至 {filters.endDate || "-"}</strong></div>
             <div className="status-line"><span>更新时间</span><strong>{new Date(String((payload.meta as any).snapshotUpdatedAt || payload.meta.updatedAt)).toLocaleString("zh-CN")}</strong></div>
           </div>
