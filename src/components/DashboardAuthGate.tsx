@@ -15,7 +15,6 @@ import {
   type DashboardProfile,
   type DashboardSession,
 } from "@/lib/dashboardAuthClient";
-import AdminControlCenter from "./AdminControlCenter";
 
 type AuthContextValue = {
   session: DashboardSession | null;
@@ -26,20 +25,6 @@ type AuthContextValue = {
 };
 
 const AuthContext = createContext<AuthContextValue>({ session: null, profile: null, logout: () => undefined, openAdminCenter: () => undefined, openProfile: () => undefined });
-
-const DASHBOARD_IDLE_TIMEOUT_MS = 60 * 60 * 1000;
-const DASHBOARD_ACTIVITY_KEY = "hensem:dashboard:last-activity:v1";
-
-function readLastActivity(): number {
-  if (typeof window === "undefined") return 0;
-  const value = Number(window.localStorage.getItem(DASHBOARD_ACTIVITY_KEY) || 0);
-  return Number.isFinite(value) ? value : 0;
-}
-
-function writeLastActivity(value = Date.now()) {
-  if (typeof window === "undefined") return;
-  try { window.localStorage.setItem(DASHBOARD_ACTIVITY_KEY, String(value)); } catch { /* ignore */ }
-}
 
 export function useDashboardAuth() {
   return useContext(AuthContext);
@@ -55,7 +40,6 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [manageOpen, setManageOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -64,8 +48,6 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState("");
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const lastActivityRef = useRef(0);
-  const lastActivityWriteRef = useRef(0);
 
   function applyAuthenticated(nextSession: DashboardSession, nextProfile: DashboardProfile) {
     saveDashboardSession(nextSession);
@@ -74,29 +56,14 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     setReady(true);
   }
 
-  function clearAuthenticatedState(message = "") {
+  function logout() {
     saveDashboardSession(null);
     setSession(null);
     setProfile(null);
     setPassword("");
-    setManageOpen(false);
     setUserMenuOpen(false);
     setProfileOpen(false);
-    setError(message);
     setReady(true);
-  }
-
-  function logout() {
-    clearAuthenticatedState("");
-  }
-
-  function markActivity(force = false) {
-    const now = Date.now();
-    lastActivityRef.current = now;
-    if (force || now - lastActivityWriteRef.current >= 15000) {
-      lastActivityWriteRef.current = now;
-      writeLastActivity(now);
-    }
   }
 
   useEffect(() => {
@@ -108,17 +75,6 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
         if (!cancelled) setReady(true);
         return;
       }
-      const storedActivity = readLastActivity();
-      if (storedActivity && Date.now() - storedActivity >= DASHBOARD_IDLE_TIMEOUT_MS) {
-        saveDashboardSession(null);
-        if (!cancelled) {
-          setError("超过 1 小时未操作，系统已自动退出，请重新登录。");
-          setReady(true);
-        }
-        return;
-      }
-      lastActivityRef.current = storedActivity || Date.now();
-      if (!storedActivity) writeLastActivity(lastActivityRef.current);
       try {
         let active = saved;
         let nextProfile: DashboardProfile;
@@ -142,11 +98,6 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   useEffect(() => {
     if (!enabled || !session?.refresh_token) return;
     const timer = window.setInterval(() => {
-      const last = Math.max(lastActivityRef.current, readLastActivity());
-      if (last && Date.now() - last >= DASHBOARD_IDLE_TIMEOUT_MS) {
-        clearAuthenticatedState("超过 1 小时未操作，系统已自动退出，请重新登录。");
-        return;
-      }
       void (async () => {
         try {
           const nextSession = await refreshDashboardSession(session.refresh_token);
@@ -160,28 +111,6 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   }, [enabled, session?.refresh_token]);
 
   useEffect(() => {
-    if (!enabled || !session || !profile) return;
-
-    if (!lastActivityRef.current) markActivity(true);
-    const onActivity = () => markActivity(false);
-    const events: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "touchstart", "scroll"];
-    events.forEach((name) => window.addEventListener(name, onActivity, { passive: true }));
-
-    const idleTimer = window.setInterval(() => {
-      const last = Math.max(lastActivityRef.current, readLastActivity());
-      if (last && Date.now() - last >= DASHBOARD_IDLE_TIMEOUT_MS) {
-        clearAuthenticatedState("超过 1 小时未操作，系统已自动退出，请重新登录。");
-      }
-    }, 30000);
-
-    return () => {
-      events.forEach((name) => window.removeEventListener(name, onActivity));
-      window.clearInterval(idleTimer);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, session?.access_token, profile?.auth_user_id]);
-
-  useEffect(() => {
     if (!userMenuOpen) return;
     function onPointerDown(event: MouseEvent) {
       if (!menuRef.current?.contains(event.target as Node)) setUserMenuOpen(false);
@@ -190,6 +119,27 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     return () => window.removeEventListener("mousedown", onPointerDown);
   }, [userMenuOpen]);
 
+  useEffect(() => {
+    if (!enabled || !session || !profile) return;
+    const IDLE_MS = 60 * 60 * 1000;
+    let timer = window.setTimeout(() => logout(), IDLE_MS);
+    let lastReset = Date.now();
+    const reset = () => {
+      const now = Date.now();
+      if (now - lastReset < 1000) return;
+      lastReset = now;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => logout(), IDLE_MS);
+    };
+    const events: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "touchstart", "scroll"];
+    events.forEach((name) => window.addEventListener(name, reset, { passive: true }));
+    return () => {
+      window.clearTimeout(timer);
+      events.forEach((name) => window.removeEventListener(name, reset));
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, session?.access_token, profile?.username]);
+
   async function submitLogin(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -197,7 +147,6 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     try {
       const nextSession = await signInDashboard(username, password);
       const nextProfile = await fetchDashboardProfile(nextSession);
-      markActivity(true);
       applyAuthenticated(nextSession, nextProfile);
       setPassword("");
     } catch (err) {
@@ -243,7 +192,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     session,
     profile,
     logout,
-    openAdminCenter: () => { if (profile && canOpenAdminCenter(profile)) setManageOpen(true); },
+    openAdminCenter: () => { if (profile && canOpenAdminCenter(profile)) window.dispatchEvent(new CustomEvent("hensem:open-admin")); },
     openProfile: () => setProfileOpen(true),
   }), [session, profile]);
   const permissionList = useMemo(() => {
@@ -279,7 +228,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
             <div className="auth-login-feature-list">
               <div><i>01</i><span><b>统一数据中心</b><small>后台自动同步，页面按需快速读取</small></span></div>
               <div><i>02</i><span><b>分级账号权限</b><small>Owner 总管理员 · Admin 管理 · Viewer 只读</small></span></div>
-              <div><i>03</i><span><b>安全访问控制</b><small>权限隔离 · 操作审计 · 1 小时无操作自动退出</small></span></div>
+              <div><i>03</i><span><b>安全访问控制</b><small>会话续期、权限隔离、操作审计</small></span></div>
             </div>
             <div className="auth-login-brand-foot">HENSEM · INTERNAL DATA SYSTEM</div>
           </section>
@@ -303,14 +252,6 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     );
   }
 
-  if (manageOpen && session && profile && canOpenAdminCenter(profile)) {
-    return (
-      <AuthContext.Provider value={value}>
-        <AdminControlCenter open session={session} profile={profile} onClose={() => setManageOpen(false)} />
-      </AuthContext.Provider>
-    );
-  }
-
   return (
     <AuthContext.Provider value={value}>
       {children}
@@ -328,7 +269,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
               <div><b>{profile.username}</b><small>{roleDetail}</small></div>
             </div>
             <button type="button" onClick={() => { setProfileOpen(true); setUserMenuOpen(false); }}>个人资料与密码</button>
-            {canOpenAdminCenter(profile) && <button type="button" onClick={() => { setManageOpen(true); setUserMenuOpen(false); }}>管理后台</button>}
+            {canOpenAdminCenter(profile) && <button type="button" onClick={() => { window.dispatchEvent(new CustomEvent("hensem:open-admin")); setUserMenuOpen(false); }}>管理后台</button>}
             <div className="auth-user-dropdown-line" />
             <button className="danger" type="button" onClick={logout}>退出登录</button>
           </div>

@@ -216,12 +216,41 @@ function mapVolume(row: DbVolumeRow): ThirdPartyVolumeRow {
   };
 }
 
-export async function readSupabaseThirdPartyVolume(
-  request: Request,
-  startInput = "",
-  endInput = "",
-  countryInput = ""
-): Promise<ThirdPartyVolumePayload> {
+export type ThirdPartySyncStatus = {
+  ok: boolean;
+  start: string;
+  end: string;
+  historyTasks: number;
+  historySuccess: number;
+  historyRemaining: number;
+  historyFailed: number;
+  historyRowsWritten: number;
+  historyLatestSyncAt?: string | null;
+  historyComplete: boolean;
+  dataDays: number;
+  collectDays: number;
+  payoutDays: number;
+  latestWriteAt?: string | null;
+  ratesLatestWriteAt?: string | null;
+};
+
+async function callRpc<T>(name: string, body: Record<string, unknown>, token: string): Promise<T> {
+  const { url, anonKey } = config();
+  const response = await fetch(`${url}/rest/v1/rpc/${name}`, {
+    method: "POST",
+    headers: {
+      apikey: anonKey,
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body),
+    cache: "no-store"
+  });
+  return await readJson(response) as T;
+}
+
+export async function readSupabaseThirdPartyVolume(request: Request, startInput = "", endInput = "", countryInput = ""): Promise<ThirdPartyVolumePayload> {
   const token = authTokenFromRequest(request);
   const profile = await requireActiveProfile(token);
   if (profile.role === "viewer" && profile.permissions?.third_party === false) throw new Error("这个账号没有三方量 / 费率查看权限");
@@ -232,36 +261,16 @@ export async function readSupabaseThirdPartyVolume(
   const end = isoDate(endInput) || start;
   const country = String(countryInput || "").trim();
   const queryStart = previousDate(start);
-  const { url, anonKey } = config();
 
-  // V250：三方量改成一次 PostgreSQL RPC。
-  // 旧版按 Supabase REST 每 1000 行分页，一个 4 万行月份会产生几十次 HTTP 请求；
-  // 现在日期/国家过滤直接在 PostgreSQL 内完成，并一次返回 JSON。
-  const rpcRes = await fetch(`${url}/rest/v1/rpc/dashboard_third_party_volume_fast`, {
-    method: "POST",
-    headers: {
-      apikey: anonKey,
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      p_start: start,
-      p_end: end,
-      p_country: country || null
-    }),
-    cache: "no-store"
-  });
-  const rpc = await readJson(rpcRes) as {
-    ok?: boolean;
-    rows?: DbVolumeRow[];
-    rowCount?: number;
-    latestWriteAt?: string | null;
-    queryCountry?: string;
-  };
-  const dbRows = Array.isArray(rpc?.rows) ? rpc.rows : [];
+  const result = await callRpc<any>("dashboard_third_party_volume_fast_v2", {
+    p_start: start,
+    p_end: end,
+    p_country: country || null
+  }, token);
+
+  const dbRows: DbVolumeRow[] = Array.isArray(result?.rows) ? result.rows : [];
   const rows = dbRows.map(mapVolume);
-  const updatedAt = String(rpc?.latestWriteAt || "") || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString();
+  const updatedAt = String(result?.latestWriteAt || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString());
   const sheets = Array.from(new Set(rows.map((row) => row.sheetName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
 
   return {
@@ -271,16 +280,48 @@ export async function readSupabaseThirdPartyVolume(
       updatedAt,
       source: "supabase" as any,
       sheets,
-      message: `Supabase FAST RPC：${queryStart} 至 ${end}${country ? ` / ${country}` : ""}；${start} 前一天只用于 v239 昨日比较。`,
+      message: `Supabase 高速查询：${queryStart} 至 ${end}${country ? ` · ${country}` : ""}；开始日前 1 天仅用于 v239 昨日比较。`,
       dataSource: "supabase" as any,
-      queryMode: "postgres-rpc",
       queryCountry: country,
-      databaseRows: Number(rpc?.rowCount || dbRows.length)
+      rowCount: Number(result?.rowCount || rows.length),
+      dataDays: Number(result?.dataDays || 0),
+      countryCount: Number(result?.countryCount || 0),
+      platformCount: Number(result?.platformCount || 0),
+      channelCount: Number(result?.channelCount || 0),
+      fastRpc: true
     } as any,
     rows,
     aliasMap: buildAliasMap(rows),
     summary: volumeSummary(rows),
     anomalies: []
+  };
+}
+
+export async function readSupabaseThirdPartySyncStatus(request: Request, startInput = "", endInput = ""): Promise<ThirdPartySyncStatus> {
+  const token = authTokenFromRequest(request);
+  const profile = await requireActiveProfile(token);
+  if (profile.role === "viewer" && profile.permissions?.third_party === false) throw new Error("这个账号没有三方量 / 费率查看权限");
+  const now = new Date();
+  const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+  const start = isoDate(startInput) || yesterday;
+  const end = isoDate(endInput) || start;
+  const result = await callRpc<any>("dashboard_third_party_sync_status", { p_start: start, p_end: end }, token);
+  return {
+    ok: Boolean(result?.ok ?? true),
+    start,
+    end,
+    historyTasks: Number(result?.historyTasks || 0),
+    historySuccess: Number(result?.historySuccess || 0),
+    historyRemaining: Number(result?.historyRemaining || 0),
+    historyFailed: Number(result?.historyFailed || 0),
+    historyRowsWritten: Number(result?.historyRowsWritten || 0),
+    historyLatestSyncAt: result?.historyLatestSyncAt || null,
+    historyComplete: Boolean(result?.historyComplete),
+    dataDays: Number(result?.dataDays || 0),
+    collectDays: Number(result?.collectDays || 0),
+    payoutDays: Number(result?.payoutDays || 0),
+    latestWriteAt: result?.latestWriteAt || null,
+    ratesLatestWriteAt: result?.ratesLatestWriteAt || null,
   };
 }
 

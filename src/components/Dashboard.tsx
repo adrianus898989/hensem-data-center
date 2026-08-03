@@ -8,11 +8,12 @@ import { monthRangeSignature, monthlyApiUrl, rangeIncludesCurrentMonthClient } f
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload } from "@/lib/monthlyStatusClient";
 import WorkOrderDashboard from "./WorkOrderDashboard";
 import ThirdPartyVolumeDashboard from "./ThirdPartyVolumeDashboard";
+import AdminControlCenter from "./AdminControlCenter";
 import { useDashboardAuth } from "./DashboardAuthGate";
-import { canOpenAdminCenter, hasDashboardPermission } from "@/lib/dashboardAuthClient";
+import { canOpenAdminCenter, hasDashboardPermission, normalizedManagementPermissions } from "@/lib/dashboardAuthClient";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
-type ModuleMode = "home" | "auto" | "operator" | "volume" | "work";
+type ModuleMode = "home" | "auto" | "operator" | "volume" | "work" | "admin";
 type AutoView = "dashboard" | "summary" | "daily" | "month" | "compare" | "anomaly";
 type OperatorView = "dashboard" | "ranking" | "summary" | "detail" | "low" | "date" | "compare";
 type OperatorRankMode = "high" | "low";
@@ -896,14 +897,21 @@ function writeAutoLocalCache(payload: AutoWithdrawPayload) {
 }
 
 export default function Dashboard() {
-  const { profile, openAdminCenter, openProfile } = useDashboardAuth();
+  const { session, profile, openProfile } = useDashboardAuth();
   const canThirdParty = hasDashboardPermission(profile, "third_party");
+  const managementPermissions = normalizedManagementPermissions(profile);
+  const isOwner = profile?.role === "owner";
+  const canAdminUsers = Boolean(profile && (isOwner || managementPermissions.manage_viewers));
+  const canAdminData = Boolean(profile && (isOwner || managementPermissions.refresh_data));
+  const canAdminAudit = Boolean(profile && (isOwner || managementPermissions.view_audit));
   const [state, setState] = useState<LoadState>("idle");
   const [payload, setPayload] = useState<AutoWithdrawPayload | null>(null);
   const [error, setError] = useState("");
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [activeModule, setActiveModule] = useState<ModuleMode>("home");
+  const [adminExpanded, setAdminExpanded] = useState(false);
+  const [adminSection, setAdminSection] = useState<"users" | "data" | "audit">("users");
   const [autoView, setAutoView] = useState<AutoView>("daily");
   const [autoCountryPane, setAutoCountryPane] = useState<string>("");
   const [operatorCountryPane, setOperatorCountryPane] = useState<string>("");
@@ -948,6 +956,18 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => { payloadRef.current = payload; }, [payload]);
+
+  useEffect(() => {
+    const openAdmin = () => {
+      if (!profile || !canOpenAdminCenter(profile)) return;
+      setAdminExpanded(true);
+      const first = canAdminUsers ? "users" : canAdminData ? "data" : "audit";
+      setAdminSection(first);
+      setActiveModule("admin");
+    };
+    window.addEventListener("hensem:open-admin", openAdmin as EventListener);
+    return () => window.removeEventListener("hensem:open-admin", openAdmin as EventListener);
+  }, [profile, canAdminUsers, canAdminData, canAdminAudit]);
 
   async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "") {
     if (!silent) setState("loading");
@@ -1619,10 +1639,17 @@ export default function Dashboard() {
 
       <div className="nav-section-title system-admin-title">系统管理</div>
       {canOpenAdminCenter(profile) && (
-        <button className="nav-item system-admin-nav" onClick={openAdminCenter}>
-          <span className="nav-left"><span className="nav-icon">⚙</span>管理后台</span>
-          <span className="badge owner-badge">{profile?.role === "owner" ? "OWNER" : "ADMIN"}</span>
-        </button>
+        <>
+          <button className={activeModule === "admin" ? "nav-item system-admin-nav active" : "nav-item system-admin-nav"} onClick={() => setAdminExpanded((value) => !value)}>
+            <span className="nav-left"><span className="nav-icon">⚙</span>管理后台</span>
+            <span className="nav-admin-toggle">{adminExpanded ? "⌃" : "⌄"}</span>
+          </button>
+          {adminExpanded && <div className="nav-admin-submenu">
+            {canAdminUsers && <button className={activeModule === "admin" && adminSection === "users" ? "active" : ""} onClick={() => { setAdminSection("users"); setActiveModule("admin"); }}><span>账号与权限</span><small>用户 / 角色 / 权限</small></button>}
+            {canAdminData && <button className={activeModule === "admin" && adminSection === "data" ? "active" : ""} onClick={() => { setAdminSection("data"); setActiveModule("admin"); }}><span>数据同步</span><small>完整度 / 手动刷新</small></button>}
+            {canAdminAudit && <button className={activeModule === "admin" && adminSection === "audit" ? "active" : ""} onClick={() => { setAdminSection("audit"); setActiveModule("admin"); }}><span>操作记录</span><small>后台审计日志</small></button>}
+          </div>}
+        </>
       )}
       <button className="nav-item system-admin-nav" onClick={openProfile}>
         <span className="nav-left"><span className="nav-icon">👤</span>个人资料</span>
@@ -1664,6 +1691,11 @@ export default function Dashboard() {
 
   if (activeModule === "home") {
     return <div className="app-shell">{sidebarContent}{homeContent}</div>;
+  }
+
+  // V251：管理后台作为业务后台内嵌页面，不再跳到独立工作区，也不使用弹窗。
+  if (activeModule === "admin" && session && profile && canOpenAdminCenter(profile)) {
+    return <div className="app-shell">{sidebarContent}<main className="main admin-inline-main"><AdminControlCenter open session={session} profile={profile} section={adminSection} embedded onClose={() => switchModule("home")} /></main></div>;
   }
 
   // V226：工单和三方量始终使用唯一、固定的组件挂载位置。
