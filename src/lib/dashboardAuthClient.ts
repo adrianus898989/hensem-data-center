@@ -297,7 +297,7 @@ export async function listDashboardAudit(session: DashboardSession, limit = 50):
   return Array.isArray(result?.logs) ? result.logs : [];
 }
 
-export type ManualSyncJob = "today_collect" | "today_payout" | "yesterday_collect" | "yesterday_payout" | "rates" | "history_next";
+export type ManualSyncJob = "today_collect" | "today_payout" | "yesterday_collect" | "yesterday_payout" | "rates" | "history_next" | "auto_latest" | "auto_history_next";
 
 export type HistoryBackfillStatus = {
   total: number;
@@ -313,6 +313,11 @@ export type HistoryBackfillStatus = {
 
 export async function getDashboardHistoryStatus(session: DashboardSession): Promise<HistoryBackfillStatus | null> {
   const result = await callAdminFunction(session, { action: "history-status" });
+  return result?.history || null;
+}
+
+export async function getDashboardAutoWithdrawHistoryStatus(session: DashboardSession): Promise<HistoryBackfillStatus | null> {
+  const result = await callAdminFunction(session, { action: "auto-withdraw-history-status" });
   return result?.history || null;
 }
 

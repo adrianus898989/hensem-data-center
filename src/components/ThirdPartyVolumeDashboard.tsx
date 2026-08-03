@@ -2329,8 +2329,9 @@ export default function ThirdPartyVolumeDashboard() {
   }
   return (
     <div className={cls("work-order-module third-party-volume-module", initialLoading && "is-initial-loading")}>
-      <div className="topbar third-party-clean-topbar">
-        <div className="title"><h1>三方量/费率</h1><p>当前位置：Hensem数据后台 &gt; 三方量/费率</p></div>
+      <div className="volume-page-heading">
+        <div><span>THIRD PARTY DATA</span><h1>三方量 / 费率</h1><p>Supabase 高速查询 · 条件修改后点击「查询」应用</p></div>
+        <div className="volume-page-heading-badge">SUPABASE</div>
       </div>
       {initialLoading && (
         <div className="volume-soft-loading">

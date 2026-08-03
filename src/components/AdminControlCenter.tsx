@@ -38,13 +38,19 @@ type Props = {
 type Tab = "users" | "data" | "audit";
 type CreateRole = "admin" | "viewer";
 
-const SYNC_JOBS: Array<{ key: ManualSyncJob; label: string; note: string }> = [
-  { key: "today_collect", label: "今日代收", note: "小时安全增量同步" },
-  { key: "today_payout", label: "今日代付", note: "小时安全增量同步" },
+const THIRD_PARTY_SYNC_JOBS: Array<{ key: ManualSyncJob; label: string; note: string }> = [
+  { key: "today_collect", label: "今日代收", note: "同步今日三方代收" },
+  { key: "today_payout", label: "今日代付", note: "同步今日三方代付" },
   { key: "yesterday_collect", label: "昨日代收", note: "补齐延迟录入平台" },
   { key: "yesterday_payout", label: "昨日代付", note: "补齐延迟录入平台" },
   { key: "rates", label: "费率 / 盘口", note: "同步最新费率与盘口状态" },
 ];
+
+const AUTO_WITHDRAW_SYNC_JOBS: Array<{ key: ManualSyncJob; label: string; note: string }> = [
+  { key: "auto_latest", label: "自动出款 / 操作人 最新日", note: "重新读取 RAW 昨日数据并立即写入 Supabase" },
+];
+
+const ALL_LATEST_SYNC_JOBS = [...THIRD_PARTY_SYNC_JOBS, ...AUTO_WITHDRAW_SYNC_JOBS];
 
 const MANAGEMENT_OPTIONS: Array<{ key: keyof DashboardManagementPermissions; label: string; note: string }> = [
   { key: "manage_viewers", label: "账号管理", note: "可建立、停用、删除 Viewer 与重置 Viewer 密码" },
@@ -98,6 +104,52 @@ function actionLabel(action: string) {
   return labels[action] || action;
 }
 
+function auditDetailsText(log: DashboardAuditLog): string {
+  const details = log.details || {};
+  const parts: string[] = [];
+  const job = String((details as any)?.job || "");
+  if (job) parts.push(`任务：${job}`);
+  const role = String((details as any)?.role || "");
+  if (role && ["owner", "admin", "viewer"].includes(role)) parts.push(`角色：${roleLabel(role as DashboardProfile["role"])}`);
+  if (typeof (details as any)?.active === "boolean") parts.push((details as any).active ? "启用账号" : "停用账号");
+
+  const permissions = (details as any)?.permissions as Record<string, unknown> | undefined;
+  if (permissions && typeof permissions === "object") {
+    const enabled = DASHBOARD_PERMISSION_LABELS
+      .filter((item) => permissions[item.key] === true)
+      .map((item) => item.label);
+    if (enabled.length) parts.push(`业务权限：${enabled.join("、")}`);
+  }
+
+  const management = (details as any)?.management_permissions as Record<string, unknown> | undefined;
+  if (management && typeof management === "object") {
+    const enabled = MANAGEMENT_OPTIONS
+      .filter((item) => management[item.key] === true)
+      .map((item) => item.label);
+    if (enabled.length) parts.push(`后台权限：${enabled.join("、")}`);
+  }
+
+  const message = String((details as any)?.message || "");
+  if (message) parts.push(message);
+
+  if (!parts.length) {
+    try {
+      const raw = JSON.stringify(details);
+      if (raw && raw !== "{}") parts.push(raw);
+    } catch {}
+  }
+  return parts.join(" · ") || "-";
+}
+
+function localDateKey(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || "").slice(0, 10);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 export default function AdminControlCenter({ open, session, profile, onClose, section = "users", embedded = false }: Props) {
   const management = normalizedManagementPermissions(profile);
   const isOwner = profile.role === "owner";
@@ -123,6 +175,15 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   const [syncProgress, setSyncProgress] = useState<string[]>([]);
   const [historyStatus, setHistoryStatus] = useState<HistoryBackfillStatus | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [autoHistoryStatus, setAutoHistoryStatus] = useState<HistoryBackfillStatus | null>(null);
+  const [autoHistoryLoading, setAutoHistoryLoading] = useState(false);
+  const [userSearch, setUserSearch] = useState("");
+  const [userRoleFilter, setUserRoleFilter] = useState<"all" | DashboardProfile["role"]>("all");
+  const [userStatusFilter, setUserStatusFilter] = useState<"all" | "active" | "disabled">("all");
+  const [auditKeyword, setAuditKeyword] = useState("");
+  const [auditAction, setAuditAction] = useState("all");
+  const [auditStartDate, setAuditStartDate] = useState("");
+  const [auditEndDate, setAuditEndDate] = useState("");
 
   const stats = useMemo(() => ({
     owners: users.filter((u) => u.role === "owner").length,
@@ -130,6 +191,46 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     viewers: users.filter((u) => u.role === "viewer").length,
     disabled: users.filter((u) => !u.active).length,
   }), [users]);
+
+  const filteredUsers = useMemo(() => {
+    const keyword = userSearch.trim().toLowerCase();
+    return users.filter((user) => {
+      if (userRoleFilter !== "all" && user.role !== userRoleFilter) return false;
+      if (userStatusFilter === "active" && !user.active) return false;
+      if (userStatusFilter === "disabled" && user.active) return false;
+      if (!keyword) return true;
+      const haystack = [
+        user.username,
+        roleLabel(user.role),
+        roleEnglish(user.role),
+        permissionSummary(user),
+      ].join(" ").toLowerCase();
+      return haystack.includes(keyword);
+    });
+  }, [users, userSearch, userRoleFilter, userStatusFilter]);
+
+  const auditActionOptions = useMemo(() => {
+    return Array.from(new Set(logs.map((log) => log.action).filter(Boolean))).sort();
+  }, [logs]);
+
+  const filteredLogs = useMemo(() => {
+    const keyword = auditKeyword.trim().toLowerCase();
+    return logs.filter((log) => {
+      if (auditAction !== "all" && log.action !== auditAction) return false;
+      const dateKey = localDateKey(log.created_at);
+      if (auditStartDate && dateKey < auditStartDate) return false;
+      if (auditEndDate && dateKey > auditEndDate) return false;
+      if (!keyword) return true;
+      const haystack = [
+        log.actor_username,
+        log.target_username,
+        log.action,
+        actionLabel(log.action),
+        auditDetailsText(log),
+      ].join(" ").toLowerCase();
+      return haystack.includes(keyword);
+    });
+  }, [logs, auditKeyword, auditAction, auditStartDate, auditEndDate]);
 
   async function loadUsers() {
     setLoading(true);
@@ -140,7 +241,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
 
   async function loadAudit() {
     if (!canViewAudit) return;
-    try { setLogs(await listDashboardAudit(session, 80)); }
+    try { setLogs(await listDashboardAudit(session, 300)); }
     catch (error) { setMessage(error instanceof Error ? error.message : "读取操作记录失败"); }
   }
 
@@ -152,12 +253,22 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     finally { setHistoryLoading(false); }
   }
 
+  async function loadAutoHistoryStatus() {
+    if (!canRefreshData) return;
+    setAutoHistoryLoading(true);
+    try {
+      const { getDashboardAutoWithdrawHistoryStatus } = await import("@/lib/dashboardAuthClient");
+      setAutoHistoryStatus(await getDashboardAutoWithdrawHistoryStatus(session));
+    } catch { setAutoHistoryStatus(null); }
+    finally { setAutoHistoryLoading(false); }
+  }
+
   useEffect(() => {
     if (!open || !canOpenAdminCenter(profile)) return;
     setMessage("");
     void loadUsers();
     if (canViewAudit) void loadAudit();
-    if (canRefreshData) void loadHistoryStatus();
+    if (canRefreshData) { void loadHistoryStatus(); void loadAutoHistoryStatus(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, profile.role]);
 
@@ -241,16 +352,22 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   async function runJob(job: ManualSyncJob) {
     if (!canRefreshData) return;
     setSyncRunning(job);
-    setSyncProgress([`正在刷新：${SYNC_JOBS.find((item) => item.key === job)?.label || job}`]);
+    setSyncProgress([`正在刷新：${ALL_LATEST_SYNC_JOBS.find((item) => item.key === job)?.label || job}`]);
     setMessage("");
     try {
       const result = await triggerDashboardSync(session, job);
       const written = result?.result?.written;
-      const suffix = written?.volume ? `，写入 ${written.volume} 行` : written?.rates ? `，费率 ${written.rates} / 盘口 ${written.platformStatuses}` : "";
-      setSyncProgress([`${SYNC_JOBS.find((item) => item.key === job)?.label || job}：完成${suffix}`]);
+      const suffix = written?.volume
+        ? `，写入 ${written.volume} 行`
+        : written?.rates
+          ? `，费率 ${written.rates} / 盘口 ${written.platformStatuses}`
+          : written?.autoWithdraw !== undefined
+            ? `，自动出款 ${written.autoWithdraw} 行 / 操作人 ${written.operator || 0} 行`
+            : "";
+      setSyncProgress([`${ALL_LATEST_SYNC_JOBS.find((item) => item.key === job)?.label || job}：完成${suffix}`]);
       if (canViewAudit) await loadAudit();
     } catch (error) {
-      setSyncProgress([`${SYNC_JOBS.find((item) => item.key === job)?.label || job}：${error instanceof Error ? error.message : "失败"}`]);
+      setSyncProgress([`${ALL_LATEST_SYNC_JOBS.find((item) => item.key === job)?.label || job}：${error instanceof Error ? error.message : "失败"}`]);
     } finally { setSyncRunning(""); }
   }
 
@@ -259,12 +376,18 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     setSyncRunning("all");
     const lines: string[] = [];
     setSyncProgress([]);
-    for (const job of SYNC_JOBS) {
+    for (const job of ALL_LATEST_SYNC_JOBS) {
       setSyncProgress([...lines, `正在刷新：${job.label}...`]);
       try {
         const result = await triggerDashboardSync(session, job.key);
         const written = result?.result?.written;
-        const suffix = written?.volume ? `（${written.volume} 行）` : written?.rates ? `（费率 ${written.rates} / 盘口 ${written.platformStatuses}）` : "";
+        const suffix = written?.volume
+          ? `（${written.volume} 行）`
+          : written?.rates
+            ? `（费率 ${written.rates} / 盘口 ${written.platformStatuses}）`
+            : written?.autoWithdraw !== undefined
+              ? `（自动出款 ${written.autoWithdraw} / 操作人 ${written.operator || 0}）`
+              : "";
         lines.push(`✓ ${job.label} ${suffix}`);
       } catch (error) { lines.push(`✕ ${job.label}：${error instanceof Error ? error.message : "失败"}`); }
       setSyncProgress([...lines]);
@@ -287,6 +410,21 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
       if (canViewAudit) await loadAudit();
     } catch (error) {
       setSyncProgress([`历史补齐：${error instanceof Error ? error.message : "失败"}`]);
+    } finally { setSyncRunning(""); }
+  }
+
+  async function runAutoHistoryNext() {
+    if (!canRefreshData) return;
+    setSyncRunning("auto_history_next");
+    try {
+      const result = await triggerDashboardSync(session, "auto_history_next");
+      const written = result?.result?.written;
+      const date = result?.result?.date || "";
+      setSyncProgress([`自动出款历史补齐${date ? ` ${date}` : ""}：${result?.result?.status || "已执行"}${written ? `（自动出款 ${written.autoWithdraw || 0} / 操作人 ${written.operator || 0}）` : ""}`]);
+      await loadAutoHistoryStatus();
+      if (canViewAudit) await loadAudit();
+    } catch (error) {
+      setSyncProgress([`自动出款历史补齐：${error instanceof Error ? error.message : "失败"}`]);
     } finally { setSyncRunning(""); }
   }
 
@@ -321,9 +459,14 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
           </section>
 
           <section className="admin-panel-card admin-user-list-card-v249">
-            <div className="admin-card-title"><div><span>ACCOUNT DIRECTORY</span><h3>账号目录</h3></div><button type="button" className="admin-light-btn" onClick={() => void loadUsers()}>刷新列表</button></div>
+            <div className="admin-card-title"><div><span>ACCOUNT DIRECTORY</span><h3>账号目录</h3><p className="admin-card-subtitle">共 {users.length} 个账号 · 当前显示 {filteredUsers.length} 个</p></div><button type="button" className="admin-light-btn" onClick={() => void loadUsers()}>刷新列表</button></div>
+            <div className="admin-search-toolbar admin-user-search-toolbar">
+              <div className="admin-search-field wide"><label>搜索账号 / 权限</label><input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="输入账号、角色、模块或后台权限" /></div>
+              <div className="admin-search-field"><label>角色</label><select value={userRoleFilter} onChange={(e) => setUserRoleFilter(e.target.value as any)}><option value="all">全部角色</option><option value="owner">总管理员</option><option value="admin">管理员</option><option value="viewer">查看账号</option></select></div>
+              <div className="admin-search-field"><label>状态</label><select value={userStatusFilter} onChange={(e) => setUserStatusFilter(e.target.value as any)}><option value="all">全部状态</option><option value="active">正常</option><option value="disabled">停用</option></select></div>
+            </div>
             {loading && !users.length ? <div className="admin-empty">正在读取账号...</div> : <div className="admin-user-list-v249">
-              {users.map((user) => {
+              {filteredUsers.map((user) => {
                 const permissions = normalizedPermissions(user);
                 const managerPermissions = normalizedManagementPermissions(user);
                 const editable = canEditTarget(user);
@@ -338,6 +481,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
                   {!editable && user.role === "owner" && <div className="admin-owner-lock">唯一总管理员账号 · 不能在这里停用、删除或被其他账号修改</div>}
                 </article>;
               })}
+              {!filteredUsers.length && <div className="admin-empty admin-filter-empty">没有符合当前搜索条件的账号。</div>}
             </div>}
           </section>
         </div>
@@ -345,18 +489,46 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
 
       {tab === "data" && canRefreshData && (
         <div className="admin-data-grid">
-          <section className="admin-panel-card admin-data-hero"><div><span>DATA CONTROL</span><h3>数据同步</h3><p>网站查询只读 Supabase。这里显示后台同步状态；只有需要立即拿到最新 Google 数据时才手动刷新。</p></div><button type="button" className="admin-refresh-all" disabled={Boolean(syncRunning)} onClick={() => void runAllLatest()}>{syncRunning === "all" ? "正在刷新全部..." : "刷新全部最新数据"}</button></section>
-          <section className="admin-panel-card admin-history-card">
-            <div className="admin-history-head"><div><span>HISTORY DATABASE</span><h3>历史数据补齐</h3><p>完成数达到总任务数且失败为 0，才表示历史数据已经完整写入 Supabase。</p></div><button type="button" className="admin-light-btn" onClick={() => void loadHistoryStatus()} disabled={historyLoading}>{historyLoading ? "读取中..." : "刷新进度"}</button></div>
-            {historyStatus ? <><div className="admin-history-progress-line"><div style={{ width: `${Math.max(0, Math.min(100, historyStatus.completedPct || 0))}%` }} /></div><div className="admin-history-stats"><div><span>完成进度</span><b>{historyStatus.completed} / {historyStatus.total}</b><small>{historyStatus.completedPct.toFixed(1)}%</small></div><div><span>待补任务</span><b>{historyStatus.pending + historyStatus.retry}</b><small>{historyStatus.nextPendingDate || "-"}</small></div><div><span>失败任务</span><b>{historyStatus.failed}</b><small>{historyStatus.failed ? "需要检查" : "正常"}</small></div><div><span>历史写入</span><b>{historyStatus.rowsWritten.toLocaleString()}</b><small>{historyStatus.lastSyncAt ? formatTime(historyStatus.lastSyncAt) : "尚未开始"}</small></div></div><div className="admin-history-actions"><span>{historyStatus.completed === historyStatus.total && historyStatus.failed === 0 ? "✓ 历史数据已全部补齐" : "历史全部完成后任务会自动停止。"}</span><button type="button" disabled={Boolean(syncRunning)} onClick={() => void runHistoryNext()}>{syncRunning === "history_next" ? "正在补齐..." : "立即补下一项"}</button></div></> : <div className="admin-history-empty">暂时没有历史进度数据。</div>}
-          </section>
-          <section className="admin-sync-jobs">{SYNC_JOBS.map((job) => <div className="admin-panel-card admin-sync-job" key={job.key}><div><h4>{job.label}</h4><p>{job.note}</p></div><button type="button" disabled={Boolean(syncRunning)} onClick={() => void runJob(job.key)}>{syncRunning === job.key ? "刷新中..." : "立即刷新"}</button></div>)}</section>
+          <section className="admin-panel-card admin-data-hero"><div><span>DATA CONTROL</span><h3>数据同步中心</h3><p>网站只查询 Supabase；浏览器「刷新」不会把 Google / RAW 数据写进数据库。这里的同步按钮才会真正触发后台写库。</p></div><button type="button" className="admin-refresh-all" disabled={Boolean(syncRunning)} onClick={() => void runAllLatest()}>{syncRunning === "all" ? "正在同步全部..." : "立即同步全部最新数据"}</button></section>
+
+          <div className="admin-history-grid">
+            <section className="admin-panel-card admin-history-card">
+              <div className="admin-history-head"><div><span>THIRD PARTY HISTORY</span><h3>三方量历史补齐</h3><p>显示三方量 / 费率模块的历史任务完成情况。</p></div><button type="button" className="admin-light-btn" onClick={() => void loadHistoryStatus()} disabled={historyLoading}>{historyLoading ? "读取中..." : "刷新进度"}</button></div>
+              {historyStatus ? <><div className="admin-history-progress-line"><div style={{ width: `${Math.max(0, Math.min(100, historyStatus.completedPct || 0))}%` }} /></div><div className="admin-history-stats"><div><span>完成</span><b>{historyStatus.completed} / {historyStatus.total}</b><small>{historyStatus.completedPct.toFixed(1)}%</small></div><div><span>待补</span><b>{historyStatus.pending + historyStatus.retry}</b><small>{historyStatus.nextPendingDate || "-"}</small></div><div><span>失败</span><b>{historyStatus.failed}</b><small>{historyStatus.failed ? "需要检查" : "正常"}</small></div><div><span>写入</span><b>{historyStatus.rowsWritten.toLocaleString()}</b><small>{historyStatus.lastSyncAt ? formatTime(historyStatus.lastSyncAt) : "尚未开始"}</small></div></div><div className="admin-history-actions"><span>{historyStatus.completed === historyStatus.total && historyStatus.failed === 0 ? "✓ 已全部补齐" : "后台会继续自动补齐。"}</span><button type="button" disabled={Boolean(syncRunning)} onClick={() => void runHistoryNext()}>{syncRunning === "history_next" ? "补齐中..." : "立即补下一项"}</button></div></> : <div className="admin-history-empty">暂时没有历史进度数据。</div>}
+            </section>
+
+            <section className="admin-panel-card admin-history-card auto-withdraw-history-card">
+              <div className="admin-history-head"><div><span>AUTO WITHDRAW HISTORY</span><h3>自动出款 / 操作人历史</h3><p>RAW → Supabase 历史补齐状态，包含自动出款与提现操作人两套数据。</p></div><button type="button" className="admin-light-btn" onClick={() => void loadAutoHistoryStatus()} disabled={autoHistoryLoading}>{autoHistoryLoading ? "读取中..." : "刷新进度"}</button></div>
+              {autoHistoryStatus ? <><div className="admin-history-progress-line"><div style={{ width: `${Math.max(0, Math.min(100, autoHistoryStatus.completedPct || 0))}%` }} /></div><div className="admin-history-stats"><div><span>完成</span><b>{autoHistoryStatus.completed} / {autoHistoryStatus.total}</b><small>{autoHistoryStatus.completedPct.toFixed(1)}%</small></div><div><span>待补</span><b>{autoHistoryStatus.pending + autoHistoryStatus.retry}</b><small>{autoHistoryStatus.nextPendingDate || "-"}</small></div><div><span>失败</span><b>{autoHistoryStatus.failed}</b><small>{autoHistoryStatus.failed ? "需要检查" : "正常"}</small></div><div><span>写入</span><b>{autoHistoryStatus.rowsWritten.toLocaleString()}</b><small>{autoHistoryStatus.lastSyncAt ? formatTime(autoHistoryStatus.lastSyncAt) : "尚未开始"}</small></div></div><div className="admin-history-actions"><span>{autoHistoryStatus.completed === autoHistoryStatus.total && autoHistoryStatus.failed === 0 ? "✓ 已全部补齐" : "后台会继续自动补齐。"}</span><button type="button" disabled={Boolean(syncRunning)} onClick={() => void runAutoHistoryNext()}>{syncRunning === "auto_history_next" ? "补齐中..." : "立即补下一天"}</button></div></> : <div className="admin-history-empty">暂时没有自动出款历史进度。</div>}
+            </section>
+          </div>
+
+          <div className="admin-sync-section">
+            <div className="admin-sync-section-title"><span>THIRD PARTY</span><h3>三方量 / 费率即时同步</h3></div>
+            <section className="admin-sync-jobs">{THIRD_PARTY_SYNC_JOBS.map((job) => <div className="admin-panel-card admin-sync-job" key={job.key}><div><h4>{job.label}</h4><p>{job.note}</p></div><button type="button" disabled={Boolean(syncRunning)} onClick={() => void runJob(job.key)}>{syncRunning === job.key ? "刷新中..." : "立即刷新"}</button></div>)}</section>
+          </div>
+
+          <div className="admin-sync-section">
+            <div className="admin-sync-section-title"><span>AUTO WITHDRAW</span><h3>自动出款 / 提现操作人即时同步</h3></div>
+            <section className="admin-sync-jobs auto-sync-jobs">{AUTO_WITHDRAW_SYNC_JOBS.map((job) => <div className="admin-panel-card admin-sync-job" key={job.key}><div><h4>{job.label}</h4><p>{job.note}</p></div><button type="button" disabled={Boolean(syncRunning)} onClick={() => void runJob(job.key)}>{syncRunning === job.key ? "刷新中..." : "立即刷新"}</button></div>)}</section>
+          </div>
+
           {syncProgress.length > 0 && <section className="admin-panel-card admin-sync-progress"><h4>本次执行结果</h4>{syncProgress.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)}</section>}
         </div>
       )}
 
       {tab === "audit" && canViewAudit && (
-        <section className="admin-panel-card admin-audit-card-v249"><div className="admin-card-title"><div><span>ADMIN AUDIT LOG</span><h3>后台操作记录</h3></div><button type="button" className="admin-light-btn" onClick={() => void loadAudit()}>刷新记录</button></div><div className="admin-audit-table-wrap"><table className="admin-audit-table"><thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>目标</th></tr></thead><tbody>{logs.map((log) => <tr key={log.id}><td>{formatTime(log.created_at)}</td><td>{log.actor_username || "system"}</td><td>{actionLabel(log.action)}</td><td>{log.target_username || "-"}</td></tr>)}</tbody></table>{!logs.length && <div className="admin-empty">暂无操作记录。</div>}</div></section>
+        <section className="admin-panel-card admin-audit-card-v249">
+          <div className="admin-card-title"><div><span>ADMIN AUDIT LOG</span><h3>后台操作记录</h3><p className="admin-card-subtitle">已载入 {logs.length} 条 · 当前显示 {filteredLogs.length} 条</p></div><button type="button" className="admin-light-btn" onClick={() => void loadAudit()}>刷新记录</button></div>
+          <div className="admin-search-toolbar admin-audit-search-toolbar">
+            <div className="admin-search-field wide"><label>搜索操作 / 调整内容</label><input value={auditKeyword} onChange={(e) => setAuditKeyword(e.target.value)} placeholder="账号、操作人、权限、角色、停用、同步任务..." /></div>
+            <div className="admin-search-field"><label>动作</label><select value={auditAction} onChange={(e) => setAuditAction(e.target.value)}><option value="all">全部动作</option>{auditActionOptions.map((action) => <option key={action} value={action}>{actionLabel(action)}</option>)}</select></div>
+            <div className="admin-search-field"><label>开始日期</label><input type="date" value={auditStartDate} onChange={(e) => setAuditStartDate(e.target.value)} /></div>
+            <div className="admin-search-field"><label>结束日期</label><input type="date" value={auditEndDate} onChange={(e) => setAuditEndDate(e.target.value)} /></div>
+            <button type="button" className="admin-clear-filter" onClick={() => { setAuditKeyword(""); setAuditAction("all"); setAuditStartDate(""); setAuditEndDate(""); }}>清除筛选</button>
+          </div>
+          <div className="admin-audit-table-wrap"><table className="admin-audit-table"><thead><tr><th>时间</th><th>操作人</th><th>动作</th><th>目标</th><th>调整 / 详情</th></tr></thead><tbody>{filteredLogs.map((log) => <tr key={log.id}><td>{formatTime(log.created_at)}</td><td>{log.actor_username || "system"}</td><td><span className="admin-action-chip">{actionLabel(log.action)}</span></td><td>{log.target_username || "-"}</td><td className="admin-audit-details" title={auditDetailsText(log)}>{auditDetailsText(log)}</td></tr>)}</tbody></table>{!filteredLogs.length && <div className="admin-empty">没有符合当前条件的操作记录。</div>}</div>
+        </section>
       )}
     </>
   );
