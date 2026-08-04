@@ -763,16 +763,6 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
           <div className="field"><label>关键词</label><input className="input" value={draftFilters.keyword} onChange={(e) => updateDraft("keyword", e.target.value)} placeholder="搜索客服 / 平台 / 指标 / 内容" /></div>
           <div className="action-row"><button className="primary-btn" onClick={() => void applyFilters()} disabled={state === "loading"}>{state === "loading" ? "查询中..." : "查询"}</button><button className="ghost-btn" onClick={resetFilters}>重置</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(-1)}>上一日</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(1)}>下一日</button><button className="ghost-btn" onClick={() => exportCsv("customer-service.csv", filteredRows)}>导出</button></div>
         </div>
-        <div className="selected-row">
-          <span>已选条件：</span>
-          <b>页签：{filterLabel(filters.sheets, "全部")}</b>
-          <b>国家：{filterLabel(filters.countries, "全部")}</b>
-          <b>平台：{filterLabel(filters.platforms, "全部")}</b>
-          <b>团队：{filterLabel(filters.teams, "全部")}</b>
-          <b>客服：{filterLabel(filters.staff, "全部")}</b>
-          <b>指标：{filterLabel(filters.metrics, "全部")}</b>
-          <b>日期：{filters.startDate || "-"} 至 {filters.endDate || "-"}</b>
-        </div>
         <div className="quick-row date-shortcuts">
           <span>快捷日期：</span>
           <button type="button" onClick={() => applyDateShortcut("today")}>今天</button>
@@ -783,15 +773,7 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
           <button type="button" onClick={() => applyDateShortcut("thisMonth")}>本月</button>
           <button type="button" onClick={() => applyDateShortcut("lastMonth")}>上月</button>
         </div>
-        <div className="selected-row">
-          <span>当前结果：</span>
-          <span className="page-size-control">每页 <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>{[20, 50, 100, 200].map((size) => <option key={size} value={size}>{size}</option>)}</select></span>
-          <b>明细 {formatNumber(filteredRows.length)} 行</b>
-          <b>指标 {summary.metrics} 个</b>
-          <b>客服 {summary.staff} 人</b>
-        </div>
       </section>
-      {state === "loading" && <div className="business-query-note">正在查询所选日期客服数据...</div>}
       {state === "error" && error && <div className="business-query-error">查询失败：{error}</div>}
 
       {(view === "customerDashboard" || view === "staffDashboard") && (
@@ -1135,7 +1117,7 @@ function CSMultiSelect({ label, options, value, onChange, placeholder }: { label
     <div className="field multi-field rate-multi-field" ref={ref}>
       <label>{label}</label>
       <button className="multi-button" type="button" onClick={() => setOpen((x) => !x)}><span>{value.length ? filterLabel(value, placeholder) : placeholder}</span><span className="multi-caret">▾</span></button>
-      {open && <div className="multi-menu rate-multi-menu"><input className="multi-search" value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder={`搜索${label}`} /><div className="multi-actions"><button type="button" onClick={() => onChange(uniq([...value, ...visible]))}>全选当前</button><button type="button" onClick={() => { onChange([]); setKeyword(""); }}>清空</button><button type="button" onClick={() => setOpen(false)}>完成</button></div><div className="multi-list">{visible.map((item) => <label className="multi-option" key={item}><input type="checkbox" checked={value.includes(item)} onChange={() => toggle(item)} /><span>{item}</span></label>)}{!visible.length && <div className="multi-empty">没有匹配选项</div>}</div><div className="multi-footer">已选 {value.length} 项，点击“查询”后刷新</div></div>}
+      {open && <div className="multi-menu rate-multi-menu"><input className="multi-search" value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder={`搜索${label}`} /><div className="multi-actions"><button type="button" onClick={() => onChange(uniq([...value, ...visible]))}>全选当前</button><button type="button" onClick={() => { onChange([]); setKeyword(""); }}>清空</button><button type="button" onClick={() => setOpen(false)}>完成</button></div><div className="multi-list">{visible.map((item) => <label className="multi-option" key={item}><input type="checkbox" checked={value.includes(item)} onChange={() => toggle(item)} /><span>{item}</span></label>)}{!visible.length && <div className="multi-empty">没有匹配选项</div>}</div></div>}
     </div>
   );
 }

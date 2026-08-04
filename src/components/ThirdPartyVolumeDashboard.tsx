@@ -137,6 +137,25 @@ function filterLabel(values: string[], placeholder = "全部"): string {
 const ALL_USDT_COUNTRY_PAGE = "所有国家USDT";
 const COUNTRY_PRIORITY = ["印度", "巴西", "巴基斯坦", "印尼", "越南", "菲律宾", "马来", "缅甸", "哥伦比亚", "墨西哥", "智利", "尼日利亚", "胖虎巴西", "巴西原生", ALL_USDT_COUNTRY_PAGE, "南美", "USDT通道", "USDT"];
 
+// 业务导航固定显示，不依赖查询结果。
+// 进入页面即可先选择国家；真正的数据仍然只有点击「查询」后才读取 Supabase。
+const COUNTRY_NAV_TABS = [
+  "印度",
+  "巴西",
+  "巴基斯坦",
+  "印尼",
+  "越南",
+  "菲律宾",
+  "马来",
+  "缅甸",
+  "哥伦比亚",
+  "墨西哥",
+  "智利",
+  "尼日利亚",
+  "胖虎巴西",
+  ALL_USDT_COUNTRY_PAGE,
+];
+
 function isHiddenCountry(country: string): boolean {
   return String(country || "").includes("埃及");
 }
@@ -2086,13 +2105,12 @@ export default function ThirdPartyVolumeDashboard() {
 
   const rows = useMemo(() => (payload?.rows || []).map(normalizeVolumeRowForDisplay).filter((row) => !isHiddenCountry(row.country)), [payload]);
   const countries = useMemo(() => sortCountries([...knownCountries, ...rows.map((row) => row.country)]), [knownCountries, rows]);
-  // V251：国家页签使用“已知国家集合”，按国家高速查询后不会把其它国家页签一起消失。
+  // 专业后台：国家导航属于固定业务导航，不应该等查询数据回来后才出现。
+  // 动态发现的新国家仍可追加，但标准国家页签始终先显示。
   const countryTabs = useMemo(() => {
-    const tabs = [...countries];
-    const hasUsdt = rows.some(isUsdtVolumeRow) || tabs.length > 0;
-    if (hasUsdt && !tabs.includes(ALL_USDT_COUNTRY_PAGE)) tabs.push(ALL_USDT_COUNTRY_PAGE);
-    return tabs;
-  }, [countries, rows]);
+    const dynamic = countries.filter((item) => !isHiddenCountry(item) && !COUNTRY_NAV_TABS.includes(item));
+    return [...COUNTRY_NAV_TABS, ...sortCountries(dynamic)];
+  }, [countries]);
   const activeCountryPage = countryPage && countryTabs.includes(countryPage) ? countryPage : (mainTab === "country" ? (countryTabs[0] || "") : "");
   const effectiveCountryFilter = mainTab === "country" ? activeCountryPage : country;
 
@@ -2306,42 +2324,6 @@ export default function ThirdPartyVolumeDashboard() {
           <div><b>{dataNotice}</b></div>
         </div>
       )}
-      {hasQueried && <div className="volume-query-status">
-        <div className="volume-query-status-main">
-          <span className={cls("volume-query-status-dot", isQuerying && "loading")} />
-          <div>
-            <b>{isQuerying ? "查询中" : "当前结果"}</b>
-            <span>{appliedStartDate || "-"} 至 {appliedEndDate || appliedStartDate || "-"}{lastQueryAt ? ` · ${new Date(lastQueryAt).toLocaleTimeString("zh-CN", { hour12: false })}` : ""}</span>
-          </div>
-        </div>
-        {hasPendingQuery && !isQuerying && <span className="volume-query-pending">条件已修改 · 点击「查询」后应用</span>}
-      </div>}
-      {hasQueried && volumeSyncStatus && (
-        <div className={cls("volume-completeness-bar", appliedCoverage.complete ? "complete" : appliedCoverage.incomplete ? "running" : "current")}>
-          <div className="volume-completeness-main">
-            <span className="volume-completeness-icon">{appliedCoverage.complete ? "✓" : appliedCoverage.incomplete ? "↻" : "●"}</span>
-            <div>
-              <b>{appliedCoverage.complete ? "数据已齐" : appliedCoverage.historical ? "历史补齐中" : "同步中"}</b>
-              <span>{volumeSyncStatus.historyTasks > 0
-                ? `${volumeSyncStatus.historySuccess}/${volumeSyncStatus.historyTasks} 个历史任务${volumeSyncStatus.historyFailed ? ` · 失败 ${volumeSyncStatus.historyFailed}` : ""}`
-                : `当前范围 ${volumeSyncStatus.dataDays} 个数据日 · 代收 ${volumeSyncStatus.collectDays} 日 · 代付 ${volumeSyncStatus.payoutDays} 日`}</span>
-            </div>
-          </div>
-          <div className="volume-completeness-time">最后写库 {volumeSyncStatus.latestWriteAt ? new Date(volumeSyncStatus.latestWriteAt).toLocaleString("zh-CN", { hour12: false }) : "-"}</div>
-        </div>
-      )}
-      {hasQueried && appliedCoverage.incomplete && appliedCoverage.historical && (
-        <div className="volume-history-progress-notice">
-          <span className="volume-history-progress-icon">↻</span>
-          <div><b>历史补齐中</b><span>{appliedCoverage.loaded}/{appliedCoverage.expected}</span></div>
-        </div>
-      )}
-      {hasQueried && !rows.some((row) => dateMatches(row.date, appliedStartDate, appliedEndDate)) && (
-        <div className="volume-empty-notice">
-          <div className="volume-empty-icon">i</div>
-          <div><b>该日期暂无数据</b></div>
-        </div>
-      )}
       <section className="third-party-tab-panel">
         <div className="tab-group-row main-tab-row">
           <button className={cls("module-tab", mainTab === "country" && "active")} onClick={() => { setMainTab("country"); setVolumeMode("daily"); setCountryPage(""); setCountry(""); setCountrySelections([]); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }}>各国家量</button>
@@ -2504,7 +2486,7 @@ function CountryVolumeSinglePage({ country, rows, summary, monthlyRows, monthlyP
           ["代付笔数", formatNumber(summary.payoutCount)],
           ...feeStatItems
         ]} />
-        <MonthlyTable title={`${countryPaneLabel(country)} 月汇总`} subtitle="当前国家按 月份 > 统一三方 汇总；点展开可查看这个月内各类型和平台量。" rows={monthlyPeriodRows} columns={["月份", "国家", "统一三方"]} feeRows={feeRows} paginated />
+        <MonthlyTable title={`${countryPaneLabel(country)} 月汇总`} subtitle="" rows={monthlyPeriodRows} columns={["月份", "国家", "统一三方"]} feeRows={feeRows} paginated />
       </div>
     );
   }
@@ -2534,11 +2516,11 @@ function CountryVolumeSinglePage({ country, rows, summary, monthlyRows, monthlyP
       )}
 
       {subTab === "daily" && (
-        <DailyCompareTable title={`${countryPaneLabel(country)} 日汇总`} subtitle="日汇总按 日期 > 主三方 汇总；点“展开”可看当前日期下这个主三方各类型总量（跨平台合并），点“查看”可弹窗核对具体平台明细。" rows={dailyCompareRows} feeRows={feeRows} />
+        <DailyCompareTable title={`${countryPaneLabel(country)} 日汇总`} subtitle="" rows={dailyCompareRows} feeRows={feeRows} />
       )}
 
       {subTab === "platform" && (
-        <PlatformVolumeTable title={`${countryPaneLabel(country)} 平台量`} subtitle="按 日期 > 盘口/平台 汇总；点“展开”可看这个盘口下各三方代收、代付、手续费，点“查看”可弹窗核对平台原始明细。" rows={platformCompareRows} feeRows={feeRows} />
+        <PlatformVolumeTable title={`${countryPaneLabel(country)} 平台量`} subtitle="" rows={platformCompareRows} feeRows={feeRows} />
       )}
 
       {subTab === "anomaly" && (
@@ -2548,7 +2530,7 @@ function CountryVolumeSinglePage({ country, rows, summary, monthlyRows, monthlyP
       {subTab !== "anomaly" && (
         <ThirdPartyStructureCard
           title={`${countryPaneLabel(country)} ${subTabLabel}三方结构`}
-          subtitle="放在表格下方，只跟随当前国家、日期和页面筛选；异常提醒不显示这个结构块。"
+          subtitle=""
           rows={structureSourceRows}
           summary={structureSummary}
           feeRows={feeRows}
@@ -2592,7 +2574,7 @@ function PlatformVolumeTable({ title, subtitle, rows, feeRows }: { title: string
 
   return (
     <div className="panel daily-compare-panel platform-volume-panel">
-      <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      <div className="panel-head"><div><h2>{title}</h2>{subtitle ? <p>{subtitle}</p> : null}</div></div>
       <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />
       <div className="table-wrap work-table-wrap daily-compare-wrap">
         <table>
@@ -2657,7 +2639,7 @@ function DailyCompareTable({ title, subtitle, rows, feeRows }: { title: string; 
 
   return (
     <div className="panel daily-compare-panel">
-      <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      <div className="panel-head"><div><h2>{title}</h2>{subtitle ? <p>{subtitle}</p> : null}</div></div>
       <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />
       <div className="table-wrap work-table-wrap daily-compare-wrap">
         <table>
@@ -3022,7 +3004,7 @@ function ThirdPartyStructureCard({ title, subtitle, rows, summary, feeRows = [] 
   const structureRows = buildThirdPartyStructureRows(rows);
   return (
     <div className="panel third-party-structure-panel">
-      <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      <div className="panel-head"><div><h2>{title}</h2>{subtitle ? <p>{subtitle}</p> : null}</div></div>
       <div className="third-party-structure-summary">
         <div><span>主三方</span><strong>{formatNumber(structureRows.length)}</strong></div>
         <div><span>代收金额</span><strong>{formatNumber(summary.collectAmount)}</strong></div>
@@ -3181,7 +3163,7 @@ function VolumeShareCard({ summary }: { summary: ReturnType<typeof sumRows> }) {
 function TopListCard({ title, subtitle, rows }: { title: string; subtitle: string; rows: ComboSummary[] }) {
   return (
     <div className="panel">
-      <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      <div className="panel-head"><div><h2>{title}</h2>{subtitle ? <p>{subtitle}</p> : null}</div></div>
       <div className="mini-list">
         {rows.map((row, index) => <div className="rank-item" key={row.key}><div className="rank-no">{index + 1}</div><div><div className="rank-name">{row.labelParts.join(" / ")}</div><div className="rank-sub">代收 {formatNumber(row.collectAmount)} · 代付 {formatNumber(row.payoutAmount)} · 占比 {formatPercent(row.totalPct)}</div></div><div className="rank-value">{formatNumber(row.totalAmount)}</div></div>)}
         {!rows.length && <div className="empty">暂无数据</div>}
@@ -3265,7 +3247,7 @@ function CountryDirectionSections({ title, subtitle, rows, columns }: { title: s
   return (
     <div className="country-section-stack">
       <div className="panel country-section-intro">
-        <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+        <div className="panel-head"><div><h2>{title}</h2>{subtitle ? <p>{subtitle}</p> : null}</div></div>
       </div>
       {groups.map((group) => (
         <section className="country-section-card" key={group.country}>
@@ -3285,7 +3267,7 @@ function CountryFeeSections({ rows, title, subtitle, showDate, compact }: { rows
   return (
     <div className="country-section-stack fee-country-stack">
       <div className="panel country-section-intro">
-        <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+        <div className="panel-head"><div><h2>{title}</h2>{subtitle ? <p>{subtitle}</p> : null}</div></div>
       </div>
       {shownGroups.map((group) => {
         const previewRows = group.rows.slice(0, 12);
@@ -3383,7 +3365,7 @@ function MonthlyTable({ title, subtitle, rows, columns, feeRows = [], paginated,
 
   return (
     <div className="panel">
-      <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      <div className="panel-head"><div><h2>{title}</h2>{subtitle ? <p>{subtitle}</p> : null}</div></div>
       {paginated && <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />}
       <div className="table-wrap work-table-wrap volume-summary-table-wrap">
         <table>
@@ -3426,7 +3408,7 @@ function DirectionTable({ title, subtitle, rows, columns, paginated }: { title: 
   const totalSummary = sumDirectionSummaryRows(rows);
   return (
     <div className="panel">
-      <div className="panel-head"><div><h2>{title}</h2><p>{subtitle}</p></div></div>
+      <div className="panel-head"><div><h2>{title}</h2>{subtitle ? <p>{subtitle}</p> : null}</div></div>
       {paginated && <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />}
       <div className="table-wrap work-table-wrap"><table><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}<th className="num">金额</th><th className="num">笔数</th></tr></thead><tbody>{shown.map((row) => <tr key={row.key}>{columns.map((_, index) => <td key={index}>{row.parts[index] || "-"}</td>)}<td className="num">{formatNumber(row.amount)}</td><td className="num">{formatNumber(row.count)}</td></tr>)}{!shown.length && <tr><td colSpan={columns.length + 2} className="empty">暂无数据</td></tr>}</tbody><tfoot><tr className="summary-row page-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>当前页汇总</td> : <><td>当前页汇总</td>{columns.slice(1).map((column) => <td key={`direction-page-${column}`}>-</td>)}</>}<td className="num strong-cell">{formatNumber(shownSummary.amount)}</td><td className="num strong-cell">{formatNumber(shownSummary.count)}</td></tr><tr className="summary-row overall-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>全部汇总</td> : <><td>全部汇总</td>{columns.slice(1).map((column) => <td key={`direction-all-${column}`}>-</td>)}</>}<td className="num strong-cell">{formatNumber(totalSummary.amount)}</td><td className="num strong-cell">{formatNumber(totalSummary.count)}</td></tr></tfoot></table></div>
     </div>

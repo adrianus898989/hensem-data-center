@@ -27,6 +27,25 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue>({ session: null, profile: null, logout: () => undefined, openAdminCenter: () => undefined, openProfile: () => undefined });
 
+const DASHBOARD_IDLE_MS = 60 * 60 * 1000;
+const DASHBOARD_LAST_ACTIVITY_KEY = "hensem.dashboard.last_activity";
+
+function readLastActivity(): number {
+  if (typeof window === "undefined") return 0;
+  const value = Number(window.localStorage.getItem(DASHBOARD_LAST_ACTIVITY_KEY) || 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function writeLastActivity(value = Date.now()) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(DASHBOARD_LAST_ACTIVITY_KEY, String(value));
+}
+
+function clearLastActivity() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(DASHBOARD_LAST_ACTIVITY_KEY);
+}
+
 export function useDashboardAuth() {
   return useContext(AuthContext);
 }
@@ -59,6 +78,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
 
   function logout() {
     saveDashboardSession(null);
+    clearLastActivity();
     setSession(null);
     setProfile(null);
     setPassword("");
@@ -73,9 +93,21 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     void (async () => {
       const saved = readSavedDashboardSession();
       if (!saved) {
+        clearLastActivity();
         if (!cancelled) setReady(true);
         return;
       }
+
+      const lastActivity = readLastActivity();
+      if (lastActivity > 0 && Date.now() - lastActivity >= DASHBOARD_IDLE_MS) {
+        saveDashboardSession(null);
+        clearLastActivity();
+        if (!cancelled) setReady(true);
+        return;
+      }
+      // 老版本升级过来还没有活动时间时，从本次打开开始计时。
+      if (!lastActivity) writeLastActivity();
+
       try {
         let active = saved;
         let nextProfile: DashboardProfile;
@@ -123,25 +155,50 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   }, [userMenuOpen]);
 
   useEffect(() => {
-    if (!enabled || !session || !profile) return;
-    const IDLE_MS = 60 * 60 * 1000;
-    let timer = window.setTimeout(() => logout(), IDLE_MS);
-    let lastReset = Date.now();
-    const reset = () => {
+    if (!enabled || !profile?.username) return;
+
+    // 注意：后台 token 会每 45 分钟刷新一次。
+    // token 刷新不等于用户有操作，因此这里不再依赖 access_token，
+    // 否则每次刷新都会把“1小时无操作退出”重新计时。
+    let lastWrite = 0;
+
+    const markActivity = () => {
       const now = Date.now();
-      if (now - lastReset < 1000) return;
-      lastReset = now;
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => logout(), IDLE_MS);
+      if (now - lastWrite < 1000) return;
+      lastWrite = now;
+      writeLastActivity(now);
     };
+
+    const checkIdle = () => {
+      const last = readLastActivity();
+      if (!last) {
+        writeLastActivity();
+        return;
+      }
+      if (Date.now() - last >= DASHBOARD_IDLE_MS) logout();
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") checkIdle();
+    };
+
     const events: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "touchstart", "scroll"];
-    events.forEach((name) => window.addEventListener(name, reset, { passive: true }));
+    events.forEach((name) => window.addEventListener(name, markActivity, { passive: true }));
+    window.addEventListener("focus", checkIdle);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    // 30 秒检查一次，同时处理电脑休眠/页面挂后台后回来已经超过1小时的情况。
+    const timer = window.setInterval(checkIdle, 30 * 1000);
+    checkIdle();
+
     return () => {
-      window.clearTimeout(timer);
-      events.forEach((name) => window.removeEventListener(name, reset));
+      window.clearInterval(timer);
+      events.forEach((name) => window.removeEventListener(name, markActivity));
+      window.removeEventListener("focus", checkIdle);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, session?.access_token, profile?.username]);
+  }, [enabled, profile?.username]);
 
   async function submitLogin(event: React.FormEvent) {
     event.preventDefault();
@@ -151,6 +208,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       const nextSession = await signInDashboard(username, password);
       const nextProfile = await fetchDashboardProfile(nextSession);
       await verifyDashboardAccess(nextSession);
+      writeLastActivity();
       applyAuthenticated(nextSession, nextProfile);
       setPassword("");
     } catch (err) {
@@ -181,6 +239,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       const nextSession = await changeOwnDashboardPassword(profile.username, currentPassword, newPassword);
       const nextProfile = await fetchDashboardProfile(nextSession);
       await verifyDashboardAccess(nextSession);
+      writeLastActivity();
       applyAuthenticated(nextSession, nextProfile);
       setCurrentPassword("");
       setNewPassword("");

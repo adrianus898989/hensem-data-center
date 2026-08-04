@@ -1072,35 +1072,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
             
           </div>
         </div>
-
-        <div className="selected-row">
-          <span>已选条件：</span>
-          <b>国家：{filterLabel(filters.countries)}</b>
-          <b>页签：{filterLabel(filters.sheets)}</b>
-          <b>盘口：{filterLabel(filters.platforms)}</b>
-          <b>三方：{filterLabel(filters.thirdParties)}</b>
-          <b>类型：{filterLabel(filters.categories)}</b>
-          <b>状态：{filterLabel(filters.statuses)}</b>
-          <b>方向：{filterLabel(filters.channelTypes)}</b>
-        </div>
-
-        <div className="quick-row">
-          <span>当前结果：</span>
-          <label className="page-size-control">
-            每页
-            <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={200}>200</option>
-            </select>
-          </label>
-          <b>运行三方 {runningRows.length} 个</b>
-          <b>接入状态 {filteredStatusRows.length} 行</b>
-          <b>费率资料 {filteredRateRows.length} 行</b>
-        </div>
       </section>
-      {state === "loading" && <div className="business-query-note">正在查询三方费率...</div>}
       {state === "error" && error && <div className="business-query-error">查询失败：{error}</div>}
 
       {mainView === "countryRates" && (
@@ -2202,7 +2174,7 @@ function RateMultiSelect({ label, options, value, onChange, placeholder }: { lab
             ))}
             {!visibleOptions.length && <div className="multi-empty">没有匹配选项</div>}
           </div>
-          <div className="multi-footer">已选 {value.length} 项，点击“查询”后才会刷新数据</div>
+          
         </div>
       )}
     </div>

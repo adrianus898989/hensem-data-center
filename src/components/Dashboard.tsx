@@ -1806,14 +1806,6 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="selected-row">
-            <span>已选条件：</span>
-            {activeModule === "auto" ? <b>盘口：{autoCountryPane || "-"}</b> : <b>盘口：{operatorCountryPane || "-"}</b>}
-            <b>平台：{filterLabel(filters.platforms)}</b>
-            {activeModule === "operator" && <b>操作人：{filterLabel(filters.accounts)}</b>}
-            <b>日期：{filters.startDate || "-"} 至 {filters.endDate || "-"}</b>
-          </div>
-
           <div className="quick-row date-shortcuts">
             <span>快捷日期：</span>
             <button type="button" onClick={() => applyDateShortcut("today")}>今天</button>
@@ -1824,31 +1816,6 @@ export default function Dashboard() {
             <button type="button" onClick={() => applyDateShortcut("thisMonth")}>本月</button>
             <button type="button" onClick={() => applyDateShortcut("lastMonth")}>上月</button>
           </div>
-
-          <div className="quick-row">
-            <span>当前结果：</span>
-            <label className="page-size-control">
-              每页
-              <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-                <option value={200}>200</option>
-              </select>
-            </label>
-            {activeModule === "auto" ? (
-              <>
-                <b>汇总 {summaryRows.length} 行</b>
-                <b>日表 {filteredDailyRows.length} 行</b>
-              </>
-            ) : (
-              <>
-                <b>操作人汇总 {operatorSummaryRows.length} 行</b>
-                <b>操作人明细 {operatorRows.length} 行</b>
-              </>
-            )}
-          </div>
-          {state === "loading" && <div className="business-query-note">正在查询所选日期数据...</div>}
           {state === "error" && error && <div className="business-query-error">查询失败：{error}</div>}
         </section>
 
@@ -2273,7 +2240,7 @@ function MultiSelect({
             ))}
             {!visibleOptions.length && <div className="multi-empty">没有匹配选项</div>}
           </div>
-          <div className="multi-footer">已选 {value.length} 项，点击“查询”后才会刷新数据</div>
+          
         </div>
       )}
     </div>

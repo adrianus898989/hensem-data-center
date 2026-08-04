@@ -5490,3 +5490,40 @@ html body .third-party-volume-module .third-party-tab-panel{
 }
 
 .business-prequery .country-tab-row{display:none!important}
+
+
+/* =========================================================
+   FINAL5 PRO — 业务后台去说明化
+   正常状态不显示诊断/提醒文字；真实异常仍保留。
+   ========================================================= */
+.third-party-volume-module .volume-query-status,
+.third-party-volume-module .volume-completeness-bar,
+.third-party-volume-module .volume-history-progress-notice,
+.third-party-volume-module .volume-empty-notice,
+.business-query-note {
+  display: none !important;
+}
+
+.third-party-volume-module .panel-head p,
+.third-party-volume-module .country-volume-page .panel-head p {
+  display: none !important;
+}
+
+.third-party-volume-module .panel-head {
+  min-height: 52px !important;
+  align-items: center !important;
+}
+
+.volume-country-pane-row {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  padding: 8px 0 10px !important;
+  overflow: visible !important;
+  white-space: normal !important;
+}
+
+.volume-country-pane-row .module-tab {
+  flex: 0 0 auto !important;
+}
+

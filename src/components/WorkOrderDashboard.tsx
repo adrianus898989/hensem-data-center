@@ -1498,17 +1498,6 @@ export default function WorkOrderDashboard() {
           </div>
         </div>
 
-        <div className="selected-row">
-          <span>已选条件：</span>
-          <b>{mainTab === "orders" && (orderView === "orderDaily" || orderView === "orderMonthly") ? "盘口" : "国家"}：{filterLabel(filters.countries, mainTab === "orders" && (orderView === "orderDaily" || orderView === "orderMonthly") ? "全部盘口" : "全部")}</b>
-          <b>平台：{filterLabel(filters.platforms)}</b>
-          <b>类型：{filterLabel(filters.types)}</b>
-          <b>工单：{filterLabel(filters.names)}</b>
-          <b>岗位：{filterLabel(filters.accountTypes, "全部岗位")}</b>
-          {mainTab === "operators" && <b>操作人：{filterLabel(filters.operators)}</b>}
-          <b>日期：{filters.startDate || "-"} 至 {filters.endDate || "-"}</b>
-        </div>
-
         <div className="quick-row date-shortcuts">
           <span>快捷日期：</span>
           <button type="button" onClick={() => applyDateShortcut("today")}>今天</button>
@@ -1518,22 +1507,6 @@ export default function WorkOrderDashboard() {
           <button type="button" onClick={() => applyDateShortcut("lastWeek")}>上周</button>
           <button type="button" onClick={() => applyDateShortcut("thisMonth")}>本月</button>
           <button type="button" onClick={() => applyDateShortcut("lastMonth")}>上月</button>
-        </div>
-
-
-        <div className="quick-row">
-          <span>当前结果：</span>
-          <label className="page-size-control">每页
-            <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={200}>200</option>
-            </select>
-          </label>
-          <b>工单日表 {formatNumber(dailyRowsRaw.length)} 行</b>
-          <b>类型统计 {formatNumber(typeRowsRaw.length)} 行</b>
-          <b>操作人 {formatNumber(operatorRowsRaw.length)} 行</b>
         </div>
       </section>}
       {mainTab !== "customer" && state === "loading" && <div className="business-query-note">正在查询所选日期工单数据...</div>}
@@ -2503,7 +2476,7 @@ function WorkMultiSelect({ label, options, value, onChange, placeholder }: { lab
             ))}
             {!visibleOptions.length && <div className="multi-empty">没有匹配选项</div>}
           </div>
-          <div className="multi-footer">已选 {value.length} 项，点击“查询”后才会刷新数据</div>
+          
         </div>
       )}
     </div>
