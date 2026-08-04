@@ -900,6 +900,9 @@ export default function Dashboard() {
   const { session, profile, openProfile } = useDashboardAuth();
   const canThirdParty = hasDashboardPermission(profile, "third_party");
   const canAutoWithdraw = hasDashboardPermission(profile, "auto_withdraw");
+  const canWorkSupport =
+    hasDashboardPermission(profile, "work_orders") ||
+    hasDashboardPermission(profile, "customer_service");
   const managementPermissions = normalizedManagementPermissions(profile);
   const isOwner = profile?.role === "owner";
   const canAdminUsers = Boolean(profile && (isOwner || managementPermissions.manage_viewers));
@@ -907,6 +910,7 @@ export default function Dashboard() {
   const canAdminAudit = Boolean(profile && (isOwner || managementPermissions.view_audit));
   const [state, setState] = useState<LoadState>("idle");
   const [payload, setPayload] = useState<AutoWithdrawPayload | null>(null);
+  const [hasBusinessQueried, setHasBusinessQueried] = useState(false);
   const [error, setError] = useState("");
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState<FilterState>(EMPTY_FILTERS);
@@ -959,6 +963,16 @@ export default function Dashboard() {
   useEffect(() => { payloadRef.current = payload; }, [payload]);
 
   useEffect(() => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const key = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, "0")}-${String(yesterday.getDate()).padStart(2, "0")}`;
+    const next = blankFilters(key, key);
+    setFilters((prev) => prev.startDate || prev.endDate ? prev : next);
+    setDraftFilters((prev) => prev.startDate || prev.endDate ? prev : next);
+  }, []);
+
+
+  useEffect(() => {
     const openAdmin = () => {
       if (!profile || !canOpenAdminCenter(profile)) return;
       setAdminExpanded(true);
@@ -997,19 +1011,16 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
+    if (!hasBusinessQueried || !payload) return;
     if (activeModule !== "auto" && activeModule !== "operator") return;
-    const requestedSignature = monthRangeSignature(filters.startDate, filters.endDate);
-    if (payload && loadedMonthSignatureRef.current !== requestedSignature) {
-      void loadData(true, filters.startDate, filters.endDate);
-    }
     const currentTimer = window.setInterval(() => {
       if (document.visibilityState !== "visible" || !rangeIncludesCurrentMonthClient(filters.startDate, filters.endDate)) return;
-      // 8月起数据由 Supabase 每10分钟更新，页面打开时也每10分钟轻量刷新一次。
+      // 只有用户主动查询过后，才静默刷新当前已查询区间。
       void loadData(true, filters.startDate, filters.endDate);
     }, 10 * 60 * 1000);
     return () => window.clearInterval(currentTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeModule, filters.startDate, filters.endDate]);
+  }, [activeModule, filters.startDate, filters.endDate, hasBusinessQueried, payload]);
 
   // V166：打开网站先进入“选择模块”首页；费率表全局直读重构。
   // 点击“提现/自动出款统计”或“提现操作人统计”后，才调用 loadData()。
@@ -1251,15 +1262,18 @@ export default function Dashboard() {
     setPage(1);
   }
 
-  function applyFilters() {
-    setFilters({
+  async function applyFilters() {
+    const next = {
       countries: [],
       platforms: draftFilters.platforms,
       accounts: draftFilters.accounts,
       startDate: draftFilters.startDate,
       endDate: draftFilters.endDate
-    });
+    };
+    setFilters(next);
+    setHasBusinessQueried(true);
     setPage(1);
+    await loadData(false, next.startDate, next.endDate);
   }
 
   function resetFilters() {
@@ -1270,7 +1284,6 @@ export default function Dashboard() {
     if (activeModule === "auto") setAutoCountryPane(autoCountryPanes[0] || "");
     if (activeModule === "operator") setOperatorCountryPane(operatorCountryPanes[0] || "");
     setDraftFilters(next);
-    setFilters(next);
     setPage(1);
   }
 
@@ -1298,7 +1311,6 @@ export default function Dashboard() {
       const range = monthRangeFromDateKey(draftFilters.startDate || filters.startDate || draftFilters.endDate || filters.endDate);
       const next = { ...draftFilters, countries: [], startDate: range.startDate, endDate: range.endDate };
       setDraftFilters(next);
-      setFilters(next);
     }
     setPage(1);
   }
@@ -1307,10 +1319,9 @@ export default function Dashboard() {
     if (autoView !== "month") return;
     const baseDate = draftFilters.startDate || filters.startDate || draftFilters.endDate || filters.endDate;
     const range = monthRangeFromDateKey(baseDate);
-    if (draftFilters.startDate === range.startDate && draftFilters.endDate === range.endDate && filters.startDate === range.startDate && filters.endDate === range.endDate) return;
+    if (draftFilters.startDate === range.startDate && draftFilters.endDate === range.endDate) return;
     const next = { ...draftFilters, countries: [], startDate: range.startDate, endDate: range.endDate };
     setDraftFilters(next);
-    setFilters(next);
     setPage(1);
   // 自动出款月表必须按整月统计：进入月表后自动切到当月 1 号至月底。
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1346,7 +1357,6 @@ export default function Dashboard() {
     }
     const next = { ...draftFilters, countries: [], startDate: formatDateKey(start), endDate: formatDateKey(end) };
     setDraftFilters(next);
-    setFilters(next);
     setPage(1);
   }
 
@@ -1360,7 +1370,6 @@ export default function Dashboard() {
       const range = monthRangeFromDateKey(formatDateKey(current));
       const next = { ...draftFilters, countries: [], startDate: range.startDate, endDate: range.endDate };
       setDraftFilters(next);
-      setFilters(next);
       setPage(1);
       return;
     }
@@ -1374,7 +1383,6 @@ export default function Dashboard() {
     end.setDate(end.getDate() + days);
     const next = { ...draftFilters, countries: [], startDate: formatDateKey(start), endDate: formatDateKey(end) };
     setDraftFilters(next);
-    setFilters(next);
     setPage(1);
   }
 
@@ -1404,6 +1412,7 @@ export default function Dashboard() {
   function switchModule(next: ModuleMode) {
     if (next === "volume" && !canThirdParty) return;
     if ((next === "auto" || next === "operator") && !canAutoWithdraw) return;
+    if (next === "work" && !canWorkSupport) return;
     setActiveModule(next);
     if (next === "home") {
       setPage(1);
@@ -1411,21 +1420,6 @@ export default function Dashboard() {
     }
     if (next === "auto") setAutoView("daily");
     if (next === "operator") setOperatorView("summary");
-    if ((next === "auto" || next === "operator") && !payload && state !== "loading") {
-      const cached = readAutoLocalCache();
-      if (cached) {
-        setPayload(cached);
-        payloadRef.current = cached;
-        loadedMonthSignatureRef.current = monthRangeSignature("", "");
-        setState("ready");
-        void (async () => {
-          const status = await fetchPreferredMonthlyStatus("auto-withdraw");
-          if (!statusMatchesPayload(status, cached)) await loadData(true, "", "", status?.version || "");
-        })();
-      } else {
-        void loadData();
-      }
-    }
     setPage(1);
   }
 
@@ -1622,9 +1616,9 @@ export default function Dashboard() {
         <span className="nav-left"><span className="nav-icon">💸</span>提现/自动出款统计</span>
         <span className={canAutoWithdraw ? "badge ok" : "badge"}>{canAutoWithdraw ? "Supabase" : "无权限"}</span>
       </button>
-      <button className="nav-item" disabled title="新站暂未迁移此模块">
+      <button className={activeModule === "work" ? "nav-item active" : "nav-item"} onClick={() => switchModule("work")} disabled={!canWorkSupport} title={!canWorkSupport ? "管理员未开放此模块" : ""}>
         <span className="nav-left"><span className="nav-icon">🎫</span>工单/客服</span>
-        <span className="badge">待迁移</span>
+        <span className={canWorkSupport ? "badge ok" : "badge"}>{canWorkSupport ? "已接入" : "无权限"}</span>
       </button>
       <button className={activeModule === "volume" ? "nav-item active" : "nav-item"} onClick={() => switchModule("volume")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
         <span className="nav-left"><span className="nav-icon">📊</span>三方量/费率</span>
@@ -1667,11 +1661,11 @@ export default function Dashboard() {
           <em>{canAutoWithdraw ? "自动出款日表、月表与提现操作人统计" : "你的账号暂未开放此模块"}</em>
           <span className="home-enter">{canAutoWithdraw ? "进入模块 →" : "无查看权限"}</span>
         </button>
-        <button className="home-module-card home-module-green" disabled title="新站暂未迁移此模块">
+        <button className="home-module-card home-module-green" onClick={() => switchModule("work")} disabled={!canWorkSupport} title={!canWorkSupport ? "管理员未开放此模块" : ""}>
           <span className="home-module-icon">🎫</span>
-          <strong>工单 / 客服统计</strong>
-          <em>新站暂未迁移，旧网站继续使用</em>
-          <span className="home-enter">待迁移</span>
+          <strong>工单 / 客服</strong>
+          <em>{canWorkSupport ? "工单统计、操作人统计与客服统计统一在一个模块" : "你的账号暂未开放此模块"}</em>
+          <span className="home-enter">{canWorkSupport ? "进入模块 →" : "无查看权限"}</span>
         </button>
         <button className="home-module-card home-module-purple" onClick={() => switchModule("volume")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
           <span className="home-module-icon">📊</span>
@@ -1702,41 +1696,10 @@ export default function Dashboard() {
     return <div className="app-shell">{sidebarContent}<main className="main"><ThirdPartyVolumeDashboard /></main></div>;
   }
 
-  if ((activeModule === "auto" || activeModule === "operator") && state === "loading") {
-    return (
-      <div className="app-shell">
-        {sidebarContent}
-        <main className="main"><div className="loading module-loading">正在读取自动出款 / 操作人数据...</div></main>
-      </div>
-    );
-  }
-
-  if ((activeModule === "auto" || activeModule === "operator") && state === "error") {
-    return (
-      <div className="app-shell">
-        {sidebarContent}
-        <main className="main">
-          <div className="error-box">
-            <h2>读取失败</h2>
-            <p>{error}</p>
-            
-            <button className="ghost-btn" onClick={() => switchModule("home")}>返回首页</button>
-          </div>
-        </main>
-      </div>
-    );
-  }
 
 
 
-  if ((activeModule === "auto" || activeModule === "operator") && !payload) {
-    return (
-      <div className="app-shell">
-        {sidebarContent}
-        <main className="main"><div className="empty">请重新点击自动出款或操作人模块读取数据。</div></main>
-      </div>
-    );
-  }
+
 
   if (!payload && (activeModule === "work" || activeModule === "volume")) {
     return (
@@ -1747,13 +1710,11 @@ export default function Dashboard() {
     );
   }
 
-  if (!payload) return null;
-
   return (
     <div className="app-shell">
       {sidebarContent}
 
-      <main className="main">
+      <main className={`main ${!hasBusinessQueried || !payload ? "business-prequery" : ""}`}>
         {activeModule === "volume" ? (
           <ThirdPartyVolumeDashboard />
         ) : activeModule === "work" ? (
@@ -1762,13 +1723,13 @@ export default function Dashboard() {
           <>
         <div className="topbar">
           <div className="title">
-            <h1>{activeModule === "auto" ? "自动出款" : "提现操作人"}</h1>
+            <h1>提现 / 自动出款统计</h1>
           </div>
-          <div className="status-box">
+          {hasBusinessQueried && payload && <div className="status-box">
             <div className="status-line"><span>数据来源</span><strong>{String(payload.meta.source || "").toLowerCase().includes("supabase") ? "Supabase" : payload.meta.source === "demo" ? "Demo" : "历史快照"}</strong></div>
             <div className="status-line"><span>日期区间</span><strong>{filters.startDate || "-"} 至 {filters.endDate || "-"}</strong></div>
             <div className="status-line"><span>更新时间</span><strong>{new Date(String((payload.meta as any).snapshotUpdatedAt || payload.meta.updatedAt)).toLocaleString("zh-CN")}</strong></div>
-          </div>
+          </div>}
         </div>
 
         <section className="module-switch">
@@ -1776,13 +1737,13 @@ export default function Dashboard() {
             className={activeModule === "auto" ? "module-tab active" : "module-tab"}
             onClick={() => switchModule("auto")}
           >
-            自动出款数据
+            自动出款
           </button>
           <button
             className={activeModule === "operator" ? "module-tab active" : "module-tab"}
             onClick={() => switchModule("operator")}
           >
-            提现操作人统计
+            提现操作人
           </button>
         </section>
 
@@ -1837,7 +1798,7 @@ export default function Dashboard() {
               <MultiSelect label="操作人" options={accountOptions} value={draftFilters.accounts} onChange={(value) => updateDraft("accounts", value)} placeholder="全部操作人" />
             )}
             <div className="action-row action-row-v2">
-              <button className="primary-btn" onClick={applyFilters}>查询</button>
+              <button className="primary-btn" onClick={() => void applyFilters()} disabled={state === "loading"}>{state === "loading" ? "查询中..." : "查询"}</button>
               <button className="ghost-btn" onClick={resetFilters}>重置</button>
               <button className="ghost-btn" type="button" onClick={() => shiftDateRange(-1)}>{activeModule === "auto" && autoView === "month" ? "上一月" : "上一日"}</button>
               <button className="ghost-btn" type="button" onClick={() => shiftDateRange(1)}>{activeModule === "auto" && autoView === "month" ? "下一月" : "下一日"}</button>
@@ -1864,13 +1825,6 @@ export default function Dashboard() {
             <button type="button" onClick={() => applyDateShortcut("lastMonth")}>上月</button>
           </div>
 
-          <div className="quick-row date-shortcuts snapshot-month-row">
-            <span>快照月份：</span>
-            {snapshotMonthOptions.map((item) => (
-              <button key={item.key} type="button" onClick={() => openSnapshotMonth(item)}>{item.label}</button>
-            ))}
-          </div>
-
           <div className="quick-row">
             <span>当前结果：</span>
             <label className="page-size-control">
@@ -1894,6 +1848,8 @@ export default function Dashboard() {
               </>
             )}
           </div>
+          {state === "loading" && <div className="business-query-note">正在查询所选日期数据...</div>}
+          {state === "error" && error && <div className="business-query-error">查询失败：{error}</div>}
         </section>
 
         {activeModule === "auto" && (

@@ -1889,7 +1889,7 @@ function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolum
 
 export default function ThirdPartyVolumeDashboard() {
   const { session } = useDashboardAuth();
-  const [state, setState] = useState<LoadState>("loading");
+  const [state, setState] = useState<LoadState>("ready");
   const [payload, setPayload] = useState<ThirdPartyVolumePayload | null>(null);
   const [ratePayload, setRatePayload] = useState<ThirdPartyRatePayload | null>(null);
   const [error, setError] = useState("");
@@ -1917,6 +1917,7 @@ export default function ThirdPartyVolumeDashboard() {
   const [appliedChannelTypeSelections, setAppliedChannelTypeSelections] = useState<string[]>([]);
   const [isQuerying, setIsQuerying] = useState(false);
   const [lastQueryAt, setLastQueryAt] = useState("");
+  const [hasQueried, setHasQueried] = useState(false);
   const startDateRef = useRef("");
   const endDateRef = useRef("");
   const [mainTab, setMainTab] = useState<VolumeMainTab>("country");
@@ -1924,30 +1925,6 @@ export default function ThirdPartyVolumeDashboard() {
   const [volumeMode, setVolumeMode] = useState<"daily" | "monthly">("daily");
   const [countryPage, setCountryPage] = useState("");
 
-  const snapshotMonthOptions = useMemo(() => {
-    const out: Array<{ key: string; label: string; start: string; end: string }> = [];
-    const start = new Date(2026, 3, 1);
-    const now = new Date();
-    const end = new Date(now.getFullYear(), now.getMonth(), 1);
-    const cursor = new Date(start);
-    while (cursor <= end && out.length < 36) {
-      const year = cursor.getFullYear();
-      const month = cursor.getMonth() + 1;
-      const ym = `${year}-${String(month).padStart(2, "0")}`;
-      const lastDay = new Date(year, month, 0).getDate();
-      const isCurrent = year === now.getFullYear() && month === now.getMonth() + 1;
-      const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const isSettling = now.getDate() <= 7 && year === prev.getFullYear() && month === prev.getMonth() + 1;
-      out.push({
-        key: ym,
-        label: `${month}月${isCurrent ? "·当前" : isSettling ? "·结算中" : ""}`,
-        start: `${ym}-01`,
-        end: `${ym}-${String(lastDay).padStart(2, "0")}`
-      });
-      cursor.setMonth(cursor.getMonth() + 1);
-    }
-    return out;
-  }, []);
 
   async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "", requestedCountry = "", forceRates = false) {
     // V247：Supabase 已有数据时，任何瞬时网络/API问题都不能把整页从有数据变成 0。
@@ -2081,35 +2058,27 @@ export default function ThirdPartyVolumeDashboard() {
   }
 
   useEffect(() => {
-    // 正式站首次进入三方量：固定默认“昨天”。昨天通常已经完整，避免今天数据尚未到齐造成误判。
+    // 首次进入只预填“昨天”，不自动查询、不读缓存、不展示旧结果。
+    // 用户明确点击「查询」后才读取 Supabase。
     const yesterday = yesterdayLocalDateKey();
     setStartDate(yesterday);
     setEndDate(yesterday);
-    setAppliedStartDate(yesterday);
-    setAppliedEndDate(yesterday);
-    startDateRef.current = yesterday;
-    endDateRef.current = yesterday;
-
-    const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY);
-    const cachedRate = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY);
-    const cachedHasYesterday = Boolean((cachedVolume?.rows || []).some((row) => row.date === yesterday));
-    if (cachedHasYesterday && cachedVolume) {
-      setPayload(cachedVolume);
-      setRatePayload(cachedRate);
-      setState("ready");
-    }
-
-    // 无论有没有缓存，都只读取“昨天 + 为昨日对比保留的前一天”，不下载整月/整库。
-    void loadData(cachedHasYesterday, yesterday, yesterday);
+    setState("ready");
 
     const hourlyTimer = window.setInterval(() => {
       const start = startDateRef.current;
       const end = endDateRef.current;
-      // 当前月/上月结算期在页面可见时，每小时静默重新读取当前选择；历史封存月份不主动刷。
-      if (document.visibilityState === "visible" && rangeIncludesCurrentMonth(start, end)) {
+      // 只有用户至少查询过一次，才允许对“当前已查询范围”做静默刷新。
+      if (
+        document.visibilityState === "visible"
+        && start
+        && end
+        && rangeIncludesCurrentMonth(start, end)
+      ) {
         void loadData(true, start, end);
       }
     }, 60 * 60 * 1000);
+
     return () => window.clearInterval(hourlyTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -2218,11 +2187,6 @@ export default function ThirdPartyVolumeDashboard() {
     return [...feeWarning, ...aliasWarning, ...volumeHigh].slice(0, 150);
   }, [feeWarnings, aliasRows, platformRows]);
 
-  function openSnapshotMonth(item: { start: string; end: string }) {
-    // 月份按钮只负责填条件；像正常后台一样，等用户点击「查询」后才读取并切换结果。
-    setStartDate(item.start);
-    setEndDate(item.end);
-  }
 
   function switchVolumeMode(nextMode: "daily" | "monthly") {
     setVolumeMode(nextMode);
@@ -2276,6 +2240,7 @@ export default function ThirdPartyVolumeDashboard() {
       setAppliedDirection(direction);
       setAppliedChannelTypeSelections([...channelTypeSelections]);
       setLastQueryAt(new Date().toISOString());
+      setHasQueried(true);
     } finally {
       setIsQuerying(false);
     }
@@ -2329,7 +2294,7 @@ export default function ThirdPartyVolumeDashboard() {
   }
   return (
     <div className={cls("work-order-module third-party-volume-module", initialLoading && "is-initial-loading")}>
-      {initialLoading && (
+      {hasQueried && initialLoading && (
         <div className="volume-soft-loading">
           <span className="volume-soft-loading-spinner" />
           <div><b>正在载入数据</b></div>
@@ -2341,7 +2306,7 @@ export default function ThirdPartyVolumeDashboard() {
           <div><b>{dataNotice}</b></div>
         </div>
       )}
-      <div className="volume-query-status">
+      {hasQueried && <div className="volume-query-status">
         <div className="volume-query-status-main">
           <span className={cls("volume-query-status-dot", isQuerying && "loading")} />
           <div>
@@ -2350,8 +2315,8 @@ export default function ThirdPartyVolumeDashboard() {
           </div>
         </div>
         {hasPendingQuery && !isQuerying && <span className="volume-query-pending">条件已修改 · 点击「查询」后应用</span>}
-      </div>
-      {volumeSyncStatus && (
+      </div>}
+      {hasQueried && volumeSyncStatus && (
         <div className={cls("volume-completeness-bar", appliedCoverage.complete ? "complete" : appliedCoverage.incomplete ? "running" : "current")}>
           <div className="volume-completeness-main">
             <span className="volume-completeness-icon">{appliedCoverage.complete ? "✓" : appliedCoverage.incomplete ? "↻" : "●"}</span>
@@ -2365,13 +2330,13 @@ export default function ThirdPartyVolumeDashboard() {
           <div className="volume-completeness-time">最后写库 {volumeSyncStatus.latestWriteAt ? new Date(volumeSyncStatus.latestWriteAt).toLocaleString("zh-CN", { hour12: false }) : "-"}</div>
         </div>
       )}
-      {appliedCoverage.incomplete && appliedCoverage.historical && (
+      {hasQueried && appliedCoverage.incomplete && appliedCoverage.historical && (
         <div className="volume-history-progress-notice">
           <span className="volume-history-progress-icon">↻</span>
           <div><b>历史补齐中</b><span>{appliedCoverage.loaded}/{appliedCoverage.expected}</span></div>
         </div>
       )}
-      {!rows.some((row) => dateMatches(row.date, appliedStartDate, appliedEndDate)) && (
+      {hasQueried && !rows.some((row) => dateMatches(row.date, appliedStartDate, appliedEndDate)) && (
         <div className="volume-empty-notice">
           <div className="volume-empty-icon">i</div>
           <div><b>该日期暂无数据</b></div>
@@ -2392,7 +2357,7 @@ export default function ThirdPartyVolumeDashboard() {
               {countryTabs.map((item) => (
                 <button key={item} className={cls("module-tab", activeCountryPage === item && "active")} onClick={() => { setCountryPage(item); setCountrySelections([]); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }}>{countryPaneLabel(item)}</button>
               ))}
-              {!countryTabs.length && <span className="muted-text">暂无国家数据</span>}
+              {hasQueried && !countryTabs.length && <span className="muted-text">暂无国家数据</span>}
             </div>
           </>
         )}
@@ -2430,17 +2395,9 @@ export default function ThirdPartyVolumeDashboard() {
         <button type="button" onClick={() => applyDateShortcut("lastMonth")}>上月</button>
       </div>
 
-
-      <div className="quick-row date-shortcuts volume-date-shortcuts snapshot-month-row">
-        <span>快照月份：</span>
-        {snapshotMonthOptions.map((item) => (
-          <button key={item.key} type="button" onClick={() => openSnapshotMonth(item)}>{item.label}</button>
-        ))}
-      </div>
-
-      {mainTab === "country" && isAllDailyPage && <DailyPage rows={dailyCompareRows} summary={summary} feeRows={dailyFeeRows} />}
-      {mainTab === "country" && isAllMonthlyPage && <MonthlyTable title="三方量月汇总" subtitle="按月份 + 国家 + 统一三方汇总。选 5 月会直接显示 5 月总量，点查看可看这个月所有盘口明细。" rows={monthlyPeriodRows} columns={["月份", "国家", "统一三方"]} feeRows={dailyFeeRows} paginated />}
-      {mainTab === "country" && !isAllDailyPage && !isAllMonthlyPage && <CountryVolumeSinglePage country={activeCountryPage} rows={countryPageRows} summary={countryPageSummary} monthlyRows={countryPageMonthlyRows} monthlyPeriodRows={countryPageMonthlyPeriodRows} platformRows={countryPagePlatformRows} dailyRows={countryPageDailyRows} dailyCompareRows={countryPageDailyCompareRows} feeRows={countryPageFeeRows} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} volumeMode={volumeMode} />}
+      {hasQueried && mainTab === "country" && isAllDailyPage && <DailyPage rows={dailyCompareRows} summary={summary} feeRows={dailyFeeRows} />}
+      {hasQueried && mainTab === "country" && isAllMonthlyPage && <MonthlyTable title="三方量月汇总" subtitle="按月份 + 国家 + 统一三方汇总。选 5 月会直接显示 5 月总量，点查看可看这个月所有盘口明细。" rows={monthlyPeriodRows} columns={["月份", "国家", "统一三方"]} feeRows={dailyFeeRows} paginated />}
+      {hasQueried && mainTab === "country" && !isAllDailyPage && !isAllMonthlyPage && <CountryVolumeSinglePage country={activeCountryPage} rows={countryPageRows} summary={countryPageSummary} monthlyRows={countryPageMonthlyRows} monthlyPeriodRows={countryPageMonthlyPeriodRows} platformRows={countryPagePlatformRows} dailyRows={countryPageDailyRows} dailyCompareRows={countryPageDailyCompareRows} feeRows={countryPageFeeRows} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} volumeMode={volumeMode} />}
         </>
       )}
     </div>

@@ -808,8 +808,9 @@ function emptyClientWorkOrderPayload(message: string): WorkOrderPayload {
 }
 
 export default function WorkOrderDashboard() {
-  const [state, setState] = useState<LoadState>("loading");
+  const [state, setState] = useState<LoadState>("ready");
   const [payload, setPayload] = useState<WorkOrderPayload | null>(null);
+  const [hasQueried, setHasQueried] = useState(false);
   const [error, setError] = useState("");
   const [mainTab, setMainTab] = useState<MainTab>("orders");
   const [orderView, setOrderView] = useState<OrderView>("orderDaily");
@@ -910,45 +911,29 @@ export default function WorkOrderDashboard() {
   }
 
   useEffect(() => {
-    const cached = readWorkLocalCache();
-    if (cached && (cached.rows || []).length > 0) {
-      setPayload(cached);
-      payloadRef.current = cached;
-      loadedMonthSignatureRef.current = monthRangeSignature("", "");
-      setState("ready");
-      void (async () => {
-        const status = await fetchPreferredMonthlyStatus("work-orders");
-        if (!statusMatchesPayload(status, cached)) await loadData(true, "", "", status?.version || "");
-      })();
-    } else {
-      void loadData(false);
-    }
-    // 首次优先显示浏览器最后成功快照；只用小状态接口判断是否真的需要重新下载大 JSON。
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const key = formatDateKey(yesterday);
+    const next = { ...EMPTY_FILTERS, startDate: key, endDate: key };
+    setFilters(next);
+    setDraftFilters(next);
+    // 进入工单/客服时只预填昨天，不自动读取。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    const requestedSignature = monthRangeSignature(filters.startDate, filters.endDate);
-    if (payload && loadedMonthSignatureRef.current !== requestedSignature) {
-      void loadData(true, filters.startDate, filters.endDate);
-    }
+    if (!hasQueried || !payload) return;
     const hourlyTimer = window.setInterval(() => {
       if (document.visibilityState !== "visible" || !rangeIncludesCurrentMonthClient(filters.startDate, filters.endDate)) return;
       void (async () => {
         const status = await fetchPreferredMonthlyStatus("work-orders");
         if (statusMatchesPayload(status, payloadRef.current)) return;
-        if (status?.preferredMonth && status.preferredMonth !== payloadSnapshotMonth(payloadRef.current)) {
-          setFilters(EMPTY_FILTERS);
-          setDraftFilters(EMPTY_FILTERS);
-          await loadData(true, "", "", status.version);
-          return;
-        }
         await loadData(true, filters.startDate, filters.endDate, status?.version || "");
       })();
     }, 60 * 60 * 1000);
     return () => window.clearInterval(hourlyTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.startDate, filters.endDate]);
+  }, [filters.startDate, filters.endDate, hasQueried, payload]);
 
   const allDates = useMemo(() => payload ? uniq(payload.rows.map((r) => r.date).filter(isIsoDate)) : [], [payload]);
 
@@ -1098,19 +1083,19 @@ export default function WorkOrderDashboard() {
     setDraftFilters((prev) => ({ ...prev, [key]: value }));
   }
 
-  function applyFilters() {
-    setFilters({ ...draftFilters });
+  async function applyFilters() {
+    const next = { ...draftFilters };
+    setFilters(next);
+    setHasQueried(true);
     setPage(1);
+    await loadData(false, next.startDate, next.endDate);
   }
 
   function resetFilters() {
-    const latest = allDates[allDates.length - 1] || "";
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayKey = formatDateKey(yesterday);
-    const defaultDate = allDates.includes(yesterdayKey) ? yesterdayKey : latest;
-    const next = { ...EMPTY_FILTERS, startDate: defaultDate, endDate: defaultDate };
-    setFilters(next);
+    const key = formatDateKey(yesterday);
+    const next = { ...EMPTY_FILTERS, startDate: key, endDate: key };
     setDraftFilters(next);
     setPage(1);
   }
@@ -1341,7 +1326,6 @@ export default function WorkOrderDashboard() {
     }
     const next = { ...draftFilters, startDate: formatDateKey(start), endDate: formatDateKey(end) };
     setDraftFilters(next);
-    setFilters(next);
     setPage(1);
   }
 
@@ -1355,7 +1339,6 @@ export default function WorkOrderDashboard() {
       const range = monthRangeFromDateKey(formatDateKey(current));
       const next = { ...draftFilters, startDate: range.startDate, endDate: range.endDate };
       setDraftFilters(next);
-      setFilters(next);
       setPage(1);
       return;
     }
@@ -1368,7 +1351,6 @@ export default function WorkOrderDashboard() {
     end.setDate(end.getDate() + days);
     const next = { ...draftFilters, startDate: formatDateKey(start), endDate: formatDateKey(end) };
     setDraftFilters(next);
-    setFilters(next);
     setPage(1);
   }
 
@@ -1416,35 +1398,20 @@ export default function WorkOrderDashboard() {
     </section>
   );
 
-  if (state === "loading") return <div className="loading inner-loading">正在读取工单/客服...</div>;
-  if (state === "error") {
-    return (
-      <div className="error-box inner-error">
-        <h2>工单统计读取失败</h2>
-        <p>{error}</p>
-        <p className="muted-text">请确认 Netlify 的 WORK_ORDER_SHEET_ID / WORK_ORDER_SHEET_IDS 指向实际工单表，并已分享给 Service Account。</p>
-        
-      </div>
-    );
-  }
-  if (!payload) return null;
 
   return (
-    <div className="work-order-module">
+    <div className={`work-order-module ${!hasQueried || !payload ? "business-prequery" : ""}`}>
       <div className="topbar">
-        <div className="title">
-          <h1>工单/客服</h1>
-          <p>当前位置：Hensem数据后台 &gt; 工单/客服 &gt; {mainTab === "orders" ? "工单统计" : mainTab === "operators" ? "操作人统计" : "客服统计"} &gt; {mainTab === "customer" ? "客服统计" : titleForView(view)}</p>
-        </div>
-        <div className="status-box">
+        <div className="title"><h1>工单 / 客服</h1></div>
+        {hasQueried && payload && <div className="status-box">
           <div className="status-line"><span>数据月份</span><strong>{payload.meta.year || "-"} 年 {payload.meta.month || "-"} 月</strong></div>
           <div className="status-line"><span>数据来源</span><strong>Google Sheet</strong></div>
           <div className="status-line"><span>读取页签</span><strong>{payload.meta.sheets.length} 个</strong></div>
           <div className="status-line"><span>更新时间</span><strong>{new Date(String((payload.meta as any).snapshotUpdatedAt || payload.meta.updatedAt)).toLocaleString("zh-CN")}</strong></div>
-        </div>
+        </div>}
       </div>
 
-      {!(payload.rows || []).length && (
+      {hasQueried && payload && !(payload.rows || []).length && (
         <div style={{
           margin: "0 0 14px",
           padding: "12px 14px",
@@ -1523,7 +1490,7 @@ export default function WorkOrderDashboard() {
           <WorkMultiSelect label="岗位 / 账号类型" options={accountTypeOptions} value={draftFilters.accountTypes} onChange={(value) => updateDraft("accountTypes", value)} placeholder="全部岗位" />
           {mainTab === "operators" && <WorkMultiSelect label="操作人" options={operatorOptions} value={draftFilters.operators} onChange={(value) => updateDraft("operators", value)} placeholder="全部操作人" />}
           <div className="action-row action-row-v2">
-            <button className="primary-btn" onClick={applyFilters}>查询</button>
+            <button className="primary-btn" onClick={() => void applyFilters()} disabled={state === "loading"}>{state === "loading" ? "查询中..." : "查询"}</button>
             <button className="ghost-btn" onClick={resetFilters}>重置</button>
             <button className="ghost-btn" type="button" onClick={() => shiftDateRange(-1)}>{mainTab === "orders" && orderView === "orderMonthly" ? "上一月" : "上一日"}</button>
             <button className="ghost-btn" type="button" onClick={() => shiftDateRange(1)}>{mainTab === "orders" && orderView === "orderMonthly" ? "下一月" : "下一日"}</button>
@@ -1553,12 +1520,6 @@ export default function WorkOrderDashboard() {
           <button type="button" onClick={() => applyDateShortcut("lastMonth")}>上月</button>
         </div>
 
-        <div className="quick-row date-shortcuts snapshot-month-row">
-          <span>快照月份：</span>
-          {snapshotMonthOptions.map((item) => (
-            <button key={item.key} type="button" onClick={() => openSnapshotMonth(item)}>{item.label}</button>
-          ))}
-        </div>
 
         <div className="quick-row">
           <span>当前结果：</span>
@@ -1575,6 +1536,9 @@ export default function WorkOrderDashboard() {
           <b>操作人 {formatNumber(operatorRowsRaw.length)} 行</b>
         </div>
       </section>}
+      {mainTab !== "customer" && state === "loading" && <div className="business-query-note">正在查询所选日期工单数据...</div>}
+      {mainTab !== "customer" && state === "error" && error && <div className="business-query-error">查询失败：{error}</div>}
+
 
       {mainTab === "orders" && orderView === "orderDashboard" && (
         <>

@@ -5191,3 +5191,302 @@ html body .third-party-volume-module .third-party-tab-panel{
 .volume-query-status-main b{font-size:11px}
 .volume-query-status-main span{font-size:10px}
 .volume-completeness-main span{font-size:10px}
+
+
+/* =========================================================
+   FINAL3 — 合并模块布局 / UI精修
+   数据逻辑不改，只调整布局与可读性
+   ========================================================= */
+
+:root{
+  --h-sidebar:#0b1830;
+  --h-sidebar-2:#0d1e3b;
+  --h-blue:#2563eb;
+  --h-blue-soft:#eff6ff;
+  --h-border:#dde6f1;
+  --h-text:#172033;
+  --h-muted:#75859a;
+  --h-bg:#f4f7fb;
+}
+
+.app-shell{
+  background:var(--h-bg)!important;
+  grid-template-columns:220px minmax(0,1fr)!important;
+}
+
+.sidebar{
+  width:220px!important;
+  min-width:220px!important;
+  background:linear-gradient(180deg,var(--h-sidebar) 0%,#08162c 100%)!important;
+  padding:18px 12px!important;
+}
+
+.brand{padding:0 8px 18px!important}
+.brand-title{font-size:17px!important;letter-spacing:-.02em}
+.brand-subtitle{font-size:10px!important;opacity:.72}
+.logo{width:40px!important;height:40px!important;border-radius:12px!important}
+
+.nav-section-title{
+  margin:15px 9px 7px!important;
+  font-size:10px!important;
+  letter-spacing:.08em!important;
+  opacity:.65;
+}
+.nav-item{
+  min-height:48px!important;
+  border-radius:11px!important;
+  padding:0 11px!important;
+  margin:4px 0!important;
+  font-size:13px!important;
+}
+.nav-item .nav-left{gap:9px!important}
+.nav-icon{width:28px!important;height:28px!important;border-radius:8px!important}
+.nav-item.active{
+  background:linear-gradient(90deg,#173d80 0%,#14356b 100%)!important;
+  box-shadow:inset 0 0 0 1px rgba(96,165,250,.25)!important;
+}
+.badge{font-size:9px!important;padding:4px 7px!important}
+
+.main{
+  padding:18px 22px 28px!important;
+  background:var(--h-bg)!important;
+}
+.topbar{
+  min-height:58px!important;
+  margin:0 0 12px!important;
+  padding:0!important;
+  align-items:flex-start!important;
+}
+.topbar .title h1{
+  margin:0!important;
+  font-size:24px!important;
+  color:var(--h-text)!important;
+  letter-spacing:-.025em!important;
+}
+.status-box{
+  padding:9px 12px!important;
+  border:1px solid var(--h-border)!important;
+  border-radius:12px!important;
+  background:#fff!important;
+  box-shadow:0 4px 16px rgba(15,23,42,.035)!important;
+}
+.status-line span{font-size:9px!important}
+.status-line strong{font-size:10px!important}
+
+.module-switch{
+  width:max-content!important;
+  padding:3px!important;
+  margin:0 0 10px!important;
+  border:1px solid var(--h-border)!important;
+  border-radius:12px!important;
+  background:#edf2f8!important;
+  gap:3px!important;
+}
+.module-tab{
+  min-height:42px!important;
+  padding:0 20px!important;
+  border-radius:9px!important;
+  font-size:13px!important;
+  font-weight:800!important;
+}
+.module-tab.active{
+  background:#fff!important;
+  color:var(--h-blue)!important;
+  box-shadow:0 2px 8px rgba(15,23,42,.08)!important;
+}
+
+.child-switch{
+  gap:4px!important;
+  padding:0!important;
+  margin:0 0 10px!important;
+  background:transparent!important;
+  border:none!important;
+}
+.child-tab{
+  min-height:36px!important;
+  padding:0 14px!important;
+  border-radius:9px!important;
+  font-size:12px!important;
+  background:transparent!important;
+}
+.child-tab.active{
+  background:#fff!important;
+  color:var(--h-blue)!important;
+  border:1px solid var(--h-border)!important;
+  box-shadow:0 2px 8px rgba(15,23,42,.05)!important;
+}
+
+.country-pane-row{
+  padding:8px 0 4px!important;
+  overflow-x:auto!important;
+  white-space:nowrap!important;
+}
+.country-pane-row .child-tab{background:#f8fafc!important}
+.country-pane-row .child-tab.active{background:#fff!important}
+
+.filter-card,
+.panel,
+.metrics .metric-card,
+.metric-card{
+  border:1px solid var(--h-border)!important;
+  box-shadow:0 4px 15px rgba(15,23,42,.035)!important;
+}
+.filter-card{
+  border-radius:14px!important;
+  padding:14px!important;
+  background:#fff!important;
+}
+.filter-grid{
+  gap:10px!important;
+  align-items:end!important;
+}
+.field label,.multi-select-label{font-size:10px!important;color:#63748a!important}
+.input,.multi-select-trigger{
+  min-height:40px!important;
+  border-radius:9px!important;
+  border-color:#d6e0eb!important;
+  font-size:12px!important;
+}
+.primary-btn{
+  min-height:40px!important;
+  border-radius:9px!important;
+  padding:0 17px!important;
+  background:var(--h-blue)!important;
+  box-shadow:0 4px 12px rgba(37,99,235,.18)!important;
+}
+.ghost-btn{
+  min-height:40px!important;
+  border-radius:9px!important;
+  padding:0 14px!important;
+}
+.selected-row{display:none!important}
+.snapshot-month-row{display:none!important}
+
+.quick-row.date-shortcuts{
+  margin-top:10px!important;
+  gap:6px!important;
+}
+.quick-row.date-shortcuts span{display:none!important}
+.quick-row.date-shortcuts button{
+  min-height:30px!important;
+  border-radius:8px!important;
+  padding:0 11px!important;
+  font-size:10px!important;
+}
+
+.metrics{
+  gap:10px!important;
+  margin:10px 0!important;
+}
+.metric-card{
+  min-height:105px!important;
+  border-radius:14px!important;
+  padding:14px 16px!important;
+  background:#fff!important;
+}
+.metric-label{font-size:10px!important;color:#64748b!important}
+.metric-value{font-size:23px!important;color:#111827!important;letter-spacing:-.03em!important}
+.metric-sub{font-size:10px!important}
+
+.panel{
+  border-radius:15px!important;
+  background:#fff!important;
+  overflow:hidden!important;
+}
+.panel-header{
+  padding:15px 16px 12px!important;
+  border-bottom:1px solid #edf1f6!important;
+}
+.panel-title{font-size:17px!important;color:#162033!important}
+.panel-subtitle{display:none!important}
+
+.table-wrap table th{
+  height:42px!important;
+  padding:0 12px!important;
+  background:#f8fafc!important;
+  color:#41516a!important;
+  font-size:10px!important;
+  white-space:nowrap!important;
+}
+.table-wrap table td{
+  height:48px!important;
+  padding:0 12px!important;
+  font-size:11px!important;
+  color:#1f2937!important;
+  white-space:nowrap!important;
+}
+.table-wrap table tbody tr:hover{background:#f8fbff!important}
+.table-pagination{
+  padding:10px 14px!important;
+  border-top:1px solid #edf1f6!important;
+}
+
+.work-order-dashboard .topbar,
+.customer-service-dashboard .topbar{
+  min-height:52px!important;
+}
+.work-order-dashboard .topbar p,
+.customer-service-dashboard .topbar p{
+  display:none!important;
+}
+
+/* 管理后台业务权限显示成三个“合并模块” */
+.admin-permission-list .admin-permission-row,
+.admin-user-permissions-inline label{
+  border-radius:9px!important;
+}
+
+/* 窄屏时保持可用 */
+@media(max-width:1100px){
+  .app-shell{grid-template-columns:190px minmax(0,1fr)!important}
+  .sidebar{width:190px!important;min-width:190px!important}
+  .main{padding:14px!important}
+}
+
+
+/* =========================================================
+   FINAL4 — 业务后台统一手动查询
+   首次进入只显示导航 / 筛选，不展示0值、旧结果或自动加载提示。
+   ========================================================= */
+.business-prequery .status-box{display:none!important}
+.business-prequery .filter-card ~ *{display:none!important}
+.business-prequery .selected-row{display:none!important}
+.business-prequery .country-pane-row{display:none!important}
+.business-prequery .panel-subtitle{display:none!important}
+.business-prequery .quick-row:not(.date-shortcuts){display:none!important}
+.business-prequery .filter-card{
+  margin-top:8px!important;
+  border-radius:14px!important;
+}
+.business-prequery .filter-card::after{
+  content:"设置查询条件后点击查询";
+  display:block;
+  padding:12px 2px 0;
+  font-size:11px;
+  color:#94a3b8;
+}
+.business-query-note,
+.business-query-error{
+  margin-top:10px;
+  padding:10px 12px;
+  border-radius:10px;
+  font-size:12px;
+  line-height:1.5;
+}
+.business-query-note{
+  color:#1d4ed8;
+  background:#eff6ff;
+  border:1px solid #dbeafe;
+}
+.business-query-error{
+  color:#b91c1c;
+  background:#fff1f2;
+  border:1px solid #fecdd3;
+}
+.primary-btn:disabled{opacity:.7;cursor:wait}
+.business-prequery .filter-card ~ .business-query-note,
+.business-prequery .filter-card ~ .business-query-error{
+  display:block!important;
+}
+
+.business-prequery .country-tab-row{display:none!important}

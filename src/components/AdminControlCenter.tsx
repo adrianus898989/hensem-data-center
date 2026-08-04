@@ -58,6 +58,17 @@ const AUTO_WITHDRAW_SYNC_JOBS: Array<{ key: ManualSyncJob; label: string; note: 
 
 const ALL_LATEST_SYNC_JOBS = [...THIRD_PARTY_SYNC_JOBS, ...AUTO_WITHDRAW_SYNC_JOBS];
 
+const BUSINESS_PERMISSION_GROUPS: Array<{
+  key: string;
+  keys: Array<keyof DashboardPermissions>;
+  label: string;
+  note: string;
+}> = [
+  { key: "third_party", keys: ["third_party"], label: "三方量 / 费率", note: "查看三方量、费率与盘口状态" },
+  { key: "auto_withdraw", keys: ["auto_withdraw"], label: "提现 / 自动出款", note: "自动出款与提现操作人统计，同一个模块" },
+  { key: "work_customer", keys: ["work_orders", "customer_service"], label: "工单 / 客服", note: "工单、操作人、客服统计，同一个模块" },
+];
+
 const MANAGEMENT_OPTIONS: Array<{ key: keyof DashboardManagementPermissions; label: string; note: string }> = [
   { key: "manage_viewers", label: "账号管理", note: "可建立、停用、删除 Viewer 与重置 Viewer 密码" },
   { key: "refresh_data", label: "数据刷新", note: "可手动刷新今日 / 昨日 / 费率与历史补齐" },
@@ -85,7 +96,9 @@ function roleEnglish(role: DashboardProfile["role"]) {
 function permissionSummary(profile: DashboardProfile) {
   if (profile.role === "owner") return "全部业务模块 · 全部后台权限";
   const p = normalizedPermissions(profile);
-  const business = DASHBOARD_PERMISSION_LABELS.filter((item) => p[item.key]).map((item) => item.label);
+  const business = BUSINESS_PERMISSION_GROUPS
+    .filter((group) => group.keys.some((key) => p[key]))
+    .map((group) => group.label);
   if (profile.role === "admin") {
     const m = normalizedManagementPermissions(profile);
     const management = MANAGEMENT_OPTIONS.filter((item) => m[item.key]).map((item) => item.label);
@@ -535,7 +548,14 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
               <label>初始密码</label><input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="至少 8 位" />
               <label>业务模块权限</label>
               <div className="admin-permission-list">
-                {DASHBOARD_PERMISSION_LABELS.map((item) => <label key={item.key} className="admin-permission-row"><input type="checkbox" checked={newPermissions[item.key]} onChange={(e) => setNewPermissions((prev) => ({ ...prev, [item.key]: e.target.checked }))} /><span><b>{item.label}</b><small>{item.note}</small></span></label>)}
+                {BUSINESS_PERMISSION_GROUPS.map((group) => {
+                  const checked = group.keys.some((key) => newPermissions[key]);
+                  return <label key={group.key} className="admin-permission-row"><input type="checkbox" checked={checked} onChange={(e) => setNewPermissions((prev) => {
+                    const next = { ...prev };
+                    group.keys.forEach((key) => { next[key] = e.target.checked; });
+                    return next;
+                  })} /><span><b>{group.label}</b><small>{group.note}</small></span></label>;
+                })}
               </div>
               {newRole === "admin" && isOwner && <><label>后台管理权限</label><div className="admin-permission-list management-list">{MANAGEMENT_OPTIONS.map((item) => <label key={item.key} className="admin-permission-row"><input type="checkbox" checked={newManagement[item.key]} onChange={(e) => setNewManagement((prev) => ({ ...prev, [item.key]: e.target.checked }))} /><span><b>{item.label}</b><small>{item.note}</small></span></label>)}</div></>}
               <button className="admin-primary-btn" type="submit" disabled={createBusy}>{createBusy ? "建立中..." : `建立${newRole === "admin" ? "小管理员" : "查看账号"}`}</button>
@@ -558,7 +578,14 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
                 return <article className={`admin-user-row-v249 role-${user.role}`} key={user.auth_user_id}>
                   <div className="admin-user-row-head"><div className="admin-user-avatar">{user.username.slice(0, 1).toUpperCase()}</div><div className="admin-user-identity"><div><h4>{user.username}</h4><span className={`admin-user-role ${user.role}`}>{roleEnglish(user.role)}</span><span className={user.active ? "admin-user-state active" : "admin-user-state off"}>{user.active ? "正常" : "停用"}</span></div><p>{permissionSummary(user)}</p></div></div>
                   {editable && <div className="admin-user-edit-grid">
-                    <div><span className="admin-inline-title">业务模块</span><div className="admin-user-permissions-inline">{DASHBOARD_PERMISSION_LABELS.map((item) => <label key={item.key}><input type="checkbox" checked={permissions[item.key]} disabled={savingUser === user.username} onChange={(e) => void saveAccount(user, { permissions: { ...permissions, [item.key]: e.target.checked } })} />{item.label}</label>)}</div></div>
+                    <div><span className="admin-inline-title">业务模块</span><div className="admin-user-permissions-inline">{BUSINESS_PERMISSION_GROUPS.map((group) => {
+                      const checked = group.keys.some((key) => permissions[key]);
+                      return <label key={group.key}><input type="checkbox" checked={checked} disabled={savingUser === user.username} onChange={(e) => {
+                        const nextPermissions = { ...permissions };
+                        group.keys.forEach((key) => { nextPermissions[key] = e.target.checked; });
+                        void saveAccount(user, { permissions: nextPermissions });
+                      }} />{group.label}</label>;
+                    })}</div></div>
                     {user.role === "admin" && isOwner && <div><span className="admin-inline-title">后台管理</span><div className="admin-user-permissions-inline management">{MANAGEMENT_OPTIONS.map((item) => <label key={item.key}><input type="checkbox" checked={managerPermissions[item.key]} disabled={savingUser === user.username} onChange={(e) => void saveAccount(user, { management_permissions: { ...managerPermissions, [item.key]: e.target.checked } })} />{item.label}</label>)}</div></div>}
                     <div className="admin-user-buttons-v249"><button type="button" onClick={() => void saveAccount(user, { active: !user.active })}>{user.active ? "停用" : "启用"}</button><button type="button" onClick={() => { setResetTarget(resetTarget === user.username ? "" : user.username); setResetPassword(""); }}>重置密码</button><button className="danger" type="button" onClick={() => void removeAccount(user)}>删除账号</button></div>
                     {resetTarget === user.username && <form className="admin-inline-reset" onSubmit={submitResetPassword}><input type="password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} placeholder="输入新的临时密码（至少 8 位）" autoFocus /><button type="submit" disabled={savingUser === user.username}>保存新密码</button><button type="button" onClick={() => setResetTarget("")}>取消</button></form>}

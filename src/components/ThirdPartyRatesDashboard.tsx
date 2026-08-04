@@ -716,8 +716,9 @@ function filterLabel(values: string[], all = "全部"): string {
 
 export default function ThirdPartyRatesDashboard({ embedded = false }: { embedded?: boolean } = {}) {
   const { session } = useDashboardAuth();
-  const [state, setState] = useState<LoadState>("loading");
+  const [state, setState] = useState<LoadState>("ready");
   const [payload, setPayload] = useState<ThirdPartyRatePayload | null>(null);
+  const [hasQueried, setHasQueried] = useState(false);
   const [error, setError] = useState("");
   const [mainView, setMainView] = useState<RateMainView>("countryRates");
   const [view, setView] = useState<RateView>("anomalies");
@@ -747,7 +748,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
   }
 
   useEffect(() => {
-    loadData();
+    // 费率页面进入时不自动读取；用户点击查询后才加载。
   }, []);
 
   const countries = useMemo(() => payload ? sortRateCountries([...payload.platformStatuses.map((r) => r.country), ...payload.rates.map((r) => r.country)]) : [], [payload]);
@@ -863,14 +864,15 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
     setDraftFilters((prev) => ({ ...prev, [key]: value }));
   }
 
-  function applyFilters() {
+  async function applyFilters() {
+    setHasQueried(true);
     setFilters({ ...draftFilters });
     setPage(1);
+    await loadData();
   }
 
   function resetFilters() {
     setDraftFilters(EMPTY_RATE_FILTERS);
-    setFilters(EMPTY_RATE_FILTERS);
     setPage(1);
   }
 
@@ -1019,34 +1021,22 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
     });
   }
 
-  if (state === "loading") return <div className="loading inner-loading">正在读取三方费率表...</div>;
-  if (state === "error") {
-    return (
-      <div className="error-box inner-error">
-        <h2>三方费率读取失败</h2>
-        <p>{error}</p>
-        <p className="muted-text">请确认 Netlify 已添加 THIRD_PARTY_RATE_SHEET_ID，并且这个 Google Sheet 已分享给 Service Account。</p>
-        
-      </div>
-    );
-  }
-  if (!payload) return null;
 
   const currentTotal = view === "dashboard" || view === "rates" ? sortedRateRows.length : view === "running" ? sortedRunningRows.length : view === "country" ? countryThirdPartyRows.length : sortedStatusRows.length;
   const totalPages = pageCount(currentTotal, pageSize);
 
   return (
-    <div className="third-party-module">
+    <div className={`third-party-module ${!hasQueried || !payload ? "business-prequery" : ""}`}>
       {!embedded && <div className="topbar rate-topbar">
         <div className="title">
           <h1>三方费率</h1>
           <p>当前位置：Hensem数据后台 &gt; 三方费率 &gt; {view === "dashboard" ? "总览看板" : view === "running" ? "三方运行查询" : view === "country" ? "国家三方查询" : view === "platform" ? "盘口接入状态" : view === "rates" ? "三方费率表" : "异常提醒"}</p>
         </div>
-        <div className="status-box">
+        {hasQueried && payload && <div className="status-box">
           <div className="status-line"><span>数据来源</span><strong>Google Sheet</strong></div>
           <div className="status-line"><span>读取页签</span><strong>{payload.meta.sheets.length} 个</strong></div>
           <div className="status-line"><span>更新时间</span><strong>{new Date(String((payload.meta as any).snapshotUpdatedAt || payload.meta.updatedAt)).toLocaleString("zh-CN")}</strong></div>
-        </div>
+        </div>}
       </div>}
 
       <section className="third-party-tab-panel rate-module-switch">
@@ -1076,7 +1066,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
             <input className="input" value={draftFilters.keyword} onChange={(e) => updateDraft("keyword", e.target.value)} placeholder="搜索三方 / 盘口 / 费率 / 状态" />
           </div>
           <div className="action-row action-row-v2">
-            <button className="primary-btn" onClick={applyFilters}>查询</button>
+            <button className="primary-btn" onClick={() => void applyFilters()} disabled={state === "loading"}>{state === "loading" ? "查询中..." : "查询"}</button>
             <button className="ghost-btn" onClick={resetFilters}>重置</button>
             <button className="ghost-btn" onClick={handleExport}>导出</button>
             
@@ -1110,6 +1100,8 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
           <b>费率资料 {filteredRateRows.length} 行</b>
         </div>
       </section>
+      {state === "loading" && <div className="business-query-note">正在查询三方费率...</div>}
+      {state === "error" && error && <div className="business-query-error">查询失败：{error}</div>}
 
       {mainView === "countryRates" && (
         <CountryRatePage

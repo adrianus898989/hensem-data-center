@@ -460,8 +460,9 @@ function renderMetricBar(value: number, max: number, sub?: string) {
 }
 
 export default function CustomerServiceDashboard({ embedded = false }: { embedded?: boolean } = {}) {
-  const [state, setState] = useState<LoadState>("loading");
+  const [state, setState] = useState<LoadState>("ready");
   const [payload, setPayload] = useState<CustomerServicePayload | null>(null);
+  const [hasQueried, setHasQueried] = useState(false);
   const [error, setError] = useState("");
   const [mainTab, setMainTab] = useState<MainTab>("customer");
   const [view, setView] = useState<View>(() => "platformSummary");
@@ -497,15 +498,18 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
   }
 
   useEffect(() => {
-    void loadData(false);
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const key = formatDateKey(yesterday);
+    const next = { ...EMPTY_FILTERS, startDate: key, endDate: key };
+    setFilters(next);
+    setDraftFilters(next);
+    // 进入客服统计只预填昨天，不自动读取。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    const requestedSignature = monthRangeSignature(filters.startDate, filters.endDate);
-    if (payload && loadedMonthSignatureRef.current !== requestedSignature) {
-      void loadData(true, filters.startDate, filters.endDate);
-    }
+    if (!hasQueried || !payload) return;
     const hourlyTimer = window.setInterval(() => {
       if (document.visibilityState === "visible" && rangeIncludesCurrentMonthClient(filters.startDate, filters.endDate)) {
         void loadData(true, filters.startDate, filters.endDate);
@@ -513,7 +517,7 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
     }, 60 * 60 * 1000);
     return () => window.clearInterval(hourlyTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.startDate, filters.endDate]);
+  }, [filters.startDate, filters.endDate, hasQueried, payload]);
 
   const allRows = payload?.rows || [];
   const dates = useMemo(() => uniq(allRows.map((r) => r.date).filter(isIsoDate)), [allRows]);
@@ -602,16 +606,19 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
     setDraftFilters((prev) => ({ ...prev, [key]: value }));
   }
 
-  function applyFilters() {
-    setFilters({ ...draftFilters });
+  async function applyFilters() {
+    const next = { ...draftFilters };
+    setFilters(next);
+    setHasQueried(true);
     setPage(1);
+    await loadData(false, next.startDate, next.endDate);
   }
 
   function resetFilters() {
-    const first = dates[0] || "";
-    const last = dates[dates.length - 1] || "";
-    const next = { ...EMPTY_FILTERS, startDate: first, endDate: last };
-    setFilters(next);
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const key = formatDateKey(yesterday);
+    const next = { ...EMPTY_FILTERS, startDate: key, endDate: key };
     setDraftFilters(next);
     setPage(1);
   }
@@ -651,7 +658,6 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
     }
     const next = { ...draftFilters, startDate: formatDateKey(start), endDate: formatDateKey(end) };
     setDraftFilters(next);
-    setFilters(next);
     setPage(1);
   }
 
@@ -666,7 +672,6 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
     end.setDate(end.getDate() + days);
     const next = { ...draftFilters, startDate: formatDateKey(start), endDate: formatDateKey(end) };
     setDraftFilters(next);
-    setFilters(next);
     setPage(1);
   }
 
@@ -704,32 +709,20 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
     setSort((prev) => ({ key, direction: prev.key === key && prev.direction === "desc" ? "asc" : "desc" }));
   }
 
-  if (state === "loading") return <div className="loading inner-loading">正在读取客服统计...</div>;
-  if (state === "error") {
-    return (
-      <div className="error-box inner-error">
-        <h2>客服统计读取失败</h2>
-        <p>{error}</p>
-        <p className="muted-text">请确认 Netlify 已添加 CUSTOMER_SERVICE_SHEET_ID，并且这个 Google Sheet 已分享给 Service Account。</p>
-        
-      </div>
-    );
-  }
-  if (!payload) return null;
 
   return (
-    <div className="customer-service-module">
+    <div className={`customer-service-module ${!hasQueried || !payload ? "business-prequery" : ""}`}>
       {!embedded && <div className="topbar">
         <div className="title">
           <h1>客服统计</h1>
           <p>当前位置：Hensem数据后台 &gt; 客服统计 &gt; {isStaffView(view) ? "操作人统计" : "客服统计"} &gt; {viewTitle(view)}</p>
         </div>
-        <div className="status-box">
+        {hasQueried && payload && <div className="status-box">
           <div className="status-line"><span>数据月份</span><strong>{payload.meta.year} 年 {payload.meta.month} 月</strong></div>
           <div className="status-line"><span>数据来源</span><strong>Google Sheet</strong></div>
           <div className="status-line"><span>读取页签</span><strong>{payload.meta.sheets.length} 个</strong></div>
           <div className="status-line"><span>更新时间</span><strong>{new Date(String((payload.meta as any).snapshotUpdatedAt || payload.meta.updatedAt)).toLocaleString("zh-CN")}</strong></div>
-        </div>
+        </div>}
       </div>}
 
       {!embedded && <section className="module-switch work-main-switch">
@@ -768,7 +761,7 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
           <CSMultiSelect label="客服/操作人" options={staffOptions} value={draftFilters.staff} onChange={(value) => updateDraft("staff", value)} placeholder="全部客服" />
           <CSMultiSelect label="指标" options={metricOptions} value={draftFilters.metrics} onChange={(value) => updateDraft("metrics", value)} placeholder="全部指标" />
           <div className="field"><label>关键词</label><input className="input" value={draftFilters.keyword} onChange={(e) => updateDraft("keyword", e.target.value)} placeholder="搜索客服 / 平台 / 指标 / 内容" /></div>
-          <div className="action-row"><button className="primary-btn" onClick={applyFilters}>查询</button><button className="ghost-btn" onClick={resetFilters}>重置</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(-1)}>上一日</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(1)}>下一日</button><button className="ghost-btn" onClick={() => exportCsv("customer-service.csv", filteredRows)}>导出</button></div>
+          <div className="action-row"><button className="primary-btn" onClick={() => void applyFilters()} disabled={state === "loading"}>{state === "loading" ? "查询中..." : "查询"}</button><button className="ghost-btn" onClick={resetFilters}>重置</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(-1)}>上一日</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(1)}>下一日</button><button className="ghost-btn" onClick={() => exportCsv("customer-service.csv", filteredRows)}>导出</button></div>
         </div>
         <div className="selected-row">
           <span>已选条件：</span>
@@ -798,6 +791,8 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
           <b>客服 {summary.staff} 人</b>
         </div>
       </section>
+      {state === "loading" && <div className="business-query-note">正在查询所选日期客服数据...</div>}
+      {state === "error" && error && <div className="business-query-error">查询失败：{error}</div>}
 
       {(view === "customerDashboard" || view === "staffDashboard") && (
         <section className="metrics">
