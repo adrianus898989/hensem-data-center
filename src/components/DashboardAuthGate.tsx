@@ -157,44 +157,95 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   useEffect(() => {
     if (!enabled || !profile?.username) return;
 
-    // 注意：后台 token 会每 45 分钟刷新一次。
-    // token 刷新不等于用户有操作，因此这里不再依赖 access_token，
-    // 否则每次刷新都会把“1小时无操作退出”重新计时。
-    let lastWrite = 0;
+    // 严格 idle：
+    // - 只认浏览器真实用户事件（isTrusted=true）
+    // - 不再监听 scroll，因为页面渲染/恢复位置也可能触发 scroll，旧版会被误判成用户活动
+    // - token 自动刷新不算活动
+    // - 用“最后真实活动时间 + 精确截止时间”退出，而不是靠会被重置的周期计时器
+    let idleTimer: number | undefined;
+    let disposed = false;
 
-    const markActivity = () => {
-      const now = Date.now();
-      if (now - lastWrite < 1000) return;
-      lastWrite = now;
-      writeLastActivity(now);
+    const logoutEverywhere = () => {
+      if (disposed) return;
+      try {
+        window.localStorage.setItem("hensem.dashboard.idle_logout_at", String(Date.now()));
+      } catch {}
+      logout();
     };
 
-    const checkIdle = () => {
-      const last = readLastActivity();
+    const scheduleIdleCheck = () => {
+      if (disposed) return;
+      if (idleTimer) window.clearTimeout(idleTimer);
+
+      let last = readLastActivity();
       if (!last) {
-        writeLastActivity();
+        last = Date.now();
+        writeLastActivity(last);
+      }
+
+      const remaining = DASHBOARD_IDLE_MS - (Date.now() - last);
+      if (remaining <= 0) {
+        logoutEverywhere();
         return;
       }
-      if (Date.now() - last >= DASHBOARD_IDLE_MS) logout();
+
+      idleTimer = window.setTimeout(() => {
+        const latest = readLastActivity();
+        if (!latest || Date.now() - latest >= DASHBOARD_IDLE_MS) {
+          logoutEverywhere();
+        } else {
+          scheduleIdleCheck();
+        }
+      }, Math.max(250, remaining + 100));
+    };
+
+    const markActivity = (event: Event) => {
+      // 代码触发的 synthetic event 不算用户活动。
+      if (!event.isTrusted) return;
+      writeLastActivity(Date.now());
+      scheduleIdleCheck();
+    };
+
+    const checkNow = () => {
+      const last = readLastActivity();
+      if (last && Date.now() - last >= DASHBOARD_IDLE_MS) {
+        logoutEverywhere();
+        return;
+      }
+      scheduleIdleCheck();
     };
 
     const onVisibility = () => {
-      if (document.visibilityState === "visible") checkIdle();
+      if (document.visibilityState === "visible") checkNow();
     };
 
-    const events: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "touchstart", "scroll"];
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === DASHBOARD_LAST_ACTIVITY_KEY) {
+        scheduleIdleCheck();
+      }
+      if (event.key === "hensem.dashboard.idle_logout_at" && event.newValue) {
+        logout();
+      }
+      if (event.key === "hensem:dashboard:auth-session:v2" && !event.newValue) {
+        logout();
+      }
+    };
+
+    // wheel 是真实滚轮动作；programmatic scroll 不会触发 wheel。
+    const events: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "touchstart", "wheel"];
     events.forEach((name) => window.addEventListener(name, markActivity, { passive: true }));
-    window.addEventListener("focus", checkIdle);
+    window.addEventListener("focus", checkNow);
+    window.addEventListener("storage", onStorage);
     document.addEventListener("visibilitychange", onVisibility);
 
-    // 30 秒检查一次，同时处理电脑休眠/页面挂后台后回来已经超过1小时的情况。
-    const timer = window.setInterval(checkIdle, 30 * 1000);
-    checkIdle();
+    scheduleIdleCheck();
 
     return () => {
-      window.clearInterval(timer);
+      disposed = true;
+      if (idleTimer) window.clearTimeout(idleTimer);
       events.forEach((name) => window.removeEventListener(name, markActivity));
-      window.removeEventListener("focus", checkIdle);
+      window.removeEventListener("focus", checkNow);
+      window.removeEventListener("storage", onStorage);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
