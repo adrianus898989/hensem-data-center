@@ -124,6 +124,9 @@ const MANUAL_THIRD_PARTY_ALIAS_FIXES: ThirdPartyAliasEntry[] = [
   { country: "巴基斯坦", canonical: "StarPago", aliases: ["StarPago", "StarPago-EP", "StarPago-Jazz"] },
   { country: "巴基斯坦", canonical: "P777Pay", aliases: ["777Pay", "777-Pay", "P777", "P777Pay", "P777pay", "P777-EP", "P777-Jazz"] },
   { country: "巴基斯坦", canonical: "DeePay", aliases: ["DePay", "DeePay", "DeePay-Ablepay", "AblePay", "Dee-EP", "Dee-Jazz"] },
+  { country: "菲律宾", canonical: "PAYRORO", aliases: ["roroPay", "RoroPay", "ROROPAY", "PAYRORO", "PayRoro"] },
+  { country: "菲律宾", canonical: "DyPay", aliases: ["DyPayV2", "DYPAYV2", "DyPay", "DYPAY"] },
+  { country: "菲律宾", canonical: "PinoyPay", aliases: ["nova", "Nova", "NOVAPAY", "NovaPay", "PINOYPAY", "PinoyPay"] },
   { country: "印尼", canonical: "PayIngPay", aliases: ["PayIngPay", "PayIngPayI", "PayingPay", "PayingPayI", "PayIng", "PAYING", "SECPAY", "SECPAY-PAYING", "SEC PAY", "SecPay", "SecPay-PayIng", "QRIS (PayIngPay)"] },
   { country: "印尼", canonical: "SafePay", aliases: ["SafePay", "SAFEPAY", "SafePay2", "Safe2Pay", "safe2pay03", "Safepay OLD", "SAFEPAY WALLET OLD"] },
   { country: "印尼", canonical: "YerePay", aliases: ["YerePay", "yerePay", "YEREPAY", "Yere Pay", "yere pay", "QRIS (YerePay)", "QRIS YerePay", "QRIS-YerePay", "E~YerePay", "B~YerePay", "E-YerePay", "B-YerePay", "YerePay IDR-DANA", "YerePay IDR DANA", "YerePay-DANA", "DANA (YerePay)"] },
@@ -580,6 +583,13 @@ function confirmedUserThirdPartyAlias(value: string, country?: string): string {
   // 用户确认：SudalinkPay 是独立三方，不属于 StarPay。
   if (c === "印尼" && /sudalink/.test(key)) return "SudalinkPay";
 
+  // 用户确认：菲律宾主三方名称统一。
+  if (c === "菲律宾") {
+    if (/^(roropay|payroro)$/.test(key)) return "PAYRORO";
+    if (/^(dypay|dypayv2)$/.test(key)) return "DyPay";
+    if (/^(nova|novapay|pinoypay)$/.test(key)) return "PinoyPay";
+  }
+
   // 已确认的印度主三方别名。这里只统一名称，不写任何费率。
   if (c === "印度") {
     if (/^(ic2pay|ic2payqr|paytmic2pay|icpay|icpayqr|icpayinr)$/.test(key)) return "ICPay";
@@ -752,7 +762,9 @@ export function canonicalThirdPartyName(value: string, country?: string): string
       shijie: "ShiJie", shije: "ShiJie", shijiev3: "ShiJie", shijiepay: "ShiJie", shijieqr: "ShiJie", shijiev3pay: "ShiJie",
       kili: "KiliPay", kilipay: "KiliPay", kilipaymaya: "KiliPay", kili2pay: "KiliPay", kilipay2: "KiliPay", kilimaya: "KiliPay",
       ux: "UxPay", uxpay: "UxPay", uxqr: "UxPay", uxpayqr: "UxPay",
-      nova: "Nova", novapay: "Nova"
+      roropay: "PAYRORO", payroro: "PAYRORO",
+      dypay: "DyPay", dypayv2: "DyPay",
+      nova: "PinoyPay", novapay: "PinoyPay", pinoypay: "PinoyPay"
     };
     if (phExplicit[rawAliasKey]) return phExplicit[rawAliasKey];
   }
@@ -810,12 +822,12 @@ export function canonicalThirdPartyName(value: string, country?: string): string
   if (/eypay|ey-pay|pix-?21\b/.test(x)) return "EyPay";
   if (/bcpay|dp-bcpay|wd-bcpay/.test(x)) return "BetCatPay";
   if (/vpspay|dp-vpspay|wd-vpspay|^vps$|pixpay0?21\b/.test(x)) return "VPS";
-  if (/dypay|dy-pay|pix-?20\b|pixpay0?20\b/.test(x)) return "DyPayV2";
+  if (/dypay|dy-pay|pix-?20\b|pixpay0?20\b/.test(x)) return cKeyNow === "菲律宾" ? "DyPay" : "DyPayV2";
 
   // Existing cross-country mappings.
   if (/bfpay|bf-pay/.test(x)) return "BFPAY";
   if (/shijie|shije|shi-jie|世界/.test(x)) return cKeyNow === "菲律宾" ? "ShiJie" : "SHIJIE";
-  if (/novapay|nova-pay|^nova$/.test(x)) return cKeyNow === "菲律宾" ? "Nova" : "NOVAPAY";
+  if (/novapay|nova-pay|^nova$|^pinoypay$/.test(x)) return cKeyNow === "菲律宾" ? "PinoyPay" : "NOVAPAY";
   if (/uxpay|ux-pay|^ux$/.test(x)) return cKeyNow === "菲律宾" ? "UxPay" : "UXPAY";
   if (/kili2?pay|kili-maya|kili|kilipay/.test(x)) return cKeyNow === "菲律宾" ? "KiliPay" : "KILIPAY";
   if (/rujia|如家|qr-rujia|paytm-rujia/.test(x)) return "RUJIA";
