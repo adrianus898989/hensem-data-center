@@ -126,6 +126,7 @@ const MANUAL_THIRD_PARTY_ALIAS_FIXES: ThirdPartyAliasEntry[] = [
   { country: "巴基斯坦", canonical: "DeePay", aliases: ["DePay", "DeePay", "DeePay-Ablepay", "AblePay", "Dee-EP", "Dee-Jazz"] },
   { country: "菲律宾", canonical: "PAYRORO", aliases: ["roroPay", "RoroPay", "ROROPAY", "PAYRORO", "PayRoro"] },
   { country: "菲律宾", canonical: "DyPay", aliases: ["DyPayV2", "DYPAYV2", "DyPay", "DYPAY"] },
+  { country: "巴基斯坦", canonical: "MCBPay", aliases: ["MCB", "MCBPay", "mcbPay", "MCB-JZ", "MCB_JZ", "MCB JZ", "MCB-Jazz"] },
   { country: "菲律宾", canonical: "PinoyPay", aliases: ["nova", "Nova", "NOVAPAY", "NovaPay", "PINOYPAY", "PinoyPay"] },
   { country: "印尼", canonical: "PayIngPay", aliases: ["PayIngPay", "PayIngPayI", "PayingPay", "PayingPayI", "PayIng", "PAYING", "SECPAY", "SECPAY-PAYING", "SEC PAY", "SecPay", "SecPay-PayIng", "QRIS (PayIngPay)"] },
   { country: "印尼", canonical: "SafePay", aliases: ["SafePay", "SAFEPAY", "SafePay2", "Safe2Pay", "safe2pay03", "Safepay OLD", "SAFEPAY WALLET OLD"] },
@@ -590,6 +591,14 @@ function confirmedUserThirdPartyAlias(value: string, country?: string): string {
     if (/^(nova|novapay|pinoypay)$/.test(key)) return "PinoyPay";
   }
 
+  // 用户确认：巴基斯坦三方别名统一。
+  if (c === "巴基斯坦") {
+    if (/^(mcb|mcbpay|mcbjz|mcbjazz|mcbjzpay)$/.test(key)) return "MCBPay";
+    if (/^(owpay|owenpay|owenpayowpay)$/.test(key)) return "OwenPay";
+    if (/^(op3pay|openpay|openpayop3pay)$/.test(key)) return "OpenPay";
+    if (/^(omnipay|epay|epayomnipay)$/.test(key)) return "EPAY";
+  }
+
   // 已确认的印度主三方别名。这里只统一名称，不写任何费率。
   if (c === "印度") {
     if (/^(ic2pay|ic2payqr|paytmic2pay|icpay|icpayqr|icpayinr)$/.test(key)) return "ICPay";
@@ -706,6 +715,10 @@ export function canonicalThirdPartyName(value: string, country?: string): string
       pkpay: "PkPay", pkep: "PkPay", pkjazz: "PkPay", pkjz: "PkPay", pkpayep: "PkPay", pkpayjazz: "PkPay", pkpayjz: "PkPay", pkpaypkreasypaisa: "PkPay", pkpaypkrjazzcash: "PkPay", pkpaypkrjazz: "PkPay", pkpaypkreasy: "PkPay", pkpaywallet2: "PkPay",
       starpago: "StarPago", starpagoep: "StarPago", starpagojazz: "StarPago", starpagojz: "StarPago",
       mega: "MegaPay", megapay: "MegaPay", megaep: "MegaPay", megajazz: "MegaPay", megajz: "MegaPay",
+      mcb: "MCBPay", mcbpay: "MCBPay", mcbjz: "MCBPay", mcbjazz: "MCBPay", mcbjzpay: "MCBPay",
+      owpay: "OwenPay", owenpay: "OwenPay", owenpayowpay: "OwenPay",
+      op3pay: "OpenPay", openpay: "OpenPay", openpayop3pay: "OpenPay",
+      omnipay: "EPAY", epay: "EPAY", epayomnipay: "EPAY",
       unipayusdt: "UniPayUSDT", usdt: "UniPayUSDT"
     };
     if (pkExplicit[rawAliasKey]) return pkExplicit[rawAliasKey];
