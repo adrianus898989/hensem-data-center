@@ -136,6 +136,22 @@ const OPERATOR_PANE_ALL = "所有盘口";
 const NPG_PANE_LABEL = "NPG盘口";
 const PANGHU_BRAZIL_PANE_LABEL = "胖虎巴西盘口";
 
+// V7P：提现/自动出款模块一进入就显示国家盘口，不再依赖“先查询出数据”才生成页签。
+// 只影响自动出款 / 提现操作人，不修改三方量 / 三方费率。
+const DEFAULT_AUTO_COUNTRY_PANES = [
+  "印度盘口",
+  "巴基斯坦盘口",
+  "印尼盘口",
+  "马来盘口",
+  "缅甸盘口",
+  "尼日利亚盘口",
+  "越南盘口",
+  "菲律宾盘口",
+  PANGHU_BRAZIL_PANE_LABEL,
+  NPG_PANE_LABEL,
+  "巴西盘口"
+];
+
 function normalizePaneToken(value: string): string {
   return String(value || "").toLowerCase().replace(/[\s_\-\/\（）()]+/g, "");
 }
@@ -373,7 +389,8 @@ function aggregateByPlatform(rows: AutoWithdrawRow[]): AutoWithdrawRow[] {
   const map = new Map<string, AutoWithdrawRow & { _seconds: number; _weight: number }>();
 
   for (const row of rows) {
-    const key = `${row.country}|||${row.platform}|||${row.sourceSheet}`;
+    // V7P：日期区间累计只按 国家 + 盘口 合并。跨月时也不能因为 sourceSheet 不同拆成两行。
+    const key = `${row.country}|||${row.platform}`;
     const weight = row.total || row.success + row.rejected || 0;
     const seconds = parseDurationToSeconds(row.avgTime);
     const current = map.get(key);
@@ -1063,18 +1080,22 @@ export default function Dashboard() {
   }, [payload]);
 
   const autoCountryPanes = useMemo(() => {
-    if (!payload) return [];
-    const autoCountries = uniq([
+    const autoCountries = payload ? uniq([
       ...payload.monthlyRows.map((r) => r.country),
       ...payload.dailyRows.map((r) => r.country)
-    ]);
-    return sortAutoPanes(uniq(autoCountries.map(countryPaneLabelFor)));
+    ]) : [];
+    return sortAutoPanes(uniq([
+      ...DEFAULT_AUTO_COUNTRY_PANES,
+      ...autoCountries.map(countryPaneLabelFor)
+    ]));
   }, [payload]);
 
   const operatorCountryPanes = useMemo(() => {
-    if (!payload) return [];
-    const operatorCountries = uniq(payload.operatorRows.map((r) => r.country));
-    return sortAutoPanes(uniq(operatorCountries.map(countryPaneLabelFor)));
+    const operatorCountries = payload ? uniq(payload.operatorRows.map((r) => r.country)) : [];
+    return sortAutoPanes(uniq([
+      ...DEFAULT_AUTO_COUNTRY_PANES,
+      ...operatorCountries.map(countryPaneLabelFor)
+    ]));
   }, [payload]);
 
   useEffect(() => {
@@ -1420,6 +1441,28 @@ export default function Dashboard() {
     }
     if (next === "auto") setAutoView("daily");
     if (next === "operator") setOperatorView("summary");
+
+    // V7P：第一次点进自动出款 / 提现操作人就自动读取默认日期，
+    // 国家盘口立即可见，不需要用户再点一次“查询”。
+    if ((next === "auto" || next === "operator") && !hasBusinessQueried) {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const fallbackDate = formatDateKey(yesterday);
+      const startDate = draftFilters.startDate || filters.startDate || fallbackDate;
+      const endDate = draftFilters.endDate || filters.endDate || startDate;
+      const initialFilters = {
+        ...filters,
+        countries: [],
+        platforms: [],
+        accounts: [],
+        startDate,
+        endDate
+      };
+      setFilters(initialFilters);
+      setDraftFilters(initialFilters);
+      setHasBusinessQueried(true);
+      void loadData(false, startDate, endDate);
+    }
     setPage(1);
   }
 
@@ -1448,6 +1491,32 @@ export default function Dashboard() {
       kind: "operator-date",
       title: `${date} ${country} 操作人明细`,
       subtitle: `弹窗查看，不改变当前页面筛选条件。共 ${rows.length} 行。`,
+      rows
+    });
+  }
+
+  function openAutoPlatformDaily(row: AutoWithdrawRow) {
+    const rows = filteredDailyRows
+      .filter((item) => item.country === row.country && item.platform === row.platform)
+      .sort((a, b) => a.date.localeCompare(b.date) || b.total - a.total);
+
+    setDetailModal({
+      kind: "auto-date",
+      title: `${row.country} ${row.platform} 每日明细`,
+      subtitle: `${filters.startDate || "-"} 至 ${filters.endDate || "-"} · 区间累计 ${formatNumber(row.total)} 笔 · 共 ${rows.length} 天/行`,
+      rows
+    });
+  }
+
+  function openOperatorAccountDaily(row: OperatorSummaryRow) {
+    const rows = operatorRows
+      .filter((item) => item.country === row.country && item.account === row.account)
+      .sort((a, b) => a.date.localeCompare(b.date) || b.processed - a.processed || a.platform.localeCompare(b.platform, "zh-CN"));
+
+    setDetailModal({
+      kind: "operator-date",
+      title: `${row.country} ${row.account} 每日处理明细`,
+      subtitle: `${filters.startDate || "-"} 至 ${filters.endDate || "-"} · 区间累计处理 ${formatNumber(row.processed)} 笔 · 共 ${uniq(rows.map((item) => item.date)).length} 天`,
       rows
     });
   }
@@ -1530,8 +1599,7 @@ export default function Dashboard() {
         return;
       }
       if (autoView === "daily") {
-        exportCsv(`自动出款日表-${suffix}.csv`, filteredDailyRows, [
-          { label: "日期", value: (r) => r.date },
+        exportCsv(`自动出款区间累计-${suffix}.csv`, summaryRows, [
           { label: "国家", value: (r) => r.country },
           { label: "盘口", value: (r) => r.platform },
           { label: "总提款笔数", value: (r) => r.total },
@@ -1543,9 +1611,7 @@ export default function Dashboard() {
           { label: "人工处理", value: (r) => r.manualCount },
           { label: "自动占比", value: (r) => formatPercent(r.autoRate) },
           { label: "人工占比", value: (r) => formatPercent(r.manualRate) },
-          { label: "平均处理时间", value: (r) => r.avgTime },
-          { label: "昨日平均处理时间", value: (r) => r.yesterdayAvgTime },
-          { label: "对比%", value: (r) => r.comparePercent || "-" }
+          { label: "平均处理时间", value: (r) => r.avgTime }
         ]);
         return;
       }
@@ -1962,16 +2028,16 @@ export default function Dashboard() {
             )}
 
             {autoView === "daily" && (
-              <Panel title="自动出款日表" subtitle="读取每个国家盘口表内横向日期块，可按开始日期和结束日期筛选">
+              <Panel title="自动出款日表" subtitle="按你选择的开始日期～结束日期累计到盘口；点“查看”弹窗展开该盘口每天的数据">
                 <QuickStats
                   items={[
-                    { label: "统计天数", value: `${activeDayCount} 天`, sub: "按当前日期区间计算" },
-                    { label: "日均总笔数", value: formatNumber(Math.round(dailyAverageTotal)), sub: `总笔数 ${formatNumber(summary.total)}` },
-                    { label: "人工日均笔数", value: formatNumber(Math.round(dailyAverageManual)), sub: `人工总数 ${formatNumber(summary.manualCount)}` }
+                    { label: "统计天数", value: `${activeDayCount} 天`, sub: `${filters.startDate || "-"} 至 ${filters.endDate || "-"}` },
+                    { label: "区间总笔数", value: formatNumber(summary.total), sub: `日均 ${formatNumber(Math.round(dailyAverageTotal))}` },
+                    { label: "区间自动 / 人工", value: `${formatNumber(summary.autoCount)} / ${formatNumber(summary.manualCount)}`, sub: `人工日均 ${formatNumber(Math.round(dailyAverageManual))}` }
                   ]}
                 />
-                <PaginationControls total={sortedDailyRows.length} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
-                <DailyWithdrawTable rows={paginateRows(sortedDailyRows, page, pageSize)} totalRows={sortedDailyRows} sortState={sorts.autoDaily} onSort={(key) => toggleSort("autoDaily", key)} onOpenOperators={openAutoPlatformOperators} />
+                <PaginationControls total={sortedSummaryRows.length} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
+                <AutoWithdrawTable rows={paginateRows(sortedSummaryRows, page, pageSize)} totalRows={sortedSummaryRows} sortState={sorts.autoSummary} onSort={(key) => toggleSort("autoSummary", key)} onOpenOperators={openAutoPlatformDaily} />
               </Panel>
             )}
 
@@ -2093,10 +2159,10 @@ export default function Dashboard() {
             )}
 
             {operatorView === "summary" && (
-              <Panel title="提现操作人汇总表" subtitle="按账号汇总处理笔数，适合看总量排行与总处理情况">
+              <Panel title="提现操作人汇总表" subtitle="按当前开始日期～结束日期累计到操作人；点“查看”弹窗展开该账号每天的处理明细">
                 <OperatorResultStats accounts={operatorSummaryRows.length} platforms={operatorSummary.uniquePlatforms} totalProcessed={operatorSummary.totalProcessed} totalRejected={operatorSummary.totalRejected} avgTime={operatorSummary.avgTime} />
                 <PaginationControls total={sortedOperatorSummaryRows.length} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
-                <OperatorSummaryTable rows={paginateRows(sortedOperatorSummaryRows, page, pageSize)} totalRows={sortedOperatorSummaryRows} totalProcessed={operatorSummary.totalProcessed} totalRejected={operatorSummary.totalRejected} sortState={sorts.operatorSummary} onSort={(key) => toggleSort("operatorSummary", key)} />
+                <OperatorSummaryTable rows={paginateRows(sortedOperatorSummaryRows, page, pageSize)} totalRows={sortedOperatorSummaryRows} totalProcessed={operatorSummary.totalProcessed} totalRejected={operatorSummary.totalRejected} sortState={sorts.operatorSummary} onSort={(key) => toggleSort("operatorSummary", key)} onOpen={openOperatorAccountDaily} />
               </Panel>
             )}
 
@@ -3282,7 +3348,8 @@ function OperatorSummaryTable({
   totalProcessed,
   totalRejected,
   sortState,
-  onSort
+  onSort,
+  onOpen
 }: {
   rows: OperatorSummaryRow[];
   totalRows?: OperatorSummaryRow[];
@@ -3290,6 +3357,7 @@ function OperatorSummaryTable({
   totalRejected: number;
   sortState: TableSortState;
   onSort: (key: string) => void;
+  onOpen?: (row: OperatorSummaryRow) => void;
 }) {
   const shownSummary = summarizeOperatorRows(rows);
   const overallSummary = summarizeOperatorRows(totalRows);
@@ -3307,6 +3375,7 @@ function OperatorSummaryTable({
           <col className="op-col-num" />
           <col className="op-col-rate" />
           <col className="op-col-time" />
+          <col className="detail-col" />
         </colgroup>
         <thead>
           <tr>
@@ -3318,6 +3387,7 @@ function OperatorSummaryTable({
             <SortableTh label="驳回总数" sortKey="rejected" sortState={sortState} onSort={onSort} className="num" />
             <th>驳回占比</th>
             <SortableTh label="平均处理时长" sortKey="avgTime" sortState={sortState} onSort={onSort} />
+            <th className="detail-col">详情</th>
           </tr>
         </thead>
         <tbody>
@@ -3331,12 +3401,13 @@ function OperatorSummaryTable({
               <td className="num">{formatNumber(row.rejected)}</td>
               <td className="operator-ratio-cell"><RateBar value={totalRejected ? row.rejected / totalRejected : 0} reject /></td>
               <td>{row.avgTime}</td>
+              <td><button className="detail-view-btn" type="button" onClick={() => onOpen?.(row)}>查看</button></td>
             </tr>
           ))}
         </tbody>
         <tfoot>
-          <tr className="summary-row page-summary-row"><td colSpan={3}>当前页汇总</td><td className="num strong-cell">{formatNumber(shownSummary.processed)}</td><td>{formatPercent(totalProcessed ? shownSummary.processed / totalProcessed : 0)}</td><td className="num">{formatNumber(shownSummary.rejected)}</td><td>{totalRejected ? formatPercent(shownSummary.rejected / totalRejected) : '-'}</td><td className="muted-cell">汇总</td></tr>
-          <tr className="summary-row overall-summary-row"><td colSpan={3}>全部汇总</td><td className="num strong-cell">{formatNumber(overallSummary.processed)}</td><td>{formatPercent(totalProcessed ? overallSummary.processed / totalProcessed : 0)}</td><td className="num">{formatNumber(overallSummary.rejected)}</td><td>{totalRejected ? formatPercent(overallSummary.rejected / totalRejected) : '-'}</td><td className="muted-cell">汇总</td></tr>
+          <tr className="summary-row page-summary-row"><td colSpan={3}>当前页汇总</td><td className="num strong-cell">{formatNumber(shownSummary.processed)}</td><td>{formatPercent(totalProcessed ? shownSummary.processed / totalProcessed : 0)}</td><td className="num">{formatNumber(shownSummary.rejected)}</td><td>{totalRejected ? formatPercent(shownSummary.rejected / totalRejected) : '-'}</td><td className="muted-cell">汇总</td><td>-</td></tr>
+          <tr className="summary-row overall-summary-row"><td colSpan={3}>全部汇总</td><td className="num strong-cell">{formatNumber(overallSummary.processed)}</td><td>{formatPercent(totalProcessed ? overallSummary.processed / totalProcessed : 0)}</td><td className="num">{formatNumber(overallSummary.rejected)}</td><td>{totalRejected ? formatPercent(overallSummary.rejected / totalRejected) : '-'}</td><td className="muted-cell">汇总</td><td>-</td></tr>
         </tfoot>
       </table>
     </div>

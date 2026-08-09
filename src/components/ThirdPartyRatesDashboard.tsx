@@ -96,6 +96,25 @@ const EMPTY_RATE_FILTERS: RateFilters = {
 
 const RATE_COUNTRY_PRIORITY = ["印度", "巴基斯坦", "印尼", "越南", "菲律宾", "马来", "缅甸", "哥伦比亚", "墨西哥", "智利", "尼日利亚", "胖虎巴西", "巴西", "南美", "USDT通道", "USDT"];
 
+// V7Q：费率页面显示顺序严格跟 Google「各国三方费率」工作簿的页签顺序。
+// 这里只控制前端展示，不修改三方量、不修改费率同步/匹配数据。
+const RATE_SHEET_PRIORITY = [
+  "USDT通道",
+  "印度线下",
+  "印度原生线上",
+  "IFSC支持三方",
+  "巴西盘口",
+  "越南盘口",
+  "菲律宾盘口",
+  "印尼盘",
+  "马来盘",
+  "巴基斯坦盘口",
+  "南美盘口",
+  "缅甸盘",
+  "尼日利亚盘口",
+  "埃及-已关盘"
+];
+
 function isHiddenRateCountry(country: string): boolean {
   return String(country || "").includes("埃及");
 }
@@ -113,6 +132,38 @@ function compareRateCountry(a: string, b: string): number {
 
 function sortRateCountries(values: string[]): string[] {
   return uniq(values.filter((item) => !isHiddenRateCountry(item))).sort(compareRateCountry);
+}
+
+function rateSheetRank(sheetName: string): number {
+  const text = String(sheetName || "").trim();
+  const normalized = text.replace(/\s+/g, "").toLowerCase();
+  if (!normalized) return RATE_SHEET_PRIORITY.length + 1;
+  const index = RATE_SHEET_PRIORITY.findIndex((item) => {
+    const target = item.replace(/\s+/g, "").toLowerCase();
+    return normalized === target || normalized.includes(target) || target.includes(normalized);
+  });
+  return index >= 0 ? index : RATE_SHEET_PRIORITY.length + 1;
+}
+
+function compareRateSheets(a: string, b: string): number {
+  return rateSheetRank(a) - rateSheetRank(b) || String(a || "").localeCompare(String(b || ""), "zh-CN", { numeric: true });
+}
+
+function sortRateSheets(values: string[]): string[] {
+  return uniq(values.filter((item) => !isHiddenRateCountry(item))).sort(compareRateSheets);
+}
+
+function compareRateSourceOrder(a: ThirdPartyRateRow, b: ThirdPartyRateRow): number {
+  return compareRateSheets(a.sheetName, b.sheetName)
+    || Number(a.sourceRow || 0) - Number(b.sourceRow || 0)
+    || String(a.thirdParty || "").localeCompare(String(b.thirdParty || ""), "zh-CN", { numeric: true, sensitivity: "base" });
+}
+
+function compareStatusSourceOrder(a: ThirdPartyPlatformStatusRow, b: ThirdPartyPlatformStatusRow): number {
+  return compareRateSheets(a.sheetName, b.sheetName)
+    || Number(a.sourceRow || 0) - Number(b.sourceRow || 0)
+    || Number(a.sourceColumn || 0) - Number(b.sourceColumn || 0)
+    || String(a.platform || "").localeCompare(String(b.platform || ""), "zh-CN", { numeric: true, sensitivity: "base" });
 }
 
 function removeHiddenRateData(payload: ThirdPartyRatePayload): ThirdPartyRatePayload {
@@ -727,10 +778,11 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
   const [draftFilters, setDraftFilters] = useState<RateFilters>(EMPTY_RATE_FILTERS);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [statusSort, setStatusSort] = useState<SortState>({ key: "country", direction: "asc" });
-  const [rateSort, setRateSort] = useState<SortState>({ key: "country", direction: "asc" });
+  const [statusSort, setStatusSort] = useState<SortState>({ key: "sourceOrder", direction: "asc" });
+  const [rateSort, setRateSort] = useState<SortState>({ key: "sourceOrder", direction: "asc" });
   const [runningSort, setRunningSort] = useState<SortState>({ key: "open", direction: "desc" });
   const [anomalyModal, setAnomalyModal] = useState<RateAnomalyDetail | null>(null);
+  const autoLoadTokenRef = useRef("");
 
   async function loadData() {
     setState("loading");
@@ -748,11 +800,18 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
   }
 
   useEffect(() => {
-    // 费率页面进入时不自动读取；用户点击查询后才加载。
-  }, []);
+    // V7Q：打开三方费率页面就自动读取，效果跟打开 Google 表一样；查询按钮只负责后续筛选/刷新。
+    const token = String(session?.access_token || "");
+    if (!token || autoLoadTokenRef.current === token) return;
+    autoLoadTokenRef.current = token;
+    setHasQueried(true);
+    void loadData();
+    // access token 刷新后允许自动取一次最新数据，但不会改变当前筛选条件。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.access_token]);
 
   const countries = useMemo(() => payload ? sortRateCountries([...payload.platformStatuses.map((r) => r.country), ...payload.rates.map((r) => r.country)]) : [], [payload]);
-  const sheets = useMemo(() => payload ? sortRateCountries(payload.meta.sheets) : [], [payload]);
+  const sheets = useMemo(() => payload ? sortRateSheets(payload.meta.sheets) : [], [payload]);
   const platformOptions = useMemo(() => {
     if (!payload) return [];
     return uniq(payload.platformStatuses
@@ -802,7 +861,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
       if (filters.keyword && !compactText(row.country, row.sheetName, row.platform, row.thirdParty, canonical, row.status, row.collectFee, row.payoutFee, row.collectSingleFee, row.payoutSingleFee, row.category).includes(keyword)) return false;
       return true;
     });
-    return dedupeStatusRows(matched);
+    return dedupeStatusRows(matched).sort(compareStatusSourceOrder);
   }, [payload, filters, draftFilters.keyword]);
 
   const filteredRateRows = useMemo(() => {
@@ -819,11 +878,17 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
       if (filters.keyword && !compactText(row.country, row.sheetName, row.category, row.thirdParty, canonical, row.status, row.collectFee, row.payoutFee, row.totalFee, row.collectSingleFee, row.payoutSingleFee, row.collectLimit, row.payoutLimit).includes(keyword)) return false;
       return true;
     });
-    return dedupeRateRows(matched);
+    return dedupeRateRows(matched).sort(compareRateSourceOrder);
   }, [payload, filters, draftFilters.keyword]);
 
-  const sortedStatusRows = useMemo(() => sortRows(filteredStatusRows, statusSort, statusValue), [filteredStatusRows, statusSort]);
-  const sortedRateRows = useMemo(() => sortRows(filteredRateRows, rateSort, rateValue), [filteredRateRows, rateSort]);
+  const sortedStatusRows = useMemo(
+    () => statusSort.key === "sourceOrder" ? [...filteredStatusRows].sort(compareStatusSourceOrder) : sortRows(filteredStatusRows, statusSort, statusValue),
+    [filteredStatusRows, statusSort]
+  );
+  const sortedRateRows = useMemo(
+    () => rateSort.key === "sourceOrder" ? [...filteredRateRows].sort(compareRateSourceOrder) : sortRows(filteredRateRows, rateSort, rateValue),
+    [filteredRateRows, rateSort]
+  );
   const runningRows = useMemo(() => summarizeThirdPartyRunning(filteredStatusRows, filteredRateRows), [filteredStatusRows, filteredRateRows]);
   const sortedRunningRows = useMemo(() => sortRows(runningRows, runningSort, runningValue), [runningRows, runningSort]);
   const countryThirdPartyRows = useMemo(() => summarizeCountryThirdParties(filteredStatusRows, filteredRateRows), [filteredStatusRows, filteredRateRows]);
@@ -1187,7 +1252,7 @@ function CountryRatePage({ country, statusRows, rateRows, highFeeRows, anomalies
         </div>
       </section>
       <RatePanel title={`${countryPaneLabel(country)} 三方费率明细`} subtitle="当前国家的费率资料放在最上面；多类型点击查看会展开完整类型费率。">
-        <RateTable rows={rateRows.slice(0, 200)} sortState={{ key: "thirdParty", direction: "asc" }} onSort={() => undefined} onOpen={onOpenRate} />
+        <RateTable rows={[...rateRows].sort(compareRateSourceOrder).slice(0, 200)} sortState={{ key: "sourceOrder", direction: "asc" }} onSort={() => undefined} onOpen={onOpenRate} />
       </RatePanel>
       <section className="metrics rate-metrics">
         <RateMetric label="接入记录" value={formatNumber(statusRows.length)} sub="盘口 × 主三方状态" />
