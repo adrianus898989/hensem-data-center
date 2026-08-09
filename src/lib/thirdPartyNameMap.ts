@@ -716,9 +716,9 @@ export function canonicalThirdPartyName(value: string, country?: string): string
       starpago: "StarPago", starpagoep: "StarPago", starpagojazz: "StarPago", starpagojz: "StarPago",
       mega: "MegaPay", megapay: "MegaPay", megaep: "MegaPay", megajazz: "MegaPay", megajz: "MegaPay",
       mcb: "MCBPay", mcbpay: "MCBPay", mcbjz: "MCBPay", mcbjazz: "MCBPay", mcbjzpay: "MCBPay",
-      owpay: "OwenPay", owenpay: "OwenPay", owenpayowpay: "OwenPay",
-      op3pay: "OpenPay", openpay: "OpenPay", openpayop3pay: "OpenPay",
-      omnipay: "EPAY", epay: "EPAY", epayomnipay: "EPAY",
+      owpay: "OwenPay", owenpayowpay: "OwenPay",
+      op3pay: "OpenPay", openpayop3pay: "OpenPay",
+      omnipay: "EPAY", epayomnipay: "EPAY",
       unipayusdt: "UniPayUSDT", usdt: "UniPayUSDT"
     };
     if (pkExplicit[rawAliasKey]) return pkExplicit[rawAliasKey];

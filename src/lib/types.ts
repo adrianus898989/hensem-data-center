@@ -37,7 +37,7 @@ export type SheetMeta = {
   year: string;
   month: string;
   updatedAt: string;
-  source: "google-sheet" | "demo";
+  source: "google-sheet" | "demo" | "supabase" | "history+supabase";
   message?: string;
   rawSourceId?: string;
   rawDailySheets?: string[];

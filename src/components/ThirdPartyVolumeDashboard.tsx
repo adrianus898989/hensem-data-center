@@ -1215,8 +1215,9 @@ function groupKeyForFee(row: FeeCompareRow): string {
   return row.date ? `${row.date}|||${row.country}|||${type}` : `${row.country}|||${type}`;
 }
 
-function buildFeeCompareRows(comboRows: ComboSummary[], rateRows: ThirdPartyRateRow[], statusRows: ThirdPartyPlatformStatusRow[], scope: "platform" | "daily"): FeeCompareRow[] {
-  const rateMap = buildRateMap(rateRows, statusRows);
+function buildFeeCompareRows(comboRows: ComboSummary[], rateRows: ThirdPartyRateRow[], _statusRows: ThirdPartyPlatformStatusRow[], scope: "platform" | "daily", prebuiltRateMap?: Map<string, RateLike>): FeeCompareRow[] {
+  // 手续费只从费率主表取。盘口状态只用于“是否接入”，不参与费率匹配。
+  const rateMap = prebuiltRateMap || buildRateMap(rateRows, []);
   const rows = comboRows.filter((row) => row.totalAmount > 0 || row.totalCount > 0).map((row) => {
     const [a = "", b = "", c = "", d = "", e = ""] = row.labelParts;
     const date = scope === "daily" ? a : undefined;
@@ -1941,8 +1942,10 @@ export default function ThirdPartyVolumeDashboard() {
   const endDateRef = useRef("");
   const [mainTab, setMainTab] = useState<VolumeMainTab>("country");
   const [tab, setTab] = useState<TabKey>("daily");
-  const [volumeMode, setVolumeMode] = useState<"daily" | "monthly">("daily");
   const [countryPage, setCountryPage] = useState("");
+  // 当前页面选择 与 最后一次真正点击「查询」的数据国家分开保存。
+  // 这样切换国家页签只是纯 UI 状态变化，不触发旧结果的大量手续费重算。
+  const [appliedCountryPage, setAppliedCountryPage] = useState("");
 
 
   async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "", requestedCountry = "", forceRates = false) {
@@ -2112,7 +2115,8 @@ export default function ThirdPartyVolumeDashboard() {
     return [...COUNTRY_NAV_TABS, ...sortCountries(dynamic)];
   }, [countries]);
   const activeCountryPage = countryPage && countryTabs.includes(countryPage) ? countryPage : (mainTab === "country" ? (countryTabs[0] || "") : "");
-  const effectiveCountryFilter = mainTab === "country" ? activeCountryPage : country;
+  // 数据计算只跟最后一次“查询”的国家走；点其它国家页签本身不会重新计算/读取。
+  const effectiveCountryFilter = mainTab === "country" ? appliedCountryPage : country;
 
   const filteredBaseNoDate = useMemo(() => {
     return rows.filter((row) => {
@@ -2166,8 +2170,8 @@ export default function ThirdPartyVolumeDashboard() {
   const filteredNoDate = useMemo(() => filteredBaseNoDate.filter((row) => !appliedChannelTypeSelections.length || appliedChannelTypeSelections.includes(row.channelType || "其他类型")), [filteredBaseNoDate, appliedChannelTypeSelections]);
 
   const summary = useMemo(() => sumRows(filtered), [filtered]);
-  const countryPageRows = useMemo(() => filtered.filter((row) => activeCountryPage && rowMatchesCountryPage(row, activeCountryPage)), [filtered, activeCountryPage]);
-  const countryPageRowsNoDate = useMemo(() => filteredNoDate.filter((row) => activeCountryPage && rowMatchesCountryPage(row, activeCountryPage)), [filteredNoDate, activeCountryPage]);
+  const countryPageRows = useMemo(() => filtered.filter((row) => appliedCountryPage && rowMatchesCountryPage(row, appliedCountryPage)), [filtered, appliedCountryPage]);
+  const countryPageRowsNoDate = useMemo(() => filteredNoDate.filter((row) => appliedCountryPage && rowMatchesCountryPage(row, appliedCountryPage)), [filteredNoDate, appliedCountryPage]);
   const countryPageSummary = useMemo(() => sumRows(countryPageRows), [countryPageRows]);
   const countryPageMonthlyRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.country, row.channel]), [countryPageRows]);
   const countryPageMonthlyPeriodRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.date.slice(0, 7), row.country, row.channel]), [countryPageRows]);
@@ -2182,10 +2186,12 @@ export default function ThirdPartyVolumeDashboard() {
   const dailyCompareRows = useMemo(() => buildDailyCompareRows(filtered, filteredNoDate), [filtered, filteredNoDate]);
   const dailyCompareBaseRows = useMemo(() => aggregateCombo(filtered, (row) => [row.date, row.country, row.platform, row.channel, normalizedFeeBaseChannelType(row)]), [filtered]);
   const platformFeeBaseRows = useMemo(() => aggregateCombo(filtered, (row) => [row.country, row.platform, row.channel, normalizedFeeBaseChannelType(row)]), [filtered]);
-  const platformFeeRows = useMemo(() => buildFeeCompareRows(platformFeeBaseRows, ratePayload?.rates || [], ratePayload?.platformStatuses || [], "platform"), [platformFeeBaseRows, ratePayload]);
-  const dailyFeeRows = useMemo(() => buildFeeCompareRows(dailyCompareBaseRows, ratePayload?.rates || [], ratePayload?.platformStatuses || [], "daily"), [dailyCompareBaseRows, ratePayload]);
+  // 费率索引只在费率资料变化时重建；切国家页签不会再重建 3900+ 盘口状态索引。
+  const feeRateMap = useMemo(() => buildRateMap(ratePayload?.rates || [], []), [ratePayload?.rates]);
+  const platformFeeRows = useMemo(() => buildFeeCompareRows(platformFeeBaseRows, ratePayload?.rates || [], [], "platform", feeRateMap), [platformFeeBaseRows, ratePayload?.rates, feeRateMap]);
+  const dailyFeeRows = useMemo(() => buildFeeCompareRows(dailyCompareBaseRows, ratePayload?.rates || [], [], "daily", feeRateMap), [dailyCompareBaseRows, ratePayload?.rates, feeRateMap]);
   const feeWarnings = useMemo(() => feeWarningRows(dailyFeeRows), [dailyFeeRows]);
-  const countryPageFeeRows = useMemo(() => dailyFeeRows.filter((row) => activeCountryPage && feeRowMatchesCountryPage(row, activeCountryPage)), [dailyFeeRows, activeCountryPage]);
+  const countryPageFeeRows = useMemo(() => dailyFeeRows.filter((row) => appliedCountryPage && feeRowMatchesCountryPage(row, appliedCountryPage)), [dailyFeeRows, appliedCountryPage]);
   const dashboardFeeStatItems = useMemo(() => buildFeeStatItems(dailyFeeRows.length ? dailyFeeRows : platformFeeRows), [dailyFeeRows, platformFeeRows]);
 
   const aliasRows = useMemo(() => {
@@ -2206,40 +2212,22 @@ export default function ThirdPartyVolumeDashboard() {
   }, [feeWarnings, aliasRows, platformRows]);
 
 
-  function switchVolumeMode(nextMode: "daily" | "monthly") {
-    setVolumeMode(nextMode);
-    setPlatformSelections([]);
-    setChannel("");
-    setChannelTypeSelections([]);
-    if (nextMode === "monthly") {
-      const range = monthDateRange(startDate || endDate || appliedEndDate || defaultEnd(rows));
-      setStartDate(range.start);
-      setEndDate(range.end);
-    }
-  }
-
   function applyDateShortcut(mode: DateShortcut) {
     const range = shortcutDateRange(mode, startDate || endDate || appliedEndDate);
     setStartDate(range.start);
     setEndDate(range.end);
   }
 
-  function shiftDateRange(days: number) {
-    if (volumeMode === "monthly") {
-      const base = startDate || endDate || appliedEndDate || defaultEnd(rows) || formatLocalDateKey(new Date());
-      const current = new Date(`${base}T00:00:00`);
-      if (Number.isNaN(current.getTime())) return;
-      current.setMonth(current.getMonth() + days);
-      const range = monthDateRange(formatLocalDateKey(current));
-      setStartDate(range.start);
-      setEndDate(range.end);
-      return;
-    }
-
+  function shiftDateRange(periods: number) {
     const baseStart = startDate || endDate || appliedStartDate || defaultEnd(rows) || formatLocalDateKey(new Date());
     const baseEnd = endDate || startDate || appliedEndDate || baseStart;
-    setStartDate(dateAdd(baseStart, days));
-    setEndDate(dateAdd(baseEnd, days));
+    const startObj = new Date(`${baseStart}T00:00:00Z`);
+    const endObj = new Date(`${baseEnd}T00:00:00Z`);
+    if (Number.isNaN(startObj.getTime()) || Number.isNaN(endObj.getTime())) return;
+    const spanDays = Math.max(1, Math.floor((endObj.getTime() - startObj.getTime()) / 86400000) + 1);
+    const delta = periods * spanDays;
+    setStartDate(dateAdd(baseStart, delta));
+    setEndDate(dateAdd(baseEnd, delta));
   }
 
   async function runQuery() {
@@ -2257,6 +2245,7 @@ export default function ThirdPartyVolumeDashboard() {
       setAppliedChannel(channel);
       setAppliedDirection(direction);
       setAppliedChannelTypeSelections([...channelTypeSelections]);
+      setAppliedCountryPage(queryCountry);
       setLastQueryAt(new Date().toISOString());
       setHasQueried(true);
     } finally {
@@ -2326,18 +2315,22 @@ export default function ThirdPartyVolumeDashboard() {
       )}
       <section className="third-party-tab-panel">
         <div className="tab-group-row main-tab-row">
-          <button className={cls("module-tab", mainTab === "country" && "active")} onClick={() => { setMainTab("country"); setVolumeMode("daily"); setCountryPage(""); setCountry(""); setCountrySelections([]); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }}>各国家量</button>
+          <button className={cls("module-tab", mainTab === "country" && "active")} onClick={() => { setMainTab("country"); setCountryPage(""); setCountry(""); setCountrySelections([]); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }}>各国家量</button>
           <button className={cls("module-tab", mainTab === "rates" && "active")} onClick={() => { setMainTab("rates"); }}>各国家费率</button>
         </div>
         {mainTab === "country" && (
           <>
-            <div className="tab-group-row child-tab-row country-mode-row">
-              <button className={cls("module-tab", volumeMode === "daily" && "active")} onClick={() => switchVolumeMode("daily")}>日汇总</button>
-              <button className={cls("module-tab", volumeMode === "monthly" && "active")} onClick={() => switchVolumeMode("monthly")}>月汇总</button>
-            </div>
             <div className="tab-group-row child-tab-row country-tab-row volume-country-pane-row">
               {countryTabs.map((item) => (
-                <button key={item} className={cls("module-tab", activeCountryPage === item && "active")} onClick={() => { setCountryPage(item); setCountrySelections([]); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }}>{countryPaneLabel(item)}</button>
+                <button key={item} className={cls("module-tab", activeCountryPage === item && "active")} onClick={() => {
+                  setCountryPage(item);
+                  setCountrySelections([]);
+                  setPlatformSelections([]);
+                  setChannel("");
+                  setChannelTypeSelections([]);
+                  // 切页签不是查询。立即隐藏上一国家的结果，等用户按「查询」才读取新国家。
+                  setHasQueried(false);
+                }}>{countryPaneLabel(item)}</button>
               ))}
               {hasQueried && !countryTabs.length && <span className="muted-text">暂无国家数据</span>}
             </div>
@@ -2345,9 +2338,7 @@ export default function ThirdPartyVolumeDashboard() {
         )}
       </section>
 
-      <div style={{ display: mainTab === "rates" ? "block" : "none" }}>
-        <ThirdPartyRatesDashboard embedded />
-      </div>
+      {mainTab === "rates" && <ThirdPartyRatesDashboard embedded />}
 
       {mainTab !== "rates" && (
         <>
@@ -2362,7 +2353,7 @@ export default function ThirdPartyVolumeDashboard() {
           <div className="field"><label>统一三方</label><select className="input" value={channel} onChange={(event) => { setChannel(event.target.value); setChannelTypeSelections([]); }}><option value="">全部三方</option>{channels.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
           <VolumeMultiSelect label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" />
           <div className="field"><label>业务方向</label><select className="input" value={direction} onChange={(event) => setDirection(event.target.value)}><option value="">全部方向</option><option value="代收">代收</option><option value="代付">代付</option></select></div>
-          <div className="action-row action-row-v2"><button className="primary-btn volume-query-btn" type="button" disabled={isQuerying} onClick={() => { void runQuery(); }}>{isQuerying ? "查询中…" : "查询"}</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(-1)}>{volumeMode === "monthly" ? "上一月" : "上一日"}</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(1)}>{volumeMode === "monthly" ? "下一月" : "下一日"}</button></div>
+          <div className="action-row action-row-v2"><button className="primary-btn volume-query-btn" type="button" disabled={isQuerying} onClick={() => { void runQuery(); }}>{isQuerying ? "查询中…" : "查询"}</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(-1)}>上一周期</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(1)}>下一周期</button></div>
         </div>
       </section>
 
@@ -2377,9 +2368,7 @@ export default function ThirdPartyVolumeDashboard() {
         <button type="button" onClick={() => applyDateShortcut("lastMonth")}>上月</button>
       </div>
 
-      {hasQueried && mainTab === "country" && isAllDailyPage && <DailyPage rows={dailyCompareRows} summary={summary} feeRows={dailyFeeRows} />}
-      {hasQueried && mainTab === "country" && isAllMonthlyPage && <MonthlyTable title="三方量月汇总" subtitle="按月份 + 国家 + 统一三方汇总。选 5 月会直接显示 5 月总量，点查看可看这个月所有盘口明细。" rows={monthlyPeriodRows} columns={["月份", "国家", "统一三方"]} feeRows={dailyFeeRows} paginated />}
-      {hasQueried && mainTab === "country" && !isAllDailyPage && !isAllMonthlyPage && <CountryVolumeSinglePage country={activeCountryPage} rows={countryPageRows} summary={countryPageSummary} monthlyRows={countryPageMonthlyRows} monthlyPeriodRows={countryPageMonthlyPeriodRows} platformRows={countryPagePlatformRows} dailyRows={countryPageDailyRows} dailyCompareRows={countryPageDailyCompareRows} feeRows={countryPageFeeRows} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} volumeMode={volumeMode} />}
+      {hasQueried && mainTab === "country" && appliedCountryPage === activeCountryPage && <CountryVolumeSinglePage country={appliedCountryPage} rows={countryPageRows} summary={countryPageSummary} monthlyRows={countryPageMonthlyRows} feeRows={countryPageFeeRows} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} />}
         </>
       )}
     </div>
@@ -2456,86 +2445,28 @@ function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { l
   );
 }
 
-function CountryVolumeSinglePage({ country, rows, summary, monthlyRows, monthlyPeriodRows, platformRows, dailyRows, dailyCompareRows, feeRows, dateRangeLabel, volumeMode }: { country: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; monthlyPeriodRows: ComboSummary[]; platformRows: ComboSummary[]; dailyRows: DirectionSummary[]; dailyCompareRows: DailyCompareRow[]; feeRows: FeeCompareRow[]; dateRangeLabel: string; volumeMode: "daily" | "monthly" }) {
-  const [subTab, setSubTab] = useState<CountrySubTab>("daily");
-  const platforms = uniq(rows.map((row) => row.platform));
-  const channels = uniq(rows.map((row) => row.channel));
-  const collectRows = monthlyRows.filter((row) => row.collectAmount > 0).sort((a, b) => b.collectAmount - a.collectAmount);
-  const payoutRows = monthlyRows.filter((row) => row.payoutAmount > 0).sort((a, b) => b.payoutAmount - a.payoutAmount);
-  const countryWarnings = feeRows.filter((row) => row.level !== "normal");
+function CountryVolumeSinglePage({ country, rows, summary, monthlyRows, feeRows, dateRangeLabel }: { country: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; dateRangeLabel: string }) {
   const feeStatItems = buildFeeStatItems(feeRows);
-  const platformCompareRows = useMemo(() => buildPlatformCompareRows(rows), [rows]);
-  const subTabLabel = subTab === "daily" ? "日汇总" : subTab === "platform" ? "平台量" : "异常提醒";
-  const structureSourceRows = subTab === "daily"
-    ? dailyCompareRows.flatMap((row) => row.rows)
-    : subTab === "platform"
-      ? platformCompareRows.flatMap((row) => row.rows)
-      : rows;
-  const structureSummary = sumRows(structureSourceRows);
-
-  if (volumeMode === "monthly") {
-    return (
-      <div className="country-volume-page">
-        <div className="country-inline-title">{countryPaneLabel(country)} · 月汇总</div>
-        <PageStatStrip items={[
-          ["主三方", uniq(rows.map((row) => row.channel)).length],
-          ["平台", uniq(rows.map((row) => row.platform)).length],
-          ["代收金额", formatNumber(summary.collectAmount)],
-          ["代收笔数", formatNumber(summary.collectCount)],
-          ["代付金额", formatNumber(summary.payoutAmount)],
-          ["代付笔数", formatNumber(summary.payoutCount)],
-          ...feeStatItems
-        ]} />
-        <MonthlyTable title={`${countryPaneLabel(country)} 月汇总`} subtitle="" rows={monthlyPeriodRows} columns={["月份", "国家", "统一三方"]} feeRows={feeRows} paginated />
-      </div>
-    );
-  }
-
+  const displayCountry = countryPaneLabel(country);
   return (
-    <div className="country-volume-page">
-      <div className="country-inline-title">{countryPaneLabel(country)}</div>
-      <div className="tab-group-row child-tab-row country-sub-tab-row">
-        <button className={cls("module-tab", subTab === "daily" && "active")} onClick={() => setSubTab("daily")}>日汇总</button>
-        <button className={cls("module-tab", subTab === "platform" && "active")} onClick={() => setSubTab("platform")}>平台量</button>
-        <button className={cls("module-tab", subTab === "anomaly" && "active")} onClick={() => setSubTab("anomaly")}>异常提醒</button>
-      </div>
-
-      {subTab !== "anomaly" && (
-        <>
-          <PageStatStrip items={[
-            ["主三方", channels.length],
-            ["平台", platforms.length],
-            ["代收金额", formatNumber(structureSummary.collectAmount)],
-            ["代收笔数", formatNumber(structureSummary.collectCount)],
-            ["代付金额", formatNumber(structureSummary.payoutAmount)],
-            ["代付笔数", formatNumber(structureSummary.payoutCount)],
-            ...feeStatItems
-          ]} />
-
-        </>
-      )}
-
-      {subTab === "daily" && (
-        <DailyCompareTable title={`${countryPaneLabel(country)} 日汇总`} subtitle="" rows={dailyCompareRows} feeRows={feeRows} />
-      )}
-
-      {subTab === "platform" && (
-        <PlatformVolumeTable title={`${countryPaneLabel(country)} 平台量`} subtitle="" rows={platformCompareRows} feeRows={feeRows} />
-      )}
-
-      {subTab === "anomaly" && (
-        <CountryFeeAnomalyPanel country={country} rows={countryWarnings} allRows={feeRows} dateRangeLabel={dateRangeLabel} />
-      )}
-
-      {subTab !== "anomaly" && (
-        <ThirdPartyStructureCard
-          title={`${countryPaneLabel(country)} ${subTabLabel}三方结构`}
-          subtitle=""
-          rows={structureSourceRows}
-          summary={structureSummary}
-          feeRows={feeRows}
-        />
-      )}
+    <div className="country-volume-page range-volume-page">
+      <PageStatStrip items={[
+        ["主三方", uniq(rows.map((row) => row.channel)).length],
+        ["平台", uniq(rows.map((row) => row.platform)).length],
+        ["代收金额", formatNumber(summary.collectAmount)],
+        ["代收笔数", formatNumber(summary.collectCount)],
+        ["代付金额", formatNumber(summary.payoutAmount)],
+        ["代付笔数", formatNumber(summary.payoutCount)],
+        ...feeStatItems
+      ]} />
+      <MonthlyTable
+        title={`${displayCountry} 汇总`}
+        subtitle={dateRangeLabel}
+        rows={monthlyRows}
+        columns={["国家", "统一三方"]}
+        feeRows={feeRows}
+        paginated
+      />
     </div>
   );
 }
@@ -2670,33 +2601,71 @@ function DailyCompareTable({ title, subtitle, rows, feeRows }: { title: string; 
 }
 
 function VolumeRowsModal({ title, rows, onClose }: { title: string; rows: ThirdPartyVolumeRow[]; onClose: () => void }) {
+  type ModalSortKey = "date" | "country" | "platform" | "direction" | "channelType" | "channel" | "rawChannel" | "amount" | "count";
   const [modalKeyword, setModalKeyword] = useState("");
   const [modalCountry, setModalCountry] = useState("");
   const [modalPlatform, setModalPlatform] = useState("");
   const [modalDirection, setModalDirection] = useState("");
+  const [modalSort, setModalSort] = useState<{ key: ModalSortKey; direction: "asc" | "desc" }>({ key: "date", direction: "asc" });
 
   const countryOptions = useMemo(() => sortCountries(rows.map((row) => row.country)), [rows]);
   const platformOptions = useMemo(() => uniq(rows.filter((row) => !modalCountry || row.country === modalCountry).map((row) => row.platform)), [rows, modalCountry]);
   const directionOptions = useMemo(() => uniq(rows.map((row) => row.direction)), [rows]);
+
   const filteredRows = useMemo(() => {
     const kw = modalKeyword.trim().toLowerCase();
     return rows.filter((row) => {
       if (modalCountry && row.country !== modalCountry) return false;
       if (modalPlatform && row.platform !== modalPlatform) return false;
       if (modalDirection && row.direction !== modalDirection) return false;
-      if (kw && !`${row.date} ${row.country} ${row.platform} ${row.direction} ${row.channelType || ""} ${row.channel} ${row.rawChannel} ${row.sheetName}`.toLowerCase().includes(kw)) return false;
+      if (kw && !`${row.date} ${row.country} ${row.platform} ${row.direction} ${row.channelType || ""} ${row.channel} ${row.rawChannel}`.toLowerCase().includes(kw)) return false;
       return true;
     });
   }, [rows, modalKeyword, modalCountry, modalPlatform, modalDirection]);
 
+  const sortedRows = useMemo(() => {
+    const list = [...filteredRows];
+    const dir = modalSort.direction === "asc" ? 1 : -1;
+    list.sort((a, b) => {
+      const av = modalSort.key === "amount" || modalSort.key === "count"
+        ? Number(a[modalSort.key] || 0)
+        : String((a as any)[modalSort.key] || "").toLowerCase();
+      const bv = modalSort.key === "amount" || modalSort.key === "count"
+        ? Number(b[modalSort.key] || 0)
+        : String((b as any)[modalSort.key] || "").toLowerCase();
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+      return String(av).localeCompare(String(bv), "zh-CN", { numeric: true, sensitivity: "base" }) * dir;
+    });
+    return list;
+  }, [filteredRows, modalSort]);
+
+  function toggleModalSort(key: ModalSortKey) {
+    setModalSort((current) => current.key === key
+      ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
+      : { key, direction: key === "amount" || key === "count" ? "desc" : "asc" });
+  }
+
+  function sortMark(key: ModalSortKey) {
+    if (modalSort.key !== key) return "↕";
+    return modalSort.direction === "asc" ? "↑" : "↓";
+  }
+
   const summary = sumRows(filteredRows);
-  const pager = usePagination<ThirdPartyVolumeRow>(filteredRows, true);
+  const pager = usePagination<ThirdPartyVolumeRow>(sortedRows, true);
   const amountTotal = filteredRows.reduce((sum, row) => sum + row.amount, 0);
   const countTotal = filteredRows.reduce((sum, row) => sum + row.count, 0);
 
+  const SortTh = ({ label, sortKey, num }: { label: string; sortKey: ModalSortKey; num?: boolean }) => (
+    <th className={num ? "num" : undefined}>
+      <button type="button" className="modal-sort-btn" onClick={() => toggleModalSort(sortKey)}>
+        {label}<span>{sortMark(sortKey)}</span>
+      </button>
+    </th>
+  );
+
   return (
     <div className="modal-backdrop"><div className="detail-modal work-detail-modal volume-detail-modal volume-detail-modal-v209">
-      <div className="detail-modal-header"><div><h3>{title}</h3><p>可以在弹窗内按国家、平台、代收/代付、三方名称继续搜索核对，不会改变外层页面筛选。</p></div><button className="modal-close-btn" type="button" onClick={onClose}>关闭</button></div>
+      <div className="detail-modal-header"><div><h3>{title}</h3></div><button className="modal-close-btn" type="button" onClick={onClose}>关闭</button></div>
       <div className="modal-filter-row">
         <div className="field"><label>搜索</label><input className="input" value={modalKeyword} onChange={(event) => setModalKeyword(event.target.value)} placeholder="搜索平台 / 三方 / 原始名称" /></div>
         <div className="field"><label>国家</label><select className="input" value={modalCountry} onChange={(event) => { setModalCountry(event.target.value); setModalPlatform(""); }}><option value="">全部国家</option>{countryOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
@@ -2705,8 +2674,20 @@ function VolumeRowsModal({ title, rows, onClose }: { title: string; rows: ThirdP
         <button className="ghost-btn" type="button" onClick={() => { setModalKeyword(""); setModalCountry(""); setModalPlatform(""); setModalDirection(""); }}>清空</button>
       </div>
       <div className="modal-summary-grid modal-summary-grid-v209"><div><span>筛选金额</span><strong>{formatNumber(summary.amount)}</strong><p>全部 {formatNumber(rows.reduce((sum, row) => sum + row.amount, 0))}</p></div><div><span>筛选笔数</span><strong>{formatNumber(summary.count)}</strong><p>全部 {formatNumber(rows.reduce((sum, row) => sum + row.count, 0))}</p></div><div><span>代收</span><strong>{formatNumber(summary.collectAmount)}</strong><p>{pct(summary.collectAmount, summary.amount)} · {formatNumber(summary.collectCount)} 笔</p></div><div><span>代付</span><strong>{formatNumber(summary.payoutAmount)}</strong><p>{pct(summary.payoutAmount, summary.amount)} · {formatNumber(summary.payoutCount)} 笔</p></div></div>
-      <TablePager total={filteredRows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />
-      <div className="table-wrap detail-table-wrap"><table><thead><tr><th>日期</th><th>国家</th><th>平台</th><th>业务方向</th><th>钱包/通道类型</th><th>统一三方</th><th>原始名称</th><th className="num">金额</th><th>金额占比</th><th className="num">笔数</th><th>笔数占比</th><th>来源</th></tr></thead><tbody>{pager.shown.map((row) => <tr key={row.id}><td>{row.date}</td><td>{row.country}</td><td>{row.platform}</td><td>{row.direction}</td><td>{row.channelType || "其他类型"}</td><td>{row.channel}</td><td>{row.rawChannel}</td><td className="num">{formatNumber(row.amount)}</td><td><ShareBar value={amountTotal ? row.amount / amountTotal : 0} /></td><td className="num">{formatNumber(row.count)}</td><td><ShareBar value={countTotal ? row.count / countTotal : 0} /></td><td>{row.sheetName} #{row.sourceRow}</td></tr>)}{!pager.shown.length && <tr><td colSpan={12} className="empty">暂无明细</td></tr>}</tbody></table></div>
+      <TablePager total={sortedRows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />
+      <div className="table-wrap detail-table-wrap"><table><thead><tr>
+        <SortTh label="日期" sortKey="date" />
+        <SortTh label="国家" sortKey="country" />
+        <SortTh label="平台" sortKey="platform" />
+        <SortTh label="业务方向" sortKey="direction" />
+        <SortTh label="钱包/通道类型" sortKey="channelType" />
+        <SortTh label="统一三方" sortKey="channel" />
+        <SortTh label="原始名称" sortKey="rawChannel" />
+        <SortTh label="金额" sortKey="amount" num />
+        <th>金额占比</th>
+        <SortTh label="笔数" sortKey="count" num />
+        <th>笔数占比</th>
+      </tr></thead><tbody>{pager.shown.map((row) => <tr key={row.id}><td>{row.date}</td><td>{row.country}</td><td>{row.platform}</td><td>{row.direction}</td><td>{row.channelType || "其他类型"}</td><td>{row.channel}</td><td>{row.rawChannel}</td><td className="num">{formatNumber(row.amount)}</td><td><ShareBar value={amountTotal ? row.amount / amountTotal : 0} /></td><td className="num">{formatNumber(row.count)}</td><td><ShareBar value={countTotal ? row.count / countTotal : 0} /></td></tr>)}{!pager.shown.length && <tr><td colSpan={11} className="empty">暂无明细</td></tr>}</tbody></table></div>
     </div></div>
   );
 }

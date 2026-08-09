@@ -440,7 +440,7 @@ export async function readSupabaseAutoWithdraw(request: Request, startInput: str
       year: start.slice(0, 4),
       month: String(Number(start.slice(5, 7))),
       updatedAt,
-      source: "google-sheet",
+      source: "supabase",
       message: `2026-08 起直读 Supabase · 自动出款 ${dailyRows.length} 行 · 操作人 ${operatorRows.length} 行`,
       rawDailyRows: dailyRows.length,
       rawOperatorRows: operatorRows.length,

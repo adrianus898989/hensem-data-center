@@ -41,7 +41,7 @@ function combinePayloads(oldPayload: AutoWithdrawPayload | null, newPayload: Aut
       year: oldPayload.meta.year || newPayload.meta.year,
       month: newPayload.meta.month || oldPayload.meta.month,
       updatedAt: [oldPayload.meta.updatedAt, newPayload.meta.updatedAt].filter(Boolean).sort().pop() || new Date().toISOString(),
-      source: "google-sheet",
+      source: "history+supabase",
       message: "4-7月历史快照只读 · 8月起 Supabase 持续同步",
       rawDailyRows: Number(oldPayload.meta.rawDailyRows || 0) + Number(newPayload.meta.rawDailyRows || 0),
       rawOperatorRows: Number(oldPayload.meta.rawOperatorRows || 0) + Number(newPayload.meta.rawOperatorRows || 0),
@@ -83,7 +83,11 @@ export async function GET(request: Request) {
   let supabasePayload: AutoWithdrawPayload | null = null;
   if (newMonths.length) {
     try {
-      const { start, end } = monthBounds(newMonths);
+      const bounds = monthBounds(newMonths);
+      const requestedStart = String(url.searchParams.get("start") || url.searchParams.get("startDate") || "");
+      const requestedEnd = String(url.searchParams.get("end") || url.searchParams.get("endDate") || requestedStart || "");
+      const start = /^20\d{2}-\d{2}-\d{2}$/.test(requestedStart) && requestedStart > bounds.start ? requestedStart : bounds.start;
+      const end = /^20\d{2}-\d{2}-\d{2}$/.test(requestedEnd) && requestedEnd < bounds.end ? requestedEnd : bounds.end;
       supabasePayload = await readSupabaseAutoWithdraw(request, start, end);
     } catch (error) {
       const message = error instanceof Error ? error.message : "读取 Supabase 自动出款失败";

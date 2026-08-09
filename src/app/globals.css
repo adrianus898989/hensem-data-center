@@ -5527,3 +5527,40 @@ html body .third-party-volume-module .third-party-tab-panel{
   flex: 0 0 auto !important;
 }
 
+
+
+/* FINAL10: 三方费率业务状态与盘口接入状态分离 */
+.business-status-cell{
+  display:flex;
+  align-items:center;
+  gap:5px;
+  flex-wrap:wrap;
+  min-width:64px;
+}
+
+
+/* FINAL11 — 三方量按查询区间累计；弹窗可排序 */
+.range-volume-page .panel-head p{
+  display:block !important;
+  margin-top:4px !important;
+  font-size:11px !important;
+  color:#7b8aa0 !important;
+}
+.modal-sort-btn{
+  appearance:none;
+  border:0;
+  background:transparent;
+  color:inherit;
+  font:inherit;
+  font-weight:inherit;
+  padding:0;
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  cursor:pointer;
+  white-space:nowrap;
+}
+.modal-sort-btn span{
+  font-size:10px;
+  opacity:.65;
+}

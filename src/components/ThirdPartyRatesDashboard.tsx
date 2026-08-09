@@ -1152,7 +1152,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
       )}
 
       {mainView === "dashboard" && view === "rates" && (
-        <RatePanel title="三方费率表" subtitle="查看三方费率、代收/代付手续费、限额和状态">
+        <RatePanel title="三方费率表" subtitle="代收 / 代付状态来自费率表左侧；站点接入情况请点「接入平台」查看">
           <RatePagination total={sortedRateRows.length} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
           <RateTable rows={paginateRows(sortedRateRows, page, pageSize)} totalRows={sortedRateRows} sortState={rateSort} onSort={toggleRateSort} onOpen={openRateAccess} />
         </RatePanel>
@@ -1932,6 +1932,36 @@ function compactFeeCell(value: string) {
   return <span>{text || "-"}</span>;
 }
 
+function rateBusinessStatus(row: ThirdPartyRateRow, kind: "collect" | "payout"): string {
+  const info = String(row.channelInfo || "");
+  const labels = kind === "collect"
+    ? ["代收状态", "代收情况"]
+    : ["代付状态", "代付情况"];
+
+  for (const label of labels) {
+    const pattern = new RegExp(`(?:^|\\s*/\\s*)${label}\\s*[:：]\\s*([^/]+)`, "i");
+    const match = info.match(pattern);
+    if (match?.[1]) {
+      const value = match[1].trim();
+      if (value) return value;
+    }
+  }
+  return "";
+}
+
+function BusinessStatusCell({ value }: { value: string }) {
+  const parts = String(value || "")
+    .split(/\s*\+\s*/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!parts.length) return <span className="muted-cell">-</span>;
+  return (
+    <div className="business-status-cell">
+      {parts.map((item) => <StatusBadge key={item} status={item} />)}
+    </div>
+  );
+}
+
 
 type RateGroupRow = {
   id: string;
@@ -1946,6 +1976,8 @@ type RateGroupRow = {
   payoutSingleFee: string;
   collectLimit: string;
   payoutLimit: string;
+  collectStatus: string;
+  payoutStatus: string;
   status: string;
   rows: ThirdPartyRateRow[];
   multi: boolean;
@@ -1968,7 +2000,9 @@ function groupedRateRows(rows: ThirdPartyRateRow[]): RateGroupRow[] {
     const feeItems = dedupeRateRows(preferDirectRateRows(items));
     const first = feeItems[0] || items[0];
     const categories = Array.from(new Set(feeItems.map((r) => r.category || "-").filter(Boolean)));
-    const statuses = Array.from(new Set(items.map((r) => r.status || "未知").filter(Boolean)));
+    const statuses = Array.from(new Set(items.map((r) => r.status || "").filter(Boolean)));
+    const collectStatuses = Array.from(new Set(items.map((r) => rateBusinessStatus(r, "collect")).filter(Boolean)));
+    const payoutStatuses = Array.from(new Set(items.map((r) => rateBusinessStatus(r, "payout")).filter(Boolean)));
     return {
       id: `rate-group-${key}`,
       country: first.country,
@@ -1982,7 +2016,9 @@ function groupedRateRows(rows: ThirdPartyRateRow[]): RateGroupRow[] {
       payoutSingleFee: joinUnique(feeItems.map((r) => r.payoutSingleFee)),
       collectLimit: joinUnique(feeItems.map((r) => r.collectLimit)),
       payoutLimit: joinUnique(feeItems.map((r) => r.payoutLimit)),
-      status: statuses.length === 1 ? statuses[0] : `多状态 ${statuses.length} 项`,
+      collectStatus: collectStatuses.length ? collectStatuses.join(" + ") : "",
+      payoutStatus: payoutStatuses.length ? payoutStatuses.join(" + ") : "",
+      status: statuses.length === 1 ? statuses[0] : (statuses.length > 1 ? `多状态 ${statuses.length} 项` : ""),
       rows: feeItems,
       multi: feeItems.length > 1 || categories.length > 1
     } satisfies RateGroupRow;
@@ -2005,7 +2041,8 @@ function RateSubTable({ rows }: { rows: ThirdPartyRateRow[] }) {
             <th>代付单笔</th>
             <th>代收限制</th>
             <th>代付限制</th>
-            <th>状态</th>
+            <th>代收状态</th>
+            <th>代付状态</th>
           </tr>
         </thead>
         <tbody>
@@ -2020,7 +2057,8 @@ function RateSubTable({ rows }: { rows: ThirdPartyRateRow[] }) {
               <td>{row.payoutSingleFee || "-"}</td>
               <td>{row.collectLimit || "-"}</td>
               <td>{row.payoutLimit || "-"}</td>
-              <td><StatusBadge status={row.status || "未知"} /></td>
+              <td><BusinessStatusCell value={rateBusinessStatus(row, "collect")} /></td>
+              <td><BusinessStatusCell value={rateBusinessStatus(row, "payout")} /></td>
             </tr>
           ))}
         </tbody>
@@ -2057,7 +2095,8 @@ function RateTable({ rows, totalRows = rows, sortState, onSort, onOpen }: { rows
             <SortableTh label="代收最高限制" sortKey="collectLimit" sortState={sortState} onSort={onSort} />
             <SortableTh label="代付最低限制" sortKey="payoutLimit" sortState={sortState} onSort={onSort} />
             <SortableTh label="代付最高限制" sortKey="payoutLimit" sortState={sortState} onSort={onSort} />
-            <SortableTh label="状态" sortKey="status" sortState={sortState} onSort={onSort} />
+            <th>代收状态</th>
+            <th>代付状态</th>
             <th>详情</th>
           </tr>
         </thead>
@@ -2083,7 +2122,8 @@ function RateTable({ rows, totalRows = rows, sortState, onSort, onOpen }: { rows
                   <td className="fee-cell">{compactFeeCell(collectLimit.max)}</td>
                   <td className="fee-cell">{compactFeeCell(payoutLimit.min)}</td>
                   <td className="fee-cell">{compactFeeCell(payoutLimit.max)}</td>
-                  <td><StatusBadge status={row.status || "未知"} /></td>
+                  <td><BusinessStatusCell value={row.collectStatus} /></td>
+                  <td><BusinessStatusCell value={row.payoutStatus} /></td>
                   <td className="action-cell">
                     {row.multi ? <button className="ghost-btn small" type="button" onClick={() => toggle(row.id)}>{isOpen ? "收起" : "展开"}</button> : null}
                     <button className="ghost-btn small" type="button" onClick={() => onOpen(first)}>接入平台</button>
@@ -2091,7 +2131,7 @@ function RateTable({ rows, totalRows = rows, sortState, onSort, onOpen }: { rows
                 </tr>
                 {row.multi && isOpen && (
                   <tr className="expanded-subrow">
-                    <td colSpan={15}><RateSubTable rows={row.rows} /></td>
+                    <td colSpan={16}><RateSubTable rows={row.rows} /></td>
                   </tr>
                 )}
               </Fragment>
@@ -2099,8 +2139,8 @@ function RateTable({ rows, totalRows = rows, sortState, onSort, onOpen }: { rows
           })}
         </tbody>
         <tfoot>
-          <tr className="summary-row page-summary-row"><td colSpan={13}>当前页汇总</td><td>{formatNumber(shownSummary.count)} 组</td><td className="muted-cell">多类型 {formatNumber(shownSummary.multi)} 组</td></tr>
-          <tr className="summary-row overall-summary-row"><td colSpan={13}>全部汇总</td><td>{formatNumber(allSummary.count)} 组</td><td className="muted-cell">多类型 {formatNumber(allSummary.multi)} 组</td></tr>
+          <tr className="summary-row page-summary-row"><td colSpan={14}>当前页汇总</td><td>{formatNumber(shownSummary.count)} 组</td><td className="muted-cell">多类型 {formatNumber(shownSummary.multi)} 组</td></tr>
+          <tr className="summary-row overall-summary-row"><td colSpan={14}>全部汇总</td><td>{formatNumber(allSummary.count)} 组</td><td className="muted-cell">多类型 {formatNumber(allSummary.multi)} 组</td></tr>
         </tfoot>
       </table>
     </div>
