@@ -205,6 +205,10 @@ function normalizeVolumeChannelType(country: string, platform: string, rawChanne
   const text = `${platform} ${rawChannel} ${channel} ${typeText} ${mapCode} ${system} ${title} ${sheetName}`.toLowerCase();
   const southAmericaType = normalizeSouthAmericaChannelType(country, mapCode, typeText, rawChannel, channel);
   if (southAmericaType) return southAmericaType;
+  // V7O：Arb-UPI / Arb-BANK 是 UPI-QR 的代付别名；类型也必须按 UPI 匹配费率，不能因为名字里有 BANK 就误归“银行卡”。
+  const indiaRawKey = normalizeCell(rawChannel).toLowerCase().replace(/[^a-z0-9一-龥]+/g, "");
+  if (country.includes("印度") && direction === "代付" && ["arbupi", "arbbank", "upiqr"].includes(indiaRawKey)) return "UPI";
+
   const inferred = inferThirdPartyChannelType(rawChannel, country, `${platform} ${channel} ${typeText} ${mapCode} ${system} ${title} ${sheetName}`);
 
   if (country.includes("巴西")) return "PIX";
@@ -325,9 +329,11 @@ function manualThirdPartyOverride(country: string, platform: string, rawChannel:
   const p = normalizeCell(platform).toUpperCase().replace(/[^A-Z0-9]/g, "");
   const k = normalizeCell(rawChannel).toLowerCase().replace(/[^a-z0-9一-龥]+/g, "");
   if (c.includes("印度")) {
-    // DhaniWin 代付 UPI 是人工确认；其它平台出现 UPI-QR2 用户确认归 ATPay。
-    if (p === "DHANIWIN" && direction === "代付" && (k === "upi" || k === "upiqr" || k === "upiqr2")) return "人工确认";
+    // V7O：用户再次确认 DHANIWIN 的 Arb-UPI / Arb-BANK 都是 UPI-QR 代付，绝不能算进“人工确认”。
+    // 只有原始名称真的就是 UPI（没有三方名）时，DHANIWIN 才继续按人工确认；LOCAL BANK / BankCard 规则不变。
+    if (direction === "代付" && (k === "arbupi" || k === "arbbank" || k === "upiqr")) return "UPI-QR";
     if (k === "upiqr2") return "ATPay";
+    if (p === "DHANIWIN" && direction === "代付" && k === "upi") return "人工确认";
     if (k === "manualrecharge" || k === "人工充值") return "人工充值";
     if (direction === "代付" && (k === "localbank" || k === "bankcard")) return "人工确认";
   }

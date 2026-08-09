@@ -1986,7 +1986,8 @@ type RateGroupRow = {
 function joinUnique(values: string[], empty = "-"): string {
   const cleaned = Array.from(new Set(values.map((v) => String(v || "").trim()).filter(Boolean)));
   if (!cleaned.length) return empty;
-  return cleaned.join(" + ");
+  // 不同通道/类型是并列费率，不是相加关系。
+  return cleaned.join(" / ");
 }
 
 function groupedRateRows(rows: ThirdPartyRateRow[]): RateGroupRow[] {

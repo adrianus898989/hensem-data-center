@@ -448,9 +448,11 @@ export function inferThirdPartyChannelType(value: string, country?: string, extr
     return "其他类型";
   }
   if (cKey === "印度") {
+    // V7O：Arb-UPI / Arb-BANK 是 UPI-QR 的代付别名。Arb-BANK 名字里虽然有 BANK，但业务类型仍是 UPI。
+    if (/arb[-_ ]?(upi|bank)/i.test(raw) || /arbupi|arbbank/.test(compact)) return "UPI";
     // 用户确认：印度线下表就是“印度”；印度三方量里的类型重点区分 UPI / 银行卡 / USDT。
     if (/usdt|trx|trc20|tron/i.test(raw) || /usdt|trx|trc20|tron/i.test(text)) return "USDT";
-    if (/bank|银行卡|银行|card|cardpay|arb[-_ ]?bank|fastupi提现/i.test(raw) || /bank|card|arb-bank|arbpayinr/.test(text)) return "银行卡";
+    if (/bank|银行卡|银行|card|cardpay|fastupi提现/i.test(raw) || /bank|card|arbpayinr/.test(text)) return "银行卡";
     if (/upi|paytm|phonepe|qr|扫码/i.test(raw) || /upi|paytm|phonepe|qr/.test(text)) return "UPI";
     return "UPI";
   }

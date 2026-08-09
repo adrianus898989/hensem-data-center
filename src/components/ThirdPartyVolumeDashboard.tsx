@@ -248,25 +248,22 @@ function normalizeCountryLabel(value: string): string {
     .trim();
 }
 
-const SOUTH_AMERICA_RATE_COUNTRIES = ["南美", "墨西哥", "哥伦比亚", "智利"];
+const SOUTH_AMERICA_RATE_COUNTRIES = ["墨西哥", "哥伦比亚", "智利"] as const;
+
+function isStrictSouthAmericaRateCountry(value: string): boolean {
+  return SOUTH_AMERICA_RATE_COUNTRIES.includes(normalizeCountryLabel(value) as (typeof SOUTH_AMERICA_RATE_COUNTRIES)[number]);
+}
 
 function expandRateCountries(value: string): string[] {
   const normalized = normalizeCountryLabel(value);
-  const set = new Set<string>();
-  const add = (x?: string) => {
-    const v = normalizeCountryLabel(String(x || ""));
-    if (v) set.add(v);
-  };
-  add(value);
-  add(normalized);
-  if (normalized === "南美") {
-    SOUTH_AMERICA_RATE_COUNTRIES.forEach(add);
-  } else if (["墨西哥", "哥伦比亚", "智利"].includes(normalized)) {
-    // 具体国家不能互相串费率：墨西哥只用墨西哥，哥伦比亚只用哥伦比亚，智利用智利。
-    // 只保留“南美”作为兜底，不再把三个国家互相写入。
-    add("南美");
-  }
-  return Array.from(set);
+  if (!normalized) return [];
+
+  // V7N：南美三国的费率必须严格按国家隔离。
+  // 墨西哥 / 哥伦比亚 / 智利不能再共同写入或读取“南美”兜底，
+  // 否则 TodayPay / STARPAGO 等同名三方会把 CLP 单笔 800/2200 串到 MXN 页面。
+  if (normalized === "南美" || isStrictSouthAmericaRateCountry(normalized)) return [normalized];
+
+  return [normalized];
 }
 
 function normalizeFeeTypeToken(country: string, value?: string): string {
@@ -1065,9 +1062,12 @@ function rateCountriesCompatible(targetCountry: string, candidateCountry: string
   const candidate = normalizeCountryLabel(candidateCountry);
   if (!target || !candidate) return { ok: false, score: 0 };
   if (target === candidate) return { ok: true, score: 40 };
-  const southAmerica = new Set(["墨西哥", "哥伦比亚", "智利"]);
-  if (southAmerica.has(target) && candidate === "南美") return { ok: true, score: 12 };
-  if (target === "南美" && southAmerica.has(candidate)) return { ok: true, score: 8 };
+
+  // V7N：南美三国不允许使用“南美”或其它南美国家作为费率候选。
+  // 宁可显示“未匹配”，也绝不能跨币种拿错手续费。
+  if (target === "南美" || candidate === "南美" || isStrictSouthAmericaRateCountry(target) || isStrictSouthAmericaRateCountry(candidate)) {
+    return { ok: false, score: 0 };
+  }
   return { ok: false, score: 0 };
 }
 
@@ -1080,9 +1080,15 @@ function findMatchedRate(rateMap: Map<string, RateLike>, country: string, platfo
     ? Array.from(new Set(["USDT通道", "USDT", ...expandRateCountries(country)]))
     : expandRateCountries(country);
   const platformCandidates = platformText ? [platformText, ""] : [""];
-  const typeCandidates = isUsdtTarget
-    ? Array.from(new Set(["", ...feeTypeCandidates("USDT", channelType), ...feeTypeCandidates(country, channelType)]))
-    : Array.from(new Set(["", ...feeTypeCandidates(country, channelType)]));
+  const rawTypeCandidates = isUsdtTarget
+    ? [...feeTypeCandidates("USDT", channelType), ...feeTypeCandidates(country, channelType)]
+    : feeTypeCandidates(country, channelType);
+  const typeCandidates = Array.from(new Set(
+    isStrictSouthAmericaRateCountry(country)
+      // V7N：南美三国必须先匹配真实通道类型，空类型只能最后兜底。
+      ? [...rawTypeCandidates.filter(Boolean), ""]
+      : ["", ...rawTypeCandidates]
+  ));
   const seen = new Set<string>();
   let bestAny: { row: RateLike; score: number } | null = null;
   let bestWithFee: { row: RateLike; score: number } | null = null;
@@ -1098,7 +1104,6 @@ function findMatchedRate(rateMap: Map<string, RateLike>, country: string, platfo
         let score = side ? rateSideScore(row, side) : rateScore(row);
         if (isUsdtTarget && (countryKey === "USDT通道" || countryKey === "USDT")) score += 30;
         else if (countryKey === normalizeCountryLabel(country)) score += 14;
-        else if (countryKey === "南美") score += 6;
         if (platformKey && platformKey === platformText) score += 10;
         if (typeKey && typeKey === exactType) score += 8;
         else if (typeKey && feeTypeMatches(country, exactType, typeKey)) score += 5;
@@ -1140,7 +1145,21 @@ function findMatchedRate(rateMap: Map<string, RateLike>, country: string, platfo
     else if (targetPlatform) score -= 3;
 
     const rowType = normalizeFeeTypeToken(targetCountry, row.category || "");
-    if (targetType && rowType === targetType) score += 20;
+
+    if (isStrictSouthAmericaRateCountry(targetCountry)) {
+      const genericTargetType = !targetType || targetType === "其他类型" || targetType === "代付类型";
+      if (genericTargetType) {
+        // 南美没有可识别类型时，只接受真正无类型的费率行；不能随便挑 SPEI/OXXO/PSE 等一行。
+        if (rowType) continue;
+        score += 6;
+      } else if (rowType === targetType) {
+        score += 20;
+      } else if (rowType && feeTypeMatches(targetCountry, targetType, rowType)) {
+        score += 12;
+      } else {
+        continue;
+      }
+    } else if (targetType && rowType === targetType) score += 20;
     else if (targetType && rowType && feeTypeMatches(targetCountry, targetType, rowType)) score += 12;
     else if (!rowType) score += 6;
     else if (!targetType || targetType === "其他类型" || targetType === "代付类型") score += 2;
@@ -1163,7 +1182,12 @@ function buildRateMap(rates: ThirdPartyRateRow[], statuses: ThirdPartyPlatformSt
     for (const country of countryKeys) {
       for (const name of names) {
         putRate(map, country, "", name, row.category || "", row);
-        putRate(map, country, "", name, "", row);
+
+        // V7N：墨西哥/哥伦比亚/智利的 Google 表是一三方多通道费率。
+        // 有 category 时绝不能再并入无类型 key，否则 SPEI + Cash + OXXO 会被合成一条假费率。
+        if (!isStrictSouthAmericaRateCountry(country) || !String(row.category || "").trim()) {
+          putRate(map, country, "", name, "", row);
+        }
         // NinePay 同主三方两套费率：把费率表里的 NinePayINR 191 / 213 作为类型索引挂到 NinePay 下。
         if (normalizeCountryLabel(country).includes("印度") && /ninepay\s*inr\s*(191|213)|ninepayinr(191|213)/i.test(`${row.thirdParty} ${row.channelInfo || ""}`)) {
           const text = `${row.thirdParty} ${row.channelInfo || ""}`;
@@ -1196,10 +1220,14 @@ function buildRateMap(rates: ThirdPartyRateRow[], statuses: ThirdPartyPlatformSt
       for (const name of names) {
         // 盘口状态表最准确：优先按 国家 + 平台 + 三方 + 类型 匹配。
         putRate(map, country, row.platform, name, row.category || "", asRate);
-        putRate(map, country, row.platform, name, "", asRate);
+        if (!isStrictSouthAmericaRateCountry(country) || !String(row.category || "").trim()) {
+          putRate(map, country, row.platform, name, "", asRate);
+        }
         // 再补一个不带平台的兜底，防止量表平台名和费率表平台名细微不同。
         putRate(map, country, "", name, row.category || "", asRate);
-        putRate(map, country, "", name, "", asRate);
+        if (!isStrictSouthAmericaRateCountry(country) || !String(row.category || "").trim()) {
+          putRate(map, country, "", name, "", asRate);
+        }
       }
     }
   }
@@ -1494,26 +1522,10 @@ function normalizedDisplayChannelType(country: string, type: string, rawRows: Th
     if (/fpx|bank|maybank|cimb|rhb|publicbank|ambank|hongleong/.test(text)) return "FPX-BANK";
     if (onlyPayout && (fallback === "其他类型" || fallback === "代付类型" || fallback === "银行代付")) return "银行";
   }
-  if (country.includes("墨西哥")) {
-    if (/spei|bank/.test(text)) return onlyPayout ? "银行代付" : "SPEI";
-    if (/oxxo/.test(text)) return "OXXO Pay";
-    if (/cash|efectivo/.test(text)) return "Cash";
-    if (onlyPayout && fallback === "其他类型") return "银行代付";
-  }
-  if (country.includes("哥伦比亚")) {
-    if (/pse|bank/.test(text)) return onlyPayout ? "银行代付" : "PSE";
-    if (/nequi/.test(text)) return "Nequi";
-    if (/transfiya/.test(text)) return "Transfiya";
-    if (/bre[-_ ]?b|breb/.test(text)) return "BRE_B";
-    if (/bre[-_ ]?key|brekey/.test(text)) return "BRE_KEY";
-    if (onlyPayout && fallback === "其他类型") return "银行代付";
-  }
-  if (country.includes("智利")) {
-    if (/webpay|card|tarjeta/.test(text)) return "Card(Webpay)";
-    if (/khipu|bank|banco/.test(text)) return onlyPayout ? "银行代付" : "Bank(Khipu)";
-    if (/mach|wallet|ewallet/.test(text)) return "E-Wallet(Mach)";
-    if (/pago46|cash|efectivo/.test(text)) return "Cash(Pago46)";
-    if (onlyPayout && fallback === "其他类型") return "银行代付";
+  if (isStrictSouthAmericaRateCountry(country)) {
+    // V7N：南美三国的代付也必须保留 Google 费率表里的真实类型
+    // （SPEI/CLABE/OXXO/PSE/Khipu...），不能折叠成“银行代付”后再随机兜底。
+    return fallback;
   }
   if (fallback === "其他类型" && onlyPayout) return "代付类型";
   return fallback;
@@ -1548,35 +1560,45 @@ type FeeSummary = {
   totalFeeShare: number;
   collectHasFee: boolean;
   payoutHasFee: boolean;
-  collectSingleHint: string;
-  payoutSingleHint: string;
-  collectRateHint: string;
-  payoutRateHint: string;
+  collectFeeHint: string;
+  payoutFeeHint: string;
   alertRows: FeeCompareRow[];
   missing: number;
 };
 
 type FeeSummaryMode = "monthly" | "monthlyPeriod" | "platform" | "daily";
 
-function singleFeeHint(rows: FeeCompareRow[], side: "collect" | "payout"): string {
-  const values = Array.from(new Set(rows
-    .filter((row) => side === "collect" ? sideHasValue(row.collectAmount, row.collectCount) : sideHasValue(row.payoutAmount, row.payoutCount))
-    .map((row) => side === "collect" ? row.collectSingleFee : row.payoutSingleFee)
-    .filter((value) => value > 0)
-    .map((value) => Number(value.toFixed(6)))))
-    .sort((a, b) => a - b);
-  if (!values.length) return "";
-  return values.map((value) => `单笔 ${formatSingleFeeValue(value)}`).join(" / ");
-}
+function feePairHint(rows: FeeCompareRow[], side: "collect" | "payout"): string {
+  const activeRows = rows.filter((row) =>
+    side === "collect"
+      ? sideHasValue(row.collectAmount, row.collectCount)
+      : sideHasValue(row.payoutAmount, row.payoutCount)
+  );
+  const seen = new Set<string>();
+  const values: string[] = [];
 
-function percentRateHint(rows: FeeCompareRow[], side: "collect" | "payout"): string {
-  const values = Array.from(new Set(rows
-    .filter((row) => side === "collect" ? sideHasValue(row.collectAmount, row.collectCount) : sideHasValue(row.payoutAmount, row.payoutCount))
-    .map((row) => side === "collect" ? row.collectFeeRate : row.payoutFeeRate)
-    .filter((value) => value > 0)
-    .map((value) => Number(value.toFixed(6)))));
-  if (!values.length) return "";
-  return values.map((value) => formatPercent(value)).join(" + ");
+  for (const row of activeRows) {
+    const rate = side === "collect" ? row.collectFeeRate : row.payoutFeeRate;
+    const single = side === "collect" ? row.collectSingleFee : row.payoutSingleFee;
+    const knownZero = side === "collect" ? row.collectFeeKnownZero : row.payoutFeeKnownZero;
+    const feeParts: string[] = [];
+    if (rate > 0) feeParts.push(formatPercent(rate));
+    if (single > 0) feeParts.push(`单笔 ${formatSingleFeeValue(single)}`);
+    if (!feeParts.length && knownZero) feeParts.push("0");
+    if (!feeParts.length) continue;
+
+    const type = normalizeFeeTypeToken(row.country, row.channelType || "");
+    const feeText = feeParts.join(" + ");
+    const label = isStrictSouthAmericaRateCountry(row.country) && type && type !== "其他类型" && type !== "代付类型"
+      ? `${type}: ${feeText}`
+      : feeText;
+    if (seen.has(label)) continue;
+    seen.add(label);
+    values.push(label);
+  }
+
+  // 不同子通道是“可选费率”，不是数学相加；必须用 / 分隔。
+  return values.join(" / ");
 }
 
 function summarizeFeeRows(rows: FeeCompareRow[], totalCollectFee = 0, totalPayoutFee = 0): FeeSummary {
@@ -1602,28 +1624,22 @@ function summarizeFeeRows(rows: FeeCompareRow[], totalCollectFee = 0, totalPayou
     totalFeeShare: totalFee ? estimatedFee / totalFee : 0,
     collectHasFee,
     payoutHasFee,
-    collectSingleHint: singleFeeHint(rows, "collect"),
-    payoutSingleHint: singleFeeHint(rows, "payout"),
-    collectRateHint: percentRateHint(rows, "collect"),
-    payoutRateHint: percentRateHint(rows, "payout"),
+    collectFeeHint: feePairHint(rows, "collect"),
+    payoutFeeHint: feePairHint(rows, "payout"),
     alertRows,
     missing: rows.filter((row) => row.level === "missing").length
   };
 }
 
 function emptyFeeSummary(): FeeSummary {
-  return { collectFee: 0, payoutFee: 0, estimatedFee: 0, collectRate: 0, payoutRate: 0, collectFeeShare: 0, payoutFeeShare: 0, totalFeeShare: 0, collectHasFee: false, payoutHasFee: false, collectSingleHint: "", payoutSingleHint: "", collectRateHint: "", payoutRateHint: "", alertRows: [], missing: 0 };
+  return { collectFee: 0, payoutFee: 0, estimatedFee: 0, collectRate: 0, payoutRate: 0, collectFeeShare: 0, payoutFeeShare: 0, totalFeeShare: 0, collectHasFee: false, payoutHasFee: false, collectFeeHint: "", payoutFeeHint: "", alertRows: [], missing: 0 };
 }
 
 function feeRateText(summary: FeeSummary, side: "collect" | "payout"): string {
   const hasFee = side === "collect" ? summary.collectHasFee : summary.payoutHasFee;
-  const rateHint = side === "collect" ? summary.collectRateHint : summary.payoutRateHint;
-  const singleHint = side === "collect" ? summary.collectSingleHint : summary.payoutSingleHint;
+  const hint = side === "collect" ? summary.collectFeeHint : summary.payoutFeeHint;
   if (!hasFee) return "-";
-  const parts: string[] = [];
-  if (rateHint) parts.push(rateHint);
-  if (singleHint) parts.push(singleHint.startsWith("单笔") ? singleHint : `单笔 ${singleHint}`);
-  return parts.length ? parts.join(" + ") : "0";
+  return hint || "0";
 }
 
 function formatSingleFeeValue(value: number): string {
@@ -1892,9 +1908,15 @@ function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolum
   const country = row.country || "";
   const platformKey = localAliasKey(row.platform || "").toUpperCase();
   let channel = row.channel || raw || "未知三方";
+  const isIndiaUpiQrPayout = country.includes("印度") && row.direction === "代付" && ["arbupi", "arbbank", "upiqr"].includes(key);
 
-  if (!["人工确认", "人工充值", "Coinvid USDT"].includes(channel)) {
-    if (country.includes("印度") && row.direction === "代付" && platformKey === "DHANIWIN" && ["upi", "upiqr", "upiqr2"].includes(key)) channel = "人工确认";
+  // V7O：修正已经写进 Supabase 的旧数据。即使旧 row.channel 已经被存成“人工确认”，
+  // 只要原始/压缩后的名称是 Arb-UPI、Arb-BANK 或 UPI-QR，就直接恢复为 UPI-QR。
+  if (isIndiaUpiQrPayout) {
+    channel = "UPI-QR";
+  } else if (!["人工确认", "人工充值", "Coinvid USDT"].includes(channel)) {
+    // DHANIWIN 只有“裸 UPI”继续算人工确认；UPI-QR2 仍按 ATPay，LOCAL BANK / BankCard 规则不变。
+    if (country.includes("印度") && row.direction === "代付" && platformKey === "DHANIWIN" && key === "upi") channel = "人工确认";
     else if (country.includes("印度") && row.direction === "代付" && ["localbank", "bankcard"].includes(key)) channel = "人工确认";
     else if (country.includes("印度") && ["manualrecharge", "人工充值"].includes(key)) channel = "人工充值";
     else channel = canonicalThirdPartyName(raw || channel, country) || channel;
@@ -1902,7 +1924,7 @@ function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolum
 
   channel = collapseThirdPartyDisplayName(channel, country);
   if (!channel || channel === "未知三方") channel = collapseThirdPartyDisplayName(row.channel || raw || "未知三方", country);
-  let channelType = row.channelType || inferThirdPartyChannelType(raw || channel, country, `${channel} ${raw}`) || "其他类型";
+  let channelType = isIndiaUpiQrPayout ? "UPI" : (row.channelType || inferThirdPartyChannelType(raw || channel, country, `${channel} ${raw}`) || "其他类型");
   if (channel === "人工确认" || channel === "人工充值") channelType = channel;
   return { ...row, channel, channelType };
 }
