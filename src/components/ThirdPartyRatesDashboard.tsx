@@ -153,9 +153,29 @@ function sortRateSheets(values: string[]): string[] {
   return uniq(values.filter((item) => !isHiddenRateCountry(item))).sort(compareRateSheets);
 }
 
+// V7R：费率展示顺序只认 Google 表里的原始行顺序。
+// 某些旧同步记录 source_row 可能为空/0，但 id 里仍保留 v166/direct 的真实行号；
+// 这里从 id 兜底恢复行号，避免页面退回按三方名称字母排序。
+// 只影响「三方费率」前端展示，不修改三方量、费率同步或费率匹配。
+function effectiveRateSourceRow(row: Pick<ThirdPartyRateRow, "id" | "sourceRow">): number {
+  const id = String(row.id || "");
+
+  // id 是同步时按 Google 实际行生成的，优先级高于旧数据里可能被写成固定值的 source_row。
+  const v166 = id.match(/-v166-(\d+)-/i);
+  if (v166) return Number(v166[1]) + 1; // v166 id 保存的是 0-based r
+
+  const directId = id.match(/-direct-(\d+)-/i);
+  if (directId) return Number(directId[1]); // direct id 保存的是 1-based sourceRow
+
+  const direct = Number(row.sourceRow || 0);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+
+  return Number.MAX_SAFE_INTEGER;
+}
+
 function compareRateSourceOrder(a: ThirdPartyRateRow, b: ThirdPartyRateRow): number {
   return compareRateSheets(a.sheetName, b.sheetName)
-    || Number(a.sourceRow || 0) - Number(b.sourceRow || 0)
+    || effectiveRateSourceRow(a) - effectiveRateSourceRow(b)
     || String(a.thirdParty || "").localeCompare(String(b.thirdParty || ""), "zh-CN", { numeric: true, sensitivity: "base" });
 }
 
@@ -2044,6 +2064,7 @@ type RateGroupRow = {
   collectStatus: string;
   payoutStatus: string;
   status: string;
+  sourceOrder: number;
   rows: ThirdPartyRateRow[];
   multi: boolean;
 };
@@ -2085,10 +2106,16 @@ function groupedRateRows(rows: ThirdPartyRateRow[]): RateGroupRow[] {
       collectStatus: collectStatuses.length ? collectStatuses.join(" + ") : "",
       payoutStatus: payoutStatuses.length ? payoutStatuses.join(" + ") : "",
       status: statuses.length === 1 ? statuses[0] : (statuses.length > 1 ? `多状态 ${statuses.length} 项` : ""),
-      rows: feeItems,
+      sourceOrder: Math.min(...items.map((item) => effectiveRateSourceRow(item))),
+      rows: [...feeItems].sort(compareRateSourceOrder),
       multi: feeItems.length > 1 || categories.length > 1
     } satisfies RateGroupRow;
-  }).sort((a, b) => a.country.localeCompare(b.country, "zh-CN") || a.sheetName.localeCompare(b.sheetName, "zh-CN") || a.thirdParty.localeCompare(b.thirdParty, "zh-CN"));
+  }).sort((a, b) =>
+    compareRateCountry(a.country, b.country)
+    || compareRateSheets(a.sheetName, b.sheetName)
+    || a.sourceOrder - b.sourceOrder
+    || a.thirdParty.localeCompare(b.thirdParty, "zh-CN", { numeric: true, sensitivity: "base" })
+  );
 }
 
 function RateSubTable({ rows }: { rows: ThirdPartyRateRow[] }) {
