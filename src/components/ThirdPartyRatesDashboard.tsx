@@ -1137,6 +1137,12 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
         )}
       </section>
 
+      {embedded && hasQueried && payload && (
+        <div className="rate-access-mode-note">
+          费率数据最后同步：{new Date(String((payload.meta as any).snapshotUpdatedAt || payload.meta.updatedAt)).toLocaleString("zh-CN")} · 来源：Google Sheet → Supabase
+        </div>
+      )}
+
       <section className="filter-card">
         <div className="filters filters-v3 rate-filters">
           <RateMultiSelect label="国家 / 地区" options={countries} value={draftFilters.countries} onChange={(value) => updateDraft("countries", value)} placeholder="全部国家" />
@@ -1237,7 +1243,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
       )}
 
       {mainView === "dashboard" && view === "rates" && (
-        <RatePanel title="三方费率表" subtitle="代收 / 代付状态来自费率表左侧；站点接入情况请点「接入平台」查看">
+        <RatePanel title="三方费率表" subtitle="主表只保留常用费率、范围和状态；停用原因、完整资料、接入盘口请点「查看」。">
           <RatePagination total={sortedRateRows.length} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
           <RateTable rows={paginateRows(sortedRateRows, page, pageSize)} totalRows={sortedRateRows} sortState={rateSort} onSort={toggleRateSort} onOpen={openRateAccess} />
         </RatePanel>
@@ -1737,9 +1743,15 @@ function RateAnomalyModal({ detail, onClose }: { detail: RateAnomalyDetail; onCl
                   <div><span>代付手续费</span><b>{row.payoutFee || "-"}</b></div>
                   <div><span>代收单笔</span><b>{row.collectSingleFee || "-"}</b></div>
                   <div><span>代付单笔</span><b>{row.payoutSingleFee || "-"}</b></div>
-                  <div><span>代收限制</span><b>{row.collectLimit || "-"}</b></div>
-                  <div><span>代付限制</span><b>{row.payoutLimit || "-"}</b></div>
-                  <div><span>通道情况</span><b>{row.channelInfo || "-"}</b></div>
+                  <div><span>代收范围</span><b>{row.collectLimit || "-"}</b></div>
+                  <div><span>代付范围</span><b>{row.payoutLimit || "-"}</b></div>
+                  <div><span>代收状态</span><b>{rateBusinessStatus(row, "collect") || row.status || "-"}</b></div>
+                  <div><span>代付状态</span><b>{rateBusinessStatus(row, "payout") || row.status || "-"}</b></div>
+                  <div><span>停用原因 / 状态备注</span><b>{rateStopReason(row) || "-"}</b></div>
+                  <div><span>白名单</span><b>{row.whitelist || "-"}</b></div>
+                  <div><span>是否有漏洞</span><b>{row.leak || "-"}</b></div>
+                  <div><span>完整通道资料</span><b>{row.channelInfo || "-"}</b></div>
+                  <div><span>数据位置</span><b>{row.sheetName || "-"} · 第 {row.sourceRow || "-"} 行</b></div>
                 </div>
               </div>
             ))}
@@ -1957,7 +1969,6 @@ function PlatformStatusTable({ rows, totalRows = rows, sortState, onSort }: { ro
         <thead>
           <tr>
             <SortableTh label="国家" sortKey="country" sortState={sortState} onSort={onSort} />
-            <SortableTh label="页签" sortKey="sheetName" sortState={sortState} onSort={onSort} />
             <SortableTh label="盘口" sortKey="platform" sortState={sortState} onSort={onSort} />
             <SortableTh label="三方" sortKey="thirdParty" sortState={sortState} onSort={onSort} />
             <SortableTh label="状态" sortKey="status" sortState={sortState} onSort={onSort} />
@@ -1966,17 +1977,14 @@ function PlatformStatusTable({ rows, totalRows = rows, sortState, onSort }: { ro
             <th>代收单笔</th>
             <th>代付单笔</th>
             <SortableTh label="合计费率" sortKey="totalFee" sortState={sortState} onSort={onSort} />
-            <SortableTh label="代收最低限制" sortKey="collectLimit" sortState={sortState} onSort={onSort} />
-            <SortableTh label="代收最高限制" sortKey="collectLimit" sortState={sortState} onSort={onSort} />
-            <SortableTh label="代付最低限制" sortKey="payoutLimit" sortState={sortState} onSort={onSort} />
-            <SortableTh label="代付最高限制" sortKey="payoutLimit" sortState={sortState} onSort={onSort} />
+            <SortableTh label="代收范围" sortKey="collectLimit" sortState={sortState} onSort={onSort} />
+            <SortableTh label="代付范围" sortKey="payoutLimit" sortState={sortState} onSort={onSort} />
           </tr>
         </thead>
         <tbody>
           {rows.map((row) => (
             <tr key={row.id}>
               <td><span className="country-pill">{row.country}</span></td>
-              <td>{row.sheetName}</td>
               <td className="platform-cell">{row.platform}</td>
               <td className="platform-cell">{row.thirdParty}</td>
               <td><StatusBadge status={row.status} /></td>
@@ -1985,14 +1993,14 @@ function PlatformStatusTable({ rows, totalRows = rows, sortState, onSort }: { ro
               <td className="fee-cell">{row.collectSingleFee || "-"}</td>
               <td className="fee-cell">{row.payoutSingleFee || "-"}</td>
               <td className="fee-cell">{row.totalFee || "-"}</td>
-              {(() => { const limit = splitLimitValue(row.collectLimit); return <><td className="fee-cell">{limit.min}</td><td className="fee-cell">{limit.max}</td></>; })()}
-              {(() => { const limit = splitLimitValue(row.payoutLimit); return <><td className="fee-cell">{limit.min}</td><td className="fee-cell">{limit.max}</td></>; })()}
+              <td className="fee-cell">{compactFeeCell(row.collectLimit)}</td>
+              <td className="fee-cell">{compactFeeCell(row.payoutLimit)}</td>
             </tr>
           ))}
         </tbody>
         <tfoot>
-          <tr className="summary-row page-summary-row"><td colSpan={14}>当前页汇总</td><td className="muted-cell">共 {formatNumber(shownSummary.count)} 行</td></tr>
-          <tr className="summary-row overall-summary-row"><td colSpan={14}>全部汇总</td><td className="muted-cell">共 {formatNumber(allSummary.count)} 行</td></tr>
+          <tr className="summary-row page-summary-row"><td colSpan={10}>当前页汇总</td><td className="muted-cell">共 {formatNumber(shownSummary.count)} 行</td></tr>
+          <tr className="summary-row overall-summary-row"><td colSpan={10}>全部汇总</td><td className="muted-cell">共 {formatNumber(allSummary.count)} 行</td></tr>
         </tfoot>
       </table>
     </div>
@@ -2015,6 +2023,23 @@ function compactFeeDisplay(value: string): string {
 function compactFeeCell(value: string) {
   const text = compactFeeDisplay(value);
   return <span>{text || "-"}</span>;
+}
+
+function rateInfoValue(row: ThirdPartyRateRow, labels: string[]): string {
+  const info = String(row.channelInfo || "");
+  for (const label of labels) {
+    const pattern = new RegExp(`(?:^|\\s*/\\s*)${label}\\s*[:：]\\s*([^/]+)`, "i");
+    const match = info.match(pattern);
+    if (match?.[1]) {
+      const value = match[1].trim();
+      if (value) return value;
+    }
+  }
+  return "";
+}
+
+function rateStopReason(row: ThirdPartyRateRow): string {
+  return rateInfoValue(row, ["停用原因", "状态备注", "备注原因", "停用备注"]);
 }
 
 function rateBusinessStatus(row: ThirdPartyRateRow, kind: "collect" | "payout"): string {
@@ -2176,7 +2201,6 @@ function RateTable({ rows, totalRows = rows, sortState, onSort, onOpen }: { rows
         <thead>
           <tr>
             <SortableTh label="国家" sortKey="country" sortState={sortState} onSort={onSort} />
-            <SortableTh label="页签" sortKey="sheetName" sortState={sortState} onSort={onSort} />
             <SortableTh label="三方名称" sortKey="thirdParty" sortState={sortState} onSort={onSort} />
             <th>类型 / 钱包</th>
             <SortableTh label="合计费率" sortKey="totalFee" sortState={sortState} onSort={onSort} />
@@ -2184,10 +2208,8 @@ function RateTable({ rows, totalRows = rows, sortState, onSort, onOpen }: { rows
             <SortableTh label="代付手续费" sortKey="payoutFee" sortState={sortState} onSort={onSort} />
             <th>代收单笔</th>
             <th>代付单笔</th>
-            <SortableTh label="代收最低限制" sortKey="collectLimit" sortState={sortState} onSort={onSort} />
-            <SortableTh label="代收最高限制" sortKey="collectLimit" sortState={sortState} onSort={onSort} />
-            <SortableTh label="代付最低限制" sortKey="payoutLimit" sortState={sortState} onSort={onSort} />
-            <SortableTh label="代付最高限制" sortKey="payoutLimit" sortState={sortState} onSort={onSort} />
+            <SortableTh label="代收范围" sortKey="collectLimit" sortState={sortState} onSort={onSort} />
+            <SortableTh label="代付范围" sortKey="payoutLimit" sortState={sortState} onSort={onSort} />
             <th>代收状态</th>
             <th>代付状态</th>
             <th>详情</th>
@@ -2197,13 +2219,10 @@ function RateTable({ rows, totalRows = rows, sortState, onSort, onOpen }: { rows
           {grouped.map((row) => {
             const isOpen = expanded.includes(row.id);
             const first = row.rows[0];
-            const collectLimit = splitLimitValue(row.collectLimit);
-            const payoutLimit = splitLimitValue(row.payoutLimit);
             return (
               <Fragment key={row.id}>
                 <tr>
                   <td><span className="country-pill">{row.country}</span></td>
-                  <td>{row.sheetName}</td>
                   <td className="platform-cell">{row.thirdParty}</td>
                   <td>{row.category}</td>
                   <td className="fee-cell">{compactFeeCell(row.totalFee)}</td>
@@ -2211,20 +2230,18 @@ function RateTable({ rows, totalRows = rows, sortState, onSort, onOpen }: { rows
                   <td className="fee-cell">{compactFeeCell(row.payoutFee)}</td>
                   <td className="fee-cell">{compactFeeCell(row.collectSingleFee)}</td>
                   <td className="fee-cell">{compactFeeCell(row.payoutSingleFee)}</td>
-                  <td className="fee-cell">{compactFeeCell(collectLimit.min)}</td>
-                  <td className="fee-cell">{compactFeeCell(collectLimit.max)}</td>
-                  <td className="fee-cell">{compactFeeCell(payoutLimit.min)}</td>
-                  <td className="fee-cell">{compactFeeCell(payoutLimit.max)}</td>
+                  <td className="fee-cell">{compactFeeCell(row.collectLimit)}</td>
+                  <td className="fee-cell">{compactFeeCell(row.payoutLimit)}</td>
                   <td><BusinessStatusCell value={row.collectStatus} /></td>
                   <td><BusinessStatusCell value={row.payoutStatus} /></td>
                   <td className="action-cell">
                     {row.multi ? <button className="ghost-btn small" type="button" onClick={() => toggle(row.id)}>{isOpen ? "收起" : "展开"}</button> : null}
-                    <button className="ghost-btn small" type="button" onClick={() => onOpen(first)}>接入平台</button>
+                    <button className="ghost-btn small" type="button" onClick={() => onOpen(first)}>查看</button>
                   </td>
                 </tr>
                 {row.multi && isOpen && (
                   <tr className="expanded-subrow">
-                    <td colSpan={16}><RateSubTable rows={row.rows} /></td>
+                    <td colSpan={13}><RateSubTable rows={row.rows} /></td>
                   </tr>
                 )}
               </Fragment>
@@ -2232,8 +2249,8 @@ function RateTable({ rows, totalRows = rows, sortState, onSort, onOpen }: { rows
           })}
         </tbody>
         <tfoot>
-          <tr className="summary-row page-summary-row"><td colSpan={14}>当前页汇总</td><td>{formatNumber(shownSummary.count)} 组</td><td className="muted-cell">多类型 {formatNumber(shownSummary.multi)} 组</td></tr>
-          <tr className="summary-row overall-summary-row"><td colSpan={14}>全部汇总</td><td>{formatNumber(allSummary.count)} 组</td><td className="muted-cell">多类型 {formatNumber(allSummary.multi)} 组</td></tr>
+          <tr className="summary-row page-summary-row"><td colSpan={11}>当前页汇总</td><td>{formatNumber(shownSummary.count)} 组</td><td className="muted-cell">多类型 {formatNumber(shownSummary.multi)} 组</td></tr>
+          <tr className="summary-row overall-summary-row"><td colSpan={11}>全部汇总</td><td>{formatNumber(allSummary.count)} 组</td><td className="muted-cell">多类型 {formatNumber(allSummary.multi)} 组</td></tr>
         </tfoot>
       </table>
     </div>

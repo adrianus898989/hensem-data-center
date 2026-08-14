@@ -2375,7 +2375,7 @@ export default function ThirdPartyVolumeDashboard() {
           <div className="field"><label>统一三方</label><select className="input" value={channel} onChange={(event) => { setChannel(event.target.value); setChannelTypeSelections([]); }}><option value="">全部三方</option>{channels.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
           <VolumeMultiSelect label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" />
           <div className="field"><label>业务方向</label><select className="input" value={direction} onChange={(event) => setDirection(event.target.value)}><option value="">全部方向</option><option value="代收">代收</option><option value="代付">代付</option></select></div>
-          <div className="action-row action-row-v2"><button className="primary-btn volume-query-btn" type="button" disabled={isQuerying} onClick={() => { void runQuery(); }}>{isQuerying ? "查询中…" : "查询"}</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(-1)}>上一周期</button><button className="ghost-btn" type="button" onClick={() => shiftDateRange(1)}>下一周期</button></div>
+          <div className="action-row action-row-v2"><button className="primary-btn volume-query-btn" type="button" disabled={isQuerying} onClick={() => { void runQuery(); }}>{isQuerying ? "查询中…" : "查询"}</button></div>
         </div>
       </section>
 
