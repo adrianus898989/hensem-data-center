@@ -1088,10 +1088,10 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
       return item.country === row.country && name === target;
     }));
     setAnomalyModal({
-      title: `${row.country} ${target} 接入盘口`,
+      title: `${row.country} ${target} 详情`,
       message: sameCountryStatusRows.length
-        ? `全部国家统一查看模式：上面显示已接入平台，下面显示未接入/不支持平台，再下面显示对应三方费率资料。当前匹配 ${sameCountryStatusRows.length} 条接入状态。`
-        : `全部国家统一查看模式：没有匹配到接入盘口；下面保留费率资料方便核对。`,
+        ? `费率资料严格按 Google 费率表字段展示；下方再看各盘口接入状态。当前匹配 ${sameCountryStatusRows.length} 条盘口状态。`
+        : `费率资料严格按 Google 费率表字段展示；当前没有匹配到盘口接入状态。`,
       statusRows: sameCountryStatusRows.slice(0, 300),
       rateRows: sameCountryRateRows.slice(0, 120)
     });
@@ -1243,7 +1243,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
       )}
 
       {mainView === "dashboard" && view === "rates" && (
-        <RatePanel title="三方费率表" subtitle="主表只保留常用费率、范围和状态；停用原因、完整资料、接入盘口请点「查看」。">
+        <RatePanel title="三方费率表" subtitle="主表严格对齐 Google 的合计费率、代收/代付合计、范围和业务状态；详细手续费、停用原因、通道能力与接入盘口请点「查看」。">
           <RatePagination total={sortedRateRows.length} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
           <RateTable rows={paginateRows(sortedRateRows, page, pageSize)} totalRows={sortedRateRows} sortState={rateSort} onSort={toggleRateSort} onOpen={openRateAccess} />
         </RatePanel>
@@ -1277,7 +1277,7 @@ function CountryRatePage({ country, statusRows, rateRows, highFeeRows, anomalies
           <p>这里只显示 {country || "当前国家"} 的三方费率、盘口接入状态和异常；主三方名称按映射表统一。</p>
         </div>
       </section>
-      <RatePanel title={`${countryPaneLabel(country)} 三方费率明细`} subtitle="当前国家的费率资料放在最上面；多类型点击查看会展开完整类型费率。">
+      <RatePanel title={`${countryPaneLabel(country)} 三方费率明细`} subtitle="当前国家主表按 Google 原始费率字段显示；详细手续费、停用原因、通道能力与接入盘口统一放在「查看」。">
         <RateTable rows={[...rateRows].sort(compareRateSourceOrder).slice(0, 200)} sortState={{ key: "sourceOrder", direction: "asc" }} onSort={() => undefined} onOpen={onOpenRate} />
       </RatePanel>
       <section className="metrics rate-metrics">
@@ -1683,11 +1683,33 @@ function AnomalyList({ items, expanded = false, onOpen }: { items: string[]; exp
 
 function RateAnomalyModal({ detail, onClose }: { detail: RateAnomalyDetail; onClose: () => void }) {
   const notConnectedStatuses = new Set(["未接入", "不支持", "对接中", "未知"]);
-  const connectedRows = detail.statusRows.filter((row) => !notConnectedStatuses.has(row.status || "未知"));
-  const missingRows = detail.statusRows.filter((row) => notConnectedStatuses.has(row.status || "未知"));
+  const connectedRows = [...detail.statusRows]
+    .filter((row) => !notConnectedStatuses.has(row.status || "未知"))
+    .sort(compareStatusSourceOrder);
+  const missingRows = [...detail.statusRows]
+    .filter((row) => notConnectedStatuses.has(row.status || "未知"))
+    .sort(compareStatusSourceOrder);
+
+  const detailFieldDefs: Array<[string, string[]]> = [
+    ["代收情况", ["代收情况"]],
+    ["代付情况", ["代付情况"]],
+    ["创建单子非整数", ["创建单子非整数", "创建单子小数点"]],
+    ["授信", ["授信"]],
+    ["公户打款", ["公户打款"]],
+    ["限额最高", ["限额最高"]],
+    ["打款时间", ["打款时间"]],
+    ["通知群组", ["切换通道通知出款群组名称", "切换通道通知群组名称"]],
+    ["三方收款UPI账号", ["三方收款UPI账号", "收款UPI账号"]],
+    ["是否愿意升级", ["三方是否愿意升级", "是否愿意升级"]],
+    ["IFSC 支持", ["请问我们商户是否支持IFSC AIRP0000001", "IFSC支持", "是否支持IFSC"]],
+    ["UTR 查单补单", ["UTR接口查单补单", "UTR查单补单"]],
+    ["代付成功返回UTR", ["代付出款成功支持UTR返回", "代付成功支持UTR返回"]],
+    ["收款账户类型", ["收款是使用公户还是 个人", "收款是使用公户还是个人"]]
+  ];
+
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
-      <div className="detail-modal rate-detail-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+      <div className="detail-modal rate-detail-modal tidy-rate-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
         <div className="detail-modal-header">
           <div>
             <h3>{detail.title}</h3>
@@ -1697,17 +1719,76 @@ function RateAnomalyModal({ detail, onClose }: { detail: RateAnomalyDetail; onCl
         </div>
 
         <div className="detail-modal-body">
-          {detail.title.includes("接入盘口") && (
-            <div className="rate-access-mode-note">
-              查看模式适用全部国家：先看已接入平台，再看未接入 / 不支持平台，最后看该三方的各类型费率明细。
-            </div>
-          )}
-          <div className="modal-section-title">已接入平台（{connectedRows.length} 个）</div>
-          <div className="modal-chip-list">
+          <div className="modal-section-title">费率与业务资料（{detail.rateRows.length} 条）</div>
+          <div className="modal-card-grid">
+            {detail.rateRows.map((row) => {
+              const collectStatus = rateBusinessStatus(row, "collect") || "-";
+              const payoutStatus = rateBusinessStatus(row, "payout") || "-";
+              const stopReason = rateStopReason(row);
+              const extraFields = detailFieldDefs
+                .map(([label, aliases]) => [label, rateInfoValue(row, aliases)] as [string, string])
+                .filter(([, value]) => value && value !== "-");
+              return (
+                <div className="modal-data-card tidy-rate-card" key={row.id}>
+                  <div className="detail-card-head tidy-detail-card-head">
+                    <div>
+                      <strong>{row.thirdParty}</strong>
+                      <span>{row.country} · {row.category || "-"}</span>
+                    </div>
+                    <div className="detail-status-pair">
+                      <span>代收 <StatusBadge status={collectStatus} /></span>
+                      <span>代付 <StatusBadge status={payoutStatus} /></span>
+                    </div>
+                  </div>
+
+                  <div className="rate-detail-section">
+                    <div className="rate-detail-section-title">费率</div>
+                    <div className="tidy-info-grid primary-rate-grid">
+                      <div><span>合计费率</span><b>{row.totalFee || "-"}</b></div>
+                      <div><span>代收合计%+单笔</span><b>{rateCombinedFee(row, "collect")}</b></div>
+                      <div><span>代付合计%+单笔</span><b>{rateCombinedFee(row, "payout")}</b></div>
+                      <div><span>代收费率</span><b>{row.collectFee || "-"}</b></div>
+                      <div><span>代付费率</span><b>{row.payoutFee || "-"}</b></div>
+                      <div><span>代收单笔</span><b>{row.collectSingleFee || "-"}</b></div>
+                      <div><span>代付单笔</span><b>{row.payoutSingleFee || "-"}</b></div>
+                      <div><span>代收范围</span><b>{row.collectLimit || "-"}</b></div>
+                      <div><span>代付范围</span><b>{row.payoutLimit || "-"}</b></div>
+                    </div>
+                  </div>
+
+                  <div className="rate-detail-section">
+                    <div className="rate-detail-section-title">状态 / 停用原因</div>
+                    <div className="tidy-info-grid status-info-grid">
+                      <div><span>代收状态</span><div className="status-value"><BusinessStatusCell value={collectStatus} /></div></div>
+                      <div><span>代付状态</span><div className="status-value"><BusinessStatusCell value={payoutStatus} /></div></div>
+                      {row.status ? <div><span>表格状态</span><b>{row.status}</b></div> : null}
+                      <div className="wide-info-cell"><span>停用原因 / 状态备注</span><b>{stopReason || "-"}</b></div>
+                    </div>
+                  </div>
+
+                  {extraFields.length ? (
+                    <div className="rate-detail-section">
+                      <div className="rate-detail-section-title">通道能力 / 运营资料</div>
+                      <div className="tidy-info-grid capability-grid">
+                        {extraFields.map(([label, value]) => <div key={label}><span>{label}</span><b>{value}</b></div>)}
+                        <div><span>白名单</span><b>{row.whitelist || "-"}</b></div>
+                        <div><span>是否有漏洞</span><b>{row.leak || "-"}</b></div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="rate-source-line">数据来源：{row.sheetName || "-"} · 第 {row.sourceRow || "-"} 行</div>
+                </div>
+              );
+            })}
+            {!detail.rateRows.length && <div className="empty">没有匹配的费率资料</div>}
+          </div>
+
+          <div className="modal-section-title">已接入 / 可用平台（{connectedRows.length} 个）</div>
+          <div className="modal-chip-list tidy-platform-grid">
             {connectedRows.map((row) => (
-              <div className="modal-platform-chip" key={row.id}>
+              <div className="modal-platform-chip tidy-platform-chip" key={row.id}>
                 <strong>{row.platform}</strong>
-                <span>{row.country} · {row.sheetName}</span>
                 <StatusBadge status={row.status || "未知"} />
               </div>
             ))}
@@ -1715,47 +1796,14 @@ function RateAnomalyModal({ detail, onClose }: { detail: RateAnomalyDetail; onCl
           </div>
 
           <div className="modal-section-title">未接入 / 不支持平台（{missingRows.length} 个）</div>
-          <div className="modal-chip-list">
+          <div className="modal-chip-list tidy-platform-grid">
             {missingRows.map((row) => (
-              <div className="modal-platform-chip muted-platform-chip" key={row.id}>
+              <div className="modal-platform-chip muted-platform-chip tidy-platform-chip" key={row.id}>
                 <strong>{row.platform}</strong>
-                <span>{row.country} · {row.sheetName}</span>
                 <StatusBadge status={row.status || "未知"} />
               </div>
             ))}
             {!missingRows.length && <div className="empty">暂无未接入平台</div>}
-          </div>
-
-          <div className="modal-section-title">相关三方费率资料（{detail.rateRows.length} 条）</div>
-          <div className="modal-card-grid">
-            {detail.rateRows.map((row) => (
-              <div className="modal-data-card" key={row.id}>
-                <div className="detail-card-head">
-                  <div>
-                    <strong>{row.thirdParty}</strong>
-                    <span>{row.country} · {row.sheetName} · {row.category || "-"}</span>
-                  </div>
-                  <StatusBadge status={row.status || "未知"} />
-                </div>
-                <div className="modal-mini-grid">
-                  <div><span>合计费率</span><b>{row.totalFee || "-"}</b></div>
-                  <div><span>代收手续费</span><b>{row.collectFee || "-"}</b></div>
-                  <div><span>代付手续费</span><b>{row.payoutFee || "-"}</b></div>
-                  <div><span>代收单笔</span><b>{row.collectSingleFee || "-"}</b></div>
-                  <div><span>代付单笔</span><b>{row.payoutSingleFee || "-"}</b></div>
-                  <div><span>代收范围</span><b>{row.collectLimit || "-"}</b></div>
-                  <div><span>代付范围</span><b>{row.payoutLimit || "-"}</b></div>
-                  <div><span>代收状态</span><b>{rateBusinessStatus(row, "collect") || row.status || "-"}</b></div>
-                  <div><span>代付状态</span><b>{rateBusinessStatus(row, "payout") || row.status || "-"}</b></div>
-                  <div><span>停用原因 / 状态备注</span><b>{rateStopReason(row) || "-"}</b></div>
-                  <div><span>白名单</span><b>{row.whitelist || "-"}</b></div>
-                  <div><span>是否有漏洞</span><b>{row.leak || "-"}</b></div>
-                  <div><span>完整通道资料</span><b>{row.channelInfo || "-"}</b></div>
-                  <div><span>数据位置</span><b>{row.sheetName || "-"} · 第 {row.sourceRow || "-"} 行</b></div>
-                </div>
-              </div>
-            ))}
-            {!detail.rateRows.length && <div className="empty">没有匹配的费率资料</div>}
           </div>
         </div>
       </div>
@@ -2025,38 +2073,49 @@ function compactFeeCell(value: string) {
   return <span>{text || "-"}</span>;
 }
 
+function rateInfoEntries(row: ThirdPartyRateRow): Array<[string, string]> {
+  return String(row.channelInfo || "")
+    .split(/\s+\/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const match = part.match(/^([^:：]+)\s*[:：]\s*(.*)$/);
+      return match ? [match[1].trim(), match[2].trim()] as [string, string] : ["", part] as [string, string];
+    });
+}
+
 function rateInfoValue(row: ThirdPartyRateRow, labels: string[]): string {
-  const info = String(row.channelInfo || "");
-  for (const label of labels) {
-    const pattern = new RegExp(`(?:^|\\s*/\\s*)${label}\\s*[:：]\\s*([^/]+)`, "i");
-    const match = info.match(pattern);
-    if (match?.[1]) {
-      const value = match[1].trim();
-      if (value) return value;
-    }
+  const targets = labels.map((label) => label.toLowerCase());
+  for (const [label, value] of rateInfoEntries(row)) {
+    const key = label.toLowerCase();
+    if (targets.includes(key) && value) return value;
   }
   return "";
+}
+
+function rateCombinedFee(row: ThirdPartyRateRow, kind: "collect" | "payout"): string {
+  const raw = kind === "collect"
+    ? rateInfoValue(row, ["代收合计%+单笔", "代收合计", "收款合计%+单笔"])
+    : rateInfoValue(row, ["代付合计%+单笔", "代付合计", "付款合计%+单笔", "出款合计%+单笔"]);
+  if (raw) return raw;
+
+  const fee = String((kind === "collect" ? row.collectFee : row.payoutFee) || "").trim();
+  const single = String((kind === "collect" ? row.collectSingleFee : row.payoutSingleFee) || "").trim();
+  if (!fee) return single || "-";
+  // 阶梯费率本身已经包含“以上/以下/+单笔”等说明时，不再重复拼接单笔。
+  if (/以上|以下|\+\s*\d|单笔/.test(fee)) return fee;
+  if (!single || /^(没有|无|-|—|0(?:\.0+)?)$/i.test(single)) return `${fee} + 0`;
+  return `${fee} + ${single}`;
 }
 
 function rateStopReason(row: ThirdPartyRateRow): string {
-  return rateInfoValue(row, ["停用原因", "状态备注", "备注原因", "停用备注"]);
+  return rateInfoValue(row, ["停用原因", "状态备注", "状态备注内容", "备注原因", "停用备注"]);
 }
 
 function rateBusinessStatus(row: ThirdPartyRateRow, kind: "collect" | "payout"): string {
-  const info = String(row.channelInfo || "");
-  const labels = kind === "collect"
-    ? ["代收状态", "代收情况"]
-    : ["代付状态", "代付情况"];
-
-  for (const label of labels) {
-    const pattern = new RegExp(`(?:^|\\s*/\\s*)${label}\\s*[:：]\\s*([^/]+)`, "i");
-    const match = info.match(pattern);
-    if (match?.[1]) {
-      const value = match[1].trim();
-      if (value) return value;
-    }
-  }
-  return "";
+  return kind === "collect"
+    ? rateInfoValue(row, ["代收状态", "代收情况"])
+    : rateInfoValue(row, ["代付状态", "代付情况"]);
 }
 
 function BusinessStatusCell({ value }: { value: string }) {
@@ -2186,71 +2245,52 @@ function RateSubTable({ rows }: { rows: ThirdPartyRateRow[] }) {
 }
 
 function RateTable({ rows, totalRows = rows, sortState, onSort, onOpen }: { rows: ThirdPartyRateRow[]; totalRows?: ThirdPartyRateRow[]; sortState: SortState; onSort: (key: string) => void; onOpen: (row: ThirdPartyRateRow) => void }) {
-  const [expanded, setExpanded] = useState<string[]>([]);
   const grouped = useMemo(() => groupedRateRows(rows), [rows]);
   const totalGrouped = useMemo(() => groupedRateRows(totalRows), [totalRows]);
   const shownSummary = summarizeRateGroups(grouped);
   const allSummary = summarizeRateGroups(totalGrouped);
   if (!grouped.length) return <div className="empty">没有匹配的三方费率资料</div>;
-  function toggle(id: string) {
-    setExpanded((prev) => prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]);
-  }
   return (
-    <div className="table-wrap rate-table-wrap">
+    <div className="table-wrap rate-table-wrap tidy-main-rate-table">
       <table>
         <thead>
           <tr>
             <SortableTh label="国家" sortKey="country" sortState={sortState} onSort={onSort} />
             <SortableTh label="三方名称" sortKey="thirdParty" sortState={sortState} onSort={onSort} />
-            <th>类型 / 钱包</th>
+            <th>类型</th>
             <SortableTh label="合计费率" sortKey="totalFee" sortState={sortState} onSort={onSort} />
-            <SortableTh label="代收手续费" sortKey="collectFee" sortState={sortState} onSort={onSort} />
-            <SortableTh label="代付手续费" sortKey="payoutFee" sortState={sortState} onSort={onSort} />
-            <th>代收单笔</th>
-            <th>代付单笔</th>
+            <th>代收合计%+单笔</th>
+            <th>代付合计%+单笔</th>
             <SortableTh label="代收范围" sortKey="collectLimit" sortState={sortState} onSort={onSort} />
             <SortableTh label="代付范围" sortKey="payoutLimit" sortState={sortState} onSort={onSort} />
             <th>代收状态</th>
             <th>代付状态</th>
-            <th>详情</th>
+            <th>查看</th>
           </tr>
         </thead>
         <tbody>
           {grouped.map((row) => {
-            const isOpen = expanded.includes(row.id);
             const first = row.rows[0];
             return (
-              <Fragment key={row.id}>
-                <tr>
-                  <td><span className="country-pill">{row.country}</span></td>
-                  <td className="platform-cell">{row.thirdParty}</td>
-                  <td>{row.category}</td>
-                  <td className="fee-cell">{compactFeeCell(row.totalFee)}</td>
-                  <td className="fee-cell">{compactFeeCell(row.collectFee)}</td>
-                  <td className="fee-cell">{compactFeeCell(row.payoutFee)}</td>
-                  <td className="fee-cell">{compactFeeCell(row.collectSingleFee)}</td>
-                  <td className="fee-cell">{compactFeeCell(row.payoutSingleFee)}</td>
-                  <td className="fee-cell">{compactFeeCell(row.collectLimit)}</td>
-                  <td className="fee-cell">{compactFeeCell(row.payoutLimit)}</td>
-                  <td><BusinessStatusCell value={row.collectStatus} /></td>
-                  <td><BusinessStatusCell value={row.payoutStatus} /></td>
-                  <td className="action-cell">
-                    {row.multi ? <button className="ghost-btn small" type="button" onClick={() => toggle(row.id)}>{isOpen ? "收起" : "展开"}</button> : null}
-                    <button className="ghost-btn small" type="button" onClick={() => onOpen(first)}>查看</button>
-                  </td>
-                </tr>
-                {row.multi && isOpen && (
-                  <tr className="expanded-subrow">
-                    <td colSpan={13}><RateSubTable rows={row.rows} /></td>
-                  </tr>
-                )}
-              </Fragment>
+              <tr key={row.id}>
+                <td><span className="country-pill">{row.country}</span></td>
+                <td className="platform-cell main-party-name">{row.thirdParty}</td>
+                <td className="type-cell">{row.category}</td>
+                <td className="fee-cell total-fee-cell">{compactFeeCell(row.totalFee)}</td>
+                <td className="fee-cell combined-fee-cell">{joinUnique(row.rows.map((item) => rateCombinedFee(item, "collect")))}</td>
+                <td className="fee-cell combined-fee-cell">{joinUnique(row.rows.map((item) => rateCombinedFee(item, "payout")))}</td>
+                <td className="fee-cell range-cell">{compactFeeCell(row.collectLimit)}</td>
+                <td className="fee-cell range-cell">{compactFeeCell(row.payoutLimit)}</td>
+                <td><BusinessStatusCell value={row.collectStatus} /></td>
+                <td><BusinessStatusCell value={row.payoutStatus} /></td>
+                <td className="action-cell"><button className="ghost-btn small" type="button" onClick={() => onOpen(first)}>查看</button></td>
+              </tr>
             );
           })}
         </tbody>
         <tfoot>
-          <tr className="summary-row page-summary-row"><td colSpan={11}>当前页汇总</td><td>{formatNumber(shownSummary.count)} 组</td><td className="muted-cell">多类型 {formatNumber(shownSummary.multi)} 组</td></tr>
-          <tr className="summary-row overall-summary-row"><td colSpan={11}>全部汇总</td><td>{formatNumber(allSummary.count)} 组</td><td className="muted-cell">多类型 {formatNumber(allSummary.multi)} 组</td></tr>
+          <tr className="summary-row page-summary-row"><td colSpan={9}>当前页汇总</td><td>{formatNumber(shownSummary.count)} 组</td><td className="muted-cell">多类型 {formatNumber(shownSummary.multi)} 组</td></tr>
+          <tr className="summary-row overall-summary-row"><td colSpan={9}>全部汇总</td><td>{formatNumber(allSummary.count)} 组</td><td className="muted-cell">多类型 {formatNumber(allSummary.multi)} 组</td></tr>
         </tfoot>
       </table>
     </div>
