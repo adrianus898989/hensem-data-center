@@ -1944,9 +1944,33 @@ export function applyConfirmedRateRules(
   rateRows: ThirdPartyRateRow[],
   statusRows: ThirdPartyPlatformStatusRow[]
 ): { rates: ThirdPartyRateRow[]; statuses: ThirdPartyPlatformStatusRow[] } {
-  // V232：Google 费率表是唯一费率来源。
-  // 这里不再补写、覆盖或固定任何百分比和单笔费用；名称归并由 thirdPartyNameMap 负责。
-  return { rates: rateRows, statuses: statusRows };
+  // Google 费率表仍是唯一费率来源；这里只处理用户已确认的类型别名，不写死任何费率数值。
+  const rates = [...rateRows];
+  const hasMexicoStarpagoClabe = rates.some((row) =>
+    normalizeCell(row.country) === "墨西哥" &&
+    canonicalThirdPartyName(row.thirdParty, row.country) === "STARPAGO" &&
+    normalizeCell(row.category).toUpperCase() === "CLABE"
+  );
+
+  // 用户确认：墨西哥业务量中的 STARPAGO/CLABE 对应费率表的 STARPAGO/SPEI。
+  // 复制源行的实时费率作为 CLABE 类型别名，Google 表变更后会随下一次同步自动更新。
+  if (!hasMexicoStarpagoClabe) {
+    const source = rates.find((row) =>
+      normalizeCell(row.country) === "墨西哥" &&
+      canonicalThirdPartyName(row.thirdParty, row.country) === "STARPAGO" &&
+      normalizeCell(row.category).toUpperCase() === "SPEI"
+    );
+    if (source) {
+      rates.push({
+        ...source,
+        id: `${source.id}-confirmed-clabe`,
+        category: "CLABE",
+        channelInfo: `${source.channelInfo || "Google费率表直读"} / 已确认 STARPAGO SPEI=CLABE`
+      });
+    }
+  }
+
+  return { rates, statuses: statusRows };
 }
 
 export function buildThirdPartyRatePayload(sheetValues: Record<string, Values>): ThirdPartyRatePayload {
