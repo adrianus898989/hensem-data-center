@@ -603,6 +603,8 @@ function confirmedUserThirdPartyAlias(value: string, country?: string): string {
 
   // 已确认的印度主三方别名。这里只统一名称，不写任何费率。
   if (c === "印度") {
+    // Intnet 在三方量表中写作 Intnet-QR，费率表中写作 Intnetpay；统一后才能稳定匹配费率。
+    if (/^(intnet|intnetpay|intnetqr)$/.test(key)) return "Intnet";
     if (/^(ic2pay|ic2payqr|paytmic2pay|icpay|icpayqr|icpayinr)$/.test(key)) return "ICPay";
     if (/^(ox2pay|ox2payqr|paytmox2pay|oxpay|oxpayqr|paytmoxpay)$/.test(key)) return "OXPay";
     if (/^(arbpay|arbpayinr)$/.test(key)) return "ArbPay";
