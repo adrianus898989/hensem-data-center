@@ -1816,7 +1816,7 @@ function v166ParseUnifiedRateSheet(sheetName: string, values: Values): { rates: 
   if (nameCol < 0) return { rates: [], statuses: [] };
 
   const countryCol = v166HeaderFind(headers, (key) => key === "国家" || key === "国家地区" || key === "地区", dataBoundary);
-  const categoryCols = v166HeaderFindAll(headers, (key, raw, index) => index <= dataBoundary && (/^(类型|通道类型|分类|钱包)$/.test(key) || /三方代收通道|通道类型|结算周期/.test(key)), dataBoundary);
+  const categoryCols = v166HeaderFindAll(headers, (key, raw, index) => index <= dataBoundary && (/^(类型|通道类型|分类|钱包)$/.test(key) || /三方代收通道|通道类型/.test(key)), dataBoundary);
   const statusCol = findUsableStatusColumn(headers);
   const leakCol = v166HeaderFind(headers, (key) => /漏洞/.test(key), dataBoundary);
   const whitelistCol = v166HeaderFind(headers, (key) => /白名单/.test(key), dataBoundary);
