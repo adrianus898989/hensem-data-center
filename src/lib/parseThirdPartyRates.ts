@@ -1182,6 +1182,14 @@ function collectPakistanVariant(row: string[], headers: string[], variant: "easy
 
 function directNormalizeCategory(country: string, rawCategory: string, thirdParty: string, rowText: string, sheetName: string): string {
   const base = normalizeCell(rawCategory);
+  if (country.includes("越南")) {
+    const vnCategory = normalizeCell(base).toLowerCase().replace(/[^a-z0-9一-龥]+/g, "");
+    if (/bankqr/.test(vnCategory)) return "BANKQR";
+    if (/viettel/.test(vnCategory)) return "VIETTEL";
+    if (/zalo/.test(vnCategory)) return "ZALO";
+    if (/momo/.test(vnCategory)) return "MOMO";
+    if (/thecao|thẻcào/.test(vnCategory)) return "THẺ CÀO";
+  }
   const southAmericaCategory = normalizeSouthAmericaRateCategory(country, base, rowText);
   if (southAmericaCategory) return southAmericaCategory;
   if (country.includes("巴基斯坦")) {
