@@ -872,6 +872,18 @@ function estimateSideFee(amount: number, count: number, percentRate: number, sin
 function normalizeRateCategory(country: string, value?: string): string {
   const text = String(value || "").trim();
   if (!text) return "";
+
+  // 越南费率必须保留具体通道类型；BANKQR、VIETTEL、ZALO 不能再次压成“银行/其他类型”，
+  // 否则同一 FASTPay 的 0.60%、0.80%、2.30% 会写入同一个费率索引并互相覆盖。
+  if (normalizeCountryLabel(country).includes("越南")) {
+    const key = normalizeMatchKey(text);
+    if (/bankqr/.test(key)) return "BANKQR";
+    if (/viettel/.test(key)) return "VIETTEL";
+    if (/zalo/.test(key)) return "ZALO";
+    if (/momo/.test(key)) return "MOMO";
+    if (/thecao/.test(key)) return "THẺ CÀO";
+  }
+
   return inferThirdPartyChannelType(text, country, text) || text;
 }
 

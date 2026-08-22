@@ -1182,6 +1182,14 @@ function collectPakistanVariant(row: string[], headers: string[], variant: "easy
 
 function directNormalizeCategory(country: string, rawCategory: string, thirdParty: string, rowText: string, sheetName: string): string {
   const base = normalizeCell(rawCategory);
+  if (country.includes("越南")) {
+    const vnCategory = normalizeCell(base).toLowerCase().replace(/[^a-z0-9一-龥]+/g, "");
+    if (/bankqr/.test(vnCategory)) return "BANKQR";
+    if (/viettel/.test(vnCategory)) return "VIETTEL";
+    if (/zalo/.test(vnCategory)) return "ZALO";
+    if (/momo/.test(vnCategory)) return "MOMO";
+    if (/thecao|thẻcào/.test(vnCategory)) return "THẺ CÀO";
+  }
   const southAmericaCategory = normalizeSouthAmericaRateCategory(country, base, rowText);
   if (southAmericaCategory) return southAmericaCategory;
   if (country.includes("巴基斯坦")) {
@@ -1816,7 +1824,7 @@ function v166ParseUnifiedRateSheet(sheetName: string, values: Values): { rates: 
   if (nameCol < 0) return { rates: [], statuses: [] };
 
   const countryCol = v166HeaderFind(headers, (key) => key === "国家" || key === "国家地区" || key === "地区", dataBoundary);
-  const categoryCols = v166HeaderFindAll(headers, (key, raw, index) => index <= dataBoundary && (/^(类型|通道类型|分类|钱包)$/.test(key) || /三方代收通道|通道类型|结算周期/.test(key)), dataBoundary);
+  const categoryCols = v166HeaderFindAll(headers, (key, raw, index) => index <= dataBoundary && (/^(类型|通道类型|分类|钱包)$/.test(key) || /三方代收通道|通道类型/.test(key)), dataBoundary);
   const statusCol = findUsableStatusColumn(headers);
   const leakCol = v166HeaderFind(headers, (key) => /漏洞/.test(key), dataBoundary);
   const whitelistCol = v166HeaderFind(headers, (key) => /白名单/.test(key), dataBoundary);
@@ -1944,9 +1952,33 @@ export function applyConfirmedRateRules(
   rateRows: ThirdPartyRateRow[],
   statusRows: ThirdPartyPlatformStatusRow[]
 ): { rates: ThirdPartyRateRow[]; statuses: ThirdPartyPlatformStatusRow[] } {
-  // V232：Google 费率表是唯一费率来源。
-  // 这里不再补写、覆盖或固定任何百分比和单笔费用；名称归并由 thirdPartyNameMap 负责。
-  return { rates: rateRows, statuses: statusRows };
+  // Google 费率表仍是唯一费率来源；这里只处理用户已确认的类型别名，不写死任何费率数值。
+  const rates = [...rateRows];
+  const hasMexicoStarpagoClabe = rates.some((row) =>
+    normalizeCell(row.country) === "墨西哥" &&
+    canonicalThirdPartyName(row.thirdParty, row.country) === "STARPAGO" &&
+    normalizeCell(row.category).toUpperCase() === "CLABE"
+  );
+
+  // 用户确认：墨西哥业务量中的 STARPAGO/CLABE 对应费率表的 STARPAGO/SPEI。
+  // 复制源行的实时费率作为 CLABE 类型别名，Google 表变更后会随下一次同步自动更新。
+  if (!hasMexicoStarpagoClabe) {
+    const source = rates.find((row) =>
+      normalizeCell(row.country) === "墨西哥" &&
+      canonicalThirdPartyName(row.thirdParty, row.country) === "STARPAGO" &&
+      normalizeCell(row.category).toUpperCase() === "SPEI"
+    );
+    if (source) {
+      rates.push({
+        ...source,
+        id: `${source.id}-confirmed-clabe`,
+        category: "CLABE",
+        channelInfo: `${source.channelInfo || "Google费率表直读"} / 已确认 STARPAGO SPEI=CLABE`
+      });
+    }
+  }
+
+  return { rates, statuses: statusRows };
 }
 
 export function buildThirdPartyRatePayload(sheetValues: Record<string, Values>): ThirdPartyRatePayload {

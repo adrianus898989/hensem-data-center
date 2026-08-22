@@ -470,6 +470,8 @@ export function inferThirdPartyChannelType(value: string, country?: string, extr
   }
   if (cKey === "越南") {
     if (/momo|mo-mo|ví\s*momo|vi\s*momo/i.test(raw) || /momo/.test(text) || /momo/.test(compact)) return "MOMO";
+    if (/^(epay|megipay|epaymegi|epaymegipay)/.test(compact)) return "BANKQR";
+    if (/^(fast|fastpay|fastqr|fastpayqr|fastpayvnd|fastpayvndqr)/.test(compact) || /fast\s*pay\s*[-_]?\s*qr|fastpay\s*[-_]?\s*qr/i.test(raw)) return "BANKQR";
     if (/thẻ|the\s*cao|thecao|cào|cao|card|napthe|nạp\s*thẻ/.test(raw.toLowerCase())) return "THẺ CÀO";
     if (/bank|ngan|ngân|viet|vnbank|bidv|vietin|vietcom|acb|mbbank|techcom|tpbank/.test(text)) return "银行";
     return "其他类型";
@@ -593,6 +595,9 @@ function confirmedUserThirdPartyAlias(value: string, country?: string): string {
     if (/^(nova|novapay|pinoypay)$/.test(key)) return "PinoyPay";
   }
 
+  // 用户确认：越南 MegiPay / EPAY-MegiPay 就是 EPay。
+  if (c === "越南" && /^(megipay|epaymegi|epaymegipay)$/.test(key)) return "EPay";
+
   // 用户确认：巴基斯坦三方别名统一。
   if (c === "巴基斯坦") {
     if (/^(mcb|mcbpay|mcbjz|mcbjazz|mcbjzpay)$/.test(key)) return "MCBPay";
@@ -603,6 +608,8 @@ function confirmedUserThirdPartyAlias(value: string, country?: string): string {
 
   // 已确认的印度主三方别名。这里只统一名称，不写任何费率。
   if (c === "印度") {
+    // 用户确认：IcePay、Ice、Intnetpay、Intnet-QR 是同一个印度三方；统一后代收代付合并显示并匹配同一费率。
+    if (/^(ice|icepay|intnet|intnetpay|intnetqr)$/.test(key)) return "Intnet";
     if (/^(ic2pay|ic2payqr|paytmic2pay|icpay|icpayqr|icpayinr)$/.test(key)) return "ICPay";
     if (/^(ox2pay|ox2payqr|paytmox2pay|oxpay|oxpayqr|paytmoxpay)$/.test(key)) return "OXPay";
     if (/^(arbpay|arbpayinr)$/.test(key)) return "ArbPay";
