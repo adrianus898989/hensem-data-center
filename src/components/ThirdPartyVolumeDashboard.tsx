@@ -873,6 +873,10 @@ function normalizeRateCategory(country: string, value?: string): string {
   const text = String(value || "").trim();
   if (!text) return "";
 
+  // 印尼量表的 QRIS 与费率表的 QRIS 必须保持同一个精确类型。
+  // inferThirdPartyChannelType 可能把它扩写成“QRIS扫描”，导致精确费率失配后误走通用费率。
+  if (normalizeCountryLabel(country).includes("印尼") && /qris/i.test(text)) return "QRIS";
+
   // 越南费率必须保留具体通道类型；BANKQR、VIETTEL、ZALO 不能再次压成“银行/其他类型”，
   // 否则同一 FASTPay 的 0.60%、0.80%、2.30% 会写入同一个费率索引并互相覆盖。
   if (normalizeCountryLabel(country).includes("越南")) {
@@ -916,25 +920,29 @@ function isCoinvidUsdtChannel(country: string, platform: string, channel: string
   return normalizedCountry.includes("越南") && /coinvid/.test(text) && /usdt|trc20|tron/.test(text);
 }
 
+function feeFieldIsExplicit(value?: string): boolean {
+  const text = String(value || "").trim();
+  if (!text || text === "-" || text === "—" || /^(?:没有|无|n\/a|null|undefined)$/i.test(text)) return false;
+  // 0、0%、0.00% + 0 都是费率表明确配置的零费率，不能按空值处理。
+  return /\d/.test(text);
+}
+
 function rateHasFee(row: RateLike | undefined): boolean {
   if (!row) return false;
-  return !!(
-    parseFeeRate(row.collectFee) ||
-    parseFeeRate(row.payoutFee) ||
-    parseFeeRate(row.totalFee) ||
-    parseSingleFee(row.collectFee) ||
-    parseSingleFee(row.payoutFee) ||
-    parseSingleFee(row.collectSingleFee) ||
-    parseSingleFee(row.payoutSingleFee)
-  );
+  return [
+    row.collectFee,
+    row.payoutFee,
+    row.totalFee,
+    row.collectSingleFee,
+    row.payoutSingleFee
+  ].some(feeFieldIsExplicit);
 }
 
 function rateHasSideFee(row: RateLike | undefined, side: "collect" | "payout"): boolean {
   if (!row) return false;
-  if (side === "collect") {
-    return !!(parseFeeRate(row.collectFee) || parseSingleFee(row.collectFee) || parseSingleFee(row.collectSingleFee));
-  }
-  return !!(parseFeeRate(row.payoutFee) || parseSingleFee(row.payoutFee) || parseSingleFee(row.payoutSingleFee));
+  return side === "collect"
+    ? [row.collectFee, row.collectSingleFee].some(feeFieldIsExplicit)
+    : [row.payoutFee, row.payoutSingleFee].some(feeFieldIsExplicit);
 }
 
 function rateSideScore(row: RateLike | undefined, side: "collect" | "payout"): number {
@@ -1281,11 +1289,15 @@ function buildFeeCompareRows(comboRows: ComboSummary[], rateRows: ThirdPartyRate
     const payoutSingleFee = singleFeeFor(payoutRateRow, "payout", payoutAvgAmount);
     const collectFeeAmount = estimateSideFee(row.collectAmount, row.collectCount, collectFeeRate, collectSingleFee);
     const payoutFeeAmount = estimateSideFee(row.payoutAmount, row.payoutCount, payoutFeeRate, payoutSingleFee);
-    const isManualHandling = channel === "人工确认" || channel === "人工充值";
-    // 先正常对应 Google 费率表；只有人工处理通道在对应方向没有任何费率/单笔费时，才明确视为 0 手续费。
-    // 这样不会给其它真实三方擅自补 0，也不会把“未匹配”伪装成正常费率。
-    const collectFeeKnownZero = isManualHandling && sideHasValue(row.collectAmount, row.collectCount) && !rateHasSideFee(collectRateRow, "collect");
-    const payoutFeeKnownZero = isManualHandling && sideHasValue(row.payoutAmount, row.payoutCount) && !rateHasSideFee(payoutRateRow, "payout");
+    // 费率表明确写 0 时显示 0；真正未匹配的通道仍显示“-”，避免把缺失数据伪装成零费率。
+    const collectFeeKnownZero = sideHasValue(row.collectAmount, row.collectCount)
+      && rateHasSideFee(collectRateRow, "collect")
+      && collectFeeRate === 0
+      && collectSingleFee === 0;
+    const payoutFeeKnownZero = sideHasValue(row.payoutAmount, row.payoutCount)
+      && rateHasSideFee(payoutRateRow, "payout")
+      && payoutFeeRate === 0
+      && payoutSingleFee === 0;
     const estimatedFee = collectFeeAmount + payoutFeeAmount;
     const effectiveTotalFeeRate = row.totalAmount ? estimatedFee / row.totalAmount : totalFeeRate;
     return {
