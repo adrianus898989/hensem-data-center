@@ -209,6 +209,14 @@ function normalizeVolumeChannelType(country: string, platform: string, rawChanne
   const indiaRawKey = normalizeCell(rawChannel).toLowerCase().replace(/[^a-z0-9一-龥]+/g, "");
   if (country.includes("印度") && direction === "代付" && ["arbupi", "arbbank", "upiqr"].includes(indiaRawKey)) return "UPI";
 
+  // 用户确认：越南 MegiPay/EPay 以及普通 FASTPAY/FASTPAY-QR/FastPay(VND) 都是 BANKQR。
+  const vietnamRawKey = normalizeCell(rawChannel).toLowerCase().replace(/[^a-z0-9一-龥]+/g, "");
+  if (
+    country.includes("越南") &&
+    /^(fast|fastpay|fastqr|fastpayqr|fastpayvnd|fastpayvndqr|epay|megipay|epaymegi|epaymegipay)$/.test(vietnamRawKey) &&
+    !/momo|zalo|viettel|thẻ|thecao|thẻcào/.test(text)
+  ) return "BANKQR";
+
   const inferred = inferThirdPartyChannelType(rawChannel, country, `${platform} ${channel} ${typeText} ${mapCode} ${system} ${title} ${sheetName}`);
 
   if (country.includes("巴西")) return "PIX";
