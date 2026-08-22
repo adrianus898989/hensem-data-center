@@ -470,6 +470,8 @@ export function inferThirdPartyChannelType(value: string, country?: string, extr
   }
   if (cKey === "越南") {
     if (/momo|mo-mo|ví\s*momo|vi\s*momo/i.test(raw) || /momo/.test(text) || /momo/.test(compact)) return "MOMO";
+    if (/^(epay|megipay|epaymegi|epaymegipay)/.test(compact)) return "BANKQR";
+    if (/^(fast|fastpay|fastqr|fastpayqr|fastpayvnd|fastpayvndqr)/.test(compact) || /fast\s*pay\s*[-_]?\s*qr|fastpay\s*[-_]?\s*qr/i.test(raw)) return "BANKQR";
     if (/thẻ|the\s*cao|thecao|cào|cao|card|napthe|nạp\s*thẻ/.test(raw.toLowerCase())) return "THẺ CÀO";
     if (/bank|ngan|ngân|viet|vnbank|bidv|vietin|vietcom|acb|mbbank|techcom|tpbank/.test(text)) return "银行";
     return "其他类型";
@@ -592,6 +594,9 @@ function confirmedUserThirdPartyAlias(value: string, country?: string): string {
     if (/^(dypay|dypayv2)$/.test(key)) return "DyPay";
     if (/^(nova|novapay|pinoypay)$/.test(key)) return "PinoyPay";
   }
+
+  // 用户确认：越南 MegiPay / EPAY-MegiPay 就是 EPay。
+  if (c === "越南" && /^(megipay|epaymegi|epaymegipay)$/.test(key)) return "EPay";
 
   // 用户确认：巴基斯坦三方别名统一。
   if (c === "巴基斯坦") {
