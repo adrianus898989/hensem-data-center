@@ -475,6 +475,11 @@ export function inferThirdPartyChannelType(value: string, country?: string, extr
     if (/thẻ|the\s*cao|thecao|cào|cao|card|napthe|nạp\s*thẻ/.test(raw.toLowerCase()) || /thecao/.test(compact)) return "THẺ CÀO";
     if (/viettel/.test(text) || /viettel/.test(compact)) return "VIETTEL";
     if (/zalo/.test(text) || /zalo/.test(compact)) return "ZALO";
+    if (/usdt|trc20|erc20|tron/.test(text) || /usdt|trc20|erc20|tron/.test(compact)) return "USDT";
+    // 名称带 QR，或属于费率表 BANKQR 区的默认越南三方，统一按 BANKQR。
+    // 这里只维护业务类型归属，实际百分比和单笔费仍实时读取 Google 费率表。
+    if (/qr/.test(text) || /qr/.test(compact)) return "BANKQR";
+    if (/^(panpay|shijie|worldpay|vnbankpay|vnbank|v8pay|v8|quickpay|vnspay|vns|yespay|toppay)/.test(compact)) return "BANKQR";
     if (/^1vnpay/.test(compact) || /1vnpay\s*[-_]?\s*qr/i.test(raw)) return "BANKQR";
     if (/^(epay|megipay|epaymegi|epaymegipay)/.test(compact)) return "BANKQR";
     if (/^(fast|fastpay|fastqr|fastpayqr|fastpayvnd|fastpayvndqr)/.test(compact) || /fast\s*pay\s*[-_]?\s*qr|fastpay\s*[-_]?\s*qr/i.test(raw)) return "BANKQR";
