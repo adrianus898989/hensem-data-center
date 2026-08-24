@@ -469,10 +469,15 @@ export function inferThirdPartyChannelType(value: string, country?: string, extr
     return "其他类型";
   }
   if (cKey === "越南") {
+    // 越南同一主三方会把业务类型写在名称后缀中，必须先按后缀分类再匹配动态费率表。
+    // 1VNPay-MoMo / 1VNPay-THẺ CÀO 保留各自类型；1VNPay-QR 及无后缀的历史记录按 BANKQR。
     if (/momo|mo-mo|ví\s*momo|vi\s*momo/i.test(raw) || /momo/.test(text) || /momo/.test(compact)) return "MOMO";
+    if (/thẻ|the\s*cao|thecao|cào|cao|card|napthe|nạp\s*thẻ/.test(raw.toLowerCase()) || /thecao/.test(compact)) return "THẺ CÀO";
+    if (/viettel/.test(text) || /viettel/.test(compact)) return "VIETTEL";
+    if (/zalo/.test(text) || /zalo/.test(compact)) return "ZALO";
+    if (/^1vnpay/.test(compact) || /1vnpay\s*[-_]?\s*qr/i.test(raw)) return "BANKQR";
     if (/^(epay|megipay|epaymegi|epaymegipay)/.test(compact)) return "BANKQR";
     if (/^(fast|fastpay|fastqr|fastpayqr|fastpayvnd|fastpayvndqr)/.test(compact) || /fast\s*pay\s*[-_]?\s*qr|fastpay\s*[-_]?\s*qr/i.test(raw)) return "BANKQR";
-    if (/thẻ|the\s*cao|thecao|cào|cao|card|napthe|nạp\s*thẻ/.test(raw.toLowerCase())) return "THẺ CÀO";
     if (/bank|ngan|ngân|viet|vnbank|bidv|vietin|vietcom|acb|mbbank|techcom|tpbank/.test(text)) return "银行";
     return "其他类型";
   }
