@@ -694,8 +694,11 @@ export function normalizeThirdPartyVolumePayload(payload: ThirdPartyVolumePayloa
 
   const normalizedRows: ThirdPartyVolumeRow[] = sourceRows.map((row) => {
     const rawChannel = normalizeCell(row.rawChannel || row.channel || "");
+    // 主表分组必须始终使用已经归一化的 channel。rawChannel 只用于别名识别和类型判断，
+    // 不能反过来覆盖主名称，否则 “FastPay-QR / FastPay” 会被拆成新的第三方。
+    const canonicalSource = normalizeCell(row.channel || rawChannel);
     const keepManual = ["人工确认", "人工充值", "Coinvid USDT"].includes(row.channel || "");
-    let channel = keepManual ? row.channel : manualThirdPartyOverride(row.country, row.platform, rawChannel || row.channel, row.direction) || canonicalThirdPartyName(rawChannel || row.channel, row.country);
+    let channel = keepManual ? row.channel : manualThirdPartyOverride(row.country, row.platform, rawChannel || canonicalSource, row.direction) || canonicalThirdPartyName(canonicalSource, row.country);
     if (!channel || channel === "未知三方" || isIgnoredThirdPartyText(channel)) {
       channel = row.channel || rawChannel || "未知三方";
     }
