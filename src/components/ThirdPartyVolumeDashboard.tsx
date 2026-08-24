@@ -922,8 +922,10 @@ function isCoinvidUsdtChannel(country: string, platform: string, channel: string
 
 function feeFieldIsExplicit(value?: string): boolean {
   const text = String(value || "").trim();
-  if (!text || text === "-" || text === "—" || /^(?:没有|无|n\/a|null|undefined)$/i.test(text)) return false;
-  // 0、0%、0.00% + 0 都是费率表明确配置的零费率，不能按空值处理。
+  if (!text || text === "-" || text === "—" || /^(?:n\/a|null|undefined)$/i.test(text)) return false;
+  // 数字 0 以及“不用/没有/客户承担”等业务词，都是费率表明确配置的零费率。
+  // 它们必须显示为 0，不能被当成缺失费率后再误选其他类型的通用费率。
+  if (/^(?:不用|没有|无|免费|免手续费|客户承担|用户承担)$/i.test(text)) return true;
   return /\d/.test(text);
 }
 
@@ -1534,6 +1536,16 @@ function normalizedDisplayChannelType(country: string, type: string, rawRows: Th
   if (country.includes("越南")) {
     if (/momo|mo-mo|ví\s*momo|vi\s*momo/.test(text)) return "MOMO";
     if (/fast[-_ ]?momo|fastpay[-_ ]?momo|1vnpay[-_ ]?momo/.test(text)) return "MOMO";
+    if (/thẻ|the\s*cao|thecao|cào|nạp\s*thẻ/.test(text)) return "THẺ CÀO";
+    if (/viettel/.test(text)) return "VIETTEL";
+    if (/zalo/.test(text)) return "ZALO";
+
+    // 旧快照曾把 1VNPay-QR 的后缀压掉并保存成“其他类型”。
+    // 对 1VNPay 只在没有明确 MOMO/THẺ CÀO/ZALO/VIETTEL 类型时回退到 BANKQR；
+    // 费率数值仍从 Google 费率表实时同步，不在前端硬编码。
+    const is1VnPay = rawRows.some((row) => canonicalThirdPartyName(row.channel || row.rawChannel, row.country) === "1VNPay")
+      || /1vnpay/.test(text);
+    if (is1VnPay && ["", "其他类型", "代付类型"].includes(fallback)) return "BANKQR";
   }
   if (country.includes("马来")) {
     // V88：马来代收 Touch n Go-TP 算 DUITNOW/QR；马来所有代付统一算「银行」。
