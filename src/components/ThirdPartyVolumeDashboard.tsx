@@ -43,6 +43,16 @@ type TabKey = VolumeTab | FeeTab;
 type VolumeMainTab = "country" | "rates";
 type CountrySubTab = "daily" | "platform" | "anomaly";
 type PageSize = 20 | 50 | 100 | 200;
+type PageStatTone = "default" | "collect" | "payout" | "fee" | "net";
+type PageStatItem = [string, string | number] | {
+  label: string;
+  value: string | number;
+  delta?: number;
+  deltaPercent?: number | null;
+  compareLabel?: string;
+  helper?: string;
+  tone?: PageStatTone;
+};
 
 type ComboSummary = {
   key: string;
@@ -1762,6 +1772,30 @@ function diffPercentText(current: number, previous: number): string {
   return formatPercent((current - previous) / previous);
 }
 
+function signedNumberText(value: number): string {
+  if (!Number.isFinite(value)) return "-";
+  return `${value > 0 ? "+" : ""}${formatNumber(value)}`;
+}
+
+function signedPercentText(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "无基数";
+  return `${value > 0 ? "+" : ""}${formatPercent(value)}`;
+}
+
+function comparativeStat(label: string, current: number, previous: number, canCompare: boolean, tone: PageStatTone = "default"): PageStatItem {
+  if (!canCompare) {
+    return { label, value: formatNumber(current), helper: "单日查询显示昨日对比", tone };
+  }
+  return {
+    label,
+    value: formatNumber(current),
+    delta: current - previous,
+    deltaPercent: previous ? (current - previous) / Math.abs(previous) : null,
+    compareLabel: "较昨日",
+    tone
+  };
+}
+
 function sideHasValue(amount: number, count: number): boolean {
   return Math.abs(amount || 0) > 0 || Math.abs(count || 0) > 0;
 }
@@ -2250,6 +2284,21 @@ export default function ThirdPartyVolumeDashboard() {
   const dailyFeeRows = useMemo(() => buildFeeCompareRows(dailyCompareBaseRows, ratePayload?.rates || [], [], "daily", feeRateMap), [dailyCompareBaseRows, ratePayload?.rates, feeRateMap]);
   const feeWarnings = useMemo(() => feeWarningRows(dailyFeeRows), [dailyFeeRows]);
   const countryPageFeeRows = useMemo(() => dailyFeeRows.filter((row) => appliedCountryPage && feeRowMatchesCountryPage(row, appliedCountryPage)), [dailyFeeRows, appliedCountryPage]);
+  const isSingleDayQuery = Boolean(appliedStartDate && appliedStartDate === appliedEndDate);
+  const comparisonDate = isSingleDayQuery ? dateAdd(appliedStartDate, -1) : "";
+  const countryPagePreviousRows = useMemo(() => {
+    if (!comparisonDate || !appliedCountryPage) return [];
+    return filteredNoDate.filter((row) => row.date === comparisonDate && rowMatchesCountryPage(row, appliedCountryPage));
+  }, [filteredNoDate, comparisonDate, appliedCountryPage]);
+  const countryPagePreviousSummary = useMemo(() => sumRows(countryPagePreviousRows), [countryPagePreviousRows]);
+  const countryPagePreviousFeeBaseRows = useMemo(
+    () => aggregateCombo(countryPagePreviousRows, (row) => [row.date, row.country, row.platform, row.channel, normalizedFeeBaseChannelType(row)]),
+    [countryPagePreviousRows]
+  );
+  const countryPagePreviousFeeRows = useMemo(
+    () => buildFeeCompareRows(countryPagePreviousFeeBaseRows, ratePayload?.rates || [], [], "daily", feeRateMap),
+    [countryPagePreviousFeeBaseRows, ratePayload?.rates, feeRateMap]
+  );
   const dashboardFeeStatItems = useMemo(() => buildFeeStatItems(dailyFeeRows.length ? dailyFeeRows : platformFeeRows), [dailyFeeRows, platformFeeRows]);
 
   const aliasRows = useMemo(() => {
@@ -2426,7 +2475,14 @@ export default function ThirdPartyVolumeDashboard() {
         <button type="button" onClick={() => applyDateShortcut("lastMonth")}>上月</button>
       </div>
 
-      {hasQueried && mainTab === "country" && appliedCountryPage === activeCountryPage && <CountryVolumeSinglePage country={appliedCountryPage} rows={countryPageRows} summary={countryPageSummary} monthlyRows={countryPageMonthlyRows} feeRows={countryPageFeeRows} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} />}
+      {!hasQueried && mainTab === "country" && (
+        <section className="dashboard-query-empty volume-query-empty" aria-live="polite">
+          <span className="dashboard-query-empty-icon">↗</span>
+          <div><strong>查询后查看国家资金数据</strong><p>选择日期、平台或三方，系统会展示金额、手续费和昨日对比。</p></div>
+        </section>
+      )}
+
+      {hasQueried && mainTab === "country" && appliedCountryPage === activeCountryPage && <CountryVolumeSinglePage country={appliedCountryPage} rows={countryPageRows} summary={countryPageSummary} previousSummary={countryPagePreviousSummary} monthlyRows={countryPageMonthlyRows} feeRows={countryPageFeeRows} previousFeeRows={countryPagePreviousFeeRows} canCompare={isSingleDayQuery} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} />}
         </>
       )}
     </div>
@@ -2503,19 +2559,25 @@ function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { l
   );
 }
 
-function CountryVolumeSinglePage({ country, rows, summary, monthlyRows, feeRows, dateRangeLabel }: { country: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; dateRangeLabel: string }) {
-  const feeStatItems = buildFeeStatItems(feeRows);
+function CountryVolumeSinglePage({ country, rows, summary, previousSummary, monthlyRows, feeRows, previousFeeRows, canCompare, dateRangeLabel }: { country: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; previousSummary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; previousFeeRows: FeeCompareRow[]; canCompare: boolean; dateRangeLabel: string }) {
+  const fees = summarizeFeeRows(feeRows);
+  const previousFees = summarizeFeeRows(previousFeeRows);
+  const netAmount = summary.collectAmount - summary.payoutAmount - fees.estimatedFee;
+  const previousNetAmount = previousSummary.collectAmount - previousSummary.payoutAmount - previousFees.estimatedFee;
   const displayCountry = countryPaneLabel(country);
   return (
     <div className="country-volume-page range-volume-page">
       <PageStatStrip items={[
-        ["主三方", uniq(rows.map((row) => row.channel)).length],
-        ["平台", uniq(rows.map((row) => row.platform)).length],
-        ["代收金额", formatNumber(summary.collectAmount)],
-        ["代收笔数", formatNumber(summary.collectCount)],
-        ["代付金额", formatNumber(summary.payoutAmount)],
-        ["代付笔数", formatNumber(summary.payoutCount)],
-        ...feeStatItems
+        { label: "主三方", value: uniq(rows.map((row) => row.channel)).length, helper: "当前筛选范围", tone: "default" },
+        { label: "平台", value: uniq(rows.map((row) => row.platform)).length, helper: "当前筛选范围", tone: "default" },
+        comparativeStat("代收金额", summary.collectAmount, previousSummary.collectAmount, canCompare, "collect"),
+        comparativeStat("代收笔数", summary.collectCount, previousSummary.collectCount, canCompare, "collect"),
+        comparativeStat("代付金额", summary.payoutAmount, previousSummary.payoutAmount, canCompare, "payout"),
+        comparativeStat("代付笔数", summary.payoutCount, previousSummary.payoutCount, canCompare, "payout"),
+        comparativeStat("代收手续费", fees.collectFee, previousFees.collectFee, canCompare, "fee"),
+        comparativeStat("代付手续费", fees.payoutFee, previousFees.payoutFee, canCompare, "fee"),
+        comparativeStat("合计手续费", fees.estimatedFee, previousFees.estimatedFee, canCompare, "fee"),
+        { ...comparativeStat("业务净额", netAmount, previousNetAmount, canCompare, "net") as Exclude<PageStatItem, [string, string | number]>, helper: canCompare ? "代收－代付－手续费" : "代收－代付－手续费 · 单日可对比昨日" }
       ]} />
       <MonthlyTable
         title={`${displayCountry} 汇总`}
@@ -3155,8 +3217,28 @@ function FeeOverview({ dailyRows, dailyWarnings, platformRows }: { dailyRows: Fe
   );
 }
 
-function PageStatStrip({ items }: { items: Array<[string, string | number]> }) {
-  return <section className="page-stat-strip">{items.map(([label, value]) => <div key={label} data-label={label} className="page-stat-card"><span>{label}</span><strong>{value}</strong></div>)}</section>;
+function PageStatStrip({ items }: { items: PageStatItem[] }) {
+  return (
+    <section className="page-stat-strip">
+      {items.map((item) => {
+        const normalized = Array.isArray(item) ? { label: item[0], value: item[1], tone: "default" as PageStatTone } : item;
+        const hasDelta = typeof normalized.delta === "number";
+        const direction = hasDelta ? (normalized.delta! > 0 ? "up" : normalized.delta! < 0 ? "down" : "flat") : "";
+        return (
+          <div key={normalized.label} data-label={normalized.label} data-tone={normalized.tone || "default"} className="page-stat-card">
+            <span>{normalized.label}</span>
+            <strong>{normalized.value}</strong>
+            {hasDelta ? (
+              <p className={`page-stat-compare ${direction}`}>
+                <span>{normalized.compareLabel || "较昨日"}</span>
+                <b>{signedNumberText(normalized.delta!)} <em>{signedPercentText(normalized.deltaPercent ?? null)}</em></b>
+              </p>
+            ) : normalized.helper ? <p className="page-stat-helper">{normalized.helper}</p> : null}
+          </div>
+        );
+      })}
+    </section>
+  );
 }
 
 function FeeStatStrip({ items }: { items: Array<[string, string | number]> }) {

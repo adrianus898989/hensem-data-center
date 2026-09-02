@@ -1512,6 +1512,16 @@ export default function WorkOrderDashboard() {
       {mainTab !== "customer" && state === "loading" && <div className="business-query-note">正在查询所选日期工单数据...</div>}
       {mainTab !== "customer" && state === "error" && error && <div className="business-query-error">查询失败：{error}</div>}
 
+      {mainTab !== "customer" && (!hasQueried || !payload) && (
+        <section className="dashboard-query-empty" aria-live="polite">
+          <span className="dashboard-query-empty-icon" aria-hidden="true">⌁</span>
+          <div>
+            <strong>选择条件，开始查看工单数据</strong>
+            <p>设置日期和盘口后点击“查询”，统计结果和明细会在这里展示。</p>
+          </div>
+        </section>
+      )}
+
 
       {mainTab === "orders" && orderView === "orderDashboard" && (
         <>

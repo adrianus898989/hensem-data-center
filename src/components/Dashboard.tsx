@@ -913,6 +913,23 @@ function writeAutoLocalCache(payload: AutoWithdrawPayload) {
   try { window.localStorage.setItem(AUTO_WITHDRAW_CACHE_KEY, JSON.stringify(payload)); } catch { /* 缓存失败不影响页面 */ }
 }
 
+type DashboardGlyphName = "home" | "cash" | "ticket" | "chart" | "settings" | "user" | "arrow";
+
+function DashboardGlyph({ name }: { name: DashboardGlyphName }) {
+  const common = { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" {...common}>
+      {name === "home" && <><path d="M3 10.8 12 3l9 7.8" /><path d="M5.5 9.5V21h13V9.5M9.5 21v-6h5v6" /></>}
+      {name === "cash" && <><rect x="3" y="5" width="18" height="12" rx="2.5" /><path d="M7 9h.01M17 13h.01M9 21h8M12 8.5c-1.4 0-2.5.8-2.5 2s1.1 2 2.5 2 2.5.8 2.5 2-1.1 2-2.5 2" /></>}
+      {name === "ticket" && <><path d="M5 4h14a2 2 0 0 1 2 2v3a3 3 0 0 0 0 6v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a3 3 0 0 0 0-6V6a2 2 0 0 1 2-2Z" /><path d="M9 8h6M9 12h6M9 16h3" /></>}
+      {name === "chart" && <><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /><path d="m4 7 6-4 6 6 5-5" /></>}
+      {name === "settings" && <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 8.97 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.52-1H3v-4h.08A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.52V3h4v.08A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.52 1H21v4h-.08A1.7 1.7 0 0 0 19.4 15Z" /></>}
+      {name === "user" && <><circle cx="12" cy="8" r="4" /><path d="M4.5 21a7.5 7.5 0 0 1 15 0" /></>}
+      {name === "arrow" && <><path d="M5 12h14M14 7l5 5-5 5" /></>}
+    </svg>
+  );
+}
+
 export default function Dashboard() {
   const { session, profile, openProfile } = useDashboardAuth();
   const canThirdParty = hasDashboardPermission(profile, "third_party");
@@ -1665,29 +1682,29 @@ export default function Dashboard() {
   const sidebarContent = (
     <aside className="sidebar">
       <div className="brand">
-        <div className="logo logo-data">Data</div>
+        <div className="logo logo-data">H</div>
         <div>
           <div className="brand-title">Hensem数据后台</div>
-          <div className="brand-subtitle">Hensem Data Dashboard</div>
+          <div className="brand-subtitle">Operations Center</div>
         </div>
       </div>
 
       <div className="nav-section-title">入口</div>
       <button className={activeModule === "home" ? "nav-item active" : "nav-item"} onClick={() => switchModule("home")}>
-        <span className="nav-left"><span className="nav-icon">🏠</span>首页 / 选择模块</span>
+        <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="home" /></span>首页 / 选择模块</span>
       </button>
 
       <div className="nav-section-title">系统模块</div>
       <button className={(activeModule === "auto" || activeModule === "operator") ? "nav-item active" : "nav-item"} onClick={() => switchModule("auto")} disabled={!canAutoWithdraw} title={!canAutoWithdraw ? "管理员未开放此模块" : ""}>
-        <span className="nav-left"><span className="nav-icon">💸</span>提现/自动出款统计</span>
+        <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="cash" /></span>提现/自动出款统计</span>
         <span className={canAutoWithdraw ? "badge ok" : "badge"}>{canAutoWithdraw ? "Supabase" : "无权限"}</span>
       </button>
       <button className={activeModule === "work" ? "nav-item active" : "nav-item"} onClick={() => switchModule("work")} disabled={!canWorkSupport} title={!canWorkSupport ? "管理员未开放此模块" : ""}>
-        <span className="nav-left"><span className="nav-icon">🎫</span>工单/客服</span>
+        <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="ticket" /></span>工单/客服</span>
         <span className={canWorkSupport ? "badge ok" : "badge"}>{canWorkSupport ? "已接入" : "无权限"}</span>
       </button>
       <button className={activeModule === "volume" ? "nav-item active" : "nav-item"} onClick={() => switchModule("volume")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
-        <span className="nav-left"><span className="nav-icon">📊</span>三方量/费率</span>
+        <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="chart" /></span>三方量/费率</span>
         <span className={canThirdParty ? "badge ok" : "badge"}>{canThirdParty ? "Supabase" : "无权限"}</span>
       </button>
 
@@ -1695,7 +1712,7 @@ export default function Dashboard() {
       {canOpenAdminCenter(profile) && (
         <>
           <button className={activeModule === "admin" ? "nav-item system-admin-nav active" : "nav-item system-admin-nav"} onClick={() => setAdminExpanded((value) => !value)}>
-            <span className="nav-left"><span className="nav-icon">⚙</span>管理后台</span>
+            <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="settings" /></span>管理后台</span>
             <span className="nav-admin-toggle">{adminExpanded ? "⌃" : "⌄"}</span>
           </button>
           {adminExpanded && <div className="nav-admin-submenu">
@@ -1706,7 +1723,7 @@ export default function Dashboard() {
         </>
       )}
       <button className="nav-item system-admin-nav" onClick={openProfile}>
-        <span className="nav-left"><span className="nav-icon">👤</span>个人资料</span>
+        <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="user" /></span>个人资料</span>
       </button>
     </aside>
   );
@@ -1714,30 +1731,32 @@ export default function Dashboard() {
   const homeContent = (
     <main className="main home-main">
       <div className="home-topbar">
-        <div>
-          
+        <div className="home-heading">
+          <span className="home-eyebrow">OPERATIONS OVERVIEW</span>
           <h1>Hensem 数据中控</h1>
+          <p>统一查看关键业务数据，快速进入你需要的工作模块。</p>
         </div>
+        <span className="home-system-state"><i />系统运行正常</span>
       </div>
 
       <section className="home-card-grid">
         <button className="home-module-card home-module-blue" onClick={() => switchModule("auto")} disabled={!canAutoWithdraw} title={!canAutoWithdraw ? "管理员未开放此模块" : ""}>
-          <span className="home-module-icon">💸</span>
-          <strong>提现 / 自动出款统计</strong>
-          <em>{canAutoWithdraw ? "自动出款日表、月表与提现操作人统计" : "你的账号暂未开放此模块"}</em>
-          <span className="home-enter">{canAutoWithdraw ? "进入模块 →" : "无查看权限"}</span>
+          <span className="home-module-head"><span className="home-module-icon"><DashboardGlyph name="cash" /></span><span className="home-module-index">01</span></span>
+          <span className="home-module-copy"><strong>提现 / 自动出款</strong><em>{canAutoWithdraw ? "自动出款日表、月表与操作人效率统计" : "你的账号暂未开放此模块"}</em></span>
+          <span className="home-module-tags"><i>日/月趋势</i><i>人员效率</i><i>异常提醒</i></span>
+          <span className="home-enter">{canAutoWithdraw ? <>进入模块 <DashboardGlyph name="arrow" /></> : "无查看权限"}</span>
         </button>
         <button className="home-module-card home-module-green" onClick={() => switchModule("work")} disabled={!canWorkSupport} title={!canWorkSupport ? "管理员未开放此模块" : ""}>
-          <span className="home-module-icon">🎫</span>
-          <strong>工单 / 客服</strong>
-          <em>{canWorkSupport ? "工单统计、操作人统计与客服统计统一在一个模块" : "你的账号暂未开放此模块"}</em>
-          <span className="home-enter">{canWorkSupport ? "进入模块 →" : "无查看权限"}</span>
+          <span className="home-module-head"><span className="home-module-icon"><DashboardGlyph name="ticket" /></span><span className="home-module-index">02</span></span>
+          <span className="home-module-copy"><strong>工单 / 客服</strong><em>{canWorkSupport ? "工单、操作人和客服指标统一查看" : "你的账号暂未开放此模块"}</em></span>
+          <span className="home-module-tags"><i>工单统计</i><i>客服效率</i><i>服务质量</i></span>
+          <span className="home-enter">{canWorkSupport ? <>进入模块 <DashboardGlyph name="arrow" /></> : "无查看权限"}</span>
         </button>
         <button className="home-module-card home-module-purple" onClick={() => switchModule("volume")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
-          <span className="home-module-icon">📊</span>
-          <strong>三方量 / 费率统计</strong>
-          <em>{canThirdParty ? "三方充值/提现量、费率、手续费、各国家三方汇总" : "你的账号暂未开放此模块"}</em>
-          <span className="home-enter">{canThirdParty ? "进入模块 →" : "无查看权限"}</span>
+          <span className="home-module-head"><span className="home-module-icon"><DashboardGlyph name="chart" /></span><span className="home-module-index">03</span></span>
+          <span className="home-module-copy"><strong>三方量 / 费率</strong><em>{canThirdParty ? "充值、提款、费率和手续费集中分析" : "你的账号暂未开放此模块"}</em></span>
+          <span className="home-module-tags"><i>国家汇总</i><i>费率匹配</i><i>费用分析</i></span>
+          <span className="home-enter">{canThirdParty ? <>进入模块 <DashboardGlyph name="arrow" /></> : "无查看权限"}</span>
         </button>
       </section>
     </main>
@@ -1884,6 +1903,13 @@ export default function Dashboard() {
           </div>
           {state === "error" && error && <div className="business-query-error">查询失败：{error}</div>}
         </section>
+
+        {(!hasBusinessQueried || !payload) && (
+          <section className="dashboard-query-empty" aria-live="polite">
+            <span className="dashboard-query-empty-icon"><DashboardGlyph name="chart" /></span>
+            <div><strong>选择条件，开始查看数据</strong><p>设置日期和盘口后点击“查询”，结果会在这里清晰展示。</p></div>
+          </section>
+        )}
 
         {activeModule === "auto" && (
           <>

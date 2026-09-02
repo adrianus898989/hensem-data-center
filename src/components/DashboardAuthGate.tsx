@@ -332,24 +332,33 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     return (
       <div className="auth-login-page">
         <div className="auth-login-shell">
-          <section className="auth-login-brand-panel compact">
-            <div className="auth-login-brand-center">
+          <section className="auth-login-brand-panel">
+            <div className="auth-login-brand-copy">
               <div className="auth-login-brand-mark large">H</div>
-              <strong>Hensem 数据后台</strong>
-              <small>Data Center</small>
+              <span className="auth-login-eyebrow">HENSEM OPERATIONS</span>
+              <h1>让每一笔业务数据<br />更清晰、更可控</h1>
+              <p>统一查看提现效率、工单服务和三方资金流，快速定位异常并掌握关键趋势。</p>
+              <div className="auth-login-feature-list">
+                <div><i>01</i><span><b>统一数据视图</b><small>核心业务指标集中呈现</small></span></div>
+                <div><i>02</i><span><b>安全权限管理</b><small>按角色开放对应模块</small></span></div>
+                <div><i>03</i><span><b>及时异常追踪</b><small>费率、同步与业务状态可查</small></span></div>
+              </div>
             </div>
           </section>
 
-          <form className="auth-login-card compact" onSubmit={submitLogin}>
+          <form className="auth-login-card" onSubmit={submitLogin}>
             <div className="auth-login-card-top">
-              <h2>登录</h2>
+              <span>SECURE ACCESS</span>
+              <h2>欢迎回来</h2>
+              <p>登录 Hensem 数据中控，继续查看今日业务数据。</p>
             </div>
             <label>账号</label>
-            <div className="auth-input-wrap"><span>◎</span><input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="请输入账号" /></div>
+            <div className="auth-input-wrap"><span className="auth-field-icon">ID</span><input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="请输入账号" /></div>
             <label>密码</label>
-            <div className="auth-input-wrap"><span>⌁</span><input type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="请输入密码" /><button type="button" onClick={() => setShowPassword((value) => !value)}>{showPassword ? "隐藏" : "显示"}</button></div>
+            <div className="auth-input-wrap"><span className="auth-field-icon">••</span><input type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="请输入密码" /><button type="button" onClick={() => setShowPassword((value) => !value)}>{showPassword ? "隐藏" : "显示"}</button></div>
             {error && <div className="auth-login-error">{error}</div>}
-            <button className="auth-login-submit" type="submit" disabled={busy}>{busy ? "正在验证..." : "登录"}</button>
+            <button className="auth-login-submit" type="submit" disabled={busy}>{busy ? "正在验证..." : "安全登录"}</button>
+            <div className="auth-login-security"><span>●</span>账号连接受安全策略保护</div>
           </form>
         </div>
       </div>
