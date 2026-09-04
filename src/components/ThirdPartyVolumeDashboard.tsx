@@ -1952,6 +1952,14 @@ function localAliasKey(value: string): string {
     .replace(/[^a-z0-9一-龥]+/g, "");
 }
 
+function normalizePlatformDisplayName(value: string): string {
+  const platform = String(value || "").trim();
+  // 新平台在不同数据源里分别写成 Shree.Win / Shreewin。
+  // 页面和筛选统一成一个名称，避免费率表已接入、跑量表却匹配不到。
+  if (localAliasKey(platform) === "shreewin") return "ShreeWin";
+  return platform;
+}
+
 function collapseThirdPartyDisplayName(value: string, country?: string): string {
   const canonical = canonicalThirdPartyName(value, country) || String(value || "").trim();
   if (!canonical) return "未知三方";
@@ -1976,7 +1984,8 @@ function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolum
   const raw = row.rawChannel || row.channel || "";
   const key = localAliasKey(raw);
   const country = row.country || "";
-  const platformKey = localAliasKey(row.platform || "").toUpperCase();
+  const platform = normalizePlatformDisplayName(row.platform);
+  const platformKey = localAliasKey(platform).toUpperCase();
   let channel = row.channel || raw || "未知三方";
   const isIndiaUpiQrPayout = country.includes("印度") && row.direction === "代付" && ["arbupi", "arbbank", "upiqr"].includes(key);
 
@@ -1996,7 +2005,7 @@ function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolum
   if (!channel || channel === "未知三方") channel = collapseThirdPartyDisplayName(row.channel || raw || "未知三方", country);
   let channelType = isIndiaUpiQrPayout ? "UPI" : (row.channelType || inferThirdPartyChannelType(raw || channel, country, `${channel} ${raw}`) || "其他类型");
   if (channel === "人工确认" || channel === "人工充值") channelType = channel;
-  return { ...row, channel, channelType };
+  return { ...row, platform, channel, channelType };
 }
 
 export default function ThirdPartyVolumeDashboard() {
@@ -2230,7 +2239,21 @@ export default function ThirdPartyVolumeDashboard() {
   const optionScopedRowsBeforeCountry = useMemo(() => rows.filter((row) => rowMatchesCountryPage(row, optionCountryFilter)), [rows, optionCountryFilter]);
   const countryFilterOptions = useMemo(() => sortCountries(optionScopedRowsBeforeCountry.map((row) => row.country)), [optionScopedRowsBeforeCountry]);
   const optionScopedRows = useMemo(() => optionScopedRowsBeforeCountry.filter((row) => !countrySelections.length || countrySelections.includes(row.country)), [optionScopedRowsBeforeCountry, countrySelections]);
-  const platforms = useMemo(() => uniq(optionScopedRows.map((row) => row.platform)), [optionScopedRows]);
+  const configuredPlatforms = useMemo(() => {
+    // 平台下拉不能只看当前日期是否有三方量。新盘口通常先配置费率、后开始跑量；
+    // 只从 volume rows 取选项会让已接入的新平台（例如 ShreeWin）完全无法选择。
+    if (isAllUsdtCountryPage(optionCountryFilter)) return [];
+    const targetCountry = normalizeCountryLabel(optionCountryFilter);
+    const selectedCountries = new Set(countrySelections.map(normalizeCountryLabel));
+    return uniq((ratePayload?.platformStatuses || [])
+      .filter((row) => !targetCountry || normalizeCountryLabel(row.country) === targetCountry)
+      .filter((row) => !selectedCountries.size || selectedCountries.has(normalizeCountryLabel(row.country)))
+      .map((row) => normalizePlatformDisplayName(row.platform)));
+  }, [ratePayload?.platformStatuses, optionCountryFilter, countrySelections]);
+  const platforms = useMemo(() => uniq([
+    ...optionScopedRows.map((row) => normalizePlatformDisplayName(row.platform)),
+    ...configuredPlatforms
+  ]), [optionScopedRows, configuredPlatforms]);
   const channelOptionRows = useMemo(() => optionScopedRows.filter((row) => !platformSelections.length || selectedPlatformSet.has(row.platform)), [optionScopedRows, platformSelections.length, selectedPlatformSet]);
   const channels = useMemo(() => uniq(channelOptionRows.map((row) => row.channel)), [channelOptionRows]);
   const channelTypeOptions = useMemo(() => uniq(optionScopedRows.filter((row) => (!platformSelections.length || selectedPlatformSet.has(row.platform))).map((row) => row.channelType || "其他类型").filter(Boolean)), [optionScopedRows, platformSelections.length, selectedPlatformSet]);
