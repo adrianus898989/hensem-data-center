@@ -1265,6 +1265,9 @@ function manualThirdPartyOverride(country: string, platform: string, rawChannel:
   const p = normalizeCell(platform).toUpperCase().replace(/[^A-Z0-9]/g, "");
   const k = normalizeCell(rawChannel).toLowerCase().replace(/[^a-z0-9一-龥]+/g, "");
   if (c.includes("印度")) {
+    // SHREE.WIN 的源数据会把 UPI-QR 写成“未知”或 ArUpiPay-26000；仅对该平台定向纠正。
+    // 真正的 UpiPay-QR 不命中这里，仍按 UpiPay 处理。
+    if (p === "SHREEWIN" && (k === "未知" || k === "arupipay26000")) return "UPI-QR";
     // DhaniWin 代付 UPI 是人工确认；其它平台出现 UPI-QR2 用户确认归 ATPay。
     if (p === "DHANIWIN" && direction === "代付" && (k === "upi" || k === "upiqr" || k === "upiqr2")) return "人工确认";
     if (k === "upiqr2") return "ATPay";
@@ -1318,15 +1321,18 @@ function parseSheet(sheetName: string, values: Values): ThirdPartyVolumeRow[] {
       if (/商户余额不足|余额不足/.test(statusText)) continue;
       // 三方量必须优先使用“三方/通道名称”，不要优先用“映射码”。很多映射码是 hash/数字，会把别名识别搞乱。
       // “人工确认/人工充值”是业务处理通道，不是第三方支付商，但用户要求在三方量里正常保留显示。
-      // 其它错误文本仍继续过滤，避免把状态、报错文字误当成三方。
-      const validThirdParty = thirdParty && (isManualHandlingChannel(thirdParty) || (!isIgnoredThirdPartyText(thirdParty) && !isLikelyThirdPartyCodeOnly(thirdParty))) ? thirdParty : "";
-      const validMapCode = mapCode && (isManualHandlingChannel(mapCode) || (!isIgnoredThirdPartyText(mapCode) && !isLikelyThirdPartyCodeOnly(mapCode))) ? mapCode : "";
+      // 平台定向纠正必须先于“未知”等错误文本过滤，否则 SHREE.WIN 的有效 UPI-QR 会被直接丢弃。
+      const direction = inferDirection(sheetName, block.title, typeText);
+      const thirdPartyOverride = manualThirdPartyOverride(country, platform, thirdParty, direction);
+      const mapCodeOverride = manualThirdPartyOverride(country, platform, mapCode, direction);
+      const validThirdParty = thirdParty && (thirdPartyOverride || isManualHandlingChannel(thirdParty) || (!isIgnoredThirdPartyText(thirdParty) && !isLikelyThirdPartyCodeOnly(thirdParty))) ? thirdParty : "";
+      const validMapCode = mapCode && (mapCodeOverride || isManualHandlingChannel(mapCode) || (!isIgnoredThirdPartyText(mapCode) && !isLikelyThirdPartyCodeOnly(mapCode))) ? mapCode : "";
       const rawChannel = validThirdParty || validMapCode;
       if (!rawChannel) continue;
-      const direction = inferDirection(sheetName, block.title, typeText);
+      const forcedChannel = validThirdParty ? thirdPartyOverride : mapCodeOverride;
       let channel = isManualHandlingChannel(rawChannel)
         ? normalizeCell(rawChannel).replace(/[\s　_-]+/g, "")
-        : manualThirdPartyOverride(country, platform, rawChannel, direction) || normalizeChannel(rawChannel, country);
+        : forcedChannel || normalizeChannel(rawChannel, country);
       if (isCoinvidUsdtVolume(country, platform, rawChannel, sheetName, block.title, system)) channel = "Coinvid USDT";
       if (!channel || channel === "未知三方" || (!isManualHandlingChannel(channel) && isIgnoredThirdPartyText(channel))) continue;
       let channelType = normalizeVolumeChannelType(country, platform, rawChannel, channel, typeText, mapCode, system, block.title, sheetName, direction);
@@ -4344,12 +4350,18 @@ function parseKnownBlockLocalFinal(
     const statusText = block.statusCol >= 0 ? cell(block.statusCol) : "";
     if (/商户余额不足|余额不足/.test(statusText)) continue;
 
+    const direction = inferDirection(sheetName, block.title, typeText);
+    const thirdPartyOverride = manualThirdPartyOverride(country, platform, thirdParty, direction);
+    const mapCodeOverride = manualThirdPartyOverride(country, platform, mapCode, direction);
+
     const validThirdParty = thirdParty && (
+      thirdPartyOverride ||
       isManualHandlingChannel(thirdParty) ||
       (!isIgnoredThirdPartyText(thirdParty) && !isLikelyThirdPartyCodeOnly(thirdParty))
     ) ? thirdParty : "";
 
     const validMapCode = mapCode && (
+      mapCodeOverride ||
       isManualHandlingChannel(mapCode) ||
       (!isIgnoredThirdPartyText(mapCode) && !isLikelyThirdPartyCodeOnly(mapCode))
     ) ? mapCode : "";
@@ -4357,10 +4369,10 @@ function parseKnownBlockLocalFinal(
     const rawChannel = validThirdParty || validMapCode;
     if (!rawChannel) continue;
 
-    const direction = inferDirection(sheetName, block.title, typeText);
+    const forcedChannel = validThirdParty ? thirdPartyOverride : mapCodeOverride;
     let channel = isManualHandlingChannel(rawChannel)
       ? normalizeCell(rawChannel).replace(/[\s　_-]+/g, "")
-      : manualThirdPartyOverride(country, platform, rawChannel, direction) || normalizeChannel(rawChannel, country);
+      : forcedChannel || normalizeChannel(rawChannel, country);
 
     if (isCoinvidUsdtVolume(country, platform, rawChannel, sheetName, block.title, system)) {
       channel = "Coinvid USDT";
@@ -4602,23 +4614,28 @@ async function readAndParseVolumeUltraFinal(
             const statusText = block.statusCol >= 0 ? cell(block.statusCol) : "";
             if (/商户余额不足|余额不足/.test(statusText)) continue;
 
+            const rowDirection = inferDirection(baseSheetName, block.title, typeText);
+            if (rowDirection !== direction) continue;
+            const thirdPartyOverride = manualThirdPartyOverride(country, platform, thirdParty, rowDirection);
+            const mapCodeOverride = manualThirdPartyOverride(country, platform, mapCode, rowDirection);
+
             const validThirdParty = thirdParty && (
+              thirdPartyOverride ||
               isManualHandlingChannel(thirdParty) ||
               (!isIgnoredThirdPartyText(thirdParty) && !isLikelyThirdPartyCodeOnly(thirdParty))
             ) ? thirdParty : "";
             const validMapCode = mapCode && (
+              mapCodeOverride ||
               isManualHandlingChannel(mapCode) ||
               (!isIgnoredThirdPartyText(mapCode) && !isLikelyThirdPartyCodeOnly(mapCode))
             ) ? mapCode : "";
             const rawChannel = validThirdParty || validMapCode;
             if (!rawChannel) continue;
 
-            const rowDirection = inferDirection(baseSheetName, block.title, typeText);
-            if (rowDirection !== direction) continue;
-
+            const forcedChannel = validThirdParty ? thirdPartyOverride : mapCodeOverride;
             let channel = isManualHandlingChannel(rawChannel)
               ? normalizeCell(rawChannel).replace(/[\s　_-]+/g, "")
-              : manualThirdPartyOverride(country, platform, rawChannel, rowDirection) || normalizeChannel(rawChannel, country);
+              : forcedChannel || normalizeChannel(rawChannel, country);
             if (isCoinvidUsdtVolume(country, platform, rawChannel, baseSheetName, block.title, system)) {
               channel = "Coinvid USDT";
             }
