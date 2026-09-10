@@ -23,20 +23,23 @@ function ReasonPagination({ page, pages, total, onPage }: { page: number; pages:
   </nav>;
 }
 
-function ReasonRow({ group: g, denominator, showOther }: { group: WithdrawReasonGroup; denominator: number; showOther: boolean }) {
+function ReasonRow({ group: g, denominator, operator, showOther }: { group: WithdrawReasonGroup; denominator: number; operator: ReasonOperator; showOther: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const variants = g.variants || [{ reason_label: g.reason_label, count: g.count }];
   return <Fragment><tr>
     <td><div className="wr-reason-text">{g.reason_label}
       {variants.length > 1 && <span className="wr-merged-count">合并 {variants.length} 项</span>}
       {g.classification === "truncated" && <span className="wr-badge wr-truncated">待补全文</span>}</div></td>
-    <td className="wr-count">{fmt(g.count)}</td><td><strong>{reasonPercent(g.count, denominator)}</strong></td>
+    <td className="wr-count">{fmt(g.count)}</td>
+    <td className="wr-reason-share" title={`${fmt(g.count)} ÷ ${operatorNames[operator]}有原因订单 ${fmt(denominator)} 笔`}><strong>{reasonPercent(g.count, denominator)}</strong></td>
     <td><span className="wr-success">{fmt(g.success)}</span><span className="wr-divider"> / </span><span className="wr-rejected">{fmt(g.reject)}</span></td>
     {showOther && <td>{fmt(g.other)}</td>}
     <td><button className="wr-detail-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>{expanded ? "收起明细" : "展开明细"}</button></td>
   </tr>{expanded && <tr className="wr-variant-row"><td colSpan={showOther ? 6 : 5}>
-    <div className="wr-variant-heading"><strong>原备注</strong><span>笔数</span></div>
-    {variants.map(v => <div className="wr-variant-item" key={v.reason_label}><span>{v.reason_label}</span><strong>{fmt(v.count)}</strong></div>)}
+    <div className="wr-variant-heading"><strong>原备注</strong><span>笔数</span><span title={`原备注笔数 ÷ 该原因 ${fmt(g.count)} 笔`}>占该原因</span><span title={`原备注笔数 ÷ ${operatorNames[operator]}有原因订单 ${fmt(denominator)} 笔`}>占当前原因总笔数</span></div>
+    {variants.map(v => <div className="wr-variant-item" key={v.reason_label}><span>{v.reason_label}</span><strong>{fmt(v.count)}</strong>
+      <strong className="wr-variant-share" title={`${fmt(v.count)} ÷ 该原因 ${fmt(g.count)} 笔`}>{reasonPercent(v.count, g.count)}</strong>
+      <span className="wr-variant-operator-share" title={`${fmt(v.count)} ÷ ${operatorNames[operator]}有原因订单 ${fmt(denominator)} 笔`}>{reasonPercent(v.count, denominator)}</span></div>)}
     {g.samples.length > 0 && <details className="wr-samples"><summary>备注样本</summary><ul>{g.samples.map((sample, i) => <li key={i}>{sample}</li>)}</ul><small>脱敏示例，非全部订单明细。</small></details>}
   </td></tr>}</Fragment>;
 }
@@ -130,9 +133,17 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
     return () => { document.body.style.overflow = previous; };
   }, [openModal]);
 
-  const totals = day?.snapshot.totals;
+  // Reason percentages exclude missing remarks, not real but unclassified or
+  // truncated notes. Source snapshots and the main daily report stay intact.
+  const reasonedGroups = (day?.snapshot.groups || []).filter(g => g.classification !== "empty");
+  const totals = day ? reasonedGroups.reduce((sum, g) => {
+    sum.total += g.count; sum[g.operator_class] += g.count;
+    sum.success += g.success; sum.reject += g.reject; sum.other += g.other;
+    return sum;
+  }, { total: 0, manual: 0, auto: 0, unknown: 0, success: 0, reject: 0, other: 0 }) : undefined;
+  const omittedCount = day && totals ? day.snapshot.totals.total - totals.total : 0;
   const denominator = totals?.[operator] || 0;
-  const groups = (day?.snapshot.groups || []).filter(g => g.operator_class === operator)
+  const groups = reasonedGroups.filter(g => g.operator_class === operator)
     .filter(g => !search.trim() || `${g.reason_label} ${(g.variants || []).map(v => v.reason_label).join(" ")} ${g.samples.join(" ")}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))
     .sort((a, b) => b.count - a.count || a.reason_key.localeCompare(b.reason_key));
   const pages = Math.max(1, Math.ceil(groups.length / 20));
@@ -140,7 +151,7 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
   const matchedCount = groups.reduce((sum, group) => sum + group.count, 0);
   const reportRows = target ? availableRows.filter(row => row.date === target.date && row.country === target.country && row.platform === target.platform) : [];
   const reportTotal = reportRows.reduce((sum, row) => sum + row.total, 0);
-  const differs = Boolean(totals && reportRows.length && reportTotal !== totals.total);
+  const differs = Boolean(day && reportRows.length && reportTotal !== day.snapshot.totals.total);
   const showOther = Boolean(totals?.other);
 
   const panel = target && <div className={inline ? "wr-inline-panel wr-review" : "wr-modal wr-review"} role={inline ? "region" : "dialog"}
@@ -169,31 +180,32 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
           {!loading && !error && visibleResult && !day && <div className="wr-state"><strong>该平台当天尚未同步原因数据</strong>
             <p>补采该日期后点击刷新。</p></div>}
           {!error && day && totals && <>
-            <dl className="wr-overview" aria-label="采集总数及结果，占比按总笔数计算">
-              <div><dt>总笔数</dt><dd><strong>{fmt(totals.total)}</strong></dd></div>
-              <div className="wr-success"><dt>成功</dt><dd><strong>{fmt(totals.success)}</strong><small title="成功笔数 / 总笔数；沿用日表口径（含已提交）">{reasonPercent(totals.success, totals.total)}</small></dd></div>
-              <div className="wr-rejected"><dt>驳回</dt><dd><strong>{fmt(totals.reject)}</strong><small title="驳回笔数 / 总笔数">{reasonPercent(totals.reject, totals.total)}</small></dd></div>
+            <dl className="wr-overview" aria-label="有原因订单及结果，不含未填写备注的订单">
+              <div><dt>有原因订单</dt><dd><strong>{fmt(totals.total)}</strong></dd></div>
+              <div className="wr-success"><dt>成功</dt><dd><strong>{fmt(totals.success)}</strong><small title="有原因的成功笔数 / 有原因订单数；沿用日表状态口径（含已提交）">{reasonPercent(totals.success, totals.total)}</small></dd></div>
+              <div className="wr-rejected"><dt>驳回</dt><dd><strong>{fmt(totals.reject)}</strong><small title="有原因的驳回笔数 / 有原因订单数">{reasonPercent(totals.reject, totals.total)}</small></dd></div>
               {totals.other > 0 && <div><dt>其他状态</dt><dd><strong>{fmt(totals.other)}</strong><small>{reasonPercent(totals.other, totals.total)}</small></dd></div>}
             </dl>
-            {differs && <div className="wr-alert">采集 {fmt(totals.total)} 笔 / 日表 {fmt(reportTotal)} 笔，尚未对齐；占比按采集数据计算。</div>}
+            {differs && <div className="wr-alert">采集 {fmt(day.snapshot.totals.total)} 笔 / 日表 {fmt(reportTotal)} 笔，尚未对齐；原因占比按已采集且有备注的订单计算。</div>}
             {day.snapshot.coverage.incomplete_note_count > 0 && <div className="wr-alert">{fmt(day.snapshot.coverage.incomplete_note_count)} 笔备注待补全文，请重新采集当天。</div>}
             <div className="wr-reason-controls">
               <div className="wr-tabs" role="group" aria-label="操作方式">
                 {(["manual", "auto", "unknown"] as const).map(type => <button type="button" key={type} aria-pressed={operator === type}
                   title={type === "unknown" ? "原因已归类；原记录未识别自动或人工，不并入人工笔数。" : undefined}
                   className={operator === type ? "active" : ""} onClick={() => setOperator(type)}>
-                  <span>{operatorNames[type]}</span><strong>{fmt(totals[type])}</strong><small title="占总笔数">{reasonPercent(totals[type], totals.total)}</small>
+                  <span>{operatorNames[type]}</span><strong>{fmt(totals[type])}</strong><small title="占全部有原因订单">{reasonPercent(totals[type], totals.total)}</small>
                 </button>)}
               </div>
               <div className="wr-reason-tools">
+                <span className="wr-note-scope">仅含已填备注{omittedCount > 0 && ` · 全部方式未填 ${fmt(omittedCount)} 笔不计`}</span>
                 <input aria-label="搜索原因或备注样本" placeholder="搜索原因 / 原备注" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} />
                 <ReasonPagination page={actualPage} pages={pages} total={groups.length} onPage={setPage} />
               </div>
             </div>
             <div className="wr-table-wrap"><table className="wr-table"><colgroup><col className="wr-col-reason" /><col className="wr-col-count" /><col className="wr-col-percent" /><col className="wr-col-status" />{showOther && <col className="wr-col-other" />}<col className="wr-col-detail" /></colgroup><thead><tr>
-              <th>原因</th><th>笔数</th><th title={`该原因笔数 ÷ ${operatorNames[operator]} ${fmt(denominator)} 笔`}>占{operatorNames[operator]}</th><th title="沿用日表口径，已提交计入成功">成功 / 驳回</th>{showOther && <th>其他</th>}<th>明细</th>
-            </tr></thead><tbody>{groups.slice((actualPage - 1) * 20, actualPage * 20).map(g => <ReasonRow key={`${operator}:${g.reason_key}`} group={g} denominator={denominator} showOther={showOther} />)}</tbody></table>
-            {!groups.length && <div className="wr-state">{search ? "没有匹配的原因" : `当天没有${operatorNames[operator]}记录`}</div>}</div>
+              <th>原因</th><th>笔数</th><th title={`该原因笔数 ÷ ${operatorNames[operator]}有原因订单 ${fmt(denominator)} 笔（不含未填写备注）`}>原因占比</th><th title="沿用日表口径，已提交计入成功">成功 / 驳回</th>{showOther && <th>其他</th>}<th>明细</th>
+            </tr></thead><tbody>{groups.slice((actualPage - 1) * 20, actualPage * 20).map(g => <ReasonRow key={`${operator}:${g.reason_key}`} group={g} denominator={denominator} operator={operator} showOther={showOther} />)}</tbody></table>
+            {!groups.length && <div className="wr-state">{search ? "没有匹配的原因" : `当天没有${operatorNames[operator]}的已填写原因`}</div>}</div>
             <div className="wr-footer"><span>{search.trim() ? "匹配" : "共"} {groups.length} 类 · {fmt(matchedCount)} 笔</span>
               <ReasonPagination page={actualPage} pages={pages} total={groups.length} onPage={setPage} /></div>
           </>}
