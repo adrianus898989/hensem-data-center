@@ -1,0 +1,748 @@
+{
+  "fixture_version": 1,
+  "purpose": "合成离线对抗样例：仅验证只读派生类别，不修改原原因、笔数、variants 或 samples。",
+  "contract": {
+    "match_scope": "仅全文锚定的已知诊断格式；不能按前缀命中后吞掉尾部。",
+    "restricted_game_bets": "只合并明确字段‘会员在限制的游戏类型中总的投注数’后的实际数，显示‘受限游戏类型投注’。",
+    "last_recharge_age": "实际日期、实际间隔可以变化；配置的天数门槛必须保留，显示‘最后充值日超过限制（7天）’等。",
+    "minimum_withdrawals": "当前累计提现次数可以变化；‘不能小于’与配置次数必须保留，显示‘累计提款次数不能小于1次’等。",
+    "fallback": "附加原因、错误码、相反比较、未知格式、截断文本、非上述固定原因均保留原文。",
+    "amounts": "现有 v2 金额占位原因直接沿用原文；不额外丢弃负号、比较方向或否定词。",
+    "preservation": "原始 label 和 count 必须保留为 variants；原 samples 保持现有最多 3 条限制，不能用于替代整组原始订单推断。",
+    "unicode": "以下明确标为 matched 的全角冒号、逗号与字段间空白变体，应产生相同显示类别；不能因此模糊匹配字段名。"
+  },
+  "cases": [
+    {
+      "id": "bet_actual_0",
+      "family": "restricted_game_bets",
+      "input_label": "会员在限制的游戏类型中总的投注数:0",
+      "expected_canonical_label": "受限游戏类型投注",
+      "matched": true
+    },
+    {
+      "id": "bet_actual_1",
+      "family": "restricted_game_bets",
+      "input_label": "会员在限制的游戏类型中总的投注数:1",
+      "expected_canonical_label": "受限游戏类型投注",
+      "matched": true
+    },
+    {
+      "id": "bet_actual_3",
+      "family": "restricted_game_bets",
+      "input_label": "会员在限制的游戏类型中总的投注数:3",
+      "expected_canonical_label": "受限游戏类型投注",
+      "matched": true
+    },
+    {
+      "id": "bet_actual_18",
+      "family": "restricted_game_bets",
+      "input_label": "会员在限制的游戏类型中总的投注数:18",
+      "expected_canonical_label": "受限游戏类型投注",
+      "matched": true
+    },
+    {
+      "id": "bet_fullwidth_colon",
+      "family": "restricted_game_bets",
+      "input_label": "会员在限制的游戏类型中总的投注数：18",
+      "expected_canonical_label": "受限游戏类型投注",
+      "matched": true
+    },
+    {
+      "id": "bet_value_space",
+      "family": "restricted_game_bets",
+      "input_label": "会员在限制的游戏类型中总的投注数: 18",
+      "expected_canonical_label": "受限游戏类型投注",
+      "matched": true
+    },
+    {
+      "id": "bet_negative_actual",
+      "family": "passthrough",
+      "input_label": "会员在限制的游戏类型中总的投注数:-1",
+      "expected_canonical_label": "会员在限制的游戏类型中总的投注数:-1",
+      "matched": false
+    },
+    {
+      "id": "bet_truncated",
+      "family": "passthrough",
+      "input_label": "会员在限制的游戏类型中总的投注数:...",
+      "expected_canonical_label": "会员在限制的游戏类型中总的投注数:...",
+      "matched": false
+    },
+    {
+      "id": "bet_negated_header",
+      "family": "passthrough",
+      "input_label": "会员不在限制的游戏类型中总的投注数:3",
+      "expected_canonical_label": "会员不在限制的游戏类型中总的投注数:3",
+      "matched": false
+    },
+    {
+      "id": "bet_changed_field",
+      "family": "passthrough",
+      "input_label": "会员在限制的游戏类型中最低投注数:3",
+      "expected_canonical_label": "会员在限制的游戏类型中最低投注数:3",
+      "matched": false
+    },
+    {
+      "id": "bet_extra_cause",
+      "family": "passthrough",
+      "input_label": "会员在限制的游戏类型中总的投注数:3,用户未完成认证",
+      "expected_canonical_label": "会员在限制的游戏类型中总的投注数:3,用户未完成认证",
+      "matched": false
+    },
+    {
+      "id": "bet_extra_error_501",
+      "family": "passthrough",
+      "input_label": "会员在限制的游戏类型中总的投注数:3,错误码501",
+      "expected_canonical_label": "会员在限制的游戏类型中总的投注数:3,错误码501",
+      "matched": false
+    },
+    {
+      "id": "bet_extra_error_503",
+      "family": "passthrough",
+      "input_label": "会员在限制的游戏类型中总的投注数:3,错误码503",
+      "expected_canonical_label": "会员在限制的游戏类型中总的投注数:3,错误码503",
+      "matched": false
+    },
+    {
+      "id": "bet_minimum_policy_3",
+      "family": "passthrough",
+      "input_label": "会员在限制的游戏类型中总的投注数:1,最低投注门槛:3次",
+      "expected_canonical_label": "会员在限制的游戏类型中总的投注数:1,最低投注门槛:3次",
+      "matched": false
+    },
+    {
+      "id": "bet_minimum_policy_5",
+      "family": "passthrough",
+      "input_label": "会员在限制的游戏类型中总的投注数:1,最低投注门槛:5次",
+      "expected_canonical_label": "会员在限制的游戏类型中总的投注数:1,最低投注门槛:5次",
+      "matched": false
+    },
+    {
+      "id": "recharge_policy7_actual136",
+      "family": "last_recharge_age",
+      "input_label": "最后充值日限额超过 当前配置的最后充值日限制:7 天,最后充值时间:4/26/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:136 天",
+      "expected_canonical_label": "最后充值日超过限制（7天）",
+      "matched": true
+    },
+    {
+      "id": "recharge_policy7_actual60",
+      "family": "last_recharge_age",
+      "input_label": "最后充值日限额超过 当前配置的最后充值日限制:7 天,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天",
+      "expected_canonical_label": "最后充值日超过限制（7天）",
+      "matched": true
+    },
+    {
+      "id": "recharge_policy7_compact",
+      "family": "last_recharge_age",
+      "input_label": "最后充值日限额超过 当前配置的最后充值日限制:7天,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM,间隔:60天",
+      "expected_canonical_label": "最后充值日超过限制（7天）",
+      "matched": true
+    },
+    {
+      "id": "recharge_policy7_fullwidth",
+      "family": "last_recharge_age",
+      "input_label": "最后充值日限额超过 当前配置的最后充值日限制：7 天，最后充值时间：7/11/2026 12:00:00 AM，当前时间：9/9/2026 12:00:00 AM，间隔：60 天",
+      "expected_canonical_label": "最后充值日超过限制（7天）",
+      "matched": true
+    },
+    {
+      "id": "recharge_policy14_actual60",
+      "family": "last_recharge_age",
+      "input_label": "最后充值日限额超过 当前配置的最后充值日限制:14 天,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天",
+      "expected_canonical_label": "最后充值日超过限制（14天）",
+      "matched": true
+    },
+    {
+      "id": "recharge_policy14_actual136",
+      "family": "last_recharge_age",
+      "input_label": "最后充值日限额超过 当前配置的最后充值日限制:14 天,最后充值时间:4/26/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:136 天",
+      "expected_canonical_label": "最后充值日超过限制（14天）",
+      "matched": true
+    },
+    {
+      "id": "recharge_policy7_extra_cause",
+      "family": "passthrough",
+      "input_label": "最后充值日限额超过 当前配置的最后充值日限制:7 天,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天,账户状态异常",
+      "expected_canonical_label": "最后充值日限额超过 当前配置的最后充值日限制:7 天,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天,账户状态异常",
+      "matched": false
+    },
+    {
+      "id": "recharge_policy7_extra_error",
+      "family": "passthrough",
+      "input_label": "最后充值日限额超过 当前配置的最后充值日限制:7 天,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天,错误码501",
+      "expected_canonical_label": "最后充值日限额超过 当前配置的最后充值日限制:7 天,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天,错误码501",
+      "matched": false
+    },
+    {
+      "id": "recharge_not_exceeded",
+      "family": "passthrough",
+      "input_label": "最后充值日限额未超过 当前配置的最后充值日限制:7 天,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天",
+      "expected_canonical_label": "最后充值日限额未超过 当前配置的最后充值日限制:7 天,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天",
+      "matched": false
+    },
+    {
+      "id": "recharge_negative_policy",
+      "family": "passthrough",
+      "input_label": "最后充值日限额超过 当前配置的最后充值日限制:-7 天,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天",
+      "expected_canonical_label": "最后充值日限额超过 当前配置的最后充值日限制:-7 天,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天",
+      "matched": false
+    },
+    {
+      "id": "recharge_wrong_unit",
+      "family": "passthrough",
+      "input_label": "最后充值日限额超过 当前配置的最后充值日限制:7 小时,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天",
+      "expected_canonical_label": "最后充值日限额超过 当前配置的最后充值日限制:7 小时,最后充值时间:7/11/2026 12:00:00 AM,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天",
+      "matched": false
+    },
+    {
+      "id": "recharge_missing_body",
+      "family": "passthrough",
+      "input_label": "最后充值日限额超过 当前配置的最后充值日限制:7 天,最后充值时间:...",
+      "expected_canonical_label": "最后充值日限额超过 当前配置的最后充值日限制:7 天,最后充值时间:...",
+      "matched": false
+    },
+    {
+      "id": "recharge_embedded_cause_in_time",
+      "family": "passthrough",
+      "input_label": "最后充值日限额超过 当前配置的最后充值日限制:7 天,最后充值时间:账户异常,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天",
+      "expected_canonical_label": "最后充值日限额超过 当前配置的最后充值日限制:7 天,最后充值时间:账户异常,当前时间:9/9/2026 12:00:00 AM, 间隔:60 天",
+      "matched": false
+    },
+    {
+      "id": "withdraw_policy1_actual0",
+      "family": "minimum_withdrawals",
+      "input_label": "累计提款次数不能小于1次,当前累计提现次数:0次",
+      "expected_canonical_label": "累计提款次数不能小于1次",
+      "matched": true
+    },
+    {
+      "id": "withdraw_policy1_actual2",
+      "family": "minimum_withdrawals",
+      "input_label": "累计提款次数不能小于1次,当前累计提现次数:2次",
+      "expected_canonical_label": "累计提款次数不能小于1次",
+      "matched": true
+    },
+    {
+      "id": "withdraw_policy1_fullwidth",
+      "family": "minimum_withdrawals",
+      "input_label": "累计提款次数不能小于1次，当前累计提现次数：0次",
+      "expected_canonical_label": "累计提款次数不能小于1次",
+      "matched": true
+    },
+    {
+      "id": "withdraw_policy3_actual0",
+      "family": "minimum_withdrawals",
+      "input_label": "累计提款次数不能小于3次,当前累计提现次数:0次",
+      "expected_canonical_label": "累计提款次数不能小于3次",
+      "matched": true
+    },
+    {
+      "id": "withdraw_policy3_actual2",
+      "family": "minimum_withdrawals",
+      "input_label": "累计提款次数不能小于3次,当前累计提现次数:2次",
+      "expected_canonical_label": "累计提款次数不能小于3次",
+      "matched": true
+    },
+    {
+      "id": "withdraw_policy5_actual0",
+      "family": "minimum_withdrawals",
+      "input_label": "累计提款次数不能小于5次,当前累计提现次数:0次",
+      "expected_canonical_label": "累计提款次数不能小于5次",
+      "matched": true
+    },
+    {
+      "id": "withdraw_policy5_actual4",
+      "family": "minimum_withdrawals",
+      "input_label": "累计提款次数不能小于5次,当前累计提现次数:4次",
+      "expected_canonical_label": "累计提款次数不能小于5次",
+      "matched": true
+    },
+    {
+      "id": "withdraw_policy1_extra_cause",
+      "family": "passthrough",
+      "input_label": "累计提款次数不能小于1次,当前累计提现次数:0次,姓名不一致",
+      "expected_canonical_label": "累计提款次数不能小于1次,当前累计提现次数:0次,姓名不一致",
+      "matched": false
+    },
+    {
+      "id": "withdraw_policy1_extra_error",
+      "family": "passthrough",
+      "input_label": "累计提款次数不能小于1次,当前累计提现次数:0次,错误码501",
+      "expected_canonical_label": "累计提款次数不能小于1次,当前累计提现次数:0次,错误码501",
+      "matched": false
+    },
+    {
+      "id": "withdraw_opposite_comparison",
+      "family": "passthrough",
+      "input_label": "累计提款次数不能大于1次,当前累计提现次数:0次",
+      "expected_canonical_label": "累计提款次数不能大于1次,当前累计提现次数:0次",
+      "matched": false
+    },
+    {
+      "id": "withdraw_changed_negation",
+      "family": "passthrough",
+      "input_label": "累计提款次数可以小于1次,当前累计提现次数:0次",
+      "expected_canonical_label": "累计提款次数可以小于1次,当前累计提现次数:0次",
+      "matched": false
+    },
+    {
+      "id": "withdraw_wrong_current_field",
+      "family": "passthrough",
+      "input_label": "累计提款次数不能小于1次,当前累计提现金额:0次",
+      "expected_canonical_label": "累计提款次数不能小于1次,当前累计提现金额:0次",
+      "matched": false
+    },
+    {
+      "id": "withdraw_negative_actual",
+      "family": "passthrough",
+      "input_label": "累计提款次数不能小于1次,当前累计提现次数:-1次",
+      "expected_canonical_label": "累计提款次数不能小于1次,当前累计提现次数:-1次",
+      "matched": false
+    },
+    {
+      "id": "withdraw_two_causes",
+      "family": "passthrough",
+      "input_label": "累计提款次数不能小于1次,当前累计提现次数:0次;会员在限制的游戏类型中总的投注数:3",
+      "expected_canonical_label": "累计提款次数不能小于1次,当前累计提现次数:0次;会员在限制的游戏类型中总的投注数:3",
+      "matched": false
+    },
+    {
+      "id": "money_less",
+      "family": "unchanged_v2_amount",
+      "input_label": "充提差负盈利金额小于{金额},不能自动出款",
+      "expected_canonical_label": "充提差负盈利金额小于{金额},不能自动出款",
+      "matched": false
+    },
+    {
+      "id": "money_less_repeat",
+      "family": "unchanged_v2_amount",
+      "input_label": "充提差负盈利金额小于{金额},不能自动出款",
+      "expected_canonical_label": "充提差负盈利金额小于{金额},不能自动出款",
+      "matched": false
+    },
+    {
+      "id": "money_greater",
+      "family": "unchanged_v2_amount",
+      "input_label": "充提差负盈利金额大于{金额},不能自动出款",
+      "expected_canonical_label": "充提差负盈利金额大于{金额},不能自动出款",
+      "matched": false
+    },
+    {
+      "id": "money_negation_changed",
+      "family": "unchanged_v2_amount",
+      "input_label": "充提差负盈利金额小于{金额},允许自动出款",
+      "expected_canonical_label": "充提差负盈利金额小于{金额},允许自动出款",
+      "matched": false
+    },
+    {
+      "id": "money_extra_error",
+      "family": "unchanged_v2_amount",
+      "input_label": "充提差负盈利金额小于{金额},不能自动出款,错误码501",
+      "expected_canonical_label": "充提差负盈利金额小于{金额},不能自动出款,错误码501",
+      "matched": false
+    },
+    {
+      "id": "balance_negative",
+      "family": "unchanged_v2_amount",
+      "input_label": "余额-{金额}",
+      "expected_canonical_label": "余额-{金额}",
+      "matched": false
+    },
+    {
+      "id": "balance_positive",
+      "family": "unchanged_v2_amount",
+      "input_label": "余额{金额}",
+      "expected_canonical_label": "余额{金额}",
+      "matched": false
+    },
+    {
+      "id": "money_multiple_causes",
+      "family": "unchanged_v2_amount",
+      "input_label": "提现金额{金额},超过自动限额{金额},用户未完成认证",
+      "expected_canonical_label": "提现金额{金额},超过自动限额{金额},用户未完成认证",
+      "matched": false
+    },
+    {
+      "id": "money_limit_only",
+      "family": "unchanged_v2_amount",
+      "input_label": "提现金额{金额},超过自动限额{金额}",
+      "expected_canonical_label": "提现金额{金额},超过自动限额{金额}",
+      "matched": false
+    },
+    {
+      "id": "fixed_device100",
+      "family": "passthrough",
+      "input_label": "同设备数大于100",
+      "expected_canonical_label": "同设备数大于100",
+      "matched": false
+    },
+    {
+      "id": "fixed_device200",
+      "family": "passthrough",
+      "input_label": "同设备数大于200",
+      "expected_canonical_label": "同设备数大于200",
+      "matched": false
+    },
+    {
+      "id": "fixed_error501",
+      "family": "passthrough",
+      "input_label": "错误码501",
+      "expected_canonical_label": "错误码501",
+      "matched": false
+    },
+    {
+      "id": "fixed_error503",
+      "family": "passthrough",
+      "input_label": "错误码503",
+      "expected_canonical_label": "错误码503",
+      "matched": false
+    },
+    {
+      "id": "fixed_rule3",
+      "family": "passthrough",
+      "input_label": "规则号3不能自动出款",
+      "expected_canonical_label": "规则号3不能自动出款",
+      "matched": false
+    },
+    {
+      "id": "fixed_rule5",
+      "family": "passthrough",
+      "input_label": "规则号5不能自动出款",
+      "expected_canonical_label": "规则号5不能自动出款",
+      "matched": false
+    },
+    {
+      "id": "fixed_amount_comparison",
+      "family": "passthrough",
+      "input_label": "提款金额大于自动出款金额",
+      "expected_canonical_label": "提款金额大于自动出款金额",
+      "matched": false
+    },
+    {
+      "id": "fixed_amount_comparison_negated",
+      "family": "passthrough",
+      "input_label": "提款金额未大于自动出款金额",
+      "expected_canonical_label": "提款金额未大于自动出款金额",
+      "matched": false
+    },
+    {
+      "id": "empty_note_label",
+      "family": "passthrough",
+      "input_label": "未填写备注",
+      "expected_canonical_label": "未填写备注",
+      "matched": false
+    },
+    {
+      "id": "truncated_note_label",
+      "family": "passthrough",
+      "input_label": "备注内容截断，待补充",
+      "expected_canonical_label": "备注内容截断，待补充",
+      "matched": false
+    }
+  ],
+  "must_equal": [
+    {
+      "ids": [
+        "bet_actual_0",
+        "bet_actual_1",
+        "bet_actual_3",
+        "bet_actual_18",
+        "bet_fullwidth_colon",
+        "bet_value_space"
+      ],
+      "why": "同一明确实际投注数字段变化，不是配置门槛变化。"
+    },
+    {
+      "ids": [
+        "recharge_policy7_actual136",
+        "recharge_policy7_actual60",
+        "recharge_policy7_compact",
+        "recharge_policy7_fullwidth"
+      ],
+      "why": "门槛均为7天，实际日期/间隔变化仅为观测值。"
+    },
+    {
+      "ids": [
+        "recharge_policy14_actual60",
+        "recharge_policy14_actual136"
+      ],
+      "why": "门槛均为14天，实际间隔可变。"
+    },
+    {
+      "ids": [
+        "withdraw_policy1_actual0",
+        "withdraw_policy1_actual2",
+        "withdraw_policy1_fullwidth"
+      ],
+      "why": "保留不能小于1次，只忽略明确当前实际次数的差别。"
+    },
+    {
+      "ids": [
+        "withdraw_policy3_actual0",
+        "withdraw_policy3_actual2"
+      ],
+      "why": "配置均为不能小于3次。"
+    },
+    {
+      "ids": [
+        "withdraw_policy5_actual0",
+        "withdraw_policy5_actual4"
+      ],
+      "why": "配置均为不能小于5次。"
+    },
+    {
+      "ids": [
+        "money_less",
+        "money_less_repeat"
+      ],
+      "why": "原v2 label完全相同，直接原文作为类别key。"
+    }
+  ],
+  "must_different": [
+    {
+      "ids": [
+        "recharge_policy7_actual60",
+        "recharge_policy14_actual60"
+      ],
+      "why": "相同实际间隔，不同7/14天规则门槛。"
+    },
+    {
+      "ids": [
+        "withdraw_policy3_actual0",
+        "withdraw_policy5_actual0"
+      ],
+      "why": "相同实际次数，不同3/5次规则门槛。"
+    },
+    {
+      "ids": [
+        "withdraw_policy1_actual0",
+        "withdraw_policy3_actual0"
+      ],
+      "why": "不能丢掉1/3次门槛差别。"
+    },
+    {
+      "ids": [
+        "bet_minimum_policy_3",
+        "bet_minimum_policy_5"
+      ],
+      "why": "附加的最低投注门槛不是可忽略实际数。"
+    },
+    {
+      "ids": [
+        "bet_actual_3",
+        "bet_negated_header"
+      ],
+      "why": "不能丢掉不在限制中的否定词。"
+    },
+    {
+      "ids": [
+        "bet_actual_3",
+        "bet_changed_field"
+      ],
+      "why": "最低投注数不是总的实际投注数。"
+    },
+    {
+      "ids": [
+        "bet_actual_3",
+        "bet_extra_cause"
+      ],
+      "why": "附加认证原因必须保留，不能前缀匹配吞掉。"
+    },
+    {
+      "ids": [
+        "bet_actual_3",
+        "bet_extra_error_501"
+      ],
+      "why": "附加错误码是新的信息。"
+    },
+    {
+      "ids": [
+        "bet_extra_error_501",
+        "bet_extra_error_503"
+      ],
+      "why": "错误码501/503不能归为同类。"
+    },
+    {
+      "ids": [
+        "bet_actual_1",
+        "bet_negative_actual"
+      ],
+      "why": "非法负实际数不应被宽松数值规则吸收。"
+    },
+    {
+      "ids": [
+        "bet_actual_3",
+        "bet_truncated"
+      ],
+      "why": "截断并未给出完整实际值，不能猜成已知类别。"
+    },
+    {
+      "ids": [
+        "recharge_policy7_actual60",
+        "recharge_policy7_extra_cause"
+      ],
+      "why": "完整已知诊断后附加账户异常，不得删除尾部。"
+    },
+    {
+      "ids": [
+        "recharge_policy7_actual60",
+        "recharge_policy7_extra_error"
+      ],
+      "why": "完整已知诊断后附加错误码，不得删除尾部。"
+    },
+    {
+      "ids": [
+        "recharge_policy7_actual60",
+        "recharge_not_exceeded"
+      ],
+      "why": "超过和未超过方向相反。"
+    },
+    {
+      "ids": [
+        "recharge_policy7_actual60",
+        "recharge_wrong_unit"
+      ],
+      "why": "7天与7小时规则不同。"
+    },
+    {
+      "ids": [
+        "recharge_policy7_actual60",
+        "recharge_negative_policy"
+      ],
+      "why": "门槛正负号不能被删除。"
+    },
+    {
+      "ids": [
+        "recharge_policy7_actual60",
+        "recharge_missing_body"
+      ],
+      "why": "未知/缺失正文不能伪装成完整诊断。"
+    },
+    {
+      "ids": [
+        "recharge_policy7_actual60",
+        "recharge_embedded_cause_in_time"
+      ],
+      "why": "日期字段不能用任意文本通配，防止把其他原因当作日期观测删除。"
+    },
+    {
+      "ids": [
+        "withdraw_policy1_actual0",
+        "withdraw_policy1_extra_cause"
+      ],
+      "why": "姓名不一致是附加原因。"
+    },
+    {
+      "ids": [
+        "withdraw_policy1_actual0",
+        "withdraw_policy1_extra_error"
+      ],
+      "why": "错误码必须保留。"
+    },
+    {
+      "ids": [
+        "withdraw_policy1_actual0",
+        "withdraw_opposite_comparison"
+      ],
+      "why": "不能小于与不能大于不同。"
+    },
+    {
+      "ids": [
+        "withdraw_policy1_actual0",
+        "withdraw_changed_negation"
+      ],
+      "why": "不能与可以语义不同。"
+    },
+    {
+      "ids": [
+        "withdraw_policy1_actual0",
+        "withdraw_wrong_current_field"
+      ],
+      "why": "字段名称须准确，次数不等于金额。"
+    },
+    {
+      "ids": [
+        "withdraw_policy1_actual0",
+        "withdraw_negative_actual"
+      ],
+      "why": "负次数格式不应通过非负实际次数规则。"
+    },
+    {
+      "ids": [
+        "withdraw_policy1_actual0",
+        "withdraw_two_causes"
+      ],
+      "why": "两条诊断不能按第一条前缀吞掉第二条。"
+    },
+    {
+      "ids": [
+        "money_less",
+        "money_greater"
+      ],
+      "why": "v2占位只替金额，不合并相反比较。"
+    },
+    {
+      "ids": [
+        "money_less",
+        "money_negation_changed"
+      ],
+      "why": "不能出款与允许出款不同。"
+    },
+    {
+      "ids": [
+        "money_less",
+        "money_extra_error"
+      ],
+      "why": "占位原因附加错误码必须保留。"
+    },
+    {
+      "ids": [
+        "balance_negative",
+        "balance_positive"
+      ],
+      "why": "负余额与正余额不得丢掉负号合并。"
+    },
+    {
+      "ids": [
+        "money_limit_only",
+        "money_multiple_causes"
+      ],
+      "why": "额外认证原因不能被金额模板吞掉。"
+    },
+    {
+      "ids": [
+        "fixed_device100",
+        "fixed_device200"
+      ],
+      "why": "设备数100/200是门槛，不是本次允许变化的实际投注数。"
+    },
+    {
+      "ids": [
+        "fixed_error501",
+        "fixed_error503"
+      ],
+      "why": "固定错误码原文即类别。"
+    },
+    {
+      "ids": [
+        "fixed_rule3",
+        "fixed_rule5"
+      ],
+      "why": "规则编号不得当作普通变化数字删除。"
+    },
+    {
+      "ids": [
+        "fixed_amount_comparison",
+        "fixed_amount_comparison_negated"
+      ],
+      "why": "原文否定必须保留。"
+    },
+    {
+      "ids": [
+        "empty_note_label",
+        "truncated_note_label"
+      ],
+      "why": "没有备注与备注被截断不是同一状态。"
+    }
+  ]
+}
