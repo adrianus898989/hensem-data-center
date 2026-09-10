@@ -21,6 +21,10 @@ const key = 'c'.repeat(64);
       create function public.dashboard_has_permission(text) returns boolean language sql stable as $$ select coalesce(current_setting('test.auto_withdraw',true),'false') = 'true' $$;`);
     await db.exec(migration('20260910073836_withdraw_reasons_snapshots.sql'));
     await db.exec(migration('20260910105601_withdraw_reason_categories.sql'));
+    // Reproduce managed-project defaults, then verify the derived view is read only.
+    await db.exec('grant all on public.withdraw_reasons_daily_grouped to service_role');
+    await db.exec(migration('20260910111641_withdraw_reason_view_readonly.sql'));
+    assert.equal(await scalar("select has_table_privilege('service_role','public.withdraw_reasons_daily_grouped','insert,update,delete')"),false); checks++;
     const labels = new Map();
     for (const c of fixtures.cases) {
       const result = await scalar('select public.withdraw_reason_category($1,$2)', [c.input_label, c.classification || 'unclassified']);
