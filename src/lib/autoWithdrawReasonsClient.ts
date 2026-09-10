@@ -61,6 +61,15 @@ export function reasonPercent(count: number, total: number): string {
   return total > 0 ? `${(count / total * 100).toFixed(2)}%` : "—";
 }
 
+export function reasonSourceTarget(country: string, platform: string) {
+  // These are the two explicitly configured New AR backends. Keep their
+  // snapshots separate from AR, and never fuzzy-match similarly named sites.
+  const name = platform.trim();
+  if (country === "PK" && name.toUpperCase() === "POPZAR") return { source: "NEWAR", platform: "POPZAR" };
+  if (country === "IN" && ["DHANI.WIN", "DHANIWIN"].includes(name.toUpperCase())) return { source: "NEWAR", platform: "DHANI.WIN" };
+  return { source: "AR", platform: name };
+}
+
 // Fail closed on damaged/partial responses: never show a partial count as a full day.
 export function validateReasonsDay(value: unknown): WithdrawReasonsDay {
   const row = value as WithdrawReasonsDay;
@@ -108,14 +117,14 @@ export async function getAutoWithdrawReasons(
   if (!session?.access_token) throw new Error("请先登录后查看原因统计。");
   if (!isReasonDate(target.date) || !target.platform.trim() || target.platform.length > 80) throw new Error("请选择有效的日期和平台。");
   const country = reasonCountryCode(target.country);
-  const platform = target.platform.trim();
+  const { source, platform } = reasonSourceTarget(country, target.platform);
   const url = String(process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim().replace(/\/$/, "");
   const key = String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
   if (!url || !key) throw new Error("原因统计服务尚未配置。");
   // Exact case-insensitive match. Escape LIKE wildcards; never use fuzzy platform matching.
   const query = new URLSearchParams({
     select: "source_system,country_code,platform,stat_date,updated_at,grouping_version,snapshot",
-    source_system: "eq.AR", country_code: `eq.${country}`, stat_date: `eq.${target.date}`,
+    source_system: `eq.${source}`, country_code: `eq.${country}`, stat_date: `eq.${target.date}`,
     platform: `ilike.${platform.replace(/[\\%_*]/g, "\\$&")}`, limit: "2",
   });
   const response = await fetch(`${url}/rest/v1/withdraw_reasons_daily_grouped?${query}`, {
@@ -130,7 +139,7 @@ export async function getAutoWithdrawReasons(
   if (!Array.isArray(json) || json.length > 1) throw new Error("原因数据存在重复平台或响应异常，请联系管理员核对。");
   if (!json.length) return null;
   const day = validateReasonsDay(json[0]);
-  if (day.source_system !== "AR" || day.country_code !== country || day.stat_date !== target.date
+  if (day.source_system !== source || day.country_code !== country || day.stat_date !== target.date
     || day.platform.toUpperCase() !== platform.toUpperCase()) throw new Error("原因数据范围不匹配，未展示其他平台的数据。");
   return day;
 }

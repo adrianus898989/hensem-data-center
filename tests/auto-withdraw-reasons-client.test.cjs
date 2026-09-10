@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const test = require("node:test");
 const { loadTs, root } = require("./load-typescript.cjs");
-const { canReadWithdrawReasons, getAutoWithdrawReasons, validateReasonsDay, reasonPercent, reasonCountryCode } = loadTs(path.join(root, "src/lib/autoWithdrawReasonsClient.ts"));
+const { canReadWithdrawReasons, getAutoWithdrawReasons, validateReasonsDay, reasonPercent, reasonCountryCode, reasonSourceTarget } = loadTs(path.join(root, "src/lib/autoWithdrawReasonsClient.ts"));
 const target = { country: "印度", platform: "TPPLAY", date: "2026-09-09" };
 const session = { access_token: "test-session-token" };
 function fixture() {
@@ -48,6 +48,33 @@ test("one daily query preserves exact source/country/platform/date and uses auth
 });
 test("zero rows means not collected, not fabricated zero totals", async () => {
   await withApi(() => Response.json([]), async () => assert.equal(await getAutoWithdrawReasons(session, target), null));
+});
+test("New AR platform routes are explicit and country-bound", () => {
+  assert.deepEqual(reasonSourceTarget("PK", "popzar"), { source: "NEWAR", platform: "POPZAR" });
+  for (const name of ["DhaniWin", "DHANI.WIN", "dhani.win"])
+    assert.deepEqual(reasonSourceTarget("IN", name), { source: "NEWAR", platform: "DHANI.WIN" });
+  for (const [country, name] of [["IN", "POPZAR"], ["PK", "DHANI.WIN"], ["IN", "DHANIWIN2"], ["IN", "TPPLAY"]])
+    assert.deepEqual(reasonSourceTarget(country, name), { source: "AR", platform: name });
+});
+test("New AR queries use their own source and canonical platform without old-AR fallback", async () => {
+  for (const [country, code, input, platform] of [["巴基斯坦", "PK", "POPZAR", "POPZAR"], ["印度", "IN", "DhaniWin", "DHANI.WIN"]]) {
+    const data = { ...fixture(), source_system: "NEWAR", country_code: code, platform };
+    await withApi(({ url }) => {
+      assert.equal(url.searchParams.get("source_system"), "eq.NEWAR");
+      assert.equal(url.searchParams.get("country_code"), `eq.${code}`);
+      assert.equal(url.searchParams.get("platform"), `ilike.${platform}`);
+      return Response.json([data]);
+    }, async calls => {
+      assert.deepEqual(await getAutoWithdrawReasons(session, { ...target, country, platform: input }), data);
+      assert.equal(calls.length, 1);
+    });
+    await withApi(() => Response.json([{ ...data, source_system: "AR" }]), async () =>
+      assert.rejects(getAutoWithdrawReasons(session, { ...target, country, platform: input }), /不匹配/));
+    await withApi(() => Response.json([]), async calls => {
+      assert.equal(await getAutoWithdrawReasons(session, { ...target, country, platform: input }), null);
+      assert.equal(calls.length, 1);
+    });
+  }
 });
 test("case insensitive matching preserves platform punctuation", async () => {
   await withApi(({ url }) => { assert.equal(url.searchParams.get("platform"), "ilike.Shree.Win"); return Response.json([{ ...fixture(), platform: "SHREE.WIN" }]); },
