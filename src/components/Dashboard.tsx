@@ -3066,7 +3066,7 @@ function AutoWithdrawTable({
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <Fragment key={`${row.sourceSheet}-${row.country}-${row.platform}-${index}`}><tr>
+            <Fragment key={withNotes ? JSON.stringify([row.country, row.platform]) : `${row.sourceSheet}-${row.country}-${row.platform}-${index}`}><tr>
               <td><span className="country-pill">{row.country}</span></td>
               <td className="platform-cell">{row.platform}</td>
               <td className="num">{formatNumber(row.total)}</td>
