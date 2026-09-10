@@ -13,6 +13,7 @@ export type WithdrawReasonGroup = {
   reject: number;
   other: number;
   samples: string[];
+  variants?: Array<{ reason_label: string; count: number }>;
 };
 export type WithdrawReasonsDay = {
   source_system: string;
@@ -20,6 +21,7 @@ export type WithdrawReasonsDay = {
   platform: string;
   stat_date: string;
   updated_at: string;
+  grouping_version?: string;
   snapshot: {
     schema_version: number;
     classifier_version: string;
@@ -83,6 +85,9 @@ export function validateReasonsDay(value: unknown): WithdrawReasonsDay {
       || typeof g.reason_key !== "string" || !g.reason_key || typeof g.reason_label !== "string" || !g.reason_label
       || !Array.isArray(g.samples) || g.samples.some(s => typeof s !== "string")
       || ![g.count, g.success, g.reject, g.other].every(count) || g.success + g.reject + g.other !== g.count) return fail();
+    if (g.variants !== undefined && (!Array.isArray(g.variants) || g.variants.length === 0
+      || g.variants.some(v => !v || typeof v.reason_label !== "string" || !v.reason_label || !count(v.count))
+      || g.variants.reduce((sum, v) => sum + v.count, 0) !== g.count)) return fail();
     const key = `${g.operator_class}:${g.reason_key}`;
     if (seen.has(key)) return fail();
     seen.add(key);
@@ -109,11 +114,11 @@ export async function getAutoWithdrawReasons(
   if (!url || !key) throw new Error("原因统计服务尚未配置。");
   // Exact case-insensitive match. Escape LIKE wildcards; never use fuzzy platform matching.
   const query = new URLSearchParams({
-    select: "source_system,country_code,platform,stat_date,updated_at,snapshot",
+    select: "source_system,country_code,platform,stat_date,updated_at,grouping_version,snapshot",
     source_system: "eq.AR", country_code: `eq.${country}`, stat_date: `eq.${target.date}`,
     platform: `ilike.${platform.replace(/[\\%_*]/g, "\\$&")}`, limit: "2",
   });
-  const response = await fetch(`${url}/rest/v1/withdraw_reasons_daily?${query}`, {
+  const response = await fetch(`${url}/rest/v1/withdraw_reasons_daily_grouped?${query}`, {
     headers: { apikey: key, Authorization: `Bearer ${session.access_token}` }, cache: "no-store", signal,
   });
   const json: unknown = await response.json().catch(() => null);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { AutoWithdrawPayload, AutoWithdrawRow, DailyWithdrawRow, OperatorRow } from "@/lib/types";
 import { formatDuration, formatNumber, formatPercent, parseDurationToSeconds } from "@/lib/format";
@@ -13,7 +13,7 @@ import { useDashboardAuth } from "./DashboardAuthGate";
 import { canOpenAdminCenter, hasDashboardPermission, normalizedManagementPermissions } from "@/lib/dashboardAuthClient";
 import { aggregateAutoWithdrawByPlatform as aggregateByPlatform } from "@/lib/autoWithdrawComparison";
 import { AutoWithdrawNotesProvider, AutoWithdrawReasonCell } from "./AutoWithdrawNotes";
-import { AutoWithdrawReasonsProvider, AutoWithdrawReasonsButton } from "./AutoWithdrawReasons";
+import { AutoWithdrawReasonsProvider, AutoWithdrawReasonsButton, AutoWithdrawReasonsInlineRow } from "./AutoWithdrawReasons";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 type ModuleMode = "home" | "auto" | "operator" | "volume" | "work" | "admin";
@@ -3066,7 +3066,7 @@ function AutoWithdrawTable({
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={`${row.sourceSheet}-${row.platform}-${index}`}>
+            <Fragment key={`${row.sourceSheet}-${row.country}-${row.platform}-${index}`}><tr>
               <td><span className="country-pill">{row.country}</span></td>
               <td className="platform-cell">{row.platform}</td>
               <td className="num">{formatNumber(row.total)}</td>
@@ -3084,6 +3084,7 @@ function AutoWithdrawTable({
               {withNotes && <td className="auto-note-column"><AutoWithdrawReasonCell country={row.country} platform={row.platform} /></td>}
               <td><div className={withNotes ? "wr-row-actions" : undefined}>{withNotes && <AutoWithdrawReasonsButton country={row.country} platform={row.platform} />}<button className="detail-view-btn" type="button" onClick={() => onOpenOperators?.(row)}>{withNotes ? "日明细" : "查看"}</button></div></td>
             </tr>
+            {withNotes && <AutoWithdrawReasonsInlineRow country={row.country} platform={row.platform} />}</Fragment>
           ))}
         </tbody>
         <tfoot>

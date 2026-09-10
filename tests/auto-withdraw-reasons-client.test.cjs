@@ -34,7 +34,7 @@ async function withApi(respond, run) {
 test("one daily query preserves exact source/country/platform/date and uses authenticated read only", async () => {
   const controller = new AbortController();
   await withApi(({ url, options }) => {
-    assert.equal(url.pathname, "/rest/v1/withdraw_reasons_daily");
+    assert.equal(url.pathname, "/rest/v1/withdraw_reasons_daily_grouped");
     assert.equal(url.searchParams.get("source_system"), "eq.AR");
     assert.equal(url.searchParams.get("country_code"), "eq.IN");
     assert.equal(url.searchParams.get("stat_date"), "eq.2026-09-09");
@@ -124,4 +124,14 @@ test("frontend permission gate matches database: active owner or explicit module
   assert.equal(canReadWithdrawReasons({ active: true, role: "admin" }), false);
   assert.equal(canReadWithdrawReasons({ active: true, role: "viewer", permissions: { auto_withdraw: true } }), true);
   assert.equal(canReadWithdrawReasons({ active: true, role: "admin", permissions: { auto_withdraw: false } }), false);
+});
+test("group variants retain exact counts and reject missing/duplicated-count totals", () => {
+  const day = fixture();
+  day.grouping_version = "reason-category-v1";
+  day.snapshot.groups[3].variants = [{ reason_label: "投注实际数1", count: 100 }, { reason_label: "投注实际数3", count: 141 }];
+  assert.equal(validateReasonsDay(day).snapshot.groups[3].count, 241);
+  day.snapshot.groups[3].variants[0].count++;
+  assert.throws(() => validateReasonsDay(day), /校验失败/);
+  day.snapshot.groups[3].variants = [];
+  assert.throws(() => validateReasonsDay(day), /校验失败/);
 });
