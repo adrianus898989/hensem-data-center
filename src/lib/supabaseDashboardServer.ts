@@ -346,7 +346,7 @@ function mapDbDaily(row: DbAutoWithdrawRow): DailyWithdrawRow {
     autoRate: total ? autoCount / total : 0,
     manualRate: total ? manualCount / total : 0,
     avgTime: String(row.avg_time_text || "") || formatDuration(avgSeconds),
-    yesterdayAvgTime: "0秒",
+    yesterdayAvgTime: "-",
     comparePercent: "-",
     sourceSheet: String(row.source_sheet || "Supabase"),
     date: String(row.data_date || ""),
@@ -364,7 +364,7 @@ function mapDbOperator(row: DbOperatorRow): OperatorRow {
     processed: Number(row.processed || 0),
     rejected: Number(row.rejected || 0),
     avgTime: String(row.avg_time_text || "") || formatDuration(avgSeconds),
-    yesterdayAvgTime: "0秒",
+    yesterdayAvgTime: "-",
     comparePercent: "-",
   };
 }
@@ -377,7 +377,7 @@ function enrichDbDaily(rows: DailyWithdrawRow[]): DailyWithdrawRow[] {
     const previous = seconds.get(`${row.country}|||${row.platform}|||${addIsoDays(row.date, -1)}`) || 0;
     return {
       ...row,
-      yesterdayAvgTime: previous ? formatDuration(previous) : "0秒",
+      yesterdayAvgTime: previous ? formatDuration(previous) : "-",
       comparePercent: compareDurationPercent(current, previous),
     };
   });
@@ -391,7 +391,7 @@ function enrichDbOperators(rows: OperatorRow[]): OperatorRow[] {
     const previous = seconds.get(`${row.country}|||${row.platform}|||${row.account}|||${addIsoDays(row.date, -1)}`) || 0;
     return {
       ...row,
-      yesterdayAvgTime: previous ? formatDuration(previous) : "0秒",
+      yesterdayAvgTime: previous ? formatDuration(previous) : "-",
       comparePercent: compareDurationPercent(current, previous),
     };
   });
@@ -404,7 +404,9 @@ export async function readSupabaseAutoWithdraw(request: Request, startInput: str
 
   const start = isoDate(startInput);
   const end = isoDate(endInput || startInput);
-  if (!start || !end) throw new Error("自动出款查询日期无效");
+  if (!start || !end || start > end) throw new Error("自动出款查询日期无效");
+  // The preceding calendar day is fetched even across month/year boundaries,
+  // then removed after comparison enrichment so it cannot inflate totals.
   const queryStart = addIsoDays(start, -1);
 
   const dailyQuery = new URLSearchParams();
