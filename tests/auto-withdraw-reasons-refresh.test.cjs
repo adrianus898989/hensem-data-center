@@ -50,7 +50,7 @@ test('same user token renewal does not refetch; manual refresh reads newest toke
   const previous=h.states[2];h.states[5]++;h.render();
   assert.equal(h.calls.length,2);assert.equal(h.calls[1].session.access_token,'renewed');
   assert.equal(h.states[2],previous,'Manual refresh does not clear successful current-scope content');
-  assert.match(textOf(h.panel()),/总笔数/);
+  assert.match(textOf(h.panel()),/有原因订单/);
   h.calls[1].resolve(day);await settle();
 });
 test('switching platform aborts the old request and ignores its late response',async()=>{
@@ -62,7 +62,7 @@ test('switching platform aborts the old request and ignores its late response',a
 test('switching authenticated user hides cached data and uses a new request',async()=>{
   const h=harness();h.calls[0].resolve(day);await settle();h.render();
   h.setAuth({...h.getAuth(),session:{access_token:'other-token',user:{id:'user-2'}}});h.render();
-  assert.equal(h.calls.length,2);assert.doesNotMatch(textOf(h.panel()),/总笔数/);
+  assert.equal(h.calls.length,2);assert.doesNotMatch(textOf(h.panel()),/有原因订单/);
   h.calls[1].resolve(day);await settle();h.render();assert.equal(h.states[2].viewerKey,'user-2');
 });
 test('permission loss aborts in-flight request and clears prior data',async()=>{

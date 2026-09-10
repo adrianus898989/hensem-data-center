@@ -9,7 +9,7 @@ const { loadTs, root } = require('./load-typescript.cjs');
 const target = {country:'印度',platform:'TPPLAY',date:'2026-09-09'};
 
 // Component render tests with injected hook state; no browser, login or network.
-function render({expanded=false,inline=true,allowed=true,empty=false,error='',rowExpanded=false,loading=false,dayOverride=null,operator='manual',search='',page=1}={}) {
+function render({expanded=false,inline=true,allowed=true,empty=false,error='',rowExpanded=false,loading=false,dayOverride=null,operator='manual',search='',page=1,availableTotal=33}={}) {
   const api = loadTs(path.join(root,'src/lib/autoWithdrawReasonsClient.ts'));
   let state = 0;
   const day = dayOverride || {stat_date:target.date,updated_at:'2026-09-10T10:49:00Z',grouping_version:'reason-category-v1',snapshot:{
@@ -30,7 +30,7 @@ function render({expanded=false,inline=true,allowed=true,empty=false,error='',ro
     throw new Error(`Unexpected dependency ${name}`);
   },module,module.exports);
   const {AutoWithdrawReasonsProvider:Provider,AutoWithdrawReasonsButton:Button,AutoWithdrawReasonsInlineRow:Row}=module.exports;
-  return renderToStaticMarkup(React.createElement(Provider,{startDate:target.date,endDate:target.date,availableRows:[{...target,total:33,manualCount:33}]},
+  return renderToStaticMarkup(React.createElement(Provider,{startDate:target.date,endDate:target.date,availableRows:[{...target,total:availableTotal,manualCount:33}]},
     React.createElement('table',null,React.createElement('tbody',null,
       React.createElement('tr',null,React.createElement('td',null,React.createElement(Button,target))),
       React.createElement(Row,target), React.createElement(Row,{...target,platform:'OTHER'})))));
@@ -89,8 +89,8 @@ test('compact detail puts date in the header and counts in a strip, with no metr
   assert.match(html,/class="wr-inline-panel wr-review"/);
   assert.match(html,/<header class="wr-header">[\s\S]*统计日期[\s\S]*type="date"[\s\S]*关闭原因统计[\s\S]*<\/header>/);
   assert.match(html,/class="wr-overview"/);assert.doesNotMatch(html,/class="wr-stats"/);
-  assert.match(html,/人工处理<\/span><strong>33<\/strong><small title="占总笔数">100.00%/);
-  assert.match(html,/自动出款<\/span><strong>0<\/strong><small title="占总笔数">0.00%/);
+  assert.match(html,/人工处理<\/span><strong>33<\/strong><small title="占全部有原因订单">100.00%/);
+  assert.match(html,/自动出款<\/span><strong>0<\/strong><small title="占全部有原因订单">0.00%/);
 });
 
 test('21 and 41 reason categories expose top and bottom pagination and last entries',()=>{
@@ -110,7 +110,7 @@ test('search and fewer refreshed categories clamp page and show matched counts o
   const dayOverride=manyReasons();
   const html=render({expanded:true,dayOverride,search:'分类原因 41',page:3});
   assert.match(html,/分类原因 41/);assert.match(html,/匹配 1 类 · 1 笔/);
-  assert.match(html,/该原因笔数 ÷ 人工处理 41 笔/);
+  assert.match(html,/该原因笔数 ÷ 人工处理有原因订单 41 笔/);
   assert.match(html,/2.44%/);assert.doesNotMatch(html,/aria-label="原因分类分页"/);
   const reduced=render({expanded:true,dayOverride:manyReasons(2),page:3});
   assert.match(reduced,/分类原因 1/);assert.match(reduced,/分类原因 2/);
@@ -134,4 +134,108 @@ test('inline width follows visible parent, without 1100px ceiling or height clip
   assert.match(css,/\.wr-inline-panel\.wr-review \.wr-body\{overflow:visible\}/);
   assert.match(css,/\.wr-review \.wr-reason-text\{white-space:pre-wrap;overflow-wrap:anywhere/);
   assert.match(css,/\.wr-review \.wr-variant-item\{[^}]*white-space:pre-wrap;overflow-wrap:anywhere/);
+});
+
+function distinctDenominators() {
+  const group=(operator_class,reason_key,count,variants)=>({operator_class,reason_key,reason_label:`原因 ${reason_key}`,
+    classification:'template',count,success:count,reject:0,other:0,samples:[],variants});
+  return {stat_date:target.date,updated_at:'2026-09-10T10:49:00Z',snapshot:{coverage:{incomplete_note_count:0},
+    totals:{total:100,manual:60,auto:30,unknown:10,success:100,reject:0,other:0},
+    groups:[group('manual','M1',30,[{reason_label:'原备注 A',count:12},{reason_label:'原备注 B',count:18}]),
+      group('manual','M2',30),group('auto','A1',15),group('auto','A2',15),group('unknown','U1',10)]}};
+}
+
+test('each reason shows current-operator reason share without search reweighting',()=>{
+  for (const search of ['', '原因 M1']) {
+    const html=render({expanded:true,dayOverride:distinctDenominators(),search});
+    assert.match(html,/class="wr-reason-share" title="30 ÷ 人工处理有原因订单 60 笔"><strong>50.00%/);
+    assert.match(html,/>原因占比<\/th>/);
+  }
+});
+
+test('expanded original remarks show share of parent reason and share of current operator',()=>{
+  const html=render({expanded:true,rowExpanded:true,dayOverride:distinctDenominators()});
+  assert.match(html,/>占该原因<\/span>/);
+  assert.match(html,/class="wr-variant-share" title="12 ÷ 该原因 30 笔">40.00%/);
+  assert.match(html,/class="wr-variant-operator-share" title="12 ÷ 人工处理有原因订单 60 笔">20.00%/);
+  assert.match(html,/class="wr-variant-share" title="18 ÷ 该原因 30 笔">60.00%/);
+  assert.match(html,/class="wr-variant-operator-share" title="18 ÷ 人工处理有原因订单 60 笔">30.00%/);
+});
+
+test('auto and unknown percentages use their own operation denominator with fallback remark',()=>{
+  for (const [operator,count,label,operatorShare] of [['auto',15,'自动出款','50.00%'],['unknown',10,'方式未识别','100.00%']]) {
+    const html=render({expanded:true,rowExpanded:true,dayOverride:distinctDenominators(),operator});
+    assert.ok(html.includes(`class="wr-reason-share" title="${count} ÷ ${label}有原因订单 ${operator==='auto'?30:10} 笔"><strong>${operatorShare}`));
+    assert.ok(html.includes(`class="wr-variant-share" title="${count} ÷ 该原因 ${count} 笔">100.00%`));
+  }
+});
+
+test('zero count ratios render zero or unavailable without invalid percentages',()=>{
+  const dayOverride=manyReasons(1);
+  dayOverride.snapshot.groups[0]={...dayOverride.snapshot.groups[0],count:0,success:0};
+  dayOverride.snapshot.totals={total:0,manual:0,auto:0,unknown:0,success:0,reject:0,other:0};
+  const html=render({expanded:true,rowExpanded:true,dayOverride});
+  assert.match(html,/class="wr-reason-share"[^>]*><strong>—/);
+  assert.match(html,/class="wr-variant-share"[^>]*>—/);
+  assert.doesNotMatch(html,/NaN|Infinity/);
+  dayOverride.snapshot.totals.total=1;dayOverride.snapshot.totals.manual=1;
+  dayOverride.snapshot.groups.push({...dayOverride.snapshot.groups[0],reason_key:'positive',count:1,success:1});
+  const positive=render({expanded:true,dayOverride});
+  assert.match(positive,/class="wr-reason-share"[^>]*><strong>0.00%/);
+});
+
+function addEmpty(day,operator,count,other=0) {
+  day.snapshot.groups.push({operator_class:operator,reason_key:`empty-${operator}`,reason_label:'未填写备注',classification:'empty',
+    count,success:count-other,reject:0,other,samples:[],variants:[{reason_label:'未填写备注',count}]});
+  day.snapshot.totals.total+=count;day.snapshot.totals[operator]+=count;
+  day.snapshot.totals.success+=count-other;day.snapshot.totals.other+=other;
+  return day;
+}
+
+test('empty remarks are hidden and excluded from all panel counts and operation denominators',()=>{
+  const dayOverride=distinctDenominators();
+  addEmpty(dayOverride,'manual',40);addEmpty(dayOverride,'auto',20);addEmpty(dayOverride,'unknown',10);
+  for (const [operator,count,denominator,share] of [['manual',30,60,'50.00%'],['auto',15,30,'50.00%'],['unknown',10,10,'100.00%']]) {
+    const html=render({expanded:true,dayOverride,operator,availableTotal:170});
+    assert.match(html,/>有原因订单<\/dt><dd><strong>100<\/strong>/);
+    assert.match(html,/全部方式未填 70 笔不计/);
+    assert.ok(html.includes(`有原因订单 ${denominator} 笔"><strong>${share}`));
+    assert.doesNotMatch(html,/>未填写备注<|尚未对齐/);
+    assert.ok(!html.includes('empty-'+operator));
+  }
+  const searched=render({expanded:true,dayOverride,search:'未填写备注',availableTotal:170});
+  assert.match(searched,/没有匹配的原因/);
+  assert.doesNotMatch(searched,/class="wr-reason-share"/);
+});
+
+test('91CLUB screenshot denominator subtracts 929 blank notes before calculating reason percentages',()=>{
+  const dayOverride=distinctDenominators();
+  dayOverride.snapshot.totals={total:16020,manual:16020,auto:0,unknown:0,success:16020,reject:0,other:0};
+  dayOverride.snapshot.groups=dayOverride.snapshot.groups.slice(0,2).map((g,i)=>({...g,count:i===0?5595:10425,success:i===0?5595:10425,variants:undefined}));
+  addEmpty(dayOverride,'manual',929);
+  const html=render({expanded:true,dayOverride,availableTotal:16949,search:'原因 M1'});
+  assert.match(html,/class="wr-reason-share" title="5,595 ÷ 人工处理有原因订单 16,020 笔"><strong>34.93%/);
+  assert.doesNotMatch(html,/33.01%|尚未对齐/);
+});
+
+test('all blank capture is a collected day with no reasons, not missing data or invalid percentages',()=>{
+  const dayOverride=distinctDenominators();
+  dayOverride.snapshot.groups=[];
+  dayOverride.snapshot.totals={total:0,manual:0,auto:0,unknown:0,success:0,reject:0,other:0};
+  addEmpty(dayOverride,'manual',33,2);
+  const html=render({expanded:true,dayOverride,availableTotal:33});
+  assert.match(html,/>有原因订单<\/dt><dd><strong>0<\/strong>/);
+  assert.match(html,/当天没有人工处理的已填写原因/);
+  assert.doesNotMatch(html,/尚未同步|尚未对齐|NaN|Infinity|<th>其他<\/th>|其他状态/);
+});
+
+test('unclassified and truncated real remarks remain in the reason denominator',()=>{
+  const dayOverride=distinctDenominators();
+  dayOverride.snapshot.groups[0].classification='unclassified';
+  dayOverride.snapshot.groups[1].classification='truncated';
+  addEmpty(dayOverride,'manual',40);
+  const html=render({expanded:true,rowExpanded:true,dayOverride,availableTotal:140});
+  assert.match(html,/待补全文/);
+  assert.match(html,/class="wr-variant-operator-share" title="12 ÷ 人工处理有原因订单 60 笔">20.00%/);
+  assert.match(html,/class="wr-reason-share"[^>]*><strong>50.00%/);
 });
