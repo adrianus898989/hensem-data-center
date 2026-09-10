@@ -14,6 +14,15 @@ const fmt = (n: number) => n.toLocaleString("zh-CN");
 const operatorNames: Record<ReasonOperator, string> = { manual: "人工处理", auto: "自动出款", unknown: "方式未识别" };
 const keyOf = (p: Platform) => JSON.stringify([p.country, p.platform]);
 
+function ReasonPagination({ page, pages, total, onPage }: { page: number; pages: number; total: number; onPage: (page: number) => void }) {
+  if (pages <= 1) return null;
+  return <nav className="wr-pagination" aria-label="原因分类分页">
+    <span>{(page - 1) * 20 + 1}–{Math.min(page * 20, total)} / 共 {total} 类</span>
+    <button type="button" disabled={page <= 1} onClick={() => onPage(page - 1)} aria-label="上一页原因">上一页</button>
+    <button type="button" disabled={page >= pages} onClick={() => onPage(page + 1)} aria-label="下一页原因">下一页</button>
+  </nav>;
+}
+
 function ReasonRow({ group: g, denominator, showOther }: { group: WithdrawReasonGroup; denominator: number; showOther: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const variants = g.variants || [{ reason_label: g.reason_label, count: g.count }];
@@ -128,12 +137,13 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
     .sort((a, b) => b.count - a.count || a.reason_key.localeCompare(b.reason_key));
   const pages = Math.max(1, Math.ceil(groups.length / 20));
   const actualPage = Math.min(page, pages);
+  const matchedCount = groups.reduce((sum, group) => sum + group.count, 0);
   const reportRows = target ? availableRows.filter(row => row.date === target.date && row.country === target.country && row.platform === target.platform) : [];
   const reportTotal = reportRows.reduce((sum, row) => sum + row.total, 0);
   const differs = Boolean(totals && reportRows.length && reportTotal !== totals.total);
   const showOther = Boolean(totals?.other);
 
-  const panel = target && <div className={inline ? "wr-inline-panel" : "wr-modal"} role={inline ? "region" : "dialog"}
+  const panel = target && <div className={inline ? "wr-inline-panel wr-review" : "wr-modal wr-review"} role={inline ? "region" : "dialog"}
         aria-modal={inline ? undefined : true} aria-labelledby="wr-title" ref={modalRef}
         onKeyDown={e => {
           if (e.key === "Escape") { e.stopPropagation(); close(); }
@@ -143,47 +153,49 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
           if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
           else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
         }}>
-        <header className="wr-header"><div><h2 id="wr-title">{target.platform} · 原因明细</h2><span className="wr-country">{target.country}</span></div>
-          <button type="button" className="detail-view-btn" onClick={close} aria-label="关闭原因统计">关闭</button></header>
-        <div className="wr-body">
+        <header className="wr-header"><div className="wr-identity"><h2 id="wr-title">{target.platform} · 原因明细</h2><span className="wr-country">{target.country}</span></div>
           <div className="wr-filters">
-            <label>统计日期<input type="date" value={target.date} min={startDate} max={endDate} onChange={e => setTarget({ ...target, date: e.target.value })} /></label>
-            {!inline && <label>国家 / 平台<select value={keyOf(target)} onChange={e => { const p = platforms.find(p => keyOf(p) === e.target.value); if (p) setTarget({ ...p, date: target.date }); }}>
+            <label><span className="wr-field-label">统计日期</span><input type="date" value={target.date} min={startDate} max={endDate} onChange={e => setTarget({ ...target, date: e.target.value })} /></label>
+            {!inline && <label><span className="wr-field-label">国家 / 平台</span><select value={keyOf(target)} onChange={e => { const p = platforms.find(p => keyOf(p) === e.target.value); if (p) setTarget({ ...p, date: target.date }); }}>
               {platforms.map(p => <option key={keyOf(p)} value={keyOf(p)}>{p.country} / {p.platform}</option>)}
             </select></label>}
             <button type="button" className="wr-refresh" disabled={loading} onClick={() => setReload(n => n + 1)}>{loading ? "读取中…" : "刷新"}</button>
           </div>
+          <button type="button" className="wr-close" onClick={close} aria-label="关闭原因统计">{inline ? "收起" : "关闭"}<span aria-hidden="true">×</span></button>
+        </header>
+        <div className="wr-body">
           {loading && !day && <div className="wr-state" role="status">正在读取…</div>}
           {error && <div className="wr-alert" role="alert">{error}</div>}
           {!loading && !error && visibleResult && !day && <div className="wr-state"><strong>该平台当天尚未同步原因数据</strong>
             <p>补采该日期后点击刷新。</p></div>}
           {!error && day && totals && <>
-            <div className="wr-stats">
-              {[
-                ["总笔数", totals.total, ""],
-                ["自动出款", totals.auto, reasonPercent(totals.auto, totals.total)],
-                ["人工处理", totals.manual, reasonPercent(totals.manual, totals.total)],
-                ["成功", totals.success, reasonPercent(totals.success, totals.total)],
-                ["驳回", totals.reject, reasonPercent(totals.reject, totals.total)],
-              ].map(([label, count, sub]) => <div key={label}><span>{label}</span><strong>{fmt(Number(count))}</strong>{sub && <small>{sub}</small>}</div>)}
-            </div>
+            <dl className="wr-overview" aria-label="采集总数及结果，占比按总笔数计算">
+              <div><dt>总笔数</dt><dd><strong>{fmt(totals.total)}</strong></dd></div>
+              <div className="wr-success"><dt>成功</dt><dd><strong>{fmt(totals.success)}</strong><small title="成功笔数 / 总笔数；沿用日表口径（含已提交）">{reasonPercent(totals.success, totals.total)}</small></dd></div>
+              <div className="wr-rejected"><dt>驳回</dt><dd><strong>{fmt(totals.reject)}</strong><small title="驳回笔数 / 总笔数">{reasonPercent(totals.reject, totals.total)}</small></dd></div>
+              {totals.other > 0 && <div><dt>其他状态</dt><dd><strong>{fmt(totals.other)}</strong><small>{reasonPercent(totals.other, totals.total)}</small></dd></div>}
+            </dl>
             {differs && <div className="wr-alert">采集 {fmt(totals.total)} 笔 / 日表 {fmt(reportTotal)} 笔，尚未对齐；占比按采集数据计算。</div>}
             {day.snapshot.coverage.incomplete_note_count > 0 && <div className="wr-alert">{fmt(day.snapshot.coverage.incomplete_note_count)} 笔备注待补全文，请重新采集当天。</div>}
             <div className="wr-reason-controls">
               <div className="wr-tabs" role="group" aria-label="操作方式">
                 {(["manual", "auto", "unknown"] as const).map(type => <button type="button" key={type} aria-pressed={operator === type}
                   title={type === "unknown" ? "原因已归类；原记录未识别自动或人工，不并入人工笔数。" : undefined}
-                  className={operator === type ? "active" : ""} onClick={() => setOperator(type)}>{operatorNames[type]} {fmt(totals[type])}</button>)}
+                  className={operator === type ? "active" : ""} onClick={() => setOperator(type)}>
+                  <span>{operatorNames[type]}</span><strong>{fmt(totals[type])}</strong><small title="占总笔数">{reasonPercent(totals[type], totals.total)}</small>
+                </button>)}
               </div>
-              <input aria-label="搜索原因或备注样本" placeholder="搜索原因" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} />
+              <div className="wr-reason-tools">
+                <input aria-label="搜索原因或备注样本" placeholder="搜索原因 / 原备注" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} />
+                <ReasonPagination page={actualPage} pages={pages} total={groups.length} onPage={setPage} />
+              </div>
             </div>
             <div className="wr-table-wrap"><table className="wr-table"><colgroup><col className="wr-col-reason" /><col className="wr-col-count" /><col className="wr-col-percent" /><col className="wr-col-status" />{showOther && <col className="wr-col-other" />}<col className="wr-col-detail" /></colgroup><thead><tr>
               <th>原因</th><th>笔数</th><th title={`该原因笔数 ÷ ${operatorNames[operator]} ${fmt(denominator)} 笔`}>占{operatorNames[operator]}</th><th title="沿用日表口径，已提交计入成功">成功 / 驳回</th>{showOther && <th>其他</th>}<th>明细</th>
             </tr></thead><tbody>{groups.slice((actualPage - 1) * 20, actualPage * 20).map(g => <ReasonRow key={`${operator}:${g.reason_key}`} group={g} denominator={denominator} showOther={showOther} />)}</tbody></table>
             {!groups.length && <div className="wr-state">{search ? "没有匹配的原因" : `当天没有${operatorNames[operator]}记录`}</div>}</div>
-            <div className="wr-footer"><span>{groups.length} 类 · {fmt(denominator)} 笔</span>{pages > 1 && <div>
-              <button type="button" disabled={actualPage <= 1} onClick={() => setPage(actualPage - 1)}>上一页</button><span>{actualPage} / {pages}</span>
-              <button type="button" disabled={actualPage >= pages} onClick={() => setPage(actualPage + 1)}>下一页</button></div>}</div>
+            <div className="wr-footer"><span>{search.trim() ? "匹配" : "共"} {groups.length} 类 · {fmt(matchedCount)} 笔</span>
+              <ReasonPagination page={actualPage} pages={pages} total={groups.length} onPage={setPage} /></div>
           </>}
         </div>
       </div>;
