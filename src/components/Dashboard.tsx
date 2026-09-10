@@ -12,8 +12,9 @@ import AdminControlCenter from "./AdminControlCenter";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { canOpenAdminCenter, hasDashboardPermission, normalizedManagementPermissions } from "@/lib/dashboardAuthClient";
 import { aggregateAutoWithdrawByPlatform as aggregateByPlatform } from "@/lib/autoWithdrawComparison";
-import { AutoWithdrawNotesProvider, AutoWithdrawReasonCell } from "./AutoWithdrawNotes";
-import { AutoWithdrawReasonsProvider, AutoWithdrawReasonsButton, AutoWithdrawReasonsInlineRow } from "./AutoWithdrawReasons";
+import { AutoWithdrawNotesProvider, AutoWithdrawReasonCell, AutoWithdrawNotesActions } from "./AutoWithdrawNotes";
+import { AutoWithdrawReasonsProvider, AutoWithdrawReasonsButton, AutoWithdrawReasonsInlineRow, AutoWithdrawReasonsQueryButton } from "./AutoWithdrawReasons";
+import { AutoWithdrawDailySummary } from "./AutoWithdrawDailySummary";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 type ModuleMode = "home" | "auto" | "operator" | "volume" | "work" | "admin";
@@ -2008,21 +2009,16 @@ export default function Dashboard() {
             )}
 
             {autoView === "daily" && (
-              <Panel title="自动出款日表" subtitle="按你选择的开始日期～结束日期累计到盘口；点“查看”弹窗展开该盘口每天的数据">
-                <QuickStats
-                  items={[
-                    { label: "统计天数", value: `${activeDayCount} 天`, sub: `${filters.startDate || "-"} 至 ${filters.endDate || "-"}` },
-                    { label: "区间总笔数", value: formatNumber(summary.total), sub: `日均 ${formatNumber(Math.round(dailyAverageTotal))}` },
-                    { label: "区间自动 / 人工", value: `${formatNumber(summary.autoCount)} / ${formatNumber(summary.manualCount)}`, sub: `人工日均 ${formatNumber(Math.round(dailyAverageManual))}` }
-                  ]}
-                />
-                <AutoWithdrawReasonsProvider startDate={filters.startDate} endDate={filters.endDate} availableRows={filteredDailyRows}>
-                <AutoWithdrawNotesProvider startDate={filters.startDate} endDate={filters.endDate} availableRows={filteredDailyRows}>
+              <section className="panel aw-daily-panel" aria-label="自动出款日表">
+                <AutoWithdrawReasonsProvider startDate={filters.startDate} endDate={filters.endDate} availableRows={filteredDailyRows} showToolbar={false}>
+                <AutoWithdrawNotesProvider startDate={filters.startDate} endDate={filters.endDate} availableRows={filteredDailyRows} showToolbar={false}>
+                  <AutoWithdrawDailySummary startDate={filters.startDate} endDate={filters.endDate} dayCount={activeDayCount} totals={summary}
+                    actions={<><AutoWithdrawReasonsQueryButton /><AutoWithdrawNotesActions /></>} />
                   <PaginationControls total={sortedSummaryRows.length} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
                   <AutoWithdrawTable rows={paginateRows(sortedSummaryRows, page, pageSize)} totalRows={sortedSummaryRows} sortState={sorts.autoSummary} onSort={(key) => toggleSort("autoSummary", key)} onOpenOperators={openAutoPlatformDaily} withNotes singleDay={filters.startDate === filters.endDate} />
                 </AutoWithdrawNotesProvider>
                 </AutoWithdrawReasonsProvider>
-              </Panel>
+              </section>
             )}
 
             {autoView === "month" && (

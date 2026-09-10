@@ -6,7 +6,10 @@ import { useDashboardAuth } from "./DashboardAuthGate";
 
 type Platform = { country: string; platform: string };
 type Target = Platform & { date: string };
-const ReasonsContext = createContext<{ open: (platform: Platform) => void; expandedKey: string; panel: ReactNode } | null>(null);
+const ReasonsContext = createContext<{
+  open: (platform: Platform) => void; expandedKey: string; panel: ReactNode;
+  query: () => void; canQuery: boolean;
+} | null>(null);
 const fmt = (n: number) => n.toLocaleString("zh-CN");
 const operatorNames: Record<ReasonOperator, string> = { manual: "人工处理", auto: "自动出款", unknown: "方式未识别" };
 const keyOf = (p: Platform) => JSON.stringify([p.country, p.platform]);
@@ -42,10 +45,17 @@ export function AutoWithdrawReasonsInlineRow({ country, platform }: Platform) {
     ? <tr className="wr-expanded-row"><td colSpan={16}>{context.panel}</td></tr> : null;
 }
 
-export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows, children }: {
+export function AutoWithdrawReasonsQueryButton() {
+  const context = useContext(ReasonsContext);
+  return <button type="button" className="detail-view-btn wr-open" disabled={!context?.canQuery}
+    onClick={() => context?.query()}>查询原因</button>;
+}
+
+export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows, children, showToolbar = true }: {
   startDate: string; endDate: string;
   availableRows: Array<Platform & { date: string; total: number; manualCount: number }>;
   children: ReactNode;
+  showToolbar?: boolean;
 }) {
   const { session, profile } = useDashboardAuth();
   const allowed = Boolean(session && canReadWithdrawReasons(profile));
@@ -178,12 +188,12 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
         </div>
       </div>;
 
-  return <ReasonsContext.Provider value={allowed ? { open: p => open(p), expandedKey: inline && target ? keyOf(target) : "", panel } : null}>
-    <div className="wr-toolbar">
+  return <ReasonsContext.Provider value={allowed ? { open: p => open(p), expandedKey: inline && target ? keyOf(target) : "", panel,
+    query: () => platforms[0] && open(platforms[0], false), canQuery: platforms.length > 0 } : null}>
+    {showToolbar && <div className="wr-toolbar">
       <div><strong>原因统计</strong></div>
-      <button type="button" className="detail-view-btn wr-open" disabled={!allowed || !platforms.length}
-        onClick={() => platforms[0] && open(platforms[0], false)}>查询原因统计</button>
-    </div>
+      <AutoWithdrawReasonsQueryButton />
+    </div>}
     {children}
     {target && !inline && <div className="wr-backdrop" onClick={e => { if (e.target === e.currentTarget) close(); }}>{panel}</div>}
   </ReasonsContext.Provider>;

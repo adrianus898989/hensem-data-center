@@ -6234,3 +6234,34 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .wr-table .wr-variant-row>td{text-align:left!important;background:#f6f9fe;padding:10px 16px!important}.wr-variant-heading,.wr-variant-item{display:grid;grid-template-columns:minmax(0,1fr) 70px;gap:18px;padding:6px 0;font-size:13px}.wr-variant-heading{font-size:12px;color:#6e819b;border-bottom:1px solid #dfe7f3}.wr-variant-item{border-bottom:1px solid #e8eef7;overflow-wrap:anywhere;white-space:pre-wrap}.wr-variant-item>strong,.wr-variant-heading>span{text-align:right}.wr-samples{margin-top:10px}.wr-table .wr-samples summary{font-size:12px}
 .wr-footer{padding:10px 0 0;font-size:12px}.wr-inline-panel .wr-state{padding:22px 12px}.wr-toolbar{padding:8px 15px}
 @media(max-width:760px){.wr-inline-panel{width:calc(100vw - 58px);left:8px;margin-left:8px}@supports(width:1cqw){.wr-inline-panel{width:calc(100cqw - 16px)}}.wr-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.wr-stats>div:first-child{grid-column:auto}.wr-reason-controls input{width:100%}.wr-filters label{flex:initial}.wr-header>div{flex-wrap:wrap;gap:4px 8px}}
+
+/* Daily summary only: one header/action row and one compact count/rate strip. */
+.aw-daily-summary{container:aw-summary / inline-size;padding:0 15px 10px;border-bottom:1px solid #e7edf5;background:#fff}
+.aw-daily-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;padding:10px 0}
+.aw-daily-scope{display:flex;align-items:baseline;flex-wrap:wrap;gap:5px 12px;min-width:0}
+.aw-daily-scope h2{margin:0;font-size:15px;line-height:1.4;color:#1b273a;font-weight:750}
+.aw-daily-scope>span{font-size:12px;color:#70819b;font-variant-numeric:tabular-nums}
+.aw-daily-actions,.aw-daily-actions .auto-notes-toolbar-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+.aw-daily-actions button{min-height:28px!important;height:28px!important;padding:3px 10px!important;border:1px solid #dce5f3!important;border-radius:6px!important;background:#f8faff!important;color:#345685!important;font-size:12px!important;font-weight:550!important;line-height:20px!important;white-space:nowrap;box-shadow:none!important;cursor:pointer}
+.aw-daily-actions button.wr-open{background:#eef4ff!important;color:#285bd1!important;border-color:#d4e1ff!important}
+.aw-daily-actions button:hover:not(:disabled){background:#eaf1ff!important;border-color:#aec6f5!important}
+.aw-daily-actions button:focus-visible{outline:2px solid #3468f1;outline-offset:2px}
+.aw-daily-actions button:disabled{opacity:.5;cursor:default}
+.aw-daily-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));margin:0;border:1px solid #e1e8f2;border-radius:8px;overflow:hidden;background:#fafcff}
+.aw-daily-metric{min-width:0;padding:8px 12px;border-left:1px solid #e1e8f2}
+.aw-daily-metric:first-child{border-left:0}
+.aw-daily-metric dt{margin:0 0 4px;font-size:12px;font-weight:500;color:#60748f}
+.aw-daily-metric dd{display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 10px;margin:0;font-variant-numeric:tabular-nums}
+.aw-daily-metric strong{font-size:21px;line-height:1.25;letter-spacing:-.03em;font-weight:650;color:#1e2c43;overflow-wrap:anywhere}
+.aw-daily-metric small{font-size:11px;color:#73849b;white-space:nowrap}
+.aw-daily-metric .aw-daily-percent{padding:2px 5px;border-radius:4px;background:#edf1f7;color:#526681;font-size:12px;font-weight:550}
+.aw-daily-metric.is-auto .aw-daily-percent{background:#eaf1ff;color:#2d62c7}
+.aw-daily-metric.is-manual .aw-daily-percent{background:#fff1e8;color:#ac602c}
+.aw-daily-metric.is-success .aw-daily-percent{background:#e6f5ef;color:#167457}
+.aw-daily-metric.is-rejected .aw-daily-percent{background:#fff0f1;color:#b34957}
+.aw-daily-remainders{display:flex;flex-wrap:wrap;gap:4px 18px;padding-top:7px;font-size:11px;line-height:1.5;color:#78869a;font-variant-numeric:tabular-nums}
+.aw-daily-remainders b{font-weight:550;color:#566881}
+.aw-daily-remainders .aw-daily-mismatch{color:#ad5c28}
+.aw-daily-panel>.pagination-row{padding:7px 15px;background:#fff}
+@container aw-summary (max-width:900px){.aw-daily-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.aw-daily-metric:nth-child(4){border-left:0}.aw-daily-metric:nth-child(n+4){border-top:1px solid #e1e8f2}}
+@container aw-summary (max-width:520px){.aw-daily-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.aw-daily-metric:nth-child(n){border-left:1px solid #e1e8f2}.aw-daily-metric:nth-child(odd){border-left:0}.aw-daily-metric:nth-child(n+3){border-top:1px solid #e1e8f2}.aw-daily-metric strong{font-size:19px}.aw-daily-scope{display:block}.aw-daily-scope>span{display:block;margin-top:4px}}

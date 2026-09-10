@@ -13,6 +13,8 @@ type NotesContextValue = {
   singleDay: boolean;
   canWrite: boolean;
   open: (country: string, platform: string) => void;
+  refresh: () => void;
+  showSample: () => void;
 };
 
 const NotesContext = createContext<NotesContextValue | null>(null);
@@ -26,11 +28,21 @@ function noteTime(value: string) {
     : "";
 }
 
-export function AutoWithdrawNotesProvider({ startDate, endDate, availableRows, children }: {
+export function AutoWithdrawNotesActions() {
+  const context = useContext(NotesContext);
+  if (!context) return null;
+  return <div className="auto-notes-toolbar-actions">
+    <button className="ghost-btn small" type="button" onClick={context.refresh} disabled={context.loading}>刷新备注</button>
+    <button className="ghost-btn small" type="button" onClick={context.showSample}>备注样本</button>
+  </div>;
+}
+
+export function AutoWithdrawNotesProvider({ startDate, endDate, availableRows, children, showToolbar = true }: {
   startDate: string;
   endDate: string;
   availableRows: Array<{ date: string; country: string; platform: string }>;
   children: ReactNode;
+  showToolbar?: boolean;
 }) {
   const { session, profile } = useDashboardAuth();
   const canRead = Boolean(session && hasDashboardPermission(profile, "auto_withdraw"));
@@ -176,18 +188,16 @@ export function AutoWithdrawNotesProvider({ startDate, endDate, availableRows, c
   const dateOptions = target ? Array.from(new Set([...availableDates(target.country, target.platform), ...platformNotes.map((note) => note.data_date), target.date])).sort((a, b) => b.localeCompare(a)) : [];
 
   return (
-    <NotesContext.Provider value={{ notes, loading, error, singleDay, canWrite, open: openEditor }}>
-      <div className="auto-notes-toolbar">
+    <NotesContext.Provider value={{ notes, loading, error, singleDay, canWrite, open: openEditor,
+      refresh: () => setReload(value => value + 1), showSample: () => setShowSample(true) }}>
+      {showToolbar && <div className="auto-notes-toolbar">
         <div>
           <strong>每日原因备注</strong>
           <span>{singleDay ? `${startDate} · 记录各盘口人工处理偏高的原因` : "按日期分别记录；区间汇总展示最新原因"}</span>
           {!canWrite && !loading && !error && <span>当前账号可查看，管理员可编辑</span>}
         </div>
-        <div className="auto-notes-toolbar-actions">
-          <button className="ghost-btn small" type="button" onClick={() => setReload((value) => value + 1)} disabled={loading}>刷新备注</button>
-          <button className="ghost-btn small" type="button" onClick={() => setShowSample(true)}>展示样本</button>
-        </div>
-      </div>
+        <AutoWithdrawNotesActions />
+      </div>}
       {loading && <p className="auto-notes-status" role="status">正在读取每日备注…</p>}
       {error && <p className="auto-notes-status is-error" role="alert">备注暂时未能读取：{error} <button type="button" onClick={() => setReload((value) => value + 1)}>重试</button></p>}
       {savedMessage && <p className="auto-notes-status is-success" role="status">{savedMessage}</p>}
