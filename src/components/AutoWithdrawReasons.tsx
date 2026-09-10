@@ -126,7 +126,7 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
     if (!openModal) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    modalRef.current?.querySelector<HTMLElement>("button")?.focus();
+    modalRef.current?.querySelector<HTMLElement>(".wr-close")?.focus();
     return () => { document.body.style.overflow = previous; };
   }, [openModal]);
 
