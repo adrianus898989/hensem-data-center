@@ -11,6 +11,8 @@ import ThirdPartyVolumeDashboard from "./ThirdPartyVolumeDashboard";
 import AdminControlCenter from "./AdminControlCenter";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { canOpenAdminCenter, hasDashboardPermission, normalizedManagementPermissions } from "@/lib/dashboardAuthClient";
+import { aggregateAutoWithdrawByPlatform as aggregateByPlatform } from "@/lib/autoWithdrawComparison";
+import { AutoWithdrawNotesProvider, AutoWithdrawReasonCell } from "./AutoWithdrawNotes";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 type ModuleMode = "home" | "auto" | "operator" | "volume" | "work" | "admin";
@@ -383,55 +385,6 @@ function topRows<T>(rows: T[], value: (row: T) => number, limit = 6): T[] {
 function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
   const start = Math.max(0, (page - 1) * pageSize);
   return rows.slice(start, start + pageSize);
-}
-
-function aggregateByPlatform(rows: AutoWithdrawRow[]): AutoWithdrawRow[] {
-  const map = new Map<string, AutoWithdrawRow & { _seconds: number; _weight: number }>();
-
-  for (const row of rows) {
-    // V7P：日期区间累计只按 国家 + 盘口 合并。跨月时也不能因为 sourceSheet 不同拆成两行。
-    const key = `${row.country}|||${row.platform}`;
-    const weight = row.total || row.success + row.rejected || 0;
-    const seconds = parseDurationToSeconds(row.avgTime);
-    const current = map.get(key);
-
-    if (!current) {
-      map.set(key, {
-        ...row,
-        successRate: 0,
-        rejectRate: 0,
-        autoRate: 0,
-        manualRate: 0,
-        avgTime: "0秒",
-        yesterdayAvgTime: "-",
-        comparePercent: "-",
-        _seconds: seconds > 0 && weight > 0 ? seconds * weight : 0,
-        _weight: seconds > 0 && weight > 0 ? weight : 0
-      });
-      continue;
-    }
-
-    current.total += row.total;
-    current.success += row.success;
-    current.rejected += row.rejected;
-    current.autoCount += row.autoCount;
-    current.manualCount += row.manualCount;
-    if (seconds > 0 && weight > 0) {
-      current._seconds += seconds * weight;
-      current._weight += weight;
-    }
-  }
-
-  return Array.from(map.values())
-    .map(({ _seconds, _weight, ...row }) => ({
-      ...row,
-      successRate: row.total ? row.success / row.total : 0,
-      rejectRate: row.total ? row.rejected / row.total : 0,
-      autoRate: row.total ? row.autoCount / row.total : 0,
-      manualRate: row.total ? row.manualCount / row.total : 0,
-      avgTime: formatDuration(_weight ? _seconds / _weight : 0)
-    }))
-    .sort((a, b) => b.total - a.total);
 }
 
 function aggregateByDate(rows: DailyWithdrawRow[]): AutoWithdrawRow[] {
@@ -2062,8 +2015,10 @@ export default function Dashboard() {
                     { label: "区间自动 / 人工", value: `${formatNumber(summary.autoCount)} / ${formatNumber(summary.manualCount)}`, sub: `人工日均 ${formatNumber(Math.round(dailyAverageManual))}` }
                   ]}
                 />
-                <PaginationControls total={sortedSummaryRows.length} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
-                <AutoWithdrawTable rows={paginateRows(sortedSummaryRows, page, pageSize)} totalRows={sortedSummaryRows} sortState={sorts.autoSummary} onSort={(key) => toggleSort("autoSummary", key)} onOpenOperators={openAutoPlatformDaily} />
+                <AutoWithdrawNotesProvider startDate={filters.startDate} endDate={filters.endDate} availableRows={filteredDailyRows}>
+                  <PaginationControls total={sortedSummaryRows.length} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
+                  <AutoWithdrawTable rows={paginateRows(sortedSummaryRows, page, pageSize)} totalRows={sortedSummaryRows} sortState={sorts.autoSummary} onSort={(key) => toggleSort("autoSummary", key)} onOpenOperators={openAutoPlatformDaily} withNotes singleDay={filters.startDate === filters.endDate} />
+                </AutoWithdrawNotesProvider>
               </Panel>
             )}
 
@@ -2959,7 +2914,7 @@ function ConsistentLowTable({ rows, totalRows }: { rows: ConsistentLowRow[]; tot
 }
 
 
-function summarizeAutoRows(rows: AutoWithdrawRow[] | DailyWithdrawRow[]) {
+function summarizeAutoRows(rows: readonly AutoWithdrawRow[]) {
   return rows.reduce((acc, row) => {
     acc.total += row.total || 0;
     acc.success += row.success || 0;
@@ -2982,7 +2937,7 @@ function autoSummaryFoot(
   current: ReturnType<typeof summarizeAutoRows>,
   overall: ReturnType<typeof summarizeAutoRows>,
   label: string,
-  options: { leadingColSpan?: number; includeDetail?: boolean } = {}
+  options: { leadingColSpan?: number; includeDetail?: boolean; includeNotes?: boolean } = {}
 ) {
   const source = label === "当前页汇总" ? current : overall;
   const leadingColSpan = options.leadingColSpan ?? 2;
@@ -3001,6 +2956,7 @@ function autoSummaryFoot(
       <td>-</td>
       <td>-</td>
       <td className="muted-cell">汇总</td>
+      {options.includeNotes ? <td className="muted-cell">每日备注按盘口记录</td> : null}
       {options.includeDetail ? <td className="muted-cell">-</td> : null}
     </tr>
   );
@@ -3066,20 +3022,24 @@ function AutoWithdrawTable({
   totalRows = rows,
   sortState,
   onSort,
-  onOpenOperators
+  onOpenOperators,
+  withNotes = false,
+  singleDay = false
 }: {
   rows: AutoWithdrawRow[];
   totalRows?: AutoWithdrawRow[];
   sortState: TableSortState;
   onSort: (key: string) => void;
   onOpenOperators?: (row: AutoWithdrawRow) => void;
+  withNotes?: boolean;
+  singleDay?: boolean;
 }) {
   const shownSummary = summarizeAutoRows(rows);
   const totalSummary = summarizeAutoRows(totalRows);
   if (!rows.length) return <div className="empty">没有匹配的自动出款数据</div>;
 
   return (
-    <div className="table-wrap">
+    <div className={withNotes ? "table-wrap auto-withdraw-daily-compact" : "table-wrap"}>
       <table>
         <thead>
           <tr>
@@ -3094,9 +3054,10 @@ function AutoWithdrawTable({
             <SortableTh label="人工处理" sortKey="manualCount" sortState={sortState} onSort={onSort} className="num" />
             <SortableTh label="自动占比" sortKey="autoRate" sortState={sortState} onSort={onSort} />
             <SortableTh label="人工占比" sortKey="manualRate" sortState={sortState} onSort={onSort} />
-            <SortableTh label="平均处理时间" sortKey="avgTime" sortState={sortState} onSort={onSort} />
-            <SortableTh label="昨日平均处理时间" sortKey="yesterdayAvgTime" sortState={sortState} onSort={onSort} />
-            <SortableTh label="对比%" sortKey="comparePercent" sortState={sortState} onSort={onSort} />
+            <SortableTh label={withNotes ? "平均用时" : "平均处理时间"} sortKey="avgTime" sortState={sortState} onSort={onSort} />
+            <SortableTh label={withNotes ? "昨日用时" : "昨日平均处理时间"} sortKey="yesterdayAvgTime" sortState={sortState} onSort={onSort} />
+            <SortableTh label={withNotes ? "较昨日%" : "对比%"} sortKey="comparePercent" sortState={sortState} onSort={onSort} />
+            {withNotes && <th className="auto-note-column">原因 / 每日备注</th>}
             <th className="detail-col">详情</th>
           </tr>
         </thead>
@@ -3115,15 +3076,16 @@ function AutoWithdrawTable({
               <td><RateBar value={row.autoRate} /></td>
               <td><RateBar value={row.manualRate} reject /></td>
               <td>{row.avgTime}</td>
-              <td>{row.yesterdayAvgTime}</td>
-              <td><CompareCell value={row.comparePercent} /></td>
+              <td title={withNotes && !singleDay ? "区间汇总不对应单个昨日，请查询单日查看较昨日变化" : "同一盘口前一自然日的平均处理时间；缺少昨日数据时显示 —"}>{withNotes && !singleDay ? "仅单日对比" : row.yesterdayAvgTime || "—"}</td>
+              <td><CompareCell value={withNotes && !singleDay ? "-" : row.comparePercent} /></td>
+              {withNotes && <td className="auto-note-column"><AutoWithdrawReasonCell country={row.country} platform={row.platform} /></td>}
               <td><button className="detail-view-btn" type="button" onClick={() => onOpenOperators?.(row)}>查看</button></td>
             </tr>
           ))}
         </tbody>
         <tfoot>
-          {autoSummaryFoot(shownSummary, totalSummary, "当前页汇总", { leadingColSpan: 2, includeDetail: true })}
-          {autoSummaryFoot(shownSummary, totalSummary, "全部汇总", { leadingColSpan: 2, includeDetail: true })}
+          {autoSummaryFoot(shownSummary, totalSummary, "当前页汇总", { leadingColSpan: 2, includeDetail: true, includeNotes: withNotes })}
+          {autoSummaryFoot(shownSummary, totalSummary, "全部汇总", { leadingColSpan: 2, includeDetail: true, includeNotes: withNotes })}
         </tfoot>
       </table>
     </div>
