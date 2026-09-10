@@ -6264,14 +6264,17 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .wr-review .wr-table th,.wr-review .wr-table td{height:auto!important;padding:6px 10px!important;white-space:normal!important;line-height:1.5;text-overflow:clip;overflow:visible;position:static}
 .wr-review .wr-table th{font-size:12px!important;font-weight:550!important;background:#f5f7fb!important;color:#718098}
 .wr-review .wr-table td{font-size:14px!important;font-weight:400!important}
-.wr-review .wr-table .wr-col-count{width:80px}.wr-review .wr-table .wr-col-percent{width:125px}.wr-review .wr-table .wr-col-status{width:125px}.wr-review .wr-table .wr-col-detail{width:100px}
+.wr-review .wr-table .wr-col-count{width:75px}.wr-review .wr-table .wr-col-percent{width:115px}.wr-review .wr-table .wr-col-status{width:125px}.wr-review .wr-table .wr-col-detail{width:90px}
 .wr-review .wr-table .wr-count{font-weight:600!important;font-variant-numeric:tabular-nums}
 .wr-review .wr-table td>strong{font-weight:600}.wr-review .wr-reason-text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5}
+.wr-review .wr-table .wr-reason-share{color:#285dbb;font-variant-numeric:tabular-nums}.wr-review .wr-note-scope{font-size:12px;color:#718098}
 .wr-review .wr-detail-toggle{min-height:26px;border:0;border-radius:4px;background:transparent;padding:3px 0 3px 6px;font-size:14px;line-height:20px;color:#3566b9}
 .wr-review .wr-detail-toggle:hover{color:#1647a8;text-decoration:underline}
 .wr-review .wr-merged-count{font-size:12px;color:#8190a5;margin-left:8px}.wr-review .wr-badge{font-size:12px}
 .wr-review .wr-table .wr-variant-row>td{padding:8px 14px!important;background:#f4f7fc!important}
+.wr-review .wr-variant-heading,.wr-review .wr-variant-item{grid-template-columns:minmax(0,1fr) 65px 90px 130px;gap:12px}
 .wr-review .wr-variant-item{font-size:14px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.wr-review .wr-variant-share{color:#285dbb;font-variant-numeric:tabular-nums}.wr-review .wr-variant-operator-share{text-align:right;color:#546782;font-variant-numeric:tabular-nums}
 .wr-review .wr-variant-heading{font-size:12px}.wr-review .wr-samples{margin-top:7px}.wr-review .wr-table details li{font-size:14px;line-height:1.6}.wr-review .wr-table details small{font-size:12px}
 .wr-review .wr-footer{display:flex;align-items:center;flex-wrap:wrap;justify-content:space-between;gap:6px 12px;padding:7px 0 0;font-size:12px;color:#7a899f}
 .wr-review .wr-pagination{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:12px;font-variant-numeric:tabular-nums;color:#75859b}
