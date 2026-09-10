@@ -33,7 +33,7 @@ function harness() {
   const Provider=module.exports.AutoWithdrawReasonsProvider;
   const render=()=>{stateIndex=0;refIndex=0;effectIndex=0;tree=Provider({startDate:'2026-09-01',endDate:'2026-09-09',availableRows:[{...target,total:1,manualCount:1}],children:null});while(pending.length)pending.shift()();return tree;};
   render();states[0]=target;states[1]=true;render();
-  return {states,calls,render,setAuth(value){auth=value;},getAuth(){return auth;},panel(){return tree.props.value?.panel;}};
+  return {states,refs,calls,render,setAuth(value){auth=value;},getAuth(){return auth;},panel(){return tree.props.value?.panel;}};
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 const day={snapshot:{totals:{total:1,manual:1,auto:0,unknown:0,success:1,reject:0,other:0},coverage:{incomplete_note_count:0},groups:[]}};
@@ -73,4 +73,17 @@ test('permission loss aborts in-flight request and clears prior data',async()=>{
 test('daily platform row keys are stable when main-table ordering changes',()=>{
   const dashboard=fs.readFileSync(path.join(root,'src/components/Dashboard.tsx'),'utf8');
   assert.match(dashboard,/key=\{withNotes \? JSON\.stringify\(\[row\.country, row\.platform\]\)/);
+});
+test('opening a loading dialog focuses the enabled close control, not refresh',()=>{
+  const h=harness();let selected='',focused=0;
+  h.refs[0].current={querySelector(selector){selected=selector;return {focus(){focused++;}};}};
+  const oldDocument=global.document;
+  global.document={body:{style:{overflow:''}}};
+  try {
+    h.states[1]=false;h.states[4]=true;h.render();
+    assert.equal(selected,'.wr-close');assert.equal(focused,1);
+    assert.equal(global.document.body.style.overflow,'hidden');
+  } finally {
+    if(oldDocument===undefined)delete global.document;else global.document=oldDocument;
+  }
 });
