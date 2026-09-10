@@ -24,6 +24,7 @@ const key = 'c'.repeat(64);
     // Reproduce managed-project defaults, then verify the derived view is read only.
     await db.exec('grant all on public.withdraw_reasons_daily_grouped to service_role');
     await db.exec(migration('20260910111641_withdraw_reason_view_readonly.sql'));
+    await db.exec(migration('20260910152757_withdraw_reason_daily_profit.sql'));
     assert.equal(await scalar("select has_table_privilege('service_role','public.withdraw_reasons_daily_grouped','insert,update,delete')"),false); checks++;
     const labels = new Map();
     for (const c of fixtures.cases) {
@@ -37,6 +38,36 @@ const key = 'c'.repeat(64);
     }
     await fail('select public.withdraw_reason_category($1,$2)', ['x'.repeat(401),'unclassified'], 'WR_CATEGORY_LABEL_TOO_LONG');
     await fail('select public.withdraw_reasons_group_snapshot($1::jsonb)', ['{}'], 'WR_INVALID_GROUPING_INPUT');
+    const profitLabel = amount => `当日盈利金额大于{金额},当日盈利:${amount}`;
+    const profitAmounts = ['118552.18','149803.23','100244.56','128570.76'];
+    for (const amount of profitAmounts) {
+      assert.deepEqual(await scalar('select public.withdraw_reason_category($1,$2)',[profitLabel(amount),'template']),
+        {label:'当日盈利金额大于{金额}',classification:'template'}); checks++;
+    }
+    assert.equal((await scalar('select public.withdraw_reason_category($1,$2)',
+      [' 当日盈利金额大于{金额} ， 当日盈利： 118552.18 ','unclassified'])).label,'当日盈利金额大于{金额}'); checks++;
+    for (const threshold of ['80000.00','100000','200000']) {
+      for (const amount of ['250000','300000.25']) {
+        assert.equal((await scalar('select public.withdraw_reason_category($1,$2)',
+          [`当日盈利金额大于${threshold},当日盈利:${amount}`,'unclassified'])).label,`当日盈利金额大于${threshold}`); checks++;
+      }
+    }
+    for (const unchanged of [
+      '当日盈利金额小于{金额},当日盈利:118552.18',
+      '当日盈利金额大于等于{金额},当日盈利:118552.18',
+      '累计盈利金额大于{金额},当日盈利:118552.18',
+      `${profitLabel('118552.18')},错误码:501`,
+      `${profitLabel('118552.18')},余额不足`,
+      profitLabel(''),profitLabel('未知'),profitLabel('118552.18/149803.23'),profitLabel('118552x18'),
+      profitLabel('-118552.18'),
+    ]) {
+      assert.deepEqual(await scalar('select public.withdraw_reason_category($1,$2)',[unchanged,'unclassified']),
+        {label:unchanged,classification:'unclassified'}); checks++;
+    }
+    for (const classification of ['empty','truncated']) {
+      assert.deepEqual(await scalar('select public.withdraw_reason_category($1,$2)',[profitLabel('118552.18'),classification]),
+        {label:profitLabel('118552.18'),classification}); checks++;
+    }
     await db.exec('set role service_role');
     await db.query(`insert into public.withdraw_reasons_credentials(token_hash,source_system,allowed_scopes,expires_at)
       values($1,'AR','[{"country_code":"IN","platform":"TPPLAY"}]',now()+interval '1 day')`, [key]);
@@ -44,6 +75,20 @@ const key = 'c'.repeat(64);
       operator_class: operator, reason_key: createHash('sha256').update(label).digest('hex'), reason_label: label,
       classification, count, success, reject: count-success, other: 0, samples: [label, '脱敏样本'],
     });
+    const profitGroups = profitAmounts.map(amount=>group(profitLabel(amount),1,1,'manual','template'));
+    const profitSnapshot = {totals:{manual:16020},groups:[...profitGroups,
+      group(profitLabel('118552.18'),2,1,'auto','template'),group('未填写备注',929,574,'manual','empty')]};
+    const profitBefore = JSON.stringify(profitSnapshot);
+    const profitResult = await scalar('select public.withdraw_reasons_group_snapshot($1::jsonb)',[profitBefore]);
+    const profitMerged = profitResult.groups.find(g=>g.operator_class==='manual' && g.classification!=='empty');
+    assert.equal(profitResult.groups.length,3);
+    assert.equal(profitMerged.reason_label,'当日盈利金额大于{金额}');
+    assert.equal(profitMerged.count,4); assert.equal(profitMerged.success,4); assert.equal(profitMerged.reject,0);
+    assert.equal(profitMerged.variants.length,4);
+    assert.deepEqual(profitMerged.variants.map(v=>v.reason_label).sort(),profitGroups.map(g=>g.reason_label).sort());
+    assert.ok(profitMerged.variants.every(v=>v.count===1));
+    assert.equal((profitMerged.count / profitSnapshot.totals.manual * 100).toFixed(2),'0.02');
+    assert.equal(JSON.stringify(profitSnapshot),profitBefore); checks++;
     const groups = [group('会员在限制的游戏类型中总的投注数:1', 14, 13), group('会员在限制的游戏类型中总的投注数:3', 19, 19),
       group('会员在限制的游戏类型中总的投注数:3', 2, 2, 'auto'),
       group('无充值连续提款大于3次',5,3), group('无充值连续提款大于5次',3,2),
