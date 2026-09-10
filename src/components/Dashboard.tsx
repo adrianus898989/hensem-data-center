@@ -13,6 +13,7 @@ import { useDashboardAuth } from "./DashboardAuthGate";
 import { canOpenAdminCenter, hasDashboardPermission, normalizedManagementPermissions } from "@/lib/dashboardAuthClient";
 import { aggregateAutoWithdrawByPlatform as aggregateByPlatform } from "@/lib/autoWithdrawComparison";
 import { AutoWithdrawNotesProvider, AutoWithdrawReasonCell } from "./AutoWithdrawNotes";
+import { AutoWithdrawReasonsProvider, AutoWithdrawReasonsButton } from "./AutoWithdrawReasons";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 type ModuleMode = "home" | "auto" | "operator" | "volume" | "work" | "admin";
@@ -2015,10 +2016,12 @@ export default function Dashboard() {
                     { label: "区间自动 / 人工", value: `${formatNumber(summary.autoCount)} / ${formatNumber(summary.manualCount)}`, sub: `人工日均 ${formatNumber(Math.round(dailyAverageManual))}` }
                   ]}
                 />
+                <AutoWithdrawReasonsProvider startDate={filters.startDate} endDate={filters.endDate} availableRows={filteredDailyRows}>
                 <AutoWithdrawNotesProvider startDate={filters.startDate} endDate={filters.endDate} availableRows={filteredDailyRows}>
                   <PaginationControls total={sortedSummaryRows.length} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
                   <AutoWithdrawTable rows={paginateRows(sortedSummaryRows, page, pageSize)} totalRows={sortedSummaryRows} sortState={sorts.autoSummary} onSort={(key) => toggleSort("autoSummary", key)} onOpenOperators={openAutoPlatformDaily} withNotes singleDay={filters.startDate === filters.endDate} />
                 </AutoWithdrawNotesProvider>
+                </AutoWithdrawReasonsProvider>
               </Panel>
             )}
 
@@ -3079,7 +3082,7 @@ function AutoWithdrawTable({
               <td title={withNotes && !singleDay ? "区间汇总不对应单个昨日，请查询单日查看较昨日变化" : "同一盘口前一自然日的平均处理时间；缺少昨日数据时显示 —"}>{withNotes && !singleDay ? "仅单日对比" : row.yesterdayAvgTime || "—"}</td>
               <td><CompareCell value={withNotes && !singleDay ? "-" : row.comparePercent} /></td>
               {withNotes && <td className="auto-note-column"><AutoWithdrawReasonCell country={row.country} platform={row.platform} /></td>}
-              <td><button className="detail-view-btn" type="button" onClick={() => onOpenOperators?.(row)}>查看</button></td>
+              <td><div className={withNotes ? "wr-row-actions" : undefined}>{withNotes && <AutoWithdrawReasonsButton country={row.country} platform={row.platform} />}<button className="detail-view-btn" type="button" onClick={() => onOpenOperators?.(row)}>{withNotes ? "日明细" : "查看"}</button></div></td>
             </tr>
           ))}
         </tbody>
