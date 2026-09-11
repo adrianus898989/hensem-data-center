@@ -179,9 +179,16 @@ function countryPaneLabelFor(country: string): string {
   return raw.endsWith("盘口") ? raw : `${raw}盘口`;
 }
 
-function countryMatchesAutoPane(country: string, pane: string): boolean {
+function autoCountryPaneLabelFor(country: string, platform: string): string {
+  // npg-platform-pane-v1: the archive stores these three NPG platforms as 南美.
+  // Keep other South American platforms (for example VG / CO66) separate.
+  if (/^NPG-(CHILE|COLOMBIA|MEXICO)$/i.test(String(platform || "").trim())) return NPG_PANE_LABEL;
+  return countryPaneLabelFor(country);
+}
+
+function countryMatchesAutoPane(country: string, pane: string, platform = ""): boolean {
   if (!pane || pane === AUTO_PANE_ALL) return true;
-  return countryPaneLabelFor(country) === pane;
+  return autoCountryPaneLabelFor(country, platform) === pane;
 }
 
 function countryMatchesOperatorPane(country: string, pane: string): boolean {
@@ -1060,12 +1067,12 @@ export default function Dashboard() {
 
   const autoCountryPanes = useMemo(() => {
     const autoCountries = payload ? uniq([
-      ...payload.monthlyRows.map((r) => r.country),
-      ...payload.dailyRows.map((r) => r.country)
+      ...payload.monthlyRows.map((r) => autoCountryPaneLabelFor(r.country, r.platform)),
+      ...payload.dailyRows.map((r) => autoCountryPaneLabelFor(r.country, r.platform))
     ]) : [];
     return sortAutoPanes(uniq([
       ...DEFAULT_AUTO_COUNTRY_PANES,
-      ...autoCountries.map(countryPaneLabelFor)
+      ...autoCountries
     ]));
   }, [payload]);
 
@@ -1095,7 +1102,7 @@ export default function Dashboard() {
     if (!payload) return [];
     const sourceRows = activeModule === "operator"
       ? payload.operatorRows.filter((r) => countryMatchesOperatorPane(r.country, operatorCountryPane))
-      : [...payload.monthlyRows, ...payload.dailyRows].filter((r) => countryMatchesAutoPane(r.country, autoCountryPane));
+      : [...payload.monthlyRows, ...payload.dailyRows].filter((r) => countryMatchesAutoPane(r.country, autoCountryPane, r.platform));
     return uniq(sourceRows.map((r) => r.platform));
   }, [payload, activeModule, operatorCountryPane, autoCountryPane]);
 
@@ -1110,7 +1117,7 @@ export default function Dashboard() {
   const filteredDailyRows = useMemo(() => {
     if (!payload) return [];
     return payload.dailyRows.filter((row) => {
-      if (!countryMatchesAutoPane(row.country, autoCountryPane)) return false;
+      if (!countryMatchesAutoPane(row.country, autoCountryPane, row.platform)) return false;
       if (!matchesSelection(row.platform, filters.platforms)) return false;
       if (!inDateRange(row.date, filters.startDate, filters.endDate)) return false;
       return true;
@@ -1121,7 +1128,7 @@ export default function Dashboard() {
     if (!payload) return [];
     if (payload.dailyRows.length) return aggregateByPlatform(filteredDailyRows);
     return payload.monthlyRows.filter((row) => {
-      if (!countryMatchesAutoPane(row.country, autoCountryPane)) return false;
+      if (!countryMatchesAutoPane(row.country, autoCountryPane, row.platform)) return false;
       if (!matchesSelection(row.platform, filters.platforms)) return false;
       return true;
     });
