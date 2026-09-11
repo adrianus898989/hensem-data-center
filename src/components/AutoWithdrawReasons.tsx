@@ -91,8 +91,12 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
   const targetKey = target ? JSON.stringify(target) : "";
   const visibleResult = allowed && result?.key === targetKey && result.viewerKey === viewerKey ? result : null;
   const day = visibleResult?.day;
-  const abnormalOnly = day?.source_system === "PANDA";
-  const statusBasis = abnormalOnly ? "沿用原已审核日表口径：已完成计成功，其余计驳回；不代表实时待处理订单状态" : "沿用日表状态口径（含已提交）";
+  const abnormalOnly = day?.source_system === "PANDA" || day?.source_system === "BAIFU";
+  const statusBasis = day?.source_system === "PANDA"
+    ? "沿用原已审核日表口径：已完成计成功，其余计驳回；不代表实时待处理订单状态"
+    : day?.source_system === "BAIFU"
+      ? "按创建日期归属；沿用百富日表成功/驳回状态，待处理等状态归其他"
+      : "沿用日表状态口径（含已提交）";
   const openModal = Boolean(target && !inline);
 
   function open(platform: Platform, inRow = true) {

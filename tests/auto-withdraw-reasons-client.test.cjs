@@ -107,6 +107,31 @@ test("Panda Brazil, Fat Tiger Brazil and PH19 query only their own snapshots", a
     });
   }
 });
+test("Baifu only routes its two configured Brazilian platforms", async () => {
+  for (const platform of ["5C555", "BET6867"]) {
+    assert.deepEqual(reasonSourceTarget("BR", platform.toLowerCase()), { source: "BAIFU", platform });
+    const data = { ...fixture(), source_system: "BAIFU", country_code: "BR", platform };
+    await withApi(({ url }) => {
+      assert.equal(url.searchParams.get("source_system"), "eq.BAIFU");
+      assert.equal(url.searchParams.get("country_code"), "eq.BR");
+      assert.equal(url.searchParams.get("platform"), `ilike.${platform}`);
+      return Response.json([data]);
+    }, async calls => {
+      assert.deepEqual(await getAutoWithdrawReasons(session, { ...target, country: "胖虎巴西", platform: platform.toLowerCase() }), data);
+      assert.equal(calls.length, 1);
+    });
+    for (const source_system of ["AR", "PANDA", "NEWAR"])
+      await withApi(() => Response.json([{ ...data, source_system }]), async () =>
+        assert.rejects(getAutoWithdrawReasons(session, { ...target, country: "巴西", platform }), /不匹配/));
+    await withApi(() => Response.json([]), async calls => {
+      assert.equal(await getAutoWithdrawReasons(session, { ...target, country: "胖虎巴西", platform }), null);
+      assert.equal(calls.length, 1);
+    });
+  }
+  for (const [country, platform] of [["IN", "5C555"], ["PH", "BET6867"], ["BR", "5C5552"], ["BR", "BET6867X"]])
+    assert.deepEqual(reasonSourceTarget(country, platform), { source: "AR", platform });
+  assert.deepEqual(reasonSourceTarget("BR", "5V555"), { source: "PANDA", platform: "5V555" });
+});
 test("LIKE wildcard inputs cannot match other platforms", async () => {
   await withApi(({ url }) => { assert.equal(url.searchParams.get("platform"), "ilike.A\\_B\\%\\*\\\\"); return Response.json([]); },
     async () => assert.equal(await getAutoWithdrawReasons(session, { ...target, platform: "A_B%*\\" }), null));
