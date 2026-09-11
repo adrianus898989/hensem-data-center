@@ -9,7 +9,7 @@ export function configLocalDay(timezone:string, now=new Date()) {
   const parts=new Intl.DateTimeFormat("en-CA",{timeZone:timezone,year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(now);
   return ["year","month","day"].map(k=>parts.find(p=>p.type===k)?.value).join("-");
 }
-async function readConfig<T>(table:string,query:Record<string,string>,session:DashboardSession,signal:AbortSignal):Promise<T[]> {
+export async function readConfig<T>(table:string,query:Record<string,string>,session:DashboardSession,signal:AbortSignal):Promise<T[]> {
   const url=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").replace(/\/$/,"");
   const key=String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||"");
   if(!url||!key||!session.access_token)throw new Error("配置读取尚未就绪，请重新登录后重试。");

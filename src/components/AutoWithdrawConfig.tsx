@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import catalog from "@/lib/arAutoWithdrawConfigCatalog.json";
 import {configLocalDay,fetchConfigIndex,fetchConfigSnapshot,type ConfigTarget,type ConfigSummary,type ConfigSnapshot,type Configuration} from "@/lib/arAutoWithdrawConfigClient";
 import {useDashboardAuth} from "./DashboardAuthGate";
+import {fetchPandaConfigIndex,fetchPandaConfigSnapshot,type PandaConfigSnapshot,type PandaConfiguration} from "@/lib/pandaAutoWithdrawConfigClient";
+import PandaConfigSheet from "./PandaConfigSheet";
 import "./AutoWithdrawConfig.css";
 
 export function ConfigSheet({configuration}:{configuration:Configuration}) {
@@ -39,34 +41,38 @@ export function ConfigSheet({configuration}:{configuration:Configuration}) {
 function stamp(value:string,timezone:string) {
   return new Date(value).toLocaleString("zh-CN",{timeZone:timezone,hour12:false});
 }
-function PlatformConfig({target,revision}:{target:ConfigTarget;revision:number}) {
+function PlatformConfig({target,revision,system}:{target:ConfigTarget;revision:number;system:"AR"|"PANDA"}) {
   const {session}=useDashboardAuth();
-  const [row,setRow]=useState<ConfigSnapshot|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState("");
+  const [row,setRow]=useState<ConfigSnapshot|PandaConfigSnapshot|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState("");
   useEffect(()=>{const c=new AbortController();setLoading(true);setError("");setRow(null);
     if(!session){setLoading(false);return ()=>c.abort();}
-    fetchConfigSnapshot(target,session,c.signal).then(r=>{if(!c.signal.aborted)setRow(r);}).catch(e=>{if(!c.signal.aborted)setError(e.message);}).finally(()=>{if(!c.signal.aborted)setLoading(false);});
+    (system==="PANDA"?fetchPandaConfigSnapshot(target,session,c.signal):fetchConfigSnapshot(target,session,c.signal)).then(r=>{if(!c.signal.aborted)setRow(r);}).catch(e=>{if(!c.signal.aborted)setError(e.message);}).finally(()=>{if(!c.signal.aborted)setLoading(false);});
     return ()=>c.abort();
-  },[target.country_code,target.platform,session?.access_token,revision]);
+  },[target.country_code,target.platform,session?.access_token,revision,system]);
   const fresh=row&&row.observed_local_date===configLocalDay(target.timezone);
   return <section className="awc-detail">
-    <header className="awc-detail-head"><div><span className="awc-eyebrow">AR SYSTEM / 只读配置</span><h2>{target.platform}<span>{target.country_name}</span></h2></div>
+    <header className="awc-detail-head"><div><span className="awc-eyebrow">{system==="PANDA"?"PANDA 熊猫":"AR SYSTEM"} / 只读配置</span><h2>{target.platform}<span>{target.country_name}</span></h2></div>
       {row&&<span className={fresh?"awc-status good":"awc-status pending"}>{fresh?"今日已采集":"历史配置 · 待更新"}</span>}</header>
     {loading?<div className="awc-empty" role="status">正在读取配置…</div>:error?<div className="awc-empty" role="alert">{error}</div>:!row?
-      <div className="awc-empty"><strong>该平台尚未同步配置</strong><p>新版采集程序运行后，这里会显示真实配置。</p><code>--mode config-sync --only {target.platform}</code></div>:
-      <><div className="awc-capture-time">采集时间：{stamp(row.observed_at,target.timezone)} <span>{target.timezone}</span><span>每天读取一次 · 非实时配置</span></div><ConfigSheet configuration={row.configuration}/></>}
+      <div className="awc-empty"><strong>该平台尚未同步配置</strong><p>新版采集程序运行后，这里会显示真实配置。</p><code>--mode config-sync {system==="PANDA"?"--platforms":"--only"} {target.platform}</code></div>:
+      <><div className="awc-capture-time">采集时间：{stamp(row.observed_at,target.timezone)} <span>{target.timezone}</span><span>每天读取一次 · 非实时配置</span></div>{system==="PANDA"?<PandaConfigSheet configuration={row.configuration as PandaConfiguration}/>:<ConfigSheet configuration={row.configuration as Configuration}/>}</>}
   </section>;
 }
 export default function AutoWithdrawConfig() {
+  const [system,setSystem]=useState<"AR"|"PANDA">("AR");
+  return <><nav className="awc-system-selector" aria-label="配置来源系统"><button type="button" className={system==="AR"?"active":""} aria-pressed={system==="AR"} onClick={()=>setSystem("AR")}>AR 系统</button><button type="button" className={system==="PANDA"?"active":""} aria-pressed={system==="PANDA"} onClick={()=>setSystem("PANDA")}>熊猫系统</button></nav><ConfigBrowser key={system} system={system}/></>;
+}
+function ConfigBrowser({system}:{system:"AR"|"PANDA"}) {
   const {session,profile}=useDashboardAuth();
   const [targets,setTargets]=useState<ConfigTarget[]>([]),[summaries,setSummaries]=useState<ConfigSummary[]>([]);
-  const [country,setCountry]=useState("IN"),[platform,setPlatform]=useState("Shree.Win"),[keyword,setKeyword]=useState("");
+  const [country,setCountry]=useState(system==="PANDA"?"BR":"IN"),[platform,setPlatform]=useState(system==="PANDA"?"SSS55":"Shree.Win"),[keyword,setKeyword]=useState("");
   const [revision,setRevision]=useState(0),[loading,setLoading]=useState(true),[error,setError]=useState("");
   const allowed=Boolean(profile?.active&&(profile.role==="owner"||profile.permissions?.auto_withdraw===true));
   useEffect(()=>{const c=new AbortController();setError("");setLoading(true);setTargets([]);setSummaries([]);
     if(!session||!allowed){setLoading(false);return ()=>c.abort();}
-    fetchConfigIndex(session,c.signal).then(data=>{if(c.signal.aborted)return;setTargets(data.targets);setSummaries(data.summaries);}).catch(e=>{if(!c.signal.aborted)setError(e.message);}).finally(()=>{if(!c.signal.aborted)setLoading(false);});
+    (system==="PANDA"?fetchPandaConfigIndex(session,c.signal):fetchConfigIndex(session,c.signal)).then(data=>{if(c.signal.aborted)return;setTargets(data.targets);setSummaries(data.summaries);}).catch(e=>{if(!c.signal.aborted)setError(e.message);}).finally(()=>{if(!c.signal.aborted)setLoading(false);});
     return ()=>c.abort();
-  },[session?.access_token,allowed,revision]);
+  },[session?.access_token,allowed,revision,system]);
   const countries=useMemo(()=>Array.from(new Map(targets.map(t=>[t.country_code,t.country_name]))),[targets]);
   const chosenCountry=countries.some(([code])=>code===country)?country:countries[0]?.[0];
   const visible=targets.filter(t=>t.country_code===chosenCountry&&t.platform.toLowerCase().includes(keyword.toLowerCase().trim()));
@@ -76,13 +82,13 @@ export default function AutoWithdrawConfig() {
   const freshCount=countryTargets.filter(t=>summaryFor(t)?.observed_local_date===configLocalDay(t.timezone)).length;
   if(!allowed)return <section className="awc-empty">没有自动出款配置查看权限，请联系管理员。</section>;
   return <section className="awc-page" aria-label="自动出款配置">
-    <div className="awc-toolbar"><div><h2>自动出款配置</h2><span>按国家查看各平台原始配置</span></div><button type="button" className="awc-refresh" onClick={()=>setRevision(v=>v+1)} disabled={loading} title="仅重新读取 Supabase 已收到的配置，不触发 AR 采集">{loading?"读取中…":"刷新已同步配置"}</button></div>
-    {error?<div className="awc-empty" role="alert">{error}</div>:loading?<div className="awc-empty" role="status">正在读取平台列表…</div>:targets.length===0?<div className="awc-empty">暂未配置 AR 采集平台</div>:<>
+    <div className="awc-toolbar"><div><h2>自动出款配置</h2><span>按国家查看各平台原始配置</span></div><button type="button" className="awc-refresh" onClick={()=>setRevision(v=>v+1)} disabled={loading} title="仅重新读取 Supabase 已收到的配置，不触发源后台采集">{loading?"读取中…":"刷新已同步配置"}</button></div>
+    {error?<div className="awc-empty" role="alert">{error}</div>:loading?<div className="awc-empty" role="status">正在读取平台列表…</div>:targets.length===0?<div className="awc-empty">暂未配置{system==="PANDA"?"熊猫":"AR"}采集平台</div>:<>
       <nav className="awc-countries" aria-label="配置国家">{countries.map(([code,name])=><button className={chosenCountry===code?"active":""} key={code} aria-pressed={chosenCountry===code} onClick={()=>{setCountry(code);setKeyword("");setPlatform("");}}>{name}<small>{targets.filter(t=>t.country_code===code).length}</small></button>)}</nav>
       <div className="awc-workspace"><aside className="awc-platforms"><div className="awc-list-title"><strong>平台配置</strong><span>今日 {freshCount}/{countryTargets.length}</span></div>
         <input className="awc-search" aria-label="搜索配置平台" placeholder="搜索平台" value={keyword} onChange={e=>setKeyword(e.target.value)}/>
         <div className="awc-platform-list">{visible.map(t=>{const s=summaryFor(t);const fresh=s?.observed_local_date===configLocalDay(t.timezone);return <button className={selected?.platform===t.platform?"active":""} key={t.platform} onClick={()=>setPlatform(t.platform)}><span>{t.platform}</span><small className={fresh?"fresh":""}>{fresh?"今日已同步":s?"待更新":"未采集"}</small></button>;})}</div>
-      </aside>{selected?<PlatformConfig key={selected.country_code+":"+selected.platform} target={selected} revision={revision}/>:<div className="awc-empty">没有匹配的平台</div>}</div>
+      </aside>{selected?<PlatformConfig key={selected.country_code+":"+selected.platform} target={selected} revision={revision} system={system}/>:<div className="awc-empty">没有匹配的平台</div>}</div>
     </>}
   </section>;
 }

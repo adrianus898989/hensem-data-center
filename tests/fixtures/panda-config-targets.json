@@ -1,0 +1,551 @@
+{
+  "source_kind": "exact_user_script_metadata",
+  "live_capture": false,
+  "targets": [
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "SSS55",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "SSS55"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPWB",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPWB"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPMEL",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPMEL"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPDEZ",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPDEZ"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPBOA",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPBOA"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "BOOMRIO",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "BOOMRIO"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPN1",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPN1"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPBIS",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPBIS"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPFLU",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPFLU"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPVAI",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPVAI"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPLUZ",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPLUZ"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPBEA",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPBEA"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPFOI",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPFOI"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "PH",
+      "platform": "PH19",
+      "timezone": "Asia/Manila",
+      "aliases": [
+        "PH19"
+      ],
+      "display_country": "菲律宾"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPZOE",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPZOE"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "PLAYER BR",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "PLAYERBR",
+        "PLAYER BR"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPSUR",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPSUR"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPTIG",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPTIG"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPSEN",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPSEN"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPTAM",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPTAM"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "56L",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "56L"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "559K",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "559K"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "2V222",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "2V222"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "9596BET",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "9596BET"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "8599BET",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "8599BET"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "F75",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "F75"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "KK345",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "KK345"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "AA45",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "AA45"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "FF555",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "FF55",
+        "FF555"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "VIP345",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "VIP345"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "25RR",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "25RR"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "KKVIP",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "KKVIP"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "5V555",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "5v555",
+        "5V555"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "27FF",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "27ff",
+        "27FF"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "58EE",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "58EE"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "222O",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "222o",
+        "222O"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "32QQ",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "32QQ"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "TPTP",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "TPTP"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "67VIP",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "67VIP"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "222VIP",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "222VIP"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "345F",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "345F"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPNOV",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPNOV"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPFEZ",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPFEZ"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPCRA",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPCRA"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "43R",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "43R"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "POPBUL",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "POPBUL"
+      ],
+      "display_country": "巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "234T",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "234T"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "888HH",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "888HH"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "BET5697",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "BET5697"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "96F",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "96F"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "45FF",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "45FF"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "76PP",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "76PP"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "8566BET",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "8566BET"
+      ],
+      "display_country": "胖虎巴西"
+    },
+    {
+      "source_system": "PANDA",
+      "country_code": "BR",
+      "platform": "776F",
+      "timezone": "Etc/GMT+3",
+      "aliases": [
+        "776F"
+      ],
+      "display_country": "胖虎巴西"
+    }
+  ]
+}
