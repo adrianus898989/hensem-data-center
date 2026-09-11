@@ -5,6 +5,7 @@ import {configLocalDay,fetchConfigIndex,fetchConfigSnapshot,type ConfigTarget,ty
 import {useDashboardAuth} from "./DashboardAuthGate";
 import {fetchPandaConfigIndex,fetchPandaConfigSnapshot,type PandaConfigSnapshot,type PandaConfiguration} from "@/lib/pandaAutoWithdrawConfigClient";
 import PandaConfigSheet from "./PandaConfigSheet";
+import {configDisplayGroup} from "@/lib/pandaConfigDisplayGroup";
 import "./AutoWithdrawConfig.css";
 
 export function ConfigSheet({configuration}:{configuration:Configuration}) {
@@ -51,7 +52,7 @@ function PlatformConfig({target,revision,system}:{target:ConfigTarget;revision:n
   },[target.country_code,target.platform,session?.access_token,revision,system]);
   const fresh=row&&row.observed_local_date===configLocalDay(target.timezone);
   return <section className="awc-detail">
-    <header className="awc-detail-head"><div><span className="awc-eyebrow">{system==="PANDA"?"PANDA 熊猫":"AR SYSTEM"} / 只读配置</span><h2>{target.platform}<span>{target.country_name}</span></h2></div>
+    <header className="awc-detail-head"><div><span className="awc-eyebrow">{system==="PANDA"?"PANDA 熊猫":"AR SYSTEM"} / 只读配置</span><h2>{target.platform}<span>{configDisplayGroup(target,system).name}</span></h2></div>
       {row&&<span className={fresh?"awc-status good":"awc-status pending"}>{fresh?"今日已采集":"历史配置 · 待更新"}</span>}</header>
     {loading?<div className="awc-empty" role="status">正在读取配置…</div>:error?<div className="awc-empty" role="alert">{error}</div>:!row?
       <div className="awc-empty"><strong>该平台尚未同步配置</strong><p>新版采集程序运行后，这里会显示真实配置。</p><code>--mode config-sync {system==="PANDA"?"--platforms":"--only"} {target.platform}</code></div>:
@@ -73,18 +74,18 @@ function ConfigBrowser({system}:{system:"AR"|"PANDA"}) {
     (system==="PANDA"?fetchPandaConfigIndex(session,c.signal):fetchConfigIndex(session,c.signal)).then(data=>{if(c.signal.aborted)return;setTargets(data.targets);setSummaries(data.summaries);}).catch(e=>{if(!c.signal.aborted)setError(e.message);}).finally(()=>{if(!c.signal.aborted)setLoading(false);});
     return ()=>c.abort();
   },[session?.access_token,allowed,revision,system]);
-  const countries=useMemo(()=>Array.from(new Map(targets.map(t=>[t.country_code,t.country_name]))),[targets]);
+  const countries=useMemo(()=>Array.from(new Map(targets.map(t=>{const group=configDisplayGroup(t,system);return [group.key,group.name];}))),[targets,system]);
   const chosenCountry=countries.some(([code])=>code===country)?country:countries[0]?.[0];
-  const visible=targets.filter(t=>t.country_code===chosenCountry&&t.platform.toLowerCase().includes(keyword.toLowerCase().trim()));
+  const visible=targets.filter(t=>configDisplayGroup(t,system).key===chosenCountry&&t.platform.toLowerCase().includes(keyword.toLowerCase().trim()));
   const selected=visible.find(t=>t.platform===platform)||visible[0];
-  const countryTargets=targets.filter(t=>t.country_code===chosenCountry);
+  const countryTargets=targets.filter(t=>configDisplayGroup(t,system).key===chosenCountry);
   const summaryFor=(t:ConfigTarget)=>summaries.find(s=>s.country_code===t.country_code&&s.platform===t.platform);
   const freshCount=countryTargets.filter(t=>summaryFor(t)?.observed_local_date===configLocalDay(t.timezone)).length;
   if(!allowed)return <section className="awc-empty">没有自动出款配置查看权限，请联系管理员。</section>;
   return <section className="awc-page" aria-label="自动出款配置">
-    <div className="awc-toolbar"><div><h2>自动出款配置</h2><span>按国家查看各平台原始配置</span></div><button type="button" className="awc-refresh" onClick={()=>setRevision(v=>v+1)} disabled={loading} title="仅重新读取 Supabase 已收到的配置，不触发源后台采集">{loading?"读取中…":"刷新已同步配置"}</button></div>
+    <div className="awc-toolbar"><div><h2>自动出款配置</h2><span>按盘口分组查看各平台原始配置</span></div><button type="button" className="awc-refresh" onClick={()=>setRevision(v=>v+1)} disabled={loading} title="仅重新读取 Supabase 已收到的配置，不触发源后台采集">{loading?"读取中…":"刷新已同步配置"}</button></div>
     {error?<div className="awc-empty" role="alert">{error}</div>:loading?<div className="awc-empty" role="status">正在读取平台列表…</div>:targets.length===0?<div className="awc-empty">暂未配置{system==="PANDA"?"熊猫":"AR"}采集平台</div>:<>
-      <nav className="awc-countries" aria-label="配置国家">{countries.map(([code,name])=><button className={chosenCountry===code?"active":""} key={code} aria-pressed={chosenCountry===code} onClick={()=>{setCountry(code);setKeyword("");setPlatform("");}}>{name}<small>{targets.filter(t=>t.country_code===code).length}</small></button>)}</nav>
+      <nav className="awc-countries" aria-label="配置盘口分组">{countries.map(([code,name])=><button className={chosenCountry===code?"active":""} key={code} aria-pressed={chosenCountry===code} onClick={()=>{setCountry(code);setKeyword("");setPlatform("");}}>{name}<small>{targets.filter(t=>configDisplayGroup(t,system).key===code).length}</small></button>)}</nav>
       <div className="awc-workspace"><aside className="awc-platforms"><div className="awc-list-title"><strong>平台配置</strong><span>今日 {freshCount}/{countryTargets.length}</span></div>
         <input className="awc-search" aria-label="搜索配置平台" placeholder="搜索平台" value={keyword} onChange={e=>setKeyword(e.target.value)}/>
         <div className="awc-platform-list">{visible.map(t=>{const s=summaryFor(t);const fresh=s?.observed_local_date===configLocalDay(t.timezone);return <button className={selected?.platform===t.platform?"active":""} key={t.platform} onClick={()=>setPlatform(t.platform)}><span>{t.platform}</span><small className={fresh?"fresh":""}>{fresh?"今日已同步":s?"待更新":"未采集"}</small></button>;})}</div>
