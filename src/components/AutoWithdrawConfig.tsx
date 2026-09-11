@@ -56,7 +56,7 @@ function PlatformConfig({target,revision,system}:{target:ConfigTarget;revision:n
       {row&&<span className={fresh?"awc-status good":"awc-status pending"}>{fresh?"今日已采集":"历史配置 · 待更新"}</span>}</header>
     {loading?<div className="awc-empty" role="status">正在读取配置…</div>:error?<div className="awc-empty" role="alert">{error}</div>:!row?
       <div className="awc-empty"><strong>该平台尚未同步配置</strong><p>新版采集程序运行后，这里会显示真实配置。</p><code>--mode config-sync {system==="PANDA"?"--platforms":"--only"} {target.platform}</code></div>:
-      <><div className="awc-capture-time">采集时间：{stamp(row.observed_at,target.timezone)} <span>{target.timezone}</span><span>每天读取一次 · 非实时配置</span></div>{system==="PANDA"?<PandaConfigSheet configuration={row.configuration as PandaConfiguration}/>:<ConfigSheet configuration={row.configuration as Configuration}/>}</>}
+      <><div className="awc-capture-time">采集时间：{stamp(row.observed_at,target.timezone)} <span>{target.timezone}</span><span>每天读取一次 · 非实时配置</span></div>{system==="PANDA"?<PandaConfigSheet configuration={row.configuration as PandaConfiguration} countryCode={target.country_code} platform={target.platform} dictionary={(row as PandaConfigSnapshot).dictionary}/>:<ConfigSheet configuration={row.configuration as Configuration}/>}</>}
   </section>;
 }
 export default function AutoWithdrawConfig() {
