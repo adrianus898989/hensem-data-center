@@ -15,9 +15,10 @@ import { aggregateAutoWithdrawByPlatform as aggregateByPlatform } from "@/lib/au
 import { AutoWithdrawNotesProvider, AutoWithdrawReasonCell, AutoWithdrawNotesActions } from "./AutoWithdrawNotes";
 import { AutoWithdrawReasonsProvider, AutoWithdrawReasonsButton, AutoWithdrawReasonsInlineRow, AutoWithdrawReasonsQueryButton } from "./AutoWithdrawReasons";
 import { AutoWithdrawDailySummary } from "./AutoWithdrawDailySummary";
+import AutoWithdrawConfig from "./AutoWithdrawConfig";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
-type ModuleMode = "home" | "auto" | "operator" | "volume" | "work" | "admin";
+type ModuleMode = "home" | "auto" | "config" | "operator" | "volume" | "work" | "admin";
 type AutoView = "dashboard" | "summary" | "daily" | "month" | "compare" | "anomaly";
 type OperatorView = "dashboard" | "ranking" | "summary" | "detail" | "low" | "date" | "compare";
 type OperatorRankMode = "high" | "low";
@@ -1404,7 +1405,7 @@ export default function Dashboard() {
 
   function switchModule(next: ModuleMode) {
     if (next === "volume" && !canThirdParty) return;
-    if ((next === "auto" || next === "operator") && !canAutoWithdraw) return;
+    if ((next === "auto" || next === "config" || next === "operator") && !canAutoWithdraw) return;
     if (next === "work" && !canWorkSupport) return;
     setActiveModule(next);
     if (next === "home") {
@@ -1650,7 +1651,7 @@ export default function Dashboard() {
       </button>
 
       <div className="nav-section-title">系统模块</div>
-      <button className={(activeModule === "auto" || activeModule === "operator") ? "nav-item active" : "nav-item"} onClick={() => switchModule("auto")} disabled={!canAutoWithdraw} title={!canAutoWithdraw ? "管理员未开放此模块" : ""}>
+      <button className={(activeModule === "auto" || activeModule === "config" || activeModule === "operator") ? "nav-item active" : "nav-item"} onClick={() => switchModule("auto")} disabled={!canAutoWithdraw} title={!canAutoWithdraw ? "管理员未开放此模块" : ""}>
         <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="cash" /></span>提现/自动出款统计</span>
         <span className={canAutoWithdraw ? "badge ok" : "badge"}>{canAutoWithdraw ? "Supabase" : "无权限"}</span>
       </button>
@@ -1765,7 +1766,7 @@ export default function Dashboard() {
           <div className="title">
             <h1>提现 / 自动出款统计</h1>
           </div>
-          {hasBusinessQueried && payload && <div className="status-box">
+          {activeModule !== "config" && hasBusinessQueried && payload && <div className="status-box">
             <div className="status-line"><span>数据来源</span><strong>{String(payload.meta.source || "").toLowerCase().includes("supabase") ? "Supabase" : payload.meta.source === "demo" ? "Demo" : "历史快照"}</strong></div>
             <div className="status-line"><span>日期区间</span><strong>{filters.startDate || "-"} 至 {filters.endDate || "-"}</strong></div>
             <div className="status-line"><span>更新时间</span><strong>{new Date(String((payload.meta as any).snapshotUpdatedAt || payload.meta.updatedAt)).toLocaleString("zh-CN")}</strong></div>
@@ -1779,6 +1780,7 @@ export default function Dashboard() {
           >
             自动出款
           </button>
+          <button className={activeModule === "config" ? "module-tab active" : "module-tab"} onClick={() => switchModule("config")}>自动出款配置</button>
           <button
             className={activeModule === "operator" ? "module-tab active" : "module-tab"}
             onClick={() => switchModule("operator")}
@@ -1787,6 +1789,7 @@ export default function Dashboard() {
           </button>
         </section>
 
+        {activeModule === "config" ? <AutoWithdrawConfig /> : <>
         {activeModule === "auto" && (
           <section className="child-switch view-switch-row">
             <button className={autoView === "daily" ? "child-tab active" : "child-tab"} onClick={() => switchAutoView("daily")}>自动出款日表</button>
@@ -2194,6 +2197,7 @@ export default function Dashboard() {
             )}
           </>
         )}
+        </>}
           </>
         )}
 
