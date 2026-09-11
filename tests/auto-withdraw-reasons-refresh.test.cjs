@@ -53,6 +53,15 @@ test('same user token renewal does not refetch; manual refresh reads newest toke
   assert.match(textOf(h.panel()),/有原因订单/);
   h.calls[1].resolve(day);await settle();
 });
+test('a failed read recovers once when the same user receives a renewed token',async()=>{
+  const h=harness();h.calls[0].reject(new Error('temporary authentication failure'));
+  await settle();h.render();assert.equal(h.calls.length,1);
+  h.setAuth({...h.getAuth(),session:{access_token:'renewed',user:{id:'user-1'}}});
+  h.render();h.render();assert.equal(h.calls.length,2);
+  assert.equal(h.calls[1].session.access_token,'renewed');
+  h.calls[1].resolve(day);await settle();h.render();h.render();
+  assert.equal(h.calls.length,2);assert.match(textOf(h.panel()),/有原因订单/);
+});
 test('switching platform aborts the old request and ignores its late response',async()=>{
   const h=harness();h.states[0]={...target,platform:'OTHER'};h.render();
   assert.equal(h.calls[0].signal.aborted,true);assert.equal(h.calls.length,2);

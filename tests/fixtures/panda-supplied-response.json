@@ -1,0 +1,39 @@
+{
+  "result": {
+    "data": {
+      "json": {
+        "withdrawSwitch": true,
+        "rechargeMultiple": 1,
+        "rewardMultiple": 1,
+        "autoWithdrawalSwitch": true,
+        "autoWithdrawalAmountMix": 1000,
+        "autoWithdrawalAmountMax": 199900,
+        "autoWithdrawalChannel": [
+          {"pullOffType":"SuccessRate","withdrawalChannelId":1198,"tenantWithdrawTypeId":856,"tenantWithdrawTypeName":"PIX","tenantWithdrawTypeCode":"PIX"},
+          {"pullOffType":"SuccessRate","withdrawalChannelId":1213,"tenantWithdrawTypeId":856,"tenantWithdrawTypeName":"PIX","tenantWithdrawTypeCode":"PIX"},
+          {"pullOffType":"SuccessRate","withdrawalChannelId":1210,"tenantWithdrawTypeId":856,"tenantWithdrawTypeName":"PIX","tenantWithdrawTypeCode":"PIX"},
+          {"pullOffType":"SuccessRate","withdrawalChannelId":1424,"tenantWithdrawTypeId":856,"tenantWithdrawTypeName":"PIX","tenantWithdrawTypeCode":"PIX"}
+        ],
+        "auditAutoRelieve": 300,
+        "auditGameLimit": "{\"status\":\"ON\",\"limitData\":[{\"gameType\":\"ELECTRONIC\",\"platformData\":[{\"platformId\":33,\"gameData\":[{\"gameId\":3603},{\"gameId\":3605},{\"gameId\":3606},{\"gameId\":3610},{\"gameId\":3608},{\"gameId\":3607},{\"gameId\":3609},{\"gameId\":3604}]}]}]}",
+        "autoRefuseSwitch": "ON",
+        "autoWithdrawalLimitSwitch": "OFF",
+        "autoWithdrawalLimitType": "validBet",
+        "autoWithdrawalLimitAmount": 3,
+        "autoWithdrawalLimitLevel": [],
+        "autoWithdrawLimitRegTime": "noLimit",
+        "autoWithdrawLimitOther": ["RollBackGameRecord","AgentWithdrawalsReviewedOnce","AgentWithdrawalsReviewed"],
+        "autoWithdrawDailyLimit": 0,
+        "autoWithdrawManualRechargeLimit": 0,
+        "autoWithdrawManualGiftLimit": 0,
+        "autoWithdrawalPollingSwitch": "ON",
+        "successRateType": "Number",
+        "orderVolume": 1000,
+        "minSuccessRate": 80,
+        "auditAutoRelieveType": "immediately",
+        "auditLevelMode": "global",
+        "levelMultiples": "[]"
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import type { DashboardSession, DashboardProfile } from "./dashboardAuthClient";
+import { dashboardAuthenticatedFetch, type DashboardSession, type DashboardProfile } from "./dashboardAuthClient";
 
 export type ReasonOperator = "manual" | "auto" | "unknown";
 export type WithdrawReasonGroup = {
@@ -172,12 +172,12 @@ export async function getAutoWithdrawReasons(
     source_system: `eq.${source}`, country_code: `eq.${country}`, stat_date: `eq.${target.date}`,
     platform: `ilike.${platform.replace(/[\\%_*]/g, "\\$&")}`, limit: "2",
   });
-  const response = await fetch(`${url}/rest/v1/withdraw_reasons_daily_grouped?${query}`, {
+  const response = await dashboardAuthenticatedFetch(`${url}/rest/v1/withdraw_reasons_daily_grouped?${query}`, {
     headers: { apikey: key, Authorization: `Bearer ${session.access_token}` }, cache: "no-store", signal,
-  });
+  }, session);
   const json: unknown = await response.json().catch(() => null);
   if (!response.ok) {
-    if (response.status === 401) throw new Error("登录已过期，请重新登录后查看原因统计。");
+    if (response.status === 401) throw new Error("登录验证未通过，请重新登录后重试原因统计。");
     if (response.status === 403) throw new Error("没有自动出款查看权限，请联系管理员。");
     throw new Error("原因统计读取失败，请稍后刷新；未使用旧缓存代替。");
   }

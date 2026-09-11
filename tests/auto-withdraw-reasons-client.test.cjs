@@ -4,7 +4,8 @@ const test = require("node:test");
 const { loadTs, root } = require("./load-typescript.cjs");
 const { canReadWithdrawReasons, getAutoWithdrawReasons, validateReasonsDay, reasonPercent, reasonCountryCode, reasonSourceTarget } = loadTs(path.join(root, "src/lib/autoWithdrawReasonsClient.ts"));
 const target = { country: "印度", platform: "TPPLAY", date: "2026-09-09" };
-const session = { access_token: "test-session-token" };
+const auth = loadTs(path.join(root, "src/lib/dashboardAuthClient.ts"));
+const session = { access_token: "test-session-token", refresh_token: "test-refresh", user: { id: "reasons-user" }, expires_at: 4102444800 };
 function fixture() {
   const group = (operator_class, reason_key, classification, count, success, reject) => ({
     operator_class, reason_key, classification, reason_label: reason_key, count, success, reject, other: 0, samples: [],
@@ -23,9 +24,11 @@ async function withApi(respond, run) {
   const oldKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://reason-test.invalid/";
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "public-test-key";
+  auth.saveDashboardSession(session);
   const calls = [];
   global.fetch = async (url, options) => { const call = { url: new URL(url), options }; calls.push(call); assert.equal(call.url.origin, "https://reason-test.invalid"); return respond(call); };
   try { await run(calls); } finally {
+    auth.saveDashboardSession(null);
     global.fetch = oldFetch;
     if (oldUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL; else process.env.NEXT_PUBLIC_SUPABASE_URL = oldUrl;
     if (oldKey === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY; else process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = oldKey;
@@ -40,9 +43,9 @@ test("one daily query preserves exact source/country/platform/date and uses auth
     assert.equal(url.searchParams.get("stat_date"), "eq.2026-09-09");
     assert.equal(url.searchParams.get("platform"), "ilike.TPPLAY");
     assert.equal(url.searchParams.get("limit"), "2");
-    assert.deepEqual(options.headers, { apikey: "public-test-key", Authorization: "Bearer test-session-token" });
+    assert.deepEqual(Object.fromEntries(new Headers(options.headers)), { apikey: "public-test-key", authorization: "Bearer test-session-token" });
     assert.equal(options.cache, "no-store"); assert.equal(options.signal, controller.signal);
-    assert.equal(options.body, undefined); assert.equal(options.method, undefined);
+    assert.equal(options.body, undefined); assert.equal(options.method, "GET");
     return Response.json([fixture()]);
   }, async calls => { assert.deepEqual(await getAutoWithdrawReasons(session, target, controller.signal), fixture()); assert.equal(calls.length, 1); });
 });
@@ -144,7 +147,7 @@ test("invalid dates, blank platform, missing login or ambiguous region do not is
     await assert.rejects(getAutoWithdrawReasons(session, { ...target, country: "南美" }), /暂未配置/);
   });
 });
-for (const [status, message] of [[401, /登录已过期/], [403, /没有自动出款查看权限/], [500, /读取失败/]]) {
+for (const [status, message] of [[401, /登录/], [403, /没有自动出款查看权限/], [500, /读取失败/]]) {
   test(`HTTP ${status} surfaces error and never turns into empty statistics`, async () => {
     await withApi(() => Response.json({ message: "private upstream response" }, { status }), async () => {
       await assert.rejects(getAutoWithdrawReasons(session, target), message);

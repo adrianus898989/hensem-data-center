@@ -1,6 +1,6 @@
 "use client";
 
-import type { DashboardSession } from "./dashboardAuthClient";
+import { dashboardAuthenticatedFetch, type DashboardSession } from "./dashboardAuthClient";
 
 export type AutoWithdrawNote = {
   data_date: string;
@@ -34,8 +34,8 @@ function isDate(value: string): boolean {
 async function readNotesResponse(response: Response): Promise<AutoWithdrawNote[]> {
   const json = await response.json().catch(() => null);
   if (!response.ok) {
-    if (response.status === 401) throw new Error("登录已过期，请重新登录后保存备注");
-    if (response.status === 403) throw new Error("没有备注编辑权限，请联系管理员确认账号的自动出款权限");
+    if (response.status === 401) throw new Error("登录验证未通过，请重新登录后重试备注操作");
+    if (response.status === 403) throw new Error("没有备注操作权限，请联系管理员确认账号的自动出款权限");
     throw new Error(json?.message || "备注读取或保存失败，请重试");
   }
   if (!Array.isArray(json)) throw new Error("备注服务返回格式异常");
@@ -51,7 +51,7 @@ export async function listAutoWithdrawNotes(session: DashboardSession, start: st
     const query = new URLSearchParams({ select: COLUMNS, order: "data_date.asc,country.asc,platform.asc", limit: String(pageSize), offset: String(offset) });
     query.append("data_date", `gte.${start}`);
     query.append("data_date", `lte.${end}`);
-    const page = await readNotesResponse(await fetch(`${url}?${query}`, { headers, cache: "no-store" }));
+    const page = await readNotesResponse(await dashboardAuthenticatedFetch(`${url}?${query}`, { headers, cache: "no-store" }, session));
     all.push(...page);
     if (page.length < pageSize) return all;
   }
@@ -68,13 +68,13 @@ export async function saveAutoWithdrawNote(
   if (reason.length > 1000) throw new Error("备注不能超过 1000 字");
   const { url, headers } = requestConfig(session);
   const query = new URLSearchParams({ on_conflict: "data_date,country,platform", select: COLUMNS });
-  const rows = await readNotesResponse(await fetch(`${url}?${query}`, {
+  const rows = await readNotesResponse(await dashboardAuthenticatedFetch(`${url}?${query}`, {
     method: "POST",
     headers: { ...headers, Prefer: "resolution=merge-duplicates,return=representation" },
     // Author and timestamp are stamped by the database, not trusted from the browser.
     body: JSON.stringify({ data_date: input.date, country, platform, reason }),
     cache: "no-store",
-  }));
+  }, session));
   if (rows.length !== 1) throw new Error("备注没有保存成功，请重试");
   return rows[0];
 }

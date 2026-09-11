@@ -10,7 +10,7 @@ import WorkOrderDashboard from "./WorkOrderDashboard";
 import ThirdPartyVolumeDashboard from "./ThirdPartyVolumeDashboard";
 import AdminControlCenter from "./AdminControlCenter";
 import { useDashboardAuth } from "./DashboardAuthGate";
-import { canOpenAdminCenter, hasDashboardPermission, normalizedManagementPermissions } from "@/lib/dashboardAuthClient";
+import { canOpenAdminCenter, ensureDashboardSession, hasDashboardPermission, normalizedManagementPermissions, type DashboardSession } from "@/lib/dashboardAuthClient";
 import { aggregateAutoWithdrawByPlatform as aggregateByPlatform } from "@/lib/autoWithdrawComparison";
 import { AutoWithdrawNotesProvider, AutoWithdrawReasonCell, AutoWithdrawNotesActions } from "./AutoWithdrawNotes";
 import { AutoWithdrawReasonsProvider, AutoWithdrawReasonsButton, AutoWithdrawReasonsInlineRow, AutoWithdrawReasonsQueryButton } from "./AutoWithdrawReasons";
@@ -979,8 +979,14 @@ export default function Dashboard() {
     setError("");
     try {
       const requestUrl = monthlyApiUrl("/api/auto-withdraw", requestedStart, requestedEnd, version);
-      const authHeaders = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
-      const res = await fetch(requestUrl, { cache: "no-store", headers: authHeaders });
+      let active = session ? await ensureDashboardSession(session) : null;
+      const read = (current: DashboardSession | null) => fetch(requestUrl, { cache: "no-store", headers: current ? { Authorization: `Bearer ${current.access_token}` } : {} });
+      let res = await read(active);
+      if (res.status === 401 && active) {
+        await res.body?.cancel();
+        active = await ensureDashboardSession(active, true);
+        res = await read(active);
+      }
       const json = await res.json();
       if (!res.ok) throw new Error(json?.message || "读取数据失败");
       setPayload(json);
@@ -1010,7 +1016,7 @@ export default function Dashboard() {
     }, 10 * 60 * 1000);
     return () => window.clearInterval(currentTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeModule, filters.startDate, filters.endDate, hasBusinessQueried, payload]);
+  }, [activeModule, filters.startDate, filters.endDate, hasBusinessQueried, payload, session?.access_token]);
 
   // V166：打开网站先进入“选择模块”首页；费率表全局直读重构。
   // 点击“提现/自动出款统计”或“提现操作人统计”后，才调用 loadData()。
