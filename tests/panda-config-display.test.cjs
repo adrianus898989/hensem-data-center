@@ -67,7 +67,27 @@ test('Missing/null/unknown enums are not rendered as zero or an invented disable
   assert.match(html,/data-field="autoWithdrawManualGiftLimit"[^]*?接口返回空值/);
   assert.match(html,/未映射条件：UnmappedSelected/);
   assert.match(html,/UnknownRateMode/);
-  assert.doesNotMatch(html,/class="pwc-radio-list"/);
+  assert.doesNotMatch(html,/aria-label="成功率配置（只读）"/);
+});
+test('Each platform displays its returned level IDs and empty game object, without screenshot-derived options',()=>{
+  const config=structuredClone(configuration);
+  config.values.autoWithdrawalLimitType='firstWithdraw';
+  config.values.auditGameLimit={};
+  config.values.autoWithdrawalLimitLevel=[17,29];
+  config.values.autoWithdrawLimitOther=['MembersWithPositiveDepositWithdrawalDifference'];
+  const html=render(config);
+  assert.match(html,/checked=""\/>会员首次提现必须审核/);
+  assert.match(html,/接口返回空对象（\{\}）/);
+  assert.match(html,/层级 ID：17/);assert.match(html,/层级 ID：29/);
+  assert.match(html,/checked=""\/>充提差额大于0的会员才免审核/);
+  assert.doesNotMatch(html,/默认层级|十元层级|全选|超24小时/);
+  assert.deepEqual(config.values.auditGameLimit,{});
+  const empty=structuredClone(config);empty.values.autoWithdrawalLimitLevel=[];
+  assert.match(render(empty),/未选择会员层级（\[\]）/);
+  const unknown=structuredClone(config);unknown.values.autoWithdrawalLimitType='futureMode';unknown.values.autoWithdrawLimitRegTime='futureAge';
+  const unknownHtml=render(unknown);
+  assert.match(unknownHtml,/futureMode/);assert.match(unknownHtml,/futureAge/);
+  assert.doesNotMatch(unknownHtml,/aria-label="首次提款限制（只读）"/);
 });
 test('Nonzero unverified money is not rescaled and display grouping is not used in API requests',()=>{
   const config=structuredClone(configuration);config.values.autoWithdrawDailyLimit=12345;

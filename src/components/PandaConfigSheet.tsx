@@ -3,11 +3,10 @@ import type {PandaConfiguration,PandaValue} from "@/lib/pandaAutoWithdrawConfigC
 import "./PandaConfigSheet.css";
 
 const KNOWN_LABELS:Record<string,string>={autoWithdrawalSwitch:"自动代付",autoWithdrawalAmountMix:"自动代付金额下限",autoWithdrawalAmountMax:"自动代付金额上限",autoRefuseSwitch:"代付失败自动驳回",autoWithdrawalLimitType:"首次提款限制",autoWithdrawalLimitAmount:"首次出款有效投注倍数",autoWithdrawalLimitLevel:"免审会员层级",autoWithdrawLimitRegTime:"免审会员注册时长",autoWithdrawLimitOther:"其他免审条件",autoWithdrawDailyLimit:"会员单日累计提现金额免审限制",autoWithdrawManualRechargeLimit:"单笔人工存入限制",autoWithdrawManualGiftLimit:"单笔人工优惠 / 单笔批量人工优惠限制",successRateType:"成功率配置",orderVolume:"接单量",minSuccessRate:"成功率低于"};
-const KNOWN_VALUES:Record<string,Record<string,string>>={autoWithdrawalLimitType:{validBet:"需要达到有效投注"},autoWithdrawLimitRegTime:{noLimit:"不限"},successRateType:{Number:"按接单量成功率"}};
+const KNOWN_VALUES:Record<string,Record<string,string>>={autoWithdrawalLimitType:{validBet:"需要达到有效投注",firstWithdraw:"会员首次提现必须审核"},autoWithdrawLimitRegTime:{noLimit:"不限"},successRateType:{Number:"按接单量成功率"}};
 // Only these mappings have been verified against the source interface.
-const OTHER_CONDITIONS:Record<string,string>={AgentWithdrawalsReviewed:"代理提现必须审核（多次）",AgentWithdrawalsReviewedOnce:"代理提现必须审核（一次）",RollBackGameRecord:"游戏撤单后首笔提现必须审核"};
+const OTHER_CONDITIONS:Record<string,string>={AgentWithdrawalsReviewed:"代理提现必须审核（多次）",AgentWithdrawalsReviewedOnce:"代理提现必须审核（一次）",RollBackGameRecord:"游戏撤单后首笔提现必须审核",MembersWithPositiveDepositWithdrawalDifference:"充提差额大于0的会员才免审核"};
 const MONEY_UNVERIFIED=["autoWithdrawDailyLimit","autoWithdrawManualRechargeLimit","autoWithdrawManualGiftLimit"];
-const BASIC=["autoWithdrawalSwitch","autoWithdrawalAmountMix","autoWithdrawalAmountMax","autoRefuseSwitch"];
 const CONDITIONS=["autoWithdrawalLimitType","autoWithdrawalLimitAmount","autoWithdrawalLimitLevel","autoWithdrawLimitRegTime",...MONEY_UNVERIFIED,"autoWithdrawLimitOther"];
 const CHANNEL_RULES=["successRateType","orderVolume","minSuccessRate"];
 const EXTRA=["withdrawSwitch","rechargeMultiple","rewardMultiple","auditAutoRelieve","autoWithdrawalLimitSwitch","autoWithdrawalPollingSwitch","auditAutoRelieveType","auditLevelMode","levelMultiples"];
@@ -36,6 +35,7 @@ export default function PandaConfigSheet({configuration}:{configuration:PandaCon
     if(key==="minSuccessRate"&&typeof item==="number")return <><div className="pwc-inline">{input(key,item.toFixed(2),true)}<span>%，则自动下架</span></div><small className="pwc-field-help pwc-warning">不输入或者 0，表示不限制成功率</small></>;
     if(key==="orderVolume"&&typeof item==="number")return <>{input(key,String(item))}<small className="pwc-field-help pwc-warning">不输入或者 0，表示不限制接单量</small></>;
     if(key==="successRateType"&&item==="Number")return <div className="pwc-radio-list" role="group" aria-label="成功率配置（只读）"><label><input type="radio" checked disabled/>按接单量成功率</label><label><input type="radio" checked={false} disabled/>按历史成功率</label></div>;
+    if(key==="autoWithdrawalLimitType"&&typeof item==="string"&&Object.hasOwn(KNOWN_VALUES.autoWithdrawalLimitType,item))return <div className="pwc-radio-list" role="group" aria-label="首次提款限制（只读）">{Object.entries(KNOWN_VALUES.autoWithdrawalLimitType).map(([code,label])=><label key={code}><input type="radio" checked={item===code} disabled/>{label}</label>)}</div>;
     if(key==="autoWithdrawLimitOther"&&Array.isArray(item)){
       const selected=new Set(item.map(String));
       return <div className="pwc-check-list" role="group" aria-label="其他免审条件（只读）">
@@ -44,7 +44,8 @@ export default function PandaConfigSheet({configuration}:{configuration:PandaCon
         <small className="pwc-field-help">显示已核实名称的条件；未映射的已选项保留原码。</small>
       </div>;
     }
-    if(key==="autoWithdrawalLimitLevel"&&Array.isArray(item))return select(KNOWN_LABELS[key],item.length?"层级 ID："+item.map(String).join("、"):"未选择会员层级");
+    if(key==="autoWithdrawalLimitLevel"&&Array.isArray(item))return item.length?<div className="pwc-check-list" role="group" aria-label="免审会员层级（只读）">{item.map((id,i)=><label key={i}><input type="checkbox" checked disabled/>层级 ID：{String(id)}</label>)}<small className="pwc-field-help">已选层级按真实 ID 显示；源后台名称字典尚未同步。</small></div>:<span className="pwc-muted">未选择会员层级（[]）</span>;
+    if(key==="auditGameLimit"&&typeof item==="object"&&!Array.isArray(item)&&Object.keys(item).length===0)return <span className="pwc-muted">接口返回空对象（{"{}"}）</span>;
     const label=KNOWN_VALUES[key]?.[String(item)];
     return label?select(KNOWN_LABELS[key],label):<Shape value={item}/>;
   };
@@ -53,7 +54,9 @@ export default function PandaConfigSheet({configuration}:{configuration:PandaCon
   const channels=Array.isArray(channelValue)?channelValue:[];
   return <div className="pwc-sheet" aria-label="熊猫自动出款配置只读展示">
     <div className="pwc-sheet-heading"><h3>代付设置</h3><span>只读配置 · 每日同步</span></div>
-    {BASIC.map(row)}
+    {row("autoWithdrawalSwitch")}
+    <div className="pwc-row" data-field="autoWithdrawalAmountMix"><div className="pwc-label">自动代付金额范围：</div><div className="pwc-value"><div className="pwc-amount-range">{value("autoWithdrawalAmountMix")}<span>~</span><div data-field="autoWithdrawalAmountMax">{value("autoWithdrawalAmountMax")}</div></div><small className="pwc-field-help pwc-warning">不输入或者 0~0，表示不限制范围</small></div></div>
+    {row("autoRefuseSwitch")}
     <h4>免审条件</h4><p className="pwc-help">同时满足以下设置条件的会员才能自动免审；不填表示不限制。</p>
     {CONDITIONS.map(row)}
     <h4>自动代付渠道下架规则 <span>（若按成功率判断，成功率未达到设置值时，该自动代付渠道自动下架）</span></h4>
