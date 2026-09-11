@@ -41,6 +41,8 @@ function safeJson(v:any,depth=0):any {
 }
 function games(v:any){
   if(v==="")return v;
+  // withdrawal.getAuto also returns "{}"; preserve the decoded empty object.
+  if(object(v)&&Object.keys(v).length===0)return {};
   keys(v,["status","limitData"]);
   return {status:text(v.status),limitData:array(v.limitData).map(x=>{
     keys(x,["gameType","platformData"]);
