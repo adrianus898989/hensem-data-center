@@ -79,6 +79,31 @@ function sanitizeManagementPermissions(value: unknown): ManagementPermissions {
   };
 }
 
+
+function requestClientIp(request: Request): string {
+  const direct = [
+    request.headers.get("cf-connecting-ip"),
+    request.headers.get("x-real-ip"),
+    request.headers.get("fly-client-ip"),
+    request.headers.get("sb-client-ip"),
+  ].map((value) => String(value || "").trim()).find(Boolean);
+  if (direct) return direct.replace(/^::ffff:/i, "");
+  const forwarded = String(request.headers.get("x-forwarded-for") || "").split(",")[0].trim();
+  return forwarded.replace(/^::ffff:/i, "");
+}
+
+function validateIp(value: unknown): string {
+  const ip = String(value || "").trim().replace(/^::ffff:/i, "");
+  if (!ip || ip.length > 64) throw new Error("IP 格式不正确");
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) {
+    const parts = ip.split(".").map(Number);
+    if (parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) return ip;
+    throw new Error("IPv4 格式不正确");
+  }
+  if (/^[0-9a-f:]+$/i.test(ip) && ip.includes(":")) return ip.toLowerCase();
+  throw new Error("只支持单个 IPv4 / IPv6 地址，不支持网段");
+}
+
 function dateInManila(offsetDays = 0): string {
   const base = new Date(Date.now() + offsetDays * 86400000);
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -140,12 +165,138 @@ Deno.serve(async (request) => {
       return { token, caller, profile: callerProfile, actor: { id: caller.id, username: String(callerProfile.username || "admin") } };
     }
 
+    async function requireAuthenticated() {
+      const authHeader = String(request.headers.get("authorization") || "");
+      const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+      if (!token) throw new Error("未登录");
+      const { data: userData, error: userError } = await admin.auth.getUser(token);
+      const caller = userData?.user;
+      if (userError || !caller) throw new Error("登录状态无效");
+      const { data: callerProfile, error: profileError } = await admin
+        .from("dashboard_profiles")
+        .select("username,role,active,permissions,management_permissions")
+        .eq("auth_user_id", caller.id)
+        .maybeSingle();
+      if (profileError) throw new Error(`读取账号权限失败：${profileError.message}`);
+      if (!callerProfile?.active) throw new Error("这个账号已被停用");
+      return { token, caller, profile: callerProfile, actor: { id: caller.id, username: String(callerProfile.username || "user") } };
+    }
+
+    async function requireOwner() {
+      const ctx = await requireManager();
+      if (ctx.profile.role !== "owner") throw new Error("只有总管理员可以管理 IP 白名单");
+      return ctx;
+    }
+
+    async function loadIpSecurity() {
+      const { data: settings, error: settingsError } = await admin
+        .from("dashboard_security_settings")
+        .select("ip_whitelist_enabled,updated_at")
+        .eq("id", 1)
+        .maybeSingle();
+      if (settingsError) throw new Error(`读取 IP 安全设置失败：${settingsError.message}`);
+      return { enabled: Boolean(settings?.ip_whitelist_enabled), updatedAt: String(settings?.updated_at || "") };
+    }
+
     async function requireCapability(key: keyof ManagementPermissions) {
       const ctx = await requireManager();
       if (ctx.profile.role === "owner") return ctx;
       const permissions = sanitizeManagementPermissions(ctx.profile.management_permissions);
       if (!permissions[key]) throw new Error("当前管理员没有这个后台管理权限");
       return ctx;
+    }
+
+    if (action === "check-access") {
+      const ctx = await requireAuthenticated();
+      const currentIp = requestClientIp(request);
+      const security = await loadIpSecurity();
+      if (!security.enabled) return json(request, { ok: true, allowed: true, enabled: false, currentIp });
+      if (!currentIp) return json(request, { ok: false, allowed: false, enabled: true, currentIp: "", message: "无法识别当前 IP，已拒绝登录" }, 403);
+      const { data: allowedRow, error } = await admin
+        .from("dashboard_ip_whitelist")
+        .select("id,ip,note,active")
+        .eq("ip", currentIp)
+        .eq("active", true)
+        .maybeSingle();
+      if (error) throw new Error(`检查 IP 白名单失败：${error.message}`);
+      if (!allowedRow) {
+        await audit(ctx.actor, "login_ip_denied", ctx.actor.username || "", { ip: currentIp });
+        return json(request, { ok: false, allowed: false, enabled: true, currentIp, message: `当前 IP ${currentIp} 不在登录白名单` }, 403);
+      }
+      return json(request, { ok: true, allowed: true, enabled: true, currentIp, note: allowedRow.note || "" });
+    }
+
+    if (action === "ip-settings") {
+      await requireOwner();
+      const security = await loadIpSecurity();
+      const { data: rows, error } = await admin
+        .from("dashboard_ip_whitelist")
+        .select("id,ip,note,active,created_at,updated_at")
+        .order("active", { ascending: false })
+        .order("id", { ascending: true });
+      if (error) throw new Error(`读取 IP 白名单失败：${error.message}`);
+      return json(request, { ok: true, enabled: security.enabled, currentIp: requestClientIp(request), rows: rows || [] });
+    }
+
+    if (action === "add-ip") {
+      const ctx = await requireOwner();
+      const ip = validateIp(body?.ip || requestClientIp(request));
+      const note = String(body?.note || "").trim().slice(0, 100);
+      const { error } = await admin.from("dashboard_ip_whitelist").upsert({
+        ip, note, active: true, created_by: ctx.caller.id, updated_at: new Date().toISOString(),
+      }, { onConflict: "ip" });
+      if (error) throw new Error(`添加 IP 失败：${error.message}`);
+      await audit(ctx.actor, "ip_whitelist_add", ip, { ip, note });
+      return json(request, { ok: true, ip, message: "IP 已加入白名单" });
+    }
+
+    if (action === "set-ip-active") {
+      const ctx = await requireOwner();
+      const id = Number(body?.id || 0);
+      if (!id) throw new Error("IP 记录 ID 无效");
+      const active = Boolean(body?.active);
+      const { data: row, error } = await admin.from("dashboard_ip_whitelist")
+        .update({ active, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .select("id,ip,note,active")
+        .maybeSingle();
+      if (error) throw new Error(`更新 IP 状态失败：${error.message}`);
+      if (!row) throw new Error("IP 记录不存在");
+      await audit(ctx.actor, "ip_whitelist_update", String(row.ip || ""), { ip: row.ip, active });
+      return json(request, { ok: true, row, message: active ? "IP 已启用" : "IP 已停用" });
+    }
+
+    if (action === "delete-ip") {
+      const ctx = await requireOwner();
+      const id = Number(body?.id || 0);
+      if (!id) throw new Error("IP 记录 ID 无效");
+      const { data: row } = await admin.from("dashboard_ip_whitelist").select("id,ip").eq("id", id).maybeSingle();
+      const { error } = await admin.from("dashboard_ip_whitelist").delete().eq("id", id);
+      if (error) throw new Error(`删除 IP 失败：${error.message}`);
+      await audit(ctx.actor, "ip_whitelist_delete", String(row?.ip || ""), { ip: row?.ip || "" });
+      return json(request, { ok: true, message: "IP 已删除" });
+    }
+
+    if (action === "set-ip-mode") {
+      const ctx = await requireOwner();
+      const enabled = Boolean(body?.enabled);
+      const currentIp = requestClientIp(request);
+      if (enabled) {
+        if (!currentIp) throw new Error("无法识别当前 IP，不能开启白名单限制");
+        const { data: currentAllowed, error: allowError } = await admin.from("dashboard_ip_whitelist")
+          .select("id")
+          .eq("ip", currentIp)
+          .eq("active", true)
+          .maybeSingle();
+        if (allowError) throw new Error(`检查当前 IP 失败：${allowError.message}`);
+        if (!currentAllowed) throw new Error(`请先把当前 IP ${currentIp} 加入并启用，再开启白名单限制`);
+      }
+      const { error } = await admin.from("dashboard_security_settings").upsert({
+        id: 1, ip_whitelist_enabled: enabled, updated_by: ctx.caller.id, updated_at: new Date().toISOString(),
+      }, { onConflict: "id" });
+      if (error) throw new Error(`保存 IP 登录模式失败：${error.message}`);
+      await audit(ctx.actor, "ip_whitelist_mode", "", { enabled, currentIp });
+      return json(request, { ok: true, enabled, currentIp, message: enabled ? "已开启：只有白名单 IP 可以登录" : "已关闭：账号密码正确即可登录" });
     }
 
     if (action === "bootstrap-admin") {
@@ -301,15 +452,20 @@ Deno.serve(async (request) => {
 
     if (action === "update-account") {
       const ctx = await requireManager();
+      const hasRole = Object.prototype.hasOwnProperty.call(body, "role");
+      if (hasRole && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以修改账号角色" }, 403);
+      if (hasRole && !["admin", "viewer"].includes(body.role)) return json(request, { ok: false, message: "角色只能选择管理员或查看账号" }, 400);
+      if (hasRole && !["admin", "viewer"].includes(body.expected_role)) return json(request, { ok: false, message: "请刷新账号列表后重新修改角色" }, 400);
       const username = normalizeUsername(body?.username);
       const { data: target, error: targetError } = await admin
         .from("dashboard_profiles")
-        .select("auth_user_id,username,role,active,permissions,management_permissions")
+        .select("auth_user_id,username,role,active,permissions,management_permissions,updated_at")
         .eq("username", username)
         .maybeSingle();
       if (targetError) throw new Error(`读取目标账号失败：${targetError.message}`);
       if (!target) return json(request, { ok: false, message: "账号不存在" }, 404);
       if (target.role === "owner") return json(request, { ok: false, message: "总管理员不能被其它账号修改" }, 403);
+      if (hasRole && body.expected_role !== target.role) return json(request, { ok: false, message: "账号角色已变更，请刷新列表后重试" }, 409);
       if (target.role === "admin" && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以修改小管理员" }, 403);
       if (target.role === "viewer" && ctx.profile.role !== "owner") {
         const management = sanitizeManagementPermissions(ctx.profile.management_permissions);
@@ -320,14 +476,43 @@ Deno.serve(async (request) => {
       if (typeof body?.active === "boolean") patch.active = body.active;
       if (body?.permissions) patch.permissions = sanitizePermissions(body.permissions);
       if (target.role === "admin" && body?.management_permissions) patch.management_permissions = sanitizeManagementPermissions(body.management_permissions);
-      const { error } = await admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id);
+      if (hasRole) {
+        // A role change never implicitly grants business access through role defaults.
+        const previous = target.permissions || {};
+        patch.permissions = {
+          home: true,
+          third_party: previous.third_party !== false,
+          auto_withdraw: target.role === "admin" ? previous.auto_withdraw !== false : previous.auto_withdraw === true,
+          work_orders: target.role === "admin" ? previous.work_orders !== false : previous.work_orders === true,
+          customer_service: target.role === "admin" ? previous.customer_service !== false : previous.customer_service === true,
+        };
+        // Change only the role here; other controls retain their existing save path.
+        delete patch.active;
+        patch.role = body.role;
+        if (body.role === "admin") {
+          const requested = body.management_permissions;
+          const keys = ["manage_viewers", "refresh_data", "view_audit"];
+          if (!requested || typeof requested !== "object" || Array.isArray(requested) || keys.some((key) => typeof requested[key] !== "boolean")) {
+            return json(request, { ok: false, message: "请明确选择全部后台权限后保存角色" }, 400);
+          }
+          patch.management_permissions = sanitizeManagementPermissions(requested);
+        } else {
+          patch.management_permissions = { ...VIEWER_MANAGEMENT };
+        }
+      }
+      // Do not let a concurrent promotion turn a viewer edit into an admin edit.
+      let update = admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id).eq("role", target.role);
+      if (target.updated_at) update = update.eq("updated_at", target.updated_at);
+      const { data: updated, error } = await update.select("role").maybeSingle();
       if (error) throw new Error(`更新账号失败：${error.message}`);
-      await audit(ctx.actor, "update_account", username, { role: target.role, ...patch });
-      return json(request, { ok: true, username, role: target.role, message: "账号权限已更新" });
+      if (!updated) return json(request, { ok: false, message: "账号信息已变更，请刷新列表后重试" }, 409);
+      await audit(ctx.actor, "update_account", username, { previous_role: target.role, ...patch, role: updated.role });
+      return json(request, { ok: true, username, role: updated.role, message: hasRole ? "账号角色已更新" : "账号权限已更新" });
     }
 
     if (action === "update-viewer") {
       const { actor } = await requireCapability("manage_viewers");
+      if (Object.prototype.hasOwnProperty.call(body, "role")) return json(request, { ok: false, message: "请使用账号角色设置修改角色" }, 400);
       const username = normalizeUsername(body?.username);
       const { data: target, error: targetError } = await admin
         .from("dashboard_profiles")
@@ -341,8 +526,9 @@ Deno.serve(async (request) => {
       const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
       if (typeof body?.active === "boolean") patch.active = body.active;
       if (body?.permissions) patch.permissions = sanitizePermissions(body.permissions);
-      const { error } = await admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id);
+      const { data: updated, error } = await admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id).eq("role", "viewer").select("role").maybeSingle();
       if (error) throw new Error(`更新账号失败：${error.message}`);
+      if (!updated) return json(request, { ok: false, message: "账号角色已变更，请刷新列表后重试" }, 409);
       await audit(actor, "update_viewer", username, patch);
       return json(request, { ok: true, username, message: "账号权限已更新" });
     }
@@ -527,7 +713,7 @@ Deno.serve(async (request) => {
 
     return json(request, {
       ok: false,
-      message: "action 请使用 bootstrap-admin / reset-admin-password / create-account / create-viewer / list-users / update-account / update-viewer / reset-password / delete-account / list-audit / history-status / auto-withdraw-history-status / trigger-sync",
+      message: "action 请使用 check-access / ip-settings / add-ip / set-ip-active / delete-ip / set-ip-mode / bootstrap-admin / reset-admin-password / create-account / create-viewer / list-users / update-account / update-viewer / reset-password / delete-account / list-audit / history-status / auto-withdraw-history-status / trigger-sync",
     }, 400);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

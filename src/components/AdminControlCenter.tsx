@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import "./AdminControlCenter.css";
+import AccountRoleEditor from "./AccountRoleEditor";
 import {
   addDashboardAllowedIp,
   canOpenAdminCenter,
@@ -24,6 +25,7 @@ import {
   triggerDashboardSync,
   updateDashboardAccount,
   type DashboardAuditLog,
+  type DashboardAccountPatch,
   type DashboardIpSettings,
   type DashboardManagementPermissions,
   type DashboardPermissions,
@@ -135,6 +137,8 @@ function auditDetailsText(log: DashboardAuditLog): string {
   const job = String((details as any)?.job || "");
   if (job) parts.push(`任务：${job}`);
   const role = String((details as any)?.role || "");
+  const previousRole = String((details as any)?.previous_role || "");
+  if (previousRole && previousRole !== role && ["admin", "viewer"].includes(previousRole)) parts.push(`原角色：${roleLabel(previousRole as DashboardProfile["role"])}`);
   if (role && ["owner", "admin", "viewer"].includes(role)) parts.push(`角色：${roleLabel(role as DashboardProfile["role"])}`);
   if (typeof (details as any)?.active === "boolean") parts.push((details as any).active ? "启用账号" : "停用账号");
 
@@ -397,15 +401,16 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     return canManageUsers;
   }
 
-  async function saveAccount(user: DashboardProfile, patch: { active?: boolean; permissions?: DashboardPermissions; management_permissions?: DashboardManagementPermissions }) {
-    if (!canEditTarget(user)) return;
+  async function saveAccount(user: DashboardProfile, patch: DashboardAccountPatch): Promise<boolean> {
+    if (!canEditTarget(user) || savingUser || (patch.role && !isOwner)) return false;
     setSavingUser(user.username);
     setMessage("");
     try {
       await updateDashboardAccount(session, user.username, patch);
-      setMessage(`${user.username} 已更新。`);
+      setMessage(patch.role ? `${user.username} 已改为${roleLabel(patch.role)}。该账号刷新页面或重新登录后可看到新权限。` : `${user.username} 已更新。`);
       await Promise.all([loadUsers(), canViewAudit ? loadAudit() : Promise.resolve()]);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "更新失败"); }
+      return true;
+    } catch (error) { setMessage(error instanceof Error ? error.message : "更新失败"); return false; }
     finally { setSavingUser(""); }
   }
 
@@ -598,7 +603,8 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
                   <td>{editable ? <button type="button" className="admin-account-settings" aria-expanded={expanded} aria-controls={editId} onClick={() => { setEditingUsername(expanded ? "" : user.username); setResetTarget(""); setResetPassword(""); }}>{expanded ? "收起" : "设置"}<span aria-hidden="true">{expanded ? "⌃" : "⌄"}</span></button> : <span className="admin-account-readonly" title={user.role === "owner" ? "唯一总管理员账号，不能在这里停用、删除或修改" : "当前账号无权修改此管理员"}>{user.role === "owner" ? "受保护" : "只读"}</span>}</td>
                 </tr>
                   {expanded && <tr className="admin-account-editor-row"><td colSpan={5}><div id={editId} className="admin-user-edit-grid admin-account-editor">
-                    <div className="admin-account-edit-hint"><strong>{user.username} · 权限设置</strong><span>{savingUser === user.username ? "正在保存…" : "勾选后自动保存"}</span></div>
+                    <div className="admin-account-edit-hint"><strong>{user.username} · 权限设置</strong><span>{savingUser === user.username ? "正在保存…" : "业务模块和已有后台权限勾选后自动保存"}</span></div>
+                    {isOwner && user.role !== "owner" && <AccountRoleEditor key={`${user.auth_user_id}:${user.role}`} user={user} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />}
                     <div><span className="admin-inline-title">业务模块</span><div className="admin-user-permissions-inline">{BUSINESS_PERMISSION_GROUPS.map((group) => {
                       const checked = group.keys.some((key) => permissions[key]);
                       return <label key={group.key}><input type="checkbox" checked={checked} disabled={savingUser === user.username} onChange={(e) => {
