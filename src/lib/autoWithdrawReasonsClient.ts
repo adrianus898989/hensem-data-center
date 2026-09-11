@@ -78,6 +78,8 @@ export function reasonSourceTarget(country: string, platform: string) {
   const name = platform.trim();
   if (country === "PK" && name.toUpperCase() === "POPZAR") return { source: "NEWAR", platform: "POPZAR" };
   if (country === "IN" && ["DHANI.WIN", "DHANIWIN"].includes(name.toUpperCase())) return { source: "NEWAR", platform: "DHANI.WIN" };
+  // Only these exact names belong to the supplied Baifu collector.
+  if (country === "BR" && ["5C555", "BET6867"].includes(name.toUpperCase())) return { source: "BAIFU", platform: name.toUpperCase() };
   if ((country === "BR" && PANDA_BRAZIL_PLATFORMS.has(name.toUpperCase()))
     || (country === "PH" && name.toUpperCase() === "PH19")) return { source: "PANDA", platform: name.toUpperCase() };
   return { source: "AR", platform: name };

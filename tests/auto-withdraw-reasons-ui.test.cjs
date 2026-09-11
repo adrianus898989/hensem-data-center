@@ -80,6 +80,23 @@ test('Panda describes abnormal-only scope and excludes normal and unknown notes 
   assert.match(html,/沿用原已审核日表口径/);
   assert.doesNotMatch(html,/全部方式未填|含已提交|>未填写备注<|尚未对齐/);
 });
+test('Baifu excludes normal notes while keeping pending outcomes separate from rejection',()=>{
+  const dayOverride={source_system:'BAIFU',stat_date:target.date,updated_at:'2026-09-11T01:00:00Z',snapshot:{
+    classifier_version:'note-template-v2',timezone:'America/Sao_Paulo',coverage:{incomplete_note_count:0},
+    totals:{total:100,manual:40,auto:60,unknown:0,success:80,reject:10,other:10},
+    groups:[{operator_class:'manual',reason_key:'review',reason_label:'用户出款类型需要人工审核',classification:'template',count:6,success:4,reject:1,other:1,samples:[]},
+      {operator_class:'manual',reason_key:'bonus',reason_label:'宝箱活动奖励提现审核',classification:'template',count:4,success:3,reject:0,other:1,samples:[]},
+      {operator_class:'manual',reason_key:'empty-manual',reason_label:'未填写备注',classification:'empty',count:30,success:23,reject:7,other:0,samples:[]},
+      {operator_class:'auto',reason_key:'empty-auto',reason_label:'未填写备注',classification:'empty',count:60,success:50,reject:2,other:8,samples:[]}]}};
+  const html=render({expanded:true,dayOverride,availableTotal:100});
+  assert.match(html,/>异常原因订单<\/dt><dd><strong>10<\/strong>/);
+  assert.match(html,/仅统计已识别异常 · 其余 90 笔不计/);
+  assert.match(html,/6 ÷ 人工处理有原因订单 10 笔"><strong>60.00%/);
+  assert.match(html,/4 ÷ 人工处理有原因订单 10 笔"><strong>40.00%/);
+  assert.match(html,/按创建日期归属/); assert.match(html,/待处理等状态归其他/);
+  assert.match(html,/>其他<\/th>/); assert.match(html,/用户出款类型需要人工审核/);
+  assert.doesNotMatch(html,/其余计驳回|含已提交|>未填写备注<|尚未对齐/);
+});
 test('same-scope manual refresh keeps the visible table and open details',()=>{
   const html=render({expanded:true,rowExpanded:true,loading:true});
   assert.match(html,/读取中/); assert.match(html,/wr-variant-row/); assert.match(html,/受限游戏类型投注/);
