@@ -133,6 +133,14 @@
 .admin-account-editor .admin-user-buttons-v249 button { min-height: 30px; padding: 5px 10px; font-size: 11px; }
 .admin-account-editor .admin-inline-reset { margin: 0; }
 .admin-account-editor .admin-inline-reset button { font-size: 11px; }
+.admin-account-role-editor { padding-bottom: 10px; border-bottom: 1px solid #e5edf8; }
+.admin-account-role-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; }
+.admin-account-role-controls select { min-height: 34px; padding: 4px 26px 4px 9px; border: 1px solid #cbdcf6; border-radius: 6px; background: #fff; color: #25354d; font: inherit; }
+.admin-account-role-controls button { min-height: 34px; padding: 5px 12px; font-size: 14px; }
+.admin-role-management { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0 0; padding: 8px 10px; border: 1px solid #dce7f6; border-radius: 6px; }
+.admin-role-management legend { padding: 0 5px; color: #52657f; font-size: 13px; }
+.admin-role-management label { display: inline-flex; align-items: center; gap: 5px; font-size: 14px; }
+.admin-role-warning { margin: 8px 0 0; color: #9a580c; font-size: 13px; }
 
 .admin-users-compact .admin-account-create-panel {
   margin: 0 0 12px;

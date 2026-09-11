@@ -248,7 +248,15 @@ export async function listDashboardUsers(session: DashboardSession): Promise<Das
   return Array.isArray(result?.users) ? result.users : [];
 }
 
-export async function updateDashboardAccount(session: DashboardSession, username: string, patch: { active?: boolean; permissions?: DashboardPermissions; management_permissions?: DashboardManagementPermissions }) {
+export type DashboardAccountPatch = {
+  active?: boolean;
+  permissions?: DashboardPermissions;
+  management_permissions?: DashboardManagementPermissions;
+  role?: "admin" | "viewer";
+  expected_role?: "admin" | "viewer";
+};
+
+export async function updateDashboardAccount(session: DashboardSession, username: string, patch: DashboardAccountPatch) {
   return await callAdminFunction(session, { action: "update-account", username, ...patch });
 }
 
