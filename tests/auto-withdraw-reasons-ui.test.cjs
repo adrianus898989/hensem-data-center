@@ -66,6 +66,20 @@ test('original remarks expand across the reason table, not in a narrow last cell
   assert.match(html,/会员在限制的游戏类型中总的投注数:1/); assert.match(html,/>14<\/strong>/); assert.match(html,/>19<\/strong>/);
   assert.match(html,/脱敏示例，非全部订单明细/);
 });
+test('Panda describes abnormal-only scope and excludes normal and unknown notes from shares',()=>{
+  const dayOverride={source_system:'PANDA',stat_date:target.date,updated_at:'2026-09-11T01:00:00Z',snapshot:{
+    classifier_version:'note-template-v2',timezone:'Etc/GMT+3',coverage:{incomplete_note_count:0},
+    totals:{total:100,manual:40,auto:60,unknown:0,success:90,reject:10,other:0},
+    groups:[{operator_class:'manual',reason_key:'abnormal',reason_label:'免审未通过：领取活动奖励（多次）',classification:'template',count:10,success:7,reject:3,other:0,samples:[]},
+      {operator_class:'manual',reason_key:'omitted-manual',reason_label:'未填写备注',classification:'empty',count:30,success:23,reject:7,other:0,samples:[]},
+      {operator_class:'auto',reason_key:'omitted-auto',reason_label:'未填写备注',classification:'empty',count:60,success:60,reject:0,other:0,samples:[]}]}};
+  const html=render({expanded:true,dayOverride,availableTotal:100});
+  assert.match(html,/>异常原因订单<\/dt><dd><strong>10<\/strong>/);
+  assert.match(html,/仅统计已识别异常 · 其余 90 笔不计/);
+  assert.match(html,/10 ÷ 人工处理有原因订单 10 笔"><strong>100.00%/);
+  assert.match(html,/沿用原已审核日表口径/);
+  assert.doesNotMatch(html,/全部方式未填|含已提交|>未填写备注<|尚未对齐/);
+});
 test('same-scope manual refresh keeps the visible table and open details',()=>{
   const html=render({expanded:true,rowExpanded:true,loading:true});
   assert.match(html,/读取中/); assert.match(html,/wr-variant-row/); assert.match(html,/受限游戏类型投注/);

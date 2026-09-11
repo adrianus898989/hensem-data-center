@@ -91,6 +91,8 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
   const targetKey = target ? JSON.stringify(target) : "";
   const visibleResult = allowed && result?.key === targetKey && result.viewerKey === viewerKey ? result : null;
   const day = visibleResult?.day;
+  const abnormalOnly = day?.source_system === "PANDA";
+  const statusBasis = abnormalOnly ? "沿用原已审核日表口径：已完成计成功，其余计驳回；不代表实时待处理订单状态" : "沿用日表状态口径（含已提交）";
   const openModal = Boolean(target && !inline);
 
   function open(platform: Platform, inRow = true) {
@@ -180,13 +182,13 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
           {!loading && !error && visibleResult && !day && <div className="wr-state"><strong>该平台当天尚未同步原因数据</strong>
             <p>补采该日期后点击刷新。</p></div>}
           {!error && day && totals && <>
-            <dl className="wr-overview" aria-label="有原因订单及结果，不含未填写备注的订单">
-              <div><dt>有原因订单</dt><dd><strong>{fmt(totals.total)}</strong></dd></div>
-              <div className="wr-success"><dt>成功</dt><dd><strong>{fmt(totals.success)}</strong><small title="有原因的成功笔数 / 有原因订单数；沿用日表状态口径（含已提交）">{reasonPercent(totals.success, totals.total)}</small></dd></div>
+            <dl className="wr-overview" aria-label={abnormalOnly ? "异常原因订单及结果，不含正常、空白或未识别的备注" : "有原因订单及结果，不含未填写备注的订单"}>
+              <div><dt>{abnormalOnly ? "异常原因订单" : "有原因订单"}</dt><dd><strong>{fmt(totals.total)}</strong></dd></div>
+              <div className="wr-success"><dt>成功</dt><dd><strong>{fmt(totals.success)}</strong><small title={`有原因的成功笔数 / 有原因订单数；${statusBasis}`}>{reasonPercent(totals.success, totals.total)}</small></dd></div>
               <div className="wr-rejected"><dt>驳回</dt><dd><strong>{fmt(totals.reject)}</strong><small title="有原因的驳回笔数 / 有原因订单数">{reasonPercent(totals.reject, totals.total)}</small></dd></div>
               {totals.other > 0 && <div><dt>其他状态</dt><dd><strong>{fmt(totals.other)}</strong><small>{reasonPercent(totals.other, totals.total)}</small></dd></div>}
             </dl>
-            {differs && <div className="wr-alert">采集 {fmt(day.snapshot.totals.total)} 笔 / 日表 {fmt(reportTotal)} 笔，尚未对齐；原因占比按已采集且有备注的订单计算。</div>}
+            {differs && <div className="wr-alert">采集 {fmt(day.snapshot.totals.total)} 笔 / 日表 {fmt(reportTotal)} 笔，尚未对齐；原因占比按{abnormalOnly ? "已采集的异常原因订单" : "已采集且有备注的订单"}计算。</div>}
             {day.snapshot.coverage.incomplete_note_count > 0 && <div className="wr-alert">{fmt(day.snapshot.coverage.incomplete_note_count)} 笔备注待补全文，请重新采集当天。</div>}
             <div className="wr-reason-controls">
               <div className="wr-tabs" role="group" aria-label="操作方式">
@@ -197,15 +199,15 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
                 </button>)}
               </div>
               <div className="wr-reason-tools">
-                <span className="wr-note-scope">仅含已填备注{omittedCount > 0 && ` · 全部方式未填 ${fmt(omittedCount)} 笔不计`}</span>
+                <span className="wr-note-scope">{abnormalOnly ? "仅统计已识别异常" : "仅含已填备注"}{omittedCount > 0 && (abnormalOnly ? ` · 其余 ${fmt(omittedCount)} 笔不计` : ` · 全部方式未填 ${fmt(omittedCount)} 笔不计`)}</span>
                 <input aria-label="搜索原因或备注样本" placeholder="搜索原因 / 原备注" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} />
                 <ReasonPagination page={actualPage} pages={pages} total={groups.length} onPage={setPage} />
               </div>
             </div>
             <div className="wr-table-wrap"><table className="wr-table"><colgroup><col className="wr-col-reason" /><col className="wr-col-count" /><col className="wr-col-percent" /><col className="wr-col-status" />{showOther && <col className="wr-col-other" />}<col className="wr-col-detail" /></colgroup><thead><tr>
-              <th>原因</th><th>笔数</th><th title={`该原因笔数 ÷ ${operatorNames[operator]}有原因订单 ${fmt(denominator)} 笔（不含未填写备注）`}>原因占比</th><th title="沿用日表口径，已提交计入成功">成功 / 驳回</th>{showOther && <th>其他</th>}<th>明细</th>
+              <th>原因</th><th>笔数</th><th title={`该原因笔数 ÷ ${operatorNames[operator]}有原因订单 ${fmt(denominator)} 笔（${abnormalOnly ? "仅含已识别异常" : "不含未填写备注"}）`}>原因占比</th><th title={statusBasis}>成功 / 驳回</th>{showOther && <th>其他</th>}<th>明细</th>
             </tr></thead><tbody>{groups.slice((actualPage - 1) * 20, actualPage * 20).map(g => <ReasonRow key={`${operator}:${g.reason_key}`} group={g} denominator={denominator} operator={operator} showOther={showOther} />)}</tbody></table>
-            {!groups.length && <div className="wr-state">{search ? "没有匹配的原因" : `当天没有${operatorNames[operator]}的已填写原因`}</div>}</div>
+            {!groups.length && <div className="wr-state">{search ? "没有匹配的原因" : `当天没有${operatorNames[operator]}的${abnormalOnly ? "已识别异常原因" : "已填写原因"}`}</div>}</div>
             <div className="wr-footer"><span>{search.trim() ? "匹配" : "共"} {groups.length} 类 · {fmt(matchedCount)} 笔</span>
               <ReasonPagination page={actualPage} pages={pages} total={groups.length} onPage={setPage} /></div>
           </>}

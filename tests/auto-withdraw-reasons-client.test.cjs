@@ -80,6 +80,33 @@ test("case insensitive matching preserves platform punctuation", async () => {
   await withApi(({ url }) => { assert.equal(url.searchParams.get("platform"), "ilike.Shree.Win"); return Response.json([{ ...fixture(), platform: "SHREE.WIN" }]); },
     async () => assert.equal((await getAutoWithdrawReasons(session, { ...target, platform: "Shree.Win" })).platform, "SHREE.WIN"));
 });
+test("Panda source uses configured output labels only, with country isolation", () => {
+  for (const name of ["776F", "SSS55", "PLAYER BR", "FF555", "5V555", "27FF", "222O"])
+    assert.deepEqual(reasonSourceTarget("BR", name.toLowerCase()), { source: "PANDA", platform: name });
+  assert.deepEqual(reasonSourceTarget("PH", "ph19"), { source: "PANDA", platform: "PH19" });
+  for (const [country, name] of [["IN", "776F"], ["PH", "SSS55"], ["BR", "PH19"], ["BR", "POPOTHER"], ["BR", "PLAYERBR"], ["BR", "776F2"]])
+    assert.deepEqual(reasonSourceTarget(country, name), { source: "AR", platform: name });
+});
+test("Panda Brazil, Fat Tiger Brazil and PH19 query only their own snapshots", async () => {
+  for (const [country, code, platform] of [["巴西", "BR", "SSS55"], ["胖虎巴西", "BR", "776F"], ["菲律宾", "PH", "PH19"]]) {
+    const data = { ...fixture(), source_system: "PANDA", country_code: code, platform };
+    await withApi(({ url }) => {
+      assert.equal(url.searchParams.get("source_system"), "eq.PANDA");
+      assert.equal(url.searchParams.get("country_code"), `eq.${code}`);
+      assert.equal(url.searchParams.get("platform"), `ilike.${platform}`);
+      return Response.json([data]);
+    }, async calls => {
+      assert.deepEqual(await getAutoWithdrawReasons(session, { ...target, country, platform }), data);
+      assert.equal(calls.length, 1);
+    });
+    await withApi(() => Response.json([{ ...data, source_system: "AR" }]), async () =>
+      assert.rejects(getAutoWithdrawReasons(session, { ...target, country, platform }), /不匹配/));
+    await withApi(() => Response.json([]), async calls => {
+      assert.equal(await getAutoWithdrawReasons(session, { ...target, country, platform }), null);
+      assert.equal(calls.length, 1);
+    });
+  }
+});
 test("LIKE wildcard inputs cannot match other platforms", async () => {
   await withApi(({ url }) => { assert.equal(url.searchParams.get("platform"), "ilike.A\\_B\\%\\*\\\\"); return Response.json([]); },
     async () => assert.equal(await getAutoWithdrawReasons(session, { ...target, platform: "A_B%*\\" }), null));
@@ -142,7 +169,7 @@ test("a truly empty, completely collected day stays distinct from no record", ()
 });
 test("country mapping is explicit and preserves India vs Indonesia", () => {
   assert.equal(reasonCountryCode("印度"), "IN"); assert.equal(reasonCountryCode("印尼"), "ID");
-  assert.equal(reasonCountryCode("vn"), "VN"); assert.throws(() => reasonCountryCode("胖虎巴西"), /暂未配置/);
+  assert.equal(reasonCountryCode("vn"), "VN"); assert.equal(reasonCountryCode("胖虎巴西"), "BR");
 });
 test("frontend permission gate matches database: active owner or explicit module permission", () => {
   assert.equal(canReadWithdrawReasons(null), false);
