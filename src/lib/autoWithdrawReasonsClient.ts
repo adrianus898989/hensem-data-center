@@ -36,8 +36,19 @@ export type WithdrawReasonsDay = {
 const COUNTRY_CODES: Record<string, string> = {
   印度: "IN", 印尼: "ID", 印度尼西亚: "ID", 越南: "VN", 巴西: "BR", 巴基斯坦: "PK",
   孟加拉: "BD", 孟加拉国: "BD", 菲律宾: "PH", 尼日利亚: "NG", 缅甸: "MM", 马来: "MY",
-  马来西亚: "MY", 墨西哥: "MX", 哥伦比亚: "CO", 智利: "CL", 南非: "ZA",
+  马来西亚: "MY", 墨西哥: "MX", 哥伦比亚: "CO", 智利: "CL", 南非: "ZA", 胖虎巴西: "BR",
 };
+
+// Exact output labels from the user's Panda collector, not inferred from a
+// country or a name prefix. Other Brazilian/Philippine backends stay on AR.
+const PANDA_BRAZIL_PLATFORMS = new Set([
+  "SSS55", "POPWB", "POPMEL", "POPDEZ", "POPBOA", "BOOMRIO", "POPN1", "POPBIS", "POPFLU",
+  "POPVAI", "POPLUZ", "POPBEA", "POPFOI", "POPZOE", "PLAYER BR", "POPSUR", "POPTIG", "POPSEN",
+  "POPTAM", "56L", "559K", "2V222", "9596BET", "8599BET", "F75", "KK345", "AA45", "FF555",
+  "VIP345", "25RR", "KKVIP", "5V555", "27FF", "58EE", "222O", "32QQ", "TPTP", "67VIP",
+  "222VIP", "345F", "POPNOV", "POPFEZ", "POPCRA", "43R", "POPBUL", "234T", "888HH",
+  "BET5697", "96F", "45FF", "76PP", "8566BET", "776F",
+]);
 
 export function canReadWithdrawReasons(profile: DashboardProfile | null): boolean {
   // Match withdraw_reasons_dashboard_read, including explicit permission for admins.
@@ -67,6 +78,8 @@ export function reasonSourceTarget(country: string, platform: string) {
   const name = platform.trim();
   if (country === "PK" && name.toUpperCase() === "POPZAR") return { source: "NEWAR", platform: "POPZAR" };
   if (country === "IN" && ["DHANI.WIN", "DHANIWIN"].includes(name.toUpperCase())) return { source: "NEWAR", platform: "DHANI.WIN" };
+  if ((country === "BR" && PANDA_BRAZIL_PLATFORMS.has(name.toUpperCase()))
+    || (country === "PH" && name.toUpperCase() === "PH19")) return { source: "PANDA", platform: name.toUpperCase() };
   return { source: "AR", platform: name };
 }
 
