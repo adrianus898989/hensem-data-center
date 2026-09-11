@@ -1,4 +1,4 @@
-import { validatePandaConfigSnapshot } from "./panda-config-contract.ts";
+import { validatePandaConfigSnapshot, validatePandaDictionary } from "./panda-config-contract.ts";
 
 // Source PANDA credentials never reach this function. The key here only permits
 // config ingestion/reporting for pre-authorized targets in our own database.
@@ -34,6 +34,17 @@ Deno.serve(async(req:Request)=>{
       const rows=await db("panda_config_latest?select=country_code,platform,observed_at,observed_local_date,received_at,configuration_hash,snapshot_id&limit=1000");
       return reply({ok:true,snapshots:rows.filter((r:any)=>credential.allowed_targets.includes(r.country_code+":"+r.platform)
         &&(!body.country_code||body.country_code===r.country_code)&&(!body.platforms?.length||body.platforms.includes(r.platform)))});
+    }
+    if(body.action==="dictionary-ingest"){
+      let dictionary;
+      try{dictionary=validatePandaDictionary(body.dictionary);}catch{return reply({ok:false,error:"invalid_configuration_snapshot"},400);}
+      if(!credential.allowed_targets.includes(dictionary.country_code+":"+dictionary.platform))return reply({ok:false,error:"target_not_allowed"},403);
+      const target=await db("panda_config_targets?"+new URLSearchParams({select:"timezone,source_tenant_id,source_region_id",country_code:"eq."+dictionary.country_code,platform:"eq."+dictionary.platform,limit:"1"}));
+      if(target[0]?.timezone!==dictionary.timezone)return reply({ok:false,error:"target_timezone_mismatch"},400);
+      if(target[0]?.source_tenant_id!==dictionary.tenant_id||target[0]?.source_region_id!==dictionary.region_id)return reply({ok:false,error:"target_tenant_mismatch"},400);
+      const hash=await sha(JSON.stringify(dictionary));
+      const result=await db("rpc/ingest_panda_config_dictionary",{method:"POST",body:JSON.stringify({p_dictionary:dictionary,p_hash:hash})});
+      return reply({ok:true,...result});
     }
     if(body.action!=="ingest")return reply({ok:false,error:"invalid_action"},400);
     let snapshot;

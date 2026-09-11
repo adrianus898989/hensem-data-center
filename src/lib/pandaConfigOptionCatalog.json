@@ -1,0 +1,203 @@
+{
+  "autoWithdrawLimitRegTime": {
+    "control": "RadioGroup",
+    "label": "免审会员注册时长：",
+    "component_entry_index": 74,
+    "field_help": [],
+    "options": [
+      {
+        "code": "noLimit",
+        "label": "不限",
+        "label_key": "options.reportQuery.exportPage.setting.noLimit",
+        "tooltip": null
+      },
+      {
+        "code": "1Day",
+        "label": "超24小时",
+        "label_key": "options.merchantFinancialConfig.payoutManage.payOutSetPH.over24Hours",
+        "tooltip": null
+      },
+      {
+        "code": "3Days",
+        "label": "超3天",
+        "label_key": "options.merchantFinancialConfig.payoutManage.payOutSetPH.over3Days",
+        "tooltip": null
+      },
+      {
+        "code": "7Days",
+        "label": "超7天",
+        "label_key": "options.merchantFinancialConfig.payoutManage.payOutSetPH.over7Days",
+        "tooltip": null
+      },
+      {
+        "code": "30Days",
+        "label": "超30天",
+        "label_key": "options.merchantFinancialConfig.payoutManage.payOutSetPH.over30Days",
+        "tooltip": null
+      }
+    ]
+  },
+  "autoWithdrawLimitOther": {
+    "control": "checkbox_option_list",
+    "component_entry_index": 74,
+    "enum_entry_index": 3,
+    "locale_entry_index": 9,
+    "options": [
+      {
+        "code": "MembersWithPositiveDepositWithdrawalDifference",
+        "label": "充提差额大于0的会员才免审核",
+        "label_key": "options.merchantFinancialConfig.payoutManage.autoPayoutSettings.positiveDepositDifference",
+        "tooltip": "总充值成功金额-总提现成功金额大于0的会员",
+        "tooltip_key": "options.merchantFinancialConfig.payoutManage.autoPayoutSettings.positiveDepositDifferenceTip"
+      },
+      {
+        "code": "MembersWithCumulativeLosses",
+        "label": "历史累计亏损会员才免审核",
+        "label_key": "options.eventLog.tenantPaymentManager.autoPayCondition.MembersWithCumulativeLosses",
+        "tooltip": "历史总输赢是负数的会员",
+        "tooltip_key": "options.merchantFinancialConfig.payoutManage.autoPayoutSettings.cumulativeLossMembersTip"
+      },
+      {
+        "code": "MembersWithAuditReliefInLast3Days",
+        "label": "近3天有自动解除稽核的会员必须审核",
+        "label_key": "options.merchantFinancialConfig.payoutManage.autoPayoutSettings.auditReliefLast3Days",
+        "tooltip": "最近三天内，有触发过自动解除稽核的会员",
+        "tooltip_key": "options.merchantFinancialConfig.payoutManage.autoPayoutSettings.auditReliefLast3DaysTip"
+      },
+      {
+        "code": "MembersWhoCompletedFirstDeposit",
+        "label": "已完成首充会员才免审",
+        "label_key": "options.merchantFinancialConfig.payoutManage.autoPayoutSettings.firstDepositCompleted",
+        "tooltip": "完成首次充值成功的会员",
+        "tooltip_key": "options.merchantFinancialConfig.payoutManage.autoPayoutSettings.firstDepositCompletedTip"
+      },
+      {
+        "code": "AgentWithdrawalsReviewed",
+        "label": "代理提现必须审核(多次)",
+        "label_key": "options.merchantFinancialConfig.payoutManage.payOutSetPH.agentWithdrawalsReviewed",
+        "tooltip": "勾选后，每次领取助力领现金或者代理宝箱活动奖励后，下次提现必须人工审核",
+        "tooltip_key": "options.merchantFinancialConfig.payoutManage.payOutSetPH.agentWithdrawalsReviewedTooltip"
+      },
+      {
+        "code": "AgentWithdrawalsReviewedOnce",
+        "label": "代理提现必须审核(一次)",
+        "label_key": "options.merchantFinancialConfig.payoutManage.payOutSetPH.agentWithdrawalsReviewedOnce",
+        "tooltip": "勾选后，领取助力领现金或者代理宝箱活动奖励后，下次提现必须人工审核，只审核一次",
+        "tooltip_key": "options.merchantFinancialConfig.payoutManage.autoPayoutSettings.agentWithdrawReviewOnceTip"
+      },
+      {
+        "code": "RollBackGameRecord",
+        "label": "游戏撤单后首笔提现必须审核",
+        "label_key": "options.eventLog.tenantPaymentManager.autoPayCondition.RollBackGameRecord",
+        "tooltip": "勾选后，若游戏发生过撤单，则每次撤单后的第一笔提现，都必须人工审核",
+        "tooltip_key": "options.merchantFinancialConfig.payoutManage.payOutSetPH.rollBackGameRecordTooltip"
+      },
+      {
+        "code": "CommissionWithdrawalsReviewed",
+        "label": "领取佣金必须审核(多次)",
+        "label_key": null,
+        "tooltip": "勾选后，每次领取佣金后，下次提现必须人工审核",
+        "tooltip_key": null,
+        "text_source": "literal_in_component_entry_74"
+      },
+      {
+        "code": "CommissionWithdrawalsReviewedOnce",
+        "label": "领取佣金必须审核(一次)",
+        "label_key": null,
+        "tooltip": "勾选后，领取佣金后，下次提现必须人工审核，只审核一次",
+        "tooltip_key": null,
+        "text_source": "literal_in_component_entry_74"
+      },
+      {
+        "code": "RiskAssociatedMembersReviewed",
+        "label": "风控关联会员必须审核",
+        "label_key": null,
+        "tooltip": "勾选后，在关联记录中统计的会员，提现时必须审核",
+        "tooltip_key": null,
+        "text_source": "literal_in_component_entry_74"
+      },
+      {
+        "code": "CPFFirstWithdrawalExempt",
+        "label": "会员首次提现若使用CPF方式则免审",
+        "label_key": "options.eventLog.tenantPaymentManager.autoPayCondition.CPFFirstWithdrawalExempt",
+        "tooltip": "勾选后，会员首次提现时，若使用CPF方式则免审；使用其他方式则需人工审核。",
+        "tooltip_key": "options.merchantFinancialConfig.payoutManage.autoPayoutSettings.cpfFirstWithdrawExemptTip",
+        "source_visibility": {
+          "country_codes": [
+            "BR"
+          ],
+          "condition": "l===Re.Enum.BR",
+          "note": "Source appends this option only under its BR guard."
+        }
+      }
+    ]
+  },
+  "autoWithdrawalLimitType": {
+    "control": "RadioGroup",
+    "label": "首次提款限制：",
+    "component_entry_index": 74,
+    "field_help": [],
+    "options": [
+      {
+        "code": "validBet",
+        "label": "需要达到有效投注",
+        "label_key": "options.merchantFinancialConfig.payoutManage.payOutSetPH.requireValidBet",
+        "tooltip": null
+      },
+      {
+        "code": "firstWithdraw",
+        "label": "会员首次提现必须审核",
+        "label_key": "options.merchantFinancialConfig.payoutManage.payOutSetIN.firstWithdrawMustReview",
+        "tooltip": null
+      }
+    ]
+  },
+  "successRateType": {
+    "control": "RadioGroup",
+    "label": "成功率配置：",
+    "component_entry_index": 74,
+    "field_help": [
+      {
+        "key": "options.merchantFinancialConfig.payoutManage.autoPayoutSettings.successRateHelp1",
+        "text": "按接单量成功率：按照接单的数量计算渠道的成功率。接单量达到配置次数后会更新成功率并重新统计接单量；"
+      },
+      {
+        "key": "options.merchantFinancialConfig.payoutManage.autoPayoutSettings.successRateHelp2",
+        "text": "按历史成功率：按照当前渠道的历史接单数据计算成功率；"
+      }
+    ],
+    "options": [
+      {
+        "code": "Number",
+        "label": "按接单量成功率",
+        "label_key": "options.eventLog.tenantConfig.successRate.byOrderCount",
+        "tooltip": null
+      },
+      {
+        "code": "History",
+        "label": "按历史成功率",
+        "label_key": "options.eventLog.tenantConfig.successRate.byHistory",
+        "tooltip": null
+      }
+    ]
+  },
+  "pullOffType": {
+    "scope": "autoWithdrawalChannel[].pullOffType",
+    "component_entry_index": 74,
+    "field_help": [],
+    "options": [
+      {
+        "code": "SuccessRate",
+        "label": "按成功率",
+        "label_key": "options.eventLog.tenantConfig.pullOffType.successRate",
+        "tooltip": null
+      },
+      {
+        "code": "Manual",
+        "label": "不自动下架",
+        "label_key": "options.eventLog.tenantConfig.pullOffType.manual",
+        "tooltip": null
+      }
+    ]
+  }
+}

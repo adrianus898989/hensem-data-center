@@ -94,3 +94,26 @@ export function validatePandaConfigSnapshot(s:any,now=Date.now()){
   if(new TextEncoder().encode(JSON.stringify({action:"ingest",snapshot:result})).length>262144)return fail();
   return result;
 }
+
+// Independent, per-tenant name dictionaries; never alter a day's configuration.
+export function validatePandaDictionary(s:any,now=Date.now()){
+  keys(s,["schema_version","snapshot_id","source_system","country_code","platform","timezone","observed_at","observed_local_date","tenant_id","region_id","channels","levels"]);
+  if(s.schema_version!==1||s.source_system!=="PANDA"||!["BR","PH"].includes(s.country_code)
+    ||typeof s.snapshot_id!=="string"||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s.snapshot_id))return fail();
+  const platform=text(s.platform,80),timezone=text(s.timezone,64);
+  if(!platform||typeof s.observed_at!=="string"||!/^\d{4}-\d{2}-\d{2}T/.test(s.observed_at)||!/(Z|[+]00:00)$/.test(s.observed_at))return fail();
+  const time=Date.parse(s.observed_at);
+  if(!Number.isFinite(time)||time>now+600000||time<Date.UTC(2020,0,1))return fail();
+  const parts=new Intl.DateTimeFormat("en-CA",{timeZone:timezone,year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(time);
+  if(s.observed_local_date!==["year","month","day"].map(k=>parts.find(p=>p.type===k)?.value).join("-"))return fail();
+  const tenant_id=number(s.tenant_id,true),region_id=number(s.region_id,true);
+  if(tenant_id<1||region_id!==(s.country_code==="BR"?1:2))return fail();
+  const name=(value:any)=>{const result=text(value);if(!result.trim())return fail();return result;};
+  const safeId=(value:any)=>{const result=number(value,true);if(!Number.isSafeInteger(result))return fail();return result;};
+  const channels=array(s.channels,1000).map(c=>{keys(c,["id","name","withdraw_type_id"]);return {id:safeId(c.id),name:name(c.name),withdraw_type_id:safeId(c.withdraw_type_id)};});
+  const levels=array(s.levels,2000).map(l=>{keys(l,["id","name"]);return {id:safeId(l.id),name:name(l.name)};});
+  if(new Set(channels.map(c=>c.id)).size!==channels.length||new Set(levels.map(l=>l.id)).size!==levels.length)return fail();
+  const result={schema_version:1,snapshot_id:s.snapshot_id,source_system:"PANDA",country_code:s.country_code,platform,timezone,observed_at:new Date(time).toISOString(),observed_local_date:s.observed_local_date,tenant_id,region_id,channels,levels};
+  if(new TextEncoder().encode(JSON.stringify({action:"dictionary-ingest",dictionary:result})).length>262144)return fail();
+  return result;
+}
