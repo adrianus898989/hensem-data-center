@@ -6314,3 +6314,5 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .aw-daily-panel>.pagination-row{padding:7px 15px;background:#fff}
 @container aw-summary (max-width:900px){.aw-daily-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.aw-daily-metric:nth-child(4){border-left:0}.aw-daily-metric:nth-child(n+4){border-top:1px solid #e1e8f2}}
 @container aw-summary (max-width:520px){.aw-daily-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.aw-daily-metric:nth-child(n){border-left:1px solid #e1e8f2}.aw-daily-metric:nth-child(odd){border-left:0}.aw-daily-metric:nth-child(n+3){border-top:1px solid #e1e8f2}.aw-daily-metric strong{font-size:19px}.aw-daily-scope{display:block}.aw-daily-scope>span{display:block;margin-top:4px}}
+.wr-note-kinds { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; margin-bottom: .6rem; }
+.wr-note-kinds > small { color: #64748b; font-size: .8125rem; }

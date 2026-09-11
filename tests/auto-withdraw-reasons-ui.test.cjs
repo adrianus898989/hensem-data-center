@@ -9,7 +9,7 @@ const { loadTs, root } = require('./load-typescript.cjs');
 const target = {country:'印度',platform:'TPPLAY',date:'2026-09-09'};
 
 // Component render tests with injected hook state; no browser, login or network.
-function render({expanded=false,inline=true,allowed=true,empty=false,error='',rowExpanded=false,loading=false,dayOverride=null,operator='manual',search='',page=1,availableTotal=33}={}) {
+function render({expanded=false,inline=true,allowed=true,empty=false,error='',rowExpanded=false,loading=false,dayOverride=null,operator='manual',search='',page=1,availableTotal=33,noteKind='reasons'}={}) {
   const api = loadTs(path.join(root,'src/lib/autoWithdrawReasonsClient.ts'));
   let state = 0;
   const day = dayOverride || {stat_date:target.date,updated_at:'2026-09-10T10:49:00Z',grouping_version:'reason-category-v1',snapshot:{
@@ -17,7 +17,7 @@ function render({expanded=false,inline=true,allowed=true,empty=false,error='',ro
     totals:{total:33,manual:33,auto:0,unknown:0,success:32,reject:1,other:0},
     groups:[{operator_class:'manual',reason_key:'group',reason_label:'受限游戏类型投注',classification:'template',count:33,success:32,reject:1,other:0,
       variants:[{reason_label:'会员在限制的游戏类型中总的投注数:1',count:14},{reason_label:'会员在限制的游戏类型中总的投注数:3',count:19}],samples:['脱敏样本']}]}};
-  const states=[expanded?target:null,inline,expanded?{key:JSON.stringify(target),viewerKey:'test-user',day:empty?null:day}:null,error,loading,0,operator,search,page,rowExpanded];
+  const states=[expanded?target:null,inline,expanded?{key:JSON.stringify(target),viewerKey:'test-user',day:empty?null:day}:null,error,loading,0,operator,search,page,noteKind,rowExpanded];
   const react={...React,useState: initial=>React.useState(state<states.length?states[state++]:initial)};
   const source=ts.transpileModule(fs.readFileSync(path.join(root,'src/components/AutoWithdrawReasons.tsx'),'utf8'),{
     compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX}}).outputText;
@@ -39,6 +39,42 @@ function render({expanded=false,inline=true,allowed=true,empty=false,error='',ro
 test('collapsed platform stays compact with no blank details row',()=>{
   const html=render(); assert.match(html,/展开原因/); assert.match(html,/aria-expanded="false"/);
   assert.doesNotMatch(html,/class="wr-expanded-row"|role="dialog"|colSpan="16"/i);
+});
+
+function newarNotesDay(dual=false) {
+  const totals={total:10,auto:0,manual:10,unknown:0,success:8,reject:2,other:0};
+  const group=(key,label,count,success,reject,classification='unclassified')=>({operator_class:'manual',reason_key:key,reason_label:label,count,success,reject,other:0,classification,samples:[]});
+  const member={schema_version:1,classifier_version:'note-template-v2',timezone:'Asia/Kolkata',snapshot_at:'2026-09-10T01:00:00Z',coverage:{incomplete_note_count:0},totals,
+    groups:[group('note','广告代理 / 会员备注',2,1,1),group('blank','未填写备注',8,7,1,'empty')]};
+  return {source_system:'NEWAR',...target,stat_date:target.date,updated_at:'2026-09-10T01:00:00Z',snapshot:dual ? {...member,note_field:'remark',member_notes:member,
+    groups:[group('reason','累计提款次数不能小于1次',6,4,2,'template'),group('blank','未填写备注',4,4,0,'empty')]} : member};
+}
+test('legacy NEWAR member notes never appear as automatic reasons',()=>{
+  const dayOverride=newarNotesDay();
+  const html=render({expanded:true,dayOverride,availableTotal:10});
+  assert.match(html,/自动出款原因尚未采集/);assert.match(html,/会员 \/ ID 备注/);
+  assert.doesNotMatch(html,/广告代理 \/ 会员备注|有原因订单/);
+  const member=render({expanded:true,dayOverride,availableTotal:10,noteKind:'member'});
+  assert.match(member,/广告代理 \/ 会员备注/);assert.match(member,/有ID备注订单/);
+  assert.doesNotMatch(member,/自动出款原因尚未采集/);
+});
+test('dual NEWAR note channels have independent content and denominators',()=>{
+  const dayOverride=newarNotesDay(true);
+  const reasons=render({expanded:true,dayOverride,availableTotal:10});
+  assert.match(reasons,/>有原因订单<\/dt><dd><strong>6<\/strong>/);
+  assert.match(reasons,/累计提款次数不能小于1次/);assert.doesNotMatch(reasons,/广告代理 \/ 会员备注/);
+  const member=render({expanded:true,dayOverride,availableTotal:10,noteKind:'member'});
+  assert.match(member,/>有ID备注订单<\/dt><dd><strong>2<\/strong>/);
+  assert.match(member,/备注占比/);assert.match(member,/100.00%/);
+  assert.doesNotMatch(member,/累计提款次数不能小于1次/);
+});
+test('missing member notes show unavailable or explicitly preserved data, never fake zero',()=>{
+  const dayOverride=newarNotesDay(true);const saved=dayOverride.snapshot.member_notes;delete dayOverride.snapshot.member_notes;
+  const missing=render({expanded:true,dayOverride,availableTotal:10,noteKind:'member'});
+  assert.match(missing,/当天尚未采集会员备注/);assert.doesNotMatch(missing,/有ID备注订单/);
+  dayOverride.member_notes_snapshot=saved;
+  const preserved=render({expanded:true,dayOverride,availableTotal:10,noteKind:'member'});
+  assert.match(preserved,/保留上次完整采集/);assert.match(preserved,/广告代理 \/ 会员备注/);
 });
 test('expanded reason panel appears below exactly the selected platform, not a modal',()=>{
   const html=render({expanded:true});

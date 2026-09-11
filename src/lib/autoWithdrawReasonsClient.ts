@@ -22,7 +22,14 @@ export type WithdrawReasonsDay = {
   stat_date: string;
   updated_at: string;
   grouping_version?: string;
+  member_notes_snapshot?: WithdrawReasonsDay["snapshot"] | null;
   snapshot: {
+    source_system?: string;
+    country_code?: string;
+    platform?: string;
+    stat_date?: string;
+    note_field?: "remark";
+    member_notes?: WithdrawReasonsDay["snapshot"];
     schema_version: number;
     classifier_version: string;
     timezone: string;
@@ -32,6 +39,15 @@ export type WithdrawReasonsDay = {
     groups: WithdrawReasonGroup[];
   };
 };
+
+export type ReasonNoteKind = "reasons" | "member";
+export function reasonNoteSnapshot(day: WithdrawReasonsDay | null | undefined, kind: ReasonNoteKind) {
+  if (!day) return null;
+  if (day.source_system !== "NEWAR") return kind === "reasons" ? day.snapshot : null;
+  if (kind === "reasons") return day.snapshot.note_field === "remark" ? day.snapshot : null;
+  return day.snapshot.member_notes || day.member_notes_snapshot
+    || (day.snapshot.note_field === undefined ? day.snapshot : null);
+}
 
 const COUNTRY_CODES: Record<string, string> = {
   印度: "IN", 印尼: "ID", 印度尼西亚: "ID", 越南: "VN", 巴西: "BR", 巴基斯坦: "PK",
@@ -86,7 +102,7 @@ export function reasonSourceTarget(country: string, platform: string) {
 }
 
 // Fail closed on damaged/partial responses: never show a partial count as a full day.
-export function validateReasonsDay(value: unknown): WithdrawReasonsDay {
+export function validateReasonsDay(value: unknown, nested = false): WithdrawReasonsDay {
   const row = value as WithdrawReasonsDay;
   const snapshot = row?.snapshot;
   const t = snapshot?.totals;
@@ -97,6 +113,20 @@ export function validateReasonsDay(value: unknown): WithdrawReasonsDay {
     || !isReasonDate(row.stat_date) || !Number.isFinite(Date.parse(row.updated_at))
     || !Number.isFinite(Date.parse(snapshot.snapshot_at)) || typeof snapshot.timezone !== "string"
     || typeof snapshot.classifier_version !== "string") return fail();
+  if ("note_field" in snapshot || "member_notes" in snapshot) {
+    if (nested || row.source_system !== "NEWAR" || snapshot.note_field !== "remark") return fail();
+  }
+  const validateMember = (member: WithdrawReasonsDay["snapshot"], sameCapture: boolean) => {
+    if (nested || row.source_system !== "NEWAR" || !member || typeof member !== "object"
+      || "note_field" in member || "member_notes" in member) return fail();
+    for (const key of ["source_system", "country_code", "platform", "stat_date"] as const)
+      if (member[key] !== row[key]) return fail();
+    validateReasonsDay({ ...row, member_notes_snapshot: undefined, snapshot: member }, true);
+    if (sameCapture && (member.timezone !== snapshot.timezone || member.snapshot_at !== snapshot.snapshot_at
+      || ["total", "auto", "manual", "unknown", "success", "reject", "other"].some(key => member.totals[key as keyof typeof t] !== t[key as keyof typeof t]))) return fail();
+  };
+  if ("member_notes" in snapshot) validateMember(snapshot.member_notes!, true);
+  if (row.member_notes_snapshot != null) validateMember(row.member_notes_snapshot, false);
   for (const key of ["total", "auto", "manual", "unknown", "success", "reject", "other"] as const) if (!count(t[key])) return fail();
   if (!c.complete || !count(c.expected_count) || !count(c.unique_count) || !count(c.incomplete_note_count)
     || c.unique_count !== t.total || c.expected_count !== t.total
@@ -138,7 +168,7 @@ export async function getAutoWithdrawReasons(
   if (!url || !key) throw new Error("原因统计服务尚未配置。");
   // Exact case-insensitive match. Escape LIKE wildcards; never use fuzzy platform matching.
   const query = new URLSearchParams({
-    select: "source_system,country_code,platform,stat_date,updated_at,grouping_version,snapshot",
+    select: "source_system,country_code,platform,stat_date,updated_at,grouping_version,snapshot,member_notes_snapshot",
     source_system: `eq.${source}`, country_code: `eq.${country}`, stat_date: `eq.${target.date}`,
     platform: `ilike.${platform.replace(/[\\%_*]/g, "\\$&")}`, limit: "2",
   });
