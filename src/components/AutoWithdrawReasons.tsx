@@ -135,6 +135,12 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
   }, [targetKey, viewerKey, allowed, reload, startDate, endDate]);
 
   useEffect(() => {
+    // Keep an already loaded view stable; only recover a failed read after renewal.
+    if (error) setReload(value => value + 1);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.access_token]);
+
+  useEffect(() => {
     if (!openModal) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";

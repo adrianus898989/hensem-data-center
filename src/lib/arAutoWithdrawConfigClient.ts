@@ -1,5 +1,5 @@
 "use client";
-import type { DashboardSession } from "./dashboardAuthClient";
+import { dashboardAuthenticatedFetch, type DashboardSession } from "./dashboardAuthClient";
 export type ConfigField = {key:string;kind:"number"|"boolean";value:string|boolean|null;label:string;description:string;available:boolean;read_only:boolean};
 export type Configuration = {fields:ConfigField[];groups:Array<{key:string;options:Array<{value:string;label:string;selected:boolean}>}>};
 export type ConfigTarget = {country_code:string;country_name:string;platform:string;timezone:string;currency:string|null};
@@ -13,7 +13,7 @@ export async function readConfig<T>(table:string,query:Record<string,string>,ses
   const url=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").replace(/\/$/,"");
   const key=String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||"");
   if(!url||!key||!session.access_token)throw new Error("配置读取尚未就绪，请重新登录后重试。");
-  const res=await fetch(url+"/rest/v1/"+table+"?"+new URLSearchParams(query),{headers:{apikey:key,Authorization:`Bearer ${session.access_token}`},cache:"no-store",signal});
+  const res=await dashboardAuthenticatedFetch(url+"/rest/v1/"+table+"?"+new URLSearchParams(query),{headers:{apikey:key,Authorization:`Bearer ${session.access_token}`},cache:"no-store",signal},session);
   if(!res.ok)throw new Error(res.status===401||res.status===403?"登录已失效或没有自动出款查看权限。":"配置读取失败，请重试。");
   const data=await res.json();if(!Array.isArray(data))throw new Error("配置响应不完整，请重试。");return data;
 }

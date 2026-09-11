@@ -3,7 +3,8 @@ const path = require("node:path");
 const test = require("node:test");
 const { loadTs, root } = require("./load-typescript.cjs");
 const { listAutoWithdrawNotes, saveAutoWithdrawNote } = loadTs(path.join(root, "src/lib/autoWithdrawNotesClient.ts"));
-const session = { access_token: "test-token" };
+const auth = loadTs(path.join(root, "src/lib/dashboardAuthClient.ts"));
+const session = { access_token: "test-token", refresh_token: "test-refresh", user: { id: "notes-user" }, expires_at: 4102444800 };
 const input = { date: "2026-09-09", country: "印尼", platform: "LG111", reason: "通道维护" };
 const note = { data_date: input.date, country: input.country, platform: input.platform, reason: input.reason,
   updated_by: "server-user", updated_by_name: "管理员", updated_at: "2026-09-10T08:00:00Z" };
@@ -14,6 +15,7 @@ async function withApi(respond, run) {
   const previousKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://notes-test.invalid/";
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-public-key";
+  auth.saveDashboardSession(session);
   const calls = [];
   global.fetch = async (url, options) => {
     const call = { url: new URL(String(url)), options };
@@ -23,6 +25,7 @@ async function withApi(respond, run) {
   };
   try { await run(calls); }
   finally {
+    auth.saveDashboardSession(null);
     global.fetch = previousFetch;
     if (previousUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
     else process.env.NEXT_PUBLIC_SUPABASE_URL = previousUrl;
@@ -44,7 +47,7 @@ test("list reads all pages with the same date bounds and deterministic ordering"
       assert.deepEqual(url.searchParams.getAll("data_date"), ["gte.2026-08-31", "lte.2026-09-09"]);
       assert.equal(url.searchParams.get("order"), "data_date.asc,country.asc,platform.asc");
       assert.equal(options.cache, "no-store");
-      assert.equal(options.headers.Authorization, "Bearer test-token");
+      assert.equal(new Headers(options.headers).get("Authorization"), "Bearer test-token");
     }
   });
 });
@@ -64,7 +67,7 @@ test("save targets one date/country/platform and never trusts supplied author or
   await withApi(({ url, options }) => {
     assert.equal(options.method, "POST");
     assert.equal(url.searchParams.get("on_conflict"), "data_date,country,platform");
-    assert.equal(options.headers.Prefer, "resolution=merge-duplicates,return=representation");
+    assert.equal(new Headers(options.headers).get("Prefer"), "resolution=merge-duplicates,return=representation");
     assert.deepEqual(JSON.parse(options.body), { data_date: "2026-09-09", country: "印尼", platform: "LG111", reason: "通道维护\n转人工处理" });
     return Response.json([note]);
   }, async () => {
@@ -92,7 +95,7 @@ test("invalid save input and missing session fail before any request", async () 
   });
 });
 
-for (const [status, expected] of [[401, /登录已过期/], [403, /没有备注编辑权限/], [500, /测试服务错误/]]) {
+for (const [status, expected] of [[401, /登录/], [403, /没有备注操作权限/], [500, /测试服务错误/]]) {
   test(`${status} responses surface a save/list failure instead of reporting success`, async () => {
     await withApi(() => Response.json({ message: "测试服务错误" }, { status }), async () => {
       await assert.rejects(listAutoWithdrawNotes(session, input.date, input.date), expected);
@@ -104,7 +107,7 @@ for (const [status, expected] of [[401, /登录已过期/], [403, /没有备注�
 test("a later page failing does not return an apparently complete partial note list", async () => {
   await withApi((_, count) => count === 1 ? Response.json(Array(500).fill(note))
     : Response.json({ message: "权限被撤销" }, { status: 403 }), async (calls) => {
-    await assert.rejects(listAutoWithdrawNotes(session, input.date, input.date), /没有备注编辑权限/);
+    await assert.rejects(listAutoWithdrawNotes(session, input.date, input.date), /没有备注操作权限/);
     assert.equal(calls.length, 2);
   });
 });

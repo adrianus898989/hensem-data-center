@@ -68,12 +68,104 @@ export type DashboardAuditLog = {
 };
 
 const SESSION_KEY = "hensem:dashboard:auth-session:v2";
+export const DASHBOARD_SESSION_EVENT = "hensem:dashboard:session-changed";
+
+export class DashboardHttpError extends Error {
+  readonly status: number;
+  readonly code: string;
+  constructor(message: string, status = 0, code = "http_error") {
+    super(message);
+    this.name = "DashboardHttpError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function isInvalidDashboardRefreshError(error: unknown): boolean {
+  return error instanceof DashboardHttpError && error.code === "refresh_invalid";
+}
+
+export function isDashboardAuthTerminalError(error: unknown): boolean {
+  return error instanceof DashboardHttpError && (
+    ["refresh_invalid", "session_changed", "session_logged_out", "profile_denied"].includes(error.code)
+    || error.status === 401 || error.status === 403
+  );
+}
+
+let sessionGeneration = 0;
+let memorySession: DashboardSession | null = null;
+let observedStoredSession = false;
+let explicitlyLoggedOut = false;
+const freshSignIns = new WeakMap<DashboardSession, number>();
+const refreshFlights = new Map<string, Promise<DashboardSession>>();
 
 function publicConfig() {
   const url = String(process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim().replace(/\/$/, "");
   const anonKey = String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
   if (!url || !anonKey) throw new Error("网站还没有配置 Supabase 登录环境变量");
-  return { url, anonKey };
+  const parsed = new URL(url);
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password
+      || (parsed.pathname !== "/" && parsed.pathname !== "") || parsed.search || parsed.hash) {
+    throw new DashboardHttpError("Supabase 登录地址配置不正确", 0, "auth_configuration_invalid");
+  }
+  return { url: parsed.origin, anonKey };
+}
+
+function jwtExpiresAt(accessToken: string): number | null {
+  try {
+    const encoded = accessToken.split(".")[1];
+    if (!encoded || encoded.length > 65536) return null;
+    const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const payload = JSON.parse(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "=")));
+    return typeof payload?.exp === "number" && Number.isFinite(payload.exp) && payload.exp > 0 ? payload.exp : null;
+  } catch { return null; }
+}
+
+function sessionExpiry(session: DashboardSession): number | null {
+  if (typeof session.expires_at === "number" && Number.isFinite(session.expires_at) && session.expires_at > 0) return session.expires_at;
+  return jwtExpiresAt(session.access_token);
+}
+
+// JWT decoding is scheduling information only; permissions still come from the server.
+export function isDashboardSessionExpired(session: DashboardSession | null | undefined, aheadSeconds = 60): boolean {
+  if (!session) return true;
+  const expiry = sessionExpiry(session);
+  return expiry !== null && expiry <= Date.now() / 1000 + Math.max(0, aheadSeconds);
+}
+
+function isSession(value: unknown): value is DashboardSession {
+  const s = value as DashboardSession | null;
+  return Boolean(s && typeof s === "object" && typeof s.access_token === "string" && s.access_token
+    && typeof s.refresh_token === "string" && typeof s.user?.id === "string" && s.user.id);
+}
+
+function receivedSession(value: unknown): DashboardSession {
+  if (!isSession(value)) throw new DashboardHttpError("登录服务器返回了无效会话，请稍后重试", 502, "auth_response_invalid");
+  const expiry = sessionExpiry(value);
+  if (expiry !== null) return { ...value, expires_at: expiry };
+  if (typeof value.expires_in === "number" && Number.isFinite(value.expires_in) && value.expires_in > 0) {
+    return { ...value, expires_at: Math.floor(Date.now() / 1000) + value.expires_in };
+  }
+  return value;
+}
+
+function sameTokens(left: DashboardSession, right: DashboardSession): boolean {
+  return left.user.id === right.user.id && left.access_token === right.access_token && left.refresh_token === right.refresh_token;
+}
+
+function sessionChanged(loggedOut = false): DashboardHttpError {
+  return new DashboardHttpError(loggedOut ? "登录已退出，请重新登录" : "登录账号或会话已改变，请使用当前会话", 409,
+    loggedOut ? "session_logged_out" : "session_changed");
+}
+
+function currentSession(candidate: DashboardSession): DashboardSession {
+  const saved = readSavedDashboardSession();
+  if (saved) {
+    if (saved.user.id !== candidate.user.id) throw sessionChanged();
+    return saved;
+  }
+  if (explicitlyLoggedOut && freshSignIns.get(candidate) !== sessionGeneration) throw sessionChanged(true);
+  return candidate;
 }
 
 export function dashboardAuthEnabled(): boolean {
@@ -143,30 +235,148 @@ async function readJson(response: Response) {
   let json: any = {};
   try { json = text ? JSON.parse(text) : {}; } catch { json = {}; }
   if (!response.ok) {
-    throw new Error(json?.msg || json?.message || json?.error_description || json?.error || `HTTP ${response.status}`);
+    const message = json?.msg || json?.message || json?.error_description || json?.error || `HTTP ${response.status}`;
+    throw new DashboardHttpError(typeof message === "string" ? message : `HTTP ${response.status}`, response.status);
   }
   return json;
 }
 
 export async function signInDashboard(usernameInput: string, password: string): Promise<DashboardSession> {
+  const startedGeneration = sessionGeneration;
   const { url, anonKey } = publicConfig();
   const email = dashboardUsernameEmail(usernameInput);
   const response = await fetch(`${url}/auth/v1/token?grant_type=password`, {
     method: "POST",
+    redirect: "error",
+    credentials: "omit",
     headers: { apikey: anonKey, "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
-  return await readJson(response) as DashboardSession;
+  const session = receivedSession(await readJson(response));
+  freshSignIns.set(session, startedGeneration);
+  return session;
 }
 
-export async function refreshDashboardSession(refreshToken: string): Promise<DashboardSession> {
+async function requestRefreshedSession(refreshToken: string): Promise<DashboardSession> {
   const { url, anonKey } = publicConfig();
-  const response = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
-    method: "POST",
-    headers: { apikey: anonKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: refreshToken }),
-  });
-  return await readJson(response) as DashboardSession;
+  if (!refreshToken) throw new DashboardHttpError("登录已失效，请重新登录", 401, "refresh_invalid");
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 15000);
+  try {
+    const response = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST", redirect: "error", credentials: "omit", signal: abort.signal,
+      headers: { apikey: anonKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if ([400, 401, 403].includes(response.status)) {
+      // Do not reflect token endpoint payloads or token values into an error.
+      throw new DashboardHttpError("登录已失效，请重新登录", response.status, "refresh_invalid");
+    }
+    return receivedSession(await readJson(response));
+  } catch (error) {
+    if (error instanceof DashboardHttpError) throw error;
+    throw new DashboardHttpError("登录续期暂时失败，请检查网络后重试", 0, "refresh_network_error");
+  } finally { clearTimeout(timer); }
+}
+
+export async function ensureDashboardSession(session: DashboardSession, force = false): Promise<DashboardSession> {
+  if (!isSession(session)) throw new DashboardHttpError("登录状态不完整，请重新登录", 401, "refresh_invalid");
+  const candidate = currentSession(session);
+  // A different token already saved by another request/tab satisfies an old-token 401.
+  if (!isDashboardSessionExpired(candidate) && (!force || !sameTokens(candidate, session))) return candidate;
+  if (!force && !isDashboardSessionExpired(candidate)) return candidate;
+
+  const key = `${candidate.user.id}:${candidate.refresh_token}`; // Memory-only; never sent as a lock name or logged.
+  const existing = refreshFlights.get(key);
+  if (existing) return existing;
+  const generation = sessionGeneration;
+  const startedStored = readSavedDashboardSession();
+
+  const refresh = async (): Promise<DashboardSession> => {
+    const before = readSavedDashboardSession();
+    if (generation !== sessionGeneration) throw sessionChanged(!before);
+    if ((startedStored && !before) || (!before && explicitlyLoggedOut && freshSignIns.get(candidate) !== sessionGeneration)) throw sessionChanged(true);
+    if (before && before.user.id !== candidate.user.id) throw sessionChanged();
+    const active = before || candidate;
+    if (!sameTokens(active, candidate) && !isDashboardSessionExpired(active)) return active;
+
+    try {
+      const next = await requestRefreshedSession(active.refresh_token);
+      const latest = readSavedDashboardSession();
+      if (generation !== sessionGeneration) throw sessionChanged(!latest);
+      if ((startedStored && !latest) || (!latest && explicitlyLoggedOut && freshSignIns.get(candidate) !== sessionGeneration)) throw sessionChanged(true);
+      if (latest && latest.user.id !== active.user.id) throw sessionChanged();
+      if (next.user.id !== active.user.id) throw new DashboardHttpError("登录续期返回了不一致的账号，请稍后重试", 502, "auth_response_invalid");
+      // A cross-tab refresh/sign-in may have won while this request was in flight.
+      if (latest && !sameTokens(latest, active)) return latest;
+      saveDashboardSession(next); // Persist rotated refresh token before profile/IP checks.
+      return next;
+    } catch (error) {
+      const latest = readSavedDashboardSession();
+      if (generation !== sessionGeneration) throw sessionChanged(!latest);
+      if (latest && latest.user.id !== active.user.id) throw sessionChanged();
+      if (latest && !sameTokens(latest, active)) return latest;
+      if (isInvalidDashboardRefreshError(error)) {
+        // Never clear another account or a newer token published in another tab.
+        if (!latest || sameTokens(latest, active)) saveDashboardSession(null);
+      }
+      throw error;
+    }
+  };
+
+  const coordinated = async (): Promise<DashboardSession> => {
+    const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+    if (!locks?.request) return refresh();
+    try {
+      return await locks.request(`hensem:dashboard-refresh:${publicConfig().url}:${candidate.user.id}`, { mode: "exclusive" }, refresh);
+    } catch (error) {
+      if (error instanceof DashboardHttpError) throw error;
+      throw new DashboardHttpError("登录续期协调暂时失败，请稍后重试", 0, "refresh_coordination_failed");
+    }
+  };
+  let flight: Promise<DashboardSession>;
+  flight = coordinated().finally(() => { if (refreshFlights.get(key) === flight) refreshFlights.delete(key); });
+  refreshFlights.set(key, flight);
+  return flight;
+}
+
+// Retain the old API without allowing an obsolete caller to refresh another account.
+export async function refreshDashboardSession(refreshToken: string): Promise<DashboardSession> {
+  const saved = readSavedDashboardSession();
+  if (!saved) throw sessionChanged(true);
+  if (saved.refresh_token !== refreshToken) throw sessionChanged();
+  return ensureDashboardSession(saved, true);
+}
+
+export async function dashboardAuthenticatedFetch(
+  inputURL: string | URL,
+  init: RequestInit | undefined,
+  session: DashboardSession,
+  options: { retry401?: boolean } = {},
+): Promise<Response> {
+  const { url, anonKey } = publicConfig();
+  const target = new URL(String(inputURL), `${url}/`);
+  if (target.origin !== url || target.protocol !== "https:" || target.username || target.password) {
+    throw new DashboardHttpError("拒绝向其他地址发送登录凭据", 0, "auth_target_not_allowed");
+  }
+  const method = String(init?.method || "GET").toUpperCase();
+  const canRetry = (method === "GET" || method === "HEAD") && options.retry401 !== false;
+  const send = async (active: DashboardSession): Promise<Response> => {
+    const current = currentSession(active);
+    const headers = new Headers(init?.headers);
+    headers.set("apikey", anonKey);
+    headers.set("Authorization", `Bearer ${current.access_token}`);
+    try {
+      return await fetch(target.href, { ...init, method, headers, redirect: "error", credentials: "omit" });
+    } catch {
+      throw new DashboardHttpError("网络请求暂时失败，请稍后重试", 0, "network_error");
+    }
+  };
+  const active = await ensureDashboardSession(session);
+  const first = await send(active);
+  if (first.status !== 401 || !canRetry) return first;
+  const refreshed = await ensureDashboardSession(active, true);
+  return send(refreshed); // Exactly one read-only replay; never refresh on 403.
 }
 
 export async function fetchDashboardProfile(session: DashboardSession): Promise<DashboardProfile> {
@@ -183,25 +393,57 @@ export async function fetchDashboardProfile(session: DashboardSession): Promise<
   });
   const rows = await readJson(response);
   const profile = Array.isArray(rows) ? rows[0] : null;
-  if (!profile) throw new Error("这个账号还没有配置后台权限");
-  if (!profile.active) throw new Error("这个账号已被停用");
+  if (!profile) throw new DashboardHttpError("这个账号还没有配置后台权限", 403, "profile_denied");
+  if (!profile.active) throw new DashboardHttpError("这个账号已被停用", 403, "profile_denied");
   return profile as DashboardProfile;
 }
 
 export function saveDashboardSession(session: DashboardSession | null) {
+  if (session && !isSession(session)) throw new DashboardHttpError("登录状态不完整，请重新登录", 401, "refresh_invalid");
+  const previous = memorySession;
+  let previousText = previous ? JSON.stringify(previous) : null;
+  if (typeof window !== "undefined") {
+    try { previousText = window.localStorage.getItem(SESSION_KEY); } catch { /* Keep the memory-only comparison. */ }
+  }
+  let next = session;
+  if (session) {
+    // expires_in is relative only when first received/saved, never at every read.
+    let prior: DashboardSession | null = previous;
+    try { const parsed: unknown = previousText ? JSON.parse(previousText) : null; if (isSession(parsed)) prior = parsed; } catch { /* Ignore malformed old storage. */ }
+    const knownExpiry = sessionExpiry(session) ?? (prior && sameTokens(prior, session) ? sessionExpiry(prior) : null);
+    next = knownExpiry !== null ? { ...session, expires_at: knownExpiry } : receivedSession(session);
+    freshSignIns.delete(session);
+  }
+  const text = next ? JSON.stringify(next) : null;
+  const changed = text !== previousText || (!session && Boolean(previous));
+  if (changed || !session) sessionGeneration += 1;
+  memorySession = next;
+  explicitlyLoggedOut = !next;
+  if (next) observedStoredSession = true;
   if (typeof window === "undefined") return;
   try {
-    if (!session) window.localStorage.removeItem(SESSION_KEY);
-    else window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    if (!next) window.localStorage.removeItem(SESSION_KEY);
+    else window.localStorage.setItem(SESSION_KEY, text!);
   } catch { /* 本地记忆失败不影响本次会话 */ }
+  if (changed) {
+    try { window.dispatchEvent(new CustomEvent(DASHBOARD_SESSION_EVENT, { detail: { session: next } })); } catch { /* Event delivery must not discard tokens. */ }
+  }
 }
 
 export function readSavedDashboardSession(): DashboardSession | null {
-  if (typeof window === "undefined") return null;
+  if (typeof window === "undefined") return memorySession;
   try {
     const text = window.localStorage.getItem(SESSION_KEY);
-    return text ? JSON.parse(text) as DashboardSession : null;
-  } catch { return null; }
+    const parsed: unknown = text ? JSON.parse(text) : null;
+    if (isSession(parsed)) {
+      memorySession = parsed;
+      observedStoredSession = true;
+      return parsed;
+    }
+    if (observedStoredSession) explicitlyLoggedOut = true;
+    memorySession = null;
+    return null;
+  } catch { return memorySession; }
 }
 
 async function callAdminFunction(session: DashboardSession, body: Record<string, unknown>) {
