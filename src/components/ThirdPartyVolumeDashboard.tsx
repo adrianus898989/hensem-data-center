@@ -26,6 +26,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ThirdPartyPlatformStatusRow, ThirdPartyRatePayload, ThirdPartyRateRow, ThirdPartyVolumePayload, ThirdPartyVolumeRow } from "@/lib/types";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { canonicalThirdPartyName, inferThirdPartyChannelType } from "@/lib/thirdPartyNameMap";
+import { canonicalThirdPartyPlatform, canonicalThirdPartyPlatformSelections, matchesThirdPartyPlatformSelection } from "@/lib/thirdPartyPlatform";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload, type ClientMonthlyStatus } from "@/lib/monthlyStatusClient";
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
 import { useDashboardAuth } from "./DashboardAuthGate";
@@ -1952,14 +1953,6 @@ function localAliasKey(value: string): string {
     .replace(/[^a-z0-9一-龥]+/g, "");
 }
 
-function normalizePlatformDisplayName(value: string): string {
-  const platform = String(value || "").trim();
-  // 新平台在不同数据源里分别写成 Shree.Win / Shreewin。
-  // 页面和筛选统一成一个名称，避免费率表已接入、跑量表却匹配不到。
-  if (localAliasKey(platform) === "shreewin") return "ShreeWin";
-  return platform;
-}
-
 function collapseThirdPartyDisplayName(value: string, country?: string): string {
   const canonical = canonicalThirdPartyName(value, country) || String(value || "").trim();
   if (!canonical) return "未知三方";
@@ -1984,7 +1977,7 @@ function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolum
   const raw = row.rawChannel || row.channel || "";
   const key = localAliasKey(raw);
   const country = row.country || "";
-  const platform = normalizePlatformDisplayName(row.platform);
+  const platform = canonicalThirdPartyPlatform(country, row.platform);
   const platformKey = localAliasKey(platform).toUpperCase();
   let channel = row.channel || raw || "未知三方";
   const isIndiaUpiQrPayout = country.includes("印度") && row.direction === "代付" && ["arbupi", "arbbank", "upiqr"].includes(key);
@@ -2223,7 +2216,7 @@ export default function ThirdPartyVolumeDashboard() {
     return rows.filter((row) => {
       if (!rowMatchesCountryPage(row, effectiveCountryFilter)) return false;
       if (appliedCountrySelections.length && !appliedCountrySelections.includes(row.country)) return false;
-      if (appliedPlatformSelections.length && !appliedPlatformSelections.includes(row.platform)) return false;
+      if (!matchesThirdPartyPlatformSelection(row.country, row.platform, appliedPlatformSelections)) return false;
       if (appliedChannel && row.channel !== appliedChannel) return false;
       if (appliedDirection && row.direction !== appliedDirection) return false;
       return true;
@@ -2235,7 +2228,8 @@ export default function ThirdPartyVolumeDashboard() {
   const isAllDailyPage = false;
   const isAllMonthlyPage = false;
   const optionCountryFilter = mainTab === "country" ? activeCountryPage : country;
-  const selectedPlatformSet = useMemo(() => new Set(platformSelections), [platformSelections]);
+  const platformSelectionCountry = optionCountryFilter && !isAllUsdtCountryPage(optionCountryFilter)
+    ? optionCountryFilter : countrySelections.length === 1 ? countrySelections[0] : "";
   const optionScopedRowsBeforeCountry = useMemo(() => rows.filter((row) => rowMatchesCountryPage(row, optionCountryFilter)), [rows, optionCountryFilter]);
   const countryFilterOptions = useMemo(() => sortCountries(optionScopedRowsBeforeCountry.map((row) => row.country)), [optionScopedRowsBeforeCountry]);
   const optionScopedRows = useMemo(() => optionScopedRowsBeforeCountry.filter((row) => !countrySelections.length || countrySelections.includes(row.country)), [optionScopedRowsBeforeCountry, countrySelections]);
@@ -2248,15 +2242,15 @@ export default function ThirdPartyVolumeDashboard() {
     return uniq((ratePayload?.platformStatuses || [])
       .filter((row) => !targetCountry || normalizeCountryLabel(row.country) === targetCountry)
       .filter((row) => !selectedCountries.size || selectedCountries.has(normalizeCountryLabel(row.country)))
-      .map((row) => normalizePlatformDisplayName(row.platform)));
+      .map((row) => canonicalThirdPartyPlatform(row.country, row.platform)));
   }, [ratePayload?.platformStatuses, optionCountryFilter, countrySelections]);
   const platforms = useMemo(() => uniq([
-    ...optionScopedRows.map((row) => normalizePlatformDisplayName(row.platform)),
+    ...optionScopedRows.map((row) => canonicalThirdPartyPlatform(row.country, row.platform)),
     ...configuredPlatforms
   ]), [optionScopedRows, configuredPlatforms]);
-  const channelOptionRows = useMemo(() => optionScopedRows.filter((row) => !platformSelections.length || selectedPlatformSet.has(row.platform)), [optionScopedRows, platformSelections.length, selectedPlatformSet]);
+  const channelOptionRows = useMemo(() => optionScopedRows.filter((row) => matchesThirdPartyPlatformSelection(row.country, row.platform, platformSelections)), [optionScopedRows, platformSelections]);
   const channels = useMemo(() => uniq(channelOptionRows.map((row) => row.channel)), [channelOptionRows]);
-  const channelTypeOptions = useMemo(() => uniq(optionScopedRows.filter((row) => (!platformSelections.length || selectedPlatformSet.has(row.platform))).map((row) => row.channelType || "其他类型").filter(Boolean)), [optionScopedRows, platformSelections.length, selectedPlatformSet]);
+  const channelTypeOptions = useMemo(() => uniq(optionScopedRows.filter((row) => matchesThirdPartyPlatformSelection(row.country, row.platform, platformSelections)).map((row) => row.channelType || "其他类型").filter(Boolean)), [optionScopedRows, platformSelections]);
 
 
   useEffect(() => {
@@ -2274,13 +2268,13 @@ export default function ThirdPartyVolumeDashboard() {
   useEffect(() => {
     if (!platformSelections.length) return;
     const available = new Set(platforms);
-    const next = platformSelections.filter((item) => available.has(item));
-    if (next.length !== platformSelections.length) {
+    const next = canonicalThirdPartyPlatformSelections(platformSelectionCountry, platformSelections).filter((item) => available.has(item));
+    if (next.length !== platformSelections.length || next.some((item, index) => item !== platformSelections[index])) {
       setPlatformSelections(next);
       setChannel("");
       setChannelTypeSelections([]);
     }
-  }, [platforms, platformSelections]);
+  }, [platforms, platformSelections, platformSelectionCountry]);
   const filtered = useMemo(() => filteredBase.filter((row) => !appliedChannelTypeSelections.length || appliedChannelTypeSelections.includes(row.channelType || "其他类型")), [filteredBase, appliedChannelTypeSelections]);
   const filteredNoDate = useMemo(() => filteredBaseNoDate.filter((row) => !appliedChannelTypeSelections.length || appliedChannelTypeSelections.includes(row.channelType || "其他类型")), [filteredBaseNoDate, appliedChannelTypeSelections]);
 
@@ -2371,7 +2365,7 @@ export default function ThirdPartyVolumeDashboard() {
       setAppliedStartDate(queryStart);
       setAppliedEndDate(queryEnd);
       setAppliedCountrySelections([...countrySelections]);
-      setAppliedPlatformSelections([...platformSelections]);
+      setAppliedPlatformSelections(canonicalThirdPartyPlatformSelections(platformSelectionCountry, platformSelections));
       setAppliedChannel(channel);
       setAppliedDirection(direction);
       setAppliedChannelTypeSelections([...channelTypeSelections]);
@@ -2479,7 +2473,7 @@ export default function ThirdPartyVolumeDashboard() {
           <div className="field"><label>结束日期</label><input className="input" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></div>
           
           {isAllUsdtCountryPage(activeCountryPage) && <VolumeMultiSelect label="国家" options={countryFilterOptions} value={countrySelections} onChange={(value) => { setCountrySelections(value); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部国家" />}
-          <VolumeMultiSelect label="平台" options={platforms} value={platformSelections} onChange={(value) => { setPlatformSelections(value); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" />
+          <VolumeMultiSelect label="平台" options={platforms} value={platformSelections} onChange={(value) => { setPlatformSelections(canonicalThirdPartyPlatformSelections(platformSelectionCountry, value)); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" />
           <div className="field"><label>统一三方</label><select className="input" value={channel} onChange={(event) => { setChannel(event.target.value); setChannelTypeSelections([]); }}><option value="">全部三方</option>{channels.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
           <VolumeMultiSelect label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" />
           <div className="field"><label>业务方向</label><select className="input" value={direction} onChange={(event) => setDirection(event.target.value)}><option value="">全部方向</option><option value="代收">代收</option><option value="代付">代付</option></select></div>
@@ -2592,7 +2586,7 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
     <div className="country-volume-page range-volume-page">
       <PageStatStrip items={[
         { label: "主三方", value: uniq(rows.map((row) => row.channel)).length, helper: "当前筛选范围", tone: "default" },
-        { label: "平台", value: uniq(rows.map((row) => row.platform)).length, helper: "当前筛选范围", tone: "default" },
+        { label: "平台", value: uniq(rows.map((row) => row.platform)).length, helper: "当前有数据的平台", tone: "default" },
         comparativeStat("代收金额", summary.collectAmount, previousSummary.collectAmount, canCompare, "collect"),
         comparativeStat("代收笔数", summary.collectCount, previousSummary.collectCount, canCompare, "collect"),
         comparativeStat("代付金额", summary.payoutAmount, previousSummary.payoutAmount, canCompare, "payout"),
@@ -2752,14 +2746,14 @@ function VolumeRowsModal({ title, rows, onClose }: { title: string; rows: ThirdP
   const [modalSort, setModalSort] = useState<{ key: ModalSortKey; direction: "asc" | "desc" }>({ key: "date", direction: "asc" });
 
   const countryOptions = useMemo(() => sortCountries(rows.map((row) => row.country)), [rows]);
-  const platformOptions = useMemo(() => uniq(rows.filter((row) => !modalCountry || row.country === modalCountry).map((row) => row.platform)), [rows, modalCountry]);
+  const platformOptions = useMemo(() => uniq(rows.filter((row) => !modalCountry || row.country === modalCountry).map((row) => canonicalThirdPartyPlatform(row.country, row.platform))), [rows, modalCountry]);
   const directionOptions = useMemo(() => uniq(rows.map((row) => row.direction)), [rows]);
 
   const filteredRows = useMemo(() => {
     const kw = modalKeyword.trim().toLowerCase();
     return rows.filter((row) => {
       if (modalCountry && row.country !== modalCountry) return false;
-      if (modalPlatform && row.platform !== modalPlatform) return false;
+      if (modalPlatform && !matchesThirdPartyPlatformSelection(row.country, row.platform, [modalPlatform])) return false;
       if (modalDirection && row.direction !== modalDirection) return false;
       if (kw && !`${row.date} ${row.country} ${row.platform} ${row.direction} ${row.channelType || ""} ${row.channel} ${row.rawChannel}`.toLowerCase().includes(kw)) return false;
       return true;
