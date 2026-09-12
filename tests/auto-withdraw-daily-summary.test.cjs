@@ -15,12 +15,14 @@ function component(name, mocks = {}) {
   new Function('require', 'module', 'exports', source)(name => {
     if (name in mocks) return mocks[name];
     if (name === 'react' || name === 'react/jsx-runtime') return require(name);
+    if (name === './AutoWithdrawRateComparison') return component('AutoWithdrawRateComparison');
     if (name.startsWith('@/lib/')) return loadTs(path.join(root, 'src', name.slice(2) + '.ts'));
     throw Error(`Unexpected dependency: ${name}`);
   }, module, module.exports);
   return module.exports;
 }
 const {AutoWithdrawDailySummary: Summary} = component('AutoWithdrawDailySummary');
+const {AutoWithdrawRateComparison: RateComparison} = component('AutoWithdrawRateComparison');
 const props = {startDate: '2026-09-09', endDate: '2026-09-09', dayCount: 1};
 // Success/reject values are test fixtures; operation totals match the user's screenshot.
 const totals = {total: 10742, autoCount: 4536, manualCount: 5033, success: 9500, rejected: 1000};
@@ -105,4 +107,123 @@ test('daily summary uses the full filtered aggregate, not the current table page
   assert.doesNotMatch(daily, /<QuickStats|<Panel/);
   assert.match(daily, /AutoWithdrawTable rows=\{paginateRows/);
   assert.equal((daily.match(/showToolbar=\{false\}/g) || []).length, 2);
+});
+
+const current = {total: 100, autoCount: 60, manualCount: 40, success: 80, rejected: 20};
+const previous = {total: 200, autoCount: 100, manualCount: 100, success: 180, rejected: 20};
+const comparison = {totals: previous, matchedPlatforms: 2, totalPlatforms: 2, date: '2026-09-09'};
+const compareProps = {startDate: '2026-09-10', endDate: '2026-09-10', comparison};
+const metric = (html, tone) => html.match(new RegExp(`<div class="aw-daily-metric is-${tone}">([\\s\\S]*?)<\\/div>`))[1];
+const rate = (extra = {}) => renderToStaticMarkup(React.createElement(RateComparison, {
+  count: 60, total: 100, previousCount: 100, previousTotal: 200, tone: 'auto', compare: true, ...extra
+}));
+
+test('daily summary shows exact prior date and weighted previous rates with pp changes', () => {
+  const html = render(current, compareProps);
+  assert.match(html, /对比 2026-09-09/);
+  assert.match(metric(html, 'auto'), /前日 50\.00%/);
+  assert.match(metric(html, 'auto'), /\+10\.00 pp/);
+  assert.match(metric(html, 'manual'), /-10\.00 pp/);
+  assert.match(metric(html, 'success'), /前日 90\.00%/);
+  assert.match(metric(html, 'success'), /-10\.00 pp/);
+  assert.match(metric(html, 'rejected'), /前日 10\.00%/);
+  assert.match(metric(html, 'rejected'), /\+10\.00 pp/);
+  assert.doesNotMatch(html, /aw-daily-comparison-incomplete/);
+});
+
+test('summary total uses count growth percentage rather than pp', () => {
+  const total = metric(render(current, compareProps), 'total');
+  assert.match(total, /前日 200 笔/);
+  assert.match(total, /−50\.00%/);
+  assert.doesNotMatch(total, / pp/);
+});
+
+test('zero prior total remains a known zero count but rates and growth are incomparable', () => {
+  const zero = Object.fromEntries(Object.keys(previous).map(key => [key, 0]));
+  const html = render(current, {...compareProps, comparison: {...comparison, totals: zero}});
+  assert.match(metric(html, 'total'), /前日 0 笔/);
+  assert.match(metric(html, 'total'), /不可比/);
+  assert.match(metric(html, 'auto'), /前日 —/);
+  assert.match(metric(html, 'auto'), /不可比/);
+  assert.doesNotMatch(html, /Infinity|NaN|\+0\.00 pp/);
+});
+
+test('partial previous platform coverage never compares a subset against all current totals', () => {
+  const html = render(current, {...compareProps, comparison: {...comparison, matchedPlatforms: 1}});
+  assert.match(html, /覆盖 1\/2 平台，汇总不可比/);
+  assert.equal((html.match(/无完整对比数据/g) || []).length, 5);
+  assert.doesNotMatch(html, /前日 200 笔|前日 50\.00%|10\.00 pp/);
+});
+
+test('missing aggregate and zero matched platforms cannot become a zero percent comparison', () => {
+  const html = render(current, {...compareProps, comparison: {...comparison, totals: null, matchedPlatforms: 0}});
+  assert.match(html, /覆盖 0\/2 平台，汇总不可比/);
+  assert.doesNotMatch(html, /前日 0\.00%|前日 0 笔| pp/);
+});
+
+test('range summaries do not inherit a single yesterday comparison', () => {
+  const html = render(current, {...compareProps, startDate: '2026-09-01', dayCount: 10});
+  assert.doesNotMatch(html, /aw-daily-comparison-scope|aw-daily-previous|前日| pp/);
+});
+
+test('summary distinguishes favorable directions by metric rather than sign alone', () => {
+  const html = render(current, compareProps);
+  assert.match(metric(html, 'auto'), /is-up is-favorable/);
+  assert.match(metric(html, 'manual'), /is-down is-favorable/);
+  assert.match(metric(html, 'success'), /is-down is-unfavorable/);
+  assert.match(metric(html, 'rejected'), /is-up is-unfavorable/);
+});
+
+test('rate cell emphasizes current percent and shows previous denominator-based percent and pp', () => {
+  const html = rate();
+  assert.match(html, /class="aw-rate-current">60\.00%/);
+  assert.match(html, /昨日 50\.00%/);
+  assert.match(html, /\+10\.00 pp/);
+  assert.match(html, /is-up is-favorable/);
+  assert.match(html, /aw-rate-current-line[\s\S]*aw-rate-current[\s\S]*aw-rate-delta[\s\S]*aw-rate-previous/);
+  assert.match(html, /class="aw-rate-previous">昨日 50\.00%<\/span>/);
+});
+
+test('rate cell with no prior row is explicitly missing rather than zero', () => {
+  const html = rate({previousCount: undefined, previousTotal: undefined});
+  assert.match(html, /60\.00%/);
+  assert.match(html, /无对比数据/);
+  assert.doesNotMatch(html, /昨日| pp|0\.00%<\/span>.*0\.00%/);
+});
+
+test('rate cell keeps positive-denominator zero rates comparable', () => {
+  const html = rate({count: 0, previousCount: 0});
+  assert.match(html, /class="aw-rate-current">0\.00%/);
+  assert.match(html, /昨日 0\.00%/);
+  assert.match(html, /is-flat is-neutral/);
+  assert.match(html, /0\.00 pp/);
+  assert.doesNotMatch(html, /无对比数据|不可比/);
+});
+
+test('zero denominators and invalid inputs never show Infinity or fictional zero comparisons', () => {
+  for (const extra of [{previousTotal: 0}, {total: 0}, {count: NaN}, {previousCount: Infinity}]) {
+    const html = rate(extra);
+    assert.doesNotMatch(html, /NaN|Infinity|\+0\.00 pp/);
+    assert.match(html, /不可比|无对比数据/);
+  }
+});
+
+test('manual and rejected decreases are favorable while increases are unfavorable', () => {
+  for (const tone of ['manual', 'rejected']) {
+    assert.match(rate({tone, count: 40}), /is-down is-favorable/);
+    assert.match(rate({tone, count: 60}), /is-up is-unfavorable/);
+  }
+});
+
+test('delta color direction uses the same two-decimal rounding as its displayed pp', () => {
+  const html = rate({count: 0, total: 100000, previousCount: 5, previousTotal: 100000, tone: 'manual'});
+  assert.match(html, /-0\.01 pp/);
+  assert.match(html, /is-down is-favorable/);
+  assert.doesNotMatch(html, /is-flat/);
+});
+
+test('rate comparisons hidden outside comparison mode retain current percent', () => {
+  const html = rate({compare: false});
+  assert.match(html, /60\.00%/);
+  assert.doesNotMatch(html, /aw-rate-previous|昨日| pp/);
 });

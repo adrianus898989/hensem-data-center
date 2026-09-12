@@ -331,7 +331,7 @@ function mapDbDaily(row: DbAutoWithdrawRow): DailyWithdrawRow {
   const success = Number(row.success || 0);
   const rejected = Number(row.rejected || 0);
   const autoCount = Number(row.auto_count || 0);
-  const manualCount = Number(row.manual_count || 0) || Math.max(total - autoCount, 0);
+  const manualCount = row.manual_count == null ? Math.max(total - autoCount, 0) : Number(row.manual_count);
   const avgSeconds = Number(row.avg_seconds || 0) || parseDurationToSeconds(String(row.avg_time_text || ""));
   return {
     country: String(row.country || ""),
@@ -370,15 +370,24 @@ function mapDbOperator(row: DbOperatorRow): OperatorRow {
 }
 
 function enrichDbDaily(rows: DailyWithdrawRow[]): DailyWithdrawRow[] {
-  const seconds = new Map<string, number>();
-  for (const row of rows) seconds.set(`${row.country}|||${row.platform}|||${row.date}`, parseDurationToSeconds(row.avgTime));
+  const byDate = new Map<string, DailyWithdrawRow>();
+  for (const row of rows) byDate.set(`${row.country}|||${row.platform}|||${row.date}`, row);
   return rows.map((row) => {
     const current = parseDurationToSeconds(row.avgTime);
-    const previous = seconds.get(`${row.country}|||${row.platform}|||${addIsoDays(row.date, -1)}`) || 0;
+    const previousRow = byDate.get(`${row.country}|||${row.platform}|||${addIsoDays(row.date, -1)}`);
+    const previous = previousRow ? parseDurationToSeconds(previousRow.avgTime) : 0;
     return {
       ...row,
       yesterdayAvgTime: previous ? formatDuration(previous) : "-",
       comparePercent: compareDurationPercent(current, previous),
+      previousDay: previousRow ? {
+        date: previousRow.date,
+        total: previousRow.total,
+        success: previousRow.success,
+        rejected: previousRow.rejected,
+        autoCount: previousRow.autoCount,
+        manualCount: previousRow.manualCount,
+      } : null,
     };
   });
 }
@@ -430,7 +439,8 @@ export async function readSupabaseAutoWithdraw(request: Request, startInput: str
   const operatorAll = enrichDbOperators(dedupeDbOperators(operatorRaw).map(mapDbOperator));
   const dailyRows = dailyAll.filter((row) => row.date >= start && row.date <= end);
   const operatorRows = operatorAll.filter((row) => row.date >= start && row.date <= end);
-  const monthlyRows: AutoWithdrawRow[] = aggregateWithdrawRows(dailyRows);
+  const monthlyRows: AutoWithdrawRow[] = aggregateWithdrawRows(dailyRows)
+    .map((row) => ({ ...row, previousDay: start === end ? row.previousDay ?? null : null }));
 
   const updatedAt = [
     ...dailyRaw.map((row) => String(row.updated_at || row.source_updated_at || "")),

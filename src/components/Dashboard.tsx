@@ -11,10 +11,11 @@ import ThirdPartyVolumeDashboard from "./ThirdPartyVolumeDashboard";
 import AdminControlCenter from "./AdminControlCenter";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { canOpenAdminCenter, ensureDashboardSession, hasDashboardPermission, normalizedManagementPermissions, type DashboardSession } from "@/lib/dashboardAuthClient";
-import { aggregateAutoWithdrawByPlatform as aggregateByPlatform } from "@/lib/autoWithdrawComparison";
+import { aggregateAutoWithdrawByPlatform as aggregateByPlatform, summarizePreviousDay, percentagePointChange, formatPercentagePointChange } from "@/lib/autoWithdrawComparison";
 import { AutoWithdrawNotesProvider, AutoWithdrawReasonCell, AutoWithdrawNotesActions } from "./AutoWithdrawNotes";
 import { AutoWithdrawReasonsProvider, AutoWithdrawReasonsButton, AutoWithdrawReasonsInlineRow, AutoWithdrawReasonsQueryButton } from "./AutoWithdrawReasons";
 import { AutoWithdrawDailySummary } from "./AutoWithdrawDailySummary";
+import { AutoWithdrawRateComparison } from "./AutoWithdrawRateComparison";
 import AutoWithdrawConfig from "./AutoWithdrawConfig";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
@@ -1146,6 +1147,8 @@ export default function Dashboard() {
   }, [payload, filters, operatorCountryPane]);
 
   const summary = useMemo(() => summarize(summaryRows), [summaryRows]);
+  const previousDaySummary = useMemo(() => filters.startDate === filters.endDate
+    ? summarizePreviousDay(summaryRows) : undefined, [summaryRows, filters.startDate, filters.endDate]);
   const operatorSummary = useMemo(() => summarizeOperators(operatorRows), [operatorRows]);
   const operatorSummaryRows = useMemo(() => aggregateOperators(operatorRows), [operatorRows]);
   const sortedSummaryRows = useMemo(() => sortRows(summaryRows, sorts.autoSummary, getAutoSortValue), [summaryRows, sorts.autoSummary]);
@@ -1585,6 +1588,15 @@ export default function Dashboard() {
         return;
       }
       if (autoView === "daily") {
+        const previous = (row: AutoWithdrawRow) => filters.startDate === filters.endDate ? row.previousDay : null;
+        const priorRate = (row: AutoWithdrawRow, key: "success" | "rejected" | "autoCount" | "manualCount") => {
+          const prior = previous(row);
+          return prior && prior.total > 0 ? formatPercent(prior[key] / prior.total) : "—";
+        };
+        const rateChange = (row: AutoWithdrawRow, key: "success" | "rejected" | "autoCount" | "manualCount") => {
+          const prior = previous(row);
+          return formatPercentagePointChange(prior ? percentagePointChange(row[key], row.total, prior[key], prior.total) : null);
+        };
         exportCsv(`自动出款区间累计-${suffix}.csv`, summaryRows, [
           { label: "国家", value: (r) => r.country },
           { label: "盘口", value: (r) => r.platform },
@@ -1597,7 +1609,17 @@ export default function Dashboard() {
           { label: "人工处理", value: (r) => r.manualCount },
           { label: "自动占比", value: (r) => formatPercent(r.autoRate) },
           { label: "人工占比", value: (r) => formatPercent(r.manualRate) },
-          { label: "平均处理时间", value: (r) => r.avgTime }
+          { label: "平均处理时间", value: (r) => r.avgTime },
+          { label: "前日对比日期", value: (r) => previous(r)?.date || "—" },
+          { label: "前日总笔数", value: (r) => previous(r)?.total ?? "—" },
+          { label: "前日自动占比", value: (r) => priorRate(r, "autoCount") },
+          { label: "自动占比变化（百分点）", value: (r) => rateChange(r, "autoCount") },
+          { label: "前日人工占比", value: (r) => priorRate(r, "manualCount") },
+          { label: "人工占比变化（百分点）", value: (r) => rateChange(r, "manualCount") },
+          { label: "前日成功占比", value: (r) => priorRate(r, "success") },
+          { label: "成功占比变化（百分点）", value: (r) => rateChange(r, "success") },
+          { label: "前日驳回占比", value: (r) => priorRate(r, "rejected") },
+          { label: "驳回占比变化（百分点）", value: (r) => rateChange(r, "rejected") }
         ]);
         return;
       }
@@ -1768,7 +1790,7 @@ export default function Dashboard() {
     <div className="app-shell">
       {sidebarContent}
 
-      <main className={`main ${!hasBusinessQueried || !payload ? "business-prequery" : ""}`}>
+      <main className={`main ${activeModule === "auto" && autoView === "daily" ? "aw-daily-workspace" : ""} ${!hasBusinessQueried || !payload ? "business-prequery" : ""}`}>
         {activeModule === "volume" ? (
           <ThirdPartyVolumeDashboard />
         ) : activeModule === "work" ? (
@@ -2029,7 +2051,11 @@ export default function Dashboard() {
                 <AutoWithdrawReasonsProvider startDate={filters.startDate} endDate={filters.endDate} availableRows={filteredDailyRows} showToolbar={false}>
                 <AutoWithdrawNotesProvider startDate={filters.startDate} endDate={filters.endDate} availableRows={filteredDailyRows} showToolbar={false}>
                   <AutoWithdrawDailySummary startDate={filters.startDate} endDate={filters.endDate} dayCount={activeDayCount} totals={summary}
+                    comparison={previousDaySummary}
                     actions={<><AutoWithdrawReasonsQueryButton /><AutoWithdrawNotesActions /></>} />
+                  <div className="aw-comparison-legend">{filters.startDate === filters.endDate
+                    ? "占比下方为同一盘口前一日数据 · pp = 百分点（本日占比 − 前日占比）"
+                    : "当前为区间累计 · 选择单日可查看与前一日的占比变化"}</div>
                   <PaginationControls total={sortedSummaryRows.length} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
                   <AutoWithdrawTable rows={paginateRows(sortedSummaryRows, page, pageSize)} totalRows={sortedSummaryRows} sortState={sorts.autoSummary} onSort={(key) => toggleSort("autoSummary", key)} onOpenOperators={openAutoPlatformDaily} withNotes singleDay={filters.startDate === filters.endDate} />
                 </AutoWithdrawNotesProvider>
@@ -2957,6 +2983,7 @@ function autoSummaryFoot(
 ) {
   const source = label === "当前页汇总" ? current : overall;
   const leadingColSpan = options.leadingColSpan ?? 2;
+  const operationTotal = options.includeNotes ? source.total : source.autoCount + source.manualCount;
   return (
     <tr className={`summary-row ${label === "当前页汇总" ? "page-summary-row" : "overall-summary-row"}`}>
       <td colSpan={leadingColSpan}>{label}</td>
@@ -2967,8 +2994,8 @@ function autoSummaryFoot(
       <td>{source.total ? formatPercent(source.rejected / source.total) : "-"}</td>
       <td className="num">{formatNumber(source.autoCount)}</td>
       <td className="num">{formatNumber(source.manualCount)}</td>
-      <td>{source.autoCount + source.manualCount ? formatPercent(source.autoCount / (source.autoCount + source.manualCount)) : "-"}</td>
-      <td>{source.autoCount + source.manualCount ? formatPercent(source.manualCount / (source.autoCount + source.manualCount)) : "-"}</td>
+      <td>{operationTotal ? formatPercent(source.autoCount / operationTotal) : "-"}</td>
+      <td>{operationTotal ? formatPercent(source.manualCount / operationTotal) : "-"}</td>
       <td>-</td>
       <td>-</td>
       <td className="muted-cell">汇总</td>
@@ -3072,7 +3099,7 @@ function AutoWithdrawTable({
             <SortableTh label="人工占比" sortKey="manualRate" sortState={sortState} onSort={onSort} />
             <SortableTh label={withNotes ? "平均用时" : "平均处理时间"} sortKey="avgTime" sortState={sortState} onSort={onSort} />
             <SortableTh label={withNotes ? "昨日用时" : "昨日平均处理时间"} sortKey="yesterdayAvgTime" sortState={sortState} onSort={onSort} />
-            <SortableTh label={withNotes ? "较昨日%" : "对比%"} sortKey="comparePercent" sortState={sortState} onSort={onSort} />
+            <SortableTh label={withNotes ? "用时变化%" : "对比%"} sortKey="comparePercent" sortState={sortState} onSort={onSort} />
             {withNotes && <th className="auto-note-column">原因 / 每日备注</th>}
             <th className="detail-col">详情</th>
           </tr>
@@ -3085,12 +3112,12 @@ function AutoWithdrawTable({
               <td className="num">{formatNumber(row.total)}</td>
               <td className="num">{formatNumber(row.success)}</td>
               <td className="num">{formatNumber(row.rejected)}</td>
-              <td><RateBar value={row.successRate} /></td>
-              <td><RateBar value={row.rejectRate} reject /></td>
+              <td>{withNotes ? <AutoWithdrawRateComparison count={row.success} total={row.total} previousCount={row.previousDay?.success} previousTotal={row.previousDay?.total} tone="success" compare={singleDay} /> : <RateBar value={row.successRate} />}</td>
+              <td>{withNotes ? <AutoWithdrawRateComparison count={row.rejected} total={row.total} previousCount={row.previousDay?.rejected} previousTotal={row.previousDay?.total} tone="rejected" compare={singleDay} /> : <RateBar value={row.rejectRate} reject />}</td>
               <td className="num">{formatNumber(row.autoCount)}</td>
               <td className="num">{formatNumber(row.manualCount)}</td>
-              <td><RateBar value={row.autoRate} /></td>
-              <td><RateBar value={row.manualRate} reject /></td>
+              <td>{withNotes ? <AutoWithdrawRateComparison count={row.autoCount} total={row.total} previousCount={row.previousDay?.autoCount} previousTotal={row.previousDay?.total} tone="auto" compare={singleDay} /> : <RateBar value={row.autoRate} />}</td>
+              <td>{withNotes ? <AutoWithdrawRateComparison count={row.manualCount} total={row.total} previousCount={row.previousDay?.manualCount} previousTotal={row.previousDay?.total} tone="manual" compare={singleDay} /> : <RateBar value={row.manualRate} reject />}</td>
               <td>{row.avgTime}</td>
               <td title={withNotes && !singleDay ? "区间汇总不对应单个昨日，请查询单日查看较昨日变化" : "同一盘口前一自然日的平均处理时间；缺少昨日数据时显示 —"}>{withNotes && !singleDay ? "仅单日对比" : row.yesterdayAvgTime || "—"}</td>
               <td><CompareCell value={withNotes && !singleDay ? "-" : row.comparePercent} /></td>
