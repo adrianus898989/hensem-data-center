@@ -6316,3 +6316,49 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 @container aw-summary (max-width:520px){.aw-daily-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.aw-daily-metric:nth-child(n){border-left:1px solid #e1e8f2}.aw-daily-metric:nth-child(odd){border-left:0}.aw-daily-metric:nth-child(n+3){border-top:1px solid #e1e8f2}.aw-daily-metric strong{font-size:19px}.aw-daily-scope{display:block}.aw-daily-scope>span{display:block;margin-top:4px}}
 .wr-note-kinds { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; margin-bottom: .6rem; }
 .wr-note-kinds > small { color: #64748b; font-size: .8125rem; }
+
+/* Daily comparisons stay inside existing rate columns, not a second wide table. */
+.aw-daily-workspace .topbar { min-height: 44px !important; margin-bottom: 7px !important; }
+.aw-daily-workspace .topbar .title h1 { font-size: 20px !important; }
+.aw-daily-workspace .topbar .status-box { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-right: 185px; padding: 6px 8px; background: transparent; border: 0; box-shadow: none !important; }
+.aw-daily-workspace .module-tab { min-height: 32px !important; padding: 0 12px !important; }
+.aw-daily-workspace .filter-card { padding: 9px 12px !important; }
+.aw-daily-workspace .filter-card .input,
+.aw-daily-workspace .filter-card .multi-select-trigger,
+.aw-daily-workspace .filter-card .primary-btn,
+.aw-daily-workspace .filter-card .ghost-btn { height: 34px !important; min-height: 34px !important; }
+.aw-daily-workspace .quick-row.date-shortcuts { margin-bottom: 3px !important; }
+.aw-daily-summary { padding: 0 12px 8px; }
+.aw-daily-heading { padding: 9px 0; gap: 6px 12px; }
+.aw-daily-scope h2 { font-size: 14px; }
+.aw-daily-metric { padding: 8px 10px; }
+.aw-daily-metric strong { font-size: 20px; }
+.aw-daily-comparison-scope { color: #527398; font-size: 11px; }
+.aw-daily-metric dd.aw-daily-previous { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 5px; margin: 5px 0 0; font-size: 11px; line-height: 1.5; color: #708098; font-variant-numeric: tabular-nums; }
+.aw-daily-comparison-incomplete { color: #946429; }
+.aw-comparison-legend { padding: 6px 12px; font-size: 11px; line-height: 1.5; color: #708198; background: #f9fbfe; border-bottom: 1px solid #e7edf5; }
+.aw-daily-panel > .pagination-row { padding: 5px 12px; }
+.auto-withdraw-daily-compact > table { min-width: 1280px; width: 100%; }
+.auto-withdraw-daily-compact.table-wrap > table > thead > tr > th { padding: 5px !important; height: 32px !important; font-size: 11px !important; }
+.auto-withdraw-daily-compact.table-wrap > table > tbody > tr:not(.wr-expanded-row) > td { padding: 7px 5px !important; height: 50px !important; font-size: 11px !important; }
+.auto-withdraw-daily-compact.table-wrap table .auto-note-column { width: 145px; min-width: 130px; max-width: 160px; }
+.auto-withdraw-daily-compact .platform-cell { min-width: 62px; max-width: 100px; overflow-wrap: anywhere; white-space: normal; }
+.auto-withdraw-daily-compact .detail-col { min-width: 108px; }
+.auto-withdraw-daily-compact .wr-row-actions { display: flex; flex-direction: row; align-items: center; gap: 4px; white-space: nowrap; }
+.auto-withdraw-daily-compact .wr-row-actions .detail-view-btn { flex: 0 0 auto; min-height: 24px !important; height: 24px !important; padding: 2px 6px !important; border-radius: 5px; font-size: 10px !important; line-height: 18px; }
+.aw-rate-compare { display: block; min-width: 105px; font-variant-numeric: tabular-nums; line-height: 1.5; }
+.aw-rate-current-line { display: flex; align-items: center; gap: 3px; white-space: nowrap; }
+.aw-rate-current { font-size: 12px; font-weight: 650; color: #263950; }
+.aw-rate-compare.is-auto .aw-rate-current { color: #265fbd; }
+.aw-rate-compare.is-manual .aw-rate-current { color: #b16529; }
+.aw-rate-previous { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 5px; margin-top: 2px; font-size: 10px; color: #7c8b9f; }
+.aw-rate-delta { display: inline-block; font-size: 10px; font-weight: 550; border-radius: 3px; padding: 0 3px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.aw-rate-delta.is-favorable { color: #11745a; background: #e8f5ee; }
+.aw-rate-delta.is-unfavorable { color: #b54b53; background: #fff0f1; }
+.aw-rate-delta.is-neutral { color: #73839a; background: #f0f3f8; }
+.aw-rate-previous.is-unavailable { color: #93a0b2; }
+@media (max-width: 1400px) {
+  .auto-withdraw-daily-compact.table-wrap table .auto-note-column { min-width: 110px; width: 120px; }
+  .aw-rate-compare { min-width: 98px; }
+  .aw-rate-previous { gap: 2px 3px; }
+}

@@ -3,7 +3,10 @@ const path = require("node:path");
 const test = require("node:test");
 const { loadTs, root } = require("./load-typescript.cjs");
 
-const { aggregateAutoWithdrawByPlatform } = loadTs(path.join(root, "src/lib/autoWithdrawComparison.ts"));
+const {
+  aggregateAutoWithdrawByPlatform, summarizePreviousDay,
+  percentagePointChange, formatPercentagePointChange,
+} = loadTs(path.join(root, "src/lib/autoWithdrawComparison.ts"));
 const { readSupabaseAutoWithdraw } = loadTs(path.join(root, "src/lib/supabaseDashboardServer.ts"));
 
 function daily(date, seconds, overrides = {}) {
@@ -63,6 +66,10 @@ for (const [previous, current] of [["2026-09-08", "2026-09-09"], ["2026-08-31", 
       assert.equal(display.total, 100, "comparison-day totals must never enter the selected-day totals");
       assert.equal(display.yesterdayAvgTime, "2分0秒");
       assert.equal(display.comparePercent, "+25.00%");
+      assert.deepEqual(display.previousDay, {
+        date: previous, total: 900, success: 95, rejected: 5, autoCount: 60, manualCount: 40,
+      });
+      assert.deepEqual(payload.monthlyRows[0].previousDay, display.previousDay);
     });
   });
 }
@@ -77,6 +84,8 @@ test("a cross-month aggregate keeps range totals and does not borrow one day's y
     assert.equal(display.avgTime, "2分30秒");
     assert.equal(display.yesterdayAvgTime, "-");
     assert.equal(display.comparePercent, "-");
+    assert.equal(display.previousDay, null);
+    assert.equal(payload.monthlyRows[0].previousDay, null);
     assert.equal(payload.dailyRows[0].total, 100, "aggregation must not mutate the source daily rows");
     assert.equal(payload.dailyRows[1].comparePercent, "+50.00%");
   });
@@ -92,5 +101,151 @@ test("missing previous-day data does not become zero seconds or another platform
     const [display] = aggregateAutoWithdrawByPlatform(payload.dailyRows);
     assert.equal(display.yesterdayAvgTime, "-");
     assert.equal(display.comparePercent, "-");
+    assert.equal(display.previousDay, null);
   });
+});
+
+test("a present zero-total day is distinct from a missing day", async () => {
+  await withDatabase([
+    daily("2026-09-09", 0, { total: 0, success: 0, rejected: 0, auto_count: 0, manual_count: 0 }),
+    daily("2026-09-10", 90),
+  ], async (request) => {
+    const payload = await readSupabaseAutoWithdraw(request, "2026-09-10", "2026-09-10");
+    const rows = aggregateAutoWithdrawByPlatform(payload.dailyRows);
+    assert.deepEqual(rows[0].previousDay, {
+      date: "2026-09-09", total: 0, success: 0, rejected: 0, autoCount: 0, manualCount: 0,
+    });
+    const summary = summarizePreviousDay(rows);
+    assert.equal(summary.matchedPlatforms, 1);
+    assert.equal(summary.totals.total, 0);
+    assert.equal(percentagePointChange(60, 100, 0, 0), null);
+  });
+});
+
+test("explicit zero manual and automatic counts remain zero for both dates", async () => {
+  await withDatabase([
+    daily("2026-09-09", 90, { manual_count: 0, auto_count: 0 }),
+    daily("2026-09-10", 90, { manual_count: "0", auto_count: "0" }),
+  ], async (request) => {
+    const payload = await readSupabaseAutoWithdraw(request, "2026-09-10", "2026-09-10");
+    const [row] = payload.dailyRows;
+    assert.equal(row.manualCount, 0);
+    assert.equal(row.autoCount, 0);
+    assert.equal(row.previousDay.manualCount, 0);
+    assert.equal(row.previousDay.autoCount, 0);
+    assert.equal(row.manualRate, 0);
+  });
+});
+
+test("only a missing manual count uses the legacy total-minus-auto fallback", async () => {
+  await withDatabase([daily("2026-09-10", 90, { manual_count: null })], async (request) => {
+    const payload = await readSupabaseAutoWithdraw(request, "2026-09-10", "2026-09-10");
+    assert.equal(payload.dailyRows[0].manualCount, 40);
+  });
+});
+
+test("the previous-day comparison uses the latest deduplicated row, not an older source revision", async () => {
+  await withDatabase([
+    daily("2026-09-09", 90, { updated_at: "2026-09-10T10:00:00Z", auto_count: 20 }),
+    daily("2026-09-09", 90, { updated_at: "2026-09-10T11:00:00Z", auto_count: 70 }),
+    daily("2026-09-10", 90),
+  ], async (request) => {
+    const payload = await readSupabaseAutoWithdraw(request, "2026-09-10", "2026-09-10");
+    assert.equal(payload.dailyRows[0].previousDay.autoCount, 70);
+    assert.equal(payload.dailyRows[0].total, 100);
+  });
+});
+
+test("multi-day selection clears every platform comparison, including sparse platforms", async () => {
+  await withDatabase([
+    daily("2026-09-08", 90), daily("2026-09-09", 90), daily("2026-09-10", 90),
+    daily("2026-09-09", 90, { platform: "SPARSE" }),
+  ], async (request) => {
+    const payload = await readSupabaseAutoWithdraw(request, "2026-09-09", "2026-09-10");
+    const rows = aggregateAutoWithdrawByPlatform(payload.dailyRows);
+    assert.equal(rows.length, 2);
+    for (const row of rows) {
+      assert.equal(row.previousDay, null);
+      assert.equal(row.comparePercent, "-");
+    }
+    assert.ok(payload.monthlyRows.every((row) => row.previousDay === null));
+  });
+});
+
+function previous(overrides = {}) {
+  return { date: "2026-09-09", total: 100, success: 90, rejected: 10, autoCount: 60, manualCount: 40, ...overrides };
+}
+
+function display(platform, previousDay, overrides = {}) {
+  return {
+    country: "巴西", platform, date: "2026-09-10", total: 100, success: 95, rejected: 5,
+    autoCount: 60, manualCount: 40, successRate: 0.95, rejectRate: 0.05, autoRate: 0.6, manualRate: 0.4,
+    avgTime: "1分30秒", yesterdayAvgTime: "1分20秒", comparePercent: "+12.50%",
+    sourceSheet: "test", previousDay, ...overrides,
+  };
+}
+
+test("summary uses weighted count totals rather than averaging platform rates", () => {
+  const rows = [
+    display("SMALL", previous({ total: 10, success: 1, rejected: 9, autoCount: 2, manualCount: 8 })),
+    display("LARGE", previous({ total: 90, success: 81, rejected: 9, autoCount: 72, manualCount: 18 })),
+  ];
+  const before = JSON.stringify(rows);
+  assert.deepEqual(summarizePreviousDay(rows), {
+    totals: { total: 100, success: 82, rejected: 18, autoCount: 74, manualCount: 26 },
+    matchedPlatforms: 2, totalPlatforms: 2, date: "2026-09-09",
+  });
+  const delta = percentagePointChange(90, 100, 82, 100);
+  assert.ok(Math.abs(delta - 8) < 1e-10);
+  assert.equal(formatPercentagePointChange(delta), "+8.00 pp");
+  assert.equal(JSON.stringify(rows), before, "summary must not mutate current or previous counts");
+});
+
+test("a missing filtered platform does not get a zero-filled summary", () => {
+  const rows = [display("A", previous()), display("B", null)];
+  assert.deepEqual(summarizePreviousDay(rows), {
+    totals: null, matchedPlatforms: 1, totalPlatforms: 2, date: "2026-09-09",
+  });
+  assert.equal(summarizePreviousDay(rows.slice(0, 1)).totals.total, 100, "only selected platforms determine coverage");
+});
+
+test("same platform name in another country is a separate comparison population", () => {
+  const summary = summarizePreviousDay([
+    display("A", previous()), display("A", null, { country: "印度" }),
+  ]);
+  assert.equal(summary.totalPlatforms, 2);
+  assert.equal(summary.matchedPlatforms, 1);
+  assert.equal(summary.totals, null);
+});
+
+test("different previous dates never combine into one comparison day", () => {
+  assert.deepEqual(summarizePreviousDay([
+    display("A", previous()), display("B", previous({ date: "2026-09-08" })),
+  ]), { totals: null, matchedPlatforms: 2, totalPlatforms: 2, date: null });
+});
+
+test("summary counts repeated identical platforms once and rejects conflicting revisions", () => {
+  const first = display("A", previous());
+  assert.equal(summarizePreviousDay([first, { ...first }]).totals.total, 100);
+  assert.deepEqual(summarizePreviousDay([first, display("A", previous({ autoCount: 61 }))]), {
+    totals: null, matchedPlatforms: 0, totalPlatforms: 1, date: null,
+  });
+});
+
+test("an empty or undated selection cannot invent a comparison", () => {
+  assert.deepEqual(summarizePreviousDay([]), { totals: null, matchedPlatforms: 0, totalPlatforms: 0, date: null });
+  assert.equal(aggregateAutoWithdrawByPlatform([display("A", previous(), { date: undefined })])[0].previousDay, null);
+});
+
+test("pp calculation retains signs, handles zero and rejects unavailable denominators", () => {
+  assert.equal(formatPercentagePointChange(percentagePointChange(75, 100, 50, 100)), "+25.00 pp");
+  assert.equal(formatPercentagePointChange(percentagePointChange(25, 100, 50, 100)), "-25.00 pp");
+  assert.equal(formatPercentagePointChange(percentagePointChange(0, 100, 0, 100)), "0.00 pp");
+  for (const counts of [[0, 0, 1, 10], [1, 10, 0, 0], [1, -1, 1, 10], [NaN, 10, 1, 10], [1, Infinity, 1, 10]]) {
+    assert.equal(percentagePointChange(...counts), null);
+  }
+  assert.equal(formatPercentagePointChange(null), "—");
+  assert.equal(formatPercentagePointChange(NaN), "—");
+  assert.equal(formatPercentagePointChange(-0.000001), "0.00 pp");
+  assert.equal(formatPercentagePointChange(0.000001), "0.00 pp");
 });

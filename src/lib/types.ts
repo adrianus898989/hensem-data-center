@@ -1,3 +1,13 @@
+export type AutoWithdrawCounts = {
+  total: number;
+  success: number;
+  rejected: number;
+  autoCount: number;
+  manualCount: number;
+};
+
+export type AutoWithdrawPreviousDay = AutoWithdrawCounts & { date: string };
+
 export type AutoWithdrawRow = {
   country: string;
   platform: string;
@@ -14,6 +24,7 @@ export type AutoWithdrawRow = {
   yesterdayAvgTime: string;
   comparePercent: string;
   sourceSheet: string;
+  previousDay?: AutoWithdrawPreviousDay | null;
 };
 
 export type DailyWithdrawRow = AutoWithdrawRow & {
