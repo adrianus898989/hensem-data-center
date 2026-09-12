@@ -145,6 +145,23 @@ test('Offer tree preserves all source names and hierarchy but makes only expansi
   assert.doesNotMatch(html,/checked=""/);
   assert.match(html,/指定优惠选项（只读）/);
 });
+test('Grouped discount selections use the complete parent path, preserve empty children and stay readonly',()=>{
+  const copy=structuredClone(config);
+  const selected=[{optType:6,dealType:6109,activeIds:[1]},{optType:7,dealType:7101,activeIds:[]}];
+  copy.settings['0'].otherConditionV2.mustBeReceivedDiscount.specifiedDiscount=selected;
+  copy.dictionaries.activities[1].dealTypeList[0].activeList=[{ActiveId:1,ActiveName:'合成同ID不同路径'}];
+  copy.settings['0'].betGameLimit.games=[{categoryId:1,platformId:2,gameIds:[]}];
+  contract.validateWGConfiguration(copy);
+  const before=JSON.stringify(copy),html=brand(copy.settings['0'],copy),offers=section(html,'mustBeReceivedDiscount');
+  assert.match(offers,/checked=""[^>]*\/><span>合成充值优惠/);
+  assert.doesNotMatch(offers,/checked=""[^>]*\/><span>合成同ID不同路径/);
+  assert.match(offers,/空 activeIds 或未匹配部分不推断为全选、全不选/);
+  const raw=offers.match(/<pre>([\s\S]*?)<\/pre>/)[1].replaceAll('&quot;','"');
+  assert.deepEqual(JSON.parse(raw),selected);
+  assert.match(section(html,'betGameLimit'),/空 gameIds 不推断为全部游戏或没有游戏/);
+  assert.equal(JSON.stringify(copy),before);
+  assert((html.match(/<input\b[^>]*>/g)||[]).every(input=>/readonly=""|disabled=""/.test(input)));
+});
 test('Unknown game and bank catalogs are not replaced by guessed screenshot options',()=>{
   const html=render();assert.match(html,/游戏名单、银行名单尚未提供/);
   assert.match(section(html,'betGameLimit'),/游戏名称与候选名单尚未同步/);

@@ -5,7 +5,7 @@ import "./WGConfigSheet.css";
 
 type Values=Record<string,unknown>;
 type Option={id:number;name:string};
-type TreeNode={key:string;name:string;children?:TreeNode[]};
+type TreeNode={key:string;name:string;children?:TreeNode[];selected?:boolean|null};
 const object=(value:unknown):Values=>value!==null&&typeof value==="object"&&!Array.isArray(value)?value as Values:{};
 const array=(value:unknown):unknown[]=>Array.isArray(value)?value:[];
 const literal=(value:unknown)=>value===undefined?"接口未提供":JSON.stringify(value);
@@ -47,14 +47,15 @@ function Registration({value,required}:{value:unknown;required:boolean}) {
   return <><div className="wgc-radios" role="group" aria-label={(required?"必审":"免审")+"注册时长（只读）"}>{labels.map((label,index)=><label key={label} className={value===0&&index===0?"selected":""}>{value===0?<input type="radio" checked={index===0} disabled/>:<span className="wgc-unknown-mark" role="img" aria-label="选中状态未核实">?</span>}{label}</label>)}</div>{value!==0&&<small className="wgc-unknown">当前接口原值：{literal(value)}；选项原码未核实，不推断选中项。</small>}</>;
 }
 function SelectionTree({nodes,selected,label}:{nodes:TreeNode[];selected:unknown;label:string}) {
-  // Current supplied settings contain []/null only. A future nonempty saved
-  // structure is retained explicitly until its exact selection encoding is known.
+  // Only explicit, fully matched paths can supply a selected leaf. Empty child
+  // ID lists have unverified semantics and must not imply a selected branch.
   const knownEmpty=Array.isArray(selected)&&selected.length===0;
+  const state=(node:TreeNode)=>node.selected!==undefined?node.selected:knownEmpty?false:null;
   const branch=(node:TreeNode):ReactNode=>node.children?.length?<details className="wgc-tree-branch" key={node.key}>
-    <summary><Check checked={knownEmpty?false:null}>{node.name}</Check><span className="wgc-tree-count">{node.children.length}</span></summary>
-    <div className="wgc-tree-children">{node.children.map(branch)}</div></details>:<div className="wgc-tree-leaf" key={node.key}><Check checked={knownEmpty?false:null}>{node.name}</Check></div>;
+    <summary><Check checked={state(node)}>{node.name}</Check><span className="wgc-tree-count">{node.children.length}</span></summary>
+    <div className="wgc-tree-children">{node.children.map(branch)}</div></details>:<div className="wgc-tree-leaf" key={node.key}><Check checked={state(node)}>{node.name}</Check></div>;
   return <><div className="wgc-tree" aria-label={label+"选项（只读）"}>{nodes.length?nodes.map(branch):<p className="wgc-unknown">该选项名单暂未同步。</p>}</div>
-    {!knownEmpty&&<details className="wgc-selection-raw"><summary>{label}当前原值 · 选中结构待核实</summary><pre>{literal(selected)}</pre></details>}</>;
+    {!knownEmpty&&<details className="wgc-selection-raw"><summary>{label}当前原值 · 未映射部分保留原结构</summary><pre>{JSON.stringify(selected,null,2)}</pre></details>}</>;
 }
 const amountRows=(value:unknown)=>array(value).map(object);
 function AmountFields({entry,mode,merchants}:{entry:Values;mode:"required"|"exempt"|"payment";merchants:Option[]}) {
@@ -90,7 +91,13 @@ export function WGBrandSettings({setting,configuration}:{setting:WGConfigSetting
   const levels=d.levels.map(level=>({id:level.level_id,name:level.name}));
   const tags=d.tags.map(tag=>({id:tag.id,name:tag.name}));
   const merchants=d.merchants.map(merchant=>({id:merchant.id,name:merchant.value}));
-  const activities:TreeNode[]=d.activities.map(category=>({key:"o:"+category.optType,name:category.optTypeTxt,children:category.dealTypeList.map(deal=>({key:"d:"+category.optType+":"+deal.dealType,name:deal.dealTypeTxt,children:deal.activeList.map(active=>({key:"a:"+deal.dealType+":"+active.ActiveId,name:active.ActiveName}))}))}));
+  const discounts=array(condition("mustBeReceivedDiscount").specifiedDiscount);
+  const structuredDiscounts=discounts.filter(value=>{
+    const entry=object(value);
+    return Object.keys(entry).length===3&&typeof entry.optType==="number"&&typeof entry.dealType==="number"&&Array.isArray(entry.activeIds)&&entry.activeIds.every(id=>typeof id==="number");
+  }).map(object);
+  const activities:TreeNode[]=d.activities.map(category=>({key:"o:"+category.optType,name:category.optTypeTxt,children:category.dealTypeList.map(deal=>({key:"d:"+category.optType+":"+deal.dealType,name:deal.dealTypeTxt,children:deal.activeList.map(active=>({key:"a:"+category.optType+":"+deal.dealType+":"+active.ActiveId,name:active.ActiveName,
+    selected:structuredDiscounts.some(entry=>entry.optType===category.optType&&entry.dealType===deal.dealType&&(entry.activeIds as number[]).includes(active.ActiveId))?true:undefined}))}))}));
   const withdrawTypes:TreeNode[]=d.withdraw_types.map(type=>({key:"w:"+type.id,name:type.name,children:type.child.map(child=>({key:"c:"+type.id+":"+child.id,name:child.name}))}));
   const rule=(key:string,children:ReactNode)=><Check checked={status(key)}>{children}</Check>;
   const PIX=["CPF","PHONE","EMAIL","EVP","CNPJ","SLRY","SVGS","CACC","TRAN"];
@@ -120,8 +127,8 @@ export function WGBrandSettings({setting,configuration}:{setting:WGConfigSetting
       {rule("manualDepositAudit",<>近 {field("manualDepositAudit","day","手动加款天数")} 天有手动加款</>)}{rule("withdrawalDeviceAccountNumber",<>该提现设备有 ≥ {field("withdrawalDeviceAccountNumber","value","同设备会员账号数量")} 个会员账号</>)}
       {rule("last3DaysSystemReleaseAudit",<>近 {field("last3DaysSystemReleaseAudit","day","系统解除稽核天数")} 天有系统解除稽核</>)}{rule("sportRollingBetProfit",<>体育滚球盘盈利 ≥ {field("sportRollingBetProfit","amount","体育滚球盘盈利")} USDT</>)}
     </div></Row>
-    <Row label="领取过优惠必审条件" id="mustBeReceivedDiscount"><div className="wgc-bordered"><div className="wgc-inline">近 {field("mustBeReceivedDiscount","severalHours","领取优惠小时数")} 小时，领取过以下指定优惠必须审核</div><div className="wgc-tree-row"><span>领取指定优惠</span><SelectionTree nodes={activities} selected={condition("mustBeReceivedDiscount").specifiedDiscount} label="指定优惠"/></div></div></Row>
-    <Row label="投注过以下游戏必审" help="（建议勾选容易套利的游戏）" id="betGameLimit"><div className="wgc-inline">近 <ReadValue value={object(s.betGameLimit).days} label="投注游戏统计时长"/> 小时，内投注过以下游戏必审</div><div className="wgc-game-missing"><strong>游戏名称与候选名单尚未同步</strong><p>不会按截图猜测游戏 ID 或选中状态。</p><details><summary>查看游戏限制实际保存值</summary><pre>{literal(s.betGameLimit)}</pre></details></div></Row>
+    <Row label="领取过优惠必审条件" id="mustBeReceivedDiscount"><div className="wgc-bordered"><div className="wgc-inline">近 {field("mustBeReceivedDiscount","severalHours","领取优惠小时数")} 小时，领取过以下指定优惠必须审核</div>{structuredDiscounts.length>0&&<p className="wgc-help">仅标出完整优惠路径匹配的明确活动 ID；空 activeIds 或未匹配部分不推断为全选、全不选。</p>}<div className="wgc-tree-row"><span>领取指定优惠</span><SelectionTree nodes={activities} selected={condition("mustBeReceivedDiscount").specifiedDiscount} label="指定优惠"/></div></div></Row>
+    <Row label="投注过以下游戏必审" help="（建议勾选容易套利的游戏）" id="betGameLimit"><div className="wgc-inline">近 <ReadValue value={object(s.betGameLimit).days} label="投注游戏统计时长"/> 小时，内投注过以下游戏必审</div><div className="wgc-game-missing"><strong>游戏名称与候选名单尚未同步</strong><p>不会按截图猜测游戏 ID 或选中状态；空 gameIds 不推断为全部游戏或没有游戏。</p><details><summary>查看游戏限制实际保存值</summary><pre>{JSON.stringify(s.betGameLimit,null,2)}</pre></details></div></Row>
     <Row label="其他必审条件" id="mustBeReviewedMemberLevelAmountList"><LayerRules entries={s.mustBeReviewedMemberLevelAmountList} levels={levels} merchants={merchants} mode="required"/></Row>
     <h4 className="wgc-section-heading">免审核的情形 <span>（满足以下任何一个条件的会员都自动免审，不填或填 0 表示不限制）</span></h4>
     <Row label="免审会员层级" id="levelIds"><Selection selected={s.levelIds} options={levels} label="免审会员层级"/></Row>

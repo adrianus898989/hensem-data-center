@@ -6,6 +6,8 @@ export const WG_UNAVAILABLE_DICTIONARIES = ["games", "banks"] as const;
 export type WGDictionaryName = typeof WG_DICTIONARIES[number];
 export type WGSelectionCode = number | string;
 export type WGUnknownSelection = WGSelectionCode | WGSelectionCode[] | null;
+export type WGGameSelection = { categoryId: number; platformId: number; gameIds: number[] };
+export type WGDiscountSelection = { optType: number; dealType: number; activeIds: number[] };
 export type WGAmount = {
   memberLevelId?: number; currency?: string; currencyName?: string;
   minAuditAmount: string; total24Amount: string; selectType: number;
@@ -15,7 +17,7 @@ export type WGAmount = {
 export type WGCondition = {
   status?: boolean; value?: number; excludeNoWallet?: boolean; excludeThirdPartyWallet?: boolean;
   day?: number; multiple?: number; ratio?: number; difference?: number; severalTimes?: number;
-  severalHours?: number; specifiedDiscount?: WGSelectionCode[]; amount?: number;
+  severalHours?: number; specifiedDiscount?: WGSelectionCode[] | WGDiscountSelection[]; amount?: number;
 };
 export type WGConfigSetting = {
   exemptSwitch: number; unavoidableCauseRemarkSwitch: number;
@@ -25,7 +27,7 @@ export type WGConfigSetting = {
   exemptAmountList: WGAmount[]; otherConditionV2: Record<string, WGCondition | WGUnknownSelection>;
   PIXCondition: WGSelectionCode[]; exemptMemberLevelAmount: WGAmount[];
   mustBeReviewedAmountList: WGAmount[]; mustBeReviewedMemberLevelAmountList: WGAmount[];
-  reviewBankCodeList: WGUnknownSelection; betGameLimit: { games: WGUnknownSelection; days: number };
+  reviewBankCodeList: WGUnknownSelection; betGameLimit: { games: WGUnknownSelection | WGGameSelection[]; days: number };
 };
 export type WGConfigDictionaries = {
   levels: Array<{ id: number; level_id: number; name: string }>;
@@ -88,6 +90,24 @@ function selection(value: unknown, path: string, arrayOnly = false): void {
   }
 }
 function nullOnly(value: unknown, path: string): void { if (value !== null) fail(`${path}.unobserved_shape`); }
+// VN returns selected games/offers grouped by their source parents. Only these
+// two observed structures are accepted; arbitrary objects remain unsupported.
+function groupedSelection(value: unknown, path: string, parents: readonly string[], children: string, arrayOnly = false): void {
+  if (!Array.isArray(value) || !value.some(item => item !== null && typeof item === "object")) {
+    selection(value, path, arrayOnly); return;
+  }
+  const rows = list(value, 2000, path), seen = new Set<string>();
+  let nodes = rows.length;
+  for (const item of rows) {
+    const row = object(item, path); keys(row, [...parents, children], path);
+    for (const parent of parents) id(row[parent], `${path}.${parent}`);
+    const selected = ids(row[children], `${path}.${children}`);
+    const key = JSON.stringify(parents.map(parent => row[parent]));
+    if (seen.has(key)) fail(`${path}.duplicate`);
+    seen.add(key); nodes += selected.length;
+  }
+  if (nodes > 5000) fail(`${path}.tree_size`);
+}
 function byteLimit(value: unknown): void {
   let encoded: string;
   try { encoded = JSON.stringify(value); } catch { fail("json"); }
@@ -147,7 +167,7 @@ function setting(value: unknown, path: string): void {
   for (const key of ["exemptAmountList", "mustBeReviewedAmountList"]) amountRows(current[key], false, `${path}.${key}`);
   for (const key of ["exemptMemberLevelAmount", "mustBeReviewedMemberLevelAmountList"]) amountRows(current[key], true, `${path}.${key}`);
   const game = object(current.betGameLimit, `${path}.betGameLimit`);
-  keys(game, ["games", "days"], `${path}.betGameLimit`); selection(game.games, `${path}.betGameLimit.games`); number(game.days, `${path}.betGameLimit.days`);
+  keys(game, ["games", "days"], `${path}.betGameLimit`); groupedSelection(game.games, `${path}.betGameLimit.games`, ["categoryId", "platformId"], "gameIds"); number(game.days, `${path}.betGameLimit.days`);
   const rules = object(current.otherConditionV2, `${path}.otherConditionV2`);
   keys(rules, Object.keys(RULE_FIELDS), `${path}.otherConditionV2`);
   for (const [key, fields] of Object.entries(RULE_FIELDS)) {
@@ -157,7 +177,7 @@ function setting(value: unknown, path: string): void {
     for (const field of fields) {
       if (["status", "excludeNoWallet", "excludeThirdPartyWallet"].includes(field)) {
         if (typeof rule[field] !== "boolean") fail(`${rulePath}.${field}`);
-      } else if (field === "specifiedDiscount") selection(rule[field], `${rulePath}.${field}`, true);
+      } else if (field === "specifiedDiscount") groupedSelection(rule[field], `${rulePath}.${field}`, ["optType", "dealType"], "activeIds", true);
       else number(rule[field], `${rulePath}.${field}`);
     }
   }
