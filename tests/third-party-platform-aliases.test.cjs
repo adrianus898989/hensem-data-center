@@ -9,6 +9,7 @@ const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 const { loadTs, root } = require('./load-typescript.cjs');
 const helper = loadTs(path.join(root, 'src/lib/thirdPartyPlatform.ts'));
+const countryHelper = loadTs(path.join(root, 'src/lib/platformDisplayCountry.ts'));
 const names = loadTs(path.join(root, 'src/lib/thirdPartyNameMap.ts'));
 const text = fs.readFileSync(path.join(root, 'src/components/ThirdPartyVolumeDashboard.tsx'), 'utf8');
 const source = ts.createSourceFile('ThirdPartyVolumeDashboard.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -28,7 +29,7 @@ function compile(code) {
 function functions(search = '') {
   const selected = source.statements.filter(node => ts.isFunctionDeclaration(node) && functionNames.includes(node.name?.text));
   let state = 0;
-  const dependencies = { ...helper, ...names, exports: {}, ALL_USDT_COUNTRY_PAGE: '所有国家USDT', useMemo: callback => callback(), useEffect: () => {},
+  const dependencies = { ...helper, ...countryHelper, ...names, exports: {}, ALL_USDT_COUNTRY_PAGE: '所有国家USDT', useMemo: callback => callback(), useEffect: () => {},
     useRef: () => ({ current: null }), useState: initial => [state++ === 0 ? true : search, () => {}],
     require: name => { assert.equal(name, 'react/jsx-runtime'); return require(name); } };
   return new Function(...Object.keys(dependencies), compile(selected.map(node => node.getText(source)).join('\n'))
@@ -58,7 +59,7 @@ const rates = [{ country: '巴西', platform: '43R' }, { country: '巴西', plat
   { country: '越南', platform: 'VN_RATE_ONLY' }];
 function pipeline({ input = data(), platforms = [], country = '巴西', statusRows = rates } = {}) {
   const api = functions();
-  const context = { ...api, ...helper, payload: { rows: input }, ratePayload: { platformStatuses: statusRows },
+  const context = { ...api, ...helper, ...countryHelper, payload: { rows: input }, ratePayload: { platformStatuses: statusRows },
     useMemo: callback => callback(), mainTab: 'country', activeCountryPage: country, country: '', effectiveCountryFilter: country,
     optionCountryFilter: country, countrySelections: [], appliedCountrySelections: [], platformSelections: platforms,
     appliedPlatformSelections: platforms, appliedChannel: '', appliedDirection: '', appliedChannelTypeSelections: [] };
@@ -255,4 +256,32 @@ test('new POPKKK canonicalization never loses numeric/status fields when joining
     assert.equal(view.filteredBaseNoDate.reduce((sum, row) => sum + row[field], 0), input.reduce((sum, row) => sum + row[field], 0));
   assert.equal(view.sumRows(view.filteredBaseNoDate).amount, 1000);
   assert.equal(view.sumRows(view.filteredBaseNoDate).count, 30);
+});
+
+test('actual Brazil and Panghu volume panes partition historical rows before options and filters', () => {
+  const input=[row('g1','776F',100,10),row('g2','776F',200,20,{country:'胖虎巴西',date:'2026-09-09'}),
+    row('g3','POPNOV',300,30,{country:'胖虎巴西'}),row('g4','POPFEZ',400,40,{country:'胖虎巴西'}),
+    row('g5','POPCRA',500,50),row('g6','776F',600,60,{country:'越南'})];
+  const statusRows=[{country:'巴西',platform:'776F'},{country:'胖虎巴西',platform:'POPNOV'},
+    {country:'胖虎巴西',platform:'POPFEZ'},{country:'巴西',platform:'POPCRA'}];
+  const before=structuredClone({input,statusRows});
+  for(const [country,expectedIds,expectedPlatforms] of [
+    ['胖虎巴西',['g1','g2'],['776F']],['巴西',['g3','g4','g5'],['POPCRA','POPFEZ','POPNOV']],['越南',['g6'],['776F']],
+  ]) {
+    const result=pipeline({input,statusRows,country});
+    assert.deepEqual(result.filteredBaseNoDate.map(r=>r.id).sort(),expectedIds);
+    assert.deepEqual([...result.platforms].sort(),expectedPlatforms);
+    const expected=input.filter(r=>expectedIds.includes(r.id));
+    for(const key of ['amount','count','successCount','failedCount'])
+      assert.equal(result.filteredBaseNoDate.reduce((sum,r)=>sum+r[key],0),expected.reduce((sum,r)=>sum+r[key],0));
+  }
+  assert.deepEqual({input,statusRows},before);
+});
+
+test('actual configured-only 776F option belongs to Panghu without inventing a volume record',()=>{
+  const input=[row('g1','SSS55',75,3)],statusRows=[{country:'巴西',platform:'776F'},{country:'胖虎巴西',platform:'POPNOV'}];
+  const panghu=pipeline({input,statusRows,country:'胖虎巴西'}),brazil=pipeline({input,statusRows,country:'巴西'});
+  assert.deepEqual(panghu.platforms,['776F']); assert.equal(panghu.filteredBaseNoDate.length,0);
+  assert.ok(brazil.platforms.includes('POPNOV')); assert.ok(!brazil.platforms.includes('776F'));
+  assert.equal(brazil.filteredBaseNoDate.length,1); assert.equal(brazil.filteredBaseNoDate[0].amount,75);
 });

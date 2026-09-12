@@ -18,18 +18,18 @@ const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.
 new Function('require','exports',compiled)(name=>name.endsWith('.css')?{}:name==='../lib/pandaConfigOptionCatalog.json'?require('../src/lib/pandaConfigOptionCatalog.json'):require(name),exportsObject);
 const render=(config,props={})=>renderToStaticMarkup(React.createElement(exportsObject.default,{configuration:config,countryCode:'BR',platform:'TEST',...props}));
 
-test('Panda registered targets partition 31 Panghu / 22 Brazil / 1 Philippines without source mutation',()=>{
+test('Panda registered targets partition 29 Panghu / 24 Brazil / 1 Philippines without source mutation',()=>{
   const before=JSON.stringify(targets);
   const counts={};
   for(const target of targets){const key=configDisplayGroup(target,'PANDA').key;counts[key]=(counts[key]||0)+1;}
-  assert.deepEqual(counts,{BR_PANGHU:31,BR:22,PH:1});
+  assert.deepEqual(counts,{BR_PANGHU:29,BR:24,PH:1});
   assert.equal(JSON.stringify(targets),before);
   assert.equal(targets.length,54);
 });
 test('Known Panghu aliases stay separate; ordinary Brazil, other countries, and AR stay unchanged',()=>{
   const target=platform=>({country_code:'BR',country_name:'巴西',platform});
-  for(const label of ['VIP345','FF555','5v555','27ff','222o','POPCRA','POPNOV','POPFEZ','222VIP','56L'])assert.deepEqual(configDisplayGroup(target(label),'PANDA'),{key:'BR_PANGHU',name:'胖虎巴西'});
-  for(const label of ['SSS55','43R','776F','PLAYER BR','VIP345-extra'])assert.equal(configDisplayGroup(target(label),'PANDA').key,'BR');
+  for(const label of ['VIP345','FF555','5v555','27ff','222o','776F','222VIP','56L'])assert.deepEqual(configDisplayGroup(target(label),'PANDA'),{key:'BR_PANGHU',name:'胖虎巴西'});
+  for(const label of ['SSS55','43R','POPCRA','POPNOV','POPFEZ','PLAYER BR','VIP345-extra'])assert.equal(configDisplayGroup(target(label),'PANDA').key,'BR');
   assert.deepEqual(configDisplayGroup(target('VIP345'),'AR'),{key:'BR',name:'巴西'});
   assert.equal(configDisplayGroup({...target('VIP345'),country_code:'PH'},'PANDA').key,'PH');
 });

@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { listAutoWithdrawNotes, saveAutoWithdrawNote, type AutoWithdrawNote } from "@/lib/autoWithdrawNotesClient";
 import { hasDashboardPermission } from "@/lib/dashboardAuthClient";
 import { useDashboardAuth } from "./DashboardAuthGate";
+import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
 
 type NoteTarget = { country: string; platform: string; date: string };
 type NotesContextValue = {
@@ -18,8 +19,36 @@ type NotesContextValue = {
 };
 
 const NotesContext = createContext<NotesContextValue | null>(null);
-const noteMatches = (note: AutoWithdrawNote, target: NoteTarget) =>
-  note.data_date === target.date && note.country === target.country && note.platform === target.platform;
+function sameDisplayPlatform(country: string, platform: string, targetCountry: string, targetPlatform: string) {
+  return platform === targetPlatform
+    && platformDisplayCountry(country, platform) === platformDisplayCountry(targetCountry, targetPlatform);
+}
+
+// Display aliases never rewrite stored note identities. If both historical
+// country keys exist on one day, prefer the canonical key, then latest update.
+export function autoWithdrawDisplayNotes(notes: readonly AutoWithdrawNote[], country: string, platform: string): AutoWithdrawNote[] {
+  const canonical = platformDisplayCountry(country, platform);
+  const candidates = notes.filter((note) => sameDisplayPlatform(note.country, note.platform, country, platform))
+    .sort((a, b) => b.data_date.localeCompare(a.data_date)
+      || Number(b.country === canonical) - Number(a.country === canonical)
+      || b.updated_at.localeCompare(a.updated_at)
+      || a.country.localeCompare(b.country));
+  const days = new Set<string>();
+  return candidates.filter((note) => {
+    if (days.has(note.data_date)) return false;
+    days.add(note.data_date);
+    return true;
+  });
+}
+
+export function findAutoWithdrawDisplayNote(notes: readonly AutoWithdrawNote[], target: NoteTarget) {
+  return autoWithdrawDisplayNotes(notes, target.country, target.platform).find((note) => note.data_date === target.date);
+}
+
+export function autoWithdrawNoteSaveTarget(notes: readonly AutoWithdrawNote[], target: NoteTarget): NoteTarget {
+  const existing = findAutoWithdrawDisplayNote(notes, target);
+  return existing ? { ...target, country: existing.country } : target;
+}
 
 function noteTime(value: string) {
   const parsed = new Date(value);
@@ -92,7 +121,7 @@ export function AutoWithdrawNotesProvider({ startDate, endDate, availableRows, c
   }, [savedMessage]);
 
   function availableDates(country: string, platform: string) {
-    return Array.from(new Set(availableRows.filter((row) => row.country === country && row.platform === platform && row.date >= startDate && row.date <= endDate).map((row) => row.date))).sort((a, b) => b.localeCompare(a));
+    return Array.from(new Set(availableRows.filter((row) => sameDisplayPlatform(row.country, row.platform, country, platform) && row.date >= startDate && row.date <= endDate).map((row) => row.date))).sort((a, b) => b.localeCompare(a));
   }
 
   function closeEditor() {
@@ -111,7 +140,7 @@ export function AutoWithdrawNotesProvider({ startDate, endDate, availableRows, c
   function selectDate(date: string) {
     if (!target || !date || date < startDate || date > endDate) return;
     const next = { ...target, date };
-    const reason = notes.find((note) => noteMatches(note, next))?.reason || "";
+    const reason = findAutoWithdrawDisplayNote(notes, next)?.reason || "";
     setTarget(next);
     setDraft(reason);
     setOriginal(reason);
@@ -128,10 +157,9 @@ export function AutoWithdrawNotesProvider({ startDate, endDate, availableRows, c
   function openEditor(country: string, platform: string) {
     if (loading || error) return;
     openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const latest = notes.filter((note) => note.country === country && note.platform === platform && note.reason.trim())
-      .sort((a, b) => b.data_date.localeCompare(a.data_date))[0];
+    const latest = autoWithdrawDisplayNotes(notes, country, platform).find((note) => note.reason.trim());
     const next = { country, platform, date: singleDay ? startDate : latest?.data_date || availableDates(country, platform)[0] || endDate };
-    const reason = notes.find((note) => noteMatches(note, next))?.reason || "";
+    const reason = findAutoWithdrawDisplayNote(notes, next)?.reason || "";
     setTarget(next);
     setOriginal(reason);
     setDraft(reason);
@@ -164,11 +192,14 @@ export function AutoWithdrawNotesProvider({ startDate, endDate, availableRows, c
     setSaving(true);
     setSaveError("");
     try {
-      const result = await saveAutoWithdrawNote(session, { ...target, reason: draft.trim() });
+      const storageTarget = autoWithdrawNoteSaveTarget(notes, target);
+      const result = await saveAutoWithdrawNote(session, { ...storageTarget, reason: draft.trim() });
       requestVersion.current += 1;
       setLoading(false);
       setError("");
-      setNotes((previous) => [...previous.filter((note) => !noteMatches(note, target)), result]);
+      // Replace only the saved database key, not other legacy alias records.
+      setNotes((previous) => [...previous.filter((note) => !(note.data_date === result.data_date
+        && note.country === result.country && note.platform === result.platform)), result]);
       setSavedMessage(`${target.date} · ${target.platform} 的备注已${result.reason.trim() ? "保存" : "清空"}`);
       setOriginal(result.reason);
       setDraft(result.reason);
@@ -182,9 +213,8 @@ export function AutoWithdrawNotesProvider({ startDate, endDate, availableRows, c
     }
   }
 
-  const platformNotes = target ? notes.filter((note) => note.country === target.country && note.platform === target.platform && note.reason.trim())
-    .sort((a, b) => b.data_date.localeCompare(a.data_date)) : [];
-  const activeNote = target ? notes.find((note) => noteMatches(note, target)) : undefined;
+  const platformNotes = target ? autoWithdrawDisplayNotes(notes, target.country, target.platform).filter((note) => note.reason.trim()) : [];
+  const activeNote = target ? findAutoWithdrawDisplayNote(notes, target) : undefined;
   const dateOptions = target ? Array.from(new Set([...availableDates(target.country, target.platform), ...platformNotes.map((note) => note.data_date), target.date])).sort((a, b) => b.localeCompare(a)) : [];
 
   return (
@@ -255,8 +285,7 @@ export function AutoWithdrawReasonCell({ country, platform }: { country: string;
   const context = useContext(NotesContext);
   if (!context) return null;
   const { notes, singleDay, loading, error, canWrite, open } = context;
-  const matching = notes.filter((note) => note.country === country && note.platform === platform && note.reason.trim())
-    .sort((a, b) => b.data_date.localeCompare(a.data_date));
+  const matching = autoWithdrawDisplayNotes(notes, country, platform).filter((note) => note.reason.trim());
   const latest = matching[0];
   if (loading) return <span className="auto-note-placeholder">读取中…</span>;
   if (error) return <span className="auto-note-placeholder">备注读取失败</span>;

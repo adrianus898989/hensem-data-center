@@ -1,6 +1,7 @@
 import type { ThirdPartyVolumePayload, ThirdPartyVolumeRow } from "./types";
 import { normalizeCell, toNumber } from "./format";
 import { canonicalThirdPartyName, inferThirdPartyChannelType, isIgnoredThirdPartyText, isLikelyThirdPartyCodeOnly } from "./thirdPartyNameMap";
+import { platformDisplayCountry } from "./platformDisplayCountry";
 
 type Values = string[][];
 
@@ -103,8 +104,8 @@ function normalizeSouthAmericaRow(country: string, platform: string, system: str
 function normalizeSpecialPlatformCountry(country: string, platform: string, sheetName: string, title: string, system: string): string {
   const text = `${platform} ${sheetName} ${title} ${system}`.toLowerCase();
   // 234T 是胖虎巴西盘口，不能混到普通巴西盘口。
-  if (/\b234\s*t\b|234t|胖虎巴西/.test(text)) return "胖虎巴西";
-  return country;
+  if (/\b234\s*t\b|234t|胖虎巴西/.test(text)) return platformDisplayCountry("胖虎巴西", platform);
+  return platformDisplayCountry(country, platform);
 }
 
 function normalizeSouthAmericaChannelType(country: string, mapCode: string, typeText: string, rawChannel: string, channel: string): string {
@@ -713,7 +714,8 @@ export function normalizeThirdPartyVolumePayload(payload: ThirdPartyVolumePayloa
     return {
       ...row,
       channel,
-      channelType
+      channelType,
+      country: platformDisplayCountry(row.country, row.platform)
     };
   });
 

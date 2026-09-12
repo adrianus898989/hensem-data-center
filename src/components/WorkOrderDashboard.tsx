@@ -9,6 +9,14 @@ import CustomerServiceDashboard from "./CustomerServiceDashboard";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { monthRangeSignature, monthlyApiUrl, rangeIncludesCurrentMonthClient } from "@/lib/monthRange";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload } from "@/lib/monthlyStatusClient";
+import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
+
+export function workOrderDisplayRows(rows: readonly WorkOrderRow[]): WorkOrderRow[] {
+  return rows.map((row) => {
+    const country = platformDisplayCountry(row.country, row.platform);
+    return country === row.country ? row : { ...row, country };
+  });
+}
 
 type LoadState = "loading" | "ready" | "error";
 type MainTab = "orders" | "operators" | "customer";
@@ -948,7 +956,9 @@ export default function WorkOrderDashboard() {
     setDraftFilters((prev) => prev.startDate || prev.endDate ? prev : { ...prev, startDate: defaultDate, endDate: defaultDate });
   }, [payload, allDates]);
 
-  const allRows = payload?.rows || [];
+  // Display projection also covers archived and last-good local-cache payloads.
+  // The stored rows, IDs and source/account-type lookup keys stay unchanged.
+  const allRows = useMemo(() => workOrderDisplayRows(payload?.rows || []), [payload]);
   const countries = useMemo(() => sortWorkCountries(allRows.map((r) => r.country)), [allRows]);
   const platformOptions = useMemo(() => uniq(allRows.filter((r) => matchesSelection(r.country, draftFilters.countries)).map((r) => r.platform)), [allRows, draftFilters.countries]);
   const typeOptions = useMemo(() => {

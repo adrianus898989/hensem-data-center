@@ -11,6 +11,7 @@ import type {
 } from "@/lib/types";
 import { formatDuration, parseDurationToSeconds } from "@/lib/format";
 import { aggregateWithdrawRows } from "@/lib/parseAutoWithdraw";
+import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
 
 const PAGE_SIZE = 1000;
 
@@ -206,7 +207,7 @@ function mapVolume(row: DbVolumeRow): ThirdPartyVolumeRow {
     sheetName: String(row.sheet_name || ""),
     sourceRow: Number(row.source_row || 0),
     date: String(row.data_date || ""),
-    country: String(row.country || ""),
+    country: platformDisplayCountry(String(row.country || ""), String(row.platform || "")),
     platform: String(row.platform || ""),
     channel: String(row.channel || ""),
     rawChannel: String(row.raw_channel || ""),
@@ -334,7 +335,7 @@ function mapDbDaily(row: DbAutoWithdrawRow): DailyWithdrawRow {
   const manualCount = row.manual_count == null ? Math.max(total - autoCount, 0) : Number(row.manual_count);
   const avgSeconds = Number(row.avg_seconds || 0) || parseDurationToSeconds(String(row.avg_time_text || ""));
   return {
-    country: String(row.country || ""),
+    country: platformDisplayCountry(String(row.country || ""), String(row.platform || "")),
     platform: String(row.platform || ""),
     total,
     success,
@@ -357,7 +358,7 @@ function mapDbDaily(row: DbAutoWithdrawRow): DailyWithdrawRow {
 function mapDbOperator(row: DbOperatorRow): OperatorRow {
   const avgSeconds = Number(row.avg_seconds || 0) || parseDurationToSeconds(String(row.avg_time_text || ""));
   return {
-    country: String(row.country || ""),
+    country: platformDisplayCountry(String(row.country || ""), String(row.platform || "")),
     date: String(row.data_date || ""),
     platform: String(row.platform || ""),
     account: String(row.account || ""),
@@ -475,15 +476,20 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   const country = String(countryInput || "").trim();
   const queryStart = previousDate(start);
 
-  const result = await callRpc<any>("dashboard_third_party_volume_fast_v2", {
+  // Legacy snapshots can hold the right platform in the wrong Brazil group.
+  // Read only the three exact source labels with the same user's RLS token,
+  // then project and filter. Filtering one stored country first would omit it.
+  const brazilPage = ["BR", "巴西", "胖虎巴西"].includes(country);
+  const sourceCountries = brazilPage ? ["巴西", "胖虎巴西", "BR"] : [country || null];
+  const results = await Promise.all(sourceCountries.map((sourceCountry) => callRpc<any>("dashboard_third_party_volume_fast_v2", {
     p_start: start,
     p_end: end,
-    p_country: country || null
-  }, token);
-
-  const dbRows: DbVolumeRow[] = Array.isArray(result?.rows) ? result.rows : [];
-  const rows = dbRows.map(mapVolume);
-  const updatedAt = String(result?.latestWriteAt || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString());
+    p_country: sourceCountry
+  }, token)));
+  const dbRows: DbVolumeRow[] = results.flatMap((result) => Array.isArray(result?.rows) ? result.rows : []);
+  const displayCountry = country === "BR" ? "巴西" : country;
+  const rows = dbRows.map(mapVolume).filter((row) => !brazilPage || row.country === displayCountry || (displayCountry === "巴西" && row.country === "BR"));
+  const updatedAt = String(results.map((result) => result?.latestWriteAt).filter(Boolean).sort().pop() || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString());
   const sheets = Array.from(new Set(rows.map((row) => row.sheetName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
 
   return {
@@ -496,11 +502,11 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
       message: `Supabase 高速查询：${queryStart} 至 ${end}${country ? ` · ${country}` : ""}；开始日前 1 天仅用于 v239 昨日比较。`,
       dataSource: "supabase" as any,
       queryCountry: country,
-      rowCount: Number(result?.rowCount || rows.length),
-      dataDays: Number(result?.dataDays || 0),
-      countryCount: Number(result?.countryCount || 0),
-      platformCount: Number(result?.platformCount || 0),
-      channelCount: Number(result?.channelCount || 0),
+      rowCount: rows.length,
+      dataDays: new Set(rows.map((row) => row.date)).size,
+      countryCount: new Set(rows.map((row) => row.country)).size,
+      platformCount: new Set(rows.map((row) => row.platform)).size,
+      channelCount: new Set(rows.map((row) => row.channel)).size,
       fastRpc: true
     } as any,
     rows,
@@ -606,7 +612,7 @@ function mapStatus(row: DbStatusRow): ThirdPartyPlatformStatusRow {
   return {
     id: String(row.id || ""),
     sheetName: String(row.sheet_name || ""),
-    country: String(row.country || ""),
+    country: platformDisplayCountry(String(row.country || ""), String(row.platform || "")),
     platform: String(row.platform || ""),
     thirdParty: String(row.third_party || ""),
     status: String(row.status || ""),
