@@ -160,6 +160,62 @@
 .admin-account-create-panel .admin-permission-row small { font-size: 10px; line-height: 1.4; }
 .admin-account-create-panel .admin-primary-btn { width: auto; min-width: 140px; margin-top: 12px; padding: 9px 16px; border-radius: 7px; font-size: 12px; }
 
+/* Account-specific grants use the same permission model, presented by module. */
+.admin-permission-directory .admin-account-directory-head h3 { font-size: 17px; }
+.admin-permission-overview { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 24px; padding: 11px 0 15px; color: #6d82a0; font-size: 12px; }
+.admin-permission-overview > div { display: flex; align-items: baseline; gap: 6px; }
+.admin-permission-overview b { color: #29456b; font-size: 18px; font-variant-numeric: tabular-nums; }
+.admin-permission-overview > span { margin-left: auto; font-size: 11px; }
+.admin-permission-table-meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0 9px; color: #7489a5; font-size: 11px; }
+.admin-permission-legend { display: flex; gap: 16px; }
+.admin-permission-legend > span { display: inline-flex; align-items: center; gap: 5px; }
+.admin-permission-legend > span::before { content: ""; width: 7px; height: 7px; border-radius: 2px; background: #b8c4d5; }
+.admin-permission-legend > .all::before { background: #52ab83; }
+.admin-permission-legend > .partial::before { background: #6999ed; }
+.admin-permission-matrix { min-width: 760px; table-layout: fixed; }
+.admin-permission-matrix > thead > tr > th { background: #eaf1f7; color: #617b9c; padding: 12px 14px; }
+.admin-permission-matrix > thead > tr > th:first-child { width: 205px; border-radius: 8px 0 0 0; }
+.admin-permission-matrix > thead > tr > th:last-child { width: 140px; border-radius: 0 8px 0 0; }
+.admin-permission-matrix > tbody > tr > td,
+.admin-permission-matrix > tbody > tr > th { height: 104px; padding: 16px 14px; border-bottom-color: #e2eaf5; }
+.admin-permission-matrix > tbody > tr:nth-child(even):not(.admin-account-editor-row) > td,
+.admin-permission-matrix > tbody > tr:nth-child(even):not(.admin-account-editor-row) > th { background: #f9fbff; }
+.admin-matrix-identity { min-width: 0; text-align: left; }
+.admin-matrix-identity > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.admin-matrix-identity strong { color: #294366; font-size: 14px; overflow-wrap: anywhere; }
+.admin-matrix-protected { flex-shrink: 0; color: #268262; background: #e8f6ef; padding: 3px 7px; border-radius: 12px; font-size: 10px; }
+.admin-matrix-identity-meta { display: flex; gap: 7px; margin: 8px 0 5px; }
+.admin-matrix-identity > small { color: #7b90ad; font-weight: 400; font-size: 10px; }
+.admin-module-permission-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.admin-module-permission-chip { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 31px; width: 100%; padding: 6px 9px; border: 1px solid #e0e7f0; border-radius: 4px; background: #f2f5f9; color: #6b809a; text-align: left; cursor: pointer; font: inherit; font-size: 11px; line-height: 1.4; }
+.admin-module-permission-chip.module-management { grid-column: span 2; }
+.admin-module-permission-chip.all { border-color: #cde9dd; background: #edf8f2; color: #337e61; }
+.admin-module-permission-chip.partial { border-color: #d4e2ff; background: #edf3ff; color: #3b65a9; }
+.admin-module-permission-chip:hover { box-shadow: 0 0 0 1px #a8c4ef; }
+.admin-module-permission-chip span { min-width: 0; }
+.admin-module-permission-chip b { white-space: nowrap; font-size: 12px; font-variant-numeric: tabular-nums; }
+.admin-module-permission-chip small { font: inherit; font-size: 10px; }
+.admin-matrix-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.admin-matrix-total { color: #5277b0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.admin-matrix-total small { font-size: 11px; }
+.admin-matrix-configure { min-height: 32px; padding: 6px 11px; border: 1px solid #ccdcff; border-radius: 7px; background: #f0f5ff; color: #2d60ce; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.admin-matrix-configure:hover { background: #e5edff; border-color: #97b7f8; }
+.admin-matrix-account-settings { display: inline-flex; align-items: center; gap: 6px; border: 0; padding: 2px 0; background: transparent; color: #7589a8; font-size: 10px; cursor: pointer; }
+.admin-matrix-account-settings:hover { color: #2d60ce; }
+@media (max-width: 1100px) {
+  .admin-permission-matrix > thead > tr > th:first-child { width: 165px; }
+  .admin-permission-matrix > thead > tr > th:last-child { width: 125px; }
+  .admin-module-permission-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-module-permission-chip.module-management { grid-column: span 2; }
+  .admin-permission-overview > span { flex-basis: 100%; margin-left: 0; }
+}
+@media (max-width: 600px) {
+  .admin-permission-directory .admin-account-directory-head { flex-wrap: wrap; }
+  .admin-permission-directory .admin-account-directory-head p { max-width: none; }
+  .admin-permission-overview { gap: 9px 15px; }
+  .admin-permission-table-meta { align-items: flex-start; flex-wrap: wrap; }
+}
+
 @media (max-width: 850px) {
   .admin-users-compact .admin-user-search-toolbar { grid-template-columns: minmax(0, 1fr) 130px 110px; }
   .admin-account-create-panel .admin-permission-list { grid-template-columns: 1fr; }
