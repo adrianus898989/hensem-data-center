@@ -36,9 +36,9 @@ function Selection({selected,options,label}:{selected:unknown;options:Option[];l
     {options.length===0&&<small className="wgc-unknown">名称字典未提供或为空。</small>}
   </div>;
 }
-function Switch({value,label,off,on}:{value:unknown;label:string;off:string;on:string}) {
-  const known=value===0||value===1;
-  return <div className="wgc-radios" role="group" aria-label={label+"（只读）"}>{[{value:0,label:off},{value:1,label:on}].map(option=><label key={option.value} className={value===option.value?"selected":""}>{known?<input type="radio" checked={value===option.value} disabled/>:<span className="wgc-unknown-mark">?</span>}{option.label}</label>)}{!known&&<small className="wgc-unknown">当前原值：{literal(value)}</small>}</div>;
+function Switch({value,label,off,on,mappingVerified=true}:{value:unknown;label:string;off:string;on:string;mappingVerified?:boolean}) {
+  const known=mappingVerified&&(value===0||value===1);
+  return <div className="wgc-radios" role="group" aria-label={label+"（只读）"}>{[{value:0,label:off},{value:1,label:on}].map(option=><label key={option.value} className={known&&value===option.value?"selected":""}>{known?<input type="radio" checked={value===option.value} disabled/>:<span className="wgc-unknown-mark" role="img" aria-label="开关选中状态未核实">?</span>}{option.label}</label>)}{!known&&<small className="wgc-unknown">当前原值：{literal(value)}；开关映射待核实</small>}</div>;
 }
 function Registration({value,required}:{value:unknown;required:boolean}) {
   // Only 0 has a verified source enum. The screenshot confirms the remaining
@@ -97,7 +97,7 @@ export function WGBrandSettings({setting,configuration}:{setting:WGConfigSetting
   const pixEmpty=Array.isArray(s.PIXCondition)&&s.PIXCondition.length===0;
   return <div className="wgc-brand-settings">
     <Row label="免审出款开关" id="exemptSwitch"><Switch value={s.exemptSwitch} label="免审出款开关" off="关闭免审自动出款" on="开启免审自动出款"/></Row>
-    <Row label="不免审原因备注开关" id="unavoidableCauseRemarkSwitch"><Switch value={s.unavoidableCauseRemarkSwitch} label="不免审原因备注开关" off="关闭不免审原因订单备注" on="开启不免审原因订单备注"/></Row>
+    <Row label="不免审原因备注开关" id="unavoidableCauseRemarkSwitch"><Switch value={s.unavoidableCauseRemarkSwitch} label="不免审原因备注开关" off="关闭不免审原因订单备注" on="开启不免审原因订单备注" mappingVerified={false}/></Row>
     <h4 className="wgc-section-heading">必须审核的情形 <span>（必审的级别高于免审，只要触发以下任意一条规则就必须审核）</span></h4>
     <Row label="必审会员层级" id="requiredLevelIds"><Selection selected={s.requiredLevelIds} options={levels} label="必审会员层级"/></Row>
     <Row label="必审会员标签" id="requiredTagIds"><Selection selected={s.requiredTagIds} options={tags} label="必审会员标签"/></Row>

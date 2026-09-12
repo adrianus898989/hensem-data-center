@@ -97,7 +97,22 @@ test('Default and each brand keep independent switches and selected lists',()=>{
       assert(match,key+':'+level.name);
       assert.equal(/checked=""/.test(match[0]),setting.requiredLevelIds.includes(level.level_id),key+':'+level.name);
     }
-    assert.match(section(html,'unavoidableCauseRemarkSwitch'),new RegExp('checked=""[^>]*\\/>'+(setting.unavoidableCauseRemarkSwitch===1?'开启':'关闭')+'不免审原因订单备注'));
+    const remark=section(html,'unavoidableCauseRemarkSwitch');
+    assert.match(remark,new RegExp('当前原值：'+setting.unavoidableCauseRemarkSwitch+'；开关映射待核实'));
+    assert.doesNotMatch(remark,/checked=""|class="selected"/);
+    assert.match(section(html,'exemptSwitch'),/checked=""[^>]*\/>开启免审自动出款/);
+  }
+});
+test('Unverified remark switch preserves every raw code without any selected-state hint; verified switch stays unchanged',()=>{
+  for(const value of [0,1,7,null]){
+    const copy=structuredClone(config);copy.settings['0'].unavoidableCauseRemarkSwitch=value;
+    const before=JSON.stringify(copy),html=brand(copy.settings['0'],copy),remark=section(html,'unavoidableCauseRemarkSwitch');
+    assert.match(remark,new RegExp('当前原值：'+JSON.stringify(value)+'；开关映射待核实'));
+    assert.equal((remark.match(/aria-label="开关选中状态未核实"/g)||[]).length,2);
+    assert.doesNotMatch(remark,/<input|class="selected"|aria-checked="true"/);
+    assert.match(remark,/关闭不免审原因订单备注/);assert.match(remark,/开启不免审原因订单备注/);
+    assert.match(section(html,'exemptSwitch'),/class="selected"><input type="radio" disabled="" checked=""\/>开启免审自动出款/);
+    assert.equal(JSON.stringify(copy),before);
   }
 });
 test('Layer zero means 全部层级 and is independent of global currency values; no currency scaling',()=>{
@@ -191,5 +206,8 @@ test('Optional LOCAL safe HAR projection validates and renders without mutation'
   for(const [key,setting] of Object.entries(local.settings)){
     const markup=brand(setting,local);assert.match(markup,/必审会员层级/);
     for(const level of local.dictionaries.levels)assert(markup.includes(level.name),key+':'+level.name);
+    const remark=section(markup,'unavoidableCauseRemarkSwitch');
+    assert.match(remark,new RegExp('当前原值：'+setting.unavoidableCauseRemarkSwitch+'；开关映射待核实'));
+    assert.doesNotMatch(remark,/<input|class="selected"/);
   }
 });
