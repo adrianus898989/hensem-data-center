@@ -5,6 +5,7 @@ import {configLocalDay,fetchConfigIndex,fetchConfigSnapshot,type ConfigTarget,ty
 import {useDashboardAuth} from "./DashboardAuthGate";
 import {fetchPandaConfigIndex,fetchPandaConfigSnapshot,type PandaConfigSnapshot,type PandaConfiguration} from "@/lib/pandaAutoWithdrawConfigClient";
 import PandaConfigSheet from "./PandaConfigSheet";
+import WGConfigBrowser from "./WGConfigBrowser";
 import {configDisplayGroup} from "@/lib/pandaConfigDisplayGroup";
 import "./AutoWithdrawConfig.css";
 
@@ -60,8 +61,8 @@ function PlatformConfig({target,revision,system}:{target:ConfigTarget;revision:n
   </section>;
 }
 export default function AutoWithdrawConfig() {
-  const [system,setSystem]=useState<"AR"|"PANDA">("AR");
-  return <><nav className="awc-system-selector" aria-label="配置来源系统"><button type="button" className={system==="AR"?"active":""} aria-pressed={system==="AR"} onClick={()=>setSystem("AR")}>AR 系统</button><button type="button" className={system==="PANDA"?"active":""} aria-pressed={system==="PANDA"} onClick={()=>setSystem("PANDA")}>熊猫系统</button></nav><ConfigBrowser key={system} system={system}/></>;
+  const [system,setSystem]=useState<"AR"|"PANDA"|"WG">("AR");
+  return <><nav className="awc-system-selector" aria-label="配置来源系统"><button type="button" className={system==="AR"?"active":""} aria-pressed={system==="AR"} onClick={()=>setSystem("AR")}>AR 系统</button><button type="button" className={system==="PANDA"?"active":""} aria-pressed={system==="PANDA"} onClick={()=>setSystem("PANDA")}>熊猫系统</button><button type="button" className={system==="WG"?"active":""} aria-pressed={system==="WG"} onClick={()=>setSystem("WG")}>WG 系统</button></nav>{system==="WG"?<WGConfigBrowser/>:<ConfigBrowser key={system} system={system}/>}</>;
 }
 function ConfigBrowser({system}:{system:"AR"|"PANDA"}) {
   const {session,profile}=useDashboardAuth();
