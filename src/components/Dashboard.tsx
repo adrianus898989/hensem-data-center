@@ -19,6 +19,9 @@ import { AutoWithdrawRateComparison } from "./AutoWithdrawRateComparison";
 import AutoWithdrawConfig from "./AutoWithdrawConfig";
 import { autoWithdrawDisplayPayload } from "@/lib/autoWithdrawDisplayPayload";
 import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
+import { dashboardBusinessFetch, isDashboardDataDenied, readDashboardDataCache, writeDashboardDataCache } from "@/lib/dashboardDataClient";
+import { dashboardScopeAllows, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
+import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 type ModuleMode = "home" | "auto" | "config" | "operator" | "volume" | "work" | "admin";
@@ -866,17 +869,12 @@ function blankFilters(startDate = "", endDate = ""): FilterState {
 
 const AUTO_WITHDRAW_CACHE_KEY = "hensem:last-good:auto-withdraw:v238-current";
 
-function readAutoLocalCache(): AutoWithdrawPayload | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const text = window.localStorage.getItem(AUTO_WITHDRAW_CACHE_KEY);
-    return text ? JSON.parse(text) as AutoWithdrawPayload : null;
-  } catch { return null; }
+function readAutoLocalCache(profile:DashboardProfile|null): AutoWithdrawPayload | null {
+  return readDashboardDataCache<AutoWithdrawPayload>(AUTO_WITHDRAW_CACHE_KEY,profile);
 }
 
-function writeAutoLocalCache(payload: AutoWithdrawPayload) {
-  if (typeof window === "undefined") return;
-  try { window.localStorage.setItem(AUTO_WITHDRAW_CACHE_KEY, JSON.stringify(payload)); } catch { /* 缓存失败不影响页面 */ }
+function writeAutoLocalCache(payload: AutoWithdrawPayload,profile:DashboardProfile|null) {
+  writeDashboardDataCache(AUTO_WITHDRAW_CACHE_KEY,payload,profile);
 }
 
 type DashboardGlyphName = "home" | "cash" | "ticket" | "chart" | "settings" | "user" | "arrow";
@@ -991,23 +989,17 @@ export default function Dashboard() {
     setError("");
     try {
       const requestUrl = monthlyApiUrl("/api/auto-withdraw", requestedStart, requestedEnd, version);
-      let active = session ? await ensureDashboardSession(session) : null;
-      const read = (current: DashboardSession | null) => fetch(requestUrl, { cache: "no-store", headers: current ? { Authorization: `Bearer ${current.access_token}` } : {} });
-      let res = await read(active);
-      if (res.status === 401 && active) {
-        await res.body?.cancel();
-        active = await ensureDashboardSession(active, true);
-        res = await read(active);
-      }
+      const res = await dashboardBusinessFetch(requestUrl);
       const json = await res.json();
       if (!res.ok) throw new Error(json?.message || "读取数据失败");
       setPayload(json);
       payloadRef.current = json;
       loadedMonthSignatureRef.current = monthRangeSignature(requestedStart, requestedEnd);
-      if (rangeIncludesCurrentMonthClient(requestedStart, requestedEnd)) writeAutoLocalCache(json);
+      if (rangeIncludesCurrentMonthClient(requestedStart, requestedEnd)) writeAutoLocalCache(json,profile);
       setState("ready");
     } catch (err) {
       const message = err instanceof Error ? err.message : "读取数据失败";
+      if(isDashboardDataDenied(err)){setPayload(null);payloadRef.current=null;setError(message);setState("error");return;}
       if (silent) {
         setError(message);
         setState("ready");
@@ -1071,6 +1063,7 @@ export default function Dashboard() {
   }, [payload]);
 
   const autoCountryPanes = useMemo(() => {
+    const scope=effectiveDashboardDataScope(profile);
     const autoCountries = payload ? uniq([
       ...payload.monthlyRows.map((r) => autoCountryPaneLabelFor(r.country, r.platform)),
       ...payload.dailyRows.map((r) => autoCountryPaneLabelFor(r.country, r.platform))
@@ -1078,16 +1071,17 @@ export default function Dashboard() {
     return sortAutoPanes(uniq([
       ...DEFAULT_AUTO_COUNTRY_PANES,
       ...autoCountries
-    ]));
-  }, [payload]);
+    ])).filter(pane=>pane===NPG_PANE_LABEL ? scope.mode==="all"||scope.countries.some(key=>["CO","MX","CL"].includes(key)) : dashboardScopeAllows(scope,pane));
+  }, [payload,profile]);
 
   const operatorCountryPanes = useMemo(() => {
+    const scope=effectiveDashboardDataScope(profile);
     const operatorCountries = payload ? uniq(payload.operatorRows.map((r) => r.country)) : [];
     return sortAutoPanes(uniq([
       ...DEFAULT_AUTO_COUNTRY_PANES,
       ...operatorCountries.map(countryPaneLabelFor)
-    ]));
-  }, [payload]);
+    ])).filter(pane=>pane===NPG_PANE_LABEL ? scope.mode==="all"||scope.countries.some(key=>["CO","MX","CL"].includes(key)) : dashboardScopeAllows(scope,pane));
+  }, [payload,profile]);
 
   useEffect(() => {
     if (!autoCountryPanes.length) return;

@@ -28,6 +28,9 @@ import { formatNumber, formatPercent } from "@/lib/format";
 import { canonicalThirdPartyName, inferThirdPartyChannelType } from "@/lib/thirdPartyNameMap";
 import { canonicalThirdPartyPlatform, canonicalThirdPartyPlatformSelections, matchesThirdPartyPlatformSelection } from "@/lib/thirdPartyPlatform";
 import { platformDisplayCountry, withPlatformDisplayCountry } from "@/lib/platformDisplayCountry";
+import { dashboardBusinessFetch, isDashboardDataDenied, readDashboardDataCache, writeDashboardDataCache } from "@/lib/dashboardDataClient";
+import { dashboardScopeAllows, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
+import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload, type ClientMonthlyStatus } from "@/lib/monthlyStatusClient";
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
 import { useDashboardAuth } from "./DashboardAuthGate";
@@ -807,7 +810,7 @@ function parseConditionalRate(value: string, avgAmount = 0): number {
   return parseFeeRate(raw);
 }
 
-type RateLike = Pick<ThirdPartyRateRow, "country" | "category" | "thirdParty" | "collectFee" | "payoutFee" | "totalFee" | "collectSingleFee" | "payoutSingleFee" | "collectLimit" | "payoutLimit"> & { platform?: string; channelInfo?: string; sheetName?: string };
+type RateLike = Pick<ThirdPartyRateRow, "country" | "category" | "thirdParty" | "collectFee" | "payoutFee" | "totalFee" | "collectSingleFee" | "payoutSingleFee" | "collectLimit" | "payoutLimit"> & { platform?: string; channelInfo?: string; sheetName?: string; scopePlatformOnly?: boolean };
 
 function shouldUseTotalFeeAsRate(value: string): boolean {
   const raw = String(value || "").trim();
@@ -988,6 +991,7 @@ function mergeRateLike(oldRow: RateLike, newRow: RateLike): RateLike {
   return {
     ...oldRow,
     ...newRow,
+    scopePlatformOnly: oldRow.scopePlatformOnly || newRow.scopePlatformOnly || undefined,
     collectFee: oldRow.collectFee || newRow.collectFee,
     payoutFee: oldRow.payoutFee || newRow.payoutFee,
     totalFee: oldRow.totalFee || newRow.totalFee,
@@ -1079,7 +1083,7 @@ function expandRateNameCandidates(country: string, ...values: Array<string | und
 }
 
 function putRate(map: Map<string, RateLike>, country: string, platform: string, name: string, category: string, row: RateLike) {
-  const key = rateKey(country, platform, name, category);
+  const key = rateKey(country, platform, name, category) + (row.scopePlatformOnly ? `|||scope:${String(platform || "").trim().toUpperCase()}` : "");
   const existing = map.get(key);
   if (!existing) {
     map.set(key, row);
@@ -1133,8 +1137,9 @@ function findMatchedRate(rateMap: Map<string, RateLike>, country: string, platfo
         const key = rateKey(countryKey, platformKey, ch, typeKey);
         if (seen.has(key)) continue;
         seen.add(key);
-        const row = rateMap.get(key);
+        const row = rateMap.get(`${key}|||scope:${platformText.toUpperCase()}`) || rateMap.get(key);
         if (!row) continue;
+        if (row.scopePlatformOnly && String(row.platform || "").trim().toUpperCase() !== platformText.toUpperCase()) continue;
         let score = side ? rateSideScore(row, side) : rateScore(row);
         if (isUsdtTarget && (countryKey === "USDT通道" || countryKey === "USDT")) score += 30;
         else if (countryKey === normalizeCountryLabel(country)) score += 14;
@@ -1174,6 +1179,7 @@ function findMatchedRate(rateMap: Map<string, RateLike>, country: string, platfo
 
     let score = countryMatch.score + (side ? rateSideScore(row, side) : rateScore(row));
     const rowPlatform = normalizeMatchKey(row.platform || "");
+    if (row.scopePlatformOnly && String(row.platform || "").trim().toUpperCase() !== platformText.toUpperCase()) continue;
     if (targetPlatform && rowPlatform === targetPlatform) score += 20;
     else if (!rowPlatform) score += 4;
     else if (targetPlatform) score -= 3;
@@ -1207,7 +1213,7 @@ function findMatchedRate(rateMap: Map<string, RateLike>, country: string, platfo
   return fallbackWithFee?.row || bestAny?.row || fallbackAny?.row;
 }
 
-function buildRateMap(rates: ThirdPartyRateRow[], statuses: ThirdPartyPlatformStatusRow[] = []): Map<string, RateLike> {
+function buildRateMap(rates: ThirdPartyRateRow[], statuses: ThirdPartyPlatformStatusRow[] = [], scopedPlatformOnly = false): Map<string, RateLike> {
   const map = new Map<string, RateLike>();
 
   for (const row of rates) {
@@ -1234,6 +1240,7 @@ function buildRateMap(rates: ThirdPartyRateRow[], statuses: ThirdPartyPlatformSt
 
   for (const row of statuses) {
     const asRate: RateLike = {
+      scopePlatformOnly: scopedPlatformOnly || undefined,
       country: row.country,
       platform: row.platform,
       category: row.category || "",
@@ -1257,6 +1264,9 @@ function buildRateMap(rates: ThirdPartyRateRow[], statuses: ThirdPartyPlatformSt
         if (!isStrictSouthAmericaRateCountry(country) || !String(row.category || "").trim()) {
           putRate(map, country, row.platform, name, "", asRate);
         }
+        // Scoped accounts may use only the returned platform's own fee fields,
+        // never infer a shared national fee or borrow another platform's rate.
+        if(scopedPlatformOnly)continue;
         // 再补一个不带平台的兜底，防止量表平台名和费率表平台名细微不同。
         putRate(map, country, "", name, row.category || "", asRate);
         if (!isStrictSouthAmericaRateCountry(country) || !String(row.category || "").trim()) {
@@ -1893,24 +1903,12 @@ function volumePayloadFresh(payload: ThirdPartyVolumePayload | null | undefined,
   return Number.isFinite(time) && Date.now() - time < maxAgeMs;
 }
 
-function readLocalCache<T>(key: string): T | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const text = window.localStorage.getItem(key);
-    if (!text) return null;
-    return JSON.parse(text) as T;
-  } catch {
-    return null;
-  }
+function readLocalCache<T>(key: string,profile:DashboardProfile|null): T | null {
+  return readDashboardDataCache<T>(key,profile);
 }
 
-function writeLocalCache(key: string, payload: unknown) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify(payload));
-  } catch {
-    // localStorage 满了也不能影响页面展示
-  }
+function writeLocalCache(key: string, payload: unknown,profile:DashboardProfile|null) {
+  writeDashboardDataCache(key,payload,profile);
 }
 
 function attachClientFallbackMessage<T extends { meta?: Record<string, any> }>(payload: T, reason: string): T {
@@ -2003,7 +2001,7 @@ function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolum
 }
 
 export default function ThirdPartyVolumeDashboard() {
-  const { session } = useDashboardAuth();
+  const { session, profile } = useDashboardAuth();
   const [state, setState] = useState<LoadState>("ready");
   const [payload, setPayload] = useState<ThirdPartyVolumePayload | null>(null);
   const [ratePayload, setRatePayload] = useState<ThirdPartyRatePayload | null>(null);
@@ -2049,65 +2047,32 @@ export default function ThirdPartyVolumeDashboard() {
     setError("");
     try {
       const volumeUrl = thirdPartyVolumeApiUrl(requestedStart, requestedEnd, version, requestedCountry);
-      const authHeaders = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
-      const cachedRateBeforeFetch = ratePayload || readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY);
+      const cachedRateBeforeFetch = ratePayload || readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY,profile);
       const shouldFetchRates = forceRates || !ratePayloadFresh(cachedRateBeforeFetch);
 
       const [firstVolumeRes, rateRes, statusRes] = await Promise.all([
-        fetch(volumeUrl, { cache: "no-store", headers: authHeaders }),
-        shouldFetchRates ? fetch("/api/supabase-third-party-rates", {
-          cache: "no-store",
-          headers: authHeaders
-        }).catch(() => null) : Promise.resolve(null),
-        requestedStart && requestedEnd ? fetch(thirdPartySyncStatusApiUrl(requestedStart, requestedEnd), {
-          cache: "no-store", headers: authHeaders
-        }).catch(() => null) : Promise.resolve(null)
+        dashboardBusinessFetch(volumeUrl),
+        shouldFetchRates ? dashboardBusinessFetch("/api/supabase-third-party-rates")
+          .catch(error=>{if(isDashboardDataDenied(error))throw error;return null;}) : Promise.resolve(null),
+        requestedStart && requestedEnd && effectiveDashboardDataScope(profile).mode==="all" ? dashboardBusinessFetch(thirdPartySyncStatusApiUrl(requestedStart, requestedEnd))
+          .catch(() => null) : Promise.resolve(null)
       ]);
 
       let volumeRes = firstVolumeRes;
       let json = await safeReadJson(volumeRes, "三方量") as ThirdPartyVolumePayload;
       if (!volumeRes.ok) throw new Error((json as any)?.message || "读取 Supabase 三方量失败");
 
-      // 偶发 0 行时立即轻量重试一次；不需要等下一小时，更不会去现场读取 Google。
-      if (!(json?.rows || []).length && requestedStart && requestedEnd) {
-        await new Promise((resolve) => window.setTimeout(resolve, 450));
-        const retryRes = await fetch(volumeUrl, { cache: "no-store", headers: authHeaders });
-        const retryJson = await safeReadJson(retryRes, "三方量") as ThirdPartyVolumePayload;
-        if (retryRes.ok && (retryJson?.rows || []).length) {
-          volumeRes = retryRes;
-          json = retryJson;
-        }
-      }
-
       const volumeRows = json?.rows || [];
-      const currentPayload = payloadRef.current;
-      const currentRows = currentPayload?.rows || [];
-      const currentMatchesSelection = Boolean(currentRows.length && currentRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd) && rowMatchesRequestedCountry(row, requestedCountry)));
-      const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY);
-      const cachedRows = cachedVolume?.rows || [];
-      const cacheMatchesSelection = Boolean(cachedRows.length && cachedRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd) && rowMatchesRequestedCountry(row, requestedCountry)));
-
-      if (!volumeRows.length && (currentMatchesSelection || cacheMatchesSelection)) {
-        // 关键修复：本次异常空结果不覆盖上一份成功数据，也绝不写入 last-good cache。
-        const fallback = currentMatchesSelection ? currentPayload! : cachedVolume!;
-        const shown = attachClientFallbackMessage(fallback, "Supabase 本次返回空结果，已自动保留上一份成功数据并等待下一次刷新");
-        setPayload(shown);
-        payloadRef.current = shown;
-        setDataNotice("本次读取出现瞬时空结果，当前仍显示上一份成功数据；无需等待 Google，稍后查询会自动重试。");
-      } else {
-        setPayload(json);
-        payloadRef.current = json;
-        setDataNotice("");
-        // 只有真实非空成功数据才允许成为 last-good，彻底避免“0 行缓存”污染下一次打开。
-        const cacheableCurrentSlice = rangeIncludesCurrentMonth(requestedStart, requestedEnd)
-          && (!requestedStart || !requestedEnd || requestedStart === requestedEnd);
-        if (cacheableCurrentSlice && volumeRows.length) writeLocalCache(THIRD_PARTY_VOLUME_CACHE_KEY, json);
-      }
+      // Server-authorized zero rows are valid after a scope/date change.
+      setPayload(json);payloadRef.current=json;setDataNotice("");
+      const cacheableCurrentSlice=rangeIncludesCurrentMonth(requestedStart,requestedEnd)
+        && (!requestedStart || !requestedEnd || requestedStart===requestedEnd);
+      if(cacheableCurrentSlice)writeLocalCache(THIRD_PARTY_VOLUME_CACHE_KEY,json,profile);
 
       if (rateRes && rateRes.ok) {
         const rateJson = await safeReadJson(rateRes, "三方费率") as ThirdPartyRatePayload;
         setRatePayload(rateJson);
-        if (((rateJson as any)?.rates?.length || 0) + (((rateJson as any)?.platformStatuses?.length || 0)) > 0) writeLocalCache(THIRD_PARTY_RATES_CACHE_KEY, rateJson);
+        writeLocalCache(THIRD_PARTY_RATES_CACHE_KEY,rateJson,profile);
       } else if (cachedRateBeforeFetch) {
         setRatePayload(cachedRateBeforeFetch);
       }
@@ -2125,11 +2090,12 @@ export default function ThirdPartyVolumeDashboard() {
       setState("ready");
     } catch (err) {
       const message = err instanceof Error ? err.message : "读取 Supabase 三方量失败";
+      if(isDashboardDataDenied(err)){setPayload(null);payloadRef.current=null;setRatePayload(null);setVolumeSyncStatus(null);setDataNotice("");setError(message);setState("error");return;}
       const currentPayload = payloadRef.current;
       const currentRows = currentPayload?.rows || [];
       const currentMatchesSelection = Boolean(currentRows.length && currentRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd) && rowMatchesRequestedCountry(row, requestedCountry)));
-      const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY);
-      const cachedRate = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY);
+      const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY,profile);
+      const cachedRate = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY,profile);
       const cachedRows = cachedVolume?.rows || [];
       const cacheMatchesSelection = Boolean(cachedRows.length && cachedRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd) && rowMatchesRequestedCountry(row, requestedCountry)));
 
@@ -2207,8 +2173,9 @@ export default function ThirdPartyVolumeDashboard() {
   // 动态发现的新国家仍可追加，但标准国家页签始终先显示。
   const countryTabs = useMemo(() => {
     const dynamic = countries.filter((item) => !isHiddenCountry(item) && !COUNTRY_NAV_TABS.includes(item));
-    return [...COUNTRY_NAV_TABS, ...sortCountries(dynamic)];
-  }, [countries]);
+    const scope=effectiveDashboardDataScope(profile);
+    return [...COUNTRY_NAV_TABS, ...sortCountries(dynamic)].filter(name=>dashboardScopeAllows(scope,name));
+  }, [countries,profile]);
   const activeCountryPage = countryPage && countryTabs.includes(countryPage) ? countryPage : (mainTab === "country" ? (countryTabs[0] || "") : "");
   // 数据计算只跟最后一次“查询”的国家走；点其它国家页签本身不会重新计算/读取。
   const effectiveCountryFilter = mainTab === "country" ? appliedCountryPage : country;
@@ -2301,7 +2268,10 @@ export default function ThirdPartyVolumeDashboard() {
   const dailyCompareBaseRows = useMemo(() => aggregateCombo(filtered, (row) => [row.date, row.country, row.platform, row.channel, normalizedFeeBaseChannelType(row)]), [filtered]);
   const platformFeeBaseRows = useMemo(() => aggregateCombo(filtered, (row) => [row.country, row.platform, row.channel, normalizedFeeBaseChannelType(row)]), [filtered]);
   // 费率索引只在费率资料变化时重建；切国家页签不会再重建 3900+ 盘口状态索引。
-  const feeRateMap = useMemo(() => buildRateMap(ratePayload?.rates || [], []), [ratePayload?.rates]);
+  const feeRateMap = useMemo(() => {
+    const restricted=effectiveDashboardDataScope(profile).mode==="selected";
+    return buildRateMap(ratePayload?.rates||[],restricted ? ratePayload?.platformStatuses||[] : [],restricted);
+  }, [ratePayload?.rates,ratePayload?.platformStatuses,profile]);
   const platformFeeRows = useMemo(() => buildFeeCompareRows(platformFeeBaseRows, ratePayload?.rates || [], [], "platform", feeRateMap), [platformFeeBaseRows, ratePayload?.rates, feeRateMap]);
   const dailyFeeRows = useMemo(() => buildFeeCompareRows(dailyCompareBaseRows, ratePayload?.rates || [], [], "daily", feeRateMap), [dailyCompareBaseRows, ratePayload?.rates, feeRateMap]);
   const feeWarnings = useMemo(() => feeWarningRows(dailyFeeRows), [dailyFeeRows]);

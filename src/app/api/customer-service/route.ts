@@ -8,7 +8,8 @@ import {
   requestedMonthsFromUrl,
   writeMonthlySnapshot
 } from "@/lib/monthlySnapshotStore";
-import { monthlyResponseHeaders, weakMonthlyEtag } from "@/lib/monthlyApiResponse";
+import { monthlyResponseHeaders } from "@/lib/monthlyApiResponse";
+import { withDashboardDataAccess, scopeCustomerServicePayload, requireDashboardRefresh } from "@/lib/dashboardDataAccessServer";
 import { countSnapshotPayloadRows, isSnapshotPayloadUsable } from "@/lib/snapshotStore";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +17,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function GET(request: Request) {
+  return withDashboardDataAccess(request, "customer_service", async (access) => {
   const url = new URL(request.url);
   const forceLive = url.searchParams.get("live") === "1" || url.searchParams.get("refresh") === "1";
   const months = requestedMonthsFromUrl(url);
@@ -31,6 +33,7 @@ export async function GET(request: Request) {
   }
 
   if (!snapshot && forceLive && months.length === 1 && months[0] === currentMonthKey()) {
+    requireDashboardRefresh(access);
     try {
       const { getCustomerServicePayload } = await import("@/lib/googleSheets");
       const payload = await getCustomerServicePayload({ months: [currentMonthKey()] });
@@ -46,14 +49,13 @@ export async function GET(request: Request) {
   }
 
   if (snapshot) {
-    const etag = weakMonthlyEtag("customer-service", responseMonths, snapshot);
-    const headers = monthlyResponseHeaders(responseMonths, etag);
-    if (request.headers.get("if-none-match") === etag) return new NextResponse(null, { status: 304, headers });
-    return NextResponse.json(snapshot, { headers, status: 200 });
+    const headers = monthlyResponseHeaders(responseMonths);
+    return NextResponse.json(scopeCustomerServicePayload(access, snapshot), { headers, status: 200 });
   }
 
   return NextResponse.json(
     emptyCustomerServicePayload(`暂时没有 ${months.map((month) => month.replace("_", "-")).join("、")} 的客服月快照。当前月每小时更新；历史月份只读。`),
     { headers: monthlyResponseHeaders(months, "", false), status: 200 }
   );
+  });
 }

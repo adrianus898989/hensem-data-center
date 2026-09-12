@@ -10,6 +10,9 @@ import { formatNumber, formatPercent } from "@/lib/format";
 import { monthRangeSignature, monthlyApiUrl, rangeIncludesCurrentMonthClient } from "@/lib/monthRange";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload } from "@/lib/monthlyStatusClient";
 import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
+import { useDashboardAuth } from "./DashboardAuthGate";
+import { dashboardBusinessFetch, isDashboardDataDenied, readDashboardDataCache, writeDashboardDataCache } from "@/lib/dashboardDataClient";
+import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 
 export function workOrderDisplayRows(rows: readonly WorkOrderRow[]): WorkOrderRow[] {
   return rows.map((row) => {
@@ -763,24 +766,12 @@ function buildWorkCompareRows(rows: WorkOrderRow[], groupKey: "all" | "country" 
 
 const WORK_ORDER_CACHE_KEY = "hensem:last-good:work-orders:v238-current";
 
-function readWorkLocalCache(): WorkOrderPayload | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const text = window.localStorage.getItem(WORK_ORDER_CACHE_KEY);
-    if (!text) return null;
-    return JSON.parse(text) as WorkOrderPayload;
-  } catch {
-    return null;
-  }
+function readWorkLocalCache(profile: DashboardProfile | null): WorkOrderPayload | null {
+  return readDashboardDataCache<WorkOrderPayload>(WORK_ORDER_CACHE_KEY,profile);
 }
 
-function writeWorkLocalCache(payload: WorkOrderPayload) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(WORK_ORDER_CACHE_KEY, JSON.stringify(payload));
-  } catch {
-    // localStorage 满了也不能影响页面展示
-  }
+function writeWorkLocalCache(payload: WorkOrderPayload,profile: DashboardProfile | null) {
+  writeDashboardDataCache(WORK_ORDER_CACHE_KEY,payload,profile);
 }
 
 function attachWorkClientFallbackMessage(payload: WorkOrderPayload, reason: string): WorkOrderPayload {
@@ -816,6 +807,7 @@ function emptyClientWorkOrderPayload(message: string): WorkOrderPayload {
 }
 
 export default function WorkOrderDashboard() {
+  const {profile}=useDashboardAuth();
   const [state, setState] = useState<LoadState>("ready");
   const [payload, setPayload] = useState<WorkOrderPayload | null>(null);
   const [hasQueried, setHasQueried] = useState(false);
@@ -887,27 +879,21 @@ export default function WorkOrderDashboard() {
     setError("");
     try {
       const requestUrl = monthlyApiUrl("/api/work-orders", requestedStart, requestedEnd, version);
-      const res = await fetch(requestUrl, { cache: "default" });
+      const res = await dashboardBusinessFetch(requestUrl);
       const text = await res.text();
       if (!text.trim()) throw new Error("工单接口没有返回数据");
       const json = JSON.parse(text) as WorkOrderPayload;
       if (!res.ok) throw new Error((json as any)?.message || "读取工单统计失败");
-      if (!(json.rows || []).length && rangeIncludesCurrentMonthClient(requestedStart, requestedEnd)) {
-        const cached = readWorkLocalCache();
-        if (cached && (cached.rows || []).length > 0) {
-          setPayload(attachWorkClientFallbackMessage(cached, String(json.meta?.message || "后台正在建立最新工单快照")));
-          setState("ready");
-          return;
-        }
-      }
+      // An authorized empty result is authoritative, never replaced by old data.
       setPayload(json);
       payloadRef.current = json;
       loadedMonthSignatureRef.current = monthRangeSignature(requestedStart, requestedEnd);
-      if ((json.rows || []).length > 0 && rangeIncludesCurrentMonthClient(requestedStart, requestedEnd)) writeWorkLocalCache(json);
+      if (rangeIncludesCurrentMonthClient(requestedStart, requestedEnd)) writeWorkLocalCache(json,profile);
       setState("ready");
     } catch (err) {
       const message = err instanceof Error ? err.message : "读取工单统计失败";
-      const cached = rangeIncludesCurrentMonthClient(requestedStart, requestedEnd) ? readWorkLocalCache() : null;
+      if(isDashboardDataDenied(err)){setPayload(null);payloadRef.current=null;setError(message);setState("error");return;}
+      const cached = rangeIncludesCurrentMonthClient(requestedStart, requestedEnd) ? readWorkLocalCache(profile) : null;
       if (cached && (cached.rows || []).length > 0) {
         setPayload(attachWorkClientFallbackMessage(cached, message));
         setState("ready");

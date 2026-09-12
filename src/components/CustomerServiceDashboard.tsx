@@ -6,6 +6,7 @@ import type { CustomerServicePayload, CustomerServiceRow } from "@/lib/types";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { monthRangeSignature, monthlyApiUrl, rangeIncludesCurrentMonthClient } from "@/lib/monthRange";
 import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
+import { dashboardBusinessFetch, isDashboardDataDenied } from "@/lib/dashboardDataClient";
 
 export function customerServiceDisplayRows(rows: readonly CustomerServiceRow[]): CustomerServiceRow[] {
   return rows.map((row) => {
@@ -487,7 +488,7 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
     setError("");
     try {
       const requestUrl = monthlyApiUrl("/api/customer-service", requestedStart, requestedEnd);
-      const res = await fetch(requestUrl, { cache: "default" });
+      const res = await dashboardBusinessFetch(requestUrl);
       const json = await res.json();
       if (!res.ok) throw new Error(json?.message || "读取客服统计失败");
       setPayload(json);
@@ -495,6 +496,7 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
       setState("ready");
     } catch (err) {
       const message = err instanceof Error ? err.message : "读取客服统计失败";
+      if(isDashboardDataDenied(err)){setPayload(null);setError(message);setState("error");return;}
       if (silent) {
         setError(message);
         setState("ready");

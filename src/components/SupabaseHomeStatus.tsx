@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { formatNumber } from "@/lib/format";
 import { triggerDashboardSync, type ManualSyncJob } from "@/lib/dashboardAuthClient";
+import { dashboardBusinessFetch } from "@/lib/dashboardDataClient";
+import { effectiveDashboardDataScope, dashboardScopeLabel } from "@/lib/dashboardDataScope";
 
 type StatusPayload = {
   ok?: boolean;
@@ -29,22 +31,21 @@ export default function SupabaseHomeStatus() {
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [refreshText, setRefreshText] = useState("");
+  const scoped=effectiveDashboardDataScope(profile).mode!=="all";
+  const canStatus=Boolean(profile?.role==="owner"||profile?.permissions?.third_party===true);
 
   const loadStatus = useCallback(async () => {
-    if (!session?.access_token) return;
+    if (!session?.access_token || scoped || !canStatus) return;
     try {
       setError("");
-      const res = await fetch("/api/supabase-status", {
-        cache: "no-store",
-        headers: { Authorization: `Bearer ${session.access_token}` },
-      });
+      const res = await dashboardBusinessFetch("/api/supabase-status");
       const json = await res.json();
       if (!res.ok) throw new Error(json?.message || "读取 Supabase 状态失败");
       setData(json);
     } catch (err) {
       setError(err instanceof Error ? err.message : "读取 Supabase 状态失败");
     }
-  }, [session?.access_token]);
+  }, [session?.access_token,scoped,canStatus]);
 
   useEffect(() => { void loadStatus(); }, [loadStatus]);
 
@@ -66,6 +67,8 @@ export default function SupabaseHomeStatus() {
       setRefreshing(false);
     }
   }
+
+  if(scoped || !canStatus)return <section className="home-supabase-status-card"><h2>账号数据范围</h2><p>{scoped?dashboardScopeLabel(profile?.data_scope):"请进入已授权的业务模块查看数据。"}</p><p>仅展示你获准查看的数据，不展示全站汇总或其他盘口状态。</p></section>;
 
   return (
     <section className="home-supabase-status-card">

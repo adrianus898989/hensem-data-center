@@ -1,5 +1,7 @@
 "use client";
 
+import type { DashboardDataScope } from "./dashboardDataScope";
+
 export type DashboardRole = "owner" | "admin" | "viewer";
 export type DashboardPermissionKey = "home" | "third_party" | "auto_withdraw" | "work_orders" | "customer_service";
 export type DashboardPermissions = Record<DashboardPermissionKey, boolean>;
@@ -46,6 +48,7 @@ export type DashboardProfile = {
   active: boolean;
   permissions?: Partial<DashboardPermissions> | null;
   management_permissions?: Partial<DashboardManagementPermissions> | null;
+  data_scope?: DashboardDataScope | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -384,7 +387,7 @@ export async function fetchDashboardProfile(session: DashboardSession): Promise<
   const userId = String(session?.user?.id || "");
   if (!userId) throw new Error("登录状态缺少用户 ID");
   const params = new URLSearchParams();
-  params.set("select", "auth_user_id,username,role,active,permissions,management_permissions,created_at,updated_at");
+  params.set("select", "auth_user_id,username,role,active,permissions,management_permissions,data_scope,created_at,updated_at");
   params.set("auth_user_id", `eq.${userId}`);
   params.set("limit", "1");
   const response = await fetch(`${url}/rest/v1/dashboard_profiles?${params.toString()}`, {
@@ -468,6 +471,7 @@ export async function createDashboardAccount(
   role: "admin" | "viewer",
   permissions: DashboardPermissions,
   managementPermissions?: DashboardManagementPermissions,
+  dataScope?: DashboardDataScope,
 ) {
   const username = validateDashboardUsername(usernameInput);
   if (String(password || "").length < 8) throw new Error("密码至少 8 位");
@@ -478,6 +482,7 @@ export async function createDashboardAccount(
     role,
     permissions,
     management_permissions: managementPermissions || DEFAULT_ADMIN_MANAGEMENT_PERMISSIONS,
+    ...(dataScope === undefined ? {} : { data_scope: dataScope }),
   });
 }
 
@@ -494,6 +499,7 @@ export type DashboardAccountPatch = {
   active?: boolean;
   permissions?: DashboardPermissions;
   management_permissions?: DashboardManagementPermissions;
+  data_scope?: DashboardDataScope;
   role?: "admin" | "viewer";
   expected_role?: "admin" | "viewer";
 };

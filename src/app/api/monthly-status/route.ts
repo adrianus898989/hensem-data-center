@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withDashboardDataAccess, requireDashboardModule } from "@/lib/dashboardDataAccessServer";
 import {
   currentMonthKey,
   isSettlementMonth,
@@ -17,11 +18,13 @@ function validModule(value: string): MonthlySnapshotModuleKey | null {
 }
 
 export async function GET(request: Request) {
+  return withDashboardDataAccess(request, undefined, async (access) => {
   const url = new URL(request.url);
   const key = validModule(url.searchParams.get("module") || "");
   if (!key) {
     return NextResponse.json({ ok: false, message: "无效模块" }, { status: 400 });
   }
+  requireDashboardModule(access, ({"auto-withdraw":"auto_withdraw","work-orders":"work_orders","third-party-volume":"third_party","customer-service":"customer_service"} as const)[key]);
 
   const current = currentMonthKey();
   const previous = previousMonthKey();
@@ -46,11 +49,6 @@ export async function GET(request: Request) {
     settling: settlingStatus
   }, {
     status: 200,
-    headers: {
-      "Cache-Control": "public, max-age=20, stale-while-revalidate=40",
-      "Netlify-CDN-Cache-Control": "public, durable, max-age=20, stale-while-revalidate=40",
-      "CDN-Cache-Control": "public, max-age=20, stale-while-revalidate=40",
-      "Vary": "Accept-Encoding"
-    }
   });
+  }, {allDataOnly: true});
 }

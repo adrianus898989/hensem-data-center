@@ -8,6 +8,7 @@ import type { ThirdPartyPlatformStatusRow, ThirdPartyRatePayload, ThirdPartyRate
 import { canonicalThirdPartyName } from "@/lib/thirdPartyNameMap";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
+import { dashboardBusinessFetch, isDashboardDataDenied } from "@/lib/dashboardDataClient";
 
 export function thirdPartyStatusDisplayRows(rows: readonly ThirdPartyPlatformStatusRow[]): ThirdPartyPlatformStatusRow[] {
   return rows.map((row) => {
@@ -816,12 +817,13 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
     setState("loading");
     setError("");
     try {
-      const res = await fetch("/api/supabase-third-party-rates", { cache: "no-store", headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {} });
+      const res = await dashboardBusinessFetch("/api/supabase-third-party-rates");
       const json = await res.json();
       if (!res.ok) throw new Error(json?.message || "读取三方费率失败");
       setPayload(removeHiddenRateData(json));
       setState("ready");
     } catch (err) {
+      if(isDashboardDataDenied(err))setPayload(null);
       setError(err instanceof Error ? err.message : "读取三方费率失败");
       setState("error");
     }

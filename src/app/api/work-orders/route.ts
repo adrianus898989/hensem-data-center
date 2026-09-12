@@ -8,7 +8,8 @@ import {
   readCombinedMonthlyPayload,
   requestedMonthsFromUrl
 } from "@/lib/monthlySnapshotStore";
-import { monthlyResponseHeaders, weakMonthlyEtag } from "@/lib/monthlyApiResponse";
+import { monthlyResponseHeaders } from "@/lib/monthlyApiResponse";
+import { withDashboardDataAccess, scopeWorkOrderPayload, requireDashboardRefresh } from "@/lib/dashboardDataAccessServer";
 import { queueNetlifyBackgroundFunction } from "@/lib/netlifyFunctionQueue";
 import { readSnapshotCursor } from "@/lib/snapshotStore";
 
@@ -19,12 +20,14 @@ export const maxDuration = 30;
 const WORK_ORDER_STATUS_NAME = "work-orders-worker-status-v226";
 
 export async function GET(request: Request) {
+  return withDashboardDataAccess(request, "work_orders", async (access) => {
   const url = new URL(request.url);
   const forceRefresh = url.searchParams.get("live") === "1" || url.searchParams.get("refresh") === "1";
   const months = requestedMonthsFromUrl(url);
 
   // 只有明确刷新当前月时才排队；普通打开页面以及历史查询都只读快照。
   if (forceRefresh && months.length === 1 && months[0] === currentMonthKey()) {
+    requireDashboardRefresh(access);
     await queueNetlifyBackgroundFunction(request, "sync-work-orders-background", { source: "manual" }).catch(() => undefined);
   }
 
@@ -39,14 +42,12 @@ export async function GET(request: Request) {
     }
   }
   if (snapshot) {
-    const etag = weakMonthlyEtag("work-orders", responseMonths, snapshot);
-    const headers = monthlyResponseHeaders(responseMonths, etag);
-    if (request.headers.get("if-none-match") === etag) return new NextResponse(null, { status: 304, headers });
-    return NextResponse.json(snapshot, { headers, status: 200 });
+    const headers = monthlyResponseHeaders(responseMonths);
+    return NextResponse.json(scopeWorkOrderPayload(access, snapshot), { headers, status: 200 });
   }
 
   const missing = await missingMonthlySnapshotMonths("work-orders", months).catch(() => months);
-  const workerStatus = await readSnapshotCursor<any>(WORK_ORDER_STATUS_NAME).catch(() => null);
+  const workerStatus = access.scope.mode === "all" ? await readSnapshotCursor<any>(WORK_ORDER_STATUS_NAME).catch(() => null) : null;
   const statusMessage = String(workerStatus?.message || "").trim();
   return NextResponse.json(
     emptyWorkOrderPayload(
@@ -54,4 +55,5 @@ export async function GET(request: Request) {
     ),
     { headers: monthlyResponseHeaders(months, "", false), status: 200 }
   );
+  });
 }

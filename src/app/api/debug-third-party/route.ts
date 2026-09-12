@@ -1,15 +1,13 @@
 import { NextResponse } from "next/server";
+import { withDashboardDataAccess } from "@/lib/dashboardDataAccessServer";
 import { getThirdPartyVolumePayload, getThirdPartyRatePayload } from "@/lib/googleSheets";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 26;
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error || "unknown");
-}
-
 export async function GET(request: Request) {
+  return withDashboardDataAccess(request, "third_party", async () => {
   const url = new URL(request.url);
   const moduleName = url.searchParams.get("module") || "volume";
   try {
@@ -43,12 +41,6 @@ export async function GET(request: Request) {
       monthKeys: (payload.meta as any).monthKeys || [],
       failedSheets: (payload.meta as any).failedSheets || []
     });
-  } catch (error) {
-    return NextResponse.json({
-      ok: false,
-      module: moduleName,
-      error: messageOf(error),
-      hint: "如果这里报错，请截图这个 JSON；这不是 Google Sheet 分享页面的问题，而是具体读取/解析步骤的问题。"
-    }, { status: 200 });
-  }
+  } catch (error) { throw error; }
+  }, {ownerOnly: true});
 }
