@@ -94,6 +94,10 @@ export function reasonSourceTarget(country: string, platform: string) {
   const name = platform.trim();
   if (country === "PK" && name.toUpperCase() === "POPZAR") return { source: "NEWAR", platform: "POPZAR" };
   if (country === "IN" && ["DHANI.WIN", "DHANIWIN"].includes(name.toUpperCase())) return { source: "NEWAR", platform: "DHANI.WIN" };
+  // Only the five existing WG withdrawal platforms are registered for reasons.
+  // Configuration-only brands do not implicitly gain historical reason data.
+  if ((country === "VN" && ["98VV", "XX98"].includes(name.toUpperCase()))
+    || (country === "BR" && ["26BET", "POPKKK", "POPMIU"].includes(name.toUpperCase()))) return { source: "WG", platform: name.toUpperCase() };
   // Only these exact names belong to the supplied Baifu collector.
   if (country === "BR" && ["5C555", "BET6867"].includes(name.toUpperCase())) return { source: "BAIFU", platform: name.toUpperCase() };
   if ((country === "BR" && PANDA_BRAZIL_PLATFORMS.has(name.toUpperCase()))
