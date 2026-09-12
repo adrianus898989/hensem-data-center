@@ -7,11 +7,12 @@ export function canonicalThirdPartyPlatform(country: string, value: string): str
 
   const countryKey = String(country || "").trim().toUpperCase();
   if (countryKey === "BR" || countryKey === "巴西") {
-    // Only verified aliases. In particular 43-R, PLAYER-BR and POPKKK新 are
-    // distinct until confirmed; do not apply generic punctuation removal.
+    // Only verified aliases; do not apply generic punctuation or suffix removal.
     const known = platform.toUpperCase();
     if (known === "43R") return "43R";
     if (known === "PLAYERBR" || known === "PLAYER BR") return "PLAYER BR";
+    // Confirmed by the owner: the fee-table POPKKK新 is the same WG POPKKK.
+    if (known === "POPKKK" || known === "POPKKK新") return "POPKKK";
   }
   return platform;
 }

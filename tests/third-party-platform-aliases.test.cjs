@@ -69,23 +69,24 @@ function pipeline({ input = data(), platforms = [], country = '巴西', statusRo
   return context;
 }
 
-test('only two confirmed Brazilian aliases canonicalize; other countries remain unchanged', () => {
-  for (const country of ['巴西', 'BR']) for (const [input, expected] of [['43r', '43R'], ['43R', '43R'], [' playerbr ', 'PLAYER BR'], ['PLAYER BR', 'PLAYER BR']])
+test('only three confirmed Brazilian aliases canonicalize; other countries remain unchanged', () => {
+  for (const country of ['巴西', 'BR']) for (const [input, expected] of [['43r', '43R'], ['43R', '43R'], [' playerbr ', 'PLAYER BR'], ['PLAYER BR', 'PLAYER BR'], ['POPKKK新', 'POPKKK'], [' popkkk新 ', 'POPKKK'], ['popkkk', 'POPKKK']])
     assert.equal(helper.canonicalThirdPartyPlatform(country, input), expected);
   for (const country of ['越南', 'VN', '印度', 'IN', '巴西原生', 'BR2', '']) {
     assert.equal(helper.canonicalThirdPartyPlatform(country, '43r'), '43r');
     assert.equal(helper.canonicalThirdPartyPlatform(country, 'PLAYERBR'), 'PLAYERBR');
+    assert.equal(helper.canonicalThirdPartyPlatform(country, 'POPKKK新'), 'POPKKK新');
   }
 });
-test('similar independent platforms and unconfirmed POPKKK新 remain distinct', () => {
-  for (const platform of ['43-R', '43R2', 'PLAYER-BR', 'PLAYER_BR', 'PLAYER BR2', 'POPKKK新', 'POPKKK'])
+test('similar independent platforms remain distinct without generic suffix stripping', () => {
+  for (const platform of ['43-R', '43R2', 'PLAYER-BR', 'PLAYER_BR', 'PLAYER BR2', 'POPKKK新2', 'POPKKK-新', 'POPKKK2'])
     assert.equal(helper.canonicalThirdPartyPlatform('巴西', platform), platform);
-  assert.equal(helper.matchesThirdPartyPlatformSelection('巴西', 'POPKKK', ['POPKKK新']), false);
+  assert.equal(helper.matchesThirdPartyPlatformSelection('巴西', 'POPKKK新2', ['POPKKK新']), false);
 });
 test('selection normalization is stable, unique, ignores blanks and preserves inputs', () => {
   const selected = ['PLAYERBR', '43r', 'PLAYER BR', '43R', '', ' ', 'POPKKK新', 'POPKKK'];
   const before = [...selected];
-  assert.deepEqual(helper.canonicalThirdPartyPlatformSelections('巴西', selected), ['PLAYER BR', '43R', 'POPKKK新', 'POPKKK']);
+  assert.deepEqual(helper.canonicalThirdPartyPlatformSelections('巴西', selected), ['PLAYER BR', '43R', 'POPKKK']);
   assert.deepEqual(selected, before);
   assert.equal(helper.matchesThirdPartyPlatformSelection('巴西', '43r', []), true);
 });
@@ -94,8 +95,12 @@ test('either old or canonical selection matches all history but not similar plat
     assert.equal(helper.matchesThirdPartyPlatformSelection('巴西', platform, [selection]), true);
   for (const selection of ['PLAYERBR', 'PLAYER BR']) for (const platform of ['PLAYERBR', 'PLAYER BR'])
     assert.equal(helper.matchesThirdPartyPlatformSelection('巴西', platform, [selection]), true);
+  for (const country of ['巴西', 'BR']) for (const selection of ['POPKKK新', 'POPKKK']) for (const platform of ['POPKKK新', 'POPKKK'])
+    assert.equal(helper.matchesThirdPartyPlatformSelection(country, platform, [selection]), true);
   assert.equal(helper.matchesThirdPartyPlatformSelection('巴西', '43-R', ['43R']), false);
   assert.equal(helper.matchesThirdPartyPlatformSelection('越南', 'PLAYERBR', ['PLAYER BR']), false);
+  assert.equal(helper.matchesThirdPartyPlatformSelection('越南', 'POPKKK新', ['POPKKK']), false);
+  assert.equal(helper.matchesThirdPartyPlatformSelection('VN', 'POPKKK', ['POPKKK新']), false);
 });
 test('the existing global ShreeWin compatibility behavior remains unchanged', () => {
   for (const country of ['印度', '巴西', '越南', '']) for (const platform of ['Shree.Win', 'Shreewin', 'SHREE WIN'])
@@ -111,12 +116,13 @@ test('actual component rows normalize names without deleting, duplicating or mut
 });
 test('actual volume+rate option union removes confirmed duplicate spellings but keeps rate-only platforms', () => {
   const view = pipeline();
-  assert.deepEqual(view.platforms, ['43-R', '43R', 'PLAYER BR', 'PLAYER-BR', 'POPKKK', 'POPKKK新', 'RATE_ONLY'].sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true })));
+  assert.deepEqual(view.platforms, ['43-R', '43R', 'PLAYER BR', 'PLAYER-BR', 'POPKKK', 'RATE_ONLY'].sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true })));
   assert.equal(view.platforms.filter(name => name === '43R').length, 1);
   assert.equal(view.platforms.filter(name => name === 'PLAYER BR').length, 1);
+  assert.equal(view.platforms.filter(name => name === 'POPKKK').length, 1);
   assert.ok(view.platforms.includes('RATE_ONLY')); assert.ok(!view.platforms.includes('VN_RATE_ONLY'));
   assert.equal(view.uniq(view.optionScopedRows.map(row => row.platform)).length, 5);
-  assert.equal(view.platforms.length, 7, 'Configured options can legitimately exceed active-volume platforms');
+  assert.equal(view.platforms.length, 6, 'Configured options can legitimately exceed active-volume platforms');
 });
 test('actual applied filter and draft channel/type options accept old and canonical selections', () => {
   for (const selected of ['PLAYERBR', 'PLAYER BR']) {
@@ -146,33 +152,34 @@ test('actual grouped summaries preserve counts once per original row and keep co
 });
 test('actual dropdown SSR renders each confirmed canonical candidate exactly once without changing selections', () => {
   const view = pipeline(), api = functions();
-  const selected = helper.canonicalThirdPartyPlatformSelections('巴西', ['43r', 'PLAYERBR']);
+  const selected = helper.canonicalThirdPartyPlatformSelections('巴西', ['43r', 'PLAYERBR', 'POPKKK新', 'POPKKK']);
   const before = [...selected];
   const html = renderToStaticMarkup(React.createElement(api.VolumeMultiSelect, { label: '平台', options: view.platforms, value: selected, onChange: () => assert.fail('SSR cannot save'), placeholder: '全部平台' }));
   assert.equal((html.match(/<span>43R<\/span>/g) || []).length, 1);
   assert.equal((html.match(/<span>PLAYER BR<\/span>/g) || []).length, 1);
-  assert.equal((html.match(/type="checkbox"/g) || []).length, 7);
-  assert.equal((html.match(/checked=""/g) || []).length, 2);
-  assert.match(html, /RATE_ONLY/); assert.match(html, /POPKKK新/);
-  assert.doesNotMatch(html, /<span>43r<\/span>|<span>PLAYERBR<\/span>/);
+  assert.equal((html.match(/<span>POPKKK<\/span>/g) || []).length, 1);
+  assert.equal((html.match(/type="checkbox"/g) || []).length, 6);
+  assert.equal((html.match(/checked=""/g) || []).length, 3);
+  assert.match(html, /RATE_ONLY/);
+  assert.doesNotMatch(html, /<span>43r<\/span>|<span>PLAYERBR<\/span>|POPKKK新/);
   assert.deepEqual(selected, before);
 });
 test('selecting both aliases cannot duplicate historical amounts or order counts', () => {
-  const view = pipeline({ platforms: ['43r', '43R', 'PLAYERBR', 'PLAYER BR'] });
-  assert.deepEqual(view.filteredBaseNoDate.map(row => row.id), ['r1', 'r2', 'r3', 'r4']);
-  assert.equal(view.sumRows(view.filteredBaseNoDate).amount, 1000);
-  assert.equal(view.sumRows(view.filteredBaseNoDate).count, 100);
+  const view = pipeline({ platforms: ['43r', '43R', 'PLAYERBR', 'PLAYER BR', 'POPKKK新', 'POPKKK'] });
+  assert.deepEqual(view.filteredBaseNoDate.map(row => row.id), ['r1', 'r2', 'r3', 'r4', 'r5']);
+  assert.equal(view.sumRows(view.filteredBaseNoDate).amount, 1500);
+  assert.equal(view.sumRows(view.filteredBaseNoDate).count, 150);
 });
 test('actual selection-retention effect canonicalizes old saved choices instead of clearing them', () => {
   const effect = dashboard.body.statements.find(node => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
     && node.expression.expression.getText(source) === 'useEffect' && node.expression.arguments[0]?.getText(source).includes('setPlatformSelections(next)'));
   assert.ok(effect, 'Actual selection maintenance effect must exist');
   const callback = effect.expression.arguments[0];
-  const view = pipeline({ platforms: ['43r', '43R', 'PLAYERBR', 'PLAYER BR', 'REMOVED'] });
+  const view = pipeline({ platforms: ['43r', '43R', 'PLAYERBR', 'PLAYER BR', 'POPKKK新', 'POPKKK', 'REMOVED'] });
   let next, channel, types;
   const context = { ...view, setPlatformSelections: value => { next = value; }, setChannel: value => { channel = value; }, setChannelTypeSelections: value => { types = value; } };
   new Function(...Object.keys(context), compile(`const run = ${callback.getText(source)}; run();`))(...Object.values(context));
-  assert.deepEqual(next, ['43R', 'PLAYER BR']); assert.equal(channel, ''); assert.deepEqual(types, []);
+  assert.deepEqual(next, ['43R', 'PLAYER BR', 'POPKKK']); assert.equal(channel, ''); assert.deepEqual(types, []);
 });
 test('actual modal platform candidates and filtering use the same alias identities', () => {
   const modal = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'VolumeRowsModal');
@@ -190,14 +197,14 @@ test('actual query commits canonical selection state without broadening the sele
   const query = dashboard.body.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'runQuery');
   assert.ok(query);
   const writes = {}, requests = [];
-  const context = { ...pipeline({ platforms: ['43r', '43R', 'PLAYERBR'] }), startDate: '2026-09-09', endDate: '2026-09-10',
+  const context = { ...pipeline({ platforms: ['43r', '43R', 'PLAYERBR', 'POPKKK新', 'POPKKK'] }), startDate: '2026-09-09', endDate: '2026-09-10',
     appliedStartDate: '', appliedEndDate: '', channel: '', direction: '', channelTypeSelections: [],
     loadData: async (...args) => { requests.push(args); },
     ...Object.fromEntries(['IsQuerying', 'AppliedStartDate', 'AppliedEndDate', 'AppliedCountrySelections', 'AppliedPlatformSelections',
       'AppliedChannel', 'AppliedDirection', 'AppliedChannelTypeSelections', 'AppliedCountryPage', 'LastQueryAt', 'HasQueried']
       .map(name => ['set' + name, value => { writes[name] = value; }])) };
   await new Function(...Object.keys(context), compile(query.getText(source)) + '\nreturn runQuery();')(...Object.values(context));
-  assert.deepEqual(writes.AppliedPlatformSelections, ['43R', 'PLAYER BR']);
+  assert.deepEqual(writes.AppliedPlatformSelections, ['43R', 'PLAYER BR', 'POPKKK']);
   assert.equal(writes.AppliedCountryPage, '巴西');
   assert.equal(writes.AppliedStartDate, '2026-09-09'); assert.equal(writes.AppliedEndDate, '2026-09-10');
   assert.deepEqual(requests, [[true, '2026-09-09', '2026-09-10', '', '巴西', true]]);
@@ -217,5 +224,35 @@ test('actual platform card explicitly counts active data, not the larger configu
   const context = { uniq: view.uniq, rows: view.optionScopedRows };
   const result = new Function(...Object.keys(context), compile(`const result = ${card.getText(source)};`) + '\nreturn result;')(...Object.values(context));
   assert.equal(result.helper, '当前有数据的平台');
-  assert.equal(result.value, 5); assert.equal(view.platforms.length, 7);
+  assert.equal(result.value, 5); assert.equal(view.platforms.length, 6);
+});
+test('confirmed POPKKK historical aliases filter together once while identical Vietnamese spellings remain separate', () => {
+  const input = [row('p1', 'POPKKK', 125, 10), row('p2', 'POPKKK新', 250, 20, { date: '2026-09-09', direction: '代付', channel: 'USDT', rawChannel: 'USDT', channelType: 'USDT' }),
+    row('p3', 'POPKKK新', 500, 40, { country: '越南' }), row('p4', 'POPKKK-新', 1000, 80)];
+  const before = structuredClone(input);
+  for (const platforms of [['POPKKK新'], ['POPKKK'], ['POPKKK新', 'POPKKK']]) {
+    const view = pipeline({ input, platforms });
+    assert.deepEqual(view.filteredBaseNoDate.map(row => row.id), ['p1', 'p2']);
+    assert.deepEqual(view.channelOptionRows.map(row => row.id), ['p1', 'p2']);
+    assert.deepEqual(view.channels, ['PIX', 'USDT']);
+    assert.deepEqual(view.channelTypeOptions, ['PIX', 'USDT']);
+    assert.deepEqual(view.sumRows(view.filteredBaseNoDate), { amount: 375, count: 30, collectAmount: 125, collectCount: 10, payoutAmount: 250, payoutCount: 20 });
+    const groups = view.aggregateCombo(view.rows, row => [row.country, row.platform]);
+    assert.equal(groups.length, 3);
+    assert.equal(groups.reduce((sum, group) => sum + group.totalAmount, 0), 1875);
+    assert.equal(groups.reduce((sum, group) => sum + group.totalCount, 0), 150);
+    assert.equal(groups.find(group => group.labelParts[0] === '巴西' && group.labelParts[1] === 'POPKKK').totalAmount, 375);
+    assert.equal(groups.find(group => group.labelParts[0] === '越南' && group.labelParts[1] === 'POPKKK新').totalAmount, 500);
+  }
+  assert.deepEqual(input, before, 'Every historical raw platform and numeric value remains intact');
+});
+test('new POPKKK canonicalization never loses numeric/status fields when joining the display group', () => {
+  const input = [row('p1', 'POPKKK', 321.5, 13), row('p2', 'POPKKK新', 678.5, 17)];
+  const view = pipeline({ input, platforms: ['POPKKK', 'POPKKK新'] });
+  assert.equal(view.filteredBaseNoDate.length, 2);
+  assert.deepEqual(view.filteredBaseNoDate.map(row => row.platform), ['POPKKK', 'POPKKK']);
+  for (const field of ['amount', 'count', 'successCount', 'failedCount'])
+    assert.equal(view.filteredBaseNoDate.reduce((sum, row) => sum + row[field], 0), input.reduce((sum, row) => sum + row[field], 0));
+  assert.equal(view.sumRows(view.filteredBaseNoDate).amount, 1000);
+  assert.equal(view.sumRows(view.filteredBaseNoDate).count, 30);
 });
