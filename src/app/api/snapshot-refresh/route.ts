@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { timingSafeEqual } from "node:crypto";
+import { requireDashboardDataAccess, requireDashboardRefresh, requireDashboardModule, dashboardPrivateResponse, dashboardDataErrorResponse } from "@/lib/dashboardDataAccessServer";
 import { getSnapshotModuleKeys, refreshSnapshotModule } from "@/lib/snapshotSync";
 import type { SnapshotModuleKey } from "@/lib/snapshotStore";
 import { queueThirdPartyMonthlyJob } from "@/lib/thirdPartyMonthlySync";
@@ -7,41 +9,33 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-function isSameOriginBrowserRequest(request: Request): boolean {
-  const requestUrl = new URL(request.url);
-  const origin = request.headers.get("origin");
-  const referer = request.headers.get("referer");
-  const fetchSite = String(request.headers.get("sec-fetch-site") || "").toLowerCase();
-
-  if (origin) return origin === requestUrl.origin;
-  if (referer) {
-    try {
-      return new URL(referer).origin === requestUrl.origin;
-    } catch {
-      return false;
-    }
-  }
-  return fetchSite === "same-origin" || fetchSite === "same-site";
-}
-
-function isAllowed(request: Request): boolean {
+function isTrustedRefreshRequest(request: Request): boolean {
   const token = process.env.SNAPSHOT_REFRESH_TOKEN || process.env.DASHBOARD_REFRESH_TOKEN || "";
-  if (!token) return true;
-  if (request.method === "POST" && isSameOriginBrowserRequest(request)) return true;
-
+  if (!token) return false;
   const url = new URL(request.url);
   const provided = url.searchParams.get("token") || request.headers.get("x-refresh-token") || "";
-  return provided === token;
+  const expectedBytes = Buffer.from(token), suppliedBytes = Buffer.from(provided);
+  return expectedBytes.length === suppliedBytes.length && timingSafeEqual(expectedBytes, suppliedBytes);
 }
 
 async function handle(request: Request) {
-  if (!isAllowed(request)) {
-    return NextResponse.json({ ok: false, message: "Invalid refresh token" }, { status: 401 });
-  }
+  // Preserve the dedicated internal scheduler credential. An ordinary browser
+  // must authenticate and have global refresh permission, not just same origin.
+  const access = isTrustedRefreshRequest(request) ? null : await requireDashboardDataAccess(request);
+  if (access) requireDashboardRefresh(access);
 
   const url = new URL(request.url);
   const moduleParam = url.searchParams.get("module") as SnapshotModuleKey | null;
   const allowed = getSnapshotModuleKeys();
+  if (moduleParam && !allowed.includes(moduleParam)) {
+    return NextResponse.json({ ok: false, message: "未知模块" }, { status: 400 });
+  }
+  if (access) {
+    const modules = {"auto-withdraw":"auto_withdraw", "work-orders":"work_orders", "third-party-volume":"third_party", "third-party-rates":"third_party", "customer-service":"customer_service"} as const;
+    // Refresh results contain module-wide metadata. Do not return them to an
+    // ordinary browser whose account cannot read that module.
+    for (const key of moduleParam ? [moduleParam] : allowed) requireDashboardModule(access, modules[key]);
+  }
 
   try {
     // V222：三方量不再在网页 API 请求里直接读取 Google Sheet。
@@ -54,10 +48,6 @@ async function handle(request: Request) {
         force: true
       });
       return NextResponse.json(queued, { status: 202 });
-    }
-
-    if (moduleParam && !allowed.includes(moduleParam)) {
-      return NextResponse.json({ ok: false, message: `未知模块：${moduleParam}` }, { status: 400 });
     }
 
     if (moduleParam) {
@@ -74,16 +64,14 @@ async function handle(request: Request) {
     const thirdPartyQueued = await queueThirdPartyMonthlyJob({ mode: "current", origin: url.origin, force: true });
     const ok = results.every((item) => item.ok) && thirdPartyQueued.ok;
     return NextResponse.json({ ok, updatedAt: new Date().toISOString(), results, thirdPartyQueued }, { status: ok ? 200 : 500 });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ ok: false, message }, { status: 500 });
-  }
+  } catch (error) { throw error; }
 }
 
 export async function GET(request: Request) {
-  return handle(request);
+  try { return dashboardPrivateResponse(await handle(request)); }
+  catch (error) { return dashboardDataErrorResponse(error); }
 }
 
 export async function POST(request: Request) {
-  return handle(request);
+  return GET(request);
 }

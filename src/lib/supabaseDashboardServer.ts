@@ -12,6 +12,8 @@ import type {
 import { formatDuration, parseDurationToSeconds } from "@/lib/format";
 import { aggregateWithdrawRows } from "@/lib/parseAutoWithdraw";
 import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
+import { dashboardScopeAllows } from "@/lib/dashboardDataScope";
+import { requireDashboardDataAccess, requireDashboardAllData, dashboardAllowedRows, DashboardDataAccessError } from "@/lib/dashboardDataAccessServer";
 
 const PAGE_SIZE = 1000;
 
@@ -27,47 +29,16 @@ function config() {
   return { url, anonKey };
 }
 
-function authTokenFromRequest(request: Request): string {
-  const header = String(request.headers.get("authorization") || "");
-  const token = header.replace(/^Bearer\s+/i, "").trim();
-  if (!token) throw new Error("未登录或登录状态已失效");
-  return token;
-}
-
 async function readJson(response: Response) {
   const text = await response.text();
   let json: any = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = null; }
   if (!response.ok) {
-    const message = json?.message || json?.msg || json?.hint || text || `HTTP ${response.status}`;
-    throw new Error(message);
+    if (response.status === 401) throw new DashboardDataAccessError(401, "login_required", "登录已失效，请重新登录。");
+    if (response.status === 403) throw new DashboardDataAccessError(403, "data_denied", "当前账号没有此数据查看权限。");
+    throw new DashboardDataAccessError(503, "data_unavailable", "数据读取暂时不可用，请稍后重试。");
   }
   return json;
-}
-
-async function requireActiveProfile(token: string) {
-  const { url, anonKey } = config();
-  const userRes = await fetch(`${url}/auth/v1/user`, {
-    headers: { apikey: anonKey, Authorization: `Bearer ${token}` },
-    cache: "no-store"
-  });
-  const user = await readJson(userRes);
-  const userId = String(user?.id || "");
-  if (!userId) throw new Error("登录状态无效");
-
-  const params = new URLSearchParams();
-  params.set("select", "auth_user_id,username,role,active,permissions,management_permissions");
-  params.set("auth_user_id", `eq.${userId}`);
-  params.set("limit", "1");
-  const profileRes = await fetch(`${url}/rest/v1/dashboard_profiles?${params.toString()}`, {
-    headers: { apikey: anonKey, Authorization: `Bearer ${token}`, Accept: "application/json" },
-    cache: "no-store"
-  });
-  const rows = await readJson(profileRes);
-  const profile = Array.isArray(rows) ? rows[0] : null;
-  if (!profile) throw new Error("这个账号还没有后台权限");
-  if (!profile.active) throw new Error("这个账号已被停用");
-  return profile as { auth_user_id: string; username: string; role: "owner" | "admin" | "viewer"; active: boolean; permissions?: Record<string, boolean> | null; management_permissions?: Record<string, boolean> | null };
 }
 
 async function fetchPaged<T>(table: string, query: URLSearchParams, token: string): Promise<T[]> {
@@ -408,9 +379,8 @@ function enrichDbOperators(rows: OperatorRow[]): OperatorRow[] {
 }
 
 export async function readSupabaseAutoWithdraw(request: Request, startInput: string, endInput: string): Promise<AutoWithdrawPayload> {
-  const token = authTokenFromRequest(request);
-  const profile = await requireActiveProfile(token);
-  if (profile.role === "viewer" && profile.permissions?.auto_withdraw !== true) throw new Error("这个账号没有提现 / 自动出款查看权限");
+  const access = await requireDashboardDataAccess(request, "auto_withdraw");
+  const {token} = access;
 
   const start = isoDate(startInput);
   const end = isoDate(endInput || startInput);
@@ -431,10 +401,12 @@ export async function readSupabaseAutoWithdraw(request: Request, startInput: str
   operatorQuery.append("data_date", `lte.${end}`);
   operatorQuery.set("order", "data_date.asc,country.asc,platform.asc,account.asc,updated_at.asc");
 
-  const [dailyRaw, operatorRaw] = await Promise.all([
+  const [dailyFetched, operatorFetched] = await Promise.all([
     fetchPaged<DbAutoWithdrawRow>("auto_withdraw_daily", dailyQuery, token),
     fetchPaged<DbOperatorRow>("withdraw_operator_daily", operatorQuery, token),
   ]);
+  const dailyRaw = dashboardAllowedRows(access, dailyFetched);
+  const operatorRaw = dashboardAllowedRows(access, operatorFetched);
 
   const dailyAll = enrichDbDaily(dedupeDbDaily(dailyRaw).map(mapDbDaily));
   const operatorAll = enrichDbOperators(dedupeDbOperators(operatorRaw).map(mapDbOperator));
@@ -465,15 +437,15 @@ export async function readSupabaseAutoWithdraw(request: Request, startInput: str
 }
 
 export async function readSupabaseThirdPartyVolume(request: Request, startInput = "", endInput = "", countryInput = ""): Promise<ThirdPartyVolumePayload> {
-  const token = authTokenFromRequest(request);
-  const profile = await requireActiveProfile(token);
-  if (profile.role === "viewer" && profile.permissions?.third_party === false) throw new Error("这个账号没有三方量 / 费率查看权限");
+  const access = await requireDashboardDataAccess(request, "third_party");
+  const {token} = access;
 
   const now = new Date();
   const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
   const start = isoDate(startInput) || yesterday;
   const end = isoDate(endInput) || start;
   const country = String(countryInput || "").trim();
+  if (country && !dashboardScopeAllows(access.scope, country)) throw new DashboardDataAccessError(403, "scope_denied", "当前账号没有此国家或盘口组的数据权限。");
   const queryStart = previousDate(start);
 
   // Legacy snapshots can hold the right platform in the wrong Brazil group.
@@ -486,10 +458,11 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
     p_end: end,
     p_country: sourceCountry
   }, token)));
-  const dbRows: DbVolumeRow[] = results.flatMap((result) => Array.isArray(result?.rows) ? result.rows : []);
+  const dbRows: DbVolumeRow[] = dashboardAllowedRows(access, results.flatMap((result) => Array.isArray(result?.rows) ? result.rows : []));
   const displayCountry = country === "BR" ? "巴西" : country;
-  const rows = dbRows.map(mapVolume).filter((row) => !brazilPage || row.country === displayCountry || (displayCountry === "巴西" && row.country === "BR"));
-  const updatedAt = String(results.map((result) => result?.latestWriteAt).filter(Boolean).sort().pop() || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString());
+  const rows = dbRows.map(mapVolume).map(row => access.scope.mode === "all" ? row : {...row, raw: undefined}).filter((row) => !brazilPage || row.country === displayCountry || (displayCountry === "巴西" && row.country === "BR"));
+  const globalLatest = access.scope.mode === "all" ? results.map((result) => result?.latestWriteAt).filter(Boolean).sort().pop() : null;
+  const updatedAt = String(globalLatest || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString());
   const sheets = Array.from(new Set(rows.map((row) => row.sheetName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
 
   return {
@@ -517,9 +490,9 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
 }
 
 export async function readSupabaseThirdPartySyncStatus(request: Request, startInput = "", endInput = ""): Promise<ThirdPartySyncStatus> {
-  const token = authTokenFromRequest(request);
-  const profile = await requireActiveProfile(token);
-  if (profile.role === "viewer" && profile.permissions?.third_party === false) throw new Error("这个账号没有三方量 / 费率查看权限");
+  const access = await requireDashboardDataAccess(request, "third_party");
+  requireDashboardAllData(access);
+  const {token} = access;
   const now = new Date();
   const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
   const start = isoDate(startInput) || yesterday;
@@ -653,9 +626,8 @@ function buildRateSummary(rates: ThirdPartyRateRow[], statuses: ThirdPartyPlatfo
 }
 
 export async function readSupabaseThirdPartyRates(request: Request): Promise<ThirdPartyRatePayload> {
-  const token = authTokenFromRequest(request);
-  const profile = await requireActiveProfile(token);
-  if (profile.role === "viewer" && profile.permissions?.third_party === false) throw new Error("这个账号没有三方量 / 费率查看权限");
+  const access = await requireDashboardDataAccess(request, "third_party");
+  const {token} = access;
   const rateQuery = new URLSearchParams();
   rateQuery.set("select", "id,sheet_name,country,category,third_party,collect_fee,payout_fee,total_fee,collect_single_fee,payout_single_fee,collect_limit,payout_limit,channel_info,leak,whitelist,status,source_row,updated_at");
   rateQuery.set("order", "country.asc,third_party.asc");
@@ -663,10 +635,12 @@ export async function readSupabaseThirdPartyRates(request: Request): Promise<Thi
   statusQuery.set("select", "id,sheet_name,country,platform,third_party,status,raw_status,collect_fee,payout_fee,total_fee,collect_single_fee,payout_single_fee,collect_limit,payout_limit,category,source_row,source_column,updated_at");
   statusQuery.set("order", "country.asc,platform.asc,third_party.asc");
 
-  const [dbRates, dbStatuses] = await Promise.all([
+  const [fetchedRates, fetchedStatuses] = await Promise.all([
     fetchPaged<DbRateRow>("third_party_rates", rateQuery, token),
     fetchPaged<DbStatusRow>("third_party_platform_status", statusQuery, token)
   ]);
+  const dbRates = dashboardAllowedRows(access, fetchedRates);
+  const dbStatuses = dashboardAllowedRows(access, fetchedStatuses);
   const rates = dbRates.map(mapRate);
   const platformStatuses = dbStatuses.map(mapStatus);
   const updatedAt = [...dbRates.map((row) => String(row.updated_at || "")), ...dbStatuses.map((row) => String(row.updated_at || ""))]
@@ -692,8 +666,9 @@ export async function readSupabaseThirdPartyRates(request: Request): Promise<Thi
 }
 
 export async function readSupabaseHomeStatus(request: Request) {
-  const token = authTokenFromRequest(request);
-  const profile = await requireActiveProfile(token);
+  const access = await requireDashboardDataAccess(request, "third_party");
+  requireDashboardAllData(access);
+  const {token, profile} = access;
   const { url, anonKey } = config();
   const statusParams = new URLSearchParams();
   statusParams.set("select", "module,last_sync_at,last_data_date,status,message,updated_at");

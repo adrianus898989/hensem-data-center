@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withDashboardDataAccess } from "@/lib/dashboardDataAccessServer";
 import { getAutoWithdrawPayload } from "@/lib/googleSheets";
 
 export const dynamic = "force-dynamic";
@@ -9,7 +10,8 @@ function uniq(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  return withDashboardDataAccess(request, "auto_withdraw", async () => {
   try {
     const payload = await getAutoWithdrawPayload();
     const operatorRows = payload.operatorRows || [];
@@ -34,10 +36,6 @@ export async function GET() {
       },
       sampleOperatorRows: operatorRows.slice(0, 10)
     });
-  } catch (error) {
-    return NextResponse.json({
-      ok: false,
-      message: error instanceof Error ? error.message : String(error || "unknown")
-    }, { status: 500 });
-  }
+  } catch (error) { throw error; }
+  }, {ownerOnly: true});
 }

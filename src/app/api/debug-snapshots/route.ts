@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withDashboardDataAccess } from "@/lib/dashboardDataAccessServer";
 import {
   SNAPSHOT_KEYS,
   countSnapshotPayloadRows,
@@ -33,7 +34,8 @@ function compact(key: any, snapshot: any) {
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  return withDashboardDataAccess(request, undefined, async () => {
   const legacyModules = await Promise.all(SNAPSHOT_KEYS.map(async (key) => {
     const [current, lastGood, best] = await Promise.all([
       readSnapshot(key).catch(() => null),
@@ -64,4 +66,5 @@ export async function GET() {
   }, {
     headers: { "Cache-Control": "no-store, max-age=0" }
   });
+  }, {ownerOnly: true});
 }

@@ -23,6 +23,45 @@ const ADMIN_PERMISSIONS: DashboardPermissions = {
 const ADMIN_MANAGEMENT: ManagementPermissions = { manage_viewers: true, refresh_data: true, view_audit: true };
 const VIEWER_MANAGEMENT: ManagementPermissions = { manage_viewers: false, refresh_data: false, view_audit: false };
 
+type DataScope = { mode: "all" | "selected"; countries: string[] };
+const DATA_GROUPS = new Set(["BR_PANGHU", "BR", "IN", "PK", "ID", "VN", "PH", "MY", "MM", "NG", "CO", "MX", "CL", "SA", "BR_NATIVE", "USDT"]);
+class DataScopeError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+function parseDataScope(value: unknown): DataScope {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new DataScopeError("可见数据范围格式不正确", 400);
+  const raw = value as Record<string, unknown>;
+  if (Object.keys(raw).sort().join(",") !== "countries,mode" || !Array.isArray(raw.countries)
+      || raw.countries.length > DATA_GROUPS.size || !raw.countries.every(key => typeof key === "string" && DATA_GROUPS.has(key))) {
+    throw new DataScopeError("可见数据范围包含未知国家或盘口组", 400);
+  }
+  if (raw.mode === "all" && raw.countries.length === 0) return { mode: "all", countries: [] };
+  if (raw.mode !== "selected" || raw.countries.length === 0) throw new DataScopeError("请至少选择一个可见国家或盘口组", 400);
+  return { mode: "selected", countries: Array.from(new Set(raw.countries as string[])).sort() };
+}
+function storedDataScope(profile: { role?: string; data_scope?: unknown }): DataScope {
+  if (profile.role === "owner" || profile.data_scope == null) return { mode: "all", countries: [] };
+  try { return parseDataScope(profile.data_scope); } catch { return { mode: "selected", countries: [] }; }
+}
+function dataScopeSubset(child: DataScope, parent: DataScope): boolean {
+  return parent.mode === "all" || child.mode === "selected" && child.countries.every(key => parent.countries.includes(key));
+}
+function assertTargetDataScope(actor: { role?: string; data_scope?: unknown }, target: { role?: string; data_scope?: unknown }) {
+  // Disabled accounts retain their real scope; resetting or enabling one must
+  // never turn an out-of-scope account into a route around the caller's limits.
+  if (actor.role !== "owner" && !dataScopeSubset(storedDataScope(target), storedDataScope(actor))) {
+    throw new DataScopeError("不能管理超出自己可见数据范围的账号", 403);
+  }
+}
+function requestedDataScope(body: Record<string, unknown>, actor: { role?: string; data_scope?: unknown }, creating: boolean): DataScope | undefined {
+  const present = Object.prototype.hasOwnProperty.call(body, "data_scope");
+  if (!present && !creating) return undefined;
+  const scope = present ? parseDataScope(body.data_scope) : storedDataScope(actor);
+  if (scope.mode === "selected" && !scope.countries.length) throw new DataScopeError("请至少选择一个可见国家或盘口组", 400);
+  if (actor.role !== "owner" && !dataScopeSubset(scope, storedDataScope(actor))) throw new DataScopeError("不能授予超出自己可见数据范围的权限", 403);
+  return scope;
+}
+
 function corsHeaders(request: Request) {
   const allowed = String(Deno.env.get("DASHBOARD_ALLOWED_ORIGIN") || "*").trim() || "*";
   const origin = request.headers.get("origin") || "";
@@ -157,7 +196,7 @@ Deno.serve(async (request) => {
 
       const { data: callerProfile, error: profileError } = await admin
         .from("dashboard_profiles")
-        .select("username,role,active,permissions,management_permissions")
+        .select("username,role,active,permissions,management_permissions,data_scope")
         .eq("auth_user_id", caller.id)
         .maybeSingle();
       if (profileError) throw new Error(`读取管理员权限失败：${profileError.message}`);
@@ -174,7 +213,7 @@ Deno.serve(async (request) => {
       if (userError || !caller) throw new Error("登录状态无效");
       const { data: callerProfile, error: profileError } = await admin
         .from("dashboard_profiles")
-        .select("username,role,active,permissions,management_permissions")
+        .select("username,role,active,permissions,management_permissions,data_scope")
         .eq("auth_user_id", caller.id)
         .maybeSingle();
       if (profileError) throw new Error(`读取账号权限失败：${profileError.message}`);
@@ -203,6 +242,9 @@ Deno.serve(async (request) => {
       if (ctx.profile.role === "owner") return ctx;
       const permissions = sanitizeManagementPermissions(ctx.profile.management_permissions);
       if (!permissions[key]) throw new Error("当前管理员没有这个后台管理权限");
+      if (key !== "manage_viewers" && storedDataScope(ctx.profile).mode !== "all") {
+        throw new DataScopeError("当前账号仅可见指定数据范围，不能访问全局同步或全局操作记录", 403);
+      }
       return ctx;
     }
 
@@ -379,6 +421,7 @@ Deno.serve(async (request) => {
 
       const permissions = requestedRole === "admin" ? { ...ADMIN_PERMISSIONS, ...sanitizePermissions(body?.permissions) } : sanitizePermissions(body?.permissions);
       const managementPermissions = requestedRole === "admin" ? sanitizeManagementPermissions(body?.management_permissions) : VIEWER_MANAGEMENT;
+      const dataScope = requestedDataScope(body, ctx.profile, true)!;
       const { data: exists } = await admin.from("dashboard_profiles").select("auth_user_id").eq("username", username).maybeSingle();
       if (exists) return json(request, { ok: false, message: "这个账号已经存在" }, 409);
 
@@ -397,21 +440,23 @@ Deno.serve(async (request) => {
         active: true,
         permissions,
         management_permissions: managementPermissions,
+        data_scope: dataScope,
         created_by: ctx.caller.id,
       });
       if (insertError) {
         await admin.auth.admin.deleteUser(created.user.id).catch(() => undefined);
         throw new Error(`写入账号权限失败：${insertError.message}`);
       }
-      await audit(ctx.actor, requestedRole === "admin" ? "create_admin" : "create_viewer", username, { permissions, management_permissions: managementPermissions });
-      return json(request, { ok: true, username, role: requestedRole, permissions, management_permissions: managementPermissions, message: requestedRole === "admin" ? "小管理员已建立" : "查看账号已建立" });
+      await audit(ctx.actor, requestedRole === "admin" ? "create_admin" : "create_viewer", username, { permissions, management_permissions: managementPermissions, data_scope: dataScope });
+      return json(request, { ok: true, username, role: requestedRole, permissions, management_permissions: managementPermissions, data_scope: dataScope, message: requestedRole === "admin" ? "小管理员已建立" : "查看账号已建立" });
     }
 
     if (action === "create-viewer") {
-      const { caller, actor } = await requireCapability("manage_viewers");
+      const { caller, actor, profile: callerProfile } = await requireCapability("manage_viewers");
       const username = normalizeUsername(body?.username);
       const password = validatePassword(body?.password);
       const permissions = sanitizePermissions(body?.permissions);
+      const dataScope = requestedDataScope(body, callerProfile, true)!;
 
       const { data: exists } = await admin.from("dashboard_profiles").select("auth_user_id").eq("username", username).maybeSingle();
       if (exists) return json(request, { ok: false, message: "这个账号已经存在" }, 409);
@@ -430,24 +475,29 @@ Deno.serve(async (request) => {
         role: "viewer",
         active: true,
         permissions,
+        data_scope: dataScope,
         created_by: caller.id,
       });
       if (insertError) {
         await admin.auth.admin.deleteUser(created.user.id).catch(() => undefined);
         throw new Error(`写入查看权限失败：${insertError.message}`);
       }
-      await audit(actor, "create_viewer", username, { permissions });
-      return json(request, { ok: true, username, role: "viewer", permissions, message: "只读账号已建立" });
+      await audit(actor, "create_viewer", username, { permissions, data_scope: dataScope });
+      return json(request, { ok: true, username, role: "viewer", permissions, data_scope: dataScope, message: "只读账号已建立" });
     }
 
     if (action === "list-users") {
-      await requireManager();
+      const ctx = await requireManager();
       const { data, error } = await admin
         .from("dashboard_profiles")
-        .select("auth_user_id,username,role,active,permissions,management_permissions,created_at,updated_at")
+        .select("auth_user_id,username,role,active,permissions,management_permissions,data_scope,created_at,updated_at")
         .order("created_at", { ascending: true });
       if (error) throw new Error(`读取账号列表失败：${error.message}`);
-      return json(request, { ok: true, users: data || [] });
+      const scope = storedDataScope(ctx.profile);
+      const users = scope.mode === "all" ? data || [] : (data || []).filter(user =>
+        sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers
+        && user.role === "viewer" && dataScopeSubset(storedDataScope(user), scope));
+      return json(request, { ok: true, users });
     }
 
     if (action === "update-account") {
@@ -459,7 +509,7 @@ Deno.serve(async (request) => {
       const username = normalizeUsername(body?.username);
       const { data: target, error: targetError } = await admin
         .from("dashboard_profiles")
-        .select("auth_user_id,username,role,active,permissions,management_permissions,updated_at")
+        .select("auth_user_id,username,role,active,permissions,management_permissions,data_scope,updated_at")
         .eq("username", username)
         .maybeSingle();
       if (targetError) throw new Error(`读取目标账号失败：${targetError.message}`);
@@ -472,7 +522,11 @@ Deno.serve(async (request) => {
         if (!management.manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
       }
 
+      assertTargetDataScope(ctx.profile, target);
+      const dataScope = requestedDataScope(body, ctx.profile, false);
+
       const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (dataScope !== undefined) patch.data_scope = dataScope;
       if (typeof body?.active === "boolean") patch.active = body.active;
       if (body?.permissions) patch.permissions = sanitizePermissions(body.permissions);
       if (target.role === "admin" && body?.management_permissions) patch.management_permissions = sanitizeManagementPermissions(body.management_permissions);
@@ -488,6 +542,7 @@ Deno.serve(async (request) => {
         };
         // Change only the role here; other controls retain their existing save path.
         delete patch.active;
+        delete patch.data_scope; // Role changes preserve the independently saved data range.
         patch.role = body.role;
         if (body.role === "admin") {
           const requested = body.management_permissions;
@@ -511,22 +566,28 @@ Deno.serve(async (request) => {
     }
 
     if (action === "update-viewer") {
-      const { actor } = await requireCapability("manage_viewers");
+      const { actor, profile: callerProfile } = await requireCapability("manage_viewers");
       if (Object.prototype.hasOwnProperty.call(body, "role")) return json(request, { ok: false, message: "请使用账号角色设置修改角色" }, 400);
       const username = normalizeUsername(body?.username);
       const { data: target, error: targetError } = await admin
         .from("dashboard_profiles")
-        .select("auth_user_id,username,role,active,permissions")
+        .select("auth_user_id,username,role,active,permissions,data_scope,updated_at")
         .eq("username", username)
         .maybeSingle();
       if (targetError) throw new Error(`读取目标账号失败：${targetError.message}`);
       if (!target) return json(request, { ok: false, message: "账号不存在" }, 404);
       if (target.role !== "viewer") return json(request, { ok: false, message: "不能在这里修改 Admin" }, 403);
 
+      assertTargetDataScope(callerProfile, target);
+      const dataScope = requestedDataScope(body, callerProfile, false);
+
       const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (dataScope !== undefined) patch.data_scope = dataScope;
       if (typeof body?.active === "boolean") patch.active = body.active;
       if (body?.permissions) patch.permissions = sanitizePermissions(body.permissions);
-      const { data: updated, error } = await admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id).eq("role", "viewer").select("role").maybeSingle();
+      let update = admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id).eq("role", "viewer");
+      if (target.updated_at) update = update.eq("updated_at", target.updated_at);
+      const { data: updated, error } = await update.select("role").maybeSingle();
       if (error) throw new Error(`更新账号失败：${error.message}`);
       if (!updated) return json(request, { ok: false, message: "账号角色已变更，请刷新列表后重试" }, 409);
       await audit(actor, "update_viewer", username, patch);
@@ -540,7 +601,7 @@ Deno.serve(async (request) => {
       const password = validatePassword(body?.password);
       const { data: target, error: targetError } = await admin
         .from("dashboard_profiles")
-        .select("auth_user_id,username,role")
+        .select("auth_user_id,username,role,data_scope")
         .eq("username", username)
         .maybeSingle();
       if (targetError) throw new Error(`读取目标账号失败：${targetError.message}`);
@@ -548,6 +609,7 @@ Deno.serve(async (request) => {
       if (target.role === "owner") return json(request, { ok: false, message: "总管理员密码请由本人在个人资料修改" }, 403);
       if (target.role === "admin" && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以重置小管理员密码" }, 403);
       if (target.role === "viewer" && ctx.profile.role !== "owner" && !sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
+      assertTargetDataScope(ctx.profile, target);
       const { error } = await admin.auth.admin.updateUserById(target.auth_user_id, { password });
       if (error) throw new Error(`重置密码失败：${error.message}`);
       await audit(actor, "reset_password", username, {});
@@ -559,7 +621,7 @@ Deno.serve(async (request) => {
       const username = normalizeUsername(body?.username);
       const { data: target, error: targetError } = await admin
         .from("dashboard_profiles")
-        .select("auth_user_id,username,role")
+        .select("auth_user_id,username,role,data_scope")
         .eq("username", username)
         .maybeSingle();
       if (targetError) throw new Error(`读取目标账号失败：${targetError.message}`);
@@ -567,6 +629,7 @@ Deno.serve(async (request) => {
       if (target.role === "owner") return json(request, { ok: false, message: "总管理员账号不能删除" }, 403);
       if (target.role === "admin" && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以删除小管理员" }, 403);
       if (target.role === "viewer" && ctx.profile.role !== "owner" && !sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
+      assertTargetDataScope(ctx.profile, target);
       const { error } = await admin.auth.admin.deleteUser(target.auth_user_id);
       if (error) throw new Error(`删除账号失败：${error.message}`);
       await audit(ctx.actor, "delete_account", username, { role: target.role });
@@ -717,7 +780,7 @@ Deno.serve(async (request) => {
     }, 400);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const status = /未登录|登录状态/.test(message) ? 401 : /只有|没有这个后台管理权限|不能|总管理员/.test(message) ? 403 : 500;
+    const status = error instanceof DataScopeError ? error.status : /未登录|登录状态/.test(message) ? 401 : /只有|没有这个后台管理权限|不能|总管理员/.test(message) ? 403 : 500;
     return json(request, { ok: false, message }, status);
   }
 });

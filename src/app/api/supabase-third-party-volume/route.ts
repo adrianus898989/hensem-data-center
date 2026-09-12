@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { dashboardDataErrorResponse, dashboardPrivateHeaders } from "@/lib/dashboardDataAccessServer";
 import { readSupabaseThirdPartyVolume } from "@/lib/supabaseDashboardServer";
 
 export const dynamic = "force-dynamic";
@@ -12,10 +13,8 @@ export async function GET(request: Request) {
     const end = url.searchParams.get("end") || url.searchParams.get("endDate") || start;
     const country = url.searchParams.get("country") || "";
     const payload = await readSupabaseThirdPartyVolume(request, start, end, country);
-    return NextResponse.json(payload, { status: 200, headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(payload, { status: 200, headers: dashboardPrivateHeaders() });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error || "Supabase 三方量读取失败");
-    const status = /未登录|登录状态|权限|停用/.test(message) ? 401 : 500;
-    return NextResponse.json({ ok: false, message }, { status, headers: { "Cache-Control": "no-store" } });
+    return dashboardDataErrorResponse(error);
   }
 }

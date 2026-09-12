@@ -8,7 +8,8 @@ import {
   requestedMonthsFromUrl,
   writeMonthlySnapshot
 } from "@/lib/monthlySnapshotStore";
-import { monthlyResponseHeaders, weakMonthlyEtag } from "@/lib/monthlyApiResponse";
+import { monthlyResponseHeaders } from "@/lib/monthlyApiResponse";
+import { withDashboardDataAccess, scopeAutoWithdrawPayload, requireDashboardRefresh } from "@/lib/dashboardDataAccessServer";
 import { countSnapshotPayloadRows, isSnapshotPayloadUsable } from "@/lib/snapshotStore";
 import { readSupabaseAutoWithdraw } from "@/lib/supabaseDashboardServer";
 import type { AutoWithdrawPayload } from "@/lib/types";
@@ -53,6 +54,7 @@ function combinePayloads(oldPayload: AutoWithdrawPayload | null, newPayload: Aut
 }
 
 export async function GET(request: Request) {
+  return withDashboardDataAccess(request, "auto_withdraw", async (access) => {
   const url = new URL(request.url);
   const forceLive = url.searchParams.get("live") === "1" || url.searchParams.get("refresh") === "1";
   const months = requestedMonthsFromUrl(url);
@@ -67,6 +69,7 @@ export async function GET(request: Request) {
 
   // 兼容旧逻辑：历史快照缺失且显式要求当前月 live 时，仍允许旧数据源手动生成快照。
   if (!oldSnapshot && !newMonths.length && forceLive && months.length === 1 && months[0] === currentMonthKey()) {
+    requireDashboardRefresh(access);
     try {
       const { getAutoWithdrawPayload } = await import("@/lib/googleSheets");
       const payload = await getAutoWithdrawPayload({ months: [currentMonthKey()] });
@@ -89,10 +92,7 @@ export async function GET(request: Request) {
       const start = /^20\d{2}-\d{2}-\d{2}$/.test(requestedStart) && requestedStart > bounds.start ? requestedStart : bounds.start;
       const end = /^20\d{2}-\d{2}-\d{2}$/.test(requestedEnd) && requestedEnd < bounds.end ? requestedEnd : bounds.end;
       supabasePayload = await readSupabaseAutoWithdraw(request, start, end);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "读取 Supabase 自动出款失败";
-      return NextResponse.json({ ...emptyAutoWithdrawPayload(message), message }, { status: /未登录|登录状态|权限/.test(message) ? 401 : 500, headers: { "Cache-Control": "no-store" } });
-    }
+    } catch (error) { throw error; }
   }
 
   let payload = combinePayloads(oldSnapshot, supabasePayload);
@@ -107,12 +107,11 @@ export async function GET(request: Request) {
   }
 
   if (payload) {
+    payload = scopeAutoWithdrawPayload(access, payload);
     if (newMonths.length) {
       return NextResponse.json(payload, { status: 200, headers: { "Cache-Control": "no-store, max-age=0" } });
     }
-    const etag = weakMonthlyEtag("auto-withdraw", oldMonths, payload);
-    const headers = monthlyResponseHeaders(oldMonths, etag);
-    if (request.headers.get("if-none-match") === etag) return new NextResponse(null, { status: 304, headers });
+    const headers = monthlyResponseHeaders(oldMonths);
     return NextResponse.json(payload, { headers, status: 200 });
   }
 
@@ -120,4 +119,5 @@ export async function GET(request: Request) {
     `暂时没有 ${months.map((month) => month.replace("_", "-")).join("、")} 的自动出款数据。4-7月保持历史快照；8月起使用 Supabase。`
   );
   return NextResponse.json(empty, { headers: monthlyResponseHeaders(months, "", false), status: 200 });
+  });
 }

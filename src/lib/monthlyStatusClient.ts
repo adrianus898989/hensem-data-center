@@ -1,3 +1,4 @@
+import { dashboardBusinessFetch } from "./dashboardDataClient";
 export type ClientMonthlyModuleKey = "auto-withdraw" | "work-orders" | "third-party-volume" | "customer-service";
 
 export type ClientMonthlyStatus = {
@@ -34,7 +35,7 @@ export function payloadSnapshotMonth(payload: any): string {
 
 export async function fetchPreferredMonthlyStatus(module: ClientMonthlyModuleKey): Promise<ClientMonthlyStatus | null> {
   try {
-    const response = await fetch(`/api/monthly-status?module=${encodeURIComponent(module)}`, { cache: "default" });
+    const response = await dashboardBusinessFetch(`/api/monthly-status?module=${encodeURIComponent(module)}`);
     if (!response.ok) return null;
     const json = await response.json();
     return json?.ok ? json as ClientMonthlyStatus : null;

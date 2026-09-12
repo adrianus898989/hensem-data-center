@@ -1,5 +1,6 @@
 import { countSnapshotPayloadRows, type SnapshotModuleKey } from "./snapshotStore";
-import { effectiveMonthlyStatus, type MonthlySnapshotModuleKey } from "./monthlySnapshotStore";
+import { type MonthlySnapshotModuleKey } from "./monthlySnapshotStore";
+import { dashboardPrivateHeaders } from "./dashboardDataAccessServer";
 
 export function weakMonthlyEtag(
   key: MonthlySnapshotModuleKey,
@@ -29,24 +30,8 @@ export function weakMonthlyEtag(
 }
 
 export function monthlyResponseHeaders(months: string[], etag = "", immutableHistory = true): Record<string, string> {
-  const normalized = Array.from(new Set(months.filter(Boolean)));
-  // V236：只有真正超过结算期的月份才使用 immutable。
-  // 月初前 7 天的上个月仍是 settling，必须走短缓存，避免把未补齐的月底数据缓存一年。
-  const historicalOnly = normalized.length > 0 && normalized.every((month) => effectiveMonthlyStatus(month) === "archived");
-  if (historicalOnly && immutableHistory) {
-    return {
-      "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
-      "Netlify-CDN-Cache-Control": "public, durable, max-age=31536000, immutable",
-      "CDN-Cache-Control": "public, max-age=31536000, immutable",
-      "Vary": "Accept-Encoding",
-      ...(etag ? { ETag: etag } : {})
-    };
-  }
-  return {
-    "Cache-Control": "public, max-age=60, stale-while-revalidate=300",
-    "Netlify-CDN-Cache-Control": "public, durable, max-age=120, stale-while-revalidate=300",
-    "CDN-Cache-Control": "public, max-age=120, stale-while-revalidate=300",
-    "Vary": "Accept-Encoding",
-    ...(etag ? { ETag: etag } : {})
-  };
+  // Archived source snapshots remain immutable in storage, but a user's
+  // authorized projection can change at any time. Never cache it publicly.
+  void months; void etag; void immutableHistory;
+  return dashboardPrivateHeaders();
 }

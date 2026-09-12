@@ -202,6 +202,22 @@
 .admin-matrix-configure:hover { background: #e5edff; border-color: #97b7f8; }
 .admin-matrix-account-settings { display: inline-flex; align-items: center; gap: 6px; border: 0; padding: 2px 0; background: transparent; color: #7589a8; font-size: 10px; cursor: pointer; }
 .admin-matrix-account-settings:hover { color: #2d60ce; }
+.admin-account-scope-summary { display: flex; gap: 8px; margin-bottom: 9px; color: #56749a; font-size: 11px; line-height: 1.5; }
+.admin-account-scope-summary b { flex-shrink: 0; color: #3c587c; }
+.admin-account-scope-summary span { overflow-wrap: anywhere; }
+.admin-account-data-scope-editor { grid-column: 1 / -1; min-width: 0; padding: 12px; border: 1px solid #dce6f4; border-radius: 8px; background: #fff; }
+.admin-data-scope-picker { min-width: 0; margin: 14px 0 10px; padding: 12px; border: 1px solid #dce6f4; border-radius: 8px; }
+.admin-data-scope-picker legend { padding: 0 5px; color: #345781; font-size: 13px; font-weight: 600; }
+.admin-data-scope-picker p { margin: 0 0 10px; color: #7487a1; font-size: 11px; line-height: 1.6; }
+.admin-data-scope-modes { display: flex; flex-wrap: wrap; gap: 10px 20px; }
+.admin-data-scope-picker .admin-data-scope-modes label,
+.admin-data-scope-picker .admin-data-scope-options label { display: flex; align-items: center; gap: 7px; margin: 0; color: #436083; font-size: 12px; font-weight: 400; }
+.admin-data-scope-picker input { flex: 0 0 auto; width: 15px; height: 15px; margin: 0; accent-color: #4477d5; }
+.admin-data-scope-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 11px; padding-top: 14px; }
+.admin-data-scope-picker small { display: block; margin-top: 10px; color: #9a7133; font-size: 11px; }
+.admin-data-scope-actions { display: flex; gap: 8px; }
+.admin-account-data-scope-editor > p { color: #b64242; font-size: 12px; }
+.admin-scope-restriction { margin: 0 0 14px; padding: 11px 14px; border: 1px solid #e5d6b8; border-radius: 8px; background: #fffaf0; color: #846733; font-size: 12px; line-height: 1.7; }
 @media (max-width: 1100px) {
   .admin-permission-matrix > thead > tr > th:first-child { width: 165px; }
   .admin-permission-matrix > thead > tr > th:last-child { width: 125px; }

@@ -6,6 +6,7 @@ import {
   type DashboardPermissionKey,
   type DashboardProfile,
 } from "@/lib/dashboardAuthClient";
+import { effectiveDashboardDataScope, isDashboardDataScopeSubset, normalizeDashboardDataScope } from "./dashboardDataScope";
 
 export type PermissionItem = {
   id: string;
@@ -84,6 +85,7 @@ export function canEditPermission(
     && entry.key === item.key && entry.kind === item.kind);
   if (!actor || actor.active !== true || !known || known.fixed || target.role === "owner") return false;
   if (target.role !== "admin" && target.role !== "viewer") return false;
+  if (!isDashboardDataScopeSubset(normalizeDashboardDataScope(target.data_scope), effectiveDashboardDataScope(actor))) return false;
   if (known.kind === "management") return actor.role === "owner" && target.role === "admin";
   if (actor.role === "owner") return true;
   return actor.role === "admin" && target.role === "viewer"

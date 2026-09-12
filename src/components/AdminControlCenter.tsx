@@ -5,6 +5,7 @@ import "./AdminControlCenter.css";
 import AccountRoleEditor from "./AccountRoleEditor";
 import AccountPermissionDialog from "./AccountPermissionDialog";
 import { ACCOUNT_PERMISSION_MODULES, ALL_ACCOUNT_PERMISSIONS, createPermissionDraft, permissionModuleCount } from "@/lib/accountPermissionCatalog";
+import { DASHBOARD_DATA_GROUPS, dashboardScopeLabel, effectiveDashboardDataScope, isDashboardDataScopeSubset, normalizeDashboardDataScope, type DashboardDataScope } from "@/lib/dashboardDataScope";
 import {
   addDashboardAllowedIp,
   canOpenAdminCenter,
@@ -48,6 +49,49 @@ type Props = {
 
 type Tab = "users" | "data" | "audit";
 type CreateRole = "admin" | "viewer";
+
+function accountStoredScope(user: DashboardProfile): DashboardDataScope {
+  return user.role === "owner" ? { mode: "all", countries: [] } : normalizeDashboardDataScope(user.data_scope);
+}
+
+function DataScopePicker({ id, value, actor, disabled, onChange }: {
+  id: string; value: DashboardDataScope; actor: DashboardProfile; disabled: boolean; onChange: (value: DashboardDataScope) => void;
+}) {
+  const allowed = effectiveDashboardDataScope(actor);
+  const choices = DASHBOARD_DATA_GROUPS.filter(group => allowed.mode === "all" || allowed.countries.includes(group.key));
+  return <fieldset className="admin-data-scope-picker" disabled={disabled}>
+    <legend>可见数据范围</legend>
+    <p>仅限制已授权业务模块的数据，不改变模块权限。巴西与胖虎巴西分开选择。</p>
+    <div className="admin-data-scope-modes">
+      <label><input type="radio" name={`${id}-scope-mode`} value="all" checked={value.mode === "all"} disabled={disabled || allowed.mode !== "all"} onChange={() => onChange({ mode: "all", countries: [] })} />全部数据</label>
+      <label><input type="radio" name={`${id}-scope-mode`} value="selected" checked={value.mode === "selected"} onChange={() => onChange({ mode: "selected", countries: value.mode === "selected" ? value.countries : [] })} />指定国家 / 盘口组</label>
+    </div>
+    {value.mode === "selected" && <div className="admin-data-scope-options">{choices.map(group => <label key={group.key}><input type="checkbox" checked={value.countries.includes(group.key)} onChange={event => onChange({ mode: "selected", countries: event.target.checked ? [...value.countries, group.key] : value.countries.filter(key => key !== group.key) })} />{group.label}</label>)}</div>}
+    {value.mode === "selected" && !value.countries.length && <small role="status">请至少选择一个国家或盘口组。</small>}
+    {allowed.mode !== "all" && <small>只能分配自己可见的范围。</small>}
+  </fieldset>;
+}
+
+function AccountDataScopeEditor({ user, actor, busy, onSave }: {
+  user: DashboardProfile; actor: DashboardProfile; busy: boolean; onSave: (patch: DashboardAccountPatch) => Promise<boolean>;
+}) {
+  const current = accountStoredScope(user);
+  const [draft, setDraft] = useState<DashboardDataScope>(() => current);
+  const [error, setError] = useState("");
+  const normalized = normalizeDashboardDataScope(draft);
+  const changed = JSON.stringify(normalized) !== JSON.stringify(current);
+  const valid = (draft.mode === "all" || draft.countries.length > 0) && isDashboardDataScopeSubset(normalized, effectiveDashboardDataScope(actor));
+  async function save() {
+    if (busy || !changed || !valid) return;
+    setError("");
+    if (!(await onSave({ data_scope: normalized }))) setError("范围保存失败，请检查提示后重试；当前选择已保留。");
+  }
+  return <div className="admin-account-data-scope-editor">
+    <DataScopePicker id={`edit-${user.auth_user_id}`} value={draft} actor={actor} disabled={busy} onChange={setDraft} />
+    <div className="admin-data-scope-actions"><button type="button" disabled={busy || !changed || !valid} onClick={() => void save()}>{busy ? "保存中…" : "保存数据范围"}</button>{changed && <button type="button" disabled={busy} onClick={() => { setDraft(current); setError(""); }}>取消范围修改</button>}</div>
+    {error && <p role="alert">{error}</p>}
+  </div>;
+}
 
 const THIRD_PARTY_SYNC_JOBS: Array<{ key: ManualSyncJob; label: string; note: string }> = [
   { key: "today_collect", label: "今日代收", note: "同步今日三方代收" },
@@ -184,9 +228,11 @@ function localDateKey(value: string): string {
 export default function AdminControlCenter({ open, session, profile, onClose, section = "users", embedded = false }: Props) {
   const management = normalizedManagementPermissions(profile);
   const isOwner = profile.role === "owner";
+  const hasAllData = effectiveDashboardDataScope(profile).mode === "all";
+  const actorDataScopeKey = JSON.stringify(effectiveDashboardDataScope(profile));
   const canManageUsers = isOwner || management.manage_viewers;
-  const canRefreshData = isOwner || management.refresh_data;
-  const canViewAudit = isOwner || management.view_audit;
+  const canRefreshData = hasAllData && (isOwner || management.refresh_data);
+  const canViewAudit = hasAllData && (isOwner || management.view_audit);
 
   const [tab, setTab] = useState<Tab>(section);
   const [users, setUsers] = useState<DashboardProfile[]>([]);
@@ -198,6 +244,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   const [newPassword, setNewPassword] = useState("");
   const [newPermissions, setNewPermissions] = useState<DashboardPermissions>({ ...DEFAULT_VIEWER_PERMISSIONS });
   const [newManagement, setNewManagement] = useState<DashboardManagementPermissions>({ ...DEFAULT_ADMIN_MANAGEMENT_PERMISSIONS });
+  const [newDataScope, setNewDataScope] = useState<DashboardDataScope>(() => effectiveDashboardDataScope(profile));
   const [createBusy, setCreateBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingUsername, setEditingUsername] = useState("");
@@ -242,6 +289,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
         roleLabel(user.role),
         roleEnglish(user.role),
         permissionSummary(user),
+        dashboardScopeLabel(accountStoredScope(user)),
       ].join(" ").toLowerCase();
       return haystack.includes(keyword);
     });
@@ -372,6 +420,8 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
 
   useEffect(() => { setTab(section); }, [section]);
 
+  useEffect(() => { setNewDataScope(JSON.parse(actorDataScopeKey) as DashboardDataScope); }, [profile.auth_user_id, actorDataScopeKey]);
+
   if (!open || !canOpenAdminCenter(profile)) return null;
 
   function resetCreateRole(role: CreateRole) {
@@ -383,14 +433,17 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   async function submitCreate(event: React.FormEvent) {
     event.preventDefault();
     if (!canManageUsers) return;
+    if (newDataScope.mode === "selected" && !newDataScope.countries.length) { setMessage("请至少选择一个可见国家或盘口组。"); return; }
+    if (!isDashboardDataScopeSubset(newDataScope, effectiveDashboardDataScope(profile))) { setMessage("不能授予超出自己可见数据范围的权限。"); return; }
     setCreateBusy(true);
     setMessage("");
     try {
-      const result = await createDashboardAccount(session, newUsername, newPassword, newRole, newPermissions, newManagement);
+      const result = await createDashboardAccount(session, newUsername, newPassword, newRole, newPermissions, newManagement, newDataScope);
       setMessage(`${roleLabel(result?.role || newRole)} ${result?.username || newUsername} 已建立。`);
       setNewUsername("");
       setNewPassword("");
       resetCreateRole("viewer");
+      setNewDataScope(effectiveDashboardDataScope(profile));
       setCreateOpen(false);
       await Promise.all([loadUsers(), canViewAudit ? loadAudit() : Promise.resolve()]);
     } catch (error) {
@@ -400,12 +453,14 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
 
   function canEditTarget(user: DashboardProfile) {
     if (user.role === "owner") return false;
+    if (!profile.active || !isDashboardDataScopeSubset(accountStoredScope(user), effectiveDashboardDataScope(profile))) return false;
     if (user.role === "admin") return isOwner;
     return canManageUsers;
   }
 
   async function saveAccount(user: DashboardProfile, patch: DashboardAccountPatch): Promise<boolean> {
     if (!canEditTarget(user) || savingUser || (patch.role && !isOwner)) return false;
+    if (patch.data_scope && (!isDashboardDataScopeSubset(patch.data_scope, effectiveDashboardDataScope(profile)) || patch.data_scope.mode === "selected" && !patch.data_scope.countries.length)) return false;
     setSavingUser(user.username);
     setMessage("");
     try {
@@ -535,6 +590,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
 
   const content = (
     <>
+      {!hasAllData && <div className="admin-scope-restriction" role="status">当前账号可见：{dashboardScopeLabel(effectiveDashboardDataScope(profile))}。只能管理此范围内的查看账号；全局数据同步、操作记录和安全设置不可用。</div>}
       {tab === "users" && (canManageUsers || isOwner) && (
         <div className="admin-users-compact">
           {isOwner && <details className="admin-panel-card admin-access-details">
@@ -581,7 +637,8 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
                 })}
               </div>
               {newRole === "admin" && isOwner && <><label>后台管理权限</label><div className="admin-permission-list management-list">{MANAGEMENT_OPTIONS.map((item) => <label key={item.key} className="admin-permission-row"><input type="checkbox" checked={newManagement[item.key]} onChange={(e) => setNewManagement((prev) => ({ ...prev, [item.key]: e.target.checked }))} /><span><b>{item.label}</b><small>{item.note}</small></span></label>)}</div></>}
-              <button className="admin-primary-btn" type="submit" disabled={createBusy}>{createBusy ? "建立中..." : `建立${newRole === "admin" ? "小管理员" : "查看账号"}`}</button>
+              <DataScopePicker id="new-account" value={newDataScope} actor={profile} disabled={createBusy} onChange={setNewDataScope} />
+              <button className="admin-primary-btn" type="submit" disabled={createBusy || newDataScope.mode === "selected" && !newDataScope.countries.length}>{createBusy ? "建立中..." : `建立${newRole === "admin" ? "小管理员" : "查看账号"}`}</button>
 
             </form>
           </section>}
@@ -601,7 +658,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
                 const editId = `admin-account-edit-${user.auth_user_id}`;
                 return <Fragment key={user.auth_user_id}><tr className={expanded ? "is-editing" : ""}>
                   <th scope="row"><div className="admin-matrix-identity"><div><strong>{user.username}</strong>{user.role === "owner" && <span className="admin-matrix-protected">锁定</span>}</div><div className="admin-matrix-identity-meta"><span className={`admin-user-role ${user.role}`}>{roleLabel(user.role)}</span><span className={user.active ? "admin-user-state active" : "admin-user-state off"}>{user.active ? "正常" : "停用"}</span></div><small>{user.role === "owner" ? "OWNER · 固定权限" : `${roleEnglish(user.role)} · 账号独立授权`}</small></div></th>
-                  <td><div className="admin-module-permission-grid">{ACCOUNT_PERMISSION_MODULES.map((module) => {
+                  <td><div className="admin-account-scope-summary" title={dashboardScopeLabel(accountStoredScope(user))}><b>数据范围</b><span>{dashboardScopeLabel(accountStoredScope(user))}</span></div><div className="admin-module-permission-grid">{ACCOUNT_PERMISSION_MODULES.map((module) => {
                     const count = permissionModuleCount(module, draft);
                     const state = count.enabled === count.total ? "all" : count.enabled === 0 ? "none" : "partial";
                     return <button type="button" key={module.id} className={`admin-module-permission-chip ${state} module-${module.id}`} aria-label={`${user.username} · ${module.label}，已开 ${count.enabled} / ${count.total} 项，查看权限`} aria-haspopup="dialog" onClick={() => setPermissionTarget({ username: user.username, module: module.id })}><span>{module.label}</span><b>{count.enabled}<small>/{count.total}</small></b></button>;
@@ -611,6 +668,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
                   {expanded && <tr className="admin-account-editor-row"><td colSpan={3}><div id={editId} className="admin-user-edit-grid admin-account-editor">
                     <div className="admin-account-edit-hint"><strong>{user.username} · 账号设置</strong><span>{savingUser === user.username ? "正在保存…" : "角色、启停和密码独立管理；模块权限请使用「配置权限」"}</span></div>
                     {isOwner && user.role !== "owner" && <AccountRoleEditor key={`${user.auth_user_id}:${user.role}`} user={user} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />}
+                    <AccountDataScopeEditor key={`scope-${user.auth_user_id}:${user.updated_at || "legacy"}`} user={user} actor={profile} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />
                     <div className="admin-user-buttons-v249"><button type="button" disabled={savingUser === user.username} onClick={() => void saveAccount(user, { active: !user.active })}>{user.active ? "停用" : "启用"}</button><button type="button" disabled={savingUser === user.username} onClick={() => { setResetTarget(resetTarget === user.username ? "" : user.username); setResetPassword(""); }}>重置密码</button><button className="danger" type="button" disabled={savingUser === user.username} onClick={() => void removeAccount(user)}>删除账号</button></div>
                     {resetTarget === user.username && <form className="admin-inline-reset" onSubmit={submitResetPassword}><input type="password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} placeholder="输入新的临时密码（至少 8 位）" autoFocus /><button type="submit" disabled={savingUser === user.username}>保存新密码</button><button type="button" onClick={() => setResetTarget("")}>取消</button></form>}
                   </div></td></tr>}

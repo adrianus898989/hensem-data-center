@@ -1,6 +1,8 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { dashboardScopeIdentity, effectiveDashboardDataScope, dashboardScopeLabel } from "@/lib/dashboardDataScope";
+import { clearDashboardDataCaches, setDashboardDataViewer, DASHBOARD_PROFILE_EVENT } from "@/lib/dashboardDataClient";
 import {
   canOpenAdminCenter,
   changeOwnDashboardPassword,
@@ -78,6 +80,8 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   sessionRef.current = session;
 
   function applyAuthenticated(nextSession: DashboardSession, nextProfile: DashboardProfile) {
+    // A slower older profile response must not restore a revoked wider scope.
+    if(!setDashboardDataViewer(nextProfile))return;
     const saved = readSavedDashboardSession();
     if (saved?.access_token !== nextSession.access_token || saved?.refresh_token !== nextSession.refresh_token) saveDashboardSession(nextSession);
     sessionRef.current = nextSession;
@@ -91,6 +95,8 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   function clearAuthenticatedView() {
     operationRef.current += 1;
     clearLastActivity();
+    clearDashboardDataCaches();
+    setDashboardDataViewer(null);
     sessionRef.current = null;
     setSession(null);
     setProfile(null);
@@ -106,6 +112,17 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     saveDashboardSession(null);
     clearAuthenticatedView();
   }
+
+  useEffect(() => {
+    const verified=(event:Event)=>{
+      const detail=(event as CustomEvent).detail;
+      const saved=readSavedDashboardSession();
+      if(detail?.profile?.auth_user_id===saved?.user.id&&detail?.session?.access_token===saved?.access_token)applyAuthenticated(detail.session,detail.profile);
+    };
+    window.addEventListener(DASHBOARD_PROFILE_EVENT,verified);
+    return ()=>window.removeEventListener(DASHBOARD_PROFILE_EVENT,verified);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -182,6 +199,8 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       }
       if (previous.user.id !== saved.user.id) {
         operationRef.current += 1;
+        setDashboardDataViewer(null);
+        clearDashboardDataCaches();
         sessionRef.current = null; setSession(null); setProfile(null);
         setReady(false); setRestoreAttempt(n => n + 1); return;
       }
@@ -208,7 +227,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       try {
         active = await ensureDashboardSession(previous);
         if (disposed) return;
-        if (active.access_token !== checkedToken || Date.now() - checkedAt >= 5 * 60 * 1000) {
+        if (active.access_token !== checkedToken || Date.now() - checkedAt >= 30000) {
           let nextProfile: DashboardProfile;
           try { nextProfile = await fetchDashboardProfile(active); }
           catch (cause) {
@@ -477,7 +496,8 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   return (
     <AuthContext.Provider value={value}>
       {authWarning && <div role="status" className="auth-session-warning" style={{position:"fixed",left:"50%",top:12,transform:"translateX(-50%)",zIndex:1200,padding:"10px 18px",background:"#fff8e8",border:"1px solid #efd5a0",borderRadius:6,color:"#805d23",fontSize:13,maxWidth:"85vw"}}>{authWarning}</div>}
-      {children}
+      {effectiveDashboardDataScope(profile).mode === "selected" && <div role="status" className="dashboard-data-scope-notice" style={{padding:"8px 16px",background:"#eef4ff",color:"#315b95",fontSize:12}}>可见数据范围：{dashboardScopeLabel(profile?.data_scope)}；仅在已授权模块内生效。</div>}
+      <Fragment key={dashboardScopeIdentity(profile)}>{children}</Fragment>
 
       <div className="auth-user-menu-wrap" ref={menuRef}>
         <button className={userMenuOpen ? "auth-user-trigger open" : "auth-user-trigger"} type="button" onClick={() => setUserMenuOpen((value) => !value)}>
