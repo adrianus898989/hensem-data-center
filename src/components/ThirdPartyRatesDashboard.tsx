@@ -7,6 +7,14 @@ import type { ReactNode } from "react";
 import type { ThirdPartyPlatformStatusRow, ThirdPartyRatePayload, ThirdPartyRateRow } from "@/lib/types";
 import { canonicalThirdPartyName } from "@/lib/thirdPartyNameMap";
 import { formatNumber, formatPercent } from "@/lib/format";
+import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
+
+export function thirdPartyStatusDisplayRows(rows: readonly ThirdPartyPlatformStatusRow[]): ThirdPartyPlatformStatusRow[] {
+  return rows.map((row) => {
+    const country = platformDisplayCountry(row.country, row.platform);
+    return country === row.country ? row : { ...row, country };
+  });
+}
 
 type RateView = "dashboard" | "running" | "country" | "platform" | "rates" | "anomalies";
 type RateMainView = "dashboard" | "countryRates";
@@ -830,12 +838,12 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.access_token]);
 
-  const countries = useMemo(() => payload ? sortRateCountries([...payload.platformStatuses.map((r) => r.country), ...payload.rates.map((r) => r.country)]) : [], [payload]);
+  const countries = useMemo(() => payload ? sortRateCountries([...payload.platformStatuses.map((r) => platformDisplayCountry(r.country, r.platform)), ...payload.rates.map((r) => r.country)]) : [], [payload]);
   const sheets = useMemo(() => payload ? sortRateSheets(payload.meta.sheets) : [], [payload]);
   const platformOptions = useMemo(() => {
     if (!payload) return [];
     return uniq(payload.platformStatuses
-      .filter((r) => matchesSelection(r.country, draftFilters.countries))
+      .filter((r) => matchesSelection(platformDisplayCountry(r.country, r.platform), draftFilters.countries))
       .filter((r) => matchesSelection(r.sheetName, draftFilters.sheets))
       .map((r) => r.platform)).sort((a, b) => a.localeCompare(b, "zh-CN"));
   }, [payload, draftFilters.countries, draftFilters.sheets]);
@@ -843,7 +851,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
     if (!payload) return [];
     return uniq([
       ...payload.platformStatuses
-        .filter((r) => matchesSelection(r.country, draftFilters.countries))
+        .filter((r) => matchesSelection(platformDisplayCountry(r.country, r.platform), draftFilters.countries))
         .filter((r) => matchesSelection(r.platform, draftFilters.platforms))
         .map((r) => r.thirdParty),
       ...payload.rates
@@ -860,7 +868,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
         .filter((r) => matchesSelection(r.sheetName, draftFilters.sheets))
         .map((r) => r.category),
       ...payload.platformStatuses
-        .filter((r) => matchesSelection(r.country, draftFilters.countries))
+        .filter((r) => matchesSelection(platformDisplayCountry(r.country, r.platform), draftFilters.countries))
         .filter((r) => matchesSelection(r.sheetName, draftFilters.sheets))
         .map((r) => r.category)
     ]).sort((a, b) => a.localeCompare(b, "zh-CN"));
@@ -870,18 +878,21 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
     if (!payload) return [];
     const keyword = filters.keyword.trim().toLowerCase();
     const matched = payload.platformStatuses.filter((row) => {
+      const displayCountry = platformDisplayCountry(row.country, row.platform);
       const canonical = normalizeRatePartyName(row.thirdParty, row.country, row);
-      if (!matchesSelection(row.country, filters.countries)) return false;
+      if (!matchesSelection(displayCountry, filters.countries)) return false;
       if (!matchesSelection(row.sheetName, filters.sheets)) return false;
       if (!matchesSelection(row.platform, filters.platforms)) return false;
       if (!matchesSelection(row.thirdParty, filters.thirdParties) && !matchesSelection(canonical, filters.thirdParties)) return false;
       if (!matchesSelection(row.category || "", filters.categories)) return false;
       if (!matchesSelection(row.status, filters.statuses)) return false;
       if (!matchesChannelTypes(row, filters.channelTypes)) return false;
-      if (filters.keyword && !compactText(row.country, row.sheetName, row.platform, row.thirdParty, canonical, row.status, row.collectFee, row.payoutFee, row.collectSingleFee, row.payoutSingleFee, row.category).includes(keyword)) return false;
+      if (filters.keyword && !compactText(displayCountry, row.sheetName, row.platform, row.thirdParty, canonical, row.status, row.collectFee, row.payoutFee, row.collectSingleFee, row.payoutSingleFee, row.category).includes(keyword)) return false;
       return true;
     });
-    return dedupeStatusRows(matched).sort(compareStatusSourceOrder);
+    // Keep the original country-based source deduplication/fee-name keys, then
+    // project display clones. Country-wide rate rows have no platform to move.
+    return thirdPartyStatusDisplayRows(dedupeStatusRows(matched)).sort(compareStatusSourceOrder);
   }, [payload, filters, draftFilters.keyword]);
 
   const filteredRateRows = useMemo(() => {

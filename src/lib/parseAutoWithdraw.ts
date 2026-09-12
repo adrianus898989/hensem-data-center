@@ -1,5 +1,6 @@
 import type { AutoWithdrawPayload, AutoWithdrawRow, DailyWithdrawRow, OperatorRow } from "./types";
 import { formatDuration, inferCountryFromSheet, normalizeCell, parseDurationToSeconds, toNumber, toPercent } from "./format";
+import { platformDisplayCountry, withPlatformDisplayCountry } from "./platformDisplayCountry";
 
 type Values = string[][];
 
@@ -87,21 +88,8 @@ function comparePercentText(currentSeconds: number, previousSeconds: number): st
   return `${sign}${pct.toFixed(2)}%`;
 }
 
-const PANGHU_BRAZIL_PLATFORM_KEYS = new Set([
-  "VIP345", "KKVIP", "KK345", "FF555", "TPTP", "AA45", "F75", "25RR",
-  "8599BET", "9596BET", "8566BET", "5V555", "58EE", "27FF", "222O",
-  "32QQ", "67VIP", "234T", "888HH", "POPCRA", "POPNOV", "POPFEZ",
-  "345F", "BET5697"
-]);
-
-function platformKey(value: string): string {
-  return normalizeCell(value).toUpperCase().replace(/[^A-Z0-9]/g, "");
-}
-
 function normalizeAutoCountry(country: string, platform: string): string {
-  const pKey = platformKey(platform);
-  if (PANGHU_BRAZIL_PLATFORM_KEYS.has(pKey)) return "胖虎巴西";
-  return country;
+  return platformDisplayCountry(country, platform);
 }
 
 
@@ -345,7 +333,8 @@ function groupKey(row: Pick<AutoWithdrawRow, "country" | "platform" | "sourceShe
 export function aggregateWithdrawRows(rows: AutoWithdrawRow[]): AutoWithdrawRow[] {
   const map = new Map<string, AutoWithdrawRow & { _seconds: number; _weight: number }>();
 
-  for (const row of rows) {
+  for (const originalRow of rows) {
+    const row = withPlatformDisplayCountry(originalRow);
     const key = groupKey(row);
     const current = map.get(key);
     const weight = row.total || row.success + row.rejected || 0;

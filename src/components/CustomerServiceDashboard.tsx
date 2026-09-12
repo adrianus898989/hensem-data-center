@@ -5,6 +5,14 @@ import type { ReactNode } from "react";
 import type { CustomerServicePayload, CustomerServiceRow } from "@/lib/types";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { monthRangeSignature, monthlyApiUrl, rangeIncludesCurrentMonthClient } from "@/lib/monthRange";
+import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
+
+export function customerServiceDisplayRows(rows: readonly CustomerServiceRow[]): CustomerServiceRow[] {
+  return rows.map((row) => {
+    const country = platformDisplayCountry(row.country, row.platform);
+    return country === row.country ? row : { ...row, country };
+  });
+}
 
 type LoadState = "loading" | "ready" | "error";
 type MainTab = "customer" | "staff";
@@ -519,7 +527,8 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.startDate, filters.endDate, hasQueried, payload]);
 
-  const allRows = payload?.rows || [];
+  // Group before any option/filter/summary work, without rewriting source rows.
+  const allRows = useMemo(() => customerServiceDisplayRows(payload?.rows || []), [payload]);
   const dates = useMemo(() => uniq(allRows.map((r) => r.date).filter(isIsoDate)), [allRows]);
 
   useEffect(() => {

@@ -27,6 +27,7 @@ import type { ThirdPartyPlatformStatusRow, ThirdPartyRatePayload, ThirdPartyRate
 import { formatNumber, formatPercent } from "@/lib/format";
 import { canonicalThirdPartyName, inferThirdPartyChannelType } from "@/lib/thirdPartyNameMap";
 import { canonicalThirdPartyPlatform, canonicalThirdPartyPlatformSelections, matchesThirdPartyPlatformSelection } from "@/lib/thirdPartyPlatform";
+import { platformDisplayCountry, withPlatformDisplayCountry } from "@/lib/platformDisplayCountry";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload, type ClientMonthlyStatus } from "@/lib/monthlyStatusClient";
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
 import { useDashboardAuth } from "./DashboardAuthGate";
@@ -192,7 +193,7 @@ function isUsdtFeeTarget(country: string, platform: string, channel: string, cha
 function rowMatchesCountryPage(row: ThirdPartyVolumeRow, page: string): boolean {
   if (!page) return true;
   if (isAllUsdtCountryPage(page)) return isUsdtVolumeRow(row);
-  return row.country === page;
+  return platformDisplayCountry(row.country, row.platform) === page;
 }
 
 function rowMatchesRequestedCountry(row: ThirdPartyVolumeRow, page: string): boolean {
@@ -1976,7 +1977,7 @@ function collapseThirdPartyDisplayName(value: string, country?: string): string 
 function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolumeRow {
   const raw = row.rawChannel || row.channel || "";
   const key = localAliasKey(raw);
-  const country = row.country || "";
+  const country = platformDisplayCountry(row.country || "", row.platform);
   const platform = canonicalThirdPartyPlatform(country, row.platform);
   const platformKey = localAliasKey(platform).toUpperCase();
   let channel = row.channel || raw || "未知三方";
@@ -1998,7 +1999,7 @@ function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolum
   if (!channel || channel === "未知三方") channel = collapseThirdPartyDisplayName(row.channel || raw || "未知三方", country);
   let channelType = isIndiaUpiQrPayout ? "UPI" : (row.channelType || inferThirdPartyChannelType(raw || channel, country, `${channel} ${raw}`) || "其他类型");
   if (channel === "人工确认" || channel === "人工充值") channelType = channel;
-  return { ...row, platform, channel, channelType };
+  return { ...row, country, platform, channel, channelType };
 }
 
 export default function ThirdPartyVolumeDashboard() {
@@ -2237,11 +2238,15 @@ export default function ThirdPartyVolumeDashboard() {
     // 平台下拉不能只看当前日期是否有三方量。新盘口通常先配置费率、后开始跑量；
     // 只从 volume rows 取选项会让已接入的新平台（例如 ShreeWin）完全无法选择。
     if (isAllUsdtCountryPage(optionCountryFilter)) return [];
-    const targetCountry = normalizeCountryLabel(optionCountryFilter);
-    const selectedCountries = new Set(countrySelections.map(normalizeCountryLabel));
+    // Display groups must stay distinct; fee lookup intentionally shares the
+    // national Brazil rate key and must not be reused for this dropdown.
+    const displayGroup = (value: string) => value === "BR" ? "巴西" : value;
+    const targetCountry = displayGroup(optionCountryFilter);
+    const selectedCountries = new Set(countrySelections.map(displayGroup));
     return uniq((ratePayload?.platformStatuses || [])
-      .filter((row) => !targetCountry || normalizeCountryLabel(row.country) === targetCountry)
-      .filter((row) => !selectedCountries.size || selectedCountries.has(normalizeCountryLabel(row.country)))
+      .map(withPlatformDisplayCountry)
+      .filter((row) => !targetCountry || displayGroup(row.country) === targetCountry)
+      .filter((row) => !selectedCountries.size || selectedCountries.has(displayGroup(row.country)))
       .map((row) => canonicalThirdPartyPlatform(row.country, row.platform)));
   }, [ratePayload?.platformStatuses, optionCountryFilter, countrySelections]);
   const platforms = useMemo(() => uniq([

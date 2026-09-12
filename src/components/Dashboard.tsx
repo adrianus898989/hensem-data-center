@@ -17,6 +17,8 @@ import { AutoWithdrawReasonsProvider, AutoWithdrawReasonsButton, AutoWithdrawRea
 import { AutoWithdrawDailySummary } from "./AutoWithdrawDailySummary";
 import { AutoWithdrawRateComparison } from "./AutoWithdrawRateComparison";
 import AutoWithdrawConfig from "./AutoWithdrawConfig";
+import { autoWithdrawDisplayPayload } from "@/lib/autoWithdrawDisplayPayload";
+import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 type ModuleMode = "home" | "auto" | "config" | "operator" | "volume" | "work" | "admin";
@@ -184,7 +186,7 @@ function autoCountryPaneLabelFor(country: string, platform: string): string {
   // npg-platform-pane-v1: the archive stores these three NPG platforms as 南美.
   // Keep other South American platforms (for example VG / CO66) separate.
   if (/^NPG-(CHILE|COLOMBIA|MEXICO)$/i.test(String(platform || "").trim())) return NPG_PANE_LABEL;
-  return countryPaneLabelFor(country);
+  return countryPaneLabelFor(platformDisplayCountry(country, platform));
 }
 
 function countryMatchesAutoPane(country: string, pane: string, platform = ""): boolean {
@@ -907,7 +909,9 @@ export default function Dashboard() {
   const canAdminData = Boolean(profile && (isOwner || managementPermissions.refresh_data));
   const canAdminAudit = Boolean(profile && (isOwner || managementPermissions.view_audit));
   const [state, setState] = useState<LoadState>("idle");
-  const [payload, setPayload] = useState<AutoWithdrawPayload | null>(null);
+  const [sourcePayload, setPayload] = useState<AutoWithdrawPayload | null>(null);
+  // Apply the same grouping to live responses and old local/history snapshots.
+  const payload = useMemo(() => autoWithdrawDisplayPayload(sourcePayload), [sourcePayload]);
   const [hasBusinessQueried, setHasBusinessQueried] = useState(false);
   const [error, setError] = useState("");
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);

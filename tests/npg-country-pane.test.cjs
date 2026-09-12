@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const ts = require('typescript');
+const {loadTs,root} = require('./load-typescript.cjs');
+const {platformDisplayCountry} = loadTs(path.join(root,'src/lib/platformDisplayCountry.ts'));
 
 const text = fs.readFileSync(path.join(__dirname, '../src/components/Dashboard.tsx'), 'utf8');
 const source = ts.createSourceFile('Dashboard.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -12,9 +14,9 @@ assert.equal(functions.length, names.length);
 const code = ts.transpileModule(functions.map(n => n.getText(source)).join('\n'), {
   compilerOptions: {target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS}
 }).outputText;
-const {pane, matches} = new Function('NPG_PANE_LABEL', 'PANGHU_BRAZIL_PANE_LABEL', 'AUTO_PANE_ALL',
+const {pane, matches} = new Function('NPG_PANE_LABEL', 'PANGHU_BRAZIL_PANE_LABEL', 'AUTO_PANE_ALL', 'platformDisplayCountry',
   code + '\nreturn {pane: autoCountryPaneLabelFor, matches: countryMatchesAutoPane};'
-)('NPG盘口', '胖虎巴西盘口', '所有盘口');
+)('NPG盘口', '胖虎巴西盘口', '所有盘口', platformDisplayCountry);
 
 // Read-only cloud counts for 2026-09-10; no user/order data.
 const rows = [
@@ -46,7 +48,7 @@ test('existing country mappings and unknown platforms are preserved', () => {
   for (const [country, platform, expected] of [
     ['南美', 'npg-mexico', 'NPG盘口'], ['南美', 'NPG-MEXICO-extra', '南美盘口'],
     ['墨西哥', '', 'NPG盘口'], ['智利', '', 'NPG盘口'], ['Colombia', '', 'NPG盘口'],
-    ['巴西', 'VIP345', '巴西盘口'], ['胖虎巴西', 'VIP345', '胖虎巴西盘口'],
+    ['巴西', 'SSS55', '巴西盘口'], ['巴西', 'VIP345', '胖虎巴西盘口'], ['胖虎巴西', 'VIP345', '胖虎巴西盘口'],
     ['印度', '91CLUB', '印度盘口'], ['', 'UNKNOWN', '其他盘口']
   ]) assert.equal(pane(country, platform), expected);
 });
