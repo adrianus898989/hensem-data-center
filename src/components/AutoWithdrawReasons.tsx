@@ -94,11 +94,13 @@ export function AutoWithdrawReasonsProvider({ startDate, endDate, availableRows,
   const day = visibleResult?.day;
   const memberView = day?.source_system === "NEWAR" && noteKind === "member";
   const selectedSnapshot = reasonNoteSnapshot(day, memberView ? "member" : "reasons");
-  const abnormalOnly = day?.source_system === "PANDA" || day?.source_system === "BAIFU";
+  const abnormalOnly = day?.source_system === "PANDA" || day?.source_system === "BAIFU" || day?.source_system === "WG";
   const statusBasis = day?.source_system === "PANDA"
     ? "沿用原已审核日表口径：已完成计成功，其余计驳回；不代表实时待处理订单状态"
     : day?.source_system === "BAIFU"
       ? "按创建日期归属；沿用百富日表成功/驳回状态，待处理等状态归其他"
+      : day?.source_system === "WG"
+        ? "沿用 WG 原日表的最终成功/驳回及自动/人工口径；拦截原因不改变订单结果"
       : "沿用日表状态口径（含已提交）";
   const openModal = Boolean(target && !inline);
 
