@@ -128,14 +128,19 @@ test('actual parent passes every unmerged source row to the country sheet while 
   assert.deepEqual(input, before, 'Parent must not canonicalize or mutate original source rows');
 });
 
-test('actual parent to real country page and real sheet SSR renders more than 200 rows in source order', () => {
+test('actual parent passes all 225 rows while the real country sheet starts with a compact first page', () => {
   const rows = Array.from({ length: 225 }, (_, index) => rate(index));
-  const html = renderToStaticMarkup(parentPage(pipeline(payload([...rows].reverse()))));
-  assert.equal((html.match(/data-rate-id=/g) || []).length, 225);
+  const page = parentPage(pipeline(payload([...rows].reverse())));
+  const html = renderToStaticMarkup(page);
+  assert.equal(page.props.sheetRows.length, 225);
+  assert.equal((html.match(/data-rate-id=/g) || []).length, 12);
   assert.match(html, /225 条类型记录/);
-  assert.ok(html.indexOf('data-rate-id="synthetic-rate-0"') < html.indexOf('data-rate-id="synthetic-rate-224"'));
-  assert.match(html, /SYNTHETIC-224/);
-  assert.match(html, /rate-sheet-detail/);
+  assert.ok(html.indexOf('data-rate-id="synthetic-rate-0"') < html.indexOf('data-rate-id="synthetic-rate-11"'));
+  assert.match(html, /1–12 \/ 225 条/);
+  assert.match(html, /下一页/);
+  assert.match(html, /原表全部列/);
+  assert.match(html, /不代表实际跑量/);
+  assert.doesNotMatch(html, /rate-sheet-detail|三方运行 TOP|最多显示 200 行/);
 });
 
 test('parent sheet preserves distinct types, duplicate origin notes, zero and tiered fee strings', () => {
@@ -143,7 +148,9 @@ test('parent sheet preserves distinct types, duplicate origin notes, zero and ti
     rate(1, { thirdParty: 'Alpha', category: 'IMPS', payoutFee: '1000以下0.8%\n1000以上0.6% + 2' }),
     rate(2, { thirdParty: 'Zulu', collectFee: '0%', payoutSingleFee: '', channelInfo: '第二条同费率独立备注' })];
   const input = payload([rows[2], rows[0], rows[1]]), before = structuredClone(input);
-  const view = pipeline(input), html = renderToStaticMarkup(parentPage(view));
+  const view = pipeline(input);
+  const actualSheet = elementsByType(api.CountryRatePage(parentPage(view).props), sheetApi.default)[0];
+  const html = renderToStaticMarkup(React.cloneElement(actualSheet, { initialView: 'full' }));
   assert.deepEqual(view.activeCountrySheetRows.map(row => row.id), rows.map(row => row.id));
   assert.equal(view.activeCountrySheetRows.length, 3); assert.equal(view.activeCountryRateRows.length, 2);
   assert.match(html, /第二条同费率独立备注/); assert.match(html, /1000以下0.8%\n1000以上0.6% \+ 2/);
@@ -273,7 +280,9 @@ test('the actual controlled sheet selection aligns visible rows, raw export and 
   assert.strictEqual(actualSheet.props.onSelectSheet, setter);
   actualSheet.props.onSelectSheet('印度线下'); assert.equal(selected, '印度线下');
   const html = renderToStaticMarkup(page);
-  assert.equal((html.match(/data-rate-id=/g) || []).length, 225);
+  assert.equal((html.match(/data-rate-id=/g) || []).length, 12);
+  assert.match(html, /225 条类型记录/);
+  assert.equal(actualSheet.props.rateRows.length, 226, 'Every source sheet remains available to the pagination component');
   assert.doesNotMatch(html, /data-rate-id="synthetic-rate-0"/);
   assert.deepEqual(exportFrom(view).rows, selectedRows);
   assert.equal(exportFrom(view).rows.length, 225);
@@ -297,7 +306,7 @@ test('legacy dashboard exports continue using established deduped rate and statu
   assert.strictEqual(running.rows, view.sortedRunningRows); assert.match(running.filename, /^三方运行查询-/);
 });
 
-test('clicking an actual repeated country-sheet row opens only that original row and its exact raw statuses', () => {
+test('country matrix has no detail popup callback while the legacy detail helper retains exact source matching', () => {
   const selected = rate(2, { id: 'synthetic-v166-8-picked', sourceRow: 1, channelInfo: '当前选中原行备注' });
   const matching = status(20, { id: 'synthetic-v166-status-8-21', sourceRow: 1, rawStatus: '原状态一' });
   const conflicting = { ...matching, id: 'synthetic-v166-status-8-22', rawStatus: '原状态二', sourceColumn: 22 };
@@ -314,8 +323,8 @@ test('clicking an actual repeated country-sheet row opens only that original row
   const handler = nestedHandler('openCountrySheetRate', { ...view, setAnomalyModal: value => { detail = value; } });
   const page = parentPage(view, { openCountrySheetRate: handler });
   const actualSheet = elementsByType(api.CountryRatePage(page.props), sheetApi.default)[0];
-  assert.strictEqual(actualSheet.props.onOpenRate, handler);
-  actualSheet.props.onOpenRate(selected);
+  assert.equal(actualSheet.props.onOpenRate, undefined, 'The production country table must display details on-page');
+  handler(selected);
   assert.equal(detail.sourceRowDetail, true); assert.deepEqual(detail.rateRows, [selected]);
   assert.strictEqual(detail.rateRows[0], selected); assert.deepEqual(detail.statusRows, [matching, conflicting]);
   assert.match(detail.title, /印度线下 · 原行 9/);

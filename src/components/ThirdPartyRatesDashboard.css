@@ -1,0 +1,126 @@
+/* Country rates only: the volume dashboard, anomaly views and shared filters
+   keep their established styles and data paths. */
+.third-party-module.country-rate-workspace {
+  min-width: 0;
+  gap: 10px;
+}
+.country-rate-workspace > .rate-module-switch {
+  margin: 0 !important;
+  padding: 6px 8px !important;
+  border-radius: 10px !important;
+}
+.country-rate-workspace .rate-module-switch .main-tab-row {
+  width: auto !important;
+  flex: 0 0 auto;
+  padding: 0 !important;
+  border: 0 !important;
+}
+.country-rate-workspace .rate-module-switch .country-tab-row {
+  flex: 1 1 650px;
+  width: auto !important;
+  max-width: 100%;
+  padding: 0 !important;
+  gap: 2px;
+}
+.country-rate-workspace .rate-module-switch .module-tab {
+  min-height: 32px !important;
+  padding: 0 10px !important;
+  border-radius: 6px !important;
+}
+.country-rate-workspace > .rate-access-mode-note {
+  margin: 0 !important;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.7;
+}
+.country-rate-workspace > .filter-card {
+  margin: 0 !important;
+  padding: 9px 12px !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+}
+.country-rate-workspace .rate-filters {
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 7px 10px !important;
+}
+.country-rate-workspace .rate-filters .field label {
+  margin-bottom: 3px !important;
+  font-size: 10px !important;
+}
+.country-rate-workspace .rate-filters .input,
+.country-rate-workspace .rate-filters .multi-button,
+.country-rate-workspace .rate-filters .multi-select-trigger,
+.country-rate-workspace .rate-filters .primary-btn,
+.country-rate-workspace .rate-filters .ghost-btn {
+  min-height: 32px !important;
+  height: 32px !important;
+  border-radius: 6px !important;
+}
+.country-rate-workspace .rate-filters > .action-row {
+  min-height: 32px !important;
+  gap: 6px;
+  align-self: end;
+}
+.country-rate-workspace .country-rate-sheet-page {
+  min-width: 0;
+  padding: 0;
+  border: 1px solid #dce5ef;
+  border-radius: 10px;
+  background: #fff;
+}
+.country-rate-workspace .country-rate-sheet-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px 8px;
+}
+.country-rate-workspace .country-rate-sheet-heading h2 {
+  margin: 0;
+  color: #213047;
+  font-size: 15px;
+  line-height: 1.4;
+  font-weight: 700;
+}
+.country-rate-workspace .country-rate-sheet-heading h2 span {
+  margin-left: 8px;
+  color: #697b91;
+  font-size: 12px;
+  font-weight: 400;
+}
+.country-rate-workspace .country-rate-source-label {
+  flex-shrink: 0;
+  color: #697b91;
+  font-size: 11px;
+}
+.country-rate-workspace .country-rate-sheet-page > .rate-sheet {
+  border: 0;
+  border-radius: 0 0 10px 10px;
+}
+@media (max-width: 1100px) {
+  .country-rate-workspace .rate-filters {
+    grid-template-columns: repeat(4, minmax(100px, 1fr));
+  }
+}
+@media (max-width: 700px) {
+  .country-rate-workspace .rate-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .country-rate-workspace .rate-filters > .action-row {
+    grid-column: 1 / -1;
+  }
+  .country-rate-workspace .rate-module-switch .country-tab-row {
+    flex: 1 1 100%;
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    padding-bottom: 3px !important;
+  }
+  .country-rate-workspace .country-tab-row .module-tab { flex-shrink: 0; }
+  .country-rate-workspace .country-rate-sheet-heading { padding: 10px; }
+  .country-rate-workspace .country-rate-sheet-heading h2 span { display: none; }
+}
