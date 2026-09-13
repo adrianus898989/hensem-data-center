@@ -18,6 +18,7 @@ const status = (extra = {}) => ({ id: 'India-v166-status-10-20', sheetName: '印
   collectFee: '1.25%', payoutFee: '0.8%', totalFee: '2.05%', collectSingleFee: '0', payoutSingleFee: '3', collectLimit: '100–50,000', payoutLimit: '200–100,000',
   status: '正常', rawStatus: '开启', sourceRow: 11, sourceColumn: 21, ...extra });
 const render = (rateRows, statusRows = [], extra = {}) => renderToStaticMarkup(React.createElement(api.default, { country: '印度', rateRows, statusRows, ...extra }));
+const renderFull = (rateRows, statusRows = [], extra = {}) => render(rateRows, statusRows, { initialView: 'full', ...extra });
 
 test('one input type stays one row; no collapsed categories, fee addition or alphabetic sorting', () => {
   const rows = [rate({ id: 'first', thirdParty: 'Zulu', category: 'UPI' }), rate({ id: 'second', thirdParty: 'Alpha', category: 'IMPS', collectFee: '2.17%' }), rate({ id: 'third', thirdParty: 'Zulu', category: 'UPI' })];
@@ -30,7 +31,7 @@ test('one input type stays one row; no collapsed categories, fee addition or alp
 });
 
 test('explicit zero, empty and tiered fee text remain distinct without number parsing', () => {
-  const html = render([rate({ collectFee: '0%', collectSingleFee: '', payoutSingleFee: '0.00', payoutFee: '1000以下0.8%\n1000以上0.6% + 2' })]);
+  const html = renderFull([rate({ collectFee: '0%', collectSingleFee: '', payoutSingleFee: '0.00', payoutFee: '1000以下0.8%\n1000以上0.6% + 2' })]);
   assert.match(html, /<td>0%<\/td><td>—<\/td>/);
   assert.match(html, /1000以下0.8%\n1000以上0.6% \+ 2/);
   assert.match(html, /<td>0\.00<\/td>/);
@@ -44,7 +45,7 @@ test('business side status uses exact metadata field only, never overall status'
   const capability = rate({ channelInfo: '代收情况: 支持限额 / 代付情况: 20万50万' });
   assert.equal(api.rateSheetBusinessStatus(capability, 'collect'), '');
   assert.equal(api.rateSheetBusinessStatus(capability, 'payout'), '');
-  assert.match(render([capability]), /代付情况: 20万50万/);
+  assert.match(renderFull([capability]), /代付情况: 20万50万/);
 });
 
 test('matrix requires sheet, country, source row, type and exact party', () => {
@@ -73,15 +74,19 @@ test('platform columns follow sourceColumn, stable ties preserve source order', 
   assert.deepEqual(columns.map(item => item.platform), ['B', 'A', 'Z']);
 });
 
-test('matrix defaults collapsed; matched records preserve raw wording/conflicts without choosing a winner', () => {
+test('compact matrix is visible by default; matched raw conflicts remain without choosing a winner', () => {
   const records = [status({ id: 's1', rawStatus: '支持充值,暂缓代付' }), status({ id: 's2', rawStatus: '暂停维护' })];
   assert.deepEqual(api.rateSheetMatrixRows(rate(), records).map(row => row.rawStatus), ['支持充值,暂缓代付', '暂停维护']);
   const html = render([rate()], records);
-  assert.match(html, /盘口状态矩阵/); assert.doesNotMatch(html, /盘口接入状态 · 原单元格/);
+  assert.match(html, /class="rate-sheet rate-sheet-compact" data-view="compact"/);
+  assert.match(html, /盘口接入状态 · 原单元格/);
+  assert.match(html, /支持充值,暂缓代付/); assert.match(html, /暂停维护/);
+  assert.match(html, /不代表实际跑量/);
+  assert.doesNotMatch(html, /有跑|没跑|未跑|rate-sheet-matrix-toggle/);
 });
 
 test('all source note fields preserved, escaped and not executed as markup', () => {
-  const html = render([rate({ channelInfo: '<script>alert(1)</script>\n特殊 / 原文', leak: '漏单备注', whitelist: '白名单说明' })]);
+  const html = renderFull([rate({ channelInfo: '<script>alert(1)</script>\n特殊 / 原文', leak: '漏单备注', whitelist: '白名单说明' })]);
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/); assert.match(html, /漏单备注/); assert.match(html, /白名单说明/);
   assert.doesNotMatch(html, /<script/);
 });
@@ -103,15 +108,26 @@ test('controlled selectedSheet chooses the parent page, with a safe current-list
   }
 });
 
-test('more than 200 actual rows are not silently clipped', () => {
-  const html = render(Array.from({ length: 225 }, (_, i) => rate({ id: `row-${i}` })));
-  assert.equal((html.match(/data-rate-id=/g) || []).length, 225);
-  assert.match(html, /225 条类型记录/);
+test('225 rows retain the original total with explicit 12/20/50 pagination, not a hidden fixed clip', () => {
+  const rows = Array.from({ length: 225 }, (_, i) => rate({ id: `row-${i}` }));
+  const before = JSON.stringify(rows);
+  for (const pageSize of [12, 20, 50]) {
+    const html = render(rows, [], { pageSize });
+    assert.equal((html.match(/data-rate-id=/g) || []).length, pageSize);
+    assert.match(html, /225 条类型记录/);
+    assert(html.includes(`1–${pageSize} / 225 条`));
+    assert(html.includes(`1 / ${Math.ceil(225 / pageSize)}`));
+    assert.match(html, /aria-label="每页记录数"/);
+    assert.match(html, /<button type="button">下一页<\/button>/);
+  }
+  assert.equal(JSON.stringify(rows), before);
 });
 
-test('optional detail button receives a source row and empty state needs no data', () => {
+test('legacy detail callback cannot add a popup action; full columns are inline and empty is safe', () => {
   assert.doesNotMatch(render([rate()]), /rate-sheet-detail/);
-  assert.match(render([rate()], [], { onOpenRate: () => assert.fail('SSR must not invoke actions') }), /查看 SUPER UPI 详情/);
+  const html = render([rate()], [], { onOpenRate: () => assert.fail('SSR must not invoke actions') });
+  assert.doesNotMatch(html, /查看 SUPER UPI 详情|rate-sheet-detail|role="dialog"/);
+  assert.match(html, /原表全部列/);
   assert.match(render([]), /没有匹配的三方费率资料/);
 });
 
@@ -140,7 +156,7 @@ for (const [country, sheet, types, units] of [
     const rows = types.map((category, i) => rate({ id: `${country}-${i}`, sheetName: sheet, country, thirdParty: '同名示例渠道', category,
       collectFee: i ? '0%' : '0.75%', collectSingleFee: units[0], collectLimit: units[1], payoutFee: '', payoutSingleFee: '',
       channelInfo: '代收情况: 支持 / 代付情况: 20万50万', status: '', sourceRow: 6 + i }));
-    const before = JSON.stringify(rows), html = render(rows, [], { country });
+    const before = JSON.stringify(rows), html = renderFull(rows, [], { country });
     assert.equal((html.match(/data-rate-id=/g) || []).length, 2);
     for (const text of [...types, ...units]) assert(html.includes(text), text);
     assert.doesNotMatch(html, /多类型|rate-sheet-status-good|rate-sheet-status-bad/);
@@ -153,11 +169,24 @@ for (const [country, sheet, types, units] of [
 
 test('long multilingual notes including literal comparison signs and emoji have no truncation', () => {
   const note = '原样说明 R$ / VND / USDT，金额 <= 100，范围 > 0，🙂\n'.repeat(80) + '长备注结束标记';
-  const html = render([rate({ channelInfo: note })]);
+  const html = renderFull([rate({ channelInfo: note })]);
   assert.match(html, /长备注结束标记/);
   assert.equal((html.match(/🙂/gu) || []).length, 80);
   assert.match(html, /金额 &lt;= 100/); assert.match(html, /范围 &gt; 0/);
   assert.match(html, /完整备注，可滚动查看/); assert.match(html, /tabindex="0" role="region"/);
+});
+
+test('compact preserves separate percent and single units, while full retains every original field', () => {
+  const row = rate({ collectFee: '0%', collectSingleFee: '1 USDT', payoutFee: '', payoutSingleFee: '0', totalFee: '原表合计不可重算',
+    collectLimit: '精确原文 <= 1,000 USDT', payoutLimit: '0–50,000', leak: '漏单原文', whitelist: '白名单原文' });
+  const compact = render([row]), full = renderFull([row]);
+  assert.match(compact, /rate-sheet-fee-value">0%/);
+  assert.match(compact, /rate-sheet-single-value">单笔 1 USDT/);
+  assert.match(compact, /rate-sheet-fee-value">—/);
+  assert.match(compact, /rate-sheet-single-value">单笔 0/);
+  assert.doesNotMatch(compact, /rate-sheet-notes|原表合计不可重算/);
+  assert.match(full, /原表合计不可重算/);
+  for (const field of ['1 USDT', '精确原文 &lt;= 1,000 USDT', '0–50,000', '漏单原文', '白名单原文']) assert(full.includes(field));
 });
 
 test('presentation imports only React, types and isolated CSS; no fee pipeline or I/O', () => {

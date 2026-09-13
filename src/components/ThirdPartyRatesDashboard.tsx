@@ -10,6 +10,7 @@ import { formatNumber, formatPercent } from "@/lib/format";
 import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
 import { dashboardBusinessFetch, isDashboardDataDenied } from "@/lib/dashboardDataClient";
 import ThirdPartyRateSheet, { rateSheetBusinessStatus, rateSheetMatrixRows, rateSheetSourceRow } from "./ThirdPartyRateSheet";
+import "./ThirdPartyRatesDashboard.css";
 
 export function thirdPartyStatusDisplayRows(rows: readonly ThirdPartyPlatformStatusRow[]): ThirdPartyPlatformStatusRow[] {
   return rows.map((row) => {
@@ -1150,7 +1151,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
   const totalPages = pageCount(currentTotal, pageSize);
 
   return (
-    <div className={`third-party-module ${!hasQueried || !payload ? "business-prequery" : ""}`}>
+    <div className={`third-party-module ${mainView === "countryRates" ? "country-rate-workspace" : ""} ${!hasQueried || !payload ? "business-prequery" : ""}`}>
       {!embedded && <div className="topbar rate-topbar">
         <div className="title">
           <h1>三方费率</h1>
@@ -1305,53 +1306,15 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
 }
 
 
-function CountryRatePage({ country, statusRows, rateRows, sheetRows, sheetStatusRows, selectedSheet, onSelectSheet, onOpenSheetRate, highFeeRows, anomalies, onOpenRate, onOpenAnomaly }: { country: string; statusRows: ThirdPartyPlatformStatusRow[]; rateRows: ThirdPartyRateRow[]; sheetRows: ThirdPartyRateRow[]; sheetStatusRows: ThirdPartyPlatformStatusRow[]; selectedSheet: string; onSelectSheet: (sheet: string) => void; onOpenSheetRate: (row: ThirdPartyRateRow) => void; highFeeRows: ThirdPartyRateRow[]; anomalies: string[]; onOpenRate: (row: ThirdPartyRateRow) => void; onOpenAnomaly: (message: string) => void }) {
-  const open = statusRows.filter((row) => GOOD_STATUSES.has(row.status)).length;
-  const bad = statusRows.filter((row) => BAD_STATUSES.has(row.status)).length;
-  const platforms = uniq(statusRows.map((row) => row.platform));
-  const parties = uniq([...statusRows.map((row) => canonicalThirdPartyName(row.thirdParty, row.country)), ...rateRows.map((row) => canonicalThirdPartyName(row.thirdParty, row.country))]);
-  const statusGroups = summarizePlatformHealth(statusRows).slice(0, 10);
-  const runningRows = summarizeThirdPartyRunning(statusRows, rateRows).slice(0, 10);
-
+function CountryRatePage({ country, sheetRows, sheetStatusRows, selectedSheet, onSelectSheet }: { country: string; statusRows: ThirdPartyPlatformStatusRow[]; rateRows: ThirdPartyRateRow[]; sheetRows: ThirdPartyRateRow[]; sheetStatusRows: ThirdPartyPlatformStatusRow[]; selectedSheet: string; onSelectSheet: (sheet: string) => void; onOpenSheetRate: (row: ThirdPartyRateRow) => void; highFeeRows: ThirdPartyRateRow[]; anomalies: string[]; onOpenRate: (row: ThirdPartyRateRow) => void; onOpenAnomaly: (message: string) => void }) {
   return (
-    <div className="country-rate-page">
-      <section className="panel country-page-title">
-        <div>
-          <h2>{countryPaneLabel(country)}</h2>
-          <p>这里只显示 {country || "当前国家"} 的三方费率、盘口接入状态和异常；主三方名称按映射表统一。</p>
-        </div>
-      </section>
-      <RatePanel title={`${countryPaneLabel(country)} 三方费率明细`} subtitle="按原表页签、行序逐项展示；代收与代付分栏，不合并不同通道费率。">
-        <ThirdPartyRateSheet country={country} rateRows={sheetRows} statusRows={sheetStatusRows} selectedSheet={selectedSheet} onSelectSheet={onSelectSheet} onOpenRate={onOpenSheetRate} />
-      </RatePanel>
-      <section className="metrics rate-metrics">
-        <RateMetric label="接入记录" value={formatNumber(statusRows.length)} sub="盘口 × 主三方状态" />
-        <RateMetric label="盘口 / 主三方" value={`${formatNumber(platforms.length)} / ${formatNumber(parties.length)}`} sub="按当前国家去重" />
-        <RateMetric label="开启 / 正常" value={formatNumber(open)} sub={`可用率 ${formatPercent(statusRows.length ? open / statusRows.length : 0)}`} />
-        <RateMetric label="异常 / 未接" value={formatNumber(bad)} sub="暂停、停用、未接入、维护、不支持" />
-        <RateMetric label="高费率" value={formatNumber(highFeeRows.length)} sub="按当前国家费率资料判断" />
-        <RateMetric label="异常提醒" value={formatNumber(anomalies.length)} sub="仅当前国家" />
-      </section>
-      <section className="chart-grid">
-        <RatePanel title={`${countryPaneLabel(country)} 可用三方较少盘口`} subtitle="本国家内开启/正常数量越少越需要关注。">
-          <PlatformHealthList rows={statusGroups} statusRows={statusRows} rateRows={rateRows} />
-        </RatePanel>
-        <RatePanel title={`${countryPaneLabel(country)} 三方运行 TOP`} subtitle="本国家内哪些三方覆盖盘口最多、开启状态最多。">
-          <ThirdPartyRunningMiniList rows={runningRows} onOpen={() => undefined} />
-        </RatePanel>
-      </section>
-      <section className="chart-grid">
-        <RatePanel title={`${countryPaneLabel(country)} 费率偏高`} subtitle="只显示当前国家费率偏高的三方。">
-          <CountryHighFeeMini rows={highFeeRows.slice(0, 20)} onOpen={onOpenRate} />
-        </RatePanel>
-        <RatePanel title={`${countryPaneLabel(country)} 异常提醒`} subtitle="按当前国家过滤后的异常。">
-          <AnomalyList items={anomalies.slice(0, 30)} expanded onOpen={onOpenAnomaly} />
-        </RatePanel>
-      </section>
-      <RatePanel title={`${countryPaneLabel(country)} 盘口接入状态`} subtitle="当前国家的盘口接入状态，最多显示 200 行。">
-        <PlatformStatusTable rows={statusRows.slice(0, 200)} sortState={{ key: "platform", direction: "asc" }} onSort={() => undefined} />
-      </RatePanel>
-    </div>
+    <section className="country-rate-page country-rate-sheet-page" aria-label={`${countryPaneLabel(country)}费率与平台接入表`}>
+      <header className="country-rate-sheet-heading">
+        <h2>{countryPaneLabel(country)} <span>费率与平台接入</span></h2>
+        <span className="country-rate-source-label">原表只读</span>
+      </header>
+      <ThirdPartyRateSheet country={country} rateRows={sheetRows} statusRows={sheetStatusRows} selectedSheet={selectedSheet} onSelectSheet={onSelectSheet} />
+    </section>
   );
 }
 
