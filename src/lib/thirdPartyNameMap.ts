@@ -65,6 +65,27 @@ function stripBusinessSuffix(value: string): string {
     .trim();
 }
 
+// 2026-09-13 user-confirmed aliases. Keep these out of the global alias index:
+// e.g. Indonesia's StarPay is a different provider. Match only complete names,
+// without deleting punctuation or unconfirmed version numbers.
+const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
+  ["starpay", "VstarPay"],
+  ["qr-rspay", "RsPay"],
+  ["fancypayinr-paytmqr", "FancyPay"],
+  ["super-apppay", "SUPER"],
+  ["qr-wpay", "WPay"],
+  ["paytm-rapay", "RAPay"],
+  ["ic2payinr-paytmqr", "ICPay"],
+  ["newwinpay2", "NewWinPay"],
+  ["arbpay2inr-bank", "UPI-QR"],
+  ["arbpay2inr-upi", "UPI-QR"],
+]);
+export function confirmedIndiaThirdPartyAlias(value: string, country?: string): string {
+  const scope = normalizeCell(country || "");
+  if (!/^(?:IN|INDIA|印度(?:线下)?(?:盘口)?)$/i.test(scope)) return "";
+  return CONFIRMED_INDIA_CHANNEL_ALIASES.get(normalizeCell(value).toLowerCase()) || "";
+}
+
 type ThirdPartyAliasEntry = { country: string; canonical: string; aliases: string[] };
 
 // 来自用户上传的「三方名称及类型.xlsx」。用于三方量 + 三方费率统一识别。
@@ -417,6 +438,9 @@ function prettyFallbackName(raw: string): string {
 
 
 export function inferThirdPartyChannelType(value: string, country?: string, extraText = ""): string {
+  // These two explicitly confirmed ArbPay2 names are UPI, including BANK.
+  // Other provider names and saved PaytmQR/UPI categories remain untouched.
+  if (confirmedIndiaThirdPartyAlias(value, country) === "UPI-QR") return "UPI";
   const cKey = countryKey(country);
   const raw = `${normalizeCell(value)} ${normalizeCell(extraText)}`;
   const text = raw.toLowerCase()
@@ -638,6 +662,8 @@ export function canonicalThirdPartyName(value: string, country?: string): string
   if (!raw) return "未知三方";
 
   const strippedRaw = stripBusinessSuffix(raw);
+  const confirmedIndiaAlias = confirmedIndiaThirdPartyAlias(strippedRaw, country);
+  if (confirmedIndiaAlias) return confirmedIndiaAlias;
   const rawAliasKey = aliasKey(strippedRaw);
   const originalAliasKey = aliasKey(raw);
   const cKeyNow = countryKey(country);

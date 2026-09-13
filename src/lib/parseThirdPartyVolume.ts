@@ -1,6 +1,6 @@
 import type { ThirdPartyVolumePayload, ThirdPartyVolumeRow } from "./types";
 import { normalizeCell, toNumber } from "./format";
-import { canonicalThirdPartyName, inferThirdPartyChannelType, isIgnoredThirdPartyText, isLikelyThirdPartyCodeOnly } from "./thirdPartyNameMap";
+import { canonicalThirdPartyName, confirmedIndiaThirdPartyAlias, inferThirdPartyChannelType, isIgnoredThirdPartyText, isLikelyThirdPartyCodeOnly } from "./thirdPartyNameMap";
 import { platformDisplayCountry } from "./platformDisplayCountry";
 
 type Values = string[][];
@@ -701,15 +701,18 @@ export function normalizeThirdPartyVolumePayload(payload: ThirdPartyVolumePayloa
 
   const normalizedRows: ThirdPartyVolumeRow[] = sourceRows.map((row) => {
     const rawChannel = normalizeCell(row.rawChannel || row.channel || "");
-    // 主表分组必须始终使用已经归一化的 channel。rawChannel 只用于别名识别和类型判断，
-    // 不能反过来覆盖主名称，否则 “FastPay-QR / FastPay” 会被拆成新的第三方。
+    // 保留已归一化主名称；只有用户明确确认的印度别名可以纠正旧快照的归类。
+    // 不对其他 rawChannel 重新猜测，避免拆开既有主三方或影响其他国家。
     const canonicalSource = normalizeCell(row.channel || rawChannel);
     const keepManual = ["人工确认", "人工充值", "Coinvid USDT"].includes(row.channel || "");
-    let channel = keepManual ? row.channel : manualThirdPartyOverride(row.country, row.platform, rawChannel || canonicalSource, row.direction) || canonicalThirdPartyName(canonicalSource, row.country);
+    const confirmedAlias = confirmedIndiaThirdPartyAlias(rawChannel, row.country);
+    let channel = keepManual ? row.channel : confirmedAlias || manualThirdPartyOverride(row.country, row.platform, rawChannel || canonicalSource, row.direction) || canonicalThirdPartyName(canonicalSource, row.country);
     if (!channel || channel === "未知三方" || isIgnoredThirdPartyText(channel)) {
       channel = row.channel || rawChannel || "未知三方";
     }
     let channelType = row.channelType || inferThirdPartyChannelType(rawChannel || channel, row.country, `${channel} ${rawChannel}`) || "其他类型";
+    // 这两个已确认 ARB 通道同属 UPI-QR；纠正旧 BANK 推断，其他类型仍照原记录。
+    if (!keepManual && confirmedAlias === "UPI-QR") channelType = "UPI";
     if (channel === "人工确认" || channel === "人工充值") channelType = channel;
     return {
       ...row,

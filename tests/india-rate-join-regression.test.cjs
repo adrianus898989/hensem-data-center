@@ -1,0 +1,161 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+const ts = require('typescript');
+const { root, loadTs } = require('./load-typescript.cjs');
+
+// Load the actual production fee functions, without mounting the dashboard,
+// executing React effects, or accessing a network/account/browser cache.
+const filename = path.join(root, 'src/components/ThirdPartyVolumeDashboard.tsx');
+const source = ts.createSourceFile(filename, fs.readFileSync(filename, 'utf8'),
+  ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const functions = source.statements.filter(node => ts.isFunctionDeclaration(node)
+  && node.name?.text !== 'ThirdPartyVolumeDashboard');
+const dependencies = {
+  exports: {},
+  SOUTH_AMERICA_RATE_COUNTRIES: ['墨西哥', '哥伦比亚', '智利'],
+  ALL_USDT_COUNTRY_PAGE: '所有国家USDT',
+  ...loadTs(path.join(root, 'src/lib/thirdPartyNameMap.ts')),
+  ...loadTs(path.join(root, 'src/lib/thirdPartyPlatform.ts')),
+  ...loadTs(path.join(root, 'src/lib/platformDisplayCountry.ts')),
+  ...loadTs(path.join(root, 'src/lib/format.ts')),
+};
+const compiled = ts.transpileModule(functions.map(fn => fn.getText(source)).join('\n'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
+}).outputText;
+const api = Function('require', ...Object.keys(dependencies), compiled + `
+  return { expandRateNameCandidates, buildRateMap, findMatchedRate,
+    rateFor, singleFeeFor, estimateSideFee, rateHasSideFee };
+`)(require, ...Object.values(dependencies));
+
+const ARB2 = ['ArbPay2INR-BANK', 'ArbPay2INR-UPI'];
+function rate(thirdParty, category = 'UPI', extra = {}) {
+  return {
+    id: `synthetic-${thirdParty}-${category}`, country: '印度', sheetName: 'synthetic-fees',
+    thirdParty, category, collectFee: '1.25%', payoutFee: '0.50%', totalFee: '1.75%',
+    collectSingleFee: '0.10', payoutSingleFee: '0.20', collectLimit: '100–10000',
+    payoutLimit: '200–20000', status: '开启', ...extra,
+  };
+}
+function lookup(map, name, type = 'UPI', side = 'collect', country = '印度', platform = 'SYNTHETIC') {
+  return api.findMatchedRate(map, country, platform, name, type, side);
+}
+function feeFields(row) {
+  return Object.fromEntries(['collectFee', 'payoutFee', 'totalFee', 'collectSingleFee',
+    'payoutSingleFee', 'collectLimit', 'payoutLimit', 'status'].map(key => [key, row[key]]));
+}
+
+test('confirmed Arb2 candidates never add independent ArbPay names', () => {
+  for (const name of [...ARB2, '  ARBPAY2INR-BANK  ']) {
+    const candidates = api.expandRateNameCandidates('印度', name);
+    assert(candidates.includes('UPI-QR'), name);
+    assert(!candidates.includes('ArbPay'), name);
+    assert(!candidates.includes('ArbPayINR'), name);
+  }
+  const existing = api.expandRateNameCandidates('印度', 'ArbPay');
+  assert(existing.includes('ArbPay'));
+  assert(existing.includes('ArbPayINR'));
+  assert(!existing.includes('UPI-QR'));
+});
+
+test('actual fee map does not leak an Arb2 fee into independent ArbPay', () => {
+  for (const name of ARB2) for (const category of ['UPI', '银行卡']) {
+    const original = rate(name, category), before = structuredClone(original);
+    const map = api.buildRateMap([original]);
+    assert.equal(lookup(map, name, category)?.id, original.id);
+    assert.equal(lookup(map, 'UPI-QR', category)?.id, original.id);
+    for (const independent of ['ArbPay', 'ArbPayINR']) {
+      assert.equal(lookup(map, independent, category), undefined, `${name} must not supply ${independent}`);
+    }
+    for (const key of map.keys()) assert(!['arbpay', 'arbpayinr'].includes(key.split('|||')[2]), key);
+    assert.deepEqual(original, before);
+  }
+});
+
+test('actual fallback cannot borrow independent ArbPay for missing Arb2 or UPI-QR', () => {
+  const original = rate('ArbPay', '银行卡'), map = api.buildRateMap([original]);
+  assert.equal(lookup(map, 'ArbPayINR', '银行卡')?.id, original.id);
+  for (const name of [...ARB2, 'UPI-QR']) {
+    assert.equal(lookup(map, name, 'UPI'), undefined, name);
+    assert.equal(lookup(map, name, '银行卡'), undefined, name);
+  }
+});
+
+test('both providers retain their own fees regardless of source row order', () => {
+  for (const name of ARB2) {
+    const independent = rate('ArbPay', 'UPI', { id: 'independent-arb', collectFee: '7.50%' });
+    const confirmed = rate(name, 'UPI', { id: 'confirmed-upi', collectFee: '1.50%' });
+    for (const rows of [[independent, confirmed], [confirmed, independent]]) {
+      const before = structuredClone(rows), map = api.buildRateMap(rows);
+      for (const alias of ['ArbPay', 'ArbPayINR']) assert.equal(lookup(map, alias)?.collectFee, '7.50%');
+      for (const alias of [name, 'UPI-QR']) assert.equal(lookup(map, alias)?.collectFee, '1.50%');
+      assert.deepEqual(rows, before);
+    }
+  }
+});
+
+test('SUPER remains the shared internal rate key in both directions', () => {
+  for (const sourceName of ['SUPER', 'SuperPay', 'Super-APPPay']) {
+    const original = rate(sourceName, 'PaytmQR'), map = api.buildRateMap([original]);
+    for (const queryName of ['SUPER', 'SuperPay', 'Super-APPPay']) {
+      const result = lookup(map, queryName, 'PaytmQR');
+      assert(result, `${sourceName} -> ${queryName}`);
+      assert.deepEqual(feeFields(result), feeFields(original));
+      assert.equal(result.thirdParty, sourceName, 'matching does not rewrite the source fee record');
+    }
+  }
+});
+
+test('confirmed NewWinPay2 joins NewWinPay while unconfirmed NewWinPay3 remains independent', () => {
+  for (const sourceName of ['NewWinPay', 'NewWinPay2']) {
+    const original = rate(sourceName), map = api.buildRateMap([original]);
+    for (const alias of ['NewWinPay', 'NewWinPay2']) assert.equal(lookup(map, alias)?.id, original.id);
+    assert.equal(lookup(map, 'NewWinPay3'), undefined);
+  }
+  const third = rate('NewWinPay3'), map = api.buildRateMap([third]);
+  assert.equal(lookup(map, 'NewWinPay3')?.id, third.id);
+  assert.equal(lookup(map, 'NewWinPay2'), undefined);
+});
+
+test('India rate keys never supply another country with its confirmed aliases', () => {
+  for (const [name, query] of [['SuperPay', 'Super-APPPay'], ['NewWinPay', 'NewWinPay2'], ['UPI-QR', 'ArbPay2INR-BANK']]) {
+    const map = api.buildRateMap([rate(name)]);
+    assert(lookup(map, query));
+    for (const country of ['印尼', '越南', '巴西']) assert.equal(lookup(map, query, 'UPI', 'collect', country), undefined);
+  }
+});
+
+test('aliases do not change percent plus per-order fee formulas or original source values', () => {
+  const original = rate('SUPER', 'PaytmQR'), before = structuredClone(original);
+  const result = lookup(api.buildRateMap([original]), 'Super-APPPay', 'PaytmQR');
+  assert.equal(api.rateFor(result, 'collect'), 0.0125);
+  assert.equal(api.singleFeeFor(result, 'collect'), 0.10);
+  assert.equal(api.estimateSideFee(1000, 20, api.rateFor(result, 'collect'), api.singleFeeFor(result, 'collect')), 14.5);
+  assert.equal(api.rateFor(result, 'payout'), 0.005);
+  assert.equal(api.singleFeeFor(result, 'payout'), 0.20);
+  assert.equal(api.estimateSideFee(400, 4, api.rateFor(result, 'payout'), api.singleFeeFor(result, 'payout')), 2.8);
+  assert.deepEqual(feeFields(result), feeFields(original));
+  assert.deepEqual(original, before);
+});
+
+test('explicit zero fee remains zero after confirmed alias matching', () => {
+  const zero = rate('NewWinPay', 'UPI', { collectFee: '0%', collectSingleFee: '0', totalFee: '0%' });
+  const result = lookup(api.buildRateMap([zero]), 'NewWinPay2');
+  assert.equal(api.rateHasSideFee(result, 'collect'), true);
+  assert.equal(api.rateFor(result, 'collect'), 0);
+  assert.equal(api.singleFeeFor(result, 'collect'), 0);
+  assert.equal(api.estimateSideFee(1000, 20, api.rateFor(result, 'collect'), api.singleFeeFor(result, 'collect')), 0);
+});
+
+test('platform-only status fee aliases keep the existing exact platform restriction', () => {
+  const original = rate('ArbPay2INR-UPI', 'UPI', { platform: 'SYNTHETIC' });
+  const before = structuredClone(original), map = api.buildRateMap([], [original], true);
+  const result = lookup(map, 'UPI-QR');
+  assert.equal(result?.scopePlatformOnly, true);
+  // Existing status-to-fee adapter keeps fee fields, not the status-only flag.
+  assert.deepEqual(feeFields(result), { ...feeFields(original), status: undefined });
+  assert.equal(lookup(map, 'UPI-QR', 'UPI', 'collect', '印度', 'OTHER'), undefined);
+  assert.equal(lookup(map, 'ArbPay'), undefined);
+  assert.deepEqual(original, before);
+});

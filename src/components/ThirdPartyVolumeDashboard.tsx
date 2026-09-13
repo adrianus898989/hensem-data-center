@@ -25,7 +25,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ThirdPartyPlatformStatusRow, ThirdPartyRatePayload, ThirdPartyRateRow, ThirdPartyVolumePayload, ThirdPartyVolumeRow } from "@/lib/types";
 import { formatNumber, formatPercent } from "@/lib/format";
-import { canonicalThirdPartyName, inferThirdPartyChannelType } from "@/lib/thirdPartyNameMap";
+import { canonicalThirdPartyName, confirmedIndiaThirdPartyAlias, inferThirdPartyChannelType } from "@/lib/thirdPartyNameMap";
 import { canonicalThirdPartyPlatform, canonicalThirdPartyPlatformSelections, matchesThirdPartyPlatformSelection } from "@/lib/thirdPartyPlatform";
 import { platformDisplayCountry, withPlatformDisplayCountry } from "@/lib/platformDisplayCountry";
 import { dashboardBusinessFetch, isDashboardDataDenied, readDashboardDataCache, writeDashboardDataCache } from "@/lib/dashboardDataClient";
@@ -1045,7 +1045,9 @@ function expandRateNameCandidates(country: string, ...values: Array<string | und
   if (normalizedCountry.includes("印度")) {
     // 用户确认：OX2PAY 就是 OXPay。量表和费率表任一边写 OX2Pay/OXPay 都必须命中同一费率。
     if (/ox2pay|oxpay/.test(keys)) ["OXPay", "OXPay-QR", "PAYTM-OXPay", "OX2Pay", "OX2Pay-QR", "PAYTM-OX2Pay"].forEach(add);
-    if (/arbpay|arbpayinr/.test(keys)) ["ArbPay", "ArbPayINR"].forEach(add);
+    // 已确认的 ArbPay2 BANK / UPI 属于 UPI-QR，不能再借用独立 ArbPay 的费率。
+    const confirmedUpiQr = values.some((value) => confirmedIndiaThirdPartyAlias(String(value || ""), normalizedCountry) === "UPI-QR");
+    if (!confirmedUpiQr && /arbpay|arbpayinr/.test(keys)) ["ArbPay", "ArbPayINR"].forEach(add);
   }
 
   if (/usdt|trx|trc20|tron/i.test(keys) || normalizedCountry.includes("USDT")) {
