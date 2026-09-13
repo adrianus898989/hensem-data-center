@@ -9,6 +9,7 @@ import { canonicalThirdPartyName } from "@/lib/thirdPartyNameMap";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
 import { dashboardBusinessFetch, isDashboardDataDenied } from "@/lib/dashboardDataClient";
+import ThirdPartyRateSheet, { rateSheetBusinessStatus, rateSheetMatrixRows, rateSheetSourceRow } from "./ThirdPartyRateSheet";
 
 export function thirdPartyStatusDisplayRows(rows: readonly ThirdPartyPlatformStatusRow[]): ThirdPartyPlatformStatusRow[] {
   return rows.map((row) => {
@@ -44,6 +45,7 @@ type RateAnomalyDetail = {
   message: string;
   statusRows: ThirdPartyPlatformStatusRow[];
   rateRows: ThirdPartyRateRow[];
+  sourceRowDetail?: boolean;
 };
 
 type ThirdPartyRunningRow = {
@@ -803,6 +805,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
   const [mainView, setMainView] = useState<RateMainView>("countryRates");
   const [view, setView] = useState<RateView>("anomalies");
   const [countryRatePage, setCountryRatePage] = useState("");
+  const [countryRateSheetName, setCountryRateSheetName] = useState("");
   const [filters, setFilters] = useState<RateFilters>(EMPTY_RATE_FILTERS);
   const [draftFilters, setDraftFilters] = useState<RateFilters>(EMPTY_RATE_FILTERS);
   const [page, setPage] = useState(1);
@@ -876,7 +879,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
     ]).sort((a, b) => a.localeCompare(b, "zh-CN"));
   }, [payload, draftFilters.countries, draftFilters.sheets]);
 
-  const filteredStatusRows = useMemo(() => {
+  const matchedStatusSourceRows = useMemo(() => {
     if (!payload) return [];
     const keyword = filters.keyword.trim().toLowerCase();
     const matched = payload.platformStatuses.filter((row) => {
@@ -892,12 +895,14 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
       if (filters.keyword && !compactText(displayCountry, row.sheetName, row.platform, row.thirdParty, canonical, row.status, row.collectFee, row.payoutFee, row.collectSingleFee, row.payoutSingleFee, row.category).includes(keyword)) return false;
       return true;
     });
-    // Keep the original country-based source deduplication/fee-name keys, then
-    // project display clones. Country-wide rate rows have no platform to move.
-    return thirdPartyStatusDisplayRows(dedupeStatusRows(matched)).sort(compareStatusSourceOrder);
+    return matched;
   }, [payload, filters, draftFilters.keyword]);
 
-  const filteredRateRows = useMemo(() => {
+  // Existing dashboard summaries keep their established deduplication. Only the
+  // country sheet presentation receives unmerged, already-authorized source rows.
+  const filteredStatusRows = useMemo(() => thirdPartyStatusDisplayRows(dedupeStatusRows(matchedStatusSourceRows)).sort(compareStatusSourceOrder), [matchedStatusSourceRows]);
+
+  const matchedRateSourceRows = useMemo(() => {
     if (!payload) return [];
     const keyword = filters.keyword.trim().toLowerCase();
     const matched = payload.rates.filter((row) => {
@@ -911,8 +916,10 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
       if (filters.keyword && !compactText(row.country, row.sheetName, row.category, row.thirdParty, canonical, row.status, row.collectFee, row.payoutFee, row.totalFee, row.collectSingleFee, row.payoutSingleFee, row.collectLimit, row.payoutLimit).includes(keyword)) return false;
       return true;
     });
-    return dedupeRateRows(matched).sort(compareRateSourceOrder);
+    return matched;
   }, [payload, filters, draftFilters.keyword]);
+
+  const filteredRateRows = useMemo(() => dedupeRateRows(matchedRateSourceRows).sort(compareRateSourceOrder), [matchedRateSourceRows]);
 
   const sortedStatusRows = useMemo(
     () => statusSort.key === "sourceOrder" ? [...filteredStatusRows].sort(compareStatusSourceOrder) : sortRows(filteredStatusRows, statusSort, statusValue),
@@ -939,6 +946,11 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
   const activeCountryRate = countryRatePage && countryRateOptions.includes(countryRatePage) ? countryRatePage : (countryRateOptions[0] || "");
   const activeCountryStatusRows = useMemo(() => filteredStatusRows.filter((row) => activeCountryRate && row.country === activeCountryRate), [filteredStatusRows, activeCountryRate]);
   const activeCountryRateRows = useMemo(() => filteredRateRows.filter((row) => activeCountryRate && row.country === activeCountryRate), [filteredRateRows, activeCountryRate]);
+  const activeCountrySheetRows = useMemo(() => matchedRateSourceRows.filter((row) => activeCountryRate && row.country === activeCountryRate).sort(compareRateSourceOrder), [matchedRateSourceRows, activeCountryRate]);
+  const activeCountrySheetStatuses = useMemo(() => thirdPartyStatusDisplayRows(matchedStatusSourceRows).filter((row) => activeCountryRate && row.country === activeCountryRate).sort(compareStatusSourceOrder), [matchedStatusSourceRows, activeCountryRate]);
+  const countryRateSheetNames = useMemo(() => uniq(activeCountrySheetRows.map((row) => row.sheetName)), [activeCountrySheetRows]);
+  const effectiveCountryRateSheetName = countryRateSheetNames.includes(countryRateSheetName) ? countryRateSheetName : (countryRateSheetNames[0] || "");
+  const visibleCountrySheetRows = useMemo(() => activeCountrySheetRows.filter((row) => row.sheetName === effectiveCountryRateSheetName), [activeCountrySheetRows, effectiveCountryRateSheetName]);
   const filteredAnomalies = useMemo(() => {
     if (!payload) return feeConsistencyAnomalies;
     const selected = new Set(filteredStatusRows.map((r) => `${r.country} ${r.platform}`));
@@ -991,7 +1003,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
 
   function handleExport() {
     const suffix = `${filterLabel(filters.countries)}-${view}`.replace(/\s+/g, "");
-    if (view === "running") {
+    if (mainView !== "countryRates" && view === "running") {
       exportCsv(`三方运行查询-${suffix}.csv`, sortedRunningRows, [
         { label: "三方名称", value: (r) => r.thirdParty },
         { label: "开启/正常", value: (r) => r.open },
@@ -1009,10 +1021,12 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
       ]);
       return;
     }
-    if (view === "rates") {
-      exportCsv(`三方费率表-${suffix}.csv`, sortedRateRows, [
+    if (mainView === "countryRates" || view === "rates") {
+      const rateSuffix = mainView === "countryRates" ? `${activeCountryRate}-${effectiveCountryRateSheetName}` : suffix;
+      exportCsv(`三方费率表-${rateSuffix}.csv`, mainView === "countryRates" ? visibleCountrySheetRows : sortedRateRows, [
         { label: "国家", value: (r) => r.country },
         { label: "页签", value: (r) => r.sheetName },
+        ...(mainView === "countryRates" ? [{ label: "原行", value: (r: ThirdPartyRateRow) => rateSheetSourceRow(r) ?? "" }] : []),
         { label: "类型", value: (r) => r.category },
         { label: "三方", value: (r) => r.thirdParty },
         { label: "合计费率", value: (r) => r.totalFee },
@@ -1110,6 +1124,18 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
     });
   }
 
+  function openCountrySheetRate(row: ThirdPartyRateRow) {
+    // This is a source-row detail, not a canonical-provider summary. Preserve
+    // repeated original rows and never borrow another sheet/type's metadata.
+    setAnomalyModal({
+      title: `${row.country} ${row.thirdParty} · ${row.sheetName} · 原行 ${rateSheetSourceRow(row) ?? "未提供"}`,
+      message: `仅显示当前原表行与该行的盘口接入记录；类型：${row.category || "未提供"}。`,
+      sourceRowDetail: true,
+      rateRows: [row],
+      statusRows: rateSheetMatrixRows(row, activeCountrySheetStatuses)
+    });
+  }
+
   function openThirdPartyDetail(row: ThirdPartyRunningRow) {
     setAnomalyModal({
       title: `${row.thirdParty} 运行详情`,
@@ -1184,6 +1210,11 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
           country={activeCountryRate}
           statusRows={activeCountryStatusRows}
           rateRows={activeCountryRateRows}
+          sheetRows={activeCountrySheetRows}
+          sheetStatusRows={activeCountrySheetStatuses}
+          selectedSheet={effectiveCountryRateSheetName}
+          onSelectSheet={setCountryRateSheetName}
+          onOpenSheetRate={openCountrySheetRate}
           highFeeRows={highFeeRateRows.filter((row) => row.country === activeCountryRate)}
           anomalies={filteredAnomalies.filter((text) => !activeCountryRate || text.includes(activeCountryRate))}
           onOpenRate={openRateAccess}
@@ -1274,7 +1305,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
 }
 
 
-function CountryRatePage({ country, statusRows, rateRows, highFeeRows, anomalies, onOpenRate, onOpenAnomaly }: { country: string; statusRows: ThirdPartyPlatformStatusRow[]; rateRows: ThirdPartyRateRow[]; highFeeRows: ThirdPartyRateRow[]; anomalies: string[]; onOpenRate: (row: ThirdPartyRateRow) => void; onOpenAnomaly: (message: string) => void }) {
+function CountryRatePage({ country, statusRows, rateRows, sheetRows, sheetStatusRows, selectedSheet, onSelectSheet, onOpenSheetRate, highFeeRows, anomalies, onOpenRate, onOpenAnomaly }: { country: string; statusRows: ThirdPartyPlatformStatusRow[]; rateRows: ThirdPartyRateRow[]; sheetRows: ThirdPartyRateRow[]; sheetStatusRows: ThirdPartyPlatformStatusRow[]; selectedSheet: string; onSelectSheet: (sheet: string) => void; onOpenSheetRate: (row: ThirdPartyRateRow) => void; highFeeRows: ThirdPartyRateRow[]; anomalies: string[]; onOpenRate: (row: ThirdPartyRateRow) => void; onOpenAnomaly: (message: string) => void }) {
   const open = statusRows.filter((row) => GOOD_STATUSES.has(row.status)).length;
   const bad = statusRows.filter((row) => BAD_STATUSES.has(row.status)).length;
   const platforms = uniq(statusRows.map((row) => row.platform));
@@ -1290,8 +1321,8 @@ function CountryRatePage({ country, statusRows, rateRows, highFeeRows, anomalies
           <p>这里只显示 {country || "当前国家"} 的三方费率、盘口接入状态和异常；主三方名称按映射表统一。</p>
         </div>
       </section>
-      <RatePanel title={`${countryPaneLabel(country)} 三方费率明细`} subtitle="当前国家主表按 Google 原始费率字段显示；详细手续费、停用原因、通道能力与接入盘口统一放在「查看」。">
-        <RateTable rows={[...rateRows].sort(compareRateSourceOrder).slice(0, 200)} sortState={{ key: "sourceOrder", direction: "asc" }} onSort={() => undefined} onOpen={onOpenRate} />
+      <RatePanel title={`${countryPaneLabel(country)} 三方费率明细`} subtitle="按原表页签、行序逐项展示；代收与代付分栏，不合并不同通道费率。">
+        <ThirdPartyRateSheet country={country} rateRows={sheetRows} statusRows={sheetStatusRows} selectedSheet={selectedSheet} onSelectSheet={onSelectSheet} onOpenRate={onOpenSheetRate} />
       </RatePanel>
       <section className="metrics rate-metrics">
         <RateMetric label="接入记录" value={formatNumber(statusRows.length)} sub="盘口 × 主三方状态" />
@@ -1735,8 +1766,8 @@ function RateAnomalyModal({ detail, onClose }: { detail: RateAnomalyDetail; onCl
           <div className="modal-section-title">费率与业务资料（{detail.rateRows.length} 条）</div>
           <div className="modal-card-grid">
             {detail.rateRows.map((row) => {
-              const collectStatus = rateBusinessStatus(row, "collect") || "-";
-              const payoutStatus = rateBusinessStatus(row, "payout") || "-";
+              const collectStatus = (detail.sourceRowDetail ? rateSheetBusinessStatus(row, "collect") : rateBusinessStatus(row, "collect")) || "-";
+              const payoutStatus = (detail.sourceRowDetail ? rateSheetBusinessStatus(row, "payout") : rateBusinessStatus(row, "payout")) || "-";
               const stopReason = rateStopReason(row);
               const extraFields = detailFieldDefs
                 .map(([label, aliases]) => [label, rateInfoValue(row, aliases)] as [string, string])
@@ -1758,8 +1789,8 @@ function RateAnomalyModal({ detail, onClose }: { detail: RateAnomalyDetail; onCl
                     <div className="rate-detail-section-title">费率</div>
                     <div className="tidy-info-grid primary-rate-grid">
                       <div><span>合计费率</span><b>{row.totalFee || "-"}</b></div>
-                      <div><span>代收合计%+单笔</span><b>{rateCombinedFee(row, "collect")}</b></div>
-                      <div><span>代付合计%+单笔</span><b>{rateCombinedFee(row, "payout")}</b></div>
+                      <div><span>代收合计%+单笔</span><b>{detail.sourceRowDetail ? rateInfoValue(row, ["代收合计%+单笔", "代收合计", "收款合计%+单笔"]) || "未单独提供" : rateCombinedFee(row, "collect")}</b></div>
+                      <div><span>代付合计%+单笔</span><b>{detail.sourceRowDetail ? rateInfoValue(row, ["代付合计%+单笔", "代付合计", "付款合计%+单笔"]) || "未单独提供" : rateCombinedFee(row, "payout")}</b></div>
                       <div><span>代收费率</span><b>{row.collectFee || "-"}</b></div>
                       <div><span>代付费率</span><b>{row.payoutFee || "-"}</b></div>
                       <div><span>代收单笔</span><b>{row.collectSingleFee || "-"}</b></div>
@@ -1790,7 +1821,15 @@ function RateAnomalyModal({ detail, onClose }: { detail: RateAnomalyDetail; onCl
                     </div>
                   ) : null}
 
-                  <div className="rate-source-line">数据来源：{row.sheetName || "-"} · 第 {row.sourceRow || "-"} 行</div>
+                  {detail.sourceRowDetail && <div className="rate-detail-section">
+                    <div className="rate-detail-section-title">原表备注完整内容</div>
+                    <div className="tidy-info-grid capability-grid">
+                      <div className="wide-info-cell"><span>通道 / 备注</span><b style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{row.channelInfo || "-"}</b></div>
+                      <div><span>白名单</span><b>{row.whitelist || "-"}</b></div>
+                      <div><span>是否有漏洞</span><b>{row.leak || "-"}</b></div>
+                    </div>
+                  </div>}
+                  <div className="rate-source-line">数据来源：{row.sheetName || "-"} · 第 {(detail.sourceRowDetail ? rateSheetSourceRow(row) : row.sourceRow) || "-"} 行</div>
                 </div>
               );
             })}
