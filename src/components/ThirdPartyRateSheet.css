@@ -1,0 +1,60 @@
+.rate-sheet { --rate-sheet-origin: 54px; --rate-sheet-party: 144px; --rate-sheet-type: 148px; color: #253751; font-size: 12px; min-width: 0; }
+.rate-sheet-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+.rate-sheet-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.rate-sheet-tabs button { border: 1px solid #dbe3ef; background: #f7f9fc; color: #566983; padding: 7px 13px; border-radius: 6px; font: inherit; cursor: pointer; }
+.rate-sheet-tabs button.is-active { background: #e8f1ff; color: #1853b9; border-color: #9fc0f3; box-shadow: inset 0 -2px #356fd4; font-weight: 650; }
+.rate-sheet-tabs button:focus-visible, .rate-sheet-detail:focus-visible, .rate-sheet-scroll:focus-visible, .rate-sheet-notes:focus-visible { outline: 2px solid #2768cf; outline-offset: 2px; }
+.rate-sheet-matrix-toggle { display: flex; align-items: center; gap: 6px; flex-shrink: 0; cursor: pointer; color: #53657e; }
+.rate-sheet-matrix-toggle input { accent-color: #2963ca; }
+.rate-sheet-hint { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: #61738d; margin-bottom: 9px; font-size: 11px; }
+.rate-sheet-scroll { overflow: auto; max-height: min(72vh, 900px); border: 1px solid #d5deeb; border-radius: 7px; isolation: isolate; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.rate-sheet-table { border-collapse: separate; border-spacing: 0; table-layout: fixed; width: max-content; min-width: 100%; font-size: 12px; }
+.rate-sheet-table caption { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+.rate-sheet-table th, .rate-sheet-table td { box-sizing: border-box; padding: 10px 11px; border-right: 1px solid #e0e6ef; border-bottom: 1px solid #e0e6ef; text-align: left; vertical-align: middle; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; font-size: inherit; }
+.rate-sheet-table thead th { position: sticky; top: 0; z-index: 4; height: 40px; background: #eaf0f8; color: #334b6c; font-weight: 650; text-align: center; }
+.rate-sheet-table thead tr:nth-child(2) th { top: 40px; height: 36px; }
+.rate-sheet-table thead .rate-sheet-collect-head { background: #e6f0ff; color: #245c9f; }
+.rate-sheet-table thead .rate-sheet-payout-head { background: #e7f4ef; color: #226d58; }
+.rate-sheet-table thead .rate-sheet-platform-head { background: #edf0f7; color: #566987; }
+.rate-sheet-table tbody td, .rate-sheet-table tbody th { background: #fff; font-variant-numeric: tabular-nums; }
+.rate-sheet-table tbody tr:nth-child(even) td, .rate-sheet-table tbody tr:nth-child(even) th { background: #f9fbfd; }
+.rate-sheet-table tbody tr:hover td, .rate-sheet-table tbody tr:hover th { background: #f0f6ff; }
+.rate-sheet-table .rate-sheet-sticky-origin, .rate-sheet-table .rate-sheet-sticky-party, .rate-sheet-table .rate-sheet-sticky-type { position: sticky; z-index: 2; }
+.rate-sheet-table .rate-sheet-sticky-origin { left: 0; width: var(--rate-sheet-origin); color: #8290a5; text-align: center; }
+.rate-sheet-table .rate-sheet-sticky-party { left: var(--rate-sheet-origin); width: var(--rate-sheet-party); font-weight: 650; }
+.rate-sheet-original-name { display: block; margin-top: 3px; color: #7a89a0; font-size: 10px; font-weight: 400; }
+.rate-sheet-table .rate-sheet-sticky-type { left: calc(var(--rate-sheet-origin) + var(--rate-sheet-party)); width: var(--rate-sheet-type); box-shadow: 3px 0 4px -3px #9faec2; }
+.rate-sheet-table tbody .rate-sheet-sticky-origin, .rate-sheet-table tbody .rate-sheet-sticky-party, .rate-sheet-table tbody .rate-sheet-sticky-type { top: auto; }
+.rate-sheet-table thead .rate-sheet-sticky-origin, .rate-sheet-table thead .rate-sheet-sticky-party, .rate-sheet-table thead .rate-sheet-sticky-type { z-index: 6; color: #334b6c; }
+.rate-sheet-col-origin { width: var(--rate-sheet-origin); }
+.rate-sheet-col-party { width: var(--rate-sheet-party); }
+.rate-sheet-col-type { width: var(--rate-sheet-type); }
+.rate-sheet-col-total { width: 125px; }
+.rate-sheet-col-fee { width: 112px; }
+.rate-sheet-col-limit { width: 150px; }
+.rate-sheet-col-notes { width: 280px; }
+.rate-sheet-col-platform { width: 104px; }
+.rate-sheet-col-detail { width: 65px; }
+.rate-sheet-status { display: inline-block; white-space: pre-wrap; border-radius: 4px; padding: 2px 5px; }
+.rate-sheet-status-good { color: #18734f; background: #e7f5ed; }
+.rate-sheet-status-bad { color: #af4350; background: #fcecee; }
+.rate-sheet-status-attention { color: #976221; background: #fff3dc; }
+.rate-sheet-status-plain { color: inherit; padding: 0; }
+.rate-sheet-matrix-values { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.rate-sheet-notes { font-size: 11px; line-height: 1.6; max-height: 160px; overflow: auto; overscroll-behavior: contain; }
+.rate-sheet-notes > div + div { margin-top: 5px; }
+.rate-sheet-notes span { color: #73829a; }
+.rate-sheet-missing { color: #9aa6b6; }
+.rate-sheet-detail { padding: 4px 7px; border: 1px solid #c8d9f2; border-radius: 4px; color: #2a60ad; background: #f4f8ff; cursor: pointer; font: inherit; }
+.rate-sheet-footnote { color: #8290a4; font-size: 11px; margin-top: 9px; line-height: 1.6; }
+.rate-sheet-empty { color: #7b8aa0; padding: 32px; text-align: center; }
+@media (max-width: 760px) {
+  .rate-sheet { --rate-sheet-origin: 38px; --rate-sheet-party: 106px; --rate-sheet-type: 106px; }
+  .rate-sheet-toolbar { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .rate-sheet-scroll { max-height: 68vh; }
+  .rate-sheet-table th, .rate-sheet-table td { padding: 8px; }
+  .rate-sheet-table tbody .rate-sheet-sticky-type { position: static; box-shadow: none; }
+  .rate-sheet-table thead .rate-sheet-sticky-type { left: auto; z-index: 4; box-shadow: none; }
+  .rate-sheet-notes { max-height: 128px; }
+  .rate-sheet-hint { line-height: 1.6; }
+}
