@@ -26,10 +26,24 @@ const compiled = ts.transpileModule(functions.map(fn => fn.getText(source)).join
 }).outputText;
 const api = Function('require', ...Object.keys(dependencies), compiled + `
   return { expandRateNameCandidates, buildRateMap, findMatchedRate,
-    rateFor, singleFeeFor, estimateSideFee, rateHasSideFee };
+    rateFor, singleFeeFor, estimateSideFee, rateHasSideFee, normalizeVolumeRowForDisplay };
 `)(require, ...Object.values(dependencies));
 
 const ARB2 = ['ArbPay2INR-BANK', 'ArbPay2INR-UPI'];
+test('the live Supabase dashboard normalizes saved Arb2 types, not only the source parser', () => {
+  const source = { country: '印度', platform: 'SYNTHETIC', direction: '代付', channel: 'ArbPay2', rawChannel: 'ArbPay2INR-BANK', channelType: '银行卡', amount: 123.4, count: 9 };
+  const before = structuredClone(source), output = api.normalizeVolumeRowForDisplay(source);
+  assert.equal(output.channel, 'UPI-QR'); assert.equal(output.channelType, 'UPI');
+  assert.equal(output.amount, source.amount); assert.equal(output.count, source.count);
+  assert.deepEqual(source, before);
+  assert.equal(api.normalizeVolumeRowForDisplay({ ...source, country: '印尼' }).channelType, '银行卡');
+  assert.equal(api.normalizeVolumeRowForDisplay({ ...source, channel: '人工确认' }).channel, '人工确认');
+  assert.equal(api.normalizeVolumeRowForDisplay({ ...source, channel: '人工确认' }).channelType, '人工确认');
+  for (const [rawChannel, name] of [['StarPay', 'VstarPay'], ['NewWinPay2', 'NewWinPay'], ['IC2PayINR-PaytmQR', 'ICPay']]) {
+    const actual = api.normalizeVolumeRowForDisplay({ ...source, channel: rawChannel, rawChannel, channelType: 'PaytmQR' });
+    assert.equal(actual.channel, name); assert.equal(actual.channelType, 'PaytmQR');
+  }
+});
 function rate(thirdParty, category = 'UPI', extra = {}) {
   return {
     id: `synthetic-${thirdParty}-${category}`, country: '印度', sheetName: 'synthetic-fees',

@@ -1997,7 +1997,8 @@ function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolum
 
   channel = collapseThirdPartyDisplayName(channel, country);
   if (!channel || channel === "未知三方") channel = collapseThirdPartyDisplayName(row.channel || raw || "未知三方", country);
-  let channelType = isIndiaUpiQrPayout ? "UPI" : (row.channelType || inferThirdPartyChannelType(raw || channel, country, `${channel} ${raw}`) || "其他类型");
+  const confirmedIndiaUpiQr = confirmedIndiaThirdPartyAlias(raw, country) === "UPI-QR" && !["人工确认", "人工充值", "Coinvid USDT"].includes(channel);
+  let channelType = isIndiaUpiQrPayout || confirmedIndiaUpiQr ? "UPI" : (row.channelType || inferThirdPartyChannelType(raw || channel, country, `${channel} ${raw}`) || "其他类型");
   if (channel === "人工确认" || channel === "人工充值") channelType = channel;
   return { ...row, country, platform, channel, channelType };
 }
