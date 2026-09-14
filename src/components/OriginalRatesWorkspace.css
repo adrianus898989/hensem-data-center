@@ -1,0 +1,24 @@
+.original-rates-workspace { display:flex; flex-direction:column; min-width:0; overflow:hidden; background:#fff; border:1px solid #d7dfe9; border-radius:7px; color:#27364c; font-size:12px; }
+.original-rates-workspace .original-rates-toolbar { display:flex; align-items:center; gap:7px; min-height:39px; padding:4px 9px; background:#f8fafd; border-bottom:1px solid #dae1e9; flex-wrap:wrap; }
+.original-rates-workspace button,.original-rates-workspace input,.original-rates-workspace select,.original-rates-workspace textarea { font:inherit; }
+.original-rates-workspace .original-rates-toolbar button,.original-rates-workspace .original-rates-toolbar select,.original-rates-workspace .original-rates-notice button { border:1px solid #dce3ed; border-radius:4px; background:#fff; color:#405572; min-height:27px; padding:3px 9px; cursor:pointer; }
+.original-rates-workspace .original-rates-toolbar strong { font-size:13px; color:#204773; margin-right:4px; }
+.original-rates-workspace .original-rates-divider { width:1px; height:19px; background:#d8dfe8; margin:0 3px; }
+.original-rates-workspace .original-rates-search { display:flex; align-items:center; gap:5px; margin:0; }
+.original-rates-workspace .original-rates-search input { width:180px; min-height:27px; border:1px solid #dce3ed; border-radius:4px; padding:3px 8px; background:#fff; }
+.original-rates-workspace .original-rates-search span { color:#788599; min-width:18px; }
+.original-rates-workspace .original-rates-time { color:#7d8798; font-size:10px; margin-left:auto; white-space:nowrap; }
+.original-rates-workspace .original-rates-cellbar { display:flex; align-items:center; min-height:29px; border-bottom:1px solid #d5dce5; min-width:0; }
+.original-rates-workspace .original-rates-cellbar input { border:0; background:#fff; border-radius:0; padding:4px 9px; height:28px; color:#35445a; width:79px; min-width:0; }
+.original-rates-workspace .original-rates-cellbar textarea { flex:1; resize:none; height:28px; min-width:0; border:0; border-radius:0; background:#fff; color:#35445a; padding:4px 9px; white-space:pre; }
+.original-rates-workspace .original-rates-cellbar textarea:focus { height:64px; }
+.original-rates-workspace .original-rates-cellbar span { padding:0 10px; border-left:1px solid #dce2ea; color:#8a94a0; font-style:italic; }
+.original-rates-workspace .original-rates-content { min-width:0; }
+.original-rates-workspace .original-rates-tabs { display:flex; overflow-x:auto; gap:0; min-height:35px; background:#f8fafd; border-top:1px solid #d5dce5; scrollbar-width:thin; }
+.original-rates-workspace .original-rates-tabs button { flex-shrink:0; padding:7px 15px; border:0; border-right:1px solid #e0e5eb; border-radius:0; background:transparent; color:#58677a; cursor:pointer; white-space:nowrap; }
+.original-rates-workspace .original-rates-tabs button[aria-current] { color:#145e40; background:#e3f1e9; border-bottom:3px solid #248259; font-weight:600; }
+.original-rates-workspace .original-rates-notice { min-height:55vh; display:flex; align-items:center; justify-content:center; gap:12px; color:#697b91; }
+.original-rates-workspace button:disabled { opacity:.5; cursor:default; }
+.original-rates-workspace input:focus-visible,.original-rates-workspace textarea:focus-visible,.original-rates-workspace button:focus-visible,.original-rates-workspace select:focus-visible { outline:2px solid #4d87df; outline-offset:1px; }
+.original-rates-workspace .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
+@media(max-width:700px) { .original-rates-workspace .original-rates-time { display:none; } .original-rates-workspace .original-rates-search input { width:132px; } .original-rates-workspace .original-rates-toolbar { gap:5px; } }

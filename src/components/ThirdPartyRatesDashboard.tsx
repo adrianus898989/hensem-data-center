@@ -11,6 +11,8 @@ import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
 import { dashboardBusinessFetch, isDashboardDataDenied } from "@/lib/dashboardDataClient";
 import ThirdPartyRateSheet, { rateSheetBusinessStatus, rateSheetMatrixRows, rateSheetSourceRow } from "./ThirdPartyRateSheet";
 import "./ThirdPartyRatesDashboard.css";
+import { dashboardScopeIdentity, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
+import OriginalRatesWorkspace from "./OriginalRatesWorkspace";
 
 export function thirdPartyStatusDisplayRows(rows: readonly ThirdPartyPlatformStatusRow[]): ThirdPartyPlatformStatusRow[] {
   return rows.map((row) => {
@@ -798,7 +800,7 @@ function filterLabel(values: string[], all = "全部"): string {
 }
 
 export default function ThirdPartyRatesDashboard({ embedded = false }: { embedded?: boolean } = {}) {
-  const { session } = useDashboardAuth();
+  const { session, profile } = useDashboardAuth();
   const [state, setState] = useState<LoadState>("ready");
   const [payload, setPayload] = useState<ThirdPartyRatePayload | null>(null);
   const [hasQueried, setHasQueried] = useState(false);
@@ -1149,6 +1151,13 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
 
   const currentTotal = view === "dashboard" || view === "rates" ? sortedRateRows.length : view === "running" ? sortedRunningRows.length : view === "country" ? countryThirdPartyRows.length : sortedStatusRows.length;
   const totalPages = pageCount(currentTotal, pageSize);
+
+  // A source grid contains every platform column. Only all-data viewers may
+  // request it; restricted accounts keep the existing server-filtered view.
+  // This presentation path never changes or supplies the volume fee map.
+  if (mainView === "countryRates" && effectiveDashboardDataScope(profile).mode === "all") {
+    return <OriginalRatesWorkspace key={dashboardScopeIdentity(profile)} onAnomalies={() => { setMainView("dashboard"); setView("anomalies"); }} />;
+  }
 
   return (
     <div className={`third-party-module ${mainView === "countryRates" ? "country-rate-workspace" : ""} ${!hasQueried || !payload ? "business-prequery" : ""}`}>
