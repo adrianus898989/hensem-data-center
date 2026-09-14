@@ -115,7 +115,7 @@ export default function OriginalRatesWorkspace({ onAnomalies, onUnavailable }: {
       </form>
       <label className="original-rates-zoom"><span className="sr-only">表格缩放</span><select aria-label="表格缩放" value={zoom} onChange={event => setZoom(Number(event.target.value))}>{[0.7, 0.85, 1, 1.15].map(value => <option key={value} value={value}>{Math.round(value * 100)}%</option>)}</select></label>
       <button type="button" onClick={() => setRevision(value => value + 1)} disabled={loading}>刷新</button>
-      {grid && <time className="original-rates-time" dateTime={grid.fetchedAt} title="原表读取时间">{new Date(grid.fetchedAt).toLocaleString("zh-CN", { hour12: false })}</time>}
+      {grid && <time className="original-rates-time" dateTime={grid.fetchedAt} title="Supabase 原表同步时间">Supabase · {new Date(grid.fetchedAt).toLocaleString("zh-CN", { hour12: false })}</time>}
     </div>
     <div className="original-rates-cellbar">
       <input aria-label="单元格位置" value={address} onChange={event => setAddress(event.target.value)} onKeyDown={event => { if (event.key === "Enter") goToAddress(); }} />
