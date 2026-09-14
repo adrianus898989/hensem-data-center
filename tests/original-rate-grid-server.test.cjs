@@ -139,7 +139,11 @@ for (const id of [77, 999]) test('hidden/unknown native gid cannot expose source
 });
 test('source credential/configuration failures are private and fixed, no raw credential text', async () => {
   for (const env of [{ GOOGLE_PRIVATE_KEY: '' }, { GOOGLE_SERVICE_ACCOUNT_EMAIL: '' }, { THIRD_PARTY_RATE_SHEET_ID: 'https://attacker.invalid/' }]) {
-    const h = harness({}, env); const response = await h.get(); assert.equal(response.status, 503); assertPrivate(response); assert.equal(h.state.googleCalls.length, 0); assert.doesNotMatch(await response.text(), /GOOGLE_|attacker|synthetic-key/);
+    const h = harness({}, env); const response = await h.get(); assert.equal(response.status, 503); assertPrivate(response); assert.equal(h.state.googleCalls.length, 0);
+    const body = await response.json();
+    assert.equal(body.code, env.THIRD_PARTY_RATE_SHEET_ID ? 'original_sheet_source_invalid' : 'original_sheet_google_not_configured');
+    assert.match(body.message, env.THIRD_PARTY_RATE_SHEET_ID ? /原表来源地址配置不正确/ : /原表 Google 只读连接尚未配置/);
+    assert.doesNotMatch(JSON.stringify(body), /GOOGLE_|attacker|synthetic-key|synthetic@example/);
   }
 });
 test('source env aliases match existing precedence and accept official Google Sheets file URLs', async () => {
@@ -166,7 +170,7 @@ test('source configuration rejects non-Google URLs and never falls back past an 
     'https://docs.google.com/spreadsheets/d/alternate_source_12345/not-a-file-view',
   ]) {
     const h = harness({}, { THIRD_PARTY_RATE_SHEET_ID: url, THIRD_PARTY_RATE_SPREADSHEET_ID: 'valid_lower_priority_12345' }); const response = await h.get();
-    assert.equal(response.status, 503); assert.equal((await response.json()).code, 'original_sheet_not_configured'); assert.equal(h.state.googleCalls.length, 0); assertPrivate(response);
+    assert.equal(response.status, 503); assert.equal((await response.json()).code, 'original_sheet_source_invalid'); assert.equal(h.state.googleCalls.length, 0); assertPrivate(response);
   }
 });
 test('Google errors are sanitized and never negative-cached or passed through as successful data', async () => {

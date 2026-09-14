@@ -1156,7 +1156,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
   // request it; restricted accounts keep the existing server-filtered view.
   // This presentation path never changes or supplies the volume fee map.
   if (mainView === "countryRates" && effectiveDashboardDataScope(profile).mode === "all") {
-    return <OriginalRatesWorkspace key={dashboardScopeIdentity(profile)} onAnomalies={() => { setMainView("dashboard"); setView("anomalies"); }} />;
+    return <OriginalRatesWorkspace key={dashboardScopeIdentity(profile)} onAnomalies={() => { setMainView("dashboard"); setView("anomalies"); }} onUnavailable={() => { setMainView("dashboard"); setView("rates"); }} />;
   }
 
   return (
