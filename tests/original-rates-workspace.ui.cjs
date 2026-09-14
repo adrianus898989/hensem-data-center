@@ -39,7 +39,7 @@ async function run(){
   window.alert=window.open=()=>{window.sideEffects++;};window.fetch=()=>{throw Error('Native fetch forbidden in offline UI test');};
   function request(url,init={}){
     const record={id:window.calls.length,url,signal:init.signal,aborted:false,done:false};window.calls.push(record);if(init.signal)init.signal.addEventListener('abort',()=>{record.aborted=true;});
-    if(url==='/api/supabase-third-party-rates'){record.done=true;return Promise.resolve({ok:true,json:async()=>({rates:[],platformStatuses:[],anomalies:[],meta:{sheets:[],updatedAt:'2026-09-14T08:00:00Z'},summary:{totalRates:0,totalPlatforms:0}})});}
+    if(url==='/api/supabase-third-party-rates'){record.done=true;const payload=window.options.legacyPayload||{rates:[],platformStatuses:[],anomalies:[],meta:{sheets:[],updatedAt:'2026-09-14T08:00:00Z'},summary:{totalRates:0,totalPlatforms:0}};return Promise.resolve({ok:true,json:async()=>structuredClone(payload)});}
     if(!/^\/api\/original-rate-sheet(?:\?sheetId=\d+)?$/.test(url))throw Error('Unexpected API '+url);
     const id=new URL(url,'https://offline.invalid').searchParams.get('sheetId');
     return new Promise((resolve,reject)=>{
@@ -131,6 +131,19 @@ async function run(){
       await mount();await ready();await page.evaluate(()=>{window.options={holdGrid:true};});await page.getByRole('button',{name:sheets[1].title,exact:true}).click();
       const id=await pending('/api/original-rate-sheet?sheetId=202');await page.evaluate(id=>window.rejectCall(id),id);await page.getByRole('alert').waitFor();
       assert.equal(await page.locator('[data-cell]').count(),0);assert.match(await page.getByRole('alert').textContent(),/权限/);
+    });
+    await check('metadata unavailable fallback opens actual legacy rate data and unmounts source workspace',async()=>{
+      const row={id:'synthetic-existing-rate',sheetName:'印度线下',sourceRow:8,country:'印度',thirdParty:'ExistingFixturePay',category:'UPI',collectFee:'1.23%',payoutFee:'0.45%',totalFee:'原有合计1.68%',collectSingleFee:'0',payoutSingleFee:'2',collectLimit:'100–2000',payoutLimit:'100–5000',status:'正常',channelInfo:'原有费率接口返回',leak:'',whitelist:''};
+      const legacyPayload={rates:[row],platformStatuses:[],anomalies:[],meta:{sheets:['印度线下'],updatedAt:'2026-09-14T08:00:00Z'},summary:{totalRates:1,totalPlatforms:0}};
+      const before=(await calls()).length;await mount(profiles.all,{holdMeta:true,legacyPayload});const id=await pending('/api/original-rate-sheet');
+      await deliver(id,{ok:false,code:'original_sheet_not_configured',message:'原表读取配置暂未就绪'},503);await page.getByRole('alert').waitFor();
+      await page.getByRole('button',{name:'查看现有费率',exact:true}).click();await tick(page);
+      assert.equal(await page.locator('.original-rates-workspace,[data-cell]').count(),0);
+      assert.equal(await page.getByText('三方费率表',{exact:true}).count(),1);assert.match(await page.locator('.third-party-module').innerText(),/ExistingFixturePay/);
+      assert.match(await page.locator('.third-party-module').innerText(),/1\.23%/);assert.equal(await page.locator('.country-rate-workspace').count(),0);
+      const recent=(await calls()).slice(before);assert.equal(recent.filter(r=>r.url==='/api/supabase-third-party-rates').length,1);
+      assert.equal(recent.filter(r=>r.url==='/api/original-rate-sheet').length,1);assert.equal(recent.filter(r=>r.url.includes('?sheetId=')).length,0);
+      assert.deepEqual(await page.evaluate(()=>window.options.legacyPayload),legacyPayload);assert.deepEqual(network,[]);
     });
     await check('anomaly action unmounts source view and leaves existing dashboard',async()=>{
       await mount();await ready();await page.getByRole('button',{name:'异常提醒',exact:true}).click();assert.equal(await page.locator('.original-rates-workspace').count(),0);assert.equal(await page.locator('.third-party-module').count(),1);

@@ -47,12 +47,12 @@ function sourceId(): string {
     const match = /^\/spreadsheets\/d\/([a-zA-Z0-9_-]{10,200})(?:\/(?:edit|view|preview|htmlview|copy))?\/?$/.exec(url.pathname);
     if (url.protocol === "https:" && url.hostname === "docs.google.com" && !url.port && !url.username && !url.password && match) return match[1];
   } catch { /* Return only the fixed configuration error below. */ }
-  throw sourceError("original_sheet_not_configured", 503, "原表读取尚未配置，请联系管理员。");
+  throw sourceError("original_sheet_source_invalid", 503, "原表来源地址配置不正确，请联系管理员。");
 }
 function sheetsClient() {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const privateKey = process.env.GOOGLE_PRIVATE_KEY;
-  if (!email || !privateKey) throw sourceError("original_sheet_not_configured", 503, "原表读取尚未配置，请联系管理员。");
+  if (!email || !privateKey) throw sourceError("original_sheet_google_not_configured", 503, "原表 Google 只读连接尚未配置，请联系管理员。");
   const auth = new google.auth.JWT({ email, key: privateKey.replace(/^"|"$/g, "").replace(/\\n/g, "\n"), scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"] });
   return google.sheets({ version: "v4", auth });
 }

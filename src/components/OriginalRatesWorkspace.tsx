@@ -12,7 +12,7 @@ function cellName(row: number, col: number): string {
   return `${letters}${row + 1}`;
 }
 
-export default function OriginalRatesWorkspace({ onAnomalies }: { onAnomalies: () => void }) {
+export default function OriginalRatesWorkspace({ onAnomalies, onUnavailable }: { onAnomalies: () => void; onUnavailable?: () => void }) {
   const [meta, setMeta] = useState<OriginalRateWorkbookMeta | null>(null);
   const [sheetId, setSheetId] = useState<number | null>(null);
   const [grid, setGrid] = useState<OriginalRateGrid | null>(null);
@@ -122,7 +122,7 @@ export default function OriginalRatesWorkspace({ onAnomalies }: { onAnomalies: (
       <span>fx</span><textarea aria-label="原单元格完整内容" rows={1} value={text} readOnly />
     </div>
     <div className="original-rates-content" ref={host}>
-      {loading ? <div className="original-rates-notice" role="status">读取原表中…</div> : error ? <div className="original-rates-notice" role="alert">{error}<button type="button" onClick={() => setRevision(value => value + 1)}>重试</button></div> : grid ? <OriginalRateGridView key={sheetId} grid={grid} zoom={zoom} onCellSelect={select} /> : <div className="original-rates-notice">暂无原表</div>}
+      {loading ? <div className="original-rates-notice" role="status">读取原表中…</div> : error ? <div className="original-rates-notice" role="alert">{error}<button type="button" onClick={() => setRevision(value => value + 1)}>重试</button>{onUnavailable && <button type="button" onClick={onUnavailable}>查看现有费率</button>}</div> : grid ? <OriginalRateGridView key={sheetId} grid={grid} zoom={zoom} onCellSelect={select} /> : <div className="original-rates-notice">暂无原表</div>}
     </div>
     <nav className="original-rates-tabs" aria-label="Google 原表页签">{meta?.sheets.map(sheet => <button key={sheet.sheetId} type="button" aria-current={sheetId === sheet.sheetId ? "page" : undefined} onClick={() => { setSheetId(sheet.sheetId); setQuery(""); }}>{sheet.title}</button>)}</nav>
   </section>;
