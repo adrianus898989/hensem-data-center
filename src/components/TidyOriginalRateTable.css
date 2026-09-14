@@ -1,0 +1,119 @@
+.tidy-rate-scroll {
+  --tidy-line: #dce5f1;
+  --tidy-paper: #ffffff;
+  --tidy-alternate: #f6f8fc;
+  --tidy-ink: #263a56;
+  --tidy-muted: #6b80a0;
+  --tidy-header: #eaf0f8;
+  --tidy-blue: #245fd0;
+  --tidy-blue-soft: #e8f1ff;
+  --tidy-green: #177560;
+  --tidy-green-soft: #e7f4ef;
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  max-height: min(68vh, 760px);
+  min-height: 160px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scroll-padding-top: 62px;
+  scroll-padding-left: var(--tidy-frozen-width, 44px);
+  border-top: 1px solid var(--tidy-line);
+  border-bottom: 1px solid var(--tidy-line);
+  background: var(--tidy-paper);
+  color: var(--tidy-ink);
+  scrollbar-width: thin;
+  scrollbar-color: #afbed3 #f4f7fb;
+}
+
+.tidy-rate-scroll *, .tidy-rate-scroll *::before, .tidy-rate-scroll *::after { box-sizing: border-box; }
+.tidy-rate-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.tidy-rate-scroll::-webkit-scrollbar-thumb { background: #afbed3; border: 2px solid #f4f7fb; border-radius: 8px; }
+.tidy-rate-scroll::-webkit-scrollbar-track { background: #f4f7fb; }
+.tidy-rate-scroll .tidy-rate-table {
+  /* Do not stretch columns: frozen offsets must match these fixed widths. */
+  min-width: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  margin: 0;
+  font: 12px/15px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--tidy-ink);
+}
+.tidy-rate-scroll .tidy-rate-table th,
+.tidy-rate-scroll .tidy-rate-table td {
+  border: 0;
+  border-right: 1px solid var(--tidy-line);
+  border-bottom: 1px solid var(--tidy-line);
+  border-radius: 0;
+  background: var(--tidy-paper);
+  padding: 3px 8px;
+  vertical-align: middle;
+  text-align: left;
+}
+.tidy-rate-scroll .tidy-rate-table th:last-child,
+.tidy-rate-scroll .tidy-rate-table td:last-child { border-right: 0; }
+.tidy-rate-scroll .tidy-rate-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  height: 26px;
+  padding: 3px 7px;
+  background: var(--tidy-header);
+  color: var(--tidy-muted);
+  text-align: center;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 14px;
+}
+.tidy-rate-scroll .tidy-rate-table thead .tidy-rate-leaf-header { top: 26px; height: 36px; }
+.tidy-rate-scroll .tidy-rate-table thead .tidy-rate-tall-header { height: 62px; }
+.tidy-rate-scroll .tidy-rate-table thead .tidy-rate-group-collect { background: var(--tidy-blue-soft); color: var(--tidy-blue); }
+.tidy-rate-scroll .tidy-rate-table thead .tidy-rate-group-payout { background: var(--tidy-green-soft); color: var(--tidy-green); }
+.tidy-rate-scroll .tidy-rate-table thead .tidy-rate-group-platform { background: #edf2f9; color: #3f5778; }
+.tidy-rate-scroll .tidy-rate-header-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  max-height: 28px;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+.tidy-rate-scroll .tidy-rate-table tbody tr { height: 36px; }
+.tidy-rate-scroll .tidy-rate-table tbody th,
+.tidy-rate-scroll .tidy-rate-table tbody td { height: 36px; font-weight: 400; }
+.tidy-rate-scroll .tidy-rate-table tbody tr:nth-child(even) > * { background: var(--tidy-alternate); }
+.tidy-rate-scroll .tidy-rate-table tbody tr:hover > * { background: #eef4ff; }
+.tidy-rate-scroll .tidy-rate-table .tidy-rate-frozen { position: sticky; z-index: 2; }
+.tidy-rate-scroll .tidy-rate-table thead .tidy-rate-frozen { z-index: 6; }
+.tidy-rate-scroll .tidy-rate-table .tidy-rate-frozen-edge { border-right: 1px solid #ccd9eb; box-shadow: 3px 0 5px #263c5810; }
+.tidy-rate-scroll .tidy-rate-table .tidy-rate-index { text-align: center; color: var(--tidy-muted); padding-left: 3px; padding-right: 3px; font-size: 10px; font-weight: 400; }
+.tidy-rate-scroll .tidy-rate-cell-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  max-height: 30px;
+  line-height: 15px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+}
+.tidy-rate-scroll .tidy-rate-table tbody .tidy-rate-provider { font-weight: 600; color: #26384f; }
+.tidy-rate-scroll .tidy-rate-table .tidy-rate-type { color: var(--tidy-muted); font-size: 11px; }
+.tidy-rate-scroll .tidy-rate-table tbody .tidy-rate-fee { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.tidy-rate-scroll .tidy-rate-table tbody .tidy-rate-note { color: #617692; font-size: 11px; }
+.tidy-rate-scroll .tidy-rate-table tbody .tidy-rate-status,
+.tidy-rate-scroll .tidy-rate-table tbody .tidy-rate-group-platform { text-align: center; font-size: 11px; }
+.tidy-rate-scroll .tidy-rate-table tbody .tidy-rate-tone-good { color: #187c5a; font-weight: 500; }
+.tidy-rate-scroll .tidy-rate-table tbody .tidy-rate-tone-bad { color: #bd4653; font-weight: 500; }
+.tidy-rate-scroll .tidy-rate-table tbody .tidy-rate-tone-attention { color: #95670e; font-weight: 500; }
+.tidy-rate-scroll .tidy-rate-table td { cursor: cell; }
+.tidy-rate-scroll .tidy-rate-table td.tidy-rate-selected,
+.tidy-rate-scroll .tidy-rate-table td:focus-visible { outline: 2px solid #487cef; outline-offset: -2px; background: #eef4ff; }
+.tidy-rate-scroll .tidy-rate-table .tidy-rate-empty { height: 120px; text-align: center; color: var(--tidy-muted); cursor: default; }
+
+@media (max-width: 600px) {
+  .tidy-rate-scroll { max-height: 68vh; }
+}
