@@ -204,6 +204,23 @@ export type ThirdPartyVolumePayload = {
     channels: number;
   };
   anomalies: string[];
+  /** Submission-day counts, independent of the legacy volume success fields. */
+  collectionSuccessSnapshots?: CollectionSuccessSnapshot[];
+  collectionSuccessError?: string;
+};
+
+export type CollectionSuccessSnapshot = {
+  schema_version: 1;
+  source_system: string;
+  country_code: string;
+  platform: string;
+  stat_date: string;
+  timezone: string;
+  snapshot_id: string;
+  snapshot_at: string;
+  coverage: { complete: boolean; expected_count: number; fetched_count: number; unique_count: number };
+  totals: { submitted_count: number; success_count: number };
+  groups: Array<{ raw_channel: string; channel_type: string; submitted_count: number; success_count: number }>;
 };
 
 export type CustomerServiceRow = {

@@ -67,7 +67,8 @@ function stripBusinessSuffix(value: string): string {
 
 // 2026-09-13 user-confirmed aliases. Keep these out of the global alias index:
 // e.g. Indonesia's StarPay is a different provider. Match only complete names,
-// without deleting punctuation or unconfirmed version numbers.
+// without deleting punctuation or unconfirmed version numbers. A dash may use
+// spreadsheet typography and spaces around it, but it must still be present.
 const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
   ["starpay", "VstarPay"],
   ["qr-rspay", "RsPay"],
@@ -83,7 +84,21 @@ const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
 export function confirmedIndiaThirdPartyAlias(value: string, country?: string): string {
   const scope = normalizeCell(country || "");
   if (!/^(?:IN|INDIA|印度(?:线下)?(?:盘口)?)$/i.test(scope)) return "";
-  return CONFIRMED_INDIA_CHANNEL_ALIASES.get(normalizeCell(value).toLowerCase()) || "";
+  const key = normalizeCell(value).toLowerCase().replace(/\s*[-‐‑‒–—﹘﹣－]\s*/g, "-");
+  return CONFIRMED_INDIA_CHANNEL_ALIASES.get(key) || "";
+}
+
+// Keep the confirmed provider spelling stable even when a saved canonical
+// value uses different casing. Do not add these names to the global index.
+export function confirmedIndiaThirdPartyName(value: string, country?: string): string {
+  const alias = confirmedIndiaThirdPartyAlias(value, country);
+  if (alias) return alias;
+  const scope = normalizeCell(country || "");
+  if (!/^(?:IN|INDIA|印度(?:线下)?(?:盘口)?)$/i.test(scope)) return "";
+  const key = normalizeCell(value).toLowerCase();
+  if (key === "rapay") return "RAPay";
+  if (key === "newwinpay") return "NewWinPay";
+  return "";
 }
 
 type ThirdPartyAliasEntry = { country: string; canonical: string; aliases: string[] };
@@ -662,7 +677,7 @@ export function canonicalThirdPartyName(value: string, country?: string): string
   if (!raw) return "未知三方";
 
   const strippedRaw = stripBusinessSuffix(raw);
-  const confirmedIndiaAlias = confirmedIndiaThirdPartyAlias(strippedRaw, country);
+  const confirmedIndiaAlias = confirmedIndiaThirdPartyName(strippedRaw, country);
   if (confirmedIndiaAlias) return confirmedIndiaAlias;
   const rawAliasKey = aliasKey(strippedRaw);
   const originalAliasKey = aliasKey(raw);

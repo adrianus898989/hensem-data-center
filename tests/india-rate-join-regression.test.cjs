@@ -26,7 +26,7 @@ const compiled = ts.transpileModule(functions.map(fn => fn.getText(source)).join
 }).outputText;
 const api = Function('require', ...Object.keys(dependencies), compiled + `
   return { expandRateNameCandidates, buildRateMap, findMatchedRate,
-    rateFor, singleFeeFor, estimateSideFee, rateHasSideFee, normalizeVolumeRowForDisplay };
+    rateFor, singleFeeFor, estimateSideFee, rateHasSideFee, normalizeVolumeRowForDisplay, aggregateCombo };
 `)(require, ...Object.values(dependencies));
 
 const ARB2 = ['ArbPay2INR-BANK', 'ArbPay2INR-UPI'];
@@ -130,6 +130,104 @@ test('confirmed NewWinPay2 joins NewWinPay while unconfirmed NewWinPay3 remains 
   const third = rate('NewWinPay3'), map = api.buildRateMap([third]);
   assert.equal(lookup(map, 'NewWinPay3')?.id, third.id);
   assert.equal(lookup(map, 'NewWinPay2'), undefined);
+});
+
+test('PAYTM dash variants and RAPay join the existing rate in both directions without rewriting fees', () => {
+  const aliases = ['RAPay', 'rapay', 'PAYTM-RAPay', 'PAYTM— RAPay', ' paytm - RAPAY '];
+  for (const sourceName of aliases) {
+    const original = rate(sourceName, 'PaytmQR'), before = structuredClone(original);
+    const map = api.buildRateMap([original]);
+    for (const queryName of aliases) for (const side of ['collect', 'payout']) {
+      const matched = lookup(map, queryName, 'PaytmQR', side);
+      assert.equal(matched?.id, original.id, `${sourceName} -> ${queryName}/${side}`);
+      assert.deepEqual(feeFields(matched), feeFields(original));
+    }
+    for (const queryName of ['NewWinPay', 'PAYTM-RAPay2', 'NewWinPay3'])
+      assert.equal(lookup(map, queryName, 'PaytmQR'), undefined, queryName);
+    for (const country of ['印尼', '越南', '巴西'])
+      assert.equal(lookup(map, 'PAYTM— RAPay', 'PaytmQR', 'collect', country), undefined);
+    assert.deepEqual(original, before);
+  }
+});
+
+function volumeRow(index, channel, rawChannel = channel, extra = {}) {
+  return { id: `synthetic-volume-${index}`, sheetName: 'synthetic', sourceRow: index + 2,
+    date: '2026-09-13', country: '印度', platform: 'SYNTHETIC', channel, rawChannel,
+    channelType: 'PaytmQR', direction: '代收', amount: 100.25, count: 5,
+    successCount: 4, failedCount: 1, successRate: 0.8, status: '',
+    raw: { channel_canonical: channel, channel: rawChannel, channel_type: 'PaytmQR' }, ...extra };
+}
+
+test('live display repairs old canonical/raw names while retaining source fields and classifications', () => {
+  // The API exposes the saved canonical value as channel and source text as
+  // rawChannel; raw data may additionally retain its historical column names.
+  const input = [
+    volumeRow(1, 'PAYTM— RAPay'),
+    volumeRow(2, 'RAPay', ''),
+    volumeRow(3, 'rapay'),
+    volumeRow(4, 'NewWinPay2', ''),
+    volumeRow(5, 'NewWinPay', ''),
+    volumeRow(6, 'old-name', 'newwinpay2'),
+    volumeRow(7, 'old-name', 'PAYTM - RAPay'),
+    volumeRow(8, 'NewWinPay3'),
+    volumeRow(9, '人工确认', 'PAYTM— RAPay', { channelType: '人工确认' }),
+    volumeRow(10, 'NewWinPay2', 'NewWinPay2', { country: '印尼', channelType: 'QRIS' }),
+    volumeRow(11, 'PAYTM— RAPay', 'PAYTM— RAPay', { country: '越南', channelType: 'BANKQR' }),
+  ];
+  const before = structuredClone(input), output = input.map(api.normalizeVolumeRowForDisplay);
+  assert.deepEqual(output.map(row => row.channel), [
+    'RAPay', 'RAPay', 'RAPay', 'NewWinPay', 'NewWinPay', 'NewWinPay', 'RAPay',
+    'NewWinPay3', '人工确认', 'NewWinPay2', 'PAYTM— RAPay',
+  ]);
+  for (let i = 0; i < input.length; i++) {
+    assert.deepEqual(output[i], { ...input[i], channel: output[i].channel });
+    assert.deepEqual(api.normalizeVolumeRowForDisplay(output[i]), output[i]);
+  }
+  assert.deepEqual(input, before);
+});
+
+test('a saved provider never overrides a different raw provider or an unconfirmed version', () => {
+  for (const savedName of ['RAPay', 'NewWinPay', 'NewWinPay2']) {
+    for (const rawChannel of ['ArbPay', 'NewWinPay3', 'PAYTM-RAPay2', 'UnknownProvider']) {
+      const input = volumeRow(1, savedName, rawChannel), before = structuredClone(input);
+      const output = api.normalizeVolumeRowForDisplay(input);
+      assert.equal(output.channel, rawChannel, `${savedName}/${rawChannel}`);
+      assert.deepEqual(output, { ...input, channel: rawChannel });
+      assert.deepEqual(input, before);
+    }
+  }
+});
+
+test('live provider grouping sums every alias row even when amounts and counts are identical', () => {
+  const input = [
+    volumeRow(1, 'RAPay'), volumeRow(2, 'PAYTM— RAPay'),
+    volumeRow(3, 'PAYTM-RAPay', 'PAYTM-RAPay', { successCount: 2, failedCount: 3, successRate: 0.4 }),
+    volumeRow(4, 'PAYTM - RAPay', 'PAYTM - RAPay', { direction: '代付' }),
+    volumeRow(5, 'NewWinPay'), volumeRow(6, 'NewWinPay2'),
+    volumeRow(7, 'NewWinPay3'),
+    volumeRow(8, 'NewWinPay2', 'NewWinPay2', { country: '印尼' }),
+    volumeRow(9, 'PAYTM— RAPay', 'PAYTM— RAPay', { channelType: 'UPI' }),
+    volumeRow(10, 'NewWinPay2', 'NewWinPay2', { date: '2026-09-12' }),
+    volumeRow(11, 'NewWinPay2', 'NewWinPay2', { platform: 'OTHER' }),
+  ];
+  const before = structuredClone(input), normalized = input.map(api.normalizeVolumeRowForDisplay);
+  const grouped = api.aggregateCombo(normalized, row => [row.date, row.country, row.platform, row.channel, row.channelType]);
+  const rapay = grouped.find(row => row.labelParts[3] === 'RAPay' && row.labelParts[4] === 'PaytmQR');
+  assert.equal(rapay.rows.length, 4);
+  assert.equal(rapay.collectAmount, 300.75); assert.equal(rapay.collectCount, 15);
+  assert.equal(rapay.payoutAmount, 100.25); assert.equal(rapay.payoutCount, 5);
+  const collect = rapay.rows.filter(row => row.direction === '代收');
+  assert.equal(collect.reduce((sum, row) => sum + row.successCount, 0), 10);
+  assert.equal(collect.reduce((sum, row) => sum + row.failedCount, 0), 5);
+  assert.equal(collect.reduce((sum, row) => sum + row.successCount, 0) / rapay.collectCount, 2 / 3);
+  const newWin = grouped.find(row => row.labelParts.join('/') === '2026-09-13/印度/SYNTHETIC/NewWinPay/PaytmQR');
+  assert.equal(newWin.rows.length, 2); assert.equal(newWin.totalAmount, 200.5); assert.equal(newWin.totalCount, 10);
+  assert.equal(grouped.length, 7);
+  assert.equal(grouped.flatMap(row => row.rows).length, input.length);
+  for (const metric of ['amount', 'count', 'successCount', 'failedCount'])
+    assert.equal(grouped.flatMap(row => row.rows).reduce((sum, row) => sum + row[metric], 0),
+      input.reduce((sum, row) => sum + row[metric], 0), metric);
+  assert.deepEqual(input, before);
 });
 
 test('India rate keys never supply another country with its confirmed aliases', () => {

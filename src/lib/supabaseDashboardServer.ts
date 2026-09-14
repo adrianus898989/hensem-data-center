@@ -1,5 +1,6 @@
 import type {
   AutoWithdrawPayload,
+  CollectionSuccessSnapshot,
   AutoWithdrawRow,
   DailyWithdrawRow,
   OperatorRow,
@@ -13,6 +14,7 @@ import { formatDuration, parseDurationToSeconds } from "@/lib/format";
 import { aggregateWithdrawRows } from "@/lib/parseAutoWithdraw";
 import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
 import { dashboardScopeAllows } from "@/lib/dashboardDataScope";
+import { collectionSuccessCountry, collectionSuccessPeriod } from "@/lib/collectionSuccess";
 import { requireDashboardDataAccess, requireDashboardAllData, dashboardAllowedRows, DashboardDataAccessError } from "@/lib/dashboardDataAccessServer";
 
 const PAGE_SIZE = 1000;
@@ -212,7 +214,7 @@ export type ThirdPartySyncStatus = {
   ratesLatestWriteAt?: string | null;
 };
 
-async function callRpc<T>(name: string, body: Record<string, unknown>, token: string): Promise<T> {
+async function callRpc<T>(name: string, body: Record<string, unknown>, token: string, signal?: AbortSignal): Promise<T> {
   const { url, anonKey } = config();
   const response = await fetch(`${url}/rest/v1/rpc/${name}`, {
     method: "POST",
@@ -223,7 +225,8 @@ async function callRpc<T>(name: string, body: Record<string, unknown>, token: st
       "Content-Type": "application/json"
     },
     body: JSON.stringify(body),
-    cache: "no-store"
+    cache: "no-store",
+    signal
   });
   return await readJson(response) as T;
 }
@@ -453,6 +456,19 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   // then project and filter. Filtering one stored country first would omit it.
   const brazilPage = ["BR", "巴西", "胖虎巴西"].includes(country);
   const sourceCountries = brazilPage ? ["巴西", "胖虎巴西", "BR"] : [country || null];
+  // Additive read, with the same end-user JWT/RLS as volumes. A missing rollout
+  // migration or slow success endpoint must not prevent existing volume data.
+  const successPeriod = collectionSuccessPeriod(start, end);
+  const successCountry = country === "所有国家USDT" ? null : country || null;
+  const successRead = successPeriod
+    ? callRpc<{ snapshots: CollectionSuccessSnapshot[] }>("dashboard_collection_success", {
+      p_start: successPeriod.previousStart, p_end: end, p_country: successCountry,
+    }, token, AbortSignal.timeout(6000)).then(result => {
+      if (!Array.isArray(result?.snapshots)) throw new Error("invalid_success_payload");
+      return { snapshots: result.snapshots.filter(snapshot => snapshot && typeof snapshot.country_code === "string" && typeof snapshot.platform === "string"
+        && dashboardScopeAllows(access.scope, collectionSuccessCountry(snapshot.country_code, snapshot.platform), snapshot.platform)), error: "" };
+    }).catch(() => ({ snapshots: [] as CollectionSuccessSnapshot[], error: "代收成功率暂未读取，原有三方量不受影响。" }))
+    : Promise.resolve({ snapshots: [] as CollectionSuccessSnapshot[], error: "代收成功率支持最多 366 天的查询。" });
   const results = await Promise.all(sourceCountries.map((sourceCountry) => callRpc<any>("dashboard_third_party_volume_fast_v2", {
     p_start: start,
     p_end: end,
@@ -464,6 +480,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   const globalLatest = access.scope.mode === "all" ? results.map((result) => result?.latestWriteAt).filter(Boolean).sort().pop() : null;
   const updatedAt = String(globalLatest || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString());
   const sheets = Array.from(new Set(rows.map((row) => row.sheetName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
+  const collectionSuccess = await successRead;
 
   return {
     meta: {
@@ -483,6 +500,8 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
       fastRpc: true
     } as any,
     rows,
+    collectionSuccessSnapshots: collectionSuccess.snapshots,
+    ...(collectionSuccess.error ? { collectionSuccessError: collectionSuccess.error } : {}),
     aliasMap: buildAliasMap(rows),
     summary: volumeSummary(rows),
     anomalies: []
