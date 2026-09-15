@@ -135,7 +135,7 @@ export function scopeAutoWithdrawPayload(access: DashboardDataAccess, payload: A
 }
 export function scopeWorkOrderPayload(access: DashboardDataAccess, payload: WorkOrderPayload): WorkOrderPayload {
   if (access.scope.mode === "all") return payload;
-  const rows = dashboardAllowedRows(access, payload.rows || []).map(row => withPlatformDisplayCountry(knownFields(row, ["id", "date", "country", "platform", "workType", "workName", "operator", "accountType", "total", "success", "failed", "pending", "amount", "status", "sourceSheet", "sourceRow", "kind"])));
+  const rows = dashboardAllowedRows(access, payload.rows || []).map(row => withPlatformDisplayCountry(knownFields(row, ["id", "date", "country", "platform", "workType", "workName", "operator", "accountType", "total", "success", "failed", "pending", "amount", "auto", "manual", "status", "sourceSheet", "sourceRow", "kind"])));
   const sheets = [...new Set(rows.map(row => row.sourceSheet).filter(Boolean))];
   return {rows, anomalies: [], meta: {...scopedMeta(payload.meta), sheets}, summary: {
     total: sum(rows, "total"), success: sum(rows, "success"), failed: sum(rows, "failed"), pending: sum(rows, "pending"), amount: sum(rows, "amount"),

@@ -9,6 +9,7 @@ import type {
   ThirdPartyRateRow,
   ThirdPartyVolumePayload,
   ThirdPartyVolumeRow,
+  WithdrawActualRow,
   WithdrawPendingSnapshot,
   WorkOrderDepositRow,
   WorkOrderPayload,
@@ -499,6 +500,18 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
       error: ""
     })).catch(() => ({ rows: [] as WorkOrderDepositRow[], error: "存款未到账数据暂未读取，原有三方量不受影响。" }))
     : Promise.resolve({ rows: [] as WorkOrderDepositRow[], error: "存款未到账数据支持最多 366 天的查询。" });
+  const actualRead = successPeriod
+    ? callRpc<{ rows: WithdrawActualRow[] }>("dashboard_withdraw_actual", {
+      p_start: successPeriod.previousStart, p_end: end, p_country: successCountry,
+    }, token, AbortSignal.timeout(6000)).then(result => {
+      if (!Array.isArray(result?.rows)) throw new Error("invalid_withdraw_actual_payload");
+      return {
+        rows: result.rows.filter(row => row && typeof row.stat_date === "string" && typeof row.platform === "string"
+          && typeof row.third_party === "string" && dashboardScopeAllows(access.scope, row.country_code || row.country, row.platform)),
+        error: ""
+      };
+    }).catch(() => ({ rows: [] as WithdrawActualRow[], error: "实际到账/提现手续费暂未读取，原有三方量不受影响。" }))
+    : Promise.resolve({ rows: [] as WithdrawActualRow[], error: "实际到账/提现手续费支持最多 366 天的查询。" });
   const results = await Promise.all(sourceCountries.map((sourceCountry) => callRpc<any>("dashboard_third_party_volume_fast_v2", {
     p_start: start,
     p_end: end,
@@ -510,7 +523,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   const globalLatest = access.scope.mode === "all" ? results.map((result) => result?.latestWriteAt).filter(Boolean).sort().pop() : null;
   const updatedAt = String(globalLatest || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString());
   const sheets = Array.from(new Set(rows.map((row) => row.sheetName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
-  const [collectionSuccess, withdrawPending, workOrderDeposit] = await Promise.all([successRead, pendingRead, depositRead]);
+  const [collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual] = await Promise.all([successRead, pendingRead, depositRead, actualRead]);
 
   return {
     meta: {
@@ -536,6 +549,8 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
     ...(withdrawPending.error ? { withdrawPendingError: withdrawPending.error } : {}),
     workOrderDepositRows: workOrderDeposit.rows,
     ...(workOrderDeposit.error ? { workOrderDepositError: workOrderDeposit.error } : {}),
+    withdrawActualRows: withdrawActual.rows,
+    ...(withdrawActual.error ? { withdrawActualError: withdrawActual.error } : {}),
     aliasMap: buildAliasMap(rows),
     summary: volumeSummary(rows),
     anomalies: []
@@ -570,11 +585,34 @@ function numberField(value: unknown): number {
 function mapWorkOrderBundle(bundle: DbWorkOrderBundle): WorkOrderRow[] {
   const base = `${bundle.stat_date}:${bundle.country_code}:${bundle.platform}`;
   const rows: WorkOrderRow[] = [];
+  // The collector stores the operator breakdown in employee_rows.  Older
+  // daily_rows did not carry the derived auto/manual fields, so calculate the
+  // split at read time as well. This backfills already-written dates without
+  // requiring the source scraper to be rerun.
+  let autoProcessed = 0;
+  let manualProcessed = 0;
+  for (const employee of bundle.employee_rows || []) {
+    const handled = numberField(employee.completed_count) + numberField(employee.rejected_count);
+    if (!handled) continue;
+    const employeeName = String(employee.employee_name || employee.employee_id || "").trim();
+    const accountType = String(employee.account_type || "").trim().toLowerCase();
+    const operator = employeeName.toLowerCase();
+    const isAutomatic = ["admin", "system", "auto", "automatic", "robot", "机器人", "自动"].some((value) =>
+      operator === value || operator.includes(value) || accountType === value || accountType.includes(value)
+    );
+    if (isAutomatic) autoProcessed += handled;
+    else if (employeeName || accountType) manualProcessed += handled;
+  }
   const add = (source: Record<string, unknown>, kind: WorkOrderRow["kind"], index: number, defaults: { workType: string; workName: string; operator: string }) => {
     const total = numberField(source.total_count);
     const success = numberField(source.completed_count);
     const failed = numberField(source.rejected_count);
     const pending = numberField(source.in_progress_count || source.pending_count);
+    const sourceAuto = source.auto_processed_count ?? source.auto;
+    const sourceManual = source.manual_processed_count ?? source.manual;
+    const hasSourceSplit = sourceAuto !== undefined || sourceManual !== undefined;
+    const rowAuto = hasSourceSplit ? numberField(sourceAuto) : autoProcessed;
+    const rowManual = hasSourceSplit ? numberField(sourceManual) : manualProcessed;
     rows.push({
       id: `${base}:${kind}:${index}`,
       date: bundle.stat_date,
@@ -586,6 +624,7 @@ function mapWorkOrderBundle(bundle: DbWorkOrderBundle): WorkOrderRow[] {
       accountType: String(source.account_type || ""),
       total, success, failed, pending,
       amount: numberField(source.total_amount || source.amount),
+      ...(kind === "daily" ? { auto: rowAuto, manual: rowManual } : {}),
       status: success > 0 || failed > 0 ? "已处理" : "待处理",
       sourceSheet: "supabase:workorder_daily_bundle",
       sourceRow: index,
