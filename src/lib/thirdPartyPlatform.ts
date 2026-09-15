@@ -1,20 +1,28 @@
 /** Display/filter aliases only. Never deduplicate, delete or rewrite source rows. */
 export function canonicalThirdPartyPlatform(country: string, value: string): string {
   const platform = String(value || "").trim();
+  // The source sometimes appends `(AR)` to the same platform name. It is a
+  // backend/display suffix, not a separate platform, so normalize it before
+  // building options, filters, aggregates, and work-order keys.
+  const displayPlatform = platform
+    .replace(/（/g, "(")
+    .replace(/）/g, ")")
+    .replace(/\s*\(AR\)\s*$/i, "")
+    .trim() || platform;
   // Preserve the existing Shree.Win / Shreewin display compatibility exactly.
-  const legacyShreeKey = platform.toLowerCase().replace(/（/g, "(").replace(/）/g, ")").replace(/[^a-z0-9一-龥]+/g, "");
+  const legacyShreeKey = displayPlatform.toLowerCase().replace(/[^a-z0-9一-龥]+/g, "");
   if (legacyShreeKey === "shreewin") return "ShreeWin";
 
   const countryKey = String(country || "").trim().toUpperCase();
   if (countryKey === "BR" || countryKey === "巴西") {
     // Only verified aliases; do not apply generic punctuation or suffix removal.
-    const known = platform.toUpperCase();
+    const known = displayPlatform.toUpperCase();
     if (known === "43R") return "43R";
     if (known === "PLAYERBR" || known === "PLAYER BR") return "PLAYER BR";
     // Confirmed by the owner: the fee-table POPKKK新 is the same WG POPKKK.
     if (known === "POPKKK" || known === "POPKKK新") return "POPKKK";
   }
-  return platform;
+  return displayPlatform;
 }
 
 /** Stable first-occurrence order, suitable for draft/applied multi-select state. */
