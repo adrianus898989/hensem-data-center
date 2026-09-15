@@ -8,13 +8,18 @@ import type {
   ThirdPartyRatePayload,
   ThirdPartyRateRow,
   ThirdPartyVolumePayload,
-  ThirdPartyVolumeRow
+  ThirdPartyVolumeRow,
+  WithdrawPendingSnapshot,
+  WorkOrderDepositRow,
+  WorkOrderPayload,
+  WorkOrderRow
 } from "@/lib/types";
 import { formatDuration, parseDurationToSeconds } from "@/lib/format";
 import { aggregateWithdrawRows } from "@/lib/parseAutoWithdraw";
 import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
 import { dashboardScopeAllows } from "@/lib/dashboardDataScope";
 import { collectionSuccessCountry, collectionSuccessPeriod } from "@/lib/collectionSuccess";
+import { withdrawPendingCountry } from "@/lib/withdrawPending";
 import { requireDashboardDataAccess, requireDashboardAllData, dashboardAllowedRows, DashboardDataAccessError } from "@/lib/dashboardDataAccessServer";
 
 const PAGE_SIZE = 1000;
@@ -469,6 +474,31 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
         && dashboardScopeAllows(access.scope, collectionSuccessCountry(snapshot.country_code, snapshot.platform), snapshot.platform)), error: "" };
     }).catch(() => ({ snapshots: [] as CollectionSuccessSnapshot[], error: "代收成功率暂未读取，原有三方量不受影响。" }))
     : Promise.resolve({ snapshots: [] as CollectionSuccessSnapshot[], error: "代收成功率支持最多 366 天的查询。" });
+  // Exact-"已提交" payout snapshots are read through a separate RPC/table so
+  // legacy payout totals and the collection-success denominator cannot mix.
+  const pendingRead = successPeriod
+    ? callRpc<{ snapshots: WithdrawPendingSnapshot[] }>("dashboard_withdraw_pending", {
+      p_start: successPeriod.previousStart, p_end: end, p_country: successCountry,
+    }, token, AbortSignal.timeout(6000)).then(result => {
+      if (!Array.isArray(result?.snapshots)) throw new Error("invalid_pending_payload");
+      return { snapshots: result.snapshots.filter(snapshot => snapshot && typeof snapshot.country_code === "string" && typeof snapshot.platform === "string"
+        && dashboardScopeAllows(access.scope, withdrawPendingCountry(snapshot.country_code, snapshot.platform), snapshot.platform)), error: "" };
+    }).catch(() => ({ snapshots: [] as WithdrawPendingSnapshot[], error: "代付中数据暂未读取，原有三方量不受影响。" }))
+    : Promise.resolve({ snapshots: [] as WithdrawPendingSnapshot[], error: "代付中数据支持最多 366 天的查询。" });
+  const depositQuery = successPeriod ? new URLSearchParams({
+    select: "system_name,source_system,stat_date,country_code,country,platform,third_party,channel_type,submitted_count,submitted_amount,success_count,success_amount,status_counts,source_updated_at",
+    order: "stat_date.asc,platform.asc,third_party.asc"
+  }) : null;
+  if (depositQuery && successPeriod) {
+    depositQuery.append("stat_date", `gte.${successPeriod.previousStart}`);
+    depositQuery.append("stat_date", `lte.${end}`);
+  }
+  const depositRead = successPeriod && depositQuery
+    ? fetchPaged<WorkOrderDepositRow>("workorder_deposit_daily", depositQuery, token).then(rows => ({
+      rows: rows.filter(row => row && row.source_system === "AR_WORKORDER" && dashboardScopeAllows(access.scope, row.country_code || row.country, row.platform)),
+      error: ""
+    })).catch(() => ({ rows: [] as WorkOrderDepositRow[], error: "存款未到账数据暂未读取，原有三方量不受影响。" }))
+    : Promise.resolve({ rows: [] as WorkOrderDepositRow[], error: "存款未到账数据支持最多 366 天的查询。" });
   const results = await Promise.all(sourceCountries.map((sourceCountry) => callRpc<any>("dashboard_third_party_volume_fast_v2", {
     p_start: start,
     p_end: end,
@@ -480,7 +510,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   const globalLatest = access.scope.mode === "all" ? results.map((result) => result?.latestWriteAt).filter(Boolean).sort().pop() : null;
   const updatedAt = String(globalLatest || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString());
   const sheets = Array.from(new Set(rows.map((row) => row.sheetName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
-  const collectionSuccess = await successRead;
+  const [collectionSuccess, withdrawPending, workOrderDeposit] = await Promise.all([successRead, pendingRead, depositRead]);
 
   return {
     meta: {
@@ -502,10 +532,108 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
     rows,
     collectionSuccessSnapshots: collectionSuccess.snapshots,
     ...(collectionSuccess.error ? { collectionSuccessError: collectionSuccess.error } : {}),
+    withdrawPendingSnapshots: withdrawPending.snapshots,
+    ...(withdrawPending.error ? { withdrawPendingError: withdrawPending.error } : {}),
+    workOrderDepositRows: workOrderDeposit.rows,
+    ...(workOrderDeposit.error ? { workOrderDepositError: workOrderDeposit.error } : {}),
     aliasMap: buildAliasMap(rows),
     summary: volumeSummary(rows),
     anomalies: []
   };
+}
+
+type DbWorkOrderBundle = {
+  system_name: string;
+  stat_date: string;
+  country_code: string;
+  country: string;
+  platform: string;
+  daily_rows: Record<string, unknown>[];
+  type_rows: Record<string, unknown>[];
+  employee_rows: Record<string, unknown>[];
+  source_updated_at: string | null;
+};
+
+function monthBounds(monthKey: string): { start: string; end: string } | null {
+  const match = String(monthKey || "").match(/^(20\d{2})_(0?[1-9]|1[0-2])$/);
+  if (!match) return null;
+  const year = Number(match[1]), month = Number(match[2]);
+  const last = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+  return { start: `${year}-${String(month).padStart(2, "0")}-01`, end: last };
+}
+
+function numberField(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function mapWorkOrderBundle(bundle: DbWorkOrderBundle): WorkOrderRow[] {
+  const base = `${bundle.stat_date}:${bundle.country_code}:${bundle.platform}`;
+  const rows: WorkOrderRow[] = [];
+  const add = (source: Record<string, unknown>, kind: WorkOrderRow["kind"], index: number, defaults: { workType: string; workName: string; operator: string }) => {
+    const total = numberField(source.total_count);
+    const success = numberField(source.completed_count);
+    const failed = numberField(source.rejected_count);
+    const pending = numberField(source.in_progress_count || source.pending_count);
+    rows.push({
+      id: `${base}:${kind}:${index}`,
+      date: bundle.stat_date,
+      country: bundle.country,
+      platform: bundle.platform,
+      workType: String(source.order_type || defaults.workType || "工单"),
+      workName: String(source.order_name || defaults.workName || "日汇总"),
+      operator: String(source.employee_name || defaults.operator || ""),
+      accountType: String(source.account_type || ""),
+      total, success, failed, pending,
+      amount: numberField(source.total_amount || source.amount),
+      status: success > 0 || failed > 0 ? "已处理" : "待处理",
+      sourceSheet: "supabase:workorder_daily_bundle",
+      sourceRow: index,
+      kind,
+    });
+  };
+  (bundle.daily_rows || []).forEach((row, index) => add(row, "daily", index, { workType: "日汇总", workName: "全部工单", operator: "" }));
+  (bundle.type_rows || []).forEach((row, index) => add(row, "type", index, { workType: "未命名类型", workName: "-", operator: "" }));
+  (bundle.employee_rows || []).forEach((row, index) => add(row, "operator", index, { workType: "工单", workName: "操作人汇总", operator: "" }));
+  return rows;
+}
+
+function workOrderPayloadFromRows(rows: WorkOrderRow[], monthKeys: string[]): WorkOrderPayload {
+  const sheets = rows.length ? ["supabase:workorder_daily_bundle"] : [];
+  return {
+    meta: {
+      year: monthKeys[0]?.slice(0, 4) || String(new Date().getFullYear()),
+      month: monthKeys[0] ? String(Number(monthKeys[0].slice(5, 7))) : String(new Date().getMonth() + 1),
+      updatedAt: new Date().toISOString(), source: "supabase", sheets,
+      message: rows.length ? "工单最新日汇总直接读取 Supabase；历史缺失时可回退 Google 快照。" : "Supabase 暂无工单日汇总。",
+    },
+    summary: {
+      total: rows.reduce((sum, row) => sum + row.total, 0), success: rows.reduce((sum, row) => sum + row.success, 0),
+      failed: rows.reduce((sum, row) => sum + row.failed, 0), pending: rows.reduce((sum, row) => sum + row.pending, 0),
+      amount: rows.reduce((sum, row) => sum + row.amount, 0),
+      countries: new Set(rows.map(row => row.country)).size, platforms: new Set(rows.map(row => row.platform)).size,
+      types: new Set(rows.map(row => row.workType)).size, names: new Set(rows.map(row => row.workName)).size,
+      operators: new Set(rows.map(row => row.operator).filter(Boolean)).size,
+    },
+    rows, anomalies: [],
+  };
+}
+
+export async function readSupabaseWorkOrderMonths(request: Request, monthKeys: string[]): Promise<WorkOrderPayload> {
+  const access = await requireDashboardDataAccess(request, "work_orders");
+  const bounds = monthKeys.map(monthBounds).filter(Boolean) as Array<{ start: string; end: string }>;
+  if (!bounds.length) return workOrderPayloadFromRows([], monthKeys);
+  const start = bounds.map(item => item.start).sort()[0];
+  const end = bounds.map(item => item.end).sort().pop() || start;
+  const query = new URLSearchParams({
+    select: "system_name,stat_date,country_code,country,platform,daily_rows,type_rows,employee_rows,source_updated_at",
+    stat_date: `gte.${start}`,
+    order: "stat_date.asc,platform.asc",
+  });
+  query.append("stat_date", `lte.${end}`);
+  const bundles = await fetchPaged<DbWorkOrderBundle>("workorder_daily_bundle", query, access.token);
+  const allowed = dashboardAllowedRows(access, bundles);
+  return workOrderPayloadFromRows(allowed.flatMap(mapWorkOrderBundle), monthKeys);
 }
 
 export async function readSupabaseThirdPartySyncStatus(request: Request, startInput = "", endInput = ""): Promise<ThirdPartySyncStatus> {
