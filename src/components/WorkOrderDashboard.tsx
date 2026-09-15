@@ -497,6 +497,21 @@ function isAutoOperatorName(value: string): boolean {
 }
 
 function autoManualForRow(row: WorkOrderRow): { auto: number; manual: number } {
+  // Supabase daily rows now carry an explicit split derived from employee_rows.
+  // Prefer it over the legacy status/operator heuristic; the latter remains
+  // necessary for Google snapshots and older rows.
+  if (row.auto !== undefined || row.manual !== undefined) {
+    let auto = Math.max(0, Number(row.auto || 0));
+    let manual = Math.max(0, Number(row.manual || 0));
+    if (!Number.isFinite(auto)) auto = 0;
+    if (!Number.isFinite(manual)) manual = 0;
+    if (row.total > 0 && auto + manual > row.total) {
+      const sum = auto + manual;
+      auto = Math.round((auto / sum) * row.total);
+      manual = Math.max(0, row.total - auto);
+    }
+    return { auto, manual };
+  }
   const status = String(row.status || "");
   const autoMatch = status.match(/自动\s*(\d+(?:\.\d+)?)/);
   const manualMatch = status.match(/人工\s*(\d+(?:\.\d+)?)/);

@@ -142,6 +142,10 @@ export type WorkOrderRow = {
   failed: number;
   pending: number;
   amount: number;
+  /** 已处理工单中由系统自动处理的数量（来自 employee_rows 汇总）。 */
+  auto?: number;
+  /** 已处理工单中由人工处理的数量（来自 employee_rows 汇总）。 */
+  manual?: number;
   status: string;
   sourceSheet: string;
   sourceRow: number;

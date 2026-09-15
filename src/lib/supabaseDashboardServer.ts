@@ -585,6 +585,24 @@ function numberField(value: unknown): number {
 function mapWorkOrderBundle(bundle: DbWorkOrderBundle): WorkOrderRow[] {
   const base = `${bundle.stat_date}:${bundle.country_code}:${bundle.platform}`;
   const rows: WorkOrderRow[] = [];
+  // The collector stores the operator breakdown in employee_rows.  Older
+  // daily_rows did not carry the derived auto/manual fields, so calculate the
+  // split at read time as well. This backfills already-written dates without
+  // requiring the source scraper to be rerun.
+  let autoProcessed = 0;
+  let manualProcessed = 0;
+  for (const employee of bundle.employee_rows || []) {
+    const handled = numberField(employee.completed_count) + numberField(employee.rejected_count);
+    if (!handled) continue;
+    const employeeName = String(employee.employee_name || employee.employee_id || "").trim();
+    const accountType = String(employee.account_type || "").trim().toLowerCase();
+    const operator = employeeName.toLowerCase();
+    const isAutomatic = ["admin", "system", "auto", "automatic", "robot", "机器人", "自动"].some((value) =>
+      operator === value || operator.includes(value) || accountType === value || accountType.includes(value)
+    );
+    if (isAutomatic) autoProcessed += handled;
+    else if (employeeName || accountType) manualProcessed += handled;
+  }
   const add = (source: Record<string, unknown>, kind: WorkOrderRow["kind"], index: number, defaults: { workType: string; workName: string; operator: string }) => {
     const total = numberField(source.total_count);
     const success = numberField(source.completed_count);
@@ -601,6 +619,7 @@ function mapWorkOrderBundle(bundle: DbWorkOrderBundle): WorkOrderRow[] {
       accountType: String(source.account_type || ""),
       total, success, failed, pending,
       amount: numberField(source.total_amount || source.amount),
+      ...(kind === "daily" ? { auto: autoProcessed, manual: manualProcessed } : {}),
       status: success > 0 || failed > 0 ? "已处理" : "待处理",
       sourceSheet: "supabase:workorder_daily_bundle",
       sourceRow: index,
