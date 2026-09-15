@@ -608,6 +608,11 @@ function mapWorkOrderBundle(bundle: DbWorkOrderBundle): WorkOrderRow[] {
     const success = numberField(source.completed_count);
     const failed = numberField(source.rejected_count);
     const pending = numberField(source.in_progress_count || source.pending_count);
+    const sourceAuto = source.auto_processed_count ?? source.auto;
+    const sourceManual = source.manual_processed_count ?? source.manual;
+    const hasSourceSplit = sourceAuto !== undefined || sourceManual !== undefined;
+    const rowAuto = hasSourceSplit ? numberField(sourceAuto) : autoProcessed;
+    const rowManual = hasSourceSplit ? numberField(sourceManual) : manualProcessed;
     rows.push({
       id: `${base}:${kind}:${index}`,
       date: bundle.stat_date,
@@ -619,7 +624,7 @@ function mapWorkOrderBundle(bundle: DbWorkOrderBundle): WorkOrderRow[] {
       accountType: String(source.account_type || ""),
       total, success, failed, pending,
       amount: numberField(source.total_amount || source.amount),
-      ...(kind === "daily" ? { auto: autoProcessed, manual: manualProcessed } : {}),
+      ...(kind === "daily" ? { auto: rowAuto, manual: rowManual } : {}),
       status: success > 0 || failed > 0 ? "已处理" : "待处理",
       sourceSheet: "supabase:workorder_daily_bundle",
       sourceRow: index,

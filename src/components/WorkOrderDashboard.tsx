@@ -779,7 +779,9 @@ function buildWorkCompareRows(rows: WorkOrderRow[], groupKey: "all" | "country" 
   }).sort((a, b) => Math.abs(b.totalDiff) - Math.abs(a.totalDiff));
 }
 
-const WORK_ORDER_CACHE_KEY = "hensem:last-good:work-orders:v238-current";
+// Bump this whenever the server payload shape changes. Otherwise an older
+// browser cache can keep showing the pre-Supabase auto/manual values.
+const WORK_ORDER_CACHE_KEY = "hensem:last-good:work-orders:v239-auto-manual";
 
 function readWorkLocalCache(profile: DashboardProfile | null): WorkOrderPayload | null {
   return readDashboardDataCache<WorkOrderPayload>(WORK_ORDER_CACHE_KEY,profile);
@@ -1416,7 +1418,7 @@ export default function WorkOrderDashboard() {
         <div className="title"><h1>工单 / 客服</h1></div>
         {hasQueried && payload && <div className="status-box">
           <div className="status-line"><span>数据月份</span><strong>{payload.meta.year || "-"} 年 {payload.meta.month || "-"} 月</strong></div>
-          <div className="status-line"><span>数据来源</span><strong>Google Sheet</strong></div>
+          <div className="status-line"><span>数据来源</span><strong>{String((payload.meta as any).source || "").toLowerCase() === "supabase" ? "Supabase" : "Google Sheet"}</strong></div>
           <div className="status-line"><span>读取页签</span><strong>{payload.meta.sheets.length} 个</strong></div>
           <div className="status-line"><span>更新时间</span><strong>{new Date(String((payload.meta as any).snapshotUpdatedAt || payload.meta.updatedAt)).toLocaleString("zh-CN")}</strong></div>
         </div>}

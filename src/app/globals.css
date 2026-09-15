@@ -6373,3 +6373,126 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* 工单页重排：卡片保持成组，避免 8 张卡片挤成 6+2 并留下大片空白。 */
+.work-order-module .work-overview-metrics,
+.work-order-module .work-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 12px !important;
+  margin: 0 0 16px !important;
+}
+
+.work-order-module .metric-card {
+  min-height: 116px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: flex-start !important;
+  padding: 16px 18px !important;
+  border-radius: 14px !important;
+  background: #fff !important;
+  overflow: hidden !important;
+}
+
+.work-order-module .metric-card::after {
+  display: none !important;
+}
+
+.work-order-module .metric-card > span {
+  position: relative;
+  z-index: 1;
+  margin: 0 0 8px !important;
+  color: #63748a !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+}
+
+.work-order-module .metric-card > strong {
+  position: relative;
+  z-index: 1;
+  color: #172238 !important;
+  font-size: 25px !important;
+  line-height: 1.15 !important;
+  letter-spacing: -.035em !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.work-order-module .metric-card > p {
+  position: relative;
+  z-index: 1;
+  margin: 8px 0 0 !important;
+  color: #7b899c !important;
+  font-size: 11px !important;
+  line-height: 1.45 !important;
+}
+
+.work-order-module .work-overview-metrics .metric-card:nth-child(1),
+.work-order-module .work-overview-metrics .metric-card:nth-child(2) {
+  border-top: 3px solid #2f66e8 !important;
+}
+
+.work-order-module .work-overview-metrics .metric-card:nth-child(3) {
+  border-top: 3px solid #168b68 !important;
+  background: linear-gradient(180deg, #fff, #f5fcf9) !important;
+}
+
+.work-order-module .work-overview-metrics .metric-card:nth-child(4) {
+  border-top: 3px solid #d97706 !important;
+  background: linear-gradient(180deg, #fff, #fffaf3) !important;
+}
+
+.work-order-module .panel {
+  border-radius: 16px !important;
+  overflow: hidden !important;
+}
+
+.work-order-module .panel-header {
+  min-height: 62px !important;
+  padding: 16px 18px 13px !important;
+  background: linear-gradient(180deg, #fff 0%, #f9fbfe 100%) !important;
+}
+
+.work-order-module .panel-header h3 {
+  margin: 0 !important;
+  color: #172238 !important;
+  font-size: 18px !important;
+  line-height: 1.25 !important;
+  font-weight: 900 !important;
+  letter-spacing: -.02em !important;
+}
+
+.work-order-module .panel-header p {
+  margin: 6px 0 0 !important;
+  color: #7a899d !important;
+  font-size: 11px !important;
+  line-height: 1.45 !important;
+}
+
+.work-order-module .work-table-wrap {
+  border-top: 1px solid #edf1f6 !important;
+}
+
+.work-order-module .work-order-rank-grid {
+  gap: 12px !important;
+  margin-top: 14px !important;
+}
+
+.work-order-module .compact-breakdown {
+  margin: 0 0 12px !important;
+  padding: 12px 14px !important;
+  border-radius: 12px !important;
+  background: #f8fbff !important;
+}
+
+@media (max-width: 1280px) {
+  .work-order-module .work-overview-metrics,
+  .work-order-module .work-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 780px) {
+  .work-order-module .work-overview-metrics,
+  .work-order-module .work-metrics {
+    grid-template-columns: 1fr !important;
+  }
+}
