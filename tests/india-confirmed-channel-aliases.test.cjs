@@ -30,6 +30,30 @@ test('confirmed matching tolerates case and boundary spaces without broad punctu
     assert.equal(names.confirmedIndiaThirdPartyAlias(value, '印度'), '', value);
 });
 
+test('PAYTM-RAPay accepts dash typography and surrounding spaces, keeping exact provider scope', () => {
+  for (const dash of ['-', '‐', '‑', '‒', '–', '—', '﹘', '﹣', '－']) {
+    for (const input of [`PAYTM${dash}RAPay`, ` paytm ${dash} RAPAY `, `PAYTM${dash}\u00a0RAPay`]) {
+      for (const country of ['印度', '印度线下', 'IN', 'India']) {
+        assert.equal(names.confirmedIndiaThirdPartyAlias(input, country), 'RAPay', `${country}/${input}`);
+        assert.equal(names.canonicalThirdPartyName(input, country), 'RAPay', `${country}/${input}`);
+      }
+      for (const country of [undefined, '印尼', '印度尼西亚', '越南', '巴西'])
+        assert.equal(names.confirmedIndiaThirdPartyName(input, country), '', `${country}/${input}`);
+    }
+  }
+  for (const input of ['PAYTMRAPay', 'PAYTM RAPay', 'PAYTM_RAPay', 'PAYTM/RAPay', 'PAYTM--RAPay', 'PAYTM-RAPay2'])
+    assert.equal(names.confirmedIndiaThirdPartyName(input, '印度'), '', input);
+});
+
+test('confirmed provider names keep canonical casing when read from historical snapshots', () => {
+  for (const country of ['印度', '印度线下', 'IN', 'India'])
+    for (const [input, expected] of [['rapay', 'RAPay'], ['RAPAY', 'RAPay'], ['NewWinPay', 'NewWinPay'], ['NEWWINPAY2', 'NewWinPay']]) {
+      assert.equal(names.confirmedIndiaThirdPartyName(input, country), expected);
+      assert.equal(names.canonicalThirdPartyName(input, country), expected);
+      assert.equal(names.canonicalThirdPartyName(expected, country), expected);
+    }
+});
+
 test('the scoped helper never recognizes new aliases outside India', () => {
   for (const country of [undefined, '', '印尼', '印度尼西亚', 'Indonesia', 'ID', '越南', 'VN', '巴西', '尼日利亚', 'IN-extra', '印度2'])
     for (const [input] of aliases) assert.equal(names.confirmedIndiaThirdPartyAlias(input, country), '', `${country}/${input}`);
