@@ -213,6 +213,9 @@ export type ThirdPartyVolumePayload = {
   /** AR 工单“存款未到账”每日提交/成功聚合；由采集脚本直接写入 Supabase。 */
   workOrderDepositRows?: WorkOrderDepositRow[];
   workOrderDepositError?: string;
+  /** 提现订单实际到账金额与手续费的安全聚合；原始订单字段不会下发到前端。 */
+  withdrawActualRows?: WithdrawActualRow[];
+  withdrawActualError?: string;
 };
 
 export type WorkOrderDepositRow = {
@@ -229,6 +232,20 @@ export type WorkOrderDepositRow = {
   success_count: number;
   success_amount: number;
   status_counts?: Record<string, number>;
+  source_updated_at?: string;
+};
+
+export type WithdrawActualRow = {
+  stat_date: string;
+  country_code: string;
+  country: string;
+  platform: string;
+  third_party: string;
+  channel_type: string;
+  order_count: number;
+  requested_amount: number;
+  actual_amount: number;
+  fee_amount: number;
   source_updated_at?: string;
 };
 

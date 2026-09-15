@@ -2,3 +2,7 @@
 .withdraw-pending-value { display: inline-block; min-width: 58px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .withdraw-pending-value.is-ready { color: #7b5317; font-weight: 650; }
 .withdraw-pending-value.is-pending { color: #9aa6b8; }
+.withdraw-actual-heading { min-width: 96px; white-space: nowrap; color: #126a52; }
+.withdraw-actual-value { display: inline-block; min-width: 58px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.withdraw-actual-value.is-ready { color: #126a52; font-weight: 650; }
+.withdraw-actual-value.is-pending { color: #9aa6b8; }

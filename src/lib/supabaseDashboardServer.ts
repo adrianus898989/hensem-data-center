@@ -9,6 +9,7 @@ import type {
   ThirdPartyRateRow,
   ThirdPartyVolumePayload,
   ThirdPartyVolumeRow,
+  WithdrawActualRow,
   WithdrawPendingSnapshot,
   WorkOrderDepositRow,
   WorkOrderPayload,
@@ -499,6 +500,18 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
       error: ""
     })).catch(() => ({ rows: [] as WorkOrderDepositRow[], error: "存款未到账数据暂未读取，原有三方量不受影响。" }))
     : Promise.resolve({ rows: [] as WorkOrderDepositRow[], error: "存款未到账数据支持最多 366 天的查询。" });
+  const actualRead = successPeriod
+    ? callRpc<{ rows: WithdrawActualRow[] }>("dashboard_withdraw_actual", {
+      p_start: successPeriod.previousStart, p_end: end, p_country: successCountry,
+    }, token, AbortSignal.timeout(6000)).then(result => {
+      if (!Array.isArray(result?.rows)) throw new Error("invalid_withdraw_actual_payload");
+      return {
+        rows: result.rows.filter(row => row && typeof row.stat_date === "string" && typeof row.platform === "string"
+          && typeof row.third_party === "string" && dashboardScopeAllows(access.scope, row.country_code || row.country, row.platform)),
+        error: ""
+      };
+    }).catch(() => ({ rows: [] as WithdrawActualRow[], error: "实际到账/提现手续费暂未读取，原有三方量不受影响。" }))
+    : Promise.resolve({ rows: [] as WithdrawActualRow[], error: "实际到账/提现手续费支持最多 366 天的查询。" });
   const results = await Promise.all(sourceCountries.map((sourceCountry) => callRpc<any>("dashboard_third_party_volume_fast_v2", {
     p_start: start,
     p_end: end,
@@ -510,7 +523,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   const globalLatest = access.scope.mode === "all" ? results.map((result) => result?.latestWriteAt).filter(Boolean).sort().pop() : null;
   const updatedAt = String(globalLatest || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString());
   const sheets = Array.from(new Set(rows.map((row) => row.sheetName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
-  const [collectionSuccess, withdrawPending, workOrderDeposit] = await Promise.all([successRead, pendingRead, depositRead]);
+  const [collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual] = await Promise.all([successRead, pendingRead, depositRead, actualRead]);
 
   return {
     meta: {
@@ -536,6 +549,8 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
     ...(withdrawPending.error ? { withdrawPendingError: withdrawPending.error } : {}),
     workOrderDepositRows: workOrderDeposit.rows,
     ...(workOrderDeposit.error ? { workOrderDepositError: workOrderDeposit.error } : {}),
+    withdrawActualRows: withdrawActual.rows,
+    ...(withdrawActual.error ? { withdrawActualError: withdrawActual.error } : {}),
     aliasMap: buildAliasMap(rows),
     summary: volumeSummary(rows),
     anomalies: []
