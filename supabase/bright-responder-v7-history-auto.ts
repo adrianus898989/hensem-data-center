@@ -188,7 +188,8 @@ const MANUAL_THIRD_PARTY_ALIAS_FIXES: ThirdPartyAliasEntry[] = [
   { country: "巴基斯坦", canonical: "OpenPay", aliases: ["OPENPAY", "OpenPay", "Open-EP", "Open-Jazz", "OpenPay-Wallet2", "OpenPayPKR-Easy", "OpenPayPKR-JazzCash"] },
   { country: "巴基斯坦", canonical: "OpenPay", aliases: ["OPPAY", "OpPay", "OPay", "OpPay-EP", "OpPay-Jazz", "OpPayPKR-Easy", "OpPayPKR-JazzCash", "OpPay-Wallet2"] },
   { country: "巴基斯坦", canonical: "OwenPay", aliases: ["OWEN", "Owen", "Own", "OWN", "OwenPay", "Owen-EP", "Owen-Jazz", "OwenPay-Wallet2", "OwenPayPKR-EASYPAISA", "OwenPayPKR-JAZZCASH"] },
-  { country: "巴基斯坦", canonical: "GxPay", aliases: ["gxPay", "gxpay", "gxPay-Jazz", "gxPay-EP", "gxpay-Jazz", "gxpay-EP", "GxPayPKR-Easy", "GxPayPKR-JazzCash"] },
+  // 用户确认：GxPay 是 P777Pay 的旧/后台显示名，统一归并到 P777Pay。
+  { country: "巴基斯坦", canonical: "P777Pay", aliases: ["GxPay", "gxPay", "gxpay", "gxPay-Jazz", "gxPay-EP", "gxpay-Jazz", "gxpay-EP", "GxPayPKR-Easy", "GxPayPKR-JazzCash"] },
   { country: "巴基斯坦", canonical: "P777Pay", aliases: ["P777", "P777Pay", "P777-EP", "P777-Jazz", "P777PayPKR-Easy", "P777PayPKR-Jazz"] },
   { country: "巴基斯坦", canonical: "PkPay", aliases: ["PkPay", "PKPAY", "Pk-EP", "Pk-Jazz", "PkPayPKR-EASYPAISA", "PkPayPKR-JAZZCASH", "PkPayPKR-Jazz", "PkPayPKR-Easy"] },
   { country: "巴基斯坦", canonical: "StarPago", aliases: ["StarPago", "StarPago-EP", "StarPago-Jazz"] },
@@ -335,7 +336,7 @@ function normalizeCanonicalByCountry(name: string, country?: string): string {
       [/^(oppay|oppayep|oppayjazz|opay|opayep|opayjazz|oppaypkreasy|oppaypkrjazzcash|oppaypkreasy|oppaypkrjazz|oppaypkrjazzcash|oppaywallet2)$/, "OpenPay"],
       [/^(owenpay|owen|own|owenep|owenjazz|owenpaypkreasypaisa|owenpaypkrjazzcash|owenpaywallet2)$/, "OwenPay"],
       [/^(p777pay|p777|p777ep|p777jazz|p777paypkreasy|p777paypkrjazz|p777paypkrjazzcash)$/, "P777Pay"],
-      [/^(gxpay|gxpayep|gxpayjazz|gxppay|gxppayep|gxppayjazz|gxpaypkreasy|gxpaypkrjazzcash)$/, "GxPay"],
+      [/^(gxpay|gxpayep|gxpayjazz|gxppay|gxppayep|gxppayjazz|gxpaypkreasy|gxpaypkrjazzcash)$/, "P777Pay"],
       [/^(pkpay|pkpayep|pkpayjz|pkep|pkjazz|pkpaypkreasypaisa|pkpaypkreasy|pkpaypkrjazzcash|pkpaypkrjazz|pkpaywallet2)$/, "PkPay"],
       [/^(starpago|starpagoep|starpagojazz|starpagopkreasy|starpagopkrjazzcash)$/, "StarPago"],
       [/^(pay4z|pay4zep|pay4zjazz)$/, "Pay4z"],
@@ -762,7 +763,7 @@ export function canonicalThirdPartyName(value: string, country?: string): string
       oppay: "OpenPay", oppayep: "OpenPay", oppayjazz: "OpenPay", opay: "OpenPay", opayep: "OpenPay", opayjazz: "OpenPay",
       owenpay: "OwenPay", owen: "OwenPay", own: "OwenPay", owenep: "OwenPay", owenjazz: "OwenPay", owenpaypkreasypaisa: "OwenPay", owenpaypkrjazzcash: "OwenPay", owenpaywallet2: "OwenPay",
       p777pay: "P777Pay", p777: "P777Pay", p777ep: "P777Pay", p777jazz: "P777Pay", p777paypkreasy: "P777Pay", p777paypkrjazz: "P777Pay", "777pay": "P777Pay",
-      gxpay: "GxPay", gxpayep: "GxPay", gxpayjazz: "GxPay", gxppay: "GxPay", gxppayep: "GxPay", gxppayjazz: "GxPay",
+      gxpay: "P777Pay", gxpayep: "P777Pay", gxpayjazz: "P777Pay", gxppay: "P777Pay", gxppayep: "P777Pay", gxppayjazz: "P777Pay",
       pkpay: "PkPay", pkep: "PkPay", pkjazz: "PkPay", pkjz: "PkPay", pkpayep: "PkPay", pkpayjazz: "PkPay", pkpayjz: "PkPay", pkpaypkreasypaisa: "PkPay", pkpaypkrjazzcash: "PkPay", pkpaypkrjazz: "PkPay", pkpaypkreasy: "PkPay", pkpaywallet2: "PkPay",
       starpago: "StarPago", starpagoep: "StarPago", starpagojazz: "StarPago", starpagojz: "StarPago",
       mega: "MegaPay", megapay: "MegaPay", megaep: "MegaPay", megajazz: "MegaPay", megajz: "MegaPay",
@@ -905,7 +906,7 @@ export function canonicalThirdPartyName(value: string, country?: string): string
   if (/^(oppay|opay|opayep|opayjazz|oppayep|oppayjazz|oppaypkreasy|oppaypkrjazzcash)$/.test(x) || /(?:^|[^a-z0-9])op-pay(?:$|[^a-z0-9])/.test(x)) return "OpenPay";
   if (/owenpay|owen|\bown\b/.test(x)) return "OwenPay";
   if (/p777pay|p777/.test(x)) return "P777Pay";
-  if (/gxpay|gxp-pay|gxppay/.test(x)) return "GxPay";
+  if (/gxpay|gxp-pay|gxppay/.test(x)) return "P777Pay";
   if (/wepay|we-pay|wepay.*唤醒|wepay醒|paytm-wepay|qr-wepay/.test(x)) return "WePay";
   if (/movpay|mov-pay/.test(x)) return "MovPay";
   if (/magicpay|magic-pay/.test(x)) return "MagicPay";
