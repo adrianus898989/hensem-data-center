@@ -207,6 +207,29 @@ export type ThirdPartyVolumePayload = {
   /** Submission-day counts, independent of the legacy volume success fields. */
   collectionSuccessSnapshots?: CollectionSuccessSnapshot[];
   collectionSuccessError?: string;
+  /** Daily exact-"已提交" payout snapshots; independent of payout success/volume fields. */
+  withdrawPendingSnapshots?: WithdrawPendingSnapshot[];
+  withdrawPendingError?: string;
+  /** AR 工单“存款未到账”每日提交/成功聚合；由采集脚本直接写入 Supabase。 */
+  workOrderDepositRows?: WorkOrderDepositRow[];
+  workOrderDepositError?: string;
+};
+
+export type WorkOrderDepositRow = {
+  system_name: string;
+  source_system: string;
+  stat_date: string;
+  country_code: string;
+  country: string;
+  platform: string;
+  third_party: string;
+  channel_type: string;
+  submitted_count: number;
+  submitted_amount: number;
+  success_count: number;
+  success_amount: number;
+  status_counts?: Record<string, number>;
+  source_updated_at?: string;
 };
 
 export type CollectionSuccessSnapshot = {
@@ -221,6 +244,20 @@ export type CollectionSuccessSnapshot = {
   coverage: { complete: boolean; expected_count: number; fetched_count: number; unique_count: number };
   totals: { submitted_count: number; success_count: number };
   groups: Array<{ raw_channel: string; channel_type: string; submitted_count: number; success_count: number }>;
+};
+
+export type WithdrawPendingSnapshot = {
+  schema_version: 1;
+  source_system: string;
+  country_code: string;
+  platform: string;
+  stat_date: string;
+  timezone: string;
+  snapshot_id: string;
+  snapshot_at: string;
+  coverage: { complete: boolean; expected_count: number; fetched_count: number; unique_count: number };
+  totals: { pending_count: number; pending_amount: number };
+  groups: Array<{ raw_channel: string; channel_type: string; pending_count: number; pending_amount: number }>;
 };
 
 export type CustomerServiceRow = {

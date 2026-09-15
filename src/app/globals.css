@@ -6362,3 +6362,14 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
   .aw-rate-compare { min-width: 98px; }
   .aw-rate-previous { gap: 2px 3px; }
 }
+.workorder-deposit-heading {
+  background: #fff7ed;
+  color: #9a3412;
+  white-space: nowrap;
+}
+
+.workorder-deposit-cell {
+  color: #9a3412;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

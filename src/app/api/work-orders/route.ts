@@ -12,6 +12,7 @@ import { monthlyResponseHeaders } from "@/lib/monthlyApiResponse";
 import { withDashboardDataAccess, scopeWorkOrderPayload, requireDashboardRefresh } from "@/lib/dashboardDataAccessServer";
 import { queueNetlifyBackgroundFunction } from "@/lib/netlifyFunctionQueue";
 import { readSnapshotCursor } from "@/lib/snapshotStore";
+import { readSupabaseWorkOrderMonths } from "@/lib/supabaseDashboardServer";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,6 +25,12 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const forceRefresh = url.searchParams.get("live") === "1" || url.searchParams.get("refresh") === "1";
   const months = requestedMonthsFromUrl(url);
+
+  // 最新工单优先直读 Supabase；历史月份或迁移尚未完成时继续使用原有 Google 快照兜底。
+  const supabasePayload = await readSupabaseWorkOrderMonths(request, months).catch(() => null);
+  if (supabasePayload?.rows?.length) {
+    return NextResponse.json(scopeWorkOrderPayload(access, supabasePayload), { headers: monthlyResponseHeaders(months), status: 200 });
+  }
 
   // 只有明确刷新当前月时才排队；普通打开页面以及历史查询都只读快照。
   if (forceRefresh && months.length === 1 && months[0] === currentMonthKey()) {
