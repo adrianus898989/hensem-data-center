@@ -37,7 +37,7 @@ import { useDashboardAuth } from "./DashboardAuthGate";
 import { buildCollectionSuccessView, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
 import { CollectionSuccessCell, CollectionSuccessBreakdown } from "./CollectionSuccessCell";
 import { buildWithdrawPendingView, type WithdrawPendingView } from "@/lib/withdrawPending";
-import { buildWorkOrderDepositView, type WorkOrderDepositView } from "@/lib/workOrderDeposit";
+import { buildWorkOrderDepositView, workOrderDepositPlatformKey, workOrderDepositProviderKey, type WorkOrderDepositView } from "@/lib/workOrderDeposit";
 import { buildWithdrawActualView, type WithdrawActualView } from "@/lib/withdrawActual";
 import "./WithdrawPendingCell.css";
 
@@ -3533,7 +3533,12 @@ function MonthlyTable({ title, subtitle, rows, columns, feeRows = [], paginated,
 
   const successKeys = (items: ComboSummary[]) => items.map(item => collectionSuccessProviderKey(item.labelParts[0], item.labelParts[1]));
   const columnCount = columns.length + (showFeeColumns ? 16 : 10) + (collectionSuccess ? 1 : 0) + (withdrawPending ? 2 : 0) + (workOrderDeposit ? 2 : 0) + (withdrawActual ? 2 : 0);
-  const depositKeys = (items: ComboSummary[]) => items.map(item => `${item.labelParts[0] || ""}\u001f${canonicalThirdPartyName(item.labelParts[1] || "", item.labelParts[0] || "")}`);
+  const depositKeys = (items: ComboSummary[]) => items.flatMap((item) => {
+    const country = item.labelParts[0] || "";
+    const provider = workOrderDepositProviderKey(country, item.labelParts[1] || "");
+    const platforms = item.rows.map((raw) => workOrderDepositPlatformKey(raw.country, raw.platform));
+    return Array.from(new Set([provider, ...platforms]));
+  });
   const depositText = (metric: ReturnType<WorkOrderDepositView["compare"]>["current"] | undefined, kind: "submitted" | "success") => {
     if (!metric || metric.state === "missing" || metric.state === "unavailable") return "—";
     const count = kind === "submitted" ? metric.submittedCount : metric.successCount;

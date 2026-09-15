@@ -41,6 +41,21 @@ function platformKey(country: string, platform: string): string {
   return canonicalThirdPartyPlatform(country, platform).trim().toUpperCase();
 }
 
+/**
+ * Keys used by the dashboard to attribute work-order rows to a platform.
+ * Work-order ingestion can legitimately leave third_party as “未标记三方”;
+ * the platform is still a safe, non-duplicating fallback because each row has
+ * one platform and the volume table already groups those platforms under the
+ * displayed third party.
+ */
+export function workOrderDepositProviderKey(country: string, channel: string): string {
+  return providerKey(country, channel);
+}
+
+export function workOrderDepositPlatformKey(country: string, platform: string): string {
+  return `${workOrderDepositCountry(country, platform)}\u001fplatform:${platformKey(country, platform)}`;
+}
+
 function datePeriod(start: string, end: string) {
   if (!validDate(start) || !validDate(end)) return null;
   const first = Date.parse(`${start}T00:00:00Z`), last = Date.parse(`${end}T00:00:00Z`);
@@ -98,8 +113,9 @@ export function buildWorkOrderDepositView(input: {
     for (const row of rows) {
       if (!dates.includes(row.stat_date)) continue;
       const country = workOrderDepositCountry(row.country_code || row.country, row.platform);
-      const key = providerKey(country, row.third_party);
-      if (allowed && !allowed.has(key)) continue;
+      const provider = providerKey(country, row.third_party);
+      const platform = workOrderDepositPlatformKey(country, row.platform);
+      if (allowed && !allowed.has(provider) && !allowed.has(platform)) continue;
       submittedAmount += number(row.submitted_amount); submittedCount += number(row.submitted_count);
       successAmount += number(row.success_amount); successCount += number(row.success_count);
       captured += 1;
