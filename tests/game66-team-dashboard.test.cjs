@@ -69,6 +69,25 @@ test("66GAME 完整聚合区分代收成功、代付成功、已提交和实际�
   assert.match(migration,/game66_withdraw_orders_volume_cover_idx/);
 });
 
+test("66GAME 自动出款按真实团队授权并返回操作人统计",()=>{
+  const migration=fs.readFileSync(path.join(root,"supabase/migrations/20260916201600_fix_game66_team_withdraw_operators.sql"),"utf8");
+  assert.match(migration,/when 'hong_kong' then 'HK_TEAM'/);
+  assert.match(migration,/when 'red_crab' then 'RED_CRAB'/);
+  assert.doesNotMatch(migration,/'印度'::text as country/);
+  assert.match(migration,/w\.create_time >= v_start_at/);
+  assert.match(migration,/w\.create_time < v_end_at/);
+  assert.match(migration,/greatest\(0::numeric, extract\(epoch from/);
+  assert.doesNotMatch(migration,/pg_catalog\.greatest/);
+  assert.match(migration,/when w\.auto_commit = '2' then '自动审核'/);
+  assert.match(migration,/audit_admin/);
+  assert.match(migration,/'operatorRows', v_operator_rows/);
+  for(const file of ["src/lib/supabaseDashboardServer.ts","supabase/functions/dashboard-api/lib/supabaseDashboardServer.ts"]){
+    const server=fs.readFileSync(path.join(root,file),"utf8");
+    assert.match(server,/operatorRows\?: DbOperatorRow\[\]/);
+    assert.match(server,/\[\.\.\.operatorFetched, \.\.\.\(game66Result\.operatorRows \|\| \[\]\)\]/);
+  }
+});
+
 test("红膏蟹成功率支持平台总计与各三方，待处理快照也可验证",()=>{
   assert.equal(collectionSuccess.collectionSuccessCountry("RED_CRAB","66GAME"),"红膏蟹");
   assert.equal(withdrawPending.withdrawPendingCountry("RED_CRAB","66GAME"),"红膏蟹");
