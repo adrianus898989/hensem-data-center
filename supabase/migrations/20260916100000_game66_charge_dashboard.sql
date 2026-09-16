@@ -29,9 +29,20 @@ begin
       (c.create_time at time zone 'Asia/Kolkata')::date as data_date,
       'IN'::text as country_code,
       '印度'::text as country,
-      coalesce(nullif(g.platform_name, ''), '66GAME') as platform,
-      '66GAME'::text as channel,
-      '66GAME'::text as raw_channel,
+      coalesce(nullif(btrim(g.platform_name), ''), '66GAME') as platform,
+      coalesce(
+        nullif(btrim(c.pay_method_name), ''),
+        nullif(btrim(c.pay_method_code), ''),
+        nullif(btrim(c.channel), ''),
+        '未标记三方'
+      )::text as channel,
+      coalesce(nullif(btrim(c.pay_mode), ''), '其他类型')::text as channel_type,
+      coalesce(
+        nullif(btrim(c.pay_method_name), ''),
+        nullif(btrim(c.pay_method_code), ''),
+        nullif(btrim(c.channel), ''),
+        '未标记三方'
+      )::text as raw_channel,
       '代收'::text as direction,
       sum(coalesce(nullif(c.amount_display, 0), c.amount_minor / 100.0, 0)) as amount,
       count(*)::bigint as order_count,
@@ -46,11 +57,11 @@ begin
     join public.game66_platforms g on g.id = c.platform_id
     where (c.create_time at time zone 'Asia/Kolkata')::date between p_start and p_end
       and (coalesce(trim(p_country), '') = '' or p_country in ('IN', '印度'))
-    group by 1, 2, 3, 4, 5, 6, 7
+    group by 1, 2, 3, 4, 5, 6, 7, 8
   )
   select
     coalesce(jsonb_agg(jsonb_build_object(
-      'id', md5(concat_ws('|||', data_date::text, country, platform, channel, direction)),
+      'id', md5(concat_ws('|||', data_date::text, country, platform, channel, channel_type, direction)),
       'sheet_name', 'game66_charge_orders',
       'source_row', 0,
       'data_date', data_date,
@@ -58,7 +69,7 @@ begin
       'platform', platform,
       'channel', channel,
       'raw_channel', raw_channel,
-      'channel_type', '66GAME',
+      'channel_type', channel_type,
       'direction', direction,
       'amount', amount,
       'count', order_count,
@@ -66,9 +77,15 @@ begin
       'failed_count', failed_count,
       'success_rate', case when order_count > 0 then success_count::numeric / order_count::numeric else 0 end,
       'status', case when platform_enabled then '66GAME 原始订单' else '66GAME 原始订单（配置未启用）' end,
-      'raw', jsonb_build_object('source_team', team_name, 'paid_amount', success_amount, 'platform_enabled', platform_enabled),
+      'raw', jsonb_build_object(
+        'source_team', team_name,
+        'paid_amount', success_amount,
+        'pay_mode', channel_type,
+        'pay_method_name', channel,
+        'platform_enabled', platform_enabled
+      ),
       'updated_at', updated_at
-      ) order by data_date, platform), '[]'::jsonb),
+      ) order by data_date, platform, channel, channel_type), '[]'::jsonb),
     count(*)::integer,
     max(updated_at)
   into v_rows, v_row_count, v_latest
