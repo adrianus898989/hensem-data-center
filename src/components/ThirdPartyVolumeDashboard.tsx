@@ -156,6 +156,7 @@ function filterLabel(values: string[], placeholder = "全部"): string {
 
 
 const ALL_USDT_COUNTRY_PAGE = "所有国家USDT";
+const TEAM_PAGE_PREFIX = "团队:";
 const COUNTRY_PRIORITY = ["印度", "巴西", "巴基斯坦", "印尼", "越南", "菲律宾", "马来", "缅甸", "哥伦比亚", "墨西哥", "智利", "尼日利亚", "胖虎巴西", "巴西原生", ALL_USDT_COUNTRY_PAGE, "南美", "USDT通道", "USDT"];
 
 // 业务导航固定显示，不依赖查询结果。
@@ -185,6 +186,18 @@ function isAllUsdtCountryPage(country: string): boolean {
   return String(country || "") === ALL_USDT_COUNTRY_PAGE;
 }
 
+function teamPageKey(team: string): string {
+  return `${TEAM_PAGE_PREFIX}${String(team || "").trim()}`;
+}
+
+function isTeamPage(page: string): boolean {
+  return String(page || "").startsWith(TEAM_PAGE_PREFIX);
+}
+
+function teamFromPage(page: string): string {
+  return isTeamPage(page) ? String(page).slice(TEAM_PAGE_PREFIX.length).trim() : "";
+}
+
 function isUsdtVolumeRow(row: ThirdPartyVolumeRow): boolean {
   const text = `${row.country || ""} ${row.platform || ""} ${row.channel || ""} ${row.rawChannel || ""} ${row.channelType || ""} ${row.sheetName || ""}`.toLowerCase();
   const compact = text.replace(/[^a-z0-9]+/g, "");
@@ -212,6 +225,7 @@ function isUsdtFeeTarget(country: string, platform: string, channel: string, cha
 
 function rowMatchesCountryPage(row: ThirdPartyVolumeRow, page: string): boolean {
   if (!page) return true;
+  if (isTeamPage(page)) return String(row.team || "").trim() === teamFromPage(page);
   if (isAllUsdtCountryPage(page)) return isUsdtVolumeRow(row);
   return platformDisplayCountry(row.country, row.platform) === page;
 }
@@ -1467,6 +1481,7 @@ function groupDirectionsByCountry(rows: DirectionSummary[]): Array<{ country: st
 }
 
 function countryPaneLabel(country: string): string {
+  if (isTeamPage(country)) return `${teamFromPage(country)}团队`;
   if (isAllUsdtCountryPage(country)) return ALL_USDT_COUNTRY_PAGE;
   if (country.includes("哥伦比亚")) return "NPG哥伦比亚盘口";
   if (country.includes("墨西哥")) return "NPG墨西哥盘口";
@@ -2218,9 +2233,10 @@ export default function ThirdPartyVolumeDashboard() {
   // 动态发现的新国家仍可追加，但标准国家页签始终先显示。
   const countryTabs = useMemo(() => {
     const dynamic = countries.filter((item) => !isHiddenCountry(item) && !COUNTRY_NAV_TABS.includes(item));
+    const teamTabs = uniq(rows.map((row) => String(row.team || "").trim()).filter(Boolean)).map(teamPageKey);
     const scope=effectiveDashboardDataScope(profile);
-    return [...COUNTRY_NAV_TABS, ...sortCountries(dynamic)].filter(name=>dashboardScopeAllows(scope,name));
-  }, [countries,profile]);
+    return [...COUNTRY_NAV_TABS, ...sortCountries(dynamic), ...teamTabs].filter(name=>dashboardScopeAllows(scope,name));
+  }, [countries, rows, profile]);
   const activeCountryPage = countryPage && countryTabs.includes(countryPage) ? countryPage : (mainTab === "country" ? (countryTabs[0] || "") : "");
   // 数据计算只跟最后一次“查询”的国家走；点其它国家页签本身不会重新计算/读取。
   const effectiveCountryFilter = mainTab === "country" ? appliedCountryPage : country;
@@ -2241,7 +2257,7 @@ export default function ThirdPartyVolumeDashboard() {
   const isAllDailyPage = false;
   const isAllMonthlyPage = false;
   const optionCountryFilter = mainTab === "country" ? activeCountryPage : country;
-  const platformSelectionCountry = optionCountryFilter && !isAllUsdtCountryPage(optionCountryFilter)
+  const platformSelectionCountry = optionCountryFilter && !isAllUsdtCountryPage(optionCountryFilter) && !isTeamPage(optionCountryFilter)
     ? optionCountryFilter : countrySelections.length === 1 ? countrySelections[0] : "";
   const optionScopedRowsBeforeCountry = useMemo(() => rows.filter((row) => rowMatchesCountryPage(row, optionCountryFilter)), [rows, optionCountryFilter]);
   const countryFilterOptions = useMemo(() => sortCountries(optionScopedRowsBeforeCountry.map((row) => row.country)), [optionScopedRowsBeforeCountry]);
@@ -2457,7 +2473,10 @@ export default function ThirdPartyVolumeDashboard() {
     const queryEnd = endDate || startDate || appliedEndDate || queryStart;
     setIsQuerying(true);
     try {
-      const queryCountry = mainTab === "country" ? activeCountryPage : "";
+      // Team pages are a client-side slice of their source country. Query the
+      // source country (or all countries) first, then filter by row.team; the
+      // API does not know about the UI-only “团队:” page key.
+      const queryCountry = mainTab === "country" && !isTeamPage(activeCountryPage) ? activeCountryPage : "";
       await loadData(true, queryStart, queryEnd, "", queryCountry, true);
       // 只有点击查询后才把所有筛选条件应用到结果。
       setAppliedStartDate(queryStart);

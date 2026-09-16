@@ -181,6 +181,8 @@ export type ThirdPartyVolumeRow = {
   country: string;
   platform: string;
   channel: string;
+  /** Owning business team, when supplied by the source or an explicit mapping. */
+  team?: string;
   rawChannel: string;
   channelType?: string;
   direction: "代收" | "代付";

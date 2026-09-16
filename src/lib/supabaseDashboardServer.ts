@@ -22,6 +22,7 @@ import { dashboardScopeAllows } from "@/lib/dashboardDataScope";
 import { collectionSuccessCountry, collectionSuccessPeriod } from "@/lib/collectionSuccess";
 import { withdrawPendingCountry } from "@/lib/withdrawPending";
 import { requireDashboardDataAccess, requireDashboardAllData, dashboardAllowedRows, DashboardDataAccessError } from "@/lib/dashboardDataAccessServer";
+import { resolveVolumeTeam } from "@/lib/volumeTeamMap";
 
 const PAGE_SIZE = 1000;
 
@@ -176,7 +177,7 @@ type DbVolumeRow = {
   failed_count: number | string | null;
   success_rate: number | string | null;
   status: string | null;
-  raw: Record<string, string> | null;
+  raw: Record<string, unknown> | null;
   updated_at: string | null;
 };
 
@@ -189,6 +190,7 @@ function mapVolume(row: DbVolumeRow): ThirdPartyVolumeRow {
     country: platformDisplayCountry(String(row.country || ""), String(row.platform || "")),
     platform: String(row.platform || ""),
     channel: String(row.channel || ""),
+    team: resolveVolumeTeam(String(row.platform || ""), row.raw?.source_team || row.raw?.team_name || row.raw?.team),
     rawChannel: String(row.raw_channel || ""),
     channelType: String(row.channel_type || ""),
     direction: row.direction === "代付" ? "代付" : "代收",
@@ -242,7 +244,7 @@ type Game66VolumeRpcRow = {
   platform?: string; channel?: string; raw_channel?: string; channel_type?: string; direction?: string;
   amount?: number | string; count?: number | string; success_count?: number | string;
   failed_count?: number | string; success_rate?: number | string; status?: string;
-  raw?: Record<string, string>; updated_at?: string;
+  raw?: Record<string, unknown>; updated_at?: string;
 };
 
 
