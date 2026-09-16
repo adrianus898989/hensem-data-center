@@ -126,17 +126,28 @@ test("团队页只读 GAME66 且前端查询有明确超时",()=>{
   const volume=fs.readFileSync(path.join(root,"src/components/ThirdPartyVolumeDashboard.tsx"),"utf8");
   for(const source of [server,edge]){
     assert.match(source,/const shouldReadLegacy = !game66TeamCountry/);
-    assert.match(source,/const redCrabTeamCountry = \\["红膏蟹", "红膏蟹盘口", "redcrab"\\]/);
-    assert.match(source,/const hongKongTeamCountry = \\["香港", "香港盘口", "hkteam", "hongkong"\\]/);
-    assert.match(source,/p_country: game66RpcCountry/);
-    assert.match(source,/const game66CurrentRead = readGame66Window\(start, end\)/);
+    assert.match(source,/const redCrabTeamCountry = \["红膏蟹", "红膏蟹盘口", "redcrab"\]/);
+    assert.match(source,/const hongKongTeamCountry = \["香港", "香港盘口", "hkteam", "hongkong"\]/);
+    assert.match(source,/p_country: targetCountry/);
+    assert.match(source,/const game66CurrentRead = game66TeamPlatforms\.length/);
     assert.match(source,/readGame66Window\(successPeriod\.previousStart, successPeriod\.previousStart\)/);
+    assert.match(source,/\["66GAME", "YYGAME", "XX7", "XX6", "XX5", "YY9", "PE7", "W5W"\]/);
+    assert.match(source,/game66TeamPlatforms\.map\(platform => readGame66Window\(start, end, platform\)\)/);
     assert.match(source,/const \[results, game66Result\] = await Promise\.all\(\[legacyVolumeRead, game66Read\]\)/);
     assert.match(source,/if \(game66TeamCountry\) throw error/);
     assert.match(source,/collectionSuccessSnapshots: \[\.\.\.collectionSuccess\.snapshots, \.\.\.game66SuccessSnapshots\]/);
     assert.match(source,/withdrawPendingSnapshots: \[\.\.\.withdrawPending\.snapshots, \.\.\.game66PendingSnapshots\]/);
     assert.match(source,/withdrawActualRows: \[\.\.\.withdrawActual\.rows, \.\.\.game66ActualRows\]/);
   }
-  assert.match(volume,/dashboardBusinessFetch\(volumeUrl, \{ signal: AbortSignal\\.timeout\\(25000\\) \}\)/);
+  assert.match(volume,/dashboardBusinessFetch\(volumeUrl, \{ signal: AbortSignal\.timeout\(25000\) \}\)/);
   assert.match(volume,/loadData\(true, queryStart, queryEnd, "", queryCountry, true\)/);
+});
+
+test("GAME66 团队大数据按精确盘口走索引预过滤",()=>{
+  const scoped=fs.readFileSync(path.join(root,"supabase/migrations/20260916212000_game66_platform_scoped_dashboard.sql"),"utf8");
+  const prefilter=fs.readFileSync(path.join(root,"supabase/migrations/20260916213500_game66_platform_prefilter.sql"),"utf8");
+  assert.match(scoped,/g\.platform_name, g\.platform_code/);
+  assert.match(prefilter,/v_platform_id uuid/);
+  assert.match(prefilter,/c\.platform_id = v_platform_id/);
+  assert.match(prefilter,/w\.platform_id = v_platform_id/);
 });
