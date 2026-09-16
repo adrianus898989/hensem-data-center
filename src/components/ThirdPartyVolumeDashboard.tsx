@@ -2096,7 +2096,7 @@ export default function ThirdPartyVolumeDashboard() {
       const shouldFetchRates = forceRates || !ratePayloadFresh(cachedRateBeforeFetch);
 
       const [firstVolumeRes, rateRes, statusRes] = await Promise.all([
-        dashboardBusinessFetch(volumeUrl, { signal: AbortSignal.timeout(15000) }),
+        dashboardBusinessFetch(volumeUrl, { signal: AbortSignal.timeout(25000) }),
         shouldFetchRates ? dashboardBusinessFetch("/api/supabase-third-party-rates", { signal: AbortSignal.timeout(8000) })
           .catch(error=>{if(isDashboardDataDenied(error))throw error;return null;}) : Promise.resolve(null),
         requestedStart && requestedEnd && effectiveDashboardDataScope(profile).mode==="all" ? dashboardBusinessFetch(thirdPartySyncStatusApiUrl(requestedStart, requestedEnd), { signal: AbortSignal.timeout(8000) })
