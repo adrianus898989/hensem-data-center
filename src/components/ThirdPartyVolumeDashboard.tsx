@@ -2150,12 +2150,29 @@ export default function ThirdPartyVolumeDashboard() {
   }
 
   useEffect(() => {
-    // 首次进入只预填“昨天”，不自动查询、不读缓存、不展示旧结果。
-    // 用户明确点击「查询」后才读取 Supabase。
+    // 首次进入默认查询昨天；之前这里只预填日期但不发请求，页面会一直停在空状态。
+    // 等登录会话就绪后自动读取 Supabase，手动查询仍然保留。
     const yesterday = yesterdayLocalDateKey();
     setStartDate(yesterday);
     setEndDate(yesterday);
     setState("ready");
+    let disposed = false;
+    if (session?.access_token) {
+      void (async () => {
+        await loadData(true, yesterday, yesterday, "", "", true);
+        if (disposed) return;
+        setAppliedStartDate(yesterday);
+        setAppliedEndDate(yesterday);
+        setAppliedCountrySelections([]);
+        setAppliedPlatformSelections([]);
+        setAppliedChannel("");
+        setAppliedDirection("");
+        setAppliedChannelTypeSelections([]);
+        setAppliedCountryPage("");
+        setLastQueryAt(new Date().toISOString());
+        setHasQueried(true);
+      })();
+    }
 
     const hourlyTimer = window.setInterval(() => {
       const start = startDateRef.current;
@@ -2171,9 +2188,12 @@ export default function ThirdPartyVolumeDashboard() {
       }
     }, 60 * 60 * 1000);
 
-    return () => window.clearInterval(hourlyTimer);
+    return () => {
+      disposed = true;
+      window.clearInterval(hourlyTimer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [session?.access_token]);
 
 
   const rows = useMemo(() => (payload?.rows || []).map(normalizeVolumeRowForDisplay).filter((row) => !isHiddenCountry(row.country)), [payload]);
