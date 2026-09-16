@@ -237,6 +237,14 @@ async function callRpc<T>(name: string, body: Record<string, unknown>, token: st
   return await readJson(response) as T;
 }
 
+type Game66VolumeRpcRow = {
+  id?: string; sheet_name?: string; source_row?: number; data_date?: string; country?: string;
+  platform?: string; channel?: string; raw_channel?: string; channel_type?: string; direction?: string;
+  amount?: number | string; count?: number | string; success_count?: number | string;
+  failed_count?: number | string; success_rate?: number | string; status?: string;
+  raw?: Record<string, string>; updated_at?: string;
+};
+
 
 type DbAutoWithdrawRow = {
   id: string;
@@ -518,9 +526,24 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
     p_country: sourceCountry
   }, token)));
   const dbRows: DbVolumeRow[] = dashboardAllowedRows(access, results.flatMap((result) => Array.isArray(result?.rows) ? result.rows : []));
+  // 66GAME 已有原始订单时，以安全聚合行并入代收列表；不改写
+  // third_party_volume，只在印度页显示为独立的 66GAME 平台行。
+  const game66Result = await callRpc<{ rows?: Game66VolumeRpcRow[]; latestWriteAt?: string | null }>("dashboard_game66_charge_volume", {
+    p_start: start, p_end: end, p_country: country || null
+  }, token, AbortSignal.timeout(6000)).catch(() => ({ rows: [] as Game66VolumeRpcRow[], latestWriteAt: null }));
+  const game66Rows = dashboardAllowedRows(access, game66Result.rows || []).map((row) => mapVolume({
+    id: String(row.id || ""), sheet_name: String(row.sheet_name || "game66_charge_orders"), source_row: Number(row.source_row || 0),
+    data_date: String(row.data_date || ""), country: String(row.country || "印度"), platform: String(row.platform || "66GAME"),
+    channel: String(row.channel || "66GAME"), raw_channel: String(row.raw_channel || row.channel || "66GAME"), channel_type: String(row.channel_type || "66GAME"),
+    direction: String(row.direction || "代收"), amount: row.amount ?? 0, count: row.count ?? 0, success_count: row.success_count ?? 0,
+    failed_count: row.failed_count ?? 0, success_rate: row.success_rate ?? 0, status: String(row.status || "66GAME 原始订单"),
+    raw: row.raw || {}, updated_at: row.updated_at || null
+  }));
   const displayCountry = country === "BR" ? "巴西" : country;
-  const rows = dbRows.map(mapVolume).map(row => access.scope.mode === "all" ? row : {...row, raw: undefined}).filter((row) => !brazilPage || row.country === displayCountry || (displayCountry === "巴西" && row.country === "BR"));
-  const globalLatest = access.scope.mode === "all" ? results.map((result) => result?.latestWriteAt).filter(Boolean).sort().pop() : null;
+  const rows = [...dbRows.map(mapVolume), ...game66Rows]
+    .map(row => access.scope.mode === "all" ? row : {...row, raw: undefined})
+    .filter((row) => !brazilPage || row.country === displayCountry || (displayCountry === "巴西" && row.country === "BR"));
+  const globalLatest = access.scope.mode === "all" ? [...results.map((result) => result?.latestWriteAt), game66Result.latestWriteAt].filter(Boolean).sort().pop() : null;
   const updatedAt = String(globalLatest || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString());
   const sheets = Array.from(new Set(rows.map((row) => row.sheetName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
   const [collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual] = await Promise.all([successRead, pendingRead, depositRead, actualRead]);
