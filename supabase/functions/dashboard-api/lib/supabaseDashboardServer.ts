@@ -256,12 +256,6 @@ type Game66VolumeRpcResult = {
 
 type Game66AutoWithdrawRpcRow = DbAutoWithdrawRow & { country_code?: string | null };
 
-type Game66AutoWithdrawRpcResult = {
-  rows?: Game66AutoWithdrawRpcRow[];
-  operatorRows?: DbOperatorRow[];
-  latestWriteAt?: string | null;
-};
-
 
 type DbAutoWithdrawRow = {
   id: string;
@@ -438,12 +432,12 @@ export async function readSupabaseAutoWithdraw(request: Request, startInput: str
   const [dailyFetched, operatorFetched, game66Result] = await Promise.all([
     fetchPaged<DbAutoWithdrawRow>("auto_withdraw_daily", dailyQuery, token),
     fetchPaged<DbOperatorRow>("withdraw_operator_daily", operatorQuery, token),
-    callRpc<Game66AutoWithdrawRpcResult>("dashboard_game66_withdraw_daily", {
+    callRpc<{rows?: Game66AutoWithdrawRpcRow[]; latestWriteAt?: string | null}>("dashboard_game66_withdraw_daily", {
       p_start: queryStart, p_end: end,
-    }, token, AbortSignal.timeout(6000)).catch(() => ({rows: [], operatorRows: [], latestWriteAt: null})),
+    }, token, AbortSignal.timeout(6000)).catch(() => ({rows: [] as Game66AutoWithdrawRpcRow[], latestWriteAt: null})),
   ]);
   const dailyRaw = dashboardAllowedRows(access, [...dailyFetched, ...(game66Result.rows || [])]);
-  const operatorRaw = dashboardAllowedRows(access, [...operatorFetched, ...(game66Result.operatorRows || [])]);
+  const operatorRaw = dashboardAllowedRows(access, operatorFetched);
 
   const dailyAll = enrichDbDaily(dedupeDbDaily(dailyRaw).map(mapDbDaily));
   const operatorAll = enrichDbOperators(dedupeDbOperators(operatorRaw).map(mapDbOperator));
@@ -565,12 +559,26 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   // aggregation can exceed the Edge timeout while each indexed day completes
   // quickly. Read both windows concurrently and retain previous-day snapshots
   // only for success/pending comparisons.
-  const readGame66Window = (windowStart: string, windowEnd: string) =>
+  const game66TeamPlatforms = redCrabTeamCountry
+    ? ["66GAME", "YYGAME", "XX7", "XX6", "XX5", "YY9", "PE7", "W5W"]
+    : hongKongTeamCountry
+      ? ["EZ777", "KA9", "8GAME", "WR777", "JW777", "HU777", "GG9", "MM9", "WW9", "777IN", "365IN", "INDIA2026", "FT7"]
+      : [];
+  const mergeGame66 = (parts: Game66VolumeRpcResult[]): Game66VolumeRpcResult => ({
+    rows: parts.flatMap(part => part.rows || []),
+    collectionSuccessSnapshots: parts.flatMap(part => part.collectionSuccessSnapshots || []),
+    withdrawPendingSnapshots: parts.flatMap(part => part.withdrawPendingSnapshots || []),
+    withdrawActualRows: parts.flatMap(part => part.withdrawActualRows || []),
+    latestWriteAt: parts.map(part => part.latestWriteAt).filter(Boolean).sort().pop() || null,
+  });
+  const readGame66Window = (windowStart: string, windowEnd: string, targetCountry = game66RpcCountry) =>
     callRpc<Game66VolumeRpcResult>("dashboard_game66_charge_volume", {
-      p_start: windowStart, p_end: windowEnd, p_country: game66RpcCountry
-    }, token, AbortSignal.timeout(12000));
-  const game66CurrentRead = readGame66Window(start, end);
-  const game66PreviousRead = successPeriod && successPeriod.previousStart < start
+      p_start: windowStart, p_end: windowEnd, p_country: targetCountry
+    }, token, AbortSignal.timeout(18000));
+  const game66CurrentRead = game66TeamPlatforms.length
+    ? Promise.all(game66TeamPlatforms.map(platform => readGame66Window(start, end, platform))).then(mergeGame66)
+    : readGame66Window(start, end);
+  const game66PreviousRead = !game66TeamPlatforms.length && successPeriod && successPeriod.previousStart < start
     ? readGame66Window(successPeriod.previousStart, successPeriod.previousStart)
     : Promise.resolve({} as Game66VolumeRpcResult);
   const game66Read = Promise.all([game66CurrentRead, game66PreviousRead]).then(([current, previous]) => ({
