@@ -41,6 +41,11 @@ function platformKey(country: string, platform: string): string {
   return canonicalThirdPartyPlatform(country, platform).trim().toUpperCase();
 }
 
+function isUnmarkedProvider(value: string): boolean {
+  const key = String(value || "").trim().toLowerCase().replace(/[\s_\-]+/g, "");
+  return !key || key === "未标记三方".toLowerCase() || key === "未分类三方".toLowerCase() || key === "unknown" || key === "unmarked";
+}
+
 /**
  * Keys used by the dashboard to attribute work-order rows to a platform.
  * Work-order ingestion can legitimately leave third_party as “未标记三方”;
@@ -115,7 +120,11 @@ export function buildWorkOrderDepositView(input: {
       const country = workOrderDepositCountry(row.country_code || row.country, row.platform);
       const provider = providerKey(country, row.third_party);
       const platform = workOrderDepositPlatformKey(country, row.platform);
-      if (allowed && !allowed.has(provider) && !allowed.has(platform)) continue;
+      // A real third-party name is authoritative. Only the still-unmarked
+      // legacy rows may fall back to their platform, otherwise every provider
+      // row can inherit the same platform aggregate.
+      const rowKey = isUnmarkedProvider(row.third_party) ? platform : provider;
+      if (allowed && !allowed.has(rowKey)) continue;
       submittedAmount += number(row.submitted_amount); submittedCount += number(row.submitted_count);
       successAmount += number(row.success_amount); successCount += number(row.success_count);
       captured += 1;
