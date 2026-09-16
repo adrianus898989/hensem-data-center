@@ -8,6 +8,7 @@ const COUNTRIES: Record<string, string> = {
   IN: "印度", INDIA: "印度", 印度线下: "印度", 印度盘口: "印度",
   BR: "巴西", PK: "巴基斯坦", ID: "印尼", VN: "越南", PH: "菲律宾", MY: "马来",
   MM: "缅甸", NG: "尼日利亚", CO: "哥伦比亚", MX: "墨西哥", CL: "智利",
+  HK_TEAM: "香港", HONG_KONG: "香港", RED_CRAB: "红膏蟹", REDCRAB: "红膏蟹",
 };
 
 export function withdrawPendingCountry(country: string, platform = ""): string {
@@ -35,7 +36,7 @@ const safeAmount = (value: unknown): value is number => typeof value === "number
 export function validWithdrawPendingSnapshot(snapshot: WithdrawPendingSnapshot): boolean {
   if (!snapshot || snapshot.schema_version !== 1 || snapshot.source_system !== "WITHDRAW_REVIEW" || snapshot.coverage?.complete !== true || !Array.isArray(snapshot.groups)) return false;
   if (![snapshot.country_code, snapshot.platform, snapshot.stat_date, snapshot.timezone, snapshot.snapshot_id, snapshot.snapshot_at].every(value => typeof value === "string" && value.trim().length > 0)) return false;
-  if (!/^[A-Z]{2}$/.test(snapshot.country_code) || !validDate(snapshot.stat_date) || !Number.isFinite(Date.parse(snapshot.snapshot_at))) return false;
+  if (!/^(?:[A-Z]{2}|HK_TEAM|RED_CRAB)$/.test(snapshot.country_code) || !validDate(snapshot.stat_date) || !Number.isFinite(Date.parse(snapshot.snapshot_at))) return false;
   const { expected_count: expected, fetched_count: fetched, unique_count: unique } = snapshot.coverage;
   if (![expected, fetched, unique, snapshot.totals?.pending_count].every(safeCount) || !safeAmount(snapshot.totals?.pending_amount)) return false;
   if (expected !== fetched || expected !== unique || expected !== snapshot.totals.pending_count) return false;
