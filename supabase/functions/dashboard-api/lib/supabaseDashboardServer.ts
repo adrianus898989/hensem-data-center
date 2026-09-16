@@ -246,6 +246,14 @@ type Game66VolumeRpcRow = {
   raw?: Record<string, string>; updated_at?: string;
 };
 
+type Game66VolumeRpcResult = {
+  rows?: Game66VolumeRpcRow[];
+  collectionSuccessSnapshots?: CollectionSuccessSnapshot[];
+  withdrawPendingSnapshots?: WithdrawPendingSnapshot[];
+  withdrawActualRows?: WithdrawActualRow[];
+  latestWriteAt?: string | null;
+};
+
 type Game66AutoWithdrawRpcRow = DbAutoWithdrawRow & { country_code?: string | null };
 
 
@@ -541,11 +549,17 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
     : Promise.resolve([] as any[]);
   // Start GAME66 alongside the legacy request instead of after it. Team pages
   // must surface a real read error rather than silently presenting false zeroes.
-  const game66Read = callRpc<{ rows?: Game66VolumeRpcRow[]; latestWriteAt?: string | null }>("dashboard_game66_charge_volume", {
-    p_start: start, p_end: end, p_country: country || null
+  const game66Read = callRpc<Game66VolumeRpcResult>("dashboard_game66_charge_volume", {
+    p_start: successPeriod?.previousStart || start, p_end: end, p_country: country || null
   }, token, AbortSignal.timeout(12000)).catch((error) => {
     if (game66TeamCountry) throw error;
-    return { rows: [] as Game66VolumeRpcRow[], latestWriteAt: null };
+    return {
+      rows: [] as Game66VolumeRpcRow[],
+      collectionSuccessSnapshots: [] as CollectionSuccessSnapshot[],
+      withdrawPendingSnapshots: [] as WithdrawPendingSnapshot[],
+      withdrawActualRows: [] as WithdrawActualRow[],
+      latestWriteAt: null
+    };
   });
   const [results, game66Result] = await Promise.all([legacyVolumeRead, game66Read]);
   const dbRows: DbVolumeRow[] = dashboardAllowedRows(access, results.flatMap((result) => Array.isArray(result?.rows) ? result.rows : []));
@@ -557,7 +571,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
     direction: String(row.direction || "代收"), amount: row.amount ?? 0, count: row.count ?? 0, success_count: row.success_count ?? 0,
     failed_count: row.failed_count ?? 0, success_rate: row.success_rate ?? 0, status: String(row.status || "66GAME 原始订单"),
     raw: row.raw || {}, updated_at: row.updated_at || null
-  }));
+  })).filter((row) => row.date >= start && row.date <= end);
   const displayCountry = country === "BR" ? "巴西" : country;
   const rows = [...dbRows.map(mapVolume), ...game66Rows]
     .map(row => access.scope.mode === "all" ? row : {...row, raw: undefined})
@@ -566,6 +580,15 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   const updatedAt = String(globalLatest || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString());
   const sheets = Array.from(new Set(rows.map((row) => row.sheetName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
   const [collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual] = await Promise.all([successRead, pendingRead, depositRead, actualRead]);
+  const game66SuccessSnapshots = (Array.isArray(game66Result.collectionSuccessSnapshots) ? game66Result.collectionSuccessSnapshots : [])
+    .filter(snapshot => snapshot && typeof snapshot.country_code === "string" && typeof snapshot.platform === "string"
+      && dashboardScopeAllows(access.scope, collectionSuccessCountry(snapshot.country_code, snapshot.platform), snapshot.platform));
+  const game66PendingSnapshots = (Array.isArray(game66Result.withdrawPendingSnapshots) ? game66Result.withdrawPendingSnapshots : [])
+    .filter(snapshot => snapshot && typeof snapshot.country_code === "string" && typeof snapshot.platform === "string"
+      && dashboardScopeAllows(access.scope, withdrawPendingCountry(snapshot.country_code, snapshot.platform), snapshot.platform));
+  const game66ActualRows = (Array.isArray(game66Result.withdrawActualRows) ? game66Result.withdrawActualRows : [])
+    .filter(row => row && typeof row.stat_date === "string" && typeof row.platform === "string" && typeof row.third_party === "string"
+      && dashboardScopeAllows(access.scope, row.country_code || row.country, row.platform));
 
   return {
     meta: {
@@ -585,13 +608,13 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
       fastRpc: true
     } as any,
     rows,
-    collectionSuccessSnapshots: collectionSuccess.snapshots,
+    collectionSuccessSnapshots: [...collectionSuccess.snapshots, ...game66SuccessSnapshots],
     ...(collectionSuccess.error ? { collectionSuccessError: collectionSuccess.error } : {}),
-    withdrawPendingSnapshots: withdrawPending.snapshots,
+    withdrawPendingSnapshots: [...withdrawPending.snapshots, ...game66PendingSnapshots],
     ...(withdrawPending.error ? { withdrawPendingError: withdrawPending.error } : {}),
     workOrderDepositRows: workOrderDeposit.rows,
     ...(workOrderDeposit.error ? { workOrderDepositError: workOrderDeposit.error } : {}),
-    withdrawActualRows: withdrawActual.rows,
+    withdrawActualRows: [...withdrawActual.rows, ...game66ActualRows],
     ...(withdrawActual.error ? { withdrawActualError: withdrawActual.error } : {}),
     aliasMap: buildAliasMap(rows),
     summary: volumeSummary(rows),
