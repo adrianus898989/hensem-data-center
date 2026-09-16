@@ -560,11 +560,21 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
       p_country: sourceCountry
     }, token, AbortSignal.timeout(12000))))
     : Promise.resolve([] as any[]);
-  // Start GAME66 alongside the legacy request instead of after it. Team pages
-  // must surface a real read error rather than silently presenting false zeroes.
-  const game66Read = callRpc<Game66VolumeRpcResult>("dashboard_game66_charge_volume", {
-    p_start: successPeriod?.previousStart || start, p_end: end, p_country: game66RpcCountry
-  }, token, AbortSignal.timeout(12000)).catch((error) => {
+  const readGame66Window = (windowStart: string, windowEnd: string) =>
+    callRpc<Game66VolumeRpcResult>("dashboard_game66_charge_volume", {
+      p_start: windowStart, p_end: windowEnd, p_country: game66RpcCountry
+    }, token, AbortSignal.timeout(12000));
+  const game66CurrentRead = readGame66Window(start, end);
+  const game66PreviousRead = successPeriod && successPeriod.previousStart < start
+    ? readGame66Window(successPeriod.previousStart, successPeriod.previousStart)
+    : Promise.resolve({} as Game66VolumeRpcResult);
+  const game66Read = Promise.all([game66CurrentRead, game66PreviousRead]).then(([current, previous]) => ({
+    rows: current.rows || [],
+    collectionSuccessSnapshots: [...(previous.collectionSuccessSnapshots || []), ...(current.collectionSuccessSnapshots || [])],
+    withdrawPendingSnapshots: [...(previous.withdrawPendingSnapshots || []), ...(current.withdrawPendingSnapshots || [])],
+    withdrawActualRows: current.withdrawActualRows || [],
+    latestWriteAt: [previous.latestWriteAt, current.latestWriteAt].filter(Boolean).sort().pop() || null,
+  })).catch((error) => {
     if (game66TeamCountry) throw error;
     return {
       rows: [] as Game66VolumeRpcRow[],
