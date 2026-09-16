@@ -6,7 +6,19 @@
  * ownership from a similar-looking channel name.
  */
 const TEAM_PLATFORM_RULES: Array<{ team: string; platforms: string[] }> = [
-  { team: "红膏蟹", platforms: ["66GAME", "66GAME 平台 01"] },
+  {
+    team: "红膏蟹",
+    platforms: [
+      "66GAME", "66GAME 平台 01", "YYGAME", "XX7", "XX6", "XX5", "YY9", "PE7", "W5W",
+    ],
+  },
+  {
+    team: "香港·团队",
+    platforms: [
+      "EZ777", "8GAME", "KA9", "WR777", "HU777", "GG9", "WW9", "MM9", "777IN",
+      "365IN", "INDIA2026", "FT7",
+    ],
+  },
 ];
 
 function compact(value: unknown): string {
@@ -21,4 +33,3 @@ export function resolveVolumeTeam(platform: string, rawTeam?: unknown): string {
   const rule = TEAM_PLATFORM_RULES.find((item) => item.platforms.some((candidate) => compact(candidate) === key));
   return rule?.team || "";
 }
-
