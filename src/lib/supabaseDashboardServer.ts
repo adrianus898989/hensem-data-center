@@ -51,7 +51,7 @@ async function readJson(response: Response) {
   return json;
 }
 
-async function fetchPaged<T>(table: string, query: URLSearchParams, token: string): Promise<T[]> {
+async function fetchPaged<T>(table: string, query: URLSearchParams, token: string, signal?: AbortSignal): Promise<T[]> {
   const { url, anonKey } = config();
 
   const fetchPage = async (offset: number, withCount = false): Promise<{ rows: T[]; total: number | null }> => {
@@ -65,7 +65,8 @@ async function fetchPaged<T>(table: string, query: URLSearchParams, token: strin
         Accept: "application/json",
         ...(withCount ? { Prefer: "count=exact" } : {})
       },
-      cache: "no-store"
+      cache: "no-store",
+      signal
     });
     const rows = await readJson(response);
     const list = Array.isArray(rows) ? rows as T[] : [];
@@ -472,6 +473,11 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   const country = String(countryInput || "").trim();
   if (country && !dashboardScopeAllows(access.scope, country)) throw new DashboardDataAccessError(403, "scope_denied", "当前账号没有此国家或盘口组的数据权限。");
   const queryStart = previousDate(start);
+  const normalizedCountry = country.toLowerCase().replace(/[\s_-]+/g, "");
+  const game66TeamCountry = ["香港", "香港盘口", "hkteam", "hongkong", "红膏蟹", "红膏蟹盘口", "redcrab"].includes(normalizedCountry);
+  // 香港/红膏蟹只来自 GAME66 安全汇总。不要再等待旧三方量和四条
+  // 辅助统计链路；这既避免错误混入其他盘口，也让无数据日期立即返回。
+  const shouldReadLegacy = !game66TeamCountry;
 
   // Legacy snapshots can hold the right platform in the wrong Brazil group.
   // Read only the three exact source labels with the same user's RLS token,
@@ -482,7 +488,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   // migration or slow success endpoint must not prevent existing volume data.
   const successPeriod = collectionSuccessPeriod(start, end);
   const successCountry = country === "所有国家USDT" ? null : country || null;
-  const successRead = successPeriod
+  const successRead = shouldReadLegacy && successPeriod
     ? callRpc<{ snapshots: CollectionSuccessSnapshot[] }>("dashboard_collection_success", {
       p_start: successPeriod.previousStart, p_end: end, p_country: successCountry,
     }, token, AbortSignal.timeout(6000)).then(result => {
@@ -490,10 +496,10 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
       return { snapshots: result.snapshots.filter(snapshot => snapshot && typeof snapshot.country_code === "string" && typeof snapshot.platform === "string"
         && dashboardScopeAllows(access.scope, collectionSuccessCountry(snapshot.country_code, snapshot.platform), snapshot.platform)), error: "" };
     }).catch(() => ({ snapshots: [] as CollectionSuccessSnapshot[], error: "代收成功率暂未读取，原有三方量不受影响。" }))
-    : Promise.resolve({ snapshots: [] as CollectionSuccessSnapshot[], error: "代收成功率支持最多 366 天的查询。" });
+    : Promise.resolve({ snapshots: [] as CollectionSuccessSnapshot[], error: game66TeamCountry ? "" : "代收成功率支持最多 366 天的查询。" });
   // Exact-"已提交" payout snapshots are read through a separate RPC/table so
   // legacy payout totals and the collection-success denominator cannot mix.
-  const pendingRead = successPeriod
+  const pendingRead = shouldReadLegacy && successPeriod
     ? callRpc<{ snapshots: WithdrawPendingSnapshot[] }>("dashboard_withdraw_pending", {
       p_start: successPeriod.previousStart, p_end: end, p_country: successCountry,
     }, token, AbortSignal.timeout(6000)).then(result => {
@@ -501,7 +507,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
       return { snapshots: result.snapshots.filter(snapshot => snapshot && typeof snapshot.country_code === "string" && typeof snapshot.platform === "string"
         && dashboardScopeAllows(access.scope, withdrawPendingCountry(snapshot.country_code, snapshot.platform), snapshot.platform)), error: "" };
     }).catch(() => ({ snapshots: [] as WithdrawPendingSnapshot[], error: "代付中数据暂未读取，原有三方量不受影响。" }))
-    : Promise.resolve({ snapshots: [] as WithdrawPendingSnapshot[], error: "代付中数据支持最多 366 天的查询。" });
+    : Promise.resolve({ snapshots: [] as WithdrawPendingSnapshot[], error: game66TeamCountry ? "" : "代付中数据支持最多 366 天的查询。" });
   const depositQuery = successPeriod ? new URLSearchParams({
     select: "system_name,source_system,stat_date,country_code,country,platform,third_party,channel_type,submitted_count,submitted_amount,success_count,success_amount,status_counts,source_updated_at",
     order: "stat_date.asc,platform.asc,third_party.asc"
@@ -510,13 +516,13 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
     depositQuery.append("stat_date", `gte.${successPeriod.previousStart}`);
     depositQuery.append("stat_date", `lte.${end}`);
   }
-  const depositRead = successPeriod && depositQuery
-    ? fetchPaged<WorkOrderDepositRow>("workorder_deposit_daily", depositQuery, token).then(rows => ({
+  const depositRead = shouldReadLegacy && successPeriod && depositQuery
+    ? fetchPaged<WorkOrderDepositRow>("workorder_deposit_daily", depositQuery, token, AbortSignal.timeout(6000)).then(rows => ({
       rows: rows.filter(row => row && row.source_system === "AR_WORKORDER" && dashboardScopeAllows(access.scope, row.country_code || row.country, row.platform)),
       error: ""
     })).catch(() => ({ rows: [] as WorkOrderDepositRow[], error: "存款未到账数据暂未读取，原有三方量不受影响。" }))
-    : Promise.resolve({ rows: [] as WorkOrderDepositRow[], error: "存款未到账数据支持最多 366 天的查询。" });
-  const actualRead = successPeriod
+    : Promise.resolve({ rows: [] as WorkOrderDepositRow[], error: game66TeamCountry ? "" : "存款未到账数据支持最多 366 天的查询。" });
+  const actualRead = shouldReadLegacy && successPeriod
     ? callRpc<{ rows: WithdrawActualRow[] }>("dashboard_withdraw_actual", {
       p_start: successPeriod.previousStart, p_end: end, p_country: successCountry,
     }, token, AbortSignal.timeout(6000)).then(result => {
@@ -527,17 +533,25 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
         error: ""
       };
     }).catch(() => ({ rows: [] as WithdrawActualRow[], error: "实际到账/提现手续费暂未读取，原有三方量不受影响。" }))
-    : Promise.resolve({ rows: [] as WithdrawActualRow[], error: "实际到账/提现手续费支持最多 366 天的查询。" });
-  const results = await Promise.all(sourceCountries.map((sourceCountry) => callRpc<any>("dashboard_third_party_volume_fast_v2", {
-    p_start: start,
-    p_end: end,
-    p_country: sourceCountry
-  }, token)));
+    : Promise.resolve({ rows: [] as WithdrawActualRow[], error: game66TeamCountry ? "" : "实际到账/提现手续费支持最多 366 天的查询。" });
+  const legacyVolumeRead = shouldReadLegacy
+    ? Promise.all(sourceCountries.map((sourceCountry) => callRpc<any>("dashboard_third_party_volume_fast_v2", {
+      p_start: start,
+      p_end: end,
+      p_country: sourceCountry
+    }, token, AbortSignal.timeout(12000))))
+    : Promise.resolve([] as any[]);
+  // Start GAME66 alongside the legacy request instead of after it. Team pages
+  // must surface a real read error rather than silently presenting false zeroes.
+  const game66Read = callRpc<{ rows?: Game66VolumeRpcRow[]; latestWriteAt?: string | null }>("dashboard_game66_charge_volume", {
+    p_start: start, p_end: end, p_country: country || null
+  }, token, AbortSignal.timeout(12000)).catch((error) => {
+    if (game66TeamCountry) throw error;
+    return { rows: [] as Game66VolumeRpcRow[], latestWriteAt: null };
+  });
+  const [results, game66Result] = await Promise.all([legacyVolumeRead, game66Read]);
   const dbRows: DbVolumeRow[] = dashboardAllowedRows(access, results.flatMap((result) => Array.isArray(result?.rows) ? result.rows : []));
   // 已接入的团队平台以安全聚合行并入代收列表；原始会员和订单字段不出库。
-  const game66Result = await callRpc<{ rows?: Game66VolumeRpcRow[]; latestWriteAt?: string | null }>("dashboard_game66_charge_volume", {
-    p_start: start, p_end: end, p_country: country || null
-  }, token, AbortSignal.timeout(6000)).catch(() => ({ rows: [] as Game66VolumeRpcRow[], latestWriteAt: null }));
   const game66Rows = dashboardAllowedRows(access, game66Result.rows || []).map((row) => mapVolume({
     id: String(row.id || ""), sheet_name: String(row.sheet_name || "game66_charge_orders"), source_row: Number(row.source_row || 0),
     data_date: String(row.data_date || ""), country: String(row.country || ""), platform: String(row.platform || "66GAME"),
