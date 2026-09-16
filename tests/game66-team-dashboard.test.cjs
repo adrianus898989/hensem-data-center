@@ -35,3 +35,25 @@ test("三个入口都提供团队页签，配置入口连接真实状态组件",
   assert.match(config,/Game66ConfigBrowser team="hong_kong"/);
   assert.match(config,/Game66ConfigBrowser team="red_crab"/);
 });
+
+test("66GAME 汇总使用覆盖索引与可索引时间范围",()=>{
+  const migration=fs.readFileSync(path.join(root,"supabase/migrations/20260916195000_optimize_game66_volume_query.sql"),"utf8");
+  assert.match(migration,/game66_charge_orders_volume_cover_idx/);
+  assert.match(migration,/include \([\s\S]*pay_method_name[\s\S]*status_code[\s\S]*last_seen_at[\s\S]*\)/);
+  assert.match(migration,/c\.create_time >= v_start_at/);
+  assert.match(migration,/c\.create_time < v_end_at/);
+  assert.doesNotMatch(migration,/where \(c\.create_time at time zone 'Asia\/Kolkata'\)::date/);
+});
+
+test("团队页只读 GAME66 且前端查询有明确超时",()=>{
+  const server=fs.readFileSync(path.join(root,"src/lib/supabaseDashboardServer.ts"),"utf8");
+  const edge=fs.readFileSync(path.join(root,"supabase/functions/dashboard-api/lib/supabaseDashboardServer.ts"),"utf8");
+  const volume=fs.readFileSync(path.join(root,"src/components/ThirdPartyVolumeDashboard.tsx"),"utf8");
+  for(const source of [server,edge]){
+    assert.match(source,/const shouldReadLegacy = !game66TeamCountry/);
+    assert.match(source,/const \[results, game66Result\] = await Promise\.all\(\[legacyVolumeRead, game66Read\]\)/);
+    assert.match(source,/if \(game66TeamCountry\) throw error/);
+  }
+  assert.match(volume,/dashboardBusinessFetch\(volumeUrl, \{ signal: AbortSignal\.timeout\(15000\) \}\)/);
+  assert.match(volume,/loadData\(true, queryStart, queryEnd, "", queryCountry, true\)/);
+});
