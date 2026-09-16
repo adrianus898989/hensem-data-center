@@ -2062,10 +2062,10 @@ export default function ThirdPartyVolumeDashboard() {
       const shouldFetchRates = forceRates || !ratePayloadFresh(cachedRateBeforeFetch);
 
       const [firstVolumeRes, rateRes, statusRes] = await Promise.all([
-        dashboardBusinessFetch(volumeUrl),
-        shouldFetchRates ? dashboardBusinessFetch("/api/supabase-third-party-rates")
+        dashboardBusinessFetch(volumeUrl, { signal: AbortSignal.timeout(15000) }),
+        shouldFetchRates ? dashboardBusinessFetch("/api/supabase-third-party-rates", { signal: AbortSignal.timeout(8000) })
           .catch(error=>{if(isDashboardDataDenied(error))throw error;return null;}) : Promise.resolve(null),
-        requestedStart && requestedEnd && effectiveDashboardDataScope(profile).mode==="all" ? dashboardBusinessFetch(thirdPartySyncStatusApiUrl(requestedStart, requestedEnd))
+        requestedStart && requestedEnd && effectiveDashboardDataScope(profile).mode==="all" ? dashboardBusinessFetch(thirdPartySyncStatusApiUrl(requestedStart, requestedEnd), { signal: AbortSignal.timeout(8000) })
           .catch(() => null) : Promise.resolve(null)
       ]);
 
@@ -2100,7 +2100,9 @@ export default function ThirdPartyVolumeDashboard() {
       }
       setState("ready");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "读取 Supabase 三方量失败";
+      const message = err instanceof DOMException && ["AbortError", "TimeoutError"].includes(err.name)
+        ? "查询超过 15 秒，请缩短日期范围后重试。"
+        : err instanceof Error ? err.message : "读取 Supabase 三方量失败";
       if(isDashboardDataDenied(err)){setPayload(null);payloadRef.current=null;setRatePayload(null);setVolumeSyncStatus(null);setDataNotice("");setError(message);setState("error");return;}
       const currentPayload = payloadRef.current;
       const currentRows = currentPayload?.rows || [];
