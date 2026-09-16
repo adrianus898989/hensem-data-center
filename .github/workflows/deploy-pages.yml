@@ -27,7 +27,10 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      # The historical suite exercises the removed Next.js /api routes. These
+      # migration regressions cover the live static UI/data attribution paths;
+      # the Edge Function is verified separately after deployment.
+      - run: pnpm test:migration
       - run: pnpm build
         env:
           PAGES_BASE_PATH: /hensem-data-center
