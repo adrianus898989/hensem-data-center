@@ -72,8 +72,8 @@ begin
         else coalesce(nullif(gp.metadata->>'dashboard_country', ''), nullif(o.country, ''), '未标记')
       end as source_country,
       coalesce(nullif(gp.metadata->>'dashboard_platform', ''), nullif(gp.platform_name, ''), nullif(gp.platform_code, ''), '未标记') as platform,
-      coalesce(nullif(o.channel, ''), nullif(o.pay_channel, ''), nullif(o.pay_method_name, ''), '未标记') as third_party,
-      coalesce(nullif(o.pay_channel, ''), nullif(o.pay_method_name, ''), nullif(o.channel, ''), '未标记') as channel_type,
+      coalesce(nullif(pg_catalog.btrim(o.pay_channel), ''), '未标记三方') as third_party,
+      coalesce(nullif(pg_catalog.btrim(o.channel), ''), nullif(pg_catalog.btrim(o.pay_method_name), ''), '其他类型') as channel_type,
       private.game66_amount(o.amount_display, o.amount_minor) as requested_amount,
       private.game66_amount(o.real_amount_display, o.real_amount_minor) as actual_amount,
       private.game66_amount(o.fee_display, o.fee_minor) as fee_amount,
