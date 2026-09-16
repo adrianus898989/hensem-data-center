@@ -1,6 +1,6 @@
-import { dashboardScopeAllows, effectiveDashboardDataScope, type DashboardDataScope } from "./dashboardDataScope";
-import { withPlatformDisplayCountry } from "./platformDisplayCountry";
-import type { AutoWithdrawPayload, CustomerServicePayload, WorkOrderPayload } from "./types";
+import { dashboardScopeAllows, effectiveDashboardDataScope, type DashboardDataScope } from "./dashboardDataScope.ts";
+import { withPlatformDisplayCountry } from "./platformDisplayCountry.ts";
+import type { AutoWithdrawPayload, CustomerServicePayload, WorkOrderPayload } from "./types.ts";
 
 export type DashboardBusinessModule = "home" | "third_party" | "auto_withdraw" | "work_orders" | "customer_service";
 export type DashboardAccessProfile = {
@@ -66,12 +66,10 @@ async function verifyRequest(request: Request): Promise<DashboardDataAccess> {
   if (!match) throw new DashboardDataAccessError(401, "login_required", "请先登录后读取数据。");
   const token = match[1];
   const runtimeEnv = (name: string): string => {
-    const deno = (globalThis as any).Deno?.env?.get?.(name);
-    if (deno) return String(deno);
-    return typeof process !== "undefined" ? String(process.env[name] || "") : "";
+    return String(Deno.env.get(name) || "");
   };
-  const base = String(runtimeEnv("SUPABASE_URL") || runtimeEnv("NEXT_PUBLIC_SUPABASE_URL")).trim().replace(/\/$/, "");
-  const key = String(runtimeEnv("SUPABASE_ANON_KEY") || runtimeEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY")).trim();
+  const base = String(runtimeEnv("SUPABASE_URL")).trim().replace(/\/$/, "");
+  const key = String(runtimeEnv("SUPABASE_ANON_KEY")).trim();
   let url: URL;
   try { url = new URL(base); } catch { throw new DashboardDataAccessError(503, "auth_unavailable", "登录验证暂时不可用。"); }
   if (!key || url.protocol !== "https:" || url.origin !== base || url.username || url.password) {

@@ -2145,7 +2145,7 @@ export default function ThirdPartyVolumeDashboard() {
   useEffect(() => { payloadRef.current = payload; }, [payload]);
 
   async function checkCurrentSnapshotAndRefresh(silent = true) {
-    // V242：新 Netlify 站只读 Supabase，不再检查旧 Netlify / Google 快照状态。
+    // GitHub Pages 前端只读取 Supabase，不再依赖旧站点快照状态。
     const start = startDateRef.current;
     const end = endDateRef.current;
     await loadData(silent, start, end, "");
@@ -2500,7 +2500,7 @@ export default function ThirdPartyVolumeDashboard() {
       <div className="error-box inner-error">
         <h2>三方量读取失败</h2>
         <p>{error}</p>
-        <p className="muted-text">请确认已经登录，并且新 Netlify 站已配置 Supabase URL / Anon Key。</p>
+        <p className="muted-text">请确认已经登录，并且 GitHub Pages 已连接 Supabase。</p>
         
       </div>
     );

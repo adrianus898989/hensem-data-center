@@ -54,7 +54,10 @@ function addDays(date: string, days: number): string {
 }
 
 function autoWithdrawMaxDate(): string {
-  const configured = normalizeCell(process.env.AUTO_WITHDRAW_MAX_DATE || "");
+  const configured = normalizeCell(
+    (globalThis as any).Deno?.env?.get?.("AUTO_WITHDRAW_MAX_DATE") ||
+    (typeof process !== "undefined" ? process.env.AUTO_WITHDRAW_MAX_DATE : "") || ""
+  );
   if (/^20\d{2}-\d{2}-\d{2}$/.test(configured)) return configured;
   return new Date().toISOString().slice(0, 10);
 }

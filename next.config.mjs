@@ -1,7 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: "export",
+  trailingSlash: true,
+  basePath: process.env.PAGES_BASE_PATH || "",
+  assetPrefix: process.env.PAGES_BASE_PATH || "",
   reactStrictMode: true,
-  // V185：先避免 Netlify 因 TypeScript 类型提示阻断部署；运行问题用 debug API 查。
+  images: { unoptimized: true },
   typescript: {
     ignoreBuildErrors: true
   }

@@ -1,0 +1,51 @@
+name: Deploy Hensem to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build
+        env:
+          PAGES_BASE_PATH: /hensem-data-center
+          NEXT_PUBLIC_SUPABASE_URL: https://gmfyfzsxpxmaqtuuwgxb.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_0DFLEmUvGBp1GYQ7jNo4IA_O1PeA9zV
+          NEXT_PUBLIC_DASHBOARD_AUTH_ENABLED: "true"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./out
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

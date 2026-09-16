@@ -44,12 +44,25 @@ export function isDashboardDataDenied(error:unknown) {
   return error instanceof DashboardHttpError && ([401,403,409].includes(error.status)||error.code==="data_scope_changed");
 }
 
-// Same-origin website APIs only. Database authorization still uses the caller's
-// token and current database profile; this check also invalidates stale UI/cache.
+function dashboardEdgeApiTarget(input:string):URL {
+  const local=new URL(input,window.location.origin);
+  if(local.origin!==window.location.origin||!local.pathname.startsWith("/api/"))throw new DashboardHttpError("拒绝向未授权地址发送业务登录凭据",403,"auth_target_not_allowed");
+  const rawBase=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,"");
+  let base:URL;
+  try{base=new URL(rawBase);}catch{throw new DashboardHttpError("Supabase 服务地址无效",503,"api_unavailable");}
+  if(base.protocol!=="https:"||base.origin!==rawBase||base.username||base.password)throw new DashboardHttpError("Supabase 服务地址无效",503,"api_unavailable");
+  const target=new URL(`${base.origin}/functions/v1/dashboard-api`);
+  target.searchParams.set("_route",local.pathname);
+  local.searchParams.forEach((value,key)=>target.searchParams.append(key,value));
+  return target;
+}
+
+// GitHub Pages only serves static assets. Authenticated business requests go
+// directly to the dedicated Supabase Edge Function, which revalidates the
+// current profile, module permission and data scope on every request.
 export async function dashboardBusinessFetch(input:string,init:RequestInit={}):Promise<Response> {
   if(typeof window==="undefined")throw new DashboardHttpError("业务请求仅能从已登录页面发起",401,"profile_denied");
-  const target=new URL(input,window.location.origin);
-  if(target.origin!==window.location.origin||!target.pathname.startsWith("/api/"))throw new DashboardHttpError("拒绝向其他地址发送业务登录凭据",403,"auth_target_not_allowed");
+  const target=dashboardEdgeApiTarget(input);
   const saved=readSavedDashboardSession();
   if(!saved)throw new DashboardHttpError("请先登录",401,"profile_denied");
   const active=await ensureDashboardSession(saved);
@@ -63,8 +76,12 @@ export async function dashboardBusinessFetch(input:string,init:RequestInit={}):P
   window.dispatchEvent(new CustomEvent(DASHBOARD_PROFILE_EVENT,{detail:{profile,session:active}}));
   if(changed)throw new DashboardHttpError("数据权限已更新，请按当前范围重新查询",409,"data_scope_changed");
   const epoch=viewerEpoch;
-  const headers=new Headers(init.headers);headers.set("Authorization",`Bearer ${active.access_token}`);
-  const response=await fetch(target.href,{...init,headers,cache:"no-store",redirect:"error"});
+  const publishableKey=String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||"").trim();
+  if(!publishableKey)throw new DashboardHttpError("Supabase 发布密钥未配置",503,"api_unavailable");
+  const headers=new Headers(init.headers);
+  headers.set("Authorization",`Bearer ${active.access_token}`);
+  headers.set("apikey",publishableKey);
+  const response=await fetch(target.href,{...init,headers,cache:"no-store",redirect:"error",credentials:"omit"});
   if([401,403,409].includes(response.status))throw new DashboardHttpError("没有当前数据的查看权限，或登录已失效",response.status,"data_scope_denied");
   // Ignore a response from an earlier scope/account even if it won an HTTP race.
   if(epoch!==viewerEpoch||dashboardScopeIdentity(profile)!==dashboardScopeIdentity(currentViewer)||readSavedDashboardSession()?.user.id!==profile.auth_user_id)throw new DashboardHttpError("数据权限已更新，请重新查询",409,"data_scope_changed");

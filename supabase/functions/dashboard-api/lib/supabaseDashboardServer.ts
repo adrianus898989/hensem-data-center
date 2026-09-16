@@ -14,28 +14,26 @@ import type {
   WorkOrderDepositRow,
   WorkOrderPayload,
   WorkOrderRow
-} from "./types";
-import { formatDuration, parseDurationToSeconds } from "./format";
-import { aggregateWithdrawRows } from "./parseAutoWithdraw";
-import { platformDisplayCountry } from "./platformDisplayCountry";
-import { dashboardScopeAllows } from "./dashboardDataScope";
-import { collectionSuccessCountry, collectionSuccessPeriod } from "./collectionSuccess";
-import { withdrawPendingCountry } from "./withdrawPending";
-import { requireDashboardDataAccess, requireDashboardAllData, dashboardAllowedRows, DashboardDataAccessError } from "./dashboardDataAccessServer";
+} from "./types.ts";
+import { formatDuration, parseDurationToSeconds } from "./format.ts";
+import { aggregateWithdrawRows } from "./autoWithdrawAggregate.ts";
+import { platformDisplayCountry } from "./platformDisplayCountry.ts";
+import { dashboardScopeAllows } from "./dashboardDataScope.ts";
+import { collectionSuccessCountry, collectionSuccessPeriod } from "./collectionSuccessLite.ts";
+import { withdrawPendingCountry } from "./withdrawPendingLite.ts";
+import { requireDashboardDataAccess, requireDashboardAllData, dashboardAllowedRows, DashboardDataAccessError } from "./dashboardDataAccessServer.ts";
 
 const PAGE_SIZE = 1000;
 
 function requiredEnv(name: string): string {
-  const deno = (globalThis as any).Deno?.env?.get?.(name);
-  const value = String(deno || (typeof process !== "undefined" ? process.env[name] : "") || "").trim();
+  const value = String(Deno.env.get(name) || "").trim();
   if (!value) throw new Error(`缺少环境变量 ${name}`);
   return value;
 }
 
 function config() {
-  const edge = Boolean((globalThis as any).Deno?.env?.get);
-  const url = requiredEnv(edge ? "SUPABASE_URL" : "NEXT_PUBLIC_SUPABASE_URL").replace(/\/$/, "");
-  const anonKey = requiredEnv(edge ? "SUPABASE_ANON_KEY" : "NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  const url = requiredEnv("SUPABASE_URL").replace(/\/$/, "");
+  const anonKey = requiredEnv("SUPABASE_ANON_KEY");
   return { url, anonKey };
 }
 

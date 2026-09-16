@@ -4821,7 +4821,7 @@ td .rate-cell,
   .auth-session-pill > div { flex: 1; min-width: 0; }
 }
 
-/* V242: new Netlify site / Supabase only validation card */
+/* GitHub Pages / Supabase validation card */
 .home-supabase-status-card{margin-top:18px;border:1px solid #dbe6f4;background:#fff;border-radius:18px;padding:20px;box-shadow:0 12px 32px rgba(15,23,42,.06);max-width:920px}
 .home-supabase-status-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px}
 .home-supabase-status-head h2{margin:3px 0 0;font-size:20px;color:#17233c}
