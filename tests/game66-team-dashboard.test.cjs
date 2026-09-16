@@ -126,6 +126,9 @@ test("团队页只读 GAME66 且前端查询有明确超时",()=>{
   const volume=fs.readFileSync(path.join(root,"src/components/ThirdPartyVolumeDashboard.tsx"),"utf8");
   for(const source of [server,edge]){
     assert.match(source,/const shouldReadLegacy = !game66TeamCountry/);
+    assert.match(source,/const redCrabTeamCountry = \\["红膏蟹", "红膏蟹盘口", "redcrab"\\]/);
+    assert.match(source,/const hongKongTeamCountry = \\["香港", "香港盘口", "hkteam", "hongkong"\\]/);
+    assert.match(source,/p_country: game66RpcCountry/);
     assert.match(source,/const \[results, game66Result\] = await Promise\.all\(\[legacyVolumeRead, game66Read\]\)/);
     assert.match(source,/if \(game66TeamCountry\) throw error/);
     assert.match(source,/collectionSuccessSnapshots: \[\.\.\.collectionSuccess\.snapshots, \.\.\.game66SuccessSnapshots\]/);
