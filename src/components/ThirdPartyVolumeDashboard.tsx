@@ -28,6 +28,7 @@ import { formatNumber, formatPercent } from "@/lib/format";
 import { canonicalThirdPartyName, confirmedIndiaThirdPartyAlias, inferThirdPartyChannelType } from "@/lib/thirdPartyNameMap";
 import { canonicalThirdPartyPlatform, canonicalThirdPartyPlatformSelections, matchesThirdPartyPlatformSelection } from "@/lib/thirdPartyPlatform";
 import { platformDisplayCountry, withPlatformDisplayCountry } from "@/lib/platformDisplayCountry";
+import { resolveVolumeTeam } from "@/lib/volumeTeamMap";
 import { dashboardBusinessFetch, isDashboardDataDenied, readDashboardDataCache, writeDashboardDataCache } from "@/lib/dashboardDataClient";
 import { dashboardScopeAllows, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
@@ -226,6 +227,9 @@ function isUsdtFeeTarget(country: string, platform: string, channel: string, cha
 function rowMatchesCountryPage(row: ThirdPartyVolumeRow, page: string): boolean {
   if (!page) return true;
   if (isTeamPage(page)) return String(row.team || "").trim() === teamFromPage(page);
+  // Team-owned feeds (for example 红膏蟹 66GAME) must not change the ordinary
+  // country totals. They are available from their dedicated team tab instead.
+  if (String(row.team || "").trim()) return false;
   if (isAllUsdtCountryPage(page)) return isUsdtVolumeRow(row);
   return platformDisplayCountry(row.country, row.platform) === page;
 }
@@ -236,6 +240,8 @@ function rowMatchesRequestedCountry(row: ThirdPartyVolumeRow, page: string): boo
 
 function feeRowMatchesCountryPage(row: FeeCompareRow, page: string): boolean {
   if (!page) return true;
+  if (isTeamPage(page)) return resolveVolumeTeam(row.platform) === teamFromPage(page);
+  if (resolveVolumeTeam(row.platform)) return false;
   if (isAllUsdtCountryPage(page)) {
     const text = `${row.country || ""} ${row.platform || ""} ${row.channel || ""} ${row.channelType || ""}`.toLowerCase();
     const compact = text.replace(/[^a-z0-9]+/g, "");
@@ -2358,6 +2364,7 @@ export default function ThirdPartyVolumeDashboard() {
     start: appliedStartDate,
     end: appliedEndDate,
     country: isAllUsdtCountryPage(appliedCountryPage) ? "" : appliedCountryPage,
+    team: teamFromPage(appliedCountryPage),
     platforms: appliedPlatformSelections,
     provider: appliedChannel,
     error: payload?.withdrawActualError,

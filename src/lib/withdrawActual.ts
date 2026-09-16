@@ -2,6 +2,7 @@ import type { ThirdPartyVolumeRow, WithdrawActualRow } from "./types";
 import { canonicalThirdPartyName } from "./thirdPartyNameMap";
 import { canonicalThirdPartyPlatform } from "./thirdPartyPlatform";
 import { platformDisplayCountry } from "./platformDisplayCountry";
+import { resolveVolumeTeam } from "./volumeTeamMap";
 
 const DAY = 86400000;
 const COUNTRY_CODES: Record<string, string> = {
@@ -59,7 +60,7 @@ export type WithdrawActualMetric = {
 };
 
 export type WithdrawActualView = {
-  providers: Array<{ key: string; country: string; channel: string; requestedAmount: number; actualAmount: number; feeAmount: number; orderCount: number }>;
+  providers: Array<{ key: string; country: string; channel: string; team?: string; requestedAmount: number; actualAmount: number; feeAmount: number; orderCount: number }>;
   compare: (providerKeys?: readonly string[]) => { current: WithdrawActualMetric; previous: WithdrawActualMetric };
   error?: string;
 };
@@ -70,15 +71,19 @@ export function buildWithdrawActualView(input: {
   start: string;
   end: string;
   country: string;
+  team?: string;
   platforms?: readonly string[];
   provider?: string;
   error?: string;
 }): WithdrawActualView {
   const range = period(input.start, input.end);
-  const requestedCountry = withdrawActualCountry(input.country);
+  const requestedCountry = String(input.country || "").startsWith("团队:") ? "" : withdrawActualCountry(input.country);
+  const requestedTeam = String(input.team || "").trim();
   const selectedPlatforms = new Set((input.platforms || []).map(value => platformKey(requestedCountry, value)));
   const inScope = (country: string, platform: string) =>
-    (!requestedCountry || country === requestedCountry) && (!selectedPlatforms.size || selectedPlatforms.has(platformKey(country, platform)));
+    (!requestedCountry || country === requestedCountry)
+      && (!requestedTeam ? !resolveVolumeTeam(platform) : resolveVolumeTeam(platform) === requestedTeam)
+      && (!selectedPlatforms.size || selectedPlatforms.has(platformKey(country, platform)));
   const targets = new Map<string, { country: string; platform: string }>();
   for (const row of input.volumeRows) {
     const country = withdrawActualCountry(row.country, row.platform);
@@ -139,7 +144,7 @@ export function buildWithdrawActualView(input: {
     const channel = canonicalThirdPartyName(row.third_party, country);
     const key = providerKey(country, channel);
     if (input.provider && key !== providerKey(requestedCountry, input.provider)) continue;
-    const item = providers.get(key) || { key, country, channel, requestedAmount: 0, actualAmount: 0, feeAmount: 0, orderCount: 0 };
+    const item = providers.get(key) || { key, country, channel, team: resolveVolumeTeam(row.platform), requestedAmount: 0, actualAmount: 0, feeAmount: 0, orderCount: 0 };
     item.requestedAmount += number(row.requested_amount);
     item.actualAmount += number(row.actual_amount);
     item.feeAmount += number(row.fee_amount);
