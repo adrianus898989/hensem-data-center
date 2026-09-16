@@ -271,7 +271,7 @@ function pageCount(total: number, pageSize: number): number {
   return Math.max(1, Math.ceil(total / pageSize));
 }
 
-function sortRows<T>(rows: T[], sort: SortState, getValue: (row: T, key: string) => string | number): T[] {
+function sortRows<T>(rows: T[], sort: SortState, getValue: (row: NoInfer<T>, key: string) => string | number): T[] {
   return [...rows].sort((a, b) => {
     const av = getValue(a, sort.key);
     const bv = getValue(b, sort.key);
@@ -1063,7 +1063,7 @@ export default function WorkOrderDashboard() {
   const workCompareRows = useMemo(() => buildWorkCompareRows(dailyRowsRaw, "country", compareMode), [dailyRowsRaw, compareMode]);
   const workCompareTotal = useMemo(() => buildWorkCompareRows(dailyRowsRaw, "all", compareMode)[0], [dailyRowsRaw, compareMode]);
 
-  const currentRows: Array<SummaryRow | CountryTypeShareRow | LowRow> = view === "orderDaily"
+  const currentRows: SummaryRow[] = view === "orderDaily"
     ? orderDailyRows
     : view === "orderMonthly"
       ? orderMonthlyRows

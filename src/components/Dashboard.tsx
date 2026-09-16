@@ -160,7 +160,9 @@ const DEFAULT_AUTO_COUNTRY_PANES = [
   "菲律宾盘口",
   PANGHU_BRAZIL_PANE_LABEL,
   NPG_PANE_LABEL,
-  "巴西盘口"
+  "巴西盘口",
+  "香港盘口",
+  "红膏蟹盘口"
 ];
 
 function normalizePaneToken(value: string): string {
@@ -182,6 +184,8 @@ function countryPaneLabelFor(country: string): string {
   if (x.includes("缅甸") || x === "mm" || x.includes("myanmar")) return "缅甸盘口";
   if (x.includes("菲律宾") || x === "ph" || x.includes("philippines")) return "菲律宾盘口";
   if (x.includes("尼日利亚") || x === "ng" || x.includes("nigeria")) return "尼日利亚盘口";
+  if (x === "香港" || x === "hkteam" || x.includes("hongkong")) return "香港盘口";
+  if (x.includes("红膏蟹") || x.includes("紅膏蟹") || x === "redcrab") return "红膏蟹盘口";
   return raw.endsWith("盘口") ? raw : `${raw}盘口`;
 }
 
@@ -204,7 +208,7 @@ function countryMatchesOperatorPane(country: string, pane: string): boolean {
 
 function sortAutoPanes(panes: string[]): string[] {
   const order = [
-    "印度盘口", "巴基斯坦盘口", "印尼盘口", "马来盘口", "缅甸盘口", "尼日利亚盘口", "越南盘口", "菲律宾盘口", PANGHU_BRAZIL_PANE_LABEL, NPG_PANE_LABEL, "巴西盘口"
+    "印度盘口", "巴基斯坦盘口", "印尼盘口", "马来盘口", "缅甸盘口", "尼日利亚盘口", "越南盘口", "菲律宾盘口", PANGHU_BRAZIL_PANE_LABEL, NPG_PANE_LABEL, "巴西盘口", "香港盘口", "红膏蟹盘口"
   ];
   return [...panes].sort((a, b) => {
     const ai = order.indexOf(a);
@@ -1775,11 +1779,11 @@ export default function Dashboard() {
 
 
 
-  if (!payload && (activeModule === "work" || activeModule === "volume")) {
+  if (!payload && ((activeModule as string) === "work" || (activeModule as string) === "volume")) {
     return (
       <div className="app-shell">
         {sidebarContent}
-        <main className="main">{activeModule === "work" ? <WorkOrderDashboard /> : <ThirdPartyVolumeDashboard />}</main>
+        <main className="main">{(activeModule as string) === "work" ? <WorkOrderDashboard /> : <ThirdPartyVolumeDashboard />}</main>
       </div>
     );
   }
@@ -1789,9 +1793,9 @@ export default function Dashboard() {
       {sidebarContent}
 
       <main className={`main ${activeModule === "auto" && autoView === "daily" ? "aw-daily-workspace" : ""} ${!hasBusinessQueried || !payload ? "business-prequery" : ""}`}>
-        {activeModule === "volume" ? (
+        {(activeModule as string) === "volume" ? (
           <ThirdPartyVolumeDashboard />
-        ) : activeModule === "work" ? (
+        ) : (activeModule as string) === "work" ? (
           <WorkOrderDashboard />
         ) : (
           <>

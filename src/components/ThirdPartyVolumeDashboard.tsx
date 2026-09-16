@@ -37,7 +37,7 @@ import { useDashboardAuth } from "./DashboardAuthGate";
 import { buildCollectionSuccessView, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
 import { CollectionSuccessCell, CollectionSuccessBreakdown } from "./CollectionSuccessCell";
 import { buildWithdrawPendingView, type WithdrawPendingView } from "@/lib/withdrawPending";
-import { buildWorkOrderDepositView, workOrderDepositPlatformKey, workOrderDepositProviderKey, type WorkOrderDepositView } from "@/lib/workOrderDeposit";
+import { buildWorkOrderDepositView, workOrderDepositProviderKey, type WorkOrderDepositView } from "@/lib/workOrderDeposit";
 import { buildWithdrawActualView, type WithdrawActualView } from "@/lib/withdrawActual";
 import "./WithdrawPendingCell.css";
 
@@ -156,7 +156,7 @@ function filterLabel(values: string[], placeholder = "全部"): string {
 
 
 const ALL_USDT_COUNTRY_PAGE = "所有国家USDT";
-const COUNTRY_PRIORITY = ["印度", "巴西", "巴基斯坦", "印尼", "越南", "菲律宾", "马来", "缅甸", "哥伦比亚", "墨西哥", "智利", "尼日利亚", "胖虎巴西", "巴西原生", ALL_USDT_COUNTRY_PAGE, "南美", "USDT通道", "USDT"];
+const COUNTRY_PRIORITY = ["印度", "巴西", "巴基斯坦", "印尼", "越南", "菲律宾", "马来", "缅甸", "哥伦比亚", "墨西哥", "智利", "尼日利亚", "胖虎巴西", "香港", "红膏蟹", "巴西原生", ALL_USDT_COUNTRY_PAGE, "南美", "USDT通道", "USDT"];
 
 // 业务导航固定显示，不依赖查询结果。
 // 进入页面即可先选择国家；真正的数据仍然只有点击「查询」后才读取 Supabase。
@@ -174,6 +174,8 @@ const COUNTRY_NAV_TABS = [
   "智利",
   "尼日利亚",
   "胖虎巴西",
+  "香港",
+  "红膏蟹",
   ALL_USDT_COUNTRY_PAGE,
 ];
 
@@ -3540,10 +3542,7 @@ function MonthlyTable({ title, subtitle, rows, columns, feeRows = [], paginated,
   const [selected, setSelected] = useState<ComboSummary | null>(null);
   const [selectedFeeIssues, setSelectedFeeIssues] = useState<{ title: string; rows: FeeCompareRow[] } | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const pager = usePagination(rows, !!paginated);
-  const shown = paginated ? pager.shown : rows;
-  const shownSummary = sumComboSummaryRows(shown);
-  const totalSummary = sumComboSummaryRows(rows);
+  const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
   const feeMode: FeeSummaryMode = columns.includes("月份") ? "monthlyPeriod" : columns.includes("平台") ? "platform" : "monthly";
   const feeMap = useMemo(() => buildFeeSummaryMap(feeRows, feeMode), [feeRows, feeMode]);
   const showFeeColumns = feeRows.length > 0;
@@ -3554,11 +3553,9 @@ function MonthlyTable({ title, subtitle, rows, columns, feeRows = [], paginated,
   const successKeys = (items: ComboSummary[]) => items.map(item => collectionSuccessProviderKey(item.labelParts[0], item.labelParts[1]));
   // 工单存款未到账的金额与笔数必须分列，不能把“笔 / 金额”拼在一个单元格里。
   const columnCount = columns.length + (showFeeColumns ? 16 : 10) + (collectionSuccess ? 1 : 0) + (withdrawPending ? 2 : 0) + (workOrderDeposit ? 4 : 0) + (withdrawActual ? 2 : 0);
-  const depositKeys = (items: ComboSummary[]) => items.flatMap((item) => {
+  const depositKeys = (items: ComboSummary[]) => items.map((item) => {
     const country = item.labelParts[0] || "";
-    const provider = workOrderDepositProviderKey(country, item.labelParts[1] || "");
-    const platforms = item.rows.map((raw) => workOrderDepositPlatformKey(raw.country, raw.platform));
-    return Array.from(new Set([provider, ...platforms]));
+    return workOrderDepositProviderKey(country, item.labelParts[1] || "");
   });
   const depositValue = (metric: ReturnType<WorkOrderDepositView["compare"]>["current"] | undefined, kind: "submitted" | "success", field: "amount" | "count") => {
     if (!metric || metric.state === "missing" || metric.state === "unavailable") return "—";
@@ -3566,6 +3563,66 @@ function MonthlyTable({ title, subtitle, rows, columns, feeRows = [], paginated,
       ? (field === "amount" ? metric.submittedAmount : metric.submittedCount)
       : (field === "amount" ? metric.successAmount : metric.successCount);
     return formatNumber(value);
+  };
+
+  const sortedRows = useMemo(() => {
+    if (!sort) return rows;
+    const value = (row: ComboSummary): string | number | null => {
+      if (sort.key.startsWith("dimension:")) return row.labelParts[Number(sort.key.slice(10))] || "";
+      const providerKeys = successKeys([row]);
+      const fee = feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary();
+      switch (sort.key) {
+        case "collectAmount": return row.collectAmount;
+        case "collectCount": return row.collectCount;
+        case "collectionSuccessRate": return collectionSuccess?.compare(providerKeys).current.rate ?? null;
+        case "collectPct": return row.collectPct;
+        case "payoutAmount": return row.payoutAmount;
+        case "payoutCount": return row.payoutCount;
+        case "withdrawActualAmount": return withdrawActual?.compare(providerKeys).current.actualAmount ?? null;
+        case "withdrawActualFee": return withdrawActual?.compare(providerKeys).current.feeAmount ?? null;
+        case "withdrawPendingAmount": return withdrawPending?.compare(providerKeys).current.amount ?? null;
+        case "withdrawPendingCount": return withdrawPending?.compare(providerKeys).current.count ?? null;
+        case "depositSubmittedAmount": return workOrderDeposit?.compare(depositKeys([row])).current.submittedAmount ?? null;
+        case "depositSubmittedCount": return workOrderDeposit?.compare(depositKeys([row])).current.submittedCount ?? null;
+        case "depositSuccessAmount": return workOrderDeposit?.compare(depositKeys([row])).current.successAmount ?? null;
+        case "depositSuccessCount": return workOrderDeposit?.compare(depositKeys([row])).current.successCount ?? null;
+        case "payoutPct": return row.payoutPct;
+        case "totalAmount": return row.totalAmount;
+        case "totalCount": return row.totalCount;
+        case "collectFeeRate": return fee.collectRate;
+        case "collectFee": return fee.collectFee;
+        case "payoutFeeRate": return fee.payoutRate;
+        case "payoutFee": return fee.payoutFee;
+        case "estimatedFee": return fee.estimatedFee;
+        case "feeShare": return fee.totalFeeShare;
+        case "totalPct": return row.totalPct;
+        default: return null;
+      }
+    };
+    const direction = sort.direction === "asc" ? 1 : -1;
+    return rows.map((row, index) => ({ row, index, value: value(row) })).sort((a, b) => {
+      if (a.value == null && b.value == null) return a.index - b.index;
+      if (a.value == null) return 1;
+      if (b.value == null) return -1;
+      const compared = typeof a.value === "number" && typeof b.value === "number"
+        ? a.value - b.value
+        : String(a.value).localeCompare(String(b.value), "zh-CN", { numeric: true, sensitivity: "base" });
+      return compared ? compared * direction : a.index - b.index;
+    }).map(item => item.row);
+  }, [rows, sort, columns, feeMap, collectionSuccess, withdrawActual, withdrawPending, workOrderDeposit]);
+  const pager = usePagination(sortedRows, !!paginated);
+  const shown = paginated ? pager.shown : sortedRows;
+  const shownSummary = sumComboSummaryRows(shown);
+  const totalSummary = sumComboSummaryRows(rows);
+
+  const toggleSort = (key: string, numeric = false) => setSort(current => current?.key === key
+    ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
+    : { key, direction: numeric ? "desc" : "asc" });
+  const SortTh = ({ label, sortKey, numeric, className = "", title }: { label: string; sortKey: string; numeric?: boolean; className?: string; title?: string }) => {
+    const active = sort?.key === sortKey;
+    return <th className={`${className} sortable-th ${active ? "active" : ""}`} title={title} aria-sort={active ? (sort?.direction === "asc" ? "ascending" : "descending") : "none"}>
+      <button className="th-sort-btn" type="button" onClick={() => toggleSort(sortKey, numeric)}><span>{label}</span><span className="sort-arrow">{active ? (sort?.direction === "asc" ? "↑" : "↓") : "↕"}</span></button>
+    </th>;
   };
 
   function feeForChild(country: string, platform: string, channel: string, type: string): FeeSummary {
@@ -3608,7 +3665,24 @@ function MonthlyTable({ title, subtitle, rows, columns, feeRows = [], paginated,
       {paginated && <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />}
       <div className="table-wrap work-table-wrap volume-summary-table-wrap">
         <table>
-          <thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}<th className="num">代收金额</th><th className="num">代收笔数</th>{collectionSuccess && <th className="num collection-success-heading" title="按提交日期：成功笔数 ÷ 提交笔数；与前一期比较使用百分点。">代收成功率</th>}<th>代收占比</th><th className="num">代付金额</th><th className="num">代付笔数</th>{withdrawActual && <><th className="num withdraw-actual-heading" title="提现订单中的实际到账金额（real_amount）。来源没有完整覆盖时显示 —。">实际到账金额</th><th className="num withdraw-actual-heading" title="提现订单中的实际手续费（fee）。来源没有完整覆盖时显示 —。">提现手续费</th></>}{withdrawPending && <><th className="num withdraw-pending-heading" title="各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的申请金额。">代付中金额</th><th className="num withdraw-pending-heading" title="各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的提交笔数。">代付中笔数</th></>}{workOrderDeposit && <><th className="num workorder-deposit-heading" title="工单管理中“存款未到账”当天提交的金额。">存款未到账提交金额</th><th className="num workorder-deposit-heading" title="工单管理中“存款未到账”当天提交的笔数。">存款未到账提交笔数</th><th className="num workorder-deposit-heading" title="工单管理中“存款未到账”状态为“已处理”的成功金额。">存款未到账成功金额</th><th className="num workorder-deposit-heading" title="工单管理中“存款未到账”状态为“已处理”的成功笔数。">存款未到账成功笔数</th></> }<th>代付占比</th><th className="num">合计金额</th><th className="num">合计笔数</th>{showFeeColumns && <><th>代收费率</th><th className="num">代收手续费</th><th>代付费率</th><th className="num">代付手续费</th><th className="num">合计手续费</th><th>手续费占比</th></>}<th>总占比</th><th>详情</th></tr></thead>
+          <thead><tr>
+            {columns.map((column, index) => <SortTh key={column} label={column} sortKey={`dimension:${index}`} />)}
+            <SortTh label="代收金额" sortKey="collectAmount" numeric className="num" />
+            <SortTh label="代收笔数" sortKey="collectCount" numeric className="num" />
+            {collectionSuccess && <SortTh label="代收成功率" sortKey="collectionSuccessRate" numeric className="num collection-success-heading" title="按提交日期：成功笔数 ÷ 提交笔数；与前一期比较使用百分点。" />}
+            <SortTh label="代收占比" sortKey="collectPct" numeric />
+            <SortTh label="代付金额" sortKey="payoutAmount" numeric className="num" />
+            <SortTh label="代付笔数" sortKey="payoutCount" numeric className="num" />
+            {withdrawActual && <><SortTh label="实际到账金额" sortKey="withdrawActualAmount" numeric className="num withdraw-actual-heading" title="提现订单中的实际到账金额（real_amount）。来源没有完整覆盖时显示 —。" /><SortTh label="提现手续费" sortKey="withdrawActualFee" numeric className="num withdraw-actual-heading" title="提现订单中的实际手续费（fee）。来源没有完整覆盖时显示 —。" /></>}
+            {withdrawPending && <><SortTh label="代付中金额" sortKey="withdrawPendingAmount" numeric className="num withdraw-pending-heading" title="各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的申请金额。" /><SortTh label="代付中笔数" sortKey="withdrawPendingCount" numeric className="num withdraw-pending-heading" title="各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的提交笔数。" /></>}
+            {workOrderDeposit && <><SortTh label="存款未到账提交金额" sortKey="depositSubmittedAmount" numeric className="num workorder-deposit-heading" title="按工单的三方映射码归类；未标记数据不参与分配。" /><SortTh label="存款未到账提交笔数" sortKey="depositSubmittedCount" numeric className="num workorder-deposit-heading" title="按工单的三方映射码归类；未标记数据不参与分配。" /><SortTh label="存款未到账成功金额" sortKey="depositSuccessAmount" numeric className="num workorder-deposit-heading" title="状态为“已处理”的成功金额。" /><SortTh label="存款未到账成功笔数" sortKey="depositSuccessCount" numeric className="num workorder-deposit-heading" title="状态为“已处理”的成功笔数。" /></>}
+            <SortTh label="代付占比" sortKey="payoutPct" numeric />
+            <SortTh label="合计金额" sortKey="totalAmount" numeric className="num" />
+            <SortTh label="合计笔数" sortKey="totalCount" numeric className="num" />
+            {showFeeColumns && <><SortTh label="代收费率" sortKey="collectFeeRate" numeric /><SortTh label="代收手续费" sortKey="collectFee" numeric className="num" /><SortTh label="代付费率" sortKey="payoutFeeRate" numeric /><SortTh label="代付手续费" sortKey="payoutFee" numeric className="num" /><SortTh label="合计手续费" sortKey="estimatedFee" numeric className="num" /><SortTh label="手续费占比" sortKey="feeShare" numeric /></>}
+            <SortTh label="总占比" sortKey="totalPct" numeric />
+            <th>详情</th>
+          </tr></thead>
           <tbody>{shown.flatMap((row) => {
             const fee = feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary();
             const children = childLines(row);

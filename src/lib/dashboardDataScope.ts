@@ -7,6 +7,7 @@ export const DASHBOARD_DATA_GROUPS = [
   {key:"MM",label:"缅甸"}, {key:"NG",label:"尼日利亚"},
   {key:"CO",label:"NPG 哥伦比亚"}, {key:"MX",label:"NPG 墨西哥"}, {key:"CL",label:"NPG 智利"},
   {key:"SA",label:"其他南美"}, {key:"BR_NATIVE",label:"巴西原生"}, {key:"USDT",label:"USDT 通道"},
+  {key:"HK_TEAM",label:"香港团队"}, {key:"RED_CRAB",label:"红膏蟹团队"},
 ] as const;
 export type DashboardDataGroup = typeof DASHBOARD_DATA_GROUPS[number]["key"];
 export type DashboardDataScope = {mode:"all"|"selected";countries:DashboardDataGroup[]};
@@ -39,6 +40,8 @@ const COUNTRY_ALIASES:Record<string,DashboardDataGroup>={
   "缅甸":"MM","MYANMAR":"MM","尼日利亚":"NG","NIGERIA":"NG",
   "哥伦比亚":"CO","COLOMBIA":"CO","墨西哥":"MX","MEXICO":"MX","智利":"CL","CHILE":"CL",
   "南美":"SA","SOUTH AMERICA":"SA","巴西原生":"BR_NATIVE","USDT通道":"USDT","USDT 通道":"USDT",
+  "香港":"HK_TEAM","HONG KONG":"HK_TEAM","HONG_KONG":"HK_TEAM",
+  "红膏蟹":"RED_CRAB","紅膏蟹":"RED_CRAB","RED CRAB":"RED_CRAB",
 };
 export function dashboardDataGroup(country:unknown,platform:unknown=""):DashboardDataGroup|"" {
   const name=String(country??"").trim().replace(/盘口$/,"").trim().toUpperCase();
