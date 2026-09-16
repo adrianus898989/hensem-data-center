@@ -5,6 +5,9 @@ const test = require("node:test");
 const {loadTs,root} = require("./load-typescript.cjs");
 
 const scope = loadTs(path.join(root,"src/lib/dashboardDataScope.ts"));
+const collectionSuccess = loadTs(path.join(root,"src/lib/collectionSuccess.ts"));
+const withdrawPending = loadTs(path.join(root,"src/lib/withdrawPending.ts"));
+const withdrawActual = loadTs(path.join(root,"src/lib/withdrawActual.ts"));
 
 test("香港和红膏蟹是独立权限组，不再落入印度",()=>{
   assert.equal(scope.dashboardDataGroup("香港","EZ777"),"HK_TEAM");
@@ -45,6 +48,49 @@ test("66GAME 汇总使用覆盖索引与可索引时间范围",()=>{
   assert.doesNotMatch(migration,/where \(c\.create_time at time zone 'Asia\/Kolkata'\)::date/);
 });
 
+test("66GAME 代收金额和笔数只展示成功到账订单",()=>{
+  const migration=fs.readFileSync(path.join(root,"supabase/migrations/20260916195500_game66_successful_charge_volume.sql"),"utf8");
+  assert.match(migration,/sum\([\s\S]*\) filter \(where c\.status_code = '1'\)[\s\S]*as amount/);
+  assert.match(migration,/count\(\*\) filter \(where c\.status_code = '1'\)::bigint as order_count/);
+  assert.match(migration,/having count\(\*\) filter \(where c\.status_code = '1'\) > 0/);
+  assert.match(migration,/'submitted_amount', submitted_amount/);
+  assert.match(migration,/'submitted_count', submitted_count/);
+});
+
+test("66GAME 完整聚合区分代收成功、代付成功、已提交和实际到账",()=>{
+  const migration=fs.readFileSync(path.join(root,"supabase/migrations/20260916200500_game66_complete_team_metrics.sql"),"utf8");
+  assert.match(migration,/w\.status_code = '3'/);
+  assert.match(migration,/w\.status_code = '1'/);
+  assert.match(migration,/'collectionSuccessSnapshots', v_collection_snapshots/);
+  assert.match(migration,/'withdrawPendingSnapshots', v_withdraw_pending_snapshots/);
+  assert.match(migration,/'withdrawActualRows', v_withdraw_actual_rows/);
+  assert.match(migration,/real_amount_display/);
+  assert.match(migration,/fee_display/);
+  assert.match(migration,/game66_withdraw_orders_volume_cover_idx/);
+});
+
+test("红膏蟹成功率支持平台总计与各三方，待处理快照也可验证",()=>{
+  assert.equal(collectionSuccess.collectionSuccessCountry("RED_CRAB","66GAME"),"红膏蟹");
+  assert.equal(withdrawPending.withdrawPendingCountry("RED_CRAB","66GAME"),"红膏蟹");
+  assert.equal(withdrawActual.withdrawActualCountry("RED_CRAB","66GAME"),"红膏蟹");
+  const snapshot={
+    schema_version:1, source_system:"RECHARGE_REVIEW", country_code:"RED_CRAB", platform:"66GAME",
+    stat_date:"2026-09-14", timezone:"Asia/Kolkata", snapshot_id:"charge", snapshot_at:"2026-09-15T00:00:00Z",
+    coverage:{complete:true,expected_count:100,fetched_count:100,unique_count:100},
+    totals:{submitted_count:100,success_count:60},
+    groups:[{raw_channel:"LovePay唤醒",channel_type:"其他类型",submitted_count:100,success_count:60}]
+  };
+  const volumeRows=[{date:"2026-09-14",country:"红膏蟹",platform:"66GAME",channel:"LovePay唤醒",rawChannel:"LovePay唤醒",channelType:"其他类型",direction:"代收"}];
+  const view=collectionSuccess.buildCollectionSuccessView({snapshots:[snapshot],volumeRows,start:"2026-09-14",end:"2026-09-14",country:"红膏蟹"});
+  assert.equal(view.compare().current.rate,0.6);
+  assert.equal(view.compare([view.providers[0].key]).current.rate,0.6);
+  assert.equal(withdrawPending.validWithdrawPendingSnapshot({
+    schema_version:1,source_system:"WITHDRAW_REVIEW",country_code:"RED_CRAB",platform:"66GAME",
+    stat_date:"2026-09-14",timezone:"Asia/Kolkata",snapshot_id:"pending",snapshot_at:"2026-09-15T00:00:00Z",
+    coverage:{complete:true,expected_count:0,fetched_count:0,unique_count:0},totals:{pending_count:0,pending_amount:0},groups:[]
+  }),true);
+});
+
 test("团队页只读 GAME66 且前端查询有明确超时",()=>{
   const server=fs.readFileSync(path.join(root,"src/lib/supabaseDashboardServer.ts"),"utf8");
   const edge=fs.readFileSync(path.join(root,"supabase/functions/dashboard-api/lib/supabaseDashboardServer.ts"),"utf8");
@@ -53,6 +99,9 @@ test("团队页只读 GAME66 且前端查询有明确超时",()=>{
     assert.match(source,/const shouldReadLegacy = !game66TeamCountry/);
     assert.match(source,/const \[results, game66Result\] = await Promise\.all\(\[legacyVolumeRead, game66Read\]\)/);
     assert.match(source,/if \(game66TeamCountry\) throw error/);
+    assert.match(source,/collectionSuccessSnapshots: \[\.\.\.collectionSuccess\.snapshots, \.\.\.game66SuccessSnapshots\]/);
+    assert.match(source,/withdrawPendingSnapshots: \[\.\.\.withdrawPending\.snapshots, \.\.\.game66PendingSnapshots\]/);
+    assert.match(source,/withdrawActualRows: \[\.\.\.withdrawActual\.rows, \.\.\.game66ActualRows\]/);
   }
   assert.match(volume,/dashboardBusinessFetch\(volumeUrl, \{ signal: AbortSignal\.timeout\(15000\) \}\)/);
   assert.match(volume,/loadData\(true, queryStart, queryEnd, "", queryCountry, true\)/);
