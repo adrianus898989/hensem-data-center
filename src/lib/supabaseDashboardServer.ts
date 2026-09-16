@@ -488,7 +488,12 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   if (country && !dashboardScopeAllows(access.scope, country)) throw new DashboardDataAccessError(403, "scope_denied", "当前账号没有此国家或盘口组的数据权限。");
   const queryStart = previousDate(start);
   const normalizedCountry = country.toLowerCase().replace(/[\s_-]+/g, "");
-  const game66TeamCountry = ["香港", "香港盘口", "hkteam", "hongkong", "红膏蟹", "红膏蟹盘口", "redcrab"].includes(normalizedCountry);
+  const redCrabTeamCountry = ["红膏蟹", "红膏蟹盘口", "redcrab"].includes(normalizedCountry);
+  const hongKongTeamCountry = ["香港", "香港盘口", "hkteam", "hongkong"].includes(normalizedCountry);
+  const game66TeamCountry = redCrabTeamCountry || hongKongTeamCountry;
+  const game66RpcCountry = redCrabTeamCountry ? "RED_CRAB"
+    : hongKongTeamCountry ? "HK_TEAM"
+    : country || null;
   // 香港/红膏蟹只来自 GAME66 安全汇总。不要再等待旧三方量和四条
   // 辅助统计链路；这既避免错误混入其他盘口，也让无数据日期立即返回。
   const shouldReadLegacy = !game66TeamCountry;
@@ -558,7 +563,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   // Start GAME66 alongside the legacy request instead of after it. Team pages
   // must surface a real read error rather than silently presenting false zeroes.
   const game66Read = callRpc<Game66VolumeRpcResult>("dashboard_game66_charge_volume", {
-    p_start: successPeriod?.previousStart || start, p_end: end, p_country: country || null
+    p_start: successPeriod?.previousStart || start, p_end: end, p_country: game66RpcCountry
   }, token, AbortSignal.timeout(12000)).catch((error) => {
     if (game66TeamCountry) throw error;
     return {
