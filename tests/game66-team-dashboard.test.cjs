@@ -129,6 +129,8 @@ test("团队页只读 GAME66 且前端查询有明确超时",()=>{
     assert.match(source,/const redCrabTeamCountry = \\["红膏蟹", "红膏蟹盘口", "redcrab"\\]/);
     assert.match(source,/const hongKongTeamCountry = \\["香港", "香港盘口", "hkteam", "hongkong"\\]/);
     assert.match(source,/p_country: game66RpcCountry/);
+    assert.match(source,/const game66CurrentRead = readGame66Window\(start, end\)/);
+    assert.match(source,/readGame66Window\(successPeriod\.previousStart, successPeriod\.previousStart\)/);
     assert.match(source,/const \[results, game66Result\] = await Promise\.all\(\[legacyVolumeRead, game66Read\]\)/);
     assert.match(source,/if \(game66TeamCountry\) throw error/);
     assert.match(source,/collectionSuccessSnapshots: \[\.\.\.collectionSuccess\.snapshots, \.\.\.game66SuccessSnapshots\]/);
