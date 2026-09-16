@@ -137,6 +137,6 @@ test("团队页只读 GAME66 且前端查询有明确超时",()=>{
     assert.match(source,/withdrawPendingSnapshots: \[\.\.\.withdrawPending\.snapshots, \.\.\.game66PendingSnapshots\]/);
     assert.match(source,/withdrawActualRows: \[\.\.\.withdrawActual\.rows, \.\.\.game66ActualRows\]/);
   }
-  assert.match(volume,/dashboardBusinessFetch\(volumeUrl, \{ signal: AbortSignal\.timeout\(15000\) \}\)/);
+  assert.match(volume,/dashboardBusinessFetch\(volumeUrl, \{ signal: AbortSignal\\.timeout\\(25000\\) \}\)/);
   assert.match(volume,/loadData\(true, queryStart, queryEnd, "", queryCountry, true\)/);
 });
