@@ -91,6 +91,24 @@ export type CollectionSuccessView = {
   error?: string;
 };
 
+/**
+ * The rate shown in the cell belongs to the current period.  When only the
+ * comparison period is absent, say that explicitly instead of displaying the
+ * ambiguous "昨日未采集" underneath a valid current rate.
+ */
+export function collectionSuccessComparisonNote(value: CollectionSuccessComparison): string {
+  const { previous, deltaPoints, comparisonLabel } = value;
+  if (deltaPoints !== null) return `${comparisonLabel} ${deltaPoints > 0 ? "+" : ""}${deltaPoints.toFixed(2)} 百分点`;
+
+  const currentPeriod = comparisonLabel === "较昨日" ? "本日" : "本期";
+  const previousPeriod = comparisonLabel === "较昨日" ? "昨日" : "上期";
+  if (previous.state === "missing") return `${currentPeriod}已采集 · 无${previousPeriod}对比`;
+  if (previous.state === "zero") return `${currentPeriod}已采集 · ${previousPeriod}无提交`;
+  if (previous.state === "partial") return `${currentPeriod}已采集 · ${previousPeriod}${previous.unknownType ? "类型未确认" : "部分未采集"}`;
+  if (previous.state === "unavailable") return `${currentPeriod}已采集 · ${previousPeriod}暂不可用`;
+  return `${currentPeriod}已采集 · ${previousPeriod}不可比`;
+}
+
 type ProjectedSnapshot = {
   country: string; platform: string; platformId: string; date: string; at: string; valid: boolean;
   groups: Array<{ providerKey: string; channel: string; type: string; submitted: number; success: number }>;

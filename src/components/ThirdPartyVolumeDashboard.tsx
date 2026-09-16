@@ -1013,6 +1013,18 @@ function mergeRateLike(oldRow: RateLike, newRow: RateLike): RateLike {
   };
 }
 
+function isGame66TeamRateCountry(value: string): boolean {
+  const country = normalizeCountryLabel(value);
+  return country === "红膏蟹" || country === "香港";
+}
+
+function stripGame66ProviderMode(value: string): string {
+  return String(value || "")
+    .trim()
+    .replace(/\s*(?:唤醒|扫码)(?:\s*[-‐‑‒–—﹘﹣－_]\s*新)?\s*$/i, "")
+    .trim();
+}
+
 function expandRateNameCandidates(country: string, ...values: Array<string | undefined>): string[] {
   const normalizedCountry = normalizeCountryLabel(country);
   const set = new Set<string>();
@@ -1025,6 +1037,18 @@ function expandRateNameCandidates(country: string, ...values: Array<string | und
   };
 
   values.forEach(add);
+
+  // GAME66 的团队报表把接入方式写在三方名后（如 RushPay唤醒、ARUPI唤醒）。
+  // 团队当前没有独立费率页；只用去掉接入方式后能在印度费率表中明确命中的主名。
+  // 不删除版本号、不做相似匹配，避免 ICPay2/999Pay 等误借其它三方费率。
+  if (isGame66TeamRateCountry(normalizedCountry)) {
+    for (const value of values) {
+      const provider = stripGame66ProviderMode(String(value || ""));
+      if (!provider) continue;
+      add(provider);
+      add(canonicalThirdPartyName(provider, "印度"));
+    }
+  }
 
   const keys = Array.from(set).map((x) => normalizeMatchKey(x)).join("|");
 
@@ -1111,6 +1135,10 @@ function rateCountriesCompatible(targetCountry: string, candidateCountry: string
   if (!target || !candidate) return { ok: false, score: 0 };
   if (target === candidate) return { ok: true, score: 40 };
 
+  // 香港/红膏蟹团队使用 INR 三方，但名称必须先经过上面的严格主名匹配。
+  // 仅允许团队页面单向读取印度费率；印度和其它国家绝不会反向读取团队费率。
+  if (isGame66TeamRateCountry(target) && candidate === "印度") return { ok: true, score: 20 };
+
   // V7N：南美三国不允许使用“南美”或其它南美国家作为费率候选。
   // 宁可显示“未匹配”，也绝不能跨币种拿错手续费。
   if (target === "南美" || candidate === "南美" || isStrictSouthAmericaRateCountry(target) || isStrictSouthAmericaRateCountry(candidate)) {
@@ -1171,7 +1199,13 @@ function findMatchedRate(rateMap: Map<string, RateLike>, country: string, platfo
   // 上面的精确索引没命中时，只在“同国家（或南美兜底）+ 同主三方”范围内扫描。
   // 不允许墨西哥/哥伦比亚/智利互相串费率，也不写死任何费率数值。
   const targetCountry = normalizeCountryLabel(country);
-  const targetNameKeys = new Set(expandRateNameCandidates(country, channel).map((name) => rateNameKey(country, name)));
+  const targetNameKeys = new Set<string>();
+  for (const name of expandRateNameCandidates(country, channel)) {
+    targetNameKeys.add(rateNameKey(country, name));
+    // UPI-QR 等名称在团队上下文与印度上下文中的全局显示别名可能不同；
+    // 团队借用印度费率时，同时保留印度作用域下的精确 key。
+    if (isGame66TeamRateCountry(targetCountry)) targetNameKeys.add(rateNameKey("印度", name));
+  }
   targetNameKeys.add(rateNameKey(country, channel));
   const targetType = normalizeFeeTypeToken(country, channelType);
   const targetPlatform = normalizeMatchKey(platformText);

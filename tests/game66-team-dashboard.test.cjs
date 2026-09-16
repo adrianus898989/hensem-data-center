@@ -91,6 +91,16 @@ test("红膏蟹成功率支持平台总计与各三方，待处理快照也可�
   }),true);
 });
 
+test("当前日有成功率但昨日无快照时，不再误报当前数据未采集",()=>{
+  const complete={submitted:100,success:60,rate:0.6,expected:1,captured:1,state:"complete"};
+  const missing={submitted:0,success:0,rate:null,expected:1,captured:0,state:"missing"};
+  const zero={submitted:0,success:0,rate:null,expected:1,captured:1,state:"zero"};
+  const base={current:complete,previous:missing,deltaPoints:null,comparisonLabel:"较昨日",platforms:[]};
+  assert.equal(collectionSuccess.collectionSuccessComparisonNote(base),"本日已采集 · 无昨日对比");
+  assert.equal(collectionSuccess.collectionSuccessComparisonNote({...base,previous:zero}),"本日已采集 · 昨日无提交");
+  assert.equal(collectionSuccess.collectionSuccessComparisonNote({...base,previous:complete,deltaPoints:5.25}),"较昨日 +5.25 百分点");
+});
+
 test("团队页只读 GAME66 且前端查询有明确超时",()=>{
   const server=fs.readFileSync(path.join(root,"src/lib/supabaseDashboardServer.ts"),"utf8");
   const edge=fs.readFileSync(path.join(root,"supabase/functions/dashboard-api/lib/supabaseDashboardServer.ts"),"utf8");

@@ -1,4 +1,4 @@
-import type { CollectionSuccessComparison, CollectionSuccessMetric } from "@/lib/collectionSuccess";
+import { collectionSuccessComparisonNote, type CollectionSuccessComparison, type CollectionSuccessMetric } from "@/lib/collectionSuccess";
 import { formatNumber } from "@/lib/format";
 import "./CollectionSuccessCell.css";
 
@@ -15,8 +15,7 @@ export function CollectionSuccessCell({ value }: { value: CollectionSuccessCompa
   const counts = `${formatNumber(current.success)} 成功 / ${formatNumber(current.submitted)} 提交`;
   const coverage = `已采集 ${current.captured}/${current.expected} 个平台日`;
   const label = current.rate === null ? "—" : `${(current.rate * 100).toFixed(2)}%`;
-  const delta = deltaPoints === null ? `${comparisonLabel === "较昨日" ? "昨日" : "上期"}${metricNote(previous) || "不可比"}`
-    : `${comparisonLabel} ${deltaPoints > 0 ? "+" : ""}${deltaPoints.toFixed(2)} 百分点`;
+  const delta = collectionSuccessComparisonNote(value);
   return <div className="collection-success-cell" tabIndex={0}
     title={`按提交日期：成功笔数 ÷ 提交笔数。${counts}；${coverage}。${current.rate === null ? metricNote(current) : delta}。上一期：${formatNumber(previous.success)} / ${formatNumber(previous.submitted)}。`}
     aria-label={`代收成功率 ${label}，${current.rate === null ? metricNote(current) : delta}，${counts}，${coverage}`}>

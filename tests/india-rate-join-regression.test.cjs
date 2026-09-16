@@ -26,7 +26,8 @@ const compiled = ts.transpileModule(functions.map(fn => fn.getText(source)).join
 }).outputText;
 const api = Function('require', ...Object.keys(dependencies), compiled + `
   return { expandRateNameCandidates, buildRateMap, findMatchedRate,
-    rateFor, singleFeeFor, estimateSideFee, rateHasSideFee, normalizeVolumeRowForDisplay, aggregateCombo };
+    rateFor, singleFeeFor, estimateSideFee, rateHasSideFee, normalizeVolumeRowForDisplay, aggregateCombo,
+    rateNameKey, rateCountriesCompatible };
 `)(require, ...Object.values(dependencies));
 
 const ARB2 = ['ArbPay2INR-BANK', 'ArbPay2INR-UPI'];
@@ -236,6 +237,28 @@ test('India rate keys never supply another country with its confirmed aliases', 
     assert(lookup(map, query));
     for (const country of ['印尼', '越南', '巴西']) assert.equal(lookup(map, query, 'UPI', 'collect', country), undefined);
   }
+});
+
+test('GAME66 team providers only borrow confidently matched India fee rows', () => {
+  const rush = rate('RushPay', 'UPI', { id: 'india-rush', collectFee: '4.50%', payoutFee: '3.00%' });
+  const upiQr = rate('UPI-QR', 'UPI', { id: 'india-upi-qr', collectFee: '2.00%', payoutFee: '1.00%' });
+  const vietnamFast = rate('FASTPay', 'BANKQR', { id: 'vietnam-fast', country: '越南' });
+  const philippinesWin2 = rate('WIN2Pay', 'GCASH', { id: 'philippines-win2', country: '菲律宾' });
+  const map = api.buildRateMap([rush, upiQr, vietnamFast, philippinesWin2]);
+
+  for (const country of ['红膏蟹', '香港']) {
+    assert(api.expandRateNameCandidates(country, 'ARUPI唤醒').includes('UPI-QR'));
+    assert.equal(api.rateCountriesCompatible(country, '印度').ok, true);
+    assert.equal(lookup(map, 'RushPay唤醒', '其他类型', 'collect', country, '66GAME')?.id, rush.id);
+    assert.equal(lookup(map, 'ARUPI唤醒', '其他类型', 'collect', country, '66GAME')?.id, upiQr.id);
+    for (const unmatched of ['LovePay唤醒', 'ICPay2唤醒', '999Pay唤醒', 'FastPay唤醒-新', 'Win2Pay唤醒', 'LkgoPay唤醒']) {
+      assert.equal(lookup(map, unmatched, '其他类型', 'collect', country, '66GAME'), undefined, `${country}/${unmatched}`);
+    }
+  }
+
+  // The allowance is one-way and cannot make an India row read a team-only rate.
+  const teamOnly = rate('TeamOnlyPay', 'UPI', { id: 'team-only', country: '红膏蟹' });
+  assert.equal(lookup(api.buildRateMap([teamOnly]), 'TeamOnlyPay'), undefined);
 });
 
 test('aliases do not change percent plus per-order fee formulas or original source values', () => {
