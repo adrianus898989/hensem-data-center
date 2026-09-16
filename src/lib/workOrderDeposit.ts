@@ -46,13 +46,7 @@ function isUnmarkedProvider(value: string): boolean {
   return !key || key === "未标记三方".toLowerCase() || key === "未分类三方".toLowerCase() || key === "unknown" || key === "unmarked";
 }
 
-/**
- * Keys used by the dashboard to attribute work-order rows to a platform.
- * Work-order ingestion can legitimately leave third_party as “未标记三方”;
- * the platform is still a safe, non-duplicating fallback because each row has
- * one platform and the volume table already groups those platforms under the
- * displayed third party.
- */
+/** Keys used by the dashboard to attribute work-order rows to a displayed third party. */
 export function workOrderDepositProviderKey(country: string, channel: string): string {
   return providerKey(country, channel);
 }
@@ -120,11 +114,15 @@ export function buildWorkOrderDepositView(input: {
       const country = workOrderDepositCountry(row.country_code || row.country, row.platform);
       const provider = providerKey(country, row.third_party);
       const platform = workOrderDepositPlatformKey(country, row.platform);
-      // A real third-party name is authoritative. Only the still-unmarked
-      // legacy rows may fall back to their platform, otherwise every provider
-      // row can inherit the same platform aggregate.
+      // A real third-party name is authoritative. Legacy unmarked rows are
+      // addressable only by the explicit “未标记三方” row; never use platform
+      // as a fallback here because one platform can contain several providers
+      // and that would duplicate the same work-order totals into every row.
       const rowKey = isUnmarkedProvider(row.third_party) ? platform : provider;
-      if (allowed && !allowed.has(rowKey)) continue;
+      const unmarkedKey = providerKey(country, "未标记三方");
+      const matchesAllowed = !allowed || allowed.has(rowKey)
+        || (isUnmarkedProvider(row.third_party) && allowed.has(unmarkedKey));
+      if (!matchesAllowed) continue;
       submittedAmount += number(row.submitted_amount); submittedCount += number(row.submitted_count);
       successAmount += number(row.success_amount); successCount += number(row.success_count);
       captured += 1;

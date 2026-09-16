@@ -37,7 +37,7 @@ import { useDashboardAuth } from "./DashboardAuthGate";
 import { buildCollectionSuccessView, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
 import { CollectionSuccessCell, CollectionSuccessBreakdown } from "./CollectionSuccessCell";
 import { buildWithdrawPendingView, type WithdrawPendingView } from "@/lib/withdrawPending";
-import { buildWorkOrderDepositView, workOrderDepositPlatformKey, workOrderDepositProviderKey, type WorkOrderDepositView } from "@/lib/workOrderDeposit";
+import { buildWorkOrderDepositView, workOrderDepositProviderKey, type WorkOrderDepositView } from "@/lib/workOrderDeposit";
 import { buildWithdrawActualView, type WithdrawActualView } from "@/lib/withdrawActual";
 import "./WithdrawPendingCell.css";
 
@@ -190,6 +190,17 @@ function isUsdtVolumeRow(row: ThirdPartyVolumeRow): boolean {
   const compact = text.replace(/[^a-z0-9]+/g, "");
   return /(^|[^a-z0-9])(usdt|trc20|erc20|tron|trx)([^a-z0-9]|$)/i.test(text)
     || /usdt|usdtu|usdtcu|trc20|erc20|tronpay|unipayusdt|upay13usdt|aypayusdt|uupayusdt/.test(compact);
+}
+
+function isUnmarkedThirdPartyLabel(value: string): boolean {
+  const label = String(value || "").trim().toLowerCase();
+  return !label || ["未标记三方", "未分类三方", "未知三方", "unknown", "unmarked"].includes(label);
+}
+
+function isEmptyUnmarkedThirdPartyRow(row: ThirdPartyVolumeRow): boolean {
+  if (!isUnmarkedThirdPartyLabel(row.channel || row.rawChannel || "")) return false;
+  return [row.amount, row.count, row.successCount, row.failedCount]
+    .every((value) => Number(value || 0) === 0);
 }
 
 function isUsdtFeeTarget(country: string, platform: string, channel: string, channelType?: string): boolean {
@@ -2196,7 +2207,12 @@ export default function ThirdPartyVolumeDashboard() {
   }, [session?.access_token]);
 
 
-  const rows = useMemo(() => (payload?.rows || []).map(normalizeVolumeRowForDisplay).filter((row) => !isHiddenCountry(row.country)), [payload]);
+  const rows = useMemo(() => (payload?.rows || [])
+    .map(normalizeVolumeRowForDisplay)
+    .filter((row) => !isHiddenCountry(row.country))
+    // 不把“零数据的未标记三方”渲染成一个假的三方行。真正有金额的未标记记录
+    // 仍保留，直到抓取端拿到原始三方名后才能安全归类。
+    .filter((row) => !isEmptyUnmarkedThirdPartyRow(row)), [payload]);
   const countries = useMemo(() => sortCountries([...knownCountries, ...rows.map((row) => row.country)]), [knownCountries, rows]);
   // 专业后台：国家导航属于固定业务导航，不应该等查询数据回来后才出现。
   // 动态发现的新国家仍可追加，但标准国家页签始终先显示。
@@ -2345,7 +2361,9 @@ export default function ThirdPartyVolumeDashboard() {
       collectAmount: 0, collectCount: 0, payoutAmount: 0, payoutCount: 0,
       totalAmount: 0, totalCount: 0, collectPct: 0, payoutPct: 0, totalPct: 0,
     }));
-    const depositMissing: ComboSummary[] = workOrderDeposit.providers.filter(provider => !keys.has(provider.key) && !missing.some(row => row.key === `collection-only:${provider.key}`) && !pendingMissing.some(row => row.key === `pending-only:${provider.key}`)).map(provider => ({
+    // 未标记工单没有可靠的三方归属，不能为了显示工单数字再造一个“未标记三方”行；
+    // 等抓取端写入真实 third_party 后，真实三方会通过自己的 key 自动出现。
+    const depositMissing: ComboSummary[] = workOrderDeposit.providers.filter(provider => !isUnmarkedThirdPartyLabel(provider.channel) && !keys.has(provider.key) && !missing.some(row => row.key === `collection-only:${provider.key}`) && !pendingMissing.some(row => row.key === `pending-only:${provider.key}`)).map(provider => ({
       key: `deposit-only:${provider.key}`, labelParts: [provider.country, provider.channel], rows: [],
       collectAmount: 0, collectCount: 0, payoutAmount: 0, payoutCount: 0,
       totalAmount: 0, totalCount: 0, collectPct: 0, payoutPct: 0, totalPct: 0,
@@ -3554,11 +3572,14 @@ function MonthlyTable({ title, subtitle, rows, columns, feeRows = [], paginated,
   const successKeys = (items: ComboSummary[]) => items.map(item => collectionSuccessProviderKey(item.labelParts[0], item.labelParts[1]));
   // 工单存款未到账的金额与笔数必须分列，不能把“笔 / 金额”拼在一个单元格里。
   const columnCount = columns.length + (showFeeColumns ? 16 : 10) + (collectionSuccess ? 1 : 0) + (withdrawPending ? 2 : 0) + (workOrderDeposit ? 4 : 0) + (withdrawActual ? 2 : 0);
-  const depositKeys = (items: ComboSummary[]) => items.flatMap((item) => {
+  const depositKeys = (items: ComboSummary[]) => items.map((item) => {
     const country = item.labelParts[0] || "";
-    const provider = workOrderDepositProviderKey(country, item.labelParts[1] || "");
-    const platforms = item.rows.map((raw) => workOrderDepositPlatformKey(raw.country, raw.platform));
-    return Array.from(new Set([provider, ...platforms]));
+    // Country/provider tables use [country, provider]. Platform detail tables
+    // use [country, platform, provider]. Attribute only by the provider name;
+    // falling back to platform is what previously copied one unmarked total to
+    // every provider shown on that platform.
+    const providerIndex = hasPlatformColumn ? 2 : 1;
+    return workOrderDepositProviderKey(country, item.labelParts[providerIndex] || "");
   });
   const depositValue = (metric: ReturnType<WorkOrderDepositView["compare"]>["current"] | undefined, kind: "submitted" | "success", field: "amount" | "count") => {
     if (!metric || metric.state === "missing" || metric.state === "unavailable") return "—";
