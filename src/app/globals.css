@@ -4544,8 +4544,13 @@ td .rate-cell,
 .third-party-volume-module .volume-summary-table-wrap.sticky-first-dimension td:first-child {
   position: sticky;
   left: 0;
-  min-width: 118px;
+  min-width: 104px;
   box-shadow: 5px 0 8px -8px rgba(15, 23, 42, 0.55);
+}
+.third-party-volume-module .volume-summary-table-wrap.sticky-first-dimension thead th:first-child .th-sort-btn {
+  width: auto;
+  justify-content: flex-start;
+  gap: 4px;
 }
 .third-party-volume-module .volume-summary-table-wrap.sticky-first-dimension thead th:first-child {
   z-index: 4;
@@ -6392,15 +6397,73 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
   .aw-rate-previous { gap: 2px 3px; }
 }
 .workorder-deposit-heading {
-  background: #fff7ed;
-  color: #9a3412;
+  background: #fff7ed !important;
+  color: #9a3412 !important;
   white-space: nowrap;
 }
 
 .workorder-deposit-cell {
-  color: #9a3412;
+  color: #9a3412 !important;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.workorder-withdraw-heading {
+  background: #f0f7ff !important;
+  color: #1d4f91 !important;
+}
+
+.workorder-withdraw-cell {
+  color: #1d4f91 !important;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.third-party-volume-module .workorder-metric-heading {
+  min-width: 82px;
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+  white-space: normal !important;
+}
+
+.third-party-volume-module .workorder-metric-heading .th-sort-btn {
+  justify-content: flex-end;
+  gap: 3px;
+}
+
+.workorder-heading-label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  line-height: 1.05;
+  text-align: right !important;
+  white-space: nowrap;
+}
+
+.workorder-heading-label small,
+.workorder-heading-label span {
+  display: block;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.workorder-heading-label small {
+  opacity: 0.78;
+}
+
+.workorder-success-heading,
+.workorder-success-rate-cell {
+  font-weight: 900;
+}
+
+.workorder-deposit-heading.workorder-success-heading,
+.workorder-deposit-cell.workorder-success-rate-cell {
+  color: #15803d !important;
+}
+
+.workorder-withdraw-heading.workorder-success-heading,
+.workorder-withdraw-cell.workorder-success-rate-cell {
+  color: #047857 !important;
 }
 
 /* 工单页重排：卡片保持成组，避免 8 张卡片挤成 6+2 并留下大片空白。 */

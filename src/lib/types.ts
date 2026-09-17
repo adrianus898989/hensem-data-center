@@ -235,6 +235,14 @@ export type WorkOrderDepositRow = {
   submitted_amount: number;
   success_count: number;
   success_amount: number;
+  /** 提款未到账工单笔数；旧快照没有该字段时按 0 兼容。 */
+  withdraw_not_received_count?: number;
+  /** 提款未到账工单金额；旧快照没有该字段时按 0 兼容。 */
+  withdraw_not_received_amount?: number;
+  /** 提款未到账中状态为“已处理”的笔数。 */
+  withdraw_success_count?: number;
+  /** 提款未到账中状态为“已处理”的金额。 */
+  withdraw_success_amount?: number;
   status_counts?: Record<string, number>;
   source_updated_at?: string;
 };

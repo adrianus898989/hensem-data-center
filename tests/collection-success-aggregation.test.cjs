@@ -65,6 +65,16 @@ test('missing platform-days fail closed; captured platform detail remains visibl
   assert.equal(result.platforms.find(p => p.platform === 'DHANIWIN').current.state, 'missing');
 });
 
+test('a platform with no scoped volume on the queried day is not falsely marked uncollected', () => {
+  const result = view([snapshot()], {
+    volumeRows: [volume(), volume('DHANIWIN', 'WPay', '2026-09-12')],
+  }).compare([key()]);
+  assert.equal(result.current.state, 'complete');
+  assert.equal(result.current.expected, 1);
+  assert.equal(result.current.captured, 1);
+  assert.equal(result.current.rate, 0.8);
+});
+
 test('explicit platform filter removes out-of-scope denominator and missing-platform coverage', () => {
   const result = view([snapshot()], { volumeRows: [volume(), volume('DHANIWIN')], platforms: ['91CLUB'] }).compare([key()]);
   assert.equal(result.current.rate, 0.8);

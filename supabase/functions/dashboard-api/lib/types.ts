@@ -235,6 +235,10 @@ export type WorkOrderDepositRow = {
   submitted_amount: number;
   success_count: number;
   success_amount: number;
+  withdraw_not_received_count?: number;
+  withdraw_not_received_amount?: number;
+  withdraw_success_count?: number;
+  withdraw_success_amount?: number;
   status_counts?: Record<string, number>;
   source_updated_at?: string;
 };
@@ -309,5 +313,3 @@ export type CustomerServicePayload = {
     metricTotal: number;
   };
 };
-
-

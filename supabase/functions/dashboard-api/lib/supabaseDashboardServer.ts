@@ -546,7 +546,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
     }).catch(() => ({ snapshots: [] as WithdrawPendingSnapshot[], error: "代付中数据暂未读取，原有三方量不受影响。" }))
     : Promise.resolve({ snapshots: [] as WithdrawPendingSnapshot[], error: game66TeamCountry ? "" : "代付中数据支持最多 366 天的查询。" });
   const depositQuery = successPeriod ? new URLSearchParams({
-    select: "system_name,source_system,stat_date,country_code,country,platform,third_party,channel_type,submitted_count,submitted_amount,success_count,success_amount,status_counts,source_updated_at",
+    select: "system_name,source_system,stat_date,country_code,country,platform,third_party,channel_type,submitted_count,submitted_amount,success_count,success_amount,withdraw_not_received_count,withdraw_not_received_amount,withdraw_success_count,withdraw_success_amount,status_counts,source_updated_at",
     order: "stat_date.asc,platform.asc,third_party.asc"
   }) : null;
   if (depositQuery && successPeriod) {

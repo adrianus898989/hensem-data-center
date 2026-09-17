@@ -18,13 +18,17 @@ export type WorkOrderDepositMetric = {
   submittedCount: number;
   successAmount: number;
   successCount: number;
+  withdrawNotReceivedAmount: number;
+  withdrawNotReceivedCount: number;
+  withdrawSuccessAmount: number;
+  withdrawSuccessCount: number;
   expected: number;
   captured: number;
   state: "complete" | "partial" | "missing" | "zero" | "unavailable";
 };
 
 export type WorkOrderDepositView = {
-  providers: Array<{ key: string; country: string; channel: string; submittedAmount: number; submittedCount: number; successAmount: number; successCount: number }>;
+  providers: Array<{ key: string; country: string; channel: string; submittedAmount: number; submittedCount: number; successAmount: number; successCount: number; withdrawNotReceivedAmount: number; withdrawNotReceivedCount: number; withdrawSuccessAmount: number; withdrawSuccessCount: number }>;
   compare: (providerKeys?: readonly string[]) => { current: WorkOrderDepositMetric; previous: WorkOrderDepositMetric };
   error?: string;
 };
@@ -107,7 +111,8 @@ export function buildWorkOrderDepositView(input: {
   }
 
   const metric = (dates: readonly string[], keys?: readonly string[]): WorkOrderDepositMetric => {
-    let submittedAmount = 0, submittedCount = 0, successAmount = 0, successCount = 0, captured = 0;
+    let submittedAmount = 0, submittedCount = 0, successAmount = 0, successCount = 0;
+    let withdrawNotReceivedAmount = 0, withdrawNotReceivedCount = 0, withdrawSuccessAmount = 0, withdrawSuccessCount = 0, captured = 0;
     const allowed = keys?.length ? new Set(keys) : null;
     for (const row of rows) {
       if (!dates.includes(row.stat_date)) continue;
@@ -116,26 +121,36 @@ export function buildWorkOrderDepositView(input: {
       if (allowed && !allowed.has(provider)) continue;
       submittedAmount += number(row.submitted_amount); submittedCount += number(row.submitted_count);
       successAmount += number(row.success_amount); successCount += number(row.success_count);
+      withdrawNotReceivedAmount += number(row.withdraw_not_received_amount);
+      withdrawNotReceivedCount += number(row.withdraw_not_received_count);
+      withdrawSuccessAmount += number(row.withdraw_success_amount);
+      withdrawSuccessCount += number(row.withdraw_success_count);
       captured += 1;
     }
     const expected = dates.length * Math.max(1, targets.size);
     const state: WorkOrderDepositMetric["state"] = input.error || !range ? "unavailable" : !captured ? "missing" : captured < expected ? "partial" : !submittedCount ? "zero" : "complete";
-    return { submittedAmount, submittedCount, successAmount, successCount, expected, captured, state };
+    return { submittedAmount, submittedCount, successAmount, successCount, withdrawNotReceivedAmount, withdrawNotReceivedCount, withdrawSuccessAmount, withdrawSuccessCount, expected, captured, state };
   };
 
-  const providers = new Map<string, { key: string; country: string; channel: string; submittedAmount: number; submittedCount: number; successAmount: number; successCount: number }>();
+  const providers = new Map<string, { key: string; country: string; channel: string; submittedAmount: number; submittedCount: number; successAmount: number; successCount: number; withdrawNotReceivedAmount: number; withdrawNotReceivedCount: number; withdrawSuccessAmount: number; withdrawSuccessCount: number }>();
   for (const row of currentRows) {
     const country = workOrderDepositCountry(row.country_code || row.country, row.platform);
     const channel = canonicalThirdPartyName(row.third_party, country);
     const key = providerKey(country, channel);
     if (input.provider && key !== providerKey(requestedCountry, input.provider)) continue;
-    const item = providers.get(key) || { key, country, channel, submittedAmount: 0, submittedCount: 0, successAmount: 0, successCount: 0 };
+    const item = providers.get(key) || { key, country, channel, submittedAmount: 0, submittedCount: 0, successAmount: 0, successCount: 0, withdrawNotReceivedAmount: 0, withdrawNotReceivedCount: 0, withdrawSuccessAmount: 0, withdrawSuccessCount: 0 };
     item.submittedAmount += number(row.submitted_amount); item.submittedCount += number(row.submitted_count);
     item.successAmount += number(row.success_amount); item.successCount += number(row.success_count);
+    item.withdrawNotReceivedAmount += number(row.withdraw_not_received_amount);
+    item.withdrawNotReceivedCount += number(row.withdraw_not_received_count);
+    item.withdrawSuccessAmount += number(row.withdraw_success_amount);
+    item.withdrawSuccessCount += number(row.withdraw_success_count);
     providers.set(key, item);
   }
   return {
-    providers: Array.from(providers.values()).sort((a, b) => b.submittedAmount - a.submittedAmount || b.submittedCount - a.submittedCount),
+    providers: Array.from(providers.values()).sort((a, b) =>
+      (b.submittedAmount + b.withdrawNotReceivedAmount) - (a.submittedAmount + a.withdrawNotReceivedAmount)
+      || (b.submittedCount + b.withdrawNotReceivedCount) - (a.submittedCount + a.withdrawNotReceivedCount)),
     compare: (keys) => ({ current: metric(range?.currentDates || [], keys), previous: metric(range?.previousDates || [], keys) }),
     error: input.error,
   };

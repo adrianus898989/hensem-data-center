@@ -237,16 +237,29 @@ export function buildCollectionSuccessView(input: {
     }
   }
   const metric = (dates: string[], targets: typeof platforms, keys?: readonly string[], types?: readonly string[]): CollectionSuccessMetric => {
-    let submitted = 0, success = 0, captured = 0, unknownType = false;
-    const expected = dates.length * targets.size;
+    let submitted = 0, success = 0, captured = 0, expected = 0, unknownType = false;
     const typeFilter = (types || []).map(t => collectionSuccessType(requestedCountry, "", t));
     const unknown = (type: string) => /^(UNKNOWN|其他类型|未知)$/i.test(type);
     const unknownExcluded = (typeFilter.length > 0 && !typeFilter.some(unknown)) || (selectedTypes.length > 0 && !selectedTypes.some(unknown));
     for (const platform of Array.from(targets.values())) for (const date of dates) {
-      const snapshot = projections.get(`${platform.id}\u001f${date}`);
+      const dayKey = `${platform.id}\u001f${date}`;
+      const snapshot = projections.get(dayKey);
+      const scopedProviderKeys = keys || (input.provider ? [collectionSuccessProviderKey(platform.country, input.provider)] : undefined);
+      const dayProviders = volumeProviders.get(dayKey);
+      const hasScopedVolume = scopedProviderKeys?.length
+        ? scopedProviderKeys.some(providerKey => dayProviders?.has(providerKey))
+        : Boolean(dayProviders?.size);
+      const snapshotHasScope = Boolean(snapshot?.valid) && (scopedProviderKeys?.length
+        ? snapshot!.groups.some(group => scopedProviderKeys.includes(group.providerKey)) || Boolean(snapshot!.fallbackProvider && scopedProviderKeys.includes(snapshot!.fallbackProvider.key))
+        : true);
+      // A platform that has neither volume nor a scoped snapshot on this date
+      // did not run and must not turn an otherwise complete rate into
+      // "partial". An explicitly selected platform remains an expected target.
+      const explicitlySelected = selectedPlatforms.has(platformKey(platform.country, platform.platform));
+      if (!hasScopedVolume && !snapshotHasScope && !explicitlySelected) continue;
+      expected += 1;
       if (!snapshot?.valid) continue;
       captured += 1;
-      const scopedProviderKeys = keys || (input.provider ? [collectionSuccessProviderKey(snapshot.country, input.provider)] : undefined);
       const directGroups = snapshot.groups.filter(group => matchesSelected(group, snapshot.country)
         && (!keys || keys.includes(group.providerKey))
         && (!typeFilter.length || typeFilter.includes(group.type)));

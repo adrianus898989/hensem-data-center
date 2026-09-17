@@ -2180,14 +2180,17 @@ export default function ThirdPartyVolumeDashboard() {
     // 首次进入默认查询昨天；之前这里只预填日期但不发请求，页面会一直停在空状态。
     // 等登录会话就绪后自动读取 Supabase，手动查询仍然保留。
     const yesterday = yesterdayLocalDateKey();
+    const initialCountry = COUNTRY_NAV_TABS.find((name) => dashboardScopeAllows(effectiveDashboardDataScope(profile), name)) || "";
     setStartDate(yesterday);
     setEndDate(yesterday);
+    setCountryPage(initialCountry);
     setState("ready");
     let disposed = false;
     if (session?.access_token) {
       void (async () => {
-        await loadData(true, yesterday, yesterday, "", "", true);
+        const loaded = await loadData(true, yesterday, yesterday, "", initialCountry, true);
         if (disposed) return;
+        if (!loaded) return;
         setAppliedStartDate(yesterday);
         setAppliedEndDate(yesterday);
         setAppliedCountrySelections([]);
@@ -2195,7 +2198,7 @@ export default function ThirdPartyVolumeDashboard() {
         setAppliedChannel("");
         setAppliedDirection("");
         setAppliedChannelTypeSelections([]);
-        setAppliedCountryPage("");
+        setAppliedCountryPage(initialCountry);
         setLastQueryAt(new Date().toISOString());
         setHasQueried(true);
       })();
@@ -2220,7 +2223,7 @@ export default function ThirdPartyVolumeDashboard() {
       window.clearInterval(hourlyTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.access_token]);
+  }, [session?.access_token, profile]);
 
 
   const rows = useMemo(() => (payload?.rows || []).map(normalizeVolumeRowForDisplay).filter((row) => !isHiddenCountry(row.country)), [payload]);
@@ -2321,18 +2324,6 @@ export default function ThirdPartyVolumeDashboard() {
     types: appliedChannelTypeSelections.length ? appliedChannelTypeSelections : isAllUsdtCountryPage(appliedCountryPage) ? ["USDT"] : [],
     enabled: appliedDirection !== "代付", error: payload?.collectionSuccessError,
   }), [payload?.collectionSuccessSnapshots, payload?.collectionSuccessError, rows, appliedCountryPage, appliedStartDate, appliedEndDate, appliedCountrySelections, appliedPlatformSelections, appliedChannel, appliedChannelTypeSelections, appliedDirection]);
-  const payoutSuccess = useMemo(() => buildCollectionSuccessView({
-    snapshots: payload?.collectionSuccessSnapshots || [],
-    sourceSystems: ["WITHDRAW_REVIEW"],
-    volumeRows: rows.filter(row => rowMatchesCountryPage(row, appliedCountryPage)
-      && (!appliedCountrySelections.length || appliedCountrySelections.includes(row.country))
-      && matchesThirdPartyPlatformSelection(row.country, row.platform, appliedPlatformSelections)),
-    start: appliedStartDate, end: appliedEndDate,
-    country: isAllUsdtCountryPage(appliedCountryPage) ? "" : appliedCountryPage,
-    countries: appliedCountrySelections, platforms: appliedPlatformSelections, provider: appliedChannel,
-    types: appliedChannelTypeSelections.length ? appliedChannelTypeSelections : isAllUsdtCountryPage(appliedCountryPage) ? ["USDT"] : [],
-    enabled: appliedDirection !== "代收", error: payload?.collectionSuccessError,
-  }), [payload?.collectionSuccessSnapshots, payload?.collectionSuccessError, rows, appliedCountryPage, appliedStartDate, appliedEndDate, appliedCountrySelections, appliedPlatformSelections, appliedChannel, appliedChannelTypeSelections, appliedDirection]);
   const withdrawPending = useMemo(() => buildWithdrawPendingView({
     snapshots: payload?.withdrawPendingSnapshots || [],
     volumeRows: rows.filter(row => rowMatchesCountryPage(row, appliedCountryPage)
@@ -2372,39 +2363,25 @@ export default function ThirdPartyVolumeDashboard() {
   const countryPageMonthlyRows = useMemo(() => {
     const existing = aggregateCombo(countryPageRows, (row) => [row.country, row.channel]);
     const keys = new Set(existing.map(row => collectionSuccessProviderKey(row.labelParts[0], row.labelParts[1])));
-    // A provider can have submitted orders but zero successful/volume rows.
-    // Append an independent zero-volume row; never inject submissions into rows.
-    const missing: ComboSummary[] = appliedDirection === "代付" ? [] : collectionSuccess.providers.filter(provider => !keys.has(provider.key)).map(provider => ({
-      key: `collection-only:${provider.key}`, labelParts: [provider.country, provider.channel], rows: [],
-      collectAmount: 0, collectCount: 0, payoutAmount: 0, payoutCount: 0,
-      totalAmount: 0, totalCount: 0, collectPct: 0, payoutPct: 0, totalPct: 0,
-    }));
-    const payoutMissing: ComboSummary[] = appliedDirection === "代收" ? [] : payoutSuccess.providers.filter(provider => !keys.has(provider.key) && !missing.some(row => row.key === `collection-only:${provider.key}`)).map(provider => ({
-      key: `payout-success-only:${provider.key}`, labelParts: [provider.country, provider.channel], rows: [],
-      collectAmount: 0, collectCount: 0, payoutAmount: 0, payoutCount: 0,
-      totalAmount: 0, totalCount: 0, collectPct: 0, payoutPct: 0, totalPct: 0,
-    }));
-    const pendingMissing: ComboSummary[] = withdrawPending.providers.filter(provider => !keys.has(provider.key) && !missing.some(row => row.key === `collection-only:${provider.key}`) && !payoutMissing.some(row => row.key === `payout-success-only:${provider.key}`)).map(provider => ({
-      key: `pending-only:${provider.key}`, labelParts: [provider.country, provider.channel], rows: [],
-      collectAmount: 0, collectCount: 0, payoutAmount: 0, payoutCount: 0,
-      totalAmount: 0, totalCount: 0, collectPct: 0, payoutPct: 0, totalPct: 0,
-    }));
-    const depositMissing: ComboSummary[] = workOrderDeposit.providers.filter(provider => !keys.has(provider.key) && !missing.some(row => row.key === `collection-only:${provider.key}`) && !payoutMissing.some(row => row.key === `payout-success-only:${provider.key}`) && !pendingMissing.some(row => row.key === `pending-only:${provider.key}`)).map(provider => ({
-      key: `deposit-only:${provider.key}`, labelParts: [provider.country, provider.channel], rows: [],
-      collectAmount: 0, collectCount: 0, payoutAmount: 0, payoutCount: 0,
-      totalAmount: 0, totalCount: 0, collectPct: 0, payoutPct: 0, totalPct: 0,
-    }));
-    const actualMissing: ComboSummary[] = withdrawActual.providers.filter(provider => !keys.has(provider.key)
-      && !missing.some(row => row.key === `collection-only:${provider.key}`)
-      && !payoutMissing.some(row => row.key === `payout-success-only:${provider.key}`)
-      && !pendingMissing.some(row => row.key === `pending-only:${provider.key}`)
-      && !depositMissing.some(row => row.key === `deposit-only:${provider.key}`)).map(provider => ({
-      key: `actual-only:${provider.key}`, labelParts: [provider.country, provider.channel], rows: [],
-      collectAmount: 0, collectCount: 0, payoutAmount: 0, payoutCount: 0,
-      totalAmount: 0, totalCount: 0, collectPct: 0, payoutPct: 0, totalPct: 0,
-    }));
-    return [...existing, ...missing, ...payoutMissing, ...pendingMissing, ...depositMissing, ...actualMissing];
-  }, [countryPageRows, collectionSuccess, payoutSuccess, withdrawPending, workOrderDeposit, withdrawActual, appliedDirection]);
+    // 成功率快照本身没有资金量，不能凭它制造 0 / 0 的虚假三方行。
+    // 代付中、工单、实际到账则是独立业务指标，即使主量表没有记录也必须保留。
+    const providerOnlyRows: ComboSummary[] = [];
+    const appendProviderOnly = (prefix: string, providers: Array<{ key: string; country: string; channel: string }>) => {
+      for (const provider of providers) {
+        if (keys.has(provider.key)) continue;
+        keys.add(provider.key);
+        providerOnlyRows.push({
+          key: `${prefix}:${provider.key}`, labelParts: [provider.country, provider.channel], rows: [],
+          collectAmount: 0, collectCount: 0, payoutAmount: 0, payoutCount: 0,
+          totalAmount: 0, totalCount: 0, collectPct: 0, payoutPct: 0, totalPct: 0,
+        });
+      }
+    };
+    appendProviderOnly("pending-only", withdrawPending.providers);
+    appendProviderOnly("deposit-only", workOrderDeposit.providers);
+    appendProviderOnly("actual-only", withdrawActual.providers);
+    return [...existing, ...providerOnlyRows];
+  }, [countryPageRows, withdrawPending, workOrderDeposit, withdrawActual]);
   const countryPageMonthlyPeriodRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.date.slice(0, 7), row.country, row.channel]), [countryPageRows]);
   const countryPagePlatformRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.country, row.platform, row.channel]), [countryPageRows]);
   const countryPageDailyRows = useMemo(() => aggregateDirection(countryPageRows, (row) => [row.date, row.country, row.platform, row.direction, row.channel]), [countryPageRows]);
@@ -2486,7 +2463,12 @@ export default function ThirdPartyVolumeDashboard() {
     try {
       const queryCountry = mainTab === "country" ? activeCountryPage : "";
       const loaded = await loadData(true, queryStart, queryEnd, "", queryCountry, true);
-      if (!loaded) return;
+      if (!loaded) {
+        // 查询失败只撤销尚未应用的国家切换；上一份成功数据继续留在页面。
+        if (appliedCountryPage) setCountryPage(appliedCountryPage);
+        setHasQueried(Boolean(payloadRef.current));
+        return;
+      }
       // 只有点击查询后才把所有筛选条件应用到结果。
       setAppliedStartDate(queryStart);
       setAppliedEndDate(queryEnd);
@@ -2511,6 +2493,7 @@ export default function ThirdPartyVolumeDashboard() {
     || channel !== appliedChannel
     || direction !== appliedDirection
     || channelTypeSelections.join("|||") !== appliedChannelTypeSelections.join("|||")
+    || (mainTab === "country" && activeCountryPage !== appliedCountryPage)
   );
 
   const appliedCoverage = useMemo(() => {
@@ -2578,8 +2561,7 @@ export default function ThirdPartyVolumeDashboard() {
                   setPlatformSelections([]);
                   setChannel("");
                   setChannelTypeSelections([]);
-                  // 切页签不是查询。立即隐藏上一国家的结果，等用户按「查询」才读取新国家。
-                  setHasQueried(false);
+                  // 切页签只改变待查询条件；上一份成功数据保留到新查询成功。
                 }}>{countryPaneLabel(item)}</button>
               ))}
               {hasQueried && !countryTabs.length && <span className="muted-text">暂无国家数据</span>}
@@ -2625,7 +2607,7 @@ export default function ThirdPartyVolumeDashboard() {
         </section>
       )}
 
-        {hasQueried && mainTab === "country" && appliedCountryPage === activeCountryPage && <CountryVolumeSinglePage country={appliedCountryPage} rows={countryPageRows} summary={countryPageSummary} previousSummary={countryPagePreviousSummary} monthlyRows={countryPageMonthlyRows} feeRows={countryPageFeeRows} previousFeeRows={countryPagePreviousFeeRows} canCompare={isSingleDayQuery} collectionSuccess={collectionSuccess} payoutSuccess={payoutSuccess} withdrawPending={withdrawPending} workOrderDeposit={workOrderDeposit} withdrawActual={withdrawActual} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} />}
+        {hasQueried && mainTab === "country" && <CountryVolumeSinglePage country={appliedCountryPage || activeCountryPage} rows={countryPageRows} summary={countryPageSummary} previousSummary={countryPagePreviousSummary} monthlyRows={countryPageMonthlyRows} feeRows={countryPageFeeRows} previousFeeRows={countryPagePreviousFeeRows} canCompare={isSingleDayQuery} collectionSuccess={collectionSuccess} withdrawPending={withdrawPending} workOrderDeposit={workOrderDeposit} withdrawActual={withdrawActual} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} />}
         </>
       )}
     </div>
@@ -2702,7 +2684,7 @@ function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { l
   );
 }
 
-function CountryVolumeSinglePage({ country, rows, summary, previousSummary, monthlyRows, feeRows, previousFeeRows, canCompare, dateRangeLabel, collectionSuccess, payoutSuccess, withdrawPending, workOrderDeposit, withdrawActual }: { country: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; previousSummary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; previousFeeRows: FeeCompareRow[]; canCompare: boolean; dateRangeLabel: string; collectionSuccess: CollectionSuccessView; payoutSuccess: CollectionSuccessView; withdrawPending: WithdrawPendingView; workOrderDeposit: WorkOrderDepositView; withdrawActual: WithdrawActualView }) {
+function CountryVolumeSinglePage({ country, rows, summary, previousSummary, monthlyRows, feeRows, previousFeeRows, canCompare, dateRangeLabel, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual }: { country: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; previousSummary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; previousFeeRows: FeeCompareRow[]; canCompare: boolean; dateRangeLabel: string; collectionSuccess: CollectionSuccessView; withdrawPending: WithdrawPendingView; workOrderDeposit: WorkOrderDepositView; withdrawActual: WithdrawActualView }) {
   const fees = summarizeFeeRows(feeRows);
   const previousFees = summarizeFeeRows(previousFeeRows);
   const netAmount = summary.collectAmount - summary.payoutAmount - fees.estimatedFee;
@@ -2731,7 +2713,6 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
         stickyFirstColumn
         feeRows={feeRows}
         collectionSuccess={collectionSuccess}
-        payoutSuccess={payoutSuccess}
         withdrawPending={withdrawPending}
         workOrderDeposit={workOrderDeposit}
         withdrawActual={withdrawActual}
@@ -3585,7 +3566,7 @@ function feeShareNode(summary: FeeSummary, onOpen: () => void) {
   return <button type="button" className="fee-share-alert-btn" onClick={onOpen}>{text}</button>;
 }
 
-function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFirstColumn, feeRows = [], paginated, compact, collectionSuccess, payoutSuccess, withdrawPending, workOrderDeposit, withdrawActual }: { title: string; subtitle: string; rows: ComboSummary[]; columns: string[]; columnIndexes?: number[]; stickyFirstColumn?: boolean; feeRows?: FeeCompareRow[]; paginated?: boolean; compact?: boolean; collectionSuccess?: CollectionSuccessView; payoutSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView }) {
+function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFirstColumn, feeRows = [], paginated, compact, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual }: { title: string; subtitle: string; rows: ComboSummary[]; columns: string[]; columnIndexes?: number[]; stickyFirstColumn?: boolean; feeRows?: FeeCompareRow[]; paginated?: boolean; compact?: boolean; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView }) {
   const [selected, setSelected] = useState<ComboSummary | null>(null);
   const [selectedFeeIssues, setSelectedFeeIssues] = useState<{ title: string; rows: FeeCompareRow[] } | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -3599,18 +3580,35 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
   const totalPayoutFee = feeRows.reduce((sum, row) => sum + row.payoutFeeAmount, 0);
 
   const successKeys = (items: ComboSummary[]) => items.map(item => collectionSuccessProviderKey(item.labelParts[0], item.labelParts[1]));
-  // 工单存款未到账的金额与笔数必须分列，不能把“笔 / 金额”拼在一个单元格里。
-  const columnCount = columns.length + (showFeeColumns ? 16 : 10) + (collectionSuccess ? 1 : 0) + (payoutSuccess ? 1 : 0) + (withdrawPending ? 2 : 0) + (workOrderDeposit ? 4 : 0) + (withdrawActual ? 2 : 0);
+  // 存款、提款工单各展示提交/成功的金额与笔数，以及按笔数计算的成功占比。
+  const workOrderColumnCount = workOrderDeposit ? 10 : 0;
+  const columnCount = columns.length + (showFeeColumns ? 16 : 10) + (collectionSuccess ? 1 : 0) + (withdrawPending ? 2 : 0) + workOrderColumnCount + (withdrawActual ? 2 : 0);
   const depositKeys = (items: ComboSummary[]) => items.map((item) => {
     const country = item.labelParts[0] || "";
     return workOrderDepositProviderKey(country, item.labelParts[1] || "");
   });
-  const depositValue = (metric: ReturnType<WorkOrderDepositView["compare"]>["current"] | undefined, kind: "submitted" | "success", field: "amount" | "count") => {
-    if (!metric || metric.state === "missing" || metric.state === "unavailable") return "—";
-    const value = kind === "submitted"
-      ? (field === "amount" ? metric.submittedAmount : metric.submittedCount)
-      : (field === "amount" ? metric.successAmount : metric.successCount);
-    return formatNumber(value);
+  const issueNumber = (metric: ReturnType<WorkOrderDepositView["compare"]>["current"] | undefined, kind: "deposit" | "withdraw", field: "submittedAmount" | "submittedCount" | "successAmount" | "successCount") => {
+    if (!metric || metric.state === "missing" || metric.state === "unavailable") return null;
+    if (kind === "deposit") {
+      if (field === "submittedAmount") return metric.submittedAmount;
+      if (field === "submittedCount") return metric.submittedCount;
+      if (field === "successAmount") return metric.successAmount;
+      return metric.successCount;
+    }
+    if (field === "submittedAmount") return metric.withdrawNotReceivedAmount;
+    if (field === "submittedCount") return metric.withdrawNotReceivedCount;
+    if (field === "successAmount") return metric.withdrawSuccessAmount;
+    return metric.withdrawSuccessCount;
+  };
+  const issueValue = (metric: ReturnType<WorkOrderDepositView["compare"]>["current"] | undefined, kind: "deposit" | "withdraw", field: "submittedAmount" | "submittedCount" | "successAmount" | "successCount") => {
+    const value = issueNumber(metric, kind, field);
+    return value == null ? "—" : formatNumber(value);
+  };
+  const issueRate = (metric: ReturnType<WorkOrderDepositView["compare"]>["current"] | undefined, kind: "deposit" | "withdraw") => {
+    const submitted = issueNumber(metric, kind, "submittedCount");
+    const success = issueNumber(metric, kind, "successCount");
+    if (submitted == null || success == null || submitted <= 0) return "—";
+    return formatPercent(success / submitted);
   };
 
   const sortedRows = useMemo(() => {
@@ -3626,7 +3624,6 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
         case "collectPct": return row.collectPct;
         case "payoutAmount": return row.payoutAmount;
         case "payoutCount": return row.payoutCount;
-        case "payoutSuccessRate": return payoutSuccess?.compare(providerKeys).current.rate ?? null;
         case "withdrawActualAmount": return withdrawActual?.compare(providerKeys).current.actualAmount ?? null;
         case "withdrawActualFee": return withdrawActual?.compare(providerKeys).current.feeAmount ?? null;
         case "withdrawPendingAmount": return withdrawPending?.compare(providerKeys).current.amount ?? null;
@@ -3635,6 +3632,18 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
         case "depositSubmittedCount": return workOrderDeposit?.compare(depositKeys([row])).current.submittedCount ?? null;
         case "depositSuccessAmount": return workOrderDeposit?.compare(depositKeys([row])).current.successAmount ?? null;
         case "depositSuccessCount": return workOrderDeposit?.compare(depositKeys([row])).current.successCount ?? null;
+        case "depositSuccessRate": {
+          const metric = workOrderDeposit?.compare(depositKeys([row])).current;
+          return metric && metric.submittedCount > 0 ? metric.successCount / metric.submittedCount : null;
+        }
+        case "withdrawNotReceivedAmount": return workOrderDeposit?.compare(depositKeys([row])).current.withdrawNotReceivedAmount ?? null;
+        case "withdrawNotReceivedCount": return workOrderDeposit?.compare(depositKeys([row])).current.withdrawNotReceivedCount ?? null;
+        case "withdrawSuccessAmount": return workOrderDeposit?.compare(depositKeys([row])).current.withdrawSuccessAmount ?? null;
+        case "withdrawSuccessCount": return workOrderDeposit?.compare(depositKeys([row])).current.withdrawSuccessCount ?? null;
+        case "withdrawSuccessRate": {
+          const metric = workOrderDeposit?.compare(depositKeys([row])).current;
+          return metric && metric.withdrawNotReceivedCount > 0 ? metric.withdrawSuccessCount / metric.withdrawNotReceivedCount : null;
+        }
         case "payoutPct": return row.payoutPct;
         case "totalAmount": return row.totalAmount;
         case "totalCount": return row.totalCount;
@@ -3658,7 +3667,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
         : String(a.value).localeCompare(String(b.value), "zh-CN", { numeric: true, sensitivity: "base" });
       return compared ? compared * direction : a.index - b.index;
     }).map(item => item.row);
-  }, [rows, sort, columns, feeMap, collectionSuccess, payoutSuccess, withdrawActual, withdrawPending, workOrderDeposit]);
+  }, [rows, sort, columns, feeMap, collectionSuccess, withdrawActual, withdrawPending, workOrderDeposit]);
   const pager = usePagination(sortedRows, !!paginated);
   const shown = paginated ? pager.shown : sortedRows;
   const shownSummary = sumComboSummaryRows(shown);
@@ -3667,10 +3676,10 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
   const toggleSort = (key: string, numeric = false) => setSort(current => current?.key === key
     ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
     : { key, direction: numeric ? "desc" : "asc" });
-  const SortTh = ({ label, sortKey, numeric, className = "", title }: { label: string; sortKey: string; numeric?: boolean; className?: string; title?: string }) => {
+  const SortTh = ({ label, groupLabel, sortKey, numeric, className = "", title }: { label: string; groupLabel?: string; sortKey: string; numeric?: boolean; className?: string; title?: string }) => {
     const active = sort?.key === sortKey;
     return <th className={`${className} sortable-th ${active ? "active" : ""}`} title={title} aria-sort={active ? (sort?.direction === "asc" ? "ascending" : "descending") : "none"}>
-      <button className="th-sort-btn" type="button" onClick={() => toggleSort(sortKey, numeric)}><span>{label}</span><span className="sort-arrow">{active ? (sort?.direction === "asc" ? "↑" : "↓") : "↕"}</span></button>
+      <button className="th-sort-btn" type="button" onClick={() => toggleSort(sortKey, numeric)}>{groupLabel ? <span className="workorder-heading-label"><small>{groupLabel}</small><span>{label}</span></span> : <span>{label}</span>}<span className="sort-arrow">{active ? (sort?.direction === "asc" ? "↑" : "↓") : "↕"}</span></button>
     </th>;
   };
 
@@ -3722,10 +3731,20 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
             <SortTh label="代收占比" sortKey="collectPct" numeric />
             <SortTh label="代付金额" sortKey="payoutAmount" numeric className="num" />
             <SortTh label="代付笔数" sortKey="payoutCount" numeric className="num" />
-            {payoutSuccess && <SortTh label="代付成功率" sortKey="payoutSuccessRate" numeric className="num collection-success-heading" title="按提交日期：明确付款成功笔数 ÷ 全部提交笔数；“已提交/提交三方”只进入分母，不算成功。" />}
             {withdrawActual && <><SortTh label="实际到账金额" sortKey="withdrawActualAmount" numeric className="num withdraw-actual-heading" title="提现订单中的实际到账金额（real_amount）。来源没有完整覆盖时显示 —。" /><SortTh label="提现手续费" sortKey="withdrawActualFee" numeric className="num withdraw-actual-heading" title="提现订单中的实际手续费（fee）。来源没有完整覆盖时显示 —。" /></>}
             {withdrawPending && <><SortTh label="代付中金额" sortKey="withdrawPendingAmount" numeric className="num withdraw-pending-heading" title="各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的申请金额。" /><SortTh label="代付中笔数" sortKey="withdrawPendingCount" numeric className="num withdraw-pending-heading" title="各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的提交笔数。" /></>}
-            {workOrderDeposit && <><SortTh label="存款未到账提交金额" sortKey="depositSubmittedAmount" numeric className="num workorder-deposit-heading" title="按工单的三方映射码归类；无法识别的记录显示为『未标记三方（待核实）』。" /><SortTh label="存款未到账提交笔数" sortKey="depositSubmittedCount" numeric className="num workorder-deposit-heading" title="按工单的三方映射码归类；无法识别的记录显示为『未标记三方（待核实）』。" /><SortTh label="存款未到账成功金额" sortKey="depositSuccessAmount" numeric className="num workorder-deposit-heading" title="状态为“已处理”的成功金额。" /><SortTh label="存款未到账成功笔数" sortKey="depositSuccessCount" numeric className="num workorder-deposit-heading" title="状态为“已处理”的成功笔数。" /></>}
+            {workOrderDeposit && <>
+              <SortTh groupLabel="存款未到账" label="提交金额" sortKey="depositSubmittedAmount" numeric className="num workorder-metric-heading workorder-deposit-heading" title="按工单真实三方名称归类的存款未到账提交金额。" />
+              <SortTh groupLabel="存款未到账" label="提交笔数" sortKey="depositSubmittedCount" numeric className="num workorder-metric-heading workorder-deposit-heading" title="按工单真实三方名称归类的存款未到账提交笔数。" />
+              <SortTh groupLabel="存款未到账" label="成功金额" sortKey="depositSuccessAmount" numeric className="num workorder-metric-heading workorder-deposit-heading" title="存款未到账工单中状态为“已处理”的金额。" />
+              <SortTh groupLabel="存款未到账" label="成功笔数" sortKey="depositSuccessCount" numeric className="num workorder-metric-heading workorder-deposit-heading" title="存款未到账工单中状态为“已处理”的笔数。" />
+              <SortTh groupLabel="存款未到账" label="成功占比" sortKey="depositSuccessRate" numeric className="num workorder-metric-heading workorder-deposit-heading workorder-success-heading" title="成功笔数 ÷ 提交笔数。" />
+              <SortTh groupLabel="提款未到账" label="提交金额" sortKey="withdrawNotReceivedAmount" numeric className="num workorder-metric-heading workorder-withdraw-heading" title="按工单真实三方名称归类的提款未到账提交金额。" />
+              <SortTh groupLabel="提款未到账" label="提交笔数" sortKey="withdrawNotReceivedCount" numeric className="num workorder-metric-heading workorder-withdraw-heading" title="按工单真实三方名称归类的提款未到账提交笔数。" />
+              <SortTh groupLabel="提款未到账" label="成功金额" sortKey="withdrawSuccessAmount" numeric className="num workorder-metric-heading workorder-withdraw-heading" title="提款未到账工单中状态为“已处理”的金额。" />
+              <SortTh groupLabel="提款未到账" label="成功笔数" sortKey="withdrawSuccessCount" numeric className="num workorder-metric-heading workorder-withdraw-heading" title="提款未到账工单中状态为“已处理”的笔数。" />
+              <SortTh groupLabel="提款未到账" label="成功占比" sortKey="withdrawSuccessRate" numeric className="num workorder-metric-heading workorder-withdraw-heading workorder-success-heading" title="成功笔数 ÷ 提交笔数。" />
+            </>}
             <SortTh label="代付占比" sortKey="payoutPct" numeric />
             <SortTh label="合计金额" sortKey="totalAmount" numeric className="num" />
             <SortTh label="合计笔数" sortKey="totalCount" numeric className="num" />
@@ -3737,24 +3756,23 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
             const fee = feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary();
             const children = childLines(row);
             const success = collectionSuccess?.compare(successKeys([row]));
-            const payoutRate = payoutSuccess?.compare(successKeys([row]));
             const pending = withdrawPending?.compare(successKeys([row])).current;
             const deposit = workOrderDeposit?.compare(depositKeys([row])).current;
             const actual = withdrawActual?.compare(successKeys([row])).current;
-            const canExpand = children.length > 0 || Boolean(success?.platforms.length) || Boolean(payoutRate?.platforms.length);
+            const canExpand = children.length > 0 || Boolean(success?.platforms.length);
             const isOpen = !!expanded[row.key];
-            const main = <tr key={row.key} className={fee.alertRows.length ? "fee-warning-main-row" : ""}>{columns.map((_, index) => <td key={index}>{row.labelParts[dimensionIndexes[index] ?? index] || "-"}</td>)}<td className="num">{formatNumber(row.collectAmount)}</td><td className="num">{formatNumber(row.collectCount)}</td>{success && <td><CollectionSuccessCell value={success} /></td>}<td><ShareBar value={row.collectPct} /></td><td className="num">{formatNumber(row.payoutAmount)}</td><td className="num">{formatNumber(row.payoutCount)}</td>{payoutRate && <td><CollectionSuccessCell value={payoutRate} /></td>}{withdrawActual && <><td className="num withdraw-actual-cell"><WithdrawActualCell metric={actual} kind="actual" /></td><td className="num withdraw-actual-cell"><WithdrawActualCell metric={actual} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={pending} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={pending} kind="count" /></td></>}{workOrderDeposit && <><td className="num workorder-deposit-cell">{depositValue(deposit, "submitted", "amount")}</td><td className="num workorder-deposit-cell">{depositValue(deposit, "submitted", "count")}</td><td className="num workorder-deposit-cell">{depositValue(deposit, "success", "amount")}</td><td className="num workorder-deposit-cell">{depositValue(deposit, "success", "count")}</td></>}<td><ShareBar value={row.payoutPct} /></td><td className="num strong-cell">{formatNumber(row.totalAmount)}</td><td className="num strong-cell">{formatNumber(row.totalCount)}</td>{showFeeColumns && <><td>{feeRateText(fee, "collect")}</td><td className="num">{feeAmountText(fee, "collect")}</td><td>{feeRateText(fee, "payout")}</td><td className="num">{feeAmountText(fee, "payout")}</td><td className="num">{feeTotalText(fee)}</td><td>{feeShareNode(fee, () => setSelectedFeeIssues({ title: row.labelParts.join(" / "), rows: fee.alertRows }))}</td></>}<td>{formatPercent(row.totalPct)}</td><td><div className="row-action-group">{canExpand && <button className="mini-btn" onClick={() => setExpanded((old) => ({ ...old, [row.key]: !old[row.key] }))}>{isOpen ? "收起" : "展开"}</button>}<button className="mini-btn" onClick={() => setSelected(row)}>查看</button></div></td></tr>;
+            const main = <tr key={row.key} className={fee.alertRows.length ? "fee-warning-main-row" : ""}>{columns.map((_, index) => <td key={index}>{row.labelParts[dimensionIndexes[index] ?? index] || "-"}</td>)}<td className="num">{formatNumber(row.collectAmount)}</td><td className="num">{formatNumber(row.collectCount)}</td>{success && <td><CollectionSuccessCell value={success} /></td>}<td><ShareBar value={row.collectPct} /></td><td className="num">{formatNumber(row.payoutAmount)}</td><td className="num">{formatNumber(row.payoutCount)}</td>{withdrawActual && <><td className="num withdraw-actual-cell"><WithdrawActualCell metric={actual} kind="actual" /></td><td className="num withdraw-actual-cell"><WithdrawActualCell metric={actual} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={pending} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={pending} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={deposit} formatValue={issueValue} formatRate={issueRate} />}<td><ShareBar value={row.payoutPct} /></td><td className="num strong-cell">{formatNumber(row.totalAmount)}</td><td className="num strong-cell">{formatNumber(row.totalCount)}</td>{showFeeColumns && <><td>{feeRateText(fee, "collect")}</td><td className="num">{feeAmountText(fee, "collect")}</td><td>{feeRateText(fee, "payout")}</td><td className="num">{feeAmountText(fee, "payout")}</td><td className="num">{feeTotalText(fee)}</td><td>{feeShareNode(fee, () => setSelectedFeeIssues({ title: row.labelParts.join(" / "), rows: fee.alertRows }))}</td></>}<td>{formatPercent(row.totalPct)}</td><td><div className="row-action-group">{canExpand && <button className="mini-btn" onClick={() => setExpanded((old) => ({ ...old, [row.key]: !old[row.key] }))}>{isOpen ? "收起" : "展开"}</button>}<button className="mini-btn" onClick={() => setSelected(row)}>查看</button></div></td></tr>;
             if (!isOpen || !canExpand) return [main];
             const childRows = children.map((child) => {
               const childHasCollect = sideHasValue(child.collectAmount, child.collectCount);
               const childHasPayout = sideHasValue(child.payoutAmount, child.payoutCount);
-              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row">{columns.map((_, index) => <td key={index}>{child.displayParts[dimensionIndexes[index] ?? index] || "-"}</td>)}<td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td>{collectionSuccess && <td><CollectionSuccessCell value={collectionSuccess.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]])} /></td>}<td>{sideShareNode(childHasCollect, row.collectAmount ? child.collectAmount / row.collectAmount : 0)}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td>{payoutSuccess && <td><CollectionSuccessCell value={payoutSuccess.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]])} /></td>}{withdrawActual && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}{withdrawPending && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}{workOrderDeposit && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}<td>{sideShareNode(childHasPayout, row.payoutAmount ? child.payoutAmount / row.payoutAmount : 0)}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td>{showFeeColumns && <><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.labelParts.join(" / ")} / ${child.displayParts.join(" / ")}`, rows: child.fee.alertRows }))}</td></>}<td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td className="muted-cell">子通道</td></tr>;
+              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row">{columns.map((_, index) => <td key={index}>{child.displayParts[dimensionIndexes[index] ?? index] || "-"}</td>)}<td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td>{collectionSuccess && <td><CollectionSuccessCell value={collectionSuccess.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]])} /></td>}<td>{sideShareNode(childHasCollect, row.collectAmount ? child.collectAmount / row.collectAmount : 0)}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td>{withdrawActual && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}{withdrawPending && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}{workOrderDeposit && <WorkOrderIssuesEmptyCells />}<td>{sideShareNode(childHasPayout, row.payoutAmount ? child.payoutAmount / row.payoutAmount : 0)}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td>{showFeeColumns && <><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.labelParts.join(" / ")} / ${child.displayParts.join(" / ")}`, rows: child.fee.alertRows }))}</td></>}<td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td className="muted-cell">子通道</td></tr>;
             });
-            return [main, ...childRows, ...(success?.platforms.length ? [<tr key={`${row.key}:success-platforms`} className="volume-child-row"><td colSpan={columnCount}><strong>代收成功率：</strong><CollectionSuccessBreakdown value={success} /></td></tr>] : []), ...(payoutRate?.platforms.length ? [<tr key={`${row.key}:payout-success-platforms`} className="volume-child-row"><td colSpan={columnCount}><strong>代付成功率：</strong><CollectionSuccessBreakdown value={payoutRate} /></td></tr>] : [])];
+            return [main, ...childRows, ...(success?.platforms.length ? [<tr key={`${row.key}:success-platforms`} className="volume-child-row"><td colSpan={columnCount}><strong>代收成功率：</strong><CollectionSuccessBreakdown value={success} /></td></tr>] : [])];
           })}{!shown.length && <tr><td colSpan={columnCount} className="empty">暂无数据</td></tr>}</tbody>
           <tfoot>
-            <tr className="summary-row page-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>当前页汇总</td> : <><td>当前页汇总</td>{columns.slice(1).map((column) => <td key={`page-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(shownSummary.collectAmount)}</td><td className="num">{formatNumber(shownSummary.collectCount)}</td>{collectionSuccess && <td><CollectionSuccessCell value={collectionSuccess.compare(successKeys(shown))} /></td>}<td>{pct(shownSummary.collectAmount, shownSummary.totalAmount)}</td><td className="num">{formatNumber(shownSummary.payoutAmount)}</td><td className="num">{formatNumber(shownSummary.payoutCount)}</td>{payoutSuccess && <td><CollectionSuccessCell value={payoutSuccess.compare(successKeys(shown))} /></td>}{withdrawActual && <><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(shown)).current} kind="actual" /></td><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(shown)).current} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(shown)).current} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(shown)).current} kind="count" /></td></>}{workOrderDeposit && <><td className="num workorder-deposit-cell">{depositValue(workOrderDeposit.compare(depositKeys(shown)).current, "submitted", "amount")}</td><td className="num workorder-deposit-cell">{depositValue(workOrderDeposit.compare(depositKeys(shown)).current, "submitted", "count")}</td><td className="num workorder-deposit-cell">{depositValue(workOrderDeposit.compare(depositKeys(shown)).current, "success", "amount")}</td><td className="num workorder-deposit-cell">{depositValue(workOrderDeposit.compare(depositKeys(shown)).current, "success", "count")}</td></>}<td>{pct(shownSummary.payoutAmount, shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).collectFee, 0))}</td><td>-</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).payoutFee, 0))}</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0))}</td><td>{formatPercent(rows.length ? shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0) / Math.max(1, rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0)) : 0)}</td></>}<td>{formatPercent(shownSummary.totalPct)}</td><td className="muted-cell">汇总</td></tr>
-            <tr className="summary-row overall-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>全部汇总</td> : <><td>全部汇总</td>{columns.slice(1).map((column) => <td key={`all-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(totalSummary.collectAmount)}</td><td className="num">{formatNumber(totalSummary.collectCount)}</td>{collectionSuccess && <td><CollectionSuccessCell value={collectionSuccess.compare(successKeys(rows))} /></td>}<td>{pct(totalSummary.collectAmount, totalSummary.totalAmount)}</td><td className="num">{formatNumber(totalSummary.payoutAmount)}</td><td className="num">{formatNumber(totalSummary.payoutCount)}</td>{payoutSuccess && <td><CollectionSuccessCell value={payoutSuccess.compare(successKeys(rows))} /></td>}{withdrawActual && <><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(rows)).current} kind="actual" /></td><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(rows)).current} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(rows)).current} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(rows)).current} kind="count" /></td></>}{workOrderDeposit && <><td className="num workorder-deposit-cell">{depositValue(workOrderDeposit.compare(depositKeys(rows)).current, "submitted", "amount")}</td><td className="num workorder-deposit-cell">{depositValue(workOrderDeposit.compare(depositKeys(rows)).current, "submitted", "count")}</td><td className="num workorder-deposit-cell">{depositValue(workOrderDeposit.compare(depositKeys(rows)).current, "success", "amount")}</td><td className="num workorder-deposit-cell">{depositValue(workOrderDeposit.compare(depositKeys(rows)).current, "success", "count")}</td></>}<td>{pct(totalSummary.payoutAmount, totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).collectFee, 0))}</td><td>-</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).payoutFee, 0))}</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0))}</td><td>100.00%</td></>}<td>100.00%</td><td className="muted-cell">汇总</td></tr>
+            <tr className="summary-row page-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>当前页汇总</td> : <><td>当前页汇总</td>{columns.slice(1).map((column) => <td key={`page-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(shownSummary.collectAmount)}</td><td className="num">{formatNumber(shownSummary.collectCount)}</td>{collectionSuccess && <td><CollectionSuccessCell value={collectionSuccess.compare(successKeys(shown))} /></td>}<td>{pct(shownSummary.collectAmount, shownSummary.totalAmount)}</td><td className="num">{formatNumber(shownSummary.payoutAmount)}</td><td className="num">{formatNumber(shownSummary.payoutCount)}</td>{withdrawActual && <><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(shown)).current} kind="actual" /></td><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(shown)).current} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(shown)).current} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(shown)).current} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={workOrderDeposit.compare(depositKeys(shown)).current} formatValue={issueValue} formatRate={issueRate} />}<td>{pct(shownSummary.payoutAmount, shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).collectFee, 0))}</td><td>-</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).payoutFee, 0))}</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0))}</td><td>{formatPercent(rows.length ? shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0) / Math.max(1, rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0)) : 0)}</td></>}<td>{formatPercent(shownSummary.totalPct)}</td><td className="muted-cell">汇总</td></tr>
+            <tr className="summary-row overall-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>全部汇总</td> : <><td>全部汇总</td>{columns.slice(1).map((column) => <td key={`all-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(totalSummary.collectAmount)}</td><td className="num">{formatNumber(totalSummary.collectCount)}</td>{collectionSuccess && <td><CollectionSuccessCell value={collectionSuccess.compare(successKeys(rows))} /></td>}<td>{pct(totalSummary.collectAmount, totalSummary.totalAmount)}</td><td className="num">{formatNumber(totalSummary.payoutAmount)}</td><td className="num">{formatNumber(totalSummary.payoutCount)}</td>{withdrawActual && <><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(rows)).current} kind="actual" /></td><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(rows)).current} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(rows)).current} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(rows)).current} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={workOrderDeposit.compare(depositKeys(rows)).current} formatValue={issueValue} formatRate={issueRate} />}<td>{pct(totalSummary.payoutAmount, totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).collectFee, 0))}</td><td>-</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).payoutFee, 0))}</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0))}</td><td>100.00%</td></>}<td>100.00%</td><td className="muted-cell">汇总</td></tr>
           </tfoot>
         </table>
       </div>
@@ -3767,6 +3785,30 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
 
 function ShareBar({ value }: { value: number }) {
   return <div className="share-bar"><span>{formatPercent(value)}</span><i style={{ width: `${Math.min(100, Math.max(0, value * 100))}%` }} /></div>;
+}
+
+type WorkOrderIssueMetric = ReturnType<WorkOrderDepositView["compare"]>["current"];
+type WorkOrderIssueField = "submittedAmount" | "submittedCount" | "successAmount" | "successCount";
+type WorkOrderIssueFormatter = (metric: WorkOrderIssueMetric | undefined, kind: "deposit" | "withdraw", field: WorkOrderIssueField) => string;
+type WorkOrderIssueRateFormatter = (metric: WorkOrderIssueMetric | undefined, kind: "deposit" | "withdraw") => string;
+
+function WorkOrderIssuesCells({ metric, formatValue, formatRate }: { metric?: WorkOrderIssueMetric; formatValue: WorkOrderIssueFormatter; formatRate: WorkOrderIssueRateFormatter }) {
+  return <>
+    <td className="num workorder-deposit-cell">{formatValue(metric, "deposit", "submittedAmount")}</td>
+    <td className="num workorder-deposit-cell">{formatValue(metric, "deposit", "submittedCount")}</td>
+    <td className="num workorder-deposit-cell">{formatValue(metric, "deposit", "successAmount")}</td>
+    <td className="num workorder-deposit-cell">{formatValue(metric, "deposit", "successCount")}</td>
+    <td className="num workorder-deposit-cell workorder-success-rate-cell">{formatRate(metric, "deposit")}</td>
+    <td className="num workorder-withdraw-cell">{formatValue(metric, "withdraw", "submittedAmount")}</td>
+    <td className="num workorder-withdraw-cell">{formatValue(metric, "withdraw", "submittedCount")}</td>
+    <td className="num workorder-withdraw-cell">{formatValue(metric, "withdraw", "successAmount")}</td>
+    <td className="num workorder-withdraw-cell">{formatValue(metric, "withdraw", "successCount")}</td>
+    <td className="num workorder-withdraw-cell workorder-success-rate-cell">{formatRate(metric, "withdraw")}</td>
+  </>;
+}
+
+function WorkOrderIssuesEmptyCells() {
+  return <>{Array.from({ length: 10 }, (_, index) => <td className="num muted-cell" key={`workorder-empty-${index}`}>-</td>)}</>;
 }
 
 function WithdrawPendingCell({ metric, kind }: { metric: { amount: number; count: number; state: string } | undefined; kind: "amount" | "count" }) {
