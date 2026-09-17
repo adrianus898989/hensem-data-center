@@ -4,6 +4,8 @@
 .collection-success-cell small { color: #8491a6; font-size: 9px; font-weight: 400; }
 .collection-success-cell small.success-up { color: #148564; }
 .collection-success-cell small.success-down { color: #cc4357; }
+.collection-success-cell.is-partial strong { text-decoration: underline dotted #d28b20; text-underline-offset: 3px; }
+.collection-success-cell small.success-partial { color: #a86100; font-weight: 650; }
 .collection-success-cell:focus-visible { outline: 2px solid #5d8bff; outline-offset: 3px; border-radius: 3px; }
 .collection-success-breakdown { padding: 5px 0; white-space: normal; }
 .collection-success-breakdown-label { color: #6c7e98; display: block; font-size: 10px; margin-bottom: 7px; }

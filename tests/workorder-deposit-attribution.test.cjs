@@ -7,6 +7,7 @@ const {
   buildWorkOrderDepositView,
   workOrderDepositProviderKey,
   workOrderDepositThirdPartyName,
+  workOrderSuccessTone,
 } = loadTs(path.join(root, "src/lib/workOrderDeposit.ts"));
 
 const volumeRows = ["YerePay", "CoverPay"].map((channel, index) => ({
@@ -30,6 +31,14 @@ function deposit(thirdParty, submittedAmount, submittedCount, successAmount, suc
     withdraw_success_count: withdrawSuccessCount,
   };
 }
+
+test("work-order success warning uses a sample floor and red/orange/green tiers", () => {
+  assert.equal(workOrderSuccessTone(19, 0), "neutral", "tiny samples must not trigger noisy warnings");
+  assert.equal(workOrderSuccessTone(100, 49), "danger");
+  assert.equal(workOrderSuccessTone(100, 50), "warning");
+  assert.equal(workOrderSuccessTone(100, 89), "warning");
+  assert.equal(workOrderSuccessTone(100, 90), "healthy");
+});
 
 test("unmarked platform aggregates are excluded instead of copied to every provider", () => {
   const view = buildWorkOrderDepositView({

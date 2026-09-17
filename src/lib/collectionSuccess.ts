@@ -104,7 +104,12 @@ export type CollectionSuccessView = {
  * ambiguous "昨日未采集" underneath a valid current rate.
  */
 export function collectionSuccessComparisonNote(value: CollectionSuccessComparison): string {
-  const { previous, deltaPoints, comparisonLabel } = value;
+  const { current, previous, deltaPoints, comparisonLabel } = value;
+  if (current.state === "partial") {
+    return current.unknownType
+      ? "类型未确认"
+      : `部分未采集 · 已采集 ${current.captured}/${current.expected}`;
+  }
   if (deltaPoints !== null) return `${comparisonLabel} ${deltaPoints > 0 ? "+" : ""}${deltaPoints.toFixed(2)} 百分点`;
 
   const currentPeriod = comparisonLabel === "较昨日" ? "本日" : "本期";
@@ -285,7 +290,12 @@ export function buildCollectionSuccessView(input: {
       }
     }
     const state: CollectionSuccessMetric["state"] = input.enabled === false || input.error || !period || !Number.isSafeInteger(submitted) || !Number.isSafeInteger(success) ? "unavailable" : !expected || !captured ? "missing" : captured < expected || unknownType ? "partial" : !submitted ? "zero" : "complete";
-    return { submitted, success, expected, captured, state, unknownType, rate: state === "complete" ? success / submitted : null };
+    // Missing platform-days make the scope incomplete, but they do not erase
+    // the valid success/submission counts already captured. Keep the partial
+    // state visible while showing the observed weighted rate. An unknown type
+    // still fails closed because its filtered denominator cannot be trusted.
+    const canShowObservedRate = submitted > 0 && !unknownType && (state === "complete" || state === "partial");
+    return { submitted, success, expected, captured, state, unknownType, rate: canShowObservedRate ? success / submitted : null };
   };
   return {
     providers: Array.from(providerMap.values()), error: input.error,
@@ -296,7 +306,12 @@ export function buildCollectionSuccessView(input: {
       const current = metric(period?.currentDates || [], targets, keys, types);
       const previous = metric(period?.previousDates || [], targets, keys, types);
       return {
-        current, previous, deltaPoints: current.rate !== null && previous.rate !== null ? (current.rate - previous.rate) * 100 : null,
+        current, previous,
+        // Never compare an incomplete period with another period: the two
+        // platform sets may differ even though both observed rates are valid.
+        deltaPoints: current.state === "complete" && previous.state === "complete" && current.rate !== null && previous.rate !== null
+          ? (current.rate - previous.rate) * 100
+          : null,
         comparisonLabel: period?.comparisonLabel || "较昨日",
         platforms: Array.from(targets.values()).map(platform => ({
           country: platform.country, platform: platform.platform,

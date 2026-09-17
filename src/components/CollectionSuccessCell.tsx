@@ -16,11 +16,12 @@ export function CollectionSuccessCell({ value }: { value: CollectionSuccessCompa
   const coverage = `已采集 ${current.captured}/${current.expected} 个平台日`;
   const label = current.rate === null ? "—" : `${(current.rate * 100).toFixed(2)}%`;
   const delta = collectionSuccessComparisonNote(value);
-  return <div className="collection-success-cell" tabIndex={0}
+  const isPartial = current.state === "partial";
+  return <div className={`collection-success-cell${isPartial ? " is-partial" : ""}`} tabIndex={0}
     title={`按提交日期：成功笔数 ÷ 提交笔数。${counts}；${coverage}。${current.rate === null ? metricNote(current) : delta}。上一期：${formatNumber(previous.success)} / ${formatNumber(previous.submitted)}。`}
     aria-label={`代收成功率 ${label}，${current.rate === null ? metricNote(current) : delta}，${counts}，${coverage}`}>
     <strong>{label}</strong>
-    <small className={current.rate !== null && deltaPoints !== null ? deltaPoints > 0 ? "success-up" : deltaPoints < 0 ? "success-down" : "" : ""}>
+    <small className={isPartial ? "success-partial" : current.rate !== null && deltaPoints !== null ? deltaPoints > 0 ? "success-up" : deltaPoints < 0 ? "success-down" : "" : ""}>
       {current.rate === null ? metricNote(current) : delta}
     </small>
   </div>;

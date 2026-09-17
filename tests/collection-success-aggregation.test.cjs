@@ -58,9 +58,11 @@ test('multi-day query compares equal-length preceding period, sums counts first'
 test('missing platform-days fail closed; captured platform detail remains visible', () => {
   const result = view([snapshot()], { volumeRows: [volume(), volume('DHANIWIN')] }).compare([key()]);
   assert.equal(result.current.state, 'partial');
-  assert.equal(result.current.rate, null);
+  assert.equal(result.current.rate, 0.8);
   assert.equal(result.current.expected, 2);
   assert.equal(result.current.captured, 1);
+  assert.equal(result.deltaPoints, null, 'a partial period must not produce a comparison delta');
+  assert.equal(lib.collectionSuccessComparisonNote(result), '部分未采集 · 已采集 1/2');
   assert.equal(result.platforms.find(p => p.platform === '91CLUB').current.rate, 0.8);
   assert.equal(result.platforms.find(p => p.platform === 'DHANIWIN').current.state, 'missing');
 });

@@ -33,6 +33,21 @@ export type WorkOrderDepositView = {
   error?: string;
 };
 
+export type WorkOrderSuccessTone = "neutral" | "danger" | "warning" | "healthy";
+
+/**
+ * Keep tiny samples neutral. For established samples, below 90% follows the
+ * dashboard's existing success-rate warning boundary; below 50% is elevated
+ * to a red danger signal so the worst providers are immediately visible.
+ */
+export function workOrderSuccessTone(submittedCount: number | null | undefined, successCount: number | null | undefined): WorkOrderSuccessTone {
+  if (!Number.isFinite(submittedCount) || !Number.isFinite(successCount) || Number(submittedCount) < 20 || Number(successCount) < 0) return "neutral";
+  const rate = Number(successCount) / Number(submittedCount);
+  if (rate < 0.5) return "danger";
+  if (rate < 0.9) return "warning";
+  return "healthy";
+}
+
 function validDate(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`));
 }
