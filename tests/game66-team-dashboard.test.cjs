@@ -88,6 +88,20 @@ test("66GAME 自动出款按真实团队授权并返回操作人统计",()=>{
   }
 });
 
+test("66GAME 自动出款按日期限流分片，配置状态失败时仍展示规则",()=>{
+  for(const file of ["src/lib/supabaseDashboardServer.ts","supabase/functions/dashboard-api/lib/supabaseDashboardServer.ts"]){
+    const server=fs.readFileSync(path.join(root,file),"utf8");
+    assert.match(server,/const concurrency = 4/);
+    assert.match(server,/days\.slice\(index, index \+ concurrency\)\.map\(\(day\) =>/);
+    assert.match(server,/p_start: day, p_end: day/);
+    assert.match(server,/AbortSignal\.timeout\(12000\)/);
+  }
+  const config=fs.readFileSync(path.join(root,"src/components/Game66ConfigBrowser.tsx"),"utf8");
+  assert.match(config,/Promise\.allSettled\(\[fetchGame66PlatformStatus/);
+  assert.match(config,/teamTargets\.map\(fallbackStatus\)/);
+  assert.match(config,/订单库存状态暂时读取较慢/);
+});
+
 test("红膏蟹成功率支持平台总计与各三方，待处理快照也可验证",()=>{
   assert.equal(collectionSuccess.collectionSuccessCountry("RED_CRAB","66GAME"),"红膏蟹");
   assert.equal(withdrawPending.withdrawPendingCountry("RED_CRAB","66GAME"),"红膏蟹");
