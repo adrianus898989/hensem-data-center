@@ -25,6 +25,12 @@ function platformKey(country: string, platform: string): string {
   return canonicalThirdPartyPlatform(country, platform).trim().toUpperCase();
 }
 
+function collectionSuccessEffectiveChannel(country: string, rawChannel: string, explicit = ""): string {
+  const unmarked = /^(未标记三方|未分类三方|unknown|unmarked)$/i.test(String(rawChannel || "").trim());
+  if (collectionSuccessCountry(country) === "越南" && unmarked && canonicalThirdPartyName(explicit, country) === "LocalBank") return "LocalBank";
+  return rawChannel;
+}
+
 /** Exact type buckets; in particular, PaytmQR and UPI must not share a denominator. */
 export function collectionSuccessType(country: string, rawChannel: string, explicit = ""): string {
   // Confirmed ARB BANK/UPI aliases are the UPI-QR channel, not a second bank provider.
@@ -40,6 +46,7 @@ export function collectionSuccessType(country: string, rawChannel: string, expli
     if (key === "BANK" || key === "BANKCARD") return "银行代付";
     if (key === "EWALLET" || key === "WALLET") return "钱包代付";
   }
+  if (collectionSuccessCountry(country) === "越南" && canonicalThirdPartyName(explicit || rawChannel, country) === "LocalBank") return "银行";
   const known: Record<string, string> = {
     UPI: "UPI", PAYTMQR: "PaytmQR", APPPAY: "APPPay",
     LOCALBANK: "银行卡", BANK: "银行卡", BANKCARD: "银行卡",
@@ -174,12 +181,15 @@ export function buildCollectionSuccessView(input: {
     const valid = validCollectionSuccessSnapshot(snapshot);
     projections.set(key, {
       country, platform: snapshot.platform, platformId, date: snapshot.stat_date, at, valid,
-      groups: valid ? snapshot.groups.map(group => ({
-        providerKey: collectionSuccessProviderKey(country, group.raw_channel),
-        channel: canonicalThirdPartyName(group.raw_channel, country),
-        type: collectionSuccessType(country, group.raw_channel, group.channel_type),
-        submitted: group.submitted_count, success: group.success_count,
-      })) : [],
+      groups: valid ? snapshot.groups.map(group => {
+        const rawChannel = collectionSuccessEffectiveChannel(country, group.raw_channel, group.channel_type);
+        return {
+          providerKey: collectionSuccessProviderKey(country, rawChannel),
+          channel: canonicalThirdPartyName(rawChannel, country),
+          type: collectionSuccessType(country, rawChannel, group.channel_type),
+          submitted: group.submitted_count, success: group.success_count,
+        };
+      }) : [],
     });
   }
   const selectedTypes = (input.types || []).map(t => collectionSuccessType(requestedCountry, "", t));
