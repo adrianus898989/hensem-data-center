@@ -200,6 +200,7 @@ test('actual query commits canonical selection state without broadening the sele
   const writes = {}, requests = [];
   const context = { ...pipeline({ platforms: ['43r', '43R', 'PLAYERBR', 'POPKKK新', 'POPKKK'] }), startDate: '2026-09-09', endDate: '2026-09-10',
     appliedStartDate: '', appliedEndDate: '', channel: '', direction: '', channelTypeSelections: [],
+    queryInFlightRef: { current: false }, payloadRef: { current: null },
     loadData: async (...args) => { requests.push(args); return true; },
     ...Object.fromEntries(['IsQuerying', 'AppliedStartDate', 'AppliedEndDate', 'AppliedCountrySelections', 'AppliedPlatformSelections',
       'AppliedChannel', 'AppliedDirection', 'AppliedChannelTypeSelections', 'AppliedCountryPage', 'LastQueryAt', 'HasQueried']
@@ -210,6 +211,55 @@ test('actual query commits canonical selection state without broadening the sele
   assert.equal(writes.AppliedStartDate, '2026-09-09'); assert.equal(writes.AppliedEndDate, '2026-09-10');
   assert.deepEqual(requests, [[true, '2026-09-09', '2026-09-10', '', '巴西', true]]);
   assert.equal(writes.IsQuerying, false);
+});
+test('failed country query keeps the selected tab while retaining the last successful result', async () => {
+  const query = dashboard.body.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'runQuery');
+  assert.ok(query);
+  const writes = {}, queryInFlightRef = { current: false };
+  const context = { ...pipeline({ country: '越南' }), mainTab: 'country', activeCountryPage: '越南', appliedCountryPage: '印度',
+    startDate: '2026-09-10', endDate: '2026-09-10', appliedStartDate: '2026-09-09', appliedEndDate: '2026-09-09',
+    channel: '', direction: '', channelTypeSelections: [], queryInFlightRef,
+    payloadRef: { current: { rows: [{ country: '印度' }] } }, loadData: async () => false,
+    setCountryPage: value => { writes.CountryPage = value; },
+    ...Object.fromEntries(['IsQuerying', 'AppliedStartDate', 'AppliedEndDate', 'AppliedCountrySelections', 'AppliedPlatformSelections',
+      'AppliedChannel', 'AppliedDirection', 'AppliedChannelTypeSelections', 'AppliedCountryPage', 'LastQueryAt', 'HasQueried']
+      .map(name => ['set' + name, value => { writes[name] = value; }])) };
+  await new Function(...Object.keys(context), compile(query.getText(source)) + '\nreturn runQuery();')(...Object.values(context));
+  assert.equal(writes.CountryPage, undefined, 'a failed request must not jump the selected country back');
+  assert.equal(writes.AppliedCountryPage, undefined, 'failed filters must not become the applied result');
+  assert.equal(writes.HasQueried, true, 'the previous successful payload remains visible');
+  assert.equal(writes.IsQuerying, false);
+  assert.equal(queryInFlightRef.current, false);
+});
+test('query ref blocks rapid concurrent submits and source ignores stale load completions', async () => {
+  const query = dashboard.body.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'runQuery');
+  assert.ok(query);
+  let resolveLoad;
+  const pending = new Promise(resolve => { resolveLoad = resolve; });
+  let calls = 0;
+  const queryInFlightRef = { current: false };
+  const context = { ...pipeline(), startDate: '2026-09-10', endDate: '2026-09-10', appliedStartDate: '', appliedEndDate: '',
+    channel: '', direction: '', channelTypeSelections: [], queryInFlightRef, payloadRef: { current: null },
+    loadData: async () => { calls += 1; return pending; },
+    ...Object.fromEntries(['IsQuerying', 'AppliedStartDate', 'AppliedEndDate', 'AppliedCountrySelections', 'AppliedPlatformSelections',
+      'AppliedChannel', 'AppliedDirection', 'AppliedChannelTypeSelections', 'AppliedCountryPage', 'LastQueryAt', 'HasQueried']
+      .map(name => ['set' + name, () => {}])) };
+  const run = new Function(...Object.keys(context), compile(query.getText(source)) + '\nreturn runQuery;')(...Object.values(context));
+  const first = run();
+  const second = run();
+  assert.equal(calls, 1, 'the second submit must not start another request');
+  resolveLoad(true);
+  await Promise.all([first, second]);
+  assert.equal(queryInFlightRef.current, false);
+
+  assert.match(text, /const requestSequence = \+\+loadRequestSequenceRef\.current/);
+  assert.equal((text.match(/requestSequence !== loadRequestSequenceRef\.current/g) || []).length, 2);
+  assert.match(text, /AbortSignal\.timeout\(THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS\)/);
+  assert.match(text, /THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS = 25_000/);
+  assert.match(text, /!queryInFlightRef\.current[\s\S]*rangeIncludesCurrentMonth/);
+  assert.match(text, /\[session\?\.user\.id, profileScopeIdentity\]/);
+  assert.doesNotMatch(text, /\[session\?\.access_token, profile\]/);
+  assert.doesNotMatch(text, /if \(appliedCountryPage\) setCountryPage\(appliedCountryPage\)/);
 });
 test('actual platform card explicitly counts active data, not the larger configured-option union', () => {
   const page = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'CountryVolumeSinglePage');

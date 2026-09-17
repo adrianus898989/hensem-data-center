@@ -29,7 +29,7 @@ import { canonicalThirdPartyName, confirmedIndiaThirdPartyAlias, inferThirdParty
 import { canonicalThirdPartyPlatform, canonicalThirdPartyPlatformSelections, matchesThirdPartyPlatformSelection } from "@/lib/thirdPartyPlatform";
 import { platformDisplayCountry, withPlatformDisplayCountry } from "@/lib/platformDisplayCountry";
 import { dashboardBusinessFetch, isDashboardDataDenied, readDashboardDataCache, writeDashboardDataCache } from "@/lib/dashboardDataClient";
-import { dashboardScopeAllows, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
+import { dashboardScopeAllows, dashboardScopeIdentity, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload, type ClientMonthlyStatus } from "@/lib/monthlyStatusClient";
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
@@ -1936,6 +1936,8 @@ async function safeReadJson(response: Response, label: string): Promise<any> {
 
 const THIRD_PARTY_VOLUME_CACHE_KEY = "hensem:last-good:third-party-volume:v252-submission-success";
 const THIRD_PARTY_RATES_CACHE_KEY = "hensem:last-good:third-party-rates:v251";
+const THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS = 25_000;
+const THIRD_PARTY_VOLUME_QUERY_TIMEOUT_SECONDS = Math.round(THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS / 1000);
 
 function ratePayloadFresh(payload: ThirdPartyRatePayload | null | undefined, maxAgeMs = 55 * 60 * 1000): boolean {
   const updatedAt = String((payload?.meta as any)?.snapshotUpdatedAt || payload?.meta?.updatedAt || "");
@@ -2031,6 +2033,7 @@ function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolum
 
 export default function ThirdPartyVolumeDashboard() {
   const { session, profile } = useDashboardAuth();
+  const profileScopeIdentity = dashboardScopeIdentity(profile);
   const [state, setState] = useState<LoadState>("ready");
   const [payload, setPayload] = useState<ThirdPartyVolumePayload | null>(null);
   const [ratePayload, setRatePayload] = useState<ThirdPartyRatePayload | null>(null);
@@ -2040,6 +2043,8 @@ export default function ThirdPartyVolumeDashboard() {
   const [volumeSyncStatus, setVolumeSyncStatus] = useState<VolumeSyncStatus | null>(null);
   const [knownCountries, setKnownCountries] = useState<string[]>([]);
   const payloadRef = useRef<ThirdPartyVolumePayload | null>(null);
+  const loadRequestSequenceRef = useRef(0);
+  const queryInFlightRef = useRef(false);
   const [country, setCountry] = useState("");
   const [platformSelections, setPlatformSelections] = useState<string[]>([]);
   const [countrySelections, setCountrySelections] = useState<string[]>([]);
@@ -2071,6 +2076,7 @@ export default function ThirdPartyVolumeDashboard() {
 
 
   async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "", requestedCountry = "", forceRates = false): Promise<boolean> {
+    const requestSequence = ++loadRequestSequenceRef.current;
     // V247：Supabase 已有数据时，任何瞬时网络/API问题都不能把整页从有数据变成 0。
     if (!silent && !payloadRef.current) setState("loading");
     setError("");
@@ -2080,7 +2086,7 @@ export default function ThirdPartyVolumeDashboard() {
       const shouldFetchRates = forceRates || !ratePayloadFresh(cachedRateBeforeFetch);
 
       const [firstVolumeRes, rateRes, statusRes] = await Promise.all([
-        dashboardBusinessFetch(volumeUrl, { signal: AbortSignal.timeout(25000) }),
+        dashboardBusinessFetch(volumeUrl, { signal: AbortSignal.timeout(THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS) }),
         shouldFetchRates ? dashboardBusinessFetch("/api/supabase-third-party-rates", { signal: AbortSignal.timeout(8000) })
           .catch(error=>{if(isDashboardDataDenied(error))throw error;return null;}) : Promise.resolve(null),
         requestedStart && requestedEnd && effectiveDashboardDataScope(profile).mode==="all" ? dashboardBusinessFetch(thirdPartySyncStatusApiUrl(requestedStart, requestedEnd), { signal: AbortSignal.timeout(8000) })
@@ -2089,6 +2095,9 @@ export default function ThirdPartyVolumeDashboard() {
 
       let volumeRes = firstVolumeRes;
       let json = await safeReadJson(volumeRes, "三方量") as ThirdPartyVolumePayload;
+      // A slower response from an older country/date request must never replace
+      // the latest result or mutate its notice/loading state.
+      if (requestSequence !== loadRequestSequenceRef.current) return false;
       if (!volumeRes.ok) throw new Error((json as any)?.message || "读取 Supabase 三方量失败");
 
       const volumeRows = json?.rows || [];
@@ -2119,8 +2128,9 @@ export default function ThirdPartyVolumeDashboard() {
       setState("ready");
       return true;
     } catch (err) {
+      if (requestSequence !== loadRequestSequenceRef.current) return false;
       const message = err instanceof DOMException && ["AbortError", "TimeoutError"].includes(err.name)
-        ? "查询超过 15 秒，请缩短日期范围后重试。"
+        ? `查询超过 ${THIRD_PARTY_VOLUME_QUERY_TIMEOUT_SECONDS} 秒，请缩短日期范围后重试。`
         : err instanceof Error ? err.message : "读取 Supabase 三方量失败";
       if(isDashboardDataDenied(err)){setPayload(null);payloadRef.current=null;setRatePayload(null);setVolumeSyncStatus(null);setDataNotice("");setError(message);setState("error");return false;}
       const currentPayload = payloadRef.current;
@@ -2210,6 +2220,7 @@ export default function ThirdPartyVolumeDashboard() {
       // 只有用户至少查询过一次，才允许对“当前已查询范围”做静默刷新。
       if (
         document.visibilityState === "visible"
+        && !queryInFlightRef.current
         && start
         && end
         && rangeIncludesCurrentMonth(start, end)
@@ -2223,7 +2234,9 @@ export default function ThirdPartyVolumeDashboard() {
       window.clearInterval(hourlyTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.access_token, profile]);
+  // Access-token refreshes and identical profile objects are expected during
+  // business requests; neither may restart the initial country query.
+  }, [session?.user.id, profileScopeIdentity]);
 
 
   const rows = useMemo(() => (payload?.rows || []).map(normalizeVolumeRowForDisplay).filter((row) => !isHiddenCountry(row.country)), [payload]);
@@ -2457,6 +2470,10 @@ export default function ThirdPartyVolumeDashboard() {
   }
 
   async function runQuery() {
+    // React state is not synchronous; the ref also blocks rapid double-clicks
+    // before the disabled button has rendered.
+    if (queryInFlightRef.current) return;
+    queryInFlightRef.current = true;
     const queryStart = startDate || endDate || appliedStartDate || yesterdayLocalDateKey();
     const queryEnd = endDate || startDate || appliedEndDate || queryStart;
     setIsQuerying(true);
@@ -2464,8 +2481,7 @@ export default function ThirdPartyVolumeDashboard() {
       const queryCountry = mainTab === "country" ? activeCountryPage : "";
       const loaded = await loadData(true, queryStart, queryEnd, "", queryCountry, true);
       if (!loaded) {
-        // 查询失败只撤销尚未应用的国家切换；上一份成功数据继续留在页面。
-        if (appliedCountryPage) setCountryPage(appliedCountryPage);
+        // 查询失败只保留上一份成功数据，不能改写用户当前选择的国家页签。
         setHasQueried(Boolean(payloadRef.current));
         return;
       }
@@ -2481,6 +2497,7 @@ export default function ThirdPartyVolumeDashboard() {
       setLastQueryAt(new Date().toISOString());
       setHasQueried(true);
     } finally {
+      queryInFlightRef.current = false;
       setIsQuerying(false);
     }
   }

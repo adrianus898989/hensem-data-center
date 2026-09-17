@@ -211,9 +211,11 @@ test("团队页只读 GAME66 且前端查询有明确超时",()=>{
     assert.match(source,/withdrawPendingSnapshots: \[\.\.\.withdrawPending\.snapshots, \.\.\.game66PendingSnapshots\]/);
     assert.match(source,/withdrawActualRows: \[\.\.\.withdrawActual\.rows, \.\.\.game66ActualRows\]/);
   }
-  assert.match(volume,/dashboardBusinessFetch\(volumeUrl, \{ signal: AbortSignal\.timeout\(25000\) \}\)/);
+  assert.match(volume,/THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS = 25_000/);
+  assert.match(volume,/dashboardBusinessFetch\(volumeUrl, \{ signal: AbortSignal\.timeout\(THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS\) \}\)/);
   assert.match(volume,/loadData\(true, queryStart, queryEnd, "", queryCountry, true\)/);
-  assert.match(volume,/if \(!loaded\) return/);
+  assert.match(volume,/if \(!loaded\) \{[\s\S]*setHasQueried\(Boolean\(payloadRef\.current\)\);[\s\S]*return;/);
+  assert.doesNotMatch(volume,/if \(appliedCountryPage\) setCountryPage\(appliedCountryPage\)/);
   assert.doesNotMatch(volume,/setPayload\(emptyClientVolumePayload/);
 });
 
