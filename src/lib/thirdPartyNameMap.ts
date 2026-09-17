@@ -700,7 +700,7 @@ export function canonicalThirdPartyName(value: string, country?: string): string
       quick: "QuickPay", quickpay: "QuickPay", quickqr: "QuickPay", quickpayqr: "QuickPay",
       aqfpay: "AQFPay", aqfpayvnd: "AQFPay", aqfpayvndbank: "AQFPay", aqfpaybank: "AQFPay", aqfpayqr: "AQFPay", aqfpayvndqr: "AQFPay",
       tronpay: "TronPayUSDT", tronpayusdt: "TronPayUSDT", unipayusdt: "UniPayUSDT", unipay: "UniPayUSDT",
-      localbank: "LocalBank", bank: "LocalBank", usdt: "USDT", yespay: "YesPay", yespayqr: "YesPay"
+      localbank: "LocalBank", bank: "LocalBank", chuynkhonnhanh: "LocalBank", usdt: "USDT", yespay: "YesPay", yespayqr: "YesPay"
     };
     if (vnStrict[currencyKey] || vnStrict[rawAliasKey]) return vnStrict[currencyKey] || vnStrict[rawAliasKey];
   }
