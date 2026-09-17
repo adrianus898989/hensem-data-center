@@ -72,12 +72,29 @@ function stripBusinessSuffix(value: string): string {
 const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
   ["starpay", "VstarPay"],
   ["qr-rspay", "RsPay"],
+  ["fancypay", "FancyPay"],
   ["fancypayinr-paytmqr", "FancyPay"],
+  ["fancypay-qr", "FancyPay"],
+  ["fancypayinr-bank", "FancyPay"],
   ["super-apppay", "SUPER"],
   ["qr-wpay", "WPay"],
   ["paytm-rapay", "RAPay"],
+  ["rapay-qr", "RAPay"],
   ["ic2payinr-paytmqr", "ICPay"],
+  ["ic2payinr-bank", "ICPay"],
+  ["qr-ox", "OXPay"],
+  ["oxpayinr", "OXPay"],
+  ["didi", "DiDiPay"],
+  ["didipayinr-bank", "DiDiPay"],
+  ["atpayinr-bank2", "ATPay"],
   ["newwinpay2", "NewWinPay"],
+  ["newwinpay2inr", "NewWinPay"],
+  ["newwinpay2inr-bank", "NewWinPay"],
+  ["3tpay", "3TPay"],
+  ["3tpayinr", "3TPay"],
+  ["3tpayinr-paytmqr", "3TPay"],
+  ["3cpay", "3cPay"],
+  ["p3cpayinr", "3cPay"],
   ["arbpay2inr-bank", "UPI-QR"],
   ["arbpay2inr-upi", "UPI-QR"],
 ]);
@@ -661,9 +678,9 @@ function confirmedUserThirdPartyAlias(value: string, country?: string): string {
 
   // 用户确认：巴基斯坦三方别名统一。
   if (c === "巴基斯坦") {
-    if (/^(mcb|mcbpay|mcbjz|mcbjazz|mcbjzpay)$/.test(key)) return "MCBPay";
+    if (/^(mcb|mcbpay|mcbep|mcbjz|mcbjazz|mcbjzpay)$/.test(key)) return "MCBPay";
     if (/^(owpay|owenpay|owenpayowpay)$/.test(key)) return "OwenPay";
-    if (/^(op3pay|openpay|openpayop3pay)$/.test(key)) return "OpenPay";
+    if (/^(open|openpaypkr|op3pay|openpay|openpayop3pay)$/.test(key)) return "OpenPay";
     if (/^(omnipay|epay|epayomnipay)$/.test(key)) return "EPAY";
   }
 
@@ -787,9 +804,9 @@ export function canonicalThirdPartyName(value: string, country?: string): string
       pkpay: "PkPay", pkep: "PkPay", pkjazz: "PkPay", pkjz: "PkPay", pkpayep: "PkPay", pkpayjazz: "PkPay", pkpayjz: "PkPay", pkpaypkreasypaisa: "PkPay", pkpaypkrjazzcash: "PkPay", pkpaypkrjazz: "PkPay", pkpaypkreasy: "PkPay", pkpaywallet2: "PkPay",
       starpago: "StarPago", starpagoep: "StarPago", starpagojazz: "StarPago", starpagojz: "StarPago",
       mega: "MegaPay", megapay: "MegaPay", megaep: "MegaPay", megajazz: "MegaPay", megajz: "MegaPay",
-      mcb: "MCBPay", mcbpay: "MCBPay", mcbjz: "MCBPay", mcbjazz: "MCBPay", mcbjzpay: "MCBPay",
+      mcb: "MCBPay", mcbpay: "MCBPay", mcbep: "MCBPay", mcbjz: "MCBPay", mcbjazz: "MCBPay", mcbjzpay: "MCBPay",
       owpay: "OwenPay", owenpayowpay: "OwenPay",
-      op3pay: "OpenPay", openpayop3pay: "OpenPay",
+      open: "OpenPay", openpaypkr: "OpenPay", op3pay: "OpenPay", openpayop3pay: "OpenPay",
       omnipay: "EPAY", epayomnipay: "EPAY",
       unipayusdt: "UniPayUSDT", usdt: "UniPayUSDT"
     };

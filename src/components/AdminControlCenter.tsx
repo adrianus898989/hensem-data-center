@@ -43,11 +43,11 @@ type Props = {
   session: DashboardSession;
   profile: DashboardProfile;
   onClose: () => void;
-  section?: "users" | "data" | "audit";
+  section?: "accounts" | "permissions" | "ip" | "data" | "audit";
   embedded?: boolean;
 };
 
-type Tab = "users" | "data" | "audit";
+type Tab = "accounts" | "permissions" | "ip" | "data" | "audit";
 type CreateRole = "admin" | "viewer";
 
 function accountStoredScope(user: DashboardProfile): DashboardDataScope {
@@ -225,7 +225,7 @@ function localDateKey(value: string): string {
   return `${y}-${m}-${d}`;
 }
 
-export default function AdminControlCenter({ open, session, profile, onClose, section = "users", embedded = false }: Props) {
+export default function AdminControlCenter({ open, session, profile, onClose, section = "accounts", embedded = false }: Props) {
   const management = normalizedManagementPermissions(profile);
   const isOwner = profile.role === "owner";
   const hasAllData = effectiveDashboardDataScope(profile).mode === "all";
@@ -252,6 +252,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   const [savingUser, setSavingUser] = useState("");
   const [resetTarget, setResetTarget] = useState("");
   const [resetPassword, setResetPassword] = useState("");
+  const [accountFeedback, setAccountFeedback] = useState<Record<string, { tone: "success" | "error"; text: string }>>({});
   const [syncRunning, setSyncRunning] = useState<ManualSyncJob | "all" | "">("");
   const [syncProgress, setSyncProgress] = useState<string[]>([]);
   const [historyStatus, setHistoryStatus] = useState<HistoryBackfillStatus | null>(null);
@@ -418,7 +419,14 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     if (!isOwner && newRole === "admin") setNewRole("viewer");
   }, [isOwner, newRole]);
 
-  useEffect(() => { setTab(section); }, [section]);
+  useEffect(() => {
+    setTab(section);
+    setPermissionTarget(null);
+    setEditingUsername("");
+    setResetTarget("");
+    setResetPassword("");
+    setCreateOpen(false);
+  }, [section]);
 
   useEffect(() => { setNewDataScope(JSON.parse(actorDataScopeKey) as DashboardDataScope); }, [profile.auth_user_id, actorDataScopeKey]);
 
@@ -475,15 +483,26 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   async function submitResetPassword(event: React.FormEvent) {
     event.preventDefault();
     if (!resetTarget) return;
-    setSavingUser(resetTarget);
+    const username = resetTarget;
+    setSavingUser(username);
     setMessage("");
+    setAccountFeedback((current) => {
+      const next = { ...current };
+      delete next[username];
+      return next;
+    });
     try {
-      await resetDashboardUserPassword(session, resetTarget, resetPassword);
-      setMessage(`${resetTarget} 密码已重置。`);
+      await resetDashboardUserPassword(session, username, resetPassword);
+      setMessage(`${username} 密码已重置。`);
+      setAccountFeedback((current) => ({ ...current, [username]: { tone: "success", text: "密码已重置成功。请让该账号使用新密码重新登录。" } }));
       setResetTarget("");
       setResetPassword("");
       if (canViewAudit) await loadAudit();
-    } catch (error) { setMessage(error instanceof Error ? error.message : "重置密码失败"); }
+    } catch (error) {
+      const text = error instanceof Error ? error.message : "重置密码失败";
+      setMessage(text);
+      setAccountFeedback((current) => ({ ...current, [username]: { tone: "error", text: `密码重置失败：${text}` } }));
+    }
     finally { setSavingUser(""); }
   }
 
@@ -581,42 +600,53 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     } finally { setSyncRunning(""); }
   }
 
-  const sectionTitle = tab === "users" ? "账号与权限" : tab === "data" ? "数据同步" : "操作记录";
-  const sectionSubtitle = tab === "users"
-    ? "账号、角色、权限与 IP 登录控制。"
-    : tab === "data"
-      ? "同步状态与手动刷新。"
-      : "后台操作与调整记录。";
+  const sectionTitle = tab === "accounts"
+    ? "账号管理"
+    : tab === "permissions"
+      ? "权限管理"
+      : tab === "ip"
+        ? "IP 白名单"
+        : tab === "data"
+          ? "数据同步"
+          : "操作记录";
+  const sectionSubtitle = tab === "accounts"
+    ? "建立账号，管理角色、启停状态、数据范围与密码。"
+    : tab === "permissions"
+      ? "按账号独立配置模块、页面和具体操作权限。"
+      : tab === "ip"
+        ? "管理登录限制与可信 IP；仅总管理员可操作。"
+        : tab === "data"
+          ? "同步状态与手动刷新。"
+          : "后台操作与调整记录。";
 
   const content = (
     <>
       {!hasAllData && <div className="admin-scope-restriction" role="status">当前账号可见：{dashboardScopeLabel(effectiveDashboardDataScope(profile))}。只能管理此范围内的查看账号；全局数据同步、操作记录和安全设置不可用。</div>}
-      {tab === "users" && (canManageUsers || isOwner) && (
-        <div className="admin-users-compact">
-          {isOwner && <details className="admin-panel-card admin-access-details">
-            <summary><strong>IP 登录控制</strong><span>{ipSettings ? (ipSettings.enabled ? "已开启白名单" : "账号密码登录") : "读取登录限制…"}{ipSettings?.currentIp ? ` · 当前 IP ${ipSettings.currentIp}` : ""}</span><b>设置</b></summary>
-            <div className="admin-ip-card">
-            <div className="admin-card-title"><div><span>LOGIN ACCESS</span><h3>IP 白名单</h3><p className="admin-card-subtitle">当前 IP：{ipSettings?.currentIp || "读取中..."}</p></div><button type="button" className={ipSettings?.enabled ? "admin-ip-mode on" : "admin-ip-mode"} disabled={ipLoading || !ipSettings} onClick={() => void toggleIpMode()}>{ipSettings?.enabled ? "已开启 · 必须白名单" : "未开启 · 账号密码即可"}</button></div>
-            <form className="admin-ip-add" onSubmit={addIp}>
-              <input value={ipInput} onChange={(e) => setIpInput(e.target.value)} placeholder="IPv4 / IPv6" />
-              <input value={ipNote} onChange={(e) => setIpNote(e.target.value)} placeholder="备注，例如 办公室 / 家里" />
-              <button type="submit" disabled={ipLoading}>加入白名单</button>
-              {ipSettings?.currentIp && <button type="button" className="ghost" onClick={() => setIpInput(ipSettings.currentIp)}>填入当前 IP</button>}
-            </form>
-            <div className="admin-ip-list">
-              {(ipSettings?.rows || []).map((row) => <div className="admin-ip-row" key={row.id}><div><b>{row.ip}</b><span>{row.note || "无备注"}</span></div><em className={row.active ? "on" : "off"}>{row.active ? "启用" : "停用"}</em><button type="button" onClick={() => void toggleAllowedIp(row.id, !row.active)}>{row.active ? "停用" : "启用"}</button><button type="button" className="danger" onClick={() => void removeAllowedIp(row.id)}>删除</button></div>)}
-              {!ipLoading && !(ipSettings?.rows || []).length && <div className="admin-empty">还没有白名单 IP。先加入当前 IP，再开启限制。</div>}
-            </div>
-            </div>
-          </details>}
+      {tab === "ip" && isOwner && (
+        <section className="admin-panel-card admin-ip-card admin-ip-page">
+          <div className="admin-card-title"><div><span>LOGIN ACCESS</span><h3>IP 白名单</h3><p className="admin-card-subtitle">当前 IP：{ipSettings?.currentIp || "读取中..."}</p></div><button type="button" className={ipSettings?.enabled ? "admin-ip-mode on" : "admin-ip-mode"} disabled={ipLoading || !ipSettings} onClick={() => void toggleIpMode()}>{ipSettings?.enabled ? "已开启 · 必须白名单" : "未开启 · 账号密码即可"}</button></div>
+          <form className="admin-ip-add" onSubmit={addIp}>
+            <input value={ipInput} onChange={(e) => setIpInput(e.target.value)} placeholder="IPv4 / IPv6" aria-label="白名单 IP" />
+            <input value={ipNote} onChange={(e) => setIpNote(e.target.value)} placeholder="备注，例如 办公室 / 家里" aria-label="IP 备注" />
+            <button type="submit" disabled={ipLoading}>加入白名单</button>
+            {ipSettings?.currentIp && <button type="button" className="ghost" onClick={() => setIpInput(ipSettings.currentIp)}>填入当前 IP</button>}
+          </form>
+          <div className="admin-ip-list">
+            {(ipSettings?.rows || []).map((row) => <div className="admin-ip-row" key={row.id}><div><b>{row.ip}</b><span>{row.note || "无备注"}</span></div><em className={row.active ? "on" : "off"}>{row.active ? "启用" : "停用"}</em><button type="button" onClick={() => void toggleAllowedIp(row.id, !row.active)}>{row.active ? "停用" : "启用"}</button><button type="button" className="danger" onClick={() => void removeAllowedIp(row.id)}>删除</button></div>)}
+            {!ipLoading && !(ipSettings?.rows || []).length && <div className="admin-empty">还没有白名单 IP。先加入当前 IP，再开启限制。</div>}
+          </div>
+        </section>
+      )}
 
+      {(tab === "accounts" || tab === "permissions") && (canManageUsers || isOwner) && (
+        <div className="admin-users-compact">
           <section className="admin-panel-card admin-account-directory admin-permission-directory">
             <div className="admin-account-directory-head">
-              <div><h3>按模块、页面和具体操作配置权限</h3><p>按账号独立授权；点击模块查看详情，调整后统一保存。</p></div>
-              <div className="admin-account-toolbar-actions"><button type="button" className="admin-light-btn" disabled={loading} onClick={() => void loadUsers()}>{loading ? "刷新中…" : "刷新"}</button><button type="button" className="admin-account-create-toggle" aria-expanded={createOpen} aria-controls="admin-create-account" onClick={() => setCreateOpen(!createOpen)}>{createOpen ? "收起新建" : "+ 新建账号"}</button></div>
+              <div>{tab === "accounts" ? <><h3>账号列表</h3><p>建立账号，管理角色、启停状态、数据范围与密码。</p></> : <><h3>按模块、页面和具体操作配置权限</h3><p>按账号独立授权；点击模块查看详情，调整后统一保存。</p></>}</div>
+              <div className="admin-account-toolbar-actions"><button type="button" className="admin-light-btn" disabled={loading} onClick={() => void loadUsers()}>{loading ? "刷新中…" : "刷新"}</button>{tab === "accounts" && <button type="button" className="admin-account-create-toggle" aria-expanded={createOpen} aria-controls="admin-create-account" onClick={() => setCreateOpen(!createOpen)}>{createOpen ? "收起新建" : "+ 新建账号"}</button>}</div>
             </div>
-            <div className="admin-permission-overview"><div><b>{users.length}</b> 当前账号</div><div><b>{ACCOUNT_PERMISSION_MODULES.length}</b> 权限模块</div><div><b>{ALL_ACCOUNT_PERMISSIONS.length}</b> 权限项</div><div><b>{ALL_ACCOUNT_PERMISSIONS.filter((item) => item.kind === "management").length}</b> 后台权限</div><span>权限项与现有系统一致，不新增授权范围</span></div>
-          {createOpen && <section id="admin-create-account" className="admin-create-card-v249 admin-account-create-panel">
+            {tab === "permissions" ? <div className="admin-permission-overview"><div><b>{users.length}</b> 当前账号</div><div><b>{ACCOUNT_PERMISSION_MODULES.length}</b> 权限模块</div><div><b>{ALL_ACCOUNT_PERMISSIONS.length}</b> 权限项</div><div><b>{ALL_ACCOUNT_PERMISSIONS.filter((item) => item.kind === "management").length}</b> 后台权限</div><span>权限项与现有系统一致，不新增授权范围</span></div> : <div className="admin-permission-overview admin-account-overview"><div><b>{users.length}</b> 全部账号</div><div><b>{stats.owners}</b> 总管理员</div><div><b>{stats.admins}</b> 管理员</div><div><b>{stats.viewers}</b> 查看账号</div><div><b>{stats.disabled}</b> 已停用</div></div>}
+          {tab === "accounts" && createOpen && <section id="admin-create-account" className="admin-create-card-v249 admin-account-create-panel">
             <div className="admin-account-form-title"><h4>新建账号</h4><button type="button" className="admin-light-btn" disabled={createBusy} onClick={() => setCreateOpen(false)}>取消</button></div>
             <div className="admin-role-picker">
               {isOwner && <button type="button" className={newRole === "admin" ? "active" : ""} onClick={() => resetCreateRole("admin")}><b>小管理员</b><small>可继续分配后台管理权限</small></button>}
@@ -644,40 +674,41 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
           </section>}
 
             <div className="admin-search-toolbar admin-user-search-toolbar">
-              <div className="admin-search-field wide"><label>搜索账号 / 权限</label><input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="输入账号、角色、模块或后台权限" /></div>
+              <div className="admin-search-field wide"><label>{tab === "accounts" ? "搜索账号" : "搜索账号 / 权限"}</label><input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder={tab === "accounts" ? "输入账号、角色或数据范围" : "输入账号、角色、模块或后台权限"} /></div>
               <div className="admin-search-field"><label>角色</label><select value={userRoleFilter} onChange={(e) => setUserRoleFilter(e.target.value as any)}><option value="all">全部角色</option><option value="owner">总管理员</option><option value="admin">管理员</option><option value="viewer">查看账号</option></select></div>
               <div className="admin-search-field"><label>状态</label><select value={userStatusFilter} onChange={(e) => setUserStatusFilter(e.target.value as any)}><option value="all">全部状态</option><option value="active">正常</option><option value="disabled">停用</option></select></div>
             </div>
-            <div className="admin-permission-table-meta"><span>显示 {filteredUsers.length} / {users.length} 个账号</span><div className="admin-permission-legend"><span className="all">全部已开</span><span className="partial">部分已开</span><span className="none">未开</span></div></div>
-            {loading && !users.length ? <div className="admin-empty">正在读取账号...</div> : <div className="admin-account-table-wrap"><table className="admin-account-table admin-permission-matrix"><thead><tr><th scope="col">账号 / 角色</th><th scope="col">模块权限 · 已开 / 权限总数</th><th scope="col">操作</th></tr></thead><tbody>
+            <div className="admin-permission-table-meta"><span>显示 {filteredUsers.length} / {users.length} 个账号</span>{tab === "permissions" && <div className="admin-permission-legend"><span className="all">全部已开</span><span className="partial">部分已开</span><span className="none">未开</span></div>}</div>
+            {loading && !users.length ? <div className="admin-empty">正在读取账号...</div> : <div className="admin-account-table-wrap"><table className={`admin-account-table ${tab === "permissions" ? "admin-permission-matrix" : "admin-account-management-table"}`}><thead><tr><th scope="col">账号 / 角色</th><th scope="col">{tab === "permissions" ? "模块权限 · 已开 / 权限总数" : "数据范围 / 当前权限"}</th><th scope="col">操作</th></tr></thead><tbody>
               {filteredUsers.map((user) => {
                 const draft = createPermissionDraft(user);
                 const enabled = ALL_ACCOUNT_PERMISSIONS.filter((item) => draft[item.id]).length;
                 const editable = canEditTarget(user);
-                const expanded = editable && editingUsername === user.username;
+                const expanded = tab === "accounts" && editable && editingUsername === user.username;
                 const editId = `admin-account-edit-${user.auth_user_id}`;
                 return <Fragment key={user.auth_user_id}><tr className={expanded ? "is-editing" : ""}>
                   <th scope="row"><div className="admin-matrix-identity"><div><strong>{user.username}</strong>{user.role === "owner" && <span className="admin-matrix-protected">锁定</span>}</div><div className="admin-matrix-identity-meta"><span className={`admin-user-role ${user.role}`}>{roleLabel(user.role)}</span><span className={user.active ? "admin-user-state active" : "admin-user-state off"}>{user.active ? "正常" : "停用"}</span></div><small>{user.role === "owner" ? "OWNER · 固定权限" : `${roleEnglish(user.role)} · 账号独立授权`}</small></div></th>
-                  <td><div className="admin-account-scope-summary" title={dashboardScopeLabel(accountStoredScope(user))}><b>数据范围</b><span>{dashboardScopeLabel(accountStoredScope(user))}</span></div><div className="admin-module-permission-grid">{ACCOUNT_PERMISSION_MODULES.map((module) => {
+                  <td><div className="admin-account-scope-summary" title={dashboardScopeLabel(accountStoredScope(user))}><b>数据范围</b><span>{dashboardScopeLabel(accountStoredScope(user))}</span></div>{tab === "permissions" ? <div className="admin-module-permission-grid">{ACCOUNT_PERMISSION_MODULES.map((module) => {
                     const count = permissionModuleCount(module, draft);
                     const state = count.enabled === count.total ? "all" : count.enabled === 0 ? "none" : "partial";
                     return <button type="button" key={module.id} className={`admin-module-permission-chip ${state} module-${module.id}`} aria-label={`${user.username} · ${module.label}，已开 ${count.enabled} / ${count.total} 项，查看权限`} aria-haspopup="dialog" onClick={() => setPermissionTarget({ username: user.username, module: module.id })}><span>{module.label}</span><b>{count.enabled}<small>/{count.total}</small></b></button>;
-                  })}</div></td>
-                  <td><div className="admin-matrix-actions"><span className="admin-matrix-total">{enabled}<small> / {ALL_ACCOUNT_PERMISSIONS.length}</small></span><button type="button" className="admin-matrix-configure" aria-haspopup="dialog" onClick={() => setPermissionTarget({ username: user.username, module: "home" })}>{editable ? "配置权限" : user.role === "owner" ? "查看固定权限" : "查看权限"}</button>{editable && <button type="button" className="admin-matrix-account-settings" aria-expanded={expanded} aria-controls={editId} onClick={() => { setEditingUsername(expanded ? "" : user.username); setResetTarget(""); setResetPassword(""); }}>{expanded ? "收起账号设置" : "账号设置"}<span aria-hidden="true">{expanded ? "⌃" : "⌄"}</span></button>}</div></td>
+                  })}</div> : <div className="admin-account-permission-summary">{permissionSummary(user)}</div>}</td>
+                  <td><div className="admin-matrix-actions">{tab === "permissions" ? <><span className="admin-matrix-total">{enabled}<small> / {ALL_ACCOUNT_PERMISSIONS.length}</small></span><button type="button" className="admin-matrix-configure" aria-haspopup="dialog" onClick={() => setPermissionTarget({ username: user.username, module: "home" })}>{editable ? "配置权限" : user.role === "owner" ? "查看固定权限" : "查看权限"}</button></> : editable ? <button type="button" className="admin-matrix-configure" aria-expanded={expanded} aria-controls={editId} onClick={() => { setEditingUsername(expanded ? "" : user.username); setResetTarget(""); setResetPassword(""); }}>{expanded ? "收起账号设置" : "账号设置"}</button> : <span className="admin-account-readonly">固定账号</span>}</div></td>
                 </tr>
                   {expanded && <tr className="admin-account-editor-row"><td colSpan={3}><div id={editId} className="admin-user-edit-grid admin-account-editor">
-                    <div className="admin-account-edit-hint"><strong>{user.username} · 账号设置</strong><span>{savingUser === user.username ? "正在保存…" : "角色、启停和密码独立管理；模块权限请使用「配置权限」"}</span></div>
+                    <div className="admin-account-edit-hint"><strong>{user.username} · 账号设置</strong><span>{savingUser === user.username ? "正在保存…" : "角色、启停、数据范围和密码在这里管理；模块权限请前往左侧「权限管理」"}</span></div>
                     {isOwner && user.role !== "owner" && <AccountRoleEditor key={`${user.auth_user_id}:${user.role}`} user={user} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />}
                     <AccountDataScopeEditor key={`scope-${user.auth_user_id}:${user.updated_at || "legacy"}`} user={user} actor={profile} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />
                     <div className="admin-user-buttons-v249"><button type="button" disabled={savingUser === user.username} onClick={() => void saveAccount(user, { active: !user.active })}>{user.active ? "停用" : "启用"}</button><button type="button" disabled={savingUser === user.username} onClick={() => { setResetTarget(resetTarget === user.username ? "" : user.username); setResetPassword(""); }}>重置密码</button><button className="danger" type="button" disabled={savingUser === user.username} onClick={() => void removeAccount(user)}>删除账号</button></div>
                     {resetTarget === user.username && <form className="admin-inline-reset" onSubmit={submitResetPassword}><input type="password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} placeholder="输入新的临时密码（至少 8 位）" autoFocus /><button type="submit" disabled={savingUser === user.username}>保存新密码</button><button type="button" onClick={() => setResetTarget("")}>取消</button></form>}
+                    {accountFeedback[user.username] && <p className={`admin-account-feedback ${accountFeedback[user.username].tone}`} role={accountFeedback[user.username].tone === "error" ? "alert" : "status"}>{accountFeedback[user.username].text}</p>}
                   </div></td></tr>}
                 </Fragment>;
               })}
               {!filteredUsers.length && <tr><td colSpan={3}><div className="admin-empty admin-filter-empty">没有符合当前搜索条件的账号。</div></td></tr>}
             </tbody></table></div>}
           </section>
-          {permissionTarget && users.filter((user) => user.username === permissionTarget.username).map((user) => <AccountPermissionDialog key={`${user.auth_user_id}:${user.role}`} actor={profile} user={user} initialModule={permissionTarget.module} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} onClose={() => setPermissionTarget(null)} />)}
+          {tab === "permissions" && permissionTarget && users.filter((user) => user.username === permissionTarget.username).map((user) => <AccountPermissionDialog key={`${user.auth_user_id}:${user.role}`} actor={profile} user={user} initialModule={permissionTarget.module} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} onClose={() => setPermissionTarget(null)} />)}
         </div>
       )}
 

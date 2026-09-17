@@ -27,8 +27,17 @@ const compiled = ts.transpileModule(functions.map(fn => fn.getText(source)).join
 const api = Function('require', ...Object.keys(dependencies), compiled + `
   return { expandRateNameCandidates, buildRateMap, findMatchedRate,
     rateFor, singleFeeFor, estimateSideFee, rateHasSideFee, normalizeVolumeRowForDisplay, aggregateCombo,
-    rateNameKey, rateCountriesCompatible };
+    rateNameKey, rateCountriesCompatible, ratePayloadUsable, ratePayloadFresh };
 `)(require, ...Object.values(dependencies));
+
+test('empty fee responses are never treated as a fresh usable cache', () => {
+  const freshMeta = { updatedAt: new Date().toISOString() };
+  assert.equal(api.ratePayloadUsable(null), false);
+  assert.equal(api.ratePayloadUsable({ meta: freshMeta, rates: [] }), false);
+  assert.equal(api.ratePayloadFresh({ meta: freshMeta, rates: [] }), false);
+  assert.equal(api.ratePayloadUsable({ meta: freshMeta, rates: [{ id: 'rate-1' }] }), true);
+  assert.equal(api.ratePayloadFresh({ meta: freshMeta, rates: [{ id: 'rate-1' }] }), true);
+});
 
 const ARB2 = ['ArbPay2INR-BANK', 'ArbPay2INR-UPI'];
 test('the live Supabase dashboard normalizes saved Arb2 types, not only the source parser', () => {

@@ -133,6 +133,13 @@
 .admin-account-editor .admin-user-buttons-v249 button { min-height: 30px; padding: 5px 10px; font-size: 11px; }
 .admin-account-editor .admin-inline-reset { margin: 0; }
 .admin-account-editor .admin-inline-reset button { font-size: 11px; }
+.admin-account-feedback { margin: 0; padding: 9px 11px; border: 1px solid; border-radius: 7px; font-size: 12px; line-height: 1.5; }
+.admin-account-feedback.success { border-color: #b7e4cf; background: #ecf9f3; color: #217255; }
+.admin-account-feedback.error { border-color: #f2c6c6; background: #fff4f4; color: #a23f3f; }
+.admin-account-management-table > thead > tr > th:first-child { width: 210px; }
+.admin-account-management-table > thead > tr > th:last-child { width: 140px; }
+.admin-account-management-table .admin-account-permission-summary { max-width: none; }
+.admin-ip-page { min-width: 0; }
 .admin-account-role-editor { padding-bottom: 10px; border-bottom: 1px solid #e5edf8; }
 .admin-account-role-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; }
 .admin-account-role-controls select { min-height: 34px; padding: 4px 26px 4px 9px; border: 1px solid #cbdcf6; border-radius: 6px; background: #fff; color: #25354d; font: inherit; }

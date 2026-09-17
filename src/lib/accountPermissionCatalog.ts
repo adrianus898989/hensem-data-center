@@ -56,7 +56,7 @@ export const ACCOUNT_PERMISSION_MODULES: readonly PermissionModule[] = [
     id: "management", label: "管理后台", description: "仅总管理员可以调整管理员的后台权限。",
     items: [
       { id: "manage_viewers", key: "manage_viewers", kind: "management", label: "账号管理",
-        description: "建立、停用、删除查看账号，以及重置查看账号密码。", page: "管理后台 / 账号与权限", sensitive: true },
+        description: "建立、停用、删除查看账号，以及重置查看账号密码。", page: "管理后台 / 账号管理", sensitive: true },
       { id: "refresh_data", key: "refresh_data", kind: "management", label: "数据刷新",
         description: "手动刷新今日、昨日、费率与历史补齐数据。", page: "管理后台 / 数据同步", sensitive: true },
       { id: "view_audit", key: "view_audit", kind: "management", label: "操作记录",

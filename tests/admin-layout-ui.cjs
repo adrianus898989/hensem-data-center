@@ -83,9 +83,9 @@ const mockSession = {
     await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
     await page.getByRole("button", { name: /管理后台/ }).waitFor({ timeout: 60000 });
     await page.getByRole("button", { name: /管理后台/ }).click();
-    await page.getByRole("button", { name: /账号与权限/ }).click();
+    await page.getByRole("button", { name: /权限管理/ }).click();
     await page.locator(".admin-permission-matrix tbody tr").first().waitFor();
-    const rows = () => page.locator(".admin-permission-matrix tbody > tr:not(.admin-account-editor-row)");
+    const rows = () => page.locator(".admin-account-table tbody > tr:not(.admin-account-editor-row)");
     const row = name => rows().filter({ has: page.locator(".admin-matrix-identity strong").filter({ hasText: new RegExp("^" + name + "$") }) });
     const dialog = () => page.getByRole("dialog", { name: /设置权限/ });
     const card = key => dialog().locator(".account-permission-card").filter({ has: page.locator("code").filter({ hasText: new RegExp("^" + key + "$") }) });
@@ -132,6 +132,7 @@ const mockSession = {
       await mod(1);await box("third_party").uncheck();assert.equal(updates().length,0);
       await dialog().getByRole("button",{name:"保存权限",exact:true}).click();await dialog().waitFor({state:"hidden"});
       assert.deepEqual(updates(),[{action:"update-account",username:"report01",permissions:{...thirdPartyOnly,third_party:false}}]);
+      await page.getByRole("button", { name: /账号管理/ }).click();
       await row("report01").getByRole("button",{name:"账号设置",exact:true}).click();
       assert.equal(await page.locator(".admin-account-role-editor").count(),0);
       assert.deepEqual(errors,[]);assert.deepEqual(rejectedOrigins,[]);
@@ -179,6 +180,7 @@ const mockSession = {
     assert.match(await confirm(()=>dialog().getByRole("button",{name:"取消",exact:true}).click(),true),/放弃修改/);
     await dialog().waitFor({state:"hidden"});assert.equal(updates().length,2);
     await open("finance01","third_party");assert(await box("third_party").isChecked());await close();
+    await page.getByRole("button", { name: /账号管理/ }).click();
     await row("finance01").getByRole("button",{name:"账号设置",exact:true}).click();
     const editor=page.locator(".admin-account-editor");
     assert.equal(await editor.count(),1);assert.equal(await editor.getByLabel("账号角色",{exact:true}).inputValue(),"admin");
@@ -196,9 +198,10 @@ const mockSession = {
     await create.getByRole("button",{name:/小管理员/}).click();
     assert.deepEqual(await create.locator("input[type=checkbox]").evaluateAll(inputs=>inputs.map(i=>i.checked)),[true,true,true,true,true,true]);
     await create.getByRole("button",{name:"取消",exact:true}).click();assert(!requests.some(r=>r.action==="create-account"));
+    await page.getByRole("button", { name: /权限管理/ }).click();
     const responsive=[];
     for(const viewport of [{width:1728,height:1080},{width:1366,height:768},{width:390,height:844}]){
-      await page.setViewportSize(viewport);await page.getByRole("button",{name:"+ 新建账号",exact:true}).scrollIntoViewIfNeeded();
+      await page.setViewportSize(viewport);await page.locator(".admin-permission-matrix").scrollIntoViewIfNeeded();
       let size=await page.evaluate(()=>({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth}));
       assert(size.scroll<=size.width+1,"Matrix document overflow at "+viewport.width);
       if(viewport.width===390)await screenshot("admin-permission-matrix-mobile.png");

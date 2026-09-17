@@ -37,10 +37,6 @@ function validDate(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`));
 }
 
-function providerKey(country: string, channel: string): string {
-  return `${workOrderDepositCountry(country)}\u001f${canonicalThirdPartyName(channel, workOrderDepositCountry(country))}`;
-}
-
 function platformKey(country: string, platform: string): string {
   return canonicalThirdPartyPlatform(country, platform).trim().toUpperCase();
 }
@@ -48,6 +44,82 @@ function platformKey(country: string, platform: string): string {
 function isUnmarkedProvider(value: string): boolean {
   const key = String(value || "").trim().toLowerCase().replace(/[\s_\-]+/g, "");
   return !key || key === "未标记三方".toLowerCase() || key === "未分类三方".toLowerCase() || key === "unknown" || key === "unmarked";
+}
+
+function workOrderProviderPart(value: string): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9一-龥]+/g, "");
+}
+
+/**
+ * Some AR work-order backends put the payment rail in `third_party` and the
+ * actual provider in `channel_type`. Resolve only source combinations already
+ * confirmed by the business. An unconfirmed pair stays traceable and separate
+ * instead of being merged into a guessed provider.
+ */
+export function workOrderDepositThirdPartyName(country: string, thirdParty: string, channelType = ""): string {
+  const normalizedCountry = workOrderDepositCountry(country);
+  const rawThirdParty = String(thirdParty || "").trim();
+  // A traceable generic-rail label produced below must be idempotent when the
+  // dashboard turns that display value back into a provider filter key.
+  if (!String(channelType || "").trim() && rawThirdParty.includes(" / ")) return rawThirdParty;
+  const rawKey = workOrderProviderPart(thirdParty);
+  const channelKey = workOrderProviderPart(channelType);
+  let confirmed = "";
+  let genericRail = false;
+
+  if (normalizedCountry === "印度") {
+    const paytmProviders: Record<string, string> = {
+      ic2payinr: "ICPay",
+      ninepayinr: "NinePay",
+      ox2payinr: "OXPay",
+      rapayinr: "RAPay",
+      umoneypayinr: "UmoneyPay",
+      wepay2inr: "WePay",
+      wpayinr: "WPay",
+    };
+    const qrProviders: Record<string, string> = {
+      umoneypayinr: "UmoneyPay",
+      wepay2inr: "WePay",
+    };
+    if (rawKey === "paytm") {
+      genericRail = true;
+      confirmed = paytmProviders[channelKey] || "";
+    } else if (rawKey === "qr") {
+      genericRail = true;
+      confirmed = qrProviders[channelKey] || "";
+    }
+  } else if (normalizedCountry === "缅甸") {
+    if (rawKey === "kbzpay" || rawKey === "wavepay") {
+      genericRail = true;
+      if (channelKey === "kingpaymmk") confirmed = "KingPay";
+      else if (channelKey === "ytpaymmk") confirmed = "YTPay";
+    }
+  } else if (normalizedCountry === "马来") {
+    if (rawKey === "duitnow") {
+      genericRail = true;
+      if (channelKey === "fpaymyr") confirmed = "FPay";
+    } else if (rawKey === "touchngo") {
+      genericRail = true;
+      if (channelKey === "truepaymyr") confirmed = "TruePay";
+    }
+  }
+
+  if (confirmed) return canonicalThirdPartyName(confirmed, normalizedCountry);
+  if (genericRail && channelKey && channelKey !== rawKey) {
+    return `${rawThirdParty} / ${String(channelType || "").trim()}`;
+  }
+  return canonicalThirdPartyName(thirdParty, normalizedCountry);
+}
+
+function providerKey(country: string, channel: string): string {
+  return `${workOrderDepositCountry(country)}\u001f${workOrderDepositThirdPartyName(country, channel)}`;
+}
+
+function workOrderRowProviderKey(country: string, row: WorkOrderDepositRow): string {
+  return `${workOrderDepositCountry(country)}\u001f${workOrderDepositThirdPartyName(country, row.third_party, row.channel_type)}`;
 }
 
 /** A work-order metric is joined only by its real, normalized provider name. */
@@ -117,7 +189,7 @@ export function buildWorkOrderDepositView(input: {
     for (const row of rows) {
       if (!dates.includes(row.stat_date)) continue;
       const country = workOrderDepositCountry(row.country_code || row.country, row.platform);
-      const provider = providerKey(country, row.third_party);
+      const provider = workOrderRowProviderKey(country, row);
       if (allowed && !allowed.has(provider)) continue;
       submittedAmount += number(row.submitted_amount); submittedCount += number(row.submitted_count);
       successAmount += number(row.success_amount); successCount += number(row.success_count);
@@ -135,8 +207,8 @@ export function buildWorkOrderDepositView(input: {
   const providers = new Map<string, { key: string; country: string; channel: string; submittedAmount: number; submittedCount: number; successAmount: number; successCount: number; withdrawNotReceivedAmount: number; withdrawNotReceivedCount: number; withdrawSuccessAmount: number; withdrawSuccessCount: number }>();
   for (const row of currentRows) {
     const country = workOrderDepositCountry(row.country_code || row.country, row.platform);
-    const channel = canonicalThirdPartyName(row.third_party, country);
-    const key = providerKey(country, channel);
+    const channel = workOrderDepositThirdPartyName(country, row.third_party, row.channel_type);
+    const key = workOrderRowProviderKey(country, row);
     if (input.provider && key !== providerKey(requestedCountry, input.provider)) continue;
     const item = providers.get(key) || { key, country, channel, submittedAmount: 0, submittedCount: 0, successAmount: 0, successCount: 0, withdrawNotReceivedAmount: 0, withdrawNotReceivedCount: 0, withdrawSuccessAmount: 0, withdrawSuccessCount: 0 };
     item.submittedAmount += number(row.submitted_amount); item.submittedCount += number(row.submitted_count);

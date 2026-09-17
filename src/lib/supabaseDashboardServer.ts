@@ -942,6 +942,10 @@ function buildRateSummary(rates: ThirdPartyRateRow[], statuses: ThirdPartyPlatfo
 export async function readSupabaseThirdPartyRates(request: Request): Promise<ThirdPartyRatePayload> {
   const access = await requireDashboardDataAccess(request, "third_party");
   const {token} = access;
+  // The volume dashboard only needs the national fee table for all-data
+  // accounts.  Avoid transferring the 4k+ platform-status matrix on that hot
+  // path; the dedicated rates/configuration page still receives it by default.
+  const includeStatuses = new URL(request.url).searchParams.get("includeStatuses") !== "0";
   const rateQuery = new URLSearchParams();
   rateQuery.set("select", "id,sheet_name,country,category,third_party,collect_fee,payout_fee,total_fee,collect_single_fee,payout_single_fee,collect_limit,payout_limit,channel_info,leak,whitelist,status,source_row,updated_at");
   rateQuery.set("order", "country.asc,third_party.asc");
@@ -951,7 +955,9 @@ export async function readSupabaseThirdPartyRates(request: Request): Promise<Thi
 
   const [fetchedRates, fetchedStatuses] = await Promise.all([
     fetchPaged<DbRateRow>("third_party_rates", rateQuery, token),
-    fetchPaged<DbStatusRow>("third_party_platform_status", statusQuery, token)
+    includeStatuses
+      ? fetchPaged<DbStatusRow>("third_party_platform_status", statusQuery, token)
+      : Promise.resolve([] as DbStatusRow[])
   ]);
   const dbRates = dashboardAllowedRows(access, fetchedRates);
   const dbStatuses = dashboardAllowedRows(access, fetchedStatuses);

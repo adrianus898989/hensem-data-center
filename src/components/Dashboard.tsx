@@ -908,6 +908,7 @@ export default function Dashboard() {
   const managementPermissions = normalizedManagementPermissions(profile);
   const isOwner = profile?.role === "owner";
   const canAdminUsers = Boolean(profile && (isOwner || managementPermissions.manage_viewers));
+  const canAdminIp = Boolean(profile && isOwner);
   const canAdminData = Boolean(profile && (isOwner || managementPermissions.refresh_data));
   const canAdminAudit = Boolean(profile && (isOwner || managementPermissions.view_audit));
   const [state, setState] = useState<LoadState>("idle");
@@ -920,7 +921,7 @@ export default function Dashboard() {
   const [draftFilters, setDraftFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [activeModule, setActiveModule] = useState<ModuleMode>("home");
   const [adminExpanded, setAdminExpanded] = useState(false);
-  const [adminSection, setAdminSection] = useState<"users" | "data" | "audit">("users");
+  const [adminSection, setAdminSection] = useState<"accounts" | "permissions" | "ip" | "data" | "audit">("accounts");
   const [autoView, setAutoView] = useState<AutoView>("daily");
   const [autoCountryPane, setAutoCountryPane] = useState<string>("");
   const [operatorCountryPane, setOperatorCountryPane] = useState<string>("");
@@ -980,13 +981,13 @@ export default function Dashboard() {
     const openAdmin = () => {
       if (!profile || !canOpenAdminCenter(profile)) return;
       setAdminExpanded(true);
-      const first = canAdminUsers ? "users" : canAdminData ? "data" : "audit";
+      const first = canAdminUsers ? "accounts" : canAdminIp ? "ip" : canAdminData ? "data" : "audit";
       setAdminSection(first);
       setActiveModule("admin");
     };
     window.addEventListener("hensem:open-admin", openAdmin as EventListener);
     return () => window.removeEventListener("hensem:open-admin", openAdmin as EventListener);
-  }, [profile, canAdminUsers, canAdminData, canAdminAudit]);
+  }, [profile, canAdminUsers, canAdminIp, canAdminData, canAdminAudit]);
 
   async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "") {
     if (!silent) setState("loading");
@@ -1709,7 +1710,9 @@ export default function Dashboard() {
             <span className="nav-admin-toggle">{adminExpanded ? "⌃" : "⌄"}</span>
           </button>
           {adminExpanded && <div className="nav-admin-submenu">
-            {canAdminUsers && <button className={activeModule === "admin" && adminSection === "users" ? "active" : ""} onClick={() => { setAdminSection("users"); setActiveModule("admin"); }}><span>账号与权限</span><small>账号 / 角色 / IP</small></button>}
+            {canAdminUsers && <button className={activeModule === "admin" && adminSection === "accounts" ? "active" : ""} onClick={() => { setAdminSection("accounts"); setActiveModule("admin"); }}><span>账号管理</span><small>账号 / 角色 / 密码</small></button>}
+            {canAdminUsers && <button className={activeModule === "admin" && adminSection === "permissions" ? "active" : ""} onClick={() => { setAdminSection("permissions"); setActiveModule("admin"); }}><span>权限管理</span><small>模块 / 页面 / 操作</small></button>}
+            {canAdminIp && <button className={activeModule === "admin" && adminSection === "ip" ? "active" : ""} onClick={() => { setAdminSection("ip"); setActiveModule("admin"); }}><span>IP 白名单</span><small>登录限制 / 可信 IP</small></button>}
             {canAdminData && <button className={activeModule === "admin" && adminSection === "data" ? "active" : ""} onClick={() => { setAdminSection("data"); setActiveModule("admin"); }}><span>数据同步</span><small>完整度 / 手动刷新</small></button>}
             {canAdminAudit && <button className={activeModule === "admin" && adminSection === "audit" ? "active" : ""} onClick={() => { setAdminSection("audit"); setActiveModule("admin"); }}><span>操作记录</span><small>后台审计日志</small></button>}
           </div>}

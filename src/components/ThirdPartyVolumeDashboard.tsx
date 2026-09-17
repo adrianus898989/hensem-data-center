@@ -1935,11 +1935,19 @@ async function safeReadJson(response: Response, label: string): Promise<any> {
 }
 
 const THIRD_PARTY_VOLUME_CACHE_KEY = "hensem:last-good:third-party-volume:v252-submission-success";
-const THIRD_PARTY_RATES_CACHE_KEY = "hensem:last-good:third-party-rates:v251";
+const THIRD_PARTY_RATES_CACHE_KEY = "hensem:last-good:third-party-rates:v252-nonempty";
 const THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS = 25_000;
 const THIRD_PARTY_VOLUME_QUERY_TIMEOUT_SECONDS = Math.round(THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS / 1000);
+const THIRD_PARTY_RATES_QUERY_TIMEOUT_MS = 20_000;
+
+function ratePayloadUsable(payload: ThirdPartyRatePayload | null | undefined): payload is ThirdPartyRatePayload {
+  return Array.isArray(payload?.rates) && payload.rates.length > 0;
+}
 
 function ratePayloadFresh(payload: ThirdPartyRatePayload | null | undefined, maxAgeMs = 55 * 60 * 1000): boolean {
+  // Never treat an HTTP-200 empty response as a successful fee snapshot.  That
+  // used to overwrite the last good cache and made every fee render as zero.
+  if (!ratePayloadUsable(payload)) return false;
   const updatedAt = String((payload?.meta as any)?.snapshotUpdatedAt || payload?.meta?.updatedAt || "");
   const time = new Date(updatedAt).getTime();
   return Number.isFinite(time) && Date.now() - time < maxAgeMs;
@@ -2082,13 +2090,24 @@ export default function ThirdPartyVolumeDashboard() {
     setError("");
     try {
       const volumeUrl = thirdPartyVolumeApiUrl(requestedStart, requestedEnd, version, requestedCountry);
-      const cachedRateBeforeFetch = ratePayload || readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY,profile);
+      const storedRateBeforeFetch = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY,profile);
+      const cachedRateBeforeFetch = ratePayloadUsable(ratePayload)
+        ? ratePayload
+        : ratePayloadUsable(storedRateBeforeFetch) ? storedRateBeforeFetch : null;
       const shouldFetchRates = forceRates || !ratePayloadFresh(cachedRateBeforeFetch);
+      const ratesUrl = effectiveDashboardDataScope(profile).mode === "all"
+        ? "/api/supabase-third-party-rates?includeStatuses=0"
+        : "/api/supabase-third-party-rates";
+      let rateTransportError = "";
 
       const [firstVolumeRes, rateRes, statusRes] = await Promise.all([
         dashboardBusinessFetch(volumeUrl, { signal: AbortSignal.timeout(THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS) }),
-        shouldFetchRates ? dashboardBusinessFetch("/api/supabase-third-party-rates", { signal: AbortSignal.timeout(8000) })
-          .catch(error=>{if(isDashboardDataDenied(error))throw error;return null;}) : Promise.resolve(null),
+        shouldFetchRates ? dashboardBusinessFetch(ratesUrl, { signal: AbortSignal.timeout(THIRD_PARTY_RATES_QUERY_TIMEOUT_MS) })
+          .catch(error=>{
+            if(isDashboardDataDenied(error))throw error;
+            rateTransportError = error instanceof Error ? error.message : "网络请求失败";
+            return null;
+          }) : Promise.resolve(null),
         requestedStart && requestedEnd && effectiveDashboardDataScope(profile).mode==="all" ? dashboardBusinessFetch(thirdPartySyncStatusApiUrl(requestedStart, requestedEnd), { signal: AbortSignal.timeout(8000) })
           .catch(() => null) : Promise.resolve(null)
       ]);
@@ -2102,18 +2121,46 @@ export default function ThirdPartyVolumeDashboard() {
 
       const volumeRows = json?.rows || [];
       // Server-authorized zero rows are valid after a scope/date change.
-      setPayload(json);payloadRef.current=json;setDataNotice("");
+      setPayload(json);payloadRef.current=json;
       const cacheableCurrentSlice=rangeIncludesCurrentMonth(requestedStart,requestedEnd)
         && (!requestedStart || !requestedEnd || requestedStart===requestedEnd);
       if(cacheableCurrentSlice)writeLocalCache(THIRD_PARTY_VOLUME_CACHE_KEY,json,profile);
 
+      let rateNotice = "";
       if (rateRes && rateRes.ok) {
-        const rateJson = await safeReadJson(rateRes, "三方费率") as ThirdPartyRatePayload;
-        setRatePayload(rateJson);
-        writeLocalCache(THIRD_PARTY_RATES_CACHE_KEY,rateJson,profile);
-      } else if (cachedRateBeforeFetch) {
+        try {
+          const rateJson = await safeReadJson(rateRes, "三方费率") as ThirdPartyRatePayload;
+          if (!ratePayloadUsable(rateJson)) {
+            throw new Error("手续费接口返回空费率表");
+          }
+          setRatePayload(rateJson);
+          writeLocalCache(THIRD_PARTY_RATES_CACHE_KEY,rateJson,profile);
+        } catch (rateError) {
+          const reason = rateError instanceof Error ? rateError.message : "手续费数据格式异常";
+          setRatePayload(cachedRateBeforeFetch);
+          rateNotice = cachedRateBeforeFetch
+            ? `手续费接口刚才异常，当前保留上一份有效费率：${reason}`
+            : `手续费费率暂未载入（不会按 0 展示）：${reason}`;
+        }
+      } else if (shouldFetchRates) {
+        let reason = rateTransportError;
+        if (!reason && rateRes) {
+          try {
+            const rateErrorJson = await safeReadJson(rateRes, "三方费率");
+            reason = String(rateErrorJson?.message || `HTTP ${rateRes.status}`);
+          } catch (rateError) {
+            reason = rateError instanceof Error ? rateError.message : `HTTP ${rateRes.status}`;
+          }
+        }
+        if (!reason) reason = "请求超时或网络中断";
+        setRatePayload(cachedRateBeforeFetch);
+        rateNotice = cachedRateBeforeFetch
+          ? `手续费接口刚才失败，当前保留上一份有效费率：${reason}`
+          : `手续费费率暂未载入（不会按 0 展示）：${reason}`;
+      } else {
         setRatePayload(cachedRateBeforeFetch);
       }
+      setDataNotice(rateNotice);
 
       if (statusRes && statusRes.ok) {
         try { setVolumeSyncStatus(await statusRes.json() as VolumeSyncStatus); } catch { /* 状态不影响主数据 */ }
@@ -2137,7 +2184,8 @@ export default function ThirdPartyVolumeDashboard() {
       const currentRows = currentPayload?.rows || [];
       const currentMatchesSelection = Boolean(currentRows.length && currentRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd) && rowMatchesRequestedCountry(row, requestedCountry)));
       const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY,profile);
-      const cachedRate = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY,profile);
+      const cachedRateCandidate = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY,profile);
+      const cachedRate = ratePayloadUsable(cachedRateCandidate) ? cachedRateCandidate : null;
       const cachedRows = cachedVolume?.rows || [];
       const cacheMatchesSelection = Boolean(cachedRows.length && cachedRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd) && rowMatchesRequestedCountry(row, requestedCountry)));
 
@@ -2145,7 +2193,7 @@ export default function ThirdPartyVolumeDashboard() {
         const shown = attachClientFallbackMessage(currentPayload, message);
         setPayload(shown);
         payloadRef.current = shown;
-        setRatePayload(cachedRate || ratePayload);
+        setRatePayload(cachedRate || (ratePayloadUsable(ratePayload) ? ratePayload : null));
         setDataNotice(`Supabase 刚才读取失败，当前保留上一份成功数据：${message}`);
         setState("ready");
         return true;
@@ -2706,6 +2754,10 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
   const previousFees = summarizeFeeRows(previousFeeRows);
   const netAmount = summary.collectAmount - summary.payoutAmount - fees.estimatedFee;
   const previousNetAmount = previousSummary.collectAmount - previousSummary.payoutAmount - previousFees.estimatedFee;
+  const collectFeeAvailable = !summary.collectAmount || fees.collectHasFee;
+  const payoutFeeAvailable = !summary.payoutAmount || fees.payoutHasFee;
+  const allFeesAvailable = collectFeeAvailable && payoutFeeAvailable;
+  const unavailableFeeStat = (label: string): PageStatItem => ({ label, value: "—", helper: "手续费费率暂未载入", tone: "fee" });
   const displayCountry = countryPaneLabel(country);
   return (
     <div className="country-volume-page range-volume-page">
@@ -2716,10 +2768,12 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
         comparativeStat("代收笔数", summary.collectCount, previousSummary.collectCount, canCompare, "collect"),
         comparativeStat("代付金额", summary.payoutAmount, previousSummary.payoutAmount, canCompare, "payout"),
         comparativeStat("代付笔数", summary.payoutCount, previousSummary.payoutCount, canCompare, "payout"),
-        comparativeStat("代收手续费", fees.collectFee, previousFees.collectFee, canCompare, "fee"),
-        comparativeStat("代付手续费", fees.payoutFee, previousFees.payoutFee, canCompare, "fee"),
-        comparativeStat("合计手续费", fees.estimatedFee, previousFees.estimatedFee, canCompare, "fee"),
-        { ...comparativeStat("业务净额", netAmount, previousNetAmount, canCompare, "net") as Exclude<PageStatItem, [string, string | number]>, helper: canCompare ? "代收－代付－手续费" : "代收－代付－手续费 · 单日可对比昨日" }
+        collectFeeAvailable ? comparativeStat("代收手续费", fees.collectFee, previousFees.collectFee, canCompare, "fee") : unavailableFeeStat("代收手续费"),
+        payoutFeeAvailable ? comparativeStat("代付手续费", fees.payoutFee, previousFees.payoutFee, canCompare, "fee") : unavailableFeeStat("代付手续费"),
+        allFeesAvailable ? comparativeStat("合计手续费", fees.estimatedFee, previousFees.estimatedFee, canCompare, "fee") : unavailableFeeStat("合计手续费"),
+        allFeesAvailable
+          ? { ...comparativeStat("业务净额", netAmount, previousNetAmount, canCompare, "net") as Exclude<PageStatItem, [string, string | number]>, helper: canCompare ? "代收－代付－手续费" : "代收－代付－手续费 · 单日可对比昨日" }
+          : { label: "业务净额", value: "—", helper: "手续费费率载入后计算", tone: "net" }
       ]} />
       <MonthlyTable
         title={`${displayCountry} 汇总`}

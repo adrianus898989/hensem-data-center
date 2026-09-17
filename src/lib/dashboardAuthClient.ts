@@ -239,23 +239,89 @@ async function readJson(response: Response) {
   try { json = text ? JSON.parse(text) : {}; } catch { json = {}; }
   if (!response.ok) {
     const message = json?.msg || json?.message || json?.error_description || json?.error || `HTTP ${response.status}`;
-    throw new DashboardHttpError(typeof message === "string" ? message : `HTTP ${response.status}`, response.status);
+    const code = json?.error_code || json?.code || "http_error";
+    throw new DashboardHttpError(
+      typeof message === "string" ? message : `HTTP ${response.status}`,
+      response.status,
+      typeof code === "string" ? code : "http_error",
+    );
   }
   return json;
+}
+
+type DashboardNetworkOptions = {
+  timeoutMessage: string;
+  networkMessage: string;
+  timeoutCode: string;
+  networkCode: string;
+  timeoutMs?: number;
+  retryReadOnce?: boolean;
+};
+
+// Authentication POSTs and administrative mutations must never be replayed after
+// an ambiguous network failure. Only callers that are provably read-only may opt
+// into the single retry below.
+async function dashboardNetworkFetch(
+  input: string | URL,
+  init: RequestInit,
+  options: DashboardNetworkOptions,
+): Promise<Response> {
+  const attempts = options.retryReadOnce ? 2 : 1;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const abort = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; abort.abort(); }, options.timeoutMs ?? 15000);
+    try {
+      return await fetch(input, { ...init, signal: abort.signal });
+    } catch (error) {
+      if (attempt + 1 < attempts) continue;
+      throw new DashboardHttpError(
+        timedOut ? options.timeoutMessage : options.networkMessage,
+        0,
+        timedOut ? options.timeoutCode : options.networkCode,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new DashboardHttpError(options.networkMessage, 0, options.networkCode);
 }
 
 export async function signInDashboard(usernameInput: string, password: string): Promise<DashboardSession> {
   const startedGeneration = sessionGeneration;
   const { url, anonKey } = publicConfig();
   const email = dashboardUsernameEmail(usernameInput);
-  const response = await fetch(`${url}/auth/v1/token?grant_type=password`, {
+  const response = await dashboardNetworkFetch(`${url}/auth/v1/token?grant_type=password`, {
     method: "POST",
     redirect: "error",
     credentials: "omit",
     headers: { apikey: anonKey, "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
+  }, {
+    timeoutMessage: "登录服务响应超时，请检查网络或代理后重试",
+    networkMessage: "登录服务暂时无法连接，请检查网络或代理，并关闭会拦截跨站请求的浏览器扩展后重试",
+    timeoutCode: "auth_timeout",
+    networkCode: "auth_network_error",
   });
-  const session = receivedSession(await readJson(response));
+  let payload: unknown;
+  try {
+    payload = await readJson(response);
+  } catch (error) {
+    if (error instanceof DashboardHttpError
+        && error.status === 400
+        && (error.code === "invalid_credentials" || /invalid login credentials/i.test(error.message))) {
+      throw new DashboardHttpError("账号或密码不正确", 400, "invalid_credentials");
+    }
+    if (error instanceof DashboardHttpError && (error.status === 429 || error.status >= 500)) {
+      throw new DashboardHttpError(
+        error.status === 429 ? "登录请求过于频繁，请稍后再试" : "登录服务暂时繁忙，请稍后重试",
+        error.status,
+        error.status === 429 ? "auth_rate_limited" : "auth_service_unavailable",
+      );
+    }
+    throw error;
+  }
+  const session = receivedSession(payload);
   freshSignIns.set(session, startedGeneration);
   return session;
 }
@@ -390,9 +456,15 @@ export async function fetchDashboardProfile(session: DashboardSession): Promise<
   params.set("select", "auth_user_id,username,role,active,permissions,management_permissions,data_scope,created_at,updated_at");
   params.set("auth_user_id", `eq.${userId}`);
   params.set("limit", "1");
-  const response = await fetch(`${url}/rest/v1/dashboard_profiles?${params.toString()}`, {
+  const response = await dashboardNetworkFetch(`${url}/rest/v1/dashboard_profiles?${params.toString()}`, {
     headers: { apikey: anonKey, Authorization: `Bearer ${session.access_token}`, Accept: "application/json" },
     cache: "no-store",
+  }, {
+    timeoutMessage: "账号密码已验证，但读取账号权限超时，请检查网络后重试",
+    networkMessage: "账号密码已验证，但暂时无法读取账号权限，请检查网络、代理或浏览器扩展后重试",
+    timeoutCode: "profile_timeout",
+    networkCode: "profile_network_error",
+    retryReadOnce: true,
   });
   const rows = await readJson(response);
   const profile = Array.isArray(rows) ? rows[0] : null;
@@ -452,7 +524,8 @@ export function readSavedDashboardSession(): DashboardSession | null {
 async function callAdminFunction(session: DashboardSession, body: Record<string, unknown>) {
   const { url, anonKey } = publicConfig();
   const functionName = String(process.env.NEXT_PUBLIC_DASHBOARD_USER_FUNCTION || "dashboard-user-admin").trim() || "dashboard-user-admin";
-  const response = await fetch(`${url}/functions/v1/${functionName}`, {
+  const isAccessCheck = body.action === "check-access";
+  const response = await dashboardNetworkFetch(`${url}/functions/v1/${functionName}`, {
     method: "POST",
     headers: {
       apikey: anonKey,
@@ -460,6 +533,15 @@ async function callAdminFunction(session: DashboardSession, body: Record<string,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
+  }, {
+    timeoutMessage: isAccessCheck
+      ? "账号密码和权限已验证，但登录安全检查超时，请稍后重试"
+      : "后台操作响应超时，请稍后重试",
+    networkMessage: isAccessCheck
+      ? "账号密码和权限已验证，但登录安全检查暂时无法连接，请检查网络、代理或浏览器扩展后重试"
+      : "后台服务暂时无法连接，请检查网络后重试",
+    timeoutCode: isAccessCheck ? "access_check_timeout" : "admin_timeout",
+    networkCode: isAccessCheck ? "access_check_network_error" : "admin_network_error",
   });
   return await readJson(response);
 }
@@ -533,7 +615,7 @@ export async function changeOwnDashboardPassword(username: string, currentPasswo
   // 先用当前密码重新验证一次，避免仅凭浏览器里残留的会话就能直接改密码。
   const verifiedSession = await signInDashboard(username, currentPassword);
   const { url, anonKey } = publicConfig();
-  const response = await fetch(`${url}/auth/v1/user`, {
+  const response = await dashboardNetworkFetch(`${url}/auth/v1/user`, {
     method: "PUT",
     headers: {
       apikey: anonKey,
@@ -541,6 +623,11 @@ export async function changeOwnDashboardPassword(username: string, currentPasswo
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ password: newPassword }),
+  }, {
+    timeoutMessage: "修改密码请求超时；为避免重复提交，请重新登录确认密码是否已经生效",
+    networkMessage: "修改密码时网络中断；为避免重复提交，请重新登录确认密码是否已经生效",
+    timeoutCode: "password_change_timeout",
+    networkCode: "password_change_network_error",
   });
   await readJson(response);
 

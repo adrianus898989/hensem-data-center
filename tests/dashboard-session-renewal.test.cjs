@@ -252,6 +252,40 @@ test('logout still permits a fresh interactive login before it is saved',async()
   assert.equal((await h.api.dashboardAuthenticatedFetch(dataURL,{},signedIn)).status,200);
   assert.equal(h.refreshCalls().length,0);
 });
+test('interactive login network failures are translated and never replay credentials',async()=>{
+  const h=harness();h.setFetch(()=>Promise.reject(new TypeError('Failed to fetch')));
+  const error=await h.api.signInDashboard('offline-user','offline-password').catch(value=>value);
+  assert.equal(error.code,'auth_network_error');assert.match(error.message,/登录服务暂时无法连接/);
+  assert.doesNotMatch(error.message,/Failed to fetch/i);
+  assert.equal(h.calls.length,1);assert.equal(h.calls[0].method,'POST');
+});
+test('invalid credentials are shown in Chinese without exposing the internal email',async()=>{
+  const h=harness();h.setFetch(()=>json({error_code:'invalid_credentials',msg:'Invalid login credentials'},400));
+  const error=await h.api.signInDashboard('offline-user','offline-password').catch(value=>value);
+  assert.equal(error.code,'invalid_credentials');assert.equal(error.message,'账号或密码不正确');
+  assert.equal(h.calls.length,1);assert.doesNotMatch(error.message,/@hensem\.local/);
+});
+test('upstream login timeout is translated and credentials are never replayed',async()=>{
+  const h=harness();h.setFetch(()=>json({message:'Gateway Timeout'},504));
+  const error=await h.api.signInDashboard('offline-user','offline-password').catch(value=>value);
+  assert.equal(error.code,'auth_service_unavailable');assert.equal(error.status,504);
+  assert.equal(error.message,'登录服务暂时繁忙，请稍后重试');
+  assert.equal(h.calls.length,1);assert.equal(h.calls[0].method,'POST');
+});
+test('profile read retries one safe GET and translates a repeated network failure',async()=>{
+  const h=harness(),active=session();h.setFetch(()=>Promise.reject(new TypeError('Failed to fetch')));
+  const error=await h.api.fetchDashboardProfile(active).catch(value=>value);
+  assert.equal(error.code,'profile_network_error');assert.match(error.message,/暂时无法读取账号权限/);
+  assert.doesNotMatch(error.message,/Failed to fetch/i);
+  assert.equal(h.calls.length,2);assert.ok(h.calls.every(call=>call.method==='GET'));
+});
+test('access-check network failure is translated and its POST is never replayed',async()=>{
+  const h=harness(),active=session();h.setFetch(()=>Promise.reject(new TypeError('Failed to fetch')));
+  const error=await h.api.verifyDashboardAccess(active).catch(value=>value);
+  assert.equal(error.code,'access_check_network_error');assert.match(error.message,/登录安全检查暂时无法连接/);
+  assert.doesNotMatch(error.message,/Failed to fetch/i);
+  assert.equal(h.calls.length,1);assert.equal(h.calls[0].method,'POST');
+});
 test('once a fresh login has been saved and logged out its old object cannot revive it',async()=>{
   const h=harness(),next=session('new-login');h.setFetch(()=>json(next));
   const signedIn=await h.api.signInDashboard('offline-user','offline-password');
