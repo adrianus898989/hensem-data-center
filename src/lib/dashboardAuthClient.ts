@@ -302,6 +302,10 @@ export async function signInDashboard(usernameInput: string, password: string): 
     networkMessage: "登录服务暂时无法连接，请检查网络或代理，并关闭会拦截跨站请求的浏览器扩展后重试",
     timeoutCode: "auth_timeout",
     networkCode: "auth_network_error",
+    // Supabase Auth can occasionally take 20-30 seconds while the project is
+    // resuming or under load. Keep the one-shot password request alive long
+    // enough to receive its definitive response; it is deliberately not retried.
+    timeoutMs: 60000,
   });
   let payload: unknown;
   try {
