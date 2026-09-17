@@ -4540,6 +4540,35 @@ td .rate-cell,
 .third-party-volume-module .daily-compare-wrap tbody tr:hover {
   background: #f8fbff;
 }
+.third-party-volume-module .volume-summary-table-wrap.sticky-first-dimension th:first-child,
+.third-party-volume-module .volume-summary-table-wrap.sticky-first-dimension td:first-child {
+  position: sticky;
+  left: 0;
+  min-width: 118px;
+  box-shadow: 5px 0 8px -8px rgba(15, 23, 42, 0.55);
+}
+.third-party-volume-module .volume-summary-table-wrap.sticky-first-dimension thead th:first-child {
+  z-index: 4;
+  background: #f6f9fd;
+}
+.third-party-volume-module .volume-summary-table-wrap.sticky-first-dimension tbody td:first-child {
+  z-index: 2;
+  background: #fff;
+  font-weight: 800;
+  color: #334155;
+}
+.third-party-volume-module .volume-summary-table-wrap.sticky-first-dimension tbody tr:hover td:first-child {
+  background: #f8fbff;
+}
+.third-party-volume-module .volume-summary-table-wrap.sticky-first-dimension tbody tr.volume-child-row td:first-child {
+  background: #f5f8ff;
+}
+.third-party-volume-module .volume-summary-table-wrap.sticky-first-dimension tbody tr.fee-warning-main-row td:first-child {
+  background: #fff7f7;
+}
+.third-party-volume-module .volume-summary-table-wrap.sticky-first-dimension tfoot td:first-child {
+  z-index: 4;
+}
 @media (max-width: 1500px) {
   .third-party-volume-module .work-filters { grid-template-columns: repeat(4, minmax(145px, 1fr)); }
 }
