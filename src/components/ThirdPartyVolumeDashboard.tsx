@@ -1970,24 +1970,6 @@ function attachClientFallbackMessage<T extends { meta?: Record<string, any> }>(p
   };
 }
 
-function emptyClientVolumePayload(message: string): ThirdPartyVolumePayload {
-  const now = new Date();
-  return {
-    meta: {
-      year: String(now.getFullYear()),
-      month: String(now.getMonth() + 1),
-      updatedAt: now.toISOString(),
-      source: "snapshot-waiting",
-      sheets: [],
-      message
-    } as any,
-    rows: [],
-    aliasMap: {},
-    summary: { rows: 0, amount: 0, count: 0, successCount: 0, failedCount: 0, countries: 0, platforms: 0, channels: 0 },
-    anomalies: []
-  };
-}
-
 function localAliasKey(value: string): string {
   return String(value || "")
     .toLowerCase()
@@ -2086,7 +2068,7 @@ export default function ThirdPartyVolumeDashboard() {
   const [appliedCountryPage, setAppliedCountryPage] = useState("");
 
 
-  async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "", requestedCountry = "", forceRates = false) {
+  async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "", requestedCountry = "", forceRates = false): Promise<boolean> {
     // V247：Supabase 已有数据时，任何瞬时网络/API问题都不能把整页从有数据变成 0。
     if (!silent && !payloadRef.current) setState("loading");
     setError("");
@@ -2133,11 +2115,12 @@ export default function ThirdPartyVolumeDashboard() {
         setEndDate((old) => old || defaultEnd(volumeRows));
       }
       setState("ready");
+      return true;
     } catch (err) {
       const message = err instanceof DOMException && ["AbortError", "TimeoutError"].includes(err.name)
         ? "查询超过 15 秒，请缩短日期范围后重试。"
         : err instanceof Error ? err.message : "读取 Supabase 三方量失败";
-      if(isDashboardDataDenied(err)){setPayload(null);payloadRef.current=null;setRatePayload(null);setVolumeSyncStatus(null);setDataNotice("");setError(message);setState("error");return;}
+      if(isDashboardDataDenied(err)){setPayload(null);payloadRef.current=null;setRatePayload(null);setVolumeSyncStatus(null);setDataNotice("");setError(message);setState("error");return false;}
       const currentPayload = payloadRef.current;
       const currentRows = currentPayload?.rows || [];
       const currentMatchesSelection = Boolean(currentRows.length && currentRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd) && rowMatchesRequestedCountry(row, requestedCountry)));
@@ -2153,7 +2136,7 @@ export default function ThirdPartyVolumeDashboard() {
         setRatePayload(cachedRate || ratePayload);
         setDataNotice(`Supabase 刚才读取失败，当前保留上一份成功数据：${message}`);
         setState("ready");
-        return;
+        return true;
       }
       if (cachedVolume && cacheMatchesSelection) {
         const shown = attachClientFallbackMessage(cachedVolume, message);
@@ -2162,13 +2145,17 @@ export default function ThirdPartyVolumeDashboard() {
         setRatePayload(cachedRate);
         setDataNotice(`Supabase 刚才读取失败，当前显示浏览器最后成功数据：${message}`);
         setState("ready");
-        return;
+        return true;
       }
 
-      setPayload(emptyClientVolumePayload("该日期数据库目前确实没有可用数据。后台同步完成后再次查询即可。"));
+      // A transport/API failure is not evidence that the selected date has no
+      // data. Keep the last visible result and do not apply the pending filters;
+      // otherwise a timeout is rendered as a misleading table full of zeros.
       setRatePayload(cachedRate);
-      setDataNotice("");
+      setError(message);
+      setDataNotice(`查询失败，未切换当前结果：${message}`);
       setState("ready");
+      return false;
     }
   }
 
@@ -2478,7 +2465,8 @@ export default function ThirdPartyVolumeDashboard() {
     setIsQuerying(true);
     try {
       const queryCountry = mainTab === "country" ? activeCountryPage : "";
-      await loadData(true, queryStart, queryEnd, "", queryCountry, true);
+      const loaded = await loadData(true, queryStart, queryEnd, "", queryCountry, true);
+      if (!loaded) return;
       // 只有点击查询后才把所有筛选条件应用到结果。
       setAppliedStartDate(queryStart);
       setAppliedEndDate(queryEnd);
@@ -3711,7 +3699,7 @@ function MonthlyTable({ title, subtitle, rows, columns, feeRows = [], paginated,
             <SortTh label="代付笔数" sortKey="payoutCount" numeric className="num" />
             {withdrawActual && <><SortTh label="实际到账金额" sortKey="withdrawActualAmount" numeric className="num withdraw-actual-heading" title="提现订单中的实际到账金额（real_amount）。来源没有完整覆盖时显示 —。" /><SortTh label="提现手续费" sortKey="withdrawActualFee" numeric className="num withdraw-actual-heading" title="提现订单中的实际手续费（fee）。来源没有完整覆盖时显示 —。" /></>}
             {withdrawPending && <><SortTh label="代付中金额" sortKey="withdrawPendingAmount" numeric className="num withdraw-pending-heading" title="各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的申请金额。" /><SortTh label="代付中笔数" sortKey="withdrawPendingCount" numeric className="num withdraw-pending-heading" title="各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的提交笔数。" /></>}
-            {workOrderDeposit && <><SortTh label="存款未到账提交金额" sortKey="depositSubmittedAmount" numeric className="num workorder-deposit-heading" title="按工单的三方映射码归类；未标记数据不参与分配。" /><SortTh label="存款未到账提交笔数" sortKey="depositSubmittedCount" numeric className="num workorder-deposit-heading" title="按工单的三方映射码归类；未标记数据不参与分配。" /><SortTh label="存款未到账成功金额" sortKey="depositSuccessAmount" numeric className="num workorder-deposit-heading" title="状态为“已处理”的成功金额。" /><SortTh label="存款未到账成功笔数" sortKey="depositSuccessCount" numeric className="num workorder-deposit-heading" title="状态为“已处理”的成功笔数。" /></>}
+            {workOrderDeposit && <><SortTh label="存款未到账提交金额" sortKey="depositSubmittedAmount" numeric className="num workorder-deposit-heading" title="按工单的三方映射码归类；无法识别的记录显示为『未标记三方（待核实）』。" /><SortTh label="存款未到账提交笔数" sortKey="depositSubmittedCount" numeric className="num workorder-deposit-heading" title="按工单的三方映射码归类；无法识别的记录显示为『未标记三方（待核实）』。" /><SortTh label="存款未到账成功金额" sortKey="depositSuccessAmount" numeric className="num workorder-deposit-heading" title="状态为“已处理”的成功金额。" /><SortTh label="存款未到账成功笔数" sortKey="depositSuccessCount" numeric className="num workorder-deposit-heading" title="状态为“已处理”的成功笔数。" /></>}
             <SortTh label="代付占比" sortKey="payoutPct" numeric />
             <SortTh label="合计金额" sortKey="totalAmount" numeric className="num" />
             <SortTh label="合计笔数" sortKey="totalCount" numeric className="num" />

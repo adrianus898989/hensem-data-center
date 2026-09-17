@@ -593,10 +593,19 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
     callRpc<Game66VolumeRpcResult>("dashboard_game66_charge_volume", {
       p_start: windowStart, p_end: windowEnd, p_country: targetCountry
     }, token, AbortSignal.timeout(18000));
-  const game66CurrentRead = game66TeamPlatforms.length
-    ? Promise.all(game66TeamPlatforms.map(platform => readGame66Window(start, end, platform))).then(mergeGame66)
-    : readGame66Window(start, end);
-  const game66PreviousRead = !game66TeamPlatforms.length && successPeriod && successPeriod.previousStart < start
+  // GAME66 only contains the Hong Kong and Red Crab teams. Legacy country
+  // pages must not scan the multi-million-row GAME66 order tables: doing so
+  // adds no rows and can make an otherwise small country query time out while
+  // a backfill is writing to those tables.
+  const game66CurrentRead = !game66TeamCountry
+    ? Promise.resolve({
+      rows: [], collectionSuccessSnapshots: [], withdrawPendingSnapshots: [],
+      withdrawActualRows: [], latestWriteAt: null
+    } as Game66VolumeRpcResult)
+    : game66TeamPlatforms.length
+      ? Promise.all(game66TeamPlatforms.map(platform => readGame66Window(start, end, platform))).then(mergeGame66)
+      : readGame66Window(start, end);
+  const game66PreviousRead = game66TeamCountry && !game66TeamPlatforms.length && successPeriod && successPeriod.previousStart < start
     ? readGame66Window(successPeriod.previousStart, successPeriod.previousStart)
     : Promise.resolve({} as Game66VolumeRpcResult);
   const game66Read = Promise.all([game66CurrentRead, game66PreviousRead]).then(([current, previous]) => ({

@@ -134,6 +134,27 @@ test("当前日有成功率但昨日无快照时，不再误报当前数据未�
   assert.equal(collectionSuccess.collectionSuccessComparisonNote({...base,previous:complete,deltaPoints:5.25}),"较昨日 +5.25 百分点");
 });
 
+test("越南 CHUYỂN KHOẢN NHANH 成功率归入 LocalBank，其他近似名称不误合并",()=>{
+  const makeSnapshot=(rawChannel,channelType)=>({
+    schema_version:1,source_system:"RECHARGE_REVIEW",country_code:"VN",platform:"92LOTTERY",
+    stat_date:"2026-09-09",timezone:"Asia/Ho_Chi_Minh",snapshot_id:`vn-${channelType}`,snapshot_at:"2026-09-10T00:00:00Z",
+    coverage:{complete:true,expected_count:20,fetched_count:20,unique_count:20},
+    totals:{submitted_count:20,success_count:12},
+    groups:[{raw_channel:rawChannel,channel_type:channelType,submitted_count:20,success_count:12}]
+  });
+  const volumeRows=[{date:"2026-09-09",country:"越南",platform:"92LOTTERY",channel:"LocalBank",rawChannel:"LocalBank",channelType:"银行",direction:"代收"}];
+  const mapped=collectionSuccess.buildCollectionSuccessView({
+    snapshots:[makeSnapshot("未标记三方","CHUYỂN KHOẢN NHANH")],volumeRows,start:"2026-09-09",end:"2026-09-09",country:"越南"
+  });
+  assert.equal(mapped.providers[0].channel,"LocalBank");
+  assert.equal(mapped.compare([mapped.providers[0].key],["银行"]).current.rate,0.6);
+
+  const unconfirmed=collectionSuccess.buildCollectionSuccessView({
+    snapshots:[makeSnapshot("未标记三方","CHUYỂN TIỀN NHANH")],volumeRows,start:"2026-09-09",end:"2026-09-09",country:"越南"
+  });
+  assert.equal(unconfirmed.providers[0].channel,"未标记三方");
+});
+
 test("团队页只读 GAME66 且前端查询有明确超时",()=>{
   const server=fs.readFileSync(path.join(root,"src/lib/supabaseDashboardServer.ts"),"utf8");
   const edge=fs.readFileSync(path.join(root,"supabase/functions/dashboard-api/lib/supabaseDashboardServer.ts"),"utf8");
@@ -143,7 +164,8 @@ test("团队页只读 GAME66 且前端查询有明确超时",()=>{
     assert.match(source,/const redCrabTeamCountry = \["红膏蟹", "红膏蟹盘口", "redcrab"\]/);
     assert.match(source,/const hongKongTeamCountry = \["香港", "香港盘口", "hkteam", "hongkong"\]/);
     assert.match(source,/p_country: targetCountry/);
-    assert.match(source,/const game66CurrentRead = game66TeamPlatforms\.length/);
+    assert.match(source,/const game66CurrentRead = !game66TeamCountry/);
+    assert.match(source,/GAME66 only contains the Hong Kong and Red Crab teams/);
     assert.match(source,/readGame66Window\(successPeriod\.previousStart, successPeriod\.previousStart\)/);
     assert.match(source,/\["66GAME", "YYGAME", "XX7", "XX6", "XX5", "YY9", "PE7", "W5W"\]/);
     assert.match(source,/game66TeamPlatforms\.map\(platform => readGame66Window\(start, end, platform\)\)/);
@@ -155,6 +177,8 @@ test("团队页只读 GAME66 且前端查询有明确超时",()=>{
   }
   assert.match(volume,/dashboardBusinessFetch\(volumeUrl, \{ signal: AbortSignal\.timeout\(25000\) \}\)/);
   assert.match(volume,/loadData\(true, queryStart, queryEnd, "", queryCountry, true\)/);
+  assert.match(volume,/if \(!loaded\) return/);
+  assert.doesNotMatch(volume,/setPayload\(emptyClientVolumePayload/);
 });
 
 test("GAME66 团队大数据按精确盘口走索引预过滤",()=>{

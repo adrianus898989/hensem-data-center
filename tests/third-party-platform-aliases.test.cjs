@@ -200,7 +200,7 @@ test('actual query commits canonical selection state without broadening the sele
   const writes = {}, requests = [];
   const context = { ...pipeline({ platforms: ['43r', '43R', 'PLAYERBR', 'POPKKK新', 'POPKKK'] }), startDate: '2026-09-09', endDate: '2026-09-10',
     appliedStartDate: '', appliedEndDate: '', channel: '', direction: '', channelTypeSelections: [],
-    loadData: async (...args) => { requests.push(args); },
+    loadData: async (...args) => { requests.push(args); return true; },
     ...Object.fromEntries(['IsQuerying', 'AppliedStartDate', 'AppliedEndDate', 'AppliedCountrySelections', 'AppliedPlatformSelections',
       'AppliedChannel', 'AppliedDirection', 'AppliedChannelTypeSelections', 'AppliedCountryPage', 'LastQueryAt', 'HasQueried']
       .map(name => ['set' + name, value => { writes[name] = value; }])) };
