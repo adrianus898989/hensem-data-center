@@ -6466,34 +6466,9 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
   color: #047857 !important;
 }
 
-/* 工单成功占比预警：金额仍保留存/提款分组色，提交笔数、成功笔数和占比同步着色。 */
-.workorder-success-signal {
-  font-weight: 900 !important;
-  transition: color 120ms ease, background-color 120ms ease;
-}
-
-.workorder-success-signal.is-danger {
+/* 工单成功占比预警：仅低于 30% 的占比文字标红，不给单元格加底色。 */
+.workorder-success-rate-cell.workorder-success-signal.is-danger {
   color: #c62f46 !important;
-  background: #fff0f2 !important;
-}
-
-.workorder-success-signal.is-warning {
-  color: #a85c00 !important;
-  background: #fff8e6 !important;
-}
-
-.workorder-success-signal.is-healthy {
-  color: #087a55 !important;
-  background: #edf9f3 !important;
-}
-
-.workorder-success-rate-cell.is-danger::before,
-.workorder-success-rate-cell.is-warning::before {
-  content: "⚠";
-  display: inline-block;
-  margin-right: 4px;
-  font-size: 9px;
-  line-height: 1;
 }
 
 /* 工单页重排：卡片保持成组，避免 8 张卡片挤成 6+2 并留下大片空白。 */

@@ -72,9 +72,17 @@ const baselineHeaders=['国家','统一三方','代收金额','代收笔数','�
     await page.screenshot({path:path.join(output,'collection-success-production-expanded.png'),fullPage:true});
     await first.getByRole('button',{name:'收起',exact:true}).click();
     await page.evaluate(()=>window.render(true,'partial'));
-    await page.waitForFunction(()=>document.querySelector('.volume-summary-table-wrap tbody tr td:nth-child(5)').textContent.includes('部分未采集'));
-    assert.match(await table.locator('tbody tr td:nth-child(5)').first().innerText(),/85\.00%/);
-    assert.match(await table.locator('tbody tr td:nth-child(5)').first().innerText(),/部分未采集/);
+    await page.waitForFunction(()=>document.querySelector('.volume-summary-table-wrap tbody tr td:nth-child(5)').textContent.includes('已采集 2/3'));
+    const partialCell=table.locator('tbody tr td:nth-child(5)').first();
+    assert.match(await partialCell.innerText(),/85\.00%/);
+    assert.doesNotMatch(await partialCell.innerText(),/部分未采集/);
+    const coverageButton=partialCell.getByRole('button',{name:'已采集 2/3',exact:true});
+    await coverageButton.click();
+    const coveragePopup=page.getByRole('dialog',{name:'未采集平台'});
+    await coveragePopup.waitFor();
+    assert.match(await coveragePopup.innerText(),/IN999/);
+    assert.doesNotMatch(await coveragePopup.innerText(),/91CLUB|55CLUB/);
+    assert.equal(await coverageButton.getAttribute('aria-expanded'),'true');
     await page.evaluate(()=>window.render(true,'missing'));
     await page.waitForFunction(()=>document.querySelector('.volume-summary-table-wrap tbody tr td:nth-child(5)').textContent.includes('未采集'));
     assert.doesNotMatch(await table.locator('tbody tr td:nth-child(5)').first().innerText(),/100\.00%|0\.00%/);
@@ -83,13 +91,12 @@ const baselineHeaders=['国家','统一三方','代收金额','代收笔数','�
     const upi=table.locator('tbody > tr').filter({hasText:'UPI-QR'}).first();
     const arb=table.locator('tbody > tr').filter({hasText:'ArbPay'}).first();
     const ic=table.locator('tbody > tr').filter({hasText:'ICPay'}).first();
-    assert.equal(await upi.locator('td.workorder-success-signal.is-danger').count(),3);
-    assert.equal(await upi.locator('td.workorder-success-signal.is-warning').count(),3);
-    assert.equal(await arb.locator('td.workorder-success-signal.is-warning').count(),3);
-    assert.equal(await arb.locator('td.workorder-success-signal.is-healthy').count(),3);
-    assert.equal(await ic.locator('td.workorder-success-signal.is-healthy').count(),3);
-    assert.equal(await ic.locator('td.workorder-success-signal').count(),3,'withdraw sample below 20 stays neutral');
+    assert.equal(await upi.locator('td.workorder-success-rate-cell.is-danger').count(),1,'only UPI deposit rate at 20 percent is red');
+    assert.equal(await arb.locator('td.workorder-success-rate-cell.is-danger').count(),0);
+    assert.equal(await ic.locator('td.workorder-success-rate-cell.is-danger').count(),1,'ICPay withdrawal rate at 0 percent is red');
+    assert.equal(await table.locator('tbody td.workorder-success-signal').count(),2,'rates at or above 30 percent stay unstyled');
+    assert.equal(await table.locator('tbody td:not(.workorder-success-rate-cell).workorder-success-signal').count(),0,'counts are never warning-colored');
     for(const width of [1280,390]) {await page.setViewportSize({width,height:850});const layout=await page.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth,table:document.querySelector('.volume-summary-table-wrap').getBoundingClientRect().width}));assert(layout.scroll<=width+1,JSON.stringify(layout));}
-    assert.deepEqual(errors,[]);assert.deepEqual(network,[]);console.log(JSON.stringify({passed:true,synthetic:true,checks:['actual component 18→19 columns','all original values unchanged','submission denominator separate','same-cell pp delta','real expand platform detail','partial rate remains visible','missing ≠ 0/100','red/orange/green work-order success warnings','contained horizontal table scroll'],screenshots:['collection-success-production-table.png','collection-success-production-expanded.png'].map(f=>path.join(output,f))},null,2));
+    assert.deepEqual(errors,[]);assert.deepEqual(network,[]);console.log(JSON.stringify({passed:true,synthetic:true,checks:['actual component 18→19 columns','all original values unchanged','submission denominator separate','same-cell pp delta','real expand platform detail','partial rate remains visible','clickable exact missing-platform popup','missing ≠ 0/100','only rates below 30 percent use red text','contained horizontal table scroll'],screenshots:['collection-success-production-table.png','collection-success-production-expanded.png'].map(f=>path.join(output,f))},null,2));
   } finally{await context.close();await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});

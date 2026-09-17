@@ -32,12 +32,12 @@ function deposit(thirdParty, submittedAmount, submittedCount, successAmount, suc
   };
 }
 
-test("work-order success warning uses a sample floor and red/orange/green tiers", () => {
-  assert.equal(workOrderSuccessTone(19, 0), "neutral", "tiny samples must not trigger noisy warnings");
-  assert.equal(workOrderSuccessTone(100, 49), "danger");
-  assert.equal(workOrderSuccessTone(100, 50), "warning");
-  assert.equal(workOrderSuccessTone(100, 89), "warning");
-  assert.equal(workOrderSuccessTone(100, 90), "healthy");
+test("work-order success warning only flags valid ratios below 30 percent", () => {
+  assert.equal(workOrderSuccessTone(0, 0), "neutral");
+  assert.equal(workOrderSuccessTone(1, 0), "danger");
+  assert.equal(workOrderSuccessTone(100, 29), "danger");
+  assert.equal(workOrderSuccessTone(100, 30), "neutral");
+  assert.equal(workOrderSuccessTone(100, 90), "neutral");
 });
 
 test("unmarked platform aggregates are excluded instead of copied to every provider", () => {

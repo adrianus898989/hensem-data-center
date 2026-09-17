@@ -4,8 +4,16 @@
 .collection-success-cell small { color: #8491a6; font-size: 9px; font-weight: 400; }
 .collection-success-cell small.success-up { color: #148564; }
 .collection-success-cell small.success-down { color: #cc4357; }
-.collection-success-cell.is-partial strong { text-decoration: underline dotted #d28b20; text-underline-offset: 3px; }
 .collection-success-cell small.success-partial { color: #a86100; font-weight: 650; }
+.collection-success-coverage-trigger { appearance: none; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; font-weight: inherit; cursor: pointer; text-decoration: underline dotted currentColor; text-underline-offset: 2px; }
+.collection-success-coverage-trigger:hover { color: #805000; }
+.collection-success-coverage-trigger:focus-visible { outline: 2px solid #5d8bff; outline-offset: 2px; border-radius: 2px; }
+.collection-success-coverage-popup[popover] { position: fixed; inset: auto; top: var(--coverage-popup-top, 50%); left: var(--coverage-popup-left, 50%); width: 220px; max-height: 250px; overflow: auto; margin: 0; padding: 10px 11px; border: 1px solid #d8e2ef; border-radius: 8px; background: #fff; box-shadow: 0 10px 30px rgba(31, 52, 82, .18); color: #344963; text-align: left; white-space: normal; }
+.collection-success-coverage-title { margin-bottom: 7px; color: #233a5a; font-size: 11px; font-weight: 700; }
+.collection-success-coverage-list { display: grid; gap: 5px; }
+.collection-success-coverage-item { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding-top: 5px; border-top: 1px solid #edf2f8; font-size: 10px; }
+.collection-success-coverage-item strong { color: #354c70; font-size: 10px; font-weight: 600; text-decoration: none; }
+.collection-success-coverage-item span { color: #8996a9; }
 .collection-success-cell:focus-visible { outline: 2px solid #5d8bff; outline-offset: 3px; border-radius: 3px; }
 .collection-success-breakdown { padding: 5px 0; white-space: normal; }
 .collection-success-breakdown-label { color: #6c7e98; display: block; font-size: 10px; margin-bottom: 7px; }

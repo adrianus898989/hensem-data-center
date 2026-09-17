@@ -3871,15 +3871,9 @@ function WorkOrderIssuesCells({ metric, formatValue, formatRate }: { metric?: Wo
     const tone = workOrderSuccessTone(submitted, success);
     const rate = submitted > 0 ? success / submitted : null;
     const scope = kind === "deposit" ? "存款未到账" : "提款未到账";
-    const title = tone === "danger"
-      ? `${scope}低成功占比预警：${formatNumber(success)} / ${formatNumber(submitted)}（${formatPercent(rate || 0)}），低于 50%。`
-      : tone === "warning"
-        ? `${scope}成功占比需关注：${formatNumber(success)} / ${formatNumber(submitted)}（${formatPercent(rate || 0)}），低于 90%。`
-        : tone === "healthy"
-          ? `${scope}成功占比正常：${formatNumber(success)} / ${formatNumber(submitted)}（${formatPercent(rate || 0)}）。`
-          : submitted > 0
-            ? `${scope}样本 ${formatNumber(submitted)} 笔，少于 20 笔，暂不着色预警。`
-            : "";
+    const title = submitted > 0
+      ? `${scope}成功占比：${formatNumber(success)} / ${formatNumber(submitted)}（${formatPercent(rate || 0)}）${tone === "danger" ? "，低于 30%。" : "。"}`
+      : "";
     return { tone, title };
   };
   const depositSignal = signal("deposit");
@@ -3887,14 +3881,14 @@ function WorkOrderIssuesCells({ metric, formatValue, formatRate }: { metric?: Wo
   const signalClass = (tone: ReturnType<typeof workOrderSuccessTone>) => tone === "neutral" ? "" : ` workorder-success-signal is-${tone}`;
   return <>
     <td className="num workorder-deposit-cell">{formatValue(metric, "deposit", "submittedAmount")}</td>
-    <td className={`num workorder-deposit-cell${signalClass(depositSignal.tone)}`} title={depositSignal.title}>{formatValue(metric, "deposit", "submittedCount")}</td>
+    <td className="num workorder-deposit-cell">{formatValue(metric, "deposit", "submittedCount")}</td>
     <td className="num workorder-deposit-cell">{formatValue(metric, "deposit", "successAmount")}</td>
-    <td className={`num workorder-deposit-cell${signalClass(depositSignal.tone)}`} title={depositSignal.title}>{formatValue(metric, "deposit", "successCount")}</td>
+    <td className="num workorder-deposit-cell">{formatValue(metric, "deposit", "successCount")}</td>
     <td className={`num workorder-deposit-cell workorder-success-rate-cell${signalClass(depositSignal.tone)}`} title={depositSignal.title}>{formatRate(metric, "deposit")}</td>
     <td className="num workorder-withdraw-cell">{formatValue(metric, "withdraw", "submittedAmount")}</td>
-    <td className={`num workorder-withdraw-cell${signalClass(withdrawSignal.tone)}`} title={withdrawSignal.title}>{formatValue(metric, "withdraw", "submittedCount")}</td>
+    <td className="num workorder-withdraw-cell">{formatValue(metric, "withdraw", "submittedCount")}</td>
     <td className="num workorder-withdraw-cell">{formatValue(metric, "withdraw", "successAmount")}</td>
-    <td className={`num workorder-withdraw-cell${signalClass(withdrawSignal.tone)}`} title={withdrawSignal.title}>{formatValue(metric, "withdraw", "successCount")}</td>
+    <td className="num workorder-withdraw-cell">{formatValue(metric, "withdraw", "successCount")}</td>
     <td className={`num workorder-withdraw-cell workorder-success-rate-cell${signalClass(withdrawSignal.tone)}`} title={withdrawSignal.title}>{formatRate(metric, "withdraw")}</td>
   </>;
 }

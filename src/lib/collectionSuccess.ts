@@ -92,11 +92,32 @@ export type CollectionSuccessComparison = {
   comparisonLabel: string;
   platforms: Array<{ country: string; platform: string; current: CollectionSuccessMetric; previous: CollectionSuccessMetric }>;
 };
+export type CollectionSuccessMissingPlatform = {
+  country: string;
+  platform: string;
+  expected: number;
+  captured: number;
+  missing: number;
+};
 export type CollectionSuccessView = {
   providers: Array<{ key: string; country: string; channel: string; submitted: number }>;
   compare: (providerKeys?: readonly string[], types?: readonly string[]) => CollectionSuccessComparison;
   error?: string;
 };
+
+/** Exact current-period platform coverage gaps, derived from the same scope as the displayed rate. */
+export function collectionSuccessMissingPlatforms(value: CollectionSuccessComparison): CollectionSuccessMissingPlatform[] {
+  return value.platforms
+    .filter(item => item.current.expected > item.current.captured)
+    .map(item => ({
+      country: item.country,
+      platform: item.platform,
+      expected: item.current.expected,
+      captured: item.current.captured,
+      missing: item.current.expected - item.current.captured,
+    }))
+    .sort((a, b) => a.country.localeCompare(b.country, "zh-CN") || a.platform.localeCompare(b.platform, "zh-CN", { numeric: true }));
+}
 
 /**
  * The rate shown in the cell belongs to the current period.  When only the
@@ -106,9 +127,9 @@ export type CollectionSuccessView = {
 export function collectionSuccessComparisonNote(value: CollectionSuccessComparison): string {
   const { current, previous, deltaPoints, comparisonLabel } = value;
   if (current.state === "partial") {
-    return current.unknownType
-      ? "类型未确认"
-      : `部分未采集 · 已采集 ${current.captured}/${current.expected}`;
+    return current.captured < current.expected
+      ? `已采集 ${current.captured}/${current.expected}`
+      : "类型未确认";
   }
   if (deltaPoints !== null) return `${comparisonLabel} ${deltaPoints > 0 ? "+" : ""}${deltaPoints.toFixed(2)} 百分点`;
 
@@ -116,7 +137,7 @@ export function collectionSuccessComparisonNote(value: CollectionSuccessComparis
   const previousPeriod = comparisonLabel === "较昨日" ? "昨日" : "上期";
   if (previous.state === "missing") return `${currentPeriod}已采集 · 无${previousPeriod}对比`;
   if (previous.state === "zero") return `${currentPeriod}已采集 · ${previousPeriod}无提交`;
-  if (previous.state === "partial") return `${currentPeriod}已采集 · ${previousPeriod}${previous.unknownType ? "类型未确认" : "部分未采集"}`;
+  if (previous.state === "partial") return `${currentPeriod}已采集 · ${previousPeriod}${previous.captured < previous.expected ? `已采集 ${previous.captured}/${previous.expected}` : "类型未确认"}`;
   if (previous.state === "unavailable") return `${currentPeriod}已采集 · ${previousPeriod}暂不可用`;
   return `${currentPeriod}已采集 · ${previousPeriod}不可比`;
 }

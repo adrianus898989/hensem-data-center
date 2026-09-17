@@ -62,7 +62,10 @@ test('missing platform-days fail closed; captured platform detail remains visibl
   assert.equal(result.current.expected, 2);
   assert.equal(result.current.captured, 1);
   assert.equal(result.deltaPoints, null, 'a partial period must not produce a comparison delta');
-  assert.equal(lib.collectionSuccessComparisonNote(result), '部分未采集 · 已采集 1/2');
+  assert.equal(lib.collectionSuccessComparisonNote(result), '已采集 1/2');
+  assert.deepEqual(lib.collectionSuccessMissingPlatforms(result), [
+    { country: '印度', platform: 'DHANIWIN', expected: 1, captured: 0, missing: 1 },
+  ]);
   assert.equal(result.platforms.find(p => p.platform === '91CLUB').current.rate, 0.8);
   assert.equal(result.platforms.find(p => p.platform === 'DHANIWIN').current.state, 'missing');
 });
