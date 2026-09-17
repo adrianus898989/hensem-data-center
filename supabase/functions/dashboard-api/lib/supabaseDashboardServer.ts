@@ -435,12 +435,29 @@ export async function readSupabaseAutoWithdraw(request: Request, startInput: str
   operatorQuery.append("data_date", `lte.${end}`);
   operatorQuery.set("order", "data_date.asc,country.asc,platform.asc,account.asc,updated_at.asc");
 
+  const game66Read = (async (): Promise<Game66AutoWithdrawRpcResult> => {
+    const days: string[] = [];
+    for (let day = queryStart; day <= end; day = addIsoDays(day, 1)) days.push(day);
+    const parts: Game66AutoWithdrawRpcResult[] = [];
+    const concurrency = 4;
+    for (let index = 0; index < days.length; index += concurrency) {
+      parts.push(...await Promise.all(days.slice(index, index + concurrency).map((day) =>
+        callRpc<Game66AutoWithdrawRpcResult>("dashboard_game66_withdraw_daily", {
+          p_start: day, p_end: day,
+        }, token, AbortSignal.timeout(12000))
+      )));
+    }
+    return {
+      rows: parts.flatMap((part) => part.rows || []),
+      operatorRows: parts.flatMap((part) => part.operatorRows || []),
+      latestWriteAt: parts.map((part) => part.latestWriteAt).filter(Boolean).sort().pop() || null,
+    };
+  })();
+
   const [dailyFetched, operatorFetched, game66Result] = await Promise.all([
     fetchPaged<DbAutoWithdrawRow>("auto_withdraw_daily", dailyQuery, token),
     fetchPaged<DbOperatorRow>("withdraw_operator_daily", operatorQuery, token),
-    callRpc<Game66AutoWithdrawRpcResult>("dashboard_game66_withdraw_daily", {
-      p_start: queryStart, p_end: end,
-    }, token, AbortSignal.timeout(6000)).catch(() => ({rows: [], operatorRows: [], latestWriteAt: null})),
+    game66Read,
   ]);
   const dailyRaw = dashboardAllowedRows(access, [...dailyFetched, ...(game66Result.rows || [])]);
   const operatorRaw = dashboardAllowedRows(access, [...operatorFetched, ...(game66Result.operatorRows || [])]);
