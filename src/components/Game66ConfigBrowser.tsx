@@ -4,6 +4,12 @@ import {useDashboardAuth} from "./DashboardAuthGate";
 import {fetchGame66PlatformStatus,type Game66PlatformStatus} from "@/lib/game66PlatformClient";
 import {fetchGame66Config,type Game66ConfigTarget,type Game66ReviewRule} from "@/lib/game66ConfigClient";
 
+// These brands belong to the Hong Kong reporting catalogue, but do not expose
+// an automatic-withdrawal configuration. Keep this exclusion local to the
+// configuration browser so the dashboard platform catalogue remains intact.
+const GAME66_CONFIG_EXCLUDED_PLATFORMS=new Set(["GEM7","MAX7","EK7"]);
+function showsGame66Config(platform:string){return !GAME66_CONFIG_EXCLUDED_PLATFORMS.has(platform.trim().toUpperCase());}
+
 function stamp(value:string|null,timezone="Asia/Kolkata") {
   return value?new Date(value).toLocaleString("zh-CN",{timeZone:timezone,hour12:false}):"尚无";
 }
@@ -35,8 +41,8 @@ export default function Game66ConfigBrowser({team}:{team:"hong_kong"|"red_crab"}
       .then(([statusResult,configResult])=>{if(controller.signal.aborted)return;
         if(statusResult.status==="rejected"&&configResult.status==="rejected")throw configResult.reason||statusResult.reason;
         const config=configResult.status==="fulfilled"?configResult.value:null;
-        const teamTargets=(config?.targets||[]).filter(row=>row.team_code===team);
-        const statusRows=statusResult.status==="fulfilled"?statusResult.value.filter(row=>row.team_code===team):[];
+        const teamTargets=(config?.targets||[]).filter(row=>row.team_code===team&&showsGame66Config(row.platform_name));
+        const statusRows=statusResult.status==="fulfilled"?statusResult.value.filter(row=>row.team_code===team&&showsGame66Config(row.platform_name)):[];
         setStatusAvailable(statusResult.status==="fulfilled");
         setRows(statusRows.length?statusRows:teamTargets.map(fallbackStatus));
         setTargets(teamTargets);setRules(config?.rules||[]);

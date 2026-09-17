@@ -102,6 +102,15 @@ test("66GAME 自动出款按日期限流分片，配置状态失败时仍展示�
   assert.match(config,/订单库存状态暂时读取较慢/);
 });
 
+test("GEM7 MAX7 EK7 仅从 66GAME 自动出款配置页排除",()=>{
+  const config=fs.readFileSync(path.join(root,"src/components/Game66ConfigBrowser.tsx"),"utf8");
+  const volume=fs.readFileSync(path.join(root,"src/components/ThirdPartyVolumeDashboard.tsx"),"utf8");
+  assert.match(config,/GAME66_CONFIG_EXCLUDED_PLATFORMS=new Set\(\["GEM7","MAX7","EK7"\]\)/);
+  assert.match(config,/team_code===team&&showsGame66Config\(row\.platform_name\)/);
+  assert.equal((config.match(/showsGame66Config\(row\.platform_name\)/g)||[]).length,2,"targets and live status must use the same exclusion");
+  assert.doesNotMatch(volume,/GAME66_CONFIG_EXCLUDED_PLATFORMS|showsGame66Config/,"dashboard catalogue must stay unchanged");
+});
+
 test("红膏蟹成功率支持平台总计与各三方，待处理快照也可验证",()=>{
   assert.equal(collectionSuccess.collectionSuccessCountry("RED_CRAB","66GAME"),"红膏蟹");
   assert.equal(withdrawPending.withdrawPendingCountry("RED_CRAB","66GAME"),"红膏蟹");
