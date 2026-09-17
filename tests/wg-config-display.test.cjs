@@ -205,10 +205,11 @@ test('Absent configuration and transport/abort failure never become fabricated c
   const invalidTarget={...target,site_code:278};
   await assert.rejects(()=>client(async table=>table==='wg_config_targets'?[invalidTarget]:[]).fetchWGConfigIndex({},new AbortController().signal),/WG 配置响应不完整/);
 });
-test('WG addition leaves the old AR/PANDA browser and mapping paths isolated',()=>{
+test('WG remains isolated while AR/PANDA/NEW_AR use the shared browser shell',()=>{
   const auto=fs.readFileSync(path.join(root,'src/components/AutoWithdrawConfig.tsx'),'utf8');
-  assert.match(auto,/system==="WG"\?<WGConfigBrowser\/>:<ConfigBrowser key=\{system\} system=\{system\}\/>/);
-  assert.match(auto,/function ConfigBrowser\(\{system\}:\{system:"AR"\|"PANDA"\}\)/);
+  assert.match(auto,/system==="WG"\?<WGConfigBrowser\/>:system==="GAME66_HK"/);
+  assert.match(auto,/function ConfigBrowser\(\{system\}:\{system:"AR"\|"NEW_AR"\|"PANDA"\}\)/);
+  assert.match(auto,/system==="NEW_AR"\?fetchNewARConfigIndex/);
   assert.doesNotMatch(fs.readFileSync(path.join(root,'src/lib/pandaConfigDisplayGroup.ts'),'utf8'),/WG/);
   const browser=fs.readFileSync(path.join(root,'src/components/WGConfigBrowser.tsx'),'utf8');
   assert.match(browser,/配置已同步，部分选项未齐/);

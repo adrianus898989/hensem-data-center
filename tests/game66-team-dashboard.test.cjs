@@ -134,6 +134,42 @@ test("当前日有成功率但昨日无快照时，不再误报当前数据未�
   assert.equal(collectionSuccess.collectionSuccessComparisonNote({...base,previous:complete,deltaPoints:5.25}),"较昨日 +5.25 百分点");
 });
 
+test("成功量与单一三方完全相等时可安全使用平台总成功率",()=>{
+  const snapshot={
+    schema_version:1,source_system:"RECHARGE_REVIEW",country_code:"IN",platform:"6CLUB",
+    stat_date:"2026-09-16",timezone:"Asia/Kolkata",snapshot_id:"single-provider-fallback",snapshot_at:"2026-09-17T00:00:00Z",
+    coverage:{complete:true,expected_count:200,fetched_count:200,unique_count:200},
+    totals:{submitted_count:200,success_count:128},
+    groups:[{raw_channel:"后台未返回三方",channel_type:"其他类型",submitted_count:200,success_count:128}]
+  };
+  const oneProvider=[{date:"2026-09-16",country:"印度",platform:"6CLUB",channel:"UPI-QR",rawChannel:"UPI-QR",channelType:"UPI",direction:"代收",count:128}];
+  const view=collectionSuccess.buildCollectionSuccessView({snapshots:[snapshot],volumeRows:oneProvider,start:"2026-09-16",end:"2026-09-16",country:"印度"});
+  const upiKey=collectionSuccess.collectionSuccessProviderKey("印度","UPI-QR");
+  assert.equal(view.compare([upiKey]).current.rate,0.64);
+
+  const ambiguous=collectionSuccess.buildCollectionSuccessView({snapshots:[snapshot],volumeRows:[
+    {...oneProvider[0],count:100},
+    {...oneProvider[0],channel:"ArbPay",rawChannel:"ArbPay",count:28}
+  ],start:"2026-09-16",end:"2026-09-16",country:"印度"});
+  assert.equal(ambiguous.compare([upiKey]).current.rate,null);
+});
+
+test("VEERGAME 与 SHREEWIN 的 ArUpiPay-26000 成功率归入 UPI-QR",()=>{
+  const snapshot={
+    schema_version:1,source_system:"RECHARGE_REVIEW",country_code:"IN",platform:"Veer.Game",
+    stat_date:"2026-09-16",timezone:"Asia/Kolkata",snapshot_id:"veer-arupipay",snapshot_at:"2026-09-17T00:00:00Z",
+    coverage:{complete:true,expected_count:84123,fetched_count:84123,unique_count:84123},
+    totals:{submitted_count:84123,success_count:43602},
+    groups:[{raw_channel:"ArUpiPay-26000",channel_type:"UPI",submitted_count:84123,success_count:43602}]
+  };
+  const volumeRows=[{date:"2026-09-16",country:"印度",platform:"VEER.GAME",channel:"UPI-QR",rawChannel:"UPI-QR",channelType:"UPI",direction:"代收",count:59070}];
+  const view=collectionSuccess.buildCollectionSuccessView({snapshots:[snapshot],volumeRows,start:"2026-09-16",end:"2026-09-16",country:"印度"});
+  const upiKey=collectionSuccess.collectionSuccessProviderKey("印度","UPI-QR");
+  assert.equal(collectionSuccess.collectionSuccessProviderKey("印度","ArUpiPay-26000"),upiKey);
+  assert.equal(view.compare([upiKey],["UPI"]).current.rate,43602/84123);
+  assert.equal(view.compare([upiKey],["UPI"]).current.state,"complete");
+});
+
 test("越南 CHUYỂN KHOẢN NHANH 成功率归入 LocalBank，其他近似名称不误合并",()=>{
   const makeSnapshot=(rawChannel,channelType)=>({
     schema_version:1,source_system:"RECHARGE_REVIEW",country_code:"VN",platform:"92LOTTERY",

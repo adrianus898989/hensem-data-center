@@ -146,7 +146,10 @@ const MANUAL_THIRD_PARTY_ALIAS_FIXES: ThirdPartyAliasEntry[] = [
   { country: "巴西", canonical: "H88Pay", aliases: ["H88Pay", "H88PayBRL", "PIX22", "PIX-22", "PIX35", "PIX-35", "PIXPAY22"] },
   { country: "巴西", canonical: "UUPay", aliases: ["UUPay", "UuPayBRL", "PIX11", "PIX-11", "PIX31", "PIX-31"] },
   { country: "巴西", canonical: "EyPay", aliases: ["EyPay", "EyPayBRL", "PIX21", "PIX-21"] },
-  { country: "巴西", canonical: "DyPayV2", aliases: ["DyPayV2", "PIXPAY20", "PIX PAY20", "PIX-PAY20"] },
+  // 用户确认：PIX23 是 VPS，PIX24 / DyPayV2 是 DyPay，PIX25 以及所有明显的 megiPay 拼法都是 MegiPay。
+  { country: "巴西", canonical: "VPS", aliases: ["VPS", "VpsPay", "VPSPay", "dp-vpsPay", "wd-vpsPay"] },
+  { country: "巴西", canonical: "DyPay", aliases: ["DyPay", "DyPayV2", "DyPayBRL", "DyPayV2BRL"] },
+  { country: "巴西", canonical: "MegiPay", aliases: ["MegiPay", "dp-megiPay", "wd-megiPay", "MegiPayBRL-PIX", "MegiPay_306"] },
   { country: "马来", canonical: "TruePay", aliases: ["TNG DUTNOW ID", "TNG DUTINOW ID", "TNG DUITNOW ID", "TNG DUTNOW", "TNG DUTINOW", "TNG DUITNOW", "TNG-DUTNOW-ID", "TNG-DUITNOW-ID", "Tng-DuitNow-TP", "Touch n Go -TP", "Touch N Go TP", "DuitNow-TP", "FPXDUITNOW - TP", "FPX-TP", "FPX-TPAY", "FPX-TruePay", "TPAY", "TRUEPAY", "TruePay", "TP"] },
   { country: "马来", canonical: "RapidPay", aliases: ["RapidPay", "Touch n Go-RapidPay", "Touch n Go-Rapid...", "Touch N Go RapidPay", "MaybankQR-RapidPay", "MaybankQR-RapidP...", "DuitNow-RapidPay", "FPX-RapidPay", "GrabPay-RapidPay", "Boost-RapidPay"] },
   { country: "马来", canonical: "WinPay", aliases: ["WinPay", "WinFaPay", "WinfaPay", "FPX-WinfaPay", "Touch N Go-WinfaPay", "Touch n Go-WinfaPay"] },
@@ -179,7 +182,7 @@ const MANUAL_THIRD_PARTY_ALIAS_FIXES: ThirdPartyAliasEntry[] = [
   { country: "印度", canonical: "OXPay", aliases: ["OXPay", "OXPay-QR", "PAYTM-OXPay", "PAYTM OXPay", "OX2Pay", "OX2Pay-QR", "PAYTM-OX2Pay", "PAYTM OX2Pay"] },
   { country: "印度", canonical: "WeePay", aliases: ["WeePay", "WeePay-QR", "PAYTM-WeePay", "PAYTM WeePay"] },
   { country: "印度", canonical: "ArbPay", aliases: ["ArbPay", "ArbPayINR"] },
-  { country: "印度", canonical: "UPI-QR", aliases: ["Phonepe_QR", "Phonepe-QR", "UPI-QR", "ARUPI", "Arb-UPI", "Arb-BANK"] },
+  { country: "印度", canonical: "UPI-QR", aliases: ["Phonepe_QR", "Phonepe-QR", "UPI-QR", "ARUPI", "Arb-UPI", "Arb-BANK", "ArUpiPay-26000"] },
   { country: "印度", canonical: "VstarPay", aliases: ["VstarPay", "Vstar-QR", "VstarPay-QR", "Vstar QR", "VstarPay QR"] },
   { country: "印度", canonical: "SUPER", aliases: ["Super", "SUPER", "Super-QR", "Super QR", "SuperPay", "PAYTM-Super"] },
   { country: "印度", canonical: "WePay", aliases: ["WEPAY唤醒", "WEPAY 醒", "WEPAY醒", "PAYTM-WePay", "QR-WePay", "WePay-QR"] },
@@ -220,7 +223,7 @@ const MANUAL_THIRD_PARTY_ALIAS_FIXES: ThirdPartyAliasEntry[] = [
   { country: "USDT", canonical: "TronPayUSDT", aliases: ["TRONPAY-USDT", "TRONPAY USDT", "TronPayUSDT", "TronPayUSDTCU", "TRONPAY", "TronPay", "USDT-TRONPAY"] },
   { country: "USDT", canonical: "UUPayUSDT", aliases: ["UUPAY-USDT", "UUPAY USDT", "UUPayUSDT", "UUPayUSDTCU", "USDT - TRC20", "TRC20", "USDT-TRC20"] },
   { country: "尼日利亚", canonical: "WanguPay", aliases: ["WPay", "W Pay", "WP", "WPPay", "WanguPay", "WangPay", "Wangu"] },
-  { country: "巴西", canonical: "VpsPay", aliases: ["VpsPay", "VPSPay", "dp-vpsPay", "wd-vpsPay", "dp-vpspay", "wd-vpspay", "DP-VPSPAY", "WD-VPSPAY"] },
+  { country: "巴西", canonical: "VPS", aliases: ["VpsPay", "VPSPay", "dp-vpsPay", "wd-vpsPay", "dp-vpspay", "wd-vpspay", "DP-VPSPAY", "WD-VPSPAY"] },
 ];
 for (const entry of MANUAL_THIRD_PARTY_ALIAS_FIXES) {
   const cKey = countryKey(entry.country);
@@ -270,8 +273,14 @@ function normalizeCanonicalByCountry(name: string, country?: string): string {
       wdtran: "TransafePay",
       dptran: "TransafePay",
       nana: "NanaPay",
-      pixpay20: "DyPayV2",
-      dypayv2: "DyPayV2"
+      pixpay20: "DyPay",
+      dypayv2: "DyPay",
+      pix23: "VPS",
+      pixpay23: "VPS",
+      pix24: "DyPay",
+      pixpay24: "DyPay",
+      pix25: "MegiPay",
+      pixpay25: "MegiPay"
     };
     if (brazilPix[bKey]) return brazilPix[bKey];
   }
@@ -396,8 +405,8 @@ function prettyFallbackName(raw: string): string {
     pixpay4: "TodayPay",
     pixpay3: "NanaPay",
     pixpay12: "WinWinPay",
-    pixpay20: "DyPayV2",
-    dypayv2: "DyPayV2",
+    pixpay20: "DyPay",
+    dypayv2: "DyPay",
     epaybrl: "EPay",
     epaybrl二: "EPay",
     epaybrl编码2364: "EPay",
@@ -633,7 +642,9 @@ function confirmedUserThirdPartyAlias(value: string, country?: string): string {
   if (key === "人工充值") return "人工充值";
 
   // 用户确认：巴西 VPS / vps / VpsPay / PIXPAY21 都是同一个三方。
-  if (c === "巴西" && /^(vps|vpspay|dpvpspay|wdvpspay|pixpay21|pixpay021)$/.test(key)) return "VPS";
+  if (c === "巴西" && /^(vps|vpspay|dpvpspay|wdvpspay|pix23|pixpay23|pixpay023|pixpay21|pixpay021)$/.test(key)) return "VPS";
+  if (c === "巴西" && /^(dypay|dypayv2|dypaybrl|dypayv2brl|pix24|pixpay24|pixpay024|pix20|pixpay20|pixpay020)$/.test(key)) return "DyPay";
+  if (c === "巴西" && (/megipay/.test(key) || /^(pix25|pixpay25|pixpay025)$/.test(key))) return "MegiPay";
 
   // 用户确认：SudalinkPay 是独立三方，不属于 StarPay。
   if (c === "印尼" && /sudalink/.test(key)) return "SudalinkPay";
@@ -717,7 +728,7 @@ export function canonicalThirdPartyName(value: string, country?: string): string
       wpayvvpay: "WPay", wpayvpay: "WPay", wpay: "WPay", vvpay: "WPay",
       wandanpay: "WandaPay", wandanpayjaiclub盘: "WandaPay", wandapay: "WandaPay",
       arbpay: "ArbPay", arbpayinr: "ArbPay",
-      arbbank: "UPI-QR", arbupi: "UPI-QR", phonepeqr: "UPI-QR", upiqr: "UPI-QR", arupi: "UPI-QR",
+      arbbank: "UPI-QR", arbupi: "UPI-QR", phonepeqr: "UPI-QR", upiqr: "UPI-QR", arupi: "UPI-QR", arupipay26000: "UPI-QR",
       icpay: "ICPay", icpayinr: "ICPay", icpayqr: "ICPay", ic2pay: "ICPay", ic2payqr: "ICPay", paytmic2pay: "ICPay",
       speed2pay: "Speed2Pay", speed2payqr: "Speed2Pay", speed2pay1: "Speed2Pay", speed2pay2: "Speed2Pay", paytmspeed2pay: "Speed2Pay",
       oxpay: "OXPay", oxpayqr: "OXPay", paytmoxpay: "OXPay", ox2pay: "OXPay", ox2payqr: "OXPay", paytmox2pay: "OXPay",
@@ -870,7 +881,10 @@ export function canonicalThirdPartyName(value: string, country?: string): string
       pix22: "H88Pay", pix35: "H88Pay", h88paybrl: "H88Pay", h88pay: "H88Pay",
       pix11: "UUPay", pix31: "UUPay", uupaybrl: "UUPay", uupay: "UUPay",
       pix21: "EyPay", eypaybrl: "EyPay", eypay: "EyPay",
-      bcpaybrl: "BetCatPay", bcpay: "BetCatPay", dpvpspay: "VPS", wdvpspay: "VPS", vpspay: "VPS", vps: "VPS", pixpay21: "VPS", pixpay021: "VPS", pix20: "DyPayV2", pixpay20: "DyPayV2", pixpay020: "DyPayV2", dypay: "DyPayV2", dypayv2: "DyPayV2", dypaybrl: "DyPayV2", dypayv2brl: "DyPayV2"
+      bcpaybrl: "BetCatPay", bcpay: "BetCatPay",
+      dpvpspay: "VPS", wdvpspay: "VPS", vpspay: "VPS", vps: "VPS", pix23: "VPS", pixpay23: "VPS", pixpay023: "VPS", pixpay21: "VPS", pixpay021: "VPS",
+      pix24: "DyPay", pixpay24: "DyPay", pixpay024: "DyPay", pix20: "DyPay", pixpay20: "DyPay", pixpay020: "DyPay", dypay: "DyPay", dypayv2: "DyPay", dypaybrl: "DyPay", dypayv2brl: "DyPay",
+      pix25: "MegiPay", pixpay25: "MegiPay", pixpay025: "MegiPay", megipay: "MegiPay", dpmegipay: "MegiPay", wdmegipay: "MegiPay", megipaybrlpix: "MegiPay", megipay306: "MegiPay"
     };
     if (brazilExplicit[rawBrazilKey]) return brazilExplicit[rawBrazilKey];
   }
@@ -895,8 +909,11 @@ export function canonicalThirdPartyName(value: string, country?: string): string
   if (/uupay|uu-pay|dp-uupay|wd-uupay|pix-?11\b/.test(x)) return "UUPay";
   if (/eypay|ey-pay|pix-?21\b/.test(x)) return "EyPay";
   if (/bcpay|dp-bcpay|wd-bcpay/.test(x)) return "BetCatPay";
-  if (/vpspay|dp-vpspay|wd-vpspay|^vps$|pixpay0?21\b/.test(x)) return "VPS";
-  if (/dypay|dy-pay|pix-?20\b|pixpay0?20\b/.test(x)) return cKeyNow === "菲律宾" ? "DyPay" : "DyPayV2";
+  if (/vpspay|dp-vpspay|wd-vpspay|^vps$/.test(x)) return "VPS";
+  if (cKeyNow === "巴西" && /pix-?23\b|pixpay0?23\b|pixpay0?21\b/.test(x)) return "VPS";
+  if (cKeyNow === "巴西" && (/megipay/.test(x) || /pix-?25\b|pixpay0?25\b/.test(x))) return "MegiPay";
+  if (/dypay|dy-pay/.test(x)) return "DyPay";
+  if (cKeyNow === "巴西" && /pix-?24\b|pixpay0?24\b|pix-?20\b|pixpay0?20\b/.test(x)) return "DyPay";
 
   // Existing cross-country mappings.
   if (/bfpay|bf-pay/.test(x)) return "BFPAY";

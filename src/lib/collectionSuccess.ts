@@ -119,12 +119,15 @@ export function collectionSuccessComparisonNote(value: CollectionSuccessComparis
 type ProjectedSnapshot = {
   country: string; platform: string; platformId: string; date: string; at: string; valid: boolean;
   groups: Array<{ providerKey: string; channel: string; type: string; submitted: number; success: number }>;
+  totals: { submitted: number; success: number };
+  /** Safe one-provider fallback, proven by exact success-count equality. */
+  fallbackProvider?: { key: string; channel: string };
 };
 const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
 /** Fail closed even if a corrupt/old cache bypasses the server validator. */
-export function validCollectionSuccessSnapshot(snapshot: CollectionSuccessSnapshot): boolean {
-  if (!snapshot || snapshot.schema_version !== 1 || snapshot.source_system !== "RECHARGE_REVIEW" || snapshot.coverage?.complete !== true || !Array.isArray(snapshot.groups)) return false;
+export function validCollectionSuccessSnapshot(snapshot: CollectionSuccessSnapshot, sourceSystems: readonly string[] = ["RECHARGE_REVIEW"]): boolean {
+  if (!snapshot || snapshot.schema_version !== 1 || !sourceSystems.includes(snapshot.source_system) || snapshot.coverage?.complete !== true || !Array.isArray(snapshot.groups)) return false;
   if (![snapshot.country_code, snapshot.platform, snapshot.stat_date, snapshot.timezone, snapshot.snapshot_id, snapshot.snapshot_at].every(value => typeof value === "string" && value.trim().length > 0)) return false;
   if (!Number.isFinite(businessDate(snapshot.stat_date)) || !Number.isFinite(Date.parse(snapshot.snapshot_at))) return false;
   const { expected_count: expected, fetched_count: fetched, unique_count: unique } = snapshot.coverage;
@@ -148,16 +151,19 @@ export function buildCollectionSuccessView(input: {
   volumeRows: readonly ThirdPartyVolumeRow[];
   start: string; end: string; country: string;
   platforms?: readonly string[]; countries?: readonly string[]; provider?: string; types?: readonly string[];
+  sourceSystems?: readonly string[];
   enabled?: boolean; error?: string;
 }): CollectionSuccessView {
   const period = collectionSuccessPeriod(input.start, input.end);
   const requestedCountry = collectionSuccessCountry(input.country);
+  const sourceSystems = input.sourceSystems || ["RECHARGE_REVIEW"];
   const selectedPlatforms = new Set((input.platforms || []).map(p => platformKey(requestedCountry, p)));
   const selectedCountries = (input.countries || []).map(c => collectionSuccessCountry(c));
   const inScope = (country: string, platform: string) => (!requestedCountry || country === requestedCountry) && (!selectedCountries.length || selectedCountries.includes(country)) && (!selectedPlatforms.size || selectedPlatforms.has(platformKey(country, platform)));
   const projections = new Map<string, ProjectedSnapshot>();
   const platforms = new Map<string, { country: string; platform: string; id: string }>();
   const providerMap = new Map<string, { key: string; country: string; channel: string; submitted: number }>();
+  const volumeProviders = new Map<string, Map<string, { key: string; country: string; channel: string; successCount: number }>>();
   const keyFor = (country: string, platform: string) => `${country}\u001f${platformKey(country, platform)}`;
   const inRange = (date: string) => !!period && date >= period.previousStart && date <= period.end;
   const addPlatform = (country: string, platform: string) => {
@@ -167,29 +173,49 @@ export function buildCollectionSuccessView(input: {
   };
   for (const row of input.volumeRows) {
     const country = collectionSuccessCountry(row.country, row.platform);
-    if (inScope(country, row.platform) && inRange(row.date)) addPlatform(country, row.platform);
+    if (!inScope(country, row.platform) || !inRange(row.date)) continue;
+    const platformId = addPlatform(country, row.platform);
+    const expectedDirection = sourceSystems.includes("WITHDRAW_REVIEW") && !sourceSystems.includes("RECHARGE_REVIEW") ? "代付" : "代收";
+    if (row.direction !== expectedDirection || !count(row.count) || row.count <= 0) continue;
+    const dayKey = `${platformId}\u001f${row.date}`;
+    const providers = volumeProviders.get(dayKey) || new Map();
+    const providerKey = collectionSuccessProviderKey(country, row.channel);
+    const current = providers.get(providerKey) || { key: providerKey, country, channel: canonicalThirdPartyName(row.channel, country), successCount: 0 };
+    current.successCount += row.count;
+    providers.set(providerKey, current);
+    volumeProviders.set(dayKey, providers);
   }
   for (const platform of input.platforms || []) if (requestedCountry) addPlatform(requestedCountry, platform);
   for (const snapshot of input.snapshots) {
-    if (!snapshot || typeof snapshot.country_code !== "string" || typeof snapshot.platform !== "string" || typeof snapshot.stat_date !== "string" || !inRange(snapshot.stat_date)) continue;
+    if (!snapshot || !sourceSystems.includes(snapshot.source_system) || typeof snapshot.country_code !== "string" || typeof snapshot.platform !== "string" || typeof snapshot.stat_date !== "string" || !inRange(snapshot.stat_date)) continue;
     const country = collectionSuccessCountry(snapshot.country_code, snapshot.platform);
     if (!inScope(country, snapshot.platform)) continue;
     const platformId = addPlatform(country, snapshot.platform);
     const key = `${platformId}\u001f${snapshot.stat_date}`;
     const at = String(snapshot.snapshot_at || "");
     if (projections.has(key) && projections.get(key)!.at >= at) continue;
-    const valid = validCollectionSuccessSnapshot(snapshot);
+    const valid = validCollectionSuccessSnapshot(snapshot, sourceSystems);
+    const groups = valid ? snapshot.groups.map(group => {
+      const rawChannel = collectionSuccessEffectiveChannel(country, group.raw_channel, group.channel_type);
+      return {
+        providerKey: collectionSuccessProviderKey(country, rawChannel),
+        channel: canonicalThirdPartyName(rawChannel, country),
+        type: collectionSuccessType(country, rawChannel, group.channel_type),
+        submitted: group.submitted_count, success: group.success_count,
+      };
+    }) : [];
+    const candidates = volumeProviders.get(key);
+    const onlyProvider = candidates?.size === 1 ? Array.from(candidates.values())[0] : undefined;
+    const fallbackProvider = valid && onlyProvider
+      && onlyProvider.successCount === snapshot.totals.success_count
+      && !groups.some(group => group.providerKey === onlyProvider.key)
+      ? { key: onlyProvider.key, channel: onlyProvider.channel }
+      : undefined;
     projections.set(key, {
       country, platform: snapshot.platform, platformId, date: snapshot.stat_date, at, valid,
-      groups: valid ? snapshot.groups.map(group => {
-        const rawChannel = collectionSuccessEffectiveChannel(country, group.raw_channel, group.channel_type);
-        return {
-          providerKey: collectionSuccessProviderKey(country, rawChannel),
-          channel: canonicalThirdPartyName(rawChannel, country),
-          type: collectionSuccessType(country, rawChannel, group.channel_type),
-          submitted: group.submitted_count, success: group.success_count,
-        };
-      }) : [],
+      groups,
+      totals: valid ? { submitted: snapshot.totals.submitted_count, success: snapshot.totals.success_count } : { submitted: 0, success: 0 },
+      fallbackProvider,
     });
   }
   const selectedTypes = (input.types || []).map(t => collectionSuccessType(requestedCountry, "", t));
@@ -197,6 +223,12 @@ export function buildCollectionSuccessView(input: {
     (!input.provider || group.providerKey === collectionSuccessProviderKey(country, input.provider)) && (!selectedTypes.length || selectedTypes.includes(group.type));
   for (const snapshot of Array.from(projections.values())) {
     if (!period || snapshot.date < period.start) continue;
+    if (snapshot.fallbackProvider && snapshot.totals.submitted > 0) {
+      const fallback = snapshot.fallbackProvider;
+      const item = providerMap.get(fallback.key) || { key: fallback.key, country: snapshot.country, channel: fallback.channel, submitted: 0 };
+      item.submitted += snapshot.totals.submitted;
+      providerMap.set(fallback.key, item);
+    }
     for (const group of snapshot.groups) {
       if (!matchesSelected(group, snapshot.country) || !group.submitted) continue;
       const item = providerMap.get(group.providerKey) || { key: group.providerKey, country: snapshot.country, channel: group.channel, submitted: 0 };
@@ -214,6 +246,20 @@ export function buildCollectionSuccessView(input: {
       const snapshot = projections.get(`${platform.id}\u001f${date}`);
       if (!snapshot?.valid) continue;
       captured += 1;
+      const scopedProviderKeys = keys || (input.provider ? [collectionSuccessProviderKey(snapshot.country, input.provider)] : undefined);
+      const directGroups = snapshot.groups.filter(group => matchesSelected(group, snapshot.country)
+        && (!keys || keys.includes(group.providerKey))
+        && (!typeFilter.length || typeFilter.includes(group.type)));
+      const canUsePlatformTotal = !!scopedProviderKeys?.length
+        && !typeFilter.length && !selectedTypes.length
+        && !!snapshot.fallbackProvider
+        && scopedProviderKeys.includes(snapshot.fallbackProvider.key)
+        && directGroups.length === 0;
+      if (canUsePlatformTotal) {
+        submitted += snapshot.totals.submitted;
+        success += snapshot.totals.success;
+        continue;
+      }
       for (const group of snapshot.groups) {
         // Unknown wallet types remain in the all-types denominator. Never
         // silently discard them and call a type-filtered rate complete.
