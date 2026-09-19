@@ -62,7 +62,8 @@ function pipeline({ input = data(), platforms = [], country = '巴西', statusRo
   const context = { ...api, ...helper, ...countryHelper, payload: { rows: input }, ratePayload: { platformStatuses: statusRows },
     useMemo: callback => callback(), mainTab: 'country', activeCountryPage: country, country: '', effectiveCountryFilter: country,
     optionCountryFilter: country, countrySelections: [], appliedCountrySelections: [], platformSelections: platforms,
-    appliedPlatformSelections: platforms, appliedChannel: '', appliedDirection: '', appliedChannelTypeSelections: [] };
+    appliedPlatformSelections: platforms, appliedChannel: '', appliedDirection: '', appliedChannelTypeSelections: [],
+    timeQuery: {mode:'daily',showDaily:()=>{},platforms:[]}, timeOptionsRows:[] };
   for (const name of ['rows', 'platformSelectionCountry', 'selectedPlatformSet', 'optionScopedRowsBeforeCountry', 'optionScopedRows', 'configuredPlatforms',
     'platforms', 'channelOptionRows', 'channels', 'channelTypeOptions', 'filteredBaseNoDate']) {
     if (declarations.has(name)) context[name] = evaluate(name, context);
