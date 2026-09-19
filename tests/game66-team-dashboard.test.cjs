@@ -214,7 +214,8 @@ test("团队页只读 GAME66 且前端查询有明确超时",()=>{
     assert.match(source,/readGame66Window\(successPeriod\.previousStart, successPeriod\.previousStart\)/);
     assert.match(source,/\["66GAME", "YYGAME", "XX7", "XX6", "XX5", "YY9", "PE7", "W5W"\]/);
     assert.match(source,/game66TeamPlatforms\.map\(platform => readGame66Window\(start, end, platform\)\)/);
-    assert.match(source,/const \[results, game66Result\] = await Promise\.all\(\[legacyVolumeRead, game66Read\]\)/);
+    assert.match(source,/const \[results, game66Result, newarFetched\] = await Promise\.all\(\[legacyVolumeRead, game66Read,/);
+    assert.match(source,/const canReadNewar = shouldReadLegacy && includesNewarCountry\(country\)/,"团队页不会读取 NEWAR 业务快照");
     assert.match(source,/if \(game66TeamCountry\) throw error/);
     assert.match(source,/collectionSuccessSnapshots: \[\.\.\.collectionSuccess\.snapshots, \.\.\.game66SuccessSnapshots\]/);
     assert.match(source,/withdrawPendingSnapshots: \[\.\.\.withdrawPending\.snapshots, \.\.\.game66PendingSnapshots\]/);

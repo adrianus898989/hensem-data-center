@@ -8,7 +8,8 @@ import { monthRangeSignature, monthlyApiUrl, rangeIncludesCurrentMonthClient } f
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload } from "@/lib/monthlyStatusClient";
 import WorkOrderDashboard from "./WorkOrderDashboard";
 import ThirdPartyVolumeDashboard from "./ThirdPartyVolumeDashboard";
-import OrderDetailSearch from "./OrderDetailSearch";
+import OrderDetailSearch from "./UnifiedOrderSearch";
+import ProviderAnomalyDashboard from "./ProviderAnomalyDashboard";
 import AdminControlCenter from "./AdminControlCenter";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { canOpenAdminCenter, ensureDashboardSession, hasDashboardPermission, normalizedManagementPermissions, type DashboardSession } from "@/lib/dashboardAuthClient";
@@ -25,7 +26,7 @@ import { dashboardScopeAllows, effectiveDashboardDataScope } from "@/lib/dashboa
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
-type ModuleMode = "home" | "auto" | "config" | "operator" | "volume" | "orders" | "work" | "admin";
+type ModuleMode = "home" | "auto" | "config" | "operator" | "volume" | "orders" | "provider-anomalies" | "work" | "admin";
 type AutoView = "dashboard" | "summary" | "daily" | "month" | "compare" | "anomaly";
 type OperatorView = "dashboard" | "ranking" | "summary" | "detail" | "low" | "date" | "compare";
 type OperatorRankMode = "high" | "low";
@@ -1424,7 +1425,7 @@ export default function Dashboard() {
   }
 
   function switchModule(next: ModuleMode) {
-    if ((next === "volume" || next === "orders") && !canThirdParty) return;
+    if ((next === "volume" || next === "orders" || next === "provider-anomalies") && !canThirdParty) return;
     if ((next === "auto" || next === "config" || next === "operator") && !canAutoWithdraw) return;
     if (next === "work" && !canWorkSupport) return;
     setActiveModule(next);
@@ -1706,6 +1707,10 @@ export default function Dashboard() {
         <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="ticket" /></span>订单明细</span>
         <span className={canThirdParty ? "badge ok" : "badge"}>{canThirdParty ? "单平台" : "无权限"}</span>
       </button>
+      <button className={activeModule === "provider-anomalies" ? "nav-item active" : "nav-item"} onClick={() => switchModule("provider-anomalies")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
+        <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="chart" /></span>三方异常</span>
+        <span className={canThirdParty ? "badge ok" : "badge"}>{canThirdParty ? "只读提示" : "无权限"}</span>
+      </button>
 
       <div className="nav-section-title system-admin-title">系统管理</div>
       {canOpenAdminCenter(profile) && (
@@ -1789,6 +1794,9 @@ export default function Dashboard() {
   }
   if (activeModule === "orders") {
     return <div className="app-shell">{sidebarContent}<main className="main">{canThirdParty ? <OrderDetailSearch /> : <p role="alert">管理员未开放此模块。</p>}</main></div>;
+  }
+  if (activeModule === "provider-anomalies") {
+    return <div className="app-shell">{sidebarContent}<main className="main">{canThirdParty ? <ProviderAnomalyDashboard /> : <p role="alert">管理员未开放此模块。</p>}</main></div>;
   }
 
 

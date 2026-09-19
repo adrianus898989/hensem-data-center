@@ -1,0 +1,18 @@
+{
+  "third_party_volume": {
+    "action": "third_party_volume", "source": "popzar_withdraw_plus_third_party",
+    "rows": [{"stat_date":"2026-09-18","system_name":"新AR","country":"巴基斯坦","country_code":"PK","platform":"POPZAR","biz_type":"recharge","biz_label":"充值","type":"充值","third_party":"SyntheticPay","mapping_code":"bank","mappingCode":"bank","map_code":"bank","mapping":"bank","pay_method":"bank","payMethod":"bank","映射码":"bank","success_count":2,"success_amount":150.25,"total_count":3,"total_amount":200.25,"failed_count":1,"success_rate":0.66666667,"count":2,"amount":150.25,"updated_at":"2026-09-19 09:00:00"}],
+    "third_party_rows": [{"stat_date":"2026-09-18","system_name":"新AR","country":"巴基斯坦","country_code":"PK","platform":"POPZAR","biz_type":"recharge","biz_label":"充值","type":"充值","third_party":"SyntheticPay","mapping_code":"bank","mappingCode":"bank","map_code":"bank","mapping":"bank","pay_method":"bank","payMethod":"bank","映射码":"bank","success_count":2,"success_amount":150.25,"total_count":3,"total_amount":200.25,"failed_count":1,"success_rate":0.66666667,"count":2,"amount":150.25,"updated_at":"2026-09-19 09:00:00"}]
+  },
+  "auto_withdraw_bundle": {
+    "action":"upsert_daily_bundle",
+    "rows":[{"stat_date":"2026-09-18","system_name":"新AR","country":"巴基斯坦","platform":"POPZAR","total_count":3,"success_count":2,"reject_count":1,"auto_count":1,"manual_count":2,"total_handle_seconds":120,"handle_count":2}],
+    "operator_rows":[{"stat_date":"2026-09-18","system_name":"新AR","country":"巴基斯坦","platform":"POPZAR","operator":"SyntheticOperator","processed_count":2,"reject_count":1,"total_handle_seconds":120,"handle_count":2}]
+  },
+  "workorder_daily_bundle": {
+    "action":"upsert_workorder_bundle","system_name":"新AR",
+    "rows":[{"stat_date":"2026-09-18","system_name":"新AR","country":"巴基斯坦","platform":"POPZAR","total_count":3,"pending_count":1,"in_progress_count":0,"system_processing_count":0,"completed_count":1,"rejected_count":1,"one_to_one_count":1,"total_conversation_count":0,"total_conversation_rate_text":"","total_message_count":0,"avg_conversation_duration_text":"","avg_first_response_time_text":""}],
+    "employee_rows":[{"stat_date":"2026-09-18","system_name":"新AR","country":"巴基斯坦","platform":"POPZAR","account_type":"客服","employee_id":"","employee_name":"SyntheticOperator","order_type":"存款未到账","order_name":"SyntheticName","total_count":3,"in_progress_count":0,"completed_count":1,"rejected_count":1,"one_to_one_work_order_count":1,"total_conversation_count":0,"total_conversation_rate_text":"","total_message_count":0,"avg_conversation_duration_text":"60秒","avg_first_response_time_text":"","total_sation_duration_text":"60秒","first_response_time_text":""}],
+    "type_rows":[{"stat_date":"2026-09-18","system_name":"新AR","country":"巴基斯坦","platform":"POPZAR","account_type":"","employee_id":"","employee_name":"","order_type":"存款未到账","order_name":"SyntheticName","total_count":3,"in_progress_count":0,"completed_count":1,"rejected_count":1,"one_to_one_work_order_count":1,"total_conversation_count":0,"total_conversation_rate_text":"","total_message_count":0,"avg_conversation_duration_text":"60秒","avg_first_response_time_text":"","total_sation_duration_text":"60秒","first_response_time_text":""}]
+  }
+}
