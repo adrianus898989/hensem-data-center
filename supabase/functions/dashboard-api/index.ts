@@ -17,6 +17,7 @@ import {
   type DashboardBusinessModule,
 } from "./lib/dashboardDataAccessServer.ts";
 import { buildCustomerServicePayload } from "./lib/parseCustomerService.ts";
+import { anomalyDateRange, buildProviderAnomalyResponse } from "./lib/providerAnomalies.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -235,6 +236,20 @@ async function handle(request: Request): Promise<Response> {
   if (request.method !== "GET") return json({ok: false, code: "method_not_allowed", message: "仅支持 GET 请求。"}, 405);
   const url = new URL(request.url);
   const route = apiRoute(url);
+  if (route === "/api/provider-anomalies") {
+    await requireDashboardDataAccess(request, "third_party");
+    const start = url.searchParams.get("startDate") || "", end = url.searchParams.get("endDate") || "";
+    try { anomalyDateRange(start, end); }
+    catch { throw new DashboardDataAccessError(400, "invalid_range", "请选择最多31天的有效日期范围。"); }
+    const response = await postgrest(request, "/rest/v1/rpc/dashboard_provider_anomaly_inputs", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({p_start: start, p_end: end}), signal: AbortSignal.timeout(20000),
+    });
+    if (response.status === 401) throw new DashboardDataAccessError(401, "login_required", "登录已失效，请重新登录。");
+    if (response.status === 403) throw new DashboardDataAccessError(403, "data_denied", "当前账号没有此数据查看权限。");
+    if (!response.ok) throw new DashboardDataAccessError(503, "anomaly_data_unavailable", "异常数据接口暂未就绪，不能据此判断正常或异常。");
+    return json(buildProviderAnomalyResponse(await response.json(), start, end));
+  }
   if (route === "/api/auto-withdraw") {
     const {start, end} = requestRange(url);
     return json(await readSupabaseAutoWithdraw(request, start, end));

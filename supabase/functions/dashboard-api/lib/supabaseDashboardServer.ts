@@ -23,6 +23,8 @@ import { collectionSuccessCountry, collectionSuccessPeriod } from "./collectionS
 import { withdrawPendingCountry } from "./withdrawPendingLite.ts";
 import { requireDashboardDataAccess, requireDashboardAllData, dashboardAllowedRows, DashboardDataAccessError } from "./dashboardDataAccessServer.ts";
 
+import { validateNewarBusinessSnapshots, mergeNewarVolumeRows, mergeNewarDailyRows, mergeNewarOperatorRows, mergeNewarWorkOrderBundles, type NewarBusinessKind, type NewarBusinessSnapshot } from "./newarBusinessMerge.ts";
+
 const PAGE_SIZE = 1000;
 
 function requiredEnv(name: string): string {
@@ -236,6 +238,22 @@ async function callRpc<T>(name: string, body: Record<string, unknown>, token: st
     signal
   });
   return await readJson(response) as T;
+}
+
+async function readNewarBusiness(kind: NewarBusinessKind, start: string, end: string, country: string, token: string): Promise<NewarBusinessSnapshot[]> {
+  const result = await callRpc<unknown>("dashboard_newar_business_snapshots", {
+    p_kind: kind, p_start: start, p_end: end, p_country: country,
+  }, token, AbortSignal.timeout(12000));
+  // Direct data is authoritative. An unavailable RPC must not silently claim
+  // a stale Google copy is the current direct result.
+  const snapshots = validateNewarBusinessSnapshots(result, kind, start, end);
+  const requestedCode = ["PK", "巴基斯坦", "巴基斯坦盘口"].includes(country) ? "PK" : ["IN", "印度", "印度盘口", "印度线下盘口"].includes(country) ? "IN" : "";
+  if (requestedCode && snapshots.some(snapshot => snapshot.country_code !== requestedCode)) throw new Error("NEWAR 直传统计国家范围不匹配");
+  return snapshots;
+}
+
+function includesNewarCountry(country: string): boolean {
+  return !country || ["PK", "巴基斯坦", "巴基斯坦盘口", "IN", "印度", "印度盘口", "印度线下盘口"].includes(country);
 }
 
 type Game66VolumeRpcRow = {
@@ -454,13 +472,16 @@ export async function readSupabaseAutoWithdraw(request: Request, startInput: str
     };
   })();
 
-  const [dailyFetched, operatorFetched, game66Result] = await Promise.all([
+  const canReadNewar = dashboardScopeAllows(access.scope, "巴基斯坦") || dashboardScopeAllows(access.scope, "印度");
+  const [dailyFetched, operatorFetched, game66Result, newarFetched] = await Promise.all([
     fetchPaged<DbAutoWithdrawRow>("auto_withdraw_daily", dailyQuery, token),
     fetchPaged<DbOperatorRow>("withdraw_operator_daily", operatorQuery, token),
     game66Read,
+    canReadNewar ? readNewarBusiness("auto_withdraw_bundle", queryStart, end, "", token) : Promise.resolve([] as NewarBusinessSnapshot[]),
   ]);
-  const dailyRaw = dashboardAllowedRows(access, [...dailyFetched, ...(game66Result.rows || [])]);
-  const operatorRaw = dashboardAllowedRows(access, [...operatorFetched, ...(game66Result.operatorRows || [])]);
+  const newarSnapshots = dashboardAllowedRows(access, newarFetched);
+  const dailyRaw = dashboardAllowedRows(access, mergeNewarDailyRows([...dailyFetched, ...(game66Result.rows || [])], newarSnapshots));
+  const operatorRaw = dashboardAllowedRows(access, mergeNewarOperatorRows([...operatorFetched, ...(game66Result.operatorRows || [])], newarSnapshots));
 
   const dailyAll = enrichDbDaily(dedupeDbDaily(dailyRaw).map(mapDbDaily));
   const operatorAll = enrichDbOperators(dedupeDbOperators(operatorRaw).map(mapDbOperator));
@@ -473,6 +494,7 @@ export async function readSupabaseAutoWithdraw(request: Request, startInput: str
     ...dailyRaw.map((row) => String(row.updated_at || row.source_updated_at || "")),
     ...operatorRaw.map((row) => String(row.updated_at || row.source_updated_at || "")),
     String(game66Result.latestWriteAt || ""),
+    ...newarSnapshots.map(snapshot => snapshot.captured_at),
   ].filter(Boolean).sort().pop() || new Date().toISOString();
 
   return {
@@ -637,8 +659,11 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
       latestWriteAt: null
     };
   });
-  const [results, game66Result] = await Promise.all([legacyVolumeRead, game66Read]);
-  const dbRows: DbVolumeRow[] = dashboardAllowedRows(access, results.flatMap((result) => Array.isArray(result?.rows) ? result.rows : []));
+  const canReadNewar = shouldReadLegacy && includesNewarCountry(country) && (dashboardScopeAllows(access.scope, "巴基斯坦") || dashboardScopeAllows(access.scope, "印度"));
+  const [results, game66Result, newarFetched] = await Promise.all([legacyVolumeRead, game66Read,
+    canReadNewar ? readNewarBusiness("third_party_volume", start, end, country, token) : Promise.resolve([] as NewarBusinessSnapshot[])]);
+  const newarSnapshots = dashboardAllowedRows(access, newarFetched);
+  const dbRows: DbVolumeRow[] = dashboardAllowedRows(access, mergeNewarVolumeRows(results.flatMap((result) => Array.isArray(result?.rows) ? result.rows : []), newarSnapshots));
   // 已接入的团队平台以安全聚合行并入代收列表；原始会员和订单字段不出库。
   const game66Rows = dashboardAllowedRows(access, game66Result.rows || []).map((row) => mapVolume({
     id: String(row.id || ""), sheet_name: String(row.sheet_name || "game66_charge_orders"), source_row: Number(row.source_row || 0),
@@ -652,7 +677,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   const rows = [...dbRows.map(mapVolume), ...game66Rows]
     .map(row => access.scope.mode === "all" ? row : {...row, raw: undefined})
     .filter((row) => !brazilPage || row.country === displayCountry || (displayCountry === "巴西" && row.country === "BR"));
-  const globalLatest = access.scope.mode === "all" ? [...results.map((result) => result?.latestWriteAt), game66Result.latestWriteAt].filter(Boolean).sort().pop() : null;
+  const globalLatest = access.scope.mode === "all" ? [...results.map((result) => result?.latestWriteAt), game66Result.latestWriteAt, ...newarSnapshots.map(snapshot => snapshot.captured_at)].filter(Boolean).sort().pop() : null;
   const updatedAt = String(globalLatest || dbRows.map((row) => String(row.updated_at || "")).filter(Boolean).sort().pop() || new Date().toISOString());
   const sheets = Array.from(new Set(rows.map((row) => row.sheetName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true }));
   const [collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual] = await Promise.all([successRead, pendingRead, depositRead, actualRead]);
@@ -785,7 +810,7 @@ function workOrderPayloadFromRows(rows: WorkOrderRow[], monthKeys: string[]): Wo
       year: monthKeys[0]?.slice(0, 4) || String(new Date().getFullYear()),
       month: monthKeys[0] ? String(Number(monthKeys[0].slice(5, 7))) : String(new Date().getMonth() + 1),
       updatedAt: new Date().toISOString(), source: "supabase", sheets,
-      message: rows.length ? "工单最新日汇总直接读取 Supabase；历史缺失时可回退 Google 快照。" : "Supabase 暂无工单日汇总。",
+      message: rows.length ? "工单读取 Supabase；NEWAR 直传优先，未覆盖的历史日期保留旧快照。" : "Supabase 暂无工单日汇总。",
     },
     summary: {
       total: rows.reduce((sum, row) => sum + row.total, 0), success: rows.reduce((sum, row) => sum + row.success, 0),
@@ -811,8 +836,12 @@ export async function readSupabaseWorkOrderMonths(request: Request, monthKeys: s
     order: "stat_date.asc,platform.asc",
   });
   query.append("stat_date", `lte.${end}`);
-  const bundles = await fetchPaged<DbWorkOrderBundle>("workorder_daily_bundle", query, access.token);
-  const allowed = dashboardAllowedRows(access, bundles);
+  const canReadNewar = dashboardScopeAllows(access.scope, "巴基斯坦") || dashboardScopeAllows(access.scope, "印度");
+  const [bundles, newarFetched] = await Promise.all([
+    fetchPaged<DbWorkOrderBundle>("workorder_daily_bundle", query, access.token),
+    canReadNewar ? readNewarBusiness("workorder_daily_bundle", start, end, "", access.token) : Promise.resolve([] as NewarBusinessSnapshot[]),
+  ]);
+  const allowed = dashboardAllowedRows(access, mergeNewarWorkOrderBundles(bundles, dashboardAllowedRows(access, newarFetched)));
   return workOrderPayloadFromRows(allowed.flatMap(mapWorkOrderBundle), monthKeys);
 }
 
