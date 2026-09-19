@@ -59,12 +59,16 @@ function data() {
 const rates = [{ country: '巴西', platform: '43R' }, { country: '巴西', platform: 'PLAYER BR' },
   { country: '巴西', platform: 'POPKKK新' }, { country: '巴西', platform: 'RATE_ONLY' },
   { country: '越南', platform: 'VN_RATE_ONLY' }];
-function pipeline({ input = data(), platforms = [], country = '巴西', statusRows = rates } = {}) {
+function pipeline({ input = data(), platforms = [], country = '巴西', statusRows = rates,
+  catalog = [...input.map(({ country, platform }) => ({ country, platform })), ...statusRows] } = {}) {
   const api = functions();
   const context = { ...api, ...helper, ...countryHelper, ...workorders, ...orderTime, payload: { rows: input }, ratePayload: { platformStatuses: statusRows },
     useMemo: callback => callback(), mainTab: 'country', activeCountryPage: country, country: '', effectiveCountryFilter: country,
     optionCountryFilter: country, countrySelections: [], appliedCountrySelections: [], platformSelections: platforms,
     appliedPlatformSelections: platforms, appliedChannel: '', appliedDirection: '', appliedChannelTypeSelections: [],
+    filterOptions: { platforms: catalog, ready: true, loading: false, error: '' },
+    queryIntentRef: { current: 0 }, queryContextRef: { current: `viewer:${country}` }, viewerIdentity: 'viewer',
+    loadFlightRef: { current: null }, loadTimeRates: async () => {},
     timeQuery: {mode:'created',showDaily:()=>{},platforms:[],startClock:'00:00:00',endClock:'23:59:59',optionsLoading:false,optionsError:''},
     setSummaryQueryError:()=>{},setLegacySummaryNotice:()=>{},timeOptionsRows:[], startDate:'2026-09-01', endDate:'2026-09-30' };
   for (const name of ['rows', 'platformSelectionCountry', 'selectedPlatformSet', 'optionScopedRowsBeforeCountry', 'optionScopedRows', 'configuredPlatforms',
@@ -119,7 +123,7 @@ test('actual component rows normalize names without deleting, duplicating or mut
   for (let index = 0; index < input.length; index++) for (const field of fields) assert.equal(view.rows[index][field], input[index][field]);
   assert.deepEqual(view.sumRows(view.rows), view.sumRows(input));
 });
-test('actual volume+rate option union removes confirmed duplicate spellings but keeps rate-only platforms', () => {
+test('actual authorized catalog removes duplicate spellings but keeps configured-only platforms', () => {
   const view = pipeline();
   assert.deepEqual(view.platforms, ['43-R', '43R', 'PLAYER BR', 'PLAYER-BR', 'POPKKK', 'RATE_ONLY'].sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true })));
   assert.equal(view.platforms.filter(name => name === '43R').length, 1);
@@ -128,6 +132,14 @@ test('actual volume+rate option union removes confirmed duplicate spellings but 
   assert.ok(view.platforms.includes('RATE_ONLY')); assert.ok(!view.platforms.includes('VN_RATE_ONLY'));
   assert.equal(view.uniq(view.optionScopedRows.map(row => row.platform)).length, 5);
   assert.equal(view.platforms.length, 6, 'Configured options can legitimately exceed active-volume platforms');
+});
+test('authorized catalog options are available before any volume response and exclude unregistered payload platforms', () => {
+  const catalog = [{ country: '巴西', platform: '43r' }, { country: '巴西', platform: '43R' },
+    { country: '巴西', platform: 'RATE_ONLY' }, { country: '越南', platform: 'VN_RATE_ONLY' }];
+  const empty = pipeline({ input: [], statusRows: [], catalog });
+  assert.deepEqual(empty.platforms, ['43R', 'RATE_ONLY']);
+  const loaded = pipeline({ input: [row('secret1', 'NOT_AUTHORIZED', 123, 4)], catalog });
+  assert.deepEqual(loaded.platforms, empty.platforms, 'report rows must not widen the authorized platform directory');
 });
 test('actual applied filter and draft channel/type options accept old and canonical selections', () => {
   for (const selected of ['PLAYERBR', 'PLAYER BR']) {
@@ -186,6 +198,17 @@ test('actual selection-retention effect canonicalizes old saved choices instead 
   new Function(...Object.keys(context), compile(`const run = ${callback.getText(source)}; run();`))(...Object.values(context));
   assert.deepEqual(next, ['43R', 'PLAYER BR', 'POPKKK']); assert.equal(channel, ''); assert.deepEqual(types, []);
 });
+test('catalog loading or failure never clears a platform choice into an all-platform query', () => {
+  const effect = dashboard.body.statements.find(node => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
+    && node.expression.expression.getText(source) === 'useEffect' && node.expression.arguments[0]?.getText(source).includes('setPlatformSelections(next)'));
+  for (const directory of [{ ready: false, loading: true, error: '' }, { ready: false, loading: false, error: 'denied' }]) {
+    const view = pipeline({ platforms: ['43R'], catalog: [] });
+    const context = { ...view, filterOptions: { platforms: [], ...directory },
+      setPlatformSelections: () => assert.fail('must retain selection while catalog is unavailable'),
+      setChannel: () => assert.fail('must retain channel'), setChannelTypeSelections: () => assert.fail('must retain types') };
+    new Function(...Object.keys(context), compile(`const run = ${effect.expression.arguments[0].getText(source)}; run();`))(...Object.values(context));
+  }
+});
 test('actual modal platform candidates and filtering use the same alias identities', () => {
   const modal = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'VolumeRowsModal');
   const vars = new Map();
@@ -202,36 +225,44 @@ test('actual query commits canonical selection state without broadening the sele
   const query = dashboard.body.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'runQuery');
   assert.ok(query);
   const writes = {}, requests = [];
-  const context = { ...pipeline({ platforms: ['43r', '43R', 'PLAYERBR', 'POPKKK新', 'POPKKK'] }), startDate: '2026-09-09', endDate: '2026-09-10',
+  // The selection-retention effect above canonicalizes persisted aliases before submission.
+  const context = { ...pipeline({ platforms: ['43R', 'PLAYER BR', 'POPKKK'] }), startDate: '2026-09-09', endDate: '2026-09-10',
     appliedStartDate: '', appliedEndDate: '', channel: '', direction: '', channelTypeSelections: [],
     queryInFlightRef: { current: false }, payloadRef: { current: null },
     loadData: async (...args) => { requests.push(args); return true; },
     ...Object.fromEntries(['IsQuerying', 'AppliedStartDate', 'AppliedEndDate', 'AppliedCountrySelections', 'AppliedPlatformSelections',
-      'AppliedChannel', 'AppliedDirection', 'AppliedChannelTypeSelections', 'AppliedCountryPage', 'LastQueryAt', 'HasQueried']
+      'AppliedChannel', 'AppliedDirection', 'AppliedChannelTypeSelections', 'AppliedCountryPage', 'AppliedViewer', 'LastQueryAt', 'HasQueried']
       .map(name => ['set' + name, value => { writes[name] = value; }])) };
   await new Function(...Object.keys(context), compile(query.getText(source)) + '\nreturn runQuery();')(...Object.values(context));
   assert.deepEqual(writes.AppliedPlatformSelections, ['43R', 'PLAYER BR', 'POPKKK']);
   assert.equal(writes.AppliedCountryPage, '巴西');
+  assert.equal(writes.AppliedViewer, 'viewer');
   assert.equal(writes.AppliedStartDate, '2026-09-09'); assert.equal(writes.AppliedEndDate, '2026-09-10');
   assert.deepEqual(requests, [[true, '2026-09-09', '2026-09-10', '', '巴西', true]]);
   assert.equal(writes.IsQuerying, false);
 });
-test('failed country query keeps the selected tab while retaining the last successful result', async () => {
+test('failed query retains a same-country result but never exposes another country or account result', async () => {
   const query = dashboard.body.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'runQuery');
   assert.ok(query);
   const writes = {}, queryInFlightRef = { current: false };
-  const context = { ...pipeline({ country: '越南' }), mainTab: 'country', activeCountryPage: '越南', appliedCountryPage: '印度',
+  const context = { ...pipeline({ country: '越南' }), mainTab: 'country', activeCountryPage: '越南', appliedCountryPage: '越南',
+    appliedViewer: 'viewer',
     startDate: '2026-09-10', endDate: '2026-09-10', appliedStartDate: '2026-09-09', appliedEndDate: '2026-09-09',
     channel: '', direction: '', channelTypeSelections: [], queryInFlightRef,
-    payloadRef: { current: { rows: [{ country: '印度' }] } }, loadData: async () => false,
+    payloadRef: { current: { rows: [{ country: '越南' }] } }, loadData: async () => false,
     setCountryPage: value => { writes.CountryPage = value; },
     ...Object.fromEntries(['IsQuerying', 'AppliedStartDate', 'AppliedEndDate', 'AppliedCountrySelections', 'AppliedPlatformSelections',
-      'AppliedChannel', 'AppliedDirection', 'AppliedChannelTypeSelections', 'AppliedCountryPage', 'LastQueryAt', 'HasQueried']
+      'AppliedChannel', 'AppliedDirection', 'AppliedChannelTypeSelections', 'AppliedCountryPage', 'AppliedViewer', 'LastQueryAt', 'HasQueried']
       .map(name => ['set' + name, value => { writes[name] = value; }])) };
   await new Function(...Object.keys(context), compile(query.getText(source)) + '\nreturn runQuery();')(...Object.values(context));
   assert.equal(writes.CountryPage, undefined, 'a failed request must not jump the selected country back');
   assert.equal(writes.AppliedCountryPage, undefined, 'failed filters must not become the applied result');
-  assert.equal(writes.HasQueried, true, 'the previous successful payload remains visible');
+  assert.equal(writes.HasQueried, true, 'the previous same-country successful payload is retained');
+  assert.equal(evaluate('showDailyResult', { ...context, hasQueried: writes.HasQueried }), true);
+  assert.equal(evaluate('showDailyResult', { ...context, hasQueried: true, appliedCountryPage: '印度' }), false,
+    'an India payload must not render under the Vietnam tab even before the cleanup effect');
+  assert.equal(evaluate('showDailyResult', { ...context, hasQueried: true, appliedViewer: 'old-viewer' }), false,
+    'an old account payload must not render even before the cleanup effect');
   assert.equal(writes.IsQuerying, false);
   assert.equal(queryInFlightRef.current, false);
 });
@@ -246,7 +277,7 @@ test('query ref blocks rapid concurrent submits and source ignores stale load co
     channel: '', direction: '', channelTypeSelections: [], queryInFlightRef, payloadRef: { current: null },
     loadData: async () => { calls += 1; return pending; },
     ...Object.fromEntries(['IsQuerying', 'AppliedStartDate', 'AppliedEndDate', 'AppliedCountrySelections', 'AppliedPlatformSelections',
-      'AppliedChannel', 'AppliedDirection', 'AppliedChannelTypeSelections', 'AppliedCountryPage', 'LastQueryAt', 'HasQueried']
+      'AppliedChannel', 'AppliedDirection', 'AppliedChannelTypeSelections', 'AppliedCountryPage', 'AppliedViewer', 'LastQueryAt', 'HasQueried']
       .map(name => ['set' + name, () => {}])) };
   const run = new Function(...Object.keys(context), compile(query.getText(source)) + '\nreturn runQuery;')(...Object.values(context));
   const first = run();
@@ -257,13 +288,144 @@ test('query ref blocks rapid concurrent submits and source ignores stale load co
   assert.equal(queryInFlightRef.current, false);
 
   assert.match(text, /const requestSequence = \+\+loadRequestSequenceRef\.current/);
-  assert.equal((text.match(/requestSequence !== loadRequestSequenceRef\.current/g) || []).length, 2);
-  assert.match(text, /AbortSignal\.timeout\(THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS\)/);
   assert.match(text, /THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS = 25_000/);
-  assert.match(text, /!queryInFlightRef\.current[\s\S]*rangeIncludesCurrentMonth/);
-  assert.match(text, /\[session\?\.user\.id, profileScopeIdentity\]/);
+  assert.match(text, /\[viewerIdentity\]/);
   assert.doesNotMatch(text, /\[session\?\.access_token, profile\]/);
   assert.doesNotMatch(text, /if \(appliedCountryPage\) setCountryPage\(appliedCountryPage\)/);
+});
+test('mount and identity changes only prefill controls and invalidate old requests, with no report request or timer', () => {
+  const effect = dashboard.body.statements.find(node => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
+    && node.expression.expression.getText(source) === 'useEffect'
+    && node.expression.arguments[1]?.getText(source) === '[viewerIdentity]');
+  assert.ok(effect, 'Account/scope initialization effect must exist');
+  const invalidate = dashboard.body.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'invalidateQuery');
+  let aborted = 0, cleared = 0;
+  const writes = {};
+  const context = {
+    profile: {}, COUNTRY_NAV_TABS: ['印度', '巴基斯坦'], yesterdayLocalDateKey: () => '2026-09-18',
+    effectiveDashboardDataScope: () => ({ mode: 'all' }), dashboardScopeAllows: () => true,
+    queryIntentRef: { current: 7 }, loadRequestSequenceRef: { current: 9 },
+    loadFlightRef: { current: { abort: () => { aborted += 1; } } }, queryInFlightRef: { current: true },
+    payloadRef: { current: { rows: [{ country: '印度' }] } }, timeQuery: { clearResult: () => { cleared += 1; } },
+    loadData: () => assert.fail('mount/account change must not request a business report'),
+    dashboardBusinessFetch: () => assert.fail('mount/account change must not fetch business data'),
+    setInterval: () => assert.fail('there must be no automatic report refresh interval'),
+    ...Object.fromEntries(['StartDate', 'EndDate', 'CountryPage', 'PlatformSelections', 'CountrySelections', 'Channel',
+      'ChannelTypeSelections', 'RatePayload', 'IsQuerying', 'HasQueried', 'Payload', 'VolumeSyncStatus', 'Error',
+      'DataNotice', 'SummaryQueryError', 'LegacySummaryNotice', 'State'].map(name => ['set' + name,
+        value => { writes[name] = typeof value === 'function' ? value('') : value; }]))
+  };
+  const cleanup = new Function(...Object.keys(context), compile(`${invalidate.getText(source)}\nconst run = ${effect.expression.arguments[0].getText(source)};`)
+    + '\nreturn run();')(...Object.values(context));
+  assert.equal(writes.StartDate, '2026-09-18'); assert.equal(writes.CountryPage, '印度');
+  assert.equal(writes.HasQueried, false); assert.equal(writes.Payload, null);
+  assert.equal(context.payloadRef.current, null); assert.equal(context.queryInFlightRef.current, false);
+  assert.equal(context.queryIntentRef.current, 8); assert.equal(context.loadRequestSequenceRef.current, 10);
+  assert.equal(cleared, 1); assert.equal(aborted, 1);
+  cleanup();
+  assert.equal(context.queryIntentRef.current, 9); assert.equal(context.loadRequestSequenceRef.current, 11);
+  assert.equal(aborted, 2);
+  for (const statement of dashboard.body.statements) {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)
+      || statement.expression.expression.getText(source) !== 'useEffect') continue;
+    assert.doesNotMatch(statement.expression.arguments[0]?.getText(source) || '', /\bloadData\s*\(|\brunQuery\s*\(/,
+      'business queries must remain an explicit submit action');
+  }
+});
+
+function loadHarness(overrides = {}) {
+  const writes = [], requests = [];
+  const payload = { rows: [row('p1', 'PK_TEST', 10, 2, { country: '巴基斯坦' })] };
+  const response = value => ({ ok: true, status: 200, json: async () => value });
+  const context = {
+    profile: {}, ratePayload: null, loadRequestSequenceRef: { current: 0 }, queryContextRef: { current: 'viewer:巴基斯坦' },
+    loadFlightRef: { current: null }, payloadRef: { current: null },
+    THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS: 25_000, THIRD_PARTY_VOLUME_QUERY_TIMEOUT_SECONDS: 25,
+    THIRD_PARTY_RATES_QUERY_TIMEOUT_MS: 12_000, THIRD_PARTY_VOLUME_CACHE_KEY: 'volume', THIRD_PARTY_RATES_CACHE_KEY: 'rates',
+    thirdPartyVolumeApiUrl: () => '/volume', thirdPartySyncStatusApiUrl: () => '/status',
+    readLocalCache: () => null, writeLocalCache: (...args) => writes.push(['cache', ...args]),
+    ratePayloadUsable: value => Boolean(value?.usable), ratePayloadFresh: () => false,
+    effectiveDashboardDataScope: () => ({ mode: 'all' }), isDashboardDataDenied: () => false,
+    safeReadJson: response => response.json(), rangeIncludesCurrentMonth: () => true,
+    sortCountries: values => values, defaultStart: () => '2026-09-10', defaultEnd: () => '2026-09-10',
+    dateMatches: () => true, rowMatchesRequestedCountry: (row, country) => row.country === country,
+    attachClientFallbackMessage: value => value,
+    dashboardBusinessFetch: async (url, options) => {
+      requests.push([url, options]);
+      return response(url === '/volume' ? payload : url === '/status' ? { ok: true } : { usable: true });
+    },
+    ...Object.fromEntries(['State', 'Error', 'Payload', 'RatePayload', 'DataNotice', 'VolumeSyncStatus', 'KnownCountries', 'StartDate', 'EndDate']
+      .map(name => ['set' + name, value => writes.push([name, value])])),
+    ...overrides,
+  };
+  const declaration = dashboard.body.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'loadData');
+  const run = new Function(...Object.keys(context), compile(declaration.getText(source)) + '\nreturn loadData;')(...Object.values(context));
+  return { context, writes, requests, response, run };
+}
+
+test('country/account invalidation during rate or status JSON parsing prevents every late data/cache commit', async () => {
+  for (const pauseAt of ['rates', 'status']) {
+    let reached, resume;
+    const waiting = new Promise(resolve => { reached = resolve; });
+    const blocked = new Promise(resolve => { resume = resolve; });
+    const harness = loadHarness({ dashboardBusinessFetch: async url => ({ ok: true, status: 200, json: async () => {
+      const kind = url === '/volume' ? 'volume' : url === '/status' ? 'status' : 'rates';
+      if (kind === pauseAt) { reached(); await blocked; }
+      return kind === 'volume' ? { rows: [row('late1', 'PK_TEST', 10, 2, { country: '巴基斯坦' })] }
+        : kind === 'rates' ? { usable: true } : { ok: true };
+    } }) });
+    const pending = harness.run(true, '2026-09-10', '2026-09-10', '', '巴基斯坦', true);
+    await waiting;
+    const before = [...harness.writes];
+    harness.context.queryContextRef.current = 'new-viewer:印度';
+    ++harness.context.loadRequestSequenceRef.current;
+    harness.context.loadFlightRef.current.abort();
+    resume();
+    assert.equal(await pending, false);
+    assert.deepEqual(harness.writes, before, `${pauseAt}: invalidated response cannot change data, notices, loading or cache`);
+    assert.equal(harness.context.payloadRef.current, null);
+  }
+});
+
+test('volume request retains its 25-second timeout and handles abort without publishing fake zero rows', async () => {
+  const deadlines = [], controllers = [];
+  const harness = loadHarness({ AbortSignal: {
+    any: signals => globalThis.AbortSignal.any(signals),
+    timeout: milliseconds => {
+      deadlines.push(milliseconds);
+      const controller = new AbortController(); controllers.push(controller); return controller.signal;
+    },
+  }, dashboardBusinessFetch: async (_url, { signal }) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  }) });
+  const pending = harness.run(true, '2026-09-10', '2026-09-10', '', '巴基斯坦', true);
+  assert.equal(deadlines[0], 25_000);
+  for (const controller of controllers) controller.abort(new DOMException('deadline', 'TimeoutError'));
+  assert.equal(await pending, false);
+  assert.ok(harness.writes.some(([name, value]) => name === 'Error' && /25/.test(value)));
+  assert.equal(harness.writes.some(([name]) => name === 'Payload' || name === 'cache'), false);
+  assert.equal(harness.context.payloadRef.current, null);
+});
+
+test('country switch invalidates an in-flight submit including its finally cleanup', async () => {
+  const query = dashboard.body.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'runQuery');
+  let resume;
+  const waiting = new Promise(resolve => { resume = resolve; });
+  const writes = [];
+  const context = { ...pipeline(), startDate: '2026-09-10', endDate: '2026-09-10', appliedStartDate: '', appliedEndDate: '',
+    channel: '', direction: '', channelTypeSelections: [], queryInFlightRef: { current: false }, payloadRef: { current: null },
+    loadData: async () => waiting,
+    ...Object.fromEntries(['IsQuerying', 'AppliedStartDate', 'AppliedEndDate', 'AppliedCountrySelections', 'AppliedPlatformSelections',
+      'AppliedChannel', 'AppliedDirection', 'AppliedChannelTypeSelections', 'AppliedCountryPage', 'AppliedViewer', 'LastQueryAt', 'HasQueried']
+      .map(name => ['set' + name, value => writes.push([name, value])])) };
+  const run = new Function(...Object.keys(context), compile(query.getText(source)) + '\nreturn runQuery;')(...Object.values(context));
+  const pending = run();
+  context.queryContextRef.current = 'viewer:巴基斯坦'; ++context.queryIntentRef.current;
+  // A newer country request owns this shared busy flag now.
+  context.queryInFlightRef.current = true;
+  const before = [...writes]; resume(true); await pending;
+  assert.deepEqual(writes, before, 'late submit cannot publish filters or clear the newer request busy state');
+  assert.equal(context.queryInFlightRef.current, true);
 });
 test('actual platform card explicitly counts active data, not the larger configured-option union', () => {
   const page = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'CountryVolumeSinglePage');

@@ -29,7 +29,7 @@ export async function orderTimeRpc(session:DashboardSession|null, name:string,bo
 
 export function useOrderTimeQuery() {
   const {session,profile}=useDashboardAuth();
-  const identity=dashboardScopeIdentity(profile),currentIdentity=useRef(identity);currentIdentity.current=identity;
+  const identity=`${session?.user.id||""}:${dashboardScopeIdentity(profile)}`,currentIdentity=useRef(identity);currentIdentity.current=identity;
   const [mode,setMode]=useState<"daily"|"created"|"success">("created");
   const [startClock,setStartClock]=useState("00:00:00"),[endClock,setEndClock]=useState("23:59:59");
   const [createdStart,setCreatedStart]=useState(""),[createdEnd,setCreatedEnd]=useState("");
@@ -40,6 +40,10 @@ export function useOrderTimeQuery() {
   const [optionsLoading,setOptionsLoading]=useState(false),[optionsRetry,setOptionsRetry]=useState(0);
   const [progress,setProgress]=useState({completed:0,total:0,active:0});
   const requestSerial=useRef(0),flight=useRef<AbortController|null>(null);
+  function clearResult() {
+    ++requestSerial.current;flight.current?.abort();
+    setStored(null);setActive(false);setBusy(false);setError("");setProgress({completed:0,total:0,active:0});
+  }
   useEffect(()=>{
     const controller=new AbortController();let disposed=false,timedOut=false;
     const timer=setTimeout(()=>{timedOut=true;controller.abort();},30000);
@@ -47,9 +51,9 @@ export function useOrderTimeQuery() {
     setPlatforms([]);setStored(null);setActive(false);setBusy(false);setError("");setOptionsError("");
     setOptionsLoading(true);
     void orderTimeRpc(session,"dashboard_order_time_query",{},controller.signal).then(payload=>{
-      if(!controller.signal.aborted&&Array.isArray(payload.platforms))setPlatforms(payload.platforms);
-    }).catch(err=>{if(!disposed)setOptionsError(timedOut?"平台明细权限读取超时，请重试。":err.message);})
-      .finally(()=>{clearTimeout(timer);if(!disposed)setOptionsLoading(false);});
+      if(!disposed&&identity===currentIdentity.current&&!controller.signal.aborted&&Array.isArray(payload.platforms))setPlatforms(payload.platforms);
+    }).catch(err=>{if(!disposed&&identity===currentIdentity.current)setOptionsError(timedOut?"平台明细权限读取超时，请重试。":err.message);})
+      .finally(()=>{clearTimeout(timer);if(!disposed&&identity===currentIdentity.current)setOptionsLoading(false);});
     return()=>{disposed=true;clearTimeout(timer);controller.abort();flight.current?.abort();++requestSerial.current;};
   // Token refresh must not erase a query. RPC always verifies server-side scope.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -72,27 +76,27 @@ export function useOrderTimeQuery() {
       const payloads=await queryOrderTimeBatches(selected.map(p=>timeOrderFilters(draft,p.id)),
         (body,signal)=>orderTimeRpc(session,"dashboard_order_time_query",body,signal),
         {signal:controller.signal,onProgress:value=>{if(serial===requestSerial.current&&viewer===currentIdentity.current)setProgress(value);}});
-      if(serial!==requestSerial.current||viewer!==currentIdentity.current)return false;
+      if(controller.signal.aborted||serial!==requestSerial.current||viewer!==currentIdentity.current)return false;
       setStored({identity:viewer,data:{selection,payloads}});setActive(true);return true;
-    }catch(err){if(serial===requestSerial.current){
+    }catch(err){if(serial===requestSerial.current&&viewer===currentIdentity.current){
       if(isOrderQueryDenied(err)){setStored(null);setActive(false);setPlatforms([]);}
       setError(controller.signal.aborted?"查询超时，请缩短时间段。":(err as Error).message);
     }return false;}
-    finally{clearTimeout(timer);if(serial===requestSerial.current)setBusy(false);}
+    finally{clearTimeout(timer);if(serial===requestSerial.current&&viewer===currentIdentity.current)setBusy(false);}
   }
   return {mode,setMode,startClock,setStartClock,endClock,setEndClock,createdStart,setCreatedStart,createdEnd,setCreatedEnd,
-    platforms,run,busy,error,progress,cancel:()=>{++requestSerial.current;flight.current?.abort();setBusy(false);setError("查询已取消，保留上次查询结果。");},optionsError,optionsLoading,reloadOptions:()=>setOptionsRetry(n=>n+1),active:active&&stored?.identity===identity,result:stored?.identity===identity?stored.data:null,
+    platforms,run,busy,error,progress,clearResult,cancel:()=>{++requestSerial.current;flight.current?.abort();setBusy(false);setError("查询已取消，保留上次查询结果。");},optionsError,optionsLoading,reloadOptions:()=>setOptionsRetry(n=>n+1),active:active&&stored?.identity===identity,result:stored?.identity===identity?stored.data:null,
     showDaily:()=>{setActive(false);setError("");}};
 }
 
-export function TimeQueryExtra({query}:{query:ReturnType<typeof useOrderTimeQuery>}) {
+export function TimeQueryExtra({query,showTimeHelp=true}:{query:ReturnType<typeof useOrderTimeQuery>;showTimeHelp?:boolean}) {
   if(query.mode==="daily")return null;
   return <div className="integrated-time-extra">
-    <div className="order-query-help"><span>印度后台时间 UTC+05:30 · 单次最多 31 天</span><span>{query.mode==="created"?"统计时段内创建的订单，包括尚未成功的订单。":"统计时段内成功的订单，包括以前创建的订单。"}</span></div>
+    {showTimeHelp&&<div className="order-query-help"><span>印度后台时间 UTC+05:30 · 单次最多 31 天</span><span>{query.mode==="created"?"统计时段内创建的订单，包括尚未成功的订单。":"统计时段内成功的订单，包括以前创建的订单。"}</span></div>}
     {query.busy&&<p role="status" className="order-query-progress">正在分段读取：{query.progress.completed} / {query.progress.total}，全部完成后统一展示。 <button type="button" className="mini-btn" onClick={query.cancel}>取消查询</button></p>}
     {query.optionsLoading&&<p role="status">正在读取可查询的平台…</p>}
     {query.optionsError&&<p role="alert" className="business-query-error">{query.optionsError} <button type="button" className="mini-btn" onClick={query.reloadOptions}>重新读取平台</button></p>}
-    {query.mode==="success"&&<details className="order-advanced"><summary>更多筛选：限制创建时间（可选）{query.createdStart||query.createdEnd?" · 已设置":""}</summary><div className="time-secondary-fields">
+    {showTimeHelp&&query.mode==="success"&&<details className="order-advanced"><summary>更多筛选：限制创建时间（可选）{query.createdStart||query.createdEnd?" · 已设置":""}</summary><div className="time-secondary-fields">
       <label className="field">创建开始<input className="input" type="datetime-local" step="1" value={query.createdStart} onChange={e=>query.setCreatedStart(e.target.value)}/></label>
       <label className="field">创建结束<input className="input" type="datetime-local" step="1" value={query.createdEnd} onChange={e=>query.setCreatedEnd(e.target.value)}/></label>
       <button className="mini-btn" type="button" onClick={()=>{query.setCreatedStart("");query.setCreatedEnd("");}}>清除创建时间限制</button>

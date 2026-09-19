@@ -104,7 +104,7 @@ visit(main);assert.ok(filterNode,'the existing dashboard filter card must be tes
 function filterElement(mode='created',overrides={}){
   const noop=()=>{};
   const timeQuery={mode,startClock:'00:00:00',endClock:'23:59:59',memberId:'',orderNumber:'',status:'all',crossDayOnly:false,createdStart:'',createdEnd:'',active:true};
-  const context={...api,...dependencies,exports:{},timeQuery,timePlatformOptions:['EK7','GEM7','MAX7'],startDate:'2026-09-17',endDate:'2026-09-17',activeCountryPage:'香港',
+  const context={...api,...dependencies,exports:{},filterOptions:{ready:true,loading:false,error:''},timeQuery,timePlatformOptions:['EK7','GEM7','MAX7'],startDate:'2026-09-17',endDate:'2026-09-17',activeCountryPage:'香港',
     countryFilterOptions:[],countrySelections:[],platforms:['EK7'],platformSelections:['EK7'],platformSelectionCountry:'香港',channel:'',channels:['PayA','PayB'],
     channelTypeOptions:['UPI','BANK'],channelTypeSelections:[],direction:'',isQuerying:false,hasPendingQuery:false,applyDateShortcut:noop,runQuery:noop,
     setChannelTypeSelections:noop,...overrides};

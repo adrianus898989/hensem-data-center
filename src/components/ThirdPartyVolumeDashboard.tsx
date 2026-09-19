@@ -2065,9 +2065,47 @@ function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolum
   return { ...row, country, platform, channel, channelType };
 }
 
+type VolumeFilterPlatform = {country:string;platform:string};
+
+/** The directory contains names only; loading it must not query a report. */
+function useVolumeFilterOptions(profile: DashboardProfile | null, userId: string | undefined) {
+  const identity = `${userId || ""}:${dashboardScopeIdentity(profile)}`;
+  const owner = useRef(identity);owner.current = identity;
+  const [stored, setStored] = useState<{identity:string;platforms:VolumeFilterPlatform[]}|null>(null);
+  const [loading, setLoading] = useState(true), [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();let disposed = false, timedOut = false;
+    const timer = setTimeout(() => {timedOut = true;controller.abort();}, 30000);
+    setLoading(true);setError("");
+    void (async () => {
+      try {
+        const response = await dashboardBusinessFetch("/api/third-party-filter-options", {signal:controller.signal});
+        const data = await safeReadJson(response, "平台目录");
+        if (!response.ok) throw new Error(data?.message || "平台目录读取失败，请重试。");
+        if (!Array.isArray(data?.platforms) || data.platforms.some((row:any) => !row || typeof row.country !== "string" || !row.country.trim() || typeof row.platform !== "string" || !row.platform.trim())) throw new Error("平台目录返回不完整，请重试。");
+        if (!disposed && !controller.signal.aborted && owner.current === identity) {
+          const scoped = data.platforms.map((row:VolumeFilterPlatform) => withPlatformDisplayCountry(row))
+            .filter((row:VolumeFilterPlatform) => dashboardScopeAllows(effectiveDashboardDataScope(profile),row.country,row.platform));
+          setStored({identity,platforms:scoped});
+        }
+      } catch (err) {
+        if (!disposed && owner.current === identity) setError(timedOut ? "平台目录读取超时，请重试。" : err instanceof Error ? err.message : "平台目录读取失败，请重试。");
+      } finally {clearTimeout(timer);if (!disposed && owner.current === identity) setLoading(false);}
+    })();
+    return () => {disposed = true;controller.abort();clearTimeout(timer);};
+  // Access-token renewal does not reset this permission-scoped directory.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity,retry]);
+  return {platforms:stored?.identity===identity?stored.platforms:[],loading,error,
+    ready:stored?.identity===identity&&!loading&&!error,reload:()=>setRetry(n=>n+1)};
+}
+
 export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:()=>void}={}) {
   const { session, profile } = useDashboardAuth();
   const profileScopeIdentity = dashboardScopeIdentity(profile);
+  const viewerIdentity = `${session?.user.id || ""}:${profileScopeIdentity}`;
+  const filterOptions = useVolumeFilterOptions(profile,session?.user.id);
   const [state, setState] = useState<LoadState>("ready");
   const [payload, setPayload] = useState<ThirdPartyVolumePayload | null>(null);
   const [ratePayload, setRatePayload] = useState<ThirdPartyRatePayload | null>(null);
@@ -2078,6 +2116,9 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
   const [knownCountries, setKnownCountries] = useState<string[]>([]);
   const payloadRef = useRef<ThirdPartyVolumePayload | null>(null);
   const loadRequestSequenceRef = useRef(0);
+  const loadFlightRef = useRef<AbortController|null>(null);
+  const queryIntentRef = useRef(0);
+  const queryContextRef = useRef("");
   const queryInFlightRef = useRef(false);
   const [country, setCountry] = useState("");
   const [platformSelections, setPlatformSelections] = useState<string[]>([]);
@@ -2099,8 +2140,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
   const [isQuerying, setIsQuerying] = useState(false);
   const [lastQueryAt, setLastQueryAt] = useState("");
   const [hasQueried, setHasQueried] = useState(false);
-  const startDateRef = useRef("");
-  const endDateRef = useRef("");
+  const [appliedViewer, setAppliedViewer] = useState("");
   const [mainTab, setMainTab] = useState<VolumeMainTab>("country");
   const [tab, setTab] = useState<TabKey>("daily");
   const [countryPage, setCountryPage] = useState("");
@@ -2111,9 +2151,39 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
   const [legacySummaryNotice, setLegacySummaryNotice] = useState("");
   const timeQuery = useOrderTimeQuery();
 
+  function invalidateQuery() {
+    ++queryIntentRef.current;++loadRequestSequenceRef.current;loadFlightRef.current?.abort();
+    queryInFlightRef.current=false;setIsQuerying(false);timeQuery.clearResult();
+    setHasQueried(false);setPayload(null);payloadRef.current=null;setVolumeSyncStatus(null);
+    setError("");setDataNotice("");setSummaryQueryError("");setLegacySummaryNotice("");setState("ready");
+  }
+
+  async function loadTimeRates(intent:number, context:string) {
+    const controller=new AbortController();loadFlightRef.current?.abort();loadFlightRef.current=controller;
+    const isCurrent=()=>intent===queryIntentRef.current&&context===queryContextRef.current&&!controller.signal.aborted;
+    const cached=ratePayloadUsable(ratePayload)?ratePayload:readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY,profile);
+    if(ratePayloadFresh(cached)){if(isCurrent()){setRatePayload(cached);setDataNotice("");}return;}
+    try {
+      const url=effectiveDashboardDataScope(profile).mode==="all"?"/api/supabase-third-party-rates?includeStatuses=0":"/api/supabase-third-party-rates";
+      const response=await dashboardBusinessFetch(url,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(THIRD_PARTY_RATES_QUERY_TIMEOUT_MS)])});
+      const next=await safeReadJson(response,"三方费率") as ThirdPartyRatePayload;
+      if(!response.ok||!ratePayloadUsable(next))throw new Error("手续费费率暂未载入");
+      if(!isCurrent())return;
+      setRatePayload(next);writeLocalCache(THIRD_PARTY_RATES_CACHE_KEY,next,profile);setDataNotice("");
+    } catch(err) {
+      if(!isCurrent())return;
+      const retained=!isDashboardDataDenied(err)&&ratePayloadUsable(cached)?cached:null;
+      setRatePayload(retained);
+      setDataNotice(retained?"手续费读取暂时失败，保留上一份有效费率；订单查询结果不受影响。":"手续费费率暂未载入（不会按 0 展示）；订单查询结果不受影响。");
+    }
+  }
 
   async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "", requestedCountry = "", forceRates = false): Promise<boolean> {
     const requestSequence = ++loadRequestSequenceRef.current;
+    const context = queryContextRef.current, controller = new AbortController();
+    loadFlightRef.current?.abort();loadFlightRef.current=controller;
+    const isCurrent = () => requestSequence===loadRequestSequenceRef.current && context===queryContextRef.current && !controller.signal.aborted;
+    const signal = (timeout:number) => AbortSignal.any([controller.signal,AbortSignal.timeout(timeout)]);
     // V247：Supabase 已有数据时，任何瞬时网络/API问题都不能把整页从有数据变成 0。
     if (!silent && !payloadRef.current) setState("loading");
     setError("");
@@ -2130,14 +2200,14 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       let rateTransportError = "";
 
       const [firstVolumeRes, rateRes, statusRes] = await Promise.all([
-        dashboardBusinessFetch(volumeUrl, { signal: AbortSignal.timeout(THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS) }),
-        shouldFetchRates ? dashboardBusinessFetch(ratesUrl, { signal: AbortSignal.timeout(THIRD_PARTY_RATES_QUERY_TIMEOUT_MS) })
+        dashboardBusinessFetch(volumeUrl, { signal: signal(THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS) }),
+        shouldFetchRates ? dashboardBusinessFetch(ratesUrl, { signal: signal(THIRD_PARTY_RATES_QUERY_TIMEOUT_MS) })
           .catch(error=>{
             if(isDashboardDataDenied(error))throw error;
             rateTransportError = error instanceof Error ? error.message : "网络请求失败";
             return null;
           }) : Promise.resolve(null),
-        requestedStart && requestedEnd && effectiveDashboardDataScope(profile).mode==="all" ? dashboardBusinessFetch(thirdPartySyncStatusApiUrl(requestedStart, requestedEnd), { signal: AbortSignal.timeout(8000) })
+        requestedStart && requestedEnd && effectiveDashboardDataScope(profile).mode==="all" ? dashboardBusinessFetch(thirdPartySyncStatusApiUrl(requestedStart, requestedEnd), { signal: signal(8000) })
           .catch(() => null) : Promise.resolve(null)
       ]);
 
@@ -2145,28 +2215,25 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       let json = await safeReadJson(volumeRes, "三方量") as ThirdPartyVolumePayload;
       // A slower response from an older country/date request must never replace
       // the latest result or mutate its notice/loading state.
-      if (requestSequence !== loadRequestSequenceRef.current) return false;
+      if (!isCurrent()) return false;
       if (!volumeRes.ok) throw new Error((json as any)?.message || "读取 Supabase 三方量失败");
 
       const volumeRows = json?.rows || [];
       // Server-authorized zero rows are valid after a scope/date change.
-      setPayload(json);payloadRef.current=json;
       const cacheableCurrentSlice=rangeIncludesCurrentMonth(requestedStart,requestedEnd)
         && (!requestedStart || !requestedEnd || requestedStart===requestedEnd);
-      if(cacheableCurrentSlice)writeLocalCache(THIRD_PARTY_VOLUME_CACHE_KEY,json,profile);
 
       let rateNotice = "";
+      let nextRate = cachedRateBeforeFetch;
       if (rateRes && rateRes.ok) {
         try {
           const rateJson = await safeReadJson(rateRes, "三方费率") as ThirdPartyRatePayload;
           if (!ratePayloadUsable(rateJson)) {
             throw new Error("手续费接口返回空费率表");
           }
-          setRatePayload(rateJson);
-          writeLocalCache(THIRD_PARTY_RATES_CACHE_KEY,rateJson,profile);
+          nextRate = rateJson;
         } catch (rateError) {
           const reason = rateError instanceof Error ? rateError.message : "手续费数据格式异常";
-          setRatePayload(cachedRateBeforeFetch);
           rateNotice = cachedRateBeforeFetch
             ? `手续费接口刚才异常，当前保留上一份有效费率：${reason}`
             : `手续费费率暂未载入（不会按 0 展示）：${reason}`;
@@ -2182,19 +2249,18 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
           }
         }
         if (!reason) reason = "请求超时或网络中断";
-        setRatePayload(cachedRateBeforeFetch);
         rateNotice = cachedRateBeforeFetch
           ? `手续费接口刚才失败，当前保留上一份有效费率：${reason}`
           : `手续费费率暂未载入（不会按 0 展示）：${reason}`;
-      } else {
-        setRatePayload(cachedRateBeforeFetch);
       }
-      setDataNotice(rateNotice);
-
+      let nextStatus:VolumeSyncStatus|null = null;
       if (statusRes && statusRes.ok) {
-        try { setVolumeSyncStatus(await statusRes.json() as VolumeSyncStatus); } catch { /* 状态不影响主数据 */ }
+        try { nextStatus = await statusRes.json() as VolumeSyncStatus; } catch { /* 状态不影响主数据 */ }
       }
-
+      if (!isCurrent()) return false;
+      setPayload(json);payloadRef.current=json;setRatePayload(nextRate);setDataNotice(rateNotice);setVolumeSyncStatus(nextStatus);
+      if(cacheableCurrentSlice)writeLocalCache(THIRD_PARTY_VOLUME_CACHE_KEY,json,profile);
+      if(nextRate)writeLocalCache(THIRD_PARTY_RATES_CACHE_KEY,nextRate,profile);
       if (volumeRows.length) {
         const loadedCountries = volumeRows.map((row) => row.country).filter(Boolean);
         setKnownCountries((old) => sortCountries([...old, ...loadedCountries]));
@@ -2204,43 +2270,18 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       setState("ready");
       return true;
     } catch (err) {
-      if (requestSequence !== loadRequestSequenceRef.current) return false;
+      if (!isCurrent()) return false;
       const message = err instanceof DOMException && ["AbortError", "TimeoutError"].includes(err.name)
         ? `查询超过 ${THIRD_PARTY_VOLUME_QUERY_TIMEOUT_SECONDS} 秒，请缩短日期范围后重试。`
         : err instanceof Error ? err.message : "读取 Supabase 三方量失败";
       if(isDashboardDataDenied(err)){setPayload(null);payloadRef.current=null;setRatePayload(null);setVolumeSyncStatus(null);setDataNotice("");setError(message);setState("error");return false;}
-      const currentPayload = payloadRef.current;
-      const currentRows = currentPayload?.rows || [];
-      const currentMatchesSelection = Boolean(currentRows.length && currentRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd) && rowMatchesRequestedCountry(row, requestedCountry)));
-      const cachedVolume = readLocalCache<ThirdPartyVolumePayload>(THIRD_PARTY_VOLUME_CACHE_KEY,profile);
       const cachedRateCandidate = readLocalCache<ThirdPartyRatePayload>(THIRD_PARTY_RATES_CACHE_KEY,profile);
       const cachedRate = ratePayloadUsable(cachedRateCandidate) ? cachedRateCandidate : null;
-      const cachedRows = cachedVolume?.rows || [];
-      const cacheMatchesSelection = Boolean(cachedRows.length && cachedRows.some((row) => dateMatches(row.date, requestedStart, requestedEnd) && rowMatchesRequestedCountry(row, requestedCountry)));
-
-      if (currentPayload && currentMatchesSelection) {
-        const shown = attachClientFallbackMessage(currentPayload, message);
-        setPayload(shown);
-        payloadRef.current = shown;
-        setRatePayload(cachedRate || (ratePayloadUsable(ratePayload) ? ratePayload : null));
-        setDataNotice(`Supabase 刚才读取失败，当前保留上一份成功数据：${message}`);
-        setState("ready");
-        return true;
-      }
-      if (cachedVolume && cacheMatchesSelection) {
-        const shown = attachClientFallbackMessage(cachedVolume, message);
-        setPayload(shown);
-        payloadRef.current = shown;
-        setRatePayload(cachedRate);
-        setDataNotice(`Supabase 刚才读取失败，当前显示浏览器最后成功数据：${message}`);
-        setState("ready");
-        return true;
-      }
-
       // A transport/API failure is not evidence that the selected date has no
       // data. Keep the last visible result and do not apply the pending filters;
-      // otherwise a timeout is rendered as a misleading table full of zeros.
-      setRatePayload(cachedRate);
+      // overlap with one cached day does not prove coverage of the new range.
+      // Only a successful response (including zero rows) may commit that range.
+      setRatePayload(cachedRate || (ratePayloadUsable(ratePayload) ? ratePayload : null));
       setError(message);
       setDataNotice(`查询失败，未切换当前结果：${message}`);
       setState("ready");
@@ -2248,73 +2289,21 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
     }
   }
 
-  useEffect(() => {
-    // 后台小时静默刷新只刷新「已查询」范围，不能因为用户只是改了输入框就偷偷查询。
-    startDateRef.current = appliedStartDate;
-    endDateRef.current = appliedEndDate;
-  }, [appliedStartDate, appliedEndDate]);
-
   useEffect(() => { payloadRef.current = payload; }, [payload]);
 
-  async function checkCurrentSnapshotAndRefresh(silent = true) {
-    // GitHub Pages 前端只读取 Supabase，不再依赖旧站点快照状态。
-    const start = startDateRef.current;
-    const end = endDateRef.current;
-    await loadData(silent, start, end, "");
-  }
-
   useEffect(() => {
-    // 首次进入默认查询昨天；之前这里只预填日期但不发请求，页面会一直停在空状态。
-    // 等登录会话就绪后自动读取 Supabase，手动查询仍然保留。
+    // Only prefill controls. Business data is loaded exclusively on submit.
     const yesterday = yesterdayLocalDateKey();
     const initialCountry = COUNTRY_NAV_TABS.find((name) => dashboardScopeAllows(effectiveDashboardDataScope(profile), name)) || "";
-    setStartDate(yesterday);
-    setEndDate(yesterday);
-    setCountryPage(initialCountry);
-    setState("ready");
-    let disposed = false;
-    if (session?.access_token) {
-      void (async () => {
-        const loaded = await loadData(true, yesterday, yesterday, "", initialCountry, true);
-        if (disposed) return;
-        if (!loaded) return;
-        setAppliedStartDate(yesterday);
-        setAppliedEndDate(yesterday);
-        setAppliedCountrySelections([]);
-        setAppliedPlatformSelections([]);
-        setAppliedChannel("");
-        setAppliedDirection("");
-        setAppliedChannelTypeSelections([]);
-        setAppliedCountryPage(initialCountry);
-        setLegacySummaryNotice("当前结果使用原有日汇总口径，未按订单创建／成功时间重新计算。");
-        setLastQueryAt(new Date().toISOString());
-        setHasQueried(true);
-      })();
-    }
-
-    const hourlyTimer = window.setInterval(() => {
-      const start = startDateRef.current;
-      const end = endDateRef.current;
-      // 只有用户至少查询过一次，才允许对“当前已查询范围”做静默刷新。
-      if (
-        document.visibilityState === "visible"
-        && !queryInFlightRef.current
-        && start
-        && end
-        && rangeIncludesCurrentMonth(start, end)
-      ) {
-        void loadData(true, start, end);
-      }
-    }, 60 * 60 * 1000);
-
-    return () => {
-      disposed = true;
-      window.clearInterval(hourlyTimer);
-    };
+    setStartDate(old=>old||yesterday);setEndDate(old=>old||yesterday);
+    setCountryPage(old=>old&&dashboardScopeAllows(effectiveDashboardDataScope(profile),old)?old:initialCountry);
+    setPlatformSelections([]);setCountrySelections([]);setChannel("");setChannelTypeSelections([]);setRatePayload(null);
+    invalidateQuery();
+    return () => {++queryIntentRef.current;++loadRequestSequenceRef.current;loadFlightRef.current?.abort();};
     // eslint-disable-next-line react-hooks/exhaustive-deps
   // Access-token refreshes and identical profile objects are expected during
   // business requests; neither may restart the initial country query.
-  }, [session?.user.id, profileScopeIdentity]);
+  }, [viewerIdentity]);
 
 
   const rows = useMemo(() => (payload?.rows || []).map(normalizeVolumeRowForDisplay).filter((row) => !isHiddenCountry(row.country)), [payload]);
@@ -2327,6 +2316,15 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
     return [...COUNTRY_NAV_TABS, ...sortCountries(dynamic)].filter(name=>dashboardScopeAllows(scope,name));
   }, [countries,profile]);
   const activeCountryPage = countryPage && countryTabs.includes(countryPage) ? countryPage : (mainTab === "country" ? (countryTabs[0] || "") : "");
+  queryContextRef.current = `${viewerIdentity}:${activeCountryPage}`;
+  const showDailyResult = hasQueried && appliedViewer===viewerIdentity && appliedCountryPage===activeCountryPage;
+  const showTimeResult = timeQuery.active && timeQuery.result?.selection.country===activeCountryPage;
+  useEffect(() => {
+    invalidateQuery();
+    return () => {++queryIntentRef.current;++loadRequestSequenceRef.current;loadFlightRef.current?.abort();};
+  // Changing the country invalidates a result, not the pending date controls.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCountryPage]);
   // 数据计算只跟最后一次“查询”的国家走；点其它国家页签本身不会重新计算/读取。
   const effectiveCountryFilter = mainTab === "country" ? appliedCountryPage : country;
 
@@ -2349,28 +2347,27 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
   const platformSelectionCountry = optionCountryFilter && !isAllUsdtCountryPage(optionCountryFilter)
     ? optionCountryFilter : countrySelections.length === 1 ? countrySelections[0] : "";
   const optionScopedRowsBeforeCountry = useMemo(() => rows.filter((row) => rowMatchesCountryPage(row, optionCountryFilter)), [rows, optionCountryFilter]);
-  const countryFilterOptions = useMemo(() => sortCountries(optionScopedRowsBeforeCountry.map((row) => row.country)), [optionScopedRowsBeforeCountry]);
+  const countryFilterOptions = useMemo(() => sortCountries(filterOptions.platforms.map(row=>row.country)), [filterOptions.platforms]);
   const optionScopedRows = useMemo(() => optionScopedRowsBeforeCountry.filter((row) => !countrySelections.length || countrySelections.includes(row.country)), [optionScopedRowsBeforeCountry, countrySelections]);
   const configuredPlatforms = useMemo(() => {
-    // 平台下拉不能只看当前日期是否有三方量。新盘口通常先配置费率、后开始跑量；
-    // 只从 volume rows 取选项会让已接入的新平台（例如 ShreeWin）完全无法选择。
+    // The permission-scoped directory is independent of report dates, volume
+    // rows and rate-status payloads, including registered zero-volume platforms.
     if (isAllUsdtCountryPage(optionCountryFilter)) return [];
     // Display groups must stay distinct; fee lookup intentionally shares the
     // national Brazil rate key and must not be reused for this dropdown.
     const displayGroup = (value: string) => value === "BR" ? "巴西" : value;
     const targetCountry = displayGroup(optionCountryFilter);
     const selectedCountries = new Set(countrySelections.map(displayGroup));
-    return uniq((ratePayload?.platformStatuses || [])
+    return uniq(filterOptions.platforms
       .map(withPlatformDisplayCountry)
       .filter((row) => !targetCountry || displayGroup(row.country) === targetCountry)
       .filter((row) => !selectedCountries.size || selectedCountries.has(displayGroup(row.country)))
       .map((row) => canonicalThirdPartyPlatform(row.country, row.platform)));
-  }, [ratePayload?.platformStatuses, optionCountryFilter, countrySelections]);
+  }, [filterOptions.platforms, optionCountryFilter, countrySelections]);
   const timePlatformOptions = useMemo(() => timeQuery.platforms.filter(p=>timePlatformCountry(p)===activeCountryPage).map(p=>p.name), [timeQuery.platforms, activeCountryPage]);
-  const platforms = useMemo(() => uniq([
-    ...optionScopedRows.map((row) => canonicalThirdPartyPlatform(row.country, row.platform)),
-    ...configuredPlatforms, ...timePlatformOptions
-  ]), [optionScopedRows, configuredPlatforms, timePlatformOptions]);
+  const platforms = useMemo(() => isAllUsdtCountryPage(optionCountryFilter)
+    ? uniq(filterOptions.platforms.filter(row=>!countrySelections.length||countrySelections.includes(row.country)).map(row=>canonicalThirdPartyPlatform(row.country,row.platform)))
+    : configuredPlatforms, [filterOptions.platforms, configuredPlatforms, optionCountryFilter, countrySelections]);
   const hasLegacyPlatformSelection = !timePlatformOptions.length
     || (platformSelections.length ? platformSelections : platforms).some(name => !timePlatformOptions.includes(name));
   const channelOptionRows = useMemo(() => optionScopedRows.filter((row) => matchesThirdPartyPlatformSelection(row.country, row.platform, platformSelections)), [optionScopedRows, platformSelections]);
@@ -2388,7 +2385,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
 
 
   useEffect(() => {
-    if (!countrySelections.length) return;
+    if (!countrySelections.length || !filterOptions.ready) return;
     const available = new Set(countryFilterOptions);
     const next = countrySelections.filter((item) => available.has(item));
     if (next.length !== countrySelections.length) {
@@ -2397,11 +2394,11 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       setChannel("");
       setChannelTypeSelections([]);
     }
-  }, [countryFilterOptions, countrySelections]);
+  }, [countryFilterOptions, countrySelections, filterOptions.ready]);
 
   useEffect(() => {
     if (!platformSelections.length) return;
-    if (timeQuery.optionsLoading) return;
+    if (!filterOptions.ready) return;
     const available = new Set(platforms);
     const next = canonicalThirdPartyPlatformSelections(platformSelectionCountry, platformSelections).filter((item) => available.has(item));
     if (next.length !== platformSelections.length || next.some((item, index) => item !== platformSelections[index])) {
@@ -2409,7 +2406,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       setChannel("");
       setChannelTypeSelections([]);
     }
-  }, [platforms, platformSelections, platformSelectionCountry, timeQuery.optionsLoading]);
+  }, [platforms, platformSelections, platformSelectionCountry, filterOptions.ready]);
   const filtered = useMemo(() => filteredBase.filter((row) => !appliedChannelTypeSelections.length || appliedChannelTypeSelections.includes(row.channelType || "其他类型")), [filteredBase, appliedChannelTypeSelections]);
   const filteredNoDate = useMemo(() => filteredBaseNoDate.filter((row) => !appliedChannelTypeSelections.length || appliedChannelTypeSelections.includes(row.channelType || "其他类型")), [filteredBaseNoDate, appliedChannelTypeSelections]);
 
@@ -2567,12 +2564,20 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
     // before the disabled button has rendered.
     if (queryInFlightRef.current) return;
     queryInFlightRef.current = true;
+    const intent = ++queryIntentRef.current, context = queryContextRef.current;
+    loadFlightRef.current?.abort();
+    const isCurrent = () => intent===queryIntentRef.current && context===queryContextRef.current;
     const queryStart = startDate || endDate || appliedStartDate || (timePlatformOptions.length ? indiaDay(-1) : yesterdayLocalDateKey());
     const queryEnd = endDate || startDate || appliedEndDate || queryStart;
     setIsQuerying(true);
     setSummaryQueryError("");
     try {
       const queryCountry = mainTab === "country" ? activeCountryPage : "";
+      if (!queryCountry) throw new Error("请选择国家后查询。");
+      if (filterOptions.loading) throw new Error("正在读取平台目录，请稍后查询。");
+      if (filterOptions.error) throw new Error(`平台目录暂未载入：${filterOptions.error}`);
+      if (!filterOptions.ready || !platforms.length) throw new Error("当前国家没有可查询的平台，请检查平台配置或权限。");
+      if (platformSelections.some(name=>!platforms.includes(name))) throw new Error("所选平台已不在当前目录，请重新选择。");
       if (timeQuery.optionsLoading) throw new Error("正在读取可查询的平台，请稍后查询。");
       if (timeQuery.optionsError) throw new Error(`平台明细权限暂未载入：${timeQuery.optionsError}。请重新读取平台后查询。`);
       const querySource = summaryQuerySource({basis:timeQuery.mode==="success"?"success":"created",
@@ -2581,10 +2586,11 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       if (querySource === "orders") {
         const loaded = await timeQuery.run({country:queryCountry,platforms:[...platformSelections],channel,types:[...channelTypeSelections],direction,
           start:`${queryStart}T${timeQuery.startClock}`,end:`${queryEnd}T${timeQuery.endClock}`});
-        if (loaded) setLegacySummaryNotice("");
+        if (loaded && isCurrent()) {setLegacySummaryNotice("");void loadTimeRates(intent,context);}
         return;
       }
       const loaded = await loadData(true, queryStart, queryEnd, "", queryCountry, true);
+      if (!isCurrent()) return;
       if (!loaded) {
         // 查询失败只保留上一份成功数据，不能改写用户当前选择的国家页签。
         setHasQueried(Boolean(payloadRef.current));
@@ -2601,13 +2607,13 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       setAppliedDirection(direction);
       setAppliedChannelTypeSelections([...channelTypeSelections]);
       setAppliedCountryPage(queryCountry);
+      setAppliedViewer(viewerIdentity);
       setLastQueryAt(new Date().toISOString());
       setHasQueried(true);
     } catch (err) {
-      setSummaryQueryError(err instanceof Error ? err.message : "查询失败，请重试。");
+      if (isCurrent()) setSummaryQueryError(err instanceof Error ? err.message : "查询失败，请重试。");
     } finally {
-      queryInFlightRef.current = false;
-      setIsQuerying(false);
+      if (isCurrent()) {queryInFlightRef.current = false;setIsQuerying(false);}
     }
   }
 
@@ -2676,7 +2682,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       )}
       <section className="third-party-tab-panel">
         <div className="tab-group-row main-tab-row">
-          <button className={cls("module-tab", mainTab === "country" && "active")} onClick={() => { setMainTab("country"); setCountryPage(""); setCountry(""); setCountrySelections([]); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }}>各国家量</button>
+          <button className={cls("module-tab", mainTab === "country" && "active")} onClick={() => { setMainTab("country"); }}>各国家量</button>
           <button className={cls("module-tab", mainTab === "rates" && "active")} onClick={() => { setMainTab("rates"); }}>各国家费率</button>
         </div>
         {mainTab === "country" && (
@@ -2684,12 +2690,14 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
             <div className="tab-group-row child-tab-row country-tab-row volume-country-pane-row">
               {countryTabs.map((item) => (
                 <button key={item} className={cls("module-tab", activeCountryPage === item && "active")} onClick={() => {
+                  if (item===activeCountryPage) return;
+                  invalidateQuery();
                   setCountryPage(item);
                   setCountrySelections([]);
                   setPlatformSelections([]);
                   setChannel("");
                   setChannelTypeSelections([]);
-                  // 切页签只改变待查询条件；上一份成功数据保留到新查询成功。
+                  // A country page never displays another country's result.
                 }}>{countryPaneLabel(item)}</button>
               ))}
               {hasQueried && !countryTabs.length && <span className="muted-text">暂无国家数据</span>}
@@ -2710,9 +2718,9 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
           <label className="field volume-date-field">结束时间<input className="input" required type="datetime-local" step="1" value={endDate?`${endDate}T${timeQuery.endClock}`:""} onChange={e=>{setEndDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setEndClock(e.target.value.split("T")[1]);}} /></label>
           
           {isAllUsdtCountryPage(activeCountryPage) && <VolumeMultiSelect label="国家" options={countryFilterOptions} value={countrySelections} onChange={(value) => { setCountrySelections(value); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部国家" />}
-          <VolumeMultiSelect label="平台" options={platforms} value={platformSelections} onChange={(value) => { setPlatformSelections(canonicalThirdPartyPlatformSelections(platformSelectionCountry, value)); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" />
+          <VolumeMultiSelect key={`platform:${activeCountryPage}`} label="平台" options={platforms} value={platformSelections} onChange={(value) => { setPlatformSelections(canonicalThirdPartyPlatformSelections(platformSelectionCountry, value)); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" />
           <VolumeSingleSelect label="统一三方" options={channels} value={channel} onChange={value=>{setChannel(value);setChannelTypeSelections([]);}} placeholder="全部三方" />
-          <VolumeMultiSelect label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" />
+          <VolumeMultiSelect key={`type:${activeCountryPage}`} label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" />
           <label className="field">业务方向<select className="input" value={direction} onChange={(event) => setDirection(event.target.value)}><option value="">全部方向</option><option value="代收">代收</option><option value="代付">代付</option></select></label>
         </div>
       <div className="volume-search-actions">
@@ -2728,23 +2736,28 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       </div>
         <button className="primary-btn volume-query-btn" type="submit" disabled={isQuerying}>{isQuerying ? "查询中…" : "查询"}</button>
       </div>
-        {(timePlatformOptions.length>0||timeQuery.optionsLoading||timeQuery.optionsError)&&<TimeQueryExtra query={timeQuery}/>}
+        <div aria-live="polite">
+          {filterOptions.loading && <p role="status">正在读取平台目录…</p>}
+          {filterOptions.error && <p className="business-query-error" role="alert">{filterOptions.error} <button className="mini-btn" type="button" onClick={filterOptions.reload}>重新读取平台目录</button></p>}
+          {filterOptions.ready && !platforms.length && <p role="status">当前国家暂无可查询平台。</p>}
+        </div>
+        {(timePlatformOptions.length>0||timeQuery.optionsLoading||timeQuery.optionsError)&&<TimeQueryExtra query={timeQuery} showTimeHelp={timePlatformOptions.length>0}/>}
         {hasPendingQuery && <p className="time-pending-note">筛选已修改，点击查询后生效。</p>}
       </form>
 
       {summaryQueryError&&<p className="business-query-error" role="alert">{summaryQueryError} 当前结果未被替换。</p>}
       {!summaryQueryError&&timeQuery.error&&<p className="business-query-error" role="alert">{timeQuery.error}{timeQuery.active&&" 当前结果未被替换。"}</p>}
       {!timeQuery.active&&legacySummaryNotice&&<p className="volume-legacy-note">{legacySummaryNotice}</p>}
-      {timeQuery.active&&timeQuery.result&&<TimeRangeVolumeResult result={timeQuery.result} rateRows={ratePayload?.rates||[]} feeRateMap={feeRateMap}/>}
+      {showTimeResult&&timeQuery.result&&<TimeRangeVolumeResult result={timeQuery.result} rateRows={ratePayload?.rates||[]} feeRateMap={feeRateMap}/>}
 
-      {!hasQueried && !timeQuery.active && mainTab === "country" && (
+      {!showDailyResult && !showTimeResult && mainTab === "country" && (
         <section className="dashboard-query-empty volume-query-empty" aria-live="polite">
           <span className="dashboard-query-empty-icon">↗</span>
           <div><strong>查询后查看国家资金数据</strong><p>选择时间范围、平台或三方后查询。</p></div>
         </section>
       )}
 
-        {hasQueried && !timeQuery.active && mainTab === "country" && <CountryVolumeSinglePage country={appliedCountryPage || activeCountryPage} rows={countryPageRows} summary={countryPageSummary} previousSummary={countryPagePreviousSummary} monthlyRows={countryPageMonthlyRows} feeRows={countryPageFeeRows} previousFeeRows={countryPagePreviousFeeRows} canCompare={isSingleDayQuery} collectionSuccess={collectionSuccess} withdrawPending={withdrawPending} workOrderDeposit={workOrderDeposit} withdrawActual={withdrawActual} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} />}
+        {showDailyResult && !showTimeResult && mainTab === "country" && <CountryVolumeSinglePage country={appliedCountryPage} rows={countryPageRows} summary={countryPageSummary} previousSummary={countryPagePreviousSummary} monthlyRows={countryPageMonthlyRows} feeRows={countryPageFeeRows} previousFeeRows={countryPagePreviousFeeRows} canCompare={isSingleDayQuery} collectionSuccess={collectionSuccess} withdrawPending={withdrawPending} workOrderDeposit={workOrderDeposit} withdrawActual={withdrawActual} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} />}
         </>
       )}
     </div>
@@ -2829,7 +2842,7 @@ function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { l
   return (
     <div ref={boxRef} className="field multi-field volume-multi-field">
       <label>{label}</label>
-      <button className="multi-button" type="button" aria-label={label} aria-expanded={open} onClick={() => setOpen((x) => !x)}>
+      <button className="multi-button" type="button" aria-label={label} aria-expanded={open} onClick={() => {setSearch("");setOpen((x) => !x);}}>
         <span>{filterLabel(value, placeholder)}</span>
         <span className="multi-caret">▾</span>
       </button>
