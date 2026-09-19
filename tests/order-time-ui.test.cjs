@@ -110,14 +110,58 @@ function filterElement(mode='created'){
     setChannelTypeSelections:noop};
   return new Function('require',...Object.keys(context),compile(`const element=${filterNode.getText(source)};`)+ '\nreturn element;')(require,...Object.values(context));
 }
-test('existing search card renders time precision and identifier filters without a separate dashboard',()=>{
+test('summary search keeps time precision and a required single platform without order lookup filters',()=>{
   const html=renderToStaticMarkup(filterElement());
   assert.equal((html.match(/type="datetime-local"/g)||[]).length,2);
   assert.match(html,/value="2026-09-17T00:00:00"/);assert.match(html,/value="2026-09-17T23:59:59"/);
-  for(const label of ['时间口径','平台','统一三方','类型 / 钱包','业务方向','会员 ID','订单号 / 三方订单号','订单状态','只看跨日成功订单'])assert.ok(plain(html).includes(label),label);
+  for(const label of ['时间口径','平台（必选一个）','统一三方','类型 / 钱包','业务方向'])assert.ok(plain(html).includes(label),label);
+  assert.doesNotMatch(html,/会员 ID|订单号|订单状态|只看跨日|全部平台|multiple=/);
+  const platformSelect=findElements(filterElement(),'select').find(element=>element.props.required);
+  assert.ok(platformSelect);assert.equal(platformSelect.props.value,'EK7');
+  assert.equal(platformSelect.props.children[0].props.disabled,true);
   const success=renderToStaticMarkup(filterElement('success'));
-  assert.match(success,/更多筛选：限制创建时间/);assert.match(success,/<option value="success" selected="">成功<\/option>/);
+  assert.match(success,/更多筛选：限制创建时间/);assert.doesNotMatch(success,/会员 ID|订单号|订单状态|只看跨日/);
   const daily=renderToStaticMarkup(filterElement('daily'));assert.doesNotMatch(daily,/会员 ID|type="datetime-local"/);
+});
+
+test('actual summary query rejects empty, multiple and ambiguous platform selections before reading orders',async()=>{
+  const hook=controls.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='useOrderTimeQuery');
+  const run=hook.body.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='run');
+  for(const [names,duplicate] of [[[],false],[['EK7','GEM7'],false],[['EK7'],false],[['EK7'],true]]){
+    let calls=0,error='',stored;
+    const noop=()=>{};
+    const context={...dependencies,mode:'created',identity:'viewer',currentIdentity:{current:'viewer'},requestSerial:{current:0},flight:{current:null},
+      setBusy:noop,setError:value=>error=value,setProgress:noop,optionsLoading:false,optionsError:'',
+      platforms:[{id:platform,name:'EK7',team:'香港'},{id:'00000000-0000-0000-0000-000000000002',name:duplicate?'EK7':'GEM7',team:'香港'}],
+      createdStart:'',createdEnd:'',session:{},setStored:value=>stored=value,setActive:noop,isOrderQueryDenied:()=>false,
+      queryOrderTimeBatches:async filters=>{calls++;assert.equal(filters.length,1);assert.equal(filters[0].memberId,'');assert.equal(filters[0].status,'all');return [];},orderTimeRpc:()=>{throw Error('unexpected direct request');}};
+    const invoke=new Function(...Object.keys(context),compile(run.getText(controls))+'\nreturn run;')(...Object.values(context));
+    const ok=await invoke({...fixture().selection,platforms:names});
+    const valid=names.length===1&&!duplicate;
+    assert.equal(ok,valid);assert.equal(calls,valid?1:0);
+    if(!valid){assert.match(error,/一个平台|重名/);assert.equal(stored,undefined);}
+    else assert.equal(stored.data.selection.crossDayOnly,false);
+  }
+});
+
+test('actual time summary clears sensitive previous results on authorization denial, not a network error',async()=>{
+  const hook=controls.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='useOrderTimeQuery');
+  const run=hook.body.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='run');
+  const denial=controls.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='isOrderQueryDenied');
+  const denied=new Function('exports',compile(denial.getText(controls))+'\nreturn isOrderQueryDenied;')({});
+  for(const failure of [{status:403},{code:'42501'},{status:401},{code:'28000'},new Error('network failed')]){
+    let stored='previous',active=true,cleared=false;
+    const noop=()=>{};
+    const context={...dependencies,mode:'created',identity:'viewer',currentIdentity:{current:'viewer'},requestSerial:{current:0},flight:{current:null},
+      setBusy:noop,setError:noop,setProgress:noop,optionsLoading:false,optionsError:'',
+      platforms:[{id:platform,name:'EK7',team:'香港'}],setPlatforms:()=>cleared=true,
+      createdStart:'',createdEnd:'',session:{},setStored:value=>stored=value,setActive:value=>active=value,isOrderQueryDenied:denied,
+      queryOrderTimeBatches:async()=>{throw failure;},orderTimeRpc:noop};
+    const invoke=new Function(...Object.keys(context),compile(run.getText(controls))+'\nreturn run;')(...Object.values(context));
+    assert.equal(await invoke(fixture().selection),false);
+    const shouldClear=denied(failure);
+    assert.equal(stored,shouldClear?null:'previous');assert.equal(active,!shouldClear);assert.equal(cleared,shouldClear);
+  }
 });
 
 if(process.env.ORDER_TIME_UI_PREVIEW==='1'){

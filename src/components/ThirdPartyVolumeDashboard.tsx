@@ -2042,7 +2042,7 @@ function normalizeVolumeRowForDisplay(row: ThirdPartyVolumeRow): ThirdPartyVolum
   return { ...row, country, platform, channel, channelType };
 }
 
-export default function ThirdPartyVolumeDashboard() {
+export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:()=>void}={}) {
   const { session, profile } = useDashboardAuth();
   const profileScopeIdentity = dashboardScopeIdentity(profile);
   const [state, setState] = useState<LoadState>("ready");
@@ -2649,12 +2649,13 @@ export default function ThirdPartyVolumeDashboard() {
 
       <form className="filter-card volume-search-card" aria-label="三方量搜索" onSubmit={event=>{event.preventDefault();void runQuery();}}>
         <div className="filters work-filters">
-          <div className="field"><label>时间口径</label><select className="input" value={timeQuery.mode} onChange={e=>{timeQuery.setMode(e.target.value as "daily"|"created"|"success");setPlatformSelections([]);setChannel("");setChannelTypeSelections([]);}}><option value="daily">日汇总（现有数据）</option><option value="created" disabled={!timePlatformOptions.length}>创建时间 · 订单明细</option><option value="success" disabled={!timePlatformOptions.length}>成功时间 · 订单明细</option></select></div>
+          <div className="field"><label>时间口径</label><select className="input" aria-label="时间口径" value={timeQuery.mode} onChange={e=>{timeQuery.setMode(e.target.value as "daily"|"created"|"success");setPlatformSelections([]);setChannel("");setChannelTypeSelections([]);}}><option value="daily">日汇总（现有数据）</option><option value="created" disabled={!timePlatformOptions.length}>创建时间 · 汇总</option><option value="success" disabled={!timePlatformOptions.length}>成功时间 · 汇总</option></select></div>
           <div className="field"><label>{timeQuery.mode==="daily"?"开始日期":"开始时间"}</label><input className="input" type={timeQuery.mode==="daily"?"date":"datetime-local"} step="1" value={timeQuery.mode==="daily"?startDate:startDate?`${startDate}T${timeQuery.startClock}`:""} onChange={e=>{setStartDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setStartClock(e.target.value.split("T")[1]);}} /></div>
           <div className="field"><label>{timeQuery.mode==="daily"?"结束日期":"结束时间"}</label><input className="input" type={timeQuery.mode==="daily"?"date":"datetime-local"} step="1" value={timeQuery.mode==="daily"?endDate:endDate?`${endDate}T${timeQuery.endClock}`:""} onChange={e=>{setEndDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setEndClock(e.target.value.split("T")[1]);}} /></div>
           
           {isAllUsdtCountryPage(activeCountryPage) && <VolumeMultiSelect label="国家" options={countryFilterOptions} value={countrySelections} onChange={(value) => { setCountrySelections(value); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部国家" />}
-          <VolumeMultiSelect label="平台" options={timeQuery.mode==="daily"?platforms:timePlatformOptions} value={platformSelections} onChange={(value) => { setPlatformSelections(canonicalThirdPartyPlatformSelections(platformSelectionCountry, value)); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" />
+          {timeQuery.mode==="daily" ? <VolumeMultiSelect label="平台" options={platforms} value={platformSelections} onChange={(value) => { setPlatformSelections(canonicalThirdPartyPlatformSelections(platformSelectionCountry, value)); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" /> :
+            <label className="field">平台（必选一个）<select className="input" required value={platformSelections.length===1?platformSelections[0]:""} onChange={e=>{setPlatformSelections(e.target.value?[e.target.value]:[]);setChannel("");setChannelTypeSelections([]);}}><option value="" disabled>请选择一个平台</option>{timePlatformOptions.map(name=><option key={name} value={name}>{name}</option>)}</select></label>}
           <div className="field"><label>统一三方</label><select className="input" value={channel} onChange={(event) => { setChannel(event.target.value); setChannelTypeSelections([]); }}><option value="">全部三方</option>{channels.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
           <VolumeMultiSelect label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" />
           <div className="field"><label>业务方向</label><select className="input" value={direction} onChange={(event) => setDirection(event.target.value)}><option value="">全部方向</option><option value="代收">代收</option><option value="代付">代付</option></select></div>
@@ -2675,8 +2676,9 @@ export default function ThirdPartyVolumeDashboard() {
         {timeQuery.mode==="daily"&&!timePlatformOptions.length&&<details className="query-source-note"><summary>数据说明</summary>当前来源为日汇总；历史没有订单时间的记录不能拆成小时。接入对应明细采集脚本后，开放创建／成功时间查询。{timeQuery.optionsError&&<p role="alert">明细平台状态暂未载入：{timeQuery.optionsError} <button type="button" className="mini-btn" onClick={timeQuery.reloadOptions}>重新读取平台</button></p>}</details>}
         {(hasPendingQuery || timeQuery.active) && <p className="time-pending-note">修改筛选后请点击“查询”；下方时间标签为已应用的查询范围。</p>}
       </form>
+      {onOpenOrders&&<div className="order-query-help"><span>此页仅展示汇总；会员、订单号和金额查单请进入独立页面。</span><button type="button" className="mini-btn" onClick={onOpenOrders}>打开订单明细</button></div>}
 
-      {timeQuery.error&&<p className="business-query-error" role="alert">{timeQuery.error} 当前结果未被替换。</p>}
+      {timeQuery.error&&<p className="business-query-error" role="alert">{timeQuery.error}{timeQuery.active&&" 当前结果未被替换。"}</p>}
       {timeQuery.active&&timeQuery.result&&<TimeRangeVolumeResult result={timeQuery.result} rateRows={ratePayload?.rates||[]} feeRateMap={feeRateMap}/>}
 
       {!hasQueried && !timeQuery.active && mainTab === "country" && (

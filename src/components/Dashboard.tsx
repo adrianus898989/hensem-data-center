@@ -8,6 +8,7 @@ import { monthRangeSignature, monthlyApiUrl, rangeIncludesCurrentMonthClient } f
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload } from "@/lib/monthlyStatusClient";
 import WorkOrderDashboard from "./WorkOrderDashboard";
 import ThirdPartyVolumeDashboard from "./ThirdPartyVolumeDashboard";
+import OrderDetailSearch from "./OrderDetailSearch";
 import AdminControlCenter from "./AdminControlCenter";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { canOpenAdminCenter, ensureDashboardSession, hasDashboardPermission, normalizedManagementPermissions, type DashboardSession } from "@/lib/dashboardAuthClient";
@@ -24,7 +25,7 @@ import { dashboardScopeAllows, effectiveDashboardDataScope } from "@/lib/dashboa
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
-type ModuleMode = "home" | "auto" | "config" | "operator" | "volume" | "work" | "admin";
+type ModuleMode = "home" | "auto" | "config" | "operator" | "volume" | "orders" | "work" | "admin";
 type AutoView = "dashboard" | "summary" | "daily" | "month" | "compare" | "anomaly";
 type OperatorView = "dashboard" | "ranking" | "summary" | "detail" | "low" | "date" | "compare";
 type OperatorRankMode = "high" | "low";
@@ -1423,7 +1424,7 @@ export default function Dashboard() {
   }
 
   function switchModule(next: ModuleMode) {
-    if (next === "volume" && !canThirdParty) return;
+    if ((next === "volume" || next === "orders") && !canThirdParty) return;
     if ((next === "auto" || next === "config" || next === "operator") && !canAutoWithdraw) return;
     if (next === "work" && !canWorkSupport) return;
     setActiveModule(next);
@@ -1701,6 +1702,10 @@ export default function Dashboard() {
         <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="chart" /></span>三方量/费率</span>
         <span className={canThirdParty ? "badge ok" : "badge"}>{canThirdParty ? "Supabase" : "无权限"}</span>
       </button>
+      <button className={activeModule === "orders" ? "nav-item active" : "nav-item"} onClick={() => switchModule("orders")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
+        <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="ticket" /></span>订单明细</span>
+        <span className={canThirdParty ? "badge ok" : "badge"}>{canThirdParty ? "单平台" : "无权限"}</span>
+      </button>
 
       <div className="nav-section-title system-admin-title">系统管理</div>
       {canOpenAdminCenter(profile) && (
@@ -1754,6 +1759,12 @@ export default function Dashboard() {
           <span className="home-module-tags"><i>国家汇总</i><i>费率匹配</i><i>费用分析</i></span>
           <span className="home-enter">{canThirdParty ? <>进入模块 <DashboardGlyph name="arrow" /></> : "无查看权限"}</span>
         </button>
+        <button className="home-module-card home-module-blue" onClick={() => switchModule("orders")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
+          <span className="home-module-head"><span className="home-module-icon"><DashboardGlyph name="ticket" /></span><span className="home-module-index">04</span></span>
+          <span className="home-module-copy"><strong>订单明细</strong><em>先选一个平台，按会员、订单和金额查记录</em></span>
+          <span className="home-module-tags"><i>单平台必选</i><i>按时间查询</i><i>分页读取</i></span>
+          <span className="home-enter">{canThirdParty ? <>进入模块 <DashboardGlyph name="arrow" /></> : "无查看权限"}</span>
+        </button>
       </section>
     </main>
   );
@@ -1774,7 +1785,10 @@ export default function Dashboard() {
     return <div className="app-shell">{sidebarContent}<main className="main"><WorkOrderDashboard /></main></div>;
   }
   if (activeModule === "volume") {
-    return <div className="app-shell">{sidebarContent}<main className="main"><ThirdPartyVolumeDashboard /></main></div>;
+    return <div className="app-shell">{sidebarContent}<main className="main"><ThirdPartyVolumeDashboard onOpenOrders={() => switchModule("orders")} /></main></div>;
+  }
+  if (activeModule === "orders") {
+    return <div className="app-shell">{sidebarContent}<main className="main">{canThirdParty ? <OrderDetailSearch /> : <p role="alert">管理员未开放此模块。</p>}</main></div>;
   }
 
 
