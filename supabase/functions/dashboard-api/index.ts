@@ -18,6 +18,7 @@ import {
 } from "./lib/dashboardDataAccessServer.ts";
 import { buildCustomerServicePayload } from "./lib/parseCustomerService.ts";
 import { anomalyDateRange, buildProviderAnomalyResponse } from "./lib/providerAnomalies.ts";
+import { readSupabaseThirdPartyFilterOptions } from "./lib/thirdPartyFilterOptionsServer.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -236,6 +237,7 @@ async function handle(request: Request): Promise<Response> {
   if (request.method !== "GET") return json({ok: false, code: "method_not_allowed", message: "仅支持 GET 请求。"}, 405);
   const url = new URL(request.url);
   const route = apiRoute(url);
+  if (route === "/api/third-party-filter-options") return json(await readSupabaseThirdPartyFilterOptions(request));
   if (route === "/api/provider-anomalies") {
     await requireDashboardDataAccess(request, "third_party");
     const start = url.searchParams.get("startDate") || "", end = url.searchParams.get("endDate") || "";

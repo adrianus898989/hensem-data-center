@@ -222,9 +222,14 @@ test("团队页只读 GAME66 且前端查询有明确超时",()=>{
     assert.match(source,/withdrawActualRows: \[\.\.\.withdrawActual\.rows, \.\.\.game66ActualRows\]/);
   }
   assert.match(volume,/THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS = 25_000/);
-  assert.match(volume,/dashboardBusinessFetch\(volumeUrl, \{ signal: AbortSignal\.timeout\(THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS\) \}\)/);
+  assert.match(volume,/const signal = \(timeout:number\) => AbortSignal\.any\(\[controller\.signal,AbortSignal\.timeout\(timeout\)\]\)/);
+  assert.match(volume,/dashboardBusinessFetch\(volumeUrl, \{ signal: signal\(THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS\) \}\)/);
   assert.match(volume,/loadData\(true, queryStart, queryEnd, "", queryCountry, true\)/);
   assert.match(volume,/if \(!loaded\) \{[\s\S]*setHasQueried\(Boolean\(payloadRef\.current\)\);[\s\S]*return;/);
+  assert.match(volume,/const showDailyResult = hasQueried && appliedViewer===viewerIdentity && appliedCountryPage===activeCountryPage/,
+    "保留旧结果不等于在另一账号或国家下显示旧结果");
+  assert.match(volume,/if \(!isCurrent\(\)\) return;/,"已取消的国家查询不得提交筛选条件");
+  assert.doesNotMatch(volume,/setInterval\(/,"报表不再随挂载自动周期读取");
   assert.doesNotMatch(volume,/if \(appliedCountryPage\) setCountryPage\(appliedCountryPage\)/);
   assert.doesNotMatch(volume,/setPayload\(emptyClientVolumePayload/);
 });

@@ -31,6 +31,7 @@ jobs:
       # migration regressions cover the live static UI/data attribution paths;
       # the Edge Function is verified separately after deployment.
       - run: pnpm test:migration
+      - run: pnpm test:platform-filters
       - run: pnpm build
         env:
           PAGES_BASE_PATH: /hensem-data-center

@@ -23,7 +23,7 @@ function visit(node){if(ts.isJsxElement(node)&&node.openingElement.attributes.ge
 visit(main);assert.ok(form);
 const Multi=()=>null,Single=()=>null,Extra=()=>null,noop=()=>{};
 function summaryForm(mode='created',selected=[],overrides={}){
-  const context={exports:{},VolumeMultiSelect:Multi,VolumeSingleSelect:Single,TimeQueryExtra:Extra,
+  const context={exports:{},filterOptions:{ready:true,loading:false,error:''},VolumeMultiSelect:Multi,VolumeSingleSelect:Single,TimeQueryExtra:Extra,
     timeQuery:{mode,startClock:'18:00:00',endClock:'23:59:59',setMode:noop},timePlatformOptions:fixture.detailPlatforms,
     startDate:'2026-09-17',endDate:'2026-09-17',activeCountryPage:'香港',isAllUsdtCountryPage:()=>false,
     platforms:fixture.availablePlatforms,platformSelections:selected,platformSelectionCountry:'香港',canonicalThirdPartyPlatformSelections:(_country,value)=>value,
@@ -91,7 +91,7 @@ test('time validation rejects reversed, invalid and over-31-day ranges before ch
 test('production query dispatch never reads or publishes partial mixed-source results',async()=>{
   for(const selection of [[],['EK7'],['EK7','91CLUB']])for(const basis of ['created','success']){
     const calls={daily:0,orders:0,showDaily:0},errors=[],notices=[];
-    const context={queryInFlightRef:{current:false},startDate:'2026-09-17',endDate:'2026-09-17',appliedStartDate:'',appliedEndDate:'',
+    const context={queryInFlightRef:{current:false},queryIntentRef:{current:0},queryContextRef:{current:'viewer:香港'},loadFlightRef:{current:null},loadTimeRates:async()=>{},viewerIdentity:'viewer',filterOptions:{ready:true,loading:false,error:''},setAppliedViewer:noop,startDate:'2026-09-17',endDate:'2026-09-17',appliedStartDate:'',appliedEndDate:'',
       timePlatformOptions:['EK7'],platforms:['EK7','91CLUB'],platformSelections:selection,platformSelectionCountry:'香港',
       mainTab:'country',activeCountryPage:'香港',channel:'',channelTypeSelections:[],direction:'',countrySelections:[],
       setIsQuerying:noop,setSummaryQueryError:value=>errors.push(value),summaryQuerySource,
