@@ -157,6 +157,29 @@ function filterLabel(values: string[], placeholder = "全部"): string {
   return `${values.slice(0, 2).join("、")} 等 ${values.length} 项`;
 }
 
+/** Never reinterpret a daily total as a partial-hour or success-time result. */
+function summaryQuerySource(input: {
+  basis: "created" | "success"; start: string; end: string;
+  platforms: string[]; availablePlatforms: string[]; detailPlatforms: string[];
+}): "orders" | "daily" {
+  const normalize = (value: string) => value.length === 16 ? `${value}:00` : value;
+  const start = normalize(input.start), end = normalize(input.end);
+  const validTime = (value: string) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(value)
+    && Number.isFinite(Date.parse(`${value}Z`)) && new Date(`${value}Z`).toISOString().slice(0,19) === value;
+  if (!validTime(start) || !validTime(end) || end < start) throw new Error("请选择有效的开始和结束时间，结束时间不能早于开始时间。");
+  if (Date.parse(`${end}Z`) - Date.parse(`${start}Z`) >= 31 * 86400000) throw new Error("单次最多查询 31 天，请缩短时间范围。");
+  const selected = input.platforms.length ? input.platforms : input.availablePlatforms;
+  const details = new Set(input.detailPlatforms);
+  const legacy = selected.filter(name => !details.has(name));
+  if (input.detailPlatforms.length && !legacy.length) return "orders";
+  const fullDays = start.endsWith("T00:00:00") && end.endsWith("T23:59:59");
+  if (input.basis !== "created" || !fullDays) {
+    const names = legacy.length ? legacy.join("、") : "当前范围的平台";
+    throw new Error(`${names} 尚未接入订单时间明细，仅能查询创建时间的完整日期（00:00:00—23:59:59）；不能按部分时段或成功时间查询。请选择已接入的平台，或查询完整日期。`);
+  }
+  return "daily";
+}
+
 
 const ALL_USDT_COUNTRY_PAGE = "所有国家USDT";
 const COUNTRY_PRIORITY = ["印度", "巴西", "巴基斯坦", "印尼", "越南", "菲律宾", "马来", "缅甸", "哥伦比亚", "墨西哥", "智利", "尼日利亚", "胖虎巴西", "香港", "红膏蟹", "巴西原生", ALL_USDT_COUNTRY_PAGE, "南美", "USDT通道", "USDT"];
@@ -2084,6 +2107,8 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
   // 当前页面选择 与 最后一次真正点击「查询」的数据国家分开保存。
   // 这样切换国家页签只是纯 UI 状态变化，不触发旧结果的大量手续费重算。
   const [appliedCountryPage, setAppliedCountryPage] = useState("");
+  const [summaryQueryError, setSummaryQueryError] = useState("");
+  const [legacySummaryNotice, setLegacySummaryNotice] = useState("");
   const timeQuery = useOrderTimeQuery();
 
 
@@ -2261,6 +2286,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
         setAppliedDirection("");
         setAppliedChannelTypeSelections([]);
         setAppliedCountryPage(initialCountry);
+        setLegacySummaryNotice("当前结果使用原有日汇总口径，未按订单创建／成功时间重新计算。");
         setLastQueryAt(new Date().toISOString());
         setHasQueried(true);
       })();
@@ -2340,21 +2366,23 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       .filter((row) => !selectedCountries.size || selectedCountries.has(displayGroup(row.country)))
       .map((row) => canonicalThirdPartyPlatform(row.country, row.platform)));
   }, [ratePayload?.platformStatuses, optionCountryFilter, countrySelections]);
+  const timePlatformOptions = useMemo(() => timeQuery.platforms.filter(p=>timePlatformCountry(p)===activeCountryPage).map(p=>p.name), [timeQuery.platforms, activeCountryPage]);
   const platforms = useMemo(() => uniq([
     ...optionScopedRows.map((row) => canonicalThirdPartyPlatform(row.country, row.platform)),
-    ...configuredPlatforms
-  ]), [optionScopedRows, configuredPlatforms]);
-  const timePlatformOptions = timeQuery.platforms.filter(p=>timePlatformCountry(p)===activeCountryPage).map(p=>p.name);
+    ...configuredPlatforms, ...timePlatformOptions
+  ]), [optionScopedRows, configuredPlatforms, timePlatformOptions]);
+  const hasLegacyPlatformSelection = !timePlatformOptions.length
+    || (platformSelections.length ? platformSelections : platforms).some(name => !timePlatformOptions.includes(name));
   const channelOptionRows = useMemo(() => optionScopedRows.filter((row) => matchesThirdPartyPlatformSelection(row.country, row.platform, platformSelections)), [optionScopedRows, platformSelections]);
   const timeOptionsRows = timeQuery.result && timeQuery.mode!=="daily" && timeQuery.result.selection.country===activeCountryPage
     ? timeSourceRows({...timeQuery.result,selection:{...timeQuery.result.selection,channel:"",types:[],direction:""}}).filter(row=>!platformSelections.length||platformSelections.includes(row.platform)) : [];
-  const workOrderChannelOptions = useMemo(() => timeQuery.mode!=="daily" || isAllUsdtCountryPage(optionCountryFilter) ? [] : buildWorkOrderDepositView({
+  const workOrderChannelOptions = useMemo(() => !hasLegacyPlatformSelection || isAllUsdtCountryPage(optionCountryFilter) ? [] : buildWorkOrderDepositView({
     rows: (payload?.workOrderDepositRows || []).filter(row=>!countrySelections.length||countrySelections.includes(workOrderDepositCountry(row.country_code||row.country,row.platform))),
     volumeRows: channelOptionRows,
     start: startDate, end: endDate,
     country: isAllUsdtCountryPage(optionCountryFilter)?"":optionCountryFilter,
     platforms: platformSelections,
-  }).providers.map(provider=>provider.channel), [timeQuery.mode, payload?.workOrderDepositRows, countrySelections, channelOptionRows, startDate, endDate, optionCountryFilter, platformSelections]);
+  }).providers.map(provider=>provider.channel), [hasLegacyPlatformSelection, payload?.workOrderDepositRows, countrySelections, channelOptionRows, startDate, endDate, optionCountryFilter, platformSelections]);
   const channels = uniq([...channelOptionRows.map(row=>row.channel),...timeOptionsRows.map(row=>row.channel),...workOrderChannelOptions]);
   const channelTypeOptions = uniq([...optionScopedRows.filter((row) => matchesThirdPartyPlatformSelection(row.country, row.platform, platformSelections)).map((row) => row.channelType || "其他类型").filter(Boolean),...timeOptionsRows.map(row=>row.channel_type)]);
 
@@ -2373,7 +2401,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
 
   useEffect(() => {
     if (!platformSelections.length) return;
-    if (timeQuery.mode !== "daily") return;
+    if (timeQuery.optionsLoading) return;
     const available = new Set(platforms);
     const next = canonicalThirdPartyPlatformSelections(platformSelectionCountry, platformSelections).filter((item) => available.has(item));
     if (next.length !== platformSelections.length || next.some((item, index) => item !== platformSelections[index])) {
@@ -2381,7 +2409,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       setChannel("");
       setChannelTypeSelections([]);
     }
-  }, [platforms, platformSelections, platformSelectionCountry, timeQuery.mode]);
+  }, [platforms, platformSelections, platformSelectionCountry, timeQuery.optionsLoading]);
   const filtered = useMemo(() => filteredBase.filter((row) => !appliedChannelTypeSelections.length || appliedChannelTypeSelections.includes(row.channelType || "其他类型")), [filteredBase, appliedChannelTypeSelections]);
   const filteredNoDate = useMemo(() => filteredBaseNoDate.filter((row) => !appliedChannelTypeSelections.length || appliedChannelTypeSelections.includes(row.channelType || "其他类型")), [filteredBaseNoDate, appliedChannelTypeSelections]);
 
@@ -2516,7 +2544,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
 
   function applyDateShortcut(mode: DateShortcut) {
     const selectedDate = startDate || endDate || appliedEndDate;
-    const range = timeQuery.mode==="daily" ? shortcutDateRange(mode,selectedDate) : indiaShortcutDateRange(mode,selectedDate);
+    const range = timePlatformOptions.length ? indiaShortcutDateRange(mode,selectedDate) : shortcutDateRange(mode,selectedDate);
     setStartDate(range.start);
     setEndDate(range.end);
     timeQuery.setStartClock("00:00:00");timeQuery.setEndClock("23:59:59");
@@ -2539,14 +2567,21 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
     // before the disabled button has rendered.
     if (queryInFlightRef.current) return;
     queryInFlightRef.current = true;
-    const queryStart = startDate || endDate || appliedStartDate || (timeQuery.mode === "daily" ? yesterdayLocalDateKey() : indiaDay(-1));
+    const queryStart = startDate || endDate || appliedStartDate || (timePlatformOptions.length ? indiaDay(-1) : yesterdayLocalDateKey());
     const queryEnd = endDate || startDate || appliedEndDate || queryStart;
     setIsQuerying(true);
+    setSummaryQueryError("");
     try {
       const queryCountry = mainTab === "country" ? activeCountryPage : "";
-      if (timeQuery.mode !== "daily") {
-        await timeQuery.run({country:queryCountry,platforms:[...platformSelections],channel,types:[...channelTypeSelections],direction,
+      if (timeQuery.optionsLoading) throw new Error("正在读取可查询的平台，请稍后查询。");
+      if (timeQuery.optionsError) throw new Error(`平台明细权限暂未载入：${timeQuery.optionsError}。请重新读取平台后查询。`);
+      const querySource = summaryQuerySource({basis:timeQuery.mode==="success"?"success":"created",
+        start:`${queryStart}T${timeQuery.startClock}`,end:`${queryEnd}T${timeQuery.endClock}`,
+        platforms:platformSelections,availablePlatforms:platforms,detailPlatforms:timePlatformOptions});
+      if (querySource === "orders") {
+        const loaded = await timeQuery.run({country:queryCountry,platforms:[...platformSelections],channel,types:[...channelTypeSelections],direction,
           start:`${queryStart}T${timeQuery.startClock}`,end:`${queryEnd}T${timeQuery.endClock}`});
+        if (loaded) setLegacySummaryNotice("");
         return;
       }
       const loaded = await loadData(true, queryStart, queryEnd, "", queryCountry, true);
@@ -2556,6 +2591,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
         return;
       }
       timeQuery.showDaily();
+      setLegacySummaryNotice("当前选择含仅有日汇总的平台；本次整组使用原有日汇总口径，未按订单创建／成功时间重新计算。");
       // 只有点击查询后才把所有筛选条件应用到结果。
       setAppliedStartDate(queryStart);
       setAppliedEndDate(queryEnd);
@@ -2567,13 +2603,25 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       setAppliedCountryPage(queryCountry);
       setLastQueryAt(new Date().toISOString());
       setHasQueried(true);
+    } catch (err) {
+      setSummaryQueryError(err instanceof Error ? err.message : "查询失败，请重试。");
     } finally {
       queryInFlightRef.current = false;
       setIsQuerying(false);
     }
   }
 
-  const hasPendingQuery = Boolean(
+  const hasPendingQuery = timeQuery.active && timeQuery.result ? Boolean(
+    timeQuery.result.selection.basis !== timeQuery.mode
+    || timeQuery.result.selection.start !== `${startDate}T${timeQuery.startClock}`
+    || timeQuery.result.selection.end !== `${endDate}T${timeQuery.endClock}`
+    || timeQuery.result.selection.country !== activeCountryPage
+    || timeQuery.result.selection.platforms.join("|||") !== platformSelections.join("|||")
+    || timeQuery.result.selection.channel !== channel
+    || timeQuery.result.selection.direction !== direction
+    || timeQuery.result.selection.types.join("|||") !== channelTypeSelections.join("|||")
+    || (timeQuery.mode === "success" && (timeQuery.result.selection.createdStart !== timeQuery.createdStart || timeQuery.result.selection.createdEnd !== timeQuery.createdEnd))
+  ) : Boolean(
     startDate !== appliedStartDate
     || endDate !== appliedEndDate
     || countrySelections.join("|||") !== appliedCountrySelections.join("|||")
@@ -2582,6 +2630,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
     || direction !== appliedDirection
     || channelTypeSelections.join("|||") !== appliedChannelTypeSelections.join("|||")
     || (mainTab === "country" && activeCountryPage !== appliedCountryPage)
+    || timeQuery.mode === "success" || timeQuery.startClock !== "00:00:00" || timeQuery.endClock !== "23:59:59"
   );
 
   const appliedCoverage = useMemo(() => {
@@ -2655,14 +2704,13 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
         <>
 
       <form className="filter-card volume-search-card" aria-label="三方量搜索" onSubmit={event=>{event.preventDefault();void runQuery();}}>
-        <div className={cls("filters work-filters", timeQuery.mode!=="daily"&&"volume-time-filter-grid")}>
-          <div className="field"><label>时间口径</label><select className="input" aria-label="时间口径" title={timePlatformOptions.length?"选择日期区间，或按订单创建／成功时间精确到秒查询":"当前平台仅有日汇总，可查询日期区间；接入订单明细后支持时分秒"} value={timeQuery.mode} onChange={e=>{timeQuery.setMode(e.target.value as "daily"|"created"|"success");setPlatformSelections([]);setChannel("");setChannelTypeSelections([]);}}><option value="daily">日期区间 · 日汇总</option><option value="created" disabled={!timePlatformOptions.length}>创建时间 · 汇总</option><option value="success" disabled={!timePlatformOptions.length}>成功时间 · 汇总</option></select></div>
-          <label className="field volume-date-field">{timeQuery.mode==="daily"?"开始日期":"开始时间"}<input className="input" required type={timeQuery.mode==="daily"?"date":"datetime-local"} step="1" value={timeQuery.mode==="daily"?startDate:startDate?`${startDate}T${timeQuery.startClock}`:""} onChange={e=>{setStartDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setStartClock(e.target.value.split("T")[1]);}} /></label>
-          <label className="field volume-date-field">{timeQuery.mode==="daily"?"结束日期":"结束时间"}<input className="input" required type={timeQuery.mode==="daily"?"date":"datetime-local"} step="1" value={timeQuery.mode==="daily"?endDate:endDate?`${endDate}T${timeQuery.endClock}`:""} onChange={e=>{setEndDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setEndClock(e.target.value.split("T")[1]);}} /></label>
+        <div className="filters work-filters volume-time-filter-grid">
+          <div className="field"><label>时间口径</label><select className="input" aria-label="时间口径" value={timeQuery.mode==="success"?"success":"created"} onChange={e=>{timeQuery.setMode(e.target.value as "created"|"success");}}><option value="created">创建时间</option><option value="success">成功时间</option></select></div>
+          <label className="field volume-date-field">开始时间<input className="input" required type="datetime-local" step="1" value={startDate?`${startDate}T${timeQuery.startClock}`:""} onChange={e=>{setStartDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setStartClock(e.target.value.split("T")[1]);}} /></label>
+          <label className="field volume-date-field">结束时间<input className="input" required type="datetime-local" step="1" value={endDate?`${endDate}T${timeQuery.endClock}`:""} onChange={e=>{setEndDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setEndClock(e.target.value.split("T")[1]);}} /></label>
           
           {isAllUsdtCountryPage(activeCountryPage) && <VolumeMultiSelect label="国家" options={countryFilterOptions} value={countrySelections} onChange={(value) => { setCountrySelections(value); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部国家" />}
-          {timeQuery.mode==="daily" ? <VolumeMultiSelect label="平台" options={platforms} value={platformSelections} onChange={(value) => { setPlatformSelections(canonicalThirdPartyPlatformSelections(platformSelectionCountry, value)); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" /> :
-            <label className="field">平台（必选一个）<select className="input" required value={platformSelections.length===1?platformSelections[0]:""} onChange={e=>{setPlatformSelections(e.target.value?[e.target.value]:[]);setChannel("");setChannelTypeSelections([]);}}><option value="" disabled>请选择一个平台</option>{timePlatformOptions.map(name=><option key={name} value={name}>{name}</option>)}</select></label>}
+          <VolumeMultiSelect label="平台" options={platforms} value={platformSelections} onChange={(value) => { setPlatformSelections(canonicalThirdPartyPlatformSelections(platformSelectionCountry, value)); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" />
           <VolumeSingleSelect label="统一三方" options={channels} value={channel} onChange={value=>{setChannel(value);setChannelTypeSelections([]);}} placeholder="全部三方" />
           <VolumeMultiSelect label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" />
           <label className="field">业务方向<select className="input" value={direction} onChange={(event) => setDirection(event.target.value)}><option value="">全部方向</option><option value="代收">代收</option><option value="代付">代付</option></select></label>
@@ -2680,18 +2728,19 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       </div>
         <button className="primary-btn volume-query-btn" type="submit" disabled={isQuerying}>{isQuerying ? "查询中…" : "查询"}</button>
       </div>
-        <TimeQueryExtra query={timeQuery}/>
-        {timeQuery.mode==="daily"&&timeQuery.optionsError&&<p role="alert" className="business-query-error">明细平台暂未载入：{timeQuery.optionsError} <button type="button" className="mini-btn" onClick={timeQuery.reloadOptions}>重试</button></p>}
+        {(timePlatformOptions.length>0||timeQuery.optionsLoading||timeQuery.optionsError)&&<TimeQueryExtra query={timeQuery}/>}
         {hasPendingQuery && <p className="time-pending-note">筛选已修改，点击查询后生效。</p>}
       </form>
 
-      {timeQuery.error&&<p className="business-query-error" role="alert">{timeQuery.error}{timeQuery.active&&" 当前结果未被替换。"}</p>}
+      {summaryQueryError&&<p className="business-query-error" role="alert">{summaryQueryError} 当前结果未被替换。</p>}
+      {!summaryQueryError&&timeQuery.error&&<p className="business-query-error" role="alert">{timeQuery.error}{timeQuery.active&&" 当前结果未被替换。"}</p>}
+      {!timeQuery.active&&legacySummaryNotice&&<p className="volume-legacy-note">{legacySummaryNotice}</p>}
       {timeQuery.active&&timeQuery.result&&<TimeRangeVolumeResult result={timeQuery.result} rateRows={ratePayload?.rates||[]} feeRateMap={feeRateMap}/>}
 
       {!hasQueried && !timeQuery.active && mainTab === "country" && (
         <section className="dashboard-query-empty volume-query-empty" aria-live="polite">
           <span className="dashboard-query-empty-icon">↗</span>
-          <div><strong>查询后查看国家资金数据</strong><p>选择日期、平台或三方，系统会展示金额、手续费和昨日对比。</p></div>
+          <div><strong>查询后查看国家资金数据</strong><p>选择时间范围、平台或三方后查询。</p></div>
         </section>
       )}
 
