@@ -9,7 +9,7 @@ const text=fs.readFileSync(path.join(root,'src/components/ThirdPartyVolumeDashbo
 const source=ts.createSourceFile('ThirdPartyVolumeDashboard.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const main=source.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='ThirdPartyVolumeDashboard');
 function compile(code){return ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;}
-const libs=['format','thirdPartyNameMap','thirdPartyPlatform','platformDisplayCountry','collectionSuccess','withdrawPending','withdrawActual','workOrderDeposit','orderTimeVolume','orderTimeQuery'];
+const libs=['format','thirdPartyNameMap','thirdPartyPlatform','platformDisplayCountry','collectionSuccess','withdrawPending','withdrawActual','workOrderDeposit','orderTimeVolume','orderTimeQuery','orderTimePlatforms'];
 const dependencies=Object.assign({},...libs.map(name=>loadTs(path.join(root,`src/lib/${name}.ts`))));
 const controlsText=fs.readFileSync(path.join(root,'src/components/OrderTimeControls.tsx'),'utf8');
 const controls=ts.createSourceFile('OrderTimeControls.tsx',controlsText,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
@@ -110,18 +110,19 @@ function filterElement(mode='created',overrides={}){
     setChannelTypeSelections:noop,...overrides};
   return new Function('require',...Object.keys(context),compile(`const element=${filterNode.getText(source)};`)+ '\nreturn element;')(require,...Object.values(context));
 }
-test('summary search keeps time precision and a required single platform without order lookup filters',()=>{
+test('summary search keeps time precision and all/multiple platform selection without order lookup filters',()=>{
   const html=renderToStaticMarkup(filterElement());
   assert.equal((html.match(/type="datetime-local"/g)||[]).length,2);
   assert.match(html,/value="2026-09-17T00:00:00"/);assert.match(html,/value="2026-09-17T23:59:59"/);
-  for(const label of ['时间口径','平台（必选一个）','统一三方','类型 / 钱包','业务方向'])assert.ok(plain(html).includes(label),label);
-  assert.doesNotMatch(html,/会员 ID|订单号|订单状态|只看跨日|全部平台|multiple=/);
-  const platformSelect=findElements(filterElement(),'select').find(element=>element.props.required);
-  assert.ok(platformSelect);assert.equal(platformSelect.props.value,'EK7');
-  assert.equal(platformSelect.props.children[0].props.disabled,true);
+  for(const label of ['时间口径','平台','统一三方','类型 / 钱包','业务方向'])assert.ok(plain(html).includes(label),label);
+  assert.doesNotMatch(html,/会员 ID|订单号|订单状态|只看跨日|平台（必选一个）/);
+  const platformSelect=findElements(filterElement(),api.VolumeMultiSelect).find(element=>element.props.label==='平台');
+  assert.ok(platformSelect);assert.deepEqual(platformSelect.props.value,['EK7']);assert.equal(platformSelect.props.placeholder,'全部平台');
+  assert.equal(findElements(filterElement(),'select').some(element=>element.props.required),false);
   const success=renderToStaticMarkup(filterElement('success'));
   assert.match(success,/更多筛选：限制创建时间/);assert.doesNotMatch(success,/会员 ID|订单号|订单状态|只看跨日/);
-  const daily=renderToStaticMarkup(filterElement('daily'));assert.doesNotMatch(daily,/会员 ID|type="datetime-local"/);
+  const daily=renderToStaticMarkup(filterElement('daily'));assert.doesNotMatch(daily,/会员 ID|日期区间 · 日汇总|type="date"/);
+  assert.equal((daily.match(/type="datetime-local"/g)||[]).length,2);
 });
 
 test('summary has one bottom pager, keeps the applied date range, and removes duplicate headings',()=>{
@@ -156,8 +157,8 @@ test('summary filters submit only on explicit search while provider selection re
   for(const button of findElements(element,'button').filter(button=>button!==submit[0]))
     assert.equal(button.props.type,'button','date shortcuts must not also submit the form');
   const html=renderToStaticMarkup(element);
-  assert.match(html,/日期区间 · 日汇总/);assert.equal((html.match(/type="date"/g)||[]).length,2);
-  assert.ok(plain(html).includes('开始日期'));assert.ok(plain(html).includes('结束日期'));
+  assert.doesNotMatch(html,/日期区间 · 日汇总|type="date"/);assert.equal((html.match(/type="datetime-local"/g)||[]).length,2);
+  assert.ok(plain(html).includes('开始时间'));assert.ok(plain(html).includes('结束时间'));
 });
 
 test('provider search is single-choice, filters case-insensitively, and Enter never submits the enclosing form',()=>{
@@ -198,18 +199,18 @@ test('daily provider choices include scoped work-order-only providers without le
     channel_type:'UPI',submitted_amount:100,submitted_count:1,success_amount:0,success_count:0,...overrides});
   const sourceRows=[workorder('3TPay-QR'),workorder('Intnet'),workorder('未标记三方'),workorder('WrongDay',{stat_date:'2026-09-16'}),
     workorder('WrongPlatform',{platform:'RAJA'}),workorder('WrongCountry',{country:'印尼',country_code:'ID'}),workorder('3cPay-QR',{country:''})];
-  for(const [mode,optionCountryFilter] of [['daily','印度'],['created','印度'],['daily','所有国家USDT']]){
-    const context={...api,...dependencies,useMemo:fn=>fn(),timeQuery:{mode},payload:{workOrderDepositRows:sourceRows},countrySelections:['印度'],
+  for(const [hasLegacyPlatformSelection,optionCountryFilter] of [[true,'印度'],[false,'印度'],[true,'所有国家USDT']]){
+    const context={...api,...dependencies,useMemo:fn=>fn(),hasLegacyPlatformSelection,payload:{workOrderDepositRows:sourceRows},countrySelections:['印度'],
       channelOptionRows:[{channel:'3TPay'}],timeOptionsRows:[],startDate:'2026-09-17',endDate:'2026-09-17',optionCountryFilter,platformSelections:['91CLUB']};
     const output=new Function(...Object.keys(context),compile(statements)+'\nreturn {workOrderChannelOptions,channels};')(...Object.values(context));
-    const includeWorkorders=mode==='daily'&&optionCountryFilter!=='所有国家USDT';
+    const includeWorkorders=hasLegacyPlatformSelection&&optionCountryFilter!=='所有国家USDT';
     assert.deepEqual(output.channels.sort(),(includeWorkorders?['3TPay','3cPay','Intnet']:['3TPay']).sort());
     if(!includeWorkorders)assert.deepEqual(output.workOrderChannelOptions,[],'unclassified work-order rails cannot leak into time or USDT-only choices');
     assert.equal(new Set(output.channels).size,output.channels.length,'canonical provider choices are unique');
   }
 });
 
-test('actual summary query rejects empty, multiple and ambiguous platform selections before reading orders',async()=>{
+test('actual summary query accepts all/multiple/single platforms and rejects ambiguous platform names',async()=>{
   const hook=controls.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='useOrderTimeQuery');
   const run=hook.body.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='run');
   for(const [names,duplicate] of [[[],false],[['EK7','GEM7'],false],[['EK7'],false],[['EK7'],true]]){
@@ -219,12 +220,12 @@ test('actual summary query rejects empty, multiple and ambiguous platform select
       setBusy:noop,setError:value=>error=value,setProgress:noop,optionsLoading:false,optionsError:'',
       platforms:[{id:platform,name:'EK7',team:'香港'},{id:'00000000-0000-0000-0000-000000000002',name:duplicate?'EK7':'GEM7',team:'香港'}],
       createdStart:'',createdEnd:'',session:{},setStored:value=>stored=value,setActive:noop,isOrderQueryDenied:()=>false,
-      queryOrderTimeBatches:async filters=>{calls++;assert.equal(filters.length,1);assert.equal(filters[0].memberId,'');assert.equal(filters[0].status,'all');return [];},orderTimeRpc:()=>{throw Error('unexpected direct request');}};
+      queryOrderTimeBatches:async filters=>{calls++;assert.equal(filters.length,names.length||2);assert.equal(filters[0].memberId,'');assert.equal(filters[0].status,'all');return [];},orderTimeRpc:()=>{throw Error('unexpected direct request');}};
     const invoke=new Function(...Object.keys(context),compile(run.getText(controls))+'\nreturn run;')(...Object.values(context));
     const ok=await invoke({...fixture().selection,platforms:names});
-    const valid=names.length===1&&!duplicate;
+    const valid=!duplicate;
     assert.equal(ok,valid);assert.equal(calls,valid?1:0);
-    if(!valid){assert.match(error,/一个平台|重名/);assert.equal(stored,undefined);}
+    if(!valid){assert.match(error,/重名/);assert.equal(stored,undefined);}
     else assert.equal(stored.data.selection.crossDayOnly,false);
   }
 });

@@ -5,7 +5,8 @@ import {dashboardAuthenticatedFetch,type DashboardSession} from "@/lib/dashboard
 import {dashboardScopeIdentity} from "@/lib/dashboardDataScope";
 import {orderTimeRequest,sourceTime,type OrderTimePayload} from "@/lib/orderTimeQuery";
 import {queryOrderTimeBatches} from "@/lib/orderTimeBatch";
-import {timePlatformCountry,timeOrderFilters,timeSourceRows,type TimeQuerySelection,type TimeQueryResult} from "@/lib/orderTimeVolume";
+import {selectOrderTimePlatforms} from "@/lib/orderTimePlatforms";
+import {timeOrderFilters,timeSourceRows,type TimeQuerySelection,type TimeQueryResult} from "@/lib/orderTimeVolume";
 import {formatNumber} from "@/lib/format";
 import "./OrderTimeDashboard.css";
 
@@ -29,7 +30,7 @@ export async function orderTimeRpc(session:DashboardSession|null, name:string,bo
 export function useOrderTimeQuery() {
   const {session,profile}=useDashboardAuth();
   const identity=dashboardScopeIdentity(profile),currentIdentity=useRef(identity);currentIdentity.current=identity;
-  const [mode,setMode]=useState<"daily"|"created"|"success">("daily");
+  const [mode,setMode]=useState<"daily"|"created"|"success">("created");
   const [startClock,setStartClock]=useState("00:00:00"),[endClock,setEndClock]=useState("23:59:59");
   const [createdStart,setCreatedStart]=useState(""),[createdEnd,setCreatedEnd]=useState("");
   const [platforms,setPlatforms]=useState<OrderTimePayload["platforms"]>([]);
@@ -61,12 +62,9 @@ export function useOrderTimeQuery() {
     setBusy(true);setError("");setProgress({completed:0,total:0,active:0});
     try {
       if(optionsLoading)throw new Error("正在读取可查询的平台，请稍后查询。");
-      if(input.platforms.length!==1)throw new Error("时间段查询必须选择一个平台，不能查询全部或多个平台。");
-      const selected=platforms.filter(p=>timePlatformCountry(p)===input.country&&(!input.platforms.length||input.platforms.includes(p.name)));
-      if(!selected.length)throw new Error(optionsError||"当前平台尚未接入订单明细，请使用日汇总；接入采集脚本后才能按时段查询。");
-      if(selected.length!==1)throw new Error("平台配置存在重名，请联系管理员确认后再查询。");
-      if(input.platforms.some(name=>!selected.some(p=>p.name===name)))throw new Error("所选平台中有未接入订单明细的平台，请分开查询，不能把日汇总混进时间段结果。");
-      const selection:TimeQuerySelection={...input,basis:mode,createdStart:mode==="success"?createdStart:"",createdEnd:mode==="success"?createdEnd:"",
+      if(optionsError)throw new Error(optionsError);
+      const selected=selectOrderTimePlatforms(platforms,input.country,input.platforms);
+      const selection:TimeQuerySelection={...input,platforms:[...new Set(input.platforms)],basis:mode,createdStart:mode==="success"?createdStart:"",createdEnd:mode==="success"?createdEnd:"",
         memberId:"",orderNumber:"",status:"all",crossDayOnly:false};
       const draft:TimeQueryResult={selection,payloads:[]};
       // One shared two-request queue; day/direction shards stay under the

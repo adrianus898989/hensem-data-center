@@ -12,6 +12,7 @@ const helper = loadTs(path.join(root, 'src/lib/thirdPartyPlatform.ts'));
 const countryHelper = loadTs(path.join(root, 'src/lib/platformDisplayCountry.ts'));
 const names = loadTs(path.join(root, 'src/lib/thirdPartyNameMap.ts'));
 const workorders = loadTs(path.join(root, 'src/lib/workOrderDeposit.ts'));
+const orderTime = loadTs(path.join(root, 'src/lib/orderTimeVolume.ts'));
 const text = fs.readFileSync(path.join(root, 'src/components/ThirdPartyVolumeDashboard.tsx'), 'utf8');
 const source = ts.createSourceFile('ThirdPartyVolumeDashboard.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const dashboard = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'ThirdPartyVolumeDashboard');
@@ -23,7 +24,7 @@ for (const statement of dashboard.body.statements) {
 }
 const functionNames = ['uniq', 'filterLabel', 'localAliasKey', 'normalizePlatformDisplayName', 'collapseThirdPartyDisplayName',
   'normalizeVolumeRowForDisplay', 'isHiddenCountry', 'isAllUsdtCountryPage', 'isUsdtVolumeRow', 'rowMatchesCountryPage',
-  'normalizeCountryLabel', 'sumRows', 'aggregateCombo', 'aggregateDirection', 'VolumeMultiSelect'];
+  'normalizeCountryLabel', 'sumRows', 'aggregateCombo', 'aggregateDirection', 'VolumeMultiSelect', 'summaryQuerySource'];
 function compile(code) {
   return ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText;
 }
@@ -60,13 +61,14 @@ const rates = [{ country: '巴西', platform: '43R' }, { country: '巴西', plat
   { country: '越南', platform: 'VN_RATE_ONLY' }];
 function pipeline({ input = data(), platforms = [], country = '巴西', statusRows = rates } = {}) {
   const api = functions();
-  const context = { ...api, ...helper, ...countryHelper, ...workorders, payload: { rows: input }, ratePayload: { platformStatuses: statusRows },
+  const context = { ...api, ...helper, ...countryHelper, ...workorders, ...orderTime, payload: { rows: input }, ratePayload: { platformStatuses: statusRows },
     useMemo: callback => callback(), mainTab: 'country', activeCountryPage: country, country: '', effectiveCountryFilter: country,
     optionCountryFilter: country, countrySelections: [], appliedCountrySelections: [], platformSelections: platforms,
     appliedPlatformSelections: platforms, appliedChannel: '', appliedDirection: '', appliedChannelTypeSelections: [],
-    timeQuery: {mode:'daily',showDaily:()=>{},platforms:[]}, timeOptionsRows:[], startDate:'2026-09-01', endDate:'2026-09-30' };
+    timeQuery: {mode:'created',showDaily:()=>{},platforms:[],startClock:'00:00:00',endClock:'23:59:59',optionsLoading:false,optionsError:''},
+    setSummaryQueryError:()=>{},setLegacySummaryNotice:()=>{},timeOptionsRows:[], startDate:'2026-09-01', endDate:'2026-09-30' };
   for (const name of ['rows', 'platformSelectionCountry', 'selectedPlatformSet', 'optionScopedRowsBeforeCountry', 'optionScopedRows', 'configuredPlatforms',
-    'platforms', 'channelOptionRows', 'workOrderChannelOptions', 'channels', 'channelTypeOptions', 'filteredBaseNoDate']) {
+    'timePlatformOptions', 'platforms', 'hasLegacyPlatformSelection', 'channelOptionRows', 'workOrderChannelOptions', 'channels', 'channelTypeOptions', 'filteredBaseNoDate']) {
     if (declarations.has(name)) context[name] = evaluate(name, context);
   }
   return context;
