@@ -585,7 +585,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   const game66TeamPlatforms = redCrabTeamCountry
     ? ["66GAME", "YYGAME", "XX7", "XX6", "XX5", "YY9", "PE7", "W5W"]
     : hongKongTeamCountry
-      ? ["EZ777", "KA9", "8GAME", "WR777", "JW777", "HU777", "GG9", "MM9", "WW9", "777IN", "365IN", "INDIA2026", "FT7"]
+      ? ["EZ777", "KA9", "8GAME", "WR777", "JW777", "HU777", "GG9", "MM9", "WW9", "777IN", "365IN", "INDIA2026", "FT7", "GEM7", "MAX7", "EK7"]
       : [];
   const mergeGame66 = (parts: Game66VolumeRpcResult[]): Game66VolumeRpcResult => ({
     rows: parts.flatMap(part => part.rows || []),
