@@ -1,0 +1,128 @@
+// Execute the existing production table and integrated filter JSX with fixture
+// orders. No accounts, browser session, API requests or database writes.
+const assert=require('node:assert/strict');
+const test=require('node:test');
+const fs=require('node:fs'),path=require('node:path'),ts=require('typescript');
+const React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
+const {loadTs,root}=require('./load-typescript.cjs');
+const text=fs.readFileSync(path.join(root,'src/components/ThirdPartyVolumeDashboard.tsx'),'utf8');
+const source=ts.createSourceFile('ThirdPartyVolumeDashboard.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+const main=source.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='ThirdPartyVolumeDashboard');
+function compile(code){return ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;}
+const libs=['format','thirdPartyNameMap','thirdPartyPlatform','platformDisplayCountry','collectionSuccess','withdrawPending','withdrawActual','workOrderDeposit','orderTimeVolume','orderTimeQuery'];
+const dependencies=Object.assign({},...libs.map(name=>loadTs(path.join(root,`src/lib/${name}.ts`))));
+const controlsText=fs.readFileSync(path.join(root,'src/components/OrderTimeControls.tsx'),'utf8');
+const controls=ts.createSourceFile('OrderTimeControls.tsx',controlsText,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+const extra=controls.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='TimeQueryExtra');
+const selected=source.statements.filter(n=>ts.isVariableStatement(n)||(ts.isFunctionDeclaration(n)&&n!==main));
+function createApi(overrides={}){
+  const context={...React,...dependencies,exports:{},OrderRecordModal:()=>null,...overrides};
+  const names=selected.filter(ts.isFunctionDeclaration).map(n=>n.name.text);
+  return new Function('require',...Object.keys(context),compile(selected.map(n=>n.getText(source)).join('\n')+'\n'+extra.getText(controls))+`\nreturn {${names.join(',')},TimeQueryExtra};`)(specifier=>{
+    assert.equal(specifier,'react/jsx-runtime');return require(specifier);
+  },...Object.values(context));
+}
+const api=createApi();
+const platform='00000000-0000-0000-0000-000000000001';
+function sample(provider,direction,count,success,amount,successAmount,channel_type='UPI'){
+  return {provider,direction,channel_type,created_date:'2026-09-17',success_date:'2026-09-18',
+    submitted_count:count,submitted_amount:amount,success_count:success,success_amount:successAmount,
+    pending_count:count-success,pending_amount:amount-successAmount,actual_amount:direction==='withdraw'?successAmount-8:0,
+    withdraw_fee:direction==='withdraw'?8:0,cross_day_count:success,cross_day_amount:successAmount,earlier_count:success,earlier_amount:successAmount,missing_success_time_count:0,
+    first_created_at:'2026-09-17T10:00:00+05:30',last_created_at:'2026-09-17T18:00:00+05:30',
+    first_success_at:'2026-09-18T10:00:00+05:30',last_success_at:'2026-09-18T18:00:00+05:30',last_synced_at:'2026-09-19T00:10:00+05:30'};
+}
+function fixture(selection={}){
+  return {selection:{country:'香港',platforms:['EK7'],channel:'',types:[],direction:'',start:'2026-09-17T00:00:00',end:'2026-09-17T23:59:59',basis:'created',createdStart:'',createdEnd:'',memberId:'',orderNumber:'',status:'all',crossDayOnly:false,...selection},
+    payloads:[{id:platform,payload:{platform:'EK7',team:'香港',platforms:[{id:platform,name:'EK7',team:'香港'}],timezone:'Asia/Kolkata',
+      rows:[sample('PayA','charge',10,2,1000,900),sample('PayA','withdraw',8,6,800,120,'BANK'),sample('PayB','charge',4,1,400,50)]}}]};
+}
+function render(result){return renderToStaticMarkup(React.createElement(api.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));}
+const plain=html=>html.replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&');
+function table(html){const match=html.match(/<table>([\s\S]*?)<\/table>/);assert.ok(match);return match[1];}
+function rows(html){return [...table(html).matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(m=>m[1]);}
+function cells(html,kind='td'){return [...html.matchAll(new RegExp(`<${kind}\\b[^>]*>([\\s\\S]*?)<\\/${kind}>`,'g'))].map(m=>m[1]);}
+function headings(html){return cells(rows(html)[0],'th').map(x=>plain(x).replace(/[↕↑↓]/g,''));}
+function assertAligned(html){
+  const all=rows(html),size=cells(all[0],'th').length;
+  for(const row of all.slice(1)){
+    const count=[...row.matchAll(/<td\b([^>]*)>/g)].reduce((n,m)=>n+Number(m[1].match(/colSpan="(\d+)"/i)?.[1]||1),0);
+    assert.equal(count,size,`every data/summary/expanded row aligns with ${size} headers`);
+  }
+}
+test('actual mother table includes both rates calculated by order counts, not money',()=>{
+  const result=fixture(),html=render(result),labels=headings(html),dataRows=rows(html).slice(1);
+  assert.ok(labels.includes('代收成功率'));assert.ok(labels.includes('代付成功率'));
+  const payA=dataRows.find(row=>plain(cells(row)[0]||'')==='PayA');assert.ok(payA);
+  const columns=cells(payA);
+  assert.match(plain(columns[labels.indexOf('代收成功率')]),/20\.00%.*2 \/ 10 笔/);
+  assert.match(plain(columns[labels.indexOf('代付成功率')]),/75\.00%.*6 \/ 8 笔/);
+  assert.equal(plain(columns[labels.indexOf('代收金额')]),'900');
+  assert.equal(plain(columns[labels.indexOf('代付金额')]),'120');
+  assert.equal(plain(columns[labels.indexOf('实际到账金额')]),'112');
+  assert.equal(plain(columns[labels.indexOf('提现手续费')]),'8');
+  const total=dataRows.find(row=>plain(row).startsWith('全部汇总'));
+  assert.match(plain(cells(total)[labels.indexOf('代收成功率')]),/21\.43%.*3 \/ 14 笔/,'aggregate rate is weighted by counts, not average of provider rates');
+  assertAligned(html);
+});
+test('success-time and filtered subsets never show a false 100% order success rate',()=>{
+  for(const selection of [{basis:'success',start:'2026-09-18T00:00:00',end:'2026-09-18T23:59:59'},{status:'success'},{crossDayOnly:true}]){
+    const html=render(fixture(selection)),labels=headings(html);
+    for(const row of rows(html).slice(1))for(const label of ['代收成功率','代付成功率']){
+      const value=plain(cells(row)[labels.indexOf(label)]||'');
+      assert.match(value,/—不适用/);assert.doesNotMatch(value,/%/);
+    }
+    assertAligned(html);assert.match(html,/不含完整|不计算/);
+  }
+});
+test('existing daily result retains table structure and explicitly lacks payout denominator',()=>{
+  const data=dependencies.timeVolumeData(fixture());
+  const html=renderToStaticMarkup(React.createElement(api.CountryVolumeSinglePage,{country:'香港',rows:data.rows,summary:api.sumRows(data.rows),previousSummary:api.sumRows([]),
+    monthlyRows:api.aggregateCombo(data.rows,row=>[row.country,row.channel]),feeRows:[],previousFeeRows:[],canCompare:false,dateRangeLabel:'2026-09-17'}));
+  const labels=headings(html);assert.ok(labels.includes('代付成功率'));
+  for(const row of rows(html).slice(1))assert.match(plain(cells(row)[labels.indexOf('代付成功率')]),/—待明细接入/);
+  assertAligned(html);
+});
+function findElements(element,type){
+  if(Array.isArray(element))return element.flatMap(item=>findElements(item,type));
+  if(!React.isValidElement(element))return [];
+  return [...(element.type===type?[element]:[]),...findElements(element.props.children,type)];
+}
+test('provider detail entry routes to order-level drilldown and child columns remain aligned',()=>{
+  const data=dependencies.timeVolumeData(fixture());let clicked;
+  const hooks={useMemo:fn=>fn(),useEffect:()=>{},useState:initial=>[initial&&typeof initial==='object'&&!Array.isArray(initial)?{'香港|||PayA':true}:initial,()=>{}]};
+  const probe=createApi(hooks),grouped=probe.aggregateCombo(data.rows,row=>[row.country,row.channel]);
+  const element=probe.MonthlyTable({title:'香港 汇总',subtitle:'fixture',rows:grouped,columns:['统一三方'],columnIndexes:[1],feeRows:[],collectionSuccess:data.collectionSuccess,
+    withdrawSuccess:data.withdrawSuccess,withdrawActual:data.withdrawActual,withdrawPending:data.withdrawPending,orderRateHint:data.successRateHint,onView:row=>{clicked=row;}});
+  const buttons=findElements(element,'button'),view=buttons.find(button=>button.props.children==='查看');
+  assert.ok(view,'real table has detail entry');view.props.onClick();assert.equal(clicked.labelParts[1],'PayA');
+  const html=renderToStaticMarkup(element);assertAligned(html);assert.match(html,/volume-child-row/);
+});
+let filterNode;
+function visit(node){if(ts.isJsxElement(node)&&node.openingElement.attributes.getText(source).includes('filter-card volume-search-card'))filterNode=node;ts.forEachChild(node,visit);}
+visit(main);assert.ok(filterNode,'the existing dashboard filter card must be tested, not a separate page');
+function filterElement(mode='created'){
+  const noop=()=>{};
+  const timeQuery={mode,startClock:'00:00:00',endClock:'23:59:59',memberId:'',orderNumber:'',status:'all',crossDayOnly:false,createdStart:'',createdEnd:'',active:true};
+  const context={...api,...dependencies,exports:{},timeQuery,timePlatformOptions:['EK7','GEM7','MAX7'],startDate:'2026-09-17',endDate:'2026-09-17',activeCountryPage:'香港',
+    countryFilterOptions:[],countrySelections:[],platforms:['EK7'],platformSelections:['EK7'],platformSelectionCountry:'香港',channel:'',channels:['PayA','PayB'],
+    channelTypeOptions:['UPI','BANK'],channelTypeSelections:[],direction:'',isQuerying:false,hasPendingQuery:false,applyDateShortcut:noop,runQuery:noop,
+    setChannelTypeSelections:noop};
+  return new Function('require',...Object.keys(context),compile(`const element=${filterNode.getText(source)};`)+ '\nreturn element;')(require,...Object.values(context));
+}
+test('existing search card renders time precision and identifier filters without a separate dashboard',()=>{
+  const html=renderToStaticMarkup(filterElement());
+  assert.equal((html.match(/type="datetime-local"/g)||[]).length,2);
+  assert.match(html,/value="2026-09-17T00:00:00"/);assert.match(html,/value="2026-09-17T23:59:59"/);
+  for(const label of ['时间口径','平台','统一三方','类型 / 钱包','业务方向','会员 ID','订单号 / 三方订单号','订单状态','只看跨日成功订单'])assert.ok(plain(html).includes(label),label);
+  const success=renderToStaticMarkup(filterElement('success'));
+  assert.match(success,/更多筛选：限制创建时间/);assert.match(success,/<option value="success" selected="">成功<\/option>/);
+  const daily=renderToStaticMarkup(filterElement('daily'));assert.doesNotMatch(daily,/会员 ID|type="datetime-local"/);
+});
+
+if(process.env.ORDER_TIME_UI_PREVIEW==='1'){
+  const css=['src/app/globals.css','src/components/OrderTimeDashboard.css','src/components/WithdrawPendingCell.css'].map(file=>fs.readFileSync(path.join(root,file),'utf8')).join('\n');
+  const output=path.join(root,'outputs/integrated-order-ui.html');fs.mkdirSync(path.dirname(output),{recursive:true});
+  fs.writeFileSync(output,`<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>三方量 · 集成页面验收</title><style>${css}\nbody{padding:20px;background:#f2f5fa}main{max-width:1600px;margin:auto;min-width:0}.fixture-label{font-size:12px;color:#62748e}</style><body><main class="third-party-volume-module"><p class="fixture-label">UI验收示例，非生产数据。以下搜索框与汇总表均来自现有三方量页面。</p>${renderToStaticMarkup(filterElement())}${render(fixture())}</main></body></html>`);
+  console.log(output);
+}

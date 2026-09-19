@@ -1,0 +1,43 @@
+.third-party-volume-module .filter-card.volume-search-card{padding:16px 18px;margin:12px 0 16px;border:1px solid #dce5f0;background:#fff;border-radius:14px}
+.third-party-volume-module .volume-search-card .work-filters{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px 16px;align-items:end}
+.third-party-volume-module .volume-search-card .input,.third-party-volume-module .volume-search-card .multi-select-trigger{height:38px;min-height:38px;width:100%;font-size:12px;padding:8px 10px;border-radius:8px;background:#fbfcfe;border:1px solid #ccd9e9;color:#23344e;box-sizing:border-box}
+.third-party-volume-module .volume-search-card .field{min-width:0;display:flex;flex-direction:column;gap:6px;font-size:12px;color:#53657e}
+.third-party-volume-module .volume-search-card .field label{font-size:12px;font-weight:500}
+.third-party-volume-module .volume-search-card .action-row{justify-content:flex-end;margin:0}
+.third-party-volume-module .volume-search-card .volume-query-btn{min-height:38px;width:100%;padding:9px 18px}
+.third-party-volume-module .volume-search-card .volume-date-shortcuts{padding-top:12px;margin:0;flex-wrap:wrap;gap:6px}
+.integrated-time-extra{border-top:1px solid #edf1f7;padding-top:14px;margin-top:14px}
+.order-search-fields{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px 16px;align-items:end}
+.order-check{display:flex;align-items:center;gap:7px;min-height:38px;font-size:12px;color:#53657e;cursor:pointer}
+.order-check input{accent-color:#3166e8}
+.order-query-help{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px;font-size:11px;line-height:1.7;color:#75849b}
+.order-advanced{margin-top:9px;font-size:12px;color:#59739a}
+.order-advanced summary,.query-source-note summary{cursor:pointer}
+.time-secondary-fields{display:grid;grid-template-columns:minmax(200px,1fr) minmax(200px,1fr) auto;gap:12px;align-items:end;margin:12px 0 8px}
+.query-source-note{margin-top:10px;color:#718198;font-size:11px;line-height:1.7}
+.time-pending-note{font-size:12px;color:#967136;margin:10px 0 0}
+.order-result-context{background:#f4f7fc;border:1px solid #dce5f2;border-radius:11px;padding:12px 16px;margin-bottom:14px;color:#526883;font-size:12px;line-height:1.7}
+.order-result-context>div:first-child{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.order-result-context strong{color:#293f5d}
+.order-result-context small{display:block;color:#78879c;font-size:11px}
+.order-result-tags{display:flex;gap:6px;flex-wrap:wrap;margin:7px 0}
+.order-result-tags span{border:1px solid #dce6f6;background:white;border-radius:5px;padding:2px 7px}
+.order-rate-value,.order-rate-empty{display:block;white-space:nowrap;font-variant-numeric:tabular-nums}
+.order-rate-value{font-weight:600;color:#294f80}
+.order-rate-value small,.order-rate-empty small{display:block;font-size:10px;font-weight:400;color:#8794a7;line-height:1.6}
+.order-record-modal{width:min(1440px,calc(100vw - 48px));max-height:90vh;display:flex;flex-direction:column}
+.order-record-modal .detail-modal-header p{font-size:12px;color:#7b8ba2;line-height:1.6;margin:5px 0 0}
+.record-toolbar{display:flex;align-items:center;gap:12px;padding:12px 18px;flex-wrap:wrap;border-bottom:1px solid #e4ebf5}
+.record-toolbar .field{display:flex;align-items:center;gap:8px;font-size:12px}
+.record-toolbar .input{min-width:130px;height:34px}
+.record-toolbar>span{font-size:12px;color:#75859c}
+.record-toolbar>span:nth-child(2){margin-right:auto}
+.order-record-modal .table-wrap{overflow:auto;min-height:160px}
+.order-record-modal table{width:100%;border-collapse:collapse;white-space:nowrap;font-size:12px}
+.order-record-modal th,.order-record-modal td{padding:12px;border-bottom:1px solid #e7edf5;text-align:left}
+.order-record-modal th{position:sticky;top:0;background:#f3f7fd;z-index:1;color:#617792;font-weight:500}
+.order-record-modal td small{display:block;color:#8494a9;font-size:10px}
+.order-record-modal tr:hover{background:#f8fbff}
+.cross-day-tag{color:#735da3!important}
+@media(max-width:1100px){.third-party-volume-module .volume-search-card .work-filters,.order-search-fields{grid-template-columns:repeat(2,minmax(150px,1fr))}}
+@media(max-width:680px){.third-party-volume-module .filter-card.volume-search-card{padding:14px}.third-party-volume-module .volume-search-card .work-filters,.order-search-fields,.time-secondary-fields{grid-template-columns:1fr}.order-record-modal{width:calc(100vw - 20px)}.record-toolbar{gap:8px}.record-toolbar>span:nth-child(2){width:100%}.order-result-context>div:first-child{gap:3px}}

@@ -33,6 +33,9 @@ import { dashboardScopeAllows, dashboardScopeIdentity, effectiveDashboardDataSco
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload, type ClientMonthlyStatus } from "@/lib/monthlyStatusClient";
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
+import {useOrderTimeQuery, TimeQueryExtra, OrderRecordModal} from "./OrderTimeControls";
+import {timePlatformCountry,timeVolumeData,timeSourceRows,type TimeQueryResult} from "@/lib/orderTimeVolume";
+import {sourceTime,indiaDay,indiaShortcutDateRange} from "@/lib/orderTimeQuery";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { buildCollectionSuccessView, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
 import { CollectionSuccessCell, CollectionSuccessBreakdown } from "./CollectionSuccessCell";
@@ -2081,6 +2084,7 @@ export default function ThirdPartyVolumeDashboard() {
   // 当前页面选择 与 最后一次真正点击「查询」的数据国家分开保存。
   // 这样切换国家页签只是纯 UI 状态变化，不触发旧结果的大量手续费重算。
   const [appliedCountryPage, setAppliedCountryPage] = useState("");
+  const timeQuery = useOrderTimeQuery();
 
 
   async function loadData(silent = false, requestedStart = "", requestedEnd = "", version = "", requestedCountry = "", forceRates = false): Promise<boolean> {
@@ -2340,9 +2344,12 @@ export default function ThirdPartyVolumeDashboard() {
     ...optionScopedRows.map((row) => canonicalThirdPartyPlatform(row.country, row.platform)),
     ...configuredPlatforms
   ]), [optionScopedRows, configuredPlatforms]);
+  const timePlatformOptions = timeQuery.platforms.filter(p=>timePlatformCountry(p)===activeCountryPage).map(p=>p.name);
   const channelOptionRows = useMemo(() => optionScopedRows.filter((row) => matchesThirdPartyPlatformSelection(row.country, row.platform, platformSelections)), [optionScopedRows, platformSelections]);
-  const channels = useMemo(() => uniq(channelOptionRows.map((row) => row.channel)), [channelOptionRows]);
-  const channelTypeOptions = useMemo(() => uniq(optionScopedRows.filter((row) => matchesThirdPartyPlatformSelection(row.country, row.platform, platformSelections)).map((row) => row.channelType || "其他类型").filter(Boolean)), [optionScopedRows, platformSelections]);
+  const timeOptionsRows = timeQuery.result && timeQuery.mode!=="daily" && timeQuery.result.selection.country===activeCountryPage
+    ? timeSourceRows({...timeQuery.result,selection:{...timeQuery.result.selection,channel:"",types:[],direction:""}}).filter(row=>!platformSelections.length||platformSelections.includes(row.platform)) : [];
+  const channels = uniq([...channelOptionRows.map(row=>row.channel),...timeOptionsRows.map(row=>row.channel)]);
+  const channelTypeOptions = uniq([...optionScopedRows.filter((row) => matchesThirdPartyPlatformSelection(row.country, row.platform, platformSelections)).map((row) => row.channelType || "其他类型").filter(Boolean),...timeOptionsRows.map(row=>row.channel_type)]);
 
 
   useEffect(() => {
@@ -2359,6 +2366,7 @@ export default function ThirdPartyVolumeDashboard() {
 
   useEffect(() => {
     if (!platformSelections.length) return;
+    if (timeQuery.mode !== "daily") return;
     const available = new Set(platforms);
     const next = canonicalThirdPartyPlatformSelections(platformSelectionCountry, platformSelections).filter((item) => available.has(item));
     if (next.length !== platformSelections.length || next.some((item, index) => item !== platformSelections[index])) {
@@ -2366,7 +2374,7 @@ export default function ThirdPartyVolumeDashboard() {
       setChannel("");
       setChannelTypeSelections([]);
     }
-  }, [platforms, platformSelections, platformSelectionCountry]);
+  }, [platforms, platformSelections, platformSelectionCountry, timeQuery.mode]);
   const filtered = useMemo(() => filteredBase.filter((row) => !appliedChannelTypeSelections.length || appliedChannelTypeSelections.includes(row.channelType || "其他类型")), [filteredBase, appliedChannelTypeSelections]);
   const filteredNoDate = useMemo(() => filteredBaseNoDate.filter((row) => !appliedChannelTypeSelections.length || appliedChannelTypeSelections.includes(row.channelType || "其他类型")), [filteredBaseNoDate, appliedChannelTypeSelections]);
 
@@ -2500,9 +2508,11 @@ export default function ThirdPartyVolumeDashboard() {
 
 
   function applyDateShortcut(mode: DateShortcut) {
-    const range = shortcutDateRange(mode, startDate || endDate || appliedEndDate);
+    const selectedDate = startDate || endDate || appliedEndDate;
+    const range = timeQuery.mode==="daily" ? shortcutDateRange(mode,selectedDate) : indiaShortcutDateRange(mode,selectedDate);
     setStartDate(range.start);
     setEndDate(range.end);
+    timeQuery.setStartClock("00:00:00");timeQuery.setEndClock("23:59:59");
   }
 
   function shiftDateRange(periods: number) {
@@ -2522,17 +2532,23 @@ export default function ThirdPartyVolumeDashboard() {
     // before the disabled button has rendered.
     if (queryInFlightRef.current) return;
     queryInFlightRef.current = true;
-    const queryStart = startDate || endDate || appliedStartDate || yesterdayLocalDateKey();
+    const queryStart = startDate || endDate || appliedStartDate || (timeQuery.mode === "daily" ? yesterdayLocalDateKey() : indiaDay(-1));
     const queryEnd = endDate || startDate || appliedEndDate || queryStart;
     setIsQuerying(true);
     try {
       const queryCountry = mainTab === "country" ? activeCountryPage : "";
+      if (timeQuery.mode !== "daily") {
+        await timeQuery.run({country:queryCountry,platforms:[...platformSelections],channel,types:[...channelTypeSelections],direction,
+          start:`${queryStart}T${timeQuery.startClock}`,end:`${queryEnd}T${timeQuery.endClock}`});
+        return;
+      }
       const loaded = await loadData(true, queryStart, queryEnd, "", queryCountry, true);
       if (!loaded) {
         // 查询失败只保留上一份成功数据，不能改写用户当前选择的国家页签。
         setHasQueried(Boolean(payloadRef.current));
         return;
       }
+      timeQuery.showDaily();
       // 只有点击查询后才把所有筛选条件应用到结果。
       setAppliedStartDate(queryStart);
       setAppliedEndDate(queryEnd);
@@ -2587,18 +2603,9 @@ export default function ThirdPartyVolumeDashboard() {
   }, [volumeSyncStatus, appliedStartDate, appliedEndDate]);
 
   const initialLoading = state === "loading" && !payload;
-  if (state === "error") {
-    return (
-      <div className="error-box inner-error">
-        <h2>三方量读取失败</h2>
-        <p>{error}</p>
-        <p className="muted-text">请确认已经登录，并且 GitHub Pages 已连接 Supabase。</p>
-        
-      </div>
-    );
-  }
   return (
     <div className={cls("work-order-module third-party-volume-module", initialLoading && "is-initial-loading")}>
+      {state==="error"&&<p className="business-query-error" role="alert">日汇总暂未载入：{error}。可重试查询，或使用已接入平台的订单明细查询。</p>}
       {hasQueried && initialLoading && (
         <div className="volume-soft-loading">
           <span className="volume-soft-loading-spinner" />
@@ -2637,23 +2644,22 @@ export default function ThirdPartyVolumeDashboard() {
 
       {mainTab === "rates" && <ThirdPartyRatesDashboard embedded />}
 
-      {mainTab !== "rates" && (
+      {mainTab === "country" && (
         <>
 
-      <section className="filter-card">
+      <form className="filter-card volume-search-card" aria-label="三方量搜索" onSubmit={event=>{event.preventDefault();void runQuery();}}>
         <div className="filters work-filters">
-          <div className="field"><label>开始日期</label><input className="input" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></div>
-          <div className="field"><label>结束日期</label><input className="input" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></div>
+          <div className="field"><label>时间口径</label><select className="input" value={timeQuery.mode} onChange={e=>{timeQuery.setMode(e.target.value as "daily"|"created"|"success");setPlatformSelections([]);setChannel("");setChannelTypeSelections([]);}}><option value="daily">日汇总（现有数据）</option><option value="created" disabled={!timePlatformOptions.length}>创建时间 · 订单明细</option><option value="success" disabled={!timePlatformOptions.length}>成功时间 · 订单明细</option></select></div>
+          <div className="field"><label>{timeQuery.mode==="daily"?"开始日期":"开始时间"}</label><input className="input" type={timeQuery.mode==="daily"?"date":"datetime-local"} step="1" value={timeQuery.mode==="daily"?startDate:startDate?`${startDate}T${timeQuery.startClock}`:""} onChange={e=>{setStartDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setStartClock(e.target.value.split("T")[1]);}} /></div>
+          <div className="field"><label>{timeQuery.mode==="daily"?"结束日期":"结束时间"}</label><input className="input" type={timeQuery.mode==="daily"?"date":"datetime-local"} step="1" value={timeQuery.mode==="daily"?endDate:endDate?`${endDate}T${timeQuery.endClock}`:""} onChange={e=>{setEndDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setEndClock(e.target.value.split("T")[1]);}} /></div>
           
           {isAllUsdtCountryPage(activeCountryPage) && <VolumeMultiSelect label="国家" options={countryFilterOptions} value={countrySelections} onChange={(value) => { setCountrySelections(value); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部国家" />}
-          <VolumeMultiSelect label="平台" options={platforms} value={platformSelections} onChange={(value) => { setPlatformSelections(canonicalThirdPartyPlatformSelections(platformSelectionCountry, value)); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" />
+          <VolumeMultiSelect label="平台" options={timeQuery.mode==="daily"?platforms:timePlatformOptions} value={platformSelections} onChange={(value) => { setPlatformSelections(canonicalThirdPartyPlatformSelections(platformSelectionCountry, value)); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" />
           <div className="field"><label>统一三方</label><select className="input" value={channel} onChange={(event) => { setChannel(event.target.value); setChannelTypeSelections([]); }}><option value="">全部三方</option>{channels.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
           <VolumeMultiSelect label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" />
           <div className="field"><label>业务方向</label><select className="input" value={direction} onChange={(event) => setDirection(event.target.value)}><option value="">全部方向</option><option value="代收">代收</option><option value="代付">代付</option></select></div>
-          <div className="action-row action-row-v2"><button className="primary-btn volume-query-btn" type="button" disabled={isQuerying} onClick={() => { void runQuery(); }}>{isQuerying ? "查询中…" : "查询"}</button></div>
+          <div className="action-row action-row-v2"><button className="primary-btn volume-query-btn" type="submit" disabled={isQuerying}>{isQuerying ? "查询中…" : "查询"}</button></div>
         </div>
-      </section>
-
       <div className="quick-row date-shortcuts volume-date-shortcuts">
         <span>快捷日期：</span>
         <button type="button" onClick={() => applyDateShortcut("today")}>今天</button>
@@ -2664,15 +2670,22 @@ export default function ThirdPartyVolumeDashboard() {
         <button type="button" onClick={() => applyDateShortcut("thisMonth")}>本月</button>
         <button type="button" onClick={() => applyDateShortcut("lastMonth")}>上月</button>
       </div>
+        <TimeQueryExtra query={timeQuery}/>
+        {timeQuery.mode==="daily"&&!timePlatformOptions.length&&<details className="query-source-note"><summary>数据说明</summary>当前来源为日汇总；历史没有订单时间的记录不能拆成小时。接入对应明细采集脚本后，开放创建／成功时间查询。{timeQuery.optionsError&&<p role="alert">明细平台状态暂未载入：{timeQuery.optionsError} <button type="button" className="mini-btn" onClick={timeQuery.reloadOptions}>重新读取平台</button></p>}</details>}
+        {(hasPendingQuery || timeQuery.active) && <p className="time-pending-note">修改筛选后请点击“查询”；下方时间标签为已应用的查询范围。</p>}
+      </form>
 
-      {!hasQueried && mainTab === "country" && (
+      {timeQuery.error&&<p className="business-query-error" role="alert">{timeQuery.error} 当前结果未被替换。</p>}
+      {timeQuery.active&&timeQuery.result&&<TimeRangeVolumeResult result={timeQuery.result} rateRows={ratePayload?.rates||[]} feeRateMap={feeRateMap}/>}
+
+      {!hasQueried && !timeQuery.active && mainTab === "country" && (
         <section className="dashboard-query-empty volume-query-empty" aria-live="polite">
           <span className="dashboard-query-empty-icon">↗</span>
           <div><strong>查询后查看国家资金数据</strong><p>选择日期、平台或三方，系统会展示金额、手续费和昨日对比。</p></div>
         </section>
       )}
 
-        {hasQueried && mainTab === "country" && <CountryVolumeSinglePage country={appliedCountryPage || activeCountryPage} rows={countryPageRows} summary={countryPageSummary} previousSummary={countryPagePreviousSummary} monthlyRows={countryPageMonthlyRows} feeRows={countryPageFeeRows} previousFeeRows={countryPagePreviousFeeRows} canCompare={isSingleDayQuery} collectionSuccess={collectionSuccess} withdrawPending={withdrawPending} workOrderDeposit={workOrderDeposit} withdrawActual={withdrawActual} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} />}
+        {hasQueried && !timeQuery.active && mainTab === "country" && <CountryVolumeSinglePage country={appliedCountryPage || activeCountryPage} rows={countryPageRows} summary={countryPageSummary} previousSummary={countryPagePreviousSummary} monthlyRows={countryPageMonthlyRows} feeRows={countryPageFeeRows} previousFeeRows={countryPagePreviousFeeRows} canCompare={isSingleDayQuery} collectionSuccess={collectionSuccess} withdrawPending={withdrawPending} workOrderDeposit={workOrderDeposit} withdrawActual={withdrawActual} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} />}
         </>
       )}
     </div>
@@ -2749,7 +2762,37 @@ function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { l
   );
 }
 
-function CountryVolumeSinglePage({ country, rows, summary, previousSummary, monthlyRows, feeRows, previousFeeRows, canCompare, dateRangeLabel, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual }: { country: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; previousSummary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; previousFeeRows: FeeCompareRow[]; canCompare: boolean; dateRangeLabel: string; collectionSuccess: CollectionSuccessView; withdrawPending: WithdrawPendingView; workOrderDeposit: WorkOrderDepositView; withdrawActual: WithdrawActualView }) {
+
+function OrderSuccessCell({value,hint}:{value?:ReturnType<CollectionSuccessView["compare"]>["current"];hint?:string}) {
+  if(!value || value.rate==null) return <span className="order-rate-empty" title={hint||"现有日汇总没有完整提现订单分母；请使用已接入的创建时间查询。"}>—<small>{hint?"不适用":"待明细接入"}</small></span>;
+  return <span className="order-rate-value" title={`成功 ${formatNumber(value.success)} 笔 ÷ 创建 ${formatNumber(value.submitted)} 笔；仅基于已入库订单`}>{formatPercent(value.rate)}<small>{formatNumber(value.success)} / {formatNumber(value.submitted)} 笔</small></span>;
+}
+
+function TimeRangeVolumeResult({result,rateRows,feeRateMap}:{result:TimeQueryResult;rateRows:ThirdPartyRateRow[];feeRateMap:Map<string,RateLike>}) {
+  const [selected,setSelected]=useState<string|null>(null);
+  const data=useMemo(()=>timeVolumeData(result),[result]);
+  const monthlyRows=useMemo(()=>aggregateCombo(data.rows,row=>[row.country,row.channel]),[data]);
+  const feeRows=useMemo(()=>rateRows.length ? buildFeeCompareRows(aggregateCombo(data.rows,row=>[row.date,row.country,row.platform,row.channel,normalizedFeeBaseChannelType(row)]),rateRows,[],"daily",feeRateMap) : [],[data,rateRows,feeRateMap]);
+  const s=result.selection,range=`${s.start.replace("T"," ")} 至 ${s.end.replace("T"," ")}`;
+  const lastSync=data.source.map(row=>row.last_synced_at).filter(Boolean).sort().at(-1);
+  const hint=data.successRateHint||"成功笔数 ÷ 创建笔数；仅统计已入库订单，不代表采集已完整。";
+  useEffect(()=>setSelected(null),[result]);
+  return <>
+    <div className="order-result-context" aria-live="polite">
+      <div><strong>{s.basis==="created"?"按创建时间":"按成功时间"} · {countryPaneLabel(s.country)}</strong><span>{range} · 印度时间</span></div>
+      <div className="order-result-tags"><span>{s.platforms.length?s.platforms.join(" / "):"全部已接入平台"}</span>{s.memberId&&<span>会员 {s.memberId}</span>}{s.orderNumber&&<span>订单 {s.orderNumber}</span>}{s.status&&s.status!=="all"&&<span>状态已筛选</span>}{s.crossDayOnly&&<span>仅跨日成功</span>}<span>跨日成功 {formatNumber(data.totals.cross_day_count)} 笔</span></div>
+      {(s.createdStart||s.createdEnd)&&<small>创建时间限制：{s.createdStart.replace("T"," ")||"不限"} 至 {s.createdEnd.replace("T"," ")||"不限"}</small>}
+      <small>仅显示已同步到 Supabase 的明细；最近同步：{lastSync?sourceTime(lastSync):"暂无记录"}。补采完成前，结果可能不完整。{data.successRateHint}</small>
+    </div>
+    <CountryVolumeSinglePage country={s.country} rows={data.rows} summary={sumRows(data.rows)} previousSummary={sumRows([])}
+      monthlyRows={monthlyRows} feeRows={feeRows} previousFeeRows={[]} canCompare={false} dateRangeLabel={range}
+      collectionSuccess={data.collectionSuccess} withdrawSuccess={data.withdrawSuccess} orderRateHint={hint}
+      withdrawActual={data.withdrawActual} withdrawPending={data.withdrawPending} onView={row=>setSelected(row.labelParts[1])}/>
+    {selected&&<OrderRecordModal result={result} channel={selected} onClose={()=>setSelected(null)}/>}
+  </>;
+}
+
+function CountryVolumeSinglePage({ country, rows, summary, previousSummary, monthlyRows, feeRows, previousFeeRows, canCompare, dateRangeLabel, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual, withdrawSuccess, orderRateHint, onView }: { country: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; previousSummary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; previousFeeRows: FeeCompareRow[]; canCompare: boolean; dateRangeLabel: string; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView; withdrawSuccess?: CollectionSuccessView; orderRateHint?: string; onView?: (row: ComboSummary) => void }) {
   const fees = summarizeFeeRows(feeRows);
   const previousFees = summarizeFeeRows(previousFeeRows);
   const netAmount = summary.collectAmount - summary.payoutAmount - fees.estimatedFee;
@@ -2759,20 +2802,24 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
   const allFeesAvailable = collectFeeAvailable && payoutFeeAvailable;
   const unavailableFeeStat = (label: string): PageStatItem => ({ label, value: "—", helper: "手续费费率暂未载入", tone: "fee" });
   const displayCountry = countryPaneLabel(country);
+  const volumeStat = (...args:Parameters<typeof comparativeStat>):PageStatItem => {
+    const item=comparativeStat(...args);
+    return orderRateHint && !Array.isArray(item) ? {...item,helper:"所选时间段 · 已入库订单"} : item;
+  };
   return (
     <div className="country-volume-page range-volume-page">
       <PageStatStrip items={[
         { label: "主三方", value: uniq(rows.map((row) => row.channel)).length, helper: "当前筛选范围", tone: "default" },
         { label: "平台", value: uniq(rows.map((row) => row.platform)).length, helper: "当前有数据的平台", tone: "default" },
-        comparativeStat("代收金额", summary.collectAmount, previousSummary.collectAmount, canCompare, "collect"),
-        comparativeStat("代收笔数", summary.collectCount, previousSummary.collectCount, canCompare, "collect"),
-        comparativeStat("代付金额", summary.payoutAmount, previousSummary.payoutAmount, canCompare, "payout"),
-        comparativeStat("代付笔数", summary.payoutCount, previousSummary.payoutCount, canCompare, "payout"),
-        collectFeeAvailable ? comparativeStat("代收手续费", fees.collectFee, previousFees.collectFee, canCompare, "fee") : unavailableFeeStat("代收手续费"),
-        payoutFeeAvailable ? comparativeStat("代付手续费", fees.payoutFee, previousFees.payoutFee, canCompare, "fee") : unavailableFeeStat("代付手续费"),
-        allFeesAvailable ? comparativeStat("合计手续费", fees.estimatedFee, previousFees.estimatedFee, canCompare, "fee") : unavailableFeeStat("合计手续费"),
+        volumeStat("代收金额", summary.collectAmount, previousSummary.collectAmount, canCompare, "collect"),
+        volumeStat("代收笔数", summary.collectCount, previousSummary.collectCount, canCompare, "collect"),
+        volumeStat("代付金额", summary.payoutAmount, previousSummary.payoutAmount, canCompare, "payout"),
+        volumeStat("代付笔数", summary.payoutCount, previousSummary.payoutCount, canCompare, "payout"),
+        collectFeeAvailable ? volumeStat("代收手续费", fees.collectFee, previousFees.collectFee, canCompare, "fee") : unavailableFeeStat("代收手续费"),
+        payoutFeeAvailable ? volumeStat("代付手续费", fees.payoutFee, previousFees.payoutFee, canCompare, "fee") : unavailableFeeStat("代付手续费"),
+        allFeesAvailable ? volumeStat("合计手续费", fees.estimatedFee, previousFees.estimatedFee, canCompare, "fee") : unavailableFeeStat("合计手续费"),
         allFeesAvailable
-          ? { ...comparativeStat("业务净额", netAmount, previousNetAmount, canCompare, "net") as Exclude<PageStatItem, [string, string | number]>, helper: canCompare ? "代收－代付－手续费" : "代收－代付－手续费 · 单日可对比昨日" }
+          ? { ...volumeStat("业务净额", netAmount, previousNetAmount, canCompare, "net") as Exclude<PageStatItem, [string, string | number]>, helper: orderRateHint || canCompare ? "代收－代付－手续费" : "代收－代付－手续费 · 单日可对比昨日" }
           : { label: "业务净额", value: "—", helper: "手续费费率载入后计算", tone: "net" }
       ]} />
       <MonthlyTable
@@ -2787,6 +2834,9 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
         withdrawPending={withdrawPending}
         workOrderDeposit={workOrderDeposit}
         withdrawActual={withdrawActual}
+        withdrawSuccess={withdrawSuccess}
+        orderRateHint={orderRateHint}
+        onView={onView}
         paginated
       />
     </div>
@@ -3637,7 +3687,7 @@ function feeShareNode(summary: FeeSummary, onOpen: () => void) {
   return <button type="button" className="fee-share-alert-btn" onClick={onOpen}>{text}</button>;
 }
 
-function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFirstColumn, feeRows = [], paginated, compact, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual }: { title: string; subtitle: string; rows: ComboSummary[]; columns: string[]; columnIndexes?: number[]; stickyFirstColumn?: boolean; feeRows?: FeeCompareRow[]; paginated?: boolean; compact?: boolean; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView }) {
+function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFirstColumn, feeRows = [], paginated, compact, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual, withdrawSuccess, orderRateHint, onView }: { title: string; subtitle: string; rows: ComboSummary[]; columns: string[]; columnIndexes?: number[]; stickyFirstColumn?: boolean; feeRows?: FeeCompareRow[]; paginated?: boolean; compact?: boolean; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView; withdrawSuccess?: CollectionSuccessView; orderRateHint?: string; onView?: (row: ComboSummary) => void }) {
   const [selected, setSelected] = useState<ComboSummary | null>(null);
   const [selectedFeeIssues, setSelectedFeeIssues] = useState<{ title: string; rows: FeeCompareRow[] } | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -3653,7 +3703,8 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
   const successKeys = (items: ComboSummary[]) => items.map(item => collectionSuccessProviderKey(item.labelParts[0], item.labelParts[1]));
   // 存款、提款工单各展示提交/成功的金额与笔数，以及按笔数计算的成功占比。
   const workOrderColumnCount = workOrderDeposit ? 10 : 0;
-  const columnCount = columns.length + (showFeeColumns ? 16 : 10) + (collectionSuccess ? 1 : 0) + (withdrawPending ? 2 : 0) + workOrderColumnCount + (withdrawActual ? 2 : 0);
+  const showCollectRate = Boolean(collectionSuccess || orderRateHint);
+  const columnCount = columns.length + (showFeeColumns ? 16 : 10) + (showCollectRate ? 1 : 0) + 1 + (withdrawPending ? 2 : 0) + workOrderColumnCount + (withdrawActual ? 2 : 0);
   const depositKeys = (items: ComboSummary[]) => items.map((item) => {
     const country = item.labelParts[0] || "";
     return workOrderDepositProviderKey(country, item.labelParts[1] || "");
@@ -3692,6 +3743,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
         case "collectAmount": return row.collectAmount;
         case "collectCount": return row.collectCount;
         case "collectionSuccessRate": return collectionSuccess?.compare(providerKeys).current.rate ?? null;
+        case "payoutSuccessRate": return withdrawSuccess?.compare(providerKeys).current.rate ?? null;
         case "collectPct": return row.collectPct;
         case "payoutAmount": return row.payoutAmount;
         case "payoutCount": return row.payoutCount;
@@ -3738,7 +3790,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
         : String(a.value).localeCompare(String(b.value), "zh-CN", { numeric: true, sensitivity: "base" });
       return compared ? compared * direction : a.index - b.index;
     }).map(item => item.row);
-  }, [rows, sort, columns, feeMap, collectionSuccess, withdrawActual, withdrawPending, workOrderDeposit]);
+  }, [rows, sort, columns, feeMap, collectionSuccess, withdrawActual, withdrawPending, workOrderDeposit, withdrawSuccess]);
   const pager = usePagination(sortedRows, !!paginated);
   const shown = paginated ? pager.shown : sortedRows;
   const shownSummary = sumComboSummaryRows(shown);
@@ -3798,12 +3850,13 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
             {columns.map((column, index) => <SortTh key={column} label={column} sortKey={`dimension:${dimensionIndexes[index] ?? index}`} />)}
             <SortTh label="代收金额" sortKey="collectAmount" numeric className="num" />
             <SortTh label="代收笔数" sortKey="collectCount" numeric className="num" />
-            {collectionSuccess && <SortTh label="代收成功率" sortKey="collectionSuccessRate" numeric className="num collection-success-heading" title="按提交日期：成功笔数 ÷ 提交笔数；与前一期比较使用百分点。" />}
+            {showCollectRate && <SortTh label="代收成功率" sortKey="collectionSuccessRate" numeric className="num collection-success-heading" title={orderRateHint||"按提交日期：成功笔数 ÷ 提交笔数；与前一期比较使用百分点。"} />}
             <SortTh label="代收占比" sortKey="collectPct" numeric />
             <SortTh label="代付金额" sortKey="payoutAmount" numeric className="num" />
             <SortTh label="代付笔数" sortKey="payoutCount" numeric className="num" />
+            <SortTh label="代付成功率" sortKey="payoutSuccessRate" numeric className="num" title="创建时间口径：成功提现笔数 ÷ 提现订单总笔数。没有完整分母时不计算。" />
             {withdrawActual && <><SortTh label="实际到账金额" sortKey="withdrawActualAmount" numeric className="num withdraw-actual-heading" title="提现订单中的实际到账金额（real_amount）。来源没有完整覆盖时显示 —。" /><SortTh label="提现手续费" sortKey="withdrawActualFee" numeric className="num withdraw-actual-heading" title="提现订单中的实际手续费（fee）。来源没有完整覆盖时显示 —。" /></>}
-            {withdrawPending && <><SortTh label="代付中金额" sortKey="withdrawPendingAmount" numeric className="num withdraw-pending-heading" title="各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的申请金额。" /><SortTh label="代付中笔数" sortKey="withdrawPendingCount" numeric className="num withdraw-pending-heading" title="各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的提交笔数。" /></>}
+            {withdrawPending && <><SortTh label="代付中金额" sortKey="withdrawPendingAmount" numeric className="num withdraw-pending-heading" title={orderRateHint?"所选创建时间内，目前状态仍为已提交的提现订单金额。":"各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的申请金额。"} /><SortTh label="代付中笔数" sortKey="withdrawPendingCount" numeric className="num withdraw-pending-heading" title={orderRateHint?"所选创建时间内，目前状态仍为已提交的提现订单笔数。":"各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的提交笔数。"} /></>}
             {workOrderDeposit && <>
               <SortTh groupLabel="存款未到账" label="提交金额" sortKey="depositSubmittedAmount" numeric className="num workorder-metric-heading workorder-deposit-heading" title="按工单真实三方名称归类的存款未到账提交金额。" />
               <SortTh groupLabel="存款未到账" label="提交笔数" sortKey="depositSubmittedCount" numeric className="num workorder-metric-heading workorder-deposit-heading" title="按工单真实三方名称归类的存款未到账提交笔数。" />
@@ -3832,18 +3885,18 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
             const actual = withdrawActual?.compare(successKeys([row])).current;
             const canExpand = children.length > 0 || Boolean(success?.platforms.length);
             const isOpen = !!expanded[row.key];
-            const main = <tr key={row.key} className={fee.alertRows.length ? "fee-warning-main-row" : ""}>{columns.map((_, index) => <td key={index}>{row.labelParts[dimensionIndexes[index] ?? index] || "-"}</td>)}<td className="num">{formatNumber(row.collectAmount)}</td><td className="num">{formatNumber(row.collectCount)}</td>{success && <td><CollectionSuccessCell value={success} /></td>}<td><ShareBar value={row.collectPct} /></td><td className="num">{formatNumber(row.payoutAmount)}</td><td className="num">{formatNumber(row.payoutCount)}</td>{withdrawActual && <><td className="num withdraw-actual-cell"><WithdrawActualCell metric={actual} kind="actual" /></td><td className="num withdraw-actual-cell"><WithdrawActualCell metric={actual} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={pending} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={pending} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={deposit} formatValue={issueValue} formatRate={issueRate} />}<td><ShareBar value={row.payoutPct} /></td><td className="num strong-cell">{formatNumber(row.totalAmount)}</td><td className="num strong-cell">{formatNumber(row.totalCount)}</td>{showFeeColumns && <><td>{feeRateText(fee, "collect")}</td><td className="num">{feeAmountText(fee, "collect")}</td><td>{feeRateText(fee, "payout")}</td><td className="num">{feeAmountText(fee, "payout")}</td><td className="num">{feeTotalText(fee)}</td><td>{feeShareNode(fee, () => setSelectedFeeIssues({ title: row.labelParts.join(" / "), rows: fee.alertRows }))}</td></>}<td>{formatPercent(row.totalPct)}</td><td><div className="row-action-group">{canExpand && <button className="mini-btn" onClick={() => setExpanded((old) => ({ ...old, [row.key]: !old[row.key] }))}>{isOpen ? "收起" : "展开"}</button>}<button className="mini-btn" onClick={() => setSelected(row)}>查看</button></div></td></tr>;
+            const main = <tr key={row.key} className={fee.alertRows.length ? "fee-warning-main-row" : ""}>{columns.map((_, index) => <td key={index}>{row.labelParts[dimensionIndexes[index] ?? index] || "-"}</td>)}<td className="num">{formatNumber(row.collectAmount)}</td><td className="num">{formatNumber(row.collectCount)}</td>{showCollectRate && <td>{orderRateHint ? <OrderSuccessCell value={success?.current} hint={orderRateHint}/> : success ? <CollectionSuccessCell value={success} /> : "—"}</td>}<td><ShareBar value={row.collectPct} /></td><td className="num">{formatNumber(row.payoutAmount)}</td><td className="num">{formatNumber(row.payoutCount)}</td><td><OrderSuccessCell value={withdrawSuccess?.compare(successKeys([row])).current} hint={orderRateHint}/></td>{withdrawActual && <><td className="num withdraw-actual-cell"><WithdrawActualCell metric={actual} kind="actual" /></td><td className="num withdraw-actual-cell"><WithdrawActualCell metric={actual} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={pending} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={pending} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={deposit} formatValue={issueValue} formatRate={issueRate} />}<td><ShareBar value={row.payoutPct} /></td><td className="num strong-cell">{formatNumber(row.totalAmount)}</td><td className="num strong-cell">{formatNumber(row.totalCount)}</td>{showFeeColumns && <><td>{feeRateText(fee, "collect")}</td><td className="num">{feeAmountText(fee, "collect")}</td><td>{feeRateText(fee, "payout")}</td><td className="num">{feeAmountText(fee, "payout")}</td><td className="num">{feeTotalText(fee)}</td><td>{feeShareNode(fee, () => setSelectedFeeIssues({ title: row.labelParts.join(" / "), rows: fee.alertRows }))}</td></>}<td>{formatPercent(row.totalPct)}</td><td><div className="row-action-group">{canExpand && <button className="mini-btn" onClick={() => setExpanded((old) => ({ ...old, [row.key]: !old[row.key] }))}>{isOpen ? "收起" : "展开"}</button>}<button className="mini-btn" onClick={() => onView ? onView(row) : setSelected(row)}>查看</button></div></td></tr>;
             if (!isOpen || !canExpand) return [main];
             const childRows = children.map((child) => {
               const childHasCollect = sideHasValue(child.collectAmount, child.collectCount);
               const childHasPayout = sideHasValue(child.payoutAmount, child.payoutCount);
-              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row">{columns.map((_, index) => <td key={index}>{child.displayParts[dimensionIndexes[index] ?? index] || "-"}</td>)}<td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td>{collectionSuccess && <td><CollectionSuccessCell value={collectionSuccess.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]])} /></td>}<td>{sideShareNode(childHasCollect, row.collectAmount ? child.collectAmount / row.collectAmount : 0)}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td>{withdrawActual && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}{withdrawPending && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}{workOrderDeposit && <WorkOrderIssuesEmptyCells />}<td>{sideShareNode(childHasPayout, row.payoutAmount ? child.payoutAmount / row.payoutAmount : 0)}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td>{showFeeColumns && <><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.labelParts.join(" / ")} / ${child.displayParts.join(" / ")}`, rows: child.fee.alertRows }))}</td></>}<td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td className="muted-cell">子通道</td></tr>;
+              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row">{columns.map((_, index) => <td key={index}>{child.displayParts[dimensionIndexes[index] ?? index] || "-"}</td>)}<td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td>{showCollectRate && <td>{orderRateHint ? <OrderSuccessCell value={collectionSuccess?.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]]).current} hint={orderRateHint}/> : collectionSuccess ? <CollectionSuccessCell value={collectionSuccess.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]])} /> : "—"}</td>}<td>{sideShareNode(childHasCollect, row.collectAmount ? child.collectAmount / row.collectAmount : 0)}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td><td><OrderSuccessCell value={withdrawSuccess?.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]]).current} hint={orderRateHint}/></td>{withdrawActual && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}{withdrawPending && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}{workOrderDeposit && <WorkOrderIssuesEmptyCells />}<td>{sideShareNode(childHasPayout, row.payoutAmount ? child.payoutAmount / row.payoutAmount : 0)}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td>{showFeeColumns && <><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.labelParts.join(" / ")} / ${child.displayParts.join(" / ")}`, rows: child.fee.alertRows }))}</td></>}<td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td className="muted-cell">子通道</td></tr>;
             });
             return [main, ...childRows, ...(success?.platforms.length ? [<tr key={`${row.key}:success-platforms`} className="volume-child-row"><td colSpan={columnCount}><strong>代收成功率：</strong><CollectionSuccessBreakdown value={success} /></td></tr>] : [])];
           })}{!shown.length && <tr><td colSpan={columnCount} className="empty">暂无数据</td></tr>}</tbody>
           <tfoot>
-            <tr className="summary-row page-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>当前页汇总</td> : <><td>当前页汇总</td>{columns.slice(1).map((column) => <td key={`page-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(shownSummary.collectAmount)}</td><td className="num">{formatNumber(shownSummary.collectCount)}</td>{collectionSuccess && <td><CollectionSuccessCell value={collectionSuccess.compare(successKeys(shown))} /></td>}<td>{pct(shownSummary.collectAmount, shownSummary.totalAmount)}</td><td className="num">{formatNumber(shownSummary.payoutAmount)}</td><td className="num">{formatNumber(shownSummary.payoutCount)}</td>{withdrawActual && <><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(shown)).current} kind="actual" /></td><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(shown)).current} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(shown)).current} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(shown)).current} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={workOrderDeposit.compare(depositKeys(shown)).current} formatValue={issueValue} formatRate={issueRate} />}<td>{pct(shownSummary.payoutAmount, shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).collectFee, 0))}</td><td>-</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).payoutFee, 0))}</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0))}</td><td>{formatPercent(rows.length ? shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0) / Math.max(1, rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0)) : 0)}</td></>}<td>{formatPercent(shownSummary.totalPct)}</td><td className="muted-cell">汇总</td></tr>
-            <tr className="summary-row overall-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>全部汇总</td> : <><td>全部汇总</td>{columns.slice(1).map((column) => <td key={`all-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(totalSummary.collectAmount)}</td><td className="num">{formatNumber(totalSummary.collectCount)}</td>{collectionSuccess && <td><CollectionSuccessCell value={collectionSuccess.compare(successKeys(rows))} /></td>}<td>{pct(totalSummary.collectAmount, totalSummary.totalAmount)}</td><td className="num">{formatNumber(totalSummary.payoutAmount)}</td><td className="num">{formatNumber(totalSummary.payoutCount)}</td>{withdrawActual && <><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(rows)).current} kind="actual" /></td><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(rows)).current} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(rows)).current} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(rows)).current} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={workOrderDeposit.compare(depositKeys(rows)).current} formatValue={issueValue} formatRate={issueRate} />}<td>{pct(totalSummary.payoutAmount, totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).collectFee, 0))}</td><td>-</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).payoutFee, 0))}</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0))}</td><td>100.00%</td></>}<td>100.00%</td><td className="muted-cell">汇总</td></tr>
+            <tr className="summary-row page-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>当前页汇总</td> : <><td>当前页汇总</td>{columns.slice(1).map((column) => <td key={`page-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(shownSummary.collectAmount)}</td><td className="num">{formatNumber(shownSummary.collectCount)}</td>{showCollectRate && <td>{orderRateHint ? <OrderSuccessCell value={collectionSuccess?.compare(successKeys(shown)).current} hint={orderRateHint}/> : collectionSuccess ? <CollectionSuccessCell value={collectionSuccess.compare(successKeys(shown))} /> : "—"}</td>}<td>{pct(shownSummary.collectAmount, shownSummary.totalAmount)}</td><td className="num">{formatNumber(shownSummary.payoutAmount)}</td><td className="num">{formatNumber(shownSummary.payoutCount)}</td><td><OrderSuccessCell value={withdrawSuccess?.compare(successKeys(shown)).current} hint={orderRateHint}/></td>{withdrawActual && <><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(shown)).current} kind="actual" /></td><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(shown)).current} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(shown)).current} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(shown)).current} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={workOrderDeposit.compare(depositKeys(shown)).current} formatValue={issueValue} formatRate={issueRate} />}<td>{pct(shownSummary.payoutAmount, shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).collectFee, 0))}</td><td>-</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).payoutFee, 0))}</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0))}</td><td>{formatPercent(rows.length ? shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0) / Math.max(1, rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0)) : 0)}</td></>}<td>{formatPercent(shownSummary.totalPct)}</td><td className="muted-cell">汇总</td></tr>
+            <tr className="summary-row overall-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>全部汇总</td> : <><td>全部汇总</td>{columns.slice(1).map((column) => <td key={`all-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(totalSummary.collectAmount)}</td><td className="num">{formatNumber(totalSummary.collectCount)}</td>{showCollectRate && <td>{orderRateHint ? <OrderSuccessCell value={collectionSuccess?.compare(successKeys(rows)).current} hint={orderRateHint}/> : collectionSuccess ? <CollectionSuccessCell value={collectionSuccess.compare(successKeys(rows))} /> : "—"}</td>}<td>{pct(totalSummary.collectAmount, totalSummary.totalAmount)}</td><td className="num">{formatNumber(totalSummary.payoutAmount)}</td><td className="num">{formatNumber(totalSummary.payoutCount)}</td><td><OrderSuccessCell value={withdrawSuccess?.compare(successKeys(rows)).current} hint={orderRateHint}/></td>{withdrawActual && <><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(rows)).current} kind="actual" /></td><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(rows)).current} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(rows)).current} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(rows)).current} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={workOrderDeposit.compare(depositKeys(rows)).current} formatValue={issueValue} formatRate={issueRate} />}<td>{pct(totalSummary.payoutAmount, totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).collectFee, 0))}</td><td>-</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).payoutFee, 0))}</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0))}</td><td>100.00%</td></>}<td>100.00%</td><td className="muted-cell">汇总</td></tr>
           </tfoot>
         </table>
       </div>
