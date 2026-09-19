@@ -45,8 +45,9 @@ test('SQL returns earlier-created successes, exact time windows, scoped platform
       set test.uid='10000000-0000-0000-0000-000000000001';set test.allowed='yes';`);
     await db.exec(fs.readFileSync(path.join(root,'supabase/migrations/20260919083628_order_time_query.sql'),'utf8'));
     await db.exec(fs.readFileSync(path.join(root,'supabase/migrations/20260919085244_order_time_details.sql'),'utf8'));
+    await db.exec(fs.readFileSync(path.join(root,'supabase/migrations/20260919095550_order_time_reference_start.sql'),'utf8'));
     const signatures=(await db.query("select n.nspname,proname,pronargs from pg_proc p join pg_namespace n on n.oid=p.pronamespace where proname in ('dashboard_order_time_query','dashboard_order_time_details') order by n.nspname,proname")).rows;
-    assert.deepEqual(signatures.map(r=>Number(r.pronargs)),[15,11,15,11], 'only one signature per schema/RPC; no ambiguous overloads');
+    assert.deepEqual(signatures.map(r=>Number(r.pronargs)),[15,12,15,12], 'only one signature per schema/RPC; no ambiguous overloads and detail API is unchanged');
     const charge=[['2026-09-17T10:00:00+05:30','2026-09-18T10:00:00+05:30','1',100],
       ['2026-09-18T10:00:00+05:30','2026-09-18T23:59:59.999+05:30','1',200],
       ['2026-09-16T10:00:00+05:30','2026-09-17T10:00:00+05:30','1',300],
@@ -56,6 +57,7 @@ test('SQL returns earlier-created successes, exact time windows, scoped platform
     await db.query(`insert into game66_withdraw_orders(platform_id,update_time,create_time,status_code,pay_channel,payout_mode,amount_display,amount_minor,real_amount_display,real_amount_minor,fee_display,fee_minor,last_seen_at,uid,order_num,out_trade_no) values($1,'2026-09-18T10:00:00+05:30','2026-09-17T10:00:00+05:30','3','PayB','BANK',80,8000,78,7800,2,200,now(),'00123','WITHDRAW-0','WTHIRD-0'),($1,null,'2026-09-18T10:00:00+05:30','1','PayB','BANK',90,9000,88,8800,2,200,now(),'00123','WITHDRAW-1','WTHIRD-1')`,[base.platform]);
     function params(filters){const r=q.orderTimeRequest(filters);return [r.p_platform,r.p_start_at,r.p_end_at,r.p_basis,r.p_direction,r.p_created_start,r.p_created_end];}
     async function query(filters,extra={}){return (await db.query('select public.dashboard_order_time_query($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) as data',[...params(filters),extra.member??null,extra.order??null,extra.status??'all',extra.crossDay??false])).rows[0].data;}
+    async function referenceQuery(filters,reference,extra={}){return (await db.query('select public.dashboard_order_time_query($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) as data',[...params(filters),extra.member??null,extra.order??null,extra.status??'all',extra.crossDay??false,reference])).rows[0].data;}
     async function details(filters,extra={}){return (await db.query('select public.dashboard_order_time_details($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) as data',[...params(filters),extra.providers??null,extra.types??null,extra.cursor??null,extra.limit??50,extra.member??null,extra.order??null,extra.status??'all',extra.crossDay??false])).rows[0].data;}
     let payload=await query(base);assert.equal(payload.platforms.length,1);
     let sums=q.timeTotals(payload.rows.filter(r=>r.direction==='charge'));
@@ -107,6 +109,35 @@ test('SQL returns earlier-created successes, exact time windows, scoped platform
       const detail=await details({...base,basis:'created'},{status});
       assert.equal(detail.rows.length,1);assert.equal(detail.rows[0].status_group,status);
     }
+
+    // Legacy eleven-argument calls remain byte-for-byte equivalent to an
+    // explicit null/reference equal to start. No PostgREST overload survives.
+    assert.deepEqual(await referenceQuery(base,null),await query(base));
+    assert.deepEqual(await referenceQuery(base,q.indiaInstant(base.start)),await query(base));
+    const fullRange={...base,start:'2026-09-17T00:00:00'};
+    const reference=q.indiaInstant(fullRange.start);
+    const slices=[['2026-09-17T00:00:00','2026-09-17T23:59:59'],
+      ['2026-09-18T00:00:00','2026-09-18T11:59:59'],['2026-09-18T12:00:00','2026-09-18T23:59:59']];
+    const slicedRows=[],legacySliceRows=[];
+    for(const [start,end] of slices){
+      slicedRows.push(...(await referenceQuery({...base,start,end},reference)).rows);
+      legacySliceRows.push(...(await query({...base,start,end})).rows);
+    }
+    const whole=q.timeTotals((await query(fullRange)).rows),sliced=q.timeTotals(slicedRows);
+    assert.deepEqual(sliced,whole,'three day/hour slices retain every aggregate metric using the global reference');
+    assert.equal(whole.earlier_count,2);assert.equal(whole.earlier_amount,350);
+    assert.equal(whole.cross_day_count,4);assert.equal(whole.cross_day_amount,530);
+    assert.ok(q.timeTotals(legacySliceRows).earlier_count>whole.earlier_count,'slice-local starts would falsely count later-in-range creation as earlier');
+    const filteredSlices=[];
+    for(const [start,end] of slices)filteredSlices.push(...(await referenceQuery({...base,start,end},reference,{member:' 00123 '})).rows);
+    assert.deepEqual(q.timeTotals(filteredSlices),q.timeTotals((await query(fullRange,{member:'00123'})).rows),'leading-zero member identity remains exact across slices');
+    assert.equal((await referenceQuery(base,reference,{member:'123'})).rows.length,0);
+    assert.equal(q.timeTotals((await referenceQuery(base,reference,{order:' THIRD-0 '})).rows).success_amount,100);
+    assert.equal(q.timeTotals((await referenceQuery({...base,basis:'created'},reference)).rows).earlier_count,0,'reference does not broaden creation filters');
+    await assert.rejects(()=>referenceQuery(base,'infinity'),/范围无效/);
+    await assert.rejects(()=>referenceQuery(base,'-infinity'),/范围无效/);
+    await assert.rejects(()=>referenceQuery(base,'2026-09-18T00:00:01+05:30'),/范围无效/,'reference cannot be after the slice start');
+    await assert.rejects(()=>referenceQuery(base,'2026-08-01T00:00:00+05:30'),/范围无效/,'whole selected range remains bounded to31days');
     await assert.rejects(()=>query(base,{status:'anything'}),/范围无效/);
     await assert.rejects(()=>details(base,{status:'anything'}),/无效查询/);
     await assert.rejects(()=>details(base,{limit:201}),/无效查询/);
@@ -114,12 +145,15 @@ test('SQL returns earlier-created successes, exact time windows, scoped platform
     await assert.rejects(()=>details(base,{cursor:{at:'infinity',direction:'charge',id:firstIds[0]}}),/无效分页/);
     await assert.rejects(()=>details(base,{cursor:{at:base.start,direction:'charge',id:'bad-uuid'}}),/无效分页/);
     await assert.rejects(()=>query({...base,platform:'00000000-0000-0000-0000-000000000002'}),/无权查看/);
+    await assert.rejects(()=>referenceQuery({...base,platform:'00000000-0000-0000-0000-000000000002'},reference),/无权查看/);
     await assert.rejects(()=>details({...base,platform:'00000000-0000-0000-0000-000000000002'}),/无权查看/);
-    const privileges=(await db.query("select has_function_privilege('anon','public.dashboard_order_time_query(uuid,timestamptz,timestamptz,text,text,timestamptz,timestamptz,text,text,text,boolean)','execute') as anon,has_function_privilege('authenticated','public.dashboard_order_time_details(uuid,timestamptz,timestamptz,text,text,timestamptz,timestamptz,text[],text[],jsonb,integer,text,text,text,boolean)','execute') as authenticated")).rows[0];
+    const privileges=(await db.query("select has_function_privilege('anon','public.dashboard_order_time_query(uuid,timestamptz,timestamptz,text,text,timestamptz,timestamptz,text,text,text,boolean,timestamptz)','execute') as anon,has_function_privilege('authenticated','public.dashboard_order_time_details(uuid,timestamptz,timestamptz,text,text,timestamptz,timestamptz,text[],text[],jsonb,integer,text,text,text,boolean)','execute') as authenticated")).rows[0];
     assert.equal(privileges.anon,false);assert.equal(privileges.authenticated,true);
     await db.exec("set test.allowed='no'");await assert.rejects(()=>query(base),/没有三方查询权限/);
+    await assert.rejects(()=>referenceQuery(base,reference),/没有三方查询权限/);
     await assert.rejects(()=>details(base),/没有三方查询权限/);
     await db.exec("set test.uid=''");await assert.rejects(()=>query(base),/请先登录/);
+    await assert.rejects(()=>referenceQuery(base,reference),/请先登录/);
     await assert.rejects(()=>details(base),/请先登录/);
   }finally{await db.close();}
 });

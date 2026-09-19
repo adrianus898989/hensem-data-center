@@ -2605,7 +2605,7 @@ export default function ThirdPartyVolumeDashboard() {
   const initialLoading = state === "loading" && !payload;
   return (
     <div className={cls("work-order-module third-party-volume-module", initialLoading && "is-initial-loading")}>
-      {state==="error"&&<p className="business-query-error" role="alert">日汇总暂未载入：{error}。可重试查询，或使用已接入平台的订单明细查询。</p>}
+      {state==="error"&&!timeQuery.active&&<p className="business-query-error" role="alert">日汇总暂未载入：{error}。可重试查询，或使用已接入平台的订单明细查询。</p>}
       {hasQueried && initialLoading && (
         <div className="volume-soft-loading">
           <span className="volume-soft-loading-spinner" />
@@ -2615,7 +2615,7 @@ export default function ThirdPartyVolumeDashboard() {
       {dataNotice && (
         <div className="volume-stable-notice">
           <span className="volume-stable-dot" />
-          <div><b>{dataNotice}</b></div>
+          <div><b>{timeQuery.active?"日汇总/费率提示（不代表订单明细查询失败）：":""}{dataNotice}</b></div>
         </div>
       )}
       <section className="third-party-tab-panel">
@@ -2671,6 +2671,7 @@ export default function ThirdPartyVolumeDashboard() {
         <button type="button" onClick={() => applyDateShortcut("lastMonth")}>上月</button>
       </div>
         <TimeQueryExtra query={timeQuery}/>
+        {timeQuery.mode==="daily"&&timePlatformOptions.includes("EK7")&&<p className="order-query-help">EK7、GEM7、MAX7 已接入订单明细；查看这三个平台，请将“时间口径”切换为“创建时间”或“成功时间”。</p>}
         {timeQuery.mode==="daily"&&!timePlatformOptions.length&&<details className="query-source-note"><summary>数据说明</summary>当前来源为日汇总；历史没有订单时间的记录不能拆成小时。接入对应明细采集脚本后，开放创建／成功时间查询。{timeQuery.optionsError&&<p role="alert">明细平台状态暂未载入：{timeQuery.optionsError} <button type="button" className="mini-btn" onClick={timeQuery.reloadOptions}>重新读取平台</button></p>}</details>}
         {(hasPendingQuery || timeQuery.active) && <p className="time-pending-note">修改筛选后请点击“查询”；下方时间标签为已应用的查询范围。</p>}
       </form>

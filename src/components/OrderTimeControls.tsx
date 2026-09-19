@@ -4,6 +4,7 @@ import {useDashboardAuth} from "./DashboardAuthGate";
 import {dashboardAuthenticatedFetch,type DashboardSession} from "@/lib/dashboardAuthClient";
 import {dashboardScopeIdentity} from "@/lib/dashboardDataScope";
 import {orderTimeRequest,sourceTime,type OrderTimePayload,type OrderTimeStatus} from "@/lib/orderTimeQuery";
+import {queryOrderTimeBatches} from "@/lib/orderTimeBatch";
 import {timePlatformCountry,timeOrderFilters,timeSourceRows,type TimeQuerySelection,type TimeQueryResult} from "@/lib/orderTimeVolume";
 import {formatNumber} from "@/lib/format";
 import "./OrderTimeDashboard.css";
@@ -15,7 +16,7 @@ export async function orderTimeRpc(session:DashboardSession|null, name:string,bo
     method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal,cache:"no-store"
   },session);
   const payload=await response.json();
-  if(!response.ok)throw new Error([401,403].includes(response.status)?"登录失效或无此平台权限。":payload?.message||"读取明细失败，请重试。");
+  if(!response.ok)throw Object.assign(new Error([401,403].includes(response.status)?"登录失效或无此平台权限。":payload?.message||"读取明细失败，请重试。"),{code:payload?.code,status:response.status});
   if(!Array.isArray(payload?.rows))throw new Error("订单查询返回不完整。");
   return payload;
 }
@@ -33,6 +34,7 @@ export function useOrderTimeQuery() {
   const [active,setActive]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState("");
   const [optionsError,setOptionsError]=useState("");
   const [optionsLoading,setOptionsLoading]=useState(false),[optionsRetry,setOptionsRetry]=useState(0);
+  const [progress,setProgress]=useState({completed:0,total:0,active:0});
   const requestSerial=useRef(0),flight=useRef<AbortController|null>(null);
   useEffect(()=>{
     const controller=new AbortController();let disposed=false,timedOut=false;
@@ -52,8 +54,8 @@ export function useOrderTimeQuery() {
     if(mode==="daily")return false;
     const viewer=identity,serial=++requestSerial.current,controller=new AbortController();
     flight.current?.abort();flight.current=controller;
-    const timer=setTimeout(()=>controller.abort(),90000);
-    setBusy(true);setError("");
+    const timer=setTimeout(()=>controller.abort(),600000);
+    setBusy(true);setError("");setProgress({completed:0,total:0,active:0});
     try {
       if(optionsLoading)throw new Error("正在读取可查询的平台，请稍后查询。");
       const selected=platforms.filter(p=>timePlatformCountry(p)===input.country&&(!input.platforms.length||input.platforms.includes(p.name)));
@@ -62,12 +64,11 @@ export function useOrderTimeQuery() {
       const selection:TimeQuerySelection={...input,basis:mode,createdStart:mode==="success"?createdStart:"",createdEnd:mode==="success"?createdEnd:"",
         memberId:memberId.trim(),orderNumber:orderNumber.trim(),status:mode==="success"?"all":status,crossDayOnly};
       const draft:TimeQueryResult={selection,payloads:[]};
-      // At most three concurrent indexed queries; each platform stays isolated.
-      const payloads:TimeQueryResult["payloads"]=[];
-      for(let i=0;i<selected.length;i+=3){
-        const part=await Promise.all(selected.slice(i,i+3).map(async p=>({id:p.id,payload:await orderTimeRpc(session,"dashboard_order_time_query",orderTimeRequest(timeOrderFilters(draft,p.id)),controller.signal) as OrderTimePayload})));
-        payloads.push(...part);
-      }
+      // One shared two-request queue; day/direction shards stay under the
+      // database timeout and publish one result only when every shard succeeds.
+      const payloads=await queryOrderTimeBatches(selected.map(p=>timeOrderFilters(draft,p.id)),
+        (body,signal)=>orderTimeRpc(session,"dashboard_order_time_query",body,signal),
+        {signal:controller.signal,onProgress:value=>{if(serial===requestSerial.current&&viewer===currentIdentity.current)setProgress(value);}});
       if(serial!==requestSerial.current||viewer!==currentIdentity.current)return false;
       setStored({identity:viewer,data:{selection,payloads}});setActive(true);return true;
     }catch(err){if(serial===requestSerial.current)setError(controller.signal.aborted?"查询超时，请缩短时间段。":(err as Error).message);return false;}
@@ -75,7 +76,7 @@ export function useOrderTimeQuery() {
   }
   return {mode,setMode,startClock,setStartClock,endClock,setEndClock,createdStart,setCreatedStart,createdEnd,setCreatedEnd,
     memberId,setMemberId,orderNumber,setOrderNumber,status,setStatus,crossDayOnly,setCrossDayOnly,
-    platforms,run,busy,error,optionsError,optionsLoading,reloadOptions:()=>setOptionsRetry(n=>n+1),active:active&&stored?.identity===identity,result:stored?.identity===identity?stored.data:null,
+    platforms,run,busy,error,progress,cancel:()=>{++requestSerial.current;flight.current?.abort();setBusy(false);setError("查询已取消，保留上次查询结果。");},optionsError,optionsLoading,reloadOptions:()=>setOptionsRetry(n=>n+1),active:active&&stored?.identity===identity,result:stored?.identity===identity?stored.data:null,
     showDaily:()=>{setActive(false);setError("");}};
 }
 
@@ -89,6 +90,7 @@ export function TimeQueryExtra({query}:{query:ReturnType<typeof useOrderTimeQuer
       <label className="order-check"><input type="checkbox" checked={query.crossDayOnly} onChange={e=>query.setCrossDayOnly(e.target.checked)}/>只看跨日成功订单</label>
     </div>
     <div className="order-query-help"><span>印度后台时间 UTC+05:30 · 单次最多 31 天</span><span>{query.mode==="created"?"统计时段内创建的订单，包括尚未成功的订单。":"统计时段内成功的订单，包括以前创建的订单。"}</span></div>
+    {query.busy&&<p role="status" className="order-query-progress">正在分段读取：{query.progress.completed} / {query.progress.total}，全部完成后统一展示。 <button type="button" className="mini-btn" onClick={query.cancel}>取消查询</button></p>}
     {query.optionsLoading&&<p role="status">正在读取可查询的平台…</p>}
     {query.optionsError&&<p role="alert" className="business-query-error">{query.optionsError} <button type="button" className="mini-btn" onClick={query.reloadOptions}>重新读取平台</button></p>}
     {query.mode==="success"&&<details className="order-advanced"><summary>更多筛选：限制创建时间（可选）{query.createdStart||query.createdEnd?" · 已设置":""}</summary><div className="time-secondary-fields">
