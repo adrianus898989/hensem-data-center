@@ -110,6 +110,7 @@ test("confirmed raw work-order aliases use one provider without guessing adjacen
     ["印度", "NewWinPay2INR", "NewWinPay"],
     ["印度", "NewWinPay2INR-Bank", "NewWinPay"],
     ["印度", "3TPayINR", "3TPay"],
+    ["印度", "3TPay-QR", "3TPay"],
     ["印度", "3TPayINR-PaytmQR", "3TPay"],
     ["印度", "FancyPay-QR", "FancyPay"],
     ["印度", "FancyPayINR-Bank", "FancyPay"],
@@ -121,6 +122,7 @@ test("confirmed raw work-order aliases use one provider without guessing adjacen
     ["印度", "IC2PayINR-Bank", "ICPay"],
     ["印度", "ATPayINR-Bank2", "ATPay"],
     ["印度", "P3cPayINR", "3cPay"],
+    ["印度", "3cPay-QR", "3cPay"],
     ["巴基斯坦", "MCB-EP", "MCBPay"],
     ["巴基斯坦", "Open", "OpenPay"],
     ["巴基斯坦", "OpenPayPKR", "OpenPay"],
@@ -136,6 +138,7 @@ test("confirmed raw work-order aliases use one provider without guessing adjacen
 
 test("generic payment rails use channel_type only for confirmed source pairs", () => {
   const confirmed = [
+    ["印度", "PAYTM", "HaoxPayINR", "WPay"],
     ["印度", "PAYTM", "IC2PayINR", "ICPay"],
     ["印度", "PAYTM", "NinePayINR", "NinePay"],
     ["印度", "PAYTM", "OX2PayINR", "OXPay"],
@@ -145,6 +148,7 @@ test("generic payment rails use channel_type only for confirmed source pairs", (
     ["印度", "PAYTM", "WPayINR", "WPay"],
     ["印度", "QR", "UmoneyPayINR", "UmoneyPay"],
     ["印度", "QR", "WePay2INR", "WePay"],
+    ["印度", "UPI", "ArbPayINR", "UPI-QR"],
     ["缅甸", "KBZPay", "KingPayMMK", "KingPay"],
     ["缅甸", "WavePay", "KingPayMMK", "KingPay"],
     ["缅甸", "KBZPay", "YTPayMMK", "YTPay"],
@@ -156,7 +160,6 @@ test("generic payment rails use channel_type only for confirmed source pairs", (
     assert.equal(workOrderDepositThirdPartyName(country, raw, channelType), expected, `${country}/${raw}/${channelType}`);
   }
 
-  assert.equal(workOrderDepositThirdPartyName("印度", "PAYTM", "HaoxPayINR"), "PAYTM / HaoxPayINR");
   assert.equal(workOrderDepositThirdPartyName("印度", "PAYTM", "SpeedPayINR"), "PAYTM / SpeedPayINR");
   assert.equal(workOrderDepositThirdPartyName("印度", "QR", "Arb"), "QR / Arb");
   assert.equal(workOrderDepositThirdPartyName("马来", "DuitNow", "N/A"), "DuitNow / N/A");
@@ -190,13 +193,44 @@ test("resolved aliases merge their deposit and withdrawal metrics while traceabl
     [byName.get("ICPay").submittedAmount, byName.get("ICPay").withdrawNotReceivedAmount],
     [70, 7],
   );
-  for (const unknown of ["PAYTM / HaoxPayINR", "PAYTM / SpeedPayINR", "未知三方", "Arb"]) {
+  assert.equal(byName.get("WPay").submittedAmount, 50);
+  for (const unknown of ["PAYTM / SpeedPayINR", "未知三方", "Arb"]) {
     assert.equal(byName.has(unknown), true, unknown);
   }
   const newWin = view.compare([workOrderDepositProviderKey("印度", "NewWinPay")]).current;
   assert.deepEqual([newWin.submittedAmount, newWin.submittedCount, newWin.withdrawNotReceivedAmount, newWin.withdrawNotReceivedCount], [30, 2, 3, 2]);
-  const traceable = view.compare([workOrderDepositProviderKey("印度", "PAYTM / HaoxPayINR")]).current;
-  assert.deepEqual([traceable.submittedAmount, traceable.submittedCount, traceable.withdrawNotReceivedAmount, traceable.withdrawNotReceivedCount], [50, 1, 5, 1]);
+  const traceable = view.compare([workOrderDepositProviderKey("印度", "PAYTM / SpeedPayINR")]).current;
+  assert.deepEqual([traceable.submittedAmount, traceable.submittedCount, traceable.withdrawNotReceivedAmount, traceable.withdrawNotReceivedCount], [60, 1, 6, 1]);
+});
+
+test("source-backed India rail and code pairs join canonical providers without global alias guesses", () => {
+  const scoped = (thirdParty, channelType, amount) => ({
+    ...deposit(thirdParty, amount, 1, amount / 2, 1, amount * 2, 2, amount, 1),
+    country_code: "IN", country: "印度", platform: "RAJA", channel_type: channelType,
+  });
+  const source = [
+    scoped("PAYTM", "HaoxPayINR", 100), scoped("PAYTM-WPay", "HaoxPayINR", 200), scoped("WPay", "UPI", 300),
+    scoped("UPI", "ArbPayINR", 400), scoped("UPI-QR", "ArbPayINR", 500),
+    scoped("ArbPay", "ArbPayINR", 600), scoped("N/A", "N/A", 700),
+  ];
+  const before = structuredClone(source);
+  const view = buildWorkOrderDepositView({ rows: source, volumeRows: [], start: "2026-09-15", end: "2026-09-15", country: "印度" });
+  assert.deepEqual(source, before);
+  assert.deepEqual(view.providers.map(row => row.channel).sort(), ["WPay", "UPI-QR", "ArbPay", "未知三方"].sort());
+  for (const [provider, amount, count] of [["WPay", 600, 3], ["UPI-QR", 900, 2], ["ArbPay", 600, 1], ["未知三方", 700, 1]]) {
+    const metric = view.compare([workOrderDepositProviderKey("印度", provider)]).current;
+    assert.deepEqual([metric.submittedAmount, metric.submittedCount, metric.withdrawNotReceivedAmount, metric.withdrawNotReceivedCount], [amount, count, amount * 2, count * 2]);
+  }
+  assert.equal(view.compare().current.submittedAmount, 2800);
+  assert.equal(view.compare().current.withdrawNotReceivedAmount, 5600);
+  for (const [raw, channel] of [["PAYTM", "HaoxPayINR2"], ["QR", "HaoxPayINR"], ["HaoxPayINR", "PAYTM"]])
+    assert.notEqual(workOrderDepositThirdPartyName("印度", raw, channel), "WPay");
+  for (const [raw, channel] of [["UPI", ""], ["UPI", "ArbPayINR2"], ["ArbPayINR", "UPI"], ["ArbPay", "ArbPayINR"]])
+    assert.notEqual(workOrderDepositThirdPartyName("印度", raw, channel), "UPI-QR");
+  for (const country of ["印尼", "越南", "马来"]) {
+    assert.notEqual(workOrderDepositThirdPartyName(country, "PAYTM", "HaoxPayINR"), "WPay");
+    assert.notEqual(workOrderDepositThirdPartyName(country, "UPI", "ArbPayINR"), "UPI-QR");
+  }
 });
 
 test("an unmarked-only source produces no fake provider row or duplicated value", () => {
@@ -210,4 +244,48 @@ test("an unmarked-only source produces no fake provider row or duplicated value"
     assert.equal(metric.state, "missing");
     assert.deepEqual([metric.submittedAmount, metric.submittedCount, metric.successAmount, metric.successCount], [0, 0, 0, 0]);
   }
+});
+
+test("QR work orders join canonical provider rows once in current and previous periods", () => {
+  const scoped = (thirdParty, amount, statDate = "2026-09-15") => ({
+    ...deposit(thirdParty, amount, 1, amount / 2, 1, amount * 2, 2, amount, 1),
+    country_code: "IN", country: "印度", platform: "91CLUB", stat_date: statDate,
+    channel_type: "QR",
+  });
+  const rows = [
+    scoped("3TPay", 100), scoped("3TPay-QR", 200),
+    scoped("3cPay", 300), scoped("3cPay-QR", 400),
+    scoped("IcePay", 500), scoped("Intnet-QR", 600),
+    scoped("3TPay-QR", 40, "2026-09-14"),
+    scoped("3cPay-QR", 50, "2026-09-14"),
+    scoped("UPI", 10), scoped("N/A", 20),
+  ];
+  const before = structuredClone(rows);
+  const view = buildWorkOrderDepositView({
+    rows, volumeRows: ["3TPay", "3cPay", "Intnet"].map(channel => ({
+      ...volumeRows[0], country: "印度", platform: "91CLUB", channel, rawChannel: channel,
+    })), start: "2026-09-15", end: "2026-09-15", country: "印度",
+  });
+  assert.deepEqual(rows, before, "attribution never rewrites the collected source rows");
+  assert.deepEqual(view.providers.map(row => row.channel).sort(), ["3TPay", "3cPay", "Intnet", "UPI", "未知三方"].sort());
+  for (const [provider, amount, previousAmount] of [["3TPay", 300, 40], ["3cPay", 700, 50], ["Intnet", 1100, 0]]) {
+    const metric = view.compare([workOrderDepositProviderKey("印度", provider)]);
+    assert.deepEqual(
+      [metric.current.submittedAmount, metric.current.submittedCount,
+        metric.current.successAmount, metric.current.successCount,
+        metric.current.withdrawNotReceivedAmount, metric.current.withdrawNotReceivedCount,
+        metric.current.withdrawSuccessAmount, metric.current.withdrawSuccessCount],
+      [amount, 2, amount / 2, 2, amount * 2, 4, amount, 2], provider,
+    );
+    assert.equal(metric.previous.submittedAmount, previousAmount, provider);
+  }
+  const total = view.compare().current;
+  assert.equal(total.submittedAmount, 2130, "unresolved provider money remains in the total");
+  assert.equal(total.submittedCount, 8);
+  assert.equal(total.withdrawNotReceivedAmount, 4260);
+  assert.equal(total.withdrawNotReceivedCount, 16);
+  assert.equal(view.providers.reduce((sum, row) => sum + row.submittedAmount, 0), total.submittedAmount);
+  const filtered = buildWorkOrderDepositView({ rows, volumeRows: [], start: "2026-09-15", end: "2026-09-15", country: "印度", provider: "3TPay-QR" });
+  assert.deepEqual(filtered.providers.map(row => row.channel), ["3TPay"]);
+  assert.equal(filtered.providers[0].submittedAmount, 300);
 });

@@ -68,8 +68,8 @@ function workOrderProviderPart(value: string): string {
 
 /**
  * Some AR work-order backends put the payment rail in `third_party` and the
- * actual provider in `channel_type`. Resolve only source combinations already
- * confirmed by the business. An unconfirmed pair stays traceable and separate
+ * actual provider in `channel_type`. Resolve only source combinations backed
+ * by explicit provider records or business confirmation. An unconfirmed pair stays traceable and separate
  * instead of being merged into a guessed provider.
  */
 export function workOrderDepositThirdPartyName(country: string, thirdParty: string, channelType = ""): string {
@@ -85,6 +85,10 @@ export function workOrderDepositThirdPartyName(country: string, thirdParty: stri
 
   if (normalizedCountry === "印度") {
     const paytmProviders: Record<string, string> = {
+      // The same source code is named PAYTM-WPay / WPay / WPay-QR in AR
+      // work orders. This repairs only the generic PAYTM + code pair; the
+      // code is not promoted to a global provider alias.
+      haoxpayinr: "WPay",
       ic2payinr: "ICPay",
       ninepayinr: "NinePay",
       ox2payinr: "OXPay",
@@ -103,6 +107,10 @@ export function workOrderDepositThirdPartyName(country: string, thirdParty: stri
     } else if (rawKey === "qr") {
       genericRail = true;
       confirmed = qrProviders[channelKey] || "";
+    } else if (rawKey === "upi" && channelKey === "arbpayinr") {
+      // AR's UPI work orders share this code with explicit UPI-QR records.
+      // The independent bank provider ArbPay must retain its own identity.
+      confirmed = "UPI-QR";
     }
   } else if (normalizedCountry === "缅甸") {
     if (rawKey === "kbzpay" || rawKey === "wavepay") {

@@ -10,6 +10,7 @@ const aliases = [
   ['FancyPayINR-PaytmQR', 'FancyPay'], ['Super-APPPay', 'SUPER'],
   ['QR-WPay', 'WPay'], ['PAYTM-RAPay', 'RAPay'], ['IC2PayINR-PaytmQR', 'ICPay'],
   ['NewWinPay2', 'NewWinPay'],
+  ['3TPay-QR', '3TPay'], ['3cPay-QR', '3cPay'],
   ['ArbPay2INR-BANK', 'UPI-QR'], ['ArbPay2INR-UPI', 'UPI-QR'],
 ];
 
@@ -75,6 +76,21 @@ test('only the confirmed NewWinPay2 version merges; other unconfirmed names rema
   assert.notEqual(names.canonicalThirdPartyName('NewWinPay3', '印度'), names.canonicalThirdPartyName('NewWinPay', '印度'));
   for (const country of ['印尼', '越南', '巴西'])
     assert.equal(names.canonicalThirdPartyName('NewWinPay2', country), 'NewWinPay2');
+});
+
+test('provider QR aliases do not absorb generic UPI or different provider versions', () => {
+  for (const [input, canonical] of [['3TPay-QR', '3TPay'], ['3cPay-QR', '3cPay']]) {
+    assert.equal(names.canonicalThirdPartyName(input, '印度'), canonical);
+    for (const country of ['印尼', '越南', '巴西'])
+      assert.notEqual(names.canonicalThirdPartyName(input, country), canonical, `${country}/${input}`);
+  }
+  for (const input of ['3TPay2-QR', '3cPay2-QR', '3TPay-QR2', '3cPay-QR2']) {
+    assert.equal(names.confirmedIndiaThirdPartyAlias(input, '印度'), '');
+    assert.notEqual(names.canonicalThirdPartyName(input, '印度'), '3TPay');
+    assert.notEqual(names.canonicalThirdPartyName(input, '印度'), '3cPay');
+  }
+  assert.equal(names.canonicalThirdPartyName('UPI', '印度'), 'UPI');
+  assert.notEqual(names.canonicalThirdPartyName('UPI', '印度'), names.canonicalThirdPartyName('UPI-QR', '印度'));
 });
 
 test('canonical aliases are idempotent and preserve existing SUPER rate-join identity', () => {

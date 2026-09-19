@@ -11,6 +11,7 @@ const { loadTs, root } = require('./load-typescript.cjs');
 const helper = loadTs(path.join(root, 'src/lib/thirdPartyPlatform.ts'));
 const countryHelper = loadTs(path.join(root, 'src/lib/platformDisplayCountry.ts'));
 const names = loadTs(path.join(root, 'src/lib/thirdPartyNameMap.ts'));
+const workorders = loadTs(path.join(root, 'src/lib/workOrderDeposit.ts'));
 const text = fs.readFileSync(path.join(root, 'src/components/ThirdPartyVolumeDashboard.tsx'), 'utf8');
 const source = ts.createSourceFile('ThirdPartyVolumeDashboard.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const dashboard = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'ThirdPartyVolumeDashboard');
@@ -59,13 +60,13 @@ const rates = [{ country: '巴西', platform: '43R' }, { country: '巴西', plat
   { country: '越南', platform: 'VN_RATE_ONLY' }];
 function pipeline({ input = data(), platforms = [], country = '巴西', statusRows = rates } = {}) {
   const api = functions();
-  const context = { ...api, ...helper, ...countryHelper, payload: { rows: input }, ratePayload: { platformStatuses: statusRows },
+  const context = { ...api, ...helper, ...countryHelper, ...workorders, payload: { rows: input }, ratePayload: { platformStatuses: statusRows },
     useMemo: callback => callback(), mainTab: 'country', activeCountryPage: country, country: '', effectiveCountryFilter: country,
     optionCountryFilter: country, countrySelections: [], appliedCountrySelections: [], platformSelections: platforms,
     appliedPlatformSelections: platforms, appliedChannel: '', appliedDirection: '', appliedChannelTypeSelections: [],
-    timeQuery: {mode:'daily',showDaily:()=>{},platforms:[]}, timeOptionsRows:[] };
+    timeQuery: {mode:'daily',showDaily:()=>{},platforms:[]}, timeOptionsRows:[], startDate:'2026-09-01', endDate:'2026-09-30' };
   for (const name of ['rows', 'platformSelectionCountry', 'selectedPlatformSet', 'optionScopedRowsBeforeCountry', 'optionScopedRows', 'configuredPlatforms',
-    'platforms', 'channelOptionRows', 'channels', 'channelTypeOptions', 'filteredBaseNoDate']) {
+    'platforms', 'channelOptionRows', 'workOrderChannelOptions', 'channels', 'channelTypeOptions', 'filteredBaseNoDate']) {
     if (declarations.has(name)) context[name] = evaluate(name, context);
   }
   return context;

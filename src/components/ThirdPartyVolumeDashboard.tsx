@@ -40,7 +40,7 @@ import { useDashboardAuth } from "./DashboardAuthGate";
 import { buildCollectionSuccessView, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
 import { CollectionSuccessCell, CollectionSuccessBreakdown } from "./CollectionSuccessCell";
 import { buildWithdrawPendingView, type WithdrawPendingView } from "@/lib/withdrawPending";
-import { buildWorkOrderDepositView, workOrderDepositProviderKey, workOrderSuccessTone, type WorkOrderDepositView } from "@/lib/workOrderDeposit";
+import { buildWorkOrderDepositView, workOrderDepositCountry, workOrderDepositProviderKey, workOrderSuccessTone, type WorkOrderDepositView } from "@/lib/workOrderDeposit";
 import { buildWithdrawActualView, type WithdrawActualView } from "@/lib/withdrawActual";
 import "./WithdrawPendingCell.css";
 
@@ -2348,7 +2348,14 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
   const channelOptionRows = useMemo(() => optionScopedRows.filter((row) => matchesThirdPartyPlatformSelection(row.country, row.platform, platformSelections)), [optionScopedRows, platformSelections]);
   const timeOptionsRows = timeQuery.result && timeQuery.mode!=="daily" && timeQuery.result.selection.country===activeCountryPage
     ? timeSourceRows({...timeQuery.result,selection:{...timeQuery.result.selection,channel:"",types:[],direction:""}}).filter(row=>!platformSelections.length||platformSelections.includes(row.platform)) : [];
-  const channels = uniq([...channelOptionRows.map(row=>row.channel),...timeOptionsRows.map(row=>row.channel)]);
+  const workOrderChannelOptions = useMemo(() => timeQuery.mode!=="daily" || isAllUsdtCountryPage(optionCountryFilter) ? [] : buildWorkOrderDepositView({
+    rows: (payload?.workOrderDepositRows || []).filter(row=>!countrySelections.length||countrySelections.includes(workOrderDepositCountry(row.country_code||row.country,row.platform))),
+    volumeRows: channelOptionRows,
+    start: startDate, end: endDate,
+    country: isAllUsdtCountryPage(optionCountryFilter)?"":optionCountryFilter,
+    platforms: platformSelections,
+  }).providers.map(provider=>provider.channel), [timeQuery.mode, payload?.workOrderDepositRows, countrySelections, channelOptionRows, startDate, endDate, optionCountryFilter, platformSelections]);
+  const channels = uniq([...channelOptionRows.map(row=>row.channel),...timeOptionsRows.map(row=>row.channel),...workOrderChannelOptions]);
   const channelTypeOptions = uniq([...optionScopedRows.filter((row) => matchesThirdPartyPlatformSelection(row.country, row.platform, platformSelections)).map((row) => row.channelType || "其他类型").filter(Boolean),...timeOptionsRows.map(row=>row.channel_type)]);
 
 
@@ -2648,19 +2655,19 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
         <>
 
       <form className="filter-card volume-search-card" aria-label="三方量搜索" onSubmit={event=>{event.preventDefault();void runQuery();}}>
-        <div className="filters work-filters">
-          <div className="field"><label>时间口径</label><select className="input" aria-label="时间口径" value={timeQuery.mode} onChange={e=>{timeQuery.setMode(e.target.value as "daily"|"created"|"success");setPlatformSelections([]);setChannel("");setChannelTypeSelections([]);}}><option value="daily">日汇总（现有数据）</option><option value="created" disabled={!timePlatformOptions.length}>创建时间 · 汇总</option><option value="success" disabled={!timePlatformOptions.length}>成功时间 · 汇总</option></select></div>
-          <div className="field"><label>{timeQuery.mode==="daily"?"开始日期":"开始时间"}</label><input className="input" type={timeQuery.mode==="daily"?"date":"datetime-local"} step="1" value={timeQuery.mode==="daily"?startDate:startDate?`${startDate}T${timeQuery.startClock}`:""} onChange={e=>{setStartDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setStartClock(e.target.value.split("T")[1]);}} /></div>
-          <div className="field"><label>{timeQuery.mode==="daily"?"结束日期":"结束时间"}</label><input className="input" type={timeQuery.mode==="daily"?"date":"datetime-local"} step="1" value={timeQuery.mode==="daily"?endDate:endDate?`${endDate}T${timeQuery.endClock}`:""} onChange={e=>{setEndDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setEndClock(e.target.value.split("T")[1]);}} /></div>
+        <div className={cls("filters work-filters", timeQuery.mode!=="daily"&&"volume-time-filter-grid")}>
+          <div className="field"><label>时间口径</label><select className="input" aria-label="时间口径" title={timePlatformOptions.length?"选择日期区间，或按订单创建／成功时间精确到秒查询":"当前平台仅有日汇总，可查询日期区间；接入订单明细后支持时分秒"} value={timeQuery.mode} onChange={e=>{timeQuery.setMode(e.target.value as "daily"|"created"|"success");setPlatformSelections([]);setChannel("");setChannelTypeSelections([]);}}><option value="daily">日期区间 · 日汇总</option><option value="created" disabled={!timePlatformOptions.length}>创建时间 · 汇总</option><option value="success" disabled={!timePlatformOptions.length}>成功时间 · 汇总</option></select></div>
+          <label className="field volume-date-field">{timeQuery.mode==="daily"?"开始日期":"开始时间"}<input className="input" required type={timeQuery.mode==="daily"?"date":"datetime-local"} step="1" value={timeQuery.mode==="daily"?startDate:startDate?`${startDate}T${timeQuery.startClock}`:""} onChange={e=>{setStartDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setStartClock(e.target.value.split("T")[1]);}} /></label>
+          <label className="field volume-date-field">{timeQuery.mode==="daily"?"结束日期":"结束时间"}<input className="input" required type={timeQuery.mode==="daily"?"date":"datetime-local"} step="1" value={timeQuery.mode==="daily"?endDate:endDate?`${endDate}T${timeQuery.endClock}`:""} onChange={e=>{setEndDate(e.target.value.slice(0,10));if(e.target.value.includes("T"))timeQuery.setEndClock(e.target.value.split("T")[1]);}} /></label>
           
           {isAllUsdtCountryPage(activeCountryPage) && <VolumeMultiSelect label="国家" options={countryFilterOptions} value={countrySelections} onChange={(value) => { setCountrySelections(value); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部国家" />}
           {timeQuery.mode==="daily" ? <VolumeMultiSelect label="平台" options={platforms} value={platformSelections} onChange={(value) => { setPlatformSelections(canonicalThirdPartyPlatformSelections(platformSelectionCountry, value)); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" /> :
             <label className="field">平台（必选一个）<select className="input" required value={platformSelections.length===1?platformSelections[0]:""} onChange={e=>{setPlatformSelections(e.target.value?[e.target.value]:[]);setChannel("");setChannelTypeSelections([]);}}><option value="" disabled>请选择一个平台</option>{timePlatformOptions.map(name=><option key={name} value={name}>{name}</option>)}</select></label>}
-          <div className="field"><label>统一三方</label><select className="input" value={channel} onChange={(event) => { setChannel(event.target.value); setChannelTypeSelections([]); }}><option value="">全部三方</option>{channels.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
+          <VolumeSingleSelect label="统一三方" options={channels} value={channel} onChange={value=>{setChannel(value);setChannelTypeSelections([]);}} placeholder="全部三方" />
           <VolumeMultiSelect label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" />
-          <div className="field"><label>业务方向</label><select className="input" value={direction} onChange={(event) => setDirection(event.target.value)}><option value="">全部方向</option><option value="代收">代收</option><option value="代付">代付</option></select></div>
-          <div className="action-row action-row-v2"><button className="primary-btn volume-query-btn" type="submit" disabled={isQuerying}>{isQuerying ? "查询中…" : "查询"}</button></div>
+          <label className="field">业务方向<select className="input" value={direction} onChange={(event) => setDirection(event.target.value)}><option value="">全部方向</option><option value="代收">代收</option><option value="代付">代付</option></select></label>
         </div>
+      <div className="volume-search-actions">
       <div className="quick-row date-shortcuts volume-date-shortcuts">
         <span>快捷日期：</span>
         <button type="button" onClick={() => applyDateShortcut("today")}>今天</button>
@@ -2671,12 +2678,12 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
         <button type="button" onClick={() => applyDateShortcut("thisMonth")}>本月</button>
         <button type="button" onClick={() => applyDateShortcut("lastMonth")}>上月</button>
       </div>
+        <button className="primary-btn volume-query-btn" type="submit" disabled={isQuerying}>{isQuerying ? "查询中…" : "查询"}</button>
+      </div>
         <TimeQueryExtra query={timeQuery}/>
-        {timeQuery.mode==="daily"&&timePlatformOptions.includes("EK7")&&<p className="order-query-help">EK7、GEM7、MAX7 已接入订单明细；查看这三个平台，请将“时间口径”切换为“创建时间”或“成功时间”。</p>}
-        {timeQuery.mode==="daily"&&!timePlatformOptions.length&&<details className="query-source-note"><summary>数据说明</summary>当前来源为日汇总；历史没有订单时间的记录不能拆成小时。接入对应明细采集脚本后，开放创建／成功时间查询。{timeQuery.optionsError&&<p role="alert">明细平台状态暂未载入：{timeQuery.optionsError} <button type="button" className="mini-btn" onClick={timeQuery.reloadOptions}>重新读取平台</button></p>}</details>}
-        {(hasPendingQuery || timeQuery.active) && <p className="time-pending-note">修改筛选后请点击“查询”；下方时间标签为已应用的查询范围。</p>}
+        {timeQuery.mode==="daily"&&timeQuery.optionsError&&<p role="alert" className="business-query-error">明细平台暂未载入：{timeQuery.optionsError} <button type="button" className="mini-btn" onClick={timeQuery.reloadOptions}>重试</button></p>}
+        {hasPendingQuery && <p className="time-pending-note">筛选已修改，点击查询后生效。</p>}
       </form>
-      {onOpenOrders&&<div className="order-query-help"><span>此页仅展示汇总；会员、订单号和金额查单请进入独立页面。</span><button type="button" className="mini-btn" onClick={onOpenOrders}>打开订单明细</button></div>}
 
       {timeQuery.error&&<p className="business-query-error" role="alert">{timeQuery.error}{timeQuery.active&&" 当前结果未被替换。"}</p>}
       {timeQuery.active&&timeQuery.result&&<TimeRangeVolumeResult result={timeQuery.result} rateRows={ratePayload?.rates||[]} feeRateMap={feeRateMap}/>}
@@ -2695,6 +2702,42 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
   );
 }
 
+
+function VolumeSingleSelect({ label, options, value, onChange, placeholder }: { label: string; options: string[]; value: string; onChange: (value: string) => void; placeholder: string }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const visibleOptions = options.filter(item => item.toLowerCase().includes(search.trim().toLowerCase()));
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: MouseEvent | TouchEvent) => {
+      if (event.target instanceof Node && !boxRef.current?.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("touchstart", outside);
+    return () => { document.removeEventListener("mousedown", outside); document.removeEventListener("touchstart", outside); };
+  }, [open]);
+  const choose = (next: string) => { onChange(next); setOpen(false); setSearch(""); buttonRef.current?.focus(); };
+  return <div ref={boxRef} className="field multi-field volume-multi-field volume-single-field" onKeyDown={event=>{
+    if (event.key==="Escape") { event.preventDefault(); setOpen(false); buttonRef.current?.focus(); }
+  }}>
+    <label>{label}</label>
+    <button ref={buttonRef} className="multi-button" type="button" aria-label={label} aria-haspopup="dialog" aria-expanded={open} onClick={()=>{setSearch("");setOpen(!open);}}>
+      <span>{value||placeholder}</span><span className="multi-caret">▾</span>
+    </button>
+    {open&&<div className="multi-menu volume-multi-menu" role="dialog" aria-label={`选择${label}`}>
+      <input className="multi-search" aria-label={`搜索${label}`} placeholder={`搜索${label}`} autoFocus value={search} onChange={event=>setSearch(event.target.value)} onKeyDown={event=>{
+        if(event.key==="Enter") { event.preventDefault(); if(visibleOptions.length===1)choose(visibleOptions[0]); }
+      }}/>
+      <div className="multi-list">
+        <button type="button" className="multi-option volume-single-option" aria-pressed={!value} onClick={()=>choose("")}>{placeholder}</button>
+        {visibleOptions.map(item=><button type="button" className="multi-option volume-single-option" aria-pressed={item===value} key={item} onClick={()=>choose(item)}>{item}</button>)}
+        {!visibleOptions.length&&<div className="multi-empty">没有匹配的三方</div>}
+      </div>
+    </div>}
+  </div>;
+}
 
 function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { label: string; options: string[]; value: string[]; onChange: (value: string[]) => void; placeholder: string }) {
   const [open, setOpen] = useState(false);
@@ -2737,13 +2780,13 @@ function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { l
   return (
     <div ref={boxRef} className="field multi-field volume-multi-field">
       <label>{label}</label>
-      <button className="multi-button" type="button" onClick={() => setOpen((x) => !x)}>
+      <button className="multi-button" type="button" aria-label={label} aria-expanded={open} onClick={() => setOpen((x) => !x)}>
         <span>{filterLabel(value, placeholder)}</span>
         <span className="multi-caret">▾</span>
       </button>
       {open && (
         <div className="multi-menu volume-multi-menu">
-          <input className="multi-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`搜索${label}`} />
+          <input className="multi-search" aria-label={`搜索${label}`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`搜索${label}`} onKeyDown={event=>{if(event.key==="Enter")event.preventDefault();}} />
           <div className="multi-actions">
             <button type="button" onClick={selectVisible}>全选当前</button>
             <button type="button" onClick={clearAll}>清空</button>
@@ -2804,13 +2847,13 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
   const payoutFeeAvailable = !summary.payoutAmount || fees.payoutHasFee;
   const allFeesAvailable = collectFeeAvailable && payoutFeeAvailable;
   const unavailableFeeStat = (label: string): PageStatItem => ({ label, value: "—", helper: "手续费费率暂未载入", tone: "fee" });
-  const displayCountry = countryPaneLabel(country);
   const volumeStat = (...args:Parameters<typeof comparativeStat>):PageStatItem => {
     const item=comparativeStat(...args);
     return orderRateHint && !Array.isArray(item) ? {...item,helper:"所选时间段 · 已入库订单"} : item;
   };
   return (
     <div className="country-volume-page range-volume-page">
+      {!orderRateHint&&<div className="volume-applied-range" role="status">{countryPaneLabel(country)} · {dateRangeLabel}</div>}
       <PageStatStrip items={[
         { label: "主三方", value: uniq(rows.map((row) => row.channel)).length, helper: "当前筛选范围", tone: "default" },
         { label: "平台", value: uniq(rows.map((row) => row.platform)).length, helper: "当前有数据的平台", tone: "default" },
@@ -2826,8 +2869,8 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
           : { label: "业务净额", value: "—", helper: "手续费费率载入后计算", tone: "net" }
       ]} />
       <MonthlyTable
-        title={`${displayCountry} 汇总`}
-        subtitle={dateRangeLabel}
+        title=""
+        subtitle=""
         rows={monthlyRows}
         columns={["统一三方"]}
         columnIndexes={[1]}
@@ -3845,8 +3888,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
 
   return (
     <div className="panel">
-      <div className="panel-head"><div><h2>{title}</h2>{subtitle ? <p>{subtitle}</p> : null}</div></div>
-      {paginated && <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />}
+      {(title||subtitle)&&<div className="panel-head"><div>{title&&<h2>{title}</h2>}{subtitle ? <p>{subtitle}</p> : null}</div></div>}
       <div className={cls("table-wrap", "work-table-wrap", "volume-summary-table-wrap", stickyFirstColumn && "sticky-first-dimension") }>
         <table>
           <thead><tr>
@@ -3903,6 +3945,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
           </tfoot>
         </table>
       </div>
+      {paginated && <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />}
       {compact && rows.length > shown.length && <div className="table-note">这里只展示 TOP {shown.length}，更多请进入对应明细页。</div>}
       {selected && <VolumeRowsModal title={selected.labelParts.join(" / ")} rows={selected.rows} onClose={() => setSelected(null)} />}
       {selectedFeeIssues && <FeeIssueRowsModal title={selectedFeeIssues.title} rows={selectedFeeIssues.rows} onClose={() => setSelectedFeeIssues(null)} />}
