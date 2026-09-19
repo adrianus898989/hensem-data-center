@@ -1,4 +1,4 @@
-// LOCAL-ONLY candidate. Not deployed and no collector credential is provisioned.
+// Scoped NEWAR detail receiver. Collector credentials are provisioned separately.
 // Authentication and exact platform/dataset authorization are rechecked inside
 // the atomic DB transaction. Never distribute a service-role key to collectors.
 const MAX_BYTES = 2 * 1024 * 1024;
