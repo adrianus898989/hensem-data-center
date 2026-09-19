@@ -101,13 +101,13 @@ test('provider detail entry routes to order-level drilldown and child columns re
 let filterNode;
 function visit(node){if(ts.isJsxElement(node)&&node.openingElement.attributes.getText(source).includes('filter-card volume-search-card'))filterNode=node;ts.forEachChild(node,visit);}
 visit(main);assert.ok(filterNode,'the existing dashboard filter card must be tested, not a separate page');
-function filterElement(mode='created'){
+function filterElement(mode='created',overrides={}){
   const noop=()=>{};
   const timeQuery={mode,startClock:'00:00:00',endClock:'23:59:59',memberId:'',orderNumber:'',status:'all',crossDayOnly:false,createdStart:'',createdEnd:'',active:true};
   const context={...api,...dependencies,exports:{},timeQuery,timePlatformOptions:['EK7','GEM7','MAX7'],startDate:'2026-09-17',endDate:'2026-09-17',activeCountryPage:'香港',
     countryFilterOptions:[],countrySelections:[],platforms:['EK7'],platformSelections:['EK7'],platformSelectionCountry:'香港',channel:'',channels:['PayA','PayB'],
     channelTypeOptions:['UPI','BANK'],channelTypeSelections:[],direction:'',isQuerying:false,hasPendingQuery:false,applyDateShortcut:noop,runQuery:noop,
-    setChannelTypeSelections:noop};
+    setChannelTypeSelections:noop,...overrides};
   return new Function('require',...Object.keys(context),compile(`const element=${filterNode.getText(source)};`)+ '\nreturn element;')(require,...Object.values(context));
 }
 test('summary search keeps time precision and a required single platform without order lookup filters',()=>{
@@ -122,6 +122,91 @@ test('summary search keeps time precision and a required single platform without
   const success=renderToStaticMarkup(filterElement('success'));
   assert.match(success,/更多筛选：限制创建时间/);assert.doesNotMatch(success,/会员 ID|订单号|订单状态|只看跨日/);
   const daily=renderToStaticMarkup(filterElement('daily'));assert.doesNotMatch(daily,/会员 ID|type="datetime-local"/);
+});
+
+test('summary has one bottom pager, keeps the applied date range, and removes duplicate headings',()=>{
+  const data=dependencies.timeVolumeData(fixture());
+  const html=renderToStaticMarkup(React.createElement(api.CountryVolumeSinglePage,{country:'香港',rows:data.rows,summary:api.sumRows(data.rows),previousSummary:api.sumRows([]),
+    monthlyRows:api.aggregateCombo(data.rows,row=>[row.country,row.channel]),feeRows:[],previousFeeRows:[],canCompare:false,dateRangeLabel:'2026-09-01 至 2026-09-17'}));
+  assert.equal((html.match(/class="table-pager-row"/g)||[]).length,1);
+  assert.ok(html.indexOf('class="table-pager-row"')>html.lastIndexOf('</table>'),'paging follows the summary table and both totals');
+  assert.match(html,/class="volume-applied-range"[^>]*>香港盘口 · 2026-09-01 至 2026-09-17/);
+  assert.doesNotMatch(html,/<h2>|class="panel-head"/,'no redundant country summary title above the table');
+  const timeHtml=render(fixture());
+  assert.equal((timeHtml.match(/class="table-pager-row"/g)||[]).length,1);
+  assert.ok(timeHtml.indexOf('class="table-pager-row"')>timeHtml.lastIndexOf('</table>'));
+  assert.match(plain(timeHtml),/按创建时间.*2026-09-17 00:00:00 至 2026-09-17 23:59:59/);
+  const actualMainJsx=main.body.statements.find(ts.isReturnStatement).expression.getText(source);
+  assert.doesNotMatch(actualMainJsx,/数据说明|此页仅展示汇总|打开订单明细/);
+  assert.match(actualMainJsx,/role="alert"/,'query failures remain visible after decorative copy is removed');
+});
+
+test('summary filters submit only on explicit search while provider selection resets dependent types',()=>{
+  let queryCount=0,provider='',types=['BANK'],prevented=false;
+  const element=filterElement('daily',{runQuery:()=>{queryCount++;},setChannel:value=>provider=value,setChannelTypeSelections:value=>types=value});
+  assert.equal(element.type,'form');assert.equal(element.props['aria-label'],'三方量搜索');
+  const submit=findElements(element,'button').filter(button=>button.props.type==='submit');
+  assert.equal(submit.length,1);assert.equal(submit[0].props.children,'查询');
+  const single=findElements(element,api.VolumeSingleSelect)[0];assert.ok(single);
+  assert.deepEqual(single.props.options,['PayA','PayB']);
+  single.props.onChange('PayB');
+  assert.equal(provider,'PayB');assert.deepEqual(types,[]);assert.equal(queryCount,0);
+  element.props.onSubmit({preventDefault(){prevented=true;}});
+  assert.equal(prevented,true);assert.equal(queryCount,1);
+  for(const button of findElements(element,'button').filter(button=>button!==submit[0]))
+    assert.equal(button.props.type,'button','date shortcuts must not also submit the form');
+  const html=renderToStaticMarkup(element);
+  assert.match(html,/日期区间 · 日汇总/);assert.equal((html.match(/type="date"/g)||[]).length,2);
+  assert.ok(plain(html).includes('开始日期'));assert.ok(plain(html).includes('结束日期'));
+});
+
+test('provider search is single-choice, filters case-insensitively, and Enter never submits the enclosing form',()=>{
+  const state=[false,''];let stateIndex=0,selected='PayB',focused=0;
+  const probe=createApi({useState:initial=>{const index=stateIndex++;return[state[index]??initial,value=>state[index]=typeof value==='function'?value(state[index]):value];},
+    useEffect:()=>{},useRef:()=>({current:{focus(){focused++;}}})});
+  const draw=()=>{stateIndex=0;return probe.VolumeSingleSelect({label:'统一三方',options:['PayA','PayB'],value:selected,onChange:value=>selected=value,placeholder:'全部三方'});};
+  let element=draw();assert.equal(findElements(element,'input').length,0);
+  findElements(element,'button')[0].props.onClick();element=draw();
+  const input=findElements(element,'input')[0];assert.equal(input.props['aria-label'],'搜索统一三方');
+  input.props.onChange({target:{value:' paYA '}});element=draw();
+  const choices=findElements(element,'button').filter(button=>button.props.className.includes('volume-single-option'));
+  assert.deepEqual(choices.map(button=>button.props.children),['全部三方','PayA']);
+  for(const choice of choices)assert.equal(choice.props.type,'button');
+  let prevented=false;
+  findElements(element,'input')[0].props.onKeyDown({key:'Enter',preventDefault(){prevented=true;}});
+  assert.equal(prevented,true);assert.equal(selected,'PayA');assert.equal(state[0],false);assert.equal(state[1],'');assert.ok(focused);
+  element=draw();findElements(element,'button')[0].props.onClick();element=draw();
+  prevented=false;findElements(element,'input')[0].props.onKeyDown({key:'Enter',preventDefault(){prevented=true;}});
+  assert.equal(prevented,true);assert.equal(selected,'PayA','ambiguous search does not choose an arbitrary provider');
+  findElements(element,'button').find(button=>button.props.children==='全部三方').props.onClick();
+  assert.equal(selected,'');
+});
+
+test('multi-select option search also suppresses implicit query submission',()=>{
+  const probe=createApi({useState:initial=>[typeof initial==='boolean'?true:initial,()=>{}],useMemo:fn=>fn(),useEffect:()=>{},useRef:()=>({current:null})});
+  const element=probe.VolumeMultiSelect({label:'平台',options:['EK7','GEM7'],value:[],onChange:()=>{throw Error('typing is not selection');},placeholder:'全部平台'});
+  const input=findElements(element,'input').find(input=>input.props['aria-label']==='搜索平台');assert.ok(input);
+  let prevented=false;input.props.onKeyDown({key:'Enter',preventDefault(){prevented=true;}});
+  assert.equal(prevented,true);
+  for(const button of findElements(element,'button'))assert.equal(button.props.type,'button');
+});
+
+test('daily provider choices include scoped work-order-only providers without leaking other dates or platforms',()=>{
+  const declarations=main.body.statements.filter(ts.isVariableStatement).flatMap(node=>node.declarationList.declarations);
+  const statements=['workOrderChannelOptions','channels'].map(name=>{const declaration=declarations.find(node=>node.name.getText(source)===name);assert.ok(declaration,name);return `const ${declaration.getText(source)};`;}).join('\n');
+  const workorder=(provider,overrides={})=>({source_system:'AR_WORKORDER',country:'印度',country_code:'IN',platform:'91CLUB',stat_date:'2026-09-17',third_party:provider,
+    channel_type:'UPI',submitted_amount:100,submitted_count:1,success_amount:0,success_count:0,...overrides});
+  const sourceRows=[workorder('3TPay-QR'),workorder('Intnet'),workorder('未标记三方'),workorder('WrongDay',{stat_date:'2026-09-16'}),
+    workorder('WrongPlatform',{platform:'RAJA'}),workorder('WrongCountry',{country:'印尼',country_code:'ID'}),workorder('3cPay-QR',{country:''})];
+  for(const [mode,optionCountryFilter] of [['daily','印度'],['created','印度'],['daily','所有国家USDT']]){
+    const context={...api,...dependencies,useMemo:fn=>fn(),timeQuery:{mode},payload:{workOrderDepositRows:sourceRows},countrySelections:['印度'],
+      channelOptionRows:[{channel:'3TPay'}],timeOptionsRows:[],startDate:'2026-09-17',endDate:'2026-09-17',optionCountryFilter,platformSelections:['91CLUB']};
+    const output=new Function(...Object.keys(context),compile(statements)+'\nreturn {workOrderChannelOptions,channels};')(...Object.values(context));
+    const includeWorkorders=mode==='daily'&&optionCountryFilter!=='所有国家USDT';
+    assert.deepEqual(output.channels.sort(),(includeWorkorders?['3TPay','3cPay','Intnet']:['3TPay']).sort());
+    if(!includeWorkorders)assert.deepEqual(output.workOrderChannelOptions,[],'unclassified work-order rails cannot leak into time or USDT-only choices');
+    assert.equal(new Set(output.channels).size,output.channels.length,'canonical provider choices are unique');
+  }
 });
 
 test('actual summary query rejects empty, multiple and ambiguous platform selections before reading orders',async()=>{

@@ -142,6 +142,24 @@ test('confirmed NewWinPay2 joins NewWinPay while unconfirmed NewWinPay3 remains 
   assert.equal(lookup(map, 'NewWinPay2'), undefined);
 });
 
+test('India QR provider rows and their canonical names use the same existing fee', () => {
+  for (const [channel, provider] of [['3TPay-QR', '3TPay'], ['3cPay-QR', '3cPay']]) {
+    const source = { country: '印度', platform: 'SYNTHETIC', direction: '代收', channel,
+      rawChannel: channel, channelType: 'PaytmQR', amount: 123.45, count: 9 };
+    const output = api.normalizeVolumeRowForDisplay(source);
+    assert.equal(output.channel, provider);
+    assert.equal(output.channelType, source.channelType);
+    assert.equal(output.amount, source.amount);
+    assert.equal(output.count, source.count);
+    for (const sourceName of [provider, channel]) {
+      const original = rate(sourceName, 'PaytmQR'), map = api.buildRateMap([original]);
+      for (const queryName of [provider, channel])
+        assert.equal(lookup(map, queryName, 'PaytmQR')?.id, original.id);
+      assert.equal(lookup(map, `${provider}2-QR`, 'PaytmQR'), undefined);
+    }
+  }
+});
+
 test('PAYTM dash variants and RAPay join the existing rate in both directions without rewriting fees', () => {
   const aliases = ['RAPay', 'rapay', 'PAYTM-RAPay', 'PAYTM— RAPay', ' paytm - RAPAY '];
   for (const sourceName of aliases) {
