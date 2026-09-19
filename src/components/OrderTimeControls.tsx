@@ -3,11 +3,16 @@ import {useEffect,useRef,useState} from "react";
 import {useDashboardAuth} from "./DashboardAuthGate";
 import {dashboardAuthenticatedFetch,type DashboardSession} from "@/lib/dashboardAuthClient";
 import {dashboardScopeIdentity} from "@/lib/dashboardDataScope";
-import {orderTimeRequest,sourceTime,type OrderTimePayload,type OrderTimeStatus} from "@/lib/orderTimeQuery";
+import {orderTimeRequest,sourceTime,type OrderTimePayload} from "@/lib/orderTimeQuery";
 import {queryOrderTimeBatches} from "@/lib/orderTimeBatch";
 import {timePlatformCountry,timeOrderFilters,timeSourceRows,type TimeQuerySelection,type TimeQueryResult} from "@/lib/orderTimeVolume";
 import {formatNumber} from "@/lib/format";
 import "./OrderTimeDashboard.css";
+
+export function isOrderQueryDenied(error:unknown):boolean {
+  const value=error as {status?:number;code?:string};
+  return [401,403].includes(Number(value?.status))||value?.code==="42501"||String(value?.code||"").startsWith("28");
+}
 
 export async function orderTimeRpc(session:DashboardSession|null, name:string,body:unknown,signal:AbortSignal) {
   if(!session)throw new Error("请先登录。");
@@ -16,7 +21,7 @@ export async function orderTimeRpc(session:DashboardSession|null, name:string,bo
     method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal,cache:"no-store"
   },session);
   const payload=await response.json();
-  if(!response.ok)throw Object.assign(new Error([401,403].includes(response.status)?"登录失效或无此平台权限。":payload?.message||"读取明细失败，请重试。"),{code:payload?.code,status:response.status});
+  if(!response.ok)throw Object.assign(new Error([401,403].includes(response.status)?"登录失效或无此平台权限。":payload?.code==="57014"?"查询数据较多，请缩短时间范围或增加筛选后重试。":payload?.message||"读取明细失败，请重试。"),{code:payload?.code,status:response.status});
   if(!Array.isArray(payload?.rows))throw new Error("订单查询返回不完整。");
   return payload;
 }
@@ -27,8 +32,6 @@ export function useOrderTimeQuery() {
   const [mode,setMode]=useState<"daily"|"created"|"success">("daily");
   const [startClock,setStartClock]=useState("00:00:00"),[endClock,setEndClock]=useState("23:59:59");
   const [createdStart,setCreatedStart]=useState(""),[createdEnd,setCreatedEnd]=useState("");
-  const [memberId,setMemberId]=useState(""),[orderNumber,setOrderNumber]=useState("");
-  const [status,setStatus]=useState<OrderTimeStatus>("all"),[crossDayOnly,setCrossDayOnly]=useState(false);
   const [platforms,setPlatforms]=useState<OrderTimePayload["platforms"]>([]);
   const [stored,setStored]=useState<{identity:string;data:TimeQueryResult}|null>(null);
   const [active,setActive]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState("");
@@ -58,11 +61,13 @@ export function useOrderTimeQuery() {
     setBusy(true);setError("");setProgress({completed:0,total:0,active:0});
     try {
       if(optionsLoading)throw new Error("正在读取可查询的平台，请稍后查询。");
+      if(input.platforms.length!==1)throw new Error("时间段查询必须选择一个平台，不能查询全部或多个平台。");
       const selected=platforms.filter(p=>timePlatformCountry(p)===input.country&&(!input.platforms.length||input.platforms.includes(p.name)));
       if(!selected.length)throw new Error(optionsError||"当前平台尚未接入订单明细，请使用日汇总；接入采集脚本后才能按时段查询。");
+      if(selected.length!==1)throw new Error("平台配置存在重名，请联系管理员确认后再查询。");
       if(input.platforms.some(name=>!selected.some(p=>p.name===name)))throw new Error("所选平台中有未接入订单明细的平台，请分开查询，不能把日汇总混进时间段结果。");
       const selection:TimeQuerySelection={...input,basis:mode,createdStart:mode==="success"?createdStart:"",createdEnd:mode==="success"?createdEnd:"",
-        memberId:memberId.trim(),orderNumber:orderNumber.trim(),status:mode==="success"?"all":status,crossDayOnly};
+        memberId:"",orderNumber:"",status:"all",crossDayOnly:false};
       const draft:TimeQueryResult={selection,payloads:[]};
       // One shared two-request queue; day/direction shards stay under the
       // database timeout and publish one result only when every shard succeeds.
@@ -71,11 +76,13 @@ export function useOrderTimeQuery() {
         {signal:controller.signal,onProgress:value=>{if(serial===requestSerial.current&&viewer===currentIdentity.current)setProgress(value);}});
       if(serial!==requestSerial.current||viewer!==currentIdentity.current)return false;
       setStored({identity:viewer,data:{selection,payloads}});setActive(true);return true;
-    }catch(err){if(serial===requestSerial.current)setError(controller.signal.aborted?"查询超时，请缩短时间段。":(err as Error).message);return false;}
+    }catch(err){if(serial===requestSerial.current){
+      if(isOrderQueryDenied(err)){setStored(null);setActive(false);setPlatforms([]);}
+      setError(controller.signal.aborted?"查询超时，请缩短时间段。":(err as Error).message);
+    }return false;}
     finally{clearTimeout(timer);if(serial===requestSerial.current)setBusy(false);}
   }
   return {mode,setMode,startClock,setStartClock,endClock,setEndClock,createdStart,setCreatedStart,createdEnd,setCreatedEnd,
-    memberId,setMemberId,orderNumber,setOrderNumber,status,setStatus,crossDayOnly,setCrossDayOnly,
     platforms,run,busy,error,progress,cancel:()=>{++requestSerial.current;flight.current?.abort();setBusy(false);setError("查询已取消，保留上次查询结果。");},optionsError,optionsLoading,reloadOptions:()=>setOptionsRetry(n=>n+1),active:active&&stored?.identity===identity,result:stored?.identity===identity?stored.data:null,
     showDaily:()=>{setActive(false);setError("");}};
 }
@@ -83,12 +90,6 @@ export function useOrderTimeQuery() {
 export function TimeQueryExtra({query}:{query:ReturnType<typeof useOrderTimeQuery>}) {
   if(query.mode==="daily")return null;
   return <div className="integrated-time-extra">
-    <div className="order-search-fields">
-      <label className="field">会员 ID<input className="input" type="text" inputMode="text" autoComplete="off" maxLength={200} value={query.memberId} placeholder="精确查询，保留前导 0" onChange={e=>query.setMemberId(e.target.value)}/></label>
-      <label className="field">订单号 / 三方订单号<input className="input" type="text" autoComplete="off" maxLength={200} value={query.orderNumber} placeholder="输入完整订单号" onChange={e=>query.setOrderNumber(e.target.value)}/></label>
-      <label className="field">订单状态<select className="input" value={query.mode==="success"?"success":query.status} disabled={query.mode==="success"} onChange={e=>query.setStatus(e.target.value as OrderTimeStatus)}><option value="all">全部状态</option><option value="success">成功</option><option value="pending">处理中 / 已提交</option><option value="failed">失败</option><option value="rejected">已拒绝</option><option value="unknown">其他状态</option></select></label>
-      <label className="order-check"><input type="checkbox" checked={query.crossDayOnly} onChange={e=>query.setCrossDayOnly(e.target.checked)}/>只看跨日成功订单</label>
-    </div>
     <div className="order-query-help"><span>印度后台时间 UTC+05:30 · 单次最多 31 天</span><span>{query.mode==="created"?"统计时段内创建的订单，包括尚未成功的订单。":"统计时段内成功的订单，包括以前创建的订单。"}</span></div>
     {query.busy&&<p role="status" className="order-query-progress">正在分段读取：{query.progress.completed} / {query.progress.total}，全部完成后统一展示。 <button type="button" className="mini-btn" onClick={query.cancel}>取消查询</button></p>}
     {query.optionsLoading&&<p role="status">正在读取可查询的平台…</p>}

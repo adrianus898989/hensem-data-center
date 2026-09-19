@@ -5974,7 +5974,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .home-topbar p{margin:0!important;font-size:13px!important;font-weight:650!important;color:var(--ops-muted)!important}
 .home-system-state{display:inline-flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid #d8eee6;border-radius:999px;background:#f3fbf8;color:#187b5e;font-size:10px;font-weight:850;white-space:nowrap}
 .home-system-state i{width:7px;height:7px;border-radius:50%;background:#20b784;box-shadow:0 0 0 4px rgba(32,183,132,.11)}
-.home-card-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:14px!important}
+.home-card-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:14px!important}
 .home-module-card{
   min-height:286px!important;padding:22px!important;align-items:stretch!important;justify-content:flex-start!important;gap:0!important;
   text-align:left!important;border:1px solid var(--ops-line)!important;border-radius:18px!important;
