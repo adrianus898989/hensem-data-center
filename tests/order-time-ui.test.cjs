@@ -125,7 +125,7 @@ test('summary search keeps time precision and all/multiple platform selection wi
   assert.equal((daily.match(/type="datetime-local"/g)||[]).length,2);
 });
 
-test('summary has one bottom pager, keeps the applied date range, and removes duplicate headings',()=>{
+test('summary has one bottom pager, preserves daily applied dates, and removes duplicate time headings',()=>{
   const data=dependencies.timeVolumeData(fixture());
   const html=renderToStaticMarkup(React.createElement(api.CountryVolumeSinglePage,{country:'香港',rows:data.rows,summary:api.sumRows(data.rows),previousSummary:api.sumRows([]),
     monthlyRows:api.aggregateCombo(data.rows,row=>[row.country,row.channel]),feeRows:[],previousFeeRows:[],canCompare:false,dateRangeLabel:'2026-09-01 至 2026-09-17'}));
@@ -136,10 +136,33 @@ test('summary has one bottom pager, keeps the applied date range, and removes du
   const timeHtml=render(fixture());
   assert.equal((timeHtml.match(/class="table-pager-row"/g)||[]).length,1);
   assert.ok(timeHtml.indexOf('class="table-pager-row"')>timeHtml.lastIndexOf('</table>'));
-  assert.match(plain(timeHtml),/按创建时间.*2026-09-17 00:00:00 至 2026-09-17 23:59:59/);
+  assert.doesNotMatch(timeHtml,/order-result-context|order-result-tags|volume-applied-range|最近同步：|补采完成前/,'the redundant explanation panel and repeated time heading are removed');
   const actualMainJsx=main.body.statements.find(ts.isReturnStatement).expression.getText(source);
   assert.doesNotMatch(actualMainJsx,/数据说明|此页仅展示汇总|打开订单明细/);
   assert.match(actualMainJsx,/role="alert"/,'query failures remain visible after decorative copy is removed');
+});
+
+test('default partial-platform coverage stays visible inside the existing platform card',()=>{
+  const html=render(fixture({platforms:[],availablePlatforms:['EK7','91CLUB','91CLUB']}));
+  assert.match(plain(html),/可查 1 \/ 全部 2 平台/,'available-only results must not look like complete all-platform totals');
+  assert.doesNotMatch(html,/order-result-context|order-result-tags/,'coverage must not recreate the removed explanation panel');
+  assert.doesNotMatch(plain(render(fixture({platforms:['EK7'],availablePlatforms:['EK7','91CLUB']}))),/可查 .*全部/,'an explicit single-platform result does not inherit other platform warnings');
+  assert.doesNotMatch(plain(render(fixture({platforms:[],availablePlatforms:['EK7']}))),/可查 .*全部/,'a fully covered catalog does not show a partial-coverage warning');
+});
+
+test('summary hides explanatory copy but preserves progress, failures and optional success-time bounds',()=>{
+  const noop=()=>{};
+  const query={mode:'success',busy:true,progress:{completed:1,total:3},cancel:noop,optionsLoading:true,optionsError:'平台读取失败',reloadOptions:noop,
+    createdStart:'',createdEnd:'',setCreatedStart:noop,setCreatedEnd:noop};
+  const hidden=renderToStaticMarkup(React.createElement(api.TimeQueryExtra,{query,hideExplanation:true}));
+  assert.doesNotMatch(hidden,/order-query-help|印度后台时间|统计时段内成功的订单/);
+  assert.match(hidden,/正在分段读取：1 \/ 3/);assert.match(hidden,/取消查询/);
+  assert.match(hidden,/正在读取可查询的平台/);assert.match(hidden,/role="alert"/);assert.match(hidden,/平台读取失败/);
+  assert.match(hidden,/更多筛选：限制创建时间/);assert.equal((hidden.match(/type="datetime-local"/g)||[]).length,2);
+  const defaults=renderToStaticMarkup(React.createElement(api.TimeQueryExtra,{query}));
+  assert.match(defaults,/order-query-help|印度后台时间/,'existing non-summary callers retain help by default');
+  const summaryExtra=findElements(filterElement('success'),api.TimeQueryExtra);
+  assert.equal(summaryExtra.length,1);assert.equal(summaryExtra[0].props.hideExplanation,true);
 });
 
 test('summary filters submit only on explicit search while provider selection resets dependent types',()=>{

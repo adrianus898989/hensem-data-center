@@ -9,6 +9,7 @@ import { timeTotals, sourceTime, type OrderTimeFilters, type OrderTimePayload, t
 
 export type TimeQuerySelection = {
   country: string; platforms: string[]; channel: string; types: string[]; direction: string;
+  availablePlatforms?: string[];
   start: string; end: string; basis: "created" | "success"; createdStart: string; createdEnd: string;
   memberId?: string; orderNumber?: string;
   status?: "all" | "success" | "pending" | "failed" | "rejected" | "unknown";

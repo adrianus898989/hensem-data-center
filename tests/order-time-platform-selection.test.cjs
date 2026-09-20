@@ -18,6 +18,17 @@ test('all, multiple and single selections stay in the active group of the author
   assert.deepEqual(selectOrderTimePlatforms(catalog,'红膏蟹',[]),[catalog[3]]);
 });
 
+test('default all is the intersection of current country, permitted details and the independent directory',()=>{
+  assert.deepEqual(selectOrderTimePlatforms(catalog,'香港',[],['EK7','91CLUB']),[catalog[0]]);
+  assert.deepEqual(selectOrderTimePlatforms(catalog,'香港',[],['MAX7','66GAME','MISSING']),[catalog[2]],'another group and unconnected platforms cannot broaden the query');
+  assert.deepEqual(selectOrderTimePlatforms(catalog,'香港',['EK7'],['EK7','91CLUB']),[catalog[0]],'unrelated legacy entries do not block a selected detail platform');
+  for(const availableNames of [[],['91CLUB'],['66GAME']])
+    assert.throws(()=>selectOrderTimePlatforms(catalog,'香港',[],availableNames),/没有可查询|暂无.*明细/,'an explicitly empty/mismatched directory must not fall back to every RPC platform');
+  assert.throws(()=>selectOrderTimePlatforms(catalog,'香港',['MAX7'],['EK7']),/未接入订单明细或当前无权限/);
+  assert.throws(()=>selectOrderTimePlatforms(catalog,'香港',['EK7','91CLUB'],['EK7','91CLUB']),/未接入订单明细或当前无权限/,'explicit legacy selections fail rather than disappear');
+  assert.throws(()=>selectOrderTimePlatforms(catalog.filter(p=>p.name!=='MAX7'),'香港',[],['MAX7']),/没有可查询|暂无.*明细/,'directory membership cannot grant missing RPC permission');
+});
+
 test('repeated catalog entries and selected names are deduplicated by stable platform ID',()=>{
   const duplicated=[...catalog,catalog[0],{...catalog[1],team:'香港'}];
   assert.deepEqual(selectOrderTimePlatforms(duplicated,'香港',['GEM7','EK7','EK7']),catalog.slice(0,2));
@@ -97,6 +108,31 @@ test('actual summary query accepts all, multiple and single platforms and publis
       assert.equal(body.p_member_id,null);assert.equal(body.p_order_number,null);assert.equal(body.p_status,'all');
       assert.ok(catalog.slice(0,3).some(p=>p.id===body.p_platform));
     }
+  }
+});
+
+test('default partial-hour query reads only directory-authorized available detail platforms',async()=>{
+  for(const mode of ['created','success']){
+    const h=harness({mode});
+    assert.equal(await h.run({...input,availablePlatforms:['EK7','91CLUB']}),true);
+    assert.equal(h.state.calls.length,2);
+    assert.ok(h.state.calls.every(body=>body.p_platform===catalog[0].id));
+    assert.deepEqual(h.state.stored.data.selection.platforms,[],'empty means the user kept default all, not an invented explicit selection');
+    assert.deepEqual(h.state.stored.data.selection.availablePlatforms,['EK7','91CLUB']);
+    assert.deepEqual(h.state.stored.data.payloads.map(item=>item.id),[catalog[0].id]);
+  }
+});
+
+test('missing directory intersections and unsupported explicit choices never fall back to all platforms',async()=>{
+  for(const selection of [
+    {...input,availablePlatforms:[]},
+    {...input,availablePlatforms:['91CLUB']},
+    {...input,availablePlatforms:['EK7'],platforms:['MAX7']},
+    {...input,availablePlatforms:['EK7','91CLUB'],platforms:['EK7','91CLUB']},
+  ]){
+    const h=harness();
+    assert.equal(await h.run(selection),false);
+    assert.equal(h.state.calls.length,0);assert.equal(h.state.stored,'previous');assert.ok(h.state.error);
   }
 });
 

@@ -73,11 +73,26 @@ test('legacy or mixed full-day creation selections keep the entire original dail
   assert.equal(summaryQuerySource({...fixture,availablePlatforms:['91CLUB'],detailPlatforms:[]}),'daily');
 });
 
-test('legacy platforms cannot silently contaminate partial-hour or success results',()=>{
+test('default all queries available detail platforms without letting unrelated legacy platforms block it',()=>{
   const mixed={...fixture,availablePlatforms:['EK7','91CLUB'],detailPlatforms:['EK7']};
   for(const selection of [{basis:'success'},{start:'2026-09-17T18:00:00'},{end:'2026-09-17T23:59:00'}]){
-    assert.throws(()=>summaryQuerySource({...mixed,...selection}),/91CLUB.*不能按部分时段或成功时间/);
+    assert.equal(summaryQuerySource({...mixed,...selection}),'orders');
+    assert.equal(summaryQuerySource({...mixed,...selection,platforms:['EK7']}),'orders','explicit available platform is independent of all other platforms');
     assert.throws(()=>summaryQuerySource({...mixed,...selection,platforms:['91CLUB']}),/91CLUB/);
+    assert.throws(()=>summaryQuerySource({...mixed,...selection,platforms:['EK7','91CLUB']}),/91CLUB/,'explicit choices must never be silently dropped');
+  }
+});
+
+test('default time queries require detail and directory intersection, never a fabricated daily result',()=>{
+  for(const selection of [{basis:'success'},{start:'2026-09-17T18:00:00'}]){
+    for(const detailPlatforms of [[],['OTHER_GROUP_DETAIL']]){
+      assert.throws(()=>summaryQuerySource({...fixture,...selection,availablePlatforms:['91CLUB','RAJA'],detailPlatforms}),error=>{
+        assert.match(error.message,/当前.*(?:没有|暂无|未接入).*明细|当前.*明细.*(?:没有|暂无|未接入)/);
+        assert.doesNotMatch(error.message,/91CLUB|RAJA|OTHER_GROUP_DETAIL/,'default no-data state is not a long unsupported-platform list');
+        return true;
+      });
+    }
+    assert.throws(()=>summaryQuerySource({...fixture,...selection,availablePlatforms:[],detailPlatforms:['EK7']}),/当前.*(?:没有|暂无|未接入).*(?:明细|平台)/,'empty directory cannot be mistaken for an all-detail match');
   }
 });
 
@@ -88,23 +103,25 @@ test('time validation rejects reversed, invalid and over-31-day ranges before ch
   assert.equal(summaryQuerySource({...fixture,start:'2026-09-01T00:00:00',end:'2026-09-30T23:59:59'}),'orders');
 });
 
-test('production query dispatch never reads or publishes partial mixed-source results',async()=>{
-  for(const selection of [[],['EK7'],['EK7','91CLUB']])for(const basis of ['created','success']){
+test('production dispatch keeps default available-only time queries separate from strict explicit choices and daily totals',async()=>{
+  for(const selection of [[],['EK7'],['91CLUB'],['EK7','91CLUB']])for(const basis of ['created','success'])for(const startClock of ['00:00:00','05:00:00']){
     const calls={daily:0,orders:0,showDaily:0},errors=[],notices=[];
     const context={queryInFlightRef:{current:false},queryIntentRef:{current:0},queryContextRef:{current:'viewer:香港'},loadFlightRef:{current:null},loadTimeRates:async()=>{},viewerIdentity:'viewer',filterOptions:{ready:true,loading:false,error:''},setAppliedViewer:noop,startDate:'2026-09-17',endDate:'2026-09-17',appliedStartDate:'',appliedEndDate:'',
       timePlatformOptions:['EK7'],platforms:['EK7','91CLUB'],platformSelections:selection,platformSelectionCountry:'香港',
       mainTab:'country',activeCountryPage:'香港',channel:'',channelTypeSelections:[],direction:'',countrySelections:[],
       setIsQuerying:noop,setSummaryQueryError:value=>errors.push(value),summaryQuerySource,
-      timeQuery:{mode:basis,startClock:'00:00:00',endClock:'23:59:59',optionsLoading:false,optionsError:'',
-        run:async input=>{calls.orders++;assert.deepEqual(input.platforms,selection);return true;},showDaily:()=>calls.showDaily++},
+      timeQuery:{mode:basis,startClock,endClock:'23:59:59',optionsLoading:false,optionsError:'',
+        run:async input=>{calls.orders++;assert.deepEqual(input.platforms,selection);assert.deepEqual(input.availablePlatforms,['EK7','91CLUB'],'directory boundary must reach the authorized order selector');return true;},showDaily:()=>calls.showDaily++},
       loadData:async(_silent,start,end,_version,country)=>{calls.daily++;assert.equal(start,'2026-09-17');assert.equal(end,'2026-09-17');assert.equal(country,'香港');return true;},
       setLegacySummaryNotice:value=>notices.push(value),setAppliedStartDate:noop,setAppliedEndDate:noop,setAppliedCountrySelections:noop,
       setAppliedPlatformSelections:noop,canonicalThirdPartyPlatformSelections:(_country,value)=>value,setAppliedChannel:noop,setAppliedDirection:noop,
       setAppliedChannelTypeSelections:noop,setAppliedCountryPage:noop,setLastQueryAt:noop,setHasQueried:noop};
     const execute=new Function(...Object.keys(context),compile(run.getText(source))+'\nreturn runQuery;')(...Object.values(context));
     await execute();
-    if(selection.length===1){assert.deepEqual(calls,{daily:0,orders:1,showDaily:0});assert.deepEqual(notices,['']);}
-    else if(basis==='created'){assert.deepEqual(calls,{daily:1,orders:0,showDaily:1});assert.match(notices[0],/整组使用原有日汇总口径/);}
+    const explicitDetail=selection.length===1&&selection[0]==='EK7';
+    const defaultDetail=!selection.length&&(basis==='success'||startClock!=='00:00:00');
+    if(explicitDetail||defaultDetail){assert.deepEqual(calls,{daily:0,orders:1,showDaily:0});assert.deepEqual(notices,['']);}
+    else if(basis==='created'&&startClock==='00:00:00'){assert.deepEqual(calls,{daily:1,orders:0,showDaily:1});assert.match(notices[0],/整组使用原有日汇总口径/);}
     else{assert.deepEqual(calls,{daily:0,orders:0,showDaily:0});assert.match(errors.at(-1),/91CLUB/);assert.deepEqual(notices,[]);}
     assert.equal(context.queryInFlightRef.current,false);
   }

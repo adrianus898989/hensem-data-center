@@ -67,8 +67,8 @@ export function useOrderTimeQuery() {
     try {
       if(optionsLoading)throw new Error("正在读取可查询的平台，请稍后查询。");
       if(optionsError)throw new Error(optionsError);
-      const selected=selectOrderTimePlatforms(platforms,input.country,input.platforms);
-      const selection:TimeQuerySelection={...input,platforms:[...new Set(input.platforms)],basis:mode,createdStart:mode==="success"?createdStart:"",createdEnd:mode==="success"?createdEnd:"",
+      const selected=selectOrderTimePlatforms(platforms,input.country,input.platforms,input.availablePlatforms);
+      const selection:TimeQuerySelection={...input,platforms:[...new Set(input.platforms)],availablePlatforms:input.availablePlatforms?[...new Set(input.availablePlatforms)]:undefined,basis:mode,createdStart:mode==="success"?createdStart:"",createdEnd:mode==="success"?createdEnd:"",
         memberId:"",orderNumber:"",status:"all",crossDayOnly:false};
       const draft:TimeQueryResult={selection,payloads:[]};
       // One shared two-request queue; day/direction shards stay under the
@@ -89,10 +89,11 @@ export function useOrderTimeQuery() {
     showDaily:()=>{setActive(false);setError("");}};
 }
 
-export function TimeQueryExtra({query,showTimeHelp=true}:{query:ReturnType<typeof useOrderTimeQuery>;showTimeHelp?:boolean}) {
+export function TimeQueryExtra({query,showTimeHelp=true,hideExplanation=false}:{query:ReturnType<typeof useOrderTimeQuery>;showTimeHelp?:boolean;hideExplanation?:boolean}) {
   if(query.mode==="daily")return null;
+  if(hideExplanation&&!query.busy&&!query.optionsLoading&&!query.optionsError&&!(showTimeHelp&&query.mode==="success"))return null;
   return <div className="integrated-time-extra">
-    {showTimeHelp&&<div className="order-query-help"><span>印度后台时间 UTC+05:30 · 单次最多 31 天</span><span>{query.mode==="created"?"统计时段内创建的订单，包括尚未成功的订单。":"统计时段内成功的订单，包括以前创建的订单。"}</span></div>}
+    {showTimeHelp&&!hideExplanation&&<div className="order-query-help"><span>印度后台时间 UTC+05:30 · 单次最多 31 天</span><span>{query.mode==="created"?"统计时段内创建的订单，包括尚未成功的订单。":"统计时段内成功的订单，包括以前创建的订单。"}</span></div>}
     {query.busy&&<p role="status" className="order-query-progress">正在分段读取：{query.progress.completed} / {query.progress.total}，全部完成后统一展示。 <button type="button" className="mini-btn" onClick={query.cancel}>取消查询</button></p>}
     {query.optionsLoading&&<p role="status">正在读取可查询的平台…</p>}
     {query.optionsError&&<p role="alert" className="business-query-error">{query.optionsError} <button type="button" className="mini-btn" onClick={query.reloadOptions}>重新读取平台</button></p>}
