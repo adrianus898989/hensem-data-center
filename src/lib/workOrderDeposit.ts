@@ -31,6 +31,8 @@ export type WorkOrderDepositView = {
   providers: Array<{ key: string; country: string; channel: string; submittedAmount: number; submittedCount: number; successAmount: number; successCount: number; withdrawNotReceivedAmount: number; withdrawNotReceivedCount: number; withdrawSuccessAmount: number; withdrawSuccessCount: number }>;
   compare: (providerKeys?: readonly string[]) => { current: WorkOrderDepositMetric; previous: WorkOrderDepositMetric };
   error?: string;
+  /** These aggregates have daily granularity even beside an hourly order query. */
+  basisHint?: string;
 };
 
 export type WorkOrderSuccessTone = "neutral" | "danger";

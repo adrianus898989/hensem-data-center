@@ -13,6 +13,10 @@ const run=main.body.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text
 function compile(code){return ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;}
 const summaryQuerySource=new Function(compile(route.getText(source))+'\nreturn summaryQuerySource;')();
 const fixture={basis:'created',start:'2026-09-17T00:00:00',end:'2026-09-17T23:59:59',platforms:[],availablePlatforms:['EK7','GEM7','MAX7'],detailPlatforms:['EK7','GEM7','MAX7']};
+test('India default 15-detail/22-directory coverage never switches to seven-platform legacy data when hours change',()=>{
+  const detailPlatforms=Array.from({length:15},(_,i)=>`Uploaded-${i}`),availablePlatforms=[...detailPlatforms,...Array.from({length:7},(_,i)=>`Legacy-${i}`)];
+  for(const start of ['2026-09-19T00:00:00','2026-09-19T10:00:00'])assert.equal(summaryQuerySource({...fixture,start,end:'2026-09-19T23:59:59',availablePlatforms,detailPlatforms}),'orders');
+});
 function elements(value,type){
   if(Array.isArray(value))return value.flatMap(item=>elements(item,type));
   if(!React.isValidElement(value))return [];

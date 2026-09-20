@@ -50,6 +50,58 @@ function assertAligned(html){
     assert.equal(count,size,`every data/summary/expanded row aligns with ${size} headers`);
   }
 }
+function indiaFixture(selection={}){
+  const result=fixture({country:'印度',platforms:[],...selection});
+  Object.assign(result.payloads[0].payload,{platform:'DhaniWin',team:'NEWAR',country:'印度'});
+  return result;
+}
+function renderWithWorkOrders(result,stored){
+  let index=0;
+  const custom=createApi({useState:initial=>React.useState(index++===1?stored:initial)});
+  return renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));
+}
+const issue=(provider='PayA',platform='DHANIWIN(新AR)',country_code='IN')=>({system_name:'AR',source_system:'AR_WORKORDER',stat_date:'2026-09-17',country_code,platform,third_party:provider,channel_type:'BANK',submitted_amount:200,submitted_count:2,success_amount:100,success_count:1,withdraw_not_received_amount:300,withdraw_not_received_count:3,withdraw_success_amount:100,withdraw_success_count:1});
+test('India never exposes partial actual-amount/deduction columns; Hong Kong keeps them',()=>{
+  const html=render(indiaFixture()),labels=headings(html);
+  assert.ok(!labels.includes('实际到账金额'));assert.ok(!labels.includes('提现手续费'));
+  assert.match(html,/data-label="代付手续费"/);assert.ok(labels.includes('代付金额'));assertAligned(html);
+  assert.ok(headings(render(fixture())).includes('实际到账金额'));
+});
+test('full-day and hourly order results retain both daily workorder groups and workorder-only providers',()=>{
+  for(const start of ['2026-09-17T00:00:00','2026-09-17T10:00:00']){
+    const result=indiaFixture({start}),html=renderWithWorkOrders(result,{result,rows:[issue(),issue('OnlyIssue'),issue('Foreign','OTHER','PK')]});
+    const labels=headings(html),line=rows(html).find(line=>plain(cells(line)[0]||'')==='PayA'),c=cells(line);
+    assert.equal(plain(c[labels.indexOf('存款未到账（日）提交金额')]),'200');
+    assert.equal(plain(c[labels.indexOf('存款未到账（日）提交笔数')]),'2');
+    assert.equal(plain(c[labels.indexOf('提款未到账（日）提交金额')]),'300');
+    assert.equal(plain(c[labels.indexOf('提款未到账（日）成功笔数')]),'1');
+    assert.ok(plain(html).includes('OnlyIssue'));assert.ok(!plain(html).includes('Foreign'));
+    assert.match(html,/工单按所选日期整日统计/);assertAligned(html);
+    const all=cells(rows(html).find(line=>plain(line).startsWith('全部汇总')));
+    assert.equal(plain(all[labels.indexOf('代收金额')]),'950','restoring workorders never adds their money to payment volume');
+  }
+});
+test('unavailable or stale workorders retain columns as dashes and cannot leak previous date/platform data',()=>{
+  const result=indiaFixture();
+  for(const stored of [null,{result:indiaFixture(),rows:[issue()]},{result,rows:[],error:'工单统计暂未载入，请重新查询。'}]){
+    const html=renderWithWorkOrders(result,stored),labels=headings(html),c=cells(rows(html).find(line=>plain(cells(line)[0]||'')==='PayA'));
+    assert.equal(plain(c[labels.indexOf('存款未到账（日）提交金额')]),'—');
+    assert.equal(plain(c[labels.indexOf('提款未到账（日）提交金额')]),'—');assertAligned(html);
+  }
+  const single=indiaFixture({platforms:['DhaniWin']});
+  const html=renderWithWorkOrders(single,{result:single,rows:[issue(),issue('Excluded','91CLUB')]});
+  assert.ok(!plain(html).includes('Excluded'));
+});
+test('workorder request is date/country scoped, canceled on result change and never publishes a late response',async()=>{
+  const effects=[],writes=[],result=indiaFixture({start:'2026-09-17T10:00:00'});let resolve,captured;
+  const custom=createApi({useState:initial=>[initial,value=>writes.push(value)],useMemo:fn=>fn(),useEffect:fn=>effects.push(fn),
+    dashboardBusinessFetch:(url,options)=>{captured={url,options};return new Promise(r=>resolve=r);}});
+  custom.TimeRangeVolumeResult({result,rateRows:[],feeRateMap:new Map()});
+  const cleanup=effects[0]();assert.equal(captured.url,'/api/third-party-workorder-metrics?country=%E5%8D%B0%E5%BA%A6&start=2026-09-17&end=2026-09-17');
+  cleanup();assert.equal(captured.options.signal.aborted,true);
+  resolve(Response.json({basis:'daily',country:'印度',start:'2026-09-17',end:'2026-09-17',rows:[issue()]}));
+  await new Promise(r=>setImmediate(r));assert.deepEqual(writes,[]);
+});
 test('actual mother table includes both rates calculated by order counts, not money',()=>{
   const result=fixture(),html=render(result),labels=headings(html),dataRows=rows(html).slice(1);
   assert.ok(labels.includes('代收成功率'));assert.ok(labels.includes('代付成功率'));

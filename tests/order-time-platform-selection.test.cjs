@@ -9,6 +9,13 @@ const {timeMetricKeys,timeTotals}=loadTs(path.join(root,'src/lib/orderTimeQuery.
 const platform=(n,name,team='香港')=>({id:`00000000-0000-0000-0000-${String(n).padStart(12,'0')}`,name,team});
 const catalog=[platform(1,'EK7'),platform(2,'GEM7','香港团队'),platform(3,'MAX7'),platform(4,'66GAME','红膏蟹'),platform(5,'GEM7','印度')];
 const input={country:'香港',platforms:[],channel:'',types:[],direction:'',start:'2026-09-17T18:00:00',end:'2026-09-17T23:59:59'};
+test('three displayed aliases select the same uploaded platform ID exactly once',()=>{
+  const platforms=[{...platform(90,'DhaniWin','NEWAR'),country:'印度',source:'newar'}, {...platform(91,'Veer.Game','AR'),country:'印度',source:'ar'}];
+  const directory=['DhaniWin','DHANIWIN','DHANIWIN(新AR)','Veer.Game','VEER.GAME','VEERGAME'];
+  assert.deepEqual(selectOrderTimePlatforms(platforms,'印度',[],directory),platforms);
+  for(const names of [['DhaniWin'],['DHANIWIN'],['DHANIWIN(新AR)'],directory.slice(0,3)])assert.deepEqual(selectOrderTimePlatforms(platforms,'印度',names,directory),[platforms[0]]);
+  for(const names of [['Veer.Game'],['VEER.GAME'],['VEERGAME'],directory.slice(3)])assert.deepEqual(selectOrderTimePlatforms(platforms,'印度',names,directory),[platforms[1]]);
+});
 
 test('all, multiple and single selections stay in the active group of the authorized catalog',()=>{
   assert.deepEqual(selectOrderTimePlatforms(catalog,'香港',[]).map(p=>p.name),['EK7','GEM7','MAX7']);
