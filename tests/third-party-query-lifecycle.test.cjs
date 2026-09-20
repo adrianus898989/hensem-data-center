@@ -57,6 +57,38 @@ test('mount requests only the independent name directory; PK has all platforms b
   h.unmount();
 });
 
+test('default dates and shortcuts follow catalog timezone while custom dates survive a platform change',async()=>{
+  const previousNow=Date.now;
+  Date.now=()=>Date.parse('2026-09-18T18:45:00Z');
+  const h=harness(normal);
+  const dates=()=>elements(h.tree,e=>e.type==='input'&&e.props.type==='datetime-local').map(e=>e.props.value);
+  try{
+    await h.settle();assert.deepEqual(dates(),['2026-09-18T00:00:00','2026-09-18T23:59:59']);
+    h.time.platforms=[{id:'pk',name:'POPZAR',team:'NEWAR',country:'巴基斯坦',timezone:'Asia/Karachi',source:'newar'}];
+    h.country('巴基斯坦盘口');await h.settle();
+    assert.deepEqual(dates(),['2026-09-17T00:00:00','2026-09-17T23:59:59']);
+    elements(h.tree,e=>e.type==='button'&&e.props.children==='今天')[0].props.onClick();await h.settle();
+    assert.deepEqual(dates(),['2026-09-18T00:00:00','2026-09-18T23:59:59']);
+    h.date(0,'2026-08-25T10:00:00');h.date(1,'2026-08-27T20:00:00');await h.settle();
+    h.country('印度线下盘口');await h.settle();
+    assert.deepEqual(dates(),['2026-08-25T10:00:00','2026-08-27T20:00:00']);
+    assert.equal(h.calls.filter(c=>isVolume(c.url)).length,0,'no metadata or date change triggers an order/report fetch');
+  }finally{Date.now=previousNow;h.unmount();}
+});
+
+test('uploaded AR aliases use the canonical pre-query directory for all and explicit time queries',async()=>{
+  for(const [raw,display] of [['Shree.Win','ShreeWin'],['SYNTHETIC(AR)','SYNTHETIC']])for(const explicit of [false,true]){
+    const h=harness(url=>url.includes('filter-options')?response({platforms:[{country:'印度',platform:raw}]}):normal(url));
+    h.time.platforms=[{id:'fixture-ar',name:raw,team:'AR',country:'印度',timezone:'Asia/Kolkata',source:'ar'}];
+    await h.settle();assert.deepEqual(h.select('平台').props.options,[display]);
+    if(explicit){h.select('平台').props.onChange([display]);await h.settle();}
+    h.submit();await h.settle();
+    assert.equal(h.time.active,true);assert.deepEqual(h.time.result.selection.platforms,explicit?[display]:[]);
+    assert.deepEqual(h.time.result.selection.availablePlatforms,[display]);
+    assert.equal(h.calls.filter(c=>isVolume(c.url)).length,0,'raw catalog alias must not force legacy or drop the platform');h.unmount();
+  }
+});
+
 test('switching country aborts and discards a late India report even when transport ignores abort',async()=>{
   const slow=deferred();const h=harness(url=>isVolume(url)?slow.promise:normal(url));await h.settle();
   h.date(0,'2026-09-17T00:00:00');h.date(1,'2026-09-17T23:59:59');await h.settle();h.submit();await h.settle();

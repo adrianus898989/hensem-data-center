@@ -28,6 +28,20 @@ test('September 1–17 splits into 34 non-overlapping platform/day/direction req
   }
 });
 
+test('batch merge propagates missing amount and fee values instead of silently summing a partial total',async()=>{
+  let calls=0;
+  const [result]=await queryOrderTimeBatches([{...base,direction:'withdraw',end:'2026-09-02T23:59:59'}],async request=>{
+    const first=++calls===1;
+    return payload(request,{currency:'INR',submitted_amount:first?null:100,success_amount:first?null:100,
+      actual_amount:first?null:98,withdraw_fee:first?null:2,pending_amount:first?null:0,missing_amount_count:first?1:0});
+  });
+  assert.equal(result.payload.rows.length,1);
+  const row=result.payload.rows[0];
+  for(const key of ['submitted_amount','success_amount','actual_amount','withdraw_fee','pending_amount'])assert.equal(row[key],null,key);
+  assert.equal(row.missing_amount_count,1);
+  assert.equal(row.success_count,2);
+});
+
 test('partial seconds stay half-open and all independent filters retain the whole-range reference',()=>{
   const requests=planOrderTimeBatches({...base,basis:'success',direction:'withdraw',start:'2026-09-01T23:59:59',end:'2026-09-02T00:00:00',
     createdStart:'2026-08-01T00:00:00',createdEnd:'2026-08-31T23:59:59',memberId:'0007',orderNumber:'ORDER-7',status:'success',crossDayOnly:true});

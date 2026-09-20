@@ -3,8 +3,8 @@ import {useEffect,useMemo,useRef,useState,type FormEvent} from "react";
 import {useDashboardAuth} from "./DashboardAuthGate";
 import {orderTimeRpc} from "./OrderTimeControls";
 import {dashboardScopeIdentity} from "@/lib/dashboardDataScope";
-import {indiaDay,sourceTime,type OrderTimePayload} from "@/lib/orderTimeQuery";
-import {initialOrderDetailSearch,orderDetailSearchRequest,validateOrderDetailPage,formatOrderDetailAmount,orderDetailAccessDenied,
+import {sourceDay,sourceTime,type OrderTimePayload} from "@/lib/orderTimeQuery";
+import {initialOrderDetailSearch,orderDetailSearchRequest,validateOrderDetailPage,formatOrderDetailAmount,orderDetailStatusLabel,orderDetailAccessDenied,
   type OrderDetailSearchDraft,type OrderDetailCursor,type OrderDetailPage} from "@/lib/orderDetailSearch";
 import "./OrderDetailSearch.css";
 
@@ -25,7 +25,8 @@ export default function OrderDetailSearch() {
   const result=resultState?.owner===identity?resultState:null;
   const [busy,setBusy]=useState(false),[error,setError]=useState("");
   const serial=useRef(0),busyRef=useRef(false),flight=useRef<AbortController|null>(null);
-  const groups=useMemo(()=>[...new Set(options.map(p=>p.team||"其他团队"))].map(team=>({team,items:options.filter(p=>(p.team||"其他团队")===team)})),[options]);
+  const groups=useMemo(()=>[...new Set(options.map(p=>p.country||p.team||"其他团队"))].map(team=>({team,items:options.filter(p=>(p.country||p.team||"其他团队")===team)})),[options]);
+  const draftTimezone=options.find(p=>p.id===draft.platform)?.timezone||"Asia/Kolkata";
   const dirty=Boolean(result&&JSON.stringify(draft)!==JSON.stringify(result.applied.draft));
 
   function updateDraft(patch:Partial<OrderDetailSearchDraft>) {
@@ -89,6 +90,7 @@ export default function OrderDetailSearch() {
     event.preventDefault();
     const snapshot={...draft};
     const selected=options.find(p=>p.id===snapshot.platform);
+    if(selected?.timezone)snapshot.timezone=selected.timezone;
     void loadPage({draft:snapshot,platformName:selected?.name||""},0,[null]);
   }
   function cancel() {
@@ -99,13 +101,20 @@ export default function OrderDetailSearch() {
     if(busyRef.current)cancel();
     setDraftState({owner:identity,draft:initialOrderDetailSearch()});setResultState(null);setError("");
   }
-  function shortcut(offset:number) {const day=indiaDay(offset);updateDraft({start:`${day}T00:00:00`,end:`${day}T23:59:59`});}
+  function selectPlatform(platform:string) {
+    const timezone=options.find(p=>p.id===platform)?.timezone;
+    const oldDay=sourceDay(draftTimezone,-1),newDay=sourceDay(timezone,-1);
+    const pristine=draft.start===`${oldDay}T00:00:00`&&draft.end===`${oldDay}T23:59:59`;
+    updateDraft({platform,provider:"",timezone,...(pristine?{start:`${newDay}T00:00:00`,end:`${newDay}T23:59:59`}:{})});
+  }
+  function shortcut(offset:number) {const day=sourceDay(draftTimezone,offset);updateDraft({start:`${day}T00:00:00`,end:`${day}T23:59:59`});}
   const applied=result?.applied.draft;
+  const resultTimezone=result?.data.timezone||applied?.timezone||"Asia/Kolkata";
   return <section className="order-detail-search" aria-label="订单明细查询">
-    <header className="ods-title"><div><h2>订单明细查询</h2><p>按平台直接查订单，每次最多读取 50 笔，不加载全平台汇总。</p></div><span>印度时间 · UTC+05:30</span></header>
+    <header className="ods-title"><div><h2>订单明细查询</h2><p>按平台直接查订单，每次最多读取 50 笔，不加载全平台汇总。</p></div><span>{draftTimezone}</span></header>
     <form className="ods-search-card" onSubmit={query}>
       <div className="ods-primary-fields">
-        <label className="ods-field"><span>平台 <b>*</b></span><select required value={draft.platform} onChange={e=>updateDraft({platform:e.target.value,provider:""})} disabled={optionsLoading}><option value="">{optionsLoading?"正在读取可用平台…":"请选择一个平台"}</option>{groups.map(g=><optgroup label={g.team} key={g.team}>{g.items.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</optgroup>)}</select></label>
+        <label className="ods-field"><span>平台 <b>*</b></span><select required value={draft.platform} onChange={e=>selectPlatform(e.target.value)} disabled={optionsLoading}><option value="">{optionsLoading?"正在读取可用平台…":"请选择一个平台"}</option>{groups.map(g=><optgroup label={g.team} key={g.team}>{g.items.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</optgroup>)}</select></label>
         <label className="ods-field"><span>时间口径</span><select value={draft.basis} onChange={e=>updateDraft({basis:e.target.value as "created"|"success",status:"all",createdStart:"",createdEnd:""})}><option value="created">创建时间</option><option value="success">成功时间</option></select></label>
         <label className="ods-field"><span>开始时间 <b>*</b></span><input type="datetime-local" required step="1" value={draft.start} onChange={e=>updateDraft({start:e.target.value})}/></label>
         <label className="ods-field"><span>结束时间 <b>*</b></span><input type="datetime-local" required step="1" value={draft.end} onChange={e=>updateDraft({end:e.target.value})}/></label>
@@ -130,11 +139,11 @@ export default function OrderDetailSearch() {
     </form>
     {error&&<p className="ods-error" role="alert">{error}{result&&" 下方仍为上次成功查询结果。"}</p>}
     {!result?<div className="ods-empty" role="status"><strong>{busy?"正在读取订单明细…":"先选择平台，再点击“查询订单”"}</strong><span>仅查询已同步到数据库的明细；不会自动读取全部订单。</span></div>:<section className="ods-results" aria-label="订单查询结果">
-      <div className="ods-result-heading"><div><h3>{result.applied.platformName} · 订单记录</h3><p>{applied!.basis==="created"?"创建时间":"成功时间"}：{applied!.start.replace("T"," ")} 至 {applied!.end.replace("T"," ")} · 印度时间</p></div><span>本页 {result.data.rows.length} 笔 · 每页最多 50 笔</span></div>
+      <div className="ods-result-heading"><div><h3>{result.applied.platformName} · 订单记录</h3><p>{applied!.basis==="created"?"创建时间":"成功时间"}：{applied!.start.replace("T"," ")} 至 {applied!.end.replace("T"," ")} · {resultTimezone}</p></div><span>本页 {result.data.rows.length} 笔 · 每页最多 50 笔</span></div>
       <div className="ods-applied-tags"><span>{applied!.direction==="charge"?"代收":applied!.direction==="withdraw"?"代付":"代收和代付"}</span><span>状态：{applied!.basis==="success"?"成功":({all:"全部状态",success:"成功",pending:"处理中 / 已提交",failed:"失败",rejected:"已拒绝",unknown:"其他状态"} as const)[applied!.status||"all"]}</span>{applied!.memberId&&<span>会员 {applied!.memberId}</span>}{applied!.orderNumber&&<span>订单 {applied!.orderNumber}</span>}{(applied!.amountMin||applied!.amountMax)&&<span>订单金额 {applied!.amountMin||"不限"} — {applied!.amountMax||"不限"}（含）</span>}{applied!.provider&&<span>通道 {applied!.provider}</span>}{applied!.crossDayOnly&&<span>仅跨日成功</span>}{(applied!.createdStart||applied!.createdEnd)&&<span>创建限制 {applied!.createdStart.replace("T"," ")||"不限"} — {applied!.createdEnd.replace("T"," ")||"不限"}</span>}</div>
       {dirty&&<p className="ods-draft-note">筛选已修改，点击“查询订单”后生效；翻页仍使用上方已应用条件。</p>}
       <div className="ods-pagination"><span>第 {result.page+1} 页{busy?" · 正在读取…":""}</span><button className="ods-secondary" type="button" disabled={busy||result.page===0} onClick={()=>void loadPage(result.applied,result.page-1,result.cursors)}>上一页</button><button className="ods-secondary" type="button" disabled={busy||!result.data.hasMore} onClick={()=>void loadPage(result.applied,result.page+1,[...result.cursors.slice(0,result.page+1),result.data.nextCursor])}>下一页</button></div>
-      <div className="ods-table-wrap"><table><thead><tr><th>会员 ID</th><th>订单号</th><th>三方订单号</th><th>业务</th><th>三方通道</th><th>状态</th><th className="ods-number">订单金额</th><th className="ods-number">实际到账</th><th className="ods-number">提现手续费</th><th>创建时间</th><th>成功时间</th><th>最近同步</th></tr></thead><tbody>{result.data.rows.map(row=><tr key={`${row.direction}:${row.id}`}><td className="ods-identifier">{row.member_id||"—"}</td><td className="ods-identifier">{row.order_number||"—"}</td><td className="ods-identifier">{row.third_party_order_number||"—"}</td><td>{row.direction==="charge"?"代收":"代付"}</td><td>{row.provider}<small>{row.channel_type}</small></td><td><span className={`ods-status ods-status-${["success","pending","failed","rejected"].includes(row.status_group)?row.status_group:"unknown"}`}>{row.status||"其他状态"}</span>{row.cross_day&&<small className="ods-cross-day">跨日成功</small>}</td><td className="ods-number">{formatOrderDetailAmount(row.amount)}</td><td className="ods-number">{formatOrderDetailAmount(row.actual_amount)}</td><td className="ods-number">{formatOrderDetailAmount(row.withdraw_fee)}</td><td>{sourceTime(row.created_at)}</td><td>{sourceTime(row.success_at)}</td><td>{sourceTime(row.synced_at)}</td></tr>)}{!result.data.rows.length&&<tr><td colSpan={12} className="ods-no-rows">当前条件没有已入库订单。历史缺失的明细需要采集脚本补录后才可搜索。</td></tr>}</tbody></table></div>
+      <div className="ods-table-wrap"><table><thead><tr><th>会员 ID</th><th>订单号</th><th>三方订单号</th><th>业务</th><th>三方通道</th><th>状态</th><th className="ods-number">订单金额</th><th className="ods-number">实际到账</th><th className="ods-number">提现手续费</th><th>创建时间</th><th>成功时间</th><th>最近同步</th></tr></thead><tbody>{result.data.rows.map(row=><tr key={`${row.direction}:${row.id}`}><td className="ods-identifier">{row.member_id||"—"}</td><td className="ods-identifier">{row.order_number||"—"}</td><td className="ods-identifier">{row.third_party_order_number||"—"}</td><td>{row.direction==="charge"?"代收":"代付"}</td><td>{row.provider}<small>{row.channel_type}</small></td><td><span className={`ods-status ods-status-${["success","pending","failed","rejected"].includes(row.status_group)?row.status_group:"unknown"}`}>{orderDetailStatusLabel(row.status,row.status_group)}</span>{row.cross_day&&<small className="ods-cross-day">跨日成功</small>}</td><td className="ods-number">{formatOrderDetailAmount(row.amount)}{row.currency&&<small>{row.currency}</small>}</td><td className="ods-number">{formatOrderDetailAmount(row.actual_amount)}</td><td className="ods-number">{formatOrderDetailAmount(row.withdraw_fee)}</td><td>{sourceTime(row.created_at,resultTimezone)}</td><td>{sourceTime(row.success_at,resultTimezone)}</td><td>{sourceTime(row.synced_at,resultTimezone)}</td></tr>)}{!result.data.rows.length&&<tr><td colSpan={12} className="ods-no-rows">当前条件没有已入库订单。历史缺失的明细需要采集脚本补录后才可搜索。</td></tr>}</tbody></table></div>
       <p className="ods-footnote ods-results-note">只显示已同步记录；分页不代表完整采集，也不计算全量订单数。正在补录时，新写入订单可能需要重新查询。</p>
     </section>}
   </section>;

@@ -13,6 +13,8 @@ const countryHelper = loadTs(path.join(root, 'src/lib/platformDisplayCountry.ts'
 const names = loadTs(path.join(root, 'src/lib/thirdPartyNameMap.ts'));
 const workorders = loadTs(path.join(root, 'src/lib/workOrderDeposit.ts'));
 const orderTime = loadTs(path.join(root, 'src/lib/orderTimeVolume.ts'));
+const orderClock = loadTs(path.join(root, 'src/lib/orderTimeQuery.ts'));
+const format = loadTs(path.join(root, 'src/lib/format.ts'));
 const text = fs.readFileSync(path.join(root, 'src/components/ThirdPartyVolumeDashboard.tsx'), 'utf8');
 const source = ts.createSourceFile('ThirdPartyVolumeDashboard.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const dashboard = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'ThirdPartyVolumeDashboard');
@@ -31,7 +33,7 @@ function compile(code) {
 function functions(search = '') {
   const selected = source.statements.filter(node => ts.isFunctionDeclaration(node) && functionNames.includes(node.name?.text));
   let state = 0;
-  const dependencies = { ...helper, ...countryHelper, ...names, exports: {}, ALL_USDT_COUNTRY_PAGE: '所有国家USDT', useMemo: callback => callback(), useEffect: () => {},
+  const dependencies = { ...helper, ...countryHelper, ...names, ...format, exports: {}, ALL_USDT_COUNTRY_PAGE: '所有国家USDT', useMemo: callback => callback(), useEffect: () => {},
     useRef: () => ({ current: null }), useState: initial => [state++ === 0 ? true : search, () => {}],
     require: name => { assert.equal(name, 'react/jsx-runtime'); return require(name); } };
   return new Function(...Object.keys(dependencies), compile(selected.map(node => node.getText(source)).join('\n'))
@@ -302,7 +304,8 @@ test('mount and identity changes only prefill controls and invalidate old reques
   let aborted = 0, cleared = 0;
   const writes = {};
   const context = {
-    profile: {}, COUNTRY_NAV_TABS: ['印度', '巴基斯坦'], yesterdayLocalDateKey: () => '2026-09-18',
+    profile: {}, COUNTRY_NAV_TABS: ['印度', '巴基斯坦'],
+    sourceDay: (zone, offset) => orderClock.sourceDay(zone, offset, Date.parse('2026-09-19T12:00:00Z')),
     effectiveDashboardDataScope: () => ({ mode: 'all' }), dashboardScopeAllows: () => true,
     queryIntentRef: { current: 7 }, loadRequestSequenceRef: { current: 9 },
     loadFlightRef: { current: { abort: () => { aborted += 1; } } }, queryInFlightRef: { current: true },

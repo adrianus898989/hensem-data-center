@@ -91,6 +91,20 @@ test('summary hook defaults to creation time, while keeping the legacy internal 
   assert.match(text,/useState<"daily"\|"created"\|"success">\("created"\)/);
 });
 
+test('actual unified hook uses each catalog source timezone and keeps single-platform UUID routing',async()=>{
+  const platforms=[{...platform(20,'POPZAR','NEWAR'),country:'巴基斯坦',timezone:'Asia/Karachi',source:'newar'},
+    {...platform(21,'AR-PK','AR'),country:'巴基斯坦',timezone:'Asia/Karachi',source:'ar'}];
+  const calls=[];
+  const h=harness({platforms,orderTimeRpc:async(_session,name,body)=>{
+    assert.equal(name,'dashboard_order_time_query');calls.push(body);
+    const selected=platforms.find(p=>p.id===body.p_platform);
+    return {platforms,platform:selected.name,team:selected.team,country:selected.country,timezone:selected.timezone,source:selected.source,rows:[]};
+  }});
+  assert.equal(await h.run({...input,country:'巴基斯坦',start:'2026-09-19T00:00:00',end:'2026-09-19T23:59:59',availablePlatforms:['POPZAR','AR-PK','LEGACY']}),true);
+  assert.equal(calls.length,4);assert.equal(h.state.stored.data.payloads.length,2);
+  for(const body of calls){assert.equal(body.p_start_at,'2026-09-18T19:00:00.000Z');assert.equal(body.p_end_at,'2026-09-19T19:00:00.000Z');}
+});
+
 test('actual summary query accepts all, multiple and single platforms and publishes all shards once',async()=>{
   for(const names of [[],['EK7','GEM7'],['MAX7'],['MAX7','MAX7'],['MAX7','EK7']]){
     const h=harness();

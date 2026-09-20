@@ -38,6 +38,13 @@ export default function NewarDetailSearch(){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[owner,retry]);
   function patch(value:Partial<NewarDraft>){setDraft(d=>({...d,...value}));}
+  function selectPlatform(name:string){
+    const platform=options.find(p=>p.platform===name);
+    const oldDay=newarDay(selected?.timezone||"Asia/Karachi"),nextDay=newarDay(platform?.timezone||"Asia/Karachi");
+    const pristine=draft.start===oldDay+"T00:00:00"&&draft.end===oldDay+"T23:59:59";
+    patch({platform:name,dataset:platform?.datasets[0]||"charge",basis:"created",
+      ...(pristine?{start:nextDay+"T00:00:00",end:nextDay+"T23:59:59"}:{})});
+  }
   async function query(snapshot:NewarDraft,page=0,cursors:(NewarCursor|null)[]=[null]){
     const platform=options.find(p=>p.platform===snapshot.platform);
     let body:ReturnType<typeof newarDetailRequest>;
@@ -58,7 +65,7 @@ export default function NewarDetailSearch(){
     <header className="ods-title"><div><h2>NEWAR 订单 / 工单明细</h2><p>充值、提现和工单独立查询；只读取已同步记录，不重新采集。</p></div><span>{zone==="Asia/Karachi"?"巴基斯坦时间 · UTC+05:00":"印度时间 · UTC+05:30"}</span></header>
     <form className="ods-search-card" onSubmit={(e:FormEvent)=>{e.preventDefault();void query({...draft});}}>
       <div className="ods-primary-fields">
-        <label className="ods-field"><span>平台 *</span><select required disabled={loading} value={draft.platform} onChange={e=>{const p=options.find(p=>p.platform===e.target.value);patch({platform:e.target.value,dataset:p?.datasets[0]||"charge",basis:"created"});}}><option value="">{loading?"读取中…":"请选择一个平台"}</option>{options.map(p=><option key={p.platform} value={p.platform}>{p.platform} · {p.country}</option>)}</select></label>
+        <label className="ods-field"><span>平台 *</span><select required disabled={loading} value={draft.platform} onChange={e=>selectPlatform(e.target.value)}><option value="">{loading?"读取中…":"请选择一个平台"}</option>{options.map(p=><option key={p.platform} value={p.platform}>{p.platform} · {p.country}</option>)}</select></label>
         <label className="ods-field"><span>业务</span><select value={draft.dataset} onChange={e=>patch({dataset:e.target.value as NewarDataset,basis:"created"})}>{(selected?.datasets||["charge","withdraw"]).map(d=><option key={d} value={d}>{labels[d]}</option>)}</select></label>
         <label className="ods-field"><span>时间口径</span><select value={draft.basis} onChange={e=>patch({basis:e.target.value as NewarBasis,status:"all"})}><option value="created">{draft.dataset==="workorder"?"提交时间":"创建时间"}</option><option value={draft.dataset==="workorder"?"processed":"success"}>{draft.dataset==="workorder"?"真实处理时间（尚未采集）":"成功时间"}</option></select></label>
         <label className="ods-field"><span>状态</span><select value={draft.status} onChange={e=>patch({status:e.target.value})}><option value="all">全部状态</option>{["success","pending","failed","rejected","unknown"].map(s=><option key={s} value={s}>{labels[s]}</option>)}</select></label>

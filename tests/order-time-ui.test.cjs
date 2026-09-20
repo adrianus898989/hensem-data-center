@@ -65,6 +65,64 @@ test('actual mother table includes both rates calculated by order counts, not mo
   assert.match(plain(cells(total)[labels.indexOf('代收成功率')]),/21\.43%.*3 \/ 14 笔/,'aggregate rate is weighted by counts, not average of provider rates');
   assertAligned(html);
 });
+
+test('AR missing money renders dashes in table, footer and cards without losing order counts or success rates',()=>{
+  const result=fixture();
+  result.payloads[0].payload.rows=result.payloads[0].payload.rows.map(r=>({...r,currency:'INR',submitted_amount:null,
+    success_amount:null,actual_amount:null,withdraw_fee:null,pending_amount:null,missing_amount_count:r.submitted_count}));
+  const html=render(result),labels=headings(html);
+  for(const line of rows(html).slice(1)){
+    const c=cells(line),name=plain(c[0]);
+    for(const label of ['代收金额','代收占比','合计金额','总占比'])assert.equal(plain(c[labels.indexOf(label)]),'—',`${name} ${label}`);
+    if(name!=='PayB')for(const label of ['代付金额','代付占比','实际到账金额','提现手续费','代付中金额'])
+      assert.equal(plain(c[labels.indexOf(label)]),'—',`${name} ${label}`);
+  }
+  const a=cells(rows(html).find(line=>plain(cells(line)[0]||'')==='PayA'));
+  assert.equal(plain(a[labels.indexOf('代付笔数')]),'6');
+  assert.equal(plain(a[labels.indexOf('代付中笔数')]),'2');
+  assert.match(plain(a[labels.indexOf('代付成功率')]),/75\.00%/);
+  for(const label of ['代收金额','代付金额','代收手续费','代付手续费','合计手续费','业务净额']){
+    assert.match(html,new RegExp(`data-label="${label}"[^>]*>[\\s\\S]*?<strong>—<\\/strong>`));
+  }
+  assert.doesNotMatch(html,/NaN|Infinity|width:NaN/);
+  assertAligned(html);
+});
+
+test('AR missing-money rows never generate zero fees or aggregate rate/share even with matching fee rules',()=>{
+  const result=fixture();
+  result.payloads[0].payload.rows=[{...sample('PayA','withdraw',8,6,800,120),currency:'INR',success_amount:null,pending_amount:null,actual_amount:null,withdraw_fee:null}];
+  const data=dependencies.timeVolumeData(result),combo=api.aggregateCombo(data.rows,r=>[r.date,r.country,r.platform,r.channel,r.channelType]);
+  const rates=[{country:'香港',category:'UPI',thirdParty:'PayA',collectFee:'2%',payoutFee:'1%',totalFee:'3%',collectSingleFee:'2',payoutSingleFee:'3',collectLimit:'',payoutLimit:''}];
+  const fees=api.buildFeeCompareRows(combo,rates,[],'daily');
+  assert.equal(fees.length,1);
+  assert.ok(Number.isNaN(fees[0].payoutFeeAmount));
+  const summary=api.summarizeFeeRows(fees);
+  assert.equal(api.feeRateText(summary,'payout'),'—');
+  assert.equal(api.feeAmountText(summary,'payout'),'—');
+  assert.equal(api.feeTotalText(summary),'—');
+  const html=renderToStaticMarkup(React.createElement(api.TimeRangeVolumeResult,{result,rateRows:rates,feeRateMap:api.buildRateMap(rates)}));
+  const labels=headings(html);
+  for(const line of rows(html).slice(1)){
+    const c=cells(line);
+    for(const label of ['代付手续费','合计手续费','手续费占比','总占比'])
+      assert.ok(['—','-'].includes(plain(c[labels.indexOf(label)])),`${label} is not zero or 100 percent`);
+  }
+  assert.doesNotMatch(html,/NaN|Infinity/);
+});
+
+test('cross-currency totals and shares are hidden without hiding a valid provider amount',()=>{
+  const result=fixture();
+  result.payloads[0].payload.rows=[{...sample('PayA','charge',3,2,150,100),currency:'INR'},
+    {...sample('PayB','charge',3,2,250,200),currency:'PKR'}];
+  const html=render(result),labels=headings(html);
+  for(const line of rows(html).slice(1)){
+    const c=cells(line),name=plain(c[0]);
+    assert.equal(plain(c[labels.indexOf('代收占比')]),'—');
+    assert.equal(plain(c[labels.indexOf('总占比')]),'—');
+    if(name.includes('汇总'))assert.equal(plain(c[labels.indexOf('代收金额')]),'—');
+    else assert.equal(plain(c[labels.indexOf('代收金额')]),name==='PayA'?'100':'200');
+  }
+});
 test('success-time and filtered subsets never show a false 100% order success rate',()=>{
   for(const selection of [{basis:'success',start:'2026-09-18T00:00:00',end:'2026-09-18T23:59:59'},{status:'success'},{crossDayOnly:true}]){
     const html=render(fixture(selection)),labels=headings(html);

@@ -14,8 +14,45 @@ const NEWAR_FIELD_KINDS: Record<string, string> = {
   accountBalance:"number", firstDepositAmount:"number", sameDeviceAccountCount:"number",
   dayWithdrawLimit:"number", lastRechargeDayLimit:"number"
 };
+// Exact business fields from AutoWithdrawConfig/GetSetting. Never retain headers,
+// tokens or arbitrary response fields in a configuration snapshot.
+export const NEWAR_SETTING_KEYS = new Set([
+  "id", "configName", "configState", "allowVirtualWithdraw", "maxWithdrawAmount",
+  "maxWithdrawTime", "grandWithdrawTotal", "maxWithdrawRechargeRate", "needFirstRecharge",
+  "needUserNoRemark", "needLimitGroup", "limitGroup", "dayProfitAmount", "manualRechargeOf3Day",
+  "bonusRechargeOf3Day", "balance", "firstDepositAmount", "sameDeviceRegistCount",
+  "allowInvitedWheelAutoWithdraw", "sameIpRegistCount", "sameBankAccountCount", "checkRejectPackage",
+  "rejectPackageIds", "totalRechargeAmountOpreationType", "totalRechargeAmount", "checkLowOddsOrderRatio",
+  "lowOdds", "lowOddsOrderRatio", "checkRiskList", "checkBlackListUserIdAndIp", "totalWinLoseAmount",
+  "autoWithdrawFailCount", "totalCodingAmountMultiple", "totalCodingAmountMultipleWithBonus",
+  "allowPackageIds", "isDefaultConfig"
+]);
+function validateSettingGroups(value:any) {
+  if (!Array.isArray(value) || value.length>500) return fail();
+  const seen=new Set<string>();
+  const scalar=(v:any):string|number|boolean|null=>{
+    if (v===null || typeof v==="boolean" || (typeof v==="number" && Number.isFinite(v))) return v;
+    if (typeof v==="string") return text(v,4000);
+    return fail();
+  };
+  return value.map((row:any)=>{
+    if (!object(row) || !["string","number"].includes(typeof row.id)
+      || String(row.id).trim()==="" || typeof row.configName!=="string" || !row.configName.trim()) return fail();
+    const id=text(String(row.id),80);
+    if (seen.has(id)) return fail();
+    seen.add(id);
+    return Object.fromEntries(Object.entries(row).map(([key,v])=>{
+      if (!NEWAR_SETTING_KEYS.has(key)) return fail();
+      if (Array.isArray(v)) {
+        if (v.length>1000) return fail();
+        return [key,v.map(scalar)];
+      }
+      return [key,scalar(v)];
+    }));
+  });
+}
 function validateNewARConfigSnapshot(s:any, now:number) {
-  if (!object(s) || s.source_system!=="NEW_AR" || s.schema_version!==1 || s.parser_version!=="newar-config-v1"
+  if (!object(s) || s.source_system!=="NEW_AR" || s.schema_version!==1 || !["newar-config-v1","newar-config-v2"].includes(s.parser_version)
     || !/^[A-Z]{2}$/.test(s.country_code) || typeof s.snapshot_id!=="string"
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s.snapshot_id)) return fail();
   const platform=text(s.platform,80), timezone=text(s.timezone,64);
@@ -54,7 +91,7 @@ function validateNewARConfigSnapshot(s:any, now:number) {
   });
   return {schema_version:1,source_system:"NEW_AR",snapshot_id:s.snapshot_id,country_code:s.country_code,platform,timezone,
     observed_at:new Date(t).toISOString(),observed_local_date:s.observed_local_date,parser_version:s.parser_version,
-    configuration:{fields,channels,channelRules}};
+    configuration:{fields,channels,channelRules,...(s.parser_version==="newar-config-v2"?{settingGroups:validateSettingGroups(cfg.settingGroups)}:{})}};
 }
 
 export function validateConfigSnapshot(s: any, now = Date.now()) {
@@ -100,4 +137,3 @@ export function validateConfigSnapshot(s: any, now = Date.now()) {
   return {schema_version:1,source_system:"AR",snapshot_id:s.snapshot_id,country_code:s.country_code,platform,timezone,
     observed_at:new Date(t).toISOString(),observed_local_date:s.observed_local_date,parser_version:s.parser_version,configuration:{fields,groups}};
 }
-

@@ -84,3 +84,44 @@ test('member/order/status/cross-day searches pass through unchanged to the RPC i
   assert.equal(filters.crossDayOnly,true);
   assert.equal(filters.platform,'ek7');
 });
+
+test('missing AR money stays unknown while submitted, success and pending counts remain usable',()=>{
+  const unknown=row({currency:'INR',submitted_amount:null,success_amount:null,pending_amount:null,
+    actual_amount:null,withdraw_fee:null,cross_day_amount:null,missing_amount_count:2});
+  const data=volume.timeVolumeData(result([unknown]));
+  assert.equal(data.totals.success_amount,null);
+  assert.equal(data.totals.submitted_amount,null);
+  assert.equal(data.totals.missing_amount_count,2);
+  assert.ok(Number.isNaN(data.rows[0].amount));
+  assert.equal(data.withdrawSuccess.compare().current.rate,0.5);
+  assert.equal(data.withdrawActual.compare().current.state,'unavailable');
+  assert.ok(Number.isNaN(data.withdrawPending.compare().current.amount));
+  assert.equal(data.withdrawPending.compare().current.count,1);
+  const mixed=volume.timeVolumeData(result([unknown,row({currency:'INR'})]));
+  assert.equal(mixed.totals.success_amount,null,'known GAME66 money is not shown as the entire incomplete total');
+  assert.equal(mixed.totals.success_count,2);
+});
+
+test('different explicit currencies never sum money, but counts remain combined',()=>{
+  const data=volume.timeVolumeData(result([row({currency:'INR'}),row({currency:'PKR'})]));
+  assert.equal(data.totals.success_amount,null);
+  assert.equal(data.totals.pending_amount,null);
+  assert.equal(data.totals.success_count,2);
+  assert.equal(data.withdrawActual.compare().current.state,'unavailable');
+  assert.ok(Number.isNaN(data.withdrawPending.compare().current.amount));
+  assert.equal(data.withdrawPending.compare().current.count,2);
+});
+
+test('unknown formatting is a dash; confirmed zero remains zero',()=>{
+  const f=loadTs(path.join(root,'src/lib/format.ts'));
+  for(const value of [null,undefined,NaN,Infinity]){
+    assert.equal(f.formatNumber(value),'—');
+    assert.equal(f.formatPercent(value),'—');
+  }
+  assert.equal(f.formatNumber(0),'0');
+  assert.equal(f.formatPercent(0),'0.00%');
+  assert.equal(f.formatNumber(5873),'5,873');
+  assert.ok(Number.isNaN(f.amountRatio(100,NaN)));
+  assert.ok(Number.isNaN(f.sumVolumeAmounts([{amount:100,currency:'INR'},{amount:100,currency:'PKR'}])));
+  assert.equal(f.sumVolumeAmounts([{amount:100,currency:'INR'},{amount:100,currency:'INR'}]),200);
+});

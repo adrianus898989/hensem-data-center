@@ -66,6 +66,16 @@ test('detail money retains sub-unit amounts and zero, never uses rounded totals 
   assert.equal(detail.formatOrderDetailAmount(NaN),'—');
 });
 
+test('numeric status labels use normalized status groups without changing source status codes',()=>{
+  const row={status:'2',status_code:'2',status_group:'success'},before={...row};
+  assert.equal(detail.orderDetailStatusLabel(row.status,row.status_group),'成功');
+  assert.deepEqual(row,before);
+  for(const [group,label] of [['pending','处理中 / 已提交'],['failed','失败'],['rejected','已拒绝'],['unknown','其他状态']])
+    assert.equal(detail.orderDetailStatusLabel('-1',group),label);
+  assert.equal(detail.orderDetailStatusLabel('代付成功','success'),'代付成功');
+  assert.equal(detail.orderDetailStatusLabel('',null),'其他状态');
+});
+
 test('explicit permission failures are distinguishable from transient network failures',()=>{
   for(const error of [{status:401},{status:403},{code:'42501'},{code:'28000'},{code:'28P01'}])assert.equal(detail.orderDetailAccessDenied(error),true);
   for(const error of [null,new Error('Network error'),{status:500},{code:'57014'},{code:'22023'}])assert.equal(detail.orderDetailAccessDenied(error),false);
@@ -97,4 +107,33 @@ test('SSR renders a platform-required empty search page with accessible labels a
   assert.doesNotMatch(source,/queryOrderTimeBatches|formatNumber\(/);
   assert.equal((source.match(/"dashboard_order_time_query"/g)||[]).length,1);
   assert.equal((source.match(/"dashboard_order_detail_search"/g)||[]).length,1);
+});
+
+test('standalone detail results display the response timezone, source currency, exact amounts and null as dash',()=>{
+  const ts=require('typescript'),React=require('react'),server=require('react-dom/server');
+  const filename=path.join(root,'src/components/OrderDetailSearch.tsx');
+  const source=fs.readFileSync(filename,'utf8');
+  const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
+  const savedDraft={...draft(),timezone:'Asia/Kolkata'};
+  const page={timezone:'Asia/Karachi',hasMore:false,nextCursor:null,rows:[{id:'record',direction:'withdraw',member_id:'000001',order_number:'ORDER-PK',
+    provider:'Pay',status:'2',status_code:'2',status_group:'success',amount:'1.25',actual_amount:null,withdraw_fee:null,currency:'PKR',
+    created_at:'2026-09-18T19:00:00Z',success_at:null,synced_at:'2026-09-18T19:00:00Z'}]};
+  const states={0:{owner:'viewer:scope',draft:savedDraft},1:{owner:'viewer:scope',rows:[{id,name:'POPZAR',team:'NEWAR',country:'巴基斯坦',timezone:'Asia/Karachi'}]},
+    5:{owner:'viewer:scope',applied:{draft:savedDraft,platformName:'POPZAR'},page:0,cursors:[null],data:page}};
+  let index=0;const module={exports:{}},nativeRequire=createRequire(filename);
+  const requireLocal=specifier=>{
+    if(specifier==='react')return {...React,useState:initial=>{const i=index++;return[i in states?states[i]:typeof initial==='function'?initial():initial,()=>{}];},useEffect:()=>{},useMemo:fn=>fn(),useRef:value=>({current:value})};
+    if(specifier.endsWith('.css'))return {};
+    if(specifier==='./DashboardAuthGate')return {useDashboardAuth:()=>({session:{user:{id:'viewer'}},profile:{}})};
+    if(specifier==='./OrderTimeControls')return {orderTimeRpc:()=>{throw new Error('Unexpected external request');}};
+    if(specifier==='@/lib/dashboardDataScope')return {dashboardScopeIdentity:()=> 'scope'};
+    if(specifier.startsWith('@/'))return loadTs(path.join(root,'src',specifier.slice(2)+'.ts'));
+    return nativeRequire(specifier);
+  };
+  new Function('require','module','exports',js)(requireLocal,module,module.exports);
+  const html=server.renderToStaticMarkup(React.createElement(module.exports.default));
+  assert.match(html,/2026-09-19 00:00:00/);assert.doesNotMatch(html,/2026-09-19 00:30:00/);
+  assert.match(html,/1\.25<small>PKR<\/small>/);assert.match(html,/ods-number">—<\/td>/);
+  assert.match(html,/<optgroup label="巴基斯坦"/);
+  assert.match(html,/ods-status-success">成功<\/span>/);
 });

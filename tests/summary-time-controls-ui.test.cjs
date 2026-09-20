@@ -72,9 +72,9 @@ test('all detailed platforms route to real order aggregation for full days, part
   }
 });
 
-test('legacy or mixed full-day creation selections keep the entire original daily backend',()=>{
+test('default full days use uploaded details while explicit legacy or mixed selections retain daily backend',()=>{
   const mixed={...fixture,availablePlatforms:['EK7','91CLUB'],detailPlatforms:['EK7']};
-  assert.equal(summaryQuerySource(mixed),'daily');
+  assert.equal(summaryQuerySource(mixed),'orders');
   assert.equal(summaryQuerySource({...mixed,platforms:['EK7','91CLUB']}),'daily');
   assert.equal(summaryQuerySource({...mixed,platforms:['91CLUB']}),'daily');
   assert.equal(summaryQuerySource({...mixed,platforms:['EK7']}),'orders');
@@ -127,7 +127,7 @@ test('production dispatch keeps default available-only time queries separate fro
     const execute=new Function(...Object.keys(context),compile(run.getText(source))+'\nreturn runQuery;')(...Object.values(context));
     await execute();
     const explicitDetail=selection.length===1&&selection[0]==='EK7';
-    const defaultDetail=!selection.length&&(basis==='success'||startClock!=='00:00:00');
+    const defaultDetail=!selection.length;
     if(explicitDetail||defaultDetail){assert.deepEqual(calls,{daily:0,orders:1,showDaily:0});assert.deepEqual(notices,['']);}
     else if(basis==='created'&&startClock==='00:00:00'){assert.deepEqual(calls,{daily:1,orders:0,showDaily:1});assert.match(notices[0],/整组使用原有日汇总口径/);}
     else{assert.deepEqual(calls,{daily:0,orders:0,showDaily:0});assert.match(errors.at(-1),/91CLUB/);assert.deepEqual(notices,[]);}

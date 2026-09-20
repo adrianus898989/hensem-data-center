@@ -1,4 +1,4 @@
-import {orderTimeRequest,timeMetricKeys,type OrderTimeFilters,type OrderTimePayload,type OrderTimeRow} from "./orderTimeQuery";
+import {orderTimeRequest,nextSourceMidnight,timeTotals,type OrderTimeFilters,type OrderTimePayload,type OrderTimeRow} from "./orderTimeQuery";
 
 export type OrderTimeBatchRequest=ReturnType<typeof orderTimeRequest>&{p_reference_start:string};
 export type OrderTimeBatchProgress={completed:number;total:number;active:number};
@@ -9,15 +9,15 @@ export type OrderTimeBatchOptions={
   /** Primarily useful for tests; production requests never exceed 45 seconds. */
   requestTimeoutMs?:number;
 };
-const DAY=86400_000,HOUR=3600_000,INDIA_OFFSET=330*60_000;
+const HOUR=3600_000;
 
-/** Disjoint half-open intervals, split on India midnight and business direction. */
+/** Disjoint half-open intervals, split on platform-local midnight and direction. */
 export function planOrderTimeBatches(filters:OrderTimeFilters):OrderTimeBatchRequest[] {
   const original=orderTimeRequest(filters),end=Date.parse(original.p_end_at);
   const directions=filters.direction==="all"?["charge","withdraw"] as const:[filters.direction];
   const requests:OrderTimeBatchRequest[]=[];
   for(let start=Date.parse(original.p_start_at);start<end;){
-    const nextMidnight=(Math.floor((start+INDIA_OFFSET)/DAY)+1)*DAY-INDIA_OFFSET;
+    const nextMidnight=nextSourceMidnight(start,filters.timezone);
     const stop=Math.min(end,nextMidnight);
     for(const direction of directions)requests.push({...original,p_direction:direction,
       p_start_at:new Date(start).toISOString(),p_end_at:new Date(stop).toISOString(),
@@ -71,10 +71,10 @@ async function fetchShard(request:OrderTimeBatchRequest,fetcher:(request:OrderTi
 function mergeRows(payloads:OrderTimePayload[]):OrderTimeRow[] {
   const groups=new Map<string,OrderTimeRow>();
   for(const payload of payloads)for(const row of payload.rows){
-    const key=JSON.stringify([row.direction,row.provider,row.channel_type,row.created_date,row.success_date]);
+    const key=JSON.stringify([row.direction,row.provider,row.channel_type,row.created_date,row.success_date,row.currency||null]);
     const previous=groups.get(key);
     if(!previous){groups.set(key,{...row});continue;}
-    for(const metric of timeMetricKeys)previous[metric]=Number(previous[metric]||0)+Number(row[metric]||0);
+    Object.assign(previous,timeTotals([previous,row]));
     for(const field of ["first_created_at","first_success_at"] as const){
       const value=row[field];if(value&&(!previous[field]||Date.parse(value)<Date.parse(previous[field]!)))previous[field]=value;
     }

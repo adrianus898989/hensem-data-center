@@ -183,6 +183,8 @@ export type ThirdPartyVolumeRow = {
   channel: string;
   rawChannel: string;
   channelType?: string;
+  /** Present on detail aggregates; never sum unlike currencies. */
+  currency?: string | null;
   direction: "代收" | "代付";
   amount: number;
   count: number;

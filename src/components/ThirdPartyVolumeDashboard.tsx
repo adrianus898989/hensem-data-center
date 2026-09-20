@@ -24,7 +24,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ThirdPartyPlatformStatusRow, ThirdPartyRatePayload, ThirdPartyRateRow, ThirdPartyVolumePayload, ThirdPartyVolumeRow } from "@/lib/types";
-import { formatNumber, formatPercent } from "@/lib/format";
+import { formatNumber, formatPercent, amountRatio, sumVolumeAmounts } from "@/lib/format";
 import { canonicalThirdPartyName, confirmedIndiaThirdPartyAlias, inferThirdPartyChannelType } from "@/lib/thirdPartyNameMap";
 import { canonicalThirdPartyPlatform, canonicalThirdPartyPlatformSelections, matchesThirdPartyPlatformSelection } from "@/lib/thirdPartyPlatform";
 import { platformDisplayCountry, withPlatformDisplayCountry } from "@/lib/platformDisplayCountry";
@@ -34,8 +34,8 @@ import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload, type ClientMonthlyStatus } from "@/lib/monthlyStatusClient";
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
 import {useOrderTimeQuery, TimeQueryExtra, OrderRecordModal} from "./OrderTimeControls";
-import {timePlatformCountry,timeVolumeData,timeSourceRows,type TimeQueryResult} from "@/lib/orderTimeVolume";
-import {indiaDay,indiaShortcutDateRange} from "@/lib/orderTimeQuery";
+import {timePlatformCountry,timePlatformName,timeVolumeData,timeSourceRows,type TimeQueryResult} from "@/lib/orderTimeVolume";
+import {sourceDay,sourceShortcutDateRange} from "@/lib/orderTimeQuery";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { buildCollectionSuccessView, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
 import { CollectionSuccessCell, CollectionSuccessBreakdown } from "./CollectionSuccessCell";
@@ -118,6 +118,9 @@ type FeeCompareRow = {
   // 人工确认等明确业务通道：费率表没有对应费用时按 0 展示，而不是误显示“未匹配 -”。
   collectFeeKnownZero?: boolean;
   payoutFeeKnownZero?: boolean;
+  collectAmountUnavailable?: boolean;
+  payoutAmountUnavailable?: boolean;
+  currency?: string | null;
   estimatedFee: number;
   advice: string;
   level: "normal" | "warning" | "danger" | "missing";
@@ -172,6 +175,9 @@ function summaryQuerySource(input: {
   if (!selected.length) throw new Error("当前范围暂无可查询平台。");
   const details = new Set(input.detailPlatforms);
   const legacy = selected.filter(name => !details.has(name));
+  // An unselected platform filter means all available uploaded detail sources,
+  // not that unrelated daily-only platforms should force everyone to legacy.
+  if (!input.platforms.length && selected.some(name => details.has(name))) return "orders";
   if (input.detailPlatforms.length && !legacy.length) return "orders";
   const fullDays = start.endsWith("T00:00:00") && end.endsWith("T23:59:59");
   if (input.basis !== "created" || !fullDays) {
@@ -531,12 +537,12 @@ function feeTypeMatches(country: string, expectedType: string, actualType: strin
 function sumRows(rows: ThirdPartyVolumeRow[]) {
   const collectRows = rows.filter((row) => row.direction === "代收");
   const payoutRows = rows.filter((row) => row.direction === "代付");
-  const collectAmount = collectRows.reduce((sum, row) => sum + row.amount, 0);
+  const collectAmount = sumVolumeAmounts(collectRows);
   const collectCount = collectRows.reduce((sum, row) => sum + row.count, 0);
-  const payoutAmount = payoutRows.reduce((sum, row) => sum + row.amount, 0);
+  const payoutAmount = sumVolumeAmounts(payoutRows);
   const payoutCount = payoutRows.reduce((sum, row) => sum + row.count, 0);
   return {
-    amount: collectAmount + payoutAmount,
+    amount: sumVolumeAmounts(rows),
     count: collectCount + payoutCount,
     collectAmount,
     collectCount,
@@ -555,18 +561,18 @@ function aggregateCombo(rows: ThirdPartyVolumeRow[], keyFn: (row: ThirdPartyVolu
     map.set(key, current);
   }
 
-  const totalCollectAmount = rows.filter((row) => row.direction === "代收").reduce((sum, row) => sum + row.amount, 0);
-  const totalPayoutAmount = rows.filter((row) => row.direction === "代付").reduce((sum, row) => sum + row.amount, 0);
-  const totalAmount = rows.reduce((sum, row) => sum + row.amount, 0);
+  const totalCollectAmount = sumVolumeAmounts(rows.filter((row) => row.direction === "代收"));
+  const totalPayoutAmount = sumVolumeAmounts(rows.filter((row) => row.direction === "代付"));
+  const totalAmount = sumVolumeAmounts(rows);
 
   return Array.from(map.entries()).map(([key, item]) => {
     const collectRows = item.rows.filter((row) => row.direction === "代收");
     const payoutRows = item.rows.filter((row) => row.direction === "代付");
-    const collectAmount = collectRows.reduce((sum, row) => sum + row.amount, 0);
+    const collectAmount = sumVolumeAmounts(collectRows);
     const collectCount = collectRows.reduce((sum, row) => sum + row.count, 0);
-    const payoutAmount = payoutRows.reduce((sum, row) => sum + row.amount, 0);
+    const payoutAmount = sumVolumeAmounts(payoutRows);
     const payoutCount = payoutRows.reduce((sum, row) => sum + row.count, 0);
-    const rowTotalAmount = collectAmount + payoutAmount;
+    const rowTotalAmount = sumVolumeAmounts(item.rows);
     const rowTotalCount = collectCount + payoutCount;
     return {
       key,
@@ -577,9 +583,9 @@ function aggregateCombo(rows: ThirdPartyVolumeRow[], keyFn: (row: ThirdPartyVolu
       payoutCount,
       totalAmount: rowTotalAmount,
       totalCount: rowTotalCount,
-      collectPct: totalCollectAmount ? collectAmount / totalCollectAmount : 0,
-      payoutPct: totalPayoutAmount ? payoutAmount / totalPayoutAmount : 0,
-      totalPct: totalAmount ? rowTotalAmount / totalAmount : 0,
+      collectPct: amountRatio(collectAmount,totalCollectAmount),
+      payoutPct: amountRatio(payoutAmount,totalPayoutAmount),
+      totalPct: amountRatio(rowTotalAmount,totalAmount),
       rows: item.rows
     };
   }).sort((a, b) => b.totalAmount - a.totalAmount || b.totalCount - a.totalCount);
@@ -967,7 +973,7 @@ function rateTypeKey(country: string, channelType?: string): string {
 }
 
 function rateKey(country: string, platform: string, channel: string, channelType?: string): string {
-  return `${normalizeMatchKey(normalizeCountryLabel(country))}|||${normalizeMatchKey(platform)}|||${rateNameKey(country, channel)}|||${rateTypeKey(country, channelType)}`;
+  return `${normalizeMatchKey(normalizeCountryLabel(country))}|||${normalizeMatchKey(canonicalThirdPartyPlatform(country,platform))}|||${rateNameKey(country, channel)}|||${rateTypeKey(country, channelType)}`;
 }
 
 function isCoinvidUsdtChannel(country: string, platform: string, channel: string, channelType?: string): boolean {
@@ -1152,7 +1158,7 @@ function expandRateNameCandidates(country: string, ...values: Array<string | und
 }
 
 function putRate(map: Map<string, RateLike>, country: string, platform: string, name: string, category: string, row: RateLike) {
-  const key = rateKey(country, platform, name, category) + (row.scopePlatformOnly ? `|||scope:${String(platform || "").trim().toUpperCase()}` : "");
+  const key = rateKey(country, platform, name, category) + (row.scopePlatformOnly ? `|||scope:${canonicalThirdPartyPlatform(country,platform).toUpperCase()}` : "");
   const existing = map.get(key);
   if (!existing) {
     map.set(key, row);
@@ -1185,7 +1191,7 @@ function rateCountriesCompatible(targetCountry: string, candidateCountry: string
 function findMatchedRate(rateMap: Map<string, RateLike>, country: string, platform: string, channel: string, channelType?: string, side?: "collect" | "payout"): RateLike | undefined {
   const isUsdtTarget = isUsdtFeeTarget(country, platform, channel, channelType);
   const ch = canonicalThirdPartyName(channel, isUsdtTarget ? "USDT" : country);
-  const platformText = String(platform || "").trim();
+  const platformText = canonicalThirdPartyPlatform(country,platform);
   const exactType = normalizeFeeTypeToken(country, channelType);
   const countryCandidates = isUsdtTarget
     ? Array.from(new Set(["USDT通道", "USDT", ...expandRateCountries(country)]))
@@ -1212,7 +1218,7 @@ function findMatchedRate(rateMap: Map<string, RateLike>, country: string, platfo
         seen.add(key);
         const row = rateMap.get(`${key}|||scope:${platformText.toUpperCase()}`) || rateMap.get(key);
         if (!row) continue;
-        if (row.scopePlatformOnly && String(row.platform || "").trim().toUpperCase() !== platformText.toUpperCase()) continue;
+        if (row.scopePlatformOnly && canonicalThirdPartyPlatform(country,row.platform||"").toUpperCase() !== platformText.toUpperCase()) continue;
         let score = side ? rateSideScore(row, side) : rateScore(row);
         if (isUsdtTarget && (countryKey === "USDT通道" || countryKey === "USDT")) score += 30;
         else if (countryKey === normalizeCountryLabel(country)) score += 14;
@@ -1257,8 +1263,8 @@ function findMatchedRate(rateMap: Map<string, RateLike>, country: string, platfo
     if (!targetNameKeys.has(rowName)) continue;
 
     let score = countryMatch.score + (side ? rateSideScore(row, side) : rateScore(row));
-    const rowPlatform = normalizeMatchKey(row.platform || "");
-    if (row.scopePlatformOnly && String(row.platform || "").trim().toUpperCase() !== platformText.toUpperCase()) continue;
+    const rowPlatform = normalizeMatchKey(canonicalThirdPartyPlatform(country,row.platform||""));
+    if (row.scopePlatformOnly && canonicalThirdPartyPlatform(country,row.platform||"").toUpperCase() !== platformText.toUpperCase()) continue;
     if (targetPlatform && rowPlatform === targetPlatform) score += 20;
     else if (!rowPlatform) score += 4;
     else if (targetPlatform) score -= 3;
@@ -1390,19 +1396,23 @@ function buildFeeCompareRows(comboRows: ComboSummary[], rateRows: ThirdPartyRate
     const totalFeeRate = collectFeeRate + payoutFeeRate;
     const collectSingleFee = singleFeeFor(collectRateRow, "collect", collectAvgAmount);
     const payoutSingleFee = singleFeeFor(payoutRateRow, "payout", payoutAvgAmount);
-    const collectFeeAmount = estimateSideFee(row.collectAmount, row.collectCount, collectFeeRate, collectSingleFee);
-    const payoutFeeAmount = estimateSideFee(row.payoutAmount, row.payoutCount, payoutFeeRate, payoutSingleFee);
+    const detailAmounts = row.rows.some(item=>String(item.id || "").startsWith("time:"));
+    const mixedCurrency = new Set(row.rows.map(item=>item.currency || "")).size > 1;
+    const collectAmountUnavailable = mixedCurrency || (detailAmounts && !Number.isFinite(row.collectAmount));
+    const payoutAmountUnavailable = mixedCurrency || (detailAmounts && !Number.isFinite(row.payoutAmount));
+    const collectFeeAmount = collectAmountUnavailable ? Number.NaN : estimateSideFee(row.collectAmount, row.collectCount, collectFeeRate, collectSingleFee);
+    const payoutFeeAmount = payoutAmountUnavailable ? Number.NaN : estimateSideFee(row.payoutAmount, row.payoutCount, payoutFeeRate, payoutSingleFee);
     // 费率表明确写 0 时显示 0；真正未匹配的通道仍显示“-”，避免把缺失数据伪装成零费率。
-    const collectFeeKnownZero = sideHasValue(row.collectAmount, row.collectCount)
+    const collectFeeKnownZero = !collectAmountUnavailable && sideHasValue(row.collectAmount, row.collectCount)
       && rateHasSideFee(collectRateRow, "collect")
       && collectFeeRate === 0
       && collectSingleFee === 0;
-    const payoutFeeKnownZero = sideHasValue(row.payoutAmount, row.payoutCount)
+    const payoutFeeKnownZero = !payoutAmountUnavailable && sideHasValue(row.payoutAmount, row.payoutCount)
       && rateHasSideFee(payoutRateRow, "payout")
       && payoutFeeRate === 0
       && payoutSingleFee === 0;
     const estimatedFee = collectFeeAmount + payoutFeeAmount;
-    const effectiveTotalFeeRate = row.totalAmount ? estimatedFee / row.totalAmount : totalFeeRate;
+    const effectiveTotalFeeRate = !Number.isFinite(row.totalAmount) ? Number.NaN : row.totalAmount ? estimatedFee / row.totalAmount : totalFeeRate;
     return {
       key: `${row.key}|||fee`,
       date,
@@ -1429,6 +1439,9 @@ function buildFeeCompareRows(comboRows: ComboSummary[], rateRows: ThirdPartyRate
       payoutFeeAmount,
       collectFeeKnownZero,
       payoutFeeKnownZero,
+      collectAmountUnavailable,
+      payoutAmountUnavailable,
+      currency:row.rows[0]?.currency,
       estimatedFee,
       advice: "正常观察",
       level: "normal" as FeeCompareRow["level"]
@@ -1452,9 +1465,9 @@ function buildFeeCompareRows(comboRows: ComboSummary[], rateRows: ThirdPartyRate
     const avgTotal = totalRates.length ? totalRates.reduce((sum, rate) => sum + rate, 0) / totalRates.length : 0;
 
     for (const row of list) {
-      row.collectShare = totalCollect ? row.collectAmount / totalCollect : 0;
-      row.payoutShare = totalPayout ? row.payoutAmount / totalPayout : 0;
-      row.totalShare = totalVolume ? row.totalAmount / totalVolume : 0;
+      row.collectShare = amountRatio(row.collectAmount,totalCollect);
+      row.payoutShare = amountRatio(row.payoutAmount,totalPayout);
+      row.totalShare = amountRatio(row.totalAmount,totalVolume);
       const notes: string[] = [];
       let level: FeeCompareRow["level"] = "normal";
 
@@ -1491,7 +1504,7 @@ function feeWarningRows(rows: FeeCompareRow[]): FeeCompareRow[] {
 }
 
 function pct(value: number, total: number): string {
-  return total ? formatPercent(value / total) : "0.00%";
+  return formatPercent(amountRatio(value,total));
 }
 
 function cls(...values: Array<string | false | undefined>): string {
@@ -1739,13 +1752,16 @@ function feePairHint(rows: FeeCompareRow[], side: "collect" | "payout"): string 
 }
 
 function summarizeFeeRows(rows: FeeCompareRow[], totalCollectFee = 0, totalPayoutFee = 0): FeeSummary {
+  const mixedCurrency = new Set(rows.map(row=>row.currency || "")).size > 1;
+  const collectUnavailable = mixedCurrency || rows.some(row=>row.collectAmountUnavailable);
+  const payoutUnavailable = mixedCurrency || rows.some(row=>row.payoutAmountUnavailable);
   // 忽略单条异常 NaN，不能让 TodayPay 等整组三方手续费被污染后显示为 0。
-  const collectFee = rows.reduce((sum, row) => sum + finiteFeeNumber(row.collectFeeAmount), 0);
-  const payoutFee = rows.reduce((sum, row) => sum + finiteFeeNumber(row.payoutFeeAmount), 0);
-  const collectAmount = rows.reduce((sum, row) => sum + finiteFeeNumber(row.collectAmount), 0);
-  const payoutAmount = rows.reduce((sum, row) => sum + finiteFeeNumber(row.payoutAmount), 0);
+  const collectFee = collectUnavailable ? Number.NaN : rows.reduce((sum, row) => sum + finiteFeeNumber(row.collectFeeAmount), 0);
+  const payoutFee = payoutUnavailable ? Number.NaN : rows.reduce((sum, row) => sum + finiteFeeNumber(row.payoutFeeAmount), 0);
+  const collectAmount = collectUnavailable ? Number.NaN : rows.reduce((sum, row) => sum + finiteFeeNumber(row.collectAmount), 0);
+  const payoutAmount = payoutUnavailable ? Number.NaN : rows.reduce((sum, row) => sum + finiteFeeNumber(row.payoutAmount), 0);
   const estimatedFee = collectFee + payoutFee;
-  const totalFee = finiteFeeNumber(totalCollectFee) + finiteFeeNumber(totalPayoutFee);
+  const totalFee = totalCollectFee + totalPayoutFee;
   const collectHasFee = rows.some((row) => sideHasValue(row.collectAmount, row.collectCount) && (row.collectFeeRate > 0 || row.collectSingleFee > 0 || row.collectFeeAmount > 0 || row.collectFeeKnownZero));
   const payoutHasFee = rows.some((row) => sideHasValue(row.payoutAmount, row.payoutCount) && (row.payoutFeeRate > 0 || row.payoutSingleFee > 0 || row.payoutFeeAmount > 0 || row.payoutFeeKnownZero));
   const alertRows = rows.filter((row) => row.level === "danger" || row.level === "warning").sort((a, b) => b.estimatedFee - a.estimatedFee || b.totalAmount - a.totalAmount);
@@ -1754,11 +1770,11 @@ function summarizeFeeRows(rows: FeeCompareRow[], totalCollectFee = 0, totalPayou
     payoutFee,
     estimatedFee,
     // 合计行可能包含多个钱包/通道，用实际手续费 ÷ 金额显示有效费率，避免同三方被拆开后看不懂。
-    collectRate: collectAmount ? collectFee / collectAmount : 0,
-    payoutRate: payoutAmount ? payoutFee / payoutAmount : 0,
-    collectFeeShare: totalCollectFee ? collectFee / totalCollectFee : 0,
-    payoutFeeShare: totalPayoutFee ? payoutFee / totalPayoutFee : 0,
-    totalFeeShare: totalFee ? estimatedFee / totalFee : 0,
+    collectRate: amountRatio(collectFee,collectAmount),
+    payoutRate: amountRatio(payoutFee,payoutAmount),
+    collectFeeShare: amountRatio(collectFee,totalCollectFee),
+    payoutFeeShare: amountRatio(payoutFee,totalPayoutFee),
+    totalFeeShare: amountRatio(estimatedFee,totalFee),
     collectHasFee,
     payoutHasFee,
     collectFeeHint: feePairHint(rows, "collect"),
@@ -1773,6 +1789,7 @@ function emptyFeeSummary(): FeeSummary {
 }
 
 function feeRateText(summary: FeeSummary, side: "collect" | "payout"): string {
+  if (!Number.isFinite(side === "collect" ? summary.collectFee : summary.payoutFee)) return "—";
   const hasFee = side === "collect" ? summary.collectHasFee : summary.payoutHasFee;
   const hint = side === "collect" ? summary.collectFeeHint : summary.payoutFeeHint;
   if (!hasFee) return "-";
@@ -1797,16 +1814,18 @@ function feeCompareRateText(row: FeeCompareRow, side: "collect" | "payout"): str
 }
 
 function feeAmountText(summary: FeeSummary, side: "collect" | "payout"): string {
+  if (!Number.isFinite(side === "collect" ? summary.collectFee : summary.payoutFee)) return "—";
   if (side === "collect") return summary.collectHasFee ? formatNumber(summary.collectFee) : "-";
   return summary.payoutHasFee ? formatNumber(summary.payoutFee) : "-";
 }
 
 function feeTotalText(summary: FeeSummary): string {
+  if (!Number.isFinite(summary.estimatedFee)) return "—";
   return (summary.collectHasFee || summary.payoutHasFee) ? formatNumber(summary.estimatedFee) : "-";
 }
 
 function sumComboSummaryRows(rows: ComboSummary[]) {
-  return rows.reduce((acc, row) => {
+  const result = rows.reduce((acc, row) => {
     acc.collectAmount += row.collectAmount;
     acc.collectCount += row.collectCount;
     acc.payoutAmount += row.payoutAmount;
@@ -1816,6 +1835,8 @@ function sumComboSummaryRows(rows: ComboSummary[]) {
     acc.totalPct += row.totalPct;
     return acc;
   }, { collectAmount: 0, collectCount: 0, payoutAmount: 0, payoutCount: 0, totalAmount: 0, totalCount: 0, totalPct: 0 });
+  const amounts = sumRows(rows.flatMap(row=>row.rows));
+  return {...result,collectAmount:amounts.collectAmount,payoutAmount:amounts.payoutAmount,totalAmount:amounts.amount};
 }
 
 function sumDirectionSummaryRows(rows: DirectionSummary[]) {
@@ -1939,8 +1960,9 @@ function buildFeeSummaryMap(rows: FeeCompareRow[], mode: FeeSummaryMode): Map<st
     list.push(row);
     grouped.set(key, list);
   }
-  const totalCollectFee = rows.reduce((sum, row) => sum + finiteFeeNumber(row.collectFeeAmount), 0);
-  const totalPayoutFee = rows.reduce((sum, row) => sum + finiteFeeNumber(row.payoutFeeAmount), 0);
+  const totals = summarizeFeeRows(rows);
+  const totalCollectFee = totals.collectFee;
+  const totalPayoutFee = totals.payoutFee;
   const map = new Map<string, FeeSummary>();
   for (const [key, list] of grouped.entries()) map.set(key, summarizeFeeRows(list, totalCollectFee, totalPayoutFee));
   return map;
@@ -2300,7 +2322,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
 
   useEffect(() => {
     // Only prefill controls. Business data is loaded exclusively on submit.
-    const yesterday = yesterdayLocalDateKey();
+    const yesterday = sourceDay("Asia/Kolkata", -1);
     const initialCountry = COUNTRY_NAV_TABS.find((name) => dashboardScopeAllows(effectiveDashboardDataScope(profile), name)) || "";
     setStartDate(old=>old||yesterday);setEndDate(old=>old||yesterday);
     setCountryPage(old=>old&&dashboardScopeAllows(effectiveDashboardDataScope(profile),old)?old:initialCountry);
@@ -2371,7 +2393,18 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
       .filter((row) => !selectedCountries.size || selectedCountries.has(displayGroup(row.country)))
       .map((row) => canonicalThirdPartyPlatform(row.country, row.platform)));
   }, [filterOptions.platforms, optionCountryFilter, countrySelections]);
-  const timePlatformOptions = useMemo(() => timeQuery.platforms.filter(p=>timePlatformCountry(p)===activeCountryPage).map(p=>p.name), [timeQuery.platforms, activeCountryPage]);
+  const timePlatformOptions = useMemo(() => timeQuery.platforms.filter(p=>timePlatformCountry(p)===activeCountryPage).map(timePlatformName), [timeQuery.platforms, activeCountryPage]);
+  const timeRangeTimezone = timeQuery.platforms.find(p=>timePlatformCountry(p)===activeCountryPage
+    &&(!platformSelections.length||platformSelections.includes(timePlatformName(p))))?.timezone || "Asia/Kolkata";
+  const defaultTimeDay = useRef(sourceDay("Asia/Kolkata", -1));
+  useEffect(()=>{
+    // Metadata can arrive after initial render. Update only untouched defaults;
+    // changing country/platform must not overwrite a user's chosen dates.
+    const previous=defaultTimeDay.current,next=sourceDay(timeRangeTimezone,-1);
+    setStartDate(old=>!old||old===previous?next:old);
+    setEndDate(old=>!old||old===previous?next:old);
+    defaultTimeDay.current=next;
+  },[timeRangeTimezone]);
   const platforms = useMemo(() => isAllUsdtCountryPage(optionCountryFilter)
     ? uniq(filterOptions.platforms.filter(row=>!countrySelections.length||countrySelections.includes(row.country)).map(row=>canonicalThirdPartyPlatform(row.country,row.platform)))
     : configuredPlatforms, [filterOptions.platforms, configuredPlatforms, optionCountryFilter, countrySelections]);
@@ -2548,14 +2581,14 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
 
   function applyDateShortcut(mode: DateShortcut) {
     const selectedDate = startDate || endDate || appliedEndDate;
-    const range = timePlatformOptions.length ? indiaShortcutDateRange(mode,selectedDate) : shortcutDateRange(mode,selectedDate);
+    const range = sourceShortcutDateRange(mode,selectedDate,timeRangeTimezone);
     setStartDate(range.start);
     setEndDate(range.end);
     timeQuery.setStartClock("00:00:00");timeQuery.setEndClock("23:59:59");
   }
 
   function shiftDateRange(periods: number) {
-    const baseStart = startDate || endDate || appliedStartDate || defaultEnd(rows) || formatLocalDateKey(new Date());
+    const baseStart = startDate || endDate || appliedStartDate || defaultEnd(rows) || sourceDay(timeRangeTimezone);
     const baseEnd = endDate || startDate || appliedEndDate || baseStart;
     const startObj = new Date(`${baseStart}T00:00:00Z`);
     const endObj = new Date(`${baseEnd}T00:00:00Z`);
@@ -2574,7 +2607,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
     const intent = ++queryIntentRef.current, context = queryContextRef.current;
     loadFlightRef.current?.abort();
     const isCurrent = () => intent===queryIntentRef.current && context===queryContextRef.current;
-    const queryStart = startDate || endDate || appliedStartDate || (timePlatformOptions.length ? indiaDay(-1) : yesterdayLocalDateKey());
+    const queryStart = startDate || endDate || appliedStartDate || sourceDay(timeRangeTimezone,-1);
     const queryEnd = endDate || startDate || appliedEndDate || queryStart;
     setIsQuerying(true);
     setSummaryQueryError("");
@@ -2907,9 +2940,9 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
   const previousFees = summarizeFeeRows(previousFeeRows);
   const netAmount = summary.collectAmount - summary.payoutAmount - fees.estimatedFee;
   const previousNetAmount = previousSummary.collectAmount - previousSummary.payoutAmount - previousFees.estimatedFee;
-  const collectFeeAvailable = !summary.collectAmount || fees.collectHasFee;
-  const payoutFeeAvailable = !summary.payoutAmount || fees.payoutHasFee;
-  const allFeesAvailable = collectFeeAvailable && payoutFeeAvailable;
+  const collectFeeAvailable = Number.isFinite(summary.collectAmount) && Number.isFinite(fees.collectFee) && (!summary.collectAmount || fees.collectHasFee);
+  const payoutFeeAvailable = Number.isFinite(summary.payoutAmount) && Number.isFinite(fees.payoutFee) && (!summary.payoutAmount || fees.payoutHasFee);
+  const allFeesAvailable = collectFeeAvailable && payoutFeeAvailable && Number.isFinite(summary.amount);
   const unavailableFeeStat = (label: string): PageStatItem => ({ label, value: "—", helper: "手续费费率暂未载入", tone: "fee" });
   const volumeStat = (...args:Parameters<typeof comparativeStat>):PageStatItem => {
     const item=comparativeStat(...args);
@@ -3000,7 +3033,7 @@ function PlatformVolumeTable({ title, subtitle, rows, feeRows }: { title: string
             const childRows = children.map((child) => {
               const childHasCollect = sideHasValue(child.collectAmount, child.collectCount);
               const childHasPayout = sideHasValue(child.payoutAmount, child.payoutCount);
-              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row"><td>{row.date}</td><td>{row.country}</td><td>{`↳ ${child.displayChannel || "-"}`}</td><td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td>{sideShareNode(childHasCollect, row.collectAmount ? child.collectAmount / row.collectAmount : 0)}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td>{sideShareNode(childHasPayout, row.payoutAmount ? child.payoutAmount / row.payoutAmount : 0)}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.date} / ${row.country} / ${row.platform} / ${child.displayChannel}`, rows: child.fee.alertRows }))}</td><td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td><button className="mini-btn" onClick={() => setSelected(child)}>查看</button></td></tr>;
+              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row"><td>{row.date}</td><td>{row.country}</td><td>{`↳ ${child.displayChannel || "-"}`}</td><td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td>{sideShareNode(childHasCollect, amountRatio(child.collectAmount,row.collectAmount))}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td>{sideShareNode(childHasPayout, amountRatio(child.payoutAmount,row.payoutAmount))}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.date} / ${row.country} / ${row.platform} / ${child.displayChannel}`, rows: child.fee.alertRows }))}</td><td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td><button className="mini-btn" onClick={() => setSelected(child)}>查看</button></td></tr>;
             });
             return [main, ...childRows];
           })}{!pager.shown.length && <tr><td colSpan={19} className="empty">暂无平台量数据</td></tr>}</tbody>
@@ -3065,7 +3098,7 @@ function DailyCompareTable({ title, subtitle, rows, feeRows }: { title: string; 
             const childRows = children.map((child) => {
               const childHasCollect = sideHasValue(child.collectAmount, child.collectCount);
               const childHasPayout = sideHasValue(child.payoutAmount, child.payoutCount);
-              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row"><td>{row.date}</td><td>{row.country}</td><td>{`↳ ${child.displayType || "-"}`}</td><td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td>{sideShareNode(childHasCollect, row.collectAmount ? child.collectAmount / row.collectAmount : 0)}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td>{sideShareNode(childHasPayout, row.payoutAmount ? child.payoutAmount / row.payoutAmount : 0)}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.date} / ${row.country} / ${row.channel} / ${child.displayType}`, rows: child.fee.alertRows }))}</td><td className="num">-</td><td className="muted-cell">-</td><td className="num">-</td><td className="muted-cell">-</td><td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td><button className="mini-btn" onClick={() => setSelected(child)}>查看</button></td></tr>;
+              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row"><td>{row.date}</td><td>{row.country}</td><td>{`↳ ${child.displayType || "-"}`}</td><td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td>{sideShareNode(childHasCollect, amountRatio(child.collectAmount,row.collectAmount))}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td>{sideShareNode(childHasPayout, amountRatio(child.payoutAmount,row.payoutAmount))}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.date} / ${row.country} / ${row.channel} / ${child.displayType}`, rows: child.fee.alertRows }))}</td><td className="num">-</td><td className="muted-cell">-</td><td className="num">-</td><td className="muted-cell">-</td><td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td><button className="mini-btn" onClick={() => setSelected(child)}>查看</button></td></tr>;
             });
             return [main, ...childRows];
           })}{!pager.shown.length && <tr><td colSpan={23} className="empty">暂无所有明细数据</td></tr>}</tbody>
@@ -3331,7 +3364,7 @@ function CountryFeeAnomalyPanel({ country, rows, allRows, dateRangeLabel }: { co
         const mainEffectiveRate = row.totalAmount ? row.estimatedFee / row.totalAmount : 0;
         const main = <tr key={row.key} className={row.level !== "normal" ? "warning-row" : ""}><td>{row.date}</td><td>{row.country}</td><td className="strong-cell">{row.channel}</td><td>{row.channelType || "其他类型"}</td><td className="num">{formatNumber(row.collectAmount)}</td><td><ShareBar value={row.collectShare} /></td><td className="num">{formatNumber(row.payoutAmount)}</td><td><ShareBar value={row.payoutShare} /></td><td className="num strong-cell">{formatNumber(row.totalAmount)}</td><td><ShareBar value={row.totalShare} /></td><td className="num strong-cell">{formatNumber(row.estimatedFee)}</td><td>{mainEffectiveRate ? formatPercent(mainEffectiveRate) : "-"}</td><td>{feeBase ? formatPercent(row.estimatedFee / feeBase) : "0.00%"}</td><td>{row.advice}</td><td><div className="row-action-group"><button className="mini-btn" onClick={() => setExpanded((old) => ({ ...old, [row.key]: !old[row.key] }))}>{isOpen ? "收起" : "展开"}</button></div></td></tr>;
         if (!isOpen) return [main];
-        const children = row.rows.map((child) => <tr key={`${row.key}|||${child.key}`} className="volume-child-row"><td>{child.date || row.date}</td><td>{child.country}</td><td>{`↳ ${child.platform}`}</td><td>{child.channelType || "其他类型"}</td><td className="num">{formatNumber(child.collectAmount)}</td><td><ShareBar value={row.collectAmount ? child.collectAmount / row.collectAmount : 0} /></td><td className="num">{formatNumber(child.payoutAmount)}</td><td><ShareBar value={row.payoutAmount ? child.payoutAmount / row.payoutAmount : 0} /></td><td className="num">{formatNumber(child.totalAmount)}</td><td><ShareBar value={row.totalAmount ? child.totalAmount / row.totalAmount : 0} /></td><td className="num">{formatNumber(child.estimatedFee)}</td><td>{child.effectiveTotalFeeRate ? formatPercent(child.effectiveTotalFeeRate) : "-"}</td><td>{row.estimatedFee ? formatPercent(child.estimatedFee / row.estimatedFee) : "0.00%"}</td><td>{child.advice}</td><td><button className="mini-btn" onClick={() => setSelected(child)}>查看</button></td></tr>);
+        const children = row.rows.map((child) => <tr key={`${row.key}|||${child.key}`} className="volume-child-row"><td>{child.date || row.date}</td><td>{child.country}</td><td>{`↳ ${child.platform}`}</td><td>{child.channelType || "其他类型"}</td><td className="num">{formatNumber(child.collectAmount)}</td><td><ShareBar value={amountRatio(child.collectAmount,row.collectAmount)} /></td><td className="num">{formatNumber(child.payoutAmount)}</td><td><ShareBar value={amountRatio(child.payoutAmount,row.payoutAmount)} /></td><td className="num">{formatNumber(child.totalAmount)}</td><td><ShareBar value={row.totalAmount ? child.totalAmount / row.totalAmount : 0} /></td><td className="num">{formatNumber(child.estimatedFee)}</td><td>{child.effectiveTotalFeeRate ? formatPercent(child.effectiveTotalFeeRate) : "-"}</td><td>{row.estimatedFee ? formatPercent(child.estimatedFee / row.estimatedFee) : "0.00%"}</td><td>{child.advice}</td><td><button className="mini-btn" onClick={() => setSelected(child)}>查看</button></td></tr>);
         return [main, ...children];
       })}{!pager.shown.length && <tr><td colSpan={15} className="empty">当前国家暂无明显异常。</td></tr>}</tbody></table></div>
       {selected && <FeeDetailModal row={selected} onClose={() => setSelected(null)} />}
@@ -3904,6 +3937,9 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
   const shown = paginated ? pager.shown : sortedRows;
   const shownSummary = sumComboSummaryRows(shown);
   const totalSummary = sumComboSummaryRows(rows);
+  const shownFeeKeys = new Set(shown.map(row=>comboFeeKey(row,columns)));
+  const shownFees = summarizeFeeRows(feeRows.filter(row=>shownFeeKeys.has(feeSummaryKey(row,feeMode))));
+  const allFees = summarizeFeeRows(feeRows);
 
   const toggleSort = (key: string, numeric = false) => setSort(current => current?.key === key
     ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
@@ -3998,13 +4034,13 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
             const childRows = children.map((child) => {
               const childHasCollect = sideHasValue(child.collectAmount, child.collectCount);
               const childHasPayout = sideHasValue(child.payoutAmount, child.payoutCount);
-              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row">{columns.map((_, index) => <td key={index}>{child.displayParts[dimensionIndexes[index] ?? index] || "-"}</td>)}<td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td>{showCollectRate && <td>{orderRateHint ? <OrderSuccessCell value={collectionSuccess?.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]]).current} hint={orderRateHint}/> : collectionSuccess ? <CollectionSuccessCell value={collectionSuccess.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]])} /> : "—"}</td>}<td>{sideShareNode(childHasCollect, row.collectAmount ? child.collectAmount / row.collectAmount : 0)}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td><td><OrderSuccessCell value={withdrawSuccess?.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]]).current} hint={orderRateHint}/></td>{withdrawActual && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}{withdrawPending && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}{workOrderDeposit && <WorkOrderIssuesEmptyCells />}<td>{sideShareNode(childHasPayout, row.payoutAmount ? child.payoutAmount / row.payoutAmount : 0)}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td>{showFeeColumns && <><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.labelParts.join(" / ")} / ${child.displayParts.join(" / ")}`, rows: child.fee.alertRows }))}</td></>}<td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td className="muted-cell">子通道</td></tr>;
+              return <tr key={`${row.key}|||child|||${child.key}`} className="volume-child-row">{columns.map((_, index) => <td key={index}>{child.displayParts[dimensionIndexes[index] ?? index] || "-"}</td>)}<td className="num">{sideNumberText(child.collectAmount, child.collectCount)}</td><td className="num">{sideCountText(child.collectAmount, child.collectCount)}</td>{showCollectRate && <td>{orderRateHint ? <OrderSuccessCell value={collectionSuccess?.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]]).current} hint={orderRateHint}/> : collectionSuccess ? <CollectionSuccessCell value={collectionSuccess.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]])} /> : "—"}</td>}<td>{sideShareNode(childHasCollect, amountRatio(child.collectAmount,row.collectAmount))}</td><td className="num">{sideNumberText(child.payoutAmount, child.payoutCount)}</td><td className="num">{sideCountText(child.payoutAmount, child.payoutCount)}</td><td><OrderSuccessCell value={withdrawSuccess?.compare(successKeys([row]), [child.labelParts[child.labelParts.length - 1]]).current} hint={orderRateHint}/></td>{withdrawActual && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}{withdrawPending && <><td className="num muted-cell">-</td><td className="num muted-cell">-</td></>}{workOrderDeposit && <WorkOrderIssuesEmptyCells />}<td>{sideShareNode(childHasPayout, amountRatio(child.payoutAmount,row.payoutAmount))}</td><td className="num strong-cell">{formatNumber(child.totalAmount)}</td><td className="num strong-cell">{formatNumber(child.totalCount)}</td>{showFeeColumns && <><td>{sideFeeRateText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td className="num">{sideFeeAmountText(child.fee, "collect", child.collectAmount, child.collectCount)}</td><td>{sideFeeRateText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{sideFeeAmountText(child.fee, "payout", child.payoutAmount, child.payoutCount)}</td><td className="num">{feeTotalText(child.fee)}</td><td>{feeShareNode(child.fee, () => setSelectedFeeIssues({ title: `${row.labelParts.join(" / ")} / ${child.displayParts.join(" / ")}`, rows: child.fee.alertRows }))}</td></>}<td>{row.totalAmount ? formatPercent(child.totalAmount / row.totalAmount) : "-"}</td><td className="muted-cell">子通道</td></tr>;
             });
             return [main, ...childRows, ...(success?.platforms.length ? [<tr key={`${row.key}:success-platforms`} className="volume-child-row"><td colSpan={columnCount}><strong>代收成功率：</strong><CollectionSuccessBreakdown value={success} /></td></tr>] : [])];
           })}{!shown.length && <tr><td colSpan={columnCount} className="empty">暂无数据</td></tr>}</tbody>
           <tfoot>
-            <tr className="summary-row page-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>当前页汇总</td> : <><td>当前页汇总</td>{columns.slice(1).map((column) => <td key={`page-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(shownSummary.collectAmount)}</td><td className="num">{formatNumber(shownSummary.collectCount)}</td>{showCollectRate && <td>{orderRateHint ? <OrderSuccessCell value={collectionSuccess?.compare(successKeys(shown)).current} hint={orderRateHint}/> : collectionSuccess ? <CollectionSuccessCell value={collectionSuccess.compare(successKeys(shown))} /> : "—"}</td>}<td>{pct(shownSummary.collectAmount, shownSummary.totalAmount)}</td><td className="num">{formatNumber(shownSummary.payoutAmount)}</td><td className="num">{formatNumber(shownSummary.payoutCount)}</td><td><OrderSuccessCell value={withdrawSuccess?.compare(successKeys(shown)).current} hint={orderRateHint}/></td>{withdrawActual && <><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(shown)).current} kind="actual" /></td><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(shown)).current} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(shown)).current} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(shown)).current} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={workOrderDeposit.compare(depositKeys(shown)).current} formatValue={issueValue} formatRate={issueRate} />}<td>{pct(shownSummary.payoutAmount, shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).collectFee, 0))}</td><td>-</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).payoutFee, 0))}</td><td className="num">{formatNumber(shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0))}</td><td>{formatPercent(rows.length ? shown.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0) / Math.max(1, rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0)) : 0)}</td></>}<td>{formatPercent(shownSummary.totalPct)}</td><td className="muted-cell">汇总</td></tr>
-            <tr className="summary-row overall-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>全部汇总</td> : <><td>全部汇总</td>{columns.slice(1).map((column) => <td key={`all-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(totalSummary.collectAmount)}</td><td className="num">{formatNumber(totalSummary.collectCount)}</td>{showCollectRate && <td>{orderRateHint ? <OrderSuccessCell value={collectionSuccess?.compare(successKeys(rows)).current} hint={orderRateHint}/> : collectionSuccess ? <CollectionSuccessCell value={collectionSuccess.compare(successKeys(rows))} /> : "—"}</td>}<td>{pct(totalSummary.collectAmount, totalSummary.totalAmount)}</td><td className="num">{formatNumber(totalSummary.payoutAmount)}</td><td className="num">{formatNumber(totalSummary.payoutCount)}</td><td><OrderSuccessCell value={withdrawSuccess?.compare(successKeys(rows)).current} hint={orderRateHint}/></td>{withdrawActual && <><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(rows)).current} kind="actual" /></td><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(rows)).current} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(rows)).current} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(rows)).current} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={workOrderDeposit.compare(depositKeys(rows)).current} formatValue={issueValue} formatRate={issueRate} />}<td>{pct(totalSummary.payoutAmount, totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).collectFee, 0))}</td><td>-</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).payoutFee, 0))}</td><td className="num">{formatNumber(rows.reduce((sum, row) => sum + (feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary()).estimatedFee, 0))}</td><td>100.00%</td></>}<td>100.00%</td><td className="muted-cell">汇总</td></tr>
+            <tr className="summary-row page-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>当前页汇总</td> : <><td>当前页汇总</td>{columns.slice(1).map((column) => <td key={`page-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(shownSummary.collectAmount)}</td><td className="num">{formatNumber(shownSummary.collectCount)}</td>{showCollectRate && <td>{orderRateHint ? <OrderSuccessCell value={collectionSuccess?.compare(successKeys(shown)).current} hint={orderRateHint}/> : collectionSuccess ? <CollectionSuccessCell value={collectionSuccess.compare(successKeys(shown))} /> : "—"}</td>}<td>{pct(shownSummary.collectAmount, shownSummary.totalAmount)}</td><td className="num">{formatNumber(shownSummary.payoutAmount)}</td><td className="num">{formatNumber(shownSummary.payoutCount)}</td><td><OrderSuccessCell value={withdrawSuccess?.compare(successKeys(shown)).current} hint={orderRateHint}/></td>{withdrawActual && <><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(shown)).current} kind="actual" /></td><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(shown)).current} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(shown)).current} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(shown)).current} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={workOrderDeposit.compare(depositKeys(shown)).current} formatValue={issueValue} formatRate={issueRate} />}<td>{pct(shownSummary.payoutAmount, shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(shownSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(shownFees.collectFee)}</td><td>-</td><td className="num">{formatNumber(shownFees.payoutFee)}</td><td className="num">{formatNumber(shownFees.estimatedFee)}</td><td>{formatPercent(amountRatio(shownFees.estimatedFee,allFees.estimatedFee))}</td></>}<td>{formatPercent(shownSummary.totalPct)}</td><td className="muted-cell">汇总</td></tr>
+            <tr className="summary-row overall-summary-row">{columns.length > 1 ? <td colSpan={columns.length}>全部汇总</td> : <><td>全部汇总</td>{columns.slice(1).map((column) => <td key={`all-summary-${column}`}>-</td>)}</>}<td className="num">{formatNumber(totalSummary.collectAmount)}</td><td className="num">{formatNumber(totalSummary.collectCount)}</td>{showCollectRate && <td>{orderRateHint ? <OrderSuccessCell value={collectionSuccess?.compare(successKeys(rows)).current} hint={orderRateHint}/> : collectionSuccess ? <CollectionSuccessCell value={collectionSuccess.compare(successKeys(rows))} /> : "—"}</td>}<td>{pct(totalSummary.collectAmount, totalSummary.totalAmount)}</td><td className="num">{formatNumber(totalSummary.payoutAmount)}</td><td className="num">{formatNumber(totalSummary.payoutCount)}</td><td><OrderSuccessCell value={withdrawSuccess?.compare(successKeys(rows)).current} hint={orderRateHint}/></td>{withdrawActual && <><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(rows)).current} kind="actual" /></td><td className="num"><WithdrawActualCell metric={withdrawActual.compare(successKeys(rows)).current} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(rows)).current} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={withdrawPending.compare(successKeys(rows)).current} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={workOrderDeposit.compare(depositKeys(rows)).current} formatValue={issueValue} formatRate={issueRate} />}<td>{pct(totalSummary.payoutAmount, totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalAmount)}</td><td className="num strong-cell">{formatNumber(totalSummary.totalCount)}</td>{showFeeColumns && <><td>-</td><td className="num">{formatNumber(allFees.collectFee)}</td><td>-</td><td className="num">{formatNumber(allFees.payoutFee)}</td><td className="num">{formatNumber(allFees.estimatedFee)}</td><td>{Number.isFinite(allFees.estimatedFee) ? "100.00%" : "—"}</td></>}<td>{Number.isFinite(totalSummary.totalAmount) ? "100.00%" : "—"}</td><td className="muted-cell">汇总</td></tr>
           </tfoot>
         </table>
       </div>
@@ -4017,6 +4053,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
 }
 
 function ShareBar({ value }: { value: number }) {
+  if (!Number.isFinite(value)) return <span className="muted-cell">—</span>;
   return <div className="share-bar"><span>{formatPercent(value)}</span><i style={{ width: `${Math.min(100, Math.max(0, value * 100))}%` }} /></div>;
 }
 
@@ -4063,14 +4100,14 @@ function WithdrawPendingCell({ metric, kind }: { metric: { amount: number; count
   const state = metric?.state;
   const ready = state === "complete" || state === "zero";
   const value = kind === "amount" ? metric?.amount : metric?.count;
-  return <span className={`withdraw-pending-value ${ready ? "is-ready" : "is-pending"}`} title="状态严格等于“已提交”；按各国家当地时间 00:00 采集前 10 个完整自然日">{ready ? formatNumber(value || 0) : "—"}</span>;
+  return <span className={`withdraw-pending-value ${ready ? "is-ready" : "is-pending"}`} title="状态严格等于“已提交”；按各国家当地时间 00:00 采集前 10 个完整自然日">{ready ? formatNumber(value) : "—"}</span>;
 }
 
 function WithdrawActualCell({ metric, kind }: { metric: { actualAmount: number; feeAmount: number; state: string } | undefined; kind: "actual" | "fee" }) {
   const ready = metric?.state === "complete" || metric?.state === "zero";
   const value = kind === "actual" ? metric?.actualAmount : metric?.feeAmount;
   const label = kind === "actual" ? "实际到账金额" : "提现手续费";
-  return <span className={`withdraw-actual-value ${ready ? "is-ready" : "is-pending"}`} title={`${label}来自 game66_withdraw_orders 的安全汇总；来源覆盖不完整时不显示 0。`}>{ready ? formatNumber(value || 0) : "—"}</span>;
+  return <span className={`withdraw-actual-value ${ready ? "is-ready" : "is-pending"}`} title={`${label}来自已入库订单的安全汇总；来源覆盖不完整时不显示 0。`}>{ready ? formatNumber(value) : "—"}</span>;
 }
 
 function DirectionTable({ title, subtitle, rows, columns, paginated }: { title: string; subtitle: string; rows: DirectionSummary[]; columns: string[]; paginated?: boolean }) {
