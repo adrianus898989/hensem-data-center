@@ -67,6 +67,28 @@ test('India never exposes partial actual-amount/deduction columns; Hong Kong kee
   assert.match(html,/data-label="代付手续费"/);assert.ok(labels.includes('代付金额'));assertAligned(html);
   assert.ok(headings(render(fixture())).includes('实际到账金额'));
 });
+test('India confirmed provider aliases merge amounts, rates and both workorder groups without changing totals',()=>{
+  const result=indiaFixture(),p=result.payloads[0].payload;
+  p.rows=['LKgoPayINR-PaytmQR','LKgoPayINR-Bank','LKgoPayI','LKgoPay','LKgoPay-QR'].map((name,i)=>({...sample(name,i%2?'withdraw':'charge',5,4,500,400),currency:'INR'}));
+  p.rows.push({...sample('3TPayINR-Bank','withdraw',2,1,200,100),currency:'INR'},
+    {...sample('3TPay-QR','charge',2,1,200,100),currency:'INR'});
+  const stored={result,rows:[issue('LKgoPay'),issue('LKgoPayINR-PaytmQR'),issue('3TPay')]};
+  let index=0;
+  const custom=createApi({useState:initial=>React.useState(index++===1?stored:initial)});
+  const rates=['LKgoPay','3TPay'].map(thirdParty=>({country:'印度',category:'UPI',thirdParty,collectFee:'2%',payoutFee:'1%',totalFee:'3%',collectSingleFee:'0',payoutSingleFee:'0',collectLimit:'',payoutLimit:''}));
+  const html=renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:rates,feeRateMap:api.buildRateMap(rates)}));
+  const labels=headings(html),body=rows(html),lk=cells(body.find(line=>plain(cells(line)[0]||'')==='LKgoPay'));
+  assert.equal(body.filter(line=>plain(cells(line)[0]||'')==='LKgoPay').length,1);
+  assert.equal(body.filter(line=>plain(cells(line)[0]||'')==='3TPay').length,1);
+  for(const alias of ['LKgoPayINR-Bank','LKgoPayINR-PaytmQR','LKgoPayI','LKgoPay-QR','3TPayINR-Bank'])assert.ok(!body.some(line=>plain(cells(line)[0]||'')===alias));
+  assert.equal(plain(lk[labels.indexOf('代收金额')]),'1,200');
+  assert.equal(plain(lk[labels.indexOf('代付金额')]),'800');
+  assert.equal(plain(lk[labels.indexOf('存款未到账（日）提交金额')]),'400');
+  assert.equal(plain(lk[labels.indexOf('提款未到账（日）提交金额')]),'600');
+  const stats=[['代收金额','1,300'],['代付金额','900'],['代收手续费','26'],['代付手续费','9'],['合计手续费','35'],['业务净额','365']];
+  for(const [label,value] of stats)assert.match(html,new RegExp(`data-label="${label}"[^>]*>[\\s\\S]*?<strong>${value}<\\/strong>`));
+  assertAligned(html);
+});
 test('full-day and hourly order results retain both daily workorder groups and workorder-only providers',()=>{
   for(const start of ['2026-09-17T00:00:00','2026-09-17T10:00:00']){
     const result=indiaFixture({start}),html=renderWithWorkOrders(result,{result,rows:[issue(),issue('OnlyIssue'),issue('Foreign','OTHER','PK')]});

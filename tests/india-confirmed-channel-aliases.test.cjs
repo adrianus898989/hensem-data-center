@@ -11,6 +11,8 @@ const aliases = [
   ['QR-WPay', 'WPay'], ['PAYTM-RAPay', 'RAPay'], ['IC2PayINR-PaytmQR', 'ICPay'],
   ['NewWinPay2', 'NewWinPay'],
   ['3TPay-QR', '3TPay'], ['3cPay-QR', '3cPay'],
+  ['3TPayINR-Bank', '3TPay'],
+  ...['LKgoPayINR-PaytmQR','LKgoPayINR-Bank','LKgoPayI','LKgoPay','LKgoPay-QR'].map(name=>[name,'LKgoPay']),
   ['ArbPay2INR-BANK', 'UPI-QR'], ['ArbPay2INR-UPI', 'UPI-QR'],
 ];
 
