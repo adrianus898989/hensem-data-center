@@ -2947,7 +2947,7 @@ function ComparisonCoverageDialog({issues,onClose}:{issues:TimeComparisonIssue[]
   useEffect(()=>{const element=dialog.current;element?.showModal();return()=>element?.close();},[]);
   return <dialog ref={dialog} className="platform-coverage-dialog" aria-label="涨跌对比核验" onCancel={onClose} onClick={event=>{if(event.target===event.currentTarget)onClose();}}>
     <div className="platform-coverage-content">
-      <div className="detail-modal-header"><div><h3>涨跌对比核验</h3><p>当前金额与工单保留。核验未通过时，不把缺失明细当成零，也不混用日汇总计算涨跌。</p></div><button autoFocus type="button" className="modal-close-btn" onClick={onClose}>关闭</button></div>
+      <div className="detail-modal-header"><div><h3>涨跌对比核验</h3><p>完整创建日使用历史日汇总对比，不要求旧明细。当前金额与工单保留，缺少日汇总时不按零计算。</p></div><button autoFocus type="button" className="modal-close-btn" onClick={onClose}>关闭</button></div>
       <ul className="comparison-coverage-list">{issues.map((issue,index)=><li key={index}>
         <strong>{issue.period==="current"?"本期":"对比期"} · {issue.date} · {issue.platform} {issue.direction}</strong>
         <p>{issue.reason}{issue.expected!==undefined&&<> 采集记录 {formatNumber(issue.expected)} 笔；已入库 {issue.stored===undefined?"未确认":formatNumber(issue.stored)} 笔。</>}</p>
@@ -2963,7 +2963,14 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
   const [comparisonOpen,setComparisonOpen]=useState(false);
   const comparison=useOrderTimeComparison(result,paused);
   const data=useMemo(()=>timeVolumeData(result),[result]);
-  const previousData=useMemo(()=>comparison.status==="ready"&&comparison.previous?timeVolumeData(comparison.previous):null,[comparison]);
+  const previousData=useMemo(()=>{
+    if(comparison.status!=="ready")return null;
+    if(comparison.previousRows){
+      const s=result.selection;
+      return {rows:comparison.previousRows.map(normalizeVolumeRowForDisplay).filter(row=>(!s.channel||row.channel===s.channel)&&(!s.types.length||s.types.includes(row.channelType||"其他类型")))};
+    }
+    return comparison.previous?timeVolumeData(comparison.previous):null;
+  },[comparison,result]);
   const workOrderCountry=collectionSuccessCountry(result.selection.country);
   const showWorkOrders=!["香港","红膏蟹",ALL_USDT_COUNTRY_PAGE].includes(workOrderCountry);
   useEffect(()=>{
@@ -3010,7 +3017,7 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
     {comparison.status==="unavailable"&&<div className="comparison-coverage-notice"><button type="button" className="mini-btn" onClick={()=>setComparisonOpen(true)}>涨跌暂不可比 · 查看原因</button></div>}
     <CountryVolumeSinglePage country={s.country} rows={data.rows} previousRows={previousData?.rows} summary={sumRows(data.rows)} previousSummary={sumRows(previousData?.rows||[])}
       monthlyRows={monthlyRows} feeRows={feeRows} previousFeeRows={previousFeeRows} canCompare={!!previousData} dateRangeLabel={range}
-      compareLabel={timeComparisonLabel(s)} comparisonHint={comparison.status==="error"?"核验暂未载入":comparison.status==="unavailable"?"数据待核实": "对比中…"}
+      compareLabel={`${timeComparisonLabel(s)}${comparison.basis==="daily"?"（日汇总）":""}`} comparisonHint={comparison.status==="error"?"核验暂未载入":comparison.status==="unavailable"?"数据待核实": "对比中…"}
       collectionSuccess={data.collectionSuccess} withdrawSuccess={data.withdrawSuccess} orderRateHint={hint}
       platformCoverage={coverage} onPlatformCoverage={()=>setCoverageOpen(true)}
       workOrderDeposit={workOrderDeposit}

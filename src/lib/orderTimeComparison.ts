@@ -2,7 +2,7 @@ import type { TimeQueryResult, TimeQuerySelection } from "./orderTimeVolume";
 import { timePlatformCoverage, timePlatformCountry, timePlatformName } from "./orderTimeVolume";
 import { collectionSuccessCountry, validCollectionSuccessSnapshot } from "./collectionSuccess";
 import { canonicalThirdPartyPlatform } from "./thirdPartyPlatform";
-import type { CollectionSuccessSnapshot } from "./types";
+import type { CollectionSuccessSnapshot, ThirdPartyVolumeRow } from "./types";
 
 export type TimeComparisonIssue = {
   period: "current" | "previous";
@@ -17,6 +17,8 @@ export type TimeComparisonIssue = {
 export type TimeComparisonState = {
   status: "loading" | "ready" | "error" | "unavailable";
   previous?: TimeQueryResult;
+  previousRows?: ThirdPartyVolumeRow[];
+  basis?: "daily" | "details";
   issues?: TimeComparisonIssue[];
 };
 
@@ -27,7 +29,39 @@ export function comparisonScopeIssues(result: TimeQueryResult): TimeComparisonIs
     || s.memberId || s.orderNumber || s.crossDayOnly || (s.status && s.status !== "all")
     || !/^00:00(?::00)?$/.test(s.start.slice(11)) || s.end.slice(11) !== "23:59:59";
   return unsupported ? [{period: "current", platform: "当前筛选范围", date: `${s.start.slice(0,10)} 至 ${s.end.slice(0,10)}`,
-    direction: "", reason: "尚无此时间／筛选口径的完整性凭据，不能用整日采集记录证明时段明细齐全。"}] : [];
+    direction: "", reason: "历史日汇总仅用于完整创建日对比，不能代替小时、成功时间或订单条件筛选。"}] : [];
+}
+
+/** Owner-approved historical baseline. Old collectors only uploaded daily totals;
+ * missing old raw orders must not invalidate those totals. Match the platforms
+ * actually queried, not unrelated names in the directory. Check coverage before
+ * provider/type filtering: a provider absent from a covered day is a valid zero.
+ */
+export function historicalDailyComparison(result: TimeQueryResult, input: ThirdPartyVolumeRow[]): TimeComparisonState {
+  const unsupported = comparisonScopeIssues(result);
+  if (unsupported.length) return {status:"unavailable",issues:unsupported};
+  const s=previousTimeSelection(result.selection), start=s.start.slice(0,10), end=s.end.slice(0,10);
+  const platforms=new Map(result.payloads.map(({payload:p})=>{
+    const identity={name:p.platform||"",team:p.team||"",country:p.country};
+    return [timePlatformName(identity),timePlatformCountry(identity)] as const;
+  }));
+  const directions=s.direction?[s.direction]:["代收","代付"];
+  const rows=input.map(row=>{
+    const country=collectionSuccessCountry(row.country,row.platform);
+    return {...row,country,platform:canonicalThirdPartyPlatform(country,row.platform)};
+  }).filter(row=>row.date>=start&&row.date<=end&&platforms.get(row.platform)===row.country&&directions.includes(row.direction));
+  const issues:TimeComparisonIssue[]=[];
+  if(!platforms.size)issues.push({period:"previous",platform:"当前筛选范围",date:start,direction:"",reason:"没有可对比的平台。"});
+  for(const [platform] of platforms)for(let day=Date.parse(`${start}T00:00:00Z`);day<=Date.parse(`${end}T00:00:00Z`);day+=86400000){
+    const date=new Date(day).toISOString().slice(0,10);
+    for(const direction of directions){
+      const slice=rows.filter(row=>row.platform===platform&&row.date===date&&row.direction===direction);
+      if(!slice.length)issues.push({period:"previous",platform,date,direction,reason:"此日期尚无该方向的历史日汇总；不按零计算，也不要求补跑旧明细。"});
+      else if(slice.some(row=>typeof row.amount!=="number"||!Number.isFinite(row.amount)||row.amount<0||!Number.isSafeInteger(row.count)||row.count<0))
+        issues.push({period:"previous",platform,date,direction,reason:"历史日汇总金额或笔数无效，待核实。"});
+    }
+  }
+  return issues.length?{status:"unavailable",issues}:{status:"ready",previousRows:rows,basis:"daily"};
 }
 
 /** Fail closed for every platform × date × direction, including zero-order days.

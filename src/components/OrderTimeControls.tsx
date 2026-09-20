@@ -7,8 +7,9 @@ import {orderTimeRequest,sourceTime,type OrderTimePayload} from "@/lib/orderTime
 import {queryOrderTimeBatches} from "@/lib/orderTimeBatch";
 import {selectOrderTimePlatforms} from "@/lib/orderTimePlatforms";
 import {timeOrderFilters,timeSourceRows,type TimeQuerySelection,type TimeQueryResult} from "@/lib/orderTimeVolume";
-import {previousTimeSelection,comparisonScopeIssues,timeComparisonIssues,type TimeComparisonState} from "@/lib/orderTimeComparison";
-import type {CollectionSuccessSnapshot} from "@/lib/types";
+import {previousTimeSelection,comparisonScopeIssues,historicalDailyComparison,type TimeComparisonState} from "@/lib/orderTimeComparison";
+import {dashboardBusinessFetch} from "@/lib/dashboardDataClient";
+import type {ThirdPartyVolumeRow} from "@/lib/types";
 import {formatOrderDetailAmount,orderDetailStatusLabel} from "@/lib/orderDetailSearch";
 import "./OrderTimeDashboard.css";
 
@@ -22,35 +23,27 @@ export function useOrderTimeComparison(result:TimeQueryResult,paused=false):Time
   const {session,profile}=useDashboardAuth();
   const identity=`${session?.user.id||""}:${dashboardScopeIdentity(profile)}`;
   const [stored,setStored]=useState<{result:TimeQueryResult;identity:string;state:TimeComparisonState}|null>(null);
-  const cache=useRef(new Map<string,{at:number;previous:TimeQueryResult;snapshots:CollectionSuccessSnapshot[]}>());
+  const cache=useRef(new Map<string,{at:number;rows:ThirdPartyVolumeRow[]}>());
   useEffect(()=>{cache.current.clear();},[identity]);
   useEffect(()=>{
     if(paused||!session)return;
     const unsupported=comparisonScopeIssues(result);
     if(unsupported.length){setStored({result,identity,state:{status:"unavailable",issues:unsupported}});return;}
     const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),180000);
-    const previous:TimeQueryResult={selection:previousTimeSelection(result.selection),payloads:result.payloads.map(p=>({...p,payload:{...p.payload,rows:[]}}))};
-    const filters=result.payloads.map(p=>timeOrderFilters(previous,p.id,p.payload.timezone));
-    const key=JSON.stringify([identity,previous.selection,filters]);
+    const timer=setTimeout(()=>controller.abort(),30000);
+    const previous=previousTimeSelection(result.selection);
+    const key=JSON.stringify([identity,previous.country,previous.start,previous.end]);
     const hit=cache.current.get(key);
     if(hit&&Date.now()-hit.at<300000){
-      const issues=[...timeComparisonIssues(result,hit.snapshots,"current"),...timeComparisonIssues(hit.previous,hit.snapshots,"previous")];
-      clearTimeout(timer);setStored({result,identity,state:issues.length?{status:"unavailable",issues}:{status:"ready",previous:hit.previous}});return;
+      clearTimeout(timer);setStored({result,identity,state:historicalDailyComparison(result,hit.rows)});return;
     }
     setStored({result,identity,state:{status:"loading"}});
     void (async()=>{
-        const snapshots=await orderComparisonSnapshots(session,previous.selection.start.slice(0,10),result.selection.end.slice(0,10),result.selection.country,controller.signal);
+        const rows=await orderComparisonDailyRows(previous.start.slice(0,10),previous.end.slice(0,10),previous.country,controller.signal);
         if(controller.signal.aborted)return;
-        const preflight=[...timeComparisonIssues(result,snapshots,"current"),...timeComparisonIssues(previous,snapshots,"previous",false)];
-        if(preflight.length){setStored({result,identity,state:{status:"unavailable",issues:preflight}});return;}
-        const payloads=await queryOrderTimeBatches(filters,(body,signal)=>orderTimeRpc(session,"dashboard_order_time_query",body,signal),{signal:controller.signal});
-        if(controller.signal.aborted)return;
-        const value={...previous,payloads};
-        const issues=timeComparisonIssues(value,snapshots,"previous");
         if(cache.current.size>=4)cache.current.delete(cache.current.keys().next().value!);
-        cache.current.set(key,{at:Date.now(),previous:value,snapshots});
-        setStored({result,identity,state:issues.length?{status:"unavailable",issues}:{status:"ready",previous:value}});
+        cache.current.set(key,{at:Date.now(),rows});
+        setStored({result,identity,state:historicalDailyComparison(result,rows)});
       })().catch(()=>{if(!disposed)setStored({result,identity,state:{status:"error"}});})
       .finally(()=>clearTimeout(timer));
     let disposed=false;
@@ -61,17 +54,15 @@ export function useOrderTimeComparison(result:TimeQueryResult,paused=false):Time
   return stored?.identity===identity&&stored.result===result?stored.state:{status:"loading"};
 }
 
-/** Existing authenticated/RLS read: small daily receipts, never raw orders. */
-export async function orderComparisonSnapshots(session:DashboardSession,start:string,end:string,country:string,signal:AbortSignal):Promise<CollectionSuccessSnapshot[]> {
-  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").replace(/\/$/,"");
-  const response=await dashboardAuthenticatedFetch(`${base}/rest/v1/rpc/dashboard_collection_success`,{
-    method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({p_start:start,p_end:end,p_country:country}),
-    signal:AbortSignal.any([signal,AbortSignal.timeout(15000)]),cache:"no-store"
-  },session);
+/** Existing authorized daily endpoint, including source replacement/aliases.
+ * A single small summary read replaces one raw-order query per platform.
+ */
+export async function orderComparisonDailyRows(start:string,end:string,country:string,signal:AbortSignal):Promise<ThirdPartyVolumeRow[]> {
+  const query=new URLSearchParams({start,end,country});
+  const response=await dashboardBusinessFetch(`/api/supabase-third-party-volume?${query}`,{signal,cache:"no-store"});
   const payload=await response.json();
-  if(!response.ok||!Array.isArray(payload?.snapshots))throw new Error("完整性核验记录暂未载入。");
-  return payload.snapshots;
+  if(!response.ok||!Array.isArray(payload?.rows))throw new Error("历史日汇总暂未载入。");
+  return payload.rows;
 }
 
 export async function orderTimeRpc(session:DashboardSession|null, name:string,body:unknown,signal:AbortSignal) {

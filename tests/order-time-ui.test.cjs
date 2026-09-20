@@ -395,6 +395,20 @@ test('order-time cards restore positive, negative and zero-base comparisons with
   assert.match(zeroStats,/无基数/);assert.doesNotMatch(zeroStats,/Infinity|NaN|100.00%/);
 });
 
+test('full-day cards use historical daily totals without old raw details and preserve current totals/workorders',()=>{
+  const result=indiaFixture();
+  result.payloads[0].payload.rows=[sample('PayA','charge',700000,431750,300000000,276939770.55),sample('PayA','withdraw',170000,156130,230000000,218627111,'BANK')];
+  const previousRows=[{date:'2026-09-16',country:'印度',platform:'DHANIWIN',direction:'代收',channel:'PayA',rawChannel:'PayA',channelType:'UPI',amount:280228755.97,count:430088},
+    {date:'2026-09-16',country:'印度',platform:'DHANIWIN',direction:'代付',channel:'PayA',rawChannel:'PayA',channelType:'BANK',amount:243352746,count:149135}];
+  let index=0;
+  const custom=createApi({useState:initial=>React.useState(index++===1?{result,rows:[issue()]}:initial),useOrderTimeComparison:()=>({status:'ready',basis:'daily',previousRows})});
+  const html=plain(renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()})));
+  assert.match(html,/276,939,771较昨日（日汇总）−?\-?3,288,985 \-1.17%/);
+  assert.match(html,/218,627,111较昨日（日汇总）−?\-?24,725,635 \-10.16%/);
+  assert.match(html,/存款未到账（日）/);assert.match(html,/提款未到账（日）/);
+  assert.doesNotMatch(html,/涨跌暂不可比|数据待核实|468.86%/);
+});
+
 test('incomplete comparison retains amounts and both workorders, hides false deltas and offers exact gap explanation',()=>{
   const result=indiaFixture(),issues=[{period:'previous',date:'2026-09-18',platform:'91CLUB',direction:'代收',expected:199537,stored:100000,reason:'已入库明细少于完整采集记录。'}];
   let index=0;
