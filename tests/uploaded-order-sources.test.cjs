@@ -74,11 +74,52 @@ before(async()=>{
  await db.exec(migration);
  await db.exec('alter table game66_charge_orders add column status_group text');
  await db.exec(fs.readFileSync(path.join(root,'supabase/migrations/20260920102953_g66_charge_status_group.sql'),'utf8'));
+ await db.exec(fs.readFileSync(path.join(root,'supabase/migrations/20260920130729_india_order_amount_read_contract.sql'),'utf8'));
  await identity();
  ar=(await db.query("select md5('ar:VN:VNTEST')::uuid as id")).rows[0].id;
  newar=(await db.query("select md5('newar:PK:POPZAR')::uuid as id")).rows[0].id;
 });
 after(async()=>{if(db)await db.close();});
+
+test('India amount migration preserves prior query/auth/catalog functions except the two narrow read expressions',()=>{
+ const file=name=>fs.readFileSync(path.join(root,'supabase/migrations',name),'utf8');
+ const current=file('20260920130729_india_order_amount_read_contract.sql');
+ const old=file('20260920062124_order_catalog_index_probes.sql')+'\n'+file('20260920102953_g66_charge_status_group.sql');
+ const strip=s=>s.replace(/--[^\n]*/g,'').replace(/\s+/g,'');
+ const restored=current.replace("coalesce(t.currency,case when t.country_code='IN' then 'INR' end)",'t.currency')
+  .replace(/coalesce\(a\.amount,case[\s\S]*?then btrim\(a\.amount_text\)::numeric end\) as amount/, 'a.amount');
+ assert.equal(strip(restored),strip(old));
+ assert.doesNotMatch(current,/\b(?:insert into|delete from|update public\.|alter table|grant )/i);
+});
+
+test('India legacy null currency and signed manual adjustments retain full amounts without rewriting source rows',async()=>{
+ await db.exec('begin');
+ try{
+  await db.exec(`insert into ar_config_targets(country_code,platform,country_name,timezone,currency) values
+    ('IN','INTEST','印度','Asia/Kolkata',null),('IN','IN-EXPLICIT','印度','Asia/Kolkata','USD');`);
+  const records=[['known',100,'100','PayA','recharge','已支付'],['adjustment',null,'-8085','人工充值','recharge','已支付'],
+    ['decimal',null,' -19.57 ','人工充值','recharge','已支付'],['malformed',null,'-10 INR','人工充值','recharge','已支付'],
+    ['unconfirmed',null,'10','人工充值','recharge','已支付'],['other-provider',null,'-10','PayA','recharge','已支付'],
+    ['other-direction',null,'-10','人工充值','withdraw','已通过']];
+  for(const [order,amount,raw,provider,kind,status] of records)await db.query(`insert into ar_collected_orders
+   (source_system,country_code,platform,order_kind,order_no,member_id,amount,amount_text,status,applied_at,completed_at,raw_channel,channel_type)
+   values('AR','IN','INTEST',$1,$2,'SIGNED',$3,$4,$5,'2026-09-19 10:00','2026-09-19 10:01',$6,'UPI')`,[kind,order,amount,raw,status,provider]);
+  await db.exec(`insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,amount,status,applied_at,raw_channel)
+   values('AR','IN','IN-EXPLICIT','recharge','explicit',3,'已支付','2026-09-19 10:00','PayA');`);
+  const catalog=(await aggregate({platform:null})).platforms;
+  const india=catalog.find(p=>p.name==='INTEST');assert.equal(india.currency,'INR');
+  assert.equal(catalog.find(p=>p.name==='IN-EXPLICIT').currency,'USD');
+  assert.equal(catalog.find(p=>p.name==='VNTEST'&&p.country_code==='VN').currency,'VND');
+  const options={platform:india.id,start:'2026-09-19T00:00+05:30',end:'2026-09-20T00:00+05:30'};
+  const details=(await search(options)).rows;
+  for(const name of ['malformed','unconfirmed','other-provider','other-direction'])assert.equal(details.find(r=>r.order_number===name).amount,null,name);
+  assert.equal(details.find(r=>r.order_number==='adjustment').amount,'-8085');
+  assert.equal(details.find(r=>r.order_number==='decimal').amount,'-19.57');
+  const total=(await aggregate({...options,order:'adjustment'})).rows[0];
+  assert.equal(total.success_amount,-8085);assert.equal(total.success_count,1);assert.equal(total.missing_amount_count,0);assert.equal(total.currency,'INR');
+  assert.equal((await db.query("select amount from ar_collected_orders where platform='INTEST' and order_no='adjustment'")).rows[0].amount,null,'source remains untouched');
+ }finally{await db.exec('rollback');}
+});
 
 test('G66 failed and EK pending charge code 0 retain distinct collector semantics without changing totals',async()=>{
  await db.exec('begin');
