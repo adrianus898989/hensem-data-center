@@ -69,11 +69,11 @@ const compile=code=>ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKi
 const isOrderQueryDenied=new Function('exports',compile(denied.getText(source))+'\nreturn isOrderQueryDenied;')({});
 function payload(request){
   const p=catalog.find(p=>p.id===request.p_platform);
-  return {platforms:catalog,platform:p.name,team:p.team,timezone:'Asia/Kolkata',rows:[{
-    ...Object.fromEntries(timeMetricKeys.map(k=>[k,0])),direction:request.p_direction,provider:'PayA',channel_type:'UPI',
+  return {platforms:catalog,platform:p.name,team:p.team,timezone:'Asia/Kolkata',rows:(request.p_direction==='all'?['charge','withdraw']:[request.p_direction]).map(direction=>({
+    ...Object.fromEntries(timeMetricKeys.map(k=>[k,0])),direction,provider:'PayA',channel_type:'UPI',
     created_date:'2026-09-17',success_date:'2026-09-18',submitted_count:2,submitted_amount:200,success_count:1,success_amount:100,
     first_created_at:request.p_start_at,last_created_at:request.p_end_at,first_success_at:null,last_success_at:null,last_synced_at:request.p_end_at
-  }]};
+  }))};
 }
 function harness(overrides={}){
   const state={stored:'previous',active:true,error:'',busy:false,progress:[],cleared:false,calls:[]};
@@ -101,7 +101,7 @@ test('actual unified hook uses each catalog source timezone and keeps single-pla
     return {platforms,platform:selected.name,team:selected.team,country:selected.country,timezone:selected.timezone,source:selected.source,rows:[]};
   }});
   assert.equal(await h.run({...input,country:'巴基斯坦',start:'2026-09-19T00:00:00',end:'2026-09-19T23:59:59',availablePlatforms:['POPZAR','AR-PK','LEGACY']}),true);
-  assert.equal(calls.length,4);assert.equal(h.state.stored.data.payloads.length,2);
+  assert.equal(calls.length,2);assert.equal(h.state.stored.data.payloads.length,2);
   for(const body of calls){assert.equal(body.p_start_at,'2026-09-18T19:00:00.000Z');assert.equal(body.p_end_at,'2026-09-19T19:00:00.000Z');}
 });
 
@@ -110,7 +110,7 @@ test('actual summary query accepts all, multiple and single platforms and publis
     const h=harness();
     assert.equal(await h.run({...input,platforms:names}),true);
     const count=new Set(names).size||3;
-    assert.equal(h.state.calls.length,count*2);
+    assert.equal(h.state.calls.length,count);
     assert.equal(h.state.stored.data.payloads.length,count);
     assert.equal(timeTotals(h.state.stored.data.payloads.flatMap(p=>p.payload.rows)).success_count,count*2);
     assert.equal(h.state.stored.data.selection.platforms.length,names.length?count:0);
@@ -129,7 +129,7 @@ test('default partial-hour query reads only directory-authorized available detai
   for(const mode of ['created','success']){
     const h=harness({mode});
     assert.equal(await h.run({...input,availablePlatforms:['EK7','91CLUB']}),true);
-    assert.equal(h.state.calls.length,2);
+    assert.equal(h.state.calls.length,1);
     assert.ok(h.state.calls.every(body=>body.p_platform===catalog[0].id));
     assert.deepEqual(h.state.stored.data.selection.platforms,[],'empty means the user kept default all, not an invented explicit selection');
     assert.deepEqual(h.state.stored.data.selection.availablePlatforms,['EK7','91CLUB']);
@@ -153,7 +153,7 @@ test('missing directory intersections and unsupported explicit choices never fal
 test('success-time multi query retains separate optional creation bounds on every shard',async()=>{
   const h=harness({mode:'success',createdStart:'2026-09-01T00:00:00',createdEnd:'2026-09-16T23:59:59'});
   assert.equal(await h.run({...input,platforms:['EK7','MAX7']}),true);
-  assert.equal(h.state.calls.length,4);
+  assert.equal(h.state.calls.length,2);
   for(const body of h.state.calls){
     assert.equal(body.p_basis,'success');
     assert.equal(body.p_created_start,'2026-08-31T18:30:00.000Z');

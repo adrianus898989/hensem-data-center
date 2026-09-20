@@ -9,17 +9,17 @@ const base={platform:id,basis:'created',direction:'all',start:'2026-09-01T00:00:
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function payload(request,extra={}) {
   const start=request.p_start_at,end=request.p_end_at;
-  return {platforms:[{id,name:'EK7',team:'香港'}],platform:'EK7',team:'香港',timezone:'Asia/Kolkata',rows:[{
-    ...Object.fromEntries(timeMetricKeys.map(key=>[key,0])),direction:request.p_direction,provider:'PayA',channel_type:'UPI',
+  return {platforms:[{id,name:'EK7',team:'香港'}],platform:'EK7',team:'香港',timezone:'Asia/Kolkata',rows:(request.p_direction==='all'?['charge','withdraw']:[request.p_direction]).map(direction=>({
+    ...Object.fromEntries(timeMetricKeys.map(key=>[key,0])),direction,provider:'PayA',channel_type:'UPI',
     created_date:'2026-09-01',success_date:'2026-09-17',submitted_count:1,submitted_amount:100,success_count:1,success_amount:100,
     first_created_at:start,last_created_at:end,first_success_at:start,last_success_at:end,last_synced_at:end,...extra
-  }]};
+  }))};
 }
 
-test('September 1–17 splits into 34 non-overlapping platform/day/direction requests',()=>{
+test('September 1–17 uses 17 non-overlapping day requests with both directions together',()=>{
   const requests=planOrderTimeBatches(base);
-  assert.equal(requests.length,34);
-  for(const direction of ['charge','withdraw']) {
+  assert.equal(requests.length,17);
+  for(const direction of ['all']) {
     const group=requests.filter(r=>r.p_direction===direction);
     assert.equal(group[0].p_start_at,'2026-08-31T18:30:00.000Z');
     assert.equal(group.at(-1).p_end_at,'2026-09-17T18:30:00.000Z');
@@ -45,10 +45,9 @@ test('batch merge propagates missing amount and fee values instead of silently s
 test('partial seconds stay half-open and all independent filters retain the whole-range reference',()=>{
   const requests=planOrderTimeBatches({...base,basis:'success',direction:'withdraw',start:'2026-09-01T23:59:59',end:'2026-09-02T00:00:00',
     createdStart:'2026-08-01T00:00:00',createdEnd:'2026-08-31T23:59:59',memberId:'0007',orderNumber:'ORDER-7',status:'success',crossDayOnly:true});
-  assert.equal(requests.length,2);
+  assert.equal(requests.length,1);
   assert.deepEqual(requests.map(r=>[r.p_start_at,r.p_end_at]),[
-    ['2026-09-01T18:29:59.000Z','2026-09-01T18:30:00.000Z'],
-    ['2026-09-01T18:30:00.000Z','2026-09-01T18:30:01.000Z']]);
+    ['2026-09-01T18:29:59.000Z','2026-09-01T18:30:01.000Z']]);
   for(const request of requests) {
     assert.equal(request.p_reference_start,'2026-09-01T18:29:59.000Z');
     assert.equal(request.p_created_start,'2026-07-31T18:30:00.000Z');
@@ -65,8 +64,8 @@ test('all platforms share at most two requests and merged cohorts preserve origi
   const results=await queryOrderTimeBatches(filters,async request=>{
     maximum=Math.max(maximum,++active);calls++;await wait(2);active--;return payload(request);
   },{onProgress:p=>progress.push(p)});
-  assert.equal(maximum,2);assert.equal(calls,8);assert.equal(results.length,2);
-  assert.deepEqual(progress.at(-1),{completed:8,total:8,active:0});
+  assert.equal(maximum,2);assert.equal(calls,4);assert.equal(results.length,2);
+  assert.deepEqual(progress.at(-1),{completed:4,total:4,active:0});
   for(const result of results) {
     assert.equal(result.payload.rows.length,2); // Same cohort/day split recombined, direction kept separate.
     assert.equal(timeTotals(result.payload.rows).success_count,4);
@@ -101,12 +100,56 @@ test('statement timeout recursively splits to one-hour leaves with no overlap or
 test('authorization and validation failures do not split or return partially completed results',async()=>{
   for(const code of ['42501','22023','28000']) {
     let calls=0;
-    await assert.rejects(()=>queryOrderTimeBatches([{...base,end:'2026-09-01T23:59:59'}],async request=>{
-      calls++;if(request.p_direction==='withdraw')throw Object.assign(new Error('statement timeout-looking validation message'),{code});
+    await assert.rejects(()=>queryOrderTimeBatches([{...base,end:'2026-09-02T23:59:59'}],async request=>{
+      calls++;if(request.p_start_at==='2026-09-01T18:30:00.000Z')throw Object.assign(new Error('statement timeout-looking validation message'),{code});
       return payload(request);
     }),error=>error.code===code);
     assert.equal(calls,2);
   }
+});
+
+test('eight platforms on one day need eight requests, not sixteen, without increasing concurrency',async()=>{
+  let active=0,maximum=0;const calls=[],progress=[];
+  const filters=Array.from({length:8},(_,i)=>({...base,platform:`00000000-0000-0000-0000-${String(i+1).padStart(12,'0')}`,end:'2026-09-01T23:59:59'}));
+  const results=await queryOrderTimeBatches(filters,async request=>{
+    calls.push(request);maximum=Math.max(maximum,++active);await wait(1);active--;return payload(request);
+  },{onProgress:value=>progress.push(value)});
+  assert.equal(calls.length,8);assert.equal(maximum,2);assert.equal(results.length,8);
+  assert.ok(calls.every(request=>request.p_direction==='all'));
+  assert.equal(timeTotals(results.flatMap(result=>result.payload.rows)).success_count,16);
+  assert.deepEqual(progress.at(-1),{completed:8,total:8,active:0});
+});
+
+test('all-direction timeout retries only that shard by direction before splitting time',async()=>{
+  const calls=[],progress=[];
+  const results=await queryOrderTimeBatches([{...base,end:'2026-09-02T23:59:59'}],async request=>{
+    calls.push(request);
+    if(request.p_start_at==='2026-09-01T18:30:00.000Z'&&request.p_direction==='all')
+      throw Object.assign(new Error('statement timeout'),{code:'57014'});
+    return payload(request);
+  },{onProgress:value=>progress.push(value)});
+  assert.equal(calls.length,4);
+  assert.equal(calls.filter(request=>request.p_start_at==='2026-08-31T18:30:00.000Z').length,1,'successful day never repeats');
+  assert.deepEqual(calls.filter(request=>request.p_direction!=='all').map(r=>r.p_direction).sort(),['charge','withdraw']);
+  assert.ok(calls.every(request=>request.p_reference_start==='2026-08-31T18:30:00.000Z'));
+  assert.equal(timeTotals(results[0].payload.rows).success_count,4,'fallback does not count the failed parent');
+  assert.deepEqual(progress.at(-1),{completed:3,total:3,active:0});
+});
+
+test('all-direction timeout can still fall back to disjoint one-hour leaves',async()=>{
+  const leaves=[],progress=[];
+  const [result]=await queryOrderTimeBatches([{...base,end:'2026-09-01T01:59:59'}],async request=>{
+    if(request.p_direction==='all'||Date.parse(request.p_end_at)-Date.parse(request.p_start_at)>3600000)
+      throw Object.assign(new Error('statement timeout'),{code:'57014'});
+    leaves.push(request);return payload(request);
+  },{onProgress:value=>progress.push(value)});
+  assert.equal(leaves.length,4);
+  for(const direction of ['charge','withdraw']){
+    const group=leaves.filter(r=>r.p_direction===direction).sort((a,b)=>a.p_start_at.localeCompare(b.p_start_at));
+    assert.equal(group.length,2);assert.equal(group[0].p_end_at,group[1].p_start_at);
+  }
+  assert.equal(timeTotals(result.payload.rows).success_count,4);
+  assert.deepEqual(progress.at(-1),{completed:4,total:4,active:0});
 });
 
 test('a caller abort promptly cancels both in-flight requests even if the transport ignores cancellation',async()=>{

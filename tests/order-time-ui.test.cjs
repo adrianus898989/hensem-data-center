@@ -146,9 +146,88 @@ function findElements(element,type){
   if(!React.isValidElement(element))return [];
   return [...(element.type===type?[element]:[]),...findElements(element.props.children,type)];
 }
+function sortingHarness(props={}){
+  const state=[];let cursor=0,element;
+  const probe=createApi({useMemo:fn=>fn(),useEffect:()=>{},useState:initial=>{
+    const index=cursor++;if(!(index in state))state[index]=initial;
+    return [state[index],value=>state[index]=typeof value==='function'?value(state[index]):value];
+  }});
+  const data=dependencies.timeVolumeData(fixture());
+  const base=probe.aggregateCombo(data.rows,row=>[row.country,row.channel])[0];
+  const amounts=[['Unknown',NaN],['Small',20],['Large',100],['Zero',0],['Same',20],['Infinite',Infinity]];
+  const defaults={title:'',subtitle:'',columns:['统一三方'],columnIndexes:[1],stickyFirstColumn:true,
+    rows:amounts.map(([name,amount])=>({...base,key:name,labelParts:['香港',name],collectAmount:amount,totalAmount:amount,rows:[]}))};
+  const draw=(extra={})=>{cursor=0;element=probe.MonthlyTable({...defaults,...props,...extra});return renderToStaticMarkup(element);};
+  const click=key=>{
+    function visit(node){
+      if(Array.isArray(node))return node.map(visit).find(Boolean);
+      if(!React.isValidElement(node))return null;
+      if(node.props.sortKey===key)return node;
+      return visit(node.props.children);
+    }
+    const header=visit(element);assert.ok(header,`sort header ${key}`);
+    findElements(header.type(header.props),'button')[0].props.onClick();
+  };
+  return {draw,click,base,defaults};
+}
+const sortedNames=html=>[...html.match(/<tbody>([\s\S]*?)<\/tbody>/)[1].matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(m=>plain(cells(m[1])[0]));
+test('real summary sorting defaults to total descending, toggles correctly, keeps unknowns last and retains a user choice on new results',()=>{
+  const h=sortingHarness();let html=h.draw();
+  assert.deepEqual(sortedNames(html),['Large','Small','Same','Zero','Unknown','Infinite']);
+  assert.match(html,/<th[^>]*aria-sort="descending"[^>]*><button[^>]*><span>合计金额<\/span><span class="sort-arrow" aria-hidden="true">↓/);
+  h.click('collectAmount');html=h.draw();
+  assert.deepEqual(sortedNames(html),['Large','Small','Same','Zero','Unknown','Infinite']);
+  assert.match(html,/<th[^>]*aria-sort="descending"[^>]*><button[^>]*><span>代收金额/);
+  h.click('collectAmount');html=h.draw();
+  assert.deepEqual(sortedNames(html),['Zero','Small','Same','Large','Unknown','Infinite']);
+  assert.match(html,/<th[^>]*aria-sort="ascending"[^>]*><button[^>]*><span>代收金额<\/span><span class="sort-arrow" aria-hidden="true">↑/);
+  html=h.draw({rows:[...h.defaults.rows].reverse()});
+  assert.deepEqual(sortedNames(html),['Zero','Same','Small','Large','Infinite','Unknown'],'new results retain selected ascending order and stable ties');
+  h.click('dimension:1');html=h.draw();
+  assert.deepEqual(sortedNames(html),['Infinite','Large','Same','Small','Unknown','Zero']);
+  assert.match(html,/sticky-first-dimension/);assertAligned(html);
+});
+test('display-unavailable payout metrics sort last even when their backing metric contains zero',()=>{
+  const metric=name=>name.endsWith('Unknown')?{state:'missing',amount:0,count:0,actualAmount:0,feeAmount:0}
+    :{state:'complete',amount:name.endsWith('Small')?20:100,count:1,actualAmount:name.endsWith('Small')?20:100,feeAmount:2};
+  const view={compare:keys=>({current:metric(keys[0]||'Large')})};
+  const h=sortingHarness({withdrawActual:view,withdrawPending:view});
+  const selected=h.defaults.rows.filter(row=>['Unknown','Small','Large'].includes(row.key));
+  for(const key of ['withdrawActualAmount','withdrawActualFee','withdrawPendingAmount','withdrawPendingCount']){
+    h.draw({rows:selected});h.click(key);h.draw({rows:selected});h.click(key);
+    const html=h.draw({rows:selected});assert.equal(sortedNames(html).at(-1),'Unknown',key);
+  }
+});
+test('numeric summary headings all use aligned compact buttons and expose only the current direction',()=>{
+  const h=sortingHarness(),html=h.draw();
+  const headers=[...html.matchAll(/<th\b([^>]*)>([\s\S]*?)<\/th>/g)];
+  for(const [,attributes,content] of headers){
+    if(!content.includes('th-sort-btn'))continue;
+    if(!content.includes('统一三方'))assert.match(attributes,/\bnum\b/);
+    assert.match(content,/<\/span><span class="sort-arrow" aria-hidden="true">[↕↑↓]<\/span>/);
+  }
+  assert.equal(headers.filter(([,attributes])=>/aria-sort="descending"/.test(attributes)).length,1);
+});
+test('confirmed zero-fee share sorts as zero while unconfigured fees remain last in both directions',()=>{
+  const feeRows=['Unknown','Zero','Large'].map(channel=>({country:'香港',platform:'EK7',channel,channelType:'UPI',
+    collectAmount:100,collectCount:1,payoutAmount:0,payoutCount:0,totalAmount:100,totalCount:1,
+    collectFeeRate:channel==='Large'?0.1:0,collectSingleFee:0,collectFeeAmount:channel==='Large'?10:0,
+    collectFeeKnownZero:channel==='Zero',payoutFeeRate:0,payoutSingleFee:0,payoutFeeAmount:0,payoutFeeKnownZero:false,
+    estimatedFee:channel==='Large'?10:0,level:channel==='Unknown'?'missing':'normal',rows:[]}));
+  const summary=api.buildFeeSummaryMap(feeRows,'monthly');
+  assert.equal(summary.get('香港|||Zero').collectHasFee,true);
+  assert.equal(summary.get('香港|||Zero').totalFeeShare,0);
+  assert.equal(summary.get('香港|||Unknown').collectHasFee,false);
+  const h=sortingHarness({feeRows});
+  const rows=['Unknown','Zero','Large'].map(name=>h.defaults.rows.find(row=>row.key===name));
+  h.draw({rows});h.click('feeShare');
+  assert.deepEqual(sortedNames(h.draw({rows})),['Large','Zero','Unknown']);
+  h.click('feeShare');
+  assert.deepEqual(sortedNames(h.draw({rows})),['Zero','Large','Unknown']);
+});
 test('provider detail entry routes to order-level drilldown and child columns remain aligned',()=>{
   const data=dependencies.timeVolumeData(fixture());let clicked;
-  const hooks={useMemo:fn=>fn(),useEffect:()=>{},useState:initial=>[initial&&typeof initial==='object'&&!Array.isArray(initial)?{'香港|||PayA':true}:initial,()=>{}]};
+  const hooks={useMemo:fn=>fn(),useEffect:()=>{},useState:initial=>[initial&&typeof initial==='object'&&!Array.isArray(initial)&&!initial.key?{'香港|||PayA':true}:initial,()=>{}]};
   const probe=createApi(hooks),grouped=probe.aggregateCombo(data.rows,row=>[row.country,row.channel]);
   const element=probe.MonthlyTable({title:'香港 汇总',subtitle:'fixture',rows:grouped,columns:['统一三方'],columnIndexes:[1],feeRows:[],collectionSuccess:data.collectionSuccess,
     withdrawSuccess:data.withdrawSuccess,withdrawActual:data.withdrawActual,withdrawPending:data.withdrawPending,orderRateHint:data.successRateHint,onView:row=>{clicked=row;}});
