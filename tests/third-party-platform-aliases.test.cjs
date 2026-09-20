@@ -455,7 +455,7 @@ test('actual platform card explicitly counts active data, not the larger configu
   visit(page);
   assert.ok(card, 'Actual platform metric card must exist');
   const view = pipeline();
-  const context = { uniq: view.uniq, rows: view.optionScopedRows, platformCoverage: undefined };
+  const context = { uniq: view.uniq, rows: view.optionScopedRows, platformCoverage: undefined, compareLabel:undefined, onPlatformCoverage:undefined };
   const result = new Function(...Object.keys(context), compile(`const result = ${card.getText(source)};`) + '\nreturn result;')(...Object.values(context));
   assert.equal(result.helper, '当前有数据的平台');
   assert.equal(result.value, 5); assert.equal(view.platforms.length, 6);

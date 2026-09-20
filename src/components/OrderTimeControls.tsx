@@ -7,12 +7,49 @@ import {orderTimeRequest,sourceTime,type OrderTimePayload} from "@/lib/orderTime
 import {queryOrderTimeBatches} from "@/lib/orderTimeBatch";
 import {selectOrderTimePlatforms} from "@/lib/orderTimePlatforms";
 import {timeOrderFilters,timeSourceRows,type TimeQuerySelection,type TimeQueryResult} from "@/lib/orderTimeVolume";
+import {previousTimeSelection,type TimeComparisonState} from "@/lib/orderTimeComparison";
 import {formatOrderDetailAmount,orderDetailStatusLabel} from "@/lib/orderDetailSearch";
 import "./OrderTimeDashboard.css";
 
 export function isOrderQueryDenied(error:unknown):boolean {
   const value=error as {status?:number;code?:string};
   return [401,403].includes(Number(value?.status))||value?.code==="42501"||String(value?.code||"").startsWith("28");
+}
+
+/** Current totals render first; comparison never blocks or overlaps a new search. */
+export function useOrderTimeComparison(result:TimeQueryResult,paused=false):TimeComparisonState {
+  const {session,profile}=useDashboardAuth();
+  const identity=`${session?.user.id||""}:${dashboardScopeIdentity(profile)}`;
+  const [stored,setStored]=useState<{result:TimeQueryResult;identity:string;state:TimeComparisonState}|null>(null);
+  const cache=useRef(new Map<string,{at:number;previous:TimeQueryResult}>());
+  useEffect(()=>{cache.current.clear();},[identity]);
+  useEffect(()=>{
+    if(paused||!session)return;
+    const controller=new AbortController();
+    const timer=setTimeout(()=>controller.abort(),180000);
+    const previous:TimeQueryResult={selection:previousTimeSelection(result.selection),payloads:[]};
+    const filters=result.payloads.map(p=>timeOrderFilters(previous,p.id,p.payload.timezone));
+    const key=JSON.stringify([identity,previous.selection,filters]);
+    const hit=cache.current.get(key);
+    if(hit&&Date.now()-hit.at<300000){
+      clearTimeout(timer);setStored({result,identity,state:{status:"ready",previous:hit.previous}});return;
+    }
+    setStored({result,identity,state:{status:"loading"}});
+    void queryOrderTimeBatches(filters,(body,signal)=>orderTimeRpc(session,"dashboard_order_time_query",body,signal),{signal:controller.signal})
+      .then(payloads=>{
+        if(controller.signal.aborted)return;
+        const value={...previous,payloads};
+        if(cache.current.size>=4)cache.current.delete(cache.current.keys().next().value!);
+        cache.current.set(key,{at:Date.now(),previous:value});
+        setStored({result,identity,state:{status:"ready",previous:value}});
+      }).catch(()=>{if(!disposed)setStored({result,identity,state:{status:"error"}});})
+      .finally(()=>clearTimeout(timer));
+    let disposed=false;
+    return()=>{disposed=true;controller.abort();clearTimeout(timer);};
+  // Refreshing a token does not restart a matching comparison; RPC verifies scope.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[result,paused,identity]);
+  return stored?.identity===identity&&stored.result===result?stored.state:{status:"loading"};
 }
 
 export async function orderTimeRpc(session:DashboardSession|null, name:string,body:unknown,signal:AbortSignal) {

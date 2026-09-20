@@ -33,8 +33,9 @@ import { dashboardScopeAllows, dashboardScopeIdentity, effectiveDashboardDataSco
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload, type ClientMonthlyStatus } from "@/lib/monthlyStatusClient";
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
-import {useOrderTimeQuery, TimeQueryExtra, OrderRecordModal} from "./OrderTimeControls";
-import {timePlatformCountry,timePlatformName,timeVolumeData,timeSourceRows,type TimeQueryResult} from "@/lib/orderTimeVolume";
+import {useOrderTimeQuery, useOrderTimeComparison, TimeQueryExtra, OrderRecordModal} from "./OrderTimeControls";
+import {timePlatformCountry,timePlatformName,timeVolumeData,timeSourceRows,timePlatformCoverage,type TimeQueryResult} from "@/lib/orderTimeVolume";
+import {timeComparisonLabel} from "@/lib/orderTimeComparison";
 import {sourceDay,sourceShortcutDateRange} from "@/lib/orderTimeQuery";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { buildCollectionSuccessView, collectionSuccessCountry, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
@@ -66,6 +67,7 @@ type PageStatItem = [string, string | number] | {
   compareLabel?: string;
   helper?: string;
   tone?: PageStatTone;
+  onClick?: () => void;
 };
 
 type ComboSummary = {
@@ -2797,7 +2799,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
 
       {summaryQueryError&&<p className="business-query-error" role="alert">{summaryQueryError} 当前结果未被替换。</p>}
       {!summaryQueryError&&timeQuery.error&&<p className="business-query-error" role="alert">{timeQuery.error}{timeQuery.active&&" 当前结果未被替换。"}</p>}
-      {showTimeResult&&timeQuery.result&&<TimeRangeVolumeResult result={timeQuery.result} rateRows={ratePayload?.rates||[]} feeRateMap={feeRateMap}/>}
+      {showTimeResult&&timeQuery.result&&<TimeRangeVolumeResult result={timeQuery.result} paused={timeQuery.busy} rateRows={ratePayload?.rates||[]} feeRateMap={feeRateMap}/>}
 
       {!showDailyResult && !showTimeResult && mainTab === "country" && (
         <section className="dashboard-query-empty volume-query-empty" aria-live="polite">
@@ -2925,10 +2927,28 @@ function OrderSuccessCell({value,hint}:{value?:ReturnType<CollectionSuccessView[
   return <span className="order-rate-value" title={`成功 ${formatNumber(value.success)} 笔 ÷ 创建 ${formatNumber(value.submitted)} 笔；仅基于已入库订单`}>{formatPercent(value.rate)}<small>{formatNumber(value.success)} / {formatNumber(value.submitted)} 笔</small></span>;
 }
 
-function TimeRangeVolumeResult({result,rateRows,feeRateMap}:{result:TimeQueryResult;rateRows:ThirdPartyRateRow[];feeRateMap:Map<string,RateLike>}) {
+function PlatformCoverageDialog({result,onClose}:{result:TimeQueryResult;onClose:()=>void}) {
+  const dialog=useRef<HTMLDialogElement>(null),coverage=timePlatformCoverage(result);
+  useEffect(()=>{const element=dialog.current;element?.showModal();return()=>element?.close();},[]);
+  return <dialog ref={dialog} className="platform-coverage-dialog" aria-label="平台查询情况" onCancel={onClose} onClick={event=>{if(event.target===event.currentTarget)onClose();}}>
+    <div className="platform-coverage-content">
+      <div className="detail-modal-header"><div><h3>平台查询情况</h3><p>{result.selection.country} · {result.selection.start.replace("T"," ")} 至 {result.selection.end.replace("T"," ")}</p></div><button autoFocus type="button" className="modal-close-btn" onClick={onClose}>关闭</button></div>
+      {([
+        ["尚无可查明细",coverage.unavailable,"已在平台目录登记，但当前没有可查询的已上传明细；不代表已确认漏采。"],
+        ["已查询、当前条件无数据",coverage.empty,"已读取该平台，但没有匹配本次时间和筛选条件的订单。"],
+        ["本次有数据",coverage.contributing,""]
+      ] as const).map(([title,names,hint])=><section className="platform-coverage-group" key={title}><h4>{title}（{names.length}）</h4>{names.length?<ul>{names.map(name=><li key={name}>{name}</li>)}</ul>:<p>无</p>}{hint&&names.length>0&&<small>{hint}</small>}</section>)}
+    </div>
+  </dialog>;
+}
+
+function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result:TimeQueryResult;rateRows:ThirdPartyRateRow[];feeRateMap:Map<string,RateLike>;paused?:boolean}) {
   const [selected,setSelected]=useState<string|null>(null);
   const [workOrders,setWorkOrders]=useState<{result:TimeQueryResult;rows:WorkOrderDepositRow[];error?:string}|null>(null);
+  const [coverageOpen,setCoverageOpen]=useState(false);
+  const comparison=useOrderTimeComparison(result,paused);
   const data=useMemo(()=>timeVolumeData(result),[result]);
+  const previousData=useMemo(()=>comparison.status==="ready"&&comparison.previous?timeVolumeData(comparison.previous):null,[comparison]);
   const workOrderCountry=collectionSuccessCountry(result.selection.country);
   const showWorkOrders=!["香港","红膏蟹",ALL_USDT_COUNTRY_PAGE].includes(workOrderCountry);
   useEffect(()=>{
@@ -2964,25 +2984,28 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap}:{result:TimeQueryRes
     return rows;
   },[data,workOrderDeposit]);
   const feeRows=useMemo(()=>rateRows.length ? buildFeeCompareRows(aggregateCombo(data.rows,row=>[row.date,row.country,row.platform,row.channel,normalizedFeeBaseChannelType(row)]),rateRows,[],"daily",feeRateMap) : [],[data,rateRows,feeRateMap]);
+  const previousFeeRows=useMemo(()=>previousData&&rateRows.length?buildFeeCompareRows(aggregateCombo(previousData.rows,row=>[row.date,row.country,row.platform,row.channel,normalizedFeeBaseChannelType(row)]),rateRows,[],"daily",feeRateMap):[],[previousData,rateRows,feeRateMap]);
   const s=result.selection,range=`${s.start.replace("T"," ")} 至 ${s.end.replace("T"," ")}`;
   const hint=data.successRateHint||"成功笔数 ÷ 创建笔数；仅统计已入库订单，不代表采集已完整。";
-  const availableCount=new Set(s.availablePlatforms||[]).size;
-  const coverage=!s.platforms.length&&availableCount>result.payloads.length
-    ? `可查 ${result.payloads.length} / 全部 ${availableCount} 平台` : undefined;
-  useEffect(()=>setSelected(null),[result]);
+  const platforms=timePlatformCoverage(result);
+  const coverage=!s.platforms.length&&platforms.unavailable.length
+    ? `可查 ${platforms.queried.length} / 全部 ${platforms.expected.length} 平台 · 点击查看` : "点击查看平台名单";
+  useEffect(()=>{setSelected(null);setCoverageOpen(false);},[result]);
   return <>
-    <CountryVolumeSinglePage country={s.country} rows={data.rows} summary={sumRows(data.rows)} previousSummary={sumRows([])}
-      monthlyRows={monthlyRows} feeRows={feeRows} previousFeeRows={[]} canCompare={false} dateRangeLabel={range}
+    <CountryVolumeSinglePage country={s.country} rows={data.rows} previousRows={previousData?.rows} summary={sumRows(data.rows)} previousSummary={sumRows(previousData?.rows||[])}
+      monthlyRows={monthlyRows} feeRows={feeRows} previousFeeRows={previousFeeRows} canCompare={!!previousData} dateRangeLabel={range}
+      compareLabel={timeComparisonLabel(s)} comparisonHint={comparison.status==="error"?"对比暂未载入": "对比中…"}
       collectionSuccess={data.collectionSuccess} withdrawSuccess={data.withdrawSuccess} orderRateHint={hint}
-      platformCoverage={coverage}
+      platformCoverage={coverage} onPlatformCoverage={()=>setCoverageOpen(true)}
       workOrderDeposit={workOrderDeposit}
       withdrawActual={data.withdrawActual} withdrawPending={data.withdrawPending} onView={row=>setSelected(row.labelParts[1])}/>
     {workOrders?.result===result&&workOrders.error&&<p role="alert">{workOrders.error}</p>}
     {selected&&<OrderRecordModal result={result} channel={selected} onClose={()=>setSelected(null)}/>}
+    {coverageOpen&&<PlatformCoverageDialog result={result} onClose={()=>setCoverageOpen(false)}/>}
   </>;
 }
 
-function CountryVolumeSinglePage({ country, rows, summary, previousSummary, monthlyRows, feeRows, previousFeeRows, canCompare, dateRangeLabel, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual, withdrawSuccess, orderRateHint, platformCoverage, onView }: { country: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; previousSummary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; previousFeeRows: FeeCompareRow[]; canCompare: boolean; dateRangeLabel: string; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView; withdrawSuccess?: CollectionSuccessView; orderRateHint?: string; platformCoverage?: string; onView?: (row: ComboSummary) => void }) {
+function CountryVolumeSinglePage({ country, rows, previousRows, summary, previousSummary, monthlyRows, feeRows, previousFeeRows, canCompare, compareLabel, comparisonHint, dateRangeLabel, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual, withdrawSuccess, orderRateHint, platformCoverage, onPlatformCoverage, onView }: { country: string; rows: ThirdPartyVolumeRow[]; previousRows?: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; previousSummary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; previousFeeRows: FeeCompareRow[]; canCompare: boolean; compareLabel?: string; comparisonHint?: string; dateRangeLabel: string; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView; withdrawSuccess?: CollectionSuccessView; orderRateHint?: string; platformCoverage?: string; onPlatformCoverage?:()=>void; onView?: (row: ComboSummary) => void }) {
   const fees = summarizeFeeRows(feeRows);
   const previousFees = summarizeFeeRows(previousFeeRows);
   const netAmount = summary.collectAmount - summary.payoutAmount - fees.estimatedFee;
@@ -2990,25 +3013,29 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
   const collectFeeAvailable = Number.isFinite(summary.collectAmount) && Number.isFinite(fees.collectFee) && (!summary.collectAmount || fees.collectHasFee);
   const payoutFeeAvailable = Number.isFinite(summary.payoutAmount) && Number.isFinite(fees.payoutFee) && (!summary.payoutAmount || fees.payoutHasFee);
   const allFeesAvailable = collectFeeAvailable && payoutFeeAvailable && Number.isFinite(summary.amount);
+  const previousCollectFeeAvailable=Number.isFinite(previousSummary.collectAmount)&&Number.isFinite(previousFees.collectFee)&&(!previousSummary.collectAmount||previousFees.collectHasFee);
+  const previousPayoutFeeAvailable=Number.isFinite(previousSummary.payoutAmount)&&Number.isFinite(previousFees.payoutFee)&&(!previousSummary.payoutAmount||previousFees.payoutHasFee);
   const unavailableFeeStat = (label: string): PageStatItem => ({ label, value: "—", helper: "手续费费率暂未载入", tone: "fee" });
   const volumeStat = (...args:Parameters<typeof comparativeStat>):PageStatItem => {
-    const item=comparativeStat(...args);
-    return orderRateHint && !Array.isArray(item) ? {...item,helper:"所选时间段 · 已入库订单"} : item;
+    const comparable=args[3]&&Number.isFinite(args[1])&&Number.isFinite(args[2]);
+    const item=comparativeStat(args[0],args[1],args[2],comparable,args[4]);
+    return !Array.isArray(item) ? {...item,compareLabel:compareLabel||item.compareLabel,
+      helper:compareLabel?`${compareLabel} · ${canCompare?"暂无可比数据":comparisonHint||"对比中…"}`:orderRateHint?"所选时间段 · 已入库订单":item.helper} : item;
   };
   return (
     <div className="country-volume-page range-volume-page">
       <PageStatStrip items={[
-        { label: "主三方", value: uniq(rows.map((row) => row.channel)).length, helper: "当前筛选范围", tone: "default" },
-        { label: "平台", value: uniq(rows.map((row) => row.platform)).length, helper: platformCoverage || "当前有数据的平台", tone: "default" },
+        compareLabel?volumeStat("主三方",uniq(rows.map(row=>row.channel)).length,uniq((previousRows||[]).map(row=>row.channel)).length,canCompare):{ label: "主三方", value: uniq(rows.map((row) => row.channel)).length, helper: "当前筛选范围", tone: "default" },
+        { ...(compareLabel?volumeStat("平台",uniq(rows.map(row=>row.platform)).length,uniq((previousRows||[]).map(row=>row.platform)).length,canCompare):{value:uniq(rows.map(row=>row.platform)).length}) as Exclude<PageStatItem,[string,string|number]>,label:"平台",helper:platformCoverage||"当前有数据的平台",onClick:onPlatformCoverage,tone:"default" },
         volumeStat("代收金额", summary.collectAmount, previousSummary.collectAmount, canCompare, "collect"),
         volumeStat("代收笔数", summary.collectCount, previousSummary.collectCount, canCompare, "collect"),
         volumeStat("代付金额", summary.payoutAmount, previousSummary.payoutAmount, canCompare, "payout"),
         volumeStat("代付笔数", summary.payoutCount, previousSummary.payoutCount, canCompare, "payout"),
-        collectFeeAvailable ? volumeStat("代收手续费", fees.collectFee, previousFees.collectFee, canCompare, "fee") : unavailableFeeStat("代收手续费"),
-        payoutFeeAvailable ? volumeStat("代付手续费", fees.payoutFee, previousFees.payoutFee, canCompare, "fee") : unavailableFeeStat("代付手续费"),
-        allFeesAvailable ? volumeStat("合计手续费", fees.estimatedFee, previousFees.estimatedFee, canCompare, "fee") : unavailableFeeStat("合计手续费"),
+        collectFeeAvailable ? volumeStat("代收手续费", fees.collectFee, previousCollectFeeAvailable?previousFees.collectFee:NaN, canCompare, "fee") : unavailableFeeStat("代收手续费"),
+        payoutFeeAvailable ? volumeStat("代付手续费", fees.payoutFee, previousPayoutFeeAvailable?previousFees.payoutFee:NaN, canCompare, "fee") : unavailableFeeStat("代付手续费"),
+        allFeesAvailable ? volumeStat("合计手续费", fees.estimatedFee, previousCollectFeeAvailable&&previousPayoutFeeAvailable?previousFees.estimatedFee:NaN, canCompare, "fee") : unavailableFeeStat("合计手续费"),
         allFeesAvailable
-          ? { ...volumeStat("业务净额", netAmount, previousNetAmount, canCompare, "net") as Exclude<PageStatItem, [string, string | number]>, helper: orderRateHint || canCompare ? "代收－代付－手续费" : "代收－代付－手续费 · 单日可对比昨日" }
+          ? { ...volumeStat("业务净额", netAmount, previousCollectFeeAvailable&&previousPayoutFeeAvailable?previousNetAmount:NaN, canCompare, "net") as Exclude<PageStatItem, [string, string | number]>, ...(!compareLabel?{helper:orderRateHint || canCompare ? "代收－代付－手续费" : "代收－代付－手续费 · 单日可对比昨日"}:{}) }
           : { label: "业务净额", value: "—", helper: "手续费费率载入后计算", tone: "net" }
       ]} />
       <MonthlyTable
@@ -3665,8 +3692,9 @@ function PageStatStrip({ items }: { items: PageStatItem[] }) {
         const normalized = Array.isArray(item) ? { label: item[0], value: item[1], tone: "default" as PageStatTone } : item;
         const hasDelta = typeof normalized.delta === "number";
         const direction = hasDelta ? (normalized.delta! > 0 ? "up" : normalized.delta! < 0 ? "down" : "flat") : "";
+        const Tag=normalized.onClick?"button":"div";
         return (
-          <div key={normalized.label} data-label={normalized.label} data-tone={normalized.tone || "default"} className="page-stat-card">
+          <Tag key={normalized.label} type={normalized.onClick?"button":undefined} onClick={normalized.onClick} aria-haspopup={normalized.onClick?"dialog":undefined} aria-label={normalized.onClick?`${normalized.label} ${normalized.value}，点击查看平台查询情况`:undefined} title={normalized.onClick?normalized.helper:undefined} data-label={normalized.label} data-tone={normalized.tone || "default"} className={`page-stat-card${normalized.onClick?" page-stat-action":""}`}>
             <span>{normalized.label}</span>
             <strong>{normalized.value}</strong>
             {hasDelta ? (
@@ -3675,7 +3703,8 @@ function PageStatStrip({ items }: { items: PageStatItem[] }) {
                 <b>{signedNumberText(normalized.delta!)} <em>{signedPercentText(normalized.deltaPercent ?? null)}</em></b>
               </p>
             ) : normalized.helper ? <p className="page-stat-helper">{normalized.helper}</p> : null}
-          </div>
+            {hasDelta&&normalized.onClick&&normalized.helper&&<p className="page-stat-helper">{normalized.helper}</p>}
+          </Tag>
         );
       })}
     </section>

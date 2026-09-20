@@ -9,14 +9,14 @@ const text=fs.readFileSync(path.join(root,'src/components/ThirdPartyVolumeDashbo
 const source=ts.createSourceFile('ThirdPartyVolumeDashboard.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const main=source.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='ThirdPartyVolumeDashboard');
 function compile(code){return ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;}
-const libs=['format','thirdPartyNameMap','thirdPartyPlatform','platformDisplayCountry','collectionSuccess','withdrawPending','withdrawActual','workOrderDeposit','orderTimeVolume','orderTimeQuery','orderTimePlatforms'];
+const libs=['format','thirdPartyNameMap','thirdPartyPlatform','platformDisplayCountry','collectionSuccess','withdrawPending','withdrawActual','workOrderDeposit','orderTimeVolume','orderTimeQuery','orderTimePlatforms','orderTimeComparison'];
 const dependencies=Object.assign({},...libs.map(name=>loadTs(path.join(root,`src/lib/${name}.ts`))));
 const controlsText=fs.readFileSync(path.join(root,'src/components/OrderTimeControls.tsx'),'utf8');
 const controls=ts.createSourceFile('OrderTimeControls.tsx',controlsText,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const extra=controls.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='TimeQueryExtra');
 const selected=source.statements.filter(n=>ts.isVariableStatement(n)||(ts.isFunctionDeclaration(n)&&n!==main));
 function createApi(overrides={}){
-  const context={...React,...dependencies,exports:{},OrderRecordModal:()=>null,...overrides};
+  const context={...React,...dependencies,exports:{},OrderRecordModal:()=>null,useOrderTimeComparison:()=>({status:'loading'}),...overrides};
   const names=selected.filter(ts.isFunctionDeclaration).map(n=>n.name.text);
   return new Function('require',...Object.keys(context),compile(selected.map(n=>n.getText(source)).join('\n')+'\n'+extra.getText(controls))+`\nreturn {${names.join(',')},TimeQueryExtra};`)(specifier=>{
     assert.equal(specifier,'react/jsx-runtime');return require(specifier);
@@ -359,6 +359,54 @@ test('default partial-platform coverage stays visible inside the existing platfo
   assert.doesNotMatch(html,/order-result-context|order-result-tags/,'coverage must not recreate the removed explanation panel');
   assert.doesNotMatch(plain(render(fixture({platforms:['EK7'],availablePlatforms:['EK7','91CLUB']}))),/可查 .*全部/,'an explicit single-platform result does not inherit other platform warnings');
   assert.doesNotMatch(plain(render(fixture({platforms:[],availablePlatforms:['EK7']}))),/可查 .*全部/,'a fully covered catalog does not show a partial-coverage warning');
+});
+
+test('platform card is keyboard-clickable and dialog names missing, empty and contributing platforms separately',()=>{
+  const result=indiaFixture({availablePlatforms:['DhaniWin','DHANIWIN(新AR)','BIG','INDIA82','91CLUB']});
+  result.payloads.push({id:'empty',payload:{platform:'91CLUB',country:'印度',rows:[]}});
+  const html=render(result);
+  assert.match(html,/<button[^>]*aria-haspopup="dialog"[^>]*data-label="平台"/);
+  assert.match(html,/可查 2 \/ 全部 4 平台/);
+  const dialog=renderToStaticMarkup(React.createElement(api.PlatformCoverageDialog,{result,onClose(){}}));
+  assert.match(plain(dialog),/尚无可查明细（2）BIGINDIA82/);
+  assert.match(plain(dialog),/已查询、当前条件无数据（1）91CLUB/);
+  assert.match(plain(dialog),/本次有数据（1）DhaniWin/);
+  assert.match(dialog,/不代表已确认漏采/);
+  const single={...result,selection:{...result.selection,platforms:['DhaniWin']},payloads:[result.payloads[0]]};
+  assert.deepEqual(dependencies.timePlatformCoverage(single).unavailable,[]);
+});
+
+test('order-time cards restore positive, negative and zero-base comparisons without losing coverage or daily workorders',()=>{
+  const result=indiaFixture({availablePlatforms:['DhaniWin','BIG']}),previous=indiaFixture();
+  previous.payloads[0].payload.rows=[sample('PayA','charge',10,1,1000,500),sample('PayA','withdraw',8,8,800,240,'BANK')];
+  const rates=[{country:'印度',category:'UPI',thirdParty:'PayA',collectFee:'2%',payoutFee:'1%',collectSingleFee:'0',payoutSingleFee:'0'},
+    {country:'印度',category:'UPI',thirdParty:'PayB',collectFee:'2%',payoutFee:'1%',collectSingleFee:'0',payoutSingleFee:'0'}];
+  const custom=createApi({useOrderTimeComparison:()=>({status:'ready',previous})});
+  const html=renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:rates,feeRateMap:api.buildRateMap(rates)}));
+  const stat=label=>plain(html.match(new RegExp(`data-label="${label}"[\\s\\S]*?(?:<\\/div>|<\\/button>)`))[0]);
+  assert.match(stat('代收金额'),/950较昨日\+450 \+90.00%/);
+  assert.match(stat('代付金额'),/120较昨日−?\-?120 \-50.00%/);
+  assert.match(stat('平台'),/较昨日0 0.00%.*可查 1 \/ 全部 2 平台/);
+  for(const name of ['主三方','代收笔数','代付笔数','代收手续费','代付手续费','合计手续费','业务净额'])assert.match(stat(name),/较昨日/);
+  assert.match(html,/存款未到账（日）/);assert.match(html,/提款未到账（日）/);
+  const zero=createApi({useOrderTimeComparison:()=>({status:'ready',previous:{...previous,payloads:[]}})});
+  const zeroHtml=renderToStaticMarkup(React.createElement(zero.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));
+  const zeroStats=zeroHtml.slice(0,zeroHtml.indexOf('</section>'));
+  assert.match(zeroStats,/无基数/);assert.doesNotMatch(zeroStats,/Infinity|NaN|100.00%/);
+});
+
+test('comparison failure or unknown historical fees never become fake zero, percentage or block current totals',()=>{
+  const result=fixture(),previous=fixture();
+  for(const status of ['loading','error']){
+    const custom=createApi({useOrderTimeComparison:()=>({status})});
+    const html=renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));
+    assert.match(html,/<strong>950<\/strong>/);assert.doesNotMatch(html,/page-stat-compare (up|down|flat)/);
+    assert.match(html,status==='loading'?/较昨日 · 对比中…/:/较昨日 · 对比暂未载入/);
+  }
+  const multi=fixture({start:'2026-09-15T10:00:00'});
+  const custom=createApi({useOrderTimeComparison:()=>({status:'ready',previous})});
+  const html=renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result:multi,rateRows:[],feeRateMap:new Map()}));
+  assert.match(html,/较前期/);assert.doesNotMatch(html,/较昨日/);
 });
 
 test('summary hides explanatory copy but preserves progress, failures and optional success-time bounds',()=>{

@@ -26,6 +26,16 @@ export function timePlatformCountry(platform: {name:string;team:string;country?:
 export function timePlatformName(platform: {name:string;team:string;country?:string}) {
   return canonicalThirdPartyPlatform(timePlatformCountry(platform),platform.name);
 }
+/** The directory, queried sources and matching rows are three distinct scopes. */
+export function timePlatformCoverage(result:TimeQueryResult) {
+  const names=(values:string[])=>[...new Set(values.filter(Boolean))].sort((a,b)=>a.localeCompare(b,"zh-CN",{numeric:true}));
+  const s=result.selection;
+  const queried=names(result.payloads.map(({payload:p})=>timePlatformName({name:p.platform||"",team:p.team||"",country:p.country})));
+  const expected=names((s.platforms.length?s.platforms:s.availablePlatforms||queried).map(name=>canonicalThirdPartyPlatform(s.country,name)));
+  const contributing=names(timeSourceRows(result).map(row=>row.platform));
+  return {expected,queried,contributing,unavailable:expected.filter(name=>!queried.includes(name)),
+    empty:queried.filter(name=>!contributing.includes(name))};
+}
 export function timeSourceRows(result:TimeQueryResult):TimeSourceRow[] {
   const selected=result.selection;
   return result.payloads.flatMap(({id,payload})=>{
