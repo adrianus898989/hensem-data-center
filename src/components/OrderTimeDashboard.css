@@ -58,6 +58,10 @@
 .order-record-modal td small{display:block;color:#8494a9;font-size:10px}
 .order-record-modal tr:hover{background:#f8fbff}
 .cross-day-tag{color:#735da3!important}
+.comparison-coverage-notice{display:flex;justify-content:flex-end;margin:0 0 6px}
+.comparison-coverage-list{padding-left:20px;font-size:12px;line-height:1.6}
+.comparison-coverage-list li{padding:8px 0;border-bottom:1px solid #e7edf5}
+.comparison-coverage-list p{margin:3px 0;color:#65768d}
 @media(max-width:1100px){.order-search-fields{grid-template-columns:repeat(2,minmax(150px,1fr))}}
 @media(max-width:680px){.third-party-volume-module .filter-card.volume-search-card{padding:12px!important}.order-search-fields,.time-secondary-fields{grid-template-columns:1fr}.order-record-modal{width:calc(100vw - 20px)}.record-toolbar{gap:8px}.record-toolbar>span:nth-child(2){width:100%}.order-result-context>div:first-child{gap:3px}}
 

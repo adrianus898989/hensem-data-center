@@ -35,7 +35,7 @@ import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
 import {useOrderTimeQuery, useOrderTimeComparison, TimeQueryExtra, OrderRecordModal} from "./OrderTimeControls";
 import {timePlatformCountry,timePlatformName,timeVolumeData,timeSourceRows,timePlatformCoverage,type TimeQueryResult} from "@/lib/orderTimeVolume";
-import {timeComparisonLabel} from "@/lib/orderTimeComparison";
+import {timeComparisonLabel,type TimeComparisonIssue} from "@/lib/orderTimeComparison";
 import {sourceDay,sourceShortcutDateRange} from "@/lib/orderTimeQuery";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { buildCollectionSuccessView, collectionSuccessCountry, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
@@ -2942,10 +2942,25 @@ function PlatformCoverageDialog({result,onClose}:{result:TimeQueryResult;onClose
   </dialog>;
 }
 
+function ComparisonCoverageDialog({issues,onClose}:{issues:TimeComparisonIssue[];onClose:()=>void}) {
+  const dialog=useRef<HTMLDialogElement>(null);
+  useEffect(()=>{const element=dialog.current;element?.showModal();return()=>element?.close();},[]);
+  return <dialog ref={dialog} className="platform-coverage-dialog" aria-label="涨跌对比核验" onCancel={onClose} onClick={event=>{if(event.target===event.currentTarget)onClose();}}>
+    <div className="platform-coverage-content">
+      <div className="detail-modal-header"><div><h3>涨跌对比核验</h3><p>当前金额与工单保留。核验未通过时，不把缺失明细当成零，也不混用日汇总计算涨跌。</p></div><button autoFocus type="button" className="modal-close-btn" onClick={onClose}>关闭</button></div>
+      <ul className="comparison-coverage-list">{issues.map((issue,index)=><li key={index}>
+        <strong>{issue.period==="current"?"本期":"对比期"} · {issue.date} · {issue.platform} {issue.direction}</strong>
+        <p>{issue.reason}{issue.expected!==undefined&&<> 采集记录 {formatNumber(issue.expected)} 笔；已入库 {issue.stored===undefined?"未确认":formatNumber(issue.stored)} 笔。</>}</p>
+      </li>)}</ul>
+    </div>
+  </dialog>;
+}
+
 function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result:TimeQueryResult;rateRows:ThirdPartyRateRow[];feeRateMap:Map<string,RateLike>;paused?:boolean}) {
   const [selected,setSelected]=useState<string|null>(null);
   const [workOrders,setWorkOrders]=useState<{result:TimeQueryResult;rows:WorkOrderDepositRow[];error?:string}|null>(null);
   const [coverageOpen,setCoverageOpen]=useState(false);
+  const [comparisonOpen,setComparisonOpen]=useState(false);
   const comparison=useOrderTimeComparison(result,paused);
   const data=useMemo(()=>timeVolumeData(result),[result]);
   const previousData=useMemo(()=>comparison.status==="ready"&&comparison.previous?timeVolumeData(comparison.previous):null,[comparison]);
@@ -2990,11 +3005,12 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
   const platforms=timePlatformCoverage(result);
   const coverage=!s.platforms.length&&platforms.unavailable.length
     ? `可查 ${platforms.queried.length} / 全部 ${platforms.expected.length} 平台 · 点击查看` : "点击查看平台名单";
-  useEffect(()=>{setSelected(null);setCoverageOpen(false);},[result]);
+  useEffect(()=>{setSelected(null);setCoverageOpen(false);setComparisonOpen(false);},[result]);
   return <>
+    {comparison.status==="unavailable"&&<div className="comparison-coverage-notice"><button type="button" className="mini-btn" onClick={()=>setComparisonOpen(true)}>涨跌暂不可比 · 查看原因</button></div>}
     <CountryVolumeSinglePage country={s.country} rows={data.rows} previousRows={previousData?.rows} summary={sumRows(data.rows)} previousSummary={sumRows(previousData?.rows||[])}
       monthlyRows={monthlyRows} feeRows={feeRows} previousFeeRows={previousFeeRows} canCompare={!!previousData} dateRangeLabel={range}
-      compareLabel={timeComparisonLabel(s)} comparisonHint={comparison.status==="error"?"对比暂未载入": "对比中…"}
+      compareLabel={timeComparisonLabel(s)} comparisonHint={comparison.status==="error"?"核验暂未载入":comparison.status==="unavailable"?"数据待核实": "对比中…"}
       collectionSuccess={data.collectionSuccess} withdrawSuccess={data.withdrawSuccess} orderRateHint={hint}
       platformCoverage={coverage} onPlatformCoverage={()=>setCoverageOpen(true)}
       workOrderDeposit={workOrderDeposit}
@@ -3002,6 +3018,7 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
     {workOrders?.result===result&&workOrders.error&&<p role="alert">{workOrders.error}</p>}
     {selected&&<OrderRecordModal result={result} channel={selected} onClose={()=>setSelected(null)}/>}
     {coverageOpen&&<PlatformCoverageDialog result={result} onClose={()=>setCoverageOpen(false)}/>}
+    {comparisonOpen&&<ComparisonCoverageDialog issues={comparison.issues||[]} onClose={()=>setComparisonOpen(false)}/>}
   </>;
 }
 

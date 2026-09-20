@@ -7,7 +7,8 @@ import {orderTimeRequest,sourceTime,type OrderTimePayload} from "@/lib/orderTime
 import {queryOrderTimeBatches} from "@/lib/orderTimeBatch";
 import {selectOrderTimePlatforms} from "@/lib/orderTimePlatforms";
 import {timeOrderFilters,timeSourceRows,type TimeQuerySelection,type TimeQueryResult} from "@/lib/orderTimeVolume";
-import {previousTimeSelection,type TimeComparisonState} from "@/lib/orderTimeComparison";
+import {previousTimeSelection,comparisonScopeIssues,timeComparisonIssues,type TimeComparisonState} from "@/lib/orderTimeComparison";
+import type {CollectionSuccessSnapshot} from "@/lib/types";
 import {formatOrderDetailAmount,orderDetailStatusLabel} from "@/lib/orderDetailSearch";
 import "./OrderTimeDashboard.css";
 
@@ -21,28 +22,36 @@ export function useOrderTimeComparison(result:TimeQueryResult,paused=false):Time
   const {session,profile}=useDashboardAuth();
   const identity=`${session?.user.id||""}:${dashboardScopeIdentity(profile)}`;
   const [stored,setStored]=useState<{result:TimeQueryResult;identity:string;state:TimeComparisonState}|null>(null);
-  const cache=useRef(new Map<string,{at:number;previous:TimeQueryResult}>());
+  const cache=useRef(new Map<string,{at:number;previous:TimeQueryResult;snapshots:CollectionSuccessSnapshot[]}>());
   useEffect(()=>{cache.current.clear();},[identity]);
   useEffect(()=>{
     if(paused||!session)return;
+    const unsupported=comparisonScopeIssues(result);
+    if(unsupported.length){setStored({result,identity,state:{status:"unavailable",issues:unsupported}});return;}
     const controller=new AbortController();
     const timer=setTimeout(()=>controller.abort(),180000);
-    const previous:TimeQueryResult={selection:previousTimeSelection(result.selection),payloads:[]};
+    const previous:TimeQueryResult={selection:previousTimeSelection(result.selection),payloads:result.payloads.map(p=>({...p,payload:{...p.payload,rows:[]}}))};
     const filters=result.payloads.map(p=>timeOrderFilters(previous,p.id,p.payload.timezone));
     const key=JSON.stringify([identity,previous.selection,filters]);
     const hit=cache.current.get(key);
     if(hit&&Date.now()-hit.at<300000){
-      clearTimeout(timer);setStored({result,identity,state:{status:"ready",previous:hit.previous}});return;
+      const issues=[...timeComparisonIssues(result,hit.snapshots,"current"),...timeComparisonIssues(hit.previous,hit.snapshots,"previous")];
+      clearTimeout(timer);setStored({result,identity,state:issues.length?{status:"unavailable",issues}:{status:"ready",previous:hit.previous}});return;
     }
     setStored({result,identity,state:{status:"loading"}});
-    void queryOrderTimeBatches(filters,(body,signal)=>orderTimeRpc(session,"dashboard_order_time_query",body,signal),{signal:controller.signal})
-      .then(payloads=>{
+    void (async()=>{
+        const snapshots=await orderComparisonSnapshots(session,previous.selection.start.slice(0,10),result.selection.end.slice(0,10),result.selection.country,controller.signal);
+        if(controller.signal.aborted)return;
+        const preflight=[...timeComparisonIssues(result,snapshots,"current"),...timeComparisonIssues(previous,snapshots,"previous",false)];
+        if(preflight.length){setStored({result,identity,state:{status:"unavailable",issues:preflight}});return;}
+        const payloads=await queryOrderTimeBatches(filters,(body,signal)=>orderTimeRpc(session,"dashboard_order_time_query",body,signal),{signal:controller.signal});
         if(controller.signal.aborted)return;
         const value={...previous,payloads};
+        const issues=timeComparisonIssues(value,snapshots,"previous");
         if(cache.current.size>=4)cache.current.delete(cache.current.keys().next().value!);
-        cache.current.set(key,{at:Date.now(),previous:value});
-        setStored({result,identity,state:{status:"ready",previous:value}});
-      }).catch(()=>{if(!disposed)setStored({result,identity,state:{status:"error"}});})
+        cache.current.set(key,{at:Date.now(),previous:value,snapshots});
+        setStored({result,identity,state:issues.length?{status:"unavailable",issues}:{status:"ready",previous:value}});
+      })().catch(()=>{if(!disposed)setStored({result,identity,state:{status:"error"}});})
       .finally(()=>clearTimeout(timer));
     let disposed=false;
     return()=>{disposed=true;controller.abort();clearTimeout(timer);};
@@ -50,6 +59,19 @@ export function useOrderTimeComparison(result:TimeQueryResult,paused=false):Time
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[result,paused,identity]);
   return stored?.identity===identity&&stored.result===result?stored.state:{status:"loading"};
+}
+
+/** Existing authenticated/RLS read: small daily receipts, never raw orders. */
+export async function orderComparisonSnapshots(session:DashboardSession,start:string,end:string,country:string,signal:AbortSignal):Promise<CollectionSuccessSnapshot[]> {
+  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").replace(/\/$/,"");
+  const response=await dashboardAuthenticatedFetch(`${base}/rest/v1/rpc/dashboard_collection_success`,{
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({p_start:start,p_end:end,p_country:country}),
+    signal:AbortSignal.any([signal,AbortSignal.timeout(15000)]),cache:"no-store"
+  },session);
+  const payload=await response.json();
+  if(!response.ok||!Array.isArray(payload?.snapshots))throw new Error("完整性核验记录暂未载入。");
+  return payload.snapshots;
 }
 
 export async function orderTimeRpc(session:DashboardSession|null, name:string,body:unknown,signal:AbortSignal) {
