@@ -1,9 +1,83 @@
 import type { TimeQueryResult, TimeQuerySelection } from "./orderTimeVolume";
+import { timePlatformCoverage, timePlatformCountry, timePlatformName } from "./orderTimeVolume";
+import { collectionSuccessCountry, validCollectionSuccessSnapshot } from "./collectionSuccess";
+import { canonicalThirdPartyPlatform } from "./thirdPartyPlatform";
+import type { CollectionSuccessSnapshot } from "./types";
+
+export type TimeComparisonIssue = {
+  period: "current" | "previous";
+  platform: string;
+  date: string;
+  direction: string;
+  reason: string;
+  expected?: number;
+  stored?: number;
+};
 
 export type TimeComparisonState = {
-  status: "loading" | "ready" | "error";
+  status: "loading" | "ready" | "error" | "unavailable";
   previous?: TimeQueryResult;
+  issues?: TimeComparisonIssue[];
 };
+
+/** A daily creation snapshot cannot certify an hourly or success-time slice. */
+export function comparisonScopeIssues(result: TimeQueryResult): TimeComparisonIssue[] {
+  const s = result.selection;
+  const unsupported = s.basis !== "created" || s.createdStart || s.createdEnd
+    || s.memberId || s.orderNumber || s.crossDayOnly || (s.status && s.status !== "all")
+    || !/^00:00(?::00)?$/.test(s.start.slice(11)) || s.end.slice(11) !== "23:59:59";
+  return unsupported ? [{period: "current", platform: "当前筛选范围", date: `${s.start.slice(0,10)} 至 ${s.end.slice(0,10)}`,
+    direction: "", reason: "尚无此时间／筛选口径的完整性凭据，不能用整日采集记录证明时段明细齐全。"}] : [];
+}
+
+/** Fail closed for every platform × date × direction, including zero-order days.
+ * Matching counts are a consistency check, not a new source for money. We never
+ * substitute a daily summary/snapshot into either period's detail totals.
+ */
+export function timeComparisonIssues(result: TimeQueryResult, snapshots: CollectionSuccessSnapshot[],
+  period: TimeComparisonIssue["period"], checkRows = true): TimeComparisonIssue[] {
+  const issues: TimeComparisonIssue[] = [], s = result.selection;
+  const first = Date.parse(`${s.start.slice(0,10)}T00:00:00Z`), last = Date.parse(`${s.end.slice(0,10)}T00:00:00Z`);
+  if (!Number.isFinite(first) || !Number.isFinite(last) || last < first || last-first >= 31*86400000)
+    return [{period,platform:"当前筛选范围",date:"",direction:"",reason:"对比日期范围无效。"}];
+  for (const platform of timePlatformCoverage(result).unavailable)
+    issues.push({period,platform,date:`${s.start.slice(0,10)} 至 ${s.end.slice(0,10)}`,direction:"",reason:"所选平台没有可核验的订单来源。"});
+  if (!result.payloads.length) return [...issues,{period,platform:"当前筛选范围",date:"",direction:"",reason:"没有可核验的订单来源。"}];
+  const directions = s.direction === "代收" ? ["charge"] : s.direction === "代付" ? ["withdraw"] : ["charge","withdraw"];
+  const seen = new Set<string>();
+  for (const {payload} of result.payloads) {
+    const identity = {name:payload.platform||"",team:payload.team||"",country:payload.country};
+    const country = timePlatformCountry(identity), platform = timePlatformName(identity);
+    if (seen.has(`${country}:${platform}`)) {
+      issues.push({period,platform,date:"",direction:"",reason:"同一平台存在多个订单来源，尚不能确认无重复。"}); continue;
+    }
+    seen.add(`${country}:${platform}`);
+    for (let day=first;day<=last;day+=86400000) for (const direction of directions) {
+      const date = new Date(day).toISOString().slice(0,10), label = direction === "charge" ? "代收" : "代付";
+      const source = direction === "charge" ? "RECHARGE_REVIEW" : "WITHDRAW_REVIEW";
+      const matches = snapshots.filter(snapshot => snapshot && snapshot.source_system === source && snapshot.stat_date === date
+        && collectionSuccessCountry(snapshot.country_code,snapshot.platform) === country
+        && canonicalThirdPartyPlatform(country,snapshot.platform) === platform);
+      const item = {period,platform,date,direction:label};
+      if (matches.length !== 1 || !validCollectionSuccessSnapshot(matches[0],[source])
+        || matches[0].timezone !== payload.timezone) {
+        issues.push({...item,reason:matches.length>1?"采集记录来源重复，待核实。":"缺少同口径的完整采集记录；不代表确认漏采。"}); continue;
+      }
+      if (!checkRows) continue;
+      const snapshot = matches[0], rows = payload.rows.filter(row=>row.direction===direction && row.created_date===date);
+      const counts = rows.map(row=>Number(row.submitted_count)), successes = rows.map(row=>Number(row.success_count));
+      const stored = counts.reduce((a,b)=>a+b,0), expected = snapshot.totals.submitted_count;
+      if (counts.some(n=>!Number.isSafeInteger(n)||n<0) || successes.some(n=>!Number.isSafeInteger(n)||n<0)
+        || stored!==expected || successes.reduce((a,b)=>a+b,0)!==snapshot.totals.success_count) {
+        issues.push({...item,expected,stored:Number.isSafeInteger(stored)?stored:undefined,
+          reason:stored<expected?"已入库明细少于完整采集记录。":"明细笔数或成功状态与采集记录不一致，待核实。"});
+      } else if (rows.some(row=>row.success_amount==null || !Number.isFinite(Number(row.success_amount)))) {
+        issues.push({...item,expected,stored,reason:"成功订单金额存在未确认值，暂不比较。"});
+      }
+    }
+  }
+  return issues;
+}
 
 /** Shift calendar dates, not the browser timezone or the selected clock hours. */
 export function previousTimeSelection(selection: TimeQuerySelection): TimeQuerySelection {

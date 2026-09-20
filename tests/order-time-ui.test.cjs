@@ -395,13 +395,27 @@ test('order-time cards restore positive, negative and zero-base comparisons with
   assert.match(zeroStats,/无基数/);assert.doesNotMatch(zeroStats,/Infinity|NaN|100.00%/);
 });
 
+test('incomplete comparison retains amounts and both workorders, hides false deltas and offers exact gap explanation',()=>{
+  const result=indiaFixture(),issues=[{period:'previous',date:'2026-09-18',platform:'91CLUB',direction:'代收',expected:199537,stored:100000,reason:'已入库明细少于完整采集记录。'}];
+  let index=0;
+  const custom=createApi({useState:initial=>React.useState(index++===1?{result,rows:[issue()]}:initial),useOrderTimeComparison:()=>({status:'unavailable',issues})});
+  const html=renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));
+  assert.match(html,/涨跌暂不可比 · 查看原因/);assert.match(html,/较昨日 · 数据待核实/);
+  assert.doesNotMatch(html,/468\.86|page-stat-delta/);
+  assert.match(html,/data-label="代收金额"[\s\S]*?<strong>950<\/strong>/);
+  assert.ok(headings(html).includes('存款未到账（日）提交金额'));assert.ok(headings(html).includes('提款未到账（日）提交金额'));
+  const dialog=renderToStaticMarkup(React.createElement(custom.ComparisonCoverageDialog,{issues,onClose(){}}));
+  assert.match(plain(dialog),/对比期 · 2026-09-18 · 91CLUB 代收/);assert.match(plain(dialog),/199,537 笔；已入库 100,000 笔/);
+  assert.match(dialog,/aria-label="涨跌对比核验"/);
+});
+
 test('comparison failure or unknown historical fees never become fake zero, percentage or block current totals',()=>{
   const result=fixture(),previous=fixture();
   for(const status of ['loading','error']){
     const custom=createApi({useOrderTimeComparison:()=>({status})});
     const html=renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));
     assert.match(html,/<strong>950<\/strong>/);assert.doesNotMatch(html,/page-stat-compare (up|down|flat)/);
-    assert.match(html,status==='loading'?/较昨日 · 对比中…/:/较昨日 · 对比暂未载入/);
+    assert.match(html,status==='loading'?/较昨日 · 对比中…/:/较昨日 · 核验暂未载入/);
   }
   const multi=fixture({start:'2026-09-15T10:00:00'});
   const custom=createApi({useOrderTimeComparison:()=>({status:'ready',previous})});
