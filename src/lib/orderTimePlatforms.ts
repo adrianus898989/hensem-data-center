@@ -8,14 +8,15 @@ type TimePlatform=OrderTimePayload["platforms"][number];
  * selection means all catalog platforms in this display group, never every
  * platform in the database. RPC authorization still applies to each stable ID.
  */
-export function selectOrderTimePlatforms(catalog:TimePlatform[],country:string,names:string[]):TimePlatform[] {
+export function selectOrderTimePlatforms(catalog:TimePlatform[],country:string,names:string[],availableNames?:string[]):TimePlatform[] {
   const byId=new Map<string,TimePlatform>(),conflictingIds=new Set<string>();
   for(const platform of catalog){
     const id=platform.id.trim().toLowerCase(),previous=byId.get(id);
     if(previous&&(previous.name!==platform.name||timePlatformCountry(previous)!==timePlatformCountry(platform)))conflictingIds.add(id);
     if(!previous)byId.set(id,{...platform,id});
   }
-  const inGroup=[...byId.values()].filter(platform=>timePlatformCountry(platform)===country);
+  const available=availableNames?new Set(availableNames):null;
+  const inGroup=[...byId.values()].filter(platform=>timePlatformCountry(platform)===country&&(!available||available.has(platform.name)));
   const requested=new Set(names);
   const selected=inGroup.filter(platform=>!requested.size||requested.has(platform.name));
   if([...requested].some(name=>!selected.some(platform=>platform.name===name)))

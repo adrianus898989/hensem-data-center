@@ -35,7 +35,7 @@ import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
 import {useOrderTimeQuery, TimeQueryExtra, OrderRecordModal} from "./OrderTimeControls";
 import {timePlatformCountry,timeVolumeData,timeSourceRows,type TimeQueryResult} from "@/lib/orderTimeVolume";
-import {sourceTime,indiaDay,indiaShortcutDateRange} from "@/lib/orderTimeQuery";
+import {indiaDay,indiaShortcutDateRange} from "@/lib/orderTimeQuery";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { buildCollectionSuccessView, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
 import { CollectionSuccessCell, CollectionSuccessBreakdown } from "./CollectionSuccessCell";
@@ -169,12 +169,19 @@ function summaryQuerySource(input: {
   if (!validTime(start) || !validTime(end) || end < start) throw new Error("请选择有效的开始和结束时间，结束时间不能早于开始时间。");
   if (Date.parse(`${end}Z`) - Date.parse(`${start}Z`) >= 31 * 86400000) throw new Error("单次最多查询 31 天，请缩短时间范围。");
   const selected = input.platforms.length ? input.platforms : input.availablePlatforms;
+  if (!selected.length) throw new Error("当前范围暂无可查询平台。");
   const details = new Set(input.detailPlatforms);
   const legacy = selected.filter(name => !details.has(name));
   if (input.detailPlatforms.length && !legacy.length) return "orders";
   const fullDays = start.endsWith("T00:00:00") && end.endsWith("T23:59:59");
   if (input.basis !== "created" || !fullDays) {
-    const names = legacy.length ? legacy.join("、") : "当前范围的平台";
+    // An automatic selection queries the supported intersection. A user's
+    // explicit selection must never silently drop a requested platform.
+    if (!input.platforms.length) {
+      if (selected.some(name => details.has(name))) return "orders";
+      throw new Error("当前国家暂无可按此时段查询的订单明细；已有日汇总请按创建时间的完整日期查询。");
+    }
+    const names = legacy.length ? legacy.join("、") : "所选平台";
     throw new Error(`${names} 尚未接入订单时间明细，仅能查询创建时间的完整日期（00:00:00—23:59:59）；不能按部分时段或成功时间查询。请选择已接入的平台，或查询完整日期。`);
   }
   return "daily";
@@ -2584,7 +2591,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
         start:`${queryStart}T${timeQuery.startClock}`,end:`${queryEnd}T${timeQuery.endClock}`,
         platforms:platformSelections,availablePlatforms:platforms,detailPlatforms:timePlatformOptions});
       if (querySource === "orders") {
-        const loaded = await timeQuery.run({country:queryCountry,platforms:[...platformSelections],channel,types:[...channelTypeSelections],direction,
+        const loaded = await timeQuery.run({country:queryCountry,platforms:[...platformSelections],availablePlatforms:[...platforms],channel,types:[...channelTypeSelections],direction,
           start:`${queryStart}T${timeQuery.startClock}`,end:`${queryEnd}T${timeQuery.endClock}`});
         if (loaded && isCurrent()) {setLegacySummaryNotice("");void loadTimeRates(intent,context);}
         return;
@@ -2741,7 +2748,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
           {filterOptions.error && <p className="business-query-error" role="alert">{filterOptions.error} <button className="mini-btn" type="button" onClick={filterOptions.reload}>重新读取平台目录</button></p>}
           {filterOptions.ready && !platforms.length && <p role="status">当前国家暂无可查询平台。</p>}
         </div>
-        {(timePlatformOptions.length>0||timeQuery.optionsLoading||timeQuery.optionsError)&&<TimeQueryExtra query={timeQuery} showTimeHelp={timePlatformOptions.length>0}/>}
+        {(timePlatformOptions.length>0||timeQuery.optionsLoading||timeQuery.optionsError)&&<TimeQueryExtra query={timeQuery} showTimeHelp={timePlatformOptions.length>0} hideExplanation/>}
         {hasPendingQuery && <p className="time-pending-note">筛选已修改，点击查询后生效。</p>}
       </form>
 
@@ -2882,25 +2889,22 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap}:{result:TimeQueryRes
   const monthlyRows=useMemo(()=>aggregateCombo(data.rows,row=>[row.country,row.channel]),[data]);
   const feeRows=useMemo(()=>rateRows.length ? buildFeeCompareRows(aggregateCombo(data.rows,row=>[row.date,row.country,row.platform,row.channel,normalizedFeeBaseChannelType(row)]),rateRows,[],"daily",feeRateMap) : [],[data,rateRows,feeRateMap]);
   const s=result.selection,range=`${s.start.replace("T"," ")} 至 ${s.end.replace("T"," ")}`;
-  const lastSync=data.source.map(row=>row.last_synced_at).filter(Boolean).sort().at(-1);
   const hint=data.successRateHint||"成功笔数 ÷ 创建笔数；仅统计已入库订单，不代表采集已完整。";
+  const availableCount=new Set(s.availablePlatforms||[]).size;
+  const coverage=!s.platforms.length&&availableCount>result.payloads.length
+    ? `可查 ${result.payloads.length} / 全部 ${availableCount} 平台` : undefined;
   useEffect(()=>setSelected(null),[result]);
   return <>
-    <div className="order-result-context" aria-live="polite">
-      <div><strong>{s.basis==="created"?"按创建时间":"按成功时间"} · {countryPaneLabel(s.country)}</strong><span>{range} · 印度时间</span></div>
-      <div className="order-result-tags"><span>{s.platforms.length?s.platforms.join(" / "):"全部已接入平台"}</span>{s.memberId&&<span>会员 {s.memberId}</span>}{s.orderNumber&&<span>订单 {s.orderNumber}</span>}{s.status&&s.status!=="all"&&<span>状态已筛选</span>}{s.crossDayOnly&&<span>仅跨日成功</span>}<span>跨日成功 {formatNumber(data.totals.cross_day_count)} 笔</span></div>
-      {(s.createdStart||s.createdEnd)&&<small>创建时间限制：{s.createdStart.replace("T"," ")||"不限"} 至 {s.createdEnd.replace("T"," ")||"不限"}</small>}
-      <small>仅显示已同步到 Supabase 的明细；最近同步：{lastSync?sourceTime(lastSync):"暂无记录"}。补采完成前，结果可能不完整。{data.successRateHint}</small>
-    </div>
     <CountryVolumeSinglePage country={s.country} rows={data.rows} summary={sumRows(data.rows)} previousSummary={sumRows([])}
       monthlyRows={monthlyRows} feeRows={feeRows} previousFeeRows={[]} canCompare={false} dateRangeLabel={range}
       collectionSuccess={data.collectionSuccess} withdrawSuccess={data.withdrawSuccess} orderRateHint={hint}
+      platformCoverage={coverage}
       withdrawActual={data.withdrawActual} withdrawPending={data.withdrawPending} onView={row=>setSelected(row.labelParts[1])}/>
     {selected&&<OrderRecordModal result={result} channel={selected} onClose={()=>setSelected(null)}/>}
   </>;
 }
 
-function CountryVolumeSinglePage({ country, rows, summary, previousSummary, monthlyRows, feeRows, previousFeeRows, canCompare, dateRangeLabel, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual, withdrawSuccess, orderRateHint, onView }: { country: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; previousSummary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; previousFeeRows: FeeCompareRow[]; canCompare: boolean; dateRangeLabel: string; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView; withdrawSuccess?: CollectionSuccessView; orderRateHint?: string; onView?: (row: ComboSummary) => void }) {
+function CountryVolumeSinglePage({ country, rows, summary, previousSummary, monthlyRows, feeRows, previousFeeRows, canCompare, dateRangeLabel, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual, withdrawSuccess, orderRateHint, platformCoverage, onView }: { country: string; rows: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; previousSummary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; previousFeeRows: FeeCompareRow[]; canCompare: boolean; dateRangeLabel: string; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView; withdrawSuccess?: CollectionSuccessView; orderRateHint?: string; platformCoverage?: string; onView?: (row: ComboSummary) => void }) {
   const fees = summarizeFeeRows(feeRows);
   const previousFees = summarizeFeeRows(previousFeeRows);
   const netAmount = summary.collectAmount - summary.payoutAmount - fees.estimatedFee;
@@ -2918,7 +2922,7 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
       {!orderRateHint&&<div className="volume-applied-range" role="status">{countryPaneLabel(country)} · {dateRangeLabel}</div>}
       <PageStatStrip items={[
         { label: "主三方", value: uniq(rows.map((row) => row.channel)).length, helper: "当前筛选范围", tone: "default" },
-        { label: "平台", value: uniq(rows.map((row) => row.platform)).length, helper: "当前有数据的平台", tone: "default" },
+        { label: "平台", value: uniq(rows.map((row) => row.platform)).length, helper: platformCoverage || "当前有数据的平台", tone: "default" },
         volumeStat("代收金额", summary.collectAmount, previousSummary.collectAmount, canCompare, "collect"),
         volumeStat("代收笔数", summary.collectCount, previousSummary.collectCount, canCompare, "collect"),
         volumeStat("代付金额", summary.payoutAmount, previousSummary.payoutAmount, canCompare, "payout"),
