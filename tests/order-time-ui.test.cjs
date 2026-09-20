@@ -362,13 +362,13 @@ test('default partial-platform coverage stays visible inside the existing platfo
 });
 
 test('platform card is keyboard-clickable and dialog names missing, empty and contributing platforms separately',()=>{
-  const result=indiaFixture({availablePlatforms:['DhaniWin','DHANIWIN(新AR)','BIG','INDIA82','91CLUB']});
+  const result=indiaFixture({availablePlatforms:['DhaniWin','DHANIWIN(新AR)','UNCONNECTED_A','UNCONNECTED_B','91CLUB']});
   result.payloads.push({id:'empty',payload:{platform:'91CLUB',country:'印度',rows:[]}});
   const html=render(result);
   assert.match(html,/<button[^>]*aria-haspopup="dialog"[^>]*data-label="平台"/);
   assert.match(html,/可查 2 \/ 全部 4 平台/);
   const dialog=renderToStaticMarkup(React.createElement(api.PlatformCoverageDialog,{result,onClose(){}}));
-  assert.match(plain(dialog),/尚无可查明细（2）BIGINDIA82/);
+  assert.match(plain(dialog),/尚无可查明细（2）UNCONNECTED_AUNCONNECTED_B/);
   assert.match(plain(dialog),/已查询、当前条件无数据（1）91CLUB/);
   assert.match(plain(dialog),/本次有数据（1）DhaniWin/);
   assert.match(dialog,/不代表已确认漏采/);

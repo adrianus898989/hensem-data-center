@@ -4,7 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),ts=require('typescript');
 const {loadTs,root}=require('./load-typescript.cjs');
 const {selectOrderTimePlatforms}=loadTs(path.join(root,'src/lib/orderTimePlatforms.ts'));
 const {queryOrderTimeBatches}=loadTs(path.join(root,'src/lib/orderTimeBatch.ts'));
-const {timeOrderFilters}=loadTs(path.join(root,'src/lib/orderTimeVolume.ts'));
+const {timeOrderFilters,timePlatformCoverage}=loadTs(path.join(root,'src/lib/orderTimeVolume.ts'));
 const {timeMetricKeys,timeTotals}=loadTs(path.join(root,'src/lib/orderTimeQuery.ts'));
 const platform=(n,name,team='香港')=>({id:`00000000-0000-0000-0000-${String(n).padStart(12,'0')}`,name,team});
 const catalog=[platform(1,'EK7'),platform(2,'GEM7','香港团队'),platform(3,'MAX7'),platform(4,'66GAME','红膏蟹'),platform(5,'GEM7','印度')];
@@ -23,6 +23,23 @@ test('all, multiple and single selections stay in the active group of the author
   assert.deepEqual(selectOrderTimePlatforms(catalog,'香港',['GEM7']),[catalog[1]]);
   assert.deepEqual(selectOrderTimePlatforms(catalog.filter(p=>p.name==='EK7'),'香港',[]),[catalog[0]],'all never expands beyond the supplied permission catalog');
   assert.deepEqual(selectOrderTimePlatforms(catalog,'红膏蟹',[]),[catalog[3]]);
+});
+
+test('India fee aliases yield 16 real platforms, no false gaps, and the same two uploaded IDs',()=>{
+  const names=['6CLUB','51GAME','55CLUB','82LOTTERY','91CLUB','BIGMUMBAI','DhaniWin','IN999','JAICLUB','JALWA','LOTTERY7','OKWIN','RAJA','ShreeWin','TPPLAY','VEER.GAME'];
+  const uploaded=names.map((name,i)=>({...platform(i+100,name,'AR'),country:'印度',source:'ar'}));
+  const available=[...names,'BIG(AR)','INDIA82(AR)'];
+  assert.equal(selectOrderTimePlatforms(uploaded,'印度',[],available).length,16);
+  for(const [oldName,name] of [['BIG','BIGMUMBAI'],['BIG(AR)','BIGMUMBAI'],['INDIA82','82LOTTERY'],['INDIA82(AR)','82LOTTERY']]){
+    assert.deepEqual(selectOrderTimePlatforms(uploaded,'印度',[oldName,name],available).map(p=>p.id),[uploaded.find(p=>p.name===name).id]);
+  }
+  const result={selection:{...input,country:'印度',availablePlatforms:available},payloads:uploaded.map(p=>({id:p.id,payload:{platform:p.name,country:'印度',rows:[{direction:'charge',provider:'PayA',channel_type:'UPI'}]}}))};
+  const coverage=timePlatformCoverage(result);
+  assert.equal(coverage.expected.length,16);assert.equal(coverage.queried.length,16);assert.equal(coverage.contributing.length,16);
+  assert.deepEqual(coverage.unavailable,[]);assert.deepEqual(coverage.empty,[]);
+  result.payloads=result.payloads.filter(p=>p.payload.platform!=='BIGMUMBAI');
+  assert.deepEqual(timePlatformCoverage(result).unavailable,['BIGMUMBAI'],'a real missing source must still be reported');
+  assert.throws(()=>selectOrderTimePlatforms(uploaded.filter(p=>p.name!=='BIGMUMBAI'),'印度',['BIG'],available),/未接入订单明细或当前无权限/,'aliases never grant access to an absent source');
 });
 
 test('default all is the intersection of current country, permitted details and the independent directory',()=>{

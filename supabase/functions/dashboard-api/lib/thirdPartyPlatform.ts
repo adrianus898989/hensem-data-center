@@ -18,6 +18,10 @@ export function canonicalThirdPartyPlatform(country: string, value: string): str
     // Owner-confirmed names for the same platform, across legacy/AR/NEWAR.
     // Keep this allowlist scoped to India; never strip arbitrary suffixes.
     const known = displayPlatform.toUpperCase();
+    // Fee-matrix headings use BIG(AR) / INDIA82(AR); uploaded AR orders
+    // use BIGMUMBAI / 82LOTTERY. Owner confirmed both identities.
+    if (["BIG", "BIGMUMBAI"].includes(known)) return "BIGMUMBAI";
+    if (["INDIA82", "82LOTTERY"].includes(known)) return "82LOTTERY";
     if (["VEER.GAME", "VEERGAME"].includes(known)) return "VEER.GAME";
     if (["DHANIWIN", "DHANI.WIN", "DHANIWIN(新AR)"].includes(known)) return "DhaniWin";
   }

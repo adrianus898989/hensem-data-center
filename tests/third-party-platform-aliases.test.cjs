@@ -75,6 +75,27 @@ test('confirmed India DhaniWin and Veer aliases canonicalize once, without mergi
   assert.deepEqual(output.platforms.sort(),['DhaniWin','VEER.GAME'].sort());
   assert.equal(output.rows.length,6);assert.equal(output.rows.reduce((n,r)=>n+r.amount,0),600,'display aliases must not duplicate original source rows');
 });
+test('confirmed India fee headings match uploaded identities without mutating records or foreign names',()=>{
+  const groups=[['BIGMUMBAI',['BIG','BIG(AR)','big（AR）','BIGMUMBAI','bigmumbai']],['82LOTTERY',['INDIA82','INDIA82(AR)','india82（AR）','82LOTTERY','82lottery']]];
+  for(const [canonical,aliases] of groups)for(const country of ['印度','IN','INDIA','印度线下','印度盘口','印度线下盘口']){
+    assert.deepEqual(helper.canonicalThirdPartyPlatformSelections(country,aliases),[canonical]);
+    for(const alias of aliases){
+      assert.ok(helper.matchesThirdPartyPlatformSelection(country,alias,[canonical]));
+      assert.ok(helper.matchesThirdPartyPlatformSelection(country,canonical,[alias]));
+    }
+  }
+  for(const country of ['巴西','越南','香港',''])for(const name of ['BIG','INDIA82'])assert.equal(helper.canonicalThirdPartyPlatform(country,name),name);
+  for(const name of ['BIG2','BIGWIN','BIGMUMBAI2','INDIA82NEW','INDIA820','82LOTTERY2'])assert.equal(helper.canonicalThirdPartyPlatform('印度',name),name);
+  const input=[row('b1','BIGMUMBAI',100,10,{country:'印度'}),row('b2','82LOTTERY',200,20,{country:'印度'})];
+  const before=structuredClone(input);
+  const statusRows=groups.flatMap(([,aliases])=>aliases.map(platform=>({country:'印度',platform})));
+  const view=pipeline({input,country:'印度',statusRows,platforms:['BIG(AR)','BIGMUMBAI','INDIA82','82LOTTERY']});
+  assert.deepEqual(view.platforms,['82LOTTERY','BIGMUMBAI']);
+  assert.equal(view.filteredBaseNoDate.length,2);
+  assert.equal(view.sumRows(view.filteredBaseNoDate).amount,300);
+  assert.equal(view.sumRows(view.filteredBaseNoDate).count,30);
+  assert.deepEqual(input,before);
+});
 function pipeline({ input = data(), platforms = [], country = '巴西', statusRows = rates,
   catalog = [...input.map(({ country, platform }) => ({ country, platform })), ...statusRows] } = {}) {
   const api = functions();

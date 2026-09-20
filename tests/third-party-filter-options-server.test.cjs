@@ -133,6 +133,15 @@ async function httpFixture(options,run){
 }
 const request=()=>new Request('https://dashboard.invalid/api/third-party-filter-options?start=1999-01-01',{headers:{Authorization:'Bearer session-only'}});
 for(const [name,reader] of readers){
+  test(name+': India fee headings and uploaded platforms share one directory identity',async()=>{
+    const payload={platforms:['BIG(AR)','BIGMUMBAI','INDIA82(AR)','82LOTTERY'].map(platform=>({country:'印度',platform}))};
+    payload.platforms.push({country:'越南',platform:'BIG'});
+    await httpFixture({payload},async()=>{
+      const result=await reader(request());
+      assert.deepEqual(result.platforms.filter(p=>p.country==='印度').map(p=>p.platform),['82LOTTERY','BIGMUMBAI']);
+      assert.ok(result.platforms.some(p=>p.country==='越南'&&p.platform==='BIG'));
+    });
+  });
   test(name+': one independent RPC, canonical aliases, minimal projection and correct display groups',async()=>{
     await httpFixture({},async calls=>{
       const result=await reader(request());assert.equal(calls.length,3);assert.ok(result.platforms.some(r=>r.country==='香港'&&r.platform==='EK7'));
