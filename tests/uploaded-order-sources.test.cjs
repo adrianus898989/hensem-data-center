@@ -75,6 +75,7 @@ before(async()=>{
  await db.exec('alter table game66_charge_orders add column status_group text');
  await db.exec(fs.readFileSync(path.join(root,'supabase/migrations/20260920102953_g66_charge_status_group.sql'),'utf8'));
  await db.exec(fs.readFileSync(path.join(root,'supabase/migrations/20260920130729_india_order_amount_read_contract.sql'),'utf8'));
+ await db.exec(fs.readFileSync(path.join(root,'supabase/migrations/20260920134354_india_legacy_labelled_amount_read.sql'),'utf8'));
  await identity();
  ar=(await db.query("select md5('ar:VN:VNTEST')::uuid as id")).rows[0].id;
  newar=(await db.query("select md5('newar:PK:POPZAR')::uuid as id")).rows[0].id;
@@ -119,6 +120,43 @@ test('India legacy null currency and signed manual adjustments retain full amoun
   assert.equal(total.success_amount,-8085);assert.equal(total.success_count,1);assert.equal(total.missing_amount_count,0);assert.equal(total.currency,'INR');
   assert.equal((await db.query("select amount from ar_collected_orders where platform='INTEST' and order_no='adjustment'")).rows[0].amount,null,'source remains untouched');
  }finally{await db.exec('rollback');}
+});
+
+test('legacy INR labelled amount reads exact account money, never the exchange rate or USDT quantity',async()=>{
+ await db.exec('begin');
+ try{
+  await db.exec("insert into ar_config_targets values('IN','LABELLED','印度','Asia/Kolkata',null,'AR')");
+  const encoded='金额：1030\\n \\n 兑换比例：103\\n \\n USDT：8.5';
+  const actual='金额：5150\n \n 兑换比例：103\n \n USDT：22';
+  const records=[['encoded',null,encoded,'USDT(TRC20)-3','recharge','已支付','IN'],
+    ['real-newline',null,actual,'USDT(TRC20)-4','recharge','已支付','IN'],
+    ['known',999,actual,'USDT(TRC20)-4','recharge','已支付','IN'],
+    ['zero',null,'金额：0\n兑换比例：103\nUSDT：0','USDT(TRC20)-3','recharge','已支付','IN'],
+    ['missing-label',null,'USDT：22','USDT(TRC20)-3','recharge','已支付','IN'],
+    ['malformed',null,actual+' extra','USDT(TRC20)-3','recharge','已支付','IN'],
+    ['negative',null,actual.replace('5150','-5150'),'USDT(TRC20)-3','recharge','已支付','IN'],
+    ['different-rail',null,actual,'PayA','recharge','已支付','IN'],
+    ['different-direction',null,actual,'USDT(TRC20)-3','withdraw','已通过','IN']];
+  for(const [order,amount,raw,channel,kind,status,country] of records)await db.query(`insert into ar_collected_orders
+   (source_system,country_code,platform,order_kind,order_no,member_id,amount,amount_text,status,applied_at,raw_channel)
+   values('AR',$1,'LABELLED',$2,$3,'LABELLED',$4,$5,$6,'2026-09-19 10:00',$7)`,[country,kind,order,amount,raw,status,channel]);
+  const platform=(await aggregate({platform:null})).platforms.find(p=>p.name==='LABELLED').id;
+  const options={platform,start:'2026-09-19T00:00+05:30',end:'2026-09-20T00:00+05:30'};
+  const details=(await search(options)).rows,amounts=Object.fromEntries(details.map(r=>[r.order_number,r.amount]));
+  assert.deepEqual(amounts,{encoded:'1030','real-newline':'5150',known:'999',zero:'0','missing-label':null,malformed:null,negative:null,'different-rail':null,'different-direction':null});
+  assert.equal((await aggregate({...options,order:'encoded'})).rows[0].success_amount,1030);
+  assert.equal((await db.query("select amount from ar_collected_orders where platform='LABELLED' and order_no='encoded'")).rows[0].amount,null);
+  await db.exec("update ar_config_targets set country_code='VN',country_name='越南',currency='VND' where platform='LABELLED';update ar_collected_orders set country_code='VN' where platform='LABELLED'");
+  const vietnam=(await aggregate({platform:null})).platforms.find(p=>p.name==='LABELLED').id;
+  assert.equal((await search({...options,platform:vietnam,order:'encoded'})).rows[0].amount,null);
+ }finally{await db.exec('rollback');}
+});
+
+test('labelled amount read leaves the authenticated query body, ACL and filters otherwise unchanged',()=>{
+ const old=fs.readFileSync(path.join(root,'supabase/migrations/20260920130729_india_order_amount_read_contract.sql'),'utf8').split('create or replace function private.dashboard_uploaded_order_query(')[1];
+ const current=fs.readFileSync(path.join(root,'supabase/migrations/20260920134354_india_legacy_labelled_amount_read.sql'),'utf8').split('create or replace function private.dashboard_uploaded_order_query(')[1];
+ const restored=current.replace(/\n          when a\.country_code='IN' and a\.order_kind='recharge' and btrim\(a\.raw_channel\) ~ '\^USDT[\s\S]*?\)::numeric end\) as amount/,' end) as amount');
+ assert.equal(restored,old);
 });
 
 test('G66 failed and EK pending charge code 0 retain distinct collector semantics without changing totals',async()=>{
