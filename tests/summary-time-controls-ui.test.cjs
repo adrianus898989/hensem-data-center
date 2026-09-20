@@ -58,6 +58,14 @@ test('all/single/multiple summary selections use one multiselect and basis chang
   }
 });
 
+test('summary hides redundant captions without removing query errors or controls',()=>{
+  const element=summaryForm('created',[],{hasPendingQuery:true});
+  assert.doesNotMatch(renderToStaticMarkup(element),/筛选已修改|time-pending-note/);
+  assert.doesNotMatch(main.getText(source),/className="volume-legacy-note"/);
+  assert.match(main.getText(source),/summaryQueryError&&<p className="business-query-error" role="alert"/);
+  assert.equal(elements(element,'button').filter(button=>button.props.type==='submit').length,1);
+});
+
 test('all detailed platforms route to real order aggregation for full days, partial hours and success time',()=>{
   for(const platforms of [[],['EK7'],['EK7','MAX7']])for(const selection of [{},{start:'2026-09-17T18:00:00'},{basis:'success'}]){
     assert.equal(summaryQuerySource({...fixture,...selection,platforms}),'orders');

@@ -125,13 +125,13 @@ test('summary search keeps time precision and all/multiple platform selection wi
   assert.equal((daily.match(/type="datetime-local"/g)||[]).length,2);
 });
 
-test('summary has one bottom pager, preserves daily applied dates, and removes duplicate time headings',()=>{
+test('summary has one bottom pager and removes redundant daily and order-time headings',()=>{
   const data=dependencies.timeVolumeData(fixture());
   const html=renderToStaticMarkup(React.createElement(api.CountryVolumeSinglePage,{country:'香港',rows:data.rows,summary:api.sumRows(data.rows),previousSummary:api.sumRows([]),
     monthlyRows:api.aggregateCombo(data.rows,row=>[row.country,row.channel]),feeRows:[],previousFeeRows:[],canCompare:false,dateRangeLabel:'2026-09-01 至 2026-09-17'}));
   assert.equal((html.match(/class="table-pager-row"/g)||[]).length,1);
   assert.ok(html.indexOf('class="table-pager-row"')>html.lastIndexOf('</table>'),'paging follows the summary table and both totals');
-  assert.match(html,/class="volume-applied-range"[^>]*>香港盘口 · 2026-09-01 至 2026-09-17/);
+  assert.doesNotMatch(html,/volume-applied-range|香港盘口 · 2026-09-01 至 2026-09-17/);
   assert.doesNotMatch(html,/<h2>|class="panel-head"/,'no redundant country summary title above the table');
   const timeHtml=render(fixture());
   assert.equal((timeHtml.match(/class="table-pager-row"/g)||[]).length,1);
