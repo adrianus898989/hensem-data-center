@@ -4,7 +4,9 @@ import { collectionSuccessProviderKey } from "./collectionSuccess";
 import type { WithdrawActualView } from "./withdrawActual";
 import type { WithdrawPendingView } from "./withdrawPending";
 import { canonicalThirdPartyName } from "./thirdPartyNameMap";
+import { canonicalThirdPartyPlatform } from "./thirdPartyPlatform";
 import { platformDisplayCountry } from "./platformDisplayCountry";
+import { availableAmount } from "./format";
 import { timeTotals, sourceTime, type OrderTimeFilters, type OrderTimePayload, type OrderTimeRow } from "./orderTimeQuery";
 
 export type TimeQuerySelection = {
@@ -16,23 +18,28 @@ export type TimeQuerySelection = {
   crossDayOnly?: boolean;
 };
 export type TimeQueryResult = { selection: TimeQuerySelection; payloads: Array<{id:string; payload:OrderTimePayload}> };
-export type TimeSourceRow = OrderTimeRow & { platform:string; platformId:string; country:string; channel:string };
+export type TimeSourceRow = OrderTimeRow & { platform:string; platformId:string; country:string; channel:string; timezone:string };
 
-export function timePlatformCountry(platform: {name:string;team:string}) {
-  return platformDisplayCountry(platform.team.replace(/团队$/, ""),platform.name);
+export function timePlatformCountry(platform: {name:string;team:string;country?:string}) {
+  return platformDisplayCountry((platform.country || platform.team).replace(/团队$/, ""),platform.name);
+}
+export function timePlatformName(platform: {name:string;team:string;country?:string}) {
+  return canonicalThirdPartyPlatform(timePlatformCountry(platform),platform.name);
 }
 export function timeSourceRows(result:TimeQueryResult):TimeSourceRow[] {
   const selected=result.selection;
   return result.payloads.flatMap(({id,payload})=>{
-    const country=timePlatformCountry({name:payload.platform||"",team:payload.team||""});
-    return payload.rows.map(row=>({...row,platform:payload.platform||"",platformId:id,country,channel:canonicalThirdPartyName(row.provider,country)}));
+    const country=timePlatformCountry({name:payload.platform||"",team:payload.team||"",country:payload.country});
+    return payload.rows.map(row=>({...row,platform:canonicalThirdPartyPlatform(country,payload.platform||""),platformId:id,country,timezone:payload.timezone||"Asia/Kolkata",channel:canonicalThirdPartyName(row.provider,country)}));
   }).filter(row=>(!selected.channel||row.channel===selected.channel)
     && (!selected.types.length||selected.types.includes(row.channel_type))
     && (!selected.direction||(selected.direction==="代收"?row.direction==="charge":row.direction==="withdraw")));
 }
-export function timeOrderFilters(result:TimeQueryResult,platform:string):OrderTimeFilters {
+export function timeOrderFilters(result:TimeQueryResult,platform:string,timezone?:string):OrderTimeFilters {
   const s=result.selection;
+  const zone=timezone||result.payloads.find(item=>item.id===platform)?.payload.timezone;
   return {platform,basis:s.basis,start:s.start,end:s.end,createdStart:s.createdStart,createdEnd:s.createdEnd,
+    ...(zone?{timezone:zone}:{}),
     direction:s.direction==="代收"?"charge":s.direction==="代付"?"withdraw":"all",
     memberId:s.memberId,orderNumber:s.orderNumber,status:s.status,crossDayOnly:s.crossDayOnly};
 }
@@ -52,12 +59,12 @@ export function timeVolumeData(result:TimeQueryResult) {
     id:`time:${r.platformId}:${i}`,sheetName:"订单明细库",sourceRow:i+1,
     date:(basis==="created"?r.created_date:r.success_date)||result.selection.start.slice(0,10),
     country:r.country,platform:r.platform,channel:r.channel,rawChannel:r.provider,channelType:r.channel_type,
-    direction:r.direction==="charge"?"代收":"代付",amount:Number(r.success_amount),count:Number(r.success_count),
+    direction:r.direction==="charge"?"代收":"代付",currency:r.currency,amount:availableAmount(r.success_amount),count:Number(r.success_count),
     successCount:Number(r.success_count),failedCount:0,successRate:0,status:"已入库订单聚合",
     raw:{"时间口径":basis==="created"?"创建时间":"成功时间","创建日期":r.created_date||"—","成功日期":r.success_date||"—",
-      "最早创建":sourceTime(r.first_created_at),"最晚创建":sourceTime(r.last_created_at),
-      "最早成功":sourceTime(r.first_success_at),"最晚成功":sourceTime(r.last_success_at),
-      "创建笔数":String(r.submitted_count),"成功笔数":String(r.success_count),"最近同步":sourceTime(r.last_synced_at)}
+      "最早创建":sourceTime(r.first_created_at,r.timezone),"最晚创建":sourceTime(r.last_created_at,r.timezone),
+      "最早成功":sourceTime(r.first_success_at,r.timezone),"最晚成功":sourceTime(r.last_success_at,r.timezone),
+      "创建笔数":String(r.submitted_count),"成功笔数":String(r.success_count),"最近同步":sourceTime(r.last_synced_at,r.timezone)}
   }));
   const metric=(items:TimeSourceRow[],direction:"charge"|"withdraw"):CollectionSuccessMetric=>{
     const s=timeTotals(items.filter(r=>r.direction===direction));
@@ -77,9 +84,10 @@ export function timeVolumeData(result:TimeQueryResult) {
   const collectionSuccess=successView("charge");
   const withdrawSuccess=successView("withdraw");
   const actual=(items:TimeSourceRow[])=>{
-    const s=timeTotals(items.filter(r=>r.direction==="withdraw"));
-    return {requestedAmount:s.success_amount,actualAmount:s.actual_amount,feeAmount:s.withdraw_fee,orderCount:s.success_count,
-      expected:1,captured:1,state:"complete" as const};
+    const withdrawals=items.filter(r=>r.direction==="withdraw"),s=timeTotals(withdrawals);
+    const complete=s.actual_amount!=null&&s.withdraw_fee!=null;
+    return {requestedAmount:availableAmount(s.success_amount),actualAmount:availableAmount(s.actual_amount),feeAmount:availableAmount(s.withdraw_fee),orderCount:s.success_count,
+      expected:1,captured:complete?1:0,state:complete?"complete" as const:"unavailable" as const};
   };
   const withdrawActual:WithdrawActualView={
     providers:providers.map(p=>({...p,...actual(select([p.key]))})),
@@ -87,7 +95,8 @@ export function timeVolumeData(result:TimeQueryResult) {
   };
   const pending=(items:TimeSourceRow[])=>{
     const s=timeTotals(items.filter(r=>r.direction==="withdraw"));
-    return {amount:s.pending_amount,count:s.pending_count,expected:1,captured:1,state:"complete" as const};
+    // Count coverage remains available even when the corresponding money was not captured.
+    return {amount:availableAmount(s.pending_amount),count:s.pending_count,expected:1,captured:1,state:"complete" as const};
   };
   const withdrawPending:WithdrawPendingView|undefined=basis==="created"?{
     providers:providers.map(p=>({...p,...pending(select([p.key]))})),

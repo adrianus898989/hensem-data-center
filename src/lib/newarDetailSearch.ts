@@ -12,19 +12,15 @@ export type NewarDraft = {platform:string;dataset:NewarDataset;basis:NewarBasis;
 const offsets:Record<string,number>={"Asia/Karachi":300,"Asia/Kolkata":330};
 export function newarLocalInstant(value:string,zone:string,end=false):string {
   if(!Object.hasOwn(offsets,zone))throw new Error("平台时区尚未确认。");
-  if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value))throw new Error("请填写完整时间。");
-  const full=value.length===16?value+":00":value;
-  const date=new Date(full+"Z");
-  if(!Number.isFinite(date.getTime())||date.toISOString().slice(0,19)!==full)throw new Error("日期或时间无效。");
-  return new Date(date.getTime()-offsets[zone]*60000+(end?1000:0)).toISOString();
+  return sourceInstant(value,zone,end);
 }
 export function newarLocalTime(value:string|null,zone:string):string {
   if(!value||!Object.hasOwn(offsets,zone)||!Number.isFinite(Date.parse(value)))return "—";
-  return new Date(Date.parse(value)+offsets[zone]*60000).toISOString().slice(0,19).replace("T"," ");
+  return sourceTime(value,zone);
 }
 export function newarDay(zone:string,offset=-1,now=Date.now()):string {
   if(!Object.hasOwn(offsets,zone))throw new Error("平台时区尚未确认。");
-  return new Date(now+offsets[zone]*60000+offset*86400000).toISOString().slice(0,10);
+  return sourceDay(zone,offset,now);
 }
 export function newarDetailRequest(draft:NewarDraft,platform:NewarPlatform,cursor:NewarCursor|null=null) {
   if(draft.platform!==platform.platform||!platform.datasets.includes(draft.dataset))throw new Error("请选择有权限的平台及业务。");
@@ -72,3 +68,4 @@ export function validateNewarPage(value:unknown,request:ReturnType<typeof newarD
   }
   return p;
 }
+import {sourceDay,sourceInstant,sourceTime} from "./orderTimeQuery";

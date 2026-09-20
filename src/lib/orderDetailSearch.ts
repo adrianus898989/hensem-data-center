@@ -1,14 +1,23 @@
-import {indiaDay,orderTimeRequest,type OrderTimeFilters} from "./orderTimeQuery";
+import {indiaDay,orderTimeRequest,sourceWallClock,type OrderTimeFilters} from "./orderTimeQuery";
 
 export type OrderDetailSearchDraft=OrderTimeFilters&{amountMin:string;amountMax:string;provider:string};
 export type OrderDetailCursor={at:string;direction:"charge"|"withdraw";id:string};
 export type OrderDetailRow={
   id:string;order_number:string|null;member_id:string|null;third_party_order_number:string|null;
+  currency?:string|null;
   direction:"charge"|"withdraw";provider:string;channel_type:string;status:string;status_group:string;succeeded:boolean;
-  created_at:string|null;success_at:string|null;amount:number|string;actual_amount:number|string|null;withdraw_fee:number|string|null;
+  created_at:string|null;success_at:string|null;amount:number|string|null;actual_amount:number|string|null;withdraw_fee:number|string|null;
   synced_at:string;cross_day:boolean;
 };
-export type OrderDetailPage={rows:OrderDetailRow[];hasMore:boolean;nextCursor:OrderDetailCursor|null};
+export type OrderDetailPage={rows:OrderDetailRow[];hasMore:boolean;nextCursor:OrderDetailCursor|null;timezone?:string};
+
+/** Translate numeric source status for display only; never rewrite the record. */
+export function orderDetailStatusLabel(status:string|null|undefined,group:string|null|undefined):string {
+  const raw=String(status??"").trim();
+  if(raw&&!/^-?\d+$/.test(raw))return raw;
+  const labels:Record<string,string>={success:"成功",pending:"处理中 / 已提交",failed:"失败",rejected:"已拒绝",unknown:"其他状态"};
+  return labels[group||""]||raw||"其他状态";
+}
 
 /** Detail amounts must never use the integer-rounded dashboard summary formatter. */
 export function formatOrderDetailAmount(value:number|string|null|undefined):string {
@@ -67,5 +76,9 @@ export function validateOrderDetailPage(value:unknown):OrderDetailPage {
   const page=value as OrderDetailPage;
   if(!page||!Array.isArray(page.rows)||page.rows.length>50||typeof page.hasMore!=="boolean"
     ||(page.hasMore&&!validOrderDetailCursor(page.nextCursor)))throw new Error("订单明细返回不完整，请重试；未显示部分数据。");
+  if(page.timezone!==undefined){
+    if(typeof page.timezone!=="string")throw new Error("平台时区返回不完整。");
+    sourceWallClock(0,page.timezone);
+  }
   return {...page,nextCursor:page.hasMore?page.nextCursor:null};
 }

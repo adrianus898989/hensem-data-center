@@ -9,6 +9,7 @@ export type NewARConfiguration = {
   fields:NewARConfigField[];
   channels:Array<{id:string;channelName:string;channelUrl:string;channelType:string}>;
   channelRules:Array<Record<string,string|number|boolean|null>>;
+  settingGroups?:Array<Record<string,string|number|boolean|null|Array<string|number|boolean|null>>>;
 };
 export type NewARConfigSnapshot = Omit<ConfigSnapshot,"configuration"> & {configuration:NewARConfiguration};
 export type ConfigSummary = Pick<ConfigSnapshot,"country_code"|"platform"|"timezone"|"observed_at"|"observed_local_date">;
@@ -46,5 +47,6 @@ export async function fetchNewARConfigSnapshot(target:ConfigTarget,session:Dashb
   const rows=await readConfig<NewARConfigSnapshot>("ar_config_latest",{select:"*",country_code:"eq."+target.country_code,platform:"eq."+target.platform,limit:"1"},session,signal);
   const row=rows[0]||null;
   if(row && (!Array.isArray(row.configuration?.fields)||!Array.isArray(row.configuration?.channels)||!Array.isArray(row.configuration?.channelRules)))throw new Error("新AR配置格式不完整，请重新采集。");
+  if(row?.parser_version==="newar-config-v2" && !Array.isArray(row.configuration.settingGroups))throw new Error("新AR分组配置格式不完整，请重新采集。");
   return row;
 }

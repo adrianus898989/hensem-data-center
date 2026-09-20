@@ -321,3 +321,13 @@ test('platform-only status fee aliases keep the existing exact platform restrict
   assert.equal(lookup(map, 'ArbPay'), undefined);
   assert.deepEqual(original, before);
 });
+
+test('uploaded platform display aliases match their own scoped fee without borrowing another platform',()=>{
+  for(const [source,display] of [['Shree.Win','ShreeWin'],['SYNTHETIC(AR)','SYNTHETIC']]){
+    const original=rate('ArbPay2INR-UPI','UPI',{platform:source});
+    const map=api.buildRateMap([], [original], true);
+    assert.equal(lookup(map,'UPI-QR','UPI','collect','印度',display)?.platform,source);
+    assert.equal(lookup(map,'UPI-QR','UPI','collect','印度',source)?.platform,source);
+    assert.equal(lookup(map,'UPI-QR','UPI','collect','印度',display+'2'),undefined);
+  }
+});

@@ -28,13 +28,30 @@ export function toPercent(value: unknown, fallback = 0): number {
   return n > 1 ? n / 100 : n;
 }
 
-export function formatNumber(value: number): string {
-  return new Intl.NumberFormat("zh-CN").format(Math.round(value || 0));
+export function formatNumber(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  return new Intl.NumberFormat("zh-CN").format(Math.round(value));
 }
 
-export function formatPercent(value: number): string {
-  if (!Number.isFinite(value)) return "0.00%";
+export function formatPercent(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
   return `${(value * 100).toFixed(2)}%`;
+}
+
+/** Numeric dashboard adapter: NaN propagates unavailable amounts through sums. Never persist it. */
+export function availableAmount(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : Number.NaN;
+}
+
+export function amountRatio(value: number, total: number): number {
+  if (!Number.isFinite(value) || !Number.isFinite(total)) return Number.NaN;
+  return total ? value / total : 0;
+}
+
+/** Explicit currency metadata is never converted or inferred from a channel name. */
+export function sumVolumeAmounts(rows: readonly {amount:number;currency?:string|null}[]): number {
+  if (new Set(rows.map(row=>row.currency || "")).size > 1) return Number.NaN;
+  return rows.reduce((sum,row)=>sum+availableAmount(row.amount),0);
 }
 
 export function parseDurationToSeconds(value: unknown): number {

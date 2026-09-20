@@ -7,7 +7,7 @@ import {orderTimeRequest,sourceTime,type OrderTimePayload} from "@/lib/orderTime
 import {queryOrderTimeBatches} from "@/lib/orderTimeBatch";
 import {selectOrderTimePlatforms} from "@/lib/orderTimePlatforms";
 import {timeOrderFilters,timeSourceRows,type TimeQuerySelection,type TimeQueryResult} from "@/lib/orderTimeVolume";
-import {formatNumber} from "@/lib/format";
+import {formatOrderDetailAmount,orderDetailStatusLabel} from "@/lib/orderDetailSearch";
 import "./OrderTimeDashboard.css";
 
 export function isOrderQueryDenied(error:unknown):boolean {
@@ -73,7 +73,7 @@ export function useOrderTimeQuery() {
       const draft:TimeQueryResult={selection,payloads:[]};
       // One shared two-request queue; day/direction shards stay under the
       // database timeout and publish one result only when every shard succeeds.
-      const payloads=await queryOrderTimeBatches(selected.map(p=>timeOrderFilters(draft,p.id)),
+      const payloads=await queryOrderTimeBatches(selected.map(p=>timeOrderFilters(draft,p.id,p.timezone)),
         (body,signal)=>orderTimeRpc(session,"dashboard_order_time_query",body,signal),
         {signal:controller.signal,onProgress:value=>{if(serial===requestSerial.current&&viewer===currentIdentity.current)setProgress(value);}});
       if(controller.signal.aborted||serial!==requestSerial.current||viewer!==currentIdentity.current)return false;
@@ -105,9 +105,9 @@ export function TimeQueryExtra({query,showTimeHelp=true,hideExplanation=false}:{
   </div>;
 }
 
-type DetailRow={id:string;order_number:string;member_id:string|null;third_party_order_number:string|null;direction:string;provider:string;channel_type:string;status:string;status_group:string;succeeded:boolean;
-  created_at:string|null;success_at:string|null;amount:number;actual_amount:number|null;withdraw_fee:number|null;synced_at:string;cross_day:boolean};
-type DetailPage={rows:DetailRow[];hasMore:boolean;nextCursor:unknown};
+type DetailRow={id:string;order_number:string;member_id:string|null;third_party_order_number:string|null;direction:string;provider:string;channel_type:string;status:string;status_group:string;succeeded:boolean;currency?:string|null;
+  created_at:string|null;success_at:string|null;amount:number|string|null;actual_amount:number|string|null;withdraw_fee:number|string|null;synced_at:string;cross_day:boolean};
+type DetailPage={rows:DetailRow[];hasMore:boolean;nextCursor:unknown;timezone?:string};
 
 export function OrderRecordModal({result,channel,onClose}:{result:TimeQueryResult;channel:string;onClose:()=>void}) {
   const {session,profile}=useDashboardAuth(),identity=dashboardScopeIdentity(profile);
@@ -116,6 +116,7 @@ export function OrderRecordModal({result,channel,onClose}:{result:TimeQueryResul
   const [platform,setPlatform]=useState(choices[0]?.id||"");
   const [cursors,setCursors]=useState<unknown[]>([null]),[page,setPage]=useState(0);
   const [data,setData]=useState<DetailPage|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const timezone=data?.timezone||choices.find(choice=>choice.id===platform)?.payload.timezone||"Asia/Kolkata";
   const [reload,setReload]=useState(0);
   const [owner]=useState(identity);
   useEffect(()=>{
@@ -136,11 +137,11 @@ export function OrderRecordModal({result,channel,onClose}:{result:TimeQueryResul
   useEffect(()=>{const handler=(e:KeyboardEvent)=>{if(e.key==="Escape")onClose();};document.addEventListener("keydown",handler);return()=>document.removeEventListener("keydown",handler);},[onClose]);
   if(owner!==identity)return null;
   return <div className="modal-backdrop" onClick={onClose}><div className="detail-modal volume-detail-modal order-record-modal" role="dialog" aria-modal="true" aria-label={`${channel}订单明细`} onClick={e=>e.stopPropagation()}>
-    <div className="detail-modal-header"><div><h3>{channel} · 订单明细</h3><p>{result.selection.basis==="created"?"创建时间":"成功时间"}：{result.selection.start.replace("T"," ")} — {result.selection.end.replace("T"," ")} · 印度时间</p></div><button className="modal-close-btn" type="button" onClick={onClose}>关闭</button></div>
-    <div className="record-toolbar"><label className="field">平台<select className="input" value={platform} onChange={e=>{setPlatform(e.target.value);setCursors([null]);setPage(0);}}>{choices.map(p=><option value={p.id} key={p.id}>{p.payload.platform}</option>)}</select></label><span>每页 50 笔 · 仅展示有权限的业务记录</span><button type="button" className="mini-btn" disabled={!page||busy} onClick={()=>setPage(n=>n-1)}>上一页</button><span>第 {page+1} 页</span><button type="button" className="mini-btn" disabled={!data?.hasMore||busy} onClick={()=>{setCursors(old=>[...old.slice(0,page+1),data!.nextCursor]);setPage(n=>n+1);}}>下一页</button></div>
+    <div className="detail-modal-header"><div><h3>{channel} · 订单明细</h3><p>{result.selection.basis==="created"?"创建时间":"成功时间"}：{result.selection.start.replace("T"," ")} — {result.selection.end.replace("T"," ")} · {timezone}</p></div><button className="modal-close-btn" type="button" onClick={onClose}>关闭</button></div>
+    <div className="record-toolbar"><label className="field">平台<select className="input" value={platform} onChange={e=>{setPlatform(e.target.value);setData(null);setCursors([null]);setPage(0);}}>{choices.map(p=><option value={p.id} key={p.id}>{p.payload.platform}</option>)}</select></label><span>每页 50 笔 · 仅展示有权限的业务记录</span><button type="button" className="mini-btn" disabled={!page||busy} onClick={()=>setPage(n=>n-1)}>上一页</button><span>第 {page+1} 页</span><button type="button" className="mini-btn" disabled={!data?.hasMore||busy} onClick={()=>{setCursors(old=>[...old.slice(0,page+1),data!.nextCursor]);setPage(n=>n+1);}}>下一页</button></div>
     {error&&<p role="alert" className="business-query-error">{error} <button type="button" className="mini-btn" onClick={()=>setReload(n=>n+1)}>重试</button></p>}
     <div className="table-wrap"><table><thead><tr><th>会员 ID</th><th>订单号</th><th>三方订单号</th><th>业务</th><th>三方通道</th><th>状态</th><th>订单金额</th><th>实际到账</th><th>提现手续费</th><th>创建时间</th><th>成功时间</th><th>最近同步</th></tr></thead><tbody>
-      {data?.rows.map(r=><tr key={`${r.direction}:${r.id}`}><td>{r.member_id||"—"}</td><td>{r.order_number||"—"}</td><td>{r.third_party_order_number||"—"}</td><td>{r.direction==="charge"?"代收":"代付"}</td><td>{r.provider}<small>{r.channel_type}</small></td><td>{r.status}{r.cross_day&&<small className="cross-day-tag">跨日成功</small>}</td><td>{formatNumber(r.amount)}</td><td>{r.actual_amount==null?"—":formatNumber(r.actual_amount)}</td><td>{r.withdraw_fee==null?"—":formatNumber(r.withdraw_fee)}</td><td>{sourceTime(r.created_at)}</td><td>{sourceTime(r.success_at)}</td><td>{sourceTime(r.synced_at)}</td></tr>)}
+      {data?.rows.map(r=><tr key={`${r.direction}:${r.id}`}><td>{r.member_id||"—"}</td><td>{r.order_number||"—"}</td><td>{r.third_party_order_number||"—"}</td><td>{r.direction==="charge"?"代收":"代付"}</td><td>{r.provider}<small>{r.channel_type}</small></td><td>{orderDetailStatusLabel(r.status,r.status_group)}{r.cross_day&&<small className="cross-day-tag">跨日成功</small>}</td><td>{formatOrderDetailAmount(r.amount)}{r.currency&&<small>{r.currency}</small>}</td><td>{formatOrderDetailAmount(r.actual_amount)}</td><td>{formatOrderDetailAmount(r.withdraw_fee)}</td><td>{sourceTime(r.created_at,timezone)}</td><td>{sourceTime(r.success_at,timezone)}</td><td>{sourceTime(r.synced_at,timezone)}</td></tr>)}
       {!data?.rows.length&&<tr><td colSpan={12} className="empty">{busy?"正在读取订单明细…":error?"读取失败，未显示旧明细":"当前条件没有已入库订单"}</td></tr>}
     </tbody></table></div>
   </div></div>;
