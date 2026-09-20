@@ -3833,7 +3833,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
   const [selected, setSelected] = useState<ComboSummary | null>(null);
   const [selectedFeeIssues, setSelectedFeeIssues] = useState<{ title: string; rows: FeeCompareRow[] } | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" } | null>(null);
+  const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" }>({ key: "totalAmount", direction: "desc" });
   const feeMode: FeeSummaryMode = columns.includes("月份") ? "monthlyPeriod" : columns.includes("平台") ? "platform" : "monthly";
   const feeMap = useMemo(() => buildFeeSummaryMap(feeRows, feeMode), [feeRows, feeMode]);
   const showFeeColumns = feeRows.length > 0;
@@ -3876,7 +3876,6 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
   };
 
   const sortedRows = useMemo(() => {
-    if (!sort) return rows;
     const value = (row: ComboSummary): string | number | null => {
       if (sort.key.startsWith("dimension:")) return row.labelParts[Number(sort.key.slice(10))] || "";
       const providerKeys = successKeys([row]);
@@ -3889,41 +3888,54 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
         case "collectPct": return row.collectPct;
         case "payoutAmount": return row.payoutAmount;
         case "payoutCount": return row.payoutCount;
-        case "withdrawActualAmount": return withdrawActual?.compare(providerKeys).current.actualAmount ?? null;
-        case "withdrawActualFee": return withdrawActual?.compare(providerKeys).current.feeAmount ?? null;
-        case "withdrawPendingAmount": return withdrawPending?.compare(providerKeys).current.amount ?? null;
-        case "withdrawPendingCount": return withdrawPending?.compare(providerKeys).current.count ?? null;
-        case "depositSubmittedAmount": return workOrderDeposit?.compare(depositKeys([row])).current.submittedAmount ?? null;
-        case "depositSubmittedCount": return workOrderDeposit?.compare(depositKeys([row])).current.submittedCount ?? null;
-        case "depositSuccessAmount": return workOrderDeposit?.compare(depositKeys([row])).current.successAmount ?? null;
-        case "depositSuccessCount": return workOrderDeposit?.compare(depositKeys([row])).current.successCount ?? null;
+        case "withdrawActualAmount": case "withdrawActualFee": {
+          const metric = withdrawActual?.compare(providerKeys).current;
+          return metric && (metric.state === "complete" || metric.state === "zero")
+            ? (sort.key === "withdrawActualAmount" ? metric.actualAmount : metric.feeAmount) : null;
+        }
+        case "withdrawPendingAmount": case "withdrawPendingCount": {
+          const metric = withdrawPending?.compare(providerKeys).current;
+          return metric && (metric.state === "complete" || metric.state === "zero")
+            ? (sort.key === "withdrawPendingAmount" ? metric.amount : metric.count) : null;
+        }
+        case "depositSubmittedAmount": return issueNumber(workOrderDeposit?.compare(depositKeys([row])).current, "deposit", "submittedAmount");
+        case "depositSubmittedCount": return issueNumber(workOrderDeposit?.compare(depositKeys([row])).current, "deposit", "submittedCount");
+        case "depositSuccessAmount": return issueNumber(workOrderDeposit?.compare(depositKeys([row])).current, "deposit", "successAmount");
+        case "depositSuccessCount": return issueNumber(workOrderDeposit?.compare(depositKeys([row])).current, "deposit", "successCount");
         case "depositSuccessRate": {
           const metric = workOrderDeposit?.compare(depositKeys([row])).current;
-          return metric && metric.submittedCount > 0 ? metric.successCount / metric.submittedCount : null;
+          const submitted = issueNumber(metric, "deposit", "submittedCount"), success = issueNumber(metric, "deposit", "successCount");
+          return submitted != null && success != null && submitted > 0 ? success / submitted : null;
         }
-        case "withdrawNotReceivedAmount": return workOrderDeposit?.compare(depositKeys([row])).current.withdrawNotReceivedAmount ?? null;
-        case "withdrawNotReceivedCount": return workOrderDeposit?.compare(depositKeys([row])).current.withdrawNotReceivedCount ?? null;
-        case "withdrawSuccessAmount": return workOrderDeposit?.compare(depositKeys([row])).current.withdrawSuccessAmount ?? null;
-        case "withdrawSuccessCount": return workOrderDeposit?.compare(depositKeys([row])).current.withdrawSuccessCount ?? null;
+        case "withdrawNotReceivedAmount": return issueNumber(workOrderDeposit?.compare(depositKeys([row])).current, "withdraw", "submittedAmount");
+        case "withdrawNotReceivedCount": return issueNumber(workOrderDeposit?.compare(depositKeys([row])).current, "withdraw", "submittedCount");
+        case "withdrawSuccessAmount": return issueNumber(workOrderDeposit?.compare(depositKeys([row])).current, "withdraw", "successAmount");
+        case "withdrawSuccessCount": return issueNumber(workOrderDeposit?.compare(depositKeys([row])).current, "withdraw", "successCount");
         case "withdrawSuccessRate": {
           const metric = workOrderDeposit?.compare(depositKeys([row])).current;
-          return metric && metric.withdrawNotReceivedCount > 0 ? metric.withdrawSuccessCount / metric.withdrawNotReceivedCount : null;
+          const submitted = issueNumber(metric, "withdraw", "submittedCount"), success = issueNumber(metric, "withdraw", "successCount");
+          return submitted != null && success != null && submitted > 0 ? success / submitted : null;
         }
         case "payoutPct": return row.payoutPct;
         case "totalAmount": return row.totalAmount;
         case "totalCount": return row.totalCount;
-        case "collectFeeRate": return fee.collectRate;
-        case "collectFee": return fee.collectFee;
-        case "payoutFeeRate": return fee.payoutRate;
-        case "payoutFee": return fee.payoutFee;
-        case "estimatedFee": return fee.estimatedFee;
-        case "feeShare": return fee.totalFeeShare;
+        case "collectFeeRate": return fee.collectHasFee ? fee.collectRate : null;
+        case "collectFee": return fee.collectHasFee ? fee.collectFee : null;
+        case "payoutFeeRate": return fee.payoutHasFee ? fee.payoutRate : null;
+        case "payoutFee": return fee.payoutHasFee ? fee.payoutFee : null;
+        case "estimatedFee": return fee.collectHasFee || fee.payoutHasFee ? fee.estimatedFee : null;
+        case "feeShare": return fee.collectHasFee || fee.payoutHasFee ? fee.totalFeeShare : null;
         case "totalPct": return row.totalPct;
         default: return null;
       }
     };
     const direction = sort.direction === "asc" ? 1 : -1;
-    return rows.map((row, index) => ({ row, index, value: value(row) })).sort((a, b) => {
+    return rows.map((row, index) => {
+      const raw = value(row);
+      // Keep unavailable money/rates at the end in either direction; zero is
+      // still a real value. Never let NaN make the comparator inconsistent.
+      return { row, index, value: raw == null || (typeof raw === "number" && !Number.isFinite(raw)) || raw === "" ? null : raw };
+    }).sort((a, b) => {
       if (a.value == null && b.value == null) return a.index - b.index;
       if (a.value == null) return 1;
       if (b.value == null) return -1;
@@ -3945,9 +3957,9 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
     ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
     : { key, direction: numeric ? "desc" : "asc" });
   const SortTh = ({ label, groupLabel, sortKey, numeric, className = "", title }: { label: string; groupLabel?: string; sortKey: string; numeric?: boolean; className?: string; title?: string }) => {
-    const active = sort?.key === sortKey;
-    return <th className={`${className} sortable-th ${active ? "active" : ""}`} title={title} aria-sort={active ? (sort?.direction === "asc" ? "ascending" : "descending") : "none"}>
-      <button className="th-sort-btn" type="button" onClick={() => toggleSort(sortKey, numeric)}>{groupLabel ? <span className="workorder-heading-label"><small>{groupLabel}</small><span>{label}</span></span> : <span>{label}</span>}<span className="sort-arrow">{active ? (sort?.direction === "asc" ? "↑" : "↓") : "↕"}</span></button>
+    const active = sort.key === sortKey;
+    return <th className={`${className} sortable-th ${numeric ? "num" : ""} ${active ? "active" : ""}`} title={title} aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}>
+      <button className="th-sort-btn" type="button" onClick={() => toggleSort(sortKey, numeric)}>{groupLabel ? <span className="workorder-heading-label"><small>{groupLabel}</small><span>{label}</span></span> : <span>{label}</span>}<span className="sort-arrow" aria-hidden="true">{active ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}</span></button>
     </th>;
   };
 

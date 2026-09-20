@@ -71,11 +71,39 @@ before(async()=>{
  ('FUTURE','charge','SRC-F','0007','FUTURE',null,'PayN','BANK','PKR',500,500,0,'2','success','2026-09-19T05:00+05:00','2026-09-19T05:01+05:00'),
  ('DISABLED','charge','SRC-D','0007','DISABLED',null,'PayN','BANK','PKR',500,500,0,'2','success','2026-09-19T05:00+05:00','2026-09-19T05:01+05:00');`);
  for(const f of ['20260919083628_order_time_query.sql','20260919085244_order_time_details.sql','20260919095550_order_time_reference_start.sql','20260919101327_order_detail_search.sql'])await db.exec(fs.readFileSync(path.join(root,'supabase/migrations',f),'utf8'));
- await db.exec(migration); await identity();
+ await db.exec(migration);
+ await db.exec('alter table game66_charge_orders add column status_group text');
+ await db.exec(fs.readFileSync(path.join(root,'supabase/migrations/20260920102953_g66_charge_status_group.sql'),'utf8'));
+ await identity();
  ar=(await db.query("select md5('ar:VN:VNTEST')::uuid as id")).rows[0].id;
  newar=(await db.query("select md5('newar:PK:POPZAR')::uuid as id")).rows[0].id;
 });
 after(async()=>{if(db)await db.close();});
+
+test('G66 failed and EK pending charge code 0 retain distinct collector semantics without changing totals',async()=>{
+ await db.exec('begin');
+ try{
+  const items=[['G66-FAILED','0','failed','付款失败'],['EK-PENDING','0','pending','待支付'],
+   ['LEGACY-ZERO','0',null,'0'],['BAD-ZERO','0','success','0'],
+   ['CODE1','1','failed','已支付'],['UNKNOWN','77','success','未来状态']];
+  for(const [order,code,group,label] of items)await db.query(`insert into game66_charge_orders
+   (platform_id,order_num,uid,create_time,pay_time,status_code,status_group,status_text,amount_display,pay_method_name)
+   values($1,$2,'STATUS-TEST','2026-09-19T12:00+05:30','2026-09-19T12:01+05:30',$3,$4,$5,10,'StatusProvider')`,[game,order,code,group,label]);
+  const options={platform:game,member:'STATUS-TEST',direction:'charge'};
+  const all=await search(options);
+  const groups=Object.fromEntries(all.rows.map(r=>[r.order_number,r.status_group]));
+  assert.deepEqual(groups,{'G66-FAILED':'failed','EK-PENDING':'pending','LEGACY-ZERO':'pending','BAD-ZERO':'pending','CODE1':'success','UNKNOWN':'unknown'});
+  assert.deepEqual((await search({...options,status:'failed'})).rows.map(r=>r.order_number),['G66-FAILED']);
+  assert.deepEqual(new Set((await search({...options,status:'pending'})).rows.map(r=>r.order_number)),new Set(['EK-PENDING','LEGACY-ZERO','BAD-ZERO']));
+  assert.deepEqual((await search({...options,basis:'success'})).rows.map(r=>r.order_number),['CODE1']);
+  assert.ok(all.rows.filter(r=>!r.succeeded).every(r=>r.success_at===null));
+  const totals=(await aggregate(options)).rows;
+  const sum=field=>totals.reduce((n,r)=>n+Number(r[field]),0);
+  assert.equal(sum('submitted_count'),6);assert.equal(sum('submitted_amount'),60);
+  assert.equal(sum('success_count'),1);assert.equal(sum('success_amount'),10);
+  assert.equal(sum('pending_count'),3);assert.equal(sum('pending_amount'),30);
+ }finally{await db.exec('rollback');}
+});
 
 test('existing UUID API signatures and invoker wrappers remain unchanged; internals are not callable',async()=>{
  const rows=(await db.query("select n.nspname,p.proname,p.pronargs,p.prosecdef,p.proconfig,has_function_privilege('anon',p.oid,'execute') as anon,has_function_privilege('authenticated',p.oid,'execute') as authenticated from pg_proc p join pg_namespace n on n.oid=p.pronamespace where p.proname in ('dashboard_order_time_query','dashboard_order_time_details','dashboard_order_detail_search','dashboard_uploaded_order_platforms','dashboard_uploaded_order_query')")).rows;

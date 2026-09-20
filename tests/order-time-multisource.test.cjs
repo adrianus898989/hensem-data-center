@@ -29,7 +29,7 @@ test('old metadata defaults to India; PK/AR IANA clocks never depend on the comp
 test('IANA DST days split at actual local midnight with 23/25 hours and no overlap',()=>{
   for(const [day,hours] of [['2026-03-08',23],['2026-11-01',25]]){
     const batches=planOrderTimeBatches({...filters,timezone:'America/New_York',start:day+'T00:00:00',end:day+'T23:59:59'});
-    assert.equal(batches.length,2);
+    assert.equal(batches.length,1);
     assert.equal((Date.parse(batches[0].p_end_at)-Date.parse(batches[0].p_start_at))/3600000,hours);
     assert.equal(query.sourceTime(batches[0].p_start_at,'America/New_York'),day+' 00:00:00');
   }

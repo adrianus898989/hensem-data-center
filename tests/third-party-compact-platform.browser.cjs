@@ -44,12 +44,12 @@ const ek7Id = '11111111-1111-4111-8111-111111111111';
       const details=[{id:ek7Id,name:'EK7',team:'香港'}];
       const catalog={platforms:[{country:'印度',platform:'SampleIN'},{country:'香港',platform:'EK7'},
         {country:'香港',platform:'LegacyHK'},{country:'巴基斯坦',platform:'SamplePK'}]};
-      function orderPayload(body){return {platforms:details,platform:'EK7',team:'香港',basis:body.p_basis,timezone:'Asia/Kolkata',rows:[{
-        direction:body.p_direction,provider:'FixturePay',channel_type:'BANK',created_date:'2026-09-19',success_date:'2026-09-19',
+      function orderPayload(body){return {platforms:details,platform:'EK7',team:'香港',basis:body.p_basis,timezone:'Asia/Kolkata',rows:(body.p_direction==='all'?['charge','withdraw']:[body.p_direction]).map(direction=>({
+        direction,provider:'FixturePay',channel_type:'BANK',created_date:'2026-09-19',success_date:'2026-09-19',
         submitted_count:10,submitted_amount:1000,success_count:8,success_amount:800,actual_amount:780,withdraw_fee:20,
         cross_day_count:0,cross_day_amount:0,earlier_count:0,earlier_amount:0,missing_success_time_count:0,
         pending_count:1,pending_amount:100,first_created_at:body.p_start_at,last_created_at:body.p_start_at,
-        first_success_at:body.p_start_at,last_success_at:body.p_start_at,last_synced_at:'2026-09-20T00:00:00Z'}]};}
+        first_success_at:body.p_start_at,last_success_at:body.p_start_at,last_synced_at:'2026-09-20T00:00:00Z'}))};}
       window.resolveOrders=(failure=false)=>{const pending=window.pendingOrders.splice(0);for(const p of pending)
         p.resolve(failure?json({message:'示例查询失败，请重试。'},500):json(orderPayload(p.body)));};
       async function business(url){window.testCalls.push(url);
@@ -118,11 +118,12 @@ const ek7Id = '11111111-1111-4111-8111-111111111111';
     await measure('1720 / 230 sidebar / seven fields',7,true);
     await checkTypeMenu(1720);
     await page.getByRole('button', {name:'查询',exact:true}).click();
-    await page.waitForFunction(() => window.pendingOrders.length===2);
+    await page.waitForFunction(() => window.pendingOrders.length===1);
     await page.getByRole('status').filter({hasText:'正在分段读取'}).waitFor();
     assert.equal(await page.locator('.order-query-help').count(),0,'redundant explanation removed, progress retained');
     const shards=await page.evaluate(()=>window.orderCalls.filter(body=>body.p_platform));
-    assert.equal(shards.length,2,'real batch hook splits charge and withdraw');
+    assert.equal(shards.length,1,'real batch hook combines charge and withdraw in one short-range request');
+    assert.equal(shards[0].p_direction,'all');
     assert(shards.every(body=>body.p_platform===ek7Id),'automatic all-platform partial query only requests supported platform');
     assert(shards.every(body=>body.p_start_at==='2026-09-18T23:30:01.000Z'&&body.p_end_at==='2026-09-19T18:30:00.000Z'),'selected seconds reach RPC');
     assert.equal(await page.evaluate(()=>window.testCalls.filter(url=>url.includes('third-party-volume')).length),0,'partial-hours never use daily totals');
@@ -138,7 +139,7 @@ const ek7Id = '11111111-1111-4111-8111-111111111111';
     await page.getByRole('button',{name:'完成',exact:true}).click();
     await page.getByRole('button',{name:'查询',exact:true}).click();
     await page.getByRole('alert').filter({hasText:'LegacyHK'}).waitFor();
-    assert.equal(await page.evaluate(()=>window.orderCalls.filter(body=>body.p_platform).length),2,'explicit unsupported platform does not broaden to supported selection');
+    assert.equal(await page.evaluate(()=>window.orderCalls.filter(body=>body.p_platform).length),1,'explicit unsupported platform does not broaden to supported selection');
     assert.equal(await page.evaluate(()=>window.testCalls.filter(url=>url.includes('third-party-volume')).length),0,'explicit legacy selection does not relabel a daily total as hourly');
     assert(await page.getByText('FixturePay',{exact:true}).count(),'failed query preserves old result');
 
@@ -146,7 +147,7 @@ const ek7Id = '11111111-1111-4111-8111-111111111111';
     await page.getByRole('checkbox',{name:'LegacyHK',exact:true}).uncheck();
     await page.getByRole('button',{name:'完成',exact:true}).click();
     await page.getByRole('button',{name:'查询',exact:true}).click();
-    await page.waitForFunction(()=>window.pendingOrders.length===2);
+    await page.waitForFunction(()=>window.pendingOrders.length===1);
     await page.getByRole('status').filter({hasText:'正在分段读取'}).waitFor();
     await page.evaluate(()=>window.resolveOrders(true));
     await page.getByRole('alert').filter({hasText:'示例查询失败，请重试。'}).waitFor();
@@ -177,6 +178,11 @@ const ek7Id = '11111111-1111-4111-8111-111111111111';
     await page.getByRole('button',{name:'香港盘口',exact:true}).click();
     await page.getByLabel('开始时间',{exact:true}).fill('2026-09-19T00:00:00');
     await page.getByLabel('结束时间',{exact:true}).fill('2026-09-19T23:59:59');
+    await page.getByRole('button',{name:'平台',exact:true}).click();
+    await page.getByRole('button',{name:'清空',exact:true}).click();
+    await page.getByPlaceholder('搜索平台',{exact:true}).fill('');
+    await page.getByRole('checkbox',{name:'LegacyHK',exact:true}).check();
+    await page.getByRole('button',{name:'完成',exact:true}).click();
     await page.getByRole('button',{name:'查询',exact:true}).click();
     await page.getByText('LegacyPay',{exact:true}).first().waitFor();
     assert.equal(await page.locator('.time-pending-note,.volume-legacy-note,.volume-applied-range').count(),0,'all three redundant captions are absent from daily results');

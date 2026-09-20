@@ -11,15 +11,16 @@ export type OrderTimeBatchOptions={
 };
 const HOUR=3600_000;
 
-/** Disjoint half-open intervals, split on platform-local midnight and direction. */
+/** Keep short ranges together; longer ranges use disjoint platform-local days. */
 export function planOrderTimeBatches(filters:OrderTimeFilters):OrderTimeBatchRequest[] {
   const original=orderTimeRequest(filters),end=Date.parse(original.p_end_at);
-  const directions=filters.direction==="all"?["charge","withdraw"] as const:[filters.direction];
+  const rangeStart=Date.parse(original.p_start_at);
+  if(end-rangeStart<=24*HOUR)return [{...original,p_reference_start:original.p_start_at}];
   const requests:OrderTimeBatchRequest[]=[];
-  for(let start=Date.parse(original.p_start_at);start<end;){
+  for(let start=rangeStart;start<end;){
     const nextMidnight=nextSourceMidnight(start,filters.timezone);
     const stop=Math.min(end,nextMidnight);
-    for(const direction of directions)requests.push({...original,p_direction:direction,
+    requests.push({...original,
       p_start_at:new Date(start).toISOString(),p_end_at:new Date(stop).toISOString(),
       p_reference_start:original.p_start_at});
     start=stop;
@@ -39,6 +40,11 @@ function statementTimedOut(error:unknown):boolean {
   return /statement\s+timeout|canceling statement due to statement timeout/i.test(String(value?.message||""));
 }
 function smallerRequests(request:OrderTimeBatchRequest):OrderTimeBatchRequest[]|null {
+  // Retry only the failed shard. Both directions are disjoint, so the fallback
+  // never repeats already completed platforms/days or doubles their totals.
+  if(request.p_direction==="all")return [
+    {...request,p_direction:"charge"},{...request,p_direction:"withdraw"},
+  ];
   const start=Date.parse(request.p_start_at),end=Date.parse(request.p_end_at),duration=end-start;
   if(duration<2*HOUR)return null;
   // Whole-hour cuts keep the smallest retry at one hour without fractional
@@ -125,7 +131,7 @@ export async function queryOrderTimeBatches(
           }).catch(error=>{
             if(failed)return;
             const retry=!controller.signal.aborted&&statementTimedOut(error)?smallerRequests(request):null;
-            if(retry){queue.unshift(...retry);total++;}else fail(error);
+            if(retry){queue.unshift(...retry);total+=retry.length-1;}else fail(error);
           }).finally(()=>{active--;if(!failed){report();pump();}});
         }
         if(!active&&!queue.length)resolve();
