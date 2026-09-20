@@ -61,6 +61,20 @@ function data() {
 const rates = [{ country: '巴西', platform: '43R' }, { country: '巴西', platform: 'PLAYER BR' },
   { country: '巴西', platform: 'POPKKK新' }, { country: '巴西', platform: 'RATE_ONLY' },
   { country: '越南', platform: 'VN_RATE_ONLY' }];
+test('confirmed India DhaniWin and Veer aliases canonicalize once, without merging similarly named or foreign platforms',()=>{
+  const groups=[['DhaniWin',['DhaniWin','DHANIWIN','DHANIWIN(新AR)','DhaniWin（新AR）','DHANI.WIN']],['VEER.GAME',['Veer.Game','VEER.GAME','VEERGAME']]];
+  for(const [canonical,aliases] of groups)for(const country of ['印度','IN','印度线下盘口']){
+    assert.deepEqual(helper.canonicalThirdPartyPlatformSelections(country,aliases),[canonical]);
+    for(const alias of aliases)assert.ok(helper.matchesThirdPartyPlatformSelection(country,alias,[canonical]));
+  }
+  for(const name of ['VEERGAME2','VEER-GAME','DHANIWIN2','DHANIWIN(旧)'])assert.equal(helper.canonicalThirdPartyPlatform('印度',name),name);
+  assert.equal(helper.canonicalThirdPartyPlatform('越南','VEERGAME'),'VEERGAME');
+  assert.equal(helper.canonicalThirdPartyPlatform('香港','DHANIWIN(新AR)'),'DHANIWIN(新AR)');
+  const input=['DhaniWin','DHANIWIN','DHANIWIN(新AR)','Veer.Game','VEER.GAME','VEERGAME'].map((p,i)=>row('i'+i,p,100,1,{country:'印度'}));
+  const output=pipeline({input,country:'印度',statusRows:[]});
+  assert.deepEqual(output.platforms.sort(),['DhaniWin','VEER.GAME'].sort());
+  assert.equal(output.rows.length,6);assert.equal(output.rows.reduce((n,r)=>n+r.amount,0),600,'display aliases must not duplicate original source rows');
+});
 function pipeline({ input = data(), platforms = [], country = '巴西', statusRows = rates,
   catalog = [...input.map(({ country, platform }) => ({ country, platform })), ...statusRows] } = {}) {
   const api = functions();

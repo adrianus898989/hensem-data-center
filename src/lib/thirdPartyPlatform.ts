@@ -14,6 +14,13 @@ export function canonicalThirdPartyPlatform(country: string, value: string): str
   if (legacyShreeKey === "shreewin") return "ShreeWin";
 
   const countryKey = String(country || "").trim().toUpperCase();
+  if (["IN", "INDIA", "印度", "印度线下", "印度盘口", "印度线下盘口"].includes(countryKey)) {
+    // Owner-confirmed names for the same platform, across legacy/AR/NEWAR.
+    // Keep this allowlist scoped to India; never strip arbitrary suffixes.
+    const known = displayPlatform.toUpperCase();
+    if (["VEER.GAME", "VEERGAME"].includes(known)) return "VEER.GAME";
+    if (["DHANIWIN", "DHANI.WIN", "DHANIWIN(新AR)"].includes(known)) return "DhaniWin";
+  }
   if (countryKey === "BR" || countryKey === "巴西") {
     // Only verified aliases; do not apply generic punctuation or suffix removal.
     const known = displayPlatform.toUpperCase();

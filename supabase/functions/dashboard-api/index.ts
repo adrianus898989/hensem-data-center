@@ -5,6 +5,7 @@ import {
   readSupabaseThirdPartyRates,
   readSupabaseThirdPartySyncStatus,
   readSupabaseThirdPartyVolume,
+  readSupabaseThirdPartyWorkOrderMetrics,
   readSupabaseWorkOrderMonths,
 } from "./lib/supabaseDashboardServer.ts";
 import {
@@ -264,6 +265,9 @@ async function handle(request: Request): Promise<Response> {
   if (route === "/api/supabase-third-party-volume") {
     const {start, end} = requestRange(url);
     return json(await readSupabaseThirdPartyVolume(request, start, end, url.searchParams.get("country") || ""));
+  }
+  if (route === "/api/third-party-workorder-metrics") {
+    return json(await readSupabaseThirdPartyWorkOrderMetrics(request,url.searchParams.get("start")||"",url.searchParams.get("end")||"",url.searchParams.get("country")||""));
   }
   if (route === "/api/supabase-third-party-rates") return json(await readSupabaseThirdPartyRates(request));
   if (route === "/api/supabase-third-party-sync-status") {

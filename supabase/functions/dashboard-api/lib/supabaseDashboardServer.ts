@@ -51,7 +51,7 @@ async function readJson(response: Response) {
   return json;
 }
 
-async function fetchPaged<T>(table: string, query: URLSearchParams, token: string, signal?: AbortSignal): Promise<T[]> {
+async function fetchPaged<T>(table: string, query: URLSearchParams, token: string, signal?: AbortSignal, strict = false): Promise<T[]> {
   const { url, anonKey } = config();
 
   const fetchPage = async (offset: number, withCount = false): Promise<{ rows: T[]; total: number | null }> => {
@@ -69,6 +69,7 @@ async function fetchPaged<T>(table: string, query: URLSearchParams, token: strin
       signal
     });
     const rows = await readJson(response);
+    if (strict && !Array.isArray(rows)) throw new DashboardDataAccessError(503,"data_unavailable","数据读取暂时不可用，请稍后重试。");
     const list = Array.isArray(rows) ? rows as T[] : [];
     const contentRange = String(response.headers.get("content-range") || "");
     const match = contentRange.match(/\/(\d+)$/);
@@ -78,6 +79,8 @@ async function fetchPaged<T>(table: string, query: URLSearchParams, token: strin
   // V247：第一页顺便拿 exact count。Supabase 默认单页最多 1000 行，
   // 以前 4~5 页是串行读取；现在剩余页并行读取，数据库已有数据时页面明显更快。
   const first = await fetchPage(0, true);
+  if (strict && first.total != null && (first.total > 500000 || (first.rows.length < PAGE_SIZE && first.rows.length < first.total)))
+    throw new DashboardDataAccessError(503,"data_incomplete","数据未完整返回，请缩短范围后重试。");
   if (first.rows.length < PAGE_SIZE) return first.rows;
 
   if (Number.isFinite(first.total) && Number(first.total) >= first.rows.length) {
@@ -90,6 +93,7 @@ async function fetchPaged<T>(table: string, query: URLSearchParams, token: strin
       const pages = await Promise.all(offsets.slice(i, i + CONCURRENCY).map((offset) => fetchPage(offset, false)));
       for (const page of pages) all.push(...page.rows);
     }
+    if(strict && all.length!==total)throw new DashboardDataAccessError(503,"data_incomplete","数据未完整返回，请重新查询。");
     return all;
   }
 
@@ -511,6 +515,29 @@ export async function readSupabaseAutoWithdraw(request: Request, startInput: str
     dailyRows,
     operatorRows,
   };
+}
+
+/** Independent daily work-order business: never load/recompute payment volumes. */
+export async function readSupabaseThirdPartyWorkOrderMetrics(request: Request, start: string, end: string, country: string) {
+  const access = await requireDashboardDataAccess(request, "third_party");
+  const validDay = (value:string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
+    && Number.isFinite(Date.parse(value+"T00:00:00Z")) && new Date(value+"T00:00:00Z").toISOString().slice(0,10)===value;
+  if (!validDay(start)||!validDay(end)||start>end||Date.parse(end)-Date.parse(start)>=31*86400000||!country.trim())
+    throw new DashboardDataAccessError(400,"invalid_range","工单日期范围须为1至31天，并指定国家。");
+  if (!dashboardScopeAllows(access.scope,country))
+    throw new DashboardDataAccessError(403,"scope_denied","当前账号没有此国家的查看权限。");
+  const query = new URLSearchParams({
+    select:"system_name,source_system,stat_date,country_code,country,platform,third_party,channel_type,submitted_count,submitted_amount,success_count,success_amount,withdraw_not_received_count,withdraw_not_received_amount,withdraw_success_count,withdraw_success_amount,source_updated_at",
+    source_system:"eq.AR_WORKORDER",order:"stat_date.asc,system_name.asc,country_code.asc,platform.asc,third_party.asc,channel_type.asc",
+  });
+  query.append("stat_date",`gte.${start}`);query.append("stat_date",`lte.${end}`);
+  const signal=AbortSignal.any([request.signal,AbortSignal.timeout(12000)]);
+  const rows=await fetchPaged<WorkOrderDepositRow>("workorder_deposit_daily",query,access.token,signal,true);
+  const selectedCountry=collectionSuccessCountry(country);
+  return {basis:"daily" as const,start,end,country,rows:rows.filter(row=>row&&row.source_system==="AR_WORKORDER"
+    && row.stat_date>=start&&row.stat_date<=end
+    && collectionSuccessCountry(row.country_code||row.country,row.platform)===selectedCountry
+    && dashboardScopeAllows(access.scope,row.country_code||row.country,row.platform))};
 }
 
 export async function readSupabaseThirdPartyVolume(request: Request, startInput = "", endInput = "", countryInput = ""): Promise<ThirdPartyVolumePayload> {

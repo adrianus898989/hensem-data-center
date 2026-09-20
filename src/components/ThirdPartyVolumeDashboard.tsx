@@ -23,7 +23,7 @@
 // V79_VERIFIED_BUILD: 所有明细第一、合计第二、移除平台明细、NPG/马来/印尼费率匹配修复。
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ThirdPartyPlatformStatusRow, ThirdPartyRatePayload, ThirdPartyRateRow, ThirdPartyVolumePayload, ThirdPartyVolumeRow } from "@/lib/types";
+import type { ThirdPartyPlatformStatusRow, ThirdPartyRatePayload, ThirdPartyRateRow, ThirdPartyVolumePayload, ThirdPartyVolumeRow, WorkOrderDepositRow } from "@/lib/types";
 import { formatNumber, formatPercent, amountRatio, sumVolumeAmounts } from "@/lib/format";
 import { canonicalThirdPartyName, confirmedIndiaThirdPartyAlias, inferThirdPartyChannelType } from "@/lib/thirdPartyNameMap";
 import { canonicalThirdPartyPlatform, canonicalThirdPartyPlatformSelections, matchesThirdPartyPlatformSelection } from "@/lib/thirdPartyPlatform";
@@ -37,7 +37,7 @@ import {useOrderTimeQuery, TimeQueryExtra, OrderRecordModal} from "./OrderTimeCo
 import {timePlatformCountry,timePlatformName,timeVolumeData,timeSourceRows,type TimeQueryResult} from "@/lib/orderTimeVolume";
 import {sourceDay,sourceShortcutDateRange} from "@/lib/orderTimeQuery";
 import { useDashboardAuth } from "./DashboardAuthGate";
-import { buildCollectionSuccessView, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
+import { buildCollectionSuccessView, collectionSuccessCountry, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
 import { CollectionSuccessCell, CollectionSuccessBreakdown } from "./CollectionSuccessCell";
 import { buildWithdrawPendingView, type WithdrawPendingView } from "@/lib/withdrawPending";
 import { buildWorkOrderDepositView, workOrderDepositCountry, workOrderDepositProviderKey, workOrderSuccessTone, type WorkOrderDepositView } from "@/lib/workOrderDeposit";
@@ -2520,9 +2520,9 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
     };
     appendProviderOnly("pending-only", withdrawPending.providers);
     appendProviderOnly("deposit-only", workOrderDeposit.providers);
-    appendProviderOnly("actual-only", withdrawActual.providers);
+    if (collectionSuccessCountry(appliedCountryPage) !== "印度") appendProviderOnly("actual-only", withdrawActual.providers);
     return [...existing, ...providerOnlyRows];
-  }, [countryPageRows, withdrawPending, workOrderDeposit, withdrawActual]);
+  }, [countryPageRows, withdrawPending, workOrderDeposit, withdrawActual, appliedCountryPage]);
   const countryPageMonthlyPeriodRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.date.slice(0, 7), row.country, row.channel]), [countryPageRows]);
   const countryPagePlatformRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.country, row.platform, row.channel]), [countryPageRows]);
   const countryPageDailyRows = useMemo(() => aggregateDirection(countryPageRows, (row) => [row.date, row.country, row.platform, row.direction, row.channel]), [countryPageRows]);
@@ -2916,8 +2916,42 @@ function OrderSuccessCell({value,hint}:{value?:ReturnType<CollectionSuccessView[
 
 function TimeRangeVolumeResult({result,rateRows,feeRateMap}:{result:TimeQueryResult;rateRows:ThirdPartyRateRow[];feeRateMap:Map<string,RateLike>}) {
   const [selected,setSelected]=useState<string|null>(null);
+  const [workOrders,setWorkOrders]=useState<{result:TimeQueryResult;rows:WorkOrderDepositRow[];error?:string}|null>(null);
   const data=useMemo(()=>timeVolumeData(result),[result]);
-  const monthlyRows=useMemo(()=>aggregateCombo(data.rows,row=>[row.country,row.channel]),[data]);
+  const workOrderCountry=collectionSuccessCountry(result.selection.country);
+  const showWorkOrders=!["香港","红膏蟹",ALL_USDT_COUNTRY_PAGE].includes(workOrderCountry);
+  useEffect(()=>{
+    if(!showWorkOrders)return;
+    const controller=new AbortController(),s=result.selection;
+    const query=new URLSearchParams({country:s.country,start:s.start.slice(0,10),end:s.end.slice(0,10)});
+    void (async()=>{
+      try {
+        const response=await dashboardBusinessFetch(`/api/third-party-workorder-metrics?${query}`,{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(15000)])});
+        const payload=await safeReadJson(response,"工单统计");
+        if(!response.ok || payload?.basis!=="daily" || payload?.start!==query.get("start") || payload?.end!==query.get("end") || payload?.country!==s.country || !Array.isArray(payload?.rows))throw new Error("工单统计暂未载入，请重新查询。");
+        if(!controller.signal.aborted)setWorkOrders({result,rows:payload.rows});
+      } catch {
+        if(!controller.signal.aborted)setWorkOrders({result,rows:[],error:"工单统计暂未载入，请重新查询。"});
+      }
+    })();
+    return ()=>controller.abort();
+  },[result,showWorkOrders]);
+  const workOrderDeposit=useMemo(()=>{
+    if(!showWorkOrders)return undefined;
+    const current=workOrders?.result===result?workOrders:null,s=result.selection;
+    return {...buildWorkOrderDepositView({rows:current?.rows||[],volumeRows:data.rows,start:s.start.slice(0,10),end:s.end.slice(0,10),
+      country:s.country,platforms:s.platforms,provider:s.channel,error:current?.error||(!current?"工单统计载入中…":undefined)}),
+      basisHint:"工单按所选日期整日统计，独立于订单小时／成功时间筛选。"};
+  },[result,showWorkOrders,workOrders,data]);
+  const monthlyRows=useMemo(()=>{
+    const rows=aggregateCombo(data.rows,row=>[row.country,row.channel]);
+    const keys=new Set(rows.map(row=>workOrderDepositProviderKey(row.labelParts[0],row.labelParts[1])));
+    for(const p of workOrderDeposit?.providers||[])if(!keys.has(p.key)){
+      keys.add(p.key);rows.push({key:`deposit-only:${p.key}`,labelParts:[p.country,p.channel],rows:[],
+        collectAmount:0,collectCount:0,payoutAmount:0,payoutCount:0,totalAmount:0,totalCount:0,collectPct:0,payoutPct:0,totalPct:0});
+    }
+    return rows;
+  },[data,workOrderDeposit]);
   const feeRows=useMemo(()=>rateRows.length ? buildFeeCompareRows(aggregateCombo(data.rows,row=>[row.date,row.country,row.platform,row.channel,normalizedFeeBaseChannelType(row)]),rateRows,[],"daily",feeRateMap) : [],[data,rateRows,feeRateMap]);
   const s=result.selection,range=`${s.start.replace("T"," ")} 至 ${s.end.replace("T"," ")}`;
   const hint=data.successRateHint||"成功笔数 ÷ 创建笔数；仅统计已入库订单，不代表采集已完整。";
@@ -2930,7 +2964,9 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap}:{result:TimeQueryRes
       monthlyRows={monthlyRows} feeRows={feeRows} previousFeeRows={[]} canCompare={false} dateRangeLabel={range}
       collectionSuccess={data.collectionSuccess} withdrawSuccess={data.withdrawSuccess} orderRateHint={hint}
       platformCoverage={coverage}
+      workOrderDeposit={workOrderDeposit}
       withdrawActual={data.withdrawActual} withdrawPending={data.withdrawPending} onView={row=>setSelected(row.labelParts[1])}/>
+    {workOrders?.result===result&&workOrders.error&&<p role="alert">{workOrders.error}</p>}
     {selected&&<OrderRecordModal result={result} channel={selected} onClose={()=>setSelected(null)}/>}
   </>;
 }
@@ -2975,7 +3011,7 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
         collectionSuccess={collectionSuccess}
         withdrawPending={withdrawPending}
         workOrderDeposit={workOrderDeposit}
-        withdrawActual={withdrawActual}
+        withdrawActual={collectionSuccessCountry(country)==="印度"?undefined:withdrawActual}
         withdrawSuccess={withdrawSuccess}
         orderRateHint={orderRateHint}
         onView={onView}
@@ -3958,6 +3994,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
     : { key, direction: numeric ? "desc" : "asc" });
   const SortTh = ({ label, groupLabel, sortKey, numeric, className = "", title }: { label: string; groupLabel?: string; sortKey: string; numeric?: boolean; className?: string; title?: string }) => {
     const active = sort.key === sortKey;
+    if(groupLabel&&workOrderDeposit?.basisHint){groupLabel+="（日）";title=`${workOrderDeposit.basisHint} ${title||""}`;}
     return <th className={`${className} sortable-th ${numeric ? "num" : ""} ${active ? "active" : ""}`} title={title} aria-sort={active ? (sort.direction === "asc" ? "ascending" : "descending") : "none"}>
       <button className="th-sort-btn" type="button" onClick={() => toggleSort(sortKey, numeric)}>{groupLabel ? <span className="workorder-heading-label"><small>{groupLabel}</small><span>{label}</span></span> : <span>{label}</span>}<span className="sort-arrow" aria-hidden="true">{active ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}</span></button>
     </th>;
