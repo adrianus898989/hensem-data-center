@@ -2465,6 +2465,17 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
     types: appliedChannelTypeSelections.length ? appliedChannelTypeSelections : isAllUsdtCountryPage(appliedCountryPage) ? ["USDT"] : [],
     enabled: appliedDirection !== "代付", error: payload?.collectionSuccessError,
   }), [payload?.collectionSuccessSnapshots, payload?.collectionSuccessError, rows, appliedCountryPage, appliedStartDate, appliedEndDate, appliedCountrySelections, appliedPlatformSelections, appliedChannel, appliedChannelTypeSelections, appliedDirection]);
+  const withdrawSuccess = useMemo(() => buildCollectionSuccessView({
+    snapshots: payload?.collectionSuccessSnapshots || [],
+    volumeRows: rows.filter(row => rowMatchesCountryPage(row, appliedCountryPage)
+      && (!appliedCountrySelections.length || appliedCountrySelections.includes(row.country))
+      && matchesThirdPartyPlatformSelection(row.country, row.platform, appliedPlatformSelections)),
+    start: appliedStartDate, end: appliedEndDate,
+    country: isAllUsdtCountryPage(appliedCountryPage) ? "" : appliedCountryPage,
+    countries: appliedCountrySelections, platforms: appliedPlatformSelections, provider: appliedChannel,
+    types: appliedChannelTypeSelections.length ? appliedChannelTypeSelections : isAllUsdtCountryPage(appliedCountryPage) ? ["USDT"] : [],
+    sourceSystems: ["WITHDRAW_REVIEW"], enabled: appliedDirection !== "代收", error: payload?.collectionSuccessError,
+  }), [payload?.collectionSuccessSnapshots, payload?.collectionSuccessError, rows, appliedCountryPage, appliedStartDate, appliedEndDate, appliedCountrySelections, appliedPlatformSelections, appliedChannel, appliedChannelTypeSelections, appliedDirection]);
   const withdrawPending = useMemo(() => buildWithdrawPendingView({
     snapshots: payload?.withdrawPendingSnapshots || [],
     volumeRows: rows.filter(row => rowMatchesCountryPage(row, appliedCountryPage)
@@ -2795,7 +2806,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
         </section>
       )}
 
-        {showDailyResult && !showTimeResult && mainTab === "country" && <CountryVolumeSinglePage country={appliedCountryPage} rows={countryPageRows} summary={countryPageSummary} previousSummary={countryPagePreviousSummary} monthlyRows={countryPageMonthlyRows} feeRows={countryPageFeeRows} previousFeeRows={countryPagePreviousFeeRows} canCompare={isSingleDayQuery} collectionSuccess={collectionSuccess} withdrawPending={withdrawPending} workOrderDeposit={workOrderDeposit} withdrawActual={withdrawActual} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} />}
+        {showDailyResult && !showTimeResult && mainTab === "country" && <CountryVolumeSinglePage country={appliedCountryPage} rows={countryPageRows} summary={countryPageSummary} previousSummary={countryPagePreviousSummary} monthlyRows={countryPageMonthlyRows} feeRows={countryPageFeeRows} previousFeeRows={countryPagePreviousFeeRows} canCompare={isSingleDayQuery} collectionSuccess={collectionSuccess} withdrawSuccess={withdrawSuccess} withdrawPending={withdrawPending} workOrderDeposit={workOrderDeposit} withdrawActual={withdrawActual} dateRangeLabel={`${appliedStartDate || "-"} 至 ${appliedEndDate || "-"}`} />}
         </>
       )}
     </div>
