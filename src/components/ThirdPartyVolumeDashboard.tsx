@@ -2749,12 +2749,10 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
           {filterOptions.ready && !platforms.length && <p role="status">当前国家暂无可查询平台。</p>}
         </div>
         {(timePlatformOptions.length>0||timeQuery.optionsLoading||timeQuery.optionsError)&&<TimeQueryExtra query={timeQuery} showTimeHelp={timePlatformOptions.length>0} hideExplanation/>}
-        {hasPendingQuery && <p className="time-pending-note">筛选已修改，点击查询后生效。</p>}
       </form>
 
       {summaryQueryError&&<p className="business-query-error" role="alert">{summaryQueryError} 当前结果未被替换。</p>}
       {!summaryQueryError&&timeQuery.error&&<p className="business-query-error" role="alert">{timeQuery.error}{timeQuery.active&&" 当前结果未被替换。"}</p>}
-      {!timeQuery.active&&legacySummaryNotice&&<p className="volume-legacy-note">{legacySummaryNotice}</p>}
       {showTimeResult&&timeQuery.result&&<TimeRangeVolumeResult result={timeQuery.result} rateRows={ratePayload?.rates||[]} feeRateMap={feeRateMap}/>}
 
       {!showDailyResult && !showTimeResult && mainTab === "country" && (
@@ -2919,7 +2917,6 @@ function CountryVolumeSinglePage({ country, rows, summary, previousSummary, mont
   };
   return (
     <div className="country-volume-page range-volume-page">
-      {!orderRateHint&&<div className="volume-applied-range" role="status">{countryPaneLabel(country)} · {dateRangeLabel}</div>}
       <PageStatStrip items={[
         { label: "主三方", value: uniq(rows.map((row) => row.channel)).length, helper: "当前筛选范围", tone: "default" },
         { label: "平台", value: uniq(rows.map((row) => row.platform)).length, helper: platformCoverage || "当前有数据的平台", tone: "default" },

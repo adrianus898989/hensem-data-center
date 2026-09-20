@@ -90,6 +90,7 @@ const ek7Id = '11111111-1111-4111-8111-111111111111';
     assert.deepEqual(await page.evaluate(() => window.testCalls.filter(url => /third-party-volume|third-party-rates/.test(url))), []);
     await page.getByLabel('开始时间', {exact: true}).fill('2026-09-19T05:00:01');
     await page.getByLabel('结束时间', {exact: true}).fill('2026-09-19T23:59:59');
+    assert.equal(await page.locator('.time-pending-note').count(),0,'changed filters do not show the removed caption');
 
     async function measure(label, count, oneRow = false) {
       const value = await page.locator('.volume-time-filter-grid').evaluate(element => {
@@ -172,6 +173,15 @@ const ek7Id = '11111111-1111-4111-8111-111111111111';
       assert(await page.getByRole('button',{name:'查询',exact:true}).isVisible());
       await page.getByRole('button',{name:'所有国家USDT',exact:true}).click();
     }
+    await page.setViewportSize({width:1720,height:960});
+    await page.getByRole('button',{name:'香港盘口',exact:true}).click();
+    await page.getByLabel('开始时间',{exact:true}).fill('2026-09-19T00:00:00');
+    await page.getByLabel('结束时间',{exact:true}).fill('2026-09-19T23:59:59');
+    await page.getByRole('button',{name:'查询',exact:true}).click();
+    await page.getByText('LegacyPay',{exact:true}).first().waitFor();
+    assert.equal(await page.locator('.time-pending-note,.volume-legacy-note,.volume-applied-range').count(),0,'all three redundant captions are absent from daily results');
+    assert(await page.getByRole('button',{name:'查询',exact:true}).isEnabled(),'daily query remains operable');
+    await page.screenshot({path:path.join(root,'outputs','summary-captions-removed.png'),fullPage:true});
     assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
     console.log(JSON.stringify({passed:true,externalRequests:0,screenshot:output,geometry,
       checks:['seven/eight fields in one desktop row','sidebar-aware narrow layout','seconds preserved','platform picker operable',
