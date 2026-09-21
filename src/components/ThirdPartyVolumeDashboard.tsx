@@ -33,7 +33,7 @@ import { dashboardScopeAllows, dashboardScopeIdentity, effectiveDashboardDataSco
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload, type ClientMonthlyStatus } from "@/lib/monthlyStatusClient";
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
-import {useOrderTimeQuery, useOrderTimeComparison, useMidnightPending, TimeQueryExtra, OrderRecordModal} from "./OrderTimeControls";
+import {useOrderTimeQuery, useOrderTimeComparison, useOrderTimeDaily, useMidnightPending, TimeQueryExtra, OrderRecordModal} from "./OrderTimeControls";
 import {timePlatformCountry,timePlatformName,timeVolumeData,timeSourceRows,timePlatformCoverage,type TimeQueryResult} from "@/lib/orderTimeVolume";
 import {timeComparisonLabel,type TimeComparisonIssue} from "@/lib/orderTimeComparison";
 import {timePendingSnapshotView,usesMidnightPending} from "@/lib/orderTimePending";
@@ -2924,7 +2924,7 @@ function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { l
 
 
 function OrderSuccessCell({value,hint}:{value?:ReturnType<CollectionSuccessView["compare"]>["current"];hint?:string}) {
-  if(!value || value.rate==null) return <span className="order-rate-empty" title={hint||"现有日汇总没有完整提现订单分母；请使用已接入的创建时间查询。"}>—<small>{hint?"不适用":"待明细接入"}</small></span>;
+  if(!value || value.rate==null) return <span className="order-rate-empty" title={value?.state==="unavailable"?"当前范围包含仅有日汇总的平台，尚无完整订单分母，暂不计算成功率。":hint||"现有日汇总没有完整提现订单分母；请使用已接入的创建时间查询。"}>—<small>{value?.state==="unavailable"?"待明细接入":hint?"不适用":"待明细接入"}</small></span>;
   return <span className="order-rate-value" title={`成功 ${formatNumber(value.success)} 笔 ÷ 创建 ${formatNumber(value.submitted)} 笔；仅基于已入库订单`}>{formatPercent(value.rate)}<small>{formatNumber(value.success)} / {formatNumber(value.submitted)} 笔</small></span>;
 }
 
@@ -2937,6 +2937,7 @@ function PlatformCoverageDialog({result,onClose}:{result:TimeQueryResult;onClose
       {([
         ["所选日期尚未开盘",coverage.notOpen,"92BLAZE 于 9 月 22 日开盘，9 月 23 日开始采集 22 日的完整日数据；此前不计入待采平台。"],
         ["尚无可查明细",coverage.unavailable,"已在平台目录登记，但当前没有可查询的已上传明细；不代表已确认漏采。"],
+        ["已展示日汇总",coverage.daily,"金额与成功笔数已纳入本次结果；订单明细尚未接入，不据此计算成功率。"],
         ["已查询、当前条件无数据",coverage.empty,"已读取该平台，但没有匹配本次时间和筛选条件的订单。"],
         ["本次有数据",coverage.contributing,""]
       ] as const).map(([title,names,hint])=><section className="platform-coverage-group" key={title}><h4>{title}（{names.length}）</h4>{names.length?<ul>{names.map(name=><li key={name}>{name}</li>)}</ul>:<p>无</p>}{hint&&names.length>0&&<small>{hint}</small>}</section>)}
@@ -2963,8 +2964,10 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
   const [workOrders,setWorkOrders]=useState<{result:TimeQueryResult;rows:WorkOrderDepositRow[];error?:string}|null>(null);
   const [coverageOpen,setCoverageOpen]=useState(false);
   const [comparisonOpen,setComparisonOpen]=useState(false);
-  const comparison=useOrderTimeComparison(result,paused);
-  const data=useMemo(()=>timeVolumeData(result),[result]);
+  const daily=useOrderTimeDaily(result,paused);
+  const displayResult=useMemo(()=>daily.rows?{...result,dailyRows:daily.rows.map(normalizeVolumeRowForDisplay)}:result,[result,daily.rows]);
+  const comparison=useOrderTimeComparison(displayResult,paused||daily.loading);
+  const data=useMemo(()=>timeVolumeData(displayResult),[displayResult]);
   const pendingSnapshots=useMidnightPending(result,paused);
   const pendingView=useMemo(()=>usesMidnightPending(result)
     ?timePendingSnapshotView(result,pendingSnapshots.snapshots,pendingSnapshots.error):data.withdrawPending,
@@ -3015,11 +3018,14 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
   const previousFeeRows=useMemo(()=>previousData&&rateRows.length?buildFeeCompareRows(aggregateCombo(previousData.rows,row=>[row.date,row.country,row.platform,row.channel,normalizedFeeBaseChannelType(row)]),rateRows,[],"daily",feeRateMap):[],[previousData,rateRows,feeRateMap]);
   const s=result.selection,range=`${s.start.replace("T"," ")} 至 ${s.end.replace("T"," ")}`;
   const hint=data.successRateHint||"成功笔数 ÷ 创建笔数；仅统计已入库订单，不代表采集已完整。";
-  const platforms=timePlatformCoverage(result);
+  const platforms=timePlatformCoverage(displayResult);
   const coverage=!s.platforms.length&&platforms.unavailable.length
     ? `可查 ${platforms.queried.length} / 全部 ${platforms.expected.length} 平台 · 点击查看` : "点击查看平台名单";
   useEffect(()=>{setSelected(null);setCoverageOpen(false);setComparisonOpen(false);},[result]);
   return <>
+    {daily.loading&&<p role="status">正在补充已有日汇总…</p>}
+    {daily.error&&<p role="alert">{daily.error}</p>}
+    {platforms.daily.length>0&&<p role="status">{platforms.daily.join("、")}：已纳入日汇总金额和成功笔数；相关成功率待完整订单明细接入后计算。</p>}
     {comparison.status==="unavailable"&&<div className="comparison-coverage-notice"><button type="button" className="mini-btn" onClick={()=>setComparisonOpen(true)}>涨跌暂不可比 · 查看原因</button></div>}
     <CountryVolumeSinglePage country={s.country} rows={data.rows} previousRows={previousData?.rows} summary={sumRows(data.rows)} previousSummary={sumRows(previousData?.rows||[])}
       monthlyRows={monthlyRows} feeRows={feeRows} previousFeeRows={previousFeeRows} canCompare={!!previousData} dateRangeLabel={range}
@@ -3030,8 +3036,8 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
       withdrawActual={data.withdrawActual} withdrawPending={pendingView} onView={row=>setSelected(row.labelParts[1])}/>
     {pendingView?.basisHint&&<p className="withdraw-pending-context" role="status">{pendingView.basisHint} 已采集 {pendingView.compare().current.captured} / {pendingView.compare().current.expected} 平台。{pendingView.error}</p>}
     {workOrders?.result===result&&workOrders.error&&<p role="alert">{workOrders.error}</p>}
-    {selected&&<OrderRecordModal result={result} channel={selected} onClose={()=>setSelected(null)}/>}
-    {coverageOpen&&<PlatformCoverageDialog result={result} onClose={()=>setCoverageOpen(false)}/>}
+    {selected&&<OrderRecordModal result={displayResult} channel={selected} onClose={()=>setSelected(null)}/>}
+    {coverageOpen&&<PlatformCoverageDialog result={displayResult} onClose={()=>setCoverageOpen(false)}/>}
     {comparisonOpen&&<ComparisonCoverageDialog issues={comparison.issues||[]} onClose={()=>setComparisonOpen(false)}/>}
   </>;
 }

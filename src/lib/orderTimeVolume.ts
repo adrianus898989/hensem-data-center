@@ -7,6 +7,7 @@ import { canonicalThirdPartyName } from "./thirdPartyNameMap";
 import { canonicalThirdPartyPlatform,thirdPartyPlatformNotOpen } from "./thirdPartyPlatform";
 import { platformDisplayCountry } from "./platformDisplayCountry";
 import { availableAmount } from "./format";
+import { dailyVolumeRows } from "./orderTimeDaily";
 import { timeTotals, sourceTime, type OrderTimeFilters, type OrderTimePayload, type OrderTimeRow } from "./orderTimeQuery";
 
 export type TimeQuerySelection = {
@@ -17,7 +18,7 @@ export type TimeQuerySelection = {
   status?: "all" | "success" | "pending" | "failed" | "rejected" | "unknown";
   crossDayOnly?: boolean;
 };
-export type TimeQueryResult = { selection: TimeQuerySelection; payloads: Array<{id:string; payload:OrderTimePayload}> };
+export type TimeQueryResult = { selection: TimeQuerySelection; payloads: Array<{id:string; payload:OrderTimePayload}>; dailyRows?:ThirdPartyVolumeRow[] };
 export type TimeSourceRow = OrderTimeRow & { platform:string; platformId:string; country:string; channel:string; timezone:string };
 
 export function timePlatformCountry(platform: {name:string;team:string;country?:string}) {
@@ -30,12 +31,14 @@ export function timePlatformName(platform: {name:string;team:string;country?:str
 export function timePlatformCoverage(result:TimeQueryResult) {
   const names=(values:string[])=>[...new Set(values.filter(Boolean))].sort((a,b)=>a.localeCompare(b,"zh-CN",{numeric:true}));
   const s=result.selection;
-  const queried=names(result.payloads.map(({payload:p})=>timePlatformName({name:p.platform||"",team:p.team||"",country:p.country})));
+  const daily=names(dailyVolumeRows(result,false).map(row=>row.platform));
+  const detailed=names(result.payloads.map(({payload:p})=>timePlatformName({name:p.platform||"",team:p.team||"",country:p.country})));
+  const queried=names([...detailed,...daily]);
   const available=names((s.platforms.length?s.platforms:s.availablePlatforms||queried).map(name=>canonicalThirdPartyPlatform(s.country,name)));
   const notOpen=available.filter(name=>thirdPartyPlatformNotOpen(s.country,name,s.end));
   const expected=available.filter(name=>!notOpen.includes(name));
-  const contributing=names(timeSourceRows(result).map(row=>row.platform));
-  return {expected,queried,contributing,notOpen,unavailable:expected.filter(name=>!queried.includes(name)),
+  const contributing=names([...timeSourceRows(result).map(row=>row.platform),...dailyVolumeRows(result).map(row=>row.platform)]);
+  return {expected,queried,contributing,notOpen,daily,detailed,unavailable:expected.filter(name=>!queried.includes(name)),
     empty:queried.filter(name=>!contributing.includes(name))};
 }
 export function timeSourceRows(result:TimeQueryResult):TimeSourceRow[] {
@@ -64,9 +67,16 @@ export function timeSuccessRateHint(selection:TimeQuerySelection):string {
 }
 export function timeVolumeData(result:TimeQueryResult) {
   const source=timeSourceRows(result),basis=result.selection.basis;
+  const daily=dailyVolumeRows(result);
   const key=(row:TimeSourceRow)=>collectionSuccessProviderKey(row.country,row.channel);
   const select=(keys?:readonly string[],types?:readonly string[])=>source.filter(row=>(!keys?.length||keys.includes(key(row)))&&(!types?.length||types.includes(row.channel_type)));
-  const providers=[...new Map(source.map(row=>[key(row),{key:key(row),country:row.country,channel:row.channel}])).values()];
+  const providers=[...new Map([...source,...daily].map(row=>{
+    const k=collectionSuccessProviderKey(row.country,row.channel);
+    return [k,{key:k,country:row.country,channel:row.channel}];
+  })).values()];
+  const hasDaily=(direction:"charge"|"withdraw",keys?:readonly string[],types?:readonly string[])=>daily.some(row=>
+    row.direction===(direction==="charge"?"代收":"代付")&&(!keys?.length||keys.includes(collectionSuccessProviderKey(row.country,row.channel)))
+    &&(!types?.length||types.includes(row.channelType)));
   const rows:ThirdPartyVolumeRow[]=source.map((r,i)=>({
     id:`time:${r.platformId}:${i}`,sheetName:"订单明细库",sourceRow:i+1,
     date:(basis==="created"?r.created_date:r.success_date)||result.selection.start.slice(0,10),
@@ -78,6 +88,7 @@ export function timeVolumeData(result:TimeQueryResult) {
       "最早成功":sourceTime(r.first_success_at,r.timezone),"最晚成功":sourceTime(r.last_success_at,r.timezone),
       "创建笔数":String(r.submitted_count),"成功笔数":String(r.success_count),"最近同步":sourceTime(r.last_synced_at,r.timezone)}
   }));
+  rows.push(...daily);
   const metric=(items:TimeSourceRow[],direction:"charge"|"withdraw"):CollectionSuccessMetric=>{
     const s=timeTotals(items.filter(r=>r.direction===direction));
     const valid=Number.isSafeInteger(s.submitted_count)&&Number.isSafeInteger(s.success_count)
@@ -91,7 +102,7 @@ export function timeVolumeData(result:TimeQueryResult) {
     &&(!result.selection.status||result.selection.status==="all");
   const successView=(direction:"charge"|"withdraw"):CollectionSuccessView|undefined=>canShowSuccessRate?{
     providers:providers.map(p=>({...p,submitted:metric(select([p.key]),direction).submitted})),
-    compare:(keys,types)=>({current:metric(select(keys,types),direction),previous,deltaPoints:null,comparisonLabel:"已入库订单",platforms:[]})
+    compare:(keys,types)=>({current:hasDaily(direction,keys,types)?{...metric(select(keys,types),direction),rate:null,captured:0,state:"unavailable"}:metric(select(keys,types),direction),previous,deltaPoints:null,comparisonLabel:"已入库订单",platforms:[]})
   }:undefined;
   const collectionSuccess=successView("charge");
   const withdrawSuccess=successView("withdraw");
@@ -103,7 +114,7 @@ export function timeVolumeData(result:TimeQueryResult) {
   };
   const withdrawActual:WithdrawActualView={
     providers:providers.map(p=>({...p,...actual(select([p.key]))})),
-    compare:keys=>({current:actual(select(keys)),previous:{...actual([]),state:"unavailable"}})
+    compare:keys=>({current:hasDaily("withdraw",keys)?{...actual(select(keys)),actualAmount:NaN,feeAmount:NaN,captured:0,state:"unavailable"}:actual(select(keys)),previous:{...actual([]),state:"unavailable"}})
   };
   const pending=(items:TimeSourceRow[])=>{
     const s=timeTotals(items.filter(r=>r.direction==="withdraw"));
@@ -112,7 +123,7 @@ export function timeVolumeData(result:TimeQueryResult) {
   };
   const withdrawPending:WithdrawPendingView|undefined=basis==="created"?{
     providers:providers.map(p=>({...p,...pending(select([p.key]))})),
-    compare:keys=>({current:pending(select(keys)),previous:{...pending([]),state:"unavailable"}})
+    compare:keys=>({current:hasDaily("withdraw",keys)?{...pending(select(keys)),amount:NaN,captured:0,state:"unavailable"}:pending(select(keys)),previous:{...pending([]),state:"unavailable"}})
   }:undefined;
   return {rows,source,collectionSuccess,withdrawSuccess,successRateHint:timeSuccessRateHint(result.selection),
     withdrawActual,withdrawPending,totals:timeTotals(source)};
