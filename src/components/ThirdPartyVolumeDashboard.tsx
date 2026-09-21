@@ -2817,12 +2817,21 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
 }
 
 
+function providerOptionRank(value: string): number {
+  // Provider names are the primary choices. Keep unresolved source categories
+  // available at the end so their records can still be inspected and filtered.
+  if (["未知", "未知三方", "未识别通道", "普通提现", "其他类型"].includes(value)) return 2;
+  if (["人工确认", "人工充值"].includes(value)) return 1;
+  return 0;
+}
+
 function VolumeSingleSelect({ label, options, value, onChange, placeholder }: { label: string; options: string[]; value: string; onChange: (value: string) => void; placeholder: string }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const boxRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
-  const visibleOptions = options.filter(item => item.toLowerCase().includes(search.trim().toLowerCase()));
+  const visibleOptions = [...new Set(options)].filter(item => item.toLowerCase().includes(search.trim().toLowerCase()))
+    .sort((a,b)=>providerOptionRank(a)-providerOptionRank(b)||a.localeCompare(b,"zh-CN",{numeric:true}));
   useEffect(() => {
     if (!open) return;
     const outside = (event: MouseEvent | TouchEvent) => {

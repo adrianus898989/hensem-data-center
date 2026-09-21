@@ -625,3 +625,16 @@ test('country interval summaries render grouped totals without per-order drilldo
   assert.match(html,/当前页汇总/);
   assert.match(html,/全部汇总/);
 });
+
+
+test('provider dropdown puts real providers first and keeps manual and unresolved filters accessible',()=>{
+  const input=['未知三方','普通提现','未识别通道','人工确认','RushPay跑分','AIV3Pay跑分','ATPay','RushPay跑分'];
+  const probe=createApi({useState:initial=>[typeof initial==='boolean'?true:initial,()=>{}],useEffect:()=>{},useRef:()=>({current:null})});
+  let picked;
+  const node=probe.VolumeSingleSelect({label:'统一三方',options:input,value:'',placeholder:'全部三方',onChange:x=>picked=x});
+  const buttons=findElements(node,'button').filter(b=>b.props.className==='multi-option volume-single-option');
+  assert.deepEqual(buttons.map(b=>b.props.children),['全部三方','AIV3Pay跑分','ATPay','RushPay跑分','人工确认','普通提现','未识别通道','未知三方']);
+  buttons.find(b=>b.props.children==='人工确认').props.onClick();assert.equal(picked,'人工确认');
+  buttons.find(b=>b.props.children==='未识别通道').props.onClick();assert.equal(picked,'未识别通道');
+  assert.equal(input.length,8);
+});
