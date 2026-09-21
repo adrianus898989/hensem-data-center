@@ -91,11 +91,23 @@ function renderWithWorkOrders(result,stored){
   return renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));
 }
 const issue=(provider='PayA',platform='DHANIWIN(新AR)',country_code='IN')=>({system_name:'AR',source_system:'AR_WORKORDER',stat_date:'2026-09-17',country_code,platform,third_party:provider,channel_type:'BANK',submitted_amount:200,submitted_count:2,success_amount:100,success_count:1,withdraw_not_received_amount:300,withdraw_not_received_count:3,withdraw_success_amount:100,withdraw_success_count:1});
-test('India never exposes partial actual-amount/deduction columns; Hong Kong keeps them',()=>{
-  const html=render(indiaFixture()),labels=headings(html);
-  assert.ok(!labels.includes('实际到账金额'));assert.ok(!labels.includes('提现手续费'));
-  assert.match(html,/data-label="代付手续费"/);assert.ok(labels.includes('代付金额'));assertAligned(html);
-  assert.ok(headings(render(fixture())).includes('实际到账金额'));
+test('only Hong Kong and Red Crab expose actual payout and withdrawal fee columns for daily and hourly ranges',()=>{
+  for(const country of ['香港','红膏蟹','印度','巴基斯坦','巴西','印尼','越南','菲律宾','马来','缅甸','尼日利亚','哥伦比亚','墨西哥','智利','胖虎巴西','所有国家USDT']){
+    for(const start of ['2026-09-17T00:00:00','2026-09-17T10:00:00']){
+      const result=fixture({country,start});
+      Object.assign(result.payloads[0].payload,{country,team:country});
+      const html=render(result),labels=headings(html),supported=['香港','红膏蟹'].includes(country);
+      for(const column of ['实际到账金额','提现手续费'])assert.equal(labels.includes(column),supported,`${country} ${start} ${column}`);
+      const provider=cells(rows(html).find(line=>plain(cells(line)[0]||'')==='PayA'));
+      assert.equal(plain(provider[labels.indexOf('代付金额')]),'120','requested payout money stays unchanged');
+      assert.equal(plain(provider[labels.indexOf('代付笔数')]),'6');
+      if(supported){
+        assert.equal(plain(provider[labels.indexOf('实际到账金额')]),'112');
+        assert.equal(plain(provider[labels.indexOf('提现手续费')]),'8');
+      }
+      assert.match(html,/data-label="代付手续费"/);assertAligned(html);
+    }
+  }
 });
 test('India confirmed provider aliases merge amounts, rates and both workorder groups without changing totals',()=>{
   const result=indiaFixture(),p=result.payloads[0].payload;
