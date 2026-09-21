@@ -3043,7 +3043,6 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
       platformCoverage={coverage} onPlatformCoverage={()=>setCoverageOpen(true)}
       workOrderDeposit={workOrderDeposit}
       withdrawActual={data.withdrawActual} withdrawPending={pendingView}/>
-    {pendingView?.basisHint&&<p className="withdraw-pending-context" role="status">{pendingView.basisHint} 已采集 {pendingView.compare().current.captured} / {pendingView.compare().current.expected} 平台。{pendingView.missingSnapshotPlatforms?.length?` 暂无该日代付中快照：${pendingView.missingSnapshotPlatforms.join("、")}。此处只统计快照覆盖，充值／提现明细单独统计。`:""}{pendingView.error}</p>}
     {workOrders?.result===result&&workOrders.error&&<p role="alert">{workOrders.error}</p>}
     {coverageOpen&&<PlatformCoverageDialog result={displayResult} onClose={()=>setCoverageOpen(false)}/>}
     {comparisonOpen&&<ComparisonCoverageDialog issues={comparison.issues||[]} onClose={()=>setComparisonOpen(false)}/>}

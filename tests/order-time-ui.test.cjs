@@ -52,8 +52,8 @@ test('real mixed AR-null/NEWAR-PKR metadata displays Pakistan money and identifi
   const custom=createApi({useMidnightPending:()=>({snapshots})});
   const html=renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));
   assert.match(html,/1,450/);assert.match(html,/1,400/);assert.match(plain(html),/35.00%/);
-  assert.match(plain(html),/暂无该日代付中快照：3PATTI-SUPER、LG789/);
-  assert.match(plain(html),/充值／提现明细单独统计/);
+  assert.doesNotMatch(html,/withdraw-pending-context/);
+  assert.doesNotMatch(plain(html),/暂无该日代付中快照：|充值／提现明细单独统计/);
 });
 test('default all-platform view renders daily-only amounts, names the basis, and does not fabricate a success rate',()=>{
   const result=fixture({country:'巴基斯坦',platforms:[],availablePlatforms:['92GAME','3PATISUPER','3PATTI-SUPER']});
@@ -620,7 +620,7 @@ test('India table shows midnight pending 262 / 812708 while retaining created-da
   assert.equal(plain(rspay[labels.indexOf('代付中金额')]),'812,708');assert.equal(plain(rspay[labels.indexOf('代付中笔数')]),'262');
   assert.match(plain(rspay[labels.indexOf('代付成功率')]),/29 \/ 101 笔/);
   assert.ok(body.some(line=>plain(cells(line)[0]||'')==='OnlyPending'));
-  assert.match(html,/近 7 个完整自然日/);assert.match(html,/已采集 1 \/ 1 平台/);assertAligned(html);
+  assert.doesNotMatch(html,/withdraw-pending-context/);assert.doesNotMatch(plain(html),/已采集 1 \/ 1 平台/);assertAligned(html);
   const partial=renderToStaticMarkup(React.createElement(custom.WithdrawPendingCell,{metric:{amount:812708,count:262,state:'partial',captured:1,expected:2},kind:'count'}));
   assert.match(plain(partial),/262部分 · 已采 1\/2/);
 });
