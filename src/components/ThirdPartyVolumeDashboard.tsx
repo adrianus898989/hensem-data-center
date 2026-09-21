@@ -24,7 +24,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ThirdPartyPlatformStatusRow, ThirdPartyRatePayload, ThirdPartyRateRow, ThirdPartyVolumePayload, ThirdPartyVolumeRow, WorkOrderDepositRow } from "@/lib/types";
-import { formatNumber, formatPercent, amountRatio, sumVolumeAmounts } from "@/lib/format";
+import { formatNumber, formatPercent, amountRatio, sumVolumeAmounts, volumeReportCurrency } from "@/lib/format";
 import { canonicalThirdPartyName, confirmedIndiaThirdPartyAlias, inferThirdPartyChannelType } from "@/lib/thirdPartyNameMap";
 import { canonicalThirdPartyPlatform, canonicalThirdPartyPlatformSelections, matchesThirdPartyPlatformSelection } from "@/lib/thirdPartyPlatform";
 import { platformDisplayCountry, withPlatformDisplayCountry } from "@/lib/platformDisplayCountry";
@@ -43,7 +43,7 @@ import { buildCollectionSuccessView, collectionSuccessCountry, collectionSuccess
 import { CollectionSuccessCell, CollectionSuccessBreakdown } from "./CollectionSuccessCell";
 import { buildWithdrawPendingView, type WithdrawPendingView } from "@/lib/withdrawPending";
 import { buildWorkOrderDepositView, workOrderDepositCountry, workOrderDepositProviderKey, workOrderSuccessTone, type WorkOrderDepositView } from "@/lib/workOrderDeposit";
-import { buildWithdrawActualView, type WithdrawActualView } from "@/lib/withdrawActual";
+import { buildWithdrawActualView, supportsWithdrawActualCountry, type WithdrawActualView } from "@/lib/withdrawActual";
 import "./WithdrawPendingCell.css";
 
 type LoadState = "loading" | "ready" | "error";
@@ -1400,7 +1400,7 @@ function buildFeeCompareRows(comboRows: ComboSummary[], rateRows: ThirdPartyRate
     const collectSingleFee = singleFeeFor(collectRateRow, "collect", collectAvgAmount);
     const payoutSingleFee = singleFeeFor(payoutRateRow, "payout", payoutAvgAmount);
     const detailAmounts = row.rows.some(item=>String(item.id || "").startsWith("time:"));
-    const mixedCurrency = new Set(row.rows.map(item=>item.currency || "")).size > 1;
+    const mixedCurrency = new Set(row.rows.map(volumeReportCurrency)).size > 1;
     const collectAmountUnavailable = mixedCurrency || (detailAmounts && !Number.isFinite(row.collectAmount));
     const payoutAmountUnavailable = mixedCurrency || (detailAmounts && !Number.isFinite(row.payoutAmount));
     const collectFeeAmount = collectAmountUnavailable ? Number.NaN : estimateSideFee(row.collectAmount, row.collectCount, collectFeeRate, collectSingleFee);
@@ -1444,7 +1444,7 @@ function buildFeeCompareRows(comboRows: ComboSummary[], rateRows: ThirdPartyRate
       payoutFeeKnownZero,
       collectAmountUnavailable,
       payoutAmountUnavailable,
-      currency:row.rows[0]?.currency,
+      currency:volumeReportCurrency(row.rows[0] || {country}),
       estimatedFee,
       advice: "正常观察",
       level: "normal" as FeeCompareRow["level"]
@@ -1755,7 +1755,7 @@ function feePairHint(rows: FeeCompareRow[], side: "collect" | "payout"): string 
 }
 
 function summarizeFeeRows(rows: FeeCompareRow[], totalCollectFee = 0, totalPayoutFee = 0): FeeSummary {
-  const mixedCurrency = new Set(rows.map(row=>row.currency || "")).size > 1;
+  const mixedCurrency = new Set(rows.map(volumeReportCurrency)).size > 1;
   const collectUnavailable = mixedCurrency || rows.some(row=>row.collectAmountUnavailable);
   const payoutUnavailable = mixedCurrency || rows.some(row=>row.payoutAmountUnavailable);
   // 忽略单条异常 NaN，不能让 TodayPay 等整组三方手续费被污染后显示为 0。
@@ -2534,7 +2534,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
     };
     appendProviderOnly("pending-only", withdrawPending.providers);
     appendProviderOnly("deposit-only", workOrderDeposit.providers);
-    if (collectionSuccessCountry(appliedCountryPage) !== "印度") appendProviderOnly("actual-only", withdrawActual.providers);
+    if (supportsWithdrawActualCountry(appliedCountryPage)) appendProviderOnly("actual-only", withdrawActual.providers);
     return [...existing, ...providerOnlyRows];
   }, [countryPageRows, withdrawPending, workOrderDeposit, withdrawActual, appliedCountryPage]);
   const countryPageMonthlyPeriodRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.date.slice(0, 7), row.country, row.channel]), [countryPageRows]);
@@ -3087,7 +3087,7 @@ function CountryVolumeSinglePage({ country, rows, previousRows, summary, previou
         collectionSuccess={collectionSuccess}
         withdrawPending={withdrawPending}
         workOrderDeposit={workOrderDeposit}
-        withdrawActual={collectionSuccessCountry(country)==="印度"?undefined:withdrawActual}
+        withdrawActual={supportsWithdrawActualCountry(country)?withdrawActual:undefined}
         withdrawSuccess={withdrawSuccess}
         orderRateHint={orderRateHint}
         onView={onView}

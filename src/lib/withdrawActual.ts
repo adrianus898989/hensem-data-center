@@ -16,6 +16,13 @@ export function withdrawActualCountry(country: string, platform = ""): string {
   return platformDisplayCountry(COUNTRY_CODES[value.toUpperCase()] || COUNTRY_CODES[value] || value, platform);
 }
 
+/** Only the EK/G66 team reports have an approved actual-settlement contract.
+ * Other adapters may expose numeric fields, but those are not a verified
+ * actual receipt / order fee and must not enable these columns. */
+export function supportsWithdrawActualCountry(country: string): boolean {
+  return ["香港", "红膏蟹"].includes(withdrawActualCountry(country.replace(/团队$/, "")));
+}
+
 function providerKey(country: string, channel: string): string {
   const displayCountry = withdrawActualCountry(country);
   return `${displayCountry}\u001f${canonicalThirdPartyName(channel, displayCountry)}`;
