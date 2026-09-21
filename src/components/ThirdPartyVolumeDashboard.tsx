@@ -33,7 +33,7 @@ import { dashboardScopeAllows, dashboardScopeIdentity, effectiveDashboardDataSco
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload, type ClientMonthlyStatus } from "@/lib/monthlyStatusClient";
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
-import {useOrderTimeQuery, useOrderTimeComparison, useOrderTimeDaily, useMidnightPending, TimeQueryExtra, OrderRecordModal} from "./OrderTimeControls";
+import {useOrderTimeQuery, useOrderTimeComparison, useOrderTimeDaily, useMidnightPending, TimeQueryExtra} from "./OrderTimeControls";
 import {timePlatformCountry,timePlatformName,timeVolumeData,timeSourceRows,timePlatformCoverage,type TimeQueryResult} from "@/lib/orderTimeVolume";
 import {timeComparisonLabel,type TimeComparisonIssue} from "@/lib/orderTimeComparison";
 import {timePendingSnapshotView,usesMidnightPending} from "@/lib/orderTimePending";
@@ -2961,7 +2961,6 @@ function ComparisonCoverageDialog({issues,onClose}:{issues:TimeComparisonIssue[]
 }
 
 function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result:TimeQueryResult;rateRows:ThirdPartyRateRow[];feeRateMap:Map<string,RateLike>;paused?:boolean}) {
-  const [selected,setSelected]=useState<string|null>(null);
   const [workOrders,setWorkOrders]=useState<{result:TimeQueryResult;rows:WorkOrderDepositRow[];error?:string}|null>(null);
   const [coverageOpen,setCoverageOpen]=useState(false);
   const [comparisonOpen,setComparisonOpen]=useState(false);
@@ -3022,7 +3021,7 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
   const platforms=timePlatformCoverage(displayResult);
   const coverage=!s.platforms.length&&platforms.unavailable.length
     ? `可查 ${platforms.queried.length} / 全部 ${platforms.expected.length} 平台 · 点击查看` : "点击查看平台名单";
-  useEffect(()=>{setSelected(null);setCoverageOpen(false);setComparisonOpen(false);},[result]);
+  useEffect(()=>{setCoverageOpen(false);setComparisonOpen(false);},[result]);
   return <>
     {daily.loading&&<p role="status">正在补充已有日汇总…</p>}
     {daily.error&&<p role="alert">{daily.error}</p>}
@@ -3034,16 +3033,15 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
       collectionSuccess={data.collectionSuccess} withdrawSuccess={data.withdrawSuccess} orderRateHint={hint}
       platformCoverage={coverage} onPlatformCoverage={()=>setCoverageOpen(true)}
       workOrderDeposit={workOrderDeposit}
-      withdrawActual={data.withdrawActual} withdrawPending={pendingView} onView={row=>setSelected(row.labelParts[1])}/>
+      withdrawActual={data.withdrawActual} withdrawPending={pendingView}/>
     {pendingView?.basisHint&&<p className="withdraw-pending-context" role="status">{pendingView.basisHint} 已采集 {pendingView.compare().current.captured} / {pendingView.compare().current.expected} 平台。{pendingView.missingSnapshotPlatforms?.length?` 暂无该日代付中快照：${pendingView.missingSnapshotPlatforms.join("、")}。此处只统计快照覆盖，充值／提现明细单独统计。`:""}{pendingView.error}</p>}
     {workOrders?.result===result&&workOrders.error&&<p role="alert">{workOrders.error}</p>}
-    {selected&&<OrderRecordModal result={displayResult} channel={selected} onClose={()=>setSelected(null)}/>}
     {coverageOpen&&<PlatformCoverageDialog result={displayResult} onClose={()=>setCoverageOpen(false)}/>}
     {comparisonOpen&&<ComparisonCoverageDialog issues={comparison.issues||[]} onClose={()=>setComparisonOpen(false)}/>}
   </>;
 }
 
-function CountryVolumeSinglePage({ country, rows, previousRows, summary, previousSummary, monthlyRows, feeRows, previousFeeRows, canCompare, compareLabel, comparisonHint, dateRangeLabel, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual, withdrawSuccess, orderRateHint, platformCoverage, onPlatformCoverage, onView }: { country: string; rows: ThirdPartyVolumeRow[]; previousRows?: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; previousSummary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; previousFeeRows: FeeCompareRow[]; canCompare: boolean; compareLabel?: string; comparisonHint?: string; dateRangeLabel: string; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView; withdrawSuccess?: CollectionSuccessView; orderRateHint?: string; platformCoverage?: string; onPlatformCoverage?:()=>void; onView?: (row: ComboSummary) => void }) {
+function CountryVolumeSinglePage({ country, rows, previousRows, summary, previousSummary, monthlyRows, feeRows, previousFeeRows, canCompare, compareLabel, comparisonHint, dateRangeLabel, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual, withdrawSuccess, orderRateHint, platformCoverage, onPlatformCoverage }: { country: string; rows: ThirdPartyVolumeRow[]; previousRows?: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; previousSummary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; previousFeeRows: FeeCompareRow[]; canCompare: boolean; compareLabel?: string; comparisonHint?: string; dateRangeLabel: string; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView; withdrawSuccess?: CollectionSuccessView; orderRateHint?: string; platformCoverage?: string; onPlatformCoverage?:()=>void }) {
   const fees = summarizeFeeRows(feeRows);
   const previousFees = summarizeFeeRows(previousFeeRows);
   const netAmount = summary.collectAmount - summary.payoutAmount - fees.estimatedFee;
@@ -3090,7 +3088,7 @@ function CountryVolumeSinglePage({ country, rows, previousRows, summary, previou
         withdrawActual={collectionSuccessCountry(country)==="印度"?undefined:withdrawActual}
         withdrawSuccess={withdrawSuccess}
         orderRateHint={orderRateHint}
-        onView={onView}
+        summaryOnly
         paginated
       />
     </div>
@@ -3943,7 +3941,7 @@ function feeShareNode(summary: FeeSummary, onOpen: () => void) {
   return <button type="button" className="fee-share-alert-btn" onClick={onOpen}>{text}</button>;
 }
 
-function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFirstColumn, feeRows = [], paginated, compact, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual, withdrawSuccess, orderRateHint, onView }: { title: string; subtitle: string; rows: ComboSummary[]; columns: string[]; columnIndexes?: number[]; stickyFirstColumn?: boolean; feeRows?: FeeCompareRow[]; paginated?: boolean; compact?: boolean; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView; withdrawSuccess?: CollectionSuccessView; orderRateHint?: string; onView?: (row: ComboSummary) => void }) {
+function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFirstColumn, feeRows = [], paginated, compact, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual, withdrawSuccess, orderRateHint, onView, summaryOnly = false }: { title: string; subtitle: string; rows: ComboSummary[]; columns: string[]; columnIndexes?: number[]; stickyFirstColumn?: boolean; feeRows?: FeeCompareRow[]; paginated?: boolean; compact?: boolean; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView; withdrawSuccess?: CollectionSuccessView; orderRateHint?: string; onView?: (row: ComboSummary) => void; summaryOnly?: boolean }) {
   const [selected, setSelected] = useState<ComboSummary | null>(null);
   const [selectedFeeIssues, setSelectedFeeIssues] = useState<{ title: string; rows: FeeCompareRow[] } | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -4145,7 +4143,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
             <SortTh label="合计笔数" sortKey="totalCount" numeric className="num" />
             {showFeeColumns && <><SortTh label="代收费率" sortKey="collectFeeRate" numeric /><SortTh label="代收手续费" sortKey="collectFee" numeric className="num" /><SortTh label="代付费率" sortKey="payoutFeeRate" numeric /><SortTh label="代付手续费" sortKey="payoutFee" numeric className="num" /><SortTh label="合计手续费" sortKey="estimatedFee" numeric className="num" /><SortTh label="手续费占比" sortKey="feeShare" numeric /></>}
             <SortTh label="总占比" sortKey="totalPct" numeric />
-            <th>详情</th>
+            <th>{summaryOnly ? "分类" : "详情"}</th>
           </tr></thead>
           <tbody>{shown.flatMap((row) => {
             const fee = feeMap.get(comboFeeKey(row, columns)) || emptyFeeSummary();
@@ -4156,7 +4154,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
             const actual = withdrawActual?.compare(successKeys([row])).current;
             const canExpand = children.length > 0 || Boolean(success?.platforms.length);
             const isOpen = !!expanded[row.key];
-            const main = <tr key={row.key} className={fee.alertRows.length ? "fee-warning-main-row" : ""}>{columns.map((_, index) => <td key={index}>{row.labelParts[dimensionIndexes[index] ?? index] || "-"}</td>)}<td className="num">{formatNumber(row.collectAmount)}</td><td className="num">{formatNumber(row.collectCount)}</td>{showCollectRate && <td>{orderRateHint ? <OrderSuccessCell value={success?.current} hint={orderRateHint}/> : success ? <CollectionSuccessCell value={success} /> : "—"}</td>}<td><ShareBar value={row.collectPct} /></td><td className="num">{formatNumber(row.payoutAmount)}</td><td className="num">{formatNumber(row.payoutCount)}</td><td><OrderSuccessCell value={withdrawSuccess?.compare(successKeys([row])).current} hint={orderRateHint}/></td>{withdrawActual && <><td className="num withdraw-actual-cell"><WithdrawActualCell metric={actual} kind="actual" /></td><td className="num withdraw-actual-cell"><WithdrawActualCell metric={actual} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={pending} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={pending} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={deposit} formatValue={issueValue} formatRate={issueRate} />}<td><ShareBar value={row.payoutPct} /></td><td className="num strong-cell">{formatNumber(row.totalAmount)}</td><td className="num strong-cell">{formatNumber(row.totalCount)}</td>{showFeeColumns && <><td>{feeRateText(fee, "collect")}</td><td className="num">{feeAmountText(fee, "collect")}</td><td>{feeRateText(fee, "payout")}</td><td className="num">{feeAmountText(fee, "payout")}</td><td className="num">{feeTotalText(fee)}</td><td>{feeShareNode(fee, () => setSelectedFeeIssues({ title: row.labelParts.join(" / "), rows: fee.alertRows }))}</td></>}<td>{formatPercent(row.totalPct)}</td><td><div className="row-action-group">{canExpand && <button className="mini-btn" onClick={() => setExpanded((old) => ({ ...old, [row.key]: !old[row.key] }))}>{isOpen ? "收起" : "展开"}</button>}<button className="mini-btn" onClick={() => onView ? onView(row) : setSelected(row)}>查看</button></div></td></tr>;
+            const main = <tr key={row.key} className={fee.alertRows.length ? "fee-warning-main-row" : ""}>{columns.map((_, index) => <td key={index}>{row.labelParts[dimensionIndexes[index] ?? index] || "-"}</td>)}<td className="num">{formatNumber(row.collectAmount)}</td><td className="num">{formatNumber(row.collectCount)}</td>{showCollectRate && <td>{orderRateHint ? <OrderSuccessCell value={success?.current} hint={orderRateHint}/> : success ? <CollectionSuccessCell value={success} /> : "—"}</td>}<td><ShareBar value={row.collectPct} /></td><td className="num">{formatNumber(row.payoutAmount)}</td><td className="num">{formatNumber(row.payoutCount)}</td><td><OrderSuccessCell value={withdrawSuccess?.compare(successKeys([row])).current} hint={orderRateHint}/></td>{withdrawActual && <><td className="num withdraw-actual-cell"><WithdrawActualCell metric={actual} kind="actual" /></td><td className="num withdraw-actual-cell"><WithdrawActualCell metric={actual} kind="fee" /></td></>}{withdrawPending && <><td className="num"><WithdrawPendingCell metric={pending} kind="amount" /></td><td className="num"><WithdrawPendingCell metric={pending} kind="count" /></td></>}{workOrderDeposit && <WorkOrderIssuesCells metric={deposit} formatValue={issueValue} formatRate={issueRate} />}<td><ShareBar value={row.payoutPct} /></td><td className="num strong-cell">{formatNumber(row.totalAmount)}</td><td className="num strong-cell">{formatNumber(row.totalCount)}</td>{showFeeColumns && <><td>{feeRateText(fee, "collect")}</td><td className="num">{feeAmountText(fee, "collect")}</td><td>{feeRateText(fee, "payout")}</td><td className="num">{feeAmountText(fee, "payout")}</td><td className="num">{feeTotalText(fee)}</td><td>{feeShareNode(fee, () => setSelectedFeeIssues({ title: row.labelParts.join(" / "), rows: fee.alertRows }))}</td></>}<td>{formatPercent(row.totalPct)}</td><td><div className="row-action-group">{canExpand && <button className="mini-btn" onClick={() => setExpanded((old) => ({ ...old, [row.key]: !old[row.key] }))}>{isOpen ? "收起" : "展开"}</button>}{!summaryOnly && <button className="mini-btn" onClick={() => onView ? onView(row) : setSelected(row)}>查看</button>}</div></td></tr>;
             if (!isOpen || !canExpand) return [main];
             const childRows = children.map((child) => {
               const childHasCollect = sideHasValue(child.collectAmount, child.collectCount);
@@ -4173,7 +4171,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
       </div>
       {paginated && <TablePager total={rows.length} page={pager.page} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />}
       {compact && rows.length > shown.length && <div className="table-note">这里只展示 TOP {shown.length}，更多请进入对应明细页。</div>}
-      {selected && <VolumeRowsModal title={selected.labelParts.join(" / ")} rows={selected.rows} onClose={() => setSelected(null)} />}
+      {!summaryOnly && selected && <VolumeRowsModal title={selected.labelParts.join(" / ")} rows={selected.rows} onClose={() => setSelected(null)} />}
       {selectedFeeIssues && <FeeIssueRowsModal title={selectedFeeIssues.title} rows={selectedFeeIssues.rows} onClose={() => setSelectedFeeIssues(null)} />}
     </div>
   );

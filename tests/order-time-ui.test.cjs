@@ -87,7 +87,7 @@ function indiaFixture(selection={}){
 }
 function renderWithWorkOrders(result,stored){
   let index=0;
-  const custom=createApi({useState:initial=>React.useState(index++===1?stored:initial)});
+  const custom=createApi({useState:initial=>React.useState(index++===0?stored:initial)});
   return renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));
 }
 const issue=(provider='PayA',platform='DHANIWIN(新AR)',country_code='IN')=>({system_name:'AR',source_system:'AR_WORKORDER',stat_date:'2026-09-17',country_code,platform,third_party:provider,channel_type:'BANK',submitted_amount:200,submitted_count:2,success_amount:100,success_count:1,withdraw_not_received_amount:300,withdraw_not_received_count:3,withdraw_success_amount:100,withdraw_success_count:1});
@@ -104,7 +104,7 @@ test('India confirmed provider aliases merge amounts, rates and both workorder g
     {...sample('3TPay-QR','charge',2,1,200,100),currency:'INR'});
   const stored={result,rows:[issue('LKgoPay'),issue('LKgoPayINR-PaytmQR'),issue('3TPay')]};
   let index=0;
-  const custom=createApi({useState:initial=>React.useState(index++===1?stored:initial)});
+  const custom=createApi({useState:initial=>React.useState(index++===0?stored:initial)});
   const rates=['LKgoPay','3TPay'].map(thirdParty=>({country:'印度',category:'UPI',thirdParty,collectFee:'2%',payoutFee:'1%',totalFee:'3%',collectSingleFee:'0',payoutSingleFee:'0',collectLimit:'',payoutLimit:''}));
   const html=renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:rates,feeRateMap:api.buildRateMap(rates)}));
   const labels=headings(html),body=rows(html),lk=cells(body.find(line=>plain(cells(line)[0]||'')==='LKgoPay'));
@@ -431,7 +431,7 @@ test('full-day cards use historical daily totals without old raw details and pre
   const previousRows=[{date:'2026-09-16',country:'印度',platform:'DHANIWIN',direction:'代收',channel:'PayA',rawChannel:'PayA',channelType:'UPI',amount:280228755.97,count:430088},
     {date:'2026-09-16',country:'印度',platform:'DHANIWIN',direction:'代付',channel:'PayA',rawChannel:'PayA',channelType:'BANK',amount:243352746,count:149135}];
   let index=0;
-  const custom=createApi({useState:initial=>React.useState(index++===1?{result,rows:[issue()]}:initial),useOrderTimeComparison:()=>({status:'ready',basis:'daily',previousRows})});
+  const custom=createApi({useState:initial=>React.useState(index++===0?{result,rows:[issue()]}:initial),useOrderTimeComparison:()=>({status:'ready',basis:'daily',previousRows})});
   const html=plain(renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()})));
   assert.match(html,/276,939,771较昨日（日汇总）−?\-?3,288,985 \-1.17%/);
   assert.match(html,/218,627,111较昨日（日汇总）−?\-?24,725,635 \-10.16%/);
@@ -442,7 +442,7 @@ test('full-day cards use historical daily totals without old raw details and pre
 test('incomplete comparison retains amounts and both workorders, hides false deltas and offers exact gap explanation',()=>{
   const result=indiaFixture(),issues=[{period:'previous',date:'2026-09-18',platform:'91CLUB',direction:'代收',expected:199537,stored:100000,reason:'已入库明细少于完整采集记录。'}];
   let index=0;
-  const custom=createApi({useState:initial=>React.useState(index++===1?{result,rows:[issue()]}:initial),useOrderTimeComparison:()=>({status:'unavailable',issues})});
+  const custom=createApi({useState:initial=>React.useState(index++===0?{result,rows:[issue()]}:initial),useOrderTimeComparison:()=>({status:'unavailable',issues})});
   const html=renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));
   assert.match(html,/涨跌暂不可比 · 查看原因/);assert.match(html,/较昨日 · 数据待核实/);
   assert.doesNotMatch(html,/468\.86|page-stat-delta/);
@@ -611,4 +611,17 @@ test('India table shows midnight pending 262 / 812708 while retaining created-da
   assert.match(html,/近 7 个完整自然日/);assert.match(html,/已采集 1 \/ 1 平台/);assertAligned(html);
   const partial=renderToStaticMarkup(React.createElement(custom.WithdrawPendingCell,{metric:{amount:812708,count:262,state:'partial',captured:1,expected:2},kind:'count'}));
   assert.match(plain(partial),/262部分 · 已采 1\/2/);
+});
+
+
+test('country interval summaries render grouped totals without per-order drilldown',()=>{
+  const input=fixture();
+  input.payloads[0].payload.rows[0].provider='Win2pay跑分';
+  input.payloads[0].payload.rows.push({...input.payloads[0].payload.rows[0],provider:'Win2Pay跑分'});
+  const html=render(input);
+  assertAligned(html);
+  assert.equal((html.match(/>Win2Pay跑分<\/td>/g)||[]).length,1);
+  assert.doesNotMatch(html,/>查看<|>详情<|会员 ID|订单号|三方订单号/);
+  assert.match(html,/当前页汇总/);
+  assert.match(html,/全部汇总/);
 });

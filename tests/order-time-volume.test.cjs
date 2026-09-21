@@ -140,3 +140,34 @@ test('known actual money survives a source without actual fields as a visibly pa
   const actual=volume.timeVolumeData(input).withdrawActual.compare().current;
   assert.equal(actual.state,'partial');assert.equal(actual.actualAmount,88);assert.equal(actual.feeAmount,12);
 });
+
+
+test('confirmed display aliases merge metrics before ratios and keep versioned providers distinct',()=>{
+  const names=loadTs(path.join(root,'src/lib/thirdPartyNameMap.ts'));
+  const groups=[['Win2pay跑分','Win2Pay跑分','WIN2PAY跑分'],['AIV3Pay跑分','Aiv3Pay跑分','aiv3pay跑分'],
+    ['t3Pay唤醒','T3Pay唤醒','t3pay唤醒'],['At2Pay唤醒','ATPay','atpay']];
+  for(const variants of groups){
+    const input=result(variants.flatMap((provider,i)=>[
+      row({provider,direction:'charge',submitted_count:(i+1)*10,success_count:(i+1)*4,success_amount:(i+1)*100}),
+      row({provider,submitted_count:(i+1)*10,success_count:i+1,success_amount:(i+1)*200,
+        actual_amount:(i+1)*198,withdraw_fee:(i+1)*2,pending_count:i+2,pending_amount:(i+2)*100})]));
+    const before=structuredClone(input),data=volume.timeVolumeData(input);
+    const canonical=names.canonicalThirdPartyName(variants[0],'香港');
+    assert.equal(new Set(data.rows.map(r=>r.channel)).size,1);
+    assert.equal(names.canonicalThirdPartyName(canonical,'香港'),canonical);
+    const key=collectionSuccessProviderKey('香港',canonical);
+    assert.equal(data.collectionSuccess.compare([key]).current.rate,24/60);
+    assert.equal(data.withdrawSuccess.compare([key]).current.rate,6/60);
+    assert.equal(data.withdrawActual.compare([key]).current.actualAmount,1188);
+    assert.equal(data.withdrawActual.compare([key]).current.feeAmount,12);
+    assert.equal(data.withdrawPending.compare([key]).current.count,9);
+    assert.equal(data.withdrawPending.compare([key]).current.amount,900);
+    assert.equal(data.rows.filter(r=>r.direction==='代收').reduce((n,r)=>n+r.amount,0),600);
+    assert.equal(data.rows.filter(r=>r.direction==='代付').reduce((n,r)=>n+r.amount,0),1200);
+    assert.deepEqual(input,before);
+    assert.equal(volume.timeVolumeData({...input,selection:{...input.selection,channel:canonical}}).rows.length,6);
+  }
+  for(const [a,b] of [['Win2Pay跑分','Win3Pay跑分'],['AIV3Pay跑分','AIV4Pay跑分'],['T3Pay唤醒','3TPay唤醒'],['At2Pay唤醒','APay唤醒']])
+    assert.notEqual(names.canonicalThirdPartyName(a,'香港'),names.canonicalThirdPartyName(b,'香港'));
+  assert.notEqual(collectionSuccessProviderKey('香港','At2Pay唤醒'),collectionSuccessProviderKey('印度','ATPay'));
+});
