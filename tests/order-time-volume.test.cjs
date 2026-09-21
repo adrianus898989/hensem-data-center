@@ -125,3 +125,18 @@ test('unknown formatting is a dash; confirmed zero remains zero',()=>{
   assert.ok(Number.isNaN(f.sumVolumeAmounts([{amount:100,currency:'INR'},{amount:100,currency:'PKR'}])));
   assert.equal(f.sumVolumeAmounts([{amount:100,currency:'INR'},{amount:100,currency:'INR'}]),200);
 });
+
+test('legacy Pakistan/India local report money combines with tagged sources without treating blank metadata as another currency',()=>{
+  const {sumVolumeAmounts}=loadTs(path.join(root,'src/lib/format.ts'));
+  for(const [country,currency] of [['巴基斯坦','PKR'],['印度','INR']]){
+    assert.equal(sumVolumeAmounts([{country,amount:100,currency:null},{country,amount:200,currency},{country,amount:300}]),600);
+    assert.ok(Number.isNaN(sumVolumeAmounts([{country,amount:100,currency:null},{country,amount:200,currency:'USDT'}])),'explicit unlike currencies remain separate');
+  }
+  assert.ok(Number.isNaN(sumVolumeAmounts([{amount:100,currency:null},{amount:200,currency:'PKR'}])),'unknown-country sources are not silently assigned a currency');
+});
+
+test('known actual money survives a source without actual fields as a visibly partial subtotal',()=>{
+  const input=result([row({actual_amount:null,withdraw_fee:null}),row({provider:'TestPayA',actual_amount:88,withdraw_fee:12})]);
+  const actual=volume.timeVolumeData(input).withdrawActual.compare().current;
+  assert.equal(actual.state,'partial');assert.equal(actual.actualAmount,88);assert.equal(actual.feeAmount,12);
+});

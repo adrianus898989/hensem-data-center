@@ -48,9 +48,16 @@ export function amountRatio(value: number, total: number): number {
   return total ? value / total : 0;
 }
 
-/** Explicit currency metadata is never converted or inferred from a channel name. */
-export function sumVolumeAmounts(rows: readonly {amount:number;currency?:string|null}[]): number {
-  if (new Set(rows.map(row=>row.currency || "")).size > 1) return Number.NaN;
+/** AR and historical IN/PK summaries store local report amounts but omit ISO
+ * metadata. These verified report contracts are not a currency conversion.
+ * An explicit currency always wins, including USDT in a local-country report.
+ */
+export function volumeReportCurrency(row:{country?:string;currency?:string|null}):string {
+  return row.currency?.trim().toUpperCase() || ({印度:"INR",IN:"INR",巴基斯坦:"PKR",PK:"PKR"}[row.country||""]||"");
+}
+
+export function sumVolumeAmounts(rows: readonly {amount:number;currency?:string|null;country?:string}[]): number {
+  if (new Set(rows.map(volumeReportCurrency)).size > 1) return Number.NaN;
   return rows.reduce((sum,row)=>sum+availableAmount(row.amount),0);
 }
 

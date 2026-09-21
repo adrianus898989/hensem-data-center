@@ -53,6 +53,7 @@ type Metric = { amount: number; count: number; state: "complete" | "partial" | "
 export type WithdrawPendingComparison = { current: Metric; previous: Metric };
 export type WithdrawPendingView = {
   basisHint?: string;
+  missingSnapshotPlatforms?: string[];
   providers: Array<{ key: string; country: string; channel: string; amount: number; count: number }>;
   compare: (providerKeys?: readonly string[]) => WithdrawPendingComparison;
   error?: string;
