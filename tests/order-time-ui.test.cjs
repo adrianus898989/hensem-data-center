@@ -9,14 +9,14 @@ const text=fs.readFileSync(path.join(root,'src/components/ThirdPartyVolumeDashbo
 const source=ts.createSourceFile('ThirdPartyVolumeDashboard.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const main=source.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='ThirdPartyVolumeDashboard');
 function compile(code){return ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;}
-const libs=['format','thirdPartyNameMap','thirdPartyPlatform','platformDisplayCountry','collectionSuccess','withdrawPending','withdrawActual','workOrderDeposit','orderTimeVolume','orderTimeQuery','orderTimePlatforms','orderTimeComparison','orderTimePending'];
+const libs=['format','thirdPartyNameMap','thirdPartyPlatform','platformDisplayCountry','collectionSuccess','withdrawPending','withdrawActual','workOrderDeposit','orderTimeVolume','orderTimeQuery','orderTimePlatforms','orderTimeComparison','orderTimePending','orderTimeDaily'];
 const dependencies=Object.assign({},...libs.map(name=>loadTs(path.join(root,`src/lib/${name}.ts`))));
 const controlsText=fs.readFileSync(path.join(root,'src/components/OrderTimeControls.tsx'),'utf8');
 const controls=ts.createSourceFile('OrderTimeControls.tsx',controlsText,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const extra=controls.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='TimeQueryExtra');
 const selected=source.statements.filter(n=>ts.isVariableStatement(n)||(ts.isFunctionDeclaration(n)&&n!==main));
 function createApi(overrides={}){
-  const context={...React,...dependencies,exports:{},OrderRecordModal:()=>null,useOrderTimeComparison:()=>({status:'loading'}),useMidnightPending:()=>({snapshots:[],error:'载入中'}),...overrides};
+  const context={...React,...dependencies,exports:{},OrderRecordModal:()=>null,useOrderTimeDaily:()=>({loading:false}),useOrderTimeComparison:()=>({status:'loading'}),useMidnightPending:()=>({snapshots:[],error:'载入中'}),...overrides};
   const names=selected.filter(ts.isFunctionDeclaration).map(n=>n.name.text);
   return new Function('require',...Object.keys(context),compile(selected.map(n=>n.getText(source)).join('\n')+'\n'+extra.getText(controls))+`\nreturn {${names.join(',')},TimeQueryExtra};`)(specifier=>{
     assert.equal(specifier,'react/jsx-runtime');return require(specifier);
@@ -43,6 +43,24 @@ function table(html){const match=html.match(/<table>([\s\S]*?)<\/table>/);assert
 function rows(html){return [...table(html).matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(m=>m[1]);}
 function cells(html,kind='td'){return [...html.matchAll(new RegExp(`<${kind}\\b[^>]*>([\\s\\S]*?)<\\/${kind}>`,'g'))].map(m=>m[1]);}
 function headings(html){return cells(rows(html)[0],'th').map(x=>plain(x).replace(/[↕↑↓]/g,''));}
+test('default all-platform view renders daily-only amounts, names the basis, and does not fabricate a success rate',()=>{
+  const result=fixture({country:'巴基斯坦',platforms:[],availablePlatforms:['92GAME','3PATISUPER','3PATTI-SUPER']});
+  Object.assign(result.payloads[0].payload,{platform:'92.GAME',country:'巴基斯坦',team:'巴基斯坦'});
+  const dailyRows=[{id:'daily',date:'2026-09-17',country:'巴基斯坦',platform:'3PATTI-SUPER',channel:'PayA',rawChannel:'PayA',channelType:'UPI',direction:'代收',amount:673300,count:300},
+    {id:'daily-pay',date:'2026-09-17',country:'巴基斯坦',platform:'3PATTI-SUPER',channel:'PayA',rawChannel:'PayA',channelType:'BANK',direction:'代付',amount:505835,count:77}];
+  const custom=createApi({useOrderTimeDaily:()=>({loading:false,rows:dailyRows})});
+  const html=renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));
+  assert.match(plain(html),/3PATTI-SUPER：已纳入日汇总金额和成功笔数/);
+  assert.match(html,/674,250/);assert.match(html,/505,955/);
+  const provider=cells(rows(html).find(row=>plain(row).startsWith('PayA')));
+  const labels=headings(html);
+  assert.match(plain(provider[labels.indexOf('代收成功率')]),/待明细接入/);
+  assert.match(plain(provider[labels.indexOf('代付成功率')]),/待明细接入/);
+  const dialog=renderToStaticMarkup(React.createElement(custom.PlatformCoverageDialog,{result:{...result,dailyRows},onClose(){}}));
+  assert.match(plain(dialog),/已展示日汇总（1）3PATTI-SUPER/);
+  assert.match(plain(dialog),/尚无可查明细（0）/);
+  assertAligned(html);
+});
 function assertAligned(html){
   const all=rows(html),size=cells(all[0],'th').length;
   for(const row of all.slice(1)){

@@ -11,6 +11,7 @@ import {previousTimeSelection,comparisonScopeIssues,historicalDailyComparison,ty
 import {dashboardBusinessFetch} from "@/lib/dashboardDataClient";
 import type {ThirdPartyVolumeRow,WithdrawPendingSnapshot} from "@/lib/types";
 import {usesMidnightPending} from "@/lib/orderTimePending";
+import {dailyFallbackPlatforms,dailyVolumeRows} from "@/lib/orderTimeDaily";
 import {formatOrderDetailAmount,orderDetailStatusLabel} from "@/lib/orderDetailSearch";
 import "./OrderTimeDashboard.css";
 
@@ -93,6 +94,27 @@ export async function orderComparisonDailyRows(start:string,end:string,country:s
   const payload=await response.json();
   if(!response.ok||!Array.isArray(payload?.rows))throw new Error("历史日汇总暂未载入。");
   return payload.rows;
+}
+
+/** One background summary read fills platforms without a detail source. */
+export function useOrderTimeDaily(result:TimeQueryResult,paused=false) {
+  const {session,profile}=useDashboardAuth();
+  const identity=`${session?.user.id||""}:${dashboardScopeIdentity(profile)}`;
+  const enabled=dailyFallbackPlatforms(result).length>0;
+  const [stored,setStored]=useState<{result:TimeQueryResult;identity:string;rows:ThirdPartyVolumeRow[];error?:string}|null>(null);
+  useEffect(()=>{
+    if(paused||!session||!enabled)return;
+    const controller=new AbortController();let disposed=false;
+    const timer=setTimeout(()=>controller.abort(),30000);
+    const s=result.selection;
+    void orderComparisonDailyRows(s.start.slice(0,10),s.end.slice(0,10),s.country,controller.signal)
+      .then(rows=>{if(!disposed&&!controller.signal.aborted)setStored({result,identity,rows});})
+      .catch(()=>{if(!disposed)setStored({result,identity,rows:[],error:"部分平台的日汇总暂未载入，请重新查询。"});})
+      .finally(()=>clearTimeout(timer));
+    return()=>{disposed=true;controller.abort();clearTimeout(timer);};
+  },[result,identity,paused,enabled]);
+  const current=stored?.result===result&&stored.identity===identity?stored:null;
+  return {rows:enabled?current?.rows:undefined,loading:enabled&&!current,error:enabled?current?.error:undefined};
 }
 
 export async function orderTimeRpc(session:DashboardSession|null, name:string,body:unknown,signal:AbortSignal) {
@@ -193,6 +215,7 @@ export function OrderRecordModal({result,channel,onClose}:{result:TimeQueryResul
   const {session,profile}=useDashboardAuth(),identity=dashboardScopeIdentity(profile);
   const source=timeSourceRows(result).filter(r=>r.channel===channel);
   const choices=result.payloads.filter(p=>source.some(r=>r.platformId===p.id));
+  const dailyPlatforms=[...new Set(dailyVolumeRows(result).filter(row=>row.channel===channel).map(row=>row.platform))];
   const [platform,setPlatform]=useState(choices[0]?.id||"");
   const [cursors,setCursors]=useState<unknown[]>([null]),[page,setPage]=useState(0);
   const [data,setData]=useState<DetailPage|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState("");
@@ -218,6 +241,7 @@ export function OrderRecordModal({result,channel,onClose}:{result:TimeQueryResul
   if(owner!==identity)return null;
   return <div className="modal-backdrop" onClick={onClose}><div className="detail-modal volume-detail-modal order-record-modal" role="dialog" aria-modal="true" aria-label={`${channel}订单明细`} onClick={e=>e.stopPropagation()}>
     <div className="detail-modal-header"><div><h3>{channel} · 订单明细</h3><p>{result.selection.basis==="created"?"创建时间":"成功时间"}：{result.selection.start.replace("T"," ")} — {result.selection.end.replace("T"," ")} · {timezone}</p></div><button className="modal-close-btn" type="button" onClick={onClose}>关闭</button></div>
+    {dailyPlatforms.length>0&&<p role="status">{dailyPlatforms.join("、")} 已显示日汇总金额与笔数，订单明细尚未接入。</p>}
     <div className="record-toolbar"><label className="field">平台<select className="input" value={platform} onChange={e=>{setPlatform(e.target.value);setData(null);setCursors([null]);setPage(0);}}>{choices.map(p=><option value={p.id} key={p.id}>{p.payload.platform}</option>)}</select></label><span>每页 50 笔 · 仅展示有权限的业务记录</span><button type="button" className="mini-btn" disabled={!page||busy} onClick={()=>setPage(n=>n-1)}>上一页</button><span>第 {page+1} 页</span><button type="button" className="mini-btn" disabled={!data?.hasMore||busy} onClick={()=>{setCursors(old=>[...old.slice(0,page+1),data!.nextCursor]);setPage(n=>n+1);}}>下一页</button></div>
     {error&&<p role="alert" className="business-query-error">{error} <button type="button" className="mini-btn" onClick={()=>setReload(n=>n+1)}>重试</button></p>}
     <div className="table-wrap"><table><thead><tr><th>会员 ID</th><th>订单号</th><th>三方订单号</th><th>业务</th><th>三方通道</th><th>状态</th><th>订单金额</th><th>实际到账</th><th>提现手续费</th><th>创建时间</th><th>成功时间</th><th>最近同步</th></tr></thead><tbody>

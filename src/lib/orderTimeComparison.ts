@@ -3,6 +3,7 @@ import { timePlatformCoverage, timePlatformCountry, timePlatformName } from "./o
 import { collectionSuccessCountry, validCollectionSuccessSnapshot } from "./collectionSuccess";
 import { canonicalThirdPartyPlatform } from "./thirdPartyPlatform";
 import type { CollectionSuccessSnapshot, ThirdPartyVolumeRow } from "./types";
+import { dailyVolumeRows } from "./orderTimeDaily";
 
 export type TimeComparisonIssue = {
   period: "current" | "previous";
@@ -45,12 +46,24 @@ export function historicalDailyComparison(result: TimeQueryResult, input: ThirdP
     const identity={name:p.platform||"",team:p.team||"",country:p.country};
     return [timePlatformName(identity),timePlatformCountry(identity)] as const;
   }));
+  for(const row of dailyVolumeRows(result,false))platforms.set(row.platform,row.country);
   const directions=s.direction?[s.direction]:["代收","代付"];
   const rows=input.map(row=>{
     const country=collectionSuccessCountry(row.country,row.platform);
     return {...row,country,platform:canonicalThirdPartyPlatform(country,row.platform)};
   }).filter(row=>row.date>=start&&row.date<=end&&platforms.get(row.platform)===row.country&&directions.includes(row.direction));
   const issues:TimeComparisonIssue[]=[];
+  const currentDaily=dailyVolumeRows(result,false);
+  for(const platform of new Set(currentDaily.map(row=>row.platform))) {
+    for(let day=Date.parse(`${result.selection.start.slice(0,10)}T00:00:00Z`);day<=Date.parse(`${result.selection.end.slice(0,10)}T00:00:00Z`);day+=86400000) {
+      const date=new Date(day).toISOString().slice(0,10);
+      for(const direction of directions) {
+        const slice=currentDaily.filter(row=>row.platform===platform&&row.date===date&&row.direction===direction);
+        if(!slice.length||slice.some(row=>typeof row.amount!=="number"||!Number.isFinite(row.amount)||row.amount<0||!Number.isSafeInteger(row.count)||row.count<0))
+          issues.push({period:"current",platform,date,direction,reason:"本期日汇总尚不完整或金额未确认，保留已有数据，暂不比较。"});
+      }
+    }
+  }
   if(!platforms.size)issues.push({period:"previous",platform:"当前筛选范围",date:start,direction:"",reason:"没有可对比的平台。"});
   for(const [platform] of platforms)for(let day=Date.parse(`${start}T00:00:00Z`);day<=Date.parse(`${end}T00:00:00Z`);day+=86400000){
     const date=new Date(day).toISOString().slice(0,10);
