@@ -709,11 +709,24 @@ function confirmedUserThirdPartyAlias(value: string, country?: string): string {
   return "";
 }
 
+// User-confirmed display aliases. Keep version numbers and channel suffixes
+// intact unless this exact spelling was explicitly confirmed as equivalent.
+const CONFIRMED_DISPLAY_ALIASES: Record<string, string> = {
+  win2pay跑分: "Win2Pay跑分",
+  aiv3pay跑分: "AIV3Pay跑分",
+  t3pay唤醒: "T3Pay唤醒",
+  at2pay唤醒: "ATPay",
+  atpay唤醒: "ATPay",
+  atpay: "ATPay",
+};
+
 export function canonicalThirdPartyName(value: string, country?: string): string {
   const raw = normalizeCell(value);
   if (!raw) return "未知三方";
 
   const strippedRaw = stripBusinessSuffix(raw);
+  const confirmedDisplayAlias = CONFIRMED_DISPLAY_ALIASES[strippedRaw.toLowerCase().replace(/\s+/g, "")];
+  if (confirmedDisplayAlias) return confirmedDisplayAlias;
   const confirmedIndiaAlias = confirmedIndiaThirdPartyName(strippedRaw, country);
   if (confirmedIndiaAlias) return confirmedIndiaAlias;
   const rawAliasKey = aliasKey(strippedRaw);
