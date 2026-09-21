@@ -133,6 +133,14 @@ async function httpFixture(options,run){
 }
 const request=()=>new Request('https://dashboard.invalid/api/third-party-filter-options?start=1999-01-01',{headers:{Authorization:'Bearer session-only'}});
 for(const [name,reader] of readers){
+  test(name+': candidate metadata is permission-scoped and projects no arbitrary values',async()=>{
+    const row={country:'巴基斯坦',platform:'92R',channel:'MCBPay',provider:'MCBPayPKR-Jazz',channel_type:'JAZZ',direction:'代收',source:'history',secret:'never expose'};
+    const payload={platforms:metadata.platforms,candidates:[row,{...row,country:'印度',platform:'DhaniWin'}]};
+    await httpFixture({payload,scope:{mode:'selected',countries:['PK']}},async()=>{
+      const result=await reader(request());assert.equal(result.candidates.length,1);assert.equal(result.candidates[0].provider,'MCBPayPKR-Jazz');assert.doesNotMatch(JSON.stringify(result.candidates),/never expose/);
+    });
+    await httpFixture({payload:{platforms:[],candidates:null}},async()=>assert.rejects(()=>reader(request()),e=>e.status===503));
+  });
   test(name+': India fee headings and uploaded platforms share one directory identity',async()=>{
     const payload={platforms:['BIG(AR)','BIGMUMBAI','INDIA82(AR)','82LOTTERY'].map(platform=>({country:'印度',platform}))};
     payload.platforms.push({country:'越南',platform:'BIG'});

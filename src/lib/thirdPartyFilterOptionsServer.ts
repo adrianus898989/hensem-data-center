@@ -2,8 +2,9 @@ import { dashboardScopeAllows } from "./dashboardDataScope";
 import { canonicalThirdPartyPlatform } from "./thirdPartyPlatform";
 import { platformDisplayCountry } from "./platformDisplayCountry";
 import { DashboardDataAccessError, requireDashboardDataAccess } from "./dashboardDataAccessServer";
+import {parseFilterCandidates,type FilterCandidate} from "./filterCandidates";
 
-export type ThirdPartyFilterOptions = {platforms:Array<{country:string;platform:string}>};
+export type ThirdPartyFilterOptions = {platforms:Array<{country:string;platform:string}>;candidates?:FilterCandidate[]};
 
 function unavailable(): never {
   throw new DashboardDataAccessError(503,"filter_options_unavailable","平台目录读取暂时不可用，请重试。");
@@ -43,6 +44,12 @@ export async function readSupabaseThirdPartyFilterOptions(request:Request):Promi
     if(!dashboardScopeAllows(access.scope,country,platform))continue;
     byKey.set(JSON.stringify([country,platform]),{country,platform});
   }
-  return {platforms:[...byKey.values()].sort((a,b)=>a.country.localeCompare(b.country,"zh-CN")
+  let candidates:FilterCandidate[]|undefined;
+  if(payload.candidates!==undefined){
+    try{candidates=parseFilterCandidates(payload.candidates.filter((r:any)=>dashboardScopeAllows(access.scope,r?.country,r?.platform)));}
+    catch{unavailable();}
+    candidates=candidates.filter(r=>dashboardScopeAllows(access.scope,r.country,r.platform));
+  }
+  return {...(candidates?{candidates}:{}),platforms:[...byKey.values()].sort((a,b)=>a.country.localeCompare(b.country,"zh-CN")
     || a.platform.localeCompare(b.platform,"zh-CN",{numeric:true}))};
 }

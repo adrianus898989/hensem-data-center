@@ -8,7 +8,7 @@ const text=fs.readFileSync(path.join(root,'src/components/ThirdPartyVolumeDashbo
 const source=ts.createSourceFile('dashboard.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const statements=source.statements.filter(n=>!ts.isImportDeclaration(n));
 const compiled=ts.transpileModule(statements.map(n=>n.getText(source)).join('\n'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
-const libs=['format','thirdPartyNameMap','thirdPartyPlatform','platformDisplayCountry','dashboardDataScope','collectionSuccess','withdrawPending','withdrawActual','workOrderDeposit','orderTimeVolume','orderTimeQuery'];
+const libs=['format','thirdPartyNameMap','thirdPartyPlatform','platformDisplayCountry','dashboardDataScope','collectionSuccess','withdrawPending','withdrawActual','workOrderDeposit','orderTimeVolume','orderTimeQuery','filterCandidates'];
 const dependencies=Object.assign({},...libs.map(name=>loadTs(path.join(root,`src/lib/${name}.ts`))));
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};};
 const response=data=>({ok:true,status:200,json:async()=>data,text:async()=>JSON.stringify(data)});
@@ -55,6 +55,18 @@ test('mount requests only the independent name directory; PK has all platforms b
   assert.deepEqual(h.select('平台').props.options,['92BLAZE','POPZAR']);assert.equal(h.calls.length,1);
   h.tokenRefresh();await h.settle();assert.deepEqual(h.select('平台').props.options,['92BLAZE','POPZAR']);assert.equal(h.calls.length,1);
   h.unmount();
+});
+
+test('pre-query provider and wallet choices follow country, platform and direction without a report',async()=>{
+  const candidate=(platform,channel,channel_type,direction,country='印度')=>({country,platform,channel,provider:channel,channel_type,direction,source:'history'});
+  const candidates=[candidate('91CLUB','LKgoPayINR-Bank','BANK','代付'),candidate('91CLUB','UPI-QR','UPI','代收'),candidate('RAJA','WrongPlatform','BANK','代付'),candidate('92R','WrongCountry','BANK','代付','巴基斯坦')];
+  const h=harness(url=>url.includes('filter-options')?response({platforms:[...directory,{country:'印度',platform:'RAJA'}],candidates}):normal(url));
+  const single=label=>elements(h.tree,e=>typeof e.type==='function'&&e.type.name==='VolumeSingleSelect'&&e.props.label===label)[0];
+  await h.settle();h.select('平台').props.onChange(['91CLUB']);await h.settle();
+  assert.deepEqual(single('统一三方').props.options,['LKgoPay','UPI-QR']);
+  single('业务方向').props.onChange('代付');await h.settle();
+  assert.deepEqual(single('统一三方').props.options,['LKgoPay']);assert.deepEqual(h.select('类型 / 钱包').props.options,['BANK']);
+  assert.equal(h.calls.length,1);assert.equal(h.summaries().length,0);h.unmount();
 });
 
 test('default dates and shortcuts follow catalog timezone while custom dates survive a platform change',async()=>{
@@ -136,7 +148,7 @@ test('account change hides existing data immediately and rejects old in-flight r
 
 test('there is no unscoped periodic refresh and the separate detail lookup stays single-platform',()=>{
   assert.doesNotMatch(text,/setInterval\(|checkCurrentSnapshotAndRefresh/);
-  const detail=fs.readFileSync(path.join(root,'src/components/OrderDetailSearch.tsx'),'utf8');assert.match(detail,/<select required value=\{draft\.platform\}/);
+  const detail=fs.readFileSync(path.join(root,'src/components/OrderDetailSearch.tsx'),'utf8');assert.match(detail,/<select[^>]*required value=\{draft\.platform\}/);
 });
 
 test('an explicit order-time query reads rates independently without silently loading a daily report',async()=>{

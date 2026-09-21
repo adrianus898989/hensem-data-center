@@ -92,6 +92,7 @@ test('SSR renders a platform-required empty search page with accessible labels a
     if(specifier.endsWith('.css'))return {};
     if(specifier==='./DashboardAuthGate')return {useDashboardAuth:()=>({session:null,profile:null})};
     if(specifier==='./OrderTimeControls')return {orderTimeRpc:()=>{calls++;throw new Error('Unexpected order read');}};
+    if(specifier==='./useFilterCandidateDirectory')return {useFilterCandidateDirectory:()=>({rows:[],loading:false,error:''})};
     if(specifier.startsWith('@/'))return loadTs(path.join(root,'src',specifier.slice(2)+'.ts'));
     return nativeRequire(specifier);
   };
@@ -99,7 +100,7 @@ test('SSR renders a platform-required empty search page with accessible labels a
   const html=server.renderToStaticMarkup(React.createElement(module.exports.default));
   assert.equal(calls,0);
   assert.match(html,/先选择平台，再点击/);assert.match(html,/请选择一个平台/);
-  assert.match(html,/<select required=""[^>]*><option value="" selected="">/);
+  assert.match(html,/<select[^>]*required=""[^>]*><option value="" selected="">/);
   assert.match(html,/<label[^>]*><span>会员 ID<\/span><input/);
   assert.match(html,/最低订单金额/);assert.match(html,/最高订单金额/);
   assert.match(html,/今天/);assert.match(html,/昨日/);assert.match(html,/前日/);
@@ -126,6 +127,7 @@ test('standalone detail results display the response timezone, source currency, 
     if(specifier.endsWith('.css'))return {};
     if(specifier==='./DashboardAuthGate')return {useDashboardAuth:()=>({session:{user:{id:'viewer'}},profile:{}})};
     if(specifier==='./OrderTimeControls')return {orderTimeRpc:()=>{throw new Error('Unexpected external request');}};
+    if(specifier==='./useFilterCandidateDirectory')return {useFilterCandidateDirectory:()=>({rows:[],loading:false,error:''})};
     if(specifier==='@/lib/dashboardDataScope')return {dashboardScopeIdentity:()=> 'scope'};
     if(specifier.startsWith('@/'))return loadTs(path.join(root,'src',specifier.slice(2)+'.ts'));
     return nativeRequire(specifier);

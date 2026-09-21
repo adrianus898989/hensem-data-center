@@ -541,7 +541,7 @@ test('daily provider choices include scoped work-order-only providers without le
     workorder('WrongPlatform',{platform:'RAJA'}),workorder('WrongCountry',{country:'印尼',country_code:'ID'}),workorder('3cPay-QR',{country:''})];
   for(const [hasLegacyPlatformSelection,optionCountryFilter] of [[true,'印度'],[false,'印度'],[true,'所有国家USDT']]){
     const context={...api,...dependencies,useMemo:fn=>fn(),hasLegacyPlatformSelection,payload:{workOrderDepositRows:sourceRows},countrySelections:['印度'],
-      channelOptionRows:[{channel:'3TPay'}],timeOptionsRows:[],startDate:'2026-09-17',endDate:'2026-09-17',optionCountryFilter,platformSelections:['91CLUB']};
+      candidateOptionRows:[],direction:'',channelOptionRows:[{channel:'3TPay'}],timeOptionsRows:[],startDate:'2026-09-17',endDate:'2026-09-17',optionCountryFilter,platformSelections:['91CLUB']};
     const output=new Function(...Object.keys(context),compile(statements)+'\nreturn {workOrderChannelOptions,channels};')(...Object.values(context));
     const includeWorkorders=hasLegacyPlatformSelection&&optionCountryFilter!=='所有国家USDT';
     assert.deepEqual(output.channels.sort(),(includeWorkorders?['3TPay','3cPay','Intnet']:['3TPay']).sort());
