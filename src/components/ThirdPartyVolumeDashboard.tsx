@@ -2534,7 +2534,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
     };
     appendProviderOnly("pending-only", withdrawPending.providers);
     appendProviderOnly("deposit-only", workOrderDeposit.providers);
-    if (collectionSuccessCountry(appliedCountryPage) !== "印度") appendProviderOnly("actual-only", withdrawActual.providers);
+    if (hasWithdrawActualColumns(appliedCountryPage)) appendProviderOnly("actual-only", withdrawActual.providers);
     return [...existing, ...providerOnlyRows];
   }, [countryPageRows, withdrawPending, workOrderDeposit, withdrawActual, appliedCountryPage]);
   const countryPageMonthlyPeriodRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.date.slice(0, 7), row.country, row.channel]), [countryPageRows]);
@@ -3050,6 +3050,10 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
   </>;
 }
 
+function hasWithdrawActualColumns(country: string): boolean {
+  return ["香港", "红膏蟹"].includes(collectionSuccessCountry(country));
+}
+
 function CountryVolumeSinglePage({ country, rows, previousRows, summary, previousSummary, monthlyRows, feeRows, previousFeeRows, canCompare, compareLabel, comparisonHint, dateRangeLabel, collectionSuccess, withdrawPending, workOrderDeposit, withdrawActual, withdrawSuccess, orderRateHint, platformCoverage, onPlatformCoverage }: { country: string; rows: ThirdPartyVolumeRow[]; previousRows?: ThirdPartyVolumeRow[]; summary: ReturnType<typeof sumRows>; previousSummary: ReturnType<typeof sumRows>; monthlyRows: ComboSummary[]; feeRows: FeeCompareRow[]; previousFeeRows: FeeCompareRow[]; canCompare: boolean; compareLabel?: string; comparisonHint?: string; dateRangeLabel: string; collectionSuccess?: CollectionSuccessView; withdrawPending?: WithdrawPendingView; workOrderDeposit?: WorkOrderDepositView; withdrawActual?: WithdrawActualView; withdrawSuccess?: CollectionSuccessView; orderRateHint?: string; platformCoverage?: string; onPlatformCoverage?:()=>void }) {
   const fees = summarizeFeeRows(feeRows);
   const previousFees = summarizeFeeRows(previousFeeRows);
@@ -3094,7 +3098,7 @@ function CountryVolumeSinglePage({ country, rows, previousRows, summary, previou
         collectionSuccess={collectionSuccess}
         withdrawPending={withdrawPending}
         workOrderDeposit={workOrderDeposit}
-        withdrawActual={collectionSuccessCountry(country)==="印度"?undefined:withdrawActual}
+        withdrawActual={hasWithdrawActualColumns(country)?withdrawActual:undefined}
         withdrawSuccess={withdrawSuccess}
         orderRateHint={orderRateHint}
         summaryOnly
