@@ -24,7 +24,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ThirdPartyPlatformStatusRow, ThirdPartyRatePayload, ThirdPartyRateRow, ThirdPartyVolumePayload, ThirdPartyVolumeRow, WorkOrderDepositRow } from "@/lib/types";
-import { formatNumber, formatPercent, amountRatio, sumVolumeAmounts } from "@/lib/format";
+import { formatNumber, formatPercent, amountRatio, sumVolumeAmounts, volumeReportCurrency } from "@/lib/format";
 import { canonicalThirdPartyName, confirmedIndiaThirdPartyAlias, inferThirdPartyChannelType } from "@/lib/thirdPartyNameMap";
 import { canonicalThirdPartyPlatform, canonicalThirdPartyPlatformSelections, matchesThirdPartyPlatformSelection } from "@/lib/thirdPartyPlatform";
 import { platformDisplayCountry, withPlatformDisplayCountry } from "@/lib/platformDisplayCountry";
@@ -39,11 +39,12 @@ import {timeComparisonLabel,type TimeComparisonIssue} from "@/lib/orderTimeCompa
 import {timePendingSnapshotView,usesMidnightPending} from "@/lib/orderTimePending";
 import {sourceDay,sourceShortcutDateRange} from "@/lib/orderTimeQuery";
 import { useDashboardAuth } from "./DashboardAuthGate";
+import {parseFilterCandidates,type FilterCandidate} from "@/lib/filterCandidates";
 import { buildCollectionSuccessView, collectionSuccessCountry, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
 import { CollectionSuccessCell, CollectionSuccessBreakdown } from "./CollectionSuccessCell";
 import { buildWithdrawPendingView, type WithdrawPendingView } from "@/lib/withdrawPending";
 import { buildWorkOrderDepositView, workOrderDepositCountry, workOrderDepositProviderKey, workOrderSuccessTone, type WorkOrderDepositView } from "@/lib/workOrderDeposit";
-import { buildWithdrawActualView, type WithdrawActualView } from "@/lib/withdrawActual";
+import { buildWithdrawActualView, supportsWithdrawActualCountry, type WithdrawActualView } from "@/lib/withdrawActual";
 import "./WithdrawPendingCell.css";
 
 type LoadState = "loading" | "ready" | "error";
@@ -1400,7 +1401,7 @@ function buildFeeCompareRows(comboRows: ComboSummary[], rateRows: ThirdPartyRate
     const collectSingleFee = singleFeeFor(collectRateRow, "collect", collectAvgAmount);
     const payoutSingleFee = singleFeeFor(payoutRateRow, "payout", payoutAvgAmount);
     const detailAmounts = row.rows.some(item=>String(item.id || "").startsWith("time:"));
-    const mixedCurrency = new Set(row.rows.map(item=>item.currency || "")).size > 1;
+    const mixedCurrency = new Set(row.rows.map(volumeReportCurrency)).size > 1;
     const collectAmountUnavailable = mixedCurrency || (detailAmounts && !Number.isFinite(row.collectAmount));
     const payoutAmountUnavailable = mixedCurrency || (detailAmounts && !Number.isFinite(row.payoutAmount));
     const collectFeeAmount = collectAmountUnavailable ? Number.NaN : estimateSideFee(row.collectAmount, row.collectCount, collectFeeRate, collectSingleFee);
@@ -1444,7 +1445,7 @@ function buildFeeCompareRows(comboRows: ComboSummary[], rateRows: ThirdPartyRate
       payoutFeeKnownZero,
       collectAmountUnavailable,
       payoutAmountUnavailable,
-      currency:row.rows[0]?.currency,
+      currency:volumeReportCurrency(row.rows[0] || {country}),
       estimatedFee,
       advice: "正常观察",
       level: "normal" as FeeCompareRow["level"]
@@ -1755,7 +1756,7 @@ function feePairHint(rows: FeeCompareRow[], side: "collect" | "payout"): string 
 }
 
 function summarizeFeeRows(rows: FeeCompareRow[], totalCollectFee = 0, totalPayoutFee = 0): FeeSummary {
-  const mixedCurrency = new Set(rows.map(row=>row.currency || "")).size > 1;
+  const mixedCurrency = new Set(rows.map(volumeReportCurrency)).size > 1;
   const collectUnavailable = mixedCurrency || rows.some(row=>row.collectAmountUnavailable);
   const payoutUnavailable = mixedCurrency || rows.some(row=>row.payoutAmountUnavailable);
   // 忽略单条异常 NaN，不能让 TodayPay 等整组三方手续费被污染后显示为 0。
@@ -2103,7 +2104,7 @@ type VolumeFilterPlatform = {country:string;platform:string};
 function useVolumeFilterOptions(profile: DashboardProfile | null, userId: string | undefined) {
   const identity = `${userId || ""}:${dashboardScopeIdentity(profile)}`;
   const owner = useRef(identity);owner.current = identity;
-  const [stored, setStored] = useState<{identity:string;platforms:VolumeFilterPlatform[]}|null>(null);
+  const [stored, setStored] = useState<{identity:string;platforms:VolumeFilterPlatform[];candidates:FilterCandidate[];candidateReady:boolean}|null>(null);
   const [loading, setLoading] = useState(true), [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   useEffect(() => {
@@ -2119,7 +2120,9 @@ function useVolumeFilterOptions(profile: DashboardProfile | null, userId: string
         if (!disposed && !controller.signal.aborted && owner.current === identity) {
           const scoped = data.platforms.map((row:VolumeFilterPlatform) => withPlatformDisplayCountry(row))
             .filter((row:VolumeFilterPlatform) => dashboardScopeAllows(effectiveDashboardDataScope(profile),row.country,row.platform));
-          setStored({identity,platforms:scoped});
+          const candidates=data.candidates===undefined?[]:parseFilterCandidates(data.candidates)
+            .filter(row=>dashboardScopeAllows(effectiveDashboardDataScope(profile),row.country,row.platform));
+          setStored({identity,platforms:scoped,candidates,candidateReady:data.candidates!==undefined});
         }
       } catch (err) {
         if (!disposed && owner.current === identity) setError(timedOut ? "平台目录读取超时，请重试。" : err instanceof Error ? err.message : "平台目录读取失败，请重试。");
@@ -2129,7 +2132,9 @@ function useVolumeFilterOptions(profile: DashboardProfile | null, userId: string
   // Access-token renewal does not reset this permission-scoped directory.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity,retry]);
-  return {platforms:stored?.identity===identity?stored.platforms:[],loading,error,
+  return {platforms:stored?.identity===identity?stored.platforms:[],
+    candidates:stored?.identity===identity?stored.candidates:[],
+    candidateReady:stored?.identity===identity&&stored.candidateReady,loading,error,
     ready:stored?.identity===identity&&!loading&&!error,reload:()=>setRetry(n=>n+1)};
 }
 
@@ -2414,6 +2419,15 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
   const hasLegacyPlatformSelection = !timePlatformOptions.length
     || (platformSelections.length ? platformSelections : platforms).some(name => !timePlatformOptions.includes(name));
   const channelOptionRows = useMemo(() => optionScopedRows.filter((row) => matchesThirdPartyPlatformSelection(row.country, row.platform, platformSelections)), [optionScopedRows, platformSelections]);
+  const candidateOptionRows = useMemo(()=>filterOptions.candidates.map(row=>{
+    const normalized=normalizeVolumeRowForDisplay({country:row.country,platform:row.platform,channel:row.channel,
+      rawChannel:row.provider,channelType:row.channel_type,direction:row.direction} as ThirdPartyVolumeRow);
+    // Dictionary wallets are independent names, not invented provider-wallet pairs.
+    return {...normalized,channel:row.channel?normalized.channel:"",channelType:row.channel_type?normalized.channelType:""};
+  }).filter(row=>rowMatchesCountryPage(row,optionCountryFilter)
+    &&(!countrySelections.length||countrySelections.includes(row.country))
+    &&matchesThirdPartyPlatformSelection(row.country,row.platform,platformSelections)
+    &&(!direction||row.direction===direction)),[filterOptions.candidates,optionCountryFilter,countrySelections,platformSelections,direction]);
   const timeOptionsRows = timeQuery.result && timeQuery.mode!=="daily" && timeQuery.result.selection.country===activeCountryPage
     ? timeSourceRows({...timeQuery.result,selection:{...timeQuery.result.selection,channel:"",types:[],direction:""}}).filter(row=>!platformSelections.length||platformSelections.includes(row.platform)) : [];
   const workOrderChannelOptions = useMemo(() => !hasLegacyPlatformSelection || isAllUsdtCountryPage(optionCountryFilter) ? [] : buildWorkOrderDepositView({
@@ -2423,8 +2437,10 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
     country: isAllUsdtCountryPage(optionCountryFilter)?"":optionCountryFilter,
     platforms: platformSelections,
   }).providers.map(provider=>provider.channel), [hasLegacyPlatformSelection, payload?.workOrderDepositRows, countrySelections, channelOptionRows, startDate, endDate, optionCountryFilter, platformSelections]);
-  const channels = uniq([...channelOptionRows.map(row=>row.channel),...timeOptionsRows.map(row=>row.channel),...workOrderChannelOptions]);
-  const channelTypeOptions = uniq([...optionScopedRows.filter((row) => matchesThirdPartyPlatformSelection(row.country, row.platform, platformSelections)).map((row) => row.channelType || "其他类型").filter(Boolean),...timeOptionsRows.map(row=>row.channel_type)]);
+  const channels = uniq([...candidateOptionRows.map(row=>row.channel),...channelOptionRows.filter(row=>!direction||row.direction===direction).map(row=>row.channel),...timeOptionsRows.filter(row=>!direction||row.direction===(direction==='代收'?'charge':'withdraw')).map(row=>row.channel),...workOrderChannelOptions].filter(Boolean));
+  const channelTypeOptions = uniq([...candidateOptionRows.filter(row=>!channel||!row.channel||row.channel===channel).map(row=>row.channelType),
+    ...channelOptionRows.filter(row=>(!direction||row.direction===direction)&&(!channel||row.channel===channel)).map(row=>row.channelType||"其他类型"),
+    ...timeOptionsRows.filter(row=>(!direction||row.direction===(direction==='代收'?'charge':'withdraw'))&&(!channel||row.channel===channel)).map(row=>row.channel_type)].filter(Boolean));
 
 
   useEffect(() => {
@@ -2534,7 +2550,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
     };
     appendProviderOnly("pending-only", withdrawPending.providers);
     appendProviderOnly("deposit-only", workOrderDeposit.providers);
-    if (collectionSuccessCountry(appliedCountryPage) !== "印度") appendProviderOnly("actual-only", withdrawActual.providers);
+    if (supportsWithdrawActualCountry(appliedCountryPage)) appendProviderOnly("actual-only", withdrawActual.providers);
     return [...existing, ...providerOnlyRows];
   }, [countryPageRows, withdrawPending, workOrderDeposit, withdrawActual, appliedCountryPage]);
   const countryPageMonthlyPeriodRows = useMemo(() => aggregateCombo(countryPageRows, (row) => [row.date.slice(0, 7), row.country, row.channel]), [countryPageRows]);
@@ -2773,9 +2789,9 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
           
           {isAllUsdtCountryPage(activeCountryPage) && <VolumeMultiSelect label="国家" options={countryFilterOptions} value={countrySelections} onChange={(value) => { setCountrySelections(value); setPlatformSelections([]); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部国家" />}
           <VolumeMultiSelect key={`platform:${activeCountryPage}`} label="平台" options={platforms} value={platformSelections} onChange={(value) => { setPlatformSelections(canonicalThirdPartyPlatformSelections(platformSelectionCountry, value)); setChannel(""); setChannelTypeSelections([]); }} placeholder="全部平台" />
-          <VolumeSingleSelect label="统一三方" options={channels} value={channel} onChange={value=>{setChannel(value);setChannelTypeSelections([]);}} placeholder="全部三方" />
-          <VolumeMultiSelect key={`type:${activeCountryPage}`} label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" />
-          <label className="field">业务方向<select className="input" value={direction} onChange={(event) => setDirection(event.target.value)}><option value="">全部方向</option><option value="代收">代收</option><option value="代付">代付</option></select></label>
+          <VolumeSingleSelect label="统一三方" options={channels} value={channel} onChange={value=>{setChannel(value);setChannelTypeSelections([]);}} placeholder="全部三方" loading={filterOptions.loading} error={filterOptions.error||(!filterOptions.loading&&!filterOptions.candidateReady?'候选目录尚未更新，请重试。':'')} onRetry={filterOptions.reload} />
+          <VolumeMultiSelect key={`type:${activeCountryPage}`} label="类型 / 钱包" options={channelTypeOptions} value={channelTypeSelections} onChange={setChannelTypeSelections} placeholder="全部类型" loading={filterOptions.loading} error={filterOptions.error||(!filterOptions.loading&&!filterOptions.candidateReady?'候选目录尚未更新，请重试。':'')} onRetry={filterOptions.reload} />
+          <VolumeSingleSelect label="业务方向" options={['代收','代付']} value={direction} onChange={value=>{setDirection(value);setChannel('');setChannelTypeSelections([]);}} placeholder="全部方向" />
         </div>
       <div className="volume-search-actions">
       <div className="quick-row date-shortcuts volume-date-shortcuts">
@@ -2817,7 +2833,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
 }
 
 
-function VolumeSingleSelect({ label, options, value, onChange, placeholder }: { label: string; options: string[]; value: string; onChange: (value: string) => void; placeholder: string }) {
+function VolumeSingleSelect({ label, options, value, onChange, placeholder,loading=false,error='',onRetry }: { label: string; options: string[]; value: string; onChange: (value: string) => void; placeholder: string;loading?:boolean;error?:string;onRetry?:()=>void }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -2844,19 +2860,24 @@ function VolumeSingleSelect({ label, options, value, onChange, placeholder }: { 
       <input className="multi-search" aria-label={`搜索${label}`} placeholder={`搜索${label}`} autoFocus value={search} onChange={event=>setSearch(event.target.value)} onKeyDown={event=>{
         if(event.key==="Enter") { event.preventDefault(); if(visibleOptions.length===1)choose(visibleOptions[0]); }
       }}/>
+      {search&&<button type="button" className="mini-btn" onClick={()=>setSearch('')}>清除搜索</button>}
+      {loading&&<div className="multi-empty" role="status">正在读取可选项…</div>}
+      {error&&<div className="multi-empty" role="alert">{error} <button type="button" className="mini-btn" onClick={onRetry}>重试</button></div>}
       <div className="multi-list">
         <button type="button" className="multi-option volume-single-option" aria-pressed={!value} onClick={()=>choose("")}>{placeholder}</button>
         {visibleOptions.map(item=><button type="button" className="multi-option volume-single-option" aria-pressed={item===value} key={item} onClick={()=>choose(item)}>{item}</button>)}
-        {!visibleOptions.length&&<div className="multi-empty">没有匹配的三方</div>}
+        {!loading&&!error&&!visibleOptions.length&&<div className="multi-empty">{search?'没有匹配项，请换个关键词':'当前范围暂无已收录选项'}</div>}
       </div>
+      <div className="multi-footer">{visibleOptions.length} 项可选{label==='统一三方'?' · 当前国家/平台已收录名称，所选日期有无订单以查询为准':''}</div>
     </div>}
   </div>;
 }
 
-function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { label: string; options: string[]; value: string[]; onChange: (value: string[]) => void; placeholder: string }) {
+function VolumeMultiSelect({ label, options, value, onChange, placeholder,loading=false,error='',onRetry }: { label: string; options: string[]; value: string[]; onChange: (value: string[]) => void; placeholder: string;loading?:boolean;error?:string;onRetry?:()=>void }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
 
   const visibleOptions = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -2892,20 +2913,22 @@ function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { l
   }
 
   return (
-    <div ref={boxRef} className="field multi-field volume-multi-field">
+    <div ref={boxRef} className="field multi-field volume-multi-field" onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setOpen(false);buttonRef.current?.focus();}}}>
       <label>{label}</label>
-      <button className="multi-button" type="button" aria-label={label} aria-expanded={open} onClick={() => {setSearch("");setOpen((x) => !x);}}>
+      <button ref={buttonRef} className="multi-button" type="button" aria-label={label} aria-haspopup="dialog" aria-expanded={open} onClick={() => {setSearch("");setOpen((x) => !x);}}>
         <span>{filterLabel(value, placeholder)}</span>
         <span className="multi-caret">▾</span>
       </button>
       {open && (
-        <div className="multi-menu volume-multi-menu">
-          <input className="multi-search" aria-label={`搜索${label}`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`搜索${label}`} onKeyDown={event=>{if(event.key==="Enter")event.preventDefault();}} />
+        <div className="multi-menu volume-multi-menu" role="dialog" aria-label={`选择${label}`}>
+          <input className="multi-search" autoFocus aria-label={`搜索${label}`} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`搜索${label}`} onKeyDown={event=>{if(event.key==="Enter")event.preventDefault();}} />
           <div className="multi-actions">
             <button type="button" onClick={selectVisible}>全选当前</button>
             <button type="button" onClick={clearAll}>清空</button>
-            <button type="button" onClick={() => setOpen(false)}>完成</button>
+            <button type="button" onClick={() => {setOpen(false);buttonRef.current?.focus();}}>完成</button>
           </div>
+          {loading&&<div className="multi-empty" role="status">正在读取可选项…</div>}
+          {error&&<div className="multi-empty" role="alert">{error} <button type="button" className="mini-btn" onClick={onRetry}>重试</button></div>}
           <div className="multi-list">
             {visibleOptions.map((item) => (
               <label className="multi-option" key={item}>
@@ -2913,7 +2936,7 @@ function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { l
                 <span>{item}</span>
               </label>
             ))}
-            {!visibleOptions.length && <div className="multi-empty">当前范围暂无选项</div>}
+            {!loading&&!error&&!visibleOptions.length && <div className="multi-empty">{search?'没有匹配项，请换个关键词':'当前范围暂无已收录选项'}</div>}
           </div>
           <div className="multi-footer">已选 {value.length} 项；会按当前国家范围提供可选项。</div>
         </div>
@@ -3087,7 +3110,7 @@ function CountryVolumeSinglePage({ country, rows, previousRows, summary, previou
         collectionSuccess={collectionSuccess}
         withdrawPending={withdrawPending}
         workOrderDeposit={workOrderDeposit}
-        withdrawActual={collectionSuccessCountry(country)==="印度"?undefined:withdrawActual}
+        withdrawActual={supportsWithdrawActualCountry(country)?withdrawActual:undefined}
         withdrawSuccess={withdrawSuccess}
         orderRateHint={orderRateHint}
         onView={onView}

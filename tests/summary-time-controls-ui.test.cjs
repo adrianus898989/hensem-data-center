@@ -141,7 +141,7 @@ test('production dispatch keeps default available-only time queries separate fro
 
 test('the separate order detail page retains required single-platform lookup protection',()=>{
   const detail=fs.readFileSync(path.join(root,'src/components/OrderDetailSearch.tsx'),'utf8');
-  assert.match(detail,/<select required value=\{draft\.platform\}/);assert.match(detail,/请选择一个平台/);
+  assert.match(detail,/<select[^>]*required value=\{draft\.platform\}/);assert.match(detail,/请选择一个平台/);
   assert.match(detail,/会员 ID/);assert.match(detail,/订单号/);
   assert.doesNotMatch(detail,/VolumeMultiSelect/);
 });

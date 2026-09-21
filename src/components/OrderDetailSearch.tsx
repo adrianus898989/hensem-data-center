@@ -7,6 +7,8 @@ import {sourceDay,sourceTime,type OrderTimePayload} from "@/lib/orderTimeQuery";
 import {initialOrderDetailSearch,orderDetailSearchRequest,validateOrderDetailPage,formatOrderDetailAmount,orderDetailStatusLabel,orderDetailAccessDenied,
   type OrderDetailSearchDraft,type OrderDetailCursor,type OrderDetailPage} from "@/lib/orderDetailSearch";
 import "./OrderDetailSearch.css";
+import {useFilterCandidateDirectory} from './useFilterCandidateDirectory';
+import {orderProviderCandidates} from '@/lib/filterCandidates';
 
 type AppliedSearch={draft:OrderDetailSearchDraft;platformName:string};
 type SearchResult={owner:string;applied:AppliedSearch;page:number;cursors:Array<OrderDetailCursor|null>;data:OrderDetailPage};
@@ -14,6 +16,7 @@ type SearchResult={owner:string;applied:AppliedSearch;page:number;cursors:Array<
 export default function OrderDetailSearch() {
   const {session,profile}=useDashboardAuth();
   const identity=`${session?.user.id||"anonymous"}:${dashboardScopeIdentity(profile)}`;
+  const candidateDirectory=useFilterCandidateDirectory(identity,profile);
   const ownerRef=useRef(identity);ownerRef.current=identity;
   const [draftState,setDraftState]=useState(()=>({owner:identity,draft:initialOrderDetailSearch()}));
   const draft=draftState.owner===identity?draftState.draft:initialOrderDetailSearch();
@@ -24,8 +27,12 @@ export default function OrderDetailSearch() {
   const [resultState,setResultState]=useState<SearchResult|null>(null);
   const result=resultState?.owner===identity?resultState:null;
   const [busy,setBusy]=useState(false),[error,setError]=useState("");
+  const [platformSearch,setPlatformSearch]=useState('');
   const serial=useRef(0),busyRef=useRef(false),flight=useRef<AbortController|null>(null);
   const groups=useMemo(()=>[...new Set(options.map(p=>p.country||p.team||"其他团队"))].map(team=>({team,items:options.filter(p=>(p.country||p.team||"其他团队")===team)})),[options]);
+  const matchingGroups=groups.map(g=>({...g,items:g.items.filter(p=>p.id===draft.platform||`${p.name} ${g.team}`.toLowerCase().includes(platformSearch.trim().toLowerCase()))})).filter(g=>g.items.length);
+  const selectedPlatform=options.find(p=>p.id===draft.platform);
+  const providerOptions=selectedPlatform?orderProviderCandidates(candidateDirectory.rows,selectedPlatform.country||selectedPlatform.team,selectedPlatform.name,draft.direction):[];
   const draftTimezone=options.find(p=>p.id===draft.platform)?.timezone||"Asia/Kolkata";
   const dirty=Boolean(result&&JSON.stringify(draft)!==JSON.stringify(result.applied.draft));
 
@@ -39,7 +46,7 @@ export default function OrderDetailSearch() {
   }
   useEffect(()=>{
     ++serial.current;flight.current?.abort();busyRef.current=false;
-    setBusy(false);setError("");setResultState(null);setDraftState({owner:identity,draft:initialOrderDetailSearch()});
+    setBusy(false);setError("");setPlatformSearch('');setResultState(null);setDraftState({owner:identity,draft:initialOrderDetailSearch()});
     return()=>{++serial.current;flight.current?.abort();busyRef.current=false;};
   },[identity]);
   useEffect(()=>{
@@ -114,7 +121,7 @@ export default function OrderDetailSearch() {
     <header className="ods-title"><div><h2>订单明细查询</h2><p>按平台直接查订单，每次最多读取 50 笔，不加载全平台汇总。</p></div><span>{draftTimezone}</span></header>
     <form className="ods-search-card" onSubmit={query}>
       <div className="ods-primary-fields">
-        <label className="ods-field"><span>平台 <b>*</b></span><select required value={draft.platform} onChange={e=>selectPlatform(e.target.value)} disabled={optionsLoading}><option value="">{optionsLoading?"正在读取可用平台…":"请选择一个平台"}</option>{groups.map(g=><optgroup label={g.team} key={g.team}>{g.items.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</optgroup>)}</select></label>
+        <div className="ods-field"><span>平台 <b>*</b></span><input type="search" aria-label="搜索平台" placeholder="搜索平台或国家" value={platformSearch} onChange={e=>setPlatformSearch(e.target.value)}/><select aria-label="平台" required value={draft.platform} onChange={e=>{selectPlatform(e.target.value);setPlatformSearch('');}} disabled={optionsLoading}><option value="">{optionsLoading?"正在读取可用平台…":"请选择一个平台"}</option>{matchingGroups.map(g=><optgroup label={g.team} key={g.team}>{g.items.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</optgroup>)}</select>{platformSearch&&!matchingGroups.length&&<small>没有匹配的平台</small>}</div>
         <label className="ods-field"><span>时间口径</span><select value={draft.basis} onChange={e=>updateDraft({basis:e.target.value as "created"|"success",status:"all",createdStart:"",createdEnd:""})}><option value="created">创建时间</option><option value="success">成功时间</option></select></label>
         <label className="ods-field"><span>开始时间 <b>*</b></span><input type="datetime-local" required step="1" value={draft.start} onChange={e=>updateDraft({start:e.target.value})}/></label>
         <label className="ods-field"><span>结束时间 <b>*</b></span><input type="datetime-local" required step="1" value={draft.end} onChange={e=>updateDraft({end:e.target.value})}/></label>
@@ -129,7 +136,7 @@ export default function OrderDetailSearch() {
         <label className="ods-field"><span>订单状态</span><select value={draft.basis==="success"?"success":draft.status} disabled={draft.basis==="success"} onChange={e=>updateDraft({status:e.target.value as OrderDetailSearchDraft["status"]})}><option value="all">全部状态</option><option value="success">成功</option><option value="pending">处理中 / 已提交</option><option value="failed">失败</option><option value="rejected">已拒绝</option><option value="unknown">其他状态</option></select></label>
       </div>
       <details className="ods-advanced"><summary>高级筛选{draft.provider||draft.createdStart||draft.createdEnd?" · 已设置":""}</summary><div className="ods-advanced-fields">
-        <label className="ods-field"><span>三方通道</span><input type="text" maxLength={200} value={draft.provider} onChange={e=>updateDraft({provider:e.target.value})} placeholder="源后台完整通道名称（精确匹配）"/></label>
+        <label className="ods-field"><span>三方通道</span><input type="text" list="order-provider-candidates" autoComplete="off" maxLength={200} value={draft.provider} onChange={e=>updateDraft({provider:e.target.value})} placeholder={draft.platform?'搜索或输入源后台完整通道名称':'先选择平台'}/><datalist id="order-provider-candidates">{providerOptions.map(name=><option key={name} value={name}/>)}</datalist><small>{candidateDirectory.loading?'正在读取通道目录…':candidateDirectory.error||`${providerOptions.length} 个已收录名称；精确匹配，不代表所选日期一定有订单。`}</small>{candidateDirectory.error&&<button className="ods-secondary" type="button" onClick={candidateDirectory.reload}>重读通道目录</button>}</label>
         {draft.basis==="success"&&<><label className="ods-field"><span>创建开始时间（可选）</span><input type="datetime-local" step="1" value={draft.createdStart} onChange={e=>updateDraft({createdStart:e.target.value})}/></label><label className="ods-field"><span>创建结束时间（可选）</span><input type="datetime-local" step="1" value={draft.createdEnd} onChange={e=>updateDraft({createdEnd:e.target.value})}/></label></>}
       </div>{draft.basis==="success"&&<small>不填写创建范围时，包含更早月份创建、本时段成功的订单。</small>}</details>
       <div className="ods-action-row"><label className="ods-checkbox"><input type="checkbox" checked={!!draft.crossDayOnly} onChange={e=>updateDraft({crossDayOnly:e.target.checked})}/>只看跨日成功订单</label><div><button className="ods-secondary" type="button" onClick={reset}>重置</button>{busy&&<button className="ods-secondary" type="button" onClick={cancel}>取消查询</button>}<button className="ods-primary" type="submit" disabled={busy||optionsLoading}>{busy?"查询中…":"查询订单"}</button></div></div>

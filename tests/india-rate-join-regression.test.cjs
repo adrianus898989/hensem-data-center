@@ -27,7 +27,8 @@ const compiled = ts.transpileModule(functions.map(fn => fn.getText(source)).join
 const api = Function('require', ...Object.keys(dependencies), compiled + `
   return { expandRateNameCandidates, buildRateMap, findMatchedRate,
     rateFor, singleFeeFor, estimateSideFee, rateHasSideFee, normalizeVolumeRowForDisplay, aggregateCombo,
-    rateNameKey, rateCountriesCompatible, ratePayloadUsable, ratePayloadFresh };
+    rateNameKey, rateCountriesCompatible, ratePayloadUsable, ratePayloadFresh,
+    buildFeeCompareRows, summarizeFeeRows };
 `)(require, ...Object.values(dependencies));
 
 test('empty fee responses are never treated as a fresh usable cache', () => {
@@ -37,6 +38,39 @@ test('empty fee responses are never treated as a fresh usable cache', () => {
   assert.equal(api.ratePayloadFresh({ meta: freshMeta, rates: [] }), false);
   assert.equal(api.ratePayloadUsable({ meta: freshMeta, rates: [{ id: 'rate-1' }] }), true);
   assert.equal(api.ratePayloadFresh({ meta: freshMeta, rates: [{ id: 'rate-1' }] }), true);
+});
+
+test('Pakistan daily summaries and PKR details retain calculated fees without changing totals', () => {
+  const rates=[{id:'pk',country:'巴基斯坦',thirdParty:'TestPay',category:'EASYPAISA',collectFee:'2%',payoutFee:'1%',collectSingleFee:'',payoutSingleFee:''}];
+  const base={date:'2026-09-20',country:'巴基斯坦',channel:'TestPay',rawChannel:'TestPay',channelType:'EASYPAISA'};
+  const rows=[
+    {...base,id:'time:detail',platform:'92GAME',currency:'PKR',direction:'代收',amount:1000,count:10},
+    {...base,id:'daily',platform:'3PATTI-SUPER',direction:'代收',amount:500,count:5},
+    {...base,id:'time:payout',platform:'92GAME',currency:'PKR',direction:'代付',amount:800,count:8},
+    {...base,id:'daily:payout',platform:'3PATTI-SUPER',direction:'代付',amount:200,count:2}
+  ];
+  const before=structuredClone(rows);
+  const grouped=api.aggregateCombo(rows,r=>[r.date,r.country,r.platform,r.channel,r.channelType]);
+  const fees=api.buildFeeCompareRows(grouped,rates,[],'daily');
+  const summary=api.summarizeFeeRows(fees);
+  assert.equal(summary.collectFee,30);assert.equal(summary.payoutFee,10);
+  assert.equal(summary.estimatedFee,40);assert.equal(summary.collectHasFee,true);assert.equal(summary.payoutHasFee,true);
+  assert.deepEqual(rows,before);
+  // A same-platform combination must use the identical currency contract.
+  const merged=api.aggregateCombo(rows.map(r=>({...r,platform:'92GAME'})),r=>[r.date,r.country,r.platform,r.channel,r.channelType]);
+  assert.equal(api.summarizeFeeRows(api.buildFeeCompareRows(merged,rates,[],'daily')).estimatedFee,40);
+  // Explicit USDT is never silently converted to PKR.
+  const mixed=api.aggregateCombo(rows.map((r,i)=>i===1?{...r,currency:'USDT'}:r),r=>[r.date,r.country,r.platform,r.channel,r.channelType]);
+  assert.equal(Number.isNaN(api.summarizeFeeRows(api.buildFeeCompareRows(mixed,rates,[],'daily')).collectFee),true);
+});
+
+test('actual settlement columns and provider-only rows are restricted to EK/G66 teams',()=>{
+  const {supportsWithdrawActualCountry:supported}=loadTs(path.join(root,'src/lib/withdrawActual.ts'));
+  for(const country of ['香港','香港团队','HK_TEAM','红膏蟹','红膏蟹团队','RED_CRAB'])assert.equal(supported(country),true,country);
+  for(const country of ['印度','巴基斯坦','PK','巴西','菲律宾','所有国家USDT',''])assert.equal(supported(country),false,country);
+  const text=source.text;
+  assert.match(text,/withdrawActual=\{supportsWithdrawActualCountry\(country\)\?withdrawActual:undefined\}/);
+  assert.match(text,/if \(supportsWithdrawActualCountry\(appliedCountryPage\)\) appendProviderOnly\("actual-only"/);
 });
 
 const ARB2 = ['ArbPay2INR-BANK', 'ArbPay2INR-UPI'];
