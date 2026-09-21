@@ -9,13 +9,43 @@ import {selectOrderTimePlatforms} from "@/lib/orderTimePlatforms";
 import {timeOrderFilters,timeSourceRows,type TimeQuerySelection,type TimeQueryResult} from "@/lib/orderTimeVolume";
 import {previousTimeSelection,comparisonScopeIssues,historicalDailyComparison,type TimeComparisonState} from "@/lib/orderTimeComparison";
 import {dashboardBusinessFetch} from "@/lib/dashboardDataClient";
-import type {ThirdPartyVolumeRow} from "@/lib/types";
+import type {ThirdPartyVolumeRow,WithdrawPendingSnapshot} from "@/lib/types";
+import {usesMidnightPending} from "@/lib/orderTimePending";
 import {formatOrderDetailAmount,orderDetailStatusLabel} from "@/lib/orderDetailSearch";
 import "./OrderTimeDashboard.css";
 
 export function isOrderQueryDenied(error:unknown):boolean {
   const value=error as {status?:number;code?:string};
   return [401,403].includes(Number(value?.status))||value?.code==="42501"||String(value?.code||"").startsWith("28");
+}
+
+export async function readMidnightPending(session:DashboardSession,date:string,country:string,signal:AbortSignal):Promise<WithdrawPendingSnapshot[]> {
+  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").replace(/\/$/,"");
+  const response=await dashboardAuthenticatedFetch(`${base}/rest/v1/rpc/dashboard_withdraw_pending`,{
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({p_start:date,p_end:date,p_country:country}),signal,cache:"no-store"
+  },session);
+  const payload=await response.json();
+  if(!response.ok||!Array.isArray(payload?.snapshots))throw new Error("代付中零点快照暂未载入，请重新查询。");
+  return payload.snapshots;
+}
+
+export function useMidnightPending(result:TimeQueryResult,paused=false) {
+  const {session,profile}=useDashboardAuth();
+  const identity=`${session?.user.id||""}:${dashboardScopeIdentity(profile)}`;
+  const enabled=usesMidnightPending(result);
+  const [stored,setStored]=useState<{result:TimeQueryResult;identity:string;snapshots:WithdrawPendingSnapshot[];error?:string}|null>(null);
+  useEffect(()=>{
+    if(paused||!session||!enabled)return;
+    const controller=new AbortController();let disposed=false;
+    const timer=setTimeout(()=>controller.abort(),15000);
+    void readMidnightPending(session,result.selection.end.slice(0,10),result.selection.country,controller.signal)
+      .then(snapshots=>{if(!disposed&&!controller.signal.aborted)setStored({result,identity,snapshots});})
+      .catch(()=>{if(!disposed)setStored({result,identity,snapshots:[],error:"代付中零点快照暂未载入，请重新查询。"});})
+      .finally(()=>clearTimeout(timer));
+    return ()=>{disposed=true;controller.abort();clearTimeout(timer);};
+  },[result,identity,paused,enabled]);
+  return stored?.identity===identity&&stored.result===result?stored:{snapshots:[],error:"代付中零点快照载入中…"};
 }
 
 /** Current totals render first; comparison never blocks or overlaps a new search. */
@@ -121,11 +151,11 @@ export function useOrderTimeQuery() {
       const selection:TimeQuerySelection={...input,platforms:[...new Set(input.platforms)],availablePlatforms:input.availablePlatforms?[...new Set(input.availablePlatforms)]:undefined,basis:mode,createdStart:mode==="success"?createdStart:"",createdEnd:mode==="success"?createdEnd:"",
         memberId:"",orderNumber:"",status:"all",crossDayOnly:false};
       const draft:TimeQueryResult={selection,payloads:[]};
-      // One shared two-request queue; day/direction shards stay under the
+      // One shared four-request queue; day/direction shards stay under the
       // database timeout and publish one result only when every shard succeeds.
       const payloads=await queryOrderTimeBatches(selected.map(p=>timeOrderFilters(draft,p.id,p.timezone)),
         (body,signal)=>orderTimeRpc(session,"dashboard_order_time_query",body,signal),
-        {signal:controller.signal,onProgress:value=>{if(serial===requestSerial.current&&viewer===currentIdentity.current)setProgress(value);}});
+        {signal:controller.signal,concurrency:4,onProgress:value=>{if(serial===requestSerial.current&&viewer===currentIdentity.current)setProgress(value);}});
       if(controller.signal.aborted||serial!==requestSerial.current||viewer!==currentIdentity.current)return false;
       setStored({identity:viewer,data:{selection,payloads}});setActive(true);return true;
     }catch(err){if(serial===requestSerial.current&&viewer===currentIdentity.current){

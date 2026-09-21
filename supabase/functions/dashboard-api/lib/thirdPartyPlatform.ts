@@ -14,6 +14,11 @@ export function canonicalThirdPartyPlatform(country: string, value: string): str
   if (legacyShreeKey === "shreewin") return "ShreeWin";
 
   const countryKey = String(country || "").trim().toUpperCase();
+  if (["PK", "PAKISTAN", "巴基斯坦", "巴基斯坦盘口"].includes(countryKey)) {
+    const known = displayPlatform.toUpperCase();
+    if (["3PATISUPER", "3PATTI-SUPER"].includes(known)) return "3PATTI-SUPER";
+    if (["92GAME", "92.GAME"].includes(known)) return "92GAME";
+  }
   if (["IN", "INDIA", "印度", "印度线下", "印度盘口", "印度线下盘口"].includes(countryKey)) {
     // Owner-confirmed names for the same platform, across legacy/AR/NEWAR.
     // Keep this allowlist scoped to India; never strip arbitrary suffixes.
@@ -34,6 +39,12 @@ export function canonicalThirdPartyPlatform(country: string, value: string): str
     if (known === "POPKKK" || known === "POPKKK新") return "POPKKK";
   }
   return displayPlatform;
+}
+
+/** Owner-confirmed first business date, not the day the first daily job runs. */
+export function thirdPartyPlatformNotOpen(country:string,platform:string,endDate:string):boolean {
+  return ["PK","PAKISTAN","巴基斯坦","巴基斯坦盘口"].includes(country.trim().toUpperCase())
+    && platform.trim().toUpperCase()==="92BLAZE" && endDate.slice(0,10)<"2026-09-22";
 }
 
 /** Stable first-occurrence order, suitable for draft/applied multi-select state. */

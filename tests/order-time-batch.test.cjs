@@ -176,3 +176,14 @@ test('invalid inputs and repeated platforms never send requests',async()=>{
   await assert.rejects(()=>queryOrderTimeBatches([base],fetcher,{signal:controller.signal}),error=>error.name==='AbortError');
   assert.equal(calls,0);
 });
+
+
+test('dashboard overlaps four requests while preserving complete results and the bounded queue',async()=>{
+  let active=0,maximum=0;
+  const filters=Array.from({length:12},(_,i)=>({...base,platform:`00000000-0000-0000-0000-${String(i+1).padStart(12,'0')}`,end:'2026-09-01T23:59:59'}));
+  const results=await queryOrderTimeBatches(filters,async request=>{
+    maximum=Math.max(maximum,++active);await wait(2);active--;return payload(request);
+  },{concurrency:4});
+  assert.equal(maximum,4);assert.equal(results.length,12);
+  for(const concurrency of [0,5,2.5,NaN])await assert.rejects(()=>queryOrderTimeBatches(filters,async r=>payload(r),{concurrency}));
+});

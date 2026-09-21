@@ -33,9 +33,10 @@ import { dashboardScopeAllows, dashboardScopeIdentity, effectiveDashboardDataSco
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload, type ClientMonthlyStatus } from "@/lib/monthlyStatusClient";
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
-import {useOrderTimeQuery, useOrderTimeComparison, TimeQueryExtra, OrderRecordModal} from "./OrderTimeControls";
+import {useOrderTimeQuery, useOrderTimeComparison, useMidnightPending, TimeQueryExtra, OrderRecordModal} from "./OrderTimeControls";
 import {timePlatformCountry,timePlatformName,timeVolumeData,timeSourceRows,timePlatformCoverage,type TimeQueryResult} from "@/lib/orderTimeVolume";
 import {timeComparisonLabel,type TimeComparisonIssue} from "@/lib/orderTimeComparison";
+import {timePendingSnapshotView,usesMidnightPending} from "@/lib/orderTimePending";
 import {sourceDay,sourceShortcutDateRange} from "@/lib/orderTimeQuery";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { buildCollectionSuccessView, collectionSuccessCountry, collectionSuccessProviderKey, type CollectionSuccessView } from "@/lib/collectionSuccess";
@@ -2934,6 +2935,7 @@ function PlatformCoverageDialog({result,onClose}:{result:TimeQueryResult;onClose
     <div className="platform-coverage-content">
       <div className="detail-modal-header"><div><h3>平台查询情况</h3><p>{result.selection.country} · {result.selection.start.replace("T"," ")} 至 {result.selection.end.replace("T"," ")}</p></div><button autoFocus type="button" className="modal-close-btn" onClick={onClose}>关闭</button></div>
       {([
+        ["所选日期尚未开盘",coverage.notOpen,"92BLAZE 于 9 月 22 日开盘，9 月 23 日开始采集 22 日的完整日数据；此前不计入待采平台。"],
         ["尚无可查明细",coverage.unavailable,"已在平台目录登记，但当前没有可查询的已上传明细；不代表已确认漏采。"],
         ["已查询、当前条件无数据",coverage.empty,"已读取该平台，但没有匹配本次时间和筛选条件的订单。"],
         ["本次有数据",coverage.contributing,""]
@@ -2963,6 +2965,10 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
   const [comparisonOpen,setComparisonOpen]=useState(false);
   const comparison=useOrderTimeComparison(result,paused);
   const data=useMemo(()=>timeVolumeData(result),[result]);
+  const pendingSnapshots=useMidnightPending(result,paused);
+  const pendingView=useMemo(()=>usesMidnightPending(result)
+    ?timePendingSnapshotView(result,pendingSnapshots.snapshots,pendingSnapshots.error):data.withdrawPending,
+    [result,pendingSnapshots.snapshots,pendingSnapshots.error,data]);
   const previousData=useMemo(()=>{
     if(comparison.status!=="ready")return null;
     if(comparison.previousRows){
@@ -2999,12 +3005,12 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
   const monthlyRows=useMemo(()=>{
     const rows=aggregateCombo(data.rows,row=>[row.country,row.channel]);
     const keys=new Set(rows.map(row=>workOrderDepositProviderKey(row.labelParts[0],row.labelParts[1])));
-    for(const p of workOrderDeposit?.providers||[])if(!keys.has(p.key)){
+    for(const p of [...(workOrderDeposit?.providers||[]),...(pendingView?.providers||[])])if(!keys.has(p.key)){
       keys.add(p.key);rows.push({key:`deposit-only:${p.key}`,labelParts:[p.country,p.channel],rows:[],
         collectAmount:0,collectCount:0,payoutAmount:0,payoutCount:0,totalAmount:0,totalCount:0,collectPct:0,payoutPct:0,totalPct:0});
     }
     return rows;
-  },[data,workOrderDeposit]);
+  },[data,workOrderDeposit,pendingView]);
   const feeRows=useMemo(()=>rateRows.length ? buildFeeCompareRows(aggregateCombo(data.rows,row=>[row.date,row.country,row.platform,row.channel,normalizedFeeBaseChannelType(row)]),rateRows,[],"daily",feeRateMap) : [],[data,rateRows,feeRateMap]);
   const previousFeeRows=useMemo(()=>previousData&&rateRows.length?buildFeeCompareRows(aggregateCombo(previousData.rows,row=>[row.date,row.country,row.platform,row.channel,normalizedFeeBaseChannelType(row)]),rateRows,[],"daily",feeRateMap):[],[previousData,rateRows,feeRateMap]);
   const s=result.selection,range=`${s.start.replace("T"," ")} 至 ${s.end.replace("T"," ")}`;
@@ -3021,7 +3027,8 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
       collectionSuccess={data.collectionSuccess} withdrawSuccess={data.withdrawSuccess} orderRateHint={hint}
       platformCoverage={coverage} onPlatformCoverage={()=>setCoverageOpen(true)}
       workOrderDeposit={workOrderDeposit}
-      withdrawActual={data.withdrawActual} withdrawPending={data.withdrawPending} onView={row=>setSelected(row.labelParts[1])}/>
+      withdrawActual={data.withdrawActual} withdrawPending={pendingView} onView={row=>setSelected(row.labelParts[1])}/>
+    {pendingView?.basisHint&&<p className="withdraw-pending-context" role="status">{pendingView.basisHint} 已采集 {pendingView.compare().current.captured} / {pendingView.compare().current.expected} 平台。{pendingView.error}</p>}
     {workOrders?.result===result&&workOrders.error&&<p role="alert">{workOrders.error}</p>}
     {selected&&<OrderRecordModal result={result} channel={selected} onClose={()=>setSelected(null)}/>}
     {coverageOpen&&<PlatformCoverageDialog result={result} onClose={()=>setCoverageOpen(false)}/>}
@@ -3995,7 +4002,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
         }
         case "withdrawPendingAmount": case "withdrawPendingCount": {
           const metric = withdrawPending?.compare(providerKeys).current;
-          return metric && (metric.state === "complete" || metric.state === "zero")
+          return metric && ["complete","zero","partial"].includes(metric.state)
             ? (sort.key === "withdrawPendingAmount" ? metric.amount : metric.count) : null;
         }
         case "depositSubmittedAmount": return issueNumber(workOrderDeposit?.compare(depositKeys([row])).current, "deposit", "submittedAmount");
@@ -4113,7 +4120,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
             <SortTh label="代付笔数" sortKey="payoutCount" numeric className="num" />
             <SortTh label="代付成功率" sortKey="payoutSuccessRate" numeric className="num" title="创建时间口径：成功提现笔数 ÷ 提现订单总笔数。没有完整分母时不计算。" />
             {withdrawActual && <><SortTh label="实际到账金额" sortKey="withdrawActualAmount" numeric className="num withdraw-actual-heading" title="提现订单中的实际到账金额（real_amount）。来源没有完整覆盖时显示 —。" /><SortTh label="提现手续费" sortKey="withdrawActualFee" numeric className="num withdraw-actual-heading" title="提现订单中的实际手续费（fee）。来源没有完整覆盖时显示 —。" /></>}
-            {withdrawPending && <><SortTh label="代付中金额" sortKey="withdrawPendingAmount" numeric className="num withdraw-pending-heading" title={orderRateHint?"所选创建时间内，目前状态仍为已提交的提现订单金额。":"各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的申请金额。"} /><SortTh label="代付中笔数" sortKey="withdrawPendingCount" numeric className="num withdraw-pending-heading" title={orderRateHint?"所选创建时间内，目前状态仍为已提交的提现订单笔数。":"各国家当地时间 00:00 采集前 10 个完整自然日内，提现状态严格等于“已提交”的提交笔数。"} /></>}
+            {withdrawPending && <><SortTh label="代付中金额" sortKey="withdrawPendingAmount" numeric className="num withdraw-pending-heading" title={withdrawPending.basisHint||(orderRateHint?"所选创建时间内，目前状态仍为已提交的提现订单金额。":"各国家当地时间 00:00 采集前 7 个完整自然日内，提现状态严格等于“已提交”的申请金额。")} /><SortTh label="代付中笔数" sortKey="withdrawPendingCount" numeric className="num withdraw-pending-heading" title={withdrawPending.basisHint||(orderRateHint?"所选创建时间内，目前状态仍为已提交的提现订单笔数。":"各国家当地时间 00:00 采集前 7 个完整自然日内，提现状态严格等于“已提交”的提交笔数。")} /></>}
             {workOrderDeposit && <>
               <SortTh groupLabel="存款未到账" label="提交金额" sortKey="depositSubmittedAmount" numeric className="num workorder-metric-heading workorder-deposit-heading" title="按工单真实三方名称归类的存款未到账提交金额。" />
               <SortTh groupLabel="存款未到账" label="提交笔数" sortKey="depositSubmittedCount" numeric className="num workorder-metric-heading workorder-deposit-heading" title="按工单真实三方名称归类的存款未到账提交笔数。" />
@@ -4209,11 +4216,11 @@ function WorkOrderIssuesEmptyCells() {
   return <>{Array.from({ length: 10 }, (_, index) => <td className="num muted-cell" key={`workorder-empty-${index}`}>-</td>)}</>;
 }
 
-function WithdrawPendingCell({ metric, kind }: { metric: { amount: number; count: number; state: string } | undefined; kind: "amount" | "count" }) {
+function WithdrawPendingCell({ metric, kind }: { metric: { amount: number; count: number; state: string; captured?:number; expected?:number } | undefined; kind: "amount" | "count" }) {
   const state = metric?.state;
-  const ready = state === "complete" || state === "zero";
+  const ready = state === "complete" || state === "zero" || state === "partial";
   const value = kind === "amount" ? metric?.amount : metric?.count;
-  return <span className={`withdraw-pending-value ${ready ? "is-ready" : "is-pending"}`} title="状态严格等于“已提交”；按各国家当地时间 00:00 采集前 10 个完整自然日">{ready ? formatNumber(value) : "—"}</span>;
+  return <span className={`withdraw-pending-value ${ready ? "is-ready" : "is-pending"}`} title="代付中统计范围以当前表格说明为准">{ready ? formatNumber(value) : "—"}{state==="partial"&&<small style={{display:"block"}}>部分 · 已采 {metric?.captured}/{metric?.expected}</small>}</span>;
 }
 
 function WithdrawActualCell({ metric, kind }: { metric: { actualAmount: number; feeAmount: number; state: string } | undefined; kind: "actual" | "fee" }) {

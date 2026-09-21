@@ -8,6 +8,8 @@ export type OrderTimeBatchOptions={
   onProgress?:(progress:OrderTimeBatchProgress)=>void;
   /** Primarily useful for tests; production requests never exceed 45 seconds. */
   requestTimeoutMs?:number;
+  /** Dashboard may overlap four platforms; other callers retain two. */
+  concurrency?:number;
 };
 const HOUR=3600_000;
 
@@ -109,6 +111,8 @@ export async function queryOrderTimeBatches(
     originals.set(filter.platform,orderTimeRequest(filter));return planOrderTimeBatches(filter);
   });
   const configuredTimeout=options.requestTimeoutMs??45000;
+  const concurrency=options.concurrency??2;
+  if(!Number.isInteger(concurrency)||concurrency<1||concurrency>4)throw new Error("查询并发设置无效。");
   if(!Number.isFinite(configuredTimeout)||configuredTimeout<1||configuredTimeout>45000)throw new Error("请求超时设置无效。");
   const controller=new AbortController(),results=new Map<string,OrderTimePayload[]>();
   let completed=0,total=queue.length,active=0,failed=false;
@@ -122,7 +126,7 @@ export async function queryOrderTimeBatches(
       const pump=()=>{
         if(failed)return;
         if(controller.signal.aborted){fail(abortError());return;}
-        while(active<2&&queue.length){
+        while(active<concurrency&&queue.length){
           const request=queue.shift()!;active++;report();
           void fetchShard(request,fetcher,controller.signal,configuredTimeout).then(payload=>{
             if(failed||controller.signal.aborted)return;
