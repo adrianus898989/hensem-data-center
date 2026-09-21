@@ -539,3 +539,19 @@ test('actual configured-only 776F option belongs to Panghu without inventing a v
   assert.ok(brazil.platforms.includes('POPNOV')); assert.ok(!brazil.platforms.includes('776F'));
   assert.equal(brazil.filteredBaseNoDate.length,1); assert.equal(brazil.filteredBaseNoDate[0].amount,75);
 });
+
+
+test('Pakistan confirmed aliases merge directory labels with real uploaded IDs without merging foreign platforms',()=>{
+  for(const [canonical,aliases] of [['3PATTI-SUPER',['3PATISUPER','3PATTI-SUPER']],['92GAME',['92.GAME','92GAME']]]){
+    for(const country of ['PK','巴基斯坦'])assert.deepEqual(helper.canonicalThirdPartyPlatformSelections(country,aliases),[canonical]);
+    for(const alias of aliases)assert.equal(helper.canonicalThirdPartyPlatform('印度',alias),alias);
+  }
+  const platforms=loadTs(path.join(root,'src/lib/orderTimePlatforms.ts'));
+  const catalog=[{id:'game-id',name:'92.GAME',team:'巴基斯坦',timezone:'Asia/Karachi',source:'ar'}];
+  assert.equal(platforms.selectOrderTimePlatforms(catalog,'巴基斯坦',['92GAME'],['92GAME'])[0].id,'game-id');
+  const input={selection:{country:'巴基斯坦',platforms:[],availablePlatforms:['92GAME','92.GAME','3PATISUPER','3PATTI-SUPER','92BLAZE'],channel:'',types:[],direction:'',start:'2026-09-20T00:00:00',end:'2026-09-20T23:59:59'},payloads:[{id:'game-id',payload:{platform:'92.GAME',country:'巴基斯坦',rows:[]}}]};
+  const coverage=orderTime.timePlatformCoverage(input);
+  assert.deepEqual(coverage.queried,['92GAME']);assert.deepEqual(coverage.unavailable,['3PATTI-SUPER']);
+  assert.deepEqual(coverage.notOpen,['92BLAZE']);assert.equal(coverage.expected.length,2);
+  input.selection.end='2026-09-22T23:59:59';assert.ok(orderTime.timePlatformCoverage(input).unavailable.includes('92BLAZE'));
+});

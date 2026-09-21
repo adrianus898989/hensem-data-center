@@ -9,14 +9,14 @@ const text=fs.readFileSync(path.join(root,'src/components/ThirdPartyVolumeDashbo
 const source=ts.createSourceFile('ThirdPartyVolumeDashboard.tsx',text,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const main=source.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='ThirdPartyVolumeDashboard');
 function compile(code){return ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;}
-const libs=['format','thirdPartyNameMap','thirdPartyPlatform','platformDisplayCountry','collectionSuccess','withdrawPending','withdrawActual','workOrderDeposit','orderTimeVolume','orderTimeQuery','orderTimePlatforms','orderTimeComparison'];
+const libs=['format','thirdPartyNameMap','thirdPartyPlatform','platformDisplayCountry','collectionSuccess','withdrawPending','withdrawActual','workOrderDeposit','orderTimeVolume','orderTimeQuery','orderTimePlatforms','orderTimeComparison','orderTimePending'];
 const dependencies=Object.assign({},...libs.map(name=>loadTs(path.join(root,`src/lib/${name}.ts`))));
 const controlsText=fs.readFileSync(path.join(root,'src/components/OrderTimeControls.tsx'),'utf8');
 const controls=ts.createSourceFile('OrderTimeControls.tsx',controlsText,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
 const extra=controls.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='TimeQueryExtra');
 const selected=source.statements.filter(n=>ts.isVariableStatement(n)||(ts.isFunctionDeclaration(n)&&n!==main));
 function createApi(overrides={}){
-  const context={...React,...dependencies,exports:{},OrderRecordModal:()=>null,useOrderTimeComparison:()=>({status:'loading'}),...overrides};
+  const context={...React,...dependencies,exports:{},OrderRecordModal:()=>null,useOrderTimeComparison:()=>({status:'loading'}),useMidnightPending:()=>({snapshots:[],error:'载入中'}),...overrides};
   const names=selected.filter(ts.isFunctionDeclaration).map(n=>n.name.text);
   return new Function('require',...Object.keys(context),compile(selected.map(n=>n.getText(source)).join('\n')+'\n'+extra.getText(controls))+`\nreturn {${names.join(',')},TimeQueryExtra};`)(specifier=>{
     assert.equal(specifier,'react/jsx-runtime');return require(specifier);
@@ -566,3 +566,19 @@ if(process.env.ORDER_TIME_UI_PREVIEW==='1'){
   fs.writeFileSync(output,`<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>三方量 · 集成页面验收</title><style>${css}\nbody{padding:20px;background:#f2f5fa}main{max-width:1600px;margin:auto;min-width:0}.fixture-label{font-size:12px;color:#62748e}</style><body><main class="third-party-volume-module"><p class="fixture-label">UI验收示例，非生产数据。以下搜索框与汇总表均来自现有三方量页面。</p>${renderToStaticMarkup(filterElement())}${render(fixture())}</main></body></html>`);
   console.log(output);
 }
+
+
+test('India table shows midnight pending 262 / 812708 while retaining created-day success rates',()=>{
+  const result=indiaFixture({platforms:['91CLUB'],start:'2026-09-20T00:00:00',end:'2026-09-20T23:59:59'});
+  Object.assign(result.payloads[0].payload,{platform:'91CLUB',team:'AR',rows:[{...sample('Rspay','withdraw',101,29,1000000,114595),created_date:'2026-09-20',pending_count:72,pending_amount:246290}]});
+  const snapshot={schema_version:1,source_system:'WITHDRAW_REVIEW',country_code:'IN',platform:'91CLUB',stat_date:'2026-09-20',timezone:'Asia/Kolkata',snapshot_id:'fixture',snapshot_at:'2026-09-20T18:30:28Z',coverage:{complete:true,expected_count:263,fetched_count:263,unique_count:263},totals:{pending_count:263,pending_amount:813708},groups:[{raw_channel:'Rspay',channel_type:'提现',pending_count:262,pending_amount:812708},{raw_channel:'OnlyPending',channel_type:'提现',pending_count:1,pending_amount:1000}]};
+  const custom=createApi({useMidnightPending:()=>({snapshots:[snapshot]})});
+  const html=renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));
+  const labels=headings(html),body=rows(html),rspay=cells(body.find(line=>plain(cells(line)[0]||'')==='RsPay'));
+  assert.equal(plain(rspay[labels.indexOf('代付中金额')]),'812,708');assert.equal(plain(rspay[labels.indexOf('代付中笔数')]),'262');
+  assert.match(plain(rspay[labels.indexOf('代付成功率')]),/29 \/ 101 笔/);
+  assert.ok(body.some(line=>plain(cells(line)[0]||'')==='OnlyPending'));
+  assert.match(html,/近 7 个完整自然日/);assert.match(html,/已采集 1 \/ 1 平台/);assertAligned(html);
+  const partial=renderToStaticMarkup(React.createElement(custom.WithdrawPendingCell,{metric:{amount:812708,count:262,state:'partial',captured:1,expected:2},kind:'count'}));
+  assert.match(plain(partial),/262部分 · 已采 1\/2/);
+});

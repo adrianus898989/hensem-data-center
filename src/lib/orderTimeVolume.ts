@@ -4,7 +4,7 @@ import { collectionSuccessProviderKey } from "./collectionSuccess";
 import type { WithdrawActualView } from "./withdrawActual";
 import type { WithdrawPendingView } from "./withdrawPending";
 import { canonicalThirdPartyName } from "./thirdPartyNameMap";
-import { canonicalThirdPartyPlatform } from "./thirdPartyPlatform";
+import { canonicalThirdPartyPlatform,thirdPartyPlatformNotOpen } from "./thirdPartyPlatform";
 import { platformDisplayCountry } from "./platformDisplayCountry";
 import { availableAmount } from "./format";
 import { timeTotals, sourceTime, type OrderTimeFilters, type OrderTimePayload, type OrderTimeRow } from "./orderTimeQuery";
@@ -31,9 +31,11 @@ export function timePlatformCoverage(result:TimeQueryResult) {
   const names=(values:string[])=>[...new Set(values.filter(Boolean))].sort((a,b)=>a.localeCompare(b,"zh-CN",{numeric:true}));
   const s=result.selection;
   const queried=names(result.payloads.map(({payload:p})=>timePlatformName({name:p.platform||"",team:p.team||"",country:p.country})));
-  const expected=names((s.platforms.length?s.platforms:s.availablePlatforms||queried).map(name=>canonicalThirdPartyPlatform(s.country,name)));
+  const available=names((s.platforms.length?s.platforms:s.availablePlatforms||queried).map(name=>canonicalThirdPartyPlatform(s.country,name)));
+  const notOpen=available.filter(name=>thirdPartyPlatformNotOpen(s.country,name,s.end));
+  const expected=available.filter(name=>!notOpen.includes(name));
   const contributing=names(timeSourceRows(result).map(row=>row.platform));
-  return {expected,queried,contributing,unavailable:expected.filter(name=>!queried.includes(name)),
+  return {expected,queried,contributing,notOpen,unavailable:expected.filter(name=>!queried.includes(name)),
     empty:queried.filter(name=>!contributing.includes(name))};
 }
 export function timeSourceRows(result:TimeQueryResult):TimeSourceRow[] {

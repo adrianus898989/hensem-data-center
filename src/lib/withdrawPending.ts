@@ -52,6 +52,7 @@ export function validWithdrawPendingSnapshot(snapshot: WithdrawPendingSnapshot):
 type Metric = { amount: number; count: number; state: "complete" | "partial" | "missing" | "zero" | "unavailable"; captured: number; expected: number };
 export type WithdrawPendingComparison = { current: Metric; previous: Metric };
 export type WithdrawPendingView = {
+  basisHint?: string;
   providers: Array<{ key: string; country: string; channel: string; amount: number; count: number }>;
   compare: (providerKeys?: readonly string[]) => WithdrawPendingComparison;
   error?: string;
