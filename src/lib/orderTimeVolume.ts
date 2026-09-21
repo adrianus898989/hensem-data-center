@@ -45,7 +45,12 @@ export function timeSourceRows(result:TimeQueryResult):TimeSourceRow[] {
   const selected=result.selection;
   return result.payloads.flatMap(({id,payload})=>{
     const country=timePlatformCountry({name:payload.platform||"",team:payload.team||"",country:payload.country});
-    return payload.rows.map(row=>({...row,platform:canonicalThirdPartyPlatform(country,payload.platform||""),platformId:id,country,timezone:payload.timezone||"Asia/Kolkata",channel:canonicalThirdPartyName(row.provider,country)}));
+    return payload.rows.map(row=>{
+      const channel=canonicalThirdPartyName(row.provider,country);
+      return {...row,platform:canonicalThirdPartyPlatform(country,payload.platform||""),platformId:id,country,
+        timezone:payload.timezone||"Asia/Kolkata",channel,
+        channel_type:["人工确认","人工充值"].includes(channel)?channel:row.channel_type};
+    });
   }).filter(row=>(!selected.channel||row.channel===selected.channel)
     && (!selected.types.length||selected.types.includes(row.channel_type))
     && (!selected.direction||(selected.direction==="代收"?row.direction==="charge":row.direction==="withdraw")));

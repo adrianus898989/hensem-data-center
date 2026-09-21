@@ -171,3 +171,14 @@ test('confirmed display aliases merge metrics before ratios and keep versioned p
     assert.notEqual(names.canonicalThirdPartyName(a,'香港'),names.canonicalThirdPartyName(b,'香港'));
   assert.notEqual(collectionSuccessProviderKey('香港','At2Pay唤醒'),collectionSuccessProviderKey('印度','ATPay'));
 });
+
+
+test('explicit manual confirmation remains a separate provider and summary type',()=>{
+  const input=result([row({provider:'人工确认',channel_type:'ARPay'}),row({provider:'人工确认',channel_type:'BANK CARD'}),row({provider:'未识别通道',channel_type:'UPI'})]);
+  const data=volume.timeVolumeData(input),key=collectionSuccessProviderKey('香港','人工确认');
+  assert.equal(data.rows.filter(r=>r.channel==='人工确认').length,2);
+  assert.ok(data.rows.filter(r=>r.channel==='人工确认').every(r=>r.channelType==='人工确认'));
+  assert.equal(data.withdrawSuccess.compare([key],['人工确认']).current.success,2);
+  assert.equal(data.rows.filter(r=>r.channel==='未识别通道').length,1);
+  assert.equal(volume.timeVolumeData({...input,selection:{...input.selection,types:['人工确认']}}).rows.length,2);
+});

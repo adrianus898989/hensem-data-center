@@ -18,7 +18,7 @@
 .third-party-volume-module .volume-search-card .volume-multi-menu{left:0;right:auto;width:max(100%,270px);min-width:0;max-width:100cqw;box-sizing:border-box}
 .third-party-volume-module .volume-search-card .multi-button,.third-party-volume-module .volume-search-card .multi-select-trigger{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0;overflow:hidden;text-align:left}
 .third-party-volume-module .volume-search-card .multi-button>span:first-child,.third-party-volume-module .volume-search-card .multi-select-trigger>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.third-party-volume-module .volume-single-field .multi-list{margin-top:8px}
+.third-party-volume-module .volume-single-field .multi-list{margin-top:8px;max-height:min(380px,50vh)}
 .third-party-volume-module .volume-single-option{width:100%;min-height:36px;border:0;padding:8px 10px;border-radius:6px;background:transparent;text-align:left;font-size:12px!important;line-height:1.4;font-weight:500!important;white-space:normal;overflow-wrap:anywhere}
 .third-party-volume-module .volume-single-option:hover{background:#f1f5fd}
 .third-party-volume-module .volume-single-option[aria-pressed="true"]{background:#e9f0ff;color:#2359bc!important;font-weight:700!important}
