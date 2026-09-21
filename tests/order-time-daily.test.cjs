@@ -41,12 +41,16 @@ test('daily totals obey direction/provider/wallet/platform filters and never ent
     assert.equal(daily.dailyVolumeRows(fixture({selection:{...selection,...filter}})).length,0);
 });
 
-test('daily success counts never create denominators, actual-amount totals or zero pending balances',()=>{
+test('daily-only platforms retain known rates and money with a partial label, without inventing denominators',()=>{
   const data=volume.timeVolumeData(fixture()),provider=key('巴基斯坦','TestPay');
-  assert.equal(data.collectionSuccess.compare([provider]).current.rate,null);
-  assert.equal(data.withdrawSuccess.compare([provider]).current.rate,null);
-  assert.equal(data.withdrawActual.compare([provider]).current.state,'unavailable');
-  assert.equal(data.withdrawPending.compare([provider]).current.state,'unavailable');
+  assert.equal(data.collectionSuccess.compare([provider]).current.rate,1167/2204);
+  assert.equal(data.collectionSuccess.compare([provider]).current.state,'partial');
+  assert.deepEqual(data.collectionSuccess.compare([provider]).current.excludedPlatforms,['3PATTI-SUPER']);
+  assert.equal(data.withdrawSuccess.compare([provider]).current.rate,520/586);
+  assert.equal(data.withdrawActual.compare([provider]).current.state,'partial');
+  assert.equal(data.withdrawActual.compare([provider]).current.actualAmount,1970773);
+  assert.equal(data.withdrawPending.compare([provider]).current.state,'partial');
+  assert.equal(data.withdrawPending.compare([provider]).current.amount,300);
   assert.equal(data.withdrawSuccess.compare([provider],['BANK']).current.rate,520/586,'unaffected wallet denominator stays intact');
   const separate=volume.timeVolumeData(fixture({dailyRows:[row({channel:'AnotherPay'})]}));
   assert.equal(separate.collectionSuccess.compare([provider]).current.rate,1167/2204);

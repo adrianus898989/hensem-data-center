@@ -719,6 +719,7 @@ export function canonicalThirdPartyName(value: string, country?: string): string
   const rawAliasKey = aliasKey(strippedRaw);
   const originalAliasKey = aliasKey(raw);
   const cKeyNow = countryKey(country);
+  if(cKeyNow==="巴基斯坦"&&rawAliasKey==="epay")return "EPay";
   const rawBrazilKey = cKeyNow === "巴西" ? brazilPixAliasKey(strippedRaw) : rawAliasKey;
   const currencyKey = currencyFreeAliasKey(strippedRaw || raw);
   const confirmedAlias = confirmedUserThirdPartyAlias(strippedRaw || raw, country) || confirmedUserThirdPartyAlias(raw, country);

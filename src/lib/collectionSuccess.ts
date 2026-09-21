@@ -83,6 +83,7 @@ export type CollectionSuccessMetric = {
   expected: number;
   captured: number;
   unknownType?: boolean;
+  excludedPlatforms?: string[];
   state: "complete" | "partial" | "missing" | "zero" | "unavailable";
 };
 export type CollectionSuccessComparison = {

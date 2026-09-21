@@ -30,6 +30,16 @@ test('missing/error/incomplete snapshots are distinct from a verified zero; miss
   const all={...result,selection:{...selection,platforms:[],availablePlatforms:['91CLUB','55CLUB']}};
   const metric=pending.timePendingSnapshotView(all,[snapshot()]).compare().current;
   assert.equal(metric.state,'partial');assert.equal(metric.count,262);assert.equal(metric.expected,2);
+  assert.deepEqual(pending.timePendingSnapshotView(all,[snapshot()]).missingSnapshotPlatforms,['55CLUB']);
+  assert.deepEqual(pending.timePendingSnapshotView(all,[snapshot()],'offline').missingSnapshotPlatforms,[],'an API failure is not evidence a named platform was missed');
+});
+
+test('midnight coverage identifies DhaniWin in India and 3PATTI/LG789 in Pakistan independently of order detail coverage',()=>{
+  const india={...result,selection:{...selection,platforms:[],availablePlatforms:['91CLUB','DhaniWin']}};
+  assert.deepEqual(pending.timePendingSnapshotView(india,[snapshot()]).missingSnapshotPlatforms,['DhaniWin']);
+  const pk={...result,selection:{...selection,country:'巴基斯坦',platforms:[],availablePlatforms:['92GAME','3PATISUPER','LG789']},payloads:[]};
+  const snap=snapshot({country_code:'PK',platform:'92.GAME'});
+  assert.deepEqual(pending.timePendingSnapshotView(pk,[snap]).missingSnapshotPlatforms,['3PATTI-SUPER','LG789']);
 });
 
 const text=fs.readFileSync(path.join(root,'src/components/OrderTimeControls.tsx'),'utf8');

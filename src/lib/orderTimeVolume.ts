@@ -6,7 +6,7 @@ import type { WithdrawPendingView } from "./withdrawPending";
 import { canonicalThirdPartyName } from "./thirdPartyNameMap";
 import { canonicalThirdPartyPlatform,thirdPartyPlatformNotOpen } from "./thirdPartyPlatform";
 import { platformDisplayCountry } from "./platformDisplayCountry";
-import { availableAmount } from "./format";
+import { availableAmount, sumVolumeAmounts } from "./format";
 import { dailyVolumeRows } from "./orderTimeDaily";
 import { timeTotals, sourceTime, type OrderTimeFilters, type OrderTimePayload, type OrderTimeRow } from "./orderTimeQuery";
 
@@ -77,6 +77,14 @@ export function timeVolumeData(result:TimeQueryResult) {
   const hasDaily=(direction:"charge"|"withdraw",keys?:readonly string[],types?:readonly string[])=>daily.some(row=>
     row.direction===(direction==="charge"?"代收":"代付")&&(!keys?.length||keys.includes(collectionSuccessProviderKey(row.country,row.channel)))
     &&(!types?.length||types.includes(row.channelType)));
+  const successMetric=(keys:readonly string[]|undefined,types:readonly string[]|undefined,direction:"charge"|"withdraw"):CollectionSuccessMetric=>{
+    const value=metric(select(keys,types),direction);
+    if(!hasDaily(direction,keys,types))return value;
+    const excludedPlatforms=[...new Set(daily.filter(row=>row.direction===(direction==="charge"?"代收":"代付")
+      &&(!keys?.length||keys.includes(collectionSuccessProviderKey(row.country,row.channel)))
+      &&(!types?.length||types.includes(row.channelType))).map(row=>row.platform))];
+    return {...value,state:value.rate==null?"missing":"partial",excludedPlatforms};
+  };
   const rows:ThirdPartyVolumeRow[]=source.map((r,i)=>({
     id:`time:${r.platformId}:${i}`,sheetName:"订单明细库",sourceRow:i+1,
     date:(basis==="created"?r.created_date:r.success_date)||result.selection.start.slice(0,10),
@@ -102,19 +110,22 @@ export function timeVolumeData(result:TimeQueryResult) {
     &&(!result.selection.status||result.selection.status==="all");
   const successView=(direction:"charge"|"withdraw"):CollectionSuccessView|undefined=>canShowSuccessRate?{
     providers:providers.map(p=>({...p,submitted:metric(select([p.key]),direction).submitted})),
-    compare:(keys,types)=>({current:hasDaily(direction,keys,types)?{...metric(select(keys,types),direction),rate:null,captured:0,state:"unavailable"}:metric(select(keys,types),direction),previous,deltaPoints:null,comparisonLabel:"已入库订单",platforms:[]})
+    compare:(keys,types)=>({current:successMetric(keys,types,direction),previous,deltaPoints:null,comparisonLabel:"已入库订单",platforms:[]})
   }:undefined;
   const collectionSuccess=successView("charge");
   const withdrawSuccess=successView("withdraw");
   const actual=(items:TimeSourceRow[])=>{
     const withdrawals=items.filter(r=>r.direction==="withdraw"),s=timeTotals(withdrawals);
-    const complete=s.actual_amount!=null&&s.withdraw_fee!=null;
-    return {requestedAmount:availableAmount(s.success_amount),actualAmount:availableAmount(s.actual_amount),feeAmount:availableAmount(s.withdraw_fee),orderCount:s.success_count,
-      expected:1,captured:complete?1:0,state:complete?"complete" as const:"unavailable" as const};
+    const actualRows=withdrawals.filter(r=>r.actual_amount!=null&&Number.isFinite(Number(r.actual_amount))),feeRows=withdrawals.filter(r=>r.withdraw_fee!=null&&Number.isFinite(Number(r.withdraw_fee)));
+    const actualAmount=actualRows.length?sumVolumeAmounts(actualRows.map(r=>({...r,amount:Number(r.actual_amount)}))):NaN;
+    const feeAmount=feeRows.length?sumVolumeAmounts(feeRows.map(r=>({...r,amount:Number(r.withdraw_fee)}))):NaN;
+    const complete=actualRows.length===withdrawals.length&&feeRows.length===withdrawals.length&&Number.isFinite(actualAmount)&&Number.isFinite(feeAmount);
+    return {requestedAmount:availableAmount(s.success_amount),actualAmount,feeAmount,orderCount:s.success_count,
+      expected:1,captured:complete?1:0,state:complete?"complete" as const:(Number.isFinite(actualAmount)||Number.isFinite(feeAmount))?"partial" as const:"unavailable" as const};
   };
   const withdrawActual:WithdrawActualView={
     providers:providers.map(p=>({...p,...actual(select([p.key]))})),
-    compare:keys=>({current:hasDaily("withdraw",keys)?{...actual(select(keys)),actualAmount:NaN,feeAmount:NaN,captured:0,state:"unavailable"}:actual(select(keys)),previous:{...actual([]),state:"unavailable"}})
+    compare:keys=>{const value=actual(select(keys));return {current:hasDaily("withdraw",keys)&&value.state==="complete"?{...value,state:"partial",captured:0}:value,previous:{...actual([]),state:"unavailable"}};}
   };
   const pending=(items:TimeSourceRow[])=>{
     const s=timeTotals(items.filter(r=>r.direction==="withdraw"));
@@ -123,7 +134,7 @@ export function timeVolumeData(result:TimeQueryResult) {
   };
   const withdrawPending:WithdrawPendingView|undefined=basis==="created"?{
     providers:providers.map(p=>({...p,...pending(select([p.key]))})),
-    compare:keys=>({current:hasDaily("withdraw",keys)?{...pending(select(keys)),amount:NaN,captured:0,state:"unavailable"}:pending(select(keys)),previous:{...pending([]),state:"unavailable"}})
+    compare:keys=>({current:hasDaily("withdraw",keys)?{...pending(select(keys)),state:select(keys).some(r=>r.direction==="withdraw")?"partial":"missing",expected:2}:pending(select(keys)),previous:{...pending([]),state:"unavailable"}})
   }:undefined;
   return {rows,source,collectionSuccess,withdrawSuccess,successRateHint:timeSuccessRateHint(result.selection),
     withdrawActual,withdrawPending,totals:timeTotals(source)};

@@ -2924,8 +2924,9 @@ function VolumeMultiSelect({ label, options, value, onChange, placeholder }: { l
 
 
 function OrderSuccessCell({value,hint}:{value?:ReturnType<CollectionSuccessView["compare"]>["current"];hint?:string}) {
-  if(!value || value.rate==null) return <span className="order-rate-empty" title={value?.state==="unavailable"?"当前范围包含仅有日汇总的平台，尚无完整订单分母，暂不计算成功率。":hint||"现有日汇总没有完整提现订单分母；请使用已接入的创建时间查询。"}>—<small>{value?.state==="unavailable"?"待明细接入":hint?"不适用":"待明细接入"}</small></span>;
-  return <span className="order-rate-value" title={`成功 ${formatNumber(value.success)} 笔 ÷ 创建 ${formatNumber(value.submitted)} 笔；仅基于已入库订单`}>{formatPercent(value.rate)}<small>{formatNumber(value.success)} / {formatNumber(value.submitted)} 笔</small></span>;
+  const excluded=value?.excludedPlatforms||[];
+  if(!value || value.rate==null) return <span className="order-rate-empty" title={excluded.length?`${excluded.join("、")} 仅有日汇总，尚无完整订单分母。`:hint||"现有日汇总没有完整提现订单分母；请使用已接入的创建时间查询。"}>—<small>{excluded.length?"待明细接入":hint?"不适用":"待明细接入"}</small></span>;
+  return <span className="order-rate-value" title={`成功 ${formatNumber(value.success)} 笔 ÷ 创建 ${formatNumber(value.submitted)} 笔；仅基于已入库订单${excluded.length?`；未含 ${excluded.join("、")} 的日汇总`:""}`}>{formatPercent(value.rate)}<small>{formatNumber(value.success)} / {formatNumber(value.submitted)} 笔</small>{value.state==="partial"&&<small>已采明细部分</small>}</span>;
 }
 
 function PlatformCoverageDialog({result,onClose}:{result:TimeQueryResult;onClose:()=>void}) {
@@ -3025,7 +3026,7 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
   return <>
     {daily.loading&&<p role="status">正在补充已有日汇总…</p>}
     {daily.error&&<p role="alert">{daily.error}</p>}
-    {platforms.daily.length>0&&<p role="status">{platforms.daily.join("、")}：已纳入日汇总金额和成功笔数；相关成功率待完整订单明细接入后计算。</p>}
+    {platforms.daily.length>0&&<p role="status">{platforms.daily.join("、")}：已纳入日汇总金额和成功笔数；成功率展示其他平台已采明细部分。</p>}
     {comparison.status==="unavailable"&&<div className="comparison-coverage-notice"><button type="button" className="mini-btn" onClick={()=>setComparisonOpen(true)}>涨跌暂不可比 · 查看原因</button></div>}
     <CountryVolumeSinglePage country={s.country} rows={data.rows} previousRows={previousData?.rows} summary={sumRows(data.rows)} previousSummary={sumRows(previousData?.rows||[])}
       monthlyRows={monthlyRows} feeRows={feeRows} previousFeeRows={previousFeeRows} canCompare={!!previousData} dateRangeLabel={range}
@@ -3034,7 +3035,7 @@ function TimeRangeVolumeResult({result,rateRows,feeRateMap,paused=false}:{result
       platformCoverage={coverage} onPlatformCoverage={()=>setCoverageOpen(true)}
       workOrderDeposit={workOrderDeposit}
       withdrawActual={data.withdrawActual} withdrawPending={pendingView} onView={row=>setSelected(row.labelParts[1])}/>
-    {pendingView?.basisHint&&<p className="withdraw-pending-context" role="status">{pendingView.basisHint} 已采集 {pendingView.compare().current.captured} / {pendingView.compare().current.expected} 平台。{pendingView.error}</p>}
+    {pendingView?.basisHint&&<p className="withdraw-pending-context" role="status">{pendingView.basisHint} 已采集 {pendingView.compare().current.captured} / {pendingView.compare().current.expected} 平台。{pendingView.missingSnapshotPlatforms?.length?` 暂无该日代付中快照：${pendingView.missingSnapshotPlatforms.join("、")}。此处只统计快照覆盖，充值／提现明细单独统计。`:""}{pendingView.error}</p>}
     {workOrders?.result===result&&workOrders.error&&<p role="alert">{workOrders.error}</p>}
     {selected&&<OrderRecordModal result={displayResult} channel={selected} onClose={()=>setSelected(null)}/>}
     {coverageOpen&&<PlatformCoverageDialog result={displayResult} onClose={()=>setCoverageOpen(false)}/>}
@@ -4003,7 +4004,7 @@ function MonthlyTable({ title, subtitle, rows, columns, columnIndexes, stickyFir
         case "payoutCount": return row.payoutCount;
         case "withdrawActualAmount": case "withdrawActualFee": {
           const metric = withdrawActual?.compare(providerKeys).current;
-          return metric && (metric.state === "complete" || metric.state === "zero")
+          return metric && ["complete","zero","partial"].includes(metric.state)
             ? (sort.key === "withdrawActualAmount" ? metric.actualAmount : metric.feeAmount) : null;
         }
         case "withdrawPendingAmount": case "withdrawPendingCount": {
@@ -4230,10 +4231,10 @@ function WithdrawPendingCell({ metric, kind }: { metric: { amount: number; count
 }
 
 function WithdrawActualCell({ metric, kind }: { metric: { actualAmount: number; feeAmount: number; state: string } | undefined; kind: "actual" | "fee" }) {
-  const ready = metric?.state === "complete" || metric?.state === "zero";
+  const ready = metric && ["complete","zero","partial"].includes(metric.state);
   const value = kind === "actual" ? metric?.actualAmount : metric?.feeAmount;
   const label = kind === "actual" ? "实际到账金额" : "提现手续费";
-  return <span className={`withdraw-actual-value ${ready ? "is-ready" : "is-pending"}`} title={`${label}来自已入库订单的安全汇总；来源覆盖不完整时不显示 0。`}>{ready ? formatNumber(value) : "—"}</span>;
+  return <span className={`withdraw-actual-value ${ready ? "is-ready" : "is-pending"}`} title={`${label}来自已入库订单；部分来源未提供此字段时显示已采小计。`}>{ready ? formatNumber(value) : "—"}{metric?.state==="partial"&&Number.isFinite(value)&&<small>已采金额部分</small>}</span>;
 }
 
 function DirectionTable({ title, subtitle, rows, columns, paginated }: { title: string; subtitle: string; rows: DirectionSummary[]; columns: string[]; paginated?: boolean }) {

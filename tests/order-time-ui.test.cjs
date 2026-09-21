@@ -43,6 +43,18 @@ function table(html){const match=html.match(/<table>([\s\S]*?)<\/table>/);assert
 function rows(html){return [...table(html).matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(m=>m[1]);}
 function cells(html,kind='td'){return [...html.matchAll(new RegExp(`<${kind}\\b[^>]*>([\\s\\S]*?)<\\/${kind}>`,'g'))].map(m=>m[1]);}
 function headings(html){return cells(rows(html)[0],'th').map(x=>plain(x).replace(/[↕↑↓]/g,''));}
+test('real mixed AR-null/NEWAR-PKR metadata displays Pakistan money and identifies missing pending snapshots by name',()=>{
+  const result=fixture({country:'巴基斯坦',platforms:[],availablePlatforms:['92GAME','LG789','3PATTI-SUPER']});
+  Object.assign(result.payloads[0].payload,{platform:'92.GAME',country:'巴基斯坦',team:'巴基斯坦'});
+  result.payloads[0].payload.rows.forEach(row=>row.currency=null);
+  result.payloads.push({id:'lg',payload:{platform:'LG789',country:'巴基斯坦',rows:[{...sample('PayA','charge',10,5,1000,500),currency:'PKR'}]}});
+  const snapshots=[{schema_version:1,source_system:'WITHDRAW_REVIEW',country_code:'PK',platform:'92.GAME',stat_date:'2026-09-17',timezone:'Asia/Karachi',snapshot_id:'midnight',snapshot_at:'2026-09-17T19:00:00Z',coverage:{complete:true,expected_count:0,fetched_count:0,unique_count:0},totals:{pending_count:0,pending_amount:0},groups:[]}];
+  const custom=createApi({useMidnightPending:()=>({snapshots})});
+  const html=renderToStaticMarkup(React.createElement(custom.TimeRangeVolumeResult,{result,rateRows:[],feeRateMap:new Map()}));
+  assert.match(html,/1,450/);assert.match(html,/1,400/);assert.match(plain(html),/35.00%/);
+  assert.match(plain(html),/暂无该日代付中快照：3PATTI-SUPER、LG789/);
+  assert.match(plain(html),/充值／提现明细单独统计/);
+});
 test('default all-platform view renders daily-only amounts, names the basis, and does not fabricate a success rate',()=>{
   const result=fixture({country:'巴基斯坦',platforms:[],availablePlatforms:['92GAME','3PATISUPER','3PATTI-SUPER']});
   Object.assign(result.payloads[0].payload,{platform:'92.GAME',country:'巴基斯坦',team:'巴基斯坦'});
@@ -54,8 +66,8 @@ test('default all-platform view renders daily-only amounts, names the basis, and
   assert.match(html,/674,250/);assert.match(html,/505,955/);
   const provider=cells(rows(html).find(row=>plain(row).startsWith('PayA')));
   const labels=headings(html);
-  assert.match(plain(provider[labels.indexOf('代收成功率')]),/待明细接入/);
-  assert.match(plain(provider[labels.indexOf('代付成功率')]),/待明细接入/);
+  assert.match(plain(provider[labels.indexOf('代收成功率')]),/20.00%2 \/ 10 笔已采明细部分/);
+  assert.match(plain(provider[labels.indexOf('代付成功率')]),/75.00%6 \/ 8 笔已采明细部分/);
   const dialog=renderToStaticMarkup(React.createElement(custom.PlatformCoverageDialog,{result:{...result,dailyRows},onClose(){}}));
   assert.match(plain(dialog),/已展示日汇总（1）3PATTI-SUPER/);
   assert.match(plain(dialog),/尚无可查明细（0）/);
