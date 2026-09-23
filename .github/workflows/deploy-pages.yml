@@ -33,6 +33,7 @@ jobs:
       - run: pnpm test:migration
       - run: pnpm test:platform-filters
       - run: pnpm test:comparisons
+      - run: pnpm test:admin-preview
       - run: pnpm build
         env:
           PAGES_BASE_PATH: /hensem-data-center

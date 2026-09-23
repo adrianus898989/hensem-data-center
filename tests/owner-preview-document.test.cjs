@@ -104,7 +104,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const prefix = `hensem:owner-preview:${userId}:`;
   values.set(prefix + KEY, 'this-account-draft');
   values.set('hensem:owner-preview:other-account:' + KEY, 'other-account-draft');
-  let hookIndex = 0, refIndex = 0, callbackIndex = 0, throwOnWrite = false;
+  let hookIndex = 0, refIndex = 0, callbackIndex = 0, throwOnWrite = false, intervalCheck = null;
   const callbacks = [];
   const react = {
     useState(initial) { const index = hookIndex++; if (!(index in states)) states[index] = initial;
@@ -118,7 +118,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const box = { exports: {} };
   const window = {
     addEventListener: (name, callback) => listeners.set(name, callback), removeEventListener: name => listeners.delete(name),
-    setInterval: () => 1, clearInterval: () => {},
+    setInterval: callback => { intervalCheck = callback; return 1; }, clearInterval: () => {},
   };
   const localStorage = { getItem: key => values.get(key) ?? null,
     setItem(key, value) { if (throwOnWrite) throw Error('Synthetic quota failure'); values.set(key, value); },
@@ -145,7 +145,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     crypto: { randomUUID: () => 'offline-frame-channel' },
     document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
-    fetch: async (url, init) => { calls.push({ url, init }); return { ok: true, status: 200, text: async () => HTML }; },
+    fetch: async (url, init) => { calls.push({ url, init }); return options.fetch ? options.fetch(url, init) : { ok: true, status: 200, text: async () => HTML }; },
   };
   vm.runInNewContext(transpile(fs.readFileSync(componentPath, 'utf8')), environment, { filename: componentPath });
   const props = { canView: options.canView ?? true, session: currentSession,
@@ -155,6 +155,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   for (const effect of effects.splice(0)) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); }
   return { values, prefix, child, calls, states, draw, channel: () => refs[1].current,
     send: event => listeners.get('message')?.(event), dispose: () => cleanups.forEach(cleanup => cleanup()),
+    checkPermission: () => intervalCheck?.(),
     failStorage: () => { throwOnWrite = true; } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -177,6 +178,31 @@ test('host sends session only to its protected fetch; iframe has no same-origin 
     assert.equal(iframe.props.srcDoc.includes(secret), false);
   assert(iframe.props.srcDoc.includes('this-account-draft'));
   h.dispose();
+});
+
+test('403 permission check aborts an initial HTML load and late success cannot restore the frame', async () => {
+  let resolveHTML;
+  const lateHTML = new Promise(resolve => { resolveHTML = resolve; });
+  const h = componentHarness('offline-revoked-user', { fetch: async url => url.endsWith('?check=1')
+    ? { ok: false, status: 403 }
+    : { ok: true, status: 200, text: () => lateHTML } });
+  try {
+    await flush();
+    assert.equal(h.calls.length, 1, 'initial HTML request has started');
+    const initialSignal = h.calls[0].init.signal;
+    assert.equal(initialSignal.aborted, false);
+    h.checkPermission(); await flush();
+    assert.equal(h.calls.length, 2);
+    assert.equal(h.calls[1].url.endsWith('?check=1'), true);
+    assert.equal(initialSignal.aborted, true, 'revocation must abort the shared initial request');
+    assert.equal(h.states[0], ''); assert(h.states[1], 'revocation remains visible as an error');
+    // Deliberately resolve despite abort: a buffered or non-abortable body must still be ignored.
+    resolveHTML(HTML); await flush();
+    assert.equal(h.states[0], '', 'late initial HTML cannot restore documentHtml after revocation');
+    assert.equal(findElement(h.draw(), 'iframe'), undefined);
+    h.checkPermission(); await flush();
+    assert.equal(h.calls.length, 2, 'cancelled effect cannot issue further permission requests');
+  } finally { resolveHTML(HTML); h.dispose(); }
 });
 
 test('host accepts only its current opaque frame, matching channel and allowed draft key', async () => {
