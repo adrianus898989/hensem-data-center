@@ -925,11 +925,14 @@ export default function Dashboard() {
   const [draftFilters, setDraftFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [activeModule, setActiveModule] = useState<ModuleMode>("home");
   const [canDetailedPreview, setCanDetailedPreview] = useState(false);
+  const detailedPreviewSessionRef=useRef(session);detailedPreviewSessionRef.current=session;
   useEffect(() => {
-    let stop = false; setCanDetailedPreview(false);
-    if (session && profile?.active) readAdminPreviewAccess(session).then(access => { if (!stop) setCanDetailedPreview(access.canView === true); }).catch(() => {});
-    return () => { stop = true; };
-  }, [session, profile?.active, profile?.auth_user_id]);
+    let stop=false,checking=false;setCanDetailedPreview(false);
+    const check=async()=>{if(checking||stop)return;const current=detailedPreviewSessionRef.current;if(!current||!profile?.active)return;
+      checking=true;try{const access=await readAdminPreviewAccess(current);if(!stop)setCanDetailedPreview(access.canView===true)}catch{if(!stop)setCanDetailedPreview(false)}finally{checking=false}};
+    void check();const timer=window.setInterval(check,60000);
+    return()=>{stop=true;window.clearInterval(timer)};
+  }, [profile?.active, profile?.auth_user_id]);
   useEffect(() => {
     const followPreviewLink = () => { if (profile?.active && (isOwner || canDetailedPreview) && window.location.hash === "#owner-admin-preview") setActiveModule("owner-admin-preview"); };
     followPreviewLink(); window.addEventListener("hashchange", followPreviewLink);
