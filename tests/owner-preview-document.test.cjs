@@ -99,7 +99,7 @@ test('bootstrap precedes original scripts and requires no eval or network CSP al
 });
 
 function componentHarness(userId = 'offline-user-a', options = {}) {
-  const listeners = new Map(), effects = [], effectDeps = [], refs = [], states = [], cleanups = [], calls = [];
+  const listeners = new Map(), effects = [], effectDeps = [], refs = [], states = [], cleanups = [], calls = [], phases = [], restoreCalls = [];
   const values = new Map([[AUTH, 'offline-host-auth-must-not-enter-frame']]);
   const prefix = `hensem:owner-preview:${userId}:`;
   values.set(prefix + KEY, 'this-account-draft');
@@ -127,11 +127,12 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const requireStub = name => {
     if (name === 'react') return react;
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx };
-    if (name.endsWith('/ownerPreviewDocument')) return api;
-    if (name.endsWith('/ownerPreviewShell')) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/ownerPreviewShell.ts'),'utf8')),{module:helper,exports:helper.exports,document:environment.document});return helper.exports; }
+    if (name.endsWith('/adminPreviewRestore')) return { restoreApprovedAdmin(html) { phases.push('restore'); restoreCalls.push(html); return options.restore ? options.restore(html) : html+'<!-- synthetic approved restoration -->'; } };
+    if (name.endsWith('/ownerPreviewDocument')) return { ...api, makeOwnerPreviewDocument(...args) { phases.push('draft-document'); return api.makeOwnerPreviewDocument(...args); } };
+    if (name.endsWith('/ownerPreviewShell')) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/ownerPreviewShell.ts'),'utf8')),{module:helper,exports:helper.exports,document:environment.document});return {...helper.exports,makeOwnerPreviewShellDocument(...args){phases.push('shell-document');return helper.exports.makeOwnerPreviewShellDocument(...args)}}; }
     if (name.endsWith('/dashboardAuthClient')) return { ensureDashboardSession: async candidate => candidate };
     if (name.endsWith('/adminLiveBridge')) {
-      if (!liveClient) { const module={exports:{}};const filename=path.join(repo,'src/lib/adminLiveBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module,exports:module.exports,setTimeout,clearTimeout},{filename});liveClient=module.exports; }
+      if (!liveClient) { const module={exports:{}};const filename=path.join(repo,'src/lib/adminLiveBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module,exports:module.exports,setTimeout,clearTimeout},{filename});liveClient={...module.exports,makeAdminLiveDocument(...args){phases.push('live-document');return module.exports.makeAdminLiveDocument(...args)}}; }
       return liveClient;
     }
     if (name.endsWith('/adminPreviewClient')) {
@@ -146,11 +147,11 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     throw Error('Unexpected component test import: ' + name);
   };
   environment = {
-    module: box, exports: box.exports, require: requireStub, window, localStorage, URL, AbortController,
+    module: box, exports: box.exports, require: requireStub, window, localStorage, URL, AbortController, Error,
     crypto: { randomUUID: () => 'offline-frame-channel' },
     document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
-    fetch: async (url, init) => { calls.push({ url, init }); return options.fetch ? options.fetch(url, init) : { ok: true, status: 200, text: async () => HTML }; },
+    fetch: async (url, init) => { phases.push('fetch'); calls.push({ url, init }); const response=options.fetch ? await options.fetch(url, init) : { ok: true, status: 200, text: async () => HTML }; return typeof response.text==='function'?{...response,text:async()=>{phases.push('response:text');return response.text()}}:response; },
   };
   vm.runInNewContext(transpile(fs.readFileSync(componentPath, 'utf8')), environment, { filename: componentPath });
   const props = { canView: options.canView ?? true, session: currentSession,
@@ -158,7 +159,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const draw = () => { hookIndex = refIndex = callbackIndex = effectIndex = 0; return box.exports.default(props); };
   draw(); const child = {}; refs[0].current = { contentWindow: child };
   for (const effect of effects.splice(0)) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); }
-  return { values, prefix, child, calls, states, draw, effectDeps, rerenderSession:next=>{props.session=next;return draw()}, session:currentSession, channel: () => refs[1].current,
+  return { values, prefix, child, calls, states, draw, effectDeps, phases, restoreCalls, rerenderSession:next=>{props.session=next;return draw()}, session:currentSession, channel: () => refs[1].current,
     send: event => listeners.get('message')?.(event), dispose: () => cleanups.forEach(cleanup => cleanup()),
     checkPermission: () => intervalCheck?.(),
     failStorage: () => { throwOnWrite = true; } };
@@ -185,6 +186,24 @@ test('host sends session only to its protected fetch; iframe has no same-origin 
   h.dispose();
 });
 
+test('authorized HTML is restored before live bridge, shell and draft bootstrap; permission checks do not transform bodies', async () => {
+  let resolveHTML;const pending=new Promise(resolve=>{resolveHTML=resolve});
+  const h=componentHarness('offline-restoration-order',{fetch:async url=>url.endsWith('?check=1')?{ok:true,status:200,text:async()=>{throw Error('check body must not be read')}}:{ok:true,status:200,text:()=>pending}});
+  try {
+    await flush();assert.deepEqual(h.phases,['fetch','response:text']);assert.equal(h.restoreCalls.length,0);assert.equal(findElement(h.draw(),'iframe'),undefined);
+    resolveHTML(HTML);await flush();assert.deepEqual(h.phases,['fetch','response:text','restore','live-document','shell-document','draft-document']);assert.deepEqual(h.restoreCalls,[HTML]);const before=findElement(h.draw(),'iframe').props.srcDoc;assert(before.includes('synthetic approved restoration'));
+    h.checkPermission();await flush();assert.equal(h.calls.length,2);assert(h.calls[1].url.endsWith('?check=1'));assert.deepEqual(h.phases,['fetch','response:text','restore','live-document','shell-document','draft-document','fetch']);assert.equal(h.restoreCalls.length,1);assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);
+  } finally {resolveHTML(HTML);h.dispose()}
+});
+
+test('restoration failure aborts the request, clears stale document state and never publishes a partial iframe', async () => {
+  let resolveHTML;const pending=new Promise(resolve=>{resolveHTML=resolve});
+  const h=componentHarness('offline-restoration-failed',{fetch:async()=>({ok:true,status:200,text:()=>pending}),restore:()=>{throw Error('Synthetic approved revision mismatch')}});
+  try {
+    await flush();h.states[0]='<!doctype html><html>Hensem synthetic stale document</html>';assert(findElement(h.draw(),'iframe'));resolveHTML(HTML);await flush();assert.equal(h.restoreCalls.length,1);assert.equal(h.states[0],'');assert.match(h.states[1],/Synthetic approved revision mismatch/);assert.equal(h.calls[0].init.signal.aborted,true);assert.equal(findElement(h.draw(),'iframe'),undefined);assert.deepEqual(h.phases,['fetch','response:text','restore']);h.checkPermission();await flush();assert.equal(h.calls.length,1,'failed restoration cancels that load lifecycle');
+  } finally {resolveHTML(HTML);h.dispose()}
+});
+
 test('403 permission check aborts an initial HTML load and late success cannot restore the frame', async () => {
   let resolveHTML;
   const lateHTML = new Promise(resolve => { resolveHTML = resolve; });
@@ -204,6 +223,7 @@ test('403 permission check aborts an initial HTML load and late success cannot r
     // Deliberately resolve despite abort: a buffered or non-abortable body must still be ignored.
     resolveHTML(HTML); await flush();
     assert.equal(h.states[0], '', 'late initial HTML cannot restore documentHtml after revocation');
+    assert.equal(h.restoreCalls.length,0,'revoked buffered HTML never reaches the transformation');
     assert.equal(findElement(h.draw(), 'iframe'), undefined);
     h.checkPermission(); await flush();
     assert.equal(h.calls.length, 2, 'cancelled effect cannot issue further permission requests');
@@ -236,7 +256,7 @@ test('an active authorized non-Owner can view; inactive or ungranted accounts ca
   await flush(); assert(findElement(viewer.draw(), 'iframe')); assert.equal(viewer.calls.length, 1); viewer.dispose();
   for (const options of [{ canView: false }, { active: false, canView: true }]) {
     const h = componentHarness('offline-denied', options); await flush();
-    assert.equal(h.calls.length, 0); assert.equal(findElement(h.draw(), 'iframe'), undefined);
+    assert.equal(h.calls.length, 0); assert.equal(h.restoreCalls.length,0); assert.equal(findElement(h.draw(), 'iframe'), undefined);
     h.send({ source: h.child, origin: 'null', data: { type: 'hensem-owner-preview-draft', channel: h.channel(), key: KEY, value: 'unauthorized' } });
     assert.equal(h.values.get(h.prefix + KEY), 'this-account-draft'); h.dispose();
   }

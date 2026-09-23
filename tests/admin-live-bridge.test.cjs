@@ -97,3 +97,37 @@ test('rate-table filters and paging survive the RPC envelope without widening it
  assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:{scopeType:'platform',country:'india',platform:'PLATFORM/RAW',provider:'Pay/Raw',query:'Raw',offset:30,limit:30}});
  for(const value of [{...request,platformId:query.platformId},{...request,limit:'30'},{...request,query:{}},{...request,scopeType:'unrestricted'},{...request,offset:-1}])assert.throws(()=>h.api.validateAdminLiveRequest(value));
 });
+
+test('ratesSheet accepts only metadata or bounded integer sheet IDs',()=>{
+ const {api}=load();
+ for(const request of [{action:'ratesSheet'},{action:'ratesSheet',sheetId:0},{action:'ratesSheet',sheetId:2147483647}])assert.deepEqual(JSON.parse(JSON.stringify(api.validateAdminLiveRequest(request))),request);
+ for(const request of [{action:'ratesSheet',sheetId:null},{action:'ratesSheet',sheetId:'0'},{action:'ratesSheet',sheetId:-1},{action:'ratesSheet',sheetId:1.5},{action:'ratesSheet',sheetId:2147483648},{action:'ratesSheet',sheetId:NaN},{action:'ratesSheet',sheetId:[0]},{action:'ratesSheet',sheetId:{}},{action:'ratesSheet',platform:'not-allowed'},{action:'ratesSheet',country:'IN'},{action:'ratesSheet',limit:20},{action:'ratesSheet',operation:'index'},{action:'ratesSheet',rpc:'arbitrary'},{action:'ratesSheet',url:'https://other.invalid'}])assert.throws(()=>api.validateAdminLiveRequest(request));
+});
+
+test('ratesSheet fixed RPC strips only action, retains sheetId and never sends session fields in its JSON',async()=>{
+ const h=load();await h.api.adminLiveRequest(session,{action:'ratesSheet'});await h.api.adminLiveRequest(session,{action:'ratesSheet',sheetId:277747449});
+ assert.equal(h.calls.length,2);assert(h.calls.every(call=>call.url==='https://offline.invalid/rest/v1/rpc/dashboard_admin_live_rate_sheet'));
+ assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:{}});assert.deepEqual(JSON.parse(h.calls[1].init.body),{p_request:{sheetId:277747449}});
+ assert(h.calls.every(call=>call.init.headers.Authorization==='Bearer offline-fresh-token'&&call.init.cache==='no-store'&&call.init.redirect==='error'));
+ assert(h.calls.every(call=>!call.init.body.includes('action')&&!call.init.body.includes('token')));
+});
+
+test('payoutConfig accepts six fixed systems and validates explicit index/snapshot boundaries',()=>{
+ const {api}=load(),systems=['AR','NEW_AR','PANDA','WG','GAME66_HK','GAME66_RED_CRAB'];
+ for(const system of systems){assert.equal(api.validateAdminLiveRequest({action:'payoutConfig',operation:'index',system}).system,system);assert.equal(api.validateAdminLiveRequest({action:'payoutConfig',operation:'snapshot',system,country:'IN',platform:'RAW / NAME'}).platform,'RAW / NAME');}
+ const base={action:'payoutConfig',operation:'snapshot',system:'AR',country:'IN',platform:'EXAMPLE'};
+ for(const request of [{...base,operation:'write'},{...base,operation:['snapshot']},{...base,system:['AR']},{...base,system:'CUSTOM'},{...base,system:'ar'},{...base,operation:null},{...base,system:null},{...base,country:''},{...base,platform:''},{...base,country:1},{...base,platform:{}},{...base,country:'IN\u0000'},{...base,platform:'x'.repeat(201)},{...base,provider:'not-allowed'},{...base,sheetId:1},{...base,limit:20},{...base,configuration:{}},{...base,raw_payload:{}},{...base,sql:'select private'}])assert.throws(()=>api.validateAdminLiveRequest(request),JSON.stringify(request));
+});
+
+test('payoutConfig uses only the fixed RPC with action removed and safe explicit request fields',async()=>{
+ const h=load(),requests=[{action:'payoutConfig',operation:'index',system:'WG'},{action:'payoutConfig',operation:'snapshot',system:'NEW_AR',country:'IN',platform:'RAW / NAME'}];
+ for(const request of requests)await h.api.adminLiveRequest(session,request);
+ assert(h.calls.every(call=>call.url==='https://offline.invalid/rest/v1/rpc/dashboard_admin_live_payout_config'));
+ assert.deepEqual(h.calls.map(call=>JSON.parse(call.init.body)),[{p_request:{operation:'index',system:'WG'}},{p_request:{operation:'snapshot',system:'NEW_AR',country:'IN',platform:'RAW / NAME'}}]);
+ assert(h.calls.every(call=>!call.init.body.includes('action')&&!call.init.body.includes('token')));assert.equal(h.authCalls.length,2);
+});
+
+test('invalid special requests are rejected at the opaque-frame boundary before auth or fetch',async()=>{
+ const h=load(),b=bridge(h);for(const [id,request]of [['sheet',{action:'ratesSheet',table:'private'}],['config',{action:'payoutConfig',operation:'index',system:'AR',raw_payload:{secret:'ignored'}}]])h.send(b.event(id,request));
+ await flush();assert.equal(h.calls.length,0);assert.equal(h.authCalls.length,0);assert.equal(b.replies.length,2);assert(b.replies.every(reply=>reply.data.error));assert(!JSON.stringify(b.replies).includes('secret'));b.cleanup();
+});

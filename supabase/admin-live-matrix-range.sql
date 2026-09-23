@@ -1,71 +1,7 @@
--- New detailed-admin read API only. No collector, source table, old RPC, or old
--- permission is changed. Register this reviewed SQL with the migration tool.
+-- Add disjoint amount-range rollups to only the new admin live query.
+-- Keeps the existing indexed scope and optimized duration rollup; no source/old RPC changes.
 begin;
-
-create function private.dashboard_admin_live_scope()
-returns jsonb language plpgsql stable security definer set search_path='' as $$
-declare v_user uuid := (select auth.uid()); v_profile public.dashboard_profiles%rowtype;
-begin
-  if v_user is null then raise exception using errcode='28000',message='login_required'; end if;
-  select * into v_profile from public.dashboard_profiles where auth_user_id=v_user;
-  if not found or v_profile.active is not true or coalesce(v_profile.role,'') not in ('owner','admin','viewer') then
-    raise exception using errcode='42501',message='preview_denied';
-  end if;
-  if v_profile.role<>'owner' and not exists(select 1 from public.dashboard_admin_preview_grants
-      where auth_user_id=v_user and can_view is true) then
-    raise exception using errcode='42501',message='preview_denied';
-  end if;
-  -- Fresh production scope, independent of the old third_party module grant.
-  return private.dashboard_current_data_scope();
-end;
-$$;
-revoke all on function private.dashboard_admin_live_scope() from public,anon,authenticated;
-
-create function private.dashboard_admin_live_platforms()
-returns table(id uuid,name text,team text,country text,scope_group text,source text,timezone text,currency text,source_name text)
-language plpgsql stable security definer set search_path='' as $$
-declare v_scope jsonb := private.dashboard_admin_live_scope();
-begin
-  return query
-  select g.id,g.platform_name,g.team_name,g.team_name,
-    case g.team_code when 'hong_kong' then 'HK_TEAM' when 'red_crab' then 'RED_CRAB' else upper(g.team_code) end,
-    'game66'::text,'Asia/Kolkata'::text,'INR'::text,g.platform_name
-  from public.game66_platforms g
-  where private.dashboard_scope_allows(v_scope,
-    case g.team_code when 'hong_kong' then 'HK_TEAM' when 'red_crab' then 'RED_CRAB' else upper(g.team_code) end,g.platform_name)
-    and (exists(select 1 from public.game66_charge_orders c where c.platform_id=g.id offset 0)
-      or exists(select 1 from public.game66_withdraw_orders w where w.platform_id=g.id offset 0))
-  union all
-  select md5('ar:'||t.country_code||':'||t.platform)::uuid,t.platform,null::text,t.country_name,
-    t.country_code,'ar'::text,t.timezone,coalesce(t.currency,case when t.country_code='IN' then 'INR' end),src.platform
-  from public.ar_config_targets t
-  -- One confirmed existing source alias, used only if the exact configured
-  -- spelling has no orders. Never guess by fuzzy matching or double count both.
-  cross join lateral (select case when t.country_code='IN' and t.platform='SHREEWIN'
-    and not exists(select 1 from public.ar_collected_orders a where a.country_code=t.country_code
-      and a.platform=t.platform and a.source_system='AR' and a.order_kind in ('recharge','withdraw') offset 0)
-    then 'Shree.Win' else t.platform end as platform) src
-  where private.dashboard_scope_allows(v_scope,t.country_code,t.platform)
-    and not (t.source_system='NEW_AR' and exists(select 1 from public.newar_detail_platforms n
-      where n.platform=t.platform and n.country_code=t.country_code and n.enabled
-        and (n.launch_at is null or n.launch_at<=now())
-        and exists(select 1 from public.newar_detail_records r where r.platform=n.platform
-          and r.dataset in ('charge','withdraw') and (n.launch_at is null or r.created_at>=n.launch_at) offset 0) offset 0))
-    and exists(select 1 from public.ar_collected_orders a where a.country_code=t.country_code
-      and a.platform=src.platform and a.source_system='AR' and a.order_kind in ('recharge','withdraw') offset 0)
-  union all
-  select md5('newar:'||n.country_code||':'||n.platform)::uuid,n.platform,null::text,n.country,
-    n.country_code,'newar'::text,n.timezone,n.currency,n.platform
-  from public.newar_detail_platforms n
-  where n.enabled and (n.launch_at is null or n.launch_at<=now())
-    and private.dashboard_scope_allows(v_scope,n.country_code,n.platform)
-    and exists(select 1 from public.newar_detail_records r where r.platform=n.platform
-      and r.dataset in ('charge','withdraw') and (n.launch_at is null or r.created_at>=n.launch_at) offset 0);
-end;
-$$;
-revoke all on function private.dashboard_admin_live_platforms() from public,anon,authenticated;
-
-create function private.dashboard_admin_live_query(p_request jsonb default '{"action":"catalog"}'::jsonb)
+create or replace function private.dashboard_admin_live_query(p_request jsonb default '{"action":"catalog"}'::jsonb)
 returns jsonb language plpgsql stable security definer set search_path='' as $$
 declare
   v_action text; v_options jsonb; v_platform record; v_meta jsonb; v_capabilities jsonb;
@@ -380,14 +316,5 @@ begin
     'capabilities',v_capabilities);
 end;
 $$;
-revoke all on function private.dashboard_admin_live_query(jsonb) from public,anon;
-grant execute on function private.dashboard_admin_live_query(jsonb) to authenticated;
-
-create function public.dashboard_admin_live_query(p_request jsonb default '{"action":"catalog"}'::jsonb)
-returns jsonb language sql stable security invoker set search_path='' as $$
-  select private.dashboard_admin_live_query(p_request);
-$$;
-revoke all on function public.dashboard_admin_live_query(jsonb) from public,anon;
-grant execute on function public.dashboard_admin_live_query(jsonb) to authenticated;
 notify pgrst,'reload schema';
 commit;

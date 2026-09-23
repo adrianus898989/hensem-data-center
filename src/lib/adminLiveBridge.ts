@@ -2,13 +2,26 @@
 import { ensureDashboardSession, type DashboardSession } from "./dashboardAuthClient";
 export const LIVE_REQUEST = "hensem-admin-live-request";
 export const LIVE_RESPONSE = "hensem-admin-live-response";
-const actions = ["catalog","query","aggregate","details","rates"];
-const keys = new Set(["action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","query"]);
+const actions = ["catalog","query","aggregate","details","rates","ratesSheet","payoutConfig"];
+const keys = new Set(["action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","query","sheetId","operation","system"]);
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
   if(Object.keys(p).some(k=>!keys.has(k))||!actions.includes(String(p.action)))throw Error("查询方法无效");
   if(p.action==="catalog")return {action:"catalog"};
+  if(p.action==="ratesSheet"){
+    if(Object.keys(p).some(k=>!["action","sheetId"].includes(k)))throw Error("原表查询参数无效");
+    if(p.sheetId!==undefined&&(!Number.isInteger(p.sheetId)||Number(p.sheetId)<0||Number(p.sheetId)>2147483647))throw Error("原表页签无效");
+    return {...p};
+  }
+  if(p.action==="payoutConfig"){
+    if(Object.keys(p).some(k=>!["action","operation","system","country","platform"].includes(k)))throw Error("配置查询参数无效");
+    if(typeof p.operation!=="string"||!["index","snapshot"].includes(p.operation))throw Error("配置查询操作无效");
+    if(typeof p.system!=="string"||!["AR","NEW_AR","PANDA","WG","GAME66_HK","GAME66_RED_CRAB"].includes(p.system))throw Error("配置系统无效");
+    for(const key of ["country","platform"])if(p[key]!==undefined&&(typeof p[key]!=="string"||String(p[key]).length>200||/[\u0000-\u001f]/.test(String(p[key]))))throw Error("配置范围无效");
+    if(p.operation==="snapshot"&&(!p.country||!p.platform))throw Error("请选择配置平台");
+    return {...p};
+  }
   if(p.action==="rates"){
     const allowed=new Set(["action","scopeType","country","platform","provider","query","offset","limit"]);
     if(Object.keys(p).some(k=>!allowed.has(k)))throw Error("费率查询参数无效");
@@ -41,8 +54,9 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if(current.user.id!==session.user.id)throw Error("当前登录账号已改变");
  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,""),url=new URL(base);
  if(url.protocol!=="https:"||url.origin!==base)throw Error("后台地址配置无效");
- const rpc=request.action==="rates"?"dashboard_admin_live_rates":"dashboard_admin_live_query";
- const response=await fetch(base+"/rest/v1/rpc/"+rpc,{method:"POST",body:JSON.stringify({p_request:request.action==="rates"?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
+ const specialRpc:Record<string,string>={rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config"};
+ const rpc=specialRpc[String(request.action)]||"dashboard_admin_live_query";
+ const response=await fetch(base+"/rest/v1/rpc/"+rpc,{method:"POST",body:JSON.stringify({p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
  if(!response.ok){let code="";try{const body=await response.json();code=String(body.message||"")}catch{}
  if([401,403].includes(response.status))throw Error("正式数据读取未获授权，或会话已失效");
  if(/unsupported_filter/.test(code))throw Error("此来源未提供该检索字段，请清空该字段后查询");
