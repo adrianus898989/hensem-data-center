@@ -99,19 +99,19 @@ test('bootstrap precedes original scripts and requires no eval or network CSP al
 });
 
 function componentHarness(userId = 'offline-user-a', options = {}) {
-  const listeners = new Map(), effects = [], refs = [], states = [], cleanups = [], calls = [];
+  const listeners = new Map(), effects = [], effectDeps = [], refs = [], states = [], cleanups = [], calls = [];
   const values = new Map([[AUTH, 'offline-host-auth-must-not-enter-frame']]);
   const prefix = `hensem:owner-preview:${userId}:`;
   values.set(prefix + KEY, 'this-account-draft');
   values.set('hensem:owner-preview:other-account:' + KEY, 'other-account-draft');
-  let hookIndex = 0, refIndex = 0, callbackIndex = 0, throwOnWrite = false, intervalCheck = null;
+  let hookIndex = 0, refIndex = 0, callbackIndex = 0, effectIndex = 0, throwOnWrite = false, intervalCheck = null;
   const callbacks = [];
   const react = {
     useState(initial) { const index = hookIndex++; if (!(index in states)) states[index] = initial;
       return [states[index], value => { states[index] = typeof value === 'function' ? value(states[index]) : value; }]; },
     useRef(initial) { const index = refIndex++; return refs[index] || (refs[index] = { current: initial }); },
     useCallback(callback) { const index = callbackIndex++; return callbacks[index] || (callbacks[index] = callback); },
-    useEffect(callback) { effects.push(callback); },
+    useEffect(callback, deps) { effectDeps[effectIndex++]=deps; effects.push(callback); },
   };
   const jsx = (type, props) => ({ type, props });
   const currentSession = { user: { id: userId }, access_token: 'offline-host-access', refresh_token: 'offline-host-refresh' };
@@ -123,12 +123,17 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const localStorage = { getItem: key => values.get(key) ?? null,
     setItem(key, value) { if (throwOnWrite) throw Error('Synthetic quota failure'); values.set(key, value); },
     removeItem(key) { if (throwOnWrite) throw Error('Synthetic quota failure'); values.delete(key); } };
-  let environment, client;
+  let environment, client, liveClient;
   const requireStub = name => {
     if (name === 'react') return react;
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx };
     if (name.endsWith('/ownerPreviewDocument')) return api;
-    if (name.endsWith('/dashboardAuthClient')) return { ensureDashboardSession: async () => currentSession };
+    if (name.endsWith('/ownerPreviewShell')) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/ownerPreviewShell.ts'),'utf8')),{module:helper,exports:helper.exports,document:environment.document});return helper.exports; }
+    if (name.endsWith('/dashboardAuthClient')) return { ensureDashboardSession: async candidate => candidate };
+    if (name.endsWith('/adminLiveBridge')) {
+      if (!liveClient) { const module={exports:{}};const filename=path.join(repo,'src/lib/adminLiveBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module,exports:module.exports,setTimeout,clearTimeout},{filename});liveClient=module.exports; }
+      return liveClient;
+    }
     if (name.endsWith('/adminPreviewClient')) {
       if (!client) {
         const box = { exports: {} }, filename = path.join(repo, 'src/lib/adminPreviewClient.ts');
@@ -149,11 +154,11 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   };
   vm.runInNewContext(transpile(fs.readFileSync(componentPath, 'utf8')), environment, { filename: componentPath });
   const props = { canView: options.canView ?? true, session: currentSession,
-    profile: { active: options.active ?? true, role: options.role || 'owner', auth_user_id: userId }, onClose() {} };
-  const draw = () => { hookIndex = refIndex = callbackIndex = 0; return box.exports.default(props); };
+    profile: { active: options.active ?? true, role: options.role || 'owner', auth_user_id: userId }, onClose: options.onClose || (()=>{}) };
+  const draw = () => { hookIndex = refIndex = callbackIndex = effectIndex = 0; return box.exports.default(props); };
   draw(); const child = {}; refs[0].current = { contentWindow: child };
   for (const effect of effects.splice(0)) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); }
-  return { values, prefix, child, calls, states, draw, channel: () => refs[1].current,
+  return { values, prefix, child, calls, states, draw, effectDeps, rerenderSession:next=>{props.session=next;return draw()}, session:currentSession, channel: () => refs[1].current,
     send: event => listeners.get('message')?.(event), dispose: () => cleanups.forEach(cleanup => cleanup()),
     checkPermission: () => intervalCheck?.(),
     failStorage: () => { throwOnWrite = true; } };
@@ -235,6 +240,29 @@ test('an active authorized non-Owner can view; inactive or ungranted accounts ca
     h.send({ source: h.child, origin: 'null', data: { type: 'hensem-owner-preview-draft', channel: h.channel(), key: KEY, value: 'unauthorized' } });
     assert.equal(h.values.get(h.prefix + KEY), 'this-account-draft'); h.dispose();
   }
+});
+
+
+
+test('same-user session refresh keeps the iframe and uses the latest session for permission checks', async () => {
+  const h=componentHarness();await flush();const before=findElement(h.draw(),'iframe').props.srcDoc,dependencies=h.effectDeps.map(deps=>deps&&[...deps]);
+  const fresh={...h.session,user:{...h.session.user},access_token:'offline-new-access',refresh_token:'offline-new-refresh'};
+  h.rerenderSession(fresh);
+  assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);
+  assert.equal(h.effectDeps.length,dependencies.length);
+  h.effectDeps.forEach((deps,i)=>{assert.equal(deps.length,dependencies[i].length);deps.forEach((dep,j)=>assert(Object.is(dep,dependencies[i][j]),'token/object refresh does not invalidate the document-load effect'));});
+  assert(h.effectDeps.every(deps=>!deps.includes(fresh)&&!deps.includes(h.session)));
+  h.checkPermission();await flush();assert.equal(h.calls.length,2);assert(h.calls[1].url.endsWith('?check=1'));assert.equal(h.calls[1].init.headers.Authorization,'Bearer offline-new-access');
+  assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);h.dispose();
+});
+
+test('shell return command only accepts the current opaque frame and never changes draft authorization', async () => {
+  let closed=0;const h=componentHarness('shell-viewer',{role:'viewer',canView:true,onClose:()=>closed++});await flush();
+  const message={source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command:'back'}};
+  for(const event of [{...message,source:{}},{...message,origin:'https://other.invalid'},{...message,data:{...message.data,channel:'stale'}},{...message,data:{...message.data,command:'grant'}},{...message,data:null}])h.send(event);
+  assert.equal(closed,0);h.send(message);assert.equal(closed,1);assert.equal(h.values.get(h.prefix+KEY),'this-account-draft');
+  assert.equal(findElement(h.draw(),'header'),undefined,'no outer preview header takes viewport space');
+  h.dispose();
 });
 
 function requestHarness(options = {}) {
