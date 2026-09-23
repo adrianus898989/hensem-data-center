@@ -11,6 +11,8 @@ import ThirdPartyVolumeDashboard from "./ThirdPartyVolumeDashboard";
 import OrderDetailSearch from "./UnifiedOrderSearch";
 import ProviderAnomalyDashboard from "./ProviderAnomalyDashboard";
 import AdminControlCenter from "./AdminControlCenter";
+import OwnerAdminPreview from "./OwnerAdminPreview";
+import { readAdminPreviewAccess } from "@/lib/adminPreviewClient";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { canOpenAdminCenter, ensureDashboardSession, hasDashboardPermission, normalizedManagementPermissions, type DashboardSession } from "@/lib/dashboardAuthClient";
 import { aggregateAutoWithdrawByPlatform as aggregateByPlatform, summarizePreviousDay, percentagePointChange, formatPercentagePointChange } from "@/lib/autoWithdrawComparison";
@@ -26,7 +28,7 @@ import { dashboardScopeAllows, effectiveDashboardDataScope } from "@/lib/dashboa
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
-type ModuleMode = "home" | "auto" | "config" | "operator" | "volume" | "orders" | "provider-anomalies" | "work" | "admin";
+type ModuleMode = "home" | "auto" | "config" | "operator" | "volume" | "orders" | "provider-anomalies" | "work" | "admin" | "owner-admin-preview";
 type AutoView = "dashboard" | "summary" | "daily" | "month" | "compare" | "anomaly";
 type OperatorView = "dashboard" | "ranking" | "summary" | "detail" | "low" | "date" | "compare";
 type OperatorRankMode = "high" | "low";
@@ -922,6 +924,17 @@ export default function Dashboard() {
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [activeModule, setActiveModule] = useState<ModuleMode>("home");
+  const [canDetailedPreview, setCanDetailedPreview] = useState(false);
+  useEffect(() => {
+    let stop = false; setCanDetailedPreview(false);
+    if (session && profile?.active) readAdminPreviewAccess(session).then(access => { if (!stop) setCanDetailedPreview(access.canView === true); }).catch(() => {});
+    return () => { stop = true; };
+  }, [session, profile?.active, profile?.auth_user_id]);
+  useEffect(() => {
+    const followPreviewLink = () => { if (profile?.active && (isOwner || canDetailedPreview) && window.location.hash === "#owner-admin-preview") setActiveModule("owner-admin-preview"); };
+    followPreviewLink(); window.addEventListener("hashchange", followPreviewLink);
+    return () => window.removeEventListener("hashchange", followPreviewLink);
+  }, [profile?.active, isOwner, canDetailedPreview]);
   const [adminExpanded, setAdminExpanded] = useState(false);
   const [adminSection, setAdminSection] = useState<"accounts" | "permissions" | "ip" | "data" | "audit">("accounts");
   const [autoView, setAutoView] = useState<AutoView>("daily");
@@ -1425,6 +1438,10 @@ export default function Dashboard() {
   }
 
   function switchModule(next: ModuleMode) {
+    if (next === "owner-admin-preview") {
+      if ((!isOwner && !canDetailedPreview) || profile?.active !== true) return;
+      window.location.hash = "owner-admin-preview";
+    }
     if ((next === "volume" || next === "orders" || next === "provider-anomalies") && !canThirdParty) return;
     if ((next === "auto" || next === "config" || next === "operator") && !canAutoWithdraw) return;
     if (next === "work" && !canWorkSupport) return;
@@ -1712,6 +1729,10 @@ export default function Dashboard() {
         <span className={canThirdParty ? "badge ok" : "badge"}>{canThirdParty ? "只读提示" : "无权限"}</span>
       </button>
 
+      {(isOwner || canDetailedPreview) && profile?.active && <button className={activeModule === "owner-admin-preview" ? "nav-item active" : "nav-item"} onClick={() => switchModule("owner-admin-preview")}>
+        <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="chart" /></span>新版详细后台</span><span className="badge">授权内测</span>
+      </button>}
+
       <div className="nav-section-title system-admin-title">系统管理</div>
       {canOpenAdminCenter(profile) && (
         <>
@@ -1773,6 +1794,10 @@ export default function Dashboard() {
       </section>
     </main>
   );
+
+  if (activeModule === "owner-admin-preview" && session && profile?.active && (isOwner || canDetailedPreview)) {
+    return <OwnerAdminPreview session={session} profile={profile} canView={isOwner || canDetailedPreview} onClose={() => { window.history.replaceState(null, "", window.location.pathname + window.location.search); switchModule("home"); }} />;
+  }
 
   if (activeModule === "home") {
     return <div className="app-shell">{sidebarContent}{homeContent}</div>;
