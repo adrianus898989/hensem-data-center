@@ -168,6 +168,24 @@ test('M8 reason categories support all eight countries, both bracket styles, and
  ];
  for(const [country,note,expected]of cases){const r=await db.query('select private.dashboard_admin_live_rejection_category($1,$2) as category',[country,note]);assert.equal(r.rows[0].category,expected,country)}
 });
+test('multilingual source preview/tooltip formatting matches complete templates while ambiguous or truncated notes stay separate',async()=>{
+ const templates=JSON.parse(sql('admin-live-withdraw-templates.sql').match(/\$templates\$([\s\S]*?)\$templates\$/)[1]);
+ let checked=0;
+ for(const [country,items]of Object.entries(templates))for(const [text,expected]of Object.entries(items)){
+  // Construct variants only from the static whitelist: no production order data.
+  const rendered=country==='MM'?text.replace(/\u1037/g,''):text;
+  const note=rendered.slice(0,14)+'... '+rendered.replace(/ /g,' <br /> ');
+  const result=await db.query('select private.dashboard_admin_live_rejection_category($1,$2) category',[country,note]);
+  assert.equal(result.rows[0].category,expected,country+': '+text);checked++;
+ }
+ assert.equal(checked,53);
+ const customer='Sayang, sila hubungi perkhidmatan pelanggan dalam talian kami, terima kasih';
+ const suspicious='Sistem mengesan bahawa pertaruhan anda mencurigakan, sila hubungi Customer Service. Terima kasih.';
+ for(const [country,note]of [['MY',customer+' '+suspicious],['IN',customer],['ID','Yth. Untuk mend...']]){
+  const result=await db.query('select private.dashboard_admin_live_rejection_category($1,$2) category',[country,note]);
+  assert.equal(result.rows[0].category,'其他未归类备注');
+ }
+});
 test('single-platform daily rejection drilldowns conserve all orders and keep denominator independent of filters and pages',async()=>{
  await db.exec('begin');try{
   for(let i=0;i<29;i++){

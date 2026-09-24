@@ -1,11 +1,26 @@
 -- M8 multilingual rejection templates, ported from the static arwd.py whitelist.
--- Full-text matching only for untagged templates. The source remark stays intact.
+-- Match complete templates within the collected note, including a short UI
+-- preview followed by the full tooltip. Never classify a truncated fragment.
+-- Formatting normalization is used only for matching; the source stays intact.
 -- Includes all untagged templates in BR, ID, MM, MY and VN; tagged IN/PK/NG
 -- and shared English templates are handled by the reason-category function.
 begin;
+create or replace function private.dashboard_admin_live_rejection_normalize(p_country_code text,p_note text)
+returns text language sql immutable parallel safe set search_path='' as $fn$
+ select btrim(regexp_replace(regexp_replace(
+  -- The Myanmar source renderer omits this combining dot in otherwise identical
+  -- whitelist text. Bank/wallet names and day/month words remain significant.
+  case when p_country_code='MM' then replace(note,chr(4151),'') else note end,
+  $punct$[\[\]【】()（）{}<>.,:：;；!！?？_/"“”'‘’…-]+$punct$,' ','g'),
+  '[[:space:]]+',' ','g'))
+ from (select regexp_replace(replace(lower(coalesce(p_note,'')),chr(160),' '),
+   '<br[[:space:]]*/?>',' ','gi') note) n
+$fn$;
+revoke all on function private.dashboard_admin_live_rejection_normalize(text,text) from public,anon,authenticated;
+
 create or replace function private.dashboard_admin_live_rejection_template(p_country_code text,p_note text)
 returns text language sql immutable parallel safe set search_path='' as $fn$
- select $templates${
+ with templates as (select $templates${
   "BR": {
     "o membro solicitou o cancelamento da retirada, obrigado": "会员申请取消",
     "olá, a falha foi causada por uma falha do sistema, por favor, solicite a retirada novamente, obrigado": "系统失败 / 重新提交",
@@ -69,7 +84,11 @@ returns text language sql immutable parallel safe set search_path='' as $fn$
     "vui lòng liên hệ cskh để được hỗ trợ, xin cảm ơn !": "联系客服核实",
     "đơn cược của quý khách đã vi phạm quy tắc đặt cược , vui lòng liên hệ cskh để biết thêm chi tiết.": "违反投注规则"
   }
-}$templates$::jsonb -> p_country_code ->> lower(btrim(regexp_replace(replace(coalesce(p_note,''),chr(160),' '),'[[:space:]]+',' ','g')))
+}$templates$::jsonb -> p_country_code as items),
+ note as materialized (select private.dashboard_admin_live_rejection_normalize(p_country_code,p_note) text)
+ select case when count(distinct t.value)=1 then min(t.value) end
+ from templates cross join lateral jsonb_each_text(coalesce(items,'{}'::jsonb)) t cross join note
+ where position(private.dashboard_admin_live_rejection_normalize(p_country_code,t.key) in note.text)>0
 $fn$;
 revoke all on function private.dashboard_admin_live_rejection_template(text,text) from public,anon,authenticated;
 commit;
