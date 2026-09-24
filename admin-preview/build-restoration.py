@@ -1,12 +1,20 @@
 """Generate a code-only UI overlay. No private HTML, rows or sheet data are read."""
 from pathlib import Path
+import hashlib
 import json
 base = Path(__file__).resolve().parent
+# This is the matcher for the already deployed c2247c0 document, not UI source.
+# Edit live-data.js for new behavior; changing this baseline needs a coordinated
+# private-document deployment and verification of that document's exact bytes.
+legacy_adapter = (base / 'legacy-live-data.js').read_text()
+legacy_sha256 = 'da886af1bf4c96efbbd1bfcb568b41b88d057208214e031d53307b40a91a3c90'
+if hashlib.sha256(legacy_adapter.encode('utf-8')).hexdigest() != legacy_sha256:
+    raise SystemExit('Deployed legacy adapter mismatch. Keep legacy-live-data.js frozen; edit live-data.js instead.')
 names = ['live-comparison.js', 'live-reference-layout.js', 'live-empty-pages.js',
          'live-pages-reference.js', 'live-rates-restored.js', 'live-duration-reference.js',
          'live-payout-config.js', 'live-data.js']
 styles = ['live-restored.css', 'live-reference-pages.css', 'live-payout-config.css']
-values = {'oldAdapter': (base / 'legacy-live-data.js').read_text(),
+values = {'oldAdapter': legacy_adapter,
           'newModules': '\n'.join((base / name).read_text() for name in names),
           'restoredCss': '\n'.join((base / name).read_text() for name in styles)}
 assert '</script' not in values['newModules'].lower()

@@ -2,6 +2,9 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript');
 const filename=path.resolve(__dirname,'../src/lib/adminPreviewRestore.ts');
 const source=fs.readFileSync(filename,'utf8');
+// Reviewed deployed c2247c0 adapter. Keep independent from generated UI/source
+// so editing both cannot silently change what authenticated HTML we accept.
+const DEPLOYED_ADAPTER_SHA256='da886af1bf4c96efbbd1bfcb568b41b88d057208214e031d53307b40a91a3c90';
 const compile=text=>ts.transpileModule(text,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 const compiled=compile(source),fixture={oldAdapter:'(function(){window.syntheticOld=true;})();',newModules:'(function(){window.syntheticNew="$&-$1-`";})();',restoredCss:'.synthetic-layout{color:navy}'};
 function load(generated=fixture){const module={exports:{}};vm.runInNewContext(compiled,{module,exports:module.exports,require:name=>{assert.equal(name,'./adminPreviewRestore.generated');return generated}},{filename});return module.exports.restoreApprovedAdmin}
@@ -39,6 +42,27 @@ test('restored markers cannot be moved outside the inline script or into a later
 
 test('actual generated code bundle has valid script syntax and cannot close the HTML script element',()=>{
  const file=path.resolve(__dirname,'../src/lib/adminPreviewRestore.generated.ts'),module={exports:{}};vm.runInNewContext(compile(fs.readFileSync(file,'utf8')),{module,exports:module.exports},{filename:file});const generated=module.exports;assert(generated.oldAdapter.length>100);assert(generated.newModules.length>100);assert.doesNotMatch(generated.newModules,/<\/script/i);assert.doesNotMatch(generated.restoredCss,/<\/style/i);const restore=load(generated),out=restore(html(generated.oldAdapter));assert.equal(restore(out),out);assert.equal(inlineScripts(out).length,1);assert.doesNotThrow(()=>new vm.Script(inlineScripts(out)[0]));
+});
+
+test('deployed legacy matcher stays frozen while the current UI overlay can evolve',()=>{
+ const crypto=require('node:crypto'),digest=value=>crypto.createHash('sha256').update(value,'utf8').digest('hex');
+ const m={exports:{}};vm.runInNewContext(compile(fs.readFileSync(path.resolve(__dirname,'../src/lib/adminPreviewRestore.generated.ts'),'utf8')),{module:m,exports:m.exports});
+ const deployed=fs.readFileSync(path.resolve(__dirname,'../admin-preview/legacy-live-data.js'),'utf8');
+ assert.equal(digest(deployed),DEPLOYED_ADAPTER_SHA256,'Legacy matcher drift prevents the deployed document from loading');
+ assert.equal(digest(m.exports.oldAdapter),DEPLOYED_ADAPTER_SHA256,'Generated matcher must recognize the deployed adapter');
+ const future={...m.exports,newModules:m.exports.newModules+'\n// Next UI-only release',restoredCss:m.exports.restoredCss+'\n.next-ui{}'};
+ const restored=load(future)(html(deployed));assert(restored.includes(future.newModules));assert(restored.includes(future.restoredCss));
+ assert.equal(load(future)(restored),restored);
+});
+
+test('overlay generation rejects legacy matcher drift before writing a bundle',()=>{
+ const os=require('node:os'),cp=require('node:child_process'),temp=fs.mkdtempSync(path.join(os.tmpdir(),'hensem-frozen-adapter-'));
+ try{
+  fs.copyFileSync(path.resolve(__dirname,'../admin-preview/build-restoration.py'),path.join(temp,'build-restoration.py'));
+  fs.writeFileSync(path.join(temp,'legacy-live-data.js'),'// Accidental UI edit to frozen deployed matcher');
+  const result=cp.spawnSync('python3',[path.join(temp,'build-restoration.py')],{encoding:'utf8'});
+  assert.equal(result.status,1);assert.match(result.stderr,/Deployed legacy adapter mismatch/);
+ }finally{fs.rmSync(temp,{recursive:true,force:true})}
 });
 
 test('host restores only the authorized HTML body, while authorization checks and the original endpoint stay unchanged',()=>{

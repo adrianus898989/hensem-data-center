@@ -25,6 +25,8 @@ The current release keeps the existing authenticated Edge Function and its priva
 
 Regenerate the code-only overlay with `python3 admin-preview/build-restoration.py`. `legacy-live-data.js` pins the deployed legacy adapter from c2247c0; the generated TypeScript contains code/styles only. Never include private HTML, the ignored gzip payload, source rows or Google snapshots in GitHub Pages or this public repository.
 
+Treat `legacy-live-data.js` as an immutable match target, including its labels and whitespace. Change the active `live-*.js` modules for UI updates. The generator and release tests pin the deployed adapter's SHA-256 independently; changing both the matcher and generated bundle must fail before release. A new baseline requires a coordinated private-document deployment and verification, never bypassing the exact-match check.
+
 Publish the host bundle through the existing Pages workflow. Session refresh must not remount the frame; fresh permission revocation still removes access.
 
 Run `pnpm test:admin-preview`, the existing migration/filter/comparison suites, and `pnpm build`. The UI fixture uses synthetic data only; production validation uses bounded read-only RPC calls.
