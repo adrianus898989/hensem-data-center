@@ -126,6 +126,25 @@ test('reference totals retain exactly six compact cards per direction with indep
  assert.match(groups[0][2],/1,000\.00/);assert.match(groups[1][2],/2,000\.00/);assert.doesNotMatch(h.html(),/3,000\.00|60\.00%/);h.L.direction='charge';h.c.render();assert.equal([...h.html().matchAll(/data-metric=/g)].length,6);assert.doesNotMatch(h.html(),/data-direction="withdraw"/);
 });
 
+test('paired business tables expose direction totals and identify unknown provider context',async()=>{
+ const h=await ready(),r=completeAggregate(P,10,3),withdraw={...completeAggregate(P,20,15).summary[0],direction:'withdraw'};
+ r.summary.push(withdraw);
+ r.groups.provider=[{...r.summary[0],provider:'未识别通道'},{...withdraw,provider:'未识别通道'}];
+ h.L.results=[r];h.L.direction='all';h.c.state.page='overview';h.c.render();
+ assert.match(h.html(),/需要你确认的未识别三方/);assert.match(h.html(),/原始通道字段为空/);assert.match(h.html(),/平台 \/ 国家：Synthetic platform · 印度/);
+ const providers=renderedTables(h.html()).filter(t=>t.headers[0]==='三方'&&t.headers.includes('包网来源'));assert.equal(providers.length,2);assert.match(providers.map(t=>t.html).join(''),/代收汇总/);assert.match(providers.map(t=>t.html).join(''),/代付汇总/);
+ const platforms=renderedTables(h.html()).filter(t=>t.headers[0]==='平台'&&t.headers.includes('包网来源'));assert.equal(platforms.length,2);assert.match(platforms.map(t=>t.html).join(''),/代收汇总/);assert.match(platforms.map(t=>t.html).join(''),/代付汇总/);
+});
+
+test('overview duration sections split collection and payout and retain explicit totals',async()=>{
+ const h=await ready(),r=completeAggregate(P,10,3),withdraw={...completeAggregate(P,20,15).summary[0],direction:'withdraw'};
+ r.summary.push(withdraw);
+ r.groups.latency=['charge','withdraw'].flatMap(direction=>Array.from({length:10},(_,bucket)=>({direction,currency:'INR',bucket,count:bucket===0?2:0,amount:bucket===0?'200':'0',valid_count:3,valid_amount:'300'})));
+ r.groups.pending_age=[{direction:'withdraw',currency:'INR',bucket:0,count:2,amount:'200',valid_count:2,valid_amount:'200'}];
+ h.L.results=[r];h.L.direction='all';h.c.state.page='overview';h.c.render();
+ assert.match(h.html(),/class="grid equal live-duration-paired"/);assert.match(h.html(),/充值 \/ 代收成功耗时/);assert.match(h.html(),/提款 \/ 代付成功耗时/);assert.match(h.html(),/成功订单合计/);assert.match(h.html(),/所选创建范围 · 仍待付订单等待时长/);assert.match(h.html(),/本期仍代付中合计/);
+});
+
 test('hour by amount matrix preserves one amount band per row, 24 hours and three independent cell values',async()=>{
  const h=await ready(),r=completeAggregate(P,10,3);h.L.results=[r];h.L.direction='charge';h.L.matrixMode='exact';h.c.state.page='matrix';h.c.render();
  const matrices=renderedTables(h.html()).filter(t=>t.headers[0]==='金额 / 时');assert.equal(matrices.length,1);const matrix=matrices[0];assert.equal(matrix.headers.length,25);assert.deepEqual(matrix.headers.slice(1),Array.from({length:24},(_,hour)=>String(hour).padStart(2,'0')+'时'));assert.equal(matrix.rows.length,10);assert.equal(new Set(matrix.rows.map(row=>plain(row[0]))).size,10);
@@ -137,10 +156,15 @@ test('rejected and unknown statuses remain explicit in the reference direction a
  const h=await ready(),r=completeAggregate(P,10,3);r.summary=[{...r.summary[0],direction:'withdraw',all_amount:null,pending_count:2,pending_amount:'200',failed_count:1,failed_amount:'100',rejected_count:2,rejected_amount:'240',unknown_count:2,unknown_amount:null,missing_amount_count:1}];h.L.direction='withdraw';h.L.results=[r];h.L.comparisonStatus='idle';h.c.state.page='payout';h.L.view='trend';h.c.render();const table=renderedTables(h.html()).find(t=>t.headers.join('|')==='状态|金额|笔数');assert(table);assert.deepEqual(table.rows.find(r=>plain(r[0])==='拒绝').map(plain),['拒绝','240.00','2']);assert.deepEqual(table.rows.find(r=>plain(r[0])==='未知').map(plain),['未知','—','2']);assert.doesNotMatch(h.html(),/NaN|Infinity/);
 });
 
-test('catalog scopes select currency/country/source/platform strictly and query local seconds correctly',async()=>{
+test('catalog scopes country/source/platform without a currency selector and query local seconds correctly',async()=>{
  const nepal={...P,id:'22222222-2222-4222-8222-222222222222',timezone:'Asia/Kathmandu',source:'NEW_AR'},usd={...P,id:'33333333-3333-4333-8333-333333333333',currency:'USD',country:'美国',timezone:'America/New_York'};
- const h=await ready({platforms:[P,nepal,usd]});setScope(h,{platform:'all',source:'NEW_AR',direction:'withdraw',status:'pending',provider:'P/Raw',orderNumber:'O/1',memberId:'M1',systemOrderId:'S1'});const before=h.calls.length;await h.c.liveLoad();const q=h.calls.slice(before);assert.equal(q.length,2);assert.equal(q[0].platformId,nepal.id);assert.equal(q[0].startAt,'2026-09-21T18:15:00.000Z');assert.equal(q[0].endAt,'2026-09-22T00:15:00.000Z');assert.equal(q[0].direction,'withdraw');assert.equal(q[0].status,'pending');assert.equal(q[0].providers[0],'P/Raw');assert.equal(q[0].orderNumber,'O/1');assert.equal(q[0].memberId,'M1');assert.equal(q[0].systemOrderId,'S1');assert.equal(q[0].currency,'INR');assert.deepEqual(withoutWindow(q[1]),withoutWindow(q[0]));
+ const h=await ready({platforms:[P,nepal,usd]});assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/liveSet\('currency'/);setScope(h,{platform:'all',source:'NEW_AR',direction:'withdraw',status:'pending',provider:'P/Raw',orderNumber:'O/1',memberId:'M1',systemOrderId:'S1'});const before=h.calls.length;await h.c.liveLoad();const q=h.calls.slice(before);assert.equal(q.length,2);assert.equal(q[0].platformId,nepal.id);assert.equal(q[0].startAt,'2026-09-21T18:15:00.000Z');assert.equal(q[0].endAt,'2026-09-22T00:15:00.000Z');assert.equal(q[0].direction,'withdraw');assert.equal(q[0].status,'pending');assert.equal(q[0].providers[0],'P/Raw');assert.equal(q[0].orderNumber,'O/1');assert.equal(q[0].memberId,'M1');assert.equal(q[0].systemOrderId,'S1');assert.equal(q[0].currency,'INR');assert.deepEqual(withoutWindow(q[1]),withoutWindow(q[0]));
  h.c.liveSet('platform',P.id);h.c.liveSet('country','美国');assert.equal(h.L.platform,'all');assert.equal(h.L.page,1);assert.equal(h.L.localPage,1);
+});
+
+test('removing the currency selector keeps each platform query on its own currency',async()=>{
+ const usd={...P,id:'44444444-4444-4444-8444-444444444444',currency:'USD',country:'美国',timezone:'America/New_York'};
+ const h=await ready({platforms:[P,usd]});assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/币种/);setScope(h,{platform:'all',source:'all'});const before=h.calls.length;await h.c.liveLoad();const currencies=new Set(h.calls.slice(before).filter(q=>q.action==='aggregate').map(q=>q.currency));assert.deepEqual([...currencies].sort(),['INR','USD']);
 });
 
 test('invalid calendar/DST ambiguous or missing local seconds never become plausible timestamps',async()=>{
