@@ -57,9 +57,55 @@ before(async()=>{
  await db.exec(sql('admin-live-withdraw-templates.sql'));
  await db.exec(sql('admin-live-withdraw-reasons.sql'));
  await db.exec(sql('admin-live-withdraw-notes.sql'));
+ await db.exec(sql('admin-live-deposit-issues.sql'));
  await as(owner);
 });
 after(async()=>{await db?.close()});
+test('confirmed provider aliases merge orders, workorders and options without merging unrelated country names',async()=>{
+ await as(owner);await db.exec('begin');try{
+  for(const [name,expected] of [['LKgoPayINR','LKgoPay'],['LKgoPay','LKgoPay'],['PAYTM- RAPay','RAPay'],['PAYTM – RAPay','RAPay'],['RAPay','RAPay']]){
+   assert.equal((await db.query('select private.dashboard_admin_live_provider_alias($1,$2) name',['印度',name])).rows[0].name,expected);
+   assert.equal((await db.query('select private.dashboard_admin_live_workorder_provider($1,$2,$3,$4) name',['印度','EXAMPLE',name,''])).rows[0].name,expected);
+   await db.query("insert into third_party_volume values('印度','EXAMPLE',$1,$1,'代收',1,'2026-09-23',now())",[name]);
+  }
+  await db.exec('refresh materialized view private.dashboard_admin_provider_registry');
+  const id=(await call('query',{action:'catalog'})).platforms.find(p=>p.name==='EXAMPLE').id;
+  const options=(await call('provider_options',{platformIds:[id]})).providers;
+  assert(options.includes('LKgoPay'));assert(options.includes('RAPay'));
+  assert(!options.some(p=>/LKgoPayINR|PAYTM.*RAPay/.test(p)));
+  assert.equal((await db.query('select private.dashboard_admin_live_provider_alias($1,$2) name',['尼泊尔','PAYTM- RAPay'])).rows[0].name,'PAYTM- RAPay');
+ }finally{await db.exec('rollback')}
+});
+test('no-provider failed and cancelled withdrawals are rejected with operators and unduplicated original notes',async()=>{
+ await as(owner);await db.exec('begin');try{
+  const raw='[Resubmit Order] Bank...\n \n[Resubmit Order] Bank information incomplete.';
+  for(const [i,status,provider] of [[1,'失败',''],[2,'人工取消','人工取消'],[3,'未通过',''],[4,'失败','Actual Provider']]){
+   await db.query("insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,amount,status,applied_at,raw_channel,operator,manual_remark,remark) values('AR','IN','EXAMPLE','withdraw',$1,100,$2,'2026-09-20 12:00',$3,'SYNTHETIC-OPERATOR','检查备注...\n检查备注完整内容',$4)",['NO-PROVIDER-'+i,status,provider,raw]);
+  }
+  const id=(await call('query',{action:'catalog'})).platforms.find(p=>p.name==='EXAMPLE').id;
+  const r=await call('query',query(id,{startAt:'2026-09-19T18:30:00Z',endAt:'2026-09-20T18:30:00Z'}));
+  assert.equal(r.summary[0].all_count,4);assert.equal(r.summary[0].rejected_count,3);assert.equal(r.summary[0].rejected_amount,'300');assert.equal(r.summary[0].failed_count,1);
+  assert.equal(r.groups.provider.find(x=>x.provider==='无三方（驳回）').all_count,3);assert(!r.groups.provider.some(x=>x.provider==='未识别通道'));
+  const q={date:'2026-09-20',country:'印度',platform:'EXAMPLE'};
+  const reasons=await call('withdraw_reasons',{...q,kind:'rejection'});assert.equal(reasons.total,1);assert.equal(reasons.noteCount,3);assert.equal(reasons.rows[0].reason,'[Resubmit Order] Bank information incomplete.');assert.equal(reasons.rows[0].count,3);
+  const orders=await call('withdraw_reasons',{...q,kind:'orders'});assert.equal(orders.total,3);assert(orders.rows.every(x=>x.operator==='SYNTHETIC-OPERATOR'&&x.rawRejectionReason===raw));
+  assert(orders.rows.every(x=>x.manualRemark==='检查备注完整内容'));
+  const distinct='第一行\n第二行\n不同补充说明';assert.equal((await db.query('select private.dashboard_admin_live_clean_note($1) value',[distinct])).rows[0].value,distinct);
+ }finally{await db.exec('rollback')}
+});
+test('deposit totals use explicit source status, preserve source dates and details, and remain authorization-scoped',async()=>{
+ await as(owner);await db.exec('begin');try{
+  for(const [i,country,platform,status,amount,days,date] of [[1,'印度','EXAMPLE','未入款',100,2,'2026-09-23'],[2,'印度','EXAMPLE','已入款',900,99,'2026-09-23'],[3,'印度','EXAMPLE',null,300,7,'2026-09-23'],[4,'印度','EXAMPLE','未入款',400,10,'2026-09-22'],[5,'尼泊尔','NEW','未入款',800,4,'2026-09-23']]){
+   await db.query("insert into admin_deposit_issue_rows(id,source_sheet,source_row,platform,country,order_number,utr,provider,amount,status,unreceived_days,record_date,provider_reply,utr_match,kyc_correct) values($1,'synthetic-sheet',$2,$3,$4,$5,'00001234','Synthetic Provider',$6,$7,$8,$9,'成功 2026-09-24','一致','正确')",['SHEET-'+i,i,platform,country,'SYNTHETIC-ORDER-'+i,amount,status,days,date]);
+  }
+  const q={startAt:'2026-09-23T00:00:00Z',endAt:'2026-09-23T23:59:59Z',country:'印度'};
+  const r=await call('deposit_issues',q);assert.equal(r.total,3);assert.equal(r.summary.unreceivedAmount,100);assert.equal(r.summary.unreceivedCount,1);assert.equal(r.summary.receivedCount,1);assert.equal(r.summary.receivedAmount,900);assert.equal(r.summary.maxUnreceivedDays,2);assert.equal(r.summary.unresolvedStatusCount,1);
+  const received=r.rows.find(x=>x.status==='已入款');assert.equal(received.unreceivedDays,99);assert.equal(received.recordDate,'2026-09-23');assert.equal(received.utr,'00001234');assert.equal(received.providerReply,'成功 2026-09-24');assert.equal(received.utrMatch,'一致');assert.equal(received.kycCorrect,'正确');
+  assert.equal((await call('deposit_issues',{...q,status:'待核对'})).total,1);
+  await as(viewer);const visible=await call('deposit_issues',{startAt:q.startAt,endAt:q.endAt});assert.equal(visible.total,3);assert(!visible.rows.some(x=>x.country==='尼泊尔'));
+ }finally{await db.exec('rollback');await as(owner)}
+ await db.exec('set role authenticated');try{await assert.rejects(()=>db.query('select * from admin_deposit_issue_rows'),/permission denied/)}finally{await db.exec('reset role')}
+});
 test('registry preserves historical mappings, conflicts, blanks and authorized options without live aggregate',async()=>{
  await as(viewer);const r=await call('provider_config',{country:'印度'});assert.equal(r.canManage,false);assert.equal(r.total,5);assert.equal(r.summary.conflict,1);assert.equal(r.summary.unassigned,1);assert(!JSON.stringify(r).includes('HiddenPay'));
  const catalog=await call('query',{action:'catalog'}),id=catalog.platforms.find(p=>p.name==='EXAMPLE').id;
@@ -88,7 +134,7 @@ test('compact provider aggregates preserve the full engine money and two indepen
  const id=(await call('query',{action:'catalog'})).platforms.find(p=>p.name==='EXAMPLE').id;
  const full=await call('query',query(id)),compact=await call('query',query(id,{view:'providers'}));
  assert.equal(compact.total,full.total);assert.deepEqual(Object.keys(compact.groups),['provider']);
- for(const row of compact.summary){const x=full.summary.find(x=>x.direction===row.direction&&x.currency===row.currency);for(const key of ['all_amount','all_count','success_amount','success_count','pending_amount','pending_count','rejected_count'])assert.equal(row[key],x[key],key)}
+ for(const row of compact.summary){const x=full.summary.find(x=>x.direction===row.direction&&x.currency===row.currency);for(const key of ['all_amount','all_count','success_amount','success_count','created_success_count','pending_amount','pending_count','rejected_count'])assert.equal(row[key],x[key],key)}
  const r=compact.summary.find(r=>r.direction==='charge');assert.equal(r.created_success_count,1);assert.equal(r.success_count,2);assert.equal(r.success_amount,'300');
  const selected=await call('query',query(id,{view:'providers',providers:['EditedPay']}));assert.equal(selected.groups.provider[0].provider,'EditedPay');assert.equal(selected.groups.provider[0].success_count,2);
  await assert.rejects(()=>call('query',query(id,{view:'providers',status:'pending'})),/unsupported_filter/);

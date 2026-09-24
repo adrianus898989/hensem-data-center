@@ -71,6 +71,18 @@ before(async()=>{
   const catalog=await call();ar=catalog.platforms.find(x=>x.source==='ar').id;newar=catalog.platforms.find(x=>x.source==='newar').id;
 });
 after(async()=>{if(db)await db.close()});
+test('providerless failures become rejected in NewAR and AA while known-provider failures remain failed',async()=>rollback(async()=>{
+ await as();
+ for(const [i,provider]of [[1,null],[2,'人工取消'],[3,'Actual Provider']]){
+  await db.query("insert into game66_withdraw_orders(platform_id,order_num,uid,create_time,status_code,amount_minor,pay_channel) values($1,$2,'SYNTHETIC','2026-09-12T12:00:00Z','2',10000,$3)",[game,'SYNTHETIC-AA-'+i,provider]);
+  await db.query("insert into newar_detail_records(platform,dataset,source_id,order_number,provider,currency,amount,status_code,status_group,created_at) values('NEW-EXAMPLE','withdraw',$1,$1,$2,'NPR',100,'0','failed','2026-09-12T12:00:00Z')",['SYNTHETIC-NEW-'+i,provider]);
+ }
+ for(const platformId of [game,newar]){
+  const r=await call(req({platformId,action:'aggregate',startAt:'2026-09-12T00:00:00Z',endAt:'2026-09-13T00:00:00Z',direction:'withdraw'}));
+  assert.equal(r.total,3);assert.equal(r.summary[0].rejected_count,2);assert.equal(Number(r.summary[0].rejected_amount),200);assert.equal(r.summary[0].failed_count,1);
+  assert.equal(r.groups.provider.find(x=>x.provider==='无三方（驳回）').all_count,2);
+ }
+}));
 
 test('only new functions are added; no old RPC, table or ingestion mutation',()=>{
   assert.doesNotMatch(sql,/\b(create or replace|insert into|update public\.|delete from|alter table|create table|create index)\b/i);

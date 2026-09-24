@@ -87,24 +87,19 @@ function numberValue(value: unknown): number | null {
   const text = String(value ?? "").replace(/[,，\s]/g, ""); if (!text) return null;
   const number = Number(text); return Number.isFinite(number) ? number : null;
 }
-function dateValue(value: unknown, orderNumber: string | null = null): string | null {
+function dateValue(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) {
-    // Some UPI核对 rows expose a legacy numeric serial outside the Google date range.
-    // The deposit order ID carries the same YYMMDD prefix, so use it only when the
-    // sheet value cannot represent a real calendar date.
-    if (value > 60000 && orderNumber) {
-      const prefix = /(?:^|[A-Za-z])(\d{6})/.exec(orderNumber)?.[1] || "";
-      const year = Number(prefix.slice(0, 2)), month = Number(prefix.slice(2, 4)), day = Number(prefix.slice(4, 6));
-      if (year >= 20 && month >= 1 && month <= 12 && day >= 1 && day <= 31) return `20${prefix.slice(0, 2)}-${prefix.slice(2, 4)}-${prefix.slice(4, 6)}`;
-      return null;
-    }
-    const date = new Date(Date.UTC(1899, 11, 30) + value * 86400000);
-    return Number.isFinite(date.getTime()) && date.getUTCFullYear() <= 2100 ? date.toISOString().slice(0, 10) : null;
+    // Only real Google date serials. Never infer the sheet's date from an order ID.
+    if (value < 1 || value > 73415) return null;
+    const date = new Date(Date.UTC(1899, 11, 30) + Math.floor(value) * 86400000);
+    return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null;
   }
-  const text = String(value ?? "").trim(); if (!text) return null;
-  const match = /^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/.exec(text);
-  if (match) return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
-  const date = new Date(text); return Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null;
+  const text = String(value ?? "").trim();
+  const match = /^(\d{4})[年\/-](\d{1,2})[月\/-](\d{1,2})(?:日|$|[ T])/.exec(text);
+  if (!match) return null;
+  const candidate = `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
+  const date = new Date(candidate + "T00:00:00Z");
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === candidate ? candidate : null;
 }
 function textValue(value: unknown, max = 200): string | null {
   const text = String(value ?? "").replace(/[\u0000-\u001f]/g, "").trim(); return text ? text.slice(0, max) : null;
@@ -126,8 +121,10 @@ function rowsFromValues(values: unknown[][], sourceSheet: string, collectedAt: s
       source_sheet: sourceSheet, source_tab: SHEET_TAB, source_row: sourceRow,
       platform, order_number: orderNumber, utr: textValue(rowValue(row, headers, "UTR")),
       amount: numberValue(rowValue(row, headers, "金额")), provider: textValue(rowValue(row, headers, "三方")),
+      provider_reply: textValue(rowValue(row, headers, "三方回复"), 4000),
+      utr_match: textValue(rowValue(row, headers, "UTR是否匹配")), kyc_correct: textValue(rowValue(row, headers, "KYC正确")),
       match_status: textValue(rowValue(row, headers, "对上")), status: textValue(rowValue(row, headers, "状态")),
-      unreceived_days: numberValue(rowValue(row, headers, "未入款天数")), record_date: dateValue(rowValue(row, headers, "日期"), orderNumber),
+      unreceived_days: numberValue(rowValue(row, headers, "未入款天数")), record_date: dateValue(rowValue(row, headers, "日期")),
       source_updated_at: collectedAt, updated_at: collectedAt,
     });
   }
@@ -146,7 +143,7 @@ export function createDepositIssueSyncHandler(runtime: Runtime) {
       const token = await requestJson(runtime, "https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: assertionValue }).toString() }, 64 * 1024);
       if (typeof token?.access_token !== "string" || !token.access_token) throw new SyncError("google_source_unavailable");
       const range = encodeURIComponent(`${SHEET_TAB}!A1:N${MAX_ROWS + 1}`);
-      const sourceUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(settings.sourceId)}/values/${range}?valueRenderOption=UNFORMATTED_VALUE&majorDimension=ROWS`;
+      const sourceUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(settings.sourceId)}/values/${range}?valueRenderOption=FORMATTED_VALUE&majorDimension=ROWS`;
       const source = await requestJson(runtime, sourceUrl, { method: "GET", headers: { Authorization: "Bearer " + token.access_token, Accept: "application/json" } }, MAX_RESPONSE_BYTES);
       const rows = rowsFromValues(source?.values, settings.sourceId, collectedAt);
       let written = 0;

@@ -2,15 +2,20 @@
  'use strict';
  const addDay=(day,n)=>{const d=new Date(day+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)};
  const duration=value=>{if(value==null||!Number.isFinite(Number(value)))return '—';const n=Math.max(0,Math.round(Number(value)));return (n>=3600?Math.floor(n/3600)+'时':'')+(n>=60?Math.floor(n%3600/60)+'分':'')+(n%60)+'秒'};
+ function cleanNote(value){
+  const lines=String(value??'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  return lines.filter((line,i)=>!lines.slice(i+1).some(later=>later===line||(/[.]{3}$|…+$/.test(line)&&later.startsWith(line.replace(/([.]{3}|…+)$/,''))))).join('\n');
+ }
  root.HensemLiveWithdrawPages={create(ctx){
   const {L,E,C,R,N,box,table,request,render}=ctx;
   const S={data:null,error:'',loading:false,dirty:false,serial:0,view:'auto',platforms:[],account:'',sort:'total',asc:false,daily:false,page:1,size:20,open:false,search:'',reason:null,reasonData:null,reasonError:'',reasonBusy:false,reasonSerial:0,reasonPage:1,reasonLabel:'',reasonQuery:'',reasonTrigger:null,note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false};
+  const reasonCache=new Map();
   const view=()=>ctx.page()==='withdraw_operators'?'operators':'auto';
   const sumKey=()=>view()==='operators'?'processed':'total';
   const dates=()=>({startAt:L.from.slice(0,10)+'T00:00:00.000Z',endAt:L.to.slice(0,10)+'T23:59:59.000Z'});
   function query(){return {action:'autoWithdraw',...dates(),country:L.country,platforms:S.platforms,view:view(),sort:S.sort,ascending:S.asc,daily:S.daily,...(view()==='operators'&&S.account?{account:S.account}:{}),offset:(S.page-1)*S.size,limit:S.size}}
   function invalidate(){S.serial++;S.loading=false;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.note=null;S.page=1}
-  async function load(reset=false){if(!L.catalogReady)return;if(reset)S.page=1;const target=view();if(S.view!==target){S.view=target;S.page=1;S.sort=target==='operators'?'processed':'total';S.asc=false;S.reason=null}const serial=++S.serial;S.loading=true;S.error='';S.dirty=false;render();try{const data=await request(query());if(serial!==S.serial)return;S.data=data;S.loading=false;render()}catch(e){if(serial!==S.serial)return;S.data=null;S.loading=false;S.error=e.message||'读取失败';render()}}
+  async function load(reset=false){if(!L.catalogReady)return;if(reset){S.page=1;reasonCache.clear()}const target=view();if(S.view!==target){S.view=target;S.page=1;S.sort=target==='operators'?'processed':'total';S.asc=false;S.daily=false;S.reason=null}const serial=++S.serial;S.loading=true;S.error='';S.dirty=false;render();try{const data=await request(query());if(serial!==S.serial)return;S.data=data;S.loading=false;render()}catch(e){if(serial!==S.serial)return;S.data=null;S.loading=false;S.error=e.message||'读取失败';render()}}
   const singleDay=()=>L.from.slice(0,10)===L.to.slice(0,10);
   const platformKey=name=>String(name||'').toUpperCase().replace(/^(DHANI|VEER|SHREE)[.]/,'$1');
   const noteFor=(row,date)=>(S.data?.notes||[]).find(n=>platformKey(n.platform)===platformKey(row.platform)&&n.date===date);
@@ -46,12 +51,12 @@
     const detailButton=(index,key,label='查看订单')=>'<button class="btn small" '+(d.canViewOrders===false?'disabled':'')+' onclick="withdrawReasonDrill('+index+',\''+key+'\')">'+label+'</button>';
     if(r.kind==='orders')body+=table(['订单号 / 金额','驳回原因 / 完整原备注','操作人账号','申请 / 完成时间','自动出款拦截 / 转人工说明'],rows.map(x=>[
      '<strong class="withdraw-order-number">'+E(x.orderNumber)+'</strong><small class="cell-sub">'+N(x.amount)+' · '+E(x.status)+'</small>',
-     '<span class="withdraw-reason-category">'+E(x.category||'未归类')+'</span><div class="withdraw-full-note">'+E(x.rejectionReason||'（源备注为空）')+'</div>',
+     '<span class="withdraw-reason-category">'+E(x.category||'未归类')+'</span><div class="withdraw-full-note">'+E(cleanNote(x.rejectionReason)||'（源备注为空）')+'</div>',
      E(x.operator||'（源账号为空）'),'<span class="withdraw-order-time">'+E(String(x.createdAt||'—').replace('T',' '))+'</span><small class="cell-sub">'+E(String(x.completedAt||'—').replace('T',' '))+'</small>',
-     '<div class="withdraw-full-note">'+E(x.manualRemark||'（源字段为空）')+'</div>']),'withdraw-reason-table withdraw-order-table');
+     '<div class="withdraw-full-note">'+E(cleanNote(x.manualRemark)||'（源字段为空）')+'</div>']),'withdraw-reason-table withdraw-order-table');
     else if(r.kind==='categories')body+=table(['驳回原因分类','笔数','占全部驳回订单','详情'],rows.map((x,i)=>[E(x.category),C(x.count),share(x.count),detailButton(i,'category')+' <button class="link" onclick="withdrawReasonVariants('+i+')">原备注分布</button>']),'withdraw-reason-table withdraw-distribution-table');
     else if(r.kind==='operators')body+=table(['操作人账号','驳回笔数','占全部驳回订单','原因类别','备注为空','详情'],rows.map((x,i)=>[E(x.operator||'（源账号为空）'),C(x.count),share(x.count),C(x.categoryCount),C(x.missingReasonCount),detailButton(i,'operator')]),'withdraw-reason-table withdraw-distribution-table');
-    else body+=table(['原因完整原文','笔数',blocking?'占已记录说明':'占全部驳回订单',...(blocking?[]:['详情'])],rows.map((x,i)=>[E(x.reason),C(x.count),share(x.count),...(blocking?[]:[detailButton(i,'reason')])]),'withdraw-reason-table withdraw-distribution-table');
+    else body+=table(['原因完整原文','笔数',blocking?'占已记录说明':'占全部驳回订单',...(blocking?[]:['详情'])],rows.map((x,i)=>[E(cleanNote(x.reason)),C(x.count),share(x.count),...(blocking?[]:[detailButton(i,'reason')])]),'withdraw-reason-table withdraw-distribution-table');
     if(!rows.length)body+='<div class="live-empty">'+(blocking?'源订单未记录自动出款拦截 / 转人工说明。':'当前条件下没有驳回记录。')+'</div>';
     body+=pagebar(Number(d.total||0),S.reasonPage,20,true);
    }
@@ -64,13 +69,13 @@
     (!operators?'<div class="live-panel-note">未分处理方式 '+C(t.unclassifiedCount||0)+' 笔 · '+R(t.unclassifiedCount,t.total)+' · 当前覆盖 '+C(t.platforms||0)+' 平台'+(singleDay()&&d.comparison?.complete===false?' · 昨日覆盖 '+C(d.comparison.matchedRows)+' / '+C(d.comparison.totalRows)+' 平台，汇总不可比':'')+'</div>':'')+'</section>';
    const sort=(label,key)=>'<button class="link" onclick="withdrawSort(\''+key+'\')">'+label+' '+(S.sort===key?(S.asc?'↑':'↓'):'↕')+'</button>';
    const rate=(r,key)=>R(r[key],r[den])+comparison(r,r.previous,key,den);
-   const headers=[...(S.daily?['日期']:[]),sort('国家','country'),sort('盘口 / 平台','platform'),...(operators?['操作人',sort('处理笔数','processed'),sort('成功','success'),sort('驳回','rejected'),sort('成功占比','successRate'),sort('驳回占比','rejectRate')]:[sort('总提现笔数','total'),sort('成功','success'),sort('驳回','rejected'),sort('成功占比','successRate'),sort('驳回占比','rejectRate'),sort('自动出款','autoCount'),sort('人工处理','manualCount'),sort('自动占比','autoRate'),sort('人工占比','manualRate')]),sort('平均用时','avgSeconds'),sort('昨日用时','previousAvgSeconds'),sort('用时变化%','durationChange'),'原因 / 每日备注','详情'];
+   const headers=[...(S.daily?['日期']:[]),sort('国家','country'),sort('盘口 / 平台','platform'),...(operators?['操作人',sort('处理笔数','processed'),sort('成功','success'),sort('驳回','rejected'),sort('成功占比','successRate'),sort('驳回占比','rejectRate')]:[sort('总提现笔数','total'),sort('成功','success'),sort('驳回','rejected'),sort('成功占比','successRate'),sort('驳回占比','rejectRate'),sort('自动出款','autoCount'),sort('人工处理','manualCount'),sort('自动占比','autoRate'),sort('人工占比','manualRate')]),sort('平均用时','avgSeconds'),sort('昨日用时','previousAvgSeconds'),sort('用时变化%','durationChange'),...(!operators?['原因 / 每日备注','详情']:[])];
    const cells=(r,i)=>[...(S.daily?[E(r.dataDate)]:[]),E(r.country),E(r.platform),...(operators?[E(r.account),C(r.processed),C(r.success),C(r.rejected),rate(r,'success'),rate(r,'rejected')]:[C(r.total),C(r.success),C(r.rejected),rate(r,'success'),rate(r,'rejected'),C(r.autoCount),C(r.manualCount),rate(r,'autoCount'),rate(r,'manualCount')]),
     duration(r.avgSeconds),singleDay()||S.daily?duration(r.previous?.avgSeconds):'仅单日对比',(singleDay()||S.daily)&&r.avgSeconds!=null&&r.previous?.avgSeconds>0?delta((r.avgSeconds/r.previous.avgSeconds-1)*100,'%',false):'—',
-    (!operators&&d.canWriteNotes?'<button class="link" onclick="withdrawNoteOpen('+i+')">'+(noteFor(r,S.daily?r.dataDate:L.to.slice(0,10))? '编辑备注':'+ 添加原因')+'</button>':'')+'<span class="withdraw-note">'+E((d.notes||[]).filter(n=>platformKey(n.platform)===platformKey(r.platform)&&(!S.daily||n.date===r.dataDate)).map(n=>n.date+' '+n.reason).join('\n')||'暂无每日备注')+'</span>',
-    '<div class="withdraw-row-actions"><button class="btn small" data-withdraw-reason="'+i+'-blocking" onclick="withdrawReasons('+i+',\'blocking\')">自动出款原因</button><button class="btn small withdraw-reject-button" data-withdraw-reason="'+i+'-rejection" onclick="withdrawReasons('+i+',\'rejection\')">驳回原因</button><button class="btn small" onclick="withdrawDaily('+i+')">'+(S.daily?'平台汇总':'日明细')+'</button></div>'];
-   const countKeys=operators?['processed','success','rejected']:['total','success','rejected','autoCount','manualCount'];const footer=(items,label,totals)=>{const a=totals||Object.fromEntries(countKeys.map(k=>[k,items.reduce((n,r)=>n+Number(r[k]||0),0)]));if(!totals){const weight=items.filter(r=>r.avgSeconds!=null);a.avgSeconds=weight.reduce((n,r)=>n+r.avgSeconds*r[den],0)/weight.reduce((n,r)=>n+r[den],0)}a.country='';a.platform=label;a.account='';const row=cells(a,0);row[row.length-1]='';row[row.length-2]='';return row};
-   body+=box(operators?'操作人表现':'平台出款表现',table(headers,rows.map(cells),'withdraw-stat-table',[footer(rows,'当前页汇总'),footer([],'全部汇总',t)])+pagebar(Number(d.total||0),S.page,S.size),
+    ...(!operators?[(d.canWriteNotes?'<button class="link" onclick="withdrawNoteOpen('+i+')">'+(noteFor(r,S.daily?r.dataDate:L.to.slice(0,10))? '编辑备注':'+ 添加原因')+'</button>':'')+'<span class="withdraw-note">'+E((d.notes||[]).filter(n=>platformKey(n.platform)===platformKey(r.platform)&&(!S.daily||n.date===r.dataDate)).map(n=>n.date+' '+n.reason).join('\n')||'暂无每日备注')+'</span>',
+    '<div class="withdraw-row-actions"><button class="btn small" data-withdraw-reason="'+i+'-blocking" onclick="withdrawReasons('+i+',\'blocking\')">自动出款原因</button><button class="btn small withdraw-reject-button" data-withdraw-reason="'+i+'-rejection" onclick="withdrawReasons('+i+',\'rejection\')">驳回原因</button><button class="btn small" onclick="withdrawDaily('+i+')">'+(S.daily?'平台汇总':'日明细')+'</button></div>']:[])];
+   const countKeys=operators?['processed','success','rejected']:['total','success','rejected','autoCount','manualCount'];const footer=(items,label,totals)=>{const a=totals||Object.fromEntries(countKeys.map(k=>[k,items.reduce((n,r)=>n+Number(r[k]||0),0)]));if(!totals){const weight=items.filter(r=>r.avgSeconds!=null);a.avgSeconds=weight.reduce((n,r)=>n+r.avgSeconds*r[den],0)/weight.reduce((n,r)=>n+r[den],0)}a.country='';a.platform=label;a.account='';const row=cells(a,0);if(!operators){row[row.length-1]='';row[row.length-2]=''}return row};
+   body+=box(operators?'操作人表现':'平台出款表现',table(headers,rows.map(cells),'withdraw-stat-table'+(operators?' withdraw-operators-table':''),Number(d.total||0)>S.size?[footer(rows,'当前页汇总'),footer([],'全部汇总',t)]:[footer([],'合计',t)])+pagebar(Number(d.total||0),S.page,S.size),
     '按来源当地日期读取，与现有后台使用相同日统计。新AR直传覆盖同平台同日副本；昨日对比不计入当日总计。平均用时按笔数加权，缺少前期记录时不显示涨跌。');
    return controls+'<div id="withdraw-content">'+body+reasonPanel()+'</div>'+noteDialog();
   }
@@ -81,7 +86,14 @@
    return '<div class="live-config-modal-backdrop"><section class="live-config-modal" role="dialog" aria-modal="true" aria-label="每日备注"><h2>每日备注</h2><div class="config-context">'+E(n.country)+' · '+E(n.platform)+'</div><form onsubmit="event.preventDefault();withdrawNoteSave()"><label for="withdrawNoteDate">备注日期</label><input id="withdrawNoteDate" type="date" min="'+E(L.from.slice(0,10))+'" max="'+E(L.to.slice(0,10))+'" value="'+E(n.date)+'" onchange="withdrawNoteDate(this.value)" '+(S.noteSaving?'disabled':'')+'><label for="withdrawNoteText">当日原因 / 运营说明</label><textarea id="withdrawNoteText" rows="6" maxlength="1000" oninput="withdrawNoteInput(this.value)" '+(S.noteSaving?'disabled':'')+'>'+E(S.noteDraft)+'</textarea><p class="config-help">最多 1000 字。只保存该平台、该日期的人工备注；留空保存可清除备注。</p>'+(S.noteError?'<div class="config-message" role="alert">'+E(S.noteError)+'</div>':'')+'<div class="config-actions"><button type="button" class="btn" onclick="withdrawNoteClose()" '+(S.noteSaving?'disabled':'')+'>取消</button><button class="btn primary" '+(S.noteSaving?'disabled':'')+'>'+(S.noteSaving?'保存中…':'保存备注')+'</button></div></form></section></div>';
   }
   const reasonFocus=()=>document.getElementById('withdraw-reasons')?.focus?.({preventScroll:true});
-  async function reasonsLoad(){if(!S.reason)return;const serial=++S.reasonSerial;S.reasonBusy=true;S.reasonError='';render();reasonFocus();try{const data=await request({action:'withdrawReasons',...S.reason,offset:(S.reasonPage-1)*20,limit:20});if(serial!==S.reasonSerial)return;S.reasonData=data;S.reasonBusy=false;render();reasonFocus()}catch(e){if(serial!==S.reasonSerial)return;S.reasonError=e.message;S.reasonBusy=false;S.reasonData=null;render();reasonFocus()}}
+  async function reasonsLoad(force=false){
+   if(!S.reason)return;const query={action:'withdrawReasons',...S.reason,offset:(S.reasonPage-1)*20,limit:20},key=JSON.stringify(query),cached=reasonCache.get(key),serial=++S.reasonSerial;
+   S.reasonError='';
+   if(!force&&cached&&Date.now()-cached.time<60000){S.reasonData=cached.data;S.reasonBusy=false;render();reasonFocus();return}
+   S.reasonBusy=true;render();reasonFocus();
+   try{const data=await request(query);if(serial!==S.reasonSerial)return;reasonCache.set(key,{data,time:Date.now()});if(reasonCache.size>30)reasonCache.delete(reasonCache.keys().next().value);S.reasonData=data;S.reasonBusy=false;render();reasonFocus()}
+   catch(e){if(serial!==S.reasonSerial)return;S.reasonError=e.message;S.reasonBusy=false;S.reasonData=null;render();reasonFocus()}
+  }
   root.withdrawLoad=load;root.autoWithdrawLoad=load;
   root.withdrawCountry=c=>{if(!L.catalog.some(p=>p.country===c))return;L.country=c;S.platforms=[];S.data=null;invalidate();render()};
   root.withdrawDate=(key,value)=>{if(!['from','to'].includes(key)||!/^\d{4}-\d{2}-\d{2}$/.test(value))return;L[key]=value+(key==='from'?'T00:00:00':'T23:59:59');invalidate();render()};
@@ -110,7 +122,7 @@
   root.withdrawReasonQuery=value=>{S.reasonQuery=String(value).slice(0,200)};
   root.withdrawReasonSearch=()=>{if(!S.reason)return;S.reason.query=S.reasonQuery.trim();S.reasonPage=1;reasonsLoad()};
   root.withdrawReasonPage=page=>{if(!Number.isInteger(page)||page<1)return;S.reasonPage=page;reasonsLoad()};
-  root.withdrawReasonClose=()=>{const trigger=S.reasonTrigger;S.reasonSerial++;S.reason=null;S.reasonData=null;render();if(trigger)document.querySelector?.('[data-withdraw-reason="'+trigger.index+'-'+trigger.kind+'"]')?.focus?.({preventScroll:true})};root.withdrawReasonRetry=reasonsLoad;
+  root.withdrawReasonClose=()=>{const trigger=S.reasonTrigger;S.reasonSerial++;S.reason=null;S.reasonData=null;render();if(trigger)document.querySelector?.('[data-withdraw-reason="'+trigger.index+'-'+trigger.kind+'"]')?.focus?.({preventScroll:true})};root.withdrawReasonRetry=()=>reasonsLoad(true);
   root.withdrawReasonKey=event=>{if(event.key==='Escape'){event.preventDefault();root.withdrawReasonClose();return}if(event.key!=='Tab')return;const panel=document.getElementById('withdraw-reasons'),items=[...(panel?.querySelectorAll('button:not([disabled]),input:not([disabled]),[tabindex="0"]')||[])].filter(e=>e.getClientRects().length);const first=items[0],last=items[items.length-1];if(!first)return;if(event.shiftKey&&(document.activeElement===first||document.activeElement===panel)){event.preventDefault();last.focus()}else if(!event.shiftKey&&(document.activeElement===last||document.activeElement===panel)){event.preventDefault();first.focus()}};
   function setNote(row,date){const previous=noteFor(row,date);S.note={country:row.country,platform:row.platform,date,storagePlatform:previous?.platform||row.platform,expectedVersion:previous?.version||'',original:previous?.reason||''};S.noteDraft=S.note.original;S.noteError='';S.noteSaving=false;render()}
   root.withdrawNoteOpen=index=>{const row=S.data?.rows?.[index];if(row&&S.data?.canWriteNotes)setNote(row,S.daily?row.dataDate:L.to.slice(0,10))};
@@ -119,7 +131,7 @@
   root.withdrawNoteSample=()=>{S.noteSample=true;render()};
   root.withdrawNoteClose=()=>{if(S.noteSaving)return;S.note=null;S.noteSample=false;S.noteError='';render()};
   root.withdrawNoteSave=async()=>{if(!S.note||S.noteSaving||!S.data?.canWriteNotes)return;const target=S.note;S.noteSaving=true;S.noteError='';render();try{const saved=await request({action:'withdrawNote',date:target.date,country:target.country,platform:target.storagePlatform,reason:S.noteDraft,expectedVersion:target.expectedVersion});if(S.note!==target)return;S.data.notes=[...(S.data.notes||[]).filter(n=>!(n.date===saved.date&&n.platform===saved.platform)),saved];S.noteSaving=false;S.note=null;render()}catch(e){if(S.note!==target)return;S.noteSaving=false;S.noteError=e.message||'备注保存失败，输入已保留';render()}};
-  return {render:draw,load,state:S,query,cancel:()=>{S.serial++;S.reasonSerial++;S.loading=false;S.reasonBusy=false;S.reason=null;S.data=null;S.note=null;S.noteSample=false}};
+  return {render:draw,load,state:S,query,cancel:()=>{reasonCache.clear();S.serial++;S.reasonSerial++;S.loading=false;S.reasonBusy=false;S.reason=null;S.data=null;S.note=null;S.noteSample=false}};
  }};
- if(typeof module!=='undefined')module.exports={addDay,duration};
+ if(typeof module!=='undefined')module.exports={addDay,duration,cleanNote};
 })(typeof window!=='undefined'?window:globalThis);
