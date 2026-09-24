@@ -16,7 +16,14 @@ function load(options = {}) {
   const authCalls = [];
   vm.runInNewContext(compiled, { module,exports:module.exports,URL,AbortController,window:target,
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: options.base || 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
-    require: name => {assert.equal(name,'./dashboardAuthClient');return { ensureDashboardSession: async current => {authCalls.push(current);return options.ensure ? options.ensure(current) : {...current,access_token:'offline-fresh-token'};} };},
+    require: name => {
+      if(name==='./adminConfigurationRequest') {
+        const helper={exports:{}};
+        vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../src/lib/adminConfigurationRequest.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:helper,exports:helper.exports});
+        return helper.exports;
+      }
+      assert.equal(name,'./dashboardAuthClient');return { ensureDashboardSession: async current => {authCalls.push(current);return options.ensure ? options.ensure(current) : {...current,access_token:'offline-fresh-token'};} };
+    },
     fetch: async (url,init) => {calls.push({url,init});return options.fetch ? options.fetch(url,init) : {ok:true,json:async()=>({rows:[],total:0})};},
     setTimeout:(callback,ms) => {const id=++timerId;timers.set(id,{callback,ms});return id;},clearTimeout:id=>timers.delete(id)
   }, {filename});
@@ -161,4 +168,26 @@ test('payoutConfig uses only the fixed RPC with action removed and safe explicit
 test('invalid special requests are rejected at the opaque-frame boundary before auth or fetch',async()=>{
  const h=load(),b=bridge(h);for(const [id,request]of [['sheet',{action:'ratesSheet',table:'private'}],['config',{action:'payoutConfig',operation:'index',system:'AR',raw_payload:{secret:'ignored'}}]])h.send(b.event(id,request));
  await flush();assert.equal(h.calls.length,0);assert.equal(h.authCalls.length,0);assert.equal(b.replies.length,2);assert(b.replies.every(reply=>reply.data.error));assert(!JSON.stringify(b.replies).includes('secret'));b.cleanup();
+});
+
+test('configuration edits and options use exact RPC envelopes and cannot carry unrelated fields',async()=>{
+ const h=load(),id=query.platformId;
+ const requests=[['providerOptions',{platformIds:[id],direction:'withdraw'}],['configurationAccess',{}],['configurationWrite',{operation:'provider',country:'印度',platform:'EXAMPLE',rawProvider:'',canonicalProvider:'ConfirmedPay',expectedVersion:'a'.repeat(32)}],['configurationWrite',{operation:'grant',userId:id,canManage:false}]];
+ const rpc={providerOptions:'provider_options',configurationAccess:'configuration_access',configurationWrite:'configuration_write'};
+ for(const [action,fields] of requests){await h.api.adminLiveRequest(session,{action,...fields});assert.equal(h.calls.at(-1).url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_'+rpc[action]);assert.deepEqual(JSON.parse(h.calls.at(-1).init.body),{p_request:fields});assert.throws(()=>h.api.validateAdminLiveRequest({action,...fields,status:'all'}));}
+ for(const request of [{action:'providerOptions',platformIds:['all']},{action:'providerOptions',platformIds:[{}]},{action:'configurationWrite',operation:'grant',userId:id,canManage:'true'},{action:'configurationWrite',operation:'provider',country:'印度',platform:'EXAMPLE',rawProvider:'',canonicalProvider:'',expectedVersion:'a'.repeat(32)},{action:'configurationWrite',operation:'provider',country:'印度',platform:'EXAMPLE',rawProvider:'x',canonicalProvider:'Y',expectedVersion:'stale'}])assert.throws(()=>h.api.validateAdminLiveRequest(request));
+});
+
+test('withdrawal subpages keep local calendar dates and bounded independent reasons requests',async()=>{
+ const h=load(),req={action:'autoWithdraw',country:'印度',startAt:'2026-09-23T00:00:00.000Z',endAt:'2026-09-23T23:59:59.000Z',platforms:['EXAMPLE'],view:'operators',account:'operator-a',sort:'processed',ascending:false,daily:true,offset:20,limit:20};
+ await h.api.adminLiveRequest(session,req);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_auto_withdraw');assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:Object.fromEntries(Object.entries(req).filter(([k])=>k!=='action'))});
+ for(const bad of [{country:'all'},{country:['印度']},{view:'aggregate'},{platforms:[{}]},{ascending:'false'},{daily:1},{sort:'private'},{startAt:'2026-02-30T00:00:00Z'},{endAt:'2026-10-24T23:59:59Z'},{date:'2026-09-23'},{sql:'select private'}])assert.throws(()=>h.api.validateAdminLiveRequest({...req,...bad}));
+ for(const kind of ['blocking','categories','rejection','operators','orders']){const r={action:'withdrawReasons',date:'2026-09-23',country:'印度',platform:'EXAMPLE',kind,offset:0,limit:20};await h.api.adminLiveRequest(session,r);assert.equal(h.calls.at(-1).url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_withdraw_reasons');for(const bad of [{date:'2026-02-30'},{country:'all'},{platform:''},{kind:'raw_sql'},{account:'other'},{category:'arbitrary SQL'},{operatorKey:[]},{query:{id:'123'}},{providers:['Pay']},{offset:-1}])assert.throws(()=>h.api.validateAdminLiveRequest({...r,...bad}));}
+ const detail={action:'withdrawReasons',date:'2026-09-23',country:'印度',platform:'EXAMPLE',kind:'orders',category:'a'.repeat(32),operatorKey:'b'.repeat(32),reasonKey:'c'.repeat(32),query:'SYNTHETIC-ORDER'};assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(detail))),detail);assert.throws(()=>h.api.validateAdminLiveRequest({...detail,kind:'blocking'}));
+});
+test('daily note writes have a fixed endpoint and cannot contain author, order status, or credential fields',async()=>{
+ const h=load(),r={action:'withdrawNote',date:'2026-09-23',country:'印度',platform:'EXAMPLE',reason:'Verified synthetic note\nSecond line',expectedVersion:''};
+ await h.api.adminLiveRequest(session,r);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_withdraw_note');
+ for(const bad of [{date:'2026-02-30'},{country:''},{platform:[]},{reason:'x'.repeat(1001)},{reason:null},{expectedVersion:'stale'},{updated_by:'x'},{status:'success'},{access_token:'x'}])assert.throws(()=>h.api.validateAdminLiveRequest({...r,...bad}));
+ for(const sort of ['platform','successRate','rejectRate','autoRate','manualRate','previousAvgSeconds','durationChange'])assert.equal(h.api.validateAdminLiveRequest({action:'autoWithdraw',country:'印度',startAt:'2026-09-23T00:00:00Z',endAt:'2026-09-23T23:59:59Z',sort}).sort,sort);
 });

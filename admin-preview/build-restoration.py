@@ -12,8 +12,8 @@ if hashlib.sha256(legacy_adapter.encode('utf-8')).hexdigest() != legacy_sha256:
     raise SystemExit('Deployed legacy adapter mismatch. Keep legacy-live-data.js frozen; edit live-data.js instead.')
 names = ['live-comparison.js', 'live-reference-layout.js', 'live-empty-pages.js',
          'live-pages-reference.js', 'live-rates-restored.js', 'live-duration-reference.js',
-         'live-payout-config.js', 'live-data.js']
-styles = ['live-restored.css', 'live-reference-pages.css', 'live-payout-config.css']
+         'live-payout-config.js', 'live-filter-controls.js', 'live-configuration.js', 'live-provider-summary.js', 'live-withdraw-pages.js', 'live-data.js']
+styles = ['live-restored.css', 'live-reference-pages.css', 'live-payout-config.css', 'live-configuration.css']
 values = {'oldAdapter': legacy_adapter,
           'newModules': '\n'.join((base / name).read_text() for name in names),
           'restoredCss': '\n'.join((base / name).read_text() for name in styles)}

@@ -16,10 +16,13 @@ begin
   if p_request is null or jsonb_typeof(p_request)<>'object' or octet_length(p_request::text)>32768
     or exists(select 1 from jsonb_object_keys(p_request) k where k<>all(array[
       'action','platformId','startAt','endAt','direction','status','orderNumber','thirdPartyOrderNumber','memberId','systemOrderId',
-      'utr','providers','channelTypes','currency','amountMin','amountMax','offset','limit'])) then
+      'utr','providers','channelTypes','currency','amountMin','amountMax','offset','limit','view'])) then
     raise exception using errcode='22023',message='invalid_request';
   end if;
   v_action:=coalesce(p_request->>'action','catalog');
+  if p_request ? 'view' and (jsonb_typeof(p_request->'view')<>'string' or p_request->>'view' not in ('full','providers') or v_action<>'aggregate') then
+    raise exception using errcode='22023',message='invalid_view';
+  end if;
   if v_action not in ('catalog','query','aggregate','details') then raise exception using errcode='22023',message='invalid_action'; end if;
   if v_action='catalog' then
     if p_request-array['action']<>'{}'::jsonb then raise exception using errcode='22023',message='invalid_catalog_request'; end if;
@@ -69,7 +72,7 @@ begin
   end if;
   foreach v_key in array array['providers','channelTypes'] loop
     if p_request ? v_key and p_request->v_key<>'null'::jsonb then
-      if jsonb_typeof(p_request->v_key)<>'array' or jsonb_array_length(p_request->v_key)>200 then
+      if jsonb_typeof(p_request->v_key)<>'array' or jsonb_array_length(p_request->v_key)>2000 then
         raise exception using errcode='22023',message='invalid_filter';
       end if;
       if exists(select 1 from jsonb_array_elements(p_request->v_key) a where jsonb_typeof(a)<>'string'
@@ -117,7 +120,7 @@ begin
             (a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
             or (((a.order_kind='recharge' and a.status='已支付') or (a.order_kind='withdraw' and a.status='已通过'))
               and a.completed_at is not null
-              and a.completed_at at time zone $4 >= $5 and a.completed_at at time zone $4 < $6))))
+              and a.completed_at >= ($5 at time zone $4) and a.completed_at < ($6 at time zone $4)))))
         and ($9 is null or a.member_id=$9) and ($10 is null or a.order_no=$10)
     $q$;
   elsif v_platform.source='newar' then
@@ -129,7 +132,7 @@ begin
         n.created_at,case when n.status_group='success' then n.success_at end as success_at,
         n.amount,n.actual_amount,n.fee as withdraw_fee,n.currency,n.received_at as synced_at,null::text as utr
       from public.newar_detail_records n join public.newar_detail_platforms t on t.platform=n.platform
-      where n.platform=$2 and n.dataset=any(case $7 when 'all' then array['charge','withdraw'] else array[$7] end)
+      where n.platform=$22 and n.dataset=any(case $7 when 'all' then array['charge','withdraw'] else array[$7] end)
         and (($19<>'aggregate' and n.created_at>=$5 and n.created_at<$6)
           or ($19='aggregate' and (n.created_at>=$5 and n.created_at<$6
             or (n.status_group='success' and n.success_at is not null and n.success_at>=$5 and n.success_at<$6))))
@@ -377,6 +380,56 @@ begin
     'pendingSummary',coalesce((select jsonb_agg((to_jsonb(s)-array['kind','valid_amount'])||jsonb_build_object('valid_amount',valid_amount::text) order by direction,currency) from duration_summary s where kind='pending_age'),'[]'::jsonb),
     'rows',coalesce((select jsonb_agg(to_jsonb(p) order by created_at desc,direction desc,id desc) from page p),'[]'::jsonb))
   $q$;
+
+  -- Provider pages do not need the eight chart grouping sets or duration bins.
+  -- Reuse exactly the same scoped source and predicates, with two grouping sets.
+  if p_request->>'view'='providers' and v_action='aggregate' then
+    if v_status<>'all' then raise exception using errcode='22023',message='unsupported_filter';end if;
+    v_sql:='with orders as ('||v_source||$q$), filtered as materialized (
+      select direction,currency,provider,status_group,created_at,success_at,
+        case when amount::text not in ('NaN','Infinity','-Infinity') then amount end as amount,synced_at,
+        (created_at >= $5 and created_at < $6) as created_in_range,
+        (success_at >= $5 and success_at < $6 and status_group='success') as success_in_range
+      from orders where ($8='all' or status_group=$8) and ($12 is null or provider=any($12))
+        and ($13 is null or channel_type=any($13)) and ($14 is null or currency=$14)
+        and ($15 is null or amount>=$15) and ($16 is null or amount<=$16)
+    ), metric as (
+      select direction,currency,provider,case when grouping(provider)=0 then 'provider' else 'summary' end as kind,
+        count(*) filter(where created_in_range) as all_count,
+        case when count(*) filter(where created_in_range and amount is null)=0
+          then coalesce(sum(amount) filter(where created_in_range),0) end as all_amount,
+        count(*) filter(where created_in_range and amount is null) as missing_amount_count,
+        count(*) filter(where created_in_range and amount<0) as negative_amount_count,
+        count(*) filter(where created_in_range and status_group='success') as created_success_count,
+        count(*) filter(where success_in_range) as success_count,
+        case when count(*) filter(where success_in_range and amount is null)=0
+          then coalesce(sum(amount) filter(where success_in_range),0) end as success_amount,
+        count(*) filter(where created_in_range and status_group='pending') as pending_count,
+        case when count(*) filter(where created_in_range and status_group='pending' and amount is null)=0
+          then coalesce(sum(amount) filter(where created_in_range and status_group='pending'),0) end as pending_amount,
+        count(*) filter(where created_in_range and status_group='failed') as failed_count,
+        case when count(*) filter(where created_in_range and status_group='failed' and amount is null)=0
+          then coalesce(sum(amount) filter(where created_in_range and status_group='failed'),0) end as failed_amount,
+        count(*) filter(where created_in_range and status_group='rejected') as rejected_count,
+        case when count(*) filter(where created_in_range and status_group='rejected' and amount is null)=0
+          then coalesce(sum(amount) filter(where created_in_range and status_group='rejected'),0) end as rejected_amount,
+        count(*) filter(where created_in_range and status_group='unknown') as unknown_count,
+        case when count(*) filter(where created_in_range and status_group='unknown' and amount is null)=0
+          then coalesce(sum(amount) filter(where created_in_range and status_group='unknown'),0) end as unknown_amount,
+        max(synced_at) as latest_synced_at
+      from filtered group by grouping sets ((direction,currency),(direction,currency,provider))
+    ), output as (
+      select kind,(to_jsonb(m)-'kind')||jsonb_build_object('all_amount',all_amount::text,
+        'success_amount',success_amount::text,'pending_amount',pending_amount::text,
+        'failed_amount',failed_amount::text,'rejected_amount',rejected_amount::text,
+        'unknown_amount',unknown_amount::text) as value from metric m
+    ) select jsonb_build_object('total',(select count(*) from filtered where created_in_range),
+      'summary',coalesce((select jsonb_agg(value) from output where kind='summary'),'[]'::jsonb),
+      'groups',jsonb_build_object('provider',coalesce((select jsonb_agg(value order by value->>'provider')
+        from output where kind='provider'),'[]'::jsonb)),'rows','[]'::jsonb)
+    $q$;
+  end if;
+
   execute v_sql into v_result using v_id,v_platform.name,v_platform.scope_group,v_platform.timezone,v_start,v_end,
     v_direction,v_status,v_member,v_order,v_system,v_providers,v_types,v_currency,v_min,v_max,v_offset,v_limit,v_action,v_asof,v_platform.currency,v_platform.source_name,v_third;
   return v_result||jsonb_build_object('version',1,'platform',v_meta,'basis','mixed_created_success','startAt',v_start,'endAt',v_end,
