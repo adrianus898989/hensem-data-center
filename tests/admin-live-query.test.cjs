@@ -119,7 +119,8 @@ test('anonymous/absent/inactive owner denied; anonymous role has no execute',asy
 test('complete summary, every grouping and same page conserve all six status groups and money',async()=>{
   const r=await call(req());assert.equal(r.total,7);assert.equal(r.rows.length,7);assert.equal(r.hasMore,false);
   assert.equal(count(r.summary),7);assert.equal(amount(r.summary),3250);
-  assert.equal(count(r.summary,'success_count'),3);assert.equal(amount(r.summary,'success_amount'),800);
+  assert.equal(count(r.summary,'success_count'),2);assert.equal(amount(r.summary,'success_amount'),600);
+  assert.equal(r.capabilities.successTimeBasis,'success_at');assert.equal(r.capabilities.successCohort,'success_at_in_selected_range');
   assert.equal(count(r.summary,'pending_count'),1);assert.equal(count(r.summary,'failed_count'),1);
   assert.equal(count(r.summary,'rejected_count'),1);assert.equal(count(r.summary,'unknown_count'),1);
   for(const name of ['provider','daily','hourly','amount','matrix','amount_range','matrix_range']){
@@ -134,7 +135,9 @@ test('complete summary, every grouping and same page conserve all six status gro
 
 test('exact identifiers/provider/channel/direction/status/amount filters AND together for both page and all aggregates',async()=>{
   const r=await call(req({orderNumber:'LAST',thirdPartyOrderNumber:'TP-LAST',memberId:'0001',providers:['P1'],channelTypes:['UPI'],direction:'charge',status:'success',amountMin:'200',amountMax:'200'}));
-  assert.equal(r.total,1);assert.equal(r.rows[0].order_number,'LAST');assert.equal(count(r.summary),1);
+  assert.equal(r.total,0);assert.equal(r.rows.length,0);assert.equal(count(r.summary),0,'a success outside the selected success-time window is excluded');
+  const inWindow=await call(req({orderNumber:'START',thirdPartyOrderNumber:'TP-START',memberId:'0001',providers:['P1'],channelTypes:['UPI'],direction:'charge',status:'success',amountMin:'100',amountMax:'100'}));
+  assert.equal(inWindow.total,1);assert.equal(inWindow.rows[0].order_number,'START');assert.equal(count(inWindow.summary),1);
   assert.equal((await call(req({orderNumber:'LAST',memberId:'0002'}))).total,0);
   assert.equal((await call(req({orderNumber:'TP-LAST'}))).total,0,'order number must not match a third-party number');
   assert.equal((await call(req({thirdPartyOrderNumber:'LAST'}))).total,0,'third-party number must not match a local order number');
@@ -146,7 +149,7 @@ test('exact identifiers/provider/channel/direction/status/amount filters AND tog
 
 test('unknown money remains null, zero and signed adjustment preserved; currencies never merge',async()=>{
   const a=await call(req({platformId:ar}));assert.equal(a.total,4);
-  const charge=a.summary.find(x=>x.direction==='charge');assert.equal(charge.all_amount,null);assert.equal(charge.success_amount,null);assert.equal(charge.missing_amount_count,1);
+  const charge=a.summary.find(x=>x.direction==='charge');assert.equal(charge.all_amount,null);assert.equal(charge.success_amount,'80.43');assert.equal(charge.missing_amount_count,1);
   assert.equal(a.rows.find(x=>x.order_number==='A-NEG').amount,'-19.57');
   assert.equal(a.rows.find(x=>x.order_number==='A-UNKNOWN').amount,null);assert(!JSON.stringify(a).includes('amount_text'));
   assert.equal(a.capabilities.historicalFees,false);assert.equal(a.capabilities.actualAmount,false);
@@ -227,13 +230,13 @@ test('latency mutual bins inclusive maxima, strict cumulative thresholds, invali
   for(const [id,time] of [['MISSING',null],['REVERSED','2026-09-09T00:00:00+05:30'],['FUTURE','2200-01-01Z']])await db.query(`insert into game66_charge_orders(platform_id,order_num,uid,create_time,pay_time,status_code,amount_display,pay_method_name)
     values($1,$2,'LATENCY','2026-09-10T00:00:00+05:30',$3,'1',10,'Latency')`,[game,id,time]);
   const r=await call(req({startAt:'2026-09-10T00:00:00+05:30',endAt:'2026-09-11T00:00:00+05:30',memberId:'LATENCY'}));
-  assert.equal(r.total,14);const s=r.latencySummary[0];assert.equal(s.candidate_count,14);assert.equal(s.valid_count,11);assert.equal(s.excluded_count,3);
-  assert.equal(s.excluded_reasons.missing_success_at,1);assert.equal(s.excluded_reasons.reversed_time,1);assert.equal(s.excluded_reasons.future_success_at,1);
-  assert.equal(r.groups.latency.length,10);assert.equal(count(r.groups.latency,'count'),11);
-  assert.equal(r.groups.latency[0].count,2);assert.equal(r.groups.latency[9].count,1);
-  const first=r.groups.latency_thresholds[0];assert.equal(first.threshold_ms,300000);assert.equal(first.count,9);
-  assert.equal(r.groups.latency_thresholds.at(-1).count,1);assert.notEqual(first.count_share,first.amount_share);
-  assert.equal(amount(r.groups.latency,'amount'),Number(s.valid_amount));assert.equal(s.p50_ms,21600000);assert(s.p95_ms>172800000);
+  assert.equal(r.total,14);const s=r.latencySummary[0];assert.equal(s.candidate_count,7);assert.equal(s.valid_count,7);assert.equal(s.excluded_count,0);
+  assert.equal(s.excluded_reasons.missing_success_at,0);assert.equal(s.excluded_reasons.reversed_time,0);assert.equal(s.excluded_reasons.future_success_at,0);
+  assert.equal(r.groups.latency.length,10);assert.equal(count(r.groups.latency,'count'),7);
+  assert.equal(r.groups.latency[0].count,2);assert.equal(r.groups.latency[9].count,0);
+  const first=r.groups.latency_thresholds[0];assert.equal(first.threshold_ms,300000);assert.equal(first.count,5);
+  assert.equal(r.groups.latency_thresholds.at(-1).count,0);assert.notEqual(first.count_share,first.amount_share);
+  assert.equal(amount(r.groups.latency,'amount'),Number(s.valid_amount));assert.equal(s.p50_ms,3600000);assert(s.p95_ms<86400000);
 }));
 
 test('pending ages explicitly describe selected payout creation cohort and query asOf; bins reconcile',async()=>rollback(async()=>{
@@ -303,10 +306,8 @@ test('duration rollup preserves missing amounts per range and empty valid denomi
   assert.equal(t[2].amount,'200','unknown lower bins must not contaminate a later threshold');
   await db.exec(`update game66_charge_orders set pay_time=null where uid='ROLLUP'`);
   const empty=await call(req({startAt:'2026-09-10T00:00:00Z',endAt:'2026-09-11T00:00:00Z',memberId:'ROLLUP'}));
-  assert.equal(empty.latencySummary[0].valid_count,0);assert.equal(empty.latencySummary[0].excluded_count,5);
-  for(const row of [...empty.groups.latency,...empty.groups.latency_thresholds]){
-    assert.equal(row.count,0);assert.equal(row.amount,'0');assert.equal(row.count_share,null);assert.equal(row.amount_share,null);
-  }
+  assert.deepEqual(empty.latencySummary,[],'without a success timestamp there is no success-time cohort');
+  assert.deepEqual(empty.groups.latency,[]);assert.deepEqual(empty.groups.latency_thresholds,[]);
 }));
 
 test('performance patch exactly replaces only the new private query and preserves authenticated output',async()=>rollback(async()=>{

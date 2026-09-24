@@ -146,7 +146,8 @@ begin
   if jsonb_typeof(p_request->'providers')='array' then select array_agg(value) into v_providers from jsonb_array_elements_text(p_request->'providers'); end if;
   if jsonb_typeof(p_request->'channelTypes')='array' then select array_agg(value) into v_types from jsonb_array_elements_text(p_request->'channelTypes'); end if;
   v_capabilities:=jsonb_build_object('systemOrderId',v_platform.source='newar','thirdPartyOrderNumber',v_platform.source<>'ar','utr',false,'historicalFees',false,
-    'timeBasis','created','latencyBasis','created_to_source_success','customerPaymentTime',false,
+    'timeBasis','created_for_all_and_non_success','successTimeBasis','success_at','successCohort','success_at_in_selected_range',
+    'latencyBasis','success_at_to_created_at','customerPaymentTime',false,
     'pendingBasis','selected_created_cohort_current_stored_status','asOfBasis','query_time_not_source_snapshot',
     'sourceCompletenessVerified',false,'actualAmount',v_platform.source<>'ar','recordedFee',v_platform.source<>'ar');
   v_meta:=jsonb_build_object('id',v_platform.id,'name',v_platform.name,'source',v_platform.source,'sourceName',v_platform.source_name,
@@ -176,7 +177,12 @@ begin
         null::numeric as actual_amount,null::numeric as withdraw_fee,$21::text as currency,a.updated_at as synced_at,null::text as utr
       from public.ar_collected_orders a where a.country_code=$3 and a.platform=$22 and a.source_system='AR'
         and a.order_kind=any(case $7 when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)
-        and a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4)
+        and (($19<>'aggregate' and a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
+          or ($19='aggregate' and (
+            (a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
+            or (((a.order_kind='recharge' and a.status='已支付') or (a.order_kind='withdraw' and a.status='已通过'))
+              and a.completed_at is not null
+              and a.completed_at at time zone $4 >= $5 and a.completed_at at time zone $4 < $6))))
         and ($9 is null or a.member_id=$9) and ($10 is null or a.order_no=$10)
     $q$;
   elsif v_platform.source='newar' then
@@ -189,7 +195,10 @@ begin
         n.amount,n.actual_amount,n.fee as withdraw_fee,n.currency,n.received_at as synced_at,null::text as utr
       from public.newar_detail_records n join public.newar_detail_platforms t on t.platform=n.platform
       where n.platform=$2 and n.dataset=any(case $7 when 'all' then array['charge','withdraw'] else array[$7] end)
-        and n.created_at>=$5 and n.created_at<$6 and (t.launch_at is null or n.created_at>=t.launch_at)
+        and (($19<>'aggregate' and n.created_at>=$5 and n.created_at<$6)
+          or ($19='aggregate' and (n.created_at>=$5 and n.created_at<$6
+            or (n.status_group='success' and n.success_at is not null and n.success_at>=$5 and n.success_at<$6))))
+        and (t.launch_at is null or n.created_at>=t.launch_at)
         and ($9 is null or n.member_id=$9) and ($10 is null or n.order_number=$10)
         and ($23 is null or n.third_party_order_number=$23)
         and ($11 is null or n.source_id=$11)
@@ -205,7 +214,10 @@ begin
         coalesce(c.amount_display,c.amount_minor/100.0) as amount,null::numeric as actual_amount,null::numeric as withdraw_fee,
         'INR'::text as currency,c.last_seen_at as synced_at,null::text as utr
       from public.game66_charge_orders c where c.platform_id=$1 and $7 in ('all','charge')
-        and c.create_time>=$5 and c.create_time<$6 and ($9 is null or c.uid=$9)
+        and (($19<>'aggregate' and c.create_time>=$5 and c.create_time<$6)
+          or ($19='aggregate' and (c.create_time>=$5 and c.create_time<$6
+            or (c.status_code='1' and c.pay_time is not null and c.pay_time>=$5 and c.pay_time<$6))))
+        and ($9 is null or c.uid=$9)
         and ($10 is null or c.order_num=$10) and ($23 is null or c.out_trade_no=$23)
       union all
       select w.id,null::text,w.order_num,w.out_trade_no,w.uid,
@@ -216,7 +228,10 @@ begin
         coalesce(w.real_amount_display,w.real_amount_minor/100.0),coalesce(w.fee_display,w.fee_minor/100.0),
         'INR',w.last_seen_at,null::text
       from public.game66_withdraw_orders w where w.platform_id=$1 and $7 in ('all','withdraw')
-        and w.create_time>=$5 and w.create_time<$6 and ($9 is null or w.uid=$9)
+        and (($19<>'aggregate' and w.create_time>=$5 and w.create_time<$6)
+          or ($19='aggregate' and (w.create_time>=$5 and w.create_time<$6
+            or (w.status_code='3' and w.update_time is not null and w.update_time>=$5 and w.update_time<$6))))
+        and ($9 is null or w.uid=$9)
         and ($10 is null or w.order_num=$10) and ($23 is null or w.out_trade_no=$23)
     $q$;
   end if;
@@ -237,8 +252,13 @@ begin
       created_at,success_at,case when amount::text not in ('NaN','Infinity','-Infinity') then amount end as amount,
       case when $19<>'aggregate' and actual_amount::text not in ('NaN','Infinity','-Infinity') then actual_amount end as actual_amount,
       case when $19<>'aggregate' and withdraw_fee::text not in ('NaN','Infinity','-Infinity') then withdraw_fee end as withdraw_fee,
-      currency,synced_at,utr,(created_at at time zone $4)::date as local_date,
+      currency,synced_at,utr,
+      (created_at >= $5 and created_at < $6) as created_in_range,
+      (success_at >= $5 and success_at < $6) as success_in_range,
+      (created_at at time zone $4)::date as local_date,
       extract(hour from created_at at time zone $4)::integer as local_hour,
+      (success_at at time zone $4)::date as success_local_date,
+      extract(hour from success_at at time zone $4)::integer as success_local_hour,
       case when amount is null or amount::text in ('NaN','Infinity','-Infinity') then 'unknown'
         when amount in (100,200,300,400,500,750,1000,1500,2000,5000) then trunc(amount)::text else 'other' end as amount_bucket,
       -- Disjoint amount ranges with the labels used by the admin UI. Integer
@@ -256,7 +276,7 @@ begin
     from orders where ($8='all' or status_group=$8) and ($12 is null or provider=any($12))
       and ($13 is null or channel_type=any($13)) and ($14 is null or currency=$14)
       and ($15 is null or amount>=$15) and ($16 is null or amount<=$16)
-  ), metrics as (
+  ), created_metrics as (
     select direction,currency,provider,local_date,local_hour,amount_bucket,amount_range_bucket,
       case when grouping(local_date)=0 then 'daily' when grouping(local_hour,amount_bucket)=0 then 'matrix'
         when grouping(local_hour,amount_range_bucket)=0 then 'matrix_range'
@@ -266,8 +286,7 @@ begin
       count(*) as all_count,case when count(amount)=count(*) then sum(amount) end as all_amount,
       count(*) filter(where amount is null) as missing_amount_count,
       count(*) filter(where amount<0) as negative_amount_count,
-      count(*) filter(where status_group='success') as success_count,
-      case when count(amount) filter(where status_group='success')=count(*) filter(where status_group='success') then coalesce(sum(amount) filter(where status_group='success'),0) end as success_amount,
+      0::bigint as success_count,0::numeric as success_amount,
       count(*) filter(where status_group='pending') as pending_count,
       case when count(amount) filter(where status_group='pending')=count(*) filter(where status_group='pending') then coalesce(sum(amount) filter(where status_group='pending'),0) end as pending_amount,
       count(*) filter(where status_group='failed') as failed_count,
@@ -277,11 +296,55 @@ begin
       count(*) filter(where status_group='unknown') as unknown_count,
       case when count(amount) filter(where status_group='unknown')=count(*) filter(where status_group='unknown') then coalesce(sum(amount) filter(where status_group='unknown'),0) end as unknown_amount,
       max(synced_at) as latest_synced_at
-    from filtered where $19<>'details'
+    from filtered where $19<>'details' and created_in_range and $8<>'success'
     group by grouping sets ((direction,currency),(direction,currency,provider),
       (direction,currency,provider,local_date),(direction,currency,local_hour),
       (direction,currency,amount_bucket),(direction,currency,local_hour,amount_bucket),
       (direction,currency,amount_range_bucket),(direction,currency,local_hour,amount_range_bucket))
+  ), success_metrics as (
+    select direction,currency,provider,success_local_date as local_date,success_local_hour as local_hour,amount_bucket,amount_range_bucket,
+      case when grouping(success_local_date)=0 then 'daily' when grouping(success_local_hour,amount_bucket)=0 then 'matrix'
+        when grouping(success_local_hour,amount_range_bucket)=0 then 'matrix_range'
+        when grouping(success_local_hour)=0 then 'hourly' when grouping(amount_bucket)=0 then 'amount'
+        when grouping(amount_range_bucket)=0 then 'amount_range'
+        when grouping(provider)=0 then 'provider' else 'summary' end as kind,
+      case when $8='success' then count(*) else 0 end as all_count,
+      case when $8='success' then case when count(amount)=count(*) then sum(amount) end else 0 end as all_amount,
+      case when $8='success' then count(*) filter(where amount is null) else 0 end as missing_amount_count,
+      case when $8='success' then count(*) filter(where amount<0) else 0 end as negative_amount_count,
+      count(*) as success_count,
+      case when count(amount)=count(*) then coalesce(sum(amount),0) end as success_amount,
+      0::bigint as pending_count,0::numeric as pending_amount,
+      0::bigint as failed_count,0::numeric as failed_amount,
+      0::bigint as rejected_count,0::numeric as rejected_amount,
+      0::bigint as unknown_count,0::numeric as unknown_amount,
+      max(synced_at) as latest_synced_at
+    from filtered where $19<>'details' and status_group='success' and success_in_range and $8 in ('all','success')
+    group by grouping sets ((direction,currency),(direction,currency,provider),
+      (direction,currency,provider,success_local_date),(direction,currency,success_local_hour),
+      (direction,currency,amount_bucket),(direction,currency,success_local_hour,amount_bucket),
+      (direction,currency,amount_range_bucket),(direction,currency,success_local_hour,amount_range_bucket))
+  ), metrics_raw as (
+    select * from created_metrics union all select * from success_metrics
+  ), metrics as (
+    select direction,currency,provider,local_date,local_hour,amount_bucket,amount_range_bucket,kind,
+      sum(all_count)::bigint as all_count,
+      case when bool_or(all_count>0 and all_amount is null) then null::numeric else coalesce(sum(all_amount),0) end as all_amount,
+      sum(missing_amount_count)::bigint as missing_amount_count,
+      sum(negative_amount_count)::bigint as negative_amount_count,
+      sum(success_count)::bigint as success_count,
+      case when bool_or(success_count>0 and success_amount is null) then null::numeric else coalesce(sum(success_amount),0) end as success_amount,
+      sum(pending_count)::bigint as pending_count,
+      case when bool_or(pending_count>0 and pending_amount is null) then null::numeric else coalesce(sum(pending_amount),0) end as pending_amount,
+      sum(failed_count)::bigint as failed_count,
+      case when bool_or(failed_count>0 and failed_amount is null) then null::numeric else coalesce(sum(failed_amount),0) end as failed_amount,
+      sum(rejected_count)::bigint as rejected_count,
+      case when bool_or(rejected_count>0 and rejected_amount is null) then null::numeric else coalesce(sum(rejected_amount),0) end as rejected_amount,
+      sum(unknown_count)::bigint as unknown_count,
+      case when bool_or(unknown_count>0 and unknown_amount is null) then null::numeric else coalesce(sum(unknown_amount),0) end as unknown_amount,
+      max(latest_synced_at) as latest_synced_at
+    from metrics_raw
+    group by direction,currency,provider,local_date,local_hour,amount_bucket,amount_range_bucket,kind
   ), metric_json as (
     select kind,(to_jsonb(m)-array['kind','local_date','local_hour','amount_bucket','amount_range_bucket','all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount'])
       || jsonb_build_object('date',local_date,'hour',local_hour,'bucket',coalesce(amount_range_bucket,amount_bucket),'all_amount',all_amount::text,
@@ -300,7 +363,8 @@ begin
         case when success_at is null then 'missing_success_at' when not isfinite(success_at) then 'invalid_success_at'
           when success_at<created_at then 'reversed_time' when success_at>$20 then 'future_success_at' end
         else case when created_at>$20 then 'future_created_at' end end as excluded_reason
-    from filtered where $19<>'details' and (status_group='success' or (direction='withdraw' and status_group='pending'))
+    from filtered where $19<>'details' and ((status_group='success' and success_in_range)
+      or (direction='withdraw' and status_group='pending' and created_in_range))
   ), duration_summary as (
     select kind,direction,currency,count(*) as candidate_count,
       count(duration_ms) as valid_count,count(*) filter(where duration_ms is null) as excluded_count,
@@ -355,8 +419,12 @@ begin
   ), page as (
     select id,system_order_id,order_number,third_party_order_number,member_id,provider,channel_type,direction,status,status_group,
       created_at,success_at,amount::text,actual_amount::text,withdraw_fee::text,currency,synced_at,utr,latency_ms,pending_wait_ms
-    from filtered where $19<>'aggregate' order by created_at desc,direction desc,id desc limit $18 offset $17
-  ) select jsonb_build_object('total',(select count(*) from filtered),
+    from filtered where $19<>'aggregate'
+      and ($19='details' or $8<>'success' or (status_group='success' and success_in_range))
+      order by created_at desc,direction desc,id desc limit $18 offset $17
+  ) select jsonb_build_object('total',(select case when $19<>'details' and $8='success'
+      then count(*) filter(where status_group='success' and success_in_range)
+      else count(*) filter(where created_in_range) end from filtered),
     'summary',coalesce((select jsonb_agg(value order by value->>'direction',value->>'currency') from metric_json where kind='summary'),'[]'::jsonb),
     'groups',jsonb_build_object(
       'provider',coalesce((select jsonb_agg(value order by value->>'provider',value->>'direction',value->>'currency') from metric_json where kind='provider'),'[]'::jsonb),
@@ -376,7 +444,7 @@ begin
   $q$;
   execute v_sql into v_result using v_id,v_platform.name,v_platform.scope_group,v_platform.timezone,v_start,v_end,
     v_direction,v_status,v_member,v_order,v_system,v_providers,v_types,v_currency,v_min,v_max,v_offset,v_limit,v_action,v_asof,v_platform.currency,v_platform.source_name,v_third;
-  return v_result||jsonb_build_object('version',1,'platform',v_meta,'basis','created','startAt',v_start,'endAt',v_end,
+  return v_result||jsonb_build_object('version',1,'platform',v_meta,'basis','mixed_created_success','startAt',v_start,'endAt',v_end,
     'asOf',v_asof,'offset',v_offset,'limit',v_limit,'hasMore',(v_result->>'total')::bigint>v_offset::bigint+v_limit,
     'capabilities',v_capabilities);
 end;
