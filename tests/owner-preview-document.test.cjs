@@ -131,6 +131,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     if (name.endsWith('/ownerPreviewDocument')) return { ...api, makeOwnerPreviewDocument(...args) { phases.push('draft-document'); return api.makeOwnerPreviewDocument(...args); } };
     if (name.endsWith('/ownerPreviewShell')) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/ownerPreviewShell.ts'),'utf8')),{module:helper,exports:helper.exports,document:environment.document});return {...helper.exports,makeOwnerPreviewShellDocument(...args){phases.push('shell-document');return helper.exports.makeOwnerPreviewShellDocument(...args)}}; }
     if (name.endsWith('/dashboardAuthClient')) return { ensureDashboardSession: async candidate => candidate };
+    if (name.endsWith('/adminConfigurationRequest')) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/adminConfigurationRequest.ts'),'utf8')),{module:helper,exports:helper.exports});return helper.exports; }
     if (name.endsWith('/adminLiveBridge')) {
       if (!liveClient) { const module={exports:{}};const filename=path.join(repo,'src/lib/adminLiveBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module,exports:module.exports,setTimeout,clearTimeout},{filename});liveClient={...module.exports,makeAdminLiveDocument(...args){phases.push('live-document');return module.exports.makeAdminLiveDocument(...args)}}; }
       return liveClient;
