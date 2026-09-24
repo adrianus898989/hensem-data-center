@@ -113,6 +113,12 @@ test('workorders uses the dedicated read-model RPC and keeps date/field/paging b
  for(const value of [{...request,action:'query'},{...request,platformId:query.platformId},{...request,direction:'both'},{...request,limit:25},{...request,offset:-1},{...request,provider:'x'.repeat(201)},{...request,startAt:'2026-09-22'}])assert.throws(()=>h.api.validateAdminLiveRequest(value));
 });
 
+test('depositIssues uses the Supabase synced UPI核对 read model with bounded filters',async()=>{
+ const h=load(),request={action:'depositIssues',startAt:'2026-09-22T00:00:00Z',endAt:'2026-09-23T00:00:00Z',country:'印度',platform:'91CLUB',provider:'UPI-QR',status:'未入款',query:'RC2026',offset:20,limit:30};
+ assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(request))),request);await h.api.adminLiveRequest(session,request);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_deposit_issues');assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=='action'))});
+ for(const value of [{...request,source:'Google'},{...request,status:'pending'},{...request,limit:25},{...request,query:'x'.repeat(201)},{...request,offset:-1}])assert.throws(()=>h.api.validateAdminLiveRequest(value));
+});
+
 test('providerConfig reads the Supabase canonical mapping read model only',async()=>{
  const h=load(),request={action:'providerConfig',rawProvider:'Arb-BANK',canonicalProvider:'ArbPay',country:'印度',direction:'charge',offset:0,limit:20};
  await h.api.adminLiveRequest(session,request);

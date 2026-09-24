@@ -2,7 +2,7 @@
 import { ensureDashboardSession, type DashboardSession } from "./dashboardAuthClient";
 export const LIVE_REQUEST = "hensem-admin-live-request";
 export const LIVE_RESPONSE = "hensem-admin-live-response";
-const actions = ["catalog","query","aggregate","details","rates","ratesSheet","payoutConfig","workorders","providerConfig","platformAssignments"];
+const actions = ["catalog","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments"];
 const keys = new Set(["action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team"]);
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
@@ -39,6 +39,29 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     if(span<=0||span>32*86400000)throw Error("查询范围最多31个当地日");
     for(const key of ["country","platform","provider"])if(p[key]!==undefined&&(typeof p[key]!=="string"||String(p[key]).length>200||/[\u0000-\u001f]/.test(String(p[key]))))throw Error("工单检索值无效");
     if(p.direction!==undefined&&!['all','charge','withdraw'].includes(String(p.direction)))throw Error("工单方向无效");
+    if(p.limit!==undefined&&(typeof p.limit!=="number"||![20,30,50,100,500].includes(p.limit)))throw Error("分页大小无效");
+    if(p.offset!==undefined&&(!Number.isSafeInteger(p.offset)||Number(p.offset)<0||Number(p.offset)>1000000))throw Error("页码无效");
+    return {...p};
+  }
+  if(p.action==="autoWithdraw"){
+    const allowed=new Set(["action","startAt","endAt","country","platform","account","offset","limit"]);
+    if(Object.keys(p).some(k=>!allowed.has(k)))throw Error("自动出款查询参数无效");
+    for(const key of ["startAt","endAt"])if(typeof p[key]!=="string"||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?Z$/.test(String(p[key]))||!Number.isFinite(Date.parse(String(p[key]))))throw Error("请填写完整日期及秒");
+    const span=Date.parse(String(p.endAt))-Date.parse(String(p.startAt));
+    if(span<=0||span>32*86400000)throw Error("查询范围最多31个当地日");
+    for(const key of ["country","platform","account"])if(p[key]!==undefined&&(typeof p[key]!=="string"||String(p[key]).length>200||/[\u0000-\u001f]/.test(String(p[key]))))throw Error("自动出款检索值无效");
+    if(p.limit!==undefined&&(typeof p.limit!=="number"||![20,30,50,100,500].includes(p.limit)))throw Error("分页大小无效");
+    if(p.offset!==undefined&&(!Number.isSafeInteger(p.offset)||Number(p.offset)<0||Number(p.offset)>1000000))throw Error("页码无效");
+    return {...p};
+  }
+  if(p.action==="depositIssues"){
+    const allowed=new Set(["action","startAt","endAt","country","platform","provider","status","query","offset","limit"]);
+    if(Object.keys(p).some(k=>!allowed.has(k)))throw Error("存款未到账查询参数无效");
+    for(const key of ["startAt","endAt"])if(typeof p[key]!=="string"||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?Z$/.test(String(p[key]))||!Number.isFinite(Date.parse(String(p[key]))))throw Error("请填写完整日期及秒");
+    const span=Date.parse(String(p.endAt))-Date.parse(String(p.startAt));
+    if(span<=0||span>32*86400000)throw Error("查询范围最多31个当地日");
+    for(const key of ["country","platform","provider","status","query"])if(p[key]!==undefined&&(typeof p[key]!=="string"||String(p[key]).length>200||/[\u0000-\u001f]/.test(String(p[key]))))throw Error("存款未到账检索值无效");
+    if(p.status!==undefined&&!['all','未入款','已入款','待核对'].includes(String(p.status)))throw Error("存款未到账状态无效");
     if(p.limit!==undefined&&(typeof p.limit!=="number"||![20,30,50,100,500].includes(p.limit)))throw Error("分页大小无效");
     if(p.offset!==undefined&&(!Number.isSafeInteger(p.offset)||Number(p.offset)<0||Number(p.offset)>1000000))throw Error("页码无效");
     return {...p};
@@ -85,7 +108,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if(current.user.id!==session.user.id)throw Error("当前登录账号已改变");
  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,""),url=new URL(base);
  if(url.protocol!=="https:"||url.origin!==base)throw Error("后台地址配置无效");
- const specialRpc:Record<string,string>={rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments"};
+ const specialRpc:Record<string,string>={rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments"};
  const rpc=specialRpc[String(request.action)]||"dashboard_admin_live_query";
  const response=await fetch(base+"/rest/v1/rpc/"+rpc,{method:"POST",body:JSON.stringify({p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
  if(!response.ok){let code="";try{const body=await response.json();code=String(body.message||"")}catch{}

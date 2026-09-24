@@ -241,14 +241,15 @@ begin
       extract(hour from created_at at time zone $4)::integer as local_hour,
       case when amount is null or amount::text in ('NaN','Infinity','-Infinity') then 'unknown'
         when amount in (100,200,300,400,500,750,1000,1500,2000,5000) then trunc(amount)::text else 'other' end as amount_bucket,
-      -- Disjoint left-inclusive/right-exclusive ranges. Every order remains
-      -- in exactly one range; signed/low amounts and missing values stay visible.
+      -- Disjoint amount ranges with the labels used by the admin UI. Integer
+      -- boundaries are explicit: 100–200, 201–300, and so on. Every order
+      -- remains in exactly one range; low/missing values stay visible.
       case when amount is null or amount::text in ('NaN','Infinity','-Infinity') then 'unknown'
-        when amount<100 then 'other' when amount<200 then '100–200'
-        when amount<300 then '200–300' when amount<400 then '300–400'
-        when amount<500 then '400–500' when amount<1000 then '500–1,000'
-        when amount<2000 then '1,000–2,000' when amount<5000 then '2,000–5,000'
-        else '≥5,000' end as amount_range_bucket,
+        when amount<100 then 'other' when amount<=200 then '100–200'
+        when amount<=300 then '201–300' when amount<=400 then '301–400'
+        when amount<=500 then '401–500' when amount<=750 then '501–750'
+        when amount<=1000 then '751–1,000' when amount<=2000 then '1,001–2,000'
+        when amount<=5000 then '2,001–5,000' else '≥5,001' end as amount_range_bucket,
       case when status_group='success' and isfinite(success_at) and success_at>=created_at and success_at<=$20
         then extract(epoch from success_at-created_at)*1000 end as latency_ms,
       case when direction='withdraw' and status_group='pending' and created_at<=$20 then extract(epoch from $20-created_at)*1000 end as pending_wait_ms
