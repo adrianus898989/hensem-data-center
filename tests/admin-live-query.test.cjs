@@ -122,7 +122,7 @@ test('complete summary, every grouping and same page conserve all six status gro
   assert.equal(count(r.summary,'success_count'),3);assert.equal(amount(r.summary,'success_amount'),800);
   assert.equal(count(r.summary,'pending_count'),1);assert.equal(count(r.summary,'failed_count'),1);
   assert.equal(count(r.summary,'rejected_count'),1);assert.equal(count(r.summary,'unknown_count'),1);
-  for(const name of ['provider','daily','hourly','amount','matrix']){
+  for(const name of ['provider','daily','hourly','amount','matrix','amount_range','matrix_range']){
     assert.equal(count(r.groups[name]),7,name);assert.equal(amount(r.groups[name]),3250,name);
   }
   assert(r.groups.daily.every(x=>x.provider&&x.date==='2026-09-19'));
@@ -155,6 +155,53 @@ test('unknown money remains null, zero and signed adjustment preserved; currenci
   const only=await call(req({platformId:newar,startAt:'2026-09-19T00:00:00+05:45',endAt:'2026-09-20T00:00:00+05:45',currency:'NPR'}));
   assert.equal(only.total,1);assert.equal(only.summary[0].all_amount,'1500');
 });
+
+test('amount ranges are disjoint at every boundary and conserve each direction/currency/hour/status without changing exact buckets',async()=>rollback(async()=>{
+  const cases=[
+    [null,'unknown'],['NaN','unknown'],['Infinity','unknown'],['-Infinity','unknown'],
+    ['-19.57','other'],['0','other'],['99.999','other'],
+    ['100','100–200'],['199.999','100–200'],['200','200–300'],['299.999','200–300'],
+    ['300','300–400'],['399.999','300–400'],['400','400–500'],['499.999','400–500'],
+    ['500','500–1,000'],['999.999','500–1,000'],['1000','1,000–2,000'],['1999.999','1,000–2,000'],
+    ['2000','2,000–5,000'],['4999.999','2,000–5,000'],['5000','≥5,000'],['5000.001','≥5,000'],['10000','≥5,000']
+  ];
+  const statusNames=['success','pending','failed','rejected','unknown'],expected=[];
+  const exactAmounts=new Set([100,200,300,400,500,750,1000,1500,2000,5000]);
+  for(const direction of ['charge','withdraw'])for(const currency of ['NPR','USD'])for(let i=0;i<cases.length;i++){
+    const [raw,bucket]=cases[i],hour=Math.floor(i/2),status=statusNames[i%statusNames.length],id=`RANGE-${direction}-${currency}-${i}`;
+    const created=`2026-09-19T${String(hour).padStart(2,'0')}:00:00+05:45`;
+    await db.query(`insert into newar_detail_records(platform,dataset,source_id,member_id,order_number,provider,channel_type,currency,amount,status_code,status_group,created_at,success_at)
+      values('NEW-EXAMPLE',$1,$2,'RANGES',$2,'Range Provider','BANK',$3,$4,$5,$5,$6::timestamptz,
+        case when $5='success' then $6::timestamptz+interval '5 minutes' end)`,[direction,id,currency,raw,status,created]);
+    const value=raw===null||!Number.isFinite(Number(raw))?null:Number(raw);
+    expected.push({direction,currency,hour,bucket,status,amount:value,exact:value===null?'unknown':exactAmounts.has(value)?String(value):'other'});
+  }
+  const request=req({platformId:newar,startAt:'2026-09-19T00:00:00+05:45',endAt:'2026-09-20T00:00:00+05:45',memberId:'RANGES',limit:500});
+  const r=await call(request);assert.equal(r.total,expected.length);assert.equal(r.rows.length,expected.length);
+  function checkGroups(rows,matrix,exact=false,source=expected){
+    const keys=new Map();for(const row of source){const key=[row.direction,row.currency,exact?row.exact:row.bucket,...(matrix?[row.hour]:[])].join('|');if(!keys.has(key))keys.set(key,[]);keys.get(key).push(row)}
+    assert.equal(rows.length,keys.size,'only occupied buckets are returned without losing or duplicating records');
+    for(const row of rows){const key=[row.direction,row.currency,row.bucket,...(matrix?[row.hour]:[])].join('|'),items=keys.get(key);assert(items,`unexpected group ${key}`);
+      for(const status of ['all',...statusNames]){const set=status==='all'?items:items.filter(x=>x.status===status);assert.equal(row[status+'_count'],set.length,`${key} ${status} denominator`);
+        if(set.some(x=>x.amount===null))assert.equal(row[status+'_amount'],null,`${key} missing amount is unknown`);
+        else assert(Math.abs(Number(row[status+'_amount'])-set.reduce((sum,x)=>sum+x.amount,0))<1e-8,`${key} ${status} amount`);
+      }
+      assert.equal(row.missing_amount_count,items.filter(x=>x.amount===null).length);
+      assert(!Object.hasOwn(row,'amount_range_bucket'),'internal classification column must not leak into the public metric shape');
+    }
+    assert.equal(count(rows),source.length);assert.equal(count(rows,'success_count'),source.filter(x=>x.status==='success').length);
+  }
+  checkGroups(r.groups.amount_range,false);checkGroups(r.groups.matrix_range,true);
+  checkGroups(r.groups.amount,false,true);checkGroups(r.groups.matrix,true,true);
+  assert(!r.groups.amount_range.some(x=>/^0[–-]100$/.test(x.bucket)),'sub-100 values stay in other');
+  for(const direction of ['charge','withdraw'])for(const currency of ['NPR','USD']){
+    assert.equal(count(r.groups.amount_range.filter(x=>x.direction===direction&&x.currency===currency)),cases.length);
+    assert.equal(r.summary.find(x=>x.direction===direction&&x.currency===currency).all_amount,null);
+  }
+  const narrow=await call({...request,direction:'withdraw',currency:'USD',status:'success',providers:['Range Provider'],amountMin:'200',amountMax:'2000'});
+  const scoped=expected.filter(x=>x.direction==='withdraw'&&x.currency==='USD'&&x.status==='success'&&x.amount!==null&&x.amount>=200&&x.amount<=2000);
+  assert.equal(narrow.total,scoped.length);checkGroups(narrow.groups.amount_range,false,false,scoped);checkGroups(narrow.groups.matrix_range,true,false,scoped);
+}));
 
 test('query and aggregate identical full result; details counts full set but skips heavy groups',async()=>{
   const q=await call(req()),a=await call(req({action:'aggregate'})),d=await call(req({action:'details'}));
@@ -274,6 +321,23 @@ test('performance patch exactly replaces only the new private query and preserve
   delete before.asOf;delete after.asOf;assert.deepEqual(after,before);
 }));
 
+test('additive range patch changes only the new private query and preserves ACL and authenticated results',async()=>rollback(async()=>{
+  const patch=fs.readFileSync(path.join(repo,'supabase/admin-live-matrix-range.sql'),'utf8');
+  const fn=sql.slice(sql.indexOf('create function private.dashboard_admin_live_query('),sql.indexOf('revoke all on function private.dashboard_admin_live_query'));
+  assert(patch.includes(fn.replace('create function private.dashboard_admin_live_query(','create or replace function private.dashboard_admin_live_query(')));
+  assert.equal((patch.match(/create or replace function/g)||[]).length,1);
+  assert.doesNotMatch(patch.replace(/^\s*--.*$/gm,''),/statement_timeout|alter table|insert into|delete from|create index|\bgrant\s|\brevoke\s/i);
+  assert.match(patch,/duration_bucket_totals as materialized/,'optimized duration classification remains');
+  assert.match(patch,/case when v_action='details' then 'not materialized' else 'materialized' end/i,'details projection optimization remains');
+  const acl=()=>db.query("select n.nspname,p.proname,p.proacl,p.prosecdef,p.proconfig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where p.proname like 'dashboard_admin_live_%' order by n.nspname,p.proname");
+  const beforeAcl=(await acl()).rows,before=await call(req());
+  await db.exec(patch.replace(/^begin;$/m,'').replace(/^commit;$/m,''));
+  assert.deepEqual((await acl()).rows,beforeAcl);
+  await db.exec('set role authenticated');let after;
+  try{after=await call(req())}finally{await db.exec('reset role')}
+  delete before.asOf;delete after.asOf;assert.deepEqual(after,before);
+}));
+
 test('bounded synthetic day conserves every full aggregate while details stay one page',async t=>rollback(async()=>{
   const size=Number(process.env.ADMIN_LIVE_LOAD_SIZE||10000);assert(Number.isInteger(size)&&size>=10000&&size<=250000);
   await db.exec(`insert into game66_charge_orders(platform_id,order_num,uid,create_time,pay_time,status_code,status_group,amount_display,pay_method_name)
@@ -285,7 +349,7 @@ test('bounded synthetic day conserves every full aggregate while details stay on
   const d=await call(req({action:'details',memberId:'LOAD',limit:20,offset:5000}));
   const detailsMs=Math.round(performance.now()-pageStart);
   assert.equal(a.total,size);assert.equal(count(a.summary),size);assert.equal(amount(a.summary),size*100);
-  for(const group of ['provider','daily','hourly','amount','matrix'])assert.equal(count(a.groups[group]),size);
+  for(const group of ['provider','daily','hourly','amount','matrix','amount_range','matrix_range'])assert.equal(count(a.groups[group]),size);
   assert.equal(count(a.groups.latency,'count'),size);assert.equal(a.rows.length,0);
   assert.equal(d.total,size);assert.equal(d.rows.length,20);assert.equal(d.summary.length,0);
   t.diagnostic(`Offline PGlite synthetic ${size}-order day: aggregate ${aggregateMs}ms, count+page ${detailsMs}ms. Not a production latency claim.`);

@@ -176,6 +176,14 @@ begin
       extract(hour from created_at at time zone $4)::integer as local_hour,
       case when amount is null or amount::text in ('NaN','Infinity','-Infinity') then 'unknown'
         when amount in (100,200,300,400,500,750,1000,1500,2000,5000) then trunc(amount)::text else 'other' end as amount_bucket,
+      -- Disjoint left-inclusive/right-exclusive ranges. Every order remains
+      -- in exactly one range; signed/low amounts and missing values stay visible.
+      case when amount is null or amount::text in ('NaN','Infinity','-Infinity') then 'unknown'
+        when amount<100 then 'other' when amount<200 then '100–200'
+        when amount<300 then '200–300' when amount<400 then '300–400'
+        when amount<500 then '400–500' when amount<1000 then '500–1,000'
+        when amount<2000 then '1,000–2,000' when amount<5000 then '2,000–5,000'
+        else '≥5,000' end as amount_range_bucket,
       case when status_group='success' and isfinite(success_at) and success_at>=created_at and success_at<=$20
         then extract(epoch from success_at-created_at)*1000 end as latency_ms,
       case when direction='withdraw' and status_group='pending' and created_at<=$20 then extract(epoch from $20-created_at)*1000 end as pending_wait_ms
@@ -183,9 +191,11 @@ begin
       and ($13 is null or channel_type=any($13)) and ($14 is null or currency=$14)
       and ($15 is null or amount>=$15) and ($16 is null or amount<=$16)
   ), metrics as (
-    select direction,currency,provider,local_date,local_hour,amount_bucket,
+    select direction,currency,provider,local_date,local_hour,amount_bucket,amount_range_bucket,
       case when grouping(local_date)=0 then 'daily' when grouping(local_hour,amount_bucket)=0 then 'matrix'
+        when grouping(local_hour,amount_range_bucket)=0 then 'matrix_range'
         when grouping(local_hour)=0 then 'hourly' when grouping(amount_bucket)=0 then 'amount'
+        when grouping(amount_range_bucket)=0 then 'amount_range'
         when grouping(provider)=0 then 'provider' else 'summary' end as kind,
       count(*) as all_count,case when count(amount)=count(*) then sum(amount) end as all_amount,
       count(*) filter(where amount is null) as missing_amount_count,
@@ -204,10 +214,11 @@ begin
     from filtered where $19<>'details'
     group by grouping sets ((direction,currency),(direction,currency,provider),
       (direction,currency,provider,local_date),(direction,currency,local_hour),
-      (direction,currency,amount_bucket),(direction,currency,local_hour,amount_bucket))
+      (direction,currency,amount_bucket),(direction,currency,local_hour,amount_bucket),
+      (direction,currency,amount_range_bucket),(direction,currency,local_hour,amount_range_bucket))
   ), metric_json as (
-    select kind,(to_jsonb(m)-array['kind','local_date','local_hour','amount_bucket','all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount'])
-      || jsonb_build_object('date',local_date,'hour',local_hour,'bucket',amount_bucket,'all_amount',all_amount::text,
+    select kind,(to_jsonb(m)-array['kind','local_date','local_hour','amount_bucket','amount_range_bucket','all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount'])
+      || jsonb_build_object('date',local_date,'hour',local_hour,'bucket',coalesce(amount_range_bucket,amount_bucket),'all_amount',all_amount::text,
         'success_amount',success_amount::text,'pending_amount',pending_amount::text,'failed_amount',failed_amount::text,
         'rejected_amount',rejected_amount::text,'unknown_amount',unknown_amount::text) as value
     from metrics m
@@ -287,6 +298,8 @@ begin
       'hourly',coalesce((select jsonb_agg(value order by (value->>'hour')::integer,value->>'direction',value->>'currency') from metric_json where kind='hourly'),'[]'::jsonb),
       'amount',coalesce((select jsonb_agg(value order by value->>'bucket',value->>'direction',value->>'currency') from metric_json where kind='amount'),'[]'::jsonb),
       'matrix',coalesce((select jsonb_agg(value order by (value->>'hour')::integer,value->>'bucket',value->>'direction',value->>'currency') from metric_json where kind='matrix'),'[]'::jsonb),
+      'amount_range',coalesce((select jsonb_agg(value order by value->>'bucket',value->>'direction',value->>'currency') from metric_json where kind='amount_range'),'[]'::jsonb),
+      'matrix_range',coalesce((select jsonb_agg(value order by (value->>'hour')::integer,value->>'bucket',value->>'direction',value->>'currency') from metric_json where kind='matrix_range'),'[]'::jsonb),
       'latency',coalesce((select jsonb_agg(value order by value->>'direction',value->>'currency',bucket) from duration_json where kind='latency' and not cumulative),'[]'::jsonb),
       'latency_thresholds',coalesce((select jsonb_agg(value order by value->>'direction',value->>'currency',bucket) from duration_json where kind='latency' and cumulative),'[]'::jsonb),
       'pending_age',coalesce((select jsonb_agg(value order by value->>'direction',value->>'currency',bucket) from duration_json where kind='pending_age' and not cumulative),'[]'::jsonb),

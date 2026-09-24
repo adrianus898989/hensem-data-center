@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type DashboardProfile, type DashboardSession } from "@/lib/dashboardAuthClient";
 import { makeOwnerPreviewDocument, OWNER_PREVIEW_DRAFT_KEYS, ownerPreviewDraftAllowed } from "@/lib/ownerPreviewDocument";
 
+import { restoreApprovedAdmin } from "@/lib/adminPreviewRestore";
 import { adminPreviewRequest } from "@/lib/adminPreviewClient";
 import AdminPreviewGrants from "./AdminPreviewGrants";
 import { installAdminLiveBridge, makeAdminLiveDocument } from "@/lib/adminLiveBridge";
@@ -25,7 +26,7 @@ export default function OwnerAdminPreview({session,profile,onClose,canView}: Pro
     channel.current=crypto.randomUUID();
     const request=async(check=false)=>{
       const response=await adminPreviewRequest(sessionRef.current,check?"?check=1":"",{signal:controller.signal});
-      if(!check){const html=await response.text();if(!cancelled)setDocumentHtml(makeOwnerPreviewDocument(makeOwnerPreviewShellDocument(makeAdminLiveDocument(html,channel.current),channel.current,owner),readDrafts(),channel.current));}
+      if(!check){const html=await response.text();if(!cancelled)setDocumentHtml(makeOwnerPreviewDocument(makeOwnerPreviewShellDocument(makeAdminLiveDocument(restoreApprovedAdmin(html),channel.current),channel.current,owner),readDrafts(),channel.current));}
     };
     const fail=(e:unknown)=>{if(cancelled)return;cancelled=true;controller.abort();setDocumentHtml("");setError(e instanceof Error?e.message:"后台预览加载失败")};
     request().catch(fail);

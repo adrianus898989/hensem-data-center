@@ -1,0 +1,43 @@
+/* Preserve the approved page density and component vocabulary. */
+body.live-admin .content{padding:17px 22px 22px}
+body.live-admin .eyebrow{display:block;font-size:9px;margin-bottom:5px}
+body.live-admin .page-title{margin-bottom:14px}
+body.live-admin .page-title h1{font-size:23px}
+body.live-admin .panel-head{min-height:48px;padding:13px 15px}
+body.live-admin .panel-head h2{font-size:13px}
+body.live-admin .live-filters{gap:7px 8px;padding:8px 10px;margin:0 0 10px}
+body.live-admin .live-field{flex:0 0 120px;min-width:0}
+body.live-admin .live-field.wide{flex-basis:140px}
+body.live-admin .live-field:has(#live-provider){flex-basis:130px}
+body.live-admin .live-field:has(#live-direction){flex-basis:94px}
+body.live-admin .live-field input,body.live-admin .live-field select{height:29px;font-size:11px;font-family:inherit}
+body.live-admin .live-date-range{display:flex;flex-direction:column;gap:4px;flex:0 0 506px;min-width:0}
+body.live-admin .live-date-range>label{font-size:10px;color:#7789a7}
+.live-date-controls{display:grid;grid-template-columns:128px 108px 14px 128px 108px;gap:5px;align-items:center}
+.live-date-controls input{min-width:0;width:100%;height:29px;border:1px solid #dbe3ef;border-radius:5px;background:white;padding:4px 7px;font:11px inherit;color:#30486b;box-sizing:border-box}
+.live-date-controls>span{font-size:11px;color:#7b8aa0}
+.live-admin .live-actions .btn{padding:4px 7px;height:29px}
+.live-admin .live-search-row .live-field{flex-basis:158px}
+.live-admin .live-table:not(.live-matrix) th,.live-admin .live-table:not(.live-matrix) td{padding:10px 11px}
+.live-admin .df-flow-metric>.metric-link{display:block;color:#3056b0;font-size:19px;margin-top:7px}
+.live-admin .df-flow-metric>.live-compare{display:block;font-size:10px;margin-top:6px;color:#7c8ca5}
+.live-admin .df-flow-foot>div>strong{display:block;font-weight:500;margin-top:5px}
+.live-admin .df-flow-rate .live-compare{display:block;font-size:10px}
+.live-admin .pending-metric>strong{font-size:21px;color:#243c62;display:block}
+.live-admin .df-exception-metrics .metric-link{display:block;margin-top:7px}
+.live-admin .df-risk-item>b,.live-admin .df-risk-item>small{display:block}
+.live-admin .df-jumps a{scroll-margin-top:60px}
+.live-admin [id^=df-]{scroll-margin-top:65px}
+.live-reference-bar{display:grid;grid-template-columns:125px minmax(80px,1fr) 100px;gap:12px;align-items:center;margin:11px 0;font-size:11px}
+.live-reference-bar>div{height:7px;background:#f1f4fb;border-radius:3px;overflow:hidden}
+.live-reference-bar i{display:block;height:100%;background:#7191eb}
+.live-reference-bar b{text-align:right;font-weight:500}
+.live-daily-matrix table{min-width:1580px!important;table-layout:fixed!important}
+.live-daily-matrix th:first-child,.live-daily-matrix td:first-child{width:130px;position:sticky;left:0;background:#fff;z-index:2}
+.live-daily-matrix th:nth-child(2){width:45px}.live-daily-matrix td,.live-daily-matrix th{font-size:10px!important;padding:8px 3px!important;text-align:center!important;border:1px solid #e5eaf3}
+.live-admin .live-tabs{margin:0}.live-admin .panel-head>.live-tabs button{border:0;background:#f2f5fa}.live-admin .panel-head>.live-tabs button.on{background:#fff;box-shadow:0 1px 4px #24365414}
+.live-admin .live-reference-metrics .kpi-icon{display:none}.live-admin .live-reference-metrics .kpi-value{color:#3056b0;letter-spacing:0;margin-top:0;font-size:18px}
+@media(max-width:1100px){body.live-admin .live-date-range{flex-basis:506px}.live-reference-bar{grid-template-columns:100px minmax(50px,1fr) 85px}}
+@media(max-width:800px){body.live-admin .content{padding:14px 10px}body.live-admin .live-date-range{flex:1 1 100%;max-width:100%}.live-date-controls{grid-template-columns:128px 108px}.live-date-controls>span{display:none}.live-admin .live-field{flex:1 1 120px}}
+
+.live-admin .df-state-tail{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;padding:7px 12px;border-top:1px solid #edf1f7;font-size:9px;color:#8192aa}.live-admin .df-state-tail b{color:#506582;font-weight:500;margin-left:4px}
