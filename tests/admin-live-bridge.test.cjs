@@ -104,6 +104,31 @@ test('ratesSheet accepts only metadata or bounded integer sheet IDs',()=>{
  for(const request of [{action:'ratesSheet',sheetId:null},{action:'ratesSheet',sheetId:'0'},{action:'ratesSheet',sheetId:-1},{action:'ratesSheet',sheetId:1.5},{action:'ratesSheet',sheetId:2147483648},{action:'ratesSheet',sheetId:NaN},{action:'ratesSheet',sheetId:[0]},{action:'ratesSheet',sheetId:{}},{action:'ratesSheet',platform:'not-allowed'},{action:'ratesSheet',country:'IN'},{action:'ratesSheet',limit:20},{action:'ratesSheet',operation:'index'},{action:'ratesSheet',rpc:'arbitrary'},{action:'ratesSheet',url:'https://other.invalid'}])assert.throws(()=>api.validateAdminLiveRequest(request));
 });
 
+test('workorders uses the dedicated read-model RPC and keeps date/field/paging boundaries',async()=>{
+ const h=load(),request={action:'workorders',startAt:'2026-09-22T00:00:00Z',endAt:'2026-09-23T00:00:00Z',country:'IN',platform:'91CLUB',provider:'Super-QR',direction:'withdraw',offset:20,limit:30};
+ assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(request))),request);
+ await h.api.adminLiveRequest(session,request);
+ assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_workorders');
+ assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:{startAt:request.startAt,endAt:request.endAt,country:'IN',platform:'91CLUB',provider:'Super-QR',direction:'withdraw',offset:20,limit:30}});
+ for(const value of [{...request,action:'query'},{...request,platformId:query.platformId},{...request,direction:'both'},{...request,limit:25},{...request,offset:-1},{...request,provider:'x'.repeat(201)},{...request,startAt:'2026-09-22'}])assert.throws(()=>h.api.validateAdminLiveRequest(value));
+});
+
+test('providerConfig reads the Supabase canonical mapping read model only',async()=>{
+ const h=load(),request={action:'providerConfig',rawProvider:'Arb-BANK',canonicalProvider:'ArbPay',country:'印度',direction:'charge',offset:0,limit:20};
+ await h.api.adminLiveRequest(session,request);
+ assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_provider_config');
+ assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:{rawProvider:'Arb-BANK',canonicalProvider:'ArbPay',country:'印度',direction:'charge',offset:0,limit:20}});
+ for(const value of [{...request,source:'Google'},{...request,direction:'both'},{...request,limit:10},{...request,canonicalProvider:'x'.repeat(201)}])assert.throws(()=>h.api.validateAdminLiveRequest(value));
+});
+
+test('platformAssignments reads the Supabase team/platform mapping read model only',async()=>{
+ const h=load(),request={action:'platformAssignments',team:'M8',country:'印度',system:'AR系统',platform:'91CLUB',status:'unmapped',offset:20,limit:50};
+ await h.api.adminLiveRequest(session,request);
+ assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_platform_assignments');
+ assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:{team:'M8',country:'印度',system:'AR系统',platform:'91CLUB',status:'unmapped',offset:20,limit:50}});
+ for(const value of [{...request,source:'Google'},{...request,status:'unknown'},{...request,limit:10},{...request,team:'x'.repeat(201)},{...request,offset:-1}])assert.throws(()=>h.api.validateAdminLiveRequest(value));
+});
+
 test('ratesSheet fixed RPC strips only action, retains sheetId and never sends session fields in its JSON',async()=>{
  const h=load();await h.api.adminLiveRequest(session,{action:'ratesSheet'});await h.api.adminLiveRequest(session,{action:'ratesSheet',sheetId:277747449});
  assert.equal(h.calls.length,2);assert(h.calls.every(call=>call.url==='https://offline.invalid/rest/v1/rpc/dashboard_admin_live_rate_sheet'));

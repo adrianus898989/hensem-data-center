@@ -42,7 +42,7 @@ Optional filters all combine with AND:
 | memberId | exact member ID |
 | systemOrderId | exact NEW_AR `source_id`; unsupported for other sources |
 | utr | currently unsupported for all safe normalized sources |
-| providers | array of exact raw provider names |
+| providers | array of provider names; the private wrapper accepts the canonical name shown by the UI, expands it to all matching raw aliases from `third_party_volume`, then returns the groups under that canonical name |
 | channelTypes | array of exact raw channel type names |
 | currency | exact currency; omitted means preserve all currencies as separate aggregates |
 | amountMin / amountMax | inclusive original order amount; decimal strings accepted; negative signed adjustments preserved |
@@ -57,7 +57,7 @@ Unknown fields or nonempty unsupported filters fail with `22023`; they are never
 
 `id` is the stable production source platform UUID. `scopeGroup` is the production authorization grouping. `country` remains the source label; for GAME66 its legacy value can be 香港/红膏蟹 team group, not geographic country. `team` is null for AR/NEW_AR because those source registries do not prove a team assignment. GAME66 retains its real team directory value. Display/entity mapping must never expand production data scope.
 
-`sourceName` preserves physical source platform spelling. The only additional confirmed alias is configured India `SHREEWIN` → source `Shree.Win`, used only when the exact configured spelling has no orders. Exact spelling takes precedence and both are never added together. Other unconfirmed spellings are not guessed. AR/NEW_AR source precedence follows the existing authoritative-source rule.
+`sourceName` preserves physical source platform spelling. The team/platform mapping read model keeps the user-facing label separate from the live `source_platform` join key, so confirmed spellings such as `DHANIWIN`, `SHREE.WIN`, `VEER.GAME`, `LOTTERY7` and `PLAYER BR` are matched without changing the label shown in the UI. Other unconfirmed spellings are not guessed. AR/NEW_AR source precedence follows the existing authoritative-source rule.
 
 ## Query response
 
