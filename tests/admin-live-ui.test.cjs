@@ -126,6 +126,25 @@ test('reference totals retain exactly six compact cards per direction with indep
  assert.match(groups[0][2],/1,000\.00/);assert.match(groups[1][2],/2,000\.00/);assert.doesNotMatch(h.html(),/3,000\.00|60\.00%/);h.L.direction='charge';h.c.render();assert.equal([...h.html().matchAll(/data-metric=/g)].length,6);assert.doesNotMatch(h.html(),/data-direction="withdraw"/);
 });
 
+test('paired business tables expose direction totals and identify unknown provider context',async()=>{
+ const h=await ready(),r=completeAggregate(P,10,3),withdraw={...completeAggregate(P,20,15).summary[0],direction:'withdraw'};
+ r.summary.push(withdraw);
+ r.groups.provider=[{...r.summary[0],provider:'未识别通道'},{...withdraw,provider:'未识别通道'}];
+ h.L.results=[r];h.L.direction='all';h.c.state.page='overview';h.c.render();
+ assert.match(h.html(),/需要你确认的未识别三方/);assert.match(h.html(),/原始通道字段为空/);assert.match(h.html(),/平台 \/ 国家：Synthetic platform · 印度/);
+ const providers=renderedTables(h.html()).filter(t=>t.headers[0]==='三方'&&t.headers.includes('包网来源'));assert.equal(providers.length,2);assert.match(providers.map(t=>t.html).join(''),/代收汇总/);assert.match(providers.map(t=>t.html).join(''),/代付汇总/);
+ const platforms=renderedTables(h.html()).filter(t=>t.headers[0]==='平台'&&t.headers.includes('包网来源'));assert.equal(platforms.length,2);assert.match(platforms.map(t=>t.html).join(''),/代收汇总/);assert.match(platforms.map(t=>t.html).join(''),/代付汇总/);
+});
+
+test('overview duration sections split collection and payout and retain explicit totals',async()=>{
+ const h=await ready(),r=completeAggregate(P,10,3),withdraw={...completeAggregate(P,20,15).summary[0],direction:'withdraw'};
+ r.summary.push(withdraw);
+ r.groups.latency=['charge','withdraw'].flatMap(direction=>Array.from({length:10},(_,bucket)=>({direction,currency:'INR',bucket,count:bucket===0?2:0,amount:bucket===0?'200':'0',valid_count:3,valid_amount:'300'})));
+ r.groups.pending_age=[{direction:'withdraw',currency:'INR',bucket:0,count:2,amount:'200',valid_count:2,valid_amount:'200'}];
+ h.L.results=[r];h.L.direction='all';h.c.state.page='overview';h.c.render();
+ assert.match(h.html(),/class="grid equal live-duration-paired"/);assert.match(h.html(),/充值 \/ 代收成功耗时/);assert.match(h.html(),/提款 \/ 代付成功耗时/);assert.match(h.html(),/成功订单合计/);assert.match(h.html(),/所选创建范围 · 仍待付订单等待时长/);assert.match(h.html(),/本期仍代付中合计/);
+});
+
 test('hour by amount matrix preserves one amount band per row, 24 hours and three independent cell values',async()=>{
  const h=await ready(),r=completeAggregate(P,10,3);h.L.results=[r];h.L.direction='charge';h.L.matrixMode='exact';h.c.state.page='matrix';h.c.render();
  const matrices=renderedTables(h.html()).filter(t=>t.headers[0]==='金额 / 时');assert.equal(matrices.length,1);const matrix=matrices[0];assert.equal(matrix.headers.length,25);assert.deepEqual(matrix.headers.slice(1),Array.from({length:24},(_,hour)=>String(hour).padStart(2,'0')+'时'));assert.equal(matrix.rows.length,10);assert.equal(new Set(matrix.rows.map(row=>plain(row[0]))).size,10);
