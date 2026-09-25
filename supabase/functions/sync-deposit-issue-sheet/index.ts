@@ -1,14 +1,16 @@
-// Synchronize only the safe deposit-not-received columns from the UPI核对 tab.
+// Mirror the safe columns from the reconciliation result and platform follow-up sheets.
 // The private admin page reads Supabase; it never calls Google directly.
 const DEFAULT_SOURCE_ID = "1Y110H-E0ny6Yj6ZEhn7tRLgCuRrSE5iDeFwaZ8-aCqg";
 const SHEET_TAB = "UPI核对";
+const DEFAULT_ENTRY_SOURCE_ID = "1UBnMj2JS4eDfT-gdE-flUVLWs387FgoR6Rw2baLYzoE";
+const ENTRY_TABS = new Set(["SHREEWIN", "VEERGAME", "DHANIWIN", "91CLUB", "BIGMUMBAI", "TPPLAY", "INDIA82", "6CLUB", "OKWIN", "JALWA", "JAICLUB", "RAJALOTTERY", "51GAME", "55CLUB", "IN999", "LOTTERY77"]);
 const MAX_ROWS = 40000;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 120_000;
 const encoder = new TextEncoder();
 
 type Runtime = { env: (name: string) => string | undefined; fetch: typeof fetch; now: () => number; crypto: Crypto };
-type Settings = { sourceId: string; email: string; privateKey: string; supabaseUrl: string; serviceKey: string };
+type Settings = { sourceId: string; entrySourceId: string; email: string; privateKey: string; supabaseUrl: string; serviceKey: string };
 class SyncError extends Error { constructor(readonly code: string, readonly status = 503) { super(code); } }
 
 function json(body: Record<string, unknown>, status = 200): Response {
@@ -45,7 +47,7 @@ function config(runtime: Runtime): Settings {
     const url = new URL(supabaseUrl);
     if (url.protocol !== "https:" || url.origin !== supabaseUrl || url.username || url.password || url.port || !url.hostname.endsWith(".supabase.co")) throw new Error();
   } catch { throw new SyncError("sync_configuration_incomplete", 500); }
-  return { sourceId: sourceId(source), email, privateKey, supabaseUrl, serviceKey };
+  return { sourceId: sourceId(source), entrySourceId: sourceId(runtime.env("DEPOSIT_FOLLOWUP_SHEET_ID") || DEFAULT_ENTRY_SOURCE_ID), email, privateKey, supabaseUrl, serviceKey };
 }
 async function assertion(settings: Settings, runtime: Runtime): Promise<string> {
   const header = base64Url(encoder.encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
@@ -102,7 +104,7 @@ function dateValue(value: unknown): string | null {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === candidate ? candidate : null;
 }
 function textValue(value: unknown, max = 200): string | null {
-  const text = String(value ?? "").replace(/[\u0000-\u001f]/g, "").trim(); return text ? text.slice(0, max) : null;
+  const text = String(value ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").replace(/\r\n?/g, "\n").trim(); return text ? text.slice(0, max) : null;
 }
 function rowValue(row: unknown[], headers: Map<string, number>, name: string): unknown { const index = headers.get(name); return index === undefined ? null : row[index]; }
 function rowsFromValues(values: unknown[][], sourceSheet: string, collectedAt: string): Record<string, unknown>[] {
@@ -119,7 +121,7 @@ function rowsFromValues(values: unknown[][], sourceSheet: string, collectedAt: s
     rows.push({
       id: `${sourceSheet}:${SHEET_TAB}:${sourceRow}`,
       source_sheet: sourceSheet, source_tab: SHEET_TAB, source_row: sourceRow,
-      platform, order_number: orderNumber, utr: textValue(rowValue(row, headers, "UTR")),
+      platform, country: "印度", order_number: orderNumber, utr: textValue(rowValue(row, headers, "UTR")),
       amount: numberValue(rowValue(row, headers, "金额")), provider: textValue(rowValue(row, headers, "三方")),
       provider_reply: textValue(rowValue(row, headers, "三方回复"), 4000),
       utr_match: textValue(rowValue(row, headers, "UTR是否匹配")), kyc_correct: textValue(rowValue(row, headers, "KYC正确")),
@@ -129,6 +131,52 @@ function rowsFromValues(values: unknown[][], sourceSheet: string, collectedAt: s
     });
   }
   return rows;
+}
+
+// Platform tabs have some historical header spelling differences. Resolve only
+// known columns; never ingest UPI/KYC payment addresses or member identifiers.
+function entryRowsFromValues(values: unknown[][], sourceSheet: string, tab: string, gid: number, collectedAt: string): Record<string, unknown>[] {
+  if (!Array.isArray(values) || !Array.isArray(values[0])) throw new SyncError("entry_rows_missing", 502);
+  const normalize = (v: unknown) => String(v ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+  const headers = new Map<string, number>(); values[0].forEach((value, i) => { const key = normalize(value); if (key && !headers.has(key)) headers.set(key, i); });
+  for (const key of ["ORDER NUMBER", "AMOUNT", "THIRDPARTY", "STATUS", "MAIN THIRD PARTY REPLY"]) if (!headers.has(key)) throw new SyncError("entry_headers_missing", 502);
+  if (values.length > MAX_ROWS) throw new SyncError("source_row_limit_reached", 413);
+  const rows: Record<string, unknown>[] = [];
+  for (let i = 1; i < values.length; i++) {
+    const row = Array.isArray(values[i]) ? values[i] : [];
+    const get = (key: string) => rowValue(row, headers, key);
+    const orderNumber = textValue(get("ORDER NUMBER"));
+    if (!orderNumber) continue;
+    const followupAt = textValue(get("MAIN THIRD PARTY FOLLOW UP DATE & TIME"));
+    const dayFirst = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:$|\s)/.exec(followupAt || "");
+    const followupDate = dayFirst ? dateValue(`${dayFirst[3]}-${dayFirst[2]}-${dayFirst[1]}`) : dateValue(followupAt);
+    rows.push({ id: `${sourceSheet}:${tab}:${i + 1}`, source_sheet: sourceSheet, source_tab: tab, source_gid: gid, source_row: i + 1,
+      country: "印度", platform: tab, order_number: orderNumber, work_order_number: textValue(get("WORK ORDER NUMBER")),
+      utr: textValue(get(headers.has("UTR NUMBER") ? "UTR NUMBER" : "UTR NUMMBER")),
+      amount: numberValue(get("AMOUNT")), provider: textValue(get("THIRDPARTY")),
+      provider_reply: textValue(get("MAIN THIRD PARTY REPLY"), 4000), followup_status: textValue(get("STATUS")),
+      utr_match: textValue(get("UTR MATCHED")), kyc_correct: textValue(get("KYC记录正确")),
+      evidence: textValue(get("PDF/VIDEO"), 2000), followup_at: followupAt, followup_date: followupDate,
+      receipt_text: textValue(get("RECEIPT DATE")), source_updated_at: collectedAt, updated_at: collectedAt });
+  }
+  return rows;
+}
+async function readEntrySheets(settings: Settings, runtime: Runtime, headers: Record<string, string>, collectedAt: string): Promise<{rows: Record<string, unknown>[]; tabs: string[]}> {
+  const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(settings.entrySourceId)}`;
+  const metadata = await requestJson(runtime, base + "?fields=sheets.properties", { method: "GET", headers }, 256 * 1024);
+  const tabs = (Array.isArray(metadata?.sheets) ? metadata.sheets : []).map((s: any) => s?.properties).filter((p: any) => p && !p.hidden && ENTRY_TABS.has(p.title) && Number.isSafeInteger(p.sheetId));
+  // An incomplete workbook read must never remove the previous complete mirror.
+  if (tabs.length !== ENTRY_TABS.size || new Set(tabs.map((t: any) => t.title)).size !== ENTRY_TABS.size) throw new SyncError("entry_tabs_incomplete", 502);
+  const rows: Record<string, unknown>[] = [];
+  for (let at = 0; at < tabs.length; at += 4) {
+    const group = tabs.slice(at, at + 4), query = new URLSearchParams({ valueRenderOption: "FORMATTED_VALUE", majorDimension: "ROWS" });
+    group.forEach((t: any) => query.append("ranges", `'${t.title}'!A1:P${MAX_ROWS + 1}`));
+    const data = await requestJson(runtime, base + "/values:batchGet?" + query, { method: "GET", headers }, MAX_RESPONSE_BYTES);
+    if (!Array.isArray(data?.valueRanges) || data.valueRanges.length !== group.length) throw new SyncError("entry_tabs_incomplete", 502);
+    data.valueRanges.forEach((r: any, i: number) => rows.push(...entryRowsFromValues(r.values, settings.entrySourceId, group[i].title, group[i].sheetId, collectedAt)));
+    if (rows.length > MAX_ROWS) throw new SyncError("source_row_limit_reached", 413);
+  }
+  return { rows, tabs: tabs.map((t: any) => t.title) };
 }
 
 export function createDepositIssueSyncHandler(runtime: Runtime) {
@@ -145,18 +193,22 @@ export function createDepositIssueSyncHandler(runtime: Runtime) {
       const range = encodeURIComponent(`${SHEET_TAB}!A1:N${MAX_ROWS + 1}`);
       const sourceUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(settings.sourceId)}/values/${range}?valueRenderOption=FORMATTED_VALUE&majorDimension=ROWS`;
       const source = await requestJson(runtime, sourceUrl, { method: "GET", headers: { Authorization: "Bearer " + token.access_token, Accept: "application/json" } }, MAX_RESPONSE_BYTES);
-      const rows = rowsFromValues(source?.values, settings.sourceId, collectedAt);
-      let written = 0;
-      for (let at = 0; at < rows.length; at += 500) {
-        const batch = rows.slice(at, at + 500);
-        await requestJson(runtime, settings.supabaseUrl + "/rest/v1/admin_deposit_issue_rows?on_conflict=source_sheet,source_tab,source_row", { method: "POST", headers: { apikey: settings.serviceKey, Authorization: "Bearer " + settings.serviceKey, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(batch) }, 128 * 1024);
-        written += batch.length;
+      if (!Array.isArray(source?.values) || source.values.length > MAX_ROWS) throw new SyncError("source_row_limit_reached", 413);
+      const rows = rowsFromValues(source.values, settings.sourceId, collectedAt);
+      const entries = await readEntrySheets(settings, runtime, { Authorization: "Bearer " + token.access_token, Accept: "application/json" }, collectedAt);
+      const targets = [{ table: "admin_deposit_issue_rows", rows, source: settings.sourceId, tab: SHEET_TAB },
+        { table: "admin_deposit_followup_rows", rows: entries.rows, source: settings.entrySourceId, tab: null }];
+      const databaseHeaders = { apikey: settings.serviceKey, Authorization: "Bearer " + settings.serviceKey };
+      // Read and validate both sources before writing. Failed writes never delete
+      // old rows; cleanup starts only after both complete mirrors are persisted.
+      for (const target of targets) for (let at = 0; at < target.rows.length; at += 500) {
+        await requestJson(runtime, settings.supabaseUrl + "/rest/v1/" + target.table + "?on_conflict=source_sheet,source_tab,source_row", { method: "POST", headers: { ...databaseHeaders, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(target.rows.slice(at, at + 500)) }, 128 * 1024);
       }
-      // A successful full read is the only point where stale rows can be
-      // removed. If Google or an upsert fails, the previous complete set stays.
-      const stale = settings.supabaseUrl + "/rest/v1/admin_deposit_issue_rows?source_sheet=eq." + encodeURIComponent(settings.sourceId) + "&source_tab=eq." + encodeURIComponent(SHEET_TAB) + "&updated_at=lt." + encodeURIComponent(collectedAt);
-      await requestJson(runtime, stale, { method: "DELETE", headers: { apikey: settings.serviceKey, Authorization: "Bearer " + settings.serviceKey, Prefer: "return=minimal" } }, 64 * 1024);
-      return json({ ok: true, action: "sync", source: settings.sourceId, tab: SHEET_TAB, rowsRead: rows.length, rowsWritten: written, collectedAt });
+      for (const target of targets) {
+        const stale = settings.supabaseUrl + "/rest/v1/" + target.table + "?source_sheet=eq." + encodeURIComponent(target.source) + (target.tab ? "&source_tab=eq." + encodeURIComponent(target.tab) : "") + "&updated_at=lt." + encodeURIComponent(collectedAt);
+        await requestJson(runtime, stale, { method: "DELETE", headers: { ...databaseHeaders, Prefer: "return=minimal" } }, 64 * 1024);
+      }
+      return json({ ok: true, action: "sync", source: settings.sourceId, tab: SHEET_TAB, rowsRead: rows.length, rowsWritten: rows.length, entryRows: entries.rows.length, entryTabs: entries.tabs.length, collectedAt });
     } catch (error) {
       const code = error instanceof SyncError ? error.code : "deposit_issue_sync_failed";
       const status = error instanceof SyncError ? error.status : 503;
