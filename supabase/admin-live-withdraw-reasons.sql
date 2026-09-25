@@ -5,6 +5,7 @@ begin;
 -- Remove only an identical line or a truncated prefix repeated in a later line.
 create or replace function private.dashboard_admin_live_clean_note(p_note text)
 returns text language sql immutable parallel safe set search_path='' as $$
+ select case when p_note !~ E'[\r\n]' then nullif(regexp_replace(p_note,'^[[:space:]]+|[[:space:]]+$','','g'),'') else (
  with parts as materialized (
   select btrim(regexp_replace(line,'^[[:space:]]+|[[:space:]]+$','','g')) as line,ordinality as position
   from regexp_split_to_table(coalesce(p_note,''),E'\\r?\\n') with ordinality as p(line,ordinality)
@@ -14,7 +15,7 @@ returns text language sql immutable parallel safe set search_path='' as $$
     later.line=p.line or (p.line ~ '([.]{3}|…+)$'
      and length(regexp_replace(p.line,'([.]{3}|…+)$',''))>0
      and starts_with(later.line,regexp_replace(p.line,'([.]{3}|…+)$','')))))
- ) select nullif(string_agg(line,E'\n' order by position),'') from kept
+ ) select nullif(string_agg(line,E'\n' order by position),'') from kept) end
 $$;
 revoke all on function private.dashboard_admin_live_clean_note(text) from public,anon,authenticated;
 -- Source headings from the user's arwd.py remark whitelist (2026-09-19).
@@ -93,19 +94,25 @@ begin
  if v_meta.source='ar' then
   with orders as materialized (
    select order_no,amount,status,nullif(btrim(operator),'') operator,applied_at,completed_at,nullif(btrim(manual_remark),'') manual_raw,nullif(btrim(remark),'') rejection_raw,
-    private.dashboard_admin_live_clean_note(manual_remark) manual_note,private.dashboard_admin_live_clean_note(remark) rejection_note,updated_at,
+    updated_at,
     case when status in('未通过','拒绝','驳回','已拒绝','人工取消','已取消')
       or (status in('失败','提现失败','出款失败') and coalesce(btrim(raw_channel),'') in ('','人工取消')) then 'rejected' when status in('已通过','已出款','已完成','成功','已支付','已打款') then 'success' else 'other' end status_group
    from public.ar_collected_orders where source_system='AR' and country_code=v_code and platform=any(v_aliases) and order_kind='withdraw'
      and applied_at>=v_date::timestamp and applied_at<(v_date+1)::timestamp
+  ), candidates as materialized (
+   select * from orders where (v_kind='blocking' and manual_raw ~ '[^[:space:]]') or (v_kind<>'blocking' and status_group='rejected')
   ), distinct_reasons as materialized (
-   select distinct coalesce(rejection_note,'') as rejection_note from orders where v_kind<>'blocking' and status_group='rejected'
+   -- Classify distinct source text only after selecting the relevant orders.
+   -- A busy platform's successful orders do not need rejection-note processing.
+   select distinct coalesce(case when v_kind='blocking' then manual_raw else rejection_raw end,'') raw_note from candidates
+  ), cleaned as materialized (
+   select raw_note,private.dashboard_admin_live_clean_note(raw_note) clean_note from distinct_reasons
   ), classified as materialized (
-   select rejection_note,private.dashboard_admin_live_rejection_category(v_code,rejection_note) category from distinct_reasons
+   select raw_note,clean_note,case when v_kind<>'blocking' then private.dashboard_admin_live_rejection_category(v_code,clean_note) end category from cleaned
   ), notes as materialized (
-   select o.*,case when v_kind='blocking' then o.manual_note else coalesce(o.rejection_note,'（源备注为空）') end as note,
-    c.category
-   from orders o left join classified c on c.rejection_note=coalesce(o.rejection_note,'') where (v_kind='blocking' and manual_note is not null) or (v_kind<>'blocking' and status_group='rejected')
+   select o.*,case when v_kind='blocking' then c.clean_note else coalesce(c.clean_note,'（源备注为空）') end as note,
+    case when v_kind<>'blocking' then c.clean_note end rejection_note,c.category
+   from candidates o join classified c on c.raw_note=coalesce(case when v_kind='blocking' then o.manual_raw else o.rejection_raw end,'')
   ), selected_notes as materialized (
    select * from notes where (v_category is null or md5(category)=v_category) and (v_reason is null or md5(note)=v_reason)
     and (v_operator is null or md5(coalesce(operator,''))=v_operator)
@@ -125,11 +132,11 @@ begin
    union all select to_jsonb(g),g.count,g.category,null::timestamp from category_groups g where v_kind='categories'
    union all select to_jsonb(g),g.count,coalesce(g.operator,''),null::timestamp from operator_groups g where v_kind='operators'
    union all select jsonb_build_object('orderNumber',order_no,'amount',amount,'status',status,'operator',operator,
-    'operatorKey',md5(coalesce(operator,'')),'createdAt',applied_at,'completedAt',completed_at,'manualRemark',manual_note,
+    'operatorKey',md5(coalesce(operator,'')),'createdAt',applied_at,'completedAt',completed_at,'manualRemark',private.dashboard_admin_live_clean_note(manual_raw),
     'rejectionReason',rejection_note,'rawRejectionReason',rejection_raw,'rawManualRemark',manual_raw,'category',category,'categoryKey',md5(category),'reasonKey',md5(note)),0,order_no,applied_at
    from selected_notes where v_kind='orders'
   )
-  select (select count(*) from orders),(select count(*) from orders where status_group='rejected'),(select count(*) from orders where manual_note is not null),
+  select (select count(*) from orders),(select count(*) from orders where status_group='rejected'),(select count(*) from orders where manual_raw ~ '[^[:space:]]'),
    (select max(updated_at) from orders),(select count(*) from rendered),
    coalesce((select jsonb_agg(item order by sort_time desc nulls last,sort_count desc,sort_text) from
     (select * from rendered order by sort_time desc nulls last,sort_count desc,sort_text offset v_offset limit v_limit)p),'[]'::jsonb),

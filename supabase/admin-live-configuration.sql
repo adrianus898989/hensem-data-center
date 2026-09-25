@@ -42,6 +42,15 @@ returns boolean language sql stable security definer set search_path='' as $$
 $$;
 revoke all on function private.dashboard_admin_live_can_configure() from public,anon,authenticated;
 
+-- Apply newly confirmed aliases immediately, including registry rows waiting for
+-- the next refresh. Two historical spellings of one provider are not a conflict.
+create or replace function private.dashboard_admin_live_provider_alias_values(p_country text,p_names text[])
+returns text[] language sql immutable set search_path='' as $$
+ select coalesce(array_agg(distinct name order by name),'{}'::text[])
+ from (select private.dashboard_admin_live_provider_alias(p_country,n) name from unnest(p_names)n) names;
+$$;
+revoke all on function private.dashboard_admin_live_provider_alias_values(text,text[]) from public,anon,authenticated;
+
 create or replace function private.dashboard_admin_live_provider_rows()
 returns table(country text,platform text,raw_provider text,canonical_provider text,canonical_values text[],
   directions text[],charge_count bigint,withdraw_count bigint,matched_count bigint,last_data_date date,
@@ -49,15 +58,21 @@ returns table(country text,platform text,raw_provider text,canonical_provider te
 language plpgsql stable security definer set search_path='' as $$
 declare v_scope jsonb:=private.dashboard_admin_live_scope();
 begin
-  return query select r.country,r.platform,r.raw_provider,
-    coalesce(o.canonical_provider,case when cardinality(r.canonical_values)=1 then r.canonical_values[1] end),
+  return query with normalized as materialized (
+    select stored.country,stored.platform,stored.raw_provider,
+      private.dashboard_admin_live_provider_alias_values(stored.country,stored.canonical_values) canonical_values,
+      stored.directions,stored.charge_count,stored.withdraw_count,stored.matched_count,stored.last_data_date,stored.updated_at
+    from private.dashboard_admin_provider_registry stored
+    where private.dashboard_scope_allows(v_scope,stored.country,stored.platform)
+  ) select r.country,r.platform,r.raw_provider,
+    coalesce(private.dashboard_admin_live_provider_alias(r.country,o.canonical_provider),case when cardinality(r.canonical_values)=1 then r.canonical_values[1] end),
     r.canonical_values,r.directions,r.charge_count,r.withdraw_count,r.matched_count,r.last_data_date,
     coalesce(o.updated_at,r.updated_at),case when o.canonical_provider is not null or cardinality(r.canonical_values)=1 then 'assigned'
       when cardinality(r.canonical_values)>1 then 'conflict' else 'unassigned' end,
     md5(jsonb_build_array(r.canonical_values,coalesce(o.version,0))::text),o.canonical_provider is not null
-  from private.dashboard_admin_provider_registry r
+  from normalized r
   left join private.dashboard_admin_provider_overrides o using(country,platform,raw_provider)
-  where private.dashboard_scope_allows(v_scope,r.country,r.platform);
+  ;
 end;
 $$;
 revoke all on function private.dashboard_admin_live_provider_rows() from public,anon,authenticated;
@@ -114,9 +129,8 @@ $$;
 
 create or replace function private.dashboard_admin_live_provider_options(p_request jsonb default '{}'::jsonb)
 returns jsonb language plpgsql stable security definer set search_path='' as $$
-declare v_ids uuid[]; v_result jsonb;
+declare v_ids uuid[]; v_result jsonb; v_scope jsonb:=private.dashboard_admin_live_scope();
 begin
-  perform private.dashboard_admin_live_scope();
   if p_request is null or jsonb_typeof(p_request)<>'object' or p_request-array['platformIds','direction']<>'{}'::jsonb
     or jsonb_typeof(p_request->'platformIds') is distinct from 'array' or jsonb_array_length(p_request->'platformIds')>200
     or coalesce(p_request->>'direction','all') not in('all','charge','withdraw') then
@@ -126,9 +140,22 @@ begin
     or a#>>'{}' !~ '^[0-9a-fA-F-]{36}$') then raise exception using errcode='22023',message='invalid_filter';end if;
   select array_agg(value::uuid) into v_ids from jsonb_array_elements_text(p_request->'platformIds');
   with platforms as materialized (select * from private.dashboard_admin_live_platforms() where id=any(v_ids)),
-  matches as (select distinct coalesce(r.canonical_provider,nullif(r.raw_provider,''),'未识别通道') as provider
-    from private.dashboard_admin_live_provider_rows() r join platforms p on r.country=p.country and (r.platform=p.name or r.platform=p.source_name)
-    where coalesce(p_request->>'direction','all')='all' or case p_request->>'direction' when 'charge' then '代收' else '代付' end=any(r.directions))
+  scoped as materialized (
+    select distinct r.country,r.platform,r.raw_provider,r.canonical_values
+    from private.dashboard_admin_provider_registry r join platforms p on r.country=p.country and (r.platform=p.name or r.platform=p.source_name)
+    where private.dashboard_scope_allows(v_scope,r.country,r.platform)
+      and (coalesce(p_request->>'direction','all')='all' or case p_request->>'direction' when 'charge' then '代收' else '代付' end=any(r.directions))
+  ), name_sets as materialized (
+    select distinct country,canonical_values from scoped
+  ), names as materialized (
+    select country,canonical_values,private.dashboard_admin_live_provider_alias_values(country,canonical_values) as names from name_sets
+  ), matches as (
+    select distinct coalesce(private.dashboard_admin_live_provider_alias(r.country,o.canonical_provider),
+      case when cardinality(n.names)=1 then n.names[1] end,
+      nullif(private.dashboard_admin_live_provider_alias(r.country,r.raw_provider),''),'未识别通道') as provider
+    from scoped r join names n on n.country=r.country and n.canonical_values=r.canonical_values
+    left join private.dashboard_admin_provider_overrides o on o.country=r.country and o.platform=r.platform and o.raw_provider=r.raw_provider
+  )
   select jsonb_build_object('providers',coalesce((select jsonb_agg(provider order by provider) from matches),'[]'::jsonb),
     'platformCount',(select count(*) from platforms),'basis','existing_classification') into v_result;
   return v_result;
@@ -138,9 +165,10 @@ $$;
 -- Canonicalization reads the small registry, then gives an explicit manual override precedence.
 create or replace function private.dashboard_admin_live_provider_canonical(p_country text,p_platform text,p_raw text)
 returns text language sql stable security definer set search_path='' as $$
-  select coalesce((select coalesce(o.canonical_provider,case when cardinality(r.canonical_values)=1 then r.canonical_values[1] end)
+  select private.dashboard_admin_live_provider_alias(p_country,coalesce((select coalesce(o.canonical_provider,case when cardinality(n.names)=1 then n.names[1] end)
     from private.dashboard_admin_provider_registry r left join private.dashboard_admin_provider_overrides o using(country,platform,raw_provider)
-    where r.country=p_country and r.platform=p_platform and r.raw_provider=case when p_raw='未识别通道' then '' else coalesce(btrim(p_raw),'') end),private.dashboard_admin_live_provider_alias(p_country,p_raw));
+    cross join lateral (select private.dashboard_admin_live_provider_alias_values(r.country,r.canonical_values) names)n
+    where r.country=p_country and r.platform=p_platform and r.raw_provider=case when p_raw='未识别通道' then '' else coalesce(btrim(p_raw),'') end),p_raw));
 $$;
 revoke all on function private.dashboard_admin_live_provider_canonical(text,text,text) from public,anon,authenticated;
 

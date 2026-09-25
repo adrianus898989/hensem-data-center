@@ -61,18 +61,27 @@ before(async()=>{
  await as(owner);
 });
 after(async()=>{await db?.close()});
-test('confirmed provider aliases merge orders, workorders and options without merging unrelated country names',async()=>{
+test('confirmed provider aliases merge both directions and existing configuration before registry refresh',async()=>{
  await as(owner);await db.exec('begin');try{
-  for(const [name,expected] of [['LKgoPayINR','LKgoPay'],['LKgoPay','LKgoPay'],['PAYTM- RAPay','RAPay'],['PAYTM – RAPay','RAPay'],['RAPay','RAPay']]){
+  const pairs=[['LKgoPayINR','LKgoPay'],['LKgoPay','LKgoPay'],['PAYTM- RAPay','RAPay'],['PAYTM – RAPay','RAPay'],['RAPay','RAPay'],['VstarPay','VstarPay'],['VstarPayINR-Bank','VstarPay'],['UmoneyPay','UmoneyPay'],['UmoneyPayINR','UmoneyPay'],['MovPayINR-Bank','MovPay'],['MovPay','MovPay'],['FFPayINR','FFPay'],['FFPay','FFPay'],['UniPayUSDTCU','UniPayUSDT'],['UniPayUSDT','UniPayUSDT'],['CedarPayINR-wake','CedarPay'],['CedarPay-QR','CedarPay']];
+  // Simulate a historical registry built before the aliases were confirmed.
+  await db.exec("create or replace function private.dashboard_admin_live_provider_alias(p_country text,p_name text) returns text language sql immutable set search_path='' as $$select p_name$$");
+  for(const [name] of pairs)for(const direction of ['代收','代付'])await db.query("insert into third_party_volume values('印度','EXAMPLE',$1,$1,$2,1,'2026-09-23',now())",[name,direction]);
+  await db.exec("insert into third_party_volume values('印度','EXAMPLE','historical-route','UmoneyPay','代收',1,'2026-09-23',now()),('印度','EXAMPLE','historical-route','UmoneyPayINR','代付',1,'2026-09-23',now());refresh materialized view private.dashboard_admin_provider_registry");
+  await db.exec(sql('admin-live-provider-aliases.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,''));
+  for(const [name,expected] of pairs){
    assert.equal((await db.query('select private.dashboard_admin_live_provider_alias($1,$2) name',['印度',name])).rows[0].name,expected);
+   assert.equal((await db.query('select private.dashboard_admin_live_provider_canonical($1,$2,$3) name',['印度','EXAMPLE',name])).rows[0].name,expected);
    assert.equal((await db.query('select private.dashboard_admin_live_workorder_provider($1,$2,$3,$4) name',['印度','EXAMPLE',name,''])).rows[0].name,expected);
-   await db.query("insert into third_party_volume values('印度','EXAMPLE',$1,$1,'代收',1,'2026-09-23',now())",[name]);
+   const config=(await call('provider_config',{country:'印度',platform:'EXAMPLE',rawProvider:name,limit:500})).rows.find(r=>r.rawProvider===name);
+   assert.equal(config.canonicalProvider,expected);assert.equal(config.status,'assigned');assert.deepEqual(config.directions,['代付','代收']);
   }
-  await db.exec('refresh materialized view private.dashboard_admin_provider_registry');
+  const historical=(await call('provider_config',{country:'印度',rawProvider:'historical-route'})).rows[0];assert.equal(historical.status,'assigned');assert.equal(historical.canonicalProvider,'UmoneyPay');assert.deepEqual(historical.canonicalProviders,['UmoneyPay']);
   const id=(await call('query',{action:'catalog'})).platforms.find(p=>p.name==='EXAMPLE').id;
-  const options=(await call('provider_options',{platformIds:[id]})).providers;
-  assert(options.includes('LKgoPay'));assert(options.includes('RAPay'));
-  assert(!options.some(p=>/LKgoPayINR|PAYTM.*RAPay/.test(p)));
+  for(const direction of ['all','charge','withdraw']){
+   const options=(await call('provider_options',{platformIds:[id],direction})).providers;
+   for(const [name,expected]of pairs){assert(options.includes(expected));if(name!==expected)assert(!options.includes(name));}
+  }
   assert.equal((await db.query('select private.dashboard_admin_live_provider_alias($1,$2) name',['尼泊尔','PAYTM- RAPay'])).rows[0].name,'PAYTM- RAPay');
  }finally{await db.exec('rollback')}
 });
@@ -105,6 +114,32 @@ test('deposit totals use explicit source status, preserve source dates and detai
   await as(viewer);const visible=await call('deposit_issues',{startAt:q.startAt,endAt:q.endAt});assert.equal(visible.total,3);assert(!visible.rows.some(x=>x.country==='尼泊尔'));
  }finally{await db.exec('rollback');await as(owner)}
  await db.exec('set role authenticated');try{await assert.rejects(()=>db.query('select * from admin_deposit_issue_rows'),/permission denied/)}finally{await db.exec('reset role')}
+});
+test('deposit result statistics and entry linkage use exact scoped orders, retain conflicts and search both original replies',async()=>{
+ await as(owner);await db.exec('begin');try{
+  for(const [id,order,utr,amount,status,date,match] of [
+   ['a','A','0001',100,'未入款','2026-09-23','对得上'],['b','B','0002',200,'已入款','2026-09-23','对不上'],
+   ['c','C','0003',300,'未入款',null,'对得上'],['d','D','0004',400,'未入款','2026-09-22','对不上'],
+   ['e','E','0005',500,'未入款','2026-09-23','对得上']]){
+   await db.query("insert into admin_deposit_issue_rows(id,source_sheet,source_row,country,platform,order_number,utr,amount,provider,status,record_date,match_status,unreceived_days,provider_reply) values($1,'synthetic',ascii($1),'印度','EXAMPLE',$2,$3,$4,'UmoneyPayINR',$5,$6,$7,12,'original result reply')",[id,order,utr,amount,status,date,match]);
+  }
+  for(const [id,platform,order,utr,amount,followup] of [
+   ['f','EXAMPLE','A','0001',100,'Need to provide PDF/VIDEO'],['g','EXAMPLE','B','9999',200,'Success'],
+   ['h','EXAMPLE','C','0003',300,'Success To Other Platform'],['i','EXAMPLE','C','0003',300,'REFUND'],
+   ['j','OTHER','D','0004',400,'Success'],['k','EXAMPLE','E','0005',900,'Success'],['l','EXAMPLE','L','0007',500,'']]){
+   await db.query("insert into admin_deposit_followup_rows(id,source_sheet,source_tab,source_row,country,platform,order_number,utr,amount,provider,followup_status,followup_date,provider_reply) values($1,'synthetic-entry',$2,ascii($1),'印度',$2,$3,$4,$5,'UmoneyPay',$6,'2026-09-23','unique follow-up reply')",[id,platform,order,utr,amount,followup]);
+  }
+  const q={startAt:'2026-09-23T00:00:00Z',endAt:'2026-09-23T23:59:59Z',country:'印度',platform:'EXAMPLE',dateMode:'all'};
+  const r=await call('deposit_issues',q);assert.equal(r.total,5);assert.equal(r.summary.unreceivedAmount,1300);assert.equal(r.summary.receivedAmount,200);assert.equal(r.summary.undatedCount,1);assert.equal(r.summary.linkedCount,1);assert.equal(r.summary.reviewCount,3);assert.equal(r.summary.unlinkedCount,1);
+  assert.equal(r.providerSummary.reduce((n,x)=>n+x.unreceivedAmount,0),1300);assert.equal(r.dailySummary.reduce((n,x)=>n+x.count,0),5);assert(r.rows.every(x=>x.provider==='UmoneyPay'));assert.equal(r.rows.find(x=>x.orderNumber==='D').linkStatus,'unlinked');
+  assert.equal((await call('deposit_issues',{...q,query:'unique follow-up'})).total,1);assert.equal((await call('deposit_issues',{...q,query:'original result'})).total,5);
+  assert.equal((await call('deposit_issues',{...q,dateMode:'range'})).total,3);assert.equal((await call('deposit_issues',{...q,match:'unmatched'})).total,2);
+  const entries=await call('deposit_issues',{...q,view:'entries'});assert.equal(entries.total,6);assert.equal(entries.summary.count,6);assert.equal(entries.summary.evidenceCount,1);assert.equal(entries.rows.find(x=>x.orderNumber==='B').status,'待核对');assert.equal(entries.rows.find(x=>x.orderNumber==='C').linkStatus,'review');assert.equal(entries.rows.find(x=>x.orderNumber==='E').linkStatus,'review');assert.equal(entries.rows.find(x=>x.orderNumber==='L').linkStatus,'unlinked');
+  assert.equal((await call('deposit_issues',{...q,view:'entries',followupStatus:'未填写'})).total,1);assert.equal((await call('deposit_issues',{...q,view:'entries',followupStatus:'success to other platform'})).total,1);
+  await db.query("update dashboard_profiles set data_scope=$1::jsonb where auth_user_id=$2",[JSON.stringify({mode:'selected',countries:['印度'],platforms:['EXAMPLE']}),viewer]);await as(viewer);
+  assert.equal((await call('deposit_issues',{...q,platform:undefined,view:'entries'})).total,6);
+ }finally{await db.exec('rollback');await as(owner)}
+ await db.exec('set role authenticated');try{await assert.rejects(()=>db.query('select * from admin_deposit_followup_rows'),/permission denied/)}finally{await db.exec('reset role')}
 });
 test('registry preserves historical mappings, conflicts, blanks and authorized options without live aggregate',async()=>{
  await as(viewer);const r=await call('provider_config',{country:'印度'});assert.equal(r.canManage,false);assert.equal(r.total,5);assert.equal(r.summary.conflict,1);assert.equal(r.summary.unassigned,1);assert(!JSON.stringify(r).includes('HiddenPay'));
@@ -239,8 +274,11 @@ test('single-platform daily rejection drilldowns conserve all orders and keep de
    await db.query("insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,amount,status,applied_at,completed_at,operator,manual_remark,remark) values('AR','IN','EXAMPLE','withdraw',$1,10,'未通过','2026-09-21 12:00','2026-09-22 01:00',$2,'NEVER A REJECTION REASON',$3)",['ANALYSIS-'+String(i).padStart(3,'0'),i%2?'agent-b':'agent-a',remark]);
   }
   await db.exec("insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,amount,status,applied_at,operator,remark) values('AR','IN','EXAMPLE','withdraw','NOT-REJECTED',1,'已通过','2026-09-21','agent-a','[Gift Codes] success')");
+  await db.exec("insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,amount,status,applied_at,operator,manual_remark,remark) select 'AR','IN','EXAMPLE','withdraw','SUCCESS-'||n,1,'已通过','2026-09-21','agent-c',case when n%2=0 then E'preview...\\npreview complete' else E' \\n\\t ' end,'[Gift Codes] Successful orders are not rejected' from generate_series(1,1000)n");
   const q={date:'2026-09-21',country:'印度',platform:'EXAMPLE',kind:'categories',limit:20};
   const all=await call('withdraw_reasons',q);assert.equal(all.noteCount,29);assert.equal(all.summary.totalRejected,29);assert.equal(all.summary.missingReason,1);assert.equal(all.summary.operators,2);assert.equal(all.categories.reduce((n,g)=>n+g.count,0),29);
+  assert.equal(all.coverage.collected,1030);assert.equal(all.coverage.withManualRemark,529);
+  const blocking=await call('withdraw_reasons',{...q,kind:'blocking'});assert.equal(blocking.noteCount,529);assert.equal(blocking.rows.find(r=>r.reason==='preview complete').count,500);
   assert.equal(all.rows[0].count,20);assert(!JSON.stringify(all).includes('NEVER A REJECTION REASON'));
   const gift=all.rows[0].categoryKey,filtered=await call('withdraw_reasons',{...q,kind:'orders',category:gift});
   assert.equal(filtered.noteCount,29);assert.equal(filtered.total,20);assert.equal(filtered.rows.length,20);assert.equal(filtered.summary.selectedCount,20);assert.equal(filtered.rows[0].operator,'agent-a');assert.equal(filtered.rows[0].manualRemark,'NEVER A REJECTION REASON');

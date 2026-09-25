@@ -53,6 +53,8 @@ test('errors do not expose raw backend messages or credentials',async()=>{
   for(const [status,message,expected] of [[403,'sensitive detail','未获授权'],[400,'unsupported_filter','未提供'],[500,'57014: statement timeout','读取超时'],[500,'private SQL and offline-token','未完成']]){
     const h=load({fetch:async()=>({ok:false,status,json:async()=>({message})})});await assert.rejects(h.api.adminLiveRequest(session,query),error=>error.message.includes(expected)&&!error.message.includes('private SQL')&&!error.message.includes('offline-token'));
   }
+  const h=load({fetch:async()=>({ok:false,status:504,json:async()=>({message:'57014 statement timeout'})})});
+  await assert.rejects(h.api.adminLiveRequest(session,{action:'withdrawReasons',date:'2026-09-24',country:'印度',platform:'EXAMPLE',kind:'categories'}),error=>/当日原因读取超时/.test(error.message)&&!/缩短日期|选择单个平台/.test(error.message));
 });
 
 test('only the current opaque frame and nonce can request data; payloads remain token free',async()=>{
@@ -190,4 +192,10 @@ test('daily note writes have a fixed endpoint and cannot contain author, order s
  await h.api.adminLiveRequest(session,r);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_withdraw_note');
  for(const bad of [{date:'2026-02-30'},{country:''},{platform:[]},{reason:'x'.repeat(1001)},{reason:null},{expectedVersion:'stale'},{updated_by:'x'},{status:'success'},{access_token:'x'}])assert.throws(()=>h.api.validateAdminLiveRequest({...r,...bad}));
  for(const sort of ['platform','successRate','rejectRate','autoRate','manualRate','previousAvgSeconds','durationChange'])assert.equal(h.api.validateAdminLiveRequest({action:'autoWithdraw',country:'印度',startAt:'2026-09-23T00:00:00Z',endAt:'2026-09-23T23:59:59Z',sort}).sort,sort);
+});
+
+test('deposit sheet views allow scoped summaries and reply searches with explicit date modes',async()=>{
+ const h=load(),q={action:'depositIssues',view:'entries',dateMode:'all',startAt:'2026-01-01T00:00:00Z',endAt:'2026-09-25T23:59:59Z',country:'印度',followupStatus:'need to provide pdf/video',query:'synthetic reply',limit:500};
+ assert.equal(h.api.validateAdminLiveRequest(q).view,'entries');assert.throws(()=>h.api.validateAdminLiveRequest({...q,dateMode:'range'}));
+ for(const change of [{view:'write'},{dateMode:'unbounded'},{match:'bogus'},{followupStatus:{text:'bad'}}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...change}));
 });

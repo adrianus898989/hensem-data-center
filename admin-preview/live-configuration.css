@@ -121,21 +121,40 @@ body.live-admin .withdraw-order-search input{width:320px;max-width:70%}
 body.live-admin .withdraw-drawer-foot{flex:none;border-top:1px solid #e5ebf6;padding:12px 24px;color:#8292ad;font-size:11px;line-height:1.7;background:#fafbfe}
 @media(max-width:700px){body.live-admin .withdraw-drawer{width:100vw}body.live-admin .withdraw-drawer-head{padding:16px;gap:8px;flex-wrap:wrap}body.live-admin .withdraw-drawer-body{padding:14px}body.live-admin .withdraw-drawer .withdraw-reason-tabs{padding:12px 14px}body.live-admin .withdraw-reason-summary{grid-template-columns:repeat(2,minmax(0,1fr))}body.live-admin .withdraw-pager{flex-wrap:wrap;gap:6px}}
 @media(max-width:1000px){body.live-admin .withdraw-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
-/* Compact provider reports: one document scrollbar, amounts and counts together. */
+/* Direction-specific provider reports: separate numeric columns and comparable KPI cards. */
 body.live-admin .provider-summary-heading{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:0 0 8px}
 body.live-admin .provider-summary-heading .provider-direction-tabs{margin:0;gap:5px}
 body.live-admin .provider-summary-heading .provider-scope-note{margin:0;font-size:11px;line-height:1.5;color:#7083a0}
-body.live-admin .provider-summary-kpis{gap:7px;margin-bottom:9px}
-body.live-admin .provider-summary-kpis .live-metric{padding:9px 11px;border-radius:7px}
-body.live-admin .provider-summary-kpis strong{font-size:18px}
+body.live-admin .provider-summary-kpis{grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-bottom:7px}
+body.live-admin .provider-kpi{--kpi-accent:#b5c4dd;position:relative;overflow:hidden;background:#fff;border:1px solid #dce6f7;border-radius:8px;padding:11px 12px 10px}
+body.live-admin .provider-kpi:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--kpi-accent)}
+body.live-admin .provider-kpi-amount{--kpi-accent:#4375ee}
+body.live-admin .provider-kpi-rate{--kpi-accent:#42ae9b}
+body.live-admin .provider-kpi-fee{--kpi-accent:#8370e7}
+body.live-admin .provider-kpi-value{display:flex;align-items:baseline;justify-content:space-between;gap:6px;flex-wrap:wrap}
+body.live-admin .provider-kpi-value label{font-size:11px;color:#6a7d9a}
+body.live-admin .provider-kpi-value strong{font-size:17px;letter-spacing:-.25px;color:#23334e;line-height:1.45;font-variant-numeric:tabular-nums}
+body.live-admin .provider-kpi-comparison{margin-top:5px;min-height:31px;line-height:1.6}
+body.live-admin .provider-kpi-comparison small{display:block;font-size:10px;color:#7c8da7}
+body.live-admin .provider-kpi-change{display:block;font-size:10px;color:#647998;white-space:normal;font-variant-numeric:tabular-nums}
+body.live-admin .provider-kpi-change em{font-style:normal;margin-left:3px;border-radius:3px;padding:1px 3px;background:#f1f4f9}
+body.live-admin .provider-kpi-change.up{color:#168570}
+body.live-admin .provider-kpi-change.down{color:#bb5363}
+body.live-admin .provider-kpi-change.up em{background:#e9f6f1}
+body.live-admin .provider-kpi-change.down em{background:#fcf0f1}
+body.live-admin .provider-comparison-context{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;color:#8091aa;font-size:10px;line-height:1.5;margin:0 1px 10px}
 body.live-admin .provider-compact-table{max-height:none;overflow:auto}
-body.live-admin .provider-compact-table table{min-width:1180px;width:100%;table-layout:auto}
+body.live-admin .provider-compact-table table{min-width:1420px;width:100%;table-layout:auto}
 body.live-admin .provider-compact-table th,body.live-admin .provider-compact-table td{padding:6px 8px!important;font-size:11px;line-height:1.6}
-body.live-admin .provider-compact-table th{min-width:65px;font-size:10px;white-space:normal}
-body.live-admin .provider-compact-table th:first-child,body.live-admin .provider-compact-table td:first-child{min-width:128px}
-body.live-admin .provider-platform-count{color:#899ab3;font-size:9px;margin-left:7px}
-body.live-admin .provider-count{color:#8190a8;font-size:10px;white-space:nowrap}
+body.live-admin .provider-compact-table th{min-width:54px;font-size:10px;white-space:normal}
+body.live-admin .provider-compact-table th .link{font:inherit;font-weight:600;white-space:normal;line-height:1.5;color:#506eac}
+body.live-admin .provider-compact-table th:first-child,body.live-admin .provider-compact-table td:first-child{min-width:105px;text-align:left}
+body.live-admin .provider-compact-table th:nth-child(2),body.live-admin .provider-compact-table td:nth-child(2){min-width:42px;text-align:center;color:#7184a4}
+body.live-admin .provider-compact-table td{font-variant-numeric:tabular-nums;white-space:nowrap}
+body.live-admin .provider-compact-table tbody tr:hover td{background:#f6f9ff}
 body.live-admin .provider-partial{margin-left:4px;border-radius:3px;padding:1px 4px;background:#fff3df;color:#a87323;font-size:9px}
+@media(max-width:1500px){body.live-admin .provider-summary-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){body.live-admin .provider-summary-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 body.live-admin .withdraw-operators-table table{min-width:1120px}
 body.live-admin .withdraw-distribution-table td{padding:9px 12px!important;line-height:1.7}
 body.live-admin .withdraw-drawer-head{padding:16px 22px 12px}
@@ -145,6 +164,24 @@ body.live-admin .withdraw-reason-summary{grid-template-columns:repeat(auto-fit,m
 body.live-admin .withdraw-reason-summary>div{padding:10px 13px}
 body.live-admin .withdraw-reason-summary strong{font-size:21px;margin-top:4px}
 body.live-admin .withdraw-denominator{margin:8px 0;font-size:11px}
-body.live-admin .deposit-reply{text-align:left;max-width:280px;white-space:normal}
-body.live-admin .deposit-reply summary{color:#3d66b3;cursor:pointer;white-space:nowrap}
-body.live-admin .deposit-reply p{margin:6px 0;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}
+body.live-admin .deposit-reply{min-width:180px;max-width:320px;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;font-size:11px}
+body.live-admin .deposit-source-tabs{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px}
+body.live-admin .deposit-source-tabs [role=tablist]{display:flex;gap:8px}
+body.live-admin .deposit-issues-toolbar{padding:12px;margin-bottom:12px}
+body.live-admin .deposit-issues-toolbar .live-filters{padding:0;gap:10px;border:0;margin:0}
+body.live-admin .deposit-issues-toolbar label.live-field{display:flex;flex-direction:column;gap:5px;font-size:10px;color:#7185a5}
+body.live-admin .deposit-search{min-width:255px;flex:1}
+body.live-admin .deposit-context{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin:10px 0;color:#7185a5;font-size:11px;line-height:1.6}
+body.live-admin .deposit-summary-grid{display:grid;grid-template-columns:1fr 1.15fr;gap:12px;align-items:start}
+body.live-admin .deposit-tables .table-wrap,body.live-admin .deposit-tables .table-scroll,body.live-admin .deposit-tables .live-table-wrap{max-height:none;overflow-y:visible}
+body.live-admin .deposit-tables th,body.live-admin .deposit-tables td{padding:9px 11px;font-size:11px}
+body.live-admin .deposit-tables .panel-head{padding:13px 15px}
+body.live-admin .deposit-group-more{padding:10px 14px;border-top:1px solid #edf1f8;text-align:right}
+body.live-admin .deposit-table-link{border:0;padding:0;background:none;color:#315cd3;font-size:inherit;cursor:pointer;text-align:left}
+body.live-admin .deposit-table-link:hover{text-decoration:underline}
+body.live-admin .deposit-order{text-align:left;white-space:nowrap}
+body.live-admin .deposit-order small{display:block;color:#8091aa;font-size:10px;margin-top:4px}
+body.live-admin .deposit-muted{color:#9aa7bb}
+@media(max-width:1500px){body.live-admin .deposit-summary-grid{grid-template-columns:1fr}body.live-admin .deposit-reply{min-width:160px}}
+body.live-admin .deposit-result-details th:last-child,body.live-admin .deposit-result-details td:last-child{position:sticky;right:0;background:#fff;box-shadow:-4px 0 8px #142c5210;text-align:left;min-width:210px;max-width:320px}
+body.live-admin .deposit-result-details th:last-child{background:#f5f7fc;z-index:3}

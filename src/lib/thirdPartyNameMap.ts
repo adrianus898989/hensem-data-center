@@ -71,6 +71,20 @@ function stripBusinessSuffix(value: string): string {
 // spreadsheet typography and spaces around it, but it must still be present.
 const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
   ["starpay", "VstarPay"],
+  // Confirmed across collection and payout by the owner on 2026-09-25.
+  ["vstarpay", "VstarPay"],
+  ["vstarpayinr-bank", "VstarPay"],
+  ["umoneypay", "UmoneyPay"],
+  ["umoneypayinr", "UmoneyPay"],
+  ["movpay", "MovPay"],
+  ["movpayinr-bank", "MovPay"],
+  ["ffpay", "FFPay"],
+  ["ffpayinr", "FFPay"],
+  ["unipayusdt", "UniPayUSDT"],
+  ["unipayusdtcu", "UniPayUSDT"],
+  ["cedarpay", "CedarPay"],
+  ["cedarpayinr-wake", "CedarPay"],
+  ["cedarpay-qr", "CedarPay"],
   ["qr-rspay", "RsPay"],
   ["fancypay", "FancyPay"],
   ["fancypayinr-paytmqr", "FancyPay"],
