@@ -96,6 +96,20 @@ test('confirmed India fee headings match uploaded identities without mutating re
   assert.equal(view.sumRows(view.filteredBaseNoDate).count,30);
   assert.deepEqual(input,before);
 });
+test('confirmed India RAJA names display as RAJAGAMES while preserving foreign platform identities',()=>{
+  const aliases=['RAJA','RAJAGAME','RAJAGAMES'];
+  for(const country of ['印度','IN','印度线下盘口']){
+    assert.deepEqual(helper.canonicalThirdPartyPlatformSelections(country,aliases),['RAJAGAMES']);
+    for(const alias of aliases){
+      assert.ok(helper.matchesThirdPartyPlatformSelection(country,alias,['RAJAGAMES']));
+      assert.ok(helper.matchesThirdPartyPlatformSelection(country,'RAJAGAMES',[alias]));
+    }
+  }
+  for(const country of ['巴西','越南','香港',''])
+    for(const alias of aliases) assert.equal(helper.canonicalThirdPartyPlatform(country,alias),alias);
+  for(const alias of ['RAJA2','RAJAGAME2','RAJAGAMES2'])
+    assert.equal(helper.canonicalThirdPartyPlatform('印度',alias),alias);
+});
 function pipeline({ input = data(), platforms = [], country = '巴西', statusRows = rates,
   catalog = [...input.map(({ country, platform }) => ({ country, platform })), ...statusRows] } = {}) {
   const api = functions();

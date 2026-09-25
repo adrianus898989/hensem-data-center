@@ -49,6 +49,7 @@ function normalizePlatformName(platform: unknown): string {
     "INDIA82": "82LOTTERY",
     "82LOTTERY": "82LOTTERY",
     "RAJAGAME": "RAJA",
+    "RAJAGAMES": "RAJA",
     "RAJA": "RAJA",
     "222VIP.COM": "222VIP",
     "222-VIP": "222VIP",

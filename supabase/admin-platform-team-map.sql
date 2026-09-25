@@ -42,7 +42,7 @@ values
   ('M8', 'AR系统', 'AR', '印度', 'IN', '印度', 'JALWA', 'JALWA', '{}'::jsonb),
   ('M8', 'AR系统', 'AR', '印度', 'IN', '印度', 'LOTTERY77', 'LOTTERY7', '{}'::jsonb),
   ('M8', 'AR系统', 'AR', '印度', 'IN', '印度', 'OKWIN', 'OKWIN', '{}'::jsonb),
-  ('M8', 'AR系统', 'AR', '印度', 'IN', '印度', 'RAJA', 'RAJA', '{}'::jsonb),
+  ('M8', 'AR系统', 'AR', '印度', 'IN', '印度', 'RAJAGAMES', 'RAJA', '{}'::jsonb),
   ('M8', 'AR系统', 'AR', '印度', 'IN', '印度', 'RAJALOTTERY', 'RAJALOTTERY', '{}'::jsonb),
   ('M8', 'AR系统', 'AR', '印度', 'IN', '印度', 'SHREEWIN', 'Shree.Win', '{}'::jsonb),
   ('M8', 'AR系统', 'AR', '印度', 'IN', '印度', 'TPPLAY', 'TPPLAY', '{}'::jsonb),

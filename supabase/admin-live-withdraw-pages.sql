@@ -220,7 +220,9 @@ begin
  end if;
  with direct as materialized (
   select s.*,private.dashboard_admin_live_withdraw_key(s.platform) as platform_key from public.newar_business_snapshots s
-  where s.kind='auto_withdraw_bundle' and s.direction='all' and s.country=v_country and s.stat_date between v_before and v_end
+  where s.kind='auto_withdraw_bundle' and s.direction='all'
+   and (s.country=v_country or (v_country='胖虎巴西' and upper(s.country) in ('巴西','BR','BR_PANGHU','PANGHU BRAZIL')))
+   and s.stat_date between v_before and v_end
    and private.dashboard_scope_allows(v_scope,s.country_code,s.platform)
  ), legacy_daily as (
   select distinct on(a.data_date,a.country,private.dashboard_admin_live_withdraw_key(a.platform))
@@ -228,7 +230,7 @@ begin
    a.total::bigint,a.success::bigint,a.rejected::bigint,a.auto_count::bigint,
    coalesce(a.manual_count,greatest(a.total-a.auto_count,0))::bigint as manual_count,a.avg_seconds::numeric,
    a.source_updated_at,a.updated_at
-  from public.auto_withdraw_daily a where a.country=v_country and a.data_date between v_before and v_end
+  from public.auto_withdraw_daily a where (a.country=v_country or (v_country='胖虎巴西' and upper(a.country) in ('巴西','BR','BR_PANGHU','PANGHU BRAZIL'))) and a.data_date between v_before and v_end
    and private.dashboard_scope_allows(v_scope,a.country,a.platform)
    and not exists(select 1 from direct n where n.stat_date=a.data_date and n.platform_key=private.dashboard_admin_live_withdraw_key(a.platform) and n.payload ? 'rows')
   order by a.data_date,a.country,private.dashboard_admin_live_withdraw_key(a.platform),coalesce(a.updated_at,a.source_updated_at) desc
@@ -248,7 +250,7 @@ begin
   select distinct on(o.data_date,o.country,private.dashboard_admin_live_withdraw_key(o.platform),o.account)
    o.data_date,o.country,o.platform,private.dashboard_admin_live_withdraw_key(o.platform) as platform_key,o.account,
    o.processed::bigint,o.rejected::bigint,o.avg_seconds::numeric,o.source_updated_at,o.updated_at
-  from public.withdraw_operator_daily o where o.country=v_country and o.data_date between v_before and v_end
+  from public.withdraw_operator_daily o where (o.country=v_country or (v_country='胖虎巴西' and upper(o.country) in ('巴西','BR','BR_PANGHU','PANGHU BRAZIL'))) and o.data_date between v_before and v_end
    and private.dashboard_scope_allows(v_scope,o.country,o.platform)
    and not exists(select 1 from direct n where n.stat_date=o.data_date and n.platform_key=private.dashboard_admin_live_withdraw_key(o.platform) and n.payload ? 'operator_rows')
   order by o.data_date,o.country,private.dashboard_admin_live_withdraw_key(o.platform),o.account,coalesce(o.updated_at,o.source_updated_at) desc
@@ -337,7 +339,7 @@ begin
   'canWriteNotes',private.dashboard_admin_live_can_note(),
   'platforms',coalesce((select jsonb_agg(platform order by platform) from (select distinct platform from daily_source union select distinct platform from operator_source) p),'[]'::jsonb),
   'notes',coalesce((select jsonb_agg(jsonb_build_object('date',n.data_date,'country',n.country,'platform',n.platform,'reason',n.reason,'updatedAt',n.updated_at,
-    'version',md5(jsonb_build_array(extract(epoch from n.updated_at),n.reason)::text))) from public.auto_withdraw_notes n where n.country=v_country and n.data_date between v_start and v_end
+    'version',md5(jsonb_build_array(extract(epoch from n.updated_at),n.reason)::text))) from public.auto_withdraw_notes n where (n.country=v_country or (v_country='胖虎巴西' and upper(n.country) in ('巴西','BR','BR_PANGHU','PANGHU BRAZIL'))) and n.data_date between v_start and v_end
     and (v_platforms is null or private.dashboard_admin_live_withdraw_key(n.platform)=any(v_platforms)) and private.dashboard_scope_allows(v_scope,n.country,n.platform)),'[]'::jsonb)
  ) into v_result;
  return v_result;

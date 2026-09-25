@@ -18,6 +18,19 @@ returns text language sql immutable parallel safe set search_path='' as $$
  ) select nullif(string_agg(line,E'\n' order by position),'') from kept) end
 $$;
 revoke all on function private.dashboard_admin_live_clean_note(text) from public,anon,authenticated;
+-- The collector appends the numeric threshold to this one rule.  Those
+-- suffixes are values of the same rule, not separate reasons, so group them
+-- before counting while retaining one source variant for drill-down.
+create or replace function private.dashboard_admin_live_blocking_category(p_note text)
+returns text language sql immutable parallel safe set search_path='' as $$
+ with normalized as (
+  select nullif(btrim(regexp_replace(coalesce(p_note,''),'[[:space:]]+',' ','g')),'') note
+ ) select case
+  when regexp_replace(note,'[：:][[:space:]]*[0-9]+[[:space:]]*$','')='会员在限制的游戏类型中总的投注数'
+    then '会员在限制的游戏类型中总的投注数'
+  else note end from normalized
+$$;
+revoke all on function private.dashboard_admin_live_blocking_category(text) from public,anon,authenticated;
 -- Source headings from the user's arwd.py remark whitelist (2026-09-19).
 -- A heading describes a reason, never proves that rejecting an order was correct.
 -- Both bracket styles/case variants share a category; the complete note is retained.
@@ -89,7 +102,7 @@ begin
  v_code:=coalesce(v_meta.scope_group,(select country_code from public.dashboard_platform_team_map m where m.country_name=v_country and m.active limit 1));
  if v_code is null then raise exception using errcode='22023',message='platform_denied';end if;
  v_aliases:=array[v_platform,v_meta.name,v_meta.source_name];
- select total into v_expected from public.auto_withdraw_daily where country=v_country and data_date=v_date
+ select total into v_expected from public.auto_withdraw_daily where (country=v_country or (v_country='胖虎巴西' and upper(country) in ('巴西','BR','BR_PANGHU','PANGHU BRAZIL'))) and data_date=v_date
   and private.dashboard_admin_live_withdraw_key(platform)=private.dashboard_admin_live_withdraw_key(v_platform) order by updated_at desc limit 1;
  if v_meta.source='ar' then
   with orders as materialized (
@@ -106,23 +119,28 @@ begin
    -- A busy platform's successful orders do not need rejection-note processing.
    select distinct coalesce(case when v_kind='blocking' then manual_raw else rejection_raw end,'') raw_note from candidates
   ), cleaned as materialized (
-   select raw_note,private.dashboard_admin_live_clean_note(raw_note) clean_note from distinct_reasons
+   select raw_note,private.dashboard_admin_live_clean_note(raw_note) clean_note,
+    case when v_kind='blocking' then private.dashboard_admin_live_blocking_category(private.dashboard_admin_live_clean_note(raw_note))
+      else private.dashboard_admin_live_clean_note(raw_note) end group_note
+   from distinct_reasons
   ), classified as materialized (
-   select raw_note,clean_note,case when v_kind<>'blocking' then private.dashboard_admin_live_rejection_category(v_code,clean_note) end category from cleaned
+   select raw_note,clean_note,group_note,case when v_kind<>'blocking' then private.dashboard_admin_live_rejection_category(v_code,clean_note) end category from cleaned
   ), notes as materialized (
-   select o.*,case when v_kind='blocking' then c.clean_note else coalesce(c.clean_note,'（源备注为空）') end as note,
-    case when v_kind<>'blocking' then c.clean_note end rejection_note,c.category
+   select o.*,case when v_kind='blocking' then c.group_note else coalesce(c.clean_note,'（源备注为空）') end as note,
+    case when v_kind<>'blocking' then c.clean_note end rejection_note,c.clean_note source_note,c.category
    from candidates o join classified c on c.raw_note=coalesce(case when v_kind='blocking' then o.manual_raw else o.rejection_raw end,'')
   ), selected_notes as materialized (
    select * from notes where (v_category is null or md5(category)=v_category) and (v_reason is null or md5(note)=v_reason)
     and (v_operator is null or md5(coalesce(operator,''))=v_operator)
     and (v_query is null or position(lower(v_query) in lower(order_no))>0)
   ), groups as (
-   select note as reason,md5(note) as "reasonKey",count(*)::bigint as count,count(*) filter(where status_group='success')::bigint as success,
+   select note as reason,md5(note) as "reasonKey",count(*)::bigint as count,min(source_note) as "sourceReason",count(distinct source_note)::bigint as "sourceVariantCount",
+    count(*) filter(where status_group='success')::bigint as success,
     count(*) filter(where status_group='rejected')::bigint as rejected,count(*) filter(where status_group='other')::bigint as other
    from selected_notes group by note
   ), category_groups as (
-   select category,md5(category) "categoryKey",count(*)::bigint count from selected_notes group by category
+   select category,md5(category) "categoryKey",count(*)::bigint count,min(rejection_note) filter(where rejection_note is not null) as "sourceReason",
+    count(distinct rejection_note) filter(where rejection_note is not null)::bigint as "sourceVariantCount" from selected_notes group by category
   ), operator_groups as (
    select operator,md5(coalesce(operator,'')) "operatorKey",count(*)::bigint count,
     count(distinct category)::bigint "categoryCount",count(*) filter(where category='源备注为空')::bigint "missingReasonCount"
@@ -141,7 +159,8 @@ begin
    coalesce((select jsonb_agg(item order by sort_time desc nulls last,sort_count desc,sort_text) from
     (select * from rendered order by sort_time desc nulls last,sort_count desc,sort_text offset v_offset limit v_limit)p),'[]'::jsonb),
    coalesce((select jsonb_agg(to_jsonb(g) order by count desc,category) from
-    (select category,md5(category) "categoryKey",count(*)::bigint count from notes group by category)g),'[]'::jsonb),
+    (select category,md5(category) "categoryKey",count(*)::bigint count,min(rejection_note) filter(where rejection_note is not null) as "sourceReason",
+      count(distinct rejection_note) filter(where rejection_note is not null)::bigint as "sourceVariantCount" from notes group by category)g),'[]'::jsonb),
    jsonb_build_object('totalRejected',(select count(*) from orders where status_group='rejected'),
     'missingReason',(select count(*) from notes where category='源备注为空'),
     'withOperator',(select count(*) from notes where nullif(btrim(operator),'') is not null),
@@ -155,9 +174,9 @@ begin
    'coverage',jsonb_build_object('collected',v_count,'expected',v_expected,'complete',v_count=v_expected,'rejected',v_rejected,'withManualRemark',v_noted),
    'updatedAt',v_updated,'latestSnapshotDate',null,'snapshotFallback',true);end if;
  end if;
- select max(stat_date) into v_latest from public.withdraw_reasons_daily where country_code=v_code and private.dashboard_admin_live_withdraw_key(platform)=private.dashboard_admin_live_withdraw_key(v_platform)
+ select max(stat_date) into v_latest from public.withdraw_reasons_daily where (country_code=v_code or (v_code='BR_PANGHU' and country_code='BR')) and private.dashboard_admin_live_withdraw_key(platform)=private.dashboard_admin_live_withdraw_key(v_platform)
   and private.dashboard_scope_allows(v_scope,country_code,platform);
- select * into v_snapshot from public.withdraw_reasons_daily_grouped where country_code=v_code and stat_date=v_date
+ select * into v_snapshot from public.withdraw_reasons_daily_grouped where (country_code=v_code or (v_code='BR_PANGHU' and country_code='BR')) and stat_date=v_date
   and private.dashboard_admin_live_withdraw_key(platform)=private.dashboard_admin_live_withdraw_key(v_platform)
   and private.dashboard_scope_allows(v_scope,country_code,platform) order by updated_at desc limit 1;
  if v_snapshot.platform is null or v_kind in('orders','operators') or v_operator is not null or v_query is not null
@@ -169,22 +188,30 @@ begin
     when v_kind<>'blocking' then '当前来源尚未单独采集驳回订单的备注字段' else '所选日期尚无自动出款拦截原因采集记录' end);
  end if;
  with original_groups as materialized (
-  select private.dashboard_admin_live_clean_note(g->>'reason_label') reason,case when v_kind<>'blocking' then private.dashboard_admin_live_rejection_category(v_code,private.dashboard_admin_live_clean_note(g->>'reason_label')) end category,
+  select private.dashboard_admin_live_clean_note(g->>'reason_label') source_reason,
+   case when v_kind='blocking' then private.dashboard_admin_live_blocking_category(private.dashboard_admin_live_clean_note(g->>'reason_label'))
+    else private.dashboard_admin_live_clean_note(g->>'reason_label') end reason,
+   case when v_kind<>'blocking' then private.dashboard_admin_live_rejection_category(v_code,private.dashboard_admin_live_clean_note(g->>'reason_label')) end category,
    sum(case when v_kind<>'blocking' then (g->>'reject')::bigint else (g->>'count')::bigint end)::bigint count,
    sum((g->>'success')::bigint)::bigint success,sum((g->>'reject')::bigint)::bigint rejected,sum((g->>'other')::bigint)::bigint other
   from jsonb_array_elements(v_snapshot.snapshot->'groups')g
-  where (v_kind<>'blocking' and (g->>'reject')::bigint>0) or (v_kind='blocking' and g->>'operator_class'<>'auto') group by 1,2
+  where (v_kind<>'blocking' and (g->>'reject')::bigint>0) or (v_kind='blocking' and g->>'operator_class'<>'auto') group by 1,2,3
  ), selected_groups as materialized (
   select * from original_groups where (v_category is null or md5(category)=v_category) and (v_reason is null or md5(reason)=v_reason)
  ), rendered as (
-  select jsonb_build_object('category',category,'categoryKey',md5(category),'count',sum(count)::bigint) item,sum(count) count,category label
+  select jsonb_build_object('category',category,'categoryKey',md5(category),'count',sum(count)::bigint,
+    'sourceReason',min(source_reason),'sourceVariantCount',count(distinct source_reason)::bigint) item,sum(count) count,category label
    from selected_groups where v_kind='categories' group by category
-  union all select to_jsonb(g)||jsonb_build_object('reasonKey',md5(reason)),count,reason from selected_groups g where v_kind<>'categories'
+  union all select jsonb_build_object('reason',reason,'reasonKey',md5(reason),'count',sum(count)::bigint,
+    'sourceReason',min(source_reason),'sourceVariantCount',count(distinct source_reason)::bigint,
+    'success',sum(success)::bigint,'rejected',sum(rejected)::bigint,'other',sum(other)::bigint) item,sum(count),reason
+   from selected_groups g where v_kind<>'categories' group by reason
  ) select (select count(*) from rendered),
   coalesce((select jsonb_agg(item order by count desc,label) from (select * from rendered order by count desc,label offset v_offset limit v_limit)p),'[]'::jsonb),
   (select coalesce(sum(count),0) from original_groups),
   coalesce((select jsonb_agg(to_jsonb(g) order by count desc,category) from
-   (select category,md5(category) "categoryKey",sum(count)::bigint count from original_groups group by category)g),'[]'::jsonb),
+   (select category,md5(category) "categoryKey",sum(count)::bigint count,min(source_reason) as "sourceReason",
+     count(distinct source_reason)::bigint as "sourceVariantCount" from original_groups group by category)g),'[]'::jsonb),
   jsonb_build_object('totalRejected',v_snapshot.snapshot->'totals'->'reject','selectedCount',(select coalesce(sum(count),0) from selected_groups))
  into v_total,v_rows,v_noted,v_categories,v_summary;
  return jsonb_build_object('available',true,'source',v_snapshot.source_system||' 原因采集快照','basis',coalesce(v_snapshot.snapshot->>'note_field','source_note'),

@@ -261,6 +261,23 @@ test('M8 reason categories support all eight countries, both bracket styles, and
  ];
  for(const [country,note,expected]of cases){const r=await db.query('select private.dashboard_admin_live_rejection_category($1,$2) as category',[country,note]);assert.equal(r.rows[0].category,expected,country)}
 });
+test('blocking threshold remarks are one category while source variants remain available',async()=>{
+ await as(owner);await db.exec('begin');try{
+  for(const [i,suffix] of [[1,'5'],[2,'10']]) await db.query("insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,amount,status,applied_at,manual_remark,remark) values('AR','IN','EXAMPLE','withdraw',$1,10,'未通过','2026-09-23 12:00',$2,'')",['BLOCKING-VARIANT-'+i,'会员在限制的游戏类型中总的投注数：'+suffix]);
+  const result=await call('withdraw_reasons',{date:'2026-09-23',country:'印度',platform:'EXAMPLE',kind:'blocking'});
+  const row=result.rows.find(x=>x.reason==='会员在限制的游戏类型中总的投注数');assert(row);assert.equal(row.count,2);assert.equal(row.sourceVariantCount,2);assert.match(row.sourceReason,/会员在限制的游戏类型中总的投注数/);
+ }finally{await db.exec('rollback')}
+});
+test('auto-withdraw catalog keeps collected Panghu Brazil rows in a separate group',async()=>{
+ await as(owner);await db.exec('begin');try{
+  await db.query("insert into auto_withdraw_daily values('2026-09-23','巴西','776F',7,6,1,5,2,20,null,now(),now()),('2026-09-23','巴西','POPNOV',3,2,1,1,2,20,null,now(),now())");
+  const catalog=(await call('query',{action:'catalog'})).platforms;
+  const panghu=catalog.find(x=>x.source==='withdraw'&&x.name==='776F');
+  assert.deepEqual({country:panghu.country,team:panghu.team,scopeGroup:panghu.scopeGroup,sourceName:panghu.sourceName},{country:'胖虎巴西',team:'胖虎',scopeGroup:'BR_PANGHU',sourceName:'776F'});
+  const ordinary=catalog.find(x=>x.source==='withdraw'&&x.name==='POPNOV');
+  assert.equal(ordinary.country,'巴西');assert.equal(ordinary.scopeGroup,'BR');assert.notEqual(ordinary.team,'胖虎');
+ }finally{await db.exec('rollback')}
+});
 test('multilingual source preview/tooltip formatting matches complete templates while ambiguous or truncated notes stay separate',async()=>{
  const templates=JSON.parse(sql('admin-live-withdraw-templates.sql').match(/\$templates\$([\s\S]*?)\$templates\$/)[1]);
  let checked=0;
