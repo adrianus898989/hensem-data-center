@@ -52,6 +52,7 @@ before(async()=>{
  await db.exec(sql('admin-live-configuration.sql').split("select cron.schedule")[0]);
  await db.exec(sql('admin-live-configuration-platforms.sql'));
  await db.exec(sql('admin-live-configuration-query.sql'));
+ await db.exec(sql('admin-live-provider-filter-normalization.sql'));
  await db.exec(sql('admin-live-configuration-workorders.sql'));
  await db.exec(sql('admin-live-withdraw-pages.sql'));
  await db.exec(sql('admin-live-withdraw-templates.sql'));
@@ -145,6 +146,17 @@ test('registry preserves historical mappings, conflicts, blanks and authorized o
  await as(viewer);const r=await call('provider_config',{country:'印度'});assert.equal(r.canManage,false);assert.equal(r.total,5);assert.equal(r.summary.conflict,1);assert.equal(r.summary.unassigned,1);assert(!JSON.stringify(r).includes('HiddenPay'));
  const catalog=await call('query',{action:'catalog'}),id=catalog.platforms.find(p=>p.name==='EXAMPLE').id;
  assert.deepEqual((await call('provider_options',{platformIds:[id]})).providers,['PayA','conflict','未识别通道']);
+});
+test('provider filters include approved raw aliases even before the volume mapping refresh',async()=>{
+ await as(owner);await db.exec('begin');try{
+  await db.query("insert into third_party_volume values('印度','EXAMPLE','Phonepe_QR','Phonepe_QR','代收',2,'2026-09-23',now()),('印度','EXAMPLE','UPI-QR','UPI-QR','代收',1,'2026-09-23',now())");
+  await db.query("insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,amount,status,applied_at,completed_at,raw_channel) values('AR','IN','EXAMPLE','recharge','PHONEPE-1',100,'已支付','2026-09-23 01:00','2026-09-23 01:05','Phonepe_QR'),('AR','IN','EXAMPLE','recharge','UPI-1',200,'已支付','2026-09-23 02:00','2026-09-23 02:05','UPI-QR')");
+  await db.exec('refresh materialized view private.dashboard_admin_provider_registry');
+  const id=(await call('query',{action:'catalog'})).platforms.find(p=>p.name==='EXAMPLE').id;
+  const r=await call('query',query(id,{providers:['UPI-QR']}));
+  const row=r.groups.provider.find(x=>x.provider==='UPI-QR'&&x.direction==='charge');
+  assert(row);assert.equal(row.all_count,2);assert.equal(row.created_success_count,2);assert.equal(row.success_count,2);assert.equal(Number(row.success_amount),300);
+ }finally{await db.exec('rollback')}
 });
 test('write authorization is explicit, viewer stays read only, stale edits conflict and grants revoke immediately',async()=>{
  await as(admin);let row=(await call('provider_config',{country:'印度',rawProvider:'raw-a'})).rows[0];const write={operation:'provider',country:row.country,platform:row.platform,rawProvider:row.rawProvider,canonicalProvider:'EditedPay',expectedVersion:row.version};

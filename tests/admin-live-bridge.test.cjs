@@ -67,10 +67,10 @@ test('invalid valid-channel requests are rejected before authentication or netwo
   const h=load(),b=bridge(h);h.send(b.event('invalid',{...query,sql:'select secrets'}));await flush();assert.equal(h.calls.length,0);assert.equal(h.authCalls.length,0);assert.equal(b.replies.length,1);assert(b.replies[0].data.error);b.cleanup();
 });
 
-test('duplicate IDs and a fifth concurrent request do not create duplicate work',async()=>{
+test('duplicate IDs and queued concurrent requests do not create duplicate work',async()=>{
   const waiting=deferred(),h=load({fetch:()=>waiting.promise}),b=bridge(h);
-  h.send(b.event('a'));h.send(b.event('a'));for(const id of ['b','c','d','e'])h.send(b.event(id));await flush();assert.equal(h.calls.length,4);assert.equal(b.replies.length,1);assert.equal(b.replies[0].data.id,'e');assert.match(b.replies[0].data.error,/过多/);
-  waiting.resolve({ok:true,json:async()=>({total:0})});await flush();assert.equal(b.replies.length,5);assert.equal(h.timers.size,0);b.cleanup();
+  h.send(b.event('a'));h.send(b.event('a'));for(const id of ['b','c','d','e'])h.send(b.event(id));await flush();assert.equal(h.calls.length,4);assert.equal(b.replies.length,0);
+  waiting.resolve({ok:true,json:async()=>({total:0})});await flush();await flush();assert.equal(h.calls.length,5);assert.equal(b.replies.length,5);assert(!b.replies.some(reply=>reply.data.error));assert.equal(h.timers.size,0);b.cleanup();
 });
 
 test('cleanup aborts every active request and late success cannot reach the iframe',async()=>{

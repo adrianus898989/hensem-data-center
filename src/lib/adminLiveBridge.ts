@@ -158,18 +158,24 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  return response.json();
 }
 export function installAdminLiveBridge(options:{source:()=>Window|null|undefined;channel:()=>string;session:DashboardSession|(()=>DashboardSession);target?:Window}):()=>void{
- const target=options.target||window,active=new Map<string,AbortController>();let closed=false;
- const receive=async(event:MessageEvent)=>{
+ type Pending={id:string;request:unknown;source:Window;channel:string};
+ const target=options.target||window,active=new Map<string,AbortController>(),queued=new Map<string,Pending>();let closed=false;
+ const post=(item:Pending,payload:Record<string,unknown>)=>{if(!closed&&item.source===options.source()&&item.channel===options.channel())item.source.postMessage({type:LIVE_RESPONSE,id:item.id,channel:item.channel,...payload},"*")};
+ const run=async(item:Pending)=>{
+   if(closed||item.source!==options.source()||item.channel!==options.channel())return;
+   const controller=new AbortController();active.set(item.id,controller);const timer=setTimeout(()=>controller.abort(),90000);
+   try{post(item,{result:await adminLiveRequest(typeof options.session==="function"?options.session():options.session,item.request,controller.signal)})}catch(e){post(item,{error:controller.signal.aborted?adminLiveTimeoutMessage((item.request as {action?:unknown})?.action):e instanceof Error?e.message:"读取失败"})}finally{clearTimeout(timer);active.delete(item.id);drain()};
+ };
+ const drain=()=>{while(!closed&&active.size<4&&queued.size){const next=queued.values().next();if(next.done||!next.value)break;const item=next.value as Pending;queued.delete(item.id);if(item.source!==options.source()||item.channel!==options.channel())continue;void run(item)}};
+ const receive=(event:MessageEvent)=>{
    if(closed||!isAdminLiveMessage(event,options.source(),options.channel()))return;
-   const {id,request}=event.data,source=event.source as Window,channel=options.channel();
-   if(active.has(id))return;
-   const reply=(payload:Record<string,unknown>)=>{if(!closed&&source===options.source()&&channel===options.channel())source.postMessage({type:LIVE_RESPONSE,id,channel,...payload},"*")};
-   if(active.size>=4){reply({error:"同时查询过多，请等待当前查询完成"});return;}
-   const controller=new AbortController();active.set(id,controller);const timer=setTimeout(()=>controller.abort(),90000);
-   try{reply({result:await adminLiveRequest(typeof options.session==="function"?options.session():options.session,request,controller.signal)})}catch(e){reply({error:controller.signal.aborted?adminLiveTimeoutMessage(request?.action):e instanceof Error?e.message:"读取失败"})}finally{clearTimeout(timer);active.delete(id)};
+   const {id,request}=event.data,source=event.source as Window,channel=options.channel(),item:Pending={id,request,source,channel};
+   if(active.has(id)||queued.has(id))return;
+   if(active.size>=4){if(queued.size>=8){post(item,{error:"同时查询过多，请等待当前查询完成"});return}queued.set(id,item);return;}
+   void run(item);
  };
  target.addEventListener("message",receive);
- return ()=>{closed=true;target.removeEventListener("message",receive);for(const controller of active.values())controller.abort();active.clear()};
+ return ()=>{closed=true;target.removeEventListener("message",receive);for(const controller of active.values())controller.abort();active.clear();queued.clear()};
 }
 export function makeAdminLiveDocument(html:string,channel:string):string{
  const encoded=JSON.stringify(channel).replace(/</g,"\\u003c").replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029");

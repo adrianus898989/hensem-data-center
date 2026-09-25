@@ -28,11 +28,25 @@ begin
   select array_agg(distinct raw_provider order by raw_provider) into v_raw
     from (
       select value as raw_provider from unnest(coalesce(v_selected,'{}'::text[])) value
+      -- Use the compact registry first. It includes manual classifications
+      -- and applies the approved alias function without a materialized-view
+      -- refresh, so a newly confirmed alias is queryable immediately.
+      union
+      select coalesce(nullif(v.raw_provider,''),'未识别通道')
+      from private.dashboard_admin_live_provider_rows() v
+      where v.country=v_platform.country
+        and v.platform=any(array[v_platform.name,v_platform.source_name]::text[])
+        and v.canonical_provider=any(coalesce(v_selected,'{}'::text[]))
       union
       select v.raw_channel
       from public.third_party_volume v
-      where v.country=v_platform.country and v.platform=v_platform.name
-        and v.channel=any(coalesce(v_selected,'{}'::text[]))
+      where v.country=v_platform.country
+        and v.platform=any(array[v_platform.name,v_platform.source_name]::text[])
+        and (
+          v.channel=any(coalesce(v_selected,'{}'::text[]))
+          or private.dashboard_admin_live_provider_alias(v.country,v.raw_channel)=any(coalesce(v_selected,'{}'::text[]))
+          or private.dashboard_admin_live_provider_alias(v.country,v.channel)=any(coalesce(v_selected,'{}'::text[]))
+        )
         and v.raw_channel is not null and btrim(v.raw_channel)<>''
     ) mapped;
   return jsonb_set(p_request,'{providers}',to_jsonb(coalesce(v_raw,'{}'::text[])),true);
