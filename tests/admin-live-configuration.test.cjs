@@ -63,7 +63,7 @@ before(async()=>{
 after(async()=>{await db?.close()});
 test('confirmed provider aliases merge both directions and existing configuration before registry refresh',async()=>{
  await as(owner);await db.exec('begin');try{
-  const pairs=[['LKgoPayINR','LKgoPay'],['LKgoPay','LKgoPay'],['PAYTM- RAPay','RAPay'],['PAYTM – RAPay','RAPay'],['RAPay','RAPay'],['VstarPay','VstarPay'],['VstarPayINR-Bank','VstarPay'],['UmoneyPay','UmoneyPay'],['UmoneyPayINR','UmoneyPay'],['MovPayINR-Bank','MovPay'],['MovPay','MovPay'],['FFPayINR','FFPay'],['FFPay','FFPay'],['UniPayUSDTCU','UniPayUSDT'],['UniPayUSDT','UniPayUSDT'],['CedarPayINR-wake','CedarPay'],['CedarPay-QR','CedarPay']];
+  const pairs=[['LKgoPayINR','LKgoPay'],['LKgoPay','LKgoPay'],['PAYTM- RAPay','RAPay'],['PAYTM – RAPay','RAPay'],['RAPay','RAPay'],['VstarPay','VstarPay'],['VstarPayINR-Bank','VstarPay'],['UmoneyPay','UmoneyPay'],['UmoneyPayINR','UmoneyPay'],['MovPayINR-Bank','MovPay'],['MovPay','MovPay'],['FFPayINR','FFPay'],['FFPay','FFPay'],['UniPayUSDTCU','UniPayUSDT'],['UniPayUSDT','UniPayUSDT'],['CedarPayINR-wake','CedarPay'],['CedarPay-QR','CedarPay'],['WandaPay','WandaPay'],['WandaPay-QR','WandaPay'],['TimiPay','TimiPay'],['TimiPay-QR','TimiPay'],['Intnet','Intnet'],['Intnet-QR','Intnet'],['TyPay3','TyPay3'],['QR-TyPay3','TyPay3']];
   // Simulate a historical registry built before the aliases were confirmed.
   await db.exec("create or replace function private.dashboard_admin_live_provider_alias(p_country text,p_name text) returns text language sql immutable set search_path='' as $$select p_name$$");
   for(const [name] of pairs)for(const direction of ['代收','代付'])await db.query("insert into third_party_volume values('印度','EXAMPLE',$1,$1,$2,1,'2026-09-23',now())",[name,direction]);

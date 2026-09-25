@@ -212,6 +212,38 @@ test('orders preserve business, fee basis and historical rate tabs without chang
  for(const [view,required]of [['business',['订单号','系统 ID','平台','团队','国家','三方','方向','订单金额','状态','核对标记','创建时间','操作']],['orderFees',['订单号','系统 ID','平台','团队','三方','方向','订单金额','实际手续费']],['orderRates',['订单号','系统 ID','平台','三方','方向','百分比费率','固定费']]]){h.c.liveReferenceSet('view',view);const html=h.html();for(const label of ['业务明细','费用依据','费率版本'])assert(html.includes(label),view+' retains tab '+label);const headers=renderedTables(html).flatMap(t=>t.headers);for(const field of required)assert(headers.includes(field),view+' retains '+field);if(view==='orderFees')assert(headers.some(x=>/手续费|费用/.test(x)), 'fee tab has fee columns');if(view==='orderRates'){assert(headers.some(x=>/版本/.test(x)),'rate tab has version column');assert(headers.some(x=>/生效/.test(x)),'rate tab has effective time column')}assert.equal(h.calls.length,calls,'tab switch reuses the exact authorized page');assert.deepEqual(Array.from(h.L.detail.rows,r=>r.id),ids);assert.match(html,/共 <b>65<\/b> 条/);for(const t of renderedTables(html))for(const row of t.rows)assert.equal(row.length,t.headers.length,view+' header/body field counts')}h.c.liveOrder(0);const drawer=h.drawers.at(-1).html;for(const field of ['订单号','系统 ID','三方订单号','会员 ID','平台','团队','国家','三方','方向'])assert(drawer.includes(field),field+' remains independently identified in the drawer');for(const value of ['order-0','source-0','third-0','member-0'])assert(drawer.includes(value),'exact original identifier '+value+' survives all views');
 });
 
+test('successful orders show the completion column first while all-order views retain creation time first',async()=>{
+ const h=await ready();setScope(h,{platform:P.id});h.c.state.page='orders';h.L.detail=detail(P,1);
+ for(const status of ['all','success']){
+  h.L.status=status;h.c.render();const t=renderedTables(h.html()).find(t=>t.headers[0]==='订单号');assert(t);
+  const created=t.headers.indexOf('创建时间'),completed=t.headers.indexOf('成功时间');assert(created>=0&&completed>=0);
+  assert.equal(completed<created,status==='success');assert.notEqual(t.rows[0][created],t.rows[0][completed]);
+  assert.match(h.html(),/成功订单按成功时间；全部拉单按创建时间/);
+ }
+});
+
+test('navigation reuses recent matching aggregates without mixing directions, but explicit queries and expired or changed scopes reread',async()=>{
+ const h=await ready();setScope(h,{platform:P.id,direction:'all'});h.c.state.page='overview';
+ h.setHandler(async q=>{const r=aggregate(P,5),w={...stats(2,'400'),direction:'withdraw'};r.summary.push(w);for(const key of Object.keys(r.groups))if(r.groups[key].length)r.groups[key].push({...r.groups[key][0],...w});r.summary=r.summary.filter(row=>q.direction==='all'||row.direction===q.direction);for(const key of Object.keys(r.groups))r.groups[key]=r.groups[key].filter(row=>q.direction==='all'||row.direction===q.direction);r.total=r.summary.reduce((n,row)=>n+row.all_count,0);return r});
+ const countReads=()=>h.calls.filter(q=>q.action==='aggregate').length;
+ await h.c.liveLoad();const initial=countReads();assert.equal(h.L.results[0].total,7);
+ h.c.setPage('providers');await settle();assert.equal(countReads(),initial);assert.equal(h.L.results[0].total,5);assert(h.L.results[0].summary.every(r=>r.direction==='charge'));assert.equal(h.L.comparisonStatus,'ready');
+ h.c.setPage('payout');await settle();assert.equal(countReads(),initial);assert.equal(h.L.results[0].total,2);assert(h.L.results[0].summary.every(r=>r.direction==='withdraw'));assert.equal(h.L.comparisonResults[0].total,2);
+ await h.c.liveLoad();assert.equal(countReads(),initial+2,'manual query rereads both dates');
+ h.setNow('2026-09-23T12:01:01Z');await h.c.liveLoad(false);assert.equal(countReads(),initial+4,'navigation cache expires after one minute');
+ h.L.provider='Another Provider';h.L.multi.provider=['Another Provider'];await h.c.liveLoad(false);assert.equal(countReads(),initial+6,'provider scope cannot reuse broader totals');
+ h.L.currency='USD';h.L.catalog[0]={...h.L.catalog[0],currency:'USD'};await h.c.liveLoad(false);assert.equal(countReads(),initial+8,'currency scopes stay separate');
+});
+
+test('navigation keeps completion-cohort totals when narrowing a successful-order result by direction',async()=>{
+ const h=await ready();setScope(h,{platform:P.id,direction:'all',status:'success'});h.c.state.page='overview';
+ h.setHandler(async()=>{const r=aggregate(P,5);r.summary=[{...r.summary[0],success_count:7},{...stats(9),direction:'withdraw',success_count:2}];r.total=9;return r});
+ await h.c.liveLoad();const reads=h.calls.filter(q=>q.action==='aggregate').length;
+ h.c.setPage('providers');await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,reads);
+ assert.equal(h.L.results[0].total,7);assert.equal(h.L.results[0]._parts[0].total,7);assert.equal(h.L.comparisonResults[0].total,7);
+ h.c.setPage('payout');await settle();assert.equal(h.L.results[0].total,2);assert.equal(h.L.results[0]._parts[0].total,2);
+});
+
 test('unconnected modules preserve reference schemas and local controls without inventing source rows or queries',async()=>{
  const h=await ready(),calls=h.calls.length,expected={dropped:['订单 ID','订单号','平台','三方','方向','掉单金额','掉单笔数'],anomaly:['异常类型','订单 ID','订单号','平台','三方','方向','异常金额','异常笔数'],events:['事件编号','三方','方向','关联金额','关联笔数','处理状态'],rules:['最低订单量','超期账龄','数据不足处理','多项命中处理'],access:['账号','账号标识','角色','团队','商户（平台）范围'],ip:['IP / CIDR','适用入口','适用账号','状态'],login_logs:['账号','登录时间','IP','登录结果','白名单结果','会话状态'],operation_logs:['操作者','操作时间','动作','资源','请求 ID']};
  for(const [page,fields]of Object.entries(expected)){h.c.setPage(page);const html=h.html();assert(html.includes('data-empty-page="'+page+'"'),page);assert.match(html,/未接入/);assert.match(html,/data-empty-field=/);const tables=renderedTables(html),headers=tables.flatMap(t=>t.headers);for(const field of fields)assert(headers.includes(field),page+' preserves '+field);for(const table of tables){assert.equal(table.rows.length,1,page+' only shows the empty row');assert.equal(table.rows[0].length,1,page+' does not fabricate records');assert.match(table.rows[0][0],/未接入/);assert(table.html.includes('colspan="'+table.headers.length+'"'),page+' empty row spans schema')}assert.doesNotMatch(html,/Synthetic provider|order-0|row-0|NaN|Infinity/);assert.equal(h.calls.length,calls,page+' does not query an unrelated order dataset')}

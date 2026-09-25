@@ -171,6 +171,42 @@ test('unknown money remains null, zero and signed adjustment preserved; currenci
   assert.equal(only.total,1);assert.equal(only.summary[0].all_amount,'1500');
 });
 
+test('successful recharge details use completion time across midnight while all pulled orders retain creation time',async()=>rollback(async()=>{
+  const cases=[
+    ['CROSS-IN',101,'2026-09-15 23:59','2026-09-16 00:00','success'],
+    ['CROSS-OUT',202,'2026-09-16 01:00','2026-09-17 00:00','success'],
+    ['SAME-DAY',303,'2026-09-16 09:00','2026-09-16 10:00','success'],
+    ['LATE-ARRIVAL',404,'2026-09-15 20:00','2026-09-16 12:00','success'],
+    ['NO-COMPLETION',505,'2026-09-16 11:00',null,'success'],
+    ['STILL-PENDING',606,'2026-09-16 13:00',null,'pending'],
+  ];
+  for(const [order,n,created,completed,status]of cases){
+    await db.query(`insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,member_id,amount,status,applied_at,completed_at,raw_channel)
+      values('AR','IN','AR-EXAMPLE','recharge',$1,'TIME-BASIS',$2,$3,$4,$5,'Time Provider')`,[order,n,status==='success'?'已支付':'待支付',created,completed]);
+    await db.query(`insert into game66_charge_orders(platform_id,order_num,uid,amount_display,status_code,status_group,create_time,pay_time,pay_method_name)
+      values($1,$2,'TIME-BASIS',$3,$4,$5,$6,$7,'Time Provider')`,[game,order,n,status==='success'?'1':'0',status,created.replace(' ','T')+'+05:30',completed?completed.replace(' ','T')+'+05:30':null]);
+    await db.query(`insert into newar_detail_records(platform,dataset,source_id,member_id,order_number,amount,currency,status_code,status_group,created_at,success_at,provider)
+      values('NEW-EXAMPLE','charge',$1,'TIME-BASIS',$1,$2,'NPR',$3,$4,$5,$6,'Time Provider')`,[order,n,status==='success'?'1':'0',status,created.replace(' ','T')+'+05:30',completed?completed.replace(' ','T')+'+05:30':null]);
+  }
+  for(const platformId of [ar,game,newar]){
+    const scope=req({platformId,startAt:'2026-09-16T00:00:00+05:30',endAt:'2026-09-17T00:00:00+05:30',memberId:'TIME-BASIS',direction:'charge'});
+    const all=await call({...scope,action:'details'});
+    assert.equal(all.total,4);
+    assert.deepEqual(all.rows.map(r=>r.order_number),['STILL-PENDING','NO-COMPLETION','SAME-DAY','CROSS-OUT']);
+    const succeeded=await call({...scope,action:'details',status:'success'});
+    assert.equal(succeeded.total,3);
+    assert.deepEqual(succeeded.rows.map(r=>r.order_number),['LATE-ARRIVAL','SAME-DAY','CROSS-IN']);
+    assert.equal(succeeded.rows.reduce((n,r)=>n+Number(r.amount),0),808);
+    const total=await call({...scope,action:'aggregate'});
+    assert.equal(total.total,4);
+    assert.equal(count(total.summary,'success_count'),3);
+    assert.equal(amount(total.summary,'success_amount'),808);
+    const filtered=await call({...scope,action:'aggregate',status:'success'});
+    assert.equal(filtered.total,succeeded.total);
+    assert.equal(count(filtered.summary,'success_count'),succeeded.total);
+  }
+}));
+
 test('amount ranges are disjoint at every boundary and conserve each direction/currency/hour/status without changing exact buckets',async()=>rollback(async()=>{
   const cases=[
     [null,'unknown'],['NaN','unknown'],['Infinity','unknown'],['-Infinity','unknown'],
