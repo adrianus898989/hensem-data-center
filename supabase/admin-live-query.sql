@@ -66,7 +66,7 @@ $$;
 revoke all on function private.dashboard_admin_live_platforms() from public,anon,authenticated;
 
 create function private.dashboard_admin_live_query(p_request jsonb default '{"action":"catalog"}'::jsonb)
-returns jsonb language plpgsql stable security definer set search_path='' as $$
+returns jsonb language plpgsql stable security definer set search_path='' set jit=off as $$
 declare
   v_action text; v_options jsonb; v_platform record; v_meta jsonb; v_capabilities jsonb;
   v_id uuid; v_start timestamptz; v_end timestamptz; v_asof timestamptz := statement_timestamp();
@@ -185,8 +185,8 @@ begin
         null::numeric as actual_amount,null::numeric as withdraw_fee,$21::text as currency,a.updated_at as synced_at,null::text as utr
       from public.ar_collected_orders a where a.country_code=$3 and a.platform=$22 and a.source_system='AR'
         and a.order_kind=any(case $7 when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)
-        and (($19<>'aggregate' and a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
-          or ($19='aggregate' and (
+        and (($19<>'aggregate' and $8<>'success' and a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
+          or (($19='aggregate' or $8='success') and (
             (a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
             or (((a.order_kind='recharge' and a.status='已支付') or (a.order_kind='withdraw' and a.status='已通过'))
               and a.completed_at is not null
@@ -205,8 +205,8 @@ begin
         n.amount,n.actual_amount,n.fee as withdraw_fee,n.currency,n.received_at as synced_at,null::text as utr
       from public.newar_detail_records n join public.newar_detail_platforms t on t.platform=n.platform
       where n.platform=$22 and n.dataset=any(case $7 when 'all' then array['charge','withdraw'] else array[$7] end)
-        and (($19<>'aggregate' and n.created_at>=$5 and n.created_at<$6)
-          or ($19='aggregate' and (n.created_at>=$5 and n.created_at<$6
+        and (($19<>'aggregate' and $8<>'success' and n.created_at>=$5 and n.created_at<$6)
+          or (($19='aggregate' or $8='success') and (n.created_at>=$5 and n.created_at<$6
             or (n.status_group='success' and n.success_at is not null and n.success_at>=$5 and n.success_at<$6))))
         and (t.launch_at is null or n.created_at>=t.launch_at)
         and ($9 is null or n.member_id=$9) and ($10 is null or n.order_number=$10)
@@ -224,8 +224,8 @@ begin
         coalesce(c.amount_display,c.amount_minor/100.0) as amount,null::numeric as actual_amount,null::numeric as withdraw_fee,
         'INR'::text as currency,c.last_seen_at as synced_at,null::text as utr
       from public.game66_charge_orders c where c.platform_id=$1 and $7 in ('all','charge')
-        and (($19<>'aggregate' and c.create_time>=$5 and c.create_time<$6)
-          or ($19='aggregate' and (c.create_time>=$5 and c.create_time<$6
+        and (($19<>'aggregate' and $8<>'success' and c.create_time>=$5 and c.create_time<$6)
+          or (($19='aggregate' or $8='success') and (c.create_time>=$5 and c.create_time<$6
             or (c.status_code='1' and c.pay_time is not null and c.pay_time>=$5 and c.pay_time<$6))))
         and ($9 is null or c.uid=$9)
         and ($10 is null or c.order_num=$10) and ($23 is null or c.out_trade_no=$23)
@@ -239,8 +239,8 @@ begin
         coalesce(w.real_amount_display,w.real_amount_minor/100.0),coalesce(w.fee_display,w.fee_minor/100.0),
         'INR',w.last_seen_at,null::text
       from public.game66_withdraw_orders w where w.platform_id=$1 and $7 in ('all','withdraw')
-        and (($19<>'aggregate' and w.create_time>=$5 and w.create_time<$6)
-          or ($19='aggregate' and (w.create_time>=$5 and w.create_time<$6
+        and (($19<>'aggregate' and $8<>'success' and w.create_time>=$5 and w.create_time<$6)
+          or (($19='aggregate' or $8='success') and (w.create_time>=$5 and w.create_time<$6
             or (w.status_code='3' and w.update_time is not null and w.update_time>=$5 and w.update_time<$6))))
         and ($9 is null or w.uid=$9)
         and ($10 is null or w.order_num=$10) and ($23 is null or w.out_trade_no=$23)
@@ -434,9 +434,9 @@ begin
     select id,system_order_id,order_number,third_party_order_number,member_id,provider,channel_type,direction,status,status_group,
       created_at,success_at,amount::text,actual_amount::text,withdraw_fee::text,currency,synced_at,utr,latency_ms,pending_wait_ms
     from filtered where $19<>'aggregate'
-      and ($19='details' or $8<>'success' or (status_group='success' and success_in_range))
-      order by created_at desc,direction desc,id desc limit $18 offset $17
-  ) select jsonb_build_object('total',(select case when $19<>'details' and $8='success'
+      and ($8<>'success' or (status_group='success' and success_in_range))
+      order by case when $8='success' then success_at else created_at end desc,direction desc,id desc limit $18 offset $17
+  ) select jsonb_build_object('total',(select case when $8='success'
       then count(*) filter(where status_group='success' and success_in_range)
       else count(*) filter(where created_in_range) end from filtered),
     'summary',coalesce((select jsonb_agg(value order by value->>'direction',value->>'currency') from metric_json where kind='summary'),'[]'::jsonb),
@@ -454,7 +454,7 @@ begin
       'pending_age_thresholds',coalesce((select jsonb_agg(value order by value->>'direction',value->>'currency',bucket) from duration_json where kind='pending_age' and cumulative),'[]'::jsonb)),
     'latencySummary',coalesce((select jsonb_agg((to_jsonb(s)-array['kind','valid_amount'])||jsonb_build_object('valid_amount',valid_amount::text) order by direction,currency) from duration_summary s where kind='latency'),'[]'::jsonb),
     'pendingSummary',coalesce((select jsonb_agg((to_jsonb(s)-array['kind','valid_amount'])||jsonb_build_object('valid_amount',valid_amount::text) order by direction,currency) from duration_summary s where kind='pending_age'),'[]'::jsonb),
-    'rows',coalesce((select jsonb_agg(to_jsonb(p) order by created_at desc,direction desc,id desc) from page p),'[]'::jsonb))
+    'rows',coalesce((select jsonb_agg(to_jsonb(p) order by case when $8='success' then success_at else created_at end desc,direction desc,id desc) from page p),'[]'::jsonb))
   $q$;
 
   -- Provider pages do not need the eight chart grouping sets or duration bins.
