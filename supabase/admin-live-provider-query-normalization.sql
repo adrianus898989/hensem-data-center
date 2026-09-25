@@ -26,8 +26,9 @@ create or replace function private.dashboard_admin_live_provider_canonical(p_cou
 returns text language sql stable security definer set search_path='' as $$
   select case
     when p_raw is null or btrim(p_raw)='' then p_raw
-    when count(distinct nullif(btrim(v.channel),''))=1 then min(nullif(btrim(v.channel),''))
-    else p_raw
+    when count(distinct nullif(btrim(v.channel),''))=1
+      then private.dashboard_admin_live_provider_alias(p_country,min(nullif(btrim(v.channel),'')))
+    else private.dashboard_admin_live_provider_alias(p_country,p_raw)
   end
   from public.third_party_volume v
   where v.country=p_country
@@ -42,7 +43,7 @@ returns jsonb language plpgsql stable security definer set search_path='' as $$
 declare
   r jsonb; old_row jsonb; out_rows jsonb := '{}'::jsonb; key text; canonical text;
   k text; n numeric; fields text[] := array['all_count','missing_amount_count','negative_amount_count',
-    'success_count','pending_count','failed_count','rejected_count','unknown_count'];
+    'success_count','created_success_count','pending_count','failed_count','rejected_count','unknown_count'];
   amount_fields text[] := array['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount'];
 begin
   for r in select value from jsonb_array_elements(coalesce(p_rows,'[]'::jsonb)) loop

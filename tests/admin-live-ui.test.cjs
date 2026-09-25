@@ -403,6 +403,22 @@ test('provider catalog options do not wait for order aggregation and multiselect
  assert.equal(h.L.loading,true);assert.match(h.nodes.get('liveFilters').innerHTML,/Previously mapped pay/);assert.equal(h.L.providerOptionsBusy,false);h.c.liveSetMultiOption('provider',{value:'Previously mapped pay',checked:true});assert.deepEqual(Array.from(h.L.multi.provider),['Previously mapped pay']);assert.match(h.nodes.get('liveFilters').innerHTML,/搜索三方/);pending.resolve(aggregate());await settle();
 });
 
+test('team, system and platform selections retain each other and default systems to all',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'M8 platform',source:'NEW_AR',team:'M8'};
+ const p3={...P,id:'33333333-3333-4333-8333-333333333333',name:'Other platform',source:'AR',team:'Other'};
+ const h=await ready({platforms:[P,p2,p3]});
+ assert.equal(h.L.source,'all');assert.deepEqual(Array.from(h.L.multi.source),[]);
+ h.c.liveSetMultiOption('team',{value:'M8',checked:true});
+ h.c.liveSetMultiOption('source',{value:'AR',checked:true});
+ h.c.liveSetMultiOption('source',{value:'NEW_AR',checked:true});
+ h.c.liveSetMultiOption('platform',{value:P.id,checked:true});
+ h.c.liveSetMultiOption('platform',{value:p2.id,checked:true});
+ await settle();
+ assert.deepEqual(Array.from(h.L.multi.source).sort(),['AR','NEW_AR']);
+ assert.deepEqual(Array.from(h.L.multi.platform).sort(),[P.id,p2.id].sort());
+ const html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/M8 platform/);assert.match(html,/Other platform/);
+});
+
 test('provider KPI comparisons use the same direction and distinguish money differences from percentage points',async()=>{
  const h=await ready(),current=completeAggregate(P,100,60),previous=completeAggregate(P,100,50);
  for(const r of [current,previous])r.groups.provider.push({...r.groups.provider[0],direction:'withdraw',success_count:900,success_amount:90000,created_success_count:90});

@@ -29,7 +29,7 @@ Use the caller's current authenticated token. Authorization is active Owner, or 
 - `aggregate`: same full aggregate and exact total, `rows:[]`.
 - `details`: same filtered exact total and one page; summary/group arrays empty, avoiding repeated heavy grouping on pagination.
 
-Each noncatalog action requires one `platformId`, `startAt`, `endAt`. Timestamps must include offset/Z. Start is inclusive and end exclusive; frontends convert an inclusive ending second to the next second. Maximum 31 local calendar days in the catalog platform timezone. This API uses creation time only.
+Each noncatalog action requires one `platformId`, `startAt`, `endAt`. Timestamps must include offset/Z. Start is inclusive and end exclusive; frontends convert an inclusive ending second to the next second. Maximum 31 local calendar days in the catalog platform timezone. The API uses a mixed cohort by design: all orders and non-success statuses use the selected creation-time range; successful amount/count use the order's `success_at` range. The displayed success rate remains `created_success_count / all_count`, so it answers “of the orders created in this period, how many have succeeded” without mixing that denominator with the success-time cohort.
 
 Optional filters all combine with AND:
 
@@ -42,7 +42,7 @@ Optional filters all combine with AND:
 | memberId | exact member ID |
 | systemOrderId | exact NEW_AR `source_id`; unsupported for other sources |
 | utr | currently unsupported for all safe normalized sources |
-| providers | array of provider names; the private wrapper accepts the canonical name shown by the UI, expands it to all matching raw aliases from `third_party_volume`, then returns the groups under that canonical name |
+| providers | array of provider names; the private wrapper accepts the canonical name shown by the UI, expands it through the current classification registry and the approved raw aliases (with `third_party_volume` as a fallback), then returns the groups under that canonical name |
 | channelTypes | array of exact raw channel type names |
 | currency | exact currency; omitted means preserve all currencies as separate aggregates |
 | amountMin / amountMax | inclusive original order amount; decimal strings accepted; negative signed adjustments preserved |
@@ -99,7 +99,7 @@ created_at, success_at, amount, actual_amount, withdraw_fee,
 currency, synced_at, utr, latency_ms, pending_wait_ms
 ```
 
-Rows are ordered by creation time, direction and ID descending. Phone, bank/UPI account identifiers, raw payloads, amount source text and free-form comments are excluded. IDs retain their separate meanings. `withdraw_fee` is the recorded source field, not a historical fee estimate; AR has no actual amount/fee coverage.
+Rows are ordered by `success_at` for a successful-order query and by creation time for all other order queries, with direction and ID as tie-breakers. Phone, bank/UPI account identifiers, raw payloads, amount source text and free-form comments are excluded. IDs retain their separate meanings. `withdraw_fee` is the recorded source field, not a historical fee estimate; AR has no actual amount/fee coverage.
 
 ## Durations
 
