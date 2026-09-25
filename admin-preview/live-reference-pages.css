@@ -56,3 +56,19 @@ body.live-admin .live-date-range>label{font-size:10px;color:#7789a7}
 .live-admin .df-extreme-cell{display:flex;flex-direction:column;gap:4px;padding:10px;border:1px solid #e7edf5;border-radius:6px;background:#fbfcff;color:#566983;font-size:11px}
 .live-admin .df-extreme-cell b{color:#2f4f87;font-size:12px}
 @media(max-width:600px){.live-admin .df-extreme-grid{grid-template-columns:minmax(0,1fr)}}
+/* Place provider comparisons beside each flow's success rate. */
+body.live-admin .df-flow-grid{align-items:start}
+body.live-admin .df-flow-provider-extremes{grid-column:span 3;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:0 12px 10px}
+body.live-admin .df-provider-rank{min-width:0;padding:9px 11px;border-radius:7px;background:#f7f9fd;border:1px solid #e5ebf5;font-size:10px}
+body.live-admin .df-provider-rank>b{display:block;font-size:10px;font-weight:500;margin-bottom:5px;color:#668078}
+body.live-admin .df-provider-rank.high{background:#f3faf7;border-color:#e0eee7}
+body.live-admin .df-provider-rank.low{background:#fff8f5;border-color:#f3e6df}
+body.live-admin .df-provider-rank.low>b{color:#a37b66}
+body.live-admin .df-provider-rank-item{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;line-height:1.9}
+body.live-admin .df-provider-rank-item>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body.live-admin .df-provider-rank-item>strong{font-weight:600;color:#375981;font-variant-numeric:tabular-nums}
+body.live-admin .df-provider-rank-item>small{font-size:9px;color:#8798ad}
+body.live-admin .df-flow-foot{padding-top:8px;padding-bottom:8px}
+body.live-admin .df-flow-foot>div>strong{font-size:16px;font-weight:600;color:#375981}
+@media(max-width:1250px){body.live-admin .df-flow-provider-extremes{grid-column:span 3;grid-template-columns:1fr}body.live-admin .df-provider-rank-item>small{display:none}}
+@media(max-width:800px){body.live-admin .df-flow-provider-extremes{grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr))}}

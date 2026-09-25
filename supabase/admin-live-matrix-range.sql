@@ -98,12 +98,17 @@ begin
     v_source:=$q$
       select md5(jsonb_build_array(a.source_system,a.country_code,a.platform,a.order_kind,a.order_no)::text)::uuid as id,
         null::text as system_order_id,a.order_no as order_number,null::text as third_party_order_number,a.member_id,
-        coalesce(nullif(btrim(a.raw_channel),''),'未识别通道') as provider,
+        case when a.order_kind='withdraw' and coalesce(btrim(a.raw_channel),'') in ('','人工取消')
+          and a.status in ('未通过','拒绝','驳回','已拒绝','人工取消','已取消','失败','提现失败','出款失败') then '无三方（驳回）'
+          else coalesce(nullif(btrim(a.raw_channel),''),'未识别通道') end as provider,
         coalesce(nullif(btrim(a.channel_type),''),'其他类型') as channel_type,
         case a.order_kind when 'recharge' then 'charge' else 'withdraw' end as direction,a.status,
         case when a.order_kind='recharge' then case a.status when '已支付' then 'success' when '待支付' then 'pending'
           when '已取消' then 'failed' else 'unknown' end
-        else case a.status when '已通过' then 'success' when '已提交' then 'pending' when '未通过' then 'rejected' else 'unknown' end end as status_group,
+        else case when a.status='已通过' then 'success' when a.status='已提交' then 'pending'
+          when a.status in ('未通过','拒绝','驳回','已拒绝','人工取消','已取消') then 'rejected'
+          when a.status in ('失败','提现失败','出款失败') then case when coalesce(btrim(a.raw_channel),'') in ('','人工取消') then 'rejected' else 'failed' end
+          else 'unknown' end end as status_group,
         a.applied_at at time zone $4 as created_at,
         case when (a.order_kind='recharge' and a.status='已支付') or (a.order_kind='withdraw' and a.status='已通过')
           then a.completed_at at time zone $4 end as success_at,
@@ -127,9 +132,11 @@ begin
   elsif v_platform.source='newar' then
     v_source:=$q$
       select n.id,n.source_id as system_order_id,n.order_number,n.third_party_order_number,n.member_id,
-        coalesce(nullif(btrim(n.provider),''),'未识别通道') as provider,coalesce(nullif(btrim(n.channel_type),''),'其他类型') as channel_type,
+        case when n.dataset='withdraw' and n.status_group in ('failed','rejected') and coalesce(btrim(n.provider),'') in ('','人工取消') then '无三方（驳回）'
+          else coalesce(nullif(btrim(n.provider),''),'未识别通道') end as provider,coalesce(nullif(btrim(n.channel_type),''),'其他类型') as channel_type,
         n.dataset as direction,n.status_code as status,
-        case when n.status_group in ('success','pending','failed','rejected') then n.status_group else 'unknown' end as status_group,
+        case when n.dataset='withdraw' and n.status_group='failed' and coalesce(btrim(n.provider),'') in ('','人工取消') then 'rejected'
+          when n.status_group in ('success','pending','failed','rejected') then n.status_group else 'unknown' end as status_group,
         n.created_at,case when n.status_group='success' then n.success_at end as success_at,
         n.amount,n.actual_amount,n.fee as withdraw_fee,n.currency,n.received_at as synced_at,null::text as utr
       from public.newar_detail_records n join public.newar_detail_platforms t on t.platform=n.platform
@@ -160,9 +167,10 @@ begin
         and ($10 is null or c.order_num=$10) and ($23 is null or c.out_trade_no=$23)
       union all
       select w.id,null::text,w.order_num,w.out_trade_no,w.uid,
-        coalesce(nullif(btrim(w.pay_channel),''),nullif(btrim(w.pay_method_name),''),'未识别通道'),
+        case when w.status_code in ('2','-1') and coalesce(nullif(btrim(w.pay_channel),''),nullif(btrim(w.pay_method_name),''),'') in ('','人工取消') then '无三方（驳回）'
+          else coalesce(nullif(btrim(w.pay_channel),''),nullif(btrim(w.pay_method_name),''),'未识别通道') end,
         coalesce(nullif(btrim(w.payout_mode),''),'其他类型'),'withdraw',coalesce(nullif(w.status_text,''),w.status_code),
-        case w.status_code when '3' then 'success' when '1' then 'pending' when '2' then 'failed' when '-1' then 'rejected' else 'unknown' end,
+        case w.status_code when '3' then 'success' when '1' then 'pending' when '2' then case when coalesce(nullif(btrim(w.pay_channel),''),nullif(btrim(w.pay_method_name),''),'') in ('','人工取消') then 'rejected' else 'failed' end when '-1' then 'rejected' else 'unknown' end,
         w.create_time,case when w.status_code='3' then w.update_time end,coalesce(w.amount_display,w.amount_minor/100.0),
         coalesce(w.real_amount_display,w.real_amount_minor/100.0),coalesce(w.fee_display,w.fee_minor/100.0),
         'INR',w.last_seen_at,null::text
@@ -225,6 +233,7 @@ begin
       count(*) as all_count,case when count(amount)=count(*) then sum(amount) end as all_amount,
       count(*) filter(where amount is null) as missing_amount_count,
       count(*) filter(where amount<0) as negative_amount_count,
+      count(*) filter(where status_group='success') as created_success_count,
       0::bigint as success_count,0::numeric as success_amount,
       count(*) filter(where status_group='pending') as pending_count,
       case when count(amount) filter(where status_group='pending')=count(*) filter(where status_group='pending') then coalesce(sum(amount) filter(where status_group='pending'),0) end as pending_amount,
@@ -251,6 +260,7 @@ begin
       case when $8='success' then case when count(amount)=count(*) then sum(amount) end else 0 end as all_amount,
       case when $8='success' then count(*) filter(where amount is null) else 0 end as missing_amount_count,
       case when $8='success' then count(*) filter(where amount<0) else 0 end as negative_amount_count,
+      0::bigint as created_success_count,
       count(*) as success_count,
       case when count(amount)=count(*) then coalesce(sum(amount),0) end as success_amount,
       0::bigint as pending_count,0::numeric as pending_amount,
@@ -271,6 +281,7 @@ begin
       case when bool_or(all_count>0 and all_amount is null) then null::numeric else coalesce(sum(all_amount),0) end as all_amount,
       sum(missing_amount_count)::bigint as missing_amount_count,
       sum(negative_amount_count)::bigint as negative_amount_count,
+      sum(created_success_count)::bigint as created_success_count,
       sum(success_count)::bigint as success_count,
       case when bool_or(success_count>0 and success_amount is null) then null::numeric else coalesce(sum(success_amount),0) end as success_amount,
       sum(pending_count)::bigint as pending_count,

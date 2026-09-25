@@ -97,6 +97,7 @@ const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
   ["3tpayinr-bank", "3TPay"],
   ["lkgopayinr-paytmqr", "LKgoPay"],
   ["lkgopayinr-bank", "LKgoPay"],
+  ["lkgopayinr", "LKgoPay"],
   ["lkgopayi", "LKgoPay"],
   ["lkgopay", "LKgoPay"],
   ["lkgopay-qr", "LKgoPay"],

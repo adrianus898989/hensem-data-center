@@ -121,3 +121,30 @@ body.live-admin .withdraw-order-search input{width:320px;max-width:70%}
 body.live-admin .withdraw-drawer-foot{flex:none;border-top:1px solid #e5ebf6;padding:12px 24px;color:#8292ad;font-size:11px;line-height:1.7;background:#fafbfe}
 @media(max-width:700px){body.live-admin .withdraw-drawer{width:100vw}body.live-admin .withdraw-drawer-head{padding:16px;gap:8px;flex-wrap:wrap}body.live-admin .withdraw-drawer-body{padding:14px}body.live-admin .withdraw-drawer .withdraw-reason-tabs{padding:12px 14px}body.live-admin .withdraw-reason-summary{grid-template-columns:repeat(2,minmax(0,1fr))}body.live-admin .withdraw-pager{flex-wrap:wrap;gap:6px}}
 @media(max-width:1000px){body.live-admin .withdraw-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+/* Compact provider reports: one document scrollbar, amounts and counts together. */
+body.live-admin .provider-summary-heading{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:0 0 8px}
+body.live-admin .provider-summary-heading .provider-direction-tabs{margin:0;gap:5px}
+body.live-admin .provider-summary-heading .provider-scope-note{margin:0;font-size:11px;line-height:1.5;color:#7083a0}
+body.live-admin .provider-summary-kpis{gap:7px;margin-bottom:9px}
+body.live-admin .provider-summary-kpis .live-metric{padding:9px 11px;border-radius:7px}
+body.live-admin .provider-summary-kpis strong{font-size:18px}
+body.live-admin .provider-compact-table{max-height:none;overflow:auto}
+body.live-admin .provider-compact-table table{min-width:1180px;width:100%;table-layout:auto}
+body.live-admin .provider-compact-table th,body.live-admin .provider-compact-table td{padding:6px 8px!important;font-size:11px;line-height:1.6}
+body.live-admin .provider-compact-table th{min-width:65px;font-size:10px;white-space:normal}
+body.live-admin .provider-compact-table th:first-child,body.live-admin .provider-compact-table td:first-child{min-width:128px}
+body.live-admin .provider-platform-count{color:#899ab3;font-size:9px;margin-left:7px}
+body.live-admin .provider-count{color:#8190a8;font-size:10px;white-space:nowrap}
+body.live-admin .provider-partial{margin-left:4px;border-radius:3px;padding:1px 4px;background:#fff3df;color:#a87323;font-size:9px}
+body.live-admin .withdraw-operators-table table{min-width:1120px}
+body.live-admin .withdraw-distribution-table td{padding:9px 12px!important;line-height:1.7}
+body.live-admin .withdraw-drawer-head{padding:16px 22px 12px}
+body.live-admin .withdraw-drawer .withdraw-reason-tabs{padding:10px 22px;gap:6px}
+body.live-admin .withdraw-drawer-body{padding:12px 22px 0}
+body.live-admin .withdraw-reason-summary{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+body.live-admin .withdraw-reason-summary>div{padding:10px 13px}
+body.live-admin .withdraw-reason-summary strong{font-size:21px;margin-top:4px}
+body.live-admin .withdraw-denominator{margin:8px 0;font-size:11px}
+body.live-admin .deposit-reply{text-align:left;max-width:280px;white-space:normal}
+body.live-admin .deposit-reply summary{color:#3d66b3;cursor:pointer;white-space:nowrap}
+body.live-admin .deposit-reply p{margin:6px 0;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}

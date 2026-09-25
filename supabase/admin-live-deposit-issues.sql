@@ -23,6 +23,10 @@ create table if not exists public.admin_deposit_issue_rows (
   unique (source_sheet, source_tab, source_row)
 );
 
+alter table public.admin_deposit_issue_rows add column if not exists provider_reply text;
+alter table public.admin_deposit_issue_rows add column if not exists utr_match text;
+alter table public.admin_deposit_issue_rows add column if not exists kyc_correct text;
+
 create index if not exists admin_deposit_issue_rows_date_idx
   on public.admin_deposit_issue_rows(record_date desc, platform, provider, status);
 create index if not exists admin_deposit_issue_rows_scope_idx
@@ -91,7 +95,8 @@ begin
     from private.dashboard_admin_live_platforms() p
   ), enriched as materialized (
     select r.id,r.source_row,r.platform,r.order_number,r.utr,r.amount,r.provider,
-      r.match_status,r.status,r.unreceived_days,r.record_date,r.source_updated_at,r.updated_at,
+      r.match_status,coalesce(nullif(btrim(r.status),''),'待核对') as status,r.unreceived_days,r.record_date,r.source_updated_at,r.updated_at,
+      r.provider_reply,r.utr_match,r.kyc_correct,
       coalesce(nullif(btrim(r.country),''),c.country) as display_country
     from public.admin_deposit_issue_rows r
     left join lateral (select c.country from catalog c where c.lookup_name=lower(btrim(r.platform)) limit 1) c on true
@@ -99,13 +104,17 @@ begin
       and (v_country is null or coalesce(nullif(btrim(r.country),''),c.country)=v_country)
       and (v_platform is null or r.platform=v_platform)
       and (v_provider is null or r.provider=v_provider)
-      and (v_status='all' or coalesce(r.status,'')=v_status)
+      and (v_status='all' or coalesce(nullif(btrim(r.status),''),'待核对')=v_status)
       and (v_query is null or r.order_number ilike '%'||v_query||'%' or r.utr ilike '%'||v_query||'%')
       and private.dashboard_scope_allows(v_scope,coalesce(nullif(btrim(r.country),''),c.country,''),coalesce(r.platform,''))
   ), totals as (
     select count(*)::bigint as count,coalesce(sum(amount),0)::numeric as amount,
-      count(*) filter (where coalesce(unreceived_days,0)>0)::bigint as unreceived_count,
-      coalesce(max(unreceived_days),0)::integer as max_unreceived_days,
+      count(*) filter (where status='未入款')::bigint as unreceived_count,
+      coalesce(sum(amount) filter(where status='未入款'),0)::numeric as unreceived_amount,
+      count(*) filter(where status='已入款')::bigint as received_count,
+      coalesce(sum(amount) filter(where status='已入款'),0)::numeric as received_amount,
+      count(*) filter(where status not in('未入款','已入款'))::bigint as unresolved_status_count,
+      coalesce(max(unreceived_days) filter(where status='未入款'),0)::integer as max_unreceived_days,
       max(coalesce(source_updated_at,updated_at)) as updated_at
     from enriched
   ), page as (
@@ -113,18 +122,20 @@ begin
       offset v_offset limit v_limit
   )
   select jsonb_build_object(
-    'version',1,'source','Google Sheet UPI核对 -> Supabase admin_deposit_issue_rows',
+    'version',2,'source','Google Sheet UPI核对 -> Supabase admin_deposit_issue_rows',
     'sourceTab','UPI核对','basis','synced_safe_columns','startDate',v_start,'endDate',v_end,
     'offset',v_offset,'limit',v_limit,'total',(select count(*) from enriched),
     'hasMore',(select count(*) from enriched)>v_offset::bigint+v_limit,
     'updatedAt',(select updated_at from totals),
     'summary',jsonb_build_object('count',(select count from totals),'amount',(select amount from totals),
-      'unreceivedCount',(select unreceived_count from totals),'maxUnreceivedDays',(select max_unreceived_days from totals)),
+      'unreceivedCount',(select unreceived_count from totals),'unreceivedAmount',(select unreceived_amount from totals),
+      'receivedCount',(select received_count from totals),'receivedAmount',(select received_amount from totals),
+      'unresolvedStatusCount',(select unresolved_status_count from totals),'maxUnreceivedDays',(select max_unreceived_days from totals)),
     'facets',jsonb_build_object('providers',coalesce((select jsonb_agg(provider order by provider) from (select distinct provider from enriched where provider is not null and provider<>'') x),'[]'::jsonb)),
     'rows',coalesce((select jsonb_agg(jsonb_build_object(
       'recordDate',p.record_date,'country',p.display_country,'platform',p.platform,'provider',p.provider,
       'orderNumber',p.order_number,'utr',p.utr,'amount',p.amount,'unreceivedDays',p.unreceived_days,
-      'matchStatus',p.match_status,'status',p.status,'sourceUpdatedAt',p.source_updated_at,'updatedAt',p.updated_at)
+      'matchStatus',p.match_status,'status',p.status,'providerReply',p.provider_reply,'utrMatch',p.utr_match,'kycCorrect',p.kyc_correct,'sourceRow',p.source_row,'sourceUpdatedAt',p.source_updated_at,'updatedAt',p.updated_at)
       order by p.record_date desc nulls last,p.platform,p.provider,p.source_row) from page p),'[]'::jsonb)
   ) into v_result;
   return v_result;
