@@ -17,5 +17,13 @@ set source_platform='VEER.GAME', updated_at=now()
 where source_system='AR' and source_country='印度'
   and platform_name='VEERGAME';
 
+-- Owner-confirmed display name. Keep source_platform=RAJA because that is the
+-- physical AR key used by ar_config_targets and ar_collected_orders.
+update public.dashboard_platform_team_map
+set platform_name='RAJAGAMES', updated_at=now()
+where source_system='AR' and source_country='印度'
+  and source_platform='RAJA'
+  and platform_name in ('RAJA','RAJAGAME','RAJAGAMES');
+
 notify pgrst,'reload schema';
 commit;
