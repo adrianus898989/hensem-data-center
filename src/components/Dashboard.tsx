@@ -1723,11 +1723,11 @@ export default function Dashboard() {
         <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="chart" /></span>三方量/费率</span>
         <span className={canThirdParty ? "badge ok" : "badge"}>{canThirdParty ? "Supabase" : "无权限"}</span>
       </button>
-      <button className={activeModule === "orders" ? "nav-item active" : "nav-item"} onClick={() => switchModule("orders")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
+      <button aria-hidden="true" tabIndex={-1} style={{ display: "none" }} className={activeModule === "orders" ? "nav-item active" : "nav-item"} onClick={() => switchModule("orders")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
         <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="ticket" /></span>订单明细</span>
         <span className={canThirdParty ? "badge ok" : "badge"}>{canThirdParty ? "单平台" : "无权限"}</span>
       </button>
-      <button className={activeModule === "provider-anomalies" ? "nav-item active" : "nav-item"} onClick={() => switchModule("provider-anomalies")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
+      <button aria-hidden="true" tabIndex={-1} style={{ display: "none" }} className={activeModule === "provider-anomalies" ? "nav-item active" : "nav-item"} onClick={() => switchModule("provider-anomalies")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
         <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="chart" /></span>三方异常</span>
         <span className={canThirdParty ? "badge ok" : "badge"}>{canThirdParty ? "只读提示" : "无权限"}</span>
       </button>

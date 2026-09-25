@@ -55,14 +55,16 @@ body.live-admin .withdraw-pager{color:#6b7f9f;font-size:12px;border-top:1px soli
 body.live-admin .withdraw-pager select{appearance:none;-webkit-appearance:none;min-width:104px;height:30px;border:1px solid #d2ddf1;border-radius:6px;padding:5px 28px 5px 11px;font:inherit;color:#3b537c;background:linear-gradient(45deg,transparent 50%,#6f83a6 50%) calc(100% - 14px) 12px/4px 4px no-repeat,linear-gradient(135deg,#6f83a6 50%,transparent 50%) calc(100% - 10px) 12px/4px 4px no-repeat,#fff;cursor:pointer}
 body.live-admin .withdraw-pager select:focus-visible{outline:2px solid #99b0fa;outline-offset:2px}
 body.live-admin .withdraw-pager .btn{min-height:30px;border-radius:6px}
-body.live-admin .withdraw-stat-table{min-width:0;max-height:70vh;overflow:auto}
-body.live-admin .withdraw-stat-table table{min-width:1650px}
+body.live-admin .withdraw-stat-table{min-width:0;max-width:100%;max-height:70vh;overflow:auto}
+body.live-admin .withdraw-stat-table table{width:100%;min-width:100%;max-width:none}
 body.live-admin .withdraw-stat-table th{position:sticky;top:0;background:#f4f7ff;z-index:2}
-body.live-admin .withdraw-stat-table th .link{font:inherit;font-weight:600;color:#6880a5}
+body.live-admin .withdraw-stat-table th .link{display:inline-flex;align-items:center;white-space:nowrap;font:inherit;font-weight:600;color:#6880a5}
 body.live-admin .withdraw-stat-table tfoot td{background:#eef3ff;font-weight:600}
 body.live-admin .withdraw-stat-table td:first-child{background:#fff}
 body.live-admin .withdraw-stat-table td,body.live-admin .withdraw-stat-table th{white-space:nowrap}
-body.live-admin .withdraw-stat-table th:first-child,body.live-admin .withdraw-stat-table td:first-child{position:sticky;left:0;background:inherit;z-index:1}
+body.live-admin .withdraw-stat-table th:first-child,body.live-admin .withdraw-stat-table td:first-child{position:sticky;left:0;width:72px;min-width:72px;background:inherit;z-index:1}
+body.live-admin .withdraw-stat-table th:nth-child(2),body.live-admin .withdraw-stat-table td:nth-child(2){min-width:104px}
+body.live-admin .withdraw-stat-table th:last-child,body.live-admin .withdraw-stat-table td:last-child{width:230px;min-width:230px}
 body.live-admin .withdraw-reason-table{min-width:0;overflow:auto}
 body.live-admin .withdraw-reason-table table{min-width:700px}
 body.live-admin .withdraw-reason-table td:first-child,body.live-admin .withdraw-reason-table td:nth-last-child(-n+2){max-width:440px;min-width:120px;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -72,9 +74,17 @@ body.live-admin .withdraw-delta{display:inline-block;padding:1px 4px;border-radi
 body.live-admin .withdraw-delta.good{background:#e5f7ee;color:#087f55}
 body.live-admin .withdraw-delta.bad{background:#fff0f0;color:#c63e4a}
 body.live-admin .withdraw-delta.flat{background:#f0f3f8;color:#7788a5}
-body.live-admin .withdraw-row-actions{display:flex;gap:5px;align-items:center;flex-wrap:wrap;min-width:260px;max-width:300px}
+body.live-admin .withdraw-row-actions{display:flex;gap:5px;align-items:center;flex-wrap:nowrap;width:max-content;min-width:0;max-width:none}
 body.live-admin .withdraw-row-actions .withdraw-reject-button{border-color:#e8c6ca;color:#b24d58}
 body.live-admin .withdraw-header-actions{display:flex;gap:6px;margin-left:auto}
+body.live-admin .withdraw-source-note{display:block;max-width:620px;padding:0;border:0;background:transparent;color:#315cd3;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font:inherit;cursor:pointer}
+body.live-admin .withdraw-source-note:hover{text-decoration:underline}
+body.live-admin .withdraw-original-backdrop{position:fixed;inset:0;z-index:320;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(16,31,62,.38)}
+body.live-admin .withdraw-original-dialog{width:min(760px,calc(100vw - 48px));max-height:80vh;overflow:hidden;border:1px solid #d5def0;border-radius:10px;background:#fff;box-shadow:0 18px 60px rgba(25,50,100,.28)}
+body.live-admin .withdraw-original-dialog header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #e6ebf5}
+body.live-admin .withdraw-original-dialog h2{margin:0;color:#23395d;font-size:16px}
+body.live-admin .withdraw-original-dialog pre{margin:0;padding:20px;max-height:58vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:#30486f;font:13px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace}
+body.live-admin .withdraw-original-dialog .config-actions{justify-content:flex-end;padding:0 20px 16px}
 body.live-admin .live-config-modal textarea{display:block;width:100%;border:1px solid #ccd8ee;border-radius:6px;padding:10px;font:inherit;resize:vertical}
 body.live-admin .withdraw-toolbar .live-multiselect{min-width:220px}
 body.live-admin:has(.withdraw-drawer-backdrop){overflow:hidden}

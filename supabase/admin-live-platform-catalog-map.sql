@@ -6,6 +6,21 @@
 -- its config row yet. No source data is copied or rewritten.
 begin;
 
+-- Automatic-withdraw rows are a separate daily read model. Keep their
+-- platform identity in the catalog so the withdrawal page can expose every
+-- collected platform without making the order RPC pretend those rows are
+-- transaction records.
+create or replace function private.dashboard_admin_live_is_panghu_platform(p_name text)
+returns boolean language sql immutable parallel safe set search_path='' as $$
+  select upper(btrim(coalesce(p_name,'')))=any(array[
+    'VIP345','KKVIP','KK345','FF555','TPTP','AA45','F75','25RR',
+    '8599BET','9596BET','8566BET','5V555','58EE','27FF','222O','32QQ',
+    '67VIP','222VIP','345F','234T','888HH','BET5697','96F','45FF',
+    '76PP','56L','559K','2V222','776F','5C555','FF55','222VIP.COM','222-VIP','67-VIP'
+  ]::text[])
+$$;
+revoke all on function private.dashboard_admin_live_is_panghu_platform(text) from public,anon,authenticated;
+
 create or replace function private.dashboard_admin_live_platforms()
 returns table(id uuid, name text, team text, country text, scope_group text, source text, timezone text, currency text, source_name text)
 language plpgsql stable security definer set search_path='' as $$
@@ -15,7 +30,8 @@ begin
   with ar_targets as (
     select md5('ar:'||t.country_code||':'||src.platform)::uuid as id,
       coalesce(m.platform_name,t.platform)::text as name,
-      m.team_name::text as team,t.country_name::text as country,t.country_code::text as scope_group,
+      case when upper(btrim(m.team_name)) in ('胖虎巴西','BR_PANGHU','PANGHU BRAZIL') then '胖虎' else m.team_name end::text as team,
+      t.country_name::text as country,t.country_code::text as scope_group,
       'ar'::text as source,
       coalesce(nullif(t.timezone,''),case t.country_code
         when 'IN' then 'Asia/Kolkata' when 'BR' then 'America/Sao_Paulo'
@@ -51,7 +67,7 @@ begin
   ),
   ar_mapped_only as (
     select md5('ar:'||m.country_code||':'||m.source_platform)::uuid as id,
-      m.platform_name::text as name,m.team_name::text as team,m.country_name::text as country,
+      m.platform_name::text as name,case when upper(btrim(m.team_name)) in ('胖虎巴西','BR_PANGHU','PANGHU BRAZIL') then '胖虎' else m.team_name end::text as team,m.country_name::text as country,
       m.country_code::text as scope_group,'ar'::text as source,
       case m.country_code
         when 'IN' then 'Asia/Kolkata' when 'BR' then 'America/Sao_Paulo'
@@ -79,8 +95,59 @@ begin
               and (n.launch_at is null or n.launch_at<=now())
               and exists(select 1 from public.newar_detail_records r where r.platform=n.platform
                 and r.dataset in ('charge','withdraw') and (n.launch_at is null or r.created_at>=n.launch_at) offset 0) offset 0)))
+  ),
+  withdraw_raw as (
+    select distinct btrim(a.country)::text as country,btrim(a.platform)::text as platform,null::text as country_code
+    from public.auto_withdraw_daily a
+    where nullif(btrim(a.country),'') is not null and nullif(btrim(a.platform),'') is not null
+    union
+    select distinct btrim(o.country)::text,btrim(o.platform)::text,null::text
+    from public.withdraw_operator_daily o
+    where nullif(btrim(o.country),'') is not null and nullif(btrim(o.platform),'') is not null
+    union
+    select distinct btrim(s.country)::text,btrim(s.platform)::text,nullif(btrim(s.country_code),'')::text
+    from public.newar_business_snapshots s
+    where s.kind='auto_withdraw_bundle' and s.direction='all'
+      and nullif(btrim(s.country),'') is not null and nullif(btrim(s.platform),'') is not null
+  ),
+  withdraw_classified as (
+    select r.country,r.platform,
+      case when upper(r.country) in ('胖虎巴西','BR_PANGHU','PANGHU BRAZIL')
+             or (upper(r.country) in ('巴西','BR','BRAZIL') and private.dashboard_admin_live_is_panghu_platform(r.platform))
+           then '胖虎巴西' else r.country end::text as display_country,
+      case when upper(r.country) in ('胖虎巴西','BR_PANGHU','PANGHU BRAZIL')
+             or (upper(r.country) in ('巴西','BR','BRAZIL') and private.dashboard_admin_live_is_panghu_platform(r.platform))
+           then 'BR_PANGHU'
+           else coalesce(r.country_code,case upper(r.country)
+             when '印度' then 'IN' when 'INDIA' then 'IN' when '巴西' then 'BR' when 'BRAZIL' then 'BR'
+             when '巴基斯坦' then 'PK' when '印尼' then 'ID' when '越南' then 'VN'
+             when '菲律宾' then 'PH' when '马来' then 'MY' when '缅甸' then 'MM'
+             when '尼日利亚' then 'NG' when '哥伦比亚' then 'CO' when '墨西哥' then 'MX'
+             when '智利' then 'CL' else r.country end) end::text as scope_group
+    from withdraw_raw r
+  ),
+  withdraw_targets as (
+    select md5('withdraw:'||c.display_country||':'||c.platform)::uuid as id,
+      c.platform::text as name,
+      case when c.scope_group='BR_PANGHU' then '胖虎' else null end::text as team,
+      c.display_country::text as country,c.scope_group::text as scope_group,
+      'withdraw'::text as source,
+      case c.scope_group
+        when 'IN' then 'Asia/Kolkata' when 'BR' then 'America/Sao_Paulo' when 'BR_PANGHU' then 'America/Sao_Paulo'
+        when 'PK' then 'Asia/Karachi' when 'ID' then 'Asia/Jakarta' when 'VN' then 'Asia/Ho_Chi_Minh'
+        when 'PH' then 'Asia/Manila' when 'MY' then 'Asia/Kuala_Lumpur' when 'MM' then 'Asia/Yangon'
+        when 'NG' then 'Africa/Lagos' when 'CO' then 'America/Bogota' when 'MX' then 'America/Mexico_City'
+        when 'CL' then 'America/Santiago' else 'Asia/Kolkata' end::text as timezone,
+      case c.scope_group
+        when 'IN' then 'INR' when 'BR' then 'BRL' when 'BR_PANGHU' then 'BRL' when 'PK' then 'PKR'
+        when 'ID' then 'IDR' when 'VN' then 'VND' when 'PH' then 'PHP' when 'MY' then 'MYR'
+        when 'MM' then 'MMK' when 'NG' then 'NGN' when 'CO' then 'COP' when 'MX' then 'MXN'
+        when 'CL' then 'CLP' else null end::text as currency,
+      c.platform::text as source_name
+    from withdraw_classified c
+    where private.dashboard_scope_allows(v_scope,c.scope_group,c.platform)
   )
-  select g.id,g.platform_name,g.team_name,g.team_name,
+  select g.id,g.platform_name,case when upper(btrim(g.team_name)) in ('胖虎巴西','BR_PANGHU','PANGHU BRAZIL') then '胖虎' else g.team_name end,g.team_name,
     case g.team_code when 'hong_kong' then 'HK_TEAM' when 'red_crab' then 'RED_CRAB' else upper(g.team_code) end,
     'game66'::text,'Asia/Kolkata'::text,'INR'::text,g.platform_name
   from public.game66_platforms g
@@ -94,7 +161,7 @@ begin
   select ar_mapped_only.id,ar_mapped_only.name,ar_mapped_only.team,ar_mapped_only.country,ar_mapped_only.scope_group,ar_mapped_only.source,ar_mapped_only.timezone,ar_mapped_only.currency,ar_mapped_only.source_name from ar_mapped_only
   union all
   select md5('newar:'||n.country_code||':'||n.platform)::uuid,
-    coalesce(m.platform_name,n.platform),m.team_name,n.country,n.country_code,
+    coalesce(m.platform_name,n.platform),case when upper(btrim(m.team_name)) in ('胖虎巴西','BR_PANGHU','PANGHU BRAZIL') then '胖虎' else m.team_name end,n.country,n.country_code,
     'newar'::text,n.timezone,n.currency,n.platform
   from public.newar_detail_platforms n
   left join public.dashboard_platform_team_map m on m.active and m.source_system='NEW_AR'
@@ -103,7 +170,12 @@ begin
   where n.enabled and (n.launch_at is null or n.launch_at<=now())
     and private.dashboard_scope_allows(v_scope,n.country_code,n.platform)
     and exists(select 1 from public.newar_detail_records r where r.platform=n.platform
-      and r.dataset in ('charge','withdraw') and (n.launch_at is null or r.created_at>=n.launch_at) offset 0);
+      and r.dataset in ('charge','withdraw') and (n.launch_at is null or r.created_at>=n.launch_at) offset 0)
+  union all
+  select withdraw_targets.id,withdraw_targets.name,withdraw_targets.team,withdraw_targets.country,
+    withdraw_targets.scope_group,withdraw_targets.source,withdraw_targets.timezone,
+    withdraw_targets.currency,withdraw_targets.source_name
+  from withdraw_targets;
 end;
 $$;
 revoke all on function private.dashboard_admin_live_platforms() from public,anon;
