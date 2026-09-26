@@ -29,7 +29,7 @@ function harness(options={}){
  };context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources)vm.runInContext(module.source,context,{filename:module.name,timeout:2000});vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
  return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
 }
-async function queried(options){const h=harness(options);await settle();assert.equal(h.L.overviewQueried,false);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0,'opening overview does not query business data');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';await h.c.liveLoad();await settle();assert.equal(h.L.overviewQueried,true);assert.equal(h.L.dirty,false);return h}
+async function queried(options){const h=harness(options);await settle();assert.equal(h.L.overviewQueried,false);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0,'opening overview does not query business data');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert.equal(h.L.dirty,false);return h}
 function setScope(h,values={}){Object.assign(h.L,{from:'2026-09-22T00:00:00',to:'2026-09-22T05:59:59',...values})}
 function completeAggregate(p=P,count=10,success=5){const r=aggregate(p,count),s={...stats(count,String(count*100)),success_count:success,created_success_count:success,success_amount:String(success*100),pending_count:count-success,pending_amount:String((count-success)*100),failed_count:0,failed_amount:'0',rejected_count:0,rejected_amount:'0',unknown_count:0,unknown_amount:'0'};r.summary=[s];for(const key of ['provider','daily','hourly','amount','matrix'])r.groups[key]=[{...r.groups[key][0],...s}];return r}
 
@@ -61,7 +61,7 @@ test('changing filters or leaving overview invalidates late analysis and prevent
 });
 test('a fresh query cancels pending analysis and restarts with compact providers',async()=>{
  const h=await queried(),wait=deferred();h.setHandler(()=>wait.promise);const old=h.c.liveOverviewAnalysis();await settle();
- const calls=[];h.setHandler(async q=>{calls.push(q);return completeAggregate(P,30,15)});await h.c.liveLoad();assert.equal(h.L.overviewSections.status,'idle');assert(calls.filter(q=>q.action==='aggregate').every(q=>q.view==='providers'));
+ const calls=[];h.setHandler(async q=>{calls.push(q);return completeAggregate(P,30,15)});await h.c.liveQuery();assert.equal(h.L.overviewSections.status,'idle');assert(calls.filter(q=>q.action==='aggregate').every(q=>q.view==='providers'));
  wait.resolve(completeAggregate(P,999,999));await old;assert.equal(h.L.overviewSections.status,'idle');assert.equal(h.L.results[0].total,30);
 });
 test('analysis rendering uses only loaded analysis snapshots and restores core data even on exceptions',async()=>{
@@ -81,7 +81,7 @@ test('visible overview sections load once; offscreen, primary loading and stale 
 test('inline workorder errors remain distinct and changing scope discards stale results',async()=>{
  const h=await queried({ancillaryHandler:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='providerOptions'?{providers:[]}:q.action==='rates'?{rows:[],total:0}:aggregate(P)}),wait=deferred();
  h.setHandler(q=>q.action==='workorders'?wait.promise:aggregate(P));const old=h.c.liveOverviewWorkorders();await settle();assert.equal(h.L.overviewWorkordersStatus,'loading');h.c.liveSet('provider','Other provider');wait.resolve({rows:[{id:'old'}],summary:{submittedCount:999}});await old;assert.equal(h.L.workorders,null);assert.equal(h.L.overviewWorkordersStatus,'idle');
- await h.c.liveLoad();h.setHandler(async q=>{if(q.action==='workorders')throw Error('Synthetic workorders offline');return aggregate(P)});await h.c.liveOverviewWorkorders();assert.equal(h.L.overviewWorkordersStatus,'error');assert.equal(h.L.workorders,null);assert.match(h.L.workordersError,/Synthetic workorders offline/);assert.equal(h.L.error,'');
+ await h.c.liveQuery();h.setHandler(async q=>{if(q.action==='workorders')throw Error('Synthetic workorders offline');return aggregate(P)});await h.c.liveOverviewWorkorders();assert.equal(h.L.overviewWorkordersStatus,'error');assert.equal(h.L.workorders,null);assert.match(h.L.workordersError,/Synthetic workorders offline/);assert.equal(h.L.error,'');
 });
 
 test('leaving overview preserves the destination page workorder data and errors',async()=>{
@@ -112,4 +112,25 @@ test('single-direction business panels occupy both grid tracks while paired over
   }
  }
  assert.equal(h.calls.length,before,'layout changes do not read data');
+});
+test('overview removes repeated navigation and captions but keeps each local lazy-read and retry entry',async()=>{
+ const h=await queried();h.L.loadedView='providers';h.L.workorders=null;h.L.workordersLoading=false;h.L.workordersError='';h.c.render();
+ const html=h.html();assert.match(html,/^<div class="dashboard-full-v3"><div class="df-grid df-two">/);
+ assert.doesNotMatch(html,/df-jumps|总览分区|加载全部图表分析|df-rank-rule|创建≥1,000笔、量前10|不含 ArbPay/);
+ assert.equal((html.match(/data-live-overview-analysis/g)||[]).length,3,'trend, amount and duration keep their lazy-read targets');
+ assert.equal((html.match(/onclick="liveOverviewAnalysis\(\)"/g)||[]).length,3,'each nearby section keeps a read button');
+ assert.match(html,/data-live-overview-workorders/);assert.match(html,/onclick="liveOverviewWorkorders\(\)">加载工单汇总/);
+ const heads=[...html.matchAll(/<section class="df-card" id="df-(?:collect|payout)"><header class="df-head">([\s\S]*?)<\/header>/g)];assert.equal(heads.length,2);for(const head of heads)assert.doesNotMatch(head[1],/<small>/,'flow header has no repeated timing subtitle');
+ h.L.overviewSections.status='error';h.L.overviewSections.failures=[{id:P.id,name:P.name,message:'Synthetic timeout'}];h.L.workordersError='Synthetic workorder timeout';h.c.render();
+ assert.match(h.html(),/onclick="liveOverviewAnalysis\(\)">重试未完成平台/);assert.match(h.html(),/onclick="liveOverviewWorkorders\(\)">重试工单读取/);assert.doesNotMatch(h.html(),/加载全部图表分析/);
+});
+test('both flow cards retain rejected and unknown facts inside the fee area before workorder ranks',async()=>{
+ const h=await queried(),r=completeAggregate();r.summary[0]={...r.summary[0],rejected_amount:123.45,rejected_count:7,unknown_amount:null,unknown_count:2};
+ r.summary.push({...r.summary[0],direction:'withdraw',rejected_amount:9876.54,rejected_count:11,unknown_amount:678.9,unknown_count:3});h.L.results=[r];h.L.direction='all';
+ const before=JSON.stringify(h.L.results),calls=h.calls.length;h.c.render();const html=h.html();
+ const fees=[...html.matchAll(/<div class="df-flow-fee">([\s\S]*?)<\/div><\/div>(?=<div class="df-workorder-ranks")/g)];assert.equal(fees.length,2,'state rows belong to each fee card, not a full-width footer');
+ for(const fee of fees){assert.match(fee[1],/估算手续费/);assert.match(fee[1],/<div class="df-state-tail">/);assert.equal((fee[1].match(/<b>/g)||[]).length,4)}
+ assert.match(fees[0][1],/驳回金额 <b>123\.45<\/b>/);assert.match(fees[0][1],/驳回笔数 <b>7<\/b>/);assert.match(fees[0][1],/未知状态金额 <b>—<\/b>/);assert.match(fees[0][1],/未知状态笔数 <b>2<\/b>/);
+ assert.match(fees[1][1],/驳回金额 <b>9,876\.54<\/b>/);assert.match(fees[1][1],/驳回笔数 <b>11<\/b>/);assert.match(fees[1][1],/未知状态金额 <b>678\.90<\/b>/);assert.match(fees[1][1],/未知状态笔数 <b>3<\/b>/);
+ assert.equal(JSON.stringify(h.L.results),before);assert.equal(h.calls.length,calls);
 });
