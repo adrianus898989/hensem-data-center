@@ -10,23 +10,32 @@
  const detailPages=new Set(['orders','time','amount','matrix','latency','stuck','provider_daily']);
  const direction=value=>({recharge:'charge',deposit:'charge',collect:'charge','代收':'charge',payout:'withdraw','代付':'withdraw'})[value]||value;
  const legacyPanghu=new Set(['胖虎巴西','BR_PANGHU','PANGHU BRAZIL','PANDA PANGHU']);
- const legacyTeams={'香港':'香港',HONG_KONG:'香港',GAME66_HK:'香港','红膏蟹':'红膏蟹','紅膏蟹':'红膏蟹',RED_CRAB:'红膏蟹',GAME66_RED_CRAB:'红膏蟹'};
+ const legacyTeams={'香港':'香港',HK_TEAM:'香港',HONG_KONG:'香港',GAME66_HK:'香港','红膏蟹':'红膏蟹','紅膏蟹':'红膏蟹',RED_CRAB:'红膏蟹',GAME66_RED_CRAB:'红膏蟹'};
  const token=value=>String(value??'').trim().toUpperCase();
- const countryNames={IN:'印度',BR:'巴西',BRAZIL:'巴西',PK:'巴基斯坦',ID:'印尼',VN:'越南',PH:'菲律宾',MY:'马来',MM:'缅甸',NG:'尼日利亚',CO:'哥伦比亚',MX:'墨西哥',CL:'智利'};
+ const countryNames={IN:'印度',INDIA:'印度',BR:'巴西',BRAZIL:'巴西',PK:'巴基斯坦',ID:'印尼',VN:'越南',PH:'菲律宾',MY:'马来',MM:'缅甸',NG:'尼日利亚',CO:'哥伦比亚',MX:'墨西哥',CL:'智利'};
+ const legacyGroup=value=>legacyPanghu.has(token(value))?'胖虎巴西':legacyTeams[token(value)];
+ function sourceIdentity(row){
+  const original=row.identityCountry??row.country??row.rawCountry??'',group=legacyGroup(original)||legacyGroup(row.scopeGroup??row.scope_group)||legacyGroup(row.rawCountry);
+  // A geographically labelled report may still carry a team-specific raw
+  // scope. Match that scope, never another team's identically named platform.
+  const identityCountry=row.identityCountry??(legacyGroup(row.country)?row.country:legacyGroup(row.rawCountry)?row.rawCountry:group||original);
+  return {identityCountry,group:group||countryNames[token(original)]||original};
+ }
  // A display country must never replace the source group used for access and queries.
  function normalizeIdentity(row={}){
-  const identityCountry=row.identityCountry??row.country??row.rawCountry??'',scope=row.scopeGroup??row.scope_group,legacy=legacyPanghu.has(token(identityCountry))||legacyPanghu.has(token(scope));
-  const explicit=[row.geographicCountry,row.geographic_country,row.countryName,row.country_name,row.countryCode,row.country_code].find(value=>value&&!legacyPanghu.has(token(value))&&!legacyTeams[token(value)]);
+  const {identityCountry,group}=sourceIdentity(row),legacy=group==='胖虎巴西';
+  const explicit=[row.geographicCountry,row.geographic_country,row.countryName,row.country_name,row.countryCode,row.country_code,row.country!==identityCountry?row.country:null].find(value=>value&&!legacyGroup(value));
   // Current Hong Kong and Red Crab platforms operate in India (owner confirmed).
-  const country=legacy?'巴西':legacyTeams[token(identityCountry)]?(explicit?countryNames[token(explicit)]||String(explicit):'印度'):countryNames[token(identityCountry)]||identityCountry||'国家待核对';
-  const team=legacy||legacyPanghu.has(token(row.team))?'胖虎':row.team&&row.team!=='待归类'?legacyTeams[token(row.team)]||row.team:legacyTeams[token(identityCountry)]||'__unassigned__';
+  const country=legacy?'巴西':legacyTeams[token(group)]?(explicit?countryNames[token(explicit)]||String(explicit):'印度'):countryNames[token(identityCountry)]||identityCountry||'国家待核对';
+  const team=legacy||legacyPanghu.has(token(row.team))?'胖虎':row.team&&row.team!=='待归类'?legacyTeams[token(row.team)]||row.team:legacyTeams[token(group)]||'__unassigned__';
   return {...row,identityCountry,rawCountry:row.rawCountry??identityCountry,country,team};
  }
- const keyFor=row=>{const raw=row.identityCountry??row.country??'';return JSON.stringify([legacyPanghu.has(token(raw))||legacyPanghu.has(token(row.scopeGroup??row.scope_group))?'胖虎巴西':raw,row.name||''])};
+ const keyFor=row=>JSON.stringify([sourceIdentity(row).group,row.name||'']);
  const sourceKey=row=>JSON.stringify([row.dataset,row.system||'',row.rawCountry??row.country,row.rawPlatform??row.name,row.direction,row.sourceKind]);
  const values=value=>Array.isArray(value)?value.filter(x=>x!==''&&x!=='all'):value&&value!=='all'?[value]:[];
  const sameSource=(a,b)=>String(a||'').toLowerCase().replaceAll('_','')===String(b||'').toLowerCase().replaceAll('_','');
- const feedMatchesSources=(feed,sources)=>!values(sources).length||!feed.system||['REPORT','SHEET','RECHARGE_REVIEW','WITHDRAW_REVIEW'].includes(String(feed.system).toUpperCase())||values(sources).some(value=>sameSource(value,feed.system));
+ const feedSource=feed=>['GAME66_HK','GAME66_RED_CRAB'].includes(token(feed.system))&&legacyTeams[token(feed.system)]===sourceIdentity(feed).group?'game66':feed.system;
+ const feedMatchesSources=(feed,sources)=>!values(sources).length||!feed.system||['REPORT','SHEET','RECHARGE_REVIEW','WITHDRAW_REVIEW'].includes(String(feed.system).toUpperCase())||values(sources).some(value=>sameSource(value,feedSource(feed)));
  const sourceLabel=kind=>({direct:'直接写入 Supabase',google_sheets:'Google 表格 → Supabase',google_sheets_live:'Google 表格',mixed:'混合来源，待核对',unknown:'来源链路待核对'})[kind]||'来源链路待核对';
  root.HensemLiveReportData={normalizeIdentity,identityKey:keyFor,create({L,E,N,C,R,request,render}){
   const S={catalogRows:[],catalogLoaded:false,catalogBusy:false,catalogError:'',catalogSerial:0,catalogAt:0,loading:false,error:'',result:null,serial:0,scope:null,scopeKey:'',expanded:new Set(),tabs:new Map()};let catalogPending=null,loadPending=null,completed=null;
@@ -40,7 +49,7 @@
    // Link report names only to an already-authorized native identity. Keep
    // raw feed keys for reads; ambiguous aliases and other countries stay apart.
    const aliases=new Map(),nativeSources=new Map(),aliasKey=row=>{
-    const country=row.identityCountry??row.country??'',name=String(row.name||'').trim();
+    const country=sourceIdentity(row).group,name=String(row.name||'').trim();
     const normalized=['IN','INDIA','印度'].includes(token(country))?token(name).replace(/^(DHANI|VEER|SHREE)[.]/,'$1'):name;
     return keyFor({...row,name:normalized});
    };
@@ -50,7 +59,7 @@
    }
    const directoryKey=row=>{
     const candidates=aliases.get(aliasKey(row)),explicit=row.system&&!['REPORT','SHEET','RECHARGE_REVIEW','WITHDRAW_REVIEW'].includes(token(row.system));
-    const matches=[...(candidates||[])].filter(key=>!explicit||[...nativeSources.get(key)].some(source=>sameSource(source,row.system)));
+    const matches=[...(candidates||[])].filter(key=>!explicit||[...nativeSources.get(key)].some(source=>sameSource(source,feedSource(row))));
     if(matches.length===1)return matches[0];
     // A different explicit backend remains separately selectable, even when
     // its display name is exactly the same as the authorized native platform.

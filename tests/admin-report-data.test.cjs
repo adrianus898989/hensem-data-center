@@ -177,6 +177,61 @@ test('teams are separate from geography and a future Panghu country keeps its ow
  const normalize=f.context.HensemLiveReportData.normalizeIdentity;assert.equal(normalize({country:'巴西',team:'M8',name:'5C555'}).team,'M8');assert.equal(normalize({country:'墨西哥',team:'胖虎'}).country,'墨西哥');assert.equal(normalize(normalize({country:'胖虎巴西',team:'胖虎'})).identityCountry,'胖虎巴西');
 });
 
+// Platform names are the audited 2026-09-26 registration roster; IDs and
+// payloads below are synthetic. The browser may only use entries it receives.
+const indiaRoster={
+ M8:['51GAME','55CLUB','6CLUB','82LOTTERY','91CLUB','BIGMUMBAI','DHANIWIN','IN999','JAICLUB','JALWA','LOTTERY77','OKWIN','RAJA','RAJALOTTERY','SHREEWIN','TPPLAY','VEERGAME'],
+ '香港':['365IN','777IN','8GAME','EK7','EZ777','FT7','GEM7','GG9','HU777','INDIA2026','JW777','KA9','MAX7','MM9','WR777','WW9'],
+ '红膏蟹':['66GAME','PE7','W5W','XX5','XX6','XX7','YY9','YYGAME']
+};
+const indiaNative=()=>Object.entries(indiaRoster).flatMap(([team,names])=>names.map(name=>({id:'fixture:'+team+':'+name,name,team,country:team==='M8'?'印度':team,scopeGroup:team==='M8'?'IN':team==='香港'?'HK_TEAM':'RED_CRAB',source:team==='M8'?(name==='DHANIWIN'?'newar':'ar'):'game66',sourceName:({DHANIWIN:'DhaniWin',LOTTERY77:'LOTTERY7',SHREEWIN:'Shree.Win',VEERGAME:'Veer.Game'})[name]||name})));
+
+test('India keeps all 41 authorized native platforms and merges game66 intake/config labels into those same IDs',async()=>{
+ const catalog=indiaNative(),nativeGame66=catalog.filter(p=>p.source==='game66');
+ const feeds=nativeGame66.flatMap(p=>['charge','withdraw'].map(direction=>feed({dataset:'orders',system:p.team==='香港'?'GAME66_HK':'GAME66_RED_CRAB',country:p.country,rawCountry:p.scopeGroup,name:p.name,rawPlatform:p.sourceName,team:p.team,directions:[direction],records:null,provenance:{kind:'direct'}})));
+ for(const name of ['66GAME','PE7','W5W','XX6','XX7','YYGAME'])feeds.push(feed({dataset:'game66_config',system:'GAME66_RED_CRAB',country:'红膏蟹',rawCountry:'红膏蟹',name,rawPlatform:name,team:'待归类',directions:[],provenance:{kind:'direct'}}));
+ const seeds=['DHANI.WIN','DhaniWin','LOTTERY7','Shree.Win','Veer.Game'].map(name=>({name,country:'印度',source:'withdraw'}));
+ let resolve;const f=fixture({catalog,withdrawCatalog:seeds,onCatalog:()=>new Promise(r=>resolve=r)}),pending=f.page.loadCatalog();
+ assert.equal(f.page.selected({country:'印度'}).length,41,'native identities are available while the feed directory is loading');
+ resolve({rows:feeds});await pending;
+ const rows=f.page.selected({country:'印度'});assert.equal(rows.length,41);assert(rows.every(p=>!p.reportOnly));
+ assert.deepEqual(plain(rows.map(p=>p.id)),catalog.map(p=>p.id));
+ for(const [team,names]of Object.entries(indiaRoster))assert.equal(f.page.selected({country:'印度',teams:[team]}).length,names.length);
+ assert.equal(f.page.selected({country:'印度',sources:['game66']}).length,24);
+ assert.equal(f.page.selected({country:'HK_TEAM'}).length,16);assert.equal(f.page.selected({country:'RED_CRAB'}).length,8);
+ assert.equal(rows.find(p=>p.name==='PE7').feeds.length,3);assert.equal(rows.find(p=>p.name==='365IN').feeds.length,2);
+ f.L.country='印度';f.L.multi.source=['game66'];const html=f.page.render({page:'overview'});
+ assert.match(html,/自动出款配置接入/);assert.match(html,/PE7/);assert.doesNotMatch(html,/尚无可用于当前页面的日报汇总/,'native orders must not be reclassified as report-only capability gaps');
+ assert.equal(f.L.catalog.find(p=>p.name==='365IN').country,'香港');assert.equal(f.page.state.catalogRows[0].rawCountry,'HK_TEAM');
+});
+
+test('geographic display labels and raw team scopes cannot merge identical platform names across India teams',async()=>{
+ const catalog=[{id:'m8',name:'SAME',country:'印度',source:'ar',team:'M8'}, {id:'hk',name:'SAME',country:'香港',scopeGroup:'HK_TEAM',source:'game66',team:'香港'},{id:'crab',name:'SAME',country:'红膏蟹',scopeGroup:'RED_CRAB',source:'game66',team:'红膏蟹'}];
+ const feeds=[feed({name:'SAME',rawPlatform:'HK-RAW',country:'印度',rawCountry:'HK_TEAM',team:'待归类',system:'REPORT',directions:['charge']}),feed({name:'SAME',rawPlatform:'RC-RAW',country:'印度',rawCountry:'RED_CRAB',team:'待归类',system:'REPORT',directions:['charge']}),feed({name:'SAME',rawPlatform:'M8-RAW',country:'IN',rawCountry:'IN',team:'M8',system:'AR',directions:['charge']})];
+ const f=fixture({catalog,feeds});await f.page.load({country:'印度',teams:['香港'],direction:'charge'});
+ assert.equal(f.page.catalog().length,3);assert(f.page.catalog().every(p=>p.feeds.length===1));
+ assert.deepEqual(f.calls.find(q=>q.action==='reportSummary').feeds.map(q=>[q.country,q.platform]),[['HK_TEAM','HK-RAW']]);
+ assert.deepEqual(plain(f.page.selected({country:'香港'}).map(p=>p.id)),['hk']);
+ assert.deepEqual(plain(f.page.selected({country:'RED_CRAB'}).map(p=>p.id)),['crab']);
+ assert.equal(f.context.HensemLiveReportData.normalizeIdentity({country:'HK_TEAM'}).country,'印度');
+ assert.equal(f.context.HensemLiveReportData.normalizeIdentity({country:'印度',scope_group:'HK_TEAM'}).team,'香港');
+});
+
+test('partial authorized directories are never padded with the known roster or promoted from report-only to order platforms',async()=>{
+ const all=indiaNative(),m8=all.filter(p=>p.team==='M8'),hk=all.find(p=>p.team==='香港');
+ const f=fixture({catalog:m8,feeds:[feed({dataset:'orders',system:'GAME66_HK',country:'香港',rawCountry:'HK_TEAM',name:hk.name,rawPlatform:hk.name,team:'香港',provenance:{kind:'direct'}})]});
+ assert.equal(f.page.selected({country:'印度'}).length,17);await f.page.loadCatalog();
+ const rows=f.page.selected({country:'印度'});assert.equal(rows.length,18);assert.equal(rows.filter(p=>!p.reportOnly).length,17);
+ const report=rows.find(p=>p.team==='香港');assert.equal(report.reportOnly,true);assert.deepEqual(plain(report.orderPlatformIds),[]);
+ assert.equal(rows.filter(p=>p.team==='红膏蟹').length,0,'known registrations are not authority to add an absent scope');
+ f.L.catalog=[...m8,hk];assert.equal(f.page.selected({country:'印度'}).length,18);assert.equal(f.page.catalog().find(p=>p.team==='香港').id,hk.id);assert.equal(f.page.catalog().find(p=>p.id===hk.id).feeds.length,1);
+});
+
+test('a conflicting game66 source-team tag remains a separate report capability',async()=>{
+ const f=fixture({catalog:[{id:'hk',name:'SAME',country:'香港',team:'香港',source:'game66'}],feeds:[feed({dataset:'orders',system:'GAME66_RED_CRAB',country:'香港',rawCountry:'HK_TEAM',name:'SAME',rawPlatform:'SAME',team:'香港',provenance:{kind:'direct'}})]});
+ await f.page.loadCatalog();assert.equal(f.page.catalog().length,2);assert.equal(f.page.catalog().find(p=>p.id==='hk').feeds.length,0);assert(f.page.catalog().find(p=>p.reportOnly));
+});
+
 test('intake uses the same team/country display but keeps exact source keys for detail and config reads',async()=>{
  const f=fixture({catalog:[{id:'m8',name:'SAME',country:'巴西',team:'M8',source:'ar'}],withdrawCatalog:[{name:'SAME',country:'胖虎巴西',team:'胖虎'}]});vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-collected-data.js'),'utf8'),f.context);
  const calls=[],page=f.context.HensemLiveCollectedData.create({L:f.L,E:escape,C:String,N:String,render:()=>{},table:(heads,rows)=>'<table><thead>'+heads.map(x=>'<th>'+x+'</th>').join('')+'</thead>'+rows.map(row=>'<tr>'+row.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</table>',box:(title,body)=>'<h2>'+title+'</h2>'+body,request:async q=>{calls.push(plain(q));return q.operation==='catalog'?{rows:[feed({name:'SAME',rawPlatform:'SAME'})]}:{total:0,rows:[]}}});
