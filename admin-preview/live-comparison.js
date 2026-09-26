@@ -70,5 +70,13 @@
   const [a,n,b,m]=values;if(n===0||m===0||a>n||b>m)return unknown('percentage_points');
   return rounded((a/n-b/m)*100,' 个百分点','percentage_points');
  }
- root.HensemLiveCompare=Object.freeze({windowFor,delta,rateDelta});
+ // Success-time completions and creation-time submissions are different cohorts.
+ // This explicit ratio may exceed 100%; keep the cohort rate validator above.
+ function ratioDelta(success,total,priorSuccess,priorTotal){
+  const values=[success,total,priorSuccess,priorTotal].map(number);
+  if(values.some(v=>v===null||!Number.isSafeInteger(v)||v<0))return unknown('percentage_points');
+  const [a,n,b,m]=values;if(n===0||m===0)return unknown('percentage_points');
+  return rounded((a/n-b/m)*100,' 个百分点','percentage_points');
+ }
+ root.HensemLiveCompare=Object.freeze({windowFor,delta,rateDelta,ratioDelta});
 })(typeof window==='object'?window:globalThis);
