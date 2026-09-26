@@ -205,3 +205,9 @@ test('collected data has a bounded source-only action, fresh auth and no arbitra
  await h.api.adminLiveRequest(session,request);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_collected_data');assert.equal(h.calls[0].init.headers.Authorization,'Bearer offline-fresh-token');assert.equal(JSON.parse(h.calls[0].init.body).p_request.platform,'FUTURE-PH');
  for(const bad of [{...request,table:'dashboard_profiles'},{...request,startAt:'2026-08-01'},{...request,endAt:'2026-02-30'},{...request,offset:-1},{...request,limit:'50'},{action:'collectedData',operation:'catalog',platform:'FUTURE-PH'}])assert.throws(()=>h.api.validateAdminLiveRequest(bad));
 });
+
+test('intake directions and transport stay bounded to the selected report source',()=>{
+ const h=load(),q={action:'collectedData',operation:'rows',dataset:'volume',country:'胖虎巴西',platform:'TEST',startAt:'2026-09-24',endAt:'2026-09-24',direction:'charge',sourceKind:'google_sheets'};
+ assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(q))),q);
+ for(const bad of [{...q,direction:'all'},{...q,sourceKind:'mixed'},{...q,dataset:'panda_success'},{action:'catalog',sourceKind:'direct'},{action:'collectedData',operation:'catalog',direction:'charge'}])assert.throws(()=>h.api.validateAdminLiveRequest(bad));
+});
