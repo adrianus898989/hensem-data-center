@@ -20,10 +20,10 @@ test('both flows expand with identical parent column count/order, successful tim
   const {h}=setup(direction),before=h.networkCalls();h.root.providerSummaryToggle(0);
   const html=h.html(),rows=children(html),headers=[...html.match(/<thead>([\s\S]*?)<\/thead>/)[1].matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]));
   assert.equal(rows.length,2);for(const row of rows)assert.equal(row.length,headers.length);
-  assert.equal(plain(rows[0][0]),'Alpha');assert.equal(plain(rows[0][1]),'ar');assert.equal(plain(rows[0][2]),'900.00');assert.equal(plain(rows[1][2]),'100.00');
-  assert.match(rows[0][3],/^3<small.*笔数占比 30.00%/);assert.match(rows[1][3],/^7<small.*笔数占比 70.00%/);
-  assert.match(rows[0][4],/按成功 \/ 创建：3 \/ 20 笔/);assert.match(rows[0][4],/>15.00%/);assert.equal(plain(rows[0][5]),'90.00%');
-  const feeIndex=direction==='withdraw'?8:6;assert.equal(plain(rows[0][feeIndex]),direction==='withdraw'?'2.50% + 6 / 笔':'4.00%');
+  assert.equal(plain(rows[0][0]),'Alpha');assert.equal(plain(rows[0][1]),'ar');assert.equal(headers[2],'类型');assert.equal(plain(rows[0][3]),'900.00');assert.equal(plain(rows[1][3]),'100.00');
+  assert.equal(plain(rows[0][4]),'3');assert.equal(plain(rows[1][4]),'7');assert.equal(plain(rows[0][7]),'30.00%');assert.equal(plain(rows[1][7]),'70.00%');assert.doesNotMatch(rows[0][4],/small/);
+  assert.match(rows[0][5],/按成功 \/ 创建：3 \/ 20 笔/);assert.match(rows[0][5],/>15.00%/);assert.equal(plain(rows[0][6]),'90.00%');
+  const feeIndex=direction==='withdraw'?10:8;assert.equal(plain(rows[0][feeIndex]),direction==='withdraw'?'2.50% + 6 / 笔':'4.00%');
   assert.equal(plain(rows[1][feeIndex]),direction==='withdraw'?'3.00% + 2 / 笔':'5.00%');
   assert.equal(plain(rows[0][feeIndex+1]),direction==='withdraw'?'40.50':'36.00');assert.equal(plain(rows[1][feeIndex+1]),direction==='withdraw'?'17.00':'5.00');
   assert.equal(plain(rows[0][feeIndex+3]),'100.00');assert.equal(plain(rows[0][feeIndex+4]),'4');assert.equal(plain(rows[0].at(-2)),'50.00%');assert.equal(plain(rows[0].at(-1)),'—');
@@ -42,7 +42,7 @@ test('full platform workorder aggregates are independent of paginated records an
 
 test('legacy paged workorder rows never become fabricated platform totals; unavailable fields stay blank',()=>{
  const {h}=setup();delete h.L.workorders.byPlatformProvider;h.L.workorders.rows=[issue('a','Alpha')];h.render();h.root.providerSummaryToggle(0);
- const rows=children(h.html());for(const row of rows)assert(row.slice(11,18).every(cell=>cell==='—'));assert.match(h.html(),/不使用分页记录推算/);
+ const rows=children(h.html());for(const row of rows)assert(row.slice(13,20).every(cell=>cell==='—'));assert.match(h.html(),/不使用分页记录推算/);
 });
 
 test('same display name with ambiguous source keeps one unallocated workorder row rather than repeating it',()=>{
@@ -60,5 +60,15 @@ test('known covered zero and uncovered data differ; provider/direction/country f
 });
 
 test('missing amounts stay unknown while manual and unmatched fees stay honest',()=>{
- const h=fixture([source('a',null,3),source('b',100,7)]);h.L.feeLookupRows=[];h.render();h.root.providerSummaryToggle(0);const rows=children(h.html());assert(rows.every(r=>plain(r[5])==='—'));assert(rows.every(r=>plain(r[9])==='—'));assert.doesNotMatch(h.html(),/NaN|Infinity/);
+ const h=fixture([source('a',null,3),source('b',100,7)]);h.L.feeLookupRows=[];h.render();h.root.providerSummaryToggle(0);const rows=children(h.html());assert(rows.every(r=>plain(r[6])==='—'));assert(rows.every(r=>plain(r[11])==='—'));assert.doesNotMatch(h.html(),/NaN|Infinity/);
+});
+
+
+test('only workorder success rates below 30 percent use red text in both flows and expanded rows',()=>{
+ for(const direction of ['charge','withdraw'])for(const [success,total,red]of [[0,10,true],[2,10,true],[3,10,false],[4,10,false],[0,0,false]]){
+  const {h}=setup(direction);h.L.workorders.byProvider[0].successCount=success;h.L.workorders.byProvider[0].submittedCount=total;
+  for(const row of h.L.workorders.byPlatformProvider){row.successCount=success;row.submittedCount=total;}
+  h.render(direction);const parent=h.html().match(/<tbody>([\s\S]*?)<\/tbody>/)[1];assert.equal(parent.includes('class="workorder-rate-low"'),red,direction+' parent threshold');
+  h.root.providerSummaryToggle(0);for(const row of children(h.html()))assert.equal(row.at(-2).includes('class="workorder-rate-low"'),red,direction+' child threshold');
+ }
 });

@@ -28,7 +28,7 @@ function breakdown(html){
  const children=[...main.matchAll(/<tr class="provider-platform-row">([\s\S]*?)<\/tr>/g)];assert(children.length,'expanded platform child rows are rendered');
  return children.map(match=>{
   const cells=[...match[1].matchAll(/<td>([\s\S]*?)<\/td>/g)].map(c=>c[1]);assert.equal(cells.length,headers.length,'platform child aligns with every parent column');
-  const countCell=cells[countIndex],countShare=countCell.match(/<small class="cell-sub">笔数占比 ([\s\S]*?)<\/small>/)?.[1];assert(countShare!==undefined,'count share is displayed independently from amount share');
+  const countCell=cells[countIndex],countShare=cells[headers.findIndex(h=>/^(已读取)?笔数占比$/.test(h))];assert(countShare!==undefined,'count share has its own column beside amount share');assert.doesNotMatch(countCell,/<small/);
   return {'平台':plain(cells[0]),'包网来源':plain(cells[1]),'成功金额':plain(cells[amountIndex]),'成功笔数':plain(countCell.replace(/<small\b[\s\S]*?<\/small>/g,'')),'金额占比':plain(cells[shareIndex]),'笔数占比':plain(countShare)};
  });
 }

@@ -173,7 +173,7 @@ end;
 $$;
 revoke all on function private.dashboard_admin_rate_type_sources(text,integer[]) from public,anon,authenticated;
 
-create function private.dashboard_admin_live_rates(p_request jsonb default '{}'::jsonb)
+create or replace function private.dashboard_admin_live_rates(p_request jsonb default '{}'::jsonb)
 returns jsonb language plpgsql stable security definer set search_path='' as $$
 declare
   v_scope jsonb := private.dashboard_admin_live_scope();
@@ -284,7 +284,7 @@ $$;
 revoke all on function private.dashboard_admin_live_rates(jsonb) from public,anon;
 grant execute on function private.dashboard_admin_live_rates(jsonb) to authenticated;
 
-create function public.dashboard_admin_live_rates(p_request jsonb default '{}'::jsonb)
+create or replace function public.dashboard_admin_live_rates(p_request jsonb default '{}'::jsonb)
 returns jsonb language sql stable security invoker set search_path='' as $$
   select private.dashboard_admin_live_rates(p_request);
 $$;
