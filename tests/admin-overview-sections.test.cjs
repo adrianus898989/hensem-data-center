@@ -93,3 +93,23 @@ test('leaving overview does not cancel a newer workorder request already owned b
  const h=await queried();h.L.overviewWorkordersStatus='loading';h.L.overviewSections.workordersSerial=h.L.workordersSerial;h.L.workordersSerial++;h.L.workordersLoading=true;
  const nextSerial=h.L.workordersSerial;h.c.state.page='workorders';h.c.render();assert.equal(h.L.workordersSerial,nextSerial);assert.equal(h.L.workordersLoading,true);
 });
+test('single-direction business panels occupy both grid tracks while paired overview tables stay independent',async()=>{
+ const h=await queried();let ctx;const create=h.c.HensemLivePages.create;
+ h.c.HensemLivePages.create=value=>{ctx=value;return create(value)};h.L.feeLookupRows=[];h.c.render();assert(ctx);
+ const css=fs.readFileSync(path.join(__dirname,'../admin-preview/live-reference-pages.css'),'utf8').replace(/\/\*[\s\S]*?\*\//g,'');
+ const rules=[...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(m=>m[1].includes('.live-paired-dimensions'));
+ assert(rules.some(m=>m[1].trim()==='body.live-admin .live-paired-dimensions>.panel:only-child'&&/grid-column\s*:\s*1\s*\/\s*-1/.test(m[2])),'the only panel must span the existing tracks');
+ assert(!rules.some(m=>/grid-template-columns\s*:/.test(m[2])),'paired overview track widths are not overridden');
+ assert(rules.some(m=>m[1].trim()==='body.live-admin .live-paired-dimensions>.panel'&&/min-width\s*:\s*0/.test(m[2])),'wide tables must not enlarge their parent track');
+ assert(rules.some(m=>m[1].trim()==='body.live-admin .live-paired-dimensions>.panel>.table-wrap'&&/overflow-x\s*:\s*auto/.test(m[2])),'overflow remains scrollable inside the table');
+ const before=h.calls.length;
+ for(const direction of ['charge','withdraw','all']){
+  h.L.direction=direction;
+  for(const render of [ctx.providersView,ctx.platformsView,ctx.overviewAmounts]){
+   const html=render();assert.match(html,/^<div class="grid equal live-paired-dimensions">/);
+   assert.equal((html.match(/<section class="panel">/g)||[]).length,direction==='all'?2:1,'single-direction panel must match :only-child; overview keeps both panels');
+   assert.match(html,/class="live-table table-wrap /);
+  }
+ }
+ assert.equal(h.calls.length,before,'layout changes do not read data');
+});
