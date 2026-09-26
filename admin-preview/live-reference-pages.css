@@ -1,4 +1,8 @@
 /* Preserve the approved page density and component vocabulary. */
+/* Keep sidebar navigation scrollable without showing its scrollbar track. */
+body.live-admin .sidebar,body.live-admin .sidebar .nav{scrollbar-width:none}
+body.live-admin .sidebar .nav{overflow-y:auto}
+body.live-admin .sidebar::-webkit-scrollbar,body.live-admin .sidebar .nav::-webkit-scrollbar{display:none;width:0;height:0}
 body.live-admin .content{padding:17px 22px 22px}
 body.live-admin .eyebrow{display:block;font-size:9px;margin-bottom:5px}
 body.live-admin .page-title{margin-bottom:14px}
