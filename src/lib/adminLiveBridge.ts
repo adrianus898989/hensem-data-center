@@ -4,23 +4,25 @@ import { validateConfigurationRequest } from "./adminConfigurationRequest";
 export const LIVE_REQUEST = "hensem-admin-live-request";
 export const LIVE_RESPONSE = "hensem-admin-live-response";
 const actions = ["catalog","collectedData","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
-const keys = new Set(["dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus"]);
+const keys = new Set(["sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus"]);
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
   if(Object.keys(p).some(k=>!keys.has(k))||!actions.includes(String(p.action)))throw Error("查询方法无效");
-  if(p.action!=="collectedData"&&p.dataset!==undefined)throw Error("采集来源仅用于全部平台数据页面");
+  if(p.action!=="collectedData"&&(p.dataset!==undefined||p.sourceKind!==undefined))throw Error("采集来源仅用于平台数据接入页面");
   if(p.action!=="depositIssues"&&["dateMode","match","followupStatus"].some(k=>p[k]!==undefined))throw Error("核对筛选仅用于存款未到账页面");
   if(p.action!=="withdrawReasons"&&["category","reasonKey","operatorKey"].some(k=>p[k]!==undefined))throw Error("原因筛选仅用于驳回分析");
   if(["providerOptions","configurationAccess","configurationWrite"].includes(String(p.action)))return validateConfigurationRequest(p);
   if(p.view!==undefined&&(!["aggregate","autoWithdraw","depositIssues"].includes(String(p.action))||(p.action==="aggregate"&&!["full","providers"].includes(String(p.view)))))throw Error("统计页面类型无效");
   if(p.action==="catalog")return {action:"catalog"};
   if(p.action==="collectedData"){
-    const allowed=p.operation==='catalog'?["action","operation"]:["action","operation","dataset","country","platform","startAt","endAt","offset","limit"];
+    const allowed=p.operation==='catalog'?["action","operation"]:["action","operation","dataset","country","platform","startAt","endAt","offset","limit","direction","sourceKind"];
     if(!['catalog','rows'].includes(String(p.operation))||Object.keys(p).some(k=>!allowed.includes(k)))throw Error("采集数据参数无效");
     if(p.operation==='rows'){
       for(const k of ['dataset','country','platform'])if(typeof p[k]!=="string"||String(p[k]).length>200||/[\u0000-\u001f]/.test(String(p[k])))throw Error("采集来源无效");
       if(!p.dataset||!p.platform)throw Error("请选择平台和数据来源");
+      if(p.direction!==undefined&&!["charge","withdraw"].includes(String(p.direction)))throw Error("业务方向无效");
+      if(p.sourceKind!==undefined&&(p.dataset!=="volume"||!["direct","google_sheets","unknown"].includes(String(p.sourceKind))))throw Error("数据来源无效");
       for(const k of ['startAt','endAt'])if(typeof p[k]!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(String(p[k]))||!Number.isFinite(Date.parse(String(p[k])))||new Date(String(p[k])).toISOString().slice(0,10)!==p[k])throw Error("日报日期无效");
       const days=(Date.parse(String(p.endAt))-Date.parse(String(p.startAt)))/86400000;
       if(days<0||days>30)throw Error("查询范围最多31个当地日");
@@ -149,7 +151,7 @@ export function isAdminLiveMessage(event:MessageEvent,source:Window|null|undefin
  const d=event.data;return !!source&&!!channel&&event.source===source&&event.origin==="null"&&d?.type===LIVE_REQUEST&&d.channel===channel&&typeof d.id==="string"&&/^[a-zA-Z0-9_-]{1,100}$/.test(d.id);
 }
 function adminLiveTimeoutMessage(action:unknown):string {
- return action==='withdrawReasons'?'该平台当日原因读取超时，请点击重试':'读取超时，请缩短日期或选择单个平台后重试';
+ return action==='withdrawReasons'?'该平台当日原因读取超时，请点击重试':['aggregate','collectedData'].includes(String(action))?'读取超时，不代表没有数据；请重试':'读取超时，请缩短日期或选择单个平台后重试';
 }
 export async function adminLiveRequest(session:DashboardSession,input:unknown,signal?:AbortSignal):Promise<unknown>{
  const request=validateAdminLiveRequest(input),current=await ensureDashboardSession(session);
@@ -169,7 +171,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if([401,403].includes(response.status))throw Error("正式数据读取未获授权，或会话已失效");
  if(/unsupported_filter/.test(code))throw Error("此来源未提供该检索字段，请清空该字段后查询");
  if(/timeout|57014/i.test(code)||response.status===504)throw Error(adminLiveTimeoutMessage(request.action));
- throw Error("正式数据查询未完成，请重试；未显示部分总数");}
+ throw Error("正式数据查询未完成，请重试；不能据此判断没有数据");}
  return response.json();
 }
 export function installAdminLiveBridge(options:{source:()=>Window|null|undefined;channel:()=>string;session:DashboardSession|(()=>DashboardSession);target?:Window}):()=>void{

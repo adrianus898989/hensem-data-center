@@ -46,32 +46,33 @@ before(async()=>{
  insert into wg_config_daily values('BR','WG-DEMO','2026-09-24',now(),'{"private":"NEVER-RETURN"}');
  insert into withdraw_pending_daily values('AR','IN','Veer.Game','2026-09-24',now(),now(),'{"totals":{"pending_count":3,"pending_amount":120},"private":"NEVER-RETURN"}');
  insert into newar_business_snapshots values('third_party_volume','印度','IN','NEW-DEMO','2026-09-24',now(),now(),'charge','{"rows":[{"amount":100,"count":2,"member":"NEVER-RETURN"}]}');`);
+ await db.exec("alter table ar_config_daily add column parser_version text;create table ar_config_targets(country_code text,platform text,source_system text);alter table game66_platforms add column team_code text;create table game66_review_rules(platform_id uuid,last_seen_at timestamptz);alter table third_party_volume add column sheet_name text default '[三方量表1] fixture';alter table third_party_volume add column source_row integer default 7;create function private.dashboard_admin_live_order_intake() returns jsonb language sql as $$ select '[]'::jsonb $$;");
  const catalog=read('admin-live-platform-catalog-map.sql');await db.exec(catalog.slice(catalog.indexOf('create or replace function private.dashboard_admin_live_is_panghu_platform'),catalog.indexOf('create or replace function private.dashboard_admin_live_platforms()')));
  await db.exec(read('admin-live-collected-data.sql'));
 });
 after(async()=>{await db?.close()});
-test('all received report/config/operator platforms are visible without an order target or static platform whitelist',async()=>{
+test('business intake shows received collection, payout and config without unrelated feeds',async()=>{
  const data=await call({operation:'catalog'});const p=data.rows.find(x=>x.name==='FUTURE-PANGHU');assert.equal(p.team,'胖虎');assert.equal(p.country,'胖虎巴西');assert.equal(p.lastDate,'2026-09-24');
- assert(data.rows.some(x=>x.name==='OPERATOR-ONLY'));assert(data.rows.some(x=>x.name==='LG-ONLY'&&x.system==='LG'));assert(data.rows.some(x=>x.name==='WG-DEMO'&&x.system==='WG'&&x.team==='M8'));
+ assert(!data.rows.some(x=>x.name==='OPERATOR-ONLY'));assert(!data.rows.some(x=>['auto','pending','operators','member_notes'].includes(x.dataset)));assert(data.rows.some(x=>x.name==='LG-ONLY'&&x.system==='LG'));assert(data.rows.some(x=>x.name==='WG-DEMO'&&x.system==='WG'&&x.team==='M8'));
  assert.equal(data.rows.find(x=>x.name==='UNASSIGNED').team,'待归类');assert(!data.rows.some(x=>x.name==='QUARANTINED'));
- assert(data.rows.some(x=>x.name==='Veer.Game'&&x.dataset==='volume'&&x.team==='M8'));assert(data.rows.some(x=>x.name==='776F'&&x.team==='胖虎'));
+ assert(data.rows.some(x=>x.name==='Veer.Game'&&x.dataset==='volume'&&x.team==='M8'));assert(!data.rows.some(x=>x.name==='776F'),'automatic payout report alone is not configuration');
  assert.equal(data.rows.filter(x=>x.name==='FUTURE-PANGHU').length,2,'independent datasets remain identifiable');
 });
 test('detail reads exact source/date, projects approved numbers and never exposes raw payloads',async()=>{
  const data=await call({operation:'rows',dataset:'volume',country:'胖虎巴西',platform:'FUTURE-PANGHU',startAt:'2026-09-24',endAt:'2026-09-24'});
- assert.equal(data.total,1);assert.equal(data.rows[0].metrics.amount,1234);assert.equal(data.rows[0].metrics.count,12);assert.doesNotMatch(JSON.stringify(data),/NEVER-RETURN|token|member|raw/);
+ assert.equal(data.total,1);assert.equal(data.rows[0].metrics.amount,1234);assert.equal(data.rows[0].metrics.count,12);assert.deepEqual(data.rows[0].sourceReference,{sheetName:'[三方量表1] fixture',row:7});assert.doesNotMatch(JSON.stringify(data),/NEVER-RETURN|token|member|raw/);
  const pending=await call({operation:'rows',dataset:'pending',country:'IN',platform:'Veer.Game',startAt:'2026-09-24',endAt:'2026-09-24'});assert.equal(pending.rows[0].metrics.pending,3);assert.equal(pending.rows[0].metrics.pendingAmount,120);
  const empty=await call({operation:'rows',dataset:'volume',country:'胖虎巴西',platform:'FUTURE-PANGHU',startAt:'2026-09-23',endAt:'2026-09-23'});assert.equal(empty.total,0);
 });
 test('every catalogue and detail request rechecks scope, including raw-code aliases',async()=>{
  await db.exec(`select set_config('test.scope','{"countries":["印度"],"platforms":["Veer.Game"]}',false)`);
- try {const data=await call({operation:'catalog'});assert.equal(data.rows.length,2);assert(data.rows.every(x=>x.name==='Veer.Game'));
+ try {const data=await call({operation:'catalog'});assert.equal(data.rows.length,1);assert(data.rows.every(x=>x.name==='Veer.Game'));
  await assert.rejects(call({operation:'rows',dataset:'volume',country:'胖虎巴西',platform:'FUTURE-PANGHU',startAt:'2026-09-24',endAt:'2026-09-24'}),/scope_denied/);
  await db.exec("select set_config('test.scope','',false)");await assert.rejects(call({operation:'catalog'}),/unauthorized/);
  }finally{await db.exec(`select set_config('test.scope','{"mode":"all"}',false)`)}
 });
 test('unknown group rows are returned and newly arrived platforms are discovered without a deployment',async()=>{
- await db.exec("insert into auto_withdraw_daily(country,platform,data_date) values('胖虎巴西','NEW-AFTER-LOAD','2026-09-25')");const data=await call({operation:'catalog'});assert.equal(data.rows.find(x=>x.name==='NEW-AFTER-LOAD').team,'胖虎');
+ await db.exec("insert into third_party_volume(country,platform,data_date,direction) values('胖虎巴西','NEW-AFTER-LOAD','2026-09-25','代收')");const data=await call({operation:'catalog'});assert.equal(data.rows.find(x=>x.name==='NEW-AFTER-LOAD').team,'胖虎');
 });
 test('conflicting team mappings cannot silently assign a platform to the wrong team',async()=>{
  await db.exec("insert into dashboard_platform_team_map values('OTHER','WG','巴西','WG-DEMO','WG-DEMO',true)");const data=await call({operation:'catalog'});assert.equal(data.rows.find(x=>x.name==='WG-DEMO').team,'待归类');
@@ -104,6 +105,81 @@ test('an authoritative Panghu label carries across feeds and cannot be read unde
  }finally{await db.exec(`select set_config('test.scope','{"mode":"all"}',false)`)}
 });
 test('source date anomalies remain counted but cannot become the normal latest date',async()=>{
- await db.exec("insert into auto_withdraw_daily(country,platform,data_date) values('胖虎巴西','FUTURE-PANGHU','2611-01-12'),('胖虎巴西','FUTURE-PANGHU','2026-09-24')");
- const row=(await call({operation:'catalog'})).rows.find(r=>r.dataset==='auto'&&r.name==='FUTURE-PANGHU');assert.equal(row.dateIssues,1);assert.equal(row.lastDate,'2026-09-24');assert.equal(row.records,2);
+ await db.exec("insert into third_party_volume(country,platform,data_date,direction) values('胖虎巴西','DATE-ISSUE','2611-01-12','代收'),('胖虎巴西','DATE-ISSUE','2026-09-24','代收')");
+ const row=(await call({operation:'catalog'})).rows.find(r=>r.dataset==='volume'&&r.name==='DATE-ISSUE');assert.equal(row.dateIssues,1);assert.equal(row.lastDate,'2026-09-24');assert.equal(row.records,2);
+});
+
+test('catalog and detail separate transport and direction before pagination',async()=>{
+ await db.exec("insert into third_party_volume(country,platform,data_date,direction,sheet_name,amount,count) values('菲律宾','DUAL','2026-09-24','代收','LG_DIRECT',100,1),('菲律宾','DUAL','2026-09-23','代收','[三方量表1] test',80,1),('菲律宾','DUAL','2026-09-25','代付','LG_DIRECT',50,1),('菲律宾','DUAL','2026-09-22','代收',null,20,1)");
+ const catalog=await call({operation:'catalog'}),rows=catalog.rows.filter(r=>r.rawPlatform==='DUAL');assert.equal(rows.length,4);
+ const direct=rows.find(r=>r.provenance.kind==='direct'&&r.directions.includes('charge'));assert.equal(direct.lastDate,'2026-09-24');
+ const sheet=rows.find(r=>r.provenance.kind==='google_sheets');assert.equal(sheet.lastDate,'2026-09-23');
+ const q={operation:'rows',dataset:'volume',country:'菲律宾',platform:'DUAL',startAt:'2026-09-22',endAt:'2026-09-25',direction:'charge',sourceKind:'direct'};
+ const data=await call(q);assert.equal(data.total,1);assert.equal(data.rows[0].metrics.amount,100);assert(!('success' in data.rows[0].metrics));assert.equal((await call({...q,sourceKind:'google_sheets'})).rows[0].metrics.amount,80);assert.equal((await call({...q,sourceKind:'unknown'})).rows[0].metrics.amount,20);
+ for(const bad of [{...q,direction:'all'},{...q,sourceKind:'mixed'},{...q,dataset:'panda_success'}])await assert.rejects(call(bad),/invalid_/);
+});
+test('the historical Panghu country total is not counted as a platform',async()=>{
+ await db.exec("insert into third_party_volume(country,platform,data_date,direction) values('胖虎巴西','胖虎巴西','2026-05-17','代收')");assert(!(await call({operation:'catalog'})).rows.some(r=>r.rawPlatform==='胖虎巴西'));
+});
+
+test('recharge and withdrawal success snapshots retain their actual business direction',async()=>{
+ await db.exec(`insert into collection_success_daily(source_system,country_code,platform,stat_date,snapshot) values('RECHARGE_REVIEW','IN','Veer.Game','2026-09-24','{"totals":{"success_count":3}}'),('WITHDRAW_REVIEW','IN','Veer.Game','2026-09-25','{"totals":{"success_count":4}}')`);
+ const rows=(await call({operation:'catalog'})).rows.filter(x=>x.dataset==='collection_success'&&x.name==='Veer.Game');assert.equal(rows.length,2);assert(rows.every(x=>x.team==='M8'));assert.deepEqual(rows.find(x=>x.system==='WITHDRAW_REVIEW').directions,['withdraw']);
+ const q={operation:'rows',dataset:'collection_success',country:'IN',platform:'Veer.Game',startAt:'2026-09-24',endAt:'2026-09-25',direction:'withdraw'};const d=await call(q);assert.equal(d.total,1);assert.equal(d.rows[0].metrics.success,4);
+});
+
+function intakeFixture({catalog=[],rows=[],failure=false,payoutConfig,detailResult}={}){
+ const vm=require('node:vm'),calls=[],navigation=[],escape=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const context={document:{activeElement:null,querySelector:()=>null},HensemLivePayoutConfig:payoutConfig,liveSet:(...args)=>navigation.push(['set',...args]),liveChoosePlatform:id=>navigation.push(['orders',id]),setPage:page=>navigation.push(['page',page])};
+ vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-collected-data.js'),'utf8'),context);
+ const page=context.HensemLiveCollectedData.create({L:{catalog,to:'2026-09-25T23:59:59'},E:escape,C:x=>String(Number(x)||0),N:x=>String(Number(x)||0),render:()=>{},box:(title,content,note)=>'<section><h2>'+title+'</h2>'+content+'<p>'+note+'</p></section>',table:(headers,values,cls)=>'<table class="'+cls+'"><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+values.map(r=>'<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table>',request:async q=>{calls.push(q);if(failure)throw Error('timeout');return q.operation==='catalog'?{rows}:detailResult!==undefined?detailResult:{total:1,rows:[{date:'2026-09-24',direction:q.direction,metrics:{amount:50,count:2}}]}}});
+ return {page,context,calls,navigation};
+}
+const intakeFeed={name:'PANGHU-X',country:'胖虎巴西',rawCountry:'胖虎巴西',rawPlatform:'PANGHU-X',team:'胖虎',system:'REPORT',dataset:'volume',directions:['charge','withdraw'],lastDate:'2026-09-24',updatedAt:'2026-09-25T08:30:00Z',records:2,provenance:{kind:'google_sheets'}};
+test('intake view shows only three business capabilities and reads metadata once',async()=>{
+ const f=intakeFixture({rows:[intakeFeed,{...intakeFeed,dataset:'member_notes',directions:['withdraw']},{...intakeFeed,dataset:'workorders'},{...intakeFeed,dataset:'panda_config',system:'PANDA',directions:[],provenance:{kind:'direct'}}]});await f.page.load();
+ const html=f.page.render();assert.match(html,/<th>代收<\/th><th>代付<\/th><th>自动出款配置<\/th>/);assert.match(html,/Google 表格 → Supabase/);assert.match(html,/直接写入 Supabase/);assert.match(html,/已收到配置/);assert.match(html,/2026-09-24/);assert.match(html,/2026-09-25T08:30:00Z/);assert.doesNotMatch(html,/会员备注|工单日报|member_notes|collectedOpen\(0,1|collectedOpen\(0,2/);
+ f.context.collectedSet('team','胖虎');f.context.collectedSearch('PANGHU');assert.equal(f.calls.length,1);assert.equal(f.calls[0].operation,'catalog');assert(!f.calls.some(q=>q.action==='aggregate'));
+});
+test('catalog identity alone and a failed intake lookup never claim orders are available',async()=>{
+ const catalog=[{id:'platform-a',name:'A',country:'印度',team:'M8',source:'ar'}],f=intakeFixture({catalog,failure:true});await f.page.load();const html=f.page.render();assert.match(html,/不能据此判断平台没有数据/);assert.match(html,/未核实/);assert.doesNotMatch(html,/已收到订单|查看订单|collectedOpen\(/);
+ const success=intakeFixture({catalog});await success.page.load();assert.match(success.page.render(),/暂未收到/);assert.doesNotMatch(success.page.render(),/已收到订单/);
+});
+test('a mixed report uses exact platform and direction filters before paging',async()=>{
+ const f=intakeFixture({rows:[intakeFeed]});await f.page.load();f.context.collectedOpen(0,0,'withdraw');await new Promise(r=>setImmediate(r));const request=f.calls.at(-1);assert.equal(request.operation,'rows');assert.equal(request.direction,'withdraw');assert.equal(request.sourceKind,'google_sheets');assert.equal(request.platform,'PANGHU-X');assert.equal(request.country,'胖虎巴西');assert.equal(request.startAt,'2026-09-24');assert.equal(request.limit,50);assert.match(f.page.render(),/按源日报日期展示/);assert.match(f.page.render(),/成功时间统计/);
+ const before=f.calls.length;f.context.collectedOpen(0,0,'payout_config');assert.equal(f.calls.length,before,'unsupported direction cannot read another type of feed');
+});
+test('unspecified report directions stay unverified instead of claiming both sides exist',async()=>{
+ const f=intakeFixture({rows:[{...intakeFeed,directions:undefined}]});await f.page.load();const html=f.page.render();assert.match(html,/方向待核对/);assert.doesNotMatch(html,/collectedOpen\(/);
+});
+test('a confirmed order capability navigates to one exact platform with its direction',async()=>{
+ const catalog=[{id:'ar-1',name:'PLATFORM',country:'印度',team:'M8',source:'ar'}];
+ const f=intakeFixture({catalog,rows:[{...intakeFeed,dataset:'orders',system:'AR',name:'PLATFORM',country:'印度',team:'M8',rawCountry:'IN',rawPlatform:'PLATFORM',directions:['charge'],platformId:'ar-1',provenance:{kind:'direct'}}]});await f.page.load();const html=f.page.render();assert.match(html,/查看订单/);assert.match(html,/暂未收到/);f.context.collectedOpen(0,1,'charge');assert.deepEqual(f.navigation,[['set','country','印度'],['set','from','2026-09-24T00:00:00'],['set','to','2026-09-24T23:59:59'],['set','direction','charge'],['orders','ar-1']]);assert.equal(f.calls.length,1);
+});
+test('configuration only links when an exact platform target hook exists',async()=>{
+ const called=[],f=intakeFixture({rows:[{...intakeFeed,dataset:'panda_config',system:'PANDA'}],payoutConfig:{openTarget:q=>called.push(q)}});await f.page.load();assert.match(f.page.render(),/查看配置/);f.context.collectedOpen(0,0,'payout_config');assert.equal(called[0].platform,'PANGHU-X');assert.equal(called[0].country,'胖虎巴西');assert.equal(called[0].system,'PANDA');assert.deepEqual(f.navigation,[['page','payout_config']]);assert.equal(f.calls.length,1);
+});
+test('legacy volume metric payloads cannot expose guessed success or failed totals',async()=>{
+ const f=intakeFixture({rows:[intakeFeed]});await f.page.load();f.context.collectedOpen(0,0,'charge');await new Promise(r=>setImmediate(r));f.page.state.detailRows={total:1,rows:[{date:'2026-09-24',direction:'charge',metrics:{amount:500,count:4,success:4,failed:4}}]};
+ const html=f.page.render();assert.match(html,/<th>金额<\/th><th>笔数<\/th>/);assert.doesNotMatch(html,/<th>成功笔数<\/th>|<th>失败笔数<\/th>|成功率/);
+});
+test('volume source links preserve transport and each direction keeps its own latest date',async()=>{
+ const f=intakeFixture({rows:[{...intakeFeed,directions:['charge'],lastDate:'2026-09-24',provenance:{kind:'direct'}},{...intakeFeed,directions:['charge'],lastDate:'2026-09-23',provenance:{kind:'google_sheets'}},{...intakeFeed,directions:['withdraw'],lastDate:'2026-09-25',provenance:{kind:'direct'}}]});await f.page.load();
+ const body=f.page.render().match(/<tbody><tr>([\s\S]*?)<\/tr>/)[1],cells=[...body.matchAll(/<td>([\s\S]*?)<\/td>/g)].map(m=>m[1]);assert.match(cells[3],/源日期：2026-09-24/);assert.match(cells[3],/源日期：2026-09-23/);assert.doesNotMatch(cells[3],/源日期：2026-09-25/);assert.match(cells[4],/源日期：2026-09-25/);assert.doesNotMatch(cells[4],/源日期：2026-09-24/);
+ for(const [index,direction,sourceKind,date] of [[0,'charge','direct','2026-09-24'],[1,'charge','google_sheets','2026-09-23'],[2,'withdraw','direct','2026-09-25']]){f.context.collectedOpen(0,index,direction);await new Promise(r=>setImmediate(r));const request=f.calls.at(-1);assert.equal(request.sourceKind,sourceKind);assert.equal(request.direction,direction);assert.equal(request.startAt,date);assert.equal(request.endAt,date);f.context.collectedDetailPage(1);await new Promise(r=>setImmediate(r));assert.equal(f.calls.at(-1).sourceKind,sourceKind);assert.equal(f.calls.at(-1).offset,50)}
+});
+test('unknown volume provenance stays isolated while non-volume reads omit sourceKind',async()=>{
+ const f=intakeFixture({rows:[{...intakeFeed,provenance:{kind:'unknown'}},{...intakeFeed,dataset:'panda_success',provenance:{kind:'direct'}}]});await f.page.load();f.context.collectedOpen(0,0,'charge');await new Promise(r=>setImmediate(r));assert.equal(f.calls.at(-1).sourceKind,'unknown');f.context.collectedOpen(0,1,'charge');await new Promise(r=>setImmediate(r));assert(!Object.hasOwn(f.calls.at(-1),'sourceKind'));
+});
+test('one canonical platform row combines source capabilities while country scopes remain separate',async()=>{
+ const f=intakeFixture({catalog:[{id:'india',name:'SAME',country:'印度',team:'M8',source:'ar'},{id:'brazil',name:'SAME',country:'巴西',team:'OTHER',source:'newar'}],rows:[{...intakeFeed,name:'SAME',rawPlatform:'SAME',country:'印度',team:'M8',system:'AR',dataset:'orders',platformId:'india',directions:['charge']},{...intakeFeed,name:'SAME',rawPlatform:'SAME',country:'印度',team:'M8',system:'NEW_AR',dataset:'orders',directions:['withdraw']}]});await f.page.load();const html=f.page.render();assert.match(html,/2 个平台 · 当前 2 个/);assert.equal((html.match(/<td>SAME<\/td>/g)||[]).length,2);assert.equal((html.match(/已收到订单/g)||[]).length,2);assert.match(html,/此条同步：/);assert.doesNotMatch(html,/最近同步：/);
+});
+test('zero-record configurations and unseparated source paths do not create misleading drilldown buttons',async()=>{
+ const f=intakeFixture({rows:[{...intakeFeed,dataset:'panda_config',system:'PANDA',records:0},{...intakeFeed,provenance:{kind:'mixed'}}],payoutConfig:{openTarget:()=>{throw Error('must not open missing config')}}});await f.page.load();assert.doesNotMatch(f.page.render(),/已收到配置|查看配置|collectedOpen\(/);const count=f.calls.length;f.context.collectedOpen(0,0,'payout_config');f.context.collectedOpen(0,1,'charge');assert.equal(f.calls.length,count);
+});
+test('changing intake scope cancels old source detail responses instead of restoring them under another filter',async()=>{
+ let resolve;const pending=new Promise(r=>{resolve=r}),f=intakeFixture({rows:[intakeFeed],detailResult:pending});await f.page.load();f.context.collectedOpen(0,0,'charge');assert.equal(f.page.state.detailBusy,true);f.context.collectedSearch('OTHER-PLATFORM');resolve({total:1,rows:[{date:'2026-09-24',provider:'STALE-DETAIL',metrics:{amount:777}}]});await new Promise(r=>setImmediate(r));assert.equal(f.page.state.detail,null);assert.equal(f.page.state.detailRows,null);assert.equal(f.page.state.detailBusy,false);assert.doesNotMatch(f.page.render(),/STALE-DETAIL/);
+});
+test('malformed detail responses stay errors instead of looking like zero received records',async()=>{
+ const f=intakeFixture({rows:[intakeFeed],detailResult:{}});await f.page.load();f.context.collectedOpen(0,0,'charge');await new Promise(r=>setImmediate(r));assert.match(f.page.render(),/平台数据返回不完整/);assert.doesNotMatch(f.page.render(),/共 0 条来源记录/);
 });
