@@ -3,6 +3,10 @@
  const normalized=v=>String(v??'').trim().toLowerCase().replace(/[\s._()（）-]+/g,'');
  const canonical=(value,country)=>root.HensemProviderNames?.canonical(value,country)??String(value??'');
  const providerName=value=>!value||['未识别三方','未提供'].includes(value)?'未识别通道':value;
+ const feeExemptNames=new Set(['人工充值','人工确认','人工取消','无三方（驳回）','无三方(驳回)','manualrecharge','manualconfirmation']);
+ const unknownProviderNames=new Set(['','未识别通道','未识别三方','未提供','未标记三方']);
+ const feeExempt=value=>feeExemptNames.has(String(value??'').trim())||feeExemptNames.has(normalized(value));
+ const isProviderBusiness=value=>!feeExempt(value)&&!unknownProviderNames.has(String(value??'').trim());
  const issueKeys=['submittedAmount','submittedCount','successAmount','successCount','notReceivedAmount','notReceivedCount'];
  // Owner confirmed on 2026-09-26: India UpiPay uses 印度线下 row 4 for both flows.
  // Select that source record; never substitute another tier when it is missing.
@@ -15,6 +19,7 @@
    &&(normalized(r.country)===normalized(country)||normalized(r.scopeGroup)===normalized(country)));
  }
  function feeCandidates(row,rates,country){
+  if(!isProviderBusiness(row?.provider))return [];
   const payout=row.direction==='withdraw',feeKey=payout?'payoutFee':'collectFee',singleKey=payout?'payoutSingleFee':'collectSingleFee';
   let candidates=rateRecords(row,rates,country).filter(r=>String(r[feeKey]??'').trim()||String(r[singleKey]??'').trim());
   const rule=confirmedFeeRule(row,country);
@@ -32,6 +37,7 @@
   return {percent:p,fixed:f};
  }
  function estimate(row,rates,country){
+  if(!isProviderBusiness(row?.provider))return null;
   const payout=row.direction==='withdraw',feeKey=payout?'payoutFee':'collectFee',singleKey=payout?'payoutSingleFee':'collectSingleFee';
   const candidates=feeCandidates(row,rates,country);
   const unique=new Map();for(const r of candidates){const value=parseFee(r[feeKey],r[singleKey]);if(!value)return null;unique.set(JSON.stringify(value),value)}
@@ -46,17 +52,57 @@
   for(const row of rows){
    const observed=(coverage?.platforms||[]).filter(p=>row.platforms.includes(p.platform)||row.platforms.includes(p.sourcePlatform));
    row.issues=issues==null||coverage?.capturedPlatformDays===0||(!byIssue.has(row.provider)&&observed.length&&observed.every(p=>p.days===0))?null:byIssue.get(row.provider)||Object.fromEntries(issueKeys.map(k=>[k,0]));
-   let known=0,fee=0;for(const item of row.items){const value=estimate(item,rates,country);if(value!==null){known+=Number(item.success_count||0);fee+=value}}
-   row.estimated_fee=known>0?fee:row.success_count===0?0:null;row.fee_matched_count=known;
-   row.fee_complete=known===Number(row.success_count||0);
+   Object.assign(row,feeFacts(row.items,rates,country,Number(row.success_count||0)));
   }
   return rows;
  }
+ // Resolve each original platform/provider leaf before merging across sources.
+ // Applying one rate after a merge would misprice platform-specific and fixed fees.
+ function feeFacts(items,rates,country,successCount){
+  let matched=0,amount=0,excluded=0;const labels=new Set();
+  for(const item of items){
+   if(feeExempt(item.provider)){excluded+=Number(item.success_count||0);continue}
+   const localCountry=item.country||country,payout=item.direction==='withdraw';
+   const candidates=feeCandidates(item,rates,localCountry),values=new Map();
+   for(const r of candidates){const parsed=parseFee(r[payout?'payoutFee':'collectFee'],r[payout?'payoutSingleFee':'collectSingleFee']);if(parsed)values.set(JSON.stringify(parsed),parsed);else values.set('unknown',null)}
+   if(values.size===1&&!values.has('unknown')){const rule=[...values.values()][0];labels.add((rule.percent*100).toFixed(2)+'%'+(rule.fixed?' + '+Number(rule.fixed.toFixed(8))+' / 笔':''))}
+   else if(values.size>1)labels.add('待核对费率');else labels.add('未匹配');
+   const value=estimate(item,rates,localCountry);if(value!==null){matched+=Number(item.success_count||0);amount+=value}
+  }
+  const eligible=Math.max(0,successCount-excluded),hasUnattributed=items.reduce((n,r)=>n+Number(r.success_count||0),0)<successCount;
+  if(hasUnattributed)labels.add('未匹配');
+  const exemptOnly=items.length>0&&items.every(r=>feeExempt(r.provider))&&!hasUnattributed;
+  return {estimated_fee:exemptOnly?null:matched>0?amount:successCount===0?0:null,fee_matched_count:matched,
+   fee_eligible_count:eligible,fee_applicable_count:eligible,fee_excluded_count:excluded,fee_complete:matched===eligible,
+   fee_rate_label:exemptOnly?'不适用':[...labels].sort().join(' / ')||'未匹配'};
+ }
  function feeSummary(rows){
-  const total=(rows||[]).reduce((s,r)=>{s.successCount+=Number(r.success_count||0);s.matchedCount+=Number(r.fee_matched_count||0);if(r.estimated_fee!=null)s.amount+=Number(r.estimated_fee);return s},{amount:0,matchedCount:0,successCount:0});
-  total.complete=total.matchedCount===total.successCount;if(!total.matchedCount&&total.successCount)total.amount=null;
+  const total=(rows||[]).reduce((s,r)=>{s.successCount+=Number(r.fee_eligible_count??r.success_count??0);s.excludedCount+=Number(r.fee_excluded_count||0);s.matchedCount+=Number(r.fee_matched_count||0);if(r.estimated_fee!=null)s.amount+=Number(r.estimated_fee);return s},{amount:0,matchedCount:0,successCount:0,excludedCount:0});
+  total.complete=total.matchedCount===total.successCount;if(!total.matchedCount&&(total.successCount||total.excludedCount))total.amount=null;
   if(new Set((rows||[]).map(r=>r.currency).filter(Boolean)).size>1){total.amount=null;total.complete=false}
   return total;
+ }
+ function overviewDimensions({orders,summaries,rates,country,key,plus,combine}){
+  if(!['team','country','platform','provider'].includes(key))return [];
+  const identity=r=>r.platformId?'id:'+r.platformId:JSON.stringify([r.source,r.country,r.platform]);
+  const metadata=new Map((summaries||[]).map(r=>[identity(r),r]));
+  const leaves=(orders||[]).map(r=>{const scope=metadata.get(identity(r))||{};return {...scope,...r,country:r.country||scope.country||country,team:r.team||scope.team||'未绑定团队',provider:providerName(canonical(r.provider,r.country||scope.country||country))}});
+  const enrich=r=>({...r,_platformIdentity:identity(r)}),dimensions=key==='platform'?['_platformIdentity','platform','direction','currency']:[key,'direction','currency'];
+  const base=key==='provider'?leaves:(summaries||[]),groups=combine(base.map(enrich),dimensions);
+  const groupKey=r=>JSON.stringify(dimensions.map(k=>r[k]??'')),feesByGroup=new Map();
+  for(const leaf of leaves.map(enrich)){const id=groupKey(leaf);if(!feesByGroup.has(id))feesByGroup.set(id,[]);feesByGroup.get(id).push(leaf)}
+  for(const row of groups){
+   const original=feesByGroup.get(groupKey(row))||[];
+   Object.assign(row,feeFacts(original,rates,country,Number(row.success_count||0)));
+   row.platformIds=[...new Set(row.items.map(r=>r.platformId).filter(Boolean))];
+   row.platformId=row.platformIds.length===1?row.platformIds[0]:undefined;
+   row.sources=[...new Set(row.items.map(r=>r.source).filter(Boolean))];
+   row.fee_items=original;
+  }
+  const denominators=new Map();for(const row of groups){const id=JSON.stringify([row.direction,row.currency]);if(!denominators.has(id))denominators.set(id,[]);denominators.get(id).push(row)}
+  const ratio=(n,d)=>n!=null&&d!=null&&Number.isFinite(Number(n))&&Number.isFinite(Number(d))&&Number(d)>0?Number(n)/Number(d):null;
+  for(const items of denominators.values()){const total=plus(items),fees=feeSummary(items);for(const row of items){row.success_amount_share=ratio(row.success_amount,total.success_amount);row.success_count_share=ratio(row.success_count,total.success_count);row.fee_share=ratio(row.estimated_fee,fees.amount);row.fee_share_complete=fees.complete}}
+  return groups;
  }
  function queryCoverage(L){
   const failures=Array.isArray(L.queryFailures)&&L.queryFailures.length?L.queryFailures:(L.queryWarnings||[]).map(message=>({message}));
@@ -162,6 +208,6 @@
    box(name+'三方汇总'+(readState.partial?'（部分结果）':'')+' · '+issueLabel+'工单',reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
     '成功数据按成功时间；成功率按本期创建订单计算。昨日对比使用同平台、同币种、同一时段，成功率差额为百分点。三方及平台卡片统计有交易的范围；工单按所选整日统计，未采集显示 —。点击费率查看来源与匹配规则；手续费按当前匹配费率估算。')+'</div>';
  }
- root.HensemProviderSummary={render,buildRows,parseFee,estimate,feeSummary,feeCandidates,confirmedFeeRule,queryCoverage};
+ root.HensemProviderSummary={render,buildRows,parseFee,estimate,feeSummary,feeCandidates,confirmedFeeRule,queryCoverage,overviewDimensions,isProviderBusiness};
  if(typeof module!=='undefined')module.exports=root.HensemProviderSummary;
 })(typeof window!=='undefined'?window:globalThis);

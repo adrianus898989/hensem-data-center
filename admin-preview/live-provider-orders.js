@@ -46,7 +46,8 @@
   async function open(provider,source,direction){
    if(L.loading||L.dirty)return;
    const targets=L.results.filter(r=>!source||r.platform?.source===source).map(result=>{
-    const rows=(result.groups?.provider||[]).filter(r=>r.provider===provider&&r.direction===direction);
+    const canonical=value=>root.HensemProviderNames?.canonical(value,result.platform?.country)??String(value??'');
+    const rows=(result.groups?.provider||[]).filter(r=>canonical(r.provider)===canonical(provider)&&r.direction===direction);
     return {platform:result.platform,created:rows.reduce((n,r)=>n+Number(r.all_count||0),0),success:rows.reduce((n,r)=>n+Number(r.success_count||0),0),request:{...query(result.platform,'details'),providers:[provider],direction,offset:0,limit:20}};
    }).filter(t=>t.created||t.success).sort((a,b)=>String(a.platform.name).localeCompare(String(b.platform.name))||String(a.platform.id).localeCompare(String(b.platform.id)));
    current={provider,source,direction,targets,status:L.status,mode:L.status==='success'||targets.some(t=>t.success)?'success':'created',page:1,rows:[],error:'',loading:false,querySerial:L.serial,from:L.from,to:L.to,currency:L.currency};
