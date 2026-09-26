@@ -141,9 +141,12 @@ revoke all on function private.dashboard_admin_live_platforms() from public,anon
 grant execute on function private.dashboard_admin_live_platforms() to authenticated;
 
 -- Read only when explicitly listing collected/withdrawal platforms, never per order query.
-create or replace function private.dashboard_admin_live_withdraw_platforms()
-returns table(id uuid,name text,team text,country text,scope_group text,source text,timezone text,currency text,source_name text)
-language plpgsql stable security definer set search_path='' as $$
+CREATE OR REPLACE FUNCTION private.dashboard_admin_live_withdraw_platforms()
+ RETURNS TABLE(id uuid, name text, team text, country text, scope_group text, source text, timezone text, currency text, source_name text)
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
 declare v_scope jsonb:=private.dashboard_admin_live_scope();
 begin
  return query with
@@ -171,10 +174,19 @@ begin
       select 1 from withdraw_raw k where upper(k.country) in ('胖虎巴西','BR_PANGHU','PANGHU BRAZIL') and upper(k.platform)=upper(r.platform))
       then '胖虎巴西' else private.dashboard_admin_live_report_country(r.country,r.platform) end::text display_country)x
   ),
+  mapping_keys as materialized (
+    -- Read existing ownership once. A source-neutral report seed may inherit
+    -- only when every active mapping of this exact country/key agrees.
+    select m.team_name,
+      private.dashboard_admin_live_report_country(m.source_country,m.source_platform) as country,
+      private.dashboard_admin_live_withdraw_key(m.source_platform) as source_key,
+      private.dashboard_admin_live_withdraw_key(m.platform_name) as name_key
+    from public.dashboard_platform_team_map m where m.active
+  ),
   withdraw_targets as (
     select md5('withdraw:'||c.display_country||':'||c.platform)::uuid as id,
       c.platform::text as name,
-      case when c.scope_group='BR_PANGHU' then '胖虎' else null end::text as team,
+      case when c.scope_group='BR_PANGHU' then '胖虎' when ownership.teams=1 then ownership.team when ownership.teams>1 then '__team_conflict__' else '__unassigned__' end::text as team,
       c.display_country::text as country,c.scope_group::text as scope_group,
       'withdraw'::text as source,
       case c.scope_group
@@ -190,11 +202,17 @@ begin
         when 'CL' then 'CLP' else null end::text as currency,
       c.platform::text as source_name
     from withdraw_classified c
+    left join lateral (
+      select count(distinct m.team_name) as teams,min(m.team_name) as team
+      from mapping_keys m
+      where m.country=private.dashboard_admin_live_report_country(c.country,c.platform)
+        and private.dashboard_admin_live_deposit_platform_key(c.display_country,c.platform) in(m.source_key,m.name_key)
+    ) ownership on true
     where private.dashboard_scope_allows(v_scope,c.scope_group,c.platform)
   )
  select distinct w.id,w.name,w.team,w.country,w.scope_group,w.source,w.timezone,w.currency,w.source_name from withdraw_targets w;
 end;
-$$;
+$function$;
 revoke all on function private.dashboard_admin_live_withdraw_platforms() from public,anon,authenticated;
 notify pgrst,'reload schema';
 commit;

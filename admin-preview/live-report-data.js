@@ -17,7 +17,9 @@
  // These fill authorized report seeds before the mapped feed directory arrives.
  const confirmedM8={墨西哥:new Set(['NPG-MEXICO']),智利:new Set(['NPG-CHILE']),哥伦比亚:new Set(['NPG-COLOMBIA']),印尼:new Set(['HOT985','IND666','UANG']),巴西:new Set(['SSSGAME','TGJOGO'])};
  const legacyGroup=value=>legacyPanghu.has(token(value))?'胖虎巴西':legacyTeams[token(value)];
+ const confirmedSuperlgHistory=row=>token(row.identityCountry??row.rawCountry??row.country)==='LG'&&token(row.rawPlatform??row.name)==='SUPERLG';
  function sourceIdentity(row){
+  if(confirmedSuperlgHistory(row))return {identityCountry:'LG',group:'LG'};
   const original=row.identityCountry??row.country??row.rawCountry??'',group=legacyGroup(original)||legacyGroup(row.scopeGroup??row.scope_group)||legacyGroup(row.rawCountry);
   // A geographically labelled report may still carry a team-specific raw
   // scope. Match that scope, never another team's identically named platform.
@@ -26,13 +28,13 @@
  }
  // A display country must never replace the source group used for access and queries.
  function normalizeIdentity(row={}){
-  const {identityCountry,group}=sourceIdentity(row),legacy=group==='胖虎巴西';
+  const {identityCountry,group}=sourceIdentity(row),legacy=group==='胖虎巴西',historical=confirmedSuperlgHistory(row);
   const explicit=[row.geographicCountry,row.geographic_country,row.countryName,row.country_name,row.countryCode,row.country_code,row.country!==identityCountry?row.country:null].find(value=>value&&!legacyGroup(value));
   // Current Hong Kong and Red Crab platforms operate in India (owner confirmed).
-  const country=legacy?'巴西':legacyTeams[token(group)]?(explicit?countryNames[token(explicit)]||String(explicit):'印度'):countryNames[token(identityCountry)]||identityCountry||'国家待核对';
+  const country=historical?'菲律宾':legacy?'巴西':legacyTeams[token(group)]?(explicit?countryNames[token(explicit)]||String(explicit):'印度'):countryNames[token(identityCountry)]||identityCountry||'国家待核对';
   const assigned=row.team&&!['待归类','未绑定团队','__unassigned__'].includes(row.team)?legacyTeams[token(row.team)]||row.team:null;
-  const team=legacy||legacyPanghu.has(token(row.team))?'胖虎':assigned||legacyTeams[token(group)]||(confirmedM8[country]?.has(token(row.name))?'M8':'__unassigned__');
-  return {...row,identityCountry,rawCountry:row.rawCountry??identityCountry,country,team};
+  const team=legacy||legacyPanghu.has(token(row.team))?'胖虎':assigned||legacyTeams[token(group)]||(historical||confirmedM8[country]?.has(token(row.name))?'M8':'__unassigned__');
+  return {...row,identityCountry,rawCountry:row.rawCountry??identityCountry,country,team,...(historical?{historicalSource:'2026-07-30 操作人日报 · 原来源 LG'}:{})};
  }
  const keyFor=row=>JSON.stringify([sourceIdentity(row).group,row.name||'']);
  const sourceKey=row=>JSON.stringify([row.dataset,row.system||'',row.rawCountry??row.country,row.rawPlatform??row.name,row.direction,row.sourceKind]);
@@ -72,9 +74,9 @@
    };
    const groups=new Map(),seeds=new Map();for(const seed of L.withdrawCatalog||[]){if(!seed.name||legacyPanghu.has(token(seed.name)))continue;const key=directoryKey(seed);if(!seeds.has(key))seeds.set(key,seed);if(!groups.has(key))groups.set(key,[])}for(const f of S.catalogRows){const key=directoryKey(f);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(f)}
    const orderGroups=new Map();for(const p of L.catalog||[]){const key=keyFor(p);if(!orderGroups.has(key))orderGroups.set(key,[]);orderGroups.get(key).push(p)}
-   const reportTeams=feeds=>[...new Set(feeds.map(f=>normalizeIdentity(f).team).filter(t=>t!=='__unassigned__'))];
+   const reportTeams=feeds=>[...new Set(feeds.map(f=>normalizeIdentity(f).team).filter(t=>!['__unassigned__','__team_pending__','__team_conflict__','归属待核对'].includes(t)))];
    const native=(L.catalog||[]).map(p=>{const feeds=groups.get(keyFor(p))||[],teams=reportTeams(feeds),identity=normalizeIdentity(p),team=identity.team;return {...identity,team:team==='__unassigned__'?(teams.length===1?teams[0]:teams.length>1?'归属待核对':team):team,feeds,reportOnly:false,orderPlatformIds:(orderGroups.get(keyFor(p))||[]).map(x=>x.id)}});
-   for(const [key,feeds]of groups){if(orderGroups.has(key))continue;const seed=seeds.get(key),first=feeds[0]||seed,teams=reportTeams(feeds.length?feeds:[seed]),currencies=[...new Set(feeds.map(f=>f.currency).filter(Boolean))],zones=[...new Set(feeds.map(f=>f.timezone).filter(Boolean))],systems=[...new Set(feeds.map(f=>f.system).filter(Boolean))];native.push({...normalizeIdentity(first),id:'report:'+encodeURIComponent(key),name:first.name,team:teams.length===1?teams[0]:teams.length>1?'归属待核对':'__unassigned__',source:systems.length===1?systems[0]:'reports',currency:currencies.length===1?currencies[0]:seed?.currency||'—',timezone:zones.length===1?zones[0]:seed?.timezone||null,feeds,reportOnly:true,orderPlatformIds:[]})}
+   for(const [key,feeds]of groups){if(orderGroups.has(key))continue;const seed=seeds.get(key),first=feeds[0]||seed,teams=reportTeams([...feeds,...(seed?[seed]:[])]),teamConflict=[...feeds,...(seed?[seed]:[])].some(f=>['__team_conflict__','归属待核对'].includes(f?.team))||teams.length>1,teamVerified=feeds.length>0||seed?.team&&seed.team!=='__team_pending__',currencies=[...new Set(feeds.map(f=>f.currency).filter(Boolean))],zones=[...new Set(feeds.map(f=>f.timezone).filter(Boolean))],systems=[...new Set(feeds.map(f=>f.system).filter(Boolean))];native.push({...normalizeIdentity(first),id:'report:'+encodeURIComponent(key),name:first.name,team:teamConflict?'__team_conflict__':teams.length===1?teams[0]:teamVerified?'__unassigned__':'__team_pending__',source:systems.length===1?systems[0]:'reports',currency:currencies.length===1?currencies[0]:seed?.currency||'—',timezone:zones.length===1?zones[0]:seed?.timezone||null,feeds,reportOnly:true,orderPlatformIds:[]})}
    catalogMemo={inputs,lengths:inputs.map(rows=>rows?.length||0),rows:native};return native;
   }
   function selected(scope={}){const teams=values(scope.teams),platforms=values(scope.platforms),sources=values(scope.sources),country=normalizeIdentity({country:scope.country}).country,legacyScope=legacyPanghu.has(token(scope.country))||legacyTeams[token(scope.country)];return catalog().filter(p=>(!scope.country||scope.country==='all'||p.country===country&&(!legacyScope||keyFor({...p,name:''})===keyFor({country:scope.country,name:''})))&&(!teams.length||teams.includes(p.team))&&(!platforms.length||platforms.includes(p.id))&&(!sources.length||sources.some(s=>sameSource(s,p.source))))}
