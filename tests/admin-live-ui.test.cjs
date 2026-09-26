@@ -3,13 +3,13 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8');
 const layoutSources=['live-reference-layout.js','live-pages-reference.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js', 'live-withdraw-pages.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
 const comparisonSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-comparison.js'),'utf8');
-test('reference views keep same-name providers separated by source and platforms by stable identity',async()=>{
+test('overview merges same providers across sources while preserving stable platform identities and other source reports',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222',source:'NEW_AR'},p3={...P,id:'33333333-3333-4333-8333-333333333333'};
  const h=await ready({platforms:[P,p2,p3]});h.L.results=[completeAggregate(P,11,3),completeAggregate(p2,17,8),completeAggregate(p3,23,9)];h.L.platform='all';h.L.comparisonStatus='idle';h.L.direction='charge';h.L.dailyView='all';
  const tableFor=(page,view,first)=>{h.c.state.page=page;h.L.view=view;h.c.render();const found=renderedTables(h.html()).find(t=>t.headers[0]===first&&t.headers.includes('包网来源'));assert(found,page+'/'+view+' has an independent source column');for(const row of found.rows)assert.equal(row.length,found.headers.length,page+'/'+view+' cell alignment');return found};
  const numeric=(table,source,label)=>{const row=table.rows.find(r=>plain(r[table.headers.indexOf('包网来源')])===source);assert(row,'source '+source);return Number(plain(row[table.headers.indexOf(label)]).replaceAll(',',''))};
- const overviewProviders=tableFor('overview','business','三方');assert.equal(overviewProviders.rows.length,2);assert.equal(numeric(overviewProviders,'AR','全部笔数'),34);assert.equal(numeric(overviewProviders,'NEW_AR','全部笔数'),17);assert.equal(numeric(overviewProviders,'AR','全部金额'),3400);assert.equal(numeric(overviewProviders,'NEW_AR','全部金额'),1700);
- for(const page of ['overview','teamplatforms','merchants']){const t=tableFor(page,'business','平台');assert.equal(t.rows.length,3,page+' stable platforms must not merge by display name or source');assert.deepEqual(t.rows.map(r=>Number(plain(r[t.headers.indexOf('全部笔数')]))).sort((a,b)=>a-b),[11,17,23]);assert.equal(t.rows.reduce((n,r)=>n+Number(plain(r[t.headers.indexOf('全部金额')]).replaceAll(',','')),0),5100);}
+ h.c.state.page='overview';h.c.render();const overviewProviders=renderedTables(h.html()).find(t=>t.headers[0]==='三方');assert.equal(overviewProviders.rows.length,1);assert(!overviewProviders.headers.includes('包网来源'));assert(!overviewProviders.headers.includes('方向'));assert.equal(plain(overviewProviders.rows[0][overviewProviders.headers.indexOf('全部笔数')]),'51');assert.equal(plain(overviewProviders.rows[0][overviewProviders.headers.indexOf('全部金额')]),'5,100.00');
+ for(const page of ['overview','teamplatforms','merchants']){h.c.state.page=page;h.L.view='business';h.c.render();const t=renderedTables(h.html()).find(t=>t.headers[0]==='平台');assert(t);assert(!t.headers.includes('包网来源'));assert(!t.headers.includes('方向'));assert.equal(t.rows.length,3,page+' stable platforms must not merge by display name or source');assert.deepEqual(t.rows.map(r=>Number(plain(r[t.headers.indexOf('全部笔数')]))).sort((a,b)=>a-b),[11,17,23]);assert.equal(t.rows.reduce((n,r)=>n+Number(plain(r[t.headers.indexOf('全部金额')]).replaceAll(',','')),0),5100);}
  const fees=tableFor('merchantproviders','fees','三方');assert.equal(fees.rows.length,2);assert.equal(numeric(fees,'AR','成功金额'),1200);assert.equal(numeric(fees,'NEW_AR','成功金额'),800);assert.equal(numeric(fees,'AR','成功笔数'),12);assert.equal(numeric(fees,'NEW_AR','成功笔数'),8);
  for(const [page,view]of [['channelquality','business'],['risk','business']]){const t=tableFor(page,view,'三方');assert.equal(t.rows.length,2);assert.deepEqual(t.rows.map(r=>plain(r[t.headers.indexOf('包网来源')])).sort(),['AR','NEW_AR']);}
  tableFor('provider_daily','business','三方');const daily=renderedTables(h.html()).find(t=>t.headers[0]==='日期');assert(daily);assert.equal(daily.rows.length,2);assert.equal(numeric(daily,'AR','全部笔数'),34);assert.equal(numeric(daily,'NEW_AR','全部笔数'),17);assert.equal(numeric(daily,'AR','成功笔数'),12);assert.equal(numeric(daily,'NEW_AR','成功笔数'),8);
@@ -132,8 +132,8 @@ test('paired business tables retain unknown totals without a provider confirmati
  r.groups.provider=[{...r.summary[0],provider:'未识别通道'},{...withdraw,provider:'未识别通道'}];
  h.L.results=[r];h.L.direction='all';h.c.state.page='overview';h.c.render();
  assert.doesNotMatch(h.html(),/需要你确认的未识别三方|原始通道字段为空|请.*归类/);assert.match(h.html(),/未识别通道/);
- const providers=renderedTables(h.html()).filter(t=>t.headers[0]==='三方'&&t.headers.includes('包网来源'));assert.equal(providers.length,2);assert.match(providers.map(t=>t.html).join(''),/代收汇总/);assert.match(providers.map(t=>t.html).join(''),/代付汇总/);
- const platforms=renderedTables(h.html()).filter(t=>t.headers[0]==='平台'&&t.headers.includes('包网来源'));assert.equal(platforms.length,2);assert.match(platforms.map(t=>t.html).join(''),/代收汇总/);assert.match(platforms.map(t=>t.html).join(''),/代付汇总/);
+ const providers=renderedTables(h.html()).filter(t=>t.headers[0]==='三方');assert.equal(providers.length,2);assert.match(providers.map(t=>t.html).join(''),/代收汇总/);assert.match(providers.map(t=>t.html).join(''),/代付汇总/);
+ const platforms=renderedTables(h.html()).filter(t=>t.headers[0]==='平台');assert.equal(platforms.length,2);assert.match(platforms.map(t=>t.html).join(''),/代收汇总/);assert.match(platforms.map(t=>t.html).join(''),/代付汇总/);
 });
 
 test('overview duration sections split collection and payout and retain explicit totals',async()=>{
@@ -530,7 +530,7 @@ test('Panghu withdrawal platform picker uses received catalogue and all sends no
 
 test('overview requests compact totals and providers, defers charts, and yesterday stays compact',async()=>{
  const h=await ready();assert(h.calls.filter(q=>q.action==='aggregate').every(q=>q.view==='providers'));
- assert.match(h.html(),/加载全部图表分析/);assert.match(h.html(),/打开后读取对应分析/);
+ assert.match(h.html(),/加载全部图表分析/);assert.match(h.html(),/滚动到这里会自动读取并展示/);assert.doesNotMatch(h.html(),/打开后读取对应分析/);
  assert(!h.calls.some(q=>q.action==='workorders'));
  const start=h.calls.length;h.c.liveOverviewAnalysis();await settle();
  const reads=h.calls.slice(start).filter(q=>q.action==='aggregate');assert(reads.some(q=>!q.view));assert(reads.filter(q=>q.view).every(q=>q.view==='providers'));
@@ -667,4 +667,23 @@ test('provider summaries bound a daily timeout to one bisection and discard inco
 test('provider multi-day timeout slices preserve exact endpoints and reject a partial-day result',async()=>{
  const h=await ready({page:'providers'});h.L.feeLookupRows=[];setScope(h,{platform:P.id,from:'2026-09-20T12:34:56',to:'2026-09-22T12:34:55'});const accepted=[],requests=[];h.setHandler(async q=>{requests.push(q);if(Date.parse(q.endAt)-Date.parse(q.startAt)>86400000)throw Error('Synthetic timeout');accepted.push(q);return completeAggregate(P,10,4)});await h.c.liveLoad();assert.equal(requests.length,6);assert.equal(accepted.length,4);assert.equal(h.L.results[0]._parts.length,2);assert.equal(h.L.results[0].summary[0].all_count,20);assert.equal(accepted[0].startAt,requests[0].startAt);assert.equal(accepted[0].endAt,accepted[1].startAt);assert.equal(accepted[1].endAt,requests[0].endAt);
  let attempts=0;h.setHandler(async q=>{attempts++;if(attempts===2)return completeAggregate(P,500,499);throw Error('Synthetic timeout')});await h.c.liveLoad();assert.equal(attempts,4);assert.equal(h.L.results.length,0);assert.equal(h.L.queryFailures.length,1);
+});
+
+test('overview fills all fee rollups, merges provider sources, and keeps manual amounts outside provider ranking',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Other platform',source:'newar'},h=await ready({platforms:[P,p2]});
+ const a=completeAggregate(P,10,3),b=completeAggregate(p2,20,7),manual={...stats(2,'200'),provider:'人工充值',success_count:2,created_success_count:2,success_amount:'200',pending_count:0,pending_amount:0,failed_count:0,failed_amount:0};
+ a.groups.provider=[{...a.summary[0],provider:'UPI-QR'},manual];a.summary=[{...a.summary[0],all_count:12,all_amount:'1200',success_count:5,created_success_count:5,success_amount:'500'}];b.groups.provider=[{...b.summary[0],provider:'UPI-QR'}];
+ h.L.results=[a,b];h.L.feeLookupRows=[{scopeType:'country',country:'印度',provider:'UPI-QR',collectFee:'4%'},{scopeType:'platform',country:'印度',platform:p2.name,provider:'UPI-QR',collectFee:'5%'}];h.L.direction='charge';h.L.comparisonStatus='idle';h.c.state.page='overview';h.c.render();
+ const tables=renderedTables(h.html()),provider=tables.find(t=>t.headers[0]==='三方'),at=(t,row,label)=>plain(row[t.headers.indexOf(label)]);
+ assert(!provider.headers.includes('包网来源'));assert(!provider.headers.includes('方向'));assert.equal(provider.rows.length,2);
+ const pay=provider.rows.find(r=>plain(r[0])==='UPI-QR'),man=provider.rows.find(r=>plain(r[0])==='人工充值');
+ assert.equal(at(provider,pay,'估算手续费'),'47.00');assert.match(at(provider,pay,'手续费率'),/4\.00%/);assert.match(at(provider,pay,'手续费率'),/5\.00%/);assert.equal(at(provider,pay,'手续费占比'),'100.00%');assert.match(at(provider,pay,'成功金额 / 占比'),/1,000\.00.*83\.33%/);assert.match(at(provider,pay,'成功笔数 / 占比'),/10.*83\.33%/);assert.equal(at(provider,pay,'成功率'),'33.33%');assert.equal(at(provider,man,'成功率'),'不适用');assert.equal(at(provider,man,'估算手续费'),'不适用');
+ for(const first of ['团队','国家']){const t=tables.find(t=>t.headers[0]===first);assert.equal(at(t,t.rows[0],'估算手续费'),'47.00');assert.equal(at(t,t.rows[0],'成功金额'),'1,200.00')}
+ const platform=tables.find(t=>t.headers[0]==='平台');assert.deepEqual(platform.rows.map(r=>at(platform,r,'估算手续费')).sort(),['12.00','35.00']);
+ const ranks=h.html().match(/<div class="df-flow-provider-extremes"[^]*?<div class="df-flow-foot">/)[0];assert.doesNotMatch(ranks,/人工充值|人工确认/);assert.match(ranks,/成功金额/);assert.match(ranks,/df-rank-amount">1,000\.00/);
+ for(const t of tables.filter(t=>['团队','国家','平台','三方'].includes(t.headers[0])))for(const row of t.rows)assert.equal(row.length,t.headers.length,'compact columns align');
+});
+test('merged canonical provider order drawer includes matching aliases from each source',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',source:'newar'},h=await ready({platforms:[P,p2]}),a=completeAggregate(P,5,3),b=completeAggregate(p2,5,3);a.groups.provider[0].provider='Intnet';b.groups.provider[0].provider='Intnet-QR';h.L.results=[a,b];h.L.loading=false;h.L.dirty=false;
+ const reads=[];h.setHandler(q=>{reads.push(q);return detail(q.platformId===P.id?P:p2,3,q.offset,q.limit)});await h.c.liveProviderOrders('Intnet','','charge');assert.equal(reads.length,2);assert.deepEqual(reads.map(q=>q.platformId).sort(),[P.id,p2.id].sort());assert(reads.every(q=>q.providers[0]==='Intnet'&&q.status==='success'));assert.match(h.drawers.at(-1).html,/6 笔/);
 });

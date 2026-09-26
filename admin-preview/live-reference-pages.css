@@ -64,13 +64,26 @@ body.live-admin .df-provider-rank>b{display:block;font-size:10px;font-weight:500
 body.live-admin .df-provider-rank.high{background:#f3faf7;border-color:#e0eee7}
 body.live-admin .df-provider-rank.low{background:#fff8f5;border-color:#f3e6df}
 body.live-admin .df-provider-rank.low>b{color:#a37b66}
-body.live-admin .df-provider-rank-item{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:6px;align-items:center;line-height:1.9}
+body.live-admin .df-provider-rank-item,body.live-admin .df-provider-rank-labels{display:grid;grid-template-columns:minmax(46px,1fr) minmax(72px,1.25fr) 46px 43px;gap:5px;align-items:center;line-height:1.9}
+body.live-admin .df-provider-rank-labels{font-size:9px;color:#7b899b;margin-bottom:3px}
+body.live-admin .df-provider-rank-labels>span:not(:first-child),body.live-admin .df-provider-rank-item>span.df-rank-amount,body.live-admin .df-provider-rank-item>strong,body.live-admin .df-provider-rank-item>small{text-align:right;font-variant-numeric:tabular-nums}
+body.live-admin .df-provider-rank-item>span.df-rank-amount{overflow:visible;color:#375981;font-size:10px}
 body.live-admin .df-provider-rank-item>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 body.live-admin .df-provider-rank-item>strong{font-weight:600;color:#375981;font-variant-numeric:tabular-nums}
 body.live-admin .df-provider-rank-item>small{font-size:9px;color:#8798ad}
 body.live-admin .df-flow-foot{padding-top:8px;padding-bottom:8px}
 body.live-admin .df-flow-foot>div>strong{font-size:16px;font-weight:600;color:#375981}
-@media(max-width:1250px){body.live-admin .df-flow-provider-extremes{grid-column:span 3;grid-template-columns:1fr}body.live-admin .df-provider-rank-item>small{display:none}}
+@media(max-width:1450px){body.live-admin .df-flow-provider-extremes{grid-column:span 3;grid-template-columns:1fr}}
 @media(max-width:800px){body.live-admin .df-flow-provider-extremes{grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){body.live-admin .df-flow-provider-extremes{grid-template-columns:1fr}}
+body.live-admin .df-business-summary table{min-width:0;width:100%;font-size:10px}
+body.live-admin .df-business-summary th,body.live-admin .df-business-summary td{padding:8px 7px}
+body.live-admin .df-business-summary th{font-size:9px;white-space:normal}
+body.live-admin .df-business-summary td:not(:first-child){text-align:right;font-variant-numeric:tabular-nums}
+body.live-admin .df-value-share{display:block;color:#7b8eab;font-size:9px;margin-top:3px;font-weight:400;white-space:nowrap}
+body.live-admin .df-fee-rate{display:inline-block;max-width:110px;white-space:normal;font-size:10px}
+body.live-admin .df-analysis-status{padding:10px 14px;background:#f4f7fd;color:#657da4;font-size:11px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+body.live-admin .df-analysis-status .btn{margin-left:auto}
+body.live-admin .df-analysis-status details{width:100%}
 
 .live-provider-orders table{min-width:1450px}.live-provider-orders td:nth-child(3){min-width:245px}.live-provider-orders td:last-child{white-space:normal;min-width:230px;max-width:320px}.df-jumps .link{margin-left:auto}
