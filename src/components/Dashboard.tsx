@@ -1701,7 +1701,7 @@ export default function Dashboard() {
       <div className="brand">
         <div className="logo logo-data">H</div>
         <div>
-          <div className="brand-title">Hensem数据后台</div>
+          <div className="brand-title">M8 | 数据中控后台</div>
           <div className="brand-subtitle">Operations Center</div>
         </div>
       </div>
@@ -1764,7 +1764,7 @@ export default function Dashboard() {
       <div className="home-topbar">
         <div className="home-heading">
           <span className="home-eyebrow">OPERATIONS OVERVIEW</span>
-          <h1>Hensem 数据中控</h1>
+          <h1>M8 | 数据中控后台</h1>
           <p>统一查看关键业务数据，快速进入你需要的工作模块。</p>
         </div>
         <span className="home-system-state"><i />系统运行正常</span>

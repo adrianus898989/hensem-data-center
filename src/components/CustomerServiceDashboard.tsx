@@ -726,7 +726,7 @@ export default function CustomerServiceDashboard({ embedded = false }: { embedde
       {!embedded && <div className="topbar">
         <div className="title">
           <h1>客服统计</h1>
-          <p>当前位置：Hensem数据后台 &gt; 客服统计 &gt; {isStaffView(view) ? "操作人统计" : "客服统计"} &gt; {viewTitle(view)}</p>
+          <p>当前位置：M8 | 数据中控后台 &gt; 客服统计 &gt; {isStaffView(view) ? "操作人统计" : "客服统计"} &gt; {viewTitle(view)}</p>
         </div>
         {hasQueried && payload && <div className="status-box">
           <div className="status-line"><span>数据月份</span><strong>{payload.meta.year} 年 {payload.meta.month} 月</strong></div>

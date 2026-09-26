@@ -71,11 +71,11 @@ const supervisorRoutes=[['workorder_reconciliation','漏登与状态核对'],['w
 
 test('all six workorder entries share one menu while supervisor pages never reuse production results',async()=>{
  const h=await ready(),groups=h.c.navGroupsV3,merchant=groups.findIndex(g=>g[0]==='merchant'),work=groups[merchant+1];
- assert.equal(work[0],'workorder');assert.equal(work[2],'工单');assert.deepEqual(Array.from(work[3]),['workorders','deposit_tracking',...supervisorRoutes.map(([id])=>id)]);
+ assert.equal(work[0],'workorder');assert.equal(work[2],'工单运营中心');assert.deepEqual(Array.from(work[3]),['workorders','deposit_tracking',...supervisorRoutes.map(([id])=>id)]);
  const before=h.calls.length;h.L.results=structuredClone(h.L.results);h.L.results[0].platform.name='UNRELATED_PRODUCTION_PLATFORM';h.L.dirty=true;
  for(const [id,label]of supervisorRoutes){
   h.c.setPage(id);await settle();assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.c.location.hash,id);assert.equal(h.c.groupForV3(id)[0],'workorder');assert.equal(h.c.pages.filter(p=>p[0]===id).length,1);
-  assert.equal(h.nodes.get('crumbTitle').textContent,'工单 / '+label);assert.match(h.html(),/员工测试站尚未接通/);assert.match(h.html(),/数据来源与现有入口/);assert.doesNotMatch(h.html(),/UNRELATED_PRODUCTION_PLATFORM|class="kpi-value"|0 条|0 笔/);
+  assert.equal(h.nodes.get('crumbTitle').textContent,'工单运营中心 / '+label);assert.match(h.html(),/员工测试站尚未接通/);assert.match(h.html(),/数据来源与现有入口/);assert.doesNotMatch(h.html(),/UNRELATED_PRODUCTION_PLATFORM|class="kpi-value"|0 条|0 笔/);
   assert.equal(h.nodes.get('liveFilters').style.display,'none');assert.doesNotMatch(h.c.document.title,/正式数据/);assert.match(h.nodes.get('.title-actions').innerHTML,/setPage\('workorders'\)/);assert.match(h.nodes.get('.title-actions').innerHTML,/setPage\('deposit_tracking'\)/);assert.doesNotMatch(h.nodes.get('.title-actions').innerHTML,/liveLoad|liveExport/);
   await h.c.liveLoad();h.c.liveExport();assert.equal(h.calls.length,before);assert.equal(h.blobs.length,0);
  }
@@ -87,7 +87,7 @@ test('direct supervisor routes and bookmarks defer all requests until an existin
   for(const options of [{page,reports:true},{hash:'#'+page,reports:true}]){
    const h=await ready(options);assert.equal(h.c.state.page,page);assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.calls.length,0);assert.match(h.html(),/员工测试站尚未接通/);
    h.c.setPage('workorders');await settle();assert.equal(h.c.state.page,'workorders');assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.calls.filter(q=>q.action==='catalog').length,1);assert(h.calls.some(q=>q.action==='workorders'));assert(!h.calls.some(q=>q.action==='aggregate'));
-   h.c.setPage('deposit_tracking');await settle();assert.equal(h.c.state.page,'deposit_tracking');assert(h.calls.some(q=>q.action==='depositIssues'));assert.match(h.nodes.get('crumbTitle').textContent,/工单 \/ 存款未到账明细/);
+   h.c.setPage('deposit_tracking');await settle();assert.equal(h.c.state.page,'deposit_tracking');assert(h.calls.some(q=>q.action==='depositIssues'));assert.match(h.nodes.get('crumbTitle').textContent,/工单运营中心 \/ 存款未到账明细/);
   }
  }
 });

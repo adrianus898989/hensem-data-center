@@ -1164,7 +1164,7 @@ export default function ThirdPartyRatesDashboard({ embedded = false }: { embedde
       {!embedded && <div className="topbar rate-topbar">
         <div className="title">
           <h1>三方费率</h1>
-          <p>当前位置：Hensem数据后台 &gt; 三方费率 &gt; {view === "dashboard" ? "总览看板" : view === "running" ? "三方运行查询" : view === "country" ? "国家三方查询" : view === "platform" ? "盘口接入状态" : view === "rates" ? "三方费率表" : "异常提醒"}</p>
+          <p>当前位置：M8 | 数据中控后台 &gt; 三方费率 &gt; {view === "dashboard" ? "总览看板" : view === "running" ? "三方运行查询" : view === "country" ? "国家三方查询" : view === "platform" ? "盘口接入状态" : view === "rates" ? "三方费率表" : "异常提醒"}</p>
         </div>
         {hasQueried && payload && <div className="status-box">
           <div className="status-line"><span>数据来源</span><strong>Google Sheet</strong></div>

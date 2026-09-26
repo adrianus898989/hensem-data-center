@@ -258,3 +258,11 @@ test('latency alone has a mandatory single direction, changing it never starts a
  h.c.setPage('time');await settle();assert.match(h.nodes.get('liveFilters').innerHTML,/data-multi="direction"/);h.c.liveSetMultiOption('direction',{value:'charge',checked:true});assert.deepEqual([...h.L.multi.direction].sort(),['charge','withdraw']);
  h.c.setPage('latency');assert.equal(h.L.direction,'withdraw');assert.deepEqual([...h.L.multi.direction],['withdraw']);h.L.direction='all';h.L.multi.direction=['charge','withdraw'];h.c.setPage('workorder_workload');const beforeRestore=h.calls.length;h.c.setPage('latency');assert.equal(h.L.direction,'charge');assert.deepEqual([...h.L.multi.direction],['charge']);assert.equal(h.calls.length,beforeRestore);assert.doesNotMatch(h.html(),/提款 \/ 代付到账时效/);
 });
+
+test('the visible admin brand and document title stay exact across normal and supervisor navigation without data reads',async()=>{
+ const h=await ready(),brand='M8 | 数据中控后台',label={textContent:'Hensem 数据后台'};h.nodes.set('.sidebar .brand b',label);h.c.render();const calls=h.calls.length;
+ assert.equal(h.c.document.title,brand);assert.equal(label.textContent,brand);assert.match(h.nodes.get('.bottom-note').innerHTML,/M8 \| 数据中控后台/);
+ h.c.setPage('workorder_operation_logs');assert.equal(h.c.document.title,brand);assert.equal(label.textContent,brand);h.c.setPage('overview');assert.equal(h.c.document.title,brand);assert.equal(h.calls.length,calls);
+ const metadata=fs.readFileSync(path.join(__dirname,'../src/app/layout.tsx'),'utf8');assert.match(metadata,/title: "M8 \| 数据中控后台"/);
+ for(const file of ['Dashboard.tsx','DashboardAuthGate.tsx','CustomerServiceDashboard.tsx','ThirdPartyRatesDashboard.tsx']){const text=fs.readFileSync(path.join(__dirname,'../src/components',file),'utf8');assert(text.includes(brand));assert.doesNotMatch(text,/Hensem.?数据后台|Hensem 数据中控|HENSEM OPERATIONS/)}
+});
