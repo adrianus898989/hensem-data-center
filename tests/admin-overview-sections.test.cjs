@@ -29,13 +29,13 @@ function harness(options={}){
  };context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources)vm.runInContext(module.source,context,{filename:module.name,timeout:2000});vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
  return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
 }
-async function ready(options){const h=harness(options);await settle();if(h.L){h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59'}return h}
+async function queried(options){const h=harness(options);await settle();assert.equal(h.L.overviewQueried,false);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0,'opening overview does not query business data');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';await h.c.liveLoad();await settle();assert.equal(h.L.overviewQueried,true);assert.equal(h.L.dirty,false);return h}
 function setScope(h,values={}){Object.assign(h.L,{from:'2026-09-22T00:00:00',to:'2026-09-22T05:59:59',...values})}
 function completeAggregate(p=P,count=10,success=5){const r=aggregate(p,count),s={...stats(count,String(count*100)),success_count:success,created_success_count:success,success_amount:String(success*100),pending_count:count-success,pending_amount:String((count-success)*100),failed_count:0,failed_amount:'0',rejected_count:0,rejected_amount:'0',unknown_count:0,unknown_amount:'0'};r.summary=[s];for(const key of ['provider','daily','hourly','amount','matrix'])r.groups[key]=[{...r.groups[key][0],...s}];return r}
 
 // These tests exercise request lifetime and snapshots with synthetic platforms only.
 test('inline analysis preserves visible provider totals and reads platforms sequentially',async()=>{
- const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Second platform'},h=await ready({platforms:[P,p2]}),first=deferred(),second=deferred(),primary=h.L.results;
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Second platform'},h=await queried({platforms:[P,p2]}),first=deferred(),second=deferred(),primary=h.L.results;
  const calls=[];h.setHandler(q=>{calls.push(q);return q.platformId===P.id?first.promise:second.promise});
  const run=h.c.liveOverviewAnalysis();await settle();assert.equal(h.L.loading,false);assert.equal(h.L.results,primary);assert.equal(h.L.overviewSections.status,'loading');assert.equal(calls.length,1);assert.equal(calls[0].view,undefined);
  await h.c.liveOverviewAnalysis();assert.equal(calls.length,1,'repeated visible/render events cannot start duplicates');
@@ -43,35 +43,35 @@ test('inline analysis preserves visible provider totals and reads platforms sequ
  second.resolve(completeAggregate(p2,30,15));await run;assert.equal(h.L.overviewSections.status,'ready');assert.equal(h.L.overviewSections.done,2);assert.equal(h.L.results,primary);assert.equal(h.L.overviewAnalysis,false);assert.equal(h.L.loadedView,'providers');
 });
 test('inline partial analysis retains successful platforms and retries only failures',async()=>{
- const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Failed platform'},h=await ready({platforms:[P,p2]}),calls=[];
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Failed platform'},h=await queried({platforms:[P,p2]}),calls=[];
  h.setHandler(async q=>{calls.push(q);if(q.platformId===p2.id)throw Error('Synthetic unavailable');return completeAggregate(P,20,12)});
  await h.c.liveOverviewAnalysis();assert.equal(h.L.overviewSections.status,'partial');assert.equal(h.L.overviewSections.done,1);assert.equal(h.L.overviewSections.total,2);assert.equal(h.L.overviewSections.failures[0].name,p2.name);
  h.setHandler(async q=>{calls.push(q);return completeAggregate(p2,30,15)});await h.c.liveOverviewAnalysis();assert.equal(calls.length,3);assert.equal(calls[2].platformId,p2.id);assert.equal(h.L.overviewSections.status,'ready');assert.equal(h.L.overviewSections.done,2);
 });
 test('no successful analysis leaves an explicit error state and keeps primary data intact',async()=>{
- const h=await ready(),primary=h.L.results;let calls=0;h.setHandler(async()=>{calls++;throw Error('读取超时')});
+ const h=await queried(),primary=h.L.results;let calls=0;h.setHandler(async()=>{calls++;throw Error('读取超时')});
  await h.c.liveOverviewAnalysis();assert.equal(calls,2,'one split level only, not an unbounded recursive retry');assert.equal(h.L.overviewSections.status,'error');assert.equal(h.L.overviewSections.done,0);assert.equal(h.L.overviewSections.results.length,0);assert.equal(h.L.results,primary);assert.equal(h.L.error,'');
 });
 test('changing filters or leaving overview invalidates late analysis and prevents subsequent platform reads',async()=>{
  for(const change of [h=>h.c.liveSet('provider','Other provider'),h=>h.c.setPage('rates')]){
-  const p2={...P,id:'22222222-2222-4222-8222-222222222222'},h=await ready({platforms:[P,p2]}),wait=deferred();let reads=0;
+  const p2={...P,id:'22222222-2222-4222-8222-222222222222'},h=await queried({platforms:[P,p2]}),wait=deferred();let reads=0;
   h.setHandler(q=>{if(q.action==='aggregate'){reads++;return wait.promise}return {rows:[],total:0,options:{}}});
   const run=h.c.liveOverviewAnalysis();await settle();change(h);const next=h.L.overviewSections;wait.resolve(completeAggregate(P,999,999));await run;assert.equal(h.L.overviewSections,next);assert.equal(reads,1);assert(!h.L.results.some(r=>r.total===999));
  }
 });
 test('a fresh query cancels pending analysis and restarts with compact providers',async()=>{
- const h=await ready(),wait=deferred();h.setHandler(()=>wait.promise);const old=h.c.liveOverviewAnalysis();await settle();
+ const h=await queried(),wait=deferred();h.setHandler(()=>wait.promise);const old=h.c.liveOverviewAnalysis();await settle();
  const calls=[];h.setHandler(async q=>{calls.push(q);return completeAggregate(P,30,15)});await h.c.liveLoad();assert.equal(h.L.overviewSections.status,'idle');assert(calls.filter(q=>q.action==='aggregate').every(q=>q.view==='providers'));
  wait.resolve(completeAggregate(P,999,999));await old;assert.equal(h.L.overviewSections.status,'idle');assert.equal(h.L.results[0].total,30);
 });
 test('analysis rendering uses only loaded analysis snapshots and restores core data even on exceptions',async()=>{
- const h=await ready(),primary=h.L.results;h.setHandler(async()=>completeAggregate(P,30,15));await h.c.liveOverviewAnalysis();
+ const h=await queried(),primary=h.L.results;h.setHandler(async()=>completeAggregate(P,30,15));await h.c.liveOverviewAnalysis();
  let context;const create=h.c.HensemLivePages.create;h.c.HensemLivePages.create=c=>{context=c;return create(c)};h.c.render();
  assert.equal(context.overviewAnalysisRender(()=>h.L.results[0].total),30);assert.equal(h.L.results,primary);
  assert.throws(()=>context.overviewAnalysisRender(()=>{throw Error('render failed')}),/render failed/);assert.equal(h.L.results,primary);
 });
 test('visible overview sections load once; offscreen, primary loading and stale observers do not read',async()=>{
- const h=await ready(),observers=[];h.c.IntersectionObserver=class{constructor(callback){this.callback=callback;this.targets=[];observers.push(this)}observe(node){this.targets.push(node)}disconnect(){this.disconnected=true}};
+ const h=await queried(),observers=[];h.c.IntersectionObserver=class{constructor(callback){this.callback=callback;this.targets=[];observers.push(this)}observe(node){this.targets.push(node)}disconnect(){this.disconnected=true}};
  const target={hasAttribute:name=>name==='data-live-overview-analysis'};h.nodes.get('page').querySelectorAll=()=>[target];
  const before=h.calls.length;h.c.render();assert.equal(h.calls.length,before);const observer=observers.at(-1);observer.callback([{target,isIntersecting:false}]);assert.equal(h.calls.length,before);
  h.L.loading=true;h.c.render();assert(observer.disconnected);observer.callback([{target,isIntersecting:true}]);await settle();assert.equal(h.calls.length,before);h.L.loading=false;h.c.render();
@@ -79,17 +79,17 @@ test('visible overview sections load once; offscreen, primary loading and stale 
  h.c.liveSet('provider','Other provider');observer.callback([{target,isIntersecting:true}]);await settle();assert.equal(h.calls.length,done);
 });
 test('inline workorder errors remain distinct and changing scope discards stale results',async()=>{
- const h=await ready({ancillaryHandler:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='providerOptions'?{providers:[]}:q.action==='rates'?{rows:[],total:0}:aggregate(P)}),wait=deferred();
+ const h=await queried({ancillaryHandler:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='providerOptions'?{providers:[]}:q.action==='rates'?{rows:[],total:0}:aggregate(P)}),wait=deferred();
  h.setHandler(q=>q.action==='workorders'?wait.promise:aggregate(P));const old=h.c.liveOverviewWorkorders();await settle();assert.equal(h.L.overviewWorkordersStatus,'loading');h.c.liveSet('provider','Other provider');wait.resolve({rows:[{id:'old'}],summary:{submittedCount:999}});await old;assert.equal(h.L.workorders,null);assert.equal(h.L.overviewWorkordersStatus,'idle');
  await h.c.liveLoad();h.setHandler(async q=>{if(q.action==='workorders')throw Error('Synthetic workorders offline');return aggregate(P)});await h.c.liveOverviewWorkorders();assert.equal(h.L.overviewWorkordersStatus,'error');assert.equal(h.L.workorders,null);assert.match(h.L.workordersError,/Synthetic workorders offline/);assert.equal(h.L.error,'');
 });
 
 test('leaving overview preserves the destination page workorder data and errors',async()=>{
- const h=await ready(),data={byProvider:[{provider:'Synthetic provider',direction:'charge',submittedAmount:300,submittedCount:3}]};
+ const h=await queried(),data={byProvider:[{provider:'Synthetic provider',direction:'charge',submittedAmount:300,submittedCount:3}]};
  h.L.workorders=data;h.L.workordersError='Destination error';h.c.state.page='providers';h.c.render();assert.equal(h.L.workorders,data);assert.equal(h.L.workordersError,'Destination error');assert.equal(h.L.overviewSections,null);
  h.c.state.page='provider_payout';h.c.render();assert.equal(h.L.workorders,data);assert.equal(h.L.workordersError,'Destination error');
 });
 test('leaving overview does not cancel a newer workorder request already owned by the destination',async()=>{
- const h=await ready();h.L.overviewWorkordersStatus='loading';h.L.overviewSections.workordersSerial=h.L.workordersSerial;h.L.workordersSerial++;h.L.workordersLoading=true;
+ const h=await queried();h.L.overviewWorkordersStatus='loading';h.L.overviewSections.workordersSerial=h.L.workordersSerial;h.L.workordersSerial++;h.L.workordersLoading=true;
  const nextSerial=h.L.workordersSerial;h.c.state.page='workorders';h.c.render();assert.equal(h.L.workordersSerial,nextSerial);assert.equal(h.L.workordersLoading,true);
 });

@@ -17,7 +17,8 @@
  function normalizeIdentity(row={}){
   const identityCountry=row.identityCountry??row.country??row.rawCountry??'',scope=row.scopeGroup??row.scope_group,legacy=legacyPanghu.has(token(identityCountry))||legacyPanghu.has(token(scope));
   const explicit=[row.geographicCountry,row.geographic_country,row.countryName,row.country_name,row.countryCode,row.country_code].find(value=>value&&!legacyPanghu.has(token(value))&&!legacyTeams[token(value)]);
-  const country=legacy?'巴西':legacyTeams[token(identityCountry)]?(explicit?countryNames[token(explicit)]||String(explicit):'国家待核对'):countryNames[token(identityCountry)]||identityCountry||'国家待核对';
+  // Current Hong Kong and Red Crab platforms operate in India (owner confirmed).
+  const country=legacy?'巴西':legacyTeams[token(identityCountry)]?(explicit?countryNames[token(explicit)]||String(explicit):'印度'):countryNames[token(identityCountry)]||identityCountry||'国家待核对';
   const team=legacy||legacyPanghu.has(token(row.team))?'胖虎':row.team&&row.team!=='待归类'?legacyTeams[token(row.team)]||row.team:legacyTeams[token(identityCountry)]||'__unassigned__';
   return {...row,identityCountry,rawCountry:row.rawCountry??identityCountry,country,team};
  }
@@ -36,7 +37,27 @@
    // many scope/filter lookups in one render, not across refreshed directories.
    const inputs=[L.catalog,L.withdrawCatalog,S.catalogRows];
    if(catalogMemo&&inputs.every((rows,index)=>rows===catalogMemo.inputs[index]&&(rows?.length||0)===catalogMemo.lengths[index]))return catalogMemo.rows;
-   const groups=new Map(),seeds=new Map();for(const seed of L.withdrawCatalog||[]){if(!seed.name||legacyPanghu.has(token(seed.name)))continue;const key=keyFor(seed);if(!seeds.has(key))seeds.set(key,seed);if(!groups.has(key))groups.set(key,[])}for(const f of S.catalogRows){const key=keyFor(f);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(f)}
+   // Link report names only to an already-authorized native identity. Keep
+   // raw feed keys for reads; ambiguous aliases and other countries stay apart.
+   const aliases=new Map(),nativeSources=new Map(),aliasKey=row=>{
+    const country=row.identityCountry??row.country??'',name=String(row.name||'').trim();
+    const normalized=['IN','INDIA','印度'].includes(token(country))?token(name).replace(/^(DHANI|VEER|SHREE)[.]/,'$1'):name;
+    return keyFor({...row,name:normalized});
+   };
+   for(const p of L.catalog||[])for(const name of [p.name,p.sourceName].filter(Boolean)){
+    const alias=aliasKey({...p,name}),key=keyFor(p);if(!aliases.has(alias))aliases.set(alias,new Set());aliases.get(alias).add(key);
+    if(!nativeSources.has(key))nativeSources.set(key,new Set());nativeSources.get(key).add(p.source);
+   }
+   const directoryKey=row=>{
+    const candidates=aliases.get(aliasKey(row)),explicit=row.system&&!['REPORT','SHEET','RECHARGE_REVIEW','WITHDRAW_REVIEW'].includes(token(row.system));
+    const matches=[...(candidates||[])].filter(key=>!explicit||[...nativeSources.get(key)].some(source=>sameSource(source,row.system)));
+    if(matches.length===1)return matches[0];
+    // A different explicit backend remains separately selectable, even when
+    // its display name is exactly the same as the authorized native platform.
+    if(explicit&&candidates?.size&&!matches.length)return JSON.stringify(['report-source',keyFor(row),token(row.system)]);
+    return keyFor(row);
+   };
+   const groups=new Map(),seeds=new Map();for(const seed of L.withdrawCatalog||[]){if(!seed.name||legacyPanghu.has(token(seed.name)))continue;const key=directoryKey(seed);if(!seeds.has(key))seeds.set(key,seed);if(!groups.has(key))groups.set(key,[])}for(const f of S.catalogRows){const key=directoryKey(f);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(f)}
    const orderGroups=new Map();for(const p of L.catalog||[]){const key=keyFor(p);if(!orderGroups.has(key))orderGroups.set(key,[]);orderGroups.get(key).push(p)}
    const reportTeams=feeds=>[...new Set(feeds.map(f=>normalizeIdentity(f).team).filter(t=>t!=='__unassigned__'))];
    const native=(L.catalog||[]).map(p=>{const feeds=groups.get(keyFor(p))||[],teams=reportTeams(feeds),identity=normalizeIdentity(p),team=identity.team;return {...identity,team:team==='__unassigned__'?(teams.length===1?teams[0]:teams.length>1?'归属待核对':team):team,feeds,reportOnly:false,orderPlatformIds:(orderGroups.get(keyFor(p))||[]).map(x=>x.id)}});
@@ -56,7 +77,7 @@
    const q={country:scope.country||L.country,teams:values(scope.teams),platforms:values(scope.platforms),sources:values(scope.sources),providers:values(scope.providers),direction:scope.direction||L.direction||'all',from:String(scope.from||L.from||'').slice(0,10),to:String(scope.to||L.to||'').slice(0,10)},key=JSON.stringify(q);
    if(!force&&S.scopeKey===key&&(S.loading||S.result&&completed&&Date.now()-completed.at<60000))return loadPending||S.result;
    const serial=++S.serial;S.scope=q;S.scopeKey=key;S.loading=true;S.error='';S.result=null;S.expanded.clear();S.tabs.clear();notify();
-   const task=(async()=>{try{await loadCatalog(force);if(serial!==S.serial)return;if(S.catalogError)throw Error(S.catalogError);const all=scopeFeeds(q),supported=all.filter(x=>['direct','google_sheets','unknown'].includes(x.request.sourceKind));if(!supported.length){S.result={feeds:[],unsupported:all.length};completed={result:S.result,key,scope:q,at:Date.now()};return S.result}const requested=supported.map(x=>x.request),feeds=[];for(let index=0;index<requested.length;index+=250){const result=await request({action:'reportSummary',startAt:q.from,endAt:q.to,feeds:requested.slice(index,index+250)});if(serial!==S.serial)return;if(!Array.isArray(result?.feeds))throw Error('日报汇总返回不完整');const expected=requested.slice(index,index+250).map(f=>sourceKey({...f,rawCountry:f.country,rawPlatform:f.platform})),actual=result.feeds.map(sourceKey);if(actual.length!==expected.length||new Set(actual).size!==actual.length||expected.some(id=>!actual.includes(id)))throw Error('日报汇总来源返回不完整，请重试');feeds.push(...result.feeds)}if(serial!==S.serial)return;S.result={feeds,unsupported:all.length-supported.length};completed={result:S.result,key,scope:q,at:Date.now()};return S.result}catch(e){if(serial===S.serial)S.error=e.message||'日报读取失败';return null}finally{if(serial===S.serial){S.loading=false;if(S.result)S.scopeKey=key;loadPending=null;notify()}}})();loadPending=task;return task;
+   const task=(async()=>{try{await loadCatalog();if(serial!==S.serial)return;if(S.catalogError)throw Error(S.catalogError);const all=scopeFeeds(q),supported=all.filter(x=>['direct','google_sheets','unknown'].includes(x.request.sourceKind));if(!supported.length){S.result={feeds:[],unsupported:all.length};completed={result:S.result,key,scope:q,at:Date.now()};return S.result}const requested=supported.map(x=>x.request),feeds=[];for(let index=0;index<requested.length;index+=250){const result=await request({action:'reportSummary',startAt:q.from,endAt:q.to,feeds:requested.slice(index,index+250)});if(serial!==S.serial)return;if(!Array.isArray(result?.feeds))throw Error('日报汇总返回不完整');const expected=requested.slice(index,index+250).map(f=>sourceKey({...f,rawCountry:f.country,rawPlatform:f.platform})),actual=result.feeds.map(sourceKey);if(actual.length!==expected.length||new Set(actual).size!==actual.length||expected.some(id=>!actual.includes(id)))throw Error('日报汇总来源返回不完整，请重试');feeds.push(...result.feeds)}if(serial!==S.serial)return;S.result={feeds,unsupported:all.length-supported.length};completed={result:S.result,key,scope:q,at:Date.now()};return S.result}catch(e){if(serial===S.serial)S.error=e.message||'日报读取失败';return null}finally{if(serial===S.serial){S.loading=false;if(S.result)S.scopeKey=key;loadPending=null;notify()}}})();loadPending=task;return task;
   }
   const providerName=(name,country)=>root.HensemProviderNames?.canonical(name,country)||name||'未提供';
   function providerAllowed(row){const wanted=S.scope?.providers||[];return !wanted.length||wanted.some(name=>providerName(name,S.scope?.country)===providerName(row.provider,S.scope?.country))}

@@ -45,7 +45,7 @@ test('opening or closing navigation groups updates only the menu, never recomput
 });
 
 test('navigation paints once while destination queries are still pending and does not await IO',async()=>{
- const h=await ready({ancillaryHandler:false}),pending=deferred();h.L.from='2026-09-20T00:00:00';h.L.to='2026-09-20T23:59:59';
+ const h=await ready({ancillaryHandler:false});await h.c.liveLoad();await settle();const pending=deferred();h.L.from='2026-09-20T00:00:00';h.L.to='2026-09-20T23:59:59';
  h.setHandler(q=>q.action==='aggregate'?pending.promise:Promise.resolve({rows:[],total:0}));
  const before=pageWrites(h);h.c.setPage('provider_payout');
  assert.equal(h.c.state.page,'provider_payout');assert.equal(h.c.location.hash,'provider_payout');assert.equal(h.L.direction,'withdraw');assert.equal(h.L.loading,true);assert.equal(pageWrites(h)-before,1,'all synchronous loader notifications share one destination paint');
@@ -53,6 +53,14 @@ test('navigation paints once while destination queries are still pending and doe
  h.c.setPage('orders');assert.equal(h.c.state.page,'orders');assert.match(h.html(),/请先选择一个商户/);const afterOrders=pageWrites(h);
  pending.resolve(completeAggregate(P,987654,987653));await settle();
  assert.equal(pageWrites(h),afterOrders,'the old aggregate cannot repaint the new page');assert.doesNotMatch(h.html(),/987,654|98,765,400/);assert.equal(h.L.loading,false);
+});
+
+test('overview navigation paints immediately without starting business or auxiliary reads',async()=>{
+ const h=await ready();assert.equal(h.L.overviewQueried,false);assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
+ await h.c.liveLoad();await settle();assert.equal(h.L.overviewQueried,true);assert(h.L.results.length>0);
+ h.c.setPage('provider_payout');await settle();const calls=h.calls.length,before=pageWrites(h);
+ h.c.setPage('overview');assert.equal(h.c.state.page,'overview');assert.equal(h.c.location.hash,'overview');assert.equal(h.L.overviewQueried,false);assert.equal(h.L.dirty,true);assert.equal(h.L.loading,false);assert.equal(pageWrites(h)-before,1);assert.match(h.html(),/查询/);assert.doesNotMatch(h.html(),/代收经营总数据|代付经营总数据/);
+ await settle();assert.equal(h.calls.length,calls,'returning to overview does not fetch orders, comparison, fees, source reports or provider options');assert.equal(pageWrites(h)-before,1,'no background completion is needed to render the manual query screen');
 });
 
 test('dedicated-page responses cache data but do not repaint a different destination',async()=>{
@@ -71,7 +79,7 @@ test('collected catalog response cannot redraw another menu and is reused on ret
 });
 
 test('lazy fee lookup does not recursively rebuild the page during its first paint',async()=>{
- const h=await ready(),pending=deferred();h.L.feeLookupRows=null;h.L.feeLookupLoading=false;h.L.feeLookupError='';h.c.state.page='providers';h.L.direction='charge';h.L.multi.direction=['charge'];h.setHandler(q=>q.action==='rates'?pending.promise:Promise.resolve(aggregate()));
+ const h=await ready();await h.c.liveLoad();await settle();const pending=deferred();h.L.feeLookupRows=null;h.L.feeLookupLoading=false;h.L.feeLookupError='';h.c.state.page='providers';h.L.direction='charge';h.L.multi.direction=['charge'];h.setHandler(q=>q.action==='rates'?pending.promise:Promise.resolve(aggregate()));
  const before=pageWrites(h);h.c.render();assert.equal(pageWrites(h)-before,1);assert.equal(h.L.feeLookupLoading,true);
  pending.resolve({rows:[],total:0});await settle();assert.equal(pageWrites(h)-before,2,'completion still produces the required final view');assert.equal(h.L.feeLookupLoading,false);
 });

@@ -12,9 +12,10 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject;const promise = new Promise((a,b) => {resolve=a;reject=b;});return { promise,resolve,reject }; };
 function load(options = {}) {
   const module = { exports: {} }, calls = [], listeners = new Set(), timers = new Map(); let timerId=0;
-  const target = { addEventListener: (name,fn) => {assert.equal(name,'message');listeners.add(fn);}, removeEventListener: (name,fn) => listeners.delete(fn) };
+  let now=options.now??Date.now();class ClockDate extends Date {static now(){return now;}}
+  const target = { location:{origin:'https://dashboard.invalid'}, addEventListener: (name,fn) => {assert.equal(name,'message');listeners.add(fn);}, removeEventListener: (name,fn) => listeners.delete(fn) };
   const authCalls = [];
-  vm.runInNewContext(compiled, { module,exports:module.exports,URL,AbortController,window:target,
+  vm.runInNewContext(compiled, { module,exports:module.exports,URL,AbortController,Date:ClockDate,window:target,
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: options.base || 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
     require: name => {
       if(name==='./adminConfigurationRequest') {
@@ -27,7 +28,7 @@ function load(options = {}) {
     fetch: async (url,init) => {calls.push({url,init});return options.fetch ? options.fetch(url,init) : {ok:true,json:async()=>({rows:[],total:0})};},
     setTimeout:(callback,ms) => {const id=++timerId;timers.set(id,{callback,ms});return id;},clearTimeout:id=>timers.delete(id)
   }, {filename});
-  return {api:module.exports,calls,authCalls,listeners,timers,target,send:event=>[...listeners].forEach(fn=>fn(event))};
+  return {api:module.exports,calls,authCalls,listeners,timers,target,now:()=>now,advance:ms=>now+=ms,send:event=>[...listeners].forEach(fn=>fn(event))};
 }
 function bridge(h) {
   const replies = [], child = {postMessage:(data,origin)=>replies.push({data,origin})};let currentSource=child,currentChannel='offline-channel';
@@ -89,7 +90,7 @@ test('iframe document encodes the channel, requires matching parent replies and 
   const {api}=load(),channel='</script><script>injected=1</script>\u2028',messages=[],timers=new Map();let callback,seq=0;
   const parent={postMessage:(data,origin)=>messages.push({data,origin})},ctx=vm.createContext({parent,setTimeout:(fn,ms)=>{const id=++seq;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id),addEventListener:(name,fn)=>{assert.equal(name,'message');callback=fn;}});vm.runInContext('window=globalThis',ctx);
   const html=api.makeAdminLiveDocument('<!doctype html><html><head></head><body></body></html>',channel),scripts=[...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)];assert.equal(scripts.length,1);assert(!/access_token|refresh_token|Authorization|localStorage|sessionStorage/.test(html));vm.runInContext(scripts[0][1],ctx);assert.equal(ctx.HENSEM_PRODUCTION,true);assert.equal(ctx.injected,undefined);
-  let resolved=false;const result=ctx.hensemLiveRequest(query).then(value=>{resolved=true;return value;});assert.equal(messages.length,1);assert.equal(messages[0].data.channel,channel);assert.equal(messages[0].origin,'*');const good={source:parent,data:{type:api.LIVE_RESPONSE,channel,id:messages[0].data.id,result:{total:9}}};for(const event of [{...good,source:{}},{...good,data:{...good.data,channel:'wrong'}},{...good,data:{...good.data,id:'unknown'}}])callback(event);await flush();assert.equal(resolved,false);callback(good);assert.equal((await result).total,9);assert.equal(timers.size,0);
+  let resolved=false;const result=ctx.hensemLiveRequest(query).then(value=>{resolved=true;return value;});assert.equal(messages.length,1);assert.equal(messages[0].data.channel,channel);assert.equal(messages[0].origin,'https://dashboard.invalid');const good={source:parent,origin:'https://dashboard.invalid',data:{type:api.LIVE_RESPONSE,channel,id:messages[0].data.id,result:{total:9}}};for(const event of [{...good,source:{}},{...good,origin:'https://imposter.invalid'},{...good,origin:'null'},{...good,data:{...good.data,channel:'wrong'}},{...good,data:{...good.data,id:'unknown'}}])callback(event);await flush();assert.equal(resolved,false);callback(good);assert.equal((await result).total,9);assert.equal(timers.size,0);
   const timeout=ctx.hensemLiveRequest(query);const rejected=assert.rejects(timeout,/超时/);[...timers.values()][0].fn();await rejected;
 });
 
@@ -210,4 +211,81 @@ test('intake directions and transport stay bounded to the selected report source
  const h=load(),q={action:'collectedData',operation:'rows',dataset:'volume',country:'胖虎巴西',platform:'TEST',startAt:'2026-09-24',endAt:'2026-09-24',direction:'charge',sourceKind:'google_sheets'};
  assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(q))),q);
  for(const bad of [{...q,direction:'all'},{...q,sourceKind:'mixed'},{...q,dataset:'panda_success'},{action:'catalog',sourceKind:'direct'},{action:'collectedData',operation:'catalog',direction:'charge'}])assert.throws(()=>h.api.validateAdminLiveRequest(bad));
+});
+
+
+test('cancellation authenticates frame origin, channel, source and id before touching active or queued reads',async()=>{
+ const h=load({fetch:async(_url,init)=>new Promise((_resolve,reject)=>init.signal.addEventListener('abort',()=>reject(Error('aborted'))))}),b=bridge(h);
+ for(const id of ['a','b','c','d','queued'])h.send(b.event(id));await flush();assert.equal(h.calls.length,4);
+ const cancel={...b.event('a'),data:{type:h.api.LIVE_CANCEL,id:'a',channel:'offline-channel'}};
+ for(const bad of [{...cancel,source:{}},{...cancel,origin:'https://dashboard.invalid'},{...cancel,data:{...cancel.data,channel:'other'}},{...cancel,data:{...cancel.data,id:'bad/id'}},{...cancel,data:{...cancel.data,request:query}},{...cancel,data:{...cancel.data,reason:'arbitrary'}}])h.send(bad);
+ assert(h.calls.every(c=>!c.init.signal.aborted));assert.equal(b.replies.length,0);
+ h.send({...cancel,data:{...cancel.data,id:'queued'}});assert.equal(b.replies[0].data.code,'ADMIN_LIVE_CANCELLED');assert.doesNotMatch(b.replies[0].data.error,/超时|timeout/);
+ h.send(cancel);await flush();assert.equal(h.calls[0].init.signal.aborted,true);assert.equal(h.calls.length,4);assert.equal(b.replies.length,2);
+ h.send(cancel);assert.equal(b.replies.length,2);b.cleanup();await flush();assert.equal(h.timers.size,0);
+});
+
+test('queued reads expire on their original deadline and never enter auth or fetch',async()=>{
+ const waits=[],h=load({now:1000000,fetch:()=>{const wait=deferred();waits.push(wait);return wait.promise}}),b=bridge(h);
+ for(const id of ['a','b','c','d'])h.send(b.event(id));
+ h.send({...b.event('queued'),data:{...b.event('queued').data,deadline:h.now()+1000}});await flush();assert.equal(h.calls.length,4);
+ h.advance(1000);const timer=[...h.timers.values()].find(t=>t.ms===1000);assert(timer);timer.callback();assert.equal(b.replies[0].data.id,'queued');assert.equal(b.replies[0].data.code,'ADMIN_LIVE_TIMEOUT');
+ waits[0].resolve({ok:true,json:async()=>({total:0})});await flush();assert.equal(h.calls.length,4);assert.equal(h.authCalls.length,4);b.cleanup();for(const w of waits)w.resolve({ok:true,json:async()=>({total:0})});await flush();assert.equal(h.timers.size,0);
+});
+
+test('dequeue keeps elapsed queue time inside the same deadline, with no fresh execution timer',async()=>{
+ const waits=[],h=load({now:1000000,fetch:()=>{const wait=deferred();waits.push(wait);return wait.promise}}),b=bridge(h);
+ for(const id of ['a','b','c','d'])h.send(b.event(id));h.send({...b.event('queued'),data:{...b.event('queued').data,deadline:h.now()+20000}});await flush();
+ const deadlineTimer=[...h.timers.values()].find(t=>t.ms===20000);assert(deadlineTimer);h.advance(19000);waits[0].resolve({ok:true,json:async()=>({total:0})});await flush();assert.equal(h.calls.length,5);assert.equal(h.timers.size,4);assert([...h.timers.values()].includes(deadlineTimer));
+ h.advance(1000);deadlineTimer.callback();assert(h.calls[4].init.signal.aborted);assert.equal(b.replies.find(r=>r.data.id==='queued').data.code,'ADMIN_LIVE_TIMEOUT');
+ waits[4].resolve({ok:true,json:async()=>({private:'late'})});await flush();assert.equal(b.replies.filter(r=>r.data.id==='queued').length,1);b.cleanup();for(const w of waits)w.resolve({ok:true,json:async()=>({})});await flush();assert.equal(h.timers.size,0);
+});
+
+test('invalid or expired deadlines never query and a supplied deadline cannot prolong the host cap',async()=>{
+ const h=load({now:1000000,fetch:()=>deferred().promise}),b=bridge(h);
+ for(const [i,deadline]of [NaN,Infinity,0,-1,'1000010',{},1000000].entries())h.send({...b.event('bad_'+i),data:{...b.event('bad_'+i).data,deadline}});
+ await flush();assert.equal(h.calls.length,0);assert.equal(h.authCalls.length,0);assert.equal(b.replies.length,7);
+ h.send({...b.event('long'),data:{...b.event('long').data,deadline:h.now()+900000}});await flush();assert.equal([...h.timers.values()][0].ms,h.api.LIVE_REQUEST_TIMEOUT_MS);b.cleanup();assert.equal(h.timers.size,0);
+});
+
+test('cancelling during auth refresh cannot start a later fetch and cleanup is idempotent',async()=>{
+ const refresh=deferred(),h=load({ensure:()=>refresh.promise}),b=bridge(h);h.send(b.event('a'));await flush();assert.equal(h.authCalls.length,1);
+ h.send({...b.event('a'),data:{type:h.api.LIVE_CANCEL,id:'a',channel:'offline-channel'}});refresh.resolve({...session,access_token:'fresh'});await flush();assert.equal(h.calls.length,0);assert.equal(b.replies.length,1);assert.equal(b.replies[0].data.code,'ADMIN_LIVE_CANCELLED');b.cleanup();b.cleanup();assert.equal(h.timers.size,0);assert.equal(h.listeners.size,0);
+});
+
+function iframeHarness(){
+ const h=load(),messages=[],timers=new Map(),listeners=new Set();let seq=0;
+ const parent={postMessage:(data,origin)=>messages.push({data,origin})};
+ const ctx=vm.createContext({parent,AbortController,setTimeout:(fn,ms)=>{const id=++seq;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id),addEventListener:(name,fn)=>{assert.equal(name,'message');listeners.add(fn);}});vm.runInContext('window=globalThis',ctx);
+ const html=h.api.makeAdminLiveDocument('<!doctype html><html></html>','test-channel');vm.runInContext([...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)][0][1],ctx);
+ return {h,ctx,messages,timers,reply:(request,payload)=>[...listeners].forEach(fn=>fn({source:parent,origin:'https://dashboard.invalid',data:{type:h.api.LIVE_RESPONSE,channel:'test-channel',id:request.id,...payload}}))};
+}
+
+test('iframe cancellation releases listeners/timers, rejects with AbortError and preserves in-flight edits',async()=>{
+ const x=iframeHarness(),controller=new AbortController(),read=x.ctx.hensemLiveRequest(query,{signal:controller.signal}),cancelled=assert.rejects(read,e=>e.name==='AbortError'&&e.code==='ADMIN_LIVE_CANCELLED'&&!/超时/.test(e.message));
+ controller.abort();await cancelled;assert.equal(x.messages[1].data.type,x.h.api.LIVE_CANCEL);assert.equal(x.messages[1].data.id,x.messages[0].data.id);assert.equal(x.messages[1].origin,'https://dashboard.invalid');assert.equal(x.timers.size,0);x.reply(x.messages[0].data,{result:{private:'late'}});
+ const first=x.ctx.hensemLiveRequest(query),second=x.ctx.hensemLiveRequest({action:'rates'}),write=x.ctx.hensemLiveRequest({action:'configurationWrite'}),note=x.ctx.hensemLiveRequest({action:'withdrawNote'});
+ const firstRejected=assert.rejects(first,e=>e.code==='ADMIN_LIVE_CANCELLED');assert.equal(x.ctx.hensemLiveCancelRequests(['query']),1);await firstRejected;
+ const secondRejected=assert.rejects(second,e=>e.name==='AbortError');assert.equal(x.ctx.hensemLiveCancelRequests(),1);await secondRejected;assert.equal(x.timers.size,2);assert.equal(x.ctx.hensemLiveCancelRequests(['configurationWrite','withdrawNote']),0);
+ for(const msg of x.messages.filter(m=>m.data.type===x.h.api.LIVE_REQUEST&&['configurationWrite','withdrawNote'].includes(m.data.request.action)))x.reply(msg.data,{result:{saved:true}});
+ assert.equal((await write).saved,true);assert.equal((await note).saved,true);assert.equal(x.timers.size,0);
+ const already=new AbortController();already.abort();const before=x.messages.length;await assert.rejects(x.ctx.hensemLiveRequest(query,{signal:already.signal}),e=>e.name==='AbortError');assert.equal(x.messages.length,before);
+});
+
+test('iframe expiry sends host cancellation with the same total deadline and ignores late replies',async()=>{
+ const x=iframeHarness(),start=Date.now(),pending=x.ctx.hensemLiveRequest(query),rejected=assert.rejects(pending,e=>e.code==='ADMIN_LIVE_TIMEOUT'&&/超时/.test(e.message));
+ const request=x.messages[0].data;assert(request.deadline>=start+x.h.api.LIVE_REQUEST_TIMEOUT_MS);assert(request.deadline<=Date.now()+x.h.api.LIVE_REQUEST_TIMEOUT_MS);const timer=[...x.timers.values()][0];assert.equal(timer.ms,x.h.api.LIVE_REQUEST_TIMEOUT_MS);timer.fn();await rejected;
+ assert.equal(x.messages[1].data.type,x.h.api.LIVE_CANCEL);assert.equal(x.messages[1].data.reason,'timeout');assert.equal(x.messages[1].data.id,request.id);assert.equal(x.timers.size,0);x.reply(request,{result:{private:'late'}});
+});
+
+
+test('a late completion cannot outrun the deadline timer and publish a success',async()=>{
+ const waiting=deferred(),h=load({now:1000000,fetch:()=>waiting.promise}),b=bridge(h);h.send(b.event('late'));await flush();h.advance(90001);
+ waiting.resolve({ok:true,json:async()=>({private:'late success'})});await flush();assert.equal(b.replies.length,1);assert.equal(b.replies[0].data.code,'ADMIN_LIVE_TIMEOUT');assert(!JSON.stringify(b.replies).includes('late success'));assert.equal(h.timers.size,0);b.cleanup();
+});
+
+test('lost iframe transport cannot prevent host cancellation cleanup or queue advancement',async()=>{
+ const waits=[],h=load({fetch:async(_url,init)=>new Promise((resolve,reject)=>{waits.push({resolve,init});init.signal.addEventListener('abort',()=>reject(Error('aborted')));})}),b=bridge(h);
+ for(const id of ['a','b','c','d','queued'])h.send(b.event(id));await flush();b.child.postMessage=()=>{throw Error('closed frame')};
+ h.send({...b.event('a'),data:{type:h.api.LIVE_CANCEL,id:'a',channel:'offline-channel'}});await flush();assert.equal(waits[0].init.signal.aborted,true);assert.equal(h.calls.length,5);b.cleanup();await flush();assert.equal(h.timers.size,0);
 });

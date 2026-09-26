@@ -2,8 +2,9 @@
 -- Apply after configuration-query and provider-filter-performance. This adds
 -- independent RPCs only; existing totals/queries, source tables and ACLs stay intact.
 -- Source predicates below deliberately match admin-live-query-performance.sql.
--- One range scan yields only a range total and local-day groups. Never page
--- orders or fan out one query per day; the client may cache this scoped result.
+-- One range scan yields range/local-day groups; latency additionally returns
+-- provider groups with independent full-window valid-success denominators.
+-- Never page orders or fan out per provider/day; the client caches this scope.
 begin;
 create or replace function private.dashboard_admin_live_drilldown_raw(p_request jsonb)
 returns jsonb language plpgsql stable security definer set search_path='' set jit=off as $$
@@ -218,7 +219,7 @@ begin
   end if;
 
   v_prefix:='with orders as ('||v_source||$q$), filtered as materialized (
-    select direction,currency,status_group,created_at,success_at,
+    select provider,direction,currency,status_group,created_at,success_at,
       case when amount::text not in ('NaN','Infinity','-Infinity') then amount end as amount,synced_at,
       (created_at >= $5 and created_at < $6) as created_in_range,
       (status_group='success' and success_at >= $5 and success_at < $6) as success_in_range,
@@ -249,11 +250,20 @@ begin
         when latency_ms<=86400000 then 6 when latency_ms<=172800000 then 7
         when latency_ms<=259200000 then 8 when latency_ms is not null then 9 end as duration_bucket
       from filtered where success_in_range
+    ), provider_names as materialized (
+      -- Use the same authoritative mapping as the ordinary provider summary,
+      -- once per distinct raw name, never once per order or once per day.
+      select raw_provider,private.dashboard_admin_live_provider_canonical($30,$2,raw_provider) as provider
+      from (select distinct provider as raw_provider from candidates) names
     ), selected as (
-      select *,latency_ms is not null and case when $29 then duration_bucket>$28 else duration_bucket=$28 end as segment_match
-      from candidates
+      select c.*,n.provider as canonical_provider,
+        latency_ms is not null and case when $29 then duration_bucket>$28 else duration_bucket=$28 end as segment_match
+      from candidates c join provider_names n on n.raw_provider=c.provider
     ), metrics as (
-      select direction,currency,success_local_date as date,
+      -- Group before selecting the segment: valid_* always includes every valid
+      -- successful order for this provider/window, including other duration bins.
+      select direction,currency,canonical_provider as provider,success_local_date as date,
+        grouping(canonical_provider) as gp,grouping(success_local_date) as gd,
         count(*) filter(where segment_match) as count,
         case when count(*) filter(where segment_match and amount is null)=0
           then coalesce(sum(amount) filter(where segment_match),0) end as amount,
@@ -262,15 +272,20 @@ begin
           then coalesce(sum(amount) filter(where latency_ms is not null),0) end as valid_amount,
         count(*) as candidate_count,count(*) filter(where latency_ms is null) as excluded_count,
         count(*) filter(where segment_match and amount is null) as missing_amount_count,max(synced_at) as latest_synced_at
-      from selected group by grouping sets ((direction,currency),(direction,currency,success_local_date))
+      from selected group by grouping sets (
+        (direction,currency),(direction,currency,success_local_date),
+        (direction,currency,canonical_provider),(direction,currency,canonical_provider,success_local_date))
     ), output as (
-      select date,(to_jsonb(m)-array['amount','valid_amount'])||jsonb_build_object(
+      select date,gp,gd,(to_jsonb(m)-array['amount','valid_amount','gp','gd'])||jsonb_build_object(
         'amount',amount::text,'valid_amount',valid_amount::text,'success_count',count,'success_amount',amount::text,
         'bucket',$28,'cumulative',$29,'count_share',count::numeric/nullif(valid_count,0),
         'amount_share',case when valid_amount>0 then amount/valid_amount end) as value from metrics m
     ) select jsonb_build_object(
-      'summary',coalesce((select jsonb_agg(value-'date' order by value->>'direction',value->>'currency') from output where date is null),'[]'::jsonb),
-      'groups',jsonb_build_object('daily',coalesce((select jsonb_agg(value order by date,value->>'direction',value->>'currency') from output where date is not null),'[]'::jsonb)),
+      'summary',coalesce((select jsonb_agg(value-array['date','provider'] order by value->>'direction',value->>'currency') from output where gp=1 and gd=1),'[]'::jsonb),
+      'groups',jsonb_build_object(
+        'daily',coalesce((select jsonb_agg(value-'provider' order by date,value->>'direction',value->>'currency') from output where gp=1 and gd=0),'[]'::jsonb),
+        'provider',coalesce((select jsonb_agg(value-'date' order by value->>'provider',value->>'direction',value->>'currency') from output where gp=0 and gd=1),'[]'::jsonb),
+        'provider_daily',coalesce((select jsonb_agg(value order by date,value->>'provider',value->>'direction',value->>'currency') from output where gp=0 and gd=0),'[]'::jsonb)),
       'rows','[]'::jsonb)
     $q$;
   else
@@ -323,7 +338,7 @@ begin
   end if;
   execute v_sql into v_result using v_id,v_platform.name,v_platform.scope_group,v_platform.timezone,v_start,v_end,
     v_direction,v_status,v_member,v_order,v_system,v_providers,v_types,v_currency,v_min,v_max,v_offset,v_limit,v_action,v_asof,v_platform.currency,v_platform.source_name,v_third,v_confirmations,
-    v_kind,v_hour,v_bucket_text,v_bucket,v_cumulative;
+    v_kind,v_hour,v_bucket_text,v_bucket,v_cumulative,v_platform.country;
   return v_result||jsonb_build_object('version',1,'platform',v_meta,'basis',case when v_kind='latency' then 'success_at' else 'mixed_created_success' end,
     'total',(select coalesce(sum((r->>case when v_kind='latency' then 'count' else 'all_count' end)::bigint),0) from jsonb_array_elements(v_result->'summary') r),
     'startAt',v_start,'endAt',v_end,'asOf',v_asof,'complete',true,'hasMore',false,

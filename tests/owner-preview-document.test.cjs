@@ -117,6 +117,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const currentSession = { user: { id: userId }, access_token: 'offline-host-access', refresh_token: 'offline-host-refresh' };
   const box = { exports: {} };
   const window = {
+    location: { origin: 'https://app.offline.invalid' },
     addEventListener: (name, callback) => listeners.set(name, callback), removeEventListener: name => listeners.delete(name),
     setInterval: callback => { intervalCheck = callback; return 1; }, clearInterval: () => {},
   };

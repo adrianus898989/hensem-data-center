@@ -17,13 +17,52 @@ test('catalog preserves native IDs, adds logical report-only identities and expo
  assert.equal(f.page.selected({teams:['胖虎']}).length,1);assert.equal(f.page.selected({country:'印度',sources:['AR']}).length,1);
 });
 
+test('authorized native source names absorb report aliases without adding platforms or changing query keys',async()=>{
+ const native=[['DHANIWIN','DhaniWin','newar'],['LOTTERY77','LOTTERY7','ar'],['SHREEWIN','Shree.Win','ar'],['VEERGAME','Veer.Game','ar']].map(([name,sourceName,source],i)=>({id:'native-'+i,name,sourceName,source,country:'印度',team:'M8',currency:'INR'}));
+ const seeds=['DHANI.WIN','DhaniWin','LOTTERY7','Shree.Win','Veer.Game'].map(name=>({name,country:'印度',source:'withdraw'}));
+ const feeds=native.map(p=>feed({country:'印度',rawCountry:'IN',name:p.sourceName,rawPlatform:p.sourceName,system:'REPORT',team:'M8',directions:['charge']}));
+ const f=fixture({catalog:native,withdrawCatalog:seeds,feeds});
+ assert.deepEqual(plain(f.page.catalog().map(p=>p.id)),native.map(p=>p.id),'slow report loading must not create five alias entries');
+ await f.page.load({country:'印度',direction:'charge',from:scope.from,to:scope.to});
+ const catalog=f.page.catalog();assert.equal(catalog.length,4);assert(catalog.every(p=>!p.reportOnly&&p.team==='M8'));assert.deepEqual(plain(catalog.map(p=>p.source)),['newar','ar','ar','ar']);
+ assert.deepEqual(plain(catalog.map(p=>p.feeds.length)),[1,1,1,1]);assert.deepEqual(plain(f.calls.find(q=>q.action==='reportSummary').feeds.map(p=>p.platform)),native.map(p=>p.sourceName));
+ assert.deepEqual(plain(f.page.selected({country:'印度',sources:['newar']}).map(p=>p.id)),['native-0']);
+ assert.equal(f.L.withdrawCatalog[0].name,'DHANI.WIN');assert.equal(f.page.state.catalogRows[0].rawPlatform,'DhaniWin');
+});
+
+test('directory aliases require an authorized unique target in the same original country',async()=>{
+ const f=fixture({catalog:[{id:'one',name:'ONE',sourceName:'SHARED',country:'印度',team:'M8',source:'ar'},{id:'two',name:'TWO',sourceName:'SHARED',country:'印度',team:'M8',source:'newar'},{id:'veer',name:'VEERGAME',sourceName:'Veer.Game',country:'印度',team:'M8',source:'ar'}],withdrawCatalog:[{name:'SHARED',country:'印度'},{name:'Veer.Game',country:'巴西'},{name:'VEER-GAME',country:'印度'}],feeds:[]});
+ const catalog=f.page.catalog();assert.equal(catalog.length,6);assert(catalog.filter(p=>p.reportOnly).every(p=>p.orderPlatformIds.length===0));
+ assert.equal(catalog.find(p=>p.name==='SHARED').team,'__unassigned__');assert.equal(catalog.find(p=>p.country==='巴西').country,'巴西');assert.equal(catalog.find(p=>p.name==='VEER-GAME').reportOnly,true,'unconfirmed punctuation variants must not be guessed');
+});
+
+test('an explicitly different report backend stays selectable beside its namesake native platform',async()=>{
+ for(const name of ['Shree.Win','SHREEWIN']){
+  const f=fixture({catalog:[{id:'ar',name:'SHREEWIN',sourceName:'Shree.Win',country:'印度',team:'M8',source:'ar'}],feeds:[feed({name,rawPlatform:'EXACT-NEWAR-SOURCE',country:'印度',rawCountry:'IN',system:'NEW_AR',team:'M8',directions:['charge'],provenance:{kind:'direct'}})]});
+  await f.page.load({country:'印度',sources:['newar'],direction:'charge',from:scope.from,to:scope.to});
+  const catalog=f.page.catalog();assert.equal(catalog.length,2);assert.equal(catalog.find(p=>p.id==='ar').feeds.length,0);assert.equal(f.page.selected({country:'印度',sources:['NEW_AR']}).length,1);
+  const queries=f.calls.find(q=>q.action==='reportSummary').feeds;assert.equal(queries.length,1);assert.equal(queries[0].system,'NEW_AR');assert.equal(queries[0].platform,'EXACT-NEWAR-SOURCE');
+ }
+});
+
 test('shared native-source feeds are requested once with exact provenance and source direction',async()=>{
  const raw=feed({country:'印度',rawCountry:'IN',name:'SAME',rawPlatform:'SAME',team:'M8',system:'AR',directions:['charge'],provenance:{kind:'direct'}}),f=fixture({catalog:[{id:'a',name:'SAME',country:'印度',source:'ar',team:'M8'},{id:'b',name:'SAME',country:'印度',source:'newar',team:'M8'}],feeds:[raw,raw]});await f.page.load({country:'印度',platforms:['a','b'],direction:'charge',from:scope.from,to:scope.to});
  const call=f.calls.find(q=>q.action==='reportSummary');assert.equal(call.feeds.length,1);assert.deepEqual(call.feeds[0],{dataset:'volume',system:'AR',country:'IN',platform:'SAME',direction:'charge',sourceKind:'direct'});assert.equal(call.startAt,'2026-09-24');assert.equal(call.endAt,'2026-09-25');assert.match(f.page.render({page:'overview'}),/另有订单数据，独立核对/);assert.equal(f.calls.filter(q=>q.action==='aggregate').length,0);
 });
 
-test('concurrent catalog and load reuse metadata, query scopes cache and user force reloads',async()=>{
- let resolve;const pending=new Promise(r=>resolve=r),f=fixture({onCatalog:()=>pending});const a=f.page.loadCatalog(),b=f.page.loadCatalog(),c=f.page.load(scope);assert.equal(f.calls.length,1);resolve({rows:[feed()]});await Promise.all([a,b,c]);assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,1);await f.page.load(scope);assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,1);await f.page.load(scope,true);assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,2);assert.equal(f.calls.filter(q=>q.action==='collectedData').length,2);
+test('concurrent catalog and date loads share metadata, while forced date queries refresh only figures',async()=>{
+ let resolve;const pending=new Promise(r=>resolve=r),f=fixture({onCatalog:()=>pending});
+ const a=f.page.loadCatalog(),b=f.page.loadCatalog(),c=f.page.load(scope,true);
+ assert.equal(f.calls.length,1,'a date refresh must join the pending catalog request');
+ resolve({rows:[feed()]});await Promise.all([a,b,c]);
+ assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,1);
+ await f.page.load(scope);assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,1);
+ await f.page.load(scope,true);assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,2);
+ const otherDates={...scope,from:'2026-09-20T00:00:00',to:'2026-09-24T23:59:59'};
+ await f.page.load(otherDates,true);const queries=f.calls.filter(q=>q.action==='reportSummary');
+ assert.equal(queries.length,3);assert.equal(queries[2].startAt,'2026-09-20');assert.equal(queries[2].endAt,'2026-09-24');
+ assert.equal(f.calls.filter(q=>q.action==='collectedData').length,1,'new dates and explicit data refreshes reuse fresh metadata');
+ await f.page.load(otherDates);assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,3);
 });
 
 test('daily reports separate grains and unknown currencies, expand provider and date without database reads',async()=>{
@@ -60,8 +99,35 @@ test('explicit native source filter excludes a different direct backend but pres
  const common={country:'印度',rawCountry:'IN',name:'SAME',rawPlatform:'SAME',team:'M8',directions:['charge']},f=fixture({catalog:[{id:'ar',name:'SAME',country:'印度',source:'ar',team:'M8'},{id:'lg',name:'SAME',country:'印度',source:'lg',team:'M8'}],feeds:[feed({...common,dataset:'volume',system:'AR',provenance:{kind:'direct'}}),feed({...common,dataset:'lg_success',system:'LG',provenance:{kind:'direct'}}),feed({...common})]});await f.page.load({...scope,country:'印度',direction:'charge',sources:['ar']});const feeds=f.calls.find(q=>q.action==='reportSummary').feeds;assert.deepEqual(feeds.map(r=>r.system).sort(),['AR','REPORT']);assert(!feeds.some(r=>r.dataset==='lg_success'));
 });
 
-test('completed report and catalog caches expire after sixty seconds and force discovers a new feed',async()=>{
- const f=fixture();await f.page.load(scope);let count=f.calls.length;await f.page.load(scope);assert.equal(f.calls.length,count);f.advance(60001);await f.page.load(scope);assert.equal(f.calls.filter(q=>q.action==='collectedData').length,2);assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,2);await f.page.load(scope,true);assert.equal(f.calls.filter(q=>q.action==='collectedData').length,3);assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,3);
+test('date refreshes do not extend the sixty-second catalog TTL and expired caches reload',async()=>{
+ const f=fixture();await f.page.load(scope);await f.page.load(scope);assert.equal(f.calls.length,2);
+ f.advance(59999);await f.page.load(scope,true);
+ assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,2);
+ assert.equal(f.calls.filter(q=>q.action==='collectedData').length,1,'metadata stays cached until its own TTL expires');
+ f.advance(1);await f.page.load(scope,true);
+ assert.equal(f.calls.filter(q=>q.action==='collectedData').length,2,'refreshing figures must not reset the metadata age');
+ assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,3);
+ await f.page.load(scope);assert.equal(f.calls.length,5);
+ f.advance(60000);await f.page.load(scope);
+ assert.equal(f.calls.filter(q=>q.action==='collectedData').length,3);
+ assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,4,'completed report figures also expire after sixty seconds');
+});
+
+test('explicit catalog refresh discovers a new feed before TTL without changing existing platform IDs',async()=>{
+ let rows=[feed({directions:['charge']})];const f=fixture({onCatalog:()=>({rows})});
+ await f.page.load(scope);const id=f.page.catalog()[0].id;
+ rows=[...rows,feed({dataset:'auto',directions:['withdraw']})];
+ await f.page.load(scope,true);
+ assert.equal(f.calls.filter(q=>q.action==='collectedData').length,1);
+ assert.equal(f.calls.filter(q=>q.action==='reportSummary').at(-1).feeds.length,1,'date refresh uses the current directory snapshot');
+ await f.page.loadCatalog(true);
+ assert.equal(f.calls.filter(q=>q.action==='collectedData').length,2);
+ assert.equal(f.page.state.result,null,'figures using the previous feed set must be reloaded');
+ assert.equal(f.page.catalog()[0].id,id);assert.equal(f.page.catalog()[0].feeds.length,2);
+ await f.page.load(scope);const queries=f.calls.filter(q=>q.action==='reportSummary');assert.equal(queries.length,3);
+ assert.deepEqual(queries.at(-1).feeds.map(q=>[q.dataset,q.country,q.platform,q.direction]),[
+  ['volume','胖虎巴西','PH-RAW','charge'],['auto','胖虎巴西','PH-RAW','withdraw']
+ ]);
 });
 
 test('non-summary report-only records produce a navigation notice instead of a blank page',async()=>{
@@ -80,9 +146,23 @@ test('a first catalog failure preserves authorized seeds and never claims their 
  const f=fixture({withdrawCatalog:[{name:'BET6867',country:'胖虎巴西',team:'胖虎',scopeGroup:'BR_PANGHU'}],onCatalog:()=>{throw Error('catalog unavailable')}});await f.page.load({country:'巴西',teams:['胖虎'],...scope,country:'巴西'});assert.equal(f.page.catalog()[0].team,'胖虎');assert.equal(f.page.catalog()[0].country,'巴西');assert.equal(f.page.catalog()[0].feeds.length,0);assert.equal(f.page.state.catalogLoaded,false);assert.match(f.page.render({page:'overview'}),/日报读取未完成/);assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,0);
 });
 
-test('failed forced catalog refresh preserves session identities but clears report figures and remains retryable',async()=>{
- let fail=false;const f=fixture({onCatalog:()=>{if(fail)throw Error('catalog timeout');return {rows:[feed()]}}});await f.page.load(scope);const before=plain(f.page.catalog());assert(f.page.state.result);fail=true;await f.page.load(scope,true);assert.deepEqual(plain(f.page.catalog()),before);assert.equal(f.page.state.result,null);assert.match(f.page.render({page:'overview'}),/catalog timeout/);assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,1,'stale metadata cannot be used after a failed freshness check');
- fail=false;await f.page.load(scope);assert.equal(f.page.state.catalogError,'');assert.equal(f.calls.filter(q=>q.action==='collectedData').length,3,'retry must not be swallowed by the old metadata TTL');assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,2);
+test('failed explicit catalog refresh preserves identities, clears figures and retries despite the old TTL',async()=>{
+ let fail=false;const f=fixture({onCatalog:()=>{if(fail)throw Error('catalog timeout');return {rows:[feed()]}}});
+ await f.page.load(scope);const before=plain(f.page.catalog());assert(f.page.state.result);
+ fail=true;await f.page.load(scope,true);
+ assert(f.page.state.result);assert.equal(f.page.state.catalogError,'');
+ assert.equal(f.calls.filter(q=>q.action==='collectedData').length,1,'a date refresh does not depend on another directory read');
+ await f.page.loadCatalog(true);
+ assert.deepEqual(plain(f.page.catalog()),before);assert.equal(f.page.state.result,null);
+ assert.match(f.page.render({page:'overview'}),/catalog timeout/);
+ await f.page.load(scope);
+ assert.equal(f.page.state.result,null);assert.deepEqual(plain(f.page.catalog()),before);
+ assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,2,'a failed explicit directory check cannot serve figures from stale metadata');
+ assert.equal(f.calls.filter(q=>q.action==='collectedData').length,3,'the failed directory refresh must retry within the old TTL');
+ fail=false;await f.page.load(scope);
+ assert.equal(f.page.state.catalogError,'');assert.deepEqual(plain(f.page.catalog()),before);
+ assert.equal(f.calls.filter(q=>q.action==='collectedData').length,4);
+ assert.equal(f.calls.filter(q=>q.action==='reportSummary').length,3);assert(f.page.state.result);
 });
 
 test('display country changes do not merge an identically named M8 Brazil platform with Panghu',async()=>{
@@ -93,7 +173,7 @@ test('display country changes do not merge an identically named M8 Brazil platfo
 
 test('teams are separate from geography and a future Panghu country keeps its own country',async()=>{
  const f=fixture({catalog:[{id:'hk',name:'HK1',country:'香港',team:'香港',source:'game66',currency:'INR'},{id:'crab',name:'RC1',country:'红膏蟹',team:'红膏蟹',source:'game66',currency:'INR'},{id:'hk-india',name:'HK2',country:'香港',geographicCountry:'印度',team:'香港',source:'game66'}],withdrawCatalog:[{name:'5C555',country:'BR_PANGHU',team:'胖虎'},{name:'FUTURE-PH',country:'墨西哥',team:'胖虎',scopeGroup:'MX'}],feeds:[]});
- const c=f.page.catalog();assert(c.filter(p=>['hk','crab'].includes(p.id)).every(p=>p.country==='国家待核对'));assert.equal(c.find(p=>p.id==='hk-india').country,'印度');assert(!c.some(p=>['香港','红膏蟹','胖虎巴西'].includes(p.country)));assert.deepEqual(plain(f.page.selected({teams:['胖虎']}).map(p=>p.country).sort()),['墨西哥','巴西'].sort());assert.equal(f.page.selected({country:'墨西哥',teams:['胖虎']}).length,1);
+ const c=f.page.catalog();assert(c.filter(p=>['hk','crab'].includes(p.id)).every(p=>p.country==='印度'));assert.equal(c.find(p=>p.id==='hk-india').country,'印度');assert.equal(c.find(p=>p.id==='hk').identityCountry,'香港');assert.equal(c.find(p=>p.id==='crab').team,'红膏蟹');assert(!c.some(p=>['香港','红膏蟹','胖虎巴西'].includes(p.country)));assert.deepEqual(plain(f.page.selected({teams:['胖虎']}).map(p=>p.country).sort()),['墨西哥','巴西'].sort());assert.equal(f.page.selected({country:'墨西哥',teams:['胖虎']}).length,1);
  const normalize=f.context.HensemLiveReportData.normalizeIdentity;assert.equal(normalize({country:'巴西',team:'M8',name:'5C555'}).team,'M8');assert.equal(normalize({country:'墨西哥',team:'胖虎'}).country,'墨西哥');assert.equal(normalize(normalize({country:'胖虎巴西',team:'胖虎'})).identityCountry,'胖虎巴西');
 });
 
