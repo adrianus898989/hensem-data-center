@@ -138,6 +138,12 @@ begin
       when sheet_name like '[三方量表%]%' then 'google_sheets' else 'unknown' end::text provenance
    from public.third_party_volume where quarantined_at is null
    union all
+   select 'auto',case when source_sheet like 'AR_DIRECT%' then 'AR' when source_sheet like 'LG_DIRECT%' then 'LG' else 'REPORT' end,
+    coalesce(country,''),platform,data_date,coalesce(source_updated_at,updated_at),'withdraw',
+    case when source_sheet like 'AR_DIRECT%' or source_sheet like 'LG_DIRECT%' then 'direct'
+     when source_sheet like 'raw_daily_%' then 'google_sheets' else 'unknown' end
+   from public.auto_withdraw_daily
+   union all
    select 'panda_success','PANDA',coalesce(nullif(country,''),country_code),platform,stat_date,updated_at,
     case when lower(btrim(direction)) in('charge','recharge','collect','deposit','代收') then 'charge' when lower(btrim(direction)) in('withdraw','payout','代付') then 'withdraw' end,'direct'
    from public.panda_success_rate_daily

@@ -1,7 +1,7 @@
 /* Synthetic-only VM tests for the production UI adapter. No credentials/network/real orders. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8');
-const layoutSources=['live-analysis-drilldown.js','live-reference-layout.js','live-pages-reference.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js', 'live-withdraw-pages.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
+const layoutSources=['live-analysis-drilldown.js','live-reference-layout.js','live-pages-reference.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js', 'live-withdraw-pages.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
 const comparisonSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-comparison.js'),'utf8');
 test('overview merges same providers across sources while preserving stable platform identities and other source reports',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222',source:'NEW_AR'},p3={...P,id:'33333333-3333-4333-8333-333333333333'};
@@ -55,7 +55,7 @@ function harness(options={}){
   setInterval:(fn,ms)=>{intervals.push({fn,ms});return intervals.length},clearInterval(){},setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},
   HENSEM_PRODUCTION:options.production!==false,
   hensemLiveRequest:async request=>{calls.push(JSON.parse(JSON.stringify(request)));if(!options.ancillaryHandler&&request.action==='providerOptions')return {providers:['Synthetic provider']};if(!options.ancillaryHandler&&request.action==='workorders')return {rows:[],byProvider:[],total:0,summary:{},byDirection:{}};if(handler)return handler(request);if(request.action==='catalog')return {platforms:options.platforms||[P]};if(request.action==='details')return detail((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65,request.offset,request.limit);if(request.action==='rates')return {rows:[],total:0,options:{countries:[],platforms:[],providers:[]}};if(request.action==='payoutConfig')return payoutConfig(request,(options.platforms||[P]).length>0);return aggregate((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65)}
- };context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources)vm.runInContext(module.source,context,{filename:module.name,timeout:2000});vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
+ };context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>m.name!=='live-report-data.js'||options.reports))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
  return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
 }
 async function ready(options){const h=harness(options);await settle();if(h.L){h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59'}return h}
@@ -715,4 +715,24 @@ test('daily success metrics retain cross-day completions when that day has no cr
 
 test('analysis matrix expands cell and row aggregates without querying and keeps overview free of expansion controls',async()=>{
  const h=await ready();h.L.results=[completeAggregate(P,10,4)];h.L.results[0].groups.matrix[0].success_count=12;h.L.results[0].groups.matrix[0].success_amount='1200';h.L.matrixMode='exact';h.L.direction='charge';h.c.state.page='matrix';h.c.render();const before=h.calls.length;assert.match(h.html(),/liveMatrixSegment/);assert.match(h.html(),/明细/);assert.doesNotMatch(h.html(),/120\.00%/);h.c.liveMatrixSegment(encodeURIComponent(JSON.stringify({kind:'matrix',direction:'charge',hour:12,bucket:'200'})));assert.match(h.html(),/各平台占比/);assert.match(h.html(),/Synthetic platform/);assert.equal(h.calls.length,before);h.c.state.page='overview';h.c.render();assert.doesNotMatch(h.html(),/liveMatrixSegment|analysis-expand-table/);
+});
+
+test('overview discovers report-only teams across countries and reads them without issuing order or provider-option queries',async()=>{
+ const report={name:'BET6867',team:'胖虎',country:'胖虎巴西',system:'REPORT',dataset:'volume',rawCountry:'胖虎巴西',rawPlatform:'BET6867',directions:['charge','withdraw'],records:2,provenance:{kind:'google_sheets'}};
+ const h=await ready({reports:true,handler:q=>q.action==='catalog'?{platforms:[{...P,team:'M8'}]}:q.action==='collectedData'?{rows:[report]}:q.action==='reportSummary'?{feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'received',groups:[{grain:'provider',records:1,metrics:{amount:500,count:5,successAmount:null,successCount:null},providers:[{provider:'Example',records:1,metrics:{amount:500,count:5}}],daily:[]}]}))}:q.action==='rates'?{rows:[],total:0}:aggregate(P)});
+ assert.match(h.nodes.get('liveFilters').innerHTML,/value="胖虎"/);assert.match(h.nodes.get('liveFilters').innerHTML,/value="M8"/);
+ const before=h.calls.length;h.c.liveSetMultiOption('team',{value:'胖虎',checked:true});assert.equal(h.L.country,'胖虎巴西');await h.c.liveLoad();await settle();
+ const calls=h.calls.slice(before);assert(calls.some(q=>q.action==='reportSummary'));assert(!calls.some(q=>['aggregate','details','providerOptions'].includes(q.action)));
+ assert.match(h.html(),/BET6867/);assert.match(h.html(),/Google 表格 → Supabase/);assert.match(h.html(),/500\.00/);assert.doesNotMatch(h.html(),/df-collect|df-payout/,'report-only data never paints misleading zero-order cards');assert.match(h.nodes.get('liveFilters').innerHTML,/1 平台/);
+ h.c.setPage('time');await settle();assert.match(h.html(),/日报未提供|日报.*无法|源日报/);const n=h.calls.filter(q=>q.action==='reportSummary').length;h.c.setPage('overview');await settle();assert.match(h.html(),/BET6867/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,n,'same-range navigation reuses the complete report');
+});
+test('incomplete report read cannot remove already loaded native order summaries',async()=>{
+ const report={name:P.name,country:P.country,team:'M8',system:'REPORT',dataset:'volume',rawCountry:P.country,rawPlatform:P.name,directions:['charge'],records:1,provenance:{kind:'google_sheets'}};
+ const h=await ready({reports:true,handler:q=>q.action==='catalog'?{platforms:[{...P,team:'M8'}]}:q.action==='collectedData'?{rows:[report]}:q.action==='reportSummary'?Promise.reject(Error('synthetic report timeout')):q.action==='rates'?{rows:[],total:0}:aggregate(P)});
+ assert.equal(h.L.results.length,1);assert.match(h.html(),/df-collect/);assert.match(h.html(),/日报读取未完成/);assert.match(h.html(),/synthetic report timeout/);assert.doesNotMatch(h.html(),/所选日期未收到日报/);
+});
+
+test('report-only Panghu quick dates follow Brazil calendar at the India midnight boundary',async()=>{
+ const report={name:'BET6867',team:'胖虎',country:'胖虎巴西',system:'REPORT',dataset:'volume',rawCountry:'胖虎巴西',rawPlatform:'BET6867',directions:['charge'],records:1,provenance:{kind:'google_sheets'}};
+ const h=await ready({reports:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='collectedData'?{rows:[report]}:aggregate(P)});h.setNow('2026-09-26T02:00:00Z');h.c.liveSet('team','胖虎');h.c.livePeriod('yesterday',false);assert.equal(h.L.country,'胖虎巴西');assert.equal(h.L.from,'2026-09-24T00:00:00');assert.equal(h.L.to,'2026-09-24T23:59:59');assert.match(h.nodes.get('liveFilters').innerHTML,/America\/Sao_Paulo/);
 });

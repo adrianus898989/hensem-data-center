@@ -27,6 +27,7 @@ FILES = (
     "admin-live-provider-filter-performance.sql",
     "admin-live-sync-health.sql",
     "admin-live-drilldown.sql",
+    "admin-live-report-summary.sql",
 )
 
 
@@ -37,7 +38,7 @@ def build():
         if lines.count("begin;") != 1 or lines.count("commit;") != 1:
             raise ValueError(f"Unexpected transaction boundaries: {name}")
         parts.append(f"\n-- FILE: {name}\n" + "\n".join(line for line in lines if line not in ("begin;", "commit;")))
-    parts.append("\ncommit;\nselect 'admin-ui-20260926-v11' as applied_release;\n")
+    parts.append("\ncommit;\nselect 'admin-ui-20260926-v12' as applied_release;\n")
     return "\n".join(parts)
 
 
