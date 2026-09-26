@@ -460,11 +460,11 @@ test('provider expansion shows platform contributions without requests and leave
  h.L.results=[a,b];h.L.feeLookupRows=[];h.c.state.page='providers';h.c.render();const calls=h.calls.length;
  assert.match(h.html(),/代收创建金额/);assert.match(h.html(),/代收创建笔数/);assert.match(h.html(),/aria-expanded="false"/);
  h.c.providerSummaryToggle(0);assert.equal(h.calls.length,calls);assert.match(h.html(),/aria-expanded="true"/);
- const inner=h.html().match(/<div class="provider-platform-breakdown">([^]*?)<\/div><\/td>/)[1],t=renderedTables(inner)[0];assert.equal(t.rows.length,2);
- assert.deepEqual(t.rows.map(r=>plain(r[t.headers.indexOf('包网来源')])).sort(),['AR','NEW_AR']);
- assert.deepEqual(t.rows.map(r=>plain(r[t.headers.indexOf('金额占比')])).sort(),['40.00%','60.00%']);
- assert.deepEqual(t.rows.map(r=>plain(r[t.headers.indexOf('笔数占比')])).sort(),['40.00%','60.00%']);
- assert.equal(t.rows.reduce((n,r)=>n+Number(plain(r[t.headers.indexOf('成功金额')]).replaceAll(',','')),0),1000);
+ const children=[...h.html().matchAll(/<tr class="provider-platform-row">([^]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td>([^]*?)<\/td>/g)].map(c=>c[1]));assert.equal(children.length,2);
+ assert(children.every(r=>r.length===17));assert.deepEqual(children.map(r=>plain(r[1])).sort(),['AR','NEW_AR']);
+ assert.deepEqual(children.map(r=>plain(r[5])).sort(),['40.00%','60.00%']);
+ assert.deepEqual(children.map(r=>r[3].match(/笔数占比 ([0-9.]+%)/)[1]).sort(),['40.00%','60.00%']);
+ assert.equal(children.reduce((n,r)=>n+Number(plain(r[2]).replaceAll(',','')),0),1000);
  h.c.providerSummaryToggle(0);assert.doesNotMatch(h.html(),/provider-platform-breakdown/);
  h.L.queryWarnings=['Synthetic failed platform'];h.c.render();assert.match(h.html(),/部分平台读取失败/);
  h.c.state.page='overview';h.c.render();assert.doesNotMatch(h.html(),/provider-summary-report|provider-floating-head/);
@@ -686,4 +686,29 @@ test('overview fills all fee rollups, merges provider sources, and keeps manual 
 test('merged canonical provider order drawer includes matching aliases from each source',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222',source:'newar'},h=await ready({platforms:[P,p2]}),a=completeAggregate(P,5,3),b=completeAggregate(p2,5,3);a.groups.provider[0].provider='Intnet';b.groups.provider[0].provider='Intnet-QR';h.L.results=[a,b];h.L.loading=false;h.L.dirty=false;
  const reads=[];h.setHandler(q=>{reads.push(q);return detail(q.platformId===P.id?P:p2,3,q.offset,q.limit)});await h.c.liveProviderOrders('Intnet','','charge');assert.equal(reads.length,2);assert.deepEqual(reads.map(q=>q.platformId).sort(),[P.id,p2.id].sort());assert(reads.every(q=>q.providers[0]==='Intnet'&&q.status==='success'));assert.match(h.drawers.at(-1).html,/6 笔/);
+});
+
+test('overview adds direction-specific workorder rankings only beside the fee totals',async()=>{
+ const h=await ready();h.c.render();h.L.workorders={coverage:{complete:true},byProvider:[
+  {provider:'Intnet',direction:'charge',submittedCount:100,successCount:80,successAmount:8000,notReceivedCount:20,notReceivedAmount:2000},
+  {provider:'Intnet-QR',direction:'charge',submittedCount:50,successCount:40,successAmount:4000,notReceivedCount:10,notReceivedAmount:1000},
+  {provider:'GoodPay',direction:'charge',submittedCount:200,successCount:196,successAmount:19600,notReceivedCount:4,notReceivedAmount:400},
+  {provider:'NoSuccess',direction:'charge',submittedCount:40,successCount:0,successAmount:0,notReceivedCount:40,notReceivedAmount:5000},
+  {provider:'人工确认',direction:'charge',submittedCount:900,successCount:900,successAmount:900000,notReceivedCount:0,notReceivedAmount:0},
+  {provider:'PayoutOnly',direction:'withdraw',submittedCount:10,successCount:9,successAmount:900,notReceivedCount:1,notReceivedAmount:100}
+ ],rows:[{provider:'PageOnlyFake',direction:'charge',submittedCount:99999}]};
+ const before=h.calls.length;h.c.render();const ranks=[...h.html().matchAll(/<div class="df-workorder-ranks"[^]*?(?=<\/div><div class="df-state-tail">)/g)].map(x=>x[0]);
+ assert.equal(ranks.length,2);assert.match(ranks[0],/存款 · 未到账最多/);assert.match(ranks[0],/存款 · 工单到账率较高/);assert(ranks[0].indexOf('NoSuccess')<ranks[0].indexOf('Intnet'));assert.match(ranks[0],/30 笔/);assert.match(ranks[0],/3,000/);assert.match(ranks[0],/98\.00%/);assert.match(ranks[0],/196\/200/);assert.match(ranks[0],/19,600/);assert.doesNotMatch(ranks[0],/PayoutOnly|人工确认|PageOnlyFake|Intnet-QR/);assert.match(ranks[1],/PayoutOnly/);assert.doesNotMatch(ranks[1],/GoodPay|Intnet/);assert.equal(h.calls.length,before,'rendering ranks reuses the workorder summary');
+ assert.match(h.html(),/估算手续费[^]*?df-workorder-ranks[^]*?df-state-tail/);
+});
+test('workorder ranks distinguish partial coverage, no data and failed reads',async()=>{
+ const h=await ready();h.c.render();h.L.workorders={coverage:{complete:false},byProvider:[{provider:'SomePay',direction:'charge',submittedCount:1,successCount:1,successAmount:10,notReceivedCount:0,notReceivedAmount:0}]};h.c.render();assert.match(h.html(),/工单到账率较高<small>部分/);assert.match(h.html(),/暂无已采集的取款三方工单/);assert.match(h.html(),/已采集工单暂无未到账/);
+ h.L.workorders=null;h.L.workordersError='Synthetic timeout';h.c.render();assert.match(h.html(),/工单读取未完成/);assert.doesNotMatch(h.html(),/SomePay|已采集工单暂无未到账/);
+});
+
+test('daily success metrics retain cross-day completions when that day has no created orders',async()=>{
+ const h=await ready(),a=completeAggregate(P,0,4);a.groups.daily=[{...a.summary[0],provider:'Synthetic provider',date:'2026-09-25'}];h.L.results=[a];h.L.to='2026-09-25T23:59:59';h.L.from='2026-09-25T00:00:00';h.L.dailyMetric='success_amount';h.c.state.page='provider_daily';h.c.render();
+ let matrix=h.html().match(/<div class="[^"]*pd-matrix-wrap live-daily-matrix">([^]*?)<\/div>/)[1];assert.match(matrix,/2026-09-25[^]*?>400\.00<\/button>/);
+ h.L.dailyMetric='success_count';h.c.render();matrix=h.html().match(/<div class="[^"]*pd-matrix-wrap live-daily-matrix">([^]*?)<\/div>/)[1];assert.match(matrix,/2026-09-25[^]*?>4<\/button>/);
+ h.L.dailyMetric='rate';h.c.render();matrix=h.html().match(/<div class="[^"]*pd-matrix-wrap live-daily-matrix">([^]*?)<\/div>/)[1];assert.doesNotMatch(matrix,/Infinity|NaN|400\.00/);
 });

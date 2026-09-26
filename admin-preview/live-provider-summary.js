@@ -104,6 +104,39 @@
   for(const items of denominators.values()){const total=plus(items),fees=feeSummary(items);for(const row of items){row.success_amount_share=ratio(row.success_amount,total.success_amount);row.success_count_share=ratio(row.success_count,total.success_count);row.fee_share=ratio(row.estimated_fee,fees.amount);row.fee_share_complete=fees.complete}}
   return groups;
  }
+ // A platform child uses the same success-time facts as its parent. Work-order
+ // cohorts come only from a complete aggregate field, never the paginated rows.
+ function buildPlatformRows({row,workorders,rates,country,plus,combine}){
+  const identity=r=>r.platformId?'id:'+r.platformId:JSON.stringify([r.country||country,r.platform,r.source,r.currency]);
+  const leaves=(row.items||[]).map(r=>({...r,_platformIdentity:identity(r)}));
+  const rows=combine(leaves,['_platformIdentity','platformId','platform','source','country','currency']).map(r=>({...r,direction:row.direction,provider:row.provider,
+   ...feeFacts(r.items,rates,country,Number(r.success_count||0)),issues:null,issueOnly:false}));
+  const full=Array.isArray(workorders?.byPlatformProvider);
+  if(!full)return rows.sort((a,b)=>Number(b.success_amount)-Number(a.success_amount));
+  const entries=workorders.byPlatformProvider.filter(w=>w.direction===row.direction
+   &&providerName(canonical(w.provider,w.country||country))===row.provider
+   &&(!w.country||!country||w.country===country));
+  const addIssue=(target,w)=>{if(!target.issues)target.issues=Object.fromEntries(issueKeys.map(k=>[k,0]));for(const k of issueKeys)target.issues[k]+=Number(w[k]||0)};
+  for(const w of entries){
+   // The API resolves identities against the authorized catalog. A missing ID
+   // is intentionally not guessed from a shared display name across sources.
+   const matches=w.platformId?rows.filter(r=>r.platformId===w.platformId):[];
+   if(matches.length===1){addIssue(matches[0],w);continue}
+   const id=JSON.stringify([w.country||country,w.platformId||'',w.sourcePlatform||w.platform,w.source||'']);
+   let target=rows.find(r=>r.issueOnly&&r._issueIdentity===id);
+   if(!target){target={...plus([]),_issueIdentity:id,platformId:w.platformId||null,platform:w.platform||w.sourcePlatform||'未匹配平台',
+    source:w.source||'工单记录（包网未匹配）',country:w.country||country,currency:row.currency,direction:row.direction,provider:row.provider,
+    items:[],issueOnly:true,issues:null,estimated_fee:null,fee_complete:false,fee_rate_label:'—'};rows.push(target)}
+   addIssue(target,w);
+  }
+  // Absence is a known zero only for a platform whose work-order source was
+  // actually collected. An uncovered platform is unavailable, not zero.
+  for(const r of rows){if(r.issues||r.issueOnly)continue;
+   const observed=(workorders.coverage?.platforms||[]).filter(p=>p.platformId&&p.platformId===r.platformId);
+   if(observed.some(p=>Number(p.days)>0))r.issues=Object.fromEntries(issueKeys.map(k=>[k,0]));
+  }
+  return rows.sort((a,b)=>Number(a.issueOnly)-Number(b.issueOnly)||Number(b.success_amount)-Number(a.success_amount)||String(a.platform).localeCompare(String(b.platform)));
+ }
  function queryCoverage(L){
   const failures=Array.isArray(L.queryFailures)&&L.queryFailures.length?L.queryFailures:(L.queryWarnings||[]).map(message=>({message}));
   const received=new Set((L.results||[]).map(r=>r.platform?.id||JSON.stringify([r.platform?.source,r.platform?.country,r.platform?.name]))).size;
@@ -195,12 +228,25 @@
    L.workordersLoading?'<div class="live-status">正在读取'+issueLabel+'工单汇总…</div>':'';
   const footers=max>1?[sumRow(shown,readState.partial?'当前页已读取合计':'当前页汇总'),sumRow(rows,readState.partial?'已读取合计':'全部汇总')]:[sumRow(rows,readState.partial?'已读取合计':'合计')];
   const breakdown=row=>{
-   const items=combine(row.items,['platformId','platform','source','currency']).sort((a,b)=>Number(b.success_amount)-Number(a.success_amount));
-   return '<div class="provider-platform-breakdown"><strong>'+E(row.provider)+' · 平台占比</strong><span class="live-definition">成功金额、成功笔数按成功时间；占比以'+(readState.partial?'已读取平台范围':'当前筛选范围')+'内此三方为分母。</span>'+table(['平台','包网来源','成功金额','金额占比','成功笔数','笔数占比','创建金额','创建笔数','成功率'],items.map(r=>[E(r.platform),E(r.source),N(r.success_amount),row.success_amount==null||r.success_amount==null?'—':R(r.success_amount,row.success_amount),C(r.success_count),R(r.success_count,row.success_count),N(r.all_amount),C(r.all_count),r.created_success_count==null?'—':R(r.created_success_count,r.all_count)]),'provider-platform-table')+'</div>';
+   const items=buildPlatformRows({row,workorders:L.workorders,rates:L.feeLookupRows,country:L.country,plus,combine});
+   const share=(value,denominator)=>value==null||denominator==null?'—':R(value,denominator);
+   const details=items.map(r=>{
+    const w=r.issues,unknown=r.issueOnly,rate=r.created_success_count==null?'—':R(r.created_success_count,r.all_count);
+    const amount=key=>unknown?'—':N(r[key]),count=key=>unknown?'—':C(r[key]);
+    const values=[E(r.platform)+(unknown?'<small class="cell-sub">仅有工单数据</small>':''),E(r.source||'未提供'),
+     amount('success_amount'),count('success_count')+(unknown?'':'<small class="cell-sub">笔数占比 '+share(r.success_count,row.success_count)+'</small>'),
+     '<span title="按创建订单：'+C(r.created_success_count)+' / '+C(r.all_count)+' 笔">'+(unknown?'—':rate)+'</span>',unknown?'—':share(r.success_amount,row.success_amount),
+     ...(direction==='withdraw'?[amount('pending_amount'),count('pending_count')]:[]),E(r.fee_rate_label),unknown?'—':feeCell(r),unknown?'—':share(r.estimated_fee,row.estimated_fee),
+     ...[['submittedAmount','submittedCount'],['successAmount','successCount'],['notReceivedAmount','notReceivedCount']].flatMap(([a,n])=>!w?['—','—']:[N(w[a]),C(w[n])]),
+     !w?'—':'<span title="工单金额成功率 '+R(w.successAmount,w.submittedAmount)+'">'+R(w.successCount,w.submittedCount)+'</span>','—'];
+    return '<tr class="provider-platform-row">'+values.map(value=>'<td>'+value+'</td>').join('')+'</tr>';
+   }).join('');
+   const issueNote=!Array.isArray(L.workorders?.byPlatformProvider)?' 工单平台明细尚未返回，显示 —；不使用分页记录推算。':items.some(r=>r.issueOnly)?' 仅有工单或包网归属不明的平台单列，不计入交易平台数，未重复分摊。':'';
+   return '<tr class="provider-expanded-row"><td colspan="'+headers.length+'"><div class="provider-platform-breakdown"><strong>'+E(row.provider)+' · 平台明细</strong><span class="live-definition">第一列为平台，第二列为包网。成功金额、成功笔数按成功时间；成功率按创建订单。金额、笔数占比以'+(readState.partial?'已读取平台范围':'当前筛选范围')+'内此三方为分母；手续费占比以此三方已匹配手续费为分母。'+issueNote+'</span></div></td></tr><tr class="provider-platform-labels">'+headers.map((h,i)=>'<td>'+E(i===0?'平台':i===1?'包网':i===headers.length-1?'':h.replace(/<[^>]*>/g,'').replace(/ [↕↑↓]$/, ''))+'</td>').join('')+'</tr>'+details;
   };
   let reportTable=table(headers,shown.map((r,i)=>cells(r,providerCell(r),false,i)),'provider-summary-table provider-compact-table',footers);
   if(shown.some(r=>expanded[rowKey(r)])){
-   const body=shown.map((r,i)=>'<tr>'+cells(r,providerCell(r),false,i).map(c=>'<td>'+c+'</td>').join('')+'</tr>'+(expanded[rowKey(r)]?'<tr class="provider-expanded-row"><td colspan="'+headers.length+'">'+breakdown(r)+'</td></tr>':'')).join('');
+   const body=shown.map((r,i)=>'<tr>'+cells(r,providerCell(r),false,i).map(c=>'<td>'+c+'</td>').join('')+'</tr>'+(expanded[rowKey(r)]?breakdown(r):'')).join('');
    reportTable=reportTable.replace(/<tbody>[\s\S]*?<\/tbody>/,()=>'<tbody>'+body+'</tbody>');
   }
   return '<div class="provider-summary-report">'+readNotice(ctx)+'<div class="provider-summary-heading"><span class="provider-scope-note">'+E(L.country)+' · '+E(L.currency)+' · '+E(L.from.replace('T',' '))+' 至 '+E(L.to.replace('T',' '))+coverageNote+'</span></div>'+
@@ -208,6 +254,6 @@
    box(name+'三方汇总'+(readState.partial?'（部分结果）':'')+' · '+issueLabel+'工单',reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
     '成功数据按成功时间；成功率按本期创建订单计算。昨日对比使用同平台、同币种、同一时段，成功率差额为百分点。三方及平台卡片统计有交易的范围；工单按所选整日统计，未采集显示 —。点击费率查看来源与匹配规则；手续费按当前匹配费率估算。')+'</div>';
  }
- root.HensemProviderSummary={render,buildRows,parseFee,estimate,feeSummary,feeCandidates,confirmedFeeRule,queryCoverage,overviewDimensions,isProviderBusiness};
+ root.HensemProviderSummary={render,buildRows,parseFee,estimate,feeSummary,feeCandidates,confirmedFeeRule,queryCoverage,overviewDimensions,isProviderBusiness,buildPlatformRows};
  if(typeof module!=='undefined')module.exports=root.HensemProviderSummary;
 })(typeof window!=='undefined'?window:globalThis);

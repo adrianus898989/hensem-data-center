@@ -15,14 +15,17 @@ FILES = (
     "admin-live-platform-catalog-map.sql",
     "admin-live-configuration-query.sql",
     "admin-live-configuration-workorders.sql",
+    "admin-live-workorder-platform-breakdown.sql",
     "admin-live-withdraw-pages.sql",
     "admin-live-withdraw-templates.sql",
     "admin-live-withdraw-reasons.sql",
+    "admin-live-withdraw-note-normalization.sql",
     "admin-live-withdraw-notes.sql",
     "admin-live-deposit-issues.sql",
     "admin-live-order-intake.sql",
     "admin-live-collected-data.sql",
     "admin-live-provider-filter-performance.sql",
+    "admin-live-sync-health.sql",
 )
 
 
@@ -33,7 +36,7 @@ def build():
         if lines.count("begin;") != 1 or lines.count("commit;") != 1:
             raise ValueError(f"Unexpected transaction boundaries: {name}")
         parts.append(f"\n-- FILE: {name}\n" + "\n".join(line for line in lines if line not in ("begin;", "commit;")))
-    parts.append("\ncommit;\nselect 'admin-ui-20260926-v9' as applied_release;\n")
+    parts.append("\ncommit;\nselect 'admin-ui-20260926-v10' as applied_release;\n")
     return "\n".join(parts)
 
 

@@ -3,15 +3,21 @@
  const addDay=(day,n)=>{const d=new Date(day+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)};
  const isPanghuCountry=country=>['胖虎巴西','BR_PANGHU','PANGHU BRAZIL'].includes(String(country??'').trim().toUpperCase());
  const duration=value=>{if(value==null||!Number.isFinite(Number(value)))return '—';const n=Math.max(0,Math.round(Number(value)));return (n>=3600?Math.floor(n/3600)+'时':'')+(n>=60?Math.floor(n%3600/60)+'分':'')+(n%60)+'秒'};
+ function decodeNote(value){
+  let text=String(value??'');const named={amp:'&',lt:'<',gt:'>',quot:'"',apos:"'",nbsp:' ',lpar:'(',rpar:')',lbrack:'[',rbrack:']'};
+  for(let pass=0;pass<3;pass++){const before=text;text=text.replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|amp|lt|gt|quot|apos|nbsp|lpar|rpar|lbrack|rbrack);/gi,(entity,key)=>{const name=key.toLowerCase();if(named[name]!=null)return named[name];const code=name.startsWith('#x')?parseInt(name.slice(2),16):parseInt(name.slice(1),10);return code>0&&code<=0x10ffff&&!(code>=0xd800&&code<=0xdfff)?String.fromCodePoint(code):entity});if(text===before)break}
+  return text;
+ }
  function cleanNote(value){
-  const lines=String(value??'').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
-  return lines.filter((line,i)=>!lines.slice(i+1).some(later=>later===line||(/[.]{3}$|…+$/.test(line)&&later.startsWith(line.replace(/([.]{3}|…+)$/,''))))).join('\n');
+  const lines=decodeNote(value).replace(/<br\s*\/?>/gi,'\n').split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const comparable=line=>line.replace(/[\[\]()【】（）]/g,'');
+  return lines.filter((line,i)=>!lines.slice(i+1).some(later=>later===line||(/[.]{3}$|…+$/.test(line)&&comparable(line).replace(/([.]{3}|…+)$/,'').length>0&&comparable(later).startsWith(comparable(line).replace(/([.]{3}|…+)$/,''))))).join('\n');
  }
  root.HensemLiveWithdrawPages={create(ctx){
   const {L,E,C,R,N,box,table,request,render}=ctx;
-  const S={data:null,error:'',loading:false,dirty:false,serial:0,view:'auto',platforms:[],account:'',sort:'total',asc:false,daily:false,page:1,size:20,open:false,search:'',reason:null,reasonData:null,reasonError:'',reasonBusy:false,reasonSerial:0,reasonPage:1,reasonLabel:'',reasonQuery:'',reasonTrigger:null,originalNote:'',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false};
+  const S={data:null,error:'',loading:false,dirty:false,serial:0,view:'auto',platforms:[],account:'',sort:'total',asc:false,daily:false,page:1,size:20,open:false,search:'',reason:null,reasonData:null,reasonError:'',reasonBusy:false,reasonSerial:0,reasonPage:1,reasonLabel:'',reasonQuery:'',reasonTrigger:null,originalNote:'',originalNoteTitle:'驳回原文',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false};
   const jsArgument=value=>JSON.stringify(String(value??'')).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const sourceNote=(value,empty='（源备注为空）')=>{const full=String(value??'').trim()||empty,preview=full.length>96?full.slice(0,96)+'…':full;return '<button type="button" class="withdraw-source-note" title="点击查看完整原文" onclick="withdrawReasonOriginal('+jsArgument(full)+')">'+E(preview)+'</button>'};
+  const sourceNote=(value,empty='（源备注为空）',title='驳回原文',label='')=>{const full=cleanNote(value)||empty,preview=label||(full.length>96?full.slice(0,96)+'…':full);return '<button type="button" class="withdraw-source-note" title="点击查看完整原文" onclick="withdrawReasonOriginal('+jsArgument(full)+','+jsArgument(title)+')">'+E(preview)+'</button>'};
   const reasonCache=new Map();
   const view=()=>ctx.page()==='withdraw_operators'?'operators':'auto';
   const sumKey=()=>view()==='operators'?'processed':'total';
@@ -54,19 +60,19 @@
     }
     const detailButton=(index,key,label='查看订单')=>'<button class="btn small" '+(d.canViewOrders===false?'disabled':'')+' onclick="withdrawReasonDrill('+index+',\''+key+'\')">'+label+'</button>';
     if(r.kind==='orders')body+=table(['订单号 / 金额','驳回原因 / 完整原备注','操作人账号','申请 / 完成时间','自动出款拦截 / 转人工说明'],rows.map(x=>[
-     '<strong class="withdraw-order-number">'+E(x.orderNumber)+'</strong><small class="cell-sub">'+N(x.amount)+' · '+E(x.status)+'</small>',
+     '<strong class="withdraw-order-number" title="'+E(x.orderNumber)+'">'+E(x.orderNumber)+'</strong><small class="cell-sub">'+N(x.amount)+' · '+E(x.status)+'</small>',
      '<span class="withdraw-reason-category">'+E(x.category||'未归类')+'</span>'+sourceNote(cleanNote(x.rejectionReason)||x.rawRejectionReason),
-     E(x.operator||'（源账号为空）'),'<span class="withdraw-order-time">'+E(String(x.createdAt||'—').replace('T',' '))+'</span><small class="cell-sub">'+E(String(x.completedAt||'—').replace('T',' '))+'</small>',
-     '<div class="withdraw-full-note">'+E(cleanNote(x.manualRemark)||'（源字段为空）')+'</div>']),'withdraw-reason-table withdraw-order-table');
+     '<span class="withdraw-operator-name" title="'+E(x.operator||'（源账号为空）')+'">'+E(x.operator||'（源账号为空）')+'</span>','<span class="withdraw-order-time">'+E(String(x.createdAt||'—').replace('T',' '))+'</span><small class="cell-sub">'+E(String(x.completedAt||'—').replace('T',' '))+'</small>',
+     sourceNote(x.manualRemark,'（源字段为空）','自动出款拦截原文')]),'withdraw-reason-table withdraw-order-table');
     else if(r.kind==='categories')body+=table(['驳回原文','笔数','占全部驳回订单','详情'],rows.map((x,i)=>[sourceNote(x.sourceReason||x.rawReason||x.reason),C(x.count),share(x.count),detailButton(i,'category')+' <button class="link" onclick="withdrawReasonVariants('+i+')">原备注分布</button>']),'withdraw-reason-table withdraw-distribution-table');
     else if(r.kind==='operators')body+=table(['操作人账号','驳回笔数','占全部驳回订单','原因类别','备注为空','详情'],rows.map((x,i)=>[E(x.operator||'（源账号为空）'),C(x.count),share(x.count),C(x.categoryCount),C(x.missingReasonCount),detailButton(i,'operator')]),'withdraw-reason-table withdraw-distribution-table');
-    else body+=table([blocking?'自动出款拦截分类':'驳回原文','笔数',blocking?'占已记录说明':'占全部驳回订单',...(blocking?[]:['详情'])],rows.map((x,i)=>[(blocking?E(cleanNote(x.reason)):sourceNote(x.reason)),C(x.count),share(x.count),...(blocking?[]:[detailButton(i,'reason')])]),'withdraw-reason-table withdraw-distribution-table');
+    else body+=table([blocking?'自动出款拦截分类':'驳回原文','笔数',blocking?'占已记录说明':'占全部驳回订单',...(blocking?[]:['详情'])],rows.map((x,i)=>[(blocking?sourceNote(x.sourceReason||x.reason,'（源字段为空）',Number(x.sourceVariantCount)>1?'自动出款拦截原文（代表样本）':'自动出款拦截原文',cleanNote(x.reason))+(Number(x.sourceVariantCount)>1?'<small class="cell-sub">已合并 '+C(x.sourceVariantCount)+' 种原文</small>':''):sourceNote(x.reason)),C(x.count),share(x.count),...(blocking?[]:[detailButton(i,'reason')])]),'withdraw-reason-table withdraw-distribution-table');
     if(!rows.length)body+='<div class="live-empty">'+(blocking?'源订单未记录自动出款拦截 / 转人工说明。':'当前条件下没有驳回记录。')+'</div>';
     body+=pagebar(Number(d.total||0),S.reasonPage,20,true);
    }
    return '<div class="withdraw-drawer-backdrop" onclick="if(event.target===this)withdrawReasonClose()" onkeydown="withdrawReasonKey(event)"><section id="withdraw-reasons" class="withdraw-drawer" role="dialog" aria-modal="true" aria-label="平台原因详情" tabindex="-1"><header class="withdraw-drawer-head"><div><span>'+E(r.country)+' · '+E(r.platform)+'</span><h2>'+(blocking?'自动出款原因':'驳回原因分析')+'</h2></div><label>当地日期<input aria-label="原因日期" type="date" value="'+E(r.date)+'" onchange="withdrawReasonDate(this.value)"></label><button class="btn" aria-label="关闭原因详情" onclick="withdrawReasonClose()">关闭 ✕</button></header>'+nav+'<div class="withdraw-drawer-body">'+body+'</div><footer class="withdraw-drawer-foot">按申请日期归入当地日，与日报范围一致。分类参考 M8 各国话术；保留完整原备注，由你核对驳回是否恰当。</footer></section></div>'+(S.originalNote?originalNoteDialog():'');
   }
-  function originalNoteDialog(){return '<div class="withdraw-original-backdrop" onclick="if(event.target===this)withdrawReasonOriginalClose()"><section class="withdraw-original-dialog" role="dialog" aria-modal="true" aria-label="驳回原文"><header><h2>驳回原文</h2><button class="btn" onclick="withdrawReasonOriginalClose()">关闭 ✕</button></header><pre>'+E(S.originalNote)+'</pre><div class="config-actions"><button class="btn primary" onclick="withdrawReasonOriginalClose()">知道了</button></div></section></div>'}
+  function originalNoteDialog(){return '<div class="withdraw-original-backdrop" onclick="if(event.target===this)withdrawReasonOriginalClose()"><section class="withdraw-original-dialog" role="dialog" aria-modal="true" aria-label="'+E(S.originalNoteTitle)+'"><header><h2>'+E(S.originalNoteTitle)+'</h2><button class="btn" onclick="withdrawReasonOriginalClose()">关闭 ✕</button></header><pre>'+E(S.originalNote)+'</pre><div class="config-actions"><button class="btn primary" onclick="withdrawReasonOriginalClose()">知道了</button></div></section></div>'}
   function draw(){const operators=view()==='operators',d=S.data||{},t=d.totals||{},prior=d.comparison?.complete===false?null:d.previousTotals,den=operators?'processed':'total',rows=d.rows||[];
    const controls=toolbar();let body='';if(S.dirty)return controls+'<div class="live-status">筛选条件已修改，点击查询读取正式统计。</div>';if(S.loading)return controls+'<div class="live-status">正在读取'+(operators?'操作人统计':'自动出款统计')+'…</div>';if(S.error)return controls+'<div class="live-status live-error">'+E(S.error)+' <button class="link" onclick="withdrawLoad()">重试</button></div>';if(!S.data)return controls+'<div class="live-status">正在准备统计查询…</div>';
    const metrics=operators?[['processed','处理笔数'],['success','成功笔数'],['rejected','驳回笔数'],['operators','操作人数量'],['avgSeconds','平均用时']]:[['total','总笔数'],['autoCount','自动出款'],['manualCount','人工处理'],['success','成功'],['rejected','驳回']];
@@ -127,7 +133,7 @@
   root.withdrawReasonQuery=value=>{S.reasonQuery=String(value).slice(0,200)};
   root.withdrawReasonSearch=()=>{if(!S.reason)return;S.reason.query=S.reasonQuery.trim();S.reasonPage=1;reasonsLoad()};
   root.withdrawReasonPage=page=>{if(!Number.isInteger(page)||page<1)return;S.reasonPage=page;reasonsLoad()};
-  root.withdrawReasonOriginal=value=>{S.originalNote=String(value??'');render();document.querySelector?.('.withdraw-original-dialog')?.querySelector('button')?.focus?.({preventScroll:true})};
+  root.withdrawReasonOriginal=(value,title='驳回原文')=>{S.originalNote=cleanNote(value);S.originalNoteTitle=String(title||'驳回原文');render();document.querySelector?.('.withdraw-original-dialog')?.querySelector('button')?.focus?.({preventScroll:true})};
   root.withdrawReasonOriginalClose=()=>{S.originalNote='';render();reasonFocus()};
   root.withdrawReasonClose=()=>{const trigger=S.reasonTrigger;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';render();if(trigger)document.querySelector?.('[data-withdraw-reason="'+trigger.index+'-'+trigger.kind+'"]')?.focus?.({preventScroll:true})};root.withdrawReasonRetry=()=>reasonsLoad(true);
   root.withdrawReasonKey=event=>{if(event.key==='Escape'){event.preventDefault();root.withdrawReasonClose();return}if(event.key!=='Tab')return;const panel=document.getElementById('withdraw-reasons'),items=[...(panel?.querySelectorAll('button:not([disabled]),input:not([disabled]),[tabindex="0"]')||[])].filter(e=>e.getClientRects().length);const first=items[0],last=items[items.length-1];if(!first)return;if(event.shiftKey&&(document.activeElement===first||document.activeElement===panel)){event.preventDefault();last.focus()}else if(!event.shiftKey&&(document.activeElement===last||document.activeElement===panel)){event.preventDefault();first.focus()}};
@@ -140,5 +146,5 @@
   root.withdrawNoteSave=async()=>{if(!S.note||S.noteSaving||!S.data?.canWriteNotes)return;const target=S.note;S.noteSaving=true;S.noteError='';render();try{const saved=await request({action:'withdrawNote',date:target.date,country:target.storageCountry||target.country,platform:target.storagePlatform,reason:S.noteDraft,expectedVersion:target.expectedVersion});if(S.note!==target)return;S.data.notes=[...(S.data.notes||[]).filter(n=>!(n.date===saved.date&&n.platform===saved.platform)),saved];S.noteSaving=false;S.note=null;render()}catch(e){if(S.note!==target)return;S.noteSaving=false;S.noteError=e.message||'备注保存失败，输入已保留';render()}};
   return {render:draw,load,state:S,query,cancel:()=>{reasonCache.clear();S.serial++;S.reasonSerial++;S.loading=false;S.reasonBusy=false;S.reason=null;S.data=null;S.note=null;S.noteSample=false}};
  }};
- if(typeof module!=='undefined')module.exports={addDay,duration,cleanNote};
+ if(typeof module!=='undefined')module.exports={addDay,duration,cleanNote,decodeNote};
 })(typeof window!=='undefined'?window:globalThis);

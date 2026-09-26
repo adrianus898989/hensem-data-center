@@ -228,3 +228,15 @@ body.live-admin .workorder-summary-metrics{gap:6px;margin-bottom:8px}
 body.live-admin .workorder-summary-metrics .live-metric{padding:6px 9px;border-radius:5px}
 body.live-admin .workorder-summary-metrics .live-metric label{font-size:10px;margin-bottom:3px;line-height:1.3}
 body.live-admin .workorder-summary-metrics .live-metric strong{font-size:16px;line-height:1.3}
+
+/* Order remarks stay inside their own column; complete originals open on click. */
+body.live-admin .withdraw-order-table table{width:100%;min-width:1120px;table-layout:fixed}
+body.live-admin .withdraw-order-table th:nth-child(1){width:240px}
+body.live-admin .withdraw-order-table th:nth-child(2){width:30%}
+body.live-admin .withdraw-order-table th:nth-child(3){width:128px}
+body.live-admin .withdraw-order-table th:nth-child(4){width:178px}
+body.live-admin .withdraw-order-table th:nth-child(5){width:auto}
+body.live-admin .withdraw-order-table td{min-width:0;overflow:hidden}
+body.live-admin .withdraw-order-table .withdraw-source-note{width:100%;min-width:0;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+body.live-admin .withdraw-order-table .withdraw-order-number,body.live-admin .withdraw-order-table .withdraw-operator-name{display:block;max-width:100%;white-space:nowrap;overflow-wrap:normal;word-break:normal;overflow:hidden;text-overflow:ellipsis}
+body.live-admin .withdraw-order-table .withdraw-order-time{display:block;white-space:nowrap;overflow-wrap:normal}
