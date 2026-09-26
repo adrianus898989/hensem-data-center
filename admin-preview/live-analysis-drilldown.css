@@ -1,0 +1,23 @@
+/* Scoped only to the four analysis drilldowns; overview dimensions keep their layout. */
+body.live-admin .analysis-compact .analysis-expand-table>table,body.live-admin .latency-v3 .analysis-expand-table>table{width:100%;table-layout:auto}
+body.live-admin .analysis-compact .analysis-expand-table>table>thead>tr>th,body.live-admin .analysis-compact .analysis-expand-table>table>tbody>tr>td,body.live-admin .latency-v3 .analysis-expand-table>table>thead>tr>th,body.live-admin .latency-v3 .analysis-expand-table>table>tbody>tr>td{padding:7px 8px;font-size:10px;white-space:nowrap;min-width:0}
+body.live-admin .analysis-compact .analysis-expand-table>table>thead>tr>th:first-child,body.live-admin .analysis-compact .analysis-expand-table>table>tbody>tr>td:first-child{width:45px;max-width:150px}
+body.live-admin .analysis-compact .analysis-expand-table>table>thead>tr>th:nth-child(2){width:125px}
+body.live-admin .analysis-expand-table>table>tbody>tr>td:last-child{width:45px}
+body.live-admin .analysis-expanded-row>td{padding:0!important;white-space:normal!important;background:#f5f8ff}
+body.live-admin .analysis-drilldown{padding:10px 12px;min-width:0;white-space:normal}
+body.live-admin .analysis-drilldown-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;font-size:11px}
+body.live-admin .analysis-drilldown .tabs button{font-size:10px;padding:5px 9px}
+body.live-admin .analysis-detail-table{max-height:380px;overflow:auto;border:1px solid #dbe4f5;border-radius:4px;margin-top:8px}
+body.live-admin .analysis-detail-table table{width:100%;table-layout:auto}
+body.live-admin .analysis-detail-table th,body.live-admin .analysis-detail-table td{padding:6px 9px!important;min-width:0!important;max-width:none!important;font-size:10px!important;white-space:nowrap!important;text-align:right}
+body.live-admin .analysis-detail-table th:first-child,body.live-admin .analysis-detail-table td:first-child{text-align:left}
+body.live-admin .analysis-detail-table thead th{position:sticky;top:0;background:#eef3ff;z-index:1}
+body.live-admin .analysis-drilldown label{font-size:11px}
+body.live-admin .analysis-drilldown select{margin-left:6px;border:1px solid #d7e1f4;border-radius:4px;padding:5px 8px;max-width:240px;color:inherit;background:white}
+body.live-admin .analysis-note,body.live-admin .analysis-status{color:#7589a8;font-size:10px;line-height:1.5;margin-top:7px}
+body.live-admin .analysis-matrix .analysis-expand-table>table{min-width:1450px}
+body.live-admin .analysis-matrix .analysis-expand-table>table>thead>tr>th:nth-child(2){width:auto}
+body.live-admin .analysis-matrix .analysis-expand-table>table>tbody>tr>td{padding:5px 4px}
+body.live-admin .analysis-matrix-cell{display:flex;flex-direction:column;align-items:center;gap:2px;border:0;background:transparent;color:inherit;font:inherit;width:100%;cursor:pointer;padding:2px}
+body.live-admin .analysis-matrix-cell:hover{background:#eaf0ff;border-radius:3px;color:#3152cc}

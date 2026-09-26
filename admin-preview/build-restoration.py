@@ -11,9 +11,9 @@ legacy_sha256 = 'da886af1bf4c96efbbd1bfcb568b41b88d057208214e031d53307b40a91a3c9
 if hashlib.sha256(legacy_adapter.encode('utf-8')).hexdigest() != legacy_sha256:
     raise SystemExit('Deployed legacy adapter mismatch. Keep legacy-live-data.js frozen; edit live-data.js instead.')
 names = ['live-comparison.js', 'live-reference-layout.js', 'live-empty-pages.js',
-         'live-pages-reference.js', 'live-rates-restored.js', 'live-duration-reference.js',
+         'live-analysis-drilldown.js', 'live-pages-reference.js', 'live-rates-restored.js', 'live-duration-reference.js',
          'live-payout-config.js', 'live-filter-controls.js', 'live-configuration.js', 'live-provider-aliases.js', 'live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js', 'live-collected-data.js', 'live-withdraw-pages.js', 'live-deposit-issues.js', 'live-sync-health.js', 'live-data.js']
-styles = ['live-restored.css', 'live-reference-pages.css', 'live-payout-config.css', 'live-configuration.css', 'live-sync-health.css']
+styles = ['live-restored.css', 'live-reference-pages.css', 'live-payout-config.css', 'live-configuration.css', 'live-sync-health.css', 'live-analysis-drilldown.css']
 values = {'oldAdapter': legacy_adapter,
           'newModules': '\n'.join((base / name).read_text() for name in names),
           'restoredCss': '\n'.join((base / name).read_text() for name in styles)}

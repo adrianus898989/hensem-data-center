@@ -4,7 +4,7 @@ import { validateConfigurationRequest } from "./adminConfigurationRequest";
 export const LIVE_REQUEST = "hensem-admin-live-request";
 export const LIVE_RESPONSE = "hensem-admin-live-response";
 const actions = ["catalog","syncHealth","collectedData","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
-const keys = new Set(["sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus"]);
+const keys = new Set(["sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus"]);
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
@@ -13,7 +13,30 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(p.action!=="depositIssues"&&["dateMode","match","followupStatus"].some(k=>p[k]!==undefined))throw Error("核对筛选仅用于存款未到账页面");
   if(p.action!=="withdrawReasons"&&["category","reasonKey","operatorKey"].some(k=>p[k]!==undefined))throw Error("原因筛选仅用于驳回分析");
   if(["providerOptions","configurationAccess","configurationWrite"].includes(String(p.action)))return validateConfigurationRequest(p);
-  if(p.view!==undefined&&(!["aggregate","autoWithdraw","depositIssues"].includes(String(p.action))||(p.action==="aggregate"&&!["full","providers"].includes(String(p.view)))))throw Error("统计页面类型无效");
+  if(p.view!==undefined&&(!["aggregate","autoWithdraw","depositIssues"].includes(String(p.action))||(p.action==="aggregate"&&!["full","providers","drilldown"].includes(String(p.view)))))throw Error("统计页面类型无效");
+  const drilldown=p.action==="aggregate"&&p.view==="drilldown";
+  if(!drilldown&&["hour","bucket","cumulative"].some(key=>p[key]!==undefined))throw Error("分段条件仅用于每日对比");
+  if(drilldown){
+    const allowed=new Set(["action","view","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","kind","hour","bucket","cumulative"]);
+    if(Object.keys(p).some(key=>!allowed.has(key))||typeof p.kind!=="string"||!["hourly","amount","amount_range","matrix","matrix_range","latency"].includes(p.kind))throw Error("每日对比分段无效");
+    if(p.status!==undefined&&p.status!=="all")throw Error("每日对比需保留全部订单状态");
+    if(p.offset!==undefined&&p.offset!==0)throw Error("每日对比返回完整范围，无需分页");
+    if(["hourly","matrix","matrix_range"].includes(p.kind)){
+      if(!Number.isInteger(p.hour)||Number(p.hour)<0||Number(p.hour)>23)throw Error("每日对比小时无效");
+    }else if(p.hour!==undefined)throw Error("此分段不使用小时条件");
+    if(p.kind==="latency"){
+      if(!Number.isInteger(p.bucket)||Number(p.bucket)<0||Number(p.bucket)>9)throw Error("到账时效档位无效");
+      if(p.cumulative!==undefined&&typeof p.cumulative!=="boolean")throw Error("到账时效累计条件无效");
+      if(p.cumulative===true&&p.bucket===9)throw Error("到账时效累计阈值无效");
+    }else{
+      if(p.cumulative!==undefined)throw Error("此分段不使用累计条件");
+      if(p.kind==="hourly"){if(p.bucket!==undefined)throw Error("小时分段不使用金额档位");}
+      else{
+        const buckets=["amount","matrix"].includes(p.kind)?["100","200","300","400","500","750","1000","1500","2000","5000","other","unknown"]:["100–200","201–300","301–400","401–500","501–750","751–1,000","1,001–2,000","2,001–5,000","≥5,001","other","unknown"];
+        if(typeof p.bucket!=="string"||!buckets.includes(p.bucket))throw Error("每日对比金额档位无效");
+      }
+    }
+  }
   if(p.action==="catalog")return {action:"catalog"};
   if(p.action==="syncHealth"){
     if(Object.keys(p).some(k=>!["action","offset","limit"].includes(k)))throw Error("同步检查参数无效");
@@ -165,7 +188,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,""),url=new URL(base);
  if(url.protocol!=="https:"||url.origin!==base)throw Error("后台地址配置无效");
  const specialRpc:Record<string,string>={syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
- const rpc=specialRpc[String(request.action)]||"dashboard_admin_live_query";
+ const rpc=request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
  const response=await fetch(base+"/rest/v1/rpc/"+rpc,{method:"POST",body:JSON.stringify({p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
  if(!response.ok){let code="";try{const body=await response.json();code=String(body.message||"")}catch{}
  if(/note_conflict/.test(code))throw Error("该日备注已被修改，请取消后重新打开核对；当前输入已保留");
