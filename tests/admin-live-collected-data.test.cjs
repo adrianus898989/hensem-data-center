@@ -46,16 +46,16 @@ before(async()=>{
  insert into wg_config_daily values('BR','WG-DEMO','2026-09-24',now(),'{"private":"NEVER-RETURN"}');
  insert into withdraw_pending_daily values('AR','IN','Veer.Game','2026-09-24',now(),now(),'{"totals":{"pending_count":3,"pending_amount":120},"private":"NEVER-RETURN"}');
  insert into newar_business_snapshots values('third_party_volume','印度','IN','NEW-DEMO','2026-09-24',now(),now(),'charge','{"rows":[{"amount":100,"count":2,"member":"NEVER-RETURN"}]}');`);
- await db.exec("alter table ar_config_daily add column parser_version text;create table ar_config_targets(country_code text,platform text,source_system text);alter table game66_platforms add column team_code text;create table game66_review_rules(platform_id uuid,last_seen_at timestamptz);alter table third_party_volume add column sheet_name text default '[三方量表1] fixture';alter table third_party_volume add column source_row integer default 7;create function private.dashboard_admin_live_order_intake() returns jsonb language sql as $$ select '[]'::jsonb $$;");
+ await db.exec("alter table auto_withdraw_daily add column source_sheet text default 'raw_daily_2026_09';alter table ar_config_daily add column parser_version text;create table ar_config_targets(country_code text,platform text,source_system text);alter table game66_platforms add column team_code text;create table game66_review_rules(platform_id uuid,last_seen_at timestamptz);alter table third_party_volume add column sheet_name text default '[三方量表1] fixture';alter table third_party_volume add column source_row integer default 7;create function private.dashboard_admin_live_order_intake() returns jsonb language sql as $$ select '[]'::jsonb $$;");
  const catalog=read('admin-live-platform-catalog-map.sql');await db.exec(catalog.slice(catalog.indexOf('create or replace function private.dashboard_admin_live_is_panghu_platform'),catalog.indexOf('create or replace function private.dashboard_admin_live_platforms()')));
  await db.exec(read('admin-live-collected-data.sql'));
 });
 after(async()=>{await db?.close()});
 test('business intake shows received collection, payout and config without unrelated feeds',async()=>{
  const data=await call({operation:'catalog'});const p=data.rows.find(x=>x.name==='FUTURE-PANGHU');assert.equal(p.team,'胖虎');assert.equal(p.country,'胖虎巴西');assert.equal(p.lastDate,'2026-09-24');
- assert(!data.rows.some(x=>x.name==='OPERATOR-ONLY'));assert(!data.rows.some(x=>['auto','pending','operators','member_notes'].includes(x.dataset)));assert(data.rows.some(x=>x.name==='LG-ONLY'&&x.system==='LG'));assert(data.rows.some(x=>x.name==='WG-DEMO'&&x.system==='WG'&&x.team==='M8'));
+ assert(!data.rows.some(x=>x.name==='OPERATOR-ONLY'));assert(!data.rows.some(x=>['pending','operators','member_notes'].includes(x.dataset)));assert(data.rows.some(x=>x.name==='LG-ONLY'&&x.system==='LG'));assert(data.rows.some(x=>x.name==='WG-DEMO'&&x.system==='WG'&&x.team==='M8'));
  assert.equal(data.rows.find(x=>x.name==='UNASSIGNED').team,'待归类');assert(!data.rows.some(x=>x.name==='QUARANTINED'));
- assert(data.rows.some(x=>x.name==='Veer.Game'&&x.dataset==='volume'&&x.team==='M8'));assert(!data.rows.some(x=>x.name==='776F'),'automatic payout report alone is not configuration');
+ assert(data.rows.some(x=>x.name==='Veer.Game'&&x.dataset==='volume'&&x.team==='M8'));assert(data.rows.some(x=>x.name==='776F'&&x.dataset==='auto'&&x.provenance.kind==='google_sheets'&&x.directions[0]==='withdraw'),'automatic payout daily report is discoverable');assert(!data.rows.some(x=>x.name==='776F'&&x.dataset.endsWith('_config')),'automatic payout report alone is not configuration');
  assert.equal(data.rows.filter(x=>x.name==='FUTURE-PANGHU').length,2,'independent datasets remain identifiable');
 });
 test('detail reads exact source/date, projects approved numbers and never exposes raw payloads',async()=>{
@@ -182,4 +182,13 @@ test('changing intake scope cancels old source detail responses instead of resto
 });
 test('malformed detail responses stay errors instead of looking like zero received records',async()=>{
  const f=intakeFixture({rows:[intakeFeed],detailResult:{}});await f.page.load();f.context.collectedOpen(0,0,'charge');await new Promise(r=>setImmediate(r));assert.match(f.page.render(),/平台数据返回不完整/);assert.doesNotMatch(f.page.render(),/共 0 条来源记录/);
+});
+
+// Automatic withdrawal remains a report capability, distinct from its configuration.
+test('automatic report catalog isolates direct systems and sheets with their own dates',async()=>{
+ await db.exec("insert into auto_withdraw_daily(country,platform,data_date,total,source_sheet) values('胖虎巴西','AUTO-ONLY','2026-09-23',10,'raw_daily_2026_09'),('胖虎巴西','AUTO-ONLY','2026-09-24',20,'AR_DIRECT'),('胖虎巴西','AUTO-ONLY','2026-09-25',30,'LG_DIRECT'),('胖虎巴西','胖虎巴西','2026-09-25',999,'raw_daily_2026_09')");
+ const rows=(await call({operation:'catalog'})).rows.filter(r=>r.dataset==='auto'&&r.rawPlatform==='AUTO-ONLY');assert.equal(rows.length,3);
+ assert.deepEqual(rows.map(r=>[r.system,r.provenance.kind,r.lastDate]).sort(),[['AR','direct','2026-09-24'],['LG','direct','2026-09-25'],['REPORT','google_sheets','2026-09-23']].sort());
+ assert(rows.every(r=>r.team==='胖虎'&&r.country==='胖虎巴西'&&r.directions.join()==='withdraw'));assert(!(await call({operation:'catalog'})).rows.some(r=>r.rawPlatform==='胖虎巴西'));
+ await db.exec(`select set_config('test.scope','{"countries":["印度"]}',false)`);try{assert(!(await call({operation:'catalog'})).rows.some(r=>r.rawPlatform==='AUTO-ONLY'))}finally{await db.exec(`select set_config('test.scope','{"mode":"all"}',false)`)}
 });
