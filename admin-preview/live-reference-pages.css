@@ -132,3 +132,30 @@ body.live-admin :is(#df-collect,#df-payout)>.df-flow-foot>div:first-child>span{c
 body.live-admin :is(#df-collect,#df-payout) .df-workorder-rank{border-radius:6px;box-shadow:inset 0 0 0 1px var(--df-rank-border);background:var(--df-rank-bg)}
 body.live-admin :is(#df-collect,#df-payout) .df-workorder-rank.pending{--df-rank-bg:#fff6ec;--df-rank-border:#f2dfc6}
 body.live-admin :is(#df-collect,#df-payout) .df-workorder-rank.good{--df-rank-bg:#eef9f9;--df-rank-border:#cee8e7}
+/* Dedicated provider columns stay independent of the legacy business-columns-v3 layout. */
+body.live-admin .df-business-summary.df-provider-business-summary{min-width:0;max-width:100%;overflow:hidden}
+body.live-admin .df-provider-business-summary>.df-provider-table-scroll{position:relative;isolation:isolate;width:100%;min-width:0;max-width:100%;overflow:auto;overscroll-behavior-x:contain;scroll-padding-left:120px;scrollbar-width:thin;scrollbar-color:#b6c6df #f3f6fb}
+body.live-admin .df-provider-business-summary>.df-provider-table-scroll:focus-visible{outline:2px solid #86a5e5;outline-offset:-2px}
+body.live-admin .df-provider-business-summary>.df-provider-table-scroll::-webkit-scrollbar{height:9px}
+body.live-admin .df-provider-business-summary>.df-provider-table-scroll::-webkit-scrollbar-track{background:#f3f6fb}
+body.live-admin .df-provider-business-summary>.df-provider-table-scroll::-webkit-scrollbar-thumb{border:2px solid #f3f6fb;border-radius:5px;background:#b6c6df}
+body.live-admin .df-provider-business-summary table.df-provider-business-table{width:100%;min-width:1100px!important;max-width:none;table-layout:fixed!important;border-collapse:separate;border-spacing:0;font-size:11px;font-variant-numeric:tabular-nums}
+body.live-admin .df-provider-business-summary .df-provider-business-table col.provider{width:120px}
+body.live-admin .df-provider-business-summary .df-provider-business-table col.total-amount,body.live-admin .df-provider-business-summary .df-provider-business-table col.success-amount,body.live-admin .df-provider-business-summary .df-provider-business-table col.fee-rate,body.live-admin .df-provider-business-summary .df-provider-business-table col.fee-amount{width:130px}
+body.live-admin .df-provider-business-summary .df-provider-business-table col.total-count,body.live-admin .df-provider-business-summary .df-provider-business-table col.success-count{width:80px}
+body.live-admin .df-provider-business-summary .df-provider-business-table col.amount-share,body.live-admin .df-provider-business-summary .df-provider-business-table col.count-share,body.live-admin .df-provider-business-summary .df-provider-business-table col.success-rate{width:70px}
+body.live-admin .df-provider-business-summary .df-provider-business-table col.fee-share{width:90px}
+body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td){box-sizing:border-box;width:auto;min-width:0;max-width:none;height:34px;padding:8px 9px!important;border:0;border-bottom:1px solid #e8eef6;vertical-align:middle;text-align:right;font-size:11px!important;line-height:17px;white-space:nowrap!important;overflow-wrap:normal!important;word-break:normal!important;writing-mode:horizontal-tb;background:#fff;font-variant-numeric:tabular-nums}
+body.live-admin .df-provider-business-summary .df-provider-business-table thead th{height:36px;background:#f4f7fc;color:#7185a3;font-weight:500}
+body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td):nth-child(n+4):nth-child(-n+8){background:#fafdfb}
+body.live-admin .df-provider-business-summary .df-provider-business-table thead th:nth-child(n+4):nth-child(-n+8){background:#eff7f3;color:#5b7e71}
+body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td):nth-child(n+9){background:#fdfbff}
+body.live-admin .df-provider-business-summary .df-provider-business-table thead th:nth-child(n+9){background:#f6f1fb;color:#7c6997}
+body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td):is(:nth-child(4),:nth-child(9)){border-left:1px solid #dfe6ef}
+body.live-admin .df-provider-business-summary .df-provider-business-table tbody tr:hover>td{background:#f1f6fd!important}
+body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td):first-child{position:sticky;left:0;z-index:2;width:auto;min-width:0;text-align:left;background:#fff;box-shadow:1px 0 0 #dfe6ef,3px 0 6px #273f6310}
+body.live-admin .df-provider-business-summary .df-provider-business-table thead th:first-child{z-index:3;background:#f4f7fc}
+body.live-admin .df-provider-business-summary .df-provider-business-table tfoot td{height:36px;background:#eef3fb!important;font-weight:600;border-top:1px solid #dbe5f4;border-bottom:0}
+body.live-admin .df-provider-business-summary .df-provider-business-table :is(.link,.metric-link,.df-fee-rate){font-size:11px;line-height:17px;white-space:nowrap!important;overflow-wrap:normal!important;word-break:normal!important}
+body.live-admin .df-provider-business-summary .df-provider-business-table td:first-child .link{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;text-align:left;padding:0}
+body.live-admin .df-provider-business-summary .df-provider-business-table .df-fee-rate{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis}
