@@ -75,6 +75,7 @@ before(async()=>{
   await db.exec(fs.readFileSync(path.join(repo,'supabase/admin-live-provider-aliases.sql'),'utf8'));
   const config=fs.readFileSync(path.join(repo,'supabase/admin-live-configuration.sql'),'utf8');
   await db.exec(config.slice(config.indexOf('create or replace function private.dashboard_admin_live_provider_alias_values'),config.indexOf('revoke all on function private.dashboard_admin_live_provider_alias_values')));
+  await db.exec(config.slice(config.indexOf('create or replace function private.dashboard_admin_live_provider_canonical'),config.indexOf('revoke all on function private.dashboard_admin_live_provider_canonical')));
   await db.exec(fs.readFileSync(path.join(repo,'supabase/admin-live-provider-filter-performance.sql'),'utf8'));
   await db.exec(fs.readFileSync(path.join(repo,'supabase/admin-live-drilldown.sql'),'utf8'));
   const catalog=await call();ar=catalog.platforms.find(x=>x.source==='ar').id;newar=catalog.platforms.find(x=>x.source==='newar').id;
@@ -174,3 +175,76 @@ test('migration leaves existing engines untouched and returns complete bounded a
  assert.doesNotMatch(patch,/create or replace function (?:public|private)\.dashboard_admin_live_query\(/);assert.doesNotMatch(patch,/create index|alter table|insert into|delete from|update public|\blimit \$18|\boffset \$17/i);
  const before=await call(req());await db.exec(patch);const after=await call(req());delete before.asOf;delete after.asOf;assert.deepEqual(after,before);
 });
+
+test('latency provider and provider-day groups conserve full-window denominators across sources and directions',async()=>rollback(async()=>{
+ for(const [source,platformId]of [['ar',ar],['newar',newar],['game66',game]])for(const direction of ['charge','withdraw']){
+  const z=source==='newar'?'+05:45':'+05:30',q={platformId,direction,memberId:'DRILL',startAt:'2026-09-19T01:00:00'+z,endAt:'2026-09-20T01:00:00'+z};
+  for(const [id,value,created,success,provider]of [
+   ['FAST-A',100,'2026-09-19 01:58','2026-09-19 02:00','Latency-A'],
+   ['SLOW-A',300,'2026-09-19 01:00','2026-09-19 03:00','Latency-A'],
+   ['FAST-B',200,'2026-09-20 00:58','2026-09-20 00:59','Latency-B'],
+   ['SLOW-B',0,'2026-09-19 00:00','2026-09-19 04:00','Latency-B'],
+   ['OTHER',600,'2026-09-18 23:00','2026-09-19 05:00','Latency-C'],
+   ['REVERSED',700,'2026-09-20 01:00','2026-09-19 06:00','Invalid'],
+   ['NO-COMPLETION',800,'2026-09-19 02:00',null,'NoCompletion'],
+   ['END-BOUND',999,'2026-09-20 00:59','2026-09-20 01:00','AtEnd'],
+   ['START-BOUND',50,'2026-09-19 00:59','2026-09-19 01:00','AtStart']
+  ])await add(source,direction,source+direction+id,value,created,success,'success',provider);
+  for(const cumulative of [false,true]){
+   const r=await drill(segment('latency',{...q,bucket:0,cumulative})),s=r.summary[0],ps=r.groups.provider,ds=r.groups.provider_daily;
+   assert.deepEqual(Object.keys(r.groups).sort(),['daily','provider','provider_daily']);assert.equal(r.complete,true);assert.equal(r.hasMore,false);assert.deepEqual(r.rows,[]);
+   assert.equal(s.valid_count,6);assert.equal(s.valid_amount,'1250');assert.equal(s.candidate_count,7);assert.equal(s.excluded_count,1);
+   for(const key of ['count','amount','valid_count','valid_amount','candidate_count','excluded_count','missing_amount_count']){
+    assert.equal(ps.reduce((sum,p)=>sum+Number(p[key]),0),Number(s[key]),source+'/'+direction+'/'+key+' provider conservation');
+    assert.equal(ds.reduce((sum,p)=>sum+Number(p[key]),0),Number(s[key]),source+'/'+direction+'/'+key+' provider-day conservation');
+   }
+   const a=ps.find(p=>p.provider==='Latency-A'),b=ps.find(p=>p.provider==='Latency-B'),c=ps.find(p=>p.provider==='Latency-C'),invalid=ps.find(p=>p.provider==='Invalid');
+   assert.equal(a.valid_count,2);assert.equal(a.valid_amount,'400');assert.equal(a.count,1);assert.equal(a.count_share,0.5);assert.equal(a.amount,cumulative?'300':'100');
+   assert.equal(b.valid_count,2);assert.equal(b.count,1);assert.equal(b.amount,cumulative?'0':'200');assert.equal(b.valid_amount,'200');
+   assert.equal(c.valid_count,1);assert.equal(c.count,cumulative?1:0,'other-bin-only provider remains available with independent denominator');
+   assert.equal(invalid.count,0);assert.equal(invalid.valid_count,0);assert.equal(invalid.count_share,null);assert.equal(invalid.amount_share,null);assert.equal(invalid.excluded_count,1);
+   assert(!ps.some(p=>['AtEnd','NoCompletion'].includes(p.provider)),'half-open end and missing completion dates stay outside candidate set');
+   const bDay=ds.find(p=>p.provider==='Latency-B'&&p.date==='2026-09-20');assert.equal(bDay.valid_count,1);assert.equal(bDay.count,cumulative?0:1);assert.equal(bDay.amount,cumulative?'0':'200');
+   for(const day of r.groups.daily)assert.equal(ds.filter(p=>p.date===day.date).reduce((sum,p)=>sum+p.valid_count,0),day.valid_count);
+   assert.doesNotMatch(JSON.stringify(r),/order_number|member_id|raw_payload|source_id|account|phone/);
+  }
+ }
+}));
+
+test('latency canonical providers merge aliases and overrides before ratios without crossing platform scope',async()=>rollback(async()=>{
+ await db.exec(`insert into private.dashboard_admin_provider_registry values
+  ('印度','AR-EXAMPLE','Legacy-One',array['MergedPay']),('印度','AR-EXAMPLE','Legacy-Two',array['MergedPay']),
+  ('印度','AR-EXAMPLE','Override-Raw',array['OtherPay']),('印度','OTHER','Private-Raw',array['MergedPay']);
+  insert into private.dashboard_admin_provider_overrides values('印度','AR-EXAMPLE','Override-Raw','MergedPay');`);
+ await add('ar','charge','MAP-FAST',100,'2026-09-19 01:00','2026-09-19 01:01','success','Legacy-One');
+ await add('ar','charge','MAP-SLOW',300,'2026-09-19 01:00','2026-09-19 03:00','success','Legacy-Two');
+ await add('ar','charge','MAP-OVERRIDE',600,'2026-09-19 01:00','2026-09-19 04:00','success','Override-Raw');
+ await add('ar','charge','MAP-NONMATCH',999,'2026-09-19 01:00','2026-09-19 01:01','success','Private-Raw');
+ const q=segment('latency',{platformId:ar,direction:'charge',memberId:'DRILL',bucket:0,providers:['MergedPay'],currency:'INR',channelTypes:['BANK'],...dates('ar')});
+ const r=await drill(q),p=r.groups.provider[0];assert.equal(r.groups.provider.length,1);assert.equal(p.provider,'MergedPay');assert.equal(p.count,1);assert.equal(p.valid_count,3);assert.equal(p.amount,'100');assert.equal(p.valid_amount,'1000');assert(Math.abs(p.count_share-1/3)<1e-12);assert.equal(p.amount_share,0.1);
+ assert.equal(r.groups.provider_daily[0].provider,'MergedPay');assert.doesNotMatch(JSON.stringify(r),/Legacy-One|Legacy-Two|Override-Raw|Private-Raw/);
+ const one=await drill({...q,orderNumber:'MAP-SLOW'});assert.equal(one.groups.provider[0].count,0);assert.equal(one.groups.provider[0].valid_count,1);
+ const excluded=await drill({...q,amountMin:200});assert.equal(excluded.groups.provider[0].count,0);assert.equal(excluded.groups.provider[0].valid_count,2);assert.equal(excluded.groups.provider[0].valid_amount,'900');
+}));
+
+test('latency missing, nonfinite, zero and signed amounts never invent a usable amount denominator',async()=>rollback(async()=>{
+ for(const [id,amount,provider,created,success]of [
+  ['NULL-FAST',10,'Partial','2026-09-19 01:00','2026-09-19 01:01'],['NULL-SLOW',null,'Partial','2026-09-19 01:00','2026-09-19 03:00'],
+  ['ZERO',0,'Zero','2026-09-19 01:00','2026-09-19 01:01'],['NEGATIVE',-20,'Signed','2026-09-19 01:00','2026-09-19 01:01'],
+  ['NAN','NaN','Nonfinite','2026-09-19 01:00','2026-09-19 01:01']
+ ])await add('newar','withdraw',id,amount,created,success,'success',provider);
+ const r=await drill(segment('latency',{platformId:newar,direction:'withdraw',memberId:'DRILL',bucket:0,...dates('newar')})),ps=r.groups.provider;
+ const partial=ps.find(p=>p.provider==='Partial');assert.equal(partial.count,1);assert.equal(partial.amount,'10');assert.equal(partial.valid_count,2);assert.equal(partial.valid_amount,null);assert.equal(partial.amount_share,null);assert.equal(partial.count_share,0.5);
+ for(const name of ['Zero','Signed','Nonfinite']){const p=ps.find(p=>p.provider===name);assert.equal(p.count,1);assert.equal(p.count_share,1);assert.equal(p.amount_share,null)}
+ assert.equal(ps.find(p=>p.provider==='Zero').valid_amount,'0');assert.equal(ps.find(p=>p.provider==='Signed').valid_amount,'-20');assert.equal(ps.find(p=>p.provider==='Nonfinite').valid_amount,null);assert.equal(ps.find(p=>p.provider==='Nonfinite').missing_amount_count,1);
+ assert.equal(r.summary[0].valid_amount,null);assert.equal(r.summary[0].amount,null);
+}));
+
+test('latency provider names are mapped once per raw name, non-latency segments skip the mapping entirely',async()=>rollback(async()=>{
+ await db.exec(`create sequence mapping_calls;
+  create or replace function private.dashboard_admin_live_provider_canonical(p_country text,p_platform text,p_raw text)
+  returns text language plpgsql volatile as $$begin perform nextval('public.mapping_calls');return p_raw;end;$$;`);
+ for(let i=0;i<50;i++)await add('game66','charge','MAP-CALL-'+i,100,'2026-09-19 01:00','2026-09-19 01:01','success',i%2?'Repeated-A':'Repeated-B');
+ const q={platformId:game,direction:'charge',memberId:'DRILL',...dates('game66')};await drill(segment('latency',{...q,bucket:0}));const calls=(await db.query('select last_value from mapping_calls')).rows[0].last_value;assert.equal(Number(calls),2);
+ const amount=await drill(segment('amount',{...q,bucket:'100'}));assert.deepEqual(Object.keys(amount.groups),['daily']);assert.equal(Number((await db.query('select last_value from mapping_calls')).rows[0].last_value),2);
+}));

@@ -51,6 +51,10 @@ body.live-admin .live-date-range>label{font-size:10px;color:#7789a7}
 .live-unknown-provider-note li span{display:block;color:#876f45}
 .live-duration-paired{align-items:start}
 .live-duration-paired>.panel{min-width:0}
+/* A filtered direction uses the available width; paired overview panels keep their two tracks. */
+body.live-admin .live-paired-dimensions>.panel{min-width:0;max-width:100%}
+body.live-admin .live-paired-dimensions>.panel:only-child{grid-column:1/-1}
+body.live-admin .live-paired-dimensions>.panel>.table-wrap{max-width:100%;overflow-x:auto}
 .live-admin .df-flow-grid .df-flow-rate strong{font-size:19px;color:#3056b0;display:block;margin-top:7px}
 .live-admin .df-extreme-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:12px}
 .live-admin .df-extreme-cell{display:flex;flex-direction:column;gap:4px;padding:10px;border:1px solid #e7edf5;border-radius:6px;background:#fbfcff;color:#566983;font-size:11px}

@@ -55,7 +55,13 @@ test('health bridge only accepts bounded read parameters, fresh auth and fixed R
 test('integration permits independent first-load pages and waits for their main loading states',()=>{
  const live=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8'),ready=live.match(/configure\(\{request:q=>window\.hensemLiveRequest\(q\),ready:\(\)=>(.*?),onChange:/)[1];
  const evaluate=(page,L,modules={},reportState={})=>vm.runInNewContext(ready,{state:{page},L,window:modules,collectedPage:{state:{busy:false}},reportData:{state:reportState}});
- const L={catalogReady:true,initialReadComplete:true,loading:false};for(const page of ['auto_withdraw','rates','collected_data','payout_config','overview'])assert.equal(evaluate(page,L),true,page);assert.equal(evaluate('rates',{...L,initialReadComplete:false}),false);assert.equal(evaluate('auto_withdraw',{...L,autoWithdrawLoading:true}),false);assert.equal(evaluate('rates',L,{HensemLiveRatesRestored:{snapshot:()=>({loading:true})}}),false);assert.equal(evaluate('payout_config',L,{HensemLivePayoutConfig:{state:()=>({indexStatus:'loading'})}}),false);assert.equal(evaluate('overview',{...L,overviewSections:{status:'loading'}}),false);assert.equal(evaluate('overview',L,{}, {loading:true}),false);assert.equal(evaluate('overview',L,{}, {catalogBusy:true}),false);assert.match(live,/finally\{L.initialReadComplete=true;window.liveHeader\?\.\(\)\}/);
+ const L={catalogReady:true,initialReadComplete:true,loading:false,overviewQueried:false};
+ for(const page of ['auto_withdraw','rates','collected_data','payout_config'])assert.equal(evaluate(page,L),true,page);
+ assert.equal(evaluate('overview',L),false,'an unqueried overview must not start an independent health read');
+ const queried={...L,overviewQueried:true};assert.equal(evaluate('overview',queried),true,'health may run after an explicit overview query completes');
+ assert.equal(evaluate('rates',{...L,initialReadComplete:false}),false);assert.equal(evaluate('auto_withdraw',{...L,autoWithdrawLoading:true}),false);assert.equal(evaluate('rates',L,{HensemLiveRatesRestored:{snapshot:()=>({loading:true})}}),false);assert.equal(evaluate('payout_config',L,{HensemLivePayoutConfig:{state:()=>({indexStatus:'loading'})}}),false);
+ assert.equal(evaluate('overview',{...queried,loading:true}),false);assert.equal(evaluate('overview',{...queried,overviewSections:{status:'loading'}}),false);assert.equal(evaluate('overview',queried,{}, {loading:true}),false);assert.equal(evaluate('overview',queried,{}, {catalogBusy:true}),false);
+ assert.match(live,/finally\{initialLoad=null;L.initialReadComplete=true;window.liveHeader\?\.\(\)\}/);
 });
 
 test('an empty authorized source inventory is unverified, never all received',async()=>{const h=setup(async()=>response([],0));h.setReady(true);await h.api.refresh();h.api.open();assert.match(h.html(),/当前授权范围没有可核查来源/);assert.doesNotMatch(h.html(),/均已收到数据/)});

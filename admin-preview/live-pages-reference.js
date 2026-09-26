@@ -29,6 +29,18 @@
   const label='已匹配 '+C(r.fee_matched_count)+' / '+C(r.fee_eligible_count)+' 笔';
   return '<span title="'+E(label)+'">'+N(r.estimated_fee)+(!r.fee_complete?'<small class="provider-partial">部分</small>':'')+'</span>';
  }
+ function emptyPlatformCells(direction,columnCount){
+  if(L.dirty)return [];
+  const failed=new Set((L.queryFailures||[]).map(p=>p.id)),received=new Map((L.results||[]).map(r=>[r.platform?.id,r])),seen=new Set(),cells=[];
+  for(const platform of L.queryPlatforms||[]){
+   if(!platform.id||platform.reportOnly||failed.has(platform.id)||seen.has(platform.id))continue;seen.add(platform.id);
+   const result=received.get(platform.id);if(!result||!Array.isArray(result.summary)||result.summary.some(row=>row.direction===direction))continue;
+   if(!result.summary.length&&(result.total==null||!Number.isFinite(Number(result.total))||Number(result.total)!==0))continue;
+   if(Object.values(result.groups||{}).some(rows=>Array.isArray(rows)&&rows.some(row=>row.direction===direction)))continue;
+   const reason='本期未收到订单数据';cells.push([E(platform.name||result.platform?.name||'未提供')+'<small class="muted">'+reason+'</small>',...Array.from({length:columnCount-1},()=>'<span class="muted" title="'+reason+'">—</span>')]);
+  }
+  return cells;
+ }
  function dimensions(key,title,id){
   const rows=window.HensemProviderSummary.overviewDimensions({orders:groupRows('provider'),summaries:raw(),rates:L.feeLookupRows,country:L.country,key,plus,combine}).sort((a,b)=>b.all_count-a.all_count),isProvider=key==='provider';
   const head=isProvider?['三方','类型','全部金额','全部笔数','成功金额','金额占比','成功笔数','笔数占比','成功率','手续费率','估算手续费','手续费占比']:[key==='team'?'团队':key==='country'?'国家':'平台','全部金额','全部笔数','成功金额','成功笔数','成功率','估算手续费'];
@@ -38,7 +50,10 @@
    const cells=(r,summary=false)=>[N(r.all_amount),C(r.all_count),N(r.success_amount),...(isProvider?[summary?(Number(total.success_amount)>0?'100.00%':'—'):share(r.success_amount_share)]:[]),C(r.success_count),...(isProvider?[summary?(Number(total.success_count)>0?'100.00%':'—'):share(r.success_count_share)]:[]),
     isProvider&&!summary&&!window.HensemProviderSummary.isProviderBusiness(r.provider)?'不适用':'<span title="成功时间内成功笔数 ÷ 创建时间内全部笔数；含跨日成功，可超过100%">'+R(r.success_count,r.all_count)+'</span>',
     ...(isProvider?[summary?'—':rateCell(r)]:[]),feeCell(r),...(isProvider?[L.feeLookupLoading||L.feeLookupError?'—':summary?(fees.amount>0?'100.00%':'—'):share(r.fee_share)]:[])];
-   const body=pageTable(id+'-'+d,head,subset.map(r=>[isProvider?providerCell({...r,source:''}):E(r[key]||'未提供'),...(isProvider?[typeCell(r)]:[]),...cells(r)]),[['<strong>'+E(name(d)+'汇总')+'</strong>',...(isProvider?['—']:[]),...cells(total,true)]],isProvider?providerSummaryTable:refTable);
+   // Empty platform rows are display-only; totals and fee coverage use actual summaries above.
+   const displayRows=subset.map(r=>[isProvider?providerCell({...r,source:''}):E(r[key]||'未提供'),...(isProvider?[typeCell(r)]:[]),...cells(r)]);
+   if(key==='platform')displayRows.push(...emptyPlatformCells(d,head.length));
+   const body=pageTable(id+'-'+d,head,displayRows,[['<strong>'+E(name(d)+'汇总')+'</strong>',...(isProvider?['—']:[]),...cells(total,true)]],isProvider?providerSummaryTable:refTable);
    const feeStatus=L.feeLookupLoading?'手续费匹配中…':L.feeLookupError?'费率读取失败':'手续费已匹配 '+C(fees.matchedCount)+' / '+C(fees.successCount)+' 笔'+(fees.complete?'':' · 部分费率未匹配');
    return dblock(id+'-'+d,title+' · '+name(d),'<div class="df-business-summary'+(isProvider?' df-provider-business-summary':'')+'">'+body+'</div>',E(L.currency)+' · '+(subset.length?feeStatus:'当前方向无数据'));
 
@@ -47,7 +62,9 @@
  }
  function feeRows(direction){return window.HensemProviderSummary.buildRows({orders:groupRows('provider'),issues:[],rates:L.feeLookupRows,country:L.country,direction,plus,combine})}
  function providerExtremes(direction){
-  const list=combine(groupRows('provider').filter(r=>r.direction===direction),['provider','currency']).filter(r=>window.HensemProviderSummary.isProviderBusiness(r.provider)&&Number(r.all_count)>=1000)
+  // A zero-success ordinary withdrawal is not a provider comparison candidate; keep its ledger row.
+  const zeroOrdinaryPayout=r=>direction==='withdraw'&&String(r.provider).trim()==='普通提现'&&r.success_amount!=null&&r.success_count!=null&&Number(r.success_amount)===0&&Number(r.success_count)===0;
+  const list=combine(groupRows('provider').filter(r=>r.direction===direction),['provider','currency']).filter(r=>window.HensemProviderSummary.isProviderBusiness(r.provider)&&Number(r.all_count)>=1000&&!zeroOrdinaryPayout(r))
    .map(r=>({...r,rate:Number(r.success_count)/Number(r.all_count)})),byVolume=(a,b)=>b.all_count-a.all_count||b.success_count-a.success_count||String(a.provider).localeCompare(String(b.provider)),byRate=(a,b)=>b.rate-a.rate||b.success_count-a.success_count||byVolume(a,b);
   // Only the collection high-rate shortlist excludes ArbPay; ledger totals and payout keep it.
   const high=list.filter(r=>direction!=='charge'||String(r.provider).trim().toLowerCase()!=='arbpay').sort(byVolume).slice(0,10).sort(byRate).slice(0,3),chosen=new Set(high.map(r=>r.provider));

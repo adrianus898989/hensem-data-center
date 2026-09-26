@@ -45,7 +45,7 @@ test('opening or closing navigation groups updates only the menu, never recomput
 });
 
 test('navigation paints once while destination queries are still pending and does not await IO',async()=>{
- const h=await ready({ancillaryHandler:false}),pending=deferred();h.L.from='2026-09-20T00:00:00';h.L.to='2026-09-20T23:59:59';
+ const h=await ready({ancillaryHandler:false});await h.c.liveLoad();await settle();const pending=deferred();h.L.from='2026-09-20T00:00:00';h.L.to='2026-09-20T23:59:59';
  h.setHandler(q=>q.action==='aggregate'?pending.promise:Promise.resolve({rows:[],total:0}));
  const before=pageWrites(h);h.c.setPage('provider_payout');
  assert.equal(h.c.state.page,'provider_payout');assert.equal(h.c.location.hash,'provider_payout');assert.equal(h.L.direction,'withdraw');assert.equal(h.L.loading,true);assert.equal(pageWrites(h)-before,1,'all synchronous loader notifications share one destination paint');
@@ -53,6 +53,14 @@ test('navigation paints once while destination queries are still pending and doe
  h.c.setPage('orders');assert.equal(h.c.state.page,'orders');assert.match(h.html(),/请先选择一个商户/);const afterOrders=pageWrites(h);
  pending.resolve(completeAggregate(P,987654,987653));await settle();
  assert.equal(pageWrites(h),afterOrders,'the old aggregate cannot repaint the new page');assert.doesNotMatch(h.html(),/987,654|98,765,400/);assert.equal(h.L.loading,false);
+});
+
+test('overview navigation paints immediately without starting business or auxiliary reads',async()=>{
+ const h=await ready();assert.equal(h.L.overviewQueried,false);assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
+ await h.c.liveLoad();await settle();assert.equal(h.L.overviewQueried,true);assert(h.L.results.length>0);
+ h.c.setPage('provider_payout');await settle();const calls=h.calls.length,before=pageWrites(h);
+ h.c.setPage('overview');assert.equal(h.c.state.page,'overview');assert.equal(h.c.location.hash,'overview');assert.equal(h.L.overviewQueried,false);assert.equal(h.L.dirty,true);assert.equal(h.L.loading,false);assert.equal(pageWrites(h)-before,1);assert.match(h.html(),/查询/);assert.doesNotMatch(h.html(),/代收经营总数据|代付经营总数据/);
+ await settle();assert.equal(h.calls.length,calls,'returning to overview does not fetch orders, comparison, fees, source reports or provider options');assert.equal(pageWrites(h)-before,1,'no background completion is needed to render the manual query screen');
 });
 
 test('dedicated-page responses cache data but do not repaint a different destination',async()=>{
@@ -71,7 +79,7 @@ test('collected catalog response cannot redraw another menu and is reused on ret
 });
 
 test('lazy fee lookup does not recursively rebuild the page during its first paint',async()=>{
- const h=await ready(),pending=deferred();h.L.feeLookupRows=null;h.L.feeLookupLoading=false;h.L.feeLookupError='';h.c.state.page='providers';h.L.direction='charge';h.L.multi.direction=['charge'];h.setHandler(q=>q.action==='rates'?pending.promise:Promise.resolve(aggregate()));
+ const h=await ready();await h.c.liveLoad();await settle();const pending=deferred();h.L.feeLookupRows=null;h.L.feeLookupLoading=false;h.L.feeLookupError='';h.c.state.page='providers';h.L.direction='charge';h.L.multi.direction=['charge'];h.setHandler(q=>q.action==='rates'?pending.promise:Promise.resolve(aggregate()));
  const before=pageWrites(h);h.c.render();assert.equal(pageWrites(h)-before,1);assert.equal(h.L.feeLookupLoading,true);
  pending.resolve({rows:[],total:0});await settle();assert.equal(pageWrites(h)-before,2,'completion still produces the required final view');assert.equal(h.L.feeLookupLoading,false);
 });
@@ -110,4 +118,49 @@ test('withdraw and refreshed source directories invalidate the identity memo wit
  const rows=[{dataset:'volume',system:'REPORT',country:'胖虎巴西',rawCountry:'胖虎巴西',name:'REPORT-A',rawPlatform:'REPORT-A',team:'胖虎',records:1,directions:['charge'],provenance:{kind:'google_sheets'}}];f.setFeeds(rows);await f.page.loadCatalog(true);const first=f.page.catalog();assert(first.some(p=>p.name==='REPORT-A'));assert.equal(f.page.selected({teams:['胖虎']}).length,2);
  rows[0]={...rows[0],name:'REPORT-B',rawPlatform:'REPORT-B'};await f.page.loadCatalog(true);const refreshed=f.page.catalog();assert.notEqual(refreshed,first,'even an adapter returning the same array invalidates after a fresh response');assert(refreshed.some(p=>p.name==='REPORT-B'));assert(!refreshed.some(p=>p.name==='REPORT-A'));
  f.setFeeds([]);f.L.withdrawCatalog=[];await f.page.loadCatalog(true);assert.equal(f.page.catalog().length,1);assert.equal(f.page.selected({teams:['胖虎']}).length,0,'removed source and configuration identities disappear');
+});
+
+function flowAggregate(platform,direction,count=10){const r=completeAggregate(platform,count,5);r.summary.forEach(row=>row.direction=direction);Object.values(r.groups).forEach(rows=>rows.forEach(row=>row.direction=direction));return r}
+
+test('fixed business pages hide the direction selector and reject attempts to clear or switch it',async()=>{
+ for(const [page,direction]of[['collection','charge'],['payout','withdraw'],['providers','charge'],['provider_payout','withdraw'],['stuck','withdraw']]){
+  const h=await ready({page});assert.equal(h.L.direction,direction);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/data-multi="direction"/);
+  const calls=h.calls.length;h.c.liveSet('direction','all');h.c.liveSet('direction',direction==='charge'?'withdraw':'charge');h.c.liveMultiClear('direction');h.c.liveSetMultiOption('direction',{value:'all',checked:true});
+  assert.equal(h.c.state.page,page);assert.equal(h.L.direction,direction);assert.equal(h.calls.length,calls,'invisible fixed controls cannot start new queries');
+  h.c.liveReset();await settle();assert.equal(h.L.direction,direction);assert(h.calls.filter(q=>q.action==='aggregate').every(q=>q.direction===direction));
+ }
+ const h=await ready({page:'time'});assert.match(h.nodes.get('liveFilters').innerHTML,/data-multi="direction"/);h.c.liveSet('direction','all');assert.equal(h.L.direction,'all');
+});
+
+test('collection and payout show received orders while loading, with source reports and fees deferred',async()=>{
+ for(const [page,direction]of[['collection','charge'],['payout','withdraw']]){
+  const platforms=[P,{...P,id:'22222222-2222-4222-8222-222222222222'},{...P,id:'33333333-3333-4333-8333-333333333333'}],pending=platforms.map(()=>deferred());let initial=true;
+  const h=harness({page,reports:true,handler:q=>{
+   if(q.action==='catalog')return {platforms};if(q.action==='collectedData')throw Error('synthetic report timeout');if(q.action==='rates')return {rows:[],total:0};
+   if(q.action==='aggregate'&&initial)return pending[platforms.findIndex(p=>p.id===q.platformId)].promise;
+   return flowAggregate(platforms.find(p=>p.id===q.platformId)||P,direction);
+  }});await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2,'only two heavy platform reads at once');assert.equal(h.calls.filter(q=>q.action==='collectedData'||q.action==='reportSummary').length,0);
+  pending[0].resolve(flowAggregate(platforms[0],direction,17));await settle();assert.equal(h.L.loading,true);assert.equal(h.L.results.length,1);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,3);assert.match(h.html(),/尚非完整总计/);assert.match(h.html(),/Synthetic provider/);assert.match(h.html(),new RegExp('三方经营汇总 · '+(direction==='charge'?'代收':'代付')));assert.doesNotMatch(h.html(),/日报读取未完成/);assert.equal(h.calls.filter(q=>q.action==='rates').length,0);
+  initial=false;pending[1].resolve(flowAggregate(platforms[1],direction,19));pending[2].resolve(flowAggregate(platforms[2],direction,23));await settle();assert.equal(h.L.loading,false);assert.equal(h.L.results.length,3);assert(h.calls.some(q=>q.action==='collectedData'));assert.match(h.html(),/Synthetic provider/);assert.match(h.html(),/日报读取未完成/);assert.doesNotMatch(h.html(),/尚非完整总计/);
+ }
+});
+
+test('leaving a pending flow query cannot launch its deferred reports or repaint the destination',async()=>{
+ const pending=deferred(),h=harness({page:'collection',reports:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='aggregate'?pending.promise:{rows:[],total:0}});await settle();assert.equal(h.L.loading,true);
+ h.c.setPage('orders');const reads=h.calls.filter(q=>q.action==='collectedData'||q.action==='reportSummary').length,before=pageWrites(h);pending.resolve(flowAggregate(P,'charge'));await settle();assert.equal(h.c.state.page,'orders');assert.equal(pageWrites(h),before);assert.equal(h.calls.filter(q=>q.action==='collectedData'||q.action==='reportSummary').length,reads);assert.match(h.html(),/请先选择一个商户/);
+});
+
+test('flow query failures retain successful platforms and retry only the missing platform',async()=>{
+ for(const [page,direction]of[['collection','charge'],['payout','withdraw']]){
+  const p2={...P,id:'22222222-2222-4222-8222-222222222222'};let fail=true;
+  const h=harness({page,reports:true,handler:q=>{if(q.action==='catalog')return {platforms:[P,p2]};if(q.action==='collectedData'||q.action==='rates')return {rows:[],total:0};if(q.action==='aggregate'&&q.platformId===p2.id&&fail)throw Error('missing platform');return flowAggregate(q.platformId===p2.id?p2:P,direction)}});await settle();assert.equal(h.L.queryFailures.length,1);assert.equal(h.L.results.length,1);assert(h.calls.some(q=>q.action==='collectedData'),'reports still read after a native partial failure');assert.match(h.html(),/仅为已读取结果/);
+  const before=h.calls.filter(q=>q.action==='aggregate').length;fail=false;await h.c.liveRetryFailed();await settle();const retry=h.calls.filter(q=>q.action==='aggregate').slice(before);assert.equal(retry.length,1);assert.equal(retry[0].platformId,p2.id);assert.equal(h.L.queryFailures.length,0);assert.equal(h.L.results.length,2);assert.doesNotMatch(h.html(),/missing platform/);
+ }
+});
+
+test('multi-day flow analysis preserves full groups and exact contiguous daily ranges',async()=>{
+ for(const [page,direction]of[['collection','charge'],['payout','withdraw']]){
+  const h=await ready({page});h.setNow('2026-09-26T12:00:00Z');setScope(h,{from:'2026-09-20T00:00:00',to:'2026-09-22T05:59:59'});h.calls.length=0;h.setHandler(q=>q.action==='rates'?{rows:[],total:0}:flowAggregate(P,direction));await h.c.liveLoad();await settle();
+  const reads=h.calls.filter(q=>q.action==='aggregate'&&q.view!=='providers');assert.equal(reads.length,3);assert.deepEqual(reads.map(q=>[q.startAt,q.endAt]),[['2026-09-19T18:30:00.000Z','2026-09-20T18:30:00.000Z'],['2026-09-20T18:30:00.000Z','2026-09-21T18:30:00.000Z'],['2026-09-21T18:30:00.000Z','2026-09-22T00:30:00.000Z']]);assert(reads.every(q=>q.direction===direction));assert.equal(h.L.results[0]._parts.length,3);assert.equal(h.L.results[0].summary[0].all_count,30);assert.equal(h.L.results[0].groups.hourly[0].all_count,30);assert.equal(h.L.results[0].groups.provider[0].all_count,30);
+ }
 });

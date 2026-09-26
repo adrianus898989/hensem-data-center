@@ -23,3 +23,74 @@ test('hour and amount platform rows share parent columns and put shares under su
 test('daily comparison missing dates stay unknown and shares do not add misaligned columns',async()=>{const h=setup();h.instance.open(segment,'8时');h.action(segment,'daily');await flush();const html=h.instance.table(alignedConfig),rows=[...html.matchAll(/<tr class="analysis-aligned-item">(.*?)<\/tr>/gs)].map(x=>[...x[1].matchAll(/<td>(.*?)<\/td>/gs)].map(c=>c[1]));assert.equal(rows.length,5);assert(rows.every(row=>row.length===12));assert.equal(rows[0][0],'2026-09-20');assert.equal(rows[1][0],'2026-09-21');assert.equal(rows[1][1],'未返回记录');assert(rows[1].slice(2).every(x=>x==='—'));assert.match(html,/不补成 0/);});
 test('partial daily platform coverage is labelled and never compared as a complete day',async()=>{const h=setup(q=>Promise.resolve({complete:true,hasMore:false,summary:[],groups:{daily:q.platformId==='a'?[{...metric(),date:'2026-09-20'},{...metric(),date:'2026-09-21'}]:[]}}));h.instance.open(segment,'8时');h.action(segment,'daily');await flush();const html=h.instance.table(alignedConfig);assert.match(html,/1 \/ 2 平台有记录/);const rows=[...html.matchAll(/<tr class="analysis-aligned-item">(.*?)<\/tr>/gs)];for(const row of rows.slice(0,2))assert.match(row[1],/<td>—<\/td>$/);});
 test('matrix cell expansion appears immediately below its amount row with hour-specific totals',()=>{const h=setup(),selected={kind:'matrix_range',direction:'charge',hour:8,bucket:'100–200'},aggregate={kind:'amount_range',direction:'charge',bucket:'100–200'},config={exclusive:'matrix-charge',headers:['金额 / 时','08时'],rows:['100–200','201–300'],cells:b=>[b,'hour cell'],segment:bucket=>({kind:'amount_range',direction:'charge',bucket}),label:bucket=>bucket+' · 24小时合计',rowDetail:bucket=>bucket===selected.bucket?{segment:selected,label:'08时 × '+bucket}:null};h.instance.table(config);h.instance.open(selected,'08时 × 100–200','matrix-charge');let html=h.instance.table(config);assert.equal(h.instance.isOpen(selected),true);assert(html.indexOf('08时 × 100–200')<html.indexOf('<td>201–300</td>'));assert.match(html,/analysis-matrix-selected-row/);assert.doesNotMatch(html,/<strong>100–200 · 24小时合计/);assert.equal(h.calls.length,0);h.action(aggregate,'toggle');html=h.instance.table(config);assert.equal(h.instance.isOpen(selected),false);assert.match(html,/<strong>100–200 · 24小时合计/);assert.doesNotMatch(html,/<strong>08时 ×/);h.instance.open(selected,'08时 × 100–200','matrix-charge');assert.equal(h.instance.isOpen(aggregate),false);});
+
+const durationSegment={kind:'latency',direction:'charge',bucket:0,cumulative:false};
+const cellsOf=html=>[...html.matchAll(/<tr>(.*?)<\/tr>/gs)].map(m=>[...m[1].matchAll(/<td>(.*?)<\/td>/gs)].map(c=>c[1])).filter(row=>row.length);
+function durationResponse(q){
+ const row=(provider,count,valid_count,amount,date)=>({provider,direction:'charge',currency:'INR',count,valid_count,amount,valid_amount:valid_count*100,success_count:count,success_amount:amount,...(date?{date}:{})});
+ const provider=q.platformId==='a'?[row('SLOW',10,100,1000),row('FAST',0,900,0)]:[row('SLOW',30,300,3000),row('FAST',10,100,10000)];
+ const provider_daily=q.platformId==='a'?[row('SLOW',2,10,200,'2026-09-20'),row('FAST',0,200,0,'2026-09-20'),row('SLOW',8,90,800,'2026-09-21'),row('FAST',0,700,0,'2026-09-21')]:[row('SLOW',8,40,800,'2026-09-20'),row('FAST',2,50,2000,'2026-09-20'),row('SLOW',22,260,2200,'2026-09-21'),row('FAST',8,50,8000,'2026-09-21')];
+ const total=rows=>Object.fromEntries(['count','amount','valid_count','valid_amount'].map(key=>[key,rows.reduce((n,r)=>n+r[key],0)]));
+ return {platform:{id:q.platformId},complete:true,hasMore:false,summary:[{direction:'charge',currency:'INR',...total(provider)}],groups:{provider,provider_daily,daily:['2026-09-20','2026-09-21'].map(date=>({date,direction:'charge',currency:'INR',...total(provider_daily.filter(r=>r.date===date))}))},rows:[]};
+}
+test('each latency band has separate provider and local platform expansion buttons',async()=>{
+ const h=setup(q=>Promise.resolve(durationResponse(q))),buttons=h.instance.button(durationSegment,'≤ 5 分钟');
+ assert.match(buttons,/三方展开/);assert.match(buttons,/平台展开/);
+ h.action(durationSegment,'togglePlatform');assert.equal(h.calls.length,0);assert.match(h.instance.panel(durationSegment),/>ar</);assert.match(h.instance.panel(durationSegment),/>newar</);
+ h.action(durationSegment,'toggleProvider');await flush();assert.equal(h.calls.length,2);
+ assert(h.calls.every(q=>q.view==='drilldown'&&q.kind==='latency'&&q.bucket===0&&q.cumulative===false&&q.direction==='charge'&&q.providers[0]==='ORIGINAL'));
+ h.action(durationSegment,'toggleProvider');assert.equal(h.instance.panel(durationSegment),'');h.action(durationSegment,'toggleProvider');await flush();assert.equal(h.calls.length,2,'reopening a complete provider band reuses its aggregate result');
+ assert.doesNotMatch(h.instance.button(segment,'8时'),/三方展开|平台展开/);
+});
+test('provider shares use the band total while own-band rates use that provider valid orders across platforms',async()=>{
+ const h=setup(q=>Promise.resolve(durationResponse(q)));h.L.results.forEach(r=>r.groups.provider=[{provider:'SLOW',...metric(999999,999999,999999,999999)}]);
+ const before=JSON.stringify(h.L.results);h.instance.button(durationSegment,'≤ 5 分钟');h.action(durationSegment,'toggleProvider');await flush();
+ const html=h.instance.panel(durationSegment),rows=cellsOf(html);
+ assert.deepEqual(rows[0].slice(0,7),['SLOW','4000.00','28.57%','40','80.00%','400','10.00%']);
+ assert.deepEqual(rows[1].slice(0,7),['FAST','10000.00','71.43%','10','20.00%','1000','1.00%']);
+ assert.match(html,/<th>档内笔数占比<\/th>/);assert.match(html,/<th>自身落档率<\/th>/);assert.match(html,/快档的落档率不表示慢单率/);
+ assert.equal(rows.length,2);assert.equal(JSON.stringify(h.L.results),before);assert.doesNotMatch(html,/999999/);
+});
+test('provider daily comparison uses the same response and preserves daily own denominators and missing dates',async()=>{
+ const h=setup(q=>Promise.resolve(durationResponse(q)));h.instance.button(durationSegment,'≤ 5 分钟');h.action(durationSegment,'toggleProvider');await flush();
+ h.action(durationSegment,'providerDaily','SLOW');await flush();const html=h.instance.panel(durationSegment),rows=cellsOf(html);
+ assert.equal(h.calls.length,2,'provider daily view must not add per-day or per-provider requests');
+ assert.deepEqual(rows[0].slice(0,7),['2026-09-20','1000.00','33.33%','10','83.33%','50','20.00%']);
+ assert.deepEqual(rows[1].slice(0,7),['2026-09-21','3000.00','27.27%','30','78.95%','350','8.57%']);
+ assert.equal(rows.length,5);assert.match(rows[2][0],/2026-09-22.*当日来源未完整返回/);assert(rows[2].slice(1).every(cell=>cell==='—'));assert.match(html,/不能平均每天的比例/);
+ h.action(durationSegment,'provider');assert.equal(cellsOf(h.instance.panel(durationSegment))[0][6],'10.00%');
+});
+test('cumulative provider labels and local searching preserve full band denominators',async()=>{
+ const s={...durationSegment,cumulative:true,placement:'duration-groups'},h=setup(q=>Promise.resolve(durationResponse(q)));h.L.durationQuery='slow';
+ h.instance.dimensionButton(s,'超过 5 分钟','provider');h.action(s,'toggleProvider');await flush();const html=h.instance.panel(s),rows=cellsOf(html);
+ assert.equal(rows.length,1);assert.equal(rows[0][4],'80.00%');assert.equal(rows[0][6],'10.00%');assert.match(html,/<th>自身超时率<\/th>/);assert.match(html,/严格超过指定时长/);assert(h.calls.every(q=>q.cumulative===true&&!('placement' in q)));
+});
+test('partial provider reads never present partial denominators as complete ratios and retry only the failure',async()=>{
+ let fail=true;const h=setup(q=>q.platformId==='b'&&fail?Promise.reject(Error('provider timeout')):Promise.resolve(durationResponse(q)));h.instance.button(durationSegment,'≤ 5 分钟');h.action(durationSegment,'toggleProvider');await flush();
+ let html=h.instance.panel(durationSegment);assert.match(html,/三方分档尚不完整/);assert.match(html,/比例暂不计算/);
+ for(const row of cellsOf(html))assert.deepEqual([row[2],row[4],row[6]],['—','—','—']);
+ fail=false;h.action(durationSegment,'retry');await flush();assert.equal(h.calls.length,3);assert.equal(h.calls[2].platformId,'b');html=h.instance.panel(durationSegment);assert.doesNotMatch(html,/三方分档尚不完整/);assert.equal(cellsOf(html)[0][6],'10.00%');
+ h.L.queryFailures=[{id:'unread'}];assert(cellsOf(h.instance.panel(durationSegment)).every(row=>row[6]==='—'),'main-query failures also prevent a complete-provider rate');
+});
+test('old or incomplete provider payloads are errors instead of invented provider timing',async()=>{
+ const h=setup(q=>{const data=durationResponse(q);delete data.groups.provider;return Promise.resolve(data)});h.instance.button(durationSegment,'≤ 5 分钟');h.action(durationSegment,'toggleProvider');await flush();
+ const html=h.instance.panel(durationSegment);assert.match(html,/三方耗时分档未完整返回/);assert.equal(cellsOf(html).length,0);assert.doesNotMatch(html,/SLOW|FAST/);
+});
+test('provider expansion reuses provider groups already returned by platform daily comparison',async()=>{
+ const h=setup(q=>Promise.resolve(durationResponse(q)));h.instance.button(durationSegment,'≤ 5 分钟');h.action(durationSegment,'platformDaily','b');await flush();assert.equal(h.calls.length,1);
+ h.action(durationSegment,'toggleProvider');await flush();assert.equal(h.calls.length,2);assert.equal(h.calls[1].platformId,'a');assert.equal(cellsOf(h.instance.panel(durationSegment))[0][6],'10.00%');
+});
+test('provider duration hides zero-hit rows but retains their denominators and confirmed daily zeros',async()=>{
+ const unsafe='<img src=x onerror="alert(1)">',h=setup(q=>{const r=durationResponse(q);r.groups.provider[0].provider=unsafe;r.groups.provider[0].amount=null;r.summary[0].amount=null;const zero={provider:'ZERO',direction:'charge',currency:'INR',count:0,amount:0,valid_count:25,valid_amount:2500};r.groups.provider.push(zero);r.groups.provider_daily.push({...zero,date:'2026-09-20',valid_count:10,valid_amount:1000},{...zero,date:'2026-09-21',valid_count:15,valid_amount:1500});return Promise.resolve(r)});
+ h.instance.button(durationSegment,'≤ 5 分钟');h.action(durationSegment,'toggleProvider');await flush();const html=h.instance.panel(durationSegment),rows=cellsOf(html);
+ assert.match(html,/&lt;img/);assert.doesNotMatch(html,/<img|NaN|Infinity/);assert.equal(rows[0][1],'—');assert(rows.every(row=>row[2]==='—'));
+ assert(!rows.some(row=>row[0]==='ZERO'));assert.equal(rows[0][6],'10.00%');
+ const state=h.instance.snapshot().states.get(JSON.stringify(durationSegment));assert([...state.daily.get('all').results.values()].every(r=>r.groups.provider.some(p=>p.provider==='ZERO'&&p.valid_count===25)));
+ h.action(durationSegment,'providerDaily','ZERO');await flush();const daily=cellsOf(h.instance.panel(durationSegment));assert.deepEqual(daily[0].slice(3,7),['0','0.00%','20','0.00%']);assert.deepEqual(daily[1].slice(3,7),['0','0.00%','30','0.00%']);assert.equal(h.calls.length,2);
+});
+test('provider requests stop scheduling when collapsed and cannot populate a changed date scope',async()=>{
+ const waiting=[],h=setup(q=>new Promise(resolve=>waiting.push({q,resolve})));const third={...h.L.catalog[0],id:'c'};h.L.catalog.push(third);h.L.results.push({...h.L.results[0],platform:third});
+ h.instance.button(durationSegment,'≤ 5 分钟');h.action(durationSegment,'toggleProvider');assert.equal(h.calls.length,2);assert.match(h.instance.panel(durationSegment),/三方分档读取 0 \/ 3/);
+ h.action(durationSegment,'toggleProvider');waiting.forEach(p=>p.resolve(durationResponse(p.q)));await flush();assert.equal(h.calls.length,2,'the third platform must not start after collapse');
+ h.L.from='2026-09-21T00:00:00';h.instance.button(durationSegment,'新日期');assert.equal(h.instance.snapshot().states.get(JSON.stringify(durationSegment)).daily.size,0);assert.equal(h.instance.panel(durationSegment),'');
+});

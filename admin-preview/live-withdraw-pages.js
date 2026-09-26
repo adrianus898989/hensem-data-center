@@ -120,7 +120,7 @@
   root.withdrawMultiOpen=(_key,open)=>{S.open=!!open};
   root.withdrawMultiToggle=element=>{S.open=element.open};
   root.withdrawSetMultiOption=(_key,input)=>{S.platforms=input.checked?[...new Set([...S.platforms,input.value])]:S.platforms.filter(v=>v!==input.value);invalidate();render()};
-  root.withdrawMultiClear=()=>{S.platforms=[];invalidate();render()};
+  root.withdrawMultiClear=()=>{S.platforms=[];S.open=false;S.search='';invalidate();render()};
   root.withdrawMultiAll=(_key,checked)=>{S.platforms=checked?[...document.querySelectorAll('[data-multi="withdrawPlatform"] .live-multi-option')].filter(n=>!n.hidden).map(n=>n.querySelector('input').value):[];invalidate();render()};
   root.withdrawMultiSearch=(_key,value)=>{S.search=String(value??'').slice(0,200);const query=S.search.trim().toLocaleLowerCase();const rootNode=document.querySelector('[data-multi="withdrawPlatform"]');if(!rootNode)return;let visible=0;rootNode.querySelectorAll('.live-multi-option').forEach(n=>{const hay=String(n.dataset.search||n.textContent||'').toLocaleLowerCase();const show=!query||hay.includes(query);n.hidden=!show;if(show)visible++});const empty=rootNode.querySelector('.live-multi-empty');if(empty){empty.hidden=visible>0;empty.textContent=visible?'':'没有匹配选项'}};
   root.withdrawMultiClose=()=>{S.open=false;render()};
