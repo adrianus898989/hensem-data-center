@@ -9,31 +9,42 @@
  const pages=new Set(['overview','providers','provider_payout','collection','payout','merchants','merchantproviders','teamops','teamcountries','teamplatforms']);
  const detailPages=new Set(['orders','time','amount','matrix','latency','stuck','provider_daily']);
  const direction=value=>({recharge:'charge',deposit:'charge',collect:'charge','代收':'charge',payout:'withdraw','代付':'withdraw'})[value]||value;
- const keyFor=row=>JSON.stringify([row.country||'',row.name||'']);
+ const legacyPanghu=new Set(['胖虎巴西','BR_PANGHU','PANGHU BRAZIL','PANDA PANGHU']);
+ const legacyTeams={'香港':'香港',HONG_KONG:'香港',GAME66_HK:'香港','红膏蟹':'红膏蟹','紅膏蟹':'红膏蟹',RED_CRAB:'红膏蟹',GAME66_RED_CRAB:'红膏蟹'};
+ const token=value=>String(value??'').trim().toUpperCase();
+ const countryNames={IN:'印度',BR:'巴西',BRAZIL:'巴西',PK:'巴基斯坦',ID:'印尼',VN:'越南',PH:'菲律宾',MY:'马来',MM:'缅甸',NG:'尼日利亚',CO:'哥伦比亚',MX:'墨西哥',CL:'智利'};
+ // A display country must never replace the source group used for access and queries.
+ function normalizeIdentity(row={}){
+  const identityCountry=row.identityCountry??row.country??row.rawCountry??'',scope=row.scopeGroup??row.scope_group,legacy=legacyPanghu.has(token(identityCountry))||legacyPanghu.has(token(scope));
+  const explicit=[row.geographicCountry,row.geographic_country,row.countryName,row.country_name,row.countryCode,row.country_code].find(value=>value&&!legacyPanghu.has(token(value))&&!legacyTeams[token(value)]);
+  const country=legacy?'巴西':legacyTeams[token(identityCountry)]?(explicit?countryNames[token(explicit)]||String(explicit):'国家待核对'):countryNames[token(identityCountry)]||identityCountry||'国家待核对';
+  const team=legacy||legacyPanghu.has(token(row.team))?'胖虎':row.team&&row.team!=='待归类'?legacyTeams[token(row.team)]||row.team:legacyTeams[token(identityCountry)]||'__unassigned__';
+  return {...row,identityCountry,rawCountry:row.rawCountry??identityCountry,country,team};
+ }
+ const keyFor=row=>{const raw=row.identityCountry??row.country??'';return JSON.stringify([legacyPanghu.has(token(raw))||legacyPanghu.has(token(row.scopeGroup??row.scope_group))?'胖虎巴西':raw,row.name||''])};
  const sourceKey=row=>JSON.stringify([row.dataset,row.system||'',row.rawCountry??row.country,row.rawPlatform??row.name,row.direction,row.sourceKind]);
  const values=value=>Array.isArray(value)?value.filter(x=>x!==''&&x!=='all'):value&&value!=='all'?[value]:[];
  const sameSource=(a,b)=>String(a||'').toLowerCase().replaceAll('_','')===String(b||'').toLowerCase().replaceAll('_','');
  const feedMatchesSources=(feed,sources)=>!values(sources).length||!feed.system||['REPORT','SHEET','RECHARGE_REVIEW','WITHDRAW_REVIEW'].includes(String(feed.system).toUpperCase())||values(sources).some(value=>sameSource(value,feed.system));
  const sourceLabel=kind=>({direct:'直接写入 Supabase',google_sheets:'Google 表格 → Supabase',google_sheets_live:'Google 表格',mixed:'混合来源，待核对',unknown:'来源链路待核对'})[kind]||'来源链路待核对';
- const cleanTeam=(team,country)=>['胖虎巴西','BR_PANGHU','PANGHU BRAZIL'].includes(String(team||'').toUpperCase())||['胖虎巴西','BR_PANGHU','PANGHU BRAZIL'].includes(String(country||'').toUpperCase())?'胖虎':team&&team!=='待归类'?team:'__unassigned__';
- root.HensemLiveReportData={create({L,E,N,C,R,request,render,normalizeTeam=cleanTeam}){
+ root.HensemLiveReportData={normalizeIdentity,identityKey:keyFor,create({L,E,N,C,R,request,render}){
   const S={catalogRows:[],catalogLoaded:false,catalogBusy:false,catalogError:'',catalogSerial:0,catalogAt:0,loading:false,error:'',result:null,serial:0,scope:null,scopeKey:'',expanded:new Set(),tabs:new Map()};let catalogPending=null,loadPending=null,completed=null;
   const notify=()=>{if(typeof render==='function')render()};
   function catalog(){
-   const groups=new Map();for(const f of S.catalogRows){const key=keyFor(f);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(f)}
+   const groups=new Map(),seeds=new Map();for(const seed of L.withdrawCatalog||[]){if(!seed.name||legacyPanghu.has(token(seed.name)))continue;const key=keyFor(seed);if(!seeds.has(key))seeds.set(key,seed);if(!groups.has(key))groups.set(key,[])}for(const f of S.catalogRows){const key=keyFor(f);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(f)}
    const orderGroups=new Map();for(const p of L.catalog||[]){const key=keyFor(p);if(!orderGroups.has(key))orderGroups.set(key,[]);orderGroups.get(key).push(p)}
-   const reportTeams=feeds=>[...new Set(feeds.map(f=>normalizeTeam(f.team,f.country)).filter(t=>t!=='__unassigned__'))];
-   const native=(L.catalog||[]).map(p=>{const feeds=groups.get(keyFor(p))||[],teams=reportTeams(feeds),team=normalizeTeam(p.team,p.country);return {...p,team:team==='__unassigned__'?(teams.length===1?teams[0]:teams.length>1?'归属待核对':team):team,feeds,reportOnly:false,orderPlatformIds:(orderGroups.get(keyFor(p))||[]).map(x=>x.id)}});
-   for(const [key,feeds]of groups){if(orderGroups.has(key))continue;const first=feeds[0],teams=reportTeams(feeds),currencies=[...new Set(feeds.map(f=>f.currency).filter(Boolean))],zones=[...new Set(feeds.map(f=>f.timezone).filter(Boolean))],systems=[...new Set(feeds.map(f=>f.system).filter(Boolean))];native.push({id:'report:'+encodeURIComponent(key),name:first.name,country:first.country,team:teams.length===1?teams[0]:teams.length>1?'归属待核对':'__unassigned__',source:systems.length===1?systems[0]:'reports',currency:currencies.length===1?currencies[0]:'—',timezone:zones.length===1?zones[0]:null,feeds,reportOnly:true,orderPlatformIds:[]})}
+   const reportTeams=feeds=>[...new Set(feeds.map(f=>normalizeIdentity(f).team).filter(t=>t!=='__unassigned__'))];
+   const native=(L.catalog||[]).map(p=>{const feeds=groups.get(keyFor(p))||[],teams=reportTeams(feeds),identity=normalizeIdentity(p),team=identity.team;return {...identity,team:team==='__unassigned__'?(teams.length===1?teams[0]:teams.length>1?'归属待核对':team):team,feeds,reportOnly:false,orderPlatformIds:(orderGroups.get(keyFor(p))||[]).map(x=>x.id)}});
+   for(const [key,feeds]of groups){if(orderGroups.has(key))continue;const seed=seeds.get(key),first=feeds[0]||seed,teams=reportTeams(feeds.length?feeds:[seed]),currencies=[...new Set(feeds.map(f=>f.currency).filter(Boolean))],zones=[...new Set(feeds.map(f=>f.timezone).filter(Boolean))],systems=[...new Set(feeds.map(f=>f.system).filter(Boolean))];native.push({...normalizeIdentity(first),id:'report:'+encodeURIComponent(key),name:first.name,team:teams.length===1?teams[0]:teams.length>1?'归属待核对':'__unassigned__',source:systems.length===1?systems[0]:'reports',currency:currencies.length===1?currencies[0]:seed?.currency||'—',timezone:zones.length===1?zones[0]:seed?.timezone||null,feeds,reportOnly:true,orderPlatformIds:[]})}
    return native;
   }
-  function selected(scope={}){const teams=values(scope.teams),platforms=values(scope.platforms),sources=values(scope.sources);return catalog().filter(p=>(!scope.country||scope.country==='all'||p.country===scope.country)&&(!teams.length||teams.includes(p.team))&&(!platforms.length||platforms.includes(p.id))&&(!sources.length||sources.some(s=>sameSource(s,p.source))))}
+  function selected(scope={}){const teams=values(scope.teams),platforms=values(scope.platforms),sources=values(scope.sources),country=normalizeIdentity({country:scope.country}).country,legacyScope=legacyPanghu.has(token(scope.country))||legacyTeams[token(scope.country)];return catalog().filter(p=>(!scope.country||scope.country==='all'||p.country===country&&(!legacyScope||keyFor({...p,name:''})===keyFor({country:scope.country,name:''})))&&(!teams.length||teams.includes(p.team))&&(!platforms.length||platforms.includes(p.id))&&(!sources.length||sources.some(s=>sameSource(s,p.source))))}
   function scopeFeeds(scope={}){
    const feeds=new Map();for(const p of selected(scope))for(const f of p.feeds||[]){if(!feedMatchesSources(f,scope.sources))continue;if(!datasets.has(f.dataset)||f.available===false||Number(f.records)===0)continue;const directions=[...new Set((Array.isArray(f.directions)?f.directions:Array.isArray(f.capabilities)?f.capabilities:f.direction?[f.direction]:f.dataset==='auto'?['withdraw']:[]).map(direction).filter(d=>['charge','withdraw'].includes(d)))];for(const d of directions){if(scope.direction&&scope.direction!=='all'&&scope.direction!==d)continue;const item={dataset:f.dataset,system:f.system||'',country:f.rawCountry??f.country,platform:f.rawPlatform??f.name,direction:d,sourceKind:f.provenance?.kind||'unknown'},key=sourceKey({...item,rawCountry:item.country,rawPlatform:item.platform});if(!feeds.has(key))feeds.set(key,{request:item,feed:f,platformIds:[]});feeds.get(key).platformIds.push(p.id)}}return [...feeds.values()];
   }
   async function loadCatalog(force=false){
-   if(catalogPending)return catalogPending;if(S.catalogLoaded&&!force&&Date.now()-S.catalogAt<60000)return catalog();if(force){completed=null;S.result=null;if(!S.loading)S.scopeKey=''}const serial=++S.catalogSerial;S.catalogBusy=true;S.catalogError='';notify();
-   const task=(async()=>{try{const result=await request({action:'collectedData',operation:'catalog'});if(serial!==S.catalogSerial)return catalog();if(!Array.isArray(result?.rows))throw Error('日报目录返回不完整');S.catalogRows=result.rows;S.catalogLoaded=true;S.catalogAt=Date.now();return catalog()}catch(e){if(serial===S.catalogSerial){S.catalogError=e.message||'日报目录读取失败';S.catalogRows=[];S.catalogLoaded=false;completed=null;S.result=null}return catalog()}finally{if(serial===S.catalogSerial){S.catalogBusy=false;catalogPending=null;notify()}}})();catalogPending=task;return task;
+   if(catalogPending)return catalogPending;if(S.catalogLoaded&&!S.catalogError&&!force&&Date.now()-S.catalogAt<60000)return catalog();if(force){completed=null;S.result=null;if(!S.loading)S.scopeKey=''}const serial=++S.catalogSerial;S.catalogBusy=true;S.catalogError='';notify();
+   const task=(async()=>{try{const result=await request({action:'collectedData',operation:'catalog'});if(serial!==S.catalogSerial)return catalog();if(!Array.isArray(result?.rows))throw Error('日报目录返回不完整');S.catalogRows=result.rows;S.catalogLoaded=true;S.catalogAt=Date.now();return catalog()}catch(e){if(serial===S.catalogSerial){S.catalogError=e.message||'日报目录读取失败';completed=null;S.result=null}return catalog()}finally{if(serial===S.catalogSerial){S.catalogBusy=false;catalogPending=null;notify()}}})();catalogPending=task;return task;
   }
   function cancel(){S.serial++;S.loading=false;S.error='';if(completed){S.result=completed.result;S.scopeKey=completed.key;S.scope=completed.scope}else{S.result=null;S.scopeKey='';S.scope=null}loadPending=null}
   async function load(scope={},force=false){
@@ -62,7 +73,7 @@
   function renderReport({page='overview'}={}){
    if(!pages.has(page)&&!detailPages.has(page))return '';const scope=S.scope||{country:L.country,teams:values(L.multi?.team?.length?L.multi.team:L.team),platforms:values(L.multi?.platform?.length?L.multi.platform:L.platform),sources:values(L.multi?.source?.length?L.multi.source:L.source),direction:L.direction},pageDirection=['providers','collection'].includes(page)?'charge':['provider_payout','payout'].includes(page)?'withdraw':L.direction||'all',feedScope=scopeFeeds({...scope,direction:pageDirection}),selection=selected(scope),onlyReports=selection.some(p=>p.reportOnly&&p.feeds?.some(f=>datasets.has(f.dataset)));
    if(detailPages.has(page))return onlyReports?'<section class="live-report-data"><div class="report-note">所选平台包含源日报数据；日报未提供逐笔订单、小时、金额档或到账时效，不能生成这些订单分析。请在总览、代收汇总或代付汇总查看源日报。</div></section>':'';
-   const capability=capabilityView(selection,scope);if(!S.loading&&!S.error&&!S.catalogError&&!feedScope.length&&!S.result?.feeds?.length)return capability;
+   const capability=capabilityView(selection,scope);if(!S.catalogBusy&&!S.loading&&!S.error&&!S.catalogError&&!feedScope.length&&!S.result?.feeds?.length)return capability;
    const prefix=capability+'<section class="live-report-data"><header><div><h2>源日报数据</h2><p>日报按所选起止日期整日展示，不按小时截取；与订单统计分别列示，不重复累加。不同来源和统计粒度也分别核对。</p></div><span>'+E(scope.from||'')+' 至 '+E(scope.to||'')+'</span></header>';
    if(S.catalogBusy||S.loading)return prefix+'<div class="report-status">正在读取源日报…</div></section>';
    if(S.error||S.catalogError)return prefix+'<div class="report-status report-error">日报读取未完成，不能据此判断没有数据。'+E(S.error||S.catalogError)+'</div></section>';

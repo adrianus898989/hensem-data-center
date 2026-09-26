@@ -21,3 +21,16 @@ body.live-admin .analysis-matrix .analysis-expand-table>table>thead>tr>th:nth-ch
 body.live-admin .analysis-matrix .analysis-expand-table>table>tbody>tr>td{padding:5px 4px}
 body.live-admin .analysis-matrix-cell{display:flex;flex-direction:column;align-items:center;gap:2px;border:0;background:transparent;color:inherit;font:inherit;width:100%;cursor:pointer;padding:2px}
 body.live-admin .analysis-matrix-cell:hover{background:#eaf0ff;border-radius:3px;color:#3152cc}
+/* Detail rows share the parent's actual table columns, including on narrow screens. */
+body.live-admin .analysis-compact .analysis-aligned-table>table>thead>tr>th:first-child,body.live-admin .analysis-compact .analysis-aligned-table>table>tbody>tr:not(.analysis-expanded-row)>:first-child{width:104px;max-width:none;text-align:left}
+body.live-admin .analysis-compact .analysis-aligned-table>table>thead>tr>th:nth-child(2),body.live-admin .analysis-compact .analysis-aligned-table>table>tbody>tr:not(.analysis-expanded-row)>:nth-child(2){width:125px;text-align:left}
+body.live-admin .analysis-aligned-table>table>tbody>tr:not(.analysis-expanded-row)>:last-child{width:85px}
+body.live-admin .analysis-aligned-head>th{background:#eaf0fc;padding:7px 8px;font-size:10px;white-space:nowrap;color:#647fa5;border-top:1px solid #dbe4f5;border-bottom:1px solid #dbe4f5}
+body.live-admin .analysis-aligned-item>td{background:#f5f8ff;border-bottom:1px solid #e4ecf9;vertical-align:middle}
+body.live-admin .analysis-aligned-caption .analysis-drilldown{padding:8px}
+body.live-admin .analysis-aligned-caption .analysis-drilldown-head{margin-bottom:0}
+body.live-admin .analysis-metric-value{display:block;white-space:nowrap}
+body.live-admin .analysis-metric-share{display:block;font-size:9px;line-height:1.5;color:#7185a7;white-space:nowrap;margin-top:2px}
+body.live-admin .analysis-matrix-cell.is-selected{border-radius:4px;background:#e7edff;box-shadow:inset 0 0 0 2px #4567e8;color:#214ac5}
+body.live-admin .analysis-matrix-selected-row>td{background:#f9fbff}
+body.live-admin .analysis-matrix .analysis-expanded-row .analysis-drilldown{overflow:hidden}

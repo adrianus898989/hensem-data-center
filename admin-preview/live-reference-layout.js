@@ -10,7 +10,7 @@
  function comparison(current,previous,options,isRate=false){
   const status=options.comparisonStatus||'unavailable',label=options.comparisonLabel||'较前一日';
   if(status!=='ready'||!options.previous){const text=status==='loading'?'对比读取中':'对比暂不可用';return {text,title:options.comparisonError||text,tone:'neutral'}}
-  const helper=isRate?(options.rateDelta||root.HensemLiveCompare?.rateDelta):(options.delta||root.HensemLiveCompare?.delta);
+  const helper=isRate?(options.rateDelta||root.HensemLiveCompare?.ratioDelta):(options.delta||root.HensemLiveCompare?.delta);
   const result=typeof helper==='function'?(isRate?helper(...current,...previous):helper(current,previous)):null;
   return {text:label+' '+(result?.display||'—'),title:options.comparisonTitle||label,tone:result?.trend==='up'?'up':result?.trend==='down'?'down':'neutral'};
  }
@@ -28,7 +28,7 @@
    const countText=count(current[key+'_count'])+' 笔',foot='<span class="live-reference-count" title="'+esc('笔数'+countCompare.text)+'">'+esc(countText)+'</span>'+compareHtml(amountCompare);
    return card(name,money(current[key+'_amount']),foot,key,icon,name+'；'+countText+'；金额'+amountCompare.text+'；笔数'+countCompare.text);
   });
-  cards.push(card('成功率',rate(current.success_count,current.all_count),compareHtml(comparison([current.success_count,current.all_count],[previous.success_count,previous.all_count],options,true)),'success_rate','▥','成功笔数按成功时间；全部订单笔数按创建时间'));
+  cards.push(card('成功率',rate(current.success_count,current.all_count),compareHtml(comparison([current.success_count,current.all_count],[previous.success_count,previous.all_count],options,true)),'success_rate','▥','成功笔数按成功时间；全部订单笔数按创建时间；含跨日成功，可超过100%'));
   cards.push(card('估算手续费','—','<span class="metric-compare neutral" title="历史生效费率尚未完整匹配，不按当前费率重算旧订单">对比 —</span>','fee','▥','历史生效费率尚未接入，手续费暂不可用'));
   return '<div class="kpis dense-metrics comparison-kpis live-reference-metrics">'+cards.join('')+'</div>';
  }

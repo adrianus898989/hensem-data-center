@@ -22,7 +22,7 @@ test('both flows expand with identical parent column count/order, successful tim
   assert.equal(rows.length,2);for(const row of rows)assert.equal(row.length,headers.length);
   assert.equal(plain(rows[0][0]),'Alpha');assert.equal(plain(rows[0][1]),'ar');assert.equal(plain(rows[0][2]),'900.00');assert.equal(plain(rows[1][2]),'100.00');
   assert.match(rows[0][3],/^3<small.*笔数占比 30.00%/);assert.match(rows[1][3],/^7<small.*笔数占比 70.00%/);
-  assert.match(rows[0][4],/按创建订单：2 \/ 20 笔/);assert.match(rows[0][4],/>10.00%/);assert.equal(plain(rows[0][5]),'90.00%');
+  assert.match(rows[0][4],/按成功 \/ 创建：3 \/ 20 笔/);assert.match(rows[0][4],/>15.00%/);assert.equal(plain(rows[0][5]),'90.00%');
   const feeIndex=direction==='withdraw'?8:6;assert.equal(plain(rows[0][feeIndex]),direction==='withdraw'?'2.50% + 6 / 笔':'4.00%');
   assert.equal(plain(rows[1][feeIndex]),direction==='withdraw'?'3.00% + 2 / 笔':'5.00%');
   assert.equal(plain(rows[0][feeIndex+1]),direction==='withdraw'?'40.50':'36.00');assert.equal(plain(rows[1][feeIndex+1]),direction==='withdraw'?'17.00':'5.00');
