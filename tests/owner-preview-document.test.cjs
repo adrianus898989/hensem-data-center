@@ -131,7 +131,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     if (name.endsWith('/adminPreviewRestore')) return { restoreApprovedAdmin(html) { phases.push('restore'); restoreCalls.push(html); return options.restore ? options.restore(html) : html+'<!-- synthetic approved restoration -->'; } };
     if (name.endsWith('/ownerPreviewDocument')) return { ...api, makeOwnerPreviewDocument(...args) { phases.push('draft-document'); return api.makeOwnerPreviewDocument(...args); } };
     if (name.endsWith('/ownerPreviewShell')) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/ownerPreviewShell.ts'),'utf8')),{module:helper,exports:helper.exports,document:environment.document});return {...helper.exports,makeOwnerPreviewShellDocument(...args){phases.push('shell-document');return helper.exports.makeOwnerPreviewShellDocument(...args)}}; }
-    if (name.endsWith('/dashboardAuthClient')) return { ensureDashboardSession: async candidate => candidate };
+    if (name.endsWith('/dashboardAuthClient')) return { ensureDashboardSession: async candidate => candidate, normalizedManagementPermissions: profile=>({manage_viewers:profile.management_permissions?.manage_viewers!==false}) };
     if (name.endsWith('/adminConfigurationRequest')) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/adminConfigurationRequest.ts'),'utf8')),{module:helper,exports:helper.exports});return helper.exports; }
     if (name.endsWith('/adminLiveBridge')) {
       if (!liveClient) { const module={exports:{}};const filename=path.join(repo,'src/lib/adminLiveBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module,exports:module.exports,setTimeout,clearTimeout},{filename});liveClient={...module.exports,makeAdminLiveDocument(...args){phases.push('live-document');return module.exports.makeAdminLiveDocument(...args)}}; }
@@ -146,6 +146,8 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
       return client;
     }
     if (name === './AdminPreviewGrants') return { default: () => null };
+    if (name === './AdminControlCenter') return { default: function AdminControlCenter(){} };
+    if (name === './WorkOrderAccountAdmin') return { default: function WorkOrderAccountAdmin(){} };
     throw Error('Unexpected component test import: ' + name);
   };
   environment = {
@@ -157,7 +159,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   };
   vm.runInNewContext(transpile(fs.readFileSync(componentPath, 'utf8')), environment, { filename: componentPath });
   const props = { canView: options.canView ?? true, session: currentSession,
-    profile: { active: options.active ?? true, role: options.role || 'owner', auth_user_id: userId }, onClose: options.onClose || (()=>{}) };
+    profile: { active: options.active ?? true, role: options.role || 'owner', management_permissions:options.management_permissions, auth_user_id: userId }, onClose: options.onClose || (()=>{}) };
   const draw = () => { hookIndex = refIndex = callbackIndex = effectIndex = 0; return box.exports.default(props); };
   draw(); const child = {}; refs[0].current = { contentWindow: child };
   for (const effect of effects.splice(0)) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); }
@@ -372,4 +374,21 @@ test('bookmarked page reaches the authorized iframe while denied accounts never 
   assert.doesNotMatch(iframe.props.srcDoc,/synthetic-query-secret|offline-host-access|offline-host-refresh/);h.dispose();
   const denied=componentHarness('offline-denied-bookmark',{location,canView:false,role:'viewer'});await flush();
   assert.equal(denied.calls.length,0);assert(!findElement(denied.draw(),'iframe'));denied.dispose();
+});
+
+
+function elements(node){if(!node||typeof node!=='object')return[];return[node,...(Array.isArray(node.props?.children)?node.props.children:[node.props?.children]).flatMap(elements)]}
+test('account managers open in the host, retain the same iframe and enforce separate permissions',async()=>{
+ for(const options of [{role:'owner',accounts:true,workorder:true},{role:'admin',accounts:true,workorder:false},{role:'admin',management_permissions:{manage_viewers:false},accounts:false,workorder:false},{role:'viewer',accounts:false,workorder:false}]){
+  const h=componentHarness('account-fixture',options);await flush();const before=findElement(h.draw(),'iframe').props.srcDoc,reads=h.calls.length;
+  const send=command=>h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command}});
+  send('open-accounts');let tree=h.draw(),all=elements(tree);assert.equal(all.some(n=>n.type?.name==='AdminControlCenter'),options.accounts);assert.equal(findElement(tree,'iframe').props.srcDoc,before);assert.equal(h.calls.length,reads,'opening management does not reload preview');
+  if(options.accounts){const component=all.find(n=>n.type?.name==='AdminControlCenter');assert.equal(component.props.accountsOnlyLoading,true);assert.equal(component.props.session,h.session)}else assert(all.some(n=>n.props?.role==='alert'));
+  send('open-workorder-accounts');tree=h.draw();all=elements(tree);assert.equal(all.some(n=>n.type?.name==='WorkOrderAccountAdmin'),options.workorder);assert.equal(findElement(tree,'iframe').props.srcDoc,before);assert.equal(h.calls.length,reads);
+  all.find(n=>n.type==='button'&&n.props.children==='关闭').props.onClick();assert(!elements(h.draw()).some(n=>n.props?.role==='dialog'));assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);h.dispose();
+ }
+});
+test('wrong-origin and old-channel messages cannot open host account controls',async()=>{
+ const h=componentHarness();await flush();const base={source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command:'open-accounts'}};
+ for(const event of [{...base,source:{}},{...base,origin:'https://spoof.invalid'},{...base,data:{...base.data,channel:'old'}}]){h.send(event);assert(!elements(h.draw()).some(n=>n.props?.role==='dialog'))}h.dispose();
 });

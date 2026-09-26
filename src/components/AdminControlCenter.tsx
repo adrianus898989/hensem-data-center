@@ -45,6 +45,7 @@ type Props = {
   onClose: () => void;
   section?: "accounts" | "permissions" | "ip" | "data" | "audit";
   embedded?: boolean;
+  accountsOnlyLoading?: boolean;
 };
 
 type Tab = "accounts" | "permissions" | "ip" | "data" | "audit";
@@ -225,7 +226,7 @@ function localDateKey(value: string): string {
   return `${y}-${m}-${d}`;
 }
 
-export default function AdminControlCenter({ open, session, profile, onClose, section = "accounts", embedded = false }: Props) {
+export default function AdminControlCenter({ open, session, profile, onClose, section = "accounts", embedded = false, accountsOnlyLoading = false }: Props) {
   const management = normalizedManagementPermissions(profile);
   const isOwner = profile.role === "owner";
   const hasAllData = effectiveDashboardDataScope(profile).mode === "all";
@@ -409,9 +410,9 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     if (!open || !canOpenAdminCenter(profile)) return;
     setMessage("");
     void loadUsers();
-    if (canViewAudit) void loadAudit();
-    if (canRefreshData) { void loadHistoryStatus(); void loadAutoHistoryStatus(); }
-    if (isOwner) void loadIpSettings();
+    if (!accountsOnlyLoading && canViewAudit) void loadAudit();
+    if (!accountsOnlyLoading && canRefreshData) { void loadHistoryStatus(); void loadAutoHistoryStatus(); }
+    if (!accountsOnlyLoading && isOwner) void loadIpSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, profile.role]);
 

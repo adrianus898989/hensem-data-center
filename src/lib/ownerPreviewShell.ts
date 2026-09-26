@@ -1,7 +1,8 @@
 // Presentation-only shell. Authentication remains in the host; the opaque frame
-// receives only a nonce for the single, allowlisted return-navigation command.
+// receives only a nonce for the allowlisted navigation commands.
 export const OWNER_PREVIEW_BODY_CLASS = "owner-preview-shell-active";
 export const OWNER_PREVIEW_SHELL_MESSAGE = "hensem-owner-preview-shell";
+export type OwnerPreviewAccountCommand = "open-accounts" | "open-workorder-accounts";
 
 export const OWNER_PREVIEW_HOST_CSS = `
 .owner-preview-shell{position:fixed;inset:0;z-index:1000;background:#f3f6fb;display:flex;flex-direction:column;min-width:0}
@@ -13,6 +14,11 @@ export const OWNER_PREVIEW_HOST_CSS = `
 .owner-preview-shell-status-actions{display:flex;gap:10px;margin-top:16px}
 .owner-preview-shell-return{border:1px solid #dce4f0;background:#fff;color:#405b84;border-radius:5px;padding:7px 10px;cursor:pointer}
 .owner-preview-shell-warning{position:absolute;left:250px;bottom:12px;right:12px;z-index:3;padding:8px 12px;border:1px solid #efd49f;border-radius:5px;background:#fff8e7;color:#805b1b;font-size:12px}
+.owner-preview-account-overlay{position:fixed;inset:0;z-index:1500;background:#10223d66;display:grid;place-items:center;padding:20px}
+.owner-preview-account-dialog{width:min(1320px,100%);height:min(900px,94vh);overflow:auto;background:#f3f6fb;border:1px solid #dce4f0;border-radius:10px;color:#253e62}
+.owner-preview-account-header{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:10px;padding:14px 18px;background:#fff;border-bottom:1px solid #dce4f0}
+.owner-preview-account-header h2{font-size:17px;margin:0 auto 0 0}.owner-preview-account-header button{padding:7px 12px;border:1px solid #dce4f0;border-radius:6px;background:#fff;color:#405b84;cursor:pointer}.owner-preview-account-header button[aria-pressed=true]{background:#eaf0ff;color:#3058c9}
+.owner-preview-account-body{padding:16px}.owner-preview-account-denied{padding:20px}
 body.owner-preview-shell-active .auth-user-menu-wrap{top:8px!important;right:12px!important;bottom:auto!important;z-index:1400!important}
 body.owner-preview-shell-active:has(.owner-preview-shell-grants) .auth-user-menu-wrap{right:104px!important}
 body.owner-preview-shell-active .auth-user-trigger{min-width:160px!important;width:160px!important;height:32px!important;padding:3px 7px 3px 4px!important;gap:6px;border-radius:6px!important;box-shadow:0 2px 6px #1b355008!important;transform:none!important}
@@ -47,6 +53,13 @@ export function isOwnerPreviewReturnMessage(event: MessageEvent, source: Window 
     && data.channel === channel && data.command === "back";
 }
 
+export function ownerPreviewAccountCommand(event: MessageEvent, source: Window | null | undefined, channel: string): OwnerPreviewAccountCommand | null {
+  const data = event.data;
+  if (!source || !channel || event.source !== source || event.origin !== "null" || !data || typeof data !== "object"
+    || data.type !== OWNER_PREVIEW_SHELL_MESSAGE || data.channel !== channel) return null;
+  return data.command === "open-accounts" || data.command === "open-workorder-accounts" ? data.command : null;
+}
+
 export function makeOwnerPreviewShellDocument(html: string, channel: string, owner: boolean): string {
   const encode = (value: string) => JSON.stringify(value).replace(/</g,"\\u003c").replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029");
   const desktopRight = owner ? 276 : 184, compactRight = owner ? 142 : 60;
@@ -69,7 +82,7 @@ body .ha-popover{max-width:min(425px,calc(100vw - 24px))}
 @media(max-width:800px){.owner-preview-frame-return .owner-preview-return-label{display:none}.owner-preview-frame-return{font-size:18px}.owner-preview-frame-return .owner-preview-return-icon{display:block}}
 @media(max-width:620px){body .topbar .crumb{display:none}body .topbar{justify-content:flex-end}body .topbar .top-right{gap:4px!important}body .topbar .top-right>.sample{padding:3px 5px;font-size:9px}}
 </style>`;
-  const script = `<script>(function(){const channel=${encode(channel)};function mount(){const sidebar=document.querySelector('.sidebar');if(!sidebar||document.getElementById('owner-preview-frame-return'))return;let footer=sidebar.querySelector('.side-bottom');if(!footer){footer=document.createElement('div');footer.className='side-bottom';sidebar.appendChild(footer)}const button=document.createElement('button');button.id='owner-preview-frame-return';button.type='button';button.className='owner-preview-frame-return';button.title='返回现有后台';button.setAttribute('aria-label','返回现有后台');button.innerHTML='<span class="owner-preview-return-icon" aria-hidden="true">←</span><span class="owner-preview-return-label">返回现有后台</span>';button.addEventListener('click',()=>parent.postMessage({type:'${OWNER_PREVIEW_SHELL_MESSAGE}',channel,command:'back'},'*'));footer.appendChild(button)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount()})();</script>`;
+  const script = `<script>(function(){const channel=${encode(channel)};window.hensemOpenAccountManager=function(command){if(command!=='open-accounts'&&command!=='open-workorder-accounts')return false;parent.postMessage({type:'${OWNER_PREVIEW_SHELL_MESSAGE}',channel,command},'*');return true};function mount(){const sidebar=document.querySelector('.sidebar');if(!sidebar||document.getElementById('owner-preview-frame-return'))return;let footer=sidebar.querySelector('.side-bottom');if(!footer){footer=document.createElement('div');footer.className='side-bottom';sidebar.appendChild(footer)}const button=document.createElement('button');button.id='owner-preview-frame-return';button.type='button';button.className='owner-preview-frame-return';button.title='返回现有后台';button.setAttribute('aria-label','返回现有后台');button.innerHTML='<span class="owner-preview-return-icon" aria-hidden="true">←</span><span class="owner-preview-return-label">返回现有后台</span>';button.addEventListener('click',()=>parent.postMessage({type:'${OWNER_PREVIEW_SHELL_MESSAGE}',channel,command:'back'},'*'));footer.appendChild(button)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount()})();</script>`;
   // Add after existing styles so local page styles cannot re-hide or move the bar.
   const withStyles = /<\/head\s*>/i.test(html) ? html.replace(/<\/head\s*>/i,()=>styles+"</head>") : html.replace(/(<!doctype html>)/i,doctype=>doctype+styles);
   return /<\/body\s*>/i.test(withStyles) ? withStyles.replace(/<\/body\s*>/i,()=>script+"</body>") : withStyles+script;

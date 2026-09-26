@@ -20,7 +20,7 @@
     anomaly: {title:'异常核对',note:'异常事件与独立核对标记未接入',metrics:['异常关联金额','异常订单笔数','异常中成功金额','异常中处理中金额'],fields:[...businessFields,text('orderNumber','订单号'),text('type','异常类型'),status]},
     events: {title:'风险事件',note:'风险事件流水未接入',metrics:['风险事件','待核查','高风险事件','已跟进'],fields:[text('eventId','事件编号'),text('provider','三方'),direction,choice('level','风险级别',[['all','全部级别'],['high','高风险'],['attention','关注']]),choice('handling','处理状态',[['all','全部状态'],['pending','待核查'],['following','跟进中'],['closed','已处理']]),...dates]},
     rules: {title:'预警规则',note:'正式规则与自动调度未接入',metrics:['规则数量','已启用规则','涉及三方','最近执行'],fields:[text('rule','规则名称'),text('provider','三方'),direction,choice('enabled','启用状态',[['all','全部状态'],['enabled','启用'],['disabled','停用']])]},
-    access: {title:'账号与角色权限',note:'本页账号目录未接入；新版查看授权使用右上角入口',metrics:['账号数量','启用账号','停用账号','角色数量'],fields:[text('account','账号'),choice('role','角色',[['all','全部角色'],['owner','所有者'],['admin','团队管理员'],['analyst','团队分析员'],['viewer','只读成员']]),text('team','团队'),text('country','国家'),text('platform','平台'),choice('enabled','账号状态',[['all','全部状态'],['enabled','启用'],['disabled','停用']])],tabs:[['accounts','账号列表'],['roles','角色权限'],['scope','数据授权']]},
+    access: {title:'账号与角色权限',note:'后台账号与工单账号分开管理',metrics:[],fields:[]},
     ip: {title:'IP 白名单',note:'正式 IP 策略与访问日志未接入',metrics:['规则数量','启用规则','适用账号','拦截记录'],fields:[text('rule','规则名称'),text('cidr','IP / CIDR'),text('account','适用账号'),choice('surface','适用入口',[['all','全部入口'],['login','后台登录'],['api','采集 API'],['both','登录与采集 API']]),choice('enabled','规则状态',[['all','全部状态'],['enabled','启用'],['disabled','停用']])]},
     login_logs: {title:'登录日志',note:'认证审计未接入',metrics:['登录记录','登录成功','登录失败','活跃会话'],fields:[text('account','账号'),text('ip','IP'),text('client','客户端'),choice('result','登录结果',[['all','全部结果'],['success','成功'],['failed','失败']]),...dates]},
     operation_logs: {title:'操作日志',note:'正式操作审计未接入',metrics:['操作记录','操作完成','权限拒绝','涉及模块'],fields:[text('account','操作者'),text('requestId','请求 ID'),text('resource','资源'),text('module','模块'),text('action','动作'),choice('result','操作结果',[['all','全部结果'],['success','完成'],['denied','拒绝'],['failed','失败']]),...dates]},
@@ -73,12 +73,15 @@
     return html+panel(page,waiting?'未到账等待分档':'到账时效分档',['类型',waiting&&s.waitMode==='days'?'日期账龄':'时长档位','金额','工单笔数','笔数占比','金额占比'])
       +'<div class="grid equal">'+panel(page,'累计超过阈值',['类型','超过时长','金额','工单笔数','笔数占比','金额占比'])+panel(page,'时间字段核验',['类型','有效时间笔数','缺少时间笔数','时间冲突笔数','平均耗时','P95'])+'</div>';
   }
-  function access(page) {
-    const s=get(page), menu=tabs(page,'tab',schema[page].tabs);
-    if(s.tab==='accounts')return menu+panel(page,'账号列表',['账号','账号标识','角色','团队','商户（平台）范围','状态','操作'],'',disabled('＋ 新建账号'));
-    if(s.tab==='scope')return menu+panel(page,'账号数据授权',['账号','角色','团队范围','国家／地区','商户（平台）范围','数据边界','操作']);
-    return menu+panel(page,'角色权限矩阵',['权限项目','所有者','团队管理员','团队分析员','只读成员'],'',tabs(page,'permission',[['pages','页面访问'],['actions','按钮动作']])+disabled('保存权限'));
+  function access() {
+    return '<div class="grid equal" data-account-entries><section class="panel"><div class="panel-head"><h2>后台账号</h2></div><div style="padding:18px"><p>管理后台登录账号、角色、模块权限、数据范围与密码。</p><button type="button" class="btn primary" onclick="HensemLiveEmpty.openAccounts(\'open-accounts\')">管理后台账号</button></div></section><section class="panel"><div class="panel-head"><h2>工单账号</h2></div><div style="padding:18px"><p>管理工单系统的主管、员工、审计员与团队平台范围。工单账号独立于后台账号。</p><button type="button" class="btn primary" onclick="HensemLiveEmpty.openAccounts(\'open-workorder-accounts\')">管理工单账号</button></div></section></div><p class="live-panel-note" role="status" id="hle-account-message">后台账号按已有管理权限开放；工单账号仅总管理员可管理。新版查看授权仍在右上角。</p>';
   }
+  function openAccounts(command) {
+    if(command!=='open-accounts'&&command!=='open-workorder-accounts')return false;
+    if(typeof root.hensemOpenAccountManager==='function')return root.hensemOpenAccountManager(command);
+    const node=root.document?.getElementById('hle-account-message');if(node)node.textContent='账号管理入口尚未就绪，请刷新后重试。';return false;
+  }
+
   function rules(page) {
     const names=['掉单率','未代付金额','订单成功率','当前三方占比','异常订单数','超期未付笔数'];
     return '<section class="panel"><div class="panel-head"><h2>六项风险阈值</h2>'+disabled('保存规则')+'</div><div class="rule-grid">'+names.map(name=>'<div class="rule-card"><h3>'+name+'</h3><div class="rule-input"><label>关注阈值</label><input aria-label="'+name+'关注阈值" disabled placeholder="未接入"></div><div class="rule-input"><label>高风险阈值</label><input aria-label="'+name+'高风险阈值" disabled placeholder="未接入"></div></div>').join('')+'</div></section>'
@@ -100,6 +103,7 @@
     return '';
   }
   function inner(page) {
+    if(page==='access')return access();
     return searchBar(page)+'<div class="live-scope"><span>'+E(schema[page].note)+'</span><span>平台 — · 三方 — · 当前范围未接入</span></div>'+metrics(page)+body(page)+pager(page);
   }
   function render(page) { return get(page)?'<div id="hle-'+page+'" class="hensem-live-empty-pages" data-empty-page="'+page+'">'+inner(page)+'</div>':''; }
@@ -131,6 +135,6 @@
     return repaint(page);
   }
   function reset(page) { if(!schema[page])return '';views[page]=initial(page);return repaint(page); }
-  root.HensemLiveEmpty={render,search,change,tab,pagechange,reset,pages:Object.freeze(Object.keys(schema)),snapshot:page=>get(page)?JSON.parse(JSON.stringify(get(page))):null};
+  root.HensemLiveEmpty={render,search,change,tab,pagechange,reset,openAccounts,pages:Object.freeze(Object.keys(schema)),snapshot:page=>get(page)?JSON.parse(JSON.stringify(get(page))):null};
   if(typeof module!=='undefined'&&module.exports)module.exports=root.HensemLiveEmpty;
 })(typeof window!=='undefined'?window:globalThis);
