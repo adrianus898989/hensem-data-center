@@ -13,6 +13,7 @@ import ProviderAnomalyDashboard from "./ProviderAnomalyDashboard";
 import AdminControlCenter from "./AdminControlCenter";
 import OwnerAdminPreview from "./OwnerAdminPreview";
 import { readAdminPreviewAccess } from "@/lib/adminPreviewClient";
+import { adminPreviewPageFromHash } from "@/lib/adminLiveBridge";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { canOpenAdminCenter, ensureDashboardSession, hasDashboardPermission, normalizedManagementPermissions, type DashboardSession } from "@/lib/dashboardAuthClient";
 import { aggregateAutoWithdrawByPlatform as aggregateByPlatform, summarizePreviousDay, percentagePointChange, formatPercentagePointChange } from "@/lib/autoWithdrawComparison";
@@ -934,7 +935,7 @@ export default function Dashboard() {
     return()=>{stop=true;window.clearInterval(timer)};
   }, [profile?.active, profile?.auth_user_id]);
   useEffect(() => {
-    const followPreviewLink = () => { if (profile?.active && (isOwner || canDetailedPreview) && window.location.hash === "#owner-admin-preview") setActiveModule("owner-admin-preview"); };
+    const followPreviewLink = () => { if (profile?.active && (isOwner || canDetailedPreview) && adminPreviewPageFromHash(window.location.hash)!==null) setActiveModule("owner-admin-preview"); };
     followPreviewLink(); window.addEventListener("hashchange", followPreviewLink);
     return () => window.removeEventListener("hashchange", followPreviewLink);
   }, [profile?.active, isOwner, canDetailedPreview]);
@@ -1700,7 +1701,7 @@ export default function Dashboard() {
       <div className="brand">
         <div className="logo logo-data">H</div>
         <div>
-          <div className="brand-title">Hensem数据后台</div>
+          <div className="brand-title">M8 | 数据中控后台</div>
           <div className="brand-subtitle">Operations Center</div>
         </div>
       </div>
@@ -1763,7 +1764,7 @@ export default function Dashboard() {
       <div className="home-topbar">
         <div className="home-heading">
           <span className="home-eyebrow">OPERATIONS OVERVIEW</span>
-          <h1>Hensem 数据中控</h1>
+          <h1>M8 | 数据中控后台</h1>
           <p>统一查看关键业务数据，快速进入你需要的工作模块。</p>
         </div>
         <span className="home-system-state"><i />系统运行正常</span>

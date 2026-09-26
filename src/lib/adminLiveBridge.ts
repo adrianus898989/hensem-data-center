@@ -274,16 +274,39 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
  target.addEventListener("message",receive);
  return ()=>{if(closed)return;closed=true;target.removeEventListener("message",receive);for(const item of [...active.values(),...queued.values()]){item.settled=true;clearTimeout(item.timer);item.controller?.abort()}active.clear();queued.clear()};
 }
+// A hash route only selects presentation. The host's existing active-account
+// and preview-grant checks still run before any document or data is returned.
+export function adminPreviewPageFromHash(hash:unknown):string|null {
+ if(typeof hash!=="string")return null;
+ const match=/^#owner-admin-preview(?:\/([a-z][a-z0-9_-]{0,63}))?$/.exec(hash);
+ return match?(match[1]||"overview"):null;
+}
+export function adminPreviewPageUrl(page:unknown,location:{origin:string;pathname?:string}):string {
+ if(typeof page!=="string"||!/^[a-z][a-z0-9_-]{0,63}$/.test(page))return "";
+ const origin=new URL(location.origin),pathname=location.pathname||"/";
+ if(!/^https?:$/.test(origin.protocol)||origin.origin!==location.origin
+   ||!pathname.startsWith("/")||/[\\\u0000-\u001f\u007f?#]/.test(pathname))throw Error("后台页面来源无效");
+ const target=new URL(pathname,origin);
+ if(target.origin!==origin.origin||target.username||target.password)throw Error("后台页面来源无效");
+ target.hash="owner-admin-preview/"+page;
+ return target.href;
+}
 export function makeAdminLiveDocument(html:string,channel:string):string{
  const encode=(value:string)=>JSON.stringify(value).replace(/</g,"\\u003c").replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029");
  const origin=typeof window!=="undefined"?window.location?.origin:"";
  if(!origin||!/^https?:$/.test(new URL(origin).protocol)||new URL(origin).origin!==origin)throw Error("后台页面来源无效");
+ const pageBase=adminPreviewPageUrl("overview",window.location).split("#")[0];
+ const initialPage=adminPreviewPageFromHash(window.location.hash)||"overview";
  const script=`<script>(function(){
  const channel=${encode(channel)},hostOrigin=${encode(origin)},requests=new Map();let seq=0;
  const error=(message,code)=>{const value=Error(message);value.code=code;if(code==='ADMIN_LIVE_CANCELLED')value.name='AbortError';return value};
  const release=id=>{const q=requests.get(id);if(!q)return null;requests.delete(id);clearTimeout(q.timer);if(q.signal&&q.abort)q.signal.removeEventListener('abort',q.abort);return q};
  const cancel=(id,timeout=false)=>{const q=release(id);if(!q)return;try{parent.postMessage({type:'${LIVE_CANCEL}',channel,id,reason:timeout?'timeout':'cancelled'},hostOrigin)}catch{}q.reject(error(timeout?'正式数据读取超时，请重试':'查询已取消',timeout?'ADMIN_LIVE_TIMEOUT':'ADMIN_LIVE_CANCELLED'))};
  window.HENSEM_PRODUCTION=true;
+ window.hensemAdminInitialPage=${encode(initialPage)};
+ // No arbitrary URL, host query string or authentication fragment crosses the
+ // frame boundary. The menu independently validates its allowed page IDs.
+ window.hensemAdminPageUrl=function(page){return typeof page==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(page)?${encode(pageBase)}+'#owner-admin-preview/'+page:''};
  window.hensemLiveRequest=function(request,options={}){return new Promise((resolve,reject)=>{
    const signal=options.signal;if(signal&&signal.aborted){reject(error('查询已取消','ADMIN_LIVE_CANCELLED'));return;}
    const id='live_'+(++seq),deadline=Date.now()+${LIVE_REQUEST_TIMEOUT_MS};

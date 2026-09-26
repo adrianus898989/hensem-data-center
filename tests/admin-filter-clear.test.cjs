@@ -50,7 +50,7 @@ test('clear click prevents dropdown activation and returns focus to its summary'
 });
 
 test('clearing any optional global selection preserves all other filters and waits for manual data query',async()=>{
- const h=await ready();
+ const h=await ready({platforms:[{...P,team:'M8'}]});
  for(const key of ['team','platform','source','provider','direction']){
   const original={team:['M8'],platform:[P.id],source:['AR'],provider:['ONE','TWO'],direction:['charge']};h.L.multi=structuredClone(original);Object.assign(h.L,{team:'M8',platform:P.id,source:'AR',provider:'',direction:'charge',country:'印度',openMulti:key,dirty:false});h.L.multiSearch[key]='search text';h.c.state.page='overview';h.c.render();const before=h.calls.length,from=h.L.from,to=h.L.to,e=event();
   h.c.HensemLiveFilters.clear(e,key,h.c.liveMultiClear);await settle();

@@ -171,11 +171,13 @@ body.live-admin .provider-partial{margin-left:4px;border-radius:3px;padding:1px 
 @media(max-width:1500px){body.live-admin .provider-summary-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:700px){body.live-admin .provider-summary-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 /* Compact sizing is scoped to the provider reports, never the overview. */
-body.live-admin .provider-summary-report .provider-summary-kpis{grid-template-columns:repeat(8,minmax(0,1fr));gap:6px}
-body.live-admin .provider-summary-report .provider-kpi{padding:6px 9px;border-radius:6px}
-body.live-admin .provider-summary-report .provider-kpi-value strong{font-size:16px;line-height:1.3}
-body.live-admin .provider-summary-report .provider-kpi-comparison{margin-top:2px;min-height:0;display:flex;flex-wrap:wrap;gap:2px 8px;line-height:1.4}
-body.live-admin .provider-summary-report .provider-kpi-comparison small,body.live-admin .provider-summary-report .provider-kpi-change{font-size:9px}
+body.live-admin .provider-summary-report .provider-summary-kpis{grid-template-columns:minmax(0,.8fr) minmax(0,.8fr) minmax(0,1.45fr) minmax(0,.95fr) minmax(0,1.45fr) minmax(0,.95fr) minmax(0,1fr) minmax(0,1.35fr);gap:8px;align-items:stretch}
+body.live-admin .provider-summary-report .provider-kpi{min-width:0;min-height:88px;box-sizing:border-box;padding:10px 12px 9px;border-radius:7px;display:flex;flex-direction:column;justify-content:space-between}
+body.live-admin .provider-summary-report .provider-kpi-value{display:flex;flex-direction:column;align-items:flex-start;gap:7px;flex-wrap:nowrap}
+body.live-admin .provider-summary-report .provider-kpi-value label{line-height:16px;white-space:nowrap}
+body.live-admin .provider-summary-report .provider-kpi-value strong{font-size:clamp(17px,1.1vw,21px);line-height:24px;letter-spacing:-.3px;white-space:nowrap}
+body.live-admin .provider-summary-report .provider-kpi-comparison{margin-top:5px;min-height:14px;line-height:14px}
+body.live-admin .provider-summary-report .provider-kpi-change{font-size:10px;white-space:nowrap}
 body.live-admin .provider-compact-table th,body.live-admin .provider-compact-table td{padding:5px 6px!important;font-size:10px}
 body.live-admin .provider-compact-table th:first-child,body.live-admin .provider-compact-table td:first-child{min-width:82px}
 body.live-admin .provider-compact-table th:nth-child(2),body.live-admin .provider-compact-table td:nth-child(2){min-width:30px}
@@ -188,8 +190,8 @@ body.live-admin .provider-floating-head{position:fixed;z-index:110;overflow:hidd
 body.live-admin .provider-floating-head[hidden]{display:none}
 body.live-admin .provider-floating-head table{min-width:0;border-spacing:0;border-collapse:collapse;margin:0}
 body.live-admin .provider-floating-head th{text-align:right;font-size:10px;color:#7b8da7;font-weight:600}
-@media(max-width:1400px){body.live-admin .provider-summary-report .provider-summary-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}}
-@media(max-width:700px){body.live-admin .provider-summary-report .provider-summary-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:1600px){body.live-admin .provider-summary-report .provider-summary-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(max-width:1100px){body.live-admin .provider-summary-report .provider-summary-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 body.live-admin .withdraw-operators-table table{min-width:1120px}
 body.live-admin .withdraw-distribution-table td{padding:9px 12px!important;line-height:1.7}
 body.live-admin .withdraw-drawer-head{padding:16px 22px 12px}

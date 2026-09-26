@@ -463,7 +463,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
           <section className="auth-login-brand-panel">
             <div className="auth-login-brand-copy">
               <div className="auth-login-brand-mark large">H</div>
-              <span className="auth-login-eyebrow">HENSEM OPERATIONS</span>
+              <span className="auth-login-eyebrow">M8 | 数据中控后台</span>
               <h1>让每一笔业务数据<br />更清晰、更可控</h1>
               <p>统一查看提现效率、工单服务和三方资金流，快速定位异常并掌握关键趋势。</p>
               <div className="auth-login-feature-list">
@@ -478,7 +478,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
             <div className="auth-login-card-top">
               <span>SECURE ACCESS</span>
               <h2>欢迎回来</h2>
-              <p>登录 Hensem 数据中控，继续查看今日业务数据。</p>
+              <p>登录 M8 | 数据中控后台，继续查看今日业务数据。</p>
             </div>
             <label>账号</label>
             <div className="auth-input-wrap"><span className="auth-field-icon">ID</span><input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="请输入账号" /></div>

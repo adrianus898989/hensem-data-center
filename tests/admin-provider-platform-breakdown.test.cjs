@@ -20,7 +20,7 @@ test('both flows expand with identical parent column count/order, successful tim
   const {h}=setup(direction),before=h.networkCalls();h.root.providerSummaryToggle(0);
   const html=h.html(),rows=children(html),headers=[...html.match(/<thead>([\s\S]*?)<\/thead>/)[1].matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]));
   assert.equal(rows.length,2);for(const row of rows)assert.equal(row.length,headers.length);
-  assert.equal(plain(rows[0][0]),'Alpha');assert.equal(plain(rows[0][1]),'ar');assert.equal(headers[2],'类型');assert.equal(plain(rows[0][3]),'900.00');assert.equal(plain(rows[1][3]),'100.00');
+  assert.equal(plain(rows[0][0]),'Alpha');assert.equal(plain(rows[0][1]),'ar');assert.equal(headers[2].replace(/ [↕↑↓]$/,''),'类型');assert.equal(plain(rows[0][3]),'900.00');assert.equal(plain(rows[1][3]),'100.00');
   assert.equal(plain(rows[0][4]),'3');assert.equal(plain(rows[1][4]),'7');assert.equal(plain(rows[0][7]),'30.00%');assert.equal(plain(rows[1][7]),'70.00%');assert.doesNotMatch(rows[0][4],/small/);
   assert.match(rows[0][5],/按成功 \/ 创建：3 \/ 20 笔/);assert.match(rows[0][5],/>15.00%/);assert.equal(plain(rows[0][6]),'90.00%');
   const feeIndex=direction==='withdraw'?10:8;assert.equal(plain(rows[0][feeIndex]),direction==='withdraw'?'2.50% + 6 / 笔':'4.00%');

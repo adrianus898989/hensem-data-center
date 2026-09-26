@@ -12,7 +12,7 @@ function aggregate(p=P,count=5){const s=stats(count);return {platform:p,total:co
 function detail(p=P,total=65,offset=0,limit=20){return {platform:p,total,offset,limit,hasMore:offset+limit<total,summary:[],groups:{},rows:Array.from({length:Math.max(0,Math.min(limit,total-offset))},(_,i)=>({id:'row-'+(offset+i),system_order_id:'source-'+(offset+i),order_number:'order-'+(offset+i),third_party_order_number:'third-'+(offset+i),member_id:'member-'+(offset+i),provider:'Synthetic provider',direction:'charge',status:'1',status_group:'success',amount:'200.05',created_at:'2026-09-22T01:02:03Z',success_at:'2026-09-22T01:03:03Z',currency:'INR'}))}}
 function payoutConfig(request,hasTargets=true){const target={platform:'SYNTHETIC_CONFIG_PLATFORM',country_code:'IN',country_name:'印度',display_group:'IN',display_name:'印度',timezone:'Asia/Kolkata',members:[]};return request.operation==='index'?{version:1,system:request.system,readOnly:true,targets:hasTargets?[target]:[],summaries:hasTargets?[{...target,observed_local_date:'2026-09-22'}]:[]}:{version:1,system:request.system,readOnly:true,target,snapshot:{country_code:'IN',platform:target.platform,timezone:'Asia/Kolkata',observed_local_date:'2026-09-22',observed_at:'2026-09-22T00:00:00Z',configuration:{fields:[{key:'autoWithdraw',kind:'boolean',available:true,value:false},{key:'withdrawAmount',kind:'number',available:true,value:0}],groups:[]}}}}
 function harness(options={}){
- const nodes=new Map(),writes=[],calls=[],drawers=[],intervals=[],timers=[],blobs=[];let handler=options.handler,clock=Date.parse('2026-09-23T12:00:00Z');
+ const nodes=new Map(),writes=[],calls=[],drawers=[],intervals=[],timers=[],blobs=[],scrolled=[],observations=[];let handler=options.handler,clock=Date.parse('2026-09-23T12:00:00Z');
  function node(id){let html='';const item={id,textContent:'',value:'',title:'',style:{setProperty(k,v){this[k]=v}},classList:{add(){},remove(){}},querySelector:s=>node(id+' '+s),querySelectorAll:()=>[],appendChild(n){if(n.id)nodes.set(n.id,n);return n},after(n){if(n.id)nodes.set(n.id,n)},remove(){nodes.delete(this.id)},setAttribute(){},click(){},focus(){}};Object.defineProperty(item,'innerHTML',{get:()=>html,set:v=>{html=String(v);writes.push({id,html})}});return item}
  for(const id of ['pageTitle','pageSubtitle','eyebrow','crumbTitle','nav','filters','scope','page','headerActivityV3','.title-actions','.bottom-note','.top-right','.topbar'])nodes.set(id,node(id));
  const keys=['overview','providers','orders','time','amount','matrix','provider_daily','latency','stuck','collection','payout','risk','channelquality','teamops','teamcountries','teamplatforms','merchants','workorders','rates','data_health','deposit_tracking','dropped','anomaly','events','rules','access','ip','login_logs','operation_logs','teams','provider_config','platform_systems','merchantproviders'];
@@ -22,12 +22,12 @@ function harness(options={}){
  class TestURL extends URL{static createObjectURL(blob){blobs.push(blob);return 'blob:synthetic'}static revokeObjectURL(){}}
  const context={console,Intl,Date:FixedDate,URL:TestURL,Blob,state:{page:options.page||'overview',navGroup:'analysis'},pages,navGroupsV3:groups,location:{hash:''},
   document:{title:'',body:{classList:{add(){},remove(){}},appendChild(n){nodes.set(n.id,n)}},getElementById:id=>nodes.get(id)||null,querySelector:selector=>nodes.get(selector)||null,createElement:tag=>node(tag)},
-  render(){nodes.get('page').innerHTML='INDEPENDENT_SNAPSHOT'},syncFilters(){},groupForV3:key=>groups.find(g=>g[3].includes(key))||groups[0],toggleCenterV3(){},setPage(){},headerIconV3:()=>'<svg></svg>',openDrawer:(title,html)=>drawers.push({title,html}),toast(){},scrollTo(){},
+  render(){nodes.get('page').innerHTML='INDEPENDENT_SNAPSHOT'},syncFilters(){},groupForV3:key=>groups.find(g=>g[3].includes(key))||groups[0],toggleCenterV3(){},setPage(){},headerIconV3:()=>'<svg></svg>',openDrawer:(title,html)=>drawers.push({title,html}),toast(){},scrollTo(x,y){context.scrollX=x;context.scrollY=y;scrolled.push([x,y])},
   setInterval:(fn,ms)=>{intervals.push({fn,ms});return intervals.length},clearInterval(){},setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},
-  HENSEM_PRODUCTION:options.production!==false,
+  HENSEM_PRODUCTION:options.production!==false,hensemAdminInitialPage:options.initialPage,hensemAdminPageUrl:key=>'https://dashboard.example/app/#owner-admin-preview/'+key,scrollX:0,scrollY:0,
   hensemLiveRequest:async request=>{calls.push(JSON.parse(JSON.stringify(request)));if(!options.ancillaryHandler&&request.action==='providerOptions')return {providers:['Synthetic provider']};if(!options.ancillaryHandler&&request.action==='workorders')return {rows:[],byProvider:[],total:0,summary:{},byDirection:{}};if(handler)return handler(request);if(request.action==='catalog')return {platforms:options.platforms||[P]};if(request.action==='details')return detail((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65,request.offset,request.limit);if(request.action==='rates')return {rows:[],total:0,options:{countries:[],platforms:[],providers:[]}};if(request.action==='payoutConfig')return payoutConfig(request,(options.platforms||[P]).length>0);return aggregate((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65)}
- };context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>m.name!=='live-report-data.js'||options.reports))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
- return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
+ };if(options.observe)context.IntersectionObserver=class{constructor(callback){observations.push(callback)}observe(){}disconnect(){}};context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>m.name!=='live-report-data.js'||options.reports))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
+ return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,scrolled,observations,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
 }
 async function ready(options){const h=harness(options);await settle();if(h.L){h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59'}return h}
 function setScope(h,values={}){Object.assign(h.L,{from:'2026-09-22T00:00:00',to:'2026-09-22T05:59:59',...values})}
@@ -55,12 +55,13 @@ test('navigation paints once while destination queries are still pending and doe
  assert.equal(pageWrites(h),afterOrders,'the old aggregate cannot repaint the new page');assert.doesNotMatch(h.html(),/987,654|98,765,400/);assert.equal(h.L.loading,false);
 });
 
-test('overview navigation paints immediately without starting business or auxiliary reads',async()=>{
+test('an already queried overview tab restores immediately without business or auxiliary reads',async()=>{
  const h=await ready();assert.equal(h.L.overviewQueried,false);assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
- await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert(h.L.results.length>0);
+ await h.c.liveQuery();await settle();const result=h.L.results;assert.equal(h.L.overviewQueried,true);assert(result.length>0);
  h.c.setPage('provider_payout');await settle();const calls=h.calls.length,before=pageWrites(h);
- h.c.setPage('overview');assert.equal(h.c.state.page,'overview');assert.equal(h.c.location.hash,'overview');assert.equal(h.L.overviewQueried,false);assert.equal(h.L.dirty,true);assert.equal(h.L.loading,false);assert.equal(pageWrites(h)-before,1);assert.match(h.html(),/查询/);assert.doesNotMatch(h.html(),/代收经营总数据|代付经营总数据/);
- await settle();assert.equal(h.calls.length,calls,'returning to overview does not fetch orders, comparison, fees, source reports or provider options');assert.equal(pageWrites(h)-before,1,'no background completion is needed to render the manual query screen');
+ h.c.setPage('overview');assert.equal(h.c.state.page,'overview');assert.equal(h.L.overviewQueried,true);assert.equal(h.L.dirty,false);assert.equal(h.L.loading,false);assert.equal(pageWrites(h)-before,1);assert.equal(h.L.results,result);assert.match(h.html(),/代收经营总数据/);
+ await settle();assert.equal(h.calls.length,calls,'returning to a completed tab only restores data');assert.equal(pageWrites(h)-before,1);
+ h.c.liveClosePage('overview');h.c.setPage('overview');await settle();assert.equal(h.L.overviewQueried,false);assert.equal(h.L.dirty,true);assert.match(h.html(),/点击查询/);
 });
 
 test('a pending catalog cannot resume another page automatic query after returning to overview',async()=>{
@@ -189,7 +190,7 @@ test('overview requires the explicit query action even when a background caller 
  const filter=h.nodes.get('liveFilters').innerHTML,actions=h.nodes.get('.title-actions').innerHTML;assert.match(filter,/onclick="liveQuery\(\)"[^>]*>查询/);assert.match(actions,/onclick="liveQuery\(\)"[^>]*>读取最新数据/);
  await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert(h.L.results.length);const loaded=h.calls.length;
  await h.c.liveLoad(false);await settle();assert.equal(h.calls.length,loaded,'background refresh does not start a second overview query');assert.equal(h.L.dirty,false,'an ignored background call preserves the completed manual query');
- h.c.setPage('orders');h.c.setPage('overview');await settle();const returned=h.calls.length;h.L.dirty=false;h.c.render();await h.c.liveOverviewAnalysis();await h.c.liveOverviewWorkorders();assert.equal(h.calls.length,returned);assert.equal(h.L.overviewQueried,false);assert.match(h.html(),/点击查询/);assert.doesNotMatch(h.html(),/df-flow-card/);
+ h.c.setPage('orders');h.c.liveClosePage('overview');h.c.setPage('overview');await settle();const returned=h.calls.length;h.L.dirty=false;h.c.render();await h.c.liveOverviewAnalysis();await h.c.liveOverviewWorkorders();assert.equal(h.calls.length,returned);assert.equal(h.L.overviewQueried,false);assert.match(h.html(),/点击查询/);assert.doesNotMatch(h.html(),/df-flow-card/);
 });
 
 test('overview and provider summaries prioritize two primary reads before ancillary reports and fees',async()=>{
@@ -202,4 +203,66 @@ test('overview and provider summaries prioritize two primary reads before ancill
   pending[0].resolve(flowAggregate(platforms[0],direction));await settle();assert.equal(h.L.results.length,1);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,3);assert.equal(h.calls.filter(q=>['rates','collectedData','reportSummary'].includes(q.action)).length,0,'ancillary reads wait for primary completion');
   initial=false;pending[1].resolve(flowAggregate(platforms[1],direction));pending[2].resolve(flowAggregate(platforms[2],direction));await run;await settle();assert.equal(h.L.results.length,3);assert.equal(h.L.loading,false);assert(h.calls.some(q=>q.action==='collectedData'));assert(h.calls.some(q=>q.action==='rates'));
  }
+});
+
+
+test('tabs isolate filters, controls, result references and both scroll axes past the request cache TTL',async()=>{
+ const h=await ready({observe:true});await h.c.liveQuery();await settle();
+ h.L.multi.team=['TEAM A'];h.L.team='TEAM A';h.L.multiSearch={platform:'saved search'};h.L.providerExpanded={saved:true};h.L.tablePages={sample:3};h.L.tableSizes={sample:50};h.L.localPage=3;
+ const result=h.L.results,child={scrollLeft:124,scrollTop:43};h.nodes.get('page').querySelectorAll=()=>[child];h.c.scrollX=19;h.c.scrollY=480;
+ h.c.setPage('time');await settle();h.L.multi.team=['TEAM B'];h.L.team='TEAM B';h.L.multiSearch.platform='other';h.L.providerExpanded.saved=false;h.L.tablePages.sample=1;h.L.localPage=1;child.scrollLeft=0;child.scrollTop=0;
+ h.setNow('2026-09-23T12:02:00Z');const reads=h.calls.length;h.c.setPage('overview');await settle();
+ assert.equal(h.calls.length,reads);assert.equal(h.L.results,result);assert.equal(h.L.team,'TEAM A');assert.deepEqual([...h.L.multi.team],['TEAM A']);assert.equal(h.L.multiSearch.platform,'saved search');assert.equal(h.L.providerExpanded.saved,true);assert.equal(h.L.tablePages.sample,3);assert.equal(h.L.tableSizes.sample,50);assert.equal(h.L.localPage,3);assert.equal(h.c.scrollX,19);assert.equal(h.c.scrollY,480);assert.equal(child.scrollLeft,124);assert.equal(child.scrollTop,43);
+ const restoredReads=h.calls.length;for(const callback of h.observations)callback([{isIntersecting:true,target:{hasAttribute:()=>true}}]);await settle();assert.equal(h.calls.length,restoredReads,'old overview observers must not resume lazy reads after a tab restore');
+ h.c.setPage('time');assert.equal(h.L.team,'TEAM B');assert.equal(h.L.multiSearch.platform,'other');assert.equal(h.L.localPage,1);
+});
+
+test('closing tabs releases their navigation state and the final tab returns to a fresh manual overview',async()=>{
+ const h=await ready();await h.c.liveQuery();await settle();h.c.setPage('time');await settle();h.c.setPage('providers');await settle();
+ h.c.liveClosePage('time');assert.doesNotMatch(h.nodes.get('livePageTabs').innerHTML,/关闭 time/);assert.equal(h.c.state.page,'providers');
+ h.c.liveCloseOtherPages();assert.doesNotMatch(h.nodes.get('livePageTabs').innerHTML,/关闭 overview/);assert.match(h.nodes.get('livePageTabs').innerHTML,/关闭 代收汇总/);
+ const reads=h.calls.length;h.c.liveCloseAllPages();await settle();assert.equal(h.c.state.page,'overview');assert.equal(h.L.overviewQueried,false);assert.match(h.html(),/点击查询/);assert.equal(h.calls.length,reads);assert.equal(h.L.results.length,0);assert.equal(h.nodes.get('livePageTabs').innerHTML.match(/class="live-page-tab"/g).length,1);
+ h.c.liveClosePage('overview');assert.equal(h.c.state.page,'overview');assert.equal(h.L.overviewQueried,false);assert.equal(h.calls.length,reads);
+});
+
+test('unfinished tab requests become explicit paused partial results and cannot overwrite a restored tab',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222'},pending=deferred();let primary=true;
+ const h=harness({page:'providers',platforms:[P,p2],handler:q=>q.action==='catalog'?{platforms:[P,p2]}:q.action==='rates'?{rows:[],total:0}:q.action==='aggregate'&&q.platformId===p2.id&&primary?pending.promise:completeAggregate(q.platformId===p2.id?p2:P,17,9)});await settle();assert.equal(h.L.loading,true);assert.equal(h.L.results.length,1);
+ const serial=h.L.serial;h.c.setPage('workorder_workload');h.c.setPage('providers');const reads=h.calls.length;assert(h.L.serial>serial);assert.equal(h.L.loading,false);assert.equal(h.L.queryFailures.length,1);assert.equal(h.L.queryFailures[0].id,p2.id);assert.match(h.html(),/暂停/);const displayed=h.html();
+ pending.resolve(completeAggregate(p2,987654,900000));await settle();assert.equal(h.calls.length,reads);assert.equal(h.L.results.length,1);assert.equal(h.html(),displayed);
+ primary=false;await h.c.liveRetryFailed();await settle();assert.equal(h.L.queryFailures.length,0);assert.equal(h.L.results.length,2);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,3,'only the missing platform is retried');
+});
+
+test('sidebar exposes host page URLs without intercepting the browser modified-click action',async()=>{
+ const h=await ready({initialPage:'provider_payout'});assert.equal(h.c.state.page,'provider_payout');assert.equal(h.L.direction,'withdraw');assert(h.calls.filter(q=>q.action==='aggregate').every(q=>q.direction==='withdraw'));
+ const nav=h.nodes.get('nav').innerHTML;assert.match(nav,/<a[^>]+href="https:\/\/dashboard\.example\/app\/#owner-admin-preview\/overview"[^>]+target="_top"[^>]+rel="noopener"/);
+ const page=h.c.state.page;let prevented=0;assert.equal(h.c.liveNavClick({button:0,ctrlKey:true,preventDefault(){prevented++}},'overview'),true);assert.equal(h.c.liveNavClick({button:0,metaKey:true,preventDefault(){prevented++}},'overview'),true);assert.equal(h.c.liveNavClick({button:1,preventDefault(){prevented++}},'overview'),true);assert.equal(h.c.state.page,page);assert.equal(prevented,0);
+ assert.equal(h.c.liveNavClick({button:0,preventDefault(){prevented++}},'overview'),false);assert.equal(prevented,1);assert.equal(h.c.state.page,'overview');assert.equal(h.L.overviewQueried,false);
+ const invalid=await ready({initialPage:'not_a_real_page'});assert.equal(invalid.c.state.page,'overview');assert.deepEqual(invalid.calls.map(q=>q.action),['catalog']);
+});
+
+test('a page left before catalog completion restores valid filters and waits for a new explicit query',async()=>{
+ const catalog=deferred(),h=harness({page:'providers',handler:q=>q.action==='catalog'?catalog.promise:q.action==='rates'?{rows:[],total:0}:completeAggregate()});
+ h.c.setPage('workorder_workload');catalog.resolve({platforms:[P]});await settle();assert.equal(h.L.catalogReady,true);const reads=h.calls.length;
+ h.c.setPage('providers');await settle();assert.equal(h.L.country,'印度');assert.match(h.L.from,/^2026-/);assert.equal(h.L.dirty,true);assert.match(h.html(),/点击查询/);assert.equal(h.calls.length,reads);
+ await h.c.liveQuery();await settle();assert.equal(h.L.results.length,1);assert.equal(h.L.dirty,false);assert(h.calls.some(q=>q.action==='aggregate'));
+});
+
+test('latency alone has a mandatory single direction, changing it never starts a query and restored scopes normalize',async()=>{
+ const h=await ready({initialPage:'latency',handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='rates'?{rows:[],total:0}:flowAggregate(P,q.direction,10)});
+ assert.equal(h.c.state.page,'latency');assert.equal(h.L.direction,'charge');assert.deepEqual([...h.L.multi.direction],['charge']);assert(h.calls.filter(q=>q.action==='aggregate').every(q=>q.direction==='charge'));
+ const filters=h.nodes.get('liveFilters').innerHTML,select=filters.match(/<select[^>]*id="live-direction"[^>]*>(.*?)<\/select>/)?.[1];assert(select);assert.match(select,/value="charge"/);assert.match(select,/value="withdraw"/);assert.doesNotMatch(select,/all|全部/);assert.doesNotMatch(filters,/data-multi="direction"/);
+ const reads=h.calls.length;h.c.liveSet('direction','withdraw');assert.equal(h.L.direction,'withdraw');assert.equal(h.L.dirty,true);assert.equal(h.calls.length,reads);assert.match(h.html(),/点击查询/);
+ h.c.liveMultiClear('direction');h.c.liveSetMultiOption('direction',{value:'charge',checked:true});h.c.liveSet('direction','all');assert.equal(h.L.direction,'withdraw');assert.deepEqual([...h.L.multi.direction],['withdraw']);assert.equal(h.calls.length,reads);
+ await h.c.liveQuery();await settle();assert(h.calls.filter(q=>q.action==='aggregate').slice(-2).every(q=>q.direction==='withdraw'));assert.match(h.html(),/提款 \/ 代付到账时效/);assert.doesNotMatch(h.html(),/充值 \/ 代收到帐时效|充值 \/ 代收到账时效/);
+ h.c.setPage('time');await settle();assert.match(h.nodes.get('liveFilters').innerHTML,/data-multi="direction"/);h.c.liveSetMultiOption('direction',{value:'charge',checked:true});assert.deepEqual([...h.L.multi.direction].sort(),['charge','withdraw']);
+ h.c.setPage('latency');assert.equal(h.L.direction,'withdraw');assert.deepEqual([...h.L.multi.direction],['withdraw']);h.L.direction='all';h.L.multi.direction=['charge','withdraw'];h.c.setPage('workorder_workload');const beforeRestore=h.calls.length;h.c.setPage('latency');assert.equal(h.L.direction,'charge');assert.deepEqual([...h.L.multi.direction],['charge']);assert.equal(h.calls.length,beforeRestore);assert.doesNotMatch(h.html(),/提款 \/ 代付到账时效/);
+});
+
+test('the visible admin brand and document title stay exact across normal and supervisor navigation without data reads',async()=>{
+ const h=await ready(),brand='M8 | 数据中控后台',label={textContent:'Hensem 数据后台'};h.nodes.set('.sidebar .brand b',label);h.c.render();const calls=h.calls.length;
+ assert.equal(h.c.document.title,brand);assert.equal(label.textContent,brand);assert.match(h.nodes.get('.bottom-note').innerHTML,/M8 \| 数据中控后台/);
+ h.c.setPage('workorder_operation_logs');assert.equal(h.c.document.title,brand);assert.equal(label.textContent,brand);h.c.setPage('overview');assert.equal(h.c.document.title,brand);assert.equal(h.calls.length,calls);
+ const metadata=fs.readFileSync(path.join(__dirname,'../src/app/layout.tsx'),'utf8');assert.match(metadata,/title: "M8 \| 数据中控后台"/);
+ for(const file of ['Dashboard.tsx','DashboardAuthGate.tsx','CustomerServiceDashboard.tsx','ThirdPartyRatesDashboard.tsx']){const text=fs.readFileSync(path.join(__dirname,'../src/components',file),'utf8');assert(text.includes(brand));assert.doesNotMatch(text,/Hensem.?数据后台|Hensem 数据中控|HENSEM OPERATIONS/)}
 });

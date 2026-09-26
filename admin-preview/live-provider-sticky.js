@@ -17,7 +17,7 @@
   }
   function update(){
    frame=0;if(!wrap.isConnected){clear();return}
-   const bounds=wrap.getBoundingClientRect(),top=Math.max(0,doc.querySelector('.topbar')?.getBoundingClientRect().bottom||0),height=table.tHead.getBoundingClientRect().height;
+   const bounds=wrap.getBoundingClientRect(),top=Math.max(0,doc.querySelector('.topbar')?.getBoundingClientRect().bottom||0,doc.getElementById?.('livePageTabs')?.getBoundingClientRect().bottom||0),height=table.tHead.getBoundingClientRect().height;
    floating.hidden=!(bounds.top<top&&bounds.bottom>top+height&&bounds.width>0);
    if(floating.hidden)return;
    Object.assign(floating.style,{top:top+'px',left:bounds.left+'px',width:wrap.clientWidth+'px'});copy.style.marginLeft=-wrap.scrollLeft+'px';

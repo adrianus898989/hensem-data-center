@@ -62,6 +62,17 @@ test('confirmed UpiPay payout row supplies both percentage and per-order charge 
  assert.equal(h.api.feeCandidates(row,[inactive,blankPlatform,confirmed],'印度')[0],confirmed);
  assert.equal(h.api.estimate(row,[inactive,blankPlatform],'印度'),null,'missing confirmed row must stay unmatched');
 });
+test('typed provider aliases merge transaction/workorder totals once and retain authoritative source types',()=>{
+ const h=fixture([]),orders=[order('a','ar',100,10,{provider:'RushPay唤醒'}),order('b','game66',200,20,{provider:'RushPay跑分'}),order('a','ar',50,5,{provider:'T3Pay唤醒'}),order('b','game66',75,7,{provider:'3TPay'})];
+ const issues=[{provider:'RushPay唤醒',direction:'withdraw',submittedAmount:40,submittedCount:4,successAmount:30,successCount:3,notReceivedAmount:10,notReceivedCount:1},{provider:'RushPay跑分',direction:'withdraw',submittedAmount:60,submittedCount:6,successAmount:40,successCount:4,notReceivedAmount:20,notReceivedCount:2}];
+ const rates=[{provider:'RushPay唤醒',country:'印度',scopeType:'country',payoutFee:'1%',sheetName:'印度线下',sourceRow:5,sourceType:'唤醒',sourceTypeProvider:'RushPay唤醒',sourceTypeCell:'B5'},{provider:'RushPay跑分',country:'印度',scopeType:'country',payoutFee:'1%',sheetName:'印度线下',sourceRow:6,sourceType:'跑分',sourceTypeProvider:'RushPay跑分',sourceTypeCell:'B6'}];
+ const before=structuredClone({orders,issues,rates}),rows=h.api.buildRows({orders,issues,rates,country:'印度',direction:'withdraw',plus,combine,coverage:{complete:true,capturedPlatformDays:2}});
+ assert.equal(rows.length,3);const rush=rows.find(r=>r.provider==='RushPay');assert.equal(rush.success_amount,300);assert.equal(rush.success_count,30);assert.equal(rush.issues.submittedCount,10);assert.equal(rush.issues.notReceivedCount,3);assert.equal(rush.issues.notReceivedAmount,30);
+ const type=h.api.providerType(rush,rates,'印度');assert.equal(type.label,'多种类型');assert.deepEqual(new Set(type.types),new Set(['跑分','唤醒']));assert.match(type.detail,/B5/);assert.match(type.detail,/B6/);
+ assert.equal(h.api.estimate(rush,rates,'印度'),3,'same fee does not charge twice after alias merge');
+ assert.equal(h.api.estimate(rush,[rates[0],{...rates[1],payoutFee:'2%'}],'印度'),null,'conflicting source rates require review');
+ assert.deepEqual({orders,issues,rates},before);
+});
 
 test('missing payout amounts stay unknown in platform shares while valid counts still show',()=>{
  const h=fixture([order('platform-a','ar',null,3),order('platform-b','newar',100,7)]);h.root.providerSummaryToggle(0);
@@ -80,4 +91,16 @@ test('all failed platforms show unavailable amounts and counts rather than false
 });
 test('an incomplete current scope cannot regain yesterday comparisons merely because returned identities match',()=>{
  const h=fixture([order('platform-a','ar',100,1)]);h.L.queryPlatforms=[{id:'platform-a'},{id:'missing'}];h.L.comparisonStatus='ready';h.L.comparisonResults=[{...h.L.results[0],groups:{provider:[]}}];h.render();assert.match(h.html(),/当前平台范围未完整/);assert.doesNotMatch(h.html(),/新增 \/ 无基数/);
+});
+
+
+test('source-only workorder provider opens its loaded platform cohorts without inventing transaction orders',()=>{
+ for(const direction of ['charge','withdraw']){
+  const h=fixture([]),facts={provider:'未标记三方',currency:'INR',direction,submittedAmount:12800,submittedCount:13,successAmount:0,successCount:0,notReceivedAmount:12800,notReceivedCount:13};
+  h.L.workorders={byProvider:[facts],byPlatformProvider:[{...facts,platform:'Synthetic A',submittedAmount:4000,submittedCount:2,notReceivedAmount:4000,notReceivedCount:2},{...facts,platform:'Synthetic B',submittedAmount:8800,submittedCount:11,notReceivedAmount:8800,notReceivedCount:11}],coverage:{complete:true,capturedPlatformDays:2,expectedPlatformDays:2}};
+  h.render(direction);assert.match(h.html(),/三方未填写（源工单）/);assert.match(h.html(),/工单号未入库/);
+  assert.match(h.html(),/onclick="providerSummaryToggle\(0\)"[^>]*>三方未填写（源工单）/);
+  h.root.providerSummaryToggle(0);const children=breakdown(h.html());assert.equal(children.length,2);assert.match(h.html(),/>4,000\.00</);assert.match(h.html(),/>8,800\.00</);assert.match(h.html(),/包含已驳回、处理中等未成功工单，不等于仍在等待到账/);assert.equal(h.networkCalls(),0);
+  assert(children.every(r=>r['成功金额']==='—'),'source-only cohorts must not pretend to have transaction amounts');
+ }
 });

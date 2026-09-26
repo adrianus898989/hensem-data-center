@@ -1,4 +1,8 @@
 /* Preserve the approved page density and component vocabulary. */
+/* Keep sidebar navigation scrollable without showing its scrollbar track. */
+body.live-admin .sidebar,body.live-admin .sidebar .nav{scrollbar-width:none}
+body.live-admin .sidebar .nav{overflow-y:auto}
+body.live-admin .sidebar::-webkit-scrollbar,body.live-admin .sidebar .nav::-webkit-scrollbar{display:none;width:0;height:0}
 body.live-admin .content{padding:17px 22px 22px}
 body.live-admin .eyebrow{display:block;font-size:9px;margin-bottom:5px}
 body.live-admin .page-title{margin-bottom:14px}
@@ -118,6 +122,12 @@ body.live-admin .provider-platform-row{background:#fbfcff}
 body.live-admin .provider-platform-row td:first-child{padding-left:18px!important}
 body.live-admin .provider-platform-row td{font-size:10px!important;padding-top:5px!important;padding-bottom:5px!important}
 body.live-admin .provider-platform-labels td{background:#eef3ff;color:#6880a5;font-size:9px!important;padding-top:5px!important;padding-bottom:5px!important}
+body.live-admin .provider-summary-table .provider-sort-heading{display:inline-block;min-width:100%;padding:2px 0;color:inherit;font-size:inherit;font-weight:inherit;line-height:inherit;text-align:inherit;white-space:nowrap}
+body.live-admin .provider-summary-table .provider-sort-heading:hover{color:#3557ff}
+body.live-admin .provider-summary-table .provider-sort-heading:focus-visible{outline:2px solid #526cff;outline-offset:2px;border-radius:2px}
+body.live-admin .live-sort-heading{display:inline-block;min-width:100%;padding:2px 0;color:inherit;font-size:inherit;font-weight:inherit;line-height:inherit;text-align:inherit;white-space:nowrap}
+body.live-admin .live-sort-heading:hover{color:#3557ff}
+body.live-admin .live-sort-heading:focus-visible{outline:2px solid #526cff;outline-offset:2px;border-radius:2px}
 /* Overview tones paint inside the existing blocks; grid tracks, spacing and text sizes stay unchanged. */
 body.live-admin :is(#df-collect,#df-payout)>.df-flow-grid>.df-flow-metric{position:relative;isolation:isolate;--df-tone-bg:#f2f6ff;--df-tone-border:#d6e2fb;--df-tone-label:#45689f}
 body.live-admin :is(#df-collect,#df-payout)>.df-flow-grid>.df-flow-metric::before{content:"";position:absolute;inset:6px 5px;border:1px solid var(--df-tone-border);border-radius:7px;background:var(--df-tone-bg);pointer-events:none;z-index:-1}

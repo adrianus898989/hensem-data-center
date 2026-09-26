@@ -52,3 +52,32 @@ test('operator statistics use the same team source resolution and ordinary singl
 test('a team without matching metadata never falls through to another team or a country-wide query',async()=>{
  const f=fixture({team:'UNKNOWN'});await f.page.load();assert.equal(f.calls.length,0);assert.match(f.page.state.error,/没有可读取/);const specific=fixture();specific.page.state.platforms=['M8-ONLY'];await specific.page.load();assert.equal(specific.calls.length,0);assert.match(specific.page.state.error,/不属于当前团队/);
 });
+
+test('withdraw page snapshots preserve filters, loaded data and unsaved note draft with independent cancellation serials',async()=>{
+ const f=fixture();await f.page.load();f.page.state.account='SAVED';f.page.state.platforms=['PH-ONLY'];f.page.state.page=3;f.page.state.noteDraft='unsaved note';const data=f.page.state.data,saved=f.page.capture(),serial=f.page.state.serial,reads=f.calls.length;
+ f.page.pause();f.page.restore(null);f.page.state.account='OTHER';f.page.state.platforms=['SAME'];f.page.restore(saved);
+ assert.equal(f.page.state.data,data);assert.equal(f.page.state.account,'SAVED');assert.deepEqual(plain(f.page.state.platforms),['PH-ONLY']);assert.equal(f.page.state.page,3);assert.equal(f.page.state.noteDraft,'unsaved note');assert(f.page.state.serial>serial);f.page.render();assert.equal(f.calls.length,reads);
+});
+
+test('confirmed SUPERLG history is a separate exact authorized source and never blocks current Philippines queries',async()=>{
+ const rows=[{name:'SUPERLG',country:'菲律宾',team:'M8',scopeGroup:'PH'},{name:'PH19',country:'菲律宾',team:'M8',scopeGroup:'PH'},{name:'SUPERLG',country:'LG',team:'M8',scopeGroup:'LG'}];
+ for(const view of ['auto_withdraw','withdraw_operators']){
+  const f=fixture({catalog:[],withdrawCatalog:rows,country:'菲律宾',team:'M8',view});await f.page.load();assert.equal(f.calls.at(-1).country,'菲律宾');assert.deepEqual(f.calls.at(-1).platforms,['SUPERLG','PH19']);assert.match(f.page.render(),/当前记录/);assert.match(f.page.render(),/历史记录（2026-07-30）/);
+  const before=f.calls.length,from=f.L.from,to=f.L.to;f.context.withdrawHistorical('historical');assert.equal(f.calls.length,before,'source selection waits for manual query');assert.equal(f.L.from,from);assert.equal(f.L.to,to);assert.equal(f.L.team,'M8');await f.page.load();assert.equal(f.calls.at(-1).country,'LG');assert.deepEqual(f.calls.at(-1).platforms,['SUPERLG']);assert.equal(f.page.state.data.rawCountry,'LG');
+  const saved=f.page.capture(),data=f.page.state.data;f.page.restore(null);f.page.restore(saved);assert.equal(f.page.state.historical,true);assert.equal(f.page.state.data,data);assert.equal(f.L.from,from);assert.match(f.page.render(),/value="historical" selected/);assert.equal(f.calls.length,before+1,'restoring a tab does not read again');
+  f.context.withdrawHistorical('current');await f.page.load();assert.equal(f.calls.at(-1).country,'菲律宾');assert.deepEqual(f.calls.at(-1).platforms,['SUPERLG','PH19']);
+ }
+});
+
+test('historical source switch requires the exact authorized identity, has a fixed platform and does not create a selectable fake team',async()=>{
+ const onlyCurrent=fixture({catalog:[],withdrawCatalog:[{name:'SUPERLG',country:'菲律宾',team:'M8'}],country:'菲律宾',team:'M8'});onlyCurrent.context.withdrawHistorical('historical');assert.equal(onlyCurrent.page.state.historical,false);assert.doesNotMatch(onlyCurrent.page.render(),/历史记录（2026-07-30）/);await onlyCurrent.page.load();assert.equal(onlyCurrent.calls[0].country,'菲律宾');
+ const onlyHistory=fixture({catalog:[],withdrawCatalog:[{name:'SUPERLG',country:'LG',team:'M8'}],country:'菲律宾',team:'all'});onlyHistory.context.withdrawHistorical('historical');await onlyHistory.page.load();assert.equal(onlyHistory.calls[0].country,'LG');assert.deepEqual(onlyHistory.calls[0].platforms,['SUPERLG'],'all-team selection must still pin the one confirmed historical platform');
+ const pending=fixture({catalog:[],withdrawCatalog:[{name:'PENDING',country:'菲律宾',team:null},{name:'CONFLICT',country:'菲律宾',team:'__team_conflict__'}],country:'菲律宾',team:'all'});assert.doesNotMatch(pending.page.render(),/<option[^>]+value="(?:__team_pending__|__team_conflict__|__unassigned__)"/);pending.context.withdrawTeam('__team_pending__');assert.equal(pending.L.team,'all');
+});
+
+test('historical table, reason and note displays use Philippines while every detail request preserves LG',async()=>{
+ const f=fixture({catalog:[],withdrawCatalog:[{name:'SUPERLG',country:'LG',team:'M8'}],country:'菲律宾',team:'M8',respond:q=>q.action==='autoWithdraw'?{rows:[{country:'LG',platform:'SUPERLG',total:1,success:1,rejected:0}],totals:{total:1},notes:[],canWriteNotes:true}:q.action==='withdrawReasons'?{available:false}:{...q,version:'saved'}});
+ f.L.from='2026-07-30T00:00:00';f.L.to='2026-07-30T23:59:59';f.context.withdrawHistorical('historical');await f.page.load();assert.match(f.page.render(),/<td>菲律宾<\/td><td>SUPERLG<\/td>/);assert.doesNotMatch(f.page.render(),/<td>LG<\/td>/);
+ f.context.withdrawReasons(0,'blocking');await new Promise(setImmediate);assert.equal(f.calls.at(-1).country,'LG');assert.equal(f.calls.at(-1).platform,'SUPERLG');assert.match(f.page.render(),/<span>菲律宾 · SUPERLG<\/span>/);assert.equal(f.page.state.reason.country,'LG');
+ f.context.withdrawNoteOpen(0);assert.match(f.page.render(),/class="config-context">菲律宾 · SUPERLG<\/div>/);assert.equal(f.page.state.note.country,'LG');f.context.withdrawNoteInput('Synthetic historical note');await f.context.withdrawNoteSave();assert.equal(f.calls.at(-1).country,'LG');assert.equal(f.calls.at(-1).platform,'SUPERLG');
+});

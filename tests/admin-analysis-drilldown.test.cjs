@@ -120,3 +120,14 @@ test('latency platform daily comparisons preserve separate amount and count shar
  const html=h.instance.panel(durationSegment),rows=cellsOf(html);assert.match(html,/<th>成功金额<\/th><th>成功笔数<\/th><th>金额占比<\/th><th>笔数占比<\/th>/);
  assert.deepEqual(rows[0].slice(1,5),['200.00','2','20.00%','20.00%']);assert.deepEqual(rows[1].slice(1,5),['800.00','8','80.00%','80.00%']);assert(rows[2].slice(1).every(value=>value==='—'));
 });
+
+test('page snapshots restore expanded daily results without rewinding request generations or reading again',async()=>{
+ const h=setup();h.instance.open(segment,'8时');h.action(segment,'daily');await flush();const html=h.instance.panel(segment),calls=h.calls.length,saved=h.instance.capture();
+ h.L.serial++;h.L.queryScope='another page';h.instance.restore(null);assert.equal(h.instance.isOpen(segment),false);h.instance.open({...segment,hour:9},'other');
+ h.L.serial++;h.L.queryScope='x';h.instance.restore(saved);assert.equal(h.instance.isOpen(segment),true);assert.equal(h.instance.panel(segment),html);h.action(segment,'platform');h.action(segment,'daily');await flush();assert.equal(h.calls.length,calls);
+});
+test('capturing an in-flight drilldown pauses its entries and late results cannot refill a restored page',async()=>{
+ const waiting=[],h=setup(q=>new Promise(resolve=>waiting.push({q,resolve})));h.instance.open(segment,'8时');h.action(segment,'daily');assert.equal(h.calls.length,2);const saved=h.instance.capture();h.L.serial++;h.instance.restore(saved);
+ const entry=h.instance.snapshot().states.get(JSON.stringify(segment)).daily.get('all');assert.equal(entry.loading,false);assert.match(entry.failures[0].message,/暂停/);
+ for(const item of waiting)item.resolve({complete:true,hasMore:false,summary:[],groups:{daily:[{...metric(987654),date:'2026-09-20'}]}});await flush();assert.equal(entry.results.size,0);assert.doesNotMatch(h.instance.panel(segment),/987654/);
+});
