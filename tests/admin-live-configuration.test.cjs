@@ -271,7 +271,7 @@ test('blocking threshold remarks are one category while source variants remain a
 test('auto-withdraw catalog keeps collected Panghu Brazil rows in a separate group',async()=>{
  await as(owner);await db.exec('begin');try{
   await db.query("insert into auto_withdraw_daily values('2026-09-23','巴西','776F',7,6,1,5,2,20,null,now(),now()),('2026-09-23','巴西','POPNOV',3,2,1,1,2,20,null,now(),now())");
-  const catalog=(await call('query',{action:'catalog'})).platforms;
+  const catalog=(await call('query',{action:'catalog'})).withdrawPlatforms;
   const panghu=catalog.find(x=>x.source==='withdraw'&&x.name==='776F');
   assert.deepEqual({country:panghu.country,team:panghu.team,scopeGroup:panghu.scopeGroup,sourceName:panghu.sourceName},{country:'胖虎巴西',team:'胖虎',scopeGroup:'BR_PANGHU',sourceName:'776F'});
   const ordinary=catalog.find(x=>x.source==='withdraw'&&x.name==='POPNOV');
@@ -331,4 +331,33 @@ test('anonymous cannot call reads or writes and direct private tables remain ina
  await as('');await assert.rejects(()=>call('provider_config'),/login_required/);await as(owner);await db.exec('set role authenticated');
  try{await assert.rejects(()=>db.query('select * from private.dashboard_admin_provider_overrides'),/permission denied/)}finally{await db.exec('reset role')}
  await db.exec('set role anon');try{for(const name of ['provider_config','provider_options','configuration_write','auto_withdraw','withdraw_reasons'])await assert.rejects(()=>call(name),/permission denied/)}finally{await db.exec('reset role')}
+});
+
+test('Panghu all-platform query discovers unlisted source platforms and deduplicates legacy country aliases',async()=>{
+ await as(owner);await db.exec('begin');try{
+  await db.exec("insert into auto_withdraw_daily values('2026-09-23','巴西','776F',7,6,1,5,2,20,null,'2026-09-24','2026-09-24'),('2026-09-23','胖虎巴西','776F',9,8,1,7,2,20,null,'2026-09-25','2026-09-25'),('2026-09-23','胖虎巴西','NEW-PH',11,10,1,8,3,20,null,now(),now()),('2026-09-23','巴西','ORDINARY-BR',3,2,1,1,2,20,null,now(),now())");
+  const ph=await call('auto_withdraw',autoReq({country:'胖虎巴西',platforms:[]}));assert.equal(ph.totals.total,20);assert.equal(ph.rows.length,2);assert(ph.rows.some(r=>r.platform==='NEW-PH'));assert(ph.rows.every(r=>r.country==='胖虎巴西'));
+  const br=await call('auto_withdraw',autoReq({country:'巴西',platforms:[]}));assert.equal(br.totals.total,3);assert.equal(br.rows[0].platform,'ORDINARY-BR');
+ }finally{await db.exec('rollback')}
+});
+test('order queries never rescan the daily report catalogue',async()=>{
+ await as(owner);const id=(await call('query',{action:'catalog'})).platforms.find(p=>p.name==='EXAMPLE').id;await db.exec('begin');try{
+  await db.exec("create or replace function private.dashboard_admin_live_withdraw_platforms() returns table(id uuid,name text,team text,country text,scope_group text,source text,timezone text,currency text,source_name text) language plpgsql stable security definer as $$begin raise exception 'unexpected_daily_scan';end$$");
+  const result=await call('query',query(id));assert(result.summary.length>0);
+ }finally{await db.exec('rollback')}
+});
+
+test('legacy Brazil note storage remains editable after a platform is displayed in Panghu',async()=>{
+ await as(owner);await db.exec('begin');try{
+  await db.exec("insert into auto_withdraw_daily values('2026-09-23','巴西','776F',7,6,1,5,2,20,null,now(),now())");
+  const saved=await call('withdraw_note',{date:'2026-09-23',country:'巴西',platform:'776F',reason:'Existing source country',expectedVersion:''});assert.equal(saved.country,'巴西');
+  const group=await call('auto_withdraw',autoReq({country:'胖虎巴西'}));assert.equal(group.notes[0].reason,'Existing source country');
+  const edited=await call('withdraw_note',{date:'2026-09-23',country:saved.country,platform:'776F',reason:'Updated',expectedVersion:saved.version});assert.equal(edited.reason,'Updated');
+ }finally{await db.exec('rollback')}
+});
+
+test('provider canonicalization preserves success-time page order and raw evidence',async()=>{
+ const input=[{id:'first',provider:'raw-a',raw_provider:'raw-a',created_at:'2026-09-21',success_at:'2026-09-25'},{id:'second',provider:'raw-a',raw_provider:null,created_at:'2026-09-24',success_at:'2026-09-24'}];
+ const rows=(await db.query("select private.dashboard_admin_live_remap_rows($1::jsonb,'印度','EXAMPLE') rows",[JSON.stringify(input)])).rows[0].rows;
+ assert.deepEqual(rows.map(r=>r.id),['first','second']);assert.equal(rows[0].raw_provider,'raw-a');assert.equal(rows[1].raw_provider,null);
 });

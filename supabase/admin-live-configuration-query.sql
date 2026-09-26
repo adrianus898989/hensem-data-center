@@ -52,8 +52,8 @@ revoke all on function private.dashboard_admin_live_remap_groups(jsonb,text,text
 create or replace function private.dashboard_admin_live_remap_rows(p_rows jsonb,p_country text,p_platform text)
 returns jsonb language sql stable security definer set search_path='' as $$
   select coalesce(jsonb_agg(jsonb_set(r,'{provider}',to_jsonb(private.dashboard_admin_live_provider_canonical(p_country,p_platform,r->>'provider')),true)
-    order by r->>'created_at' desc,r->>'direction' desc,r->>'id' desc),'[]'::jsonb)
-  from jsonb_array_elements(coalesce(p_rows,'[]'::jsonb)) r;
+    order by ordinal),'[]'::jsonb)
+  from jsonb_array_elements(coalesce(p_rows,'[]'::jsonb)) with ordinality as rows(r,ordinal);
 $$;
 revoke all on function private.dashboard_admin_live_remap_rows(jsonb,text,text) from public,anon,authenticated;
 
@@ -104,7 +104,9 @@ declare
 begin
   v_result:=private.dashboard_admin_live_query_raw(v_request);
   v_action:=coalesce(v_request->>'action','catalog');
-  if v_action='catalog' then return v_result; end if;
+  if v_action='catalog' then
+    return v_result||jsonb_build_object('withdrawPlatforms',(select coalesce(jsonb_agg(to_jsonb(p)||jsonb_build_object('scopeGroup',p.scope_group,'sourceName',p.source_name)),'[]'::jsonb) from private.dashboard_admin_live_withdraw_platforms() p));
+  end if;
   v_country:=v_result#>>'{platform,country}';
   v_platform:=coalesce(v_result#>>'{platform,sourceName}',v_result#>>'{platform,name}');
   if v_country is null or v_platform is null then return v_result; end if;

@@ -179,7 +179,7 @@ create or replace function private.dashboard_admin_live_auto_withdraw(p_request 
 returns jsonb language plpgsql stable security definer set search_path='' as $$
 declare
  v_scope jsonb:=private.dashboard_admin_live_scope();v_start date;v_end date;v_before date;v_days integer;
- v_country text;v_platforms text[];v_account text;v_key text;v_view text;v_sort text;v_asc boolean;
+ v_country text;v_platforms text[];v_panghu text[];v_account text;v_key text;v_view text;v_sort text;v_asc boolean;
  v_limit integer;v_offset integer;v_result jsonb;v_game jsonb:='{}'::jsonb;v_daily boolean;
 begin
  if p_request is null or jsonb_typeof(p_request)<>'object' or octet_length(p_request::text)>32768 or
@@ -215,29 +215,34 @@ begin
   select array_agg(private.dashboard_admin_live_withdraw_key(value)) into v_platforms from jsonb_array_elements_text(p_request->'platforms');
  end if;
  if nullif(p_request->>'platform','') is not null then v_platforms:=array[private.dashboard_admin_live_withdraw_key(p_request->>'platform')];end if;
- if exists(select 1 from private.dashboard_admin_live_platforms() where source='game66' and country=v_country) then
+ if exists(select 1 from public.game66_platforms where team_name=v_country) then
   v_game:=private.dashboard_admin_live_game66_withdraw(v_before,v_end,v_country,v_platforms);
  end if;
+ select array_agg(distinct upper(btrim(platform))) into v_panghu from (
+  select platform from public.auto_withdraw_daily where country in ('胖虎巴西','BR_PANGHU','PANGHU BRAZIL')
+  union select platform from public.withdraw_operator_daily where country in ('胖虎巴西','BR_PANGHU','PANGHU BRAZIL')
+  union select platform from public.newar_business_snapshots where country in ('胖虎巴西','BR_PANGHU','PANGHU BRAZIL')
+ ) confirmed;
  with direct as materialized (
   select s.*,private.dashboard_admin_live_withdraw_key(s.platform) as platform_key from public.newar_business_snapshots s
   where s.kind='auto_withdraw_bundle' and s.direction='all'
-   and (s.country=v_country or (v_country='胖虎巴西' and upper(s.country) in ('巴西','BR','BR_PANGHU','PANGHU BRAZIL')))
+   and (case when upper(btrim(s.country)) in ('巴西','BR','BRAZIL') and upper(btrim(s.platform))=any(v_panghu) then '胖虎巴西' else private.dashboard_admin_live_report_country(s.country,s.platform) end)=v_country
    and s.stat_date between v_before and v_end
-   and private.dashboard_scope_allows(v_scope,s.country_code,s.platform)
+   and private.dashboard_scope_allows(v_scope,v_country,s.platform)
  ), legacy_daily as (
-  select distinct on(a.data_date,a.country,private.dashboard_admin_live_withdraw_key(a.platform))
-   a.data_date,a.country,a.platform,private.dashboard_admin_live_withdraw_key(a.platform) as platform_key,
+  select distinct on(a.data_date,private.dashboard_admin_live_withdraw_key(a.platform))
+   a.data_date,v_country as country,a.platform,private.dashboard_admin_live_withdraw_key(a.platform) as platform_key,
    a.total::bigint,a.success::bigint,a.rejected::bigint,a.auto_count::bigint,
    coalesce(a.manual_count,greatest(a.total-a.auto_count,0))::bigint as manual_count,a.avg_seconds::numeric,
    a.source_updated_at,a.updated_at
-  from public.auto_withdraw_daily a where (a.country=v_country or (v_country='胖虎巴西' and upper(a.country) in ('巴西','BR','BR_PANGHU','PANGHU BRAZIL'))) and a.data_date between v_before and v_end
-   and private.dashboard_scope_allows(v_scope,a.country,a.platform)
+  from public.auto_withdraw_daily a where (case when upper(btrim(a.country)) in ('巴西','BR','BRAZIL') and upper(btrim(a.platform))=any(v_panghu) then '胖虎巴西' else private.dashboard_admin_live_report_country(a.country,a.platform) end)=v_country and a.data_date between v_before and v_end
+   and private.dashboard_scope_allows(v_scope,v_country,a.platform)
    and not exists(select 1 from direct n where n.stat_date=a.data_date and n.platform_key=private.dashboard_admin_live_withdraw_key(a.platform) and n.payload ? 'rows')
-  order by a.data_date,a.country,private.dashboard_admin_live_withdraw_key(a.platform),coalesce(a.updated_at,a.source_updated_at) desc
+  order by a.data_date,private.dashboard_admin_live_withdraw_key(a.platform),coalesce(a.updated_at,a.source_updated_at) desc
  ), daily_source as materialized (
   select * from legacy_daily
   union all
-  select n.stat_date,n.country,n.platform,n.platform_key,(r->>'total_count')::bigint,(r->>'success_count')::bigint,
+  select n.stat_date,v_country,n.platform,n.platform_key,(r->>'total_count')::bigint,(r->>'success_count')::bigint,
    (r->>'reject_count')::bigint,(r->>'auto_count')::bigint,coalesce((r->>'manual_count')::bigint,greatest((r->>'total_count')::bigint-(r->>'auto_count')::bigint,0)),
    (r->>'total_handle_seconds')::numeric/nullif((r->>'handle_count')::numeric,0),n.captured_at,n.updated_at
   from direct n cross join lateral jsonb_array_elements(n.payload->'rows')r
@@ -247,17 +252,17 @@ begin
    (r->>'avg_seconds')::numeric,(r->>'source_updated_at')::timestamptz,(r->>'updated_at')::timestamptz
   from jsonb_array_elements(coalesce(v_game->'rows','[]'::jsonb))r
  ), legacy_operators as (
-  select distinct on(o.data_date,o.country,private.dashboard_admin_live_withdraw_key(o.platform),o.account)
-   o.data_date,o.country,o.platform,private.dashboard_admin_live_withdraw_key(o.platform) as platform_key,o.account,
+  select distinct on(o.data_date,private.dashboard_admin_live_withdraw_key(o.platform),o.account)
+   o.data_date,v_country as country,o.platform,private.dashboard_admin_live_withdraw_key(o.platform) as platform_key,o.account,
    o.processed::bigint,o.rejected::bigint,o.avg_seconds::numeric,o.source_updated_at,o.updated_at
-  from public.withdraw_operator_daily o where (o.country=v_country or (v_country='胖虎巴西' and upper(o.country) in ('巴西','BR','BR_PANGHU','PANGHU BRAZIL'))) and o.data_date between v_before and v_end
-   and private.dashboard_scope_allows(v_scope,o.country,o.platform)
+  from public.withdraw_operator_daily o where (case when upper(btrim(o.country)) in ('巴西','BR','BRAZIL') and upper(btrim(o.platform))=any(v_panghu) then '胖虎巴西' else private.dashboard_admin_live_report_country(o.country,o.platform) end)=v_country and o.data_date between v_before and v_end
+   and private.dashboard_scope_allows(v_scope,v_country,o.platform)
    and not exists(select 1 from direct n where n.stat_date=o.data_date and n.platform_key=private.dashboard_admin_live_withdraw_key(o.platform) and n.payload ? 'operator_rows')
-  order by o.data_date,o.country,private.dashboard_admin_live_withdraw_key(o.platform),o.account,coalesce(o.updated_at,o.source_updated_at) desc
+  order by o.data_date,private.dashboard_admin_live_withdraw_key(o.platform),o.account,coalesce(o.updated_at,o.source_updated_at) desc
  ), operator_source as materialized (
   select * from legacy_operators
   union all
-  select n.stat_date,n.country,n.platform,n.platform_key,r->>'operator',(r->>'processed_count')::bigint,(r->>'reject_count')::bigint,
+  select n.stat_date,v_country,n.platform,n.platform_key,r->>'operator',(r->>'processed_count')::bigint,(r->>'reject_count')::bigint,
    (r->>'total_handle_seconds')::numeric/nullif((r->>'handle_count')::numeric,0),n.captured_at,n.updated_at
   from direct n cross join lateral jsonb_array_elements(n.payload->'operator_rows')r
   union all
@@ -339,7 +344,7 @@ begin
   'canWriteNotes',private.dashboard_admin_live_can_note(),
   'platforms',coalesce((select jsonb_agg(platform order by platform) from (select distinct platform from daily_source union select distinct platform from operator_source) p),'[]'::jsonb),
   'notes',coalesce((select jsonb_agg(jsonb_build_object('date',n.data_date,'country',n.country,'platform',n.platform,'reason',n.reason,'updatedAt',n.updated_at,
-    'version',md5(jsonb_build_array(extract(epoch from n.updated_at),n.reason)::text))) from public.auto_withdraw_notes n where (n.country=v_country or (v_country='胖虎巴西' and upper(n.country) in ('巴西','BR','BR_PANGHU','PANGHU BRAZIL'))) and n.data_date between v_start and v_end
+    'version',md5(jsonb_build_array(extract(epoch from n.updated_at),n.reason)::text))) from public.auto_withdraw_notes n where (case when upper(btrim(n.country)) in ('巴西','BR','BRAZIL') and upper(btrim(n.platform))=any(v_panghu) then '胖虎巴西' else private.dashboard_admin_live_report_country(n.country,n.platform) end)=v_country and n.data_date between v_start and v_end
     and (v_platforms is null or private.dashboard_admin_live_withdraw_key(n.platform)=any(v_platforms)) and private.dashboard_scope_allows(v_scope,n.country,n.platform)),'[]'::jsonb)
  ) into v_result;
  return v_result;

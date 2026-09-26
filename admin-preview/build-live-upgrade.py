@@ -7,10 +7,12 @@ from pathlib import Path
 
 SQL_ROOT = Path(__file__).resolve().parents[1] / "supabase"
 FILES = (
+    "admin-live-order-confirmations.sql",
     "admin-live-query-performance.sql",
     "admin-live-provider-aliases.sql",
     "admin-live-configuration.sql",
     "admin-live-configuration-platforms.sql",
+    "admin-live-platform-catalog-map.sql",
     "admin-live-configuration-query.sql",
     "admin-live-configuration-workorders.sql",
     "admin-live-withdraw-pages.sql",
@@ -18,17 +20,18 @@ FILES = (
     "admin-live-withdraw-reasons.sql",
     "admin-live-withdraw-notes.sql",
     "admin-live-deposit-issues.sql",
+    "admin-live-collected-data.sql",
 )
 
 
 def build():
-    parts = ["-- Private admin release 2026-09-25. Atomic: a failure rolls back the entire upgrade.\nbegin;\n"]
+    parts = ["-- Private admin release 2026-09-26. Atomic: a failure rolls back the entire upgrade.\nbegin;\n"]
     for name in FILES:
         lines = (SQL_ROOT / name).read_text().splitlines()
         if lines.count("begin;") != 1 or lines.count("commit;") != 1:
             raise ValueError(f"Unexpected transaction boundaries: {name}")
         parts.append(f"\n-- FILE: {name}\n" + "\n".join(line for line in lines if line not in ("begin;", "commit;")))
-    parts.append("\ncommit;\nselect 'admin-ui-20260925-v6' as applied_release;\n")
+    parts.append("\ncommit;\nselect 'admin-ui-20260926-v8' as applied_release;\n")
     return "\n".join(parts)
 
 
