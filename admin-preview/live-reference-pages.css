@@ -87,3 +87,20 @@ body.live-admin .df-analysis-status .btn{margin-left:auto}
 body.live-admin .df-analysis-status details{width:100%}
 
 .live-provider-orders table{min-width:1450px}.live-provider-orders td:nth-child(3){min-width:245px}.live-provider-orders td:last-child{white-space:normal;min-width:230px;max-width:320px}.df-jumps .link{margin-left:auto}
+/* Fill the existing space beside each fee total without moving the surrounding cards. */
+body.live-admin .df-workorder-ranks{flex:1 1 0;min-width:0;max-width:70%;height:53px;display:flex;gap:10px;margin-left:12px;overflow-x:auto;overflow-y:hidden;align-items:start}
+body.live-admin .df-workorder-rank{flex:1 0 180px;min-width:0;font-size:9px;line-height:12px}
+body.live-admin .df-workorder-rank>b{display:block;color:#a37b66;font-size:9px;font-weight:500;margin-bottom:3px;white-space:nowrap}
+body.live-admin .df-workorder-rank.good>b{color:#528578}
+body.live-admin .df-workorder-rank>b>small{margin-left:5px;font-size:8px;color:#ae8548}
+body.live-admin .df-workorder-rank-row{display:grid;gap:5px;align-items:center;font-size:9px;font-variant-numeric:tabular-nums;line-height:12px;color:#506582}
+body.live-admin .df-workorder-rank-row.pending{grid-template-columns:minmax(35px,1fr) 38px minmax(55px,1.2fr)}
+body.live-admin .df-workorder-rank-row.good{grid-template-columns:minmax(35px,1fr) 42px minmax(35px,.9fr) minmax(55px,1.2fr)}
+body.live-admin .df-workorder-rank-row>*{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:9px;font-weight:400}
+body.live-admin .df-workorder-rank-row>:not(:first-child){text-align:right}
+body.live-admin .df-workorder-rank-row>strong{color:#375981;font-weight:500}
+body.live-admin .df-workorder-rank-status,body.live-admin .df-workorder-rank-empty{color:#7c8fa9;font-size:9px;line-height:16px}
+body.live-admin .provider-platform-row{background:#fbfcff}
+body.live-admin .provider-platform-row td:first-child{padding-left:18px!important}
+body.live-admin .provider-platform-row td{font-size:10px!important;padding-top:5px!important;padding-bottom:5px!important}
+body.live-admin .provider-platform-labels td{background:#eef3ff;color:#6880a5;font-size:9px!important;padding-top:5px!important;padding-bottom:5px!important}

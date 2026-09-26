@@ -19,7 +19,19 @@ function fixture(orders){
 }
 function order(platformId,source,successAmount,successCount,other={}){return {provider:'SyntheticPay',platformId,platform:'Same displayed platform',source,currency:'INR',direction:'withdraw',all_amount:10000,all_count:20,success_amount:successAmount,success_count:successCount,created_success_count:2,pending_amount:500,pending_count:3,...other}}
 const plain=html=>html.replace(/<[^>]*>/g,'').trim();
-function breakdown(html){const inner=html.match(/<div class="provider-platform-breakdown">([\s\S]*?)<\/div><\/td>/)?.[1];assert(inner,'expanded platform table is rendered');const headers=[...inner.matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]));const rows=[...inner.match(/<tbody>([\s\S]*?)<\/tbody>/)[1].matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td>([\s\S]*?)<\/td>/g)].map(c=>plain(c[1])));return rows.map(row=>Object.fromEntries(headers.map((header,i)=>[header,row[i]])))}
+function breakdown(html){
+ assert.match(html,/<div class="provider-platform-breakdown">/,'expanded platform heading is rendered');
+ const main=html.match(/<div class="[^"]*\bprovider-summary-table\b[^"]*">([\s\S]*?)<\/table>/)?.[1];assert(main,'platform children remain in the main summary table');
+ const headers=[...main.matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]).replace(/\s*[↕↑↓]$/,''));
+ const amountIndex=headers.findIndex(h=>/^代[收付]成功金额$/.test(h)),countIndex=headers.findIndex(h=>/^代[收付]成功笔数$/.test(h));
+ const shareIndex=headers.findIndex(h=>/^(已读取)?金额占比$/.test(h));assert(amountIndex>=0&&countIndex>=0&&shareIndex>=0,'success fields retain distinct columns');
+ const children=[...main.matchAll(/<tr class="provider-platform-row">([\s\S]*?)<\/tr>/g)];assert(children.length,'expanded platform child rows are rendered');
+ return children.map(match=>{
+  const cells=[...match[1].matchAll(/<td>([\s\S]*?)<\/td>/g)].map(c=>c[1]);assert.equal(cells.length,headers.length,'platform child aligns with every parent column');
+  const countCell=cells[countIndex],countShare=countCell.match(/<small class="cell-sub">笔数占比 ([\s\S]*?)<\/small>/)?.[1];assert(countShare!==undefined,'count share is displayed independently from amount share');
+  return {'平台':plain(cells[0]),'包网来源':plain(cells[1]),'成功金额':plain(cells[amountIndex]),'成功笔数':plain(countCell.replace(/<small\b[\s\S]*?<\/small>/g,'')),'金额占比':plain(cells[shareIndex]),'笔数占比':plain(countShare)};
+ });
+}
 
 test('payout expands each platform with independent success amount/count shares and no extra reads',()=>{
  const h=fixture([order('platform-a','ar',900,3),order('platform-b','newar',100,7),order('platform-c','ar',50000,500,{direction:'charge'})]);
