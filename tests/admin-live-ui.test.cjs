@@ -276,8 +276,8 @@ test('split date and second-precision time inputs preserve the unchanged half-op
  const h=await ready();const filters=h.nodes.get('liveFilters').innerHTML;for(const label of ['起始日期','截止日期','起始时间（含秒）','截止时间（含秒）'])assert(filters.includes('aria-label="'+label+'"'));assert.equal([...filters.matchAll(/type="date"/g)].length,2);assert.equal([...filters.matchAll(/type="time" step="1"/g)].length,2);const before=h.calls.length;h.c.liveDateSet('from','date','2026-09-22');h.c.liveDateSet('from','time','01:02:03');h.c.liveDateSet('to','date','2026-09-22');h.c.liveDateSet('to','time','04:05:06');assert.equal(h.calls.length,before,'date editing waits for query');assert.equal(h.L.from,'2026-09-22T01:02:03');assert.equal(h.L.to,'2026-09-22T04:05:06');await h.c.liveLoad();const q=h.calls.slice(before).find(q=>q.action==='aggregate');assert.equal(q.startAt,'2026-09-21T19:32:03.000Z');assert.equal(q.endAt,'2026-09-21T22:35:07.000Z');
 });
 
-test('automatic-payout configuration registers once after the deposit snapshot in the merchant center',async()=>{
- const h=await ready(),merchant=h.c.navGroupsV3.find(g=>g[0]==='merchant');assert(merchant);assert.equal(h.c.pages.filter(p=>p[0]==='payout_config').length,1);assert.deepEqual(Array.from(merchant[3]),['merchants','merchantproviders','workorders','deposit_tracking','payout_config','auto_withdraw','withdraw_operators']);assert.equal(h.c.groupForV3('payout_config')[0],'merchant');assert(!h.c.navGroupsV3.find(g=>g[0]==='analysis')[3].includes('payout_config'));const before=h.calls.length;h.c.setPage('payout_config');await settle();const requests=h.calls.slice(before);assert.deepEqual(requests.map(q=>[q.action,q.operation]),[['payoutConfig','index'],['payoutConfig','snapshot']]);assert.equal(h.c.state.navGroup,'merchant');assert.match(h.nodes.get('nav').innerHTML,/自动出款配置/);assert.match(h.html(),/class="live-payout-config"/);assert.match(h.html(),/SYNTHETIC_CONFIG_PLATFORM/);assert.match(h.html(),/原后台配置 · 只读同步/);assert.match(h.html(),/否（只读）/);assert.match(h.html(),/>0<\/span>/);assert.doesNotMatch(h.html(),/<(?:button|input)[^>]*>保存|onclick="[^"]*(?:save|update|delete)/);assert.equal(h.nodes.get('liveFilters').style.display,'none');
+test('automatic-payout configuration stays in the merchant center after workorders move out',async()=>{
+ const h=await ready(),merchant=h.c.navGroupsV3.find(g=>g[0]==='merchant');assert(merchant);assert.equal(h.c.pages.filter(p=>p[0]==='payout_config').length,1);assert.deepEqual(Array.from(merchant[3]),['merchants','merchantproviders','payout_config','auto_withdraw','withdraw_operators']);assert.equal(h.c.groupForV3('payout_config')[0],'merchant');assert(!h.c.navGroupsV3.find(g=>g[0]==='analysis')[3].includes('payout_config'));const before=h.calls.length;h.c.setPage('payout_config');await settle();const requests=h.calls.slice(before);assert.deepEqual(requests.map(q=>[q.action,q.operation]),[['payoutConfig','index'],['payoutConfig','snapshot']]);assert.equal(h.c.state.navGroup,'merchant');assert.match(h.nodes.get('nav').innerHTML,/自动出款配置/);assert.match(h.html(),/class="live-payout-config"/);assert.match(h.html(),/SYNTHETIC_CONFIG_PLATFORM/);assert.match(h.html(),/原后台配置 · 只读同步/);assert.match(h.html(),/否（只读）/);assert.match(h.html(),/>0<\/span>/);assert.doesNotMatch(h.html(),/<(?:button|input)[^>]*>保存|onclick="[^"]*(?:save|update|delete)/);assert.equal(h.nodes.get('liveFilters').style.display,'none');
 });
 
 test('configuration route and refresh use only exact read-only index/snapshot requests despite dirty order filters',async()=>{
@@ -461,10 +461,10 @@ test('provider expansion shows platform contributions without requests and leave
  assert.match(h.html(),/代收创建金额/);assert.match(h.html(),/代收创建笔数/);assert.match(h.html(),/aria-expanded="false"/);
  h.c.providerSummaryToggle(0);assert.equal(h.calls.length,calls);assert.match(h.html(),/aria-expanded="true"/);
  const children=[...h.html().matchAll(/<tr class="provider-platform-row">([^]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td>([^]*?)<\/td>/g)].map(c=>c[1]));assert.equal(children.length,2);
- assert(children.every(r=>r.length===17));assert.deepEqual(children.map(r=>plain(r[1])).sort(),['AR','NEW_AR']);
- assert.deepEqual(children.map(r=>plain(r[5])).sort(),['40.00%','60.00%']);
- assert.deepEqual(children.map(r=>r[3].match(/笔数占比 ([0-9.]+%)/)[1]).sort(),['40.00%','60.00%']);
- assert.equal(children.reduce((n,r)=>n+Number(plain(r[2]).replaceAll(',','')),0),1000);
+ assert(children.every(r=>r.length===19));assert.deepEqual(children.map(r=>plain(r[1])).sort(),['AR','NEW_AR']);
+ assert.deepEqual(children.map(r=>plain(r[6])).sort(),['40.00%','60.00%']);
+ assert.deepEqual(children.map(r=>plain(r[7])).sort(),['40.00%','60.00%']);
+ assert.equal(children.reduce((n,r)=>n+Number(plain(r[3]).replaceAll(',','')),0),1000);
  h.c.providerSummaryToggle(0);assert.doesNotMatch(h.html(),/provider-platform-breakdown/);
  h.L.queryWarnings=['Synthetic failed platform'];h.c.render();assert.match(h.html(),/部分平台读取失败/);
  h.c.state.page='overview';h.c.render();assert.doesNotMatch(h.html(),/provider-summary-report|provider-floating-head/);
@@ -676,7 +676,7 @@ test('overview fills all fee rollups, merges provider sources, and keeps manual 
  h.L.results=[a,b];h.L.feeLookupRows=[{scopeType:'country',country:'印度',provider:'UPI-QR',collectFee:'4%'},{scopeType:'platform',country:'印度',platform:p2.name,provider:'UPI-QR',collectFee:'5%'}];h.L.direction='charge';h.L.comparisonStatus='idle';h.c.state.page='overview';h.c.render();
  const tables=renderedTables(h.html()),provider=tables.find(t=>t.headers[0]==='三方'),at=(t,row,label)=>plain(row[t.headers.indexOf(label)]);
  assert(!provider.headers.includes('包网来源'));assert(!provider.headers.includes('方向'));assert.equal(provider.rows.length,2);
- assert.deepEqual(provider.headers,['三方','全部金额','全部笔数','成功金额','金额占比','成功笔数','笔数占比','成功率','手续费率','估算手续费','手续费占比']);assert.match(h.html(),/table class="df-provider-business-table"/);
+ assert.deepEqual(provider.headers,['三方','类型','全部金额','全部笔数','成功金额','金额占比','成功笔数','笔数占比','成功率','手续费率','估算手续费','手续费占比']);assert.match(h.html(),/table class="df-provider-business-table"/);
  const pay=provider.rows.find(r=>plain(r[0])==='UPI-QR'),man=provider.rows.find(r=>plain(r[0])==='人工充值');
  assert.equal(at(provider,pay,'估算手续费'),'47.00');assert.match(at(provider,pay,'手续费率'),/4\.00%/);assert.match(at(provider,pay,'手续费率'),/5\.00%/);assert.equal(at(provider,pay,'手续费占比'),'100.00%');assert.equal(at(provider,pay,'成功金额'),'1,000.00');assert.equal(at(provider,pay,'金额占比'),'83.33%');assert.equal(at(provider,pay,'成功笔数'),'10');assert.equal(at(provider,pay,'笔数占比'),'83.33%');assert.equal(at(provider,pay,'成功率'),'33.33%');assert.equal(at(provider,man,'成功率'),'不适用');assert.equal(at(provider,man,'估算手续费'),'不适用');
  for(const first of ['团队','国家']){const t=tables.find(t=>t.headers[0]===first);assert.equal(at(t,t.rows[0],'估算手续费'),'47.00');assert.equal(at(t,t.rows[0],'成功金额'),'1,200.00')}
@@ -703,7 +703,7 @@ test('overview adds direction-specific workorder rankings only beside the fee to
  assert.match(h.html(),/估算手续费[^]*?df-workorder-ranks[^]*?df-state-tail/);
 });
 test('workorder ranks distinguish partial coverage, no data and failed reads',async()=>{
- const h=await ready();h.c.render();h.L.workorders={coverage:{complete:false,capturedPlatformDays:13,expectedPlatformDays:17,platforms:[{platform:'Missing <platform>',days:0,expectedDays:1,complete:false}]},unsupportedPlatforms:['Unsupported <source>'],byProvider:[{provider:'SomePay',direction:'charge',submittedCount:1,successCount:1,successAmount:10,notReceivedCount:0,notReceivedAmount:0}]};h.c.render();assert.match(h.html(),/工单覆盖 13 \/ 17 平台日/);assert.match(h.html(),/Missing &lt;platform&gt;/);assert.match(h.html(),/Unsupported &lt;source&gt;/);assert.match(h.html(),/不能据此认定漏抓/);assert.match(h.html(),/暂无达到30笔/);assert.match(h.html(),/暂无已采集的取款三方工单/);assert.match(h.html(),/已采集工单暂无未到账/);assert.doesNotMatch(h.html(),/工单到账率较高<small>部分/);
+ const h=await ready();h.c.render();h.L.workorders={coverage:{complete:false,capturedPlatformDays:13,expectedPlatformDays:17,platforms:[{platform:'Missing <platform>',days:0,expectedDays:1,complete:false}]},unsupportedPlatforms:['Unsupported <source>'],byProvider:[{provider:'SomePay',direction:'charge',submittedCount:1,successCount:1,successAmount:10,notReceivedCount:0,notReceivedAmount:0}]};h.c.render();assert.match(h.html(),/工单覆盖 13 \/ 17 平台日/);assert.match(h.html(),/Missing &lt;platform&gt;/);assert.match(h.html(),/Unsupported &lt;source&gt;/);assert.doesNotMatch(h.html(),/<details class="df-workorder-coverage"/);for(const card of h.html().matchAll(/<section class="df-workorder-rank [^"]*">([\s\S]*?)<\/section>/g))assert.doesNotMatch(card[1],/<small class="df-rank-rule"/);assert.match(h.html(),/暂无达到30笔/);assert.match(h.html(),/暂无已采集的取款三方工单/);assert.match(h.html(),/已采集工单暂无未到账/);assert.doesNotMatch(h.html(),/工单到账率较高<small>部分/);
  h.L.workorders=null;h.L.workordersError='Synthetic timeout';h.c.render();assert.match(h.html(),/工单读取未完成/);assert.doesNotMatch(h.html(),/SomePay|已采集工单暂无未到账/);
 });
 
@@ -765,4 +765,15 @@ test('matrix cell selection renders only that hour below its band and supports c
  const h=await ready(),r=completeAggregate(P,10,4);r.groups.matrix.push({...r.groups.matrix[0],hour:13,success_amount:'99000',success_count:990,all_amount:'100000',all_count:1000});h.L.results=[r];h.L.matrixMode='exact';h.L.direction='charge';h.c.state.page='matrix';h.c.render();const before=h.calls.length,encoded=encodeURIComponent(JSON.stringify({kind:'matrix',direction:'charge',hour:12,bucket:'200'}));h.c.liveMatrixSegment(encoded);
  let html=h.html(),detail=html.match(/<div class="analysis-drilldown">([^]*?)<div class="analysis-note">/)[1];assert.match(detail,/12时 × 200/);assert.doesNotMatch(detail,/24小时合计|99,000/);assert.match(detail,/400\.00/);assert.match(detail,/金额占比 100\.00%/);assert(html.indexOf('<div class="analysis-drilldown">')<html.indexOf('<tr><td>300</td>'));assert.equal(h.calls.length,before);
  h.c.liveMatrixSegment(encoded);assert.doesNotMatch(h.html(),/<div class="analysis-drilldown">/);assert.equal(h.calls.length,before);
+});
+
+test('provider business type columns remain separate and reuse loaded source labels on all provider reports',async()=>{
+ const h=await ready();h.L.results=[completeAggregate(P,20,5)];const provider=h.L.results[0].groups.provider[0].provider;
+ h.L.feeLookupRows=[{country:'印度',scopeType:'country',provider,collectFee:'4%',payoutFee:'2%',sourceType:'跑分',sourceTypeProvider:provider,sheetName:'Synthetic original',sourceTypeCell:'B2'}];
+ for(const [page,first] of [['overview','三方'],['providers','统一三方'],['provider_payout','统一三方'],['provider_daily','三方'],['channelquality','三方'],['risk','三方']]){
+  h.c.state.page=page;h.L.view='business';h.L.direction='all';h.c.render();const table=renderedTables(h.html()).find(t=>t.headers[0]===first&&t.headers.includes('类型'));assert(table,page+' type column');
+  for(const row of table.rows)assert.equal(row.length,table.headers.length,page+' aligned type cells');
+  if(table.rows.length)assert.equal(plain(table.rows[0][table.headers.indexOf('类型')]),'跑分',page+' uses source business type');
+ }
+ h.L.feeLookupError='Synthetic type lookup failure';h.L.feeLookupRows=[];h.c.state.page='providers';h.c.render();assert.match(h.html(),/provider-business-type review[^>]*>读取失败</);
 });

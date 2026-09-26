@@ -192,7 +192,8 @@ test('new current-rate API: fresh permission, source scope, exact rows and prese
       for(const forbidden of ['EXCLUDED_LEAK','EXCLUDED_IP','EXCLUDED_ACCOUNT','EXCLUDED_RAW','whitelist','channel_info']) assert.ok(!serialized.includes(forbidden));
       assert.deepEqual(Object.keys(r.rows[0]).sort(),['id','sourceId','scopeType','country','scopeGroup','platform','provider','category',
         'collectFee','payoutFee','totalFee','collectSingleFee','payoutSingleFee','collectLimit','payoutLimit',
-        'status','rawStatus','sheetName','sourceRow','sourceColumn','updatedAt'].sort());
+        'status','rawStatus','sheetName','sourceRow','sourceColumn','updatedAt',
+        'sourceType','sourceTypeProvider','sourceTypeCell','sourceTypeHeader','sourceTypeSheetId','sourceTypeCollectedAt'].sort());
       await db.exec('reset role');
       const after=await scalar(`select jsonb_build_object('rates',(select jsonb_agg(to_jsonb(r) order by id) from public.third_party_rates r),
         'platforms',(select jsonb_agg(to_jsonb(p) order by id) from public.third_party_platform_status p))`);

@@ -75,3 +75,47 @@ test('existing provider summary also excludes manual fee records without removin
  const orders=[order(),order({provider:'人工充值',success_amount:500,success_count:5})],rows=api.buildRows({orders,issues:[],rates:[rate(),rate({provider:'人工充值',collectFee:'99%'})],country:'印度',direction:'charge',plus,combine});
  assert.equal(rows.length,2);assert.equal(plus(rows).success_amount,1500);assert.equal(rows.find(r=>r.provider==='人工充值').estimated_fee,null);assert.equal(api.feeSummary(rows).amount,40);assert.equal(api.feeSummary(rows).complete,true);
 });
+
+
+test('business types come only from identity-checked original source fields, independently of fees',()=>{
+ const r=order({provider:'ICPay'}),source=rate({provider:'ICPay',category:'UPI',sourceType:'跑分',sourceTypeProvider:'IC2Pay',sheetName:'印度线下',sourceTypeCell:'B6'});
+ assert.equal(api.providerType(r,[source],'印度').label,'跑分');
+ assert.match(api.providerType(r,[source],'印度').detail,/B6/);
+ assert.equal(api.providerType(r,[{...source,sourceType:null}],'印度').label,'未标注');
+ assert.equal(api.providerType(r,[{...source,sourceTypeProvider:'UnrelatedPay'}],'印度').label,'待核对');
+ assert.equal(api.providerType(r,[{...source,country:'巴西'}],'印度').label,'未标注');
+ assert.equal(api.providerType(r,[source,{...source,sourceType:'钱包'}],'印度').label,'多种类型');
+ assert.equal(api.providerType(order({provider:'人工充值'}),[source],'印度').label,'—');
+ assert.equal(api.providerType(r,null,'印度').label,'读取中…');
+ assert.equal(api.estimate(r,[source],'印度'),40,'business type never changes fee calculations');
+});
+test('source business types keep the confirmed UpiPay row and platform-specific scope',()=>{
+ const base=rate({provider:'UpiPay',sourceTypeProvider:'UPIPAY',sheetName:'印度线下',sourceRow:4,sourceType:'唤醒/跑分'}),r=order({provider:'UpiPay'});
+ assert.equal(api.providerType(r,[base,{...base,sourceRow:48,sourceTypeProvider:'HAP',sourceType:'其他'}],'印度').label,'唤醒/跑分');
+ assert.equal(api.providerType(r,[{...base,sourceRow:48}],'印度').label,'未标注');
+ const general=rate({sourceTypeProvider:'ExamplePay',sourceType:'跑分'}),specific={...general,scopeType:'platform',platform:'Alpha',sourceType:'钱包'};
+ assert.equal(api.providerType(order(),[general,specific],'印度').label,'钱包');
+ assert.equal(api.providerType(order({platform:'Beta'}),[general,specific],'印度').label,'跑分');
+ const escape=s=>String(s).replace(/[<>"]/g,c=>({'<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+ assert.doesNotMatch(api.providerTypeCell(order(),[{...general,sourceType:'<img onerror=bad>'}],'印度',escape),/<img/);
+});
+
+test('merged provider types reconcile all platform leaves in both summary and overview',()=>{
+ const general=rate({sourceTypeProvider:'ExamplePay',sourceType:'跑分'}),specific={...general,scopeType:'platform',platform:'Alpha',sourceType:'钱包'},rates=[general,specific];
+ const orders=[order(),order({platformId:'b',platform:'Beta'})];
+ const summary=api.buildRows({orders,issues:[],rates,country:'印度',direction:'charge',plus,combine})[0],overview=dimensions(orders,'provider',rates)[0];
+ for(const row of [summary,overview]){const type=api.providerType(row,rates,'印度');assert.equal(type.label,'多种类型');assert.deepEqual(type.types.sort(),['跑分','钱包'].sort());}
+ const E=s=>String(s).replaceAll('<','&lt;');
+ assert.match(api.providerTypeCell(order(),[],'印度',E,{feeLookupError:'Synthetic failure'}),/>读取失败</);
+ assert.match(api.providerTypeCell(order(),rates,'印度',E,{feeLookupLoading:true}),/>读取中…</);
+ assert.doesNotMatch(api.providerTypeCell(order(),[],'印度',E,{feeLookupError:'Synthetic failure'}),/未标注/);
+});
+
+test('rate lookup index avoids repeated whole-directory work and invalidates on new snapshots',()=>{
+ let reads=0;const rows=Array.from({length:200},(_,i)=>({...rate(),get provider(){reads++;return 'Pay'+i;}}));
+ const r=order({provider:'Pay0'});assert.equal(api.estimate(r,rows,'印度'),40);const firstReads=reads;
+ for(let i=0;i<40;i++)api.estimate(r,rows,'印度');assert.equal(reads,firstReads,'same snapshot reuses the index');
+ assert.equal(api.estimate(r,[rate({provider:'Pay0',collectFee:'5%'})],'印度'),50,'refreshed snapshot replaces rates');
+ rows.push(rate({provider:'Pay0',collectFee:'6%'}));assert.equal(api.estimate(r,rows,'印度'),null,'length changes invalidate cached candidates');
+ assert.equal(api.estimate(r,rows,'巴西'),null,'country scopes never share candidates');
+});

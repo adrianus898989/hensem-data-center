@@ -2,6 +2,23 @@
 -- Adds one response field; never reads raw orders or changes existing permissions.
 begin;
 
+-- Confirmed source spellings only. Never rewrite collector names or native IDs
+-- or strip arbitrary punctuation. The owner confirmed RAJA = RAJALOTTERY;
+-- RAJAGAME(S) were earlier display names for that same physical RAJA source.
+create or replace function private.dashboard_admin_live_workorder_platform_key(p_country text,p_platform text)
+returns text language sql immutable security invoker set search_path='' as $$
+  select case when upper(btrim(p_country)) in ('IN','INDIA','印度') then
+    case upper(btrim(p_platform))
+      when '82BET' then '82LOTTERY' when '82LOTTERY' then '82LOTTERY'
+      when 'OK.WIN' then 'OKWIN' when 'OKWIN' then 'OKWIN'
+      when 'VEER.GAME' then 'VEERGAME' when 'VEERGAME' then 'VEERGAME'
+      when 'RAJA' then 'RAJA' when 'RAJALOTTERY' then 'RAJA'
+      when 'RAJAGAME' then 'RAJA' when 'RAJAGAMES' then 'RAJA'
+      else p_platform end
+    else p_platform end;
+$$;
+revoke all on function private.dashboard_admin_live_workorder_platform_key(text,text) from public,anon,authenticated;
+
 create or replace function private.dashboard_admin_live_workorders(p_request jsonb default '{}'::jsonb)
 returns jsonb
 language plpgsql stable security definer set search_path='' as $$
@@ -62,11 +79,33 @@ begin
     raise exception using errcode='22023',message='invalid_direction';
   end if;
 
-  with targets as materialized (
-    select distinct p.id,p.name,p.source_name,p.country,p.source from private.dashboard_admin_live_platforms() p
+  with raw_catalog as materialized (
+    select distinct p.id,p.name,p.source_name,p.country,p.scope_group,p.source,
+      array[private.dashboard_admin_live_workorder_platform_key(p.country,p.name),
+        private.dashboard_admin_live_workorder_platform_key(p.country,p.source_name)] as platform_keys
+    from private.dashboard_admin_live_platforms() p
+  ), raja_identity as materialized (
+    -- The extra mapped-only RAJALOTTERY catalog entry is the same site. Retain
+    -- the existing physical AR:IN:RAJA ID instead of creating a new identity.
+    select p.country,min(p.id::text)::uuid as id from raw_catalog p
+    where upper(btrim(p.country)) in ('IN','INDIA','印度') and p.source='ar'
+      and upper(btrim(p.source_name))='RAJA'
+    group by p.country having count(distinct p.id)=1
+  ), catalog as materialized (
+    select distinct coalesce(r.id,p.id) as id,
+      case when r.id is not null then 'RAJALOTTERY' else p.name end as name,
+      case when r.id is not null then 'RAJA' else p.source_name end as source_name,
+      p.country,p.scope_group,p.source,
+      case when r.id is not null then array['RAJA']::text[] else p.platform_keys end as platform_keys
+    from raw_catalog p left join raja_identity r on r.country=p.country and p.source='ar'
+      and private.dashboard_admin_live_workorder_platform_key(p.country,p.source_name)='RAJA'
+  ), targets as materialized (
+    select p.* from catalog p
     where (v_country is null or p.country=v_country or p.scope_group=v_country)
-      and (v_platform is null or v_platform in(p.name,p.source_name))
-      and (not(p_request ? 'platforms') or p_request->'platforms' ? p.name or p_request->'platforms' ? p.source_name)
+      and (v_platform is null or private.dashboard_admin_live_workorder_platform_key(p.country,v_platform)=any(p.platform_keys))
+      and (not(p_request ? 'platforms') or exists (
+        select 1 from jsonb_array_elements_text(p_request->'platforms') f(platform)
+        where private.dashboard_admin_live_workorder_platform_key(p.country,f.platform)=any(p.platform_keys)))
   ), scoped as materialized (
     select w.stat_date,w.country_code,w.country,w.platform,
       coalesce(nullif(btrim(w.third_party),''),'未识别三方') as raw_provider,
@@ -80,14 +119,30 @@ begin
     where w.source_system='AR_WORKORDER'
       and w.stat_date between v_start and v_end
       and (v_country is null or w.country_code=v_country or w.country=v_country)
-      and (v_platform is null or w.platform=v_platform)
-      and (not(p_request ? 'platforms') or p_request->'platforms' ? w.platform)
+      and (v_platform is null or private.dashboard_admin_live_workorder_platform_key(w.country_code,w.platform)
+        =private.dashboard_admin_live_workorder_platform_key(w.country_code,v_platform))
+      and (not(p_request ? 'platforms') or exists (
+        select 1 from jsonb_array_elements_text(p_request->'platforms') f(platform)
+        where private.dashboard_admin_live_workorder_platform_key(w.country_code,w.platform)
+          =private.dashboard_admin_live_workorder_platform_key(w.country_code,f.platform)))
       and private.dashboard_scope_allows(v_scope,w.country_code,w.platform)
+  ), identities as materialized (
+    -- Resolve against the whole authorized catalog, not only the selected names.
+    -- An ambiguous source remains a separate issue cohort, counted once in totals.
+    select s.country,s.platform,
+      case when count(distinct p.id)=1 then min(p.id::text) end as id,
+      case when count(distinct p.id)=1 then min(p.name) end as name,
+      case when count(distinct p.id)=1 then min(p.source) end as source
+    from (select distinct country,platform from scoped) s
+    left join catalog p on p.country=s.country
+      and private.dashboard_admin_live_workorder_platform_key(s.country,s.platform)=any(p.platform_keys)
+    group by s.country,s.platform
   ), coverage as materialized (
     select t.name as platform,t.source_name as source_platform,
       case when count(distinct t.id)=1 then min(t.id::text) end as platform_id,
       count(distinct s.stat_date)::integer as days,(v_end-v_start+1) as expected_days
-    from targets t left join scoped s on s.country=t.country and s.platform in(t.name,t.source_name)
+    from targets t left join identities i on i.id=t.id::text
+    left join scoped s on s.country=i.country and s.platform=i.platform
     group by t.name,t.source_name
   ), mapped as materialized (
     select s.*,private.dashboard_admin_live_workorder_provider(s.country,s.platform,s.raw_provider,nullif(s.channel_type,'未识别通道')) as canonical_provider from scoped s
@@ -182,12 +237,7 @@ begin
         sum(success_amount) as success_amount,sum(success_count) as success_count,
         sum(not_received_amount) as not_received_amount,sum(not_received_count) as not_received_count
        from grouped_rows group by country,country_code,platform,provider,direction
-      ) t left join lateral (
-       select case when count(distinct p.id)=1 then min(p.id::text) end id,
-        case when count(distinct p.id)=1 then min(p.name) end name,
-        case when count(distinct p.id)=1 then min(p.source) end source
-       from targets p where p.country=t.country and t.platform in(p.name,p.source_name)
-      ) identity on true),'[]'::jsonb),
+      ) t left join identities identity on identity.country=t.country and identity.platform=t.platform),'[]'::jsonb),
     'rows',coalesce((select jsonb_agg(jsonb_build_object(
       'date',p.stat_date,'countryCode',p.country_code,'country',p.country,'platform',p.platform,
       'provider',p.provider,'channelType',p.channel_type,'direction',p.direction,

@@ -96,18 +96,14 @@ body.live-admin .df-analysis-status details{width:100%}
 /* Use the existing fee-row space for labelled rankings; narrower cards scroll only the rankings. */
 body.live-admin .df-flow-foot{display:grid;grid-template-columns:minmax(165px,.9fr) minmax(0,2.1fr);gap:12px;align-items:start}
 body.live-admin .df-flow-foot>div:first-child{min-width:0;padding-top:2px}
-body.live-admin .df-workorder-ranks{min-width:0;max-width:100%;display:grid;grid-template-columns:repeat(2,minmax(242px,1fr));gap:6px 12px;overflow-x:auto;align-items:start;padding-bottom:2px}
-body.live-admin .df-workorder-coverage{grid-column:1/-1;color:#7c8fa9;font-size:9px;line-height:1.5}
-body.live-admin .df-workorder-coverage>summary{cursor:pointer;color:#667d9d;white-space:normal}
-body.live-admin .df-workorder-coverage[open]{padding-bottom:3px}
-body.live-admin .df-workorder-coverage p{margin:4px 0;white-space:normal}
-body.live-admin .df-workorder-rank{min-width:0;font-size:9px;line-height:14px}
+body.live-admin .df-workorder-ranks{min-width:0;max-width:100%;display:grid;grid-template-columns:repeat(2,minmax(228px,1fr));gap:0 10px;overflow-x:auto;align-items:start;padding-bottom:2px}
+body.live-admin .df-workorder-rank{min-width:0;padding:5px 7px;box-sizing:border-box;font-size:9px;line-height:14px}
 body.live-admin .df-workorder-rank>b{display:block;color:#a37b66;font-size:10px;font-weight:500;margin-bottom:3px;white-space:normal;line-height:1.5}
 body.live-admin .df-workorder-rank.good>b{color:#528578}
 body.live-admin .df-workorder-rank>b>small{margin-left:5px;font-size:8px;color:#ae8548}
 body.live-admin .df-workorder-rank-row,body.live-admin .df-workorder-rank-labels{display:grid;gap:5px;align-items:center;font-size:9px;font-variant-numeric:tabular-nums;line-height:17px;color:#506582}
-body.live-admin .df-workorder-rank-row.pending,body.live-admin .df-workorder-rank-labels.pending{grid-template-columns:minmax(62px,1fr) minmax(64px,.8fr) minmax(88px,1.2fr)}
-body.live-admin .df-workorder-rank-row.good,body.live-admin .df-workorder-rank-labels.good{grid-template-columns:minmax(48px,1fr) 46px minmax(60px,1fr) minmax(73px,1.2fr)}
+body.live-admin .df-workorder-rank-row.pending,body.live-admin .df-workorder-rank-labels.pending{grid-template-columns:minmax(50px,1fr) minmax(62px,.8fr) minmax(76px,1.2fr)}
+body.live-admin .df-workorder-rank-row.good,body.live-admin .df-workorder-rank-labels.good{grid-template-columns:minmax(45px,1fr) 43px minmax(51px,1fr) minmax(58px,1.2fr)}
 body.live-admin .df-workorder-rank-labels{padding:2px 0 3px;margin-bottom:2px;border-bottom:1px solid #e8eef6;color:#8392a9;line-height:1.4}
 body.live-admin .df-workorder-rank-row>*,body.live-admin .df-workorder-rank-labels>*{min-width:0;white-space:nowrap;font-size:9px;font-weight:400}
 body.live-admin .df-workorder-rank-row>:first-child{white-space:normal;overflow-wrap:break-word;line-height:1.45}
@@ -139,19 +135,20 @@ body.live-admin .df-provider-business-summary>.df-provider-table-scroll:focus-vi
 body.live-admin .df-provider-business-summary>.df-provider-table-scroll::-webkit-scrollbar{height:9px}
 body.live-admin .df-provider-business-summary>.df-provider-table-scroll::-webkit-scrollbar-track{background:#f3f6fb}
 body.live-admin .df-provider-business-summary>.df-provider-table-scroll::-webkit-scrollbar-thumb{border:2px solid #f3f6fb;border-radius:5px;background:#b6c6df}
-body.live-admin .df-provider-business-summary table.df-provider-business-table{width:100%;min-width:1100px!important;max-width:none;table-layout:fixed!important;border-collapse:separate;border-spacing:0;font-size:11px;font-variant-numeric:tabular-nums}
+body.live-admin .df-provider-business-summary table.df-provider-business-table{width:100%;min-width:1190px!important;max-width:none;table-layout:fixed!important;border-collapse:separate;border-spacing:0;font-size:11px;font-variant-numeric:tabular-nums}
 body.live-admin .df-provider-business-summary .df-provider-business-table col.provider{width:120px}
+body.live-admin .df-provider-business-summary .df-provider-business-table col.business-type{width:90px}
 body.live-admin .df-provider-business-summary .df-provider-business-table col.total-amount,body.live-admin .df-provider-business-summary .df-provider-business-table col.success-amount,body.live-admin .df-provider-business-summary .df-provider-business-table col.fee-rate,body.live-admin .df-provider-business-summary .df-provider-business-table col.fee-amount{width:130px}
 body.live-admin .df-provider-business-summary .df-provider-business-table col.total-count,body.live-admin .df-provider-business-summary .df-provider-business-table col.success-count{width:80px}
 body.live-admin .df-provider-business-summary .df-provider-business-table col.amount-share,body.live-admin .df-provider-business-summary .df-provider-business-table col.count-share,body.live-admin .df-provider-business-summary .df-provider-business-table col.success-rate{width:70px}
 body.live-admin .df-provider-business-summary .df-provider-business-table col.fee-share{width:90px}
 body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td){box-sizing:border-box;width:auto;min-width:0;max-width:none;height:34px;padding:8px 9px!important;border:0;border-bottom:1px solid #e8eef6;vertical-align:middle;text-align:right;font-size:11px!important;line-height:17px;white-space:nowrap!important;overflow-wrap:normal!important;word-break:normal!important;writing-mode:horizontal-tb;background:#fff;font-variant-numeric:tabular-nums}
 body.live-admin .df-provider-business-summary .df-provider-business-table thead th{height:36px;background:#f4f7fc;color:#7185a3;font-weight:500}
-body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td):nth-child(n+4):nth-child(-n+8){background:#fafdfb}
-body.live-admin .df-provider-business-summary .df-provider-business-table thead th:nth-child(n+4):nth-child(-n+8){background:#eff7f3;color:#5b7e71}
-body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td):nth-child(n+9){background:#fdfbff}
-body.live-admin .df-provider-business-summary .df-provider-business-table thead th:nth-child(n+9){background:#f6f1fb;color:#7c6997}
-body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td):is(:nth-child(4),:nth-child(9)){border-left:1px solid #dfe6ef}
+body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td):nth-child(n+5):nth-child(-n+9){background:#fafdfb}
+body.live-admin .df-provider-business-summary .df-provider-business-table thead th:nth-child(n+5):nth-child(-n+9){background:#eff7f3;color:#5b7e71}
+body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td):nth-child(n+10){background:#fdfbff}
+body.live-admin .df-provider-business-summary .df-provider-business-table thead th:nth-child(n+10){background:#f6f1fb;color:#7c6997}
+body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td):is(:nth-child(5),:nth-child(10)){border-left:1px solid #dfe6ef}
 body.live-admin .df-provider-business-summary .df-provider-business-table tbody tr:hover>td{background:#f1f6fd!important}
 body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td):first-child{position:sticky;left:0;z-index:2;width:auto;min-width:0;text-align:left;background:#fff;box-shadow:1px 0 0 #dfe6ef,3px 0 6px #273f6310}
 body.live-admin .df-provider-business-summary .df-provider-business-table thead th:first-child{z-index:3;background:#f4f7fc}
@@ -159,3 +156,13 @@ body.live-admin .df-provider-business-summary .df-provider-business-table tfoot 
 body.live-admin .df-provider-business-summary .df-provider-business-table :is(.link,.metric-link,.df-fee-rate){font-size:11px;line-height:17px;white-space:nowrap!important;overflow-wrap:normal!important;word-break:normal!important}
 body.live-admin .df-provider-business-summary .df-provider-business-table td:first-child .link{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;text-align:left;padding:0}
 body.live-admin .df-provider-business-summary .df-provider-business-table .df-fee-rate{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+
+/* Source business types stay compact and never force number columns to wrap. */
+body.live-admin .provider-business-type{display:inline-block;max-width:112px;padding:1px 5px;border:1px solid #dde6f4;border-radius:4px;background:#f2f6fc;color:#547196;font-size:10px!important;line-height:17px;vertical-align:middle;white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis}
+body.live-admin .provider-business-type.empty{color:#8b99ad;background:#f8fafc;border-color:#e8edf4}
+body.live-admin .provider-business-type:is(.review,.mixed){color:#9b7845;background:#fff8ea;border-color:#eadfc6}
+body.live-admin .df-provider-business-summary .df-provider-business-table :is(th,td):nth-child(2){text-align:left}
+body.live-admin .provider-summary-table :is(th,td):nth-child(3){min-width:100px;white-space:nowrap}
+body.live-admin .live-daily-matrix :is(th,td):nth-child(2){min-width:90px;width:90px}
+
+body.live-admin .provider-summary-table .workorder-rate-low{color:#d6374a!important}
