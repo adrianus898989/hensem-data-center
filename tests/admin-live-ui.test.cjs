@@ -542,9 +542,14 @@ test('provider KPI comparisons use the same direction and distinguish money diff
  h.L.results=[current];h.L.comparisonResults=[previous];h.L.comparisonStatus='ready';h.L.feeLookupRows=[{scopeType:'country',country:'印度',provider:'Synthetic provider',collectFee:'2%',payoutFee:'1%'}];h.c.state.page='providers';h.c.render();
  const cards=h.html().split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];
  assert.match(cards,/6,000\.00/);assert.match(cards,/昨日 5,000\.00/);assert.match(cards,/\+1,000\.00.*\+20\.00%/);assert.match(cards,/\+10\.00 个百分点/);assert.match(cards,/120\.00/);assert.match(cards,/昨日 100\.00/);assert.doesNotMatch(cards,/90,000/);
+ assert.equal((cards.match(/<strong>/g)||[]).length,8,'all eight primary metrics remain visible');
+ assert.doesNotMatch(plain(cards),/昨日|同期|5,000\.00|\+1,000\.00/,'prior values and absolute differences stay in hover details');
+ assert.match(plain(cards),/\+20\.00%/);assert.match(plain(cards),/\+10\.00个百分点/,'percentage-point change remains distinct from relative percent');
+ assert.match(cards,/title="昨日 5,000\.00 · 较昨日同期 \+1,000\.00 · \+20\.00%"/);
  assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/业务方向/);
  const table=renderedTables(h.html()).find(t=>t.headers[0]==='统一三方');assert.equal(table.headers[1],'平台');assert(!table.headers.some(h=>/金额 \/ 笔数/.test(h)));assert(table.rows.every(r=>r.length===table.headers.length));
  h.c.state.page='provider_payout';h.c.render();const payoutCards=h.html().split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];assert.match(payoutCards,/90,000\.00/);assert.doesNotMatch(payoutCards,/6,000\.00|\+10\.00 个百分点/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/业务方向/);
+ assert.equal((payoutCards.match(/<strong>/g)||[]).length,8);assert.doesNotMatch(plain(payoutCards),/昨日|同期/,'payout uses the same compact comparison presentation');
  h.c.state.page='overview';h.c.render();assert.match(h.nodes.get('liveFilters').innerHTML,/业务方向/);
 });
 test('provider comparisons suppress incomplete scopes and partial fees while preserving current values and zero-baseline semantics',async()=>{
@@ -552,6 +557,7 @@ test('provider comparisons suppress incomplete scopes and partial fees while pre
  h.L.results=[current];h.L.comparisonResults=[previous];h.L.comparisonStatus='ready';h.L.feeLookupRows=[];h.c.state.page='providers';h.c.render();
  assert.match(cards(),/新增 \/ 无基数/);assert.match(cards(),/费率未完全匹配/);assert.doesNotMatch(cards(),/Infinity|NaN/);
  h.L.comparisonResults=[{...previous,platform:{...P,id:'different-platform'}}];h.c.render();assert.match(cards(),/6,000\.00/);assert.match(cards(),/两日平台范围不完整/);assert.doesNotMatch(cards(),/新增 \/ 无基数|\+100\.00%/);
+ assert.doesNotMatch(plain(cards()),/两日平台范围不完整/,'the same unavailable explanation is not repeated across the eight cards');assert.match(plain(cards()),/部分|费率未齐/,'incomplete fee state remains visible');
  h.L.comparisonResults=[previous];h.L.comparisonStatus='error';h.L.comparisonError='昨日数据读取失败';h.c.render();assert.match(cards(),/昨日数据读取失败/);assert.doesNotMatch(cards(),/新增 \/ 无基数/);
 });
 

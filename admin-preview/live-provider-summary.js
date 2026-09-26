@@ -223,12 +223,12 @@
   const caption=(L.comparisonLabel||'较前一日同一时段').replace('较前一日同一时段','较昨日同期');
   const priorLabel=range.calendarDays>1?'前期':'昨日',signed=(value,format)=>(value>0?'+':value<0?'−':'')+format(Math.abs(value));
   const changes=(now,before,format,isRate=false,reason='')=>{
-   const error=reason||unavailable;if(error)return '<small class="provider-kpi-unavailable" title="'+E(error)+'">'+E(error.length>22?'对比暂不可用 · '+error.slice(0,19)+'…':error)+'</small>';
+   const error=reason||unavailable;if(error)return {detail:error,text:reason?(L.feeLookupLoading?'费率读取中':L.feeLookupError?'费率读取失败':'费率未齐'):'',trend:'unknown'};
    if(isRate){const d=root.HensemLiveCompare.ratioDelta(current.total.success_count,current.total.all_count,previous.total.success_count,previous.total.all_count);
-    return '<small>'+priorLabel+' '+(R(previous.total.success_count,previous.total.all_count))+'</small><span class="provider-kpi-change '+E(d.trend)+'">'+E(caption)+' '+E(d.value===null?'暂无可比成功率':d.display)+'</span>'}
-   if(now==null||before==null||!Number.isFinite(Number(now))||!Number.isFinite(Number(before)))return '<small class="provider-kpi-unavailable">金额口径不完整，暂不可比</small>';
+    return {detail:priorLabel+' '+R(previous.total.success_count,previous.total.all_count)+' · '+caption+' '+(d.value===null?'暂无可比成功率':d.display),text:d.value===null?'暂无对比':d.display.replace(' 个百分点','个百分点'),trend:d.trend}}
+   if(now==null||before==null||!Number.isFinite(Number(now))||!Number.isFinite(Number(before)))return {detail:'金额口径不完整，暂不可比',text:'暂无对比',trend:'unknown'};
    const d=root.HensemLiveCompare.delta(now,before);
-   return '<small>'+priorLabel+' '+format(before)+'</small><span class="provider-kpi-change '+E(d.trend)+'">'+E(caption)+' '+signed(Number(now)-Number(before),format)+' <em>'+E(d.display)+'</em></span>';
+   return {detail:priorLabel+' '+format(before)+' · '+caption+' '+signed(Number(now)-Number(before),format)+' · '+d.display,text:d.display==='新增 / 无基数'?'无基数':d.display,trend:d.trend};
   };
   const fees=current.fees,feeReason=L.feeLookupLoading?'费率读取中…':L.feeLookupError?'费率读取失败，暂不可比':!fees.complete||!previous.fees.complete?'费率未完全匹配，暂不比较':'';
   const cards=[
@@ -239,11 +239,11 @@
    {label:name+'成功金额',value:N(current.total.success_amount),change:changes(current.total.success_amount,previous.total.success_amount,N),tone:'amount'},
    {label:name+'成功笔数',value:C(current.total.success_count),change:changes(current.total.success_count,previous.total.success_count,C),tone:'amount'},
    {label:name+'成功率',value:R(current.total.success_count,current.total.all_count),change:changes(null,null,null,true),tone:'rate'},
-   {label:'估算手续费',value:N(fees.amount)+(!fees.complete?'<span class="provider-partial">部分</span>':''),change:changes(fees.amount,previous.fees.amount,N,false,feeReason),tone:'fee'}
+   {label:'估算手续费',value:N(fees.amount),badge:!fees.complete?'部分':'',change:changes(fees.amount,previous.fees.amount,N,false,feeReason),tone:'fee'}
   ];
-  if(readState.partial)for(const card of cards){if(card.label==='平台'){card.label='平台覆盖';card.value=C(readState.received)+' / '+C(readState.requested);card.change='<small>已返回 / 请求平台</small>'}else{card.label='已读取'+card.label;if(readState.empty)card.value='—'}}
-  return '<div class="provider-summary-kpis">'+cards.map(c=>'<div class="provider-kpi provider-kpi-'+c.tone+'"><div class="provider-kpi-value"><label>'+c.label+'</label><strong>'+c.value+'</strong></div><div class="provider-kpi-comparison">'+c.change+'</div></div>').join('')+'</div>'+
-   '<div class="provider-comparison-context"><span>'+(range.valid?'对比 '+E(range.previousFrom.replace('T',' '))+' 至 '+E(range.previousTo.replace('T',' ')):'对比时段不可用')+'</span><span>手续费已匹配 '+C(fees.matchedCount)+' / '+C(fees.successCount)+' 笔 · 两日均按当前费率估算</span></div>';
+  if(readState.partial)for(const card of cards){if(card.label==='平台'){card.label='平台覆盖';card.value=C(readState.received)+' / '+C(readState.requested);card.change={detail:'已返回 / 请求平台',text:'部分数据',trend:'unknown'}}else{card.label='已读取'+card.label;if(readState.empty)card.value='—'}}
+  return '<div class="provider-summary-kpis">'+cards.map(c=>'<div class="provider-kpi provider-kpi-'+c.tone+'" title="'+E(c.change.detail)+'"><div class="provider-kpi-value"><label>'+c.label+(c.badge?'<span class="provider-partial">'+c.badge+'</span>':'')+'</label><strong>'+c.value+'</strong></div><div class="provider-kpi-comparison">'+(c.change.text?'<span class="provider-kpi-change '+E(c.change.trend)+'">'+E(c.change.text)+'</span>':'')+'</div></div>').join('')+'</div>'+
+   '<div class="provider-comparison-context"><span title="'+E(unavailable||'卡片变化按相同范围比较，悬停查看原值与差额')+'">'+(unavailable?'对比未就绪 · ':'')+(range.valid?'对比 '+E(range.previousFrom.replace('T',' '))+' 至 '+E(range.previousTo.replace('T',' ')):'对比时段不可用')+'</span><span title="两日均按当前费率估算">手续费已匹配 '+C(fees.matchedCount)+' / '+C(fees.successCount)+' 笔</span></div>';
  }
  function render(ctx,direction){
   const {L,E,N,C,R,plus,combine,groupRows,box,table,pager,feeForRow,ensureFeeLookup,providerCell,openDrawer}=ctx,name=direction==='charge'?'代收':'代付',issueLabel=direction==='charge'?'存款未到账':'取款未到账';
