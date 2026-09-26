@@ -45,7 +45,7 @@ test('opening or closing navigation groups updates only the menu, never recomput
 });
 
 test('navigation paints once while destination queries are still pending and does not await IO',async()=>{
- const h=await ready({ancillaryHandler:false});await h.c.liveLoad();await settle();const pending=deferred();h.L.from='2026-09-20T00:00:00';h.L.to='2026-09-20T23:59:59';
+ const h=await ready({ancillaryHandler:false});await h.c.liveQuery();await settle();const pending=deferred();h.L.from='2026-09-20T00:00:00';h.L.to='2026-09-20T23:59:59';
  h.setHandler(q=>q.action==='aggregate'?pending.promise:Promise.resolve({rows:[],total:0}));
  const before=pageWrites(h);h.c.setPage('provider_payout');
  assert.equal(h.c.state.page,'provider_payout');assert.equal(h.c.location.hash,'provider_payout');assert.equal(h.L.direction,'withdraw');assert.equal(h.L.loading,true);assert.equal(pageWrites(h)-before,1,'all synchronous loader notifications share one destination paint');
@@ -57,10 +57,27 @@ test('navigation paints once while destination queries are still pending and doe
 
 test('overview navigation paints immediately without starting business or auxiliary reads',async()=>{
  const h=await ready();assert.equal(h.L.overviewQueried,false);assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
- await h.c.liveLoad();await settle();assert.equal(h.L.overviewQueried,true);assert(h.L.results.length>0);
+ await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert(h.L.results.length>0);
  h.c.setPage('provider_payout');await settle();const calls=h.calls.length,before=pageWrites(h);
  h.c.setPage('overview');assert.equal(h.c.state.page,'overview');assert.equal(h.c.location.hash,'overview');assert.equal(h.L.overviewQueried,false);assert.equal(h.L.dirty,true);assert.equal(h.L.loading,false);assert.equal(pageWrites(h)-before,1);assert.match(h.html(),/查询/);assert.doesNotMatch(h.html(),/代收经营总数据|代付经营总数据/);
  await settle();assert.equal(h.calls.length,calls,'returning to overview does not fetch orders, comparison, fees, source reports or provider options');assert.equal(pageWrites(h)-before,1,'no background completion is needed to render the manual query screen');
+});
+
+test('a pending catalog cannot resume another page automatic query after returning to overview',async()=>{
+ const catalog=deferred(),h=harness({handler:q=>q.action==='catalog'?catalog.promise:q.action==='rates'?{rows:[],total:0}:aggregate()});
+ h.c.setPage('collection');h.c.setPage('overview');
+ assert.equal(h.c.state.page,'overview');assert.equal(h.L.overviewQueried,false);assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
+ catalog.resolve({platforms:[P]});await settle();
+ assert.equal(h.L.catalogReady,true);assert.equal(h.L.overviewQueried,false);assert.equal(h.L.dirty,true);assert.equal(h.L.loading,false);assert.equal(h.L.results.length,0);assert.match(h.html(),/点击查询/);
+ assert.deepEqual(h.calls.map(q=>q.action),['catalog'],'the old collection continuation cannot read orders, comparison, source reports, fees or provider choices on overview');
+});
+
+test('a manual query pending the catalog expires when leaving and returning to overview',async()=>{
+ const catalog=deferred(),h=harness({handler:q=>q.action==='catalog'?catalog.promise:q.action==='rates'?{rows:[],total:0}:aggregate()});
+ const oldQuery=h.c.liveQuery();h.c.setPage('collection');h.c.setPage('overview');
+ catalog.resolve({platforms:[P]});await oldQuery;await settle();
+ assert.equal(h.L.overviewQueried,false);assert.equal(h.L.dirty,true);assert.equal(h.L.results.length,0);assert.match(h.html(),/点击查询/);assert.deepEqual(h.calls.map(q=>q.action),['catalog'],'a previous visit cannot authorize the returned overview');
+ await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert.equal(h.L.dirty,false);assert.equal(h.L.loading,false);assert.equal(h.L.results.length,1);assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2,'a new explicit query still reads current and comparison once');
 });
 
 test('dedicated-page responses cache data but do not repaint a different destination',async()=>{
@@ -79,7 +96,7 @@ test('collected catalog response cannot redraw another menu and is reused on ret
 });
 
 test('lazy fee lookup does not recursively rebuild the page during its first paint',async()=>{
- const h=await ready();await h.c.liveLoad();await settle();const pending=deferred();h.L.feeLookupRows=null;h.L.feeLookupLoading=false;h.L.feeLookupError='';h.c.state.page='providers';h.L.direction='charge';h.L.multi.direction=['charge'];h.setHandler(q=>q.action==='rates'?pending.promise:Promise.resolve(aggregate()));
+ const h=await ready();await h.c.liveQuery();await settle();const pending=deferred();h.L.feeLookupRows=null;h.L.feeLookupLoading=false;h.L.feeLookupError='';h.c.state.page='providers';h.L.direction='charge';h.L.multi.direction=['charge'];h.setHandler(q=>q.action==='rates'?pending.promise:Promise.resolve(aggregate()));
  const before=pageWrites(h);h.c.render();assert.equal(pageWrites(h)-before,1);assert.equal(h.L.feeLookupLoading,true);
  pending.resolve({rows:[],total:0});await settle();assert.equal(pageWrites(h)-before,2,'completion still produces the required final view');assert.equal(h.L.feeLookupLoading,false);
 });
@@ -160,7 +177,17 @@ test('flow query failures retain successful platforms and retry only the missing
 
 test('multi-day flow analysis preserves full groups and exact contiguous daily ranges',async()=>{
  for(const [page,direction]of[['collection','charge'],['payout','withdraw']]){
-  const h=await ready({page});h.setNow('2026-09-26T12:00:00Z');setScope(h,{from:'2026-09-20T00:00:00',to:'2026-09-22T05:59:59'});h.calls.length=0;h.setHandler(q=>q.action==='rates'?{rows:[],total:0}:flowAggregate(P,direction));await h.c.liveLoad();await settle();
+  const h=await ready({page});h.setNow('2026-09-26T12:00:00Z');setScope(h,{from:'2026-09-20T00:00:00',to:'2026-09-22T05:59:59'});h.calls.length=0;h.setHandler(q=>q.action==='rates'?{rows:[],total:0}:flowAggregate(P,direction));await h.c.liveQuery();await settle();
   const reads=h.calls.filter(q=>q.action==='aggregate'&&q.view!=='providers');assert.equal(reads.length,3);assert.deepEqual(reads.map(q=>[q.startAt,q.endAt]),[['2026-09-19T18:30:00.000Z','2026-09-20T18:30:00.000Z'],['2026-09-20T18:30:00.000Z','2026-09-21T18:30:00.000Z'],['2026-09-21T18:30:00.000Z','2026-09-22T00:30:00.000Z']]);assert(reads.every(q=>q.direction===direction));assert.equal(h.L.results[0]._parts.length,3);assert.equal(h.L.results[0].summary[0].all_count,30);assert.equal(h.L.results[0].groups.hourly[0].all_count,30);assert.equal(h.L.results[0].groups.provider[0].all_count,30);
  }
+});
+
+test('overview requires the explicit query action even when a background caller invokes liveLoad',async()=>{
+ const h=await ready();const before=h.calls.length;h.L.dirty=false;
+ await h.c.liveLoad();await h.c.liveLoad(false);await h.c.liveOverviewAnalysis();await h.c.liveOverviewWorkorders();await settle();
+ assert.equal(h.calls.length,before);assert.equal(h.L.overviewQueried,false);assert.match(h.html(),/点击查询/);assert.doesNotMatch(h.html(),/df-flow-card/);
+ const filter=h.nodes.get('liveFilters').innerHTML,actions=h.nodes.get('.title-actions').innerHTML;assert.match(filter,/onclick="liveQuery\(\)"[^>]*>查询/);assert.match(actions,/onclick="liveQuery\(\)"[^>]*>读取最新数据/);
+ await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert(h.L.results.length);const loaded=h.calls.length;
+ await h.c.liveLoad(false);await settle();assert.equal(h.calls.length,loaded,'background refresh does not start a second overview query');assert.equal(h.L.dirty,false,'an ignored background call preserves the completed manual query');
+ h.c.setPage('orders');h.c.setPage('overview');await settle();const returned=h.calls.length;h.L.dirty=false;h.c.render();await h.c.liveOverviewAnalysis();await h.c.liveOverviewWorkorders();assert.equal(h.calls.length,returned);assert.equal(h.L.overviewQueried,false);assert.match(h.html(),/点击查询/);assert.doesNotMatch(h.html(),/df-flow-card/);
 });
