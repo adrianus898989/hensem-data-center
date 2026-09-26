@@ -17,6 +17,11 @@
   function sync(){const next=signature();if(next!==scope){scope=next;generation++;active++;states.clear()}return scope}
   function state(segment,label){sync();const key=JSON.stringify(segment);if(!states.has(key)){states.set(key,{segment,label,open:false,tab:'platform',platform:'all',daily:new Map()})}const s=states.get(key);if(label)s.label=label;return s}
   const dirs=segment=>segment.direction==='all'?['charge','withdraw']:[segment.direction];
+  function confirmedEmptyDirection(result,direction){
+   const summary=result.summary,scoped=row=>row.direction===direction&&(!row.currency||row.currency===L.currency);
+   // Complete empty/other-direction summaries are known zeros, unlike omitted timing data.
+   return result.complete!==false&&result.hasMore!==true&&Array.isArray(summary)&&!summary.some(scoped)&&(summary.length>0||finite(result.total)&&Number(result.total)===0)&&!Object.values(result.groups||{}).some(rows=>Array.isArray(rows)&&rows.some(scoped));
+  }
   function platformRows(segment){
    return L.results.flatMap(result=>dirs(segment).map(direction=>{
     const group=segment.kind==='latency'?(segment.cumulative?'latency_thresholds':'latency'):segment.kind;
@@ -26,7 +31,7 @@
     let metric;
     if(segment.kind==='latency'){
      const summary=(result.summary||[]).find(r=>r.direction===direction&&(!r.currency||r.currency===L.currency));
-     const available=Array.isArray(source)&&source.some(r=>r.direction===direction&&(!r.currency||r.currency===L.currency))||summary?.success_count!==null&&summary?.success_count!==undefined&&Number(summary.success_count)===0;
+     const available=Array.isArray(source)&&source.some(r=>r.direction===direction&&(!r.currency||r.currency===L.currency))||summary?.success_count!==null&&summary?.success_count!==undefined&&Number(summary.success_count)===0||confirmedEmptyDirection(result,direction);
      metric={...zero(),success_amount:available?sum(rows,'amount'):null,success_count:available?sum(rows,'count'):null};
     }else metric=Array.isArray(source)?totals(rows):Object.fromEntries(fields.map(k=>[k,null]));
     return {...metric,platformId:result.platform?.id,platform:result.platform?.name||'未提供平台',source:result.platform?.source||'—',direction,currency:result.platform?.currency||L.currency};
@@ -35,11 +40,12 @@
   const action=(segment,op,value)=>'liveAnalysisAction(\''+enc(segment)+'\',\''+op+'\''+(value===undefined?'':',\''+encodeURIComponent(String(value)).replace(/'/g,'%27')+'\'')+')';
   function dimensionButton(segment,label,dimension){const s=state(segment,label),platform=dimension==='platform',open=s.open&&(platform?s.tab==='platform':['provider','providerDaily'].includes(s.tab));return '<button class="link analysis-expand" aria-expanded="'+open+'" onclick="'+action(segment,platform?'togglePlatform':'toggleProvider')+'">'+(open?'收起':'')+(platform?'平台':'三方')+(open?'':'展开')+'</button>'}
   function button(segment,label,exclusiveGroup){const s=state(segment,label);if(exclusiveGroup)s.exclusiveGroup=exclusiveGroup;if(segment.kind==='latency')return dimensionButton(segment,label,'provider')+' '+dimensionButton(segment,label,'platform');return '<button class="link analysis-expand" aria-expanded="'+s.open+'" onclick="'+action(segment,'toggle')+'">'+(s.open?'收起':'展开')+'</button>'}
+  function valueButton(segment,label,value,title,exclusiveGroup){const s=state(segment,label);if(exclusiveGroup)s.exclusiveGroup=exclusiveGroup;return '<button class="link analysis-value-button'+(s.open?' is-selected':'')+'" aria-expanded="'+s.open+'" title="'+E(title||label)+'" onclick="'+action(segment,'toggle')+'">'+E(value)+'</button>'}
   function dates(){const start=L.from.slice(0,10),end=L.to.slice(0,10),out=[];if(!/^\d{4}-\d{2}-\d{2}$/.test(start)||!/^\d{4}-\d{2}-\d{2}$/.test(end))return out;for(let x=Date.parse(start+'T00:00Z');x<=Date.parse(end+'T00:00Z')&&out.length<31;x+=86400000)out.push(new Date(x).toISOString().slice(0,10));return out}
   const multi=()=>L.from.slice(0,10)!==L.to.slice(0,10);
-  function metricHeaders(latency){return latency?['成功金额','成功笔数']:['全部金额','全部笔数','成功金额','成功笔数','处理中金额','处理中笔数','失败金额','失败笔数','成功率'];}
+  function metricHeaders(latency){return latency?['成功金额','成功笔数','金额占比','笔数占比']:['全部金额','全部笔数','成功金额','成功笔数','处理中金额','处理中笔数','失败金额','失败笔数','成功率'];}
   const share=(value,ratio,label)=>'<span class="analysis-metric-value">'+value+'</span><small class="analysis-metric-share">'+label+' '+ratio+'</small>';
-  function metricCells(r,total,latency){const base=[share(N(r.success_amount),R(r.success_amount,total.success_amount),'金额占比'),share(C(r.success_count),R(r.success_count,total.success_count),'笔数占比')];return latency?base:[N(r.all_amount),C(r.all_count),...base,N(r.pending_amount),C(r.pending_count),N(r.failed_amount),C(r.failed_count),R(r.success_count,r.all_count)];}
+  function metricCells(r,total,latency){if(latency)return [N(r.success_amount),C(r.success_count),R(r.success_amount,total.success_amount),R(r.success_count,total.success_count)];const base=[share(N(r.success_amount),R(r.success_amount,total.success_amount),'金额占比'),share(C(r.success_count),R(r.success_count,total.success_count),'笔数占比')];return [N(r.all_amount),C(r.all_count),...base,N(r.pending_amount),C(r.pending_count),N(r.failed_amount),C(r.failed_count),R(r.success_count,r.all_count)];}
   function smallTable(headers,rows){return '<div class="analysis-detail-table table-wrap"><table><thead><tr>'+headers.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>'}
   const providerTab=s=>s.segment.kind==='latency'&&['provider','providerDaily'].includes(s.tab);
   const providerReady=result=>Array.isArray(result?.groups?.provider)&&Array.isArray(result?.groups?.provider_daily);
@@ -80,6 +86,16 @@
    return {headers:['平台','包网',...(extraDirection?['方向']:[]),...metricHeaders(latency),...(hasAction?['每日对比']:[])],rows:rows.map(r=>[E(r.platform),E(r.source),...(extraDirection?[name(r.direction)]:[]),...metricCells(r,by[r.direction],latency),...(hasAction?[multi()?'<button class="link" onclick="'+action(s.segment,'platformDaily',r.platformId)+'">查看每天</button>':'']:[])])};
   }
   function platformBody(s){const grid=platformGrid(s);return smallTable(grid.headers,grid.rows);}
+  function providerDayPanel(s){
+   const segment=s.segment,rows=L.results.flatMap(result=>{
+    if((result.platform?.source||'')!==(segment.source||''))return [];
+    const matches=(result.groups?.daily||[]).filter(row=>row.provider===segment.provider&&row.date===segment.date&&row.direction===segment.direction&&(!row.currency||row.currency===(segment.currency||L.currency)));
+    return matches.length?[{...totals(matches),platformId:result.platform?.id,platform:result.platform?.name||'未提供平台',source:result.platform?.source||'—'}]:[];
+   }).sort((a,b)=>Number(b.all_count||0)-Number(a.all_count||0)||String(a.platform).localeCompare(String(b.platform))||String(a.platformId).localeCompare(String(b.platformId)));
+   const headers=['平台','包网','全部金额','全部笔数','成功金额','成功笔数','<span title="当日成功笔数 ÷ 当日创建笔数；跨日成功可能超过 100%">成功率</span>'];
+   const status=L.queryFailures?.length?'<p class="analysis-status">当前有 '+C(L.queryFailures.length)+' 个平台未读取，以下仅展示已读平台。</p>':'';
+   return '<div class="analysis-drilldown analysis-provider-day"><div class="analysis-drilldown-head"><strong>'+E(segment.date+' · '+segment.provider+' · '+(segment.source||'未提供包网')+' · '+name(segment.direction))+'</strong><button class="link" onclick="'+action(segment,'toggle')+'">收起</button></div>'+status+smallTable(headers,rows.map(row=>[E(row.platform),E(row.source),N(row.all_amount),C(row.all_count),N(row.success_amount),C(row.success_count),R(row.success_count,row.all_count)]))+(rows.length?'':'<p class="analysis-status">当前已读数据中没有该三方、日期、包网和方向的平台明细。</p>')+'<div class="analysis-note">仅此三方、此日期、此包网和此方向；复用已读取的每日汇总。全部金额、笔数按创建日期；成功金额、笔数按成功日期。成功率 = 当日成功笔数 ÷ 当日创建笔数，跨日成功可能超过 100%；没有创建笔数时显示 —。</div></div>';
+  }
   const localDate=(value,zone)=>{try{const parts=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(value)),get=k=>parts.find(p=>p.type===k)?.value;return get('year')+'-'+get('month')+'-'+get('day')}catch{return ''}};
   function dailyRows(s,entry){
    const latency=s.segment.kind==='latency',days=dates(),records=[];
@@ -106,7 +122,7 @@
   function dailyBody(s){const grid=dailyGrid(s);return grid.before+(grid.headers.length?smallTable(grid.headers,grid.rows):'')+(grid.after||'');}
   function panelHead(s){return '<div class="analysis-drilldown-head"><strong>'+E(s.label||'区间明细')+' · '+E(L.from.slice(0,10))+' 至 '+E(L.to.slice(0,10))+'</strong><div class="tabs">'+(s.segment.kind==='latency'?'<button class="'+(providerTab(s)?'on':'')+'" onclick="'+action(s.segment,'provider')+'">各三方占比</button>':'')+'<button class="'+(s.tab==='platform'?'on':'')+'" onclick="'+action(s.segment,'platform')+'">各平台占比</button>'+(multi()?'<button class="'+(s.tab==='daily'?'on':'')+'" onclick="'+action(s.segment,'daily')+'">'+(s.segment.kind==='latency'?'平台':'')+'每日对比</button>':'')+'</div></div>'+(L.queryFailures?.length?'<div class="analysis-status">当前主表有 '+C(L.queryFailures.length)+' 个平台未读取；'+(providerTab(s)?'三方比例暂不计算。':'以下占比仅含已读平台。')+'</div>':'');}
   function panelNote(segment){return '<div class="analysis-note">'+(segment.kind==='latency'?'成功金额、笔数按成功时间；耗时为成功时间减提交／创建时间。':'全部及处理中按创建时间；成功金额、笔数按成功时间；成功率为本期成功笔数 / 本期创建笔数，含跨日成功时可能超过 100%。')+' 平台占比以此段同方向合计为分母。</div>';}
-  function panel(segment,label){const s=state(segment,label);if(!s.open)return '';return '<div class="analysis-drilldown">'+panelHead(s)+(providerTab(s)?providerBody(s):s.tab==='daily'&&multi()?dailyBody(s):platformBody(s))+(providerTab(s)?'':panelNote(segment))+'</div>';}
+  function panel(segment,label){const s=state(segment,label);if(!s.open)return '';if(segment.kind==='provider_daily')return providerDayPanel(s);return '<div class="analysis-drilldown">'+panelHead(s)+(providerTab(s)?providerBody(s):s.tab==='daily'&&multi()?dailyBody(s):platformBody(s))+(providerTab(s)?'':panelNote(segment))+'</div>';}
   function alignedPanel(segment,label,columnCount){
    const s=state(segment,label);if(!s.open)return '';
    const grid=s.tab==='daily'&&multi()?dailyGrid(s,true):platformGrid(s,true),full=body=>'<tr class="analysis-expanded-row analysis-aligned-caption"><td colspan="'+columnCount+'"><div class="analysis-drilldown">'+body+'</div></td></tr>';
@@ -122,7 +138,7 @@
    }).join('')+'</tbody>'+(config.footerRows?.length?'<tfoot>'+config.footerRows.map(r=>'<tr>'+[...r,''].map(v=>'<td>'+v+'</td>').join('')+'</tr>').join('')+'</tfoot>':'')+'</table></div>';
   }
   async function load(s,retry=false){
-   sync();if(!s.open||L.loading||L.dirty)return;
+   sync();if(!s.open||L.loading||L.dirty||s.segment.kind==='provider_daily')return;
    const needsProviders=providerTab(s);let entry=s.daily.get(s.platform);if(entry&&!retry&&(!needsProviders||[...entry.results.values()].every(providerReady)))return;
    if(!entry){entry={results:new Map(),failures:[],loading:false,total:0};s.daily.set(s.platform,entry)}
    if(needsProviders)for(const [id,result]of entry.results)if(!providerReady(result))entry.results.delete(id);
@@ -134,7 +150,7 @@
   }
   function pause(s){if([...s.daily.values()].some(entry=>entry.loading)){active++;for(const other of states.values())for(const entry of other.daily.values())if(entry.loading){entry.loading=false;entry.failures.push({name:'检查',message:'已收起或切换，请重试继续读取'})}}}
   root.liveAnalysisAction=function(encoded,op,value){let segment;try{segment=JSON.parse(decodeURIComponent(encoded))}catch{return}sync();const s=states.get(JSON.stringify(segment));if(!s)return;const decoded=value===undefined?'':decodeURIComponent(value);if(s.segment.kind==='latency'&&['provider','toggleProvider','providerDaily'].includes(op)){const close=op==='toggleProvider'&&s.open&&providerTab(s);s.open=!close;if(close)pause(s);else{s.tab=op==='providerDaily'?'providerDaily':'provider';s.platform='all';if(op==='providerDaily')s.provider=decoded;void load(s)}}else if(s.segment.kind==='latency'&&op==='togglePlatform'){const close=s.open&&s.tab==='platform';pause(s);s.open=!close;s.tab='platform'}else if(op==='toggle'){s.open=!s.open;if(s.open&&s.exclusiveGroup)for(const other of states.values())if(other!==s&&other.exclusiveGroup===s.exclusiveGroup)other.open=false;if(!s.open)pause(s)}else if(op==='platform'){if(s.segment.kind==='latency')pause(s);s.tab='platform'}else if(op==='daily'||op==='platformDaily'||op==='select'){s.open=true;s.tab='daily';if(op!=='daily')s.platform=decoded||'all';void load(s)}else if(op==='retry'){void load(s,true)}c.render()};
-  return {table,button,dimensionButton,panel,platformRows,isOpen(segment){sync();return states.get(JSON.stringify(segment))?.open===true},snapshot:()=>({scope,states}),open(segment,label,exclusiveGroup){const s=state(segment,label);if(exclusiveGroup){s.exclusiveGroup=exclusiveGroup;for(const other of states.values())if(other!==s&&other.exclusiveGroup===exclusiveGroup)other.open=false;}s.open=true;c.render()}};
+  return {table,button,valueButton,dimensionButton,panel,platformRows,isOpen(segment){sync();return states.get(JSON.stringify(segment))?.open===true},snapshot:()=>({scope,states}),open(segment,label,exclusiveGroup){const s=state(segment,label);if(exclusiveGroup){s.exclusiveGroup=exclusiveGroup;for(const other of states.values())if(other!==s&&other.exclusiveGroup===exclusiveGroup)other.open=false;}s.open=true;c.render()}};
  }
  root.HensemAnalysisDrilldown={create};
 })(typeof window==='object'?window:globalThis);

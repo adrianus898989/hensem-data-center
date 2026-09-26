@@ -31,6 +31,15 @@ test('country source groups for Hong Kong and Red Crab are only exposed as teams
  const f=fixture({country:'印度',team:'香港',withdrawCatalog:[],catalog:[{name:'HK-A',country:'香港',team:'香港',source:'game66'},{name:'RC-A',country:'红膏蟹',team:'红膏蟹',source:'game66'}]});await f.page.load();assert.equal(f.calls[0].country,'香港');assert.deepEqual(f.calls[0].platforms,['HK-A']);const html=f.page.render();assert.match(html,/<option selected>印度/);assert.doesNotMatch(html,/<option[^>]*>香港<\/option>[^]*国家 \/ 地区[^]*<option[^>]*>香港/);f.context.withdrawTeam('红膏蟹');await f.page.load();assert.equal(f.calls.at(-1).country,'红膏蟹');assert.deepEqual(f.calls.at(-1).platforms,['RC-A']);
 });
 
+test('India all-team navigation cannot collapse three authorized source groups into the M8 query',async()=>{
+ const catalog=[{name:'M8-A',country:'印度',scopeGroup:'IN',team:'M8',source:'ar'},{name:'HK-A',country:'香港',scopeGroup:'HK_TEAM',team:'香港',source:'game66'},{name:'RC-A',country:'红膏蟹',scopeGroup:'RED_CRAB',team:'红膏蟹',source:'game66'}];
+ const f=fixture({country:'印度',team:'all',catalog,withdrawCatalog:[]});await f.page.load();assert.equal(f.calls.length,0);assert.match(f.page.state.error,/多个团队/);
+ for(const [team,country,platform]of [['香港','香港','HK-A'],['红膏蟹','红膏蟹','RC-A'],['M8','印度','M8-A']]){
+  f.context.withdrawTeam(team);await f.page.load();assert.equal(f.calls.at(-1).country,country);assert.deepEqual(f.calls.at(-1).platforms,[platform]);
+  f.page.cancel();assert.equal(f.L.country,'印度');assert.deepEqual(plain(f.L.multi.team),[team],'returning to overview keeps the selected team under India');
+ }
+});
+
 test('reason and note detail requests preserve the raw row country after rendering it as Brazil',async()=>{
  const f=fixture();await f.page.load();f.context.withdrawReasons(0,'blocking');await new Promise(setImmediate);assert.equal(f.calls.at(-1).country,'胖虎巴西');f.context.withdrawNoteOpen(0);f.context.withdrawNoteInput('synthetic note');await f.context.withdrawNoteSave();assert.equal(f.calls.at(-1).action,'withdrawNote');assert.equal(f.calls.at(-1).country,'胖虎巴西');assert.equal(f.calls.at(-1).platform,'SAME');
 });

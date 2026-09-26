@@ -94,3 +94,29 @@ test('provider requests stop scheduling when collapsed and cannot populate a cha
  h.action(durationSegment,'toggleProvider');waiting.forEach(p=>p.resolve(durationResponse(p.q)));await flush();assert.equal(h.calls.length,2,'the third platform must not start after collapse');
  h.L.from='2026-09-21T00:00:00';h.instance.button(durationSegment,'新日期');assert.equal(h.instance.snapshot().states.get(JSON.stringify(durationSegment)).daily.size,0);assert.equal(h.instance.panel(durationSegment),'');
 });
+
+test('latency platform success metrics and their independent shares use separate columns',()=>{
+ const h=setup();h.L.to='2026-09-20T23:59:59';h.instance.dimensionButton(durationSegment,'≤ 5 分钟','platform');h.action(durationSegment,'togglePlatform');
+ const html=h.instance.panel(durationSegment),rows=cellsOf(html);
+ assert.match(html,/<th>成功金额<\/th><th>成功笔数<\/th><th>金额占比<\/th><th>笔数占比<\/th>/);
+ assert.deepEqual(rows,[['SAME','ar','80.00','8','80.00%','80.00%'],['SAME','newar','20.00','2','20.00%','20.00%']]);
+ assert.doesNotMatch(html,/analysis-metric-value|analysis-metric-share/);assert.equal(h.calls.length,0);
+});
+test('confirmed empty platforms do not poison a populated duration-band denominator',()=>{
+ const h=setup();h.L.to='2026-09-20T23:59:59';const empty={platform:{id:'empty',name:'Empty',source:'ar'},total:0,summary:[],groups:{latency:[],latency_thresholds:[]}};h.L.results.push(empty);
+ h.instance.open(durationSegment,'≤ 5 分钟');let rows=cellsOf(h.instance.panel(durationSegment));
+ assert.deepEqual(rows.find(row=>row[0]==='Empty'),['Empty','ar','0.00','0','0.00%','0.00%']);assert.equal(rows.find(row=>row[1]==='newar')[4],'20.00%');
+ empty.total=3;empty.summary=[{...metric(),direction:'withdraw'}];rows=cellsOf(h.instance.panel(durationSegment));assert.equal(rows.find(row=>row[1]==='newar')[5],'20.00%');
+ // An incomplete or missing aggregate is not confirmation of an empty platform.
+ empty.summary=[];empty.total=0;empty.complete=false;rows=cellsOf(h.instance.panel(durationSegment));assert(rows.every(row=>row[4]==='—'&&row[5]==='—'));delete empty.complete;
+ empty.summary=undefined;rows=cellsOf(h.instance.panel(durationSegment));assert.equal(rows.find(row=>row[0]==='Empty')[2],'—');assert(rows.every(row=>row[4]==='—'&&row[5]==='—'));
+});
+test('unknown latency amounts do not suppress known count shares, and platform search preserves the band denominator',()=>{
+ const h=setup(),s={...durationSegment,placement:'duration-groups'};h.L.to='2026-09-20T23:59:59';h.L.results[0].groups.latency[0].amount=null;h.L.results[0].platform.name='Filtered';h.L.durationQuery='SAME';
+ h.instance.open(s,'≤ 5 分钟');const rows=cellsOf(h.instance.panel(s));assert.deepEqual(rows,[['SAME','newar','20.00','2','—','20.00%']]);assert.equal(h.calls.length,0);
+});
+test('latency platform daily comparisons preserve separate amount and count share columns',async()=>{
+ const h=setup(q=>Promise.resolve(durationResponse(q)));h.instance.open(durationSegment,'≤ 5 分钟');h.action(durationSegment,'platformDaily','a');await flush();
+ const html=h.instance.panel(durationSegment),rows=cellsOf(html);assert.match(html,/<th>成功金额<\/th><th>成功笔数<\/th><th>金额占比<\/th><th>笔数占比<\/th>/);
+ assert.deepEqual(rows[0].slice(1,5),['200.00','2','20.00%','20.00%']);assert.deepEqual(rows[1].slice(1,5),['800.00','8','80.00%','80.00%']);assert(rows[2].slice(1).every(value=>value==='—'));
+});

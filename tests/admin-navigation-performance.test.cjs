@@ -191,3 +191,15 @@ test('overview requires the explicit query action even when a background caller 
  await h.c.liveLoad(false);await settle();assert.equal(h.calls.length,loaded,'background refresh does not start a second overview query');assert.equal(h.L.dirty,false,'an ignored background call preserves the completed manual query');
  h.c.setPage('orders');h.c.setPage('overview');await settle();const returned=h.calls.length;h.L.dirty=false;h.c.render();await h.c.liveOverviewAnalysis();await h.c.liveOverviewWorkorders();assert.equal(h.calls.length,returned);assert.equal(h.L.overviewQueried,false);assert.match(h.html(),/点击查询/);assert.doesNotMatch(h.html(),/df-flow-card/);
 });
+
+test('overview and provider summaries prioritize two primary reads before ancillary reports and fees',async()=>{
+ for(const page of ['overview','providers','provider_payout']){
+  const direction=page==='provider_payout'?'withdraw':'charge',platforms=[P,{...P,id:'22222222-2222-4222-8222-222222222222'},{...P,id:'33333333-3333-4333-8333-333333333333'}],pending=platforms.map(()=>deferred());let initial=true;
+  const h=harness({page,reports:true,handler:q=>{
+   if(q.action==='catalog')return {platforms};if(q.action==='collectedData')return {rows:[]};if(q.action==='rates')return {rows:[],total:0};
+   const platform=platforms.find(p=>p.id===q.platformId)||P;if(q.action==='aggregate'&&initial)return pending[platforms.indexOf(platform)].promise;return flowAggregate(platform,direction);
+  }});await settle();const run=page==='overview'?h.c.liveQuery():null;await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2,page+' bounds concurrent primary reads');
+  pending[0].resolve(flowAggregate(platforms[0],direction));await settle();assert.equal(h.L.results.length,1);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,3);assert.equal(h.calls.filter(q=>['rates','collectedData','reportSummary'].includes(q.action)).length,0,'ancillary reads wait for primary completion');
+  initial=false;pending[1].resolve(flowAggregate(platforms[1],direction));pending[2].resolve(flowAggregate(platforms[2],direction));await run;await settle();assert.equal(h.L.results.length,3);assert.equal(h.L.loading,false);assert(h.calls.some(q=>q.action==='collectedData'));assert(h.calls.some(q=>q.action==='rates'));
+ }
+});

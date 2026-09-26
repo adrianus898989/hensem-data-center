@@ -50,7 +50,7 @@ test('inline partial analysis retains successful platforms and retries only fail
 });
 test('no successful analysis leaves an explicit error state and keeps primary data intact',async()=>{
  const h=await queried(),primary=h.L.results;let calls=0;h.setHandler(async()=>{calls++;throw Error('读取超时')});
- await h.c.liveOverviewAnalysis();assert.equal(calls,2,'one split level only, not an unbounded recursive retry');assert.equal(h.L.overviewSections.status,'error');assert.equal(h.L.overviewSections.done,0);assert.equal(h.L.overviewSections.results.length,0);assert.equal(h.L.results,primary);assert.equal(h.L.error,'');
+ await h.c.liveOverviewAnalysis();assert.equal(calls,4,'three bounded split levels, then stop without publishing partial platform data');assert.equal(h.L.overviewSections.status,'error');assert.equal(h.L.overviewSections.done,0);assert.equal(h.L.overviewSections.results.length,0);assert.equal(h.L.results,primary);assert.equal(h.L.error,'');
 });
 test('changing filters or leaving overview invalidates late analysis and prevents subsequent platform reads',async()=>{
  for(const change of [h=>h.c.liveSet('provider','Other provider'),h=>h.c.setPage('rates')]){
