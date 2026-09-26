@@ -49,7 +49,7 @@ function harness(options={}){
  const pages=keys.map(k=>[k,'',k,'',k]),groups=[['analysis','','数据分析',keys.filter(k=>!merchantKeys.includes(k))],['merchant','','商户中心',merchantKeys]];
  class FixedDate extends Date{constructor(...args){super(...(args.length?args:[clock]))}static now(){return clock}}
  class TestURL extends URL{static createObjectURL(blob){blobs.push(blob);return 'blob:synthetic'}static revokeObjectURL(){}}
- const context={console,Intl,Date:FixedDate,URL:TestURL,Blob,state:{page:options.page||'overview',navGroup:'analysis'},pages,navGroupsV3:groups,location:{hash:''},
+ const context={console,Intl,Date:FixedDate,URL:TestURL,Blob,state:{page:options.page||'overview',navGroup:'analysis'},pages,navGroupsV3:groups,location:{hash:options.hash||''},
   document:{title:'',body:{classList:{add(){},remove(){}},appendChild(n){nodes.set(n.id,n)}},getElementById:id=>nodes.get(id)||null,querySelector:selector=>nodes.get(selector)||null,createElement:tag=>node(tag)},
   render(){nodes.get('page').innerHTML='INDEPENDENT_SNAPSHOT'},syncFilters(){},groupForV3:key=>groups.find(g=>g[3].includes(key))||groups[0],toggleCenterV3(){},setPage(){},headerIconV3:()=>'<svg></svg>',openDrawer:(title,html)=>drawers.push({title,html}),toast(){},scrollTo(){},
   setInterval:(fn,ms)=>{intervals.push({fn,ms});return intervals.length},clearInterval(){},setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},
@@ -66,6 +66,57 @@ const withoutWindow=q=>Object.fromEntries(Object.entries(q).filter(([key])=>!['s
 const plain=html=>String(html).replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim();
 function renderedTables(html){return [...html.matchAll(/<table\b[^>]*>([^]*?)<\/table>/g)].map(match=>({html:match[0],headers:[...match[1].matchAll(/<th\b[^>]*>([^]*?)<\/th>/g)].map(x=>plain(x[1])),rows:[...(match[1].match(/<tbody\b[^>]*>([^]*?)<\/tbody>/)?.[1]||'').matchAll(/<tr\b[^>]*>([^]*?)<\/tr>/g)].map(row=>[...row[1].matchAll(/<td\b[^>]*>([^]*?)<\/td>/g)].map(cell=>cell[1]))}));}
 
+
+const supervisorRoutes=[['workorder_reconciliation','漏登与状态核对'],['workorder_workload','员工工作量'],['workorder_operation_logs','操作日志'],['workorder_permissions','权限与预警']];
+
+test('all six workorder entries share one menu while supervisor pages never reuse production results',async()=>{
+ const h=await ready(),groups=h.c.navGroupsV3,merchant=groups.findIndex(g=>g[0]==='merchant'),work=groups[merchant+1];
+ assert.equal(work[0],'workorder');assert.equal(work[2],'工单');assert.deepEqual(Array.from(work[3]),['workorders','deposit_tracking',...supervisorRoutes.map(([id])=>id)]);
+ const before=h.calls.length;h.L.results=structuredClone(h.L.results);h.L.results[0].platform.name='UNRELATED_PRODUCTION_PLATFORM';h.L.dirty=true;
+ for(const [id,label]of supervisorRoutes){
+  h.c.setPage(id);await settle();assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.c.location.hash,id);assert.equal(h.c.groupForV3(id)[0],'workorder');assert.equal(h.c.pages.filter(p=>p[0]===id).length,1);
+  assert.equal(h.nodes.get('crumbTitle').textContent,'工单 / '+label);assert.match(h.html(),/员工测试站尚未接通/);assert.match(h.html(),/数据来源与现有入口/);assert.doesNotMatch(h.html(),/UNRELATED_PRODUCTION_PLATFORM|class="kpi-value"|0 条|0 笔/);
+  assert.equal(h.nodes.get('liveFilters').style.display,'none');assert.doesNotMatch(h.c.document.title,/正式数据/);assert.match(h.nodes.get('.title-actions').innerHTML,/setPage\('workorders'\)/);assert.match(h.nodes.get('.title-actions').innerHTML,/setPage\('deposit_tracking'\)/);assert.doesNotMatch(h.nodes.get('.title-actions').innerHTML,/liveLoad|liveExport/);
+  await h.c.liveLoad();h.c.liveExport();assert.equal(h.calls.length,before);assert.equal(h.blobs.length,0);
+ }
+ assert.equal(h.c.groupForV3('operation_logs')[0],'analysis','existing system audit menu remains separate');
+});
+
+test('direct supervisor routes and bookmarks defer all requests until an existing data entry is opened',async()=>{
+ for(const [page]of supervisorRoutes){
+  for(const options of [{page,reports:true},{hash:'#'+page,reports:true}]){
+   const h=await ready(options);assert.equal(h.c.state.page,page);assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.calls.length,0);assert.match(h.html(),/员工测试站尚未接通/);
+   h.c.setPage('workorders');await settle();assert.equal(h.c.state.page,'workorders');assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.calls.filter(q=>q.action==='catalog').length,1);assert(h.calls.some(q=>q.action==='workorders'));assert(!h.calls.some(q=>q.action==='aggregate'));
+   h.c.setPage('deposit_tracking');await settle();assert.equal(h.c.state.page,'deposit_tracking');assert(h.calls.some(q=>q.action==='depositIssues'));assert.match(h.nodes.get('crumbTitle').textContent,/工单 \/ 存款未到账明细/);
+  }
+ }
+});
+
+test('a pending production catalogue cannot start report reads after navigation to a supervisor page',async()=>{
+ const pending=deferred(),h=harness({reports:true,handler:q=>q.action==='catalog'?pending.promise:aggregate()});
+ assert.deepEqual(h.calls.map(q=>q.action),['catalog']);h.c.setPage('workorder_workload');pending.resolve({platforms:[P]});await settle();
+ assert.deepEqual(h.calls.map(q=>q.action),['catalog']);assert.equal(h.L.country,P.country);assert.match(h.html(),/员工测试站尚未接通/);
+ h.setHandler(q=>q.action==='rates'?{rows:[],total:0}:q.action==='reportSummary'?{rows:[],summary:{}}:aggregate());h.c.setPage('providers');await settle();
+ assert.equal(h.c.state.page,'providers');assert(h.calls.some(q=>q.action==='aggregate'&&q.direction==='charge'));assert.doesNotMatch(h.html(),/员工测试站尚未接通/);
+});
+
+test('returning from supervisor initializes the default report-only country',async()=>{
+ const pending=deferred(),rows=[
+  {dataset:'volume',system:'PANDA',name:'REPORT_IN',country:'印度',rawCountry:'IN',rawPlatform:'REPORT_IN',directions:['charge'],records:1,available:true,currency:'INR',timezone:'Asia/Kolkata',provenance:{kind:'google_sheets'}},
+  {dataset:'volume',system:'PANDA',name:'REPORT_PK',country:'巴基斯坦',rawCountry:'PK',rawPlatform:'REPORT_PK',directions:['charge'],records:1,available:true,currency:'PKR',timezone:'Asia/Karachi',provenance:{kind:'google_sheets'}}
+ ];
+ const h=harness({reports:true,handler:q=>q.action==='catalog'?pending.promise:q.action==='collectedData'?{rows}:q.action==='reportSummary'?{feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'not_received',groups:[]}))}:q.action==='rates'?{rows:[],total:0}:aggregate()});
+ h.c.setPage('workorder_workload');pending.resolve({platforms:[]});await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
+ h.c.setPage('providers');await settle();assert.equal(h.L.country,'印度');assert.equal(h.calls.filter(q=>q.action==='catalog').length,1,'reuse the already authorized native directory');
+ const reports=h.calls.filter(q=>q.action==='reportSummary');assert(reports.length>0);for(const report of reports)assert.deepEqual(report.feeds.map(f=>f.country),['IN']);assert.match(h.html(),/REPORT_IN/);assert.doesNotMatch(h.html(),/REPORT_PK/);
+});
+
+test('returning from supervisor recovers an interrupted provider directory',async()=>{
+ const pending=deferred(),h=harness({page:'providers',ancillaryHandler:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='providerOptions'?pending.promise:q.action==='rates'?{rows:[],total:0}:q.action==='workorders'?{rows:[],summary:{},total:0}:aggregate()});
+ await settle();assert.equal(h.L.providerOptionsBusy,true);assert.equal(h.calls.filter(q=>q.action==='providerOptions').length,1);
+ h.c.setPage('workorder_workload');const requestsOnSupervisor=h.calls.length;pending.resolve({providers:['Synthetic provider']});await settle();assert.equal(h.calls.length,requestsOnSupervisor);assert.equal(h.L.providerOptionsBusy,false);
+ h.c.setPage('providers');await settle();assert.equal(h.L.providerOptionsBusy,false);assert.equal(h.calls.filter(q=>q.action==='providerOptions').length,2);assert(h.L.providerOptions.includes('Synthetic provider'));
+});
 
 test('adapter does nothing outside production and never installs an automatic data refresh',async()=>{
  const offline=await ready({production:false});assert.equal(offline.L,undefined);assert.equal(offline.calls.length,0);

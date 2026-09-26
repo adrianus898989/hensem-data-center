@@ -232,6 +232,33 @@ test('a conflicting game66 source-team tag remains a separate report capability'
  await f.page.loadCatalog();assert.equal(f.page.catalog().length,2);assert.equal(f.page.catalog().find(p=>p.id==='hk').feeds.length,0);assert(f.page.catalog().find(p=>p.reportOnly));
 });
 
+const confirmedM8Reports=[['墨西哥','MX','南美','NPG-MEXICO'],['智利','CL','南美','NPG-CHILE'],['哥伦比亚','CO','南美','NPG-COLOMBIA'],['印尼','ID','印尼','HOT985'],['印尼','ID','印尼','IND666'],['印尼','ID','印尼','UANG'],['巴西','BR','巴西','SSSGAME'],['巴西','BR','巴西','TGJOGO']];
+
+test('the eight owner-confirmed report platforms belong to M8 before and after the authoritative feed directory arrives',async()=>{
+ const seeds=confirmedM8Reports.map(([country,scopeGroup,rawCountry,name])=>({country,scopeGroup,name,source:'withdraw',team:null}));
+ let resolve;const f=fixture({withdrawCatalog:seeds,onCatalog:()=>new Promise(r=>resolve=r)}),before=plain(f.page.catalog());
+ assert.equal(before.length,8);assert(before.every(p=>p.team==='M8'&&p.reportOnly&&!p.orderPlatformIds.length));
+ for(const [country,,,name]of confirmedM8Reports)assert.equal(f.page.selected({country,teams:['M8']}).find(p=>p.name===name).team,'M8');
+ const pending=f.page.loadCatalog();assert.equal(f.page.catalog().length,8);
+ resolve({rows:confirmedM8Reports.map(([country,,rawCountry,name])=>feed({dataset:'auto',system:'REPORT',country,rawCountry,name,rawPlatform:name,team:'M8',directions:['withdraw']}))});await pending;
+ const after=f.page.catalog();assert.deepEqual(plain(after.map(p=>p.id)),before.map(p=>p.id));assert(after.every(p=>p.team==='M8'&&p.feeds.length===1&&p.reportOnly));
+ for(const [country,,rawCountry,name]of confirmedM8Reports){await f.page.load({country,teams:['M8'],platforms:[after.find(p=>p.name===name).id],direction:'withdraw'});assert.deepEqual(f.calls.filter(q=>q.action==='reportSummary').at(-1).feeds.map(q=>[q.country,q.platform]),[[rawCountry,name]]);}
+ assert.equal(f.L.withdrawCatalog[0].country,'墨西哥');assert.equal(f.page.state.catalogRows[0].rawCountry,'南美');
+});
+
+test('confirmed M8 assignments preserve explicit ownership, other countries, Panghu and historical LG source identities',()=>{
+ const f=fixture({feeds:[]}),normalize=f.context.HensemLiveReportData.normalizeIdentity;
+ for(const [country,code,,name]of confirmedM8Reports){
+  for(const team of [null,'待归类','__unassigned__','未绑定团队'])assert.equal(normalize({country:code,name,team}).team,'M8');
+  assert.equal(normalize({country,name,team:'OTHER-EXPLICIT'}).team,'OTHER-EXPLICIT');
+  assert.equal(normalize({country:'印度',name,team:null}).team,'__unassigned__');
+  assert.equal(normalize({country,name:name+'-OTHER',team:null}).team,'__unassigned__');
+ }
+ const ph=normalize({country:'胖虎巴西',scopeGroup:'BR_PANGHU',name:'SSSGAME',team:null});assert.equal(ph.team,'胖虎');assert.equal(ph.identityCountry,'胖虎巴西');
+ const legacy=normalize({country:'LG',name:'SUPERLG',team:null});assert.equal(legacy.team,'__unassigned__');assert.equal(legacy.identityCountry,'LG');
+ assert.equal(f.page.catalog().length,0,'the confirmation only labels received identities and does not add platforms');
+});
+
 test('intake uses the same team/country display but keeps exact source keys for detail and config reads',async()=>{
  const f=fixture({catalog:[{id:'m8',name:'SAME',country:'巴西',team:'M8',source:'ar'}],withdrawCatalog:[{name:'SAME',country:'胖虎巴西',team:'胖虎'}]});vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-collected-data.js'),'utf8'),f.context);
  const calls=[],page=f.context.HensemLiveCollectedData.create({L:f.L,E:escape,C:String,N:String,render:()=>{},table:(heads,rows)=>'<table><thead>'+heads.map(x=>'<th>'+x+'</th>').join('')+'</thead>'+rows.map(row=>'<tr>'+row.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</table>',box:(title,body)=>'<h2>'+title+'</h2>'+body,request:async q=>{calls.push(plain(q));return q.operation==='catalog'?{rows:[feed({name:'SAME',rawPlatform:'SAME'})]}:{total:0,rows:[]}}});

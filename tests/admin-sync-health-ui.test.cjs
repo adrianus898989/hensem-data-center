@@ -52,11 +52,20 @@ test('health bridge only accepts bounded read parameters, fresh auth and fixed R
  await h.api.adminLiveRequest({user:{id:'test'},access_token:'old-test-token'},req);assert.equal(h.auth.length,1);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_sync_health');assert.equal(h.calls[0].init.headers.Authorization,'Bearer fresh-test-token');assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:{offset:0,limit:5000}});assert.equal(h.calls[0].init.cache,'no-store');
  const err=bridge(()=>({ok:false,status:504,json:async()=>({message:'statement timeout sensitive-private-data'})}));await assert.rejects(err.api.adminLiveRequest({user:{id:'test'},access_token:'old'},req),error=>/同步检查超时/.test(error.message)&&!/敏感|sensitive|缩短日期|选择单个平台/.test(error.message));
 });
-test('integration permits independent first-load pages and waits for their main loading states',()=>{
+test('integration permits independent first-load pages and waits for their main loading states',async()=>{
  const live=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8'),ready=live.match(/configure\(\{request:q=>window\.hensemLiveRequest\(q\),ready:\(\)=>(.*?),onChange:/)[1];
- const evaluate=(page,L,modules={},reportState={})=>vm.runInNewContext(ready,{state:{page},L,window:modules,collectedPage:{state:{busy:false}},reportData:{state:reportState}});
+ const supervisorDeclarations=live.slice(live.indexOf(' const supervisorPages='),live.indexOf('\n for(const [id,page]of Object.entries(supervisorPages))'));
+ assert.match(supervisorDeclarations,/const isSupervisorPage=/,'use the real page classifier in the extracted readiness expression');
+ const evaluate=(page,L,modules={},reportState={})=>vm.runInNewContext(supervisorDeclarations+'\n'+ready,{state:{page},L,window:modules,collectedPage:{state:{busy:false}},reportData:{state:reportState}});
  const L={catalogReady:true,initialReadComplete:true,loading:false,overviewQueried:false};
- for(const page of ['auto_withdraw','rates','collected_data','payout_config'])assert.equal(evaluate(page,L),true,page);
+ for(const page of ['auto_withdraw','rates','collected_data','payout_config','workorders','deposit_tracking'])assert.equal(evaluate(page,L),true,page);
+ for(const page of ['workorder_reconciliation','workorder_workload','workorder_operation_logs','workorder_permissions']){
+  assert.equal(evaluate(page,L),false,page+' has no connected employee source and must not start business health reads');
+  const h=setup();h.setReady(evaluate(page,L));h.api.schedule(page);await h.run();assert.equal(h.calls.length,0,page);
+ }
+ for(const page of ['workorders','deposit_tracking']){
+  const h=setup();h.setReady(evaluate(page,L));h.api.schedule(page);await h.run();assert.equal(h.calls.length,1,page+' retains its existing health check');
+ }
  assert.equal(evaluate('overview',L),false,'an unqueried overview must not start an independent health read');
  const queried={...L,overviewQueried:true};assert.equal(evaluate('overview',queried),true,'health may run after an explicit overview query completes');
  assert.equal(evaluate('rates',{...L,initialReadComplete:false}),false);assert.equal(evaluate('auto_withdraw',{...L,autoWithdrawLoading:true}),false);assert.equal(evaluate('rates',L,{HensemLiveRatesRestored:{snapshot:()=>({loading:true})}}),false);assert.equal(evaluate('payout_config',L,{HensemLivePayoutConfig:{state:()=>({indexStatus:'loading'})}}),false);

@@ -13,6 +13,9 @@
  const legacyTeams={'香港':'香港',HK_TEAM:'香港',HONG_KONG:'香港',GAME66_HK:'香港','红膏蟹':'红膏蟹','紅膏蟹':'红膏蟹',RED_CRAB:'红膏蟹',GAME66_RED_CRAB:'红膏蟹'};
  const token=value=>String(value??'').trim().toUpperCase();
  const countryNames={IN:'印度',INDIA:'印度',BR:'巴西',BRAZIL:'巴西',PK:'巴基斯坦',ID:'印尼',VN:'越南',PH:'菲律宾',MY:'马来',MM:'缅甸',NG:'尼日利亚',CO:'哥伦比亚',MX:'墨西哥',CL:'智利'};
+ // Owner-confirmed assignments, also persisted in dashboard_platform_team_map.
+ // These fill authorized report seeds before the mapped feed directory arrives.
+ const confirmedM8={墨西哥:new Set(['NPG-MEXICO']),智利:new Set(['NPG-CHILE']),哥伦比亚:new Set(['NPG-COLOMBIA']),印尼:new Set(['HOT985','IND666','UANG']),巴西:new Set(['SSSGAME','TGJOGO'])};
  const legacyGroup=value=>legacyPanghu.has(token(value))?'胖虎巴西':legacyTeams[token(value)];
  function sourceIdentity(row){
   const original=row.identityCountry??row.country??row.rawCountry??'',group=legacyGroup(original)||legacyGroup(row.scopeGroup??row.scope_group)||legacyGroup(row.rawCountry);
@@ -27,7 +30,8 @@
   const explicit=[row.geographicCountry,row.geographic_country,row.countryName,row.country_name,row.countryCode,row.country_code,row.country!==identityCountry?row.country:null].find(value=>value&&!legacyGroup(value));
   // Current Hong Kong and Red Crab platforms operate in India (owner confirmed).
   const country=legacy?'巴西':legacyTeams[token(group)]?(explicit?countryNames[token(explicit)]||String(explicit):'印度'):countryNames[token(identityCountry)]||identityCountry||'国家待核对';
-  const team=legacy||legacyPanghu.has(token(row.team))?'胖虎':row.team&&row.team!=='待归类'?legacyTeams[token(row.team)]||row.team:legacyTeams[token(group)]||'__unassigned__';
+  const assigned=row.team&&!['待归类','未绑定团队','__unassigned__'].includes(row.team)?legacyTeams[token(row.team)]||row.team:null;
+  const team=legacy||legacyPanghu.has(token(row.team))?'胖虎':assigned||legacyTeams[token(group)]||(confirmedM8[country]?.has(token(row.name))?'M8':'__unassigned__');
   return {...row,identityCountry,rawCountry:row.rawCountry??identityCountry,country,team};
  }
  const keyFor=row=>JSON.stringify([sourceIdentity(row).group,row.name||'']);
