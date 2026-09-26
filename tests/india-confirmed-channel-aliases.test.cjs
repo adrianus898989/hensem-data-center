@@ -5,6 +5,7 @@ const test = require('node:test');
 const { loadTs, root } = require('./load-typescript.cjs');
 const names = loadTs(path.join(root, 'src/lib/thirdPartyNameMap.ts'));
 const volume = loadTs(path.join(root, 'src/lib/parseThirdPartyVolume.ts'));
+const adminNames={};adminNames.window=adminNames;require('node:vm').runInNewContext(require('node:fs').readFileSync(path.join(root,'admin-preview/live-provider-aliases.js'),'utf8'),adminNames);
 const aliases = [
   ['Starpay', 'VstarPay'], ['StarPay', 'VstarPay'], ['QR-RsPay', 'RsPay'],
   ['FancyPayINR-PaytmQR', 'FancyPay'], ['Super-APPPay', 'SUPER'],
@@ -15,6 +16,43 @@ const aliases = [
   ...['LKgoPayINR-PaytmQR','LKgoPayINR-Bank','LKgoPayI','LKgoPay','LKgoPay-QR'].map(name=>[name,'LKgoPay']),
   ['ArbPay2INR-BANK', 'UPI-QR'], ['ArbPay2INR-UPI', 'UPI-QR'],
 ];
+
+test('owner-confirmed typed aliases match in main and generated admin while T3Pay stays distinct',()=>{
+  const pairs=[['t3Pay唤醒','T3Pay'],['T3PAY','T3Pay'],['3TPay唤醒','3TPay'],
+    ['RushPay唤醒','RushPay'],['RUSHPAY跑分','RushPay'],['RushPay-QR (唤醒)','RushPay'],
+    ['LovePay','WPay'],['HaoxPay-QR','WPay'],['HaoxPay — QR（跑分）','WPay'],
+    ['free2pay唤醒','FreePay'],['FREEPAY','FreePay'],['FreePay【唤醒】','FreePay'],
+    ['TTpay','TTPay'],['TtPay唤醒','TTPay'],['Win2pay跑分','Win2Pay'],['Aiv3pay跑分','AIV3Pay'],
+    ['Independent7Pay (跑分)（唤醒）','Independent7Pay']];
+  for(const country of ['印度','IN','India','印度线下','香港','红膏蟹','HK_TEAM','RED_CRAB'])for(const [raw,name] of pairs){
+    for(const canonical of [names.canonicalThirdPartyName,adminNames.HensemProviderNames.canonical]){
+      assert.equal(canonical(raw,country),name,`${country}/${raw}`);
+      assert.equal(canonical(name,country),name,`idempotent ${country}/${raw}`);
+    }
+  }
+  for(const raw of ['HaoxPayINR','HaoxPay-QR2','FreePay2','T3Pay2','T3Pay唤醒服务'])
+    for(const canonical of [names.canonicalThirdPartyName,adminNames.HensemProviderNames.canonical]){
+      assert.notEqual(canonical(raw,'印度'),'WPay',raw);assert.notEqual(canonical(raw,'印度'),'FreePay',raw);assert.notEqual(canonical(raw,'印度'),'T3Pay',raw);
+    }
+  for(const country of ['印尼','巴西'])for(const raw of ['LovePay','HaoxPay-QR','free2pay'])
+    assert.equal(adminNames.HensemProviderNames.canonical(raw,country),raw,'new aliases do not cross countries');
+  for(const raw of ['唤醒','跑分','SyntheticPay唤醒服务'])
+    assert.equal(adminNames.HensemProviderNames.canonical(raw,'印度'),raw,'empty/provider-internal words remain intact');
+});
+
+test('typed alias grouping preserves source types, directions, dates and every source amount once',()=>{
+  const input=payload([row(1,'RushPay唤醒','唤醒'),row(2,'RUSHPAY唤醒','唤醒'),row(3,'RushPay跑分','跑分'),
+    row(4,'free2pay唤醒','唤醒'),row(5,'FreePay','唤醒'),row(6,'T3Pay唤醒','唤醒'),row(7,'3TPay','UPI'),
+    row(8,'LovePay','跑分'),row(9,'WPay','跑分'),row(10,'HaoxPay-QR','唤醒')]);
+  const before=structuredClone(input),output=volume.normalizeThirdPartyVolumePayload(input);
+  assert.deepEqual(input,before);
+  assert.equal(output.rows.length,7);
+  assert.deepEqual(new Set(output.rows.filter(r=>r.channel==='RushPay').map(r=>r.channelType)),new Set(['跑分','唤醒']));
+  assert.equal(output.rows.filter(r=>r.channel==='WPay').length,2);
+  assert(output.rows.some(r=>r.channel==='T3Pay'));assert(output.rows.some(r=>r.channel==='3TPay'));
+  for(const key of ['amount','count','successCount','failedCount'])assert.equal(sum(output.rows,key),sum(input.rows,key),key);
+  assert.deepEqual(volume.normalizeThirdPartyVolumePayload(output).rows,output.rows);
+});
 
 test('confirmed aliases use existing canonical names only in exact India contexts', () => {
   for (const country of ['印度', '印度线下', '印度盘口', '印度线下盘口', 'IN', 'in', 'India', ' INDIA '])

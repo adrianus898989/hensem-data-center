@@ -64,7 +64,7 @@ function setScope(h,values={}){Object.assign(h.L,{from:'2026-09-22T00:00:00',to:
 function completeAggregate(p=P,count=10,success=5){const r=aggregate(p,count),s={...stats(count,String(count*100)),success_count:success,created_success_count:success,success_amount:String(success*100),pending_count:count-success,pending_amount:String((count-success)*100),failed_count:0,failed_amount:'0',rejected_count:0,rejected_amount:'0',unknown_count:0,unknown_amount:'0'};r.summary=[s];for(const key of ['provider','daily','hourly','amount','matrix'])r.groups[key]=[{...r.groups[key][0],...s}];return r}
 const withoutWindow=q=>Object.fromEntries(Object.entries(q).filter(([key])=>!['startAt','endAt'].includes(key)));
 const plain=html=>String(html).replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim();
-function renderedTables(html){return [...html.matchAll(/<table\b[^>]*>([^]*?)<\/table>/g)].map(match=>({html:match[0],headers:[...match[1].matchAll(/<th\b[^>]*>([^]*?)<\/th>/g)].map(x=>plain(x[1])),rows:[...(match[1].match(/<tbody\b[^>]*>([^]*?)<\/tbody>/)?.[1]||'').matchAll(/<tr\b[^>]*>([^]*?)<\/tr>/g)].map(row=>[...row[1].matchAll(/<td\b[^>]*>([^]*?)<\/td>/g)].map(cell=>cell[1]))}));}
+function renderedTables(html){return [...html.matchAll(/<table\b[^>]*>([^]*?)<\/table>/g)].map(match=>({html:match[0],headers:[...match[1].matchAll(/<th\b[^>]*>([^]*?)<\/th>/g)].map(x=>plain(x[1].replace(/<span\b[^>]*aria-hidden="true"[^>]*>[^]*?<\/span>/g,''))),rows:[...(match[1].match(/<tbody\b[^>]*>([^]*?)<\/tbody>/)?.[1]||'').matchAll(/<tr\b[^>]*>([^]*?)<\/tr>/g)].map(row=>[...row[1].matchAll(/<td\b[^>]*>([^]*?)<\/td>/g)].map(cell=>cell[1]))}));}
 
 
 const supervisorRoutes=[['workorder_reconciliation','漏登与状态核对'],['workorder_workload','员工工作量'],['workorder_operation_logs','操作日志'],['workorder_permissions','权限与预警']];
@@ -111,11 +111,11 @@ test('returning from supervisor initializes the default report-only country',asy
  const reports=h.calls.filter(q=>q.action==='reportSummary');assert(reports.length>0);for(const report of reports)assert.deepEqual(report.feeds.map(f=>f.country),['IN']);assert.match(h.html(),/REPORT_IN/);assert.doesNotMatch(h.html(),/REPORT_PK/);
 });
 
-test('returning from supervisor recovers an interrupted provider directory',async()=>{
+test('returning from supervisor preserves a paused directory without automatically reading it again',async()=>{
  const pending=deferred(),h=harness({page:'providers',ancillaryHandler:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='providerOptions'?pending.promise:q.action==='rates'?{rows:[],total:0}:q.action==='workorders'?{rows:[],summary:{},total:0}:aggregate()});
  await settle();assert.equal(h.L.providerOptionsBusy,true);assert.equal(h.calls.filter(q=>q.action==='providerOptions').length,1);
  h.c.setPage('workorder_workload');const requestsOnSupervisor=h.calls.length;pending.resolve({providers:['Synthetic provider']});await settle();assert.equal(h.calls.length,requestsOnSupervisor);assert.equal(h.L.providerOptionsBusy,false);
- h.c.setPage('providers');await settle();assert.equal(h.L.providerOptionsBusy,false);assert.equal(h.calls.filter(q=>q.action==='providerOptions').length,2);assert(h.L.providerOptions.includes('Synthetic provider'));
+ h.c.setPage('providers');await settle();assert.equal(h.L.providerOptionsBusy,false);assert.equal(h.calls.filter(q=>q.action==='providerOptions').length,1);await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='providerOptions').length,2);assert(h.L.providerOptions.includes('Synthetic provider'));
 });
 
 test('adapter does nothing outside production and never installs an automatic data refresh',async()=>{
@@ -125,12 +125,12 @@ test('adapter does nothing outside production and never installs an automatic da
 
 const businessCalls=h=>h.calls.filter(q=>['aggregate','details','reportSummary','workorders'].includes(q.action));
 
-test('overview first opening and every return wait for an explicit query without fetching business data',async()=>{
+test('overview first opening waits for query and existing queried tabs restore without fetching data',async()=>{
  const h=await ready({manualOverview:true,reports:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='collectedData'?{rows:[]}:q.action==='rates'?{rows:[],total:0}:aggregate()});
  assert.equal(h.L.catalogReady,true);assert.equal(h.L.overviewQueried,false);assert.equal(businessCalls(h).length,0);assert.equal(h.calls.filter(q=>q.action==='catalog').length,1);assert.match(h.html(),/点击查询/);
  h.c.render();h.c.render();await settle();assert.equal(businessCalls(h).length,0);
  await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2);assert.equal(h.L.comparisonStatus,'ready');
- h.c.setPage('time');await settle();const before=businessCalls(h).length;h.c.setPage('overview');await settle();assert.equal(businessCalls(h).length,before);assert.equal(h.L.overviewQueried,false);assert.equal(h.L.dirty,true);assert.match(h.html(),/点击查询/);
+ h.c.setPage('time');await settle();const before=businessCalls(h).length;h.c.setPage('overview');await settle();assert.equal(businessCalls(h).length,before);assert.equal(h.L.overviewQueried,true);assert.equal(h.L.dirty,false);assert.match(h.html(),/代收经营总数据/);
  const prior=h.calls.filter(q=>q.action==='aggregate').length;await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,prior+2,'an explicit returned overview reads current and comparison once');
 });
 
@@ -374,8 +374,8 @@ test('duration bins use contract valid denominators and human time ranges instea
 });
 
 test('restored latency page uses real direction cards, complete distributions and local detail tabs without a query',async()=>{
- const h=await ready(),r=completeAggregate(P,10,6),withdraw={...r.summary[0],direction:'withdraw'};r.summary.push(withdraw);r.groups.latency=['charge','withdraw'].flatMap(direction=>Array.from({length:10},(_,bucket)=>({direction,currency:'INR',bucket,count:bucket<2?2:0,amount:bucket<2?'200':'0',valid_count:4,valid_amount:'400'})));r.groups.latency_thresholds=['charge','withdraw'].flatMap(direction=>[300000,1800000,3600000,10800000,21600000,43200000,86400000,172800000,259200000].map((threshold_ms,bucket)=>({direction,currency:'INR',bucket,threshold_ms,count:bucket===0?2:0,amount:bucket===0?'200':'0',valid_count:4,valid_amount:'400'})));h.L.results=[r];h.c.state.page='latency';h.c.render();assert.match(h.html(),/data-duration-page="latency"/);assert.equal([...h.html().matchAll(/class="panel latency-summary"/g)].length,2);const t=renderedTables(h.html()).find(t=>t.headers[0]==='成功耗时区间');assert(t);assert.equal(t.rows.length,10);assert.equal(t.headers.length,10);assert.equal(t.headers.at(-1),'明细');assert(t.rows.every(row=>plain(row.at(-1))==='三方展开 平台展开'));assert.match(t.rows[0].at(-1),/aria-expanded="false"/);assert.deepEqual(t.rows[0].slice(0,-1).map(plain),['≤ 5 分钟','200.00','2','50.00%','50.00%','200.00','2','50.00%','50.00%']);
- const before={calls:h.calls.length,serial:h.L.serial,results:JSON.stringify(h.L.results),direction:h.L.direction,from:h.L.from,to:h.L.to};h.c.liveDurationSet('durationMode','cumulative');const cumulative=renderedTables(h.html()).find(t=>t.headers[0]==='成功耗时阈值');assert.equal(cumulative.rows.length,9);assert.equal(cumulative.headers.length,10);assert.equal(cumulative.headers.at(-1),'明细');assert.deepEqual(cumulative.rows[0].slice(0,-1).map(plain),['超过 5 分钟','200.00','2','50.00%','50.00%','200.00','2','50.00%','50.00%']);assert(cumulative.rows.every(row=>plain(row.at(-1))==='三方展开 平台展开'));assert.match(h.html(),/行间不相加/);h.c.liveDurationSet('durationGroup','platform');assert.match(h.html(),/点击“平台展开”/);const expand=[...h.html().matchAll(/onclick="([^"]+)"[^>]*>平台展开<\/button>/g)].at(-1);assert(expand);vm.runInNewContext(expand[1],{liveAnalysisAction:h.c.liveAnalysisAction});const groups=renderedTables(h.html()).find(t=>t.headers[0]==='平台');assert(groups);assert(groups.rows.length>0);assert.doesNotMatch(h.html(),/此处独立平台分组汇总尚未接入/);h.c.liveDurationSet('durationDetail','orders');const orders=renderedTables(h.html()).find(t=>t.headers[0]==='订单号');assert(orders);assert.equal(orders.rows.length,0);for(const header of ['系统 ID','平台','三方','方向','提交时间','成功时间','成功耗时'])assert(orders.headers.includes(header));assert.match(h.html(),/尚未提供对应时长条件的逐笔接口/);assert.deepEqual({calls:h.calls.length,serial:h.L.serial,results:JSON.stringify(h.L.results),direction:h.L.direction,from:h.L.from,to:h.L.to},before,'duration tabs only change local presentation');
+ const h=await ready(),r=completeAggregate(P,10,6),withdraw={...r.summary[0],direction:'withdraw'};r.summary.push(withdraw);r.groups.latency=['charge','withdraw'].flatMap(direction=>Array.from({length:10},(_,bucket)=>({direction,currency:'INR',bucket,count:bucket<2?2:0,amount:bucket<2?'200':'0',valid_count:4,valid_amount:'400'})));r.groups.latency_thresholds=['charge','withdraw'].flatMap(direction=>[300000,1800000,3600000,10800000,21600000,43200000,86400000,172800000,259200000].map((threshold_ms,bucket)=>({direction,currency:'INR',bucket,threshold_ms,count:bucket===0?2:0,amount:bucket===0?'200':'0',valid_count:4,valid_amount:'400'})));h.L.results=[r];h.c.state.page='latency';h.c.render();assert.match(h.html(),/data-duration-page="latency"/);assert.equal([...h.html().matchAll(/class="panel latency-summary"/g)].length,1);assert.equal(h.L.direction,'charge');assert.doesNotMatch(h.html(),/data-duration-direction="withdraw"/);const t=renderedTables(h.html()).find(t=>t.headers[0]==='成功耗时区间');assert(t);assert.equal(t.rows.length,10);assert.equal(t.headers.length,6);assert.equal(t.headers.at(-1),'明细');assert(t.rows.every(row=>plain(row.at(-1))==='三方展开 平台展开'));assert.match(t.rows[0].at(-1),/aria-expanded="false"/);assert.deepEqual(t.rows[0].slice(0,-1).map(plain),['≤ 5 分钟','200.00','2','50.00%','50.00%']);
+ const before={calls:h.calls.length,serial:h.L.serial,results:JSON.stringify(h.L.results),direction:h.L.direction,from:h.L.from,to:h.L.to};h.c.liveDurationSet('durationMode','cumulative');const cumulative=renderedTables(h.html()).find(t=>t.headers[0]==='成功耗时阈值');assert.equal(cumulative.rows.length,9);assert.equal(cumulative.headers.length,6);assert.equal(cumulative.headers.at(-1),'明细');assert.deepEqual(cumulative.rows[0].slice(0,-1).map(plain),['超过 5 分钟','200.00','2','50.00%','50.00%']);assert(cumulative.rows.every(row=>plain(row.at(-1))==='三方展开 平台展开'));assert.match(h.html(),/行间不相加/);h.c.liveDurationSet('durationGroup','platform');assert.match(h.html(),/点击“平台展开”/);const expand=[...h.html().matchAll(/onclick="([^"]+)"[^>]*>平台展开<\/button>/g)].at(-1);assert(expand);vm.runInNewContext(expand[1],{liveAnalysisAction:h.c.liveAnalysisAction});const groups=renderedTables(h.html()).find(t=>t.headers[0]==='平台');assert(groups);assert(groups.rows.length>0);assert.doesNotMatch(h.html(),/此处独立平台分组汇总尚未接入/);h.c.liveDurationSet('durationDetail','orders');const orders=renderedTables(h.html()).find(t=>t.headers[0]==='订单号');assert(orders);assert.equal(orders.rows.length,0);for(const header of ['系统 ID','平台','三方','方向','提交时间','成功时间','成功耗时'])assert(orders.headers.includes(header));assert.match(h.html(),/尚未提供对应时长条件的逐笔接口/);assert.deepEqual({calls:h.calls.length,serial:h.L.serial,results:JSON.stringify(h.L.results),direction:h.L.direction,from:h.L.from,to:h.L.to},before,'duration tabs only change local presentation');
 });
 
 test('restored waiting page conserves known bands plus unknown orders and retains cohort limits',async()=>{
@@ -519,10 +519,11 @@ test('provider catalog options do not wait for order aggregation and multiselect
  assert.equal(h.L.loading,true);assert.match(h.nodes.get('liveFilters').innerHTML,/Previously mapped pay/);assert.equal(h.L.providerOptionsBusy,false);h.c.liveSetMultiOption('provider',{value:'Previously mapped pay',checked:true});assert.deepEqual(Array.from(h.L.multi.provider),['Previously mapped pay']);assert.match(h.nodes.get('liveFilters').innerHTML,/搜索三方/);pending.resolve(aggregate());await settle();
 });
 
-test('team, system and platform selections retain each other and default systems to all',async()=>{
+test('valid team system and platform selections retain each other while candidates exclude other teams',async()=>{
+ const p1={...P,team:'M8'};
  const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'M8 platform',source:'NEW_AR',team:'M8'};
  const p3={...P,id:'33333333-3333-4333-8333-333333333333',name:'Other platform',source:'AR',team:'Other'};
- const h=await ready({platforms:[P,p2,p3]});
+ const h=await ready({platforms:[p1,p2,p3]});
  assert.equal(h.L.source,'all');assert.deepEqual(Array.from(h.L.multi.source),[]);
  h.c.liveSetMultiOption('team',{value:'M8',checked:true});
  h.c.liveSetMultiOption('source',{value:'AR',checked:true});
@@ -532,7 +533,7 @@ test('team, system and platform selections retain each other and default systems
  await settle();
  assert.deepEqual(Array.from(h.L.multi.source).sort(),['AR','NEW_AR']);
  assert.deepEqual(Array.from(h.L.multi.platform).sort(),[P.id,p2.id].sort());
- const html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/M8 platform/);assert.match(html,/Other platform/);
+ const html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/M8 platform/);assert.doesNotMatch(html,/Other platform/);
 });
 
 test('provider KPI comparisons use the same direction and distinguish money differences from percentage points',async()=>{
@@ -856,7 +857,7 @@ test('overview discovers report-only teams across countries and reads them witho
  const before=h.calls.length;h.c.liveSetMultiOption('team',{value:'胖虎',checked:true});assert.equal(h.L.country,'巴西');h.c.liveQuery();await settle();
  const calls=h.calls.slice(before);assert(calls.some(q=>q.action==='reportSummary'));assert(!calls.some(q=>['aggregate','details','providerOptions'].includes(q.action)));
  assert.match(h.html(),/BET6867/);assert.match(h.html(),/Google 表格 → Supabase/);assert.match(h.html(),/500\.00/);assert.doesNotMatch(h.html(),/df-collect|df-payout/,'report-only data never paints misleading zero-order cards');assert.match(h.nodes.get('liveFilters').innerHTML,/1 个仅日报 \/ 配置平台/);
- h.c.setPage('time');await settle();assert.match(h.html(),/日报未提供|日报.*无法|源日报/);const n=h.calls.filter(q=>q.action==='reportSummary').length;h.c.setPage('overview');await settle();assert.match(h.html(),/点击查询/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,n,'returning to overview must not issue a report read');await h.c.liveQuery();await settle();assert.match(h.html(),/BET6867/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,n+1,'the explicit query refreshes the exact report scope once');
+ h.c.setPage('time');await settle();assert.match(h.html(),/日报未提供|日报.*无法|源日报/);const n=h.calls.filter(q=>q.action==='reportSummary').length;h.c.setPage('overview');await settle();assert.match(h.html(),/BET6867/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,n,'returning to a report-only overview restores its exact result without a report read');await h.c.liveQuery();await settle();assert.match(h.html(),/BET6867/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,n+1,'the explicit query refreshes the exact report scope once');
 });
 test('incomplete report read cannot remove already loaded native order summaries',async()=>{
  const report={name:P.name,country:P.country,team:'M8',system:'REPORT',dataset:'volume',rawCountry:P.country,rawPlatform:P.name,directions:['charge'],records:1,provenance:{kind:'google_sheets'}};
@@ -943,4 +944,40 @@ test('analysis navigation hides only the three retired entries and daily perform
  const h=await ready();h.c.state.navGroup='analysis';h.c.render();const nav=h.nodes.get('nav').innerHTML;for(const page of ['orders','collection','payout'])assert(!nav.includes('setPage(\''+page+'\')'));
  h.c.setPage('provider_daily');await settle();assert.equal(h.L.direction,'charge');assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/data-multi="direction"/);h.c.liveSet('direction','withdraw');assert.equal(h.L.direction,'withdraw');h.c.liveSet('direction','all');assert.equal(h.L.direction,'withdraw');h.c.liveReset();await settle();assert.equal(h.L.direction,'charge');
  h.c.setPage('providers');await settle();assert.equal(h.L.direction,'charge');h.c.setPage('provider_payout');await settle();assert.equal(h.L.direction,'withdraw');assert(h.c.pages.some(p=>p[0]==='orders'),'internal drilldown capabilities remain available');
+});
+
+test('platform candidates intersect team country and system and prune only invalid downstream selections',async()=>{
+ const platforms=[{...P,id:'m8-ar',name:'M8 India AR',team:'M8',source:'ar'},
+  {...P,id:'m8-new',name:'M8 India New',team:'M8',source:'newar'},
+  {...P,id:'m8-br',name:'M8 Brazil',team:'M8',country:'巴西',currency:'BRL',source:'ar'},
+  {...P,id:'crab',name:'XX5',team:'红膏蟹',country:'红膏蟹',source:'game66'},
+  {...P,id:'hk',name:'HK ONLY',team:'香港',country:'香港',source:'game66'}];
+ const h=await ready({reports:true,platforms});
+ const control=key=>h.nodes.get('liveFilters').innerHTML.match(new RegExp('<details[^>]+data-multi="'+key+'"[^]*?</details>'))?.[0]||'';
+ h.c.liveSet('team','M8');h.c.liveSet('source','ar');
+ assert.match(control('platform'),/M8 India AR/);assert.doesNotMatch(control('platform'),/M8 India New|XX5|HK ONLY|M8 Brazil/);
+ assert.match(control('source'),/AR系统/);assert.doesNotMatch(control('source'),/AA包网/);
+ h.c.liveSet('platform','m8-ar');h.c.liveSetMultiOption('team',{value:'红膏蟹',checked:true});
+ assert.equal(h.L.source,'ar');assert.equal(h.L.platform,'m8-ar','valid selected platform is retained when team range widens');
+ assert.doesNotMatch(control('platform'),/XX5/,'system still intersects the widened team scope');
+ h.c.liveSet('source','game66');assert.equal(h.L.platform,'all');assert.deepEqual(Array.from(h.L.multi.platform),[]);assert.match(control('platform'),/XX5/);assert.doesNotMatch(control('platform'),/HK ONLY|M8 India/);
+ h.c.liveSet('platform','crab');h.c.liveSet('team','M8');assert.equal(h.L.source,'all','unavailable system is cleared');assert.equal(h.L.platform,'all');assert.doesNotMatch(control('platform'),/XX5|HK ONLY/);
+ h.c.liveSet('platform','hk');assert.equal(h.L.platform,'all','stale hidden platform selections cannot survive dependency reconciliation');
+ h.c.liveSet('country','巴西');assert.equal(h.L.team,'M8');assert.match(control('platform'),/M8 Brazil/);assert.doesNotMatch(control('platform'),/M8 India|XX5|HK ONLY/);
+ assert.equal(h.L.catalog.length,5);assert.deepEqual(h.L.catalog.map(p=>p.id),platforms.map(p=>p.id),'authorized catalog is untouched');
+});
+
+test('dependency options preserve a restricted authorized catalog and never recreate ungranted team platforms',async()=>{
+ const only={...P,id:'only',name:'AUTHORIZED ONLY',team:'红膏蟹',country:'红膏蟹',source:'game66'},h=await ready({reports:true,platforms:[only]});
+ h.c.liveSet('team','红膏蟹');const html=h.nodes.get('liveFilters').innerHTML;
+ assert.match(html,/AUTHORIZED ONLY/);assert.doesNotMatch(html,/XX5|XX6|HK ONLY|M8 India/);assert.equal(h.L.catalog.length,1);
+ h.c.liveSet('country','巴西');assert.equal(h.L.country,'印度','country outside the selected authorized team is not accepted');
+});
+
+test('filter coverage distinguishes directory membership from returned transaction platform coverage',async()=>{
+ const missing={...P,id:'missing',name:'REGISTERED WITHOUT DATA'},h=await ready({platforms:[P,missing]});
+ h.L.queryPlatforms=[P,missing];h.L.results=[completeAggregate(P,20,10),{platform:missing,summary:[],groups:{}}];h.L.dirty=false;h.L.overviewQueried=true;h.c.render();
+ let html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/2 目录平台/);assert.match(html,/所选日期有订单数据 1 平台/);
+ h.L.queryFailures=[{id:'missing'}];h.c.render();assert.match(h.nodes.get('liveFilters').innerHTML,/已返回有订单数据 1 平台/);
+ h.c.liveSet('from','2026-09-20T00:00:00');html=h.nodes.get('liveFilters').innerHTML;assert.doesNotMatch(html,/所选日期有订单数据|已返回有订单数据/,'old coverage is hidden after dates change');
 });

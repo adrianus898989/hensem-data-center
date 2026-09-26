@@ -632,7 +632,7 @@ test('country interval summaries render grouped totals without per-order drilldo
   input.payloads[0].payload.rows.push({...input.payloads[0].payload.rows[0],provider:'Win2Pay跑分'});
   const html=render(input);
   assertAligned(html);
-  assert.equal((html.match(/>Win2Pay跑分<\/td>/g)||[]).length,1);
+  assert.equal((html.match(/>Win2Pay<\/td>/g)||[]).length,1);
   assert.doesNotMatch(html,/>查看<|>详情<|会员 ID|订单号|三方订单号/);
   assert.match(html,/当前页汇总/);
   assert.match(html,/全部汇总/);

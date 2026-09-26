@@ -16,6 +16,7 @@
  root.HensemLiveWithdrawPages={create(ctx){
   const {L,E,C,R,N,box,table,request,render}=ctx;
   const S={data:null,error:'',loading:false,dirty:false,serial:0,view:'auto',platforms:[],account:'',sort:'total',asc:false,daily:false,page:1,size:20,open:false,search:'',reason:null,reasonData:null,reasonError:'',reasonBusy:false,reasonSerial:0,reasonPage:1,reasonLabel:'',reasonQuery:'',reasonTrigger:null,originalNote:'',originalNoteTitle:'驳回原文',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false};
+  const initialState={...S,platforms:[]};
   const jsArgument=value=>JSON.stringify(String(value??'')).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const sourceNote=(value,empty='（源备注为空）',title='驳回原文',label='')=>{const full=cleanNote(value)||empty,preview=label||(full.length>96?full.slice(0,96)+'…':full);return '<button type="button" class="withdraw-source-note" title="点击查看完整原文" onclick="withdrawReasonOriginal('+jsArgument(full)+','+jsArgument(title)+')">'+E(preview)+'</button>'};
   const reasonCache=new Map();
@@ -152,7 +153,10 @@
   root.withdrawNoteSample=()=>{S.noteSample=true;render()};
   root.withdrawNoteClose=()=>{if(S.noteSaving)return;S.note=null;S.noteSample=false;S.noteError='';render()};
   root.withdrawNoteSave=async()=>{if(!S.note||S.noteSaving||!S.data?.canWriteNotes)return;const target=S.note;S.noteSaving=true;S.noteError='';render();try{const saved=await request({action:'withdrawNote',date:target.date,country:target.storageCountry||target.country,platform:target.storagePlatform,reason:S.noteDraft,expectedVersion:target.expectedVersion});if(S.note!==target)return;S.data.notes=[...(S.data.notes||[]).filter(n=>!(n.date===saved.date&&n.platform===saved.platform)),saved];S.noteSaving=false;S.note=null;render()}catch(e){if(S.note!==target)return;S.noteSaving=false;S.noteError=e.message||'备注保存失败，输入已保留';render()}};
-  return {render:draw,load,state:S,query,cancel:()=>{reasonCache.clear();S.serial++;S.reasonSerial++;S.loading=false;S.reasonBusy=false;S.reason=null;S.data=null;S.note=null;S.noteSample=false}};
+  function capture(){return {...S,platforms:S.platforms.slice(),reasonTrigger:null,loading:false,reasonBusy:false,error:S.loading?'读取已暂停，点击查询继续':S.error,reasonError:S.reasonBusy?'明细读取已暂停，点击重试继续':S.reasonError};}
+  function pause(){S.serial++;S.reasonSerial++;S.loading=false;S.reasonBusy=false;reasonCache.clear();}
+  function restore(saved){pause();const serial=S.serial,reasonSerial=S.reasonSerial;for(const key of Object.keys(S))delete S[key];Object.assign(S,saved||initialState,{serial,reasonSerial,platforms:(saved?.platforms||[]).slice(),reasonTrigger:null,loading:false,reasonBusy:false});}
+  return {capture,pause,restore,render:draw,load,state:S,query,cancel:()=>{reasonCache.clear();S.serial++;S.reasonSerial++;S.loading=false;S.reasonBusy=false;S.reason=null;S.data=null;S.note=null;S.noteSample=false}};
  }};
  if(typeof module!=='undefined')module.exports={addDay,duration,cleanNote,decodeNote};
 })(typeof window!=='undefined'?window:globalThis);

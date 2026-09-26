@@ -6,7 +6,7 @@ const feed=(x={})=>({dataset:'volume',system:'REPORT',country:'胖虎巴西',raw
 const metrics=(amount,count)=>({amount,count,successAmount:null,successCount:null});
 const summary=(f,x={})=>({...f,rawCountry:f.country,rawPlatform:f.platform,country:f.country,currency:null,status:'received',updatedAt:'2026-09-25T00:00:00Z',records:2,groups:[{grain:'provider',records:2,metrics:metrics(300,3),metricCoverage:{amount:2,count:2},providers:[{provider:'ONE',records:1,metrics:metrics(100,1)},{provider:'TWO',records:1,metrics:metrics(200,2)}],daily:[{date:'2026-09-24',records:2,metrics:metrics(300,3),providers:[{provider:'ONE',records:1,metrics:metrics(100,1)},{provider:'TWO',records:1,metrics:metrics(200,2)}]}]}],...x});
 function fixture({catalog=[],withdrawCatalog=[],feeds=[feed()],respond,onCatalog,payoutConfig}={}){
- const calls=[],navigation=[],L={catalog,withdrawCatalog,country:'巴西',direction:'all',from:'2026-09-24T00:00:00',to:'2026-09-25T23:59:59',multi:{team:[],platform:[],source:[]}},context={HensemLivePayoutConfig:payoutConfig,setPage:page=>navigation.push(page)};let clock=Date.now();context.Date=class extends Date{static now(){return clock}};context.window=context;vm.runInNewContext(source,context);let renders=0;
+ const calls=[],navigation=[],L={catalog,withdrawCatalog,country:'巴西',direction:'all',from:'2026-09-24T00:00:00',to:'2026-09-25T23:59:59',multi:{team:[],platform:[],source:[]}},context={HensemLivePayoutConfig:payoutConfig,setPage:page=>navigation.push(page)};let clock=Date.now();context.Date=class extends Date{static now(){return clock}};context.window=context;vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-provider-aliases.js'),'utf8'),context);vm.runInNewContext(source,context);let renders=0;
  const page=context.HensemLiveReportData.create({L,E:escape,N:n=>Number(n).toFixed(2),C:n=>String(n),R:(n,d)=>(n/d*100).toFixed(2)+'%',render:()=>renders++,request:async q=>{calls.push(plain(q));return q.action==='collectedData'?(onCatalog?onCatalog(q):{rows:feeds}):respond?respond(q):{feeds:q.feeds.map(f=>summary(f))}}});return {page,L,calls,context,navigation,renders:()=>renders,advance:ms=>{clock+=ms}};
 }
 const scope={country:'胖虎巴西',direction:'all',from:'2026-09-24T00:00:00',to:'2026-09-25T23:59:59'};
@@ -76,6 +76,17 @@ test('not received and incomplete metrics remain missing, zero remains a real ze
 
 test('provider filtering only applies to complete provider groups and uses null-preserving sums',async()=>{
  const f=fixture({respond:q=>({feeds:q.feeds.map(x=>summary(x,{groups:[summary(x).groups[0],{...summary(x).groups[0],grain:'platform'}]}))})});await f.page.load({...scope,direction:'charge',providers:['ONE']});const html=f.page.render({page:'providers'});assert.match(html,/100\.00/);assert.doesNotMatch(html,/300\.00/);assert.match(html,/此来源粒度无法按三方筛选/);assert.deepEqual(plain(f.page.providers()),['ONE','TWO']);assert.doesNotMatch(html,/成功率/);
+});
+test('report provider aliases merge once in totals and daily expansion with null-preserving metrics',async()=>{
+ const providers=[{provider:'RushPay唤醒',records:1,metrics:metrics(100,1)},{provider:'RUSHPAY跑分',records:1,metrics:metrics(200,2)},{provider:'T3Pay唤醒',records:1,metrics:metrics(50,1)},{provider:'3TPay',records:1,metrics:metrics(null,1)}];
+ const group={grain:'provider',records:4,metrics:metrics(null,5),providers,daily:[{date:'2026-09-24',records:4,metrics:metrics(null,5),providers}]};
+ const f=fixture({feeds:[feed({country:'印度',rawCountry:'IN',team:'M8'})],respond:q=>({feeds:q.feeds.map(x=>summary(x,{groups:[group]}))})});
+ await f.page.load({...scope,country:'印度',direction:'charge'});const sourceBefore=plain(f.page.state.result),html=f.page.render({page:'providers'});
+ vm.runInNewContext(html.match(/onclick="(liveReportToggle\([^]*?\))"/)[1].replaceAll('&quot;','"').replaceAll('&#39;',"'").replaceAll('&amp;','&'),f.context);
+ let expanded=f.page.render({page:'providers'});assert.equal((expanded.match(/<td>RushPay<\/td>/g)||[]).length,1);assert.match(expanded,/>300\.00</);assert.match(expanded,/<td>T3Pay<\/td>/);assert.match(expanded,/<td>3TPay<\/td>/);
+ const before=f.calls.length;f.context.liveReportTab([...f.page.state.expanded][0],'daily');expanded=f.page.render({page:'providers'});assert.match(expanded,/查看 3 个三方/);assert.equal((expanded.match(/<td>RushPay<\/td>/g)||[]).length,1);assert.equal(f.calls.length,before);assert.deepEqual(plain(f.page.state.result),sourceBefore);
+ assert.deepEqual(plain(f.page.providers()),['RushPay','T3Pay','3TPay']);
+ await f.page.load({...scope,country:'印度',direction:'charge',providers:['RushPay']});const selected=f.page.render({page:'providers'});assert.match(selected,/>300\.00</);assert.doesNotMatch(selected,/>350\.00</);
 });
 
 test('cancel preserves completed data for page navigation and ignores stale in-flight responses',async()=>{
@@ -263,4 +274,13 @@ test('intake uses the same team/country display but keeps exact source keys for 
  const f=fixture({catalog:[{id:'m8',name:'SAME',country:'巴西',team:'M8',source:'ar'}],withdrawCatalog:[{name:'SAME',country:'胖虎巴西',team:'胖虎'}]});vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-collected-data.js'),'utf8'),f.context);
  const calls=[],page=f.context.HensemLiveCollectedData.create({L:f.L,E:escape,C:String,N:String,render:()=>{},table:(heads,rows)=>'<table><thead>'+heads.map(x=>'<th>'+x+'</th>').join('')+'</thead>'+rows.map(row=>'<tr>'+row.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</table>',box:(title,body)=>'<h2>'+title+'</h2>'+body,request:async q=>{calls.push(plain(q));return q.operation==='catalog'?{rows:[feed({name:'SAME',rawPlatform:'SAME'})]}:{total:0,rows:[]}}});
  await page.load();let html=page.render();assert.match(html,/2 个平台/);assert.doesNotMatch(html,/<option value="胖虎巴西"/);assert.match(html,/<td>胖虎<\/td><td>巴西<\/td><td>SAME<\/td>/);f.context.collectedSet('team','胖虎');html=page.render();assert.match(html,/当前 1 个/);f.context.collectedOpen(0,1,'charge');await new Promise(setImmediate);assert.equal(calls.at(-1).country,'胖虎巴西');assert.equal(calls.at(-1).platform,'SAME');assert.equal(calls.at(-1).direction,'charge');
+});
+
+test('tab snapshot restores source report scope, expanded rows and tab choices without a new read',async()=>{
+ const f=fixture();await f.page.load(scope);const result=f.page.state.result;f.page.state.expanded.add('saved');f.page.state.tabs.set('saved','daily');const saved=f.page.capture();
+ await f.page.load({...scope,direction:'withdraw'},true);f.advance(120000);const reads=f.calls.length,serial=f.page.state.serial;f.page.restore(saved);
+ assert.equal(f.page.state.result,result);assert.equal(f.page.state.scope.direction,'all');assert(f.page.state.expanded.has('saved'));assert.equal(f.page.state.tabs.get('saved'),'daily');assert(f.page.state.serial>serial);f.page.render();assert.equal(f.calls.length,reads);
+});
+test('restoring a paused source report cannot accept its old response or reuse an unrelated completed scope',async()=>{
+ let resolve,pause=false;const f=fixture({respond:q=>pause?new Promise(r=>resolve=()=>r({feeds:q.feeds.map(summary)})):{feeds:q.feeds.map(summary)}});await f.page.load(scope);pause=true;const pending=f.page.load({...scope,direction:'withdraw'},true);await new Promise(setImmediate);const saved=f.page.capture();f.page.restore(saved);assert.match(f.page.state.error,/暂停/);assert.equal(f.page.state.loading,false);resolve();await pending;assert.equal(f.page.state.result,null);f.page.cancel();assert.equal(f.page.state.result,null);
 });

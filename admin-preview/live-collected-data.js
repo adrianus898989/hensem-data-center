@@ -9,6 +9,7 @@
  const normalizeDirection=value=>({recharge:'charge',deposit:'charge','代收':'charge',payout:'withdraw','代付':'withdraw',config:'payout_config'})[value]||value;
  root.HensemLiveCollectedData={create({L,E,C,N,table,box,request,render}){
   const S={rows:[],loaded:false,busy:false,error:'',serial:0,team:'all',country:'all',query:'',page:1,detail:null,detailRows:null,detailError:'',detailBusy:false,detailSerial:0,offset:0,from:'',to:''};
+  const initialState={...S};
   const identity=row=>root.HensemLiveReportData?.normalizeIdentity(row)||row;
   const identityKey=row=>root.HensemLiveReportData?.identityKey(row)||JSON.stringify([row.identityCountry??row.country,row.name]);
   const platformRows=()=>[...(L.catalog||[]),...(L.withdrawCatalog||[])].filter(p=>p.name&&!['胖虎巴西','BR_PANGHU','PANGHU BRAZIL'].includes(String(p.name).toUpperCase())).map(p=>({...p,dataset:'catalog',name:p.name,country:p.country,rawCountry:p.rawCountry??p.country,rawPlatform:p.sourceName||p.name,team:p.team||'待归类',system:p.source,platformId:p.id}));
@@ -48,6 +49,6 @@
   root.collectedDate=(key,value)=>{if(['from','to'].includes(key)&&/^\d{4}-\d{2}-\d{2}$/.test(value)){S[key]=value;S.detailSerial++;S.detailBusy=false;S.detailRows=null;render()}};
   root.collectedQuery=()=>detailLoad();root.collectedDetailPage=delta=>{S.offset=Math.max(0,S.offset+delta*50);detailLoad(false)};
   root.collectedRefresh=()=>load(true);
-  return {load,render:draw,state:S};
+  return {load,render:draw,state:S,clear(){const serial=S.serial+1,detailSerial=S.detailSerial+1;Object.assign(S,initialState,{rows:[],serial,detailSerial});}};
  }};
 })(typeof window!=='undefined'?window:globalThis);

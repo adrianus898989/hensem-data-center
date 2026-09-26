@@ -117,7 +117,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const currentSession = { user: { id: userId }, access_token: 'offline-host-access', refresh_token: 'offline-host-refresh' };
   const box = { exports: {} };
   const window = {
-    location: { origin: 'https://app.offline.invalid' },
+    location: { origin: 'https://app.offline.invalid', ...options.location },
     addEventListener: (name, callback) => listeners.set(name, callback), removeEventListener: name => listeners.delete(name),
     setInterval: callback => { intervalCheck = callback; return 1; }, clearInterval: () => {},
   };
@@ -359,4 +359,17 @@ test('available local sample inline scripts parse and use no eval/new Function',
     }
     visit(source);
   }
+});
+
+test('bookmarked page reaches the authorized iframe while denied accounts never load it', async () => {
+  const location={pathname:'/hensem-data-center/',hash:'#owner-admin-preview/provider_payout',search:'?secret=synthetic-query-secret'};
+  const h=componentHarness('offline-bookmark',{location});await flush();
+  const iframe=findElement(h.draw(),'iframe');assert(iframe);assert.equal(iframe.props.sandbox,'allow-scripts allow-downloads');
+  const script=scripts(iframe.props.srcDoc).find(text=>text.includes('window.HENSEM_PRODUCTION=true'));assert(script);
+  const context=vm.createContext({parent:{postMessage(){throw Error('URL helper must not request data')}},addEventListener(){},setTimeout,clearTimeout});
+  vm.runInContext('window=globalThis',context);vm.runInContext(script,context);
+  assert.equal(context.hensemAdminInitialPage,'provider_payout');assert.equal(context.hensemAdminPageUrl('providers'),'https://app.offline.invalid/hensem-data-center/#owner-admin-preview/providers');
+  assert.doesNotMatch(iframe.props.srcDoc,/synthetic-query-secret|offline-host-access|offline-host-refresh/);h.dispose();
+  const denied=componentHarness('offline-denied-bookmark',{location,canView:false,role:'viewer'});await flush();
+  assert.equal(denied.calls.length,0);assert(!findElement(denied.draw(),'iframe'));denied.dispose();
 });

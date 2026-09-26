@@ -38,6 +38,8 @@ function currencyFreeAliasKey(value: string): string {
 function countryKey(value?: string): string {
   const raw = normalizeCell(value || "");
   if (!raw) return "";
+  // Owner-confirmed team geography. This is name matching only, never access scope.
+  if (/^(?:IN|INDIA|香港|红膏蟹|紅膏蟹|HK_TEAM|HONG_KONG|GAME66_HK|RED_CRAB|GAME66_RED_CRAB)$/i.test(raw)) return "印度";
   if (raw.includes("胖虎巴西")) return "巴西";
   if (raw.includes("巴西")) return "巴西";
   if (raw.includes("巴基斯坦")) return "巴基斯坦";
@@ -56,6 +58,14 @@ function countryKey(value?: string): string {
   return raw.replace(/原生|盘口|通道|国家|地区/g, "").trim();
 }
 
+// Explicit trailing business types only. Keep digits, QR/channel suffixes and
+// internal words intact; the source's type field remains separate from its name.
+export const THIRD_PARTY_TYPE_SUFFIX_PATTERN = String.raw`(?:\s*[-_‐‑‒–—﹘﹣－]?\s*(?:跑分|唤醒)|\s*[-_‐‑‒–—﹘﹣－]?\s*[（(【\[]\s*(?:跑分|唤醒)\s*[）)】\]])+$`;
+export function stripThirdPartyTypeSuffix(value: string): string {
+  const raw = normalizeCell(value);
+  return raw.replace(new RegExp(THIRD_PARTY_TYPE_SUFFIX_PATTERN), "").trim() || raw;
+}
+
 function stripBusinessSuffix(value: string): string {
   const raw = normalizeCell(value);
   if (!raw) return raw;
@@ -70,6 +80,15 @@ function stripBusinessSuffix(value: string): string {
 // without deleting punctuation or unconfirmed version numbers. A dash may use
 // spreadsheet typography and spaces around it, but it must still be present.
 const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
+  // Owner-confirmed 2026-09-26. T3Pay and 3TPay are different providers.
+  ["t3pay", "T3Pay"],
+  ["rushpay", "RushPay"],
+  ["rushpay-qr", "RushPay"],
+  ["lovepay", "WPay"],
+  ["haoxpay-qr", "WPay"],
+  ["free2pay", "FreePay"],
+  ["freepay", "FreePay"],
+  ["ttpay", "TTPay"],
   ["starpay", "VstarPay"],
   // Confirmed across collection and payout by the owner on 2026-09-25.
   ["vstarpay", "VstarPay"],
@@ -131,9 +150,10 @@ const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
   ["arbpay2inr-upi", "UPI-QR"],
 ]);
 export function confirmedIndiaThirdPartyAlias(value: string, country?: string): string {
-  const scope = normalizeCell(country || "");
+  const rawScope = normalizeCell(country || "");
+  const scope = /^(?:香港|红膏蟹|紅膏蟹|HK_TEAM|HONG_KONG|GAME66_HK|RED_CRAB|GAME66_RED_CRAB)$/i.test(rawScope) ? "印度" : rawScope;
   if (!/^(?:IN|INDIA|印度(?:线下)?(?:盘口)?)$/i.test(scope)) return "";
-  const key = normalizeCell(value).toLowerCase().replace(/\s*[-‐‑‒–—﹘﹣－]\s*/g, "-");
+  const key = stripThirdPartyTypeSuffix(value).toLowerCase().replace(/\s*[-‐‑‒–—﹘﹣－]\s*/g, "-");
   return CONFIRMED_INDIA_CHANNEL_ALIASES.get(key) || "";
 }
 
@@ -736,9 +756,9 @@ function confirmedUserThirdPartyAlias(value: string, country?: string): string {
 // User-confirmed display aliases. Keep version numbers and channel suffixes
 // intact unless this exact spelling was explicitly confirmed as equivalent.
 const CONFIRMED_DISPLAY_ALIASES: Record<string, string> = {
-  win2pay跑分: "Win2Pay跑分",
-  aiv3pay跑分: "AIV3Pay跑分",
-  t3pay唤醒: "T3Pay唤醒",
+  win2pay: "Win2Pay", win2pay跑分: "Win2Pay",
+  aiv3pay: "AIV3Pay", aiv3pay跑分: "AIV3Pay",
+  t3pay: "T3Pay", t3pay唤醒: "T3Pay",
   at2pay唤醒: "ATPay",
   atpay唤醒: "ATPay",
   atpay: "ATPay",
@@ -748,8 +768,10 @@ export function canonicalThirdPartyName(value: string, country?: string): string
   const raw = normalizeCell(value);
   if (!raw) return "未知三方";
 
-  const strippedRaw = stripBusinessSuffix(raw);
-  const confirmedDisplayAlias = CONFIRMED_DISPLAY_ALIASES[strippedRaw.toLowerCase().replace(/\s+/g, "")];
+  const businessStripped = stripBusinessSuffix(raw);
+  const strippedRaw = stripThirdPartyTypeSuffix(businessStripped);
+  const confirmedDisplayAlias = CONFIRMED_DISPLAY_ALIASES[businessStripped.toLowerCase().replace(/\s+/g, "")]
+    || CONFIRMED_DISPLAY_ALIASES[strippedRaw.toLowerCase().replace(/\s+/g, "")];
   if (confirmedDisplayAlias) return confirmedDisplayAlias;
   const confirmedIndiaAlias = confirmedIndiaThirdPartyName(strippedRaw, country);
   if (confirmedIndiaAlias) return confirmedIndiaAlias;

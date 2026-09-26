@@ -13,6 +13,7 @@ import ProviderAnomalyDashboard from "./ProviderAnomalyDashboard";
 import AdminControlCenter from "./AdminControlCenter";
 import OwnerAdminPreview from "./OwnerAdminPreview";
 import { readAdminPreviewAccess } from "@/lib/adminPreviewClient";
+import { adminPreviewPageFromHash } from "@/lib/adminLiveBridge";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import { canOpenAdminCenter, ensureDashboardSession, hasDashboardPermission, normalizedManagementPermissions, type DashboardSession } from "@/lib/dashboardAuthClient";
 import { aggregateAutoWithdrawByPlatform as aggregateByPlatform, summarizePreviousDay, percentagePointChange, formatPercentagePointChange } from "@/lib/autoWithdrawComparison";
@@ -934,7 +935,7 @@ export default function Dashboard() {
     return()=>{stop=true;window.clearInterval(timer)};
   }, [profile?.active, profile?.auth_user_id]);
   useEffect(() => {
-    const followPreviewLink = () => { if (profile?.active && (isOwner || canDetailedPreview) && window.location.hash === "#owner-admin-preview") setActiveModule("owner-admin-preview"); };
+    const followPreviewLink = () => { if (profile?.active && (isOwner || canDetailedPreview) && adminPreviewPageFromHash(window.location.hash)!==null) setActiveModule("owner-admin-preview"); };
     followPreviewLink(); window.addEventListener("hashchange", followPreviewLink);
     return () => window.removeEventListener("hashchange", followPreviewLink);
   }, [profile?.active, isOwner, canDetailedPreview]);
