@@ -1,0 +1,57 @@
+/* Synthetic-only payout report checks. No database, credentials or live orders. */
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const folder=path.join(__dirname,'../admin-preview');
+const moneyKeys=['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount'];
+const countKeys=['all_count','success_count','created_success_count','pending_count','failed_count','rejected_count','unknown_count'];
+const E=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const N=value=>value==null?'—':Number(value).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const C=value=>Number(value||0).toLocaleString('en-US');
+const R=(n,d)=>d?((Number(n)/Number(d))*100).toFixed(2)+'%':'—';
+function plus(rows){return Object.fromEntries([...moneyKeys,...countKeys].map(key=>[key,rows.some(r=>r[key]===null)?null:rows.reduce((sum,r)=>sum+Number(r[key]||0),0)]))}
+function combine(rows,keys){const groups=new Map();for(const row of rows){const id=JSON.stringify(keys.map(key=>row[key]));if(!groups.has(id))groups.set(id,[]);groups.get(id).push(row)}return [...groups.values()].map(items=>({...Object.fromEntries(keys.map(key=>[key,items[0][key]])),...plus(items),items}))}
+function table(headers,rows,css='',footers=[]){const cells=(row,tag)=>'<tr>'+row.map(c=>'<'+tag+'>'+c+'</'+tag+'>').join('')+'</tr>';return '<div class="'+css+'"><table><thead>'+cells(headers,'th')+'</thead><tbody>'+rows.map(row=>cells(row,'td')).join('')+'</tbody><tfoot>'+footers.map(row=>cells(row,'td')).join('')+'</tfoot></table></div>'}
+function fixture(orders){
+ let html='',direction='withdraw',networkCalls=0;const root={Intl,Date,fetch(){networkCalls++;throw Error('Expanding a report must not request data')}};root.window=root;
+ vm.createContext(root);for(const name of ['live-provider-aliases.js','live-comparison.js','live-provider-summary.js'])vm.runInContext(fs.readFileSync(path.join(folder,name),'utf8'),root,{filename:name});
+ const L={country:'印度',currency:'INR',from:'2026-09-25T00:00:00',to:'2026-09-25T23:59:59',queryNow:Date.parse('2026-09-26T00:00:00Z'),results:[{platform:{id:'platform-a',country:'印度',currency:'INR',timezone:'Asia/Kolkata'}}],comparisonResults:[],comparisonStatus:'idle',feeLookupRows:[],localPage:1,localSize:20,workorders:null};
+ const ctx={L,E,N,C,R,plus,combine,groupRows:()=>orders,table,box:(title,body)=>'<section><h2>'+E(title)+'</h2>'+body+'</section>',pager:()=>'',providerCell:r=>E(r.provider),feeForRow:()=>'',ensureFeeLookup(){networkCalls++;throw Error('Already loaded rates should be reused')},openDrawer(){},render(){html=root.HensemProviderSummary.render(ctx,direction)}};
+ ctx.render();return {root,L,api:root.HensemProviderSummary,html:()=>html,networkCalls:()=>networkCalls,render(flow=direction){direction=flow;ctx.render()}};
+}
+function order(platformId,source,successAmount,successCount,other={}){return {provider:'SyntheticPay',platformId,platform:'Same displayed platform',source,currency:'INR',direction:'withdraw',all_amount:10000,all_count:20,success_amount:successAmount,success_count:successCount,created_success_count:2,pending_amount:500,pending_count:3,...other}}
+const plain=html=>html.replace(/<[^>]*>/g,'').trim();
+function breakdown(html){const inner=html.match(/<div class="provider-platform-breakdown">([\s\S]*?)<\/div><\/td>/)?.[1];assert(inner,'expanded platform table is rendered');const headers=[...inner.matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]));const rows=[...inner.match(/<tbody>([\s\S]*?)<\/tbody>/)[1].matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td>([\s\S]*?)<\/td>/g)].map(c=>plain(c[1])));return rows.map(row=>Object.fromEntries(headers.map((header,i)=>[header,row[i]])))}
+
+test('payout expands each platform with independent success amount/count shares and no extra reads',()=>{
+ const h=fixture([order('platform-a','ar',900,3),order('platform-b','newar',100,7),order('platform-c','ar',50000,500,{direction:'charge'})]);
+ assert.match(h.html(),/代付三方汇总 · 取款未到账工单/);assert.match(h.html(),/代付中金额/);assert.match(h.html(),/代付中笔数/);assert.match(h.html(),/代付创建金额/);assert.match(h.html(),/代付创建笔数/);assert.match(h.html(),/aria-expanded="false"/);
+ h.root.providerSummaryToggle(0);assert.equal(h.networkCalls(),0);assert.match(h.html(),/aria-expanded="true"/);
+ const rows=breakdown(h.html());assert.equal(rows.length,2,'same display name stays separated by stable platform/source identity');
+ const ar=rows.find(row=>row['包网来源']==='ar'),newar=rows.find(row=>row['包网来源']==='newar');
+ assert.equal(ar['成功金额'],'900.00');assert.equal(ar['金额占比'],'90.00%');assert.equal(ar['成功笔数'],'3');assert.equal(ar['笔数占比'],'30.00%');
+ assert.equal(newar['成功金额'],'100.00');assert.equal(newar['金额占比'],'10.00%');assert.equal(newar['成功笔数'],'7');assert.equal(newar['笔数占比'],'70.00%');
+ assert.equal(rows.reduce((sum,row)=>sum+Number(row['成功金额']),0),1000);assert.equal(rows.reduce((sum,row)=>sum+Number(row['成功笔数']),0),10);
+ h.root.providerSummaryToggle(0);assert.doesNotMatch(h.html(),/provider-platform-breakdown/);assert.equal(h.networkCalls(),0);
+});
+
+test('payout expansion state and workorder facts stay separate from collection reports',()=>{
+ const h=fixture([order('platform-a','ar',900,3),order('platform-a','ar',600,6,{direction:'charge'})]);
+ h.L.workorders={byProvider:[{provider:'SyntheticPay',direction:'withdraw',submittedAmount:111,submittedCount:3,successAmount:100,successCount:2,notReceivedAmount:11,notReceivedCount:1},{provider:'SyntheticPay',direction:'charge',submittedAmount:99999,submittedCount:999,successAmount:88888,successCount:888,notReceivedAmount:11111,notReceivedCount:111}],coverage:{complete:true,capturedPlatformDays:1,expectedPlatformDays:1}};
+ h.render();h.root.providerSummaryToggle(0);assert.match(h.html(),/>111\.00</);assert.doesNotMatch(h.html(),/>99,999\.00</);assert.equal(breakdown(h.html())[0]['成功金额'],'900.00');
+ h.render('charge');assert.match(h.html(),/aria-expanded="false"/);assert.doesNotMatch(h.html(),/provider-platform-breakdown/);
+ h.render('withdraw');assert.match(h.html(),/aria-expanded="true"/);assert.equal(breakdown(h.html())[0]['成功金额'],'900.00');assert.equal(h.networkCalls(),0);
+});
+
+test('confirmed UpiPay payout row supplies both percentage and per-order charge without an inactive fallback',()=>{
+ const h=fixture([]),row=order('platform-a','ar',1000,10,{provider:'UpiPay'});
+ const confirmed={scopeType:'country',country:'印度',provider:'UpiPay',sheetName:'印度线下',sourceRow:4,payoutFee:'2.50%',payoutSingleFee:'6'};
+ const inactive={...confirmed,sourceRow:47,payoutFee:'2.80%',status:'停用'};
+ const blankPlatform={...confirmed,scopeType:'platform',platform:row.platform,payoutFee:'',payoutSingleFee:''};
+ assert.equal(h.api.estimate(row,[inactive,blankPlatform,confirmed],'印度'),85);
+ assert.equal(h.api.feeCandidates(row,[inactive,blankPlatform,confirmed],'印度')[0],confirmed);
+ assert.equal(h.api.estimate(row,[inactive,blankPlatform],'印度'),null,'missing confirmed row must stay unmatched');
+});
+
+test('missing payout amounts stay unknown in platform shares while valid counts still show',()=>{
+ const h=fixture([order('platform-a','ar',null,3),order('platform-b','newar',100,7)]);h.root.providerSummaryToggle(0);
+ const rows=breakdown(h.html());assert(rows.every(row=>row['金额占比']==='—'));assert.deepEqual(rows.map(row=>row['笔数占比']).sort(),['30.00%','70.00%']);assert.doesNotMatch(h.html(),/NaN|Infinity/);
+});

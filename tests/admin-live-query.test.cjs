@@ -403,3 +403,35 @@ test('bounded synthetic day conserves every full aggregate while details stay on
   assert.equal(d.total,size);assert.equal(d.rows.length,20);assert.equal(d.summary.length,0);
   t.diagnostic(`Offline PGlite synthetic ${size}-order day: aggregate ${aggregateMs}ms, count+page ${detailsMs}ms. Not a production latency claim.`);
 }));
+
+test('manual recharge classification uses explicit type and retains raw provider only in order details',async()=>rollback(async()=>{
+ await db.exec("insert into newar_detail_records(platform,dataset,source_id,order_number,provider,channel_type,currency,amount,status_code,status_group,created_at,success_at) values ('NEW-EXAMPLE','charge','MANUAL-SYS','MANUAL-ORDER',null,'ManualRecharge','NPR',298,'1','success','2026-09-19T10:00:00+05:45','2026-09-19T10:00:00+05:45'),('NEW-EXAMPLE','withdraw','EMPTY-WD','EMPTY-WD',null,'BANK','NPR',100,'1','success','2026-09-18T23:00:00+05:45','2026-09-19T01:00:00+05:45')");
+ const request=req({action:'aggregate',platformId:newar,startAt:'2026-09-19T00:00:00+05:45',endAt:'2026-09-20T00:00:00+05:45'});
+ const full=await call(request),compact=await call({...request,view:'providers'});
+ const clean=rows=>rows.map(({date,hour,bucket,...r})=>r).sort((a,b)=>JSON.stringify([a.direction,a.currency,a.provider]).localeCompare(JSON.stringify([b.direction,b.currency,b.provider])));assert.deepEqual(clean(compact.summary),clean(full.summary));assert.deepEqual(clean(compact.groups.provider),clean(full.groups.provider));
+ assert.equal(compact.groups.provider.find(r=>r.provider==='人工充值').success_count,1);
+ const manual=await call({...request,action:'details',providers:['人工充值'],status:'success'});assert.equal(manual.total,1);assert.equal(manual.rows[0].raw_provider,null);assert.equal(manual.rows[0].channel_type,'ManualRecharge');
+ const unknown=await call({...request,action:'details',providers:['未识别通道'],status:'success',direction:'withdraw'});assert.equal(unknown.total,1);assert.equal(unknown.rows[0].order_number,'EMPTY-WD');assert.equal(unknown.rows[0].provider,'未识别通道');
+ const created=await call({...request,action:'details',providers:['未识别通道'],status:'all',direction:'withdraw'});assert.equal(created.total,0);
+ assert(!JSON.stringify(compact).includes('raw_provider'));assert(!JSON.stringify(compact).includes('MANUAL-ORDER'));
+}));
+
+test('exact owner-confirmed manual orders preserve cross-day cohorts without reclassifying other empty channels',async()=>rollback(async()=>{
+ await db.exec(fs.readFileSync(path.join(repo,'supabase/admin-live-order-confirmations.sql'),'utf8').replace(/^begin;$/m,'').replace(/^commit;$/m,''));
+ await db.exec(`insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,amount,status,applied_at,completed_at,raw_channel) values
+  ('AR','IN','AR-EXAMPLE','withdraw','CONFIRMED-EXAMPLE',150,'已通过','2026-09-18 23:30','2026-09-19 00:15',null),
+  ('AR','IN','AR-EXAMPLE','withdraw','STILL-UNKNOWN',250,'已通过','2026-09-18 23:30','2026-09-19 00:15',null),
+  ('AR','IN','AR-EXAMPLE','recharge','CONFIRMED-EXAMPLE',350,'已支付','2026-09-18 23:30','2026-09-19 00:15',null);
+  insert into private.dashboard_admin_order_provider_confirmations(source_system,country_code,platform,order_kind,order_no,confirmed_provider,confirmation_note) values
+  ('AR','IN','AR-EXAMPLE','withdraw','CONFIRMED-EXAMPLE','人工确认','Synthetic owner confirmation'),
+  ('AR','IN','OTHER-PLATFORM','withdraw','STILL-UNKNOWN','人工确认','Different platform must not match');`);
+ const q=req({action:'aggregate',view:'providers',platformId:ar,direction:'withdraw'}),after=await call(q),manual=after.groups.provider.find(r=>r.provider==='人工确认');
+ assert.equal(manual.all_count,0);assert.equal(manual.success_count,1);assert.equal(manual.success_amount,'150');
+ const d=await call({...q,view:undefined,action:'details',providers:['人工确认'],status:'success'});assert.equal(d.total,1);assert.equal(d.rows[0].order_number,'CONFIRMED-EXAMPLE');assert.equal(d.rows[0].raw_provider,null);
+ const prior=await call({...q,startAt:'2026-09-18T00:00:00+05:30',endAt:from});const m=prior.groups.provider.find(r=>r.provider==='人工确认');assert.equal(m.all_count,1);assert.equal(m.success_count,0);
+ const unknown=await call({...q,view:undefined,action:'details',status:'success',providers:['未识别通道']});assert(unknown.rows.some(r=>r.order_number==='STILL-UNKNOWN'));
+ const charge=await call({...q,view:undefined,action:'details',status:'success',direction:'charge',orderNumber:'CONFIRMED-EXAMPLE'});assert.equal(charge.rows[0].provider,'未识别通道');
+ await db.exec('set role authenticated');try{await rejects(()=>db.query('select * from private.dashboard_admin_order_provider_confirmations'),/permission denied/)}finally{await db.exec('reset role')}
+ await db.exec("update ar_collected_orders set raw_channel='SourceProvided' where order_no='CONFIRMED-EXAMPLE' and order_kind='withdraw'");
+ const raw=await call({...q,view:undefined,action:'details',status:'success',orderNumber:'CONFIRMED-EXAMPLE'});assert.equal(raw.rows[0].provider,'SourceProvided');
+}));

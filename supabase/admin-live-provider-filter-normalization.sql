@@ -63,7 +63,9 @@ declare
 begin
   v_result:=private.dashboard_admin_live_query_raw(v_request);
   v_action:=coalesce(v_request->>'action','catalog');
-  if v_action='catalog' then return v_result; end if;
+  if v_action='catalog' then
+    return v_result||jsonb_build_object('withdrawPlatforms',(select coalesce(jsonb_agg(to_jsonb(p)||jsonb_build_object('scopeGroup',p.scope_group,'sourceName',p.source_name)),'[]'::jsonb) from private.dashboard_admin_live_withdraw_platforms() p));
+  end if;
   v_country:=v_result#>>'{platform,country}';
   v_platform:=v_result#>>'{platform,name}';
   if v_country is null or v_platform is null then return v_result; end if;

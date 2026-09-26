@@ -9,6 +9,7 @@ declare
   v_direction text; v_status text; v_order text; v_third text; v_member text; v_system text; v_utr text;
   v_providers text[]; v_types text[]; v_currency text; v_min numeric; v_max numeric;
   v_offset integer; v_limit integer; v_key text; v_source text; v_sql text; v_result jsonb;
+  v_confirmations jsonb := '{}'::jsonb;
 begin
   -- Catalog helper validates Auth, active profile, independent grant and scope
   -- on every call, including queries with no matching orders.
@@ -95,12 +96,20 @@ begin
   -- All branches project an explicit safe allowlist. No raw JSON, contact,
   -- account/UPI fields, comments, free text, or credentials are selected.
   if v_platform.source='ar' then
+    -- Read the small, platform-scoped confirmation map once, outside the order scan.
+    -- Optional for older installations; ordinary unknown records remain unknown.
+    if to_regclass('private.dashboard_admin_order_provider_confirmations') is not null then
+      execute 'select coalesce(jsonb_object_agg(order_kind||chr(31)||order_no,confirmed_provider),''{}''::jsonb)
+        from private.dashboard_admin_order_provider_confirmations
+        where source_system=$1 and country_code=$2 and platform=$3 and active'
+        into v_confirmations using 'AR',v_platform.scope_group,v_platform.source_name;
+    end if;
     v_source:=$q$
       select md5(jsonb_build_array(a.source_system,a.country_code,a.platform,a.order_kind,a.order_no)::text)::uuid as id,
         null::text as system_order_id,a.order_no as order_number,null::text as third_party_order_number,a.member_id,
         case when a.order_kind='withdraw' and coalesce(btrim(a.raw_channel),'') in ('','人工取消')
           and a.status in ('未通过','拒绝','驳回','已拒绝','人工取消','已取消','失败','提现失败','出款失败') then '无三方（驳回）'
-          else coalesce(nullif(btrim(a.raw_channel),''),'未识别通道') end as provider,
+          else coalesce(nullif(btrim(a.raw_channel),''),$24->>(a.order_kind||chr(31)||a.order_no),'未识别通道') end as provider,
         coalesce(nullif(btrim(a.channel_type),''),'其他类型') as channel_type,
         case a.order_kind when 'recharge' then 'charge' else 'withdraw' end as direction,a.status,
         case when a.order_kind='recharge' then case a.status when '已支付' then 'success' when '待支付' then 'pending'
@@ -118,7 +127,7 @@ begin
           when a.country_code='IN' and a.order_kind='recharge' and btrim(a.raw_channel) ~ '^USDT[(]TRC20[)]-[0-9]+$'
             and length(a.amount_text)<=250 then substring(replace(a.amount_text,chr(92)||'n',chr(10)) from
             '^[[:space:]]*金额[：:][[:space:]]*([0-9]{1,18}([.][0-9]{1,8})?)[[:space:]]+兑换比例[：:][[:space:]]*[0-9]+([.][0-9]+)?[[:space:]]+USDT[：:][[:space:]]*[0-9]+([.][0-9]+)?[[:space:]]*$')::numeric end) as amount,
-        null::numeric as actual_amount,null::numeric as withdraw_fee,$21::text as currency,a.updated_at as synced_at,null::text as utr
+        null::numeric as actual_amount,null::numeric as withdraw_fee,$21::text as currency,a.updated_at as synced_at,null::text as utr,a.raw_channel as raw_provider
       from public.ar_collected_orders a where a.country_code=$3 and a.platform=$22 and a.source_system='AR'
         and a.order_kind=any(case $7 when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)
         and (($19<>'aggregate' and $8<>'success' and a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
@@ -132,13 +141,14 @@ begin
   elsif v_platform.source='newar' then
     v_source:=$q$
       select n.id,n.source_id as system_order_id,n.order_number,n.third_party_order_number,n.member_id,
-        case when n.dataset='withdraw' and n.status_group in ('failed','rejected') and coalesce(btrim(n.provider),'') in ('','人工取消') then '无三方（驳回）'
+        case when n.dataset='charge' and coalesce(btrim(n.provider),'')='' and n.channel_type='ManualRecharge' then '人工充值'
+          when n.dataset='withdraw' and n.status_group in ('failed','rejected') and coalesce(btrim(n.provider),'') in ('','人工取消') then '无三方（驳回）'
           else coalesce(nullif(btrim(n.provider),''),'未识别通道') end as provider,coalesce(nullif(btrim(n.channel_type),''),'其他类型') as channel_type,
         n.dataset as direction,n.status_code as status,
         case when n.dataset='withdraw' and n.status_group='failed' and coalesce(btrim(n.provider),'') in ('','人工取消') then 'rejected'
           when n.status_group in ('success','pending','failed','rejected') then n.status_group else 'unknown' end as status_group,
         n.created_at,case when n.status_group='success' then n.success_at end as success_at,
-        n.amount,n.actual_amount,n.fee as withdraw_fee,n.currency,n.received_at as synced_at,null::text as utr
+        n.amount,n.actual_amount,n.fee as withdraw_fee,n.currency,n.received_at as synced_at,null::text as utr,n.provider as raw_provider
       from public.newar_detail_records n join public.newar_detail_platforms t on t.platform=n.platform
       where n.platform=$22 and n.dataset=any(case $7 when 'all' then array['charge','withdraw'] else array[$7] end)
         and (($19<>'aggregate' and $8<>'success' and n.created_at>=$5 and n.created_at<$6)
@@ -158,7 +168,7 @@ begin
           case when c.status_group in ('pending','failed') then c.status_group else 'pending' end else 'unknown' end as status_group,
         c.create_time as created_at,case when c.status_code='1' then c.pay_time end as success_at,
         coalesce(c.amount_display,c.amount_minor/100.0) as amount,null::numeric as actual_amount,null::numeric as withdraw_fee,
-        'INR'::text as currency,c.last_seen_at as synced_at,null::text as utr
+        'INR'::text as currency,c.last_seen_at as synced_at,null::text as utr,c.pay_method_name as raw_provider
       from public.game66_charge_orders c where c.platform_id=$1 and $7 in ('all','charge')
         and (($19<>'aggregate' and $8<>'success' and c.create_time>=$5 and c.create_time<$6)
           or (($19='aggregate' or $8='success') and (c.create_time>=$5 and c.create_time<$6
@@ -173,7 +183,7 @@ begin
         case w.status_code when '3' then 'success' when '1' then 'pending' when '2' then case when coalesce(nullif(btrim(w.pay_channel),''),nullif(btrim(w.pay_method_name),''),'') in ('','人工取消') then 'rejected' else 'failed' end when '-1' then 'rejected' else 'unknown' end,
         w.create_time,case when w.status_code='3' then w.update_time end,coalesce(w.amount_display,w.amount_minor/100.0),
         coalesce(w.real_amount_display,w.real_amount_minor/100.0),coalesce(w.fee_display,w.fee_minor/100.0),
-        'INR',w.last_seen_at,null::text
+        'INR',w.last_seen_at,null::text,coalesce(nullif(w.pay_channel,''),w.pay_method_name)
       from public.game66_withdraw_orders w where w.platform_id=$1 and $7 in ('all','withdraw')
         and (($19<>'aggregate' and $8<>'success' and w.create_time>=$5 and w.create_time<$6)
           or (($19='aggregate' or $8='success') and (w.create_time>=$5 and w.create_time<$6
@@ -194,6 +204,7 @@ begin
       case when $19<>'aggregate' then order_number end as order_number,
       case when $19<>'aggregate' then third_party_order_number end as third_party_order_number,
       case when $19<>'aggregate' then member_id end as member_id,provider,
+      case when $19<>'aggregate' then raw_provider end as raw_provider,
       case when $19<>'aggregate' then channel_type end as channel_type,direction,
       case when $19<>'aggregate' then status end as status,status_group,
       created_at,success_at,case when amount::text not in ('NaN','Infinity','-Infinity') then amount end as amount,
@@ -367,7 +378,7 @@ begin
         'count_share',count::numeric/nullif(valid_count,0),'amount_share',case when valid_amount>0 then amount/valid_amount end)
     from duration_thresholds t where threshold_ms is not null
   ), page as (
-    select id,system_order_id,order_number,third_party_order_number,member_id,provider,channel_type,direction,status,status_group,
+    select id,system_order_id,order_number,third_party_order_number,member_id,provider,raw_provider,channel_type,direction,status,status_group,
       created_at,success_at,amount::text,actual_amount::text,withdraw_fee::text,currency,synced_at,utr,latency_ms,pending_wait_ms
     from filtered where $19<>'aggregate'
       and ($8<>'success' or (status_group='success' and success_in_range))
@@ -443,7 +454,7 @@ begin
   end if;
 
   execute v_sql into v_result using v_id,v_platform.name,v_platform.scope_group,v_platform.timezone,v_start,v_end,
-    v_direction,v_status,v_member,v_order,v_system,v_providers,v_types,v_currency,v_min,v_max,v_offset,v_limit,v_action,v_asof,v_platform.currency,v_platform.source_name,v_third;
+    v_direction,v_status,v_member,v_order,v_system,v_providers,v_types,v_currency,v_min,v_max,v_offset,v_limit,v_action,v_asof,v_platform.currency,v_platform.source_name,v_third,v_confirmations;
   return v_result||jsonb_build_object('version',1,'platform',v_meta,'basis','mixed_created_success','startAt',v_start,'endAt',v_end,
     'asOf',v_asof,'offset',v_offset,'limit',v_limit,'hasMore',(v_result->>'total')::bigint>v_offset::bigint+v_limit,
     'capabilities',v_capabilities);

@@ -199,3 +199,9 @@ test('deposit sheet views allow scoped summaries and reply searches with explici
  assert.equal(h.api.validateAdminLiveRequest(q).view,'entries');assert.throws(()=>h.api.validateAdminLiveRequest({...q,dateMode:'range'}));
  for(const change of [{view:'write'},{dateMode:'unbounded'},{match:'bogus'},{followupStatus:{text:'bad'}}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...change}));
 });
+
+test('collected data has a bounded source-only action, fresh auth and no arbitrary database table parameter',async()=>{
+ const h=load(),request={action:'collectedData',operation:'rows',dataset:'volume',country:'胖虎巴西',platform:'FUTURE-PH',startAt:'2026-09-24',endAt:'2026-09-24',limit:50,offset:0};
+ await h.api.adminLiveRequest(session,request);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_collected_data');assert.equal(h.calls[0].init.headers.Authorization,'Bearer offline-fresh-token');assert.equal(JSON.parse(h.calls[0].init.body).p_request.platform,'FUTURE-PH');
+ for(const bad of [{...request,table:'dashboard_profiles'},{...request,startAt:'2026-08-01'},{...request,endAt:'2026-02-30'},{...request,offset:-1},{...request,limit:'50'},{action:'collectedData',operation:'catalog',platform:'FUTURE-PH'}])assert.throws(()=>h.api.validateAdminLiveRequest(bad));
+});

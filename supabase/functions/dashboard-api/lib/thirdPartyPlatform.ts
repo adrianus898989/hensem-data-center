@@ -29,7 +29,8 @@ export function canonicalThirdPartyPlatform(country: string, value: string): str
     if (["INDIA82", "82LOTTERY"].includes(known)) return "82LOTTERY";
     if (["VEER.GAME", "VEERGAME"].includes(known)) return "VEER.GAME";
     if (["DHANIWIN", "DHANI.WIN", "DHANIWIN(新AR)"].includes(known)) return "DhaniWin";
-    // Owner-confirmed display identity; the physical AR source key remains RAJA.
+    // Owner-confirmed display identity. Keep the physical AR source key as
+    // RAJA; only the platform label and cross-page selection use RAJAGAMES.
     if (["RAJA", "RAJAGAME", "RAJAGAMES"].includes(known)) return "RAJAGAMES";
   }
   if (countryKey === "BR" || countryKey === "巴西") {

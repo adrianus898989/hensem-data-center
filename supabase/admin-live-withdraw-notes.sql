@@ -5,7 +5,7 @@ begin;
 create or replace function private.dashboard_admin_live_withdraw_note(p_request jsonb)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare
- v_scope jsonb:=private.dashboard_admin_live_scope();v_date date;v_country text;v_platform text;
+ v_scope jsonb:=private.dashboard_admin_live_scope();v_date date;v_country text;v_platform text;v_query_country text;
  v_reason text;v_version text;v_key text;v_row public.auto_withdraw_notes%rowtype;v_data jsonb;
 begin
  if p_request is null or jsonb_typeof(p_request)<>'object' or octet_length(p_request::text)>8192
@@ -22,8 +22,11 @@ begin
  if length(v_country) not between 1 and 100 or length(v_platform) not between 1 and 100
    or v_country||v_platform ~ '[[:cntrl:]]' then raise exception using errcode='22023',message='invalid_request';end if;
  if not private.dashboard_scope_allows(v_scope,v_country,v_platform) then raise exception using errcode='42501',message='scope_denied';end if;
+ v_query_country:=private.dashboard_admin_live_report_country(v_country,v_platform);
+ if upper(v_country) in ('巴西','BR','BRAZIL') and exists(select 1 from private.dashboard_admin_live_withdraw_platforms() p
+   where p.country='胖虎巴西' and private.dashboard_admin_live_withdraw_key(p.source_name)=private.dashboard_admin_live_withdraw_key(v_platform)) then v_query_country:='胖虎巴西';end if;
  v_data:=private.dashboard_admin_live_auto_withdraw(jsonb_build_object('startAt',v_date||'T00:00:00Z',
-   'endAt',v_date||'T23:59:59Z','country',v_country,'platform',v_platform));
+   'endAt',v_date||'T23:59:59Z','country',v_query_country,'platform',v_platform));
  if coalesce((v_data->>'total')::integer,0)=0 then raise exception using errcode='22023',message='note_date_unavailable';end if;
  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(jsonb_build_array(v_date,v_country,v_platform)::text,0));
  select * into v_row from public.auto_withdraw_notes n where n.data_date=v_date and n.country=v_country and n.platform=v_platform;

@@ -1,7 +1,7 @@
 /* Synthetic-only VM tests for the production UI adapter. No credentials/network/real orders. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8');
-const layoutSources=['live-reference-layout.js','live-pages-reference.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js','live-withdraw-pages.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
+const layoutSources=['live-reference-layout.js','live-pages-reference.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js', 'live-withdraw-pages.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
 const comparisonSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-comparison.js'),'utf8');
 test('reference views keep same-name providers separated by source and platforms by stable identity',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222',source:'NEW_AR'},p3={...P,id:'33333333-3333-4333-8333-333333333333'};
@@ -114,7 +114,7 @@ test('zero baseline is new activity and success-rate changes use percentage poin
 });
 
 test('overview preserves the full reference dashboard and anchor navigation without extra queries',async()=>{
- const h=await ready(),calls=h.calls.length;h.c.render();const html=h.html();assert.match(html,/class="dashboard-full-v3"/);assert.match(html,/class="df-jumps"/);assert.doesNotMatch(html,/liveOverviewTab\(/);
+ const h=await ready();h.c.liveOverviewAnalysis();await settle();const calls=h.calls.length;h.c.render();const html=h.html();assert.match(html,/class="dashboard-full-v3"/);assert.match(html,/class="df-jumps"/);assert.doesNotMatch(html,/liveOverviewTab\(/);
  for(const id of ['df-collect','df-payout','df-backlog','df-risk','df-exceptions','df-order-trend','df-charge-trend','df-charge-money','df-withdraw-trend','df-withdraw-money','df-teams','df-countries','df-platforms','df-providers','df-amounts','df-hour-charge','df-hour-withdraw','df-workorders'])assert(html.includes('id="'+id+'"'),id+' is visible in the full overview');
  const navigation=html.match(/<nav class="df-jumps"[^>]*>([^]*?)<\/nav>/)?.[1];assert(navigation);assert.equal([...navigation.matchAll(/<a\b/g)].length,9);for(const [,id]of navigation.matchAll(/href="#([^"]+)"/g))assert(html.includes('id="'+id+'"'),'anchor '+id+' has a visible destination');assert.equal(h.calls.length,calls);assert.doesNotMatch(html,/NaN|Infinity/);
 });
@@ -141,7 +141,7 @@ test('overview duration sections split collection and payout and retain explicit
  r.summary.push(withdraw);
  r.groups.latency=['charge','withdraw'].flatMap(direction=>Array.from({length:10},(_,bucket)=>({direction,currency:'INR',bucket,count:bucket===0?2:0,amount:bucket===0?'200':'0',valid_count:3,valid_amount:'300'})));
  r.groups.pending_age=[{direction:'withdraw',currency:'INR',bucket:0,count:2,amount:'200',valid_count:2,valid_amount:'200'}];
- h.L.results=[r];h.L.direction='all';h.c.state.page='overview';h.c.render();
+ h.L.loadedView='full';h.L.results=[r];h.L.direction='all';h.c.state.page='overview';h.c.render();
  assert.match(h.html(),/class="grid equal live-duration-paired"/);assert.match(h.html(),/充值 \/ 代收成功耗时/);assert.match(h.html(),/提款 \/ 代付成功耗时/);assert.match(h.html(),/成功订单合计/);assert.match(h.html(),/所选创建范围 · 仍待付订单等待时长/);assert.match(h.html(),/本期仍代付中合计/);
 });
 
@@ -175,12 +175,12 @@ test('money strings aggregate and unknown amounts remain unknown rather than fab
  const h=await ready();const a=aggregate(),b=aggregate();b.platform={...P,id:'second'};b.summary[0].all_amount=null;b.summary[0].missing_amount_count=1;h.L.results=[a,b];h.c.state.page='merchantproviders';h.c.render();const section=h.html().match(/<section class="live-reference-direction" data-direction="charge"[^>]*>([^]*?)<\/section>/)?.[1];assert(section);assert.match(section,/data-metric="all"[^]*?class="kpi-value">—<\/div>[^]*?>10 笔<\/span>/);assert.match(section,/data-metric="success"[^]*?class="kpi-value">1,200\.30<\/div>[^]*?>6 笔<\/span>/);assert.doesNotMatch(h.html(),/NaN|Infinity/);
 });
 
-test('all-or-nothing aggregate publication suppresses partial totals after one source fails',async()=>{
- const p2={...P,id:'22222222-2222-4222-8222-222222222222'},h=await ready({platforms:[P,p2]});setScope(h,{platform:'all'});h.setHandler(async q=>{if(q.platformId===p2.id)throw Error('Synthetic failure');return aggregate(P)});await h.c.liveLoad();assert.equal(h.L.results.length,0);assert.match(h.html(),/Synthetic failure/);assert(!h.html().includes('live-reference-totals'));assert(!h.html().includes('dashboard-full-v3'));
+test('partial platform results stay labeled and cannot masquerade as complete totals after a failure',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222'},h=await ready({platforms:[P,p2]});setScope(h,{platform:'all'});h.setHandler(async q=>{if(q.platformId===p2.id)throw Error('Synthetic failure');return aggregate(P)});await h.c.liveLoad();assert.equal(h.L.results.length,1);assert.match(h.html(),/Synthetic failure/);assert.match(h.html(),/以下仅为已读取结果/);assert.equal(h.L.comparisonStatus,'error');
 });
 
 test('later aggregate query wins over an earlier request regardless of completion order',async()=>{
- const h=await ready(),old=deferred(),fresh=deferred();let n=0;h.setHandler(()=>++n===1?old.promise:fresh.promise);const a=h.c.liveLoad(),b=h.c.liveLoad();fresh.resolve(aggregate(P,22));await b;old.resolve(aggregate(P,11));await a;assert.equal(h.L.results[0].total,22);assert.equal(h.L.loading,false);
+ const h=await ready(),old=deferred(),fresh=deferred();let n=0;h.setHandler(()=>++n===1?old.promise:fresh.promise);const a=h.c.liveLoad();h.c.liveSet('provider','New scope');const b=h.c.liveLoad();fresh.resolve(aggregate(P,22));await b;old.resolve(aggregate(P,11));await a;assert.equal(h.L.results[0].total,22);assert.equal(h.L.loading,false);
 });
 
 test('editing filters invalidates outstanding aggregate results and leaves explicit query state',async()=>{
@@ -223,7 +223,7 @@ test('successful orders show the completion column first while all-order views r
 });
 
 test('navigation reuses recent matching aggregates without mixing directions, but explicit queries and expired or changed scopes reread',async()=>{
- const h=await ready();setScope(h,{platform:P.id,direction:'all'});h.c.state.page='overview';
+ const h=await ready();h.L.overviewAnalysis=true;setScope(h,{platform:P.id,direction:'all'});h.c.state.page='overview';
  h.setHandler(async q=>{const r=aggregate(P,5),w={...stats(2,'400'),direction:'withdraw'};r.summary.push(w);for(const key of Object.keys(r.groups))if(r.groups[key].length)r.groups[key].push({...r.groups[key][0],...w});r.summary=r.summary.filter(row=>q.direction==='all'||row.direction===q.direction);for(const key of Object.keys(r.groups))r.groups[key]=r.groups[key].filter(row=>q.direction==='all'||row.direction===q.direction);r.total=r.summary.reduce((n,row)=>n+row.all_count,0);return r});
  const countReads=()=>h.calls.filter(q=>q.action==='aggregate').length;
  await h.c.liveLoad();const initial=countReads();assert.equal(h.L.results[0].total,7);
@@ -251,7 +251,7 @@ test('unconnected modules preserve reference schemas and local controls without 
 });
 
 test('provider callback keeps quotes and slashes as a single literal value, never executable markup',async()=>{
- const h=await ready(),name='Raw/Pay\'\"<svg onload=alert(1)>';h.L.results[0].groups.provider[0].provider=name;h.c.state.page='merchantproviders';h.c.render();const html=h.html();assert(!html.includes('<svg onload'));const attr=html.match(/onclick="(liveProvider\([^]*?\))"/);assert(attr);const decoded=attr[1].replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');let value;vm.runInNewContext(decoded,{liveProvider:v=>value=v});assert.equal(value,name);
+ const h=await ready(),name='Raw/Pay\'\"<svg onload=alert(1)>';h.L.results[0].groups.provider[0].provider=name;h.c.state.page='merchantproviders';h.c.render();const html=h.html();assert(!html.includes('<svg onload'));const attr=html.match(/onclick="(liveProviderOrders\([^]*?\))"/);assert(attr);const decoded=attr[1].replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');let value;vm.runInNewContext(decoded,{liveProviderOrders:v=>value=v});assert.equal(value,name);
 });
 
 test('duration bins use contract valid denominators and human time ranges instead of bucket indexes',async()=>{
@@ -292,8 +292,11 @@ test('later forced fee query wins over stale requests',async()=>{
  const h=await ready(),old=deferred(),fresh=deferred();h.c.state.page='rates';let n=0;h.setHandler(()=>++n===1?old.promise:fresh.promise);const a=h.c.liveRates(true),b=h.c.liveRates(true);fresh.resolve({rows:[],total:22,options:{countries:[],platforms:[],providers:[]}});await b;old.resolve({rows:[],total:11,options:{countries:[],platforms:[],providers:[]}});await a;assert.equal(h.L.fees.total,22);
 });
 
-test('late sibling completion cannot hide an aggregate error behind progress text',async()=>{
- const p2={...P,id:'22222222-2222-4222-8222-222222222222'},h=await ready({platforms:[P,p2]}),a=deferred(),b=deferred();setScope(h,{platform:'all'});let n=0;h.setHandler(()=>++n===1?a.promise:b.promise);const request=h.c.liveLoad();a.reject(Error('Synthetic failed source'));await request;assert.match(h.html(),/Synthetic failed source/);b.resolve(aggregate(p2));await settle();assert.match(h.html(),/Synthetic failed source/);assert.equal(h.L.results.length,0);
+test('late sibling completion keeps the failed platform warning alongside the successful result',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222'},h=await ready({platforms:[P,p2]}),late=deferred();
+ h.setHandler(q=>q.platformId===P.id?Promise.reject(Error('Synthetic failure')):late.promise);
+ const run=h.c.liveLoad();await settle();assert.equal(h.L.queryWarnings.length,1);late.resolve(aggregate(p2,8));await run;
+ assert.equal(h.L.results.length,1);assert.match(h.html(),/Synthetic failure/);assert.match(h.html(),/仅为已读取结果/);
 });
 
 test('direct collection/payout/stuck entry starts in its explicit business direction',async()=>{
@@ -327,7 +330,7 @@ test('aggregate queries use the full interval and bisect only after a timeout',a
 
 test('timeout bisection covers the exact interval and stops retrying at or below the one-hour threshold',async()=>{
  const h=await ready();setScope(h,{platform:P.id});const accepted=[],attempts=[];h.setHandler(async q=>{attempts.push(q);if(Date.parse(q.endAt)-Date.parse(q.startAt)>1.5*3600000)throw Error('Synthetic timeout');accepted.push(q);return aggregate(P,5)});await h.c.liveLoad();assert.equal(h.L.error,'');assert.equal(attempts.length,14);assert.equal(accepted.length,8);assert(accepted.every(q=>Date.parse(q.endAt)-Date.parse(q.startAt)===1.5*3600000));for(const period of [accepted.slice(0,4),accepted.slice(4)])for(let i=1;i<period.length;i++)assert.equal(period[i-1].endAt,period[i].startAt);assert.equal(accepted[0].startAt,'2026-09-21T18:30:00.000Z');assert.equal(accepted[3].endAt,'2026-09-22T00:30:00.000Z');assert.equal(h.L.results[0].total,20);assert.equal(h.L.comparisonResults[0].total,20);
- const rejected=[];h.setHandler(async q=>{rejected.push(q);throw Error('Synthetic timeout still pending')});await h.c.liveLoad();assert.equal(rejected.length,4);const widths=rejected.map(q=>Date.parse(q.endAt)-Date.parse(q.startAt));assert(widths.at(-1)<=3600000);assert(widths.at(-2)>3600000);assert.equal(h.L.results.length,0);assert.match(h.L.error,/timeout/);const permanent=[];h.setHandler(async q=>{permanent.push(q);throw Error('Synthetic forbidden')});await h.c.liveLoad();assert.equal(permanent.length,1,'non-timeout errors are never retried by partitioning');
+ const rejected=[];h.setHandler(async q=>{rejected.push(q);throw Error('Synthetic timeout still pending')});await h.c.liveLoad();assert.equal(rejected.length,4);const widths=rejected.map(q=>Date.parse(q.endAt)-Date.parse(q.startAt));assert(widths.at(-1)<=3600000);assert(widths.at(-2)>3600000);assert.equal(h.L.results.length,0);assert.match(h.L.queryWarnings.join(' '),/timeout/);const permanent=[];h.setHandler(async q=>{permanent.push(q);throw Error('Synthetic forbidden')});await h.c.liveLoad();assert.equal(permanent.length,1,'non-timeout errors are never retried by partitioning');
 });
 
 test('detail pages use the full-range aggregate count and exact page offsets',async()=>{
@@ -436,9 +439,40 @@ test('provider comparisons suppress incomplete scopes and partial fees while pre
  h.L.comparisonResults=[previous];h.L.comparisonStatus='error';h.L.comparisonError='昨日数据读取失败';h.c.render();assert.match(cards(),/昨日数据读取失败/);assert.doesNotMatch(cards(),/新增 \/ 无基数/);
 });
 
+test('confirmed India UpiPay row 4 drives both labels and estimates without falling back to the inactive tier',async()=>{
+ const h=await ready(),r=completeAggregate(P,20,10);r.groups.provider[0].provider='UpiPay';h.L.results=[r];h.c.state.page='providers';
+ // Deliberately synthetic prices: prove the selected sheet row drives arithmetic, not a hardcoded fee.
+ const confirmed={scopeType:'country',country:'印度',provider:'UpiPay',category:'USDT',sheetName:'印度线下',sourceRow:4,collectFee:'5.20%',payoutFee:'3.10%',payoutSingleFee:'7',status:'开启'};
+ const inactive={...confirmed,category:'UPI',sourceRow:47,collectFee:'6.30%',payoutFee:'3.80%',status:'停用'};
+ h.L.feeLookupRows=[inactive,confirmed,{...confirmed,scopeType:'platform',platform:P.name,collectFee:'',payoutFee:'',payoutSingleFee:''}];h.c.render();
+ let t=renderedTables(h.html()).find(t=>t.headers[0]==='统一三方'),row=t.rows[0].map(plain),at=label=>row[t.headers.findIndex(v=>v===label||v.startsWith(label+' '))];
+ assert.equal(at('匹配费率'),'5.20%');assert.equal(at('估算手续费'),'52.00');assert.doesNotMatch(t.html,/多档费率/);
+ h.c.providerSummaryRate(0);assert.match(h.drawers.at(-1).html,/已确认.*第 4 行/);assert.match(h.drawers.at(-1).html,/印度线下 \/ 4/);assert.match(h.drawers.at(-1).html,/印度线下 \/ 47/);
+ r.groups.provider[0].direction='withdraw';h.c.state.page='provider_payout';h.c.render();t=renderedTables(h.html()).find(t=>t.headers[0]==='统一三方');row=t.rows[0].map(plain);assert.equal(at('匹配费率'),'3.10% / 单笔 7');assert.equal(at('估算手续费'),'101.00');
+ h.L.feeLookupRows=[inactive];h.c.render();t=renderedTables(h.html()).find(t=>t.headers[0]==='统一三方');row=t.rows[0].map(plain);assert.equal(at('匹配费率'),'未匹配');assert.equal(at('估算手续费'),'—');
+ const api=h.c.HensemProviderSummary,order={provider:'UpiPay',direction:'charge',platform:P.name,success_amount:1000,success_count:10};
+ assert.equal(api.estimate(order,[{...confirmed,country:'巴西',collectFee:'8%'}],'巴西'),80);
+ assert.equal(api.estimate({...order,provider:'IndependentPay'},[{...confirmed,provider:'IndependentPay',collectFee:'3%'},{...confirmed,provider:'IndependentPay',scopeType:'platform',platform:P.name,collectFee:'',collectSingleFee:''}],'印度'),30);
+});
+
+test('provider expansion shows platform contributions without requests and leaves overview layout unwrapped',async()=>{
+ const h=await ready(),p2={...P,id:'separate-id',source:'NEW_AR'},a=completeAggregate(P,20,4),b=completeAggregate(p2,30,6);
+ h.L.results=[a,b];h.L.feeLookupRows=[];h.c.state.page='providers';h.c.render();const calls=h.calls.length;
+ assert.match(h.html(),/代收创建金额/);assert.match(h.html(),/代收创建笔数/);assert.match(h.html(),/aria-expanded="false"/);
+ h.c.providerSummaryToggle(0);assert.equal(h.calls.length,calls);assert.match(h.html(),/aria-expanded="true"/);
+ const inner=h.html().match(/<div class="provider-platform-breakdown">([^]*?)<\/div><\/td>/)[1],t=renderedTables(inner)[0];assert.equal(t.rows.length,2);
+ assert.deepEqual(t.rows.map(r=>plain(r[t.headers.indexOf('包网来源')])).sort(),['AR','NEW_AR']);
+ assert.deepEqual(t.rows.map(r=>plain(r[t.headers.indexOf('金额占比')])).sort(),['40.00%','60.00%']);
+ assert.deepEqual(t.rows.map(r=>plain(r[t.headers.indexOf('笔数占比')])).sort(),['40.00%','60.00%']);
+ assert.equal(t.rows.reduce((n,r)=>n+Number(plain(r[t.headers.indexOf('成功金额')]).replaceAll(',','')),0),1000);
+ h.c.providerSummaryToggle(0);assert.doesNotMatch(h.html(),/provider-platform-breakdown/);
+ h.L.queryWarnings=['Synthetic failed platform'];h.c.render();assert.match(h.html(),/部分平台读取失败/);
+ h.c.state.page='overview';h.c.render();assert.doesNotMatch(h.html(),/provider-summary-report|provider-floating-head/);
+});
+
 test('amount ranges are sorted numerically in each direction with missing and other bands last',async()=>{
  const h=await ready(),r=completeAggregate(P),bands=['≥5,001','1,001–2,000','2,001–5,000','100–200','201–300','301–400','401–500','501–750','751–1,000','unknown','other'];
- r.groups.amount_range=['charge','withdraw'].flatMap(direction=>bands.map(bucket=>({...r.summary[0],direction,bucket})));h.L.results=[r];h.L.direction='all';h.c.state.page='overview';h.c.render();
+ r.groups.amount_range=['charge','withdraw'].flatMap(direction=>bands.map(bucket=>({...r.summary[0],direction,bucket})));h.L.loadedView='full';h.L.results=[r];h.L.direction='all';h.c.state.page='overview';h.c.render();
  const tables=renderedTables(h.html()).filter(t=>t.headers[0].startsWith('金额档位 ·'));
  assert.equal(tables.length,2);for(const table of tables)assert.deepEqual(table.rows.map(r=>plain(r[0])).slice(0,9),['100–200','201–300','301–400','401–500','501–750','751–1,000','1,001–2,000','2,001–5,000','≥5,001']);
 });
@@ -479,4 +513,140 @@ test('deposit summaries cover the filtered dataset and source switches carry sea
  h.c.depositIssuesDrill('providers',0);await settle();assert.equal(h.calls.at(-1).provider,'UmoneyPay');assert.equal(h.calls.at(-1).match,'matched');assert.equal(h.L.depositIssuesSection,'details');
  h.c.depositIssuesSet('query','success to other');h.c.depositIssuesSource('entries');await settle();assert.equal(h.calls.at(-1).view,'entries');assert.equal(h.calls.at(-1).query,'success to other');assert.equal(h.calls.at(-1).status,undefined);assert.equal(h.calls.at(-1).match,undefined);assert.match(h.html(),/打开录入表/);assert.match(h.html(),/各平台录入进度/);assert.match(h.html(),/跟进状态分布/);
  h.c.depositIssuesDrill('statuses',0);await settle();assert.equal(h.calls.at(-1).followupStatus,'need to provide pdf/video');
+});
+
+test('collected platforms expose report-only teams, retain independent filters and read one source on demand',async()=>{
+ const report={name:'NEW-PH',team:'胖虎',country:'胖虎巴西',system:'PANDA',dataset:'panda_success',rawCountry:'胖虎巴西',rawPlatform:'NEW-PH',lastDate:'2026-09-24'};
+ const h=await ready({page:'collected_data',handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='collectedData'?(q.operation==='catalog'?{rows:[report,{...report,name:'UNKNOWN',rawPlatform:'UNKNOWN',team:'待归类',country:'新地区'}]}:{rows:[{date:'2026-09-24',metrics:{count:5,success:3}}],total:1}):aggregate(P)});
+ assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);assert.match(h.html(),/NEW-PH/);assert.match(h.html(),/UNKNOWN/);assert.match(h.html(),/待归类/);
+ h.c.collectedSet('team','胖虎');assert.match(h.html(),/NEW-PH/);assert.doesNotMatch(h.html(),/<td>UNKNOWN<\/td>/);assert.match(h.html(),/<option value="待归类"/);
+ const calls=h.calls.length;h.c.collectedSearch('NEW-');h.c.collectedSearch('NEW-PH');assert.equal(h.calls.length,calls,'search needs no repeated database scan');h.c.collectedOpen(0,0);await settle();const q=h.calls.at(-1);assert.equal(q.action,'collectedData');assert.equal(q.platform,'NEW-PH');assert.equal(q.country,'胖虎巴西');assert.equal(q.dataset,'panda_success');assert.equal(q.startAt,'2026-09-24');assert.match(h.html(),/成功笔数/);h.c.collectedDate('from','2026-09-23');assert.match(h.html(),/日期已修改/);assert.doesNotMatch(h.html(),/<th>成功笔数<\/th>/);
+});
+test('Panghu withdrawal platform picker uses received catalogue and all sends no hardcoded whitelist',async()=>{
+ const ph={id:'44444444-4444-4444-4444-444444444444',name:'FUTURE-PH',country:'胖虎巴西',scopeGroup:'BR_PANGHU',team:'胖虎',source:'withdraw',timezone:'America/Sao_Paulo',currency:'BRL'};
+ const h=await ready({page:'auto_withdraw',handler:q=>q.action==='catalog'?{platforms:[P],withdrawPlatforms:[ph]}:q.action==='autoWithdraw'?{country:q.country,rows:[],totals:{},platforms:['FUTURE-PH']}:{}});
+ h.c.withdrawCountry('胖虎巴西');assert.equal(h.L.country,'胖虎巴西');assert.match(h.html(),/FUTURE-PH/);await h.c.withdrawLoad(true);const q=h.calls.filter(q=>q.action==='autoWithdraw').at(-1);assert.equal(q.country,'胖虎巴西');assert.deepEqual(q.platforms,[]);
+});
+
+test('overview requests compact totals and providers, defers charts, and yesterday stays compact',async()=>{
+ const h=await ready();assert(h.calls.filter(q=>q.action==='aggregate').every(q=>q.view==='providers'));
+ assert.match(h.html(),/加载全部图表分析/);assert.match(h.html(),/打开后读取对应分析/);
+ assert(!h.calls.some(q=>q.action==='workorders'));
+ const start=h.calls.length;h.c.liveOverviewAnalysis();await settle();
+ const reads=h.calls.slice(start).filter(q=>q.action==='aggregate');assert(reads.some(q=>!q.view));assert(reads.filter(q=>q.view).every(q=>q.view==='providers'));
+ assert.match(h.html(),/id="df-hour-charge"/);assert.match(h.html(),/id="df-charge-trend"/);
+});
+
+test('slow or failed platform keeps completed overview results visibly partial without duplicate queries',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Slow platform'},wait=deferred();
+ const h=await ready({platforms:[P,p2]});h.setHandler(q=>q.action==='aggregate'&&q.platformId===p2.id?wait.promise:aggregate(P));
+ const run=h.c.liveLoad();await settle();assert.equal(h.L.loading,true);assert.equal(h.L.results.length,1);assert.match(h.html(),/部分结果/);assert.match(h.html(),/Synthetic platform/);
+ const before=h.calls.length;await h.c.liveLoad();assert.equal(h.calls.length,before);
+ wait.reject(Error('连接中断'));await run;assert.equal(h.L.results.length,1);assert.match(h.html(),/部分平台读取失败/);assert.match(h.html(),/Slow platform/);assert.equal(h.L.comparisonStatus,'error');
+});
+
+test('provider drilldown shows prior-created successful unknown orders across platforms and keeps filters unchanged',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Another platform'},h=await ready({platforms:[P,p2]});
+ h.L.results=[P,p2].map(p=>{const r=completeAggregate(p,0,1);r.groups.provider=[{...r.summary[0],provider:'未识别通道',direction:'withdraw'}];return r});
+ const before=JSON.stringify(h.L.multi);h.setHandler(q=>({platform:q.platformId===P.id?P:p2,total:1,rows:[{order_number:q.platformId===P.id?'CROSS-DAY-1':'CROSS-DAY-2',provider:'未识别通道',raw_provider:null,channel_type:'ARPay',direction:'withdraw',status:'已通过',amount:'100',created_at:'2026-09-21T17:00:00Z',success_at:'2026-09-22T01:00:00Z'}]}));
+ const start=h.calls.length;await h.c.liveProviderOrders('未识别通道','AR','withdraw');
+ const calls=h.calls.slice(start);assert.equal(calls.length,2);assert(calls.every(q=>q.action==='details'&&q.status==='success'&&q.direction==='withdraw'&&q.providers[0]==='未识别通道'));
+ const html=h.drawers.at(-1).html;assert.match(html,/CROSS-DAY-1/);assert.match(html,/CROSS-DAY-2/);assert.match(html,/原始三方字段为空/);assert.match(html,/此前创建、本期成功/);assert.match(html,/创建时间 · 0 笔/);
+ assert.equal(JSON.stringify(h.L.multi),before);await h.c.liveProviderOrderBasis('created');assert.equal(h.calls.length,start+2);assert.doesNotMatch(h.drawers.at(-1).html,/CROSS-DAY/);
+});
+
+test('provider drilldown pages across platform boundaries and rejects changed totals',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Z platform'},h=await ready({platforms:[P,p2]});
+ h.L.results=[P,p2].map(p=>{const r=completeAggregate(p,15,15);r.groups.provider=[{...r.summary[0],provider:'Manual'}];return r});
+ h.setHandler(q=>detail(q.platformId===P.id?P:p2,15,q.offset,q.limit));
+ await h.c.liveProviderOrders('Manual','AR','charge');assert.equal((h.drawers.at(-1).html.match(/liveProviderOrder\(\d+\)/g)||[]).length,20);
+ await h.c.liveProviderOrderPage(2);assert.equal(h.calls.at(-1).offset,5);assert.equal(h.calls.at(-1).platformId,p2.id);assert.equal((h.drawers.at(-1).html.match(/liveProviderOrder\(\d+\)/g)||[]).length,10);
+ h.setHandler(q=>detail(P,16,0,20));await h.c.liveProviderOrderBasis('created');assert.match(h.drawers.at(-1).html,/来源订单已更新/);assert.doesNotMatch(h.drawers.at(-1).html,/liveProviderOrder\(0\)/);
+});
+
+test('order explorer requires an explicit platform even when the catalogue has only one platform',async()=>{
+ const h=await ready({page:'orders'});
+ assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
+ assert.match(h.html(),/请先选择一个商户（平台）/);
+ assert.equal(h.L.platform,'all');assert.equal(h.L.detail,null);
+ const picker=h.nodes.get('liveFilters').innerHTML.match(/<details[^>]*data-multi="platform"[^]*?<\/details>/)?.[0];
+ assert(picker);assert.match(picker,/type="search"/);assert.match(picker,/type="radio"/);
+ assert.doesNotMatch(picker,/type="checkbox"|全选结果/);
+ const before=h.calls.length;
+ await h.c.liveLoad();h.c.liveReset();h.c.livePeriod('week');h.c.livePeriod('yesterday');h.c.livePage(2,'server');h.c.livePageSize('500','server');await h.c.liveDetails();await settle();
+ assert.equal(h.calls.length,before,'query, reset, date presets and paging cannot read all-platform orders');
+ assert.match(h.html(),/请先选择一个商户（平台）/);assert.equal(h.L.detail,null);
+});
+
+test('order platform search retains searchable radio choices and selecting B replaces A',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Other searchable platform'};
+ const h=await ready({page:'orders',platforms:[P,p2]});
+ h.c.liveSetMultiOption('platform',{value:P.id,checked:true});await settle();
+ assert.equal(h.L.platform,P.id);assert.deepEqual(Array.from(h.L.multi.platform),[P.id]);
+ assert.deepEqual(h.calls.filter(q=>q.action==='providerOptions').at(-1).platformIds,[P.id]);
+ h.c.liveMultiSearch('platform','Other searchable');h.c.render();
+ let picker=h.nodes.get('liveFilters').innerHTML.match(/<details[^>]*data-multi="platform"[^]*?<\/details>/)?.[0];
+ assert.match(picker,/value="Other searchable"/);assert.match(picker,/<label class="live-multi-option" hidden[^]*?Synthetic platform/);
+ assert.match(picker,/type="radio"[^>]*value="22222222-2222-4222-8222-222222222222"/);
+ h.c.liveSetMultiOption('platform',{value:p2.id,checked:true});await settle();
+ assert.equal(h.L.platform,p2.id);assert.deepEqual(Array.from(h.L.multi.platform),[p2.id]);
+ const requests=h.calls.length;await h.c.liveLoad();
+ const reads=h.calls.slice(requests).filter(q=>['aggregate','details'].includes(q.action));
+ assert(reads.some(q=>q.action==='aggregate'));assert(reads.some(q=>q.action==='details'));
+ assert(reads.every(q=>q.platformId===p2.id));assert(reads.filter(q=>q.action==='aggregate').every(q=>q.view==='providers'));
+ assert.equal(h.L.detail.platform.id,p2.id);assert.equal(h.L.detail.rows.length,20);
+ h.c.livePage(2,'server');await settle();assert.equal(h.calls.at(-1).platformId,p2.id);assert.equal(h.calls.at(-1).offset,20);assert.equal(h.L.detail.rows[0].id,'row-20');
+});
+
+test('order explorer blocks inherited multiselect and a selected platform excluded by team or country',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',team:'Other team'},p3={...P,id:'33333333-3333-4333-8333-333333333333',country:'美国',currency:'USD',timezone:'America/New_York'};
+ const h=await ready({platforms:[{...P,team:'First team'},p2,p3]});
+ h.L.platform='all';h.L.multi.platform=[P.id,p2.id];let before=h.calls.length;
+ h.c.setPage('orders');await h.c.liveLoad();await settle();
+ assert.equal(h.calls.length,before);assert.match(h.html(),/请先选择一个商户（平台）/);
+ h.c.liveSet('platform',P.id);await settle();await h.c.liveLoad();assert(h.L.detail);
+ before=h.calls.length;h.c.liveSet('team','Other team');await h.c.liveLoad();h.c.livePage(2,'server');await settle();
+ assert.equal(h.calls.length,before);assert.match(h.html(),/请先选择一个商户（平台）/);assert.doesNotMatch(h.html(),/order-0/);
+ before=h.calls.length;h.c.liveSet('country','美国');await h.c.liveLoad();await settle();
+ assert.equal(h.calls.length,before);assert.match(h.html(),/请先选择一个商户（平台）/);
+});
+
+test('order platform select-all callback cannot broaden the scope and overview keeps multiselect',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Another platform'},h=await ready({page:'orders',platforms:[P,p2]});
+ h.c.liveSetMultiOption('platform',{value:P.id,checked:true});await settle();
+ h.nodes.set('details[data-multi="platform"]',{querySelectorAll:()=>[{value:P.id},{value:p2.id}]});
+ h.c.liveMultiAll('platform',true);await settle();assert.deepEqual(Array.from(h.L.multi.platform),[P.id]);
+ h.c.setPage('overview');await settle();
+ let picker=h.nodes.get('liveFilters').innerHTML.match(/<details[^>]*data-multi="platform"[^]*?<\/details>/)?.[0];
+ assert.match(picker,/type="checkbox"/);assert.match(picker,/全选结果/);
+ h.c.liveSetMultiOption('platform',{value:p2.id,checked:true});await settle();
+ assert.deepEqual(Array.from(h.L.multi.platform).sort(),[P.id,p2.id].sort());assert.equal(h.L.platform,'all');
+});
+
+test('resetting required order platform invalidates a late provider directory response',async()=>{
+ const h=await ready({page:'orders',ancillaryHandler:true}),oldOptions=deferred();
+ h.setHandler(q=>q.action==='providerOptions'?oldOptions.promise:aggregate(P));
+ h.c.liveSet('platform',P.id);assert.equal(h.L.providerOptionsBusy,true);
+ h.c.liveReset();const reads=h.calls.length;oldOptions.resolve({providers:['STALE-PLATFORM-PROVIDER']});await settle();
+ assert.equal(h.calls.length,reads);assert.equal(h.L.platform,'all');assert.equal(h.L.providerOptionsBusy,false);
+ assert.deepEqual(Array.from(h.L.providerOptions),[]);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/STALE-PLATFORM-PROVIDER/);assert.match(h.html(),/请先选择一个商户（平台）/);
+});
+
+test('resetting or replacing the required platform prevents old detail and aggregate results returning',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Fresh selected platform'},h=await ready({page:'orders',platforms:[P,p2]}),oldDetail=deferred(),oldAggregate=deferred();
+ h.c.liveSet('platform',P.id);await settle();h.setHandler(q=>q.action==='details'?oldDetail.promise:aggregate(P));
+ const details=h.c.liveDetails();h.c.liveReset();oldDetail.resolve(detail(P,65));await details;
+ assert.equal(h.L.detail,null);assert.match(h.html(),/请先选择一个商户（平台）/);
+ h.c.liveSet('platform',P.id);await settle();h.setHandler(q=>q.action==='aggregate'&&q.platformId===P.id?oldAggregate.promise:q.action==='details'?detail(p2,65,q.offset,q.limit):aggregate(p2));
+ const old=h.c.liveLoad();await settle();h.c.liveSet('platform',p2.id);await h.c.liveLoad();
+ assert.equal(h.L.results[0].platform.id,p2.id);assert.equal(h.L.detail.platform.id,p2.id);
+ oldAggregate.resolve(aggregate(P,999));await old;assert.equal(h.L.results[0].platform.id,p2.id);assert.equal(h.L.detail.platform.id,p2.id);assert.doesNotMatch(h.html(),/999/);
+});
+
+test('resetting a split order read stops subsequent chunks from querying the old platform',async()=>{
+ const h=await ready({page:'orders'}),firstChunk=deferred();h.c.liveSet('platform',P.id);await settle();
+ h.L.results=[{...aggregate(P,2),_parts:[{total:1,startAt:'2026-09-21T18:30:00.000Z',endAt:'2026-09-21T21:30:00.000Z'},{total:1,startAt:'2026-09-21T21:30:00.000Z',endAt:'2026-09-22T00:30:00.000Z'}]}];
+ let count=0;h.setHandler(q=>q.action==='details'&&++count===1?firstChunk.promise:detail(P,1,0,20));
+ const old=h.c.liveDetails();assert.equal(count,1);h.c.liveReset();firstChunk.resolve(detail(P,1,0,20));await old;
+ assert.equal(count,1,'late first chunk must not continue into another database read after reset');assert.equal(h.L.detail,null);assert.match(h.html(),/请先选择一个商户（平台）/);
 });

@@ -73,6 +73,6 @@ test('published overlay matches every reviewed renderer and style source exactly
  const m={exports:{}};vm.runInNewContext(compile(fs.readFileSync(path.resolve(__dirname,'../src/lib/adminPreviewRestore.generated.ts'),'utf8')),{module:m,exports:m.exports});
  const read=n=>fs.readFileSync(path.resolve(__dirname,'../admin-preview',n),'utf8');
  assert.equal(m.exports.oldAdapter,read('legacy-live-data.js'));
- assert.equal(m.exports.newModules,['live-comparison.js','live-reference-layout.js','live-empty-pages.js','live-pages-reference.js','live-rates-restored.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js','live-withdraw-pages.js','live-deposit-issues.js','live-data.js'].map(read).join('\n'));
+ assert.equal(m.exports.newModules,['live-comparison.js','live-reference-layout.js','live-empty-pages.js','live-pages-reference.js','live-rates-restored.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js','live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-withdraw-pages.js','live-deposit-issues.js','live-data.js'].map(read).join('\n'));
  assert.equal(m.exports.restoredCss,['live-restored.css','live-reference-pages.css','live-payout-config.css','live-configuration.css'].map(read).join('\n'));
 });

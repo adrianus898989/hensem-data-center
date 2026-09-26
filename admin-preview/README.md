@@ -42,3 +42,11 @@ Treat `legacy-live-data.js` as an immutable match target, including its labels a
 Publish the host bundle through the existing Pages workflow. Session refresh must not remount the frame; fresh permission revocation still removes access.
 
 Run `pnpm test:admin-preview`, the existing migration/filter/comparison suites, and `pnpm build`. The UI fixture uses synthetic data only; production validation uses bounded read-only RPC calls.
+
+## Collected platform coverage
+
+`collected_data` lists every received business-report platform, including report-only PANDA, WG and LG platforms, independently of the transaction catalog. It shows the active canonical team/name mapping when unambiguous; missing or conflicting mappings remain visible as 待归类. Explicit 胖虎巴西 labels take precedence across report feeds. “All” does not send a static platform whitelist. Raw country/platform keys are retained for source reads. Only approved business-number projections are returned; order/member/bank payloads and configuration secrets are never exposed by the generic feed reader.
+
+The feed catalog is loaded only on demand. Order aggregation does not rescan the daily/operator tables. LG platform discovery uses index seeks, while its paginated order details use country-local creation time. Daily amounts, success-rate reports and snapshots remain separately labelled; their rows are never added to order-time totals. Raw date anomalies remain counted and labelled rather than becoming the normal latest date.
+
+The atomic upgrade must include `admin-live-platform-catalog-map.sql` and, after the source read-model dependencies, `admin-live-collected-data.sql`. A successful Pages workflow alone does not install these database functions. Regenerate the overlay and apply the complete reviewed SQL bundle before publishing this host release.

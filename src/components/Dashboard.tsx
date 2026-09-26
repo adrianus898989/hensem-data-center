@@ -1788,7 +1788,7 @@ export default function Dashboard() {
           <span className="home-module-tags"><i>国家汇总</i><i>费率匹配</i><i>费用分析</i></span>
           <span className="home-enter">{canThirdParty ? <>进入模块 <DashboardGlyph name="arrow" /></> : "无查看权限"}</span>
         </button>
-        <button className="home-module-card home-module-blue" onClick={() => switchModule("orders")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
+        <button aria-hidden="true" tabIndex={-1} style={{ display: "none" }} className="home-module-card home-module-blue" onClick={() => switchModule("orders")} disabled={!canThirdParty} title={!canThirdParty ? "管理员未开放此模块" : ""}>
           <span className="home-module-head"><span className="home-module-icon"><DashboardGlyph name="ticket" /></span><span className="home-module-index">04</span></span>
           <span className="home-module-copy"><strong>订单明细</strong><em>先选一个平台，按会员、订单和金额查记录</em></span>
           <span className="home-module-tags"><i>单平台必选</i><i>按时间查询</i><i>分页读取</i></span>

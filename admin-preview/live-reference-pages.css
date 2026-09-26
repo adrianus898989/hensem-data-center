@@ -72,3 +72,5 @@ body.live-admin .df-flow-foot{padding-top:8px;padding-bottom:8px}
 body.live-admin .df-flow-foot>div>strong{font-size:16px;font-weight:600;color:#375981}
 @media(max-width:1250px){body.live-admin .df-flow-provider-extremes{grid-column:span 3;grid-template-columns:1fr}body.live-admin .df-provider-rank-item>small{display:none}}
 @media(max-width:800px){body.live-admin .df-flow-provider-extremes{grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.live-provider-orders table{min-width:1450px}.live-provider-orders td:nth-child(3){min-width:245px}.live-provider-orders td:last-child{white-space:normal;min-width:230px;max-width:320px}.df-jumps .link{margin-left:auto}
