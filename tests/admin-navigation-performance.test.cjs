@@ -187,7 +187,7 @@ test('overview requires the explicit query action even when a background caller 
  const h=await ready();const before=h.calls.length;h.L.dirty=false;
  await h.c.liveLoad();await h.c.liveLoad(false);await h.c.liveOverviewAnalysis();await h.c.liveOverviewWorkorders();await settle();
  assert.equal(h.calls.length,before);assert.equal(h.L.overviewQueried,false);assert.match(h.html(),/点击查询/);assert.doesNotMatch(h.html(),/df-flow-card/);
- const filter=h.nodes.get('liveFilters').innerHTML,actions=h.nodes.get('.title-actions').innerHTML;assert.match(filter,/onclick="liveQuery\(\)"[^>]*>查询/);assert.match(actions,/onclick="liveQuery\(\)"[^>]*>读取最新数据/);
+ const filter=h.nodes.get('liveFilters').innerHTML,actions=h.nodes.get('.title-actions').innerHTML;assert.match(filter,/onclick="liveDateRangeToggle\(false\);liveQuery\(\)"[^>]*>查询/);assert.doesNotMatch(actions,/读取最新数据|全部平台数据/);assert.match(actions,/导出当前表/);
  await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert(h.L.results.length);const loaded=h.calls.length;
  await h.c.liveLoad(false);await settle();assert.equal(h.calls.length,loaded,'background refresh does not start a second overview query');assert.equal(h.L.dirty,false,'an ignored background call preserves the completed manual query');
  h.c.setPage('orders');h.c.liveClosePage('overview');h.c.setPage('overview');await settle();const returned=h.calls.length;h.L.dirty=false;h.c.render();await h.c.liveOverviewAnalysis();await h.c.liveOverviewWorkorders();assert.equal(h.calls.length,returned);assert.equal(h.L.overviewQueried,false);assert.match(h.html(),/点击查询/);assert.doesNotMatch(h.html(),/df-flow-card/);
@@ -261,8 +261,22 @@ test('latency alone has a mandatory single direction, changing it never starts a
 
 test('the visible admin brand and document title stay exact across normal and supervisor navigation without data reads',async()=>{
  const h=await ready(),brand='M8 | 数据中控后台',label={textContent:'Hensem 数据后台'};h.nodes.set('.sidebar .brand b',label);h.c.render();const calls=h.calls.length;
- assert.equal(h.c.document.title,brand);assert.equal(label.textContent,brand);assert.match(h.nodes.get('.bottom-note').innerHTML,/M8 \| 数据中控后台/);
+ assert.equal(h.c.document.title,brand);assert.equal(label.textContent,brand);assert.equal(h.nodes.get('.bottom-note').innerHTML,'');
  h.c.setPage('workorder_permissions');assert.equal(h.c.document.title,brand);assert.equal(label.textContent,brand);h.c.setPage('overview');assert.equal(h.c.document.title,brand);assert.equal(h.calls.length,calls);
  const metadata=fs.readFileSync(path.join(__dirname,'../src/app/layout.tsx'),'utf8');assert.match(metadata,/title: "M8 \| 数据中控后台"/);
  for(const file of ['Dashboard.tsx','DashboardAuthGate.tsx','CustomerServiceDashboard.tsx','ThirdPartyRatesDashboard.tsx']){const text=fs.readFileSync(path.join(__dirname,'../src/components',file),'utf8');assert(text.includes(brand));assert.doesNotMatch(text,/Hensem.?数据后台|Hensem 数据中控|HENSEM OPERATIONS/)}
+});
+
+test('failed catalogue has a dedicated retry and recovers without a phantom empty business query',async()=>{
+ const pending=deferred();let attempts=0;
+ const h=harness({handler:q=>{if(q.action==='catalog'){attempts++;if(attempts===1)throw Error('平台目录读取超时，请重试读取目录');return pending.promise}return aggregate()}});
+ await settle();assert.equal(h.L.catalogReady,false);assert.equal(h.L.catalogLoading,false);assert.match(h.html(),/尚未开始查询订单/);assert.match(h.html(),/liveRetryCatalog/);assert.doesNotMatch(h.html(),/缩短日期|选择单个平台/);assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
+ const retry=h.c.liveRetryCatalog(),same=h.c.liveRetryCatalog();assert.equal(retry,same);assert.equal(attempts,2);assert.equal(h.L.catalogLoading,true);assert.equal(h.L.catalogError,'');assert.doesNotMatch(h.html(),/liveRetryCatalog/);
+ pending.resolve({platforms:[P]});await retry;await settle();assert.equal(h.L.catalogReady,true);assert.equal(h.L.catalogLoading,false);assert.equal(h.L.catalogError,'');assert.equal(h.L.error,'');assert.equal(h.L.country,P.country);assert.match(h.html(),/点击查询/);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);
+ h.c.liveQuery();await settle();assert(h.calls.some(q=>q.action==='aggregate'));assert.doesNotMatch(h.html(),/平台目录读取超时/);
+});
+
+test('malformed catalogue cannot masquerade as an authorized empty directory',async()=>{
+ const h=harness({handler:q=>q.action==='catalog'?{}:aggregate()});await settle();assert.equal(h.L.catalogReady,false);assert.match(h.html(),/平台目录响应不完整/);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);
+ h.setHandler(q=>q.action==='catalog'?{platforms:[]}:aggregate());await h.c.liveRetryCatalog();await settle();assert.equal(h.L.catalogReady,true);assert.equal(h.L.catalogError,'');assert.doesNotMatch(h.html(),/响应不完整/);
 });

@@ -1087,7 +1087,7 @@ test('Brazil selectable directory keeps all 8 native and 60 report seeds without
  const h=await ready({manualOverview:true,reports:true,platforms,handler:q=>q.action==='catalog'?{platforms,withdrawPlatforms:[...seeds,seeds[0],{...platforms[0],source:'withdraw'}]}:q.action==='collectedData'?{rows:feeds}:q.action==='reportSummary'?{feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'not_received',groups:[]}))}:q.action==='rates'?{rows:[],total:0}:completeAggregate(platforms.find(p=>p.id===q.platformId)||platforms[0],10,8)});
  let html=h.nodes.get('liveFilters').innerHTML;
  assert.match(html,/可选目录 68 个平台/);assert.match(html,/订单目录 8 平台/);assert.match(html,/仅目录 60 平台 · 数据待确认/);assert.doesNotMatch(html,/已接入日报|所选日期有订单数据|仅日报/);
- assert.match(html,/live-filter-fields/);assert.match(html,/live-filter-footer/);assert.match(html,/live-query-actions/);assert.match(h.html(),/>查询数据<\/button>/);
+ assert.match(html,/live-filter-fields/);assert.match(html,/live-date-trigger/);assert.match(html,/live-query-actions/);assert.match(h.html(),/>查询数据<\/button>/);
  assert.equal(businessCalls(h).length,0);assert.equal(h.calls.filter(q=>q.action==='collectedData').length,0);
  await h.c.liveQuery();await settle();html=h.nodes.get('liveFilters').innerHTML;
  assert.match(html,/可选目录 68 个平台/);assert.match(html,/已接入日报 \/ 配置 2 平台/);assert.match(html,/仅目录 58 平台 · 数据待确认/);assert.equal(h.L.queryPlatforms.length,8);assert.equal(new Set(h.L.queryPlatforms.map(p=>p.id)).size,8);
@@ -1100,4 +1100,21 @@ test('platform assignment input changes invalidate in-flight results and success
  h.c.platformAssignmentsSet('teamPlatformCountry','印度');assert.equal(h.L.platformAssignmentsDirty,true);assert.equal(h.L.platformAssignmentsLoading,false);old.resolve({rows:[{platform:'STALE BRAZIL',country:'巴西'}],total:1});await pending;
  assert.equal(h.L.platformAssignments,null);assert.equal(h.L.platformAssignmentsAppliedRequest,undefined);await h.c.platformAssignmentsLoad(true);assert.equal(h.L.platformAssignmentsAppliedRequest.country,'印度');assert.equal(h.L.platformAssignmentsDirty,false);assert.equal(h.L.platformAssignments.rows[0].platform,'CURRENT INDIA');
  h.c.platformAssignmentsSet('teamPlatformQuery','new query');assert.equal(h.L.platformAssignmentsDirty,true);assert.equal(h.L.platformAssignmentsAppliedRequest.platform,undefined,'applied scope is a captured object, not a live view of edited filters');
+});
+
+
+test('compact time panel keeps exact drafts and manual shortcuts while chrome keeps only export',async()=>{
+ const h=await ready({manualOverview:true});h.c.render();let html=h.nodes.get('liveFilters').innerHTML;
+ assert.match(html,/id="liveDatePanel" class="live-date-panel" hidden/);assert.match(html,/aria-controls="liveDatePanel"/);
+ assert.equal(h.nodes.get('eyebrow').textContent,'');assert.equal(h.nodes.get('.bottom-note').innerHTML,'');
+ assert.match(h.nodes.get('.title-actions').innerHTML,/liveExport/);assert.doesNotMatch(h.nodes.get('.title-actions').innerHTML,/全部平台数据|读取最新数据/);
+ const before=businessCalls(h).length;h.c.liveDateRangeToggle(true);const filterWrites=h.writes.filter(w=>w.id==='liveFilters').length;h.c.liveDateSet('from','time','01:02:03');h.c.liveDateSet('to','time','04:05:06');
+ assert.equal(h.writes.filter(w=>w.id==='liveFilters').length,filterWrites,'native date/time edits must not replace focused inputs or swallow the first Query/Done click');h.c.render();
+ html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/aria-expanded="true"/);assert.doesNotMatch(html,/class="live-date-panel" hidden/);assert.match(html,/value="01:02:03"/);assert.match(html,/value="04:05:06"/);assert.equal(businessCalls(h).length,before);
+ h.c.liveDateRangeToggle(false);h.c.render();assert.match(h.nodes.get('liveFilters').innerHTML,/class="live-date-panel" hidden/);assert.equal(h.L.from,'2026-09-22T01:02:03');
+ await h.c.liveQuery();const sent=businessCalls(h).slice(before).find(q=>q.action==='aggregate');assert.equal(sent.startAt,'2026-09-21T19:32:03.000Z');assert.equal(sent.endAt,'2026-09-21T22:35:07.000Z');
+ h.c.state.page='providers';h.c.render();html=h.nodes.get('liveFilters').innerHTML;const previous=businessCalls(h).length;
+ for(const [,handler]of html.matchAll(/onclick="(livePeriod[^";]+)"/g))vm.runInContext(handler,h.c);
+ await settle();assert.equal(businessCalls(h).length,previous,'date shortcuts only stage conditions even on provider pages');assert.equal(h.L.dirty,true);
+ h.L.catalogReady=false;h.L.catalogLoading=true;h.c.render();html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/平台目录读取中/);assert.doesNotMatch(html,/可选目录 0|订单目录 0|0 三方|0 团队|0 国家/);
 });

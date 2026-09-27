@@ -226,6 +226,7 @@ export function isAdminLiveMessage(event:MessageEvent,source:Window|null|undefin
  return isAdminLiveEnvelope(event,source,channel)&&event.data.type===LIVE_REQUEST;
 }
 function adminLiveTimeoutMessage(action:unknown):string {
+ if(action==='catalog')return '平台目录读取超时，请重试读取目录';
  return ['syncHealth','intakeCoverage'].includes(String(action))?'同步检查超时，请稍后重试；不能据此判断平台没有数据':action==='withdrawReasons'?'该平台当日原因读取超时，请点击重试':['aggregate','collectedData','reportSummary'].includes(String(action))?'读取超时，不代表没有数据；请重试':'读取超时，请缩短日期或选择单个平台后重试';
 }
 export async function adminLiveRequest(session:DashboardSession,input:unknown,signal?:AbortSignal):Promise<unknown>{

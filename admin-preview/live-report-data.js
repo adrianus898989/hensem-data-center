@@ -29,8 +29,9 @@
  }
  // Owner-confirmed alias. Limit it to this original team/country/backend;
  // sourceName/rawPlatform and the authorized native IDs remain query keys.
+ const reviewSnapshotSystems=new Set(['RECHARGE_REVIEW','WITHDRAW_REVIEW']);
  const confirmedRaja=row=>sourceIdentity(row).group==='印度'&&(!row.team||['M8','待归类','未绑定团队','__unassigned__','__team_pending__'].includes(row.team))
-  &&['','AR','REPORT','REPORTS','SHEET','WITHDRAW'].includes(token(row.system||row.source))
+  &&(['','AR','REPORT','REPORTS','SHEET','WITHDRAW'].includes(token(row.system||row.source))||reviewSnapshotSystems.has(token(row.system||row.source)))
   &&['RAJA','RAJALOTTERY'].includes(token(row.name||row.rawPlatform));
  // A display country must never replace the source group used for access and queries.
  function normalizeIdentity(row={}){
@@ -83,7 +84,11 @@
    const orderGroups=new Map();for(const p of L.catalog||[]){const key=keyFor(p);if(!orderGroups.has(key))orderGroups.set(key,[]);orderGroups.get(key).push(p)}
    const reportTeams=feeds=>[...new Set(feeds.map(f=>normalizeIdentity(f).team).filter(t=>!['__unassigned__','__team_pending__','__team_conflict__','归属待核对'].includes(t)))];
    const chosenNative=(L.catalog||[]).filter(p=>{if(!confirmedRaja(p))return true;const peers=(orderGroups.get(keyFor(p))||[]).filter(confirmedRaja),preferred=peers.find(x=>token(x.sourceName||x.name)==='RAJA')||peers[0];return p===preferred});
-   const native=chosenNative.map(p=>{const feeds=groups.get(keyFor(p))||[],teams=reportTeams(feeds),identity=normalizeIdentity(p),team=identity.team;return {...identity,team:team==='__unassigned__'?(teams.length===1?teams[0]:teams.length>1?'归属待核对':team):team,feeds,reportConnected:hasReportData(feeds),reportOnly:false,orderPlatformIds:confirmedRaja(p)?[p.id]:(orderGroups.get(keyFor(p))||[]).map(x=>x.id),...(confirmedRaja(p)?{aliasPlatformIds:(orderGroups.get(keyFor(p))||[]).map(x=>x.id)}:{})}});
+   // Review snapshots used a plain report key before joining the confirmed
+   // alias. Retain those observed, same-scope IDs for saved filter selections.
+   // They never become extra native order IDs or additional report requests.
+   const rajaSelectionIds=(p,feeds)=>[...new Set([...(orderGroups.get(keyFor(p))||[]).map(x=>x.id),...feeds.filter(f=>confirmedRaja(f)&&reviewSnapshotSystems.has(token(f.system))).map(f=>'report:'+encodeURIComponent(JSON.stringify([sourceIdentity(f).group,f.name||''])))])];
+   const native=chosenNative.map(p=>{const feeds=groups.get(keyFor(p))||[],teams=reportTeams(feeds),identity=normalizeIdentity(p),team=identity.team;return {...identity,team:team==='__unassigned__'?(teams.length===1?teams[0]:teams.length>1?'归属待核对':team):team,feeds,reportConnected:hasReportData(feeds),reportOnly:false,orderPlatformIds:confirmedRaja(p)?[p.id]:(orderGroups.get(keyFor(p))||[]).map(x=>x.id),...(confirmedRaja(p)?{aliasPlatformIds:rajaSelectionIds(p,feeds)}:{})}});
    for(const [key,feeds]of groups){if(orderGroups.has(key))continue;const seed=seeds.get(key),first=feeds[0]||seed,teams=reportTeams([...feeds,...(seed?[seed]:[])]),teamConflict=[...feeds,...(seed?[seed]:[])].some(f=>['__team_conflict__','归属待核对'].includes(f?.team))||teams.length>1,teamVerified=feeds.length>0||seed?.team&&seed.team!=='__team_pending__',currencies=[...new Set(feeds.map(f=>f.currency).filter(Boolean))],zones=[...new Set(feeds.map(f=>f.timezone).filter(Boolean))],systems=[...new Set(feeds.map(f=>f.system).filter(backendSource))];native.push({...normalizeIdentity(first),id:'report:'+encodeURIComponent(key),name:normalizeIdentity(first).name,team:teamConflict?'__team_conflict__':teams.length===1?teams[0]:teamVerified?'__unassigned__':'__team_pending__',source:systems.length===1?systems[0]:'reports',currency:currencies.length===1?currencies[0]:seed?.currency||'—',timezone:zones.length===1?zones[0]:seed?.timezone||null,feeds,reportConnected:hasReportData(feeds),reportOnly:true,orderPlatformIds:[]})}
    catalogMemo={inputs,lengths:inputs.map(rows=>rows?.length||0),rows:native};return native;
   }

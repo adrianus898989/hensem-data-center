@@ -344,3 +344,27 @@ test('confirmed alias display uses RAJA while preserving raw query identities an
  for(const other of [{country:'巴西',team:'M8',source:'ar'},{country:'印度',team:'Other',source:'ar'},{country:'印度',team:'M8',source:'newar'}])assert.equal(api.confirmedAliasKey({name:'RAJALOTTERY',...other}),null);
  assert.equal(api.normalizeIdentity({name:'RAJALOTTERY',country:'印度',team:'M8',source:'ar'}).rawPlatform,'RAJALOTTERY');
 });
+
+test('RAJA review snapshots share the confirmed native catalog identity and keep every original read key',async()=>{
+ const raw={id:'raja-native',name:'RAJA',sourceName:'RAJA',country:'印度',scopeGroup:'IN',team:'M8',source:'ar'},alias={...raw,id:'rajalottery-native',name:'RAJALOTTERY',sourceName:'RAJALOTTERY'};
+ // Production has both review snapshot systems alongside AR/config/report feeds.
+ const common={name:'RAJA',rawPlatform:'RAJA',country:'印度',rawCountry:'IN',team:'M8',provenance:{kind:'direct'}};
+ const recharge=feed({...common,dataset:'collection_success',system:'RECHARGE_REVIEW',directions:['charge']}),withdraw=feed({...common,dataset:'collection_success',system:'WITHDRAW_REVIEW',directions:['withdraw']});
+ const feeds=[recharge,withdraw,feed({...common,system:'AR',directions:['charge']}),feed({...common,system:'REPORT',rawCountry:'印度',provenance:{kind:'google_sheets'},directions:['charge']}),feed({...common,dataset:'ar_config',system:'AR',directions:[]}),recharge];
+ const before=plain(feeds),f=fixture({catalog:[alias,raw],withdrawCatalog:[{...raw,source:'withdraw'}],feeds});
+ const oldReportId='report:'+encodeURIComponent(JSON.stringify(['印度','RAJA']));
+ await f.page.load({country:'印度',teams:['M8'],platforms:[oldReportId,alias.id],direction:'all',from:scope.from,to:scope.to});
+ const rows=f.page.catalog();assert.equal(rows.length,1);assert.equal(rows[0].id,raw.id);assert.equal(rows[0].name,'RAJA');assert.equal(rows[0].reportOnly,false);assert.equal(rows[0].reportConnected,true);assert.deepEqual(plain(rows[0].orderPlatformIds),[raw.id]);
+ assert(rows[0].aliasPlatformIds.includes(alias.id));assert(rows[0].aliasPlatformIds.includes(oldReportId));assert.equal(f.page.selected({country:'印度',teams:['M8'],platforms:[oldReportId]}).length,1);
+ const reads=f.calls.find(q=>q.action==='reportSummary').feeds;assert.equal(reads.length,4,'duplicate metadata and native aliases do not double request a feed');
+ assert.deepEqual(reads.map(r=>[r.dataset,r.system,r.country,r.platform,r.direction]),[['collection_success','RECHARGE_REVIEW','IN','RAJA','charge'],['collection_success','WITHDRAW_REVIEW','IN','RAJA','withdraw'],['volume','AR','IN','RAJA','charge'],['volume','REPORT','印度','RAJA','charge']]);
+ assert.deepEqual(plain(f.page.state.catalogRows),before,'no rewriting snapshot source systems or raw platform names');assert.equal(f.calls.filter(q=>q.action==='aggregate').length,0,'source report metrics are not added to native order totals');
+});
+
+test('RAJA review alias merging is limited to the confirmed country/team and does not absorb another backend',async()=>{
+ const raw={id:'raja-native',name:'RAJA',sourceName:'RAJA',country:'印度',team:'M8',source:'ar'},common={dataset:'collection_success',system:'RECHARGE_REVIEW',name:'RAJA',rawPlatform:'RAJA',country:'印度',rawCountry:'IN',team:'M8',directions:['charge'],provenance:{kind:'direct'}};
+ for(const extra of [{team:'Other'},{country:'巴西',rawCountry:'BR'},{country:'印度',rawCountry:'HK_TEAM',team:'香港'},{system:'NEW_AR'},{system:'LG'}]){
+  const f=fixture({catalog:[raw],feeds:[feed({...common,...extra})]});await f.page.loadCatalog();
+  assert.equal(f.page.catalog().length,2);assert.equal(f.page.catalog().find(p=>p.id===raw.id).feeds.length,0);assert.equal(f.page.catalog().find(p=>p.reportOnly).orderPlatformIds.length,0);
+ }
+});
