@@ -79,7 +79,19 @@ function stripBusinessSuffix(value: string): string {
 // e.g. Indonesia's StarPay is a different provider. Match only complete names,
 // without deleting punctuation or unconfirmed version numbers. A dash may use
 // spreadsheet typography and spaces around it, but it must still be present.
+// Owner-confirmed 2026-09-27. Exact raw channels, not generic network names.
+// Bare USDT and numbered channels in other countries remain unclassified here.
+export const CONFIRMED_INDIA_USDT_CHANNEL_ALIASES = new Map<string, string>([
+  ["usdt(trc20)-3", "TronPayUSDT"],
+  ["usdt(trc20)-4", "UniPayUSDT"],
+  ["usdt(trc20)-5", "Wallet66"],
+  ["usdt(bep20)-5", "Wallet66"],
+  ["wallet66-usdt", "Wallet66"],
+]);
+
 const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
+  ...CONFIRMED_INDIA_USDT_CHANNEL_ALIASES,
+  ["wallet66", "Wallet66"],
   // Owner-confirmed 2026-09-26. T3Pay and 3TPay are different providers.
   ["t3pay", "T3Pay"],
   ["rushpay", "RushPay"],

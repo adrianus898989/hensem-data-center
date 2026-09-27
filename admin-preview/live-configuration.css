@@ -169,6 +169,7 @@ body.live-admin .provider-compact-table td{font-variant-numeric:tabular-nums;whi
 body.live-admin .provider-fee-preview{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;font:inherit;cursor:pointer}
 body.live-admin .provider-fee-preview:focus-visible{outline:2px solid #4265ec;outline-offset:2px;border-radius:3px}
 body.live-admin .drawer-backdrop:has(.provider-rate-details){z-index:200}
+body.live-admin .drawer-backdrop:has(.live-provider-orders,.live-provider-order-detail){z-index:210}
 body.live-admin .provider-rate-details table{min-width:1080px;table-layout:fixed}
 body.live-admin .provider-rate-details th{white-space:nowrap}
 body.live-admin .provider-rate-details td{white-space:normal;overflow-wrap:anywhere;vertical-align:top;line-height:1.65}

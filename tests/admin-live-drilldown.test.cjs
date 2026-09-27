@@ -170,8 +170,11 @@ test('fresh authentication, platform scope, helper grants and invalid segments c
 
 test('migration leaves existing engines untouched and returns complete bounded aggregates with no order paging',async()=>{
  const patch=fs.readFileSync(path.join(repo,'supabase/admin-live-drilldown.sql'),'utf8'),original=fs.readFileSync(path.join(repo,'supabase/admin-live-query-performance.sql'),'utf8');
- const source=value=>value.slice(value.indexOf("  if v_platform.source='ar' then"),value.indexOf('  -- Group and page')<0?value.indexOf('  v_prefix:='):value.indexOf('  -- Group and page')).trim();
- assert.equal(source(patch),source(original),'source allowlist, country/platform predicates, local time and launch filters match existing engine');
+ const source=value=>value.slice(value.indexOf("  if v_platform.source='ar' then"),value.indexOf('  -- Group and page')<0?value.indexOf("\n  if v_kind='latency' then",value.indexOf("  if v_platform.source='ar' then")):value.indexOf('  -- Group and page')).trim();
+ // Ignore only each intentionally split time predicate. Projections, scope,
+ // exact IDs and source launch filters must still match the existing engine.
+ const withoutTimePredicates=value=>value.replace(/\n        and \(\(\$[12][59][\s\S]*?(?=\n        and \((?:\$9|t\.launch_at))/g,'\n        -- event-window predicate');
+ assert.equal(withoutTimePredicates(source(patch)),withoutTimePredicates(source(original)),'safe projection and country/platform, exact ID and launch constraints remain unchanged');
  assert.doesNotMatch(patch,/create or replace function (?:public|private)\.dashboard_admin_live_query\(/);assert.doesNotMatch(patch,/create index|alter table|insert into|delete from|update public|\blimit \$18|\boffset \$17/i);
  const before=await call(req());await db.exec(patch);const after=await call(req());delete before.asOf;delete after.asOf;assert.deepEqual(after,before);
 });
@@ -247,4 +250,58 @@ test('latency provider names are mapped once per raw name, non-latency segments 
  for(let i=0;i<50;i++)await add('game66','charge','MAP-CALL-'+i,100,'2026-09-19 01:00','2026-09-19 01:01','success',i%2?'Repeated-A':'Repeated-B');
  const q={platformId:game,direction:'charge',memberId:'DRILL',...dates('game66')};await drill(segment('latency',{...q,bucket:0}));const calls=(await db.query('select last_value from mapping_calls')).rows[0].last_value;assert.equal(Number(calls),2);
  const amount=await drill(segment('amount',{...q,bucket:'100'}));assert.deepEqual(Object.keys(amount.groups),['daily']);assert.equal(Number((await db.query('select last_value from mapping_calls')).rows[0].last_value),2);
+}));
+
+test('success-window latency keeps prior-day creations and all-direction denominators without created-only or non-success rows',async()=>rollback(async()=>{
+ for(const [source,platformId]of [['ar',ar],['newar',newar],['game66',game]]){
+  for(const direction of ['charge','withdraw'])for(const [id,value,created,success,status]of [
+   ['PRIOR-CREATION',100,'2026-09-18 23:00:00.250','2026-09-19 01:00:00.250','success'],
+   ['FAST',200,'2026-09-19 01:00:00.250','2026-09-19 01:05:00.250','success'],
+   ['NEXT-DAY',300,'2026-09-20 00:59:00.249','2026-09-20 01:00:00.249','success'],
+   ['BEFORE-START',999,'2026-09-18 23:00:00.249','2026-09-19 01:00:00.249','success'],
+   ['AT-END',999,'2026-09-20 01:00:00.000','2026-09-20 01:00:00.250','success'],
+   ['CREATED-ONLY',999,'2026-09-19 02:00','2026-09-21 02:00','success'],
+   ['PENDING-WITH-TIME',999,'2026-09-19 02:00','2026-09-19 03:00','pending'],
+   ['FAILED-WITH-TIME',999,'2026-09-19 02:00','2026-09-19 03:00','failed'],
+   ['REVERSED',400,'2026-09-20 02:00','2026-09-19 03:00','success'],
+   ['MISSING-CREATED',500,null,'2026-09-19 04:00','success'],
+   ['MISSING-SUCCESS',999,'2026-09-19 02:00',null,'success']
+  ])await add(source,direction,source+direction+'-WINDOW-'+id,value,created,success,status,'WindowPay');
+  const z=source==='newar'?'+05:45':'+05:30',q=segment('latency',{platformId,direction:'all',memberId:'DRILL',bucket:3,
+   startAt:'2026-09-19T01:00:00.250'+z,endAt:'2026-09-20T01:00:00.250'+z});
+  const r=await drill(q);assert.equal(r.basis,'success_at');assert.equal(r.total,2);assert.equal(r.summary.length,2);
+  for(const direction of ['charge','withdraw']){
+   const s=r.summary.find(x=>x.direction===direction),p=r.groups.provider.find(x=>x.direction===direction);
+   assert.equal(s.count,1,source+'/'+direction+' only 1–3 hour bin');assert.equal(s.amount,'100');
+   assert.equal(s.valid_count,3);assert.equal(s.valid_amount,'600');assert.equal(s.candidate_count,5);assert.equal(s.excluded_count,2);
+   assert.equal(p.count,1);assert.equal(p.valid_count,3);assert.equal(p.valid_amount,'600');assert(Math.abs(p.count_share-1/3)<1e-12);
+   const days=r.groups.provider_daily.filter(x=>x.direction===direction);assert.equal(days.length,2);
+   assert.equal(days.find(x=>x.date==='2026-09-19').valid_count,2);assert.equal(days.find(x=>x.date==='2026-09-20').valid_count,1);
+   const only=await drill({...q,direction});assert.deepEqual(only.summary,[s]);assert.deepEqual(only.groups.provider,[p]);
+  }
+  const unmatched=await drill({...q,providers:['NoSuchProvider']});assert.deepEqual(unmatched.summary,[]);assert.deepEqual(unmatched.groups.provider,[]);
+ }
+}));
+
+test('missing and nonfinite creation times stay excluded candidates with no invented long-duration orders',async()=>rollback(async()=>{
+ for(const [source,platformId]of [['ar',ar],['newar',newar],['game66',game]])for(const direction of ['charge','withdraw']){
+  for(const label of ['NULL','NEGATIVE-INFINITY','POSITIVE-INFINITY'])await add(source,direction,source+direction+'-INVALID-'+label,100,null,'2026-09-19 03:00','success','InvalidTime');
+  const table=source==='ar'?'ar_collected_orders':source==='newar'?'newar_detail_records':direction==='charge'?'game66_charge_orders':'game66_withdraw_orders';
+  const column=source==='ar'?'applied_at':source==='newar'?'created_at':'create_time',id=source==='ar'?'order_no':source==='newar'?'order_number':'order_num';
+  await db.query(`update ${table} set ${column}='-infinity' where ${id}=$1`,[source+direction+'-INVALID-NEGATIVE-INFINITY']);
+  await db.query(`update ${table} set ${column}='infinity' where ${id}=$1`,[source+direction+'-INVALID-POSITIVE-INFINITY']);
+  const r=await drill(segment('latency',{platformId,direction,memberId:'DRILL',bucket:9,...dates(source)})),s=r.summary[0];
+  assert.equal(s.candidate_count,3);assert.equal(s.excluded_count,3);assert.equal(s.valid_count,0);assert.equal(s.count,0);assert.equal(s.count_share,null);assert.equal(s.amount_share,null);
+  assert.equal(r.groups.provider[0].valid_count,0);assert.equal(r.groups.provider_daily[0].excluded_count,3);
+ }
+}));
+
+test('success-window optimization retains NEW_AR launch and exact order filters',async()=>rollback(async()=>{
+ await db.exec("update newar_detail_platforms set launch_at='2026-09-19T00:00:00+05:45' where platform='NEW-EXAMPLE'");
+ await add('newar','charge','PRE-LAUNCH-LATENCY',999,'2026-09-18 23:00','2026-09-19 01:00','success','LaunchPay');
+ await add('newar','charge','POST-LAUNCH-LATENCY',100,'2026-09-19 00:00','2026-09-19 02:00','success','LaunchPay');
+ const q=segment('latency',{platformId:newar,direction:'charge',memberId:'DRILL',bucket:3,...dates('newar',19,20)}),r=await drill(q);
+ assert.equal(r.summary[0].count,1);assert.equal(r.summary[0].valid_count,1);assert.equal(r.summary[0].amount,'100');
+ assert.deepEqual((await drill({...q,orderNumber:'PRE-LAUNCH-LATENCY'})).summary,[]);
+ assert.equal((await drill({...q,systemOrderId:'POST-LAUNCH-LATENCY'})).summary[0].count,1);
 }));

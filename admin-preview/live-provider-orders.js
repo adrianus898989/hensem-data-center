@@ -66,7 +66,7 @@
    const r=current?.rows[index];if(!r)return;
    openDrawer('订单详情 · '+(r.order_number||r.order_no||''),'<button class="btn small" onclick="liveProviderOrdersBack()">← 返回三方订单</button>'+box('订单与归类依据',table(['字段','内容'],[
     ['订单号',E(r.order_number||r.order_no||'—')],['系统订单号',E(orderFieldValue(r.platform,'systemOrderId',r.system_order_id||r.id)||'—')],['三方订单号',E(orderFieldValue(r.platform,'thirdPartyOrderNumber',r.third_party_order_number)||'—')],['平台 / 包网',E(r.platform.name+' / '+r.platform.source)],['金额',N(r.amount)+' '+E(r.currency||current.currency)],['原始三方 / 通道',E(r.raw_provider===undefined?'接口未提供':r.raw_provider==null||r.raw_provider===''?'（空）':r.raw_provider)],['归类三方',E(r.provider||'未识别通道')],['原始类型',E(r.channel_type||'—')],['原始状态',E(r.status||r.status_group||'—')],['归类依据',E(reason(r))],['创建时间',E(formatTime(r.created_at,r.platform.timezone))],['成功时间',E(formatTime(r.success_at,r.platform.timezone))],['同步时间',E(formatTime(r.synced_at,r.platform.timezone))],['时区',E(r.platform.timezone)]
-   ])));
+   ],'live-provider-order-detail')));
   };
   root.liveProviderOrdersBack=show;
   return {open,cancel,reason};

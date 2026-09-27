@@ -60,7 +60,9 @@ declare v_scope jsonb:=private.dashboard_admin_live_scope();
 begin
   return query with normalized as materialized (
     select stored.country,stored.platform,stored.raw_provider,
-      private.dashboard_admin_live_provider_alias_values(stored.country,stored.canonical_values) canonical_values,
+      case when private.dashboard_admin_live_confirmed_usdt_provider(stored.country,stored.raw_provider) is not null
+        then array[private.dashboard_admin_live_confirmed_usdt_provider(stored.country,stored.raw_provider)]
+        else private.dashboard_admin_live_provider_alias_values(stored.country,stored.canonical_values) end canonical_values,
       stored.directions,stored.charge_count,stored.withdraw_count,stored.matched_count,stored.last_data_date,stored.updated_at
     from private.dashboard_admin_provider_registry stored
     where private.dashboard_scope_allows(v_scope,stored.country,stored.platform)
@@ -151,6 +153,7 @@ begin
     select country,canonical_values,private.dashboard_admin_live_provider_alias_values(country,canonical_values) as names from name_sets
   ), matches as (
     select distinct coalesce(private.dashboard_admin_live_provider_alias(r.country,o.canonical_provider),
+      private.dashboard_admin_live_confirmed_usdt_provider(r.country,r.raw_provider),
       case when cardinality(n.names)=1 then n.names[1] end,
       nullif(private.dashboard_admin_live_provider_alias(r.country,r.raw_provider),''),'未识别通道') as provider
     from scoped r join names n on n.country=r.country and n.canonical_values=r.canonical_values
@@ -165,7 +168,7 @@ $$;
 -- Canonicalization reads the small registry, then gives an explicit manual override precedence.
 create or replace function private.dashboard_admin_live_provider_canonical(p_country text,p_platform text,p_raw text)
 returns text language sql stable security definer set search_path='' as $$
-  select private.dashboard_admin_live_provider_alias(p_country,coalesce((select coalesce(o.canonical_provider,case when cardinality(n.names)=1 then n.names[1] end)
+  select private.dashboard_admin_live_provider_alias(p_country,coalesce((select coalesce(o.canonical_provider,private.dashboard_admin_live_confirmed_usdt_provider(r.country,r.raw_provider),case when cardinality(n.names)=1 then n.names[1] end)
     from private.dashboard_admin_provider_registry r left join private.dashboard_admin_provider_overrides o using(country,platform,raw_provider)
     cross join lateral (select private.dashboard_admin_live_provider_alias_values(r.country,r.canonical_values) names)n
     where r.country=p_country and r.platform=p_platform and r.raw_provider=case when p_raw='未识别通道' then '' else coalesce(btrim(p_raw),'') end),p_raw));
