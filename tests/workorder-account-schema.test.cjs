@@ -14,12 +14,16 @@ test('workorder schema enforces separate identities, owner mutations, RLS and tr
    insert into auth.users values('${owner}','owner@hensem.local'),('${worker}','worker1@workorder.hensem.local'),('${viewer}','viewer@hensem.local');
    insert into public.dashboard_profiles values('${owner}','owner',true),('${viewer}','viewer',true);`);
   await db.exec(sql);
+  await db.exec(fs.readFileSync(path.join(__dirname,'../supabase/workorder-operation-permissions.sql'),'utf8'));
   const insert=(id,name,actor=owner)=>db.query(`insert into public.workorder_portal_accounts(auth_user_id,username,display_name,role,team,platforms,created_by,updated_by)
    values($1,$2,'Worker','agent','M8',array['91CLUB'],$3,$3) returning updated_at`,[id,name,actor]);
   await assert.rejects(insert(viewer,'viewer'),/must not be backend/);
   await assert.rejects(insert(worker,'wrong-alias'),/identity mismatch/);
   await assert.rejects(insert(worker,'worker1',viewer),/Active backend owner/);
   await insert(worker,'worker1');
+  await assert.rejects(db.query("update workorder_portal_accounts set permissions='{\"case.assign\":true}' where auth_user_id=$1",[worker]),/check constraint/);
+  await assert.rejects(db.query("update workorder_portal_accounts set permissions='{\"case.create\":\"true\"}' where auth_user_id=$1",[worker]),/check constraint/);
+  await assert.rejects(db.query("update workorder_portal_accounts set permissions='{\"security.manage\":false}' where auth_user_id=$1",[worker]),/check constraint/);
   assert.equal((await db.query('select count(*)::int n from workorder_portal_account_audit')).rows[0].n,1);
   assert.equal((await db.query('select count(*)::int n from dashboard_profiles')).rows[0].n,2);
   await assert.rejects(db.query("update workorder_portal_accounts set username='different' where auth_user_id=$1",[worker]),/identity mismatch|immutable/);

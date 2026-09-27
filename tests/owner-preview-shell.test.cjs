@@ -70,3 +70,19 @@ test('account page layout bridge rejects spoofed or unbounded input',()=>{
  assert.deepEqual(JSON.parse(JSON.stringify(api.ownerPreviewAccountPage({...base,data:{...base.data,active:false}},source,'current'))),{active:false});
  for(const invalid of [{...base,source:{}},{...base,origin:'https://other.invalid'},{...base,data:{...base.data,channel:'stale'}},{...base,data:{...base.data,active:'true'}},...[{top:-1,left:0,width:100},{top:0,left:0,width:Infinity},{top:0,left:'0',width:100},{top:0,left:0,width:0},{top:1,left:20001,width:100}].map(bounds=>({...base,data:{...base.data,bounds}}))])assert.equal(api.ownerPreviewAccountPage(invalid,source,'current'),null);
 });
+
+test('security slot validates the same opaque source and bounds without accepting account messages',()=>{
+ const source={},base={source,origin:'null',data:{type:api.OWNER_PREVIEW_SHELL_MESSAGE,channel:'secure',command:'security-page',active:true,bounds:{top:150,left:250,width:900}}};
+ assert.deepEqual(JSON.parse(JSON.stringify(api.ownerPreviewSecurityPage(base,source,'secure'))),{active:true,bounds:{top:150,left:250,width:900}});
+ for(const invalid of [{...base,source:{}},{...base,origin:'https://attacker.invalid'},{...base,data:{...base.data,channel:'stale'}},{...base,data:{...base.data,command:'account-page'}},{...base,data:{...base.data,bounds:{top:10,left:0,width:Infinity}}}])assert.equal(api.ownerPreviewSecurityPage(invalid,source,'secure'),null);
+});
+test('native security page enters and leaves independently from accounts',()=>{
+ const result=api.makeOwnerPreviewShellDocument(html,'page-channel',true),script=[...result.matchAll(/<script>([\s\S]*?)<\/script>/g)][0][1];
+ let ip=null,account=null,mutate,queued=[];const messages=[];
+ const window={requestAnimationFrame:fn=>queued.push(fn),addEventListener:()=>{}};
+ const document={readyState:'complete',body:{},querySelector:()=>null,getElementById:id=>id==='hle-ip'?ip:id==='hle-access'?account:null};
+ vm.runInNewContext(script,{window,document,MutationObserver:class{constructor(fn){mutate=fn}observe(){}},parent:{postMessage:payload=>messages.push(JSON.parse(JSON.stringify(payload)))}});
+ const flush=()=>queued.splice(0).forEach(fn=>fn());
+ ip={getBoundingClientRect:()=>({top:140,left:230,width:1000})};mutate();flush();assert.equal(messages.at(-1).command,'security-page');assert.equal(messages.at(-1).active,true);
+ ip=null;account={getBoundingClientRect:()=>({top:160,left:230,width:1000})};mutate();flush();assert.equal(messages.at(-1).command,'security-page');assert.equal(messages.at(-1).active,false);assert.equal(messages.at(-2).command,'account-page');assert.equal(messages.at(-2).active,true);
+});

@@ -1,0 +1,13 @@
+.account-login-policy{display:flex;align-items:center;flex-wrap:wrap;gap:10px 18px;border:1px solid #e0e7f1;border-radius:7px;background:#f8faff;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#35516f}
+.account-login-policy h4{margin:0 0 3px;font-size:12px}.account-login-policy p{margin:0;color:#7689a0;font-size:11px}
+.account-login-policy form{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:auto}
+.account-login-policy label{display:flex;align-items:center;gap:8px;font-size:11px}
+.account-login-policy button,.account-login-policy select,.account-login-details button,.account-login-details select{border:1px solid #cdd9e8;background:#fff;border-radius:5px;color:#35516f;padding:6px 9px;font:inherit;cursor:pointer}
+.account-login-policy button:disabled,.account-login-policy select:disabled,.account-login-details button:disabled{opacity:.5;cursor:default}
+.account-login-policy .account-security-error,.account-login-policy .account-security-success{width:100%;margin:0}
+.account-security-error{padding:8px 10px;color:#a43e32!important;background:#fff0ed;border-radius:5px;font-size:12px}
+.account-security-success{padding:8px 10px;color:#287357!important;background:#eaf6ef;border-radius:5px;font-size:12px}
+.account-security-manual{margin:0 0 12px;color:#627b99}.account-security-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0 0 16px}
+.account-security-facts>div{padding:10px;border:1px solid #e0e7f1;border-radius:6px;background:#f8faff}.account-security-facts dt{font-size:11px;color:#7288a3}.account-security-facts dd{margin:5px 0 0;font-size:14px;font-weight:600}
+.account-security-override{display:flex;align-items:center;gap:12px;margin-bottom:12px}.account-security-actions{display:flex;gap:8px;flex-wrap:wrap}.account-security-reload{margin-top:12px}.account-security-note{margin:12px 0 0;color:#8291a6;font-size:11px}
+@media(max-width:700px){.account-login-policy form{margin-left:0}.account-security-facts{grid-template-columns:1fr}}

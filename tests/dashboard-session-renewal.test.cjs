@@ -13,7 +13,8 @@ const START = Date.parse('2026-09-11T12:00:00.000Z');
 const A = '00000000-0000-4000-8000-000000000001';
 const B = '00000000-0000-4000-8000-000000000002';
 const clone = value => JSON.parse(JSON.stringify(value));
-const json = (body, status=200) => new Response(JSON.stringify(body), {status,headers:{'Content-Type':'application/json'}});
+const json = (body, status=200) => new Response(JSON.stringify(body?.access_token?{ok:true,tokens:body}:body), {status,headers:{'Content-Type':'application/json'}});
+const authCall=(call,action)=>call.url.endsWith('/api/dashboard-auth')&&JSON.parse(call.body||'{}').action===action;
 const deferred = () => {let resolve,reject;const promise=new Promise((r,j)=>{resolve=r;reject=j;});return {promise,resolve,reject};};
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function session(label='old', seconds=3600, userId=A) {
@@ -28,14 +29,17 @@ function storageGroup(withLocks=false) {
   }};}
   return group;
 }
-function harness(group=storageGroup()) {
+function harness(group=storageGroup(),options={}) {
   let clock=START, implementation=async()=>{throw new Error('Unexpected synthetic fetch');};
   const calls=[], events=[];
+  const timers=new Map();let timerId=0;
+  const schedule=(fn,ms)=>{if(!options.manualTimeouts)return setTimeout(fn,ms);const id=++timerId;timers.set(id,{fn,ms});return id;};
+  const unschedule=id=>{if(options.manualTimeouts)timers.delete(id);else clearTimeout(id);};
   class FakeDate extends Date {constructor(...args){super(...(args.length?args:[clock]));}static now(){return clock;}}
   class CustomEventShim extends Event {constructor(type, init={}){super(type);this.detail=init.detail;}}
   const window = new EventTarget();
   window.location={origin:'https://hensem.offline.invalid',href:'https://hensem.offline.invalid/'};
-  window.setTimeout=setTimeout;window.clearTimeout=clearTimeout;
+  window.setTimeout=schedule;window.clearTimeout=unschedule;
   window.setInterval=setInterval;window.clearInterval=clearInterval;
   window.localStorage={
     getItem:key=>group.values.get(String(key))??null,
@@ -52,7 +56,7 @@ function harness(group=storageGroup()) {
   const context={module:box,exports:box.exports,window,localStorage:window.localStorage,navigator:{locks:group.locks},
     document:{visibilityState:'visible'},fetch,Date:FakeDate,URL,URLSearchParams,Headers,Request,Response,
     AbortController,AbortSignal,DOMException,Event,EventTarget,CustomEvent:CustomEventShim,
-    setTimeout,clearTimeout,setInterval,clearInterval,atob,btoa,TextEncoder,TextDecoder,console,
+    setTimeout:schedule,clearTimeout:unschedule,setInterval,clearInterval,atob,btoa,TextEncoder,TextDecoder,console,
     process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://supabase.offline.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'offline-public-key'}}};
   vm.runInNewContext(code,context,{filename:sourcePath});
   const clientCache=new Map();
@@ -68,12 +72,13 @@ function harness(group=storageGroup()) {
     vm.runInNewContext(clientCode,{...context,module:clientModule,exports:clientModule.exports,require:requireClient},{filename:clientPath});
     clientCache.set(name,clientModule.exports);return clientModule.exports;
   }
-  return {api:box.exports,calls,events,window,group,
+  return {api:box.exports,calls,events,window,group,timers,
+    expire(ms){for(const [id,timer] of [...timers])if(ms===undefined||timer.ms===ms){timers.delete(id);timer.fn();}},
     loadClient,
     now:()=>clock,advance:ms=>{clock+=ms;},setFetch:fn=>{implementation=fn;},
     saved:()=>{const raw=group.values.get(SESSION_KEY);return raw?JSON.parse(raw):null;},
-    refreshCalls:()=>calls.filter(c=>c.url.includes('grant_type=refresh_token')),
-    dataCalls:()=>calls.filter(c=>!c.url.includes('/auth/v1/token'))};
+    refreshCalls:()=>calls.filter(c=>authCall(c,'refresh')),
+    dataCalls:()=>calls.filter(c=>!c.url.endsWith('/api/dashboard-auth'))};
 }
 const tests=[];
 function test(name,fn){tests.push([name,fn]);}
@@ -81,7 +86,7 @@ const dataURL='https://supabase.offline.invalid/rest/v1/offline_table';
 
 test('near-expiry concurrent requests share one refresh and use the same new token',async()=>{
   const h=harness(),old=session('old',5),next=session('fresh');h.api.saveDashboardSession(old);
-  const gate=deferred();h.setFetch(call=>call.url.includes('grant_type=refresh_token')?gate.promise:json([]));
+  const gate=deferred();h.setFetch(call=>authCall(call,'refresh')?gate.promise:json([]));
   const pending=Array.from({length:5},()=>h.api.dashboardAuthenticatedFetch(dataURL,{method:'GET'},old));
   await tick();assert.equal(h.refreshCalls().length,1);
   gate.resolve(json(next));await Promise.all(pending);
@@ -102,7 +107,7 @@ test('403 does not trigger refresh or retry',async()=>{
 });
 test('GET 401 refreshes once and retries once with updated authorization',async()=>{
   const h=harness(),old=session(),next=session('fresh');h.api.saveDashboardSession(old);
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?json(next):
+  h.setFetch(call=>authCall(call,'refresh')?json(next):
     call.headers.get('authorization')==='Bearer '+old.access_token?json({message:'expired'},401):json([]));
   assert.equal((await h.api.dashboardAuthenticatedFetch(dataURL,{},old)).status,200);
   assert.equal(h.refreshCalls().length,1);assert.equal(h.dataCalls().length,2);
@@ -110,7 +115,7 @@ test('GET 401 refreshes once and retries once with updated authorization',async(
 test('concurrent GET 401 responses share one refresh, including a late old-token response',async()=>{
   const h=harness(),old=session(),next=session('fresh'),gate=deferred(),late=deferred();h.api.saveDashboardSession(old);
   let oldRequests=0;
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?gate.promise:
+  h.setFetch(call=>authCall(call,'refresh')?gate.promise:
     call.headers.get('authorization')==='Bearer '+old.access_token?
       (++oldRequests===3?late.promise:json({message:'expired'},401)):json([]));
   const pending=Array.from({length:3},()=>h.api.dashboardAuthenticatedFetch(dataURL,{},old));
@@ -122,20 +127,20 @@ test('concurrent GET 401 responses share one refresh, including a late old-token
 });
 test('a second GET 401 stops instead of entering a refresh loop',async()=>{
   const h=harness(),old=session();h.api.saveDashboardSession(old);
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?json(session('fresh')):json({message:'still unauthorized'},401));
+  h.setFetch(call=>authCall(call,'refresh')?json(session('fresh')):json({message:'still unauthorized'},401));
   const result=await h.api.dashboardAuthenticatedFetch(dataURL,{},old).catch(error=>error);
   assert.ok(result instanceof Error||result.status===401);
   assert.equal(h.refreshCalls().length,1);assert.equal(h.dataCalls().length,2);
 });
 test('POST 401 never automatically replays the mutation',async()=>{
   const h=harness(),old=session();h.api.saveDashboardSession(old);
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?json(session('fresh')):json({message:'expired'},401));
+  h.setFetch(call=>authCall(call,'refresh')?json(session('fresh')):json({message:'expired'},401));
   await h.api.dashboardAuthenticatedFetch(dataURL,{method:'POST',body:'{"reason":"synthetic"}'},old).catch(()=>null);
   assert.equal(h.dataCalls().length,1);assert.equal(h.dataCalls()[0].method,'POST');
 });
 test('POST may proactively refresh before sending, but is still sent only once',async()=>{
   const h=harness(),old=session('old',5),next=session('fresh');h.api.saveDashboardSession(old);
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?json(next):json([]));
+  h.setFetch(call=>authCall(call,'refresh')?json(next):json([]));
   await h.api.dashboardAuthenticatedFetch(dataURL,{method:'POST',body:'{"reason":"synthetic"}'},old);
   assert.equal(h.refreshCalls().length,1);assert.equal(h.dataCalls().length,1);
   assert.equal(h.dataCalls()[0].headers.get('authorization'),'Bearer '+next.access_token);
@@ -237,7 +242,7 @@ test('JWT exp supplies expiry when explicit expiry fields are absent',async()=>{
 });
 test('opaque legacy token with unknown expiry uses a single GET 401 refresh fallback',async()=>{
   const h=harness(),old=session();delete old.expires_at;delete old.expires_in;h.api.saveDashboardSession(old);
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?json(session('fresh')):
+  h.setFetch(call=>authCall(call,'refresh')?json(session('fresh')):
     call.headers.get('authorization')==='Bearer '+old.access_token?json({message:'expired'},401):json([]));
   const result=await h.api.ensureDashboardSession(old);
   assert.equal(result.access_token,old.access_token);assert.equal(h.refreshCalls().length,0);
@@ -246,7 +251,7 @@ test('opaque legacy token with unknown expiry uses a single GET 401 refresh fall
 });
 test('logout still permits a fresh interactive login before it is saved',async()=>{
   const h=harness(),next=session('new-login');h.api.saveDashboardSession(session());h.api.saveDashboardSession(null);
-  h.setFetch(call=>call.url.includes('grant_type=password')?json(next):json([]));
+  h.setFetch(call=>authCall(call,'login')?json(next):json([]));
   const signedIn=await h.api.signInDashboard('offline-user','offline-password');
   assert.equal((await h.api.ensureDashboardSession(signedIn)).access_token,next.access_token);
   assert.equal((await h.api.dashboardAuthenticatedFetch(dataURL,{},signedIn)).status,200);
@@ -317,7 +322,7 @@ test('actual notes, reasons, AR config and Panda config clients share the same r
   const h=harness(),old=session('old',5),gate=deferred();h.api.saveDashboardSession(old);
   const notes=h.loadClient('autoWithdrawNotesClient'),reasons=h.loadClient('autoWithdrawReasonsClient');
   const ar=h.loadClient('arAutoWithdrawConfigClient'),panda=h.loadClient('pandaAutoWithdrawConfigClient');
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?gate.promise:json([]));
+  h.setFetch(call=>authCall(call,'refresh')?gate.promise:json([]));
   const signal=new AbortController().signal;
   const pending=Promise.all([
     notes.listAutoWithdrawNotes(old,'2026-09-09','2026-09-09'),
@@ -335,6 +340,38 @@ test('actual note save preserves one POST even after a 401 response',async()=>{
   h.setFetch(()=>json({message:'synthetic expired'},401));
   await assert.rejects(()=>notes.saveAutoWithdrawNote(old,{date:'2026-09-09',country:'印度',platform:'TPPLAY',reason:'synthetic reason'}));
   assert.equal(h.calls.length,1);assert.equal(h.calls[0].method,'POST');
+});
+
+function stalledBody(call){return {ok:true,status:200,text:()=>new Promise((resolve,reject)=>{if(call.signal.aborted)reject(call.signal.reason);else call.signal.addEventListener('abort',()=>reject(call.signal.reason),{once:true});})};}
+for(const [name,timeoutMs,errorCode,run]of[
+  ['login',60000,'auth_timeout',h=>h.api.signInDashboard('offline-user','offline-password')],
+  ['administrative mutation',15000,'admin_timeout',h=>h.api.updateDashboardAccount(session(),'offline-user',{active:false})],
+  ['logout',15000,'logout_timeout',h=>h.api.signOutDashboard(session())],
+]){
+ test(name+' deadline covers stalled body after headers and never replays the POST',async()=>{
+  const h=harness(undefined,{manualTimeouts:true});h.setFetch(stalledBody);
+  const pending=run(h).catch(error=>error);await tick();
+  assert.equal(h.calls.length,1);assert.equal(h.calls[0].method,'POST');assert.equal(h.timers.size,1,'headers must not clear the deadline');assert.equal([...h.timers.values()][0].ms,timeoutMs);
+  h.expire(timeoutMs);const error=await pending;assert.equal(error.code,errorCode);assert.equal(h.calls[0].signal.aborted,true);assert.equal(h.calls.length,1);assert.equal(h.timers.size,0);
+ });
+}
+test('a stalled profile body retries only its explicit safe GET once and then stops',async()=>{
+ const h=harness(undefined,{manualTimeouts:true});h.setFetch(stalledBody);
+ const pending=h.api.fetchDashboardProfile(session()).catch(error=>error);await tick();assert.equal(h.calls.length,1);h.expire(15000);await tick();assert.equal(h.calls.length,2);assert.equal(h.timers.size,1);h.expire(15000);
+ const error=await pending;assert.equal(error.code,'profile_timeout');assert(h.calls.every(call=>call.method==='GET'&&call.signal.aborted));assert.equal(h.calls.length,2);assert.equal(h.timers.size,0);
+});
+test('a complete body is consumed once before its deadline is cleared and HTTP semantics stay intact',async()=>{
+ const h=harness(undefined,{manualTimeouts:true}),body=deferred();let reads=0;
+ h.setFetch(()=>({ok:false,status:400,text(){reads++;return body.promise}}));const pending=h.api.signInDashboard('offline-user','offline-password').catch(error=>error);await tick();assert.equal(reads,1);assert.equal(h.timers.size,1);body.resolve(JSON.stringify({error_code:'invalid_credentials',msg:'Invalid login credentials'}));const error=await pending;assert.equal(error.code,'invalid_credentials');assert.equal(error.status,400);assert.equal(error.message,'账号或密码不正确');assert.equal(reads,1);assert.equal(h.timers.size,0);assert.equal(h.calls.length,1);
+});
+test('self-password body timeout does not continue to revocation or a fresh login',async()=>{
+ const h=harness(undefined,{manualTimeouts:true});h.setFetch(call=>authCall(call,'login')?json(session('verified')):stalledBody(call));const pending=h.api.changeOwnDashboardPassword('offline-user','old-offline-password','new-offline-password').catch(error=>error);await tick();assert.equal(h.calls.length,2);assert.equal(h.calls[1].method,'PUT');assert.equal(h.timers.size,1);h.expire(15000);const error=await pending;assert.equal(error.code,'password_change_timeout');assert.equal(h.calls.length,2);assert.equal(h.timers.size,0);
+});
+test('logout-all body timeout after password change stops without another login or replay',async()=>{
+ const h=harness(undefined,{manualTimeouts:true});h.setFetch(call=>authCall(call,'login')?json(session('verified')):authCall(call,'logout-all')?stalledBody(call):json({id:A}));const pending=h.api.changeOwnDashboardPassword('offline-user','old-offline-password','new-offline-password').catch(error=>error);await tick();assert.equal(h.calls.length,3);assert(authCall(h.calls[2],'logout-all'));assert.equal(h.timers.size,1);h.expire(15000);const error=await pending;assert.equal(error.code,'password_revoke_timeout');assert.equal(h.calls.length,3);assert.equal(h.timers.size,0);
+});
+test('self-password success retains verify, update, revoke-all and fresh gateway login order',async()=>{
+ const h=harness(undefined,{manualTimeouts:true});h.setFetch(call=>authCall(call,'login')?json(session(JSON.parse(call.body).password==='new-offline-password'?'new-password':'verified')):json({ok:true}));const next=await h.api.changeOwnDashboardPassword('offline-user','old-offline-password','new-offline-password');assert.equal(next.access_token,'offline-access-new-password');assert.equal(h.calls.length,4);assert(authCall(h.calls[0],'login'));assert.equal(h.calls[1].method,'PUT');assert.deepEqual(JSON.parse(h.calls[1].body),{password:'new-offline-password'});assert(authCall(h.calls[2],'logout-all'));assert.deepEqual(JSON.parse(h.calls[2].body),{action:'logout-all'});assert(authCall(h.calls[3],'login'));assert.equal(h.timers.size,0);
 });
 
 (async()=>{

@@ -93,6 +93,11 @@ export function createOwnerAdminPreviewHandler(options: PreviewOptions): (reques
       if (!profile || profile.auth_user_id !== userId || profile.active !== true || !["owner", "admin", "viewer"].includes(profile.role)) {
         return errorResponse(origin, 403, "profile_denied");
       }
+      const sessionCheck = await read("/rest/v1/rpc/application_session_guard");
+      if (sessionCheck.status === 401) return errorResponse(origin, 401, "login_required");
+      if (sessionCheck.status === 403) return errorResponse(origin, 403, "application_session_denied");
+      if (!sessionCheck.ok) return errorResponse(origin, 503, "auth_unavailable");
+      if (await sessionCheck.json() !== true) return errorResponse(origin, 403, "application_session_denied");
       const headers = responseHeaders(origin);
       const json = (value: unknown, status = 200): Response => {
         headers.set("Content-Type", "application/json; charset=utf-8");
