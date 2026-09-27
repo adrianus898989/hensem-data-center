@@ -1,12 +1,17 @@
--- On-demand daily comparison for one selected analytical segment and platform.
--- Apply after configuration-query and provider-filter-performance. This adds
--- independent RPCs only; existing totals/queries, source tables and ACLs stay intact.
--- Non-latency predicates match admin-live-query-performance.sql. Latency reads
--- only the successful event window so existing completion-time indexes apply.
--- One range scan yields range/local-day groups; latency additionally returns
--- provider groups with independent full-window valid-success denominators.
--- Never page orders or fan out per provider/day; the client caches this scope.
+-- Latency success-window optimization. Apply after admin-live-lg-native.sql.
+-- Only the raw helper is replaced. Its current LG adapter, provider identity,
+-- wrappers, ACLs, exact filters, source indexes and timeout budgets are preserved.
 begin;
+do $latency_baseline$
+declare actual text;
+begin
+  select md5(prosrc) into actual from pg_proc
+    where oid=to_regprocedure('private.dashboard_admin_live_drilldown_raw(jsonb)');
+  if actual is null or actual not in ('9948ac57f2d7bc03f850523c90eb05d7','fabeef18fa6f57aed4ac7bd257a5ac73') then
+    raise exception 'Latency drilldown baseline changed; review current definition before applying';
+  end if;
+end;
+$latency_baseline$;
 create or replace function private.dashboard_admin_live_drilldown_raw(p_request jsonb)
 returns jsonb language plpgsql stable security definer set search_path='' set jit=off as $$
 declare
@@ -95,7 +100,7 @@ begin
   v_order:=nullif(btrim(p_request->>'orderNumber'),''); v_third:=nullif(btrim(p_request->>'thirdPartyOrderNumber'),''); v_member:=nullif(btrim(p_request->>'memberId'),'');
   v_system:=nullif(btrim(p_request->>'systemOrderId'),''); v_utr:=nullif(btrim(p_request->>'utr'),'');
   v_currency:=nullif(btrim(p_request->>'currency'),'');
-  if v_utr is not null or (v_system is not null and v_platform.source<>'newar') or (v_third is not null and v_platform.source='ar') then
+  if v_utr is not null or (v_system is not null and v_platform.source<>'newar') or (v_third is not null and v_platform.source not in ('newar','game66')) then
     raise exception using errcode='22023',message='unsupported_filter';
   end if;
   foreach v_key in array array['providers','channelTypes'] loop
@@ -111,11 +116,11 @@ begin
   end loop;
   if jsonb_typeof(p_request->'providers')='array' then select array_agg(value) into v_providers from jsonb_array_elements_text(p_request->'providers'); end if;
   if jsonb_typeof(p_request->'channelTypes')='array' then select array_agg(value) into v_types from jsonb_array_elements_text(p_request->'channelTypes'); end if;
-  v_capabilities:=jsonb_build_object('systemOrderId',v_platform.source='newar','thirdPartyOrderNumber',v_platform.source<>'ar','utr',false,'historicalFees',false,
+  v_capabilities:=jsonb_build_object('systemOrderId',v_platform.source='newar','thirdPartyOrderNumber',v_platform.source in ('newar','game66'),'utr',false,'historicalFees',false,
     'timeBasis','created_for_all_and_non_success','successTimeBasis','success_at','successCohort','success_at_in_selected_range',
     'latencyBasis','success_at_to_created_at','customerPaymentTime',false,
     'pendingBasis','selected_created_cohort_current_stored_status','asOfBasis','query_time_not_source_snapshot',
-    'sourceCompletenessVerified',false,'actualAmount',v_platform.source<>'ar','recordedFee',v_platform.source<>'ar');
+    'sourceCompletenessVerified',false,'actualAmount',v_platform.source<>'ar','recordedFee',v_platform.source in ('newar','game66'));
   v_meta:=jsonb_build_object('id',v_platform.id,'name',v_platform.name,'source',v_platform.source,'sourceName',v_platform.source_name,
     'scopeGroup',v_platform.scope_group,'country',v_platform.country,'team',v_platform.team,
     'timezone',v_platform.timezone,'currency',v_platform.currency,'capabilities',v_capabilities);
@@ -189,7 +194,29 @@ begin
         and ($23 is null or n.third_party_order_number=$23)
         and ($11 is null or n.source_id=$11)
     $q$;
-  else
+  elsif v_platform.source='lg' then
+    -- LG timestamps are already timestamptz; never reinterpret them as local
+    -- timestamps or restrict paid events to the creation-day stat_date.
+    v_source:=$q$
+      select md5(jsonb_build_array('LG',l.country_code,l.platform,l.order_kind,l.order_no)::text)::uuid as id,
+        null::text as system_order_id,l.order_no as order_number,null::text as third_party_order_number,l.member_id,
+        coalesce(nullif(btrim(l.third_party),''),nullif(btrim(l.raw_channel),''),'未识别通道') as provider,
+        coalesce(nullif(btrim(l.payment_method),''),'其他类型') as channel_type,
+        case l.order_kind when 'recharge' then 'charge' else 'withdraw' end as direction,l.status_text as status,
+        case when l.status_class in ('success','pending','rejected') then l.status_class else 'unknown' end as status_group,
+        l.created_at,case when l.status_class='success' then l.paid_at end as success_at,
+        l.metric_amount as amount,l.actual_amount,null::numeric as withdraw_fee,$21::text as currency,
+        l.updated_at as synced_at,null::text as utr,l.raw_channel as raw_provider
+      from public.lg_orders l
+      where l.country_code=$3 and l.platform=$22 and l.source_system='LG'
+        and l.order_kind=any(case $7 when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)
+        and (($25='latency' and l.status_class='success' and l.paid_at>=$5 and l.paid_at<$6)
+          or ($25<>'latency' and (($19<>'aggregate' and $8<>'success' and l.created_at>=$5 and l.created_at<$6)
+          or (($19='aggregate' or $8='success') and (l.created_at>=$5 and l.created_at<$6
+            or (l.status_class='success' and l.paid_at is not null and l.paid_at>=$5 and l.paid_at<$6))))))
+        and ($9 is null or l.member_id=$9) and ($10 is null or l.order_no=$10)
+    $q$;
+  elsif v_platform.source='game66' then
     v_source:=$q$
       select c.id,null::text as system_order_id,c.order_num as order_number,c.out_trade_no as third_party_order_number,c.uid as member_id,
         coalesce(nullif(btrim(c.pay_method_name),''),'未识别通道') as provider,coalesce(nullif(btrim(c.pay_mode),''),'其他类型') as channel_type,
@@ -223,6 +250,8 @@ begin
         and ($9 is null or w.uid=$9)
         and ($10 is null or w.order_num=$10) and ($23 is null or w.out_trade_no=$23)
     $q$;
+  else
+    raise exception using errcode='22023',message='unsupported_source';
   end if;
 
   if v_kind='latency' then
@@ -359,7 +388,7 @@ begin
       'rows','[]'::jsonb)
     $q$;
   end if;
-  execute v_sql into v_result using v_id,v_platform.name,v_platform.scope_group,v_platform.timezone,v_start,v_end,
+  execute v_sql into v_result using v_id,case when v_platform.source='lg' then v_platform.source_name else v_platform.name end,v_platform.scope_group,v_platform.timezone,v_start,v_end,
     v_direction,v_status,v_member,v_order,v_system,v_providers,v_types,v_currency,v_min,v_max,v_offset,v_limit,v_action,v_asof,v_platform.currency,v_platform.source_name,v_third,v_confirmations,
     v_kind,v_hour,v_bucket_text,v_bucket,v_cumulative,v_platform.country;
   return v_result||jsonb_build_object('version',1,'platform',v_meta,'basis',case when v_kind='latency' then 'success_at' else 'mixed_created_success' end,
@@ -369,16 +398,5 @@ begin
     'capabilities',v_capabilities);
 end;
 $$;
-revoke all on function private.dashboard_admin_live_drilldown_raw(jsonb) from public,anon,authenticated;
-
-create or replace function private.dashboard_admin_live_drilldown(p_request jsonb)
-returns jsonb language sql stable security definer set search_path='' as $$
-  select private.dashboard_admin_live_drilldown_raw(private.dashboard_admin_live_expand_provider_filter(p_request))
-$$;
-revoke all on function private.dashboard_admin_live_drilldown(jsonb) from public,anon,authenticated;
-create or replace function public.dashboard_admin_live_drilldown(p_request jsonb)
-returns jsonb language sql stable security invoker set search_path='' as $$select private.dashboard_admin_live_drilldown(p_request)$$;
-revoke all on function public.dashboard_admin_live_drilldown(jsonb) from public,anon;
-grant execute on function private.dashboard_admin_live_drilldown(jsonb),public.dashboard_admin_live_drilldown(jsonb) to authenticated;
 notify pgrst,'reload schema';
 commit;

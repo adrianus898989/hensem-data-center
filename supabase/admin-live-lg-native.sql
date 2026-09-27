@@ -13,8 +13,8 @@ begin
   ('private.dashboard_admin_live_query_raw(jsonb)','dd63f718b4dd1b304f35c29f508cbbdc','439f0c02352e2f7f7f7f62968eb3c246'),
   ('private.dashboard_admin_live_drilldown_raw(jsonb)','80f8497dc6ac38aa92860c1993e9b1a2','9948ac57f2d7bc03f850523c90eb05d7'),
   ('private.dashboard_admin_live_platforms()','19d7ed0f2c45b92e9cce78eb0f1a6731','b82d69bba3f150bf5358aee20253effa'),
-  ('private.dashboard_admin_live_provider_options(jsonb)','e798ad595c532ed9cf0536abcb4b3bab','a6c10beb920670c752c7c28f1fdcef81'),
-  ('private.dashboard_admin_live_expand_provider_filter(jsonb)','db9bbe421cd19122467cc7fc74be76de','2f4d3a98474cf57da09c95d904afca69'),
+  ('private.dashboard_admin_live_provider_options(jsonb)','e798ad595c532ed9cf0536abcb4b3bab','71ca258670880859a6b5a42ce2a5a9fc'),
+  ('private.dashboard_admin_live_expand_provider_filter(jsonb)','db9bbe421cd19122467cc7fc74be76de','635e3374d3c17174f471d200b091151b'),
   ('private.dashboard_admin_live_order_intake()','642d31c25cdabea734fbe169dbf0b339','020aa7142b408c9ffcfb3d4a184d0612'),
   ('private.dashboard_admin_live_sync_health_rows(timestamptz)','6b2edb2deba35b90f95262e9cb977155','cf0db025a3277a58a79a25e629befdbc'),
   ('private.dashboard_admin_live_query(jsonb)','2d77fd7473eecfbf252e5c6ff6bc2d63','2d77fd7473eecfbf252e5c6ff6bc2d63')
@@ -1038,6 +1038,7 @@ begin
     select country,canonical_values,private.dashboard_admin_live_provider_alias_values(country,canonical_values) as names from name_sets
   ), matches as (
     select distinct coalesce(private.dashboard_admin_live_provider_alias(r.country,o.canonical_provider),
+      private.dashboard_admin_live_confirmed_usdt_provider(r.country,r.raw_provider),
       case when cardinality(n.names)=1 then n.names[1] end,
       nullif(private.dashboard_admin_live_provider_alias(r.country,r.raw_provider),''),'未识别通道') as provider
     from scoped r join names n on n.country=r.country and n.canonical_values=r.canonical_values
@@ -1121,7 +1122,9 @@ begin
       and private.dashboard_scope_allows(v_scope,r.country,r.platform)
   ), normalized as materialized (
     select r.country,r.platform,r.raw_provider,
-      private.dashboard_admin_live_provider_alias_values(r.country,r.canonical_values) canonical_values
+      case when private.dashboard_admin_live_confirmed_usdt_provider(r.country,r.raw_provider) is not null
+        then array[private.dashboard_admin_live_confirmed_usdt_provider(r.country,r.raw_provider)]
+        else private.dashboard_admin_live_provider_alias_values(r.country,r.canonical_values) end canonical_values
     from scoped r
   ), mapped as (
     select value as raw_provider from unnest(v_selected) value

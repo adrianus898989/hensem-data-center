@@ -43,7 +43,9 @@ begin
       and private.dashboard_scope_allows(v_scope,r.country,r.platform)
   ), normalized as materialized (
     select r.country,r.platform,r.raw_provider,
-      private.dashboard_admin_live_provider_alias_values(r.country,r.canonical_values) canonical_values
+      case when private.dashboard_admin_live_confirmed_usdt_provider(r.country,r.raw_provider) is not null
+        then array[private.dashboard_admin_live_confirmed_usdt_provider(r.country,r.raw_provider)]
+        else private.dashboard_admin_live_provider_alias_values(r.country,r.canonical_values) end canonical_values
     from scoped r
   ), mapped as (
     select value as raw_provider from unnest(v_selected) value

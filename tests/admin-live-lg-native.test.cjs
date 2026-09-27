@@ -220,3 +220,56 @@ test('fee-band installation refuses a changed query baseline atomically',async()
  try{await assert.rejects(db.exec(sql('admin-live-fee-bands.sql')),/Unsupported live-query baseline/);await db.exec('rollback');}
  finally{await db.exec(saved)}
 });
+
+test('latency performance patch preserves the production LG adapter, non-latency results, all other functions and ACLs',async()=>{
+ const performance=sql('admin-live-drilldown-latency-performance.sql'),requests=[];
+ for(const direction of ['charge','withdraw','all'])for(const choice of [
+  {kind:'hourly',hour:0},{kind:'amount',bucket:'200'},{kind:'amount_range',bucket:'100–200'},
+  {kind:'matrix',hour:0,bucket:'200'},{kind:'matrix_range',hour:0,bucket:'100–200'},
+  {kind:'latency',bucket:0},{kind:'latency',bucket:3},{kind:'latency',bucket:0,cumulative:true}
+ ])requests.push({...choice,direction});
+ const stripAsOf=r=>{delete r.asOf;return r},before=[];for(const q of requests)before.push(stripAsOf(await drill(q)));
+ const functions=async()=> (await db.query("select p.proname,pg_get_function_identity_arguments(p.oid) args,md5(p.prosrc) hash from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname in ('private','public') and p.proname<>'dashboard_admin_live_drilldown_raw' order by n.nspname,p.proname,args")).rows;
+ const beforeFunctions=await functions(),beforeAcl=await acl();await db.exec(performance);await db.exec(performance);
+ const after=[];for(const q of requests)after.push(stripAsOf(await drill(q)));
+ assert.deepEqual(after,before);assert.deepEqual(await functions(),beforeFunctions);assert.deepEqual(await acl(),beforeAcl);
+ assert.doesNotMatch(performance.replace(/--[^\n]*/g,''),/\b(grant|revoke|alter table|create index|insert into|delete from)\b/i);
+ await db.exec("update dashboard_platform_team_map set platform_name='Latency display label' where source_country='菲律宾' and source_platform='SUPERLG'");
+ try{const r=await drill({kind:'latency',bucket:0,providers:['DyPay']});assert.equal(r.platform.name,'Latency display label');assert.equal(r.groups.provider[0].provider,'DyPay');assert.equal(r.total,2)}
+ finally{await db.exec("update dashboard_platform_team_map set platform_name='SUPERLG' where source_country='菲律宾' and source_platform='SUPERLG'")}
+});
+
+test('LG optimized latency includes cross-day successes and keeps full-window denominators for both directions',async()=>{
+ await db.exec('begin');try{
+  for(const direction of ['recharge','withdraw'])for(const [id,amount,created,paid,status]of [
+   ['PRIOR',100,'2026-08-31T23:00:00+08','2026-09-25T01:00:00.250+08','success'],
+   ['FAST',200,'2026-09-25T01:00:00.250+08','2026-09-25T01:05:00.250+08','success'],
+   ['NEXT',300,'2026-09-26T00:59:00.249+08','2026-09-26T01:00:00.249+08','success'],
+   ['BEFORE',999,'2026-09-25T00:00:00+08','2026-09-25T01:00:00.249+08','success'],
+   ['AT-END',999,'2026-09-26T01:00:00+08','2026-09-26T01:00:00.250+08','success'],
+   ['CREATED-ONLY',999,'2026-09-25T02:00:00+08','2026-09-27T01:00:00+08','success'],
+   ['PENDING',999,'2026-09-25T02:00:00+08','2026-09-25T03:00:00+08','pending'],
+   ['REVERSED',400,'2026-09-26T02:00:00+08','2026-09-25T03:00:00+08','success'],
+   ['NO-CREATED',500,null,'2026-09-25T04:00:00+08','success'],
+   ['NONFINITE',600,'-infinity','2026-09-25T05:00:00+08','success'],
+   ['NO-PAID',999,'2026-09-25T02:00:00+08',null,'success']
+  ])await db.query("insert into lg_orders(country_code,platform,stat_date,order_kind,order_no,member_id,status_class,metric_amount,created_at,paid_at,third_party) values('PH','SUPERLG','2026-09-25',$1,$2,'LAT-PERF',$3,$4,$5,$6,'PerfPay')",[direction,direction+'-PERF-'+id,status,amount,created,paid]);
+  const q={kind:'latency',bucket:9,direction:'all',memberId:'LAT-PERF',startAt:'2026-09-25T01:00:00.250+08:00',endAt:'2026-09-26T01:00:00.250+08:00'},r=await drill(q);
+  assert.equal(r.total,2);assert.equal(r.summary.length,2);
+  for(const direction of ['charge','withdraw']){
+   const s=r.summary.find(x=>x.direction===direction),p=r.groups.provider.find(x=>x.direction===direction);
+   assert.equal(s.count,1);assert.equal(s.amount,'100');assert.equal(s.valid_count,3);assert.equal(s.valid_amount,'600');assert.equal(s.candidate_count,6);assert.equal(s.excluded_count,3);
+   assert.equal(p.provider,'PerfPay');assert.equal(p.valid_count,3);assert(Math.abs(p.count_share-1/3)<1e-12);
+   assert.deepEqual((await drill({...q,direction})).summary,[s]);
+   const days=r.groups.provider_daily.filter(x=>x.direction===direction);assert.equal(days.find(x=>x.date==='2026-09-25').valid_count,2);assert.equal(days.find(x=>x.date==='2026-09-26').valid_count,1);
+  }
+  assert.equal((await drill({...q,bucket:0,cumulative:true})).total,2);assert.equal((await drill({...q,bucket:0})).total,4);
+ }finally{await db.exec('rollback')}
+});
+
+test('latency performance patch refuses a newer raw-helper baseline instead of overwriting it',async()=>{
+ const saved=(await db.query("select pg_get_functiondef('private.dashboard_admin_live_drilldown_raw(jsonb)'::regprocedure) d")).rows[0].d;
+ await db.exec("create or replace function private.dashboard_admin_live_drilldown_raw(p_request jsonb) returns jsonb language sql as $$select '{}'::jsonb$$");
+ try{await assert.rejects(db.exec(sql('admin-live-drilldown-latency-performance.sql')),/Latency drilldown baseline changed/);await db.exec('rollback')}
+ finally{await db.exec(saved)}
+});
