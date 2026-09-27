@@ -257,3 +257,15 @@
   .admin-access-details > summary strong { flex: 1; }
   .admin-access-details > summary span { order: 3; flex-basis: 100%; }
 }
+/* Account creation shares the same modal frame as workorder account forms. */
+.account-editor-dialog-body .admin-account-create-panel{margin:0;padding:0;border:0;background:#fff;border-radius:0}
+.account-editor-dialog-body .admin-account-create-panel fieldset{margin:0;padding:0;border:0;min-width:0}
+.account-editor-dialog-body .admin-account-create-panel .admin-create-cancel{margin-left:8px;min-height:36px}
+.admin-users-compact .admin-user-search-toolbar{grid-template-columns:minmax(190px,1fr) 125px minmax(140px,.8fr) 110px auto;align-items:end;gap:8px}
+.admin-users-compact .admin-user-search-toolbar>.admin-light-btn{height:34px}
+@media(max-width:1000px){.admin-users-compact .admin-user-search-toolbar{grid-template-columns:repeat(2,minmax(120px,1fr))}.admin-users-compact .admin-user-search-toolbar .wide{grid-column:1/-1}}
+.account-editor-dialog-body .admin-account-editor{padding:0;border:0;background:#fff}
+.account-editor-dialog-body .admin-account-edit-hint{align-items:flex-start;flex-direction:column;gap:4px}
+.account-editor-dialog-body .admin-inline-reset{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.account-editor-dialog-body .admin-inline-reset input{min-width:240px;min-height:36px;padding:7px 10px;font-size:13px}
+.account-editor-dialog-body .admin-inline-reset button{min-height:34px;font-size:12px}
