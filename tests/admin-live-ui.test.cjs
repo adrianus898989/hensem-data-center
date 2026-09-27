@@ -362,7 +362,7 @@ test('navigation keeps completion-cohort totals when narrowing a successful-orde
 test('unconnected modules preserve reference schemas and local controls without inventing source rows or queries',async()=>{
  const h=await ready(),calls=h.calls.length,expected={dropped:['订单 ID','订单号','平台','三方','方向','掉单金额','掉单笔数'],anomaly:['异常类型','订单 ID','订单号','平台','三方','方向','异常金额','异常笔数'],events:['事件编号','三方','方向','关联金额','关联笔数','处理状态'],rules:['最低订单量','超期账龄','数据不足处理','多项命中处理'],ip:['IP / CIDR','适用入口','适用账号','状态'],login_logs:['账号','登录时间','IP','登录结果','白名单结果','会话状态'],operation_logs:['操作者','操作时间','动作','资源','请求 ID']};
  for(const [page,fields]of Object.entries(expected)){h.c.setPage(page);const html=h.html();assert(html.includes('data-empty-page="'+page+'"'),page);assert.match(html,/未接入/);assert.match(html,/data-empty-field=/);const tables=renderedTables(html),headers=tables.flatMap(t=>t.headers);for(const field of fields)assert(headers.includes(field),page+' preserves '+field);for(const table of tables){assert.equal(table.rows.length,1,page+' only shows the empty row');assert.equal(table.rows[0].length,1,page+' does not fabricate records');assert.match(table.rows[0][0],/未接入/);assert(table.html.includes('colspan="'+table.headers.length+'"'),page+' empty row spans schema')}assert.doesNotMatch(html,/Synthetic provider|order-0|row-0|NaN|Infinity/);assert.equal(h.calls.length,calls,page+' does not query an unrelated order dataset')}
- const empty=h.c.HensemLiveEmpty;const workorders=empty.tab('workorders','orders');for(const field of ['工单 ID','订单号','平台','三方','提交时间／日期','到账确认时间','工单金额','到账状态'])assert(renderedTables(workorders).some(t=>t.headers.includes(field)),field);const access=empty.render('access');assert.match(access,/管理后台账号/);assert.match(access,/管理工单账号/);assert.doesNotMatch(access,/<table|账号数量|保存权限|团队分析员/);empty.search('events',{eventId:'SYNTHETIC-FILTER'});assert.equal(empty.snapshot('events').applied.eventId,'SYNTHETIC-FILTER');assert.equal(empty.snapshot('events').page,1);assert.equal(h.calls.length,calls);
+ const empty=h.c.HensemLiveEmpty;const workorders=empty.tab('workorders','orders');for(const field of ['工单 ID','订单号','平台','三方','提交时间／日期','到账确认时间','工单金额','到账状态'])assert(renderedTables(workorders).some(t=>t.headers.includes(field)),field);const access=empty.render('access');assert.match(access,/data-account-workspace/);assert.match(access,/正在读取账号页面/);assert.doesNotMatch(access,/<table|管理后台账号|管理工单账号|data-account-entries|账号数量|保存权限|团队分析员/);empty.search('events',{eventId:'SYNTHETIC-FILTER'});assert.equal(empty.snapshot('events').applied.eventId,'SYNTHETIC-FILTER');assert.equal(empty.snapshot('events').page,1);assert.equal(h.calls.length,calls);
 });
 
 test('provider callback keeps quotes and slashes as a single literal value, never executable markup',async()=>{
@@ -419,7 +419,7 @@ test('direct collection/payout/stuck entry starts in its explicit business direc
 });
 
 test('independent configuration gap remains readable without querying changed order filters',async()=>{
- const h=await ready();h.c.state.page='orders';h.c.liveSet('orderNumber','different');h.c.setPage('access');assert.match(h.html(),/实际账号|查看授权/);assert(!h.html().includes('筛选条件已修改'));
+ const h=await ready();h.c.state.page='orders';h.c.liveSet('orderNumber','different');h.c.setPage('access');assert.match(h.html(),/data-account-workspace/);assert(!h.html().includes('筛选条件已修改'));
 });
 
 test('rates preserve complex raw text and nulls; filtering keeps the agreed independent request fields',async()=>{
@@ -993,4 +993,67 @@ test('pending and conflicting report ownership are status messages rather than s
  const teams=()=>h.nodes.get('liveFilters').innerHTML.match(/<details[^>]+data-multi="team"[^]*?<\/details>/)[0];assert.match(teams(),/M8|未绑定团队/);assert.doesNotMatch(teams(),/__team_pending__|__team_conflict__|团队待读取|归属待核对/);assert.match(h.nodes.get('liveFilters').innerHTML,/部分平台团队待读取/);assert.match(h.nodes.get('liveFilters').innerHTML,/部分平台归属待核对/);
  h.c.liveSet('team','M8');h.c.liveSet('country','菲律宾');assert.equal(h.L.team,'M8');assert.match(h.nodes.get('liveFilters').innerHTML,/1 团队/);assert.match(h.nodes.get('liveFilters').innerHTML,/SUPERLG/);
  h.setHandler(q=>{if(q.action==='collectedData')throw Error('Synthetic directory timeout');return {rows:[],feeds:[],summary:[],groups:{}}});await h.c.liveQuery();assert.equal(h.L.team,'M8');assert.deepEqual(Array.from(h.L.multi.team),['M8']);assert.equal(h.L.country,'菲律宾');assert.match(teams(),/M8/);assert.doesNotMatch(teams(),/__team_pending__|__team_conflict__/);
+});
+
+test('LG native platforms enter the core overview with local order queries and keep report totals separate',async()=>{
+ const lg={...P,id:'77777777-7777-4777-8777-777777777777',name:'LG-SYNTHETIC',source:'lg',sourceName:'LG-RAW',country:'菲律宾',scopeGroup:'PH',team:'M8',timezone:'Asia/Manila',currency:'PHP',capabilities:{systemOrderId:false,thirdPartyOrderNumber:false,utr:false,historicalFees:false,recordedFee:false,actualAmount:true}};
+ const outside={...lg,id:'88888888-8888-4888-8888-888888888888',country:'巴基斯坦',scopeGroup:'PK',currency:'PKR',timezone:'Asia/Karachi'};
+ const feed={dataset:'lg_success',system:'LG',name:lg.name,rawPlatform:lg.sourceName,country:lg.country,rawCountry:'PH',team:'M8',directions:['charge'],records:1,provenance:{kind:'direct'}};
+ const h=await ready({reports:true,handler:q=>{
+  if(q.action==='catalog')return {platforms:[lg,outside]};if(q.action==='collectedData')return {rows:[feed]};
+  if(q.action==='reportSummary')return {feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'received',groups:[{grain:'platform',records:1,metrics:{amount:900000,count:9000,successAmount:800000,successCount:8000},providers:[],daily:[]}]}))};
+  if(q.action==='rates')return {rows:[],total:0};const result=completeAggregate(lg,43,7);for(const row of [...result.summary,...Object.values(result.groups).flat()])row.currency='PHP';return result;
+ }});
+ assert.equal(h.L.country,'菲律宾');assert.equal(h.L.currency,'PHP');assert.equal(h.L.results.length,1);assert.equal(h.L.results[0].summary[0].all_count,43);assert.equal(h.L.results[0].summary[0].success_count,7);assert.match(h.html(),/df-collect/);assert.match(h.html(),/900,000\.00/,'source-native report remains available as an independent comparison');
+ const calls=h.calls.filter(q=>q.action==='aggregate');assert(calls.length);assert(calls.every(q=>q.platformId===lg.id&&q.currency==='PHP'));assert.equal(calls[0].startAt,'2026-09-21T16:00:00.000Z');assert.equal(calls[0].endAt,'2026-09-21T22:00:00.000Z');
+ const filters=h.nodes.get('liveFilters').innerHTML;assert.match(filters,/LG系统/);assert.match(filters,/1 目录平台/);assert.doesNotMatch(filters,/LG-SYNTHETIC · 日报/);assert.equal(h.L.results[0].summary[0].all_amount,'4300','report amount is never added to order metrics');
+ h.c.setPage('provider_payout');await settle();await h.c.liveQuery();await settle();assert(h.calls.some(q=>q.action==='aggregate'&&q.platformId===lg.id&&q.direction==='withdraw'));assert.equal(h.L.direction,'withdraw');
+});
+
+test('LG order filters reject unavailable identifiers and do not label internal keys or raw zeros as source fees',async()=>{
+ const lg={...P,id:'77777777-7777-4777-8777-777777777777',name:'LG-SYNTHETIC',source:'lg',country:'菲律宾',scopeGroup:'PH',team:'M8',timezone:'Asia/Manila',currency:'PHP',capabilities:{systemOrderId:false,thirdPartyOrderNumber:false,utr:false,historicalFees:false,recordedFee:false,actualAmount:true}};
+ const h=await ready({platforms:[lg]});h.c.liveChoosePlatform(lg.id);await settle();
+ for(const key of ['systemOrderId','thirdPartyOrderNumber','utr'])assert.match(h.nodes.get('liveFilters').innerHTML.match(new RegExp('<input[^>]*id="live-'+key+'"[^>]*>'))[0],/disabled/);
+ Object.assign(h.L,{systemOrderId:'UNAVAILABLE-SYSTEM',thirdPartyOrderNumber:'UNAVAILABLE-THIRD',utr:'UNAVAILABLE-UTR',orderNumber:'REAL-ORDER'});const before=h.calls.length;await h.c.liveQuery();await settle();
+ for(const q of h.calls.slice(before).filter(q=>['aggregate','details'].includes(q.action))){assert.equal(q.orderNumber,'REAL-ORDER');for(const key of ['systemOrderId','thirdPartyOrderNumber','utr'])assert(!Object.hasOwn(q,key));}
+ h.L.detail={platform:lg,total:1,rows:[{id:'INTERNAL-HASH-NOT-SOURCE-ID',order_number:'REAL-ORDER',system_order_id:null,third_party_order_number:'UNAVAILABLE-THIRD',utr:'UNAVAILABLE-UTR',amount:100,actual_amount:99,withdraw_fee:0,direction:'withdraw',status_group:'success',currency:'PHP'}]};h.c.liveReferenceSet('view','orderFees');
+ const table=renderedTables(h.html()).find(t=>t.headers.includes('实际手续费'));assert(table);assert.equal(plain(table.rows[0][table.headers.indexOf('系统 ID')]),'—');assert.equal(plain(table.rows[0][table.headers.indexOf('实际手续费')]),'—');
+ h.c.liveOrder(0);const html=h.drawers.at(-1).html;assert.doesNotMatch(html,/INTERNAL-HASH-NOT-SOURCE-ID|UNAVAILABLE-THIRD|UNAVAILABLE-UTR/);assert.match(html,/99\.00/);assert.match(html,/不将空值当作零费用/);
+});
+
+test('native capability filters retain NEW_AR and GAME66 support and clear incompatible fields when changing to LG',async()=>{
+ const base={...P,country:'菲律宾',scopeGroup:'PH',currency:'PHP',timezone:'Asia/Manila'},lg={...base,id:'lg-native',source:'lg'},newar={...base,id:'newar-native',source:'NEW_AR'},game={...base,id:'game-native',source:'game66'};
+ const h=await ready({platforms:[lg,newar,game]});h.c.liveChoosePlatform(newar.id);await settle();
+ const input=key=>h.nodes.get('liveFilters').innerHTML.match(new RegExp('<input[^>]*id="live-'+key+'"[^>]*>'))[0];assert.doesNotMatch(input('systemOrderId'),/disabled/);assert.doesNotMatch(input('thirdPartyOrderNumber'),/disabled/);assert.match(input('utr'),/disabled/);
+ h.c.liveSet('systemOrderId','NEW-SYSTEM');h.c.liveSet('thirdPartyOrderNumber','NEW-THIRD');h.c.liveChoosePlatform(lg.id);await settle();assert.equal(h.L.systemOrderId,'');assert.equal(h.L.thirdPartyOrderNumber,'');assert.match(input('thirdPartyOrderNumber'),/disabled/);
+ h.c.liveChoosePlatform(game.id);await settle();assert.doesNotMatch(input('thirdPartyOrderNumber'),/disabled/);assert.match(input('systemOrderId'),/disabled/);
+});
+
+test('an LG report directory row alone is not promoted to native orders',async()=>{
+ const feed={dataset:'lg_success',system:'LG',name:'LG-REPORT-ONLY',rawPlatform:'LG-REPORT-ONLY',country:'菲律宾',rawCountry:'PH',team:'M8',directions:['charge'],records:1,provenance:{kind:'direct'}};
+ const h=await ready({reports:true,handler:q=>q.action==='catalog'?{platforms:[],withdrawPlatforms:[{name:feed.name,country:feed.country,team:'M8',source:'withdraw'}]}:q.action==='collectedData'?{rows:[feed]}:q.action==='reportSummary'?{feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'received',groups:[{grain:'platform',records:1,metrics:{amount:300,count:3},providers:[],daily:[]}]}))}:q.action==='rates'?{rows:[],total:0}:aggregate()});
+ assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);assert.doesNotMatch(h.html(),/df-collect/);assert.match(h.html(),/LG-REPORT-ONLY/);assert.match(h.nodes.get('liveFilters').innerHTML,/LG-REPORT-ONLY · 日报 \/ 配置/);
+});
+
+test('LG intake order links use the exact authorized native platform while retaining the chosen direction',async()=>{
+ const lg={...P,id:'77777777-7777-4777-8777-777777777777',name:'LG-SYNTHETIC',source:'lg',country:'菲律宾',scopeGroup:'PH',sourceName:'LG-RAW',team:'M8',timezone:'Asia/Manila',currency:'PHP'};
+ const feed={dataset:'lg_orders',system:'LG',name:lg.name,rawPlatform:lg.sourceName,country:lg.country,rawCountry:'PH',team:'M8',directions:['withdraw'],lastDate:'2026-09-22',records:1,provenance:{kind:'direct'}};
+ const h=await ready({page:'collected_data',reports:true,handler:q=>q.action==='catalog'?{platforms:[lg]}:q.action==='collectedData'?{rows:[feed]}:q.action==='details'?detail(lg):q.action==='rates'?{rows:[],total:0}:aggregate(lg)});const link=h.html().match(/collectedOpen\((\d+),(\d+),'withdraw'\)/);assert(link);h.c.collectedOpen(Number(link[1]),Number(link[2]),'withdraw');await settle();assert.equal(h.c.state.page,'orders');assert.equal(h.L.platform,lg.id);assert.equal(h.L.country,'菲律宾');assert.equal(h.L.direction,'withdraw');assert(h.calls.some(q=>q.action==='details'&&q.platformId===lg.id&&q.direction==='withdraw'));assert(!h.calls.some(q=>q.action==='collectedData'&&q.operation==='rows'),'native orders must not return to the old report-only reader');
+});
+
+test('LG and GAME66-only workorder scopes clear stale results without querying the whole country',async()=>{
+ for(const source of ['lg','game66']){
+  const p={...P,id:source+'-native',name:source.toUpperCase()+' ONLY',source},h=await ready({page:'workorders',platforms:[p]});
+  assert.equal(h.calls.filter(q=>q.action==='workorders').length,0,source+' never sends empty platforms to the workorder RPC');
+  h.L.workorders={rows:[{platform:'OTHER SOURCE PRIVATE ROW'}],summary:{submittedAmount:999999,submittedCount:999},byProvider:[{provider:'OTHER SOURCE PRIVATE PAY',submittedCount:999}]};
+  await h.c.liveQuery();assert.equal(h.L.workorders,null);assert.equal(h.L.workordersLoading,false);assert.match(h.html(),/所选平台来源尚未接入工单数据/);assert.doesNotMatch(h.html(),/OTHER SOURCE PRIVATE|999,999/);assert.equal(h.calls.filter(q=>q.action==='workorders').length,0);
+  h.c.setPage('providers');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='workorders').length,0);assert.match(h.html(),/所选平台来源尚未接入工单数据/);assert.equal(h.L.workorders,null);
+ }
+});
+
+test('mixed workorder scopes query only selected AR and NEW_AR source names and retain unsupported-source evidence',async()=>{
+ const ar={...P,id:'ar-native',name:'AR DISPLAY',sourceName:'AR RAW',source:'AR'},newar={...P,id:'newar-native',name:'NEW DISPLAY',sourceName:'NEW RAW',source:'NEW_AR'},lg={...P,id:'lg-native',name:'LG ONLY',source:'lg'},game={...P,id:'game-native',name:'GAME ONLY',source:'game66'};
+ const h=await ready({page:'workorders',platforms:[ar,newar,lg,game]});let q=h.calls.filter(q=>q.action==='workorders').at(-1);assert(q);assert.deepEqual(q.platforms.sort(),['AR DISPLAY','AR RAW','NEW DISPLAY','NEW RAW'].sort());assert.deepEqual(Array.from(h.L.workorders.unsupportedPlatforms),['LG ONLY','GAME ONLY']);
+ h.c.liveSet('platform',lg.id);await h.c.liveQuery();assert.equal(h.L.workorders,null);assert.match(h.html(),/尚未接入工单/);assert.equal(h.calls.filter(q=>q.action==='workorders').length,1,'unsupported scope cannot fall back to the previously selected AR platform');
+ h.c.liveSet('platform',newar.id);await h.c.liveQuery();q=h.calls.filter(q=>q.action==='workorders').at(-1);assert.deepEqual(q.platforms.sort(),['NEW DISPLAY','NEW RAW'].sort());assert.equal(h.L.workordersError,'');
 });

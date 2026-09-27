@@ -14,11 +14,11 @@ export const OWNER_PREVIEW_HOST_CSS = `
 .owner-preview-shell-status-actions{display:flex;gap:10px;margin-top:16px}
 .owner-preview-shell-return{border:1px solid #dce4f0;background:#fff;color:#405b84;border-radius:5px;padding:7px 10px;cursor:pointer}
 .owner-preview-shell-warning{position:absolute;left:250px;bottom:12px;right:12px;z-index:3;padding:8px 12px;border:1px solid #efd49f;border-radius:5px;background:#fff8e7;color:#805b1b;font-size:12px}
-.owner-preview-account-overlay{position:fixed;inset:0;z-index:1500;background:#10223d66;display:grid;place-items:center;padding:20px}
-.owner-preview-account-dialog{width:min(1320px,100%);height:min(900px,94vh);overflow:auto;background:#f3f6fb;border:1px solid #dce4f0;border-radius:10px;color:#253e62}
-.owner-preview-account-header{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:10px;padding:14px 18px;background:#fff;border-bottom:1px solid #dce4f0}
-.owner-preview-account-header h2{font-size:17px;margin:0 auto 0 0}.owner-preview-account-header button{padding:7px 12px;border:1px solid #dce4f0;border-radius:6px;background:#fff;color:#405b84;cursor:pointer}.owner-preview-account-header button[aria-pressed=true]{background:#eaf0ff;color:#3058c9}
-.owner-preview-account-body{padding:16px}.owner-preview-account-denied{padding:20px}
+.owner-preview-account-page{position:fixed;bottom:0;z-index:3;display:flex;flex-direction:column;min-width:0;background:#f3f6fb;color:#253e62;overflow:hidden;border-radius:8px 8px 0 0;max-width:100vw}
+.owner-preview-account-tabs{display:flex;align-items:center;gap:6px;padding:0 0 12px;background:#f3f6fb;flex-shrink:0}
+.owner-preview-account-tabs button{padding:9px 16px;border:1px solid #dce4f0;border-radius:6px;background:#fff;color:#405b84;font-family:inherit;font-size:13px;font-weight:500;line-height:1.4;cursor:pointer}
+.owner-preview-account-tabs button[aria-selected=true]{background:#365de1;border-color:#365de1;color:#fff}.owner-preview-account-tabs button:disabled{opacity:.5;cursor:default}.owner-preview-account-tabs button:focus-visible{outline:2px solid #5475df;outline-offset:2px}
+.owner-preview-account-body{padding:0 0 18px;overflow:auto;min-height:0;flex:1}.owner-preview-account-denied{padding:20px}
 body.owner-preview-shell-active .auth-user-menu-wrap{top:8px!important;right:12px!important;bottom:auto!important;z-index:1400!important}
 body.owner-preview-shell-active:has(.owner-preview-shell-grants) .auth-user-menu-wrap{right:104px!important}
 body.owner-preview-shell-active .auth-user-trigger{min-width:160px!important;width:160px!important;height:32px!important;padding:3px 7px 3px 4px!important;gap:6px;border-radius:6px!important;box-shadow:0 2px 6px #1b355008!important;transform:none!important}
@@ -60,6 +60,17 @@ export function ownerPreviewAccountCommand(event: MessageEvent, source: Window |
   return data.command === "open-accounts" || data.command === "open-workorder-accounts" ? data.command : null;
 }
 
+// Layout-only notification: authenticated controls stay in the host and are
+// placed in the existing page content slot, leaving the iframe navigation alive.
+export function ownerPreviewAccountPage(event: MessageEvent, source: Window | null | undefined, channel: string): {active:false}|{active:true;bounds:{top:number;left:number;width:number}}|null {
+  const data=event.data;
+  if(!source||!channel||event.source!==source||event.origin!=="null"||!data||typeof data!=="object"||data.type!==OWNER_PREVIEW_SHELL_MESSAGE||data.channel!==channel||data.command!=="account-page")return null;
+  if(data.active===false)return {active:false};
+  const b=data.bounds;
+  if(data.active!==true||!b||typeof b!=="object"||![b.top,b.left,b.width].every(value=>typeof value==="number"&&Number.isFinite(value))||b.top<0||b.top>20000||b.left<0||b.left>20000||b.width<=0||b.width>20000)return null;
+  return {active:true,bounds:{top:b.top,left:b.left,width:b.width}};
+}
+
 export function makeOwnerPreviewShellDocument(html: string, channel: string, owner: boolean): string {
   const encode = (value: string) => JSON.stringify(value).replace(/</g,"\\u003c").replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029");
   const desktopRight = owner ? 276 : 184, compactRight = owner ? 142 : 60;
@@ -71,6 +82,7 @@ body .topbar .top-right{display:flex!important;flex-shrink:0;min-width:0;gap:8px
 body .topbar .top-right>.owner{display:none!important}
 body .topbar .header-activity-v3{display:flex!important}
 body .sidebar .nav{min-height:0}
+body:has(#hle-access) .title-actions,body:has(#hle-access) .bottom-note{display:none!important}
 body .sidebar .side-bottom{flex-shrink:0;padding:10px 0 0}
 body .sidebar .side-bottom>.user{display:none}
 .owner-preview-frame-return{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;height:32px;border:1px solid #344761;border-radius:6px;background:#17253e;color:#c7d5ec;font-family:inherit;font-size:11px;font-weight:500;line-height:1;cursor:pointer;white-space:nowrap}
@@ -82,7 +94,8 @@ body .ha-popover{max-width:min(425px,calc(100vw - 24px))}
 @media(max-width:800px){.owner-preview-frame-return .owner-preview-return-label{display:none}.owner-preview-frame-return{font-size:18px}.owner-preview-frame-return .owner-preview-return-icon{display:block}}
 @media(max-width:620px){body .topbar .crumb{display:none}body .topbar{justify-content:flex-end}body .topbar .top-right{gap:4px!important}body .topbar .top-right>.sample{padding:3px 5px;font-size:9px}}
 </style>`;
-  const script = `<script>(function(){const channel=${encode(channel)};window.hensemOpenAccountManager=function(command){if(command!=='open-accounts'&&command!=='open-workorder-accounts')return false;parent.postMessage({type:'${OWNER_PREVIEW_SHELL_MESSAGE}',channel,command},'*');return true};function mount(){const sidebar=document.querySelector('.sidebar');if(!sidebar||document.getElementById('owner-preview-frame-return'))return;let footer=sidebar.querySelector('.side-bottom');if(!footer){footer=document.createElement('div');footer.className='side-bottom';sidebar.appendChild(footer)}const button=document.createElement('button');button.id='owner-preview-frame-return';button.type='button';button.className='owner-preview-frame-return';button.title='返回现有后台';button.setAttribute('aria-label','返回现有后台');button.innerHTML='<span class="owner-preview-return-icon" aria-hidden="true">←</span><span class="owner-preview-return-label">返回现有后台</span>';button.addEventListener('click',()=>parent.postMessage({type:'${OWNER_PREVIEW_SHELL_MESSAGE}',channel,command:'back'},'*'));footer.appendChild(button)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount()})();</script>`;
+  const script = `<script>(function(){const channel=${encode(channel)};const post=payload=>parent.postMessage({type:'${OWNER_PREVIEW_SHELL_MESSAGE}',channel,...payload},'*');window.hensemOpenAccountManager=function(command){if(command!=='open-accounts'&&command!=='open-workorder-accounts')return false;post({command});return true};let lastPage='',queued=false;function syncAccountPage(){queued=false;const slot=document.getElementById('hle-access');let payload={command:'account-page',active:false};if(slot){const r=slot.getBoundingClientRect(),tabs=document.getElementById('livePageTabs'),pageTop=Math.max(48,tabs?Math.ceil(tabs.getBoundingClientRect().bottom):48);if(r.width>0)payload={command:'account-page',active:true,bounds:{top:Math.max(pageTop,Math.round(r.top)),left:Math.max(0,Math.round(r.left)),width:Math.max(1,Math.round(r.width))}}}const key=JSON.stringify(payload);if(key!==lastPage){lastPage=key;post(payload)}}function scheduleAccountPage(){if(queued)return;queued=true;window.requestAnimationFrame(syncAccountPage)}function mount(){const sidebar=document.querySelector('.sidebar');if(sidebar&&!document.getElementById('owner-preview-frame-return')){let footer=sidebar.querySelector('.side-bottom');if(!footer){footer=document.createElement('div');footer.className='side-bottom';sidebar.appendChild(footer)}const button=document.createElement('button');button.id='owner-preview-frame-return';button.type='button';button.className='owner-preview-frame-return';button.title='返回现有后台';button.setAttribute('aria-label','返回现有后台');button.innerHTML='<span class="owner-preview-return-icon" aria-hidden="true">←</span><span class="owner-preview-return-label">返回现有后台</span>';button.addEventListener('click',()=>post({command:'back'}));footer.appendChild(button)}if(typeof MutationObserver!=='undefined'){new MutationObserver(scheduleAccountPage).observe(document.body,{childList:true,subtree:true})}window.addEventListener?.('resize',scheduleAccountPage);window.addEventListener?.('scroll',scheduleAccountPage,{passive:true});syncAccountPage()}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount()})();</script>`;
+
   // Add after existing styles so local page styles cannot re-hide or move the bar.
   const withStyles = /<\/head\s*>/i.test(html) ? html.replace(/<\/head\s*>/i,()=>styles+"</head>") : html.replace(/(<!doctype html>)/i,doctype=>doctype+styles);
   return /<\/body\s*>/i.test(withStyles) ? withStyles.replace(/<\/body\s*>/i,()=>script+"</body>") : withStyles+script;

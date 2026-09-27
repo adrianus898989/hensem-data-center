@@ -694,10 +694,10 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
                     const state = count.enabled === count.total ? "all" : count.enabled === 0 ? "none" : "partial";
                     return <button type="button" key={module.id} className={`admin-module-permission-chip ${state} module-${module.id}`} aria-label={`${user.username} · ${module.label}，已开 ${count.enabled} / ${count.total} 项，查看权限`} aria-haspopup="dialog" onClick={() => setPermissionTarget({ username: user.username, module: module.id })}><span>{module.label}</span><b>{count.enabled}<small>/{count.total}</small></b></button>;
                   })}</div> : <div className="admin-account-permission-summary">{permissionSummary(user)}</div>}</td>
-                  <td><div className="admin-matrix-actions">{tab === "permissions" ? <><span className="admin-matrix-total">{enabled}<small> / {ALL_ACCOUNT_PERMISSIONS.length}</small></span><button type="button" className="admin-matrix-configure" aria-haspopup="dialog" onClick={() => setPermissionTarget({ username: user.username, module: "home" })}>{editable ? "配置权限" : user.role === "owner" ? "查看固定权限" : "查看权限"}</button></> : editable ? <button type="button" className="admin-matrix-configure" aria-expanded={expanded} aria-controls={editId} onClick={() => { setEditingUsername(expanded ? "" : user.username); setResetTarget(""); setResetPassword(""); }}>{expanded ? "收起账号设置" : "账号设置"}</button> : <span className="admin-account-readonly">固定账号</span>}</div></td>
+                  <td><div className="admin-matrix-actions">{tab === "permissions" ? <><span className="admin-matrix-total">{enabled}<small> / {ALL_ACCOUNT_PERMISSIONS.length}</small></span><button type="button" className="admin-matrix-configure" aria-haspopup="dialog" onClick={() => setPermissionTarget({ username: user.username, module: "home" })}>{editable ? "配置权限" : user.role === "owner" ? "查看固定权限" : "查看权限"}</button></> : editable ? <button type="button" className="admin-matrix-configure" aria-expanded={expanded} aria-controls={editId} onClick={() => { setEditingUsername(expanded ? "" : user.username); setResetTarget(""); setResetPassword(""); }}>{expanded ? "收起账号设置" : "账号设置"}</button> : <span className="admin-account-readonly">固定账号</span>}{tab === "accounts" && accountsOnlyLoading && <button type="button" className="admin-matrix-configure" aria-haspopup="dialog" onClick={() => setPermissionTarget({ username: user.username, module: "home" })}>{editable ? "配置权限" : "查看权限"}</button>}</div></td>
                 </tr>
                   {expanded && <tr className="admin-account-editor-row"><td colSpan={3}><div id={editId} className="admin-user-edit-grid admin-account-editor">
-                    <div className="admin-account-edit-hint"><strong>{user.username} · 账号设置</strong><span>{savingUser === user.username ? "正在保存…" : "角色、启停、数据范围和密码在这里管理；模块权限请前往左侧「权限管理」"}</span></div>
+                    <div className="admin-account-edit-hint"><strong>{user.username} · 账号设置</strong><span>{savingUser === user.username ? "正在保存…" : accountsOnlyLoading ? "角色、启停、数据范围和密码在这里管理；模块权限点击本行「配置权限」" : "角色、启停、数据范围和密码在这里管理；模块权限请前往左侧「权限管理」"}</span></div>
                     {isOwner && user.role !== "owner" && <AccountRoleEditor key={`${user.auth_user_id}:${user.role}`} user={user} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />}
                     <AccountDataScopeEditor key={`scope-${user.auth_user_id}:${user.updated_at || "legacy"}`} user={user} actor={profile} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />
                     <div className="admin-user-buttons-v249"><button type="button" disabled={savingUser === user.username} onClick={() => void saveAccount(user, { active: !user.active })}>{user.active ? "停用" : "启用"}</button><button type="button" disabled={savingUser === user.username} onClick={() => { setResetTarget(resetTarget === user.username ? "" : user.username); setResetPassword(""); }}>重置密码</button><button className="danger" type="button" disabled={savingUser === user.username} onClick={() => void removeAccount(user)}>删除账号</button></div>
@@ -709,7 +709,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
               {!filteredUsers.length && <tr><td colSpan={3}><div className="admin-empty admin-filter-empty">没有符合当前搜索条件的账号。</div></td></tr>}
             </tbody></table></div>}
           </section>
-          {tab === "permissions" && permissionTarget && users.filter((user) => user.username === permissionTarget.username).map((user) => <AccountPermissionDialog key={`${user.auth_user_id}:${user.role}`} actor={profile} user={user} initialModule={permissionTarget.module} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} onClose={() => setPermissionTarget(null)} />)}
+          {(tab === "permissions" || accountsOnlyLoading) && permissionTarget && users.filter((user) => user.username === permissionTarget.username).map((user) => <AccountPermissionDialog key={`${user.auth_user_id}:${user.role}`} actor={profile} user={user} initialModule={permissionTarget.module} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} onClose={() => setPermissionTarget(null)} />)}
         </div>
       )}
 
@@ -762,10 +762,10 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   if (embedded) {
     return (
       <div className="admin-inline-page">
-        <div className="admin-inline-header">
+        {!accountsOnlyLoading && <div className="admin-inline-header">
           <div><span>HENSEM CONTROL</span><h1>{sectionTitle}</h1><p>{sectionSubtitle}</p></div>
           <div className="admin-inline-role"><b>{profile.username}</b><small>{roleEnglish(profile.role)} · {roleLabel(profile.role)}</small></div>
-        </div>
+        </div>}
         {message && <div className="admin-center-message">{message}</div>}
         <div className="admin-inline-content">{content}</div>
       </div>

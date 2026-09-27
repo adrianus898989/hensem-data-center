@@ -378,17 +378,26 @@ test('bookmarked page reaches the authorized iframe while denied accounts never 
 
 
 function elements(node){if(!node||typeof node!=='object')return[];return[node,...(Array.isArray(node.props?.children)?node.props.children:[node.props?.children]).flatMap(elements)]}
-test('account managers open in the host, retain the same iframe and enforce separate permissions',async()=>{
+test('account page opens a real list directly with two tabs, keeps the iframe and enforces each permission',async()=>{
  for(const options of [{role:'owner',accounts:true,workorder:true},{role:'admin',accounts:true,workorder:false},{role:'admin',management_permissions:{manage_viewers:false},accounts:false,workorder:false},{role:'viewer',accounts:false,workorder:false}]){
   const h=componentHarness('account-fixture',options);await flush();const before=findElement(h.draw(),'iframe').props.srcDoc,reads=h.calls.length;
-  const send=command=>h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command}});
-  send('open-accounts');let tree=h.draw(),all=elements(tree);assert.equal(all.some(n=>n.type?.name==='AdminControlCenter'),options.accounts);assert.equal(findElement(tree,'iframe').props.srcDoc,before);assert.equal(h.calls.length,reads,'opening management does not reload preview');
-  if(options.accounts){const component=all.find(n=>n.type?.name==='AdminControlCenter');assert.equal(component.props.accountsOnlyLoading,true);assert.equal(component.props.session,h.session)}else assert(all.some(n=>n.props?.role==='alert'));
-  send('open-workorder-accounts');tree=h.draw();all=elements(tree);assert.equal(all.some(n=>n.type?.name==='WorkOrderAccountAdmin'),options.workorder);assert.equal(findElement(tree,'iframe').props.srcDoc,before);assert.equal(h.calls.length,reads);
-  all.find(n=>n.type==='button'&&n.props.children==='关闭').props.onClick();assert(!elements(h.draw()).some(n=>n.props?.role==='dialog'));assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);h.dispose();
+  const send=data=>h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),...data}});
+  send({command:'account-page',active:true,bounds:{top:143,left:242,width:1200}});let tree=h.draw(),all=elements(tree);
+  const tabs=all.filter(n=>n.props?.role==='tab');assert.deepEqual(tabs.map(n=>n.props.children),['前端工单账号','后台账号']);assert.equal(tabs[0].props.disabled,!options.workorder);assert.equal(tabs[1].props.disabled,!options.accounts);
+  assert.equal(all.some(n=>n.type?.name==='WorkOrderAccountAdmin'),options.workorder);assert.equal(all.some(n=>n.type?.name==='AdminControlCenter'),!options.workorder&&options.accounts);
+  assert(!all.some(n=>n.props?.role==='dialog'||n.props?.['aria-modal']),'page is inline, not another dialog');
+  assert(!all.some(n=>n.type==='button'&&/^(关闭|管理后台账号|管理工单账号)$/.test(n.props.children)));
+  const page=all.find(n=>n.props?.className==='owner-preview-account-page');assert.deepEqual(JSON.parse(JSON.stringify(page.props.style)),{top:143,left:242,width:1200});
+  if(options.accounts){tabs[1].props.onClick();tree=h.draw();all=elements(tree);const component=all.find(n=>n.type?.name==='AdminControlCenter');assert(component);assert.equal(component.props.accountsOnlyLoading,true);assert.equal(component.props.section,'accounts');assert.equal(component.props.session,h.session)}else assert(all.some(n=>n.props?.role==='alert'));
+  // Old allowlisted commands cannot override the host's current permission gate.
+  send({command:'open-workorder-accounts'});assert.equal(elements(h.draw()).some(n=>n.type?.name==='WorkOrderAccountAdmin'),options.workorder);
+  send({command:'open-accounts'});assert.equal(elements(h.draw()).some(n=>n.type?.name==='AdminControlCenter'),options.accounts);
+  assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);assert.equal(h.calls.length,reads,'switching account tabs does not reload preview');
+  send({command:'account-page',active:false});assert(!elements(h.draw()).some(n=>n.props?.className==='owner-preview-account-page'));assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);
+  send({command:'account-page',active:true,bounds:{top:158,left:242,width:980}});assert.equal(elements(h.draw()).some(n=>n.type?.name==='AdminControlCenter'),options.accounts,'return keeps chosen backend tab');assert.equal(h.calls.length,reads);h.dispose();
  }
 });
-test('wrong-origin and old-channel messages cannot open host account controls',async()=>{
- const h=componentHarness();await flush();const base={source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command:'open-accounts'}};
- for(const event of [{...base,source:{}},{...base,origin:'https://spoof.invalid'},{...base,data:{...base.data,channel:'old'}}]){h.send(event);assert(!elements(h.draw()).some(n=>n.props?.role==='dialog'))}h.dispose();
+test('wrong-origin, stale-channel and malformed layout messages cannot open host account controls',async()=>{
+ const h=componentHarness();await flush();const base={source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command:'account-page',active:true,bounds:{top:120,left:230,width:1100}}};
+ for(const event of [{...base,source:{}},{...base,origin:'https://spoof.invalid'},{...base,data:{...base.data,channel:'old'}},{...base,data:{...base.data,bounds:{top:0,left:-1,width:900}}},{...base,data:{...base.data,bounds:{top:0,left:0,width:'100%'}}}]){h.send(event);assert(!elements(h.draw()).some(n=>n.props?.className==='owner-preview-account-page'))}h.dispose();
 });
