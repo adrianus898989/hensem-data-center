@@ -198,6 +198,23 @@ body.live-admin .provider-daily-v3 .analysis-value-button.is-selected{background
 
 body.live-admin .provider-summary-table .workorder-rate-low{color:#d6374a!important}
 
+/* Use the provider pages' full workspace; short ratios do not need amount-sized columns. */
+body.live-admin .content:has(.provider-summary-report){max-width:none;width:auto;margin:0;padding:12px 12px 20px}
+body.live-admin .main:has(>#page>.provider-summary-report){max-width:none;padding:12px}
+body.live-admin .provider-summary-report .provider-compact-table table{table-layout:auto;width:100%}
+body.live-admin :is(.provider-summary-report .provider-compact-table,.provider-floating-head) :is(th,td){min-width:0;padding:5px 4px!important;font-size:10px;line-height:1.5;box-sizing:border-box}
+body.live-admin :is(.provider-summary-report .provider-compact-table,.provider-floating-head) th{height:34px;white-space:normal;vertical-align:middle}
+body.live-admin :is(.provider-summary-report .provider-compact-table,.provider-floating-head) .provider-sort-heading{min-width:0;width:100%;white-space:normal;line-height:1.35;overflow-wrap:normal;word-break:normal;padding:0}
+body.live-admin .provider-summary-report .provider-compact-table td{white-space:nowrap;overflow:visible;text-overflow:clip}
+body.live-admin .provider-summary-report .provider-compact-table .provider-business-type{max-width:100%;padding:1px 3px;font-size:9px!important}
+body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-summary-kpis{gap:7px;grid-template-columns:minmax(0,.65fr) minmax(0,.6fr) minmax(0,1.45fr) minmax(0,.95fr) minmax(0,1.45fr) minmax(0,.95fr) minmax(0,1fr) minmax(0,1.35fr)}
+body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-kpi{min-height:76px;padding:8px 10px 7px}
+body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-kpi-value{gap:4px}
+body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-kpi-value strong{font-size:clamp(17px,1.05vw,20px);line-height:23px}
+body.live-admin .provider-summary-report>.panel>.panel-head{min-height:40px;padding:10px 12px}
+@media(max-width:1500px){body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-summary-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(max-width:900px){body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-summary-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
 /* One compact desktop row; exact date/time controls expand without hiding query actions. */
 body.live-admin #liveFilters{min-width:0;max-width:100%}
 body.live-admin .live-business-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(176px,205px) auto auto;align-items:end;gap:7px;padding:9px 10px;position:relative}
@@ -229,3 +246,8 @@ body.live-admin .live-query-prompt{display:flex;align-items:center;justify-conte
 body.live-admin .live-query-prompt .btn{height:32px;padding:5px 14px;flex:none}
 @media(max-width:1150px){body.live-admin .live-business-filters{grid-template-columns:minmax(190px,1fr) auto auto}body.live-admin .live-business-filters .live-filter-fields{grid-column:1/-1}body.live-admin .live-date-trigger>small{font-size:10px}}
 @media(max-width:650px){body.live-admin .live-business-filters{grid-template-columns:minmax(0,1fr) auto;gap:8px}body.live-admin .live-business-filters .live-filter-fields{grid-template-columns:repeat(2,minmax(0,1fr))}body.live-admin .live-business-filters .live-filter-date{grid-column:1/-1}body.live-admin .live-business-filters .live-date-shortcuts{flex-wrap:wrap;height:auto}body.live-admin .live-business-filters .live-date-shortcuts .btn,body.live-admin .live-business-filters .live-query-actions .btn{padding:5px 7px}body.live-admin .live-date-panel{width:calc(100% - 20px)}}
+
+body.live-admin .drawer-backdrop:has(.live-pending-snapshot-detail){z-index:210}
+body.live-admin .live-pending-snapshot-detail{min-width:0}
+body.live-admin .live-pending-snapshot-detail .live-definition{line-height:1.7}
+body.live-admin .live-pending-snapshot-detail summary{cursor:pointer;text-align:left;padding:6px 0}

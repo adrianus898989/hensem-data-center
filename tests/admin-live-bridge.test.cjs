@@ -330,3 +330,22 @@ test('blocking drilldowns require a rule key and cannot reuse rejected-order fil
  assert.equal(h.api.validateAdminLiveRequest({...base,kind:'blockingOrders',query:'SYNTHETIC-ORDER'}).query,'SYNTHETIC-ORDER');
  assert.throws(()=>h.api.validateAdminLiveRequest({...base,kind:'blockingVariants',query:'ORDER'}));
 });
+
+test('pending balance accepts one closing day and exact platform/provider scope, never an order cohort or alternate endpoint',async()=>{
+ const h=load(),request={action:'pendingSnapshot',date:'2026-09-26',platformIds:[query.platformId],providers:['ExamplePay']};
+ assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(request))),request);
+ for(const patch of [{date:'2026-02-30'},{date:'1999-12-31'},{date:'2026-09-26T23:59:59Z'},{date:null},{platformIds:[]},{platformIds:[query.platformId,query.platformId]},{platformIds:['report:untrusted']},{platformIds:['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA']},{platformIds:Array(251).fill(query.platformId)},{providers:[null]},{providers:['']},{providers:[' ExamplePay']},{providers:['X\nY']},{providers:['X'.repeat(201)]},{providers:['ExamplePay','ExamplePay']},{providers:Array(251).fill('ExamplePay')},{startAt:query.startAt},{endAt:query.endAt},{country:'IN'},{scope:'all'},{sql:'select 1'},{rpc:'another_endpoint'}])assert.throws(()=>h.api.validateAdminLiveRequest({...request,...patch}),JSON.stringify(patch));
+ assert.doesNotThrow(()=>h.api.validateAdminLiveRequest({...request,providers:[]}));
+ const signal=new AbortController().signal;await h.api.adminLiveRequest(session,request,signal);
+ assert.equal(h.calls.length,1);assert.equal(h.authCalls.length,1);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_pending_snapshot');
+ assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:{date:request.date,platformIds:request.platformIds,providers:request.providers}});
+ assert.equal(h.calls[0].init.signal,signal);assert.equal(h.calls[0].init.headers.Authorization,'Bearer offline-fresh-token');assert.equal(h.calls[0].init.cache,'no-store');
+});
+
+test('pending snapshot errors identify a failed closing balance without suggesting a narrower date or leaking source errors',async()=>{
+ const request={action:'pendingSnapshot',date:'2026-09-26',platformIds:[query.platformId]};
+ for(const [status,message,expected] of [[504,'57014 private statement','近7天代付中快照读取超时'],[403,'scope_denied','代付中查看权限'],[403,'platform_denied','代付中查看权限'],[400,'mixed_currency','同一币种'],[500,'private snapshot row and token','正式数据查询未完成']]){
+  const h=load({fetch:async()=>({ok:false,status,json:async()=>({message})})});
+  await assert.rejects(h.api.adminLiveRequest(session,request),error=>error.message.includes(expected)&&!/private|token|缩短日期/.test(error.message));
+ }
+});

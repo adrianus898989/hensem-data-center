@@ -8,7 +8,7 @@ export const LIVE_REQUEST = "hensem-admin-live-request";
 export const LIVE_RESPONSE = "hensem-admin-live-response";
 export const LIVE_CANCEL = "hensem-admin-live-cancel";
 export const LIVE_REQUEST_TIMEOUT_MS = 90000;
-const actions = ["catalog","syncHealth","intakeCoverage","reportSummary","collectedData","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
+const actions = ["catalog","syncHealth","intakeCoverage","reportSummary","pendingSnapshot","collectedData","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
 const keys = new Set(["feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"]);
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
@@ -17,6 +17,13 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(p.action==="depositStatistics")return validateDepositStatisticsRequest(p);
   if(p.action==="portalOperationLogs")return validatePortalOperationLogsRequest(p);
   if(Object.keys(p).some(k=>!keys.has(k))||!actions.includes(String(p.action)))throw Error("查询方法无效");
+  if(p.action==="pendingSnapshot"){
+    if(Object.keys(p).some(k=>!["action","date","platformIds","providers"].includes(k)))throw Error("代付中快照参数无效");
+    if(typeof p.date!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(p.date)||p.date<"2000-01-01"||!Number.isFinite(Date.parse(p.date+"T00:00:00Z"))||new Date(p.date+"T00:00:00Z").toISOString().slice(0,10)!==p.date)throw Error("代付中快照日期无效");
+    if(!Array.isArray(p.platformIds)||p.platformIds.length<1||p.platformIds.length>250||p.platformIds.some(id=>typeof id!=="string"||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id))||new Set(p.platformIds.map(id=>String(id).toLowerCase())).size!==p.platformIds.length)throw Error("请选择1至250个有效平台");
+    if(p.providers!==undefined&&(!Array.isArray(p.providers)||p.providers.length>250||p.providers.some(v=>typeof v!=="string"||!v.trim()||v!==v.trim()||v.length>200||/[\u0000-\u001f\u007f]/.test(v))||new Set(p.providers).size!==p.providers.length))throw Error("代付中三方筛选无效");
+    return {...p};
+  }
   if(p.action!=="intakeCoverage"&&p.feedIds!==undefined)throw Error("逐日覆盖来源仅用于平台数据接入");
   if(p.action==="intakeCoverage"){
     const operation=p.operation===undefined?"catalog":p.operation,allowed=operation==="catalog"?["action","operation"]:["action","operation","feedIds","startAt","endAt"];
@@ -227,6 +234,7 @@ export function isAdminLiveMessage(event:MessageEvent,source:Window|null|undefin
 }
 function adminLiveTimeoutMessage(action:unknown):string {
  if(action==='catalog')return '平台目录读取超时，请重试读取目录';
+ if(action==='pendingSnapshot')return '近7天代付中快照读取超时，请重试；不能据此判断为0';
  return ['syncHealth','intakeCoverage'].includes(String(action))?'同步检查超时，请稍后重试；不能据此判断平台没有数据':action==='withdrawReasons'?'该平台当日原因读取超时，请点击重试':['aggregate','collectedData','reportSummary'].includes(String(action))?'读取超时，不代表没有数据；请重试':'读取超时，请缩短日期或选择单个平台后重试';
 }
 export async function adminLiveRequest(session:DashboardSession,input:unknown,signal?:AbortSignal):Promise<unknown>{
@@ -241,7 +249,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  }
  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,""),url=new URL(base);
  if(url.protocol!=="https:"||url.origin!==base)throw Error("后台地址配置无效");
- const specialRpc:Record<string,string>={depositStatistics:"dashboard_admin_deposit_statistics",workorderRecords:"dashboard_admin_live_workorder_records",intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
+ const specialRpc:Record<string,string>={pendingSnapshot:"dashboard_admin_live_pending_snapshot",depositStatistics:"dashboard_admin_deposit_statistics",workorderRecords:"dashboard_admin_live_workorder_records",intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
  const rpc=request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
  const response=await fetch(base+"/rest/v1/rpc/"+rpc,{method:"POST",body:JSON.stringify({p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
  if(!response.ok){let code="";try{const body=await response.json();code=String(body.message||"")}catch{}
@@ -250,6 +258,8 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if(/note_date_unavailable/.test(code))throw Error("所选日期没有该平台的出款记录，请选择有数据的日期");
  if(/configuration_conflict/.test(code))throw Error("归类已被其他人修改，请刷新后再保存");
  if(request.action==="workorderRecords"&&/scope_denied|preview_denied/.test(code))throw Error("当前账号没有此范围的工单查看权限");
+ if(request.action==="pendingSnapshot"&&/scope_denied|preview_denied|platform_denied/.test(code))throw Error("当前账号没有此范围的代付中查看权限");
+ if(request.action==="pendingSnapshot"&&/mixed_currency/.test(code))throw Error("请选择同一币种的平台查看代付中快照");
  if(/configuration_denied|scope_denied/.test(code))throw Error("当前账号没有此范围的归类权限");
  if(/mapping_not_found|invalid_classification/.test(code))throw Error("归类来源或国家配置已改变，请刷新后重试");
  if([401,403].includes(response.status))throw Error("正式数据读取未获授权，或会话已失效");
