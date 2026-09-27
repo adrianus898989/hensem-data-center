@@ -319,3 +319,13 @@ test('portal operation logs use refreshed backend auth with a fixed portal desti
  const changed=load({ensure:async s=>({...s,user:{id:'changed'}})});await assert.rejects(changed.api.adminLiveRequest(session,q));assert.equal(changed.calls.length,0);
  for(const status of [401,403,500]){const denied=load({fetch:async()=>({ok:false,status,json:async()=>({error:'private token'})})});await assert.rejects(denied.api.adminLiveRequest(session,q),e=>!/private token/.test(e.message)&&/登录|权限|未完成/.test(e.message));}
 });
+
+test('blocking drilldowns require a rule key and cannot reuse rejected-order filters',async()=>{
+ const h=load(),base={action:'withdrawReasons',date:'2026-09-26',country:'巴基斯坦',platform:'SYNTHETIC',reasonKey:'a'.repeat(32)};
+ for(const kind of ['blockingOrders','blockingVariants']){
+  const q={...base,kind,limit:50};await h.api.adminLiveRequest(session,q);assert.equal(JSON.parse(h.calls.at(-1).init.body).p_request.kind,kind);
+  for(const patch of [{reasonKey:''},{reasonKey:'bad'},{category:'b'.repeat(32)},{operatorKey:'b'.repeat(32)}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
+ }
+ assert.equal(h.api.validateAdminLiveRequest({...base,kind:'blockingOrders',query:'SYNTHETIC-ORDER'}).query,'SYNTHETIC-ORDER');
+ assert.throws(()=>h.api.validateAdminLiveRequest({...base,kind:'blockingVariants',query:'ORDER'}));
+});

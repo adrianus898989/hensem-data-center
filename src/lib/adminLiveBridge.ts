@@ -148,10 +148,11 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     if(typeof p.country!=="string"||!p.country.trim()||p.country==='all')throw Error("请选择一个国家");
     const validDay=(value:unknown)=>typeof value==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
     if(reasons){
-      if(!validDay(p.date)||typeof p.platform!=="string"||!p.platform.trim()||p.kind!==undefined&&!["blocking","categories","rejection","operators","orders"].includes(String(p.kind)))throw Error("原因查询范围无效");
+      if(!validDay(p.date)||typeof p.platform!=="string"||!p.platform.trim()||p.kind!==undefined&&!["blocking","blockingOrders","blockingVariants","categories","rejection","operators","orders"].includes(String(p.kind)))throw Error("原因查询范围无效");
       for(const key of ["category","reasonKey","operatorKey"])if(p[key]!==undefined&&(typeof p[key]!=="string"||!/^([a-f0-9]{32})?$/.test(String(p[key]))))throw Error("原因筛选无效");
       if(p.query!==undefined&&(typeof p.query!=="string"||p.query.length>200||/[\u0000-\u001f\u007f]/.test(p.query)))throw Error("订单号无效");
       if((p.kind===undefined||p.kind==='blocking')&&["category","reasonKey","operatorKey","query"].some(k=>p[k]))throw Error("原因筛选无效");
+      if(['blockingOrders','blockingVariants'].includes(String(p.kind))&&(!/^[a-f0-9]{32}$/.test(String(p.reasonKey||''))||p.category||p.operatorKey||p.kind==='blockingVariants'&&p.query))throw Error("拦截规则筛选无效");
     }else{
       for(const key of ["startAt","endAt"])if(typeof p[key]!=="string"||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(String(p[key]))||!validDay(String(p[key]).slice(0,10))||!Number.isFinite(Date.parse(String(p[key]))))throw Error("请填写完整日期");
       const days=(Date.parse(String(p.endAt).slice(0,10))-Date.parse(String(p.startAt).slice(0,10)))/86400000+1;

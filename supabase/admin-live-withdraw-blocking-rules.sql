@@ -1,23 +1,6 @@
--- Source notes are separate: AR manual_remark explains interception/manual review;
--- AR remark explains the rejected order. Never infer one from the other.
+-- Additive read-only grouping patch. Requires the existing note-normalization installation.
+-- No collected rows, raw snapshots, grants to source tables or RLS policies change.
 begin;
--- Scraped tooltips may contain a shortened preview followed by the complete note.
--- Remove only an identical line or a truncated prefix repeated in a later line.
-create or replace function private.dashboard_admin_live_clean_note(p_note text)
-returns text language sql immutable parallel safe set search_path='' as $$
- select case when p_note !~ E'[\r\n]' then nullif(regexp_replace(p_note,'^[[:space:]]+|[[:space:]]+$','','g'),'') else (
- with parts as materialized (
-  select btrim(regexp_replace(line,'^[[:space:]]+|[[:space:]]+$','','g')) as line,ordinality as position
-  from regexp_split_to_table(coalesce(p_note,''),E'\\r?\\n') with ordinality as p(line,ordinality)
- ), kept as (
-  select p.* from parts p where p.line<>'' and not exists (
-   select 1 from parts later where later.position>p.position and (
-    later.line=p.line or (p.line ~ '([.]{3}|…+)$'
-     and length(regexp_replace(p.line,'([.]{3}|…+)$',''))>0
-     and starts_with(later.line,regexp_replace(p.line,'([.]{3}|…+)$','')))))
- ) select nullif(string_agg(line,E'\n' order by position),'') from kept) end
-$$;
-revoke all on function private.dashboard_admin_live_clean_note(text) from public,anon,authenticated;
 -- Only complete, observed diagnostic templates lose their actual values.
 -- Configured thresholds, comparators, rule families and unknown/multiple rules survive.
 create or replace function private.dashboard_admin_live_blocking_details(p_note text)
@@ -61,44 +44,6 @@ returns text language sql immutable parallel safe set search_path='' as $$
  select private.dashboard_admin_live_blocking_details(p_note)->>'reason'
 $$;
 revoke all on function private.dashboard_admin_live_blocking_category(text) from public,anon,authenticated;
--- Source headings from the user's arwd.py remark whitelist (2026-09-19).
--- A heading describes a reason, never proves that rejecting an order was correct.
--- Both bracket styles/case variants share a category; the complete note is retained.
-create or replace function private.dashboard_admin_live_rejection_category(p_country_code text,p_note text)
-returns text language sql immutable parallel safe set search_path='' as $$
- with heading as (
-  select lower(btrim(regexp_replace(substring(translate(coalesce(p_note,''),'【】','[]')
-    from '^[[:space:]]*\[([^]]{1,100})\]'),'[[:space:]]+',' ','g'))) tag
- ) select case
-  when lower(btrim(coalesce(p_note,''))) in ('','--','---','----','无','空','n/a','na','详情') then '源备注为空'
-  else coalesce(private.dashboard_admin_live_rejection_template(p_country_code,p_note),case tag
-   when 'gift code' then '红包 / 兑换码（Gift Codes）' when 'gift codes' then '红包 / 兑换码（Gift Codes）'
-   when 'return rewards' then '回归奖励（Return Rewards）'
-   when 'sign-up bonus' then '注册奖励（Sign-up Bonus）'
-   when 'vip member monthly rewards' then 'VIP 月度奖励（VIP Member Monthly Rewards）'
-   when 'illegal bet' then '违规投注（Illegal Bet）'
-   when 'abnormal bet' then '异常投注（Abnormal Bet）'
-   when 'arbitrage activity' then '套利行为（Arbitrage Activity）'
-   when 'resubmit order' then '重新提交（Resubmit Order）'
-   when 'ifsc code incorrect' then 'IFSC 错误（IFSC Code Incorrect）'
-   when 'bank incorrect' then '银行资料错误（Bank Incorrect）'
-   when 'upi data invalid' then 'UPI 资料错误（UPI Data Invalid）'
-   when 'e-wallet data incorrect' then '钱包资料错误（E-Wallet Data Incorrect）'
-   when 'e-wallet limit' then '钱包额度限制（E-Wallet Limit）'
-   when 'maintenance bank' then '银行维护（Maintenance Bank）'
-   when 'maintenance e-wallet' then '钱包维护（Maintenance E-Wallet）'
-   when 'arb maintenance' then 'ARB 维护（ARB Maintenance）'
-   when 'fail become agent' then '代理条件未满足（Fail become Agent）'
-   when 'first withdraw' then '首次提现方式（First Withdraw）'
-   when 'withdraw incorrect method' then '提现方式错误（Withdrawal Method Incorrect）'
-   when 'withdrawal method incorrect' then '提现方式错误（Withdrawal Method Incorrect）'
-   when 'verify usdt' then 'USDT 待验证（Verify USDT）'
-   when 'withdrawal cancelled successfully' then '取消提现（Withdrawal Cancelled Successfully）'
-   when 'withdrawal failed' then '提现失败 / 联系上级（Withdrawal Failed）'
-   end,case when tag is not null then '其他标签 · '||tag else '其他未归类备注' end)
-  end from heading
-$$;
-revoke all on function private.dashboard_admin_live_rejection_category(text,text) from public,anon,authenticated;
 create or replace function private.dashboard_admin_live_withdraw_reasons(p_request jsonb)
 returns jsonb language plpgsql stable security definer set search_path='' as $$
 declare

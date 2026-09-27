@@ -36,7 +36,7 @@ test('list sends separately validated AND filters and drops empty source instead
  assert.equal(h.calls.identify[0]['x-portal-client-ip'],'192.0.2.15');assert.equal(h.calls.identify[0].authorization,'Bearer SYNTHETIC-TOKEN');
 });
 test('invalid, out-of-scope and malformed filters never call DB',async()=>{
- for(const filters of [{unexpected:'x'},{platform:'OTHER'},{outcome:'paid'},{kyc:'true'},{source:'raw'},{from:'2026-02-30'},{from:'2026-09-20',to:'2026-09-01'},{minAmount:'1e10'},{minAmount:'2',maxAmount:'1'},{reply:'x\u0000'},{provider:42},{provider:null}]){
+ for(const filters of [{unexpected:'x'},{platform:'OTHER'},{outcome:'x'.repeat(201)},{kyc:'true'},{source:'raw'},{from:'2026-02-30'},{from:'2026-09-20',to:'2026-09-01'},{minAmount:'1e10'},{minAmount:'2',maxAmount:'1'},{reply:'x\u0000'},{provider:42},{provider:null}]){
   const h=harness();assert([400,403].includes((await h.request({action:'list',filters})).status));assert.equal(h.calls.list.length,0);
  }
  for(const page of [{offset:-1},{offset:0.1},{limit:101},{limit:0}]){const h=harness();assert.equal((await h.request({action:'list',...page})).status,400);assert.equal(h.calls.list.length,0);}
@@ -77,6 +77,15 @@ test('portal list serializes version and all workorders while enforcing agent ow
 });
 test('empty followup date uses case creation India date without inventing followup time',async()=>{
  const h=harness();await h.request({action:'mirror',record:{...record,entry_json:JSON.stringify({...entry,followedAt:''})}});assert.equal(h.calls.mirror[0].followup_at,null);assert.equal(h.calls.mirror[0].followup_date,'2026-09-26');
+});
+
+test('custom receipt status survives mirror, list and exact status filtering without becoming unknown',async()=>{
+ const custom='人工核实中 / Awaiting bank confirmation',h=harness();
+ assert.equal((await h.request({action:'mirror',record:{...record,entry_json:JSON.stringify({...entry,outcome:' '+custom+' '})}})).status,200);
+ const m=h.calls.mirror[0];assert.equal(m.followup_status,custom);assert.equal(m.portal_payload.entry.outcome,custom);
+ const reader=harness({result:{rows:[{...m,normalized_outcome:custom}],total:1,facets:{}}});
+ const result=await(await reader.request({action:'list',filters:{outcome:custom}})).json();assert.equal(result.rows[0].outcome,custom);assert.equal(reader.calls.list[0][1].outcome,custom);
+ for(const outcome of ['', '  ', 'x'.repeat(201),'待处理\u0085']){const bad=harness();assert.equal((await bad.request({action:'mirror',record:{...record,entry_json:JSON.stringify({...entry,outcome})}})).status,400);assert.equal(bad.calls.mirror.length,0);}
 });
 
 test('UPI addresses survive scoped history/list while RC date and India-day age ignore stale sheet text',async()=>{
