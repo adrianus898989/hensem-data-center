@@ -1,7 +1,7 @@
 /* Synthetic-only VM tests for the production UI adapter. No credentials/network/real orders. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8');
-const layoutSources=['live-analysis-drilldown.js','live-reference-layout.js','live-pages-reference.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js', 'live-withdraw-pages.js','live-workorder-operations.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
+const layoutSources=['live-analysis-drilldown.js','live-reference-layout.js','live-pages-reference.js','live-pending-snapshot.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js', 'live-withdraw-pages.js','live-workorder-operations.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
 const comparisonSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-comparison.js'),'utf8');
 test('overview merges same providers across sources while preserving stable platform identities and other source reports',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222',source:'NEW_AR'},p3={...P,id:'33333333-3333-4333-8333-333333333333'};
@@ -22,14 +22,14 @@ test('overview separately displays rejected and unknown amounts and counts so ev
  const number=text=>Number(text.replaceAll(',',''));
  for(const [id,expected]of [['df-collect',r.summary[0]],['df-payout',r.summary[1]]]){
   const html=h.html().match(new RegExp('<section class="df-card" id="'+id+'">([^]*?)</section>'))?.[1];assert(html,id);
-  const cards=[...html.matchAll(/<div class="df-flow-metric"><span>([^]*?)金额 \/ 笔数<\/span><strong[^>]*>([^]*?)<\/strong><small[^>]*>([\d,]+) 笔<\/small>/g)].map(m=>({label:m[1],amount:number(plain(m[2])),count:number(m[3])}));assert.equal(cards.length,4);
+  const cards=[...html.matchAll(/<div class="df-flow-metric"><span>([^]*?)金额 \/ 笔数<\/span><strong[^>]*>([^]*?)<\/strong><small[^>]*>([\d,]+) 笔<\/small>/g)].map(m=>({label:m[1],amount:number(plain(m[2])),count:number(m[3])}));assert.equal(cards.length,id==='df-collect'?4:3);
   const tail=html.match(/<div class="df-state-tail">([^]*?)<\/div>/)?.[1];assert(tail);
   const tailItems=Object.fromEntries([...tail.matchAll(/<span>([^<]+) <b>([^]*?)<\/b><\/span>/g)].map(m=>[m[1],number(plain(m[2]))]));
   assert.deepEqual(tailItems,{'驳回金额':Number(expected.rejected_amount),'驳回笔数':expected.rejected_count,'未知状态金额':Number(expected.unknown_amount),'未知状态笔数':expected.unknown_count});
-  assert.equal(cards.slice(1).reduce((n,s)=>n+s.amount,0)+tailItems['驳回金额']+tailItems['未知状态金额'],cards[0].amount);
-  assert.equal(cards.slice(1).reduce((n,s)=>n+s.count,0)+tailItems['驳回笔数']+tailItems['未知状态笔数'],cards[0].count);
+  if(id==='df-collect')assert.equal(cards.slice(1).reduce((n,s)=>n+s.amount,0)+tailItems['驳回金额']+tailItems['未知状态金额'],cards[0].amount);
+  if(id==='df-collect')assert.equal(cards.slice(1).reduce((n,s)=>n+s.count,0)+tailItems['驳回笔数']+tailItems['未知状态笔数'],cards[0].count);
  }
- assert.match(h.html(),/所选创建日期内仍待付/);assert.doesNotMatch(h.html(),/所选提交日期内仍待付/);
+ assert.match(h.html(),/近7天代付中快照/);assert.doesNotMatch(h.html(),/所选创建日期内仍待付/);assert.doesNotMatch(h.html(),/所选提交日期内仍待付/);
  r.summary[0].unknown_amount=null;r.summary[0].all_amount=null;h.c.render();const collect=h.html().match(/<section class="df-card" id="df-collect">([^]*?)<\/section>/)?.[1];assert.match(collect,/未知状态金额 <b>—<\/b>/);assert.match(collect,/未知状态笔数 <b>2<\/b>/);assert.doesNotMatch(collect,/NaN|Infinity/);
 });
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
@@ -55,7 +55,7 @@ function harness(options={}){
   setInterval:(fn,ms)=>{intervals.push({fn,ms});return intervals.length},clearInterval(){},setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},
   HENSEM_PRODUCTION:options.production!==false,
   hensemLiveCancelRequests:actions=>options.onCancel?.(actions),
-  hensemLiveRequest:async request=>{calls.push(JSON.parse(JSON.stringify(request)));if(!options.ancillaryHandler&&request.action==='providerOptions')return {providers:['Synthetic provider']};if(!options.ancillaryHandler&&request.action==='workorders')return {rows:[],byProvider:[],total:0,summary:{},byDirection:{}};if(handler)return handler(request);if(request.action==='catalog')return {platforms:options.platforms||[P]};if(request.action==='details')return detail((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65,request.offset,request.limit);if(request.action==='rates')return {rows:[],total:0,options:{countries:[],platforms:[],providers:[]}};if(request.action==='payoutConfig')return payoutConfig(request,(options.platforms||[P]).length>0);return aggregate((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65)}
+  hensemLiveRequest:async request=>{calls.push(JSON.parse(JSON.stringify(request)));if(request.action==='pendingSnapshot')return options.pendingSnapshotHandler?options.pendingSnapshotHandler(request):{basis:'seven_day_pending_snapshot',snapshotDate:request.date,windowStart:new Date(Date.parse(request.date+'T00:00:00Z')-6*86400000).toISOString().slice(0,10),windowEnd:request.date,complete:true,expectedPlatformCount:request.platformIds.length,receivedPlatformCount:request.platformIds.length,amount:'875.50',count:7,observedAt:'2026-09-23T00:00:00Z',rows:request.platformIds.map(id=>({id,name:'Synthetic snapshot platform',state:'complete',count:7,amount:'875.50',currency:'INR',timezone:'Asia/Kolkata'}))};if(!options.ancillaryHandler&&request.action==='providerOptions')return {providers:['Synthetic provider']};if(!options.ancillaryHandler&&request.action==='workorders')return {rows:[],byProvider:[],total:0,summary:{},byDirection:{}};if(handler)return handler(request);if(request.action==='catalog')return {platforms:options.platforms||[P]};if(request.action==='details')return detail((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65,request.offset,request.limit);if(request.action==='rates')return {rows:[],total:0,options:{countries:[],platforms:[],providers:[]}};if(request.action==='payoutConfig')return payoutConfig(request,(options.platforms||[P]).length>0);return aggregate((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65)}
  };context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>m.name!=='live-report-data.js'||options.reports))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
  return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
 }
@@ -123,7 +123,7 @@ test('adapter does nothing outside production and never installs an automatic da
  const h=await ready();assert.equal(h.calls.filter(q=>q.action==='catalog').length,1);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2);assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.intervals.length,0);const n=h.calls.length;h.c.render();h.c.render();await settle();assert.equal(h.calls.length,n);h.c.liveSet('provider','chosen');assert.equal(h.calls.length,n);assert.match(h.html(),/点击查询/);await h.c.liveQuery();assert.equal(h.calls.at(-1).providers[0],'chosen');
 });
 
-const businessCalls=h=>h.calls.filter(q=>['aggregate','details','reportSummary','workorders'].includes(q.action));
+const businessCalls=h=>h.calls.filter(q=>['aggregate','details','reportSummary','workorders','pendingSnapshot'].includes(q.action));
 
 test('overview first opening waits for query and existing queried tabs restore without fetching data',async()=>{
  const h=await ready({manualOverview:true,reports:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='collectedData'?{rows:[]}:q.action==='rates'?{rows:[],total:0}:aggregate()});
@@ -191,7 +191,7 @@ test('all direction remains selectable while charge and withdrawal totals are di
  const filters=h.nodes.get('liveFilters').innerHTML,direction=filters.match(/<details[^>]*data-multi="direction"[^]*?<\/details>/)?.[0];
  assert(direction,'direction multiselect exists');assert.match(direction,/value="charge"/);assert.match(direction,/value="withdraw"/);assert.match(direction,/>全部</);assert.doesNotMatch(direction,/代收 \+ 代付/);
  assert(h.calls.filter(q=>q.action==='aggregate').every(q=>q.direction==='all'));
- h.c.liveSet('direction','withdraw');await h.c.liveQuery();assert(h.calls.slice(-2).every(q=>q.direction==='withdraw'));
+ h.c.liveSet('direction','withdraw');await h.c.liveQuery();assert(h.calls.filter(q=>q.action==='aggregate').slice(-2).every(q=>q.direction==='withdraw'));
  h.c.liveReset();await settle();assert.equal(h.L.direction,'all');assert(h.calls.filter(q=>q.action==='aggregate'||q.action==='details').every(q=>['all','charge','withdraw'].includes(q.direction)));await h.c.liveQuery();
  const r=completeAggregate(P,10,3),withdraw=completeAggregate(P,20,15).summary[0];withdraw.direction='withdraw';r.summary.push(withdraw);for(const key of ['provider','daily','hourly','amount','matrix'])r.groups[key].push({...r.groups[key][0],...withdraw});h.L.results=[r];h.L.comparisonStatus='idle';h.c.render();assert.match(h.html(),/代收/);assert.match(h.html(),/代付/);assert.match(h.html(),/1,000\.00/);assert.match(h.html(),/2,000\.00/);assert.match(h.html(),/30\.00%/);assert.match(h.html(),/75\.00%/);assert.doesNotMatch(h.html(),/3,000\.00|60\.00%/);
  for(const page of ['providers','orders','time','amount','matrix','provider_daily','risk','teamops','merchants']){h.c.state.page=page;h.c.render();assert.doesNotMatch(h.html(),/3,000\.00|60\.00%/,page+' must not pool direction amounts or rates')}
@@ -1117,4 +1117,21 @@ test('compact time panel keeps exact drafts and manual shortcuts while chrome ke
  for(const [,handler]of html.matchAll(/onclick="(livePeriod[^";]+)"/g))vm.runInContext(handler,h.c);
  await settle();assert.equal(businessCalls(h).length,previous,'date shortcuts only stage conditions even on provider pages');assert.equal(h.L.dirty,true);
  h.L.catalogReady=false;h.L.catalogLoading=true;h.c.render();html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/平台目录读取中/);assert.doesNotMatch(html,/可选目录 0|订单目录 0|0 三方|0 团队|0 国家/);
+});
+
+
+test('overview uses one independent end-day backlog snapshot in both withdrawal cards while collection keeps its order cohort',async()=>{
+ const h=await ready();const snapshot=h.calls.filter(q=>q.action==='pendingSnapshot');assert.equal(snapshot.length,1);assert.equal(snapshot[0].date,'2026-09-22');assert.deepEqual(snapshot[0].platformIds,[P.id]);
+ const payout=h.html().match(/<section class="df-card" id="df-payout">([^]*?)<\/section>/)?.[1];assert(payout);const pending=payout.match(/<div class="df-flow-metric df-pending-snapshot">([^]*?)<\/div>/)?.[1];assert.match(pending,/875.50/);assert.match(pending,/7 笔/);assert.doesNotMatch(pending,/200.05|较前|按创建时间/);
+ const collect=h.html().match(/<section class="df-card" id="df-collect">([^]*?)<\/section>/)?.[1];assert.match(collect,/处理中金额/);assert.match(collect,/200.05/);
+ const backlog=h.html().match(/<section class="df-card" id="df-backlog">([^]*?)<\/section>/)?.[1];assert.match(backlog,/875.50/);assert.doesNotMatch(backlog,/超过 1 天|所选创建/);
+ h.c.liveSet('from','2026-09-01T12:13:14');assert.match(h.html(),/点击查询/);await h.c.liveQuery();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').at(-1).date,'2026-09-22');
+ h.c.liveSet('direction','charge');const count=h.calls.filter(q=>q.action==='pendingSnapshot').length;await h.c.liveQuery();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,count,'collection-only queries do not read withdrawal snapshots');
+});
+
+test('first overview snapshot waits for delayed report directory and keeps new unresolved platforms visible as partial',async()=>{
+ let resolveCatalog;const catalogPromise=new Promise(resolve=>resolveCatalog=resolve);
+ const native={...P,team:'Synthetic Team'},late={name:'Synthetic Late Report',rawPlatform:'Synthetic Late Report',country:'印度',rawCountry:'IN',team:'Synthetic Team',system:'REPORT',dataset:'volume',directions:['withdraw'],records:1,provenance:{kind:'direct'}};
+ const h=await ready({manualOverview:true,reports:true,handler:q=>q.action==='catalog'?{platforms:[native]}:q.action==='collectedData'?catalogPromise:q.action==='reportSummary'?{feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'not_received',groups:[]}))}:q.action==='rates'?{rows:[],total:0}:aggregate(native)});
+ const query=h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,0);resolveCatalog({rows:[late]});await query;await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1);assert.match(h.html(),/已采集 1 \/ 2 平台/);assert.match(h.html(),/已采集小计/);h.c.livePendingSnapshotDetails();assert.match(h.drawers.at(-1).html,/Synthetic Late Report/);assert.match(h.drawers.at(-1).html,/尚未接入快照/);
 });
