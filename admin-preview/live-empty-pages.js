@@ -74,12 +74,7 @@
       +'<div class="grid equal">'+panel(page,'累计超过阈值',['类型','超过时长','金额','工单笔数','笔数占比','金额占比'])+panel(page,'时间字段核验',['类型','有效时间笔数','缺少时间笔数','时间冲突笔数','平均耗时','P95'])+'</div>';
   }
   function access() {
-    return '<div class="grid equal" data-account-entries><section class="panel"><div class="panel-head"><h2>后台账号</h2></div><div style="padding:18px"><p>管理后台登录账号、角色、模块权限、数据范围与密码。</p><button type="button" class="btn primary" onclick="HensemLiveEmpty.openAccounts(\'open-accounts\')">管理后台账号</button></div></section><section class="panel"><div class="panel-head"><h2>工单账号</h2></div><div style="padding:18px"><p>管理工单系统的主管、员工、审计员与团队平台范围。工单账号独立于后台账号。</p><button type="button" class="btn primary" onclick="HensemLiveEmpty.openAccounts(\'open-workorder-accounts\')">管理工单账号</button></div></section></div><p class="live-panel-note" role="status" id="hle-account-message">后台账号按已有管理权限开放；工单账号仅总管理员可管理。新版查看授权仍在右上角。</p>';
-  }
-  function openAccounts(command) {
-    if(command!=='open-accounts'&&command!=='open-workorder-accounts')return false;
-    if(typeof root.hensemOpenAccountManager==='function')return root.hensemOpenAccountManager(command);
-    const node=root.document?.getElementById('hle-account-message');if(node)node.textContent='账号管理入口尚未就绪，请刷新后重试。';return false;
+    return '<div data-account-workspace role="status" style="min-height:420px;padding:16px;color:#677d9b">正在读取账号页面…</div>';
   }
 
   function rules(page) {
@@ -135,6 +130,6 @@
     return repaint(page);
   }
   function reset(page) { if(!schema[page])return '';views[page]=initial(page);return repaint(page); }
-  root.HensemLiveEmpty={render,search,change,tab,pagechange,reset,openAccounts,pages:Object.freeze(Object.keys(schema)),snapshot:page=>get(page)?JSON.parse(JSON.stringify(get(page))):null};
+  root.HensemLiveEmpty={render,search,change,tab,pagechange,reset,pages:Object.freeze(Object.keys(schema)),snapshot:page=>get(page)?JSON.parse(JSON.stringify(get(page))):null};
   if(typeof module!=='undefined'&&module.exports)module.exports=root.HensemLiveEmpty;
 })(typeof window!=='undefined'?window:globalThis);
