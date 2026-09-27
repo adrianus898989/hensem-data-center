@@ -320,11 +320,27 @@ test('confirmed RAJA alias has one display entry and preserves exact authorized 
  const raw={id:'raja-source',name:'RAJA',sourceName:'RAJA',country:'印度',team:'M8',source:'ar'},placeholder={...raw,id:'rajalottery-map',name:'RAJALOTTERY',sourceName:'RAJALOTTERY'};
  const f=fixture({catalog:[placeholder,raw],withdrawCatalog:[{...raw,source:'withdraw'},{...placeholder,source:'withdraw'}],feeds:[feed({name:'RAJALOTTERY',rawPlatform:'RAJA',rawCountry:'IN',country:'印度',team:'M8',system:'AR',directions:['charge'],provenance:{kind:'direct'}})]});
  const before=plain(f.L.catalog);await f.page.load({country:'印度',teams:['M8'],platforms:[placeholder.id],direction:'charge'});
- const rows=f.page.catalog();assert.equal(rows.length,1);assert.equal(rows[0].name,'RAJALOTTERY');assert.equal(rows[0].id,raw.id);assert.equal(rows[0].sourceName,'RAJA');assert.deepEqual(plain(rows[0].orderPlatformIds),[raw.id]);assert.deepEqual(plain(f.L.catalog),before);
+ const rows=f.page.catalog();assert.equal(rows.length,1);assert.equal(rows[0].name,'RAJA');assert.equal(rows[0].id,raw.id);assert.equal(rows[0].sourceName,'RAJA');assert.deepEqual(plain(rows[0].orderPlatformIds),[raw.id]);assert.deepEqual(plain(f.L.catalog),before);
  assert.deepEqual(f.calls.find(q=>q.action==='reportSummary').feeds.map(x=>[x.country,x.platform]),[['IN','RAJA']]);
  assert.equal(f.page.selected({country:'印度',platforms:[placeholder.id]}).length,1,'a saved authorized alias selection stays on this logical platform');
  const subset=fixture({catalog:[placeholder],feeds:[]});assert.equal(subset.page.catalog()[0].id,placeholder.id,'never invent the ungranted native RAJA ID');assert.equal(subset.page.catalog()[0].sourceName,'RAJALOTTERY');
  for(const extra of [{country:'巴西'},{team:'Other'},{source:'newar'},{country:'香港',team:'香港',source:'game66'}]){
   const other=fixture({catalog:[raw,{...placeholder,...extra}],feeds:[]});assert.equal(other.page.catalog().length,2,'different source/team/country remains separate');
  }
+});
+
+
+test('directory connection metadata distinguishes real report records from empty or unavailable seeds without removing platforms',async()=>{
+ const catalog=Array.from({length:8},(_,i)=>({id:'native-'+i,name:'BR-NATIVE-'+i,country:'巴西',source:'ar',team:'Synthetic'})),seeds=Array.from({length:60},(_,i)=>({name:'BR-SEED-'+i,country:'巴西',source:'withdraw',team:'Synthetic'}));
+ const feeds=[feed({name:seeds[0].name,country:'巴西',rawCountry:'BR',team:'Synthetic'}),feed({name:seeds[0].name,country:'巴西',rawCountry:'BR',team:'Synthetic',dataset:'panda_config'}),feed({name:seeds[1].name,country:'巴西',rawCountry:'BR',team:'Synthetic',available:false}),feed({name:seeds[2].name,country:'巴西',rawCountry:'BR',team:'Synthetic',records:0}),feed({name:seeds[3].name,country:'巴西',rawCountry:'BR',team:'Synthetic',dataset:'panda_config'})];
+ const f=fixture({catalog,withdrawCatalog:[...seeds,seeds[0],{...catalog[0],source:'withdraw'}],feeds});const before=f.page.selected({country:'巴西'});assert.equal(before.length,68);assert.equal(before.filter(p=>p.reportOnly).length,60);assert(before.filter(p=>p.reportOnly).every(p=>p.reportConnected===false));
+ await f.page.loadCatalog();const after=f.page.selected({country:'巴西'});assert.equal(after.length,68);assert.equal(after.filter(p=>p.reportConnected).length,2);assert.equal(after.filter(p=>p.reportOnly&&!p.reportConnected).length,58);assert.deepEqual(plain(after.map(p=>p.id)),plain(before.map(p=>p.id)));
+});
+
+test('confirmed alias display uses RAJA while preserving raw query identities and rejecting cross-scope aliases',()=>{
+ const f=fixture({catalog:[{id:'old',name:'RAJALOTTERY',sourceName:'RAJALOTTERY',country:'印度',team:'M8',source:'AR'},{id:'data',name:'RAJA',sourceName:'RAJA',country:'印度',team:'M8',source:'AR'}],feeds:[]});
+ const row=f.page.catalog()[0];assert.equal(f.page.catalog().length,1);assert.equal(row.name,'RAJA');assert.equal(row.id,'data');assert.equal(row.sourceName,'RAJA');assert.deepEqual(plain(row.aliasPlatformIds),['old','data']);
+ const api=f.context.HensemLiveReportData;assert.equal(api.confirmedAliasKey(row),api.confirmedAliasKey({name:'RAJALOTTERY',country:'印度',team:'M8',source:'ar'}));
+ for(const other of [{country:'巴西',team:'M8',source:'ar'},{country:'印度',team:'Other',source:'ar'},{country:'印度',team:'M8',source:'newar'}])assert.equal(api.confirmedAliasKey({name:'RAJALOTTERY',...other}),null);
+ assert.equal(api.normalizeIdentity({name:'RAJALOTTERY',country:'印度',team:'M8',source:'ar'}).rawPlatform,'RAJALOTTERY');
 });

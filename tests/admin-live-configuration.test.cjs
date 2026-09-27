@@ -412,3 +412,25 @@ test('soft-archived sheet duplicates stay recoverable without inflating linkage,
   await db.exec("update admin_deposit_followup_rows set stale_at=null where id='archived-entry'");const restored=await call('deposit_issues',{...q,view:'entries'});assert.equal(restored.total,2);assert(restored.rows.every(r=>r.linkStatus==='review'),'restored duplicate is visible and correctly needs manual review');
  }finally{await db.exec('rollback');await as(owner);}
 });
+
+test('platform assignment rows, counts and summaries share all active filters before pagination and retain scope',async()=>{
+ for(const source of ['admin-live-configuration-platforms.sql','admin-live-platform-assignments.sql']){
+  await as(owner);await db.exec('begin');
+  try{
+   await db.exec(sql(source).replace(/^begin;$/gm,'').replace(/^commit;$/gm,''));
+   await db.exec(`insert into dashboard_platform_team_map(team_name,system_name,source_system,country_name,country_code,source_country,platform_name,source_platform)
+    select case when i=25 then '胖虎' else 'M8' end,'AR系统','AR','巴西','BR','巴西','SYNTHETIC-BR-'||lpad(i::text,2,'0'),'SYNTHETIC-BR-'||lpad(i::text,2,'0') from generate_series(1,25)i;
+    insert into third_party_volume values('巴西','SYNTHETIC-BR-01','p','P','代收',9,'2026-09-23',now()),('巴西','SYNTHETIC-BR-UNKNOWN','p','P','代收',2,'2026-09-23',now());
+    refresh materialized view private.dashboard_admin_provider_registry;`);
+   const brazil=await call('platform_assignments',{country:'巴西',limit:20});
+   assert.equal(brazil.total,26,source);assert.equal(brazil.rows.length,20);assert(brazil.rows.every(r=>r.country==='巴西'));
+   assert.deepEqual(brazil.summary,{mappings:25,mapped:1,unmapped:1,noData:24,teams:2,systems:1,countries:1});
+   const second=await call('platform_assignments',{country:'巴西',offset:20,limit:20});assert.equal(second.rows.length,6);assert.deepEqual(second.summary,brazil.summary,'summary covers matching rows, not only this page');
+   const narrow=await call('platform_assignments',{country:'巴西',team:'M8',system:'AR系统',platform:'SYNTHETIC-BR-0',status:'no_data'});
+   assert.equal(narrow.total,8);assert.equal(narrow.summary.mappings,8);assert.equal(narrow.summary.noData,8);assert.equal(narrow.summary.mapped,0);assert.equal(narrow.summary.unmapped,0);assert.equal(narrow.summary.teams,1);
+   assert(narrow.rows.every(r=>r.team==='M8'&&r.platform.startsWith('SYNTHETIC-BR-0')&&r.status==='no_data'));
+   const none=await call('platform_assignments',{country:'巴西',platform:'DOES-NOT-EXIST'});assert.equal(none.total,0);assert(Object.values(none.summary).every(n=>n===0));
+   await as(viewer);const denied=await call('platform_assignments',{country:'巴西'});assert.equal(denied.total,0);assert(Object.values(denied.summary).every(n=>n===0));assert(!denied.options.countries.includes('巴西'));
+  }finally{await db.exec('rollback');await as(owner)}
+ }
+});

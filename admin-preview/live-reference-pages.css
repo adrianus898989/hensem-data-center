@@ -197,3 +197,26 @@ body.live-admin .provider-daily-v3 .analysis-value-button.is-selected{background
 @media(max-width:760px){body.live-admin .provider-daily-v3 .analysis-provider-day{width:calc(100vw - 48px)}}
 
 body.live-admin .provider-summary-table .workorder-rate-low{color:#d6374a!important}
+
+/* Business filters keep the query controls within the available content width. */
+body.live-admin #liveFilters{min-width:0;max-width:100%}
+body.live-admin .live-business-filters{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;padding:12px}
+body.live-admin .live-business-filters .live-filter-fields{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;min-width:0}
+body.live-admin .live-business-filters .live-field{width:100%;min-width:0;max-width:100%;margin:0}
+body.live-admin .live-business-filters .live-field input,body.live-admin .live-business-filters .live-field select,body.live-admin .live-business-filters .live-multi summary{height:32px;min-height:32px;box-sizing:border-box}
+body.live-admin .live-business-filters .live-multi-caption{max-width:100%;min-width:0}
+body.live-admin .live-business-filters .live-filter-footer{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 16px;min-width:0}
+body.live-admin .live-business-filters .live-date-range{flex:1 1 506px;width:100%;min-width:0;max-width:720px}
+body.live-admin .live-business-filters .live-date-controls{width:100%;grid-template-columns:minmax(104px,1fr) 108px 14px minmax(104px,1fr) 108px}
+body.live-admin .live-business-filters .live-date-controls input{height:32px}
+body.live-admin .live-business-filters .live-date-controls>span{display:block}
+body.live-admin .live-business-filters .live-filter-commands{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;min-width:0;margin-left:auto}
+body.live-admin .live-business-filters .live-date-shortcuts,body.live-admin .live-business-filters .live-query-actions{display:flex;align-items:center;flex-wrap:wrap;gap:5px;height:auto;min-width:0}
+body.live-admin .live-business-filters .live-date-shortcuts .btn,body.live-admin .live-business-filters .live-query-actions .btn{height:32px;padding:5px 10px;font-size:11px}
+body.live-admin .live-business-filters .live-query-actions .btn{min-width:54px}
+body.live-admin .live-business-filters .live-search-row{min-width:0}
+body.live-admin .live-business-filters .live-search-row .live-field{width:auto;flex:1 1 145px}
+body.live-admin .live-query-prompt{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+body.live-admin .live-query-prompt .btn{height:32px;padding:5px 14px;flex:none}
+@media(max-width:1200px){body.live-admin .live-business-filters .live-filter-fields{grid-template-columns:repeat(3,minmax(0,1fr))}body.live-admin .live-business-filters .live-date-range{max-width:none}body.live-admin .live-business-filters .live-filter-commands{margin-left:0;width:100%;justify-content:space-between}}
+@media(max-width:650px){body.live-admin .live-business-filters .live-filter-fields{grid-template-columns:repeat(2,minmax(0,1fr))}body.live-admin .live-business-filters .live-date-range{flex-basis:100%}body.live-admin .live-business-filters .live-date-controls{grid-template-columns:minmax(100px,1fr) minmax(95px,1fr)}body.live-admin .live-business-filters .live-date-controls>span{display:none}body.live-admin .live-business-filters .live-date-shortcuts .btn,body.live-admin .live-business-filters .live-query-actions .btn{padding:5px 8px}}

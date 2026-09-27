@@ -862,7 +862,7 @@ test('overview discovers report-only teams across countries and reads them witho
  assert.match(h.nodes.get('liveFilters').innerHTML,/value="胖虎"/);assert.match(h.nodes.get('liveFilters').innerHTML,/value="M8"/);
  const before=h.calls.length;h.c.liveSetMultiOption('team',{value:'胖虎',checked:true});assert.equal(h.L.country,'巴西');h.c.liveQuery();await settle();
  const calls=h.calls.slice(before);assert(calls.some(q=>q.action==='reportSummary'));assert(!calls.some(q=>['aggregate','details','providerOptions'].includes(q.action)));
- assert.match(h.html(),/BET6867/);assert.match(h.html(),/Google 表格 → Supabase/);assert.match(h.html(),/500\.00/);assert.doesNotMatch(h.html(),/df-collect|df-payout/,'report-only data never paints misleading zero-order cards');assert.match(h.nodes.get('liveFilters').innerHTML,/1 个仅日报 \/ 配置平台/);
+ assert.match(h.html(),/BET6867/);assert.match(h.html(),/Google 表格 → Supabase/);assert.match(h.html(),/500\.00/);assert.doesNotMatch(h.html(),/df-collect|df-payout/,'report-only data never paints misleading zero-order cards');assert.match(h.nodes.get('liveFilters').innerHTML,/已接入日报 \/ 配置 1 平台/);
  h.c.setPage('time');await settle();assert.match(h.html(),/日报未提供|日报.*无法|源日报/);const n=h.calls.filter(q=>q.action==='reportSummary').length;h.c.setPage('overview');await settle();assert.match(h.html(),/BET6867/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,n,'returning to a report-only overview restores its exact result without a report read');await h.c.liveQuery();await settle();assert.match(h.html(),/BET6867/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,n+1,'the explicit query refreshes the exact report scope once');
 });
 test('incomplete report read cannot remove already loaded native order summaries',async()=>{
@@ -880,7 +880,7 @@ test('main filters retain all authorized Panghu seeds after report catalog failu
  const brazil={...P,id:'44444444-4444-4444-8444-444444444444',name:'BET6867',country:'巴西',team:'M8',currency:'BRL',timezone:'America/Sao_Paulo'},seeds=Array.from({length:31},(_,i)=>({id:'withdraw-'+i,name:i===0?'BET6867':i===1?'5C555':'PANGHU-'+i,country:'胖虎巴西',team:'胖虎',scopeGroup:'BR_PANGHU',currency:'BRL',timezone:'America/Sao_Paulo'}));
  const h=await ready({reports:true,handler:q=>q.action==='catalog'?{platforms:[{...P,team:'M8'},brazil,{...P,id:'hk',country:'香港',team:'香港'},{...P,id:'red',country:'红膏蟹',team:'红膏蟹'}],withdrawPlatforms:seeds}:q.action==='collectedData'?Promise.reject(Error('synthetic catalog timeout')):q.action==='rates'?{rows:[],total:0}:aggregate(P)});
  const filters=h.nodes.get('liveFilters').innerHTML,countries=filters.match(/id="live-country"[^]*?<\/select>/)[0];assert.match(filters,/value="胖虎"/);assert.match(countries,/>巴西<\/option>/);assert.doesNotMatch(countries,/>胖虎巴西<|>香港<|>红膏蟹</);assert.doesNotMatch(countries,/国家待核对/);assert.match(countries,/>印度<\/option>/);
- const before=h.calls.length;h.c.liveSet('team','胖虎');assert.equal(h.L.country,'巴西');assert.match(h.nodes.get('liveFilters').innerHTML,/31 个仅日报 \/ 配置平台/);h.c.liveQuery();await settle();assert(!h.calls.slice(before).some(q=>['aggregate','providerOptions','details'].includes(q.action)));assert.match(h.html(),/日报读取未完成/);assert.doesNotMatch(h.html(),/df-collect|df-payout/);
+ const before=h.calls.length;h.c.liveSet('team','胖虎');assert.equal(h.L.country,'巴西');assert.match(h.nodes.get('liveFilters').innerHTML,/仅目录 31 平台 · 数据待确认/);h.c.liveQuery();await settle();assert(!h.calls.slice(before).some(q=>['aggregate','providerOptions','details'].includes(q.action)));assert.match(h.html(),/日报读取未完成/);assert.doesNotMatch(h.html(),/df-collect|df-payout/);
 });
 
 test('matrix cell selection renders only that hour below its band and supports closing it',async()=>{
@@ -983,7 +983,7 @@ test('dependency options preserve a restricted authorized catalog and never recr
 test('filter coverage distinguishes directory membership from returned transaction platform coverage',async()=>{
  const missing={...P,id:'missing',name:'REGISTERED WITHOUT DATA'},h=await ready({platforms:[P,missing]});
  h.L.queryPlatforms=[P,missing];h.L.results=[completeAggregate(P,20,10),{platform:missing,summary:[],groups:{}}];h.L.dirty=false;h.L.overviewQueried=true;h.c.render();
- let html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/2 目录平台/);assert.match(html,/所选日期有订单数据 1 平台/);
+ let html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/订单目录 2 平台/);assert.match(html,/所选日期有订单数据 1 平台/);
  h.L.queryFailures=[{id:'missing'}];h.c.render();assert.match(h.nodes.get('liveFilters').innerHTML,/已返回有订单数据 1 平台/);
  h.c.liveSet('from','2026-09-20T00:00:00');html=h.nodes.get('liveFilters').innerHTML;assert.doesNotMatch(html,/所选日期有订单数据|已返回有订单数据/,'old coverage is hidden after dates change');
 });
@@ -1006,7 +1006,7 @@ test('LG native platforms enter the core overview with local order queries and k
  }});
  assert.equal(h.L.country,'菲律宾');assert.equal(h.L.currency,'PHP');assert.equal(h.L.results.length,1);assert.equal(h.L.results[0].summary[0].all_count,43);assert.equal(h.L.results[0].summary[0].success_count,7);assert.match(h.html(),/df-collect/);assert.match(h.html(),/900,000\.00/,'source-native report remains available as an independent comparison');
  const calls=h.calls.filter(q=>q.action==='aggregate');assert(calls.length);assert(calls.every(q=>q.platformId===lg.id&&q.currency==='PHP'));assert.equal(calls[0].startAt,'2026-09-21T16:00:00.000Z');assert.equal(calls[0].endAt,'2026-09-21T22:00:00.000Z');
- const filters=h.nodes.get('liveFilters').innerHTML;assert.match(filters,/LG系统/);assert.match(filters,/1 目录平台/);assert.doesNotMatch(filters,/LG-SYNTHETIC · 日报/);assert.equal(h.L.results[0].summary[0].all_amount,'4300','report amount is never added to order metrics');
+ const filters=h.nodes.get('liveFilters').innerHTML;assert.match(filters,/LG系统/);assert.match(filters,/订单目录 1 平台/);assert.doesNotMatch(filters,/LG-SYNTHETIC · 日报/);assert.equal(h.L.results[0].summary[0].all_amount,'4300','report amount is never added to order metrics');
  h.c.setPage('provider_payout');await settle();await h.c.liveQuery();await settle();assert(h.calls.some(q=>q.action==='aggregate'&&q.platformId===lg.id&&q.direction==='withdraw'));assert.equal(h.L.direction,'withdraw');
 });
 
@@ -1070,11 +1070,34 @@ test('backend system filter excludes report and configuration transport labels w
 function intakeCoverageFixtureReply(q,feeds){if(q.operation==='catalog')return {version:1,complete:true,feeds};return {version:1,complete:true,checkedAt:'2026-09-26T01:00:00Z',feedIds:q.feedIds,startAt:q.startAt,endAt:q.endAt,rows:q.feedIds.flatMap(feedId=>{const rows=[];for(let t=Date.parse(q.startAt);t<=Date.parse(q.endAt);t+=86400000)rows.push({feedId,date:new Date(t).toISOString().slice(0,10),status:'received',received:true,complete:false,zeroConfirmed:false,expected:true});return rows})}}
 
 
-test('confirmed RAJA catalog alias queries the authorized source once and displays RAJALOTTERY without an empty duplicate',async()=>{
+test('confirmed RAJA catalog alias queries the authorized source once and displays RAJA without an empty duplicate',async()=>{
  const raw={...P,id:'11111111-1111-4111-8111-111111111111',name:'RAJA',sourceName:'RAJA',team:'M8'},alias={...raw,id:'22222222-2222-4222-8222-222222222222',name:'RAJALOTTERY',sourceName:'RAJALOTTERY'},platforms=[alias,raw];
  const h=await ready({reports:true,platforms,handler:async q=>q.action==='catalog'?{platforms}:q.action==='collectedData'?{rows:[]}:q.action==='rates'?{rows:[],total:0}:completeAggregate(platforms.find(p=>p.id===q.platformId)||raw,10,8)});
- const nativeCalls=h.calls.filter(q=>q.action==='aggregate');assert(nativeCalls.length>0);assert(nativeCalls.every(q=>q.platformId===raw.id));assert.equal(h.L.queryPlatforms.length,1);assert.equal(h.L.results[0].platform.name,'RAJALOTTERY');assert.equal(h.L.results[0].platform.sourceName,'RAJA');
- const table=renderedTables(h.html()).find(t=>t.headers[0]==='平台');assert(table);assert.equal(table.rows.length,1);assert.equal(plain(table.rows[0][0]),'RAJALOTTERY');assert.equal(plain(table.rows[0][table.headers.indexOf('成功笔数')]),'8');
+ const nativeCalls=h.calls.filter(q=>q.action==='aggregate');assert(nativeCalls.length>0);assert(nativeCalls.every(q=>q.platformId===raw.id));assert.equal(h.L.queryPlatforms.length,1);assert.equal(h.L.results[0].platform.name,'RAJA');assert.equal(h.L.results[0].platform.sourceName,'RAJA');
+ const table=renderedTables(h.html()).find(t=>t.headers[0]==='平台');assert(table);assert.equal(table.rows.length,1);assert.equal(plain(table.rows[0][0]),'RAJA');assert.equal(plain(table.rows[0][table.headers.indexOf('成功笔数')]),'8');
  h.c.liveSet('platform',alias.id);assert.deepEqual(Array.from(h.L.multi.platform),[raw.id]);await h.c.liveQuery(true);assert.equal(h.L.queryPlatforms.length,1);assert.equal(h.L.queryPlatforms[0].id,raw.id);
  const subset=await ready({reports:true,platforms:[alias],handler:async q=>q.action==='catalog'?{platforms:[alias]}:q.action==='collectedData'?{rows:[]}:q.action==='rates'?{rows:[],total:0}:completeAggregate(alias,4,2)});assert(subset.calls.filter(q=>q.action==='aggregate').every(q=>q.platformId===alias.id),'no unauthorized source ID may be synthesized');
+});
+
+
+test('Brazil selectable directory keeps all 8 native and 60 report seeds without claiming current-day coverage',async()=>{
+ const platforms=Array.from({length:8},(_,i)=>({...P,id:'BR-'+i,name:'SYNTHETIC-BR-'+i,country:'巴西',scopeGroup:'BR',team:'Synthetic Brazil',currency:'BRL',timezone:'America/Sao_Paulo'}));
+ const seeds=Array.from({length:60},(_,i)=>({name:'SYNTHETIC-REPORT-'+i,country:'巴西',team:'Synthetic Brazil',source:'withdraw',currency:'BRL',timezone:'America/Sao_Paulo'}));
+ const feeds=[0,1].map(i=>({name:seeds[i].name,rawPlatform:seeds[i].name,country:'巴西',rawCountry:'BR',team:'Synthetic Brazil',system:'REPORT',dataset:'volume',directions:['charge'],records:4,available:true,provenance:{kind:'direct'}}));
+ const h=await ready({manualOverview:true,reports:true,platforms,handler:q=>q.action==='catalog'?{platforms,withdrawPlatforms:[...seeds,seeds[0],{...platforms[0],source:'withdraw'}]}:q.action==='collectedData'?{rows:feeds}:q.action==='reportSummary'?{feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'not_received',groups:[]}))}:q.action==='rates'?{rows:[],total:0}:completeAggregate(platforms.find(p=>p.id===q.platformId)||platforms[0],10,8)});
+ let html=h.nodes.get('liveFilters').innerHTML;
+ assert.match(html,/可选目录 68 个平台/);assert.match(html,/订单目录 8 平台/);assert.match(html,/仅目录 60 平台 · 数据待确认/);assert.doesNotMatch(html,/已接入日报|所选日期有订单数据|仅日报/);
+ assert.match(html,/live-filter-fields/);assert.match(html,/live-filter-footer/);assert.match(html,/live-query-actions/);assert.match(h.html(),/>查询数据<\/button>/);
+ assert.equal(businessCalls(h).length,0);assert.equal(h.calls.filter(q=>q.action==='collectedData').length,0);
+ await h.c.liveQuery();await settle();html=h.nodes.get('liveFilters').innerHTML;
+ assert.match(html,/可选目录 68 个平台/);assert.match(html,/已接入日报 \/ 配置 2 平台/);assert.match(html,/仅目录 58 平台 · 数据待确认/);assert.equal(h.L.queryPlatforms.length,8);assert.equal(new Set(h.L.queryPlatforms.map(p=>p.id)).size,8);
+ h.c.liveSet('from','2026-09-20T00:00:00');assert.match(h.html(),/>查询数据<\/button>/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据/);
+});
+
+test('platform assignment input changes invalidate in-flight results and successful scopes are stamped',async()=>{
+ const old=deferred(),h=await ready({manualOverview:true});h.c.state.page='teams';h.setHandler(q=>q.action==='platformAssignments'&&q.country==='巴西'?old.promise:q.action==='platformAssignments'?{rows:[{platform:'CURRENT INDIA',country:'印度'}],total:1,options:{},summary:{}}:aggregate());
+ h.c.platformAssignmentsSet('teamPlatformCountry','巴西');const pending=h.c.platformAssignmentsLoad(true);await flush();const sent=h.calls.findLast(q=>q.action==='platformAssignments');assert.equal(sent.country,'巴西');
+ h.c.platformAssignmentsSet('teamPlatformCountry','印度');assert.equal(h.L.platformAssignmentsDirty,true);assert.equal(h.L.platformAssignmentsLoading,false);old.resolve({rows:[{platform:'STALE BRAZIL',country:'巴西'}],total:1});await pending;
+ assert.equal(h.L.platformAssignments,null);assert.equal(h.L.platformAssignmentsAppliedRequest,undefined);await h.c.platformAssignmentsLoad(true);assert.equal(h.L.platformAssignmentsAppliedRequest.country,'印度');assert.equal(h.L.platformAssignmentsDirty,false);assert.equal(h.L.platformAssignments.rows[0].platform,'CURRENT INDIA');
+ h.c.platformAssignmentsSet('teamPlatformQuery','new query');assert.equal(h.L.platformAssignmentsDirty,true);assert.equal(h.L.platformAssignmentsAppliedRequest.platform,undefined,'applied scope is a captured object, not a live view of edited filters');
 });

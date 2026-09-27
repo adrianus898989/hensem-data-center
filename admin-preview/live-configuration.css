@@ -321,3 +321,12 @@ body.live-admin .withdraw-blocking-orders table{min-width:1280px}
 body.live-admin .withdraw-blocking-orders td{vertical-align:top;text-align:left}
 body.live-admin .withdraw-blocking-orders td:nth-child(5){min-width:260px;max-width:380px;white-space:normal;overflow-wrap:anywhere}
 body.live-admin .withdraw-drawer .withdraw-filter-chip{flex-wrap:wrap}
+
+body.live-admin .config-platform-filters{display:grid;grid-template-columns:repeat(5,minmax(125px,1fr)) auto;gap:10px;align-items:end}
+body.live-admin .config-platform-filters .live-field{min-width:0;width:auto}
+body.live-admin .config-platform-filters .live-field input,body.live-admin .config-platform-filters .live-field select{width:100%;min-width:0}
+body.live-admin .config-platform-filters .live-actions{white-space:nowrap;align-self:end}
+body.live-admin .config-query-scope{margin:12px 0 0;color:#526b93;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+body.live-admin .config-query-prompt{display:flex;align-items:center;justify-content:space-between;gap:12px}
+@media(max-width:1250px){body.live-admin .config-platform-filters{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:720px){body.live-admin .config-platform-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}

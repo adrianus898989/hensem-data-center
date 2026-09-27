@@ -25,16 +25,18 @@
     ]))+pager(Number(result.total||0),L.providerConfigPage,L.providerConfigSize,'provider-config'),
     '沿用已有历史归类；手动归类优先并即时生效。历史目录每 5 分钟更新，笔数为历史覆盖量。原始通道为空的记录保留待确认。');
   }
-  function platformView(){
-   const result=L.platformAssignments||{},rows=result.rows||[],opts=result.options||{},sum=result.summary||{};
-   const form='<section class="panel"><form class="live-filters" onsubmit="event.preventDefault();platformAssignmentsLoad(true)">'+
-    select('teamPlatformTeam','所属团队',L.teamPlatformTeam,[['all','全部团队'],...(opts.teams||[]).map(v=>[v,v])])+
-    select('teamPlatformCountry','国家 / 地区',L.teamPlatformCountry,[['all','全部国家 / 地区'],...(opts.countries||[]).map(v=>[v,v])])+
-    select('teamPlatformSystem','包网系统',L.teamPlatformSystem,[['all','全部系统'],...(opts.systems||[]).map(v=>[v,v])])+
-    field('teamPlatformQuery','平台',L.teamPlatformQuery,'搜索平台名称')+
-    select('teamPlatformStatus','配置状态',L.teamPlatformStatus,[['all','全部状态'],['mapped','已配置有数据'],['no_data','配置暂无数据'],['unmapped','待归类平台']])+
-    '<div class="live-actions"><button class="btn primary">查询</button><button class="btn" type="button" onclick="platformAssignmentsReset()">重置</button></div></form></section>';
-   return form+notice(L.platformAssignmentsLoading,L.platformAssignmentsError)+permission(result)+'<div class="live-metrics">'+
+  const platformScope=request=>['team','country','system','platform','status'].map(key=>{const value=request?.[key];return value==null||value==='all'?'':String(value)});
+  const platformDraft=()=>({team:L.teamPlatformTeam,country:L.teamPlatformCountry,system:L.teamPlatformSystem,platform:L.teamPlatformQuery,status:L.teamPlatformStatus});
+  const platformScopeLabel=request=>{const [team,country,system,platform,status]=platformScope(request);return [country||'全部国家 / 地区',team||'全部团队',system||'全部系统',platform?'平台：'+platform:'',({mapped:'已配置有数据',no_data:'配置暂无数据',unmapped:'待归类平台'})[status]||''].filter(Boolean).map(E).join(' · ')};
+  function platformResults(){
+   const result=L.platformAssignments,scope=platformDraft(),applied=L.platformAssignmentsAppliedRequest;
+   const dirty=L.platformAssignmentsDirty||!applied||JSON.stringify(platformScope(scope))!==JSON.stringify(platformScope(applied));
+   const queryButton='<button type="button" class="btn primary" onclick="platformAssignmentsLoad(true)">查询</button>';
+   if(L.platformAssignmentsLoading)return '<div class="live-status" role="status">正在查询：'+platformScopeLabel(scope)+'…</div>';
+   if(L.platformAssignmentsError)return '<div class="live-status live-error" role="status">'+E(L.platformAssignmentsError)+' <button type="button" class="btn" onclick="platformAssignmentsLoad(true)">重试</button></div>';
+   if(dirty||!result)return '<div class="live-status config-query-prompt" role="status"><span>筛选条件已修改，请查询对应归属。</span>'+queryButton+'</div>';
+   const rows=result.rows||[],sum=result.summary||{};
+   return '<div class="config-query-scope">已查询：'+platformScopeLabel(applied)+'</div>'+permission(result)+'<div class="live-metrics">'+
     metric('配置平台',C(sum.mappings))+metric('已配置有数据',C(sum.mapped))+metric('配置暂无数据',C(sum.noData))+metric('待归类平台',C(sum.unmapped))+'</div>'+
     box('团队 / 平台 / 包网系统归属',table(['团队','包网系统','国家','平台','来源系统','代收笔数','代付笔数','合计笔数','状态','最后数据日','操作'],rows.map((r,i)=>[
      E(r.team||'待配置'),E(r.system||'待配置'),E(r.country||r.sourceCountry),E(r.platform||r.sourcePlatform),E(r.sourceSystem),C(r.chargeCount),C(r.withdrawCount),C(r.matchedCount),
@@ -42,6 +44,19 @@
      result.canManage?'<button class="btn small" onclick="configEditPlatform('+i+')">'+(r.mapped?'修改归属':'归类')+'</button>':'<span class="muted">只读</span>'
     ]))+pager(Number(result.total||0),L.platformAssignmentsPage,L.platformAssignmentsSize,'platform-assignments'),
     '归属修改保存到正式配置，并同步更新筛选目录；原始平台标识保留。');
+  }
+  function platformChanged(){const host=document.getElementById('platformAssignmentResults');if(host)host.innerHTML=platformResults()}
+  function platformView(){
+   const result=L.platformAssignments||{},opts=result.options||{};
+   const choices=(current,empty,items)=>[['all',empty],...[...new Set([current,...(items||[])].filter(v=>v&&v!=='all'))].map(v=>[v,v])];
+   const form='<section class="panel"><form class="live-filters config-platform-filters" onsubmit="event.preventDefault();platformAssignmentsLoad(true)">'+
+    select('teamPlatformTeam','所属团队',L.teamPlatformTeam,choices(L.teamPlatformTeam,'全部团队',opts.teams))+
+    select('teamPlatformCountry','国家 / 地区',L.teamPlatformCountry,choices(L.teamPlatformCountry,'全部国家 / 地区',opts.countries))+
+    select('teamPlatformSystem','包网系统',L.teamPlatformSystem,choices(L.teamPlatformSystem,'全部系统',opts.systems))+
+    field('teamPlatformQuery','平台',L.teamPlatformQuery,'搜索平台名称')+
+    select('teamPlatformStatus','配置状态',L.teamPlatformStatus,[['all','全部状态'],['mapped','已配置有数据'],['no_data','配置暂无数据'],['unmapped','待归类平台']])+
+    '<div class="live-actions"><button class="btn primary" type="submit">查询</button><button class="btn" type="button" onclick="platformAssignmentsReset()">重置</button></div></form></section>';
+   return form+'<div id="platformAssignmentResults" aria-live="polite">'+platformResults()+'</div>';
   }
   function modal(title,body){
    document.getElementById('liveConfigDialog')?.remove();
@@ -89,6 +104,6 @@
     saving=false;root.configClose();await changed(d.type);
    }catch(e){saving=false;host.querySelector('.config-message').textContent=e.message||'保存未完成';host.querySelectorAll('button').forEach(b=>b.disabled=false)}
   };
-  return {providerView,platformView};
+  return {providerView,platformView,platformChanged};
  }};
 })(typeof window!=='undefined'?window:globalThis);
