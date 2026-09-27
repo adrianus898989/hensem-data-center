@@ -4,7 +4,7 @@ body.live-admin .sidebar,body.live-admin .sidebar .nav{scrollbar-width:none}
 body.live-admin .sidebar .nav{overflow-y:auto}
 body.live-admin .sidebar::-webkit-scrollbar,body.live-admin .sidebar .nav::-webkit-scrollbar{display:none;width:0;height:0}
 body.live-admin .content{padding:17px 22px 22px}
-body.live-admin .eyebrow{display:block;font-size:9px;margin-bottom:5px}
+body.live-admin .eyebrow,body.live-admin .bottom-note{display:none}
 body.live-admin .page-title{margin-bottom:14px}
 body.live-admin .page-title h1{font-size:23px}
 body.live-admin .panel-head{min-height:48px;padding:13px 15px}
@@ -198,25 +198,34 @@ body.live-admin .provider-daily-v3 .analysis-value-button.is-selected{background
 
 body.live-admin .provider-summary-table .workorder-rate-low{color:#d6374a!important}
 
-/* Business filters keep the query controls within the available content width. */
+/* One compact desktop row; exact date/time controls expand without hiding query actions. */
 body.live-admin #liveFilters{min-width:0;max-width:100%}
-body.live-admin .live-business-filters{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;padding:12px}
-body.live-admin .live-business-filters .live-filter-fields{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;min-width:0}
-body.live-admin .live-business-filters .live-field{width:100%;min-width:0;max-width:100%;margin:0}
+body.live-admin .live-business-filters{display:grid;grid-template-columns:minmax(0,1fr) minmax(176px,205px) auto auto;align-items:end;gap:7px;padding:9px 10px;position:relative}
+body.live-admin .live-business-filters .live-filter-fields{display:grid;grid-template-columns:repeat(var(--filter-count,6),minmax(0,1fr));gap:6px;min-width:0}
+body.live-admin .live-business-filters .live-field{width:100%;min-width:0;max-width:100%;margin:0;gap:4px}
+body.live-admin .live-business-filters .live-field>label{white-space:nowrap;font-size:10px}
 body.live-admin .live-business-filters .live-field input,body.live-admin .live-business-filters .live-field select,body.live-admin .live-business-filters .live-multi summary{height:32px;min-height:32px;box-sizing:border-box}
 body.live-admin .live-business-filters .live-multi-caption{max-width:100%;min-width:0}
-body.live-admin .live-business-filters .live-filter-footer{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 16px;min-width:0}
-body.live-admin .live-business-filters .live-date-range{flex:1 1 506px;width:100%;min-width:0;max-width:720px}
-body.live-admin .live-business-filters .live-date-controls{width:100%;grid-template-columns:minmax(104px,1fr) 108px 14px minmax(104px,1fr) 108px}
-body.live-admin .live-business-filters .live-date-controls input{height:32px}
-body.live-admin .live-business-filters .live-date-controls>span{display:block}
-body.live-admin .live-business-filters .live-filter-commands{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;min-width:0;margin-left:auto}
-body.live-admin .live-business-filters .live-date-shortcuts,body.live-admin .live-business-filters .live-query-actions{display:flex;align-items:center;flex-wrap:wrap;gap:5px;height:auto;min-width:0}
-body.live-admin .live-business-filters .live-date-shortcuts .btn,body.live-admin .live-business-filters .live-query-actions .btn{height:32px;padding:5px 10px;font-size:11px}
-body.live-admin .live-business-filters .live-query-actions .btn{min-width:54px}
-body.live-admin .live-business-filters .live-search-row{min-width:0}
+body.live-admin .live-business-filters .live-multi summary{padding-left:7px;padding-right:5px}
+body.live-admin .live-business-filters .live-date-shortcuts,body.live-admin .live-business-filters .live-query-actions{display:flex;align-items:center;gap:4px;height:32px;min-width:0;flex-wrap:nowrap}
+body.live-admin .live-business-filters .live-date-shortcuts .btn,body.live-admin .live-business-filters .live-query-actions .btn{height:32px;padding:5px 7px;font-size:10px;white-space:nowrap}
+body.live-admin .live-business-filters .live-query-actions .btn{min-width:43px}
+body.live-admin .live-date-trigger{display:flex;align-items:center;gap:6px;width:100%;height:32px;border:1px solid #dbe3ef;border-radius:5px;background:white;color:#30486b;padding:5px 8px;font:11px inherit;white-space:nowrap;cursor:pointer}
+body.live-admin .live-date-trigger>small{font-size:9px;color:#7789a7;margin-left:auto}
+body.live-admin .live-date-trigger[aria-expanded=true]{border-color:#5371ee;box-shadow:0 0 0 2px #5371ee12}
+body.live-admin .live-date-panel{position:absolute;z-index:130;right:10px;top:calc(100% + 5px);width:min(520px,calc(100% - 20px));padding:14px;background:white;border:1px solid #dbe3ef;border-radius:8px;box-shadow:0 8px 24px #25395922}
+body.live-admin .live-date-panel[hidden]{display:none}
+body.live-admin .live-date-panel-head{display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:11px}
+body.live-admin .live-date-panel-head>span{font-size:10px;color:#7789a7}
+body.live-admin .live-date-panel-head>button{margin-left:auto}
+body.live-admin .live-business-filters .live-date-controls{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%}
+body.live-admin .live-date-endpoint{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;min-width:0}
+body.live-admin .live-date-endpoint>label{font-size:10px;color:#7789a7}
+body.live-admin .live-date-panel-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;font-size:10px;color:#7789a7}
+body.live-admin .live-date-panel-foot .btn{height:30px;padding:4px 12px}
+body.live-admin .live-business-filters .live-search-row{min-width:0;grid-column:1/-1}
 body.live-admin .live-business-filters .live-search-row .live-field{width:auto;flex:1 1 145px}
 body.live-admin .live-query-prompt{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
 body.live-admin .live-query-prompt .btn{height:32px;padding:5px 14px;flex:none}
-@media(max-width:1200px){body.live-admin .live-business-filters .live-filter-fields{grid-template-columns:repeat(3,minmax(0,1fr))}body.live-admin .live-business-filters .live-date-range{max-width:none}body.live-admin .live-business-filters .live-filter-commands{margin-left:0;width:100%;justify-content:space-between}}
-@media(max-width:650px){body.live-admin .live-business-filters .live-filter-fields{grid-template-columns:repeat(2,minmax(0,1fr))}body.live-admin .live-business-filters .live-date-range{flex-basis:100%}body.live-admin .live-business-filters .live-date-controls{grid-template-columns:minmax(100px,1fr) minmax(95px,1fr)}body.live-admin .live-business-filters .live-date-controls>span{display:none}body.live-admin .live-business-filters .live-date-shortcuts .btn,body.live-admin .live-business-filters .live-query-actions .btn{padding:5px 8px}}
+@media(max-width:1150px){body.live-admin .live-business-filters{grid-template-columns:minmax(190px,1fr) auto auto}body.live-admin .live-business-filters .live-filter-fields{grid-column:1/-1}body.live-admin .live-date-trigger>small{font-size:10px}}
+@media(max-width:650px){body.live-admin .live-business-filters{grid-template-columns:minmax(0,1fr) auto;gap:8px}body.live-admin .live-business-filters .live-filter-fields{grid-template-columns:repeat(2,minmax(0,1fr))}body.live-admin .live-business-filters .live-filter-date{grid-column:1/-1}body.live-admin .live-business-filters .live-date-shortcuts{flex-wrap:wrap;height:auto}body.live-admin .live-business-filters .live-date-shortcuts .btn,body.live-admin .live-business-filters .live-query-actions .btn{padding:5px 7px}body.live-admin .live-date-panel{width:calc(100% - 20px)}}
