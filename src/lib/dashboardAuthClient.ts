@@ -2,6 +2,8 @@
 
 import type { DashboardDataScope } from "./dashboardDataScope";
 
+export const APPLICATION_GATEWAY = "https://hensem-india-workorder.adrianus898989.workers.dev";
+
 export type DashboardRole = "owner" | "admin" | "viewer";
 export type DashboardPermissionKey = "home" | "third_party" | "auto_withdraw" | "work_orders" | "customer_service";
 export type DashboardPermissions = Record<DashboardPermissionKey, boolean>;
@@ -233,7 +235,9 @@ export function hasDashboardPermission(profile: DashboardProfile | null | undefi
   return normalizedPermissions(profile)[key];
 }
 
-async function readJson(response: Response) {
+type DashboardJsonResponse = Pick<Response, "ok" | "status" | "text">;
+
+async function readJson(response: DashboardJsonResponse) {
   const text = await response.text();
   let json: any = {};
   try { json = text ? JSON.parse(text) : {}; } catch { json = {}; }
@@ -265,14 +269,18 @@ async function dashboardNetworkFetch(
   input: string | URL,
   init: RequestInit,
   options: DashboardNetworkOptions,
-): Promise<Response> {
+): Promise<DashboardJsonResponse> {
   const attempts = options.retryReadOnce ? 2 : 1;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const abort = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; abort.abort(); }, options.timeoutMs ?? 15000);
     try {
-      return await fetch(input, { ...init, signal: abort.signal });
+      const response = await fetch(input, { ...init, signal: abort.signal });
+      // Receiving headers does not complete an authentication or mutation.
+      // Keep its existing deadline until the entire JSON body has arrived.
+      const text = await response.text();
+      return { ok: response.ok, status: response.status, text: async () => text };
     } catch (error) {
       if (attempt + 1 < attempts) continue;
       throw new DashboardHttpError(
@@ -289,14 +297,13 @@ async function dashboardNetworkFetch(
 
 export async function signInDashboard(usernameInput: string, password: string): Promise<DashboardSession> {
   const startedGeneration = sessionGeneration;
-  const { url, anonKey } = publicConfig();
-  const email = dashboardUsernameEmail(usernameInput);
-  const response = await dashboardNetworkFetch(`${url}/auth/v1/token?grant_type=password`, {
+  const username = validateDashboardUsername(usernameInput);
+  const response = await dashboardNetworkFetch(`${APPLICATION_GATEWAY}/api/dashboard-auth`, {
     method: "POST",
     redirect: "error",
     credentials: "omit",
-    headers: { apikey: anonKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "login", username, password }),
   }, {
     timeoutMessage: "登录服务响应超时，请检查网络或代理后重试",
     networkMessage: "登录服务暂时无法连接，请检查网络或代理，并关闭会拦截跨站请求的浏览器扩展后重试",
@@ -309,7 +316,9 @@ export async function signInDashboard(usernameInput: string, password: string): 
   });
   let payload: unknown;
   try {
-    payload = await readJson(response);
+    const result=await readJson(response);
+    if(result.ok!==true || !result.tokens)throw new DashboardHttpError("登录状态不完整，请重试",502,"auth_invalid_response");
+    payload = result.tokens;
   } catch (error) {
     if (error instanceof DashboardHttpError
         && error.status === 400
@@ -330,22 +339,31 @@ export async function signInDashboard(usernameInput: string, password: string): 
   return session;
 }
 
+export async function signOutDashboard(session:DashboardSession):Promise<void> {
+  const response=await dashboardNetworkFetch(`${APPLICATION_GATEWAY}/api/dashboard-auth`, {
+    method:"POST",credentials:"omit",redirect:"error",headers:{Authorization:`Bearer ${session.access_token}`,"Content-Type":"application/json"},body:JSON.stringify({action:"logout"}),
+  },{timeoutMessage:"已退出此浏览器，服务器会话注销未确认",networkMessage:"已退出此浏览器，服务器会话注销未确认",timeoutCode:"logout_timeout",networkCode:"logout_network_error"});
+  if(response.status===401||response.status===403)return;
+  await readJson(response);
+}
+
 async function requestRefreshedSession(refreshToken: string): Promise<DashboardSession> {
-  const { url, anonKey } = publicConfig();
   if (!refreshToken) throw new DashboardHttpError("登录已失效，请重新登录", 401, "refresh_invalid");
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 15000);
   try {
-    const response = await fetch(`${url}/auth/v1/token?grant_type=refresh_token`, {
+    const response = await fetch(`${APPLICATION_GATEWAY}/api/dashboard-auth`, {
       method: "POST", redirect: "error", credentials: "omit", signal: abort.signal,
-      headers: { apikey: anonKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "refresh", refresh_token: refreshToken }),
     });
     if ([400, 401, 403].includes(response.status)) {
       // Do not reflect token endpoint payloads or token values into an error.
       throw new DashboardHttpError("登录已失效，请重新登录", response.status, "refresh_invalid");
     }
-    return receivedSession(await readJson(response));
+    const result=await readJson(response);
+    if(result.ok!==true || !result.tokens)throw new DashboardHttpError("登录续期状态不完整，请重新登录",502,"auth_invalid_response");
+    return receivedSession(result.tokens);
   } catch (error) {
     if (error instanceof DashboardHttpError) throw error;
     throw new DashboardHttpError("登录续期暂时失败，请检查网络后重试", 0, "refresh_network_error");
@@ -634,6 +652,9 @@ export async function changeOwnDashboardPassword(username: string, currentPasswo
     networkCode: "password_change_network_error",
   });
   await readJson(response);
+
+  const revoke=await dashboardNetworkFetch(`${APPLICATION_GATEWAY}/api/dashboard-auth`,{method:"POST",credentials:"omit",redirect:"error",headers:{Authorization:`Bearer ${verifiedSession.access_token}`,"Content-Type":"application/json"},body:JSON.stringify({action:"logout-all"})},{timeoutMessage:"密码已修改，但旧会话注销未确认，请重新登录后核对",networkMessage:"密码已修改，但旧会话注销未确认，请重新登录后核对",timeoutCode:"password_revoke_timeout",networkCode:"password_revoke_network_error"});
+  await readJson(revoke);
 
   // 用新密码重新登录并保存一套新的 token，后续自动续期不会继续拿旧 refresh token。
   return await signInDashboard(username, newPassword);

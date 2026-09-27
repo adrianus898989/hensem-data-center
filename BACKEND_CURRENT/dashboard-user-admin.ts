@@ -119,30 +119,6 @@ function sanitizeManagementPermissions(value: unknown): ManagementPermissions {
 }
 
 
-function requestClientIp(request: Request): string {
-  const direct = [
-    request.headers.get("cf-connecting-ip"),
-    request.headers.get("x-real-ip"),
-    request.headers.get("fly-client-ip"),
-    request.headers.get("sb-client-ip"),
-  ].map((value) => String(value || "").trim()).find(Boolean);
-  if (direct) return direct.replace(/^::ffff:/i, "");
-  const forwarded = String(request.headers.get("x-forwarded-for") || "").split(",")[0].trim();
-  return forwarded.replace(/^::ffff:/i, "");
-}
-
-function validateIp(value: unknown): string {
-  const ip = String(value || "").trim().replace(/^::ffff:/i, "");
-  if (!ip || ip.length > 64) throw new Error("IP 格式不正确");
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) {
-    const parts = ip.split(".").map(Number);
-    if (parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) return ip;
-    throw new Error("IPv4 格式不正确");
-  }
-  if (/^[0-9a-f:]+$/i.test(ip) && ip.includes(":")) return ip.toLowerCase();
-  throw new Error("只支持单个 IPv4 / IPv6 地址，不支持网段");
-}
-
 function dateInManila(offsetDays = 0): string {
   const base = new Date(Date.now() + offsetDays * 86400000);
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -185,6 +161,20 @@ Deno.serve(async (request) => {
       }
     }
 
+    async function requireApprovedSession(token: string, userId: string) {
+      // Called only after getUser verifies this exact token.
+      let sessionId = "";
+      try { sessionId = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).session_id; } catch { /* fail closed */ }
+      if (typeof sessionId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) throw new DataScopeError("登录已失效，请重新登录", 403);
+      const { data, error } = await admin.rpc("application_session_check", { p_user_id: userId, p_session_id: sessionId, p_surface: "dashboard" });
+      if (error) throw new DataScopeError("登录验证暂时不可用", 503);
+      if (data?.allowed !== true) throw new DataScopeError("登录已失效或账号已自动停用，请重新登录", 403);
+    }
+    async function revokeSessions(userId: string) {
+      const { error } = await admin.rpc("application_revoke_user_sessions", { p_user_id: userId, p_surface: "dashboard" });
+      if (error) throw new DataScopeError("无法撤销原登录状态，操作未完成，请重试", 503);
+    }
+
     async function requireManager() {
       const authHeader = String(request.headers.get("authorization") || "");
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
@@ -193,6 +183,7 @@ Deno.serve(async (request) => {
       const { data: userData, error: userError } = await admin.auth.getUser(token);
       const caller = userData?.user;
       if (userError || !caller) throw new Error("登录状态无效");
+      await requireApprovedSession(token, caller.id);
 
       const { data: callerProfile, error: profileError } = await admin
         .from("dashboard_profiles")
@@ -211,6 +202,7 @@ Deno.serve(async (request) => {
       const { data: userData, error: userError } = await admin.auth.getUser(token);
       const caller = userData?.user;
       if (userError || !caller) throw new Error("登录状态无效");
+      await requireApprovedSession(token, caller.id);
       const { data: callerProfile, error: profileError } = await admin
         .from("dashboard_profiles")
         .select("username,role,active,permissions,management_permissions,data_scope")
@@ -250,95 +242,15 @@ Deno.serve(async (request) => {
 
     if (action === "check-access") {
       const ctx = await requireAuthenticated();
-      const currentIp = requestClientIp(request);
       const security = await loadIpSecurity();
-      if (!security.enabled) return json(request, { ok: true, allowed: true, enabled: false, currentIp });
-      if (!currentIp) return json(request, { ok: false, allowed: false, enabled: true, currentIp: "", message: "无法识别当前 IP，已拒绝登录" }, 403);
-      const { data: allowedRow, error } = await admin
-        .from("dashboard_ip_whitelist")
-        .select("id,ip,note,active")
-        .eq("ip", currentIp)
-        .eq("active", true)
-        .maybeSingle();
-      if (error) throw new Error(`检查 IP 白名单失败：${error.message}`);
-      if (!allowedRow) {
-        await audit(ctx.actor, "login_ip_denied", ctx.actor.username || "", { ip: currentIp });
-        return json(request, { ok: false, allowed: false, enabled: true, currentIp, message: `当前 IP ${currentIp} 不在登录白名单` }, 403);
-      }
-      return json(request, { ok: true, allowed: true, enabled: true, currentIp, note: allowedRow.note || "" });
+      // Trusted gateway checked login IP; the registry rechecks the same
+      // canonical whitelist. Never use caller-supplied forwarding headers.
+      return json(request, { ok: true, allowed: true, enabled: security.enabled, currentIp: "" });
     }
 
-    if (action === "ip-settings") {
+    if (["ip-settings", "add-ip", "set-ip-active", "delete-ip", "set-ip-mode"].includes(action)) {
       await requireOwner();
-      const security = await loadIpSecurity();
-      const { data: rows, error } = await admin
-        .from("dashboard_ip_whitelist")
-        .select("id,ip,note,active,created_at,updated_at")
-        .order("active", { ascending: false })
-        .order("id", { ascending: true });
-      if (error) throw new Error(`读取 IP 白名单失败：${error.message}`);
-      return json(request, { ok: true, enabled: security.enabled, currentIp: requestClientIp(request), rows: rows || [] });
-    }
-
-    if (action === "add-ip") {
-      const ctx = await requireOwner();
-      const ip = validateIp(body?.ip || requestClientIp(request));
-      const note = String(body?.note || "").trim().slice(0, 100);
-      const { error } = await admin.from("dashboard_ip_whitelist").upsert({
-        ip, note, active: true, created_by: ctx.caller.id, updated_at: new Date().toISOString(),
-      }, { onConflict: "ip" });
-      if (error) throw new Error(`添加 IP 失败：${error.message}`);
-      await audit(ctx.actor, "ip_whitelist_add", ip, { ip, note });
-      return json(request, { ok: true, ip, message: "IP 已加入白名单" });
-    }
-
-    if (action === "set-ip-active") {
-      const ctx = await requireOwner();
-      const id = Number(body?.id || 0);
-      if (!id) throw new Error("IP 记录 ID 无效");
-      const active = Boolean(body?.active);
-      const { data: row, error } = await admin.from("dashboard_ip_whitelist")
-        .update({ active, updated_at: new Date().toISOString() })
-        .eq("id", id)
-        .select("id,ip,note,active")
-        .maybeSingle();
-      if (error) throw new Error(`更新 IP 状态失败：${error.message}`);
-      if (!row) throw new Error("IP 记录不存在");
-      await audit(ctx.actor, "ip_whitelist_update", String(row.ip || ""), { ip: row.ip, active });
-      return json(request, { ok: true, row, message: active ? "IP 已启用" : "IP 已停用" });
-    }
-
-    if (action === "delete-ip") {
-      const ctx = await requireOwner();
-      const id = Number(body?.id || 0);
-      if (!id) throw new Error("IP 记录 ID 无效");
-      const { data: row } = await admin.from("dashboard_ip_whitelist").select("id,ip").eq("id", id).maybeSingle();
-      const { error } = await admin.from("dashboard_ip_whitelist").delete().eq("id", id);
-      if (error) throw new Error(`删除 IP 失败：${error.message}`);
-      await audit(ctx.actor, "ip_whitelist_delete", String(row?.ip || ""), { ip: row?.ip || "" });
-      return json(request, { ok: true, message: "IP 已删除" });
-    }
-
-    if (action === "set-ip-mode") {
-      const ctx = await requireOwner();
-      const enabled = Boolean(body?.enabled);
-      const currentIp = requestClientIp(request);
-      if (enabled) {
-        if (!currentIp) throw new Error("无法识别当前 IP，不能开启白名单限制");
-        const { data: currentAllowed, error: allowError } = await admin.from("dashboard_ip_whitelist")
-          .select("id")
-          .eq("ip", currentIp)
-          .eq("active", true)
-          .maybeSingle();
-        if (allowError) throw new Error(`检查当前 IP 失败：${allowError.message}`);
-        if (!currentAllowed) throw new Error(`请先把当前 IP ${currentIp} 加入并启用，再开启白名单限制`);
-      }
-      const { error } = await admin.from("dashboard_security_settings").upsert({
-        id: 1, ip_whitelist_enabled: enabled, updated_by: ctx.caller.id, updated_at: new Date().toISOString(),
-      }, { onConflict: "id" });
-      if (error) throw new Error(`保存 IP 登录模式失败：${error.message}`);
-      await audit(ctx.actor, "ip_whitelist_mode", "", { enabled, currentIp });
-      return json(request, { ok: true, enabled, currentIp, message: enabled ? "已开启：只有白名单 IP 可以登录" : "已关闭：账号密码正确即可登录" });
+      return json(request, { ok: false, code: "security_settings_moved", message: "请在登录安全页面管理 IP 白名单" }, 410);
     }
 
     if (action === "bootstrap-admin") {
@@ -399,8 +311,10 @@ Deno.serve(async (request) => {
       if (!target) return json(request, { ok: false, message: "Admin 账号不存在" }, 404);
       if (!["owner", "admin"].includes(String(target.role || ""))) return json(request, { ok: false, message: "这个账号不是管理账号" }, 403);
 
+      await revokeSessions(target.auth_user_id);
       const { error: updateError } = await admin.auth.admin.updateUserById(target.auth_user_id, { password });
       if (updateError) throw new Error(`重置 Admin 密码失败：${updateError.message}`);
+      await revokeSessions(target.auth_user_id);
 
       await audit(null, "reset_admin_password", username, { via: "sync_secret" });
       return json(request, { ok: true, username, role: "admin", message: "Admin 密码已重置" });
@@ -556,6 +470,7 @@ Deno.serve(async (request) => {
         }
       }
       // Do not let a concurrent promotion turn a viewer edit into an admin edit.
+      if (patch.active === false) await revokeSessions(target.auth_user_id);
       let update = admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id).eq("role", target.role);
       if (target.updated_at) update = update.eq("updated_at", target.updated_at);
       const { data: updated, error } = await update.select("role").maybeSingle();
@@ -585,6 +500,7 @@ Deno.serve(async (request) => {
       if (dataScope !== undefined) patch.data_scope = dataScope;
       if (typeof body?.active === "boolean") patch.active = body.active;
       if (body?.permissions) patch.permissions = sanitizePermissions(body.permissions);
+      if (patch.active === false) await revokeSessions(target.auth_user_id);
       let update = admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id).eq("role", "viewer");
       if (target.updated_at) update = update.eq("updated_at", target.updated_at);
       const { data: updated, error } = await update.select("role").maybeSingle();
@@ -610,8 +526,10 @@ Deno.serve(async (request) => {
       if (target.role === "admin" && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以重置小管理员密码" }, 403);
       if (target.role === "viewer" && ctx.profile.role !== "owner" && !sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
       assertTargetDataScope(ctx.profile, target);
+      await revokeSessions(target.auth_user_id);
       const { error } = await admin.auth.admin.updateUserById(target.auth_user_id, { password });
       if (error) throw new Error(`重置密码失败：${error.message}`);
+      await revokeSessions(target.auth_user_id);
       await audit(actor, "reset_password", username, {});
       return json(request, { ok: true, username, message: "密码已重置" });
     }

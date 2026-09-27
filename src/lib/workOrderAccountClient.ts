@@ -4,12 +4,12 @@ import { ensureDashboardSession, type DashboardSession } from "./dashboardAuthCl
 export type WorkOrderRole = "supervisor" | "agent" | "auditor";
 export type WorkOrderAccount = {
   auth_user_id: string; username: string; display_name: string; role: WorkOrderRole;
-  team: string; platforms: string[]; active: boolean; updated_at: string;
+  team: string; platforms: string[]; active: boolean; permissions: Record<string,boolean>; updated_at: string;
 };
-export type WorkOrderAccountCatalog = { teams: string[]; platforms: string[]; platformTeams: Record<string,string> };
-export type WorkOrderAccountFields = Pick<WorkOrderAccount,"display_name"|"role"|"team"|"platforms"|"active">;
+export type WorkOrderAccountCatalog = { teams: string[]; platforms: string[]; platformTeams: Record<string,string>; permissionOptions?: {key:string;label:string}[]; permissionDefaults?: Record<string,Record<string,boolean>> };
+export type WorkOrderAccountFields = Pick<WorkOrderAccount,"display_name"|"role"|"team"|"platforms"|"active"|"permissions">;
 type Request = { action:"list-accounts" }
-  | { action:"create-account"; username:string; password:string; display_name:string; role:WorkOrderRole; team:string; platforms:string[] }
+  | { action:"create-account"; username:string; password:string; display_name:string; role:WorkOrderRole; team:string; platforms:string[]; permissions?:Record<string,boolean> }
   | { action:"update-account"; auth_user_id:string; expected_updated_at:string; patch:Partial<WorkOrderAccountFields> }
   | { action:"reset-password"; auth_user_id:string; password:string };
 export type WorkOrderAccountResponse = { ok:true; accounts?:WorkOrderAccount[]; account?:WorkOrderAccount; catalog?:WorkOrderAccountCatalog; message?:string };

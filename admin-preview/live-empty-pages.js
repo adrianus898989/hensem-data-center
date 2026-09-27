@@ -99,6 +99,7 @@
   }
   function inner(page) {
     if(page==='access')return access();
+    if(page==='ip')return '<div data-security-workspace role="status" style="min-height:420px;padding:16px;color:#677d9b">正在读取 IP 白名单…</div>';
     return searchBar(page)+'<div class="live-scope"><span>'+E(schema[page].note)+'</span><span>平台 — · 三方 — · 当前范围未接入</span></div>'+metrics(page)+body(page)+pager(page);
   }
   function render(page) { return get(page)?'<div id="hle-'+page+'" class="hensem-live-empty-pages" data-empty-page="'+page+'">'+inner(page)+'</div>':''; }

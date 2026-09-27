@@ -6,6 +6,7 @@ const test=require('node:test');
 const ts=require('typescript');
 const {root,loadTs}=require('./load-typescript.cjs');
 const scope=loadTs(path.join(root,'src/lib/dashboardDataScope.ts'));
+const EDGE_ORIGIN='https://supabase.fixture.invalid',PUBLIC_KEY='synthetic-publishable-key';
 const ALL={mode:'all',countries:[]},PANGHU={mode:'selected',countries:['BR_PANGHU']};
 const makeProfile=(id='user-a',data_scope=ALL,updated_at='2026-09-12T10:00:00.000Z')=>({auth_user_id:id,username:'fixture',role:'viewer',active:true,data_scope,updated_at});
 const makeSession=id=>({access_token:`fixture-${id}`,refresh_token:`fixture-refresh-${id}`,user:{id}});
@@ -23,6 +24,7 @@ function harness(initial=makeProfile()){
   const module={exports:{}};
   const compiled=ts.transpileModule(fs.readFileSync(path.join(root,'src/lib/dashboardDataClient.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
   vm.runInNewContext(compiled,{module,exports:module.exports,require:key=>key.endsWith('dashboardAuthClient')?auth:scope,window,CustomEvent,URL,Headers,Response,Date,console,
+    process:{env:{NEXT_PUBLIC_SUPABASE_URL:EDGE_ORIGIN,NEXT_PUBLIC_SUPABASE_ANON_KEY:PUBLIC_KEY}},
     fetch:async(url,init)=>{httpCalls.push({url,init});return httpHandler(url,init);}});
   const client=module.exports;
   // Exercise the real Gate apply function, not a permissive test-only substitute.
@@ -80,7 +82,7 @@ test('parallel module requests share profile verification and keep no-store plus
   const calls=['work-orders','auto-withdraw','customer-service'].map(name=>h.client.dashboardBusinessFetch(`/api/${name}`,{headers:{Authorization:'must-be-replaced'}}));
   await pause();assert.equal(h.profileCalls.length,1);pending.resolve(profile);await Promise.all(calls);
   assert.equal(h.httpCalls.length,3);
-  for(const {url,init} of h.httpCalls){assert.equal(new URL(url).origin,h.window.location.origin);assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');assert.equal(init.headers.get('Authorization'),`Bearer ${h.getSession().access_token}`);}
+  for(const [index,{url,init}] of h.httpCalls.entries()){const target=new URL(url);assert.equal(target.origin,EDGE_ORIGIN);assert.equal(target.pathname,'/functions/v1/dashboard-api');assert.equal(target.searchParams.get('_route'),'/api/'+['work-orders','auto-withdraw','customer-service'][index]);assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');assert.equal(init.credentials,'omit');assert.equal(init.headers.get('Authorization'),`Bearer ${h.getSession().access_token}`);assert.equal(init.headers.get('apikey'),PUBLIC_KEY);}
 });
 test('external/non API requests never see session or profile calls; permission denial stays typed',async()=>{
   const h=harness();
@@ -106,17 +108,22 @@ function componentLoader(name,dependencies){
   const code=ts.transpileModule(fn.getText(source),{compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText;
   return Function(...Object.keys(dependencies),code+'\nreturn loadData;')(...Object.values(dependencies));
 }
-test('five actual component loadData denial branches clear results without touching fallback caches',async()=>{
+test('five actual component loadData denial branches clear results without using fallback caches',async()=>{
   for(const name of ['Dashboard.tsx','WorkOrderDashboard.tsx','CustomerServiceDashboard.tsx','ThirdPartyVolumeDashboard.tsx','ThirdPartyRatesDashboard.tsx']){
     const h=harness(),error=new h.auth.DashboardHttpError('fixture denied',403,'data_scope_denied'),set=[],refs={current:{rows:['old-data']}};
+    const actor=makeProfile('user-a',PANGHU);let requestCount=0,rateCacheReads=0,denied=false;
     const forbidden=()=>{throw Error('Denied request must not read/write cache or fallback');};
-    const dependencies={...scope,profile:makeProfile('user-a',PANGHU),payload:{rows:['old-data']},ratePayload:{rates:[]},payloadRef:refs,
+    const dependencies={...scope,profile:actor,payload:{rows:['old-data']},ratePayload:{rates:[]},payloadRef:refs,
+      loadRequestSequenceRef:{current:0},queryContextRef:{current:'authorized-query'},loadFlightRef:{current:null},
+      THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS:30000,THIRD_PARTY_RATES_QUERY_TIMEOUT_MS:30000,THIRD_PARTY_VOLUME_QUERY_TIMEOUT_SECONDS:30,
       setState:()=>{},setError:()=>{},setPayload:value=>set.push(value),setRatePayload:()=>{},setVolumeSyncStatus:()=>{},setDataNotice:()=>{},
       monthlyApiUrl:()=>'/api/work-orders',thirdPartyVolumeApiUrl:()=>'/api/supabase-third-party-volume',thirdPartySyncStatusApiUrl:()=>'/api/status',
-      ratePayloadFresh:()=>true,THIRD_PARTY_RATES_CACHE_KEY:'rate',THIRD_PARTY_VOLUME_CACHE_KEY:'volume',dashboardBusinessFetch:async()=>{throw error;},
-      isDashboardDataDenied:h.client.isDashboardDataDenied,readWorkLocalCache:forbidden,readAutoLocalCache:forbidden,readLocalCache:forbidden,
+      ratePayloadFresh:()=>true,ratePayloadUsable:()=>true,THIRD_PARTY_RATES_CACHE_KEY:'rate',THIRD_PARTY_VOLUME_CACHE_KEY:'volume',dashboardBusinessFetch:async()=>{requestCount++;denied=true;throw error;},
+      isDashboardDataDenied:h.client.isDashboardDataDenied,readWorkLocalCache:forbidden,readAutoLocalCache:forbidden,
+      readLocalCache:(key,profile)=>{assert.equal(name,'ThirdPartyVolumeDashboard.tsx');assert.equal(denied,false,'denial must never trigger a fallback cache read');assert.equal(key,'rate');assert.equal(profile,actor,'pre-request fee cache remains scoped to the actor');rateCacheReads++;return null;},
       writeWorkLocalCache:forbidden,writeAutoLocalCache:forbidden,writeLocalCache:forbidden,attachClientFallbackMessage:forbidden};
     await componentLoader(name,dependencies)(false,'2026-09-10','2026-09-10');assert.deepEqual(set,[null],name);
+    assert.equal(requestCount,1,name+' must actually reach the authorization rejection');assert.equal(rateCacheReads,name==='ThirdPartyVolumeDashboard.tsx'?1:0,name);
     if(name!=='CustomerServiceDashboard.tsx'&&name!=='ThirdPartyRatesDashboard.tsx')assert.equal(refs.current,null,name);
   }
 });

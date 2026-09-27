@@ -16,6 +16,7 @@ import {
   readSavedDashboardSession,
   saveDashboardSession,
   signInDashboard,
+  signOutDashboard,
   verifyDashboardAccess,
   type DashboardProfile,
   type DashboardSession,
@@ -109,8 +110,10 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   }
 
   function logout() {
+    const previous=readSavedDashboardSession();
     saveDashboardSession(null);
     clearAuthenticatedView();
+    if(previous)void signOutDashboard(previous).catch(()=>setError("已退出此浏览器，服务器会话注销未确认；请检查网络"));
   }
 
   useEffect(() => {

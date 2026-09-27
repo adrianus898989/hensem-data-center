@@ -23,7 +23,7 @@ async function edge(action, patch={}, options={}) {
   const users=clone(options.users||[target]);
   const writes=[],authCalls=[],audits=[],reads=[];
   let handler;
-  const client={auth:{
+  const client={rpc:async(name)=>({data:name==="application_session_check"?{allowed:!options.sessionDenied}:0}),auth:{
     getUser:async()=>({data:{user:options.invalidToken?null:{id:caller.auth_user_id,user_metadata:{dashboard_role:'owner',data_scope:ALL}}}}),
     admin:{
       createUser:async data=>{authCalls.push({action:'create',data});return {data:{user:{id:'fixture-created'}}};},
@@ -61,10 +61,10 @@ async function edge(action, patch={}, options={}) {
       },
     };return query;
   }};
-  vm.runInNewContext(compiled,{createClient:()=>client,Deno:{env:{get:()=> 'fixture'},serve:fn=>{handler=fn;}},Request,Response,Date,Intl,console,
+  vm.runInNewContext(compiled,{createClient:()=>client,Deno:{env:{get:()=> 'fixture'},serve:fn=>{handler=fn;}},Request,Response,Date,Intl,console,atob,
     fetch:()=>{throw Error('No external network allowed');}});
   const body={action,username:action.startsWith('create')?'newuser':'target',password:'fixture-password',...patch};
-  const response=await handler(new Request('https://fixture.invalid',{method:'POST',headers:options.noToken?{}:{authorization:'Bearer fixture'},body:JSON.stringify(body)}));
+  const response=await handler(new Request('https://fixture.invalid',{method:'POST',headers:options.noToken?{}:{authorization:'Bearer x.'+Buffer.from(JSON.stringify({session_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'})).toString('base64url')+'.sig'},body:JSON.stringify(body)}));
   return {status:response.status,body:await response.json(),writes,authCalls,audits,reads,target};
 }
 
@@ -228,7 +228,7 @@ test('actual create handler refuses empty/outside draft and submits Panghu only 
   const scope=loadTs(path.join(root,'src/lib/dashboardDataScope.ts'));
   for(const [newDataScope,expected] of [[{mode:'selected',countries:[]},0],[VN,0],[PANGHU,1]]){
     const calls=[],messages=[];const actor=profile('manager','admin',{data_scope:PANGHU});
-    const context={canManageUsers:true,profile:actor,newDataScope,session:{},newUsername:'newuser',newPassword:'fixture-password',newRole:'viewer',newPermissions:full,newManagement:management,canViewAudit:false,
+    const context={canManageUsers:true,createBusy:false,profile:actor,newDataScope,session:{},newUsername:'newuser',newPassword:'fixture-password',newRole:'viewer',newPermissions:full,newManagement:management,canViewAudit:false,
       setCreateBusy:()=>{},setMessage:text=>messages.push(text),setNewUsername:()=>{},setNewPassword:()=>{},resetCreateRole:()=>{},setCreateOpen:()=>{},setNewDataScope:()=>{},loadUsers:async()=>{},loadAudit:async()=>{},roleLabel:()=> '查看账号',
       ...scope,createDashboardAccount:async(...args)=>{calls.push(args);return {role:'viewer',username:'newuser'};}};
     const submit=Function(...Object.keys(context),output+'\nreturn submitCreate;')(...Object.values(context));
@@ -236,3 +236,5 @@ test('actual create handler refuses empty/outside draft and submits Panghu only 
     if(expected){assert.deepEqual(calls[0][6],PANGHU);assert.deepEqual(calls[0][4],full);}else assert(messages.length);
   }
 });
+
+test('unregistered dashboard session cannot manage any account or reset password',async()=>{for(const action of ['list-users','create-account','update-account','reset-password']){const result=await edge(action,{}, {sessionDenied:true,role:'owner'});assert.equal(result.status,403);assert.deepEqual(result.writes,[]);assert.deepEqual(result.authCalls,[]);}});

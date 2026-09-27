@@ -8,7 +8,7 @@ const ts = require('typescript');
 const file = path.join(__dirname, '../supabase/functions/workorder-account-admin/handler.ts');
 const mod = { exports: {} };
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText,
-  { module: mod, exports: mod.exports, Request, Response, Headers, URL, crypto: crypto.webcrypto, TextEncoder });
+  { module: mod, exports: mod.exports, Request, Response, Headers, URL, crypto: crypto.webcrypto, TextEncoder, require:(name)=>{if(name!=='./permissions.ts')throw Error(name);const pm={exports:{}};vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(path.dirname(file),'permissions.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:pm,exports:pm.exports});return pm.exports;} });
 const { createWorkorderAccountHandler, buildCatalog, ApiError } = mod.exports;
 const ownerId='11111111-1111-4111-8111-111111111111', staffId='22222222-2222-4222-8222-222222222222';
 const version='2026-09-26T00:00:00.000Z';
@@ -24,11 +24,12 @@ function fixture(overrides={}) {
     async profile(id){calls.push(['profile',id]);return id===ownerId?state.profile:state.targetProfile||null;},
     async account(id){calls.push(['account',id]);return state.account?.auth_user_id===id?state.account:null;},
     async accounts(){return [state.account];},async catalogRows(){return state.catalog;},
-    async ipEnabled(){return !!state.ipEnabled;},async ipAllowed(ip){calls.push(['ip',ip]);return ip==='203.0.113.7';},
+    async sessionAllowed(token,id,surface){calls.push(['session',id,surface]);return state.sessionAllowed!==false;},
     async createUser(email,password){calls.push(['create',email,password]);if(state.duplicate)throw new ApiError(409,'account_exists','这个工单账号已存在');return staffId;},
     async deleteUser(id){calls.push(['rollback',id]);},
     async insert(account,actor){calls.push(['insert',account,actor]);if(state.insertFailure)throw Error('PRIVATE_ERROR_SECRET');return {...account,updated_at:version};},
     async update(id,expected,patch,actor){calls.push(['update',id,expected,patch,actor]);if(state.conflict)return null;state.account={...state.account,...patch,updated_at:'2026-09-26T00:00:01Z'};return state.account;},
+    async revokeSessions(id){calls.push(['revoke',id]);if(state.revokeFailure)throw Error('revocation failed');},
     async resetPassword(id,password){calls.push(['reset',id,password]);},async audit(...args){calls.push(['audit',...args]);},
   };
   return {state,calls,handler:createWorkorderAccountHandler(gateway,{allowedOrigins:[origin],proxyKeySha256:proxyHash})};
@@ -90,13 +91,11 @@ test('reset targets only workorder rows; cannot delete or reset a backend owner'
   assert.equal((await f.handler(req({action:'reset-password',auth_user_id:staffId,password:'new-password'}))).status,200);
   assert(f.calls.some(c=>c[0]==='audit'));assert(!f.calls.some(c=>c[0]==='rollback'));
 });
-test('owner keeps original IP restriction; forged proxy headers fail even with valid JWT',async()=>{
-  const f=fixture({ipEnabled:true});assert.equal((await f.handler(req())).status,403);
-  assert.equal((await f.handler(req({}, {'x-portal-client-ip':'203.0.113.7','x-portal-proxy-key':'forged'}))).status,400); // unknown action denied first
-  assert.equal((await f.handler(req({action:'me'}, {'x-portal-client-ip':'203.0.113.7','x-portal-proxy-key':'forged'}))).status,403);
-  assert.equal((await f.handler(req({action:'me'}, {'x-portal-client-ip':'203.0.113.7','x-portal-proxy-key':proxyKey}))).status,200);
-  assert.equal((await f.handler(req({action:'me'}, {'x-portal-client-ip':'203.0.113.8','x-portal-proxy-key':proxyKey}))).status,403);
-  assert.equal((await f.handler(req({action:'me'}, {'cf-connecting-ip':'203.0.113.7'}))).status,200);
+test('unregistered sessions fail even with valid Auth and forged IP headers',async()=>{
+ const f=fixture({sessionAllowed:false});
+ for(const headers of [{},{'cf-connecting-ip':'203.0.113.7'},{'x-portal-client-ip':'203.0.113.7','x-portal-proxy-key':proxyKey}])assert.equal((await f.handler(req({action:'list-accounts'},headers))).status,403);
+ assert(!f.calls.some(c=>['create','insert','update','reset'].includes(c[0])));
+ const g=fixture({caller:{id:staffId,email:'worker1@workorder.hensem.local'}});assert.equal((await g.handler(req())).status,200);assert.equal(g.calls.find(c=>c[0]==='session')[2],'workorder');
 });
 test('proxy key alone never authenticates and browser preflight cannot carry server proof',async()=>{
   const f=fixture();assert.equal((await f.handler(req({action:'me'},{authorization:'','x-portal-proxy-key':proxyKey,'x-portal-client-ip':'203.0.113.7'}))).status,401);
@@ -107,4 +106,25 @@ test('hostile CORS and unsupported methods never read Auth',async()=>{
 });
 test('catalog merges registrations but rejects ambiguous cross-team names',()=>{
   const c=buildCatalog([...catalog,{team:'M8',platform:'91CLUB'},{team:'香港',platform:'91CLUB'}]);assert.equal(c.platformTeams['91CLUB'],undefined);assert.equal(c.platformTeams['51GAME'],'M8');
+});
+
+test('granular permissions persist and cannot exceed role or accept malformed values',async()=>{
+ const f=fixture();let response=await f.handler(req({...create,permissions:{'case.view':true,'case.follow':false}}));assert.equal(response.status,200);const created=await response.json();assert.equal(created.account.permissions['case.view'],true);assert.equal(created.account.permissions['case.create'],false);
+ for(const permissions of [{'case.assign':true},{'case.create':'true'},{'settings.manage':true},[]]){const g=fixture();assert.equal((await g.handler(req({...create,permissions}))).status,400);assert(!g.calls.some(c=>c[0]==='create'));}
+});
+test('empty explicit permissions are not converted back to role defaults',async()=>{
+ const f=fixture();f.state.account.permissions={};const result=await(await f.handler(req({action:'list-accounts'}))).json();assert(Object.values(result.accounts[0].permissions).every(v=>v===false));
+ f.state.account.permissions=null;const legacy=await(await f.handler(req({action:'list-accounts'}))).json();assert.equal(legacy.accounts[0].permissions['case.create'],true);assert.equal(legacy.accounts[0].permissions['case.assign'],false);
+});
+test('role changes safely reset permissions to new ceiling and optimistic version still applies',async()=>{
+ const f=fixture();f.state.account.role='supervisor';f.state.account.permissions={'case.assign':true};
+ const response=await f.handler(req({action:'update-account',auth_user_id:staffId,expected_updated_at:version,patch:{role:'auditor'}}));assert.equal(response.status,200);const result=await response.json();assert.equal(result.account.permissions['case.assign'],false);assert.equal(result.account.permissions['case.view_team'],true);
+ assert.equal((await f.handler(req({action:'update-account',auth_user_id:staffId,expected_updated_at:version,patch:{permissions:{'case.create':true}}}))).status,400);
+});
+
+test('disable and password reset revoke old sessions first; a revocation error fails closed',async()=>{
+ for(const body of [{action:'reset-password',auth_user_id:staffId,password:'new-password'},{action:'update-account',auth_user_id:staffId,expected_updated_at:version,patch:{active:false}}]){
+  const f=fixture();assert.equal((await f.handler(req(body))).status,200);assert(f.calls.findIndex(c=>c[0]==='revoke')<f.calls.findIndex(c=>['reset','update'].includes(c[0])));
+  const g=fixture({revokeFailure:true});assert.equal((await g.handler(req(body))).status,503);assert(!g.calls.some(c=>['reset','update'].includes(c[0])));
+ }
 });

@@ -90,6 +90,9 @@ async function verifyRequest(request: Request): Promise<DashboardDataAccess> {
   if (!profile || profile.auth_user_id !== user.id || profile.active !== true || !["owner", "admin", "viewer"].includes(profile.role)) {
     throw new DashboardDataAccessError(403, "profile_denied", "账号已停用或没有数据查看权限。");
   }
+  if (await read("/rest/v1/rpc/application_session_guard") !== true) {
+    throw new DashboardDataAccessError(403, "application_session_denied", "登录已失效，请重新登录。");
+  }
   return {token, profile, scope: effectiveDashboardDataScope(profile)};
 }
 export async function requireDashboardDataAccess(request: Request, module?: DashboardBusinessModule): Promise<DashboardDataAccess> {

@@ -24,7 +24,7 @@ const request = (query = '', headers = {}, method = 'GET', body) => new Request(
   method, body, headers: { origin: PREVIEW_ORIGIN, authorization: 'Bearer test-user-jwt', ...headers },
 });
 function fixture({ authStatus = 200, auth = { id: userId }, profileStatus = 200, profile = [goodProfile], payload = payloadBase64, failure = false,
-  grants = [], grantStatus = 200, target = [{auth_user_id:otherId,role:'viewer',active:true}], accounts = [{...goodProfile,username:'Owner'},
+  sessionApproved = true, grants = [], grantStatus = 200, target = [{auth_user_id:otherId,role:'viewer',active:true}], accounts = [{...goodProfile,username:'Owner'},
     {auth_user_id:otherId,username:'Viewer',role:'viewer',active:true}], total = accounts.length, grantSaveStatus = 200 } = {}) {
   const calls = [];
   const handler = createOwnerAdminPreviewHandler({ supabaseUrl: 'https://unit.supabase.co', anonKey: 'test-publishable-key', serviceRoleKey:'test-private-service-key', payloadBase64: payload,
@@ -34,6 +34,7 @@ function fixture({ authStatus = 200, auth = { id: userId }, profileStatus = 200,
       const parsed = new URL(url), service = init.headers.apikey === 'test-private-service-key';
       let value = profile, status = profileStatus, extraHeaders = {};
       if (parsed.pathname === '/auth/v1/user') { value = auth; status = authStatus; }
+      else if (parsed.pathname.endsWith('/application_session_guard')) { value = sessionApproved; status = 200; }
       else if (parsed.pathname.endsWith('/dashboard_profiles') && service) {
         value = parsed.searchParams.has('order') ? accounts : target; status = 200;
         if (parsed.searchParams.has('order')) extraHeaders = {'content-range': '0-' + Math.max(0, accounts.length - 1) + '/' + total};
@@ -62,12 +63,12 @@ test('requires bearer even when Origin is absent; rejects malformed credentials 
   const { handler, calls } = fixture();
   for (const authorization of ['', 'Bearer', 'Bearer a,b', 'Basic xyz', 'Bearer a b']) await denied(await handler(request('', { authorization })), 401);
   await denied(await handler(new Request('https://unit.supabase.co/functions/v1/owner-admin-preview')), 401);
-  assert.equal(calls.length, 0);
+  assert.equal(calls.filter(call=>!new URL(call.url).pathname.endsWith('/application_session_guard')).length, 0);
 });
 test('Auth failures cannot reach profile or private payload', async () => {
   for (const authStatus of [401, 403]) {
     const { handler, calls } = fixture({ authStatus });
-    await denied(await handler(request()), 401); assert.equal(calls.length, 1);
+    await denied(await handler(request()), 401); assert.equal(calls.filter(call=>!new URL(call.url).pathname.endsWith('/application_session_guard')).length, 1);
   }
   const { handler } = fixture({ auth: { user_metadata: { role: 'owner' } } });
   await denied(await handler(request()), 401);
@@ -77,7 +78,7 @@ test('fresh profile requires exactly the verified user and active boolean true',
     [{ ...goodProfile, active: false }], [{ ...goodProfile, active: 'true' }], [{ ...goodProfile, auth_user_id: otherId }], [{ active: true, role: 'owner' }]];
   for (const profile of deniedProfiles) {
     const { handler, calls } = fixture({ profile });
-    await denied(await handler(request()), 403); assert.equal(calls.length, 2);
+    await denied(await handler(request()), 403); assert.equal(calls.filter(call=>!new URL(call.url).pathname.endsWith('/application_session_guard')).length, 2);
   }
   await denied(await fixture({ profileStatus: 403 }).handler(request()), 403);
   await denied(await fixture({ profileStatus: 401 }).handler(request()), 401);
@@ -90,7 +91,7 @@ test('current owner receives the exact gzip payload through user-scoped auth cal
   assert.equal(zlib.gunzipSync(Buffer.from(await response.arrayBuffer())).toString(), marker);
   assert.equal(response.headers.get('access-control-allow-origin'), PREVIEW_ORIGIN);
   assert.match(response.headers.get('vary'), /Authorization/); assert.match(response.headers.get('cdn-cache-control'), /no-store/);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.filter(call=>!new URL(call.url).pathname.endsWith('/application_session_guard')).length, 2);
   assert.equal(calls[0].url, 'https://unit.supabase.co/auth/v1/user');
   const profileUrl = new URL(calls[1].url);
   assert.equal(profileUrl.pathname, '/rest/v1/dashboard_profiles');
@@ -107,19 +108,19 @@ test('check authenticates identically without touching invalid or private payloa
   const { handler, calls } = fixture({ payload: 'not valid base64' });
   const result = await handler(request('?check=1'));
   assert.equal(result.status, 200); assert.deepEqual(await result.json(), { ok: true, canView: true, canManage: true });
-  assert.equal(result.headers.get('content-encoding'), null); assert.equal(calls.length, 2);
+  assert.equal(result.headers.get('content-encoding'), null); assert.equal(calls.filter(call=>!new URL(call.url).pathname.endsWith('/application_session_guard')).length, 2);
   await denied(await fixture({ profile: [] }).handler(request('?check=1')), 403);
 });
 test('no authorization cache: disabling owner after a successful HTML read denies the next read', async () => {
   const profile = [{ ...goodProfile }]; const { handler, calls } = fixture({ profile });
   assert.equal((await handler(request())).status, 200);
   profile[0].active = false;
-  await denied(await handler(request()), 403); assert.equal(calls.length, 4);
+  await denied(await handler(request()), 403); assert.equal(calls.filter(call=>!new URL(call.url).pathname.endsWith('/application_session_guard')).length, 4);
 });
 test('missing Origin still needs and accepts a fresh authenticated owner', async () => {
   const { handler, calls } = fixture();
   const response = await handler(new Request('https://unit.supabase.co/functions/v1/owner-admin-preview?check=1', { headers: { authorization: 'Bearer test-user-jwt' } }));
-  assert.equal(response.status, 200); assert.equal(response.headers.get('access-control-allow-origin'), null); assert.equal(calls.length, 2);
+  assert.equal(response.status, 200); assert.equal(response.headers.get('access-control-allow-origin'), null); assert.equal(calls.filter(call=>!new URL(call.url).pathname.endsWith('/application_session_guard')).length, 2);
 });
 test('CORS accepts only the exact Pages origin and GET allowlisted preflights', async () => {
   const { handler, calls } = fixture();
@@ -135,11 +136,11 @@ test('CORS accepts only the exact Pages origin and GET allowlisted preflights', 
   assert.equal((await handler(options(PREVIEW_ORIGIN, 'POST'))).status, 204);
   await denied(await handler(options(PREVIEW_ORIGIN, 'PATCH')), 403);
   await denied(await handler(options(PREVIEW_ORIGIN, 'GET', 'x-unapproved')), 403);
-  await denied(await handler(options('null')), 403); assert.equal(calls.length, 0);
+  await denied(await handler(options('null')), 403); assert.equal(calls.filter(call=>!new URL(call.url).pathname.endsWith('/application_session_guard')).length, 0);
 });
 test('unsupported methods, upstream failures and malformed payloads fail closed', async () => {
   const { handler, calls } = fixture();
-  await denied(await handler(request('', {}, 'POST')), 405); assert.equal(calls.length, 0);
+  await denied(await handler(request('', {}, 'POST')), 405); assert.equal(calls.filter(call=>!new URL(call.url).pathname.endsWith('/application_session_guard')).length, 0);
   await denied(await fixture({ failure: true }).handler(request()), 503);
   await denied(await fixture({ authStatus: 500 }).handler(request()), 503);
   await denied(await fixture({ profileStatus: 500 }).handler(request()), 503);
@@ -172,7 +173,7 @@ test('grant must match verified user and boolean true; revocation is effective o
     [{auth_user_id:userId,can_view:true},{auth_user_id:userId,can_view:true}]]) await denied(await fixture({profile,grants}).handler(request()),403);
   const grants=[{auth_user_id:userId,can_view:true}],{handler,calls}=fixture({profile,grants});
   assert.equal((await handler(request())).status,200);grants[0].can_view=false;
-  await denied(await handler(request('?check=1')),403);assert.equal(calls.length,6);
+  await denied(await handler(request('?check=1')),403);assert.equal(calls.filter(call=>!new URL(call.url).pathname.endsWith('/application_session_guard')).length,6);
 });
 test('Owner account directory is paginated, username-only searchable and restricted to current page grants', async () => {
   const {handler,calls}=fixture({grants:[{auth_user_id:otherId,can_view:true}],total:82});
@@ -211,3 +212,5 @@ test('grant changes reject unsafe fields, oversized bodies, inactive targets and
   const revoke=await send(fixture({target:[{auth_user_id:otherId,role:'viewer',active:false}]}).handler,{auth_user_id:otherId,can_view:false});assert.equal(revoke.status,200);
   await denied(await send(fixture({grantSaveStatus:500}).handler,{auth_user_id:otherId,can_view:true}),503);
 });
+
+test('registered application session is required before private preview or grants',async()=>{for(const suffix of ['', '?action=access','?action=grants']){const {handler,calls}=fixture({sessionApproved:false});await denied(await handler(request(suffix)),403);assert(!calls.some(call=>call.init.headers.apikey==='test-private-service-key'));}});

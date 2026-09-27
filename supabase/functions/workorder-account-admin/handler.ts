@@ -1,18 +1,20 @@
-export type Account = { auth_user_id: string; username: string; display_name: string; role: string; team: string; platforms: string[]; active: boolean; created_at?: string; updated_at?: string };
-export type Catalog = { teams: string[]; platforms: string[]; platformTeams: Record<string, string> };
+// @ts-ignore Deno source extension.
+import { PERMISSION_LABELS, PERMISSION_DEFAULTS, permissionMap, validatePermissionMap } from './permissions.ts';
+export type Account = { auth_user_id: string; username: string; display_name: string; role: string; team: string; platforms: string[]; active: boolean; permissions?: Record<string,boolean> | null; created_at?: string; updated_at?: string };
+export type Catalog = { teams: string[]; platforms: string[]; platformTeams: Record<string, string>; permissionOptions?: {key:string;label:string}[]; permissionDefaults?: Record<string,Record<string,boolean>> };
 export type Gateway = {
   getUser(token: string): Promise<{ id: string; email?: string } | null>;
   profile(id: string): Promise<{ auth_user_id: string; username: string; role: string; active: boolean } | null>;
   account(id: string): Promise<Account | null>;
   accounts(): Promise<Account[]>;
   catalogRows(): Promise<{ team: string; platform: string }[]>;
-  ipEnabled(): Promise<boolean>;
-  ipAllowed(ip: string): Promise<boolean>;
+  sessionAllowed(token:string,userId:string,surface:"dashboard"|"workorder"): Promise<boolean>;
   createUser(email: string, password: string): Promise<string>;
   deleteUser(id: string): Promise<void>;
   insert(account: Account, actor: string): Promise<Account>;
   update(id: string, expected: string, patch: Record<string, unknown>, actor: string): Promise<Account | null>;
   resetPassword(id: string, password: string): Promise<void>;
+  revokeSessions(id:string):Promise<void>;
   audit(actor: string, action: string, target: string): Promise<void>;
 };
 export class ApiError extends Error {
@@ -21,7 +23,7 @@ export class ApiError extends Error {
 const bad = (message: string): never => { throw new ApiError(400, 'invalid_request', message); };
 const uid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const roles = new Set(['supervisor', 'agent', 'auditor']);
-const fields = 'auth_user_id,username,display_name,role,team,platforms,active,created_at,updated_at';
+const fields = 'auth_user_id,username,display_name,role,team,platforms,active,permissions,created_at,updated_at';
 export const ACCOUNT_FIELDS = fields;
 export const ACCOUNT_DOMAIN = 'workorder.hensem.local';
 function username(value: unknown) {
@@ -48,7 +50,7 @@ export function buildCatalog(rows: { team: string; platform: string }[]): Catalo
   // Do not silently authorize it for whichever row happened to arrive last.
   const pairs = [...teamsByPlatform].filter(([, teams]) => teams.size === 1).map(([platform, teams]) => [platform, [...teams][0]]);
   const platformTeams = Object.fromEntries(pairs);
-  return { teams: [...new Set(pairs.map(pair => pair[1]))].sort(), platforms: pairs.map(pair => pair[0]).sort(), platformTeams };
+  return { teams: [...new Set(pairs.map(pair => pair[1]))].sort(), platforms: pairs.map(pair => pair[0]).sort(), platformTeams, permissionOptions: Object.entries(PERMISSION_LABELS).map(([key,label])=>({key,label})), permissionDefaults: PERMISSION_DEFAULTS };
 }
 function scope(body: Record<string, unknown>, catalog: Catalog) {
   const team = label(body.team, '团队');
@@ -57,26 +59,9 @@ function scope(body: Record<string, unknown>, catalog: Catalog) {
   return { team, platforms: [...new Set(body.platforms as string[])].sort() };
 }
 function publicAccount(account: Account): Account {
-  return Object.fromEntries(fields.split(',').filter(key => key in account).map(key => [key, (account as any)[key]])) as Account;
+  return { ...Object.fromEntries(fields.split(',').filter(key => key in account).map(key => [key, (account as any)[key]])), permissions: permissionMap(account.role, account.permissions) } as Account;
 }
-function normalizeIp(value: string) {
-  const ip = value.trim().replace(/^::ffff:/i, '');
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip) && ip.split('.').every(n => +n <= 255)) return ip;
-  if (ip.includes(':') && ip.length <= 64) { try { return new URL('https://[' + ip + ']').hostname.slice(1, -1); } catch { /* invalid */ } }
-  return '';
-}
-async function proxyIp(request: Request, hash: string | undefined) {
-  const key = request.headers.get('x-portal-proxy-key');
-  if (!key && !request.headers.has('x-portal-client-ip')) return null;
-  if (!key || !hash || !/^[a-f0-9]{64}$/.test(hash) || key.length > 256) throw new ApiError(403, 'proxy_denied', '登录来源验证失败');
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key)));
-  const expected = Uint8Array.from(hash.match(/../g)!, v => parseInt(v, 16));
-  let mismatch = 0; for (let i = 0; i < expected.length; i++) mismatch |= expected[i] ^ digest[i];
-  const ip = normalizeIp(request.headers.get('x-portal-client-ip') || '');
-  if (mismatch || !ip) throw new ApiError(403, 'proxy_denied', '登录来源验证失败');
-  return ip;
-}
-export function createWorkorderAccountHandler(gateway: Gateway, options: { allowedOrigins: string[]; proxyKeySha256?: string }) {
+export function createWorkorderAccountHandler(gateway: Gateway, options: { allowedOrigins: string[] }) {
   return async (request: Request): Promise<Response> => {
     const origin = request.headers.get('origin');
     const headers = new Headers({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'Vary': 'Origin, Authorization', 'X-Content-Type-Options': 'nosniff' });
@@ -104,17 +89,7 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
       const profile = await gateway.profile(caller.id);
       const owner = !!profile && profile.auth_user_id === caller.id && profile.active === true && profile.role === 'owner';
       if (action !== 'me' && !owner) throw new ApiError(403, 'owner_required', '只有后台总管理员可以管理工单账号');
-      if (owner) {
-        const forwarded = await proxyIp(request, options.proxyKeySha256);
-        if (await gateway.ipEnabled()) {
-          // Keep the existing dashboard IP policy. A Worker may forward its
-          // visitor address only with server-only proxy proof; never trust body IP.
-          const direct = ['cf-connecting-ip', 'x-real-ip', 'fly-client-ip', 'sb-client-ip'].map(h => request.headers.get(h) || '').find(Boolean)
-            || (request.headers.get('x-forwarded-for') || '').split(',')[0];
-          const ip = forwarded || normalizeIp(direct);
-          if (!ip || !(await gateway.ipAllowed(ip))) throw new ApiError(403, 'ip_denied', '当前 IP 不在后台登录白名单');
-        }
-      }
+      if (!(await gateway.sessionAllowed(token,caller.id,profile?'dashboard':'workorder'))) throw new ApiError(403,'session_denied','会话未通过登录策略，请重新登录');
       let account: Account | null = null;
       if (!owner) {
         // Portal staff never gain backend permissions from metadata or email.
@@ -139,9 +114,10 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
         const name = username(body!.username), pass = password(body!.password), display = label(body!.display_name, '显示名称');
         if (!roles.has(String(body!.role))) bad('工单角色不正确');
         const selected = scope(body!, catalog);
+        let permissions:Record<string,boolean>;try{permissions=validatePermissionMap(String(body!.role),body!.permissions)}catch{bad('操作权限无效或超出角色范围')}
         const id = await gateway.createUser(`${name}@${ACCOUNT_DOMAIN}`, pass);
         let created: Account;
-        try { created = await gateway.insert({ auth_user_id: id, username: name, display_name: display, role: String(body!.role), ...selected, active: true }, caller.id); }
+        try { created = await gateway.insert({ auth_user_id: id, username: name, display_name: display, role: String(body!.role), ...selected, active: true, permissions:permissions! }, caller.id); }
         catch (error) { try { await gateway.deleteUser(id); } catch { /* An orphan Auth user has no portal row or dashboard profile, so fails closed. */ } throw error; }
         return json({ ok: true, account: publicAccount(created), message: '工单账号已创建' });
       }
@@ -149,20 +125,25 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
       const target = await gateway.account(body!.auth_user_id as string);
       if (!target || !roles.has(target.role) || await gateway.profile(target.auth_user_id)) throw new ApiError(404, 'account_not_found', '未找到独立工单账号');
       if (action === 'reset-password') {
-        await gateway.resetPassword(target.auth_user_id, password(body!.password));
+        const nextPassword=password(body!.password);
+        await gateway.revokeSessions(target.auth_user_id);
+        await gateway.resetPassword(target.auth_user_id, nextPassword);
+        await gateway.revokeSessions(target.auth_user_id);
         await gateway.audit(caller.id, 'reset-password', target.auth_user_id);
         return json({ ok: true, account: publicAccount(target), message: '工单密码已重置' });
       }
       const patch = body!.patch;
-      if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(k => !['display_name', 'role', 'team', 'platforms', 'active'].includes(k))) bad('修改内容不正确');
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(k => !['display_name', 'role', 'team', 'platforms', 'active', 'permissions'].includes(k))) bad('修改内容不正确');
       const raw = patch as Record<string, unknown>, update: Record<string, unknown> = {};
       if ('display_name' in raw) update.display_name = label(raw.display_name, '显示名称');
       if ('role' in raw) { if (!roles.has(String(raw.role))) bad('工单角色不正确'); update.role = raw.role; }
+      if ('permissions' in raw || 'role' in raw) { try { update.permissions = validatePermissionMap(String(raw.role || target.role), 'permissions' in raw ? raw.permissions : raw.role !== target.role ? undefined : target.permissions); } catch { bad('操作权限无效或超出角色范围'); } }
       if ('active' in raw) { if (typeof raw.active !== 'boolean') bad('启用状态不正确'); update.active = raw.active; }
       if ('team' in raw || 'platforms' in raw || raw.active === true) Object.assign(update, scope({ ...target, ...raw }, catalog));
       if (!Object.keys(update).length) bad('没有需要修改的内容');
       const expected = body!.expected_updated_at;
       if (typeof expected !== 'string' || !expected || !Number.isFinite(Date.parse(expected))) bad('请刷新账号后再修改');
+      if(update.active===false)await gateway.revokeSessions(target.auth_user_id);
       const updated = await gateway.update(target.auth_user_id, expected as string, update, caller.id);
       if (!updated) throw new ApiError(409, 'account_changed', '账号已被其他操作修改，请刷新后重试');
       return json({ ok: true, account: publicAccount(updated), message: '工单账号已更新' });

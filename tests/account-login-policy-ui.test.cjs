@@ -1,0 +1,57 @@
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const repo=path.resolve(__dirname,'..'),ts=require(path.join(repo,'node_modules/typescript'));
+const compile=file=>ts.transpileModule(fs.readFileSync(path.join(repo,file),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+const plain=value=>JSON.parse(JSON.stringify(value)),flush=()=>new Promise(r=>setImmediate(r));
+const session={user:{id:'owner-id'},access_token:'synthetic-token'};
+const security={failed_count:5,failure_limit:null,locked:true,locked_at:'2026-09-27T01:00:00Z',version:3};
+const target={id:'staff-id',username:'staff',active:false};
+function nodes(node){if(Array.isArray(node))return node.flatMap(nodes);return node&&typeof node==='object'?[node,...nodes(node.props?.children)]:[]}
+function text(node){if(Array.isArray(node))return node.map(text).join('');if(node&&typeof node==='object')return text(node.props?.children);return node==null||typeof node==='boolean'?'':String(node)}
+function ui(handler,initial={}){
+ const states=[],refs=[],deps=[],cleanups=[],effects=[],calls=[],snapshots=[];let i=0,r=0,e=0;
+ let props={session,surface:'workorder',onSnapshot:s=>snapshots.push(plain(s)),onClose(){},...initial};
+ const mod={exports:{}},react={useState(initial){const key=i++;if(!(key in states))states[key]=typeof initial==='function'?initial():initial;return[states[key],value=>states[key]=typeof value==='function'?value(states[key]):value]},useRef(initial){const key=r++;return refs[key]||(refs[key]={current:initial})},useEffect(fn,values){const key=e++;if(!deps[key]||values.some((v,n)=>v!==deps[key][n])){deps[key]=values;effects.push(()=>{cleanups[key]?.();cleanups[key]=fn()})}}};
+ vm.runInNewContext(compile('src/components/AccountLoginPolicy.tsx'),{module:mod,exports:mod.exports,AbortController,Error,require:name=>{
+  if(name==='react')return react;
+  if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
+  if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};
+  if(name.endsWith('/accountSecurityClient'))return{securityRequest:async(s,q,signal)=>{calls.push({session:s,request:plain(q),signal});if(handler)return handler(q,signal);if(q.action==='policy')return{ok:true,policy:{failure_limit:5,ip_enabled:false,version:1}};if(q.action==='list-account-security')return{ok:true,states:[{user_id:target.id,...security}]};return{ok:true,security}}};
+  if(name.endsWith('.css'))return{};throw Error(name);
+ }});
+ const draw=()=>{i=r=e=0;return mod.exports.default(props)};
+ const runEffects=()=>effects.splice(0).forEach(fn=>fn());
+ draw();runEffects();
+ return{calls,snapshots,draw,runEffects,setProps(patch){props={...props,...patch};draw();runEffects()},unmount(){cleanups.forEach(fn=>fn?.())},button(label){const n=nodes(draw()).find(n=>n.type==='button'&&text(n)===label);assert(n,'button '+label);return n},select(label){const n=nodes(draw()).find(n=>n.type==='label'&&text(n).startsWith(label));assert(n,'label '+label);return nodes(n).find(n=>n.type==='select')},form(){return nodes(draw()).find(n=>n.type==='form')}};
+}
+test('two batched reads fill one namespace without one request per account or invented initial threshold',async()=>{
+ const h=ui();assert.equal(h.select('默认阈值').props.value,'');assert.equal(h.select('默认阈值').props.disabled,true);assert.match(text(h.draw()),/读取中/);assert.equal(h.calls.length,2);assert.deepEqual(h.calls.map(c=>c.request),[{action:'policy',surface:'workorder'},{action:'list-account-security',surface:'workorder'}]);
+ await flush();assert.equal(h.select('默认阈值').props.value,'5');assert.deepEqual(h.snapshots.at(-1),{status:'ready',failureLimit:5,states:{[target.id]:security}});assert(!nodes(h.draw()).some(n=>n.type?.name==='AccountEditorDialog'));
+ h.setProps({target});await flush();assert.equal(h.calls.length,3);assert.deepEqual(h.calls[2].request,{action:'account-security',surface:'workorder',user_id:target.id});assert.match(text(h.draw()),/手动状态：停用.*解除自动锁定不会启用此账号/);
+ const dashboard=ui(null,{surface:'dashboard'});await flush();assert(dashboard.calls.every(c=>c.request.surface==='dashboard'));assert.match(text(dashboard.draw()),/后台登录失败限制/);
+});
+test('changing the default threshold includes its optimistic version and updates inherited list state only after acknowledgement',async()=>{
+ const h=ui(async q=>{if(q.action==='list-account-security')return{ok:true,states:[{user_id:target.id,...security}]};return{ok:true,policy:{failure_limit:q.patch?.failure_limit??5,version:q.patch?2:1}}});await flush();h.select('默认阈值').props.onChange({target:{value:'7'}});await h.form().props.onSubmit({preventDefault(){}});
+ assert.deepEqual(h.calls.at(-1).request,{action:'policy',surface:'workorder',patch:{failure_limit:7},expected_version:1});assert.equal(h.snapshots.at(-1).failureLimit,7);assert.equal(h.snapshots.at(-1).states[target.id].failure_limit,null);assert.match(text(h.draw()),/默认失败阈值已保存/);assert.equal(h.calls.length,3);
+});
+test('per-account overrides and unlock use the returned version and never turn a manually disabled account on',async()=>{
+ let current={...security};const h=ui(async q=>{if(q.action==='policy')return{ok:true,policy:{failure_limit:5,version:1}};if(q.action==='list-account-security')return{ok:true,states:[{user_id:target.id,...current}]};if(q.action==='set-account-policy')current={...current,failure_limit:q.failure_limit,version:current.version+1};if(q.action==='unlock-account')current={...current,failed_count:0,locked:false,locked_at:null,version:current.version+1};return{ok:true,security:{...current}}},{target});await flush();
+ h.select('该账号失败阈值').props.onChange({target:{value:'8'}});await h.button('保存账号阈值').props.onClick();assert.deepEqual(h.calls.at(-1).request,{action:'set-account-policy',surface:'workorder',user_id:target.id,failure_limit:8,expected_version:3});
+ await flush();await h.button('解除自动锁定').props.onClick();await flush();assert.deepEqual(h.calls.at(-1).request,{action:'unlock-account',surface:'workorder',user_id:target.id,expected_version:4});assert(!Object.hasOwn(h.calls.at(-1).request,'active'));assert.match(text(h.draw()),/手动状态：停用/);assert.match(text(h.draw()),/自动锁定与失败次数已清除；手动启停状态不变/);assert.equal(h.snapshots.at(-1).states[target.id].locked,false);assert.equal(h.snapshots.at(-1).states[target.id].failed_count,0);
+ h.select('该账号失败阈值').props.onChange({target:{value:'inherit'}});await h.button('保存账号阈值').props.onClick();await flush();assert.equal(h.calls.at(-1).request.failure_limit,null);assert.equal(h.calls.at(-1).request.expected_version,5);assert.equal(h.calls.length,6,'no per-row refresh or write retry');
+});
+test('read failure or malformed safety state remains unknown, never a zero-failure or unlocked success',async()=>{
+ for(const malformed of [null,{...security,failed_count:-1},{...security,version:'3'},{...security,failure_limit:21}]){
+  const h=ui(async q=>q.action==='policy'?{ok:true,policy:{failure_limit:5,version:1}}:q.action==='list-account-security'?{ok:true,states:[{user_id:target.id,...malformed}]}:{ok:true,security:malformed},{target});await flush();
+  assert.equal(h.snapshots.at(-1).status,'error');assert.deepEqual(h.snapshots.at(-1).states,{});assert.match(text(h.draw()),/返回不完整/);assert.doesNotMatch(text(h.draw()),/连续失败0 次|自动锁定未锁定/);assert(!nodes(h.draw()).some(n=>n.type==='button'&&text(n)==='保存账号阈值'));
+ }
+ const failed=ui(async()=>{throw Error('无权读取安全状态')});await flush();assert.equal(failed.snapshots.at(-1).status,'error');assert.equal(failed.select('默认阈值').props.value,'');assert.equal(failed.select('默认阈值').props.disabled,true);assert.match(text(failed.draw()),/无权读取安全状态/);assert.equal(failed.calls.length,2);
+});
+test('switching accounts aborts stale reads and prevents another account state from replacing the visible target',async()=>{
+ const pending=new Map();const h=ui(async(q,signal)=>q.action==='account-security'?new Promise(resolve=>pending.set(q.user_id,{resolve,signal})):q.action==='policy'?{ok:true,policy:{failure_limit:5,version:1}}:{ok:true,states:[]},{target});await flush();
+ h.setProps({target:{id:'second-id',username:'second',active:true}});assert.equal(pending.get(target.id).signal.aborted,true);pending.get('second-id').resolve({ok:true,security:{...security,failed_count:2,locked:false,version:7}});await flush();pending.get(target.id).resolve({ok:true,security:{...security,failed_count:99}});await flush();
+ assert.match(text(h.draw()),/连续失败2 次/);assert.doesNotMatch(text(h.draw()),/99 次/);assert.equal(h.snapshots.at(-1).states['second-id'].version,7);assert(!h.snapshots.at(-1).states[target.id]);h.unmount();assert(h.calls.every(c=>c.signal?.aborted));
+});
+test('version conflicts preserve both drafts and require explicit retry instead of repeating writes',async()=>{
+ const h=ui(async q=>{if(q.patch||q.action==='set-account-policy'||q.action==='unlock-account')throw Error('设置已被其他管理员修改，请重新读取');return q.action==='policy'?{ok:true,policy:{failure_limit:5,version:1}}:q.action==='list-account-security'?{ok:true,states:[{user_id:target.id,...security}]}:{ok:true,security}},{target});await flush();
+ h.select('默认阈值').props.onChange({target:{value:'9'}});await h.form().props.onSubmit({preventDefault(){}});assert.equal(h.select('默认阈值').props.value,'9');assert.equal(h.snapshots.at(-1).failureLimit,5);h.select('该账号失败阈值').props.onChange({target:{value:'10'}});await h.button('保存账号阈值').props.onClick();await flush();assert.equal(h.select('该账号失败阈值').props.value,'10');assert.equal(h.snapshots.at(-1).states[target.id].version,3);assert.match(text(h.draw()),/其他管理员修改/);assert.equal(h.calls.length,5);
+});

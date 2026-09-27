@@ -147,6 +147,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     }
     if (name === './AdminPreviewGrants') return { default: () => null };
     if (name === './AdminControlCenter') return { default: function AdminControlCenter(){} };
+    if (name === './AccountIpAdmin') return { default: function AccountIpAdmin(){} };
     if (name === './WorkOrderAccountAdmin') return { default: function WorkOrderAccountAdmin(){} };
     throw Error('Unexpected component test import: ' + name);
   };

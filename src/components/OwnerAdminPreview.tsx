@@ -8,8 +8,9 @@ import { adminPreviewRequest } from "@/lib/adminPreviewClient";
 import AdminPreviewGrants from "./AdminPreviewGrants";
 import AdminControlCenter from "./AdminControlCenter";
 import WorkOrderAccountAdmin from "./WorkOrderAccountAdmin";
+import AccountIpAdmin from "./AccountIpAdmin";
 import { installAdminLiveBridge, makeAdminLiveDocument } from "@/lib/adminLiveBridge";
-import { OWNER_PREVIEW_HOST_CSS, isOwnerPreviewReturnMessage, ownerPreviewAccountCommand, ownerPreviewAccountPage, makeOwnerPreviewShellDocument, mountOwnerPreviewHostShell } from "@/lib/ownerPreviewShell";
+import { OWNER_PREVIEW_HOST_CSS, isOwnerPreviewReturnMessage, ownerPreviewAccountCommand, ownerPreviewAccountPage, ownerPreviewSecurityPage, makeOwnerPreviewShellDocument, mountOwnerPreviewHostShell } from "@/lib/ownerPreviewShell";
 
 type Props = { canView:boolean; session: DashboardSession; profile: DashboardProfile; onClose: () => void };
 export default function OwnerAdminPreview({session,profile,onClose,canView}: Props) {
@@ -21,6 +22,7 @@ export default function OwnerAdminPreview({session,profile,onClose,canView}: Pro
   const [showGrants,setShowGrants]=useState(false);
   const [accountView,setAccountView]=useState<"accounts"|"workorder"|null>(null);
   const [accountBounds,setAccountBounds]=useState<{top:number;left:number;width:number}|null>(null);
+  const [securityBounds,setSecurityBounds]=useState<{top:number;left:number;width:number}|null>(null);
   const canManageAccounts=profile.active===true&&(owner||(profile.role==="admin"&&normalizedManagementPermissions(profile).manage_viewers));
   const activeAccountView=accountView||(owner?"workorder":"accounts");
 
@@ -28,7 +30,7 @@ export default function OwnerAdminPreview({session,profile,onClose,canView}: Pro
   const storagePrefix=`hensem:owner-preview:${profile.auth_user_id}:`;
   const readDrafts=useCallback(()=>{const values:Record<string,string>={};for(const key of OWNER_PREVIEW_DRAFT_KEYS){try{const value=localStorage.getItem(storagePrefix+key);if(value!==null&&ownerPreviewDraftAllowed(key,value))values[key]=value}catch{}}return values},[storagePrefix]);
   useEffect(()=>{
-    setDocumentHtml("");setError("");setAccountBounds(null);setAccountView(null);if(!allowed)return;
+    setDocumentHtml("");setError("");setAccountBounds(null);setSecurityBounds(null);setAccountView(null);if(!allowed)return;
     let cancelled=false,checking=false;const controller=new AbortController();
     channel.current=crypto.randomUUID();
     const request=async(check=false)=>{
@@ -42,7 +44,7 @@ export default function OwnerAdminPreview({session,profile,onClose,canView}: Pro
     const focused=()=>{if(document.visibilityState==="visible")verify()};document.addEventListener("visibilitychange",focused);
     return()=>{cancelled=true;controller.abort();window.clearInterval(timer);document.removeEventListener("visibilitychange",focused)};
   },[allowed,accountId,reload,readDrafts,owner]);
-  useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{const data=event.data;if(isOwnerPreviewReturnMessage(event,frame.current?.contentWindow,channel.current)){onClose();return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){setAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,onClose,canManageAccounts,owner]);
+  useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{const data=event.data;if(isOwnerPreviewReturnMessage(event,frame.current?.contentWindow,channel.current)){onClose();return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){setAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const securityPage=ownerPreviewSecurityPage(event,frame.current?.contentWindow,channel.current);if(securityPage){setSecurityBounds(securityPage.active?securityPage.bounds:null);return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,onClose,canManageAccounts,owner]);
   const hasDocument=Boolean(documentHtml);
   useEffect(()=>{if(!allowed||!hasDocument)return;return installAdminLiveBridge({source:()=>frame.current?.contentWindow,channel:()=>channel.current,session:()=>sessionRef.current})},[allowed,hasDocument,accountId]);
   return <section className="owner-preview-shell" aria-label="新版详细后台">
@@ -60,6 +62,7 @@ export default function OwnerAdminPreview({session,profile,onClose,canView}: Pro
       </div>
     </section>}
 
+    {allowed&&hasDocument&&securityBounds&&<section aria-label="IP 白名单" className="owner-preview-account-page" style={{top:Math.max(48,securityBounds.top),left:securityBounds.left,width:securityBounds.width}}><div className="owner-preview-account-body">{owner?<AccountIpAdmin key={accountId} session={session}/>:<p role="alert" className="owner-preview-account-denied">仅总管理员可管理 IP 白名单。</p>}</div></section>}
     {error&&documentHtml&&<div role="status" className="owner-preview-shell-warning">{error}</div>}
   </section>;
 }
