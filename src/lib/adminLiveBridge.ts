@@ -6,7 +6,7 @@ export const LIVE_RESPONSE = "hensem-admin-live-response";
 export const LIVE_CANCEL = "hensem-admin-live-cancel";
 export const LIVE_REQUEST_TIMEOUT_MS = 90000;
 const actions = ["catalog","syncHealth","intakeCoverage","reportSummary","collectedData","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
-const keys = new Set(["feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus"]);
+const keys = new Set(["feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"]);
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
@@ -25,8 +25,8 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     return p;
   }
   if(p.action!=="reportSummary"&&p.feeds!==undefined)throw Error("日报来源仅用于日报汇总");
-  if(p.action!=="collectedData"&&(p.dataset!==undefined||p.sourceKind!==undefined))throw Error("采集来源仅用于平台数据接入页面");
-  if(p.action!=="depositIssues"&&["dateMode","match","followupStatus"].some(k=>p[k]!==undefined))throw Error("核对筛选仅用于存款未到账页面");
+  if(p.action!=="collectedData"&&(p.dataset!==undefined||p.action!=="depositIssues"&&p.sourceKind!==undefined))throw Error("采集来源仅用于平台数据接入页面");
+  if(p.action!=="depositIssues"&&["dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"].some(k=>p[k]!==undefined))throw Error("核对筛选仅用于存款未到账页面");
   if(p.action!=="withdrawReasons"&&["category","reasonKey","operatorKey"].some(k=>p[k]!==undefined))throw Error("原因筛选仅用于驳回分析");
   if(["providerOptions","configurationAccess","configurationWrite"].includes(String(p.action)))return validateConfigurationRequest(p);
   if(p.view!==undefined&&(!["aggregate","autoWithdraw","depositIssues"].includes(String(p.action))||(p.action==="aggregate"&&!["full","providers","drilldown"].includes(String(p.view)))))throw Error("统计页面类型无效");
@@ -161,12 +161,15 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     return {...p};
   }
   if(p.action==="depositIssues"){
-    const allowed=new Set(["action","startAt","endAt","country","platform","provider","status","query","offset","limit","view","dateMode","match","followupStatus"]);
+    const allowed=new Set(["action","startAt","endAt","country","platform","provider","status","query","offset","limit","view","dateMode","match","followupStatus","orderNumber","workOrderNumber","utr","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId","sourceKind","amountMin","amountMax"]);
     if(Object.keys(p).some(k=>!allowed.has(k)))throw Error("存款未到账查询参数无效");
     for(const key of ["startAt","endAt"])if(typeof p[key]!=="string"||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?Z$/.test(String(p[key]))||!Number.isFinite(Date.parse(String(p[key]))))throw Error("请填写完整日期及秒");
     const span=Date.parse(String(p.endAt))-Date.parse(String(p.startAt));
     if(span<=0||(p.dateMode!=="all"&&span>32*86400000))throw Error("查询范围最多31个当地日");
-    for(const key of ["country","platform","provider","status","query","followupStatus"])if(p[key]!==undefined&&(typeof p[key]!=="string"||String(p[key]).length>200||/[\u0000-\u001f]/.test(String(p[key]))))throw Error("存款未到账检索值无效");
+    for(const key of ["country","platform","provider","status","query","followupStatus","orderNumber","workOrderNumber","utr","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"])if(p[key]!==undefined&&(typeof p[key]!=="string"||String(p[key]).length>200||/[\u0000-\u001f]/.test(String(p[key]))))throw Error("存款未到账检索值无效");
+    if(p.sourceKind!==undefined&&!["all","sheet","portal"].includes(String(p.sourceKind)))throw Error("记录来源无效");
+    for(const key of ["amountMin","amountMax"])if(p[key]!==undefined&&(typeof p[key]!=="number"||!Number.isFinite(p[key])||Number(p[key])<0))throw Error("金额范围无效");
+    if(p.amountMin!==undefined&&p.amountMax!==undefined&&Number(p.amountMin)>Number(p.amountMax))throw Error("金额范围无效");
     if(p.view!==undefined&&!['results','entries'].includes(String(p.view)))throw Error("存款核对来源无效");
     if(p.dateMode!==undefined&&!['all','range'].includes(String(p.dateMode)))throw Error("日期范围无效");
     if(p.match!==undefined&&!['all','matched','unmatched','unknown'].includes(String(p.match)))throw Error("对账筛选无效");

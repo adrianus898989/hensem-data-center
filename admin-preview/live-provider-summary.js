@@ -90,14 +90,50 @@
   if(fixed){if(/^0(?:\.0+)?%?$/.test(fixed)){}else if(/^\d+(?:\.\d+)?(?:\s*\/\s*笔)?$/.test(fixed))f+=parseFloat(fixed);else return null;}
   return {percent:p,fixed:f};
  }
- function estimate(row,rates,country){
-  if(!isProviderBusiness(row?.provider))return null;
+ // Owner confirmed 2026-09-27. This is a current estimate, not a historical
+ // charged fee. The 2000 < amount < 2001 gap has no confirmed rate.
+ function tieredFeeRule(row,country){
+  return ['印度','in','india'].includes(normalized(country))&&row.direction==='withdraw'
+   &&row.currency==='INR'&&normalized(canonical(row.provider,country))==='speed2pay'
+   ?{label:'≤2,000：3% + 6 / 笔；≥2,001：2%',lowPercent:0.03,lowFixed:6,highPercent:0.02}:null;
+ }
+ const feeBandKeys=['fee_low_count','fee_low_amount','fee_high_count','fee_high_amount','fee_gap_count','fee_gap_amount','fee_unpriced_count'];
+ function feeBands(row){
+  // Date-split requests keep their original provider leaves in items. The
+  // generic chart merger intentionally does not invent or average fee bands.
+  if(!feeBandKeys.some(k=>Object.hasOwn(row,k))&&row.items?.length){
+   const parts=row.items.map(feeBands);if(parts.some(p=>!p))return null;
+   const sum=Object.fromEntries(feeBandKeys.map(k=>[k,parts.reduce((n,p)=>n+p[k],0)]));
+   return validFeeBands(sum,row.success_count)?sum:null;
+  }
+  const facts=Object.fromEntries(feeBandKeys.map(k=>[k,knownNumber(row[k])]));
+  return validFeeBands(facts,row.success_count)?facts:null;
+ }
+ function validFeeBands(facts,count){
+  const total=knownNumber(count);if(!Number.isSafeInteger(total)||total<0||feeBandKeys.some(k=>facts[k]===null||facts[k]<0))return false;
+  for(const k of ['fee_low_count','fee_high_count','fee_gap_count','fee_unpriced_count'])if(!Number.isSafeInteger(facts[k]))return false;
+  if(facts.fee_low_count+facts.fee_high_count+facts.fee_gap_count+facts.fee_unpriced_count!==total)return false;
+  if(facts.fee_low_amount>facts.fee_low_count*2000)return false;
+  if(facts.fee_high_count===0?facts.fee_high_amount!==0:facts.fee_high_amount<facts.fee_high_count*2001)return false;
+  if(facts.fee_gap_count===0?facts.fee_gap_amount!==0:!(facts.fee_gap_amount>facts.fee_gap_count*2000&&facts.fee_gap_amount<facts.fee_gap_count*2001))return false;
+  return true;
+ }
+ function estimateFacts(row,rates,country){
+  if(!isProviderBusiness(row?.provider))return {amount:null,matched:0};
+  const tier=tieredFeeRule(row,country);
+  if(tier){
+   const bands=feeBands(row);if(!bands)return {amount:null,matched:0,label:tier.label+'（分档未读取）'};
+   const matched=bands.fee_low_count+bands.fee_high_count;
+   return {amount:matched?bands.fee_low_amount*tier.lowPercent+bands.fee_low_count*tier.lowFixed+bands.fee_high_amount*tier.highPercent:null,
+    matched,label:tier.label+(bands.fee_gap_count||bands.fee_unpriced_count?'（部分待核对）':'')};
+  }
   const payout=row.direction==='withdraw',feeKey=payout?'payoutFee':'collectFee',singleKey=payout?'payoutSingleFee':'collectSingleFee';
   const candidates=feeCandidates(row,rates,country);
-  const unique=new Map();for(const r of candidates){const value=parseFee(r[feeKey],r[singleKey]);if(!value)return null;unique.set(JSON.stringify(value),value)}
-  if(unique.size!==1||row.success_amount==null||!Number.isFinite(Number(row.success_amount)))return null;
-  const value=[...unique.values()][0];return Number(row.success_amount)*value.percent+Number(row.success_count||0)*value.fixed;
+  const unique=new Map();for(const r of candidates){const value=parseFee(r[feeKey],r[singleKey]);if(!value)return {amount:null,matched:0};unique.set(JSON.stringify(value),value)}
+  if(unique.size!==1||knownNumber(row.success_amount)===null)return {amount:null,matched:0};
+  const value=[...unique.values()][0];return {amount:Number(row.success_amount)*value.percent+Number(row.success_count||0)*value.fixed,matched:Number(row.success_count||0)};
  }
+ function estimate(row,rates,country){return estimateFacts(row,rates,country).amount}
  function buildRows({orders,issues,rates,country,direction,plus,combine,coverage}){
   const flow=(orders||[]).filter(r=>r.direction===direction).map(r=>({...r,provider:providerName(canonical(r.provider,country))}));
   const byIssue=new Map();for(const row of issues||[]){if(row.direction!==direction)continue;const name=providerName(canonical(row.provider,country)),item=byIssue.get(name)||Object.fromEntries(issueKeys.map(k=>[k,0]));for(const key of issueKeys)item[key]+=Number(row[key]||0);byIssue.set(name,item)}
@@ -117,11 +153,13 @@
   for(const item of items){
    if(feeExempt(item.provider)){excluded+=Number(item.success_count||0);continue}
    const localCountry=item.country||country,payout=item.direction==='withdraw';
+   const fact=estimateFacts(item,rates,localCountry);
    const candidates=feeCandidates(item,rates,localCountry),values=new Map();
    for(const r of candidates){const parsed=parseFee(r[payout?'payoutFee':'collectFee'],r[payout?'payoutSingleFee':'collectSingleFee']);if(parsed)values.set(JSON.stringify(parsed),parsed);else values.set('unknown',null)}
-   if(values.size===1&&!values.has('unknown')){const rule=[...values.values()][0];labels.add((rule.percent*100).toFixed(2)+'%'+(rule.fixed?' + '+Number(rule.fixed.toFixed(8))+' / 笔':''))}
+   if(fact.label)labels.add(fact.label);
+   else if(values.size===1&&!values.has('unknown')){const rule=[...values.values()][0];labels.add((rule.percent*100).toFixed(2)+'%'+(rule.fixed?' + '+Number(rule.fixed.toFixed(8))+' / 笔':''))}
    else if(values.size>1)labels.add('待核对费率');else labels.add('未匹配');
-   const value=estimate(item,rates,localCountry);if(value!==null){matched+=Number(item.success_count||0);amount+=value}
+   if(fact.amount!==null){matched+=fact.matched;amount+=fact.amount}
   }
   const eligible=Math.max(0,successCount-excluded),hasUnattributed=items.reduce((n,r)=>n+Number(r.success_count||0),0)<successCount;
   if(hasUnattributed)labels.add('未匹配');
@@ -271,22 +309,30 @@
   const issueLabelFor=row=>unknownProviderNames.has(String(row.provider??'').trim())?'三方未填写（源工单）':row.provider+'（源工单）';
   const providerLabel=(row,index)=>issueOnly(row)?'<button class="link" aria-expanded="'+!!expanded[rowKey(row)]+'" title="展开已读取的平台工单汇总；工单号未入库" onclick="providerSummaryToggle('+index+')">'+E(issueLabelFor(row))+'</button><small class="cell-sub">仅工单汇总 · 工单号未入库</small>':providerCell(row);
   const workorderBasis='工单未到账按提交减已成功计算，包含已驳回、处理中等未成功工单，不等于仍在等待到账。';
+  const tierExplanation=tier=>'已确认：按每笔成功金额分档估算。'+tier.label+'。2,000 < 金额 < 2,001 的记录待核对，不计入已匹配笔数。';
+  const displayedRate=(row,original)=>{const tier=tieredFeeRule(row,L.country);return tier?tierExplanation(tier):original};
   root.providerSummaryRate=function(index){
-   const row=shown[index];if(!row)return;const rule=confirmedFeeRule(row,L.country),records=rateRecords(row,L.feeLookupRows,L.country),used=new Set(row.items.flatMap(r=>feeCandidates(r,L.feeLookupRows,L.country)));
+   const row=shown[index];if(!row)return;const tier=tieredFeeRule(row,L.country),rule=confirmedFeeRule(row,L.country),records=rateRecords(row,L.feeLookupRows,L.country),used=new Set(row.items.flatMap(r=>feeCandidates(r,L.feeLookupRows,L.country)));
    const relevant=records.filter(r=>r.scopeType!=='platform'||row.items.some(item=>normalized(item.platform)===normalized(r.platform)));
-   openDrawer(row.provider+' · 费率依据',box('当前匹配规则','<p class="live-definition">'+E(rule?.note||'优先匹配有费率内容的平台专属记录，再匹配国家记录。存在不同费率时，保留差异供核对。')+'</p>'+table(['使用情况','来源表 / 行','范围','业务类型','通道类型','代收','代收单笔','代付','代付单笔','原状态'],relevant.map(r=>[used.has(r)?'当前匹配':'未采用',E((r.sheetName||'未提供')+' / '+(r.sourceRow??'—')),E(r.platform||r.country||r.scopeGroup),providerTypeCell(row,[r],L.country,E),E(r.category||'—'),E(r.collectFee||'—'),E(r.collectSingleFee||'—'),E(r.payoutFee||'—'),E(r.payoutSingleFee||'—'),E(r.status||r.rawStatus||'—')]))));
+   const sourceTable=table(['使用情况','来源表 / 行','范围','业务类型','通道类型','代收','代收单笔','代付','代付单笔','原状态'],relevant.map(r=>[tier?'原表参考':used.has(r)?'当前匹配':'未采用',E((r.sheetName||'未提供')+' / '+(r.sourceRow??'—')),E(r.platform||r.country||r.scopeGroup),providerTypeCell(row,[r],L.country,E),E(r.category||'—'),E(r.collectFee||'—'),E(r.collectSingleFee||'—'),E(r.payoutFee||'—'),E(r.payoutSingleFee||'—'),E(r.status||r.rawStatus||'—')]),'provider-rate-details');
+   openDrawer(row.provider+' · 费率依据',tier
+    ?box('当前确认规则','<p class="live-definition">'+E(tierExplanation(tier))+'</p>')+box('原表费率记录',sourceTable)
+    :box('当前匹配规则','<p class="live-definition">'+E(rule?.note||'优先匹配有费率内容的平台专属记录，再匹配国家记录。存在不同费率时，保留差异供核对。')+'</p>'+sourceTable));
   };
   const columns=[['统一三方','provider'],['平台','platform_count'],['类型','type'],[name+'成功金额','success_amount'],[name+'成功笔数','success_count'],['成功率','success_rate'],[readState.partial?'已读取金额占比':'金额占比','amount_share'],[readState.partial?'已读取笔数占比':'笔数占比','count_share'],...(direction==='withdraw'?[['代付中金额','pending_amount'],['代付中笔数','pending_count']]:[]),['匹配费率','fee_rate'],['估算手续费','estimated_fee'],[readState.partial?'已读取手续费占比':'手续费占比','fee_share'],
    ['工单提交金额','issue_submittedAmount'],['工单提交笔数','issue_submittedCount'],['工单成功金额','issue_successAmount'],['工单成功笔数','issue_successCount'],['工单未到账金额','issue_notReceivedAmount'],['工单未到账笔数','issue_notReceivedCount'],['工单成功率','issue_success_rate'],['平台明细',null]];
   const header=(text,key,active=sort,ascending=!!L.providerSortAsc,index=null)=>{if(!key)return E(text);const next=active===key?!ascending:textSortKeys.has(key),basis=key==='fee_rate'?'按百分比、单笔费依次排序；多档或未匹配置后。':'';return '<button class="link provider-sort-heading" title="'+E(basis+'点击按'+text+(next?'升序':'降序')+'排列；空值置后')+'" onclick="'+(index===null?'providerSummarySort(\''+key+'\')':'providerSummaryPlatformSort('+index+',\''+key+'\')')+'">'+E(text)+' <span aria-hidden="true">'+(active===key?(ascending?'↑':'↓'):'↕')+'</span></button>'};
   const headers=columns.map(([text,key])=>header(text,key));
+  const columnWidth=key=>key==='provider'?128:key==='platform_count'?64:key==='type'?84:key==='fee_rate'?132:key===null?72:key==='fee_share'?112:key.endsWith('_amount')||key.endsWith('Amount')||key==='estimated_fee'?128:key.endsWith('_count')||key.endsWith('Count')?102:key.startsWith('issue_')?100:94;
+  const widths=columns.map(([,key])=>columnWidth(key)),tableWidth=widths.reduce((sum,width)=>sum+width,0);
+  const rateButton=(value,index)=>{const full=String(value||'未匹配'),long=full.length>24||/[\r\n]/.test(full),label=long?(/以上|以下|分档|阶梯|[≥≤<>]/.test(full)?'分档费率 · 查看':'费率详情 · 查看'):full;return '<button class="link provider-fee-preview" title="'+E(full+' · 点击查看来源及匹配依据')+'" aria-label="'+E('费率：'+full+'，查看来源及匹配依据')+'" onclick="providerSummaryRate('+index+')">'+E(label)+'</button>'};
   const feeCell=r=>readState.empty?'—':r.estimated_fee==null?(L.feeLookupLoading?'读取中…':'—'):N(r.estimated_fee)+(!r.fee_complete?'<span class="provider-partial" title="已匹配 '+C(r.fee_matched_count)+' / '+C(r.success_count)+' 笔">部分</span>':'');
   const issueRate=w=>!w?'—':'<span'+(Number(w.submittedCount)>0&&Number(w.successCount)/Number(w.submittedCount)<0.3?' class="workorder-rate-low"':'')+' title="工单金额成功率 '+R(w.successAmount,w.submittedAmount)+'">'+R(w.successCount,w.submittedCount)+'</span>';
   const cells=(r,label,summary=false,index=0)=>{
    const w=r.issues,rate=R(r.success_count,r.all_count);
    return [label,'<span title="'+E(summary?'去重平台数':(r.sources.join(' / ')||'仅工单记录')+' · '+r.platforms.join('、'))+'">'+C(r.platforms.length)+'</span>',summary?'—':providerTypeCell(r,L.feeLookupRows,L.country,E,L),
     readState.empty?'—':N(r.success_amount),readState.empty?'—':C(r.success_count),'<span title="按成功 / 创建：'+C(r.success_count)+' / '+C(r.all_count)+' 笔">'+(readState.empty?'—':rate)+'</span>',readState.empty?'—':R(r.success_amount,total.success_amount),readState.empty?'—':R(r.success_count,total.success_count),
-    ...(direction==='withdraw'?[readState.empty?'—':N(r.pending_amount),readState.empty?'—':C(r.pending_count)]:[]),summary?'—':'<button class="link" title="查看来源费率及匹配依据" onclick="providerSummaryRate('+index+')">'+E(feeForRow(r))+'</button>',feeCell(r),r.estimated_fee==null?'—':R(r.estimated_fee,knownFee),
+    ...(direction==='withdraw'?[readState.empty?'—':N(r.pending_amount),readState.empty?'—':C(r.pending_count)]:[]),summary?'—':rateButton(displayedRate(r,feeForRow(r)),index),feeCell(r),r.estimated_fee==null?'—':R(r.estimated_fee,knownFee),
     ...[['submittedAmount','submittedCount'],['successAmount','successCount'],['notReceivedAmount','notReceivedCount']].flatMap(([a,n])=>!w?['—','—']:[N(w[a]),C(w[n])]),
     issueRate(w),summary?'':'<button class="link" aria-expanded="'+!!expanded[rowKey(r)]+'" onclick="providerSummaryToggle('+index+')">'+(expanded[rowKey(r)]?'收起':'展开')+'</button>'];
   };
@@ -309,7 +355,7 @@
     const values=[E(r.platform)+(unknown?'<small class="cell-sub">仅有工单数据</small>':''),E(r.source||'未提供'),providerTypeCell({...r,provider:row.provider},L.feeLookupRows,L.country,E,L),
      amount('success_amount'),count('success_count'),
      '<span title="按成功 / 创建：'+C(r.success_count)+' / '+C(r.all_count)+' 笔">'+(unknown?'—':rate)+'</span>',unknown?'—':share(r.success_amount,row.success_amount),unknown?'—':share(r.success_count,row.success_count),
-     ...(direction==='withdraw'?[amount('pending_amount'),count('pending_count')]:[]),E(r.fee_rate_label),unknown?'—':feeCell(r),unknown?'—':share(r.estimated_fee,row.estimated_fee),
+     ...(direction==='withdraw'?[amount('pending_amount'),count('pending_count')]:[]),rateButton(displayedRate(r,r.fee_rate_label),index),unknown?'—':feeCell(r),unknown?'—':share(r.estimated_fee,row.estimated_fee),
      ...[['submittedAmount','submittedCount'],['successAmount','successCount'],['notReceivedAmount','notReceivedCount']].flatMap(([a,n])=>!w?['—','—']:[N(w[a]),C(w[n])]),
      issueRate(w),'—'];
     return '<tr class="provider-platform-row">'+values.map(value=>'<td>'+value+'</td>').join('')+'</tr>';
@@ -318,7 +364,7 @@
    const definition=issueOnly(row)?'源工单仅上传日汇总，工单号未入库；下方为已读取的平台汇总。'+workorderBasis:'第一列为平台，第二列为包网。成功金额、成功笔数按成功时间；成功率为本期成功笔数 / 本期创建笔数，含跨日成功。金额、笔数占比以'+(readState.partial?'已读取平台范围':'当前筛选范围')+'内此三方为分母；手续费占比以此三方已匹配手续费为分母。'+issueNote;
    return '<tr class="provider-expanded-row"><td colspan="'+headers.length+'"><div class="provider-platform-breakdown"><strong>'+E(issueOnly(row)?issueLabelFor(row):row.provider)+' · 平台明细</strong><span class="live-definition">'+definition+'</span></div></td></tr><tr class="provider-platform-labels">'+columns.map(([text,key],i)=>'<td>'+header(i===0?'平台':i===1?'包网':key?text:'',i===0?'platform':i===1?'source':key,childSort?.key||'',!!childSort?.ascending,index)+'</td>').join('')+'</tr>'+details;
   };
-  let reportTable=table(headers,shown.map((r,i)=>cells(r,providerLabel(r,i),false,i)),'provider-summary-table provider-compact-table',footers);
+  let reportTable=table(headers,shown.map((r,i)=>cells(r,providerLabel(r,i),false,i)),'provider-summary-table provider-compact-table',footers).replace('<table>','<table style="min-width:'+tableWidth+'px"><colgroup>'+widths.map(width=>'<col style="width:'+width+'px">').join('')+'</colgroup>');
   if(shown.some(r=>expanded[rowKey(r)])){
    const body=shown.map((r,i)=>'<tr>'+cells(r,providerLabel(r,i),false,i).map(c=>'<td>'+c+'</td>').join('')+'</tr>'+(expanded[rowKey(r)]?breakdown(r,i):'')).join('');
    reportTable=reportTable.replace(/<tbody>[\s\S]*?<\/tbody>/,()=>'<tbody>'+body+'</tbody>');
@@ -328,6 +374,6 @@
    box(name+'三方汇总'+(readState.partial?'（部分结果）':'')+' · '+issueLabel+'工单',reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
     '成功数据按成功时间；成功率为本期成功笔数 / 本期创建笔数，含跨日成功，可超过100%。昨日对比使用同平台、同币种、同一时段，成功率差额为百分点。三方及平台卡片统计有交易的范围；工单按所选整日统计，未采集显示 —。'+workorderBasis+'点击费率查看来源与匹配规则；手续费按当前匹配费率估算。')+'</div>';
  }
- root.HensemProviderSummary={render,buildRows,parseFee,estimate,feeSummary,feeCandidates,confirmedFeeRule,queryCoverage,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
+ root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,tieredFeeRule,feeSummary,feeCandidates,confirmedFeeRule,queryCoverage,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
  if(typeof module!=='undefined')module.exports=root.HensemProviderSummary;
 })(typeof window!=='undefined'?window:globalThis);

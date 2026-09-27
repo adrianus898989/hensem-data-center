@@ -167,3 +167,56 @@ test('forward replacement preserves existing helper ACLs and never replaces the 
  await db.exec("create or replace function private.dashboard_admin_live_order_intake() returns jsonb language sql as $$select '[]'::jsonb$$;");
  try{await assert.rejects(db.exec(patch),/LG native baseline changed/);await db.exec('rollback');}finally{await db.exec(saved)}
 });
+
+// Fee-band patch is installed after the native-engine baseline checks above.
+// It adds only amount/count facts to the same scoped successful-order cohort.
+test('fee bands price the same success cohort on AR, NEW_AR, GAME66 and LG',async()=>{
+ const feePatch=sql('admin-live-fee-bands.sql'),beforeAcl=await acl();
+ await db.exec(feePatch);await db.exec(feePatch);assert.deepEqual(await acl(),beforeAcl);
+ await db.exec('begin');try{
+  const game='20000000-0000-0000-0000-000000000020';
+  await db.exec(`insert into game66_platforms values('${game}','FEE-GAME','Synthetic','m8');
+   insert into ar_config_targets values('IN','FEE-AR','印度','Asia/Kolkata','INR','AR');
+   insert into newar_detail_platforms values('FEE-NEW','IN','印度','Asia/Kolkata','INR',true,null);`);
+  const samples=[
+   {id:'LOW',amount:2000,status:'success'}, {id:'HIGH',amount:2001,status:'success',provider:'FeeAlias'},
+   {id:'GAP',amount:2000.5,status:'success'}, {id:'DECIMAL',amount:6000.25,status:'success'},
+   {id:'NULL',amount:null,status:'success'}, {id:'NEGATIVE',amount:-3,status:'success'},
+   {id:'CROSS-IN',amount:1000,status:'success',created:'2026-09-24T00:00Z'},
+   {id:'CROSS-OUT',amount:99999,status:'success',paid:'2026-09-26T00:00Z'},
+   {id:'PENDING',amount:99999,status:'pending'}, {id:'FAILED',amount:99999,status:'failed'},
+  ];
+  for(const x of samples){const provider=x.provider||'Speed2Pay',created=x.created||'2026-09-25T01:00Z',paid=x.paid||'2026-09-25T02:00Z';
+   await db.query(`insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,amount,status,applied_at,completed_at,raw_channel,channel_type)
+    values('AR','IN','FEE-AR','withdraw',$1,$2,$3,$4::timestamptz at time zone 'Asia/Kolkata',$5::timestamptz at time zone 'Asia/Kolkata',$6,'BANK')`,[x.id,x.amount,{success:'已通过',pending:'已提交',failed:'失败'}[x.status],created,paid,provider]);
+   await db.query(`insert into newar_detail_records(platform,dataset,source_id,order_number,provider,channel_type,currency,amount,status_group,created_at,success_at)
+    values('FEE-NEW','withdraw',$1,$1,$2,'BANK','INR',$3,$4,$5,$6)`,[x.id,provider,x.amount,x.status,created,paid]);
+   await db.query(`insert into game66_withdraw_orders(platform_id,order_num,pay_channel,payout_mode,amount_display,status_code,create_time,update_time)
+    values($1,$2,$3,'BANK',$4,$5,$6,$7)`,[game,x.id,provider,x.amount,{success:'3',pending:'1',failed:'2'}[x.status],created,paid]);
+   await db.query(`insert into lg_orders(country_code,platform,stat_date,order_kind,order_no,third_party,payment_method,metric_amount,status_class,created_at,paid_at)
+    values('PH','SUPERLG','2026-09-25','withdraw',$1,$2,'BANK',$3,$4,$5,$6)`,['FEE-'+x.id,provider,x.amount,x.status,created,paid]);
+  }
+  const platforms=(await call({action:'catalog'})).platforms.filter(p=>p.name.startsWith('FEE-')||p.name==='SUPERLG');assert.equal(platforms.length,4);
+  for(const p of platforms){
+   await db.query(`insert into private.dashboard_admin_provider_registry(country,platform,raw_provider,canonical_values,directions) values($1,$2,'FeeAlias',array['Speed2Pay'],array['代付'])`,[p.country,p.sourceName]);
+   const req=query({platformId:p.id,direction:'withdraw',startAt:'2026-09-25T00:00:00Z',endAt:'2026-09-26T00:00:00Z'});
+   let full;
+   for(const view of ['full','providers']){
+    const result=await call({...req,view}),r=result.groups.provider.find(x=>x.provider==='Speed2Pay');assert(r,p.source);
+    const bands=Object.fromEntries(Object.entries(r).filter(([k])=>k.startsWith('fee_')).map(([k,v])=>[k,k.endsWith('_amount')?Number(v):v]));
+    assert.deepEqual(bands,{fee_low_count:2,fee_low_amount:3000,fee_high_count:2,fee_high_amount:8001.25,fee_gap_count:1,fee_gap_amount:2000.5,fee_unpriced_count:2},p.source+' '+view);
+    assert.equal(r.success_count,7);assert.equal(r.success_amount,null);if(full)assert.deepEqual(bands,full);else full=bands;
+   }
+   const limited=await call({...req,view:'providers',amountMin:'2000',amountMax:'2001',channelTypes:['BANK']});
+   const r=limited.groups.provider.find(x=>x.provider==='Speed2Pay');assert.equal(r.fee_low_count,1);assert.equal(r.fee_high_count,1);assert.equal(r.fee_gap_count,1);assert.equal(r.fee_unpriced_count,0);
+   const failed=await call({...req,status:'failed'});assert(failed.groups.provider.every(r=>r.fee_low_count===0&&r.fee_high_count===0&&r.fee_gap_count===0&&r.fee_unpriced_count===0));
+  }
+  await as(viewer);await assert.rejects(call(query({platformId:game,direction:'withdraw',view:'providers'})),/platform_denied/);
+ }finally{await db.exec('rollback');await as(owner)}
+});
+test('fee-band installation refuses a changed query baseline atomically',async()=>{
+ const saved=(await db.query("select pg_get_functiondef('private.dashboard_admin_live_query_raw(jsonb)'::regprocedure) d")).rows[0].d;
+ await db.exec("create or replace function private.dashboard_admin_live_query_raw(p_request jsonb default '{\"action\":\"catalog\"}'::jsonb) returns jsonb language sql as $$select '{}'::jsonb$$");
+ try{await assert.rejects(db.exec(sql('admin-live-fee-bands.sql')),/Unsupported live-query baseline/);await db.exec('rollback');}
+ finally{await db.exec(saved)}
+});

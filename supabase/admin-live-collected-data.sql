@@ -60,10 +60,10 @@ create or replace view private.dashboard_admin_collected_feed_rows as
  left join lateral jsonb_array_elements(case when jsonb_typeof(s.payload->'rows')='array' then s.payload->'rows' else '[]'::jsonb end) r on true
  union all
  select 'deposit_results','SHEET',country,platform,record_date,coalesce(source_updated_at,updated_at),'charge',provider,
- jsonb_build_object('amount',amount,'count',1) from public.admin_deposit_issue_rows
+ jsonb_build_object('amount',amount,'count',1) from public.admin_deposit_issue_rows where stale_at is null
  union all
  select 'deposit_entries','SHEET',country,platform,followup_date,coalesce(source_updated_at,updated_at),'charge',provider,
- jsonb_build_object('amount',amount,'count',1) from public.admin_deposit_followup_rows
+ jsonb_build_object('amount',amount,'count',1) from public.admin_deposit_followup_rows where stale_at is null
  union all
  select 'lg_success','LG',country_code,platform,stat_date,coalesce(observed_at,updated_at),order_kind,scope_type||' / '||coalesce(third_party,raw_channel,'平台合计'),
  jsonb_build_object('count',total_count,'success',success_count,'failed',failed_count,'pending',pending_count,'unknown',unknown_count,'amount',total_amount,'successAmount',success_amount)

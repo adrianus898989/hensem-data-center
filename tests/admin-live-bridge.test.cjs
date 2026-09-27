@@ -289,3 +289,9 @@ test('lost iframe transport cannot prevent host cancellation cleanup or queue ad
  for(const id of ['a','b','c','d','queued'])h.send(b.event(id));await flush();b.child.postMessage=()=>{throw Error('closed frame')};
  h.send({...b.event('a'),data:{type:h.api.LIVE_CANCEL,id:'a',channel:'offline-channel'}});await flush();assert.equal(waits[0].init.signal.aborted,true);assert.equal(h.calls.length,5);b.cleanup();await flush();assert.equal(h.timers.size,0);
 });
+
+ test('follow-up field filters remain independent, bounded and read-only',()=>{
+ const h=load(),q={action:'depositIssues',view:'entries',dateMode:'all',startAt:'2026-09-01T00:00:00Z',endAt:'2026-09-27T23:59:59Z',orderNumber:'ORDER',workOrderNumber:'TICKET',utr:'0001',reply:'received',staffCode:'EMP',upiId:'synthetic',kycUpiId:'***@bank',utrMatch:'YES',kycCorrect:'YES',sourceKind:'sheet',amountMin:1,amountMax:100};
+ assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(q))),q);
+ for(const change of [{upiId:{}},{kycUpiId:'x'.repeat(201)},{sourceKind:'raw'},{staffCode:{}},{reply:'x'.repeat(201)},{amountMin:-1},{amountMax:0},{workOrderNumber:[]},{action:'catalog'}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...change}));
+ });
