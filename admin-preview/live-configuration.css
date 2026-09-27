@@ -247,3 +247,28 @@ body.live-admin .withdraw-order-table td{min-width:0;overflow:hidden}
 body.live-admin .withdraw-order-table .withdraw-source-note{width:100%;min-width:0;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 body.live-admin .withdraw-order-table .withdraw-order-number,body.live-admin .withdraw-order-table .withdraw-operator-name{display:block;max-width:100%;white-space:nowrap;overflow-wrap:normal;word-break:normal;overflow:hidden;text-overflow:ellipsis}
 body.live-admin .withdraw-order-table .withdraw-order-time{display:block;white-space:nowrap;overflow-wrap:normal}
+
+/* Date coverage has one row per source and business direction. */
+body.live-admin .collected-toolbar{padding:10px 12px}
+body.live-admin .collected-toolbar .live-filters{gap:8px;align-items:flex-end;flex-wrap:wrap}
+body.live-admin .collected-toolbar .live-field{min-width:112px;flex:0 1 128px}
+body.live-admin .collected-toolbar .live-field.wide{flex:1 1 170px}
+body.live-admin .collected-toolbar .live-field label{margin-bottom:4px}
+body.live-admin .collected-toolbar .live-scope{margin-top:8px}
+body.live-admin .collected-coverage-table{width:100%;overflow-x:auto}
+body.live-admin .collected-coverage-table>table{width:100%;min-width:1370px;border-collapse:collapse;table-layout:auto}
+body.live-admin .collected-coverage-table th,body.live-admin .collected-coverage-table td{padding:7px 8px;font-size:11px;line-height:1.5;vertical-align:middle;white-space:nowrap}
+body.live-admin .collected-coverage-table th:nth-child(n+7):nth-child(-n+9),body.live-admin .collected-coverage-table td:nth-child(n+7):nth-child(-n+9){text-align:right}
+body.live-admin .collected-coverage-table .collected-missing{max-width:210px;white-space:normal;color:#b84639}
+body.live-admin .collected-coverage-table .collected-status-cell{max-width:270px;min-width:150px;white-space:normal}
+body.live-admin .collected-state{display:inline-block;margin:1px 4px 1px 0;padding:1px 5px;border-radius:3px;background:#f2f5fa;font-size:10px}
+body.live-admin .collected-state.bad{background:#fff0ee;color:#a73829}
+body.live-admin .collected-state.warn{background:#fff8e6;color:#856011}
+body.live-admin .collected-state.good{background:#edf8f3;color:#26745c}
+body.live-admin .collected-coverage-table .collected-expanded>td{padding:8px;background:#f6f8fe}
+body.live-admin .collected-days{max-height:400px;overflow:auto}
+body.live-admin .collected-days table{width:100%;min-width:1040px;border-collapse:collapse}
+body.live-admin .collected-days th{position:sticky;top:0;background:#edf2fc;z-index:1}
+body.live-admin .collected-days td:nth-child(5){white-space:normal;min-width:240px;max-width:480px}
+body.live-admin .collected-empty{text-align:center;padding:24px!important}
+body.live-admin .collected-coverage-table td:last-child>.link+ .link{margin-left:8px}

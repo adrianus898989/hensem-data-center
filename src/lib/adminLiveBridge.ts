@@ -5,12 +5,25 @@ export const LIVE_REQUEST = "hensem-admin-live-request";
 export const LIVE_RESPONSE = "hensem-admin-live-response";
 export const LIVE_CANCEL = "hensem-admin-live-cancel";
 export const LIVE_REQUEST_TIMEOUT_MS = 90000;
-const actions = ["catalog","syncHealth","reportSummary","collectedData","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
-const keys = new Set(["feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus"]);
+const actions = ["catalog","syncHealth","intakeCoverage","reportSummary","collectedData","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
+const keys = new Set(["feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus"]);
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
   if(Object.keys(p).some(k=>!keys.has(k))||!actions.includes(String(p.action)))throw Error("查询方法无效");
+  if(p.action!=="intakeCoverage"&&p.feedIds!==undefined)throw Error("逐日覆盖来源仅用于平台数据接入");
+  if(p.action==="intakeCoverage"){
+    const operation=p.operation===undefined?"catalog":p.operation,allowed=operation==="catalog"?["action","operation"]:["action","operation","feedIds","startAt","endAt"];
+    if(typeof operation!=="string"||!["catalog","rows"].includes(operation)||Object.keys(p).some(k=>!allowed.includes(k)))throw Error("逐日覆盖参数无效");
+    if(operation==="rows"){
+      if(!Array.isArray(p.feedIds)||p.feedIds.length<1||p.feedIds.length>8||p.feedIds.some(x=>typeof x!=="string"||!/^[a-f0-9]{32}$/.test(x))||new Set(p.feedIds).size!==p.feedIds.length)throw Error("每次最多检查8个有效数据来源");
+      const day=(x:unknown)=>typeof x==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(x)&&Number.isFinite(Date.parse(x+"T00:00:00Z"))&&new Date(x+"T00:00:00Z").toISOString().slice(0,10)===x;
+      if(!day(p.startAt)||!day(p.endAt)||String(p.startAt)<"2000-01-01")throw Error("逐日覆盖日期无效");
+      const days=(Date.parse(String(p.endAt))-Date.parse(String(p.startAt)))/86400000;
+      if(days<0||days>92)throw Error("逐日覆盖每次最多查询93天");
+    }
+    return p;
+  }
   if(p.action!=="reportSummary"&&p.feeds!==undefined)throw Error("日报来源仅用于日报汇总");
   if(p.action!=="collectedData"&&(p.dataset!==undefined||p.sourceKind!==undefined))throw Error("采集来源仅用于平台数据接入页面");
   if(p.action!=="depositIssues"&&["dateMode","match","followupStatus"].some(k=>p[k]!==undefined))throw Error("核对筛选仅用于存款未到账页面");
@@ -203,7 +216,7 @@ export function isAdminLiveMessage(event:MessageEvent,source:Window|null|undefin
  return isAdminLiveEnvelope(event,source,channel)&&event.data.type===LIVE_REQUEST;
 }
 function adminLiveTimeoutMessage(action:unknown):string {
- return action==='syncHealth'?'同步检查超时，请稍后重试；不能据此判断平台没有数据':action==='withdrawReasons'?'该平台当日原因读取超时，请点击重试':['aggregate','collectedData','reportSummary'].includes(String(action))?'读取超时，不代表没有数据；请重试':'读取超时，请缩短日期或选择单个平台后重试';
+ return ['syncHealth','intakeCoverage'].includes(String(action))?'同步检查超时，请稍后重试；不能据此判断平台没有数据':action==='withdrawReasons'?'该平台当日原因读取超时，请点击重试':['aggregate','collectedData','reportSummary'].includes(String(action))?'读取超时，不代表没有数据；请重试':'读取超时，请缩短日期或选择单个平台后重试';
 }
 export async function adminLiveRequest(session:DashboardSession,input:unknown,signal?:AbortSignal):Promise<unknown>{
  signal?.throwIfAborted();
@@ -212,7 +225,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if(current.user.id!==session.user.id)throw Error("当前登录账号已改变");
  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,""),url=new URL(base);
  if(url.protocol!=="https:"||url.origin!==base)throw Error("后台地址配置无效");
- const specialRpc:Record<string,string>={reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
+ const specialRpc:Record<string,string>={intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
  const rpc=request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
  const response=await fetch(base+"/rest/v1/rpc/"+rpc,{method:"POST",body:JSON.stringify({p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
  if(!response.ok){let code="";try{const body=await response.json();code=String(body.message||"")}catch{}
