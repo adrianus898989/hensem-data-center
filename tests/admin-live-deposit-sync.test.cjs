@@ -51,7 +51,7 @@ function harness({failUpsert=false,missingTab=false,failEntries=false,failArchiv
  const fetch=async(input,init)=>{const url=new URL(input);calls.push({url,init});assert.equal(init.redirect,'error');assert(init.signal);
   if(url.origin==='https://oauth2.googleapis.com')return Response.json({access_token:'synthetic-google-token'});
   if(url.origin==='https://sheets.googleapis.com'){
-   if(url.pathname.includes('synthetic_source_'))return Response.json({values:[headers,row]});
+   if(url.pathname.includes('synthetic_source_'))return Response.json({valueRanges:[{values:[headers,row]},{values:[[],['LKgoPay']]},{values:[[],['已确认']]}]});
    if(url.pathname.endsWith('/values:batchGet'))return Response.json({valueRanges:url.searchParams.getAll('ranges').map(range=>({values:range.startsWith("'51GAME'")?[entryHeaders,entryRow]:[entryHeaders]}))});
    return Response.json({sheets:[...ENTRY_TABS].slice(missingTab?1:0).map((title,i)=>({properties:{title,sheetId:i}})).concat([{properties:{title:'Sheet21',sheetId:99,hidden:true}}])});
   }
@@ -66,7 +66,7 @@ function harness({failUpsert=false,missingTab=false,failEntries=false,failArchiv
 }
 test('authorized refresh reads both complete sources and only mirrors their safe columns',async()=>{
  const h=harness(),response=await h.call();assert.equal(response.status,200);const body=await response.json();assert.equal(body.rowsWritten,1);assert.equal(body.entryRows,1);assert.equal(body.entryTabs,16);
- const google=h.calls.find(x=>x.url.origin==='https://sheets.googleapis.com').url;assert.equal(google.searchParams.get('valueRenderOption'),'FORMATTED_VALUE');assert(decodeURIComponent(google.pathname).endsWith('/UPI核对!A1:N40001'));
+ const google=h.calls.find(x=>x.url.origin==='https://sheets.googleapis.com').url;assert.equal(google.searchParams.get('valueRenderOption'),'FORMATTED_VALUE');assert.deepEqual(google.searchParams.getAll('ranges'),['UPI核对!A1:N40001','UPI核对!AB1:AB40001','UPI核对!AS1:AS40001']);assert.equal(h.writes[0][0].canonical_provider,'LKgoPay');assert.equal(h.writes[0][0].confirmation_status,'已确认');
  assert.equal(h.writes[0][0].record_date,'2026-09-23');assert.equal(h.writes[0][0].status,'已入款');assert.equal(h.writes[1][0].followup_status,'Success To Other Platform');assert.equal(h.writes[1][0].utr,'00001234');
  const archives=h.calls.filter(x=>x.init.method==='PATCH');assert.equal(archives.length,17);assert.equal(archives[0].url.searchParams.get('source_sheet'),'eq.synthetic_source_12345');assert.equal(archives[0].url.searchParams.get('source_tab'),'eq.UPI核对');assert.equal(archives[1].url.searchParams.get('source_sheet'),'eq.synthetic_entries_12345');
  assert.deepEqual(archives.slice(1).map(x=>x.url.searchParams.get('source_tab')).sort(),[...ENTRY_TABS].map(x=>'eq.'+x).sort());

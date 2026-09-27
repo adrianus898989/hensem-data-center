@@ -110,7 +110,7 @@ function textValue(value: unknown, max = 200): string | null {
 // Validation for a new portal address must never erase a historical cell.
 function upiValue(value: unknown): string | null { return textValue(value, 500); }
 function rowValue(row: unknown[], headers: Map<string, number>, name: string): unknown { const index = headers.get(name); return index === undefined ? null : row[index]; }
-function rowsFromValues(values: unknown[][], sourceSheet: string, collectedAt: string): Record<string, unknown>[] {
+function rowsFromValues(values: unknown[][], sourceSheet: string, collectedAt: string, derived: unknown[][] = []): Record<string, unknown>[] {
   if (!Array.isArray(values) || !values.length || !Array.isArray(values[0])) throw new SyncError("source_rows_missing", 502);
   const headers = new Map<string, number>(); (values[0] as unknown[]).forEach((value, index) => { const key = String(value ?? "").trim(); if (key && !headers.has(key)) headers.set(key, index); });
   for (const required of ["盘口", "订单号", "金额", "三方", "状态", "未入款天数", "日期"]) if (!headers.has(required)) throw new SyncError("source_headers_missing", 502);
@@ -130,6 +130,7 @@ function rowsFromValues(values: unknown[][], sourceSheet: string, collectedAt: s
       provider_reply: textValue(rowValue(row, headers, "三方回复"), 4000),
       utr_match: textValue(rowValue(row, headers, "UTR是否匹配")), kyc_correct: textValue(rowValue(row, headers, "KYC正确")),
       match_status: textValue(rowValue(row, headers, "对上")), status: textValue(rowValue(row, headers, "状态")),
+      canonical_provider: textValue(derived[index]?.[0]), confirmation_status: textValue(derived[index]?.[1]),
       unreceived_days: numberValue(rowValue(row, headers, "未入款天数")), record_date: dateValue(rowValue(row, headers, "日期")),
       source_updated_at: collectedAt, updated_at: collectedAt, stale_at: null,
     });
@@ -209,11 +210,18 @@ export function createDepositIssueSyncHandler(runtime: Runtime) {
       const assertionValue = await assertion(settings, runtime);
       const token = await requestJson(runtime, "https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: assertionValue }).toString() }, 64 * 1024);
       if (typeof token?.access_token !== "string" || !token.access_token) throw new SyncError("google_source_unavailable");
-      const range = encodeURIComponent(`${SHEET_TAB}!A1:N${MAX_ROWS + 1}`);
-      const sourceUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(settings.sourceId)}/values/${range}?valueRenderOption=FORMATTED_VALUE&majorDimension=ROWS`;
-      const source = await requestJson(runtime, sourceUrl, { method: "GET", headers: { Authorization: "Bearer " + token.access_token, Accept: "application/json" } }, MAX_RESPONSE_BYTES);
+      // Read the result rows and two derived business columns in one bounded snapshot.
+      // AV:BC (including member IDs) is deliberately outside this projection.
+      const ranges = [`${SHEET_TAB}!A1:N${MAX_ROWS + 1}`, `${SHEET_TAB}!AB1:AB${MAX_ROWS + 1}`, `${SHEET_TAB}!AS1:AS${MAX_ROWS + 1}`];
+      const params = new URLSearchParams({valueRenderOption:"FORMATTED_VALUE",majorDimension:"ROWS"});
+      for (const range of ranges) params.append("ranges",range);
+      const sourceUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(settings.sourceId)}/values:batchGet?${params}`;
+      const batch = await requestJson(runtime, sourceUrl, { method: "GET", headers: { Authorization: "Bearer " + token.access_token, Accept: "application/json" } }, MAX_RESPONSE_BYTES);
+      if (!Array.isArray(batch?.valueRanges) || batch.valueRanges.length !== 3) throw new SyncError("source_columns_incomplete",502);
+      const source = batch.valueRanges[0];
       if (!Array.isArray(source?.values) || source.values.length > MAX_ROWS) throw new SyncError("source_row_limit_reached", 413);
-      const rows = rowsFromValues(source.values, settings.sourceId, collectedAt);
+      const derived = source.values.map((_: unknown,index: number) => [batch.valueRanges[1]?.values?.[index]?.[0],batch.valueRanges[2]?.values?.[index]?.[0]]);
+      const rows = rowsFromValues(source.values, settings.sourceId, collectedAt, derived);
       const entries = await readEntrySheets(settings, runtime, { Authorization: "Bearer " + token.access_token, Accept: "application/json" }, collectedAt);
       const targets = [{ table: "admin_deposit_issue_rows", rows, source: settings.sourceId, tabs: [SHEET_TAB] },
         { table: "admin_deposit_followup_rows", rows: entries.rows, source: settings.entrySourceId, tabs: entries.tabs }];

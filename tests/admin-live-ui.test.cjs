@@ -1,7 +1,7 @@
 /* Synthetic-only VM tests for the production UI adapter. No credentials/network/real orders. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8');
-const layoutSources=['live-analysis-drilldown.js','live-reference-layout.js','live-pages-reference.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js', 'live-withdraw-pages.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
+const layoutSources=['live-analysis-drilldown.js','live-reference-layout.js','live-pages-reference.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js', 'live-withdraw-pages.js','live-workorder-operations.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
 const comparisonSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-comparison.js'),'utf8');
 test('overview merges same providers across sources while preserving stable platform identities and other source reports',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222',source:'NEW_AR'},p3={...P,id:'33333333-3333-4333-8333-333333333333'};
@@ -67,11 +67,11 @@ const plain=html=>String(html).replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').tri
 function renderedTables(html){return [...html.matchAll(/<table\b[^>]*>([^]*?)<\/table>/g)].map(match=>({html:match[0],headers:[...match[1].matchAll(/<th\b[^>]*>([^]*?)<\/th>/g)].map(x=>plain(x[1].replace(/<span\b[^>]*aria-hidden="true"[^>]*>[^]*?<\/span>/g,''))),rows:[...(match[1].match(/<tbody\b[^>]*>([^]*?)<\/tbody>/)?.[1]||'').matchAll(/<tr\b[^>]*>([^]*?)<\/tr>/g)].map(row=>[...row[1].matchAll(/<td\b[^>]*>([^]*?)<\/td>/g)].map(cell=>cell[1]))}));}
 
 
-const supervisorRoutes=[['workorder_reconciliation','漏登与状态核对'],['workorder_workload','员工工作量'],['workorder_operation_logs','操作日志'],['workorder_permissions','权限与预警']];
+const supervisorRoutes=[['workorder_permissions','权限与预警']];
 
-test('all six workorder entries share one menu while supervisor pages never reuse production results',async()=>{
+test('all workorder entries share one menu while supervisor pages never reuse production results',async()=>{
  const h=await ready(),groups=h.c.navGroupsV3,merchant=groups.findIndex(g=>g[0]==='merchant'),work=groups[merchant+1];
- assert.equal(work[0],'workorder');assert.equal(work[2],'工单运营中心');assert.deepEqual(Array.from(work[3]),['workorders','deposit_tracking',...supervisorRoutes.map(([id])=>id)]);
+ assert.equal(work[0],'workorder');assert.equal(work[2],'工单运营中心');assert.deepEqual(Array.from(work[3]),['workorders','deposit_tracking','deposit_statistics','workorder_reconciliation','workorder_workload','workorder_operation_logs',...supervisorRoutes.map(([id])=>id)]);
  const before=h.calls.length;h.L.results=structuredClone(h.L.results);h.L.results[0].platform.name='UNRELATED_PRODUCTION_PLATFORM';h.L.dirty=true;
  for(const [id,label]of supervisorRoutes){
   h.c.setPage(id);await settle();assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.c.location.hash,id);assert.equal(h.c.groupForV3(id)[0],'workorder');assert.equal(h.c.pages.filter(p=>p[0]===id).length,1);
@@ -86,7 +86,7 @@ test('direct supervisor routes and bookmarks defer all requests until an existin
  for(const [page]of supervisorRoutes){
   for(const options of [{page,reports:true},{hash:'#'+page,reports:true}]){
    const h=await ready(options);assert.equal(h.c.state.page,page);assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.calls.length,0);assert.match(h.html(),/员工测试站尚未接通/);
-   h.c.setPage('workorders');await settle();assert.equal(h.c.state.page,'workorders');assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.calls.filter(q=>q.action==='catalog').length,1);assert(h.calls.some(q=>q.action==='workorders'));assert(!h.calls.some(q=>q.action==='aggregate'));
+   h.c.setPage('workorders');await settle();assert.equal(h.c.state.page,'workorders');assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.calls.filter(q=>q.action==='catalog').length,1);assert(h.calls.some(q=>q.action==='workorderRecords'));assert(!h.calls.some(q=>q.action==='aggregate'));
    h.c.setPage('deposit_tracking');await settle();assert.equal(h.c.state.page,'deposit_tracking');assert(h.calls.some(q=>q.action==='depositIssues'));assert.match(h.nodes.get('crumbTitle').textContent,/工单运营中心 \/ 存款未到账-跟进记录/);
   }
  }
@@ -94,7 +94,7 @@ test('direct supervisor routes and bookmarks defer all requests until an existin
 
 test('a pending production catalogue cannot start report reads after navigation to a supervisor page',async()=>{
  const pending=deferred(),h=harness({reports:true,handler:q=>q.action==='catalog'?pending.promise:aggregate()});
- assert.deepEqual(h.calls.map(q=>q.action),['catalog']);h.c.setPage('workorder_workload');pending.resolve({platforms:[P]});await settle();
+ assert.deepEqual(h.calls.map(q=>q.action),['catalog']);h.c.setPage('workorder_permissions');pending.resolve({platforms:[P]});await settle();
  assert.deepEqual(h.calls.map(q=>q.action),['catalog']);assert.equal(h.L.country,P.country);assert.match(h.html(),/员工测试站尚未接通/);
  h.setHandler(q=>q.action==='rates'?{rows:[],total:0}:q.action==='reportSummary'?{rows:[],summary:{}}:aggregate());h.c.setPage('providers');await settle();
  assert.equal(h.c.state.page,'providers');assert(h.calls.some(q=>q.action==='aggregate'&&q.direction==='charge'));assert.doesNotMatch(h.html(),/员工测试站尚未接通/);
@@ -106,7 +106,7 @@ test('returning from supervisor initializes the default report-only country',asy
   {dataset:'volume',system:'PANDA',name:'REPORT_PK',country:'巴基斯坦',rawCountry:'PK',rawPlatform:'REPORT_PK',directions:['charge'],records:1,available:true,currency:'PKR',timezone:'Asia/Karachi',provenance:{kind:'google_sheets'}}
  ];
  const h=harness({reports:true,handler:q=>q.action==='catalog'?pending.promise:q.action==='collectedData'?{rows}:q.action==='reportSummary'?{feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'not_received',groups:[]}))}:q.action==='rates'?{rows:[],total:0}:aggregate()});
- h.c.setPage('workorder_workload');pending.resolve({platforms:[]});await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
+ h.c.setPage('workorder_permissions');pending.resolve({platforms:[]});await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
  h.c.setPage('providers');await settle();assert.equal(h.L.country,'印度');assert.equal(h.calls.filter(q=>q.action==='catalog').length,1,'reuse the already authorized native directory');
  const reports=h.calls.filter(q=>q.action==='reportSummary');assert(reports.length>0);for(const report of reports)assert.deepEqual(report.feeds.map(f=>f.country),['IN']);assert.match(h.html(),/REPORT_IN/);assert.doesNotMatch(h.html(),/REPORT_PK/);
 });
@@ -303,7 +303,7 @@ test('editing filters invalidates outstanding aggregate results and leaves expli
 });
 
 test('switching to the independent deposit page prevents old aggregate progress/results overwrites',async()=>{
- const p2={...P,id:'22222222-2222-4222-8222-222222222222'},h=await ready({platforms:[P,p2]}),first=deferred(),second=deferred();let n=0;setScope(h,{platform:'all'});h.setHandler(q=>q.action==='depositIssues'?Promise.resolve({rows:[],total:0,summary:{},facets:{providers:[]}}):(++n===1?first.promise:second.promise));const pending=h.c.liveQuery();h.c.setPage('deposit_tracking');const mark=h.writes.length;first.resolve(aggregate(P));await settle();assert.match(h.html(),/核对结果/);assert.doesNotMatch(h.html(),/INDEPENDENT_SNAPSHOT/);second.resolve(aggregate(p2));await pending;assert(h.writes.slice(mark).filter(x=>x.id==='page').every(x=>!x.html.includes('正式数据读取')));
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222'},h=await ready({platforms:[P,p2]}),first=deferred(),second=deferred();let n=0;setScope(h,{platform:'all'});h.setHandler(q=>q.action==='depositIssues'?Promise.resolve({rows:[],total:0,summary:{},facets:{providers:[]}}):(++n===1?first.promise:second.promise));const pending=h.c.liveQuery();h.c.setPage('deposit_tracking');const mark=h.writes.length;first.resolve(aggregate(P));await settle();assert.match(h.html(),/员工跟进明细/);assert.doesNotMatch(h.html(),/INDEPENDENT_SNAPSHOT/);second.resolve(aggregate(p2));await pending;assert(h.writes.slice(mark).filter(x=>x.id==='page').every(x=>!x.html.includes('正式数据读取')));
 });
 
 test('old detail responses cannot reappear after a new aggregate scope begins',async()=>{
@@ -571,7 +571,7 @@ test('confirmed India UpiPay row 4 drives both labels and estimates without fall
  assert.equal(at('匹配费率'),'5.20%');assert.equal(at('估算手续费'),'52.00');assert.doesNotMatch(t.html,/多档费率/);
  h.c.providerSummaryRate(0);assert.match(h.drawers.at(-1).html,/已确认.*第 4 行/);assert.match(h.drawers.at(-1).html,/印度线下 \/ 4/);assert.match(h.drawers.at(-1).html,/印度线下 \/ 47/);
  r.groups.provider[0].direction='withdraw';h.c.state.page='provider_payout';h.c.render();t=renderedTables(h.html()).find(t=>t.headers[0]==='统一三方');row=t.rows[0].map(plain);assert.equal(at('匹配费率'),'3.10% / 单笔 7');assert.equal(at('估算手续费'),'101.00');
- h.L.feeLookupRows=[inactive];h.c.render();t=renderedTables(h.html()).find(t=>t.headers[0]==='统一三方');row=t.rows[0].map(plain);assert.equal(at('匹配费率'),'未匹配');assert.equal(at('估算手续费'),'—');
+ h.L.feeLookupRows=[inactive];h.c.render();t=renderedTables(h.html()).find(t=>t.headers[0]==='统一三方');row=t.rows[0].map(plain);assert.equal(at('匹配费率'),'未匹配');assert.equal(at('估算手续费'),'—未匹配');assert.match(t.html,/当前方向未找到可用费率/);
  const api=h.c.HensemProviderSummary,order={provider:'UpiPay',direction:'charge',platform:P.name,success_amount:1000,success_count:10};
  assert.equal(api.estimate(order,[{...confirmed,country:'巴西',collectFee:'8%'}],'巴西'),80);
  assert.equal(api.estimate({...order,provider:'IndependentPay'},[{...confirmed,provider:'IndependentPay',collectFee:'3%'},{...confirmed,provider:'IndependentPay',scopeType:'platform',platform:P.name,collectFee:'',collectSingleFee:''}],'印度'),30);
@@ -615,14 +615,13 @@ test('canonical aliases combine collection orders, issue-only names and current 
 });
 test('workorder page restores filters and resets the inherited payout or collection direction',async()=>{
  const h=await ready({ancillaryHandler:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='workorders'?{total:0,rows:[],byDirection:{charge:{submittedCount:3,submittedAmount:300,successCount:1,successAmount:100,notReceivedCount:2,notReceivedAmount:200},withdraw:{submittedCount:5,submittedAmount:500,successCount:2,successAmount:200,notReceivedCount:3,notReceivedAmount:300}},summary:{}}:q.action==='providerOptions'?{providers:[]}:q.action==='rates'?{rows:[],total:0}:aggregate()});
- h.L.direction='charge';h.c.setPage('workorders');await settle();assert.equal(h.L.direction,'all');assert.equal(h.calls.filter(q=>q.action==='workorders').at(-1).direction,'all');assert.equal(h.nodes.get('liveFilters').style.display,'');assert.match(h.html(),/存款未到账|取款未到账/);assert.match(h.nodes.get('nav').innerHTML,/工单未到账/);
+ h.L.direction='charge';h.c.setPage('workorders');await settle();h.c.workorderOperationsMode('daily');await settle();assert.equal(h.L.direction,'all');assert.equal(h.calls.filter(q=>q.action==='workorders').at(-1).direction,'all');assert.equal(h.nodes.get('liveFilters').style.display,'');assert.match(h.html(),/存款未到账|取款未到账/);assert.match(h.nodes.get('nav').innerHTML,/工单未到账/);
 });
-test('deposit requests preserve the sheet day and hide stale totals when filters change',async()=>{
- const h=await ready();h.setHandler(q=>q.action==='depositIssues'?{rows:[{recordDate:'2026-09-23',platform:'Synthetic platform',provider:'Synthetic Provider',orderNumber:'SYNTHETIC-ORDER',amount:900,status:'已入款',unreceivedDays:90,providerReply:'成功 <script>',utrMatch:'一致',kycCorrect:'正确'}],total:1,summary:{count:1,amount:900,unreceivedAmount:0,unreceivedCount:0,receivedCount:1,maxUnreceivedDays:0}}:{rows:[],total:0});
- h.L.from='2026-09-23T00:00:00';h.L.to='2026-09-23T23:59:59';h.c.setPage('deposit_tracking');await settle();const q=h.calls.at(-1);assert.equal(q.startAt,'2026-09-23T00:00:00.000Z');assert.equal(q.endAt,'2026-09-23T23:59:59.000Z');
- h.c.depositIssuesSource('results');await settle();h.c.depositIssuesSection('details');const table=renderedTables(h.html()).find(t=>t.headers[0]==='原表日期');assert(table);const unreceivedDaysColumn=table.headers.indexOf('未入款天数');assert(unreceivedDaysColumn>=0);assert.equal(plain(table.rows[0][unreceivedDaysColumn]),'—','a sheet received marker hides its original unreceived-day count');assert.equal(plain(table.rows[0][table.headers.indexOf('原表日期')]),'2026-09-23','the sheet record date remains separate from the RC-derived receipt date');assert.match(h.html(),/成功 &lt;script&gt;/);assert.doesNotMatch(h.html(),/<script>/);assert.doesNotMatch(h.html(),/查看回复|<details/);assert.equal(q.dateMode,'all');
- h.c.depositIssuesSource('entries');await settle();h.c.depositIssuesSection('details');const entriesTable=renderedTables(h.html()).find(t=>t.headers.includes('距今天数'));assert(entriesTable);assert.equal(plain(entriesTable.rows[0][entriesTable.headers.indexOf('距今天数')]),'—','an invalid RC order number has no derived age; do not reuse the original sheet day count');
- h.c.depositIssuesDate('from','2026-09-22');assert.match(h.html(),/点击查询/);assert.doesNotMatch(h.html(),/SYNTHETIC-ORDER/);await h.c.depositIssuesLoad();assert.equal(h.calls.at(-1).startAt,'2026-09-22T00:00:00.000Z');
+test('deposit tracking and statistics are separate pages and receipt dates never reuse source day counts',async()=>{
+ const h=await ready();h.setHandler(q=>['depositIssues','depositStatistics'].includes(q.action)?{rows:[{platform:'Synthetic platform',provider:'Synthetic Provider',orderNumber:'SYNTHETIC-ORDER',amount:900,status:'已入款',unreceivedDays:90,providerReply:'成功 <script>',utrMatch:'一致',kycCorrect:'正确'}],total:1,summary:{count:1,amount:900,unreceivedAmount:0,unreceivedCount:0,receivedCount:1}}:{rows:[],total:0});
+ h.L.from='2026-09-23T00:00:00';h.L.to='2026-09-23T23:59:59';h.c.setPage('deposit_tracking');await settle();const q=h.calls.at(-1);assert.equal(q.action,'depositIssues');assert.equal(q.view,'entries');assert.equal(q.dateMode,'all');assert.match(h.html(),/员工跟进明细/);assert.doesNotMatch(h.html(),/表格核对结果|onclick="depositIssuesSource/);
+ h.c.setPage('deposit_statistics');await settle();h.c.depositIssuesSection('details');await settle();assert.equal(h.calls.at(-1).action,'depositStatistics');assert.equal(h.calls.at(-1).section,'details');const stats=renderedTables(h.html()).find(t=>t.headers[0]==='凭证日期');assert(stats);assert.equal(plain(stats.rows[0][stats.headers.indexOf('距今天数')]),'—');assert.match(h.html(),/成功 &lt;script&gt;/);assert.doesNotMatch(h.html(),/<script>/);
+ h.c.setPage('deposit_tracking');await settle();assert.match(h.html(),/员工跟进明细/);h.c.depositIssuesDate('from','2026-09-22');assert.match(h.html(),/SYNTHETIC-ORDER/,'old result stays visible until an explicit query');await h.c.depositIssuesLoad();assert.equal(h.calls.at(-1).startAt,'2026-09-22T00:00:00.000Z');
 });
 test('revisiting a reason tab reuses its bounded cache, while refresh invalidates it',async()=>{
  const h=await ready({page:'auto_withdraw',handler:withdrawalHandler});h.c.withdrawReasons(0);await settle();h.c.withdrawReasonKind('categories');await settle();const n=h.calls.filter(q=>q.action==='withdrawReasons').length;
@@ -630,12 +629,11 @@ test('revisiting a reason tab reuses its bounded cache, while refresh invalidate
  await h.c.withdrawLoad(true);h.c.withdrawReasons(0);await settle();assert.equal(h.calls.filter(q=>q.action==='withdrawReasons').length,n+1);
 });
 
-test('deposit summaries cover the filtered dataset and source switches carry searchable replies without mixing totals',async()=>{
- const h=await ready();h.setHandler(q=>q.action==='depositIssues'?{view:q.view,rows:[],total:20,summary:{count:20,unreceivedCount:12,unreceivedAmount:900,receivedCount:8,linkedCount:17,unlinkedCount:2,reviewCount:1},facets:{platforms:['Synthetic platform'],providers:['UmoneyPay'],followupStatuses:['need to provide pdf/video']},providerSummary:[{provider:'UmoneyPay',matchStatus:'对得上',count:20,unreceivedCount:12,unreceivedAmount:900,maxDays:9,receivedCount:8}],dailySummary:[{date:'2026-09-23',count:20,matchedCount:15,unmatchedCount:5,receivedCount:8,unreceivedCount:12}],platformSummary:[{platform:'Synthetic platform',count:20,linkedCount:17,unlinkedCount:3}],statusSummary:[{status:'need to provide pdf/video',count:12,amount:900}]}:{rows:[]});
- h.c.setPage('deposit_tracking');await settle();h.c.depositIssuesSource('results');await settle();assert.match(h.html(),/三方未入款统计/);assert.match(h.html(),/每日核对统计/);
- h.c.depositIssuesDrill('providers',0);await settle();assert.equal(h.calls.at(-1).provider,'UmoneyPay');assert.equal(h.calls.at(-1).match,'matched');assert.equal(h.L.depositIssuesSection,'details');
- h.c.depositIssuesSet('query','success to other');h.c.depositIssuesSource('entries');await settle();assert.equal(h.calls.at(-1).view,'entries');assert.equal(h.calls.at(-1).query,'success to other');assert.equal(h.calls.at(-1).status,undefined);assert.equal(h.calls.at(-1).match,undefined);assert.match(h.html(),/打开员工原表/);assert.equal(h.L.depositIssuesSection,'details');h.c.depositIssuesSection('summary');assert.match(h.html(),/各平台录入进度/);assert.match(h.html(),/跟进状态分布/);
- h.c.depositIssuesDrill('statuses',0);await settle();assert.equal(h.calls.at(-1).followupStatus,'need to provide pdf/video');
+test('statistics tabs derive from one source while tracking never requests result summaries',async()=>{
+ const h=await ready();h.setHandler(q=>['depositIssues','depositStatistics'].includes(q.action)?{rows:[],total:20,summary:{count:20},facets:{platforms:['Synthetic platform'],providers:['UmoneyPay']},providerSummary:[{provider:'UmoneyPay',matchStatus:'对得上',count:20}],dailySummary:[{date:'2026-09-23',count:20}]}:{rows:[]});
+ h.c.setPage('deposit_statistics');await settle();assert.equal(h.calls.at(-1).action,'depositStatistics');assert.match(h.html(),/三方查看/);assert.match(h.html(),/每日汇总/);assert.match(h.html(),/不重复累计/);
+ h.c.depositIssuesDrill('providers',0);await settle();assert.equal(h.calls.at(-1).provider,'UmoneyPay');assert.equal(h.calls.at(-1).match,'matched');assert.equal(h.calls.at(-1).section,'details');
+ h.c.setPage('deposit_tracking');await settle();assert.equal(h.calls.at(-1).action,'depositIssues');assert.equal(h.calls.at(-1).view,'entries');assert.equal(h.calls.at(-1).match,undefined);assert.match(h.html(),/员工跟进明细/);assert.doesNotMatch(h.html(),/三方查看|每日汇总/);
 });
 
 test('collected platforms expose report-only teams, retain independent filters and read one source on demand',async()=>{
@@ -1045,7 +1043,7 @@ test('LG intake order links use the exact authorized native platform while retai
 
 test('LG and GAME66-only workorder scopes clear stale results without querying the whole country',async()=>{
  for(const source of ['lg','game66']){
-  const p={...P,id:source+'-native',name:source.toUpperCase()+' ONLY',source},h=await ready({page:'workorders',platforms:[p]});
+  const p={...P,id:source+'-native',name:source.toUpperCase()+' ONLY',source},h=await ready({page:'workorders',platforms:[p]});h.c.workorderOperationsMode('daily');await settle();
   assert.equal(h.calls.filter(q=>q.action==='workorders').length,0,source+' never sends empty platforms to the workorder RPC');
   h.L.workorders={rows:[{platform:'OTHER SOURCE PRIVATE ROW'}],summary:{submittedAmount:999999,submittedCount:999},byProvider:[{provider:'OTHER SOURCE PRIVATE PAY',submittedCount:999}]};
   await h.c.liveQuery();assert.equal(h.L.workorders,null);assert.equal(h.L.workordersLoading,false);assert.match(h.html(),/所选平台来源尚未接入工单数据/);assert.doesNotMatch(h.html(),/OTHER SOURCE PRIVATE|999,999/);assert.equal(h.calls.filter(q=>q.action==='workorders').length,0);
@@ -1055,7 +1053,7 @@ test('LG and GAME66-only workorder scopes clear stale results without querying t
 
 test('mixed workorder scopes query only selected AR and NEW_AR source names and retain unsupported-source evidence',async()=>{
  const ar={...P,id:'ar-native',name:'AR DISPLAY',sourceName:'AR RAW',source:'AR'},newar={...P,id:'newar-native',name:'NEW DISPLAY',sourceName:'NEW RAW',source:'NEW_AR'},lg={...P,id:'lg-native',name:'LG ONLY',source:'lg'},game={...P,id:'game-native',name:'GAME ONLY',source:'game66'};
- const h=await ready({page:'workorders',platforms:[ar,newar,lg,game]});let q=h.calls.filter(q=>q.action==='workorders').at(-1);assert(q);assert.deepEqual(q.platforms.sort(),['AR DISPLAY','AR RAW','NEW DISPLAY','NEW RAW'].sort());assert.deepEqual(Array.from(h.L.workorders.unsupportedPlatforms),['LG ONLY','GAME ONLY']);
+ const h=await ready({page:'workorders',platforms:[ar,newar,lg,game]});h.c.workorderOperationsMode('daily');await settle();let q=h.calls.filter(q=>q.action==='workorders').at(-1);assert(q);assert.deepEqual(q.platforms.sort(),['AR DISPLAY','AR RAW','NEW DISPLAY','NEW RAW'].sort());assert.deepEqual(Array.from(h.L.workorders.unsupportedPlatforms),['LG ONLY','GAME ONLY']);
  h.c.liveSet('platform',lg.id);await h.c.liveQuery();assert.equal(h.L.workorders,null);assert.match(h.html(),/尚未接入工单/);assert.equal(h.calls.filter(q=>q.action==='workorders').length,1,'unsupported scope cannot fall back to the previously selected AR platform');
  h.c.liveSet('platform',newar.id);await h.c.liveQuery();q=h.calls.filter(q=>q.action==='workorders').at(-1);assert.deepEqual(q.platforms.sort(),['NEW DISPLAY','NEW RAW'].sort());assert.equal(h.L.workordersError,'');
 });
@@ -1070,3 +1068,13 @@ test('backend system filter excludes report and configuration transport labels w
 
 // Local-only coverage receipt fixture for intake integration; no live database reads.
 function intakeCoverageFixtureReply(q,feeds){if(q.operation==='catalog')return {version:1,complete:true,feeds};return {version:1,complete:true,checkedAt:'2026-09-26T01:00:00Z',feedIds:q.feedIds,startAt:q.startAt,endAt:q.endAt,rows:q.feedIds.flatMap(feedId=>{const rows=[];for(let t=Date.parse(q.startAt);t<=Date.parse(q.endAt);t+=86400000)rows.push({feedId,date:new Date(t).toISOString().slice(0,10),status:'received',received:true,complete:false,zeroConfirmed:false,expected:true});return rows})}}
+
+
+test('confirmed RAJA catalog alias queries the authorized source once and displays RAJALOTTERY without an empty duplicate',async()=>{
+ const raw={...P,id:'11111111-1111-4111-8111-111111111111',name:'RAJA',sourceName:'RAJA',team:'M8'},alias={...raw,id:'22222222-2222-4222-8222-222222222222',name:'RAJALOTTERY',sourceName:'RAJALOTTERY'},platforms=[alias,raw];
+ const h=await ready({reports:true,platforms,handler:async q=>q.action==='catalog'?{platforms}:q.action==='collectedData'?{rows:[]}:q.action==='rates'?{rows:[],total:0}:completeAggregate(platforms.find(p=>p.id===q.platformId)||raw,10,8)});
+ const nativeCalls=h.calls.filter(q=>q.action==='aggregate');assert(nativeCalls.length>0);assert(nativeCalls.every(q=>q.platformId===raw.id));assert.equal(h.L.queryPlatforms.length,1);assert.equal(h.L.results[0].platform.name,'RAJALOTTERY');assert.equal(h.L.results[0].platform.sourceName,'RAJA');
+ const table=renderedTables(h.html()).find(t=>t.headers[0]==='平台');assert(table);assert.equal(table.rows.length,1);assert.equal(plain(table.rows[0][0]),'RAJALOTTERY');assert.equal(plain(table.rows[0][table.headers.indexOf('成功笔数')]),'8');
+ h.c.liveSet('platform',alias.id);assert.deepEqual(Array.from(h.L.multi.platform),[raw.id]);await h.c.liveQuery(true);assert.equal(h.L.queryPlatforms.length,1);assert.equal(h.L.queryPlatforms[0].id,raw.id);
+ const subset=await ready({reports:true,platforms:[alias],handler:async q=>q.action==='catalog'?{platforms:[alias]}:q.action==='collectedData'?{rows:[]}:q.action==='rates'?{rows:[],total:0}:completeAggregate(alias,4,2)});assert(subset.calls.filter(q=>q.action==='aggregate').every(q=>q.platformId===alias.id),'no unauthorized source ID may be synthesized');
+});

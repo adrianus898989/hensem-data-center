@@ -60,7 +60,7 @@ test('known covered zero and uncovered data differ; provider/direction/country f
 });
 
 test('missing amounts stay unknown while manual and unmatched fees stay honest',()=>{
- const h=fixture([source('a',null,3),source('b',100,7)]);h.L.feeLookupRows=[];h.render();h.root.providerSummaryToggle(0);const rows=children(h.html());assert(rows.every(r=>plain(r[6])==='—'));assert(rows.every(r=>plain(r[11])==='—'));assert.doesNotMatch(h.html(),/NaN|Infinity/);
+ const h=fixture([source('a',null,3),source('b',100,7)]);h.L.feeLookupRows=[];h.render();h.root.providerSummaryToggle(0);const rows=children(h.html());assert(rows.every(r=>plain(r[6])==='—'));assert(rows.every(r=>plain(r[11])==='—未匹配'));assert(rows.every(r=>r[11].includes('当前方向未找到可用费率')));assert.doesNotMatch(h.html(),/NaN|Infinity/);
 });
 
 

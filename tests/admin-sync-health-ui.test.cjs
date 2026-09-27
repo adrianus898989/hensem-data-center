@@ -56,10 +56,10 @@ test('integration permits independent first-load pages and waits for their main 
  const live=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8'),ready=live.match(/configure\(\{request:q=>window\.hensemLiveRequest\(q\),ready:\(\)=>(.*?),onChange:/)[1];
  const supervisorDeclarations=live.slice(live.indexOf(' const supervisorPages='),live.indexOf('\n for(const [id,page]of Object.entries(supervisorPages))'));
  assert.match(supervisorDeclarations,/const isSupervisorPage=/,'use the real page classifier in the extracted readiness expression');
- const evaluate=(page,L,modules={},reportState={})=>vm.runInNewContext(supervisorDeclarations+'\n'+ready,{state:{page},L,window:modules,collectedPage:{state:{busy:false}},reportData:{state:reportState}});
+ const evaluate=(page,L,modules={},reportState={})=>vm.runInNewContext(supervisorDeclarations+'\n'+ready,{pages:[],state:{page},L,window:modules,collectedPage:{state:{busy:false}},reportData:{state:reportState}});
  const L={catalogReady:true,initialReadComplete:true,loading:false,overviewQueried:false};
- for(const page of ['auto_withdraw','rates','collected_data','payout_config','workorders','deposit_tracking'])assert.equal(evaluate(page,L),true,page);
- for(const page of ['workorder_reconciliation','workorder_workload','workorder_operation_logs','workorder_permissions']){
+ for(const page of ['auto_withdraw','rates','collected_data','payout_config','workorders','deposit_tracking','deposit_statistics','workorder_reconciliation','workorder_workload','workorder_operation_logs'])assert.equal(evaluate(page,L),true,page);
+ for(const page of ['workorder_permissions']){
   assert.equal(evaluate(page,L),false,page+' has no connected employee source and must not start business health reads');
   const h=setup();h.setReady(evaluate(page,L));h.api.schedule(page);await h.run();assert.equal(h.calls.length,0,page);
  }

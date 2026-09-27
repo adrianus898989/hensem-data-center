@@ -119,3 +119,27 @@ test('rate lookup index avoids repeated whole-directory work and invalidates on 
  rows.push(rate({provider:'Pay0',collectFee:'6%'}));assert.equal(api.estimate(r,rows,'印度'),null,'length changes invalidate cached candidates');
  assert.equal(api.estimate(r,rows,'巴西'),null,'country scopes never share candidates');
 });
+
+
+test('fee coverage explains excluded successes and each unmatched provider without changing estimates',()=>{
+ const orders=[order({success_count:403420}),order({provider:'人工充值',success_count:23}),order({provider:'NoRatePay',success_count:1800}),order({provider:'未识别通道',success_count:7})];
+ const rows=dimensions(orders),fees=api.feeSummary(rows),text=api.feeCoverageText(fees);
+ assert.equal(plus(rows).success_count,405250);assert.equal(fees.successCount,405227);assert.equal(fees.matchedCount,403420);assert.equal(fees.excludedCount,23);assert.equal(fees.amount,40);
+ assert.match(text,/成功总笔数 405,250/);assert.match(text,/不计三方手续费 23/);assert.match(text,/应匹配 405,227/);assert.match(text,/未匹配 1,807/);assert.match(text,/人工充值 23 笔/);assert.match(text,/NoRatePay 1,800 笔（当前方向未找到可用费率）/);assert.match(text,/未识别通道 7 笔（未识别三方/);
+ assert.equal(fees.issues.reduce((n,r)=>n+r.count,0),1807);assert.equal(rows.find(r=>r.provider==='NoRatePay').estimated_fee,null);
+});
+
+test('fee gap explanations distinguish conflicts, complex rules and missing amount or provider breakdown',()=>{
+ for(const [rates,amount,reason]of [[[rate(),rate({collectFee:'5%'})],1000,'conflicting_rates'],[[rate({collectFee:'按级别'})],1000,'unsupported_rate'],[[rate()],null,'missing_success_amount']]){
+  const r=dimensions([order({success_amount:amount})],'provider',rates)[0];assert.equal(r.fee_issues[0].reason,reason);assert.equal(r.fee_issues[0].count,10);assert.equal(r.estimated_fee,null);
+ }
+ const raw=order(),r=dimensions([raw],'platform',[rate()],[{...raw,success_count:13}])[0];assert.equal(r.fee_issues[0].reason,'missing_provider_breakdown');assert.equal(r.fee_issues[0].count,3);assert.equal(r.fee_matched_count,10);
+ const zero=dimensions([order()],'provider',[rate({collectFee:'0%'})])[0];assert.deepEqual(zero.fee_issues,[]);assert.equal(zero.estimated_fee,0);
+});
+
+test('confirmed RAJA display alias still selects its own original platform rate without crossing other sources',()=>{
+ require('../admin-preview/live-report-data.js');
+ const rates=[rate({collectFee:'4%'}),rate({scopeType:'platform',platform:'RAJA',collectFee:'3%'})];
+ assert.equal(api.estimate(order({platform:'RAJALOTTERY',team:'M8'}),rates,'印度'),30);
+ assert.equal(api.estimate(order({platform:'RAJALOTTERY',source:'newar'}),rates,'印度'),40);
+});
