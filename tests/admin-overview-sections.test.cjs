@@ -30,6 +30,15 @@ function harness(options={}){
  return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
 }
 async function queried(options){const h=harness(options);await settle();assert.equal(h.L.overviewQueried,false);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0,'opening overview does not query business data');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert.equal(h.L.dirty,false);return h}
+
+test('unsupported workorder sources show a neutral unavailable state without a retry loop',async()=>{
+ const lg={...P,id:'lg-only',source:'lg'},h=await queried({platforms:[lg]});
+ await h.c.liveOverviewWorkorders();assert.equal(h.L.workordersUnsupported,true);assert.equal(h.L.overviewWorkordersStatus,'unavailable');
+ assert.equal(h.calls.filter(q=>q.action==='workorders').length,0);assert.match(h.html(),/所选平台来源尚未接入工单数据/);
+ assert.doesNotMatch(h.html(),/工单读取未完成|工单读取失败|重试工单读取|onclick="liveOverviewWorkorders\(\)"/);
+ h.L.catalog=[P];h.c.liveSet('platform',P.id);await h.c.liveQuery();await h.c.liveOverviewWorkorders();
+ assert.equal(h.L.workordersUnsupported,false);assert.equal(h.L.overviewWorkordersStatus,'ready');assert(h.L.workorders);
+});
 function setScope(h,values={}){Object.assign(h.L,{from:'2026-09-22T00:00:00',to:'2026-09-22T05:59:59',...values})}
 function completeAggregate(p=P,count=10,success=5){const r=aggregate(p,count),s={...stats(count,String(count*100)),success_count:success,created_success_count:success,success_amount:String(success*100),pending_count:count-success,pending_amount:String((count-success)*100),failed_count:0,failed_amount:'0',rejected_count:0,rejected_amount:'0',unknown_count:0,unknown_amount:'0'};r.summary=[s];for(const key of ['provider','daily','hourly','amount','matrix'])r.groups[key]=[{...r.groups[key][0],...s}];return r}
 

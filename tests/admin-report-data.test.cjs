@@ -11,6 +11,15 @@ function fixture({catalog=[],withdrawCatalog=[],feeds=[feed()],respond,onCatalog
 }
 const scope={country:'胖虎巴西',direction:'all',from:'2026-09-24T00:00:00',to:'2026-09-25T23:59:59'};
 
+test('report transport labels never replace the actual backend when a platform has one known system',async()=>{
+ const rows=['LG','REPORT'].map(system=>feed({system,name:'REPORT ONLY LG',country:'菲律宾',rawCountry:'PH',team:'M8'}));
+ const f=fixture({feeds:rows});await f.page.loadCatalog();
+ assert.equal(f.page.catalog()[0].source,'LG');assert.equal(f.page.selected({country:'菲律宾',sources:['lg']}).length,1);
+ await f.page.load({country:'菲律宾',sources:['lg'],direction:'charge',from:scope.from,to:scope.to});
+ assert.deepEqual(f.calls.find(q=>q.action==='reportSummary').feeds.map(x=>x.system).sort(),['LG','REPORT']);
+ const reports=fixture({feeds:[feed()]});await reports.page.loadCatalog();assert.equal(reports.page.catalog()[0].source,'reports');assert.equal(reports.page.selected({country:'巴西'}).length,1,'unknown system records remain accessible under all platforms');
+});
+
 test('authoritative seed ownership remains available before report loading and survives missing or failed metadata',async()=>{
  let fail=true;const seed={name:'SUPERLG',country:'菲律宾',scopeGroup:'PH',team:'M8',source:'withdraw'},f=fixture({withdrawCatalog:[seed],onCatalog:async()=>{if(fail)throw Error('Synthetic catalog timeout');return {rows:[feed({name:'SUPERLG',rawPlatform:'SUPERLG',country:'菲律宾',rawCountry:'PH',team:'待归类',system:'LG'})]}}});
  const before=f.page.catalog()[0];assert.equal(before.team,'M8');assert.equal(f.page.selected({country:'菲律宾',teams:['M8']}).length,1);assert.equal(f.page.selected({teams:['__unassigned__']}).length,0);
@@ -293,8 +302,8 @@ test('confirmed M8 assignments preserve explicit ownership, other countries, Pan
 
 test('intake uses the same team/country display but keeps exact source keys for detail and config reads',async()=>{
  const f=fixture({catalog:[{id:'m8',name:'SAME',country:'巴西',team:'M8',source:'ar'}],withdrawCatalog:[{name:'SAME',country:'胖虎巴西',team:'胖虎'}]});vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-collected-data.js'),'utf8'),f.context);
- const calls=[],page=f.context.HensemLiveCollectedData.create({L:f.L,E:escape,C:String,N:String,render:()=>{},table:(heads,rows)=>'<table><thead>'+heads.map(x=>'<th>'+x+'</th>').join('')+'</thead>'+rows.map(row=>'<tr>'+row.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</table>',box:(title,body)=>'<h2>'+title+'</h2>'+body,request:async q=>{calls.push(plain(q));return q.operation==='catalog'?{rows:[feed({name:'SAME',rawPlatform:'SAME'})]}:{total:0,rows:[]}}});
- await page.load();let html=page.render();assert.match(html,/2 个平台/);assert.doesNotMatch(html,/<option value="胖虎巴西"/);assert.match(html,/<td>胖虎<\/td><td>巴西<\/td><td>SAME<\/td>/);f.context.collectedSet('team','胖虎');html=page.render();assert.match(html,/当前 1 个/);f.context.collectedOpen(0,1,'charge');await new Promise(setImmediate);assert.equal(calls.at(-1).country,'胖虎巴西');assert.equal(calls.at(-1).platform,'SAME');assert.equal(calls.at(-1).direction,'charge');
+ const calls=[],page=f.context.HensemLiveCollectedData.create({L:f.L,E:escape,C:String,N:String,render:()=>{},table:(heads,rows)=>'<table><thead>'+heads.map(x=>'<th>'+x+'</th>').join('')+'</thead>'+rows.map(row=>'<tr>'+row.map(x=>'<td>'+x+'</td>').join('')+'</tr>').join('')+'</table>',box:(title,body)=>'<h2>'+title+'</h2>'+body,request:async q=>{calls.push(plain(q));return q.action==='intakeCoverage'?(q.operation==='catalog'?{version:1,complete:true,feeds:[feed({id:'panghu-volume',timezone:'UTC',name:'SAME',rawPlatform:'SAME',direction:'charge',sourceKind:'google_sheets',defaultEnd:'2026-09-25'})]}:{version:1,complete:true,checkedAt:'2026-09-26T00:00:00Z',feedIds:q.feedIds,startAt:q.startAt,endAt:q.endAt,rows:Array.from({length:25},(_,i)=>({feedId:'panghu-volume',date:'2026-09-'+String(i+1).padStart(2,'0'),status:'received',received:true,complete:false,zeroConfirmed:false,expected:true}))}):{total:0,rows:[]}}});
+ await page.load();let html=page.render();assert.match(html,/2 个平台/);assert.doesNotMatch(html,/<option value="胖虎巴西"/);assert.match(html,/<td>胖虎<\/td><td>巴西<\/td><td>SAME<\/td>/);f.context.collectedSet('team','胖虎');html=page.render();assert.match(html,/当前 1 个/);await f.context.collectedCoverageQuery();f.context.collectedOpenDay('panghu-volume','2026-09-24');await new Promise(setImmediate);assert.equal(calls.at(-1).country,'胖虎巴西');assert.equal(calls.at(-1).platform,'SAME');assert.equal(calls.at(-1).direction,'charge');
 });
 
 test('tab snapshot restores source report scope, expanded rows and tab choices without a new read',async()=>{

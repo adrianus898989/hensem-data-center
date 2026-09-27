@@ -638,11 +638,12 @@ test('deposit summaries cover the filtered dataset and source switches carry sea
 });
 
 test('collected platforms expose report-only teams, retain independent filters and read one source on demand',async()=>{
- const report={name:'NEW-PH',team:'胖虎',country:'胖虎巴西',system:'PANDA',dataset:'panda_success',rawCountry:'胖虎巴西',rawPlatform:'NEW-PH',lastDate:'2026-09-24'};
- const h=await ready({page:'collected_data',handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='collectedData'?(q.operation==='catalog'?{rows:[report,{...report,name:'UNKNOWN',rawPlatform:'UNKNOWN',team:'待归类',country:'新地区'}]}:{rows:[{date:'2026-09-24',metrics:{count:5,success:3}}],total:1}):aggregate(P)});
+ const report={id:'ph-report',timezone:'UTC',name:'NEW-PH',team:'胖虎',country:'胖虎巴西',system:'PANDA',dataset:'panda_success',rawCountry:'胖虎巴西',rawPlatform:'NEW-PH',lastDate:'2026-09-24',direction:'charge',sourceKind:'direct',defaultEnd:'2026-09-25'};
+ const feeds=[report,{...report,id:'unknown-report',name:'UNKNOWN',rawPlatform:'UNKNOWN',team:'待归类',country:'新地区'}];
+ const h=await ready({page:'collected_data',handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='intakeCoverage'?intakeCoverageFixtureReply(q,feeds):q.action==='collectedData'?{rows:[{date:'2026-09-24',metrics:{count:5,success:3}}],total:1}:aggregate(P)});
  assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);assert.match(h.html(),/NEW-PH/);assert.match(h.html(),/UNKNOWN/);assert.match(h.html(),/待归类/);
  h.c.collectedSet('team','胖虎');assert.match(h.html(),/NEW-PH/);assert.doesNotMatch(h.html(),/<td>UNKNOWN<\/td>/);assert.match(h.html(),/<option value="待归类"/);
- const calls=h.calls.length;h.c.collectedSearch('NEW-');h.c.collectedSearch('NEW-PH');assert.equal(h.calls.length,calls,'search needs no repeated database scan');h.c.collectedOpen(0,0);await settle();const q=h.calls.at(-1);assert.equal(q.action,'collectedData');assert.equal(q.platform,'NEW-PH');assert.equal(q.country,'胖虎巴西');assert.equal(q.dataset,'panda_success');assert.equal(q.startAt,'2026-09-24');assert.match(h.html(),/成功笔数/);h.c.collectedDate('from','2026-09-23');assert.match(h.html(),/日期已修改/);assert.doesNotMatch(h.html(),/<th>成功笔数<\/th>/);
+ const calls=h.calls.length;h.c.collectedSearch('NEW-');h.c.collectedSearch('NEW-PH');assert.equal(h.calls.length,calls,'search needs no repeated database scan');await h.c.collectedCoverageQuery();h.c.collectedOpenDay('ph-report','2026-09-24');await settle();const q=h.calls.at(-1);assert.equal(q.action,'collectedData');assert.equal(q.platform,'NEW-PH');assert.equal(q.country,'胖虎巴西');assert.equal(q.dataset,'panda_success');assert.equal(q.startAt,'2026-09-24');assert.match(h.html(),/成功笔数/);h.c.collectedDate('from','2026-09-23');assert.match(h.html(),/日期已修改/);assert.doesNotMatch(h.html(),/<th>成功笔数<\/th>/);
 });
 test('Panghu withdrawal picker preserves displayed team scope with authorized catalogue platforms',async()=>{
  const ph={id:'44444444-4444-4444-4444-444444444444',name:'FUTURE-PH',country:'胖虎巴西',scopeGroup:'BR_PANGHU',team:'胖虎',source:'withdraw',timezone:'America/Sao_Paulo',currency:'BRL'};
@@ -1037,8 +1038,8 @@ test('an LG report directory row alone is not promoted to native orders',async()
 
 test('LG intake order links use the exact authorized native platform while retaining the chosen direction',async()=>{
  const lg={...P,id:'77777777-7777-4777-8777-777777777777',name:'LG-SYNTHETIC',source:'lg',country:'菲律宾',scopeGroup:'PH',sourceName:'LG-RAW',team:'M8',timezone:'Asia/Manila',currency:'PHP'};
- const feed={dataset:'lg_orders',system:'LG',name:lg.name,rawPlatform:lg.sourceName,country:lg.country,rawCountry:'PH',team:'M8',directions:['withdraw'],lastDate:'2026-09-22',records:1,provenance:{kind:'direct'}};
- const h=await ready({page:'collected_data',reports:true,handler:q=>q.action==='catalog'?{platforms:[lg]}:q.action==='collectedData'?{rows:[feed]}:q.action==='details'?detail(lg):q.action==='rates'?{rows:[],total:0}:aggregate(lg)});const link=h.html().match(/collectedOpen\((\d+),(\d+),'withdraw'\)/);assert(link);h.c.collectedOpen(Number(link[1]),Number(link[2]),'withdraw');await settle();assert.equal(h.c.state.page,'orders');assert.equal(h.L.platform,lg.id);assert.equal(h.L.country,'菲律宾');assert.equal(h.L.direction,'withdraw');assert(h.calls.some(q=>q.action==='details'&&q.platformId===lg.id&&q.direction==='withdraw'));assert(!h.calls.some(q=>q.action==='collectedData'&&q.operation==='rows'),'native orders must not return to the old report-only reader');
+ const feed={id:'lg-order',timezone:'Asia/Manila',dataset:'lg_orders',system:'LG',name:lg.name,rawPlatform:lg.sourceName,country:lg.country,rawCountry:'PH',team:'M8',direction:'withdraw',defaultEnd:'2026-09-25',lastDate:'2026-09-22',sourceKind:'direct',platformId:lg.id};
+ const h=await ready({page:'collected_data',reports:true,handler:q=>q.action==='catalog'?{platforms:[lg]}:q.action==='intakeCoverage'?intakeCoverageFixtureReply(q,[feed]):q.action==='collectedData'?{rows:[feed]}:q.action==='details'?detail(lg):q.action==='rates'?{rows:[],total:0}:aggregate(lg)});await h.c.collectedCoverageQuery();h.c.collectedExpand('lg-order');assert.match(h.html(),/查看当日数据/);h.c.collectedOpenDay('lg-order','2026-09-22');await settle();assert.equal(h.c.state.page,'orders');assert.equal(h.L.platform,lg.id);assert.equal(h.L.country,'菲律宾');assert.equal(h.L.direction,'withdraw');assert.equal(h.L.from,'2026-09-22T00:00:00');assert(h.calls.some(q=>q.action==='details'&&q.platformId===lg.id&&q.direction==='withdraw'));assert(!h.calls.some(q=>q.action==='collectedData'&&q.operation==='rows'),'native orders must not return to the old report-only reader');
 });
 
 test('LG and GAME66-only workorder scopes clear stale results without querying the whole country',async()=>{
@@ -1057,3 +1058,14 @@ test('mixed workorder scopes query only selected AR and NEW_AR source names and 
  h.c.liveSet('platform',lg.id);await h.c.liveQuery();assert.equal(h.L.workorders,null);assert.match(h.html(),/尚未接入工单/);assert.equal(h.calls.filter(q=>q.action==='workorders').length,1,'unsupported scope cannot fall back to the previously selected AR platform');
  h.c.liveSet('platform',newar.id);await h.c.liveQuery();q=h.calls.filter(q=>q.action==='workorders').at(-1);assert.deepEqual(q.platforms.sort(),['NEW DISPLAY','NEW RAW'].sort());assert.equal(h.L.workordersError,'');
 });
+
+test('backend system filter excludes report and configuration transport labels without removing their platforms',async()=>{
+ const lg={...P,id:'lg-native',name:'LG NATIVE',country:'菲律宾',source:'lg',team:'M8'},report={dataset:'volume',system:'REPORT',name:'REPORT ONLY',rawPlatform:'REPORT ONLY',country:'菲律宾',rawCountry:'PH',team:'M8',directions:['charge'],records:1,provenance:{kind:'direct'}};
+ const h=await ready({reports:true,handler:q=>q.action==='catalog'?{platforms:[lg]}:q.action==='collectedData'?{rows:[report]}:q.action==='reportSummary'?{feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'not_received',groups:[]}))}:q.action==='rates'?{rows:[],total:0}:aggregate(lg)});
+ const filters=h.nodes.get('liveFilters').innerHTML,system=filters.match(/<details[^>]*data-multi="source"[^]*?<\/details>/)?.[0];
+ assert(system);assert.match(system,/LG系统/);assert.doesNotMatch(system,/日报|配置来源|value="reports"|value="REPORT"/);assert.match(filters,/REPORT ONLY/);
+ h.c.liveSet('source','lg');assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/REPORT ONLY/);h.c.liveMultiClear('source');assert.match(h.nodes.get('liveFilters').innerHTML,/REPORT ONLY/);
+});
+
+// Local-only coverage receipt fixture for intake integration; no live database reads.
+function intakeCoverageFixtureReply(q,feeds){if(q.operation==='catalog')return {version:1,complete:true,feeds};return {version:1,complete:true,checkedAt:'2026-09-26T01:00:00Z',feedIds:q.feedIds,startAt:q.startAt,endAt:q.endAt,rows:q.feedIds.flatMap(feedId=>{const rows=[];for(let t=Date.parse(q.startAt);t<=Date.parse(q.endAt);t+=86400000)rows.push({feedId,date:new Date(t).toISOString().slice(0,10),status:'received',received:true,complete:false,zeroConfirmed:false,expected:true});return rows})}}
