@@ -33,8 +33,8 @@ before(async()=>{
  create table ar_config_daily(country_code text,platform text,observed_local_date date,received_at timestamptz,configuration jsonb);
  create table panda_config_daily(like ar_config_daily);create table wg_config_daily(like ar_config_daily);
  create table newar_business_snapshots(kind text,country text,country_code text,platform text,stat_date date,captured_at timestamptz,updated_at timestamptz,direction text,payload jsonb);
- create table admin_deposit_issue_rows(country text,platform text,record_date date,source_updated_at timestamptz,updated_at timestamptz,provider text,amount numeric);
- create table admin_deposit_followup_rows(country text,platform text,followup_date date,source_updated_at timestamptz,updated_at timestamptz,provider text,amount numeric);
+ create table admin_deposit_issue_rows(country text,platform text,record_date date,source_updated_at timestamptz,updated_at timestamptz,provider text,amount numeric,stale_at timestamptz);
+ create table admin_deposit_followup_rows(country text,platform text,followup_date date,source_updated_at timestamptz,updated_at timestamptz,provider text,amount numeric,stale_at timestamptz);
  select set_config('test.scope','{"mode":"all"}',false);
  insert into dashboard_platform_team_map values('M8','AR','印度','VEERGAME','Veer.Game',true),('M8','WG','巴西','WG-DEMO','WG-DEMO',true);
  insert into lg_orders(country_code,platform,order_no,order_kind,order_amount,status_class,created_at,paid_at,member_id) values('PH','LG-ORDER-ONLY','O1','recharge',100,'success','2026-09-23T17:00:00Z','2026-09-24T01:00:00Z','PRIVATE-MEMBER');
@@ -63,6 +63,37 @@ test('detail reads exact source/date, projects approved numbers and never expose
  assert.equal(data.total,1);assert.equal(data.rows[0].metrics.amount,1234);assert.equal(data.rows[0].metrics.count,12);assert.deepEqual(data.rows[0].sourceReference,{sheetName:'[三方量表1] fixture',row:7});assert.doesNotMatch(JSON.stringify(data),/NEVER-RETURN|token|member|raw/);
  const pending=await call({operation:'rows',dataset:'pending',country:'IN',platform:'Veer.Game',startAt:'2026-09-24',endAt:'2026-09-24'});assert.equal(pending.rows[0].metrics.pending,3);assert.equal(pending.rows[0].metrics.pendingAmount,120);
  const empty=await call({operation:'rows',dataset:'volume',country:'胖虎巴西',platform:'FUTURE-PANGHU',startAt:'2026-09-23',endAt:'2026-09-23'});assert.equal(empty.total,0);
+});
+test('soft-archived Sheet rows remain stored but do not duplicate collected view or detail totals, and can return to active',async()=>{
+ for(const [table,dataset,dateColumn] of [
+  ['admin_deposit_issue_rows','deposit_results','record_date'],
+  ['admin_deposit_followup_rows','deposit_entries','followup_date']
+ ]){
+  await db.exec(`insert into ${table}(country,platform,${dateColumn},provider,amount,stale_at) values
+   ('印度','ARCHIVE-SYNTHETIC','2026-09-24','Current synthetic provider',100,null),
+   ('印度','ARCHIVE-SYNTHETIC','2026-09-24','Old synthetic provider',900,'2026-09-27T00:00:00Z')`);
+  const q={operation:'rows',dataset,country:'印度',platform:'ARCHIVE-SYNTHETIC',startAt:'2026-09-24',endAt:'2026-09-24'};
+  const before=await call(q);assert.equal(before.total,1);assert.equal(before.rows[0].metrics.amount,100);assert.equal(before.rows[0].provider,'Current synthetic provider');
+  const view=(await db.query("select count(*)::int count,sum((metrics->>'amount')::numeric)::text amount from private.dashboard_admin_collected_feed_rows where dataset=$1 and platform='ARCHIVE-SYNTHETIC'",[dataset])).rows[0];
+  assert.deepEqual(view,{count:1,amount:'100'});assert.equal((await db.query(`select count(*)::int count from ${table} where platform='ARCHIVE-SYNTHETIC'`)).rows[0].count,2,'archiving retains the original row');
+  await db.exec(`update ${table} set stale_at=null where platform='ARCHIVE-SYNTHETIC' and provider='Old synthetic provider'`);
+  const restored=await call(q);assert.equal(restored.total,2);assert.equal(restored.rows.reduce((sum,r)=>sum+r.metrics.amount,0),1000);
+  await db.exec(`update ${table} set stale_at='2026-09-27T01:00:00Z' where platform='ARCHIVE-SYNTHETIC'`);
+  assert.equal((await call(q)).total,0);assert.equal((await db.query(`select count(*)::int count from ${table} where platform='ARCHIVE-SYNTHETIC'`)).rows[0].count,2);
+ }
+});
+test('standalone soft-archive migration replaces an existing collected view without restoring archived rows or changing other datasets',async()=>{
+ await db.exec('create role service_role');
+ const q={operation:'rows',dataset:'volume',country:'胖虎巴西',platform:'FUTURE-PANGHU',startAt:'2026-09-24',endAt:'2026-09-24'},before=await call(q);
+ await db.exec(read('workorder-followup-soft-archive.sql'));await db.exec(read('workorder-followup-soft-archive.sql'));
+ assert.deepEqual(await call(q),before,'the full view keeps unrelated source columns and semantics');
+ for(const [table,dataset] of [['admin_deposit_issue_rows','deposit_results'],['admin_deposit_followup_rows','deposit_entries']]){
+  assert.equal((await call({operation:'rows',dataset,country:'印度',platform:'ARCHIVE-SYNTHETIC',startAt:'2026-09-24',endAt:'2026-09-24'})).total,0);
+  assert.equal((await db.query(`select count(*)::int count from ${table} where platform='ARCHIVE-SYNTHETIC'`)).rows[0].count,2);
+ }
+ for(const role of ['anon','authenticated']){
+  await db.exec('set role '+role);try{await assert.rejects(()=>db.query('select * from private.dashboard_admin_collected_feed_rows'),/permission denied/)}finally{await db.exec('reset role')}
+ }
 });
 test('every catalogue and detail request rechecks scope, including raw-code aliases',async()=>{
  await db.exec(`select set_config('test.scope','{"countries":["印度"],"platforms":["Veer.Game"]}',false)`);

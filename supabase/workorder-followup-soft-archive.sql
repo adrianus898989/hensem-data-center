@@ -1,101 +1,11 @@
--- Read model for the private detailed-admin deposit-not-received page.
--- Google Sheets is ingested by the sync-deposit-issue-sheet Edge Function;
--- the page itself reads this bounded Supabase table and never scans Google.
+-- Run after workorder-followup-upi-receipt.sql. Preserve every historical row.
+-- The synchronizer soft-archives only old rows in fully read Sheet tabs.
+-- Portal mirrors and their version guards are unchanged.
 begin;
-
-create table if not exists public.admin_deposit_issue_rows (
-  id text primary key,
-  source_sheet text not null,
-  source_tab text not null default 'UPI核对',
-  source_row integer not null check (source_row > 0),
-  platform text,
-  country text,
-  order_number text,
-  utr text,
-  amount numeric(24,2),
-  provider text,
-  match_status text,
-  status text,
-  unreceived_days integer,
-  record_date date,
-  source_updated_at timestamptz,
-  updated_at timestamptz not null default now(),
-  unique (source_sheet, source_tab, source_row)
-);
-
-alter table public.admin_deposit_issue_rows add column if not exists provider_reply text;
-alter table public.admin_deposit_issue_rows add column if not exists utr_match text;
-alter table public.admin_deposit_issue_rows add column if not exists kyc_correct text;
-
-create index if not exists admin_deposit_issue_rows_date_idx
-  on public.admin_deposit_issue_rows(record_date desc, platform, provider, status);
-create index if not exists admin_deposit_issue_rows_scope_idx
-  on public.admin_deposit_issue_rows(country, platform, record_date desc);
-create index if not exists admin_deposit_issue_rows_order_idx
-  on public.admin_deposit_issue_rows(order_number, utr);
-
-alter table public.admin_deposit_issue_rows enable row level security;
-revoke all on public.admin_deposit_issue_rows from public, anon, authenticated;
-grant all on public.admin_deposit_issue_rows to service_role;
-
--- Separate sources: input/follow-up rows must not be added to result totals.
-create table if not exists public.admin_deposit_followup_rows (
-  id text primary key, source_sheet text not null, source_tab text not null,
-  source_gid bigint, source_row integer not null check(source_row>0),
-  platform text, country text, order_number text, work_order_number text, utr text,
-  amount numeric(24,2), provider text, provider_reply text, followup_status text,
-  utr_match text, kyc_correct text, evidence text, followup_at text, followup_date date,
-  receipt_text text, source_updated_at timestamptz, updated_at timestamptz not null default now(),
-  unique(source_sheet,source_tab,source_row)
-);
-alter table public.admin_deposit_followup_rows add column if not exists source_kind text not null default 'sheet';
-alter table public.admin_deposit_followup_rows add column if not exists first_actor text;
-alter table public.admin_deposit_followup_rows add column if not exists last_actor text;
-alter table public.admin_deposit_followup_rows add column if not exists portal_case_id text;
-alter table public.admin_deposit_followup_rows add column if not exists portal_version bigint;
-alter table public.admin_deposit_followup_rows add column if not exists portal_owner_id text;
-alter table public.admin_deposit_followup_rows add column if not exists staff_code text;
-alter table public.admin_deposit_followup_rows add column if not exists source_date_text text;
-alter table public.admin_deposit_followup_rows add column if not exists portal_payload jsonb;
-alter table public.admin_deposit_followup_rows add column if not exists portal_team text;
-create index if not exists admin_deposit_followup_scope_idx on public.admin_deposit_followup_rows(country,platform,followup_date desc);
-create index if not exists admin_deposit_followup_order_idx on public.admin_deposit_followup_rows(order_number,utr);
-alter table public.admin_deposit_followup_rows enable row level security;
-revoke all on public.admin_deposit_followup_rows from public,anon,authenticated;
-grant all on public.admin_deposit_followup_rows to service_role;
-
--- Owner authorized the two UPI columns; other payment-identity columns stay excluded.
--- Archived Sheet rows remain recoverable but are excluded from business reads.
 alter table public.admin_deposit_issue_rows add column if not exists stale_at timestamptz;
 alter table public.admin_deposit_followup_rows add column if not exists stale_at timestamptz;
-alter table public.admin_deposit_issue_rows add column if not exists upi_id text;
-alter table public.admin_deposit_issue_rows add column if not exists kyc_upi_id text;
-alter table public.admin_deposit_followup_rows add column if not exists upi_id text;
-alter table public.admin_deposit_followup_rows add column if not exists kyc_upi_id text;
-create or replace function private.workorder_receipt_date(p_order text)
-returns date language plpgsql immutable set search_path='' as $$
-declare value text:=upper(btrim(coalesce(p_order,''))); parsed date;
-begin
- if value !~ '^RC[0-9]{8}' then return null; end if;
- begin parsed:=make_date(substring(value,3,4)::integer,substring(value,7,2)::integer,substring(value,9,2)::integer);
- exception when others then return null; end;
- return parsed;
-end;
-$$;
-create or replace function private.workorder_receipt_days(p_order text,p_now timestamptz default now())
-returns integer language sql stable set search_path='' as $$
- select case when private.workorder_receipt_date(p_order)<=(p_now at time zone 'Asia/Kolkata')::date
- then (p_now at time zone 'Asia/Kolkata')::date-private.workorder_receipt_date(p_order) end;
-$$;
-revoke all on function private.workorder_receipt_date(text),private.workorder_receipt_days(text,timestamptz) from public,anon,authenticated;
-grant execute on function private.workorder_receipt_date(text),private.workorder_receipt_days(text,timestamptz) to service_role;
-
-create or replace function private.dashboard_admin_live_deposit_platform_key(p_country text,p_name text)
-returns text language sql immutable set search_path='' as $$
- select case when p_country in ('印度','IN','India') and upper(btrim(p_name))='INDIA82' then '82LOTTERY'
- else private.dashboard_admin_live_withdraw_key(p_name) end;
-$$;
-revoke all on function private.dashboard_admin_live_deposit_platform_key(text,text) from public,anon,authenticated;
+comment on column public.admin_deposit_issue_rows.stale_at is 'Soft archive timestamp; NULL means present in the latest complete Sheet read.';
+comment on column public.admin_deposit_followup_rows.stale_at is 'Soft archive timestamp for Sheet rows; portal mirrors are never archived by Sheet sync.';
 
 create or replace function private.dashboard_admin_live_deposit_issues(p_request jsonb default '{}'::jsonb)
 -- Scoped CTEs can be estimated as one row despite holding thousands of sheet
@@ -324,11 +234,155 @@ end;
 $$;
 revoke all on function private.dashboard_admin_live_deposit_issues(jsonb) from public,anon;
 grant execute on function private.dashboard_admin_live_deposit_issues(jsonb) to authenticated;
-create or replace function public.dashboard_admin_live_deposit_issues(p_request jsonb default '{}'::jsonb)
-returns jsonb language sql stable security invoker set search_path='' as $$
- select private.dashboard_admin_live_deposit_issues(p_request);
+create or replace function public.workorder_followup_list(p_account jsonb,p_filters jsonb default '{}',p_offset integer default 0,p_limit integer default 50)
+returns jsonb language plpgsql stable security invoker set search_path='' as $$
+declare v jsonb;
+begin
+ if coalesce(p_account->>'role','') not in ('agent','supervisor','auditor') or p_account->>'active' is distinct from 'true'
+ or coalesce(p_account->>'team','')='' or jsonb_typeof(p_account->'platforms') is distinct from 'array'
+ or p_offset<0 or p_offset>1000000 or p_limit<1 or p_limit>100 or jsonb_typeof(p_filters) is distinct from 'object' then
+ raise exception using errcode='22023',message='invalid_request'; end if;
+ with scoped as materialized (
+ select r.*,case when private.workorder_receipt_days(r.order_number) is not null then private.workorder_receipt_date(r.order_number) end as receipt_date,private.workorder_receipt_days(r.order_number) as days_since_order,case when upper(btrim(r.platform))='INDIA82' then '82LOTTERY' else r.platform end as display_platform,
+ case when r.source_kind='portal' then coalesce(r.portal_payload->'entry'->>'outcome','unknown') else private.workorder_followup_outcome(r.followup_status) end as normalized_outcome,
+ case when r.source_kind='portal' then coalesce(r.portal_payload->'entry'->>'kycCheck','unknown') else private.workorder_followup_check(r.kyc_correct) end as normalized_kyc,
+ case when r.source_kind='portal' then coalesce(r.portal_payload->'entry'->>'utrMatch','unknown') else private.workorder_followup_check(r.utr_match) end as normalized_utr
+ from public.admin_deposit_followup_rows r
+ where r.stale_at is null and r.country='印度'
+ and (p_account->'platforms') ? (case when upper(btrim(r.platform))='INDIA82' then '82LOTTERY' else r.platform end)
+ and (r.source_kind='sheet' or r.source_kind='portal' and r.portal_team=p_account->>'team'
+   and (p_account->>'role'<>'agent' or r.portal_owner_id=p_account->>'auth_user_id'))
+ ), filtered as materialized (
+ select * from scoped r where
+ (coalesce(p_filters->>'source','all')='all' or r.source_kind=p_filters->>'source')
+ and (coalesce(p_filters->>'platform','') in ('','all') or r.display_platform=p_filters->>'platform')
+ and (coalesce(p_filters->>'provider','') in ('','all') or strpos(lower(coalesce(r.provider,'')),lower(p_filters->>'provider'))>0)
+ and (coalesce(p_filters->>'creator','') in ('','all') or strpos(lower(coalesce(r.first_actor,'')),lower(p_filters->>'creator'))>0)
+ and (coalesce(p_filters->>'follower','') in ('','all') or strpos(lower(coalesce(r.last_actor,'')),lower(p_filters->>'follower'))>0)
+ and (coalesce(p_filters->>'outcome','') in ('','all') or r.normalized_outcome=p_filters->>'outcome')
+ and (coalesce(p_filters->>'kyc','') in ('','all') or r.normalized_kyc=p_filters->>'kyc')
+ and (coalesce(p_filters->>'utrMatch','') in ('','all') or r.normalized_utr=p_filters->>'utrMatch')
+ and (coalesce(p_filters->>'orderNo','')='' or strpos(lower(coalesce(r.order_number,'')),lower(p_filters->>'orderNo'))>0)
+ and (coalesce(p_filters->>'workorder','')='' or strpos(lower(coalesce(r.work_order_number,'')),lower(p_filters->>'workorder'))>0)
+ and (coalesce(p_filters->>'utr','')='' or strpos(lower(coalesce(r.utr,'')),lower(p_filters->>'utr'))>0)
+ and (coalesce(p_filters->>'reply','')='' or strpos(lower(coalesce(r.provider_reply,'')),lower(p_filters->>'reply'))>0)
+ and (coalesce(p_filters->>'upiId','')='' or strpos(lower(coalesce(r.upi_id,'')),lower(p_filters->>'upiId'))>0)
+ and (coalesce(p_filters->>'kycUpiId','')='' or strpos(lower(coalesce(r.kyc_upi_id,'')),lower(p_filters->>'kycUpiId'))>0)
+ and (coalesce(p_filters->>'staffCode','')='' or strpos(lower(coalesce(r.staff_code,'')),lower(p_filters->>'staffCode'))>0)
+ and (coalesce(p_filters->>'from','')='' or r.followup_date >= (p_filters->>'from')::date)
+ and (coalesce(p_filters->>'to','')='' or r.followup_date <= (p_filters->>'to')::date)
+ and (coalesce(p_filters->>'minAmount','')='' or r.amount >= (p_filters->>'minAmount')::numeric)
+ and (coalesce(p_filters->>'maxAmount','')='' or r.amount <= (p_filters->>'maxAmount')::numeric)
+ ), page as (select * from filtered order by followup_date desc nulls last,source_row desc,id limit p_limit offset p_offset)
+ select jsonb_build_object('rows',coalesce((select jsonb_agg(to_jsonb(p)) from page p),'[]'::jsonb),
+ 'total',(select count(*) from filtered),'offset',p_offset,'limit',p_limit,
+ 'facets',jsonb_build_object(
+ 'platforms',p_account->'platforms',
+ 'providers',coalesce((select jsonb_agg(x.provider order by x.provider) from(select distinct provider from scoped where nullif(provider,'') is not null) x),'[]'::jsonb),
+ 'creators',coalesce((select jsonb_agg(x.first_actor order by x.first_actor) from(select distinct first_actor from scoped where nullif(first_actor,'') is not null) x),'[]'::jsonb),
+ 'followers',coalesce((select jsonb_agg(x.last_actor order by x.last_actor) from(select distinct last_actor from scoped where nullif(last_actor,'') is not null) x),'[]'::jsonb))) into v;
+ return v;
+end;
 $$;
-revoke all on function public.dashboard_admin_live_deposit_issues(jsonb) from public,anon;
-grant execute on function public.dashboard_admin_live_deposit_issues(jsonb) to authenticated;
+revoke all on function public.workorder_followup_list(jsonb,jsonb,integer,integer) from public,anon,authenticated;
+grant execute on function public.workorder_followup_list(jsonb,jsonb,integer,integer) to service_role;
+
+-- This optional inventory is installed independently; preserve installations
+-- that do not have it, and filter both branches wherever it already exists.
+do $archive_inventory$
+begin
+ if to_regclass('private.dashboard_admin_collected_feed_rows') is not null then
+ execute $inventory_view$
+create or replace view private.dashboard_admin_collected_feed_rows as
+ select 'volume'::text dataset,'REPORT'::text source_system,country,platform,data_date,updated_at,
+ direction,coalesce(nullif(raw_channel,''),channel)::text provider,
+ jsonb_build_object('amount',amount,'count',count,'success',success_count,'failed',failed_count) metrics
+ from public.third_party_volume where quarantined_at is null
+ union all
+ select 'panda_success','PANDA',coalesce(nullif(country,''),country_code),platform,stat_date,updated_at,direction,third_party,
+ jsonb_build_object('count',submitted_count,'success',success_count,'failed',failed_count)
+ from public.panda_success_rate_daily
+ union all
+ select 'auto','REPORT',country,platform,data_date,coalesce(source_updated_at,updated_at),'withdraw',null,
+ jsonb_build_object('count',total,'success',success,'rejected',rejected,'auto',auto_count,'manual',manual_count,'avgSeconds',avg_seconds)
+ from public.auto_withdraw_daily
+ union all
+ select 'operators','REPORT',country,platform,data_date,coalesce(source_updated_at,updated_at),'withdraw',account,
+ jsonb_build_object('count',processed,'rejected',rejected,'avgSeconds',avg_seconds)
+ from public.withdraw_operator_daily
+ union all
+ select 'workorders',source_system,coalesce(nullif(country,''),country_code),platform,stat_date,coalesce(source_updated_at,updated_at),null,third_party,
+ jsonb_build_object('count',submitted_count,'amount',submitted_amount,'success',success_count,'successAmount',success_amount,
+ 'withdrawPending',withdraw_not_received_count,'withdrawPendingAmount',withdraw_not_received_amount,'withdrawSuccess',withdraw_success_count,'withdrawSuccessAmount',withdraw_success_amount)
+ from public.workorder_deposit_daily
+ union all
+ select 'pending',source_system,country_code,platform,stat_date,coalesce(snapshot_at,updated_at),'withdraw',null,
+ jsonb_build_object('pending',private.dashboard_admin_live_report_number(snapshot->'totals','pending_count'),'pendingAmount',private.dashboard_admin_live_report_number(snapshot->'totals','pending_amount'))
+ from public.withdraw_pending_daily
+ union all
+ select 'backlog',source_system,country_code,platform,stat_date,coalesce(snapshot_at,updated_at),'withdraw',null,
+ jsonb_build_object('pending',private.dashboard_admin_live_report_number(snapshot->'totals','pending_count'),'pendingAmount',private.dashboard_admin_live_report_number(snapshot->'totals','pending_amount'))
+ from public.withdraw_pending_backlog_daily
+ union all
+ select 'reasons',source_system,country_code,platform,stat_date,updated_at,'withdraw',null,
+ jsonb_build_object('count',private.dashboard_admin_live_report_number(snapshot->'totals','total'),'success',private.dashboard_admin_live_report_number(snapshot->'totals','success'),
+ 'rejected',private.dashboard_admin_live_report_number(snapshot->'totals','reject'),'auto',private.dashboard_admin_live_report_number(snapshot->'totals','auto'),'manual',private.dashboard_admin_live_report_number(snapshot->'totals','manual'))
+ from public.withdraw_reasons_daily
+ union all
+ select 'ar_config','AR',country_code,platform,observed_local_date,received_at,null,null,jsonb_build_object('snapshots',1) from public.ar_config_daily
+ union all
+ select 'panda_config','PANDA',country_code,platform,observed_local_date,received_at,null,null,jsonb_build_object('snapshots',1) from public.panda_config_daily
+ union all
+ select 'wg_config','WG',country_code,platform,observed_local_date,received_at,null,null,jsonb_build_object('snapshots',1) from public.wg_config_daily
+ union all
+ select 'newar_'||s.kind,'NEW_AR',coalesce(nullif(s.country,''),s.country_code),s.platform,s.stat_date,coalesce(s.captured_at,s.updated_at),s.direction,r->>'third_party',
+ jsonb_build_object('count',coalesce(private.dashboard_admin_live_report_number(r,'total_count'),private.dashboard_admin_live_report_number(r,'count')),
+ 'amount',private.dashboard_admin_live_report_number(r,'amount'),'successAmount',private.dashboard_admin_live_report_number(r,'success_amount'),
+ 'success',private.dashboard_admin_live_report_number(r,'success_count'),'failed',private.dashboard_admin_live_report_number(r,'failed_count'),
+ 'rejected',coalesce(private.dashboard_admin_live_report_number(r,'reject_count'),private.dashboard_admin_live_report_number(r,'rejected_count')),
+ 'auto',private.dashboard_admin_live_report_number(r,'auto_count'),'manual',private.dashboard_admin_live_report_number(r,'manual_count'),
+ 'completed',private.dashboard_admin_live_report_number(r,'completed_count'),'pending',private.dashboard_admin_live_report_number(r,'pending_count'))
+ from public.newar_business_snapshots s
+ left join lateral jsonb_array_elements(case when jsonb_typeof(s.payload->'rows')='array' then s.payload->'rows' else '[]'::jsonb end) r on true
+ union all
+ select 'deposit_results','SHEET',country,platform,record_date,coalesce(source_updated_at,updated_at),'charge',provider,
+ jsonb_build_object('amount',amount,'count',1) from public.admin_deposit_issue_rows where stale_at is null
+ union all
+ select 'deposit_entries','SHEET',country,platform,followup_date,coalesce(source_updated_at,updated_at),'charge',provider,
+ jsonb_build_object('amount',amount,'count',1) from public.admin_deposit_followup_rows where stale_at is null
+ union all
+ select 'lg_success','LG',country_code,platform,stat_date,coalesce(observed_at,updated_at),order_kind,scope_type||' / '||coalesce(third_party,raw_channel,'平台合计'),
+ jsonb_build_object('count',total_count,'success',success_count,'failed',failed_count,'pending',pending_count,'unknown',unknown_count,'amount',total_amount,'successAmount',success_amount)
+ from public.lg_success_daily
+ union all
+ select 'lg_pending','LG',country_code,platform,stat_date,updated_at,'withdraw',null,
+ jsonb_build_object('pending',private.dashboard_admin_live_report_number(snapshot->'totals','pending_count'),'pendingAmount',private.dashboard_admin_live_report_number(snapshot->'totals','pending_amount'))
+ from public.lg_pending_daily
+ union all
+ select 'collection_success',source_system,country_code,platform,stat_date,coalesce(snapshot_at,updated_at),case source_system when 'RECHARGE_REVIEW' then 'charge' when 'WITHDRAW_REVIEW' then 'withdraw' end,null,
+ jsonb_build_object('count',private.dashboard_admin_live_report_number(snapshot->'totals','submitted_count'),'success',private.dashboard_admin_live_report_number(snapshot->'totals','success_count'),'successAmount',private.dashboard_admin_live_report_number(snapshot->'totals','success_amount'))
+ from public.collection_success_daily
+ union all
+ select 'workorder_bundle',system_name,coalesce(nullif(country,''),country_code),platform,stat_date,coalesce(source_updated_at,updated_at),null,null,
+ jsonb_build_object('count',private.dashboard_admin_live_report_number(r,'total_count'),'completed',private.dashboard_admin_live_report_number(r,'completed_count'),
+ 'rejected',private.dashboard_admin_live_report_number(r,'rejected_count'),'pending',private.dashboard_admin_live_report_number(r,'pending_count'))
+ from public.workorder_daily_bundle s left join lateral jsonb_array_elements(case when jsonb_typeof(daily_rows)='array' then daily_rows else '[]'::jsonb end)r on true
+ union all
+ select 'panda_dictionary','PANDA',country_code,platform,observed_local_date,received_at,null,null,jsonb_build_object('snapshots',1) from public.panda_config_dictionary_daily
+ union all
+ select 'member_notes',source_system,country_code,platform,stat_date,coalesce(snapshot_at,updated_at),'withdraw',null,jsonb_build_object('snapshots',1) from public.withdraw_member_notes_daily
+ union all
+ select 'pending_orders',source_system,country_code,platform,stat_date,coalesce(snapshot_at,updated_at),'withdraw',raw_channel,jsonb_build_object('amount',amount,'count',1) from public.withdraw_pending_orders
+ union all
+ select 'midnight',source_system,country_code,platform,(scheduled_at at time zone timezone)::date,received_at,null,null,jsonb_build_object('snapshots',1) from public.provider_midnight_snapshots
+ union all
+ select 'game66_dictionary','GAME66',g.team_name,g.platform_name,(d.fetched_at at time zone 'Asia/Kolkata')::date,d.fetched_at,null,d.data_type,jsonb_build_object('snapshots',1)
+ from public.game66_dictionary_snapshots d join public.game66_platforms g on g.id=d.platform_id;
+revoke all on private.dashboard_admin_collected_feed_rows from public,anon,authenticated;
+
+$inventory_view$;
+ end if;
+end;
+$archive_inventory$;
 notify pgrst,'reload schema';
 commit;

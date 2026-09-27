@@ -106,6 +106,9 @@ function dateValue(value: unknown): string | null {
 function textValue(value: unknown, max = 200): string | null {
   const text = String(value ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").replace(/\r\n?/g, "\n").trim(); return text ? text.slice(0, max) : null;
 }
+// Preserve exactly these owner-authorized columns, including masking and '-'.
+// Validation for a new portal address must never erase a historical cell.
+function upiValue(value: unknown): string | null { return textValue(value, 500); }
 function rowValue(row: unknown[], headers: Map<string, number>, name: string): unknown { const index = headers.get(name); return index === undefined ? null : row[index]; }
 function rowsFromValues(values: unknown[][], sourceSheet: string, collectedAt: string): Record<string, unknown>[] {
   if (!Array.isArray(values) || !values.length || !Array.isArray(values[0])) throw new SyncError("source_rows_missing", 502);
@@ -122,23 +125,35 @@ function rowsFromValues(values: unknown[][], sourceSheet: string, collectedAt: s
       id: `${sourceSheet}:${SHEET_TAB}:${sourceRow}`,
       source_sheet: sourceSheet, source_tab: SHEET_TAB, source_row: sourceRow,
       platform, country: "印度", order_number: orderNumber, utr: textValue(rowValue(row, headers, "UTR")),
+      upi_id: upiValue(rowValue(row, headers, "UPI")), kyc_upi_id: upiValue(rowValue(row, headers, "KYC-UPI")),
       amount: numberValue(rowValue(row, headers, "金额")), provider: textValue(rowValue(row, headers, "三方")),
       provider_reply: textValue(rowValue(row, headers, "三方回复"), 4000),
       utr_match: textValue(rowValue(row, headers, "UTR是否匹配")), kyc_correct: textValue(rowValue(row, headers, "KYC正确")),
       match_status: textValue(rowValue(row, headers, "对上")), status: textValue(rowValue(row, headers, "状态")),
       unreceived_days: numberValue(rowValue(row, headers, "未入款天数")), record_date: dateValue(rowValue(row, headers, "日期")),
-      source_updated_at: collectedAt, updated_at: collectedAt,
+      source_updated_at: collectedAt, updated_at: collectedAt, stale_at: null,
     });
   }
   return rows;
 }
 
 // Platform tabs have some historical header spelling differences. Resolve only
-// known columns; never ingest UPI/KYC payment addresses or member identifiers.
+// known columns. UPI and KYC-UPI are explicitly authorized; member identifiers,
+// phone numbers and bank-account columns remain excluded.
+// The user-confirmed staff code is column L. Some tabs also label the member
+// column A "ID NUMBER", so it must never be resolved by first matching header.
 function entryRowsFromValues(values: unknown[][], sourceSheet: string, tab: string, gid: number, collectedAt: string): Record<string, unknown>[] {
   if (!Array.isArray(values) || !Array.isArray(values[0])) throw new SyncError("entry_rows_missing", 502);
   const normalize = (v: unknown) => String(v ?? "").trim().replace(/\s+/g, " ").toUpperCase();
   const headers = new Map<string, number>(); values[0].forEach((value, i) => { const key = normalize(value); if (key && !headers.has(key)) headers.set(key, i); });
+  const upiColumn = normalize(values[0][6]) === "UPI ID" ? 6 : null;
+  const kycUpiColumn = normalize(values[0][7]) === "KYC-UPI ID" ? 7 : null;
+  const staffColumn = normalize(values[0][11]) === "ID NUMBER" ? 11 : null;
+  // P contains the original sheet's age/text value, despite its RECEIPT DATE
+  // title. JAICLUB also gives O this title: preserve O separately, never treat
+  // it as a follow-up timestamp or let its first header match replace P.
+  const receiptColumn = normalize(values[0][15]) === "RECEIPT DATE" ? 15 : null;
+  const sourceDateColumn = tab === "JAICLUB" && normalize(values[0][14]) === "RECEIPT DATE" ? 14 : null;
   for (const key of ["ORDER NUMBER", "AMOUNT", "THIRDPARTY", "STATUS", "MAIN THIRD PARTY REPLY"]) if (!headers.has(key)) throw new SyncError("entry_headers_missing", 502);
   if (values.length > MAX_ROWS) throw new SyncError("source_row_limit_reached", 413);
   const rows: Record<string, unknown>[] = [];
@@ -153,11 +168,15 @@ function entryRowsFromValues(values: unknown[][], sourceSheet: string, tab: stri
     rows.push({ id: `${sourceSheet}:${tab}:${i + 1}`, source_sheet: sourceSheet, source_tab: tab, source_gid: gid, source_row: i + 1,
       country: "印度", platform: tab, order_number: orderNumber, work_order_number: textValue(get("WORK ORDER NUMBER")),
       utr: textValue(get(headers.has("UTR NUMBER") ? "UTR NUMBER" : "UTR NUMMBER")),
+      upi_id: upiColumn === null ? null : upiValue(row[upiColumn]), kyc_upi_id: kycUpiColumn === null ? null : upiValue(row[kycUpiColumn]),
       amount: numberValue(get("AMOUNT")), provider: textValue(get("THIRDPARTY")),
       provider_reply: textValue(get("MAIN THIRD PARTY REPLY"), 4000), followup_status: textValue(get("STATUS")),
       utr_match: textValue(get("UTR MATCHED")), kyc_correct: textValue(get("KYC记录正确")),
       evidence: textValue(get("PDF/VIDEO"), 2000), followup_at: followupAt, followup_date: followupDate,
-      receipt_text: textValue(get("RECEIPT DATE")), source_updated_at: collectedAt, updated_at: collectedAt });
+      staff_code: staffColumn === null ? null : textValue(row[staffColumn]),
+      receipt_text: receiptColumn === null ? null : textValue(row[receiptColumn]),
+      source_date_text: sourceDateColumn === null ? null : textValue(row[sourceDateColumn]),
+      source_updated_at: collectedAt, updated_at: collectedAt, stale_at: null });
   }
   return rows;
 }
@@ -196,17 +215,23 @@ export function createDepositIssueSyncHandler(runtime: Runtime) {
       if (!Array.isArray(source?.values) || source.values.length > MAX_ROWS) throw new SyncError("source_row_limit_reached", 413);
       const rows = rowsFromValues(source.values, settings.sourceId, collectedAt);
       const entries = await readEntrySheets(settings, runtime, { Authorization: "Bearer " + token.access_token, Accept: "application/json" }, collectedAt);
-      const targets = [{ table: "admin_deposit_issue_rows", rows, source: settings.sourceId, tab: SHEET_TAB },
-        { table: "admin_deposit_followup_rows", rows: entries.rows, source: settings.entrySourceId, tab: null }];
+      const targets = [{ table: "admin_deposit_issue_rows", rows, source: settings.sourceId, tabs: [SHEET_TAB] },
+        { table: "admin_deposit_followup_rows", rows: entries.rows, source: settings.entrySourceId, tabs: entries.tabs }];
       const databaseHeaders = { apikey: settings.serviceKey, Authorization: "Bearer " + settings.serviceKey };
-      // Read and validate both sources before writing. Failed writes never delete
-      // old rows; cleanup starts only after both complete mirrors are persisted.
+      // Read and validate both sources before writing. Current rows are reactivated.
+      // Only a complete successful mirror may archive older Sheet rows; no data is deleted.
       for (const target of targets) for (let at = 0; at < target.rows.length; at += 500) {
         await requestJson(runtime, settings.supabaseUrl + "/rest/v1/" + target.table + "?on_conflict=source_sheet,source_tab,source_row", { method: "POST", headers: { ...databaseHeaders, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(target.rows.slice(at, at + 500)) }, 128 * 1024);
       }
-      for (const target of targets) {
-        const stale = settings.supabaseUrl + "/rest/v1/" + target.table + "?source_sheet=eq." + encodeURIComponent(target.source) + (target.tab ? "&source_tab=eq." + encodeURIComponent(target.tab) : "") + "&updated_at=lt." + encodeURIComponent(collectedAt);
-        await requestJson(runtime, stale, { method: "DELETE", headers: { ...databaseHeaders, Prefer: "return=minimal" } }, 64 * 1024);
+      for (const target of targets) for (const tab of target.tabs) {
+        // Scope by the exact successfully read workbook and tab. Sheet archival
+        // cannot touch portal mirrors, other sources, or a newer overlapping run.
+        const filters = new URLSearchParams({ source_sheet: "eq." + target.source, source_tab: "eq." + tab,
+          updated_at: "lt." + collectedAt, stale_at: "is.null" });
+        if (target.table === "admin_deposit_followup_rows") filters.set("source_kind", "eq.sheet");
+        await requestJson(runtime, settings.supabaseUrl + "/rest/v1/" + target.table + "?" + filters,
+          { method: "PATCH", headers: { ...databaseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
+            body: JSON.stringify({ stale_at: collectedAt }) }, 64 * 1024);
       }
       return json({ ok: true, action: "sync", source: settings.sourceId, tab: SHEET_TAB, rowsRead: rows.length, rowsWritten: rows.length, entryRows: entries.rows.length, entryTabs: entries.tabs.length, collectedAt });
     } catch (error) {

@@ -87,7 +87,7 @@ test('direct supervisor routes and bookmarks defer all requests until an existin
   for(const options of [{page,reports:true},{hash:'#'+page,reports:true}]){
    const h=await ready(options);assert.equal(h.c.state.page,page);assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.calls.length,0);assert.match(h.html(),/员工测试站尚未接通/);
    h.c.setPage('workorders');await settle();assert.equal(h.c.state.page,'workorders');assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.calls.filter(q=>q.action==='catalog').length,1);assert(h.calls.some(q=>q.action==='workorders'));assert(!h.calls.some(q=>q.action==='aggregate'));
-   h.c.setPage('deposit_tracking');await settle();assert.equal(h.c.state.page,'deposit_tracking');assert(h.calls.some(q=>q.action==='depositIssues'));assert.match(h.nodes.get('crumbTitle').textContent,/工单运营中心 \/ 存款未到账明细/);
+   h.c.setPage('deposit_tracking');await settle();assert.equal(h.c.state.page,'deposit_tracking');assert(h.calls.some(q=>q.action==='depositIssues'));assert.match(h.nodes.get('crumbTitle').textContent,/工单运营中心 \/ 存款未到账-跟进记录/);
   }
  }
 });
@@ -620,7 +620,8 @@ test('workorder page restores filters and resets the inherited payout or collect
 test('deposit requests preserve the sheet day and hide stale totals when filters change',async()=>{
  const h=await ready();h.setHandler(q=>q.action==='depositIssues'?{rows:[{recordDate:'2026-09-23',platform:'Synthetic platform',provider:'Synthetic Provider',orderNumber:'SYNTHETIC-ORDER',amount:900,status:'已入款',unreceivedDays:90,providerReply:'成功 <script>',utrMatch:'一致',kycCorrect:'正确'}],total:1,summary:{count:1,amount:900,unreceivedAmount:0,unreceivedCount:0,receivedCount:1,maxUnreceivedDays:0}}:{rows:[],total:0});
  h.L.from='2026-09-23T00:00:00';h.L.to='2026-09-23T23:59:59';h.c.setPage('deposit_tracking');await settle();const q=h.calls.at(-1);assert.equal(q.startAt,'2026-09-23T00:00:00.000Z');assert.equal(q.endAt,'2026-09-23T23:59:59.000Z');
- h.c.depositIssuesSection('details');const table=renderedTables(h.html()).find(t=>t.headers[0]==='原表日期');assert(table);assert.equal(plain(table.rows[0][7]),'—');assert.match(h.html(),/成功 &lt;script&gt;/);assert.doesNotMatch(h.html(),/<script>/);assert.doesNotMatch(h.html(),/查看回复|<details/);assert.equal(q.dateMode,'all');
+ h.c.depositIssuesSource('results');await settle();h.c.depositIssuesSection('details');const table=renderedTables(h.html()).find(t=>t.headers[0]==='原表日期');assert(table);const unreceivedDaysColumn=table.headers.indexOf('未入款天数');assert(unreceivedDaysColumn>=0);assert.equal(plain(table.rows[0][unreceivedDaysColumn]),'—','a sheet received marker hides its original unreceived-day count');assert.equal(plain(table.rows[0][table.headers.indexOf('原表日期')]),'2026-09-23','the sheet record date remains separate from the RC-derived receipt date');assert.match(h.html(),/成功 &lt;script&gt;/);assert.doesNotMatch(h.html(),/<script>/);assert.doesNotMatch(h.html(),/查看回复|<details/);assert.equal(q.dateMode,'all');
+ h.c.depositIssuesSource('entries');await settle();h.c.depositIssuesSection('details');const entriesTable=renderedTables(h.html()).find(t=>t.headers.includes('距今天数'));assert(entriesTable);assert.equal(plain(entriesTable.rows[0][entriesTable.headers.indexOf('距今天数')]),'—','an invalid RC order number has no derived age; do not reuse the original sheet day count');
  h.c.depositIssuesDate('from','2026-09-22');assert.match(h.html(),/点击查询/);assert.doesNotMatch(h.html(),/SYNTHETIC-ORDER/);await h.c.depositIssuesLoad();assert.equal(h.calls.at(-1).startAt,'2026-09-22T00:00:00.000Z');
 });
 test('revisiting a reason tab reuses its bounded cache, while refresh invalidates it',async()=>{
@@ -631,9 +632,9 @@ test('revisiting a reason tab reuses its bounded cache, while refresh invalidate
 
 test('deposit summaries cover the filtered dataset and source switches carry searchable replies without mixing totals',async()=>{
  const h=await ready();h.setHandler(q=>q.action==='depositIssues'?{view:q.view,rows:[],total:20,summary:{count:20,unreceivedCount:12,unreceivedAmount:900,receivedCount:8,linkedCount:17,unlinkedCount:2,reviewCount:1},facets:{platforms:['Synthetic platform'],providers:['UmoneyPay'],followupStatuses:['need to provide pdf/video']},providerSummary:[{provider:'UmoneyPay',matchStatus:'对得上',count:20,unreceivedCount:12,unreceivedAmount:900,maxDays:9,receivedCount:8}],dailySummary:[{date:'2026-09-23',count:20,matchedCount:15,unmatchedCount:5,receivedCount:8,unreceivedCount:12}],platformSummary:[{platform:'Synthetic platform',count:20,linkedCount:17,unlinkedCount:3}],statusSummary:[{status:'need to provide pdf/video',count:12,amount:900}]}:{rows:[]});
- h.c.setPage('deposit_tracking');await settle();assert.match(h.html(),/三方未入款统计/);assert.match(h.html(),/每日核对统计/);
+ h.c.setPage('deposit_tracking');await settle();h.c.depositIssuesSource('results');await settle();assert.match(h.html(),/三方未入款统计/);assert.match(h.html(),/每日核对统计/);
  h.c.depositIssuesDrill('providers',0);await settle();assert.equal(h.calls.at(-1).provider,'UmoneyPay');assert.equal(h.calls.at(-1).match,'matched');assert.equal(h.L.depositIssuesSection,'details');
- h.c.depositIssuesSet('query','success to other');h.c.depositIssuesSource('entries');await settle();assert.equal(h.calls.at(-1).view,'entries');assert.equal(h.calls.at(-1).query,'success to other');assert.equal(h.calls.at(-1).status,undefined);assert.equal(h.calls.at(-1).match,undefined);assert.match(h.html(),/打开录入表/);assert.match(h.html(),/各平台录入进度/);assert.match(h.html(),/跟进状态分布/);
+ h.c.depositIssuesSet('query','success to other');h.c.depositIssuesSource('entries');await settle();assert.equal(h.calls.at(-1).view,'entries');assert.equal(h.calls.at(-1).query,'success to other');assert.equal(h.calls.at(-1).status,undefined);assert.equal(h.calls.at(-1).match,undefined);assert.match(h.html(),/打开员工原表/);assert.equal(h.L.depositIssuesSection,'details');h.c.depositIssuesSection('summary');assert.match(h.html(),/各平台录入进度/);assert.match(h.html(),/跟进状态分布/);
  h.c.depositIssuesDrill('statuses',0);await settle();assert.equal(h.calls.at(-1).followupStatus,'need to provide pdf/video');
 });
 

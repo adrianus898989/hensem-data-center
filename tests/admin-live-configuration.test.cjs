@@ -142,6 +142,39 @@ test('deposit result statistics and entry linkage use exact scoped orders, retai
  }finally{await db.exec('rollback');await as(owner)}
  await db.exec('set role authenticated');try{await assert.rejects(()=>db.query('select * from admin_deposit_followup_rows'),/permission denied/)}finally{await db.exec('reset role')}
 });
+test('follow-up column filters apply before pagination and portal records cannot change sheet linkage',async()=>{
+ await as(owner);await db.exec('begin');try{
+  await db.exec(`insert into admin_deposit_issue_rows(id,source_sheet,source_row,country,platform,order_number,utr,amount,provider,status,record_date,provider_reply)
+   values('result-safe','synthetic-result',2,'印度','EXAMPLE','CASE-A','00001234',125.50,'SyntheticPay','未入款','2026-09-23','formula reply');
+   insert into admin_deposit_followup_rows(id,source_sheet,source_tab,source_row,country,platform,order_number,work_order_number,utr,amount,provider,provider_reply,followup_status,utr_match,kyc_correct,staff_code,source_date_text,receipt_text,followup_date)
+   values('entry-safe','synthetic-entry','EXAMPLE',2,'印度','EXAMPLE','CASE-A','TICKET-A','00001234',125.50,'SyntheticPay','Need PDF','pending','YES','NO','007','23/9','29','2026-09-23');
+   insert into admin_deposit_followup_rows(id,source_sheet,source_tab,source_row,country,platform,order_number,work_order_number,utr,amount,provider,provider_reply,followup_status,followup_date,source_kind,first_actor,last_actor,portal_case_id,portal_version,portal_payload)
+   values('portal-safe','PORTAL','synthetic-case',1,'印度','EXAMPLE','CASE-A','TICKET-A','00001234',125.50,'SyntheticPay','Portal reply','success','2026-09-23','portal','Synthetic creator','Synthetic follower','synthetic-case',4,'{"private":"not returned"}');
+   insert into admin_deposit_followup_rows(id,source_sheet,source_tab,source_row,country,platform,order_number,amount,provider,provider_reply,followup_date)
+   select 'many-'||i,'synthetic-entry','EXAMPLE',i+10,'印度','EXAMPLE','OTHER-'||i,0,'SyntheticPay','zero reply','2026-09-23' from generate_series(1,23)i;`);
+  const base={startAt:'2026-09-23T00:00:00Z',endAt:'2026-09-23T23:59:59Z',dateMode:'all',country:'印度',platform:'EXAMPLE'};
+  const result=await call('deposit_issues',{...base,view:'results'});assert.equal(result.total,1);assert.equal(result.rows[0].linkStatus,'matched');assert.equal(result.summary.unreceivedAmount,125.50);
+  const all=await call('deposit_issues',{...base,view:'entries'});assert.equal(all.total,25);assert.equal(all.rows.length,20);assert.equal(all.summary.portalCount,1);assert.equal(all.summary.linkedCount,1);assert.equal(all.summary.unlinkedCount,23);assert.equal(all.summary.reviewCount,0);
+  await db.exec("update admin_deposit_followup_rows set upi_id='synthetic@upi.invalid',kyc_upi_id='***@bank.invalid' where id='entry-safe'");
+  const filtered=await call('deposit_issues',{...base,view:'entries',sourceKind:'sheet',orderNumber:'case-a',workOrderNumber:'ticket',utr:'0000',reply:'need pdf',utrMatch:'yes',kycCorrect:'no',staffCode:'007',upiId:'synthetic',kycUpiId:'***@bank',amountMin:125.5,amountMax:125.5});
+  assert.equal(filtered.total,1);assert.equal(filtered.summary.count,1);assert.equal(filtered.rows[0].staffCode,'007');assert.equal(filtered.rows[0].sourceDateText,'23/9');assert.equal(filtered.rows[0].receiptText,'29');assert.equal(filtered.rows[0].utr,'00001234');assert.equal(filtered.rows[0].upiId,'synthetic@upi.invalid');assert.equal(filtered.rows[0].kycUpiId,'***@bank.invalid');assert.equal(filtered.rows[0].orderDate,null);assert.equal(filtered.rows[0].daysSinceOrder,null);
+  await db.exec("update admin_deposit_followup_rows set order_number='RC20260925SYNTHETIC' where id='entry-safe'");
+  const dated=await call('deposit_issues',{...base,view:'entries',upiId:'synthetic'});assert.equal(dated.rows[0].orderDate,'2026-09-25');assert.equal(typeof dated.rows[0].daysSinceOrder,'number');
+  await db.exec("update admin_deposit_followup_rows set order_number='CASE-A' where id='entry-safe'");
+  assert.equal((await call('deposit_issues',{...base,view:'entries',reply:'formula reply'})).total,0,'a column filter must not silently search the linked result reply');
+  const portal=await call('deposit_issues',{...base,view:'entries',sourceKind:'portal'});assert.equal(portal.total,1);assert.equal(portal.rows[0].linkStatus,'independent');assert.equal(portal.rows[0].status,'待核对');assert.equal(portal.rows[0].firstActor,'Synthetic creator');assert.equal(portal.rows[0].portalVersion,4);assert.equal(portal.rows[0].portalCaseId,'synthetic-case');assert(!JSON.stringify(portal).includes('not returned'));
+  const zero=await call('deposit_issues',{...base,view:'entries',amountMin:0,amountMax:0,offset:20});assert.equal(zero.total,23);assert.equal(zero.rows.length,3);assert.equal(zero.summary.amount,0);
+  assert.equal((await call('deposit_issues',{...base,view:'entries',utrMatch:'未填写'})).total,24);assert(all.facets.utrMatches.includes('YES'));assert(all.facets.kycCorrectValues.includes('NO'));
+ }finally{await db.exec('rollback');await as(owner)}
+});
+test('follow-up filters reject malformed ranges and remain limited to authorized platforms',async()=>{
+ await as(owner);const q={view:'entries',startAt:'2026-09-23T00:00:00Z',endAt:'2026-09-23T23:59:59Z'};
+ for(const extra of [{sourceKind:'arbitrary'},{amountMin:'1'},{amountMin:-1},{amountMin:2,amountMax:1},{amountMax:1e19},{staffCode:{}},{reply:'x'.repeat(201)}])await assert.rejects(()=>call('deposit_issues',{...q,...extra}));
+ await db.exec('begin');try{
+  await db.exec(`insert into admin_deposit_followup_rows(id,source_sheet,source_tab,source_row,country,platform,order_number,source_kind,first_actor) values('scope-allowed','PORTAL','allowed',1,'印度','EXAMPLE','A','portal','Visible employee'),('scope-hidden','PORTAL','hidden',1,'尼泊尔','NEW','B','portal','Hidden employee');`);
+  await as(viewer);const r=await call('deposit_issues',{...q,dateMode:'all',sourceKind:'portal'});assert.equal(r.total,1);assert.equal(r.rows[0].platform,'EXAMPLE');assert(!JSON.stringify(r).includes('Hidden employee'));
+ }finally{await db.exec('rollback');await as(owner)}
+});
 test('registry preserves historical mappings, conflicts, blanks and authorized options without live aggregate',async()=>{
  await as(viewer);const r=await call('provider_config',{country:'印度'});assert.equal(r.canManage,false);assert.equal(r.total,5);assert.equal(r.summary.conflict,1);assert.equal(r.summary.unassigned,1);assert(!JSON.stringify(r).includes('HiddenPay'));
  const catalog=await call('query',{action:'catalog'}),id=catalog.platforms.find(p=>p.name==='EXAMPLE').id;
@@ -360,4 +393,22 @@ test('provider canonicalization preserves success-time page order and raw eviden
  const input=[{id:'first',provider:'raw-a',raw_provider:'raw-a',created_at:'2026-09-21',success_at:'2026-09-25'},{id:'second',provider:'raw-a',raw_provider:null,created_at:'2026-09-24',success_at:'2026-09-24'}];
  const rows=(await db.query("select private.dashboard_admin_live_remap_rows($1::jsonb,'印度','EXAMPLE') rows",[JSON.stringify(input)])).rows[0].rows;
  assert.deepEqual(rows.map(r=>r.id),['first','second']);assert.equal(rows[0].raw_provider,'raw-a');assert.equal(rows[1].raw_provider,null);
+});
+
+test('soft-archived sheet duplicates stay recoverable without inflating linkage, summaries or filter facets',async()=>{
+ await as(owner);await db.exec(sql('workorder-followup-soft-archive.sql'));await db.exec('begin');try{
+  await db.exec(`insert into admin_deposit_issue_rows(id,source_sheet,source_row,country,platform,order_number,utr,amount,provider,status,record_date,stale_at)
+   values('active-result','synthetic',100,'印度','EXAMPLE','ARCHIVE-ORDER','0001',42,'ActivePay','未入款','2026-09-23',null),
+   ('archived-result','synthetic',101,'印度','EXAMPLE','ARCHIVE-ORDER','0001',42,'OldPay','未入款','2026-09-23',now()),
+   ('archived-only-result','synthetic',102,'印度','ArchivedOnly','OLD','0002',900,'ArchivedOnlyPay','未入款','2026-09-23',now());
+   insert into admin_deposit_followup_rows(id,source_sheet,source_tab,source_row,country,platform,order_number,utr,amount,provider,followup_date,stale_at)
+   values('active-entry','synthetic-entry','EXAMPLE',100,'印度','EXAMPLE','ARCHIVE-ORDER','0001',42,'ActivePay','2026-09-23',null),
+   ('archived-entry','synthetic-entry','EXAMPLE',101,'印度','EXAMPLE','ARCHIVE-ORDER','0001',42,'OldPay','2026-09-23',now()),
+   ('archived-only-entry','synthetic-entry','ArchivedOnly',102,'印度','ArchivedOnly','OLD','0002',900,'ArchivedOnlyPay','2026-09-23',now());`);
+  const q={startAt:'2026-09-23T00:00:00Z',endAt:'2026-09-23T23:59:59Z',dateMode:'all',country:'印度'};
+  for(const view of ['results','entries']){const r=await call('deposit_issues',{...q,view});assert.equal(r.total,1);assert.equal(r.summary.count,1);assert.equal(r.summary.amount,42);assert.equal(r.rows[0].linkStatus,'matched');assert(!JSON.stringify(r).includes('ArchivedOnly'));assert(!JSON.stringify(r.facets).includes('OldPay'));}
+  assert.equal((await db.query("select count(*)::int n from admin_deposit_issue_rows where source_sheet='synthetic'")).rows[0].n,3);
+  assert.equal((await db.query("select count(*)::int n from admin_deposit_followup_rows where source_sheet='synthetic-entry'")).rows[0].n,3);
+  await db.exec("update admin_deposit_followup_rows set stale_at=null where id='archived-entry'");const restored=await call('deposit_issues',{...q,view:'entries'});assert.equal(restored.total,2);assert(restored.rows.every(r=>r.linkStatus==='review'),'restored duplicate is visible and correctly needs manual review');
+ }finally{await db.exec('rollback');await as(owner);}
 });

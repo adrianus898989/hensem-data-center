@@ -223,3 +223,32 @@ test('dialog cleanup cancels delayed autofocus and does not refocus a removed op
   const h = dialogHarness(); h.mount(); assert.equal(h.timers.size, 1); h.opener.isConnected = false; h.document.activeElement = null;
   h.unmount(); h.runTimers(); assert.equal(h.document.activeElement, null); assert.equal(h.timers.size, 0); assert.equal(h.document.body.style.overflow, 'scroll');
 });
+
+test('large platform scopes show a compact preview and open the complete account-specific list without another request', async () => {
+  const many = ['PLATFORM_ALPHA_LONG', 'PLATFORM_BETA_LONG', '<not-html>', ...Array.from({length: 28}, (_, i) => `PLATFORM_${i + 4}`)];
+  const h = ui(async () => ({ok: true, accounts: [{...accounts[0], platforms: many}, accounts[2]], catalog}));
+  await flush();
+  const row = nodes(h.draw()).filter(n => n.type === 'tr')[1], cell = nodes(row).filter(n => n.type === 'td')[4];
+  const preview = nodes(cell).find(n => n.props?.className === 'wo-account-scope-preview');
+  assert.equal(text(preview), many.slice(0, 2).join('、')); assert.equal(preview.props.title, many.join('、'));
+  assert.doesNotMatch(text(cell), /PLATFORM_31|<not-html>/);
+  assert.match(text(cell), /共 31 个平台 · 查看全部/);
+  assert.equal(nodes(row).filter(n => n.type === 'td')[5].props.children.props.children, '启用');
+  assert.equal(nodes(row).filter(n => n.type === 'td')[6].props.children.props.className, 'wo-account-actions');
+  const open = h.button('共 31 个平台 · 查看全部'); assert.equal(open.props['aria-haspopup'], 'dialog'); open.props.onClick();
+  assert.equal(h.dialog().props.title, 'alice · 平台范围'); assert.deepEqual(nodes(h.dialog()).filter(n => n.type === 'li').map(text), many);
+  assert(!nodes(h.dialog()).some(n => n.props?.dangerouslySetInnerHTML));
+  assert.equal(h.calls.length, 1, 'the full list uses the authorized directory already loaded'); assert.equal(h.form(), undefined);
+  h.dialog().props.onClose(); assert.equal(h.dialog(), undefined); assert.deepEqual(h.visibleUsers(), ['alice', 'hkstaff']);
+  h.filter('平台', 'PLATFORM_31', 'select'); assert.deepEqual(h.visibleUsers(), ['alice'], 'filtering still includes platforms omitted from the preview');
+});
+
+test('refresh and edit remove the scope dialog, and a failed refresh cannot retain an old authorized list', async () => {
+  let fail = false;
+  const h = ui(async () => {if (fail) throw Error('无权读取'); return {ok: true, accounts: [{...accounts[0], platforms: ['A', 'B', 'C']}], catalog};});
+  await flush(); h.button('共 3 个平台 · 查看全部').props.onClick(); assert(h.dialog());
+  h.button('编辑范围 / 角色').props.onClick(); assert.equal(h.dialog().props.title, '编辑工单账号 · alice'); h.dialog().props.onClose();
+  h.button('共 3 个平台 · 查看全部').props.onClick(); fail = true;
+  h.button('刷新列表').props.onClick(); h.draw(); h.effect(); await flush();
+  assert.equal(h.dialog(), undefined); assert.doesNotMatch(text(h.draw()), /alice|共 3 个平台/); assert.match(text(h.draw()), /无权读取/);
+});

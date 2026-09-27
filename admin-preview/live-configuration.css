@@ -159,13 +159,20 @@ body.live-admin .provider-kpi-change.up em{background:#e9f6f1}
 body.live-admin .provider-kpi-change.down em{background:#fcf0f1}
 body.live-admin .provider-comparison-context{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;color:#8091aa;font-size:10px;line-height:1.5;margin:0 1px 10px}
 body.live-admin .provider-compact-table{max-height:none;overflow:auto}
-body.live-admin .provider-compact-table table{min-width:1420px;width:100%;table-layout:auto}
+body.live-admin .provider-compact-table table{min-width:1420px;width:100%;table-layout:fixed}
 body.live-admin .provider-compact-table th,body.live-admin .provider-compact-table td{padding:6px 8px!important;font-size:11px;line-height:1.6}
-body.live-admin .provider-compact-table th{min-width:54px;font-size:10px;white-space:normal}
-body.live-admin .provider-compact-table th .link{font:inherit;font-weight:600;white-space:normal;line-height:1.5;color:#506eac}
+body.live-admin .provider-compact-table th{min-width:0;font-size:10px;white-space:nowrap;word-break:normal;overflow-wrap:normal;height:32px;box-sizing:border-box}
+body.live-admin .provider-compact-table th .link,body.live-admin .provider-platform-labels .provider-sort-heading{font:inherit;font-weight:600;white-space:nowrap;word-break:normal;overflow-wrap:normal;line-height:1.5;color:#506eac}
 body.live-admin .provider-compact-table th:first-child,body.live-admin .provider-compact-table td:first-child{min-width:105px;text-align:left}
 body.live-admin .provider-compact-table th:nth-child(2),body.live-admin .provider-compact-table td:nth-child(2){min-width:42px;text-align:center;color:#7184a4}
 body.live-admin .provider-compact-table td{font-variant-numeric:tabular-nums;white-space:nowrap}
+body.live-admin .provider-fee-preview{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;font:inherit;cursor:pointer}
+body.live-admin .provider-fee-preview:focus-visible{outline:2px solid #4265ec;outline-offset:2px;border-radius:3px}
+body.live-admin .drawer-backdrop:has(.provider-rate-details){z-index:200}
+body.live-admin .provider-rate-details table{min-width:1080px;table-layout:fixed}
+body.live-admin .provider-rate-details th{white-space:nowrap}
+body.live-admin .provider-rate-details td{white-space:normal;overflow-wrap:anywhere;vertical-align:top;line-height:1.65}
+body.live-admin .provider-rate-details td:nth-child(n+6):nth-child(-n+9){width:140px}
 body.live-admin .provider-compact-table tbody tr:hover td{background:#f6f9ff}
 body.live-admin .provider-partial{margin-left:4px;border-radius:3px;padding:1px 4px;background:#fff3df;color:#a87323;font-size:9px}
 @media(max-width:1500px){body.live-admin .provider-summary-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
@@ -205,8 +212,12 @@ body.live-admin .deposit-reply{min-width:180px;max-width:320px;text-align:left;w
 body.live-admin .deposit-source-tabs{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px}
 body.live-admin .deposit-source-tabs [role=tablist]{display:flex;gap:8px}
 body.live-admin .deposit-issues-toolbar{padding:12px;margin-bottom:12px}
-body.live-admin .deposit-issues-toolbar .live-filters{padding:0;gap:10px;border:0;margin:0}
-body.live-admin .deposit-issues-toolbar label.live-field{display:flex;flex-direction:column;gap:5px;font-size:10px;color:#7185a5}
+body.live-admin .deposit-issues-toolbar .live-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:end;padding:0;gap:10px;border:0;margin:0}
+body.live-admin .deposit-issues-toolbar label.live-field{display:flex;flex-direction:column;gap:5px;min-width:0;width:100%;font-size:10px;color:#7185a5}
+body.live-admin .deposit-issues-toolbar .live-field>span{line-height:14px}
+body.live-admin .deposit-issues-toolbar .live-field input,body.live-admin .deposit-issues-toolbar .live-field select{height:30px;min-width:0;width:100%;box-sizing:border-box}
+@media(min-width:1600px){body.live-admin .deposit-issues-toolbar .live-filters{grid-template-columns:repeat(6,minmax(0,1fr))}}
+@media(max-width:900px){body.live-admin .deposit-issues-toolbar .live-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}
 body.live-admin .deposit-search{min-width:255px;flex:1}
 body.live-admin .deposit-context{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin:10px 0;color:#7185a5;font-size:11px;line-height:1.6}
 body.live-admin .deposit-summary-grid{display:grid;grid-template-columns:1fr 1.15fr;gap:12px;align-items:start}
@@ -222,6 +233,14 @@ body.live-admin .deposit-muted{color:#9aa7bb}
 @media(max-width:1500px){body.live-admin .deposit-summary-grid{grid-template-columns:1fr}body.live-admin .deposit-reply{min-width:160px}}
 body.live-admin .deposit-result-details th:last-child,body.live-admin .deposit-result-details td:last-child{position:sticky;right:0;background:#fff;box-shadow:-4px 0 8px #142c5210;text-align:left;min-width:210px;max-width:320px}
 body.live-admin .deposit-result-details th:last-child{background:#f5f7fc;z-index:3}
+body.live-admin .deposit-entry-details table{min-width:2420px}
+body.live-admin .deposit-entry-details th,body.live-admin .deposit-entry-details td{white-space:nowrap;vertical-align:top}
+body.live-admin .deposit-entry-details th:first-child,body.live-admin .deposit-entry-details td:first-child{position:sticky;left:0;background:#fff;z-index:1;min-width:95px}
+body.live-admin .deposit-entry-details th:first-child{background:#f5f7fc;z-index:3}
+body.live-admin .deposit-entry-details .deposit-reply{white-space:pre-wrap;min-width:190px;max-width:300px}
+body.live-admin .deposit-issues-toolbar .live-actions{align-self:end;display:flex;flex-wrap:nowrap;min-width:0;height:30px}
+body.live-admin .deposit-issues-toolbar .live-actions .btn{flex:1;min-width:0;height:30px}
+body.live-admin .deposit-metrics{grid-template-columns:repeat(auto-fit,minmax(135px,1fr))}
 
 body.live-admin .withdraw-toolbar{overflow:visible;position:relative;z-index:6}
 

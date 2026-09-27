@@ -16,9 +16,11 @@ export default function WorkOrderAccountAdmin({session}:{session:DashboardSessio
   const [nameFilter,setNameFilter]=useState(""),[roleFilter,setRoleFilter]=useState(""),[teamFilter,setTeamFilter]=useState(""),[platformFilter,setPlatformFilter]=useState(""),[statusFilter,setStatusFilter]=useState("");
   const [editing,setEditing]=useState<WorkOrderAccount|null>(null),[creating,setCreating]=useState(false),[draft,setDraft]=useState<Draft>(fresh);
   const [resetTarget,setResetTarget]=useState<WorkOrderAccount|null>(null),[password,setPassword]=useState("");
+  const [scopeTargetId,setScopeTargetId]=useState<string|null>(null);
+  const scopeTarget=loaded&&!loading?rows.find(row=>row.auth_user_id===scopeTargetId):undefined;
   const [revision,setRevision]=useState(0);
   useEffect(()=>{
-    const controller=new AbortController();setLoading(true);setError("");
+    const controller=new AbortController();setLoading(true);setError("");setScopeTargetId(null);
     workOrderAccountRequest(sessionRef.current,{action:"list-accounts"},controller.signal).then(result=>{
       if(controller.signal.aborted)return;
       if(!Array.isArray(result.accounts)||!result.catalog||!Array.isArray(result.catalog.teams)||!Array.isArray(result.catalog.platforms)||!result.catalog.platformTeams)throw Error("工单账号目录返回不完整，请重试");
@@ -27,7 +29,7 @@ export default function WorkOrderAccountAdmin({session}:{session:DashboardSessio
     return()=>controller.abort();
   },[session.user.id,revision]);
   function closeEditor(){setCreating(false);setEditing(null);setDraft(fresh())}
-  function startEdit(row:WorkOrderAccount){closeEditor();setEditing(row);setDraft({...row,password:""});setResetTarget(null);setPassword("");setError("");setMessage("")}
+  function startEdit(row:WorkOrderAccount){setScopeTargetId(null);closeEditor();setEditing(row);setDraft({...row,password:""});setResetTarget(null);setPassword("");setError("");setMessage("")}
   function receive(row:WorkOrderAccount|undefined){if(!row)throw Error("操作返回不完整，请刷新账号列表确认结果");setRows(old=>old.some(x=>x.auth_user_id===row.auth_user_id)?old.map(x=>x.auth_user_id===row.auth_user_id?row:x):[...old,row].sort((a,b)=>a.username.localeCompare(b.username)));}
   async function save(event:React.FormEvent){
     event.preventDefault();if(busy||loading||!catalog||(!creating&&!editing))return;
@@ -55,7 +57,7 @@ export default function WorkOrderAccountAdmin({session}:{session:DashboardSessio
   function closeReset(){setResetTarget(null);setPassword("");setError("")}
 
   return <div className="workorder-account-admin">
-    <div className="wo-account-toolbar"><h3>工单账号</h3><div className="wo-account-actions"><button type="button" disabled={busy||loading} onClick={()=>{closeEditor();closeReset();setRevision(x=>x+1)}}>刷新列表</button><button type="button" className="primary" aria-haspopup="dialog" disabled={busy||loading||!catalog} onClick={()=>{closeEditor();setCreating(true);closeReset();setMessage("")}}>新建工单账号</button></div></div>
+    <div className="wo-account-toolbar"><h3>工单账号</h3><div className="wo-account-actions"><button type="button" disabled={busy||loading} onClick={()=>{closeEditor();closeReset();setRevision(x=>x+1)}}>刷新列表</button><button type="button" className="primary" aria-haspopup="dialog" disabled={busy||loading||!catalog} onClick={()=>{setScopeTargetId(null);closeEditor();setCreating(true);closeReset();setMessage("")}}>新建工单账号</button></div></div>
     <div className="wo-account-filters">
       <label>账号<input aria-label="搜索工单账号" placeholder="输入账号" value={query} onChange={e=>setQuery(e.target.value)}/></label>
       <label>姓名<input placeholder="输入姓名 / 显示名称" value={nameFilter} onChange={e=>setNameFilter(e.target.value)}/></label>
@@ -74,7 +76,8 @@ export default function WorkOrderAccountAdmin({session}:{session:DashboardSessio
       <div className="wo-account-actions"><button className="primary" type="submit" disabled={!draft.platforms.length}>{busy?"保存中…":"保存账号"}</button><button type="button" onClick={closeEditor}>取消</button></div>
     </fieldset></form></AccountEditorDialog>}
     {resetTarget&&<AccountEditorDialog title={"重设工单密码 · "+resetTarget.username} busy={busy} onClose={closeReset} bodyClassName="workorder-account-admin"><form className="wo-account-editor" onSubmit={reset}>{error&&<p role="alert" className="wo-account-error">{error}</p>}<fieldset disabled={busy}><label>新密码<input aria-label="新工单密码" required type="password" minLength={8} maxLength={128} autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)}/></label><div className="wo-account-actions"><button type="submit" className="primary">{busy?"保存中…":"保存新密码"}</button><button type="button" onClick={closeReset}>取消</button></div></fieldset></form></AccountEditorDialog>}
+    {scopeTarget&&<AccountEditorDialog title={scopeTarget.username+" · 平台范围"} onClose={()=>setScopeTargetId(null)} bodyClassName="workorder-account-admin"><p className="wo-account-scope-heading">{scopeTarget.team} · 共 {scopeTarget.platforms.length} 个平台</p><ul className="wo-account-scope-list">{scopeTarget.platforms.map(platform=><li key={platform}>{platform}</li>)}</ul></AccountEditorDialog>}
     {loading&&<p role="status">正在读取工单账号…</p>}
-    {loaded&&<><p className="wo-account-count">共 {rows.length} 个工单账号 · 当前显示 {visible.length} 个</p><div className="wo-account-table"><table><thead><tr><th>账号</th><th>显示名称</th><th>角色</th><th>团队</th><th>平台范围</th><th>状态</th><th>操作</th></tr></thead><tbody>{visible.map(row=><tr key={row.auth_user_id}><td>{row.username}</td><td>{row.display_name}</td><td>{roles[row.role]||row.role}</td><td>{row.team}</td><td>{row.platforms.join("、")}</td><td><span className={row.active?"active":"inactive"}>{row.active?"启用":"停用"}</span></td><td><div className="wo-account-actions"><button disabled={busy||loading} onClick={()=>startEdit(row)}>编辑范围 / 角色</button><button disabled={busy||loading} onClick={()=>void toggle(row)}>{row.active?"停用":"启用"}</button><button disabled={busy||loading} onClick={()=>{closeEditor();setResetTarget(row);setPassword("");setError("");setMessage("")}}>重设密码</button></div></td></tr>)}</tbody></table>{!visible.length&&!loading&&!error&&<p className="wo-account-empty">{rows.length?"没有符合搜索条件的工单账号。":"还没有工单账号，可点击“新建工单账号”。"}</p>}</div></>}
+    {loaded&&<><p className="wo-account-count">共 {rows.length} 个工单账号 · 当前显示 {visible.length} 个</p><div className="wo-account-table"><table><colgroup><col className="wo-col-account"/><col className="wo-col-name"/><col className="wo-col-role"/><col className="wo-col-team"/><col className="wo-col-platforms"/><col className="wo-col-status"/><col className="wo-col-actions"/></colgroup><thead><tr><th>账号</th><th>显示名称</th><th>角色</th><th>团队</th><th>平台范围</th><th>状态</th><th>操作</th></tr></thead><tbody>{visible.map(row=><tr key={row.auth_user_id}><td>{row.username}</td><td>{row.display_name}</td><td>{roles[row.role]||row.role}</td><td>{row.team}</td><td className="wo-account-scope-cell"><div className="wo-account-scope-preview" title={row.platforms.join("、")}>{row.platforms.slice(0,2).join("、")||"未配置平台"}</div>{row.platforms.length>2?<button type="button" className="wo-account-scope-open" aria-haspopup="dialog" aria-label={"查看 "+row.username+" 的全部 "+row.platforms.length+" 个平台"} onClick={()=>{closeEditor();closeReset();setScopeTargetId(row.auth_user_id)}}>共 {row.platforms.length} 个平台 · 查看全部</button>:<small className="wo-account-scope-count">共 {row.platforms.length} 个平台</small>}</td><td><span className={row.active?"active":"inactive"}>{row.active?"启用":"停用"}</span></td><td><div className="wo-account-actions"><button disabled={busy||loading} onClick={()=>startEdit(row)}>编辑范围 / 角色</button><button disabled={busy||loading} onClick={()=>void toggle(row)}>{row.active?"停用":"启用"}</button><button disabled={busy||loading} onClick={()=>{setScopeTargetId(null);closeEditor();setResetTarget(row);setPassword("");setError("");setMessage("")}}>重设密码</button></div></td></tr>)}</tbody></table>{!visible.length&&!loading&&!error&&<p className="wo-account-empty">{rows.length?"没有符合搜索条件的工单账号。":"还没有工单账号，可点击“新建工单账号”。"}</p>}</div></>}
   </div>;
 }
