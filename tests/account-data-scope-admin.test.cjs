@@ -228,7 +228,7 @@ test('actual create handler refuses empty/outside draft and submits Panghu only 
   const scope=loadTs(path.join(root,'src/lib/dashboardDataScope.ts'));
   for(const [newDataScope,expected] of [[{mode:'selected',countries:[]},0],[VN,0],[PANGHU,1]]){
     const calls=[],messages=[];const actor=profile('manager','admin',{data_scope:PANGHU});
-    const context={canManageUsers:true,profile:actor,newDataScope,session:{},newUsername:'newuser',newPassword:'fixture-password',newRole:'viewer',newPermissions:full,newManagement:management,canViewAudit:false,
+    const context={canManageUsers:true,createBusy:false,profile:actor,newDataScope,session:{},newUsername:'newuser',newPassword:'fixture-password',newRole:'viewer',newPermissions:full,newManagement:management,canViewAudit:false,
       setCreateBusy:()=>{},setMessage:text=>messages.push(text),setNewUsername:()=>{},setNewPassword:()=>{},resetCreateRole:()=>{},setCreateOpen:()=>{},setNewDataScope:()=>{},loadUsers:async()=>{},loadAudit:async()=>{},roleLabel:()=> '查看账号',
       ...scope,createDashboardAccount:async(...args)=>{calls.push(args);return {role:'viewer',username:'newuser'};}};
     const submit=Function(...Object.keys(context),output+'\nreturn submitCreate;')(...Object.values(context));

@@ -1,0 +1,10 @@
+.account-editor-overlay{position:fixed;inset:0;z-index:2400;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(15,29,54,.42)}
+.account-editor-dialog{width:min(940px,100%);max-height:calc(100dvh - 48px);display:flex;flex-direction:column;background:#fff;border:1px solid #dbe4f0;border-radius:12px;box-shadow:0 24px 80px #12274440;color:#294363;text-align:left;font-size:13px;line-height:1.5;font-family:inherit;outline:none}
+.account-editor-dialog,.account-editor-dialog *{box-sizing:border-box}
+.account-editor-dialog>header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 20px;border-bottom:1px solid #e5ebf4;flex-shrink:0}
+.account-editor-dialog>header h2{margin:0;font-size:17px;color:#213957;line-height:1.5}
+.account-editor-dialog>header>button{border:1px solid #dbe4f0;background:#fff;color:#536f92;border-radius:6px;font-size:22px;line-height:1;width:30px;height:30px;cursor:pointer}
+.account-editor-dialog>header>button:disabled{opacity:.45;cursor:wait}
+.account-editor-dialog-body{padding:16px 20px;overflow:auto;min-height:0;overscroll-behavior:contain}
+.account-editor-dialog button:focus-visible,.account-editor-dialog input:focus-visible,.account-editor-dialog select:focus-visible{outline:2px solid #5475df;outline-offset:2px}
+@media(max-width:700px){.account-editor-overlay{padding:10px}.account-editor-dialog{max-height:calc(100dvh - 20px)}.account-editor-dialog>header{padding:12px 14px}.account-editor-dialog-body{padding:12px 14px}}
