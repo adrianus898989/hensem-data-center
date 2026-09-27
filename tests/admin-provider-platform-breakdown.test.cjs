@@ -26,7 +26,7 @@ test('both flows expand with identical parent column count/order, successful tim
   const feeIndex=direction==='withdraw'?10:8;assert.equal(plain(rows[0][feeIndex]),direction==='withdraw'?'2.50% + 6 / 笔':'4.00%');
   assert.equal(plain(rows[1][feeIndex]),direction==='withdraw'?'3.00% + 2 / 笔':'5.00%');
   assert.equal(plain(rows[0][feeIndex+1]),direction==='withdraw'?'40.50':'36.00');assert.equal(plain(rows[1][feeIndex+1]),direction==='withdraw'?'17.00':'5.00');
-  assert.equal(plain(rows[0][feeIndex+3]),'100.00');assert.equal(plain(rows[0][feeIndex+4]),'4');assert.equal(plain(rows[0].at(-2)),'50.00%');assert.equal(plain(rows[0].at(-1)),'—');
+  assert.equal(plain(rows[0][feeIndex+3]),'100.00');assert.equal(plain(rows[0][feeIndex+4]),'4');assert.equal(plain(rows[0].at(-2)),'50.00%');assert.equal(plain(rows[0].at(-1)),'查看订单');assert.match(rows[0].at(-1),/providerSummaryOrders/);
   assert.match(html,/成功金额、成功笔数按成功时间/);assert.equal(h.networkCalls(),before);assert.doesNotMatch(html,/provider-platform-table/);
  }
 });

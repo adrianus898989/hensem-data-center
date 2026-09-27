@@ -319,7 +319,8 @@
   // cohorts instead of sending these rows to the transaction-order explorer.
   const issueOnly=row=>!row.items?.length&&row.issues!=null;
   const issueLabelFor=row=>unknownProviderNames.has(String(row.provider??'').trim())?'三方未填写（源工单）':row.provider+'（源工单）';
-  const providerLabel=(row,index)=>issueOnly(row)?'<button class="link" aria-expanded="'+!!expanded[rowKey(row)]+'" title="展开已读取的平台工单汇总；工单号未入库" onclick="providerSummaryToggle('+index+')">'+E(issueLabelFor(row))+'</button><small class="cell-sub">仅工单汇总 · 工单号未入库</small>':providerCell(row);
+  root.providerSummaryOrders=function(index,platformId=''){const row=shown[index];if(!row||issueOnly(row)||platformId&&!row.items.some(r=>r.platformId===platformId))return;root.liveProviderOrders?.(row.provider,'',direction,platformId)};
+  const providerLabel=(row,index)=>issueOnly(row)?'<button class="link" aria-expanded="'+!!expanded[rowKey(row)]+'" title="展开已读取的平台工单汇总；工单号未入库" onclick="providerSummaryToggle('+index+')">'+E(issueLabelFor(row))+'</button><small class="cell-sub">仅工单汇总 · 工单号未入库</small>':providerCell(row)+(String(row.provider).trim().toUpperCase()==='USDT'?'<small class="cell-sub"><button class="link" title="查看原始通道、类型与逐笔订单；USDT不代表已确认支付商" onclick="providerSummaryOrders('+index+')">原始通道 / 订单</button></small>':'');
   const workorderBasis='工单未到账按提交减已成功计算，包含已驳回、处理中等未成功工单，不等于仍在等待到账。';
   const tierExplanation=tier=>'已确认：按每笔成功金额分档估算。'+tier.label+'。2,000 < 金额 < 2,001 的记录待核对，不计入已匹配笔数。';
   const displayedRate=(row,original)=>{const tier=tieredFeeRule(row,L.country);return tier?tierExplanation(tier):original};
@@ -370,7 +371,7 @@
      '<span title="按成功 / 创建：'+C(r.success_count)+' / '+C(r.all_count)+' 笔">'+(unknown?'—':rate)+'</span>',unknown?'—':share(r.success_amount,row.success_amount),unknown?'—':share(r.success_count,row.success_count),
      ...(direction==='withdraw'?[amount('pending_amount'),count('pending_count')]:[]),rateButton(displayedRate(r,r.fee_rate_label),index),unknown?'—':feeCell(r),unknown?'—':share(r.estimated_fee,row.estimated_fee),
      ...[['submittedAmount','submittedCount'],['successAmount','successCount'],['notReceivedAmount','notReceivedCount']].flatMap(([a,n])=>!w?['—','—']:[N(w[a]),C(w[n])]),
-     issueRate(w),'—'];
+     issueRate(w),!unknown&&r.platformId&&(Number(r.success_count)>0||Number(r.all_count)>0)?'<button class="link" title="'+E(r.platform+' · 查看'+row.provider+'原始通道与订单')+'" onclick="providerSummaryOrders('+index+','+E(JSON.stringify(r.platformId))+')">查看订单</button>':'—'];
     return '<tr class="provider-platform-row">'+values.map(value=>'<td>'+value+'</td>').join('')+'</tr>';
    }).join('');
    const issueNote=!Array.isArray(L.workorders?.byPlatformProvider)?' 工单平台明细尚未返回，显示 —；不使用分页记录推算。':items.some(r=>r.issueOnly)?' 仅有工单或包网归属不明的平台单列，不计入交易平台数，未重复分摊。':'';

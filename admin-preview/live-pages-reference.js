@@ -5,7 +5,9 @@
  const {L,E,N,C,R,plus,combine,groupRows,empty,table,box,pager,totals,comparisonRows,compareMetric,chart,matrixBody,latencyView,detailsView,providersView,platformsView,pagedTable,feeForRow,ensureFeeLookup,providerCell}=c;
  const dirs=()=>L.direction==='all'?['charge','withdraw']:[L.direction];
  const name=d=>d==='charge'?'代收':'代付';
- const raw=()=>L.results.flatMap(x=>(x.summary||[]).map(r=>({...r,platform:x.platform?.name,platformId:x.platform?.id,source:x.platform?.source,country:x.platform?.country,team:x.platform?.team||'未绑定团队'})));
+ const displayPlatform=p=>window.HensemLiveReportData?.normalizeIdentity(p||{})||p||{};
+ const aliasKey=p=>window.HensemLiveReportData?.confirmedAliasKey?.(p||{})||null;
+ const raw=()=>L.results.flatMap(x=>{const p=displayPlatform(x.platform);return (x.summary||[]).map(r=>({...r,platform:p.name,platformId:p.id,source:p.source,country:p.country,team:p.team||'未绑定团队'}))});
  const stat=d=>plus(raw().filter(r=>r.direction===d));
  const unavailable='<span class="muted" title="正式数据尚未提供此项">—</span>';
  const tab=(items,key='view')=>'<div class="section-switcher"><div class="tabs">'+items.map(([v,l])=>'<button class="'+(L[key]===v?'on':'')+'" onclick="liveReferenceSet(\''+key+'\',\''+v+'\')">'+l+'</button>').join('')+'</div></div>';
@@ -42,12 +44,17 @@
  function emptyPlatformCells(direction,columnCount){
   if(L.dirty)return [];
   const failed=new Set((L.queryFailures||[]).map(p=>p.id)),received=new Map((L.results||[]).map(r=>[r.platform?.id,r])),seen=new Set(),cells=[];
+  // A retained tab can still contain the old mapped-only alias response.
+  // Suppress only confirmed aliases whose sibling returned this direction.
+  const populatedAliases=new Set((L.results||[]).filter(r=>!failed.has(r.platform?.id)&&((r.summary||[]).some(s=>s.direction===direction)||Object.values(r.groups||{}).some(rows=>Array.isArray(rows)&&rows.some(s=>s.direction===direction)))).map(r=>aliasKey(r.platform)).filter(Boolean));
   for(const platform of L.queryPlatforms||[]){
-   if(!platform.id||platform.reportOnly||failed.has(platform.id)||seen.has(platform.id))continue;seen.add(platform.id);
+   const key=aliasKey(platform),identity=key||platform.id;
+   if(!platform.id||platform.reportOnly||failed.has(platform.id)||seen.has(identity)||key&&populatedAliases.has(key))continue;
    const result=received.get(platform.id);if(!result||!Array.isArray(result.summary)||result.summary.some(row=>row.direction===direction))continue;
    if(!result.summary.length&&(result.total==null||!Number.isFinite(Number(result.total))||Number(result.total)!==0))continue;
    if(Object.values(result.groups||{}).some(rows=>Array.isArray(rows)&&rows.some(row=>row.direction===direction)))continue;
-   const reason='本期未收到订单数据';cells.push({platform:platform.name||result.platform?.name||'未提供',_emptyCells:[E(platform.name||result.platform?.name||'未提供')+'<small class="muted">'+reason+'</small>',...Array.from({length:columnCount-1},()=>'<span class="muted" title="'+reason+'">—</span>')]});
+   seen.add(identity);const name=displayPlatform(platform).name||result.platform?.name||'未提供';
+   const reason='本期未收到订单数据';cells.push({platform:name,_emptyCells:[E(name)+'<small class="muted">'+reason+'</small>',...Array.from({length:columnCount-1},()=>'<span class="muted" title="'+reason+'">—</span>')]});
   }
   return cells;
  }
