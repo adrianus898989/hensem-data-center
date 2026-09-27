@@ -1,0 +1,11 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "data-center",
+  "account_id": "4dfad8dbba3a18b7fcdd149dfdbb8b23",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-09-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": false }
+}

@@ -1,5 +1,6 @@
 /** Private preview delivery. Fresh Auth/profile/grant checks; no public data files. */
 export const PREVIEW_ORIGIN = "https://adrianus898989.github.io";
+const previewOrigins = new Set([PREVIEW_ORIGIN, "https://data-center.workdesk-hub.workers.dev"]);
 
 export type PreviewOptions = {
   supabaseUrl: string;
@@ -22,7 +23,7 @@ const privateHeaders = {
 
 function responseHeaders(origin: string | null): Headers {
   const headers = new Headers(privateHeaders);
-  if (origin === PREVIEW_ORIGIN) headers.set("Access-Control-Allow-Origin", PREVIEW_ORIGIN);
+  if (origin !== null && previewOrigins.has(origin)) headers.set("Access-Control-Allow-Origin", origin);
   return headers;
 }
 
@@ -39,12 +40,12 @@ export function createOwnerAdminPreviewHandler(options: PreviewOptions): (reques
   let compressed: Uint8Array | null = null;
   return async function ownerAdminPreview(request: Request): Promise<Response> {
     const origin = request.headers.get("origin");
-    if (origin !== null && origin !== PREVIEW_ORIGIN) return errorResponse(origin, 403, "origin_denied");
+    if (origin !== null && !previewOrigins.has(origin)) return errorResponse(origin, 403, "origin_denied");
     if (request.method === "OPTIONS") {
       const method = request.headers.get("access-control-request-method");
       const requestedHeaders = (request.headers.get("access-control-request-headers") || "")
         .split(",").map(value => value.trim().toLowerCase()).filter(Boolean);
-      if (origin !== PREVIEW_ORIGIN || !["GET", "POST"].includes(method || "") || requestedHeaders.some(header => !allowedHeaders.has(header))) {
+      if (origin === null || !previewOrigins.has(origin) || !["GET", "POST"].includes(method || "") || requestedHeaders.some(header => !allowedHeaders.has(header))) {
         return errorResponse(origin, 403, "preflight_denied");
       }
       const headers = responseHeaders(origin);

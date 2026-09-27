@@ -38,7 +38,7 @@ const gateway: Gateway = {
   async audit(actor, action, target) { checked(await admin.from('workorder_portal_account_audit').insert({ actor_id: actor, action, target_id: target })); },
 };
 Deno.serve(createWorkorderAccountHandler(gateway, {
-  allowedOrigins: ['https://adrianus898989.github.io', 'https://hensem-india-workorder.adrianus898989.workers.dev'],
+  allowedOrigins: ['https://adrianus898989.github.io', 'https://hensem-india-workorder.adrianus898989.workers.dev', 'https://data-center.workdesk-hub.workers.dev', 'https://hensem-india-workorder.workdesk-hub.workers.dev'],
   // Random identity proxy key is a Worker secret; only its verifier is public.
   proxyKeySha256: '0ab9c303e8845503a0bb32e9a4bb898228656ba4928c306e5bc4eff35fd7980f',
 }));
