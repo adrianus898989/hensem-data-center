@@ -50,8 +50,9 @@ test('rejection category recognizes full equivalent bracket headings without gue
  assert.equal(await category('[An Unrecognized Heading] Content'),'其他标签 · an unrecognized heading');
 });
 
-test('different recharge dates, elapsed days and configured thresholds belong to one blocking rule',async()=>{
- for(const input of [lastDeposit(80,'5/1/2026'),lastDeposit(100,'4/1/2026',60)])assert.equal(await blocking(input),'最后充值日限额超过');
+test('recharge actual dates and elapsed days group only within the same configured day threshold',async()=>{
+ for(const input of [lastDeposit(80,'5/1/2026'),lastDeposit(100,'4/1/2026')])assert.equal(await blocking(input),'最后充值日限额超过（限制30天）');
+ assert.equal(await blocking(lastDeposit(100,'4/1/2026',60)),'最后充值日限额超过（限制60天）');
  assert.equal(await blocking('最后充值日限额超过但规则未完整'),'最后充值日限额超过但规则未完整');
  assert.equal(await blocking('会员在限制的游戏类型中总的投注数：15'),'会员在限制的游戏类型中总的投注数');
  assert.equal(await blocking('单日充值次数超过：15'),'单日充值次数超过：15');
@@ -63,7 +64,7 @@ test('multiple blocking reasons never collapse into only the last-recharge rule'
   assert.equal(await blocking(value),text.cleanNote(value).replace(/\s+/g,' ').trim());
   assert.notEqual(await blocking(value),'最后充值日限额超过');
  }
- for(const suffix of ['',' 。','；  ','!'])assert.equal(await blocking(complete+suffix),'最后充值日限额超过');
+ for(const suffix of ['',' 。','；  ','!'])assert.equal(await blocking(complete+suffix),'最后充值日限额超过（限制30天）');
 });
 
 test('categories, order drilldown and search keep one classification and conserve counts and original fields',async()=>{
@@ -78,12 +79,12 @@ test('categories, order drilldown and search keep one classification and conserv
 
 test('blocking grouping preserves denominator, statuses and source variant evidence',async()=>{
  const result=await call({kind:'blocking'});assert.equal(result.noteCount,24);assert.equal(result.rows.reduce((n,r)=>n+r.count,0),24);
- const recharge=result.rows.find(r=>r.reason==='最后充值日限额超过');assert.equal(recharge.count,21);assert.equal(recharge.sourceVariantCount,2);assert.equal(recharge.rejected,21);assert.match(recharge.sourceReason,/最后充值时间/);
+ const recharge=result.rows.find(r=>r.reason==='最后充值日限额超过（限制30天）');assert.equal(recharge.count,21);assert.equal(recharge.sourceVariantCount,2);assert.equal(recharge.rejected,21);assert.match(recharge.sourceReason,/最后充值时间/);
  assert.equal(result.rows.find(r=>r.reason==='会员在限制的游戏类型中总的投注数').count,3);
 });
 
 test('helpers are not callable by anonymous/authenticated and existing RPC scope checks still reject foreign platforms',async()=>{
- for(const name of ['decode_note(text)','clean_note(text)','blocking_category(text)','rejection_category(text,text)'])for(const role of ['anon','authenticated'])assert.equal(await scalar('select has_function_privilege($1,$2,\'execute\') value',[role,'private.dashboard_admin_live_'+name]),false);
+ for(const name of ['decode_note(text)','clean_note(text)','blocking_category(text)','blocking_details(text)','rejection_category(text,text)'])for(const role of ['anon','authenticated'])assert.equal(await scalar('select has_function_privilege($1,$2,\'execute\') value',[role,'private.dashboard_admin_live_'+name]),false);
  await assert.rejects(()=>call({platform:'FOREIGN',kind:'orders'}),/scope_denied/);
 });
 
@@ -120,4 +121,82 @@ test('grouped blocking rules open an explicitly labeled full original sample',()
  const h=uiFixture({available:true,source:'Synthetic',noteCount:8,total:1,rows:[{reason:'最后充值日限额超过',sourceReason:original,sourceVariantCount:2,count:8}],coverage:{collected:8}});
  h.page.state.reason.kind='blocking';h.draw();assert.match(h.html(),/已合并 2 种原文/);assert.match(h.html(),/>最后充值日限额超过<\/button>/);
  h.root.withdrawReasonOriginal(original,'自动出款拦截原文（代表样本）');assert.match(h.html(),/aria-label="自动出款拦截原文（代表样本）"/);assert.match(h.html(),/最后充值时间：5\/1\/2026/);
+});
+
+
+test('only actual values of complete known templates collapse; thresholds, comparators, families and extra rules survive',async()=>{
+ const details=value=>scalar('select private.dashboard_admin_live_blocking_details($1) value',[value]);
+ for(const amount of ['50000.00','20000','24000','25000','26000']){
+  assert.deepEqual(await details('首存金额大于19999.00,首存金额: '+amount),{reason:'首存金额大于19999',threshold:'19999',actualField:'首存金额',actualValue:amount});
+ }
+ for(const [input,want]of [
+  ['首存金额大于19999,首存金额:20000','首存金额大于19999'],
+  ['首存金额大于20000,首存金额:25000','首存金额大于20000'],
+  ['用户余额大于50000.00,用户余额:179927.54','用户余额大于50000'],
+  ['用户余额大于50000,用户余额:200000','用户余额大于50000'],
+  ['用户余额大于60000,用户余额:200000','用户余额大于60000'],
+  ['首存金额大于50000,首存金额:179927.54','首存金额大于50000'],
+  ['当日盈利金额大于50000,当日盈利:179927.54','当日盈利金额大于50000'],
+  ['首存金额小于19999,首存金额:20000','首存金额小于19999'],
+  ['首存金额大于等于19999,首存金额:20000','首存金额大于等于19999'],
+  ['当日盈利金额大于19999.00,当日盈利:20000','当日盈利金额大于19999'],
+  ['当日盈利金额大于{金额},当日盈利:20000','当日盈利金额大于{金额}'],
+  ['累计提款次数不能小于3次,当前累计提现次数:0次','累计提款次数不能小于3次'],
+  ['累计提款次数不能小于5次,当前累计提现次数:0次','累计提款次数不能小于5次']
+ ])assert.equal(await blocking(input),want);
+ assert.deepEqual(await details('用户余额大于50000.00,用户余额:179927.54'),{reason:'用户余额大于50000',actualValue:'179927.54',actualField:'用户余额',threshold:'50000'});
+ const unknown=['用户余额大于50000,首存金额:179927.54','首存金额大于50000,用户余额:179927.54','余额大于19999,首存金额:25000','首存金额大于19999,会员ID:25000','首存金额大于19999,首存金额:25000,错误码501','首存金额大于19999,首存金额:25000；其他规则需人工','首存金额大于19999,首存金额:-20000','首存金额大于19999,首存金额:2.5万','银行失败501','银行失败503','首存金额大于19999但未生效','累计提款次数可以小于3次,当前累计提现次数:0次'];
+ for(const value of unknown)assert.deepEqual(await details(value),{reason:value,threshold:null,actualField:null,actualValue:null});
+ const foreignLast=lastDeposit(80,'5/1/2026').replace('最后充值时间：5/1/2026','最后充值时间：用户ID12345');assert.equal(await blocking(foreignLast),text.cleanNote(foreignLast).replace(/\s+/g,' ').trim());
+});
+
+test('blocking rule orders and all source variants share one canonical key across every status and preserve all 22 source rows',async()=>{
+ const amounts=['50000.00','20000','24000','25000','26000','30000','40000'];const counts=[4,4,3,3,3,3,2];
+ for(let i=0;i<amounts.length;i++)for(let j=0;j<counts[i];j++)await db.query("insert into ar_collected_orders values('AR','IN','SYNTHETIC','withdraw',$1,100,$2,'operator-a','2026-09-03 12:00','2026-09-03 12:01',$3,'Unrelated rejection field','',now())",['RULE-'+i+'-'+j,['已支付','未通过','待审核'][i%3],'首存金额大于19999.00,首存金额: '+amounts[i]]);
+ await db.exec("insert into ar_collected_orders values('AR','IN','SYNTHETIC','withdraw','RULE-OTHER',100,'未通过','operator-a','2026-09-03 12:00','2026-09-03 12:01','首存金额大于29999.00,首存金额: 50000',null,'',now()),('AR','IN','FOREIGN','withdraw','FOREIGN',100,'未通过','other','2026-09-03 12:00','2026-09-03 12:01','首存金额大于19999.00,首存金额: 50000',null,'',now())");
+ const aggregate=await call({date:'2026-09-03',kind:'blocking'});assert.equal(aggregate.total,2);assert.equal(aggregate.noteCount,23);assert.equal(aggregate.canViewBlockingOrders,true);
+ const rule=aggregate.rows.find(r=>r.reason==='首存金额大于19999');assert.equal(rule.count,22);assert.equal(rule.sourceVariantCount,7);assert.equal(rule.success+rule.rejected+rule.other,22);
+ const variants=await call({date:'2026-09-03',kind:'blockingVariants',reasonKey:rule.reasonKey});assert.equal(variants.total,7);assert.equal(variants.rows.reduce((n,r)=>n+r.count,0),22);assert.equal(variants.noteCount,23);
+ assert(variants.rows.every(r=>r.reasonKey===rule.reasonKey&&r.canonicalReason===rule.reason&&r.sourceReason===r.reason));assert(variants.rows.some(r=>r.sourceReason.endsWith('50000.00')&&r.count===4));
+ const orders=await call({date:'2026-09-03',kind:'blockingOrders',reasonKey:rule.reasonKey});assert.equal(orders.total,22);assert.equal(orders.rows.length,20);assert.equal(orders.summary.selectedCount,22);assert.equal(orders.noteCount,23);
+ const second=await call({date:'2026-09-03',kind:'blockingOrders',reasonKey:rule.reasonKey,offset:20});assert.equal(second.rows.length,2);const all=[...orders.rows,...second.rows];assert.equal(new Set(all.map(r=>r.orderNumber)).size,22);assert.equal(new Set(all.map(r=>r.status)).size,3);
+ for(const row of all){assert.equal(row.blockingReason,rule.reason);assert.equal(row.blockingThreshold,'19999');assert.equal(row.blockingActualField,'首存金额');assert(amounts.includes(row.blockingActualValue));assert.match(row.rawManualRemark,/首存金额大于19999\.00/);assert.equal(row.rejectionReason,null)}
+ assert.equal((await call({date:'2026-09-03',kind:'blockingOrders',reasonKey:rule.reasonKey,query:'RULE-0-'})).total,4);
+ assert.equal(await scalar("select count(*)::integer value from ar_collected_orders where platform='SYNTHETIC' and applied_at::date='2026-09-03'"),23);
+ for(const request of [{kind:'blockingOrders'},{kind:'blockingVariants'},{kind:'blockingVariants',reasonKey:rule.reasonKey,query:'RULE'},{kind:'blockingOrders',reasonKey:rule.reasonKey,category:'a'.repeat(32)},{kind:'blockingOrders',reasonKey:rule.reasonKey,operatorKey:'a'.repeat(32)}])await assert.rejects(()=>call({...request,date:'2026-09-03'}),/invalid_filter/);
+ await assert.rejects(()=>call({kind:'blockingOrders',reasonKey:rule.reasonKey,platform:'FOREIGN'}),/scope_denied/);
+});
+
+test('snapshot variants retain every original and count, exclude automatic rows and never claim order IDs exist',async()=>{
+ const note=amount=>'首存金额大于19999.00,首存金额: '+amount;
+ const snapshot={note_field:'manual_remark',totals:{reject:3},groups:[
+  {reason_label:note('20000'),count:4,success:1,reject:2,other:1,operator_class:'manual'},
+  {reason_label:note('25000'),count:3,success:1,reject:1,other:1,operator_class:'manual'},
+  {reason_label:note('25000'),count:2,success:0,reject:0,other:2,operator_class:'unknown'},
+  {reason_label:note('50000'),count:20,success:20,reject:0,other:0,operator_class:'auto'}]};
+ await db.query("insert into withdraw_reasons_daily values('IN','SYNTHETIC','2026-09-04','AR',$1,now())",[JSON.stringify(snapshot)]);
+ const grouped=await call({date:'2026-09-04',kind:'blocking'});assert.equal(grouped.rows.length,1);assert.equal(grouped.rows[0].count,9);assert.equal(grouped.rows[0].sourceVariantCount,2);assert.equal(grouped.canViewBlockingOrders,false);
+ const variants=await call({date:'2026-09-04',kind:'blockingVariants',reasonKey:grouped.rows[0].reasonKey});assert.equal(variants.total,2);assert.deepEqual(variants.rows.map(r=>r.count),[5,4]);assert.equal(variants.rows.reduce((n,r)=>n+r.success+r.rejected+r.other,0),9);assert.equal(variants.rows[0].canonicalReason,'首存金额大于19999');
+ const detail=await call({date:'2026-09-04',kind:'blockingOrders',reasonKey:grouped.rows[0].reasonKey});assert.equal(detail.available,false);assert.equal(detail.canViewBlockingOrders,false);assert.deepEqual(detail.rows,[]);assert.match(detail.message,/没有逐笔订单编号/);
+ const unchanged=await scalar("select snapshot value from withdraw_reasons_daily where stat_date='2026-09-04'");assert.deepEqual(unchanged,snapshot);
+});
+
+test('PANDA raw variants retain the existing grouped-view category instead of reverting source-specific grouping',async()=>{
+ const snapshot={note_field:'source_note',groups:[{reason_label:'PANDA synthetic actual 100',count:2,success:1,reject:1,other:0,operator_class:'manual'},{reason_label:'PANDA synthetic actual 200',count:3,success:1,reject:1,other:1,operator_class:'manual'}]};
+ await db.query("insert into withdraw_reasons_daily values('IN','SYNTHETIC','2026-09-05','PANDA',$1,now())",[JSON.stringify(snapshot)]);
+ await db.exec(`create or replace view withdraw_reasons_daily_grouped as select country_code,platform,stat_date,source_system,case when source_system='PANDA' then jsonb_set(snapshot,'{groups}','[{"reason_label":"PANDA established category","operator_class":"manual","variants":[{"reason_label":"PANDA synthetic actual 100","count":2},{"reason_label":"PANDA synthetic actual 200","count":3}],"count":5,"success":2,"reject":2,"other":1}]') else snapshot end snapshot,updated_at from withdraw_reasons_daily`);
+ try{const grouped=await call({date:'2026-09-05',kind:'blocking'});assert.equal(grouped.rows.length,1);assert.equal(grouped.rows[0].reason,'PANDA established category');assert.equal(grouped.rows[0].count,5);const variants=await call({date:'2026-09-05',kind:'blockingVariants',reasonKey:grouped.rows[0].reasonKey});assert.equal(variants.total,2);assert.equal(variants.rows.reduce((n,r)=>n+r.count,0),5);assert(variants.rows.every(r=>r.reason.startsWith('PANDA synthetic actual')))}finally{await db.exec('create or replace view withdraw_reasons_daily_grouped as select * from withdraw_reasons_daily')}
+});
+
+
+test('the additive deployment is atomic, idempotent and matches canonical helpers/RPC without changing source rows',async()=>{
+ const additive=fs.readFileSync(path.join(repo,'supabase/admin-live-withdraw-blocking-rules.sql'),'utf8');
+ const canonical=fs.readFileSync(path.join(repo,'supabase/admin-live-withdraw-reasons.sql'),'utf8');
+ const helper=patch.slice(patch.indexOf('-- Only complete, observed diagnostic templates'),patch.indexOf('create or replace function private.dashboard_admin_live_rejection_category('));
+ const rpc=canonical.slice(canonical.indexOf('create or replace function private.dashboard_admin_live_withdraw_reasons('),canonical.lastIndexOf('notify pgrst'));
+ assert(additive.includes(helper));assert(additive.includes(rpc));assert.doesNotMatch(additive,/\b(?:update|delete\s+from|insert\s+into|drop\s+(?:table|view))\b/i);
+ const before=await call({date:'2026-09-03',kind:'blocking'});const rows=await scalar('select count(*)::integer value from ar_collected_orders');
+ await db.exec(additive);await db.exec(additive);assert.deepEqual(await call({date:'2026-09-03',kind:'blocking'}),before);assert.equal(await scalar('select count(*)::integer value from ar_collected_orders'),rows);
+ assert.equal(await scalar("select has_function_privilege('anon','public.dashboard_admin_live_withdraw_reasons(jsonb)','execute') value"),false);
+ for(const role of ['anon','authenticated'])assert.equal(await scalar('select has_function_privilege($1,\'private.dashboard_admin_live_blocking_details(text)\',\'execute\') value',[role]),false);
 });
