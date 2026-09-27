@@ -18,9 +18,9 @@ function load(options = {}) {
   vm.runInNewContext(compiled, { module,exports:module.exports,URL,AbortController,Date:ClockDate,window:target,
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: options.base || 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
     require: name => {
-      if(name==='./adminConfigurationRequest') {
+      if(['./adminConfigurationRequest','./adminWorkorderRecordsRequest','./depositStatisticsRequest','./portalOperationLogsRequest'].includes(name)) {
         const helper={exports:{}};
-        vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../src/lib/adminConfigurationRequest.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:helper,exports:helper.exports});
+        vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../src/lib/'+name.slice(2)+'.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:helper,exports:helper.exports});
         return helper.exports;
       }
       assert.equal(name,'./dashboardAuthClient');return { ensureDashboardSession: async current => {authCalls.push(current);return options.ensure ? options.ensure(current) : {...current,access_token:'offline-fresh-token'};} };
@@ -295,3 +295,27 @@ test('lost iframe transport cannot prevent host cancellation cleanup or queue ad
  assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(q))),q);
  for(const change of [{upiId:{}},{kycUpiId:'x'.repeat(201)},{sourceKind:'raw'},{staffCode:{}},{reply:'x'.repeat(201)},{amountMin:-1},{amountMax:0},{workOrderNumber:[]},{action:'catalog'}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...change}));
  });
+
+test('collected workorders have a distinct guarded read action with fresh authorization',async()=>{
+ const h=load(),q={action:'workorderRecords',view:'missing',operation:'list',country:'IN',filters:{from:'2026-09-26',to:'2026-09-26',registrationStatus:'missing',workorderNo:'WO'},offset:0,limit:100};
+ await h.api.adminLiveRequest(session,q);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_workorder_records');assert.equal(h.authCalls.length,1);assert.equal(JSON.parse(h.calls[0].init.body).p_request.filters.workorderNo,'WO');
+ for(const q2 of [{...q,account:{}},{...q,operation:'delete'},{...q,country:'all'},{...q,filters:{phone:'private'}},{...q,view:'workload',filters:{statusCode:'3'}},{...q,filters:{from:'2026-02-30',to:'2026-03-01'}},{...q,limit:500},{...q,view:'records',filters:{registrationStatus:'missing'}}])assert.throws(()=>h.api.validateAdminLiveRequest(q2));
+ assert.throws(()=>h.api.validateAdminLiveRequest({...query,filters:{}}));
+});
+
+test('reconciliation statistics keeps a dedicated scoped RPC and precise column filters',async()=>{
+ const h=load();await h.api.adminLiveRequest(session,{action:'depositStatistics',section:'details',dateMode:'all',platform:'RAJALOTTERY',upiId:'synthetic@invalid',amountMin:1,limit:20});
+ assert(h.calls[0].url.endsWith('/rpc/dashboard_admin_deposit_statistics'));const p=JSON.parse(h.calls[0].init.body).p_request;assert.equal(p.upiId,'synthetic@invalid');assert.equal(p.action,undefined);
+ for(const patch of [{section:'raw'},{country:'菲律宾'},{amountMin:-1},{amountMin:3,amountMax:1},{sourceKind:'portal'},{offset:-1},{limit:500},{dateMode:'range',startAt:'2026-02-30T00:00:00Z',endAt:'2026-03-01T00:00:00Z'}])assert.throws(()=>h.api.validateAdminLiveRequest({action:'depositStatistics',...patch}));
+ assert.throws(()=>h.api.validateAdminLiveRequest({action:'depositStatistics',limit:'20'}));
+});
+
+test('portal operation logs use refreshed backend auth with a fixed portal destination and no cookies',async()=>{
+ const q={action:'portalOperationLogs',country:'印度',filters:{from:'2026-09-01',to:'2026-09-27',operator:'synthetic',action:'follow'},limit:20,offset:0};
+ const h=load(),controller=new AbortController();await h.api.adminLiveRequest(session,q,controller.signal);
+ assert.equal(h.calls.length,1);assert.equal(h.authCalls.length,1);const {url,init}=h.calls[0];
+ assert.equal(url,'https://hensem-india-workorder.workdesk-hub.workers.dev/api/owner-operation-logs');assert.equal(init.credentials,'omit');assert.equal(init.redirect,'error');assert.equal(init.headers.Authorization,'Bearer offline-fresh-token');assert.equal(init.headers.apikey,undefined);assert.equal(init.signal,controller.signal);assert.equal(JSON.parse(init.body).action,undefined);assert.equal(JSON.parse(init.body).filters.action,'follow');
+ for(const patch of [{country:'菲律宾'},{url:'https://other.invalid'},{filters:{sql:'select'}},{filters:{from:'2026-02-30',to:'2026-03-01'}},{filters:{from:'2026-01-01',to:'2026-09-27'}},{filters:{action:'delete'}},{limit:'20'},{offset:-1}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
+ const changed=load({ensure:async s=>({...s,user:{id:'changed'}})});await assert.rejects(changed.api.adminLiveRequest(session,q));assert.equal(changed.calls.length,0);
+ for(const status of [401,403,500]){const denied=load({fetch:async()=>({ok:false,status,json:async()=>({error:'private token'})})});await assert.rejects(denied.api.adminLiveRequest(session,q),e=>!/private token/.test(e.message)&&/登录|权限|未完成/.test(e.message));}
+});

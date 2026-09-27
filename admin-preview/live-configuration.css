@@ -291,3 +291,29 @@ body.live-admin .collected-days th{position:sticky;top:0;background:#edf2fc;z-in
 body.live-admin .collected-days td:nth-child(5){white-space:normal;min-width:240px;max-width:480px}
 body.live-admin .collected-empty{text-align:center;padding:24px!important}
 body.live-admin .collected-coverage-table td:last-child>.link+ .link{margin-left:8px}
+
+/* Workorder pages share compact, column-specific controls. */
+body.live-admin .wo-filter-panel{padding:12px;margin:0 0 12px}
+body.live-admin .wo-filter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px 12px}
+body.live-admin .wo-filter-grid[hidden]{display:none}
+body.live-admin .wo-filter-grid .live-field{display:flex;flex-direction:column;gap:4px;min-width:0;width:100%;font-size:11px;color:#617b9e}
+body.live-admin .wo-filter-grid input,body.live-admin .wo-filter-grid select{box-sizing:border-box;width:100%;height:32px;min-width:0;border:1px solid #cfdaed;border-radius:5px;padding:0 9px;background:#fff;color:#2c466d;font:inherit;font-size:12px}
+body.live-admin .wo-more{border-top:1px solid #e7edf6;margin-top:10px;padding-top:10px}
+body.live-admin .wo-filter-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px}
+body.live-admin .wo-filter-actions>div{display:flex;gap:8px;flex-wrap:wrap}
+body.live-admin .wo-filter-actions .btn{height:30px;padding:0 12px}
+body.live-admin .wo-note{font-size:11px;color:#617b9e;line-height:1.6;margin:8px 0 12px}
+body.live-admin .wo-filter-panel .wo-note{margin-bottom:0}
+body.live-admin .wo-loading{font-size:12px;padding:8px 12px;color:#536d99}
+body.live-admin .wo-records-table table{min-width:2100px}
+body.live-admin .wo-workload-table table{min-width:1500px}
+body.live-admin .wo-log-table table{min-width:1400px}
+body.live-admin .wo-pager .right{display:flex;align-items:center;flex-wrap:wrap;gap:4px}
+body.live-admin .wo-jump{display:flex;align-items:center;gap:5px;margin-left:6px}
+body.live-admin .wo-jump label{display:flex;align-items:center;gap:5px;white-space:nowrap}
+body.live-admin .wo-jump input{width:54px;height:28px}
+@media(max-width:900px){body.live-admin .wo-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}body.live-admin .wo-filter-actions{flex-wrap:wrap}body.live-admin .wo-pager{flex-wrap:wrap;gap:8px}}
+
+body.live-admin .deposit-stat-metrics{grid-template-columns:repeat(5,minmax(0,1fr))}
+body.live-admin .deposit-stat-metrics .live-metric small{display:block;margin-top:3px;color:#7889a5;font-size:10px}
+@media(max-width:1100px){body.live-admin .deposit-stat-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}

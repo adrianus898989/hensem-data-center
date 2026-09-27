@@ -1,7 +1,7 @@
 /* Navigation regressions run real production modules in a synthetic DOM. No network. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8');
-const layoutSources=['live-analysis-drilldown.js','live-reference-layout.js','live-pages-reference.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js','live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js','live-withdraw-pages.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
+const layoutSources=['live-analysis-drilldown.js','live-reference-layout.js','live-pages-reference.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js','live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js','live-withdraw-pages.js','live-workorder-operations.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
 const comparisonSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-comparison.js'),'utf8');
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const settle=async()=>{for(let n=0;n<24;n++)await flush()};
@@ -262,7 +262,7 @@ test('latency alone has a mandatory single direction, changing it never starts a
 test('the visible admin brand and document title stay exact across normal and supervisor navigation without data reads',async()=>{
  const h=await ready(),brand='M8 | 数据中控后台',label={textContent:'Hensem 数据后台'};h.nodes.set('.sidebar .brand b',label);h.c.render();const calls=h.calls.length;
  assert.equal(h.c.document.title,brand);assert.equal(label.textContent,brand);assert.match(h.nodes.get('.bottom-note').innerHTML,/M8 \| 数据中控后台/);
- h.c.setPage('workorder_operation_logs');assert.equal(h.c.document.title,brand);assert.equal(label.textContent,brand);h.c.setPage('overview');assert.equal(h.c.document.title,brand);assert.equal(h.calls.length,calls);
+ h.c.setPage('workorder_permissions');assert.equal(h.c.document.title,brand);assert.equal(label.textContent,brand);h.c.setPage('overview');assert.equal(h.c.document.title,brand);assert.equal(h.calls.length,calls);
  const metadata=fs.readFileSync(path.join(__dirname,'../src/app/layout.tsx'),'utf8');assert.match(metadata,/title: "M8 \| 数据中控后台"/);
  for(const file of ['Dashboard.tsx','DashboardAuthGate.tsx','CustomerServiceDashboard.tsx','ThirdPartyRatesDashboard.tsx']){const text=fs.readFileSync(path.join(__dirname,'../src/components',file),'utf8');assert(text.includes(brand));assert.doesNotMatch(text,/Hensem.?数据后台|Hensem 数据中控|HENSEM OPERATIONS/)}
 });

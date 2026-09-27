@@ -1,0 +1,19 @@
+export const COLLECTED_WORKORDER_FILTER_KEYS=['platform','from','to','dateBasis','issueKind','statusCode','workorderId','workorderNo','orderNo','sourceOrderNo','utr','provider','operator','minAmount','maxAmount','kyc','utrMatch'] as const;
+export type CollectedWorkorderFilters=Record<typeof COLLECTED_WORKORDER_FILTER_KEYS[number],string>;
+export const EMPTY_COLLECTED_WORKORDER_FILTERS=Object.fromEntries(COLLECTED_WORKORDER_FILTER_KEYS.map(k=>[k,''])) as CollectedWorkorderFilters;
+export type CollectedWorkorder={id:string;source:'AR';countryCode:'IN';country:string;platform:string;workorderId:string;workorderNo:string;orderNo:string;sourceOrderNo:string;utr:string;issueKind:'deposit'|'withdraw';statusCode:number|null;amount:string|null;provider:string;workorderType:string;workorderName:string;channelType:string;kycConnected:boolean|null;utrMatched:boolean|null;reminderCount:number|null;submittedAt:string;operatedAt:string;operatorAccount:string;lastUpdatedBy:string;sourceUpdatedAt:string;collectedAt:string;submittedDate:string;queryDate:string;queryBasis:string;fieldGaps:string[];attachmentTypes:string[];attachmentAccess:'unavailable';readOnly:true;retained:true};
+export type CollectedWorkorderList={ok:true;sourceStatus:'ready'|'not_connected';rows:CollectedWorkorder[];total:number;offset:number;limit:number;platforms:string[]};
+export type CollectedWorkorderQuery={action:'list';filters:CollectedWorkorderFilters;offset:number;limit:number}|{action:'detail';platform:string;workorderId:string};
+const object=(v:unknown):Record<string,unknown>=>{if(!v||typeof v!=='object'||Array.isArray(v))throw new Error('查询格式无效');return v as Record<string,unknown>};
+const text=(v:unknown)=>{if(typeof v!=='string'||v.length>200||/[\u0000-\u001f\u007f]/.test(v))throw new Error('筛选字段无效');return v.trim()};
+export function readCollectedWorkorderQuery(value:unknown):CollectedWorkorderQuery{
+ const q=object(value);
+ if(q.action==='detail'){if(Object.keys(q).some(k=>!['action','platform','workorderId'].includes(k)))throw new Error('查询字段无效');const platform=text(q.platform),workorderId=text(q.workorderId);if(!platform||!workorderId)throw new Error('请选择工单');return{action:'detail',platform,workorderId};}
+ if(q.action!=='list'||Object.keys(q).some(k=>!['action','filters','offset','limit'].includes(k)))throw new Error('查询字段无效');
+ const raw=object(q.filters??{}),filters={...EMPTY_COLLECTED_WORKORDER_FILTERS};for(const [k,v]of Object.entries(raw)){if(!(COLLECTED_WORKORDER_FILTER_KEYS as readonly string[]).includes(k))throw new Error('筛选字段无效');filters[k as keyof CollectedWorkorderFilters]=text(v);}
+ for(const k of ['from','to'] as const){const v=filters[k];if(v&&(!/^\d{4}-\d{2}-\d{2}$/.test(v)||!Number.isFinite(Date.parse(v+'T00:00Z'))||new Date(v+'T00:00Z').toISOString().slice(0,10)!==v))throw new Error('日期无效');}
+ if((!!filters.from)!=(!!filters.to))throw new Error('请同时选择开始和结束日期');if(filters.from&&(filters.from>filters.to||Date.parse(filters.to)-Date.parse(filters.from)>92*86400000))throw new Error('日期范围最多93天');
+ for(const [k,choices]of Object.entries({dateBasis:['submission','operation'],issueKind:['deposit','withdraw'],statusCode:['1','2','3','4','5'],kyc:['yes','no','unknown'],utrMatch:['yes','no','unknown']})){const v=filters[k as keyof CollectedWorkorderFilters];if(v&&!choices.includes(v))throw new Error('筛选选项无效');}
+ for(const k of ['minAmount','maxAmount'] as const)if(filters[k]&&!/^\d{1,16}(\.\d{1,8})?$/.test(filters[k]))throw new Error('金额范围无效');if(filters.minAmount&&filters.maxAmount&&Number(filters.minAmount)>Number(filters.maxAmount))throw new Error('金额范围无效');
+ const offset=q.offset??0,limit=q.limit??50;if(typeof offset!=='number'||!Number.isSafeInteger(offset)||offset<0||offset>1000000||typeof limit!=='number'||![20,50,100].includes(limit))throw new Error('分页参数无效');return{action:'list',filters,offset,limit};
+}

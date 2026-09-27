@@ -227,17 +227,17 @@ const indiaRoster={
 };
 const indiaNative=()=>Object.entries(indiaRoster).flatMap(([team,names])=>names.map(name=>({id:'fixture:'+team+':'+name,name,team,country:team==='M8'?'印度':team,scopeGroup:team==='M8'?'IN':team==='香港'?'HK_TEAM':'RED_CRAB',source:team==='M8'?(name==='DHANIWIN'?'newar':'ar'):'game66',sourceName:({DHANIWIN:'DhaniWin',LOTTERY77:'LOTTERY7',SHREEWIN:'Shree.Win',VEERGAME:'Veer.Game'})[name]||name})));
 
-test('India keeps all 41 authorized native platforms and merges game66 intake/config labels into those same IDs',async()=>{
+test('India keeps 40 logical platforms from 41 authorized registrations after confirmed RAJA alias deduplication and merges game66 intake/config labels into those same IDs',async()=>{
  const catalog=indiaNative(),nativeGame66=catalog.filter(p=>p.source==='game66');
  const feeds=nativeGame66.flatMap(p=>['charge','withdraw'].map(direction=>feed({dataset:'orders',system:p.team==='香港'?'GAME66_HK':'GAME66_RED_CRAB',country:p.country,rawCountry:p.scopeGroup,name:p.name,rawPlatform:p.sourceName,team:p.team,directions:[direction],records:null,provenance:{kind:'direct'}})));
  for(const name of ['66GAME','PE7','W5W','XX6','XX7','YYGAME'])feeds.push(feed({dataset:'game66_config',system:'GAME66_RED_CRAB',country:'红膏蟹',rawCountry:'红膏蟹',name,rawPlatform:name,team:'待归类',directions:[],provenance:{kind:'direct'}}));
  const seeds=['DHANI.WIN','DhaniWin','LOTTERY7','Shree.Win','Veer.Game'].map(name=>({name,country:'印度',source:'withdraw'}));
  let resolve;const f=fixture({catalog,withdrawCatalog:seeds,onCatalog:()=>new Promise(r=>resolve=r)}),pending=f.page.loadCatalog();
- assert.equal(f.page.selected({country:'印度'}).length,41,'native identities are available while the feed directory is loading');
+ assert.equal(f.page.selected({country:'印度'}).length,40,'native identities are available while the feed directory is loading');
  resolve({rows:feeds});await pending;
- const rows=f.page.selected({country:'印度'});assert.equal(rows.length,41);assert(rows.every(p=>!p.reportOnly));
- assert.deepEqual(plain(rows.map(p=>p.id)),catalog.map(p=>p.id));
- for(const [team,names]of Object.entries(indiaRoster))assert.equal(f.page.selected({country:'印度',teams:[team]}).length,names.length);
+ const rows=f.page.selected({country:'印度'});assert.equal(rows.length,40);assert(rows.every(p=>!p.reportOnly));
+ assert.deepEqual(plain(rows.map(p=>p.id)),catalog.filter(p=>p.name!=='RAJALOTTERY').map(p=>p.id));
+ for(const [team,names]of Object.entries(indiaRoster))assert.equal(f.page.selected({country:'印度',teams:[team]}).length,names.length-(team==='M8'?1:0));
  assert.equal(f.page.selected({country:'印度',sources:['game66']}).length,24);
  assert.equal(f.page.selected({country:'HK_TEAM'}).length,16);assert.equal(f.page.selected({country:'RED_CRAB'}).length,8);
  assert.equal(rows.find(p=>p.name==='PE7').feeds.length,3);assert.equal(rows.find(p=>p.name==='365IN').feeds.length,2);
@@ -261,11 +261,11 @@ test('geographic display labels and raw team scopes cannot merge identical platf
 test('partial authorized directories are never padded with the known roster or promoted from report-only to order platforms',async()=>{
  const all=indiaNative(),m8=all.filter(p=>p.team==='M8'),hk=all.find(p=>p.team==='香港');
  const f=fixture({catalog:m8,feeds:[feed({dataset:'orders',system:'GAME66_HK',country:'香港',rawCountry:'HK_TEAM',name:hk.name,rawPlatform:hk.name,team:'香港',provenance:{kind:'direct'}})]});
- assert.equal(f.page.selected({country:'印度'}).length,17);await f.page.loadCatalog();
- const rows=f.page.selected({country:'印度'});assert.equal(rows.length,18);assert.equal(rows.filter(p=>!p.reportOnly).length,17);
+ assert.equal(f.page.selected({country:'印度'}).length,16);await f.page.loadCatalog();
+ const rows=f.page.selected({country:'印度'});assert.equal(rows.length,17);assert.equal(rows.filter(p=>!p.reportOnly).length,16);
  const report=rows.find(p=>p.team==='香港');assert.equal(report.reportOnly,true);assert.deepEqual(plain(report.orderPlatformIds),[]);
  assert.equal(rows.filter(p=>p.team==='红膏蟹').length,0,'known registrations are not authority to add an absent scope');
- f.L.catalog=[...m8,hk];assert.equal(f.page.selected({country:'印度'}).length,18);assert.equal(f.page.catalog().find(p=>p.team==='香港').id,hk.id);assert.equal(f.page.catalog().find(p=>p.id===hk.id).feeds.length,1);
+ f.L.catalog=[...m8,hk];assert.equal(f.page.selected({country:'印度'}).length,17);assert.equal(f.page.catalog().find(p=>p.team==='香港').id,hk.id);assert.equal(f.page.catalog().find(p=>p.id===hk.id).feeds.length,1);
 });
 
 test('a conflicting game66 source-team tag remains a separate report capability',async()=>{
@@ -313,4 +313,18 @@ test('tab snapshot restores source report scope, expanded rows and tab choices w
 });
 test('restoring a paused source report cannot accept its old response or reuse an unrelated completed scope',async()=>{
  let resolve,pause=false;const f=fixture({respond:q=>pause?new Promise(r=>resolve=()=>r({feeds:q.feeds.map(summary)})):{feeds:q.feeds.map(summary)}});await f.page.load(scope);pause=true;const pending=f.page.load({...scope,direction:'withdraw'},true);await new Promise(setImmediate);const saved=f.page.capture();f.page.restore(saved);assert.match(f.page.state.error,/暂停/);assert.equal(f.page.state.loading,false);resolve();await pending;assert.equal(f.page.state.result,null);f.page.cancel();assert.equal(f.page.state.result,null);
+});
+
+
+test('confirmed RAJA alias has one display entry and preserves exact authorized source IDs and report read keys',async()=>{
+ const raw={id:'raja-source',name:'RAJA',sourceName:'RAJA',country:'印度',team:'M8',source:'ar'},placeholder={...raw,id:'rajalottery-map',name:'RAJALOTTERY',sourceName:'RAJALOTTERY'};
+ const f=fixture({catalog:[placeholder,raw],withdrawCatalog:[{...raw,source:'withdraw'},{...placeholder,source:'withdraw'}],feeds:[feed({name:'RAJALOTTERY',rawPlatform:'RAJA',rawCountry:'IN',country:'印度',team:'M8',system:'AR',directions:['charge'],provenance:{kind:'direct'}})]});
+ const before=plain(f.L.catalog);await f.page.load({country:'印度',teams:['M8'],platforms:[placeholder.id],direction:'charge'});
+ const rows=f.page.catalog();assert.equal(rows.length,1);assert.equal(rows[0].name,'RAJALOTTERY');assert.equal(rows[0].id,raw.id);assert.equal(rows[0].sourceName,'RAJA');assert.deepEqual(plain(rows[0].orderPlatformIds),[raw.id]);assert.deepEqual(plain(f.L.catalog),before);
+ assert.deepEqual(f.calls.find(q=>q.action==='reportSummary').feeds.map(x=>[x.country,x.platform]),[['IN','RAJA']]);
+ assert.equal(f.page.selected({country:'印度',platforms:[placeholder.id]}).length,1,'a saved authorized alias selection stays on this logical platform');
+ const subset=fixture({catalog:[placeholder],feeds:[]});assert.equal(subset.page.catalog()[0].id,placeholder.id,'never invent the ungranted native RAJA ID');assert.equal(subset.page.catalog()[0].sourceName,'RAJALOTTERY');
+ for(const extra of [{country:'巴西'},{team:'Other'},{source:'newar'},{country:'香港',team:'香港',source:'game66'}]){
+  const other=fixture({catalog:[raw,{...placeholder,...extra}],feeds:[]});assert.equal(other.page.catalog().length,2,'different source/team/country remains separate');
+ }
 });

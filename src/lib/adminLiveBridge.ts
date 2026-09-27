@@ -1,6 +1,9 @@
 "use client";
 import { ensureDashboardSession, type DashboardSession } from "./dashboardAuthClient";
 import { validateConfigurationRequest } from "./adminConfigurationRequest";
+import { validateWorkorderRecordsRequest } from "./adminWorkorderRecordsRequest";
+import { validateDepositStatisticsRequest } from "./depositStatisticsRequest";
+import { validatePortalOperationLogsRequest } from "./portalOperationLogsRequest";
 export const LIVE_REQUEST = "hensem-admin-live-request";
 export const LIVE_RESPONSE = "hensem-admin-live-response";
 export const LIVE_CANCEL = "hensem-admin-live-cancel";
@@ -10,6 +13,9 @@ const keys = new Set(["feedIds","feeds","sourceKind","dataset","action","platfor
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
+  if(p.action==="workorderRecords")return validateWorkorderRecordsRequest(p);
+  if(p.action==="depositStatistics")return validateDepositStatisticsRequest(p);
+  if(p.action==="portalOperationLogs")return validatePortalOperationLogsRequest(p);
   if(Object.keys(p).some(k=>!keys.has(k))||!actions.includes(String(p.action)))throw Error("查询方法无效");
   if(p.action!=="intakeCoverage"&&p.feedIds!==undefined)throw Error("逐日覆盖来源仅用于平台数据接入");
   if(p.action==="intakeCoverage"){
@@ -226,9 +232,14 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  const request=validateAdminLiveRequest(input),current=await ensureDashboardSession(session);
  signal?.throwIfAborted();
  if(current.user.id!==session.user.id)throw Error("当前登录账号已改变");
+ if(request.action==="portalOperationLogs"){
+  const response=await fetch("https://hensem-india-workorder.workdesk-hub.workers.dev/api/owner-operation-logs",{method:"POST",headers:{Authorization:`Bearer ${current.access_token}`,"Content-Type":"application/json"},body:JSON.stringify(Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))),signal,cache:"no-store",redirect:"error",credentials:"omit"});
+  if(!response.ok){if(response.status===401)throw Error("后台登录已失效，请重新登录");if(response.status===403)throw Error("当前账号没有此范围的操作日志查看权限");throw Error("操作日志读取未完成，请重试；不能据此判断没有日志");}
+  return response.json();
+ }
  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,""),url=new URL(base);
  if(url.protocol!=="https:"||url.origin!==base)throw Error("后台地址配置无效");
- const specialRpc:Record<string,string>={intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
+ const specialRpc:Record<string,string>={depositStatistics:"dashboard_admin_deposit_statistics",workorderRecords:"dashboard_admin_live_workorder_records",intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
  const rpc=request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
  const response=await fetch(base+"/rest/v1/rpc/"+rpc,{method:"POST",body:JSON.stringify({p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
  if(!response.ok){let code="";try{const body=await response.json();code=String(body.message||"")}catch{}
@@ -236,6 +247,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if(/note_denied/.test(code))throw Error("当前账号没有自动出款备注编辑权限");
  if(/note_date_unavailable/.test(code))throw Error("所选日期没有该平台的出款记录，请选择有数据的日期");
  if(/configuration_conflict/.test(code))throw Error("归类已被其他人修改，请刷新后再保存");
+ if(request.action==="workorderRecords"&&/scope_denied|preview_denied/.test(code))throw Error("当前账号没有此范围的工单查看权限");
  if(/configuration_denied|scope_denied/.test(code))throw Error("当前账号没有此范围的归类权限");
  if(/mapping_not_found|invalid_classification/.test(code))throw Error("归类来源或国家配置已改变，请刷新后重试");
  if([401,403].includes(response.status))throw Error("正式数据读取未获授权，或会话已失效");
