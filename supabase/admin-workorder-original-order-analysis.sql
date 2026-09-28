@@ -159,6 +159,13 @@ begin
    count(*) filter(where amount is null) missing_ticket_amount_count,
    count(*) filter(where original_order_no is null) missing_order_number_count,
    count(*) filter(where status_code=4) processed_ticket_count,
+   count(*) filter(where status_code=3) rejected_ticket_count,
+   count(*) filter(where kyc_connected is true) kyc_yes_count,
+   count(*) filter(where kyc_connected is false) kyc_no_count,
+   count(*) filter(where kyc_connected is null) kyc_unknown_count,
+   count(*) filter(where utr_matched is true) utr_yes_count,
+   count(*) filter(where utr_matched is false) utr_no_count,
+   count(*) filter(where utr_matched is null) utr_unknown_count,
    case when count(*) filter(where status_code=4 and amount is null)=0 then coalesce(sum(amount) filter(where status_code=4),0) end processed_ticket_amount
   from filtered group by period
  ), original_metrics as (
@@ -171,6 +178,9 @@ begin
   select r.period,jsonb_build_object(
    'ticketCount',coalesce(t.ticket_count,0),'ticketAmount',case when t.period is null then '0' else t.ticket_amount::text end,
    'processedTicketCount',coalesce(t.processed_ticket_count,0),'processedTicketAmount',case when t.period is null then '0' else t.processed_ticket_amount::text end,
+   'rejectedTicketCount',coalesce(t.rejected_ticket_count,0),
+   'kycYesCount',coalesce(t.kyc_yes_count,0),'kycNoCount',coalesce(t.kyc_no_count,0),'kycUnknownCount',coalesce(t.kyc_unknown_count,0),
+   'utrYesCount',coalesce(t.utr_yes_count,0),'utrNoCount',coalesce(t.utr_no_count,0),'utrUnknownCount',coalesce(t.utr_unknown_count,0),
    'uniqueOrderCount',case when coalesce(o.order_count,0)=0 and coalesce(t.ticket_count,0)>0 then null else coalesce(o.order_count,0) end,
    'uniqueOrderAmount',case when coalesce(o.order_count,0)=0 and coalesce(t.ticket_count,0)>0 then null when o.period is null then '0' else o.order_amount::text end,
    'uniqueProcessedCount',case when coalesce(o.order_count,0)=0 and coalesce(t.ticket_count,0)>0 then null else coalesce(o.processed_count,0) end,
@@ -212,7 +222,7 @@ begin
   else coalesce((select jsonb_agg(jsonb_build_object(
    'platform',p.platform_key,'sourcePlatforms',m.source_platforms,'orderNo',p.original_order_no,'issueKind',p.issue_kind,'amount',p.amount::text,
    'amountStatus',case when p.amount_variants>1 then 'conflict' when p.amount_variants=0 then 'missing' else 'known' end,
-   'ticketCount',p.ticket_count,'processedTicketCount',p.processed_ticket_count,'processed',p.processed,
+   'ticketCount',p.ticket_count,'processedTicketCount',p.processed_ticket_count,'rejectedTicketCount',p.status_rejected_count,'processed',p.processed,
    'statusCounts',jsonb_build_object('1',p.status_pending_count,'2',p.status_processing_count,'3',p.status_rejected_count,'4',p.status_processed_count,'5',p.status_system_processing_count,'unknown',p.status_unknown_count),
    'kycCounts',jsonb_build_object('yes',p.kyc_yes_count,'no',p.kyc_no_count,'unknown',p.kyc_unknown_count),
    'utrCounts',jsonb_build_object('yes',p.utr_yes_count,'no',p.utr_no_count,'unknown',p.utr_unknown_count),
