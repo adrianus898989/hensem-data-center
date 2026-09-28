@@ -139,7 +139,7 @@ test('overview quick dates and reset update only the filters, before and after a
  for(const queried of [false,true]){
   if(queried){h.c.livePeriod('yesterday',false);await h.c.liveQuery();await settle();}
   const before=businessCalls(h).length;
-  for(const [mode,from]of [['yesterday','2026-09-22'],['before','2026-09-21'],['week','2026-09-17'],['month','2026-08-24']]){h.c.livePeriod(mode);await settle();assert.equal(h.L.from.slice(0,10),from);assert.equal(businessCalls(h).length,before);assert.equal(h.L.dirty,true);assert.match(h.html(),/点击查询/);}
+  for(const [mode,from]of [['yesterday','2026-09-22'],['before','2026-09-21'],['week','2026-09-17'],['month','2026-09-01']]){h.c.livePeriod(mode);await settle();assert.equal(h.L.from.slice(0,10),from);assert.equal(businessCalls(h).length,before);assert.equal(h.L.dirty,true);assert.match(h.html(),/点击查询/);}
   h.c.liveReset();await settle();assert.equal(h.L.from,'2026-09-22T00:00:00');assert.equal(h.L.to,'2026-09-22T23:59:59');assert.equal(businessCalls(h).length,before);assert.equal(h.L.direction,'all');
  }
 });

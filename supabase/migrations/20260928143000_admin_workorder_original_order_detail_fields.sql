@@ -116,6 +116,7 @@ begin
    d.kyc_connected,d.utr_matched,
    case when requested_operation='orderDetail' then d.source_order_no end source_order_no,
    case when requested_operation='orderDetail' then d.utr end utr,
+   d.utr detail_utr,
    case when requested_operation<>'summary' then d.submitted_at end submitted_at,
    case when requested_operation<>'summary' then d.operated_at end operated_at,
    case when requested_operation='orderDetail' then d.operator_account end operator_account,
@@ -148,6 +149,8 @@ begin
    count(*) filter(where status_code=5) status_system_processing_count,count(*) filter(where status_code is null) status_unknown_count,
    count(*) filter(where kyc_connected is true) kyc_yes_count,count(*) filter(where kyc_connected is false) kyc_no_count,count(*) filter(where kyc_connected is null) kyc_unknown_count,
    count(*) filter(where utr_matched is true) utr_yes_count,count(*) filter(where utr_matched is false) utr_no_count,count(*) filter(where utr_matched is null) utr_unknown_count,
+   coalesce(array_agg(distinct nullif(btrim(detail_utr),'') order by nullif(btrim(detail_utr),''))
+     filter(where utr_matched is true and nullif(btrim(detail_utr),'') is not null),'{}') utr_values,
    case when min(amount) is null then 0 when min(amount)=max(amount) then 1 else 2 end amount_variants,
    case when min(amount)=max(amount) then min(amount) end amount,
    max(sort_at) latest_at,max(submitted_at) latest_submitted_at,max(operated_at) latest_operated_at
@@ -225,7 +228,7 @@ begin
    'ticketCount',p.ticket_count,'processedTicketCount',p.processed_ticket_count,'rejectedTicketCount',p.status_rejected_count,'processed',p.processed,
    'statusCounts',jsonb_build_object('1',p.status_pending_count,'2',p.status_processing_count,'3',p.status_rejected_count,'4',p.status_processed_count,'5',p.status_system_processing_count,'unknown',p.status_unknown_count),
    'kycCounts',jsonb_build_object('yes',p.kyc_yes_count,'no',p.kyc_no_count,'unknown',p.kyc_unknown_count),
-   'utrCounts',jsonb_build_object('yes',p.utr_yes_count,'no',p.utr_no_count,'unknown',p.utr_unknown_count),
+   'utrCounts',jsonb_build_object('yes',p.utr_yes_count,'no',p.utr_no_count,'unknown',p.utr_unknown_count),'utrValues',p.utr_values,
    'providers',m.providers,'operators',m.operators,
    'latestSubmittedAt',p.latest_submitted_at,'latestOperatedAt',p.latest_operated_at,'country',v_country,'currency',v_currency,'source','AR','readOnly',true
   ) order by p.latest_at desc nulls last,p.platform_key,p.issue_kind,p.original_order_no) from orders_page p left join order_page_metadata m using(platform_key,issue_kind,original_order_no)),'[]'::jsonb) end

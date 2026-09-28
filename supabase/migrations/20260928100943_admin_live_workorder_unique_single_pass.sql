@@ -108,6 +108,8 @@ begin
       count(*) filter(where eligible and successful) as success_count,
       case when count(*) filter(where eligible and amount is null)=0 then coalesce(sum(amount) filter(where eligible),0) end as order_amount,
       case when count(*) filter(where eligible and successful and amount is null)=0 then coalesce(sum(amount) filter(where eligible and successful),0) end as success_amount,
+      count(*) filter(where eligible and coalesce(successful,false)=false) as not_received_count,
+      case when count(*) filter(where eligible and coalesce(successful,false)=false and amount is null)=0 then coalesce(sum(amount) filter(where eligible and coalesce(successful,false)=false),0) end as not_received_amount,
       count(*) filter(where eligible and amount_variants>1) as amount_conflict_count,
       count(*) filter(where eligible and amount_variants=0) as missing_amount_count,
       count(*) filter(where cardinality(providers)>1) as provider_conflict_count
@@ -121,6 +123,8 @@ begin
       coalesce(o.order_count,0) as order_count,coalesce(o.success_count,0) as success_count,
       case when o.key is null then 0::numeric else o.order_amount end as order_amount,
       case when o.key is null then 0::numeric else o.success_amount end as success_amount,
+      coalesce(o.not_received_count,0) as not_received_count,
+      case when o.key is null then 0::numeric else o.not_received_amount end as not_received_amount,
       coalesce(o.amount_conflict_count,0) as amount_conflict_count,coalesce(o.missing_amount_count,0) as missing_amount_count,
       coalesce(o.provider_conflict_count,0) as provider_conflict_count
     from scope_definitions s left join detail_metrics d on d.key=s.key left join original_metrics o on o.key=s.key
@@ -137,6 +141,8 @@ begin
     'uniqueOrderAmount',case when not unavailable then order_amount end,
     'uniqueSuccessCount',case when not unavailable then success_count end,
     'uniqueSuccessAmount',case when not unavailable then success_amount end,
+    'uniqueNotReceivedCount',case when not unavailable then not_received_count end,
+    'uniqueNotReceivedAmount',case when not unavailable then not_received_amount end,
     'uniqueCoverage',jsonb_build_object('status',case when unavailable then 'unavailable' when complete then 'complete' else 'partial' end,
       'complete',complete and not unavailable,'basis','platform_direction_original_order_full_range',
       'detailCount',detail_count,'missingOrderNumberCount',missing_order_number_count,'missingDetailCount',missing_detail_count,
