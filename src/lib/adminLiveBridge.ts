@@ -8,8 +8,8 @@ export const LIVE_REQUEST = "hensem-admin-live-request";
 export const LIVE_RESPONSE = "hensem-admin-live-response";
 export const LIVE_CANCEL = "hensem-admin-live-cancel";
 export const LIVE_REQUEST_TIMEOUT_MS = 90000;
-const actions = ["catalog","syncHealth","intakeCoverage","reportSummary","pendingSnapshot","collectedData","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
-const keys = new Set(["feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"]);
+const actions = ["memberDaily","catalog","syncHealth","intakeCoverage","reportSummary","pendingSnapshot","collectedData","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
+const keys = new Set(["amountBands","feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"]);
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
@@ -17,6 +17,13 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(p.action==="depositStatistics")return validateDepositStatisticsRequest(p);
   if(p.action==="portalOperationLogs")return validatePortalOperationLogsRequest(p);
   if(Object.keys(p).some(k=>!keys.has(k))||!actions.includes(String(p.action)))throw Error("查询方法无效");
+  if(p.action==="memberDaily"&&Object.keys(p).some(key=>!["action","platformId","startAt","endAt","direction","providers","currency"].includes(key)))throw Error("每日人数参数无效");
+  if(p.amountBands!==undefined){
+    if(p.action!=="aggregate"||!p.amountBands||typeof p.amountBands!=="object"||Array.isArray(p.amountBands))throw Error("金额档位参数无效");
+    const bands=p.amountBands as Record<string,unknown>,directions=p.direction==='charge'||p.direction==='withdraw'?[String(p.direction)]:['charge','withdraw'];
+    if(Object.keys(bands).some(key=>!['charge','withdraw'].includes(key))||directions.some(key=>!Object.prototype.hasOwnProperty.call(bands,key)))throw Error("金额档位方向无效");
+    for(const edges of Object.values(bands))if(!Array.isArray(edges)||edges.length!==11||edges.some((n,i)=>typeof n!=="number"||!Number.isFinite(n)||n<0||n>1e15||(i>0&&n<=edges[i-1])))throw Error("金额区间必须包含11个递增边界（10档）");
+  }
   if(p.action==="pendingSnapshot"){
     if(Object.keys(p).some(k=>!["action","date","platformIds","providers"].includes(k)))throw Error("代付中快照参数无效");
     if(typeof p.date!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(p.date)||p.date<"2000-01-01"||!Number.isFinite(Date.parse(p.date+"T00:00:00Z"))||new Date(p.date+"T00:00:00Z").toISOString().slice(0,10)!==p.date)throw Error("代付中快照日期无效");
@@ -46,7 +53,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   const drilldown=p.action==="aggregate"&&p.view==="drilldown";
   if(!drilldown&&["hour","bucket","cumulative"].some(key=>p[key]!==undefined))throw Error("分段条件仅用于每日对比");
   if(drilldown){
-    const allowed=new Set(["action","view","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","kind","hour","bucket","cumulative"]);
+    const allowed=new Set(["amountBands","action","view","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","kind","hour","bucket","cumulative"]);
     if(Object.keys(p).some(key=>!allowed.has(key))||typeof p.kind!=="string"||!["hourly","amount","amount_range","matrix","matrix_range","latency"].includes(p.kind))throw Error("每日对比分段无效");
     if(p.status!==undefined&&p.status!=="all")throw Error("每日对比需保留全部订单状态");
     if(p.offset!==undefined&&p.offset!==0)throw Error("每日对比返回完整范围，无需分页");
@@ -61,7 +68,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       if(p.cumulative!==undefined)throw Error("此分段不使用累计条件");
       if(p.kind==="hourly"){if(p.bucket!==undefined)throw Error("小时分段不使用金额档位");}
       else{
-        const buckets=["amount","matrix"].includes(p.kind)?["100","200","300","400","500","750","1000","1500","2000","5000","other","unknown"]:["100–200","201–300","301–400","401–500","501–750","751–1,000","1,001–2,000","2,001–5,000","≥5,001","other","unknown"];
+        const buckets=p.amountBands!==undefined&&["amount_range","matrix_range"].includes(p.kind)?[...Array.from({length:10},(_,i)=>"band:"+i),"below","above","unknown"]:["amount","matrix"].includes(p.kind)?["100","200","300","400","500","750","1000","1500","2000","5000","other","unknown"]:["100–200","201–300","301–400","401–500","501–750","751–1,000","1,001–2,000","2,001–5,000","≥5,001","other","unknown"];
         if(typeof p.bucket!=="string"||!buckets.includes(p.bucket))throw Error("每日对比金额档位无效");
       }
     }
@@ -249,7 +256,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  }
  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,""),url=new URL(base);
  if(url.protocol!=="https:"||url.origin!==base)throw Error("后台地址配置无效");
- const specialRpc:Record<string,string>={pendingSnapshot:"dashboard_admin_live_pending_snapshot",depositStatistics:"dashboard_admin_deposit_statistics",workorderRecords:"dashboard_admin_live_workorder_records",intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
+ const specialRpc:Record<string,string>={memberDaily:"dashboard_admin_live_member_daily",pendingSnapshot:"dashboard_admin_live_pending_snapshot",depositStatistics:"dashboard_admin_deposit_statistics",workorderRecords:"dashboard_admin_live_workorder_records",intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
  const rpc=request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
  const response=await fetch(base+"/rest/v1/rpc/"+rpc,{method:"POST",body:JSON.stringify({p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
  if(!response.ok){let code="";try{const body=await response.json();code=String(body.message||"")}catch{}

@@ -251,3 +251,30 @@ body.live-admin .drawer-backdrop:has(.live-pending-snapshot-detail){z-index:210}
 body.live-admin .live-pending-snapshot-detail{min-width:0}
 body.live-admin .live-pending-snapshot-detail .live-definition{line-height:1.7}
 body.live-admin .live-pending-snapshot-detail summary{cursor:pointer;text-align:left;padding:6px 0}
+
+/* Member counts remain a compact line beneath the existing business metrics. */
+body.live-admin .df-member-counts{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin:0 10px 7px;padding:6px 9px;border:1px solid #dce6f3;border-radius:6px;background:#f7faff;font-size:11px}
+body.live-admin .df-member-counts>span{color:#536a89}
+body.live-admin .df-member-counts strong{font-size:15px;line-height:1.2;font-variant-numeric:tabular-nums}
+body.live-admin .df-member-counts strong .link{font:inherit}
+body.live-admin .df-member-counts small{font-size:10px;color:#7185a1}
+body.live-admin .df-member-counts .df-coverage{margin-left:auto}
+body.live-admin .live-member-counts-detail table{table-layout:auto;font-size:11px}
+body.live-admin .live-member-counts-detail td{padding:6px 8px}
+body.live-admin .live-member-counts-detail .cell-sub{display:block;margin-top:2px;font-size:10px;line-height:1.4;color:#7185a1}
+body.live-admin .live-member-counts-detail .live-definition{margin:5px 0;padding:5px 8px;line-height:1.6}
+body.live-admin .live-member-counts-detail .live-tabs{margin-bottom:6px}
+body.live-admin .live-member-counts-detail th:nth-child(-n+2),body.live-admin .live-member-counts-detail td:nth-child(-n+2){text-align:left}
+body.live-admin .live-member-counts-detail th:nth-child(n+3),body.live-admin .live-member-counts-detail td:nth-child(n+3){text-align:right;font-variant-numeric:tabular-nums}
+
+/* The paired platform ledgers have eight compact columns, including daily members. */
+body.live-admin #df-platforms .df-platform-business-summary{min-width:0;max-width:100%}
+body.live-admin #df-platforms .df-platform-table-scroll{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+body.live-admin #df-platforms table.df-platform-business-table{width:100%;min-width:702px!important;table-layout:fixed!important;font-variant-numeric:tabular-nums}
+body.live-admin #df-platforms .df-platform-business-table :is(th,td){box-sizing:border-box;width:auto;min-width:0;max-width:none;padding:6px 4px!important;font-size:10px!important;line-height:16px;white-space:nowrap;text-align:right;overflow:visible;word-break:normal;overflow-wrap:normal}
+body.live-admin #df-platforms .df-platform-business-table th{font-size:9px!important;white-space:normal;vertical-align:middle}
+body.live-admin #df-platforms .df-platform-business-table :is(th,td):first-child{width:auto;min-width:0;text-align:left;overflow:hidden;text-overflow:ellipsis}
+body.live-admin #df-platforms .df-platform-business-table td:first-child .muted{display:block;white-space:normal;font-size:9px}
+body.live-admin #df-platforms .df-platform-member-count{white-space:nowrap;font-variant-numeric:tabular-nums}
+body.live-admin #df-platforms .df-platform-member-count sup{font-size:9px;margin-left:1px;color:#9a6a25}
+@media(max-width:1700px){body.live-admin #df-platforms>.df-grid.df-two{grid-template-columns:minmax(0,1fr)}}
