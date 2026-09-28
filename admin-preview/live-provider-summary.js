@@ -37,8 +37,18 @@
  // Owner confirmed on 2026-09-26: India UpiPay uses 印度线下 row 4 for both flows.
  // Select that source record; never substitute another tier when it is missing.
  function confirmedFeeRule(row,country){
-  return ['印度','in','india'].includes(normalized(country))&&normalized(canonical(row?.provider,country))==='upipay'
-   ?{sheetName:'印度线下',sourceRow:4,note:'已确认：当前统一使用《印度线下》第 4 行。具体费率读取下表的原始记录。'}:null;
+  if(!['印度','in','india'].includes(normalized(country)))return null;
+  const provider=normalized(canonical(row?.provider,country));
+  if(provider==='upipay')return {sheetName:'印度线下',sourceRow:4,note:'已确认：当前统一使用《印度线下》第 4 行。具体费率读取下表的原始记录。'};
+  // Confirmed current YayaPay route is YAYAPAY-924. The current source sheet
+  // names 923 separately; never mix the two rows or hardcode their prices.
+  if(provider==='yayapay')return {sheetName:'印度线下',sourceProvider:'YAYAPAY-924',note:'当前 YayaPay / YAYAPAY-924 使用《印度线下》原名 YAYAPAY-924 的费率。YAYAPAY-923 是另一条源记录，不混入当前估算；具体费率随源表更新。'};
+  return null;
+ }
+ function matchesFeeRule(record,rule){
+  return record.scopeType!=='platform'&&record.sheetName===rule.sheetName&&(rule.sourceProvider
+   ?normalized(record.sourceTypeProvider||record.provider)===normalized(rule.sourceProvider)
+   :Number(record.sourceRow)===rule.sourceRow);
  }
  // Loaded rate snapshots are replaced atomically. Reuse the country/provider
  // index across every platform leaf, fee total, type label and table render.
@@ -55,7 +65,7 @@
   const payout=row.direction==='withdraw',feeKey=payout?'payoutFee':'collectFee',singleKey=payout?'payoutSingleFee':'collectSingleFee';
   let candidates=rateRecords(row,rates,country).filter(r=>String(r[feeKey]??'').trim()||String(r[singleKey]??'').trim());
   const rule=confirmedFeeRule(row,country);
-  if(rule)return candidates.filter(r=>r.scopeType!=='platform'&&r.sheetName===rule.sheetName&&Number(r.sourceRow)===rule.sourceRow);
+  if(rule)return candidates.filter(r=>matchesFeeRule(r,rule));
   const platforms=[...(row.platforms||[]),row.platform].filter(Boolean).map(name=>platformKey(name,row,country));
   const specific=candidates.filter(r=>r.scopeType==='platform'&&platforms.includes(platformKey(r.platform,row,country)));
   return specific.length?specific:candidates.filter(r=>r.scopeType!=='platform');
@@ -71,7 +81,7 @@
    return {types,label:review?'待核对':types.length>1?'多种类型':types[0]||'未标注',state:review?'review':types.length>1?'mixed':types.length?'known':'empty',detail:[...new Set(facts.map(f=>f.detail))].join('；')};
   }
   let candidates=rateRecords(row,rates,country);const rule=confirmedFeeRule(row,country);
-  if(rule)candidates=candidates.filter(r=>r.scopeType!=='platform'&&r.sheetName===rule.sheetName&&Number(r.sourceRow)===rule.sourceRow);
+  if(rule)candidates=candidates.filter(r=>matchesFeeRule(r,rule));
   else {const platforms=[...(row.platforms||[]),row.platform].filter(Boolean).map(name=>platformKey(name,row,country)),specific=candidates.filter(r=>r.scopeType==='platform'&&platforms.includes(platformKey(r.platform,row,country)));candidates=specific.length?specific:candidates.filter(r=>r.scopeType!=='platform')}
   const types=new Set(),details=[];let mismatch=false;
   for(const r of candidates){
@@ -328,7 +338,7 @@
    const row=shown[index];if(!row)return;const tier=tieredFeeRule(row,L.country),rule=confirmedFeeRule(row,L.country),records=rateRecords(row,L.feeLookupRows,L.country),used=new Set(row.items.flatMap(r=>feeCandidates(r,L.feeLookupRows,L.country)));
    const relevant=records.filter(r=>r.scopeType!=='platform'||row.items.some(item=>platformKey(item.platform,item,L.country)===platformKey(r.platform,item,L.country)));
    const coverageNote='<p class="live-definition">'+E(feeCoverageText(row))+'</p>';
-   const sourceTable=table(['使用情况','来源表 / 行','范围','业务类型','通道类型','代收','代收单笔','代付','代付单笔','原状态'],relevant.map(r=>[tier?'原表参考':used.has(r)?'当前匹配':'未采用',E((r.sheetName||'未提供')+' / '+(r.sourceRow??'—')),E(r.platform||r.country||r.scopeGroup),providerTypeCell(row,[r],L.country,E),E(r.category||'—'),E(r.collectFee||'—'),E(r.collectSingleFee||'—'),E(r.payoutFee||'—'),E(r.payoutSingleFee||'—'),E(r.status||r.rawStatus||'—')]),'provider-rate-details');
+   const sourceTable=table(['使用情况','来源表 / 行','原表三方','范围','业务类型','通道类型','代收','代收单笔','代付','代付单笔','原状态'],relevant.map(r=>[tier?'原表参考':used.has(r)?'当前匹配':'未采用',E((r.sheetName||'未提供')+' / '+(r.sourceRow??'—')),E(r.sourceTypeProvider||r.provider||'—'),E(r.platform||r.country||r.scopeGroup),providerTypeCell(row,[r],L.country,E),E(r.category||'—'),E(r.collectFee||'—'),E(r.collectSingleFee||'—'),E(r.payoutFee||'—'),E(r.payoutSingleFee||'—'),E(r.status||r.rawStatus||'—')]),'provider-rate-details');
    openDrawer(row.provider+' · 费率依据',coverageNote+(tier
     ?box('当前确认规则','<p class="live-definition">'+E(tierExplanation(tier))+'</p>')+box('原表费率记录',sourceTable)
     :box('当前匹配规则','<p class="live-definition">'+E(rule?.note||'优先匹配有费率内容的平台专属记录，再匹配国家记录。存在不同费率时，保留差异供核对。')+'</p>'+sourceTable)));
@@ -337,9 +347,9 @@
    ['工单提交金额','issue_submittedAmount'],['工单提交笔数','issue_submittedCount'],['工单成功金额','issue_successAmount'],['工单成功笔数','issue_successCount'],['工单未到账金额','issue_notReceivedAmount'],['工单未到账笔数','issue_notReceivedCount'],['工单成功率','issue_success_rate'],['平台明细',null]];
   const header=(text,key,active=sort,ascending=!!L.providerSortAsc,index=null)=>{if(!key)return E(text);const next=active===key?!ascending:textSortKeys.has(key),basis=key==='fee_rate'?'按百分比、单笔费依次排序；多档或未匹配置后。':'';return '<button class="link provider-sort-heading" title="'+E(basis+'点击按'+text+(next?'升序':'降序')+'排列；空值置后')+'" onclick="'+(index===null?'providerSummarySort(\''+key+'\')':'providerSummaryPlatformSort('+index+',\''+key+'\')')+'">'+E(text)+' <span aria-hidden="true">'+(active===key?(ascending?'↑':'↓'):'↕')+'</span></button>'};
   const headers=columns.map(([text,key])=>header(text,key));
-  // Give money its full precision while keeping short ratios/counts compact.
-  // Auto layout may widen a column for unusually long values; it never clips money.
-  const columnWidth=key=>key==='provider'?112:key==='platform_count'?40:key==='type'?66:key==='fee_rate'?100:key===null?60:key==='fee_share'?64:key.endsWith('_amount')||key.endsWith('Amount')||key==='estimated_fee'?102:key.endsWith('_count')||key.endsWith('Count')?64:key.startsWith('issue_')?66:54;
+  // Short identity columns leave the same readable width for every amount,
+  // count and ratio. Fee totals reserve space for their coverage badge.
+  const columnWidth=key=>key==='provider'?92:key==='platform_count'?36:key==='type'?60:key==='fee_rate'?96:key===null?48:key==='estimated_fee'?120:key.endsWith('_amount')||key.endsWith('Amount')?104:key.endsWith('_count')||key.endsWith('Count')?68:60;
   const widths=columns.map(([,key])=>columnWidth(key)),tableWidth=widths.reduce((sum,width)=>sum+width,0);
   const rateButton=(value,index)=>{const full=String(value||'未匹配'),long=full.length>24||/[\r\n]/.test(full),label=long?(/以上|以下|分档|阶梯|[≥≤<>]/.test(full)?'分档费率 · 查看':'费率详情 · 查看'):full;return '<button class="link provider-fee-preview" title="'+E(full+' · 点击查看来源及匹配依据')+'" aria-label="'+E('费率：'+full+'，查看来源及匹配依据')+'" onclick="providerSummaryRate('+index+')">'+E(label)+'</button>'};
   const feeCell=r=>readState.empty?'—':L.feeLookupLoading?'读取中…':L.feeLookupError?'读取失败':'<span tabindex="0" title="'+E(feeCoverageText(r))+'">'+N(r.estimated_fee)+(!r.fee_complete&&Number(r.fee_eligible_count)>0?'<span class="provider-partial">'+(Number(r.fee_matched_count)>0?'部分':'未匹配')+'</span>':'')+'</span>';

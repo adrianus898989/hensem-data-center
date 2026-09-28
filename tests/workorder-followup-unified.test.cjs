@@ -45,3 +45,56 @@ test('soft archive migration retains rows and ACLs, excludes archived history, a
  }finally{await db.exec('rollback');}
  for(const role of ['anon','authenticated']){await db.exec('set role '+role);await assert.rejects(()=>call());await db.exec('reset role');}
 });
+
+test('pending migration filters explicit completion before count and pagination without dropping uncertain outcomes',async()=>{
+ const migration=sql('migrations/20260928071952_workorder_followup_pending_saved_time.sql');await db.exec(migration);await db.exec(migration);
+ await db.exec('begin');try{
+  const complete=['Success','成功','成功到账','已到账','已入款','Received','REFUND','Refunded','已退款','Closed','已关闭'];
+  const pending=['Success To Other ID','Success To Other Platform','Success To Other Order','more than 30days/refund','more than 15days refund','No refund','Not Yet Received','Need to provide PDF/VIDEO','成功到其他账号','SUCCESS pending confirmation','', 'awaiting refund'];
+  for(let i=0;i<70+125;i++)await db.query(`insert into public.admin_deposit_followup_rows(id,source_sheet,source_tab,source_row,country,platform,order_number,amount,provider,followup_status,followup_date) values($1,'pending-test','A',$2,'印度','A',$1,10,'PendingQueue',$3,$4)`,['queue-'+i,i+1,i<70?complete[i%complete.length]:pending[(i-70)%pending.length],i<70?'2026-09-28':'2026-09-27']);
+  await db.exec("update public.admin_deposit_followup_rows set stale_at=now() where id='queue-194'");
+  const filters={view:'pending',provider:'PendingQueue',from:'2026-09-01',to:'2026-09-30'};
+  const first=await call(filters,account,0,50),second=await call(filters,account,50,50),last=await call(filters,account,100,50);
+  assert.equal(first.total,124);assert.equal(first.rows.length,50);assert.equal(second.total,124);assert.equal(last.rows.length,24);assert.equal(new Set([...first.rows,...second.rows,...last.rows].map(r=>r.id)).size,124);assert(first.rows.every(r=>r.followup_pending));
+  assert.equal((await call({...filters,view:'all'})).total,194);assert.equal((await call({...filters,outcome:'success'})).total,0);assert((await call({...filters,outcome:'other_order'})).total>0);assert.equal((await call({...filters,platform:'B'})).total,0);
+  await db.exec('set role service_role');assert.equal((await call(filters)).total,124);await db.exec('reset role');
+ }finally{await db.exec('rollback');}
+ await assert.rejects(()=>call({view:'due'}));await assert.rejects(()=>call({view:null}));
+ for(const role of ['anon','authenticated']){await db.exec('set role '+role);await assert.rejects(()=>call({view:'pending'}));await db.exec('reset role');}
+ assert.equal((await db.query("select prosecdef from pg_proc where oid='public.workorder_followup_list(jsonb,jsonb,integer,integer)'::regprocedure")).rows[0].prosecdef,false);
+});
+
+test('portal pending and month filters use actual saved follow or creation time, never due/manual/sync timestamps',async()=>{
+ await db.exec('begin');try{
+  const base=record('30000000-0000-0000-0000-000000000001',{provider:'SavedTime',followup_at:'2026-08-15 10:00',followup_date:'2026-08-15',last_actor:'Actual follower',portal_payload:{created_at:'2026-08-01T00:00:00Z',last_follow_at:'2026-09-30T18:29:59Z',updated_at:'2026-10-20T00:00:00Z',due_at:'2027-01-01T00:00:00Z',backend_processed:true,status:'waiting',entry:{outcome:'other_order'}}});
+  await mirror(base);
+  await mirror(record('30000000-0000-0000-0000-000000000002',{provider:'SavedTime',followup_date:'2026-08-15',portal_payload:{created_at:'2026-09-30T18:30:00Z',updated_at:'2026-10-20T00:00:00Z',entry:{outcome:'pending'}}}));
+  await mirror(record('30000000-0000-0000-0000-000000000003',{provider:'SavedTime',portal_payload:{created_at:'2026-09-01T00:00:00Z',status:'closed',entry:{outcome:'pending'}}}));
+  await mirror(record('30000000-0000-0000-0000-000000000004',{provider:'SavedTime',portal_owner_id:other,portal_payload:{created_at:'2026-09-01T00:00:00Z',entry:{outcome:'pending'}}}));
+  await mirror(record('30000000-0000-0000-0000-000000000005',{provider:'SavedTime',portal_team:'Other',portal_payload:{created_at:'2026-09-01T00:00:00Z',entry:{outcome:'pending'}}}));
+  const filters={view:'pending',source:'portal',provider:'SavedTime',from:'2026-09-01',to:'2026-09-30'},sept=await call(filters);
+  assert.equal(sept.total,1);assert.equal(sept.rows[0].id,base.id);assert.equal(sept.rows[0].last_actor,'Actual follower');assert.equal(sept.rows[0].query_date,'2026-09-30');assert.equal(sept.rows[0].followup_at,'2026-08-15 10:00');assert.equal(sept.rows[0].portal_payload.last_follow_at,'2026-09-30T18:29:59Z');
+  assert.equal((await call({...filters,view:'all'})).total,2);assert.equal((await call(filters,{...account,role:'supervisor'})).total,2);
+  assert.equal((await call({...filters,from:'2026-10-01',to:'2026-10-31'})).total,1);assert.equal((await call({...filters,from:'2026-08-01',to:'2026-08-31'})).total,0);
+  await mirror({...base,portal_version:2,last_actor:'Newest follower',portal_payload:{...base.portal_payload,last_follow_at:'2026-10-01T00:00:00Z'}});await mirror({...base,portal_version:1});
+  assert.equal((await call(filters)).total,0);assert.equal((await call({...filters,from:'2026-10-01',to:'2026-10-31'})).rows.find(r=>r.id===base.id).last_actor,'Newest follower');
+ }finally{await db.exec('rollback');}
+});
+
+test('same-version backfill adds missing real follow metadata only when all business fields match',async()=>{
+ // Apply the finished migration again, including the metadata-only mirror patch.
+ await db.exec(sql('migrations/20260928071952_workorder_followup_pending_saved_time.sql'));
+ await db.exec('begin');try{
+  const payload={id:'40000000-0000-0000-0000-000000000001',created_at:'2026-08-01T00:00:00Z',updated_at:'2026-09-28T00:00:00Z',status:'waiting',entry:{outcome:'pending',followedAt:'2026-08-15T00:00:00Z'},last_follow_actor_name:'Old creator',last_follow_actor_id:actor};
+  const base=record(payload.id,{provider:'MetadataOnly',last_actor:'Old creator',portal_payload:payload,followup_date:'2026-08-15',portal_version:3});await mirror(base);
+  const enriched={...base,last_actor:'Real follower',followup_date:'2026-09-27',portal_payload:{...payload,last_follow_at:'2026-09-27T00:00:00Z',last_follow_actor_name:'Real follower',last_follow_actor_id:other}};
+  await mirror({...enriched,portal_version:2});assert.equal((await call({provider:'MetadataOnly'})).rows[0].portal_payload.last_follow_at,undefined);
+  await mirror({...enriched,amount:999});assert.equal((await call({provider:'MetadataOnly'})).rows[0].portal_payload.last_follow_at,undefined);
+  await mirror({...enriched,portal_payload:{...enriched.portal_payload,status:'closed'}});assert.equal((await call({provider:'MetadataOnly'})).rows[0].portal_payload.last_follow_at,undefined);
+  const original=(await call({provider:'MetadataOnly'})).rows[0];await mirror(enriched);await mirror(enriched);
+  const row=(await call({provider:'MetadataOnly'})).rows[0];assert.equal(row.portal_version,3);assert.equal(row.amount,base.amount);assert.equal(row.last_actor,'Real follower');assert.equal(row.portal_payload.last_follow_at,'2026-09-27T00:00:00Z');assert.equal(row.portal_payload.last_follow_actor_id,other);assert.equal(row.followup_date,'2026-09-27');assert.equal(row.updated_at,original.updated_at);assert.deepEqual(row.portal_payload.entry,payload.entry);assert.equal(row.followup_status,original.followup_status);
+  await mirror({...enriched,last_actor:'Stale follower',portal_payload:{...enriched.portal_payload,last_follow_at:'2026-09-28T00:00:00Z',last_follow_actor_name:'Stale follower'}});assert.equal((await call({provider:'MetadataOnly'})).rows[0].last_actor,'Real follower');
+  await mirror({...enriched,portal_version:4,amount:123,last_actor:'Next follower',portal_payload:{...enriched.portal_payload,last_follow_at:'2026-09-28T00:00:00Z',entry:{outcome:'success'}}});await mirror(enriched);const next=(await call({provider:'MetadataOnly'})).rows[0];assert.equal(next.portal_version,4);assert.equal(next.amount,123);assert.equal(next.last_actor,'Next follower');assert.equal((await call({provider:'MetadataOnly',view:'pending'})).total,0);
+ }finally{await db.exec('rollback');}
+ for(const role of ['anon','authenticated']){await db.exec('set role '+role);await assert.rejects(()=>mirror(record()));await db.exec('reset role');}
+});

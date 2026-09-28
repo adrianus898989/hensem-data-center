@@ -189,6 +189,15 @@ body.live-admin .provider-summary-report .provider-kpi-change{font-size:10px;whi
 body.live-admin .provider-compact-table th,body.live-admin .provider-compact-table td{padding:5px 6px!important;font-size:10px}
 body.live-admin .provider-compact-table th:first-child,body.live-admin .provider-compact-table td:first-child{min-width:82px}
 body.live-admin .provider-compact-table th:nth-child(2),body.live-admin .provider-compact-table td:nth-child(2){min-width:30px}
+/* Lock report columns to their colgroup so long provider labels cannot steal
+   space from adjacent amounts, counts and percentages. */
+body.live-admin .provider-summary-report .provider-summary-table.provider-compact-table table{table-layout:fixed;width:100%}
+body.live-admin .provider-summary-report .provider-summary-table.provider-compact-table :is(thead,tbody,tfoot)>tr:not(.provider-expanded-row)>:is(th,td){min-width:0;padding:5px 4px!important;box-sizing:border-box}
+body.live-admin .provider-summary-report .provider-summary-table.provider-compact-table :is(th,td):nth-child(-n+3){min-width:0;max-width:none}
+body.live-admin .provider-summary-report .provider-summary-table.provider-compact-table td:first-child>.link,
+body.live-admin .provider-summary-report .provider-summary-table.provider-compact-table td:first-child>.cell-sub{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body.live-admin .provider-summary-report .provider-summary-table.provider-compact-table .provider-business-type{box-sizing:border-box;display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
+body.live-admin .provider-summary-report .provider-summary-table.provider-compact-table .provider-platform-row>td:nth-child(2){white-space:normal;overflow-wrap:anywhere;line-height:1.3}
 body.live-admin .provider-expanded-row>td{position:static!important;padding:10px 14px!important;background:#f5f8ff!important;white-space:normal}
 body.live-admin .provider-platform-breakdown>strong{margin-right:12px}
 body.live-admin .provider-platform-breakdown .provider-platform-table{margin-top:7px;background:#fff;border:1px solid #e0e8f7;border-radius:5px}

@@ -1148,3 +1148,16 @@ test('workorder pages automatically query the current business month and keep ma
  h.c.depositIssuesSet('dateMode','all');await h.c.depositIssuesLoad();assert.equal(h.calls.at(-1).dateMode,'all');h.c.depositIssuesReset();await settle();assert.equal(h.calls.at(-1).dateMode,'range');assert.equal(h.calls.at(-1).startAt,'2026-09-01T00:00:00.000Z');
  h.c.setPage('workorders');await settle();h.c.workorderOperationsSet('from','2026-08-01');h.c.workorderOperationsSet('to','2026-08-31');await h.c.workorderOperationsLoad(true);h.c.liveClosePage('workorders');h.c.setPage('workorders');await settle();assert.equal(h.calls.at(-1).filters.from,'2026-09-01');assert.equal(h.calls.at(-1).filters.to,'2026-09-30');
 });
+
+
+test('YayaPay 924 renders one current source fee and identifies the unused 923 original row',async()=>{
+ const h=await ready(),r=completeAggregate(P,20,10);r.groups.provider[0].provider='YayaPay';h.L.results=[r];h.c.state.page='providers';
+ const selected={scopeType:'country',country:'印度',provider:'YayaPay',category:'UPI',sheetName:'印度线下',sourceRow:22,sourceTypeProvider:'YAYAPAY-924',sourceType:'混合四方',collectFee:'5.20%',payoutFee:'3.10%',payoutSingleFee:'7'};
+ const other={...selected,sourceRow:30,sourceTypeProvider:'YAYAPAY-923',sourceType:'跑分',collectFee:'6.30%'};
+ h.L.feeLookupRows=[other,selected];h.c.render();
+ const read=()=>{const t=renderedTables(h.html()).find(t=>t.headers[0]==='统一三方');return [t,label=>plain(t.rows[0][t.headers.findIndex(v=>v===label||v.startsWith(label+' '))])];};
+ let [t,at]=read();assert.equal(at('匹配费率'),'5.20%');assert.equal(at('估算手续费'),'52.00');assert.equal(at('类型'),'混合四方');assert.doesNotMatch(t.html,/多档费率|待核对费率/);
+ h.c.providerSummaryRate(0);const drawer=h.drawers.at(-1).html;assert.match(drawer,/原表三方/);assert.match(drawer,/YAYAPAY-924/);assert.match(drawer,/YAYAPAY-923/);assert.match(drawer,/当前匹配/);assert.match(drawer,/未采用/);
+ selected.collectFee='5.60%';h.L.feeLookupRows=[other,{...selected,sourceRow:40}];h.c.render();[t,at]=read();assert.equal(at('匹配费率'),'5.60%');assert.equal(at('估算手续费'),'56.00');
+ h.L.feeLookupRows=[other];h.c.render();[t,at]=read();assert.equal(at('匹配费率'),'未匹配');assert.equal(at('估算手续费'),'—未匹配');
+});

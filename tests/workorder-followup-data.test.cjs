@@ -98,3 +98,20 @@ test('mirror derives receipt date from immutable order number and validates only
  for(const upiId of ['123456789012','bank account 1234','a@b c@d']){const b=harness();assert.equal((await b.request({action:'mirror',record:{...record,entry_json:JSON.stringify({...entry,upiId})}})).status,400);assert.equal(b.calls.mirror.length,0);}
  for(const limit of [20,50,100]){const p=harness();const r=await p.request({action:'list',limit});assert.equal(r.status,200);assert.equal(p.calls.list[0][3],limit);}
 });
+
+test('all and pending views are validated and forwarded before database pagination',async()=>{
+ for(const view of ['all','pending']){const h=harness();assert.equal((await h.request({action:'list',filters:{view},offset:50,limit:20})).status,200);assert.equal(h.calls.list[0][1].view,view);assert.equal(h.calls.list[0][2],50);}
+ for(const view of ['due','completed',true,null]){const h=harness();assert.equal((await h.request({action:'list',filters:{view}})).status,400);assert.equal(h.calls.list.length,0);}
+});
+test('actual follow event time survives mirroring independently of manual third-party time and sync time',async()=>{
+ const lastFollowAt='2026-09-26T18:30:00.000Z',h=harness();
+ assert.equal((await h.request({action:'mirror',record:{...record,last_follow_at:lastFollowAt,updated_at:'2026-09-27T09:00:00Z',entry_json:JSON.stringify({...entry,followedAt:'2026-08-01T10:00:00Z'})}})).status,200);
+ const m=h.calls.mirror[0];assert.equal(m.portal_payload.last_follow_at,lastFollowAt);assert.equal(m.followup_date,'2026-09-27');assert.equal(m.followup_at,'2026-08-01T10:00:00.000Z');
+ const reader=harness({result:{rows:[{...m,normalized_outcome:'other_order'}],total:1,facets:{}}});const item=(await(await reader.request()).json()).rows[0];assert.equal(item.lastFollowAt,lastFollowAt);assert.equal(item.followedAt,'2026-08-01T10:00:00.000Z');assert.equal(item.follower,'Synthetic follower');
+ const legacy=harness();await legacy.request({action:'mirror',record:{...record,entry_json:JSON.stringify({...entry,followedAt:'2026-08-01T10:00:00Z'})}});const old=legacy.calls.mirror[0];assert.equal(old.portal_payload.last_follow_at,null);assert.equal(old.followup_date,'2026-09-26');
+ const missing=harness({result:{rows:[{...old,normalized_outcome:'other_order'}],total:1,facets:{}}});assert.equal((await(await missing.request()).json()).rows[0].lastFollowAt,'');
+ const sheet=harness({result:{rows:[{id:'sheet',source_kind:'sheet',platform:account.platforms[0],followup_at:'2026-09-26T18:30:00Z',source_updated_at:'2026-09-27T09:00:00Z'}],total:1,facets:{}}});assert.equal((await(await sheet.request()).json()).rows[0].lastFollowAt,'');
+});
+test('mirror rejects invalid or impossible saved follow timestamps without writing',async()=>{
+ for(const last_follow_at of ['yesterday','2026-09-01T00:00:00Z','2026-09-27T10:02:00Z','2026-09-26T10:02:00Z']){const h=harness();assert.equal((await h.request({action:'mirror',record:{...record,last_follow_at}})).status,400);assert.equal(h.calls.mirror.length,0);}
+});

@@ -104,3 +104,19 @@ test('source-only workorder provider opens its loaded platform cohorts without i
   assert(children.every(r=>r['成功金额']==='—'),'source-only cohorts must not pretend to have transaction amounts');
  }
 });
+
+test('compact provider reports budget short identity columns and align equivalent numeric columns',()=>{
+ for(const direction of ['charge','withdraw']){
+  const h=fixture([order('platform-a','ar',151093800,267877,{direction})]);h.render(direction);const html=h.html();
+  const section=html.match(/<div class="[^"]*\bprovider-summary-table\b[^"]*">([\s\S]*?)<\/table>/)[1];
+  const headers=[...section.matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]).replace(/\s*[↕↑↓]$/,''));
+  const widths=[...section.matchAll(/<col style="width:(\d+)px">/g)].map(m=>Number(m[1]));
+  assert.equal(widths.length,headers.length);assert.equal(widths.length,direction==='charge'?19:21);
+  assert(widths.slice(0,3).reduce((a,b)=>a+b,0)<=200,'identity columns leave room for the complete numeric report');
+  for(const suffix of ['金额','笔数']){const group=headers.map((header,i)=>header.endsWith(suffix)?widths[i]:null).filter(v=>v!==null);assert(group.length>=4);assert.equal(new Set(group).size,1, suffix+' columns share an aligned width budget');}
+  const ratios=headers.map((header,i)=>/成功率$|占比$/.test(header)?widths[i]:null).filter(v=>v!==null);assert.equal(new Set(ratios).size,1);
+  assert(widths.reduce((a,b)=>a+b,0)<=1650,'report fits the desktop content area while narrow screens scroll inside the table');
+  assert.match(section,/>151,093,800\.00</,'full-precision amount text is preserved');
+  h.root.providerSummaryToggle(0);assert.equal(breakdown(h.html())[0]['成功金额'],'151,093,800.00');
+ }
+});
