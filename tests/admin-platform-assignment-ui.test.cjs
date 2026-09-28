@@ -6,10 +6,20 @@ function make(){
  const resultHost={innerHTML:''},filtersHost={value:'typing stays here'},L={teamPlatformTeam:'all',teamPlatformCountry:'巴西',teamPlatformSystem:'all',teamPlatformQuery:'',teamPlatformStatus:'all',platformAssignmentsPage:1,platformAssignmentsSize:20,platformAssignmentsAppliedRequest:{action:'platformAssignments',country:'巴西',offset:0,limit:20},platformAssignments:{rows:[{country:'巴西',platform:'SYNTHETIC-BR',team:'M8',system:'AR',sourceSystem:'AR',status:'no_data',mapped:true}],total:1,canManage:true,summary:{mappings:1,mapped:0,noData:1,unmapped:0},options:{countries:['巴西','印尼'],teams:['M8'],systems:['AR']}}};
  const c={document:{getElementById:id=>id==='platformAssignmentResults'?resultHost:filtersHost}};c.window=c;vm.createContext(c);vm.runInContext(code,c);
  const module=c.HensemLiveConfiguration.create({L,E,C:x=>String(x??0),metric:(l,n)=>`<div>${l}:${n}</div>`,box:(t,h)=>`<section><h2>${t}</h2>${h}</section>`,table:(headers,rows)=>`<table><thead>${headers.join('|')}</thead><tbody>${rows.map(r=>r.join('|')).join('\n')}</tbody></table>`,pager:total=>`total:${total}`,request:()=>{throw Error('network forbidden')},render(){},changed(){}});
- return{L,module,resultHost,filtersHost};
+ const queries=[];c.platformAssignmentsLoad=reset=>queries.push({reset,country:L.teamPlatformCountry});
+ return{L,module,resultHost,filtersHost,context:c,queries};
 }
-test('successful assignment results state their applied scope and expose a real submit form',()=>{
- const h=make(),html=h.module.platformView();assert.match(html,/已查询：巴西 · 全部团队 · 全部系统/);assert.match(html,/配置平台:1/);assert.match(html,/SYNTHETIC-BR/);assert.match(html,/<form[^>]+onsubmit="event.preventDefault\(\);platformAssignmentsLoad\(true\)"/);assert.match(html,/type="submit">查询/);assert.match(html,/onchange="platformAssignmentsSet\('teamPlatformCountry',this.value\)"/);
+test('assignment query buttons and guarded Enter preserve the applied scope without native submit',()=>{
+ const h=make(),html=h.module.platformView();assert.match(html,/已查询：巴西 · 全部团队 · 全部系统/);assert.match(html,/配置平台:1/);assert.match(html,/SYNTHETIC-BR/);assert.match(html,/<form[^>]+onsubmit="return false"/);assert.match(html,/type="button" onclick="configQuery\(this.form,null,'platform'\)">查询/);assert.match(html,/onchange="platformAssignmentsSet\('teamPlatformCountry',this.value\)"/);
+ const click=html.match(/onclick="(configQuery\(this.form,null,'platform'\))"/)[1],keydown=html.match(/onkeydown="([^"]+)"/)[1],submit=html.match(/onsubmit="([^"]+)"/)[1];
+ const run=(handler,self,event)=>vm.runInContext('(function(event){'+handler+'})',h.context).call(self,event);
+ let valid=true,prevented=0;const form={reportValidity:()=>valid},event={key:'Enter',target:{tagName:'INPUT',type:'text'},preventDefault(){prevented++}},applied=h.L.platformAssignmentsAppliedRequest;
+ h.L.teamPlatformCountry='印尼';run(click,{form});assert.deepEqual(h.queries,[{reset:true,country:'印尼'}]);
+ run(keydown,form,event);assert.equal(prevented,1);assert.equal(h.queries.length,2);assert.equal(run(submit,form,event),false);assert.equal(h.queries.length,2,'native submit cannot repeat the query');
+ assert.equal(h.L.platformAssignmentsAppliedRequest,applied,'requesting a new country must not relabel the old response');assert.match(h.module.platformView(),/筛选条件已修改/);assert.doesNotMatch(h.module.platformView(),/SYNTHETIC-BR|已查询：印尼/);
+ valid=false;run(click,{form});run(keydown,form,event);assert.equal(h.queries.length,2,'invalid fields do not query');valid=true;
+ for(const change of [{isComposing:true},{keyCode:229},{repeat:true},{defaultPrevented:true},{ctrlKey:true},{target:{tagName:'TEXTAREA'}},{target:{tagName:'SELECT'}},{target:{tagName:'INPUT',type:'checkbox'}}])run(keydown,form,{...event,...change});
+ h.L.platformAssignmentsLoading=true;run(click,{form});assert.equal(h.queries.length,2,'IME, non-search controls and an in-flight read do not query');
 });
 test('draft country or any changed filter hides old rows, edit controls and totals until queried',()=>{
  for(const [field,value]of [['teamPlatformCountry','印尼'],['teamPlatformTeam','胖虎'],['teamPlatformSystem','PANDA'],['teamPlatformQuery','ANOTHER'],['teamPlatformStatus','mapped']]){

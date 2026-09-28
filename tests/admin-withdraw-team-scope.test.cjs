@@ -15,8 +15,8 @@ test('entering automatic withdrawals from Panghu/Brazil queries only the origina
  f.page.cancel();assert.equal(f.L.country,'巴西');assert.deepEqual(plain(f.L.multi.team),['胖虎'],'leaving for overview retains the selected team');
 });
 
-test('ambiguous all-team Brazil selection cannot silently request ordinary Brazil',async()=>{
- const f=fixture({team:'all'});await f.page.load();assert.equal(f.calls.length,0);assert.match(f.page.state.error,/多个团队/);assert.match(f.page.render(),/先选择一个团队/);f.context.withdrawTeam('胖虎');await f.page.load();assert.equal(f.calls[0].country,'胖虎巴西');
+test('all-team Brazil explicitly requests both authorized original sources',async()=>{
+ const f=fixture({team:'all'});await f.page.load();assert.equal(f.calls.length,1);assert.equal(f.calls[0].country,'巴西');assert.deepEqual(f.calls[0].scopeTargets,[{country:'巴西',platforms:['SAME','M8-ONLY']},{country:'胖虎巴西',platforms:['SAME','PH-ONLY']}]);assert.equal(f.page.state.error,'');f.context.withdrawTeam('胖虎');await f.page.load();assert.equal(f.calls.at(-1).country,'胖虎巴西');assert.equal(f.calls.at(-1).scopeTargets,undefined);
 });
 
 test('switching between identical platform names clears stale platform selections and retains the correct raw source',async()=>{
@@ -33,7 +33,7 @@ test('country source groups for Hong Kong and Red Crab are only exposed as teams
 
 test('India all-team navigation cannot collapse three authorized source groups into the M8 query',async()=>{
  const catalog=[{name:'M8-A',country:'印度',scopeGroup:'IN',team:'M8',source:'ar'},{name:'HK-A',country:'香港',scopeGroup:'HK_TEAM',team:'香港',source:'game66'},{name:'RC-A',country:'红膏蟹',scopeGroup:'RED_CRAB',team:'红膏蟹',source:'game66'}];
- const f=fixture({country:'印度',team:'all',catalog,withdrawCatalog:[]});await f.page.load();assert.equal(f.calls.length,0);assert.match(f.page.state.error,/多个团队/);
+ const f=fixture({country:'印度',team:'all',catalog,withdrawCatalog:[]});await f.page.load();assert.equal(f.calls.length,1);assert.deepEqual(f.calls[0].scopeTargets,[{country:'印度',platforms:['M8-A']},{country:'香港',platforms:['HK-A']},{country:'红膏蟹',platforms:['RC-A']}]);
  for(const [team,country,platform]of [['香港','香港','HK-A'],['红膏蟹','红膏蟹','RC-A'],['M8','印度','M8-A']]){
   f.context.withdrawTeam(team);await f.page.load();assert.equal(f.calls.at(-1).country,country);assert.deepEqual(f.calls.at(-1).platforms,[platform]);
   f.page.cancel();assert.equal(f.L.country,'印度');assert.deepEqual(plain(f.L.multi.team),[team],'returning to overview keeps the selected team under India');
@@ -80,4 +80,34 @@ test('historical table, reason and note displays use Philippines while every det
  f.L.from='2026-07-30T00:00:00';f.L.to='2026-07-30T23:59:59';f.context.withdrawHistorical('historical');await f.page.load();assert.match(f.page.render(),/<td>菲律宾<\/td><td>SUPERLG<\/td>/);assert.doesNotMatch(f.page.render(),/<td>LG<\/td>/);
  f.context.withdrawReasons(0,'blocking');await new Promise(setImmediate);assert.equal(f.calls.at(-1).country,'LG');assert.equal(f.calls.at(-1).platform,'SUPERLG');assert.match(f.page.render(),/<span>菲律宾 · SUPERLG<\/span>/);assert.equal(f.page.state.reason.country,'LG');
  f.context.withdrawNoteOpen(0);assert.match(f.page.render(),/class="config-context">菲律宾 · SUPERLG<\/div>/);assert.equal(f.page.state.note.country,'LG');f.context.withdrawNoteInput('Synthetic historical note');await f.context.withdrawNoteSave();assert.equal(f.calls.at(-1).country,'LG');assert.equal(f.calls.at(-1).platform,'SUPERLG');
+});
+
+
+test('same-name rows under multiple teams keep independent notes, saves and day drilldowns',async()=>{
+ const f=fixture({team:'all',respond:q=>q.action==='withdrawNote'?{...q,version:'saved'}:{rows:[{country:'巴西',platform:'SAME',total:4},{country:'胖虎巴西',platform:'SAME',total:7}],totals:{total:11},notes:[{country:'BR',sourceCountry:'巴西',platform:'SAME',date:'2026-09-25',reason:'M8 original'},{country:'胖虎巴西',sourceCountry:'胖虎巴西',platform:'SAME',date:'2026-09-25',reason:'PH original'}],canWriteNotes:true}});
+ await f.page.load();assert.match(f.page.render(),/巴西 · M8/);assert.match(f.page.render(),/巴西 · 胖虎/);f.context.withdrawNoteOpen(0);assert.equal(f.page.state.noteDraft,'M8 original');assert.equal(f.page.state.note.storageCountry,'BR');f.context.withdrawNoteInput('M8 saved');await f.context.withdrawNoteSave();assert.equal(f.calls.at(-1).country,'BR');assert.equal(f.page.state.data.notes.length,2);f.context.withdrawNoteOpen(1);assert.equal(f.page.state.noteDraft,'PH original');f.context.withdrawNoteClose();f.context.withdrawDaily(1);await new Promise(setImmediate);assert.equal(f.calls.at(-1).country,'胖虎巴西');assert.deepEqual(f.calls.at(-1).platforms,['SAME']);assert.equal(f.calls.at(-1).scopeTargets,undefined);f.context.withdrawMultiClear();await f.page.load();assert.equal(f.calls.at(-1).scopeTargets.length,2);
+});
+test('pending old-team response cannot overwrite the newly selected-team query',async()=>{
+ let resolve;const f=fixture({team:'all',respond:q=>q.scopeTargets?new Promise(r=>resolve=r):{rows:[],totals:{total:2},notes:[]}});const previous=f.page.load();f.context.withdrawTeam('M8');await f.page.load();resolve({rows:[],totals:{total:999},notes:[]});await previous;assert.equal(f.page.state.data.totals.total,2);assert.equal(f.page.state.data.rawCountry,'巴西');assert.equal(f.page.state.dirty,false);
+});
+
+
+test('sandboxed preview query uses direct buttons and one guarded Enter action',async()=>{
+ const f=fixture({team:'all'});f.context.withdrawTeam('M8');const html=f.page.render();assert.match(html,/<button type="button" class="btn primary" onclick="withdrawQueryForm\(this.form\)">查询<\/button>/);assert.match(html,/onkeydown="withdrawFilterKey\(event\)"/);await f.context.withdrawQueryForm({reportValidity:()=>true});assert.equal(f.calls.length,1);assert.equal(f.page.state.dirty,false);
+ f.context.withdrawDate('from','2026-09-23');let prevented=0;const event={key:'Enter',target:{tagName:'INPUT',type:'date'},preventDefault(){prevented++}};await f.context.withdrawFilterKey(event);assert.equal(prevented,1);assert.equal(f.calls.length,2);assert.equal(f.calls.at(-1).startAt,'2026-09-23T00:00:00.000Z');assert.equal(f.page.state.dirty,false);
+ await f.context.withdrawQueryForm({reportValidity:()=>false});assert.equal(f.calls.length,2);
+ for(const next of [{...event,repeat:true},{...event,defaultPrevented:true},{...event,ctrlKey:true},{...event,metaKey:true},{...event,altKey:true},{...event,shiftKey:true},{...event,keyCode:229},{...event,isComposing:true},{...event,key:' '},{...event,target:{tagName:'SELECT'}},{...event,target:{tagName:'BUTTON'}},{...event,target:{tagName:'INPUT',type:'checkbox'}},{...event,target:{tagName:'TEXTAREA'}}])await f.context.withdrawFilterKey(next);assert.equal(f.calls.length,2);
+ const shell=fs.readFileSync(path.join(__dirname,'../src/components/OwnerAdminPreview.tsx'),'utf8');assert.match(shell,/sandbox="allow-scripts allow-downloads"/);assert.doesNotMatch(shell,/allow-forms/);
+});
+
+
+test('ordinary country code aliases deduplicate one source while special team scopes remain separate',async()=>{
+ const f=fixture({team:'all',catalog:[{name:'M8-A',country:'BR',team:'M8'},{name:'M8-A',country:'巴西',team:'M8'}],withdrawCatalog:[{name:'PH-A',country:'巴西',scopeGroup:'BR_PANGHU',team:'胖虎'}]});await f.page.load();assert.deepEqual(f.calls[0].scopeTargets,[{country:'巴西',platforms:['M8-A']},{country:'胖虎巴西',platforms:['PH-A']}]);f.context.withdrawTeam('M8');await f.page.load();assert.equal(f.calls.at(-1).country,'巴西');assert.deepEqual(f.calls.at(-1).platforms,['M8-A']);
+ const g=fixture({team:'all',country:'IN',withdrawCatalog:[],catalog:[{name:'M8-A',country:'IN',team:'M8'},{name:'HK-A',country:'HK_TEAM',team:'香港'},{name:'RC-A',country:'RED_CRAB',team:'红膏蟹'}]});await g.page.load();assert.deepEqual(g.calls[0].scopeTargets,[{country:'印度',platforms:['M8-A']},{country:'香港',platforms:['HK-A']},{country:'红膏蟹',platforms:['RC-A']}]);
+});
+
+
+test('reason search shares the keyboard guard and submits only one plain Enter',async()=>{
+ const f=fixture();await f.page.load();f.context.withdrawReasons(0,'rejection');await new Promise(setImmediate);let submitted=0,prevented=0;f.context.withdrawReasonSearch=()=>{submitted++};const event={key:'Enter',target:{tagName:'INPUT',type:'search'},preventDefault(){prevented++}};
+ for(const flag of ['repeat','defaultPrevented','ctrlKey','metaKey','altKey','shiftKey','isComposing'])f.context.withdrawReasonQueryKey({...event,[flag]:true});f.context.withdrawReasonQueryKey({...event,keyCode:229});assert.equal(submitted,0);assert.equal(prevented,0);f.context.withdrawReasonQueryKey(event);assert.equal(submitted,1);assert.equal(prevented,1);
 });

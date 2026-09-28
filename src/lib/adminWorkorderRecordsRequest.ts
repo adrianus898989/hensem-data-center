@@ -3,11 +3,12 @@ const filterKeys=['platform','from','to','dateBasis','issueKind','statusCode','w
 export function validateWorkorderRecordsRequest(p:Record<string,unknown>):Record<string,unknown>{
  if(p.action!=='workorderRecords'||Object.keys(p).some(k=>!['action','view','operation','country','filters','offset','limit'].includes(k)))throw Error('工单记录参数无效');
  const view=p.view??'records',operation=p.operation??'list';
- if(typeof view!=='string'||!['records','missing','workload'].includes(view)||!['list','detail'].includes(String(operation))||operation==='detail'&&view!=='records')throw Error('工单记录页面无效');
+ if(typeof view!=='string'||!['records','orders','missing','workload'].includes(view)||!['list','detail','summary','orderDetail'].includes(String(operation))||operation==='detail'&&view!=='records'||operation==='orderDetail'&&view!=='orders'||operation==='summary'&&!['records','orders'].includes(view))throw Error('工单记录页面无效');
  if(typeof p.country!=='string'||!['IN','印度','BR','巴西','PK','巴基斯坦','ID','印尼','VN','越南','PH','菲律宾','MY','马来','MM','缅甸','NG','尼日利亚','CO','哥伦比亚','MX','墨西哥','CL','智利'].includes(p.country))throw Error('请选择国家');
  const raw=p.filters??{};if(!raw||typeof raw!=='object'||Array.isArray(raw))throw Error('工单筛选无效');const f:Record<string,string>={};
  for(const [k,v] of Object.entries(raw)){if(!filterKeys.includes(k)||typeof v!=='string'||v.length>200||/[\u0000-\u001f\u007f]/.test(v))throw Error('工单筛选无效');f[k]=v.trim();}
  if(operation==='detail'&&(!f.platform||!f.workorderId))throw Error('请选择工单');
+ if(operation==='orderDetail'&&(!f.platform||!f.orderNo||!['deposit','withdraw'].includes(f.issueKind)||Object.keys(f).some(k=>!['platform','orderNo','issueKind'].includes(k))))throw Error('请选择完整原支付订单');
  for(const k of ['from','to'])if(f[k]&&(!/^\d{4}-\d{2}-\d{2}$/.test(f[k])||!Number.isFinite(Date.parse(f[k]+'T00:00Z'))||new Date(f[k]+'T00:00Z').toISOString().slice(0,10)!==f[k]))throw Error('日期无效');
  if(Boolean(f.from)!==Boolean(f.to)||f.from&&(f.from>f.to||Date.parse(f.to)-Date.parse(f.from)>92*86400000))throw Error('日期范围最多93天');
  for(const [k,choices] of Object.entries({dateBasis:['submission','operation'],issueKind:['deposit','withdraw'],statusCode:['1','2','3','4','5'],kyc:['yes','no','unknown'],utrMatch:['yes','no','unknown'],registrationStatus:['missing','matched','review']}))if(f[k]&&!choices.includes(f[k]))throw Error('工单筛选选项无效');

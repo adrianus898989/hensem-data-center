@@ -9,7 +9,7 @@ export const LIVE_RESPONSE = "hensem-admin-live-response";
 export const LIVE_CANCEL = "hensem-admin-live-cancel";
 export const LIVE_REQUEST_TIMEOUT_MS = 90000;
 const actions = ["memberDaily","catalog","syncHealth","intakeCoverage","reportSummary","pendingSnapshot","collectedData","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
-const keys = new Set(["amountBands","feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"]);
+const keys = new Set(["scopeTargets","amountBands","feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"]);
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
@@ -18,6 +18,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(p.action==="portalOperationLogs")return validatePortalOperationLogsRequest(p);
   if(Object.keys(p).some(k=>!keys.has(k))||!actions.includes(String(p.action)))throw Error("查询方法无效");
   if(p.action==="memberDaily"&&Object.keys(p).some(key=>!["action","platformId","startAt","endAt","direction","providers","currency"].includes(key)))throw Error("每日人数参数无效");
+  if(p.scopeTargets!==undefined&&p.action!=="autoWithdraw")throw Error("团队范围仅用于自动出款统计");
   if(p.amountBands!==undefined){
     if(p.action!=="aggregate"||!p.amountBands||typeof p.amountBands!=="object"||Array.isArray(p.amountBands))throw Error("金额档位参数无效");
     const bands=p.amountBands as Record<string,unknown>,directions=p.direction==='charge'||p.direction==='withdraw'?[String(p.direction)]:['charge','withdraw'];
@@ -157,7 +158,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   }
   if(p.action==="autoWithdraw"||p.action==="withdrawReasons"){
     const reasons=p.action==="withdrawReasons";
-    const allowed=new Set(reasons?["action","date","country","platform","kind","category","reasonKey","operatorKey","query","offset","limit"]:["action","startAt","endAt","country","platform","platforms","account","view","sort","ascending","daily","offset","limit"]);
+    const allowed=new Set(reasons?["action","date","country","platform","kind","category","reasonKey","operatorKey","query","offset","limit"]:["action","startAt","endAt","country","platform","platforms","account","view","sort","ascending","daily","offset","limit","scopeTargets"]);
     if(Object.keys(p).some(k=>!allowed.has(k)))throw Error("出款查询参数无效");
     if(typeof p.country!=="string"||!p.country.trim()||p.country==='all')throw Error("请选择一个国家");
     const validDay=(value:unknown)=>typeof value==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
@@ -175,6 +176,17 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       if(p.sort!==undefined&&!["country","platform","account","total","processed","success","rejected","autoCount","manualCount","avgSeconds","successRate","rejectRate","autoRate","manualRate","previousAvgSeconds","durationChange"].includes(String(p.sort)))throw Error("排序无效");
       for(const key of ["ascending","daily"])if(p[key]!==undefined&&typeof p[key]!=="boolean")throw Error("出款查询值无效");
       if(p.platforms!==undefined&&(!Array.isArray(p.platforms)||p.platforms.length>200||p.platforms.some(v=>typeof v!=="string"||!v||v.length>200||/[\u0000-\u001f]/.test(v))))throw Error("平台范围无效");
+      if(p.scopeTargets!==undefined){
+        if(!Array.isArray(p.scopeTargets)||p.scopeTargets.length<1||p.scopeTargets.length>8)throw Error("团队范围无效");
+        const targets=p.scopeTargets as Array<Record<string,unknown>>,countries=new Set<string>();
+        const displayCountries:Record<string,string>={"胖虎巴西":"巴西","香港":"印度","红膏蟹":"印度","LG":"菲律宾"};
+        const display=(country:string)=>displayCountries[country]||country;
+        const validName=(value:unknown)=>typeof value==="string"&&value.length>0&&value.length<=200&&value===value.trim()&&!/[\u0000-\u001f\u007f]/.test(value);
+        for(const t of targets){
+          if(!t||typeof t!=="object"||Array.isArray(t)||Object.keys(t).some(k=>!["country","platforms"].includes(k))||!validName(t.country)||display(String(t.country))!==p.country||countries.has(String(t.country))||!Array.isArray(t.platforms)||t.platforms.length<1||t.platforms.length>200||!t.platforms.every(validName))throw Error("团队范围无效");
+          countries.add(String(t.country));
+        }
+      }
     }
     for(const key of ["country","platform","account"])if(p[key]!==undefined&&(typeof p[key]!=="string"||String(p[key]).length>200||/[\u0000-\u001f]/.test(String(p[key]))))throw Error("出款检索值无效");
     if(p.limit!==undefined&&(typeof p.limit!=="number"||![20,30,50,100,500].includes(p.limit)))throw Error("分页大小无效");

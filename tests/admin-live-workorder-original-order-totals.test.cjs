@@ -3,6 +3,7 @@ const {test,before,after}=require('node:test'),assert=require('node:assert/stric
 const {PGlite}=require('@electric-sql/pglite');
 const sql=name=>fs.readFileSync(path.join(__dirname,'../supabase',name),'utf8');
 const initialPatch=sql('admin-live-workorder-original-order-totals.sql'),patch=sql('admin-live-workorder-unique-single-pass.sql');
+const groupedPatch=sql('admin-live-workorder-grouped-metrics.sql');
 const alpha='11111111-1111-4111-8111-111111111111',beta='22222222-2222-4222-8222-222222222222',gamma='33333333-3333-4333-8333-333333333333';
 const req={country:'印度',startAt:'2026-09-01T00:00:00+05:30',endAt:'2026-09-02T23:59:59+05:30',limit:20};
 let db,legacy,baseAcl;
@@ -49,6 +50,12 @@ before(async()=>{
  await insert('newar-not-supported','A1',50,{system:'NEW_AR',platform:'Gamma',status:4});
  await rebuild();legacy=await call();baseAcl=(await db.query("select proacl::text acl from pg_proc where oid='private.dashboard_admin_live_workorders(jsonb)'::regprocedure")).rows[0].acl;
  await db.exec(initialPatch);await db.exec(patch);
+ const cases=[{}, {platforms:[]}, {platforms:['Alpha']}, {platforms:['Beta']}, {platforms:['Gamma']}, {platforms:['Alpha','Beta']}, {providers:['ArbPay']}, {providers:['OtherPay']}, {offset:1000}, {startAt:'2026-09-02T00:00:00+05:30'}, {endAt:'2026-09-01T23:59:59+05:30'}];
+ const checks=[];for(const direction of ['all','charge','withdraw'])for(const c of cases)checks.push({q:{...c,direction},expected:await call({...c,direction})});
+ await db.exec(groupedPatch);
+ await db.exec(sql('admin-live-workorder-provider-lookup-once.sql'));
+ await db.exec(sql('admin-live-workorder-source-scope-once.sql'));
+ for(const {q,expected} of checks)assert.deepEqual(await call(q),expected,JSON.stringify(q));
 });
 after(async()=>db?.close());
 
@@ -115,7 +122,8 @@ test('confirmed platform aliases dedupe as one physical platform without duplica
  }finally{await db.exec('rollback');}
 });
 test('migration is repeatable, read-only on business data, and identical to the deployment file',async()=>{
- const first=await call();await db.exec(patch);assert.deepEqual(await call(),first);
+ const first=await call();await db.exec(patch);await db.exec(groupedPatch);await db.exec(groupedPatch);assert.deepEqual(await call(),first);
+ assert.equal(sql('migrations/20260928115937_admin_live_workorder_grouped_metrics.sql'),groupedPatch);
  assert.equal(sql('migrations/20260928094501_admin_live_workorder_original_order_totals.sql'),initialPatch);
  assert.equal(sql('migrations/20260928100943_admin_live_workorder_unique_single_pass.sql'),patch);
  assert.doesNotMatch(patch,/\b(create table|alter table|insert into|delete from|update public\.|grant execute)\b/i);

@@ -1,8 +1,15 @@
 (function(root){
  'use strict';
+  // Query buttons must work in the read-only iframe without native form submission.
+  function readQuery(form,event,run){
+   if(event){const input=event.target;if(event.defaultPrevented||event.key!=='Enter'||event.isComposing||event.keyCode===229||event.repeat||event.ctrlKey||event.metaKey||event.altKey||event.shiftKey||input?.tagName!=='INPUT'||input.isContentEditable||!['text','search','number','date','datetime-local','time','email','url','tel'].includes(input.type||'text'))return false;event.preventDefault();}
+   if(!form||typeof form.reportValidity!=='function'||!form.reportValidity())return false;
+   return run();
+  }
  root.HensemLiveConfiguration={create(ctx){
   const {L,E,C,metric,box,table,pager,request,render,changed}=ctx;
   let dialog=null,saving=false;
+  root.configQuery=(form,event,kind)=>{if(!['provider','platform'].includes(kind))return false;return readQuery(form,event,()=>{if(kind==='provider'){if(!L.providerConfigLoading)return root.providerConfigLoad(true);}else if(!L.platformAssignmentsLoading)return root.platformAssignmentsLoad(true);});};
   const field=(key,label,value,placeholder='')=>'<div class="live-field"><label for="'+key+'">'+label+'</label><input id="'+key+'" value="'+E(value)+'" placeholder="'+E(placeholder)+'" maxlength="200" oninput="'+(key.startsWith('providerConfig')?'providerConfigSet':'platformAssignmentsSet')+'(\''+key+'\',this.value)"></div>';
   const select=(key,label,value,items)=>'<div class="live-field"><label for="'+key+'">'+label+'</label><select id="'+key+'" onchange="'+(key.startsWith('providerConfig')?'providerConfigSet':'platformAssignmentsSet')+'(\''+key+'\',this.value)">'+items.map(([id,text])=>'<option value="'+E(id)+'" '+(id===value?'selected':'')+'>'+E(text)+'</option>').join('')+'</select></div>';
   const notice=(loading,error)=>loading?'<div class="live-status">正在刷新归类目录…</div>':error?'<div class="live-status live-error">'+E(error)+'</div>':'';
@@ -10,12 +17,12 @@
   function providerView(){
    const result=L.providerConfig||{},rows=result.rows||[],opts=result.options||{},sum=result.summary||{};
    const countries=[...new Set([L.country,...(opts.countries||[])].filter(Boolean))];
-   const form='<section class="panel"><form class="live-filters" onsubmit="event.preventDefault();providerConfigLoad(true)">'+
+   const form='<section class="panel"><form class="live-filters" onsubmit="return false" onkeydown="configQuery(this,event,\'provider\')">'+
     select('providerConfigCountry','国家 / 地区',L.providerConfigCountry,countries.map(c=>[c,c]))+
     select('providerConfigPlatform','平台',L.providerConfigPlatform,[['all','全部平台'],...(opts.platforms||[]).map(p=>[p,p])])+
     field('providerConfigRaw','原始三方',L.providerConfigRaw,'搜索原始通道名称')+field('providerConfigCanonical','统一三方',L.providerConfigCanonical,'搜索已归类名称')+
     select('providerConfigStatus','归类状态',L.providerConfigStatus,[['all','全部状态'],['assigned','已归类'],['unassigned','未归类'],['conflict','归类冲突']])+
-    '<div class="live-actions"><button class="btn primary">查询</button><button class="btn" type="button" onclick="providerConfigReset()">重置</button></div></form></section>';
+    '<div class="live-actions"><button type="button" class="btn primary" onclick="configQuery(this.form,null,\'provider\')">查询</button><button class="btn" type="button" onclick="providerConfigReset()">重置</button></div></form></section>';
    return form+notice(L.providerConfigLoading,L.providerConfigError)+permission(result)+'<div class="live-metrics">'+
     metric('原始通道',C(sum.rawProviders))+metric('已归类',C(sum.assigned))+metric('未归类',C(sum.unassigned))+metric('归类冲突',C(sum.conflict))+'</div>'+
     box('三方归类',table(['原始通道','统一三方','历史归类','国家','平台','代收笔数','代付笔数','合计笔数','状态','最后数据日','操作'],rows.map((r,i)=>[
@@ -49,13 +56,13 @@
   function platformView(){
    const result=L.platformAssignments||{},opts=result.options||{};
    const choices=(current,empty,items)=>[['all',empty],...[...new Set([current,...(items||[])].filter(v=>v&&v!=='all'))].map(v=>[v,v])];
-   const form='<section class="panel"><form class="live-filters config-platform-filters" onsubmit="event.preventDefault();platformAssignmentsLoad(true)">'+
+   const form='<section class="panel"><form class="live-filters config-platform-filters" onsubmit="return false" onkeydown="configQuery(this,event,\'platform\')">'+
     select('teamPlatformTeam','所属团队',L.teamPlatformTeam,choices(L.teamPlatformTeam,'全部团队',opts.teams))+
     select('teamPlatformCountry','国家 / 地区',L.teamPlatformCountry,choices(L.teamPlatformCountry,'全部国家 / 地区',opts.countries))+
     select('teamPlatformSystem','包网系统',L.teamPlatformSystem,choices(L.teamPlatformSystem,'全部系统',opts.systems))+
     field('teamPlatformQuery','平台',L.teamPlatformQuery,'搜索平台名称')+
     select('teamPlatformStatus','配置状态',L.teamPlatformStatus,[['all','全部状态'],['mapped','已配置有数据'],['no_data','配置暂无数据'],['unmapped','待归类平台']])+
-    '<div class="live-actions"><button class="btn primary" type="submit">查询</button><button class="btn" type="button" onclick="platformAssignmentsReset()">重置</button></div></form></section>';
+    '<div class="live-actions"><button class="btn primary" type="button" onclick="configQuery(this.form,null,\'platform\')">查询</button><button class="btn" type="button" onclick="platformAssignmentsReset()">重置</button></div></form></section>';
    return form+'<div id="platformAssignmentResults" aria-live="polite">'+platformResults()+'</div>';
   }
   function modal(title,body){
