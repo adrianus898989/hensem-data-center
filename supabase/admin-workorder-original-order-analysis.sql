@@ -113,11 +113,17 @@ begin
    case when requested_operation='orderDetail' then d.work_order_no end work_order_no,
    case when requested_operation='orderDetail' then d.payment_order_no end payment_order_no,
    nullif(btrim(d.payment_order_no),'') original_order_no,d.issue_kind,d.status_code,d.amount,case when requested_operation='orderDetail' then d.third_party end third_party,
+   d.kyc_connected,d.utr_matched,
+   case when requested_operation='orderDetail' then d.source_order_no end source_order_no,
+   case when requested_operation='orderDetail' then d.utr end utr,
    case when requested_operation<>'summary' then d.submitted_at end submitted_at,
    case when requested_operation<>'summary' then d.operated_at end operated_at,
    case when requested_operation='orderDetail' then d.operator_account end operator_account,
    case when requested_operation='orderDetail' then d.operation_time_source end operation_time_source,
    case when requested_operation='orderDetail' then d.last_updated_by end last_updated_by,
+   case when requested_operation='orderDetail' then d.source_updated_at end source_updated_at,
+   case when requested_operation='orderDetail' then d.field_gaps end field_gaps,
+   case when requested_operation='orderDetail' then d.attachment_types end attachment_types,
    case when requested_operation='summary' then null when f->>'dateBasis'='operation' then d.operated_at else coalesce(d.submitted_at,d.submitted_date::timestamp at time zone v_timezone) end sort_at
   from candidates d where
 (coalesce(f->>'workorderId','')='' or case when all_history then lower(d.work_order_id)=lower(f->>'workorderId') else strpos(lower(coalesce(d.work_order_id,'')),lower(f->>'workorderId'))>0 end)
@@ -137,6 +143,11 @@ begin
  ), originals as materialized (
   select period,platform_key,issue_kind,original_order_no,
    count(*) ticket_count,count(*) filter(where status_code=4) processed_ticket_count,bool_or(status_code=4) processed,
+   count(*) filter(where status_code=1) status_pending_count,count(*) filter(where status_code=2) status_processing_count,
+   count(*) filter(where status_code=3) status_rejected_count,count(*) filter(where status_code=4) status_processed_count,
+   count(*) filter(where status_code=5) status_system_processing_count,count(*) filter(where status_code is null) status_unknown_count,
+   count(*) filter(where kyc_connected is true) kyc_yes_count,count(*) filter(where kyc_connected is false) kyc_no_count,count(*) filter(where kyc_connected is null) kyc_unknown_count,
+   count(*) filter(where utr_matched is true) utr_yes_count,count(*) filter(where utr_matched is false) utr_no_count,count(*) filter(where utr_matched is null) utr_unknown_count,
    case when min(amount) is null then 0 when min(amount)=max(amount) then 1 else 2 end amount_variants,
    case when min(amount)=max(amount) then min(amount) end amount,
    max(sort_at) latest_at,max(submitted_at) latest_submitted_at,max(operated_at) latest_operated_at
@@ -193,13 +204,19 @@ begin
   'comparison',case when requested_operation='summary' and not all_history then jsonb_build_object('label',case when span_days=1 then '昨日' else '前期' end,'startDate',first_day-span_days,'endDate',first_day-1,'days',span_days) end,
   'rows',case when requested_operation='summary' then '[]'::jsonb when requested_operation='orderDetail' then coalesce((select jsonb_agg(jsonb_build_object(
    'platform',p.platform_key,'sourcePlatform',p.platform,'workorderId',p.work_order_id,'workorderNo',p.work_order_no,'orderNo',p.payment_order_no,
-   'issueKind',p.issue_kind,'statusCode',p.status_code,'amount',p.amount::text,'provider',p.third_party,'submittedAt',p.submitted_at,'operatedAt',p.operated_at,
-   'operatorAccount',p.operator_account,'operationTimeSource',p.operation_time_source,'lastUpdatedBy',p.last_updated_by,'country',v_country,'currency',v_currency,'source','AR','readOnly',true
+   'sourceOrderNo',p.source_order_no,'utr',p.utr,'issueKind',p.issue_kind,'statusCode',p.status_code,'amount',p.amount::text,'provider',p.third_party,
+   'kycConnected',p.kyc_connected,'utrMatched',p.utr_matched,'submittedAt',p.submitted_at,'operatedAt',p.operated_at,
+   'operatorAccount',p.operator_account,'operationTimeSource',p.operation_time_source,'lastUpdatedBy',p.last_updated_by,'sourceUpdatedAt',p.source_updated_at,
+   'fieldGaps',p.field_gaps,'attachmentTypes',p.attachment_types,'country',v_country,'currency',v_currency,'source','AR','readOnly',true
   ) order by p.sort_at desc nulls last,p.platform,p.work_order_id) from tickets_page p),'[]'::jsonb)
   else coalesce((select jsonb_agg(jsonb_build_object(
    'platform',p.platform_key,'sourcePlatforms',m.source_platforms,'orderNo',p.original_order_no,'issueKind',p.issue_kind,'amount',p.amount::text,
    'amountStatus',case when p.amount_variants>1 then 'conflict' when p.amount_variants=0 then 'missing' else 'known' end,
-   'ticketCount',p.ticket_count,'processedTicketCount',p.processed_ticket_count,'processed',p.processed,'providers',m.providers,'operators',m.operators,
+   'ticketCount',p.ticket_count,'processedTicketCount',p.processed_ticket_count,'processed',p.processed,
+   'statusCounts',jsonb_build_object('1',p.status_pending_count,'2',p.status_processing_count,'3',p.status_rejected_count,'4',p.status_processed_count,'5',p.status_system_processing_count,'unknown',p.status_unknown_count),
+   'kycCounts',jsonb_build_object('yes',p.kyc_yes_count,'no',p.kyc_no_count,'unknown',p.kyc_unknown_count),
+   'utrCounts',jsonb_build_object('yes',p.utr_yes_count,'no',p.utr_no_count,'unknown',p.utr_unknown_count),
+   'providers',m.providers,'operators',m.operators,
    'latestSubmittedAt',p.latest_submitted_at,'latestOperatedAt',p.latest_operated_at,'country',v_country,'currency',v_currency,'source','AR','readOnly',true
   ) order by p.latest_at desc nulls last,p.platform_key,p.issue_kind,p.original_order_no) from orders_page p left join order_page_metadata m using(platform_key,issue_kind,original_order_no)),'[]'::jsonb) end
  ) into answer;
