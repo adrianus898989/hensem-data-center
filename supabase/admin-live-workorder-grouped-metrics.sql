@@ -114,4 +114,3 @@ end;
 $patch$;
 notify pgrst,'reload schema';
 commit;
-
