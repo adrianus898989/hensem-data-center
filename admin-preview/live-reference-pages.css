@@ -25,6 +25,7 @@ body.live-admin .live-date-range>label{font-size:10px;color:#7789a7}
 .live-admin .live-table:not(.live-matrix) th,.live-admin .live-table:not(.live-matrix) td{padding:10px 11px}
 .live-admin .df-flow-metric>.metric-link{display:block;color:#3056b0;font-size:19px;margin-top:7px}
 .live-admin .df-flow-metric>.live-compare{display:block;font-size:10px;margin-top:6px;color:#7c8ca5}
+.live-admin .df-flow-metric>.cell-warning{display:block;margin-top:3px;color:#9b6b2f;font-size:9px;line-height:1.35;white-space:normal}
 .live-admin .df-flow-foot>div>strong{display:block;font-weight:500;margin-top:5px}
 .live-admin .df-flow-rate .live-compare{display:block;font-size:10px}
 .live-admin .pending-metric>strong{font-size:21px;color:#243c62;display:block}

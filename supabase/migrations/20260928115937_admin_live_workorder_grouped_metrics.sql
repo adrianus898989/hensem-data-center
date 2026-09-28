@@ -28,6 +28,8 @@ begin
       count(*) filter(where eligible and successful) as success_count,
       case when count(*) filter(where eligible and amount is null)=0 then coalesce(sum(amount) filter(where eligible),0) end as order_amount,
       case when count(*) filter(where eligible and successful and amount is null)=0 then coalesce(sum(amount) filter(where eligible and successful),0) end as success_amount,
+      count(*) filter(where eligible and coalesce(successful,false)=false) as not_received_count,
+      case when count(*) filter(where eligible and coalesce(successful,false)=false and amount is null)=0 then coalesce(sum(amount) filter(where eligible and coalesce(successful,false)=false),0) end as not_received_amount,
       count(*) filter(where eligible and amount_variants>1) as amount_conflict_count,
       count(*) filter(where eligible and amount_variants=0) as missing_amount_count,
       count(*) filter(where cardinality(providers)>1) as provider_conflict_count
@@ -48,6 +50,8 @@ $old0$;
       count(*) as order_count,count(*) filter(where successful) as success_count,
       case when count(*) filter(where amount is null)=0 then coalesce(sum(amount),0) end as order_amount,
       case when count(*) filter(where successful and amount is null)=0 then coalesce(sum(amount) filter(where successful),0) end as success_amount,
+      count(*) filter(where coalesce(successful,false)=false) as not_received_count,
+      case when count(*) filter(where coalesce(successful,false)=false and amount is null)=0 then coalesce(sum(amount) filter(where coalesce(successful,false)=false),0) end as not_received_amount,
       count(*) filter(where amount_variants>1) as amount_conflict_count,
       count(*) filter(where amount_variants=0) as missing_amount_count,
       count(*) filter(where cardinality(providers)>1) as provider_conflict_count
@@ -60,6 +64,8 @@ $old0$;
       count(*) filter(where cardinality(providers)=1 and successful) as success_count,
       case when count(*) filter(where cardinality(providers)=1 and amount is null)=0 then coalesce(sum(amount) filter(where cardinality(providers)=1),0) end as order_amount,
       case when count(*) filter(where cardinality(providers)=1 and successful and amount is null)=0 then coalesce(sum(amount) filter(where cardinality(providers)=1 and successful),0) end as success_amount,
+      count(*) filter(where cardinality(providers)=1 and coalesce(successful,false)=false) as not_received_count,
+      case when count(*) filter(where cardinality(providers)=1 and coalesce(successful,false)=false and amount is null)=0 then coalesce(sum(amount) filter(where cardinality(providers)=1 and coalesce(successful,false)=false),0) end as not_received_amount,
       count(*) filter(where cardinality(providers)=1 and amount_variants>1) as amount_conflict_count,
       count(*) filter(where cardinality(providers)=1 and amount_variants=0) as missing_amount_count,
       count(*) filter(where cardinality(providers)>1) as provider_conflict_count
