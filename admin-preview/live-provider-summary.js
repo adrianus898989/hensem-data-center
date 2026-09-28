@@ -387,7 +387,7 @@
   const coverage=L.workorders?.coverage;
   const coverageNote=coverage&&!coverage.complete?' · 工单覆盖 '+C(coverage.capturedPlatformDays)+' / '+C(coverage.expectedPlatformDays)+' 平台日':'';
   const workNote=L.workordersUnsupported?'<div class="live-status">所选平台来源尚未接入工单数据</div>':L.workordersError?'<div class="live-status live-error">工单读取未完成：'+E(L.workordersError)+' <button type="button" class="link" onclick="liveProviderWorkordersRetry()">只重试工单</button></div>':
-   L.workordersLoading?'<div class="live-status">正在读取'+issueLabel+'工单汇总…</div>':'';
+   L.workordersLoading?'<div class="live-status">正在读取'+issueLabel+'工单汇总…</div>':!L.workorders?'<div class="live-status">'+(L.dirty?'筛选已更改，请点击查询读取对应工单':L.loading?'经营数据读取后自动加载工单':'工单尚未读取 <button type="button" class="link" onclick="liveProviderWorkordersRetry()">加载工单</button>')+'</div>':'';
   const footers=max>1?[sumRow(shown,readState.partial?'当前页已读取合计':'当前页汇总'),sumRow(rows,readState.partial?'已读取合计':'全部汇总',true)]:[sumRow(rows,readState.partial?'已读取合计':'合计',true)];
   const breakdown=(row,index)=>{
    let items=buildPlatformRows({row,workorders:L.workorders,rates:L.feeLookupRows,country:L.country,plus,combine});
