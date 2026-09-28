@@ -226,10 +226,12 @@ test('closing tabs releases their navigation state and the final tab returns to 
 });
 
 test('unfinished tab requests become explicit paused partial results and cannot overwrite a restored tab',async()=>{
- const p2={...P,id:'22222222-2222-4222-8222-222222222222'},pending=deferred();let primary=true;
- const h=harness({page:'providers',platforms:[P,p2],handler:q=>q.action==='catalog'?{platforms:[P,p2]}:q.action==='rates'?{rows:[],total:0}:q.action==='aggregate'&&q.platformId===p2.id&&primary?pending.promise:completeAggregate(q.platformId===p2.id?p2:P,17,9)});await settle();assert.equal(h.L.loading,true);assert.equal(h.L.results.length,1);
- const serial=h.L.serial;h.c.setPage('workorder_workload');h.c.setPage('providers');const reads=h.calls.length;assert(h.L.serial>serial);assert.equal(h.L.loading,false);assert.equal(h.L.queryFailures.length,1);assert.equal(h.L.queryFailures[0].id,p2.id);assert.match(h.html(),/暂停/);const displayed=h.html();
- pending.resolve(completeAggregate(p2,987654,900000));await settle();assert.equal(h.calls.length,reads);assert.equal(h.L.results.length,1);assert.equal(h.html(),displayed);
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222'},pending=deferred(),workordersPending=deferred();let primary=true;
+ const workorders={rows:[],byProvider:[],byDirection:{charge:{submittedCount:0,submittedAmount:0,successCount:0,successAmount:0}},summary:{},total:0};
+ const h=harness({page:'providers',platforms:[P,p2],handler:q=>q.action==='catalog'?{platforms:[P,p2]}:q.action==='rates'?{rows:[],total:0}:q.action==='workorders'?workordersPending.promise:q.action==='aggregate'&&q.platformId===p2.id&&primary?pending.promise:completeAggregate(q.platformId===p2.id?p2:P,17,9)});await settle();assert.equal(h.L.loading,true);assert.equal(h.L.results.length,1);
+ const serial=h.L.serial;h.c.setPage('workorder_workload');h.c.setPage('providers');const reads=h.calls.length;assert(h.L.serial>serial);assert.equal(h.L.loading,false);assert.equal(h.L.queryFailures.length,1);assert.equal(h.L.queryFailures[0].id,p2.id);assert.match(h.html(),/暂停/);assert.equal(h.calls.filter(q=>q.action==='workorders').length,1,'restoring the provider tab starts one attachment read');
+ workordersPending.resolve(workorders);await settle();const displayed=h.html();
+ pending.resolve(completeAggregate(p2,987654,900000));await settle();assert.equal(h.calls.length,reads+0);assert.equal(h.L.results.length,1);assert.equal(h.html(),displayed);
  primary=false;await h.c.liveRetryFailed();await settle();assert.equal(h.L.queryFailures.length,0);assert.equal(h.L.results.length,2);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,3,'only the missing platform is retried');
 });
 
