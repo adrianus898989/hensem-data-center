@@ -1,7 +1,7 @@
 /* Synthetic-only VM tests for the production UI adapter. No credentials/network/real orders. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8');
-const layoutSources=['live-analysis-drilldown.js','live-reference-layout.js','live-pages-reference.js','live-pending-snapshot.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js', 'live-withdraw-pages.js','live-workorder-operations.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
+const layoutSources=['live-amount-bands.js','live-member-counts.js','live-analysis-drilldown.js','live-reference-layout.js','live-pages-reference.js','live-pending-snapshot.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js', 'live-withdraw-pages.js','live-workorder-operations.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
 const comparisonSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-comparison.js'),'utf8');
 test('overview merges same providers across sources while preserving stable platform identities and other source reports',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222',source:'NEW_AR'},p3={...P,id:'33333333-3333-4333-8333-333333333333'};
@@ -56,7 +56,7 @@ function harness(options={}){
   HENSEM_PRODUCTION:options.production!==false,
   hensemLiveCancelRequests:actions=>options.onCancel?.(actions),
   hensemLiveRequest:async request=>{calls.push(JSON.parse(JSON.stringify(request)));if(request.action==='pendingSnapshot')return options.pendingSnapshotHandler?options.pendingSnapshotHandler(request):{basis:'seven_day_pending_snapshot',snapshotDate:request.date,windowStart:new Date(Date.parse(request.date+'T00:00:00Z')-6*86400000).toISOString().slice(0,10),windowEnd:request.date,complete:true,expectedPlatformCount:request.platformIds.length,receivedPlatformCount:request.platformIds.length,amount:'875.50',count:7,observedAt:'2026-09-23T00:00:00Z',rows:request.platformIds.map(id=>({id,name:'Synthetic snapshot platform',state:'complete',count:7,amount:'875.50',currency:'INR',timezone:'Asia/Kolkata'}))};if(!options.ancillaryHandler&&request.action==='providerOptions')return {providers:['Synthetic provider']};if(!options.ancillaryHandler&&request.action==='workorders')return {rows:[],byProvider:[],total:0,summary:{},byDirection:{}};if(handler)return handler(request);if(request.action==='catalog')return {platforms:options.platforms||[P]};if(request.action==='details')return detail((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65,request.offset,request.limit);if(request.action==='rates')return {rows:[],total:0,options:{countries:[],platforms:[],providers:[]}};if(request.action==='payoutConfig')return payoutConfig(request,(options.platforms||[P]).length>0);return aggregate((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65)}
- };context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>m.name!=='live-report-data.js'||options.reports))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
+ };context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>(m.name!=='live-report-data.js'||options.reports)&&(!['live-amount-bands.js','live-member-counts.js'].includes(m.name)||options.adaptive)))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
  return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
 }
 async function ready(options={}){const h=harness(options);await settle();if(h.L){h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';if(h.c.state.page==='overview'&&options.manualOverview!==true){h.c.liveQuery();await settle();}}return h}
@@ -583,7 +583,7 @@ test('provider expansion shows platform contributions without requests and leave
  assert.match(h.html(),/代收创建金额/);assert.match(h.html(),/代收创建笔数/);assert.match(h.html(),/aria-expanded="false"/);
  h.c.providerSummaryToggle(0);assert.equal(h.calls.length,calls);assert.match(h.html(),/aria-expanded="true"/);
  const children=[...h.html().matchAll(/<tr class="provider-platform-row">([^]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td>([^]*?)<\/td>/g)].map(c=>c[1]));assert.equal(children.length,2);
- assert(children.every(r=>r.length===19));assert.deepEqual(children.map(r=>plain(r[1])).sort(),['AR','NEW_AR']);
+ assert(children.every(r=>r.length===23));assert.deepEqual(children.map(r=>plain(r[1])).sort(),['AR','NEW_AR']);
  assert.deepEqual(children.map(r=>plain(r[6])).sort(),['40.00%','60.00%']);
  assert.deepEqual(children.map(r=>plain(r[7])).sort(),['40.00%','60.00%']);
  assert.equal(children.reduce((n,r)=>n+Number(plain(r[3]).replaceAll(',','')),0),1000);
@@ -1160,4 +1160,21 @@ test('YayaPay 924 renders one current source fee and identifies the unused 923 o
  h.c.providerSummaryRate(0);const drawer=h.drawers.at(-1).html;assert.match(drawer,/原表三方/);assert.match(drawer,/YAYAPAY-924/);assert.match(drawer,/YAYAPAY-923/);assert.match(drawer,/当前匹配/);assert.match(drawer,/未采用/);
  selected.collectFee='5.60%';h.L.feeLookupRows=[other,{...selected,sourceRow:40}];h.c.render();[t,at]=read();assert.equal(at('匹配费率'),'5.60%');assert.equal(at('估算手续费'),'56.00');
  h.L.feeLookupRows=[other];h.c.render();[t,at]=read();assert.equal(at('匹配费率'),'未匹配');assert.equal(at('估算手续费'),'—未匹配');
+});
+
+test('adaptive ten-band UI uses same edges for parent, matrix and daily drilldown and counts stay separate',async()=>{
+ const h=await ready({adaptive:true});h.setNow('2026-09-28T12:00:00Z');h.L.from='2026-09-27T00:00:00';h.L.to='2026-09-27T23:59:59';h.L.currency='INR';h.L.direction='all';
+ h.setHandler(q=>{
+  if(q.action==='rates')return {total:0,rows:[]};
+  if(q.action==='memberDaily')return {platform:P,startAt:q.startAt,endAt:q.endAt,capabilities:{memberIdentity:true,createdBasis:'created_at',successBasis:'success_at',dedupe:'platform_local_date_direction_member'},rows:['charge','withdraw'].map(direction=>({date:'2026-09-27',direction,created_member_count:2,success_member_count:1,created_order_count:5,success_order_count:2,created_missing_member_count:0,success_missing_member_count:0}))};
+  if(q.view==='drilldown')return {platform:P,startAt:q.startAt,endAt:q.endAt,complete:true,hasMore:false,summary:[stats()],groups:{daily:[{...stats(),date:'2026-09-27'}]}};
+  const r=completeAggregate(P);r.amountBands=q.amountBands;r.amountBandsVersion=1;r.groups.amount_range=[{...stats(),bucket:'band:0'}];r.groups.matrix_range=[{...stats(),bucket:'band:0',hour:12}];return r;
+ });
+ await h.c.liveQuery();await settle();assert.equal(h.L.amountBandProfiles.charge.edges.length,11);assert.match(h.html(),/充值人数 \/ 成功充值人数/);assert.match(h.html(),/>2 \/ 1</);
+ h.c.liveMemberCountsDetails();assert.match(h.drawers.at(-1).html,/2026-09-27/);assert.match(h.drawers.at(-1).html,/充值人数/);
+ h.L.overviewAnalysis=true;h.L.loadedView='full';h.c.render();assert.match(h.html(),/100–&lt; 200/);assert.doesNotMatch(h.html(),/>band:0</);
+ h.c.state.page='matrix';h.c.render();assert.equal((h.html().match(/金额 \/ 时/g)||[]).length,2);
+ const parent=h.calls.filter(q=>q.action==='aggregate'&&q.amountBands).at(-1);assert.equal(parent.amountBands.charge.length,11);
+ const segment={kind:'matrix_range',direction:'charge',hour:12,bucket:'band:0'};h.c.liveMatrixSegment(encodeURIComponent(JSON.stringify(segment)));h.c.liveAnalysisAction(encodeURIComponent(JSON.stringify(segment)),'daily');await settle();
+ const drill=h.calls.filter(q=>q.view==='drilldown').at(-1);assert(drill);assert.deepEqual(drill.amountBands,parent.amountBands);assert.equal(drill.bucket,'band:0');
 });

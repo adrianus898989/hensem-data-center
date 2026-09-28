@@ -9,6 +9,7 @@
  const feeExempt=value=>feeExemptNames.has(String(value??'').trim())||feeExemptNames.has(normalized(value));
  const isProviderBusiness=value=>!feeExempt(value)&&!unknownProviderNames.has(String(value??'').trim());
  const issueKeys=['submittedAmount','submittedCount','successAmount','successCount','notReceivedAmount','notReceivedCount'];
+ const uniqueIssueKeys=['uniqueOrderAmount','uniqueOrderCount','uniqueSuccessAmount','uniqueSuccessCount'];
  const knownNumber=value=>value==null||typeof value==='string'&&!value.trim()||typeof value==='boolean'||!Number.isFinite(Number(value))?null:Number(value);
  const fraction=(value,total)=>knownNumber(value)===null||knownNumber(total)===null||Number(total)<=0?null:Number(value)/Number(total);
  const sortText=value=>{const text=String(value??'').trim();return !text||['—','未提供','未标注','读取中…','读取失败','待核对'].includes(text)?null:text};
@@ -146,14 +147,23 @@
   const value=[...unique.values()][0];return {amount:Number(row.success_amount)*value.percent+Number(row.success_count||0)*value.fixed,matched:Number(row.success_count||0)};
  }
  function estimate(row,rates,country){return estimateFacts(row,rates,country).amount}
+ // Each value must come from one backend aggregate over the full requested
+ // range. Distinct order counts cannot be added across days or provider aliases.
+ function uniqueWorkorderFacts(records){
+  if(!Array.isArray(records)||records.length!==1)return null;
+  const row=records[0],coverage=row?.uniqueCoverage;
+  if(!coverage||!['complete','partial','unavailable'].includes(coverage.status))return null;
+  return {...Object.fromEntries(uniqueIssueKeys.map(key=>{const value=knownNumber(row[key]);return [key,value!==null&&(!key.endsWith('Count')||value>=0&&Number.isSafeInteger(value))?value:null]})),coverage};
+ }
  function buildRows({orders,issues,rates,country,direction,plus,combine,coverage}){
   const flow=(orders||[]).filter(r=>r.direction===direction).map(r=>({...r,provider:providerName(canonical(r.provider,country))}));
-  const byIssue=new Map();for(const row of issues||[]){if(row.direction!==direction)continue;const name=providerName(canonical(row.provider,country)),item=byIssue.get(name)||Object.fromEntries(issueKeys.map(k=>[k,0]));for(const key of issueKeys)item[key]+=Number(row[key]||0);byIssue.set(name,item)}
+  const byIssue=new Map(),uniqueByIssue=new Map();for(const row of issues||[]){if(row.direction!==direction)continue;const name=providerName(canonical(row.provider,country)),item=byIssue.get(name)||Object.fromEntries(issueKeys.map(k=>[k,0]));for(const key of issueKeys)item[key]+=Number(row[key]||0);byIssue.set(name,item);if(!uniqueByIssue.has(name))uniqueByIssue.set(name,[]);uniqueByIssue.get(name).push(row)}
   const rows=combine(flow,['provider','currency']).map(row=>({...row,direction,sources:[...new Set(row.items.map(r=>r.source))],platforms:[...new Set(row.items.map(r=>r.platform))]}));
   for(const [provider] of byIssue)if(!rows.some(row=>row.provider===provider))rows.push({...plus([]),provider,direction,sources:[],platforms:[],items:[],created_success_count:0});
   for(const row of rows){
    const observed=(coverage?.platforms||[]).filter(p=>row.platforms.includes(p.platform)||row.platforms.includes(p.sourcePlatform));
    row.issues=issues==null||coverage?.capturedPlatformDays===0||(!byIssue.has(row.provider)&&observed.length&&observed.every(p=>p.days===0))?null:byIssue.get(row.provider)||Object.fromEntries(issueKeys.map(k=>[k,0]));
+   row.uniqueOrders=uniqueWorkorderFacts(uniqueByIssue.get(row.provider));
    Object.assign(row,feeFacts(row.items,rates,country,Number(row.success_count||0)));
   }
   return rows;
@@ -230,7 +240,7 @@
   const entries=workorders.byPlatformProvider.filter(w=>w.direction===row.direction
    &&providerName(canonical(w.provider,w.country||country))===row.provider
    &&(!w.country||!country||w.country===country));
-  const addIssue=(target,w)=>{if(!target.issues)target.issues=Object.fromEntries(issueKeys.map(k=>[k,0]));for(const k of issueKeys)target.issues[k]+=Number(w[k]||0)};
+  const addIssue=(target,w)=>{if(!target.issues)target.issues=Object.fromEntries(issueKeys.map(k=>[k,0]));for(const k of issueKeys)target.issues[k]+=Number(w[k]||0);target._uniqueIssueRecords=(target._uniqueIssueRecords||[]).concat(w);target.uniqueOrders=uniqueWorkorderFacts(target._uniqueIssueRecords)};
   for(const w of entries){
    // The API resolves identities against the authorized catalog. A missing ID
    // is intentionally not guessed from a shared display name across sources.
@@ -315,8 +325,8 @@
    success_amount:r=>knownNumber(r.success_amount),success_count:r=>knownNumber(r.success_count),all_count:r=>knownNumber(r.all_count),
    success_rate:r=>fraction(r.success_count,r.all_count),amount_share:r=>fraction(r.success_amount,total.success_amount),count_share:r=>fraction(r.success_count,total.success_count),
    pending_amount:r=>knownNumber(r.pending_amount),pending_count:r=>knownNumber(r.pending_count),fee_rate:feeSortValue,estimated_fee:r=>knownNumber(r.estimated_fee),fee_share:r=>fraction(r.estimated_fee,knownFee),
-   ...Object.fromEntries(issueKeys.map(key=>['issue_'+key,r=>knownNumber(r.issues?.[key])])),issue_success_rate:r=>fraction(r.issues?.successCount,r.issues?.submittedCount)};
-  const parentKeys=new Set(['provider','platform_count','type','success_amount','success_count','all_count','success_rate','amount_share','count_share','pending_amount','pending_count','fee_rate','estimated_fee','fee_share',...issueKeys.map(key=>'issue_'+key),'issue_success_rate']);
+   ...Object.fromEntries(issueKeys.map(key=>['issue_'+key,r=>knownNumber(r.issues?.[key])])),...Object.fromEntries(uniqueIssueKeys.map(key=>['issue_'+key,r=>knownNumber(r.uniqueOrders?.[key])])),issue_success_rate:r=>fraction(r.issues?.successCount,r.issues?.submittedCount)};
+  const parentKeys=new Set(['provider','platform_count','type','success_amount','success_count','all_count','success_rate','amount_share','count_share','pending_amount','pending_count','fee_rate','estimated_fee','fee_share',...issueKeys.map(key=>'issue_'+key),...uniqueIssueKeys.map(key=>'issue_'+key),'issue_success_rate']);
   const sort=parentKeys.has(L.providerSort)?L.providerSort:'success_amount';
   rows=sortedRows(rows,sortValues[sort],!!L.providerSortAsc);
   const max=Math.max(1,Math.ceil(rows.length/L.localSize));L.localPage=Math.min(L.localPage,max);const shown=rows.slice((L.localPage-1)*L.localSize,L.localPage*L.localSize);
@@ -344,32 +354,41 @@
     :box('当前匹配规则','<p class="live-definition">'+E(rule?.note||'优先匹配有费率内容的平台专属记录，再匹配国家记录。存在不同费率时，保留差异供核对。')+'</p>'+sourceTable)));
   };
   const columns=[['统一三方','provider'],['平台','platform_count'],['类型','type'],[name+'成功金额','success_amount'],[name+'成功笔数','success_count'],['成功率','success_rate'],[readState.partial?'已读取金额占比':'金额占比','amount_share'],[readState.partial?'已读取笔数占比':'笔数占比','count_share'],...(direction==='withdraw'?[['代付中金额','pending_amount'],['代付中笔数','pending_count']]:[]),['匹配费率','fee_rate'],['估算手续费','estimated_fee'],[readState.partial?'已读取手续费占比':'手续费占比','fee_share'],
-   ['工单提交金额','issue_submittedAmount'],['工单提交笔数','issue_submittedCount'],['工单成功金额','issue_successAmount'],['工单成功笔数','issue_successCount'],['工单未到账金额','issue_notReceivedAmount'],['工单未到账笔数','issue_notReceivedCount'],['工单成功率','issue_success_rate'],['平台明细',null]];
-  const header=(text,key,active=sort,ascending=!!L.providerSortAsc,index=null)=>{if(!key)return E(text);const next=active===key?!ascending:textSortKeys.has(key),basis=key==='fee_rate'?'按百分比、单笔费依次排序；多档或未匹配置后。':'';return '<button class="link provider-sort-heading" title="'+E(basis+'点击按'+text+(next?'升序':'降序')+'排列；空值置后')+'" onclick="'+(index===null?'providerSummarySort(\''+key+'\')':'providerSummaryPlatformSort('+index+',\''+key+'\')')+'">'+E(text)+' <span aria-hidden="true">'+(active===key?(ascending?'↑':'↓'):'↕')+'</span></button>'};
+   ['工单提交金额','issue_submittedAmount'],['工单提交笔数','issue_submittedCount'],['工单成功金额','issue_successAmount'],['工单成功笔数','issue_successCount'],['工单未到账金额','issue_notReceivedAmount'],['工单未到账笔数','issue_notReceivedCount'],['去重订单金额','issue_uniqueOrderAmount'],['去重订单笔数','issue_uniqueOrderCount'],['去重成功金额','issue_uniqueSuccessAmount'],['去重成功笔数','issue_uniqueSuccessCount'],['工单成功率','issue_success_rate'],['平台明细',null]];
+  const header=(text,key,active=sort,ascending=!!L.providerSortAsc,index=null)=>{if(!key)return E(text);const unique=key.startsWith('issue_unique'),next=active===key?!ascending:textSortKeys.has(key),basis=key==='fee_rate'?'按百分比、单笔费依次排序；多档或未匹配置后。':unique?'按整个所选期间的原订单去重'+(key.endsWith('Count')?'笔数':'金额')+'排序。':'';return '<button class="link provider-sort-heading" title="'+E(basis+'点击按'+text+(next?'升序':'降序')+'排列；空值置后')+'" onclick="'+(index===null?'providerSummarySort(\''+key+'\')':'providerSummaryPlatformSort('+index+',\''+key+'\')')+'">'+E(text)+' <span aria-hidden="true">'+(active===key?(ascending?'↑':'↓'):'↕')+'</span></button>'};
   const headers=columns.map(([text,key])=>header(text,key));
   // Short identity columns leave the same readable width for every amount,
   // count and ratio. Fee totals reserve space for their coverage badge.
-  const columnWidth=key=>key==='provider'?92:key==='platform_count'?36:key==='type'?60:key==='fee_rate'?96:key===null?48:key==='estimated_fee'?120:key.endsWith('_amount')||key.endsWith('Amount')?104:key.endsWith('_count')||key.endsWith('Count')?68:60;
+  const columnWidth=key=>key==='provider'?82:key==='platform_count'?32:key==='type'?48:key==='fee_rate'?86:key===null?44:key==='estimated_fee'?108:key.endsWith('_amount')||key.endsWith('Amount')?90:key.endsWith('_count')||key.endsWith('Count')?48:50;
   const widths=columns.map(([,key])=>columnWidth(key)),tableWidth=widths.reduce((sum,width)=>sum+width,0);
   const rateButton=(value,index)=>{const full=String(value||'未匹配'),long=full.length>24||/[\r\n]/.test(full),label=long?(/以上|以下|分档|阶梯|[≥≤<>]/.test(full)?'分档费率 · 查看':'费率详情 · 查看'):full;return '<button class="link provider-fee-preview" title="'+E(full+' · 点击查看来源及匹配依据')+'" aria-label="'+E('费率：'+full+'，查看来源及匹配依据')+'" onclick="providerSummaryRate('+index+')">'+E(label)+'</button>'};
   const feeCell=r=>readState.empty?'—':L.feeLookupLoading?'读取中…':L.feeLookupError?'读取失败':'<span tabindex="0" title="'+E(feeCoverageText(r))+'">'+N(r.estimated_fee)+(!r.fee_complete&&Number(r.fee_eligible_count)>0?'<span class="provider-partial">'+(Number(r.fee_matched_count)>0?'部分':'未匹配')+'</span>':'')+'</span>';
   const issueRate=w=>!w?'—':'<span'+(Number(w.submittedCount)>0&&Number(w.successCount)/Number(w.submittedCount)<0.3?' class="workorder-rate-low"':'')+' title="工单金额成功率 '+R(w.successAmount,w.submittedAmount)+'">'+R(w.successCount,w.submittedCount)+'</span>';
+  const uniqueCell=(facts,key)=>{
+   if(!facts)return '—';
+   const coverage=facts.coverage,value=facts[key];
+   const gaps=[['missingOrderNumberCount','条缺原订单号'],['missingDetailCount','条缺原始明细'],['missingAmountCount','条金额缺失'],['amountConflictCount','组金额冲突'],['providerConflictCount','组三方冲突']].filter(([key])=>Number(coverage[key])>0).map(([key,text])=>C(coverage[key])+text);
+   const note='工单关联的原订单，在整个所选日期范围内按平台及业务方向去重；同一原订单重复提交只计一次。'+(gaps.length?gaps.join('；')+'。':'')+(coverage.complete===true?'当前已读工单原单完整。':'当前仅为已知原单，覆盖不完整；缺失部分不按零计算。');
+   const partial=coverage.complete!==true,label=value===null?'—':key.endsWith('Count')?C(value):N(value);
+   return '<span class="provider-unique-value'+(partial?' is-partial':'')+'" tabindex="0" title="'+E(note)+'">'+label+(partial?'<sup aria-label="覆盖未完整">*</sup>':'')+'</span>';
+  };
   const cells=(r,label,summary=false,index=0)=>{
    const w=r.issues,rate=R(r.success_count,r.all_count);
    return [label,'<span title="'+E(summary?'去重平台数':(r.sources.join(' / ')||'仅工单记录')+' · '+r.platforms.join('、'))+'">'+C(r.platforms.length)+'</span>',summary?'—':providerTypeCell(r,L.feeLookupRows,L.country,E,L),
     readState.empty?'—':N(r.success_amount),readState.empty?'—':C(r.success_count),'<span title="按成功 / 创建：'+C(r.success_count)+' / '+C(r.all_count)+' 笔">'+(readState.empty?'—':rate)+'</span>',readState.empty?'—':R(r.success_amount,total.success_amount),readState.empty?'—':R(r.success_count,total.success_count),
     ...(direction==='withdraw'?[readState.empty?'—':N(r.pending_amount),readState.empty?'—':C(r.pending_count)]:[]),summary?'—':rateButton(displayedRate(r,feeForRow(r)),index),feeCell(r),r.estimated_fee==null?'—':R(r.estimated_fee,knownFee),
     ...[['submittedAmount','submittedCount'],['successAmount','successCount'],['notReceivedAmount','notReceivedCount']].flatMap(([a,n])=>!w?['—','—']:[N(w[a]),C(w[n])]),
+    ...uniqueIssueKeys.map(key=>uniqueCell(r.uniqueOrders,key)),
     issueRate(w),summary?'':'<button class="link" aria-expanded="'+!!expanded[rowKey(r)]+'" onclick="providerSummaryToggle('+index+')">'+(expanded[rowKey(r)]?'收起':'展开')+'</button>'];
   };
-  const sumRow=(items,label)=>{const r={...plus(items),platforms:[...new Set(items.flatMap(i=>i.platforms))],fee_matched_count:items.reduce((n,i)=>n+i.fee_matched_count,0)};
+  const sumRow=(items,label,fullScope=false)=>{const r={...plus(items),platforms:[...new Set(items.flatMap(i=>i.platforms))],fee_matched_count:items.reduce((n,i)=>n+i.fee_matched_count,0)};
    const fees=feeSummary(items);r.estimated_fee=fees.amount;r.fee_complete=fees.complete;r.fee_eligible_count=fees.successCount;r.fee_excluded_count=fees.excludedCount;r.fee_issues=fees.issues;r.fee_exclusions=fees.exclusions;
-   r.issues=L.workorders&&items.some(i=>i.issues)?Object.fromEntries(issueKeys.map(k=>[k,items.reduce((n,i)=>n+Number(i.issues?.[k]||0),0)])):null;return cells(r,'<strong>'+label+'</strong>',true)};
+   r.issues=L.workorders&&items.some(i=>i.issues)?Object.fromEntries(issueKeys.map(k=>[k,items.reduce((n,i)=>n+Number(i.issues?.[k]||0),0)])):null;r.uniqueOrders=fullScope?uniqueWorkorderFacts([L.workorders?.byDirection?.[direction]]):null;return cells(r,'<strong>'+label+'</strong>',true)};
   const coverage=L.workorders?.coverage;
   const coverageNote=coverage&&!coverage.complete?' · 工单覆盖 '+C(coverage.capturedPlatformDays)+' / '+C(coverage.expectedPlatformDays)+' 平台日':'';
   const workNote=L.workordersUnsupported?'<div class="live-status">所选平台来源尚未接入工单数据</div>':L.workordersError?'<div class="live-status live-error">工单读取未完成：'+E(L.workordersError)+' <button class="link" onclick="liveLoad()">重试</button></div>':
    L.workordersLoading?'<div class="live-status">正在读取'+issueLabel+'工单汇总…</div>':'';
-  const footers=max>1?[sumRow(shown,readState.partial?'当前页已读取合计':'当前页汇总'),sumRow(rows,readState.partial?'已读取合计':'全部汇总')]:[sumRow(rows,readState.partial?'已读取合计':'合计')];
+  const footers=max>1?[sumRow(shown,readState.partial?'当前页已读取合计':'当前页汇总'),sumRow(rows,readState.partial?'已读取合计':'全部汇总',true)]:[sumRow(rows,readState.partial?'已读取合计':'合计',true)];
   const breakdown=(row,index)=>{
    let items=buildPlatformRows({row,workorders:L.workorders,rates:L.feeLookupRows,country:L.country,plus,combine});
    const childSort=expanded['sort:'+rowKey(row)];
@@ -383,6 +402,7 @@
      '<span title="按成功 / 创建：'+C(r.success_count)+' / '+C(r.all_count)+' 笔">'+(unknown?'—':rate)+'</span>',unknown?'—':share(r.success_amount,row.success_amount),unknown?'—':share(r.success_count,row.success_count),
      ...(direction==='withdraw'?[amount('pending_amount'),count('pending_count')]:[]),rateButton(displayedRate(r,r.fee_rate_label),index),unknown?'—':feeCell(r),unknown?'—':share(r.estimated_fee,row.estimated_fee),
      ...[['submittedAmount','submittedCount'],['successAmount','successCount'],['notReceivedAmount','notReceivedCount']].flatMap(([a,n])=>!w?['—','—']:[N(w[a]),C(w[n])]),
+     ...uniqueIssueKeys.map(key=>uniqueCell(r.uniqueOrders,key)),
      issueRate(w),!unknown&&r.platformId&&(Number(r.success_count)>0||Number(r.all_count)>0)?'<button class="link" title="'+E(r.platform+' · 查看'+row.provider+'原始通道与订单')+'" onclick="providerSummaryOrders('+index+','+E(JSON.stringify(r.platformId))+')">查看订单</button>':'—'];
     return '<tr class="provider-platform-row">'+values.map(value=>'<td>'+value+'</td>').join('')+'</tr>';
    }).join('');
@@ -398,7 +418,7 @@
   return '<div class="provider-summary-report">'+readNotice(ctx)+'<div class="provider-summary-heading"><span class="provider-scope-note">'+E(L.country)+' · '+E(L.currency)+' · '+E(L.from.replace('T',' '))+' 至 '+E(L.to.replace('T',' '))+coverageNote+'</span></div>'+
    renderMetrics(ctx,direction,rows)+workNote+
    box(name+'三方汇总'+(readState.partial?'（部分结果）':'')+' · '+issueLabel+'工单',reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
-    '成功数据按成功时间；成功率为本期成功笔数 / 本期创建笔数，含跨日成功，可超过100%。昨日对比使用同平台、同币种、同一时段，成功率差额为百分点。三方及平台卡片统计有交易的范围；工单按所选整日统计，未采集显示 —。'+workorderBasis+'点击费率查看来源与匹配规则；手续费按当前匹配费率估算。')+'</div>';
+    '成功数据按成功时间；成功率为本期成功笔数 / 本期创建笔数，含跨日成功，可超过100%。昨日对比使用同平台、同币种、同一时段，成功率差额为百分点。三方及平台卡片统计有交易的范围；工单按所选整日统计，未采集显示 —。'+workorderBasis+'去重订单与去重成功按所选期间的原订单号统计，金额与笔数分别展示；* 表示原单覆盖未齐，悬停查看缺失或冲突。全表合计直接取完整期间去重结果，当前页不累加去重值。点击费率查看来源与匹配规则；手续费按当前匹配费率估算。')+'</div>';
  }
  root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,tieredFeeRule,feeSummary,feeCoverageText,feeCandidates,confirmedFeeRule,queryCoverage,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
  if(typeof module!=='undefined')module.exports=root.HensemProviderSummary;
