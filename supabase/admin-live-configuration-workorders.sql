@@ -13,6 +13,9 @@ declare
   v_c text:=regexp_replace(lower(v_channel),'[^a-z0-9一-龥]+','','g');
   v_name text;v_generic boolean:=false;
 begin
+  -- The exact work-order source code wins over legacy generic rail labels.
+  -- Do not match ArbPay2INR, whose confirmed UPI-QR identity is unchanged.
+  if p_country='印度' and (v_r='arbpayinr' or v_c='arbpayinr') then return 'ArbPay';end if;
   select canonical_provider into v_name from private.dashboard_admin_provider_overrides
     where country=p_country and platform=p_platform and raw_provider=v_raw;
   if v_name is not null then return v_name;end if;
@@ -24,7 +27,7 @@ begin
         when 'rapayinr' then 'RAPay' when 'umoneypayinr' then 'UmoneyPay' when 'wepay2inr' then 'WePay' end;
     elsif v_r='qr' then
       v_generic:=true;v_name:=case v_c when 'umoneypayinr' then 'UmoneyPay' when 'wepay2inr' then 'WePay' end;
-    elsif v_r='upi' and v_c='arbpayinr' then v_name:='UPI-QR';end if;
+    end if;
   elsif p_country='缅甸' and v_r in('kbzpay','wavepay') then
     v_generic:=true;v_name:=case v_c when 'kingpaymmk' then 'KingPay' when 'ytpaymmk' then 'YTPay' end;
   elsif p_country='马来' then

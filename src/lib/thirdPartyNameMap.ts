@@ -263,6 +263,9 @@ const MANUAL_THIRD_PARTY_ALIAS_FIXES: ThirdPartyAliasEntry[] = [
   { country: "印度", canonical: "OXPay", aliases: ["OXPay", "OXPay-QR", "PAYTM-OXPay", "PAYTM OXPay", "OX2Pay", "OX2Pay-QR", "PAYTM-OX2Pay", "PAYTM OX2Pay"] },
   { country: "印度", canonical: "WeePay", aliases: ["WeePay", "WeePay-QR", "PAYTM-WeePay", "PAYTM WeePay"] },
   { country: "印度", canonical: "ArbPay", aliases: ["ArbPay", "ArbPayINR"] },
+  // Preserve the existing YayaPay parent identity in generated admin aliases;
+  // rate selection keeps the original 924 / 923 sheet identities separate.
+  { country: "印度", canonical: "YayaPay", aliases: ["YayaPay", "YAYAPAY-924", "YAYAPAY-923"] },
   { country: "印度", canonical: "UPI-QR", aliases: ["Phonepe_QR", "Phonepe-QR", "UPI-QR", "ARUPI", "Arb-UPI", "Arb-BANK", "ArUpiPay-26000"] },
   { country: "印度", canonical: "VstarPay", aliases: ["VstarPay", "Vstar-QR", "VstarPay-QR", "Vstar QR", "VstarPay QR"] },
   { country: "印度", canonical: "SUPER", aliases: ["Super", "SUPER", "Super-QR", "Super QR", "SuperPay", "PAYTM-Super"] },

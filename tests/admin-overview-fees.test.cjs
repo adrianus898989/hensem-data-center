@@ -143,3 +143,21 @@ test('confirmed RAJA display alias still selects its own original platform rate 
  assert.equal(api.estimate(order({platform:'RAJALOTTERY',team:'M8'}),rates,'印度'),30);
  assert.equal(api.estimate(order({platform:'RAJALOTTERY',source:'newar'}),rates,'印度'),40);
 });
+
+
+test('YayaPay uses the identity-checked 924 source rate without mixing the 923 row in any summary',()=>{
+ const active=rate({provider:'YayaPay',sheetName:'印度线下',sourceRow:22,sourceTypeProvider:'YAYAPAY-924',sourceType:'混合四方',collectFee:'5.20%',payoutFee:'3.10%',payoutSingleFee:'7'});
+ const other={...active,sourceRow:30,sourceTypeProvider:'YAYAPAY-923',sourceType:'跑分',collectFee:'6.30%',payoutFee:'4.20%'};
+ const rates=[other,active],orders=[order({provider:'YayaPay'}),order({provider:'YAYAPAY-924',direction:'withdraw'})];
+ const rows=dimensions(orders,'provider',rates);
+ assert.equal(rows[0].fee_rate_label,'5.20%');assert(Math.abs(rows[0].estimated_fee-52)<1e-8);
+ assert.equal(rows[1].fee_rate_label,'3.10% + 7 / 笔');assert.equal(rows[1].estimated_fee,101);
+ for(const row of rows){assert.equal(row.fee_complete,true);assert.equal(api.providerType(row,rates,'印度').label,'混合四方')}
+ assert(Math.abs(api.estimate(orders[0],[{...active,sourceRow:40}],'印度')-52)<1e-8,'original provider identity survives inserted sheet rows');
+ assert.equal(api.estimate(orders[0],[other],'印度'),null,'missing 924 cannot borrow the 923 fee');
+ assert.equal(api.estimate(orders[0],[{...active,sourceTypeProvider:'UnrelatedPay'}],'印度'),null,'old row number cannot override a different source provider');
+ assert.equal(api.estimate(orders[0],[{...active,sourceTypeProvider:''}],'印度'),null,'a normalized parent name alone does not identify a rate version');
+ assert.equal(api.estimate(orders[0],[{...active,country:'巴西'}],'印度'),null);
+ const summary=api.buildRows({orders,issues:[],rates,country:'印度',direction:'charge',plus,combine})[0];
+ assert(Math.abs(summary.estimated_fee-52)<1e-8);assert.equal(summary.fee_rate_label,'5.20%');
+});

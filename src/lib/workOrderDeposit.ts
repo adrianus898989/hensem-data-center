@@ -82,6 +82,10 @@ export function workOrderDepositThirdPartyName(country: string, thirdParty: stri
   if (!String(channelType || "").trim() && rawThirdParty.includes(" / ")) return rawThirdParty;
   const rawKey = workOrderProviderPart(thirdParty);
   const channelKey = workOrderProviderPart(channelType);
+  // Owner confirmed 2026-09-28: this exact source code identifies ArbPay,
+  // even when the work-order display name is the generic UPI / UPI-QR rail.
+  // ArbPay2INR is a different confirmed UPI-QR provider and is not matched.
+  if (normalizedCountry === "印度" && (rawKey === "arbpayinr" || channelKey === "arbpayinr")) return "ArbPay";
   let confirmed = "";
   let genericRail = false;
 
@@ -109,10 +113,6 @@ export function workOrderDepositThirdPartyName(country: string, thirdParty: stri
     } else if (rawKey === "qr") {
       genericRail = true;
       confirmed = qrProviders[channelKey] || "";
-    } else if (rawKey === "upi" && channelKey === "arbpayinr") {
-      // AR's UPI work orders share this code with explicit UPI-QR records.
-      // The independent bank provider ArbPay must retain its own identity.
-      confirmed = "UPI-QR";
     }
   } else if (normalizedCountry === "缅甸") {
     if (rawKey === "kbzpay" || rawKey === "wavepay") {

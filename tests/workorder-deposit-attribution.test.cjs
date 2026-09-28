@@ -148,7 +148,8 @@ test("generic payment rails use channel_type only for confirmed source pairs", (
     ["印度", "PAYTM", "WPayINR", "WPay"],
     ["印度", "QR", "UmoneyPayINR", "UmoneyPay"],
     ["印度", "QR", "WePay2INR", "WePay"],
-    ["印度", "UPI", "ArbPayINR", "UPI-QR"],
+    ["印度", "UPI", "ArbPayINR", "ArbPay"],
+    ["印度", "UPI-QR", "ArbPayINR", "ArbPay"],
     ["缅甸", "KBZPay", "KingPayMMK", "KingPay"],
     ["缅甸", "WavePay", "KingPayMMK", "KingPay"],
     ["缅甸", "KBZPay", "YTPayMMK", "YTPay"],
@@ -216,8 +217,8 @@ test("source-backed India rail and code pairs join canonical providers without g
   const before = structuredClone(source);
   const view = buildWorkOrderDepositView({ rows: source, volumeRows: [], start: "2026-09-15", end: "2026-09-15", country: "印度" });
   assert.deepEqual(source, before);
-  assert.deepEqual(view.providers.map(row => row.channel).sort(), ["WPay", "UPI-QR", "ArbPay", "未知三方"].sort());
-  for (const [provider, amount, count] of [["WPay", 600, 3], ["UPI-QR", 900, 2], ["ArbPay", 600, 1], ["未知三方", 700, 1]]) {
+  assert.deepEqual(view.providers.map(row => row.channel).sort(), ["WPay", "ArbPay", "未知三方"].sort());
+  for (const [provider, amount, count] of [["WPay", 600, 3], ["ArbPay", 1500, 3], ["未知三方", 700, 1]]) {
     const metric = view.compare([workOrderDepositProviderKey("印度", provider)]).current;
     assert.deepEqual([metric.submittedAmount, metric.submittedCount, metric.withdrawNotReceivedAmount, metric.withdrawNotReceivedCount], [amount, count, amount * 2, count * 2]);
   }
@@ -288,4 +289,16 @@ test("QR work orders join canonical provider rows once in current and previous p
   const filtered = buildWorkOrderDepositView({ rows, volumeRows: [], start: "2026-09-15", end: "2026-09-15", country: "印度", provider: "3TPay-QR" });
   assert.deepEqual(filtered.providers.map(row => row.channel), ["3TPay"]);
   assert.equal(filtered.providers[0].submittedAmount, 300);
+});
+
+
+test("exact ArbPayINR workorder identity overrides generic labels but never consumes ArbPay2", () => {
+  for (const raw of ["UPI", "UPI-QR", "PAYTM", "QR", "ArbPay", "ArbPayINR", "Arb-BANK"]) {
+    assert.equal(workOrderDepositThirdPartyName("印度", raw, "ArbPayINR"), "ArbPay", raw);
+  }
+  for (const raw of ["ArbPay2INR-BANK", "ArbPay2INR-UPI", "UPI-QR", "Arb-UPI", "Arb-BANK"]) {
+    assert.equal(workOrderDepositThirdPartyName("印度", raw, "ArbPay2INR"), "UPI-QR", raw);
+  }
+  assert.equal(workOrderDepositThirdPartyName("印度", "UPI-QR", "ArbPayINR2"), "UPI-QR");
+  assert.notEqual(workOrderDepositThirdPartyName("越南", "UPI-QR", "ArbPayINR"), "ArbPay");
 });

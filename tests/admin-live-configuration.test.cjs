@@ -235,7 +235,7 @@ test('automatic payout uses one local day, overlays NewAR once, and keeps baseli
  const o=await call('auto_withdraw',autoReq({view:'operators',sort:'processed'}));assert.equal(o.totals.processed,15);assert(!JSON.stringify(o).includes('old-operator'));assert.equal(o.rows.find(x=>x.account==='operator-1').previous.processed,4);assert.equal(o.rows.find(x=>x.account==='operator-1').previous.success,3);
 });
 test('workorder rail/code attribution matches approved legacy names and preserves unknown pairs',async()=>{
- const pairs=[['印度','PAYTM','haoxpayinr','WPay'],['印度','WPay-QR','','WPay'],['印度','UPI','arbpayinr','UPI-QR'],['印度','ArbPay','arbpayinr','ArbPay'],['印度','PAYTM','unknown-new-code','PAYTM / unknown-new-code'],['缅甸','KBZPay','kingpaymmk','KingPay'],['马来','Touch n Go','truepaymyr','TruePay'],['越南','TruePay','','TruePay']];
+ const pairs=[['印度','PAYTM','haoxpayinr','WPay'],['印度','WPay-QR','','WPay'],['印度','UPI','arbpayinr','ArbPay'],['印度','UPI-QR','ArbPayINR','ArbPay'],['印度','UPI-QR','ArbPay2INR','UPI-QR'],['印度','ArbPay','arbpayinr','ArbPay'],['印度','PAYTM','unknown-new-code','PAYTM / unknown-new-code'],['缅甸','KBZPay','kingpaymmk','KingPay'],['马来','Touch n Go','truepaymyr','TruePay'],['越南','TruePay','','TruePay']];
  for(const [country,raw,channel,expected]of pairs){const r=await db.query('select private.dashboard_admin_live_workorder_provider($1,$2,$3,$4) name',[country,'EXAMPLE',raw,channel]);assert.equal(r.rows[0].name,expected)}
  await db.exec('begin');try{
   await db.exec("insert into workorder_deposit_daily values('2026-09-21','IN','印度','EXAMPLE','PAYTM','haoxpayinr','AR_WORKORDER',10,100,4,40,5,50,2,20,now(),now())");
@@ -433,4 +433,22 @@ test('platform assignment rows, counts and summaries share all active filters be
    await as(viewer);const denied=await call('platform_assignments',{country:'巴西'});assert.equal(denied.total,0);assert(Object.values(denied.summary).every(n=>n===0));assert(!denied.options.countries.includes('巴西'));
   }finally{await db.exec('rollback');await as(owner)}
  }
+});
+
+
+test('ArbPayINR correction keeps filtered workorder summary and every platform detail in the same provider',async()=>{
+ await as(owner);await db.exec('begin');try{
+  await db.exec(sql('admin-live-workorder-platform-breakdown.sql').replace(/^begin;$/mg,'').replace(/^commit;$/mg,''));
+  await db.exec(sql('migrations/20260928073754_workorder_arbpay_and_yayapay_identity.sql').replace(/^begin;$/mg,'').replace(/^commit;$/mg,''));
+  await db.exec("insert into workorder_deposit_daily values('2026-09-20','IN','印度','EXAMPLE','UPI','ArbPayINR','AR_WORKORDER',2,400,1,200,3,600,1,200,now(),now()),('2026-09-20','IN','印度','EXAMPLE','UPI-QR','ArbPayINR','AR_WORKORDER',3,900,2,600,4,1200,2,600,now(),now()),('2026-09-20','IN','印度','EXAMPLE','UPI-QR','ArbPay2INR','AR_WORKORDER',7,3500,1,500,9,4500,2,1000,now(),now())");
+  const req={...autoReq(),startAt:'2026-09-20T00:00:00Z',endAt:'2026-09-20T23:59:59Z',platforms:['EXAMPLE'],direction:'charge'};
+  const all=await call('workorders',req),arb=await call('workorders',{...req,providers:['ArbPay']}),upi=await call('workorders',{...req,providers:['UPI-QR']});
+  assert.equal(arb.total,1);assert.equal(arb.summary.submittedCount,5);assert.equal(arb.summary.submittedAmount,1300);assert.equal(arb.summary.successAmount,800);
+  for(const row of [...arb.rows,...arb.byProvider,...arb.byPlatformProvider])assert.equal(row.provider,'ArbPay');
+  assert.equal(arb.byPlatformProvider[0].submittedAmount,arb.summary.submittedAmount);
+  assert.equal(upi.summary.submittedCount,7);assert.equal(upi.summary.submittedAmount,3500);
+  assert.equal(all.summary.submittedAmount,arb.summary.submittedAmount+upi.summary.submittedAmount);
+  assert.equal((await db.query("select private.dashboard_admin_live_provider_alias('印度','YAYAPAY-924') name")).rows[0].name,'YayaPay');
+  assert.equal((await db.query("select has_function_privilege('anon','private.dashboard_admin_live_workorder_provider(text,text,text,text)','execute') allowed")).rows[0].allowed,false);
+ }finally{await db.exec('rollback')}
 });

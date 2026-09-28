@@ -14,12 +14,21 @@
   const button=(label,next,disabled=false,on=false)=>'<button type="button" '+(disabled||busy?'disabled ':'')+(on?'class="on" aria-current="page" ':'')+'onclick="'+prefix+'Page('+next+')">'+label+'</button>';
   return '<div class="live-pager wo-pager"><span>共 <b>'+Number(total).toLocaleString('en-US')+'</b> 条 · '+(total?((current-1)*size+1)+'–'+Math.min(current*size,total):'0–0')+'</span><div class="right"><select aria-label="每页条数" '+(busy?'disabled ':'')+'onchange="'+prefix+'Size(this.value)">'+[20,50,100].map(n=>'<option '+(size===n?'selected ':'')+'value="'+n+'">'+n+' 条 / 页</option>').join('')+'</select>'+button('首页',1,current===1)+button('上一页',current-1,current===1)+numbers.map(n=>{const gap=previous&&n-previous>1?'…':'';previous=n;return gap+button(n,n,false,n===current)}).join('')+button('下一页',current+1,current===max)+button('末页',max,current===max)+'<form onsubmit="event.preventDefault();'+prefix+'Jump(this.elements.page.value)" class="wo-jump"><label>跳至 <input name="page" type="number" min="1" aria-label="跳转页码" '+(busy?'disabled':'')+'> 页</label><button type="submit" '+(busy?'disabled':'')+'>跳转</button></form></div></div>';
  }
- root.HensemWorkorderUI={pager,money,statusNames};
+ // Defaults use the country's business calendar, never the browser/UTC month.
+ function currentMonth(country,catalog=[],now=new Date()){
+  const timezone=catalog.find(p=>p.country===country&&p.timezone)?.timezone||({'巴基斯坦':'Asia/Karachi','巴西':'America/Sao_Paulo','印度':'Asia/Kolkata'}[country])||'Asia/Kolkata';
+  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit'}).formatToParts(now).map(p=>[p.type,p.value]));
+  const last=new Date(Date.UTC(Number(parts.year),Number(parts.month),0)).getUTCDate();
+  return {from:parts.year+'-'+parts.month+'-01',to:parts.year+'-'+parts.month+'-'+String(last).padStart(2,'0')};
+ }
+ root.HensemWorkorderUI={pager,money,statusNames,currentMonth};
  root.HensemLiveWorkorderOperations={create:function(ctx){
   const {L,E,C,box,table,request,render,page,openDrawer,formatTime}=ctx,states={};
   const viewFor=p=>({workorders:'records',workorder_reconciliation:'missing',workorder_workload:'workload',workorder_operation_logs:'logs'}[p]);
   const handles=p=>!!viewFor(p);
-  function state(){const p=page();if(!states[p]){const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata'}).format(new Date());states[p]={draft:{...Object.fromEntries(keys.map(k=>[k,''])),country:L.country||'印度',from:L.from?.slice(0,10)||today,to:L.to?.slice(0,10)||today,dateBasis:p==='workorders'?'submission':'operation'},filters:null,result:null,more:false,busy:false,error:'',serial:0,current:1,size:20,mode:'records'};}return states[p];}
+  function defaultDraft(p){const country=L.country||'印度';return {...Object.fromEntries(keys.map(k=>[k,''])),country,...currentMonth(country,L.catalog),dateBasis:p==='workorders'?'submission':'operation'};}
+  function state(){const p=page();if(!states[p])states[p]={draft:defaultDraft(p),initialized:!!L.catalogReady,filters:null,result:null,more:false,busy:false,error:'',serial:0,current:1,size:20,mode:'records'};const s=states[p];if(!s.initialized&&L.catalogReady){s.draft=defaultDraft(p);s.initialized=true;}return s;}
+
   const option=(v,l,selected)=>'<option value="'+E(v)+'" '+(v===selected?'selected':'')+'>'+E(l)+'</option>';
   function select(label,key,items,all=true){const s=state();return '<label class="live-field"><span>'+label+'</span><select aria-label="'+label+'" onchange="workorderOperationsSet(\''+key+'\',this.value)">'+(all?option('','全部',s.draft[key]):'')+items.map(([v,l])=>option(v,l,s.draft[key])).join('')+'</select></label>';}
   function input(label,key,type='search'){const s=state();return '<label class="live-field"><span>'+label+'</span><input aria-label="'+label+'" type="'+type+'" '+(type==='number'?'min="0" step="any"':'maxlength="200"')+' value="'+E(s.draft[key])+'" oninput="workorderOperationsSet(\''+key+'\',this.value,false)"></label>';}
@@ -58,7 +67,7 @@
   root.workorderOperationsClearDates=()=>{state().draft.from='';state().draft.to='';render();};
   root.workorderOperationsReset=()=>{delete states[page()];load(true);};
   root.workorderOperationsLoad=load;
-  root.workorderOperationsMode=mode=>{if(!['records','daily'].includes(mode)||page()!=='workorders')return;state().mode=mode;render();load();};
+  root.workorderOperationsMode=mode=>{if(!['records','daily'].includes(mode)||page()!=='workorders')return;const s=state();s.mode=mode;if(mode==='daily'&&!s.dailyInitialized){const month=currentMonth(s.draft.country,L.catalog);L.from=month.from+'T00:00:00';L.to=month.to+'T23:59:59';s.dailyInitialized=true;}render();load();};
   root.workorderOperationsPage=value=>{const s=state(),max=Math.max(1,Math.ceil(Number(s.result?.total||0)/s.size));if(s.busy||!Number.isInteger(value))return;s.current=Math.max(1,Math.min(max,value));load();};
   root.workorderOperationsSize=value=>{if(![20,50,100].includes(Number(value)))return;state().size=Number(value);state().current=1;load();};
   root.workorderOperationsJump=value=>{if(/^\d+$/.test(String(value)))root.workorderOperationsPage(Number(value));};
@@ -68,6 +77,6 @@
    openDrawer('工单详情 · '+(row.workorderNo||row.workorderId),'<p class="wo-note">采集历史只读；工单已处理不代表支付到账。</p>'+(viewFor(key)==='missing'?'<p class="wo-note">登记核对：'+E({missing:'疑似漏登',matched:'已登记',review:'待核对'}[r.registrationStatus]||'待核对')+'；'+E(matchReasons[r.matchReason||r.reason]||'待核对')+'；匹配记录 '+C(r.registrationMatchCount)+' 条；依据 '+E((r.matchedBy||[]).map(k=>({workorderNo:'完整工单号',orderNo:'完整支付订单号'}[k]||'未知')).join(' / ')||'尚未匹配')+'</p>':'')+table(['字段','内容'],columns.map(([l,v])=>[l,E(v(row)||'—')]))+((row.fieldGaps||[]).length?'<p class="wo-note">'+[...new Set(row.fieldGaps.map(g=>fieldNames[g]||'部分来源字段缺失'))].map(E).join('；')+'</p>':'')+(row.attachmentTypes?.length?'<p class="wo-note">附件查看尚未接入。</p>':''));
    }catch(error){if(page()===key)openDrawer('工单详情','<div class="live-error">'+E(error.message||'读取失败，请重试')+'</div>');}
   };
-  return {render:view,load,handles,isDaily:()=>page()==='workorders'&&state().mode==='daily',pause:()=>{Object.values(states).forEach(s=>{s.serial++;s.busy=false;})},state};
+  return {render:view,load,handles,isDaily:()=>page()==='workorders'&&state().mode==='daily',clear:key=>{if(states[key]){states[key].serial++;delete states[key];}},pause:()=>{Object.values(states).forEach(s=>{s.serial++;s.busy=false;})},state};
  }};
 })(window);

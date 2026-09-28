@@ -13,3 +13,17 @@ test('detail is scoped by country platform and internal ID and never renders att
 test('missing and workload keep separate query state and explicit source limitations',async()=>{const h=harness();h.setPage('workorder_reconciliation');h.respond({sourceStatus:'ready',rows:[],total:0,summary:{unknownOperationCount:4}});await h.module.load();assert.equal(h.calls.at(-1).view,'missing');assert.equal(h.calls.at(-1).filters.dateBasis,'operation');assert.match(h.html(),/当前授权范围内另有 4 条操作时间未确认/);h.root.workorderOperationsSet('registrationStatus','review');h.setPage('workorder_workload');await h.module.load();assert.equal(h.calls.at(-1).view,'workload');assert.equal(h.calls.at(-1).filters.registrationStatus,undefined);assert.match(h.html(),/不代表员工完整操作事件流水/);assert.doesNotMatch(h.html(),/onchange="workorderOperationsSet\('statusCode'/);});
 test('operation logs have their own action and only supported filters; detail does not issue a new read',async()=>{const h=harness();h.setPage('workorder_operation_logs');h.respond({sourceStatus:'ready',rows:[{id:'event',createdAt:'2026-09-27T01:00:00Z',actorName:'synthetic',action:'follow',platform:'SYNTHETIC',workorders:['WORK-1'],orderNo:'ORDER-1',note:'<note>',before:{outcome:'pending'},after:{outcome:'success',untrusted:'should not show'}}],total:1});await h.module.load();assert.equal(h.calls[0].action,'portalOperationLogs');assert.deepEqual(Object.keys(h.calls[0].filters).sort(),['from','to','platform','operator','action','orderNo','workorderNo','utr'].sort());const n=h.calls.length;await h.root.workorderOperationsDetail(0);assert.equal(h.calls.length,n);assert.match(h.drawer(),/变更前.*变更后/);assert.match(h.drawer(),/&lt;note&gt;/);assert.doesNotMatch(h.drawer(),/untrusted|should not show/);});
 test('pagination uses bounded size and an empty last page resets safely',async()=>{const h=harness();h.respond({sourceStatus:'ready',rows:[record],total:137});await h.module.load();h.module.state().current=7;h.respond({sourceStatus:'ready',rows:[],total:0});await h.module.load();assert.equal(h.module.state().current,1);assert.match(h.html(),/0–0/);h.root.workorderOperationsSize('500');assert.equal(h.module.state().size,20);assert.match(h.html(),/20 条 \/ 页/);assert.match(h.html(),/50 条 \/ 页/);assert.match(h.html(),/100 条 \/ 页/);});
+
+
+test('business-month defaults respect local month boundaries, leap years and year rollover',()=>{
+ const h=harness(),month=h.root.HensemWorkorderUI.currentMonth;
+ for(const [country,instant,from,to] of [
+  ['印度','2026-09-30T18:29:59Z','2026-09-01','2026-09-30'],
+  ['印度','2026-09-30T18:30:00Z','2026-10-01','2026-10-31'],
+  ['印度','2026-12-31T18:30:00Z','2027-01-01','2027-01-31'],
+  ['印度','2028-02-20T00:00:00Z','2028-02-01','2028-02-29'],
+  ['巴西','2026-10-01T01:00:00Z','2026-09-01','2026-09-30'],
+  ['巴基斯坦','2026-09-30T19:00:00Z','2026-10-01','2026-10-31']]){const r=month(country,[],new Date(instant));assert.equal(r.from,from);assert.equal(r.to,to);}
+});
+
+test('daily mode initializes to this month once and preserves a manually chosen historical range',async()=>{const h=harness();await h.module.load();h.root.workorderOperationsMode('daily');const month=h.root.HensemWorkorderUI.currentMonth('印度',h.L.catalog);assert.equal(h.L.from,month.from+'T00:00:00');assert.equal(h.L.to,month.to+'T23:59:59');h.L.from='2026-08-01T00:00:00';h.L.to='2026-08-31T23:59:59';h.root.workorderOperationsMode('records');h.root.workorderOperationsMode('daily');assert.equal(h.L.from,'2026-08-01T00:00:00');assert.equal(h.L.to,'2026-08-31T23:59:59');});
