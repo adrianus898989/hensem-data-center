@@ -4,14 +4,14 @@ const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-deposit-
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function harness(response={rows:[],total:0,summary:{}}){
  const L={catalogReady:true,catalog:[{country:'印度',name:'SYNTHETIC'}],country:'印度',from:'2026-09-01T00:00:00',to:'2026-09-27T23:59:59',depositIssuesPage:1,depositIssuesSize:20,depositIssuesSerial:0,depositIssuesPlatform:'all',depositIssuesProvider:'',depositIssuesStatus:'all',depositIssuesQuery:''},calls=[];
- let html='',renders=0,page,route='deposit_tracking',handler=async()=>response;
- const root={};vm.runInNewContext(source,{window:root});
+ let html='',drawer='',renders=0,page,route='deposit_tracking',handler=async()=>response;
+ const root={};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-workorder-operations.js'),'utf8'),{window:root});vm.runInNewContext(source,{window:root});
  page=root.HensemLiveDepositIssues.create({L,E:escape,C:v=>String(v??0),N:v=>Number(v).toFixed(2),R:(a,b)=>b?String(a/b*100):'—',formatTime:v=>v,
   metric:(title,value)=>'<div>'+title+':'+value+'</div>',box:(title,body)=>'<section><h2>'+title+'</h2>'+body+'</section>',pager:(total,p,size)=>'<footer data-total="'+total+'">'+p+'/'+size+'</footer>',
   table:(headers,rows,classes)=>'<div class="'+classes+'"><table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>',
-  page:()=>route,render:()=>{renders++;html=page.render()},request:async q=>{calls.push({...q});return handler(q)}});
+  openDrawer:(title,body)=>{drawer=title+body},page:()=>route,render:()=>{renders++;html=page.render()},request:async q=>{calls.push({...q});return handler(q)}});
  root.setPage=value=>{route=value;void page.load(true)};
- return {L,root,page,calls,html:()=>html,renders:()=>renders,setHandler:next=>{handler=next}};
+ return {L,root,page,calls,html:()=>html,drawer:()=>drawer,renders:()=>renders,setHandler:next=>{handler=next}};
 }
 const settle=async()=>{for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve))};
 
@@ -55,4 +55,10 @@ test('late responses from the previous source cannot replace current entries',as
 
 test('statistics keep other-order and other-provider classifications independent from the raw sheet mark',async()=>{
  const h=harness({rows:[{platform:'SYNTHETIC',orderNumber:'RC20260926SYNTHETIC',amount:100,status:'已入款',confirmation:'入其他订单',statisticsStatus:'other_order'}],total:1,summary:{count:1,otherOrderCount:1,otherOrderAmount:100,receivedCount:0,unreceivedCount:0}});h.root.depositIssuesSource('results');await settle();assert.match(h.html(),/入其他订单:1/);assert.match(h.html(),/本订单入款标记:0/);assert.match(h.html(),/不计本订单入款或未入款/);h.root.depositIssuesSection('details');await settle();assert.match(h.html(),/统计归类/);assert.match(h.html(),/入其他订单/);assert.match(h.html(),/已入款/);
+});
+
+
+test('compact rows retain complete escaped values in titles and a complete read-only detail view',async()=>{
+ const full='long-upi-0000000000@example',reply='first line\nsecond line <img src=x onerror=alert(1)>';
+ const h=harness({rows:[{platform:'SYNTHETIC',orderNumber:'000ORDER',upiId:full,providerReply:reply,amount:0,sourceKind:'portal',firstActor:'staff'}],total:1});await h.page.load();assert.match(h.html(),/wo-cell-value/);assert(h.html().includes('title="'+full+'"'));assert.match(h.html(),/depositIssuesDetail\(0\)/);const n=h.calls.length;h.root.depositIssuesDetail(0);assert.equal(h.calls.length,n);assert(h.drawer().includes(full));assert.match(h.drawer(),/000ORDER/);assert.match(h.drawer(),/second line &lt;img/);assert.doesNotMatch(h.drawer(),/<img/);assert.match(h.drawer(),/0.00/);
 });

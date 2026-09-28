@@ -256,7 +256,7 @@
  const withdrawPages=HensemLiveWithdrawPages.create({L,E,C,R,N,box,table,request:q=>window.hensemLiveRequest(q),render:()=>{if(isWithdrawPage(state.page))render()},page:()=>state.page});
  function autoWithdrawView(){return withdrawPages.render()}
  async function autoWithdrawLoad(reset=false){return withdrawPages.load(reset)}
- const depositPages=HensemLiveDepositIssues.create({L,E,C,N,R,metric,box,table,pager,formatTime,page:()=>state.page,request:q=>window.hensemLiveRequest(q),render:()=>{if(['deposit_tracking','deposit_statistics'].includes(state.page))render()}});
+ const depositPages=HensemLiveDepositIssues.create({L,E,C,N,R,metric,box,table,pager,formatTime,openDrawer:(title,html)=>openDrawer(title,html),page:()=>state.page,request:q=>window.hensemLiveRequest(q),render:()=>{if(['deposit_tracking','deposit_statistics'].includes(state.page))render()}});
  const workorderOperations=window.HensemLiveWorkorderOperations?.create({L,E,C,N,box,table,formatTime,page:()=>state.page,request:q=>window.hensemLiveRequest(q),render:()=>{if(isWorkorderOperations(state.page))render()},openDrawer:(title,html)=>openDrawer(title,html),renderDaily:workordersView,loadDaily:workordersLoad});
  function depositIssuesView(){return depositPages.render()}
  async function depositIssuesLoad(reset=false){return depositPages.load(reset)}
@@ -383,7 +383,7 @@
    normalizePageDirection();pendingSnapshot?.restore(entry.pendingSnapshot);reportData?.restore?.(entry.report);analysis?.restore?.(entry.analysis);if(isWithdrawPage(state.page))withdrawPages.restore?.(entry.withdraw);
   }
   function discardPageTab(key){
-   pageTabs.delete(key);
+   pageTabs.delete(key);workorderOperations?.clear?.(key);
    const prefix={rates:/^fee(?!Lookup)/,deposit_tracking:/^depositIssues/,deposit_statistics:/^depositIssues/,provider_config:/^providerConfig/,teams:/^(platformAssignments|teamPlatform)/}[key];
    if(prefix)for(const field of Object.keys(L).filter(field=>prefix.test(field))){if(/Serial$/.test(field))L[field]++;else if(Object.prototype.hasOwnProperty.call(initialDedicated,field))L[field]=copyControls(initialDedicated[field]);else delete L[field]}
    if(key==='rates')window.HensemLiveRatesRestored?.clear?.();if(key==='collected_data')collectedPage.clear?.();if(key==='payout_config')window.HensemLivePayoutConfig?.clear?.();

@@ -619,7 +619,7 @@ test('workorder page restores filters and resets the inherited payout or collect
 });
 test('deposit tracking and statistics are separate pages and receipt dates never reuse source day counts',async()=>{
  const h=await ready();h.setHandler(q=>['depositIssues','depositStatistics'].includes(q.action)?{rows:[{platform:'Synthetic platform',provider:'Synthetic Provider',orderNumber:'SYNTHETIC-ORDER',amount:900,status:'已入款',unreceivedDays:90,providerReply:'成功 <script>',utrMatch:'一致',kycCorrect:'正确'}],total:1,summary:{count:1,amount:900,unreceivedAmount:0,unreceivedCount:0,receivedCount:1}}:{rows:[],total:0});
- h.L.from='2026-09-23T00:00:00';h.L.to='2026-09-23T23:59:59';h.c.setPage('deposit_tracking');await settle();const q=h.calls.at(-1);assert.equal(q.action,'depositIssues');assert.equal(q.view,'entries');assert.equal(q.dateMode,'all');assert.match(h.html(),/员工跟进明细/);assert.doesNotMatch(h.html(),/表格核对结果|onclick="depositIssuesSource/);
+ h.L.from='2026-09-23T00:00:00';h.L.to='2026-09-23T23:59:59';h.c.setPage('deposit_tracking');await settle();const q=h.calls.at(-1);assert.equal(q.action,'depositIssues');assert.equal(q.view,'entries');assert.equal(q.dateMode,'range');assert.equal(q.startAt,'2026-09-01T00:00:00.000Z');assert.equal(q.endAt,'2026-09-30T23:59:59.000Z');assert.match(h.html(),/员工跟进明细/);assert.doesNotMatch(h.html(),/表格核对结果|onclick="depositIssuesSource/);
  h.c.setPage('deposit_statistics');await settle();h.c.depositIssuesSection('details');await settle();assert.equal(h.calls.at(-1).action,'depositStatistics');assert.equal(h.calls.at(-1).section,'details');const stats=renderedTables(h.html()).find(t=>t.headers[0]==='凭证日期');assert(stats);assert.equal(plain(stats.rows[0][stats.headers.indexOf('距今天数')]),'—');assert.match(h.html(),/成功 &lt;script&gt;/);assert.doesNotMatch(h.html(),/<script>/);
  h.c.setPage('deposit_tracking');await settle();assert.match(h.html(),/员工跟进明细/);h.c.depositIssuesDate('from','2026-09-22');assert.match(h.html(),/SYNTHETIC-ORDER/,'old result stays visible until an explicit query');await h.c.depositIssuesLoad();assert.equal(h.calls.at(-1).startAt,'2026-09-22T00:00:00.000Z');
 });
@@ -1134,4 +1134,17 @@ test('first overview snapshot waits for delayed report directory and keeps new u
  const native={...P,team:'Synthetic Team'},late={name:'Synthetic Late Report',rawPlatform:'Synthetic Late Report',country:'印度',rawCountry:'IN',team:'Synthetic Team',system:'REPORT',dataset:'volume',directions:['withdraw'],records:1,provenance:{kind:'direct'}};
  const h=await ready({manualOverview:true,reports:true,handler:q=>q.action==='catalog'?{platforms:[native]}:q.action==='collectedData'?catalogPromise:q.action==='reportSummary'?{feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'not_received',groups:[]}))}:q.action==='rates'?{rows:[],total:0}:aggregate(native)});
  const query=h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,0);resolveCatalog({rows:[late]});await query;await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1);assert.match(h.html(),/已采集 1 \/ 2 平台/);assert.match(h.html(),/已采集小计/);h.c.livePendingSnapshotDetails();assert.match(h.drawers.at(-1).html,/Synthetic Late Report/);assert.match(h.drawers.at(-1).html,/尚未接入快照/);
+});
+
+
+test('workorder pages automatically query the current business month and keep manual ranges independent',async()=>{
+ const routes=['workorders','deposit_tracking','deposit_statistics','workorder_reconciliation','workorder_workload','workorder_operation_logs'];
+ for(const page of routes){
+  const h=harness({page,handler:q=>q.action==='catalog'?{platforms:[P]}:{rows:[],total:0,summary:{}}});await settle();
+  const q=h.calls.find(q=>['workorderRecords','depositIssues','depositStatistics','portalOperationLogs'].includes(q.action));assert(q,page+' automatically reads');
+  if(q.filters){assert.equal(q.filters.from,'2026-09-01',page);assert.equal(q.filters.to,'2026-09-30',page);}else{assert.equal(q.dateMode,'range',page);assert.equal(q.startAt,'2026-09-01T00:00:00.000Z',page);assert.equal(q.endAt,'2026-09-30T23:59:59.000Z',page);}
+ }
+ const h=await ready();h.c.setPage('deposit_tracking');await settle();h.c.depositIssuesDate('from','2026-08-01');h.c.depositIssuesDate('to','2026-08-31');await h.c.depositIssuesLoad();h.c.setPage('deposit_statistics');await settle();assert.equal(h.calls.at(-1).startAt,'2026-09-01T00:00:00.000Z');h.c.setPage('deposit_tracking');await settle();assert.equal(h.L.from,'2026-08-01T00:00:00');
+ h.c.depositIssuesSet('dateMode','all');await h.c.depositIssuesLoad();assert.equal(h.calls.at(-1).dateMode,'all');h.c.depositIssuesReset();await settle();assert.equal(h.calls.at(-1).dateMode,'range');assert.equal(h.calls.at(-1).startAt,'2026-09-01T00:00:00.000Z');
+ h.c.setPage('workorders');await settle();h.c.workorderOperationsSet('from','2026-08-01');h.c.workorderOperationsSet('to','2026-08-31');await h.c.workorderOperationsLoad(true);h.c.liveClosePage('workorders');h.c.setPage('workorders');await settle();assert.equal(h.calls.at(-1).filters.from,'2026-09-01');assert.equal(h.calls.at(-1).filters.to,'2026-09-30');
 });
