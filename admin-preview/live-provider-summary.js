@@ -386,7 +386,7 @@
    r.issues=L.workorders&&items.some(i=>i.issues)?Object.fromEntries(issueKeys.map(k=>[k,items.reduce((n,i)=>n+Number(i.issues?.[k]||0),0)])):null;r.uniqueOrders=fullScope?uniqueWorkorderFacts([L.workorders?.byDirection?.[direction]]):null;return cells(r,'<strong>'+label+'</strong>',true)};
   const coverage=L.workorders?.coverage;
   const coverageNote=coverage&&!coverage.complete?' · 工单覆盖 '+C(coverage.capturedPlatformDays)+' / '+C(coverage.expectedPlatformDays)+' 平台日':'';
-  const workNote=L.workordersUnsupported?'<div class="live-status">所选平台来源尚未接入工单数据</div>':L.workordersError?'<div class="live-status live-error">工单读取未完成：'+E(L.workordersError)+' <button class="link" onclick="liveLoad()">重试</button></div>':
+  const workNote=L.workordersUnsupported?'<div class="live-status">所选平台来源尚未接入工单数据</div>':L.workordersError?'<div class="live-status live-error">工单读取未完成：'+E(L.workordersError)+' <button type="button" class="link" onclick="liveProviderWorkordersRetry()">只重试工单</button></div>':
    L.workordersLoading?'<div class="live-status">正在读取'+issueLabel+'工单汇总…</div>':'';
   const footers=max>1?[sumRow(shown,readState.partial?'当前页已读取合计':'当前页汇总'),sumRow(rows,readState.partial?'已读取合计':'全部汇总',true)]:[sumRow(rows,readState.partial?'已读取合计':'合计',true)];
   const breakdown=(row,index)=>{

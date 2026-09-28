@@ -1,5 +1,11 @@
 /* Employee follow-up records and derived sheet results stay separate. */
 (function(root){
+  // Query buttons must work in the read-only iframe without native form submission.
+  function readQuery(form,event,run){
+   if(event){const input=event.target;if(event.defaultPrevented||event.key!=='Enter'||event.isComposing||event.keyCode===229||event.repeat||event.ctrlKey||event.metaKey||event.altKey||event.shiftKey||input?.tagName!=='INPUT'||input.isContentEditable||!['text','search','number','date','datetime-local','time','email','url','tel'].includes(input.type||'text'))return false;event.preventDefault();}
+   if(!form||typeof form.reportValidity!=='function'||!form.reportValidity())return false;
+   return run();
+  }
  root.HensemLiveDepositIssues={create:function(ctx){
   const {L,E,C,N,R,metric,box,table,pager,render,request,formatTime}=ctx;
   const sourceUrl='https://docs.google.com/spreadsheets/d/1Y110H-E0ny6Yj6ZEhn7tRLgCuRrSE5iDeFwaZ8-aCqg/edit?gid=1642433306#gid=1642433306';
@@ -25,7 +31,7 @@
    const date=key=>'<label class="live-field"><span>'+(key==='from'?'开始日期':'结束日期')+'</span><input aria-label="'+(key==='from'?'开始日期':'结束日期')+'" type="date" value="'+E(L.depositIssuesDateMode==='all'?'':L[key].slice(0,10))+'" onchange="depositIssuesDate(\''+key+'\',this.value)"></label>';
    const common=field('国家 / 地区','country',countries.map(v=>[v,v]),L.country)+field('平台','platformName',[['all','全部平台'],...platforms.map(v=>[v,v])],L.depositIssuesPlatform)+input('支付订单号','orderNumber',L.depositIssuesOrderNumber)+input('UTR','utr',L.depositIssuesUtr)+date('from')+date('to')+(entries?field('跟进状态','followupStatus',[['','全部状态'],...(f.followupStatuses||[]).map(v=>[v,followupName(v)])],L.depositIssuesFollowupStatus)+field('数据来源','sourceKind',[['all','全部来源'],['sheet','员工原表'],['portal','工单前端']],L.depositIssuesSourceKind):field('表格入款标记','status',[['all','全部标记'],['未入款','未入款'],['已入款','已入款'],['待核对','待核对']],L.depositIssuesStatus)+field('表格对账','match',[['all','全部'],['matched','对得上'],['unmatched','对不上'],['unknown','待核对']],L.depositIssuesMatch));
    const extra=(entries?input('工单号','workOrderNumber',L.depositIssuesWorkOrderNumber):'')+input('三方','provider',L.depositIssuesProvider)+input('UPI ID','upiId',L.depositIssuesUpiId)+input('KYC-UPI ID','kycUpiId',L.depositIssuesKycUpiId)+input('三方回复','reply',L.depositIssuesReply)+(entries?input('原表员工编号','staffCode',L.depositIssuesStaffCode):field('原表确认','confirmation',[['','全部确认'],...(f.confirmations||[]).map(v=>[v,v])],L.depositIssuesConfirmation||''))+field('UTR 核验','utrMatch',[['','全部'],...[...new Set([...(f.utrMatches||[]),L.depositIssuesUtrMatch].filter(Boolean))].map(v=>[v,v])],L.depositIssuesUtrMatch)+field('KYC 核验','kycCorrect',[['','全部'],...[...new Set([...(f.kycCorrectValues||[]),L.depositIssuesKycCorrect].filter(Boolean))].map(v=>[v,v])],L.depositIssuesKycCorrect)+input('最低金额','amountMin',L.depositIssuesAmountMin,true)+input('最高金额','amountMax',L.depositIssuesAmountMax,true);
-   return '<section class="panel wo-filter-panel"><form onsubmit="event.preventDefault();depositIssuesLoad(true)"><div class="wo-filter-grid">'+common+'</div><div class="wo-filter-grid wo-more" '+(L.depositIssuesMore?'':'hidden')+'>'+extra+'</div><div class="wo-filter-actions"><div><button type="button" class="btn" aria-expanded="'+!!L.depositIssuesMore+'" onclick="depositIssuesMore()">'+(L.depositIssuesMore?'收起筛选':'更多筛选')+'</button><button type="button" class="btn" onclick="depositIssuesMonth()">本月</button><button type="button" class="btn" onclick="depositIssuesSet(\'dateMode\',\'all\')">全部日期</button></div><div><button class="btn primary" '+(L.depositIssuesLoading?'disabled':'')+'>查询</button><button class="btn" type="button" onclick="depositIssuesReset()">重置</button></div></div></form></section>';
+   return '<section class="panel wo-filter-panel"><form onsubmit="return false" onkeydown="depositIssuesQuery(this,event)"><div class="wo-filter-grid">'+common+'</div><div class="wo-filter-grid wo-more" '+(L.depositIssuesMore?'':'hidden')+'>'+extra+'</div><div class="wo-filter-actions"><div><button type="button" class="btn" aria-expanded="'+!!L.depositIssuesMore+'" onclick="depositIssuesMore()">'+(L.depositIssuesMore?'收起筛选':'更多筛选')+'</button><button type="button" class="btn" onclick="depositIssuesMonth()">本月</button><button type="button" class="btn" onclick="depositIssuesSet(\'dateMode\',\'all\')">全部日期</button></div><div><button type="button" class="btn primary" onclick="depositIssuesQuery(this.form)" '+(L.depositIssuesLoading?'disabled':'')+'>查询</button><button class="btn" type="button" onclick="depositIssuesReset()">重置</button></div></div></form></section>';
   }
   function summaryCards(result){
    const s=result.summary||{},entries=L.depositIssuesView==='entries';
@@ -98,6 +104,7 @@
     const data=await request(q);if(serial!==L.depositIssuesSerial)return;const max=Math.max(1,Math.ceil(Number(data.total||0)/L.depositIssuesSize));if(L.depositIssuesPage>max){L.depositIssuesPage=max;L.depositIssuesLoading=false;return load();}L.depositIssues=data;facets[L.depositIssuesView]=data.facets||{};L.depositIssuesLoading=false;render();
    }catch(e){if(serial!==L.depositIssuesSerial)return;L.depositIssuesLoading=false;L.depositIssuesError=e.message||'存款核对记录读取失败';render()}
   }
+  root.depositIssuesQuery=(form,event)=>readQuery(form,event,()=>{if(!L.depositIssuesLoading)return load(true)});
   function dirty(doRender=true){L.depositIssuesPage=1;L.depositIssuesSerial++;L.depositIssuesDirty=true;L.depositIssuesLoading=false;if(doRender)render()}
   root.depositIssuesSet=function(key,value){
    ensureMonth();

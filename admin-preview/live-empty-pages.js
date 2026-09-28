@@ -5,6 +5,12 @@
  */
 (function (root) {
   'use strict';
+  // Query buttons must work in the read-only iframe without native form submission.
+  function readQuery(form,event,run){
+   if(event){const input=event.target;if(event.defaultPrevented||event.key!=='Enter'||event.isComposing||event.keyCode===229||event.repeat||event.ctrlKey||event.metaKey||event.altKey||event.shiftKey||input?.tagName!=='INPUT'||input.isContentEditable||!['text','search','number','date','datetime-local','time','email','url','tel'].includes(input.type||'text'))return false;event.preventDefault();}
+   if(!form||typeof form.reportValidity!=='function'||!form.reportValidity())return false;
+   return run();
+  }
   const E = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const choice = (key, label, options) => ({key, label, options});
   const text = (key, label, type = 'text') => ({key, label, type});
@@ -46,7 +52,7 @@
       : '<input'+attributes+' type="'+(spec.type||'text')+'"'+(spec.type==='datetime-local'?' step="1"':' maxlength="200"')+' value="'+E(value)+'" placeholder="'+label+'" oninput="'+callback+'">')+'</label>';
   }
   function searchBar(page) {
-    return '<section class="panel ps-panel-v4" aria-label="'+E(schema[page].title)+'查询" style="padding:12px 16px"><form style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px" onsubmit="event.preventDefault();HensemLiveEmpty.search(\''+page+'\')">'+schema[page].fields.map(spec=>field(page,spec)).join('')+'<div class="ps-actions-v4"><button type="submit" class="btn primary">查询</button><button type="button" class="btn" onclick="HensemLiveEmpty.reset(\''+page+'\')">重置</button></div></form></section>';
+    return '<section class="panel ps-panel-v4" aria-label="'+E(schema[page].title)+'查询" style="padding:12px 16px"><form style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px" onsubmit="return false" onkeydown="HensemLiveEmpty.queryForm(\''+page+'\',this,event)">'+schema[page].fields.map(spec=>field(page,spec)).join('')+'<div class="ps-actions-v4"><button type="button" class="btn primary" onclick="HensemLiveEmpty.queryForm(\''+page+'\',this.form)">查询</button><button type="button" class="btn" onclick="HensemLiveEmpty.reset(\''+page+'\')">重置</button></div></form></section>';
   }
   function emptyTable(headers, label, searched = false) {
     return '<div class="live-table"><table aria-label="'+E(label)+'"><thead><tr>'+headers.map(header=>'<th>'+E(header)+'</th>').join('')+'</tr></thead><tbody><tr class="live-empty-row"><td colspan="'+headers.length+'"><div class="live-empty">'+(searched?'当前筛选：':'')+'暂无可展示记录 · 未接入</div></td></tr></tbody></table></div>';
@@ -130,6 +136,6 @@
     return repaint(page);
   }
   function reset(page) { if(!schema[page])return '';views[page]=initial(page);return repaint(page); }
-  root.HensemLiveEmpty={render,search,change,tab,pagechange,reset,pages:Object.freeze(Object.keys(schema)),snapshot:page=>get(page)?JSON.parse(JSON.stringify(get(page))):null};
+  root.HensemLiveEmpty={render,search,queryForm:(page,form,event)=>readQuery(form,event,()=>search(page)),change,tab,pagechange,reset,pages:Object.freeze(Object.keys(schema)),snapshot:page=>get(page)?JSON.parse(JSON.stringify(get(page))):null};
   if(typeof module!=='undefined'&&module.exports)module.exports=root.HensemLiveEmpty;
 })(typeof window!=='undefined'?window:globalThis);

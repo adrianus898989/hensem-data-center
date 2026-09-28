@@ -349,3 +349,12 @@ test('pending snapshot errors identify a failed closing balance without suggesti
   await assert.rejects(h.api.adminLiveRequest(session,request),error=>error.message.includes(expected)&&!/private|token|缩短日期/.test(error.message));
  }
 });
+
+
+test('auto withdrawal multi-team requests are explicit bounded source scopes within one displayed country',async()=>{
+ const h=load(),r={action:'autoWithdraw',country:'巴西',startAt:'2026-09-27T00:00:00Z',endAt:'2026-09-27T23:59:59Z',scopeTargets:[{country:'巴西',platforms:['M8-A']},{country:'胖虎巴西',platforms:['PH-A']}]};
+ await h.api.adminLiveRequest(session,r);assert.deepEqual(JSON.parse(h.calls[0].init.body).p_request.scopeTargets,r.scopeTargets);
+ for(const scopeTargets of [null,{},[],Array(9).fill(r.scopeTargets[0]),[null],[{}],[{country:'巴西',platforms:[]}],[{country:'巴西',platforms:null}],[{country:'巴西',platforms:['']}],[{country:'巴西',platforms:[' A']}],[{country:'巴西',platforms:[1]}],[{country:'巴西',platforms:Array(201).fill('A')}],[{country:'印度',platforms:['A']}],[r.scopeTargets[0],r.scopeTargets[0]],[{...r.scopeTargets[0],sql:'private'}]])assert.throws(()=>h.api.validateAdminLiveRequest({...r,scopeTargets}));
+ for(const action of ['catalog','workorders','withdrawReasons','query'])assert.throws(()=>h.api.validateAdminLiveRequest({...r,action}));
+ assert.equal(h.calls.length,1);
+});
