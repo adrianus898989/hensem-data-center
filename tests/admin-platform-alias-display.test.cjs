@@ -32,3 +32,19 @@ test('platform picker shows one RAJA after review snapshots arrive and keeps the
  const start=h.calls.length;await h.c.liveQuery();await settle();const queries=h.calls.slice(start).filter(q=>q.action==='aggregate');
  assert(queries.length>0);assert(queries.every(q=>q.platformId===raw.id));assert(!queries.some(q=>q.platformId===alias.id));
 });
+
+test('SUPERLG picker omits the redundant historical directory while preserving its independent source and retained selection',async()=>{
+ const current={...P,id:'lg-current',name:'SUPERLG',source:'lg',country:'菲律宾',scopeGroup:'PH',team:'M8',currency:'PHP',timezone:'Asia/Manila'};
+ const history={name:'SUPERLG',source:'withdraw',country:'LG',scopeGroup:'LG',team:'M8'};
+ const h=await ready({reports:true,handler:q=>q.action==='catalog'?{platforms:[current],withdrawPlatforms:[history]}:q.action==='collectedData'?{rows:[]}:completeAggregate(current,10,8)});
+ const picker=()=>h.nodes.get('liveFilters').innerHTML.match(/<details[^>]*data-multi="platform"[^]*?<\/details>/)?.[0]||'';
+ assert.equal((picker().match(/class="live-multi-option"/g)||[]).length,1);assert.match(picker(),/>SUPERLG<\/span>/);assert.doesNotMatch(picker(),/历史来源|仅目录/);
+ assert.equal(h.L.withdrawCatalog[0].country,'LG','historical operator source is not rewritten');
+ const start=h.calls.length;await h.c.liveQuery();await settle();const queries=h.calls.slice(start).filter(q=>q.action==='aggregate');assert(queries.length>0);assert(queries.every(q=>q.platformId===current.id));
+ const historyId='report:'+encodeURIComponent(JSON.stringify(['LG','SUPERLG']));h.c.liveSet('platform',historyId);
+ assert.deepEqual([...h.L.multi.platform],[historyId],'an already retained historical scope must never become all platforms');
+ const retained=h.calls.length;await h.c.liveQuery();await settle();assert.equal(h.calls.slice(retained).filter(q=>q.action==='aggregate').length,0);
+ h.c.liveMultiClear('platform');assert.doesNotMatch(picker(),/历史来源|仅目录/);
+ h.L.catalog=[{...current,team:'Other'}];h.c.render();assert.match(picker(),/历史来源/,'a same-name platform from a different team is not a replacement');
+ h.L.catalog=[];h.c.render();assert.match(picker(),/历史来源/,'historical-only access is not removed or converted to current orders');
+});

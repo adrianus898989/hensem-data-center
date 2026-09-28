@@ -93,7 +93,13 @@
  function orderCapability(p,key){if(!p||p.reportOnly||orderSource(p)==='lg'&&unsupportedLgFields.has(key))return false;if(typeof p.capabilities?.[key]==='boolean')return p.capabilities[key];return key==='systemOrderId'?orderSource(p)==='newar':key==='thirdPartyOrderNumber'?['newar','game66'].includes(orderSource(p)):false;}
  function orderFieldValue(p,key,value){return p?.capabilities?.[key]===false||orderSource(p)==='lg'&&unsupportedLgFields.has(key)?null:value;}
  const orderSearchAttributes=(key,label)=>orderCapability(orderPlatform(),key)?'':'disabled title="当前来源未提供可检索的'+label+'"';
- const visibleCatalog=()=>reportData?.catalog()||L.catalog.map(displayIdentity);
+ function visibleCatalog(){
+  const rows=reportData?.catalog()||L.catalog.map(displayIdentity),chosen=new Set(activeValues('platform'));
+  const currentSuperlg=new Set(rows.filter(p=>!p.reportOnly&&orderSource(p)==='lg'&&p.country==='菲律宾'&&String(p.name).toUpperCase()==='SUPERLG').map(platformTeam));
+  // Historical operator reports keep their own source keys and dedicated page.
+  // Hide the redundant directory option, without widening a retained selection.
+  return rows.filter(p=>!(p.reportOnly&&p.historicalSource&&p.country==='菲律宾'&&String(p.name).toUpperCase()==='SUPERLG'&&currentSuperlg.has(platformTeam(p))&&!chosen.has(p.id)));
+ }
  const teamCatalog=(catalog=visibleCatalog())=>catalog.filter(p=>matchesFilter('team',platformTeam(p)));
  const platformCandidates=(catalog=visibleCatalog())=>teamCatalog(catalog).filter(p=>!!L.country&&p.country===L.country&&matchesFilter('source',p.source));
  function reconcileScopeSelections(){const sourceSet=new Set(teamCatalog().filter(p=>p.country===L.country).map(p=>p.source).filter(backendSource).map(source=>orderSource({source}))),sources=activeValues('source').filter(source=>sourceSet.has(orderSource({source})));L.multi.source=sources;L.source=sources.length===1?sources[0]:'all';const candidates=platformCandidates(),platforms=[...new Set(activeValues('platform').map(id=>candidates.find(p=>p.id===id||(p.aliasPlatformIds||[]).includes(id))?.id).filter(Boolean))];L.multi.platform=platforms;L.platform=platforms.length===1?platforms[0]:'all';}
