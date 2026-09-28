@@ -58,6 +58,14 @@ test('recharge actual dates and elapsed days group only within the same configur
  assert.equal(await blocking('单日充值次数超过：15'),'单日充值次数超过：15');
 });
 
+test('red packet actual amounts share one blocking-rule category while retaining the values',async()=>{
+ const history=value=>'用户历史总领取的红包大于或者等于配置值不能自动出款,用户历史红包领取总额(userRedPacketTotalAmount)：'+value+',当前配置的历史红包领取总额限制是(ReceiveRedSumAmount)：1000.00';
+ const latest=value=>'用户最后一次充值之后领取的红包大于或者等于配置值不能自动出款,用户最后一次充值之后领取的红包总额(userLastRechgRecvReadSumAmount)：'+value+',当前配置的最后一次充值之后领取的红包总额限制是(LastRechgRecvReadSumAmount)：500.00';
+ assert.equal(await blocking(history('1040.00')),'用户历史总领取的红包大于或者等于配置值不能自动出款');
+ assert.equal(await blocking(history('2960.00')),'用户历史总领取的红包大于或者等于配置值不能自动出款');
+ assert.deepEqual(await scalar('select private.dashboard_admin_live_blocking_details($1) value',[latest('760.00')]),{reason:'用户最后一次充值之后领取的红包大于或者等于配置值不能自动出款',actualValue:'760.00',actualField:'userLastRechgRecvReadSumAmount',threshold:'500'});
+});
+
 test('multiple blocking reasons never collapse into only the last-recharge rule',async()=>{
  const complete=lastDeposit(80,'5/1/2026');
  for(const value of [complete+'；会员备注不为空，请检查备注',complete+'\n其他条件：投注异常',complete+'\n'+lastDeposit(120,'4/1/2026'),complete.replace('当前时间:','额外规则：需要人工审核,当前时间:')]){

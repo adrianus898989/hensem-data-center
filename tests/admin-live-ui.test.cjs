@@ -583,7 +583,7 @@ test('provider expansion shows platform contributions without requests and leave
  assert.match(h.html(),/代收创建金额/);assert.match(h.html(),/代收创建笔数/);assert.match(h.html(),/aria-expanded="false"/);
  h.c.providerSummaryToggle(0);assert.equal(h.calls.length,calls);assert.match(h.html(),/aria-expanded="true"/);
  const children=[...h.html().matchAll(/<tr class="provider-platform-row">([^]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td>([^]*?)<\/td>/g)].map(c=>c[1]));assert.equal(children.length,2);
- assert(children.every(r=>r.length===23));assert.deepEqual(children.map(r=>plain(r[1])).sort(),['AR','NEW_AR']);
+ assert(children.every(r=>r.length===19));assert.deepEqual(children.map(r=>plain(r[1])).sort(),['AR','NEW_AR']);
  assert.deepEqual(children.map(r=>plain(r[6])).sort(),['40.00%','60.00%']);
  assert.deepEqual(children.map(r=>plain(r[7])).sort(),['40.00%','60.00%']);
  assert.equal(children.reduce((n,r)=>n+Number(plain(r[3]).replaceAll(',','')),0),1000);
