@@ -36,3 +36,12 @@ test('malformed chart totals are rejected rather than improving displayed rates'
 test('unknown order status suppresses adjusted dashboard rate',async()=>{
  const h=harness();h.handler(q=>{const r=chartResponse(q);r.coverage.unknownStatusCount=1;return r});await h.ui.load();assert.doesNotMatch(h.ui.render(),/71.43%/);
 });
+test('coverage messages identify the blocking platform, field and count; recovery restores all cells',async()=>{
+ const h=harness();h.select([platform(),platform('b')]);h.handler(q=>response(q,{coverage:{missingMemberCount:q.platformId==='b'?2:0,unknownStatusCount:q.platformId==='b'?467:0}}));await h.ui.load();
+ const note=h.ui.note(true);assert.match(note,/Synthetic b：2 笔缺会员 ID、467 笔状态未识别/);assert.doesNotMatch(note,/部分订单缺少 ID 或状态/);
+ assert.match(h.ui.providerCell('Pay A',['a','b'],'rate',130,400),/Synthetic b：2 笔缺会员 ID、467 笔状态未识别/);assert.match(h.ui.providerCell('Pay A',['a'],'rate',65,200),/>50.00%/);
+ h.handler(q=>response(q));await h.ui.load();assert.equal(h.ui.note(true),'');assert.match(h.ui.providerCell('Pay A',['a','b'],'count',130,400),/>140</);assert.match(h.ui.providerCell('Pay A',['a','b'],'rate',130,400),/>50.00%/);
+});
+test('coverage diagnostics escape platform names',async()=>{
+ const h=harness();h.handler(q=>response(q,{platform:{...platform(q.platformId),name:'<img src=x>'},coverage:{unknownStatusCount:1}}));await h.ui.load();assert.match(h.ui.note(true),/&lt;img src=x&gt;/);assert.doesNotMatch(h.ui.note(true),/<img/);
+});
