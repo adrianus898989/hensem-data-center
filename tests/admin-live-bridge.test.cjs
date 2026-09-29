@@ -375,3 +375,9 @@ test('submission dashboard validates increasing numeric amount boundaries',()=>{
 test('submission charts can only be requested using a boolean flag',()=>{
  const h=load(),q={action:'submissionAnalysis',platformId:query.platformId,startAt:query.startAt,endAt:query.endAt,direction:'charge',operation:'summary'};assert.equal(h.api.validateAdminLiveRequest({...q,charts:false}).charts,false);for(const charts of [null,0,'false',{}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,charts}));
 });
+
+test('daily exclusion bridge accepts 15 for summaries and member details without relaxing numeric validation',()=>{
+ const h=load(),q={action:'submissionAnalysis',platformId:query.platformId,startAt:query.startAt,endAt:query.endAt,direction:'charge',threshold:15};
+ for(const operation of ['summary','members'])assert.equal(h.api.validateAdminLiveRequest({...q,operation}).threshold,15);
+ for(const threshold of [14,16,'15',15.5,null])assert.throws(()=>h.api.validateAdminLiveRequest({...q,threshold}));
+});

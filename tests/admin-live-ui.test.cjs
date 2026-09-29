@@ -1181,7 +1181,7 @@ test('adaptive ten-band UI uses same edges for parent, matrix and daily drilldow
 
 test('submission analysis navigation uses its own scoped reader and updates the menu without unrelated aggregate reads',async()=>{
  const h=await ready({submissions:true});setScope(h,{platform:P.id,direction:'charge',status:'all'});h.L.dirty=false;
- h.setHandler(async q=>q.action==='submissionAnalysis'?{platform:P,startAt:q.startAt,endAt:q.endAt,basis:'platform_local_day_all_providers_zero_success',coverage:{missingMemberCount:0},metrics:[10,20,30,50,100].map(threshold=>({provider:null,threshold,member_count:1,member_days:1,invalid_count:50,l0_members:0,new_members:0,funded_members:0,unknown_members:1}))}:aggregate(P));
+ h.setHandler(async q=>q.action==='submissionAnalysis'?{platform:P,startAt:q.startAt,endAt:q.endAt,basis:'platform_local_day_all_providers_zero_success',coverage:{missingMemberCount:0},metrics:[10,15,20,30,50,100].map(threshold=>({provider:null,threshold,member_count:1,member_days:1,invalid_count:50,l0_members:0,new_members:0,funded_members:0,unknown_members:1}))}:aggregate(P));
  const before=h.calls.filter(q=>q.action==='aggregate').length;h.c.setPage('events');await settle();
- assert(h.calls.some(q=>q.action==='submissionAnalysis'));assert.equal(h.calls.filter(q=>q.action==='aggregate').length,before);assert.match(h.html(),/单日 ≥30 笔/);assert.match(h.html(),/充值情况未提供/);assert.equal(h.c.pages.find(p=>p[0]==='events')[2],'刷单风控');
+ assert(h.calls.some(q=>q.action==='submissionAnalysis'));assert.equal(h.calls.filter(q=>q.action==='aggregate').length,before);assert.match(h.html(),/单日 ≥15 笔/);assert.match(h.html(),/充值情况未提供/);assert.equal(h.c.pages.find(p=>p[0]==='events')[2],'刷单风控');
 });
