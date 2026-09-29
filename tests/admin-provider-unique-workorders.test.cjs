@@ -10,22 +10,22 @@ function setup(){
  const h=fixture([order('a','ar',1000,10,{provider:'AlphaPay',platform:'Alpha'}),order('b','ar',500,5,{provider:'BetaPay',platform:'Beta'})]);
  h.L.workorders={byProvider:[fact('AlphaPay'),fact('BetaPay',{uniqueOrderAmount:800,uniqueOrderCount:8,uniqueSuccessAmount:400,uniqueSuccessCount:4})],byDirection:{withdraw:fact('',{uniqueOrderAmount:1100,uniqueOrderCount:11,uniqueSuccessAmount:600,uniqueSuccessCount:6})},byPlatformProvider:[fact('AlphaPay',{country:'印度',platformId:'a',platform:'Alpha',source:'ar'})]};h.render();return h;
 }
-const issueSlice=row=>row.slice(13,19);
+const issueSlice=row=>row.slice(-8,-2);
 
 test('the original six workorder columns now show deduplicated values and no duplicate column group',()=>{
  const h=setup(),html=h.html(),body=rows(html),footer=rows(html,'tfoot');
  for(const label of ['工单提交金额','工单提交笔数','工单成功金额','工单成功笔数','工单未到账金额','工单未到账笔数'])assert.match(html,new RegExp(label));
  for(const label of ['去重订单金额','去重订单笔数','去重成功金额','去重成功笔数','去重未到账金额','去重未到账笔数'])assert.doesNotMatch(html,new RegExp(label));
  for(const field of ['submittedAmount','submittedCount','successAmount','successCount','notReceivedAmount','notReceivedCount'])assert.match(html,new RegExp("providerSummarySort\\('issue_"+field+"'\\)"));
- assert.equal(body[0].length,21);assert.deepEqual(issueSlice(body[0]).map(plain),['500.00','5','300.00','3','200.00','2']);
+ assert.equal(body[0].length,23);assert.deepEqual(issueSlice(body[0]).map(plain),['500.00','5','300.00','3','200.00','2']);
  assert.deepEqual(issueSlice(footer[0]).map(plain),['1,100.00','11','600.00','6','200.00','2']);
- assert.doesNotMatch(html,/>2,000\.00<|>20<|>1,200\.00</,'raw complete totals are no longer displayed in the workorder columns');
+ assert.doesNotMatch(html,/>2,000\.00<|>1,200\.00</,'raw complete totals are no longer displayed in the workorder columns');
  assert.equal(h.networkCalls(),0);
 });
 
 test('platform expansion keeps the same six deduplicated workorder fields aligned',()=>{
  const h=setup();h.root.providerSummaryToggle(0);const html=h.html(),child=cells(html.match(/<tr class="provider-platform-row">([\s\S]*?)<\/tr>/)[1]);
- assert.equal(child.length,21);assert.deepEqual(issueSlice(child).map(plain),['500.00','5','300.00','3','200.00','2']);assert.doesNotMatch(html,/去重订单金额/);
+ assert.equal(child.length,23);assert.deepEqual(issueSlice(child).map(plain),['500.00','5','300.00','3','200.00','2']);assert.doesNotMatch(html,/去重订单金额/);
 });
 
 test('incomplete source-order coverage marks the displayed deduplicated fields while keeping no raw fallback',()=>{
@@ -49,7 +49,7 @@ test('collection reports use deduplicated order totals in the same six columns a
  const h=fixture([order('a','ar',200,2,{direction:'charge',provider:'AlphaPay',platform:'Alpha'})]);
  const charge=fact('AlphaPay',{direction:'charge',uniqueOrderAmount:200,uniqueOrderCount:2,uniqueSuccessAmount:100,uniqueSuccessCount:1,uniqueNotReceivedAmount:200,uniqueNotReceivedCount:2});
  h.L.workorders={byProvider:[charge],byDirection:{charge:charge,withdraw:fact('')},byPlatformProvider:[]};h.L.memberCounts={rows:[{created_member_count:9000}]};h.render('charge');const html=h.html(),body=rows(html),footer=rows(html,'tfoot');
- assert.equal(body[0].length,19);assert.deepEqual(body[0].slice(11,17).map(plain),['200.00','2','100.00','1','200.00','2']);assert.equal(plain(footer[0][11]),'200.00');assert.doesNotMatch(body[0][11],/9000|9,000/);assert.doesNotMatch(html,/去重订单金额|去重订单笔数/);
+ assert.equal(body[0].length,24);assert.deepEqual(issueSlice(body[0]).map(plain),['200.00','2','100.00','1','200.00','2']);assert.equal(plain(footer[0].at(-8)),'200.00');assert.doesNotMatch(body[0].at(-8),/9000|9,000/);assert.doesNotMatch(html,/去重订单金额|去重订单笔数/);
 });
 
 test('workorder success rate, sorting, expansion and total all use unique order counts',()=>{

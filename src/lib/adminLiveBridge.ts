@@ -13,6 +13,21 @@ const keys = new Set(["scopeTargets","amountBands","feedIds","feeds","sourceKind
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
+  if(p.action==="submissionAnalysis"){
+    const allowed=["action","platformId","startAt","endAt","direction","currency","providers","operation","threshold","level","memberId","offset","limit"];
+    if(Object.keys(p).some(k=>!allowed.includes(k)))throw Error("刷单分析参数无效");
+    if(typeof p.platformId!=="string"||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(p.platformId))throw Error("刷单分析平台无效");
+    for(const k of ["startAt","endAt"])if(typeof p[k]!=="string"||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(String(p[k]))||!Number.isFinite(Date.parse(String(p[k]))))throw Error("刷单分析日期无效");
+    const span=Date.parse(String(p.endAt))-Date.parse(String(p.startAt));if(span<=0||span>31*86400000)throw Error("刷单分析最多31天");
+    if(p.direction!==undefined&&p.direction!=="charge"||p.operation!==undefined&&!["summary","members"].includes(String(p.operation)))throw Error("刷单分析操作无效");
+    if(p.threshold!==undefined&&(typeof p.threshold!=="number"||![10,20,30,50,100].includes(p.threshold)))throw Error("刷单分析门槛无效");
+    if(p.level!==undefined&&!["all","new","funded","unknown","l0"].includes(String(p.level)))throw Error("刷单分析等级无效");
+    for(const k of ["currency","memberId"])if(p[k]!==undefined&&(typeof p[k]!=="string"||!p[k]||String(p[k]).length>200||/[\u0000-\u001f\u007f]/.test(String(p[k]))))throw Error("刷单分析筛选无效");
+    if(p.providers!==undefined&&(!Array.isArray(p.providers)||p.providers.length>200||p.providers.some(v=>typeof v!=="string"||!v.trim()||v.length>200||/[\u0000-\u001f\u007f]/.test(v))))throw Error("刷单分析三方无效");
+    if(p.offset!==undefined&&(!Number.isSafeInteger(p.offset)||Number(p.offset)<0||Number(p.offset)>9999999))throw Error("刷单分析页码无效");
+    if(p.limit!==undefined&&(typeof p.limit!=="number"||![20,50,100].includes(p.limit)))throw Error("刷单分析分页无效");
+    return {...p};
+  }
   if(p.action==="workorderRecords")return validateWorkorderRecordsRequest(p);
   if(p.action==="depositStatistics")return validateDepositStatisticsRequest(p);
   if(p.action==="portalOperationLogs")return validatePortalOperationLogsRequest(p);
@@ -268,7 +283,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  }
  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,""),url=new URL(base);
  if(url.protocol!=="https:"||url.origin!==base)throw Error("后台地址配置无效");
- const specialRpc:Record<string,string>={memberDaily:"dashboard_admin_live_member_daily",pendingSnapshot:"dashboard_admin_live_pending_snapshot",depositStatistics:"dashboard_admin_deposit_statistics",workorderRecords:"dashboard_admin_live_workorder_records",intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
+ const specialRpc:Record<string,string>={submissionAnalysis:"dashboard_admin_live_submission_analysis",memberDaily:"dashboard_admin_live_member_daily",pendingSnapshot:"dashboard_admin_live_pending_snapshot",depositStatistics:"dashboard_admin_deposit_statistics",workorderRecords:"dashboard_admin_live_workorder_records",intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
  const rpc=request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
  const response=await fetch(base+"/rest/v1/rpc/"+rpc,{method:"POST",body:JSON.stringify({p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
  if(!response.ok){let code="";try{const body=await response.json();code=String(body.message||"")}catch{}
