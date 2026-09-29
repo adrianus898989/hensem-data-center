@@ -14,12 +14,19 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
   if(p.action==="submissionAnalysis"){
-    const allowed=["action","platformId","startAt","endAt","direction","currency","providers","operation","threshold","level","memberId","offset","limit"];
+    const allowed=["action","platformId","startAt","endAt","direction","currency","providers","operation","threshold","level","memberId","offset","limit","amountBands","charts"];
     if(Object.keys(p).some(k=>!allowed.includes(k)))throw Error("刷单分析参数无效");
     if(typeof p.platformId!=="string"||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(p.platformId))throw Error("刷单分析平台无效");
     for(const k of ["startAt","endAt"])if(typeof p[k]!=="string"||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(String(p[k]))||!Number.isFinite(Date.parse(String(p[k]))))throw Error("刷单分析日期无效");
     const span=Date.parse(String(p.endAt))-Date.parse(String(p.startAt));if(span<=0||span>31*86400000)throw Error("刷单分析最多31天");
     if(p.direction!==undefined&&p.direction!=="charge"||p.operation!==undefined&&!["summary","members"].includes(String(p.operation)))throw Error("刷单分析操作无效");
+    if(p.charts!==undefined&&typeof p.charts!=="boolean")throw Error("刷单图表参数无效");
+    if(p.amountBands!==undefined){
+      const bands=p.amountBands as Record<string,unknown>;
+      if(!bands||typeof bands!=="object"||Array.isArray(bands)||Object.keys(bands).length!==1||!Array.isArray(bands.charge))throw Error("刷单金额档位无效");
+      const edges=bands.charge as unknown[];
+      if(edges.length!==11||edges.some((n,i)=>typeof n!=="number"||!Number.isFinite(n)||n<0||n>1e15||(i>0&&Number(n)<=Number(edges[i-1]))))throw Error("刷单金额边界无效");
+    }
     if(p.threshold!==undefined&&(typeof p.threshold!=="number"||![10,20,30,50,100].includes(p.threshold)))throw Error("刷单分析门槛无效");
     if(p.level!==undefined&&!["all","new","funded","unknown","l0"].includes(String(p.level)))throw Error("刷单分析等级无效");
     for(const k of ["currency","memberId"])if(p[k]!==undefined&&(typeof p[k]!=="string"||!p[k]||String(p[k]).length>200||/[\u0000-\u001f\u007f]/.test(String(p[k]))))throw Error("刷单分析筛选无效");

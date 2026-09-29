@@ -71,7 +71,7 @@ before(async()=>{
  insert into game66_withdraw_orders(platform_id,order_num,uid,create_time,update_time,status_code,pay_channel) values
  ('${ids.game}','GW1','G-SYNTH','2026-09-25T03:00+05:30','2026-09-25T03:05+05:30','3','route-a'),
  ('${ids.game}','GW2','G-SYNTH','2026-09-25T04:00+05:30','2026-09-25T04:05+05:30','2','route-b');
- `);await db.exec(`alter table lg_orders add column order_no text,add column metric_amount numeric;alter table ar_collected_orders add column member_level text,add column recharge_count integer;alter table newar_detail_records add column raw jsonb default '{}';create function private.dashboard_admin_live_provider_canonical(country text,platform text,provider text) returns text language sql stable as $$select case when provider in ('route-a','route-b') then 'CombinedPay' else provider end$$;`);await db.exec(migration);await as(owner);await seed();
+ `);await db.exec(`alter table lg_orders add column order_no text,add column metric_amount numeric;alter table ar_collected_orders add column member_level text,add column recharge_count integer;alter table newar_detail_records add column raw jsonb default '{}';create function private.dashboard_admin_live_provider_canonical(country text,platform text,provider text) returns text language sql stable as $$select case when provider in ('route-a','route-b') then 'CombinedPay' else provider end$$;`);await db.exec(migration);await db.exec(read('migrations/20260928092956_admin_live_dynamic_amount_bands.sql').split('do $patch$')[0]+'commit;');await db.exec(read('migrations/20260929200000_submission_risk_dashboard.sql'));await as(owner);await seed();
 });
 after(async()=>db?.close());
 
@@ -144,4 +144,38 @@ test('currency is filtered after eligibility; a success in another currency stil
  await db.exec(`insert into newar_detail_records(platform,dataset,source_id,member_id,order_number,provider,currency,status_group,created_at,raw)
  select 'NEW-RAW','charge','USD-'||n,'USD-MIX','USD-'||n,'OtherPay','USD','pending','2026-09-27T10:00+05:45','{}' from generate_series(1,30)n;`);
  const result=await call(q({platformId:ids.newar,startAt:'2026-09-27T00:00:00+05:45',endAt:'2026-09-28T00:00:00+05:45',currency:'NPR'}));assert.equal(metric(result).member_count,1);
+});
+
+const amountBands={charge:[10,20,30,50,100,200,500,1000,5000,10000,100000]};
+test('risk chart totals reconcile and shared amount boundaries never overlap',async()=>{
+ const r=await call(q({amountBands})),d=r.dashboard,total=d.monitoring.find(x=>x.provider===null);
+ assert.equal(total.order_count,r.coverage.orderCount);assert.equal(total.invalid_count,metric(r).invalid_count);
+ for(const key of ['hourly','amounts'])assert.equal(d[key].reduce((n,x)=>n+x.count,0),total.invalid_count);
+ assert.equal(d.daily.reduce((n,x)=>n+x.invalid_count,0),total.invalid_count);
+ assert.equal(d.amounts.find(x=>x.bucket==='band:4').count,121);assert.equal(d.amounts.length,1);
+ assert.equal(d.frequency.filter(x=>['30–49','50–99','100+'].includes(x.band)).reduce((n,x)=>n+x.count,0),metric(r).member_days);
+ assert.deepEqual(d.amountBands,amountBands);assert.ok(d.hourly.every(x=>x.hour===10));
+ assert.doesNotMatch(JSON.stringify(d),/ZERO|UNKNOWN|OLD|CROSS-PAY/);
+ const empty=await call(q({providers:['absent'],amountBands}));assert.equal(empty.dashboard.monitoring[0].order_count,0);assert.equal(empty.dashboard.amounts.length,0);
+});
+test('risk charts retain whole-day qualification while matching provider and time filters',async()=>{
+ const r=await call(q({providers:['CombinedPay'],startAt:'2026-09-27T09:00:00+05:30',endAt:'2026-09-27T11:00:00+05:30',amountBands}));
+ assert.equal(r.dashboard.monitoring.find(x=>x.provider===null).invalid_count,91);
+ assert.ok(r.dashboard.hourly.every(x=>x.provider==='CombinedPay'));assert.equal(r.dashboard.daily.length,1);
+ assert.equal(r.dashboard.monitoring.find(x=>x.provider==='CombinedPay').invalid_amount,'9100');
+});
+test('risk chart amounts honor decimal boundaries and the final inclusive maximum',async()=>{
+ await db.exec("update ar_collected_orders set amount=case when order_no='ZERO-2026-09-27-1' then 99.99 when order_no='ZERO-2026-09-27-2' then 100000 when order_no='ZERO-2026-09-27-3' then 100000.01 when order_no='ZERO-2026-09-27-4' then null else amount end where member_id='ZERO'");
+ const d=(await call(q({amountBands}))).dashboard;const value=b=>d.amounts.find(x=>x.bucket===b)?.count||0;
+ assert.equal(value('band:3'),1);assert.equal(value('band:9'),1);assert.equal(value('above'),1);assert.equal(value('unknown'),1);assert.equal(value('band:4'),117);
+ assert.equal(d.monitoring.find(x=>x.provider===null).invalid_amount,null);
+ await db.exec("update ar_collected_orders set amount=100 where member_id='ZERO'");
+});
+test('invalid chart boundaries are rejected at the database authorization boundary',async()=>{
+ for(const bands of [null,{}, {charge:[1,2]}, {charge:[10,20,20,50,100,200,500,1000,5000,10000,100000]}, {charge:[10,20,30,50,100,200,500,1000,5000,10000,'100000']}])await assert.rejects(call(q({amountBands:bands})),/invalid_amount_bands/);
+});
+test('provider summary skips charts and returns the identical exclusion metrics',async()=>{
+ const full=await call(q()),lite=await call(q({charts:false}));assert.equal(lite.dashboard,null);assert.deepEqual(lite.metrics,full.metrics);assert.deepEqual(lite.coverage,full.coverage);
+ for(const charts of [null,'false',0,{}])await assert.rejects(call(q({charts})),/invalid_charts/);
+ const config=(await db.query("select proconfig from pg_proc where oid='private.dashboard_admin_live_submission_analysis(jsonb)'::regprocedure")).rows[0].proconfig;assert(config.includes('enable_nestloop=off'));
 });
