@@ -72,8 +72,9 @@
    const memberCell=ids=>memberFact(ids)?.html||'<span class="muted" title="人数统计尚未读取">—</span>';
    const subset=rows.filter(r=>r.direction===d),fees=window.HensemProviderSummary.feeSummary(subset),total={...plus(subset),direction:d,estimated_fee:fees.amount,fee_matched_count:fees.matchedCount,fee_eligible_count:fees.successCount,fee_excluded_count:fees.excludedCount,fee_issues:fees.issues,fee_exclusions:fees.exclusions,fee_complete:fees.complete};
    const rateCell=r=>{const value=r.fee_rate_label==='不适用'?'不适用':L.feeLookupLoading?'匹配中…':L.feeLookupError?'读取失败':r.fee_rate_label;return '<span class="df-fee-rate" title="'+E(value)+'">'+E(value)+'</span>'};
+   const successRateCell=r=>{const value=R(r.success_count,r.all_count),low=isPlatform&&d==='charge'&&Number.parseFloat(value)<=49.99;return '<span'+(low?' class="df-collection-rate-low"':'')+' title="成功时间内成功笔数 ÷ 创建时间内全部笔数；含跨日成功，可超过100%">'+value+'</span>'};
    const cells=(r,summary=false)=>[N(r.all_amount),C(r.all_count),N(r.success_amount),...(isProvider?[summary?(Number(total.success_amount)>0?'100.00%':'—'):share(r.success_amount_share)]:[]),C(r.success_count),...(isProvider?[summary?(Number(total.success_count)>0?'100.00%':'—'):share(r.success_count_share)]:[]),
-    isProvider&&!summary&&!window.HensemProviderSummary.isProviderBusiness(r.provider)?'不适用':'<span title="成功时间内成功笔数 ÷ 创建时间内全部笔数；含跨日成功，可超过100%">'+R(r.success_count,r.all_count)+'</span>',
+    isProvider&&!summary&&!window.HensemProviderSummary.isProviderBusiness(r.provider)?'不适用':successRateCell(r),
     ...(isProvider?[summary?'—':rateCell(r)]:[]),feeCell(r),...(isProvider?[L.feeLookupLoading||L.feeLookupError?'—':summary?(fees.amount>0?'100.00%':'—'):share(r.fee_share)]:[])];
    // Empty platform rows are display-only; totals and fee coverage use actual summaries above.
    const displayRows=key==='platform'?[...subset,...emptyPlatformCells(d,headers.length)]:subset;
