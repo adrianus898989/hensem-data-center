@@ -71,7 +71,7 @@ before(async()=>{
  insert into game66_withdraw_orders(platform_id,order_num,uid,create_time,update_time,status_code,pay_channel) values
  ('${ids.game}','GW1','G-SYNTH','2026-09-25T03:00+05:30','2026-09-25T03:05+05:30','3','route-a'),
  ('${ids.game}','GW2','G-SYNTH','2026-09-25T04:00+05:30','2026-09-25T04:05+05:30','2','route-b');
- `);await db.exec(`alter table lg_orders add column order_no text,add column metric_amount numeric;alter table ar_collected_orders add column member_level text,add column recharge_count integer;alter table newar_detail_records add column raw jsonb default '{}';create function private.dashboard_admin_live_provider_canonical(country text,platform text,provider text) returns text language sql stable as $$select case when provider in ('route-a','route-b') then 'CombinedPay' else provider end$$;`);await db.exec(migration);await db.exec(read('migrations/20260928092956_admin_live_dynamic_amount_bands.sql').split('do $patch$')[0]+'commit;');await db.exec(read('migrations/20260929200000_submission_risk_dashboard.sql'));await as(owner);await seed();
+ `);await db.exec(`alter table lg_orders add column order_no text,add column metric_amount numeric;alter table ar_collected_orders add column member_level text,add column recharge_count integer;alter table newar_detail_records add column raw jsonb default '{}';create function private.dashboard_admin_live_provider_canonical(country text,platform text,provider text) returns text language sql stable as $$select case when provider in ('route-a','route-b') then 'CombinedPay' else provider end$$;`);await db.exec(migration);await db.exec(read('migrations/20260928092956_admin_live_dynamic_amount_bands.sql').split('do $patch$')[0]+'commit;');await db.exec(read('migrations/20260929200000_submission_risk_dashboard.sql'));await db.exec(read('migrations/20260929210000_newar_charge_wait_status.sql'));await as(owner);await seed();
 });
 after(async()=>db?.close());
 
@@ -178,4 +178,11 @@ test('provider summary skips charts and returns the identical exclusion metrics'
  const full=await call(q()),lite=await call(q({charts:false}));assert.equal(lite.dashboard,null);assert.deepEqual(lite.metrics,full.metrics);assert.deepEqual(lite.coverage,full.coverage);
  for(const charts of [null,'false',0,{}])await assert.rejects(call(q({charts})),/invalid_charts/);
  const config=(await db.query("select proconfig from pg_proc where oid='private.dashboard_admin_live_submission_analysis(jsonb)'::regprocedure")).rows[0].proconfig;assert(config.includes('enable_nestloop=off'));
+});
+
+test('NEWAR Wait states retain IDs and contribute to daily exclusion metrics after storage normalization',async()=>{
+ await db.exec(`insert into newar_detail_records(platform,dataset,source_id,member_id,order_number,provider,currency,status_code,status_group,created_at,raw)
+ select 'NEW-RAW','charge','WAIT-'||n,'WAIT-MEMBER','WAIT-'||n,'route-a','NPR','Wait','unknown','2026-09-29T10:00+05:45','{"rechargeState":"Wait"}' from generate_series(1,30)n;`);
+ const result=await call(request({platformId:ids.newar,startAt:'2026-09-29T00:00:00+05:45',endAt:'2026-09-30T00:00:00+05:45',currency:'NPR',charts:false}));
+ assert.equal(result.coverage.unknownStatusCount,0);assert.equal(result.coverage.missingMemberCount,0);assert.equal(metric(result).member_count,1);assert.equal(metric(result).invalid_count,30);
 });
