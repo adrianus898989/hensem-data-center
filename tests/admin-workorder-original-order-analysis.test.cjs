@@ -27,7 +27,7 @@ before(async()=>{db=new PGlite();await db.exec(`create role anon;create role aut
  const sql=fs.readFileSync(path.join(__dirname,'../supabase/admin-workorder-original-order-analysis.sql'),'utf8');await db.exec(sql);await db.exec(sql);
  await ingest([
   record('DUP1',{payment_order_no:'ORIGINAL-1',amount:'100',status_code:3,utr_matched:true,utr:'UTR-ORIGINAL-1'}),
-  record('DUP2',{payment_order_no:'ORIGINAL-1',amount:'100',status_code:4,utr_matched:false}),
+  record('DUP2',{payment_order_no:'ORIGINAL-1',amount:'100',status_code:4,utr_matched:false,utr:'CUSTOMER-UNMATCHED-UTR'}),
   record('OLD',{payment_order_no:'ORIGINAL-1',amount:'100',submitted_date:'2026-08-01',submitted_at:'2026-08-01T00:00:00Z'}),
   record('WITHDRAW',{payment_order_no:'ORIGINAL-1',amount:'200',issue_kind:'withdraw'}),
   record('OTHERPLATFORM',{payment_order_no:'ORIGINAL-1',amount:'300',platform:'B'}),
@@ -48,7 +48,7 @@ test('summary uses actual tickets and platform-direction-original identity; miss
  assert.equal(r.previous.ticketCount,1);assert.equal(r.previous.uniqueOrderAmount,'50.00000000');assert.deepEqual(r.comparison,{label:'昨日',days:1,startDate:'2026-09-25',endDate:'2026-09-25'});assert.equal(r.changes.ticketCount.delta,'10');assert.equal(r.changes.ticketCount.percent,'1000.00');assert.deepEqual(r.rows,[]);
 });
 test('original list is server-paged and separates settled status and linkage counts',async()=>{
- const r=await query({view:'orders',operation:'list'});assert.equal(r.total,6);assert.equal(r.rows.length,6);const a=r.rows.find(r=>r.platform==='A'&&r.orderNo==='ORIGINAL-1'&&r.issueKind==='deposit');assert.equal(a.ticketCount,2);assert.equal(a.processed,true);assert.equal(a.processedTicketCount,1);assert.equal(a.rejectedTicketCount,1);assert.equal(a.amount,'100.00000000');assert.deepEqual(a.statusCounts,{'1':0,'2':0,'3':1,'4':1,'5':0,unknown:0});assert.deepEqual(a.kycCounts,{yes:0,no:0,unknown:2});assert.deepEqual(a.utrCounts,{yes:1,no:1,unknown:0});assert.deepEqual(a.utrValues,['UTR-ORIGINAL-1']);assert(!('success' in a));const conflict=r.rows.find(r=>r.orderNo==='CONFLICT');assert.equal(conflict.amount,null);assert.equal(conflict.amountStatus,'conflict');const alias=r.rows.find(r=>r.platform==='RAJA');assert.equal(alias.ticketCount,2);assert.deepEqual(alias.sourcePlatforms,['RAJA','RAJALOTTERY']);assert(!r.rows.some(r=>r.orderNo==='NOT-A-PAYMENT'));
+ const r=await query({view:'orders',operation:'list'});assert.equal(r.total,6);assert.equal(r.rows.length,6);const a=r.rows.find(r=>r.platform==='A'&&r.orderNo==='ORIGINAL-1'&&r.issueKind==='deposit');assert.equal(a.ticketCount,2);assert.equal(a.processed,true);assert.equal(a.processedTicketCount,1);assert.equal(a.rejectedTicketCount,1);assert.equal(a.amount,'100.00000000');assert.deepEqual(a.statusCounts,{'1':0,'2':0,'3':1,'4':1,'5':0,unknown:0});assert.deepEqual(a.kycCounts,{yes:0,no:0,unknown:2});assert.deepEqual(a.utrCounts,{yes:1,no:1,unknown:0});assert.deepEqual(a.utrValues,['CUSTOMER-UNMATCHED-UTR','UTR-ORIGINAL-1']);assert(!('success' in a));const conflict=r.rows.find(r=>r.orderNo==='CONFLICT');assert.equal(conflict.amount,null);assert.equal(conflict.amountStatus,'conflict');const alias=r.rows.find(r=>r.platform==='RAJA');assert.equal(alias.ticketCount,2);assert.deepEqual(alias.sourcePlatforms,['RAJA','RAJALOTTERY']);assert(!r.rows.some(r=>r.orderNo==='NOT-A-PAYMENT'));
 });
 test('exact original drawer includes all historical associated tickets and source operator fields',async()=>{
  const q={view:'orders',operation:'orderDetail',filters:{platform:'A',issueKind:'deposit',orderNo:'ORIGINAL-1'}};const r=await query(q);assert.equal(r.allHistory,true);assert.equal(r.total,3);assert.deepEqual(r.rows.map(r=>r.workorderId).sort(),['DUP1','DUP2','OLD']);assert.equal(r.rows[0].operatorAccount,'source-operator');assert.match(r.rows[0].operatedAt,/2026-09-26T/);assert.equal(r.rows[0].lastUpdatedBy,null);assert.equal(r.rows[0].sourceUpdatedAt,null);assert.equal(r.rows[0].utr,'UTR-ORIGINAL-1');assert.equal(r.rows[0].kycConnected,null);assert.equal(r.rows[0].utrMatched,true);assert.equal(r.previous,null);assert.equal(r.comparison,null);assert(!JSON.stringify(r).includes('tenant_id'));
@@ -88,4 +88,14 @@ test('one known consistent original amount survives a missing duplicate amount w
 test('one original with 105 historical tickets is fully paged, never silently truncated',async()=>{
  await ingest(Array.from({length:105},(_,i)=>record('HISTORY-PAGE-'+i,{payment_order_no:'ONE-PAGED-ORIGINAL',submitted_date:'2026-01-01',submitted_at:'2026-01-01T00:00:00Z'})));
  const r=await query({view:'orders',operation:'orderDetail',filters:{platform:'A',issueKind:'deposit',orderNo:'ONE-PAGED-ORIGINAL'},limit:20,offset:100});assert.equal(r.total,105);assert.equal(r.rows.length,5);assert(r.rows.every(r=>r.orderNo==='ONE-PAGED-ORIGINAL'));assert.equal(r.allHistory,true);
+});
+
+test('UTR migration is idempotent and changes only the matching filter in the projection',async()=>{
+ const before=(await db.query("select pg_get_functiondef('private.dashboard_admin_live_workorder_analysis(jsonb)'::regprocedure) definition")).rows[0].definition;
+ const current="filter(where nullif(btrim(detail_utr),'') is not null)",previous="filter(where utr_matched is true and nullif(btrim(detail_utr),'') is not null)";
+ assert(before.includes(current));await db.exec(before.replace(current,previous));
+ const migration=fs.readFileSync(path.join(__dirname,'../supabase/migrations/20260929120000_workorder_all_customer_utrs.sql'),'utf8');
+ await db.exec(migration);await db.exec(migration);
+ const after=(await db.query("select pg_get_functiondef('private.dashboard_admin_live_workorder_analysis(jsonb)'::regprocedure) definition")).rows[0].definition;
+ assert.equal(after,before);
 });
