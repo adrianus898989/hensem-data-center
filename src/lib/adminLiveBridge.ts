@@ -27,7 +27,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       const edges=bands.charge as unknown[];
       if(edges.length!==11||edges.some((n,i)=>typeof n!=="number"||!Number.isFinite(n)||n<0||n>1e15||(i>0&&Number(n)<=Number(edges[i-1]))))throw Error("刷单金额边界无效");
     }
-    if(p.threshold!==undefined&&(typeof p.threshold!=="number"||![10,20,30,50,100].includes(p.threshold)))throw Error("刷单分析门槛无效");
+    if(p.threshold!==undefined&&(typeof p.threshold!=="number"||![10,15,20,30,50,100].includes(p.threshold)))throw Error("刷单分析门槛无效");
     if(p.level!==undefined&&!["all","new","funded","unknown","l0"].includes(String(p.level)))throw Error("刷单分析等级无效");
     for(const k of ["currency","memberId"])if(p[k]!==undefined&&(typeof p[k]!=="string"||!p[k]||String(p[k]).length>200||/[\u0000-\u001f\u007f]/.test(String(p[k]))))throw Error("刷单分析筛选无效");
     if(p.providers!==undefined&&(!Array.isArray(p.providers)||p.providers.length>200||p.providers.some(v=>typeof v!=="string"||!v.trim()||v.length>200||/[\u0000-\u001f\u007f]/.test(v))))throw Error("刷单分析三方无效");

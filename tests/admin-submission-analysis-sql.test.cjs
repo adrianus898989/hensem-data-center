@@ -71,7 +71,7 @@ before(async()=>{
  insert into game66_withdraw_orders(platform_id,order_num,uid,create_time,update_time,status_code,pay_channel) values
  ('${ids.game}','GW1','G-SYNTH','2026-09-25T03:00+05:30','2026-09-25T03:05+05:30','3','route-a'),
  ('${ids.game}','GW2','G-SYNTH','2026-09-25T04:00+05:30','2026-09-25T04:05+05:30','2','route-b');
- `);await db.exec(`alter table lg_orders add column order_no text,add column metric_amount numeric;alter table ar_collected_orders add column member_level text,add column recharge_count integer;alter table newar_detail_records add column raw jsonb default '{}';create function private.dashboard_admin_live_provider_canonical(country text,platform text,provider text) returns text language sql stable as $$select case when provider in ('route-a','route-b') then 'CombinedPay' else provider end$$;`);await db.exec(migration);await db.exec(read('migrations/20260928092956_admin_live_dynamic_amount_bands.sql').split('do $patch$')[0]+'commit;');await db.exec(read('migrations/20260929200000_submission_risk_dashboard.sql'));await db.exec(read('migrations/20260929210000_newar_charge_wait_status.sql'));await as(owner);await seed();
+ `);await db.exec(`alter table lg_orders add column order_no text,add column metric_amount numeric;alter table ar_collected_orders add column member_level text,add column recharge_count integer;alter table newar_detail_records add column raw jsonb default '{}';create function private.dashboard_admin_live_provider_canonical(country text,platform text,provider text) returns text language sql stable as $$select case when provider in ('route-a','route-b') then 'CombinedPay' else provider end$$;`);await db.exec(migration);await db.exec(read('migrations/20260928092956_admin_live_dynamic_amount_bands.sql').split('do $patch$')[0]+'commit;');await db.exec(read('migrations/20260929200000_submission_risk_dashboard.sql'));await db.exec(read('migrations/20260929210000_newar_charge_wait_status.sql'));await db.exec(read('migrations/20260929220000_submission_threshold_15.sql'));await as(owner);await seed();
 });
 after(async()=>db?.close());
 
@@ -185,4 +185,30 @@ test('NEWAR Wait states retain IDs and contribute to daily exclusion metrics aft
  select 'NEW-RAW','charge','WAIT-'||n,'WAIT-MEMBER','WAIT-'||n,'route-a','NPR','Wait','unknown','2026-09-29T10:00+05:45','{"rechargeState":"Wait"}' from generate_series(1,30)n;`);
  const result=await call(request({platformId:ids.newar,startAt:'2026-09-29T00:00:00+05:45',endAt:'2026-09-30T00:00:00+05:45',currency:'NPR',charts:false}));
  assert.equal(result.coverage.unknownStatusCount,0);assert.equal(result.coverage.missingMemberCount,0);assert.equal(metric(result).member_count,1);assert.equal(metric(result).invalid_count,30);
+});
+
+test('15 is inclusive across providers; different days and different platforms never combine to qualify',async()=>{
+ await db.exec(`insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,member_id,amount,status,applied_at,raw_channel)
+ select 'AR',country,'AR-RAW','recharge','EDGE-'||country||'-'||member||'-'||day||'-'||n,member,100,
+ case when member='UNKNOWN15' and n=1 then 'unknown' else '待支付' end,day::date+time '10:00',case when n%2=0 then 'EdgePay B' else 'EdgePay A' end
+ from (values('IN','BELOW14','2026-09-30',14),('IN','EXACT15','2026-09-30',15),('IN','ABOVE16','2026-09-30',16),
+ ('IN','REPEAT15','2026-09-30',15),('IN','REPEAT15','2026-10-01',15),('IN','SPLITDAY','2026-09-30',8),('IN','SPLITDAY','2026-10-01',7),
+ ('IN','SPLITPLATFORM','2026-09-30',8),('BR','SPLITPLATFORM','2026-09-30',7),('IN','PAID15','2026-09-30',15),('IN','UNKNOWN15','2026-09-30',15))v(country,member,day,total) cross join lateral generate_series(1,total)n;
+ insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,member_id,amount,status,applied_at,completed_at,raw_channel)
+ values('AR','IN','AR-RAW','recharge','EDGE-PAID','PAID15',100,'已支付','2026-09-29 23:00','2026-09-30 08:00','OtherPay');`);
+ const rq=request({startAt:'2026-09-30T00:00:00+05:30',endAt:'2026-10-02T00:00:00+05:30',threshold:15});
+ const r=await call(rq),m=metric(r,15);assert.equal(m.member_count,3);assert.equal(m.member_days,4);assert.equal(m.invalid_count,61);
+ assert.equal(r.dashboard.threshold,15);assert.equal(r.dashboard.monitoring.find(x=>x.provider===null).invalid_count,61);
+ for(const key of ['hourly','amounts'])assert.equal(r.dashboard[key].reduce((n,x)=>n+x.count,0),61);
+ assert.equal(r.dashboard.daily.reduce((n,x)=>n+x.invalid_count,0),61);assert.equal(metric(r,30).invalid_count,0);
+ const filtered=await call({...rq,providers:['EdgePay A'],charts:false});assert.equal(metric(filtered,15).member_count,3);assert.equal(metric(filtered,15).invalid_count,32);
+ const details=await call({...rq,providers:['EdgePay A'],operation:'members'});assert.equal(details.members,3);assert.equal(details.total,4);assert(details.rows.every(x=>x.submitted_count>=15));assert(details.rows.every(x=>x.selected_count===8));assert.deepEqual([...new Set(details.rows.map(x=>x.member_id))].sort(),['ABOVE16','EXACT15','REPEAT15']);
+});
+
+test('legacy open pages retain their original threshold response while refreshed pages opt into 15',async()=>{
+ const legacy=await call(q()),fresh=await call(q({threshold:15}));
+ assert.deepEqual(legacy.thresholds,[10,20,30,50,100]);assert.equal(legacy.dashboard.threshold,30);assert(legacy.metrics.every(x=>x.threshold!==15));
+ assert.deepEqual(fresh.thresholds,[10,15,20,30,50,100]);assert.equal(fresh.dashboard.threshold,15);assert.deepEqual(fresh.metrics.filter(x=>x.threshold!==15),legacy.metrics);
+ assert.equal(metric(fresh,15).invalid_count,190);assert.equal(metric(fresh,15).member_count,5);assert.equal(metric(fresh,15).member_days,7);
+ const lite=await call(q({threshold:15,charts:false}));assert.equal(lite.dashboard,null);assert.deepEqual(lite.metrics,fresh.metrics);
 });
