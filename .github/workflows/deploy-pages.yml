@@ -27,6 +27,8 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Rebuild restoration bundle
+        run: python3 admin-preview/build-restoration.py
       # The historical suite exercises the removed Next.js /api routes. These
       # migration regressions cover the live static UI/data attribution paths;
       # the Edge Function is verified separately after deployment.
