@@ -6,6 +6,7 @@ const keys=['submittedAmount','submittedCount','successAmount','successCount','n
 const issue=(platformId,platform,direction='withdraw',more={})=>({country:'印度',platformId,platform,sourcePlatform:platform,source:platformId==='b'?'newar':'ar',provider:'SyntheticPay',direction,submittedAmount:100,submittedCount:4,successAmount:60,successCount:2,notReceivedAmount:40,notReceivedCount:2,uniqueOrderAmount:70,uniqueOrderCount:2,uniqueSuccessAmount:35,uniqueSuccessCount:1,uniqueNotReceivedAmount:35,uniqueNotReceivedCount:1,uniqueCoverage:{status:'complete',complete:true},...more});
 const source=(id,amount,count,more={})=>order(id,id==='b'?'newar':'ar',amount,count,{platform:id==='b'?'Beta':'Alpha',country:'印度',...more});
 const rates=[{country:'印度',scopeType:'country',provider:'SyntheticPay',collectFee:'4%',payoutFee:'2.5%',payoutSingleFee:'6'},{country:'印度',scopeType:'platform',platform:'Beta',provider:'SyntheticPay',collectFee:'5%',payoutFee:'3%',payoutSingleFee:'2'}];
+const columns=html=>[...html.match(/<thead>([\s\S]*?)<\/thead>/)[1].matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]).replace(/ [↕↑↓]$/,''));
 const children=html=>[...html.matchAll(/<tr class="provider-platform-row">([\s\S]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td>([\s\S]*?)<\/td>/g)].map(c=>c[1]));
 const plain=s=>s.replace(/<[^>]*>/g,'');
 function setup(direction='withdraw'){
@@ -20,10 +21,10 @@ test('both flows expand with identical parent column count/order, successful tim
   const {h}=setup(direction),before=h.networkCalls();h.root.providerSummaryToggle(0);
   const html=h.html(),rows=children(html),headers=[...html.match(/<thead>([\s\S]*?)<\/thead>/)[1].matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]));
   assert.equal(rows.length,2);for(const row of rows)assert.equal(row.length,headers.length);
-  assert.equal(plain(rows[0][0]),'Alpha');assert.equal(plain(rows[0][1]),'ar');assert.equal(headers[2].replace(/ [↕↑↓]$/,''),'类型');assert.equal(plain(rows[0][3]),'900.00');assert.equal(plain(rows[1][3]),'100.00');
-  assert.equal(plain(rows[0][4]),'3');assert.equal(plain(rows[1][4]),'7');assert.equal(plain(rows[0][7]),'30.00%');assert.equal(plain(rows[1][7]),'70.00%');assert.doesNotMatch(rows[0][4],/small/);
-  assert.match(rows[0][5],/按成功 \/ 创建：3 \/ 20 笔/);assert.match(rows[0][5],/>15.00%/);assert.equal(plain(rows[0][6]),'90.00%');
-  const feeIndex=direction==='withdraw'?10:8;assert.equal(plain(rows[0][feeIndex]),direction==='withdraw'?'2.50% + 6 / 笔':'4.00%');
+  assert.equal(plain(rows[0][0]),'Alpha');assert.equal(plain(rows[0][1]),'ar');assert.equal(headers[2].replace(/ [↕↑↓]$/,''),'类型');assert.equal(plain(rows[0][5]),'900.00');assert.equal(plain(rows[1][5]),'100.00');
+  assert.equal(plain(rows[0][6]),'3');assert.equal(plain(rows[1][6]),'7');assert.equal(plain(rows[0][8]),'30.00%');assert.equal(plain(rows[1][8]),'70.00%');assert.doesNotMatch(rows[0][6],/small/);
+  assert.match(rows[0][9],/按成功 \/ 创建：3 \/ 20 笔/);assert.match(rows[0][9],/>15.00%/);assert.equal(plain(rows[0][7]),'90.00%');
+  const feeIndex=columns(html).indexOf('匹配费率');assert.equal(plain(rows[0][feeIndex]),direction==='withdraw'?'2.50% + 6 / 笔':'4.00%');
   assert.equal(plain(rows[1][feeIndex]),direction==='withdraw'?'3.00% + 2 / 笔':'5.00%');
   assert.equal(plain(rows[0][feeIndex+1]),direction==='withdraw'?'40.50':'36.00');assert.equal(plain(rows[1][feeIndex+1]),direction==='withdraw'?'17.00':'5.00');
   assert.equal(plain(rows[0][feeIndex+3]),'70.00');assert.equal(plain(rows[0][feeIndex+4]),'2');assert.equal(plain(rows[0].at(-2)),'50.00%');assert.equal(plain(rows[0].at(-1)),'查看订单');assert.match(rows[0].at(-1),/providerSummaryOrders/);
@@ -42,7 +43,7 @@ test('full platform workorder aggregates are independent of paginated records an
 
 test('legacy paged workorder rows never become fabricated platform totals; unavailable fields stay blank',()=>{
  const {h}=setup();delete h.L.workorders.byPlatformProvider;h.L.workorders.rows=[issue('a','Alpha')];h.render();h.root.providerSummaryToggle(0);
- const rows=children(h.html());for(const row of rows)assert(row.slice(13,20).every(cell=>cell==='—'));assert.match(h.html(),/不使用分页记录推算/);
+ const rows=children(h.html()),first=columns(h.html()).indexOf('工单提交金额');for(const row of rows)assert(row.slice(first,first+7).every(cell=>cell==='—'));assert.match(h.html(),/不使用分页记录推算/);
 });
 
 test('same display name with ambiguous source keeps one unallocated workorder row rather than repeating it',()=>{
@@ -60,7 +61,7 @@ test('known covered zero and uncovered data differ; provider/direction/country f
 });
 
 test('missing amounts stay unknown while manual and unmatched fees stay honest',()=>{
- const h=fixture([source('a',null,3),source('b',100,7)]);h.L.feeLookupRows=[];h.render();h.root.providerSummaryToggle(0);const rows=children(h.html());assert(rows.every(r=>plain(r[6])==='—'));assert(rows.every(r=>plain(r[11])==='—未匹配'));assert(rows.every(r=>r[11].includes('当前方向未找到可用费率')));assert.doesNotMatch(h.html(),/NaN|Infinity/);
+ const h=fixture([source('a',null,3),source('b',100,7)]);h.L.feeLookupRows=[];h.render();h.root.providerSummaryToggle(0);const rows=children(h.html()),cols=columns(h.html()),share=cols.indexOf('金额占比'),fee=cols.indexOf('估算手续费');assert(rows.every(r=>plain(r[share])==='—'));assert(rows.every(r=>plain(r[fee])==='—未匹配'));assert(rows.every(r=>r[fee].includes('当前方向未找到可用费率')));assert.doesNotMatch(h.html(),/NaN|Infinity/);
 });
 
 

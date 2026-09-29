@@ -358,3 +358,10 @@ test('auto withdrawal multi-team requests are explicit bounded source scopes wit
  for(const action of ['catalog','workorders','withdrawReasons','query'])assert.throws(()=>h.api.validateAdminLiveRequest({...r,action}));
  assert.equal(h.calls.length,1);
 });
+
+test('daily submission analysis retains narrow authenticated scope and rejects unintended filters',async()=>{
+ const h=load(),q={action:'submissionAnalysis',platformId:query.platformId,startAt:query.startAt,endAt:query.endAt,direction:'charge',operation:'members',threshold:30,level:'l0',providers:['Synthetic Pay'],limit:50,offset:0};
+ assert.equal(h.api.validateAdminLiveRequest(q).threshold,30);
+ for(const bad of [{platformId:'bad'},{direction:'withdraw'},{status:'success'},{threshold:'30'},{threshold:29},{level:'VIP'},{offset:-1},{limit:500},{providers:['']},{memberId:'\n'},{startAt:'not a date'},{operation:'delete'},{country:'hidden'}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...bad}));
+ await h.api.adminLiveRequest(session,q);assert.match(h.calls[0].url,/\/rpc\/dashboard_admin_live_submission_analysis$/);const payload=JSON.parse(h.calls[0].init.body).p_request;assert.equal(payload.platformId,q.platformId);assert.equal(payload.action,undefined);assert.equal(payload.threshold,30);
+});
