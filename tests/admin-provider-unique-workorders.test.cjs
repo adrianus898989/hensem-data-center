@@ -51,3 +51,21 @@ test('collection reports use deduplicated order totals in the same six columns a
  h.L.workorders={byProvider:[charge],byDirection:{charge:charge,withdraw:fact('')},byPlatformProvider:[]};h.L.memberCounts={rows:[{created_member_count:9000}]};h.render('charge');const html=h.html(),body=rows(html),footer=rows(html,'tfoot');
  assert.equal(body[0].length,19);assert.deepEqual(body[0].slice(11,17).map(plain),['200.00','2','100.00','1','200.00','2']);assert.equal(plain(footer[0][11]),'200.00');assert.doesNotMatch(body[0][11],/9000|9,000/);assert.doesNotMatch(html,/去重订单金额|去重订单笔数/);
 });
+
+test('workorder success rate, sorting, expansion and total all use unique order counts',()=>{
+ for(const direction of ['charge','withdraw']){
+  const h=fixture([order('a','ar',1000,10,{direction,provider:'AlphaPay',platform:'Alpha'}),order('b','ar',500,5,{direction,provider:'BetaPay',platform:'Beta'})]);
+  const alpha=fact('AlphaPay',{direction,submittedCount:20,successCount:18,uniqueOrderCount:5,uniqueSuccessCount:1});
+  const beta=fact('BetaPay',{direction,submittedCount:20,successCount:2,uniqueOrderCount:5,uniqueSuccessCount:4});
+  h.L.workorders={byProvider:[alpha,beta],byPlatformProvider:[{...alpha,country:'印度',platformId:'a',platform:'Alpha',source:'ar'}],byDirection:{[direction]:fact('',{direction,submittedCount:40,successCount:30,uniqueOrderCount:10,uniqueSuccessCount:5})}};
+  h.render(direction);
+  assert.deepEqual(rows(h.html()).map(row=>plain(row.at(-2))),['20.00%','80.00%']);
+  assert.equal(plain(rows(h.html(),'tfoot')[0].at(-2)),'50.00%');
+  h.root.providerSummaryToggle(0);
+  const child=cells(h.html().match(/<tr class="provider-platform-row">([\s\S]*?)<\/tr>/)[1]);
+  assert.equal(plain(child.at(-2)),'20.00%');
+  h.root.providerSummarySort('issue_success_rate');
+  assert.equal(plain(rows(h.html())[0][0]),'BetaPay');
+  assert.equal(h.networkCalls(),0);
+ }
+});
