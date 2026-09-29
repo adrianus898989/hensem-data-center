@@ -10,7 +10,7 @@ const sort=(h,id,index)=>h.c.liveReferenceTableSort(encodeURIComponent(id),index
 async function setup(page='overview'){
  const platforms=['Small','Large','Unknown'].map((name,i)=>({...P,id:String(i+1).repeat(8)+'-1111-4111-8111-111111111111',name,team:'Team '+name,country:'印度'})),h=await ready({platforms,page});
  h.L.results=platforms.map((p,i)=>{const r=completeAggregate(p,[10,100,20][i],[2,10,3][i]);r.summary[0].success_amount=i===2?null:[20,10000][i];r.groups.provider=[{...r.summary[0],provider:p.name+'Pay'}];return r});
- h.L.country='印度';h.L.currency='INR';h.L.direction='charge';h.L.dirty=false;h.L.loading=false;h.L.catalogReady=true;h.L.overviewQueried=true;h.L.feeLookupRows=[];h.L.feeLookupLoading=false;h.L.comparisonStatus='idle';h.c.state.page=page;h.L.view='business';h.c.render();return h;
+ h.L.country='印度';h.L.currency='INR';h.L.direction='charge';h.L.dirty=false;h.L.loading=false;h.L.catalogReady=true;h.L.pageQueried=true;h.L.overviewQueried=true;h.L.feeLookupRows=[];h.L.feeLookupLoading=false;h.L.comparisonStatus='idle';h.c.state.page=page;h.L.view='business';h.c.render();return h;
 }
 
 test('overview dimensions sort complete records before independent pagination; nulls and empty platforms remain last',async()=>{

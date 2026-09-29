@@ -47,6 +47,7 @@ type Props = {
   section?: "accounts" | "permissions" | "ip" | "data" | "audit";
   embedded?: boolean;
   accountsOnlyLoading?: boolean;
+  manualQuery?: boolean;
 };
 
 type Tab = "accounts" | "permissions" | "ip" | "data" | "audit";
@@ -227,7 +228,7 @@ function localDateKey(value: string): string {
   return `${y}-${m}-${d}`;
 }
 
-export default function AdminControlCenter({ open, session, profile, onClose, section = "accounts", embedded = false, accountsOnlyLoading = false }: Props) {
+export default function AdminControlCenter({ open, session, profile, onClose, section = "accounts", embedded = false, accountsOnlyLoading = false, manualQuery = false }: Props) {
   const management = normalizedManagementPermissions(profile);
   const isOwner = profile.role === "owner";
   const hasAllData = effectiveDashboardDataScope(profile).mode === "all";
@@ -413,14 +414,14 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   }
 
   useEffect(() => {
-    if (!open || !canOpenAdminCenter(profile)) return;
+    if (!open || manualQuery || !canOpenAdminCenter(profile)) return;
     setMessage("");
     void loadUsers();
     if (!accountsOnlyLoading && canViewAudit) void loadAudit();
     if (!accountsOnlyLoading && canRefreshData) { void loadHistoryStatus(); void loadAutoHistoryStatus(); }
     if (!accountsOnlyLoading && isOwner) void loadIpSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, profile.role]);
+  }, [open, profile.role, manualQuery]);
 
   useEffect(() => {
     if (!isOwner && newRole === "admin") setNewRole("viewer");
@@ -660,7 +661,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
           <section className="admin-panel-card admin-account-directory admin-permission-directory">
             <div className="admin-account-directory-head">
               <div>{tab === "accounts" ? <><h3>账号列表</h3><p>建立账号，管理角色、启停状态、数据范围与密码。</p></> : <><h3>按模块、页面和具体操作配置权限</h3><p>按账号独立授权；点击模块查看详情，调整后统一保存。</p></>}</div>
-              <div className="admin-account-toolbar-actions"><button type="button" className="admin-light-btn" disabled={loading} onClick={() => void loadUsers()}>{loading ? "刷新中…" : "刷新"}</button>{tab === "accounts" && <button type="button" className="admin-account-create-toggle" aria-haspopup="dialog" disabled={loading || Boolean(savingUser)} onClick={() => { setMessage(""); setCreateOpen(true); }}>+ 新建账号</button>}</div>
+              <div className="admin-account-toolbar-actions"><button type="button" className="admin-light-btn" disabled={loading} onClick={() => void loadUsers()}>{loading ? "读取中…" : manualQuery ? "查询账号" : "刷新"}</button>{tab === "accounts" && <button type="button" className="admin-account-create-toggle" aria-haspopup="dialog" disabled={loading || Boolean(savingUser)} onClick={() => { setMessage(""); setCreateOpen(true); }}>+ 新建账号</button>}</div>
             </div>
             {tab === "permissions" ? <div className="admin-permission-overview"><div><b>{users.length}</b> 当前账号</div><div><b>{ACCOUNT_PERMISSION_MODULES.length}</b> 权限模块</div><div><b>{ALL_ACCOUNT_PERMISSIONS.length}</b> 权限项</div><div><b>{ALL_ACCOUNT_PERMISSIONS.filter((item) => item.kind === "management").length}</b> 后台权限</div><span>权限项与现有系统一致，不新增授权范围</span></div> : <div className="admin-permission-overview admin-account-overview"><div><b>{users.length}</b> 全部账号</div><div><b>{stats.owners}</b> 总管理员</div><div><b>{stats.admins}</b> 管理员</div><div><b>{stats.viewers}</b> 查看账号</div><div><b>{stats.disabled}</b> 已停用</div></div>}
           {tab === "accounts" && createOpen && <AccountEditorDialog title="新建后台账号" busy={createBusy} onClose={closeCreate} bodyClassName="admin-users-compact"><section id="admin-create-account" className="admin-create-card-v249 admin-account-create-panel">

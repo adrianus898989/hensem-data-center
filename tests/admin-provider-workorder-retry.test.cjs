@@ -47,51 +47,51 @@ test('retry preserves nested table scroll at each repaint and never restores scr
 test('switching away from an inflight attachment preserves successful orders and resumes only attachment on return',async()=>{const h=await failedProvider(),rows=h.L.results;const pending=deferred();setupHandler(h,{pending});const old=h.c.liveProviderWorkordersRetry();h.c.setPage('orders');h.c.setPage('providers');await settle();assert.equal(h.L.results,rows);assert.match(h.L.workordersError,/已暂停/);assert.equal(h.L.workordersLoading,false);const n=h.calls.length;setupHandler(h);await h.c.liveProviderWorkordersRetry();assert.deepEqual(h.calls.slice(n).map(q=>q.action),['workorders']);pending.resolve({...workorderResult,total:999999});await old;assert.equal(h.L.workorders.total,0);assert.equal(h.L.results,rows);});
 test('changed filters or scope and a still loading main query cannot invoke attachment retry',async()=>{const h=await failedProvider(),n=h.calls.length;h.L.dirty=true;await h.c.liveProviderWorkordersRetry();h.L.dirty=false;h.L.from='2026-09-01T00:00:00';await h.c.liveProviderWorkordersRetry();h.L.from='2026-09-22T00:00:00';h.L.loading=true;await h.c.liveProviderWorkordersRetry();assert.equal(h.calls.length,n);});
 
-for(const previousPage of ['collection','latency','provider_daily'])test('opening providers from '+previousPage+' loads missing workorders while reusing same-direction orders',async()=>{
- const h=harness({page:previousPage,ancillaryHandler:true});await settle();setupHandler(h);
+for(const previousPage of ['collection','latency','provider_daily'])test('opening providers from '+previousPage+' waits for manual query before loading workorders',async()=>{
+ const h=harness({page:previousPage,ancillaryHandler:true});await settle();setupHandler(h);await h.c.liveQuery();await settle();
  const orders=h.L.results,before=h.calls.length;
  assert.equal(h.L.direction,'charge');assert.equal(h.L.dirty,false);assert.equal(h.L.loadedView,'full');assert(orders.length);
- h.c.setPage('providers');await settle();
+ h.c.setPage('providers');await settle();assert.equal(h.calls.length,before,'navigation waits');await h.c.liveQuery(false);await settle();
  const requests=h.calls.slice(before);
  assert.equal(requests.filter(q=>q.action==='aggregate').length,0,'navigation must retain the completed order query');
  assert.equal(requests.filter(q=>q.action==='workorders').length,1,'the workorder attachment has never been queried for this scope');
- assert.equal(h.L.results,orders);assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);
+ assert.equal(h.L.results[0].total,orders[0].total);assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);
  assert.equal(h.L.workordersLoading,false);assert.equal(h.L.workordersError,'');
 });
 
-test('restoring a provider tab with an uninitialized attachment fetches only that attachment',async()=>{
- const h=harness({page:'collection',ancillaryHandler:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='providerOptions'?{providers:['Synthetic provider']}:q.action==='rates'?{rows:[],total:0}:q.action==='workorders'?workorderResult:manyProviderAggregate()});await settle();setupHandler(h);h.c.setPage('providers');await settle();
+test('restoring a provider tab with an uninitialized attachment waits for manual retry',async()=>{
+ const h=harness({page:'collection',ancillaryHandler:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='providerOptions'?{providers:['Synthetic provider']}:q.action==='rates'?{rows:[],total:0}:q.action==='workorders'?workorderResult:manyProviderAggregate()});await settle();setupHandler(h);h.c.setPage('providers');await settle();await h.c.liveQuery();await settle();
  assert.equal(h.L.results[0].groups.provider.length,130,'the second page must be valid before testing that restoration preserves it');
  // A saved tab may predate loading the ancillary workorder report. It must not
  // remain a permanent all-dashes report when that tab is restored.
  Object.assign(h.L,{workorders:null,workordersScope:'',workordersError:'',workordersLoading:false});
  const orders=h.L.results;h.L.localPage=2;h.L.providerExpanded={kept:true};
  h.c.setPage('collection');await settle();const before=h.calls.length;
- h.c.setPage('providers');await settle();
+ h.c.setPage('providers');await settle();assert.equal(h.calls.length,before);await h.c.liveProviderWorkordersRetry();await settle();
  assert.deepEqual(h.calls.slice(before).map(q=>q.action),['workorders']);
  assert.equal(h.L.results,orders);assert.equal(h.L.localPage,2);assert.equal(h.L.providerExpanded.kept,true);
  assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);
 });
 
 for(const staleKind of ['direction','date'])test('opening providers rejects a successful workorder attachment from another '+staleKind+' scope',async()=>{
- const h=harness({page:'collection',ancillaryHandler:true});await settle();setupHandler(h);
+ const h=harness({page:'collection',ancillaryHandler:true});await settle();setupHandler(h);await h.c.liveQuery();await settle();
  const staleDirection=staleKind==='direction'?'withdraw':'charge',staleFrom=staleKind==='date'?'2026-09-01T00:00:00':h.L.from;
  h.L.workorders={rows:[],byProvider:[{provider:'Synthetic provider',direction:staleDirection,submittedCount:999999}],byDirection:{[staleDirection]:{submittedCount:999999}},total:1};
  h.L.workordersScope=JSON.stringify([h.L.country,staleFrom,h.L.to,staleDirection,[P.id],[]]);
- const orders=h.L.results,before=h.calls.length;h.c.setPage('providers');await settle();
+ const orders=h.L.results,before=h.calls.length;h.c.setPage('providers');await settle();assert.equal(h.calls.length,before);assert.equal(h.L.workorders,null);await h.c.liveQuery(false);await settle();
  const requests=h.calls.slice(before);assert.equal(requests.filter(q=>q.action==='aggregate').length,0);
  assert.equal(requests.filter(q=>q.action==='workorders').length,1);
  assert.equal(requests.find(q=>q.action==='workorders').direction,'charge');
- assert.equal(h.L.results,orders);assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);
+ assert.equal(h.L.results[0].total,orders[0].total);assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);
  assert(!h.html().includes('999,999'));
 });
 
-test('restoring a provider tab validates the saved workorder scope without reloading its orders',async()=>{
- const h=harness({page:'collection',ancillaryHandler:true});await settle();setupHandler(h);h.c.setPage('providers');await settle();
+test('restoring a provider tab invalidates stale workorders and waits for manual retry',async()=>{
+ const h=harness({page:'collection',ancillaryHandler:true});await settle();setupHandler(h);h.c.setPage('providers');await settle();await h.c.liveQuery();await settle();
  h.L.workordersScope=JSON.stringify([h.L.country,'2026-09-01T00:00:00',h.L.to,'withdraw',[P.id],[]]);
  h.L.workorders={...workorderResult,byDirection:{withdraw:{submittedCount:999999}}};
  const orders=h.L.results;h.c.setPage('collection');await settle();const before=h.calls.length;
- h.c.setPage('providers');await settle();
+ h.c.setPage('providers');await settle();assert.equal(h.calls.length,before);await h.c.liveProviderWorkordersRetry();await settle();
  assert.deepEqual(h.calls.slice(before).map(q=>q.action),['workorders']);
  assert.equal(h.L.results,orders);assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);
 });
@@ -107,7 +107,7 @@ async function partiallyFailedProvider(){
   if(q.action==='aggregate'&&q.platformId===other.id&&failed)throw Error('Synthetic order source unavailable');
   return aggregate(q.platformId===other.id?other:P,65);
  });
- h.c.setPage('providers');await settle();
+ h.c.setPage('providers');await settle();await h.c.liveQuery();await settle();
  return {h,other,recover(){failed=false}};
 }
 
@@ -134,7 +134,7 @@ test('empty or malformed workorder responses show an error and can be retried in
  for(const response of [null,{}, {rows:[]}]){
   const h=await ready({ancillaryHandler:true});
   h.setHandler(q=>q.action==='catalog'?{platforms:[P]}:q.action==='providerOptions'?{providers:['Synthetic provider']}:q.action==='rates'?{rows:[],total:0}:q.action==='workorders'?response:manyProviderAggregate());
-  h.c.setPage('providers');await settle();
+  h.c.setPage('providers');await settle();await h.c.liveQuery();await settle();
   assert.equal(h.L.workorders,null);assert.equal(h.L.workordersLoading,false);assert(h.L.workordersError,'an unusable result must not become a silent successful attachment');
   assert.match(h.html(),/liveProviderWorkordersRetry/);
   const orders=h.L.results,comparison=h.L.comparisonResults,before=h.calls.length;setupHandler(h);

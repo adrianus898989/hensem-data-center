@@ -9,10 +9,10 @@ const roles:Record<WorkOrderRole,string>={supervisor:"主管",agent:"员工",aud
 type Draft=WorkOrderAccountFields & {username:string;password:string};
 const fresh=():Draft=>({username:"",password:"",display_name:"",role:"agent",team:"",platforms:[],active:true});
 
-export default function WorkOrderAccountAdmin({session}:{session:DashboardSession}) {
+export default function WorkOrderAccountAdmin({session,manualQuery=false}:{session:DashboardSession;manualQuery?:boolean}) {
   const sessionRef=useRef(session);sessionRef.current=session;
   const [rows,setRows]=useState<WorkOrderAccount[]>([]),[catalog,setCatalog]=useState<WorkOrderAccountCatalog|null>(null);
-  const [loading,setLoading]=useState(true),[loaded,setLoaded]=useState(false),[error,setError]=useState(""),[message,setMessage]=useState(""),[busy,setBusy]=useState(false),[query,setQuery]=useState("");
+  const [loading,setLoading]=useState(!manualQuery),[loaded,setLoaded]=useState(false),[error,setError]=useState(""),[message,setMessage]=useState(""),[busy,setBusy]=useState(false),[query,setQuery]=useState("");
   const [nameFilter,setNameFilter]=useState(""),[roleFilter,setRoleFilter]=useState(""),[teamFilter,setTeamFilter]=useState(""),[platformFilter,setPlatformFilter]=useState(""),[statusFilter,setStatusFilter]=useState("");
   const [editing,setEditing]=useState<WorkOrderAccount|null>(null),[creating,setCreating]=useState(false),[draft,setDraft]=useState<Draft>(fresh);
   const [resetTarget,setResetTarget]=useState<WorkOrderAccount|null>(null),[password,setPassword]=useState("");
@@ -20,6 +20,7 @@ export default function WorkOrderAccountAdmin({session}:{session:DashboardSessio
   const scopeTarget=loaded&&!loading?rows.find(row=>row.auth_user_id===scopeTargetId):undefined;
   const [revision,setRevision]=useState(0);
   useEffect(()=>{
+    if(manualQuery&&revision===0)return;
     const controller=new AbortController();setLoading(true);setError("");setScopeTargetId(null);
     workOrderAccountRequest(sessionRef.current,{action:"list-accounts"},controller.signal).then(result=>{
       if(controller.signal.aborted)return;
@@ -27,7 +28,7 @@ export default function WorkOrderAccountAdmin({session}:{session:DashboardSessio
       setRows(result.accounts);setCatalog(result.catalog);setLoaded(true);
     }).catch(e=>{if(!controller.signal.aborted){setRows([]);setCatalog(null);setLoaded(false);setError(e instanceof Error?e.message:"读取工单账号失败")}}).finally(()=>{if(!controller.signal.aborted)setLoading(false)});
     return()=>controller.abort();
-  },[session.user.id,revision]);
+  },[session.user.id,revision,manualQuery]);
   function closeEditor(){setCreating(false);setEditing(null);setDraft(fresh())}
   function startEdit(row:WorkOrderAccount){setScopeTargetId(null);closeEditor();setEditing(row);setDraft({...row,password:""});setResetTarget(null);setPassword("");setError("");setMessage("")}
   function receive(row:WorkOrderAccount|undefined){if(!row)throw Error("操作返回不完整，请刷新账号列表确认结果");setRows(old=>old.some(x=>x.auth_user_id===row.auth_user_id)?old.map(x=>x.auth_user_id===row.auth_user_id?row:x):[...old,row].sort((a,b)=>a.username.localeCompare(b.username)));}
@@ -57,7 +58,7 @@ export default function WorkOrderAccountAdmin({session}:{session:DashboardSessio
   function closeReset(){setResetTarget(null);setPassword("");setError("")}
 
   return <div className="workorder-account-admin">
-    <div className="wo-account-toolbar"><h3>工单账号</h3><div className="wo-account-actions"><button type="button" disabled={busy||loading} onClick={()=>{closeEditor();closeReset();setRevision(x=>x+1)}}>刷新列表</button><button type="button" className="primary" aria-haspopup="dialog" disabled={busy||loading||!catalog} onClick={()=>{setScopeTargetId(null);closeEditor();setCreating(true);closeReset();setMessage("")}}>新建工单账号</button></div></div>
+    <div className="wo-account-toolbar"><h3>工单账号</h3><div className="wo-account-actions"><button type="button" disabled={busy||loading} onClick={()=>{closeEditor();closeReset();setRevision(x=>x+1)}}>{manualQuery&&!loaded?"查询账号":"刷新列表"}</button><button type="button" className="primary" aria-haspopup="dialog" disabled={busy||loading||!catalog} onClick={()=>{setScopeTargetId(null);closeEditor();setCreating(true);closeReset();setMessage("")}}>新建工单账号</button></div></div>
     <div className="wo-account-filters">
       <label>账号<input aria-label="搜索工单账号" placeholder="输入账号" value={query} onChange={e=>setQuery(e.target.value)}/></label>
       <label>姓名<input placeholder="输入姓名 / 显示名称" value={nameFilter} onChange={e=>setNameFilter(e.target.value)}/></label>
