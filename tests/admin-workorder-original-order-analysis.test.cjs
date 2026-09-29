@@ -99,3 +99,24 @@ test('UTR migration is idempotent and changes only the matching filter in the pr
  const after=(await db.query("select pg_get_functiondef('private.dashboard_admin_live_workorder_analysis(jsonb)'::regprocedure) definition")).rows[0].definition;
  assert.equal(after,before);
 });
+
+test('full-range provider breakdown is additive, classified before grouping and never duplicates conflicted originals',async()=>{
+ await db.exec(`create function private.dashboard_admin_live_workorder_provider_batch(p_names jsonb) returns table(country text,platform text,raw_provider text,channel_type text,provider text) language sql stable as $$select country,platform,raw_provider,channel_type,case when raw_provider in ('Alias-A','Alias-B') then 'UnifiedPay' else raw_provider end from jsonb_to_recordset(p_names) n(country text,platform text,raw_provider text,channel_type text)$$;`);
+ const before=await query(),migration=fs.readFileSync(path.join(__dirname,'../supabase/migrations/20260929150000_workorder_provider_analysis.sql'),'utf8');
+ await db.exec(migration);await db.exec(migration);const after=await query();delete after.byProvider;assert.deepEqual(after,before);
+ await ingest([
+ record('PROV-A',{payment_order_no:'PROV-ORDER',third_party:'Alias-A',amount:'100',operator_account:'provider-breakdown',status_code:3}),
+ record('PROV-B',{payment_order_no:'PROV-ORDER',third_party:'Alias-B',amount:'100',operator_account:'provider-breakdown',status_code:4}),
+ record('PROV-W',{payment_order_no:'PROV-ORDER',third_party:'Alias-A',issue_kind:'withdraw',amount:'200',operator_account:'provider-breakdown',status_code:2}),
+ record('PROV-C1',{payment_order_no:'PROV-CONFLICT',third_party:'Alias-A',amount:'50',operator_account:'provider-breakdown'}),
+ record('PROV-C2',{payment_order_no:'PROV-CONFLICT',third_party:'OtherPay',amount:'50',operator_account:'provider-breakdown'}),
+ record('PROV-MISSING',{payment_order_no:null,third_party:'MissingPay',amount:'7',operator_account:'provider-breakdown'})]);
+ const q={filters:{from:'2026-09-26',to:'2026-09-26',operator:'provider-breakdown'}},r=await query(q);
+ assert.equal(r.byProvider.reduce((n,p)=>n+p.ticketCount,0),r.current.ticketCount);assert.equal(r.byProvider.reduce((n,p)=>n+(p.uniqueOrderCount||0),0),r.current.uniqueOrderCount);
+ assert.equal(r.byProvider.reduce((n,p)=>n+Number(p.ticketAmount||0),0),Number(r.current.ticketAmount));assert.equal(r.byProvider.reduce((n,p)=>n+Number(p.uniqueOrderAmount||0),0),Number(r.current.uniqueOrderAmount));
+ const deposit=r.byProvider.find(p=>p.provider==='UnifiedPay'&&p.issueKind==='deposit');assert.equal(deposit.ticketCount,3);assert.equal(deposit.uniqueOrderCount,1);assert.equal(deposit.uniqueOrderAmount,'100.00000000');
+ assert.equal(r.byProvider.find(p=>p.provider==='三方归属待核对').uniqueOrderCount,1);assert.equal(r.byProvider.find(p=>p.provider==='MissingPay').uniqueOrderCount,null);
+ const withdrawal=r.byProvider.find(p=>p.issueKind==='withdraw');assert.equal(withdrawal.statusCounts['2'],1);assert.equal(withdrawal.uniqueOrderCount,1);
+ const list=await query({...q,view:'orders',operation:'list'});assert.equal(list.byProvider,null);assert(list.rows.some(p=>p.statusCounts['2']===1));
+ await db.exec(`update public.dashboard_profiles set data_scope='{"countries":["IN"],"platforms":["AB"]}'`);assert.deepEqual((await query(q)).byProvider,[]);await db.exec(`update public.dashboard_profiles set data_scope='{"all":true}'`);
+});

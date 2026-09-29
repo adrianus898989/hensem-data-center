@@ -14,7 +14,7 @@ test('source limit parsing respects units, grouped periods, direction and curren
  for(const [text,currency,expected]of [['100 (NGN)-1000000','NGN',[100,1000000]],['10-1w','INR',[10,10000]],['1000-5.000.000','VND',[1000,5000000]],['BRL 5–50.000','BRL',[5,50000]],['100.50–50,000.25 INR','INR',[100.5,50000.25]]])assert.deepEqual(Array.from(bands.parseLimit(text,currency)),expected);
  for(const text of ['100','无','0','500-100','100-500 USDT','BDT 100-500','100~500~1000','100-500 或 200-1000'])assert.equal(bands.parseLimit(text,'INR'),null,text);
  const p=bands.profile({currency:'INR',direction:'withdraw',providers:['PayA'],limits:['500-20000']});assert.equal(p.edges[0],500);assert.equal(p.edges[10],20000);assert(bands.valid(p.edges));assert.match(p.source,/三方/);
- assert.match(bands.label('band:0',p.edges),/^500–< /);assert.equal(bands.label('band:9',p.edges).endsWith('20,000'),true);assert.equal(bands.label('below',p.edges),'< 500');assert.equal(bands.label('above',p.edges),'> 20,000');assert.equal(bands.label('unknown',p.edges),'金额缺失');
+ assert.match(bands.label('band:0',p.edges),/^500 ≤ 金额 < /);assert.equal(bands.label('band:9',p.edges).endsWith('20,000'),true);assert.equal(bands.label('below',p.edges),'< 500');assert.equal(bands.label('above',p.edges),'> 20,000');assert.equal(bands.label('unknown',p.edges),'金额缺失');
 });
 test('bridge validates same dynamic boundaries for aggregate and range drilldown; exact buckets remain unchanged',()=>{
  const edges=Array.from(bands.profile({currency:'INR'}).edges),amountBands={charge:edges,withdraw:edges};
@@ -25,4 +25,12 @@ test('member counts endpoint keeps exact scope and rejects incompatible filters'
  const q={...base,action:'memberDaily',providers:['PayA']};assert.doesNotThrow(()=>mod.exports.validateAdminLiveRequest(q));
  for(const extra of [{status:'all'},{memberId:'user'},{amountBands:{}},{offset:0},{platformIds:[base.platformId]}])assert.throws(()=>mod.exports.validateAdminLiveRequest({...q,...extra}));
  await mod.exports.adminLiveRequest({user:{id:'offline'},access_token:'offline'},q);const r=calls.at(-1);assert.match(r.url,/dashboard_admin_live_member_daily$/);assert.equal(r.body.p_request.action,undefined);assert.equal(r.body.p_request.startAt,q.startAt);assert.deepEqual(r.body.p_request.providers,['PayA']);
+});
+
+test('MYR uses finer small-amount bands without a zero-to-ten regular band and honors configured limits',()=>{
+ const p=bands.profile({currency:'MYR'});assert.deepEqual(Array.from(p.edges),[10,20,30,50,100,200,500,1000,5000,10000,100000]);
+ assert.match(p.source,/限额未配置/);assert.equal(bands.label('band:0',p.edges),'10 ≤ 金额 < 20');assert.equal(bands.label('band:9',p.edges),'10,000 ≤ 金额 ≤ 100,000');
+ assert.equal(bands.label('below',p.edges),'< 10','real smaller orders remain visible as an exception');
+ const adapted=bands.profile({currency:'MYR',providers:['FPay'],limits:['MYR 5–50,000']});assert.equal(adapted.edges[0],5);assert.equal(adapted.edges[10],50000);assert.equal(adapted.providerAdapted,true);
+ assert.equal(bands.parseLimit('MYR 10–50,000','INR'),null);
 });

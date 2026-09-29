@@ -30,7 +30,7 @@ test('platform expansion keeps the same six deduplicated workorder fields aligne
 
 test('incomplete source-order coverage marks the displayed deduplicated fields while keeping no raw fallback',()=>{
  const h=setup();h.L.workorders.byProvider[0]=fact('AlphaPay',{uniqueOrderAmount:null,uniqueOrderCount:null,uniqueSuccessAmount:null,uniqueSuccessCount:null,uniqueCoverage:{status:'unavailable',complete:false,missingOrderNumberCount:20}});h.render();
- const shown=rows(h.html())[0];assert.deepEqual(issueSlice(shown).map(plain),['—*','—*','—*','—*','200.00*','2*']);assert.match(issueSlice(shown)[0],/20条缺原订单号/);assert.doesNotMatch(issueSlice(shown).join(''),/2,000\.00|1,200\.00/);
+ const shown=rows(h.html())[0];assert.deepEqual(issueSlice(shown).map(plain),['—','—','—','—','200.00','2']);assert.match(issueSlice(shown)[0],/20条缺原订单号/);assert.match(h.html(),/工单原单覆盖未齐/);assert.doesNotMatch(h.html(),/<sup/);assert.doesNotMatch(issueSlice(shown).join(''),/2,000\.00|1,200\.00/);
 });
 
 test('multiple source aggregates do not get added as distinct deduplicated orders',()=>{

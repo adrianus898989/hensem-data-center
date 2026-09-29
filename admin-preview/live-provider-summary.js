@@ -342,7 +342,7 @@
   const issueLabelFor=row=>unknownProviderNames.has(String(row.provider??'').trim())?'三方未填写（源工单）':row.provider+'（源工单）';
   root.providerSummaryOrders=function(index,platformId=''){const row=shown[index];if(!row||issueOnly(row)||platformId&&!row.items.some(r=>r.platformId===platformId))return;root.liveProviderOrders?.(row.provider,'',direction,platformId)};
   const providerLabel=(row,index)=>issueOnly(row)?'<button class="link" aria-expanded="'+!!expanded[rowKey(row)]+'" title="展开已读取的平台工单汇总；工单号未入库" onclick="providerSummaryToggle('+index+')">'+E(issueLabelFor(row))+'</button><small class="cell-sub">仅工单汇总 · 工单号未入库</small>':providerCell(row)+(String(row.provider).trim().toUpperCase()==='USDT'?'<small class="cell-sub"><button class="link" title="查看原始通道、类型与逐笔订单；USDT不代表已确认支付商" onclick="providerSummaryOrders('+index+')">原始通道 / 订单</button></small>':'');
-  const workorderBasis='工单提交、成功、未到账六列统一按原存款订单号在所选期间去重，同一原订单只保留1条；取款未到账同样适用。工单未到账为去重提交减去重成功，不等于仍在等待到账。原订单号缺失或覆盖不完整时显示 — / *，不按0计算。';
+  const workorderBasis='工单提交、成功、未到账六列统一按原存款订单号在所选期间去重，同一原订单只保留1条；取款未到账同样适用。工单未到账为去重提交减去重成功，不等于仍在等待到账。原订单号缺失时显示 —；覆盖不完整统一提示，缺失部分不按0计算。';
   const tierExplanation=tier=>'已确认：按每笔成功金额分档估算。'+tier.label+'。2,000 < 金额 < 2,001 的记录待核对，不计入已匹配笔数。';
   const displayedRate=(row,original)=>{const tier=tieredFeeRule(row,L.country);return tier?tierExplanation(tier):original};
   root.providerSummaryRate=function(index){
@@ -356,11 +356,11 @@
   };
   const columns=[['统一三方','provider'],['平台','platform_count'],['类型','type'],[name+'成功金额','success_amount'],[name+'成功笔数','success_count'],['成功率','success_rate'],[readState.partial?'已读取金额占比':'金额占比','amount_share'],[readState.partial?'已读取笔数占比':'笔数占比','count_share'],...(direction==='withdraw'?[['代付中金额','pending_amount'],['代付中笔数','pending_count']]:[]),['匹配费率','fee_rate'],['估算手续费','estimated_fee'],[readState.partial?'已读取手续费占比':'手续费占比','fee_share'],
    ['工单提交金额','issue_submittedAmount'],['工单提交笔数','issue_submittedCount'],['工单成功金额','issue_successAmount'],['工单成功笔数','issue_successCount'],['工单未到账金额','issue_notReceivedAmount'],['工单未到账笔数','issue_notReceivedCount'],['工单成功率','issue_success_rate'],['平台明细',null]];
-  const header=(text,key,active=sort,ascending=!!L.providerSortAsc,index=null)=>{if(!key)return E(text);const next=active===key?!ascending:textSortKeys.has(key),basis=key==='fee_rate'?'按百分比、单笔费依次排序；多档或未匹配置后。':key.startsWith('issue_')?'按原订单号去重后的工单数据排序。':'';return '<button class="link provider-sort-heading" title="'+E(basis+'点击按'+text+(next?'升序':'降序')+'排列；空值置后')+'" onclick="'+(index===null?'providerSummarySort(\''+key+'\')':'providerSummaryPlatformSort('+index+',\''+key+'\')')+'">'+E(text)+' <span aria-hidden="true">'+(active===key?(ascending?'↑':'↓'):'↕')+'</span></button>'};
+  const header=(text,key,active=sort,ascending=!!L.providerSortAsc,index=null)=>{if(!key)return E(text);const next=active===key?!ascending:textSortKeys.has(key),basis=key==='fee_rate'?'按百分比、单笔费依次排序；多档或未匹配置后。':key.startsWith('issue_')?'按原订单号去重后的工单数据排序。':'';return '<button class="link provider-sort-heading" title="'+E(basis+'点击按'+text+(next?'升序':'降序')+'排列；空值置后')+'" onclick="'+(index===null?'providerSummarySort(\''+key+'\')':'providerSummaryPlatformSort('+index+',\''+key+'\')')+'">'+E(text).replace(/(金额|笔数)$/, '<span class="provider-heading-unit">$1</span>')+' <span class="provider-sort-arrow" aria-hidden="true">'+(active===key?(ascending?'↑':'↓'):'↕')+'</span></button>'};
   const headers=columns.map(([text,key])=>header(text,key));
   // Short identity columns leave the same readable width for every amount,
   // count and ratio. Fee totals reserve space for their coverage badge.
-  const columnWidth=key=>key==='provider'?82:key==='platform_count'?32:key==='type'?48:key==='fee_rate'?86:key===null?44:key==='estimated_fee'?108:key.endsWith('_amount')||key.endsWith('Amount')?90:key.endsWith('_count')||key.endsWith('Count')?48:50;
+  const columnWidth=key=>key==='provider'?94:key==='platform_count'?40:key==='type'?62:key==='fee_rate'?88:key===null?54:key==='estimated_fee'?108:key.endsWith('_amount')||key.endsWith('Amount')?98:key.endsWith('_count')||key.endsWith('Count')?70:70;
   const widths=columns.map(([,key])=>columnWidth(key)),tableWidth=widths.reduce((sum,width)=>sum+width,0);
   const rateButton=(value,index)=>{const full=String(value||'未匹配'),long=full.length>24||/[\r\n]/.test(full),label=long?(/以上|以下|分档|阶梯|[≥≤<>]/.test(full)?'分档费率 · 查看':'费率详情 · 查看'):full;return '<button class="link provider-fee-preview" title="'+E(full+' · 点击查看来源及匹配依据')+'" aria-label="'+E('费率：'+full+'，查看来源及匹配依据')+'" onclick="providerSummaryRate('+index+')">'+E(label)+'</button>'};
   const feeCell=r=>readState.empty?'—':L.feeLookupLoading?'读取中…':L.feeLookupError?'读取失败':'<span tabindex="0" title="'+E(feeCoverageText(r))+'">'+N(r.estimated_fee)+(!r.fee_complete&&Number(r.fee_eligible_count)>0?'<span class="provider-partial">'+(Number(r.fee_matched_count)>0?'部分':'未匹配')+'</span>':'')+'</span>';
@@ -371,7 +371,7 @@
    const gaps=[['missingOrderNumberCount','条缺原订单号'],['missingDetailCount','条缺原始明细'],['missingAmountCount','条金额缺失'],['amountConflictCount','组金额冲突'],['providerConflictCount','组三方冲突']].filter(([key])=>Number(coverage[key])>0).map(([key,text])=>C(coverage[key])+text);
    const note='工单关联的原订单，在整个所选日期范围内按平台及业务方向去重；同一原订单重复提交只计一次。'+(gaps.length?gaps.join('；')+'。':'')+(coverage.complete===true?'当前已读工单原单完整。':'当前仅为已知原单，覆盖不完整；缺失部分不按零计算。');
    const partial=coverage.complete!==true,label=value===null?'—':key.endsWith('Count')?C(value):N(value);
-   return '<span class="provider-unique-value'+(partial?' is-partial':'')+'" tabindex="0" title="'+E(note)+'">'+label+(partial?'<sup aria-label="覆盖未完整">*</sup>':'')+'</span>';
+   return '<span class="provider-unique-value'+(partial?' is-partial':'')+'" tabindex="0" title="'+E(note)+'">'+label+'</span>';
   };
   const cells=(r,label,summary=false,index=0)=>{
    const w=r.uniqueOrders,rate=R(r.success_count,r.all_count);
@@ -385,6 +385,8 @@
    const fees=feeSummary(items);r.estimated_fee=fees.amount;r.fee_complete=fees.complete;r.fee_eligible_count=fees.successCount;r.fee_excluded_count=fees.excludedCount;r.fee_issues=fees.issues;r.fee_exclusions=fees.exclusions;
    r.issues=L.workorders&&items.some(i=>i.issues)?Object.fromEntries(issueKeys.map(k=>[k,items.reduce((n,i)=>n+Number(i.issues?.[k]||0),0)])):null;r.uniqueOrders=fullScope?uniqueWorkorderFacts([L.workorders?.byDirection?.[direction]]):null;return cells(r,'<strong>'+label+'</strong>',true)};
   const coverage=L.workorders?.coverage;
+  const partialOrderRows=rows.filter(r=>r.uniqueOrders&&r.uniqueOrders.coverage?.complete!==true);
+  const uniqueCoverageNote=partialOrderRows.length?'<div class="provider-order-coverage" role="status" title="'+E(workorderBasis)+'">工单原单覆盖未齐 · '+C(partialOrderRows.length)+' 个三方仅展示已知数据；悬停数字查看缺失详情</div>':'';
   const coverageNote=coverage&&!coverage.complete?' · 工单覆盖 '+C(coverage.capturedPlatformDays)+' / '+C(coverage.expectedPlatformDays)+' 平台日':'';
   const workNote=L.workordersUnsupported?'<div class="live-status">所选平台来源尚未接入工单数据</div>':L.workordersError?'<div class="live-status live-error">工单读取未完成：'+E(L.workordersError)+' <button type="button" class="link" onclick="liveProviderWorkordersRetry()">只重试工单</button></div>':
    L.workordersLoading?'<div class="live-status">正在读取'+issueLabel+'工单汇总…</div>':!L.workorders?'<div class="live-status">'+(L.dirty?'筛选已更改，请点击查询读取对应工单':L.loading?'经营数据读取后自动加载工单':'工单尚未读取 <button type="button" class="link" onclick="liveProviderWorkordersRetry()">加载工单</button>')+'</div>':'';
@@ -416,8 +418,8 @@
   }
   return '<div class="provider-summary-report">'+readNotice(ctx)+'<div class="provider-summary-heading"><span class="provider-scope-note">'+E(L.country)+' · '+E(L.currency)+' · '+E(L.from.replace('T',' '))+' 至 '+E(L.to.replace('T',' '))+coverageNote+'</span></div>'+
    renderMetrics(ctx,direction,rows)+workNote+
-   box(name+'三方汇总'+(readState.partial?'（部分结果）':'')+' · '+issueLabel+'工单',reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
-    '成功数据按成功时间；成功率为本期成功笔数 / 本期创建笔数，含跨日成功，可超过100%。昨日对比使用同平台、同币种、同一时段，成功率差额为百分点。三方及平台卡片统计有交易的范围；工单按所选整日统计，未采集显示 —。'+workorderBasis+'* 表示原单覆盖未齐，悬停查看缺失或冲突。全表合计直接取完整期间去重结果，当前页不累加去重值。点击费率查看来源与匹配规则；手续费按当前匹配费率估算。')+'</div>';
+   box(name+'三方汇总'+(readState.partial?'（部分结果）':'')+' · '+issueLabel+'工单',uniqueCoverageNote+reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
+    '成功数据按成功时间；成功率为本期成功笔数 / 本期创建笔数，含跨日成功，可超过100%。昨日对比使用同平台、同币种、同一时段，成功率差额为百分点。三方及平台卡片统计有交易的范围；工单按所选整日统计，未采集显示 —。'+workorderBasis+'原单覆盖未齐时统一提示，悬停数字查看缺失或冲突。全表合计直接取完整期间去重结果，当前页不累加去重值。点击费率查看来源与匹配规则；手续费按当前匹配费率估算。')+'</div>';
  }
  root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,tieredFeeRule,feeSummary,feeCoverageText,feeCandidates,confirmedFeeRule,queryCoverage,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
  if(typeof module!=='undefined')module.exports=root.HensemProviderSummary;
