@@ -368,10 +368,18 @@
   const rateButton=(value,index)=>{const full=String(value||'未匹配'),long=full.length>24||/[\r\n]/.test(full),label=long?(/以上|以下|分档|阶梯|[≥≤<>]/.test(full)?'分档费率 · 查看':'费率详情 · 查看'):full;return '<button class="link provider-fee-preview" title="'+E(full+' · 点击查看来源及匹配依据')+'" aria-label="'+E('费率：'+full+'，查看来源及匹配依据')+'" onclick="providerSummaryRate('+index+')">'+E(label)+'</button>'};
   const feeCell=r=>readState.empty?'—':L.feeLookupLoading?'读取中…':L.feeLookupError?'读取失败':'<span tabindex="0" title="'+E(feeCoverageText(r))+'">'+N(r.estimated_fee)+(!r.fee_complete&&Number(r.fee_eligible_count)>0?'<span class="provider-partial">'+(Number(r.fee_matched_count)>0?'部分':'未匹配')+'</span>':'')+'</span>';
   const issueRate=w=>!w?'—':'<span'+(Number(w.uniqueOrderCount)>0&&Number(w.uniqueSuccessCount)/Number(w.uniqueOrderCount)<0.3?' class="workorder-rate-low"':'')+' title="去重工单金额成功率 '+R(w.uniqueSuccessAmount,w.uniqueOrderAmount)+'">'+R(w.uniqueSuccessCount,w.uniqueOrderCount)+'</span>';
+  const sourceCoverage=L.workorders?.coverage;
+  const uniqueGaps=coverage=>{
+   const gaps=[['missingOrderNumberCount','条缺原订单号'],['missingDetailCount','条缺原始明细'],['missingAmountCount','条金额缺失'],['amountConflictCount','组金额冲突'],['providerConflictCount','组三方冲突']].filter(([key])=>Number(coverage?.[key])>0).map(([key,text])=>C(coverage[key])+text);
+   if(Number(coverage?.detailMismatchCount)>0&&!Number(coverage?.missingDetailCount))gaps.push('日汇总与原始明细数量相差 '+C(coverage.detailMismatchCount)+' 条');
+   if(sourceCoverage?.complete===false)gaps.push('所选平台的工单日期未收齐');
+   if(!gaps.length&&coverage?.complete!==true)gaps.push('原单覆盖状态未确认');
+   return gaps;
+  };
   const uniqueCell=(facts,key)=>{
    if(!facts)return '—';
    const coverage=facts.coverage||{},value=facts[key];
-   const gaps=[['missingOrderNumberCount','条缺原订单号'],['missingDetailCount','条缺原始明细'],['missingAmountCount','条金额缺失'],['amountConflictCount','组金额冲突'],['providerConflictCount','组三方冲突']].filter(([key])=>Number(coverage[key])>0).map(([key,text])=>C(coverage[key])+text);
+   const gaps=uniqueGaps(coverage);
    const note='工单关联的原订单，在整个所选日期范围内按平台及业务方向去重；同一原订单重复提交只计一次。'+(gaps.length?gaps.join('；')+'。':'')+(coverage.complete===true?'当前已读工单原单完整。':'当前仅为已知原单，覆盖不完整；缺失部分不按零计算。');
    const partial=coverage.complete!==true,label=value===null?'—':key.endsWith('Count')?C(value):N(value);
    return '<span class="provider-unique-value'+(partial?' is-partial':'')+'" tabindex="0" title="'+E(note)+'">'+label+'</span>';
@@ -389,7 +397,18 @@
    r.issues=L.workorders&&items.some(i=>i.issues)?Object.fromEntries(issueKeys.map(k=>[k,items.reduce((n,i)=>n+Number(i.issues?.[k]||0),0)])):null;r.uniqueOrders=fullScope?uniqueWorkorderFacts([L.workorders?.byDirection?.[direction]]):null;return cells(r,'<strong>'+label+'</strong>',true)};
   const coverage=L.workorders?.coverage;
   const partialOrderRows=rows.filter(r=>r.uniqueOrders&&r.uniqueOrders.coverage?.complete!==true);
-  const uniqueCoverageNote=partialOrderRows.length?'<div class="provider-order-coverage" role="status" title="'+E(workorderBasis)+'">工单原单覆盖未齐 · '+C(partialOrderRows.length)+' 个三方仅展示已知数据；悬停数字查看缺失详情</div>':'';
+  root.providerSummaryCoverage=function(){
+   const selectedProviders=new Set(partialOrderRows.map(r=>r.provider));
+   const missingPlatforms=(coverage?.platforms||[]).filter(p=>p.complete===false||Number.isFinite(Number(p.expectedDays))&&Number(p.days)<Number(p.expectedDays));
+   const count=value=>value==null?'未提供':C(value);
+   const sourceNote=coverage?.complete===false?'<p>工单日期已收 '+count(coverage.capturedPlatformDays)+' / '+count(coverage.expectedPlatformDays)+' 平台日。来源未收齐会使相关三方一起标记为待核对，不代表每家三方都单独缺订单。</p>':'';
+   const platforms=missingPlatforms.length?box('未收齐的平台',table(['平台','已收天数','应收天数'],missingPlatforms.map(p=>[E(p.platform||p.sourcePlatform||'未提供'),count(p.days),count(p.expectedDays)]))):'';
+   const reasons=box('三方核对原因',table(['三方','当前原因'],partialOrderRows.map(r=>[E(r.provider),E(uniqueGaps(r.uniqueOrders.coverage).join('；'))])));
+   const details=(L.workorders?.byPlatformProvider||[]).filter(r=>r.direction===direction&&selectedProviders.has(providerName(canonical(r.provider,L.country)))&&r.uniqueCoverage&&r.uniqueCoverage.complete!==true);
+   const byPlatform=details.length?box('平台明细',table(['平台','三方','工单汇总笔数','原始明细条数','当前原因'],details.map(r=>[E(r.platform||r.sourcePlatform||'未提供'),E(providerName(canonical(r.provider,L.country))),count(r.submittedCount),count(r.uniqueCoverage.detailCount),E(uniqueGaps(r.uniqueCoverage).join('；'))]))):'';
+   openDrawer('工单原单核对原因','<p>这里只影响工单提交、成功、未到账的金额和笔数，以及工单成功率。代收／代付订单统计和刷单剔除另行计算。</p>'+sourceNote+platforms+reasons+byPlatform+'<p>原订单号用于整段日期去重。未收齐的明细、缺少的原订单号或冲突金额不能按 0 补齐；现有数字保留已确认部分。</p>');
+  };
+  const uniqueCoverageNote=partialOrderRows.length?'<div class="provider-order-coverage" role="status">工单原单待核对 · '+C(partialOrderRows.length)+' 个三方 <button type="button" class="link" onclick="providerSummaryCoverage()">查看原因</button></div>':'';
   const coverageNote=coverage&&!coverage.complete?' · 工单覆盖 '+C(coverage.capturedPlatformDays)+' / '+C(coverage.expectedPlatformDays)+' 平台日':'';
   const workNote=L.workordersUnsupported?'<div class="live-status">所选平台来源尚未接入工单数据</div>':L.workordersError?'<div class="live-status live-error">工单读取未完成：'+E(L.workordersError)+' <button type="button" class="link" onclick="liveProviderWorkordersRetry()">只重试工单</button></div>':
    L.workordersLoading?'<div class="live-status">正在读取'+issueLabel+'工单汇总…</div>':!L.workorders?'<div class="live-status">'+(L.dirty?'筛选已更改，请点击查询读取对应工单':L.loading?'经营数据读取后自动加载工单':'工单尚未读取 <button type="button" class="link" onclick="liveProviderWorkordersRetry()">加载工单</button>')+'</div>':'';

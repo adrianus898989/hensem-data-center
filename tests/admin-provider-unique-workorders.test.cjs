@@ -30,7 +30,7 @@ test('platform expansion keeps the same six deduplicated workorder fields aligne
 
 test('incomplete source-order coverage marks the displayed deduplicated fields while keeping no raw fallback',()=>{
  const h=setup();h.L.workorders.byProvider[0]=fact('AlphaPay',{uniqueOrderAmount:null,uniqueOrderCount:null,uniqueSuccessAmount:null,uniqueSuccessCount:null,uniqueCoverage:{status:'unavailable',complete:false,missingOrderNumberCount:20}});h.render();
- const shown=rows(h.html())[0];assert.deepEqual(issueSlice(shown).map(plain),['—','—','—','—','200.00','2']);assert.match(issueSlice(shown)[0],/20条缺原订单号/);assert.match(h.html(),/工单原单覆盖未齐/);assert.doesNotMatch(h.html(),/<sup/);assert.doesNotMatch(issueSlice(shown).join(''),/2,000\.00|1,200\.00/);
+ const shown=rows(h.html())[0];assert.deepEqual(issueSlice(shown).map(plain),['—','—','—','—','200.00','2']);assert.match(issueSlice(shown)[0],/20条缺原订单号/);assert.match(h.html(),/工单原单待核对/);assert.doesNotMatch(h.html(),/<sup/);assert.doesNotMatch(issueSlice(shown).join(''),/2,000\.00|1,200\.00/);
 });
 
 test('multiple source aggregates do not get added as distinct deduplicated orders',()=>{
@@ -68,4 +68,11 @@ test('workorder success rate, sorting, expansion and total all use unique order 
   assert.equal(plain(rows(h.html())[0][0]),'BetaPay');
   assert.equal(h.networkCalls(),0);
  }
+});
+
+test('source date gaps and row-specific gaps have separate, escaped reasons without another request',()=>{
+ const h=setup();h.L.workorders.coverage={complete:false,capturedPlatformDays:2,expectedPlatformDays:4,platforms:[{platform:'<Missing>',days:0,expectedDays:2,complete:false},{platform:'Complete',days:2,expectedDays:2,complete:true}]};
+ h.L.workorders.byProvider=h.L.workorders.byProvider.map(r=>({...r,uniqueCoverage:{...r.uniqueCoverage,complete:false,status:'partial'}}));h.render();assert.match(h.html(),/2 个三方/);assert.match(h.html(),/查看原因/);
+ h.root.providerSummaryCoverage();let html=h.drawers.at(-1).html;assert.match(html,/2 \/ 4 平台日/);assert.match(html,/不代表每家三方都单独缺订单/);assert.match(html,/&lt;Missing&gt;/);assert.doesNotMatch(html,/<Missing>/);assert.match(html,/代收／代付订单统计和刷单剔除另行计算/);assert.equal(h.networkCalls(),0);
+ h.L.workorders.coverage.complete=true;h.L.workorders.byProvider[0].uniqueCoverage.detailMismatchCount=7;h.render();h.root.providerSummaryCoverage();html=h.drawers.at(-1).html;assert.match(html,/日汇总与原始明细数量相差 7 条/);assert.doesNotMatch(html,/日期未收齐/);assert.equal(h.networkCalls(),0);
 });
