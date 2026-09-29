@@ -150,7 +150,7 @@ begin
    count(*) filter(where kyc_connected is true) kyc_yes_count,count(*) filter(where kyc_connected is false) kyc_no_count,count(*) filter(where kyc_connected is null) kyc_unknown_count,
    count(*) filter(where utr_matched is true) utr_yes_count,count(*) filter(where utr_matched is false) utr_no_count,count(*) filter(where utr_matched is null) utr_unknown_count,
    coalesce(array_agg(distinct nullif(btrim(detail_utr),'') order by nullif(btrim(detail_utr),''))
-     filter(where utr_matched is true and nullif(btrim(detail_utr),'') is not null),'{}') utr_values,
+     filter(where nullif(btrim(detail_utr),'') is not null),'{}') utr_values,
    case when min(amount) is null then 0 when min(amount)=max(amount) then 1 else 2 end amount_variants,
    case when min(amount)=max(amount) then min(amount) end amount,
    max(sort_at) latest_at,max(submitted_at) latest_submitted_at,max(operated_at) latest_operated_at
