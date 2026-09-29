@@ -19,7 +19,7 @@ const meta={title:'测试原表',sheets,fetchedAt:'2026-01-01T00:00:00Z'};
  api.set('query','TEST-00');api.set('type','钱包甲');api.set('platform','6');api.set('status','good');assert.deepEqual([...api.model().rows],[1]);
  api.set('status','paused');assert.equal(api.model().rows.length,0);assert(api.render().includes('没有符合条件的记录'));
  api.reset();api.page(2);assert.equal((api.render().match(/<tr data-source-row=/g)||[]).length,5);api.page(1,30);assert.equal((api.render().match(/<tr data-source-row=/g)||[]).length,25);
- api.set('query','TEST-00');await api.selectSheet(2);assert.equal(api.snapshot().query,'');assert.equal(api.snapshot().sheetId,2);
+ const beforeSheet=requested.length;api.set('query','TEST-00');await api.selectSheet(2);assert.equal(requested.length,beforeSheet);assert.equal(api.snapshot().hasGrid,false);assert.match(api.render(),/点击查询/);await api.load();assert.equal(api.snapshot().query,'');assert.equal(api.snapshot().sheetId,2);
  // The inherited source-coordinate model resolves merged cells and never fills
  // unrelated blanks, preserving zero, complex fee strings and duplicate names.
  const merged=grid(1);merged.cells[2][0].text='';merged.merges=[{startRowIndex:1,endRowIndex:3,startColumnIndex:0,endColumnIndex:1}];
@@ -27,7 +27,7 @@ const meta={title:'测试原表',sheets,fetchedAt:'2026-01-01T00:00:00Z'};
  const snapshot=JSON.stringify(merged);api.sourceTools.buildTidyModel(merged);assert.equal(JSON.stringify(merged),snapshot);
  // Out-of-order sheet responses cannot replace the user's newer selection.
  let resolveOld;api.configure({request:async input=>input.sheetId===undefined?meta:input.sheetId===1?new Promise(resolve=>{resolveOld=resolve}):grid(2)});
- const pending=api.load();await new Promise(resolve=>setImmediate(resolve));await api.selectSheet(2);resolveOld(grid(1));await pending;assert.equal(api.snapshot().sheetId,2);assert.equal(api.snapshot().hasGrid,true);
+ const pending=api.load();await new Promise(resolve=>setImmediate(resolve));await api.selectSheet(2);resolveOld(grid(1));await pending;assert.equal(api.snapshot().sheetId,2);assert.equal(api.snapshot().hasGrid,false);await api.load();assert.equal(api.snapshot().hasGrid,true);
  // Revocation/network error clears every cached source value, retaining headers.
  api.configure({request:async()=>{throw Error('当前账号没有原表查看权限')}});await api.load();html=api.render();assert(html.includes('<thead>'));assert(html.includes('当前账号没有原表查看权限'));assert(!html.includes('TEST-'));assert(!html.includes('甲国'));assert.equal(api.snapshot().hasGrid,false);
  let fallback=false;api.configure({onUnavailable:()=>fallback=true});api.unavailable();assert(fallback);api.clear();assert(!api.snapshot().hasGrid);
