@@ -47,7 +47,8 @@ test('payout expands each platform with independent success amount/count shares 
 
 test('payout expansion state and workorder facts stay separate from collection reports',()=>{
  const h=fixture([order('platform-a','ar',900,3),order('platform-a','ar',600,6,{direction:'charge'})]);
- h.L.workorders={byProvider:[{provider:'SyntheticPay',direction:'withdraw',submittedAmount:111,submittedCount:3,successAmount:100,successCount:2,notReceivedAmount:11,notReceivedCount:1},{provider:'SyntheticPay',direction:'charge',submittedAmount:99999,submittedCount:999,successAmount:88888,successCount:888,notReceivedAmount:11111,notReceivedCount:111}],coverage:{complete:true,capturedPlatformDays:1,expectedPlatformDays:1}};
+ const complete={status:'complete',complete:true,detailCount:1,missingOrderNumberCount:0,missingDetailCount:0,amountConflictCount:0,providerConflictCount:0};
+ h.L.workorders={byProvider:[{provider:'SyntheticPay',direction:'withdraw',submittedAmount:111,submittedCount:3,successAmount:100,successCount:2,notReceivedAmount:11,notReceivedCount:1,uniqueOrderAmount:111,uniqueOrderCount:3,uniqueSuccessAmount:100,uniqueSuccessCount:2,uniqueNotReceivedAmount:11,uniqueNotReceivedCount:1,uniqueCoverage:complete},{provider:'SyntheticPay',direction:'charge',submittedAmount:99999,submittedCount:999,successAmount:88888,successCount:888,notReceivedAmount:11111,notReceivedCount:111,uniqueOrderAmount:99999,uniqueOrderCount:999,uniqueSuccessAmount:88888,uniqueSuccessCount:888,uniqueNotReceivedAmount:11111,uniqueNotReceivedCount:111,uniqueCoverage:complete}],coverage:{complete:true,capturedPlatformDays:1,expectedPlatformDays:1}};
  h.render();h.root.providerSummaryToggle(0);assert.match(h.html(),/>111\.00</);assert.doesNotMatch(h.html(),/>99,999\.00</);assert.equal(breakdown(h.html())[0]['成功金额'],'900.00');
  h.render('charge');assert.match(h.html(),/aria-expanded="false"/);assert.doesNotMatch(h.html(),/provider-platform-breakdown/);
  h.render('withdraw');assert.match(h.html(),/aria-expanded="true"/);assert.equal(breakdown(h.html())[0]['成功金额'],'900.00');assert.equal(h.networkCalls(),0);
@@ -96,11 +97,11 @@ test('an incomplete current scope cannot regain yesterday comparisons merely bec
 
 test('source-only workorder provider opens its loaded platform cohorts without inventing transaction orders',()=>{
  for(const direction of ['charge','withdraw']){
-  const h=fixture([]),facts={provider:'未标记三方',currency:'INR',direction,submittedAmount:12800,submittedCount:13,successAmount:0,successCount:0,notReceivedAmount:12800,notReceivedCount:13};
-  h.L.workorders={byProvider:[facts],byPlatformProvider:[{...facts,platform:'Synthetic A',submittedAmount:4000,submittedCount:2,notReceivedAmount:4000,notReceivedCount:2},{...facts,platform:'Synthetic B',submittedAmount:8800,submittedCount:11,notReceivedAmount:8800,notReceivedCount:11}],coverage:{complete:true,capturedPlatformDays:2,expectedPlatformDays:2}};
+  const h=fixture([]),coverage={status:'complete',complete:true,detailCount:13,missingOrderNumberCount:0,missingDetailCount:0,amountConflictCount:0,providerConflictCount:0},facts={provider:'未标记三方',currency:'INR',direction,submittedAmount:12800,submittedCount:13,successAmount:0,successCount:0,notReceivedAmount:12800,notReceivedCount:13,uniqueOrderAmount:12800,uniqueOrderCount:13,uniqueSuccessAmount:0,uniqueSuccessCount:0,uniqueNotReceivedAmount:12800,uniqueNotReceivedCount:13,uniqueCoverage:coverage};
+  h.L.workorders={byProvider:[facts],byPlatformProvider:[{...facts,platform:'Synthetic A',submittedAmount:4000,submittedCount:2,notReceivedAmount:4000,notReceivedCount:2,uniqueOrderAmount:4000,uniqueOrderCount:2,uniqueNotReceivedAmount:4000,uniqueNotReceivedCount:2,uniqueCoverage:{...coverage,detailCount:2}},{...facts,platform:'Synthetic B',submittedAmount:8800,submittedCount:11,notReceivedAmount:8800,notReceivedCount:11,uniqueOrderAmount:8800,uniqueOrderCount:11,uniqueNotReceivedAmount:8800,uniqueNotReceivedCount:11,uniqueCoverage:{...coverage,detailCount:11}}],coverage:{complete:true,capturedPlatformDays:2,expectedPlatformDays:2}};
   h.render(direction);assert.match(h.html(),/三方未填写（源工单）/);assert.match(h.html(),/工单号未入库/);
   assert.match(h.html(),/onclick="providerSummaryToggle\(0\)"[^>]*>三方未填写（源工单）/);
-  h.root.providerSummaryToggle(0);const children=breakdown(h.html());assert.equal(children.length,2);assert.match(h.html(),/>4,000\.00</);assert.match(h.html(),/>8,800\.00</);assert.match(h.html(),/工单提交、成功、未到账金额和笔数为已采集的完整工单口径/);assert.match(h.html(),/去重列按原存款订单号/);assert.equal(h.networkCalls(),0);
+  h.root.providerSummaryToggle(0);const children=breakdown(h.html());assert.equal(children.length,2);assert.match(h.html(),/>4,000\.00</);assert.match(h.html(),/>8,800\.00</);assert.match(h.html(),/工单提交、成功、未到账六列统一按原存款订单号/);assert.doesNotMatch(h.html(),/去重列/);assert.equal(h.networkCalls(),0);
   assert(children.every(r=>r['成功金额']==='—'),'source-only cohorts must not pretend to have transaction amounts');
  }
 });
@@ -111,7 +112,7 @@ test('compact provider reports budget short identity columns and align equivalen
   const section=html.match(/<div class="[^"]*\bprovider-summary-table\b[^"]*">([\s\S]*?)<\/table>/)[1];
   const headers=[...section.matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]).replace(/\s*[↕↑↓]$/,''));
   const widths=[...section.matchAll(/<col style="width:(\d+)px">/g)].map(m=>Number(m[1]));
-  assert.equal(widths.length,headers.length);assert.equal(widths.length,direction==='charge'?25:27);
+  assert.equal(widths.length,headers.length);assert.equal(widths.length,direction==='charge'?19:21);
   assert(widths.slice(0,3).reduce((a,b)=>a+b,0)<=166,'identity columns leave room for the complete numeric report');
   for(const suffix of ['金额','笔数']){const group=headers.map((header,i)=>header.endsWith(suffix)?widths[i]:null).filter(v=>v!==null);assert(group.length>=4);assert.equal(new Set(group).size,1, suffix+' columns share an aligned width budget');}
   const ratios=headers.map((header,i)=>/成功率$|占比$/.test(header)?widths[i]:null).filter(v=>v!==null);assert.equal(new Set(ratios).size,1);
