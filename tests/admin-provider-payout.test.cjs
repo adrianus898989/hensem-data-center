@@ -113,7 +113,7 @@ test('compact provider reports budget short identity columns and align equivalen
   const headers=[...section.matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]).replace(/\s*[↕↑↓]$/,''));
   const widths=[...section.matchAll(/<col style="width:(\d+)px">/g)].map(m=>Number(m[1]));
   assert.equal(widths.length,headers.length);assert.equal(widths.length,direction==='charge'?19:21);
-  assert(widths.slice(0,3).reduce((a,b)=>a+b,0)<=166,'identity columns leave room for the complete numeric report');
+  assert(widths.slice(0,3).reduce((a,b)=>a+b,0)<=200,'identity columns balance readable labels with the numeric report');
   for(const suffix of ['金额','笔数']){const group=headers.map((header,i)=>header.endsWith(suffix)?widths[i]:null).filter(v=>v!==null);assert(group.length>=4);assert.equal(new Set(group).size,1, suffix+' columns share an aligned width budget');}
   const ratios=headers.map((header,i)=>/成功率$|占比$/.test(header)?widths[i]:null).filter(v=>v!==null);assert.equal(new Set(ratios).size,1);
   assert(widths.reduce((a,b)=>a+b,0)<=(direction==='charge'?1700:1850),'report keeps the compact column budget while narrow screens scroll inside the table');

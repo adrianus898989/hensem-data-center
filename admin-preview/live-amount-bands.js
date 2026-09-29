@@ -2,9 +2,9 @@
 (function(root){
  'use strict';
  const defaults={
- INR:{charge:[100,200,300,500,1000,2000,5000,10000,20000,30000,50000]},
+ INR:{charge:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]},
  IDR:{charge:[20000,50000,100000,200000,500000,1000000,2000000,5000000,10000000,20000000,50000000],withdraw:[50000,100000,200000,500000,1000000,5000000,10000000,50000000,100000000,500000000,1000000000]},
- BRL:{charge:[5,10,20,50,100,200,500,1000,5000,10000,50000],withdraw:[10,20,50,100,200,500,1000,2000,5000,10000,15000]},
+ BRL:{charge:[5,10,20,30,50,100,200,500,1000,10000,50000],withdraw:[10,20,30,50,100,200,500,1000,2000,5000,15000]},
  PKR:{charge:[100,300,500,1000,2000,5000,10000,20000,30000,40000,50000],withdraw:[200,500,1000,2000,5000,10000,15000,20000,30000,40000,50000]},
  VND:{charge:[50000,100000,200000,500000,1000000,2000000,5000000,10000000,50000000,100000000,300000000],withdraw:[100000,200000,500000,1000000,2000000,5000000,10000000,20000000,50000000,100000000,200000000]},
  COP:{charge:[20000,50000,100000,200000,300000,500000,750000,1000000,1250000,1500000,2000000],withdraw:[30000,50000,100000,200000,500000,1000000,2000000,3000000,5000000,7500000,10000000]},
@@ -12,7 +12,7 @@
  CLP:{charge:[5000,10000,20000,50000,100000,200000,500000,1000000,2000000,3000000,5000000],withdraw:[8000,20000,50000,100000,200000,500000,1000000,2000000,4000000,6000000,8000000]}
  };
  // Countries without confirmed limits retain an explicitly labelled analysis scale.
- const analysisScales={NGN:[100,500,1000,2000,5000,10000,20000,50000,100000,500000,1000000],PHP:[1,10,50,100,200,500,1000,5000,10000,50000,100000]};
+ const analysisScales={MYR:[10,20,30,50,100,200,500,1000,5000,10000,100000],NGN:[100,500,1000,2000,5000,10000,20000,50000,100000,500000,1000000],PHP:[1,10,50,100,200,500,1000,5000,10000,50000,100000]};
  const fmt=n=>Number(n).toLocaleString('en-US',{maximumFractionDigits:2});
  const valid=edges=>Array.isArray(edges)&&edges.length===11&&edges.every((n,i)=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1e15&&(!i||n>edges[i-1]));
  function number(value){
@@ -25,9 +25,9 @@
  }
  function parseLimit(value,currency){
   let s=String(value??'').trim();if(!s)return null;
-  const codes=s.match(/\b(?:IDR|INR|BRL|PKR|VND|COP|MXN|CLP|NGN|PHP|BDT|USD|USDT)\b/gi)||[];
+  const codes=s.match(/\b(?:IDR|INR|BRL|PKR|VND|COP|MXN|CLP|NGN|PHP|MYR|BDT|USD|USDT)\b/gi)||[];
   if(codes.some(code=>code.toUpperCase()!==currency))return null;
-  s=s.replace(/\b(?:IDR|INR|BRL|PKR|VND|COP|MXN|CLP|NGN|PHP|BDT|USD|USDT)\b/gi,'').replace(/\(\s*\)/g,'').trim();
+  s=s.replace(/\b(?:IDR|INR|BRL|PKR|VND|COP|MXN|CLP|NGN|PHP|MYR|BDT|USD|USDT)\b/gi,'').replace(/\(\s*\)/g,'').trim();
   const match=s.match(/^([\d.,]+\s*(?:[kmbw]|万|亿)?)\s*(?:-|–|—|~|～|至)\s*([\d.,]+\s*(?:[kmbw]|万|亿)?)$/i);if(!match)return null;
   const min=number(match[1].replace(/\s/g,'')),max=number(match[2].replace(/\s/g,''));return min!==null&&max!==null&&min>=0&&max>min?[min,max]:null;
  }
@@ -53,7 +53,7 @@
   if(!valid(edges))return String(bucket);
   if(bucket==='below')return '< '+fmt(edges[0]);if(bucket==='above')return '> '+fmt(edges[10]);
   const match=String(bucket).match(/^band:([0-9])$/);if(!match)return String(bucket);const i=Number(match[1]);
-  return fmt(edges[i])+(i===9?'–':'–< ')+fmt(edges[i+1]);
+  return fmt(edges[i])+' ≤ 金额 '+(i===9?'≤':'<')+' '+fmt(edges[i+1]);
  }
  function keys(){return Array.from({length:10},(_,i)=>'band:'+i)}
  function rank(bucket,edges){if(bucket==='below')return -1;if(bucket==='above')return 11;if(bucket==='unknown'||bucket==='other')return 12;const m=String(bucket).match(/^band:([0-9])$/);return m?Number(m[1]):Number(String(bucket).replaceAll(',','').match(/\d+(?:\.\d+)?/)?.[0]||Infinity)}

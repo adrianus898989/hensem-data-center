@@ -1172,7 +1172,7 @@ test('adaptive ten-band UI uses same edges for parent, matrix and daily drilldow
  });
  await h.c.liveQuery();await settle();assert.equal(h.L.amountBandProfiles.charge.edges.length,11);assert.match(h.html(),/充值人数 \/ 成功充值人数/);assert.match(h.html(),/>2 \/ 1</);
  h.c.liveMemberCountsDetails();assert.match(h.drawers.at(-1).html,/2026-09-27/);assert.match(h.drawers.at(-1).html,/充值人数/);
- h.L.overviewAnalysis=true;h.L.loadedView='full';h.c.render();assert.match(h.html(),/100–&lt; 200/);assert.doesNotMatch(h.html(),/>band:0</);
+ h.L.overviewAnalysis=true;h.L.loadedView='full';h.c.render();assert.match(h.html(),/100 ≤ 金额 &lt; 200/);assert.doesNotMatch(h.html(),/>band:0</);
  h.c.state.page='matrix';h.c.render();assert.equal((h.html().match(/金额 \/ 时/g)||[]).length,2);
  const parent=h.calls.filter(q=>q.action==='aggregate'&&q.amountBands).at(-1);assert.equal(parent.amountBands.charge.length,11);
  const segment={kind:'matrix_range',direction:'charge',hour:12,bucket:'band:0'};h.c.liveMatrixSegment(encodeURIComponent(JSON.stringify(segment)));h.c.liveAnalysisAction(encodeURIComponent(JSON.stringify(segment)),'daily');await settle();
