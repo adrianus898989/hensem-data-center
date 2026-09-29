@@ -3,7 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const shared=fs.readFileSync(path.join(__dirname,'admin-provider-payout.test.cjs'),'utf8').split(/\ntest\(/)[0];
 const {fixture,order,plus,combine}=new Function('require','__dirname',shared+';return {fixture,order,plus,combine};')(require,__dirname);
 const keys=['submittedAmount','submittedCount','successAmount','successCount','notReceivedAmount','notReceivedCount'];
-const issue=(platformId,platform,direction='withdraw',more={})=>({country:'印度',platformId,platform,sourcePlatform:platform,source:platformId==='b'?'newar':'ar',provider:'SyntheticPay',direction,submittedAmount:100,submittedCount:4,successAmount:60,successCount:2,notReceivedAmount:40,notReceivedCount:2,...more});
+const issue=(platformId,platform,direction='withdraw',more={})=>({country:'印度',platformId,platform,sourcePlatform:platform,source:platformId==='b'?'newar':'ar',provider:'SyntheticPay',direction,submittedAmount:100,submittedCount:4,successAmount:60,successCount:2,notReceivedAmount:40,notReceivedCount:2,uniqueOrderAmount:70,uniqueOrderCount:2,uniqueSuccessAmount:35,uniqueSuccessCount:1,uniqueNotReceivedAmount:35,uniqueNotReceivedCount:1,uniqueCoverage:{status:'complete',complete:true},...more});
 const source=(id,amount,count,more={})=>order(id,id==='b'?'newar':'ar',amount,count,{platform:id==='b'?'Beta':'Alpha',country:'印度',...more});
 const rates=[{country:'印度',scopeType:'country',provider:'SyntheticPay',collectFee:'4%',payoutFee:'2.5%',payoutSingleFee:'6'},{country:'印度',scopeType:'platform',platform:'Beta',provider:'SyntheticPay',collectFee:'5%',payoutFee:'3%',payoutSingleFee:'2'}];
 const children=html=>[...html.matchAll(/<tr class="provider-platform-row">([\s\S]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td>([\s\S]*?)<\/td>/g)].map(c=>c[1]));
@@ -26,7 +26,7 @@ test('both flows expand with identical parent column count/order, successful tim
   const feeIndex=direction==='withdraw'?10:8;assert.equal(plain(rows[0][feeIndex]),direction==='withdraw'?'2.50% + 6 / 笔':'4.00%');
   assert.equal(plain(rows[1][feeIndex]),direction==='withdraw'?'3.00% + 2 / 笔':'5.00%');
   assert.equal(plain(rows[0][feeIndex+1]),direction==='withdraw'?'40.50':'36.00');assert.equal(plain(rows[1][feeIndex+1]),direction==='withdraw'?'17.00':'5.00');
-  assert.equal(plain(rows[0][feeIndex+3]),'100.00');assert.equal(plain(rows[0][feeIndex+4]),'4');assert.equal(plain(rows[0].at(-2)),'50.00%');assert.equal(plain(rows[0].at(-1)),'查看订单');assert.match(rows[0].at(-1),/providerSummaryOrders/);
+  assert.equal(plain(rows[0][feeIndex+3]),'70.00');assert.equal(plain(rows[0][feeIndex+4]),'2');assert.equal(plain(rows[0].at(-2)),'50.00%');assert.equal(plain(rows[0].at(-1)),'查看订单');assert.match(rows[0].at(-1),/providerSummaryOrders/);
   assert.match(html,/成功金额、成功笔数按成功时间/);assert.equal(h.networkCalls(),before);assert.doesNotMatch(html,/provider-platform-table/);
  }
 });
@@ -66,8 +66,8 @@ test('missing amounts stay unknown while manual and unmatched fees stay honest',
 
 test('only workorder success rates below 30 percent use red text in both flows and expanded rows',()=>{
  for(const direction of ['charge','withdraw'])for(const [success,total,red]of [[0,10,true],[2,10,true],[3,10,false],[4,10,false],[0,0,false]]){
-  const {h}=setup(direction);h.L.workorders.byProvider[0].successCount=success;h.L.workorders.byProvider[0].submittedCount=total;
-  for(const row of h.L.workorders.byPlatformProvider){row.successCount=success;row.submittedCount=total;}
+  const {h}=setup(direction);h.L.workorders.byProvider[0].uniqueSuccessCount=success;h.L.workorders.byProvider[0].uniqueOrderCount=total;
+  for(const row of h.L.workorders.byPlatformProvider){row.uniqueSuccessCount=success;row.uniqueOrderCount=total;}
   h.render(direction);const parent=h.html().match(/<tbody>([\s\S]*?)<\/tbody>/)[1];assert.equal(parent.includes('class="workorder-rate-low"'),red,direction+' parent threshold');
   h.root.providerSummaryToggle(0);for(const row of children(h.html()))assert.equal(row.at(-2).includes('class="workorder-rate-low"'),red,direction+' child threshold');
  }
