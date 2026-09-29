@@ -365,3 +365,13 @@ test('daily submission analysis retains narrow authenticated scope and rejects u
  for(const bad of [{platformId:'bad'},{direction:'withdraw'},{status:'success'},{threshold:'30'},{threshold:29},{level:'VIP'},{offset:-1},{limit:500},{providers:['']},{memberId:'\n'},{startAt:'not a date'},{operation:'delete'},{country:'hidden'}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...bad}));
  await h.api.adminLiveRequest(session,q);assert.match(h.calls[0].url,/\/rpc\/dashboard_admin_live_submission_analysis$/);const payload=JSON.parse(h.calls[0].init.body).p_request;assert.equal(payload.platformId,q.platformId);assert.equal(payload.action,undefined);assert.equal(payload.threshold,30);
 });
+
+test('submission dashboard validates increasing numeric amount boundaries',()=>{
+ const h=load(),base={action:'submissionAnalysis',platformId:query.platformId,startAt:query.startAt,endAt:query.endAt,direction:'charge',operation:'summary'};
+ const bands={charge:[10,20,30,50,100,200,500,1000,5000,10000,100000]};
+ assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest({...base,amountBands:bands}))).amountBands,bands);
+ for(const amountBands of [null,{}, {charge:[1,2]}, {...bands,withdraw:bands.charge}, {charge:[10,20,20,50,100,200,500,1000,5000,10000,100000]}])assert.throws(()=>h.api.validateAdminLiveRequest({...base,amountBands}));
+});
+test('submission charts can only be requested using a boolean flag',()=>{
+ const h=load(),q={action:'submissionAnalysis',platformId:query.platformId,startAt:query.startAt,endAt:query.endAt,direction:'charge',operation:'summary'};assert.equal(h.api.validateAdminLiveRequest({...q,charts:false}).charts,false);for(const charts of [null,0,'false',{}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,charts}));
+});

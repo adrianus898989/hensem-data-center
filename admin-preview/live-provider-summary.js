@@ -420,9 +420,9 @@
    reportTable=reportTable.replace(/<tbody>[\s\S]*?<\/tbody>/,()=>'<tbody>'+body+'</tbody>');
   }
   return '<div class="provider-summary-report">'+readNotice(ctx)+'<div class="provider-summary-heading"><span class="provider-scope-note">'+E(L.country)+' · '+E(L.currency)+' · '+E(L.from.replace('T',' '))+' 至 '+E(L.to.replace('T',' '))+coverageNote+'</span></div>'+
-   renderMetrics(ctx,direction,rows)+workNote+(direction==='charge'?(submissionAnalysis?.note()||'')+'<div class="live-definition">无充值人数 / 无效笔数：按平台当地日，同 ID 提交 ≥30 笔且无成功充值。剔除后成功率 = 原成功笔数 ÷（全部订单笔数 − 无效笔数）；原成功率保留。人数跨三方不相加，合计按平台 ID 去重。</div>':'')+
+   renderMetrics(ctx,direction,rows)+workNote+(direction==='charge'?(submissionAnalysis?.note(true)||''):'')+
    box(name+'三方汇总'+(readState.partial?'（部分结果）':'')+' · '+issueLabel+'工单',uniqueCoverageNote+reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
-    '成功数据按成功时间；成功率为本期成功笔数 / 本期创建笔数，含跨日成功，可超过100%。昨日对比使用同平台、同币种、同一时段，成功率差额为百分点。三方及平台卡片统计有交易的范围；工单按所选整日统计，未采集显示 —。'+workorderBasis+'原单覆盖未齐时统一提示，悬停数字查看缺失或冲突。全表合计直接取完整期间去重结果，当前页不累加去重值。点击费率查看来源与匹配规则；手续费按当前匹配费率估算。')+'</div>';
+    '')+'</div>';
  }
  root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,tieredFeeRule,feeSummary,feeCoverageText,feeCandidates,confirmedFeeRule,queryCoverage,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
  if(typeof module!=='undefined')module.exports=root.HensemProviderSummary;

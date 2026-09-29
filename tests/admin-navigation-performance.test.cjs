@@ -26,7 +26,7 @@ function harness(options={}){
   setInterval:(fn,ms)=>{intervals.push({fn,ms});return intervals.length},clearInterval(){},setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},
   HENSEM_PRODUCTION:options.production!==false,hensemAdminInitialPage:options.initialPage,hensemAdminPageUrl:key=>'https://dashboard.example/app/#owner-admin-preview/'+key,scrollX:0,scrollY:0,
   hensemLiveRequest:async request=>{calls.push(JSON.parse(JSON.stringify(request)));if(!options.ancillaryHandler&&request.action==='providerOptions')return {providers:['Synthetic provider']};if(!options.ancillaryHandler&&request.action==='workorders')return {rows:[],byProvider:[],total:0,summary:{},byDirection:{}};if(handler)return handler(request);if(request.action==='catalog')return {platforms:options.platforms||[P]};if(request.action==='details')return detail((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65,request.offset,request.limit);if(request.action==='rates')return {rows:[],total:0,options:{countries:[],platforms:[],providers:[]}};if(request.action==='payoutConfig')return payoutConfig(request,(options.platforms||[P]).length>0);return aggregate((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65)}
- };if(options.observe)context.IntersectionObserver=class{constructor(callback){observations.push(callback)}observe(){}disconnect(){}};context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>m.name!=='live-report-data.js'||options.reports))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
+ };if(options.observe)context.IntersectionObserver=class{constructor(callback){observations.push(callback)}observe(){}disconnect(){}};context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>m.name!=='live-report-data.js'||options.reports))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});if(options.submission)vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-submission-analysis.js'),'utf8'),context);vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
  return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,scrolled,observations,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
 }
 async function ready(options){const h=harness(options);await settle();if(h.L){h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59'}return h}
@@ -201,7 +201,7 @@ test('overview and provider summaries prioritize two primary reads before ancill
    const platform=platforms.find(p=>p.id===q.platformId)||P;if(q.action==='aggregate'&&initial)return pending[platforms.indexOf(platform)].promise;return flowAggregate(platform,direction);
   }});await settle();const run=page==='overview'?h.c.liveQuery():null;await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2,page+' bounds concurrent primary reads');
   pending[0].resolve(flowAggregate(platforms[0],direction));await settle();assert.equal(h.L.results.length,1);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,3);assert.equal(h.calls.filter(q=>['rates','collectedData','reportSummary'].includes(q.action)).length,0,'ancillary reads wait for primary completion');
-  initial=false;pending[1].resolve(flowAggregate(platforms[1],direction));pending[2].resolve(flowAggregate(platforms[2],direction));await run;await settle();assert.equal(h.L.results.length,3);assert.equal(h.L.loading,false);assert(h.calls.some(q=>q.action==='collectedData'));assert(h.calls.some(q=>q.action==='rates'));
+  initial=false;pending[1].resolve(flowAggregate(platforms[1],direction));pending[2].resolve(flowAggregate(platforms[2],direction));await run;await settle();assert.equal(h.L.results.length,3);assert.equal(h.L.loading,false);assert.equal(h.calls.some(q=>q.action==='collectedData'),page==='overview','provider summaries do not load removed source reports');assert(h.calls.some(q=>q.action==='rates'));
  }
 });
 
@@ -281,4 +281,16 @@ test('failed catalogue has a dedicated retry and recovers without a phantom empt
 test('malformed catalogue cannot masquerade as an authorized empty directory',async()=>{
  const h=harness({handler:q=>q.action==='catalog'?{}:aggregate()});await settle();assert.equal(h.L.catalogReady,false);assert.match(h.html(),/平台目录响应不完整/);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);
  h.setHandler(q=>q.action==='catalog'?{platforms:[]}:aggregate());await h.c.liveRetryCatalog();await settle();assert.equal(h.L.catalogReady,true);assert.equal(h.L.catalogError,'');assert.doesNotMatch(h.html(),/响应不完整/);
+});
+
+test('removed risk entries disappear from navigation and old page entry redirects to submission risk',async()=>{
+ const h=await ready({initialPage:'anomaly'});assert.equal(h.c.state.page,'events');
+ assert.equal(h.c.pages.find(p=>p[0]==='events')[2],'刷单风控');
+ assert.ok(h.c.pages.every(p=>!['dropped','anomaly'].includes(p[0])));
+ assert.ok(h.c.navGroupsV3.every(g=>g[3].every(k=>!['dropped','anomaly'].includes(k))));
+});
+
+test('provider loading shares bounded lanes with exclusions and avoids removed report sections',async()=>{
+ const platforms=[P,{...P,id:'22222222-2222-4222-8222-222222222222'},{...P,id:'33333333-3333-4333-8333-333333333333'}],pending=deferred();
+ const h=harness({page:'providers',submission:true,reports:true,handler:q=>{if(q.action==='catalog')return {platforms};if(q.action==='rates')return {rows:[],total:0};if(q.action==='submissionAnalysis')return pending.promise.then(()=>({platform:platforms.find(p=>p.id===q.platformId),startAt:q.startAt,endAt:q.endAt,basis:'platform_local_day_all_providers_zero_success',metrics:[10,20,30,50,100].map(threshold=>({provider:null,threshold,member_count:0,member_days:0,invalid_count:0,l0_members:0,new_members:0,funded_members:0,unknown_members:0})),coverage:{missingMemberCount:0}}));return flowAggregate(platforms.find(p=>p.id===q.platformId)||P,'charge')}});await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2);assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,2);assert.equal(h.L.results.length,2,'received aggregates paint before exclusion finishes');pending.resolve();await settle();assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,3);assert.equal(h.L.loading,false);assert.doesNotMatch(h.html(),/自动出款配置接入|源日报数据|无充值人数 \/ 无效笔数：|成功数据按成功时间；/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,0);
 });
