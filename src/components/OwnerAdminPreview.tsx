@@ -9,7 +9,9 @@ import AdminPreviewGrants from "./AdminPreviewGrants";
 import AdminControlCenter from "./AdminControlCenter";
 import WorkOrderAccountAdmin from "./WorkOrderAccountAdmin";
 import { installAdminLiveBridge, makeAdminLiveDocument } from "@/lib/adminLiveBridge";
-import { OWNER_PREVIEW_HOST_CSS, isOwnerPreviewReturnMessage, ownerPreviewAccountCommand, ownerPreviewAccountPage, makeOwnerPreviewShellDocument, mountOwnerPreviewHostShell } from "@/lib/ownerPreviewShell";
+import { OWNER_PREVIEW_HOST_CSS, isOwnerPreviewReturnMessage, ownerPreviewActivityTime, ownerPreviewAccountCommand, ownerPreviewAccountPage, makeOwnerPreviewShellDocument, mountOwnerPreviewHostShell } from "@/lib/ownerPreviewShell";
+
+import { recordDashboardActivity } from "@/lib/dashboardIdle";
 
 type Props = { canView:boolean; session: DashboardSession; profile: DashboardProfile; onClose: () => void };
 export default function OwnerAdminPreview({session,profile,onClose,canView}: Props) {
@@ -42,7 +44,7 @@ export default function OwnerAdminPreview({session,profile,onClose,canView}: Pro
     const focused=()=>{if(document.visibilityState==="visible")verify()};document.addEventListener("visibilitychange",focused);
     return()=>{cancelled=true;controller.abort();window.clearInterval(timer);document.removeEventListener("visibilitychange",focused)};
   },[allowed,accountId,reload,readDrafts,owner]);
-  useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{const data=event.data;if(isOwnerPreviewReturnMessage(event,frame.current?.contentWindow,channel.current)){onClose();return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){setAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,onClose,canManageAccounts,owner]);
+  useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{const data=event.data;const activity=ownerPreviewActivityTime(event,frame.current?.contentWindow,channel.current);if(activity!==null){recordDashboardActivity(activity);return}if(isOwnerPreviewReturnMessage(event,frame.current?.contentWindow,channel.current)){onClose();return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){setAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,onClose,canManageAccounts,owner]);
   const hasDocument=Boolean(documentHtml);
   useEffect(()=>{if(!allowed||!hasDocument)return;return installAdminLiveBridge({source:()=>frame.current?.contentWindow,channel:()=>channel.current,session:()=>sessionRef.current})},[allowed,hasDocument,accountId]);
   return <section className="owner-preview-shell" aria-label="新版详细后台">
@@ -56,7 +58,7 @@ export default function OwnerAdminPreview({session,profile,onClose,canView}: Pro
         <button type="button" role="tab" id="owner-backend-tab" aria-controls="owner-backend-panel" aria-selected={activeAccountView==="accounts"} disabled={!canManageAccounts} onClick={()=>setAccountView("accounts")}>后台账号</button>
       </div>
       <div role="tabpanel" id={activeAccountView==="workorder"?"owner-workorder-panel":"owner-backend-panel"} aria-labelledby={activeAccountView==="workorder"?"owner-workorder-tab":"owner-backend-tab"} className="owner-preview-account-body">
-        {activeAccountView==="accounts"&&canManageAccounts?<AdminControlCenter key={accountId} open session={session} profile={profile} section="accounts" embedded accountsOnlyLoading onClose={()=>{}}/>:activeAccountView==="workorder"&&owner?<WorkOrderAccountAdmin key={accountId} session={session}/>:<p role="alert" className="owner-preview-account-denied">当前账号没有此项账号管理权限。</p>}
+        {activeAccountView==="accounts"&&canManageAccounts?<AdminControlCenter key={accountId} open session={session} profile={profile} section="accounts" embedded accountsOnlyLoading manualQuery onClose={()=>{}}/>:activeAccountView==="workorder"&&owner?<WorkOrderAccountAdmin key={accountId} session={session} manualQuery/>:<p role="alert" className="owner-preview-account-denied">当前账号没有此项账号管理权限。</p>}
       </div>
     </section>}
 

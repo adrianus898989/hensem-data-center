@@ -24,7 +24,7 @@ function ui(options={}){
   if(name.startsWith('@/lib/'))return loadTs(path.join(root,'src/lib',name.slice(6)+'.ts'));
   throw Error('Unexpected module: '+name);
  }});
- const draw=()=>{cursor=ecursor=0;return mod.exports.default({open:true,session,profile:options.actor||owner,onClose(){},section:'accounts',embedded:true,accountsOnlyLoading:true})};
+ const draw=()=>{cursor=ecursor=0;return mod.exports.default({open:true,session,profile:options.actor||owner,onClose(){},section:'accounts',embedded:true,accountsOnlyLoading:true,manualQuery:options.manualQuery})};
  const all=()=>nodes(draw());
  const button=(label,within)=>{const node=nodes(within||draw()).find(n=>n.type==='button'&&text(n)===label);assert(node,'button '+label);return node};
  const field=(label)=>{const wrap=all().find(n=>n.type==='div'&&n.props.className?.includes('admin-search-field')&&nodes(n).some(c=>c.type==='label'&&text(c)===label));assert(wrap,'filter '+label);return nodes(wrap).find(n=>['select','input'].includes(n.type))};
@@ -70,4 +70,11 @@ test('existing editable account opens the same modal without an inline table row
  const h=ui();await flush();const row=h.rows().find(n=>text(n).includes('brazil-fixture'));h.button('账号设置',row).props.onClick();assert.equal(h.dialog().props.title,'后台账号设置 · brazil-fixture');assert.equal(h.all().filter(n=>n.props?.className==='admin-account-editor-row').length,0);assert(!h.calls.some(c=>['create','update','password'].includes(c.action)));
  const editor=h.all().find(n=>n.type?.name==='AccountDataScopeEditor');await editor.props.onSave({data_scope:BR});assert.deepEqual(h.calls.find(c=>c.action==='update').args,[session,'brazil-fixture',{data_scope:BR}]);assert.match(text(h.dialog()),/已更新/);h.dialog().props.onClose();assert(!h.dialog());
  const ownerRow=h.rows().find(n=>text(n).includes('owner-fixture'));assert(!nodes(ownerRow).some(n=>n.type==='button'&&text(n)==='账号设置'),'owner fixed-account protection remains');
+});
+
+
+test('embedded backend account page waits for a manual query before reading the directory',async()=>{
+ const h=ui({manualQuery:true});await flush();assert.equal(h.calls.length,0);assert.equal(h.rows().length,0);
+ await h.button('查询账号').props.onClick();await flush();assert.deepEqual(h.calls,[{action:'list'}]);assert.equal(h.rows().length,3);
+ h.draw();assert.equal(h.calls.length,1);
 });

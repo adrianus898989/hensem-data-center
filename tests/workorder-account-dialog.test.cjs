@@ -27,7 +27,7 @@ const accounts = [
   {auth_user_id: 'h', username: 'hkstaff', display_name: 'Alice Hong', role: 'auditor', team: '香港', platforms: ['H'], active: true, updated_at: 'version-h'},
 ];
 const session = {user: {id: 'owner'}, access_token: 'synthetic-session'};
-function ui(handler) {
+function ui(handler, options={}) {
   const states = [], refs = [], dependencies = [], effects = [], cleanups = [], calls = [];
   let stateIndex = 0, refIndex = 0, effectIndex = 0;
   const react = {
@@ -52,7 +52,7 @@ function ui(handler) {
       throw Error('Unexpected import ' + name);
     },
   });
-  const draw = () => {stateIndex = refIndex = effectIndex = 0; return mod.exports.default({session});};
+  const draw = () => {stateIndex = refIndex = effectIndex = 0; return mod.exports.default({session,manualQuery:options.manualQuery});};
   function dialog() {return nodes(draw()).find(node => node.type === AccountEditorDialog);}
   function form() {return nodes(dialog()).find(node => node.type === 'form');}
   function filterRoot() {return nodes(draw()).find(node => node.props?.className === 'wo-account-filters');}
@@ -251,4 +251,11 @@ test('refresh and edit remove the scope dialog, and a failed refresh cannot reta
   h.button('共 3 个平台 · 查看全部').props.onClick(); fail = true;
   h.button('刷新列表').props.onClick(); h.draw(); h.effect(); await flush();
   assert.equal(h.dialog(), undefined); assert.doesNotMatch(text(h.draw()), /alice|共 3 个平台/); assert.match(text(h.draw()), /无权读取/);
+});
+
+
+test('embedded workorder account page waits for its query button and does not keep a false loading state',async()=>{
+ const h=ui(undefined,{manualQuery:true});await flush();assert.equal(h.calls.length,0);assert.equal(h.button('查询账号').props.disabled,false);
+ h.button('查询账号').props.onClick();h.draw();h.effect();await flush();assert.equal(h.calls.length,1);assert.equal(h.calls[0].body.action,'list-accounts');assert.deepEqual(h.visibleUsers(),['alice','bravo','hkstaff']);
+ h.draw();h.effect();await flush();assert.equal(h.calls.length,1);
 });

@@ -7,7 +7,7 @@ const noData=p=>({platform:p,total:0,summary:[],groups:{}});
 const plain=s=>s.replace(/<[^>]*>/g,'').trim();
 const table=h=>h.html().match(/<section[^>]*id="df-platforms-charge"[\s\S]*?<\/section>/)?.[0]||'';
 const rows=h=>[...(table(h).match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1]||'').matchAll(/<tr(?: [^>]*)?>([\s\S]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td>([\s\S]*?)<\/td>/g)].map(c=>plain(c[1])));
-async function render(platforms,results){const h=await ready({platforms,reports:true});Object.assign(h.L,{queryPlatforms:platforms,queryFailures:[],results,country:'印度',direction:'charge',currency:'INR',dirty:false,loading:false,overviewQueried:true,feeLookupRows:[],feeLookupLoading:false,comparisonStatus:'idle'});h.c.render();return h;}
+async function render(platforms,results){const h=await ready({platforms,reports:true});Object.assign(h.L,{queryPlatforms:platforms,queryFailures:[],results,country:'印度',direction:'charge',currency:'INR',dirty:false,loading:false,pageQueried:true,overviewQueried:true,feeLookupRows:[],feeLookupLoading:false,comparisonStatus:'idle'});h.c.render();return h;}
 
 test('retained raw RAJA data suppresses the confirmed alias empty row without mutating totals or source keys',async()=>{
  const results=[completeAggregate(raw,10,8),noData(alias)],before=JSON.stringify(results),h=await render([raw,alias],results);

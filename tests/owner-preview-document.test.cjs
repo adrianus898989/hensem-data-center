@@ -148,6 +148,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     if (name === './AdminPreviewGrants') return { default: () => null };
     if (name === './AdminControlCenter') return { default: function AdminControlCenter(){} };
     if (name === './WorkOrderAccountAdmin') return { default: function WorkOrderAccountAdmin(){} };
+    if (name.endsWith('/dashboardIdle')) return {recordDashboardActivity:()=>true};
     throw Error('Unexpected component test import: ' + name);
   };
   environment = {

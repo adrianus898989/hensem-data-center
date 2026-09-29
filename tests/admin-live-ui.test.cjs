@@ -59,7 +59,7 @@ function harness(options={}){
  };context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>(m.name!=='live-report-data.js'||options.reports)&&(m.name!=='live-submission-analysis.js'||options.submissions)&&(!['live-amount-bands.js','live-member-counts.js'].includes(m.name)||options.adaptive)))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
  return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
 }
-async function ready(options={}){const h=harness(options);await settle();if(h.L){h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';if(h.c.state.page==='overview'&&options.manualOverview!==true){h.c.liveQuery();await settle();}}return h}
+async function ready(options={}){const h=harness(options);await settle();if(h.L){h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';if(options.manualOverview!==true){h.c.liveQuery();await settle();}}return h}
 function setScope(h,values={}){Object.assign(h.L,{from:'2026-09-22T00:00:00',to:'2026-09-22T05:59:59',...values})}
 function completeAggregate(p=P,count=10,success=5){const r=aggregate(p,count),s={...stats(count,String(count*100)),success_count:success,created_success_count:success,success_amount:String(success*100),pending_count:count-success,pending_amount:String((count-success)*100),failed_count:0,failed_amount:'0',rejected_count:0,rejected_amount:'0',unknown_count:0,unknown_amount:'0'};r.summary=[s];for(const key of ['provider','daily','hourly','amount','matrix'])r.groups[key]=[{...r.groups[key][0],...s}];return r}
 const withoutWindow=q=>Object.fromEntries(Object.entries(q).filter(([key])=>!['startAt','endAt'].includes(key)));
@@ -86,8 +86,8 @@ test('direct supervisor routes and bookmarks defer all requests until an existin
  for(const [page]of supervisorRoutes){
   for(const options of [{page,reports:true},{hash:'#'+page,reports:true}]){
    const h=await ready(options);assert.equal(h.c.state.page,page);assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.calls.length,0);assert.match(h.html(),/员工测试站尚未接通/);
-   h.c.setPage('workorders');await settle();assert.equal(h.c.state.page,'workorders');assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.calls.filter(q=>q.action==='catalog').length,1);assert(h.calls.some(q=>q.action==='workorderRecords'));assert(!h.calls.some(q=>q.action==='aggregate'));
-   h.c.setPage('deposit_tracking');await settle();assert.equal(h.c.state.page,'deposit_tracking');assert(h.calls.some(q=>q.action==='depositIssues'));assert.match(h.nodes.get('crumbTitle').textContent,/工单运营中心 \/ 存款未到账-跟进记录/);
+   h.c.setPage('workorders');await settle();await h.c.liveQuery();await settle();assert.equal(h.c.state.page,'workorders');assert.equal(h.c.state.navGroup,'workorder');assert.equal(h.calls.filter(q=>q.action==='catalog').length,1);assert(h.calls.some(q=>q.action==='workorderRecords'));assert(!h.calls.some(q=>q.action==='aggregate'));
+   h.c.setPage('deposit_tracking');await settle();await h.c.liveQuery();await settle();assert.equal(h.c.state.page,'deposit_tracking');assert(h.calls.some(q=>q.action==='depositIssues'));assert.match(h.nodes.get('crumbTitle').textContent,/工单运营中心 \/ 存款未到账-跟进记录/);
   }
  }
 });
@@ -96,7 +96,7 @@ test('a pending production catalogue cannot start report reads after navigation 
  const pending=deferred(),h=harness({reports:true,handler:q=>q.action==='catalog'?pending.promise:aggregate()});
  assert.deepEqual(h.calls.map(q=>q.action),['catalog']);h.c.setPage('workorder_permissions');pending.resolve({platforms:[P]});await settle();
  assert.deepEqual(h.calls.map(q=>q.action),['catalog']);assert.equal(h.L.country,P.country);assert.match(h.html(),/员工测试站尚未接通/);
- h.setHandler(q=>q.action==='rates'?{rows:[],total:0}:q.action==='reportSummary'?{rows:[],summary:{}}:aggregate());h.c.setPage('providers');await settle();
+ h.setHandler(q=>q.action==='rates'?{rows:[],total:0}:q.action==='reportSummary'?{rows:[],summary:{}}:aggregate());h.c.setPage('providers');await settle();await h.c.liveQuery();await settle();
  assert.equal(h.c.state.page,'providers');assert(h.calls.some(q=>q.action==='aggregate'&&q.direction==='charge'));assert.doesNotMatch(h.html(),/员工测试站尚未接通/);
 });
 
@@ -107,13 +107,13 @@ test('returning from supervisor initializes the default report-only country',asy
  ];
  const h=harness({reports:true,handler:q=>q.action==='catalog'?pending.promise:q.action==='collectedData'?{rows}:q.action==='reportSummary'?{feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'not_received',groups:[]}))}:q.action==='rates'?{rows:[],total:0}:aggregate()});
  h.c.setPage('workorder_permissions');pending.resolve({platforms:[]});await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
- h.c.setPage('providers');await settle();assert.equal(h.L.country,'印度');assert.equal(h.calls.filter(q=>q.action==='catalog').length,1,'reuse the already authorized native directory');
+ h.c.setPage('providers');await settle();await h.c.liveQuery();await settle();assert.equal(h.L.country,'印度');assert.equal(h.calls.filter(q=>q.action==='catalog').length,1,'reuse the already authorized native directory');
  const reports=h.calls.filter(q=>q.action==='reportSummary');assert.equal(reports.length,0);assert.doesNotMatch(h.html(),/REPORT_IN|REPORT_PK|自动出款配置接入|源日报数据/);
 });
 
 test('returning from supervisor preserves a paused directory without automatically reading it again',async()=>{
  const pending=deferred(),h=harness({page:'providers',ancillaryHandler:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='providerOptions'?pending.promise:q.action==='rates'?{rows:[],total:0}:q.action==='workorders'?{rows:[],summary:{},total:0}:aggregate()});
- await settle();assert.equal(h.L.providerOptionsBusy,true);assert.equal(h.calls.filter(q=>q.action==='providerOptions').length,1);
+ await settle();h.c.liveQuery();await settle();assert.equal(h.L.providerOptionsBusy,true);assert.equal(h.calls.filter(q=>q.action==='providerOptions').length,1);
  h.c.setPage('workorder_workload');const requestsOnSupervisor=h.calls.length;pending.resolve({providers:['Synthetic provider']});await settle();assert.equal(h.calls.length,requestsOnSupervisor);assert.equal(h.L.providerOptionsBusy,false);
  h.c.setPage('providers');await settle();assert.equal(h.L.providerOptionsBusy,false);assert.equal(h.calls.filter(q=>q.action==='providerOptions').length,1);await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='providerOptions').length,2);assert(h.L.providerOptions.includes('Synthetic provider'));
 });
@@ -158,12 +158,12 @@ test('an explicit overview retry recovers a failed catalog without an automatic 
  await h.c.liveQuery();await settle();assert.equal(catalogs,2);assert.equal(h.L.catalogReady,true);assert.equal(h.L.error,'');assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2);assert.equal(h.L.comparisonStatus,'ready');
 });
 
-test('cancelling an in-flight report and navigating to the same scope starts a new read without stale cancellation errors',async()=>{
+test('cancelling an in-flight report and manually querying the same scope starts a new read without stale cancellation errors',async()=>{
  const pending=[];let reportReads=0;
  const rawFeed={dataset:'volume',system:'REPORT',country:'印度',rawCountry:'印度',name:P.name,rawPlatform:P.name,team:'M8',directions:['charge'],records:2,provenance:{kind:'google_sheets'}};
  const h=harness({page:'collection',reports:true,onCancel:actions=>{if(actions.includes('reportSummary'))for(const item of pending.splice(0))item.reject(Object.assign(Error('查询已取消'),{name:'AbortError',code:'ADMIN_LIVE_CANCELLED'}));},handler:q=>{
   if(q.action==='catalog')return {platforms:[P]};if(q.action==='collectedData')return {rows:[rawFeed]};if(q.action==='reportSummary'){reportReads++;if(reportReads===1){const d=deferred();pending.push(d);return d.promise;}return {feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,records:0,status:'empty',groups:[]}))};}return q.action==='rates'?{rows:[],total:0}:aggregate();
- }});await settle();assert.equal(reportReads,1);const first=h.calls.find(q=>q.action==='reportSummary');h.c.setPage('merchants');await settle();assert.equal(reportReads,2);assert.deepEqual(h.calls.filter(q=>q.action==='reportSummary')[1],first,'the destination needs the same exact source/date scope');assert.doesNotMatch(h.html(),/查询已取消/);assert.equal(h.c.state.page,'merchants');assert.equal(h.L.loading,false);
+ }});await settle();h.c.liveQuery();await settle();assert.equal(reportReads,1);const first=h.calls.find(q=>q.action==='reportSummary');h.c.setPage('merchants');await settle();await h.c.liveQuery();await settle();assert.equal(reportReads,2);assert.deepEqual(h.calls.filter(q=>q.action==='reportSummary')[1],first,'the destination needs the same exact source/date scope');assert.doesNotMatch(h.html(),/查询已取消/);assert.equal(h.c.state.page,'merchants');assert.equal(h.L.loading,false);
 });
 
 test('monthly overview and provider reads cover the exact half-open range in contiguous bounded parts',async()=>{
@@ -337,26 +337,26 @@ test('successful orders show the completion column first while all-order views r
  }
 });
 
-test('navigation reuses recent matching aggregates without mixing directions, but explicit queries and expired or changed scopes reread',async()=>{
+test('explicit cache queries reuse recent matching aggregates without mixing directions, but explicit queries and expired or changed scopes reread',async()=>{
  const h=await ready();h.L.overviewAnalysis=true;setScope(h,{platform:P.id,direction:'all'});h.c.state.page='overview';
  h.setHandler(async q=>{const r=aggregate(P,5),w={...stats(2,'400'),direction:'withdraw'};r.summary.push(w);for(const key of Object.keys(r.groups))if(r.groups[key].length)r.groups[key].push({...r.groups[key][0],...w});r.summary=r.summary.filter(row=>q.direction==='all'||row.direction===q.direction);for(const key of Object.keys(r.groups))r.groups[key]=r.groups[key].filter(row=>q.direction==='all'||row.direction===q.direction);r.total=r.summary.reduce((n,row)=>n+row.all_count,0);return r});
  const countReads=()=>h.calls.filter(q=>q.action==='aggregate').length;
  await h.c.liveQuery();const initial=countReads();assert.equal(h.L.results[0].total,7);
- h.c.setPage('providers');await settle();assert.equal(countReads(),initial);assert.equal(h.L.results[0].total,5);assert(h.L.results[0].summary.every(r=>r.direction==='charge'));assert.equal(h.L.comparisonStatus,'ready');
- h.c.setPage('payout');await settle();assert.equal(countReads(),initial);assert.equal(h.L.results[0].total,2);assert(h.L.results[0].summary.every(r=>r.direction==='withdraw'));assert.equal(h.L.comparisonResults[0].total,2);
+ h.c.setPage('providers');await settle();await h.c.liveQuery(false);await settle();assert.equal(countReads(),initial);assert.equal(h.L.results[0].total,5);assert(h.L.results[0].summary.every(r=>r.direction==='charge'));assert.equal(h.L.comparisonStatus,'ready');
+ h.c.setPage('payout');await settle();await h.c.liveQuery(false);await settle();assert.equal(countReads(),initial);assert.equal(h.L.results[0].total,2);assert(h.L.results[0].summary.every(r=>r.direction==='withdraw'));assert.equal(h.L.comparisonResults[0].total,2);
  await h.c.liveQuery();assert.equal(countReads(),initial+2,'manual query rereads both dates');
  h.setNow('2026-09-23T12:01:01Z');await h.c.liveQuery(false);assert.equal(countReads(),initial+4,'navigation cache expires after one minute');
  h.L.provider='Another Provider';h.L.multi.provider=['Another Provider'];await h.c.liveQuery(false);assert.equal(countReads(),initial+6,'provider scope cannot reuse broader totals');
  h.L.currency='USD';h.L.catalog[0]={...h.L.catalog[0],currency:'USD'};await h.c.liveQuery(false);assert.equal(countReads(),initial+8,'currency scopes stay separate');
 });
 
-test('navigation keeps completion-cohort totals when narrowing a successful-order result by direction',async()=>{
+test('manual cached queries keep completion-cohort totals when narrowing a successful-order result by direction',async()=>{
  const h=await ready();setScope(h,{platform:P.id,direction:'all',status:'success'});h.c.state.page='overview';
  h.setHandler(async()=>{const r=aggregate(P,5);r.summary=[{...r.summary[0],success_count:7},{...stats(9),direction:'withdraw',success_count:2}];r.total=9;return r});
  await h.c.liveQuery();const reads=h.calls.filter(q=>q.action==='aggregate').length;
- h.c.setPage('providers');await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,reads);
+ h.c.setPage('providers');await settle();await h.c.liveQuery(false);await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,reads);
  assert.equal(h.L.results[0].total,7);assert.equal(h.L.results[0]._parts[0].total,7);assert.equal(h.L.comparisonResults[0].total,7);
- h.c.setPage('payout');await settle();assert.equal(h.L.results[0].total,2);assert.equal(h.L.results[0]._parts[0].total,2);
+ h.c.setPage('payout');await settle();await h.c.liveQuery(false);await settle();assert.equal(h.L.results[0].total,2);assert.equal(h.L.results[0]._parts[0].total,2);
 });
 
 test('unconnected modules preserve reference schemas and local controls without inventing source rows or queries',async()=>{
@@ -392,11 +392,11 @@ test('split date and second-precision time inputs preserve the unchanged half-op
 });
 
 test('automatic-payout configuration stays in the merchant center after workorders move out',async()=>{
- const h=await ready(),merchant=h.c.navGroupsV3.find(g=>g[0]==='merchant');assert(merchant);assert.equal(h.c.pages.filter(p=>p[0]==='payout_config').length,1);assert.deepEqual(Array.from(merchant[3]),['merchants','merchantproviders','payout_config','auto_withdraw','withdraw_operators']);assert.equal(h.c.groupForV3('payout_config')[0],'merchant');assert(!h.c.navGroupsV3.find(g=>g[0]==='analysis')[3].includes('payout_config'));const before=h.calls.length;h.c.setPage('payout_config');await settle();const requests=h.calls.slice(before);assert.deepEqual(requests.map(q=>[q.action,q.operation]),[['payoutConfig','index'],['payoutConfig','snapshot']]);assert.equal(h.c.state.navGroup,'merchant');assert.match(h.nodes.get('nav').innerHTML,/自动出款配置/);assert.match(h.html(),/class="live-payout-config"/);assert.match(h.html(),/SYNTHETIC_CONFIG_PLATFORM/);assert.match(h.html(),/原后台配置 · 只读同步/);assert.match(h.html(),/否（只读）/);assert.match(h.html(),/>0<\/span>/);assert.doesNotMatch(h.html(),/<(?:button|input)[^>]*>保存|onclick="[^"]*(?:save|update|delete)/);assert.equal(h.nodes.get('liveFilters').style.display,'none');
+ const h=await ready(),merchant=h.c.navGroupsV3.find(g=>g[0]==='merchant');assert(merchant);assert.equal(h.c.pages.filter(p=>p[0]==='payout_config').length,1);assert.deepEqual(Array.from(merchant[3]),['merchants','merchantproviders','payout_config','auto_withdraw','withdraw_operators']);assert.equal(h.c.groupForV3('payout_config')[0],'merchant');assert(!h.c.navGroupsV3.find(g=>g[0]==='analysis')[3].includes('payout_config'));const before=h.calls.length;h.c.setPage('payout_config');await settle();await h.c.liveQuery();await settle();const requests=h.calls.slice(before);assert.deepEqual(requests.map(q=>[q.action,q.operation]),[['payoutConfig','index'],['payoutConfig','snapshot']]);assert.equal(h.c.state.navGroup,'merchant');assert.match(h.nodes.get('nav').innerHTML,/自动出款配置/);assert.match(h.html(),/class="live-payout-config"/);assert.match(h.html(),/SYNTHETIC_CONFIG_PLATFORM/);assert.match(h.html(),/原后台配置 · 只读同步/);assert.match(h.html(),/否（只读）/);assert.match(h.html(),/>0<\/span>/);assert.doesNotMatch(h.html(),/<(?:button|input)[^>]*>保存|onclick="[^"]*(?:save|update|delete)/);assert.equal(h.nodes.get('liveFilters').style.display,'none');
 });
 
 test('configuration route and refresh use only exact read-only index/snapshot requests despite dirty order filters',async()=>{
- const h=await ready();h.c.liveSet('orderNumber','SYNTHETIC_STALE_ORDER_QUERY');const before=h.calls.length,originalResults=JSON.stringify(h.L.results);h.c.setPage('payout_config');await settle();await h.c.liveQuery();const requests=h.calls.slice(before);assert.equal(requests.length,4);for(const q of requests){assert.equal(q.action,'payoutConfig');assert(['index','snapshot'].includes(q.operation));assert(!('startAt' in q));assert(!('orderNumber' in q));assert(!('direction' in q));assert(!('currency' in q));if(q.operation==='snapshot')assert.deepEqual(Object.keys(q).sort(),['action','country','operation','platform','system'])}assert.equal(JSON.stringify(h.L.results),originalResults);assert.match(h.html(),/当前保存值/);assert.doesNotMatch(h.html(),/筛选条件已修改/);const direct=await ready({page:'payout_config'});assert.equal(direct.calls.filter(q=>q.action==='catalog').length,1);assert.equal(direct.calls.filter(q=>['aggregate','details','rates'].includes(q.action)).length,0);assert.deepEqual(direct.calls.filter(q=>q.action==='payoutConfig').map(q=>q.operation),['index','snapshot']);assert.equal(direct.c.HensemLivePayoutConfig.state().snapshotStatus,'ready');
+ const h=await ready();h.c.liveSet('orderNumber','SYNTHETIC_STALE_ORDER_QUERY');const before=h.calls.length,originalResults=JSON.stringify(h.L.results);h.c.setPage('payout_config');await settle();await h.c.liveQuery();const requests=h.calls.slice(before);assert.equal(requests.length,2);for(const q of requests){assert.equal(q.action,'payoutConfig');assert(['index','snapshot'].includes(q.operation));assert(!('startAt' in q));assert(!('orderNumber' in q));assert(!('direction' in q));assert(!('currency' in q));if(q.operation==='snapshot')assert.deepEqual(Object.keys(q).sort(),['action','country','operation','platform','system'])}assert.equal(h.L.results.length,0);assert.match(h.html(),/当前保存值/);assert.doesNotMatch(h.html(),/筛选条件已修改/);const direct=await ready({page:'payout_config'});assert.equal(direct.calls.filter(q=>q.action==='catalog').length,1);assert.equal(direct.calls.filter(q=>['aggregate','details','rates'].includes(q.action)).length,0);assert.deepEqual(direct.calls.filter(q=>q.action==='payoutConfig').map(q=>q.operation),['index','snapshot']);assert.equal(direct.c.HensemLivePayoutConfig.state().snapshotStatus,'ready');h.c.setPage('overview');await settle();assert.equal(JSON.stringify(h.L.results),originalResults);
 });
 
 test('configuration permission failures clear the displayed snapshot and never fall back to order data',async()=>{
@@ -469,7 +469,7 @@ test('automatic payout and operator pages use separate requests, local dates and
  const h=await ready({page:'auto_withdraw',handler:withdrawalHandler});assert(h.calls.some(q=>q.action==='autoWithdraw'));assert(!h.calls.some(q=>q.action==='aggregate'));assert.match(h.html(),/自动出款日报/);assert.doesNotMatch(h.html(),/SYNTHETIC-OPERATOR/);assert.match(h.html(),/>自动出款原因<\/button>/);assert.match(h.html(),/>驳回原因<\/button>/);
  h.c.withdrawDate('from','2026-09-23');h.c.withdrawDate('to','2026-09-23');await h.c.withdrawLoad();const q=h.calls.at(-1);assert.equal(q.startAt,'2026-09-23T00:00:00.000Z');assert.equal(q.endAt,'2026-09-23T23:59:59.000Z');assert.equal(q.view,'auto');assert.equal(q.country,'印度');
  const auto=renderedTables(h.html()).find(t=>t.headers.includes('总提现笔数 ↓'));assert(auto);assert(!auto.headers.includes('操作人'));assert.match(auto.html,/>合计</);assert.doesNotMatch(auto.html,/当前页汇总|全部汇总/);
- h.c.setPage('withdraw_operators');await settle();assert.equal(h.calls.at(-1).view,'operators');assert.equal(h.calls.at(-1).sort,'processed');assert.match(h.html(),/SYNTHETIC-OPERATOR/);assert.doesNotMatch(h.html(),/自动出款日报|>自动出款原因<|>驳回原因<|>日明细<|>原因 \/ 每日备注</);const op=renderedTables(h.html()).find(t=>t.headers.includes('操作人'));assert(op);assert(!op.headers.some(x=>x.startsWith('总提现笔数')));for(const t of [auto,op])for(const row of t.rows)assert.equal(row.length,t.headers.length);assert.doesNotMatch(h.html(),/NaN|Infinity/);
+ h.c.setPage('withdraw_operators');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).view,'operators');assert.equal(h.calls.at(-1).sort,'processed');assert.match(h.html(),/SYNTHETIC-OPERATOR/);assert.doesNotMatch(h.html(),/自动出款日报|>自动出款原因<|>驳回原因<|>日明细<|>原因 \/ 每日备注</);const op=renderedTables(h.html()).find(t=>t.headers.includes('操作人'));assert(op);assert(!op.headers.some(x=>x.startsWith('总提现笔数')));for(const t of [auto,op])for(const row of t.rows)assert.equal(row.length,t.headers.length);assert.doesNotMatch(h.html(),/NaN|Infinity/);
  h.c.withdrawAccount('specific');await h.c.withdrawLoad();assert.equal(h.calls.at(-1).account,'specific');h.c.withdrawSort('avgSeconds');await settle();assert.equal(h.calls.at(-1).sort,'avgSeconds');assert.equal(h.calls.at(-1).ascending,false);h.c.withdrawSize('50');await settle();assert.equal(h.calls.at(-1).limit,50);
 });
 
@@ -503,7 +503,7 @@ test('incomplete previous platform coverage suppresses total growth without hidi
 
 test('late payout results cannot replace an edited scope or another subpage',async()=>{
  const h=await ready({page:'auto_withdraw',handler:withdrawalHandler}),pending=deferred();h.setHandler(q=>q.action==='autoWithdraw'?pending.promise:withdrawalHandler(q));const first=h.c.withdrawLoad();h.c.withdrawDate('from','2026-09-20');const stale=withdrawalData();stale.rows[0].platform='STALE-PLATFORM';pending.resolve(stale);await first;assert.match(h.html(),/点击查询/);assert.doesNotMatch(h.html(),/STALE-PLATFORM/);
- const older=deferred();h.setHandler(q=>q.action==='autoWithdraw'&&q.view==='auto'?older.promise:withdrawalHandler(q));const second=h.c.withdrawLoad();h.c.setPage('withdraw_operators');await settle();older.resolve(stale);await second;assert.match(h.html(),/SYNTHETIC-OPERATOR/);assert.doesNotMatch(h.html(),/STALE-PLATFORM/);
+ const older=deferred();h.setHandler(q=>q.action==='autoWithdraw'&&q.view==='auto'?older.promise:withdrawalHandler(q));const second=h.c.withdrawLoad();h.c.setPage('withdraw_operators');await settle();await h.c.liveQuery();await settle();older.resolve(stale);await second;assert.match(h.html(),/SYNTHETIC-OPERATOR/);assert.doesNotMatch(h.html(),/STALE-PLATFORM/);
 });
 
 test('direction provider summaries merge canonical names, match platform fees and split workorder cohorts',async()=>{
@@ -619,9 +619,9 @@ test('workorder page restores filters and resets the inherited payout or collect
 });
 test('deposit tracking and statistics are separate pages and receipt dates never reuse source day counts',async()=>{
  const h=await ready();h.setHandler(q=>['depositIssues','depositStatistics'].includes(q.action)?{rows:[{platform:'Synthetic platform',provider:'Synthetic Provider',orderNumber:'SYNTHETIC-ORDER',amount:900,status:'已入款',unreceivedDays:90,providerReply:'成功 <script>',utrMatch:'一致',kycCorrect:'正确'}],total:1,summary:{count:1,amount:900,unreceivedAmount:0,unreceivedCount:0,receivedCount:1}}:{rows:[],total:0});
- h.L.from='2026-09-23T00:00:00';h.L.to='2026-09-23T23:59:59';h.c.setPage('deposit_tracking');await settle();const q=h.calls.at(-1);assert.equal(q.action,'depositIssues');assert.equal(q.view,'entries');assert.equal(q.dateMode,'range');assert.equal(q.startAt,'2026-09-01T00:00:00.000Z');assert.equal(q.endAt,'2026-09-30T23:59:59.000Z');assert.match(h.html(),/员工跟进明细/);assert.doesNotMatch(h.html(),/表格核对结果|onclick="depositIssuesSource/);
+ h.L.from='2026-09-23T00:00:00';h.L.to='2026-09-23T23:59:59';h.c.setPage('deposit_tracking');await settle();await h.c.liveQuery();await settle();const q=h.calls.at(-1);assert.equal(q.action,'depositIssues');assert.equal(q.view,'entries');assert.equal(q.dateMode,'range');assert.equal(q.startAt,'2026-09-01T00:00:00.000Z');assert.equal(q.endAt,'2026-09-30T23:59:59.000Z');assert.match(h.html(),/员工跟进明细/);assert.doesNotMatch(h.html(),/表格核对结果|onclick="depositIssuesSource/);
  h.c.setPage('deposit_statistics');await settle();h.c.depositIssuesSection('details');await settle();assert.equal(h.calls.at(-1).action,'depositStatistics');assert.equal(h.calls.at(-1).section,'details');const stats=renderedTables(h.html()).find(t=>t.headers[0]==='凭证日期');assert(stats);assert.equal(plain(stats.rows[0][stats.headers.indexOf('距今天数')]),'—');assert.match(h.html(),/成功 &lt;script&gt;/);assert.doesNotMatch(h.html(),/<script>/);
- h.c.setPage('deposit_tracking');await settle();assert.match(h.html(),/员工跟进明细/);h.c.depositIssuesDate('from','2026-09-22');assert.match(h.html(),/SYNTHETIC-ORDER/,'old result stays visible until an explicit query');await h.c.depositIssuesLoad();assert.equal(h.calls.at(-1).startAt,'2026-09-22T00:00:00.000Z');
+ h.c.setPage('deposit_tracking');await settle();await h.c.liveQuery();await settle();assert.match(h.html(),/员工跟进明细/);h.c.depositIssuesDate('from','2026-09-22');assert.match(h.html(),/SYNTHETIC-ORDER/,'old result stays visible until an explicit query');await h.c.depositIssuesLoad();assert.equal(h.calls.at(-1).startAt,'2026-09-22T00:00:00.000Z');
 });
 test('revisiting a reason tab reuses its bounded cache, while refresh invalidates it',async()=>{
  const h=await ready({page:'auto_withdraw',handler:withdrawalHandler});h.c.withdrawReasons(0);await settle();h.c.withdrawReasonKind('categories');await settle();const n=h.calls.filter(q=>q.action==='withdrawReasons').length;
@@ -631,9 +631,9 @@ test('revisiting a reason tab reuses its bounded cache, while refresh invalidate
 
 test('statistics tabs derive from one source while tracking never requests result summaries',async()=>{
  const h=await ready();h.setHandler(q=>['depositIssues','depositStatistics'].includes(q.action)?{rows:[],total:20,summary:{count:20},facets:{platforms:['Synthetic platform'],providers:['UmoneyPay']},providerSummary:[{provider:'UmoneyPay',matchStatus:'对得上',count:20}],dailySummary:[{date:'2026-09-23',count:20}]}:{rows:[]});
- h.c.setPage('deposit_statistics');await settle();assert.equal(h.calls.at(-1).action,'depositStatistics');assert.match(h.html(),/三方查看/);assert.match(h.html(),/每日汇总/);assert.match(h.html(),/不重复累计/);
+ h.c.setPage('deposit_statistics');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).action,'depositStatistics');assert.match(h.html(),/三方查看/);assert.match(h.html(),/每日汇总/);assert.match(h.html(),/不重复累计/);
  h.c.depositIssuesDrill('providers',0);await settle();assert.equal(h.calls.at(-1).provider,'UmoneyPay');assert.equal(h.calls.at(-1).match,'matched');assert.equal(h.calls.at(-1).section,'details');
- h.c.setPage('deposit_tracking');await settle();assert.equal(h.calls.at(-1).action,'depositIssues');assert.equal(h.calls.at(-1).view,'entries');assert.equal(h.calls.at(-1).match,undefined);assert.match(h.html(),/员工跟进明细/);assert.doesNotMatch(h.html(),/三方查看|每日汇总/);
+ h.c.setPage('deposit_tracking');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).action,'depositIssues');assert.equal(h.calls.at(-1).view,'entries');assert.equal(h.calls.at(-1).match,undefined);assert.match(h.html(),/员工跟进明细/);assert.doesNotMatch(h.html(),/三方查看|每日汇总/);
 });
 
 test('collected platforms expose report-only teams, retain independent filters and read one source on demand',async()=>{
@@ -863,7 +863,7 @@ test('overview discovers report-only teams across countries and reads them witho
  const before=h.calls.length;h.c.liveSetMultiOption('team',{value:'胖虎',checked:true});assert.equal(h.L.country,'巴西');h.c.liveQuery();await settle();
  const calls=h.calls.slice(before);assert(calls.some(q=>q.action==='reportSummary'));assert(!calls.some(q=>['aggregate','details','providerOptions'].includes(q.action)));
  assert.match(h.html(),/BET6867/);assert.match(h.html(),/Google 表格 → Supabase/);assert.match(h.html(),/500\.00/);assert.doesNotMatch(h.html(),/df-collect|df-payout/,'report-only data never paints misleading zero-order cards');assert.match(h.nodes.get('liveFilters').innerHTML,/已接入日报 \/ 配置 1 平台/);
- h.c.setPage('time');await settle();assert.match(h.html(),/日报未提供|日报.*无法|源日报/);const n=h.calls.filter(q=>q.action==='reportSummary').length;h.c.setPage('overview');await settle();assert.match(h.html(),/BET6867/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,n,'returning to a report-only overview restores its exact result without a report read');await h.c.liveQuery();await settle();assert.match(h.html(),/BET6867/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,n+1,'the explicit query refreshes the exact report scope once');
+ h.c.setPage('time');await settle();await h.c.liveQuery();await settle();assert.match(h.html(),/日报未提供|日报.*无法|源日报/);const n=h.calls.filter(q=>q.action==='reportSummary').length;h.c.setPage('overview');await settle();assert.match(h.html(),/BET6867/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,n,'returning to a report-only overview restores its exact result without a report read');await h.c.liveQuery();await settle();assert.match(h.html(),/BET6867/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,n+1,'the explicit query refreshes the exact report scope once');
 });
 test('incomplete report read cannot remove already loaded native order summaries',async()=>{
  const report={name:P.name,country:P.country,team:'M8',system:'REPORT',dataset:'volume',rawCountry:P.country,rawPlatform:P.name,directions:['charge'],records:1,provenance:{kind:'google_sheets'}};
@@ -1137,16 +1137,16 @@ test('first overview snapshot waits for delayed report directory and keeps new u
 });
 
 
-test('workorder pages automatically query the current business month and keep manual ranges independent',async()=>{
+test('workorder pages manually query the current business month and keep manual ranges independent',async()=>{
  const routes=['workorders','deposit_tracking','deposit_statistics','workorder_reconciliation','workorder_workload','workorder_operation_logs'];
  for(const page of routes){
-  const h=harness({page,handler:q=>q.action==='catalog'?{platforms:[P]}:{rows:[],total:0,summary:{}}});await settle();
-  const q=h.calls.find(q=>['workorderRecords','depositIssues','depositStatistics','portalOperationLogs'].includes(q.action));assert(q,page+' automatically reads');
+  const h=harness({page,handler:q=>q.action==='catalog'?{platforms:[P]}:{rows:[],total:0,summary:{}}});await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);await h.c.liveQuery();await settle();
+  const q=h.calls.find(q=>['workorderRecords','depositIssues','depositStatistics','portalOperationLogs'].includes(q.action));assert(q,page+' reads after clicking query');
   if(q.filters){assert.equal(q.filters.from,'2026-09-01',page);assert.equal(q.filters.to,'2026-09-30',page);}else{assert.equal(q.dateMode,'range',page);assert.equal(q.startAt,'2026-09-01T00:00:00.000Z',page);assert.equal(q.endAt,'2026-09-30T23:59:59.000Z',page);}
  }
- const h=await ready();h.c.setPage('deposit_tracking');await settle();h.c.depositIssuesDate('from','2026-08-01');h.c.depositIssuesDate('to','2026-08-31');await h.c.depositIssuesLoad();h.c.setPage('deposit_statistics');await settle();assert.equal(h.calls.at(-1).startAt,'2026-09-01T00:00:00.000Z');h.c.setPage('deposit_tracking');await settle();assert.equal(h.L.from,'2026-08-01T00:00:00');
+ const h=await ready();h.c.setPage('deposit_tracking');await settle();h.c.depositIssuesDate('from','2026-08-01');h.c.depositIssuesDate('to','2026-08-31');await h.c.depositIssuesLoad();h.c.setPage('deposit_statistics');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).startAt,'2026-09-01T00:00:00.000Z');h.c.setPage('deposit_tracking');await settle();assert.equal(h.L.from,'2026-08-01T00:00:00');
  h.c.depositIssuesSet('dateMode','all');await h.c.depositIssuesLoad();assert.equal(h.calls.at(-1).dateMode,'all');h.c.depositIssuesReset();await settle();assert.equal(h.calls.at(-1).dateMode,'range');assert.equal(h.calls.at(-1).startAt,'2026-09-01T00:00:00.000Z');
- h.c.setPage('workorders');await settle();h.c.workorderOperationsSet('from','2026-08-01');h.c.workorderOperationsSet('to','2026-08-31');await h.c.workorderOperationsLoad(true);h.c.liveClosePage('workorders');h.c.setPage('workorders');await settle();assert.equal(h.calls.at(-1).filters.from,'2026-09-01');assert.equal(h.calls.at(-1).filters.to,'2026-09-30');
+ h.c.setPage('workorders');await settle();await h.c.liveQuery();await settle();h.c.workorderOperationsSet('from','2026-08-01');h.c.workorderOperationsSet('to','2026-08-31');await h.c.workorderOperationsLoad(true);h.c.liveClosePage('workorders');h.c.setPage('workorders');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).filters.from,'2026-09-01');assert.equal(h.calls.at(-1).filters.to,'2026-09-30');
 });
 
 
@@ -1182,6 +1182,6 @@ test('adaptive ten-band UI uses same edges for parent, matrix and daily drilldow
 test('submission analysis navigation uses its own scoped reader and updates the menu without unrelated aggregate reads',async()=>{
  const h=await ready({submissions:true});setScope(h,{platform:P.id,direction:'charge',status:'all'});h.L.dirty=false;
  h.setHandler(async q=>q.action==='submissionAnalysis'?{platform:P,startAt:q.startAt,endAt:q.endAt,basis:'platform_local_day_all_providers_zero_success',coverage:{missingMemberCount:0},metrics:[10,15,20,30,50,100].map(threshold=>({provider:null,threshold,member_count:1,member_days:1,invalid_count:50,l0_members:0,new_members:0,funded_members:0,unknown_members:1}))}:aggregate(P));
- const before=h.calls.filter(q=>q.action==='aggregate').length;h.c.setPage('events');await settle();
+ const before=h.calls.filter(q=>q.action==='aggregate').length;h.c.setPage('events');await settle();await h.c.liveQuery();await settle();
  assert(h.calls.some(q=>q.action==='submissionAnalysis'));assert.equal(h.calls.filter(q=>q.action==='aggregate').length,before);assert.match(h.html(),/单日 ≥15 笔/);assert.match(h.html(),/充值情况未提供/);assert.equal(h.c.pages.find(p=>p[0]==='events')[2],'刷单风控');
 });

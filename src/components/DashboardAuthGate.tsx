@@ -21,6 +21,8 @@ import {
   type DashboardSession,
 } from "@/lib/dashboardAuthClient";
 
+import { DASHBOARD_IDLE_MS, readLastActivity, writeLastActivity, clearLastActivity, installDashboardIdleMonitor } from "@/lib/dashboardIdle";
+
 type AuthContextValue = {
   session: DashboardSession | null;
   profile: DashboardProfile | null;
@@ -30,25 +32,6 @@ type AuthContextValue = {
 };
 
 const AuthContext = createContext<AuthContextValue>({ session: null, profile: null, logout: () => undefined, openAdminCenter: () => undefined, openProfile: () => undefined });
-
-const DASHBOARD_IDLE_MS = 60 * 60 * 1000;
-const DASHBOARD_LAST_ACTIVITY_KEY = "hensem.dashboard.last_activity";
-
-function readLastActivity(): number {
-  if (typeof window === "undefined") return 0;
-  const value = Number(window.localStorage.getItem(DASHBOARD_LAST_ACTIVITY_KEY) || 0);
-  return Number.isFinite(value) ? value : 0;
-}
-
-function writeLastActivity(value = Date.now()) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(DASHBOARD_LAST_ACTIVITY_KEY, String(value));
-}
-
-function clearLastActivity() {
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(DASHBOARD_LAST_ACTIVITY_KEY);
-}
 
 export function useDashboardAuth() {
   return useContext(AuthContext);
@@ -273,97 +256,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   useEffect(() => {
     if (!enabled || !profile?.username) return;
 
-    // 严格 idle：
-    // - 只认浏览器真实用户事件（isTrusted=true）
-    // - 不再监听 scroll，因为页面渲染/恢复位置也可能触发 scroll，旧版会被误判成用户活动
-    // - token 自动刷新不算活动
-    // - 用“最后真实活动时间 + 精确截止时间”退出，而不是靠会被重置的周期计时器
-    let idleTimer: number | undefined;
-    let disposed = false;
-
-    const logoutEverywhere = () => {
-      if (disposed) return;
-      try {
-        window.localStorage.setItem("hensem.dashboard.idle_logout_at", String(Date.now()));
-      } catch {}
-      logout();
-    };
-
-    const scheduleIdleCheck = () => {
-      if (disposed) return;
-      if (idleTimer) window.clearTimeout(idleTimer);
-
-      let last = readLastActivity();
-      if (!last) {
-        last = Date.now();
-        writeLastActivity(last);
-      }
-
-      const remaining = DASHBOARD_IDLE_MS - (Date.now() - last);
-      if (remaining <= 0) {
-        logoutEverywhere();
-        return;
-      }
-
-      idleTimer = window.setTimeout(() => {
-        const latest = readLastActivity();
-        if (!latest || Date.now() - latest >= DASHBOARD_IDLE_MS) {
-          logoutEverywhere();
-        } else {
-          scheduleIdleCheck();
-        }
-      }, Math.max(250, remaining + 100));
-    };
-
-    const markActivity = (event: Event) => {
-      // 代码触发的 synthetic event 不算用户活动。
-      if (!event.isTrusted) return;
-      writeLastActivity(Date.now());
-      scheduleIdleCheck();
-    };
-
-    const checkNow = () => {
-      const last = readLastActivity();
-      if (last && Date.now() - last >= DASHBOARD_IDLE_MS) {
-        logoutEverywhere();
-        return;
-      }
-      scheduleIdleCheck();
-    };
-
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") checkNow();
-    };
-
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === DASHBOARD_LAST_ACTIVITY_KEY) {
-        scheduleIdleCheck();
-      }
-      if (event.key === "hensem.dashboard.idle_logout_at" && event.newValue) {
-        logout();
-      }
-      if (event.key === "hensem:dashboard:auth-session:v2" && !event.newValue) {
-        logout();
-      }
-    };
-
-    // wheel 是真实滚轮动作；programmatic scroll 不会触发 wheel。
-    const events: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "touchstart", "wheel"];
-    events.forEach((name) => window.addEventListener(name, markActivity, { passive: true }));
-    window.addEventListener("focus", checkNow);
-    window.addEventListener("storage", onStorage);
-    document.addEventListener("visibilitychange", onVisibility);
-
-    scheduleIdleCheck();
-
-    return () => {
-      disposed = true;
-      if (idleTimer) window.clearTimeout(idleTimer);
-      events.forEach((name) => window.removeEventListener(name, markActivity));
-      window.removeEventListener("focus", checkNow);
-      window.removeEventListener("storage", onStorage);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
+    return installDashboardIdleMonitor(logout);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, profile?.username]);
 
