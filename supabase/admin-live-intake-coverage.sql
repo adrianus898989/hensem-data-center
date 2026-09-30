@@ -44,6 +44,10 @@ declare
  v_from date;v_to date;v_day date;v_start timestamptz;v_end timestamptz;v_zone text;v_today date;v_launch timestamptz;v_run record;v_lg_runs jsonb;v_seen timestamptz;v_has boolean;
  v_raw_country text;v_raw_platform text;v_platform_id uuid;v_source text;v_direction text;v_kind text;dataset text;source_system text;source_kind text;
  status text;evidence text;received boolean;complete boolean;zero_confirmed boolean;expected boolean;collector_status text;expected_count bigint;fetched_count bigint;
+ -- AR_CREATION_COVERAGE_DECL_BEGIN
+ v_ar_snapshot record;v_ar_valid boolean;v_ar_counts numeric[];v_ar_value jsonb;v_ar_group jsonb;
+ v_ar_expected_groups jsonb;v_ar_observed_groups jsonb;v_ar_group_key text;v_ar_group_total numeric;
+ -- AR_CREATION_COVERAGE_DECL_END
 begin
  if p_request is null or jsonb_typeof(p_request)<>'object' or octet_length(p_request::text)>4096 or p_request-array['operation','feedIds','startAt','endAt']<>'{}' or v_operation not in('catalog','rows') then raise exception using errcode='22023',message='invalid_coverage_request';end if;
  if v_operation='catalog' then
@@ -83,6 +87,99 @@ begin
      select true,a.updated_at into v_has,v_seen from public.ar_collected_orders a where a.country_code=v_raw_country and a.platform=v_raw_platform and a.order_kind=v_kind and a.source_system='AR'
       and a.applied_at>=v_day::timestamp and a.applied_at<(v_day+1)::timestamp limit 1;
      if not coalesce(v_has,false) and exists(select 1 from public.ar_collected_orders a where a.country_code=v_raw_country and a.platform=v_raw_platform and a.order_kind=v_kind and a.source_system='AR' and a.completed_at>=v_day::timestamp and a.completed_at<(v_day+1)::timestamp) then evidence:='only_success_day_records_received';end if;
+     -- AR_CREATION_COVERAGE_BEGIN
+     -- A successful API response or one created order is not a full-day receipt.
+     -- Only charge is reconciled; payout and the independently timed success cohort stay unchanged.
+     if v_direction='charge' then
+      select t.snapshot,t.snapshot_id,t.snapshot_at,t.updated_at into v_ar_snapshot
+       from public.collection_success_daily t where t.source_system='RECHARGE_REVIEW'
+        and t.country_code=v_raw_country and t.platform=v_raw_platform and t.stat_date=v_day;
+      if found then
+       v_ar_valid:=coalesce(jsonb_typeof(v_ar_snapshot.snapshot)='object'
+        and v_ar_snapshot.snapshot->'schema_version'='1'::jsonb
+        and v_ar_snapshot.snapshot->>'source_system'='RECHARGE_REVIEW'
+        and v_ar_snapshot.snapshot->>'country_code'=v_raw_country
+        and v_ar_snapshot.snapshot->>'platform'=v_raw_platform
+        and v_ar_snapshot.snapshot->>'stat_date'=v_day::text
+        and v_ar_snapshot.snapshot->>'timezone'=v_zone
+        and v_ar_snapshot.snapshot->>'snapshot_id'=v_ar_snapshot.snapshot_id::text
+        and v_ar_snapshot.snapshot#>'{coverage,complete}'='true'::jsonb
+        and jsonb_typeof(v_ar_snapshot.snapshot->'coverage')='object'
+        and jsonb_typeof(v_ar_snapshot.snapshot->'totals')='object'
+        and jsonb_typeof(v_ar_snapshot.snapshot->'groups')='array'
+        and isfinite(v_ar_snapshot.snapshot_at) and v_ar_snapshot.snapshot_at<=v_asof+interval '5 minutes'
+        and (v_ar_snapshot.snapshot_at at time zone v_zone)::date>v_day,false);
+       if v_ar_valid then
+        begin
+         v_ar_valid:=coalesce(jsonb_typeof(v_ar_snapshot.snapshot->'snapshot_at')='string'
+          and v_ar_snapshot.snapshot->>'snapshot_at' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+          and (v_ar_snapshot.snapshot->>'snapshot_at')::timestamptz=v_ar_snapshot.snapshot_at,false);
+        exception when invalid_datetime_format or datetime_field_overflow or invalid_parameter_value then v_ar_valid:=false;
+        end;
+       end if;
+       v_ar_counts:=array[]::numeric[];
+       if v_ar_valid then
+        foreach v_ar_value in array array[v_ar_snapshot.snapshot#>'{coverage,expected_count}',
+          v_ar_snapshot.snapshot#>'{coverage,fetched_count}',v_ar_snapshot.snapshot#>'{coverage,unique_count}',
+          v_ar_snapshot.snapshot#>'{totals,submitted_count}'] loop
+         if jsonb_typeof(v_ar_value) is distinct from 'number' then v_ar_valid:=false;exit;end if;
+         if (v_ar_value::text)::numeric not between 0 and 9007199254740991
+          or trunc((v_ar_value::text)::numeric)<>(v_ar_value::text)::numeric then v_ar_valid:=false;exit;end if;
+         v_ar_counts:=array_append(v_ar_counts,(v_ar_value::text)::numeric);
+        end loop;
+       end if;
+       if v_ar_valid then
+        v_ar_valid:=v_ar_counts[1]=v_ar_counts[2] and v_ar_counts[1]=v_ar_counts[3]
+         and v_ar_counts[1]=v_ar_counts[4] and jsonb_array_length(v_ar_snapshot.snapshot->'groups')<=2000;
+       end if;
+       v_ar_expected_groups:='{}';v_ar_group_total:=0;
+       if v_ar_valid then
+        for v_ar_group in select value from jsonb_array_elements(v_ar_snapshot.snapshot->'groups') loop
+         if jsonb_typeof(v_ar_group) is distinct from 'object'
+          or jsonb_typeof(v_ar_group->'raw_channel') is distinct from 'string'
+          or jsonb_typeof(v_ar_group->'channel_type') is distinct from 'string'
+          or length(v_ar_group->>'raw_channel') not between 1 and 96
+          or length(v_ar_group->>'channel_type') not between 1 and 48
+          or jsonb_typeof(v_ar_group->'submitted_count') is distinct from 'number' then v_ar_valid:=false;exit;end if;
+         v_ar_value:=v_ar_group->'submitted_count';
+         if (v_ar_value::text)::numeric not between 1 and 9007199254740991
+          or trunc((v_ar_value::text)::numeric)<>(v_ar_value::text)::numeric then v_ar_valid:=false;exit;end if;
+         v_ar_group_key:=jsonb_build_array(v_ar_group->>'raw_channel',v_ar_group->>'channel_type')::text;
+         if v_ar_expected_groups ? v_ar_group_key then v_ar_valid:=false;exit;end if;
+         v_ar_expected_groups:=v_ar_expected_groups||jsonb_build_object(v_ar_group_key,v_ar_value);
+         v_ar_group_total:=v_ar_group_total+(v_ar_value::text)::numeric;
+        end loop;
+        v_ar_valid:=v_ar_valid and v_ar_group_total=v_ar_counts[1];
+       end if;
+       if v_ar_valid then
+        expected_count:=v_ar_counts[1]::bigint;collector_status:='snapshot_complete';
+        -- Exact raw channel/type comparison: aliases must not hide a missing channel.
+        -- No member/order fields or amounts leave this aggregate; status is deliberately irrelevant.
+        select coalesce(sum(g.n),0)::bigint,coalesce(jsonb_object_agg(g.key,to_jsonb(g.n)),'{}'::jsonb),max(g.seen)
+         into fetched_count,v_ar_observed_groups,v_seen from(
+          select jsonb_build_array(a.raw_channel,a.channel_type)::text key,count(*) n,max(a.updated_at) seen
+          from public.ar_collected_orders a where a.country_code=v_raw_country and a.platform=v_raw_platform
+           and a.order_kind='recharge' and a.source_system='AR'
+           and a.applied_at>=v_day::timestamp and a.applied_at<(v_day+1)::timestamp
+          group by a.raw_channel,a.channel_type)g;
+        v_has:=fetched_count>0;
+        complete:=fetched_count=expected_count and v_ar_observed_groups=v_ar_expected_groups;
+        zero_confirmed:=complete and expected_count=0;
+        if complete then
+         v_has:=true;v_seen:=coalesce(v_seen,v_ar_snapshot.updated_at,v_ar_snapshot.snapshot_at);
+         status:=case when zero_confirmed then 'zero_complete' else 'complete' end;
+         evidence:=case when zero_confirmed then 'source_completed_zero_rows' else 'source_created_counts_reconciled' end;
+        else
+         status:='partial';evidence:=case when fetched_count<>expected_count
+          then 'source_created_count_mismatch' else 'source_created_channel_mismatch' end;
+        end if;
+       else
+        collector_status:='snapshot_invalid';evidence:='source_snapshot_invalid';
+        status:=case when coalesce(v_has,false) then 'received' else 'not_received' end;
+       end if;
+      end if;
+     end if;
+     -- AR_CREATION_COVERAGE_END
     elsif dataset='orders' and source_system='newar' then
      select true,n.received_at into v_has,v_seen from public.newar_detail_records n where n.platform=v_raw_platform and n.dataset=v_direction and n.created_at>=greatest(v_start,coalesce(v_launch,v_start)) and n.created_at<v_end limit 1;
      if not coalesce(v_has,false) and exists(select 1 from public.newar_detail_records n where n.platform=v_raw_platform and n.dataset=v_direction and n.status_group='success' and n.success_at>=v_start and n.success_at<v_end and n.created_at>=coalesce(v_launch,'-infinity'::timestamptz)) then evidence:='only_success_day_records_received';end if;

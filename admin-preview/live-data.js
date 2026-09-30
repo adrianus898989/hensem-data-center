@@ -107,7 +107,8 @@
  window.liveMultiToggle=function(el){if(!el?.isConnected)return;const key=el.dataset.multi;if(el.open){L.openMulti=key;if(key==='provider')loadProviderOptions();document.querySelectorAll('details[data-multi]').forEach(other=>{if(other!==el)other.open=false})}else if(L.openMulti===key)L.openMulti=''};
  window.liveMultiSearch=function(key,value){L.multiSearch[key]=value;const root=document.querySelector('details[data-multi="'+key+'"]');if(!root)return;let count=0;root.querySelectorAll('.live-multi-option').forEach(row=>{row.hidden=!row.dataset.search.includes(value.toLocaleLowerCase());if(!row.hidden)count++});root.querySelector('.live-multi-empty').hidden=count>0;};
  let pendingSnapshot=null,pendingAnalysis=null,memberCounts=null,submissionAnalysis=null;
- const cancelDataReads=()=>{memberCounts?.cancel();submissionAnalysis?.cancel();pendingSnapshot?.cancel();pendingAnalysis?.cancel();reportData?.cancel();L.workordersSerial++;L.workordersLoading=false;if(L.overviewWorkordersStatus==='loading')L.overviewWorkordersStatus='idle';window.hensemLiveCancelRequests?.(['aggregate','details','reportSummary','workorders','pendingSnapshot','pendingAnalysis','memberDaily','submissionAnalysis']);};
+ const providerIntake=window.HensemProviderIntake?.create({request:r=>window.hensemLiveRequest(r)});
+ const cancelDataReads=()=>{providerIntake?.cancel();memberCounts?.cancel();submissionAnalysis?.cancel();pendingSnapshot?.cancel();pendingAnalysis?.cancel();reportData?.cancel();L.workordersSerial++;L.workordersLoading=false;if(L.overviewWorkordersStatus==='loading')L.overviewWorkordersStatus='idle';window.hensemLiveCancelRequests?.(['aggregate','details','reportSummary','workorders','pendingSnapshot','pendingAnalysis','memberDaily','submissionAnalysis','intakeCoverage']);};
  window.liveMultiClear=function(key){if(!['team','platform','source','provider','direction'].includes(key)||key==='platform'&&state.page==='orders'||key==='direction'&&(fixedDirection(state.page)||state.page==='latency'))return;L.openMulti='';L.multiSearch[key]='';setMultiValues(key,[])};
  window.liveMultiAll=function(key,all){if(state.page==='orders'&&key==='platform'&&all)return;const root=document.querySelector('details[data-multi="'+key+'"]');if(!root)return;const values=all?[...new Set([...activeValues(key),...Array.from(root.querySelectorAll('.live-multi-option:not([hidden]) input')).map(e=>e.value)])]:[];setMultiValues(key,values)};
  document.addEventListener?.('click',e=>{if(e.target.closest?.('.live-multi'))return;L.openMulti='';document.querySelectorAll('details[data-multi]').forEach(el=>el.open=false)});
@@ -416,7 +417,7 @@
   // A single document owns all tabs. Only small controls are copied; aggregate
   // result objects are shared by reference, never cloned into multiple iframes.
   const pageTabs=new Map([[state.page,{page:state.page}]]);
-  const pageFields=('pageQueried overviewQueried comparisonResults comparisonStatus comparisonError comparisonLabel queryNow overviewTab overviewAnalysis overviewSections overviewWorkordersStatus queryWarnings queryFailures queryPlatforms queryScope queryPaused multi team providerOptions providerOptionsKey providerOptionsError multiSearch country countryTouched currency platform source provider direction status from to orderNumber thirdPartyOrderNumber memberId systemOrderId utr page size detail view localPage localSize groups results loadedView dirty error progress workorders workordersError workordersUnsupported workordersScope workordersPage workordersSize providerExpanded providerSort providerSortAsc matrixMode amountBandProfiles tablePages tableSizes analysisMatrixSelection dailyDay dailyMetric dailyView durationDetail durationGroup durationMode durationOrderQuery durationQuery durationThreshold restoredPage').split(' ');
+  const pageFields=('pageQueried overviewQueried comparisonResults comparisonStatus comparisonError comparisonLabel queryNow overviewTab overviewAnalysis overviewSections overviewWorkordersStatus providerIntake providerComparisonIntake queryWarnings queryFailures queryPlatforms queryScope queryPaused multi team providerOptions providerOptionsKey providerOptionsError multiSearch country countryTouched currency platform source provider direction status from to orderNumber thirdPartyOrderNumber memberId systemOrderId utr page size detail view localPage localSize groups results loadedView dirty error progress workorders workordersError workordersUnsupported workordersScope workordersPage workordersSize providerExpanded providerSort providerSortAsc matrixMode amountBandProfiles tablePages tableSizes analysisMatrixSelection dailyDay dailyMetric dailyView durationDetail durationGroup durationMode durationOrderQuery durationQuery durationThreshold restoredPage').split(' ');
   const copiedControls=new Set(['multi','multiSearch','providerExpanded','tablePages','tableSizes','analysisMatrixSelection']);
   const initialDedicated=Object.fromEntries(Object.entries(L).filter(([key])=>/^(fee(?!Lookup)|depositIssues|providerConfig|platformAssignments|teamPlatform)/.test(key)));
   function copyControls(value){if(value===undefined)return value;return JSON.parse(JSON.stringify(value))}
@@ -427,6 +428,7 @@
    const entry=pageTabs.get(state.page);if(!entry)return;
    entry.bootstrap=!L.catalogReady;entry.scroll=pageScroll();entry.view={};for(const key of pageFields)if(Object.prototype.hasOwnProperty.call(L,key))entry.view[key]=copiedControls.has(key)?copyControls(L[key]):L[key];
    if(entry.bootstrap)entry.view.dirty=true;
+   for(const key of ['providerIntake','providerComparisonIntake'])if(entry.view[key]?.status==='loading')entry.view[key]={...entry.view[key],status:'error',error:'采集核对已暂停，点击查询重新核对'};
    if(L.providerOptionsBusy){entry.view.providerOptionsKey='';entry.view.providerOptionsError='目录读取已暂停，点击查询更新';}
    if(L.overviewSections)entry.view.overviewSections={...L.overviewSections,status:L.overviewSections.status==='loading'?'partial':L.overviewSections.status};
    if(L.overviewWorkordersStatus==='loading')entry.view.overviewWorkordersStatus='paused';
@@ -578,6 +580,16 @@
  function aggregateQueryScope(){return JSON.stringify([state.page,selected().map(p=>p.id),L.from,L.to,L.direction,L.status,activeValues('provider'),L.orderNumber,L.memberId,L.systemOrderId,L.thirdPartyOrderNumber,L.overviewAnalysis])}
 
 
+ async function loadProviderIntake(serial,previous=false){
+  if(!providerDirection(state.page))return;
+  const key=previous?'providerComparisonIntake':'providerIntake',range=HensemLiveCompare.windowFor(L.from,L.to,scopeZone(),L.queryNow);
+  const from=(previous?range.previousFrom:L.from)?.slice(0,10),to=(previous?range.previousTo:L.to)?.slice(0,10);
+  L[key]={status:'loading',from,to,platforms:[],error:''};render();
+  try{if(!providerIntake)throw Error('采集核对暂不可用');const result=await providerIntake.load({platforms:L.queryPlatforms.slice(),direction:providerDirection(state.page),from,to});if(serial===L.serial)L[key]=result;}
+  catch(e){if(serial===L.serial)L[key]={status:'error',from,to,platforms:[],error:e.message||'采集核对失败'};}
+  finally{if(serial===L.serial)render();}
+ }
+
  function loadReportData(force=false){if(state.page==='overview'&&!L.overviewQueried)return;return reportData?.load({country:L.country,teams:activeValues('team'),platforms:activeValues('platform'),sources:activeValues('source'),direction:L.direction,from:L.from,to:L.to,providers:activeValues('provider','')},force);}
   window.liveQuery=function(force=true){return window.liveLoad(force,true)};
   window.liveLoad=async function(force=true,manual=false){
@@ -592,7 +604,7 @@
   if(state.page==='orders'&&!orderPlatform()){L.serial++;cancelDataReads();L.queryRetrying=false;L.detailSerial++;L.loading=false;L.detailBusy=false;L.results=[];L.detail=null;L.error='';L.queryWarnings=[];L.queryFailures=[];L.queryPlatforms=[];L.queryScope='';L.comparisonResults=[];L.comparisonStatus='idle';L.dirty=true;providerOrders.cancel();loadProviderOptions();render();return}
   const scope=aggregateQueryScope();
   if(!L.catalogReady||L.loading&&!L.dirty&&L.inflightScope===scope)return;L.inflightScope=scope;
-  L.restoredPage=false;const platforms=selected();if(force)aggregateCache.clear();loadProviderOptions();const serial=++L.serial;cancelDataReads();L.queryScope=scope;L.queryPaused=false;L.queryPlatforms=platforms.slice();L.queryFailures=[];L.queryRetrying=false;providerOrders.cancel();L.detailSerial++;L.workordersSerial++;L.workorders=null;L.workordersLoading=false;L.workordersError='';L.workordersScope='';L.queryNow=Date.now();L.comparisonResults=[];L.comparisonStatus='idle';L.comparisonError='';L.error='';L.queryWarnings=[];L.dirty=false;L.loading=true;L.progress='正在读取正式订单…';L.detail=null;L.page=1;L.localPage=1;L.tablePages={};L.results=[];L.loadedView=L.status==='all'?aggregateMode():'full';render();
+  L.restoredPage=false;const platforms=selected();if(force)aggregateCache.clear();loadProviderOptions();const serial=++L.serial;cancelDataReads();L.providerIntake=null;L.providerComparisonIntake=null;L.queryScope=scope;L.queryPaused=false;L.queryPlatforms=platforms.slice();L.queryFailures=[];L.queryRetrying=false;providerOrders.cancel();L.detailSerial++;L.workordersSerial++;L.workorders=null;L.workordersLoading=false;L.workordersError='';L.workordersScope='';L.queryNow=Date.now();L.comparisonResults=[];L.comparisonStatus='idle';L.comparisonError='';L.error='';L.queryWarnings=[];L.dirty=false;L.loading=true;L.progress='正在读取正式订单…';L.detail=null;L.page=1;L.localPage=1;L.tablePages={};L.results=[];L.loadedView=L.status==='all'?aggregateMode():'full';render();
   let index=0,done=0;const results=[];let submissionBatch=null;
   try{
    if(window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;
@@ -602,8 +614,9 @@
    await Promise.all(Array.from({length:Math.min(2,requests.length)},()=>worker()));if(serial!==L.serial)return;submissionBatch?.finish();
    L.results=results.filter(Boolean);L.providerOptions=[...new Set([...L.providerOptions,...L.results.flatMap(r=>(r.groups?.provider||[]).map(g=>window.HensemProviderNames?.canonical(g.provider,L.country)??g.provider)).filter(Boolean)])].sort();L.loading=false;
    if(deferReports)loadReportData(force);
+   await loadProviderIntake(serial);if(serial!==L.serial)return;
    if(L.queryWarnings.length){L.comparisonStatus='error';L.comparisonError='当前平台数据未完整，暂不比较昨日';render();await ensureProviderWorkorders();return}
-   render();await Promise.all([state.page==='orders'?liveDetails():Promise.resolve(),liveComparison(serial,!force),(platforms.length&&(providerDirection(state.page)||state.page==='overview'&&L.overviewAnalysis))?workordersLoad():Promise.resolve()]);
+   render();await Promise.all([state.page==='orders'?liveDetails():Promise.resolve(),liveComparison(serial,!force),loadProviderIntake(serial,true),(platforms.length&&(providerDirection(state.page)||state.page==='overview'&&L.overviewAnalysis))?workordersLoad():Promise.resolve()]);
   }catch(e){if(serial!==L.serial)return;L.error=e.message||'读取失败';L.loading=false;render()}
  };
  // Opening or restoring a provider tab can reuse payment aggregates without a
@@ -631,7 +644,7 @@
    L.results=platforms.map(p=>completed.get(p.id)).filter(Boolean);L.queryFailures=[...failureMap.values()];L.queryWarnings=L.queryFailures.map(f=>f.name+'：'+f.message);render();
   }}
   try{await Promise.all(Array.from({length:Math.min(2,tasks.length)},()=>worker()))}finally{if(serial===L.serial){L.queryRetrying=false;if(!L.queryFailures.length){L.comparisonStatus='idle';L.comparisonError=''}L.providerOptions=[...new Set([...L.providerOptions,...L.results.flatMap(r=>(r.groups?.provider||[]).map(g=>window.HensemProviderNames?.canonical(g.provider,L.country)??g.provider)).filter(Boolean)])].sort();render()}}
-  if(serial===L.serial)await ensureProviderWorkorders();
+  if(serial===L.serial){await loadProviderIntake(serial);if(serial===L.serial)await ensureProviderWorkorders();}
  };
  async function liveComparison(serial,allowCache=false){if(serial!==L.serial)return;L.comparisonStatus='loading';render();let index=0,failed=false;const results=[];try{const requests=selected().map(p=>query(p,'aggregate',true));async function worker(){while(index<requests.length&&!failed&&serial===L.serial){const i=index++;try{const r=await readAggregate(requests[i],serial,allowCache);if(serial!==L.serial||failed)return;results[i]=r}catch(e){failed=true;throw e}}}const workers=Math.min(2,requests.length);await Promise.all(Array.from({length:workers},()=>worker()));if(serial!==L.serial)return;L.comparisonResults=results;L.comparisonStatus='ready';render()}catch(e){if(serial!==L.serial)return;L.comparisonResults=[];L.comparisonStatus='error';L.comparisonError='前期数据读取未完成：'+(e.message||'请重试');render()}}
  async function readDetails(p,serial){const cached=L.results.find(r=>r.platform?.id===p.id),parts=cached?._parts;if(!parts||parts.length<2)return window.hensemLiveRequest(query(p,'details'));const ordered=[...parts].sort((a,b)=>Date.parse(b.startAt)-Date.parse(a.startAt)),total=ordered.reduce((n,r)=>n+Number(r.total||0),0),rows=[];let skip=(L.page-1)*L.size;for(const part of ordered){if(serial!==L.detailSerial)throw Error('查询已替换');const n=Number(part.total||0);if(skip>=n){skip-=n;continue}const request={...query(p,'details'),startAt:part.startAt,endAt:part.endAt,offset:skip};const response=await window.hensemLiveRequest(request);if(serial!==L.detailSerial)throw Error('查询已替换');if(Number(response.total)!==n)throw Error('源订单已更新，请重新查询以同步总数与分页');rows.push(...(response.rows||[]).slice(0,L.size-rows.length));skip=0;if(rows.length>=L.size)break;}return {platform:p,total,rows,limit:L.size,offset:(L.page-1)*L.size,hasMore:L.page*L.size<total};}

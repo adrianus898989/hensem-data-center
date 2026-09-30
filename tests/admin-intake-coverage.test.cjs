@@ -6,6 +6,8 @@ const call=async request=>(await db.query('select public.dashboard_admin_live_in
 const catalog=async()=>(await call({operation:'catalog'})).feeds;
 const check=async(name,dataset='orders',direction='charge',startAt='2026-09-01',endAt='2026-09-25')=>{const f=(await catalog()).find(f=>f.name===name&&f.dataset===dataset&&f.direction===direction);assert(f,name);return (await call({operation:'rows',feedIds:[f.id],startAt,endAt})).rows};
 before(async()=>{db=new PGlite();await db.exec(fixture);await db.exec(`
+ alter table ar_collected_orders add raw_channel text,add channel_type text;
+ alter table collection_success_daily add snapshot jsonb,add snapshot_id uuid;
  alter table lg_orders add paid_at timestamptz;
  alter table lg_sync_runs add source_total bigint;update lg_sync_runs set source_total=expected_count;
  alter table game66_sync_runs add rows_upserted integer;alter table game66_sync_runs add rows_skipped integer;alter table game66_sync_runs add error_count integer;update game66_sync_runs set rows_upserted=rows_fetched,rows_skipped=0,error_count=0;

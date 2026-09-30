@@ -540,10 +540,20 @@ test('valid team system and platform selections retain each other while candidat
  const html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/M8 platform/);assert.doesNotMatch(html,/Other platform/);
 });
 
+function verifiedProviderIntake(h){
+ const period=h.c.HensemLiveCompare.windowFor(h.L.from,h.L.to,h.L.results[0].platform.timezone,h.L.queryNow);
+ const make=(results,from,to)=>({status:'ready',from:from.slice(0,10),to:to.slice(0,10),platforms:results.map(result=>{
+  const zero=(result.groups.provider||[]).every(r=>r.all_count===0),status=zero?'zero_complete':'complete',days=[];
+  for(let day=Date.parse(from.slice(0,10));day<=Date.parse(to.slice(0,10));day+=86400000)days.push({date:new Date(day).toISOString().slice(0,10),dataset:'orders',status,received:!zero,complete:true,zeroConfirmed:zero,expected:true});
+  return {...result.platform,status,received:true,complete:true,missingDates:[],days};
+ })});
+ h.L.providerIntake=make(h.L.results,h.L.from,h.L.to);h.L.providerComparisonIntake=make(h.L.comparisonResults,period.previousFrom,period.previousTo);
+}
+
 test('provider KPI comparisons use the same direction and distinguish money differences from percentage points',async()=>{
  const h=await ready(),current=completeAggregate(P,100,60),previous=completeAggregate(P,100,50);
  for(const r of [current,previous])r.groups.provider.push({...r.groups.provider[0],direction:'withdraw',success_count:900,success_amount:90000,created_success_count:90});
- h.L.results=[current];h.L.comparisonResults=[previous];h.L.comparisonStatus='ready';h.L.feeLookupRows=[{scopeType:'country',country:'印度',provider:'Synthetic provider',collectFee:'2%',payoutFee:'1%'}];h.c.state.page='providers';h.c.render();
+ h.L.results=[current];h.L.comparisonResults=[previous];h.L.comparisonStatus='ready';h.L.feeLookupRows=[{scopeType:'country',country:'印度',provider:'Synthetic provider',collectFee:'2%',payoutFee:'1%'}];h.c.state.page='providers';verifiedProviderIntake(h);h.c.render();
  const cards=h.html().split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];
  assert.match(cards,/6,000\.00/);assert.match(cards,/昨日 5,000\.00/);assert.match(cards,/\+1,000\.00.*\+20\.00%/);assert.match(cards,/\+10\.00 个百分点/);assert.match(cards,/120\.00/);assert.match(cards,/昨日 100\.00/);assert.doesNotMatch(cards,/90,000/);
  assert.equal((cards.match(/<strong>/g)||[]).length,8,'all eight primary metrics remain visible');
@@ -558,11 +568,18 @@ test('provider KPI comparisons use the same direction and distinguish money diff
 });
 test('provider comparisons suppress incomplete scopes and partial fees while preserving current values and zero-baseline semantics',async()=>{
  const h=await ready(),current=completeAggregate(P,100,60),previous=completeAggregate(P,0,0),cards=()=>h.html().split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];
- h.L.results=[current];h.L.comparisonResults=[previous];h.L.comparisonStatus='ready';h.L.feeLookupRows=[];h.c.state.page='providers';h.c.render();
+ h.L.results=[current];h.L.comparisonResults=[previous];h.L.comparisonStatus='ready';h.L.feeLookupRows=[];h.c.state.page='providers';verifiedProviderIntake(h);h.c.render();
  assert.match(cards(),/新增 \/ 无基数/);assert.match(cards(),/费率未完全匹配/);assert.doesNotMatch(cards(),/Infinity|NaN/);
  h.L.comparisonResults=[{...previous,platform:{...P,id:'different-platform'}}];h.c.render();assert.match(cards(),/6,000\.00/);assert.match(cards(),/两日平台范围不完整/);assert.doesNotMatch(cards(),/新增 \/ 无基数|\+100\.00%/);
  assert.doesNotMatch(plain(cards()),/两日平台范围不完整/,'the same unavailable explanation is not repeated across the eight cards');assert.match(plain(cards()),/部分|费率未齐/,'incomplete fee state remains visible');
  h.L.comparisonResults=[previous];h.L.comparisonStatus='error';h.L.comparisonError='昨日数据读取失败';h.c.render();assert.match(cards(),/昨日数据读取失败/);assert.doesNotMatch(cards(),/新增 \/ 无基数/);
+});
+
+test('provider comparisons require both current and previous intake proof while keeping visible totals',async()=>{
+ const h=await ready();h.L.results=[completeAggregate(P,100,60)];h.L.comparisonResults=[completeAggregate(P,100,50)];h.L.comparisonStatus='ready';h.L.feeLookupRows=[];h.c.state.page='providers';verifiedProviderIntake(h);
+ const current=h.L.providerIntake,previous=h.L.providerComparisonIntake;h.L.providerIntake=null;h.c.render();assert.match(h.html(),/创建数据完整性待核验，暂不可比/);assert.match(h.html(),/6,000\.00/);assert.doesNotMatch(h.html(),/\+20\.00%/);
+ h.L.providerIntake=current;h.L.providerComparisonIntake=null;h.c.render();assert.match(h.html(),/对比期创建数据完整性待核验，暂不可比/);assert.doesNotMatch(h.html(),/\+20\.00%/);
+ h.L.providerComparisonIntake=previous;h.c.render();assert.match(h.html(),/\+20\.00%/);
 });
 
 test('confirmed India UpiPay row 4 drives both labels and estimates without falling back to the inactive tier',async()=>{

@@ -30,7 +30,7 @@ test('platform expansion keeps the same six deduplicated workorder fields aligne
 
 test('incomplete source-order coverage marks the displayed deduplicated fields while keeping no raw fallback',()=>{
  const h=setup();h.L.workorders.byProvider[0]=fact('AlphaPay',{uniqueOrderAmount:null,uniqueOrderCount:null,uniqueSuccessAmount:null,uniqueSuccessCount:null,uniqueCoverage:{status:'unavailable',complete:false,missingOrderNumberCount:20}});h.render();
- const shown=rows(h.html())[0];assert.deepEqual(issueSlice(shown).map(plain),['—','—','—','—','200.00','2']);assert.match(issueSlice(shown)[0],/20条缺原订单号/);assert.match(h.html(),/工单原单待核对/);assert.doesNotMatch(h.html(),/<sup/);assert.doesNotMatch(issueSlice(shown).join(''),/2,000\.00|1,200\.00/);
+ const shown=rows(h.html())[0];assert.deepEqual(issueSlice(shown).map(plain),['—','—','—','—','200.00','2']);assert.match(issueSlice(shown)[0],/20条采集字段未提供原订单号/);assert.match(h.html(),/工单原单待核对/);assert.doesNotMatch(h.html(),/<sup/);assert.doesNotMatch(issueSlice(shown).join(''),/2,000\.00|1,200\.00/);
 });
 
 test('multiple source aggregates do not get added as distinct deduplicated orders',()=>{
@@ -89,7 +89,7 @@ test('fully read collection and payout cards separately identify named workorder
   ]};
   h.render(direction);assert.match(h.html(),/<small class="provider-read-label">已读取<\/small> 2 \/ 2/);assert.match(h.html(),/工单缺项 2 平台/);assert.doesNotMatch(h.html(),/缺失 \d+ 个平台|provider-kpi-warning/);
   const gaps=h.api.workorderPlatformGaps(h.L,direction);assert.equal(gaps.length,2);assert.equal(gaps.find(p=>p.id==='new-dhani').providers.length,2);
-  h.root.providerSummaryWorkorderPlatforms();const drawer=h.drawers.at(-1);assert.equal(drawer.title,'工单缺项平台');assert.match(drawer.html,/82LOTTERY/);assert.match(drawer.html,/DHANIWIN/);assert.match(drawer.html,/TukPay、RushPay/);assert.match(drawer.html,/工单日期已收 0 \/ 1 天/);assert.match(drawer.html,/2条缺原订单号/);assert.match(drawer.html,/3条缺原始明细/);assert.doesNotMatch(drawer.html,/Outside scope/);assert.equal(h.networkCalls(),0);
+  h.root.providerSummaryWorkorderPlatforms();const drawer=h.drawers.at(-1);assert.equal(drawer.title,'工单缺项平台');assert.match(drawer.html,/82LOTTERY/);assert.match(drawer.html,/DHANIWIN/);assert.match(drawer.html,/TukPay、RushPay/);assert.match(drawer.html,/工单日期已收 0 \/ 1 天/);assert.match(drawer.html,/2条采集字段未提供原订单号/);assert.match(drawer.html,/3条缺原始明细/);assert.doesNotMatch(drawer.html,/Outside scope/);assert.equal(h.networkCalls(),0);
  }
 });
 
