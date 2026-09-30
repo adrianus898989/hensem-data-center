@@ -3,7 +3,7 @@ const {create}=require('../admin-preview/live-submission-analysis.js');
 const E=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const platform=(id='a',source='ar')=>({id,name:'Synthetic '+id,source,currency:'INR',timezone:'Asia/Kolkata'});
 const metric=(provider,t=30,n=2,count=70)=>({provider,threshold:t,qualified_member_count:n,qualified_member_days:n+1,member_count:n,member_days:n+1,invalid_count:count,l0_members:1,new_members:1,funded_members:1,unknown_members:0});
-function response(q,more={}){return {platform:platform(q.platformId),startAt:q.startAt,endAt:q.endAt,version:2,basis:'platform_local_day_all_providers_zero_success_after_first_15',exemptCount:15,metrics:[10,15,20,30,50,100].flatMap(t=>[metric(null,t),metric('Pay A',t),metric('Pay B',t)]),coverage:{orderCount:200,missingMemberCount:0,missingLevelCount:0},...more};}
+function response(q,more={}){return {platform:platform(q.platformId),startAt:q.startAt,endAt:q.endAt,version:3,basis:'platform_local_day_all_providers_zero_success_whole_day_over_threshold',exemptCount:0,thresholdComparison:'gt',metrics:[10,15,20,30,50,100].flatMap(t=>[metric(null,t),metric('Pay A',t),metric('Pay B',t)]),coverage:{orderCount:200,missingMemberCount:0,missingLevelCount:0},...more};}
 function harness(){const L={country:'印度',from:'2026-09-01T00:00:00',to:'2026-09-30T23:59:59',dirty:false},calls=[],drawers=[],tables=[];let platforms=[platform()],providers=['Pay A','Pay B'],handler=q=>response(q);const ui=create({L,E,C:n=>String(n),N:n=>String(n),selected:()=>platforms,query:p=>({startAt:'2026-09-01T00:00:00Z',endAt:'2026-09-30T00:00:00Z',status:'all',providers}),request:q=>{calls.push(q);return Promise.resolve(handler(q))},render(){},box:(title,body)=>'<h2>'+title+'</h2>'+body,table:(headers,rows,classes)=>{tables.push({headers,rows,classes});return rows.map(row=>row.join(' ')).join('\n')},open:(title,body)=>drawers.push({title,body})});return {L,ui,calls,drawers,tables,select:x=>platforms=x,setProviders:x=>providers=x,handler:x=>handler=x};}
 test('WG never enters submission calculations without recharge member IDs and exposes the concrete gap',async()=>{
  const h=harness();h.select([platform('wg-only','wg')]);await h.ui.ensure();assert.equal(h.calls.length,0);assert.equal(h.ui.metric().available,false);
@@ -22,7 +22,7 @@ test('missing platform/member coverage cannot silently improve success rate',asy
  h.select([platform()]);h.handler(q=>response(q,{coverage:{missingMemberCount:3,missingLevelCount:100}}));await h.ui.load();assert.equal(h.ui.metric().complete,false);assert.match(h.ui.note(),/查看原因/);global.liveSubmissionCoverage();assert.match(h.drawers.at(-1).body,/Synthetic a 0|Synthetic a — 100/);
 });
 test('member detail request retains authorized scope and threshold and renders precise IDs safely',async()=>{
- const h=harness();await h.ui.ensure();h.handler(q=>response(q,{total:1,members:1,rows:[{day:'2026-09-28',member_id:'<Synthetic ID>',member_level:'L0',submitted_count:40,selected_count:20,submitted_amount:'2000',platform_day_amount:'4000',invalid_count:5,invalid_amount:'500',platform_day_invalid_count:25,platform_day_invalid_amount:'2500',providers:['Pay A']}]}));await h.ui.members(0,'Pay A',30,'new');const q=h.calls.at(-1);assert.equal(q.operation,'members');assert.equal(q.platformId,'a');assert.deepEqual(q.providers,['Pay A']);assert.equal(q.threshold,30);assert.equal(q.level,'new');assert.match(h.drawers.at(-1).body,/&lt;Synthetic ID&gt;/);assert.doesNotMatch(h.drawers.at(-1).body,/<Synthetic ID>/);
+ const h=harness();await h.ui.ensure();h.handler(q=>response(q,{total:1,members:1,rows:[{day:'2026-09-28',member_id:'<Synthetic ID>',member_level:'L0',submitted_count:40,selected_count:20,submitted_amount:'2000',platform_day_amount:'4000',invalid_count:20,invalid_amount:'2000',platform_day_invalid_count:40,platform_day_invalid_amount:'4000',providers:['Pay A']}]}));await h.ui.members(0,'Pay A',30,'new');const q=h.calls.at(-1);assert.equal(q.operation,'members');assert.equal(q.platformId,'a');assert.deepEqual(q.providers,['Pay A']);assert.equal(q.threshold,30);assert.equal(q.level,'new');assert.match(h.drawers.at(-1).body,/&lt;Synthetic ID&gt;/);assert.doesNotMatch(h.drawers.at(-1).body,/<Synthetic ID>/);
 });
 test('late responses after filter changes are discarded',async()=>{
  const h=harness();let resolve;h.handler(q=>new Promise(r=>resolve=()=>r(response(q))));const loading=h.ui.ensure();h.L.dirty=true;h.ui.cancel();resolve();await loading;assert.equal(h.ui.metric().available,false);assert.doesNotMatch(h.ui.render(),/Synthetic a/);
@@ -32,7 +32,7 @@ test('shared order lanes read each platform once and retry only failed platforms
  const batch=h.ui.startWithOrders();assert.equal(h.calls.length,0);await batch.read('a');await batch.read('a');await batch.read('b');await batch.finish();assert.equal(h.calls.length,3);assert.equal(h.ui.metric().complete,false);assert.match(h.ui.note(true),/重试未完成/);assert.doesNotMatch(h.ui.note(true),/等级未提供/);
  fail=false;await h.ui.ensure(true,true);assert.deepEqual(h.calls.map(x=>x.platformId),['a','b','b','b']);assert.equal(h.ui.metric().complete,true);assert.equal(h.ui.note(true),'');
 });
-function chartResponse(q){const metrics=[10,15,20,30,50,100].flatMap(t=>[null,'Pay A'].map(provider=>({...metric(provider,t,t<=30?1:0,t<=30?30:0),member_days:t<=30?1:0,qualified_member_days:t<=30?1:0})));return response(q,{metrics,coverage:{orderCount:100,missingMemberCount:0},dashboard:{version:2,threshold:15,amountBands:q.amountBands,monitoring:[null,'Pay A'].map(provider=>({provider,order_count:100,success_count:50,invalid_count:30,order_amount:'10000',invalid_amount:'3000'})),hourly:[{provider:'Pay A',hour:10,count:30}],daily:[{day:'2026-09-28',order_count:100,invalid_count:30}],amounts:[{bucket:'band:1',count:30}],frequency:[{band:'30–49',count:1}]}})}
+function chartResponse(q){const metrics=[10,15,20,30,50,100].flatMap(t=>[null,'Pay A'].map(provider=>({...metric(provider,t,t<30?1:0,t<30?30:0),member_days:t<30?1:0,qualified_member_days:t<30?1:0})));return response(q,{metrics,coverage:{orderCount:100,missingMemberCount:0},dashboard:{version:3,threshold:15,exemptCount:0,thresholdComparison:'gt',amountBands:q.amountBands,monitoring:[null,'Pay A'].map(provider=>({provider,order_count:100,success_count:50,invalid_count:30,order_amount:'10000',invalid_amount:'3000'})),hourly:[{provider:'Pay A',hour:10,count:30}],daily:[{day:'2026-09-28',order_count:100,invalid_count:30}],amounts:[{bucket:'band:1',count:30}],frequency:[{band:'30–49',count:1}]}})}
 test('dashboard renders real aggregates, distinct frequency and drilldown without invented risk scores',async()=>{
  const h=harness();h.handler(chartResponse);await h.ui.load();const html=h.ui.render();for(const title of ['平台 × 三方刷单监控','提交次数分布','24 小时提交热力图','金额段分布','每日疑似无效提交','查看 ID'])assert(html.includes(title));assert.match(html,/71.43%/);assert.match(html,/综合评分：数据或规则未接入/);
 });
@@ -54,9 +54,9 @@ test('coverage diagnostics escape platform names',async()=>{
 
 test('summary, default drilldown, dashboard and adjusted rate all use the 15 cohort',async()=>{
  const h=harness();h.handler(q=>response(q,{metrics:[10,15,20,30,50,100].flatMap(t=>[metric(null,t,t<=15?4:2,t<=15?80:70),metric('Pay A',t,t<=15?4:2,t<=15?80:70)])}));
- await h.ui.ensure();assert.equal(h.calls[0].threshold,15);assert.equal(h.ui.metric().invalid_count,80);assert.equal(h.ui.metric().member_count,4);assert.match(h.ui.providerCell('Pay A',['a'],'rate',60,200),/>50.00%/);assert.match(h.ui.render(),/无效笔数（第16笔起）/);assert.match(h.ui.render(),/≥30 笔人数/);
+ await h.ui.ensure();assert.equal(h.calls[0].threshold,15);assert.equal(h.ui.metric().invalid_count,80);assert.equal(h.ui.metric().member_count,4);assert.match(h.ui.providerCell('Pay A',['a'],'rate',60,200),/>50.00%/);assert.match(h.ui.render(),/无效笔数（符合条件整日）/);assert.match(h.ui.render(),/>30 笔人数/);
  h.handler(q=>response(q,{total:0,members:0,rows:[]}));await h.ui.members(0);assert.equal(h.calls.at(-1).threshold,15);assert.match(h.drawers.at(-1).title,/超过 15 笔的无效提交会员/);
- h.handler(chartResponse);await h.ui.load();assert.match(h.ui.render(),/同平台同 ID 当日前 15 笔保留/);assert.doesNotMatch(h.ui.render(),/≥30 笔且无成功充值/);
+ h.handler(chartResponse);await h.ui.load();assert.match(h.ui.render(),/同平台同 ID 当日超过 15 笔且无成功，整日计无效/);assert.doesNotMatch(h.ui.render(),/≥30 笔且无成功充值/);
 });
 
 test('resuming paused submission statistics retains completed platforms',async()=>{
@@ -95,51 +95,66 @@ test('monitoring separates platform and provider, with compact amounts and the s
  assert.match(table,/<td class="risk-invalid-count">30<\/td>/);assert.match(table,/<td class="risk-invalid-share">30.00%<\/td>/);
 });
 test('member amounts distinguish the whole platform day from the selected provider',async()=>{
- const h=harness();await h.ui.load();h.handler(q=>response(q,{total:1,members:1,rows:[{day:'2026-09-28',member_id:'Synthetic',submitted_count:49,platform_day_amount:'12340',selected_count:1,submitted_amount:'100',platform_day_invalid_count:34,platform_day_invalid_amount:'10840',invalid_count:1,invalid_amount:'100',providers:['Pay A']}]}));
- await h.ui.members(0,'Pay A');const t=h.tables.at(-1);assert.equal(t.classes,'submission-members-table');assert.deepEqual(t.headers.slice(5,13),['平台当日总笔数','平台当日总金额','平台当日无效笔数','平台当日无效金额','所选三方总笔数','所选三方总金额','所选三方无效笔数','所选三方无效金额']);assert.deepEqual(t.rows[0].slice(5,13),['49','12340','34','10840','1','100','1','100']);
- h.handler(q=>response(q,{total:1,members:1,rows:[{day:'2026-09-28',member_id:'Synthetic',submitted_count:49,platform_day_amount:null,selected_count:1,submitted_amount:null,platform_day_invalid_count:34,platform_day_invalid_amount:null,invalid_count:1,invalid_amount:null,providers:[]}]}));await h.ui.members(0);assert.deepEqual(h.tables.at(-1).rows[0].slice(5,13),['49','—','34','—','1','—','1','—']);
+ const h=harness();await h.ui.load();h.handler(q=>response(q,{total:1,members:1,rows:[{day:'2026-09-28',member_id:'Synthetic',submitted_count:49,platform_day_amount:'12340',selected_count:1,submitted_amount:'100',platform_day_invalid_count:49,platform_day_invalid_amount:'12340',invalid_count:1,invalid_amount:'100',providers:['Pay A']}]}));
+ await h.ui.members(0,'Pay A');const t=h.tables.at(-1);assert.equal(t.classes,'submission-members-table');assert.deepEqual(t.headers.slice(5,13),['平台当日总笔数','平台当日总金额','平台当日无效笔数','平台当日无效金额','所选三方总笔数','所选三方总金额','所选三方无效笔数','所选三方无效金额']);assert.deepEqual(t.rows[0].slice(5,13),['49','12340','49','12340','1','100','1','100']);
+ h.handler(q=>response(q,{total:1,members:1,rows:[{day:'2026-09-28',member_id:'Synthetic',submitted_count:49,platform_day_amount:null,selected_count:1,submitted_amount:null,platform_day_invalid_count:49,platform_day_invalid_amount:null,invalid_count:1,invalid_amount:null,providers:[]}]}));await h.ui.members(0);assert.deepEqual(h.tables.at(-1).rows[0].slice(5,13),['49','—','49','—','1','—','1','—']);
 });
 test('closing the member modal discards in-flight results and clears pagination',async()=>{
  const h=harness();await h.ui.load();let finish;h.handler(q=>new Promise(resolve=>finish=()=>resolve(response(q,{rows:[],members:0,total:0}))));const pending=h.ui.members(0);assert.equal(h.drawers.length,1);
  global.liveSubmissionMembersClose();finish();await pending;assert.equal(h.drawers.length,1);const count=h.calls.length;global.liveSubmissionMemberPage(1);assert.equal(h.calls.length,count);
 });
 
-test('first 15 submissions are kept and only server-ranked excess updates provider cells',async()=>{
- const h=harness();for(const [submitted,invalid,members] of [[15,0,0],[16,1,1],[49,34,1]]){
-  h.handler(q=>response(q,{metrics:[10,15,20,30,50,100].flatMap(t=>[null,'Pay A'].map(provider=>({...metric(provider,t,members,invalid),member_days:members,qualified_member_count:1,qualified_member_days:1})))}));await h.ui.load();
-  assert.equal(h.ui.metric().invalid_count,invalid);assert.equal(h.ui.metric().member_count,members);assert.match(h.ui.providerCell('Pay A',['a'],'count',0,submitted),new RegExp('>'+invalid+'<'));
+test('strict thresholds use the whole eligible day while any successful recharge excludes it',async()=>{
+ const h=harness();for(const [submitted,success] of [[14,0],[15,0],[16,0],[20,1],[49,0],[101,0]]){
+  h.handler(q=>response(q,{metrics:[10,15,20,30,50,100].flatMap(t=>[null,'Pay A'].map(provider=>{const n=submitted>t&&success===0?1:0;return {...metric(provider,t,n,n?submitted:0),member_days:n,qualified_member_count:n,qualified_member_days:n}}))}));await h.ui.load();
+  for(const threshold of [10,15,20,30,50,100])assert.equal(h.ui.metric(null,null,threshold).invalid_count,submitted>threshold&&success===0?submitted:0);
+  const invalid=submitted>15&&success===0?submitted:0;assert.equal(h.ui.metric().member_count,invalid?1:0);assert.match(h.ui.providerCell('Pay A',['a'],'count',success,submitted),new RegExp('>'+invalid+'<'));
  }
- assert.match(h.ui.providerCell('Pay A',['a'],'count',0,49),/所有三方合并排序/);assert.match(h.ui.providerCell('Pay A',['a'],'count',0,49),/先按完整日判定顺序/);
+ const html=h.ui.render(),definition=h.ui.providerCell('Pay A',['a'],'count',0,101);assert.match(definition,/所有三方的总提交严格超过 15 笔/);assert.match(definition,/该日全部提交计无效/);assert.doesNotMatch(definition,/合并排序|第.?16笔|前 15 笔/);
+ for(const threshold of [10,15,20,30,50,100]){assert(html.includes('累计提交 >'+threshold+' 笔'));assert(html.includes('累计 >'+threshold+' 笔人数'))}
 });
 
-test('cumulative qualification is labelled separately and never links to excess-only member details',async()=>{
- const h=harness();h.handler(q=>{const r=chartResponse(q);for(const m of r.metrics)if(m.threshold<=30){m.qualified_member_count=2;m.qualified_member_days=3}r.dashboard.frequency=[{band:'10–19',count:2},{band:'30–49',count:1}];return r});await h.ui.load();
- assert.equal(h.ui.metric().member_count,1);assert.equal(h.ui.metric().qualified_member_count,2);const html=h.ui.render(),table=thresholdTable(html);
- assert.match(html,/累计门槛人数，不代表无效笔数/);assert.match(html,/按当天全部提交次数分档，不是无效笔数/);assert.match(html,/共 3 个会员日/);
- assert.match(table,/<td>Synthetic a<\/td><td>2<\/td><td>2<\/td><td>2<\/td>/);assert.doesNotMatch(table,/liveSubmissionMembers\(0,null,10/);
+test('threshold member counts remain distinct from the whole-day order counts and natural frequency buckets',async()=>{
+ const h=harness();h.handler(chartResponse);await h.ui.load();
+ assert.equal(h.ui.metric().member_count,1);assert.equal(h.ui.metric().qualified_member_count,1);assert.equal(h.ui.metric().invalid_count,30);assert.equal(h.ui.metric(null,null,30).invalid_count,0);const html=h.ui.render(),table=thresholdTable(html);
+ assert.match(html,/超过门槛的会员人数，符合条件当日全部提交计无效/);assert.match(html,/统计当天超过 10 笔且无成功的会员日；按全部提交次数分档/);assert.match(html,/共 1 个会员日/);
+ assert.match(table,/<td>Synthetic a<\/td><td>1<\/td><td>1<\/td><td>1<\/td><td>0<\/td>/);assert.doesNotMatch(table,/liveSubmissionMembers\(0,null,10/);
 });
 
-test('old response basis, version and exempt count cannot populate the new exclusion metrics',async()=>{
- for(const patch of [{version:1},{basis:'platform_local_day_all_providers_zero_success'},{exemptCount:30}]){
+test('old response basis, version, exempt count and non-strict thresholds cannot populate the new exclusion metrics',async()=>{
+ for(const patch of [{version:1},{version:2},{basis:'platform_local_day_all_providers_zero_success_after_first_15'},{exemptCount:15},{thresholdComparison:'gte'},{thresholdComparison:undefined}]){
   const h=harness();h.handler(q=>response(q,patch));await h.ui.load();assert.equal(h.ui.metric().available,false);global.liveSubmissionCoverage();assert.match(h.drawers.at(-1).body,/响应范围不一致/);
  }
 });
 
-test('restoring old cached metrics resets to manual query without making a request',async()=>{
- const h=harness();await h.ui.load();const old=h.ui.capture();old.version=1;old.results[0].basis='platform_local_day_all_providers_zero_success';const calls=h.calls.length;h.ui.restore(old);
- assert.equal(h.calls.length,calls);assert.equal(h.ui.metric().available,false);assert.match(h.ui.render(),/点击查询/);
- await h.ui.load();const good=h.ui.capture();h.ui.restore(good);assert.equal(h.ui.metric().invalid_count,70);
+test('restoring v2 or incompatible cached metrics resets to manual query without making a request',async()=>{
+ const h=harness();await h.ui.load();const good=h.ui.capture(),calls=h.calls.length;
+ for(const patch of [{version:2},{basis:'platform_local_day_all_providers_zero_success_after_first_15'},{exemptCount:15},{thresholdComparison:'gte'}]){
+  const old=JSON.parse(JSON.stringify(good));Object.assign(old.results[0],patch);if(patch.version)old.version=patch.version;h.ui.restore(old);
+  assert.equal(h.calls.length,calls);assert.equal(h.ui.metric().available,false);assert.match(h.ui.render(),/点击查询/);
+ }
+ h.ui.restore(good);assert.equal(h.ui.metric().invalid_count,70);
 });
 
 test('uncertain ordering identifies affected platforms and suppresses exclusion rates',async()=>{
  const h=harness();h.handler(q=>{const r=chartResponse(q);r.coverage.orderSequenceUncertainCount=16;return r});await h.ui.load();
  assert.equal(h.ui.metric().complete,false);assert.match(h.ui.note(true),/Synthetic a：16 笔提交顺序待核对/);assert.match(h.ui.providerCell('Pay A',['a'],'rate',50,100),/>—</);assert.doesNotMatch(monitoringTable(h.ui.render()),/71.43%/);
- global.liveSubmissionCoverage();assert.match(h.drawers.at(-1).body,/提交顺序待核对/);assert.match(h.drawers.at(-1).body,/仅计算第 16 笔起/);
+ global.liveSubmissionCoverage();assert.match(h.drawers.at(-1).body,/提交顺序待核对/);assert.match(h.drawers.at(-1).body,/计算该日全部无效提交/);
 });
 
-test('member details refuse legacy and impossible all-order counts presented as excess',async()=>{
- const h=harness();await h.ui.load();h.handler(q=>response(q,{version:1,total:0,members:0,rows:[]}));await h.ui.members(0);assert.match(h.drawers.at(-1).body,/响应范围无效/);
- h.handler(q=>response(q,{total:1,members:1,rows:[{submitted_count:49,selected_count:49,platform_day_invalid_count:49,invalid_count:49,platform_day_amount:'4900',platform_day_invalid_amount:'4900',submitted_amount:'4900',invalid_amount:'4900'}]}));await h.ui.members(0);assert.match(h.drawers.at(-1).body,/无效笔数明细不完整/);
+test('member details reject legacy contracts, partial-day counts, exact thresholds and unequal amounts',async()=>{
+ const h=harness();await h.ui.load();
+ for(const patch of [{version:2},{thresholdComparison:'gte'},{exemptCount:15}]){h.handler(q=>response(q,{...patch,total:0,members:0,rows:[]}));await h.ui.members(0);assert.match(h.drawers.at(-1).body,/响应范围无效/)}
+ const row={submitted_count:49,selected_count:20,platform_day_invalid_count:49,invalid_count:20,platform_day_amount:'4900',platform_day_invalid_amount:'4900',submitted_amount:'2000',invalid_amount:'2000'};
+ for(const patch of [{platform_day_invalid_count:34},{invalid_count:5},{submitted_count:15,selected_count:15,platform_day_invalid_count:15,invalid_count:15},{selected_count:50,invalid_count:50},{platform_day_invalid_amount:'4899'},{invalid_amount:'1999'},{platform_day_invalid_amount:null},{invalid_amount:null},{invalid_amount:''},{submitted_amount:'9007199254740992',invalid_amount:'9007199254740993'}]){
+  h.handler(q=>response(q,{total:1,members:1,rows:[{...row,...patch}]}));await h.ui.members(0);assert.match(h.drawers.at(-1).body,/无效笔数明细不完整/);
+ }
+ for(const threshold of [10,15,20,30,50,100]){
+  const count=threshold,exact={...row,submitted_count:count,selected_count:count,platform_day_invalid_count:count,invalid_count:count};
+  h.handler(q=>response(q,{total:1,members:1,rows:[exact]}));await h.ui.members(0,null,threshold);assert.match(h.drawers.at(-1).body,/无效笔数明细不完整/);
+  h.handler(q=>response(q,{total:1,members:1,rows:[{...exact,submitted_count:count+1,selected_count:count+1,platform_day_invalid_count:count+1,invalid_count:count+1,platform_day_invalid_amount:'04900.00',invalid_amount:'2000.000'}]}));await h.ui.members(0,null,threshold);
+  assert.doesNotMatch(h.drawers.at(-1).body,/无效笔数明细不完整/);assert(h.drawers.at(-1).body.includes('总提交超过 '+threshold+' 笔'));assert(h.drawers.at(-1).title.includes('超过 '+threshold+' 笔'));
+ }
 });
 test('a final platform timeout is retried once after the other fifteen complete',async()=>{
  const h=harness(),platforms=Array.from({length:16},(_,i)=>platform('p'+String(i).padStart(2,'0')));h.select(platforms);let failed=false;h.handler(q=>{if(q.platformId==='p15'&&!failed){failed=true;throw Error('57014 statement timeout')}return response(q)});await h.ui.ensure();
