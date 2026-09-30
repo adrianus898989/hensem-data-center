@@ -37,4 +37,13 @@ test('business-month defaults respect local month boundaries, leap years and yea
   ['巴基斯坦','2026-09-30T19:00:00Z','2026-10-01','2026-10-31']]){const r=month(country,[],new Date(instant));assert.equal(r.from,from);assert.equal(r.to,to);}
 });
 
-test('daily mode initializes to this month once and preserves a manually chosen historical range',async()=>{const h=harness();await h.module.load();h.root.workorderOperationsMode('daily');const month=h.root.HensemWorkorderUI.currentMonth('印度',h.L.catalog);assert.equal(h.L.from,month.from+'T00:00:00');assert.equal(h.L.to,month.to+'T23:59:59');h.L.from='2026-08-01T00:00:00';h.L.to='2026-08-31T23:59:59';h.root.workorderOperationsMode('records');h.root.workorderOperationsMode('daily');assert.equal(h.L.from,'2026-08-01T00:00:00');assert.equal(h.L.to,'2026-08-31T23:59:59');});
+test('workorder defaults and reset use seven days; daily mode preserves a manual range',async()=>{
+ const h=harness(),range=h.root.HensemWorkorderUI.recentSevenDays('印度',h.L.catalog);
+ assert.equal(h.module.state().draft.from,range.from);assert.equal(h.module.state().draft.to,range.to);
+ h.root.workorderOperationsSet('from','2026-08-01');h.root.workorderOperationsReset();
+ assert.equal(h.module.state().draft.from,range.from);assert.equal(h.module.state().draft.to,range.to);assert.equal(h.calls.length,0);
+ await h.module.load();h.root.workorderOperationsMode('daily');
+ assert.equal(h.L.from,range.from+'T00:00:00');assert.equal(h.L.to,range.to+'T23:59:59');
+ h.L.from='2026-08-01T00:00:00';h.L.to='2026-08-31T23:59:59';h.root.workorderOperationsMode('records');h.root.workorderOperationsMode('daily');
+ assert.equal(h.L.from,'2026-08-01T00:00:00');assert.equal(h.L.to,'2026-08-31T23:59:59');
+});
