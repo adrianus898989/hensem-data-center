@@ -67,7 +67,7 @@
     const normalized=['IN','INDIA','印度'].includes(token(country))?token(name).replace(/^(DHANI|VEER|SHREE)[.]/,'$1'):name;
     return keyFor({...row,name:normalized});
    };
-   for(const p of L.catalog||[])for(const name of [p.name,p.sourceName].filter(Boolean)){
+   for(const p of L.catalog||[])for(const name of [p.name,p.sourceName,...(sameSource(p.source,'wg')?[p.source_name]:[])].filter(Boolean)){
     const alias=aliasKey({...p,name}),key=keyFor(p);if(!aliases.has(alias))aliases.set(alias,new Set());aliases.get(alias).add(key);
     if(!nativeSources.has(key))nativeSources.set(key,new Set());nativeSources.get(key).add(p.source);
    }
@@ -80,7 +80,10 @@
     if(explicit&&candidates?.size&&!matches.length)return JSON.stringify(['report-source',keyFor(row),token(row.system)]);
     return keyFor(row);
    };
-   const groups=new Map(),seeds=new Map();for(const seed of L.withdrawCatalog||[]){if(!seed.name||legacyPanghu.has(token(seed.name)))continue;const key=directoryKey(seed);if(!seeds.has(key))seeds.set(key,seed);if(!groups.has(key))groups.set(key,[])}for(const f of S.catalogRows){const key=directoryKey(f);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(f)}
+   // Realtime WG orders replace the same authorized platform's old business
+   // summaries. Configuration feeds and other backends remain independent.
+   const wgNativeKeys=new Set((L.catalog||[]).filter(p=>sameSource(p.source,'wg')).map(keyFor));
+   const groups=new Map(),seeds=new Map();for(const seed of L.withdrawCatalog||[]){if(!seed.name||legacyPanghu.has(token(seed.name)))continue;const key=directoryKey(seed);if(!seeds.has(key))seeds.set(key,seed);if(!groups.has(key))groups.set(key,[])}for(const f of S.catalogRows){const key=directoryKey(f);if(sameSource(f.system,'wg')&&datasets.has(f.dataset)&&wgNativeKeys.has(key))continue;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(f)}
    const orderGroups=new Map();for(const p of L.catalog||[]){const key=keyFor(p);if(!orderGroups.has(key))orderGroups.set(key,[]);orderGroups.get(key).push(p)}
    const reportTeams=feeds=>[...new Set(feeds.map(f=>normalizeIdentity(f).team).filter(t=>!['__unassigned__','__team_pending__','__team_conflict__','归属待核对'].includes(t)))];
    const chosenNative=(L.catalog||[]).filter(p=>{if(!confirmedRaja(p))return true;const peers=(orderGroups.get(keyFor(p))||[]).filter(confirmedRaja),preferred=peers.find(x=>token(x.sourceName||x.name)==='RAJA')||peers[0];return p===preferred});

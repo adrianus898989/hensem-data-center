@@ -178,6 +178,7 @@
  // Resolve each original platform/provider leaf before merging across sources.
  // Applying one rate after a merge would misprice platform-specific and fixed fees.
  function feeFacts(items,rates,country,successCount){
+  if(items.some(item=>item.success_count===null))return {estimated_fee:null,fee_matched_count:0,fee_issues:[],fee_exclusions:[],fee_eligible_count:null,fee_applicable_count:null,fee_excluded_count:0,fee_complete:false,fee_unknown:true,fee_rate_label:'成功时间口径未提供'};
   let matched=0,amount=0,excluded=0;const labels=new Set(),issues=[],exclusions=[];
   for(const item of items){
    if(feeExempt(item.provider)){excluded+=Number(item.success_count||0);exclusions.push({provider:item.provider,count:Number(item.success_count||0)});continue}
@@ -202,12 +203,14 @@
   const total=(rows||[]).reduce((s,r)=>{s.successCount+=Number(r.fee_eligible_count??r.success_count??0);s.excludedCount+=Number(r.fee_excluded_count||0);s.matchedCount+=Number(r.fee_matched_count||0);if(r.estimated_fee!=null)s.amount+=Number(r.estimated_fee);return s},{amount:0,matchedCount:0,successCount:0,excludedCount:0});
   total.issues=mergeFeeIssues((rows||[]).flatMap(r=>r.fee_issues||[]));total.exclusions=mergeFeeIssues((rows||[]).flatMap(r=>r.fee_exclusions||[]));
   total.complete=total.matchedCount===total.successCount;if(!total.matchedCount&&(total.successCount||total.excludedCount))total.amount=null;
+  if((rows||[]).some(row=>row.fee_unknown||row.success_count===null)){total.amount=null;total.successCount=null;total.complete=false;total.fee_unknown=true}
   if(new Set((rows||[]).map(r=>r.currency).filter(Boolean)).size>1){total.amount=null;total.complete=false}
   return total;
  }
  const feeReasons={missing_provider:'未识别三方，无法匹配费率',missing_rate:'当前方向未找到可用费率',conflicting_rates:'同一适用范围存在不同费率',unsupported_rate:'原表费率为未支持的复杂规则',missing_success_amount:'成功金额未完整提供',missing_fee_bands:'逐笔金额分档未完整读取',unconfirmed_amount_band:'金额落在尚未确认费率的区间',invalid_success_amount:'成功金额缺失或不符合计费要求',missing_provider_breakdown:'成功订单缺少三方分组明细'};
  function mergeFeeIssues(rows){const map=new Map();for(const row of rows){if(!(Number(row.count)>0))continue;const key=JSON.stringify([row.provider,row.platform,row.reason]);if(!map.has(key))map.set(key,{...row,count:0});map.get(key).count+=Number(row.count)}return [...map.values()].sort((a,b)=>b.count-a.count)}
  function feeCoverageText(row){
+  if(row.fee_unknown)return '成功时间口径未提供，不能计算手续费或完整匹配率';
   const eligible=Number(row.fee_eligible_count??row.successCount??row.success_count??0),excluded=Number(row.fee_excluded_count??row.excludedCount??0),matched=Number(row.fee_matched_count??row.matchedCount??0),issues=row.fee_issues||row.issues||[],exclusions=row.fee_exclusions||row.exclusions||[],count=n=>Number(n||0).toLocaleString('en-US');
   return '成功总笔数 '+count(eligible+excluded)+'；不计三方手续费 '+count(excluded)+'；应匹配 '+count(eligible)+'；已匹配 '+count(matched)+'；未匹配 '+count(Math.max(0,eligible-matched))+' 笔。'+
    (exclusions.length?'不计费：'+exclusions.map(x=>x.provider+' '+count(x.count)+' 笔').join('、')+'。':'')+

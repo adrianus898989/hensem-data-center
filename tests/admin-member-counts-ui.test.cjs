@@ -9,6 +9,35 @@ const zero=()=>({created_member_count:0,success_member_count:0,created_order_cou
 function response(q,rows=[row('2026-09-26'),row('2026-09-26','withdraw')],extra={}){return {version:1,platform:p(q.platformId),startAt:q.startAt,endAt:q.endAt,rows,capabilities:{memberIdentity:true,createdBasis:'created_at',successBasis:'success_at',dedupe:'platform_local_date_direction_member',sourceCompletenessVerified:false,periodTotal:'sum_daily_unique_member_visits'},...extra};}
 function harness(){const L={country:'印度',from:'2026-09-26T00:00:00',to:'2026-09-26T23:59:59',direction:'all',status:'all',dirty:false,multi:{team:[],provider:[]}},calls=[],drawers=[];let selected=[p()],handler=q=>response(q),extraQuery={};const ui=create({L,E:escape,C:v=>Number(v).toLocaleString('en-US'),N:v=>String(v),selected:()=>selected,query:(platform,action)=>({action,platformId:platform.id,startAt:'2026-09-25T18:30:00Z',endAt:'2026-09-26T18:30:00Z',direction:L.direction,status:L.status,currency:platform.currency,providers:L.multi.provider,offset:200,limit:50,view:'providers',...extraQuery}),request:q=>{calls.push(q);return Promise.resolve(handler(q))},render(){},open:(title,body)=>drawers.push({title,body})});return {L,ui,calls,drawers,select:v=>selected=v,handler:v=>handler=v,query:v=>extraQuery=v};}
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {resolve,promise};};
+function wgResponse(q){
+ const caps={memberIdentity:false,memberIdentityByDirection:{charge:false,withdraw:true},availability:{charge:{created:false,success:false},withdraw:{created:true,success:false}},createdBasis:'created_at',successBasis:'success_at',dedupe:'platform_local_date_direction_member',frequencyBasis:'per_platform_local_day_order_count',frequencyThresholds:[2,3,4,5],sourceCompletenessVerified:false};
+ const charge=row('2026-09-26','charge',{created_available:false,success_available:false,created_unavailable_reason:'source_member_id_unavailable',success_unavailable_reason:'source_member_id_unavailable',created_member_count:null,success_member_count:null,created_missing_member_count:20,success_missing_member_count:15});
+ const withdraw=row('2026-09-26','withdraw',{created_available:true,success_available:false,created_unavailable_reason:null,success_unavailable_reason:'source_success_time_unavailable',created_missing_member_count:2,success_member_count:null,success_order_count:null,success_missing_member_count:null});
+ for(const [i,n]of [2,3,4,5].entries()){charge['created_members_ge'+n]=charge['success_members_ge'+n]=withdraw['success_members_ge'+n]=null;withdraw['created_members_ge'+n]=[8,6,4,2][i];}
+ return response(q,[charge,withdraw].filter(r=>q.direction==='all'||r.direction===q.direction),{platform:p(q.platformId,{source:'wg'}),capabilities:caps});
+}
+
+test('WG member axes preserve unavailable recharge and paid-time people, but count real created withdrawal IDs',async()=>{
+ const h=harness();h.select([p(A,{source:'wg'})]);h.handler(wgResponse);await h.ui.ensure();assert.equal(h.calls.length,1);assert.equal(h.ui.state.status,'ready');
+ assert.match(h.ui.metric('charge'),/— \/ —/);assert.match(h.ui.metric('charge'),/充值明细未提供会员 ID/);assert.match(h.ui.metric('withdraw'),/12 \/ —/);assert.match(h.ui.metric('withdraw'),/未提供已核实成功时间/);
+ for(const direction of ['charge','withdraw']){const m=h.ui.platformMetric(A,direction);assert.equal(m.value,null);assert.equal(m.coverage.successOrderCount,null);assert.equal(m.partial,true);assert.match(m.html,/>—<\/span>/);assert.doesNotMatch(m.title,/成功订单会员 ID 覆盖 0 \/ 0/);}
+ h.ui.details();let html=h.drawers.at(-1).body;assert.match(html,/12<small class="cell-sub">已知人数；2 笔未提供会员 ID/);assert.match(html,/成功人数不可统计/);assert.doesNotMatch(html,/成功订单会员 ID 覆盖 0 \/ 0/);
+ h.ui.details('frequency','success');html=h.drawers.at(-1).body;assert.match(html,/成功人数不可统计/);assert.doesNotMatch(html,/<td>0<\/td>/);
+ h.ui.details('frequency','created');html=h.drawers.at(-1).body;assert.match(html,/8<small class="cell-sub">已知/);assert.match(html,/频次已提供 1 \/ 1/);
+});
+
+test('mixed WG member axes mark known other-platform totals partial rather than coerce missing WG people to zero',async()=>{
+ const h=harness();h.select([p(A,{source:'wg'}),p(B)]);h.handler(q=>q.platformId===A?wgResponse(q):response(q));await h.ui.ensure();assert.match(h.ui.metric('withdraw'),/24 \/ 9/);assert.match(h.ui.metric('withdraw'),/已知人数/);assert.match(h.ui.metric('withdraw'),/成功人数不可统计/);
+ const m=h.ui.platformMetric([A,B],'withdraw');assert.equal(m.value,9);assert.equal(m.partial,true);assert.equal(m.coverage.successOrderCount,null);assert.match(m.html,/>9<sup.*部分数据/);
+});
+
+test('WG missing capabilities, invented zeros and wrong available axes fail closed without weakening old member validation',async()=>{
+ const h=harness();h.select([p(A,{source:'wg'})]);
+ for(const alter of [r=>delete r.capabilities.availability,r=>r.rows[0].created_member_count=0,r=>r.rows[0].created_missing_member_count=0,r=>r.rows[1].success_order_count=0,r=>r.rows[1].created_available=false,r=>r.rows[1].success_unavailable_reason='unknown']){
+  h.handler(q=>{const r=wgResponse(q);alter(r);return r});await h.ui.load();assert.equal(h.ui.state.status,'error');assert.match(h.ui.metric('withdraw'),/— \/ —/);
+ }
+ h.select([p()]);h.handler(wgResponse);await h.ui.load();assert.equal(h.ui.state.status,'error');
+});
 
 test('one whole-period request per platform preserves provider union and strips aggregate/pagination fields',async()=>{
  const h=harness();h.L.multi.provider=['Synthetic B Pay','Synthetic A Pay','Synthetic B Pay'];await h.ui.ensure();assert.deepEqual(h.calls,[{action:'memberDaily',platformId:A,startAt:'2026-09-25T18:30:00Z',endAt:'2026-09-26T18:30:00Z',direction:'all',currency:'INR',providers:['Synthetic A Pay','Synthetic B Pay']}]);assert.match(h.ui.metric('charge'),/12 \/ 9/);assert.match(h.ui.metric('charge'),/充值人数 \/ 成功充值人数/);assert.doesNotMatch(h.ui.metric('charge'),/20 \/ 15/);await h.ui.ensure();assert.equal(h.calls.length,1,'same scope ready data is reused');await h.ui.load();assert.equal(h.calls.length,2,'explicit retry bypasses ready data');

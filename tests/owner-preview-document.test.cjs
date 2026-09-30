@@ -150,8 +150,6 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     if (name === './AdminControlCenter') return { default: function AdminControlCenter(){} };
     if (name === './WorkOrderAccountAdmin') return { default: function WorkOrderAccountAdmin(){} };
     if (name === './DashboardRoleManager') return { default: function DashboardRoleManager(){} };
-    if (name === './WGRealtimeDashboard') return { default: function WGRealtimeDashboard(){} };
-    if (name.endsWith('/wgRealtimeAccess')) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/wgRealtimeAccess.ts'),'utf8')),{module:helper,exports:helper.exports,URLSearchParams});return helper.exports; }
     if (name.endsWith('/dashboardRoleCatalog.json')) return {default:JSON.parse(fs.readFileSync(path.join(repo,'src/lib/dashboardRoleCatalog.json'),'utf8'))};
     if (name.endsWith('/dashboardRoleAccess')) {
       if(!roleClient){const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/dashboardRoleAccess.ts'),'utf8')),{...environment,module:helper,exports:helper.exports});roleClient=helper.exports;}
@@ -412,14 +410,13 @@ test('wrong-origin, stale-channel and malformed layout messages cannot open host
  const h=componentHarness();await flush();const base={source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command:'account-page',active:true,bounds:{top:120,left:230,width:1100}}};
  for(const event of [{...base,source:{}},{...base,origin:'https://spoof.invalid'},{...base,data:{...base.data,channel:'old'}},{...base,data:{...base.data,bounds:{top:0,left:-1,width:900}}},{...base,data:{...base.data,bounds:{top:0,left:0,width:'100%'}}}]){h.send(event);assert(!elements(h.draw()).some(n=>n.props?.className==='owner-preview-account-page'))}h.dispose();
 });
-test('formal WG entry mounts the real host component, retains iframe and closes back without reloading',async()=>{
- for(const options of [{role:'owner',allowed:true},{role:'viewer',permissions:{auto_withdraw:true},allowed:true},{role:'admin',allowed:false}]){
+test('WG data stays in the existing formal iframe with no separate workspace or entry',async()=>{
+ for(const options of [{role:'owner'},{role:'viewer',permissions:{auto_withdraw:true}},{role:'admin'}]){
   const h=componentHarness('wg-fixture',options);await flush();let tree=h.draw(),all=elements(tree);
-  const before=findElement(tree,'iframe').props.srcDoc,reads=h.calls.length;
-  const button=all.find(n=>n.type==='button'&&n.props?.children==='WG 实时数据');assert.equal(!!button,options.allowed);
-  if(button){button.props.onClick();all=elements(h.draw());assert(all.some(n=>n.type?.name==='WGRealtimeDashboard'));
-   const back=all.find(n=>n.type==='button'&&n.props?.children==='返回运营中心');assert(back);back.props.onClick();assert(!elements(h.draw()).some(n=>n.type?.name==='WGRealtimeDashboard'));
-   assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);assert.equal(h.calls.length,reads);}
+  assert(findElement(tree,'iframe').props.srcDoc.includes('owner-preview-frame-shell-style'));
+  assert(!all.some(n=>n.type==='button'&&n.props?.children==='WG 实时数据'));
+  assert(!all.some(n=>n.type?.name==='WGRealtimeDashboard'||n.props?.className==='owner-preview-wg-page'));
+  assert(!all.some(n=>n.type==='button'&&n.props?.children==='返回运营中心'));
   h.dispose();
  }
 });

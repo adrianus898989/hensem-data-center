@@ -10,6 +10,26 @@ function fixture({catalog=m8,withdrawCatalog=ph,country='巴西',team='胖虎',v
  const page=context.HensemLiveWithdrawPages.create({L,E,C:String,N:String,R:(n,d)=>d?String(n/d*100)+'%':'—',box:(_,body)=>body,table:(headers,rows)=>'<table>'+rows.map(row=>'<tr>'+row.map(cell=>'<td>'+cell+'</td>').join('')+'</tr>').join('')+'</table>',render:()=>{},page:()=>view,request:async q=>{calls.push(plain(q));if(respond)return respond(q);if(q.action==='withdrawReasons')return {available:false};if(q.action==='withdrawNote')return {...q,version:'saved'};return {rows:[{country:q.country,platform:'SAME',total:4,success:3,rejected:1}],totals:{total:4},notes:[],canWriteNotes:true}}});return {L,context,page,calls};
 }
 
+test('WG display aliases use raw site keys for auto, operators, reasons and daily drilldown only',async()=>{
+ for(const rawField of ['sourceName','source_name'])for(const view of ['auto_withdraw','withdraw_operators']){
+  const native={id:'wg-vn',name:'98VV.COM',[rawField]:'98VV',source:'wg',country:'越南',team:'M8',timezone:'Asia/Ho_Chi_Minh'};
+  const other={id:'ar-vn',name:'OTHER-DISPLAY',sourceName:'OTHER-RAW',source:'ar',country:'越南',team:'M8'};
+  const f=fixture({country:'越南',team:'M8',view,catalog:[native,other],withdrawCatalog:[{name:'98VV',source:'wg',country:'VN',team:'M8'}],respond:q=>q.action==='autoWithdraw'?{rows:[{country:'VN',platform:'98VV',total:2,processed:2,success:1,rejected:1}],totals:{total:2,processed:2},platforms:['98VV'],notes:[]}:q.action==='withdrawReasons'?{available:false}:{...q,version:'saved'}});
+  await f.page.load();assert.deepEqual(f.calls[0].platforms,['98VV','OTHER-DISPLAY']);assert.equal(f.calls[0].view,view==='withdraw_operators'?'operators':'auto');
+  assert.match(f.page.render(),/<td>98VV\.COM<\/td>/);assert.doesNotMatch(f.page.render(),/test-platforms">[^<]*(?:^|\|)98VV(?:\||<)/);
+  f.page.state.platforms=['98VV.COM'];await f.page.load();assert.deepEqual(f.calls.at(-1).platforms,['98VV']);
+  f.context.withdrawReasons(0,'blocking');await new Promise(setImmediate);assert.equal(f.calls.at(-1).platform,'98VV');assert.match(f.page.render(),/越南 · 98VV\.COM/);
+  f.context.withdrawReasonKind('operators');await new Promise(setImmediate);assert.equal(f.calls.at(-1).platform,'98VV');assert.equal(f.calls.at(-1).kind,'operators');
+  f.context.withdrawReasonClose();f.context.withdrawDaily(0);await new Promise(setImmediate);assert.deepEqual(f.calls.at(-1).platforms,['98VV']);assert.deepEqual(plain(f.page.state.platforms),['98VV.COM']);assert.equal(f.page.state.error,'');
+ }
+});
+
+test('all-team scopeTargets translate WG aliases without changing other system names or countries',async()=>{
+ const f=fixture({team:'all',catalog:[{id:'wg-br',name:'26bet.COM',sourceName:'26BET',source:'wg',country:'巴西',team:'M8'},...m8],withdrawCatalog:ph});
+ await f.page.load();assert.deepEqual(f.calls[0].scopeTargets,[{country:'巴西',platforms:['26BET','SAME','M8-ONLY']},{country:'胖虎巴西',platforms:['SAME','PH-ONLY']}]);
+ f.page.state.platforms=['26bet.COM'];await f.page.load();assert.deepEqual(f.calls.at(-1).platforms,['26BET']);assert.deepEqual(f.calls.at(-1).scopeTargets,[{country:'巴西',platforms:['26BET']}]);
+});
+
 test('entering automatic withdrawals from Panghu/Brazil queries only the original Panghu scope',async()=>{
  const f=fixture();await f.page.load();assert.equal(f.calls[0].country,'胖虎巴西');assert.deepEqual(f.calls[0].platforms,['SAME','PH-ONLY']);assert.equal(f.L.country,'巴西');assert.deepEqual(plain(f.L.multi.team),['胖虎']);assert.equal(f.page.state.data.rawCountry,'胖虎巴西');const html=f.page.render();assert.match(html,/所属团队/);assert.match(html,/<option value="胖虎" selected>胖虎/);assert.match(html,/<option selected>巴西/);assert.doesNotMatch(html,/M8-ONLY|<option[^>]*>胖虎巴西/);
  f.page.cancel();assert.equal(f.L.country,'巴西');assert.deepEqual(plain(f.L.multi.team),['胖虎'],'leaving for overview retains the selected team');
