@@ -10,7 +10,7 @@ export const LIVE_RESPONSE = "hensem-admin-live-response";
 export const LIVE_CANCEL = "hensem-admin-live-cancel";
 export const LIVE_REQUEST_TIMEOUT_MS = 90000;
 const actions = ["memberDaily","catalog","syncHealth","intakeCoverage","reportSummary","pendingSnapshot","collectedData","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
-const keys = new Set(["scopeTargets","amountBands","feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"]);
+const keys = new Set(["durationVersion","durationRange","scopeTargets","amountBands","feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"]);
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
@@ -52,6 +52,16 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(Object.keys(p).some(k=>!keys.has(k))||!actions.includes(String(p.action)))throw Error("查询方法无效");
   if(p.action==="memberDaily"&&Object.keys(p).some(key=>!["action","platformId","startAt","endAt","direction","providers","currency"].includes(key)))throw Error("每日人数参数无效");
   if(p.scopeTargets!==undefined&&p.action!=="autoWithdraw")throw Error("团队范围仅用于自动出款统计");
+  if(p.durationVersion!==undefined||p.durationRange!==undefined){
+    if(p.durationVersion!==2)throw Error("到账时效分档版本无效");
+    if(p.action!=="aggregate"||p.view!==undefined&&!["full","drilldown"].includes(String(p.view))||p.view==="drilldown"&&p.kind!=="latency")throw Error("时长条件仅用于到账时效统计");
+    if(p.durationRange!==undefined){
+      const range=p.durationRange as Record<string,unknown>;
+      if(!range||typeof range!=="object"||Array.isArray(range)||Object.keys(range).some(k=>!["minSeconds","maxSeconds"].includes(k)))throw Error("自定义时长区间无效");
+      for(const key of ["minSeconds","maxSeconds"])if(range[key]!=null&&(!Number.isSafeInteger(range[key])||Number(range[key])<0||Number(range[key])>315360000))throw Error("时长边界必须为有效整数秒");
+      if(range.minSeconds==null&&range.maxSeconds==null||range.minSeconds!=null&&range.maxSeconds!=null&&Number(range.minSeconds)>=Number(range.maxSeconds))throw Error("时长区间结束值必须大于开始值");
+    }
+  }
   if(p.amountBands!==undefined){
     if(p.action!=="aggregate"||!p.amountBands||typeof p.amountBands!=="object"||Array.isArray(p.amountBands))throw Error("金额档位参数无效");
     const bands=p.amountBands as Record<string,unknown>,directions=p.direction==='charge'||p.direction==='withdraw'?[String(p.direction)]:['charge','withdraw'];
@@ -67,8 +77,8 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   }
   if(p.action!=="intakeCoverage"&&p.feedIds!==undefined)throw Error("逐日覆盖来源仅用于平台数据接入");
   if(p.action==="intakeCoverage"){
-    const operation=p.operation===undefined?"catalog":p.operation,allowed=operation==="catalog"?["action","operation"]:["action","operation","feedIds","startAt","endAt"];
-    if(typeof operation!=="string"||!["catalog","rows"].includes(operation)||Object.keys(p).some(k=>!allowed.includes(k)))throw Error("逐日覆盖参数无效");
+    const operation=p.operation===undefined?"catalog":p.operation,allowed=["catalog","orderCatalog"].includes(String(operation))?["action","operation"]:["action","operation","feedIds","startAt","endAt"];
+    if(typeof operation!=="string"||!["catalog","orderCatalog","rows"].includes(operation)||Object.keys(p).some(k=>!allowed.includes(k)))throw Error("逐日覆盖参数无效");
     if(operation==="rows"){
       if(!Array.isArray(p.feedIds)||p.feedIds.length<1||p.feedIds.length>8||p.feedIds.some(x=>typeof x!=="string"||!/^[a-f0-9]{32}$/.test(x))||new Set(p.feedIds).size!==p.feedIds.length)throw Error("每次最多检查8个有效数据来源");
       const day=(x:unknown)=>typeof x==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(x)&&Number.isFinite(Date.parse(x+"T00:00:00Z"))&&new Date(x+"T00:00:00Z").toISOString().slice(0,10)===x;
@@ -87,7 +97,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   const drilldown=p.action==="aggregate"&&p.view==="drilldown";
   if(!drilldown&&["hour","bucket","cumulative"].some(key=>p[key]!==undefined))throw Error("分段条件仅用于每日对比");
   if(drilldown){
-    const allowed=new Set(["amountBands","action","view","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","kind","hour","bucket","cumulative"]);
+    const allowed=new Set(["durationVersion","durationRange","amountBands","action","view","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","kind","hour","bucket","cumulative"]);
     if(Object.keys(p).some(key=>!allowed.has(key))||typeof p.kind!=="string"||!["hourly","amount","amount_range","matrix","matrix_range","latency"].includes(p.kind))throw Error("每日对比分段无效");
     if(p.status!==undefined&&p.status!=="all")throw Error("每日对比需保留全部订单状态");
     if(p.offset!==undefined&&p.offset!==0)throw Error("每日对比返回完整范围，无需分页");
@@ -95,9 +105,14 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       if(!Number.isInteger(p.hour)||Number(p.hour)<0||Number(p.hour)>23)throw Error("每日对比小时无效");
     }else if(p.hour!==undefined)throw Error("此分段不使用小时条件");
     if(p.kind==="latency"){
-      if(!Number.isInteger(p.bucket)||Number(p.bucket)<0||Number(p.bucket)>9)throw Error("到账时效档位无效");
-      if(p.cumulative!==undefined&&typeof p.cumulative!=="boolean")throw Error("到账时效累计条件无效");
-      if(p.cumulative===true&&p.bucket===9)throw Error("到账时效累计阈值无效");
+      if(p.durationRange!==undefined){
+        if(p.bucket!==undefined||p.cumulative!==undefined)throw Error("自定义时长与固定分档不能同时选择");
+      }else{
+        const last=p.durationVersion===2?11:9;
+        if(!Number.isInteger(p.bucket)||Number(p.bucket)<0||Number(p.bucket)>last)throw Error("到账时效档位无效");
+        if(p.cumulative!==undefined&&typeof p.cumulative!=="boolean")throw Error("到账时效累计条件无效");
+        if(p.cumulative===true&&p.bucket===last)throw Error("到账时效累计阈值无效");
+      }
     }else{
       if(p.cumulative!==undefined)throw Error("此分段不使用累计条件");
       if(p.kind==="hourly"){if(p.bucket!==undefined)throw Error("小时分段不使用金额档位");}
@@ -319,6 +334,8 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if(/configuration_denied|scope_denied/.test(code))throw Error("当前账号没有此范围的归类权限");
  if(/mapping_not_found|invalid_classification/.test(code))throw Error("归类来源或国家配置已改变，请刷新后重试");
  if([401,403].includes(response.status))throw Error("正式数据读取未获授权，或会话已失效");
+ if(request.action==="intakeCoverage"&&request.operation==="orderCatalog"&&code==="invalid_coverage_request")throw Error("订单采集目录操作暂不支持");
+ if(request.durationVersion===2&&code==="invalid_request")throw Error("到账时效统计接口尚未更新，请更新后重试");
  if(/unsupported_filter/.test(code))throw Error("此来源未提供该检索字段，请清空该字段后查询");
  if(/timeout|57014/i.test(code)||response.status===504)throw Error(adminLiveTimeoutMessage(request.action));
  throw Error("正式数据查询未完成，请重试；不能据此判断没有数据");}

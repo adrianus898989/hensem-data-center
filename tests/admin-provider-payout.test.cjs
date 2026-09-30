@@ -83,15 +83,15 @@ test('missing payout amounts stay unknown in platform shares while valid counts 
 test('partial collection and payout reports identify the returned platform coverage and every subtotal',()=>{
  for(const direction of ['charge','withdraw']){
   const h=fixture([order('platform-a','ar',24680.5,42,{direction})]);h.L.queryPlatforms=Array.from({length:17},(_,i)=>({id:i?'failed-'+i:'platform-a',name:'Platform '+i}));h.L.queryFailures=h.L.queryPlatforms.slice(1).map(p=>({...p,message:'Synthetic timeout'}));h.L.queryWarnings=h.L.queryFailures.map(f=>f.name+': '+f.message);h.root.liveRetryFailed=()=>{};h.render(direction);
-  const html=h.html(),cards=html.split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];assert.match(html,/仅显示已返回平台的部分结果/);assert.match(html,/已返回 1 \/ 17 个平台/);assert.match(cards,/已读取代[收付]成功金额/);assert.match(cards,/24,680\.50/);assert.match(html,/已读取合计/);assert.match(html,/已读取金额占比/);assert.match(html,/<details class="provider-query-failures"><summary>/);assert.doesNotMatch(html,/<details[^>]*open/);assert.match(html,/只重试未完成平台/);assert.doesNotMatch(html,/<strong>合计<\/strong>|<strong>全部汇总<\/strong>/);
+  const html=h.html(),cards=html.split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];assert.match(html,/仅显示已返回平台的部分结果/);assert.match(html,/已返回 1 \/ 17 个平台/);assert.match(cards,/代[收付]成功金额/);assert.match(cards,/24,680\.50/);assert.match(html,/已读取合计/);assert.match(html,/已读取金额占比/);assert.match(html,/onclick="providerSummaryPlatformCoverage\(\)">订单 1 \/ 17/);assert.doesNotMatch(html,/provider-query-failures|<details[^>]*open/);assert.match(html,/只重试未完成平台/);assert.doesNotMatch(html,/<strong>合计<\/strong>|<strong>全部汇总<\/strong>/);
   h.L.queryRetrying=true;h.render(direction);assert.match(h.html(),/已返回数据保留/);assert.match(h.html(),/onclick="liveRetryFailed\(\)" disabled/);assert.match(h.html(),/24,680\.50/);
  }
 });
 test('all failed platforms show unavailable amounts and counts rather than false zero totals',()=>{
- const h=fixture([]);h.L.results=[];h.L.queryPlatforms=[{id:'failure',name:'Failed platform'}];h.L.queryFailures=[{id:'failure',name:'Failed platform',message:'timeout'}];h.render();const html=h.html(),cards=html.split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];assert.match(html,/本次尚无平台返回/);assert.match(html,/已返回 0 \/ 1 个平台/);assert.doesNotMatch(cards,/<strong>0(?:\.00)?<\/strong>/);assert.match(cards,/已读取代付成功金额<\/label><strong>—<\/strong>/);const footer=html.match(/<tfoot>([\s\S]*?)<\/tfoot>/)[1];assert.doesNotMatch(footer,/>0\.00</);assert.match(footer,/已读取合计/);
+ const h=fixture([]);h.L.results=[];h.L.queryPlatforms=[{id:'failure',name:'Failed platform'}];h.L.queryFailures=[{id:'failure',name:'Failed platform',message:'timeout'}];h.render();const html=h.html(),cards=html.split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];assert.match(html,/本次尚无平台返回/);assert.match(html,/已返回 0 \/ 1 个平台/);assert.doesNotMatch(cards,/<strong>0(?:\.00)?<\/strong>/);assert.match(cards,/代付成功金额<\/label><strong>—<\/strong>/);const footer=html.match(/<tfoot>([\s\S]*?)<\/tfoot>/)[1];assert.doesNotMatch(footer,/>0\.00</);assert.match(footer,/已读取合计/);
 });
 test('an incomplete current scope cannot regain yesterday comparisons merely because returned identities match',()=>{
- const h=fixture([order('platform-a','ar',100,1)]);h.L.queryPlatforms=[{id:'platform-a'},{id:'missing'}];h.L.comparisonStatus='ready';h.L.comparisonResults=[{...h.L.results[0],groups:{provider:[]}}];h.render();assert.match(h.html(),/当前平台范围未完整/);assert.doesNotMatch(h.html(),/新增 \/ 无基数/);
+ const h=fixture([order('platform-a','ar',100,1)]);h.L.queryPlatforms=[{id:'platform-a'},{id:'missing'}];h.L.comparisonStatus='ready';h.L.comparisonResults=[{...h.L.results[0],groups:{provider:[]}}];h.render();assert.match(h.html(),/没有同范围的两期数据/);assert.doesNotMatch(h.html(),/新增 \/ 无基数/);
 });
 
 
@@ -131,8 +131,8 @@ test('platform card separates returned zero-order responses from unverified inta
   h.L.workorders={byProvider:[],coverage:{complete:false,platforms:[{platformId:'platform-a',platform:'Active A',complete:false,days:0,expectedDays:1}]}};
   h.render(direction);
   const coverage=h.api.queryCoverage(h.L);assert.equal(coverage.received,2);assert.equal(coverage.requested,2);assert.equal(coverage.partial,false);
-  assert.equal(h.api.intakeCoverage(h.L).complete,0);assert.match(h.html(),/>创建数据<\/small> — \/ 2/);
-  assert.match(h.html(),/<small class="provider-read-label">已读取<\/small> 2 \/ 2/);
+  assert.equal(h.api.intakeCoverage(h.L).complete,0);assert.match(h.html(),/<label>平台<\/label><strong>— \/ 2<\/strong>/);
+  assert.doesNotMatch(h.html(),/provider-api-coverage/);h.root.providerSummaryPlatformCoverage();assert.equal((h.drawers.at(-1).html.match(/<td>已读取<\/td>/g)||[]).length,2);
   assert.doesNotMatch(h.html(),/provider-kpi-warning|缺失 \d+ 个平台/);
   h.root.providerSummaryPlatformCoverage();const drawer=h.drawers.at(-1);
   assert.equal(drawer.title,'平台采集与读取情况');assert.match(drawer.html,/Zero B/);assert.match(drawer.html,/返回零订单也计为已读取/);assert.match(drawer.html,/工单原单缺项另行核对/);
@@ -146,7 +146,7 @@ test('platform coverage uses query identity, deduplicates responses, and ignores
  h.L.queryFailures=[{...b,message:'timeout'},{...b,message:'timeout'},{id:'foreign-failure',name:'Outside',message:'failed'}];
  h.render();const c=h.api.queryCoverage(h.L);
  assert.equal(c.requested,2);assert.equal(c.received,1);assert.equal(c.missing.length,1);assert.equal(c.failures.length,1);assert.equal(c.failures[0].source,'newar');
- assert.match(h.html(),/缺失 1 个平台/);assert.match(h.html(),/provider-kpi-warning/);
+ assert.match(h.html(),/>未读 /);assert.match(h.html(),/provider-kpi-warning/);
  h.root.providerSummaryPlatformCoverage();const html=h.drawers.at(-1).html;assert.match(html,/<td>newar<\/td><td>读取失败<\/td><td>timeout<\/td>/);assert.doesNotMatch(html,/Not selected|Outside/);assert.equal(h.networkCalls(),0);
 });
 
@@ -161,7 +161,7 @@ test('missing platform details distinguish timeout, pending, paused and unread w
 });
 
 test('successful retry clears missing-platform warning even when old failure evidence lingers',()=>{
- const h=fixture([]),a={id:'platform-a',name:'A'},b={id:'b',name:'B'};h.L.queryPlatforms=[a,b];h.L.queryFailures=[{...b,message:'timeout'}];h.render();assert.match(h.html(),/缺失 1 个平台/);
- h.L.results.push({platform:b,groups:{provider:[]}});h.render();assert.equal(h.api.queryCoverage(h.L).partial,false);assert.match(h.html(),/<small class="provider-read-label">已读取<\/small> 2 \/ 2/);assert.doesNotMatch(h.html(),/缺失 1 个平台|provider-kpi-warning/);
+ const h=fixture([]),a={id:'platform-a',name:'A'},b={id:'b',name:'B'};h.L.queryPlatforms=[a,b];h.L.queryFailures=[{...b,message:'timeout'}];h.render();assert.match(h.html(),/>未读 /);
+ h.L.results.push({platform:b,groups:{provider:[]}});h.render();assert.equal(h.api.queryCoverage(h.L).partial,false);assert.doesNotMatch(h.html(),/provider-api-coverage/);h.root.providerSummaryPlatformCoverage();assert.equal((h.drawers.at(-1).html.match(/<td>已读取<\/td>/g)||[]).length,2);assert.doesNotMatch(h.html(),/缺失 1 个平台|provider-kpi-warning/);
  h.root.providerSummaryPlatformCoverage();assert.doesNotMatch(h.drawers.at(-1).html,/timeout|读取失败/);assert.equal(h.networkCalls(),0);
 });

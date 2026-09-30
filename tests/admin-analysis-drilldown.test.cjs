@@ -48,7 +48,7 @@ test('provider shares use the band total while own-band rates use that provider 
  const html=h.instance.panel(durationSegment),rows=cellsOf(html);
  assert.deepEqual(rows[0].slice(0,7),['SLOW','4000.00','28.57%','40','80.00%','400','10.00%']);
  assert.deepEqual(rows[1].slice(0,7),['FAST','10000.00','71.43%','10','20.00%','1000','1.00%']);
- assert.match(html,/<th>档内笔数占比<\/th>/);assert.match(html,/<th>自身落档率<\/th>/);assert.match(html,/快档的落档率不表示慢单率/);
+ assert.match(html,/<th>档内笔数占比<\/th>/);assert.match(html,/title="该三方区间内成功笔数 ÷ 该三方有效成功笔数 × 100%；与档内各三方之间的占比不同">三方区间内占比<\/span>/);assert.match(html,/区间内占比不等同于慢单率/);
  assert.equal(rows.length,2);assert.equal(JSON.stringify(h.L.results),before);assert.doesNotMatch(html,/999999/);
 });
 test('provider daily comparison uses the same response and preserves daily own denominators and missing dates',async()=>{
@@ -63,7 +63,7 @@ test('provider daily comparison uses the same response and preserves daily own d
 test('cumulative provider labels and local searching preserve full band denominators',async()=>{
  const s={...durationSegment,cumulative:true,placement:'duration-groups'},h=setup(q=>Promise.resolve(durationResponse(q)));h.L.durationQuery='slow';
  h.instance.dimensionButton(s,'超过 5 分钟','provider');h.action(s,'toggleProvider');await flush();const html=h.instance.panel(s),rows=cellsOf(html);
- assert.equal(rows.length,1);assert.equal(rows[0][4],'80.00%');assert.equal(rows[0][6],'10.00%');assert.match(html,/<th>自身超时率<\/th>/);assert.match(html,/严格超过指定时长/);assert(h.calls.every(q=>q.cumulative===true&&!('placement' in q)));
+ assert.equal(rows.length,1);assert.equal(rows[0][4],'80.00%');assert.equal(rows[0][6],'10.00%');assert.match(html,/>三方超时订单占比<\/span>/);assert.match(html,/严格超过指定时长/);assert(h.calls.every(q=>q.cumulative===true&&!('placement' in q)));
 });
 test('partial provider reads never present partial denominators as complete ratios and retry only the failure',async()=>{
  let fail=true;const h=setup(q=>q.platformId==='b'&&fail?Promise.reject(Error('provider timeout')):Promise.resolve(durationResponse(q)));h.instance.button(durationSegment,'≤ 5 分钟');h.action(durationSegment,'toggleProvider');await flush();
@@ -130,4 +130,48 @@ test('capturing an in-flight drilldown pauses its entries and late results canno
  const waiting=[],h=setup(q=>new Promise(resolve=>waiting.push({q,resolve})));h.instance.open(segment,'8时');h.action(segment,'daily');assert.equal(h.calls.length,2);const saved=h.instance.capture();h.L.serial++;h.instance.restore(saved);
  const entry=h.instance.snapshot().states.get(JSON.stringify(segment)).daily.get('all');assert.equal(entry.loading,false);assert.match(entry.failures[0].message,/暂停/);
  for(const item of waiting)item.resolve({complete:true,hasMore:false,summary:[],groups:{daily:[{...metric(987654),date:'2026-09-20'}]}});await flush();assert.equal(entry.results.size,0);assert.doesNotMatch(h.instance.panel(segment),/987654/);
+});
+
+const customForm={kind:'latency',durationVersion:2,direction:'all',placement:'duration-custom-form'};
+test('independent custom range queries only its cohort and leaves fixed distributions and totals untouched',async()=>{
+ const h=setup(q=>Promise.resolve({...durationResponse(q),durationVersion:2})),before=JSON.stringify(h.L.results);
+ let html=h.instance.customRange();assert.match(html,/自选区间/);assert.equal(h.calls.length,0);
+ h.action(customForm,'rangeQuery');await flush();html=h.instance.customRange();
+ assert.equal(h.calls.length,2);for(const q of h.calls){assert.equal(q.kind,'latency');assert.equal(q.durationVersion,2);assert.deepEqual(JSON.parse(JSON.stringify(q.durationRange)),{minSeconds:120,maxSeconds:180});assert(!('bucket'in q));assert(!('cumulative'in q));assert.equal(q.providers[0],'ORIGINAL')}
+ assert.match(html,/&gt; 2 分钟，≤ 3 分钟/);assert.match(html,/>14000.00<\/td>/);assert.match(html,/>50<\/td>/);assert.match(html,/>3.57%<\/td>/);assert.equal(JSON.stringify(h.L.results),before);
+ const segment=h.instance.snapshot().states.get(JSON.stringify(customForm)).rangeSegment;
+ h.action(segment,'togglePlatform');assert.match(h.instance.customRange(),/>1000.00<\/td>/);assert.match(h.instance.customRange(),/>13000.00<\/td>/);assert.equal(h.calls.length,2);
+ h.action(segment,'toggleProvider');await flush();assert.equal(h.calls.length,2,'provider expansion reuses the custom-range response');assert.match(h.instance.customRange(),/三方区间内占比/);
+ h.action(segment,'providerDaily','SLOW');await flush();assert.equal(h.calls.length,2);assert.equal(JSON.stringify(h.L.results),before);
+});
+test('custom range controls validate integer seconds and stage changes until explicit query',async()=>{
+ const h=setup(q=>Promise.resolve({...durationResponse(q),durationVersion:2}));h.instance.customRange();
+ for(const [min,max]of [['3','2'],['-1','3'],['',''],['bad','3'],['0.0001','3']]){h.action(customForm,'rangeMin',min);h.action(customForm,'rangeMax',max);h.action(customForm,'rangeQuery');await flush();assert.equal(h.calls.length,0);assert.match(h.instance.customRange(),/请填写有效区间/)}
+ h.action(customForm,'rangeMin','120');h.action(customForm,'rangeMax','180');h.action(customForm,'rangeUnit','seconds');assert.equal(h.calls.length,0);
+ h.action(customForm,'rangeQuery');await flush();assert.equal(h.calls.length,2);assert.deepEqual(JSON.parse(JSON.stringify(h.calls[0].durationRange)),{minSeconds:120,maxSeconds:180});
+ h.action(customForm,'rangeMax','240');assert.match(h.instance.customRange(),/条件已修改/);assert.match(h.instance.customRange(),/已查区间/);assert.match(h.instance.customRange(),/≤ 3 分钟/);assert.equal(h.calls.length,2);
+ h.action(customForm,'rangeQuery');await flush();assert.equal(h.calls.length,4);assert.equal(h.calls[2].durationRange.maxSeconds,240);
+ h.action(customForm,'rangeMin','');h.action(customForm,'rangeQuery');await flush();assert.equal(h.calls.length,6);assert.equal(h.calls[4].durationRange.minSeconds,null);
+});
+test('custom range failed platforms remain visible as partial, with safe ratios and retry only missing platforms',async()=>{
+ let fail=true;const h=setup(q=>q.platformId==='b'&&fail?Promise.reject(Error('synthetic timeout')):Promise.resolve({...durationResponse(q),durationVersion:2}));h.instance.customRange();h.action(customForm,'rangeQuery');await flush();let html=h.instance.customRange();
+ assert.match(html,/区间已读取 1 \/ 2/);assert.match(html,/比例待完整后计算/);assert.match(html,/synthetic timeout/);assert.equal(cellsOf(html)[0][3],'—');
+ const segment=h.instance.snapshot().states.get(JSON.stringify(customForm)).rangeSegment;fail=false;h.action(segment,'retry');await flush();assert.equal(h.calls.length,3);assert.equal(h.calls[2].platformId,'b');html=h.instance.customRange();assert.doesNotMatch(html,/区间已读取 1 \/ 2|synthetic timeout/);assert.equal(cellsOf(html)[0][3],'3.57%');
+});
+test('new version drilldowns reject legacy responses instead of silently using the old five-minute band',async()=>{
+ const h=setup(q=>Promise.resolve(durationResponse(q))),segment={...durationSegment,durationVersion:2};
+ h.instance.button(segment,'≤60秒');h.action(segment,'toggleProvider');await flush();assert(h.calls.every(q=>q.durationVersion===2));assert.match(h.instance.panel(segment),/时效细分档未就绪/);assert.equal(cellsOf(h.instance.panel(segment)).length,0);
+ const old=setup();old.instance.customRange();old.action(customForm,'rangeQuery');await flush();assert.match(old.instance.customRange(),/时效细分档未就绪/);assert(!old.instance.customRange().includes('NaN'));
+});
+test('new threshold indices map to three-minute/one-hour values while legacy segments keep their original indices',()=>{
+ const h=setup();h.L.results.forEach(r=>{r.durationVersion=2;r.groups.latency_thresholds=[{direction:'charge',currency:'INR',threshold_ms:180000,count:7,amount:700},{direction:'charge',currency:'INR',threshold_ms:3600000,count:2,amount:200}]});
+ assert.equal(h.instance.platformRows({kind:'latency',durationVersion:2,direction:'charge',bucket:1,cumulative:true})[0].success_count,7);
+ assert.equal(h.instance.platformRows({kind:'latency',durationVersion:2,direction:'charge',bucket:4,cumulative:true})[0].success_count,2);
+ assert.equal(h.instance.platformRows({kind:'latency',direction:'charge',bucket:2,cumulative:true})[0].success_count,2);
+});
+
+test('custom range requests are invalidated by a changed query scope without replacing fixed success data',async()=>{
+ const waiting=[],h=setup(q=>new Promise(resolve=>waiting.push({q,resolve})));h.instance.customRange();h.action(customForm,'rangeQuery');assert.equal(h.calls.length,2);
+ const before=JSON.stringify(h.L.results);h.L.from='2026-09-21T00:00:00';h.instance.customRange();waiting.forEach(({q,resolve})=>resolve({...durationResponse(q),durationVersion:2}));await flush();
+ const html=h.instance.customRange();assert.doesNotMatch(html,/已查区间|14000.00/);assert.equal(JSON.stringify(h.L.results),before);
 });

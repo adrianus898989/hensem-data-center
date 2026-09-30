@@ -314,6 +314,7 @@ returns text language sql immutable set search_path='' as $function$
     "atpayinr-bank2": "ATPay",
     "aypayusdt": "AYPayUSDT",
     "aypayusdtcu": "AYPayUSDT",
+    "basepay-qr": "FFPay",
     "busspay": "BussPay",
     "busspay-qr": "BussPay",
     "cedarpay": "CedarPay",
@@ -424,6 +425,7 @@ returns text language sql immutable set search_path='' as $function$
     "rujia": "RUJIA",
     "rujiapay": "RUJIA",
     "rushpay": "RushPay",
+    "rushpay-bank": "RushPay",
     "rushpay-qr": "RushPay",
     "speed2pay": "Speed2Pay",
     "speed2pay-paytm": "Speed2Pay",
@@ -481,6 +483,7 @@ returns text language sql immutable set search_path='' as $function$
     "vstarpay-qr": "VstarPay",
     "vstarpayinr-bank": "VstarPay",
     "wallet66": "Wallet66",
+    "wallet66-bsc": "Wallet66",
     "wallet66-usdt": "Wallet66",
     "wandapay": "WandaPay",
     "wandapay-qr": "WandaPay",
@@ -1245,12 +1248,14 @@ returns text language sql immutable set search_path='' as $function$
    names->>regexp_replace(lower(btrim(base_name)),'[[:space:]]*[-‐‑‒–—﹘﹣－][[:space:]]*','-','g'),base_name) from aliases;
 $function$;
 revoke all on function private.dashboard_admin_live_provider_alias(text,text) from public,anon,authenticated;
--- Raw identity wins over a historical generic USDT registry classification.
+-- Confirmed raw identity wins over stale automatic registry classification.
+-- The historical helper name stays compatible with existing query callers;
+-- its exact raw-provider list now includes the owner's bank/QR confirmations.
 -- This helper is private and grants no new client access.
 create or replace function private.dashboard_admin_live_confirmed_usdt_provider(p_country text,p_raw text)
 returns text language sql immutable set search_path='' as $function$
  select case when coalesce($countries${"IN":"印度","INDIA":"印度","印度线下":"印度","印度盘口":"印度","印度线下盘口":"印度","香港":"印度","红膏蟹":"印度","紅膏蟹":"印度","HK_TEAM":"印度","HONG_KONG":"印度","GAME66_HK":"印度","RED_CRAB":"印度","GAME66_RED_CRAB":"印度"}$countries$::jsonb->>upper(btrim(p_country)),p_country)='印度'
- then $confirmed${"usdt(trc20)-3":"TronPayUSDT","usdt(trc20)-4":"UniPayUSDT","usdt(trc20)-5":"Wallet66","usdt(bep20)-5":"Wallet66","wallet66-usdt":"Wallet66"}$confirmed$::jsonb->>regexp_replace(lower(btrim(regexp_replace(btrim(p_raw),$suffix$(?:\s*[-_‐‑‒–—﹘﹣－]?\s*(?:跑分|唤醒)|\s*[-_‐‑‒–—﹘﹣－]?\s*[（(【\[]\s*(?:跑分|唤醒)\s*[）)】\]])+$$suffix$,''))),'[[:space:]]*[-‐‑‒–—﹘﹣－][[:space:]]*','-','g') end;
+ then $confirmed${"usdt(trc20)-3":"TronPayUSDT","usdt(trc20)-4":"UniPayUSDT","usdt(trc20)-5":"Wallet66","usdt(bep20)-5":"Wallet66","wallet66-usdt":"Wallet66","wallet66":"Wallet66","wallet66-bsc":"Wallet66","rushpay":"RushPay","rushpay-bank":"RushPay","basepay-qr":"FFPay","ffpay":"FFPay"}$confirmed$::jsonb->>regexp_replace(lower(btrim(regexp_replace(btrim(p_raw),$suffix$(?:\s*[-_‐‑‒–—﹘﹣－]?\s*(?:跑分|唤醒)|\s*[-_‐‑‒–—﹘﹣－]?\s*[（(【\[]\s*(?:跑分|唤醒)\s*[）)】\]])+$$suffix$,''))),'[[:space:]]*[-‐‑‒–—﹘﹣－][[:space:]]*','-','g') end;
 $function$;
 revoke all on function private.dashboard_admin_live_confirmed_usdt_provider(text,text) from public,anon,authenticated;
 commit;

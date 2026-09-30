@@ -22,13 +22,13 @@ test('all selected dates must be present, even if one date has data',()=>{
 });
 test('only exact platform and direction feeds are read, with bounded batches and no provider filter',async()=>{
  const calls=[],feeds=Array.from({length:9},(_,i)=>({...feed,id:'f'+i,platformId:'p'+i})),platforms=feeds.map((f,i)=>({...p,id:f.platformId}));
- const loader=api.create({request:async q=>{calls.push(q);if(q.operation==='catalog')return {version:1,complete:true,feeds:[...feeds,{...feed,id:'withdraw',direction:'withdraw'}]};return {...response(q.feedIds.map(id=>day({feedId:id}))),feedIds:q.feedIds};}});
+ const loader=api.create({request:async q=>{calls.push(q);if(['orderCatalog','catalog'].includes(q.operation))return {version:1,complete:true,feeds:[...feeds,{...feed,id:'withdraw',direction:'withdraw'}]};return {...response(q.feedIds.map(id=>day({feedId:id}))),feedIds:q.feedIds};}});
  const result=await loader.load({platforms,direction:'charge',from,to,providers:['UPI-QR']});
- assert.equal(result.platforms.length,9);assert.equal(result.status,'ready');assert.deepEqual(calls.slice(1).map(q=>q.feedIds.length),[4,4,1]);
+ assert.equal(result.platforms.length,9);assert.equal(result.status,'ready');assert.deepEqual(calls.slice(1).map(q=>q.feedIds.length),[2,2,2,2,1]);
  assert(calls.every(q=>!('providers' in q)&&!('status' in q)));assert(!calls.some(q=>q.feedIds?.includes('withdraw')));
 });
 test('transport or malformed coverage failure stays unknown rather than inventing missing orders',async()=>{
- const loader=api.create({request:async q=>q.operation==='catalog'?{version:1,complete:true,feeds:[feed]}:response([])});
+ const loader=api.create({request:async q=>['orderCatalog','catalog'].includes(q.operation)?{version:1,complete:true,feeds:[feed]}:response([])});
  const result=await loader.load({platforms:[p],direction:'charge',from,to});assert.equal(result.platforms[0].status,'unverified');assert.equal(result.platforms[0].missingDates.length,0);assert.match(result.error,/核对失败/);
 });
 test('cancelled reads cannot populate a later query',async()=>{
@@ -36,7 +36,7 @@ test('cancelled reads cannot populate a later query',async()=>{
  const pending=loader.load({platforms:[p],direction:'charge',from,to});loader.cancel();resolve({version:1,complete:true,feeds:[feed]});await assert.rejects(pending,/已暂停/);
 });
 test('same scoped catalog can be shared by current and comparison checks; cancellation clears it',async()=>{
- let catalogs=0;const loader=api.create({request:async q=>{if(q.operation==='catalog'){catalogs++;return {version:1,complete:true,feeds:[feed]};}return response([day({})]);}});
+ let catalogs=0;const loader=api.create({request:async q=>{if(['orderCatalog','catalog'].includes(q.operation)){catalogs++;return {version:1,complete:true,feeds:[feed]};}return response([day({})]);}});
  await Promise.all([loader.load({platforms:[p],direction:'charge',from,to}),loader.load({platforms:[p],direction:'charge',from,to})]);assert.equal(catalogs,1);
  loader.cancel();await loader.load({platforms:[p],direction:'charge',from,to});assert.equal(catalogs,2);
 });
@@ -69,12 +69,41 @@ test('source local midnight controls the expected date set independently of clie
  api.validate({...r,rows:[]},[{...feed,timezone:'America/New_York'}],from,to);
 });
 test('cancellation during a batch stops later batches and invalidates the pending result',async()=>{
- const feeds=Array.from({length:5},(_,i)=>({...feed,id:'f'+i,platformId:'p'+i})),platforms=feeds.map(f=>({...p,id:f.platformId})),calls=[];let release;
- const loader=api.create({request:async q=>{calls.push(q);if(q.operation==='catalog')return {version:1,complete:true,feeds};return new Promise(resolve=>{release=()=>resolve({...response(q.feedIds.map(id=>day({feedId:id}))),feedIds:q.feedIds});});}});
- const pending=loader.load({platforms,direction:'charge',from,to});await new Promise(resolve=>setImmediate(resolve));loader.cancel();release();await assert.rejects(pending,/已暂停/);assert.deepEqual(calls.filter(q=>q.operation==='rows').map(q=>q.feedIds.length),[4]);
+ const feeds=Array.from({length:5},(_,i)=>({...feed,id:'f'+i,platformId:'p'+i})),platforms=feeds.map(f=>({...p,id:f.platformId})),calls=[];const releases=[];
+ const loader=api.create({request:async q=>{calls.push(q);if(['orderCatalog','catalog'].includes(q.operation))return {version:1,complete:true,feeds};return new Promise(resolve=>{releases.push(()=>resolve({...response(q.feedIds.map(id=>day({feedId:id}))),feedIds:q.feedIds}));});}});
+ const pending=loader.load({platforms,direction:'charge',from,to});await new Promise(resolve=>setImmediate(resolve));loader.cancel();releases.forEach(release=>release());await assert.rejects(pending,/已暂停/);assert.deepEqual(calls.filter(q=>q.operation==='rows').map(q=>q.feedIds.length),[2,2]);
 });
 test('current and comparison loads preserve independent date scopes while sharing authorized source catalog',async()=>{
- const calls=[],loader=api.create({request:async q=>{calls.push(q);if(q.operation==='catalog')return {version:1,complete:true,feeds:[feed]};return {...response([day({date:q.startAt})]),startAt:q.startAt,endAt:q.endAt};}});
+ const calls=[],loader=api.create({request:async q=>{calls.push(q);if(['orderCatalog','catalog'].includes(q.operation))return {version:1,complete:true,feeds:[feed]};return {...response([day({date:q.startAt})]),startAt:q.startAt,endAt:q.endAt};}});
  const [current,previous]=await Promise.all([loader.load({platforms:[p],direction:'charge',from,to}),loader.load({platforms:[p],direction:'charge',from:'2026-09-28',to:'2026-09-28'})]);
- assert.equal(current.from,from);assert.equal(previous.from,'2026-09-28');assert.equal(current.platforms[0].days[0].date,from);assert.equal(previous.platforms[0].days[0].date,'2026-09-28');assert.equal(calls.filter(q=>q.operation==='catalog').length,1);
+ assert.equal(current.from,from);assert.equal(previous.from,'2026-09-28');assert.equal(current.platforms[0].days[0].date,from);assert.equal(previous.platforms[0].days[0].date,'2026-09-28');assert.equal(calls.filter(q=>['orderCatalog','catalog'].includes(q.operation)).length,1);
+});
+function rowsFor(q,overrides={}){const rows=[];for(let d=Date.parse(q.startAt);d<=Date.parse(q.endAt);d+=86400000)for(const feedId of q.feedIds)rows.push(day({feedId,date:new Date(d).toISOString().slice(0,10),status:'complete',complete:true,...overrides}));return {...response(rows),feedIds:q.feedIds,startAt:q.startAt,endAt:q.endAt};}
+test('a slow platform is retried once by itself and cannot discard its successful neighbour',async()=>{
+ const feeds=[feed,{...feed,id:'f2',platformId:'p2'}],calls=[],progress=[],loader=api.create({request:async q=>{calls.push(q);if(q.operation==='orderCatalog')return {version:1,complete:true,feeds};if(q.feedIds.includes('f2'))throw Error('statement timeout');return rowsFor(q);}});
+ const result=await loader.load({platforms:[p,{...p,id:'p2',name:'OTHER'}],direction:'charge',from,to,onProgress:r=>progress.push(r)});
+ assert.deepEqual(calls.filter(q=>q.operation==='rows').map(q=>Array.from(q.feedIds)),[['f1','f2'],['f1'],['f2']]);assert.equal(result.platforms[0].complete,true);assert.equal(result.platforms[1].status,'unverified');assert.equal(result.platforms[1].missingDates.length,0);assert.match(result.platforms[1].message,/statement timeout/);assert(progress.some(r=>r.status==='loading'&&r.platforms[0].complete));
+});
+test('malformed and permission failures are not retried or converted to missing source evidence',async()=>{
+ for(const fail of [()=>{throw Error('没有访问权限')},q=>({...rowsFor(q),complete:false})]){let rows=0;const loader=api.create({request:async q=>q.operation==='orderCatalog'?{version:1,complete:true,feeds:[feed]}:(rows++,fail(q))});const result=await loader.load({platforms:[p],direction:'charge',from,to});assert.equal(rows,1);assert.equal(result.platforms[0].missingDates.length,0);assert.equal(result.platforms[0].status,'unverified');}
+});
+test('seven-day fragments retain verified missing dates independently of a failed adjacent window',async()=>{
+ const calls=[],loader=api.create({request:async q=>{calls.push(q);if(q.operation==='orderCatalog')return {version:1,complete:true,feeds:[feed]};if(q.startAt==='2026-09-27')throw Error('timeout');return rowsFor(q,{status:'not_received',received:false,complete:false,evidence:'only_success_day_records_received'});}});
+ const result=await loader.load({platforms:[p],direction:'charge',from:'2026-09-20',to});assert.equal(result.platforms[0].missingDates.length,7);assert(!result.platforms[0].missingDates.includes('2026-09-27'));assert.equal(result.platforms[0].days.find(d=>d.date==='2026-09-27').status,'unverified');assert.match(result.platforms[0].message,/2026-09-27 至 2026-09-29：timeout/);assert.equal(calls.filter(q=>q.startAt==='2026-09-27').length,2);
+});
+test('only successful exact-scope fragments are reused briefly; expiry and a new query force revalidation',async()=>{
+ let time=0,fail=true;const calls=[],feeds=[feed,{...feed,id:'f2',platformId:'p2'}],loader=api.create({now:()=>time,request:async q=>{calls.push(q);if(q.operation==='orderCatalog')return {version:1,complete:true,feeds};if(fail&&q.feedIds.includes('f2'))throw Error('timeout');return rowsFor(q);}}),scope={platforms:[p,{...p,id:'p2'}],direction:'charge',from,to};
+ await loader.load(scope);fail=false;const before=calls.length;await loader.load(scope);assert.deepEqual(calls.slice(before).map(q=>Array.from(q.feedIds)),[['f2']]);const cached=calls.length;await loader.load(scope);assert.equal(calls.length,cached);
+ await loader.load({...scope,from:'2026-09-28',to:'2026-09-28'});assert.equal(calls.at(-1).startAt,'2026-09-28');time=300000;const expired=calls.length;await loader.load(scope);assert.equal(calls.length,expired+1);assert.deepEqual(Array.from(calls.at(-1).feedIds),['f1','f2']);loader.cancel();const reset=calls.length;await loader.load(scope);assert.deepEqual(calls.slice(reset).map(q=>q.operation),['orderCatalog','rows']);
+});
+test('only an explicit unsupported operation falls back from the lighter order catalog',async()=>{
+ const calls=[],loader=api.create({request:async q=>{calls.push(q);if(q.operation==='orderCatalog')throw Error('订单采集目录操作暂不支持');return q.operation==='catalog'?{version:1,complete:true,feeds:[feed]}:rowsFor(q);}});await loader.load({platforms:[p],direction:'charge',from,to});assert.deepEqual(calls.map(q=>q.operation),['orderCatalog','catalog','rows']);
+ for(const message of ['timeout','没有访问权限']){const operations=[],failed=api.create({request:async q=>{operations.push(q.operation);throw Error(message)}});await assert.rejects(failed.load({platforms:[p],direction:'charge',from,to}));assert.equal(operations.length,message==='timeout'?2:1);assert(operations.every(x=>x==='orderCatalog'));}
+});
+test('a failed catalog is recoverable on a later explicit retry without keeping the rejected promise',async()=>{
+ let failing=true,catalogs=0;const loader=api.create({request:async q=>{if(q.operation==='orderCatalog'){catalogs++;if(failing)throw Error('timeout');return {version:1,complete:true,feeds:[feed]};}return rowsFor(q);}});await assert.rejects(loader.load({platforms:[p],direction:'charge',from,to}));failing=false;assert.equal((await loader.load({platforms:[p],direction:'charge',from,to})).platforms[0].complete,true);assert.equal(catalogs,3);
+});
+test('current and comparison workloads never exceed two simultaneous intake requests',async()=>{
+ let active=0,peak=0;const feeds=Array.from({length:8},(_,i)=>({...feed,id:'f'+i,platformId:'p'+i})),platforms=feeds.map(f=>({...p,id:f.platformId})),loader=api.create({request:async q=>{active++;peak=Math.max(peak,active);await new Promise(r=>setImmediate(r));active--;return q.operation==='orderCatalog'?{version:1,complete:true,feeds}:rowsFor(q);}});
+ await Promise.all([loader.load({platforms,direction:'charge',from,to}),loader.load({platforms,direction:'charge',from:'2026-09-28',to:'2026-09-28'})]);assert.equal(peak,2);
 });

@@ -29,3 +29,10 @@ test('missing daily source report is not displayed as zero even when detail reco
  const {h,tuk}=setup();tuk.uniqueCoverage.diagnosticDays=[{platform:'DHANIWIN',source:'newar',provider:'TukPay',direction:'withdraw',date:'2026-09-25',expectedAvailable:false,expectedCount:null,detailCount:8,missingDetailCount:null,detailMismatchCount:null}];h.render();h.root.providerSummaryCoverage();const html=h.drawers.at(-1).html;
  assert.match(html,/<td>DHANIWIN<\/td><td>newar<\/td><td>2026-09-25<\/td><td>TukPay<\/td><td>未收到<\/td><td>8<\/td>/);assert.doesNotMatch(html,/日汇总与明细数量相差 0 条/);
 });
+test('unknown provider references are explained separately from real provider conflicts',()=>{
+ const {h,tuk}=setup();Object.assign(tuk.uniqueCoverage,{missingOrderNumberCount:0,unresolvedProviderOrderCount:1,resolvedProviderOrderCount:2,unknownProviderRecordCount:3,providerConflictCount:0});h.render();h.root.providerSummaryCoverage();const html=h.drawers.at(-1).html;
+ assert.match(html,/1组原单三方未确认/);assert.match(html,/2组原单按唯一已知三方归并/);assert.match(html,/3条来源三方未填写/);assert.doesNotMatch(html,/组三方冲突/);
+});
+test('resolved unknown labels do not make a complete original-order cohort a conflict',()=>{
+ const {h,tuk}=setup();Object.assign(tuk.uniqueCoverage,{status:'complete',complete:true,missingOrderNumberCount:0,unresolvedProviderOrderCount:0,resolvedProviderOrderCount:2,unknownProviderRecordCount:2,providerConflictCount:0});h.render();h.root.providerSummaryCoverage();assert.doesNotMatch(h.drawers.at(-1).html,/<td>TukPay<\/td>/);assert.doesNotMatch(h.html(),/工单原单待核对/);
+});

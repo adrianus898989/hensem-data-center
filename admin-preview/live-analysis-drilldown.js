@@ -4,6 +4,7 @@
  const counts=['all_count','success_count','created_success_count','pending_count','failed_count','rejected_count','unknown_count'];
  const amounts=['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount'];
  const fields=[...counts,...amounts],limits=[300000,1800000,3600000,10800000,21600000,43200000,86400000,172800000,259200000];
+ const limitsV2=[60000,180000,...limits],durationLimits=s=>s.durationVersion===2?limitsV2:limits;
  const finite=v=>v!==null&&v!==undefined&&v!==''&&Number.isFinite(Number(v));
  const sum=(rows,key)=>rows.some(r=>!finite(r[key]))?null:rows.reduce((n,r)=>n+Number(r[key]),0);
  const totals=rows=>Object.fromEntries(fields.map(k=>[k,sum(rows,k)]));
@@ -23,15 +24,18 @@
    return result.complete!==false&&result.hasMore!==true&&Array.isArray(summary)&&!summary.some(scoped)&&(summary.length>0||finite(result.total)&&Number(result.total)===0)&&!Object.values(result.groups||{}).some(rows=>Array.isArray(rows)&&rows.some(scoped));
   }
   function platformRows(segment){
-   return L.results.flatMap(result=>dirs(segment).map(direction=>{
+   const custom=segment.kind==='latency'&&segment.durationRange,entry=custom?state(segment).daily.get('all'):null;
+   return L.results.flatMap(original=>dirs(segment).map(direction=>{
+    const result=custom?entry?.results.get(original.platform?.id)||{platform:original.platform}:original;
     const group=segment.kind==='latency'?(segment.cumulative?'latency_thresholds':'latency'):segment.kind;
-    const source=result.groups?.[group],rows=(source||[]).filter(r=>r.direction===direction&&(!r.currency||r.currency===L.currency)&&
+    const versionReady=segment.kind!=='latency'||segment.durationVersion!==2||result.durationVersion===2;
+    const source=versionReady?(custom?result.summary:result.groups?.[group]):undefined,rows=(source||[]).filter(r=>r.direction===direction&&(!r.currency||r.currency===L.currency)&&
      (segment.hour===undefined||Number(r.hour)===Number(segment.hour))&&
-     (segment.kind==='latency'?(segment.cumulative?Number(r.threshold_ms)===limits[segment.bucket]:Number(r.bucket)===Number(segment.bucket)):segment.bucket===undefined||String(r.bucket)===String(segment.bucket)));
+     (segment.kind==='latency'?(custom?true:segment.cumulative?Number(r.threshold_ms)===durationLimits(segment)[segment.bucket]:Number(r.bucket)===Number(segment.bucket)):segment.bucket===undefined||String(r.bucket)===String(segment.bucket)));
     let metric;
     if(segment.kind==='latency'){
      const summary=(result.summary||[]).find(r=>r.direction===direction&&(!r.currency||r.currency===L.currency));
-     const available=Array.isArray(source)&&source.some(r=>r.direction===direction&&(!r.currency||r.currency===L.currency))||summary?.success_count!==null&&summary?.success_count!==undefined&&Number(summary.success_count)===0||confirmedEmptyDirection(result,direction);
+     const available=versionReady&&(Array.isArray(source)&&source.some(r=>r.direction===direction&&(!r.currency||r.currency===L.currency))||summary?.success_count!==null&&summary?.success_count!==undefined&&Number(summary.success_count)===0||confirmedEmptyDirection(result,direction));
      metric={...zero(),success_amount:available?sum(rows,'amount'):null,success_count:available?sum(rows,'count'):null};
     }else metric=Array.isArray(source)?totals(rows):Object.fromEntries(fields.map(k=>[k,null]));
     return {...metric,platformId:result.platform?.id,platform:result.platform?.name||'未提供平台',source:result.platform?.source||'—',direction,currency:result.platform?.currency||L.currency};
@@ -67,8 +71,8 @@
   }
   function providerGrid(s){
    const {entry,complete}=providerEntry(s),daily=s.tab==='providerDaily',extra=dirs(s.segment).length>1;
-   const label=s.segment.cumulative?'自身超时率':'自身落档率',scopeLabel=daily?'该三方当日有效成功笔数':'该三方有效成功笔数';
-   const headers=[daily?'成功日期':'三方',...(extra?['方向']:[]),'本档成功金额','档内金额占比','本档成功笔数','档内笔数占比',scopeLabel,label,...(!daily&&multi()?['每日对比']:[])];
+   const label=s.segment.cumulative?'三方超时订单占比':'三方区间内占比',scopeLabel=daily?'该三方当日有效成功笔数':'该三方有效成功笔数';
+   const headers=[daily?'成功日期':'三方',...(extra?['方向']:[]),'本档成功金额','档内金额占比','本档成功笔数','档内笔数占比',scopeLabel,'<span title="'+E('该三方'+(daily?'当日':'')+'区间内成功笔数 ÷ '+scopeLabel+' × 100%；与档内各三方之间的占比不同')+'">'+label+'</span>',...(!daily&&multi()?['每日对比']:[])];
    const progress=entry?.loading?'<p class="analysis-status">三方分档读取 '+entry.results.size+' / '+entry.total+' 个平台…</p>':'';
    const failures=entry?.failures.length?'<div class="live-status live-error">三方分档尚不完整：'+entry.failures.map(f=>E(f.name+'：'+f.message)).join('；')+' <button class="link" onclick="'+action(s.segment,'retry')+'">重试未完成平台</button></div>':'';
    const selection=daily?'<p class="analysis-status">'+E(s.provider)+' · 按成功日期对比 <button class="link" onclick="'+action(s.segment,'provider')+'">返回全部三方</button></p>':'';
@@ -83,7 +87,7 @@
    const visible=(daily?records:records.filter(r=>!finite(r.count)||Number(r.count)>0)).map(r=>({...r,_band:band(r.direction,r.date),_ready:daily?dayComplete(r.direction,r.date):complete}));
    const columns=[textual(daily?'date':'provider'),...(extra?[textual('direction')]:[]),numeric('amount'),{value:r=>r._ready?fraction(r.amount,r._band.amount):null},numeric('count'),{value:r=>r._ready?fraction(r.count,r._band.count):null},numeric('valid_count'),{value:r=>r._ready?fraction(r.count,r.valid_count):null},...(!daily&&multi()?[null]:[])],sorted=sortGrid(s,daily?'provider-daily:'+s.provider:'provider',headers,visible,columns);
    const rows=sorted.rows.map(r=>{const total=r._band,ready=r._ready,ratio=(a,b)=>ready?R(a,b):'—';return [E(daily?r.date:r.provider||'未识别三方')+(daily&&!ready?'<small class="analysis-metric-share">当日来源未完整返回</small>':''),...(extra?[name(r.direction)]:[]),N(r.amount),ratio(r.amount,total.amount),C(r.count),ratio(r.count,total.count),C(r.valid_count),ratio(r.count,r.valid_count),...(!daily&&multi()?['<button class="link" onclick="'+action(s.segment,'providerDaily',r.provider)+'">查看每天</button>']:[])]});
-   const note='档内占比 = 该三方'+(daily?'当日':'')+'本档成功金额 / 笔数 ÷ 同方向'+(daily?'当日':'')+'本档合计；'+label+' = 该三方本档笔数 ÷ '+scopeLabel+'。'+(s.segment.cumulative?'当前档为严格超过指定时长；累计档之间不能相加。':'互斥分档；快档的落档率不表示慢单率。')+' 多天汇总先合计笔数再计算比例，不能平均每天的比例。'+(daily?' 未返回的日期显示 —，不补成 0。':'')+(!complete?' 本次分档数据未收齐，比例暂不计算。':' 按本次完整分档汇总计算；每日对比复用同次数据。');
+   const note='档内占比 = 该三方'+(daily?'当日':'')+'本档成功金额 / 笔数 ÷ 同方向'+(daily?'当日':'')+'本档合计；'+label+' = 该三方本档笔数 ÷ '+scopeLabel+'。'+(s.segment.cumulative?'当前档为严格超过指定时长；累计档之间不能相加。':'按所选区间计算；区间内占比不等同于慢单率。')+' 多天汇总先合计笔数再计算比例，不能平均每天的比例。'+(daily?' 未返回的日期显示 —，不补成 0。':'')+(!complete?' 本次分档数据未收齐，比例暂不计算。':' 按本次完整分档汇总计算；每日对比复用同次数据。');
    return {before:selection+progress+failures+(complete&&!visible.length?'<p class="muted">'+(query?'当前搜索没有命中的三方。':'当前分档没有命中的三方。')+'</p>':''),headers:sorted.headers,rows,after:'<div class="analysis-note">'+note+'</div>'};
   }
   function providerBody(s){const grid=providerGrid(s);return grid.before+(grid.headers.length?smallTable(grid.headers,grid.rows):'')+(grid.after||'')}
@@ -151,22 +155,54 @@
    }).join('')+'</tbody>'+(config.footerRows?.length?'<tfoot>'+config.footerRows.map(r=>'<tr>'+[...r,''].map(v=>'<td>'+v+'</td>').join('')+'</tr>').join('')+'</tfoot>':'')+'</table></div>';
   }
   async function load(s,retry=false){
-   sync();if(!s.open||L.loading||L.dirty||s.segment.kind==='provider_daily')return;
-   const needsProviders=providerTab(s);let entry=s.daily.get(s.platform);if(entry&&!retry&&(!needsProviders||[...entry.results.values()].every(providerReady)))return;
+   sync();if(!s.open&&!s.customLoading||L.loading||L.dirty||s.segment.kind==='provider_daily')return;
+   const needsProviders=providerTab(s)||!!s.segment.durationRange;let entry=s.daily.get(s.platform);if(entry&&!retry&&(!needsProviders||[...entry.results.values()].every(providerReady)))return;
    if(!entry){entry={results:new Map(),failures:[],loading:false,total:0};s.daily.set(s.platform,entry)}
    if(needsProviders)for(const [id,result]of entry.results)if(!providerReady(result))entry.results.delete(id);
    if(needsProviders)for(const other of s.daily.values())for(const [id,result]of other.results)if(providerReady(result)&&!entry.results.has(id))entry.results.set(id,result);
-   const candidates=L.results.map(r=>L.catalog.find(p=>p.id===r.platform?.id)||r.platform).filter(p=>p?.id&&(s.platform==='all'||p.id===s.platform)),pending=candidates.filter(p=>!entry.results.has(p.id)),requests=pending.map(p=>{try{return {p,q:{...c.query(p,'aggregate'),view:'drilldown',kind:s.segment.kind,...(s.segment.hour===undefined?{}:{hour:s.segment.hour}),...(s.segment.bucket===undefined?{}:{bucket:s.segment.bucket}),...(s.segment.cumulative===undefined?{}:{cumulative:s.segment.cumulative}),direction:s.segment.direction,offset:0}}}catch(error){return {p,error}}});
+   const candidates=L.results.map(r=>L.catalog.find(p=>p.id===r.platform?.id)||r.platform).filter(p=>p?.id&&(s.platform==='all'||p.id===s.platform)),pending=candidates.filter(p=>!entry.results.has(p.id)),requests=pending.map(p=>{try{return {p,q:{...c.query(p,'aggregate'),view:'drilldown',kind:s.segment.kind,...(s.segment.durationVersion===2?{durationVersion:2}:{}),...(s.segment.durationRange?{durationRange:s.segment.durationRange}:{}),...(s.segment.hour===undefined?{}:{hour:s.segment.hour}),...(s.segment.bucket===undefined?{}:{bucket:s.segment.bucket}),...(s.segment.cumulative===undefined?{}:{cumulative:s.segment.cumulative}),direction:s.segment.direction,offset:0}}}catch(error){return {p,error}}});
    for(const other of states.values())for(const old of other.daily.values())if(old.loading&&old!==entry){old.loading=false;old.failures.push({name:'读取',message:'已切换查看范围，请重试继续读取'})}entry.total=candidates.length;entry.failures=[];entry.loading=true;const gen=generation,token=++active,key=scope;let index=0;c.render();
-   async function worker(){while(index<requests.length&&gen===generation&&token===active){const {p,q,error}=requests[index++];try{if(error)throw error;const r=await requestSlot(q,()=>{sync();return gen===generation&&token===active&&key===scope});sync();if(gen!==generation||token!==active||key!==scope)return;if(r?.complete!==true||r?.hasMore!==false||!Array.isArray(r?.groups?.daily)||!Array.isArray(r?.summary)||(r.platform?.id&&r.platform.id!==p.id))throw Error('每日汇总未完整返回');if(needsProviders&&!providerReady(r))throw Error('三方耗时分档未完整返回');entry.results.set(p.id,{...r,platform:p,startAt:q.startAt,endAt:q.endAt});}catch(e){sync();if(gen!==generation||token!==active||key!==scope)return;entry.failures.push({id:p.id,name:p.name,message:e.message||'读取失败'})}c.render()}}
+   async function worker(){while(index<requests.length&&gen===generation&&token===active){const {p,q,error}=requests[index++];try{if(error)throw error;const r=await requestSlot(q,()=>{sync();return gen===generation&&token===active&&key===scope});sync();if(gen!==generation||token!==active||key!==scope)return;if(s.segment.durationVersion===2&&r?.durationVersion!==2)throw Error('时效细分档未就绪，请重新查询');if(r?.complete!==true||r?.hasMore!==false||!Array.isArray(r?.groups?.daily)||!Array.isArray(r?.summary)||(r.platform?.id&&r.platform.id!==p.id))throw Error('每日汇总未完整返回');if(needsProviders&&!providerReady(r))throw Error('三方耗时分档未完整返回');entry.results.set(p.id,{...r,platform:p,startAt:q.startAt,endAt:q.endAt});}catch(e){sync();if(gen!==generation||token!==active||key!==scope)return;entry.failures.push({id:p.id,name:p.name,message:e.message||'读取失败'})}c.render()}}
    await Promise.all(Array.from({length:Math.min(2,requests.length)},worker));if(gen!==generation||token!==active||key!==scope)return;entry.loading=false;c.render();
   }
+  const customFormSegment=()=>({kind:'latency',durationVersion:2,direction:L.direction==='all'?'all':L.direction,placement:'duration-custom-form'});
+  function customDraft(s){
+   const unit=s.rangeUnit==='seconds'?1:60,parse=value=>String(value).trim()===''?null:Number(value)*unit;
+   const minSeconds=parse(s.rangeMin??'2'),maxSeconds=parse(s.rangeMax??'3');
+   if(minSeconds===null&&maxSeconds===null||[minSeconds,maxSeconds].some(v=>v!==null&&(!Number.isSafeInteger(v)||v<0||v>315360000))||minSeconds!==null&&maxSeconds!==null&&minSeconds>=maxSeconds)return null;
+   return {minSeconds,maxSeconds};
+  }
+  const rangeLabel=range=>{const text=v=>v%60===0?v/60+' 分钟':v+' 秒';return range.minSeconds===null?'≤ '+text(range.maxSeconds):range.maxSeconds===null?'> '+text(range.minSeconds):'> '+text(range.minSeconds)+'，≤ '+text(range.maxSeconds)};
+  function customRange(){
+   const formSegment=customFormSegment(),s=state(formSegment),change=op=>'liveAnalysisAction(\''+enc(formSegment)+'\',\''+op+'\',encodeURIComponent(this.value))';
+   const activeSegment=s.rangeSegment,activeState=activeSegment?state(activeSegment):null,entry=activeState?.daily.get('all'),complete=!!entry&&!entry.loading&&!entry.failures.length&&!L.queryFailures?.length&&entry.results.size===entry.total&&[...entry.results.values()].every(providerReady);
+   const controls='<div class="latency-custom-controls"><strong>自选区间</strong><label>大于 <input type="number" min="0" step="any" aria-label="自选耗时下限" value="'+E(s.rangeMin??'2')+'" onchange="'+change('rangeMin')+'"></label><label>至（含） <input type="number" min="0" step="any" aria-label="自选耗时上限" value="'+E(s.rangeMax??'3')+'" onchange="'+change('rangeMax')+'"></label><select aria-label="自选耗时单位" onchange="'+change('rangeUnit')+'"><option value="minutes" '+(s.rangeUnit!=='seconds'?'selected':'')+'>分钟</option><option value="seconds" '+(s.rangeUnit==='seconds'?'selected':'')+'>秒</option></select><button class="btn small" onclick="'+action(formSegment,'rangeQuery')+'" '+(L.loading||L.dirty?'disabled':'')+'>查询区间</button><small>不含下限、含上限；留空为不限。固定分档与合计不变。</small></div>';
+   let body=s.rangeError?'<p class="analysis-status live-error">'+E(s.rangeError)+'</p>':'';
+   if(entry){
+    const ds=dirs(activeSegment),rows=[...entry.results.values()].flatMap(r=>r.summary||[]),heads=['已查区间',...ds.flatMap(d=>[name(d)+'成功金额',name(d)+'成功笔数',name(d)+'笔数占比',name(d)+'金额占比'])],cells=[E(rangeLabel(activeSegment.durationRange)),...ds.flatMap(d=>{const part=rows.filter(r=>r.direction===d&&(!r.currency||r.currency===L.currency)),known=complete||part.length>0;return [known?N(sum(part,'amount')):'—',known?C(sum(part,'count')):'—',complete?R(sum(part,'count'),sum(part,'valid_count')):'—',complete?R(sum(part,'amount'),sum(part,'valid_amount')):'—']})];
+    if(!complete)body+='<p class="analysis-status">'+(entry.loading?'区间读取 ':'区间已读取 ')+entry.results.size+' / '+entry.total+' 平台'+(entry.failures.length?' · <button class="link" onclick="'+action(activeSegment,'retry')+'">重试</button>':'')+'；比例待完整后计算。</p>';
+    if(entry.failures.length)body+='<p class="analysis-status live-error">'+entry.failures.map(f=>E(f.name+'：'+f.message)).join('；')+'</p>';
+    if(s.rangeDirty)body+='<p class="analysis-status">条件已修改，点击查询更新下面的区间。</p>';
+    body+=table({id:'latency-custom',headers:heads,rows:[{cells}],cells:r=>r.cells,segment:()=>activeSegment,label:()=>rangeLabel(activeSegment.durationRange)});
+   }
+   return '<section class="panel latency-custom-range">'+controls+body+'</section>';
+  }
+  function customAction(s,op,decoded){
+   if(s.segment.placement!=='duration-custom-form')return false;
+   if(['rangeMin','rangeMax','rangeUnit'].includes(op)){s[op]=decoded;s.rangeDirty=true;s.rangeError='';c.render();return true}
+   if(op!=='rangeQuery')return false;
+   const durationRange=customDraft(s);if(!durationRange){s.rangeError='请填写有效区间：至少一端有值、下限小于上限，换算后须为整数秒。';c.render();return true}
+   if(L.loading||L.dirty)return true;
+   s.rangeError='';s.rangeDirty=false;s.rangeSegment={kind:'latency',durationVersion:2,direction:s.segment.direction,durationRange,placement:'duration-custom'};
+   const selected=state(s.rangeSegment,rangeLabel(durationRange));selected.customLoading=true;
+   void load(selected).finally(()=>{selected.customLoading=false;c.render()});c.render();return true;
+  }
   function pause(s){if([...s.daily.values()].some(entry=>entry.loading)){active++;for(const other of states.values())for(const entry of other.daily.values())if(entry.loading){entry.loading=false;entry.failures.push({name:'检查',message:'已收起或切换，请重试继续读取'})}}}
-  root.liveAnalysisAction=function(encoded,op,value){let segment;try{segment=JSON.parse(decodeURIComponent(encoded))}catch{return}sync();const s=states.get(JSON.stringify(segment));if(!s)return;const decoded=value===undefined?'':decodeURIComponent(value);if(op==='sort'){let id,index;try{[id,index]=JSON.parse(decoded)}catch{return}const columns=sortRegistry.get(JSON.stringify([s.segment,id])),column=columns?.[index];if(!Number.isInteger(index)||!column||typeof column.value!=='function')return;const old=s.sorts?.[id];s.sorts={...s.sorts,[id]:{column:index,ascending:old?.column===index?!old.ascending:!!column.ascending}};c.render();return;}if(s.segment.kind==='latency'&&['provider','toggleProvider','providerDaily'].includes(op)){const close=op==='toggleProvider'&&s.open&&providerTab(s);s.open=!close;if(close)pause(s);else{s.tab=op==='providerDaily'?'providerDaily':'provider';s.platform='all';if(op==='providerDaily')s.provider=decoded;void load(s)}}else if(s.segment.kind==='latency'&&op==='togglePlatform'){const close=s.open&&s.tab==='platform';pause(s);s.open=!close;s.tab='platform'}else if(op==='toggle'){s.open=!s.open;if(s.open&&s.exclusiveGroup)for(const other of states.values())if(other!==s&&other.exclusiveGroup===s.exclusiveGroup)other.open=false;if(!s.open)pause(s)}else if(op==='platform'){if(s.segment.kind==='latency')pause(s);s.tab='platform'}else if(op==='daily'||op==='platformDaily'||op==='select'){s.open=true;s.tab='daily';if(op!=='daily')s.platform=decoded||'all';void load(s)}else if(op==='retry'){void load(s,true)}c.render()};
+  root.liveAnalysisAction=function(encoded,op,value){let segment;try{segment=JSON.parse(decodeURIComponent(encoded))}catch{return}sync();const s=states.get(JSON.stringify(segment));if(!s)return;const decoded=value===undefined?'':decodeURIComponent(value);if(customAction(s,op,decoded))return;if(op==='sort'){let id,index;try{[id,index]=JSON.parse(decoded)}catch{return}const columns=sortRegistry.get(JSON.stringify([s.segment,id])),column=columns?.[index];if(!Number.isInteger(index)||!column||typeof column.value!=='function')return;const old=s.sorts?.[id];s.sorts={...s.sorts,[id]:{column:index,ascending:old?.column===index?!old.ascending:!!column.ascending}};c.render();return;}if(s.segment.kind==='latency'&&['provider','toggleProvider','providerDaily'].includes(op)){const close=op==='toggleProvider'&&s.open&&providerTab(s);s.open=!close;if(close)pause(s);else{s.tab=op==='providerDaily'?'providerDaily':'provider';s.platform='all';if(op==='providerDaily')s.provider=decoded;void load(s)}}else if(s.segment.kind==='latency'&&op==='togglePlatform'){const close=s.open&&s.tab==='platform';pause(s);s.open=!close;s.tab='platform'}else if(op==='toggle'){s.open=!s.open;if(s.open&&s.exclusiveGroup)for(const other of states.values())if(other!==s&&other.exclusiveGroup===s.exclusiveGroup)other.open=false;if(!s.open)pause(s)}else if(op==='platform'){if(s.segment.kind==='latency')pause(s);s.tab='platform'}else if(op==='daily'||op==='platformDaily'||op==='select'){s.open=true;s.tab='daily';if(op!=='daily')s.platform=decoded||'all';void load(s)}else if(op==='retry'){if(s.segment.durationRange&&!s.open){s.customLoading=true;void load(s,true).finally(()=>{s.customLoading=false;c.render()})}else void load(s,true)}c.render()};
   const copySorts=sorts=>Object.fromEntries(Object.entries(sorts||{}).map(([id,value])=>[id,{...value}]));
   function capture(){sync();generation++;active++;return [...states].map(([key,s])=>[key,{...s,sorts:copySorts(s.sorts),daily:new Map([...s.daily].map(([id,entry])=>[id,{...entry,loading:false,results:new Map(entry.results),failures:entry.loading?[...entry.failures,{name:'读取',message:'切换页面后已暂停，点击重试继续'}]:entry.failures.slice()}]))}]);}
   function restore(saved){generation++;active++;states.clear();scope=signature();for(const [key,s]of saved||[])states.set(key,{...s,sorts:copySorts(s.sorts),daily:new Map([...s.daily].map(([id,entry])=>[id,{...entry,results:new Map(entry.results),failures:entry.failures.slice()}]))});}
-  return {capture,restore,table,button,valueButton,dimensionButton,panel,platformRows,isOpen(segment){sync();return states.get(JSON.stringify(segment))?.open===true},snapshot:()=>({scope,states}),open(segment,label,exclusiveGroup){const s=state(segment,label);if(exclusiveGroup){s.exclusiveGroup=exclusiveGroup;for(const other of states.values())if(other!==s&&other.exclusiveGroup===exclusiveGroup)other.open=false;}s.open=true;c.render()}};
+  return {capture,restore,customRange,table,button,valueButton,dimensionButton,panel,platformRows,isOpen(segment){sync();return states.get(JSON.stringify(segment))?.open===true},snapshot:()=>({scope,states}),open(segment,label,exclusiveGroup){const s=state(segment,label);if(exclusiveGroup){s.exclusiveGroup=exclusiveGroup;for(const other of states.values())if(other!==s&&other.exclusiveGroup===exclusiveGroup)other.open=false;}s.open=true;c.render()}};
  }
  root.HensemAnalysisDrilldown={create};
 })(typeof window==='object'?window:globalThis);
