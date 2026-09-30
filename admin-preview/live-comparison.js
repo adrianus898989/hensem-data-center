@@ -6,7 +6,7 @@
  const formatters=new Map();
  function formatter(timezone){
   if(typeof timezone!=='string'||!timezone.trim())throw Error('缺少平台时区');
-  if(!formatters.has(timezone))formatters.set(timezone,new Intl.DateTimeFormat('en-CA',{timeZone:timezone,calendar:'gregory',numberingSystem:'latn',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}));
+  if(!formatters.has(timezone)){const value=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,calendar:'gregory',numberingSystem:'latn',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});if(formatters.size>=32)formatters.delete(formatters.keys().next().value);formatters.set(timezone,value)}
   return formatters.get(timezone);
  }
  function localClock(epoch,timezone){const p=Object.fromEntries(formatter(timezone).formatToParts(epoch).map(x=>[x.type,x.value]));return p.year+'-'+p.month+'-'+p.day+'T'+p.hour+':'+p.minute+':'+p.second}
