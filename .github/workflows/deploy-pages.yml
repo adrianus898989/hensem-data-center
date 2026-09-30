@@ -36,6 +36,7 @@ jobs:
       - run: pnpm test:platform-filters
       - run: pnpm test:comparisons
       - run: pnpm test:admin-preview
+      - run: pnpm test:wg-realtime
       - run: pnpm build
         env:
           PAGES_BASE_PATH: /hensem-data-center
