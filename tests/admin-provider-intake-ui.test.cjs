@@ -98,3 +98,15 @@ test('zero comparison denominator shows no-baseline rather than infinity or a fa
 test('observed creation evidence is restricted to the displayed direction and never claims completeness',()=>{
  const h=fixture(1);h.L.providerIntake=null;h.orders[0].direction='withdraw';assert.equal(h.api.intakeCoverage(h.L,'charge').received,0);assert.equal(h.api.intakeCoverage(h.L,'withdraw').received,1);assert.equal(h.api.intakeCoverage(h.L,'withdraw').complete,0);
 });
+
+test('received channel mismatches remain 15 of 16 platforms and do not shrink comparison to only verified platforms',()=>{
+ const h=fixture();h.orders[0].all_count=0;h.orders[0].all_amount=0;previousRows(h,{all_count:20,all_amount:2000,success_count:5,success_amount:500});
+ const missing=h.L.providerIntake.platforms[0];Object.assign(missing,{status:'missing',received:false,complete:false,missingDates:['2026-09-26'],days:[{date:'2026-09-26',dataset:'orders',direction:'charge',status:'not_received',received:false,complete:false,evidence:'only_success_day_records_received'}]});
+ for(const p of h.L.providerIntake.platforms.slice(1,14)){p.status='missing';p.complete=false;p.received=true;p.missingDates=['2026-09-26'];p.days=[{date:'2026-09-26',dataset:'orders',direction:'charge',status:'partial',received:true,complete:false,expected:true,evidence:'source_created_channel_mismatch'}];}
+ h.render();let c=h.api.intakeCoverage(h.L);assert.equal(c.received,15);assert.equal(c.complete,2);assert.equal(c.missing.length,1);assert.equal(c.platforms.filter(p=>p.difference).length,13);assert.equal(c.partial,true);assert.match(h.html(),/<label>平台<\/label><strong>15 \/ 16<\/strong>/);assert.match(h.html(),/>缺 51GAME<\/button>/);assert.match(h.html(),/较昨日 · 同范围 15 平台/);assert.equal(metric(h.html(),'代收创建金额').change,'-50.00%');assert.match(h.html(),/代收三方汇总（部分结果）/);
+ h.root.providerSummaryPlatformCoverage();assert.match(h.drawers.at(-1).html,/已收到 · 核验有差异/);assert.match(h.drawers.at(-1).html,/创建订单与渠道分组不一致/);
+ for(const p of h.L.providerIntake.platforms.slice(1,14)){p.status='received';p.missingDates=[];}h.render();c=h.api.intakeCoverage(h.L);assert.equal(c.received,15);assert.equal(c.partial,true);assert.equal(c.missing.length,1);assert.match(h.html(),/较昨日 · 同范围 15 平台/);
+});
+test('receipt evidence with a real missing adjacent date still identifies the missing day',()=>{
+ const h=fixture(1);h.L.from='2026-09-25T00:00:00';h.L.providerIntake.from='2026-09-25';const p=h.L.providerIntake.platforms[0];p.status='missing';p.complete=false;p.received=false;p.missingDates=['2026-09-25','2026-09-26'];p.days=[{date:'2026-09-25',status:'not_received',received:false,complete:false,expected:true},{date:'2026-09-26',status:'partial',received:true,complete:false,expected:true,evidence:'source_created_channel_mismatch'}];h.render();const c=h.api.intakeCoverage(h.L);assert.equal(c.received,0);assert.deepEqual(Array.from(c.missing[0].missingDates),['2026-09-25']);assert.equal(c.partial,true);
+});

@@ -53,7 +53,7 @@ test('legacy success-only evidence cannot masquerade as received creation data',
  const result=api.summarize(p,feed,[day({status:'received',received:true,evidence:'only_success_day_records_received'})],from,to);assert.equal(result.received,false);assert.equal(result.status,'missing');assert.equal(result.days[0].received,false);assert.deepEqual(Array.from(result.missingDates),[from]);
 });
 test('partial and failed source days retain receipt evidence but cannot complete the date range',()=>{
- for(const status of ['partial','failed']){const result=api.summarize(p,feed,[day({status,received:true,complete:false})],from,to);assert.equal(result.complete,false);assert.equal(result.status,'missing');assert.deepEqual(Array.from(result.missingDates),[from]);assert.equal(result.days[0].received,true);}
+ for(const status of ['partial','failed']){const result=api.summarize(p,feed,[day({status,received:true,complete:false})],from,to);assert.equal(result.complete,false);assert.equal(result.status,'received');assert.deepEqual(Array.from(result.missingDates),[]);assert.deepEqual(Array.from(result.verificationDifferenceDates),[from]);assert.equal(result.received,true);assert.equal(result.days[0].received,true);}
  const unknown=api.summarize(p,feed,[day({status:'unverified',received:false})],from,to);assert.equal(unknown.status,'unverified');assert.equal(unknown.missingDates.length,0);
 });
 test('creation source matching cannot be satisfied by success reports, aliases, or the opposite direction',async()=>{

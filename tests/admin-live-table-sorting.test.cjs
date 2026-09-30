@@ -57,7 +57,7 @@ test('amount-band and matrix sorting retain numeric bucket order, original segme
 });
 
 test('loaded quality, risk and fee tables sort real metrics before their independent pagers without fabricating unavailable fields',async()=>{
- for(const [page,id,column]of[['channelquality','provider-quality',4],['risk','provider-risk',7],['merchantproviders','provider-fees',4]]){
+ for(const [page,id,column]of[['risk','provider-risk',7],['merchantproviders','provider-fees',4]]){
   const h=await setup(page);if(page==='merchantproviders')h.L.view='fees';h.L.tableSizes[id]=2;h.L.tablePages[id]=2;h.c.render();const calls=h.calls.length;refSort(h,id,column);assert.equal(h.L.tablePages[id],1,id);
   const table=tableFor(h,'liveReferenceTableSort'),items=rows(table);assert.equal(items[0][0],'LargePay');assert.equal(items.length,2);assert.match(table,/正式数据尚未提供此项/);assert.equal(h.calls.length,calls);
  }

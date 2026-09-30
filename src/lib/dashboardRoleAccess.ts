@@ -11,17 +11,19 @@ export type DashboardRoleAccess = {
   canView: boolean;
 };
 const codes = new Set(catalog.pages.flatMap(page => page.actions.map(action => page.id + "." + action.id)));
+const retiredCodes = new Set(["channelquality.view", "channelquality.query", "channelquality.detail", "channelquality.export"]);
 export function validateDashboardRoleAccess(value: unknown): DashboardRoleAccess {
   const v = value as DashboardRoleAccess;
   if (!v || typeof v !== "object" || !["owner", "legacy", "assigned"].includes(v.mode)
     || typeof v.canView !== "boolean" || !Number.isSafeInteger(v.version) || v.version < 0
-    || !Array.isArray(v.permissions) || v.permissions.some(key => typeof key !== "string" || !codes.has(key))
+    || !Array.isArray(v.permissions) || v.permissions.some(key => typeof key !== "string" || !codes.has(key) && !retiredCodes.has(key))
     || (v.mode === "assigned" && (typeof v.roleId !== "string" || !/^[0-9a-f-]{36}$/i.test(v.roleId)))
     || (v.roleName !== null && typeof v.roleName !== "string")) throw Error("角色权限响应不完整，请重新验证。");
-  return v;
+  const permissions = v.permissions.filter(key => !retiredCodes.has(key));
+  return {...v, permissions, canView: v.canView && (v.mode !== "assigned" || permissions.some(key => key.endsWith(".view")))};
 }
 export function dashboardRoleAllows(access: DashboardRoleAccess | null | undefined, page: string, action = "view"): boolean {
-  return !!access && access.canView && (access.mode !== "assigned"
+  return page !== "channelquality" && !!access && access.canView && (access.mode !== "assigned"
     || access.permissions.includes(page + ".view") && access.permissions.includes(page + "." + action));
 }
 export async function readDashboardRoleAccess(session: DashboardSession, signal?: AbortSignal): Promise<DashboardRoleAccess> {

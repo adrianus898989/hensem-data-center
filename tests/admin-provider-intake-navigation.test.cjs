@@ -23,11 +23,21 @@ test('switching away during intake cancels later work and restores a paused noti
  const pending=deferred();let held=false;const h=await setup(q=>{if(q.action==='intakeCoverage'&&q.operation==='rows'&&!held){held=true;return pending.promise;}return respond(q);});
  const query=h.c.liveQuery();await settle();assert.equal(h.L.providerIntake.status,'loading');const first=intakeCalls(h).find(q=>q.operation==='rows');
  h.c.setPage('amount');h.c.setPage('providers');await settle();assert.equal(h.L.providerIntake.status,'error');assert.match(h.L.providerIntake.error,/已暂停/);const before=intakeCalls(h).length;
- pending.resolve(intakeRows(first));await query;await settle();assert.equal(intakeCalls(h).length,before);assert.equal(h.L.providerIntake.status,'error');assert.equal(h.L.providerComparisonIntake,null);h.c.providerSummaryPlatformCoverage();assert.match(h.drawers.at(-1).html,/采集核对已暂停/);assert.equal(intakeCalls(h).length,before);
+ pending.resolve(intakeRows(first));await query;await settle();assert.equal(intakeCalls(h).length,before);assert.equal(h.L.providerIntake.status,'error');assert.equal(h.L.providerComparisonIntake.status,'ready');h.c.providerSummaryPlatformCoverage();assert.match(h.drawers.at(-1).html,/采集核对已暂停/);assert.equal(intakeCalls(h).length,before);
 });
 test('filter change during source query never commits evidence under a different selected range',async()=>{
  const pending=deferred();let held=false;const h=await setup(q=>{if(q.action==='intakeCoverage'&&q.operation==='rows'&&!held){held=true;return pending.promise;}return respond(q);});
  const query=h.c.liveQuery();await settle();const first=intakeCalls(h).find(q=>q.operation==='rows'),before=intakeCalls(h).length;h.c.liveSet('from','2026-09-20T00:00:00');
  pending.resolve(intakeRows(first));await query;await settle();assert.equal(h.L.dirty,true);assert.equal(h.L.from,'2026-09-20T00:00:00');assert.notEqual(h.L.providerIntake.status,'ready');assert.equal(intakeCalls(h).length,before);assert.match(h.html(),/查询/);
  await h.c.liveQuery();await settle();assert.equal(h.L.providerIntake.status,'ready');assert.equal(h.L.providerIntake.from,'2026-09-20');assert.equal(h.L.providerComparisonIntake.from,'2026-09-17');assert.equal(h.L.providerComparisonIntake.to,'2026-09-19');
+});
+
+test('slow source reconciliation does not block prior-period comparisons or workorder figures',async()=>{
+ const pending=deferred();let first;const h=await setup(q=>{if(q.action==='intakeCoverage'&&q.operation==='rows'&&q.startAt==='2026-09-22'){first=q;return pending.promise;}return respond(q);});
+ const query=h.c.liveQuery();await settle();
+ assert.equal(h.L.providerIntake.status,'loading');assert.equal(h.L.comparisonStatus,'ready');
+ assert(h.calls.some(q=>q.action==='workorders'),'workorders must start before source-day checks finish');
+ assert(h.L.workorders,'completed workorder figures remain available while source-day checks wait');
+ assert.equal(h.L.providerComparisonIntake.status,'ready');
+ pending.resolve(intakeRows(first));await query;assert.equal(h.L.providerIntake.status,'ready');
 });

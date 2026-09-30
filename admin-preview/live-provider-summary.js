@@ -294,7 +294,8 @@
   return {platforms,missing,failures:missing.filter(p=>p.status==='failed'),received,requested:platforms.length,
    partial:missing.length>0,empty:received===0&&platforms.length>0,pending:missing.filter(p=>p.status!=='failed').length};
  }
- const intakeStatusLabels={complete:'已核验完整',zero_complete:'零笔已确认',received:'已收到 · 完整性待核验',missing:'缺少创建数据',unverified:'待核验'};
+ const intakeStatusLabels={complete:'已核验完整',zero_complete:'零笔已确认',received:'已收到 · 完整性待核验',difference:'已收到 · 核验有差异',missing:'缺少创建数据',unverified:'待核验'};
+ const intakeDifference=day=>day.expected!==false&&day.evidence!=='only_success_day_records_received'&&day.received===true&&day.complete!==true&&(['partial','failed'].includes(day.status)||['source_count_mismatch','source_created_count_mismatch','source_created_channel_mismatch','source_snapshot_invalid','completed_zero_conflicts_with_records'].includes(day.evidence));
  const intakeDatasetLabels={orders:'创建订单',collection_success:'成功数据快照',volume:'三方金额 / 笔数日报'};
  const intakeReasonLabels={only_success_day_records_received:'仅有该日成功记录，未见该创建日订单',records_received_completeness_unverified:'已收到创建记录，尚无整日收齐证明',no_order_records_received:'未收到该创建日订单',no_created_orders_received:'未收到该创建日订单',no_collection_run_evidence:'未见该日采集任务或创建记录',source_collection_failed:'采集任务失败',source_task_not_finished:'采集任务尚未完成',source_counts_not_verified:'来源总数尚未核对，不能确认收齐',no_daily_report_received:'未收到该日三方金额 / 笔数日报',source_count_mismatch:'采集笔数与源数据笔数不一致',source_created_counts_reconciled:'创建总数与渠道分组已核对',source_created_count_mismatch:'创建笔数与源总数不一致',source_created_channel_mismatch:'创建订单与渠道分组不一致',source_snapshot_invalid:'来源核对快照无效'};
  const intakeReason=row=>{
@@ -313,21 +314,23 @@
    const observedRows=(result?.groups?.provider||[]).filter(row=>!direction||row.direction===direction);
    const observedCreated=observedRows.some(row=>knownNumber(row.all_count)>0);
    const raw=scoped?index.get(String(platform.id).trim().toLowerCase()):null;
-   const dates=raw&&Array.isArray(raw.missingDates)?[...new Set(raw.missingDates.filter(date=>typeof date==='string'&&date>=from&&date<=to))].sort():[];
+   const declaredMissing=raw&&Array.isArray(raw.missingDates)?[...new Set(raw.missingDates.filter(date=>typeof date==='string'&&date>=from&&date<=to))].sort():[];
    const days=raw&&Array.isArray(raw.days)?raw.days.filter(day=>day&&typeof day==='object'&&typeof day.date==='string'&&day.date>=from&&day.date<=to):[];
+   const differenceDays=days.filter(intakeDifference),dates=declaredMissing.filter(date=>!differenceDays.some(day=>day.date===date));
    const sourceMissing=days.filter(day=>day.expected!==false&&(['not_received','not_started','missing'].includes(day.status)||day.evidence==='only_success_day_records_received'));
    for(const day of sourceMissing)if(!dates.includes(day.date))dates.push(day.date);dates.sort();
-   const hasMissing=raw?.status==='missing'||dates.length>0;
-   const received=!hasMissing&&(!!raw&&raw.received===true&&['received','complete','zero_complete'].includes(raw.status)||observedCreated);
-   const observedOnly=received&&(!raw||raw.received!==true);
+   const difference=differenceDays.length>0;
+   const hasMissing=dates.length>0||raw?.status==='missing'&&!(difference&&declaredMissing.every(date=>differenceDays.some(day=>day.date===date)));
+   const received=!hasMissing&&(!!raw&&raw.received===true&&['received','complete','zero_complete'].includes(raw.status)||difference&&days.filter(day=>day.expected!==false).every(day=>day.received===true||day.zeroConfirmed===true)||observedCreated);
+   const observedOnly=received&&!difference&&(!raw||raw.received!==true);
    const complete=received&&raw?.complete===true&&['complete','zero_complete'].includes(raw.status)&&days.every(day=>day.expected===false||day.complete===true);
    const status=hasMissing?'missing':complete?raw.status:received?'received':'unverified';
    const message=observedOnly?'已读取到创建订单；整日完整性尚未核验':raw?intakeReason(raw)||(status==='missing'?'所选日期缺少创建数据':complete?'创建日数据已核验':received?'已收到创建数据，尚无整日收齐证明':'创建数据采集情况待核验'):
     !scoped?'当前查询的创建数据采集情况尚未核验':data.status==='loading'?'正在核对创建数据采集情况':data.status==='error'?data.error||'创建数据采集核验失败':'该平台的创建数据采集情况尚未核验';
-   return {...platform,readStatus:platform.status,readLabel:platform.label,readMessage:platform.message,status,label:intakeStatusLabels[status],received,complete,observedOnly,observedCreated,days,missingDates:dates,message};
+   return {...platform,readStatus:platform.status,readLabel:platform.label,readMessage:platform.message,status,label:difference&&!hasMissing?intakeStatusLabels.difference:intakeStatusLabels[status],received,complete,difference,observedOnly,observedCreated,days,missingDates:dates,message};
   });
   const missing=platforms.filter(p=>p.status==='missing'),unverified=platforms.filter(p=>!p.complete),received=platforms.filter(p=>p.received).length,complete=platforms.filter(p=>p.complete).length;
-  return {platforms,missing,unverified,received,complete,requested:query.requested,ready,active:!!data,partial:missing.length>0||!!data&&(!ready||platforms.some(p=>!p.received)),from,to,error:scoped&&data.status==='error'?data.error||'采集核验失败':''};
+  return {platforms,missing,unverified,received,complete,requested:query.requested,ready,active:!!data,partial:missing.length>0||platforms.some(p=>p.difference)||!!data&&(!ready||platforms.some(p=>!p.received)),from,to,error:scoped&&data.status==='error'?data.error||'采集核验失败':''};
  }
  // Intake status belongs in the compact platform card; detailed reasons open on demand.
  function intakeNotice(){return ''}
@@ -456,7 +459,7 @@
     let days=p.days;
     if(!days.length)days=(p.missingDates.length?p.missingDates:[coverage.from===coverage.to?coverage.from:coverage.from+' 至 '+coverage.to]).map(date=>({date,dataset:'orders',status:p.status,message:p.message}));
     return days.map(day=>{
-     const status=day.evidence==='only_success_day_records_received'?'缺少创建数据':day.status==='not_expected'?'接入前 · 不计缺失':day.complete===true?(day.zeroConfirmed===true?'零笔已确认':'已核验完整'):['not_received','not_started','missing'].includes(day.status)?'缺少创建数据':day.status==='failed'?'采集失败':day.status==='pending'?'采集中':day.received===true||day.status==='received'?'已收到 · 完整性待核验':intakeStatusLabels[day.status]||'待核验';
+     const status=day.evidence==='only_success_day_records_received'?'缺少创建数据':day.status==='not_expected'?'接入前 · 不计缺失':day.complete===true?(day.zeroConfirmed===true?'零笔已确认':'已核验完整'):['not_received','not_started','missing'].includes(day.status)?'缺少创建数据':intakeDifference(day)?'已收到 · 核验有差异':day.status==='failed'?'采集失败':day.status==='pending'?'采集中':day.received===true||day.status==='received'?'已收到 · 完整性待核验':intakeStatusLabels[day.status]||'待核验';
      const type=intakeDatasetLabels[day.dataset||day.dataType]||day.dataset||day.dataType||'创建订单';
      return [E(p.name),E(p.source||'—'),E(day.date),E((day.direction?({charge:'代收',withdraw:'代付'}[day.direction]||day.direction)+' · ':'')+type),E(status),E(intakeReason(day)||p.message)];
     });

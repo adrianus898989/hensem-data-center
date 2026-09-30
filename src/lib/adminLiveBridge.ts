@@ -392,7 +392,7 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
 export function adminPreviewPageFromHash(hash:unknown):string|null {
  if(typeof hash!=="string")return null;
  const match=/^#(?:admin|owner-admin-preview)(?:\/([a-z][a-z0-9_-]{0,63}))?$/.exec(hash);
- return match?(match[1]||"overview"):null;
+ return match?(match[1]==="channelquality"?"providers":match[1]||"overview"):null;
 }
 export function adminPreviewPageUrl(page:unknown,location:{origin:string;pathname?:string}):string {
  if(typeof page!=="string"||!/^[a-z][a-z0-9_-]{0,63}$/.test(page))return "";
@@ -401,7 +401,7 @@ export function adminPreviewPageUrl(page:unknown,location:{origin:string;pathnam
    ||!pathname.startsWith("/")||/[\\\u0000-\u001f\u007f?#]/.test(pathname))throw Error("后台页面来源无效");
  const target=new URL(pathname,origin);
  if(target.origin!==origin.origin||target.username||target.password)throw Error("后台页面来源无效");
- target.hash="admin/"+page;
+ target.hash="admin/"+(page==="channelquality"?"providers":page);
  return target.href;
 }
 export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:DashboardRoleAccess):string{
@@ -417,11 +417,11 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
  const cancel=(id,timeout=false)=>{const q=release(id);if(!q)return;try{parent.postMessage({type:'${LIVE_CANCEL}',channel,id,reason:timeout?'timeout':'cancelled'},hostOrigin)}catch{}q.reject(error(timeout?'正式数据读取超时，请重试':'查询已取消',timeout?'ADMIN_LIVE_TIMEOUT':'ADMIN_LIVE_CANCELLED'))};
  window.HENSEM_PRODUCTION=true;
  window.hensemRoleAccess=${JSON.stringify(roleAccess||{mode:"legacy",permissions:[],canView:true}).replace(/</g,"\\u003c")};
- window.hensemRoleAllowed=function(page,action='view'){const access=window.hensemRoleAccess;return access.canView===true&&(access.mode!=='assigned'||access.permissions.includes(page+'.view')&&access.permissions.includes(page+'.'+action))};
+ window.hensemRoleAllowed=function(page,action='view'){const access=window.hensemRoleAccess;return page!=='channelquality'&&access.canView===true&&(access.mode!=='assigned'||access.permissions.includes(page+'.view')&&access.permissions.includes(page+'.'+action))};
  window.hensemAdminInitialPage=${encode(initialPage)};
  // No arbitrary URL, host query string or authentication fragment crosses the
  // frame boundary. The menu independently validates its allowed page IDs.
- window.hensemAdminPageUrl=function(page){return typeof page==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(page)?${encode(pageBase)}+'#admin/'+page:''};
+ window.hensemAdminPageUrl=function(page){return typeof page==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(page)?${encode(pageBase)}+'#admin/'+(page==='channelquality'?'providers':page):''};
  window.hensemLiveRequest=function(request,options={}){return new Promise((resolve,reject)=>{
    const page=window.hensemCurrentAdminPage?.()||window.hensemAdminInitialPage;
    const operation=request?.action==='withdrawNote'?'edit':request?.action==='configurationWrite'?(request.operation==='grant'?'grant':'edit'):['catalog','providerOptions','configurationAccess'].includes(request?.action)?'view':'query';

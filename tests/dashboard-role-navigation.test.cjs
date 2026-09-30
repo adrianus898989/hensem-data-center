@@ -32,3 +32,13 @@ test('account-only role does not request business catalog and later granted busi
  assert.equal(h.calls.length,0);assert.equal(h.L.catalogError,'');
  h.c.setPage('providers');await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);
 });
+
+test('retired channelquality never appears or gains permission through a bookmark or programmatic navigation',async()=>{
+ const h=harness(options(['channelquality.view','channelquality.query','amount.view'],'channelquality'));await settle();assert.deepEqual(Array.from(h.c.pages,p=>p[0]),['amount']);assert.equal(h.c.state.page,'amount');h.c.setPage('channelquality');assert.equal(h.c.state.page,'amount');assert(!h.c.navGroupsV3.some(g=>g[3].includes('channelquality')));assert.equal(h.calls.filter(q=>q.action!=='catalog').length,0);
+ const allowed=harness(options(['providers.view','providers.query'],'channelquality'));await settle();assert.equal(allowed.c.state.page,'providers');assert(!allowed.c.pages.some(p=>p[0]==='channelquality'));
+ const denied=harness(options(['channelquality.view'],'channelquality'));await settle();assert.equal(denied.calls.length,0);assert.match(denied.nodes.get('page').textContent,/没有.*目录|无.*目录/);
+});
+
+test('account and standalone system shells render immediately without a business catalog',async()=>{
+ for(const page of ['access','rules','ip','login_logs','operation_logs']){const h=harness(options([page+'.view'],page));await settle();assert.equal(h.calls.length,0,page);assert.equal(h.L.catalogReady,false);assert.match(h.html(),new RegExp('hle-'+page));assert.doesNotMatch(h.html(),/正在读取账号可见的平台目录|平台目录未读取成功/);}
+});

@@ -34,7 +34,7 @@ test('incomplete, duplicate and mismatched success responses cannot overwrite UI
  assert.throws(()=>h.api.validateDashboardRoleResponse({role:{...role,version:2}},{operation:'update',roleId,name:role.name,description:role.description,permissions:role.permissions,expectedVersion:2}),/不完整/);
 });
 test('CAS conflict is actionable and raw server detail or credentials are not reflected',async()=>{
- for(const [status,payload,pattern]of[[409,{message:'private-db-detail'},/其他管理员修改.*草稿已保留/],[400,{code:'P0001',message:'role_version_conflict secret'},/草稿已保留/],[403,{message:'private-db-detail'},/总管理员/],[500,{message:'private-db-detail'},/操作未完成/]]){
+ for(const [status,payload,pattern]of[[409,{message:'private-db-detail'},/其他管理员修改.*草稿已保留/],[400,{code:'P0001',message:'role_version_conflict secret'},/草稿已保留/],[403,{message:'private-db-detail'},/总管理员/],[500,{message:'private-db-detail'},/角色服务处理失败/],[400,{code:'42702',message:'column reference r.id is ambiguous private-db-detail'},/角色服务处理失败/]]){
   const h=client({fetch:async()=>({ok:false,status,json:async()=>payload})});await assert.rejects(h.api.dashboardRoleRequest(session,{operation:'list'}),error=>{assert.match(error.message,pattern);assert.doesNotMatch(error.message,/private-db|secret/);return true});assert.equal(h.calls.length,1);
  }
 });
@@ -57,6 +57,8 @@ function ui(handler,initial={}){
 }
 test('owner role manager stays network-idle until explicit query and shows existing account identity and scope',async()=>{
  const h=ui();assert.equal(h.calls.length,0);assert.match(text(h.draw()),/点击「查询角色与账号」/);assert.equal(h.button('新建角色').props.disabled,true);await h.load();assert.deepEqual(h.calls,[{operation:'list'}]);assert.match(text(h.draw()),/existing-staff/);assert.match(text(h.draw()),/固定，不可修改/);assert.match(text(h.draw()),/IN/);assert(!nodes(h.draw()).some(node=>node.type==='input'&&node.props.type==='password'));
+ assert.equal(h.button('新建角色').props.disabled,false);
+ assert.doesNotMatch(text(h.draw()),/继续使用原来的账号和密码。先配置角色|前端工单账号、工单操作日志、配置授权/);
 });
 test('non-owner or session/profile mismatch cannot read or mutate roles',async()=>{
  for(const next of [{profile:{...profile,role:'admin'}},{profile:{...profile,active:false}},{session:{...session,user:{id:otherId}}}]){const h=ui(null,{...next,manualQuery:false});await flush();assert.match(text(h.draw()),/仅总管理员/);assert.equal(h.calls.length,0);assert(!nodes(h.draw()).some(node=>node.type==='button'));}
@@ -92,6 +94,15 @@ test('refresh error clears stale rows and cannot present failed read as zero acc
 test('list only exposes safe role/account fields and rejects absent or mismatched role references',()=>{
  const h=client(),result=h.api.validateDashboardRoleResponse({roles:[{...role,password:'never-retain'}],accounts:[{...account,password:'never-retain',data_scope:{...account.data_scope,private:'never-retain'}}]},{operation:'list'});assert(!JSON.stringify(result).includes('never-retain'));
  for(const item of [{...account,data_scope:null},{...account,role_id:otherId}])assert.throws(()=>h.api.validateDashboardRoleResponse({roles:[role],accounts:[item]},{operation:'list'}),/不完整/);
+});
+test('existing roles drop only retired channelquality keys from reads and never resubmit them',async()=>{
+ const h=client(),retired=['channelquality.view','channelquality.query','channelquality.detail','channelquality.export'];
+ const listed=h.api.validateDashboardRoleResponse({roles:[{...role,permissions:[...role.permissions,...retired]}],accounts:[account]},{operation:'list'});
+ assert.deepEqual(plain(listed.roles[0].permissions),role.permissions);
+ const empty=h.api.validateDashboardRoleResponse({roles:[{...role,permissions:retired}],accounts:[]},{operation:'list'});assert.deepEqual(plain(empty.roles[0].permissions),[]);
+ const archived=h.api.validateDashboardRoleResponse({role:{...role,permissions:retired,active:false,version:3}},{operation:'archive',roleId,expectedVersion:2});assert.deepEqual(plain(archived.role.permissions),[]);
+ for(const permissions of [['overview.view','rogue.view'],['overview.query',...retired],['overview.view','overview.view',...retired]])assert.throws(()=>h.api.validateDashboardRoleResponse({roles:[{...role,permissions}],accounts:[]},{operation:'list'}),/不完整/);
+ await assert.rejects(h.api.dashboardRoleRequest(session,{operation:'create',name:'Retired',description:'',permissions:retired}),/权限/);assert.equal(h.calls.length,0);
 });
 test('stale visible event callback cannot start an operation under a newly switched actor',()=>{
  const h=ui(),button=h.button('查询角色与账号');h.setProps({session:{...session,user:{id:otherId}},profile:{...profile,auth_user_id:otherId}});h.draw();button.props.onClick();assert.equal(h.calls.length,0);h.effects();
