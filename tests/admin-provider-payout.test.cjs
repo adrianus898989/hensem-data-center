@@ -23,12 +23,12 @@ function breakdown(html){
  assert.match(html,/<div class="provider-platform-breakdown">/,'expanded platform heading is rendered');
  const main=html.match(/<div class="[^"]*\bprovider-summary-table\b[^"]*">([\s\S]*?)<\/table>/)?.[1];assert(main,'platform children remain in the main summary table');
  const headers=[...main.matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]).replace(/\s*[↕↑↓]$/,''));
- const amountIndex=headers.findIndex(h=>/^代[收付]成功金额$/.test(h)),countIndex=headers.findIndex(h=>/^代[收付]成功笔数$/.test(h));
- const shareIndex=headers.findIndex(h=>/^(已读取)?金额占比$/.test(h));assert(amountIndex>=0&&countIndex>=0&&shareIndex>=0,'success fields retain distinct columns');
+ const amountIndex=headers.findIndex(h=>/^成功金额$/.test(h)),countIndex=headers.findIndex(h=>/^成功笔数$/.test(h));
+ const shareIndex=headers.findIndex(h=>/^金额占比$/.test(h));assert(amountIndex>=0&&countIndex>=0&&shareIndex>=0,'success fields retain distinct columns');
  const children=[...main.matchAll(/<tr class="provider-platform-row">([\s\S]*?)<\/tr>/g)];assert(children.length,'expanded platform child rows are rendered');
  return children.map(match=>{
   const cells=[...match[1].matchAll(/<td>([\s\S]*?)<\/td>/g)].map(c=>c[1]);assert.equal(cells.length,headers.length,'platform child aligns with every parent column');
-  const countCell=cells[countIndex],countShare=cells[headers.findIndex(h=>/^(已读取)?笔数占比$/.test(h))];assert(countShare!==undefined,'count share has its own column beside amount share');assert.doesNotMatch(countCell,/<small/);
+  const countCell=cells[countIndex],countShare=cells[headers.findIndex(h=>/^笔数占比$/.test(h))];assert(countShare!==undefined,'count share has its own column beside amount share');assert.doesNotMatch(countCell,/<small/);
   return {'平台':plain(cells[0]),'包网来源':plain(cells[1]),'成功金额':plain(cells[amountIndex]),'成功笔数':plain(countCell.replace(/<small\b[\s\S]*?<\/small>/g,'')),'金额占比':plain(cells[shareIndex]),'笔数占比':plain(countShare)};
  });
 }
@@ -83,7 +83,7 @@ test('missing payout amounts stay unknown in platform shares while valid counts 
 test('partial collection and payout reports identify the returned platform coverage and every subtotal',()=>{
  for(const direction of ['charge','withdraw']){
   const h=fixture([order('platform-a','ar',24680.5,42,{direction})]);h.L.queryPlatforms=Array.from({length:17},(_,i)=>({id:i?'failed-'+i:'platform-a',name:'Platform '+i}));h.L.queryFailures=h.L.queryPlatforms.slice(1).map(p=>({...p,message:'Synthetic timeout'}));h.L.queryWarnings=h.L.queryFailures.map(f=>f.name+': '+f.message);h.root.liveRetryFailed=()=>{};h.render(direction);
-  const html=h.html(),cards=html.split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];assert.match(html,/仅显示已返回平台的部分结果/);assert.match(html,/已返回 1 \/ 17 个平台/);assert.match(cards,/代[收付]成功金额/);assert.match(cards,/24,680\.50/);assert.match(html,/已读取合计/);assert.match(html,/已读取金额占比/);assert.match(html,/onclick="providerSummaryPlatformCoverage\(\)">订单 1 \/ 17/);assert.doesNotMatch(html,/provider-query-failures|<details[^>]*open/);assert.match(html,/只重试未完成平台/);assert.doesNotMatch(html,/<strong>合计<\/strong>|<strong>全部汇总<\/strong>/);
+  const html=h.html(),cards=html.split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];assert.match(html,/仅显示已返回平台的部分结果/);assert.match(html,/已返回 1 \/ 17 个平台/);assert.match(cards,/代[收付]成功金额/);assert.match(cards,/24,680\.50/);assert.match(html,/已读取合计/);assert.match(html,/金额占比/);assert.doesNotMatch(html,/已读取(?:金额|笔数|手续费)占比/);assert.match(html,/onclick="providerSummaryPlatformCoverage\(\)">订单 1 \/ 17/);assert.doesNotMatch(html,/provider-query-failures|<details[^>]*open/);assert.match(html,/只重试未完成平台/);assert.doesNotMatch(html,/<strong>合计<\/strong>|<strong>全部汇总<\/strong>/);
   h.L.queryRetrying=true;h.render(direction);assert.match(h.html(),/已返回数据保留/);assert.match(h.html(),/onclick="liveRetryFailed\(\)" disabled/);assert.match(h.html(),/24,680\.50/);
  }
 });
