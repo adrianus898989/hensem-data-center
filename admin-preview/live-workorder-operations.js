@@ -15,19 +15,25 @@
   const button=(label,next,disabled=false,on=false)=>'<button type="button" '+(disabled||busy?'disabled ':'')+(on?'class="on" aria-current="page" ':'')+'onclick="'+prefix+'Page('+next+')">'+label+'</button>';
   return '<div class="live-pager wo-pager"><span>共 <b>'+Number(total).toLocaleString('en-US')+'</b> 条 · '+(total?((current-1)*size+1)+'–'+Math.min(current*size,total):'0–0')+'</span><div class="right"><select aria-label="每页条数" '+(busy?'disabled ':'')+'onchange="'+prefix+'Size(this.value)">'+[20,50,100].map(n=>'<option '+(size===n?'selected ':'')+'value="'+n+'">'+n+' 条 / 页</option>').join('')+'</select>'+button('首页',1,current===1)+button('上一页',current-1,current===1)+numbers.map(n=>{const gap=previous&&n-previous>1?'…':'';previous=n;return gap+button(n,n,false,n===current)}).join('')+button('下一页',current+1,current===max)+button('末页',max,current===max)+'<form onsubmit="event.preventDefault()" class="wo-jump" onkeydown="if(event.key===\'Enter\'&&!event.isComposing&&!event.repeat&&event.keyCode!==229&&event.target.name===\'page\'){event.preventDefault();'+prefix+'Jump(this.elements.page.value)}"><label>跳至 <input name="page" type="number" min="1" aria-label="跳转页码" '+(busy?'disabled':'')+'> 页</label><button type="button" onclick="'+prefix+'Jump(this.form.elements.page.value)" '+(busy?'disabled':'')+'>跳转</button></form></div></div>';
  }
- // Defaults use the country's business calendar, never the browser/UTC month.
+ // Defaults use the country's business calendar, never the browser/UTC date.
+ function recentSevenDays(country,catalog=[],now=new Date()){
+  const timezone=catalog.find(p=>p.country===country&&p.timezone)?.timezone||({'巴基斯坦':'Asia/Karachi','巴西':'America/Sao_Paulo','印度':'Asia/Kolkata'}[country])||'Asia/Kolkata';
+  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now).map(p=>[p.type,p.value]));
+  const to=parts.year+'-'+parts.month+'-'+parts.day,from=new Date(Date.parse(to+'T00:00:00Z')-6*86400000).toISOString().slice(0,10);
+  return {from,to};
+ }
  function currentMonth(country,catalog=[],now=new Date()){
   const timezone=catalog.find(p=>p.country===country&&p.timezone)?.timezone||({'巴基斯坦':'Asia/Karachi','巴西':'America/Sao_Paulo','印度':'Asia/Kolkata'}[country])||'Asia/Kolkata';
   const parts=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit'}).formatToParts(now).map(p=>[p.type,p.value]));
   const last=new Date(Date.UTC(Number(parts.year),Number(parts.month),0)).getUTCDate();
   return {from:parts.year+'-'+parts.month+'-01',to:parts.year+'-'+parts.month+'-'+String(last).padStart(2,'0')};
  }
- root.HensemWorkorderUI={pager,money,statusNames,currentMonth};
+ root.HensemWorkorderUI={pager,money,statusNames,currentMonth,recentSevenDays};
  root.HensemLiveWorkorderOperations={create:function(ctx){
   const {L,E,C,box,table,request,render,page,openDrawer,formatTime}=ctx,states={};
   const viewFor=p=>({workorders:'records',workorder_reconciliation:'missing',workorder_workload:'workload',workorder_operation_logs:'logs'}[p]);
   const handles=p=>!!viewFor(p);
-  function defaultDraft(p){const country=L.country||'印度';return {...Object.fromEntries(keys.map(k=>[k,''])),country,...currentMonth(country,L.catalog),dateBasis:p==='workorders'?'submission':'operation'};}
+  function defaultDraft(p){const country=L.country||'印度';return {...Object.fromEntries(keys.map(k=>[k,''])),country,...(p==='workorders'?recentSevenDays:currentMonth)(country,L.catalog),dateBasis:p==='workorders'?'submission':'operation'};}
   function state(){const p=page();if(!states[p])states[p]={draft:defaultDraft(p),initialized:!!L.catalogReady,filters:null,result:null,orderDisplayRows:[],orderSort:{key:'latestSubmittedAt',direction:'desc'},more:false,busy:false,error:'',serial:0,current:1,size:20,mode:p==='workorders'?'orders':'records',analysis:null,analysisKey:'',analysisBusy:false,analysisError:'',analysisSerial:0};const s=states[p];if(!s.initialized&&L.catalogReady){s.draft=defaultDraft(p);s.initialized=true;}return s;}
 
   const isIndia=country=>['印度','IN','INDIA'].includes(String(country||'').toUpperCase());
@@ -142,7 +148,7 @@
   root.workorderOperationsClearDates=()=>{state().draft.from='';state().draft.to='';render();};
   root.workorderOperationsReset=()=>{const s=state();s.serial++;s.analysisSerial++;delete states[page()];render();};
   root.workorderOperationsLoad=load;
-  root.workorderOperationsMode=mode=>{if(!['records','orders','daily'].includes(mode)||page()!=='workorders')return;const s=state();s.serial++;s.analysisSerial++;s.analysisBusy=false;s.busy=false;s.mode=mode;s.current=1;s.result=null;s.filters=null;s.analysis=null;s.analysisKey='';s.analysisError='';s.error='';L.workordersSerial++;L.workordersLoading=false;L.workorders=null;L.workordersError='';L.dirty=true;if(mode==='daily'&&!s.dailyInitialized){const month=currentMonth(s.draft.country,L.catalog);L.from=month.from+'T00:00:00';L.to=month.to+'T23:59:59';s.dailyInitialized=true;}render();};
+  root.workorderOperationsMode=mode=>{if(!['records','orders','daily'].includes(mode)||page()!=='workorders')return;const s=state();s.serial++;s.analysisSerial++;s.analysisBusy=false;s.busy=false;s.mode=mode;s.current=1;s.result=null;s.filters=null;s.analysis=null;s.analysisKey='';s.analysisError='';s.error='';L.workordersSerial++;L.workordersLoading=false;L.workorders=null;L.workordersError='';L.dirty=true;if(mode==='daily'&&!s.dailyInitialized){const range=recentSevenDays(s.draft.country,L.catalog);L.from=range.from+'T00:00:00';L.to=range.to+'T23:59:59';s.dailyInitialized=true;}render();};
   root.workorderOperationsPage=value=>{const s=state(),max=Math.max(1,Math.ceil(Number(s.result?.total||0)/s.size));if(s.busy||!s.result||!Number.isInteger(value))return;s.current=Math.max(1,Math.min(max,value));load();};
   root.workorderOperationsSize=value=>{if(![20,50,100].includes(Number(value)))return;state().size=Number(value);state().current=1;if(state().result)load();else render();};
   root.workorderOperationsJump=value=>{if(/^\d+$/.test(String(value)))root.workorderOperationsPage(Number(value));};
