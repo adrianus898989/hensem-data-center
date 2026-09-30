@@ -20,6 +20,7 @@ import {
 import { buildCustomerServicePayload } from "./lib/parseCustomerService.ts";
 import { anomalyDateRange, buildProviderAnomalyResponse } from "./lib/providerAnomalies.ts";
 import { readSupabaseThirdPartyFilterOptions } from "./lib/thirdPartyFilterOptionsServer.ts";
+import { wgRealtimeQuery } from "./lib/wgRealtimeQuery.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -238,6 +239,17 @@ async function handle(request: Request): Promise<Response> {
   if (request.method !== "GET") return json({ok: false, code: "method_not_allowed", message: "仅支持 GET 请求。"}, 405);
   const url = new URL(request.url);
   const route = apiRoute(url);
+  if (route === "/api/wg-realtime") {
+    await requireDashboardDataAccess(request,"auto_withdraw");
+    let query;
+    try { query=wgRealtimeQuery(url.searchParams); }
+    catch { throw new DashboardDataAccessError(400,"wg_invalid_query","请选择 WG 平台及最多 31 天的有效日期范围。"); }
+    const response=await postgrest(request,"/rest/v1/rpc/dashboard_wg_realtime",{
+      method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(query),signal:request.signal,
+    });
+    if(!response.ok)throw new DashboardDataAccessError(response.status===403?403:503,"wg_read_unavailable","WG 实时数据读取失败或尚未部署，请稍后重试。");
+    return json(await response.json());
+  }
   if (route === "/api/third-party-filter-options") return json(await readSupabaseThirdPartyFilterOptions(request));
   if (route === "/api/provider-anomalies") {
     await requireDashboardDataAccess(request, "third_party");
