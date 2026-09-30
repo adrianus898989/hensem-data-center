@@ -7,14 +7,17 @@
  const initial=()=>({version:responseVersion,key:'',status:'idle',results:[],failures:[],unsupported:[],items:[],error:'',expanded:{monitoring:[],thresholds:[]}});
  const zero=()=>Object.fromEntries(fields.map(k=>[k,0]));
  function create(c){
-  const {L,E,C,N}=c;let S=initial(),serial=0,pending=null,detailSerial=0,detail=null,memberDialog=null;
+  const {L,E,C,N}=c;let S=initial(),serial=0,pending=null,detailSerial=0,detail=null,memberDialog=null,renderSnapshot=null;
   function scope(){const platforms=[...new Map(c.selected().map(p=>[p.id,p])).values()].sort((a,b)=>a.id.localeCompare(b.id)),items=[],unsupported=[];
    for(const platform of platforms){if(!native(platform)){unsupported.push({id:platform.id,name:platform.name});continue}const q=c.query(platform,'aggregate');if(q.channelTypes?.length||q.status&&q.status!=='all'||['memberId','orderNumber','systemOrderId','utr','thirdPartyOrderNumber','amountMin','amountMax'].some(k=>q[k]))throw Error('刷单统计需使用全部订单状态，并清空单笔筛选');
     const request={action:'submissionAnalysis',operation:'summary',threshold:defaultThreshold,charts:c.dashboard?c.dashboard():true,platformId:platform.id,startAt:q.startAt,endAt:q.endAt,direction:'charge',currency:platform.currency};const edges=q.amountBands?.charge||root.HensemAmountBands?.profile({currency:platform.currency,direction:'charge'}).edges;if(edges)request.amountBands={charge:edges};if(q.providers?.length)request.providers=q.providers;items.push({platform,request});}
    return {items,unsupported,key:JSON.stringify([basis,L.country,L.from,L.to,items.map(i=>i.request),unsupported.map(p=>p.id)])};
   }
   const currentKey=()=>{try{return scope().key}catch{return ''}};
-  const view=()=>L.dirty||S.key!==currentKey()?initial():S;
+  const view=()=>renderSnapshot||(L.dirty||S.key!==currentKey()?initial():S);
+  // One synchronous paint has one filter scope. Drop it before yielding so
+  // every new event, date/platform change and async response validates afresh.
+  function withSnapshot(paint){const previous=renderSnapshot;renderSnapshot=view();try{return paint()}finally{renderSnapshot=previous}}
   const valid=id=>id===serial&&!L.dirty&&S.key===currentKey();
   const expanded=(platformId,table)=>view().expanded?.[table]?.includes(platformId)===true;
   function toggle(index,table='thresholds'){const s=view(),r=s.results[index];if(!r||!['monitoring','thresholds'].includes(table))return;const ids=s.expanded?.[table]||[];S.expanded={...s.expanded,[table]:ids.includes(r.platform.id)?ids.filter(id=>id!==r.platform.id):[...ids,r.platform.id]};c.render();}
@@ -146,7 +149,7 @@
   }
   root.liveSubmissionRetry=()=>L.dirty?Promise.resolve():ensure(true,view().failures.length>0);root.liveSubmissionMembers=members;root.liveSubmissionMembersClose=closeMembers;root.liveSubmissionToggle=toggle;root.liveSubmissionCoverage=coverage;
   root.liveSubmissionMemberPage=step=>{if(detail)members(detail.index,detail.provider,detail.threshold,detail.level,Math.max(0,detail.offset+step*50))};
-  return {ensure,resume:()=>S.status==='paused'&&S.key===currentKey()&&!L.loading&&!L.queryRetrying?ensure():Promise.resolve(),startWithOrders,load:()=>ensure(true),cancel,render,note,metric,providerCell,members,capture:()=>JSON.parse(JSON.stringify(S)),restore:value=>{cancel();S=value?.version===responseVersion&&value.results?.every(r=>r.version===responseVersion&&r.basis===basis&&r.exemptCount===defaultThreshold)?JSON.parse(JSON.stringify(value)):initial();if(S.status==='loading')S.status='paused'}};
+  return {ensure,withSnapshot,resume:()=>S.status==='paused'&&S.key===currentKey()&&!L.loading&&!L.queryRetrying?ensure():Promise.resolve(),startWithOrders,load:()=>ensure(true),cancel,render,note,metric,providerCell,members,capture:()=>JSON.parse(JSON.stringify(S)),restore:value=>{cancel();S=value?.version===responseVersion&&value.results?.every(r=>r.version===responseVersion&&r.basis===basis&&r.exemptCount===defaultThreshold)?JSON.parse(JSON.stringify(value)):initial();if(S.status==='loading')S.status='paused'}};
  }
  root.HensemSubmissionAnalysis={create,thresholds};if(typeof module==='object'&&module.exports)module.exports=root.HensemSubmissionAnalysis;
 })(typeof window!=='undefined'?window:globalThis);

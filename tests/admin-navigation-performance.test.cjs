@@ -3,6 +3,13 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8');
 const layoutSources=['live-analysis-drilldown.js','live-reference-layout.js','live-pages-reference.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js','live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js','live-withdraw-pages.js','live-workorder-operations.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
 const comparisonSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-comparison.js'),'utf8');
+function clockHarness(){
+ let constructed=0,formatted=0;
+ const context={Intl:{DateTimeFormat:function(...args){constructed++;const value=new Intl.DateTimeFormat(...args);return {formatToParts(epoch){formatted++;return value.formatToParts(epoch)}}}},Date};
+ const begin=source.indexOf(' const clockFormatters=new Map();'),end=source.indexOf(' function table(',begin);assert(begin>=0&&end>begin);
+ vm.runInNewContext(source.slice(begin,end)+';globalThis.clock={localClock,instant,sizes:()=>[clockFormatters.size,instantCache.size]};',context);
+ return {...context.clock,constructed:()=>constructed,formatted:()=>formatted};
+}
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const settle=async()=>{for(let n=0;n<24;n++)await flush()};
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
@@ -26,7 +33,7 @@ function harness(options={}){
   setInterval:(fn,ms)=>{intervals.push({fn,ms});return intervals.length},clearInterval(){},setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},
   hensemRoleAccess:options.roleAccess,hensemRoleAllowed:options.roleAllowed,HENSEM_PRODUCTION:options.production!==false,hensemAdminInitialPage:options.initialPage,hensemAdminPageUrl:key=>'https://dashboard.example/app/#owner-admin-preview/'+key,scrollX:0,scrollY:0,
   hensemLiveRequest:async request=>{calls.push(JSON.parse(JSON.stringify(request)));if(!options.ancillaryHandler&&request.action==='providerOptions')return {providers:['Synthetic provider']};if(!options.ancillaryHandler&&request.action==='workorders')return {rows:[],byProvider:[],total:0,summary:{},byDirection:{}};if(handler)return handler(request);if(request.action==='catalog')return {platforms:options.platforms||[P]};if(request.action==='details')return detail((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65,request.offset,request.limit);if(request.action==='rates')return {rows:[],total:0,options:{countries:[],platforms:[],providers:[]}};if(request.action==='payoutConfig')return payoutConfig(request,(options.platforms||[P]).length>0);return aggregate((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65)}
- };if(options.observe)context.IntersectionObserver=class{constructor(callback){observations.push(callback)}observe(){}disconnect(){}};context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>m.name!=='live-report-data.js'||options.reports))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});if(options.submission)vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-submission-analysis.js'),'utf8'),context);vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
+ };if(options.observe)context.IntersectionObserver=class{constructor(callback){observations.push(callback)}observe(){}disconnect(){}};context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>m.name!=='live-report-data.js'||options.reports))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});if(options.submission){vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-submission-analysis.js'),'utf8'),context);if(options.onSubmissionQuery){const create=context.HensemSubmissionAnalysis.create;context.HensemSubmissionAnalysis.create=config=>create({...config,query(...args){options.onSubmissionQuery();return config.query(...args)}})}}vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
  return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,scrolled,observations,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
 }
 async function ready(options){const h=harness(options);await settle();if(h.L){h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';if(options?.page&&h.c.state.page!=='overview'){h.c.liveQuery();await settle();}}return h}
@@ -321,4 +328,36 @@ test('restored submission-only tab waits for a manual continuation without rerea
  }});await settle();h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,2);assert.match(h.html(),/已读取 1 \/ 2 平台/,'the completed v2 response must be accepted before testing cache restoration');assert.doesNotMatch(h.html(),/部分统计待核对|响应不完整/);h.c.setPage('workorder_workload');interrupted=false;h.c.setPage('events');await settle();assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,2);assert.match(h.html(),/读取已暂停/);h.c.liveSubmissionRetry();await settle();
  assert.deepEqual(h.calls.filter(q=>q.action==='submissionAnalysis').map(q=>q.platformId),[P.id,p2.id,p2.id]);assert.match(h.html(),/已读取 2 \/ 2 平台/);assert.doesNotMatch(h.html(),/读取已暂停/);
  const html=h.html();pending.resolve();await settle();assert.equal(h.html(),html);
+});
+
+// Reproduce the real providers render chain, including per-cell submission reads.
+test('the full provider paint shares one submission scope instead of rebuilding it per cell',async()=>{
+ let queries=0;const platforms=Array.from({length:16},(_,i)=>({...P,id:'synthetic-'+i,name:'Platform '+i}));
+ const h=await ready({platforms,submission:true,onSubmissionQuery:()=>queries++});
+ Object.assign(h.L,{pageQueried:true,dirty:false,loading:true,direction:'charge',feeLookupRows:[],queryPlatforms:platforms,results:platforms.map(p=>{const r=aggregate(p);r.groups.provider=Array.from({length:20},(_,i)=>({...stats(),provider:'Provider '+i}));return r})});
+ h.c.state.page='providers';queries=0;h.c.render();assert.equal(queries,16);assert.match(h.html(),/Provider 19/);const html=h.html();
+ queries=0;h.c.render();assert.equal(queries,16);assert.equal(h.html(),html,'reuse does not alter the report');
+ h.L.platform=platforms[0].id;h.L.multi.platform=[platforms[0].id];queries=0;h.c.render();assert.equal(queries,1,'next paint uses the changed platform selection');
+});
+
+test('repeated platform date conversion reuses native formatters and bounded successful instants',()=>{
+ const h=clockHarness(),date='2026-09-29T00:00:00';
+ for(let i=0;i<1920;i++)assert.equal(h.instant(date,'Asia/Kolkata'),'2026-09-28T18:30:00.000Z');
+ assert.equal(h.constructed(),1);assert.equal(h.formatted(),6,'the identical successful local second is checked only once');
+ assert.equal(h.instant(date,'Asia/Kolkata',true),'2026-09-28T18:30:01.000Z');
+ assert.equal(h.instant(date,'UTC'),'2026-09-29T00:00:00.000Z');
+ for(let i=0;i<150;i++)h.instant(new Date(Date.parse(date+'Z')+i*1000).toISOString().slice(0,19),'Asia/Kolkata');
+ assert.equal(h.sizes()[1],128);const before=h.formatted();assert.equal(h.instant(date,'UTC'),'2026-09-29T00:00:00.000Z');assert(h.formatted()>before,'evicted entries recompute correctly');
+ for(const zone of Intl.supportedValuesOf('timeZone').slice(0,40))h.localClock(Date.parse(date+'Z'),zone);
+ assert.equal(h.sizes()[0],32,'timezone cardinality cannot retain unbounded native formatters');
+});
+test('date caches preserve invalid calendar and both DST boundary rejections',()=>{
+ const h=clockHarness();
+ for(let repeat=0;repeat<2;repeat++)for(const date of ['2026-02-30T00:00:00','2026-03-08T02:30:00','2026-11-01T01:30:00'])assert.throws(()=>h.instant(date,'America/New_York'));
+ assert.equal(h.sizes()[1],0,'failed and ambiguous instants are never cached');
+ assert.equal(h.instant('2026-03-08T01:30:00','America/New_York'),'2026-03-08T06:30:00.000Z');
+ assert.equal(h.instant('2026-03-08T03:30:00','America/New_York'),'2026-03-08T07:30:00.000Z');
+ assert.equal(h.instant('2026-11-01T02:30:00','America/New_York'),'2026-11-01T07:30:00.000Z');
+ assert.equal(h.instant('2026-11-01T01:30:00','Asia/Kolkata'),'2026-10-31T20:00:00.000Z');
+ assert.throws(()=>h.instant('2026-11-01T01:30:00','America/New_York'),'another timezone cache must not bypass ambiguity');
 });
