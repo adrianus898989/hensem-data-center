@@ -2,6 +2,7 @@ const {test,before,after}=require('node:test'),assert=require('node:assert/stric
 const {PGlite}=require('@electric-sql/pglite'),{loadTs,root}=require('./load-typescript.cjs');
 const edge=loadTs(path.join(root,'BACKEND_CURRENT/newar-detail-ingest.ts'));
 const migration=fs.readFileSync(path.join(root,'supabase/migrations/20260929180000_newar_recharge_level.sql'),'utf8');
+const countMigration=fs.readFileSync(path.join(root,'supabase/migrations/20260930060000_newar_recharge_count.sql'),'utf8');
 const foundation=fs.readFileSync(path.join(root,'supabase/migrations/20260919115606_newar_raw_records_foundation.sql'),'utf8').split('-- Single-platform AND single-dataset keyset search.')[0]+'\ncommit;';
 const token='1'.repeat(64),now=Date.now(),at=new Date(now-60000).toISOString();let db;
 const make=(raw={})=>({schema_version:1,batch_id:randomUUID(),platform:'DhaniWin',dataset:'charge',records:[{source_id:randomUUID(),member_id:'SYNTHETIC-01',order_number:'SYNTHETIC-ORDER',amount:'100',status_code:'Cancel',status_group:'failed',created_at:at,captured_at:at,raw}]});
@@ -9,7 +10,13 @@ const ingest=async batch=>(await db.query('select public.ingest_newar_detail_bat
 before(async()=>{db=new PGlite();await db.exec('create schema private;create role anon;create role authenticated;create role service_role;');await db.exec(foundation);
  const keys=(await db.query('select private.newar_detail_raw_keys() as keys')).rows[0].keys.concat(['depositOrderNo','utr','kycConnectState','utrMatched','workOrderTypeId','syntheticFutureKey']);
  await db.exec("create or replace function private.newar_detail_raw_keys() returns text[] language sql immutable set search_path='' as $$select array["+keys.map(k=>"'"+k+"'").join(',')+"]::text[]$$;");
- await db.query('insert into private.newar_detail_credentials(token_hash,allowed_scopes,expires_at) values($1,$2,now()+interval \'1 day\')',[token,[{platform:'DhaniWin',dataset:'charge'}]]);await db.exec(migration);
+ await db.query('insert into private.newar_detail_credentials(token_hash,allowed_scopes,expires_at) values($1,$2,now()+interval \'1 day\')',[token,[{platform:'DhaniWin',dataset:'charge'}]]);await db.exec(migration);await db.exec(countMigration);
+});
+test('source recharge count reaches storage, including zero; absent and compound fields stay unknown',async()=>{
+ await db.exec(countMigration);const keys=(await db.query('select private.newar_detail_raw_keys() as keys')).rows[0].keys;assert.equal(keys.filter(k=>k==='rechargeCount').length,1);assert(keys.includes('syntheticFutureKey'));
+ for(const rechargeCount of [0,3,'12',null]){const batch=edge.validateNewarBatch(make({rechargeLevel:'LV0',rechargeCount,bankAccount:'PRIVATE-EXCLUDED'}),now);assert.deepEqual(batch.records[0].raw,{rechargeLevel:'LV0',rechargeCount});await ingest(batch);const stored=(await db.query('select raw from newar_detail_records where source_id=$1',[batch.records[0].source_id])).rows[0].raw;assert.deepEqual(stored,batch.records[0].raw);}
+ for(const raw of [{rechargeLevel:'LV0'},{rechargeLevel:'LV0',rechargeCount:{private:'EXCLUDED'}}]){const batch=edge.validateNewarBatch(make(raw),now);await ingest(batch);const stored=(await db.query('select raw from newar_detail_records where source_id=$1',[batch.records[0].source_id])).rows[0].raw;assert.deepEqual(stored,{rechargeLevel:'LV0'});}
+ assert.equal((await db.query("select has_function_privilege('anon','private.newar_detail_raw_keys()','execute') allowed")).rows[0].allowed,false);
 });
 after(async()=>db?.close());
 test('grade extension retains current and future fields and function permissions on replay',async()=>{

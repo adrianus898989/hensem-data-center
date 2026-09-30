@@ -14,7 +14,7 @@ export const NEWAR_RAW_KEYS = [
   "transactionId", "rechargeChannelType", "coinToFiatRate", "uGold",
   "sysCurrency", "uRate", "withdrawChannelId", "withdrawCategoryId", "withdrawCategoryName",
   "depositOrderNo", "utr", "kycConnectState", "utrMatched", "workOrderTypeId",
-  "rechargeLevel",
+  "rechargeLevel", "rechargeCount",
 ] as const;
 const RECORD_KEYS = [
   "source_id", "member_id", "order_number", "third_party_order_number", "provider", "provider_id",
