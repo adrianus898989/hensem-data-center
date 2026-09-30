@@ -4,7 +4,7 @@ const E=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt
 const platform=(id='a',source='ar')=>({id,name:'Synthetic '+id,source,currency:'INR',timezone:'Asia/Kolkata'});
 const metric=(provider,t=30,n=2,count=70)=>({provider,threshold:t,member_count:n,member_days:n+1,invalid_count:count,l0_members:1,new_members:1,funded_members:1,unknown_members:0});
 function response(q,more={}){return {platform:platform(q.platformId),startAt:q.startAt,endAt:q.endAt,basis:'platform_local_day_all_providers_zero_success',metrics:[10,15,20,30,50,100].flatMap(t=>[metric(null,t),metric('Pay A',t),metric('Pay B',t)]),coverage:{orderCount:200,missingMemberCount:0,missingLevelCount:0},...more};}
-function harness(){const L={country:'印度',from:'2026-09-01T00:00:00',to:'2026-09-30T23:59:59',dirty:false},calls=[],drawers=[];let platforms=[platform()],handler=q=>response(q);const ui=create({L,E,C:n=>String(n),N:n=>String(n),selected:()=>platforms,query:p=>({startAt:'2026-09-01T00:00:00Z',endAt:'2026-09-30T00:00:00Z',status:'all',providers:['Pay A','Pay B']}),request:q=>{calls.push(q);return Promise.resolve(handler(q))},render(){},box:(title,body)=>'<h2>'+title+'</h2>'+body,table:(headers,rows)=>rows.map(row=>row.join(' ')).join('\n'),open:(title,body)=>drawers.push({title,body})});return {L,ui,calls,drawers,select:x=>platforms=x,handler:x=>handler=x};}
+function harness(){const L={country:'印度',from:'2026-09-01T00:00:00',to:'2026-09-30T23:59:59',dirty:false},calls=[],drawers=[],tables=[];let platforms=[platform()],handler=q=>response(q);const ui=create({L,E,C:n=>String(n),N:n=>String(n),selected:()=>platforms,query:p=>({startAt:'2026-09-01T00:00:00Z',endAt:'2026-09-30T00:00:00Z',status:'all',providers:['Pay A','Pay B']}),request:q=>{calls.push(q);return Promise.resolve(handler(q))},render(){},box:(title,body)=>'<h2>'+title+'</h2>'+body,table:(headers,rows,classes)=>{tables.push({headers,rows,classes});return rows.map(row=>row.join(' ')).join('\n')},open:(title,body)=>drawers.push({title,body})});return {L,ui,calls,drawers,tables,select:x=>platforms=x,handler:x=>handler=x};}
 test('whole period platform totals use independently deduplicated IDs, never sum provider member counts',async()=>{
  const h=harness();await h.ui.ensure();assert.equal(h.calls.length,1);assert.equal(h.ui.metric().member_count,2);assert.equal(h.ui.metric('Pay A').member_count,2);assert.equal(h.ui.metric('Pay B').member_count,2);assert.match(h.ui.providerCell('Pay A',['a'],'members',65,200),/同平台 ID 在所选期间去重/);await h.ui.ensure();assert.equal(h.calls.length,1);assert.deepEqual(h.calls[0].providers,['Pay A','Pay B']);
 });
@@ -81,4 +81,19 @@ test('missing recharge history is distinct from failed order statistics; diagnos
 test('explicit requery refreshes completed platforms after backfill instead of silently retaining old coverage',async()=>{
  const h=harness();let fixed=false;h.handler(q=>response(q,{coverage:{orderCount:200,missingRechargeCount:fixed?0:200}}));await h.ui.load();assert.match(h.ui.note(),/查看原因/);
  fixed=true;await global.liveSubmissionRetry();assert.equal(h.calls.length,2);assert.doesNotMatch(h.ui.note(),/查看原因/);
+});
+
+test('monitoring separates platform and provider, with compact amounts and the same fold scope',async()=>{
+ const h=harness();h.handler(chartResponse);await h.ui.load();global.liveSubmissionToggle(0,'monitoring');const table=monitoringTable(h.ui.render());
+ assert.match(table,/<th>平台<\/th><th>三方<\/th>/);assert.match(table,/<td>Synthetic a<\/td><td>所选三方合计<\/td>/);assert.match(table,/<td>Synthetic a<\/td><td>Pay A<\/td>/);assert.doesNotMatch(table,/INR|<small>/);
+ assert.match(table,/<td class="risk-invalid-count">30<\/td>/);assert.match(table,/<td class="risk-invalid-share">30.00%<\/td>/);
+});
+test('member amounts distinguish the whole platform day from the selected provider',async()=>{
+ const h=harness();await h.ui.load();h.handler(q=>response(q,{total:1,members:1,rows:[{day:'2026-09-28',member_id:'Synthetic',submitted_count:49,platform_day_amount:'12340',selected_count:1,submitted_amount:'100',providers:['Pay A']}]}));
+ await h.ui.members(0,'Pay A');const t=h.tables.at(-1);assert.equal(t.classes,'submission-members-table');assert.deepEqual(t.headers.slice(5,9),['该平台当日提交','平台当日总金额','所选三方提交','所选三方金额']);assert.deepEqual(t.rows[0].slice(5,9),['49','12340','1','100']);
+ h.handler(q=>response(q,{total:1,members:1,rows:[{day:'2026-09-28',member_id:'Synthetic',submitted_count:49,selected_count:1,submitted_amount:null,providers:[]}]}));await h.ui.members(0);assert.deepEqual(h.tables.at(-1).rows[0].slice(5,9),['49','—','1','—']);
+});
+test('closing the member modal discards in-flight results and clears pagination',async()=>{
+ const h=harness();await h.ui.load();let finish;h.handler(q=>new Promise(resolve=>finish=()=>resolve(response(q,{rows:[],members:0,total:0}))));const pending=h.ui.members(0);assert.equal(h.drawers.length,1);
+ global.liveSubmissionMembersClose();finish();await pending;assert.equal(h.drawers.length,1);const count=h.calls.length;global.liveSubmissionMemberPage(1);assert.equal(h.calls.length,count);
 });
