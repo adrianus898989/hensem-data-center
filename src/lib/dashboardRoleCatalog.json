@@ -1,0 +1,1254 @@
+{
+  "version": 1,
+  "pages": [
+    {
+      "id": "overview",
+      "moduleId": "dashboard",
+      "moduleLabel": "Dashboard",
+      "label": "总览",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "workorders",
+        "pendingSnapshot",
+        "autoWithdraw",
+        "details",
+        "query"
+      ]
+    },
+    {
+      "id": "collected_data",
+      "moduleId": "dashboard",
+      "moduleLabel": "Dashboard",
+      "label": "平台数据接入",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "collectedData",
+        "reportSummary",
+        "payoutConfig"
+      ]
+    },
+    {
+      "id": "teamops",
+      "moduleId": "team",
+      "moduleLabel": "团队运营中心",
+      "label": "团队经营",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query"
+      ]
+    },
+    {
+      "id": "teamcountries",
+      "moduleId": "team",
+      "moduleLabel": "团队运营中心",
+      "label": "团队国家分析",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query"
+      ]
+    },
+    {
+      "id": "teamplatforms",
+      "moduleId": "team",
+      "moduleLabel": "团队运营中心",
+      "label": "团队平台分析",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query"
+      ]
+    },
+    {
+      "id": "merchants",
+      "moduleId": "merchant",
+      "moduleLabel": "商户运营中心",
+      "label": "平台汇总",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query"
+      ]
+    },
+    {
+      "id": "merchantproviders",
+      "moduleId": "merchant",
+      "moduleLabel": "商户运营中心",
+      "label": "平台三方分析",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query"
+      ]
+    },
+    {
+      "id": "payout_config",
+      "moduleId": "merchant",
+      "moduleLabel": "商户运营中心",
+      "label": "自动出款配置",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "payoutConfig"
+      ]
+    },
+    {
+      "id": "auto_withdraw",
+      "moduleId": "merchant",
+      "moduleLabel": "商户运营中心",
+      "label": "自动出款",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        },
+        {
+          "id": "edit",
+          "label": "编辑出款备注",
+          "sensitive": true
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "autoWithdraw",
+        "withdrawReasons",
+        "withdrawNote"
+      ]
+    },
+    {
+      "id": "withdraw_operators",
+      "moduleId": "merchant",
+      "moduleLabel": "商户运营中心",
+      "label": "操作人统计",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "autoWithdraw",
+        "withdrawReasons"
+      ]
+    },
+    {
+      "id": "workorders",
+      "moduleId": "workorder",
+      "moduleLabel": "工单运营中心",
+      "label": "工单未到账",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "workorderRecords",
+        "workorders"
+      ]
+    },
+    {
+      "id": "deposit_tracking",
+      "moduleId": "workorder",
+      "moduleLabel": "工单运营中心",
+      "label": "存款未到账-跟进记录",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "depositIssues"
+      ]
+    },
+    {
+      "id": "deposit_statistics",
+      "moduleId": "workorder",
+      "moduleLabel": "工单运营中心",
+      "label": "存款未到账-统计",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "depositStatistics",
+        "depositIssues"
+      ]
+    },
+    {
+      "id": "workorder_reconciliation",
+      "moduleId": "workorder",
+      "moduleLabel": "工单运营中心",
+      "label": "漏登与状态核对",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "workorderRecords"
+      ]
+    },
+    {
+      "id": "workorder_workload",
+      "moduleId": "workorder",
+      "moduleLabel": "工单运营中心",
+      "label": "员工工作量",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "workorderRecords"
+      ]
+    },
+    {
+      "id": "workorder_permissions",
+      "moduleId": "workorder",
+      "moduleLabel": "工单运营中心",
+      "label": "权限与预警",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        }
+      ],
+      "requests": []
+    },
+    {
+      "id": "providers",
+      "moduleId": "provider",
+      "moduleLabel": "三方通道中心",
+      "label": "代收汇总",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query",
+        "workorders",
+        "submissionAnalysis",
+        "memberDaily"
+      ]
+    },
+    {
+      "id": "provider_payout",
+      "moduleId": "provider",
+      "moduleLabel": "三方通道中心",
+      "label": "代付汇总",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query",
+        "workorders",
+        "submissionAnalysis",
+        "memberDaily"
+      ]
+    },
+    {
+      "id": "provider_daily",
+      "moduleId": "provider",
+      "moduleLabel": "三方通道中心",
+      "label": "代收代付成功率",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query",
+        "workorders",
+        "submissionAnalysis",
+        "memberDaily"
+      ]
+    },
+    {
+      "id": "channelquality",
+      "moduleId": "provider",
+      "moduleLabel": "三方通道中心",
+      "label": "稳定性与占比",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query",
+        "workorders",
+        "submissionAnalysis",
+        "memberDaily"
+      ]
+    },
+    {
+      "id": "rates",
+      "moduleId": "provider",
+      "moduleLabel": "三方通道中心",
+      "label": "费率表",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "rates",
+        "ratesSheet"
+      ]
+    },
+    {
+      "id": "risk",
+      "moduleId": "risk",
+      "moduleLabel": "智能风控中心",
+      "label": "三方风控汇总",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query"
+      ]
+    },
+    {
+      "id": "events",
+      "moduleId": "risk",
+      "moduleLabel": "智能风控中心",
+      "label": "刷单风控",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "submissionAnalysis",
+        "memberDaily",
+        "aggregate"
+      ]
+    },
+    {
+      "id": "stuck",
+      "moduleId": "risk",
+      "moduleLabel": "智能风控中心",
+      "label": "代付中与卡单分析",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "pendingAnalysis",
+        "pendingSnapshot"
+      ]
+    },
+    {
+      "id": "rules",
+      "moduleId": "risk",
+      "moduleLabel": "智能风控中心",
+      "label": "预警规则",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        }
+      ],
+      "requests": []
+    },
+    {
+      "id": "time",
+      "moduleId": "analysis",
+      "moduleLabel": "数据分析中心",
+      "label": "时间段分析",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query",
+        "memberDaily"
+      ]
+    },
+    {
+      "id": "amount",
+      "moduleId": "analysis",
+      "moduleLabel": "数据分析中心",
+      "label": "金额段分析",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query",
+        "memberDaily"
+      ]
+    },
+    {
+      "id": "matrix",
+      "moduleId": "analysis",
+      "moduleLabel": "数据分析中心",
+      "label": "时间段 × 金额段",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query",
+        "memberDaily"
+      ]
+    },
+    {
+      "id": "latency",
+      "moduleId": "analysis",
+      "moduleLabel": "数据分析中心",
+      "label": "充值 / 提款到账时效",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query",
+        "memberDaily"
+      ]
+    },
+    {
+      "id": "orders",
+      "moduleId": "analysis",
+      "moduleLabel": "数据分析中心",
+      "label": "订单明细",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query"
+      ]
+    },
+    {
+      "id": "collection",
+      "moduleId": "analysis",
+      "moduleLabel": "数据分析中心",
+      "label": "代收订单",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query"
+      ]
+    },
+    {
+      "id": "payout",
+      "moduleId": "analysis",
+      "moduleLabel": "数据分析中心",
+      "label": "代付订单",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "aggregate",
+        "rates",
+        "reportSummary",
+        "collectedData",
+        "details",
+        "query"
+      ]
+    },
+    {
+      "id": "access",
+      "moduleId": "system",
+      "moduleLabel": "系统管理后台",
+      "label": "账号与角色权限",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "create",
+          "label": "新建账号",
+          "sensitive": true
+        },
+        {
+          "id": "edit",
+          "label": "修改账号",
+          "sensitive": true
+        },
+        {
+          "id": "status",
+          "label": "启用 / 停用账号",
+          "sensitive": true
+        },
+        {
+          "id": "reset_password",
+          "label": "重置账号密码",
+          "sensitive": true
+        },
+        {
+          "id": "delete",
+          "label": "删除账号",
+          "sensitive": true
+        }
+      ],
+      "requests": []
+    },
+    {
+      "id": "provider_config",
+      "moduleId": "system",
+      "moduleLabel": "系统管理后台",
+      "label": "三方配置",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        },
+        {
+          "id": "edit",
+          "label": "修改三方归类",
+          "sensitive": true
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "providerConfig",
+        "configurationAccess",
+        "configurationWrite"
+      ]
+    },
+    {
+      "id": "teams",
+      "moduleId": "system",
+      "moduleLabel": "系统管理后台",
+      "label": "团队 / 平台归属",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        },
+        {
+          "id": "edit",
+          "label": "修改平台归属",
+          "sensitive": true
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage",
+        "platformAssignments",
+        "configurationAccess",
+        "configurationWrite"
+      ]
+    },
+    {
+      "id": "ip",
+      "moduleId": "system",
+      "moduleLabel": "系统管理后台",
+      "label": "IP 白名单",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        }
+      ],
+      "requests": []
+    },
+    {
+      "id": "data_health",
+      "moduleId": "system",
+      "moduleLabel": "系统管理后台",
+      "label": "采集与数据健康",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        },
+        {
+          "id": "refresh",
+          "label": "手动同步数据",
+          "sensitive": true
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "intakeCoverage"
+      ]
+    },
+    {
+      "id": "login_logs",
+      "moduleId": "system",
+      "moduleLabel": "系统管理后台",
+      "label": "登录日志",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        }
+      ],
+      "requests": []
+    },
+    {
+      "id": "operation_logs",
+      "moduleId": "system",
+      "moduleLabel": "系统管理后台",
+      "label": "操作日志",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        }
+      ],
+      "requests": []
+    }
+  ]
+}

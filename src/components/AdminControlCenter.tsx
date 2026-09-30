@@ -1,8 +1,9 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import "./AdminControlCenter.css";
 import AccountRoleEditor from "./AccountRoleEditor";
+import type { DashboardRoleAccess } from "@/lib/dashboardRoleAccess";
 import AccountPermissionDialog from "./AccountPermissionDialog";
 import AccountEditorDialog from "./AccountEditorDialog";
 import { ACCOUNT_PERMISSION_MODULES, ALL_ACCOUNT_PERMISSIONS, createPermissionDraft, permissionModuleCount } from "@/lib/accountPermissionCatalog";
@@ -48,6 +49,7 @@ type Props = {
   embedded?: boolean;
   accountsOnlyLoading?: boolean;
   manualQuery?: boolean;
+  roleAccess?: DashboardRoleAccess | null;
 };
 
 type Tab = "accounts" | "permissions" | "ip" | "data" | "audit";
@@ -228,19 +230,31 @@ function localDateKey(value: string): string {
   return `${y}-${m}-${d}`;
 }
 
-export default function AdminControlCenter({ open, session, profile, onClose, section = "accounts", embedded = false, accountsOnlyLoading = false, manualQuery = false }: Props) {
+export default function AdminControlCenter({ open, session, profile, onClose, section = "accounts", embedded = false, accountsOnlyLoading = false, manualQuery = false, roleAccess }: Props) {
   const management = normalizedManagementPermissions(profile);
   const isOwner = profile.role === "owner";
   const hasAllData = effectiveDashboardDataScope(profile).mode === "all";
   const actorDataScopeKey = JSON.stringify(effectiveDashboardDataScope(profile));
   const canManageUsers = isOwner || management.manage_viewers;
+  const canUseAccountAction = (action: string) => roleAccess?.mode !== "assigned" || roleAccess.canView === true
+    && roleAccess.permissions.includes("access.view") && roleAccess.permissions.includes("access." + action);
+  const canConfigureAccount = canUseAccountAction("edit");
+  const canOpenAccountSettings = canConfigureAccount || canUseAccountAction("reset_password") || canUseAccountAction("delete");
   const canRefreshData = hasAllData && (isOwner || management.refresh_data);
   const canViewAudit = hasAllData && (isOwner || management.view_audit);
 
   const [tab, setTab] = useState<Tab>(section);
-  const [users, setUsers] = useState<DashboardProfile[]>([]);
+  const [userRows, setUsers] = useState<DashboardProfile[]>([]);
   const [logs, setLogs] = useState<DashboardAuditLog[]>([]);
-  const [loading, setLoading] = useState(false);
+  const directoryScope = JSON.stringify([session.user.id, profile.auth_user_id, profile.active, profile.role, actorDataScopeKey, management.manage_viewers, roleAccess]);
+  const [directory, setDirectory] = useState<{ scope: string; status: "idle" | "loading" | "ready" | "error"; error: string }>({ scope: "", status: "idle", error: "" });
+  const directoryRequest = useRef({ scope: directoryScope, serial: 0 });
+  if (directoryRequest.current.scope !== directoryScope) directoryRequest.current = { scope: directoryScope, serial: directoryRequest.current.serial + 1 };
+  const directoryStatus = directory.scope === directoryScope ? directory.status : "idle";
+  const directoryReady = directoryStatus === "ready";
+  const loading = directoryStatus === "loading";
+  const users = directoryReady ? userRows : [];
+  useEffect(() => () => { directoryRequest.current.serial += 1; }, [directoryScope]);
   const [message, setMessage] = useState("");
   const [newRole, setNewRole] = useState<CreateRole>("viewer");
   const [newUsername, setNewUsername] = useState("");
@@ -328,10 +342,18 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   }, [logs, auditKeyword, auditAction, auditStartDate, auditEndDate]);
 
   async function loadUsers() {
-    setLoading(true);
-    try { setUsers(await listDashboardUsers(session)); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "读取账号失败"); }
-    finally { setLoading(false); }
+    if (!canUseAccountAction("view") || !open || !profile.active || profile.auth_user_id !== session.user.id || !canOpenAdminCenter(profile) || directoryRequest.current.scope !== directoryScope) return;
+    const serial = ++directoryRequest.current.serial;
+    const current = () => directoryRequest.current.scope === directoryScope && directoryRequest.current.serial === serial;
+    setDirectory({ scope: directoryScope, status: "loading", error: "" });
+    try {
+      const rows = await listDashboardUsers(session);
+      if (!current()) return;
+      setUsers(rows); setDirectory({ scope: directoryScope, status: "ready", error: "" });
+    } catch (error) {
+      if (!current()) return;
+      setUsers([]); setDirectory({ scope: directoryScope, status: "error", error: error instanceof Error ? error.message : "读取账号失败，请重试。" });
+    }
   }
 
   async function loadAudit() {
@@ -421,7 +443,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     if (!accountsOnlyLoading && canRefreshData) { void loadHistoryStatus(); void loadAutoHistoryStatus(); }
     if (!accountsOnlyLoading && isOwner) void loadIpSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, profile.role, manualQuery]);
+  }, [open, profile.role, manualQuery, directoryScope]);
 
   useEffect(() => {
     if (!isOwner && newRole === "admin") setNewRole("viewer");
@@ -458,7 +480,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
 
   async function submitCreate(event: React.FormEvent) {
     event.preventDefault();
-    if (!canManageUsers || createBusy) return;
+    if (!canManageUsers || !canUseAccountAction("create") || createBusy) return;
     if (newDataScope.mode === "selected" && !newDataScope.countries.length) { setMessage("请至少选择一个可见国家或盘口组。"); return; }
     if (!isDashboardDataScopeSubset(newDataScope, effectiveDashboardDataScope(profile))) { setMessage("不能授予超出自己可见数据范围的权限。"); return; }
     setCreateBusy(true);
@@ -485,7 +507,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   }
 
   async function saveAccount(user: DashboardProfile, patch: DashboardAccountPatch): Promise<boolean> {
-    if (!canEditTarget(user) || savingUser || (patch.role && !isOwner)) return false;
+    if (!canConfigureAccount || typeof patch.active === "boolean" && !canUseAccountAction("status") || !canEditTarget(user) || savingUser || (patch.role && !isOwner)) return false;
     if (patch.data_scope && (!isDashboardDataScopeSubset(patch.data_scope, effectiveDashboardDataScope(profile)) || patch.data_scope.mode === "selected" && !patch.data_scope.countries.length)) return false;
     setSavingUser(user.username);
     setMessage("");
@@ -500,7 +522,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
 
   async function submitResetPassword(event: React.FormEvent) {
     event.preventDefault();
-    if (!resetTarget) return;
+    if (!canUseAccountAction("reset_password") || savingUser || !users.some(user => user.username === resetTarget && canEditTarget(user))) return;
     const username = resetTarget;
     setSavingUser(username);
     setMessage("");
@@ -525,7 +547,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   }
 
   async function removeAccount(user: DashboardProfile) {
-    if (!canEditTarget(user)) return;
+    if (!canUseAccountAction("delete") || savingUser || !canEditTarget(user)) return;
     if (!window.confirm(`确定删除账号 ${user.username}？删除后该账号立即无法登录。`)) return;
     setSavingUser(user.username);
     setMessage("");
@@ -661,10 +683,10 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
           <section className="admin-panel-card admin-account-directory admin-permission-directory">
             <div className="admin-account-directory-head">
               <div>{tab === "accounts" ? <><h3>账号列表</h3><p>建立账号，管理角色、启停状态、数据范围与密码。</p></> : <><h3>按模块、页面和具体操作配置权限</h3><p>按账号独立授权；点击模块查看详情，调整后统一保存。</p></>}</div>
-              <div className="admin-account-toolbar-actions"><button type="button" className="admin-light-btn" disabled={loading} onClick={() => void loadUsers()}>{loading ? "读取中…" : manualQuery ? "查询账号" : "刷新"}</button>{tab === "accounts" && <button type="button" className="admin-account-create-toggle" aria-haspopup="dialog" disabled={loading || Boolean(savingUser)} onClick={() => { setMessage(""); setCreateOpen(true); }}>+ 新建账号</button>}</div>
+              <div className="admin-account-toolbar-actions"><button type="button" className="admin-light-btn" disabled={loading || !canUseAccountAction("view")} onClick={() => void loadUsers()}>{loading ? "读取中…" : manualQuery ? "查询账号" : "刷新"}</button>{tab === "accounts" && <button type="button" className="admin-account-create-toggle" aria-haspopup="dialog" disabled={loading || Boolean(savingUser) || !canUseAccountAction("create")} onClick={() => { if (!canUseAccountAction("create")) return; setMessage(""); setCreateOpen(true); }}>+ 新建账号</button>}</div>
             </div>
-            {tab === "permissions" ? <div className="admin-permission-overview"><div><b>{users.length}</b> 当前账号</div><div><b>{ACCOUNT_PERMISSION_MODULES.length}</b> 权限模块</div><div><b>{ALL_ACCOUNT_PERMISSIONS.length}</b> 权限项</div><div><b>{ALL_ACCOUNT_PERMISSIONS.filter((item) => item.kind === "management").length}</b> 后台权限</div><span>权限项与现有系统一致，不新增授权范围</span></div> : <div className="admin-permission-overview admin-account-overview"><div><b>{users.length}</b> 全部账号</div><div><b>{stats.owners}</b> 总管理员</div><div><b>{stats.admins}</b> 管理员</div><div><b>{stats.viewers}</b> 查看账号</div><div><b>{stats.disabled}</b> 已停用</div></div>}
-          {tab === "accounts" && createOpen && <AccountEditorDialog title="新建后台账号" busy={createBusy} onClose={closeCreate} bodyClassName="admin-users-compact"><section id="admin-create-account" className="admin-create-card-v249 admin-account-create-panel">
+            {tab === "permissions" ? <div className="admin-permission-overview"><div><b>{directoryReady ? users.length : "—"}</b> 当前账号</div><div><b>{ACCOUNT_PERMISSION_MODULES.length}</b> 权限模块</div><div><b>{ALL_ACCOUNT_PERMISSIONS.length}</b> 权限项</div><div><b>{ALL_ACCOUNT_PERMISSIONS.filter((item) => item.kind === "management").length}</b> 后台权限</div><span>权限项与现有系统一致，不新增授权范围</span></div> : <div className="admin-permission-overview admin-account-overview"><div><b>{directoryReady ? users.length : "—"}</b> 全部账号</div><div><b>{directoryReady ? stats.owners : "—"}</b> 总管理员</div><div><b>{directoryReady ? stats.admins : "—"}</b> 管理员</div><div><b>{directoryReady ? stats.viewers : "—"}</b> 查看账号</div><div><b>{directoryReady ? stats.disabled : "—"}</b> 已停用</div></div>}
+          {tab === "accounts" && createOpen && canUseAccountAction("create") && <AccountEditorDialog title="新建后台账号" busy={createBusy} onClose={closeCreate} bodyClassName="admin-users-compact"><section id="admin-create-account" className="admin-create-card-v249 admin-account-create-panel">
             {message && <p role="alert" className="admin-account-feedback error">{message}</p>}
             <fieldset disabled={createBusy}>
             <div className="admin-role-picker">
@@ -700,38 +722,38 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
               <div className="admin-search-field"><label>状态</label><select aria-label="后台账号状态筛选" value={userStatusFilter} onChange={(e) => setUserStatusFilter(e.target.value as any)}><option value="all">全部状态</option><option value="active">正常</option><option value="disabled">停用</option></select></div>
               <button type="button" className="admin-light-btn" onClick={() => { setUserSearch(""); setUserRoleFilter("all"); setUserStatusFilter("all"); setUserScopeFilter("all"); }}>重置筛选</button>
             </div>
-            <div className="admin-permission-table-meta"><span>显示 {filteredUsers.length} / {users.length} 个账号</span>{tab === "permissions" && <div className="admin-permission-legend"><span className="all">全部已开</span><span className="partial">部分已开</span><span className="none">未开</span></div>}</div>
-            {loading && !users.length ? <div className="admin-empty">正在读取账号...</div> : <div className="admin-account-table-wrap"><table className={`admin-account-table ${tab === "permissions" ? "admin-permission-matrix" : "admin-account-management-table"}`}><thead><tr><th scope="col">账号 / 角色</th><th scope="col">{tab === "permissions" ? "模块权限 · 已开 / 权限总数" : "数据范围 / 当前权限"}</th><th scope="col">操作</th></tr></thead><tbody>
+            <div className="admin-permission-table-meta"><span>{directoryReady ? `显示 ${filteredUsers.length} / ${users.length} 个账号` : loading ? "正在读取账号…" : directoryStatus === "error" ? "账号读取失败" : "尚未查询账号"}</span>{tab === "permissions" && <div className="admin-permission-legend"><span className="all">全部已开</span><span className="partial">部分已开</span><span className="none">未开</span></div>}</div>
+            {!directoryReady ? <div className="admin-empty" role={directoryStatus === "error" ? "alert" : "status"}>{loading ? "正在读取账号…" : directoryStatus === "error" ? directory.error : "点击「查询账号」读取现有后台账号。"}</div> : <div className="admin-account-table-wrap"><table className={`admin-account-table ${tab === "permissions" ? "admin-permission-matrix" : "admin-account-management-table"}`}><thead><tr><th scope="col">账号 / 角色</th><th scope="col">{tab === "permissions" ? "模块权限 · 已开 / 权限总数" : "数据范围 / 当前权限"}</th><th scope="col">操作</th></tr></thead><tbody>
               {filteredUsers.map((user) => {
                 const draft = createPermissionDraft(user);
                 const enabled = ALL_ACCOUNT_PERMISSIONS.filter((item) => draft[item.id]).length;
                 const editable = canEditTarget(user);
-                const expanded = tab === "accounts" && editable && editingUsername === user.username;
+                const expanded = tab === "accounts" && editable && canOpenAccountSettings && editingUsername === user.username;
                 const editId = `admin-account-edit-${user.auth_user_id}`;
                 return <Fragment key={user.auth_user_id}><tr className={expanded ? "is-editing" : ""}>
                   <th scope="row"><div className="admin-matrix-identity"><div><strong>{user.username}</strong>{user.role === "owner" && <span className="admin-matrix-protected">锁定</span>}</div><div className="admin-matrix-identity-meta"><span className={`admin-user-role ${user.role}`}>{roleLabel(user.role)}</span><span className={user.active ? "admin-user-state active" : "admin-user-state off"}>{user.active ? "正常" : "停用"}</span></div><small>{user.role === "owner" ? "OWNER · 固定权限" : `${roleEnglish(user.role)} · 账号独立授权`}</small></div></th>
                   <td><div className="admin-account-scope-summary" title={dashboardScopeLabel(accountStoredScope(user))}><b>数据范围</b><span>{dashboardScopeLabel(accountStoredScope(user))}</span></div>{tab === "permissions" ? <div className="admin-module-permission-grid">{ACCOUNT_PERMISSION_MODULES.map((module) => {
                     const count = permissionModuleCount(module, draft);
                     const state = count.enabled === count.total ? "all" : count.enabled === 0 ? "none" : "partial";
-                    return <button type="button" key={module.id} className={`admin-module-permission-chip ${state} module-${module.id}`} aria-label={`${user.username} · ${module.label}，已开 ${count.enabled} / ${count.total} 项，查看权限`} aria-haspopup="dialog" onClick={() => setPermissionTarget({ username: user.username, module: module.id })}><span>{module.label}</span><b>{count.enabled}<small>/{count.total}</small></b></button>;
+                    return <button type="button" key={module.id} className={`admin-module-permission-chip ${state} module-${module.id}`} aria-label={`${user.username} · ${module.label}，已开 ${count.enabled} / ${count.total} 项，查看权限`} aria-haspopup="dialog" disabled={!canConfigureAccount} onClick={() => canConfigureAccount && setPermissionTarget({ username: user.username, module: module.id })}><span>{module.label}</span><b>{count.enabled}<small>/{count.total}</small></b></button>;
                   })}</div> : <div className="admin-account-permission-summary">{permissionSummary(user)}</div>}</td>
-                  <td><div className="admin-matrix-actions">{tab === "permissions" ? <><span className="admin-matrix-total">{enabled}<small> / {ALL_ACCOUNT_PERMISSIONS.length}</small></span><button type="button" className="admin-matrix-configure" aria-haspopup="dialog" onClick={() => setPermissionTarget({ username: user.username, module: "home" })}>{editable ? "配置权限" : user.role === "owner" ? "查看固定权限" : "查看权限"}</button></> : editable ? <button type="button" className="admin-matrix-configure" aria-haspopup="dialog" onClick={() => { setMessage(""); setEditingUsername(user.username); setResetTarget(""); setResetPassword(""); }}>账号设置</button> : <span className="admin-account-readonly">固定账号</span>}{tab === "accounts" && accountsOnlyLoading && <button type="button" className="admin-matrix-configure" aria-haspopup="dialog" onClick={() => setPermissionTarget({ username: user.username, module: "home" })}>{editable ? "配置权限" : "查看权限"}</button>}</div></td>
+                  <td><div className="admin-matrix-actions">{tab === "permissions" ? <><span className="admin-matrix-total">{enabled}<small> / {ALL_ACCOUNT_PERMISSIONS.length}</small></span><button type="button" className="admin-matrix-configure" aria-haspopup="dialog" disabled={!canConfigureAccount} onClick={() => canConfigureAccount && setPermissionTarget({ username: user.username, module: "home" })}>{editable ? "配置权限" : user.role === "owner" ? "查看固定权限" : "查看权限"}</button></> : editable ? <button type="button" className="admin-matrix-configure" aria-haspopup="dialog" disabled={!canOpenAccountSettings} onClick={() => { if (!canOpenAccountSettings) return; setMessage(""); setEditingUsername(user.username); setResetTarget(""); setResetPassword(""); }}>账号设置</button> : <span className="admin-account-readonly">固定账号</span>}{tab === "accounts" && accountsOnlyLoading && <button type="button" className="admin-matrix-configure" aria-haspopup="dialog" disabled={!canConfigureAccount} onClick={() => canConfigureAccount && setPermissionTarget({ username: user.username, module: "home" })}>{editable ? "配置权限" : "查看权限"}</button>}</div></td>
                 </tr>
                   {expanded && <AccountEditorDialog title={"后台账号设置 · " + user.username} busy={Boolean(savingUser)} onClose={() => { setEditingUsername(""); setResetTarget(""); setResetPassword(""); }} bodyClassName="admin-users-compact"><div id={editId} className="admin-user-edit-grid admin-account-editor">
                     {message && <p role="status" className="admin-account-feedback">{message}</p>}
                     <div className="admin-account-edit-hint"><strong>{user.username} · 账号设置</strong><span>{savingUser === user.username ? "正在保存…" : accountsOnlyLoading ? "角色、启停、数据范围和密码在这里管理；模块权限点击本行「配置权限」" : "角色、启停、数据范围和密码在这里管理；模块权限请前往左侧「权限管理」"}</span></div>
-                    {isOwner && user.role !== "owner" && <AccountRoleEditor key={`${user.auth_user_id}:${user.role}`} user={user} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />}
-                    <AccountDataScopeEditor key={`scope-${user.auth_user_id}:${user.updated_at || "legacy"}`} user={user} actor={profile} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />
-                    <div className="admin-user-buttons-v249"><button type="button" disabled={savingUser === user.username} onClick={() => void saveAccount(user, { active: !user.active })}>{user.active ? "停用" : "启用"}</button><button type="button" disabled={savingUser === user.username} onClick={() => { setResetTarget(resetTarget === user.username ? "" : user.username); setResetPassword(""); }}>重置密码</button><button className="danger" type="button" disabled={savingUser === user.username} onClick={() => void removeAccount(user)}>删除账号</button></div>
-                    {resetTarget === user.username && <form className="admin-inline-reset" onSubmit={submitResetPassword}><input type="password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} placeholder="输入新的临时密码（至少 8 位）" autoFocus /><button type="submit" disabled={savingUser === user.username}>保存新密码</button><button type="button" onClick={() => setResetTarget("")}>取消</button></form>}
+                    {canConfigureAccount && isOwner && user.role !== "owner" && <AccountRoleEditor key={`${user.auth_user_id}:${user.role}`} user={user} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />}
+                    {canConfigureAccount && <AccountDataScopeEditor key={`scope-${user.auth_user_id}:${user.updated_at || "legacy"}`} user={user} actor={profile} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />}
+                    <div className="admin-user-buttons-v249"><button type="button" disabled={savingUser === user.username || !canConfigureAccount || !canUseAccountAction("status")} onClick={() => void saveAccount(user, { active: !user.active })}>{user.active ? "停用" : "启用"}</button><button type="button" disabled={savingUser === user.username || !canUseAccountAction("reset_password")} onClick={() => { if (!canUseAccountAction("reset_password")) return; setResetTarget(resetTarget === user.username ? "" : user.username); setResetPassword(""); }}>重置密码</button><button className="danger" type="button" disabled={savingUser === user.username || !canUseAccountAction("delete")} onClick={() => void removeAccount(user)}>删除账号</button></div>
+                    {canUseAccountAction("reset_password") && resetTarget === user.username && <form className="admin-inline-reset" onSubmit={submitResetPassword}><input type="password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} placeholder="输入新的临时密码（至少 8 位）" autoFocus /><button type="submit" disabled={savingUser === user.username}>保存新密码</button><button type="button" onClick={() => setResetTarget("")}>取消</button></form>}
                     {accountFeedback[user.username] && <p className={`admin-account-feedback ${accountFeedback[user.username].tone}`} role={accountFeedback[user.username].tone === "error" ? "alert" : "status"}>{accountFeedback[user.username].text}</p>}
                   </div></AccountEditorDialog>}
                 </Fragment>;
               })}
-              {!filteredUsers.length && <tr><td colSpan={3}><div className="admin-empty admin-filter-empty">没有符合当前搜索条件的账号。</div></td></tr>}
+              {!filteredUsers.length && <tr><td colSpan={3}><div className="admin-empty admin-filter-empty">{users.length ? "没有符合当前搜索条件的账号。" : "当前可管理范围内没有后台账号。"}</div></td></tr>}
             </tbody></table></div>}
           </section>
-          {(tab === "permissions" || accountsOnlyLoading) && permissionTarget && users.filter((user) => user.username === permissionTarget.username).map((user) => <AccountPermissionDialog key={`${user.auth_user_id}:${user.role}`} actor={profile} user={user} initialModule={permissionTarget.module} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} onClose={() => setPermissionTarget(null)} />)}
+          {(tab === "permissions" || accountsOnlyLoading) && canConfigureAccount && permissionTarget && users.filter((user) => user.username === permissionTarget.username).map((user) => <AccountPermissionDialog key={`${user.auth_user_id}:${user.role}`} actor={profile} user={user} initialModule={permissionTarget.module} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} onClose={() => setPermissionTarget(null)} />)}
         </div>
       )}
 

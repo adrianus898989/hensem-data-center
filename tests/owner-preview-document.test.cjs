@@ -99,7 +99,7 @@ test('bootstrap precedes original scripts and requires no eval or network CSP al
 });
 
 function componentHarness(userId = 'offline-user-a', options = {}) {
-  const listeners = new Map(), effects = [], effectDeps = [], refs = [], states = [], cleanups = [], calls = [], phases = [], restoreCalls = [];
+  const listeners = new Map(), effects = [], effectDeps = [], refs = [], states = [], cleanups = [], calls = [], roleCalls = [], phases = [], restoreCalls = [];
   const values = new Map([[AUTH, 'offline-host-auth-must-not-enter-frame']]);
   const prefix = `hensem:owner-preview:${userId}:`;
   values.set(prefix + KEY, 'this-account-draft');
@@ -124,7 +124,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const localStorage = { getItem: key => values.get(key) ?? null,
     setItem(key, value) { if (throwOnWrite) throw Error('Synthetic quota failure'); values.set(key, value); },
     removeItem(key) { if (throwOnWrite) throw Error('Synthetic quota failure'); values.delete(key); } };
-  let environment, client, liveClient;
+  let environment, client, liveClient, roleClient;
   const requireStub = name => {
     if (name === 'react') return react;
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx };
@@ -148,6 +148,12 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     if (name === './AdminPreviewGrants') return { default: () => null };
     if (name === './AdminControlCenter') return { default: function AdminControlCenter(){} };
     if (name === './WorkOrderAccountAdmin') return { default: function WorkOrderAccountAdmin(){} };
+    if (name === './DashboardRoleManager') return { default: function DashboardRoleManager(){} };
+    if (name.endsWith('/dashboardRoleCatalog.json')) return {default:JSON.parse(fs.readFileSync(path.join(repo,'src/lib/dashboardRoleCatalog.json'),'utf8'))};
+    if (name.endsWith('/dashboardRoleAccess')) {
+      if(!roleClient){const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/dashboardRoleAccess.ts'),'utf8')),{...environment,module:helper,exports:helper.exports});roleClient=helper.exports;}
+      return roleClient;
+    }
     if (name.endsWith('/dashboardIdle')) return {recordDashboardActivity:()=>true};
     throw Error('Unexpected component test import: ' + name);
   };
@@ -156,7 +162,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     crypto: { randomUUID: () => 'offline-frame-channel' },
     document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
-    fetch: async (url, init) => { phases.push('fetch'); calls.push({ url, init }); const response=options.fetch ? await options.fetch(url, init) : { ok: true, status: 200, text: async () => HTML }; return typeof response.text==='function'?{...response,text:async()=>{phases.push('response:text');return response.text()}}:response; },
+    fetch: async (url, init) => { if(url.endsWith('/rest/v1/rpc/dashboard_role_access')){roleCalls.push({url,init});return {ok:true,status:200,json:async()=>({mode:(options.role||'owner')==='owner'?'owner':'legacy',roleId:null,roleName:null,version:0,permissions:[],canView:true})};} phases.push('fetch'); calls.push({ url, init }); const response=options.fetch ? await options.fetch(url, init) : { ok: true, status: 200, text: async () => HTML }; return typeof response.text==='function'?{...response,text:async()=>{phases.push('response:text');return response.text()}}:response; },
   };
   vm.runInNewContext(transpile(fs.readFileSync(componentPath, 'utf8')), environment, { filename: componentPath });
   const props = { canView: options.canView ?? true, session: currentSession,
@@ -164,7 +170,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const draw = () => { hookIndex = refIndex = callbackIndex = effectIndex = 0; return box.exports.default(props); };
   draw(); const child = {}; refs[0].current = { contentWindow: child };
   for (const effect of effects.splice(0)) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); }
-  return { values, prefix, child, calls, states, draw, effectDeps, phases, restoreCalls, rerenderSession:next=>{props.session=next;return draw()}, session:currentSession, channel: () => refs[1].current,
+  return { values, prefix, child, calls, roleCalls, states, draw, effectDeps, phases, restoreCalls, rerenderSession:next=>{props.session=next;return draw()}, session:currentSession, channel: () => refs[1].current,
     send: event => listeners.get('message')?.(event), dispose: () => cleanups.forEach(cleanup => cleanup()),
     checkPermission: () => intervalCheck?.(),
     failStorage: () => { throwOnWrite = true; } };
@@ -177,6 +183,7 @@ test('host sends session only to its protected fetch; iframe has no same-origin 
   const h = componentHarness();
   await flush();
   assert.equal(h.calls.length, 1);
+  assert.equal(h.roleCalls.length,1);assert.equal(h.roleCalls[0].init.headers.Authorization,'Bearer offline-host-access');assert.equal(h.roleCalls[0].init.cache,'no-store');
   assert.equal(h.calls[0].init.headers.Authorization, 'Bearer offline-host-access');
   assert.equal(h.calls[0].init.cache, 'no-store');
   assert.equal(h.calls[0].init.redirect, 'error');
@@ -205,7 +212,7 @@ test('restoration failure aborts the request, clears stale document state and ne
   let resolveHTML;const pending=new Promise(resolve=>{resolveHTML=resolve});
   const h=componentHarness('offline-restoration-failed',{fetch:async()=>({ok:true,status:200,text:()=>pending}),restore:()=>{throw Error('Synthetic approved revision mismatch')}});
   try {
-    await flush();h.states[0]='<!doctype html><html>Hensem synthetic stale document</html>';assert(findElement(h.draw(),'iframe'));resolveHTML(HTML);await flush();assert.equal(h.restoreCalls.length,1);assert.equal(h.states[0],'');assert.match(h.states[1],/Synthetic approved revision mismatch/);assert.equal(h.calls[0].init.signal.aborted,true);assert.equal(findElement(h.draw(),'iframe'),undefined);assert.deepEqual(h.phases,['fetch','response:text','restore']);h.checkPermission();await flush();assert.equal(h.calls.length,1,'failed restoration cancels that load lifecycle');
+    await flush();h.states[1]='<!doctype html><html>Hensem synthetic stale document</html>';assert(findElement(h.draw(),'iframe'));resolveHTML(HTML);await flush();assert.equal(h.restoreCalls.length,1);assert.equal(h.states[1],'');assert.match(h.states[2],/Synthetic approved revision mismatch/);assert.equal(h.calls[0].init.signal.aborted,true);assert.equal(findElement(h.draw(),'iframe'),undefined);assert.deepEqual(h.phases,['fetch','response:text','restore']);h.checkPermission();await flush();assert.equal(h.calls.length,1,'failed restoration cancels that load lifecycle');
   } finally {resolveHTML(HTML);h.dispose()}
 });
 
@@ -224,10 +231,10 @@ test('403 permission check aborts an initial HTML load and late success cannot r
     assert.equal(h.calls.length, 2);
     assert.equal(h.calls[1].url.endsWith('?check=1'), true);
     assert.equal(initialSignal.aborted, true, 'revocation must abort the shared initial request');
-    assert.equal(h.states[0], ''); assert(h.states[1], 'revocation remains visible as an error');
+    assert.equal(h.states[1], ''); assert(h.states[2], 'revocation remains visible as an error');
     // Deliberately resolve despite abort: a buffered or non-abortable body must still be ignored.
     resolveHTML(HTML); await flush();
-    assert.equal(h.states[0], '', 'late initial HTML cannot restore documentHtml after revocation');
+    assert.equal(h.states[1], '', 'late initial HTML cannot restore documentHtml after revocation');
     assert.equal(h.restoreCalls.length,0,'revoked buffered HTML never reaches the transformation');
     assert.equal(findElement(h.draw(), 'iframe'), undefined);
     h.checkPermission(); await flush();
@@ -277,7 +284,7 @@ test('same-user session refresh keeps the iframe and uses the latest session for
   assert.equal(h.effectDeps.length,dependencies.length);
   h.effectDeps.forEach((deps,i)=>{assert.equal(deps.length,dependencies[i].length);deps.forEach((dep,j)=>assert(Object.is(dep,dependencies[i][j]),'token/object refresh does not invalidate the document-load effect'));});
   assert(h.effectDeps.every(deps=>!deps.includes(fresh)&&!deps.includes(h.session)));
-  h.checkPermission();await flush();assert.equal(h.calls.length,2);assert(h.calls[1].url.endsWith('?check=1'));assert.equal(h.calls[1].init.headers.Authorization,'Bearer offline-new-access');
+  h.checkPermission();await flush();assert.equal(h.calls.length,2);assert(h.calls[1].url.endsWith('?check=1'));assert.equal(h.calls[1].init.headers.Authorization,'Bearer offline-new-access');assert.equal(h.roleCalls.length,2);assert.equal(h.roleCalls[1].init.headers.Authorization,'Bearer offline-new-access');
   assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);h.dispose();
 });
 
@@ -379,12 +386,12 @@ test('bookmarked page reaches the authorized iframe while denied accounts never 
 
 
 function elements(node){if(!node||typeof node!=='object')return[];return[node,...(Array.isArray(node.props?.children)?node.props.children:[node.props?.children]).flatMap(elements)]}
-test('account page opens a real list directly with two tabs, keeps the iframe and enforces each permission',async()=>{
+test('account page opens a real list with permitted account and role tabs, keeps the iframe and enforces each permission',async()=>{
  for(const options of [{role:'owner',accounts:true,workorder:true},{role:'admin',accounts:true,workorder:false},{role:'admin',management_permissions:{manage_viewers:false},accounts:false,workorder:false},{role:'viewer',accounts:false,workorder:false}]){
   const h=componentHarness('account-fixture',options);await flush();const before=findElement(h.draw(),'iframe').props.srcDoc,reads=h.calls.length;
   const send=data=>h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),...data}});
   send({command:'account-page',active:true,bounds:{top:143,left:242,width:1200}});let tree=h.draw(),all=elements(tree);
-  const tabs=all.filter(n=>n.props?.role==='tab');assert.deepEqual(tabs.map(n=>n.props.children),['前端工单账号','后台账号']);assert.equal(tabs[0].props.disabled,!options.workorder);assert.equal(tabs[1].props.disabled,!options.accounts);
+  const tabs=all.filter(n=>n.props?.role==='tab');assert.deepEqual(tabs.map(n=>n.props.children),options.role==='owner'?['前端工单账号','后台账号','角色与目录权限']:['前端工单账号','后台账号']);assert.equal(tabs[0].props.disabled,!options.workorder);assert.equal(tabs[1].props.disabled,!options.accounts);
   assert.equal(all.some(n=>n.type?.name==='WorkOrderAccountAdmin'),options.workorder);assert.equal(all.some(n=>n.type?.name==='AdminControlCenter'),!options.workorder&&options.accounts);
   assert(!all.some(n=>n.props?.role==='dialog'||n.props?.['aria-modal']),'page is inline, not another dialog');
   assert(!all.some(n=>n.type==='button'&&/^(关闭|管理后台账号|管理工单账号)$/.test(n.props.children)));

@@ -344,6 +344,24 @@ button {
   overflow: auto;
 }
 
+/* Shared column guides for backend tables, account/role matrices and table dialogs.
+   Paint only within actual cells; preserve existing borders, widths and sticky shadows. */
+:where(.app-shell, .admin-inline-page, .dashboard-role-manager, .account-editor-dialog, .detail-modal, .modal-card, .wo-account-table)
+:where(table:not(.original-rate-grid-table) > :is(thead, tbody, tfoot) > tr > :is(th, td):not(:last-child)) {
+  position: relative;
+}
+
+:where(.app-shell, .admin-inline-page, .dashboard-role-manager, .account-editor-dialog, .detail-modal, .modal-card, .wo-account-table)
+:where(table:not(.original-rate-grid-table) > :is(thead, tbody, tfoot) > tr > :is(th, td):not(:last-child))::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  width: 1px;
+  background: #e3eaf4;
+  pointer-events: none;
+}
+
 table {
   width: 100%;
   border-collapse: separate;

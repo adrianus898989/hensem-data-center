@@ -26,7 +26,7 @@ function fixtures() {
   };
 }
 function harness(initialProfile = profile(), env = {}) {
-  const state = {profile:initialProfile,authStatus:200,profileStatus:200,authUser:{id:'synthetic-user',user_metadata:{role:'owner',data_scope:{mode:'all',countries:[]}}},dataReads:0,jobs:0,requests:[],payloads:fixtures(),db:{},rpc:{rows:[]}};
+  const state = {profile:initialProfile,authStatus:200,profileStatus:200,authUser:{id:'synthetic-user',user_metadata:{role:'owner',data_scope:{mode:'all',countries:[]}}},roleAccess:{mode:initialProfile.role==='owner'?'owner':'legacy',canView:true,permissions:[]},roleStatus:200,dataReads:0,jobs:0,requests:[],payloads:fixtures(),db:{},rpc:{rows:[]}};
   const environment = {NEXT_PUBLIC_SUPABASE_URL:'https://scope-preview.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'public-synthetic',...env};
   const mocks = {
     '@/lib/monthlySnapshotStore':{
@@ -49,6 +49,7 @@ function harness(initialProfile = profile(), env = {}) {
     assert.equal(url.origin,'https://scope-preview.invalid','no real network request permitted');
     if(url.pathname==='/auth/v1/user')return Response.json(state.authUser,{status:state.authStatus});
     if(url.pathname==='/rest/v1/dashboard_profiles')return Response.json([state.profile],{status:state.profileStatus});
+    if(url.pathname==='/rest/v1/rpc/dashboard_role_access')return Response.json(state.roleAccess,{status:state.roleStatus});
     state.dataReads++;
     if(url.pathname.startsWith('/rest/v1/rpc/'))return Response.json(state.rpc);
     const name=url.pathname.split('/').pop();
@@ -116,7 +117,7 @@ test('fresh profile applies scope shrink across requests and client claims canno
 test('one Request shares verification without caching across requests',async()=>{
   const h=harness(),request=h.request('work-orders'),api=h.api();
   await Promise.all([api.requireDashboardDataAccess(request,'work_orders'),api.requireDashboardDataAccess(request,'auto_withdraw')]);
-  assert.equal(h.state.requests.length,2);await api.requireDashboardDataAccess(h.request('work-orders'));assert.equal(h.state.requests.length,4);
+  assert.equal(h.state.requests.length,3);await api.requireDashboardDataAccess(h.request('work-orders'));assert.equal(h.state.requests.length,6);
 });
 for(const [route,module]of [['work-orders','work_orders'],['customer-service','customer_service'],['auto-withdraw','auto_withdraw'],['supabase-third-party-volume','third_party'],['supabase-status','third_party']])test('module revocation blocks '+route+' for viewer and admin',async()=>{
   for(const role of ['viewer','admin']){

@@ -48,8 +48,8 @@ async function request(patch, options = {}) {
   vm.runInNewContext(compiled, {
     createClient: () => client,
     Deno: { env: { get: () => "fixture-only" }, serve: fn => { handler = fn; } },
-    Request, Response, Date, Intl, console,
-    fetch: () => { throw new Error("No external requests allowed"); },
+    Request, Response, Date, Intl, console, AbortSignal,
+    fetch: async (url) => { assert(String(url).endsWith("/rest/v1/rpc/dashboard_role_access")); return Response.json({mode:caller.role === "owner" ? "owner" : "legacy",canView:true,permissions:[]}); },
   });
   const response = await handler(new Request("https://fixture.invalid", {
     method: "POST", headers: options.noToken ? {} : { authorization: "Bearer fixture" },

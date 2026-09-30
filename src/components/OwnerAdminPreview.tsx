@@ -8,6 +8,8 @@ import { adminPreviewRequest } from "@/lib/adminPreviewClient";
 import AdminPreviewGrants from "./AdminPreviewGrants";
 import AdminControlCenter from "./AdminControlCenter";
 import WorkOrderAccountAdmin from "./WorkOrderAccountAdmin";
+import DashboardRoleManager from "./DashboardRoleManager";
+import { readDashboardRoleAccess, dashboardRoleAllows, type DashboardRoleAccess } from "@/lib/dashboardRoleAccess";
 import { installAdminLiveBridge, makeAdminLiveDocument } from "@/lib/adminLiveBridge";
 import { OWNER_PREVIEW_HOST_CSS, ownerPreviewActivityTime, ownerPreviewAccountCommand, ownerPreviewAccountPage, makeOwnerPreviewShellDocument, mountOwnerPreviewHostShell } from "@/lib/ownerPreviewShell";
 
@@ -18,10 +20,12 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   const frame=useRef<HTMLIFrameElement>(null),channel=useRef("");
   const sessionRef=useRef(session);sessionRef.current=session;
   const accountId=profile.auth_user_id;
+  const roleAccessRef=useRef<DashboardRoleAccess|null>(null);
+  const [roleAccess,setRoleAccess]=useState<DashboardRoleAccess|null>(null);
   const [documentHtml,setDocumentHtml]=useState(""),[error,setError]=useState(""),[reload,setReload]=useState(0);
   const allowed=profile.active===true&&canView,owner=profile.active===true&&profile.role==="owner";
   const [showGrants,setShowGrants]=useState(false);
-  const [accountView,setAccountView]=useState<"accounts"|"workorder"|null>(null);
+  const [accountView,setAccountView]=useState<"accounts"|"workorder"|"roles"|null>(null);
   const [accountBounds,setAccountBounds]=useState<{top:number;left:number;width:number}|null>(null);
   const canManageAccounts=profile.active===true&&(owner||(profile.role==="admin"&&normalizedManagementPermissions(profile).manage_viewers));
   const activeAccountView=accountView||(owner?"workorder":"accounts");
@@ -30,12 +34,16 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   const storagePrefix=`hensem:owner-preview:${profile.auth_user_id}:`;
   const readDrafts=useCallback(()=>{const values:Record<string,string>={};for(const key of OWNER_PREVIEW_DRAFT_KEYS){try{const value=localStorage.getItem(storagePrefix+key);if(value!==null&&ownerPreviewDraftAllowed(key,value))values[key]=value}catch{}}return values},[storagePrefix]);
   useEffect(()=>{
-    setDocumentHtml("");setError("");setAccountBounds(null);setAccountView(null);if(!allowed)return;
+    setDocumentHtml("");setError("");setAccountBounds(null);setAccountView(null);roleAccessRef.current=null;setRoleAccess(null);if(!allowed)return;
     let cancelled=false,checking=false;const controller=new AbortController();
     channel.current=crypto.randomUUID();
     const request=async(check=false)=>{
+      const policy=await readDashboardRoleAccess(sessionRef.current,controller.signal);
+      if(cancelled)return;if(!policy.canView)throw Error("当前角色没有可用目录，请联系管理员分配角色。");
+      if(check&&JSON.stringify(policy)!==JSON.stringify(roleAccessRef.current)){setReload(x=>x+1);return;}
+      roleAccessRef.current=policy;setRoleAccess(policy);
       const response=await adminPreviewRequest(sessionRef.current,check?"?check=1":"",{signal:controller.signal});
-      if(!check){const html=await response.text();if(!cancelled)setDocumentHtml(makeOwnerPreviewDocument(makeOwnerPreviewShellDocument(makeAdminLiveDocument(restoreApprovedAdmin(html),channel.current),channel.current,owner),readDrafts(),channel.current));}
+      if(!check){const html=await response.text();if(!cancelled)setDocumentHtml(makeOwnerPreviewDocument(makeOwnerPreviewShellDocument(makeAdminLiveDocument(restoreApprovedAdmin(html),channel.current,policy),channel.current,owner),readDrafts(),channel.current));}
     };
     const fail=(e:unknown)=>{if(cancelled)return;cancelled=true;controller.abort();setDocumentHtml("");setError(e instanceof Error?e.message:"后台加载失败")};
     request().catch(fail);
@@ -46,19 +54,20 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   },[allowed,accountId,reload,readDrafts,owner]);
   useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{const data=event.data;const activity=ownerPreviewActivityTime(event,frame.current?.contentWindow,channel.current);if(activity!==null){recordDashboardActivity(activity);return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){setAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,canManageAccounts,owner]);
   const hasDocument=Boolean(documentHtml);
-  useEffect(()=>{if(!allowed||!hasDocument)return;return installAdminLiveBridge({source:()=>frame.current?.contentWindow,channel:()=>channel.current,session:()=>sessionRef.current})},[allowed,hasDocument,accountId]);
+  useEffect(()=>{if(!allowed||!hasDocument)return;return installAdminLiveBridge({source:()=>frame.current?.contentWindow,channel:()=>channel.current,session:()=>sessionRef.current,roleAccess:()=>roleAccessRef.current})},[allowed,hasDocument,accountId]);
   return <section className="owner-preview-shell" aria-label="数据中控后台">
     <style>{OWNER_PREVIEW_HOST_CSS}</style>
     {owner&&<button type="button" className="owner-preview-shell-grants" aria-label="管理后台查看授权" onClick={()=>setShowGrants(true)}>查看授权</button>}
     {allowed&&documentHtml?<iframe ref={frame} title="数据中控后台" sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" srcDoc={documentHtml} className="owner-preview-shell-frame"/>:<div role={error?"alert":"status"} className="owner-preview-shell-status">{!allowed?"当前账号没有后台查看权限":error||"正在验证查看权限并加载后台…"}<div className="owner-preview-shell-status-actions"><button type="button" className="owner-preview-shell-return" onClick={onLogout}>退出登录</button>{error&&<button type="button" className="owner-preview-shell-return" onClick={()=>setReload(x=>x+1)}>重新加载</button>}</div></div>}
     {owner&&showGrants&&<AdminPreviewGrants session={session} onClose={()=>setShowGrants(false)}/>}
-    {allowed&&hasDocument&&accountBounds&&<section aria-label="账号与角色权限" className="owner-preview-account-page" style={{top:Math.max(48,accountBounds.top),left:accountBounds.left,width:accountBounds.width}}>
+    {allowed&&hasDocument&&accountBounds&&dashboardRoleAllows(roleAccess,"access")&&<section aria-label="账号与角色权限" className="owner-preview-account-page" style={{top:Math.max(48,accountBounds.top),left:accountBounds.left,width:accountBounds.width}}>
       <div role="tablist" aria-label="账号类型" className="owner-preview-account-tabs">
         <button type="button" role="tab" id="owner-workorder-tab" aria-controls="owner-workorder-panel" aria-selected={activeAccountView==="workorder"} disabled={!owner} title={owner?undefined:"仅总管理员可管理前端工单账号"} onClick={()=>setAccountView("workorder")}>前端工单账号</button>
         <button type="button" role="tab" id="owner-backend-tab" aria-controls="owner-backend-panel" aria-selected={activeAccountView==="accounts"} disabled={!canManageAccounts} onClick={()=>setAccountView("accounts")}>后台账号</button>
+        {owner&&<button type="button" role="tab" id="owner-roles-tab" aria-controls="owner-roles-panel" aria-selected={activeAccountView==="roles"} onClick={()=>setAccountView("roles")}>角色与目录权限</button>}
       </div>
-      <div role="tabpanel" id={activeAccountView==="workorder"?"owner-workorder-panel":"owner-backend-panel"} aria-labelledby={activeAccountView==="workorder"?"owner-workorder-tab":"owner-backend-tab"} className="owner-preview-account-body">
-        {activeAccountView==="accounts"&&canManageAccounts?<AdminControlCenter key={accountId} open session={session} profile={profile} section="accounts" embedded accountsOnlyLoading manualQuery onClose={()=>{}}/>:activeAccountView==="workorder"&&owner?<WorkOrderAccountAdmin key={accountId} session={session} manualQuery/>:<p role="alert" className="owner-preview-account-denied">当前账号没有此项账号管理权限。</p>}
+      <div role="tabpanel" id={activeAccountView==="workorder"?"owner-workorder-panel":activeAccountView==="roles"?"owner-roles-panel":"owner-backend-panel"} aria-labelledby={activeAccountView==="workorder"?"owner-workorder-tab":activeAccountView==="roles"?"owner-roles-tab":"owner-backend-tab"} className="owner-preview-account-body">
+        {activeAccountView==="roles"&&owner?<DashboardRoleManager key={accountId} session={session} profile={profile}/>:activeAccountView==="accounts"&&canManageAccounts?<AdminControlCenter key={accountId} open session={session} profile={profile} roleAccess={roleAccess} section="accounts" embedded accountsOnlyLoading manualQuery onClose={()=>{}}/>:activeAccountView==="workorder"&&owner?<WorkOrderAccountAdmin key={accountId} session={session} manualQuery/>:<p role="alert" className="owner-preview-account-denied">当前账号没有此项账号管理权限。</p>}
       </div>
     </section>}
 

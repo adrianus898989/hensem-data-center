@@ -1,0 +1,178 @@
+const {test,before,after,beforeEach,afterEach}=require('node:test');
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const {PGlite}=require('@electric-sql/pglite');
+const read=p=>fs.readFileSync(path.join(__dirname,'..',p),'utf8');
+const migration=read('supabase/migrations/20260930180000_dashboard_roles.sql');
+const OWNER='11111111-1111-4111-8111-111111111111',ADMIN='22222222-2222-4222-8222-222222222222',VIEWER='33333333-3333-4333-8333-333333333333',LEGACY='44444444-4444-4444-8444-444444444444';
+let db,acl,profiles;
+const scalar=async(q,p=[])=>Object.values((await db.query(q,p)).rows[0])[0];
+const as=async id=>{await db.exec('reset role');await db.query("select set_config('request.jwt.claim.sub',$1,false)",[id]);await db.exec('set role authenticated');};
+const admin=()=>db.exec('reset role');
+const manage=async r=>scalar('select public.dashboard_role_manage($1::jsonb)',[JSON.stringify(r)]);
+const access=()=>scalar('select public.dashboard_role_access()');
+const execute=(page,r)=>scalar('select public.dashboard_admin_execute($1,$2::jsonb)',[page,JSON.stringify(r)]);
+const create=async permissions=>(await manage({operation:'create',name:'Role '+crypto.randomUUID(),description:' test ',permissions})).role;
+const assign=(id,role,expectedVersion=0)=>manage({operation:'assign',accountId:id,roleId:role.id,expectedVersion});
+async function granted(id,permissions){await as(OWNER);const r=await create(permissions);await assign(id,r);await as(id);return r;}
+async function denied(fn,pattern=/denied|required|permission/){await db.exec('savepoint denied');try{await assert.rejects(fn,pattern);}finally{await db.exec('rollback to savepoint denied');}}
+function fn(source,name){const start=source.indexOf('create '+(source.includes('create or replace function '+name)?'or replace ':'')+'function '+name);const end=source.indexOf('\n$$;',start);return source.slice(start,end+4);}
+before(async()=>{
+ db=new PGlite();await db.exec(`create schema private;create schema auth;create role anon;create role authenticated;create role service_role;
+ grant usage on schema public,private,auth to authenticated;
+ create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
+ grant execute on function auth.uid() to authenticated;
+ create table dashboard_profiles(auth_user_id uuid primary key,username text unique,role text,active boolean,permissions jsonb,data_scope jsonb,updated_at timestamptz default now());
+ create table dashboard_admin_preview_grants(auth_user_id uuid primary key,can_view boolean,granted_by uuid,updated_at timestamptz default now());
+ create table dashboard_audit_log(id bigint generated always as identity,actor_user_id uuid,actor_username text,action text,target_username text,details jsonb);
+ create function private.dashboard_current_data_scope() returns jsonb language sql stable security definer as $$select data_scope from public.dashboard_profiles where auth_user_id=auth.uid()$$;
+ insert into dashboard_profiles(auth_user_id,username,role,active,permissions,data_scope) values
+ ('${OWNER}','owner','owner',true,'{}','{"mode":"all"}'),('${ADMIN}','admin','admin',true,'{"auto_withdraw":true,"third_party":true}','{"mode":"restricted","platforms":["A"]}'),
+ ('${VIEWER}','viewer','viewer',true,'{"auto_withdraw":true,"third_party":true}','{"mode":"restricted","platforms":["B"]}'),('${LEGACY}','legacy','viewer',true,'{"third_party":true}','{"mode":"restricted","platforms":["C"]}');
+ insert into dashboard_admin_preview_grants select auth_user_id,true,'${OWNER}',now() from dashboard_profiles;`);
+ await db.exec(fn(read('supabase/admin-live-query.sql'),'private.dashboard_admin_live_scope('));
+ await db.exec(fn(read('supabase/dashboard-v250-owner-fast-query.sql'),'public.dashboard_has_permission('));
+ await db.exec(`revoke all on function private.dashboard_admin_live_scope() from public;
+ revoke all on function public.dashboard_has_permission(text) from public;grant execute on function public.dashboard_has_permission(text) to anon,authenticated,service_role;
+ create function private.dashboard_admin_live_query(p_request jsonb) returns jsonb language plpgsql stable security definer set search_path='' as $$declare scope jsonb:=private.dashboard_admin_live_scope();begin if p_request ? 'fail' then raise exception 'fixture_failure';end if;return jsonb_build_object('request',p_request,'scope',scope,'context',private.dashboard_role_context_valid());end$$;
+ create function public.dashboard_admin_live_query(p_request jsonb) returns jsonb language sql stable security invoker as $$select private.dashboard_admin_live_query(p_request)$$;
+ grant execute on function private.dashboard_admin_live_query(jsonb),public.dashboard_admin_live_query(jsonb) to authenticated;`);
+ for(const name of ['submission_analysis','member_daily','workorder_records','auto_withdraw','deposit_issues','configuration_access','provider_config','platform_assignments'])await db.exec(`create function private.dashboard_admin_live_${name}(p_request jsonb) returns jsonb language plpgsql stable security definer set search_path='' as $$begin perform private.dashboard_admin_live_scope();return jsonb_build_object('rpc','${name}','request',p_request);end$$;grant execute on function private.dashboard_admin_live_${name}(jsonb) to authenticated;`);
+ await db.exec(`create function private.dashboard_admin_live_configuration_write(p_request jsonb) returns jsonb language plpgsql volatile security definer set search_path='' as $$begin perform private.dashboard_admin_live_scope();if not exists(select 1 from public.dashboard_profiles where auth_user_id=auth.uid() and role in ('owner','admin')) or p_request->>'operation'='grant' and not exists(select 1 from public.dashboard_profiles where auth_user_id=auth.uid() and role='owner') then raise exception 'configuration_denied';end if;return p_request;end$$;
+ create function private.dashboard_admin_live_withdraw_note(p_request jsonb) returns jsonb language plpgsql volatile security definer set search_path='' as $$begin perform private.dashboard_admin_live_scope();if not exists(select 1 from public.dashboard_profiles where auth_user_id=auth.uid() and role in ('owner','admin')) or not public.dashboard_has_permission('auto_withdraw') then raise exception 'note_denied';end if;return p_request;end$$;
+ grant execute on function private.dashboard_admin_live_configuration_write(jsonb),private.dashboard_admin_live_withdraw_note(jsonb) to authenticated;`);
+ acl=await scalar("select jsonb_object_agg(oid::regprocedure::text,proacl::text) from pg_proc where oid in ('private.dashboard_admin_live_scope()'::regprocedure,'public.dashboard_has_permission(text)'::regprocedure)");
+ profiles=await scalar('select jsonb_agg(to_jsonb(p) order by username) from dashboard_profiles p');await db.exec(migration);
+});
+after(async()=>db?.close());beforeEach(async()=>{await db.exec('begin');await as(OWNER);});afterEach(async()=>{await db.exec('rollback');await admin();});
+
+test('catalog exactly matches shared UI permission catalog and HMAC matches independent SHA256',async()=>{
+ await admin();const catalog=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(catalog.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages);
+ const key=Buffer.alloc(32,11),msg='role-context';assert.equal(await scalar("select private.dashboard_role_hmac($1,decode($2,'hex'))",[msg,key.toString('hex')]),crypto.createHmac('sha256',key).update(msg).digest('hex'));
+});
+test('migration preserves every existing account and exact existing function ACLs; replay succeeds',async()=>{
+ await admin();assert.deepEqual(await scalar('select jsonb_agg(to_jsonb(p) order by username) from dashboard_profiles p'),profiles);
+ assert.deepEqual(await scalar("select jsonb_object_agg(oid::regprocedure::text,proacl::text) from pg_proc where oid in ('private.dashboard_admin_live_scope()'::regprocedure,'public.dashboard_has_permission(text)'::regprocedure)"),acl);
+ // DDL transaction control omitted only for replay inside the rollback fixture.
+ await db.exec(migration.replace(/^begin;$/m,'').replace(/^commit;$/m,''));
+});
+test('owner full access, legacy permissions and scope remain unchanged',async()=>{
+ assert.equal((await access()).mode,'owner');assert.ok((await access()).permissions.includes('providers.query'));await as(LEGACY);const a=await access();assert.equal(a.mode,'legacy');assert.equal(a.canView,true);assert.ok(a.permissions.includes('providers.query'));
+ assert.equal(await scalar("select public.dashboard_has_permission('third_party')"),true);
+ assert.deepEqual((await scalar("select public.dashboard_admin_live_query('{}')")).scope,{mode:'restricted',platforms:['C']});
+});
+test('CRUD and assignment preserve Auth identity, coarse role, active flag and data scope; audit is written',async()=>{
+ const r=await create(['providers.view','providers.query']);assert.equal(r.description,'test');assert.equal(r.version,1);
+ const result=await assign(ADMIN,r);assert.equal(result.account.assignment_version,1);assert.equal(result.account.role,'admin');
+ await admin();assert.deepEqual(await scalar('select jsonb_agg(to_jsonb(p) order by username) from dashboard_profiles p'),profiles);
+ assert.equal(await scalar('select count(*)::int from private.dashboard_role_audit'),2);assert.equal(await scalar("select count(*)::int from public.dashboard_audit_log where action like 'role_%'"),2);
+});
+test('only fresh active owner manages roles; owner cannot be assigned; no unassignment fallback',async()=>{
+ const r=await create([]);await denied(()=>assign(OWNER,r));await denied(()=>manage({operation:'assign',accountId:ADMIN,roleId:null,expectedVersion:0}),/invalid/);
+ await as(ADMIN);await denied(()=>manage({operation:'list'}),/owner_required/);
+ await admin();await db.exec(`update dashboard_profiles set active=false where auth_user_id='${OWNER}'`);await as(OWNER);await denied(()=>manage({operation:'list'}),/owner_required/);
+});
+test('permission validation rejects unknown/duplicate/missing-view/null keys and does not auto-grant',async()=>{
+ for(const permissions of [['providers.query'],['providers.view','providers.view'],['providers.view','made_up.edit'],null,{}])await denied(()=>create(permissions),/invalid/);
+ const r=await create([]);assert.deepEqual(r.permissions,[]);await assign(ADMIN,r);await as(ADMIN);assert.equal((await access()).canView,false);
+});
+test('optimistic role and assignment versions reject stale edits, description contracts roundtrip',async()=>{
+ const r=await create(['providers.view']);const updated=(await manage({operation:'update',roleId:r.id,expectedVersion:1,name:' Renamed ',description:' description ',permissions:['providers.view','providers.query']})).role;
+ assert.equal(updated.version,2);assert.equal(updated.description,'description');assert.equal(updated.name,'Renamed');
+ await denied(()=>manage({operation:'archive',roleId:r.id,expectedVersion:1}),/role_version_conflict/);
+ await assign(ADMIN,r);await denied(()=>assign(ADMIN,r),/assignment_version_conflict/);assert.equal((await assign(ADMIN,r,1)).account.assignment_version,2);
+});
+test('assigned catalog is view-only; query requires query capability and cannot borrow another page',async()=>{
+ await granted(VIEWER,['providers.view']);assert.equal((await execute('providers',{action:'catalog'})).context,true);
+ await denied(()=>execute('providers',{action:'aggregate'}));await denied(()=>execute('events',{action:'catalog'}));
+ await denied(()=>execute('providers',{action:'configurationWrite',operation:'provider'}));
+});
+test('assigned scoped gateway dispatch succeeds and raw detail has a distinct permission',async()=>{
+ const r=await granted(VIEWER,['providers.view','providers.query']);const result=await execute('providers',{action:'aggregate'});assert.deepEqual(result.scope,{mode:'restricted',platforms:['B']});
+ await denied(()=>execute('providers',{action:'query'}));await denied(()=>execute('providers',{action:'submissionAnalysis',operation:'members'}));
+ await as(OWNER);await manage({operation:'update',roleId:r.id,expectedVersion:1,permissions:[...r.permissions,'providers.detail']});await as(VIEWER);
+ assert.equal((await execute('providers',{action:'query'})).request.action,'query');assert.equal((await execute('providers',{action:'submissionAnalysis',operation:'members'})).rpc,'submission_analysis');
+});
+test('assigned direct public/private data RPC and old module helper cannot bypass gateway',async()=>{
+ await granted(VIEWER,['providers.view','providers.query']);await denied(()=>scalar("select public.dashboard_admin_live_query('{}')"),/role_gateway_required/);
+ await denied(()=>scalar("select private.dashboard_admin_live_query('{}')"),/role_gateway_required/);assert.equal(await scalar("select public.dashboard_has_permission('third_party')"),false);
+});
+test('forged session variable and naked JSON never authorize assigned users',async()=>{
+ await granted(ADMIN,['providers.view','providers.query']);for(const value of ['true','{}',JSON.stringify({payload:{uid:ADMIN,txid:'1',pid:'1'},signature:'guess'})]){
+ await db.query("select set_config('hensem.dashboard_role_context',$1,true)",[value]);await denied(()=>scalar("select private.dashboard_admin_live_query('{}')"),/role_gateway_required/);
+ }
+});
+test('gateway restores previous context after success and after downstream failure',async()=>{
+ await granted(ADMIN,['providers.view','providers.query']);await db.exec("select set_config('hensem.dashboard_role_context','{}',true)");await execute('providers',{action:'aggregate'});
+ assert.equal(await scalar("select current_setting('hensem.dashboard_role_context')"),'{}');await denied(()=>execute('providers',{action:'aggregate',fail:true}),/fixture_failure/);
+ assert.equal(await scalar("select current_setting('hensem.dashboard_role_context')"),'{}');await denied(()=>scalar("select private.dashboard_admin_live_query('{}')"),/role_gateway_required/);
+});
+test('old write upper bounds remain: viewer cannot edit, admin still needs old coarse permission',async()=>{
+ const permissions=['auto_withdraw.view','auto_withdraw.edit'];await granted(VIEWER,permissions);await denied(()=>execute('auto_withdraw',{action:'withdrawNote'}),/note_denied/);
+ await granted(ADMIN,permissions);assert.deepEqual(await execute('auto_withdraw',{action:'withdrawNote',id:'note'}),{id:'note'});
+ await admin();await db.exec(`update dashboard_profiles set permissions='{}' where auth_user_id='${ADMIN}'`);await as(ADMIN);await denied(()=>execute('auto_withdraw',{action:'withdrawNote'}),/note_denied/);
+});
+test('configuration writes cannot cross provider/team pages and grants remain owner-only',async()=>{
+ await granted(ADMIN,['provider_config.view','provider_config.edit','teams.view','teams.edit']);
+ assert.deepEqual(await execute('provider_config',{action:'configurationWrite',operation:'provider'}),{operation:'provider'});
+ await denied(()=>execute('provider_config',{action:'configurationWrite',operation:'platform'}));await denied(()=>execute('teams',{action:'configurationWrite',operation:'provider'}));
+ await denied(()=>execute('provider_config',{action:'configurationWrite',operation:'grant'}),/role_permission_denied/);
+});
+test('workorder views and operator statistics cannot be switched to another page',async()=>{
+ await granted(ADMIN,['workorders.view','workorders.query','workorders.detail','workorder_reconciliation.view','workorder_reconciliation.query','withdraw_operators.view','withdraw_operators.query']);
+ for(const view of ['records','orders'])assert.equal((await execute('workorders',{action:'workorderRecords',view,operation:'list'})).request.view,view);
+ await denied(()=>execute('workorders',{action:'workorderRecords',view:'workload'}));await denied(()=>execute('workorder_reconciliation',{action:'workorderRecords',view:'orders'}));
+ await denied(()=>execute('withdraw_operators',{action:'autoWithdraw',view:'auto'}));assert.equal((await execute('withdraw_operators',{action:'autoWithdraw',view:'operators'})).request.view,'operators');
+});
+test('archived assignments stay assigned and deny, including immediately stale contexts',async()=>{
+ const r=await granted(ADMIN,['providers.view','providers.query']);await as(OWNER);await manage({operation:'archive',roleId:r.id,expectedVersion:1});await as(ADMIN);
+ const a=await access();assert.equal(a.mode,'assigned');assert.equal(a.roleId,r.id);assert.equal(a.version,2);assert.deepEqual(a.permissions,[]);assert.equal(a.canView,false);await denied(()=>execute('providers',{action:'aggregate'}));
+});
+test('fresh disabled profile and can_view revocation are never bypassed',async()=>{
+ await granted(ADMIN,['providers.view','providers.query']);await admin();await db.exec(`update dashboard_admin_preview_grants set can_view=false where auth_user_id='${ADMIN}'`);await as(ADMIN);
+ assert.equal((await access()).canView,false);await denied(()=>execute('providers',{action:'aggregate'}));
+ await admin();await db.exec(`update dashboard_profiles set active=false where auth_user_id='${ADMIN}'`);await as(ADMIN);await denied(access,/profile_denied/);
+});
+test('private role tables and secret/helpers cannot be read or called by authenticated; new RPC rejects anon/service',async()=>{
+ await denied(()=>scalar('select count(*) from private.dashboard_role_context_secret'),/permission denied/);
+ await denied(()=>scalar('select count(*) from private.dashboard_roles'),/permission denied/);await denied(()=>scalar('select private.dashboard_role_context_valid()'),/permission denied/);
+ await admin();for(const role of ['anon','service_role'])for(const signature of ['public.dashboard_role_access()','public.dashboard_role_manage(jsonb)','public.dashboard_admin_execute(text,jsonb)'])assert.equal(await scalar('select has_function_privilege($1,$2,\'EXECUTE\')',[role,signature]),false);
+});
+test('gateway refuses owner/legacy, arbitrary RPCs and owner-only worker operation logs',async()=>{
+ await denied(()=>execute('providers',{action:'catalog'}),/assigned_role_required/);await granted(ADMIN,['providers.view','providers.query']);
+ await denied(()=>execute('workorder_operation_logs',{action:'portalOperationLogs'}));await denied(()=>execute('workorder_operation_logs',{action:'dashboard_role_manage'}));
+});
+
+
+test('empty-role assignment gains only newly added views; disabled assigned account can be reenabled without reassign',async()=>{
+ const r=await create([]);await assign(ADMIN,r);await as(ADMIN);assert.equal((await access()).canView,false);
+ await as(OWNER);await manage({operation:'update',roleId:r.id,expectedVersion:1,permissions:['providers.view']});await as(ADMIN);assert.equal((await access()).canView,true);
+ await admin();await db.exec(`update dashboard_profiles set active=false where auth_user_id='${VIEWER}'`);await as(OWNER);await assign(VIEWER,r);
+ await admin();await db.exec(`update dashboard_profiles set active=true where auth_user_id='${VIEWER}'`);await as(VIEWER);assert.equal((await access()).canView,true);
+ await admin();await db.exec(`update dashboard_admin_preview_grants set can_view=false where auth_user_id='${ADMIN}'`);await as(OWNER);await manage({operation:'update',roleId:r.id,expectedVersion:2,name:'Still denied'});await as(ADMIN);assert.equal((await access()).canView,false);
+});
+
+async function signedContext(patch={}){
+ await admin();const a=await access();const payload=await scalar("select jsonb_build_object('uid',auth.uid(),'txid',pg_current_xact_id()::text,'pid',pg_backend_pid()::text,'roleId',$1::text,'roleVersion',$2::text,'assignmentVersion',$3::text,'page','providers','action','aggregate','rpc','dashboard_admin_live_query','capability','query')||$4::jsonb",[a.roleId,String(a.version),String(a.assignmentVersion),JSON.stringify(patch)]);
+ return scalar("select jsonb_build_object('payload',$1::jsonb,'signature',private.dashboard_role_hmac(($1::jsonb)::text,secret)) from private.dashboard_role_context_secret",[JSON.stringify(payload)]);
+}
+test('even legitimately signed contexts are bound to user, backend, transaction and current role version',async()=>{
+ const role=await granted(ADMIN,['providers.view','providers.query']);
+ for(const patch of [{uid:VIEWER},{pid:'0'},{txid:'0'},{roleVersion:'99'},{assignmentVersion:'99'}]){
+  const context=await signedContext(patch);await as(ADMIN);await db.query("select set_config('hensem.dashboard_role_context',$1,true)",[JSON.stringify(context)]);await denied(()=>scalar("select private.dashboard_admin_live_query('{}')"),/role_gateway_required/);
+ }
+ const context=await signedContext();await as(ADMIN);await db.query("select set_config('hensem.dashboard_role_context',$1,true)",[JSON.stringify(context)]);assert.equal((await scalar("select private.dashboard_admin_live_query('{}')")).context,true);
+ await as(OWNER);await manage({operation:'update',roleId:role.id,expectedVersion:1,permissions:[]});await as(ADMIN);await denied(()=>scalar("select private.dashboard_admin_live_query('{}')"),/role_gateway_required/);
+});
+
+test('existing function-body or executable ACL drift aborts a replay without modifying prior roles',async()=>{
+ await admin();const replay=migration.replace(/^begin;$/m,'').replace(/^commit;$/m,'');
+ await db.exec('savepoint drift');await db.exec("grant execute on function private.dashboard_admin_live_scope() to authenticated");
+ await assert.rejects(()=>db.exec(replay),/dashboard_role_existing_acl_drift/);await db.exec('rollback to savepoint drift');
+ await db.exec("create or replace function private.dashboard_admin_live_scope() returns jsonb language plpgsql stable security definer as $$begin return '{}'::jsonb;end$$");
+ await assert.rejects(()=>db.exec(replay),/dashboard_role_existing_function_drift/);await db.exec('rollback to savepoint drift');
+});
+
+test('unknown replacement of new gateway API is rejected instead of overwritten on replay',async()=>{
+ await admin();await db.exec("create or replace function public.dashboard_role_access() returns jsonb language sql stable security definer as $$select '{}'::jsonb$$");
+ await assert.rejects(()=>db.exec(migration.replace(/^begin;$/m,'').replace(/^commit;$/m,'')),/dashboard_role_new_function_drift/);
+});

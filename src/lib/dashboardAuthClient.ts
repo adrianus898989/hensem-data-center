@@ -578,7 +578,17 @@ export async function createViewerAccount(session: DashboardSession, usernameInp
 
 export async function listDashboardUsers(session: DashboardSession): Promise<DashboardProfile[]> {
   const result = await callAdminFunction(session, { action: "list-users" });
-  return Array.isArray(result?.users) ? result.users : [];
+  if (result?.ok !== true || !Array.isArray(result.users)) throw new Error("账号列表返回不完整，请重新查询。");
+  const seen = new Set<string>();
+  for (const user of result.users) {
+    if (!user || typeof user !== "object" || Array.isArray(user)
+      || typeof user.auth_user_id !== "string" || !user.auth_user_id.trim()
+      || typeof user.username !== "string" || !user.username.trim()
+      || !["owner", "admin", "viewer"].includes(user.role) || typeof user.active !== "boolean"
+      || seen.has(user.auth_user_id)) throw new Error("账号列表返回不完整，请重新查询。");
+    seen.add(user.auth_user_id);
+  }
+  return result.users;
 }
 
 export type DashboardAccountPatch = {

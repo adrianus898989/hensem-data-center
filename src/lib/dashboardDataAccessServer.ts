@@ -92,6 +92,23 @@ async function verifyRequest(request: Request): Promise<DashboardDataAccess> {
   if (!profile || profile.auth_user_id !== user.id || profile.active !== true || !["owner", "admin", "viewer"].includes(profile.role)) {
     throw new DashboardDataAccessError(403, "profile_denied", "账号已停用或没有数据查看权限。");
   }
+  // Assigned roles use the new action-aware gateway; old coarse module routes
+  // cannot provide an alternate path around their page/action restrictions.
+  let roleAccess: any;
+  try {
+    const response = await fetch(base + "/rest/v1/rpc/dashboard_role_access", {
+      method: "POST", headers: {apikey: key, Authorization: `Bearer ${token}`, "Content-Type": "application/json"},
+      body: "{}", cache: "no-store", redirect: "error", signal: request.signal,
+    });
+    if (!response.ok) throw new Error("role_access_unavailable");
+    roleAccess = await response.json();
+  } catch { throw new DashboardDataAccessError(503, "role_access_unavailable", "角色权限验证暂时不可用，请重试。"); }
+  if (!roleAccess || !["owner", "legacy", "assigned"].includes(roleAccess.mode) || typeof roleAccess.canView !== "boolean"
+    || !Array.isArray(roleAccess.permissions) || !roleAccess.permissions.every((value: unknown) => typeof value === "string")
+    || (roleAccess.mode === "owner" && profile.role !== "owner")) {
+    throw new DashboardDataAccessError(503, "role_access_unavailable", "角色权限验证暂时不可用，请重试。");
+  }
+  if (roleAccess.mode === "assigned") throw new DashboardDataAccessError(403, "role_gateway_required", "此账号请通过正式后台查询数据。");
   return {token, profile, scope: effectiveDashboardDataScope(profile)};
 }
 export async function requireDashboardDataAccess(request: Request, module?: DashboardBusinessModule): Promise<DashboardDataAccess> {

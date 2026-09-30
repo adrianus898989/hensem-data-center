@@ -61,8 +61,8 @@ async function edge(action, patch={}, options={}) {
       },
     };return query;
   }};
-  vm.runInNewContext(compiled,{createClient:()=>client,Deno:{env:{get:()=> 'fixture'},serve:fn=>{handler=fn;}},Request,Response,Date,Intl,console,
-    fetch:()=>{throw Error('No external network allowed');}});
+  vm.runInNewContext(compiled,{createClient:()=>client,Deno:{env:{get:()=> 'fixture'},serve:fn=>{handler=fn;}},Request,Response,Date,Intl,console,AbortSignal,
+    fetch:async(url,init)=>{assert(String(url).endsWith('/rest/v1/rpc/dashboard_role_access'),'only fresh role validation may use network');assert.equal(init.headers.Authorization,'Bearer fixture');assert.equal(init.headers.apikey,'fixture');assert.equal(init.method,'POST');assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');if(options.roleFailure)throw Error('synthetic network');return Response.json(options.roleAccess||{mode:caller.role==='owner'?'owner':'legacy',canView:true,permissions:[]},{status:options.roleStatus||200})}});
   const body={action,username:action.startsWith('create')?'newuser':'target',password:'fixture-password',...patch};
   const response=await handler(new Request('https://fixture.invalid',{method:'POST',headers:options.noToken?{}:{authorization:'Bearer fixture'},body:JSON.stringify(body)}));
   return {status:response.status,body:await response.json(),writes,authCalls,audits,reads,target};
@@ -228,11 +228,76 @@ test('actual create handler refuses empty/outside draft and submits Panghu only 
   const scope=loadTs(path.join(root,'src/lib/dashboardDataScope.ts'));
   for(const [newDataScope,expected] of [[{mode:'selected',countries:[]},0],[VN,0],[PANGHU,1]]){
     const calls=[],messages=[];const actor=profile('manager','admin',{data_scope:PANGHU});
-    const context={canManageUsers:true,createBusy:false,profile:actor,newDataScope,session:{},newUsername:'newuser',newPassword:'fixture-password',newRole:'viewer',newPermissions:full,newManagement:management,canViewAudit:false,
+    const context={canUseAccountAction:()=>true,canManageUsers:true,createBusy:false,profile:actor,newDataScope,session:{},newUsername:'newuser',newPassword:'fixture-password',newRole:'viewer',newPermissions:full,newManagement:management,canViewAudit:false,
       setCreateBusy:()=>{},setMessage:text=>messages.push(text),setNewUsername:()=>{},setNewPassword:()=>{},resetCreateRole:()=>{},setCreateOpen:()=>{},setNewDataScope:()=>{},loadUsers:async()=>{},loadAudit:async()=>{},roleLabel:()=> '查看账号',
       ...scope,createDashboardAccount:async(...args)=>{calls.push(args);return {role:'viewer',username:'newuser'};}};
     const submit=Function(...Object.keys(context),output+'\nreturn submitCreate;')(...Object.values(context));
     assert.deepEqual(calls,[]);await submit({preventDefault:()=>{}});assert.equal(calls.length,expected);
     if(expected){assert.deepEqual(calls[0][6],PANGHU);assert.deepEqual(calls[0][4],full);}else assert(messages.length);
   }
+});
+
+
+const assignedRole = (permissions, extra={}) => ({mode:'assigned',roleId:'synthetic-role',roleName:'Synthetic',version:1,assignmentVersion:1,canView:true,permissions,...extra});
+test('assigned account permissions gate each action including legacy viewer aliases before target access',async()=>{
+  const cases=[['list-users',['access.view']],['create-account',['access.view','access.create']],['create-viewer',['access.view','access.create']],
+    ['update-account',['access.view','access.edit']],['update-viewer',['access.view','access.edit']],['reset-password',['access.view','access.reset_password']],['delete-account',['access.view','access.delete']]];
+  for(const [action,keys] of cases){
+    for(const missing of keys){
+      const result=await edge(action,{}, {roleAccess:assignedRole(keys.filter(key=>key!==missing))});
+      assert.equal(result.status,403,action+': '+missing);assert.match(result.body.message,/角色没有此项操作权限/);
+      assert.deepEqual(result.writes,[]);assert.deepEqual(result.authCalls,[]);assert.deepEqual(result.audits,[]);
+      assert.equal(result.reads.length,1,'only the caller profile is read before role denial');
+    }
+    const result=await edge(action,{}, {roleAccess:assignedRole(keys)});
+    assert.equal(result.status,200,action+': matching assigned rights');
+  }
+});
+test('status changes require both edit and status, including legacy update-viewer alias',async()=>{
+  for(const action of ['update-account','update-viewer']){
+    for(const permissions of [['access.view','access.edit'],['access.view','access.status']]){
+      const denied=await edge(action,{active:false},{roleAccess:assignedRole(permissions)});
+      assert.equal(denied.status,403);assert.deepEqual(denied.writes,[]);
+    }
+    const okay=await edge(action,{active:false},{roleAccess:assignedRole(['access.view','access.edit','access.status'])});
+    assert.equal(okay.status,200);assert.equal(okay.writes[0].active,false);
+  }
+});
+test('assigned audit, sync and IP rights cannot be substituted by account rights or the old coarse grants',async()=>{
+  const required={
+    'list-audit':['operation_logs.view'],'history-status':['data_health.view'],'auto-withdraw-history-status':['data_health.view'],
+    'trigger-sync':['data_health.view','data_health.refresh'],'ip-settings':['ip.view'],
+    'add-ip':['ip.view','ip.edit'],'set-ip-active':['ip.view','ip.edit'],'delete-ip':['ip.view','ip.edit'],'set-ip-mode':['ip.view','ip.edit']
+  };
+  const catalog=JSON.parse(fs.readFileSync(path.join(root,'src/lib/dashboardRoleCatalog.json'),'utf8'));
+  const keys=new Set(catalog.pages.flatMap(page=>page.actions.map(action=>page.id+'.'+action.id)));
+  for(const [action,permissions] of Object.entries(required))for(const missing of permissions){
+    if(!['ip.edit','data_health.refresh'].includes(missing))assert(keys.has(missing),'open permission exists in the shared catalog: '+missing);
+    const result=await edge(action,{job:'all'},{roleAccess:assignedRole(['access.view','access.create',...permissions.filter(key=>key!==missing)])});
+    assert.equal(result.status,403,action);assert.match(result.body.message,/角色没有此项操作权限/);
+    assert.equal(result.reads.length,1);assert.deepEqual(result.authCalls,[]);assert.deepEqual(result.writes,[]);
+  }
+});
+test('assigned grants remain AND with old manager role, management flag, country scope and owner-only IP guard',async()=>{
+  for(const options of [{role:'viewer'},{caller:{management_permissions:{manage_viewers:false}}},{caller:{data_scope:PANGHU},target:{data_scope:ALL}}]){
+    const result=await edge('reset-password',{}, {...options,roleAccess:assignedRole(['access.view','access.reset_password'])});
+    assert.equal(result.status,403);assert.deepEqual(result.authCalls,[]);
+  }
+  const security=await edge('ip-settings',{}, {roleAccess:assignedRole(['ip.view'])});
+  assert.equal(security.status,403);assert.doesNotMatch(security.body.message,/角色没有此项操作权限/);assert.equal(security.reads.length,1);
+  const list=await edge('list-users',{}, {caller:{data_scope:PANGHU},users:[profile('yes','viewer',{data_scope:PANGHU}),profile('no','viewer',{data_scope:ALL})],roleAccess:assignedRole(['access.view'])});
+  assert.equal(list.status,200);assert.deepEqual(list.body.users.map(user=>user.username),['yes']);
+});
+test('archived assigned roles and unavailable or malformed role lookup never fall back to legacy management',async()=>{
+  for(const roleAccess of [assignedRole(['access.view'],{canView:false}),assignedRole([])]){
+    const result=await edge('list-users',{}, {roleAccess});assert.equal(result.status,403);assert.equal(result.reads.length,1);
+  }
+  for(const options of [{roleFailure:true},{roleStatus:404},{roleStatus:403},{roleAccess:{}},{roleAccess:{mode:'unexpected',canView:true,permissions:[]}},
+    {roleAccess:{mode:'owner',canView:true,permissions:[]}},{roleAccess:{mode:'legacy',canView:'true',permissions:[]}},
+    {roleAccess:{mode:'legacy',canView:true,permissions:[true]}}]){
+    const result=await edge('create-account',{}, options);assert.equal(result.status,503);assert.deepEqual(result.authCalls,[]);assert.deepEqual(result.writes,[]);
+  }
+});
+test('CURRENT and deploy account enforcement entrypoints stay identical',()=>{
+  assert.equal(fs.readFileSync(path.join(root,'BACKEND_CURRENT/dashboard-user-admin.ts'),'utf8'),fs.readFileSync(path.join(root,'DEPLOY_SUPABASE/dashboard-user-admin.ts'),'utf8'));
 });
