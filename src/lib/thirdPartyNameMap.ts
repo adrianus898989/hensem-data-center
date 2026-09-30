@@ -89,12 +89,22 @@ export const CONFIRMED_INDIA_USDT_CHANNEL_ALIASES = new Map<string, string>([
   ["wallet66-usdt", "Wallet66"],
 ]);
 
-const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
+// Owner-confirmed raw identities also take precedence over stale automatic
+// registry labels. Keep this exact list separate from generic bank/network names.
+export const CONFIRMED_INDIA_RAW_PROVIDER_ALIASES = new Map<string, string>([
   ...CONFIRMED_INDIA_USDT_CHANNEL_ALIASES,
   ["wallet66", "Wallet66"],
+  ["wallet66-bsc", "Wallet66"],
+  ["rushpay", "RushPay"],
+  ["rushpay-bank", "RushPay"],
+  ["basepay-qr", "FFPay"],
+  ["ffpay", "FFPay"],
+]);
+
+const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
+  ...CONFIRMED_INDIA_RAW_PROVIDER_ALIASES,
   // Owner-confirmed 2026-09-26. T3Pay and 3TPay are different providers.
   ["t3pay", "T3Pay"],
-  ["rushpay", "RushPay"],
   ["rushpay-qr", "RushPay"],
   ["lovepay", "WPay"],
   ["haoxpay-qr", "WPay"],
@@ -109,7 +119,6 @@ const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
   ["umoneypayinr", "UmoneyPay"],
   ["movpay", "MovPay"],
   ["movpayinr-bank", "MovPay"],
-  ["ffpay", "FFPay"],
   ["ffpayinr", "FFPay"],
   ["unipayusdt", "UniPayUSDT"],
   ["unipayusdtcu", "UniPayUSDT"],

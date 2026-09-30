@@ -29,23 +29,41 @@
   const received=expected.length>0&&expected.every(d=>d.received||d.zeroConfirmed),complete=expected.length>0&&expected.every(d=>d.complete);
   return {id:platform.id,name:platform.name,source:platform.source,days,missingDates:missing.map(d=>d.date),received,complete,status:missing.length?'missing':complete?(expected.every(d=>d.zeroConfirmed)?'zero_complete':'complete'):received?'received':'unverified',message:missing.length?missing.map(d=>d.date+'：'+d.notes).join('；'):complete?'创建日数据已核对':received?'已收到创建数据，完整性待核验':'创建日采集证据尚未核验'};
  }
- function create({request}){
-  let revision=0,catalog=null;
-  const cancel=()=>{revision++;catalog=null;};
-  async function load({platforms,direction,from,to}){
-   const current=revision,check=()=>{if(current!==revision)throw Error('采集核对已暂停');};dates(from,to);
-   if(!catalog)catalog=Promise.resolve(request({action:'intakeCoverage',operation:'catalog'})).then(r=>{if(r?.version!==1||r.complete!==true||!Array.isArray(r.feeds)||new Set(r.feeds.map(f=>f.id)).size!==r.feeds.length)throw Error('采集目录响应不完整');return r.feeds;});
+ const transient=error=>/超时|timeout|timed out|57014|network|failed to fetch|网络|连接中断/i.test(String(error?.code||'')+' '+String(error?.message||''));
+ function create({request,now=()=>Date.now()}){
+  let revision=0,catalog=null,inFlight=0;const waiters=[],cache=new Map(),cacheMs=300000;
+  const cancel=()=>{revision++;catalog=null;cache.clear();waiters.splice(0).forEach(wake=>wake());};
+  async function limited(q,check){while(inFlight>=2){check();await new Promise(resolve=>waiters.push(resolve));}check();inFlight++;try{return await request(q)}finally{inFlight--;waiters.splice(0).forEach(wake=>wake());}}
+  async function load({platforms,direction,from,to,onProgress}){
+   const current=revision,check=()=>{if(current!==revision)throw Error('采集核对已暂停');},allDays=dates(from,to);
+   if(!catalog){const candidate=(async()=>{let r,operation='orderCatalog';for(let attempt=0;attempt<2;attempt++){try{r=await limited({action:'intakeCoverage',operation},check);break}catch(error){check();if(operation==='orderCatalog'&&/逐日覆盖参数无效|订单采集目录操作暂不支持|invalid_coverage_request|unsupported.*operation/i.test(String(error?.message||''))){operation='catalog';r=await limited({action:'intakeCoverage',operation},check);break;}if(attempt||!transient(error))throw error;}}if(r?.version!==1||r.complete!==true||!Array.isArray(r.feeds)||new Set(r.feeds.map(f=>f.id)).size!==r.feeds.length)throw Error('采集目录响应不完整');return r.feeds;})();catalog=candidate;candidate.catch(()=>{if(catalog===candidate)catalog=null;});}
    const feeds=await catalog;check();
    const scope=[...new Map(platforms.map(p=>[p.id,p])).values()],matched=new Map();
    for(const p of scope){const candidates=feeds.filter(f=>f.dataset==='orders'&&f.direction===direction&&f.platformId===p.id);if(candidates.length===1)matched.set(p.id,candidates[0]);}
-   const selected=[...matched.values()],groups=new Map(),errors=new Map();
-   // Small batches bound source scans. No provider/status/member filter is used.
-   for(let i=0;i<selected.length;i+=4){check();const batch=selected.slice(i,i+4);try{
-    const response=await request({action:'intakeCoverage',operation:'rows',feedIds:batch.map(f=>f.id),startAt:from,endAt:to});check();
-    for(const [id,rows] of validate(response,batch,from,to))groups.set(id,rows);
-   }catch(e){check();for(const f of batch)errors.set(f.id,e.message||'采集核对读取失败');}}
-   check();const output=scope.map(p=>{const feed=matched.get(p.id),item=summarize(p,feed,groups.get(feed?.id),from,to);if(!feed||errors.has(feed.id)){item.message=!feed?'未找到当前平台和方向的采集核对来源':errors.get(feed.id);item.days=item.days.map(d=>({...d,notes:item.message}));}return item;});
-   return {status:'ready',from,to,platforms:output,error:errors.size?'部分平台采集核对失败；尚未确认缺失':''};
+   const selected=[...matched.values()],groups=new Map(),errors=new Map(),tasks=[];
+   const output=status=>({status,from,to,platforms:scope.map(p=>{const feed=matched.get(p.id),item=summarize(p,feed,groups.get(feed?.id),from,to),failed=errors.get(feed?.id);
+    if(!feed||failed){const reason=!feed?'未找到当前平台和方向的采集核对来源':failed.map(x=>x.from+(x.to!==x.from?' 至 '+x.to:'')+'：'+x.message).join('；');item.message=(item.missingDates.length?item.message+'；':'')+reason;item.days=item.days.map(d=>!feed||failed?.some(x=>d.date>=x.from&&d.date<=x.to)?{...d,notes:reason}:d);}
+    return item;}),error:errors.size?'部分平台采集核对失败；读取失败不代表缺少数据':''});
+   const publish=()=>{check();if(typeof onProgress==='function')onProgress(output('loading'));};
+   // Bound both platforms and dates. A slow source cannot discard its neighbours.
+   // Cache only validated fragments from this submitted generation; a new query
+   // calls cancel(), so date/filter changes and explicit refresh never reuse them.
+   const fragmentKey=(f,start,end)=>JSON.stringify([direction,f.id,start,end]);
+   for(let d=0;d<allDays.length;d+=7){const start=allDays[d],end=allDays[Math.min(d+6,allDays.length-1)],work=[];
+    for(const f of selected){const key=fragmentKey(f,start,end),saved=cache.get(key);if(saved&&now()-saved.at<cacheMs)groups.set(f.id,[...(groups.get(f.id)||[]),...saved.rows]);else{cache.delete(key);work.push(f);}}
+    for(let i=0;i<work.length;i+=2)tasks.push({batch:work.slice(i,i+2),start,end});
+   }
+   publish();
+   async function read(batch,start,end,retry=true){check();try{
+    const response=await limited({action:'intakeCoverage',operation:'rows',feedIds:batch.map(f=>f.id),startAt:start,endAt:end},check);check();
+    for(const [id,rows] of validate(response,batch,start,end)){groups.set(id,[...(groups.get(id)||[]),...rows]);cache.set(fragmentKey({id},start,end),{at:now(),rows});}publish();
+   }catch(error){check();if(retry&&transient(error)){
+     // Each affected platform gets at most one additional read, separately.
+     for(const f of batch)await read([f],start,end,false);
+    }else{for(const f of batch)errors.set(f.id,[...(errors.get(f.id)||[]),{from:start,to:end,message:error.message||'采集核对读取失败'}]);publish();}}
+   }
+   let next=0;async function worker(){while(next<tasks.length){check();const task=tasks[next++];await read(task.batch,task.start,task.end);}}
+   await Promise.all(Array.from({length:Math.min(2,tasks.length)},()=>worker()));check();return output('ready');
   }
   return {load,cancel};
  }

@@ -23,8 +23,8 @@ test('late responses after filter changes are discarded',async()=>{
 });
 test('shared order lanes read each platform once and retry only failed platforms',async()=>{
  const h=harness();h.select([platform(),platform('b')]);let fail=true;h.handler(q=>{if(q.platformId==='b'&&fail)throw Error('timed out');return response(q)});
- const batch=h.ui.startWithOrders();assert.equal(h.calls.length,0);await batch.read('a');await batch.read('a');await batch.read('b');batch.finish();assert.equal(h.calls.length,2);assert.equal(h.ui.metric().complete,false);assert.match(h.ui.note(true),/重试未完成/);assert.doesNotMatch(h.ui.note(true),/等级未提供/);
- fail=false;await h.ui.ensure(true,true);assert.deepEqual(h.calls.map(x=>x.platformId),['a','b','b']);assert.equal(h.ui.metric().complete,true);assert.equal(h.ui.note(true),'');
+ const batch=h.ui.startWithOrders();assert.equal(h.calls.length,0);await batch.read('a');await batch.read('a');await batch.read('b');await batch.finish();assert.equal(h.calls.length,3);assert.equal(h.ui.metric().complete,false);assert.match(h.ui.note(true),/重试未完成/);assert.doesNotMatch(h.ui.note(true),/等级未提供/);
+ fail=false;await h.ui.ensure(true,true);assert.deepEqual(h.calls.map(x=>x.platformId),['a','b','b','b']);assert.equal(h.ui.metric().complete,true);assert.equal(h.ui.note(true),'');
 });
 function chartResponse(q){const metrics=[10,15,20,30,50,100].flatMap(t=>[null,'Pay A'].map(provider=>({...metric(provider,t,t<=30?1:0,t<=30?30:0),member_days:t<=30?1:0,qualified_member_days:t<=30?1:0})));return response(q,{metrics,coverage:{orderCount:100,missingMemberCount:0},dashboard:{version:2,threshold:15,amountBands:q.amountBands,monitoring:[null,'Pay A'].map(provider=>({provider,order_count:100,success_count:50,invalid_count:30,order_amount:'10000',invalid_amount:'3000'})),hourly:[{provider:'Pay A',hour:10,count:30}],daily:[{day:'2026-09-28',order_count:100,invalid_count:30}],amounts:[{bucket:'band:1',count:30}],frequency:[{band:'30–49',count:1}]}})}
 test('dashboard renders real aggregates, distinct frequency and drilldown without invented risk scores',async()=>{
@@ -134,4 +134,25 @@ test('uncertain ordering identifies affected platforms and suppresses exclusion 
 test('member details refuse legacy and impossible all-order counts presented as excess',async()=>{
  const h=harness();await h.ui.load();h.handler(q=>response(q,{version:1,total:0,members:0,rows:[]}));await h.ui.members(0);assert.match(h.drawers.at(-1).body,/响应范围无效/);
  h.handler(q=>response(q,{total:1,members:1,rows:[{submitted_count:49,selected_count:49,platform_day_invalid_count:49,invalid_count:49,platform_day_amount:'4900',platform_day_invalid_amount:'4900',submitted_amount:'4900',invalid_amount:'4900'}]}));await h.ui.members(0);assert.match(h.drawers.at(-1).body,/无效笔数明细不完整/);
+});
+test('a final platform timeout is retried once after the other fifteen complete',async()=>{
+ const h=harness(),platforms=Array.from({length:16},(_,i)=>platform('p'+String(i).padStart(2,'0')));h.select(platforms);let failed=false;h.handler(q=>{if(q.platformId==='p15'&&!failed){failed=true;throw Error('57014 statement timeout')}return response(q)});await h.ui.ensure();
+ assert.equal(h.calls.length,17);assert.equal(h.calls.at(-1).platformId,'p15');assert.equal(h.calls.filter(q=>q.platformId==='p15').length,2);assert.equal(h.ui.metric().complete,true);assert.equal(h.ui.metric().received,16);assert.equal(h.ui.note(true),'');assert(h.calls.every(q=>q.startAt==='2026-09-01T00:00:00Z'&&q.endAt==='2026-09-30T00:00:00Z'));
+});
+test('persistent failure retains fifteen platform counts while withholding the full adjusted rate',async()=>{
+ const h=harness(),platforms=Array.from({length:16},(_,i)=>platform('p'+String(i).padStart(2,'0')));h.select(platforms);h.handler(q=>{if(q.platformId==='p15')throw Error('读取超时');return response(q)});await h.ui.ensure();
+ assert.equal(h.calls.length,17);assert.equal(h.ui.metric().received,15);assert.match(h.ui.providerCell('Pay A',null,'count',975,3200),/>1050\*</);assert.match(h.ui.providerCell('Pay A',null,'members',975,3200),/>30\*</);assert.match(h.ui.providerCell('Pay A',null,'rate',975,3200),/>—</);assert.match(h.ui.providerCell('Pay A',['p00'],'rate',65,200),/>50.00%/);assert.match(h.ui.note(true),/>剔除 15\/16 · 未完成 Synthetic p15<\/button>/);assert.doesNotMatch(h.ui.note(true),/缺少.*平台/);
+ await h.ui.ensure();h.ui.render();h.ui.note(true);assert.equal(h.calls.length,17,'renders and completed scope reads do not restart retries');h.handler(response);await global.liveSubmissionRetry();assert.equal(h.calls.length,18);assert.equal(h.calls.at(-1).platformId,'p15');assert.equal(h.ui.metric().complete,true);assert.match(h.ui.providerCell('Pay A',null,'count',1040,3200),/>1120</);
+});
+test('authentication and malformed metric failures do not trigger automatic retries',async()=>{
+ for(const bad of [()=>{throw Error('没有访问权限')},q=>response(q,{version:1})]){const h=harness();h.handler(bad);await h.ui.ensure();assert.equal(h.calls.length,1);assert.equal(h.ui.metric().available,false);}
+});
+test('cancelling before the last failure arrives prevents the automatic retry and stale merge',async()=>{
+ const h=harness();h.select([platform(),platform('b')]);let release;h.handler(q=>q.platformId==='b'?new Promise((_,reject)=>{release=()=>reject(Error('timeout'))}):response(q));const run=h.ui.ensure();await new Promise(resolve=>setImmediate(resolve));assert.equal(h.ui.metric().received,1);assert.equal(h.ui.ensure(),run);assert.equal(h.calls.length,2);
+ h.ui.cancel();h.L.from='2026-08-01T00:00:00';release();await run;assert.equal(h.calls.length,2);assert.equal(h.ui.metric().available,false);
+});
+test('compact coverage keeps long errors and partial-count explanation out of the report body',async()=>{
+ const h=harness();h.select([platform(),{...platform('b'),name:'DHANIWIN'},{...platform('c'),name:'51GAME'}]);h.handler(q=>{if(q.platformId!=='a')throw Error('读取超时，请缩短日期范围后再次查询，失败原因详情');return response(q)});await h.ui.ensure();const html=h.ui.note(true),visible=html.replace(/<[^>]*>/g,'');
+ assert.equal(visible,'剔除 1/3 · 未完成 DHANIWIN 等 2 平台 重试');assert.match(html,/submission-coverage-compact/);assert.match(html,/title="[^"]*DHANIWIN：读取超时[^"]*51GAME：读取超时[^"]*\* 为已读取平台合计/);assert.match(html,/onclick="liveSubmissionCoverage\(\)"/);assert.doesNotMatch(visible,/失败原因详情|完整剔除率|51GAME/);
+ const calls=h.calls.length;global.liveSubmissionCoverage();assert.equal(h.calls.length,calls);assert.match(h.drawers.at(-1).body,/DHANIWIN：读取超时/);assert.match(h.drawers.at(-1).body,/51GAME：读取超时/);assert.match(h.drawers.at(-1).body,/\* 为已读取平台合计，完整剔除率待核对/);
 });

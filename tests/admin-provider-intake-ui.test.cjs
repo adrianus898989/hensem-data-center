@@ -20,13 +20,13 @@ function fixture(count=16){
 test('16 returned platforms with one missing creation day show 15 creation sources and preserve known success',()=>{
  const h=fixture(),p=h.L.providerIntake.platforms[0];p.status='missing';p.received=false;p.complete=false;p.missingDates=['2026-09-26'];p.days=[{date:'2026-09-26',dataset:'orders',direction:'charge',status:'not_received',received:false,complete:false,evidence:'only_success_day_records_received'}];h.render();
  assert.equal(h.api.queryCoverage(h.L).received,16);assert.equal(h.api.intakeCoverage(h.L).received,15);
- assert.match(h.html(),/>创建数据<\/small> 15 \/ 16/);assert.match(h.html(),/接口 <small[^>]*>已读取<\/small> 16 \/ 16/);
- assert.match(h.html(),/创建数据未收齐/);assert.match(h.html(),/代收三方汇总（部分结果）/);assert.match(h.html(),/完整性已核验 15 \/ 16/);assert.match(h.html(),/11,200.00/,'success data is retained');assert.match(h.html(),/创建数据完整性待核验，暂不可比/);
+ assert.match(h.html(),/<label>平台<\/label><strong>15 \/ 16<\/strong>/);assert.match(h.html(),/>缺 51GAME<\/button>/);
+ assert.doesNotMatch(h.html(),/provider-intake-coverage/);assert.match(h.html(),/代收三方汇总（部分结果）/);assert.doesNotMatch(h.html(),/provider-intake-summary|provider-api-coverage/);assert.match(h.html(),/11,200.00/,'success data is retained');assert.match(h.html(),/较昨日 · 同范围 15 平台/);
  h.root.providerSummaryPlatformCoverage();const d=h.drawers.at(-1);assert.equal(d.title,'平台采集与读取情况');assert.match(d.html,/<td>51GAME<\/td><td>ar<\/td><td>2026-09-26<\/td><td>代收 · 创建订单<\/td><td>缺少创建数据<\/td><td>仅有该日成功记录，未见该创建日订单/);
 });
 test('received rows are counted as creation data without claiming full-day completeness',()=>{
  const h=fixture(2);for(const p of h.L.providerIntake.platforms){p.status='received';p.complete=false;p.days[0].complete=false;p.days[0].status='received'}h.render();
- assert.match(h.html(),/>创建数据<\/small> 2 \/ 2/);assert.match(h.html(),/完整性已核验 0 \/ 2 · 待核验 2/);assert.doesNotMatch(h.html(),/创建数据未收齐/);assert.match(h.html(),/创建数据完整性待核验，暂不可比/);
+ assert.match(h.html(),/<label>平台<\/label><strong>2 \/ 2<\/strong>/);assert.match(h.html(),/>完整性待核验<\/button>/);assert.doesNotMatch(h.html(),/创建数据未收齐/);assert.match(h.html(),/较昨日 · 按已读 2 平台/);h.root.providerSummaryPlatformCoverage();assert.match(h.drawers.at(-1).html,/完整性已核验 0 个 · 待核验 2 个/);
 });
 test('only verified zero is complete; an empty aggregate never proves a creation-day zero',()=>{
  const h=fixture(2),p=h.L.providerIntake.platforms[0];p.status='zero_complete';p.days[0].status='zero_complete';p.days[0].zeroConfirmed=true;
@@ -40,10 +40,10 @@ test('missing evidence overrides success-only presence and cannot be hidden by p
 });
 test('stale ranges, foreign identities and duplicated intake identities cannot complete selected sources',()=>{
  const h=fixture(2);h.L.providerIntake.from='2026-09-25';h.render();assert.equal(h.api.intakeCoverage(h.L).ready,false);assert.equal(h.api.intakeCoverage(h.L).complete,0);
- h.L.providerIntake=h.intake();h.L.providerIntake.platforms=[h.L.providerIntake.platforms[0],h.L.providerIntake.platforms[0],{id:'foreign',name:'Other',received:true,complete:true,status:'complete'}];h.render();const c=h.api.intakeCoverage(h.L);assert.equal(c.requested,2);assert.equal(c.received,0);h.root.providerSummaryPlatformCoverage();assert.doesNotMatch(h.drawers.at(-1).html,/>Other</);
+ h.L.providerIntake=h.intake();h.L.providerIntake.platforms=[h.L.providerIntake.platforms[0],h.L.providerIntake.platforms[0],{id:'foreign',name:'Other',received:true,complete:true,status:'complete'}];h.render();const c=h.api.intakeCoverage(h.L);assert.equal(c.requested,2);assert.equal(c.received,2,'known nonzero creation rows remain observed despite unusable intake metadata');assert.equal(c.complete,0);h.root.providerSummaryPlatformCoverage();assert.doesNotMatch(h.drawers.at(-1).html,/>Other</);
 });
-test('current proof alone does not enable comparisons when the comparison period is unverified',()=>{
- const h=fixture(1);h.L.providerComparisonIntake.platforms[0].complete=false;h.render();assert.match(h.html(),/对比期创建数据完整性待核验/);
+test('comparison uses explicitly labelled read scope when only intake completeness is unverified',()=>{
+ const h=fixture(1);h.L.providerComparisonIntake.platforms[0].complete=false;h.render();assert.match(h.html(),/较昨日 · 按已读 1 平台/);assert.match(h.html(),/>无基数</);
  h.L.providerComparisonIntake=h.intake('2026-09-25');h.render();assert.doesNotMatch(h.html(),/对比期创建数据完整性待核验|创建数据完整性待核验，暂不可比/);
 });
 test('details use loaded source evidence, escape strings, and refuse dirty filters without a request',()=>{
@@ -57,4 +57,44 @@ test('retrying a failed aggregate cannot remove an existing source-day gap',()=>
 test('source evidence uses readable notes and does not leak internal codes or duplicate translations',()=>{
  const h=fixture(1),day=h.L.providerIntake.platforms[0].days[0];day.evidence='source_created_counts_reconciled';day.notes='创建总数与渠道分组已核对';h.render();h.root.providerSummaryPlatformCoverage();let html=h.drawers.at(-1).html;assert.match(html,/创建总数与渠道分组已核对/);assert.doesNotMatch(html,/source_created_counts_reconciled/);assert.equal((html.match(/创建总数与渠道分组已核对/g)||[]).length,1);
  delete day.notes;day.evidence='future_internal_code';h.render();h.root.providerSummaryPlatformCoverage();html=h.drawers.at(-1).html;assert.match(html,/采集依据待核验/);assert.doesNotMatch(html,/future_internal_code/);
+});
+
+function metric(html,label){const match=html.match(new RegExp('<div class="provider-kpi provider-kpi-[^"]+" title="([^"]*)"><div class="provider-kpi-value"><label>'+label+'(?:<span[^>]*>[^<]*</span>)?</label><strong>([^<]*)</strong></div><div class="provider-kpi-comparison">(?:<span class="provider-kpi-change ([^"]*)">([^<]*)</span>)?</div></div>'));assert(match,label+' metric exists');return {detail:match[1],value:match[2],trend:match[3],change:match[4]}}
+function previousRows(h,overrides={}){h.L.comparisonResults=h.L.results.map(result=>({...result,groups:{provider:result.groups.provider.map(row=>({...row,...overrides}))}}))}
+test('an intake timeout preserves observed 15 creation sources, names the one unobserved platform, and restores read-scope deltas',()=>{
+ const h=fixture(),missing=h.orders[0];missing.all_count=0;missing.all_amount=0;
+ previousRows(h,{all_count:20,all_amount:2000,success_count:5,success_amount:500});
+ h.L.providerIntake={status:'error',from:'2026-09-26',to:'2026-09-26',error:'同步检查超时'};
+ h.L.providerComparisonIntake={status:'error',from:'2026-09-25',to:'2026-09-25',error:'同步检查超时'};h.render();
+ assert.match(h.html(),/<label>平台<\/label><strong>15 \/ 16<\/strong>/);assert.match(h.html(),/>未见创建 51GAME<\/button>/);
+ assert.doesNotMatch(h.html(),/provider-intake-coverage|provider-intake-summary|provider-api-coverage|>缺 51GAME</);assert.equal(h.api.intakeCoverage(h.L).complete,0);assert.equal(h.api.intakeCoverage(h.L).missing.length,0);
+ assert.match(h.html(),/较昨日 · 按已读 16 平台/);assert.equal(metric(h.html(),'代收创建金额').change,'-53.13%');assert.equal(metric(h.html(),'代收成功金额').change,'+40.00%');
+ h.root.providerSummaryPlatformCoverage();assert.match(h.drawers.at(-1).html,/同步检查超时/);
+});
+test('confirmed missing source is excluded from both periods, while cards retain all known success values',()=>{
+ const h=fixture(2);h.orders[0].success_amount=900000;h.orders[0].success_count=900;const p=h.L.providerIntake.platforms[0];p.status='missing';p.received=false;p.complete=false;p.missingDates=['2026-09-26'];
+ previousRows(h,{all_amount:800,all_count:8,success_amount:400,success_count:4});h.L.comparisonResults[0].groups.provider[0].success_amount=800000;h.render();
+ assert.match(h.html(),/较昨日 · 同范围 1 平台/);assert.equal(metric(h.html(),'代收成功金额').value,'900,700.00');assert.equal(metric(h.html(),'代收成功金额').change,'+75.00%');assert.equal(metric(h.html(),'代收创建金额').change,'+25.00%');assert.equal(metric(h.html(),'代收成功率').change,'+20.00个百分点');assert.match(metric(h.html(),'代收成功金额').detail,/昨日 400.00/);
+});
+test('loading and failed intake retain completed named evidence rather than resetting every platform to unknown',()=>{
+ const h=fixture(2),p=h.L.providerIntake.platforms[0];p.status='missing';p.received=false;p.complete=false;p.missingDates=['2026-09-26'];
+ for(const status of ['loading','error']){h.L.providerIntake.status=status;h.render();assert.match(h.html(),/<label>平台<\/label><strong>1 \/ 2<\/strong>/);assert.match(h.html(),/>缺 51GAME<\/button>/);assert.equal(h.api.intakeCoverage(h.L).missing.length,1);assert.equal(h.api.intakeCoverage(h.L).complete,1)}
+});
+test('empty success-only aggregate does not become a confirmed missing source or a confirmed zero',()=>{
+ const h=fixture(1);h.orders[0].all_amount=0;h.orders[0].all_count=0;h.L.providerIntake={status:'error',from:'2026-09-26',to:'2026-09-26',error:'timeout'};h.render();
+ const coverage=h.api.intakeCoverage(h.L);assert.equal(coverage.received,0);assert.equal(coverage.complete,0);assert.equal(coverage.missing.length,0);assert.match(h.html(),/<label>平台<\/label><strong>— \/ 1<\/strong>/);assert.doesNotMatch(h.html(),/>缺 51GAME</);
+});
+test('comparison never combines different identities, currencies, zones, source systems, or duplicate platform responses',()=>{
+ for(const key of ['id','currency','timezone','country','source','duplicate']){const h=fixture(1);previousRows(h,{all_amount:500});if(key==='duplicate')h.L.comparisonResults.push(h.L.comparisonResults[0]);else h.L.comparisonResults[0]={...h.L.comparisonResults[0],platform:{...h.L.comparisonResults[0].platform,[key]:'different'}};h.render();assert.equal(metric(h.html(),'代收创建金额').change,undefined,key);assert.match(h.html(),/没有同范围的两期数据，暂不可比/)}
+});
+test('confirmed gaps from either period are excluded symmetrically and missing prior data keeps its reason',()=>{
+ const h=fixture(2);previousRows(h,{all_amount:500,all_count:5});const p=h.L.providerComparisonIntake.platforms[0];p.status='missing';p.received=false;p.complete=false;p.missingDates=['2026-09-25'];h.render();assert.match(h.html(),/同范围 1 平台/);assert.equal(metric(h.html(),'代收创建金额').change,'+100.00%');
+ h.L.comparisonStatus='error';h.L.comparisonError='前期数据读取未完成：timeout';h.render();assert.equal(metric(h.html(),'代收创建金额').change,undefined);assert.match(h.html(),/前期数据读取未完成：timeout/);
+});
+test('zero comparison denominator shows no-baseline rather than infinity or a fake percentage',()=>{
+ const h=fixture(1);previousRows(h,{all_amount:0,all_count:0,success_amount:0,success_count:0});h.render();assert.equal(metric(h.html(),'代收创建金额').change,'无基数');assert.equal(metric(h.html(),'代收成功率').change,'暂无对比');assert.doesNotMatch(h.html(),/NaN|Infinity/);
+ h.orders[0].all_amount=0;h.orders[0].all_count=0;h.render();assert.equal(metric(h.html(),'代收创建金额').change,'持平');
+});
+test('observed creation evidence is restricted to the displayed direction and never claims completeness',()=>{
+ const h=fixture(1);h.L.providerIntake=null;h.orders[0].direction='withdraw';assert.equal(h.api.intakeCoverage(h.L,'charge').received,0);assert.equal(h.api.intakeCoverage(h.L,'withdraw').received,1);assert.equal(h.api.intakeCoverage(h.L,'withdraw').complete,0);
 });
