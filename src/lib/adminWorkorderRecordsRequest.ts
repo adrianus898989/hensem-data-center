@@ -1,5 +1,5 @@
 // Dedicated collected-workorder contract: does not broaden other read actions.
-const filterKeys=['platform','from','to','dateBasis','issueKind','statusCode','workorderId','workorderNo','orderNo','sourceOrderNo','utr','provider','operator','minAmount','maxAmount','kyc','utrMatch','registrationStatus'];
+const filterKeys=['team','platform','from','to','dateBasis','issueKind','statusCode','workorderId','workorderNo','orderNo','sourceOrderNo','utr','provider','operator','minAmount','maxAmount','kyc','utrMatch','registrationStatus'];
 export function validateWorkorderRecordsRequest(p:Record<string,unknown>):Record<string,unknown>{
  if(p.action!=='workorderRecords'||Object.keys(p).some(k=>!['action','view','operation','country','filters','offset','limit'].includes(k)))throw Error('工单记录参数无效');
  const view=p.view??'records',operation=p.operation??'list';
@@ -7,6 +7,7 @@ export function validateWorkorderRecordsRequest(p:Record<string,unknown>):Record
  if(typeof p.country!=='string'||!['IN','印度','BR','巴西','PK','巴基斯坦','ID','印尼','VN','越南','PH','菲律宾','MY','马来','MM','缅甸','NG','尼日利亚','CO','哥伦比亚','MX','墨西哥','CL','智利'].includes(p.country))throw Error('请选择国家');
  const raw=p.filters??{};if(!raw||typeof raw!=='object'||Array.isArray(raw))throw Error('工单筛选无效');const f:Record<string,string>={};
  for(const [k,v] of Object.entries(raw)){if(!filterKeys.includes(k)||typeof v!=='string'||v.length>200||/[\u0000-\u001f\u007f]/.test(v))throw Error('工单筛选无效');f[k]=v.trim();}
+ if('team' in f&&(!['records','orders'].includes(view)||!['list','summary'].includes(String(operation))))throw Error('该条件不适用于当前页面');
  if(operation==='detail'&&(!f.platform||!f.workorderId))throw Error('请选择工单');
  if(operation==='orderDetail'&&(!f.platform||!f.orderNo||!['deposit','withdraw'].includes(f.issueKind)||Object.keys(f).some(k=>!['platform','orderNo','issueKind'].includes(k))))throw Error('请选择完整原支付订单');
  for(const k of ['from','to'])if(f[k]&&(!/^\d{4}-\d{2}-\d{2}$/.test(f[k])||!Number.isFinite(Date.parse(f[k]+'T00:00Z'))||new Date(f[k]+'T00:00Z').toISOString().slice(0,10)!==f[k]))throw Error('日期无效');
