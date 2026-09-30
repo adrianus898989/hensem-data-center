@@ -320,3 +320,9 @@ body.live-admin .submission-members-table :is(th,td):is(:nth-child(7),:nth-child
 body.live-admin .submission-members-table :is(th,td):last-child{width:10%}
 body.live-admin .submission-members-modal .submission-pager{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px;font-size:11px}
 @media(max-width:900px){body.live-admin .submission-members-modal{width:calc(100vw - 16px);max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px)}body.live-admin .submission-members-content{padding:10px}body.live-admin .submission-members-table :is(th,td){font-size:10px;padding:6px 3px}}
+
+/* Keep source intake and transport receipt legible inside the compact platform card. */
+body.live-admin .provider-summary-report .provider-intake-summary,
+body.live-admin .provider-summary-report .provider-api-coverage{display:block;white-space:normal;overflow-wrap:anywhere;font-size:10px;line-height:1.5}
+body.live-admin .provider-summary-report .provider-api-coverage .provider-read-label{display:inline}
+body.live-admin .provider-summary-report .provider-platform-coverage-button{white-space:normal;text-align:left;line-height:1.5}

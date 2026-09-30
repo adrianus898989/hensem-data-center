@@ -122,7 +122,7 @@ test('compact provider reports budget short identity columns and align equivalen
  }
 });
 
-test('platform card counts complete zero-order responses independently of provider and workorder coverage',()=>{
+test('platform card separates returned zero-order responses from unverified intake and workorder coverage',()=>{
  for(const direction of ['charge','withdraw']){
   const h=fixture([order('platform-a','ar',100,1,{direction})]);
   const platforms=[{id:'platform-a',name:'Active A',source:'ar'},{id:'zero-b',name:'Zero B',source:'newar'}];
@@ -131,10 +131,11 @@ test('platform card counts complete zero-order responses independently of provid
   h.L.workorders={byProvider:[],coverage:{complete:false,platforms:[{platformId:'platform-a',platform:'Active A',complete:false,days:0,expectedDays:1}]}};
   h.render(direction);
   const coverage=h.api.queryCoverage(h.L);assert.equal(coverage.received,2);assert.equal(coverage.requested,2);assert.equal(coverage.partial,false);
+  assert.equal(h.api.intakeCoverage(h.L).complete,0);assert.match(h.html(),/>创建数据<\/small> — \/ 2/);
   assert.match(h.html(),/<small class="provider-read-label">已读取<\/small> 2 \/ 2/);
   assert.doesNotMatch(h.html(),/provider-kpi-warning|缺失 \d+ 个平台/);
   h.root.providerSummaryPlatformCoverage();const drawer=h.drawers.at(-1);
-  assert.equal(drawer.title,'平台读取情况');assert.match(drawer.html,/Zero B/);assert.match(drawer.html,/返回零订单也计为已读取/);assert.match(drawer.html,/工单原单缺项另行核对/);
+  assert.equal(drawer.title,'平台采集与读取情况');assert.match(drawer.html,/Zero B/);assert.match(drawer.html,/返回零订单也计为已读取/);assert.match(drawer.html,/工单原单缺项另行核对/);
   assert.equal((drawer.html.match(/<td>已读取<\/td>/g)||[]).length,2);assert.equal(h.networkCalls(),0);
  }
 });
