@@ -71,7 +71,7 @@ before(async()=>{
  insert into game66_withdraw_orders(platform_id,order_num,uid,create_time,update_time,status_code,pay_channel) values
  ('${ids.game}','GW1','G-SYNTH','2026-09-25T03:00+05:30','2026-09-25T03:05+05:30','3','route-a'),
  ('${ids.game}','GW2','G-SYNTH','2026-09-25T04:00+05:30','2026-09-25T04:05+05:30','2','route-b');
- `);await db.exec(`alter table lg_orders add column order_no text,add column metric_amount numeric;alter table ar_collected_orders add column member_level text,add column recharge_count integer;alter table newar_detail_records add column raw jsonb default '{}';create function private.dashboard_admin_live_provider_canonical(country text,platform text,provider text) returns text language sql stable as $$select case when provider in ('route-a','route-b') then 'CombinedPay' else provider end$$;`);await db.exec(migration);await db.exec(read('migrations/20260928092956_admin_live_dynamic_amount_bands.sql').split('do $patch$')[0]+'commit;');await db.exec(read('migrations/20260929200000_submission_risk_dashboard.sql'));await db.exec(read('migrations/20260929210000_newar_charge_wait_status.sql'));await db.exec(read('migrations/20260929220000_submission_threshold_15.sql'));await as(owner);await seed();
+ `);await db.exec(`alter table lg_orders add column order_no text,add column metric_amount numeric;alter table ar_collected_orders add column member_level text,add column recharge_count integer;alter table newar_detail_records add column raw jsonb default '{}';create function private.dashboard_admin_live_provider_canonical(country text,platform text,provider text) returns text language sql stable as $$select case when provider in ('route-a','route-b') then 'CombinedPay' else provider end$$;`);await db.exec(migration);await db.exec(read('migrations/20260928092956_admin_live_dynamic_amount_bands.sql').split('do $patch$')[0]+'commit;');await db.exec(read('migrations/20260929200000_submission_risk_dashboard.sql'));await db.exec(read('migrations/20260929210000_newar_charge_wait_status.sql'));await db.exec(read('migrations/20260929220000_submission_threshold_15.sql'));await db.exec(read('migrations/20260930110000_submission_member_day_amount.sql'));await as(owner);await seed();
 });
 after(async()=>db?.close());
 
@@ -211,4 +211,26 @@ test('legacy open pages retain their original threshold response while refreshed
  assert.deepEqual(fresh.thresholds,[10,15,20,30,50,100]);assert.equal(fresh.dashboard.threshold,15);assert.deepEqual(fresh.metrics.filter(x=>x.threshold!==15),legacy.metrics);
  assert.equal(metric(fresh,15).invalid_count,190);assert.equal(metric(fresh,15).member_count,5);assert.equal(metric(fresh,15).member_days,7);
  const lite=await call(q({threshold:15,charts:false}));assert.equal(lite.dashboard,null);assert.deepEqual(lite.metrics,fresh.metrics);
+});
+
+test('member daily amount totals every provider and local-day order, independently of detail filters',async()=>{
+ await db.exec(`insert into ar_collected_orders(source_system,country_code,platform,order_kind,order_no,member_id,amount,status,applied_at,raw_channel)
+ select 'AR','IN','AR-RAW','recharge','AMOUNT-'||day||'-'||n,'AMOUNT-MEMBER',case when n=1 then 100 else n*10 end,'待支付',day::date+case when n=1 then time '10:00' else time '20:00' end,case when n=1 then 'AmountPay A' else 'AmountPay B' end
+ from (values('2026-10-03',49),('2026-10-04',15))v(day,total) cross join lateral generate_series(1,total)n;`);
+ const scope=request({startAt:'2026-10-03T09:00:00+05:30',endAt:'2026-10-03T11:00:00+05:30',threshold:15,operation:'members',providers:['AmountPay A']});
+ const narrow=(await call(scope)).rows[0];assert.equal(narrow.submitted_count,49);assert.equal(narrow.platform_day_amount,'12340');assert.equal(narrow.selected_count,1);assert.equal(narrow.submitted_amount,'100');
+ const all=(await call({...scope,startAt:'2026-10-03T00:00:00+05:30',endAt:'2026-10-04T00:00:00+05:30',providers:[]})).rows[0];
+ assert.equal(all.platform_day_amount,narrow.platform_day_amount);assert.equal(all.submitted_amount,'12340');assert.equal(all.selected_count,49);
+ const days=(await call({...scope,endAt:'2026-10-05T00:00:00+05:30'})).rows;assert.deepEqual(days.map(x=>[x.day,x.submitted_count,x.platform_day_amount,x.submitted_amount]),[['2026-10-04',15,'1290','100'],['2026-10-03',49,'12340','100']]);
+});
+
+test('missing or mixed-currency amounts cannot be misrepresented as a full member-day total',async()=>{
+ await db.exec(`insert into newar_detail_records(platform,dataset,source_id,member_id,order_number,provider,currency,amount,status_group,created_at)
+ select 'NEW-RAW','charge',member||'-'||n,member,member||'-'||n,case when n=1 then 'AmountPay A' else 'AmountPay B' end,
+ case when member='MIXED-CURRENCY' and n=15 then 'USD' else 'NPR' end,
+ case when member='MISSING-AMOUNT' and n=15 then null else 100 end,'pending','2026-10-03T10:00+05:45'
+ from (values('MIXED-CURRENCY'),('MISSING-AMOUNT'))v(member) cross join generate_series(1,15)n;`);
+ const scope=request({platformId:ids.newar,startAt:'2026-10-03T00:00:00+05:45',endAt:'2026-10-04T00:00:00+05:45',currency:'NPR',threshold:15,operation:'members'});
+ const rows=(await call({...scope,providers:['AmountPay A']})).rows;assert.equal(rows.length,2);for(const row of rows){assert.equal(row.submitted_count,15);assert.equal(row.platform_day_amount,null);assert.equal(row.selected_count,1);assert.equal(row.submitted_amount,'100')}
+ const missing=(await call(scope)).rows.find(x=>x.member_id==='MISSING-AMOUNT');assert.equal(missing.submitted_amount,null);
 });
