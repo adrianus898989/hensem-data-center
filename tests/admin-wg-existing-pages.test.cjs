@@ -6,6 +6,29 @@ const {harness,settle,aggregate,P}=new Function('require','__dirname',shared+';r
 const WG={...P,id:'77777777-7777-4777-8777-777777777777',name:'26BET',source:'wg',country:'巴西',scopeGroup:'BR',currency:'BRL',timezone:'America/Sao_Paulo',capabilities:{withdrawSuccessTimeAvailable:false,successTimeBasis:'recharge_notify_time_only'}};
 function wgResult(){const r=aggregate(WG,10),s={...r.summary[0],direction:'withdraw',currency:'BRL',all_count:10,all_amount:100,success_count:null,success_amount:null,created_success_count:4};r.summary=[s];r.capabilities=WG.capabilities;for(const key of ['provider','daily','hourly','amount','matrix'])r.groups[key]=r.groups[key].map(row=>({...row,...s}));return r}
 function scope(h){Object.assign(h.L,{country:'巴西',currency:'BRL',from:'2026-09-22T00:00:00',to:'2026-09-22T23:59:59',direction:'withdraw',platform:WG.id});h.L.multi.platform=[WG.id];h.L.multi.direction=['withdraw'];}
+function emptyWgResult(){const r=wgResult();r.total=0;r.summary=[];for(const key of Object.keys(r.groups))r.groups[key]=[];return r}
+function showResults(h,results,platforms=[WG]){Object.assign(h.L,{results,queryPlatforms:platforms,pageQueried:true,overviewQueried:true,dirty:false,loading:false,comparisonStatus:'idle',loadedView:'full',feeLookupRows:[],feeLookupLoading:false});h.c.render();}
+const textCells=row=>[...row.matchAll(/<td[^>]*>([^]*?)<\/td>/g)].map(cell=>cell[1].replace(/<[^>]*>/g,'').trim());
+
+test('empty WG summaries keep original overview success-time totals and fee unknown without inventing data',async()=>{
+ const h=harness({platforms:[WG]});await settle();scope(h);const empty=emptyWgResult();showResults(h,[empty]);
+ const html=h.html(),payout=html.match(/<section class="df-card" id="df-payout">([^]*?)<\/section>/)?.[1];assert(payout);
+ assert.match(html,/data-wg-existing-source/);assert.match(html,/本期未收到订单数据/);assert.match(payout,/成功金额 \/ 笔数<\/span><strong class="metric-link">—<\/strong><small class="cell-sub">— 笔/);
+ assert.match(payout,/本期成功 — \/ 本期创建 0 笔/);assert.match(payout,/成功时间口径未提供，手续费暂不可统计/);assert.doesNotMatch(payout,/本期无成功订单/);assert.equal(empty.summary.length,0);
+ for(const id of ['df-teams','df-countries','df-platforms','df-providers']){
+  const section=html.slice(html.indexOf('id="'+id+'-withdraw"'));const footer=section.match(/<tfoot[^>]*>([^]*?)<\/tfoot>/)?.[1];assert(footer,id+' footer');const cells=textCells(footer),offset=id==='df-providers'?1:0;
+  assert.equal(cells[0],'代付汇总');assert.equal(cells[1+offset],'0.00');assert.equal(cells[2+offset],'0');assert.equal(cells[3+offset],'—');assert.equal(cells[4+offset+(offset?1:0)],'—');
+ }
+ h.L.direction='all';h.L.multi.direction=[];h.c.render();const collection=h.html().match(/<section class="df-card" id="df-collect">([^]*?)<\/section>/)?.[1];assert.match(collection,/本期成功 0 \/ 本期创建 0 笔/,'WG recharge success-time empty totals remain genuine zero');
+});
+
+test('empty WG results keep existing provider and team success totals unknown, including mixed sources',async()=>{
+ const other={...WG,id:'88888888-8888-4888-8888-888888888888',name:'SYNTHETIC-OTHER',source:'ar',capabilities:{}},known=wgResult();known.platform=other;known.capabilities={};
+ for(const rows of [known.summary,...Object.values(known.groups)])for(const row of rows){row.success_count=6;row.success_amount=60;row.created_success_count=6;}
+ const h=harness({platforms:[WG,other]});await settle();scope(h);
+ for(const page of ['provider_payout','teamops','teamcountries','teamplatforms']){h.c.state.page=page;showResults(h,[emptyWgResult()]);const footers=[...h.html().matchAll(/<tfoot[^>]*>([^]*?)<\/tfoot>/g)].filter(x=>x[1].includes(page==='provider_payout'?'合计':'代付汇总'));assert(footers.length,page+' payout footer');for(const footer of footers){const cells=textCells(footer[1]);if(page==='provider_payout'){assert.equal(cells[5],'—');assert.equal(cells[6],'—');}else{assert.equal(cells[3],'—');assert.equal(cells[4],'—');}}if(page==='provider_payout'){assert.match(h.html(),/代付成功金额<\/label><strong>—<\/strong>/);assert.match(h.html(),/代付成功笔数<\/label><strong>—<\/strong>/);}}
+ h.c.state.page='overview';h.L.platform='all';h.L.multi.platform=[];showResults(h,[emptyWgResult(),known],[WG,other]);const payout=h.html().match(/<section class="df-card" id="df-payout">([^]*?)<\/section>/)?.[1];assert.match(payout,/本期成功 — \/ 本期创建 10 笔/);assert.doesNotMatch(payout,/本期成功 6 \/ 本期创建/);
+});
 
 test('WG withdrawal success-time filter is disabled and blocked instead of returning a false empty table',async()=>{
  const h=harness({platforms:[WG],page:'orders'});await settle();scope(h);
@@ -60,6 +83,18 @@ test('withdrawal coverage distinguishes current and previous completeness and cu
   let html=module.render();assert.match(html,/data-wg-coverage="partial"/);assert.match(html,/当期所选创建日尚未完整采集/);assert.match(html,/不是完整总计/);assert.match(html,/当前最后操作者/);assert.match(html,/不代表历史操作次数/);assert.doesNotMatch(html,/当期所选创建日已完整采集|前期覆盖不完整/);
   module.state.data.wgCoverage={...module.state.data.wgCoverage,currentComplete:true,previousComplete:false,days:[{date:'2026-09-21',complete:false,collected:10},{date:'2026-09-22',complete:true,collected:20}]};
   html=module.render();assert.match(html,/data-wg-coverage="complete"/);assert.match(html,/当期所选创建日已完整采集/);assert.match(html,/前期覆盖不完整，跨期汇总暂不可比/);assert.doesNotMatch(html,/当期所选创建日尚未完整采集/);
+ }
+});
+test('automatic withdrawal and operator pages label empty WG coverage as historical fallback only in the selected scope',()=>{
+ const source=read('../admin-preview/live-withdraw-pages.js'),root={window:null,HensemLiveFilters:{multi:()=>''}};root.window=root;vm.runInNewContext(source,root);
+ const other={...WG,id:'88888888-8888-4888-8888-888888888888',name:'SYNTHETIC-AR',source:'ar'};
+ for(const pageName of ['auto_withdraw','withdraw_operators']){
+  const L={catalogReady:true,catalog:[WG,other],country:'巴西',from:'2026-09-22',to:'2026-09-22'},module=root.HensemLiveWithdrawPages.create({L,page:()=>pageName,E:String,C:String,N:String,R:()=> '—',box:(title,body)=>body,table:()=>'',render:()=>{},request:async()=>({})});
+  module.state.platforms=[WG.name];module.state.data={rows:[],totals:{total:300,processed:300}};
+  for(const coverage of [undefined,{days:[]}]){module.state.data.wgCoverage=coverage;const html=module.render();assert.match(html,/data-wg-coverage="historical"/);assert.match(html,/WG 新明细尚未接入所选日期，当前沿用历史日报；不是本次实时采集结果/);assert.doesNotMatch(html,/data-wg-coverage="partial"/);}
+  module.state.platforms=[other.name];assert.doesNotMatch(module.render(),/data-wg-coverage="historical"/);
+  module.state.platforms=[WG.name];module.state.data.wgCoverage={days:[{date:'2026-09-22',complete:false}],currentComplete:false};assert.match(module.render(),/data-wg-coverage="partial"/);assert.doesNotMatch(module.render(),/data-wg-coverage="historical"/);
+  L.country='越南';module.state.data.wgCoverage={days:[]};assert.doesNotMatch(module.render(),/data-wg-coverage="historical"/);
  }
 });
 test('WG mixed with a known source keeps combined success facts unknown and does not label them no successes',async()=>{

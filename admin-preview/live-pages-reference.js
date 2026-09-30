@@ -8,7 +8,9 @@
  const displayPlatform=p=>window.HensemLiveReportData?.normalizeIdentity(p||{})||p||{};
  const aliasKey=p=>window.HensemLiveReportData?.confirmedAliasKey?.(p||{})||null;
  const raw=()=>L.results.flatMap(x=>{const p=displayPlatform(x.platform);return (x.summary||[]).map(r=>({...r,platform:p.name,platformId:p.id,source:p.source,country:p.country,team:p.team||'未绑定团队'}))});
- const stat=d=>plus(raw().filter(r=>r.direction===d));
+ const successTotal=(rows,d)=>c.successTimeSummary?c.successTimeSummary(rows,d):plus(rows);
+ const scopedFeeSummary=(rows,d)=>{const fees=window.HensemProviderSummary.feeSummary(rows);return c.successTimeUnavailable?.(d)?{...fees,amount:null,successCount:null,fee_unknown:true,complete:false}:fees;};
+ const stat=d=>successTotal(raw().filter(r=>r.direction===d),d);
  const unavailable='<span class="muted" title="正式数据尚未提供此项">—</span>';
  const tab=(items,key='view')=>'<div class="section-switcher"><div class="tabs">'+items.map(([v,l])=>'<button class="'+(L[key]===v?'on':'')+'" onclick="liveReferenceSet(\''+key+'\',\''+v+'\')">'+l+'</button>').join('')+'</div></div>';
  const choose=(items,def='business')=>{if(!items.some(x=>x[0]===L.view))L.view=def;return tab(items)};
@@ -70,7 +72,7 @@
    const headers=isPlatform?[...head,'<span title="'+E(memberTitle)+'">'+E(c.memberCounts?.platformLabel?.(d)||('实际'+(d==='charge'?'充值':'取款')+(String(L.from||'').slice(0,10)!==String(L.to||'').slice(0,10)?'人次':'人数')))+'</span>']:head;
    const memberFacts=new Map(),memberFact=ids=>{const key=JSON.stringify(ids??null);if(!memberFacts.has(key))memberFacts.set(key,c.memberCounts?.platformMetric?.(ids,d));return memberFacts.get(key)};
    const memberCell=ids=>memberFact(ids)?.html||'<span class="muted" title="人数统计尚未读取">—</span>';
-   const subset=rows.filter(r=>r.direction===d),fees=window.HensemProviderSummary.feeSummary(subset),total={...plus(subset),direction:d,estimated_fee:fees.amount,fee_matched_count:fees.matchedCount,fee_eligible_count:fees.successCount,fee_excluded_count:fees.excludedCount,fee_issues:fees.issues,fee_exclusions:fees.exclusions,fee_complete:fees.complete};
+   const subset=rows.filter(r=>r.direction===d),fees=scopedFeeSummary(subset,d),total={...successTotal(subset,d),direction:d,estimated_fee:fees.amount,fee_matched_count:fees.matchedCount,fee_eligible_count:fees.successCount,fee_excluded_count:fees.excludedCount,fee_issues:fees.issues,fee_exclusions:fees.exclusions,fee_complete:fees.complete};
    const rateCell=r=>{const value=r.fee_rate_label==='不适用'?'不适用':L.feeLookupLoading?'匹配中…':L.feeLookupError?'读取失败':r.fee_rate_label;return '<span class="df-fee-rate" title="'+E(value)+'">'+E(value)+'</span>'};
    const successRateCell=r=>{const value=R(r.success_count,r.all_count),low=isPlatform&&d==='charge'&&Number.parseFloat(value)<=49.99;return '<span'+(low?' class="df-collection-rate-low"':'')+' title="成功时间内成功笔数 ÷ 创建时间内全部笔数；含跨日成功，可超过100%">'+value+'</span>'};
    const cells=(r,summary=false)=>[N(r.all_amount),C(r.all_count),N(r.success_amount),...(isProvider?[summary?(Number(total.success_amount)>0?'100.00%':'—'):share(r.success_amount_share)]:[]),C(r.success_count),...(isProvider?[summary?(Number(total.success_count)>0?'100.00%':'—'):share(r.success_count_share)]:[]),
@@ -102,7 +104,7 @@
  }
  function flow(d){
   if(!L.loading&&L.feeLookupRows===null&&!L.feeLookupLoading&&!L.feeLookupError)ensureFeeLookup();
-  const a=stat(d),tone=d==='charge'?'collect':'payout',fees=window.HensemProviderSummary.feeSummary(feeRows(d));
+  const a=stat(d),tone=d==='charge'?'collect':'payout',fees=scopedFeeSummary(feeRows(d),d);
   const directionRows=raw().filter(r=>r.direction===d),currencies=new Set(directionRows.map(r=>r.currency).filter(Boolean)),multiCurrency=currencies.size>1;
   const amountCaveat=(key)=>{if(a[key+'_amount']!==null||Number(a[key+'_count']||0)<=0)return '';if(multiCurrency)return '<small class="cell-warning" title="当前方向包含多个币种，系统不把不同币种相加">多币种 · 请按币种查看</small>';const missing=Number(a.missing_amount_count||0);return '<small class="cell-warning" title="金额不完整时不猜测总额">金额待补齐'+(missing?' · '+C(missing)+'笔缺少金额':'')+'</small>';};
   const metrics=[['all','全部','创建时间'],['success','成功','成功时间'],['pending','处理中','创建时间'],['failed','失败','创建时间']].map(([k,l,basis])=>d==='withdraw'&&k==='pending'?(c.pendingSnapshot?.metric()||'<div class="df-flow-metric"><span>近7天代付中金额 / 笔数</span><strong>—</strong><small>快照模块尚未加载</small></div>'):'<div class="df-flow-metric"><span>'+l+'金额 / 笔数</span><strong class="metric-link">'+N(a[k+'_amount'])+'</strong><small class="cell-sub">'+C(a[k+'_count'])+' 笔</small><small class="cell-basis">按'+basis+'</small>'+amountCaveat(k)+compareMetric(k+'_amount',a,false,d)+'</div>').join('');
