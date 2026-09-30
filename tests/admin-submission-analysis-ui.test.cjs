@@ -4,7 +4,7 @@ const E=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt
 const platform=(id='a',source='ar')=>({id,name:'Synthetic '+id,source,currency:'INR',timezone:'Asia/Kolkata'});
 const metric=(provider,t=30,n=2,count=70)=>({provider,threshold:t,qualified_member_count:n,qualified_member_days:n+1,member_count:n,member_days:n+1,invalid_count:count,l0_members:1,new_members:1,funded_members:1,unknown_members:0});
 function response(q,more={}){return {platform:platform(q.platformId),startAt:q.startAt,endAt:q.endAt,version:2,basis:'platform_local_day_all_providers_zero_success_after_first_15',exemptCount:15,metrics:[10,15,20,30,50,100].flatMap(t=>[metric(null,t),metric('Pay A',t),metric('Pay B',t)]),coverage:{orderCount:200,missingMemberCount:0,missingLevelCount:0},...more};}
-function harness(){const L={country:'印度',from:'2026-09-01T00:00:00',to:'2026-09-30T23:59:59',dirty:false},calls=[],drawers=[],tables=[];let platforms=[platform()],handler=q=>response(q);const ui=create({L,E,C:n=>String(n),N:n=>String(n),selected:()=>platforms,query:p=>({startAt:'2026-09-01T00:00:00Z',endAt:'2026-09-30T00:00:00Z',status:'all',providers:['Pay A','Pay B']}),request:q=>{calls.push(q);return Promise.resolve(handler(q))},render(){},box:(title,body)=>'<h2>'+title+'</h2>'+body,table:(headers,rows,classes)=>{tables.push({headers,rows,classes});return rows.map(row=>row.join(' ')).join('\n')},open:(title,body)=>drawers.push({title,body})});return {L,ui,calls,drawers,tables,select:x=>platforms=x,handler:x=>handler=x};}
+function harness(){const L={country:'印度',from:'2026-09-01T00:00:00',to:'2026-09-30T23:59:59',dirty:false},calls=[],drawers=[],tables=[];let platforms=[platform()],providers=['Pay A','Pay B'],handler=q=>response(q);const ui=create({L,E,C:n=>String(n),N:n=>String(n),selected:()=>platforms,query:p=>({startAt:'2026-09-01T00:00:00Z',endAt:'2026-09-30T00:00:00Z',status:'all',providers}),request:q=>{calls.push(q);return Promise.resolve(handler(q))},render(){},box:(title,body)=>'<h2>'+title+'</h2>'+body,table:(headers,rows,classes)=>{tables.push({headers,rows,classes});return rows.map(row=>row.join(' ')).join('\n')},open:(title,body)=>drawers.push({title,body})});return {L,ui,calls,drawers,tables,select:x=>platforms=x,setProviders:x=>providers=x,handler:x=>handler=x};}
 test('whole period platform totals use independently deduplicated IDs, never sum provider member counts',async()=>{
  const h=harness();await h.ui.ensure();assert.equal(h.calls.length,1);assert.equal(h.ui.metric().member_count,2);assert.equal(h.ui.metric('Pay A').member_count,2);assert.equal(h.ui.metric('Pay B').member_count,2);assert.match(h.ui.providerCell('Pay A',['a'],'members',65,200),/同平台 ID 在所选期间去重/);await h.ui.ensure();assert.equal(h.calls.length,1);assert.deepEqual(h.calls[0].providers,['Pay A','Pay B']);
 });
@@ -155,4 +155,22 @@ test('compact coverage keeps long errors and partial-count explanation out of th
  const h=harness();h.select([platform(),{...platform('b'),name:'DHANIWIN'},{...platform('c'),name:'51GAME'}]);h.handler(q=>{if(q.platformId!=='a')throw Error('读取超时，请缩短日期范围后再次查询，失败原因详情');return response(q)});await h.ui.ensure();const html=h.ui.note(true),visible=html.replace(/<[^>]*>/g,'');
  assert.equal(visible,'剔除 1/3 · 未完成 DHANIWIN 等 2 平台 重试');assert.match(html,/submission-coverage-compact/);assert.match(html,/title="[^"]*DHANIWIN：读取超时[^"]*51GAME：读取超时[^"]*\* 为已读取平台合计/);assert.match(html,/onclick="liveSubmissionCoverage\(\)"/);assert.doesNotMatch(visible,/失败原因详情|完整剔除率|51GAME/);
  const calls=h.calls.length;global.liveSubmissionCoverage();assert.equal(h.calls.length,calls);assert.match(h.drawers.at(-1).body,/DHANIWIN：读取超时/);assert.match(h.drawers.at(-1).body,/51GAME：读取超时/);assert.match(h.drawers.at(-1).body,/\* 为已读取平台合计，完整剔除率待核对/);
+});
+test('one synchronous table paint validates the sixteen-platform scope once for sixty metric cells',()=>{
+ const platforms=Array.from({length:16},(_,i)=>platform('p'+i)),L={country:'印度',from:'2026-09-29T00:00:00',to:'2026-09-29T23:59:59',dirty:false};let calls=0;
+ const ui=create({L,E,C:String,N:String,selected:()=>platforms,query:()=>{calls++;return {status:'all',startAt:'2026-09-28T18:30:00Z',endAt:'2026-09-29T18:30:00Z'}},request:()=>{throw Error('unexpected request')},render(){}});
+ const paint=()=>Array.from({length:20},(_,i)=>['rate','members','count'].map(kind=>ui.providerCell('Provider '+i,platforms.map(p=>p.id),kind,50,100)));
+ const before=paint();assert.equal(calls,1920,'regression reproduces per-cell scope work');calls=0;
+ assert.deepEqual(ui.withSnapshot(paint),before);assert.equal(calls,16,'the table shares one synchronous scope validation');
+ calls=0;ui.withSnapshot(paint);assert.equal(calls,16,'each new paint still validates fresh scope');
+ calls=0;assert.throws(()=>ui.withSnapshot(()=>{throw Error('synthetic paint failure')}));ui.metric();assert.equal(calls,32,'a failed paint releases its snapshot');
+});
+test('render snapshots expire before date, platform or filter changes and async results',async()=>{
+ const h=harness();await h.ui.load();const paint=()=>h.ui.withSnapshot(()=>h.ui.metric('Pay A'));
+ assert.equal(paint().available,true);
+ h.L.from='2026-08-01T00:00:00';assert.equal(paint().available,false);h.L.from='2026-09-01T00:00:00';assert.equal(paint().available,true);
+ h.select([platform('different')]);assert.equal(paint().available,false);h.select([platform()]);assert.equal(paint().available,true);
+ h.setProviders(['Pay A']);assert.equal(paint().available,false);h.setProviders(['Pay A','Pay B']);assert.equal(paint().available,true);
+ h.L.dirty=true;assert.equal(paint().available,false);h.L.dirty=false;assert.equal(paint().available,true);
+ let done;h.handler(q=>new Promise(resolve=>{done=()=>resolve(response(q))}));const pending=h.ui.load();assert.equal(paint().available,false);done();await pending;assert.equal(paint().available,true,'the next paint includes completed async work');
 });
