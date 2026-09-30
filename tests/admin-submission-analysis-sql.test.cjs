@@ -7,13 +7,13 @@ const authSql=read('admin-live-query.sql').match(/create function private\.dashb
 const schemas=fs.readFileSync(path.join(__dirname,'uploaded-order-sources.test.cjs'),'utf8').split('\n').filter(l=>/^ create table (game66_platforms|game66_charge_orders|game66_withdraw_orders|ar_config_targets|ar_collected_orders|newar_detail_platforms|newar_detail_records)\(/.test(l)).join('\n');
 const ids={ar:'00000000-0000-4000-8000-000000000001',lg:'00000000-0000-4000-8000-000000000002',newar:'00000000-0000-4000-8000-000000000003',game:'00000000-0000-4000-8000-000000000004',hidden:'00000000-0000-4000-8000-000000000005',kp:'00000000-0000-4000-8000-000000000006'};
 const owner='10000000-0000-4000-8000-000000000001',viewer='10000000-0000-4000-8000-000000000002';
-let db;
+let db,productionAcls;
 const request=(overrides={})=>({platformId:ids.ar,startAt:'2026-09-25T00:00:00+05:30',endAt:'2026-09-26T00:00:00+05:30',direction:'charge',...overrides});
 const call=async(q=request())=>(await db.query('select public.dashboard_admin_live_submission_analysis($1::jsonb) data',[JSON.stringify(q)])).rows[0].data;
 const as=uid=>db.query("select set_config('test.uid',$1,false)",[uid]);
 const row=(result,date='2026-09-25',direction='charge')=>result.rows.find(r=>r.date===date&&r.direction===direction);
 before(async()=>{
- db=new PGlite();await db.exec(`create schema private;create schema auth;create role anon;create role authenticated;
+ db=new PGlite();await db.exec(`create schema private;create schema auth;create role anon;create role authenticated;create role service_role;create role unexpected_caller;
  grant usage on schema auth,private to authenticated;
  create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('test.uid',true),'')::uuid$$;
  create table dashboard_profiles(auth_user_id uuid primary key,role text,active boolean,data_scope jsonb);
@@ -71,7 +71,10 @@ before(async()=>{
  insert into game66_withdraw_orders(platform_id,order_num,uid,create_time,update_time,status_code,pay_channel) values
  ('${ids.game}','GW1','G-SYNTH','2026-09-25T03:00+05:30','2026-09-25T03:05+05:30','3','route-a'),
  ('${ids.game}','GW2','G-SYNTH','2026-09-25T04:00+05:30','2026-09-25T04:05+05:30','2','route-b');
- `);await db.exec(`alter table lg_orders add column order_no text,add column metric_amount numeric;alter table ar_collected_orders add column member_level text,add column recharge_count integer;alter table newar_detail_records add column raw jsonb default '{}';create function private.dashboard_admin_live_provider_canonical(country text,platform text,provider text) returns text language sql stable as $$select case when provider in ('route-a','route-b') then 'CombinedPay' else provider end$$;`);await db.exec(migration);await db.exec(read('migrations/20260928092956_admin_live_dynamic_amount_bands.sql').split('do $patch$')[0]+'commit;');await db.exec(read('migrations/20260929200000_submission_risk_dashboard.sql'));await db.exec(read('migrations/20260929210000_newar_charge_wait_status.sql'));await db.exec(read('migrations/20260929220000_submission_threshold_15.sql'));await db.exec(read('migrations/20260930110000_submission_member_day_amount.sql'));await db.exec(read('migrations/20260930150000_submission_excess_after_15.sql'));await as(owner);await seed();
+ `);await db.exec(`alter table lg_orders add column order_no text,add column metric_amount numeric;alter table ar_collected_orders add column member_level text,add column recharge_count integer;alter table newar_detail_records add column raw jsonb default '{}';create function private.dashboard_admin_live_provider_canonical(country text,platform text,provider text) returns text language sql stable as $$select case when provider in ('route-a','route-b') then 'CombinedPay' else provider end$$;`);await db.exec(migration);await db.exec(read('migrations/20260928092956_admin_live_dynamic_amount_bands.sql').split('do $patch$')[0]+'commit;');await db.exec(read('migrations/20260929200000_submission_risk_dashboard.sql'));await db.exec(read('migrations/20260929210000_newar_charge_wait_status.sql'));await db.exec(read('migrations/20260929220000_submission_threshold_15.sql'));await db.exec(read('migrations/20260930110000_submission_member_day_amount.sql'));
+ await db.exec('grant execute on function public.dashboard_admin_live_submission_analysis(jsonb) to service_role');
+ productionAcls=(await db.query("select oid::regprocedure::text name,proacl::text acl from pg_proc where oid in ('private.dashboard_admin_live_submission_analysis(jsonb)'::regprocedure,'public.dashboard_admin_live_submission_analysis(jsonb)'::regprocedure) order by name")).rows;
+ await db.exec(read('migrations/20260930150000_submission_excess_after_15.sql'));await as(owner);await seed();
 });
 after(async()=>db?.close());
 
@@ -317,4 +320,22 @@ test('migration replays only its exact reviewed body and rejects definition or e
  await db.exec('alter function private.dashboard_admin_live_submission_analysis(jsonb) set statement_timeout=1000');
  await assert.rejects(db.exec(migration),/submission_excess_definition_drift/);await db.exec('rollback;');await db.exec(original);
  await db.exec(migration);const r=await call(q({threshold:15}));assert.equal(r.version,2);assert.equal(metric(r,15).invalid_count,85);
+});
+
+
+test('reviewed production service_role grant is preserved only on the public wrapper',async()=>{
+ const migration=read('migrations/20260930150000_submission_excess_after_15.sql');
+ const acls=async()=>(await db.query("select oid::regprocedure::text name,proacl::text acl from pg_proc where oid in ('private.dashboard_admin_live_submission_analysis(jsonb)'::regprocedure,'public.dashboard_admin_live_submission_analysis(jsonb)'::regprocedure) order by name")).rows;
+ assert.deepEqual(await acls(),productionAcls,'initial predecessor migration preserves exact production-shaped ACLs');
+ await db.exec(migration);assert.deepEqual(await acls(),productionAcls,'exact-body replay retains both ACLs');
+ for(const [schema,role,grantable] of [['private','service_role',false],['private','PUBLIC',false],['public','PUBLIC',false],['public','anon',false],['public','unexpected_caller',false],['private','authenticated',true],['public','authenticated',true],['public','service_role',true]]){
+  const f=schema+'.dashboard_admin_live_submission_analysis(jsonb)';
+  await db.exec('grant execute on function '+f+' to '+role+(grantable?' with grant option':''));
+  await assert.rejects(db.exec(migration),/submission_excess_acl_drift/,schema+' '+role+(grantable?' grant option':''));await db.exec('rollback');
+  await db.exec((grantable?'revoke grant option for execute':'revoke execute')+' on function '+f+' from '+role);
+  assert.deepEqual(await acls(),productionAcls);
+ }
+ await db.exec('revoke execute on function public.dashboard_admin_live_submission_analysis(jsonb) from service_role');
+ const withoutService=await acls();await db.exec(migration);assert.deepEqual(await acls(),withoutService,'migration never introduces service_role where absent');
+ await db.exec('grant execute on function public.dashboard_admin_live_submission_analysis(jsonb) to service_role');assert.deepEqual(await acls(),productionAcls);
 });

@@ -9,12 +9,12 @@ import AdminPreviewGrants from "./AdminPreviewGrants";
 import AdminControlCenter from "./AdminControlCenter";
 import WorkOrderAccountAdmin from "./WorkOrderAccountAdmin";
 import { installAdminLiveBridge, makeAdminLiveDocument } from "@/lib/adminLiveBridge";
-import { OWNER_PREVIEW_HOST_CSS, isOwnerPreviewReturnMessage, ownerPreviewActivityTime, ownerPreviewAccountCommand, ownerPreviewAccountPage, makeOwnerPreviewShellDocument, mountOwnerPreviewHostShell } from "@/lib/ownerPreviewShell";
+import { OWNER_PREVIEW_HOST_CSS, ownerPreviewActivityTime, ownerPreviewAccountCommand, ownerPreviewAccountPage, makeOwnerPreviewShellDocument, mountOwnerPreviewHostShell } from "@/lib/ownerPreviewShell";
 
 import { recordDashboardActivity } from "@/lib/dashboardIdle";
 
-type Props = { canView:boolean; session: DashboardSession; profile: DashboardProfile; onClose: () => void };
-export default function OwnerAdminPreview({session,profile,onClose,canView}: Props) {
+type Props = { canView:boolean; session: DashboardSession; profile: DashboardProfile; onLogout: () => void };
+export default function OwnerAdminPreview({session,profile,onLogout,canView}: Props) {
   const frame=useRef<HTMLIFrameElement>(null),channel=useRef("");
   const sessionRef=useRef(session);sessionRef.current=session;
   const accountId=profile.auth_user_id;
@@ -37,20 +37,20 @@ export default function OwnerAdminPreview({session,profile,onClose,canView}: Pro
       const response=await adminPreviewRequest(sessionRef.current,check?"?check=1":"",{signal:controller.signal});
       if(!check){const html=await response.text();if(!cancelled)setDocumentHtml(makeOwnerPreviewDocument(makeOwnerPreviewShellDocument(makeAdminLiveDocument(restoreApprovedAdmin(html),channel.current),channel.current,owner),readDrafts(),channel.current));}
     };
-    const fail=(e:unknown)=>{if(cancelled)return;cancelled=true;controller.abort();setDocumentHtml("");setError(e instanceof Error?e.message:"后台预览加载失败")};
+    const fail=(e:unknown)=>{if(cancelled)return;cancelled=true;controller.abort();setDocumentHtml("");setError(e instanceof Error?e.message:"后台加载失败")};
     request().catch(fail);
     const verify=()=>{if(checking||cancelled)return;checking=true;request(true).catch(fail).finally(()=>{checking=false})};
     const timer=window.setInterval(verify,60000);
     const focused=()=>{if(document.visibilityState==="visible")verify()};document.addEventListener("visibilitychange",focused);
     return()=>{cancelled=true;controller.abort();window.clearInterval(timer);document.removeEventListener("visibilitychange",focused)};
   },[allowed,accountId,reload,readDrafts,owner]);
-  useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{const data=event.data;const activity=ownerPreviewActivityTime(event,frame.current?.contentWindow,channel.current);if(activity!==null){recordDashboardActivity(activity);return}if(isOwnerPreviewReturnMessage(event,frame.current?.contentWindow,channel.current)){onClose();return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){setAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,onClose,canManageAccounts,owner]);
+  useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{const data=event.data;const activity=ownerPreviewActivityTime(event,frame.current?.contentWindow,channel.current);if(activity!==null){recordDashboardActivity(activity);return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){setAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,canManageAccounts,owner]);
   const hasDocument=Boolean(documentHtml);
   useEffect(()=>{if(!allowed||!hasDocument)return;return installAdminLiveBridge({source:()=>frame.current?.contentWindow,channel:()=>channel.current,session:()=>sessionRef.current})},[allowed,hasDocument,accountId]);
-  return <section className="owner-preview-shell" aria-label="新版详细后台">
+  return <section className="owner-preview-shell" aria-label="数据中控后台">
     <style>{OWNER_PREVIEW_HOST_CSS}</style>
-    {owner&&<button type="button" className="owner-preview-shell-grants" aria-label="管理新版后台查看授权" onClick={()=>setShowGrants(true)}>查看授权</button>}
-    {allowed&&documentHtml?<iframe ref={frame} title="新版详细后台授权预览" sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" srcDoc={documentHtml} className="owner-preview-shell-frame"/>:<div role={error?"alert":"status"} className="owner-preview-shell-status">{!allowed?"当前账号没有新版后台查看权限":error||"正在验证查看权限并加载新版后台…"}<div className="owner-preview-shell-status-actions"><button type="button" className="owner-preview-shell-return" onClick={onClose}>← 返回现有后台</button>{error&&<button type="button" className="owner-preview-shell-return" onClick={()=>setReload(x=>x+1)}>重新加载</button>}</div></div>}
+    {owner&&<button type="button" className="owner-preview-shell-grants" aria-label="管理后台查看授权" onClick={()=>setShowGrants(true)}>查看授权</button>}
+    {allowed&&documentHtml?<iframe ref={frame} title="数据中控后台" sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" srcDoc={documentHtml} className="owner-preview-shell-frame"/>:<div role={error?"alert":"status"} className="owner-preview-shell-status">{!allowed?"当前账号没有后台查看权限":error||"正在验证查看权限并加载后台…"}<div className="owner-preview-shell-status-actions"><button type="button" className="owner-preview-shell-return" onClick={onLogout}>退出登录</button>{error&&<button type="button" className="owner-preview-shell-return" onClick={()=>setReload(x=>x+1)}>重新加载</button>}</div></div>}
     {owner&&showGrants&&<AdminPreviewGrants session={session} onClose={()=>setShowGrants(false)}/>}
     {allowed&&hasDocument&&accountBounds&&<section aria-label="账号与角色权限" className="owner-preview-account-page" style={{top:Math.max(48,accountBounds.top),left:accountBounds.left,width:accountBounds.width}}>
       <div role="tablist" aria-label="账号类型" className="owner-preview-account-tabs">

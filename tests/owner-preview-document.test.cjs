@@ -160,7 +160,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   };
   vm.runInNewContext(transpile(fs.readFileSync(componentPath, 'utf8')), environment, { filename: componentPath });
   const props = { canView: options.canView ?? true, session: currentSession,
-    profile: { active: options.active ?? true, role: options.role || 'owner', management_permissions:options.management_permissions, auth_user_id: userId }, onClose: options.onClose || (()=>{}) };
+    profile: { active: options.active ?? true, role: options.role || 'owner', management_permissions:options.management_permissions, auth_user_id: userId }, onLogout: options.onLogout || (()=>{}) };
   const draw = () => { hookIndex = refIndex = callbackIndex = effectIndex = 0; return box.exports.default(props); };
   draw(); const child = {}; refs[0].current = { contentWindow: child };
   for (const effect of effects.splice(0)) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); }
@@ -281,11 +281,11 @@ test('same-user session refresh keeps the iframe and uses the latest session for
   assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);h.dispose();
 });
 
-test('shell return command only accepts the current opaque frame and never changes draft authorization', async () => {
-  let closed=0;const h=componentHarness('shell-viewer',{role:'viewer',canView:true,onClose:()=>closed++});await flush();
+test('retired return command cannot leave the formal backend or alter draft authorization', async () => {
+  let closed=0;const h=componentHarness('shell-viewer',{role:'viewer',canView:true,onLogout:()=>closed++});await flush();
   const message={source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command:'back'}};
   for(const event of [{...message,source:{}},{...message,origin:'https://other.invalid'},{...message,data:{...message.data,channel:'stale'}},{...message,data:{...message.data,command:'grant'}},{...message,data:null}])h.send(event);
-  assert.equal(closed,0);h.send(message);assert.equal(closed,1);assert.equal(h.values.get(h.prefix+KEY),'this-account-draft');
+  assert.equal(closed,0);h.send(message);assert.equal(closed,0);assert.equal(h.values.get(h.prefix+KEY),'this-account-draft');
   assert.equal(findElement(h.draw(),'header'),undefined,'no outer preview header takes viewport space');
   h.dispose();
 });
@@ -371,7 +371,7 @@ test('bookmarked page reaches the authorized iframe while denied accounts never 
   const script=scripts(iframe.props.srcDoc).find(text=>text.includes('window.HENSEM_PRODUCTION=true'));assert(script);
   const context=vm.createContext({parent:{postMessage(){throw Error('URL helper must not request data')}},addEventListener(){},setTimeout,clearTimeout});
   vm.runInContext('window=globalThis',context);vm.runInContext(script,context);
-  assert.equal(context.hensemAdminInitialPage,'provider_payout');assert.equal(context.hensemAdminPageUrl('providers'),'https://app.offline.invalid/hensem-data-center/#owner-admin-preview/providers');
+  assert.equal(context.hensemAdminInitialPage,'provider_payout');assert.equal(context.hensemAdminPageUrl('providers'),'https://app.offline.invalid/hensem-data-center/#admin/providers');
   assert.doesNotMatch(iframe.props.srcDoc,/synthetic-query-secret|offline-host-access|offline-host-refresh/);h.dispose();
   const denied=componentHarness('offline-denied-bookmark',{location,canView:false,role:'viewer'});await flush();
   assert.equal(denied.calls.length,0);assert(!findElement(denied.draw(),'iframe'));denied.dispose();

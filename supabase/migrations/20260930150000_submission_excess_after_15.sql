@@ -8,9 +8,10 @@ begin;
 -- Replace only the reviewed predecessor or this exact completed migration.
 -- Existing unexpected definitions, execution settings or grantees require review.
 do $guard$
-declare v_name text;v_proc record;v_authenticated oid;
+declare v_name text;v_proc record;v_authenticated oid;v_service_role oid;
 begin
  select oid into v_authenticated from pg_catalog.pg_roles where rolname='authenticated';
+ select oid into v_service_role from pg_catalog.pg_roles where rolname='service_role';
  foreach v_name in array array['private.dashboard_admin_live_submission_analysis(jsonb)','public.dashboard_admin_live_submission_analysis(jsonb)'] loop
   select * into v_proc from pg_catalog.pg_proc where oid=pg_catalog.to_regprocedure(v_name);
   if not found or v_authenticated is null then raise exception 'submission_excess_baseline_missing: %',v_name;end if;
@@ -30,7 +31,12 @@ begin
   end if;
   if not exists(select 1 from pg_catalog.aclexplode(v_proc.proacl) a where a.grantee=v_authenticated and a.privilege_type='EXECUTE' and not a.is_grantable)
     or exists(select 1 from pg_catalog.aclexplode(coalesce(v_proc.proacl,pg_catalog.acldefault('f',v_proc.proowner))) a
-      where a.privilege_type='EXECUTE' and (a.grantee not in (v_proc.proowner,v_authenticated) or a.grantee=v_authenticated and a.is_grantable)) then
+      -- Production's public wrapper already permits service_role. Preserve that
+      -- existing grant only; private stays owner/authenticated and no grantable
+      -- privilege, PUBLIC, anon, or other grantee is accepted on either function.
+      where a.privilege_type='EXECUTE' and (a.is_grantable or not (
+        a.grantee=v_proc.proowner or a.grantee=v_authenticated
+        or (v_name like 'public.%' and v_service_role is not null and a.grantee=v_service_role)))) then
    raise exception 'submission_excess_acl_drift: %',v_name;
   end if;
  end loop;
@@ -289,11 +295,8 @@ begin
   'basis','platform_local_day_all_providers_zero_success_after_first_15','thresholds',to_jsonb(v_thresholds),'operation',v_operation);
 end;
 $$;
-revoke all on function private.dashboard_admin_live_submission_analysis(jsonb) from public,anon;
-grant execute on function private.dashboard_admin_live_submission_analysis(jsonb) to authenticated;
 create or replace function public.dashboard_admin_live_submission_analysis(p_request jsonb)
 returns jsonb language sql stable security invoker set search_path='' as $$select private.dashboard_admin_live_submission_analysis(p_request);$$;
-revoke all on function public.dashboard_admin_live_submission_analysis(jsonb) from public,anon;
-grant execute on function public.dashboard_admin_live_submission_analysis(jsonb) to authenticated;
+-- CREATE OR REPLACE retains the exact pre-existing ACLs verified above.
 notify pgrst,'reload schema';
 commit;

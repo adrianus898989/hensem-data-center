@@ -370,7 +370,7 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
 // and preview-grant checks still run before any document or data is returned.
 export function adminPreviewPageFromHash(hash:unknown):string|null {
  if(typeof hash!=="string")return null;
- const match=/^#owner-admin-preview(?:\/([a-z][a-z0-9_-]{0,63}))?$/.exec(hash);
+ const match=/^#(?:admin|owner-admin-preview)(?:\/([a-z][a-z0-9_-]{0,63}))?$/.exec(hash);
  return match?(match[1]||"overview"):null;
 }
 export function adminPreviewPageUrl(page:unknown,location:{origin:string;pathname?:string}):string {
@@ -380,7 +380,7 @@ export function adminPreviewPageUrl(page:unknown,location:{origin:string;pathnam
    ||!pathname.startsWith("/")||/[\\\u0000-\u001f\u007f?#]/.test(pathname))throw Error("后台页面来源无效");
  const target=new URL(pathname,origin);
  if(target.origin!==origin.origin||target.username||target.password)throw Error("后台页面来源无效");
- target.hash="owner-admin-preview/"+page;
+ target.hash="admin/"+page;
  return target.href;
 }
 export function makeAdminLiveDocument(html:string,channel:string):string{
@@ -398,7 +398,7 @@ export function makeAdminLiveDocument(html:string,channel:string):string{
  window.hensemAdminInitialPage=${encode(initialPage)};
  // No arbitrary URL, host query string or authentication fragment crosses the
  // frame boundary. The menu independently validates its allowed page IDs.
- window.hensemAdminPageUrl=function(page){return typeof page==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(page)?${encode(pageBase)}+'#owner-admin-preview/'+page:''};
+ window.hensemAdminPageUrl=function(page){return typeof page==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(page)?${encode(pageBase)}+'#admin/'+page:''};
  window.hensemLiveRequest=function(request,options={}){return new Promise((resolve,reject)=>{
    const signal=options.signal;if(signal&&signal.aborted){reject(error('查询已取消','ADMIN_LIVE_CANCELLED'));return;}
    const id='live_'+(++seq),deadline=Date.now()+${LIVE_REQUEST_TIMEOUT_MS};

@@ -903,8 +903,10 @@ function DashboardGlyph({ name }: { name: DashboardGlyphName }) {
   );
 }
 
-export default function Dashboard() {
-  const { session, profile, openProfile } = useDashboardAuth();
+// Retained helpers and legacy implementation are not mounted by the formal entry.
+export { default } from "./OfficialDashboard";
+function LegacyDashboard() {
+  const { session, profile, openProfile, logout } = useDashboardAuth();
   const canThirdParty = hasDashboardPermission(profile, "third_party");
   const canAutoWithdraw = hasDashboardPermission(profile, "auto_withdraw");
   const canWorkSupport =
@@ -1734,7 +1736,7 @@ export default function Dashboard() {
       </button>
 
       {(isOwner || canDetailedPreview) && profile?.active && <button className={activeModule === "owner-admin-preview" ? "nav-item active" : "nav-item"} onClick={() => switchModule("owner-admin-preview")}>
-        <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="chart" /></span>新版详细后台</span><span className="badge">授权内测</span>
+        <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="chart" /></span>数据中控后台</span><span className="badge">正式后台</span>
       </button>}
 
       <div className="nav-section-title system-admin-title">系统管理</div>
@@ -1800,7 +1802,7 @@ export default function Dashboard() {
   );
 
   if (activeModule === "owner-admin-preview" && session && profile?.active && (isOwner || canDetailedPreview)) {
-    return <OwnerAdminPreview session={session} profile={profile} canView={isOwner || canDetailedPreview} onClose={() => { window.history.replaceState(null, "", window.location.pathname + window.location.search); switchModule("home"); }} />;
+    return <OwnerAdminPreview session={session} profile={profile} canView={isOwner || canDetailedPreview} onLogout={logout} />;
   }
 
   if (activeModule === "home") {
