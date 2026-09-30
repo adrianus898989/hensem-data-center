@@ -1137,16 +1137,16 @@ test('first overview snapshot waits for delayed report directory and keeps new u
 });
 
 
-test('workorder pages manually query the current business month and keep manual ranges independent',async()=>{
+test('workorder records manually query the last seven business days while other pages keep the current month',async()=>{
  const routes=['workorders','deposit_tracking','deposit_statistics','workorder_reconciliation','workorder_workload','workorder_operation_logs'];
  for(const page of routes){
   const h=harness({page,handler:q=>q.action==='catalog'?{platforms:[P]}:{rows:[],total:0,summary:{}}});await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);await h.c.liveQuery();await settle();
   const q=h.calls.find(q=>['workorderRecords','depositIssues','depositStatistics','portalOperationLogs'].includes(q.action));assert(q,page+' reads after clicking query');
-  if(q.filters){assert.equal(q.filters.from,'2026-09-01',page);assert.equal(q.filters.to,'2026-09-30',page);}else{assert.equal(q.dateMode,'range',page);assert.equal(q.startAt,'2026-09-01T00:00:00.000Z',page);assert.equal(q.endAt,'2026-09-30T23:59:59.000Z',page);}
+  if(q.filters){assert.equal(q.filters.from,page==='workorders'?'2026-09-17':'2026-09-01',page);assert.equal(q.filters.to,page==='workorders'?'2026-09-23':'2026-09-30',page);}else{assert.equal(q.dateMode,'range',page);assert.equal(q.startAt,'2026-09-01T00:00:00.000Z',page);assert.equal(q.endAt,'2026-09-30T23:59:59.000Z',page);}
  }
  const h=await ready();h.c.setPage('deposit_tracking');await settle();h.c.depositIssuesDate('from','2026-08-01');h.c.depositIssuesDate('to','2026-08-31');await h.c.depositIssuesLoad();h.c.setPage('deposit_statistics');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).startAt,'2026-09-01T00:00:00.000Z');h.c.setPage('deposit_tracking');await settle();assert.equal(h.L.from,'2026-08-01T00:00:00');
  h.c.depositIssuesSet('dateMode','all');await h.c.depositIssuesLoad();assert.equal(h.calls.at(-1).dateMode,'all');h.c.depositIssuesReset();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).dateMode,'range');assert.equal(h.calls.at(-1).startAt,'2026-09-01T00:00:00.000Z');
- h.c.setPage('workorders');await settle();await h.c.liveQuery();await settle();h.c.workorderOperationsSet('from','2026-08-01');h.c.workorderOperationsSet('to','2026-08-31');await h.c.workorderOperationsLoad(true);h.c.liveClosePage('workorders');h.c.setPage('workorders');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).filters.from,'2026-09-01');assert.equal(h.calls.at(-1).filters.to,'2026-09-30');
+ h.c.setPage('workorders');await settle();await h.c.liveQuery();await settle();h.c.workorderOperationsSet('from','2026-08-01');h.c.workorderOperationsSet('to','2026-08-31');await h.c.workorderOperationsLoad(true);h.c.liveClosePage('workorders');h.c.setPage('workorders');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).filters.from,'2026-09-17');assert.equal(h.calls.at(-1).filters.to,'2026-09-23');
 });
 
 
