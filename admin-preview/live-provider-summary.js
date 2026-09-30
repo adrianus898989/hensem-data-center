@@ -397,12 +397,14 @@
   const label=full?'':(current.length<query.requested?'同范围 ':'按已读 ')+current.length+' 平台';
   return {reason:'',current,previous,count:current.length,label,detail:(full?'全部所选平台':'仅比较两期共同已读取的平台；完整性未确认的记录按已读结果计算')+'：'+names+(blocked.size?'；两期均剔除已确认缺少创建数据的平台':'')};
  }
+ const scopedTotal=(ctx,rows,direction)=>ctx.successTimeSummary?ctx.successTimeSummary(rows,direction):ctx.plus(rows);
+ const scopedFees=(ctx,rows,direction)=>{const fees=feeSummary(rows);return ctx.successTimeUnavailable?.(direction)?{...fees,amount:null,successCount:null,complete:false,fee_unknown:true}:fees;};
  function renderMetrics(ctx,direction,currentRows){
   const {L,E,N,C,R,plus,combine}=ctx,name=direction==='charge'?'代收':'代付',readState=queryCoverage(L),intake=intakeCoverage(L,direction),partial=readState.partial||intake.partial;
   const comparison=comparisonScope(L,direction),unavailable=comparison.reason;
   const previousOrders=comparison.previous.flatMap(x=>(x.groups?.provider||[]).map(r=>({...r,platformId:x.platform?.id,platform:x.platform?.name,source:x.platform?.source})));
   const previousRows=buildRows({orders:previousOrders,issues:null,rates:L.feeLookupRows,country:L.country,direction,plus,combine});
-  const snapshot=rows=>({total:plus(rows),fees:feeSummary(rows),providers:new Set(rows.filter(r=>r.items?.length&&!['未识别通道','无三方（驳回）','未标记三方','人工确认','人工充值'].includes(r.provider)).map(r=>r.provider)).size,
+  const snapshot=rows=>({total:scopedTotal(ctx,rows,direction),fees:scopedFees(ctx,rows,direction),providers:new Set(rows.filter(r=>r.items?.length&&!['未识别通道','无三方（驳回）','未标记三方','人工确认','人工充值'].includes(r.provider)).map(r=>r.provider)).size,
    platforms:new Set(rows.flatMap(r=>r.items||[]).map(r=>r.platformId).filter(Boolean)).size});
   const comparableOrders=comparison.current.flatMap(x=>(x.groups?.provider||[]).map(r=>({...r,platformId:x.platform.id,platform:x.platform.name,source:x.platform.source})));
   const comparableRows=buildRows({orders:comparableOrders,issues:null,rates:L.feeLookupRows,country:L.country,direction,plus,combine});
@@ -440,7 +442,7 @@
   const {L,E,N,C,R,plus,combine,groupRows,box,table,pager,submissionAnalysis,feeForRow,ensureFeeLookup,providerCell,openDrawer}=ctx,name=direction==='charge'?'代收':'代付',issueLabel=direction==='charge'?'存款未到账':'取款未到账';
   if(L.feeLookupRows===null&&!L.feeLookupLoading&&!L.feeLookupError)ensureFeeLookup();
   const orderRows=groupRows('provider');let rows=buildRows({orders:orderRows,issues:L.workorders?.byProvider||null,rates:L.feeLookupRows,country:L.country,direction,plus,combine,coverage:L.workorders?.coverage});
-  const total=plus(rows),fees=feeSummary(rows),knownFee=fees.amount||0,readState=queryCoverage(L),intake=intakeCoverage(L,direction),partial=readState.partial||intake.partial;
+  const total=scopedTotal(ctx,rows,direction),fees=scopedFees(ctx,rows,direction),knownFee=fees.amount||0,readState=queryCoverage(L),intake=intakeCoverage(L,direction),partial=readState.partial||intake.partial;
   const submissionIds=r=>r._submissionIds||[...new Set((r.items||[]).map(x=>x.platformId).filter(Boolean))];
   const submissionFact=r=>{const m=submissionAnalysis?.metric(r._submissionTotal?null:r.provider,submissionIds(r));return m?.complete?m:null};
   const submissionCells=r=>['rate','members','count'].map(kind=>r._submissionUnavailable?'—':submissionAnalysis?.providerCell(r._submissionTotal?null:r.provider,submissionIds(r),kind,r.success_count,r.all_count)||'—');
@@ -548,8 +550,8 @@
     ...issueKeys.map(key=>uniqueCell(r.uniqueOrders,displayedIssueKeys[key])),...(direction==='charge'?kycIssueKeys.map(key=>kycCell(r.uniqueOrders,key)):[]),
     issueRate(w),summary?'':'<button class="link" aria-expanded="'+!!expanded[rowKey(r)]+'" onclick="providerSummaryToggle('+index+')">'+(expanded[rowKey(r)]?'收起':'展开')+'</button>'];
   };
-  const sumRow=(items,label,fullScope=false)=>{const r={...plus(items),_submissionIds:[...new Set(items.flatMap(i=>(i.items||[]).map(x=>x.platformId)).filter(Boolean))],_submissionTotal:fullScope,_submissionUnavailable:!fullScope,platforms:[...new Set(items.flatMap(i=>i.platforms))],fee_matched_count:items.reduce((n,i)=>n+i.fee_matched_count,0)};
-   const fees=feeSummary(items);r.estimated_fee=fees.amount;r.fee_complete=fees.complete;r.fee_eligible_count=fees.successCount;r.fee_excluded_count=fees.excludedCount;r.fee_issues=fees.issues;r.fee_exclusions=fees.exclusions;
+  const sumRow=(items,label,fullScope=false)=>{const r={...scopedTotal(ctx,items,direction),_submissionIds:[...new Set(items.flatMap(i=>(i.items||[]).map(x=>x.platformId)).filter(Boolean))],_submissionTotal:fullScope,_submissionUnavailable:!fullScope,platforms:[...new Set(items.flatMap(i=>i.platforms))],fee_matched_count:items.reduce((n,i)=>n+i.fee_matched_count,0)};
+   const fees=scopedFees(ctx,items,direction);r.estimated_fee=fees.amount;r.fee_complete=fees.complete;r.fee_eligible_count=fees.successCount;r.fee_excluded_count=fees.excludedCount;r.fee_issues=fees.issues;r.fee_exclusions=fees.exclusions;
    r.issues=L.workorders&&items.some(i=>i.issues)?Object.fromEntries(issueKeys.map(k=>[k,items.reduce((n,i)=>n+Number(i.issues?.[k]||0),0)])):null;r.uniqueOrders=fullScope?uniqueWorkorderFacts([L.workorders?.byDirection?.[direction]]):null;return cells(r,'<strong>'+label+'</strong>',true)};
   const coverage=L.workorders?.coverage;
   const partialOrderRows=rows.filter(r=>r.uniqueOrders&&r.uniqueOrders.coverage?.complete!==true);
