@@ -76,7 +76,7 @@ test('embedded backend list exposes create and existing permission editor direct
  const actor={auth_user_id:'fixture-owner',username:'owner-fixture',role:'owner',active:true,data_scope:{mode:'all',countries:[]}};
  const target={auth_user_id:'fixture-viewer',username:'viewer-fixture',role:'viewer',active:true,data_scope:{mode:'all',countries:[]}};
  const states=[],effects=[],calls=[];let cursor=0;
- const react={Fragment:'fragment',useState(initial){const k=cursor++;if(!(k in states))states[k]=typeof initial==='function'?initial():initial;return[states[k],value=>states[k]=typeof value==='function'?value(states[k]):value]},useMemo:fn=>fn(),useEffect:fn=>effects.push(fn)};
+ const react={Fragment:'fragment',useRef(initial){const k=cursor++;return states[k]||(states[k]={current:initial})},useState(initial){const k=cursor++;if(!(k in states))states[k]=typeof initial==='function'?initial():initial;return[states[k],value=>states[k]=typeof value==='function'?value(states[k]):value]},useMemo:fn=>fn(),useEffect:fn=>effects.push(fn)};
  const mod={exports:{}};
  vm.runInNewContext(compile('src/components/AdminControlCenter.tsx'),{module:mod,exports:mod.exports,console,require:name=>{
   if(name==='react')return react;
@@ -89,7 +89,7 @@ test('embedded backend list exposes create and existing permission editor direct
   if(name.startsWith('@/lib/'))return loadTs(path.join(repo,'src/lib',name.slice('@/lib/'.length)+'.ts'));
   throw Error(name);
  }});
- const draw=()=>{cursor=0;return mod.exports.default({open:true,session,profile:actor,onClose(){},section:'accounts',embedded:true,accountsOnlyLoading:true})};
+ const draw=()=>{cursor=0;return mod.exports.default({open:true,session:{...session,user:{id:actor.auth_user_id}},profile:actor,onClose(){},section:'accounts',embedded:true,accountsOnlyLoading:true})};
  draw();effects.splice(0).forEach(fn=>fn());await flush();assert.deepEqual(calls,['list'],'only the current account directory is read');
  let all=nodes(draw());assert.match(text(draw()),/viewer-fixture/);assert(!all.some(n=>n.props?.className==='admin-inline-header'),'no secondary management page heading');assert(all.some(n=>n.type==='button'&&text(n)==='+ 新建账号'));
  all.find(n=>n.type==='button'&&text(n)==='配置权限').props.onClick();all=nodes(draw());const dialog=all.find(n=>n.type?.name==='AccountPermissionDialog');assert(dialog,'the existing permission editor is reachable from the backend list');assert.equal(dialog.props.actor,actor);assert.equal(dialog.props.user,target);assert.equal(dialog.props.initialModule,'home');

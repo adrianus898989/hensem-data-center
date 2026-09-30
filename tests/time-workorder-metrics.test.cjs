@@ -22,6 +22,7 @@ async function fixture(options,run){
     assert.equal(init.headers.Authorization,'Bearer synthetic-session');assert.equal(init.headers.apikey,'synthetic-anon');
     if(url.pathname==='/auth/v1/user')return Response.json({id:'synthetic'});
     if(url.pathname==='/rest/v1/dashboard_profiles')return Response.json([{auth_user_id:'synthetic',username:'test',active:true,role:'viewer',permissions:{third_party:options.allowed!==false},data_scope:options.scope||{mode:'all',countries:[]}}]);
+    if(url.pathname==='/rest/v1/rpc/dashboard_role_access')return Response.json({mode:'legacy',roleId:null,roleName:null,version:0,permissions:[],canView:true});
     assert.equal(url.pathname,'/rest/v1/workorder_deposit_daily');assert.equal(init.method,undefined);assert.equal(init.cache,'no-store');assert.ok(init.signal instanceof AbortSignal);
     assert.deepEqual(url.searchParams.getAll('stat_date'),['gte.2026-09-19','lte.2026-09-19']);assert.equal(url.searchParams.get('source_system'),'eq.AR_WORKORDER');
     assert.ok(!url.searchParams.get('select').includes('*'));
@@ -34,15 +35,15 @@ const req=signal=>new Request('https://dashboard.invalid/api/third-party-workord
 for(const [name,server] of readers){
   const read=(request=req(),start='2026-09-19',end=start,country='印度')=>server.readSupabaseThirdPartyWorkOrderMetrics(request,start,end,country);
   test(name+': independent daily workorders never fetch payment totals; country/date/source are rechecked',async()=>{
-    await fixture({},async calls=>{const result=await read();assert.equal(calls.length,3);assert.deepEqual(result,{basis:'daily',start:'2026-09-19',end:'2026-09-19',country:'印度',rows:[row()]});});
+    await fixture({},async calls=>{const result=await read();assert.deepEqual(calls.map(call=>call.url.pathname),['/auth/v1/user','/rest/v1/dashboard_profiles','/rest/v1/rpc/dashboard_role_access','/rest/v1/workorder_deposit_daily']);assert.deepEqual(result,{basis:'daily',start:'2026-09-19',end:'2026-09-19',country:'印度',rows:[row()]});});
   });
   test(name+': anonymous/module/scope failures do not access aggregates',async()=>{
     await fixture({},async calls=>{await assert.rejects(()=>read(new Request('https://dashboard.invalid')),e=>e.status===401);assert.equal(calls.length,0);});
-    for(const options of [{allowed:false},{scope:{mode:'selected',countries:['PK']}}])await fixture(options,async calls=>{await assert.rejects(()=>read(),e=>e.status===403);assert.equal(calls.length,2);});
+    for(const options of [{allowed:false},{scope:{mode:'selected',countries:['PK']}}])await fixture(options,async calls=>{await assert.rejects(()=>read(),e=>e.status===403);assert.deepEqual(calls.map(call=>call.url.pathname),['/auth/v1/user','/rest/v1/dashboard_profiles','/rest/v1/rpc/dashboard_role_access']);});
     await fixture({scope:{mode:'selected',countries:['IN']}},async()=>assert.equal((await read()).rows.length,1));
   });
   test(name+': invalid ranges are rejected, malformed/partial data never becomes zero',async()=>{
-    for(const [start,end] of [['2026-02-30','2026-03-01'],['2026-09-19','2026-09-18'],['2026-08-01','2026-09-19']])await fixture({},async calls=>{await assert.rejects(()=>read(req(),start,end),e=>e.status===400);assert.equal(calls.length,2);});
+    for(const [start,end] of [['2026-02-30','2026-03-01'],['2026-09-19','2026-09-18'],['2026-08-01','2026-09-19']])await fixture({},async calls=>{await assert.rejects(()=>read(req(),start,end),e=>e.status===400);assert.deepEqual(calls.map(call=>call.url.pathname),['/auth/v1/user','/rest/v1/dashboard_profiles','/rest/v1/rpc/dashboard_role_access']);});
     for(const response of [()=>Response.json({}),()=>Response.json([row()],{headers:{'content-range':'0-0/1001'}}),()=>Response.json({error:'private'},{status:500})])await fixture({response},async()=>{await assert.rejects(()=>read(),e=>e.status===503&&!e.message.includes('private'));});
     await fixture({rows:[]},async()=>assert.deepEqual((await read()).rows,[]));
   });

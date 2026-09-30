@@ -188,6 +188,20 @@ export function createOwnerAdminPreviewHandler(options: PreviewOptions): (reques
         const grants: unknown = await granted.json();
         canView = Array.isArray(grants) && grants.length === 1 && grants[0]?.auth_user_id === userId && grants[0]?.can_view === true;
       }
+      // Account grant and assigned-role availability are independent gates.
+      // Re-read on every document/access/check request, including archived roles.
+      const roleResponse = await fetcher(base + "/rest/v1/rpc/dashboard_role_access", {
+        method: "POST", headers: { apikey: key, Authorization: `Bearer ${bearer[1]}`, "Content-Type": "application/json" },
+        body: "{}", cache: "no-store", redirect: "error", signal: AbortSignal.timeout(10000),
+      });
+      if (!roleResponse.ok) return errorResponse(origin, 503, "role_access_unavailable");
+      const roleAccess: unknown = await roleResponse.json();
+      if (!roleAccess || typeof roleAccess !== "object" || Array.isArray(roleAccess)) return errorResponse(origin, 503, "role_access_unavailable");
+      const role = roleAccess as { mode?: unknown; canView?: unknown; permissions?: unknown };
+      if (!["owner", "legacy", "assigned"].includes(String(role.mode)) || typeof role.canView !== "boolean"
+        || !Array.isArray(role.permissions) || !role.permissions.every(value => typeof value === "string")
+        || (role.mode === "owner" && !canManage)) return errorResponse(origin, 503, "role_access_unavailable");
+      if (role.mode === "assigned") canView = canView && role.canView === true;
       if (action === "access") return json({ ok: true, canView, canManage });
       if (!canView) return errorResponse(origin, 403, "preview_denied");
       if (requestUrl.searchParams.get("check") === "1") return json({ ok: true, canView: true, canManage });

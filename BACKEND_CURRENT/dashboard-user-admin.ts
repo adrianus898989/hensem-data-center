@@ -185,6 +185,40 @@ Deno.serve(async (request) => {
       }
     }
 
+    async function requireAssignedRole(token: string, actorRole: string) {
+      const anonKey = String(Deno.env.get("SUPABASE_ANON_KEY") || "").trim();
+      if (!anonKey) throw new DataScopeError("角色权限验证暂时不可用，请重试。", 503);
+      let access: any;
+      try {
+        const response = await fetch(supabaseUrl.replace(/\/$/, "") + "/rest/v1/rpc/dashboard_role_access", {
+          method: "POST", headers: { apikey: anonKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: "{}", cache: "no-store", redirect: "error", signal: AbortSignal.timeout(10000),
+        });
+        if (!response.ok) throw new Error("role_access_unavailable");
+        access = await response.json();
+      } catch { throw new DataScopeError("角色权限验证暂时不可用，请重试。", 503); }
+      if (!access || !["owner", "legacy", "assigned"].includes(access.mode) || typeof access.canView !== "boolean"
+        || !Array.isArray(access.permissions) || access.permissions.length > 1000
+        || !access.permissions.every((key: unknown) => typeof key === "string" && /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/.test(key))
+        || (access.mode === "owner" && actorRole !== "owner")) throw new DataScopeError("角色权限验证暂时不可用，请重试。", 503);
+      if (access.mode !== "assigned") return;
+      const required: Record<string, string[]> = {
+        "list-users": ["access.view"],
+        "create-account": ["access.view", "access.create"], "create-viewer": ["access.view", "access.create"],
+        "update-account": ["access.view", "access.edit"], "update-viewer": ["access.view", "access.edit"],
+        "reset-password": ["access.view", "access.reset_password"], "delete-account": ["access.view", "access.delete"],
+        "list-audit": ["operation_logs.view"],
+        "history-status": ["data_health.view"], "auto-withdraw-history-status": ["data_health.view"],
+        "trigger-sync": ["data_health.view", "data_health.refresh"],
+        "ip-settings": ["ip.view"],
+        "add-ip": ["ip.view", "ip.edit"], "set-ip-active": ["ip.view", "ip.edit"],
+        "delete-ip": ["ip.view", "ip.edit"], "set-ip-mode": ["ip.view", "ip.edit"],
+      };
+      const keys = required[action];
+      if (["update-account", "update-viewer"].includes(action) && typeof body.active === "boolean") keys?.push("access.status");
+      if (!access.canView || !keys || !keys.every(key => access.permissions.includes(key))) throw new DataScopeError("当前角色没有此项操作权限。", 403);
+    }
+
     async function requireManager() {
       const authHeader = String(request.headers.get("authorization") || "");
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
@@ -201,6 +235,7 @@ Deno.serve(async (request) => {
         .maybeSingle();
       if (profileError) throw new Error(`读取管理员权限失败：${profileError.message}`);
       if (!callerProfile?.active || !["owner", "admin"].includes(String(callerProfile.role || ""))) throw new Error("只有管理账号可以执行这个操作");
+      await requireAssignedRole(token, callerProfile.role);
       return { token, caller, profile: callerProfile, actor: { id: caller.id, username: String(callerProfile.username || "admin") } };
     }
 

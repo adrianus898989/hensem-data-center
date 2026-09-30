@@ -125,6 +125,7 @@ async function httpFixture(options,run){
     const url=new URL(input);calls.push(url.pathname);assert.equal(init.headers.Authorization,'Bearer session-only');assert.equal(init.headers.apikey,'synthetic-anon');assert.equal(init.cache,'no-store');
     if(url.pathname==='/auth/v1/user')return Response.json({id:'synthetic-user'});
     if(url.pathname==='/rest/v1/dashboard_profiles')return Response.json([{auth_user_id:'synthetic-user',username:'synthetic',role:'viewer',active:options.active!==false,permissions:{third_party:options.allowed!==false,auto_withdraw:false},data_scope:options.scope||{mode:'all',countries:[]}}]);
+    if(url.pathname==='/rest/v1/rpc/dashboard_role_access')return Response.json({mode:'legacy',roleId:null,roleName:null,version:0,permissions:[],canView:true});
     assert.equal(url.pathname,'/rest/v1/rpc/dashboard_third_party_filter_options');assert.equal(init.body,'{}');assert.equal(init.method,'POST');assert.equal(init.redirect,'error');assert.ok(init.signal instanceof AbortSignal);
     if(options.onFetch)options.onFetch(init);
     return options.response?options.response():Response.json(options.payload===undefined?metadata:options.payload);
@@ -144,14 +145,14 @@ for(const [name,reader] of readers){
   });
   test(name+': one independent RPC, canonical aliases, minimal projection and correct display groups',async()=>{
     await httpFixture({},async calls=>{
-      const result=await reader(request());assert.equal(calls.length,3);assert.ok(result.platforms.some(r=>r.country==='香港'&&r.platform==='EK7'));
+      const result=await reader(request());assert.deepEqual(calls,['/auth/v1/user','/rest/v1/dashboard_profiles','/rest/v1/rpc/dashboard_role_access','/rest/v1/rpc/dashboard_third_party_filter_options']);assert.ok(result.platforms.some(r=>r.country==='香港'&&r.platform==='EK7'));
       assert.ok(result.platforms.some(r=>r.country==='胖虎巴西'&&r.platform==='VIP345'));assert.ok(result.platforms.some(r=>r.country==='巴西'&&r.platform==='POPNOV'));
       assert.equal(result.platforms.filter(r=>r.platform==='ShreeWin').length,1);assert.ok(!JSON.stringify(result).includes('never expose'));assert.deepEqual(Object.keys(result),['platforms']);
     });
   });
   test(name+': scope recheck removes foreign rows; module denial never fetches metadata',async()=>{
     await httpFixture({scope:{mode:'selected',countries:['PK']}},async()=>{const result=await reader(request());assert.deepEqual(result.platforms.map(r=>r.platform),['92BLAZE','92R']);});
-    for(const options of [{allowed:false},{active:false}])await httpFixture(options,async calls=>{await assert.rejects(()=>reader(request()),e=>e.status===403);assert.equal(calls.length,2);});
+    for(const options of [{allowed:false},{active:false}])await httpFixture(options,async calls=>{await assert.rejects(()=>reader(request()),e=>e.status===403);assert.deepEqual(calls,options.active===false?['/auth/v1/user','/rest/v1/dashboard_profiles']:['/auth/v1/user','/rest/v1/dashboard_profiles','/rest/v1/rpc/dashboard_role_access']);});
     await httpFixture({},async calls=>{await assert.rejects(()=>reader(new Request('https://dashboard.invalid')),e=>e.status===401);assert.equal(calls.length,0);});
   });
   test(name+': unavailable/malformed catalog is an explicit error, not empty fallback',async()=>{
@@ -163,7 +164,7 @@ for(const [name,reader] of readers){
   test(name+': cancellation is forwarded and fresh requests revalidate permissions',async()=>{
     const controller=new AbortController();
     await httpFixture({onFetch:init=>{controller.abort();assert.equal(init.signal.aborted,true);}},async()=>{await reader(new Request('https://dashboard.invalid',{headers:{Authorization:'Bearer session-only'},signal:controller.signal}));});
-    await httpFixture({},async calls=>{await reader(request());await reader(request());assert.equal(calls.filter(p=>p==='/rest/v1/dashboard_profiles').length,2);});
+    await httpFixture({},async calls=>{await reader(request());await reader(request());assert.equal(calls.filter(p=>p==='/rest/v1/dashboard_profiles').length,2);assert.equal(calls.filter(p=>p==='/rest/v1/rpc/dashboard_role_access').length,2);});
   });
 }
 test('Edge routing uses GET/private headers; production reader mirrors app source',()=>{

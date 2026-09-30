@@ -43,3 +43,14 @@
 
 /* Country bands spell out inclusive/exclusive boundaries without squeezing hourly values. */
 body.live-admin .live-matrix th:first-child,body.live-admin .live-matrix td:first-child{width:128px;white-space:normal;overflow-wrap:normal;line-height:1.5;padding:6px!important}
+
+/* Column guides are painted inside cells: no border width, layout or sticky-shadow changes.
+ * Zero specificity lets each table keep its existing sticky/relative positioning.
+ * A full-width expansion/empty row has one last cell, so it receives no extra guide. */
+:where(body.live-admin table > :is(thead,tbody,tfoot) > tr > :is(th,td):not(:last-child)){
+ position:relative;
+}
+:where(body.live-admin table > :is(thead,tbody,tfoot) > tr > :is(th,td):not(:last-child))::after{
+ content:"";position:absolute;inset-block:0;inset-inline-end:0;width:1px;
+ background:#e3eaf4;pointer-events:none;
+}
