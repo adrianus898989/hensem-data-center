@@ -95,3 +95,10 @@ test('iframe detail prechecks match SQL for raw query, workorders and deposit st
   const h=frame(assigned([page+'.view',page+'.query']),page);await assert.rejects(h.c.hensemLiveRequest(request),/没有查看明细权限/);assert.equal(h.posts.length,0);
  }
 });
+
+test('retired stability permissions are discarded without granting providers or rejecting unrelated valid grants',()=>{
+ const {api}=roleModule(),input=assigned(['channelquality.view','channelquality.query','providers.view']),a=api.validateDashboardRoleAccess(input);assert.deepEqual(Array.from(a.permissions),['providers.view']);assert.equal(a.canView,true);assert.equal(input.permissions.length,3);assert.equal(api.dashboardRoleAllows(a,'providers'),true);assert.equal(api.dashboardRoleAllows(a,'providers','query'),false);
+ const only=api.validateDashboardRoleAccess(assigned(['channelquality.view','channelquality.export']));assert.equal(only.canView,false);assert.equal(only.permissions.length,0);
+ for(const mode of ['owner','legacy'])assert.equal(api.dashboardRoleAllows({mode,permissions:[],canView:true},'channelquality'),false);assert.throws(()=>api.validateDashboardRoleAccess(assigned(['channelquality.delete'])),/不完整/);
+ assert(!JSON.parse(fs.readFileSync(path.join(root,'src/lib/dashboardRoleCatalog.json'),'utf8')).pages.some(p=>p.id==='channelquality'));
+});

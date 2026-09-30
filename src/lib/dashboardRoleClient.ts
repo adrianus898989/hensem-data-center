@@ -5,6 +5,7 @@ import catalog from "./dashboardRoleCatalog.json";
 export type DashboardRolePage = { id:string; moduleId:string; moduleLabel:string; label:string; actions:{id:string;label:string;sensitive?:boolean}[]; requests:string[] };
 export const dashboardRolePages: DashboardRolePage[] = (Array.isArray(catalog) ? catalog : (catalog as {pages:DashboardRolePage[]}).pages) as DashboardRolePage[];
 export const dashboardRolePermissionCodes = new Set(dashboardRolePages.flatMap(page => page.actions.map(action => page.id+"."+action.id)));
+const retiredPermissionCodes = new Set(["channelquality.view", "channelquality.query", "channelquality.detail", "channelquality.export"]);
 export type DashboardCustomRole = { id:string; name:string; description:string; permissions:string[]; active:boolean; version:number };
 export type DashboardRoleAccount = { auth_user_id:string; username:string; role:"owner"|"admin"|"viewer"; active:boolean; data_scope:unknown; role_id:string|null; assignment_version:number };
 export type DashboardRoleRequest = {operation:"list"}
@@ -26,6 +27,13 @@ function permissionsValid(value:unknown):value is string[] {
 function roleValid(value:unknown):value is DashboardCustomRole {
  return record(value)&&uuid(value.id)&&typeof value.name==="string"&&value.name.trim().length>0&&value.name.length<=80
   &&typeof value.description==="string"&&value.description.length<=500&&permissionsValid(value.permissions)&&typeof value.active==="boolean"&&version(value.version,1);
+}
+// Existing saved roles can contain retired directory keys during a rolling update.
+// Drop only those four keys on reads; never accept new unknown permissions or send
+// retired keys back when creating/updating a role.
+function readableRole(value:unknown):unknown {
+ if(!record(value)||!Array.isArray(value.permissions))return value;
+ return {...value,permissions:value.permissions.filter(code=>!retiredPermissionCodes.has(code))};
 }
 function scopeValid(value:unknown):boolean {
  return record(value)&&Array.isArray(value.countries)&&value.countries.every(country=>typeof country==="string"&&country.length>0)&&((value.mode==="all"&&value.countries.length===0)||value.mode==="selected");
@@ -51,21 +59,24 @@ export function validateDashboardRoleResponse(input:unknown,request:DashboardRol
  const invalid=()=>{throw new DashboardRoleError(request.operation==="list"?"角色与账号响应不完整，请重新查询":"操作响应不完整，结果尚未确认；请查询角色与账号核对后再操作","invalid_response")};
  if(!record(input)||input.ok===false)return invalid();
  if(request.operation==="list"){
-  if(!Array.isArray(input.roles)||!input.roles.every(roleValid)||!Array.isArray(input.accounts)||!input.accounts.every(accountValid))return invalid();
-  if(new Set(input.roles.map(r=>r.id)).size!==input.roles.length||new Set(input.accounts.map(a=>a.auth_user_id)).size!==input.accounts.length)return invalid();
-  const knownRoleIds=new Set(input.roles.map(role=>role.id));
+  if(!Array.isArray(input.roles)||!Array.isArray(input.accounts)||!input.accounts.every(accountValid))return invalid();
+  const roles=input.roles.map(readableRole);
+  if(!roles.every(roleValid))return invalid();
+  if(new Set(roles.map(r=>r.id)).size!==roles.length||new Set(input.accounts.map(a=>a.auth_user_id)).size!==input.accounts.length)return invalid();
+  const knownRoleIds=new Set(roles.map(role=>role.id));
   if(input.accounts.some(account=>account.role_id&&!knownRoleIds.has(account.role_id)))return invalid();
-  return {roles:input.roles.map(cleanRole),accounts:input.accounts.map(cleanAccount)};
+  return {roles:roles.map(cleanRole),accounts:input.accounts.map(cleanAccount)};
  }
  if(request.operation==="assign"){
   if(!accountValid(input.account)||input.account.auth_user_id!==request.accountId||input.account.role==="owner"||input.account.role_id!==request.roleId||input.account.assignment_version<=request.expectedVersion)return invalid();
   return {account:cleanAccount(input.account)};
  }
- if(!roleValid(input.role))return invalid();
- if(request.operation!=="create"&&(input.role.id!==request.roleId||input.role.version<=request.expectedVersion))return invalid();
- if(request.operation==="archive"?input.role.active:!input.role.active)return invalid();
- if(request.operation!=="archive"&&(input.role.name!==request.name.trim()||input.role.description!==request.description.trim()||[...input.role.permissions].sort().join("|")!==[...request.permissions].sort().join("|")))return invalid();
- return {role:cleanRole(input.role)};
+ const role=request.operation==="archive"?readableRole(input.role):input.role;
+ if(!roleValid(role))return invalid();
+ if(request.operation!=="create"&&(role.id!==request.roleId||role.version<=request.expectedVersion))return invalid();
+ if(request.operation==="archive"?role.active:!role.active)return invalid();
+ if(request.operation!=="archive"&&(role.name!==request.name.trim()||role.description!==request.description.trim()||[...role.permissions].sort().join("|")!==[...request.permissions].sort().join("|")))return invalid();
+ return {role:cleanRole(role)};
 }
 
 export async function dashboardRoleRequest(session:DashboardSession,input:DashboardRoleRequest,signal?:AbortSignal):Promise<DashboardRoleResponse>{
@@ -88,6 +99,7 @@ export async function dashboardRoleRequest(session:DashboardSession,input:Dashbo
    if(response.status===403||/owner|denied|forbidden/i.test(code+" "+message))throw new DashboardRoleError("仅总管理员可管理角色与分配账号","forbidden");
    if(/assigned|in_use/i.test(code+" "+message))throw new DashboardRoleError("此角色仍有账号使用，请先为这些账号分配其他角色","role_in_use");
    if(/duplicate|name_exists|23505/i.test(code+" "+message))throw new DashboardRoleError("角色名称已存在，请使用其他名称","duplicate");
+   if(response.status>=500||/^42[0-9A-Z]{3}$/.test(code))throw new DashboardRoleError("角色服务处理失败，请稍后重试","backend_error");
    throw new DashboardRoleError("角色操作未完成，请检查内容后重试","request_failed");
   }
   return validateDashboardRoleResponse(data,request);

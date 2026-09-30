@@ -38,6 +38,7 @@ test('only the formal component is exported; legacy sidebar and reader hooks are
  assert.match(dashboard,/export \{ default \} from "\.\/OfficialDashboard"/);
  assert(!/export default function Dashboard/.test(dashboard));
  assert(!fs.readFileSync(path.join(repo,'src/components/OfficialDashboard.tsx'),'utf8').includes('LegacyDashboard'));
+ const entry=fs.readFileSync(path.join(repo,'src/app/page.tsx'),'utf8');assert.match(entry,/import OfficialDashboard from "@\/components\/OfficialDashboard"/);assert.doesNotMatch(entry,/components\/Dashboard"/);
  const h=harness({role:'owner'});assert(h.frame());assert.equal(h.location.hash,'#admin/overview');assert.equal(h.requests.length,0);assert.equal(h.frame().props.canView,true);h.dispose();
 });
 test('an active granted viewer enters only after access validation and retains a legacy bookmarked page',async()=>{
@@ -72,6 +73,6 @@ test('authorized account-menu navigation mounts the current access page even on 
 });
 test('old module links and hash changes redirect to safe formal pages without legacy rendering',()=>{
  const h=harness({role:'owner'});
- const cases={'#home':'overview','#auto':'auto_withdraw','#config':'payout_config','#operator':'withdraw_operators','#volume':'providers','#work':'workorders','#orders':'orders','#provider-anomalies':'risk','#admin':'access','#owner-admin-preview/stuck':'stuck','#admin/providers':'providers','#admin/../../foreign':'overview','#https://evil.invalid':'overview'};
+ const cases={'#channelquality':'providers','#admin/channelquality':'providers','#owner-admin-preview/channelquality':'providers','#home':'overview','#auto':'auto_withdraw','#config':'payout_config','#operator':'withdraw_operators','#volume':'providers','#work':'workorders','#orders':'orders','#provider-anomalies':'risk','#admin':'access','#owner-admin-preview/stuck':'stuck','#admin/providers':'providers','#admin/../../foreign':'overview','#https://evil.invalid':'overview'};
  for(const [hash,page] of Object.entries(cases)){const old=h.frame().key;h.location.hash=hash;h.send('hashchange');assert.equal(h.location.hash,'#admin/'+page);assert(h.frame());assert.notEqual(h.frame().key,old)}assert.equal(h.requests.length,0);h.frame().props.onLogout();assert.equal(h.loggedOut(),1);h.dispose();
 });

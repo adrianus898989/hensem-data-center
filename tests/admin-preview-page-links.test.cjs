@@ -42,3 +42,9 @@ test('formal page hashes work alongside unchanged legacy bookmarks',()=>{
  for(const hash of ['#admin/','#admin/../orders','#admin//access','#admin/https://evil.invalid','#admin/__proto__'])assert.equal(api.adminPreviewPageFromHash(hash),null);
  assert.equal(frame({origin:'https://dashboard.invalid',pathname:'/',hash:'#admin/stuck'}).context.hensemAdminInitialPage,'stuck');
 });
+
+test('retired stability links redirect to the formal provider page in host and frame URL builders',()=>{
+ for(const prefix of ['#admin/','#owner-admin-preview/'])assert.equal(api.adminPreviewPageFromHash(prefix+'channelquality'),'providers');
+ assert.equal(api.adminPreviewPageUrl('channelquality',{origin:'https://dashboard.invalid',pathname:'/app/'}),'https://dashboard.invalid/app/#admin/providers');
+ const f=frame({origin:'https://dashboard.invalid',pathname:'/app/',hash:'#admin/channelquality'});assert.equal(f.context.hensemAdminInitialPage,'providers');assert.equal(f.context.hensemAdminPageUrl('channelquality'),'https://dashboard.invalid/app/#admin/providers');assert.equal(f.context.hensemRoleAllowed('channelquality'),false);
+});

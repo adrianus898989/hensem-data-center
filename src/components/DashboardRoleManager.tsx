@@ -88,7 +88,7 @@ export default function DashboardRoleManager({session,profile,manualQuery=true}:
  if(dataIdentity!==identity)return <p role="status" className="dashboard-role-manager">账号已切换，请重新查询角色与账号。</p>;
  const locked=busy||loading;
  return <div className="dashboard-role-manager">
-  <div className="drm-toolbar"><div><h3>角色与账号分配</h3><p>继续使用原来的账号和密码。先配置角色，再分配给账号。</p><p className="drm-help">前端工单账号、工单操作日志、配置授权和 IP 白名单修改仍由总管理员管理。</p></div><div className="drm-actions"><button type="button" disabled={locked} onClick={()=>void load()}>查询角色与账号</button><button type="button" className="primary" disabled={locked||!loaded} onClick={()=>edit(null)}>新建角色</button></div></div>
+  <div className="drm-toolbar"><div><h3>角色与账号分配</h3></div><div className="drm-actions"><button type="button" disabled={locked} onClick={()=>void load()}>查询角色与账号</button><button type="button" className="primary" disabled={locked||!loaded} onClick={()=>edit(null)}>新建角色</button></div></div>
   {!editor&&!assignment&&!archive&&error&&<p role="alert" className="drm-error">{error}</p>}{message&&<p role="status" className="drm-success">{message}</p>}
   {loading&&<p role="status">正在读取角色与账号…</p>}{!loaded&&!loading&&!error&&<p className="drm-empty">点击「查询角色与账号」查看现有配置。</p>}
   {loaded&&<><div className="drm-table"><table aria-label="角色目录权限矩阵"><thead><tr><th>角色</th>{modules.map(module=><th key={module.id}>{module.label}<small>启用 / 全部权限</small></th>)}<th>账号数</th><th>状态</th><th>操作</th></tr></thead><tbody>

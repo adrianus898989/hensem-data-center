@@ -1,6 +1,6 @@
 import DashboardAuthGate from "@/components/DashboardAuthGate";
-import Dashboard from "@/components/Dashboard";
+import OfficialDashboard from "@/components/OfficialDashboard";
 
 export default function Home() {
-  return <DashboardAuthGate><Dashboard /></DashboardAuthGate>;
+  return <DashboardAuthGate><OfficialDashboard /></DashboardAuthGate>;
 }

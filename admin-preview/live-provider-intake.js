@@ -25,9 +25,9 @@
    if(row.evidence==='only_success_day_records_received')row={...row,status:'not_received',received:false,complete:false,zeroConfirmed:false};
    return {...row,dataset:feed?.dataset||'orders',direction:feed?.direction||'',notes:row.message||messages[row.evidence]||(row.evidence==='day_not_verified'?'当日或未来日期尚无完整日核对结果':'采集完整性待核验')};
   });
-  const expected=days.filter(d=>d.status!=='not_expected'),missing=expected.filter(d=>['not_received','not_started','partial','failed'].includes(d.status));
-  const received=expected.length>0&&expected.every(d=>d.received||d.zeroConfirmed),complete=expected.length>0&&expected.every(d=>d.complete);
-  return {id:platform.id,name:platform.name,source:platform.source,days,missingDates:missing.map(d=>d.date),received,complete,status:missing.length?'missing':complete?(expected.every(d=>d.zeroConfirmed)?'zero_complete':'complete'):received?'received':'unverified',message:missing.length?missing.map(d=>d.date+'：'+d.notes).join('；'):complete?'创建日数据已核对':received?'已收到创建数据，完整性待核验':'创建日采集证据尚未核验'};
+  const expected=days.filter(d=>d.status!=='not_expected'),missing=expected.filter(d=>['not_received','not_started'].includes(d.status)||['partial','failed'].includes(d.status)&&!d.received&&!d.zeroConfirmed);
+  const received=expected.length>0&&expected.every(d=>d.received||d.zeroConfirmed),complete=expected.length>0&&expected.every(d=>d.complete),differences=expected.filter(d=>['partial','failed'].includes(d.status)&&d.received&&!d.complete);
+  return {id:platform.id,name:platform.name,source:platform.source,days,missingDates:missing.map(d=>d.date),verificationDifferenceDates:differences.map(d=>d.date),received,complete,status:missing.length?'missing':complete?(expected.every(d=>d.zeroConfirmed)?'zero_complete':'complete'):received?'received':'unverified',message:missing.length?missing.map(d=>d.date+'：'+d.notes).join('；'):differences.length?differences.map(d=>d.date+'：'+d.notes).join('；'):complete?'创建日数据已核对':received?'已收到创建数据，完整性待核验':'创建日采集证据尚未核验'};
  }
  const transient=error=>/超时|timeout|timed out|57014|network|failed to fetch|网络|连接中断/i.test(String(error?.code||'')+' '+String(error?.message||''));
  function create({request,now=()=>Date.now()}){

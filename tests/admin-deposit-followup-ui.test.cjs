@@ -2,18 +2,46 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-deposit-issues.js'),'utf8');
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function harness(response={rows:[],total:0,summary:{}}){
- const L={catalogReady:true,catalog:[{country:'印度',name:'SYNTHETIC'}],country:'印度',from:'2026-09-01T00:00:00',to:'2026-09-27T23:59:59',depositIssuesPage:1,depositIssuesSize:20,depositIssuesSerial:0,depositIssuesPlatform:'all',depositIssuesProvider:'',depositIssuesStatus:'all',depositIssuesQuery:''},calls=[];
- let html='',drawer='',renders=0,page,route='deposit_tracking',handler=async()=>response;
- const root={};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-workorder-operations.js'),'utf8'),{window:root});vm.runInNewContext(source,{window:root});
+function harness(response={rows:[],total:0,summary:{}},options={}){
+ let instant=options.now||'2026-09-30T12:00:00Z';const country=options.country||'印度';
+ class Clock extends Date {constructor(...args){super(...(args.length?args:[instant]))}static now(){return Date.parse(instant)}}
+ const L={catalogReady:true,catalog:[{country,name:'SYNTHETIC',...(options.timezone?{timezone:options.timezone}:{})}],country,from:'2026-09-01T00:00:00',to:'2026-09-27T23:59:59',depositIssuesPage:1,depositIssuesSize:20,depositIssuesSerial:0,depositIssuesPlatform:'all',depositIssuesProvider:'',depositIssuesStatus:'all',depositIssuesQuery:''},calls=[];
+ let html='',drawer='',renders=0,page,route=options.page||'deposit_tracking',handler=async()=>response;
+ const root={};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-workorder-operations.js'),'utf8'),{window:root,Date:Clock});vm.runInNewContext(source,{window:root,Date:Clock});
  page=root.HensemLiveDepositIssues.create({L,E:escape,C:v=>String(v??0),N:v=>Number(v).toFixed(2),R:(a,b)=>b?String(a/b*100):'—',formatTime:v=>v,
   metric:(title,value)=>'<div>'+title+':'+value+'</div>',box:(title,body)=>'<section><h2>'+title+'</h2>'+body+'</section>',pager:(total,p,size)=>'<footer data-total="'+total+'">'+p+'/'+size+'</footer>',
   table:(headers,rows,classes)=>'<div class="'+classes+'"><table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>',
   openDrawer:(title,body)=>{drawer=title+body},page:()=>route,render:()=>{renders++;html=page.render()},request:async q=>{calls.push({...q});return handler(q)}});
  root.setPage=value=>{route=value;void page.load(true)};
- return {L,root,page,calls,html:()=>html,drawer:()=>drawer,renders:()=>renders,setHandler:next=>{handler=next}};
+ return {L,root,page,calls,html:()=>html,drawer:()=>drawer,renders:()=>renders,setHandler:next=>{handler=next},setNow:value=>{instant=value}};
 }
 const settle=async()=>{for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve))};
+
+test('follow-up and statistics initialize seven local business days without querying, including date boundaries',async()=>{
+ for(const page of ['deposit_tracking','deposit_statistics'])for(const [country,timezone,now,from,to] of [
+  ['印度','Asia/Kolkata','2026-09-30T18:30:00Z','2026-09-25','2026-10-01'],
+  ['巴西','America/Sao_Paulo','2026-09-30T18:30:00Z','2026-09-24','2026-09-30'],
+  ['印度','Asia/Kolkata','2026-12-31T18:30:00Z','2026-12-26','2027-01-01'],
+  ['印度','Asia/Kolkata','2024-03-01T00:00:00Z','2024-02-24','2024-03-01'],
+  ['平台时区','Pacific/Auckland','2026-09-30T18:30:00Z','2026-09-25','2026-10-01']]){
+  const h=harness(undefined,{page,country,timezone,now});h.page.render();assert.equal(h.calls.length,0);
+  assert.equal(h.L.from,from+'T00:00:00');assert.equal(h.L.to,to+'T23:59:59');
+  await h.page.load();assert.equal(h.calls.length,1);assert.equal(h.calls[0].action,page==='deposit_statistics'?'depositStatistics':'depositIssues');
+  assert.equal(h.calls[0].startAt,from+'T00:00:00.000Z');assert.equal(h.calls[0].endAt,to+'T23:59:59.000Z');
+ }
+});
+
+test('manual dates and the month shortcut persist until reset restores the current local seven days',async()=>{
+ for(const page of ['deposit_tracking','deposit_statistics']){
+  const h=harness(undefined,{page,now:'2026-09-30T18:29:59Z'});h.page.render();
+  h.root.depositIssuesDate('from','2026-08-02');h.root.depositIssuesDate('to','2026-08-05');
+  h.setNow('2026-09-30T18:30:00Z');h.page.render();assert.equal(h.L.from,'2026-08-02T00:00:00');assert.equal(h.L.to,'2026-08-05T23:59:59');
+  h.root.depositIssuesMonth();assert.equal(h.L.from,'2026-10-01T00:00:00');assert.equal(h.L.to,'2026-10-31T23:59:59');assert.equal(h.calls.length,0);
+  h.root.depositIssuesSet('dateMode','all');h.root.depositIssuesReset();assert.equal(h.calls.length,0);assert.equal(h.L.depositIssuesDateMode,'range');
+  assert.equal(h.L.from,'2026-09-25T00:00:00');assert.equal(h.L.to,'2026-10-01T23:59:59');
+  await h.page.load();assert.equal(h.calls[0].startAt,'2026-09-25T00:00:00.000Z');assert.equal(h.calls[0].endAt,'2026-10-01T23:59:59.000Z');
+ }
+});
 
 test('default opens employee details with all stored business fields and distinct provenance',async()=>{
  const h=harness({total:2,summary:{count:2},rows:[{platform:'SYNTHETIC',orderNumber:'ORDER-A',workOrderNumber:'TICKET-A',utr:'00001234',upiId:'synthetic@upi.invalid',kycUpiId:'***@bank.invalid',orderDate:'2026-09-25',daysSinceOrder:2,amount:0,provider:'UnifiedPay',rawProvider:'RawPay',followupStatus:'success to other platform',providerReply:'line one\n<script>private</script>',utrMatch:'YES',kycCorrect:'NO',evidence:'Need video',followupAt:'25/9/2026 13:00',sourceDateText:'23/9',receiptText:'29',staffCode:'007',sourceKind:'sheet',sourceGid:42,sourceRow:5,linkStatus:'matched',status:'已入款'},

@@ -11,7 +11,7 @@ import { OWNER_PREVIEW_HOST_CSS, mountOwnerPreviewHostShell } from "@/lib/ownerP
 const legacyPages: Record<string, string> = {
   "#home": "overview", "#auto": "auto_withdraw", "#config": "payout_config",
   "#operator": "withdraw_operators", "#volume": "providers", "#orders": "orders",
-  "#provider-anomalies": "risk", "#work": "workorders", "#admin": "access",
+  "#channelquality": "providers", "#provider-anomalies": "risk", "#work": "workorders", "#admin": "access",
 };
 
 export function officialAdminPageFromHash(hash: string): string {
