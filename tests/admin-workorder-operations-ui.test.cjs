@@ -47,3 +47,47 @@ test('workorder defaults and reset use seven days; daily mode preserves a manual
  h.L.from='2026-08-01T00:00:00';h.L.to='2026-08-31T23:59:59';h.root.workorderOperationsMode('records');h.root.workorderOperationsMode('daily');
  assert.equal(h.L.from,'2026-08-01T00:00:00');assert.equal(h.L.to,'2026-08-31T23:59:59');
 });
+
+test('workorder team selector precedes country and uses only explicit authorized catalog teams',()=>{
+ const h=harness();h.L.catalog=[{name:'A',country:'印度',team:'M8'},{name:'B',country:'印度',team:'Other'},{name:'C',country:'印度'},{name:'D',country:'印度',team:'<Team>'},{name:'E',country:'巴西',team:'Other'}];
+ const html=h.module.render();assert(html.indexOf('aria-label="团队"')<html.indexOf('aria-label="国家 / 地区"'));
+ const team=html.match(/<select aria-label="团队"[\s\S]*?<\/select>/)[0];assert.match(team,/<option value="" selected>全部<\/option>/);assert.equal((team.match(/value="Other"/g)||[]).length,1);assert.match(team,/&lt;Team&gt;/);assert.doesNotMatch(team,/<Team>/);assert.equal(h.module.state().draft.team,'');assert.equal(h.calls.length,0);
+ const blank=harness();assert.doesNotMatch(blank.module.render().match(/<select aria-label="团队"[\s\S]*?<\/select>/)[0],/M8/);
+});
+
+test('changing teams narrows platform choices and clears incompatible selection without querying',async()=>{
+ const h=harness();h.L.catalog=[{name:'A',country:'印度',team:'M8'},{name:'B',country:'印度',team:'Other'},{name:'C',country:'印度'},{name:'A-BR',country:'巴西',team:'M8'}];
+ h.root.workorderOperationsSet('platform','B');h.root.workorderOperationsSet('team','M8');assert.equal(h.module.state().draft.platform,'');assert.equal(h.calls.length,0);
+ let select=h.html().match(/<select aria-label="平台"[\s\S]*?<\/select>/)[0];assert.match(select,/value="A"/);assert.doesNotMatch(select,/value="B"|value="C"|A-BR/);
+ h.root.workorderOperationsSet('platform','A');h.root.workorderOperationsSet('team','');assert.equal(h.module.state().draft.platform,'A');select=h.html().match(/<select aria-label="平台"[\s\S]*?<\/select>/)[0];assert.match(select,/value="C"/);
+ h.root.workorderOperationsSet('team','Outside scope');assert.equal(h.module.state().draft.team,'');assert.equal(h.calls.length,0);
+ h.root.workorderOperationsSet('team','M8');h.module.state().result={rows:[],platforms:['Old result only','B']};select=h.module.render().match(/<select aria-label="平台"[\s\S]*?<\/select>/)[0];assert.doesNotMatch(select,/Old result only|value="B"/);
+ h.root.workorderOperationsSet('country','巴西');assert.equal(h.module.state().draft.platform,'');assert.match(h.html().match(/<select aria-label="平台"[\s\S]*?<\/select>/)[0],/A-BR/);assert.equal(h.calls.length,0);
+});
+
+test('team goes to server list and full-range summary, while paging and summary retry retain committed scope',async()=>{
+ const h=harness();h.L.catalog=[{name:'SYNTHETIC',country:'印度',team:'M8'},{name:'B',country:'印度',team:'Other'}];
+ h.respond(q=>q.operation==='summary'?{current:{ticketCount:137,uniqueOrderCount:100}}:{sourceStatus:'ready',rows:[record],total:137,platforms:['SYNTHETIC']});
+ h.root.workorderOperationsSet('team','M8');await h.module.load(true);assert.deepEqual(h.calls.map(q=>[q.operation,q.filters.team]),[['list','M8'],['summary','M8']]);
+ const before=h.calls.length;h.root.workorderOperationsSet('team','Other');assert.equal(h.calls.length,before);assert.equal(h.module.state().filters.team,'M8');assert.equal(h.module.state().result.rows[0].platform,'SYNTHETIC');
+ h.root.workorderOperationsPage(2);await new Promise(r=>setImmediate(r));assert.equal(h.calls.at(-1).offset,20);assert.equal(h.calls.at(-1).filters.team,'M8');
+ await h.root.workorderOperationsSummaryRetry();assert.equal(h.calls.at(-1).filters.team,'M8');
+ await h.module.load(true);assert.deepEqual(h.calls.slice(-2).map(q=>[q.operation,q.filters.team]),[['list','Other'],['summary','Other']]);assert.equal(h.module.state().current,1);
+ h.root.workorderOperationsMode('records');await h.module.load(true);assert.equal(h.calls.at(-2).view,'records');assert.equal(h.calls.at(-2).filters.team,'Other');
+});
+
+test('team is excluded from detail and unrelated pages, and reset is manual with all teams',async()=>{
+ const h=harness();h.L.catalog=[{name:'SYNTHETIC',country:'印度',team:'M8'}];h.root.workorderOperationsSet('team','M8');await h.module.load(true);
+ h.respond({rows:[record],total:1});await h.root.workorderOperationsOriginal(0);assert.equal(h.calls.at(-1).filters.team,undefined);
+ await h.root.workorderOperationsDetail(0);assert.equal(h.calls.at(-1).filters.team,undefined);
+ const calls=h.calls.length;h.root.workorderOperationsReset();assert.equal(h.calls.length,calls);assert.equal(h.module.state().draft.team,'');
+ for(const p of ['workorder_reconciliation','workorder_workload','workorder_operation_logs']){h.setPage(p);assert.doesNotMatch(h.module.render(),/aria-label="团队"/);h.root.workorderOperationsSet('team','M8');await h.module.load(true);assert.equal(Object.hasOwn(h.calls.at(-1).filters,'team'),false)}
+});
+
+
+test('all teams retains authorized historical source-platform options only for the committed country',async()=>{
+ const h=harness();h.L.catalog=[{name:'SYNTHETIC',country:'印度',team:'M8'},{name:'BR',country:'巴西',team:'M8'}];h.respond({sourceStatus:'ready',rows:[],total:0,platforms:['HISTORICAL-ALIAS']});await h.module.load(true);
+ const options=()=>h.module.render().match(/<select aria-label="平台"[\s\S]*?<\/select>/)[0];assert.match(options(),/HISTORICAL-ALIAS/);
+ h.root.workorderOperationsSet('platform','HISTORICAL-ALIAS');h.root.workorderOperationsSet('team','M8');assert.doesNotMatch(options(),/HISTORICAL-ALIAS/);assert.equal(h.module.state().draft.platform,'');
+ h.root.workorderOperationsSet('team','');assert.match(options(),/HISTORICAL-ALIAS/);h.root.workorderOperationsSet('country','巴西');assert.doesNotMatch(options(),/HISTORICAL-ALIAS/);assert.match(options(),/value="BR"/);
+});

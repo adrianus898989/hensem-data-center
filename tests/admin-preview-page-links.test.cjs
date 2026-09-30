@@ -19,9 +19,9 @@ test('legacy preview bookmark and valid page tokens retain their intended routes
 });
 test('page links preserve the deployed application path and omit host query or authentication fragments',()=>{
  const location={origin:'https://dashboard.invalid',pathname:'/hensem-data-center/',search:'?token=synthetic-private-value',hash:'#access_token=synthetic-private-value'};
- assert.equal(api.adminPreviewPageUrl('provider_payout',location),'https://dashboard.invalid/hensem-data-center/#owner-admin-preview/provider_payout');
- assert.equal(api.adminPreviewPageUrl('orders',{origin:'http://localhost:5173',pathname:'/'}),'http://localhost:5173/#owner-admin-preview/orders');
- assert.equal(api.adminPreviewPageUrl('overview',{origin:'https://dashboard.invalid'}),'https://dashboard.invalid/#owner-admin-preview/overview');
+ assert.equal(api.adminPreviewPageUrl('provider_payout',location),'https://dashboard.invalid/hensem-data-center/#admin/provider_payout');
+ assert.equal(api.adminPreviewPageUrl('orders',{origin:'http://localhost:5173',pathname:'/'}),'http://localhost:5173/#admin/orders');
+ assert.equal(api.adminPreviewPageUrl('overview',{origin:'https://dashboard.invalid'}),'https://dashboard.invalid/#admin/overview');
 });
 test('URL creation rejects schemes, cross-site paths and malformed page arguments',()=>{
  for(const origin of ['javascript:alert(1)','data:text/html,test','file:///private/tmp/index.html','https://user:pass@dashboard.invalid','https://dashboard.invalid/foreign','null'])assert.throws(()=>api.adminPreviewPageUrl('providers',{origin,pathname:'/'}));
@@ -31,19 +31,14 @@ test('URL creation rejects schemes, cross-site paths and malformed page argument
 test('opaque iframe receives a fixed same-site URL builder and requested initial page without credentials',()=>{
  const f=frame({origin:'https://dashboard.invalid',pathname:'/hensem-data-center/',hash:'#owner-admin-preview/provider_payout',search:'?access_token=synthetic-do-not-copy'});
  assert.equal(f.context.hensemAdminInitialPage,'provider_payout');
- assert.equal(f.context.hensemAdminPageUrl('providers'),'https://dashboard.invalid/hensem-data-center/#owner-admin-preview/providers');
+ assert.equal(f.context.hensemAdminPageUrl('providers'),'https://dashboard.invalid/hensem-data-center/#admin/providers');
  for(const page of ['https://evil.invalid','//evil.invalid','</script>',{},null,'providers&other=1'])assert.equal(f.context.hensemAdminPageUrl(page),'');
  assert.doesNotMatch(f.html,/synthetic-do-not-copy|access_token|allow-popups|parent\.location/);
  assert.equal(frame({origin:'https://dashboard.invalid',pathname:'/',hash:'#owner-admin-preview/../../evil'}).context.hensemAdminInitialPage,'overview');
 });
-test('host login and preview permission gates still precede following a bookmarked page',()=>{
- const dashboard=fs.readFileSync(path.join(repo,'src/components/Dashboard.tsx'),'utf8');
- const body=dashboard.match(/const followPreviewLink = \(\) => \{([^\n]+)\};/);assert(body,'real host hash handler is exercised');
- const location={hash:'#owner-admin-preview/provider_payout'},opened=[];
- const follow=(profile,isOwner,canDetailedPreview)=>new Function('profile','isOwner','canDetailedPreview','window','adminPreviewPageFromHash','setActiveModule',body[1])(profile,isOwner,canDetailedPreview,{location},api.adminPreviewPageFromHash,page=>opened.push(page));
- follow(null,false,false);follow({active:false},true,true);follow({active:true},false,false);assert.deepEqual(opened,[]);
- follow({active:true},false,true);assert.deepEqual(opened,['owner-admin-preview']);assert.equal(location.hash,'#owner-admin-preview/provider_payout','login does not replace the bookmarked page with overview');
- opened.length=0;location.hash='#owner-admin-preview/https://evil.invalid';follow({active:true},true,true);assert.deepEqual(opened,[]);
- assert.match(dashboard,/followPreviewLink\(\); window\.addEventListener\("hashchange", followPreviewLink\)/);
- assert.match(dashboard,/\[profile\?\.active, isOwner, canDetailedPreview\]/,'authorization completion retries the preserved route');
+test('formal page hashes work alongside unchanged legacy bookmarks',()=>{
+ assert.equal(api.adminPreviewPageFromHash('#admin'),'overview');
+ for(const page of ['overview','providers','access','stuck'])assert.equal(api.adminPreviewPageFromHash('#admin/'+page),page);
+ for(const hash of ['#admin/','#admin/../orders','#admin//access','#admin/https://evil.invalid','#admin/__proto__'])assert.equal(api.adminPreviewPageFromHash(hash),null);
+ assert.equal(frame({origin:'https://dashboard.invalid',pathname:'/',hash:'#admin/stuck'}).context.hensemAdminInitialPage,'stuck');
 });

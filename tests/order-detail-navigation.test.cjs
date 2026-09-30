@@ -1,4 +1,5 @@
-// Exercise production navigation fragments, without browser sessions or requests.
+// Preserve permission checks in the unmounted legacy implementation.
+// The live formal entry and its independent authorization are tested in admin-official-entry.test.cjs.
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const fs = require('node:fs');
@@ -10,8 +11,16 @@ const {root} = require('./load-typescript.cjs');
 
 const text = fs.readFileSync(path.join(root, 'src/components/Dashboard.tsx'), 'utf8');
 const source = ts.createSourceFile('Dashboard.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const dashboard = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'Dashboard');
-assert.ok(dashboard);
+const dashboard = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'LegacyDashboard');
+assert.ok(dashboard, 'the historical implementation remains available only for regression checks');
+
+test('the formal default export never mounts the retained legacy dashboard', () => {
+  const entry = source.statements.find(node => ts.isExportDeclaration(node) && node.moduleSpecifier?.text === './OfficialDashboard');
+  assert.ok(entry, 'the public entry must re-export OfficialDashboard');
+  assert.ok(ts.isNamedExports(entry.exportClause) && entry.exportClause.elements.some(item => item.name.text === 'default'));
+  assert.ok(!dashboard.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword || modifier.kind === ts.SyntaxKind.DefaultKeyword));
+  assert.equal(source.statements.some(node => ts.isExportAssignment(node) && node.expression.getText(source) === 'LegacyDashboard'), false);
+});
 const switchNode = dashboard.body.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'switchModule');
 const orderBranch = dashboard.body.statements.find(node => ts.isIfStatement(node) && node.expression.getText(source) === 'activeModule === "orders"');
 let navigationButton;
@@ -34,7 +43,7 @@ function evaluate(code, values = {}) {
   return new Function('require', 'exports', ...Object.keys(values), javascript + '\nreturn output;')(require, {}, ...Object.values(values));
 }
 
-test('actual order detail sidebar entry is disabled without third-party permission', () => {
+test('retained legacy order sidebar remains disabled without third-party permission', () => {
   for (const allowed of [false, true]) {
     const opened = [];
     const button = evaluate(`const output = ${navigationButton.getText(source)};`, {
@@ -56,7 +65,7 @@ test('actual order detail sidebar entry is disabled without third-party permissi
   }
 });
 
-test('actual module switch independently rejects unauthorized order navigation', () => {
+test('retained legacy module switch independently rejects unauthorized order navigation', () => {
   for (const allowed of [false, true]) {
     const opened = [], pages = [];
     const go = evaluate(`${switchNode.getText(source)}\nconst output = switchModule;`, {
@@ -70,7 +79,7 @@ test('actual module switch independently rejects unauthorized order navigation',
   }
 });
 
-test('order route renders only the independent detail component and guards revoked access', () => {
+test('retained legacy order branch renders only detail and guards revoked access', () => {
   const branchIndex = dashboard.body.statements.indexOf(orderBranch);
   const finalReturnIndex = dashboard.body.statements.findIndex(node => ts.isReturnStatement(node));
   assert.ok(branchIndex < finalReturnIndex, 'independent orders branch precedes generic data-dependent rendering');

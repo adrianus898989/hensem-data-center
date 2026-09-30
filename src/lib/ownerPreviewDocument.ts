@@ -9,7 +9,7 @@ export function ownerPreviewDraftAllowed(key: unknown, value: unknown): boolean 
     && (value === null || (typeof value === "string" && value.length <= OWNER_PREVIEW_MAX_DRAFT_BYTES));
 }
 export function makeOwnerPreviewDocument(html: string, drafts: Record<string,string>, channel: string): string {
-  if (!/^<!doctype html>/i.test(html.trim()) || !html.includes("Hensem")) throw new Error("后台预览返回格式不正确");
+  if (!/^<!doctype html>/i.test(html.trim()) || !html.includes("Hensem")) throw new Error("后台返回格式不正确");
   const safe: Record<string,string> = {};
   for (const [key,value] of Object.entries(drafts)) if (ownerPreviewDraftAllowed(key,value)) safe[key]=value;
   const encode = (value: unknown) => JSON.stringify(value).replace(/</g,"\\u003c").replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029");

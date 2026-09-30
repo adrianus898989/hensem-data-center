@@ -14,9 +14,9 @@ test('long fee stays a short keyboard-accessible button and opens complete origi
 });
 test('both directions share exact column widths with expanded platform rows and retain plain short rates',()=>{
  for(const direction of ['charge','withdraw']){
-  const h=fixture(direction,'2.5% + 6 / 笔','ExamplePay');h.root.providerSummaryToggle(0);const html=h.html(),cols=[...html.matchAll(/<col style="width:(\d+)px">/g)],headers=[...html.matchAll(/<th>([\s\S]*?)<\/th>/g)];assert.equal(cols.length,headers.length);assert.equal(cols.length,direction==='withdraw'?23:24);
+  const h=fixture(direction,'2.5% + 6 / 笔','ExamplePay');h.root.providerSummaryToggle(0);const html=h.html(),cols=[...html.matchAll(/<col style="width:(\d+)px">/g)],headers=[...html.matchAll(/<th>([\s\S]*?)<\/th>/g)];assert.equal(cols.length,headers.length);assert.equal(cols.length,direction==='withdraw'?23:26);
   const feeColumn=headers.findIndex(m=>m[1].includes('匹配费率'));assert.equal(Number(cols[feeColumn][1]),88);assert.match(html,/>2\.5% \+ 6 \/ 笔<\/button>/);
-  const preferredWidth=cols.reduce((sum,col)=>sum+Number(col[1]),0);assert(preferredWidth<=(direction==='withdraw'?2000:2050));
+  const preferredWidth=cols.reduce((sum,col)=>sum+Number(col[1]),0);assert(preferredWidth<=(direction==='withdraw'?2000:2266));
   assert.match(html,/123,456\.78/,'the full decimal amount survives the compact presentation');
   const children=[...html.matchAll(/<tr class="provider-platform-row">([\s\S]*?)<\/tr>/g)];assert.equal(children.length,1);assert.equal([...children[0][1].matchAll(/<td>/g)].length,cols.length);assert.equal(h.requests(),0);
  }

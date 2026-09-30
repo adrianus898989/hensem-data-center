@@ -112,12 +112,55 @@ test('compact provider reports budget short identity columns and align equivalen
   const section=html.match(/<div class="[^"]*\bprovider-summary-table\b[^"]*">([\s\S]*?)<\/table>/)[1];
   const headers=[...section.matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]).replace(/\s*[↕↑↓]$/,''));
   const widths=[...section.matchAll(/<col style="width:(\d+)px">/g)].map(m=>Number(m[1]));
-  assert.equal(widths.length,headers.length);assert.equal(widths.length,direction==='charge'?24:23);
+  assert.equal(widths.length,headers.length);assert.equal(widths.length,direction==='charge'?26:23);
   assert(widths.slice(0,3).reduce((a,b)=>a+b,0)<=200,'identity columns balance readable labels with the numeric report');
-  for(const suffix of ['金额','笔数']){const group=headers.map((header,i)=>header.endsWith(suffix)?widths[i]:null).filter(v=>v!==null);assert(group.length>=4);assert.equal(new Set(group).size,1, suffix+' columns share an aligned width budget');}
+  for(const suffix of ['金额','笔数']){const group=headers.map((header,i)=>header.endsWith(suffix)&&!header.includes('KYC')?widths[i]:null).filter(v=>v!==null);assert(group.length>=4);assert.equal(new Set(group).size,1, suffix+' columns share an aligned width budget');}
   const ratios=headers.map((header,i)=>/成功率$|占比$/.test(header)?widths[i]:null).filter(v=>v!==null);assert.equal(new Set(ratios).size,1);
-  assert(widths.reduce((a,b)=>a+b,0)<=(direction==='charge'?2050:2000),'report keeps the compact column budget while narrow screens scroll inside the table');
+  assert(widths.reduce((a,b)=>a+b,0)<=(direction==='charge'?2266:2000),'report keeps the compact column budget while narrow screens scroll inside the table');
   assert.match(section,/>151,093,800\.00</,'full-precision amount text is preserved');
   h.root.providerSummaryToggle(0);assert.equal(breakdown(h.html())[0]['成功金额'],'151,093,800.00');
  }
+});
+
+test('platform card counts complete zero-order responses independently of provider and workorder coverage',()=>{
+ for(const direction of ['charge','withdraw']){
+  const h=fixture([order('platform-a','ar',100,1,{direction})]);
+  const platforms=[{id:'platform-a',name:'Active A',source:'ar'},{id:'zero-b',name:'Zero B',source:'newar'}];
+  h.L.queryPlatforms=platforms;
+  h.L.results=platforms.map(platform=>({platform,groups:{provider:[]},totals:{all_count:0},capabilities:{sourceCompletenessVerified:false}}));
+  h.L.workorders={byProvider:[],coverage:{complete:false,platforms:[{platformId:'platform-a',platform:'Active A',complete:false,days:0,expectedDays:1}]}};
+  h.render(direction);
+  const coverage=h.api.queryCoverage(h.L);assert.equal(coverage.received,2);assert.equal(coverage.requested,2);assert.equal(coverage.partial,false);
+  assert.match(h.html(),/<small class="provider-read-label">已读取<\/small> 2 \/ 2/);
+  assert.doesNotMatch(h.html(),/provider-kpi-warning|缺失 \d+ 个平台/);
+  h.root.providerSummaryPlatformCoverage();const drawer=h.drawers.at(-1);
+  assert.equal(drawer.title,'平台读取情况');assert.match(drawer.html,/Zero B/);assert.match(drawer.html,/返回零订单也计为已读取/);assert.match(drawer.html,/工单原单缺项另行核对/);
+  assert.equal((drawer.html.match(/<td>已读取<\/td>/g)||[]).length,2);assert.equal(h.networkCalls(),0);
+ }
+});
+
+test('platform coverage uses query identity, deduplicates responses, and ignores failures outside that query',()=>{
+ const h=fixture([]),a={id:'platform-a',name:'Same name',source:'ar'},b={id:'platform-b',name:'Same name',source:'newar'};
+ h.L.queryPlatforms=[a,b,a];h.L.results=[{platform:a},{platform:a},{platform:{id:'foreign',name:'Not selected'}}];
+ h.L.queryFailures=[{...b,message:'timeout'},{...b,message:'timeout'},{id:'foreign-failure',name:'Outside',message:'failed'}];
+ h.render();const c=h.api.queryCoverage(h.L);
+ assert.equal(c.requested,2);assert.equal(c.received,1);assert.equal(c.missing.length,1);assert.equal(c.failures.length,1);assert.equal(c.failures[0].source,'newar');
+ assert.match(h.html(),/缺失 1 个平台/);assert.match(h.html(),/provider-kpi-warning/);
+ h.root.providerSummaryPlatformCoverage();const html=h.drawers.at(-1).html;assert.match(html,/<td>newar<\/td><td>读取失败<\/td><td>timeout<\/td>/);assert.doesNotMatch(html,/Not selected|Outside/);assert.equal(h.networkCalls(),0);
+});
+
+test('missing platform details distinguish timeout, pending, paused and unread without extra requests',()=>{
+ const h=fixture([]),platforms=[{id:'platform-a',name:'Read A'},{id:'failure',name:'Failed <B>'},{id:'waiting',name:'Waiting C'}];
+ h.L.queryPlatforms=platforms;h.L.queryFailures=[{...platforms[1],message:'timeout <script>alert(1)</script>'}];h.L.loading=true;h.render();
+ let c=h.api.queryCoverage(h.L);assert.equal(c.received,1);assert.equal(c.requested,3);assert.equal(c.pending,1);assert.equal(c.missing.find(p=>p.id==='waiting').status,'loading');
+ h.root.providerSummaryPlatformCoverage();let drawer=h.drawers.at(-1);assert.match(drawer.html,/Failed &lt;B&gt;/);assert.match(drawer.html,/timeout &lt;script&gt;/);assert.doesNotMatch(drawer.html,/<script>/);assert.match(drawer.html,/<td>读取中<\/td>/);
+ h.L.loading=false;h.L.queryPaused=true;h.render();h.root.providerSummaryPlatformCoverage();drawer=h.drawers.at(-1);assert.match(drawer.html,/<td>已暂停<\/td>/);assert.match(drawer.html,/切换页面后暂停/);assert.doesNotMatch(h.html(),/其余 1 个平台仍在读取/);
+ h.L.queryPaused=false;h.render();h.root.providerSummaryPlatformCoverage();assert.match(h.drawers.at(-1).html,/<td>未读取<\/td>/);assert.equal(h.networkCalls(),0);
+ const count=h.drawers.length;h.L.dirty=true;h.root.providerSummaryPlatformCoverage();assert.equal(h.drawers.length,count,'changed filters cannot open details labelled as the new query');
+});
+
+test('successful retry clears missing-platform warning even when old failure evidence lingers',()=>{
+ const h=fixture([]),a={id:'platform-a',name:'A'},b={id:'b',name:'B'};h.L.queryPlatforms=[a,b];h.L.queryFailures=[{...b,message:'timeout'}];h.render();assert.match(h.html(),/缺失 1 个平台/);
+ h.L.results.push({platform:b,groups:{provider:[]}});h.render();assert.equal(h.api.queryCoverage(h.L).partial,false);assert.match(h.html(),/<small class="provider-read-label">已读取<\/small> 2 \/ 2/);assert.doesNotMatch(h.html(),/缺失 1 个平台|provider-kpi-warning/);
+ h.root.providerSummaryPlatformCoverage();assert.doesNotMatch(h.drawers.at(-1).html,/timeout|读取失败/);assert.equal(h.networkCalls(),0);
 });

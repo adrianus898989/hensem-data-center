@@ -381,3 +381,25 @@ test('daily exclusion bridge accepts 15 for summaries and member details without
  for(const operation of ['summary','members'])assert.equal(h.api.validateAdminLiveRequest({...q,operation}).threshold,15);
  for(const threshold of [14,16,'15',15.5,null])assert.throws(()=>h.api.validateAdminLiveRequest({...q,threshold}));
 });
+
+
+test('pending analysis validates inclusive daily ranges and uses only the authenticated snapshot-analysis RPC',async()=>{
+ const request={action:'pendingAnalysis',startDate:'2026-09-01',endDate:'2026-09-30',platformIds:[query.platformId],providers:['ExamplePay']},h=load();
+ assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(request))),request);
+ for(const patch of [{startDate:'2026-02-30'},{endDate:'2026-02-30'},{startDate:'1999-12-31'},{startDate:'2026-09-01T00:00:00Z'},{endDate:null},{startDate:'2026-10-01'},{endDate:'2026-10-02'},{platformIds:[]},{platformIds:[query.platformId,query.platformId]},{platformIds:['report:untrusted']},{platformIds:['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA']},{platformIds:Array(251).fill(query.platformId)},{providers:[null]},{providers:['']},{providers:[' ExamplePay']},{providers:['X\nY']},{providers:['X'.repeat(201)]},{providers:['ExamplePay','ExamplePay']},{providers:Array(251).fill('ExamplePay')},{date:'2026-09-30'},{startAt:query.startAt},{endAt:query.endAt},{country:'IN'},{direction:'withdraw'},{scope:'all'},{sql:'select 1'},{rpc:'another_endpoint'}])assert.throws(()=>h.api.validateAdminLiveRequest({...request,...patch}),JSON.stringify(patch));
+ assert.doesNotThrow(()=>h.api.validateAdminLiveRequest({...request,endDate:'2026-10-01',providers:[]}),'31 inclusive days accepted');
+ assert.doesNotThrow(()=>h.api.validateAdminLiveRequest({...request,startDate:request.endDate}),'one day accepted');
+ assert.doesNotThrow(()=>h.api.validateAdminLiveRequest({...request,startDate:'2024-02-29',endDate:'2024-02-29'}),'actual leap day accepted');
+ const signal=new AbortController().signal;await h.api.adminLiveRequest(session,request,signal);
+ assert.equal(h.calls.length,1);assert.equal(h.authCalls.length,1);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_pending_analysis');
+ assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:{startDate:request.startDate,endDate:request.endDate,platformIds:request.platformIds,providers:request.providers}});
+ assert.equal(h.calls[0].init.signal,signal);assert.equal(h.calls[0].init.headers.Authorization,'Bearer offline-fresh-token');assert.equal(h.calls[0].init.cache,'no-store');
+});
+
+test('pending analysis failures preserve missing-data and permission distinctions without exposing source errors',async()=>{
+ const request={action:'pendingAnalysis',startDate:'2026-09-20',endDate:'2026-09-26',platformIds:[query.platformId]};
+ for(const [status,message,expected]of[[504,'57014 private statement','代付中分析读取超时'],[403,'scope_denied','代付中查看权限'],[403,'platform_denied','代付中查看权限'],[400,'mixed_currency','同一币种'],[500,'private snapshot row and token','正式数据查询未完成']]){
+  const h=load({fetch:async()=>({ok:false,status,json:async()=>({message})})});
+  await assert.rejects(h.api.adminLiveRequest(session,request),error=>error.message.includes(expected)&&!/private|token/.test(error.message));
+ }
+});

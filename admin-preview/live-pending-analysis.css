@@ -1,0 +1,52 @@
+/* Pending analysis owns its layout; wide rows never widen the application. */
+body.live-admin .live-pending-analysis{min-width:0;width:100%;max-width:100%;color:#2d4368;font-size:12px}
+.live-pending-analysis *{box-sizing:border-box}
+.live-pending-analysis .pa-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px}
+.live-pending-analysis .pa-toolbar>div:first-child{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.live-pending-analysis .pa-toolbar span,.live-pending-analysis .pa-muted{color:#7789a5;font-size:11px}
+.live-pending-analysis .pa-controls{display:flex;gap:3px;padding:3px;border:1px solid #dce5f3;background:#eaf0fb;border-radius:7px}
+.live-pending-analysis .pa-controls button{border:0;background:transparent;font:inherit;font-size:11px;padding:6px 13px;border-radius:4px;color:#667b9b;cursor:pointer}
+.live-pending-analysis .pa-controls button.on{background:white;color:#3155df;box-shadow:0 1px 4px #20416f14}
+.live-pending-analysis button:focus-visible,.live-pending-analysis summary:focus-visible{outline:2px solid #4266eb;outline-offset:2px}
+.live-pending-analysis .pa-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:0 0 14px}
+.live-pending-analysis .pa-metric{border:1px solid #dce5f3;border-top:3px solid #5278ec;border-radius:8px;background:white;padding:14px;min-width:0}
+.live-pending-analysis .pa-metric span{display:block;color:#6f83a4;font-size:11px;margin-bottom:8px}
+.live-pending-analysis .pa-metric strong{font-size:24px;line-height:1.25;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.live-pending-analysis .pa-metric.pa-warning{border-top-color:#ed9661}
+.live-pending-analysis .pa-panel{border:1px solid #dce5f3;border-radius:8px;background:white;margin-bottom:14px;min-width:0;overflow:hidden}
+.live-pending-analysis .pa-panel-head{min-height:45px;padding:10px 14px;border-bottom:1px solid #e6ecf5;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.live-pending-analysis h2{margin:0;font-size:13px;font-weight:650;line-height:1.5}
+.live-pending-analysis .pa-panel-head small{color:#7a8aa4;font-size:10px}
+.live-pending-analysis .pa-charts{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.live-pending-analysis .pa-charts table{min-width:0}
+.live-pending-analysis .pa-charts th:first-child,.live-pending-analysis .pa-charts td:first-child{width:29%}
+.live-pending-analysis .pa-priority{display:flex;flex-wrap:wrap;gap:6px 22px;background:#fff8ed;border:1px solid #f3e5c8;border-radius:6px;padding:10px 13px;margin-bottom:14px;color:#926025;font-size:11px}
+.live-pending-analysis .pa-age-coverage{padding:8px 12px;color:#8291a9;font-size:10px}
+.live-pending-analysis .pa-age-partial{cursor:help;border-bottom:1px dotted #b9c4d3}
+.live-pending-analysis .pa-age-partial sup{color:#bc893b;font-size:9px;margin-left:2px}
+.live-pending-analysis .pa-hint{border-bottom:1px dotted #95a6bc;cursor:help}
+.live-pending-analysis .pa-table-wrap{max-width:100%;overflow:auto;max-height:430px}
+.live-pending-analysis table{border-collapse:collapse;width:100%;font-size:11px;table-layout:fixed;min-width:780px}
+.live-pending-analysis th,.live-pending-analysis td{padding:9px 10px;border-bottom:1px solid #e9eef6;text-align:right;vertical-align:middle;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.live-pending-analysis th{position:sticky;top:0;background:#f5f8fd;z-index:1;color:#6c82a6;font-size:10px;font-weight:600}
+.live-pending-analysis th:first-child,.live-pending-analysis td:first-child{text-align:left;width:18%}
+.live-pending-analysis tr:last-child td{border-bottom:0}
+.live-pending-analysis .pa-platform{background:#f2f6fd;font-weight:600}
+.live-pending-analysis .pa-provider td:first-child{padding-left:24px;color:#697e9d}
+.live-pending-analysis .link{border:0;background:transparent;padding:2px;font:inherit;color:#3d5fdd;cursor:pointer}
+.live-pending-analysis .pa-tied{display:block;font-size:9px;font-weight:400;color:#d18732;margin-top:3px}
+.live-pending-analysis .pa-empty{padding:26px 16px;color:#8595af;text-align:center;font-size:12px}
+.live-pending-analysis .pa-trend-caption{display:grid;grid-template-columns:60px 1fr 32%;gap:12px;font-size:10px;color:#8393ac;padding:10px 14px 6px}
+.live-pending-analysis .pa-trend-caption span:nth-child(2){text-align:right;padding-right:8px}
+.live-pending-analysis .pa-trend{padding:0 14px 12px;max-height:365px;overflow:auto}
+.live-pending-analysis .pa-trend-row{display:grid;grid-template-columns:60px minmax(40px,1fr) minmax(90px,14%) minmax(90px,32%);gap:12px;align-items:center;min-height:31px;font-size:11px}
+.live-pending-analysis .pa-track{height:10px;background:#edf2fb;border-radius:3px;overflow:hidden}
+.live-pending-analysis .pa-track i{display:block;height:100%;background:#5b7dee;border-radius:3px}
+.live-pending-analysis .pa-trend-row strong{text-align:right;font-weight:550;font-variant-numeric:tabular-nums}
+.live-pending-analysis .pa-trend-leader{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#7184a0}
+.live-pending-analysis .pa-incomplete .pa-track i{background:#e8b771}
+.live-pending-analysis .pa-basis{margin:6px 0 16px;color:#8392aa;font-size:11px;line-height:1.7}
+.live-pending-analysis .pa-basis summary{cursor:pointer}
+.live-pending-analysis .pa-basis p{max-width:1000px;margin:6px 0}
+@media(max-width:1150px){.live-pending-analysis .pa-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.live-pending-analysis .pa-metric strong{font-size:21px}.live-pending-analysis .pa-charts{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:650px){.live-pending-analysis .pa-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.live-pending-analysis .pa-trend-row{grid-template-columns:44px minmax(35px,1fr) 90px;gap:8px}.live-pending-analysis .pa-trend-leader{display:none}.live-pending-analysis .pa-trend-caption{grid-template-columns:44px 1fr}.live-pending-analysis .pa-trend-caption span:last-child{display:none}.live-pending-analysis .pa-toolbar{align-items:flex-start}.live-pending-analysis .pa-panel-head{padding:10px}.live-pending-analysis .pa-metric{padding:11px}}

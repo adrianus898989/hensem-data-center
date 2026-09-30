@@ -23,26 +23,18 @@ test('host body marker restores the prior state on unmount',()=>{
  names.add(api.OWNER_PREVIEW_BODY_CLASS);scoped.mountOwnerPreviewHostShell()();assert(names.has(api.OWNER_PREVIEW_BODY_CLASS));
  assert.doesNotThrow(()=>load({}).mountOwnerPreviewHostShell()());
 });
-test('return control sends an encoded allowlisted navigation message and never reads a host session',()=>{
+test('formal shell has no old return control and preserves encoded account commands',()=>{
  const channel='</script><script>oops()</script>\u2028',result=api.makeOwnerPreviewShellDocument(html,channel,false),scripts=[...result.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
  assert.equal(scripts.length,1);assert(!result.includes('oops()</script>'));
  const messages=[],children=[],listeners={};const sidebar={querySelector:()=>null,appendChild:node=>children.push(node)};
  const document={readyState:'loading',addEventListener:(type,fn)=>listeners[type]=fn,querySelector:()=>sidebar,getElementById:()=>null,createElement:()=>({children:[],setAttribute(name,value){this[name]=value},addEventListener(name,fn){this[name]=fn},appendChild(node){this.children.push(node)}})};
  const frameWindow={};vm.runInNewContext(scripts[0],{window:frameWindow,document,parent:{postMessage:(payload,target)=>messages.push({payload,target})}},{codeGeneration:{strings:false,wasm:false}});
- assert.equal(children.length,0);listeners.DOMContentLoaded();assert.equal(children.length,1);const button=children[0].children[0];button.click();
- assert.equal(button['aria-label'],'返回现有后台');assert.deepEqual(JSON.parse(JSON.stringify(messages.find(x=>x.payload.command==='back'))),{payload:{type:api.OWNER_PREVIEW_SHELL_MESSAGE,channel,command:'back'},target:'*'});
+ assert.equal(children.length,0);listeners.DOMContentLoaded();assert.equal(children.length,0);
+ assert(!result.includes('返回现有后台'));assert(!messages.some(x=>x.payload.command==='back'));
  assert(!/access_token|refresh_token|dashboardAuth|localStorage/.test(scripts[0]));
  for(const command of ['open-accounts','open-workorder-accounts']){assert.equal(frameWindow.hensemOpenAccountManager(command),true);assert.equal(messages.at(-1).payload.command,command);assert.equal(messages.at(-1).payload.channel,channel)}const count=messages.length;assert.equal(frameWindow.hensemOpenAccountManager('delete-account'),false);assert.equal(messages.length,count);
  assert(api.makeOwnerPreviewShellDocument('<!doctype html><body>Hensem','x',false).includes('owner-preview-frame-shell-style'));
 });
-test('message gate requires source, opaque origin, channel and back command',()=>{
- const source={},event={source,origin:'null',data:{type:api.OWNER_PREVIEW_SHELL_MESSAGE,channel:'current',command:'back'}};
- assert(api.isOwnerPreviewReturnMessage(event,source,'current'));
- for(const invalid of [{...event,source:{}},{...event,origin:'https://host.invalid'},{...event,data:{...event.data,channel:'old'}},{...event,data:{...event.data,command:'logout'}},{...event,data:null}])assert.equal(api.isOwnerPreviewReturnMessage(invalid,source,'current'),false);
- assert.equal(api.isOwnerPreviewReturnMessage(event,null,'current'),false);assert.equal(api.isOwnerPreviewReturnMessage(event,source,''),false);
-});
-
-
 test('account navigation requires matching opaque source and channel and only two commands',()=>{
  const source={},base={source,origin:'null',data:{type:api.OWNER_PREVIEW_SHELL_MESSAGE,channel:'session',command:'open-accounts'}};
  for(const command of ['open-accounts','open-workorder-accounts'])assert.equal(api.ownerPreviewAccountCommand({...base,data:{...base.data,command}},source,'session'),command);
