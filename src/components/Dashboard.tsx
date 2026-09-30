@@ -22,7 +22,6 @@ import { AutoWithdrawReasonsProvider, AutoWithdrawReasonsButton, AutoWithdrawRea
 import { AutoWithdrawDailySummary } from "./AutoWithdrawDailySummary";
 import { AutoWithdrawRateComparison } from "./AutoWithdrawRateComparison";
 import AutoWithdrawConfig from "./AutoWithdrawConfig";
-import WGRealtimeDashboard from "./WGRealtimeDashboard";
 import { autoWithdrawDisplayPayload } from "@/lib/autoWithdrawDisplayPayload";
 import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
 import { dashboardBusinessFetch, isDashboardDataDenied, readDashboardDataCache, writeDashboardDataCache } from "@/lib/dashboardDataClient";
@@ -30,7 +29,7 @@ import { dashboardScopeAllows, effectiveDashboardDataScope } from "@/lib/dashboa
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
-type ModuleMode = "home" | "auto" | "config" | "operator" | "volume" | "orders" | "provider-anomalies" | "work" | "admin" | "owner-admin-preview" | "wg-realtime";
+type ModuleMode = "home" | "auto" | "config" | "operator" | "volume" | "orders" | "provider-anomalies" | "work" | "admin" | "owner-admin-preview";
 type AutoView = "dashboard" | "summary" | "daily" | "month" | "compare" | "anomaly";
 type OperatorView = "dashboard" | "ranking" | "summary" | "detail" | "low" | "date" | "compare";
 type OperatorRankMode = "high" | "low";
@@ -1450,7 +1449,7 @@ function LegacyDashboard() {
       window.location.hash = "owner-admin-preview";
     }
     if ((next === "volume" || next === "orders" || next === "provider-anomalies") && !canThirdParty) return;
-    if ((next === "auto" || next === "config" || next === "operator" || next === "wg-realtime") && !canAutoWithdraw) return;
+    if ((next === "auto" || next === "config" || next === "operator") && !canAutoWithdraw) return;
     if (next === "work" && !canWorkSupport) return;
     setActiveModule(next);
     if (next === "home") {
@@ -1719,7 +1718,6 @@ function LegacyDashboard() {
         <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="cash" /></span>提现/自动出款统计</span>
         <span className={canAutoWithdraw ? "badge ok" : "badge"}>{canAutoWithdraw ? "Supabase" : "无权限"}</span>
       </button>
-      <button className={activeModule === "wg-realtime" ? "nav-item active" : "nav-item"} onClick={() => switchModule("wg-realtime")} disabled={!canAutoWithdraw}>WG 实时数据</button>
       <button className={activeModule === "work" ? "nav-item active" : "nav-item"} onClick={() => switchModule("work")} disabled={!canWorkSupport} title={!canWorkSupport ? "管理员未开放此模块" : ""}>
         <span className="nav-left"><span className="nav-icon"><DashboardGlyph name="ticket" /></span>工单/客服</span>
         <span className={canWorkSupport ? "badge ok" : "badge"}>{canWorkSupport ? "已接入" : "无权限"}</span>
@@ -1819,9 +1817,6 @@ function LegacyDashboard() {
   // V226：工单和三方量始终使用唯一、固定的组件挂载位置。
   // 旧版会在自动出款 payload 从空变为有值时切换 JSX 分支，造成三方量组件被销毁重建，
   // 所以用户只是在页面点击，也可能突然看到整页“正在读取三方量”。
-  if (activeModule === "wg-realtime") {
-    return <div className="app-shell">{sidebarContent}<main className="main">{canAutoWithdraw?<WGRealtimeDashboard/>:<p role="alert">管理员未开放此模块。</p>}</main></div>;
-  }
   if (activeModule === "work") {
     return <div className="app-shell">{sidebarContent}<main className="main"><WorkOrderDashboard /></main></div>;
   }

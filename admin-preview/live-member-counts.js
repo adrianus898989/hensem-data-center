@@ -6,8 +6,9 @@
  const thresholds=[2,3,4,5];
  const fields=['created_member_count','success_member_count','created_order_count','success_order_count','created_missing_member_count','success_missing_member_count'];
  const uuid=v=>typeof v==='string'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(v);
- const native=p=>!p.reportOnly&&uuid(p.id)&&['ar','newar','lg','game66'].includes(String(p.source||'').toLowerCase().replaceAll('_',''));
+ const native=p=>!p.reportOnly&&uuid(p.id)&&['ar','newar','lg','game66','wg'].includes(String(p.source||'').toLowerCase().replaceAll('_',''));
  const count=v=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0;
+ const unavailableReason=(row,basis)=>({source_member_id_unavailable:'WG 充值明细未提供会员 ID，人数不可统计',source_success_time_unavailable:'WG 提现未提供已核实成功时间，成功人数不可统计'})[row?.[basis+'_unavailable_reason']]||'此方向的人数口径不可统计';
  function localDay(value,zone){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(value));return ['year','month','day'].map(k=>parts.find(p=>p.type===k).value).join('-');}
  function daysFor(q,p){const start=Date.parse(q.startAt),end=Date.parse(q.endAt);if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start)throw Error('人数统计日期范围无效');const first=localDay(start,p.timezone),last=localDay(end-1,p.timezone),days=[];for(let d=Date.parse(first+'T00:00:00Z');d<=Date.parse(last+'T00:00:00Z');d+=86400000){days.push(new Date(d).toISOString().slice(0,10));if(days.length>31)throw Error('人数统计每次最多31个当地日');}return days;}
  // Split only at local calendar-day boundaries. A UTC +24h step is wrong on DST days.
@@ -27,10 +28,23 @@
   return {platform:p,request,days:daysFor(request,p)};
  }
  function validate(result,item){
-  const q=item.request,p=result?.platform,caps=result?.capabilities;
-  if(p?.id!==q.platformId||p?.timezone!==item.platform.timezone||Date.parse(result.startAt)!==Date.parse(q.startAt)||Date.parse(result.endAt)!==Date.parse(q.endAt)||!Array.isArray(result.rows)||caps?.memberIdentity!==true||caps.createdBasis!=='created_at'||caps.successBasis!=='success_at'||caps.dedupe!=='platform_local_date_direction_member')throw Error('人数统计响应范围或口径不一致');
+  const q=item.request,p=result?.platform,caps=result?.capabilities,wg=String(item.platform.source||'').toLowerCase()==='wg';
+  const identityValid=wg?caps?.memberIdentity===false&&caps.memberIdentityByDirection?.charge===false&&caps.memberIdentityByDirection?.withdraw===true&&caps.availability?.charge?.created===false&&caps.availability?.charge?.success===false&&caps.availability?.withdraw?.created===true&&caps.availability?.withdraw?.success===false:caps?.memberIdentity===true;
+  if(p?.id!==q.platformId||p?.timezone!==item.platform.timezone||Date.parse(result.startAt)!==Date.parse(q.startAt)||Date.parse(result.endAt)!==Date.parse(q.endAt)||!Array.isArray(result.rows)||!identityValid||caps.createdBasis!=='created_at'||caps.successBasis!=='success_at'||caps.dedupe!=='platform_local_date_direction_member')throw Error('人数统计响应范围或口径不一致');
   const expectedDirections=q.direction==='all'?directions:[q.direction],seen=new Set();
-  for(const row of result.rows){const key=row.date+'|'+row.direction;if(!item.days.includes(row.date)||!expectedDirections.includes(row.direction)||seen.has(key)||fields.some(k=>!count(row[k])))throw Error('人数统计每日明细不完整');seen.add(key);for(const basis of ['created','success']){const orders=row[basis+'_order_count'],missing=row[basis+'_missing_member_count'],members=row[basis+'_member_count'];if(missing>orders||members>orders-missing||orders>missing&&members===0)throw Error('人数统计会员覆盖待核对');}}
+  for(const row of result.rows){
+   const key=row.date+'|'+row.direction;if(!item.days.includes(row.date)||!expectedDirections.includes(row.direction)||seen.has(key)||!wg&&fields.some(k=>!count(row[k])))throw Error('人数统计每日明细不完整');seen.add(key);
+   for(const basis of ['created','success']){
+    const orders=row[basis+'_order_count'],missing=row[basis+'_missing_member_count'],members=row[basis+'_member_count'];
+    if(wg){
+     const available=row.direction==='withdraw'&&basis==='created',reason=available?null:row.direction==='charge'?'source_member_id_unavailable':'source_success_time_unavailable';
+     if(row[basis+'_available']!==available||row[basis+'_unavailable_reason']!==reason)throw Error('人数统计可用性口径不一致');
+     if(!available){if(members!==null||thresholds.some(n=>row[basis+'_members_ge'+n]!==null))throw Error('不可用人数不得返回零值');if(row.direction==='withdraw'){if(orders!==null||missing!==null)throw Error('未提供成功时间不得推算成功订单');}else if(!count(orders)||missing!==orders)throw Error('缺失会员 ID 覆盖待核对');continue;}
+     if(![orders,missing,members].every(count))throw Error('人数统计每日明细不完整');
+    }
+    if(missing>orders||members>orders-missing||orders>missing&&members===0)throw Error('人数统计会员覆盖待核对');
+   }
+  }
   if(seen.size!==item.days.length*expectedDirections.length)throw Error('人数统计缺少日期或业务方向');
   return {platform:{...item.platform,...p},rows:result.rows.map(row=>({...row})),sourceCompletenessVerified:caps.sourceCompletenessVerified===true,frequencySupported:caps.frequencyBasis==='per_platform_local_day_order_count'&&JSON.stringify(caps.frequencyThresholds)===JSON.stringify(thresholds)};
  }
@@ -67,12 +81,12 @@
     await Promise.all(Array.from({length:Math.min(2,q.items.length)},()=>worker()));if(!valid(id))return;S={...S,status:S.failures.length&&!S.results.length?'error':'ready',error:S.failures.length&&!S.results.length?'所选平台人数读取失败':''};c.render();
    })();pending=run;run.finally(()=>{if(id===serial)pending=null});return run;
   }
-  function aggregate(s,direction,basis){const rows=s.results.flatMap(r=>r.rows.filter(row=>row.direction===direction)),members=rows.reduce((n,r)=>n+r[basis+'_member_count'],0),orders=rows.reduce((n,r)=>n+r[basis+'_order_count'],0),missing=rows.reduce((n,r)=>n+r[basis+'_missing_member_count'],0),received=s.results.filter(r=>r.rows.some(row=>row.direction===direction)).length,expected=s.items.length+s.unsupported.length,partial=received<expected||missing>0;return {members,orders,missing,received,expected,partial,display:received===0||members===0&&partial?'—':C(members)};}
+  function aggregate(s,direction,basis){const all=s.results.flatMap(r=>r.rows.filter(row=>row.direction===direction)),unavailable=all.filter(row=>row[basis+'_available']===false),rows=all.filter(row=>row[basis+'_available']!==false),members=rows.reduce((n,r)=>n+r[basis+'_member_count'],0),orders=rows.reduce((n,r)=>n+r[basis+'_order_count'],0),missing=rows.reduce((n,r)=>n+r[basis+'_missing_member_count'],0),received=s.results.filter(r=>r.rows.some(row=>row.direction===direction&&row[basis+'_available']!==false)).length,expected=s.items.length+s.unsupported.length,partial=received<expected||missing>0;return {members,orders,missing,received,expected,partial,unavailable:[...new Set(unavailable.map(row=>unavailableReason(row,basis)))],display:received===0||members===0&&partial?'—':C(members)};}
   const multiple=s=>new Set(s.items.flatMap(i=>i.days)).size>1||String(L.from||'').slice(0,10)!==String(L.to||'').slice(0,10);
   const status=s=>s.status==='loading'?'人数读取中':s.status==='paused'?s.error:s.status==='error'?s.error:s.status==='idle'?'查询后显示人数':!s.items.length?'所选来源尚未接入会员明细':'';
   function metric(direction){
    if(!directions.includes(direction))return '';
-   const s=view(),created=aggregate(s,direction,'created'),success=aggregate(s,direction,'success'),name=direction==='charge'?'充值':'提款',partial=created.partial||success.partial,label=multiple(s)?'每日去重人次 · '+name+' / 成功'+name:name+'人数 / 成功'+name+'人数',message=status(s)||('读取 '+C(created.received)+' / '+C(created.expected)+' 平台'+(partial?' · 部分数据':' · 已采集订单'));
+   const s=view(),created=aggregate(s,direction,'created'),success=aggregate(s,direction,'success'),name=direction==='charge'?'充值':'提款',partial=created.partial||success.partial,label=multiple(s)?'每日去重人次 · '+name+' / 成功'+name:name+'人数 / 成功'+name+'人数',message=status(s)||('读取 '+C(created.received)+' / '+C(created.expected)+' 平台'+(partial?' · 部分数据':' · 已采集订单'))+([...new Set([...created.unavailable,...success.unavailable])].length?' · '+[...new Set([...created.unavailable,...success.unavailable])].join('；'):'');
    return '<div class="df-flow-metric df-member-counts"><span>'+label+'</span><strong><button type="button" class="link metric-link" onclick="liveMemberCountsDetails()">'+created.display+' / '+success.display+'</button></strong><small class="cell-sub">'+(partial&&(created.members||success.members)?'已知人数 · ':'')+(multiple(s)?'各日、各平台分别去重后相加':'同平台跨三方去重')+'</small><small class="df-coverage">'+E(message)+retry(s)+'</small></div>';
   }
   // Platform ledger cells reuse the exact current member query; rendering and
@@ -80,20 +94,21 @@
   function platformLabel(direction){return '实际'+(direction==='charge'?'充值':'取款')+(multiple(view())?'人次':'人数');}
   function platformMetric(platformIds,direction){
    const s=view(),inputs=Array.isArray(platformIds)?platformIds:[platformIds],ids=[...new Set(inputs.filter(id=>typeof id==='string'&&id))],unknown=inputs.filter(id=>typeof id!=='string'||!id).length,expected=ids.length+unknown;
-   const matched=directions.includes(direction)?s.results.filter(r=>ids.includes(r.platform.id)&&r.rows.some(row=>row.direction===direction)):[];
-   const rows=matched.flatMap(r=>r.rows.filter(row=>row.direction===direction));
+   const observed=directions.includes(direction)?s.results.filter(r=>ids.includes(r.platform.id)&&r.rows.some(row=>row.direction===direction)):[],unavailable=observed.flatMap(r=>r.rows.filter(row=>row.direction===direction&&row.success_available===false)),matched=observed.filter(r=>r.rows.some(row=>row.direction===direction&&row.success_available!==false));
+   const rows=matched.flatMap(r=>r.rows.filter(row=>row.direction===direction&&row.success_available!==false));
    const members=rows.reduce((n,r)=>n+r.success_member_count,0),orders=rows.reduce((n,r)=>n+r.success_order_count,0),missing=rows.reduce((n,r)=>n+r.success_missing_member_count,0);
    const partial=!expected||matched.length<expected||missing>0,value=!matched.length||members===0&&partial?null:members;
-   const reasons=ids.filter(id=>!matched.some(r=>r.platform.id===id)).map(id=>s.failures.find(p=>p.id===id)?.error||s.unsupported.find(p=>p.id===id)?.reason||status(s)||'该平台当前方向人数尚未读取');
+   const reasons=[...unavailable.map(row=>unavailableReason(row,'success')),...ids.filter(id=>!observed.some(r=>r.platform.id===id)).map(id=>s.failures.find(p=>p.id===id)?.error||s.unsupported.find(p=>p.id===id)?.reason||status(s)||'该平台当前方向人数尚未读取')];
    const title='按成功时间统计；同平台当地日按会员 ID 去重，跨三方只计一次。'+(multiple(s)?'多日为每日去重人次之和，不是整个期间去重人数。':'同日各平台分别去重，平台之间不合并会员。')+
-    '已读取 '+C(matched.length)+' / '+C(expected)+' 平台；成功订单会员 ID 覆盖 '+C(orders-missing)+' / '+C(orders)+' 笔。'+(missing?C(missing)+' 笔未提供会员 ID，未计入人数。':'')+
+    '已读取 '+C(matched.length)+' / '+C(expected)+' 平台；'+(unavailable.length?'部分成功订单会员 ID 覆盖不可统计。':'成功订单会员 ID 覆盖 '+C(orders-missing)+' / '+C(orders)+' 笔。')+(missing?C(missing)+' 笔未提供会员 ID，未计入人数。':'')+
     (partial?'当前仅显示已知人数，* 表示部分数据。':'')+(reasons.length?[...new Set(reasons)].join('；')+'。':'')+'仅统计已采集订单，源系统完整性尚未核验。';
    const display=value===null?'—':C(value),html='<span class="df-platform-member-count" tabindex="0" title="'+E(title)+'">'+display+(value!==null&&partial?'<sup aria-label="部分数据">*</sup>':'')+'</span>';
-   return {value,display,html,partial,label:platformLabel(direction),title,coverage:{complete:!partial,receivedPlatforms:matched.length,expectedPlatforms:expected,successOrderCount:orders,missingMemberOrderCount:missing,sourceCompletenessVerified:matched.length>0&&matched.every(r=>r.sourceCompletenessVerified)}};
+   return {value,display,html,partial,label:platformLabel(direction),title,coverage:{complete:!partial,receivedPlatforms:matched.length,expectedPlatforms:expected,successOrderCount:unavailable.length?null:orders,missingMemberOrderCount:unavailable.length?null:missing,sourceCompletenessVerified:matched.length>0&&matched.every(r=>r.sourceCompletenessVerified)}};
   }
   function platformCount(platformIds,direction){return platformMetric(platformIds,direction).html;}
-  const rowValue=(r,basis)=>{if(!r)return '—';const members=r[basis+'_member_count'],missing=r[basis+'_missing_member_count'];return (members===0&&missing?'—':C(members))+(missing?'<small class="cell-sub">'+(members?'已知人数；':'')+C(missing)+' 笔未提供会员 ID</small>':'');};
+  const rowValue=(r,basis)=>{if(!r)return '—';if(r[basis+'_available']===false)return '—<small class="cell-sub">'+E(unavailableReason(r,basis))+'</small>';const members=r[basis+'_member_count'],missing=r[basis+'_missing_member_count'];return (members===0&&missing?'—':C(members))+(missing?'<small class="cell-sub">'+(members?'已知人数；':'')+C(missing)+' 笔未提供会员 ID</small>':'');};
   function frequencyValues(row,basis,supported){
+   if(row?.[basis+'_available']===false)return {reason:unavailableReason(row,basis)};
    if(!row||!supported)return {reason:'尚未接入频次统计'};
    const values=thresholds.map(n=>row[basis+'_members_ge'+n]);
    if(values.every(v=>v===undefined||v===null))return {reason:'尚未接入频次统计'};
@@ -108,7 +123,7 @@
    const platformCell=r=>E(r.platform.name)+'<small class="cell-sub">'+E(r.platform.source)+' · '+E(r.platform.timezone)+'</small>';
    const click=(target,mode=basis)=>"liveMemberCountsDetails('"+target+"','"+mode+"')";
    const tabs='<div class="live-tabs"><button type="button" class="'+(tab==='members'?'on':'')+'" onclick="'+click('members')+'">每日人数</button><button type="button" class="'+(tab==='frequency'?'on':'')+'" onclick="'+click('frequency')+'">提款频次</button></div>';
-   const coverage=(tab==='frequency'?['withdraw']:directions).map(d=>{const a=aggregate(s,d,'created'),b=aggregate(s,d,'success');if(!a.received)return '';return '<div class="live-definition">'+(d==='charge'?'充值':'提款')+'：已读取 '+C(a.received)+' / '+C(a.expected)+' 平台；创建订单会员 ID 覆盖 '+C(a.orders-a.missing)+' / '+C(a.orders)+' 笔；成功订单会员 ID 覆盖 '+C(b.orders-b.missing)+' / '+C(b.orders)+' 笔。</div>';}).join('');
+   const coverage=(tab==='frequency'?['withdraw']:directions).map(d=>{const a=aggregate(s,d,'created'),b=aggregate(s,d,'success');if(!a.received&&!a.unavailable.length&&!b.unavailable.length)return '';return '<div class="live-definition">'+(d==='charge'?'充值':'提款')+'：已读取 '+C(a.received)+' / '+C(a.expected)+' 平台；'+(a.unavailable.length?E(a.unavailable.join('；'))+'；':'创建订单会员 ID 覆盖 '+C(a.orders-a.missing)+' / '+C(a.orders)+' 笔；')+(b.unavailable.length?E(b.unavailable.join('；'))+'。':'成功订单会员 ID 覆盖 '+C(b.orders-b.missing)+' / '+C(b.orders)+' 笔。')+'</div>';}).join('');
    const problems=[...s.unsupported.map(p=>[p.name,p.reason]),...s.failures.map(p=>[p.name,'读取失败：'+p.error])].map(([name,reason])=>'<div class="live-definition">'+E(name)+'：'+E(reason)+'</div>').join('');
    let definition,table;
    if(tab==='frequency'){

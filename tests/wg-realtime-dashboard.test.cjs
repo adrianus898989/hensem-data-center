@@ -5,7 +5,6 @@ const path=require('node:path');
 const {PGlite}=require('@electric-sql/pglite');
 const {loadTs,root}=require('./load-typescript.cjs');
 const {wgRealtimeQuery}=loadTs(path.join(root,'supabase/functions/dashboard-api/lib/wgRealtimeQuery.ts'));
-const {wgRealtimeAllowed,wgRealtimeFromSearch}=loadTs(path.join(root,'src/lib/wgRealtimeAccess.ts'));
 const migration=fs.readFileSync(path.join(root,'supabase/migrations/20260930093000_wg_realtime_dashboard.sql'),'utf8');
 let db;
 before(async()=>{
@@ -94,20 +93,12 @@ test('config returns selected brand plus default, midnight missed stays null',as
  const config=await rpc({section:'config'});assert.deepEqual(Object.keys(config.rows[0].configuration.settings).sort(),['0','278']);assert(!JSON.stringify(config).includes('OTHER_BRAND'));
  const midnight=await rpc({section:'midnight'});assert.equal(midnight.rows[0].status,'missed');assert.equal(midnight.rows[0].record_count,null);
 });
-test('UI is isolated, has seven sections and compact full-value access',()=>{
- const ui=fs.readFileSync(path.join(root,'src/components/WGRealtimeDashboard.tsx'),'utf8');
- for(const x of ['orders','summary','providers','operators','reasons','config','midnight'])assert(ui.includes("['"+x+"'"));
- assert.match(ui,/title=\{text\}/);assert.match(ui,/onDoubleClick/);assert.match(ui,/不与旧日报、谷歌汇总相加/);assert.match(ui,/当前最后操作者/);
- assert(!ui.includes('rest/v1/'));assert.match(ui,/dashboardBusinessFetch/);
-});
-test('formal preview mounts WG with strict existing permission, no assigned-role bypass',()=>{
- const profile={active:true,role:'owner'},owner={mode:'owner',canView:true},legacy={mode:'legacy',canView:true};
- assert.equal(wgRealtimeAllowed(profile,owner),true);
- assert.equal(wgRealtimeAllowed({...profile,role:'viewer',permissions:{auto_withdraw:true}},legacy),true);
- for(const [p,a]of [[profile,null],[{...profile,active:false},owner],[profile,{mode:'assigned',canView:true}],[{...profile,role:'admin'},legacy],[profile,{...owner,canView:false}]])assert.equal(wgRealtimeAllowed(p,a),false);
- assert.equal(wgRealtimeFromSearch('?wg=realtime'),true);assert.equal(wgRealtimeFromSearch('?wg=anything'),false);
+test('WG has no standalone entry, overlay, URL route or extra reserved header space',()=>{
  const preview=fs.readFileSync(path.join(root,'src/components/OwnerAdminPreview.tsx'),'utf8');
- assert.match(preview,/import WGRealtimeDashboard/);assert.match(preview,/canViewWg&&documentHtml&&showWg/);assert.match(preview,/<WGRealtimeDashboard key=\{accountId\}/);
- assert.match(preview,/window\.history\.replaceState/);assert.match(preview,/wgRealtimeFromSearch\(window\.location\.search\)/);
- assert.match(preview,/返回运营中心/);
+ const dashboard=fs.readFileSync(path.join(root,'src/components/Dashboard.tsx'),'utf8');
+ const shell=fs.readFileSync(path.join(root,'src/lib/ownerPreviewShell.ts'),'utf8');
+ for(const text of [preview,dashboard,shell])assert(!/WGRealtimeDashboard|wgRealtime|wg-realtime|owner-preview-(?:shell-wg|wg-page)|WG 实时数据/.test(text));
+ for(const file of ['src/components/WGRealtimeDashboard.tsx','src/components/WGRealtimeDashboard.css','src/lib/wgRealtimeAccess.ts'])assert(!fs.existsSync(path.join(root,file)));
+ assert.match(preview,/restoreApprovedAdmin/);assert.match(preview,/installAdminLiveBridge/);
+ for(const module of ['orders','volume','auto','config','operator'])assert(dashboard.includes('"'+module+'"'));
 });

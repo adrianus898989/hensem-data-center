@@ -25,6 +25,8 @@
   const detail=()=>L.durationDetail==='orders'?'orders':'groups';
   const selectedRows=(rows,d)=>(Array.isArray(rows)?rows:[]).filter(r=>r.direction===d&&(!r.currency||!L.currency||r.currency===L.currency));
   const sourceRows=(result,d)=>selectedRows(result.summary,d);
+  const unavailable=d=>(L.results||[]).some(result=>d==='withdraw'&&(result.capabilities||result.platform?.capabilities)?.withdrawSuccessTimeAvailable===false);
+  const unavailableNote='WG 提现尚未提供已核实成功时间；操作时间不能当作成功时间。到账时效暂不可统计，不按 0 秒或 0% 展示。';
   function timingParts(result,d,pending){
    const direct=selectedRows(result[pending?'pendingSummary':'latencySummary'],d);
    if(direct.length===1)return {rows:direct,complete:true,split:result._parts?.length>1};
@@ -46,7 +48,7 @@
    const bounds=pending?PENDING_LIMITS:LIMITS;
    const name=pending?'pending_age':'latency',candidateKey=pending?'pending':'success',results=Array.isArray(L.results)?L.results:[];
    const parts=results.map(result=>{const summary=sourceRows(result,d),candidateCount=sum(summary,candidateKey+'_count'),candidateAmount=sum(summary,candidateKey+'_amount'),bins=selectedRows(!pending&&result.durationVersion!==2?[]:result.groups?.[name],d),thresholds=selectedRows(!pending&&result.durationVersion!==2?[]:result.groups?.[name+'_thresholds'],d),timing=selectedRows(result[pending?'pendingSummary':'latencySummary'],d);const first=bins[0]||thresholds[0],s=timingSummary(result,d,pending),direct=timing.length===1?timing[0]:null;return {result,candidateCount,candidateAmount,bins,thresholds,timing:s,available:candidateCount===0||!!first||!!direct,validCount:first?number(first.valid_count):direct?number(direct.valid_count):candidateCount===0?0:null,validAmount:first?number(first.valid_amount):direct?number(direct.valid_amount):candidateCount===0?0:null}});
-   const candidateCount=sum(parts,'candidateCount'),candidateAmount=sum(parts,'candidateAmount'),available=parts.every(p=>p.available),validCount=sum(parts,'validCount'),validAmount=sum(parts,'validAmount');
+   const blocked=!pending&&unavailable(d),candidateCount=sum(parts,'candidateCount'),candidateAmount=sum(parts,'candidateAmount'),available=!blocked&&parts.every(p=>p.available),validCount=blocked?null:sum(parts,'validCount'),validAmount=blocked?null:sum(parts,'validAmount');
    const active=parts.filter(p=>Number(p.validCount)>0),complete=available&&active.every(p=>p.timing&&number(p.timing.valid_count)===p.validCount);
    const mean=complete&&validCount>0&&active.every(p=>number(p.timing.mean_ms)!==null)?active.reduce((n,p)=>n+Number(p.timing.mean_ms)*p.validCount,0)/validCount:null;
    // A quantile is not additive. Even one platform can contain several merged shards.
@@ -80,6 +82,7 @@
   const emptyTable=(headers,note)=>table(headers,[],'table-wrap')+'<div class="live-empty">'+E(note)+'</div>';
   function rangeNote(pending){return pending?'所选创建日期范围 '+E(L.from||'—')+' 至 '+E(L.to||'—')+' 内仍待付订单；不含窗口外历史积压。等待时长按各分段查询时点计算，非同一冻结快照。':'所选成功日期范围 '+E(L.from||'—')+' 至 '+E(L.to||'—')+'；按成功时间入选，耗时 = 成功时间 − 来源提交／创建时间；各平台当地时间；币种 '+E(L.currency||'—')+'。GAME66 提款成功时间可能为源更新时间代理。'}
   function summaryCard(d){
+   if(unavailable(d))return '<section class="panel latency-summary" data-duration-direction="'+E(d)+'"><div class="panel-head"><h2>'+title(d)+'到账时效</h2></div><div class="live-empty">'+unavailableNote+'</div></section>';
    const s=stat(d),fastParts=[0,1,2].map(i=>s.bucket(i)),fast={count:sum(fastParts,'count'),amount:sum(fastParts,'amount')},a=sourceRows({summary:(L.results||[]).flatMap(r=>r.summary||[])},d),all=sum(a,'all_count'),missingQuantile=s.validCount===0?'当前无有效成功时间订单':s.partitioned?'跨分段分位数不可合并；不能相加或平均':'来源未提供完整分位数统计',meanNote=s.mean===null?'有效耗时统计未完整返回，不能推算平均值':s.partitioned?'按各段有效成功笔数加权计算':'来源完整成功耗时平均值';
    const p50=s.p50===null?s.p50Range:null,p95=s.p95===null?s.p95Range:null,p50Note=p50?p50.note:s.p50===null?missingQuantile:'来源精确 P50',p95Note=p95?'95% 订单完成时间 · 分档区间（非精确值）':s.p95===null?missingQuantile:'95% 有效成功单不超过此时长';
    return '<section class="panel latency-summary" data-duration-direction="'+E(d)+'"><div class="panel-head"><h2>'+title(d)+'到账时效<span>提交 '+count(all)+' 笔 · 成功 '+count(s.candidateCount)+' 笔</span></h2><span class="badge '+(d==='charge'?'blue':'green')+'">'+percentage(s.validCount,s.candidateCount)+' 时间覆盖</span></div><div class="latency-summary-grid"><div><span>有效成功订单</span><strong>'+count(s.validCount)+' 笔</strong><small class="cell-sub">'+money(s.validAmount)+' '+E(L.currency)+'</small></div><div><span>5 分钟内成功</span><strong>'+percentage(fast.count,s.validCount)+'</strong><small class="cell-sub">'+count(fast.count)+' 笔 · '+money(fast.amount)+'</small></div><div title="'+E(meanNote)+'"><span>平均 / P50 耗时</span><strong>'+duration(s.mean)+'</strong><small class="cell-sub" title="'+E(p50Note)+'">P50 '+E(p50?p50.label:duration(s.p50))+(p50?' · 区间，非精确值':'')+'</small></div><div title="'+E(p95?p95.note:p95Note)+'"><span>P95 耗时</span><strong>'+E(p95?p95.label:duration(s.p95))+'</strong><small class="cell-sub">'+E(p95Note)+'</small></div></div></section>';
