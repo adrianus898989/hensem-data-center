@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const test = require('node:test');
 const ts = require('typescript');
 const {loadTs, root} = require('./load-typescript.cjs');
+const token='header.'+Buffer.from(JSON.stringify({session_id:'33333333-3333-4333-8333-333333333333'})).toString('base64url')+'.signature';
 const ALL = {mode:'all',countries:[]};
 const PANGHU = {mode:'selected',countries:['BR_PANGHU']};
 const BOTH = {mode:'selected',countries:['BR','BR_PANGHU']};
@@ -23,7 +24,7 @@ async function edge(action, patch={}, options={}) {
   const users=clone(options.users||[target]);
   const writes=[],authCalls=[],audits=[],reads=[];
   let handler;
-  const client={auth:{
+  const client={rpc:async name=>({data:name==="application_session_check"?{allowed:options.sessionAllowed!==false}:null,error:options.revokeFailure&&name==="application_revoke_user_sessions"?{message:"PRIVATE_REVOKE_FAILURE"}:null}),auth:{
     getUser:async()=>({data:{user:options.invalidToken?null:{id:caller.auth_user_id,user_metadata:{dashboard_role:'owner',data_scope:ALL}}}}),
     admin:{
       createUser:async data=>{authCalls.push({action:'create',data});return {data:{user:{id:'fixture-created'}}};},
@@ -61,10 +62,10 @@ async function edge(action, patch={}, options={}) {
       },
     };return query;
   }};
-  vm.runInNewContext(compiled,{createClient:()=>client,Deno:{env:{get:()=> 'fixture'},serve:fn=>{handler=fn;}},Request,Response,Date,Intl,console,AbortSignal,
-    fetch:async(url,init)=>{assert(String(url).endsWith('/rest/v1/rpc/dashboard_role_access'),'only fresh role validation may use network');assert.equal(init.headers.Authorization,'Bearer fixture');assert.equal(init.headers.apikey,'fixture');assert.equal(init.method,'POST');assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');if(options.roleFailure)throw Error('synthetic network');return Response.json(options.roleAccess||{mode:caller.role==='owner'?'owner':'legacy',canView:true,permissions:[]},{status:options.roleStatus||200})}});
+  vm.runInNewContext(compiled,{createClient:()=>client,Deno:{env:{get:()=> 'fixture'},serve:fn=>{handler=fn;}},Request,Response,Date,Intl,console,AbortSignal,atob,TextEncoder,TextDecoder,Uint8Array,
+    fetch:async(url,init)=>{assert(String(url).endsWith('/rest/v1/rpc/dashboard_role_access'),'only fresh role validation may use network');assert.equal(init.headers.Authorization,'Bearer '+token);assert.equal(init.headers.apikey,'fixture');assert.equal(init.method,'POST');assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');if(options.roleFailure)throw Error('synthetic network');return Response.json(options.roleAccess||{mode:caller.role==='owner'?'owner':'legacy',canView:true,permissions:[]},{status:options.roleStatus||200})}});
   const body={action,username:action.startsWith('create')?'newuser':'target',password:'fixture-password',...patch};
-  const response=await handler(new Request('https://fixture.invalid',{method:'POST',headers:options.noToken?{}:{authorization:'Bearer fixture'},body:JSON.stringify(body)}));
+  const response=await handler(new Request('https://fixture.invalid',{method:'POST',headers:{...(options.noToken?{}:{authorization:'Bearer '+token}),...options.headers},body:JSON.stringify(body)}));
   return {status:response.status,body:await response.json(),writes,authCalls,audits,reads,target};
 }
 
@@ -300,4 +301,27 @@ test('archived assigned roles and unavailable or malformed role lookup never fal
 });
 test('CURRENT and deploy account enforcement entrypoints stay identical',()=>{
   assert.equal(fs.readFileSync(path.join(root,'BACKEND_CURRENT/dashboard-user-admin.ts'),'utf8'),fs.readFileSync(path.join(root,'DEPLOY_SUPABASE/dashboard-user-admin.ts'),'utf8'));
+});
+
+test('revoked sessions cannot read profiles or perform any privileged operation',async()=>{
+  for(const action of ['list-users','create-account','update-account','reset-password','delete-account','list-audit']){
+    const r=await edge(action,{active:false},{role:'owner',sessionAllowed:false});assert.equal(r.status,403);assert.deepEqual(r.reads,[]);assert.deepEqual(r.authCalls,[]);assert.deepEqual(r.writes,[]);
+  }
+});
+test('password reset, disable and delete fail closed when old sessions cannot be revoked',async()=>{
+  for(const action of ['reset-password','delete-account','update-account','update-viewer']){
+    const r=await edge(action,{active:false},{role:'owner',revokeFailure:true});assert.equal(r.status,503);assert.deepEqual(r.writes,[]);assert.deepEqual(r.authCalls,[]);assert(!JSON.stringify(r.body).includes('PRIVATE_REVOKE_FAILURE'));
+  }
+});
+test('legacy IP settings cannot bypass canonical security policy',async()=>{
+  for(const action of ['ip-settings','add-ip','set-ip-active','delete-ip','set-ip-mode']){const r=await edge(action,{}, {role:'owner'});assert.equal(r.status,410);assert.deepEqual(r.writes,[]);}
+});
+
+test('collector sync secret cannot bootstrap or reset any dashboard owner or admin',async()=>{
+  for(const action of ['bootstrap-admin','reset-admin-password'])for(const options of [{noToken:true},{role:'owner'}]){
+    const r=await edge(action,{}, {...options,headers:{'x-sync-secret':'fixture'}});assert.equal(r.status,410);assert.equal(r.body.code,'operation_retired');assert.deepEqual(r.reads,[]);assert.deepEqual(r.authCalls,[]);assert.deepEqual(r.writes,[]);
+  }
+});
+test('untrusted Origin is rejected before account or authorization access',async()=>{
+  const r=await edge('create-account',{}, {role:'owner',headers:{origin:'https://evil.example'}});assert.equal(r.status,403);assert.deepEqual(r.reads,[]);assert.deepEqual(r.authCalls,[]);assert.deepEqual(r.writes,[]);
 });

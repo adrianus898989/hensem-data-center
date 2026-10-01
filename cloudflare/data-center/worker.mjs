@@ -1,6 +1,16 @@
 const UPSTREAM = 'https://adrianus898989.github.io';
 const BASE = '/hensem-data-center';
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+// This dedicated HTTPS entry can emit real anti-framing headers. Restrict only
+// ancestors here: the authorized internal srcdoc preview needs its inline code.
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': "frame-ancestors 'none'",
+  'X-Frame-Options': 'DENY',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  'Strict-Transport-Security': 'max-age=31536000',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+};
 
 function withinSite(path) {
   return path === BASE || path.startsWith(`${BASE}/`);
@@ -10,8 +20,7 @@ function reply(body, status, extra = {}) {
   return new Response(body, { status, headers: {
     'Content-Type': 'text/plain; charset=utf-8',
     'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': 'no-referrer',
+    ...SECURITY_HEADERS,
     ...extra,
   } });
 }
@@ -60,8 +69,7 @@ export async function serve(request, fetchPublic = fetch) {
   const isHtml = /(?:text\/html|application\/xhtml\+xml)/i.test(upstream.headers.get('Content-Type') || '');
   const headers = new Headers({
     'Cache-Control': upstream.ok && immutable && !isHtml ? 'public, max-age=31536000, immutable' : 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': 'no-referrer',
+    ...SECURITY_HEADERS,
   });
   for (const name of ['Content-Type', 'ETag', 'Last-Modified']) {
     const value = upstream.headers.get(name);

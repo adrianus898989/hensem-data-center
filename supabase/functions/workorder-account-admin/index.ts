@@ -20,8 +20,13 @@ const gateway: Gateway = {
     ]);
     return [...(checked(mapped) || []), ...(checked(game66) || [])].map(row => ({ team: row.team_name, platform: row.platform_name }));
   },
-  async ipEnabled() { const row = checked(await admin.from('dashboard_security_settings').select('ip_whitelist_enabled').eq('id', 1).maybeSingle()); if (!row) throw new Error('Missing IP settings'); return row.ip_whitelist_enabled === true; },
-  async ipAllowed(ip) { return !!checked(await admin.from('dashboard_ip_whitelist').select('id').eq('ip', ip).eq('active', true).maybeSingle()); },
+  async sessionAllowed(token,userId,surface) {
+    let sid:string;try{const part=token.split('.')[1];sid=JSON.parse(atob(part.replace(/-/g,'+').replace(/_/g,'/'))).session_id;}catch{return false;}
+    if(typeof sid!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sid))return false;
+    const result=checked(await admin.rpc('application_session_check',{p_user_id:userId,p_session_id:sid,p_surface:surface}));
+    return result?.allowed===true;
+  },
+  async ipCheck(surface,ip,userId) { return checked(await admin.rpc("application_auth_ip_check",{p_surface:surface,p_ip:ip,p_user_id:userId}))===true; },
   async createUser(email, password) {
     const result = await admin.auth.admin.createUser({ email, password, email_confirm: true });
     if (result.error?.code === 'email_exists' || result.error?.code === 'user_already_exists') throw new ApiError(409, 'account_exists', '这个工单账号已存在');
@@ -30,6 +35,7 @@ const gateway: Gateway = {
   async deleteUser(id) { checked(await admin.auth.admin.deleteUser(id)); },
   async insert(account, actor) { return checked(await admin.from('workorder_portal_accounts').insert({ ...account, created_by: actor, updated_by: actor }).select(ACCOUNT_FIELDS).single()); },
   async update(id, expected, patch, actor) { return checked(await admin.from('workorder_portal_accounts').update({ ...patch, updated_by: actor }).eq('auth_user_id', id).eq('updated_at', expected).select(ACCOUNT_FIELDS).maybeSingle()); },
+  async revokeSessions(id) { checked(await admin.rpc("application_revoke_user_sessions", {p_user_id:id,p_surface:"workorder"})); },
   async resetPassword(id, password) {
     const user = checked(await admin.auth.admin.getUserById(id))?.user;
     if (!user?.email?.toLowerCase().endsWith('@' + ACCOUNT_DOMAIN)) throw new ApiError(403, 'account_denied', '不能重置其他系统账号');

@@ -42,6 +42,7 @@ function ui(handler, options={}) {
     require(name) {
       if (name === 'react') return react;
       if (name === 'react/jsx-runtime') return jsx;
+      if (name === './AccountLoginPolicy') return {default: function AccountLoginPolicy(){}};
       if (name === './AccountEditorDialog') return {default: AccountEditorDialog};
       if (name.endsWith('.css')) return {};
       if (name.endsWith('/workOrderAccountClient')) return {workOrderAccountRequest: async (current, body, signal) => {
@@ -233,7 +234,7 @@ test('large platform scopes show a compact preview and open the complete account
   assert.equal(text(preview), many.slice(0, 2).join('、')); assert.equal(preview.props.title, many.join('、'));
   assert.doesNotMatch(text(cell), /PLATFORM_31|<not-html>/);
   assert.match(text(cell), /共 31 个平台 · 查看全部/);
-  assert.equal(nodes(row).filter(n => n.type === 'td')[5].props.children.props.children, '启用');
+  assert.equal(text(nodes(nodes(row).filter(n => n.type === 'td')[5]).find(n=>n.type==='span')), '启用');
   assert.equal(nodes(row).filter(n => n.type === 'td')[6].props.children.props.className, 'wo-account-actions');
   const open = h.button('共 31 个平台 · 查看全部'); assert.equal(open.props['aria-haspopup'], 'dialog'); open.props.onClick();
   assert.equal(h.dialog().props.title, 'alice · 平台范围'); assert.deepEqual(nodes(h.dialog()).filter(n => n.type === 'li').map(text), many);
@@ -258,4 +259,11 @@ test('embedded workorder account page waits for its query button and does not ke
  const h=ui(undefined,{manualQuery:true});await flush();assert.equal(h.calls.length,0);assert.equal(h.button('查询账号').props.disabled,false);
  h.button('查询账号').props.onClick();h.draw();h.effect();await flush();assert.equal(h.calls.length,1);assert.equal(h.calls[0].body.action,'list-accounts');assert.deepEqual(h.visibleUsers(),['alice','bravo','hkstaff']);
  h.draw();h.effect();await flush();assert.equal(h.calls.length,1);
+});
+
+test('workorder login security waits for the account query and filters confirmed locked accounts locally',async()=>{
+ const h=ui(null,{manualQuery:true});assert(!nodes(h.draw()).some(n=>n.type?.name==='AccountLoginPolicy'));h.button('查询账号').props.onClick();h.draw();h.effect();await flush();
+ let security=nodes(h.draw()).find(n=>n.type?.name==='AccountLoginPolicy');assert(security);assert.equal(security.props.surface,'workorder');
+ security.props.onSnapshot({status:'ready',states:{a:{failed_count:5,failure_limit:null,locked:true,locked_at:'2026-10-01',version:3}},failureLimit:5});h.filterField('状态','select').props.onChange({target:{value:'locked'}});assert.match(text(h.draw()),/当前显示 1 个/);assert.match(text(h.draw()),/自动锁定 · 失败 5 \/ 5/);
+ h.button('登录安全').props.onClick();security=nodes(h.draw()).find(n=>n.type?.name==='AccountLoginPolicy');assert.equal(security.props.target.id,'a');assert.equal(h.calls.length,1);
 });

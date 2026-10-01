@@ -16,6 +16,7 @@ import {
   readSavedDashboardSession,
   saveDashboardSession,
   signInDashboard,
+  signOutDashboard,
   verifyDashboardAccess,
   type DashboardProfile,
   type DashboardSession,
@@ -92,8 +93,10 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   }
 
   function logout() {
+    const endingSession = sessionRef.current;
     saveDashboardSession(null);
     clearAuthenticatedView();
+    if (endingSession) void signOutDashboard(endingSession).catch(() => {});
   }
 
   useEffect(() => {

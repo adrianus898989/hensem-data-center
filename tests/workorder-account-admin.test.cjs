@@ -8,7 +8,7 @@ const ts = require('typescript');
 const file = path.join(__dirname, '../supabase/functions/workorder-account-admin/handler.ts');
 const mod = { exports: {} };
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText,
-  { module: mod, exports: mod.exports, Request, Response, Headers, URL, crypto: crypto.webcrypto, TextEncoder });
+  { module: mod, exports: mod.exports, Request, Response, Headers, URL, crypto: crypto.webcrypto, TextEncoder, TextDecoder, Uint8Array });
 const { createWorkorderAccountHandler, buildCatalog, ApiError } = mod.exports;
 const ownerId='11111111-1111-4111-8111-111111111111', staffId='22222222-2222-4222-8222-222222222222';
 const version='2026-09-26T00:00:00.000Z';
@@ -24,7 +24,9 @@ function fixture(overrides={}) {
     async profile(id){calls.push(['profile',id]);return id===ownerId?state.profile:state.targetProfile||null;},
     async account(id){calls.push(['account',id]);return state.account?.auth_user_id===id?state.account:null;},
     async accounts(){return [state.account];},async catalogRows(){return state.catalog;},
-    async ipEnabled(){return !!state.ipEnabled;},async ipAllowed(ip){calls.push(['ip',ip]);return ip==='203.0.113.7';},
+    async sessionAllowed(token,id,surface){calls.push(['session',token,id,surface]);return state.approved!==false;},
+    async ipCheck(surface,ip,user){calls.push(['ip',surface,ip,user]);return state.ipAllowed!==false;},
+    async revokeSessions(id){calls.push(['revoke',id]);if(state.revokeFailure)throw Error('PRIVATE_REVOKE_FAILURE');},
     async createUser(email,password){calls.push(['create',email,password]);if(state.duplicate)throw new ApiError(409,'account_exists','这个工单账号已存在');return staffId;},
     async deleteUser(id){calls.push(['rollback',id]);},
     async insert(account,actor){calls.push(['insert',account,actor]);if(state.insertFailure)throw Error('PRIVATE_ERROR_SECRET');return {...account,updated_at:version};},
@@ -33,7 +35,7 @@ function fixture(overrides={}) {
   };
   return {state,calls,handler:createWorkorderAccountHandler(gateway,{allowedOrigins:[origin],proxyKeySha256:proxyHash})};
 }
-function req(body={action:'me'},headers={}){return new Request('https://unit.test/workorder-account-admin',{method:'POST',headers:{authorization:'Bearer user-token','content-type':'application/json',...headers},body:JSON.stringify(body)});}
+function req(body={action:'me'},headers={}){return new Request('https://unit.test/workorder-account-admin',{method:'POST',headers:{authorization:'Bearer user-token','content-type':'application/json','x-portal-proxy-key':proxyKey,'x-portal-client-ip':'203.0.113.7',...headers},body:JSON.stringify(body)});}
 const create={action:'create-account',username:'worker1',password:'safe-test-password',display_name:'Worker 1',role:'agent',team:'M8',platforms:['91CLUB']};
 test('requires validated Auth token before reading permissions',async()=>{
   const f=fixture({caller:null});assert.equal((await f.handler(req())).status,401);assert.deepEqual(f.calls,[['auth','user-token']]);
@@ -90,13 +92,17 @@ test('reset targets only workorder rows; cannot delete or reset a backend owner'
   assert.equal((await f.handler(req({action:'reset-password',auth_user_id:staffId,password:'new-password'}))).status,200);
   assert(f.calls.some(c=>c[0]==='audit'));assert(!f.calls.some(c=>c[0]==='rollback'));
 });
-test('owner keeps original IP restriction; forged proxy headers fail even with valid JWT',async()=>{
-  const f=fixture({ipEnabled:true});assert.equal((await f.handler(req())).status,403);
-  assert.equal((await f.handler(req({}, {'x-portal-client-ip':'203.0.113.7','x-portal-proxy-key':'forged'}))).status,400); // unknown action denied first
-  assert.equal((await f.handler(req({action:'me'}, {'x-portal-client-ip':'203.0.113.7','x-portal-proxy-key':'forged'}))).status,403);
-  assert.equal((await f.handler(req({action:'me'}, {'x-portal-client-ip':'203.0.113.7','x-portal-proxy-key':proxyKey}))).status,200);
-  assert.equal((await f.handler(req({action:'me'}, {'x-portal-client-ip':'203.0.113.8','x-portal-proxy-key':proxyKey}))).status,403);
-  assert.equal((await f.handler(req({action:'me'}, {'cf-connecting-ip':'203.0.113.7'}))).status,200);
+test('approved session gate is fresh and namespace cannot be forged by source headers',async()=>{
+  const f=fixture();assert.equal((await f.handler(req())).status,200);assert.deepEqual(f.calls.find(c=>c[0]==='session'),['session','user-token',ownerId,'dashboard']);
+  f.state.approved=false;assert.equal((await f.handler(req({action:'me'},{'cf-connecting-ip':'203.0.113.7','x-portal-client-ip':'203.0.113.7','x-portal-proxy-key':proxyKey}))).status,403);
+  const g=fixture({caller:{id:staffId,email:'worker1@workorder.hensem.local'}});assert.equal((await g.handler(req())).status,200);assert.equal(g.calls.find(c=>c[0]==='session')[3],'workorder');
+});
+test('reset revokes before and after password change; failed invalidation cannot mutate account',async()=>{
+  const f=fixture();assert.equal((await f.handler(req({action:'reset-password',auth_user_id:staffId,password:'new-password'}))).status,200);
+  const names=f.calls.map(c=>c[0]);assert(names.indexOf('revoke')<names.indexOf('reset'));assert(names.lastIndexOf('revoke')>names.indexOf('reset'));
+  for(const body of [{action:'reset-password',auth_user_id:staffId,password:'new-password'},{action:'update-account',auth_user_id:staffId,expected_updated_at:version,patch:{active:false}}]){
+    const denied=fixture({revokeFailure:true});assert.equal((await denied.handler(req(body))).status,503);assert(!denied.calls.some(c=>['reset','update'].includes(c[0])));
+  }
 });
 test('proxy key alone never authenticates and browser preflight cannot carry server proof',async()=>{
   const f=fixture();assert.equal((await f.handler(req({action:'me'},{authorization:'','x-portal-proxy-key':proxyKey,'x-portal-client-ip':'203.0.113.7'}))).status,401);
@@ -107,4 +113,14 @@ test('hostile CORS and unsupported methods never read Auth',async()=>{
 });
 test('catalog merges registrations but rejects ambiguous cross-team names',()=>{
   const c=buildCatalog([...catalog,{team:'M8',platform:'91CLUB'},{team:'香港',platform:'91CLUB'}]);assert.equal(c.platformTeams['91CLUB'],undefined);assert.equal(c.platformTeams['51GAME'],'M8');
+});
+
+test('account body is bounded in bytes before catalog or mutations',async()=>{
+  const f=fixture();assert.equal((await f.handler(req({...create,display_name:'中'.repeat(6000)}))).status,413);assert(!f.calls.some(c=>['profile','session','create','insert'].includes(c[0])));
+  for(const body of ['{','null','[]']){const q=fixture();assert.equal((await q.handler(new Request('https://unit.test',{method:'POST',headers:{authorization:'Bearer user-token'},body}))).status,400);assert(!q.calls.some(c=>c[0]==='create'));}
+});
+
+test('portal service queries require trusted current IP and account override after verified session',async()=>{
+  for(const headers of [{'x-portal-proxy-key':'forged'},{'x-portal-client-ip':'203.0.113.7, 198.51.100.1'},{'x-portal-proxy-key':'','x-portal-client-ip':''}]){const f=fixture({caller:{id:staffId,email:'worker1@workorder.hensem.local'}});assert.equal((await f.handler(req({action:'me'},headers))).status,403);assert(!f.calls.some(c=>c[0]==='ip'));}
+  const f=fixture({caller:{id:staffId,email:'worker1@workorder.hensem.local'},ipAllowed:false});assert.equal((await f.handler(req())).status,403);assert.deepEqual(f.calls.find(c=>c[0]==='ip'),['ip','workorder','203.0.113.7',staffId]);
 });

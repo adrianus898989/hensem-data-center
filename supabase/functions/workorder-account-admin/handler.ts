@@ -6,8 +6,9 @@ export type Gateway = {
   account(id: string): Promise<Account | null>;
   accounts(): Promise<Account[]>;
   catalogRows(): Promise<{ team: string; platform: string }[]>;
-  ipEnabled(): Promise<boolean>;
-  ipAllowed(ip: string): Promise<boolean>;
+  sessionAllowed(token: string, userId: string, surface: "dashboard" | "workorder"): Promise<boolean>;
+  ipCheck(surface: "dashboard" | "workorder", ip: string, userId: string): Promise<boolean>;
+  revokeSessions(id: string): Promise<void>;
   createUser(email: string, password: string): Promise<string>;
   deleteUser(id: string): Promise<void>;
   insert(account: Account, actor: string): Promise<Account>;
@@ -59,21 +60,15 @@ function scope(body: Record<string, unknown>, catalog: Catalog) {
 function publicAccount(account: Account): Account {
   return Object.fromEntries(fields.split(',').filter(key => key in account).map(key => [key, (account as any)[key]])) as Account;
 }
-function normalizeIp(value: string) {
-  const ip = value.trim().replace(/^::ffff:/i, '');
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip) && ip.split('.').every(n => +n <= 255)) return ip;
-  if (ip.includes(':') && ip.length <= 64) { try { return new URL('https://[' + ip + ']').hostname.slice(1, -1); } catch { /* invalid */ } }
-  return '';
-}
-async function proxyIp(request: Request, hash: string | undefined) {
-  const key = request.headers.get('x-portal-proxy-key');
-  if (!key && !request.headers.has('x-portal-client-ip')) return null;
-  if (!key || !hash || !/^[a-f0-9]{64}$/.test(hash) || key.length > 256) throw new ApiError(403, 'proxy_denied', '登录来源验证失败');
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key)));
-  const expected = Uint8Array.from(hash.match(/../g)!, v => parseInt(v, 16));
-  let mismatch = 0; for (let i = 0; i < expected.length; i++) mismatch |= expected[i] ^ digest[i];
-  const ip = normalizeIp(request.headers.get('x-portal-client-ip') || '');
-  if (mismatch || !ip) throw new ApiError(403, 'proxy_denied', '登录来源验证失败');
+async function trustedClientIp(request:Request,hash:string|undefined):Promise<string> {
+  const key=request.headers.get('x-portal-proxy-key')||'', raw=(request.headers.get('x-portal-client-ip')||'').trim();
+  let ip:string|null=null;
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(raw)&&raw.split('.').every(n=>+n<=255&&String(+n)===n))ip=raw;
+  else if(raw.includes(':')&&raw.length<=64){try{ip=new URL('https://['+raw+']').hostname.slice(1,-1);}catch{}}
+  if(!key||key.length>256||!ip||!hash||!/^[a-f0-9]{64}$/.test(hash))throw new ApiError(403,'proxy_denied','登录来源验证失败');
+  const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(key))),expected=Uint8Array.from(hash.match(/../g)!,v=>parseInt(v,16));
+  let mismatch=0;for(let i=0;i<bytes.length;i++)mismatch|=bytes[i]^expected[i];
+  if(mismatch)throw new ApiError(403,'proxy_denied','登录来源验证失败');
   return ip;
 }
 export function createWorkorderAccountHandler(gateway: Gateway, options: { allowedOrigins: string[]; proxyKeySha256?: string }) {
@@ -95,25 +90,37 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
       if (!token) throw new ApiError(401, 'login_required', '请先登录');
       const caller = await gateway.getUser(token);
       if (!caller || !uid(caller.id)) throw new ApiError(401, 'login_required', '登录已失效');
-      const text = await request.text();
-      if (text.length > 16384) bad('请求过大');
-      let body: Record<string, unknown>; try { body = JSON.parse(text); } catch { bad('请求格式不正确'); }
+      const reader = request.body?.getReader();
+      if (!reader) bad('请求格式不正确');
+      const chunks: Uint8Array[] = []; let bytesCount = 0;
+      try {
+        for (;;) {
+          const part = await reader!.read(); if (part.done) break;
+          bytesCount += part.value.length;
+          if (bytesCount > 16384) { await reader!.cancel(); throw new ApiError(413, 'request_too_large', '请求过大'); }
+          chunks.push(part.value);
+        }
+      } finally { reader!.releaseLock(); }
+      const bytes = new Uint8Array(bytesCount); let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+      let body: Record<string, unknown>;
+      try { body = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes)); } catch { bad('请求格式不正确'); }
       if (!body! || typeof body! !== 'object' || Array.isArray(body!)) bad('请求格式不正确');
       const action = body!.action;
       if (!['me', 'list-accounts', 'create-account', 'update-account', 'reset-password'].includes(String(action))) bad('操作不支持');
       const profile = await gateway.profile(caller.id);
       const owner = !!profile && profile.auth_user_id === caller.id && profile.active === true && profile.role === 'owner';
       if (action !== 'me' && !owner) throw new ApiError(403, 'owner_required', '只有后台总管理员可以管理工单账号');
-      if (owner) {
-        const forwarded = await proxyIp(request, options.proxyKeySha256);
-        if (await gateway.ipEnabled()) {
-          // Keep the existing dashboard IP policy. A Worker may forward its
-          // visitor address only with server-only proxy proof; never trust body IP.
-          const direct = ['cf-connecting-ip', 'x-real-ip', 'fly-client-ip', 'sb-client-ip'].map(h => request.headers.get(h) || '').find(Boolean)
-            || (request.headers.get('x-forwarded-for') || '').split(',')[0];
-          const ip = forwarded || normalizeIp(direct);
-          if (!ip || !(await gateway.ipAllowed(ip))) throw new ApiError(403, 'ip_denied', '当前 IP 不在后台登录白名单');
-        }
+      // Supabase Auth verified the token; SQL rechecks session registration,
+      // fresh account state and the canonical login-IP policy.
+      if (!(await gateway.sessionAllowed(token, caller.id, profile ? "dashboard" : "workorder"))) {
+        throw new ApiError(403, "session_denied", "会话未通过登录策略，请重新登录");
+      }
+      // Employee identity and service-role business queries are Worker-only.
+      // Owner management may still originate from the approved Pages session.
+      if(!profile||request.headers.has('x-portal-proxy-key')||request.headers.has('x-portal-client-ip')) {
+        const ip=await trustedClientIp(request,options.proxyKeySha256);
+        if(!(await gateway.ipCheck(profile?"dashboard":"workorder",ip,caller.id)))throw new ApiError(403,'ip_denied','当前 IP 不在登录白名单');
       }
       let account: Account | null = null;
       if (!owner) {
@@ -149,7 +156,10 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
       const target = await gateway.account(body!.auth_user_id as string);
       if (!target || !roles.has(target.role) || await gateway.profile(target.auth_user_id)) throw new ApiError(404, 'account_not_found', '未找到独立工单账号');
       if (action === 'reset-password') {
-        await gateway.resetPassword(target.auth_user_id, password(body!.password));
+        const nextPassword = password(body!.password);
+        await gateway.revokeSessions(target.auth_user_id);
+        await gateway.resetPassword(target.auth_user_id, nextPassword);
+        await gateway.revokeSessions(target.auth_user_id);
         await gateway.audit(caller.id, 'reset-password', target.auth_user_id);
         return json({ ok: true, account: publicAccount(target), message: '工单密码已重置' });
       }
@@ -163,6 +173,7 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
       if (!Object.keys(update).length) bad('没有需要修改的内容');
       const expected = body!.expected_updated_at;
       if (typeof expected !== 'string' || !expected || !Number.isFinite(Date.parse(expected))) bad('请刷新账号后再修改');
+      if (update.active === false) await gateway.revokeSessions(target.auth_user_id);
       const updated = await gateway.update(target.auth_user_id, expected as string, update, caller.id);
       if (!updated) throw new ApiError(409, 'account_changed', '账号已被其他操作修改，请刷新后重试');
       return json({ ok: true, account: publicAccount(updated), message: '工单账号已更新' });

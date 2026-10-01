@@ -24,7 +24,7 @@ const request = (query = '', headers = {}, method = 'GET', body) => new Request(
   method, body, headers: { origin: PREVIEW_ORIGIN, authorization: 'Bearer test-user-jwt', ...headers },
 });
 function fixture({ authStatus = 200, auth = { id: userId }, profileStatus = 200, profile = [goodProfile], payload = payloadBase64, failure = false,
-  roleAccess, roleStatus = 200, grants = [], grantStatus = 200, target = [{auth_user_id:otherId,role:'viewer',active:true}], accounts = [{...goodProfile,username:'Owner'},
+  sessionAllowed = true, sessionStatus = 200, roleAccess, roleStatus = 200, grants = [], grantStatus = 200, target = [{auth_user_id:otherId,role:'viewer',active:true}], accounts = [{...goodProfile,username:'Owner'},
     {auth_user_id:otherId,username:'Viewer',role:'viewer',active:true}], total = accounts.length, grantSaveStatus = 200 } = {}) {
   const calls = [];
   const handler = createOwnerAdminPreviewHandler({ supabaseUrl: 'https://unit.supabase.co', anonKey: 'test-publishable-key', serviceRoleKey:'test-private-service-key', payloadBase64: payload,
@@ -33,7 +33,8 @@ function fixture({ authStatus = 200, auth = { id: userId }, profileStatus = 200,
       if (failure) throw Error('UPSTREAM_PRIVATE_BODY_TOKEN');
       const parsed = new URL(url), service = init.headers.apikey === 'test-private-service-key';
       let value = profile, status = profileStatus, extraHeaders = {};
-      if (parsed.pathname === '/rest/v1/rpc/dashboard_role_access') { value=typeof roleAccess==='function'?roleAccess():roleAccess||{mode:profile[0]?.role==='owner'?'owner':'legacy',canView:true,permissions:[]};status=roleStatus; }
+      if (parsed.pathname === '/rest/v1/rpc/application_session_guard') { value=sessionAllowed; status=sessionStatus; }
+      else if (parsed.pathname === '/rest/v1/rpc/dashboard_role_access') { value=typeof roleAccess==='function'?roleAccess():roleAccess||{mode:profile[0]?.role==='owner'?'owner':'legacy',canView:true,permissions:[]};status=roleStatus; }
       else if (parsed.pathname === '/auth/v1/user') { value = auth; status = authStatus; }
       else if (parsed.pathname.endsWith('/dashboard_profiles') && service) {
         value = parsed.searchParams.has('order') ? accounts : target; status = 200;
@@ -91,7 +92,7 @@ test('current owner receives the exact gzip payload through user-scoped auth cal
   assert.equal(zlib.gunzipSync(Buffer.from(await response.arrayBuffer())).toString(), marker);
   assert.equal(response.headers.get('access-control-allow-origin'), PREVIEW_ORIGIN);
   assert.match(response.headers.get('vary'), /Authorization/); assert.match(response.headers.get('cdn-cache-control'), /no-store/);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 4);
   assert.equal(calls[0].url, 'https://unit.supabase.co/auth/v1/user');
   const profileUrl = new URL(calls[1].url);
   assert.equal(profileUrl.pathname, '/rest/v1/dashboard_profiles');
@@ -108,19 +109,19 @@ test('check authenticates identically without touching invalid or private payloa
   const { handler, calls } = fixture({ payload: 'not valid base64' });
   const result = await handler(request('?check=1'));
   assert.equal(result.status, 200); assert.deepEqual(await result.json(), { ok: true, canView: true, canManage: true });
-  assert.equal(result.headers.get('content-encoding'), null); assert.equal(calls.length, 3);
+  assert.equal(result.headers.get('content-encoding'), null); assert.equal(calls.length, 4);
   await denied(await fixture({ profile: [] }).handler(request('?check=1')), 403);
 });
 test('no authorization cache: disabling owner after a successful HTML read denies the next read', async () => {
   const profile = [{ ...goodProfile }]; const { handler, calls } = fixture({ profile });
   assert.equal((await handler(request())).status, 200);
   profile[0].active = false;
-  await denied(await handler(request()), 403); assert.equal(calls.length, 5);
+  await denied(await handler(request()), 403); assert.equal(calls.length, 6);
 });
 test('missing Origin still needs and accepts a fresh authenticated owner', async () => {
   const { handler, calls } = fixture();
   const response = await handler(new Request('https://unit.supabase.co/functions/v1/owner-admin-preview?check=1', { headers: { authorization: 'Bearer test-user-jwt' } }));
-  assert.equal(response.status, 200); assert.equal(response.headers.get('access-control-allow-origin'), null); assert.equal(calls.length, 3);
+  assert.equal(response.status, 200); assert.equal(response.headers.get('access-control-allow-origin'), null); assert.equal(calls.length, 4);
 });
 test('CORS accepts only the exact Pages origin and GET allowlisted preflights', async () => {
   const { handler, calls } = fixture();
@@ -173,7 +174,7 @@ test('grant must match verified user and boolean true; revocation is effective o
     [{auth_user_id:userId,can_view:true},{auth_user_id:userId,can_view:true}]]) await denied(await fixture({profile,grants}).handler(request()),403);
   const grants=[{auth_user_id:userId,can_view:true}],{handler,calls}=fixture({profile,grants});
   assert.equal((await handler(request())).status,200);grants[0].can_view=false;
-  await denied(await handler(request('?check=1')),403);assert.equal(calls.length,8);
+  await denied(await handler(request('?check=1')),403);assert.equal(calls.length,10);
 });
 test('Owner account directory is paginated, username-only searchable and restricted to current page grants', async () => {
   const {handler,calls}=fixture({grants:[{auth_user_id:otherId,can_view:true}],total:82});
@@ -234,4 +235,12 @@ test('missing role RPC and invalid permissions fail closed even when old grant w
   for(const roleStatus of [403,404,500])await denied(await fixture({...options,roleStatus}).handler(request()),503);
   for(const roleAccess of [{},{mode:'assigned',canView:'true',permissions:[]},{mode:'assigned',canView:true,permissions:[42]},[]])
     await denied(await fixture({...options,roleAccess}).handler(request()),503);
+});
+
+test('unapproved, revoked and unavailable session registries cannot expose payload or construct privileged requests',async()=>{
+  for(const [sessionAllowed,sessionStatus,status] of [[false,200,403],['true',200,403],[true,401,401],[true,403,403],[true,500,503]]){
+    const {handler,calls}=fixture({sessionAllowed,sessionStatus});
+    await denied(await handler(request('?action=grants')),status);
+    assert.equal(calls.length,3);assert(!calls.some(c=>c.init.headers.apikey==='test-private-service-key'));
+  }
 });
