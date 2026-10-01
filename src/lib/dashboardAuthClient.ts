@@ -86,6 +86,26 @@ export class DashboardHttpError extends Error {
   }
 }
 
+// Preserve the server's denial while separating expired application sessions from disabled accounts.
+export function dashboardResponseError(status: number, payload: unknown, fallback = `HTTP ${status}`): DashboardHttpError {
+  const data = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+  const rawCode = data.error_code || data.code;
+  const rawMessage = data.msg || data.message || data.error_description || data.error;
+  const code = typeof rawCode === "string" ? rawCode : "http_error";
+  const message = typeof rawMessage === "string" ? rawMessage : fallback;
+  if ([401, 403].includes(status) && (code === "application_session_denied"
+      || code === "42501" && message.trim() === "application_session_denied")) {
+    return new DashboardHttpError("登录会话已失效，请重新登录。", status, "application_session_denied");
+  }
+  if ([401, 403].includes(status) && code === "account_disabled") {
+    return new DashboardHttpError("这个账号已被停用，请联系管理员。", status, code);
+  }
+  if (status === 403 && code === "profile_denied") {
+    return new DashboardHttpError("这个账号还没有配置后台权限，请联系管理员。", status, code);
+  }
+  return new DashboardHttpError(message, status, code);
+}
+
 export function isInvalidDashboardRefreshError(error: unknown): boolean {
   return error instanceof DashboardHttpError && error.code === "refresh_invalid";
 }
@@ -241,15 +261,7 @@ async function readJson(response: DashboardJsonResponse) {
   const text = await response.text();
   let json: any = {};
   try { json = text ? JSON.parse(text) : {}; } catch { json = {}; }
-  if (!response.ok) {
-    const message = json?.msg || json?.message || json?.error_description || json?.error || `HTTP ${response.status}`;
-    const code = json?.error_code || json?.code || "http_error";
-    throw new DashboardHttpError(
-      typeof message === "string" ? message : `HTTP ${response.status}`,
-      response.status,
-      typeof code === "string" ? code : "http_error",
-    );
-  }
+  if (!response.ok) throw dashboardResponseError(response.status, json);
   return json;
 }
 
@@ -488,9 +500,14 @@ export async function fetchDashboardProfile(session: DashboardSession): Promise<
     retryReadOnce: true,
   });
   const rows = await readJson(response);
-  const profile = Array.isArray(rows) ? rows[0] : null;
+  if (!Array.isArray(rows) || rows.length > 1) throw new DashboardHttpError("账号权限响应不完整，请稍后重试", 503, "profile_response_invalid");
+  const profile = rows[0];
   if (!profile) throw new DashboardHttpError("这个账号还没有配置后台权限", 403, "profile_denied");
-  if (!profile.active) throw new DashboardHttpError("这个账号已被停用", 403, "profile_denied");
+  if (profile.auth_user_id !== userId || typeof profile.active !== "boolean"
+      || !["owner", "admin", "viewer"].includes(profile.role) || typeof profile.username !== "string" || !profile.username) {
+    throw new DashboardHttpError("账号权限响应不完整，请稍后重试", 503, "profile_response_invalid");
+  }
+  if (profile.active === false) throw new DashboardHttpError("这个账号已被停用，请联系管理员。", 403, "account_disabled");
   return profile as DashboardProfile;
 }
 

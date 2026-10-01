@@ -1,6 +1,7 @@
 // Real role policy, host bridge and iframe/menu code; only synthetic transport/DOM.
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript');
 const root=path.resolve(__dirname,'..');
+const authErrors=require('./load-typescript.cjs').loadTs(path.join(root,'src/lib/dashboardAuthClient.ts'));
 const bridgePrefix=fs.readFileSync(path.join(__dirname,'admin-live-bridge.test.cjs'),'utf8').split(/\ntest\(/)[0];
 const {load,session,query,flush,deferred}=new Function('require','__dirname',bridgePrefix+';return {load,session,query,flush,deferred};')(require,__dirname);
 const roleId='33333333-3333-4333-8333-333333333333';
@@ -9,7 +10,7 @@ function roleModule(options={}){
  const calls=[],auth=[],module={exports:{}};
  const text=ts.transpileModule(fs.readFileSync(path.join(root,'src/lib/dashboardRoleAccess.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
  vm.runInNewContext(text,{module,exports:module.exports,URL,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://role.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public'}},
-  require:name=>name==='./dashboardRoleCatalog.json'?{default:JSON.parse(fs.readFileSync(path.join(root,'src/lib/dashboardRoleCatalog.json'),'utf8'))}:{ensureDashboardSession:async current=>{auth.push(current);return options.ensure?options.ensure(current):{...current,access_token:'synthetic-fresh'};}},
+  require:name=>name==='./dashboardRoleCatalog.json'?{default:JSON.parse(fs.readFileSync(path.join(root,'src/lib/dashboardRoleCatalog.json'),'utf8'))}:{dashboardResponseError:authErrors.dashboardResponseError,ensureDashboardSession:async current=>{auth.push(current);return options.ensure?options.ensure(current):{...current,access_token:'synthetic-fresh'};}},
   fetch:async(url,init)=>{calls.push({url,init});return Response.json(options.value||assigned(['providers.view']),{status:options.status||200});}
  });return {api:module.exports,calls,auth};
 }
@@ -112,4 +113,13 @@ test('retired stability permissions are discarded without granting providers or 
  const only=api.validateDashboardRoleAccess(assigned(['channelquality.view','channelquality.export']));assert.equal(only.canView,false);assert.equal(only.permissions.length,0);
  for(const mode of ['owner','legacy'])assert.equal(api.dashboardRoleAllows({mode,permissions:[],canView:true},'channelquality'),false);assert.throws(()=>api.validateDashboardRoleAccess(assigned(['channelquality.delete'])),/不完整/);
  assert(!JSON.parse(fs.readFileSync(path.join(root,'src/lib/dashboardRoleCatalog.json'),'utf8')).pages.some(p=>p.id==='channelquality'));
+});
+
+test('role policy lookup preserves revoked application-session errors instead of reporting a disabled profile',async()=>{
+ const h=roleModule({status:403,value:{code:'42501',message:'application_session_denied'}});
+ const error=await h.api.readDashboardRoleAccess(session).catch(error=>error);
+ assert.equal(error.code,'application_session_denied');assert.equal(error.status,403);assert.match(error.message,/会话已失效.*重新登录/);assert.doesNotMatch(error.message,/停用/);assert.equal(h.calls.length,1);
+ assert(authErrors.isDashboardAuthTerminalError(error));
+ const retry=roleModule({status:503,value:{code:'service_unavailable',message:'private detail'}});
+ const temporary=await retry.api.readDashboardRoleAccess(session).catch(error=>error);assert.equal(authErrors.isDashboardAuthTerminalError(temporary),false);assert.doesNotMatch(temporary.message,/private detail/);
 });

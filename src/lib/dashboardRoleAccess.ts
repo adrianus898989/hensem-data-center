@@ -1,5 +1,5 @@
 "use client";
-import { ensureDashboardSession, type DashboardSession } from "./dashboardAuthClient";
+import { dashboardResponseError, ensureDashboardSession, type DashboardSession } from "./dashboardAuthClient";
 import catalog from "./dashboardRoleCatalog.json";
 
 export type DashboardRoleAccess = {
@@ -35,6 +35,12 @@ export async function readDashboardRoleAccess(session: DashboardSession, signal?
   const response = await fetch(base + "/rest/v1/rpc/dashboard_role_access", {method: "POST", body: "{}", signal,
     cache: "no-store", redirect: "error", credentials: "omit", headers: {Authorization: `Bearer ${current.access_token}`,
       apikey: String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""), "Content-Type": "application/json"}});
-  if (!response.ok) throw Error([401, 403].includes(response.status) ? "角色权限验证未通过，请重新登录或联系管理员。" : "角色权限暂时无法读取，请重试。");
+  if (!response.ok) {
+    let payload: unknown; try { payload = await response.json(); } catch { payload = null; }
+    const data = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+    const code = data.code === "42501" && data.message === "application_session_denied" ? "application_session_denied" : data.code;
+    const fallback = [401, 403].includes(response.status) ? "角色权限验证未通过，请重新登录或联系管理员。" : "角色权限暂时无法读取，请重试。";
+    throw dashboardResponseError(response.status, {code, message: fallback}, fallback);
+  }
   return validateDashboardRoleAccess(await response.json());
 }

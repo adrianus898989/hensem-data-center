@@ -99,6 +99,11 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     if (endingSession) void signOutDashboard(endingSession).catch(() => {});
   }
 
+  function logoutWithReason(cause: unknown) {
+    logout();
+    setError(cause instanceof Error ? cause.message : "登录会话已失效，请重新登录。");
+  }
+
   useEffect(() => {
     const verified=(event:Event)=>{
       const detail=(event as CustomEvent).detail;
@@ -149,7 +154,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
         if (cancelled) return;
         const current = readSavedDashboardSession();
         if (!current || isDashboardAuthTerminalError(cause)) {
-          if (!current || current.user.id === active.user.id && current.access_token === active.access_token) logout();
+          if (!current || current.user.id === active.user.id && current.access_token === active.access_token) logoutWithReason(cause);
           else { setReady(false); setRestoreAttempt(n => n + 1); }
         } else {
           // A temporary connection failure must not discard a valid refresh token.
@@ -232,7 +237,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
         if (disposed) return;
         const current = readSavedDashboardSession();
         if (!current || isDashboardAuthTerminalError(cause)) {
-          if (!current || current.user.id === active.user.id && current.access_token === active.access_token) logout();
+          if (!current || current.user.id === active.user.id && current.access_token === active.access_token) logoutWithReason(cause);
         } else setAuthWarning("登录连接暂时不稳定，已保留会话，正在自动重试。");
       } finally { checking = false; }
     };

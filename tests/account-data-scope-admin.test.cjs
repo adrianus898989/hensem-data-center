@@ -24,7 +24,7 @@ async function edge(action, patch={}, options={}) {
   const users=clone(options.users||[target]);
   const writes=[],authCalls=[],audits=[],reads=[];
   let handler;
-  const client={rpc:async name=>({data:name==="application_session_check"?{allowed:options.sessionAllowed!==false}:null,error:options.revokeFailure&&name==="application_revoke_user_sessions"?{message:"PRIVATE_REVOKE_FAILURE"}:null}),auth:{
+  const client={rpc:async name=>({data:name==="application_session_check"?{allowed:options.sessionAllowed!==false}:null,error:options.sessionFailure&&name==="application_session_check"?{message:"PRIVATE_SESSION_FAILURE"}:options.revokeFailure&&name==="application_revoke_user_sessions"?{message:"PRIVATE_REVOKE_FAILURE"}:null}),auth:{
     getUser:async()=>({data:{user:options.invalidToken?null:{id:caller.auth_user_id,user_metadata:{dashboard_role:'owner',data_scope:ALL}}}}),
     admin:{
       createUser:async data=>{authCalls.push({action:'create',data});return {data:{user:{id:'fixture-created'}}};},
@@ -51,7 +51,7 @@ async function edge(action, patch={}, options={}) {
           if(options.race||!filters.every(([key,value])=>target[key]===value))return {data:null};
           writes.push(clone(patchValue));Object.assign(target,patchValue);return {data:{role:target.role}};
         }
-        if(filters.some(([key,value])=>key==='auth_user_id'&&value===caller.auth_user_id))return {data:clone(caller)};
+        if(filters.some(([key,value])=>key==='auth_user_id'&&value===caller.auth_user_id))return {data:options.callerMissing?null:clone(caller)};
         if(filters.some(([key,value])=>key==='username'&&value==='newuser'))return {data:null};
         return {data:clone(target)};
       },
@@ -324,4 +324,14 @@ test('collector sync secret cannot bootstrap or reset any dashboard owner or adm
 });
 test('untrusted Origin is rejected before account or authorization access',async()=>{
   const r=await edge('create-account',{}, {role:'owner',headers:{origin:'https://evil.example'}});assert.equal(r.status,403);assert.deepEqual(r.reads,[]);assert.deepEqual(r.authCalls,[]);assert.deepEqual(r.writes,[]);
+});
+
+test('check-access gives distinct denial codes for an expired session, actual disabled profile and unavailable verification',async()=>{
+ for(const [options,status,code] of [[{sessionAllowed:false},403,'application_session_denied'],[{caller:{active:false}},403,'account_disabled'],[{callerMissing:true},403,'profile_denied'],[{caller:{active:null}},503,'profile_response_invalid'],[{caller:{role:'unexpected'}},503,'profile_response_invalid'],[{sessionFailure:true},503,'auth_unavailable']]){
+  const result=await edge('check-access',{},options);
+  assert.equal(result.status,status);assert.equal(result.body.code,code);assert.deepEqual(result.writes,[]);assert.deepEqual(result.authCalls,[]);
+  if(code!=='account_disabled')assert.doesNotMatch(result.body.message,/停用/);
+  if(code==='application_session_denied'||code==='auth_unavailable')assert.deepEqual(result.reads,[],'denied session never reads a profile');
+  assert(!JSON.stringify(result.body).includes('PRIVATE_SESSION_FAILURE'));
+ }
 });

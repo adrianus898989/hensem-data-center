@@ -10,7 +10,7 @@ const plain=x=>JSON.parse(JSON.stringify(x)),flush=()=>new Promise(r=>setImmedia
 const nodes=x=>Array.isArray(x)?x.flatMap(nodes):x&&typeof x==='object'?[x,...nodes(x.props?.children)]:[];
 const text=x=>Array.isArray(x)?x.map(text).join(''):x&&typeof x==='object'?text(x.props?.children):x==null||typeof x==='boolean'?'':String(x);
 function ui(options={}){
- let cursor=0,ecursor=0;const states=[],deps=[],effects=[],cleanups=[],calls=[],mod={exports:{}};let actor=options.actor||owner,currentSession={...session,user:{id:actor.auth_user_id}},roleAccess=options.roleAccess;
+ let cursor=0,ecursor=0;const states=[],deps=[],effects=[],cleanups=[],calls=[],roleCalls=[],mod={exports:{}};let actor=options.actor||owner,currentSession={...session,user:{id:actor.auth_user_id}},roleAccess=options.roleAccess;
  const react={Fragment:'fragment',useMemo:fn=>fn(),useRef(initial){const i=cursor++;return states[i]||(states[i]={current:initial})},useState(initial){const i=cursor++;if(!(i in states))states[i]=typeof initial==='function'?initial():initial;return[states[i],v=>{states[i]=typeof v==='function'?v(states[i]):v}]},useEffect(fn,values){const i=ecursor++;if(!deps[i]||values.some((v,k)=>v!==deps[i][k])){deps[i]=values;effects.push(()=>{cleanups[i]?.();cleanups[i]=fn()})}}};
  const output=ts.transpileModule(fs.readFileSync(path.join(root,'src/components/AdminControlCenter.tsx'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
  vm.runInNewContext(output,{module:mod,exports:mod.exports,console,Error,window:{confirm:()=>true},require:name=>{
@@ -21,6 +21,7 @@ function ui(options={}){
   if(name==='./AccountRoleEditor')return{default:function AccountRoleEditor(){}};
   if(name==='./AccountPermissionDialog')return{default:function AccountPermissionDialog(){}};
   if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async()=>{calls.push({action:'list'});return options.list?options.list():options.users||[owner,brazil,india]},listDashboardAudit:async()=>{calls.push({action:'audit'});return[]},createDashboardAccount:async(...args)=>{calls.push({action:'create',args:plain(args)});return options.create?options.create(...args):{role:args[3],username:args[1]}},updateDashboardAccount:async(...args)=>{calls.push({action:'update',args:plain(args)});if(options.update)return options.update(...args)},resetDashboardUserPassword:async(...args)=>calls.push({action:'password',args:plain(args)})};
+  if(name.endsWith('/dashboardRoleClient'))return{dashboardRoleRequest:async(...args)=>{roleCalls.push(plain(args));return options.roles?options.roles():{roles:[],accounts:(options.users||[owner,brazil,india]).map(account=>({...account,role_id:null,assignment_version:0}))}}};
   if(name.startsWith('@/lib/'))return loadTs(path.join(root,'src/lib',name.slice(6)+'.ts'));
   throw Error('Unexpected module: '+name);
  }});
@@ -31,7 +32,7 @@ function ui(options={}){
  const dialog=()=>all().find(n=>n.type?.name==='AccountEditorDialog');
  const rows=()=>all().filter(n=>n.type==='tr'&&nodes(n).some(c=>c.type==='th'&&c.props.scope==='row'));
  draw();effects.splice(0).forEach(fn=>fn());
- return{draw,all,button,field,dialog,rows,calls,states,dispose:()=>cleanups.forEach(fn=>fn?.()),role(next){roleAccess=next;draw();effects.splice(0).forEach(fn=>fn())},actor(next){actor=next;currentSession={...session,user:{id:next.auth_user_id}};draw();effects.splice(0).forEach(fn=>fn())}};
+ return{draw,all,button,field,dialog,rows,calls,roleCalls,states,dispose:()=>cleanups.forEach(fn=>fn?.()),role(next){roleAccess=next;draw();effects.splice(0).forEach(fn=>fn())},actor(next){actor=next;currentSession={...session,user:{id:next.auth_user_id}};draw();effects.splice(0).forEach(fn=>fn())}};
 }
 
 test('data scope, role, status and text filters intersect locally; reset restores the authorized directory without IO',async()=>{
@@ -149,4 +150,27 @@ test('owner login security is only mounted after an authoritative directory read
  h.field('状态').props.onChange({target:{value:'locked'}});assert.equal(h.rows().length,1);assert.match(text(h.rows()),/brazil-fixture.*自动锁定/);
  h.button('登录安全').props.onClick();security=h.all().find(n=>n.type?.name==='AccountLoginPolicy');assert.equal(security.props.target.id,brazil.auth_user_id);assert.equal(security.props.target.active,true);assert.equal(h.calls.length,1);
  const limited=ui({actor:manager,manualQuery:true,roleAccess:assigned(['access.view'])});limited.button('查询账号').props.onClick();await flush();assert(!limited.all().some(n=>n.type?.name==='AccountLoginPolicy'));assert(!limited.all().some(n=>n.type==='button'&&text(n)==='登录安全'));
+});
+
+const vipRole={id:'role-vip',name:'VIP',active:true,permissions:['overview.view','collect.view','collect.query'],version:1};
+const vipRoster=()=>({roles:[vipRole],accounts:[{...brazil,role_id:vipRole.id,assignment_version:2}]});
+test('backend account list shows confirmed assigned VIP and its permissions without changing the system identity or issuing writes',async()=>{
+ const h=ui({manualQuery:true,users:[brazil],roles:vipRoster});assert.equal(h.roleCalls.length,0);
+ await h.button('查询账号').props.onClick();await flush();
+ assert.equal(h.roleCalls.length,1);assert.deepEqual(h.roleCalls[0],[session,{operation:'list'}]);
+ const row=text(h.rows());assert.match(row,/VIP/);assert.match(row,/系统身份：VIEWER · 角色授权/);assert.match(row,/2 个目录 · 3 项权限/);assert.doesNotMatch(row,/账号独立授权|三方量 \/ 费率/);
+ h.field('搜索账号').props.onChange({target:{value:'VIP'}});assert.equal(h.rows().length,1);assert.deepEqual(h.calls,[{action:'list'}]);
+ h.field('系统身份').props.onChange({target:{value:'admin'}});assert.equal(h.rows().length,0,'custom role never promotes coarse identity');
+});
+test('unknown role metadata is visibly unverified, never silently called independent authorization',async()=>{
+ const h=ui({users:[brazil],roles:()=>Promise.reject(Error('fixture'))});await flush();
+ assert.match(text(h.rows()),/角色读取失败，请刷新列表/);assert.doesNotMatch(text(h.rows()),/账号独立授权|VIP/);
+ const missing=ui({users:[brazil],roles:()=>({roles:[],accounts:[]})});await flush();assert.match(text(missing.rows()),/角色待核对/);assert.doesNotMatch(text(missing.rows()),/账号独立授权/);
+ const admin=ui({actor:manager,users:[brazil]});await flush();assert.equal(admin.roleCalls.length,0,'owner-only role roster is never requested by admins');
+});
+test('late role roster cannot leak a previous owner identity into the new account directory',async()=>{
+ let resolve;const h=ui({manualQuery:true,users:[brazil],roles:()=>new Promise(r=>resolve=r)});
+ h.button('查询账号').props.onClick();await flush();assert.match(text(h.rows()),/角色待核对/);
+ h.actor(manager);h.button('查询账号').props.onClick();await flush();resolve(vipRoster());await flush();
+ assert.doesNotMatch(text(h.rows()),/VIP|账号独立授权/);assert.equal(h.roleCalls.length,1);
 });
