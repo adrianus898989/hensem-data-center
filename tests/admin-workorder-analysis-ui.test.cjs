@@ -49,6 +49,11 @@ test('provider shares use full-range direction totals and all aliases remain ser
  response(h,s);await h.module.load();assert.match(h.html(),/存款 · 三方工单分布/);assert.match(h.html(),/取款 · 三方工单分布/);assert.match(h.html(),/75.00%/);assert.match(h.html(),/62.50%/);assert.match(h.html(),/原始金额/);assert.match(h.html(),/去重金额/);assert.match(h.html(),/处理中 2/);const calls=h.calls.length;h.root.workorderProviderSort('uniqueOrderCount');assert.equal(h.calls.length,calls);assert.equal(h.module.state().providerSort.key,'uniqueOrderCount');
 });
 
+test('withdrawals missing every original order number retain raw totals and never show deduplicated zero',async()=>{
+ const h=harness(),s=summary();s.byProvider=[{issueKind:'withdraw',provider:'KnownPay',ticketCount:1100,ticketAmount:'220000',uniqueOrderCount:0,uniqueOrderAmount:'0',processedTicketCount:700,rejectedTicketCount:400,coverage:{missingOrderNumberCount:1100}}];response(h,s);await h.module.load();
+ const distribution=h.html().match(/<details class="wo-provider-analysis"[^>]*>([\s\S]*?)<\/details>/)[1];assert.match(distribution,/原始 1100 笔 \/ 1100 条缺原单号，去重暂不可计算/);assert.doesNotMatch(distribution,/去重 0 笔/);assert.match(distribution,/KnownPay<\/span>\|1100\|220,000\.00\|100\.00%\|—\|—\|—\|700\|400/);
+});
+
 test('raw and unique handling statistics retain independent amounts and explicitly label collected scope',async()=>{
  const h=harness();response(h);await h.module.load();const html=h.html();
  assert.match(html,/已采集原始工单（不去重）/);assert.match(html,/已采集原支付订单（去重）/);

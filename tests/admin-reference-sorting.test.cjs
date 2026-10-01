@@ -39,8 +39,8 @@ test('hour and amount sorting retain exact segments and inline expansion while s
   const before=h.calls.length;sort(h,'analysis-state',4);const rendered=table(h.html().slice(h.html().indexOf('analysis-expand-table')));
   assert.match(rows(rendered)[0][1],page==='time'?/07:00/:/200/);
   const segment={kind,direction:'charge',...(page==='time'?{hour:7}:{bucket:'200'})};h.c.liveAnalysisAction(encodeURIComponent(JSON.stringify(segment)),'toggle');
-  assert.match(h.html(),/analysis-aligned-item/);sort(h,'analysis-state',1);assert.match(h.html(),/analysis-aligned-item/);
-  assert(h.html().indexOf('analysis-aligned-item')>h.html().indexOf(page==='time'?'07:00–07:59:59':'<td>200</td>'));assert.equal(h.calls.length,before);
+  assert.match(h.html(),/analysis-detail-table/);sort(h,'analysis-state',1);assert.match(h.html(),/analysis-detail-table/);
+  assert(h.html().indexOf('analysis-expanded-row')>h.html().indexOf(page==='time'?'07:00–07:59:59':'<td>200</td>'));assert.match(h.html(),/全部金额 \/ 笔数/);assert.match(h.html(),/成功金额 \/ 笔数/);assert.equal(h.calls.length,before);
  }
 });
 
@@ -53,13 +53,13 @@ test('page snapshots retain reference sort state independently of later table ch
 const analysisHarness=fs.readFileSync(path.join(__dirname,'admin-analysis-drilldown.test.cjs'),'utf8').split(/\ntest\(/)[0];
 const {setup:analysisSetup,segment}=new Function('require','__dirname',analysisHarness+';return {setup,segment};')(require,__dirname);
 function analysis(){const h=analysisSetup();vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-provider-summary.js'),'utf8'),{window:h.root});h.L.to='2026-09-20T23:59:59';h.L.results[0].platform.name='Small';h.L.results[1].platform.name='Large';return h}
-const detailRows=(h,s)=>rows(table(h.instance.panel(s)));
+const detailRows=(h,s)=>rows(table(h.instance.panel(s)).replace(/(<tr(?: [^>]*)?><td>)([\s\S]*?)(<\/td>)/g,(_,prefix,cell,suffix)=>prefix+cell.replace(/<small class="analysis-metric-share">[\s\S]*?<\/small>/g,'')+suffix));
 test('each analysis segment sorts locally with stable denominators and snapshot state, including unknown amounts',()=>{
  const h=analysis(),other={...segment,hour:9};h.L.results[0].groups.hourly.push({...h.L.results[0].groups.hourly[0],hour:9});h.L.results[1].groups.hourly.push({...h.L.results[1].groups.hourly[0],hour:9});
- h.instance.open(segment,'8时');h.instance.panel(segment);h.action(segment,'sort',JSON.stringify(['platform',4]));assert.equal(detailRows(h,segment)[0][0],'Small');
- h.action(segment,'sort',JSON.stringify(['platform',4]));assert.equal(detailRows(h,segment)[0][0],'Large');assert.match(h.instance.panel(segment),/70.00%/);
+ h.instance.open(segment,'8时');h.instance.panel(segment);h.action(segment,'sort',JSON.stringify(['business-platform',2]));assert.equal(detailRows(h,segment)[0][0],'Small');
+ h.action(segment,'sort',JSON.stringify(['business-platform',2]));assert.equal(detailRows(h,segment)[0][0],'Large');assert.match(h.instance.panel(segment),/70.00%/);assert.match(h.instance.panel(segment),/Small<small class="analysis-metric-share">ar<\/small>/);
  h.instance.open(other,'9时');assert.equal(detailRows(h,other)[0][0],'Small');
- const saved=h.instance.capture();h.action(segment,'sort',JSON.stringify(['platform',4]));h.instance.restore(saved);assert.equal(detailRows(h,segment)[0][0],'Large');
+ const saved=h.instance.capture();h.action(segment,'sort',JSON.stringify(['business-platform',2]));h.instance.restore(saved);assert.equal(detailRows(h,segment)[0][0],'Large');
  h.L.results[1].groups.hourly[0].success_amount=null;assert.equal(detailRows(h,segment).at(-1)[0],'Large');assert.equal(h.calls.length,0);
  h.action(segment,'sort',JSON.stringify(['unregistered',0]));assert.equal(h.calls.length,0);
 });

@@ -10,9 +10,10 @@ body.live-admin .analysis-drilldown-head{display:flex;align-items:center;justify
 body.live-admin .analysis-drilldown .tabs button{font-size:10px;padding:5px 9px}
 body.live-admin .analysis-detail-table{max-height:380px;overflow:auto;border:1px solid #dbe4f5;border-radius:4px;margin-top:8px}
 body.live-admin .analysis-detail-table table{width:100%;table-layout:auto}
-body.live-admin .analysis-detail-table th,body.live-admin .analysis-detail-table td{padding:6px 9px!important;min-width:0!important;max-width:none!important;font-size:10px!important;white-space:nowrap!important;text-align:right}
-body.live-admin .analysis-detail-table th:first-child,body.live-admin .analysis-detail-table td:first-child{text-align:left}
+body.live-admin .analysis-detail-table th,body.live-admin .analysis-detail-table td{padding:4px 5px!important;min-width:0!important;max-width:none!important;font-size:10px!important;white-space:nowrap!important;text-align:right;font-variant-numeric:tabular-nums}
+body.live-admin .analysis-detail-table th:first-child,body.live-admin .analysis-detail-table td:first-child{position:sticky;left:0;width:90px;min-width:90px!important;max-width:130px!important;text-align:left;background:#fff;z-index:2;box-shadow:2px 0 4px #203a5b14}
 body.live-admin .analysis-detail-table thead th{position:sticky;top:0;background:#eef3ff;z-index:1}
+body.live-admin .analysis-detail-table thead th:first-child{z-index:3;background:#eef3ff}
 body.live-admin .analysis-drilldown label{font-size:11px}
 body.live-admin .analysis-drilldown select{margin-left:6px;border:1px solid #d7e1f4;border-radius:4px;padding:5px 8px;max-width:240px;color:inherit;background:white}
 body.live-admin .analysis-note,body.live-admin .analysis-status{color:#7589a8;font-size:10px;line-height:1.5;margin-top:7px}
@@ -36,19 +37,34 @@ body.live-admin .analysis-matrix-selected-row>td{background:#f9fbff}
 body.live-admin .analysis-matrix .analysis-expanded-row .analysis-drilldown{overflow:hidden}
 
 /* Freeze only the main matrix's amount labels; expanded detail tables keep their own scroll. */
-body.live-admin .matrix-hours-view{min-width:0;max-width:100%}
+body.live-admin .matrix-hours-view{min-width:0;max-width:100%;container-type:inline-size;container-name:matrix-hours}
 body.live-admin .matrix-hours-view>.analysis-expand-table{width:100%;min-width:0;max-width:100%;overflow:auto;overscroll-behavior-x:contain;position:relative}
 body.live-admin .matrix-hours-view>.analysis-expand-table>table{width:100%;min-width:1720px;border-collapse:separate;border-spacing:0}
 body.live-admin .matrix-hours-view>.analysis-expand-table>table>thead>tr>th:first-child,
 body.live-admin .matrix-hours-view>.analysis-expand-table>table>tbody>tr:not(.analysis-expanded-row)>td:first-child,
-body.live-admin .matrix-hours-view>.analysis-expand-table>table>tfoot>tr>td:first-child{position:sticky;left:0;z-index:2;width:128px;min-width:128px;max-width:128px;background:#f4f7fc;box-shadow:3px 0 5px #233b5c15;white-space:normal;overflow-wrap:normal;text-align:left}
+body.live-admin .matrix-hours-view>.analysis-expand-table>table>tfoot>tr:not(.analysis-expanded-row)>td:first-child{position:sticky;left:0;z-index:2;width:96px;min-width:96px;max-width:96px;background:#f4f7fc;box-shadow:3px 0 5px #233b5c15;white-space:normal;overflow-wrap:normal;text-align:left}
 body.live-admin .matrix-hours-view>.analysis-expand-table>table>thead>tr>th:first-child{z-index:3;background:#edf2fa}
 body.live-admin .matrix-hours-view>.analysis-expand-table>table>thead>tr>th:nth-child(26),
 body.live-admin .matrix-hours-view>.analysis-expand-table>table>tbody>tr:not(.analysis-expanded-row)>td:nth-child(26),
 body.live-admin .matrix-hours-view>.analysis-expand-table>table>tfoot>tr>td:nth-child(26){width:142px;min-width:142px;background:#f5f8ff}
-body.live-admin .matrix-hours-view .matrix-band-label{display:block;font-size:inherit;font-weight:inherit;line-height:1.5}
+body.live-admin .matrix-hours-view .matrix-band-label{display:block;font-size:10px;font-weight:inherit;line-height:13px}
+body.live-admin .matrix-hours-view .matrix-band-label>span{display:block;white-space:nowrap}
 body.live-admin .matrix-hours-view .matrix-row-total{display:flex;flex-direction:column;gap:1px;min-width:128px;line-height:12px;font-size:9px;font-variant-numeric:tabular-nums}
 body.live-admin .matrix-hours-view .matrix-row-total>span{display:flex;align-items:baseline;justify-content:space-between;gap:4px;white-space:nowrap}
 body.live-admin .matrix-hours-view .matrix-row-total>span>small{font-size:9px;color:#7588a6;font-weight:400}
 body.live-admin .matrix-hours-view .matrix-row-total>span>b{font-size:10px;font-weight:600;color:#344c70}
 body.live-admin .matrix-hours-view .matrix-total-partial{font-size:9px;line-height:12px;color:#9b7128;font-weight:400;text-align:left}
+body.live-admin .analysis-pair-amount,body.live-admin .analysis-pair-count{display:block;line-height:14px;white-space:nowrap}
+body.live-admin .analysis-pair-count{color:#7485a0;font-size:9px}
+body.live-admin .analysis-dual-detail{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:start}
+body.live-admin .analysis-dual-detail>section{min-width:0;overflow:hidden}
+body.live-admin .analysis-dual-detail h4{font-size:11px;margin:2px 0 4px;color:#385479}
+body.live-admin .analysis-dual-detail .analysis-detail-table{margin-top:3px}
+body.live-admin .analysis-dual-detail .analysis-detail-table table{min-width:620px}
+body.live-admin .analysis-drilldown .analysis-detail-table{overscroll-behavior-x:contain;position:relative}
+/* A detail panel follows the visible matrix viewport rather than all 24 columns. */
+body.live-admin .matrix-hours-view .analysis-expanded-row .analysis-drilldown{width:100cqi;max-width:100%;box-sizing:border-box;position:sticky;left:0}
+body.live-admin .analysis-expand-table>table>tbody>tr:not(.analysis-expanded-row)>td:last-child,body.live-admin .matrix-hours-view>.analysis-expand-table>table>tfoot>tr:not(.analysis-expanded-row)>td:last-child{width:90px;white-space:normal}
+body.live-admin .analysis-expand-table .analysis-expand{font-size:10px;white-space:nowrap;margin:1px 2px}
+@media(max-width:1100px){body.live-admin .analysis-dual-detail{grid-template-columns:minmax(0,1fr)}body.live-admin .analysis-drilldown-head{flex-wrap:wrap;gap:6px}body.live-admin .analysis-drilldown{padding:7px}}
+@container matrix-hours (max-width:1100px){body.live-admin .matrix-hours-view .analysis-dual-detail{grid-template-columns:minmax(0,1fr)}body.live-admin .matrix-hours-view .analysis-drilldown-head{flex-wrap:wrap;gap:6px}}

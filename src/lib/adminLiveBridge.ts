@@ -10,11 +10,11 @@ export const LIVE_RESPONSE = "hensem-admin-live-response";
 export const LIVE_CANCEL = "hensem-admin-live-cancel";
 export const LIVE_REQUEST_TIMEOUT_MS = 90000;
 const actions = ["memberDaily","catalog","syncHealth","intakeCoverage","reportSummary","pendingSnapshot","collectedData","query","aggregate","details","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
-const keys = new Set(["durationVersion","durationRange","scopeTargets","amountBands","feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","amountMaxExclusive","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"]);
+const keys = new Set(["durationVersion","durationRange","scopeTargets","amountBands","feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","amountMaxExclusive","hourRange","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"]);
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
-  if(p.amountMaxExclusive!==undefined&&(p.action!=="aggregate"||p.view==="drilldown"||typeof p.amountMaxExclusive!=="boolean"||p.amountMax===undefined||p.amountMaxExclusive&&p.amountMin!==undefined&&Number(p.amountMin)>=Number(p.amountMax)))throw Error("金额上限条件无效");
+  if(p.amountMaxExclusive!==undefined&&(p.action!=="aggregate"||p.view==="drilldown"&&p.kind!=="custom"||typeof p.amountMaxExclusive!=="boolean"||p.amountMax===undefined||p.amountMaxExclusive&&p.amountMin!==undefined&&Number(p.amountMin)>=Number(p.amountMax)))throw Error("金额上限条件无效");
   if(p.action==="submissionAnalysis"){
     const allowed=["action","platformId","startAt","endAt","direction","currency","providers","operation","threshold","level","memberId","offset","limit","amountBands","charts"];
     if(Object.keys(p).some(k=>!allowed.includes(k)))throw Error("刷单分析参数无效");
@@ -96,15 +96,22 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(["providerOptions","configurationAccess","configurationWrite"].includes(String(p.action)))return validateConfigurationRequest(p);
   if(p.view!==undefined&&(!["aggregate","autoWithdraw","depositIssues"].includes(String(p.action))||(p.action==="aggregate"&&!["full","providers","drilldown"].includes(String(p.view)))))throw Error("统计页面类型无效");
   const drilldown=p.action==="aggregate"&&p.view==="drilldown";
-  if(!drilldown&&["hour","bucket","cumulative"].some(key=>p[key]!==undefined))throw Error("分段条件仅用于每日对比");
+  if(!drilldown&&["hour","hourRange","bucket","cumulative"].some(key=>p[key]!==undefined))throw Error("分段条件仅用于每日对比");
   if(drilldown){
-    const allowed=new Set(["durationVersion","durationRange","amountBands","action","view","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","offset","limit","kind","hour","bucket","cumulative"]);
-    if(Object.keys(p).some(key=>!allowed.has(key))||typeof p.kind!=="string"||!["hourly","amount","amount_range","matrix","matrix_range","latency"].includes(p.kind))throw Error("每日对比分段无效");
+    const allowed=new Set(["durationVersion","durationRange","amountBands","action","view","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","amountMaxExclusive","hourRange","offset","limit","kind","hour","bucket","cumulative"]);
+    if(Object.keys(p).some(key=>!allowed.has(key))||typeof p.kind!=="string"||!["hourly","amount","amount_range","matrix","matrix_range","latency","custom"].includes(p.kind))throw Error("每日对比分段无效");
     if(p.status!==undefined&&p.status!=="all")throw Error("每日对比需保留全部订单状态");
     if(p.offset!==undefined&&p.offset!==0)throw Error("每日对比返回完整范围，无需分页");
     if(["hourly","matrix","matrix_range"].includes(p.kind)){
       if(!Number.isInteger(p.hour)||Number(p.hour)<0||Number(p.hour)>23)throw Error("每日对比小时无效");
     }else if(p.hour!==undefined)throw Error("此分段不使用小时条件");
+    if(p.hourRange!==undefined){
+      const range=p.hourRange as Record<string,unknown>;
+      if(p.kind!=="custom"||!range||typeof range!=="object"||Array.isArray(range)||Object.keys(range).some(k=>!["minHour","maxHour"].includes(k))
+        ||!Number.isInteger(range.minHour)||!Number.isInteger(range.maxHour)||Number(range.minHour)<0||Number(range.minHour)>23
+        ||Number(range.maxHour)<1||Number(range.maxHour)>24||Number(range.minHour)>=Number(range.maxHour))throw Error("自定义小时区间无效");
+    }
+    if(p.kind==="custom"&&p.hourRange===undefined&&p.amountMin===undefined&&p.amountMax===undefined)throw Error("请设置自定义小时或金额区间");
     if(p.kind==="latency"){
       if(p.durationRange!==undefined){
         if(p.bucket!==undefined||p.cumulative!==undefined)throw Error("自定义时长与固定分档不能同时选择");
@@ -116,7 +123,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       }
     }else{
       if(p.cumulative!==undefined)throw Error("此分段不使用累计条件");
-      if(p.kind==="hourly"){if(p.bucket!==undefined)throw Error("小时分段不使用金额档位");}
+      if(["hourly","custom"].includes(p.kind)){if(p.bucket!==undefined)throw Error("此分段不使用固定金额档位");}
       else{
         const buckets=p.amountBands!==undefined&&["amount_range","matrix_range"].includes(p.kind)?[...Array.from({length:10},(_,i)=>"band:"+i),"below","above","unknown"]:["amount","matrix"].includes(p.kind)?["100","200","300","400","500","750","1000","1500","2000","5000","other","unknown"]:["100–200","201–300","301–400","401–500","501–750","751–1,000","1,001–2,000","2,001–5,000","≥5,001","other","unknown"];
         if(typeof p.bucket!=="string"||!buckets.includes(p.bucket))throw Error("每日对比金额档位无效");

@@ -296,7 +296,7 @@ test('hour by amount matrix preserves each band label and adds four totals and t
  for(const row of matrix.rows){assert.equal(row.length,27);assert.doesNotMatch(row[0],/成功|金额合计|matrix-band-total/);for(const cell of row.slice(1,25)){assert.equal([...cell.matchAll(/class="matrix-cell analysis-matrix-cell"/g)].length,1);assert.equal([...cell.matchAll(/<b\b/g)].length,1);assert.equal([...cell.matchAll(/<span\b/g)].length,2)}}
  const row=matrix.rows.find(row=>plain(row[0])==='200'),known=row[13];assert.match(known,/>10笔<\/b>/);assert.match(known,/>1,000<\/span>/);assert.match(known,/>30\.00%<\/span>/);
  assert.deepEqual([...row[25].matchAll(/<small>([^<]+)<\/small><b>([^<]+)<\/b>/g)].map(m=>[m[1],m[2]]),[['全部笔数','10 笔'],['全部金额','1,000.00'],['成功笔数','3 笔'],['成功金额','300.00'],['成功率','30.00%']]);
- const footer=matrix.html.match(/<tfoot>([^]*?)<\/tfoot>/)?.[1];assert(footer);const customCells=[...footer.matchAll(/<td\b[^>]*>([^]*?)<\/td>/g)].map(m=>m[1]);assert.equal(customCells.length,27);assert.match(customCells[0],/自定义金额/);assert.match(customCells[25],/matrix-row-total/);assert.match(h.html(),/aria-label="自定义金额区间"/);
+ const footer=matrix.html.match(/<tfoot>([^]*?)<\/tfoot>/)?.[1];assert(footer);const customCells=[...footer.matchAll(/<td\b[^>]*>([^]*?)<\/td>/g)].map(m=>m[1]);assert.equal(customCells.length,27);assert.match(customCells[0],/自定义金额/);assert.match(customCells[25],/matrix-row-total/);assert.match(h.html(),/data-matrix-custom-direction="charge"/);assert.doesNotMatch(h.html(),/aria-label="自定义金额区间"/);
 });
 
 test('matrix 24-hour totals preserve direction, currency, missing fields and daily aggregate completeness',async()=>{
@@ -323,7 +323,7 @@ test('matrix custom interval queries independently and restores its footer witho
  const h=await ready({page:'matrix'}),main=completeAggregate(P,10,3),custom=completeAggregate(P,4,3);
  custom.groups.hourly=[{...custom.summary[0],hour:12,all_amount:'935.50',success_amount:'731.25'}];
  h.setHandler(q=>structuredClone(q.amountMin!==undefined?custom:main));setScope(h,{direction:'charge'});await h.c.liveQuery();await settle();
- assert.equal(h.L.pageQueried,true);assert.equal(h.L.dirty,false);assert.match(h.html(),/aria-label="自定义金额区间"/);
+ assert.equal(h.L.pageQueried,true);assert.equal(h.L.dirty,false);assert.match(h.html(),/data-matrix-custom-direction="charge"/);assert.doesNotMatch(h.html(),/aria-label="自定义金额区间"/);
  const matrix=()=>renderedTables(h.html()).find(t=>t.headers[0]==='金额 / 时'),primary=()=>[...h.html().matchAll(/class="kpi-value">([^]*?)<\/div>/g)].map(m=>plain(m[1]));
  const fixedBefore=JSON.stringify(matrix().rows),primaryBefore=primary(),sourceBefore=JSON.stringify(h.L.results),callsBefore=h.calls.length;
  assert.equal(primaryBefore.length,6);h.c.liveMatrixAmountSet('min','115.25');h.c.liveMatrixAmountSet('max','360.50');await h.c.liveMatrixAmountQuery({reportValidity:()=>true});await settle();
@@ -332,7 +332,7 @@ test('matrix custom interval queries independently and restores its footer witho
  const footer=()=>matrix().html.match(/<tfoot>([^]*?)<\/tfoot>/)?.[1],footerBefore=footer(),cells=[...footerBefore.matchAll(/<td\b[^>]*>([^]*?)<\/td>/g)].map(m=>m[1]);
  assert.equal(cells.length,27);assert.match(cells[0],/115\.25 ≤ 金额 &lt; 360\.50/);assert.match(cells[13],/>4笔<\/b>/);assert.match(cells[13],/>935\.50<\/span>/);assert.match(cells[13],/>75\.00%<\/span>/);assert.deepEqual([...cells[25].matchAll(/<small>([^<]+)<\/small><b>([^<]+)<\/b>/g)].map(m=>[m[1],m[2]]),[['全部笔数','4 笔'],['全部金额','935.50'],['成功笔数','3 笔'],['成功金额','731.25'],['成功率','75.00%']]);
  const afterQuery=h.calls.length;h.c.setPage('amount');await settle();h.c.setPage('matrix');await settle();
- assert.equal(h.c.state.page,'matrix');assert.equal(h.calls.length,afterQuery,'restoring a page tab reuses the primary and independent interval results');assert.equal(footer(),footerBefore);assert.equal(JSON.stringify(matrix().rows),fixedBefore);assert.deepEqual(primary(),primaryBefore);assert.match(h.html(),/aria-label="自定义最低金额"[^>]*value="115\.25"/);assert.match(h.html(),/aria-label="自定义最高金额"[^>]*value="360\.50"/);
+ assert.equal(h.c.state.page,'matrix');assert.equal(h.calls.length,afterQuery,'restoring a page tab reuses the primary and independent interval results');assert.equal(footer(),footerBefore);assert.equal(JSON.stringify(matrix().rows),fixedBefore);assert.deepEqual(primary(),primaryBefore);h.c.liveMatrixAmountEdit('charge');assert.match(h.html(),/role="dialog"/);assert.match(h.html(),/aria-label="自定义最低金额"[^>]*value="115\.25"/);assert.match(h.html(),/aria-label="自定义最高金额"[^>]*value="360\.50"/);
 });
 
 test('the matrix hides only the below-range row without moving its data or changing totals and other pages',async()=>{
@@ -979,7 +979,7 @@ test('main filters retain all authorized Panghu seeds after report catalog failu
 
 test('matrix cell selection renders only that hour below its band and supports closing it',async()=>{
  const h=await ready(),r=completeAggregate(P,10,4);r.groups.matrix.push({...r.groups.matrix[0],hour:13,success_amount:'99000',success_count:990,all_amount:'100000',all_count:1000});h.L.results=[r];h.L.matrixMode='exact';h.L.direction='charge';h.c.state.page='matrix';h.c.render();const before=h.calls.length,encoded=encodeURIComponent(JSON.stringify({kind:'matrix',direction:'charge',hour:12,bucket:'200'}));h.c.liveMatrixSegment(encoded);
- let html=h.html(),detail=html.match(/<div class="analysis-drilldown">([^]*?)<div class="analysis-note">/)[1];assert.match(detail,/12时 × 200/);assert.doesNotMatch(detail,/24小时合计|99,000/);assert.match(detail,/400\.00/);assert.match(detail,/金额占比 100\.00%/);assert(html.indexOf('<div class="analysis-drilldown">')<html.indexOf('<span class="matrix-band-label">300</span>'));assert.equal(h.calls.length,before);
+ let html=h.html(),detail=html.match(/<div class="analysis-drilldown">([^]*?)<div class="analysis-note">/)[1];assert.match(detail,/12时 × 200/);assert.doesNotMatch(detail,/24小时合计|99,000/);assert.match(detail,/400\.00/);assert.match(detail,/金额占比 100\.00%/);assert(html.indexOf('<div class="analysis-drilldown">')<html.search(/<span class="matrix-band-label"[^>]*>300<\/span>/));assert.equal(h.calls.length,before);
  h.c.liveMatrixSegment(encoded);assert.doesNotMatch(h.html(),/<div class="analysis-drilldown">/);assert.equal(h.calls.length,before);
 });
 
