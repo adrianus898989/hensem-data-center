@@ -14,7 +14,7 @@ function setup(options={}){
  const platforms=options.platforms||[platform()],L={serial:1,queryScope:'MAIN-SCOPE',queryNow:123,country:'印度',currency:'INR',from:'2026-09-29T00:00:00',to:'2026-09-29T23:59:59',direction:'all',status:'all',pageQueried:true,loading:false,queryRetrying:false,dirty:false,queryPlatforms:platforms,results:[result('MAIN',[hour({all_count:999,all_amount:'123456'})])],...options.L};
  const ctx={L,E:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),N:value=>valid(value)?Number(value).toFixed(2):'—',C:value=>valid(value)?String(Number(value)):'—',R:(n,d)=>valid(n)&&valid(d)&&Number(d)>0?(Number(n)/Number(d)*100).toFixed(2)+'%':'—',
   page:()=>page,allowed:()=>allowed,selected:()=>platforms,render:()=>renders.push(true),successUnavailable:direction=>options.successUnavailable?.(direction)||false,
-  query:(p,action)=>({action,platformId:p.id,startAt:'2026-09-28T18:30:00.000Z',endAt:'2026-09-29T18:30:00.000Z',direction:L.direction,status:L.status,currency:L.currency,providers:['SelectedPay'],offset:80,limit:20,...options.baseRequest}),
+  analysis:options.analysis,query:(p,action)=>({action,platformId:p.id,startAt:'2026-09-28T18:30:00.000Z',endAt:'2026-09-29T18:30:00.000Z',direction:L.direction,status:L.status,currency:L.currency,providers:['SelectedPay'],offset:80,limit:20,...options.baseRequest}),
   request:async(q,serial)=>{calls.push({q:copy(q),serial});active++;maxActive=Math.max(maxActive,active);try{return handler?await handler(q,serial):result(q.platformId)}finally{active--}}
  };
  vm.runInNewContext(source,{window:root},{filename:'live-matrix-custom-range.js'});const api=root.HensemMatrixCustomRange.create(ctx);
@@ -37,23 +37,23 @@ test('invalid, negative, unsafe and reversed ranges reject before issuing any re
  const h=setup();h.set('1','2');await h.query({reportValidity:()=>false});assert.equal(h.calls.length,0,'invalid native form cannot issue a request');
 });
 
-test('the footer opens an inline editor and submits its current values with exact half-open boundaries',async()=>{
+test('the footer opens a separate editor without increasing row height and submits its current values with exact half-open boundaries',async()=>{
  const amounts=[199.99,200,200.000001,249.999999,250,250.01],h=setup({handler:q=>{
   const selected=amounts.filter(amount=>(q.amountMin===undefined||amount>=q.amountMin)&&(q.amountMax===undefined||(q.amountMaxExclusive?amount<q.amountMax:amount<=q.amountMax)));
   return result('A',[hour({all_count:selected.length,all_amount:selected.reduce((a,b)=>a+b,0),success_count:2,success_amount:400.000001})]);
  }});
  assert.match(h.row('charge')[0],/onclick="liveMatrixAmountEdit\('charge'\)"/);h.root.liveMatrixAmountEdit('charge');
- assert.match(h.row('charge')[0],/aria-expanded="true"/);assert.match(h.row('charge')[0],/matrix-custom-editor/);assert.match(h.row('charge')[0],/name="matrix-min"/);assert.match(h.row('charge')[0],/name="matrix-max"/);
+ assert.match(h.row('charge')[0],/aria-expanded="true"/);assert.doesNotMatch(h.row('charge')[0],/<form|<input/);assert.match(h.api.dialog(),/role="dialog"/);assert.match(h.api.dialog(),/name="matrix-min"/);assert.match(h.api.dialog(),/name="matrix-max"/);
  const form={reportValidity:()=>true,elements:{namedItem:name=>({value:name==='matrix-min'?'200':'250'})}};let prevented=false;
  await h.query(form,{key:'Enter',target:{tagName:'INPUT'},preventDefault(){prevented=true}});
  assert(prevented);assert.equal(h.calls.length,1);assert.equal(h.calls[0].q.amountMax,250);assert.equal(h.calls[0].q.amountMaxExclusive,true);
  assert.match(h.row('charge')[0],/200\.00 ≤ 金额 &lt; 250\.00/);assert.equal(plain(h.row('charge')[2]),'3笔 650 66.67%');assert.match(h.row('charge').at(-1),/成功率<\/small><b>66.67%/);
- assert.match(h.row('charge')[0],/aria-expanded="false"/);const saved=h.api.capture();h.clear();h.api.restore(saved);assert.match(h.row('charge')[0],/aria-expanded="false"/);h.root.liveMatrixAmountEdit('charge');assert.match(h.row('charge')[0],/value="200"/);assert.match(h.row('charge')[0],/value="250"/);assert.equal(h.calls.length,1);
+ assert.match(h.row('charge')[0],/aria-expanded="false"/);const saved=h.api.capture();h.clear();h.api.restore(saved);assert.match(h.row('charge')[0],/aria-expanded="false"/);h.root.liveMatrixAmountEdit('charge');assert.match(h.api.dialog(),/value="200"/);assert.match(h.api.dialog(),/value="250"/);assert.equal(h.calls.length,1);
 });
 
-test('inline failures expose an in-place retry and clear the error after success',async()=>{
+test('failed footer queries keep a dialog retry and clear the error after success',async()=>{
  const h=setup({handler:()=>{throw Error('测试读取失败')}});h.root.liveMatrixAmountEdit('charge');h.set('200','250');await h.query();
- assert.match(h.row('charge')[0],/测试读取失败/);assert.match(h.row('charge')[0],/>重试区间<\/button>/);assert.equal(plain(h.row('charge').at(-1)),'全部笔数 — 笔 全部金额 — 成功笔数 — 笔 成功金额 — 成功率 —');
+ assert.match(h.api.dialog(),/测试读取失败/);assert.match(h.api.dialog(),/>重试区间<\/button>/);assert.equal(plain(h.row('charge').at(-1)),'全部笔数 — 笔 全部金额 — 成功笔数 — 笔 成功金额 — 成功率 —');
  h.setHandler(()=>result('A'));await h.query();assert.equal(h.calls.length,2);assert.doesNotMatch(h.row('charge')[0],/测试读取失败|重试区间/);assert.match(h.row('charge').at(-1),/成功率<\/small><b>50.00%/);
 });
 
@@ -138,4 +138,22 @@ test('capture and restore preserve the independent interval while main-query ser
 
 test('late response after a main-query serial change cannot repopulate the cleared interval',async()=>{
  const pending=deferred(),h=setup({handler:()=>pending.promise});h.set('0','10');const task=h.query();await settle();h.L.serial++;h.controls();pending.resolve(result('A',[hour({all_count:999})]));await task;assert.match(h.row('charge')[0],/点击设置区间/);assert.doesNotMatch(h.row('charge').join(''),/999笔/);
+});
+
+test('amount analysis runs an independent interval and supplies exact local platform details',async()=>{
+ const configs=[],h=setup({analysis:{table:config=>{configs.push(config);return '<div>custom summary</div>'}},handler:q=>({...result(q.platformId),platform:platform(q.platformId)})});h.setPage('amount');const before=copy(h.L.results);h.set('200','250');await h.query();
+ assert.equal(h.calls.length,1);assert.equal(h.calls[0].q.view,'full');assert.deepEqual(h.L.results,before);assert.match(h.api.pageControls('amount'),/最低金额（含）|custom summary/);
+ const config=configs.at(-1),segment=config.segment(config.rows[0]);assert.deepEqual(copy(segment),{kind:'custom',direction:'charge',amountMin:200,amountMax:250,amountMaxExclusive:true,placement:'analysis-custom-amount'});assert.equal(h.api.detailRows(segment)[0].all_count,4);assert.equal(h.api.detailRows({...segment,amountMax:251}).length,0,'another interval cannot borrow current custom values');
+});
+
+test('time custom controls include their lower hour and exclude the upper hour without new requests',()=>{
+ const configs=[],source={...result('A',[hour({hour:1,all_count:10}),hour({hour:2,all_count:20}),hour({hour:3,all_count:30}),hour({hour:4,all_count:40}),hour({hour:2,direction:'withdraw',all_count:90}),hour({hour:2,currency:'USD',all_count:200})]),platform:platform()},h=setup({L:{results:[source]},analysis:{table:config=>{configs.push(config);return '<div>hour summary</div>'}}});h.setPage('time');const before=copy(h.L.results);
+ assert.match(h.api.pageControls('time'),/自定义时段/);h.root.liveAnalysisHourSet('hourMin','2');h.root.liveAnalysisHourSet('hourMax','4');assert.equal(configs.length,0,'draft selection does not apply itself');h.root.liveAnalysisHourQuery();assert.match(h.api.pageControls('time'),/hour summary/);assert.equal(h.calls.length,0);assert.deepEqual(h.L.results,before);
+ const config=configs.at(-1),charge=config.rows.find(row=>row.direction==='charge'),selected=config.segment(charge);assert.deepEqual(copy(selected.hourRange),{minHour:2,maxHour:4});assert.equal(charge.all_count,50);assert.equal(h.api.detailRows(selected)[0].all_count,50);assert.equal(config.rows.find(row=>row.direction==='withdraw').all_count,90);assert.equal(h.api.customResults(selected).complete,true);
+ const saved=h.api.capture();h.api.restore(saved);assert.match(h.api.pageControls('time'),/hour summary/);assert.equal(h.calls.length,0);h.root.liveAnalysisHourClear();assert.doesNotMatch(h.api.pageControls('time'),/hour summary/);
+});
+
+test('invalid or unauthorized time queries cannot apply a range and partial scopes suppress the rate',()=>{
+ for(const [min,max]of [['','3'],['-1','3'],['3','3'],['4','2'],['0','25'],['1.5','3'],['bad','3']]){const h=setup();h.setPage('time');h.root.liveAnalysisHourSet('hourMin',min);h.root.liveAnalysisHourSet('hourMax',max);h.root.liveAnalysisHourQuery();assert.match(h.api.pageControls('time'),/请选择有效时段/);assert.equal(h.calls.length,0)}
+ const configs=[],h=setup({L:{queryFailures:[{id:'B'}],results:[{...result(),platform:platform()}]},analysis:{table:config=>{configs.push(config);return 'partial';}}});h.setPage('time');h.setAllowed(false);h.root.liveAnalysisHourQuery();h.api.pageControls('time');assert.equal(configs.length,0);h.setAllowed(true);h.root.liveAnalysisHourQuery();h.api.pageControls('time');const config=configs.at(-1),row=config.rows[0];assert.equal(config.cells(row).at(-1),'—');assert.equal(h.api.customResults(config.segment(row)).complete,false);
 });

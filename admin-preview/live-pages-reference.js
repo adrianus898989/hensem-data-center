@@ -164,13 +164,13 @@
    let bodyTable;
    if(c.analysis?.table){
     L.tablePages=L.tablePages||{};L.tableSizes=L.tableSizes||{};const size=L.tableSizes[id]||20,page=Math.min(L.tablePages[id]||1,Math.max(1,Math.ceil(rows.length/size)));L.tablePages[id]=page;
-    bodyTable=c.analysis.table({id,headers,aligned:headers.length===11,rows:sorted.rows.slice((page-1)*size,page*size),cells,segment:r=>({kind:groupKind,direction:r.direction,...(time?{hour:Number(r.hour)}:{bucket:String(r.bucket)})}),label})+pager(rows.length,page,size,'ref-'+id);
+    bodyTable=c.analysis.table({id,headers,aligned:false,rows:sorted.rows.slice((page-1)*size,page*size),cells,segment:r=>({kind:groupKind,direction:r.direction,...(time?{hour:Number(r.hour)}:{bucket:String(r.bucket)})}),label})+pager(rows.length,page,size,'ref-'+id);
    }else bodyTable=pageTable(id,headers,sorted.rows.map(cells));
    body=box(items[0][1],bodyTable,(time?'每小时 · 各平台当地时间':'金额 '+E(L.currency)+(L.matrixMode==='range'?' · 10档；下限含、上限不含，最后一档含上限':' · 精确金额'))+'；全部按创建时间，成功按成功时间；展开查看各平台占比'+(String(L.from||'').slice(0,10)!==String(L.to||'').slice(0,10)?'与每日对比':''),tools);
   }
   if(L.view==='checks')body=box(items[1][1],pageTable('analysis-checks',['方向',first,'估算手续费','掉单金额','掉单笔数','掉单占比','异常金额','异常笔数','异常占比'],rows.map(r=>[name(r.direction),E(label(r)),...Array(7).fill(unavailable)])),'掉单、异常独立统计 · 正式核对标记未接入');
   if(L.view==='trend')body=dirs().map(d=>box(name(d)+' · '+items[2][1],time?chart(rows.filter(r=>r.direction===d)):bars(rows.filter(r=>r.direction===d).map(r=>({name:E(label(r)),value:r.all_amount}))))).join('');
-  return '<div class="analysis-compact">'+totals()+nav+body+'</div>';
+  return '<div class="analysis-compact">'+totals()+nav+(c.matrixCustom?.pageControls(time?'time':'amount')||'')+body+'</div>';
  }
  function bars(rows){const max=Math.max(1,...rows.map(r=>Number(r.value)||0));return '<div class="panel-body">'+rows.map(r=>'<div class="live-reference-bar"><span>'+r.name+'</span><div><i style="width:'+Math.max(0,(Number(r.value)||0)/max*100)+'%"></i></div><b>'+N(r.value)+'</b></div>').join('')+'</div>'}
  function business(page){const team=['teamops','teamcountries','teamplatforms'].includes(page),merchant=page==='merchants',dimension=page==='teamcountries'?'country':'platform';let items=team?[['business',page==='teamcountries'?'国家表现':'平台经营'],['trend',page==='teamops'?'团队订单趋势 / 国家分布':'全部订单金额 / 国家 × 商户关联'],['providers','团队三方使用情况']]:merchant?[['business','商户经营清单'],['trend','商户订单趋势 / 商户状态分布'],['providers','该商户的三方经营表现']]:[['business','平台内三方表现'],['fees','平台内三方成本']];const nav=choose(items);const context='<div class="workspace-context"><div><strong>'+E(team?(L.team==='all'?'全部团队经营范围':L.team):L.platform==='all'?'全部商户（平台）':L.catalog.find(x=>x.id===L.platform)?.name||'商户')+'</strong><small>'+(team?'团队 → 国家 → 平台':'商户 = 平台；归属团队 → 国家 → 平台 → 三方订单')+'</small></div><button class="btn soft" onclick="setPage(\''+(team?'teams':'teamops')+'\')">'+(team?'团队平台配置':'所属团队')+' →</button></div>';
