@@ -54,3 +54,9 @@ body.live-admin .live-matrix th:first-child,body.live-admin .live-matrix td:firs
  content:"";position:absolute;inset-block:0;inset-inline-end:0;width:1px;
  background:#e3eaf4;pointer-events:none;
 }
+
+body.live-admin .live-health-filters{display:grid;grid-template-columns:minmax(180px,2fr) repeat(2,minmax(150px,1fr)) auto;gap:10px;align-items:end}
+body.live-admin .live-health-filters .live-field{min-width:0;width:auto}
+body.live-admin .live-health-filters .live-field input,body.live-admin .live-health-filters .live-field select{width:100%;min-width:0}
+body.live-admin .live-health-filters .live-actions{white-space:nowrap}
+@media(max-width:850px){body.live-admin .live-health-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}

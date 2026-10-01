@@ -36,9 +36,9 @@ function ui(options={}){
 
 test('data scope, role, status and text filters intersect locally; reset restores the authorized directory without IO',async()=>{
  const h=ui();await flush();assert.equal(h.rows().length,3);const reads=h.calls.length;
- for(const [label,name] of [["搜索账号","后台账号搜索"],["角色","后台账号角色筛选"],["数据范围","后台账号数据范围筛选"],["状态","后台账号状态筛选"]])assert.equal(h.field(label).props["aria-label"],name);
+ for(const [label,name] of [["搜索账号","后台账号搜索"],["系统身份","后台账号系统身份筛选"],["数据范围","后台账号数据范围筛选"],["状态","后台账号状态筛选"]])assert.equal(h.field(label).props["aria-label"],name);
  h.field('数据范围').props.onChange({target:{value:'BR_PANGHU'}});assert.deepEqual(h.rows().map(text).map(t=>/brazil-fixture/.test(t)?'BR':'OWNER').sort(),['BR','OWNER']);
- h.field('角色').props.onChange({target:{value:'viewer'}});assert.equal(h.rows().length,1);assert.match(text(h.rows()),/brazil-fixture/);
+ h.field('系统身份').props.onChange({target:{value:'viewer'}});assert.equal(h.rows().length,1);assert.match(text(h.rows()),/brazil-fixture/);
  h.field('状态').props.onChange({target:{value:'disabled'}});assert.equal(h.rows().length,0);
  h.field('搜索账号').props.onChange({target:{value:'no-match'}});h.button('重置筛选').props.onClick();assert.equal(h.rows().length,3);assert.equal(h.field('搜索账号').props.value,'');assert.equal(h.field('数据范围').props.value,'all');assert.equal(h.calls.length,reads);
  assert(!h.all().some(n=>n.type==='option'&&n.props.value==='locked'),'does not include unreleased login-security UI');
@@ -84,13 +84,13 @@ test('manual directory distinguishes pending reads, confirmed zero, and filtered
  let resolve;const h=ui({manualQuery:true,list:()=>new Promise(r=>resolve=r)});
  h.button('查询账号').props.onClick();assert.match(text(h.draw()),/正在读取账号/);assert.doesNotMatch(text(h.draw()),/显示 0|没有符合当前搜索/);
  resolve([]);await flush();assert.match(text(h.draw()),/显示 0 \/ 0 个账号/);assert.match(text(h.draw()),/当前可管理范围内没有后台账号/);
- h.button('查询账号').props.onClick();resolve([brazil]);await flush();h.field('搜索账号').props.onChange({target:{value:'other'}});assert.match(text(h.draw()),/显示 0 \/ 1 个账号/);assert.match(text(h.draw()),/没有符合当前搜索条件/);
+ h.button('刷新列表').props.onClick();resolve([brazil]);await flush();h.field('搜索账号').props.onChange({target:{value:'other'}});assert.match(text(h.draw()),/显示 0 \/ 1 个账号/);assert.match(text(h.draw()),/没有符合当前搜索条件/);
 });
 
 test('directory read failures show an error, clear stale rows and never report them as zero',async()=>{
  let fail=false;const h=ui({manualQuery:true,list:async()=>{if(fail)throw Error('fixture read failure');return[brazil]}});
  h.button('查询账号').props.onClick();await flush();assert.equal(h.rows().length,1);
- fail=true;h.button('查询账号').props.onClick();await flush();assert.equal(h.rows().length,0);assert.match(text(h.draw()),/账号读取失败/);assert.match(text(h.draw()),/fixture read failure/);assert.doesNotMatch(text(h.draw()),/显示 0|brazil-fixture|没有符合当前搜索|当前可管理范围内没有/);
+ fail=true;h.button('刷新列表').props.onClick();await flush();assert.equal(h.rows().length,0);assert.match(text(h.draw()),/账号读取失败/);assert.match(text(h.draw()),/fixture read failure/);assert.doesNotMatch(text(h.draw()),/显示 0|brazil-fixture|没有符合当前搜索|当前可管理范围内没有/);
  fail=false;h.button('查询账号').props.onClick();await flush();assert.equal(h.rows().length,1);assert.doesNotMatch(text(h.draw()),/fixture read failure/);
 });
 

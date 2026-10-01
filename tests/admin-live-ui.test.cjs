@@ -70,6 +70,23 @@ const withoutWindow=q=>Object.fromEntries(Object.entries(q).filter(([key])=>!['s
 const plain=html=>String(html).replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim();
 function renderedTables(html){return [...html.matchAll(/<table\b[^>]*>([^]*?)<\/table>/g)].map(match=>({html:match[0],headers:[...match[1].matchAll(/<th\b[^>]*>([^]*?)<\/th>/g)].map(x=>plain(x[1].replace(/<span\b[^>]*aria-hidden="true"[^>]*>[^]*?<\/span>/g,''))),rows:[...(match[1].match(/<tbody\b[^>]*>([^]*?)<\/tbody>/)?.[1]||'').matchAll(/<tr\b[^>]*>([^]*?)<\/tr>/g)].map(row=>[...row[1].matchAll(/<td\b[^>]*>([^]*?)<\/td>/g)].map(cell=>cell[1]))}));}
 
+test('data health filters the authorized directory locally on Query without replacing focused drafts',async()=>{
+ const platforms=[{...P,id:'health-india-ar',name:'ALPHA INDIA',team:'M8'}, {...P,id:'health-india-new',name:'ALPHA NEW',source:'NEW_AR',team:'M8'}, {...P,id:'health-brazil',name:'ALPHA BRAZIL',country:'巴西',scopeGroup:'brazil',team:'HK'}, ...Array.from({length:22},(_,i)=>({...P,id:'health-other-'+i,name:'OTHER '+i,team:'Other team'}))];
+ const h=harness({page:'data_health',platforms});await settle();const calls=h.calls.length,ids=Array.from(h.L.catalog,p=>p.id),form={reportValidity:()=>true};
+ const names=()=>renderedTables(h.html()).find(t=>t.headers[0]==='平台').rows.map(row=>plain(row[0]));
+ assert.equal(h.L.groups.length,25);h.c.livePage(2,'local');assert.equal(h.L.localPage,2);const writes=h.writes.filter(w=>w.id==='page').length;
+ h.c.liveHealthSet('query','  alpha  ');h.c.liveHealthSet('source','AR');h.c.liveHealthSet('group','印度');
+ assert.equal(h.writes.filter(w=>w.id==='page').length,writes,'typing/selecting only updates drafts and keeps focus');assert.equal(h.L.groups.length,25,'drafts do not silently change the displayed result');
+ h.c.liveHealthQuery(form);assert.equal(h.L.localPage,1);assert.deepEqual(names(),['ALPHA INDIA']);
+ h.c.liveHealthSet('group','brazil');h.c.liveHealthQuery(form);assert.deepEqual(names(),['ALPHA BRAZIL'],'authorization-group values filter as well as country names');
+ h.c.liveHealthSet('source','');h.c.liveHealthSet('group','');h.c.liveHealthSet('query','m8');let prevented=false;
+ h.c.liveHealthQuery(form,{key:'Enter',target:{tagName:'INPUT',type:'search'},preventDefault(){prevented=true}});assert.equal(prevented,true);assert.deepEqual(names(),['ALPHA INDIA','ALPHA NEW'],'team keywords match case-insensitively');
+ h.c.setPage('overview');h.c.setPage('data_health');assert.deepEqual(names(),['ALPHA INDIA','ALPHA NEW'],'returning to the page retains the applied filter');
+ h.c.liveHealthSet('query','not authorized or not present');h.c.liveHealthQuery(form);assert.equal(h.L.groups.length,0);
+ h.c.liveHealthReset();assert.equal(h.L.localPage,1);assert.equal(h.L.groups.length,25);assert.equal(names().length,20);assert.match(h.html(),/id="healthQuery"[^>]*value=""/);
+ assert.deepEqual(Array.from(h.L.catalog,p=>p.id),ids,'filtering never mutates the authorized catalog');assert.equal(h.calls.length,calls,'query, reset, pagination and page return make no extra API request');
+});
+
 
 const supervisorRoutes=[['workorder_permissions','权限与预警']];
 
