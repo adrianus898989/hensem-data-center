@@ -69,3 +69,51 @@ test('known exclusions without an unexplained-difference result cannot label the
  const row=diagnosticFact('Unclassified','AlphaPay',20,18,{pendingExcludedDetailCount:1,unexplainedDetailMismatchCount:null});const h=platformDiagnosis([row]);h.root.providerSummaryWorkorderPlatforms();const html=h.drawers.at(-1).html;
  assert.match(html,/0 个仅有已知范围差异，1 个含待确认项/);assert.match(html,/接口尚未提供未解释差异的拆分/);assert.doesNotMatch(html,/1 个仅有已知范围差异/);assert.equal(h.networkCalls(),0);
 });
+
+test('unmarked source-label rows with matching quantities explain absent attribution without claiming missing collection',()=>{
+ const unmarked=diagnosticFact('SourceLabelPlatform','未标记三方',1,1);unmarked.uniqueCoverage.diagnosticDays=[];
+ const resolved=diagnosticFact('SourceLabelPlatform','KnownPay',18,18,{resolvedProviderOrderCount:2,unknownProviderRecordCount:3,unresolvedProviderOrderCount:0});Object.assign(resolved.uniqueCoverage,{complete:true,status:'complete'});
+ const h=platformDiagnosis([unmarked,resolved]),before=JSON.stringify(h.L.workorders);h.root.providerSummaryWorkorderPlatforms();const html=h.drawers.at(-1).html;
+ assert.match(html,/源标签为未标记三方；本标签原单归属明细未返回/);
+ assert.match(html,/源标签汇总不等于原单归属/);assert.match(html,/已归并原单请查看本平台已知三方分项/);
+ assert.match(html,/<td>1<\/td><td>1<\/td><td>0 · 数量一致<\/td><td>0<\/td><td>0<\/td>/);
+ assert.match(html,/汇总 <b>1<\/b> \/ 明细 <b>1<\/b>/,'complete provider context must not alter difference-row totals');
+ assert.match(html,/先选全部三方、全部状态，从逐笔工单取得完整原支付订单号，再按完整原单号查看同单工单的三方字段/);
+ assert.match(html,/不要仅筛选未标记三方，以免隐藏同单的已知三方记录/);
+ assert.match(html,/不能据此把“未标记三方”汇总行直接归给某一家/);
+ assert.match(html,/<td>KnownPay<\/td><td>2<\/td><td>3<\/td><td>0<\/td>/,'show supplied resolved facts from a complete sibling cohort');
+ assert.doesNotMatch(html,/完整性待核验|工单号未入库|缺少 1 条工单|三方冲突/);
+ assert.equal(JSON.stringify(h.L.workorders),before);assert.equal(h.networkCalls(),0);
+});
+test('declared unknown source fields and resolved originals have different units and meanings',()=>{
+ const row=diagnosticFact('DeclaredPlatform','SyntheticPay',25,25,{resolvedProviderOrderCount:3,unknownProviderRecordCount:25,unresolvedProviderOrderCount:10});
+ const h=platformDiagnosis([row]),gaps=h.api.workorderPlatformGaps(h.L,'withdraw');
+ assert.equal(gaps[0].reasonGroups.find(g=>g.key==='resolvedProviderOrderCount').count,3);
+ assert.equal(gaps[0].reasonGroups.find(g=>g.key==='unknownProviderRecordCount').count,25);
+ h.root.providerSummaryWorkorderPlatforms();const html=h.drawers.at(-1).html;
+ assert.match(html,/已归并：3组原单的其他已采集工单提供了唯一已知三方/);
+ assert.match(html,/这不是三方冲突，也不表示每条源工单都填写了三方/);
+ assert.match(html,/源字段未填写：25条已采集记录/);assert.match(html,/不能仅凭此字段判断漏采或未入库/);
+ assert.match(html,/10组原单三方未确认/);assert.match(html,/<td>SyntheticPay<\/td><td>3<\/td><td>25<\/td><td>10<\/td>/);
+ assert.doesNotMatch(html,/组三方冲突|22条|已全部归并|已核验完整/);assert.equal(h.networkCalls(),0);
+});
+test('sibling attribution facts respect platform and direction, escape labels and preserve unknown quantities',()=>{
+ const unmarked=diagnosticFact('ScopePlatform','未标记三方',1,1);unmarked.uniqueCoverage.diagnosticDays=[];
+ const sibling=diagnosticFact('ScopePlatform','<KnownPay>',3,3,{resolvedProviderOrderCount:1});Object.assign(sibling.uniqueCoverage,{complete:true,status:'complete'});
+ const other=diagnosticFact('OtherPlatform','UnrelatedPay',4,4,{resolvedProviderOrderCount:99});Object.assign(other.uniqueCoverage,{complete:true,status:'complete'});
+ const opposite=diagnosticFact('ScopePlatform','OppositePay',4,4,{resolvedProviderOrderCount:88});opposite.direction='charge';opposite.uniqueCoverage.complete=true;
+ const h=platformDiagnosis([unmarked,sibling,other,opposite]);h.root.providerSummaryWorkorderPlatforms();const html=h.drawers.at(-1).html;
+ assert.match(html,/<td>&lt;KnownPay&gt;<\/td><td>1<\/td><td>未提供<\/td><td>未提供<\/td>/);
+ assert.doesNotMatch(html,/<KnownPay>|UnrelatedPay|OppositePay|>99<|>88</);assert.equal(h.networkCalls(),0);
+ const solitary=platformDiagnosis([unmarked]);solitary.root.providerSummaryWorkorderPlatforms();assert.doesNotMatch(solitary.drawers.at(-1).html,/已按唯一已知三方归并（原单组）|已归并：/);
+ assert.match(solitary.drawers.at(-1).html,/本标签原单归属明细未返回/);
+});
+
+test('resolved attribution explanations do not upgrade a known pending-scope difference to a provider conflict',()=>{
+ const row=diagnosticFact('KnownScopePlatform','KnownPay',14,13,{pendingExcludedDetailCount:1,resolvedProviderOrderCount:1,unknownProviderRecordCount:1,unresolvedProviderOrderCount:0});
+ const h=platformDiagnosis([row]);h.root.providerSummaryWorkorderPlatforms();const html=h.drawers.at(-1).html;
+ assert.match(html,/1 个仅有已知范围差异，0 个含待确认项/);
+ assert.match(html,/已归并：1组原单/);assert.match(html,/1条来源三方未填写/);
+ assert.equal(h.L.workorders.byPlatformProvider[0].uniqueCoverage.complete,false);
+ assert.doesNotMatch(html,/组三方冲突/);assert.equal(h.networkCalls(),0);
+});
