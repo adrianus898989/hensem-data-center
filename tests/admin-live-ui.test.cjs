@@ -725,7 +725,7 @@ test('revisiting a reason tab reuses its bounded cache, while refresh invalidate
 
 test('statistics tabs derive from one source while tracking never requests result summaries',async()=>{
  const h=await ready();h.setHandler(q=>['depositIssues','depositStatistics'].includes(q.action)?{rows:[],total:20,summary:{count:20},facets:{platforms:['Synthetic platform'],providers:['UmoneyPay']},providerSummary:[{provider:'UmoneyPay',matchStatus:'对得上',count:20}],dailySummary:[{date:'2026-09-23',count:20}]}:{rows:[]});
- h.c.setPage('deposit_statistics');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).action,'depositStatistics');assert.match(h.html(),/三方查看/);assert.match(h.html(),/每日汇总/);assert.match(h.html(),/不重复累计/);
+ h.c.setPage('deposit_statistics');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).action,'depositStatistics');assert.match(h.html(),/三方查看/);assert.match(h.html(),/每日汇总/);assert.match(h.html(),/>统计口径<\/button>/);assert.doesNotMatch(h.html(),/不重复累计/);
  h.c.depositIssuesDrill('providers',0);await settle();assert.equal(h.calls.at(-1).provider,'UmoneyPay');assert.equal(h.calls.at(-1).match,'matched');assert.equal(h.calls.at(-1).section,'details');
  h.c.setPage('deposit_tracking');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).action,'depositIssues');assert.equal(h.calls.at(-1).view,'entries');assert.equal(h.calls.at(-1).match,undefined);assert.match(h.html(),/员工跟进明细/);assert.doesNotMatch(h.html(),/三方查看|每日汇总/);
 });

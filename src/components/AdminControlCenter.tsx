@@ -14,11 +14,8 @@ import { ACCOUNT_PERMISSION_MODULES, ALL_ACCOUNT_PERMISSIONS, createPermissionDr
 import { DASHBOARD_DATA_GROUPS, dashboardScopeLabel, effectiveDashboardDataScope, isDashboardDataScopeSubset, normalizeDashboardDataScope, type DashboardDataScope } from "@/lib/dashboardDataScope";
 import {
   canOpenAdminCenter,
-  createDashboardAccount,
+  createDashboardRoleAccount,
   DASHBOARD_PERMISSION_LABELS,
-  DEFAULT_ADMIN_MANAGEMENT_PERMISSIONS,
-  DEFAULT_ADMIN_PERMISSIONS,
-  DEFAULT_VIEWER_PERMISSIONS,
   deleteDashboardAccount,
   getDashboardHistoryStatus,
   listDashboardAudit,
@@ -51,7 +48,6 @@ type Props = {
 };
 
 type Tab = "accounts" | "permissions" | "ip" | "data" | "audit";
-type CreateRole = "admin" | "viewer";
 
 function accountStoredScope(user: DashboardProfile): DashboardDataScope {
   return user.role === "owner" ? { mode: "all", countries: [] } : normalizeDashboardDataScope(user.data_scope);
@@ -241,6 +237,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   const canUseAccountAction = (action: string) => roleAccess?.mode !== "assigned" || roleAccess.canView === true
     && roleAccess.permissions.includes("access.view") && roleAccess.permissions.includes("access." + action);
   const canConfigureAccount = canUseAccountAction("edit");
+  const canCreateRoleAccount = isOwner || assignedActor && canUseAccountAction("create") && canConfigureAccount;
   const canOpenAccountSettings = canConfigureAccount || canUseAccountAction("reset_password") || canUseAccountAction("delete");
   const canRefreshData = hasAllData && (isOwner || (assignedActor ? dashboardRoleAllows(roleAccess,"data_health","refresh") : management.refresh_data));
   const canViewAudit = hasAllData && (isOwner || (assignedActor ? dashboardRoleAllows(roleAccess,"operation_logs") : management.view_audit));
@@ -259,11 +256,9 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   const users = directoryReady ? userRows : [];
   useEffect(() => () => { directoryRequest.current.serial += 1; }, [directoryScope]);
   const [message, setMessage] = useState("");
-  const [newRole, setNewRole] = useState<CreateRole>("viewer");
+  const [newRoleId, setNewRoleId] = useState("");
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
-  const [newPermissions, setNewPermissions] = useState<DashboardPermissions>({ ...DEFAULT_VIEWER_PERMISSIONS });
-  const [newManagement, setNewManagement] = useState<DashboardManagementPermissions>({ ...DEFAULT_ADMIN_MANAGEMENT_PERMISSIONS });
   const [newDataScope, setNewDataScope] = useState<DashboardDataScope>(() => effectiveDashboardDataScope(profile));
   const [createBusy, setCreateBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -431,9 +426,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, profile.role, manualQuery, directoryScope]);
 
-  useEffect(() => {
-    if (!isOwner && newRole === "admin") setNewRole("viewer");
-  }, [isOwner, newRole]);
+  useEffect(() => { setNewRoleId(""); setNewUsername(""); setNewPassword(""); setCreateOpen(false); }, [directoryScope]);
 
   useEffect(() => {
     setTab(section);
@@ -446,42 +439,46 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
 
   useEffect(() => { setNewDataScope(JSON.parse(actorDataScopeKey) as DashboardDataScope); }, [profile.auth_user_id, actorDataScopeKey]);
 
-  if (!open || !canEnterAdmin) return null;
+  const creationRolesReady = roleDirectory.scope === directoryScope && roleDirectory.status === "ready";
+  const creationRoles = creationRolesReady ? (roleDirectory.data?.roles || []).filter(role => role.active
+    && (isOwner || assignedActor && role.permissions.every(permission => roleAccess.permissions.includes(permission)))) : [];
+  const selectedCreationRole = creationRoles.find(role => role.id === newRoleId);
+  const selectedCreationPages = selectedCreationRole ? dashboardRolePages.filter(page => selectedCreationRole.permissions.includes(page.id + ".view")) : [];
 
-  function resetCreateRole(role: CreateRole) {
-    setNewRole(role);
-    setNewPermissions(role === "admin" ? { ...DEFAULT_ADMIN_PERMISSIONS } : { ...DEFAULT_VIEWER_PERMISSIONS });
-    setNewManagement({ ...DEFAULT_ADMIN_MANAGEMENT_PERMISSIONS });
-  }
+  if (!open || !canEnterAdmin) return null;
 
   function closeCreate() {
     if (createBusy) return;
     setCreateOpen(false);
     setNewUsername("");
     setNewPassword("");
-    resetCreateRole("viewer");
+    setNewRoleId("");
     setNewDataScope(effectiveDashboardDataScope(profile));
     setMessage("");
   }
 
   async function submitCreate(event: React.FormEvent) {
     event.preventDefault();
-    if (!canManageUsers || !canUseAccountAction("create") || createBusy) return;
+    if (!canCreateRoleAccount || createBusy) return;
+    const selectedRole = creationRoles.find(role => role.id === newRoleId);
+    if (!selectedRole) { setMessage("请明确选择已启用的新版角色；如角色已变更，请刷新角色列表。"); return; }
+    const creatingScope = directoryScope;
     if (newDataScope.mode === "selected" && !newDataScope.countries.length) { setMessage("请至少选择一个可见国家或盘口组。"); return; }
     if (!isDashboardDataScopeSubset(newDataScope, effectiveDashboardDataScope(profile))) { setMessage("不能授予超出自己可见数据范围的权限。"); return; }
     setCreateBusy(true);
     setMessage("");
     try {
-      const result = await createDashboardAccount(session, newUsername, newPassword, newRole, newPermissions, newManagement, newDataScope);
-      setMessage(`${roleLabel(result?.role || newRole)} ${result?.username || newUsername} 已建立。`);
+      const result = await createDashboardRoleAccount(session, newUsername, newPassword, {id:selectedRole.id,version:selectedRole.version}, newDataScope);
+      if (directoryRequest.current.scope !== creatingScope) return;
+      setMessage(`${result.account.username} 已建立，角色：${result.account.role_name}。`);
       setNewUsername("");
       setNewPassword("");
-      resetCreateRole("viewer");
+      setNewRoleId("");
       setNewDataScope(effectiveDashboardDataScope(profile));
       setCreateOpen(false);
       await Promise.all([loadUsers(), canViewAudit ? loadAudit() : Promise.resolve()]);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "建立账号失败");
+      if (directoryRequest.current.scope === creatingScope) setMessage(error instanceof Error ? error.message : "建立账号失败");
     } finally { setCreateBusy(false); }
   }
 
@@ -659,33 +656,28 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
           <section className="admin-panel-card admin-account-directory admin-permission-directory">
             <div className="admin-account-directory-head">
               <div>{tab === "accounts" ? <><h3>账号列表</h3><p>建立账号，管理角色、启停状态、数据范围与密码。</p></> : <><h3>按模块、页面和具体操作配置权限</h3><p>新版角色账号按角色目录授权；未分配角色的账号保留独立模块授权。</p></>}</div>
-              <div className="admin-account-toolbar-actions"><button type="button" className="admin-light-btn" disabled={loading || !canUseAccountAction("view")} onClick={() => void loadUsers()}>{loading ? "读取中…" : manualQuery && !directoryReady ? "查询账号" : "刷新列表"}</button>{tab === "accounts" && <button type="button" className="admin-account-create-toggle" aria-haspopup="dialog" disabled={loading || Boolean(savingUser) || !canUseAccountAction("create") || assignedActor} onClick={() => { if (!canUseAccountAction("create")) return; setMessage(""); setCreateOpen(true); }}>+ 新建账号</button>}</div>
+              <div className="admin-account-toolbar-actions"><button type="button" className="admin-light-btn" disabled={loading || !canUseAccountAction("view")} onClick={() => void loadUsers()}>{loading ? "读取中…" : manualQuery && !directoryReady ? "查询账号" : "刷新列表"}</button>{tab === "accounts" && <button type="button" className="admin-account-create-toggle" aria-haspopup="dialog" disabled={loading || Boolean(savingUser) || !canCreateRoleAccount} onClick={() => { if (!canCreateRoleAccount) return; setMessage(""); setNewRoleId(""); setCreateOpen(true); if (!creationRolesReady) void loadUsers(); }}>+ 新建账号</button>}</div>
             </div>
             {tab === "permissions" ? <div className="admin-permission-overview"><div><b>{directoryReady ? users.length : "—"}</b> 当前账号</div><div><b>{ACCOUNT_PERMISSION_MODULES.length}</b> 权限模块</div><div><b>{ALL_ACCOUNT_PERMISSIONS.length}</b> 权限项</div><div><b>{ALL_ACCOUNT_PERMISSIONS.filter((item) => item.kind === "management").length}</b> 后台权限</div><span>权限项与现有系统一致，不新增授权范围</span></div> : <div className="admin-permission-overview admin-account-overview"><div><b>{directoryReady ? users.length : "—"}</b> 全部账号</div><div><b>{directoryReady ? stats.owners : "—"}</b> 总管理员</div><div><b>{directoryReady ? stats.admins : "—"}</b> 管理员</div><div><b>{directoryReady ? stats.viewers : "—"}</b> 查看账号</div><div><b>{directoryReady ? stats.disabled : "—"}</b> 已停用</div></div>}
-          {tab === "accounts" && createOpen && canUseAccountAction("create") && !assignedActor && <AccountEditorDialog title="新建后台账号" busy={createBusy} onClose={closeCreate} bodyClassName="admin-users-compact"><section id="admin-create-account" className="admin-create-card-v249 admin-account-create-panel">
+          {tab === "accounts" && createOpen && canCreateRoleAccount && <AccountEditorDialog title="新建后台账号" busy={createBusy} onClose={closeCreate} bodyClassName="admin-users-compact"><section id="admin-create-account" className="admin-create-card-v249 admin-account-create-panel">
             {message && <p role="alert" className="admin-account-feedback error">{message}</p>}
             <fieldset disabled={createBusy}>
-            <div className="admin-role-picker">
-              {isOwner && <button type="button" className={newRole === "admin" ? "active" : ""} onClick={() => resetCreateRole("admin")}><b>小管理员</b><small>可继续分配后台管理权限</small></button>}
-              <button type="button" className={newRole === "viewer" ? "active" : ""} onClick={() => resetCreateRole("viewer")}><b>查看账号</b><small>只有业务模块查看权限</small></button>
-            </div>
             <form onSubmit={submitCreate}>
-              <div className="admin-account-create-fields"><div><label htmlFor="admin-new-username">账号</label><input id="admin-new-username" autoComplete="off" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} placeholder={newRole === "admin" ? "例如 manager01" : "例如 finance01"} autoFocus /></div>
+              <div className="admin-account-create-fields"><div><label htmlFor="admin-new-username">账号</label><input id="admin-new-username" autoComplete="off" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} placeholder="例如 finance01" autoFocus /></div>
               <div><label htmlFor="admin-new-password">初始密码</label><input id="admin-new-password" type="password" autoComplete="new-password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="至少 8 位" /></div></div>
-              <label>业务模块权限</label>
-              <div className="admin-permission-list">
-                {BUSINESS_PERMISSION_GROUPS.map((group) => {
-                  const checked = group.keys.some((key) => newPermissions[key]);
-                  return <label key={group.key} className="admin-permission-row"><input type="checkbox" checked={checked} onChange={(e) => setNewPermissions((prev) => {
-                    const next = { ...prev };
-                    group.keys.forEach((key) => { next[key] = e.target.checked; });
-                    return next;
-                  })} /><span><b>{group.label}</b><small>{group.note}</small></span></label>;
-                })}
-              </div>
-              {newRole === "admin" && isOwner && <><label>后台管理权限</label><div className="admin-permission-list management-list">{MANAGEMENT_OPTIONS.map((item) => <label key={item.key} className="admin-permission-row"><input type="checkbox" checked={newManagement[item.key]} onChange={(e) => setNewManagement((prev) => ({ ...prev, [item.key]: e.target.checked }))} /><span><b>{item.label}</b><small>{item.note}</small></span></label>)}</div></>}
+              <label htmlFor="admin-new-role">新版角色</label>
+              <div className="admin-account-role-create-row"><select id="admin-new-role" value={newRoleId} disabled={!creationRolesReady} onChange={event => setNewRoleId(event.target.value)}>
+                <option value="">{creationRolesReady ? "请选择角色" : roleDirectory.status === "error" ? "角色读取失败，请刷新" : "正在读取新版角色…"}</option>
+                {creationRoles.map(role => <option key={role.id} value={role.id}>{role.name} · {role.permissions.length} 项权限</option>)}
+              </select>
+              <button type="button" className="admin-light-btn" disabled={createBusy || loading} onClick={() => void loadUsers()}>刷新角色</button></div>
+              <p className="admin-account-edit-hint" role="status">{selectedCreationRole ? selectedCreationRole.permissions.length
+                ? `${selectedCreationRole.name}：${selectedCreationPages.length} 个页面、${selectedCreationRole.permissions.length} 项权限；后续随该角色统一更新。`
+                : `${selectedCreationRole.name}：0 项权限。账号保持启用，角色开放权限后才能进入相应页面。`
+                : "请明确选择新版角色，账号权限与该角色同步。"}</p>
+              {selectedCreationPages.length > 0 && <div className="admin-account-permission-summary">{selectedCreationPages.map(page => page.label).join(" / ")}</div>}
               <DataScopePicker id="new-account" value={newDataScope} actor={profile} disabled={createBusy} onChange={setNewDataScope} />
-              <button className="admin-primary-btn" type="submit" disabled={createBusy || newDataScope.mode === "selected" && !newDataScope.countries.length}>{createBusy ? "建立中..." : `建立${newRole === "admin" ? "小管理员" : "查看账号"}`}</button>
+              <button className="admin-primary-btn" type="submit" disabled={createBusy || !selectedCreationRole || newDataScope.mode === "selected" && !newDataScope.countries.length}>{createBusy ? "建立中..." : "建立后台账号"}</button>
 
               <button type="button" className="admin-light-btn admin-create-cancel" onClick={closeCreate}>取消</button>
             </form></fieldset>

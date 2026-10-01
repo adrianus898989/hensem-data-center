@@ -6,6 +6,8 @@ const ALL={mode:'all',countries:[]},BR={mode:'selected',countries:['BR_PANGHU']}
 const owner={auth_user_id:'fixture-owner',username:'owner-fixture',role:'owner',active:true,data_scope:ALL};
 const brazil={auth_user_id:'fixture-br',username:'brazil-fixture',role:'viewer',active:true,data_scope:BR};
 const india={auth_user_id:'fixture-in',username:'india-fixture',role:'admin',active:false,data_scope:IN};
+const EMPTY_ROLE={id:'11111111-2222-4333-8444-555555555555',name:'出款组长',description:'',permissions:[],active:true,version:3};
+const VIP_ROLE={id:'99999999-2222-4333-8444-555555555555',name:'VIP',description:'',permissions:['overview.view'],active:true,version:7};
 const plain=x=>JSON.parse(JSON.stringify(x)),flush=()=>new Promise(r=>setImmediate(r));
 const nodes=x=>Array.isArray(x)?x.flatMap(nodes):x&&typeof x==='object'?[x,...nodes(x.props?.children)]:[];
 const text=x=>Array.isArray(x)?x.map(text).join(''):x&&typeof x==='object'?text(x.props?.children):x==null||typeof x==='boolean'?'':String(x);
@@ -22,8 +24,8 @@ function ui(options={}){
   if(name==='./AccountAssignedRoleDialog')return{default:function AccountAssignedRoleDialog(){}};
   if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};
   if(name==='./AccountPermissionDialog')return{default:function AccountPermissionDialog(){}};
-  if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async()=>{calls.push({action:'list'});return options.list?options.list():options.users||[owner,brazil,india]},listDashboardAudit:async()=>{calls.push({action:'audit'});return[]},createDashboardAccount:async(...args)=>{calls.push({action:'create',args:plain(args)});return options.create?options.create(...args):{role:args[3],username:args[1]}},updateDashboardAccount:async(...args)=>{calls.push({action:'update',args:plain(args)});if(options.update)return options.update(...args)},resetDashboardUserPassword:async(...args)=>calls.push({action:'password',args:plain(args)})};
-  if(name.endsWith('/dashboardRoleClient'))return{dashboardRolePages:require('../src/lib/dashboardRoleCatalog.json').pages,dashboardRoleRequest:async(...args)=>{roleCalls.push(plain(args));return options.roles?options.roles():{roles:[],accounts:(options.users||[owner,brazil,india]).map(account=>({...account,role_id:null,assignment_version:0}))}}};
+  if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async()=>{calls.push({action:'list'});return options.list?options.list():options.users||[owner,brazil,india]},listDashboardAudit:async()=>{calls.push({action:'audit'});return[]},createDashboardRoleAccount:async(...args)=>{calls.push({action:'create',args:plain(args)});return options.create?options.create(...args):{account:{username:args[1],role_name:EMPTY_ROLE.name}}},updateDashboardAccount:async(...args)=>{calls.push({action:'update',args:plain(args)});if(options.update)return options.update(...args)},resetDashboardUserPassword:async(...args)=>calls.push({action:'password',args:plain(args)})};
+  if(name.endsWith('/dashboardRoleClient'))return{dashboardRolePages:require('../src/lib/dashboardRoleCatalog.json').pages,dashboardRoleRequest:async(...args)=>{roleCalls.push(plain(args));return options.roles?options.roles():{roles:[EMPTY_ROLE,VIP_ROLE],accounts:(options.users||[owner,brazil,india]).map(account=>({...account,role_id:null,assignment_version:0}))}}};
   if(name.startsWith('@/lib/'))return loadTs(path.join(root,'src/lib',name.slice(6)+'.ts'));
   throw Error('Unexpected module: '+name);
  }});
@@ -54,19 +56,20 @@ test('create opens a modal; cancel clears credentials and scope draft with no wr
  h.button('+ 新建账号').props.onClick();assert.equal(h.all().find(n=>n.props.id==='admin-new-username').props.value,'');assert.deepEqual(plain(h.all().find(n=>n.type?.name==='DataScopePicker').props.value),ALL);
 });
 
-test('create retains the old API argument contract and blocks dismissal or duplicate submit while busy',async()=>{
+test('create uses explicit new role/version/scope and blocks dismissal or duplicate submit while busy',async()=>{
  let resolve;const h=ui({create:()=>new Promise(r=>{resolve=r})});await flush();h.button('+ 新建账号').props.onClick();
  h.all().find(n=>n.props.id==='admin-new-username').props.onChange({target:{value:'new-fixture'}});h.all().find(n=>n.props.id==='admin-new-password').props.onChange({target:{value:'fixture-password'}});h.all().find(n=>n.type?.name==='DataScopePicker').props.onChange(BR);
+ h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});
  const pending=nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});
  assert.equal(h.dialog().props.busy,true);assert(h.all().some(n=>n.type==='fieldset'&&n.props.disabled));h.dialog().props.onClose();assert(h.dialog());
  await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});assert.equal(h.calls.filter(c=>c.action==='create').length,1);
- const args=h.calls.find(c=>c.action==='create').args;assert.equal(args.length,7);assert.deepEqual(args.slice(0,4),[session,'new-fixture','fixture-password','viewer']);assert.deepEqual(args[6],BR);
- resolve({role:'viewer',username:'new-fixture'});await pending;assert(!h.dialog());assert(!JSON.stringify(h.states).includes('fixture-password'));
+ const args=h.calls.find(c=>c.action==='create').args;assert.equal(args.length,5);assert.deepEqual(args.slice(0,4),[session,'new-fixture','fixture-password',{id:EMPTY_ROLE.id,version:EMPTY_ROLE.version}]);assert.deepEqual(args[4],BR);
+ resolve({account:{username:'new-fixture',role_name:EMPTY_ROLE.name}});await pending;assert(!h.dialog());assert(!JSON.stringify(h.states).includes('fixture-password'));
 });
 
 test('creation error is visible inside the dialog and preserves the draft for correction',async()=>{
  const h=ui({create:()=>{throw Error('账号已存在')}});await flush();h.button('+ 新建账号').props.onClick();h.all().find(n=>n.props.id==='admin-new-username').props.onChange({target:{value:'duplicate'}});
- await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});assert(h.dialog());assert.match(text(h.dialog()),/账号已存在/);assert.equal(h.all().find(n=>n.props.id==='admin-new-username').props.value,'duplicate');
+ h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});assert(h.dialog());assert.match(text(h.dialog()),/账号已存在/);assert.equal(h.all().find(n=>n.props.id==='admin-new-username').props.value,'duplicate');
 });
 
 test('existing editable account opens the same modal without an inline table row or implicit mutation',async()=>{
@@ -188,4 +191,25 @@ test('legacy admin sees the assigned role as read-only instead of changing ineff
  const h=ui({actor:manager,users:[brazil],roles:vipRoster});await flush();assert.match(text(h.rows()),/VIP/);h.button('查看权限').props.onClick();
  const dialog=h.all().find(n=>n.type?.name==='AccountAssignedRoleDialog');assert(dialog);assert.equal(dialog.props.editable,false);assert(!h.all().some(n=>n.type?.name==='AccountPermissionDialog'));
  assert(h.calls.every(call=>call.action==='list'));assert.equal(h.roleCalls.length,1);
+});
+
+
+test('new role choice has no default VIP or legacy module checkboxes; empty role is explicit and remains zero permissions',async()=>{
+ const h=ui();await flush();h.button('+ 新建账号').props.onClick();assert.equal(h.all().find(n=>n.props.id==='admin-new-role').props.value,'');
+ assert(!nodes(h.dialog()).some(n=>n.type==='input'&&n.props.type==='checkbox'),'creation does not use legacy module permissions');
+ await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});assert(!h.calls.some(c=>c.action==='create'));assert.match(text(h.dialog()),/明确选择/);
+ h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});assert.match(text(h.dialog()),/0 项权限/);assert.equal(h.button('建立后台账号',h.dialog()).props.disabled,false);
+ h.dialog().props.onClose();h.button('+ 新建账号').props.onClick();assert.equal(h.all().find(n=>n.props.id==='admin-new-role').props.value,'');
+});
+test('delegated creation requires create plus edit, filters ungrantable roles and cannot forge hidden role selection',async()=>{
+ for(const permissions of [['access.view','access.create'],['access.view','access.edit']]){const h=ui({actor:manager,roleAccess:assigned(permissions)});await flush();assert.equal(h.button('+ 新建账号').props.disabled,true);h.button('+ 新建账号').props.onClick();assert(!h.dialog());}
+ const h=ui({actor:manager,roleAccess:assigned(['access.view','access.create','access.edit'])});await flush();h.button('+ 新建账号').props.onClick();const select=h.all().find(n=>n.props.id==='admin-new-role');assert(!nodes(select).some(n=>n.type==='option'&&n.props.value===VIP_ROLE.id));
+ select.props.onChange({target:{value:VIP_ROLE.id}});await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});assert(!h.calls.some(c=>c.action==='create'));assert.match(text(h.dialog()),/明确选择/);
+});
+test('role directory failure and pending reads never fall back to legacy creation or auto-select a role',async()=>{
+ for(const roles of [()=>{throw Error('synthetic role failure')},()=>new Promise(()=>{})]){const h=ui({roles});await flush();h.button('+ 新建账号').props.onClick();await flush();assert.equal(h.all().find(n=>n.props.id==='admin-new-role').props.disabled,true);assert.equal(h.button('建立后台账号',h.dialog()).props.disabled,true);await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});assert(!h.calls.some(c=>c.action==='create'));}
+});
+test('creation actor change clears role/credentials and a late completed request cannot reopen or overwrite new actor state',async()=>{
+ let resolve;const h=ui({create:()=>new Promise(r=>{resolve=r})});await flush();h.button('+ 新建账号').props.onClick();h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});h.all().find(n=>n.props.id==='admin-new-username').props.onChange({target:{value:'synthetic-new'}});h.all().find(n=>n.props.id==='admin-new-password').props.onChange({target:{value:'synthetic-password'}});
+ const pending=nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});h.actor({...manager,data_scope:IN});h.draw();assert(!h.dialog());assert(!JSON.stringify(h.states).includes('synthetic-password'));resolve({account:{username:'synthetic-new',role_name:'Old role'}});await pending;assert(!h.dialog());assert.doesNotMatch(text(h.draw()),/已建立，角色/);
 });

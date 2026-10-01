@@ -24,7 +24,7 @@ const ADMIN_MANAGEMENT: ManagementPermissions = { manage_viewers: true, refresh_
 const VIEWER_MANAGEMENT: ManagementPermissions = { manage_viewers: false, refresh_data: false, view_audit: false };
 
 type DataScope = { mode: "all" | "selected"; countries: string[] };
-const DATA_GROUPS = new Set(["BR_PANGHU", "BR", "IN", "PK", "ID", "VN", "PH", "MY", "MM", "NG", "CO", "MX", "CL", "SA", "BR_NATIVE", "USDT"]);
+const DATA_GROUPS = new Set(["BR_PANGHU", "BR", "IN", "PK", "ID", "VN", "PH", "MY", "MM", "NG", "CO", "MX", "CL", "SA", "BR_NATIVE", "USDT", "HK_TEAM", "RED_CRAB"]);
 class DataScopeError extends Error {
   constructor(message: string, readonly status: number, readonly code = "request_denied") { super(message); }
 }
@@ -195,6 +195,7 @@ Deno.serve(async (request) => {
       const { data, error } = await admin.rpc("application_session_check", { p_user_id: userId, p_session_id: sessionId, p_surface: "dashboard" });
       if (error) throw new DataScopeError("登录验证暂时不可用", 503, "auth_unavailable");
       if (data?.allowed !== true) throw new DataScopeError("登录会话已失效，请重新登录。", 403, "application_session_denied");
+      return sessionId;
     }
     async function revokeSessions(userId: string) {
       const { error } = await admin.rpc("application_revoke_user_sessions", { p_user_id: userId, p_surface: "dashboard" });
@@ -221,6 +222,7 @@ Deno.serve(async (request) => {
       const required: Record<string, string[]> = {
         "list-users": ["access.view"],
         "create-account": ["access.view", "access.create"], "create-viewer": ["access.view", "access.create"],
+        "create-role-account": ["access.view", "access.create", "access.edit"],
         "update-account": ["access.view", "access.edit"], "update-viewer": ["access.view", "access.edit"],
         "reset-password": ["access.view", "access.reset_password"], "delete-account": ["access.view", "access.delete"],
         "list-audit": ["operation_logs.view"],
@@ -244,7 +246,7 @@ Deno.serve(async (request) => {
       const { data: userData, error: userError } = await admin.auth.getUser(token);
       const caller = userData?.user;
       if (userError || !caller) throw new DataScopeError("登录状态无效", 401);
-      await requireApprovedSession(token, caller.id);
+      const sessionId = await requireApprovedSession(token, caller.id);
 
       const { data: callerProfile, error: profileError } = await admin
         .from("dashboard_profiles")
@@ -255,7 +257,7 @@ Deno.serve(async (request) => {
       if (!callerProfile?.active || !["owner", "admin", "viewer"].includes(String(callerProfile.role || ""))) throw new DataScopeError("只有获授权账号可以执行这个操作", 403);
       const roleAccess = await requireAssignedRole(token, callerProfile.role);
       if (callerProfile.role === "viewer" && roleAccess.mode !== "assigned") throw new DataScopeError("当前账号没有管理权限", 403);
-      return { token, caller, roleAccess, profile: callerProfile, actor: { id: caller.id, username: String(callerProfile.username || "admin") } };
+      return { token, sessionId, caller, roleAccess, profile: callerProfile, actor: { id: caller.id, username: String(callerProfile.username || "admin") } };
     }
 
     async function requireTargetAction(ctx: Awaited<ReturnType<typeof requireManager>>, targetId: string, permission: string) {
@@ -339,87 +341,68 @@ Deno.serve(async (request) => {
       return json(request, { ok: false, code: "operation_retired", message: "此运维入口已关闭，请使用总管理员账号管理功能" }, 410);
     }
 
-    if (action === "create-account") {
-      const ctx = await requireManager();
-      if (ctx.roleAccess.mode === "assigned") return json(request, {ok:false, message:"请由总管理员建立账号，再在角色页分配获授权角色"}, 403);
-      const username = normalizeUsername(body?.username);
-      const password = validatePassword(body?.password);
-      const requestedRole = String(body?.role || "viewer") === "admin" ? "admin" : "viewer";
-      if (requestedRole === "admin" && ctx.profile.role !== "owner") {
-        return json(request, { ok: false, message: "只有总管理员可以建立小管理员" }, 403);
-      }
-      if (requestedRole === "viewer" && ctx.profile.role !== "owner") {
-        const management = sanitizeManagementPermissions(ctx.profile.management_permissions);
-        if (ctx.roleAccess.mode !== "assigned" && !management.manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
-      }
-
-      const permissions = requestedRole === "admin" ? { ...ADMIN_PERMISSIONS, ...sanitizePermissions(body?.permissions) } : sanitizePermissions(body?.permissions);
-      const managementPermissions = requestedRole === "admin" ? sanitizeManagementPermissions(body?.management_permissions) : VIEWER_MANAGEMENT;
-      const dataScope = requestedDataScope(body, ctx.profile, true)!;
-      const { data: exists } = await admin.from("dashboard_profiles").select("auth_user_id").eq("username", username).maybeSingle();
-      if (exists) return json(request, { ok: false, message: "这个账号已经存在" }, 409);
-
-      const { data: created, error: createError } = await admin.auth.admin.createUser({
-        email: usernameEmail(username),
-        password,
-        email_confirm: true,
-        user_metadata: { username, dashboard_role: requestedRole },
-      });
-      if (createError || !created.user) throw new Error(`建立账号失败：${createError?.message || "unknown"}`);
-
-      const { error: insertError } = await admin.from("dashboard_profiles").insert({
-        auth_user_id: created.user.id,
-        username,
-        role: requestedRole,
-        active: true,
-        permissions,
-        management_permissions: managementPermissions,
-        data_scope: dataScope,
-        created_by: ctx.caller.id,
-      });
-      if (insertError) {
-        await admin.auth.admin.deleteUser(created.user.id).catch(() => undefined);
-        throw new Error(`写入账号权限失败：${insertError.message}`);
-      }
-      await audit(ctx.actor, requestedRole === "admin" ? "create_admin" : "create_viewer", username, { permissions, management_permissions: managementPermissions, data_scope: dataScope });
-      return json(request, { ok: true, username, role: requestedRole, permissions, management_permissions: managementPermissions, data_scope: dataScope, message: requestedRole === "admin" ? "小管理员已建立" : "查看账号已建立" });
+    if (["create-account", "create-viewer"].includes(action)) {
+      await requireManager();
+      return json(request, {ok:false, code:"role_required", message:"旧版模块创建入口已关闭，请在新建后台账号中明确选择新版角色与数据范围。"}, 410);
     }
 
-    if (action === "create-viewer") {
-      const ctx = await requireCapability("manage_viewers");
-      if (ctx.roleAccess.mode === "assigned") return json(request, {ok:false, message:"请由总管理员建立账号，再在角色页分配获授权角色"}, 403);
-      const { caller, actor, profile: callerProfile } = ctx;
-      const username = normalizeUsername(body?.username);
-      const password = validatePassword(body?.password);
-      const permissions = sanitizePermissions(body?.permissions);
-      const dataScope = requestedDataScope(body, callerProfile, true)!;
-
-      const { data: exists } = await admin.from("dashboard_profiles").select("auth_user_id").eq("username", username).maybeSingle();
-      if (exists) return json(request, { ok: false, message: "这个账号已经存在" }, 409);
-
-      const { data: created, error: createError } = await admin.auth.admin.createUser({
-        email: usernameEmail(username),
-        password,
-        email_confirm: true,
-        user_metadata: { username, dashboard_role: "viewer" },
-      });
-      if (createError || !created.user) throw new Error(`建立查看账号失败：${createError?.message || "unknown"}`);
-
-      const { error: insertError } = await admin.from("dashboard_profiles").insert({
-        auth_user_id: created.user.id,
-        username,
-        role: "viewer",
-        active: true,
-        permissions,
-        data_scope: dataScope,
-        created_by: caller.id,
-      });
-      if (insertError) {
-        await admin.auth.admin.deleteUser(created.user.id).catch(() => undefined);
-        throw new Error(`写入查看权限失败：${insertError.message}`);
+    if (action === "create-role-account") {
+      const ctx = await requireManager();
+      if (ctx.profile.role !== "owner" && ctx.roleAccess.mode !== "assigned") throw new DataScopeError("请先配置获授权的新版角色，再创建后台账号。", 403, "role_required");
+      const expectedKeys = ["action","username","password","role_id","role_version","data_scope"];
+      if (Object.keys(body).length !== expectedKeys.length || expectedKeys.some(key => !Object.prototype.hasOwnProperty.call(body,key))
+        || typeof body.username !== "string" || typeof body.password !== "string"
+        || typeof body.role_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.role_id)
+        || !Number.isSafeInteger(body.role_version) || body.role_version < 1) throw new DataScopeError("请选择新版角色、数据范围并检查账号资料。", 400, "invalid_request");
+      const roleId = body.role_id.toLowerCase();
+      const username = normalizeUsername(body.username), password = validatePassword(body.password);
+      const dataScope = requestedDataScope(body,ctx.profile,true)!;
+      const creationId = crypto.randomUUID();
+      const requestTicket = async (ticketRequest: Record<string,unknown>) => {
+        const {data,error} = await admin.rpc("dashboard_create_role_account", {p_actor:ctx.caller.id,p_session_id:ctx.sessionId,p_request:ticketRequest});
+        if (error) throw new DataScopeError("角色账号配置未完成，请刷新角色与账号列表核对后重试。", error.code === "42501" ? 403 : error.code === "23505" || error.code === "40001" ? 409 : error.code === "22023" ? 400 : 503, "role_account_not_confirmed");
+        return data;
+      };
+      const sameScope = (value:unknown) => {
+        try { return JSON.stringify(parseDataScope(value)) === JSON.stringify(dataScope); } catch { return false; }
+      };
+      const prepared = await requestTicket({operation:"prepare",creationId,username,roleId,expectedRoleVersion:body.role_version,dataScope});
+      if (!prepared || prepared.ok !== true || prepared.status !== "prepared" || prepared.creation_id !== creationId
+        || prepared.username !== username || prepared.role_id !== roleId || prepared.role_version !== body.role_version || !sameScope(prepared.data_scope))
+        throw new DataScopeError("账号创建验证响应不完整，尚未创建账号，请重新查询角色。",503,"role_account_response_invalid");
+      let created:any, createError:any;
+      try {
+        const authResult = await admin.auth.admin.createUser({email:usernameEmail(username),password,email_confirm:true,
+          user_metadata:{username,dashboard_role:"viewer",dashboard_creation_id:creationId}});
+        created = authResult.data; createError = authResult.error;
+      } catch { throw new DataScopeError("账号创建结果待核对，请刷新角色与账号列表确认；请勿重复创建。",503,"auth_creation_not_confirmed"); }
+      // Auth failures may return an existing user. Never attach or delete that ID.
+      if (createError || !created?.user || typeof created.user.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(created.user.id)
+        || created.user.id === ctx.caller.id) throw new DataScopeError(createError?.status === 422 ? "账号未创建，请检查账号是否已存在后重试。" : "账号创建结果待核对，请刷新角色与账号列表确认；请勿重复创建。",createError?.status === 422 ? 409 : 503,"auth_creation_not_confirmed");
+      const accountId = created.user.id;
+      const completedAccount = (value:any) => value && value.ok === true && value.status === "committed" && value.creation_id === creationId
+        && value.account && value.account.auth_user_id === accountId && value.account.username === username && value.account.role === "viewer" && value.account.active === true
+        && value.account.role_id === roleId && value.account.role_version === body.role_version && value.account.assignment_version === 1
+        && typeof value.account.role_name === "string" && value.account.role_name.trim().length > 0 && value.account.role_name.length <= 80 && sameScope(value.account.data_scope);
+      let completed:any;
+      try {
+        completed = await requestTicket({operation:"commit",creationId,accountId});
+        if (!completedAccount(completed)) throw new DataScopeError("账号配置响应不完整",503);
+      } catch {
+        // Abort takes the same database row lock as commit. A lost successful
+        // commit is recovered; only a confirmed uncommitted fresh Auth ID is deleted.
+        let recovery:any;
+        try { recovery = await requestTicket({operation:"abort",creationId,accountId}); } catch { /* result remains unknown */ }
+        if (completedAccount(recovery)) completed = recovery;
+        else if (recovery?.ok === true && recovery.status === "aborted" && recovery.creation_id === creationId && recovery.cleanup_user_id === accountId) {
+          try {
+            const cleanup = await admin.auth.admin.deleteUser(accountId);
+            if (cleanup.error) throw cleanup.error;
+          } catch { throw new DataScopeError("新账号尚未完成配置，清理结果待核对，请联系总管理员核对该账号；请勿重复创建。",503,"role_account_cleanup_pending"); }
+          throw new DataScopeError("新版角色配置未完成，新建账号已撤销。请刷新角色与账号列表后重试。",503,"role_account_aborted");
+        } else throw new DataScopeError("账号创建结果待核对，请刷新角色与账号列表确认；请勿重复创建。",503,"role_account_result_unknown");
       }
-      await audit(actor, "create_viewer", username, { permissions, data_scope: dataScope });
-      return json(request, { ok: true, username, role: "viewer", permissions, data_scope: dataScope, message: "只读账号已建立" });
+      return json(request,{ok:true,account:completed.account,message:"后台账号已建立，并同步指定新版角色与数据范围。"});
     }
 
     if (action === "list-users") {

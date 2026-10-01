@@ -570,7 +570,7 @@ async function callAdminFunction(session: DashboardSession, body: Record<string,
       Authorization: `Bearer ${session.access_token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(body), redirect: "error", credentials: "omit", cache: "no-store",
   }, {
     timeoutMessage: isAccessCheck
       ? "账号密码和权限已验证，但登录安全检查超时，请稍后重试"
@@ -604,6 +604,49 @@ export async function createDashboardAccount(
     management_permissions: managementPermissions || DEFAULT_ADMIN_MANAGEMENT_PERMISSIONS,
     ...(dataScope === undefined ? {} : { data_scope: dataScope }),
   });
+}
+
+export type DashboardCreatedRoleAccount = {
+  auth_user_id: string; username: string; role: "viewer"; active: true;
+  role_id: string; role_name: string; role_version: number; assignment_version: 1; data_scope: DashboardDataScope;
+};
+export async function createDashboardRoleAccount(
+  session: DashboardSession, usernameInput: string, password: string,
+  selectedRole: {id:string;version:number}, dataScope: DashboardDataScope,
+): Promise<{ok:true;account:DashboardCreatedRoleAccount}> {
+  const username = validateDashboardUsername(usernameInput);
+  const uuid = (value:unknown):value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+  if (typeof password !== "string" || password.length < 8 || password.length > 128) throw new Error("密码应为 8-128 位");
+  if (!selectedRole || !uuid(selectedRole.id) || !Number.isSafeInteger(selectedRole.version) || selectedRole.version < 1) throw new Error("请明确选择已启用的新版角色");
+  const validScope = (value:unknown):value is DashboardDataScope => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const raw = value as DashboardDataScope;
+    return Object.keys(raw).sort().join(",") === "countries,mode" && Array.isArray(raw.countries)
+      && raw.countries.every(code => ["BR_PANGHU","BR","IN","PK","ID","VN","PH","MY","MM","NG","CO","MX","CL","SA","BR_NATIVE","USDT","HK_TEAM","RED_CRAB"].includes(code)) && new Set(raw.countries).size === raw.countries.length
+      && (raw.mode === "all" && !raw.countries.length || raw.mode === "selected" && raw.countries.length > 0);
+  };
+  if (!validScope(dataScope)) throw new Error("请明确选择有效的数据范围");
+  const roleId = selectedRole.id.toLowerCase();
+  const scope = {mode:dataScope.mode,countries:[...dataScope.countries].sort()} as DashboardDataScope;
+  const actor = session.user.id, started = readSavedDashboardSession();
+  const guard = () => {const saved = readSavedDashboardSession(); if (saved && saved.user.id !== actor || started && !saved) throw new DashboardHttpError("当前登录账号已改变，请重新打开新建账号。",403,"session_changed");};
+  guard(); const current = await ensureDashboardSession(session); guard();
+  if (current.user.id !== actor) throw new DashboardHttpError("当前登录账号已改变，请重新打开新建账号。",403,"session_changed");
+  let result:any;
+  try { result = await callAdminFunction(current,{action:"create-role-account",username,password,role_id:roleId,role_version:selectedRole.version,data_scope:scope}); }
+  catch (error) {
+    guard();
+    if (error instanceof DashboardHttpError && ["admin_timeout","admin_network_error"].includes(error.code)) throw new DashboardHttpError("账号创建结果待核对，请刷新账号列表确认；请勿重复创建。",503,"role_account_result_unknown");
+    throw error;
+  }
+  guard(); const account = result?.account;
+  if (result?.ok !== true || !account || !uuid(account.auth_user_id) || account.auth_user_id === actor || account.username !== username
+    || account.role !== "viewer" || account.active !== true || account.role_id !== roleId || account.role_version !== selectedRole.version || account.assignment_version !== 1
+    || typeof account.role_name !== "string" || !account.role_name.trim() || account.role_name.length > 80 || !validScope(account.data_scope)
+    || JSON.stringify({...account.data_scope,countries:[...account.data_scope.countries].sort()}) !== JSON.stringify(scope))
+    throw new DashboardHttpError("账号创建结果待核对，请刷新角色与账号列表确认；请勿重复创建。",503,"role_account_response_invalid");
+  return {ok:true,account:{auth_user_id:account.auth_user_id,username,role:"viewer",active:true,role_id:account.role_id,role_name:account.role_name,
+    role_version:account.role_version,assignment_version:1,data_scope:scope}};
 }
 
 export async function createViewerAccount(session: DashboardSession, usernameInput: string, password: string, permissions: DashboardPermissions) {

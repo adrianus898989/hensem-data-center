@@ -69,30 +69,10 @@ async function edge(action, patch={}, options={}) {
   return {status:response.status,body:await response.json(),writes,authCalls,audits,reads,target};
 }
 
-test('legacy owner/admin omitted creation scope stays all; limited admin omission inherits its scope on both entrypoints',async()=>{
-  for(const action of ['create-account','create-viewer'])for(const [options,expected] of [[{role:'owner'},ALL],[{},ALL],[{caller:{data_scope:PANGHU}},PANGHU]]){
-    const result=await edge(action,{},options);assert.equal(result.status,200);
-    assert.deepEqual(result.writes[0].data_scope,expected);assert.deepEqual(result.body.data_scope,expected);
-    assert.deepEqual(result.audits[0].details.data_scope,expected);
-  }
-});
-test('owner can explicitly create admin or viewer limited to Panghu without changing module choices',async()=>{
-  for(const role of ['viewer','admin']){
-    const permissions={...full,work_orders:false};
-    const result=await edge('create-account',{role,data_scope:PANGHU,permissions},{role:'owner'});
-    assert.equal(result.status,200);assert.deepEqual(result.writes[0].data_scope,PANGHU);assert.deepEqual(result.writes[0].permissions,permissions);
-  }
-});
-test('new invalid scopes reject before auth creation; never silently turn into all',async()=>{
-  for(const action of ['create-account','create-viewer'])for(const data_scope of [null,{},[],{mode:'all'}, {mode:'all',countries:['BR']},{mode:'selected',countries:[]},{mode:'selected',countries:['bad']},{mode:'selected',countries:[1]},{...PANGHU,extra:true}]){
-    const result=await edge(action,{data_scope});assert.equal(result.status,400);assert.deepEqual(result.authCalls,[]);assert.deepEqual(result.writes,[]);
-  }
-});
-test('limited admin cannot create all/outside viewers, admin peers, or trust forged user metadata',async()=>{
-  for(const action of ['create-account','create-viewer'])for(const data_scope of [ALL,VN,BOTH]){
-    const result=await edge(action,{data_scope},{caller:{data_scope:PANGHU}});assert.equal(result.status,403);assert.deepEqual(result.authCalls,[]);
-  }
-  assert.equal((await edge('create-account',{role:'admin',data_scope:PANGHU},{caller:{data_scope:PANGHU}})).status,403);
+test('obsolete backend module creation is retired without Auth/profile mutation for owner or legacy admin',async()=>{
+ for(const action of ['create-account','create-viewer'])for(const options of [{role:'owner'},{},{caller:{data_scope:PANGHU}}])for(const data_scope of [undefined,null,ALL,PANGHU,VN]){
+  const result=await edge(action,{role:'admin',data_scope,permissions:full,management_permissions:management},options);assert.equal(result.status,410);assert.equal(result.body.code,'role_required');assert.deepEqual(result.authCalls,[]);assert.deepEqual(result.writes,[]);assert.match(result.body.message,/新版角色/);
+ }
 });
 test('scope-only update leaves permissions, active, role and management untouched and uses timestamp CAS',async()=>{
   for(const action of ['update-account','update-viewer']){
@@ -154,7 +134,7 @@ test('global audit/sync/history/security operations deny limited admins without 
 });
 test('missing/inactive/unprivileged actor cannot create or modify accounts',async()=>{
   for(const action of ['create-account','create-viewer','update-account','update-viewer','reset-password','delete-account'])for(const options of [{noToken:true},{invalidToken:true},{role:'viewer'},{caller:{active:false}},{caller:{management_permissions:{manage_viewers:false}}}]){
-    const result=await edge(action,{data_scope:PANGHU},options);assert([401,403].includes(result.status));assert.deepEqual(result.writes,[]);assert.deepEqual(result.authCalls,[]);
+    const result=await edge(action,{data_scope:PANGHU},options);assert((action.startsWith('create')?[401,403,410]:[401,403]).includes(result.status));assert.deepEqual(result.writes,[]);assert.deepEqual(result.authCalls,[]);
   }
 });
 test('UI catalog scope guard matches Edge; disabled all target does not become an empty subset',()=>{
@@ -229,12 +209,12 @@ test('actual create handler refuses empty/outside draft and submits Panghu only 
   const scope=loadTs(path.join(root,'src/lib/dashboardDataScope.ts'));
   for(const [newDataScope,expected] of [[{mode:'selected',countries:[]},0],[VN,0],[PANGHU,1]]){
     const calls=[],messages=[];const actor=profile('manager','admin',{data_scope:PANGHU});
-    const context={canUseAccountAction:()=>true,canManageUsers:true,createBusy:false,profile:actor,newDataScope,session:{},newUsername:'newuser',newPassword:'fixture-password',newRole:'viewer',newPermissions:full,newManagement:management,canViewAudit:false,
-      setCreateBusy:()=>{},setMessage:text=>messages.push(text),setNewUsername:()=>{},setNewPassword:()=>{},resetCreateRole:()=>{},setCreateOpen:()=>{},setNewDataScope:()=>{},loadUsers:async()=>{},loadAudit:async()=>{},roleLabel:()=> '查看账号',
-      ...scope,createDashboardAccount:async(...args)=>{calls.push(args);return {role:'viewer',username:'newuser'};}};
+    const context={canCreateRoleAccount:true,creationRoles:[{id:'role-id',version:7}],newRoleId:'role-id',directoryScope:'fixture',directoryRequest:{current:{scope:'fixture'}},createBusy:false,profile:actor,newDataScope,session:{},newUsername:'newuser',newPassword:'fixture-password',newRole:'viewer',newPermissions:full,newManagement:management,canViewAudit:false,
+      setCreateBusy:()=>{},setMessage:text=>messages.push(text),setNewUsername:()=>{},setNewPassword:()=>{},setNewRoleId:()=>{},setCreateOpen:()=>{},setNewDataScope:()=>{},loadUsers:async()=>{},loadAudit:async()=>{},roleLabel:()=> '查看账号',
+      ...scope,createDashboardRoleAccount:async(...args)=>{calls.push(args);return {account:{username:'newuser',role_name:'Empty role'}};}};
     const submit=Function(...Object.keys(context),output+'\nreturn submitCreate;')(...Object.values(context));
     assert.deepEqual(calls,[]);await submit({preventDefault:()=>{}});assert.equal(calls.length,expected);
-    if(expected){assert.deepEqual(calls[0][6],PANGHU);assert.deepEqual(calls[0][4],full);}else assert(messages.length);
+    if(expected){assert.deepEqual(calls[0][4],PANGHU);assert.deepEqual(calls[0][3],{id:'role-id',version:7});}else assert(messages.length);
   }
 });
 
@@ -251,8 +231,8 @@ test('assigned account permissions gate each action including legacy viewer alia
       assert.equal(result.reads.length,1,'only the caller profile is read before role denial');
     }
     const result=await edge(action,{}, {roleAccess:assignedRole(keys)});
-    assert.equal(result.status,action.startsWith('create')?403:200,action+': matching assigned rights');
-    if(action.startsWith('create')){assert.deepEqual(result.authCalls,[]);assert.match(result.body.message,/总管理员建立账号/);}
+    assert.equal(result.status,action.startsWith('create')?410:200,action+': matching assigned rights');
+    if(action.startsWith('create')){assert.deepEqual(result.authCalls,[]);assert.match(result.body.message,/新版角色/);}
   }
 });
 test('status changes require both edit and status, including legacy update-viewer alias',async()=>{
