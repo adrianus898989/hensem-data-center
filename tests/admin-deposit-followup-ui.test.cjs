@@ -11,7 +11,7 @@ function harness(response={rows:[],total:0,summary:{}},options={}){
  page=root.HensemLiveDepositIssues.create({L,E:escape,C:v=>String(v??0),N:v=>Number(v).toFixed(2),R:(a,b)=>b?String(a/b*100):'—',formatTime:v=>v,
   metric:(title,value)=>'<div>'+title+':'+value+'</div>',box:(title,body)=>'<section><h2>'+title+'</h2>'+body+'</section>',pager:(total,p,size)=>'<footer data-total="'+total+'">'+p+'/'+size+'</footer>',
   table:(headers,rows,classes)=>'<div class="'+classes+'"><table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>',
-  openDrawer:(title,body)=>{drawer=title+body},page:()=>route,render:()=>{renders++;html=page.render()},request:async q=>{calls.push({...q});return handler(q)}});
+  openDrawer:options.drawer===false?undefined:(title,body)=>{drawer=title+body},page:()=>route,render:()=>{renders++;html=page.render()},request:async q=>{calls.push({...q});return handler(q)}});
  root.setPage=value=>{route=value;void page.load(true)};
  return {L,root,page,calls,html:()=>html,drawer:()=>drawer,renders:()=>renders,setHandler:next=>{handler=next},setNow:value=>{instant=value}};
 }
@@ -50,7 +50,7 @@ test('default opens employee details with all stored business fields and distinc
  for(const label of ['员工跟进明细','凭证日期','距今天数','UPI ID','KYC-UPI ID','原表员工编号','首次录入员工','最后跟进员工','UTR 核验','KYC 核验','员工跟进明细'])assert(h.html().includes(label),label);
  for(const value of ['00001234','007','2026-09-25','synthetic@upi.invalid','***@bank.invalid','Synthetic creator','Synthetic follower','独立前端记录','0.00'])assert(h.html().includes(value),value);
  assert.match(h.html(),/gid=42/);assert.doesNotMatch(h.html(),/href="[^"]*synthetic-case/);assert.match(h.html(),/&lt;script&gt;private&lt;\/script&gt;/);assert.doesNotMatch(h.html(),/<script>/);
- assert.match(h.html(),/表格：已入款/);assert.match(h.html(),/不代表当前订单已入款/);assert.doesNotMatch(h.html(),/三方未入款统计/);
+ assert.match(h.html(),/表格：已入款/);assert.doesNotMatch(h.html(),/成功到其他平台、账号或订单/);h.root.depositIssuesMethod();assert.match(h.drawer(),/成功到其他平台、账号或订单，不计为本订单入款/);assert.doesNotMatch(h.html(),/三方未入款统计/);
 });
 
 test('column filters combine in one bounded request, preserve zero and clear independently',async()=>{
@@ -71,7 +71,7 @@ test('invalid amount ranges do not contact transport; reset clears every column 
 test('derived sheet results are labelled formula markers and never use portal-only filters',async()=>{
  const h=harness({rows:[],total:0,summary:{},providerSummary:[],dailySummary:[]});h.root.depositIssuesSet('staffCode','007');h.root.depositIssuesSet('sourceKind','portal');h.root.depositIssuesSource('results');await settle();
  assert.equal(h.calls.at(-1).action,'depositStatistics');assert.equal(h.calls.at(-1).sourceKind,undefined);assert.equal(h.calls.at(-1).staffCode,undefined);assert.equal(h.L.depositIssuesSection,'summary');
- assert.match(h.html(),/表格标记不代表已核实实际到账/);assert.match(h.html(),/汇总/);assert.match(h.html(),/UPI核对/);assert.match(h.html(),/三方查看/);assert.match(h.html(),/每日汇总/);
+ assert.doesNotMatch(h.html(),/表格标记不代表已核实实际到账/);h.root.depositIssuesMethod();assert.match(h.drawer(),/表格标记不代表已核实实际到账/);assert.match(h.html(),/汇总/);assert.match(h.html(),/UPI核对/);assert.match(h.html(),/三方查看/);assert.match(h.html(),/每日汇总/);
  h.root.depositIssuesSource('entries');await settle();assert.equal(h.L.depositIssuesSection,'details');assert.equal(h.calls.at(-1).staffCode,'007');
 });
 
@@ -82,7 +82,14 @@ test('late responses from the previous source cannot replace current entries',as
 });
 
 test('statistics keep other-order and other-provider classifications independent from the raw sheet mark',async()=>{
- const h=harness({rows:[{platform:'SYNTHETIC',orderNumber:'RC20260926SYNTHETIC',amount:100,status:'已入款',confirmation:'入其他订单',statisticsStatus:'other_order'}],total:1,summary:{count:1,otherOrderCount:1,otherOrderAmount:100,receivedCount:0,unreceivedCount:0}});h.root.depositIssuesSource('results');await settle();assert.match(h.html(),/入其他订单:1/);assert.match(h.html(),/本订单入款标记:0/);assert.match(h.html(),/不计本订单入款或未入款/);h.root.depositIssuesSection('details');await h.page.load(true);await settle();assert.match(h.html(),/统计归类/);assert.match(h.html(),/入其他订单/);assert.match(h.html(),/已入款/);
+ const h=harness({rows:[{platform:'SYNTHETIC',orderNumber:'RC20260926SYNTHETIC',amount:100,status:'已入款',confirmation:'入其他订单',statisticsStatus:'other_order'}],total:1,summary:{count:1,otherOrderCount:1,otherOrderAmount:100,receivedCount:0,unreceivedCount:0}});h.root.depositIssuesSource('results');await settle();assert.match(h.html(),/入其他订单:1/);assert.match(h.html(),/本订单入款标记:0/);h.root.depositIssuesMethod();assert.match(h.drawer(),/入其他订单、转其他三方单独统计/);h.root.depositIssuesSection('details');await h.page.load(true);await settle();assert.match(h.html(),/统计归类/);assert.match(h.html(),/入其他订单/);assert.match(h.html(),/已入款/);
+});
+
+test('method explanation is opened on demand without a read and remains compatible with contexts lacking a drawer',async()=>{
+ const h=harness({rows:[],total:0,updatedAt:'2026-10-01T00:00:00Z',summary:{}},{page:'deposit_statistics'});await h.page.load();
+ assert.match(h.html(),/>统计口径<\/button>/);assert.match(h.html(),/同步于 2026-10-01T00:00:00Z/);assert.doesNotMatch(h.html(),/汇总、三方和每日视图来自/);
+ const reads=h.calls.length;h.root.depositIssuesMethod();assert.equal(h.calls.length,reads);assert.match(h.drawer(),/汇总、三方和每日视图来自/);
+ const old=harness(undefined,{drawer:false});old.page.render();assert.doesNotThrow(()=>old.root.depositIssuesMethod());assert.equal(old.calls.length,0);
 });
 
 

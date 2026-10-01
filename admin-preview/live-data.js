@@ -236,10 +236,11 @@
  function platformsView(){const rows=L.results.flatMap(r=>(r.summary||[]).map(x=>({...x,platform:r.platform}))).sort((a,b)=>b.all_count-a.all_count),headers=['平台','来源','授权分组',...businessHeaders,'源数据更新时间'],columns=[{value:r=>r.platform.name||null,ascending:true},{value:r=>r.platform.source||null,ascending:true},{value:r=>r.platform.scopeGroup||null,ascending:true},...loadedBusinessColumns(),{value:r=>r.latest_synced_at?loadedSorting.knownNumber(Date.parse(r.latest_synced_at)):null}];return '<div class="grid equal live-paired-dimensions">'+visibleDirections().map(d=>{const subset=rows.filter(r=>r.direction===d),sorted=sortLoadedTable('platforms-'+d,headers,subset,columns);return pairedTable('平台经营汇总 · '+directionName(d),sorted.headers,sorted.rows.map(r=>['<button class="link" onclick="liveChoosePlatform(\''+E(r.platform.id)+'\')">'+E(r.platform.name)+'</button>',E(r.platform.source),E(r.platform.scopeGroup||'未绑定'),...businessCells(r),E(formatTime(r.latest_synced_at,r.platform.timezone))]),'正式数据范围由账号权限控制；'+directionName(d)+'无数据时仍保留空表。','local',[businessFooter(directionName(d)+'汇总',subset,2,1,d)]);}).join('')+'</div>'}
  function chartCoverage(previous=false){
   const expected=(L.queryPlatforms||[]).length?L.queryPlatforms:selected(),ids=new Set(expected.map(p=>p.id));
-  const results=(previous?L.comparisonResults:L.results)||[],full=L.loadedView==='full'||(!previous&&L.overviewSections?.done>0&&L.results===L.overviewSections.results);
+  const results=(previous?L.comparisonResults:L.results)||[],currentFull=!previous&&(L.loadedView==='full'||L.overviewSections?.done>0&&L.results===L.overviewSections.results);
+  const full=result=>result._aggregateView==='full'||result._aggregateView===undefined&&currentFull;
   // Provider summaries contain empty hourly arrays without reading that dimension.
-  const read=results.filter(r=>(!ids.size||ids.has(r.platform?.id))&&Array.isArray(r.groups?.hourly)&&(full||r.groups.hourly.length>0));
-  const loaded=new Set(read.map(r=>r.platform?.id)).size,total=ids.size,complete=full&&total>0&&loaded===total;
+  const read=results.filter(r=>(!ids.size||ids.has(r.platform?.id))&&Array.isArray(r.groups?.hourly)&&(full(r)||r.groups.hourly.length>0));
+  const loaded=new Set(read.map(r=>r.platform?.id)).size,total=ids.size,complete=total>0&&loaded===total&&read.every(full);
   return {complete,label:(previous?'前期':'本期')+'已读 '+C(loaded)+' / '+C(total)+' 平台'+(complete?'':' · 来源不完整，仅已读范围')};
  }
  function inspectChart(svg,series,max,money,direction){
@@ -273,11 +274,11 @@
   const field=money?'all_amount':'all_count',success=money?'success_amount':'success_count';
   const current=groupRows('hourly').filter(r=>r.direction===direction),previous=L.comparisonResults.flatMap(r=>r.groups?.hourly||[]).filter(r=>r.direction===direction);
   const candidates=[{name:'本期全部',color:'#4e75ed',rows:current,key:field},{name:'本期成功',color:'#35a697',rows:current,key:success},...(L.comparisonStatus==='ready'?[{name:'前期全部',color:'#a2afc5',rows:previous,key:field,dash:true,previous:true}]:[])];
-  const lines=candidates.filter(line=>!(line.key===success&&successTimeUnavailable(direction))&&!line.rows.some(row=>row[line.key]===null));
-  for(const line of lines)line.points=Array.from({length:24},(_,hour)=>plus(line.rows.filter(r=>Number(r.hour)===hour))[line.key]);
+  const previousCoverage=chartCoverage(true),lines=candidates.filter(line=>!(line.key===success&&successTimeUnavailable(direction))&&!line.rows.some(row=>row[line.key]===null)&&(!line.previous||previousCoverage.complete||line.rows.length>0));
+  for(const line of lines)line.points=Array.from({length:24},(_,hour)=>{const rows=line.rows.filter(r=>Number(r.hour)===hour);return line.previous&&!previousCoverage.complete&&!rows.length?null:plus(rows)[line.key]});
   const max=Math.max(1,...lines.flatMap(l=>l.points).filter(v=>v!==null));let svg='<svg class="live-chart" viewBox="0 0 760 210" role="img" aria-label="'+(money?'每小时金额与前期对比':'每小时笔数与前期对比')+'">';
   for(let i=0;i<4;i++){const y=15+i*155/3;svg+='<line x1="43" x2="742" y1="'+y+'" y2="'+y+'"/><text x="36" y="'+(y+3)+'" text-anchor="end">'+C(Math.round(max*(3-i)/3))+'</text>'}
-  for(const line of lines){let segments=[];for(let i=0;i<24;i++){const v=line.points[i];if(v===null){if(segments.length)svg+='<polyline fill="none" stroke="'+line.color+'" stroke-width="2" points="'+segments.join(' ')+'"/>';segments=[];continue}segments.push((43+i*700/23)+','+(170-v/max*155))}if(segments.length)svg+='<polyline fill="none" stroke="'+line.color+'" stroke-width="2" '+(line.dash?'stroke-dasharray="5 4"':'')+' points="'+segments.join(' ')+'"/>'}
+  for(const line of lines){let segments=[];for(let i=0;i<24;i++){const v=line.points[i];if(v===null){if(segments.length)svg+='<polyline fill="none" stroke="'+line.color+'" stroke-width="2" '+(line.dash?'stroke-dasharray="5 4"':'')+' points="'+segments.join(' ')+'"/>';segments=[];continue}segments.push((43+i*700/23)+','+(170-v/max*155))}if(segments.length)svg+='<polyline fill="none" stroke="'+line.color+'" stroke-width="2" '+(line.dash?'stroke-dasharray="5 4"':'')+' points="'+segments.join(' ')+'"/>'}
   for(let i=0;i<24;i+=3)svg+='<text x="'+(43+i*700/23)+'" y="193" text-anchor="middle">'+String(i).padStart(2,'0')+':00</text>';
   return inspectChart(svg+'</svg>',candidates.map(line=>({...line,plotted:lines.includes(line)})),max,money,direction)+'<div class="live-legend">'+lines.map(l=>'<span style="color:'+l.color+'">● '+l.name+'</span>').join('')+'</div>';
  }
@@ -594,7 +595,7 @@
   const parts=[],boundedProviderRead=bounded||(state.page==='overview'&&request.view==='providers')||!!providerDirection(state.page)||isFlowPage(state.page),day=86400000;
   async function read(q,depth=0){
    if(serial!==L.serial)throw Error('查询已替换');
-   try{const cached=(allowCache||L.queryRetrying)&&q!==request?cachedAggregate(q):null;const result=cached||await window.hensemLiveRequest(q);if(serial!==L.serial)throw Error('查询已替换');const part={...result,startAt:q.startAt,endAt:q.endAt};parts.push(part);if(q!==request)rememberAggregate(q,part)}
+   try{const cached=(allowCache||L.queryRetrying)&&q!==request?cachedAggregate(q):null;const result=cached||await window.hensemLiveRequest(q);if(serial!==L.serial)throw Error('查询已替换');const part={...result,startAt:q.startAt,endAt:q.endAt,_aggregateView:cached?cached._aggregateView||aggregateView(q):aggregateView(q)};parts.push(part);if(q!==request)rememberAggregate(q,part)}
    catch(e){
     if(serial!==L.serial)throw Error('查询已替换');
     const from=Date.parse(q.startAt),to=Date.parse(q.endAt),width=to-from;
@@ -612,7 +613,7 @@
   // Keep all filters and the independent creation/success clocks unchanged.
   const largeAr=request.action==='aggregate'&&request.platformId==='5e952cbb-e42f-d6b1-a24a-a0d42d165df9'&&orderSource(platform)==='ar'&&['all','charge'].includes(request.direction);
   const initialWidth=largeAr?(request.view==='providers'?4:2)*3600000:boundedProviderRead?day:Infinity;
-  if(to-from>initialWidth){for(let cursor=from;cursor<to;cursor+=initialWidth)await read({...request,startAt:new Date(cursor).toISOString(),endAt:new Date(Math.min(cursor+initialWidth,to)).toISOString()})}else await read(request);const merged=mergeParts(parts);if(merged.platform)merged.platform=displayIdentity(merged.platform);if(serial===L.serial)rememberAggregate(request,merged);return merged;
+  if(to-from>initialWidth){for(let cursor=from;cursor<to;cursor+=initialWidth)await read({...request,startAt:new Date(cursor).toISOString(),endAt:new Date(Math.min(cursor+initialWidth,to)).toISOString()})}else await read(request);const merged=mergeParts(parts);merged._aggregateView=parts.every(part=>part._aggregateView==='full')?'full':'providers';if(merged.platform)merged.platform=displayIdentity(merged.platform);if(serial===L.serial)rememberAggregate(request,merged);return merged;
  }
  // Read deeper overview sections in place, only when visible or explicitly requested.
  // Keep their fresh source snapshot separate from the already displayed provider totals.

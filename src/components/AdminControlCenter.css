@@ -269,3 +269,8 @@
 .account-editor-dialog-body .admin-inline-reset{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .account-editor-dialog-body .admin-inline-reset input{min-width:240px;min-height:36px;padding:7px 10px;font-size:13px}
 .account-editor-dialog-body .admin-inline-reset button{min-height:34px;font-size:12px}
+
+.admin-account-role-create-row{display:flex;align-items:center;gap:8px;margin:6px 0 8px}
+.admin-account-role-create-row select{flex:1;min-width:0;min-height:36px;border:1px solid #d8e0ea;border-radius:7px;padding:0 10px;background:#fff;color:#294363;font:inherit}
+.admin-account-role-create-row button{flex-shrink:0;min-height:36px}
+.admin-account-create-panel .admin-account-edit-hint{margin:8px 0;color:#617d9e;font-size:12px;line-height:1.6}
