@@ -12,7 +12,7 @@ const viewer={auth_user_id:'viewer-fixture',role:'viewer',active:true,updated_at
 function browser(){
   const storage={};Object.defineProperties(storage,{getItem:{value:k=>storage[k]??null},setItem:{value:(k,v)=>storage[k]=v},removeItem:{value:k=>delete storage[k]}});
   const win=new EventTarget();win.localStorage=storage;win.location={origin:'https://dashboard.test'};
-  global.window=win;
+  global.window=win;process.env.NEXT_PUBLIC_SUPABASE_URL='https://business-api.fixture.supabase.co';process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY='fixture-publishable';
   global.CustomEvent=class extends Event {constructor(type,options){super(type);this.detail=options.detail;}};
   client.setDashboardDataViewer(null);return win;
 }
@@ -43,11 +43,11 @@ test('changing user or scope removes old business cache without clearing login/p
   client.setDashboardDataViewer({...viewer,updated_at:'c',data_scope:{mode:'selected',countries:['VN']}});
   assert.equal(client.readDashboardDataCache('volume',viewer),null);assert.equal(win.localStorage.getItem('login-preference'),'preserve');
 });
-test('business fetch validates fresh profile, sends only same-origin Bearer and uses no-store',async()=>{
+test('business fetch validates fresh profile, sends only dedicated Edge Bearer and uses no-store',async()=>{
   const win=browser();client.setDashboardDataViewer(viewer);
   const session={user:{id:viewer.auth_user_id},access_token:'synthetic-token'};
   auth.readSavedDashboardSession=()=>session;auth.ensureDashboardSession=async()=>session;auth.fetchDashboardProfile=async()=>viewer;
-  let called=0;global.fetch=async(url,init)=>{called++;assert.equal(url,'https://dashboard.test/api/work-orders');assert.equal(init.cache,'no-store');assert.equal(init.headers.get('Authorization'),'Bearer synthetic-token');return new Response('{}');};
+  let called=0;global.fetch=async(url,init)=>{called++;const target=new URL(url);assert.equal(target.origin,'https://business-api.fixture.supabase.co');assert.equal(target.pathname,'/functions/v1/dashboard-api');assert.equal(target.searchParams.get('_route'),'/api/work-orders');assert.equal(init.headers.get('apikey'),'fixture-publishable');assert.equal(init.cache,'no-store');assert.equal(init.headers.get('Authorization'),'Bearer synthetic-token');return new Response('{}');};
   await client.dashboardBusinessFetch('/api/work-orders');assert.equal(called,1);
   await assert.rejects(client.dashboardBusinessFetch('https://other.test/api/work-orders'),e=>client.isDashboardDataDenied(e));assert.equal(called,1);
   for(const status of [401,403]){global.fetch=async()=>new Response('{}',{status});await assert.rejects(client.dashboardBusinessFetch('/api/work-orders'),e=>client.isDashboardDataDenied(e));}

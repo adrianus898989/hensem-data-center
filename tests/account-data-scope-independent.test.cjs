@@ -22,7 +22,7 @@ function harness(initial=makeProfile()){
   const auth={DashboardHttpError,readSavedDashboardSession:()=>session,ensureDashboardSession:async value=>value,fetchDashboardProfile:async active=>{profileCalls.push(active);return profileHandler(active);}};
   const module={exports:{}};
   const compiled=ts.transpileModule(fs.readFileSync(path.join(root,'src/lib/dashboardDataClient.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
-  vm.runInNewContext(compiled,{module,exports:module.exports,require:key=>key.endsWith('dashboardAuthClient')?auth:scope,window,CustomEvent,URL,Headers,Response,Date,console,
+  vm.runInNewContext(compiled,{module,exports:module.exports,require:key=>key.endsWith('dashboardAuthClient')?auth:scope,window,CustomEvent,URL,Headers,Response,Date,console,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://business-api.fixture.supabase.co',NEXT_PUBLIC_SUPABASE_ANON_KEY:'fixture-publishable'}},
     fetch:async(url,init)=>{httpCalls.push({url,init});return httpHandler(url,init);}});
   const client=module.exports;
   // Exercise the real Gate apply function, not a permissive test-only substitute.
@@ -80,7 +80,7 @@ test('parallel module requests share profile verification and keep no-store plus
   const calls=['work-orders','auto-withdraw','customer-service'].map(name=>h.client.dashboardBusinessFetch(`/api/${name}`,{headers:{Authorization:'must-be-replaced'}}));
   await pause();assert.equal(h.profileCalls.length,1);pending.resolve(profile);await Promise.all(calls);
   assert.equal(h.httpCalls.length,3);
-  for(const {url,init} of h.httpCalls){assert.equal(new URL(url).origin,h.window.location.origin);assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');assert.equal(init.headers.get('Authorization'),`Bearer ${h.getSession().access_token}`);}
+  for(const {url,init} of h.httpCalls){assert.equal(new URL(url).origin,'https://business-api.fixture.supabase.co');assert.equal(new URL(url).pathname,'/functions/v1/dashboard-api');assert(new URL(url).searchParams.get('_route').startsWith('/api/'));assert.equal(init.headers.get('apikey'),'fixture-publishable');assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');assert.equal(init.headers.get('Authorization'),`Bearer ${h.getSession().access_token}`);}
 });
 test('external/non API requests never see session or profile calls; permission denial stays typed',async()=>{
   const h=harness();
@@ -101,7 +101,7 @@ test('cache is account/scope/version isolated, clears legacy data only, and perm
 });
 
 function componentLoader(name,dependencies){
-  const source=readComponent(name),component=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text===name.replace('.tsx',''));
+  const source=readComponent(name),component=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text===(name==='Dashboard.tsx'?'LegacyDashboard':name.replace('.tsx','')));
   const fn=component.body.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='loadData');assert(fn);
   const code=ts.transpileModule(fn.getText(source),{compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText;
   return Function(...Object.keys(dependencies),code+'\nreturn loadData;')(...Object.values(dependencies));
@@ -111,10 +111,11 @@ test('five actual component loadData denial branches clear results without touch
     const h=harness(),error=new h.auth.DashboardHttpError('fixture denied',403,'data_scope_denied'),set=[],refs={current:{rows:['old-data']}};
     const forbidden=()=>{throw Error('Denied request must not read/write cache or fallback');};
     const dependencies={...scope,profile:makeProfile('user-a',PANGHU),payload:{rows:['old-data']},ratePayload:{rates:[]},payloadRef:refs,
+      loadRequestSequenceRef:{current:0},queryContextRef:{current:'fixture'},loadFlightRef:{current:null},AbortController,AbortSignal,DOMException,THIRD_PARTY_VOLUME_QUERY_TIMEOUT_MS:1000,THIRD_PARTY_RATES_QUERY_TIMEOUT_MS:1000,ratePayloadUsable:()=>true,
       setState:()=>{},setError:()=>{},setPayload:value=>set.push(value),setRatePayload:()=>{},setVolumeSyncStatus:()=>{},setDataNotice:()=>{},
       monthlyApiUrl:()=>'/api/work-orders',thirdPartyVolumeApiUrl:()=>'/api/supabase-third-party-volume',thirdPartySyncStatusApiUrl:()=>'/api/status',
       ratePayloadFresh:()=>true,THIRD_PARTY_RATES_CACHE_KEY:'rate',THIRD_PARTY_VOLUME_CACHE_KEY:'volume',dashboardBusinessFetch:async()=>{throw error;},
-      isDashboardDataDenied:h.client.isDashboardDataDenied,readWorkLocalCache:forbidden,readAutoLocalCache:forbidden,readLocalCache:forbidden,
+      isDashboardDataDenied:h.client.isDashboardDataDenied,readWorkLocalCache:forbidden,readAutoLocalCache:forbidden,readLocalCache:key=>{assert.equal(key,'rate','only the current scoped rate may be checked before fetching');return null;},
       writeWorkLocalCache:forbidden,writeAutoLocalCache:forbidden,writeLocalCache:forbidden,attachClientFallbackMessage:forbidden};
     await componentLoader(name,dependencies)(false,'2026-09-10','2026-09-10');assert.deepEqual(set,[null],name);
     if(name!=='CustomerServiceDashboard.tsx'&&name!=='ThirdPartyRatesDashboard.tsx')assert.equal(refs.current,null,name);

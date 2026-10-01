@@ -17,7 +17,7 @@ function ui(options={}){
   if(name==='react')return react;
   if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
   if(name.endsWith('.css'))return{};
-  if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};
+  if(name==='./AccountLoginPolicy')return{default:function AccountLoginPolicy(){}};if(name==='./AccountIpAdmin')return{default:function AccountIpAdmin(){}};if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};
   if(name==='./AccountRoleEditor')return{default:function AccountRoleEditor(){}};
   if(name==='./AccountPermissionDialog')return{default:function AccountPermissionDialog(){}};
   if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async()=>{calls.push({action:'list'});return options.list?options.list():options.users||[owner,brazil,india]},listDashboardAudit:async()=>{calls.push({action:'audit'});return[]},createDashboardAccount:async(...args)=>{calls.push({action:'create',args:plain(args)});return options.create?options.create(...args):{role:args[3],username:args[1]}},updateDashboardAccount:async(...args)=>{calls.push({action:'update',args:plain(args)});if(options.update)return options.update(...args)},resetDashboardUserPassword:async(...args)=>calls.push({action:'password',args:plain(args)})};
@@ -41,7 +41,7 @@ test('data scope, role, status and text filters intersect locally; reset restore
  h.field('系统身份').props.onChange({target:{value:'viewer'}});assert.equal(h.rows().length,1);assert.match(text(h.rows()),/brazil-fixture/);
  h.field('状态').props.onChange({target:{value:'disabled'}});assert.equal(h.rows().length,0);
  h.field('搜索账号').props.onChange({target:{value:'no-match'}});h.button('重置筛选').props.onClick();assert.equal(h.rows().length,3);assert.equal(h.field('搜索账号').props.value,'');assert.equal(h.field('数据范围').props.value,'all');assert.equal(h.calls.length,reads);
- assert(!h.all().some(n=>n.type==='option'&&n.props.value==='locked'),'does not include unreleased login-security UI');
+ assert(h.all().some(n=>n.type==='option'&&n.props.value==='locked'&&n.props.disabled),'locked filter waits for confirmed security state');
 });
 
 test('create opens a modal; cancel clears credentials and scope draft with no writes',async()=>{
@@ -140,4 +140,13 @@ test('assigned status requires edit and status together; role changes invalidate
  h.button('账号设置',h.rows().find(row=>text(row).includes(brazil.username))).props.onClick();assert.equal(h.button('停用',h.dialog()).props.disabled,false);
  await h.button('停用',h.dialog()).props.onClick();assert.equal(h.calls.filter(call=>call.action==='update').length,1);assert.deepEqual(h.calls.find(call=>call.action==='update').args[2],{active:false});
  h.role(assigned(['access.view']));assert.equal(h.rows().length,0);assert.equal(h.dialog(),undefined);assert.match(text(h.draw()),/尚未查询账号/);
+});
+
+test('owner login security is only mounted after an authoritative directory read and lock filters use its snapshot',async()=>{
+ const h=ui({manualQuery:true});assert(!h.all().some(n=>n.type?.name==='AccountLoginPolicy'));h.button('查询账号').props.onClick();await flush();
+ let security=h.all().find(n=>n.type?.name==='AccountLoginPolicy');assert(security);assert.equal(security.props.surface,'dashboard');
+ security.props.onSnapshot({status:'ready',states:{[brazil.auth_user_id]:{failed_count:5,failure_limit:null,locked:true,locked_at:'2026-10-01',version:3}},failureLimit:5});
+ h.field('状态').props.onChange({target:{value:'locked'}});assert.equal(h.rows().length,1);assert.match(text(h.rows()),/brazil-fixture.*自动锁定/);
+ h.button('登录安全').props.onClick();security=h.all().find(n=>n.type?.name==='AccountLoginPolicy');assert.equal(security.props.target.id,brazil.auth_user_id);assert.equal(security.props.target.active,true);assert.equal(h.calls.length,1);
+ const limited=ui({actor:manager,manualQuery:true,roleAccess:assigned(['access.view'])});limited.button('查询账号').props.onClick();await flush();assert(!limited.all().some(n=>n.type?.name==='AccountLoginPolicy'));assert(!limited.all().some(n=>n.type==='button'&&text(n)==='登录安全'));
 });

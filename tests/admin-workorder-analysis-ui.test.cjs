@@ -161,3 +161,12 @@ test('linkage comparison uses the committed multi-day label and never invents hi
  s.comparison=null;s.previous=null;s.changes={};response(h,s);await h.module.load(true);
  assert.match(plain(linkageMetric(h.html(),'kycYesCount')),/55\.00%.*无日期对比/);assert.doesNotMatch(linkageMetric(h.html(),'kycYesCount'),/个百分点/);
 });
+
+test('both provider distributions follow the original-order table while all six overview metrics and linkage shares stay above it',async()=>{
+ const h=harness(),s=summary();s.byProvider=[{issueKind:'deposit',provider:'PayOne',ticketCount:10,ticketAmount:'500',uniqueOrderCount:8,uniqueOrderAmount:'400'},{issueKind:'withdraw',provider:'PayTwo',ticketCount:10,ticketAmount:'500',uniqueOrderCount:4,uniqueOrderAmount:'200'}];response(h,s);await h.module.load();
+ const html=h.html(),tableAt=html.indexOf('<h2>原支付订单（按平台、完整原单号去重）</h2>'),first=html.indexOf('<details class="wo-provider-analysis"');
+ assert(tableAt>0&&first>tableAt);assert(html.indexOf('存款 · 三方工单分布')>tableAt);assert(html.indexOf('取款 · 三方工单分布')>tableAt);
+ for(const key of ['ticketCount','processedTicketCount','unprocessedTicketCount','uniqueOrderCount','uniqueProcessedCount','uniqueUnprocessedCount'])assert(html.indexOf('data-stat="'+key+'"')<tableAt);
+ for(const key of ['kycYesCount','kycNoCount','kycUnknownCount','utrYesCount','utrNoCount','utrUnknownCount'])assert(html.indexOf('data-stat="'+key+'"')<tableAt);
+ assert.equal((html.match(/<details class="wo-provider-analysis"/g)||[]).length,2);
+});

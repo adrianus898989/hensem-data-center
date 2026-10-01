@@ -62,3 +62,14 @@ test('account page layout bridge rejects spoofed or unbounded input',()=>{
  assert.deepEqual(JSON.parse(JSON.stringify(api.ownerPreviewAccountPage({...base,data:{...base.data,active:false}},source,'current'))),{active:false});
  for(const invalid of [{...base,source:{}},{...base,origin:'https://other.invalid'},{...base,data:{...base.data,channel:'stale'}},{...base,data:{...base.data,active:'true'}},...[{top:-1,left:0,width:100},{top:0,left:0,width:Infinity},{top:0,left:'0',width:100},{top:0,left:0,width:0},{top:1,left:20001,width:100}].map(bounds=>({...base,data:{...base.data,bounds}}))])assert.equal(api.ownerPreviewAccountPage(invalid,source,'current'),null);
 });
+
+test('security layout uses its own command and rejects unrelated windows, origins, channels and invalid geometry',()=>{
+ const source={},base={source,origin:'null',data:{type:api.OWNER_PREVIEW_SHELL_MESSAGE,channel:'current',command:'security-page',active:true,bounds:{top:120,left:240,width:1000}}};
+ assert.deepEqual(JSON.parse(JSON.stringify(api.ownerPreviewSecurityPage(base,source,'current'))),{active:true,bounds:{top:120,left:240,width:1000}});
+ assert.equal(api.ownerPreviewAccountPage(base,source,'current'),null);
+ for(const change of [{source:{}},{origin:'https://attacker.invalid'},{data:{...base.data,channel:'old'}},{data:{...base.data,command:'account-page'}},{data:{...base.data,bounds:{top:10,left:-1,width:900}}},{data:{...base.data,bounds:{top:10,left:0,width:Infinity}}}])assert.equal(api.ownerPreviewSecurityPage({...base,...change},source,'current'),null);
+ const script=[...api.makeOwnerPreviewShellDocument(html,'ip-layout',true).matchAll(/<script>([\s\S]*?)<\/script>/g)][0][1];let slot={getBoundingClientRect:()=>({top:180,left:240,width:1000})},changed,queue=[];const messages=[];
+ vm.runInNewContext(script,{window:{requestAnimationFrame:fn=>queue.push(fn),addEventListener(){}},document:{readyState:'complete',body:{},getElementById:id=>id==='hle-ip'?slot:null},MutationObserver:class{constructor(fn){changed=fn}observe(){}},parent:{postMessage:payload=>messages.push(JSON.parse(JSON.stringify(payload)))}});
+ assert.deepEqual(messages.find(p=>p.command==='security-page').bounds,{top:180,left:240,width:1000});assert.equal(messages.find(p=>p.command==='account-page').active,false);
+ slot=null;changed();queue.splice(0).forEach(fn=>fn());assert.equal(messages.at(-1).command,'security-page');assert.equal(messages.at(-1).active,false);
+});

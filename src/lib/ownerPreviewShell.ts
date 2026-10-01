@@ -65,13 +65,21 @@ export function ownerPreviewAccountCommand(event: MessageEvent, source: Window |
 
 // Layout-only notification: authenticated controls stay in the host and are
 // placed in the existing page content slot, leaving the iframe navigation alive.
-export function ownerPreviewAccountPage(event: MessageEvent, source: Window | null | undefined, channel: string): {active:false}|{active:true;bounds:{top:number;left:number;width:number}}|null {
+type OwnerPreviewPageBounds = {active:false}|{active:true;bounds:{top:number;left:number;width:number}};
+function ownerPreviewPage(event: MessageEvent, source: Window | null | undefined, channel: string, command: "account-page"|"security-page"): OwnerPreviewPageBounds|null {
   const data=event.data;
-  if(!source||!channel||event.source!==source||event.origin!=="null"||!data||typeof data!=="object"||data.type!==OWNER_PREVIEW_SHELL_MESSAGE||data.channel!==channel||data.command!=="account-page")return null;
+  if(!source||!channel||event.source!==source||event.origin!=="null"||!data||typeof data!=="object"||data.type!==OWNER_PREVIEW_SHELL_MESSAGE||data.channel!==channel||data.command!==command)return null;
   if(data.active===false)return {active:false};
   const b=data.bounds;
   if(data.active!==true||!b||typeof b!=="object"||![b.top,b.left,b.width].every(value=>typeof value==="number"&&Number.isFinite(value))||b.top<0||b.top>20000||b.left<0||b.left>20000||b.width<=0||b.width>20000)return null;
   return {active:true,bounds:{top:b.top,left:b.left,width:b.width}};
+}
+
+export function ownerPreviewAccountPage(event: MessageEvent, source: Window | null | undefined, channel: string): OwnerPreviewPageBounds|null {
+  return ownerPreviewPage(event,source,channel,"account-page");
+}
+export function ownerPreviewSecurityPage(event: MessageEvent, source: Window | null | undefined, channel: string): OwnerPreviewPageBounds|null {
+  return ownerPreviewPage(event,source,channel,"security-page");
 }
 
 export function makeOwnerPreviewShellDocument(html: string, channel: string, owner: boolean): string {
@@ -85,7 +93,7 @@ body .topbar .top-right{display:flex!important;flex-shrink:0;min-width:0;gap:8px
 body .topbar .top-right>.owner{display:none!important}
 body .topbar .header-activity-v3{display:flex!important}
 body .sidebar .nav{min-height:0}
-body:has(#hle-access) .title-actions,body:has(#hle-access) .bottom-note{display:none!important}
+body:has(#hle-access) .title-actions,body:has(#hle-access) .bottom-note,body:has(#hle-ip) .title-actions,body:has(#hle-ip) .bottom-note{display:none!important}
 body .sidebar .side-bottom{flex-shrink:0;padding:10px 0 0}
 body .sidebar .side-bottom>.user{display:none}
 body .ha-popover{max-width:min(425px,calc(100vw - 24px))}
@@ -93,7 +101,7 @@ body .ha-popover{max-width:min(425px,calc(100vw - 24px))}
 @media(max-width:900px){body .topbar{padding-right:${compactRight}px!important;padding-left:14px!important}}
 @media(max-width:620px){body .topbar .crumb{display:none}body .topbar{justify-content:flex-end}body .topbar .top-right{gap:4px!important}body .topbar .top-right>.sample{padding:3px 5px;font-size:9px}}
 </style>`;
-  const script = `<script>(function(){const channel=${encode(channel)};const post=payload=>parent.postMessage({type:'${OWNER_PREVIEW_SHELL_MESSAGE}',channel,...payload},'*');let activityTimer=0,latestInput=0,lastSent=0;const sendActivity=()=>{activityTimer=0;lastSent=Date.now();post({command:'user-activity',occurredAt:latestInput})};const inputActivity=event=>{if(!event.isTrusted)return;latestInput=Date.now();if(!activityTimer){if(latestInput-lastSent>=500)sendActivity();else activityTimer=window.setTimeout(sendActivity,500-(latestInput-lastSent))}};['pointerdown','pointermove','keydown','touchstart','wheel'].forEach(name=>window.addEventListener?.(name,inputActivity,{passive:true,capture:true}));window.hensemOpenAccountManager=function(command){if(command!=='open-accounts'&&command!=='open-workorder-accounts')return false;post({command});return true};let lastPage='',queued=false;function syncAccountPage(){queued=false;const slot=document.getElementById('hle-access');let payload={command:'account-page',active:false};if(slot){const r=slot.getBoundingClientRect(),tabs=document.getElementById('livePageTabs'),pageTop=Math.max(48,tabs?Math.ceil(tabs.getBoundingClientRect().bottom):48);if(r.width>0)payload={command:'account-page',active:true,bounds:{top:Math.max(pageTop,Math.round(r.top)),left:Math.max(0,Math.round(r.left)),width:Math.max(1,Math.round(r.width))}}}const key=JSON.stringify(payload);if(key!==lastPage){lastPage=key;post(payload)}}function scheduleAccountPage(){if(queued)return;queued=true;window.requestAnimationFrame(syncAccountPage)}function mount(){if(typeof MutationObserver!=='undefined'){new MutationObserver(scheduleAccountPage).observe(document.body,{childList:true,subtree:true})}window.addEventListener?.('resize',scheduleAccountPage);window.addEventListener?.('scroll',scheduleAccountPage,{passive:true});syncAccountPage()}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount()})();</script>`;
+  const script = `<script>(function(){const channel=${encode(channel)};const post=payload=>parent.postMessage({type:'${OWNER_PREVIEW_SHELL_MESSAGE}',channel,...payload},'*');let activityTimer=0,latestInput=0,lastSent=0;const sendActivity=()=>{activityTimer=0;lastSent=Date.now();post({command:'user-activity',occurredAt:latestInput})};const inputActivity=event=>{if(!event.isTrusted)return;latestInput=Date.now();if(!activityTimer){if(latestInput-lastSent>=500)sendActivity();else activityTimer=window.setTimeout(sendActivity,500-(latestInput-lastSent))}};['pointerdown','pointermove','keydown','touchstart','wheel'].forEach(name=>window.addEventListener?.(name,inputActivity,{passive:true,capture:true}));window.hensemOpenAccountManager=function(command){if(command!=='open-accounts'&&command!=='open-workorder-accounts')return false;post({command});return true};const lastPages={};let queued=false;function syncAccountPage(){queued=false;for(const [id,command] of [['hle-access','account-page'],['hle-ip','security-page']]){const slot=document.getElementById(id);let payload={command,active:false};if(slot){const r=slot.getBoundingClientRect(),tabs=document.getElementById('livePageTabs'),pageTop=Math.max(48,tabs?Math.ceil(tabs.getBoundingClientRect().bottom):48);if(r.width>0)payload={command,active:true,bounds:{top:Math.max(pageTop,Math.round(r.top)),left:Math.max(0,Math.round(r.left)),width:Math.max(1,Math.round(r.width))}}}const key=JSON.stringify(payload);if(key!==lastPages[command]){lastPages[command]=key;post(payload)}}}function scheduleAccountPage(){if(queued)return;queued=true;window.requestAnimationFrame(syncAccountPage)}function mount(){if(typeof MutationObserver!=='undefined'){new MutationObserver(scheduleAccountPage).observe(document.body,{childList:true,subtree:true})}window.addEventListener?.('resize',scheduleAccountPage);window.addEventListener?.('scroll',scheduleAccountPage,{passive:true});syncAccountPage()}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount()})();</script>`;
 
   // Add after existing styles so local page styles cannot re-hide or move the bar.
   const withStyles = /<\/head\s*>/i.test(html) ? html.replace(/<\/head\s*>/i,()=>styles+"</head>") : html.replace(/(<!doctype html>)/i,doctype=>doctype+styles);

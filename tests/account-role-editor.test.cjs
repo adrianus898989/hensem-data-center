@@ -5,6 +5,7 @@ const vm = require("node:vm");
 const test = require("node:test");
 const ts = require("typescript");
 const root = path.resolve(__dirname, "..");
+const token='header.'+Buffer.from(JSON.stringify({session_id:'33333333-3333-4333-8333-333333333333'})).toString('base64url')+'.signature';
 const source = fs.readFileSync(path.join(root, "BACKEND_CURRENT/dashboard-user-admin.ts"), "utf8");
 const compiled = ts.transpileModule(source.replace(/^import .*;\n/, ""), {
   compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS },
@@ -21,6 +22,7 @@ async function request(patch, options = {}) {
   const writes = [], audits = [];
   let handler;
   const client = {
+    rpc: async name => ({data:name==="application_session_check"?{allowed:options.sessionAllowed!==false}:null,error:options.revokeFailure&&name==="application_revoke_user_sessions"?{message:"PRIVATE_REVOKE_FAILURE"}:null}),
     auth: { getUser: async () => ({ data: { user: options.invalidToken ? null : { id: "fixture-manager", user_metadata: { dashboard_role: "owner" } } } }) },
     from(table) {
       let values, filters = [];
@@ -48,11 +50,11 @@ async function request(patch, options = {}) {
   vm.runInNewContext(compiled, {
     createClient: () => client,
     Deno: { env: { get: () => "fixture-only" }, serve: fn => { handler = fn; } },
-    Request, Response, Date, Intl, console, AbortSignal,
+    Request, Response, Date, Intl, console, AbortSignal, atob, TextEncoder, TextDecoder, Uint8Array,
     fetch: async (url) => { assert(String(url).endsWith("/rest/v1/rpc/dashboard_role_access")); return Response.json({mode:caller.role === "owner" ? "owner" : "legacy",canView:true,permissions:[]}); },
   });
   const response = await handler(new Request("https://fixture.invalid", {
-    method: "POST", headers: options.noToken ? {} : { authorization: "Bearer fixture" },
+    method: "POST", headers: options.noToken ? {} : { authorization: "Bearer "+token },
     body: JSON.stringify({ action: "update-account", username: "fixture", ...patch }),
   }));
   return { status: response.status, body: await response.json(), writes: JSON.parse(JSON.stringify(writes)), audits: JSON.parse(JSON.stringify(audits)), target };
@@ -106,7 +108,7 @@ test("stale roles, missing expected role, concurrent updates and write failures 
     [{ ...promotion, expected_role: undefined }, {}, 400],
     [{ ...promotion, expected_role: "admin" }, {}, 409],
     [promotion, { race: true }, 409],
-    [promotion, { writeError: true }, 500],
+    [promotion, { writeError: true }, 503],
     [promotion, { missing: true }, 404],
   ]) {
     const result = await request(patch, options);

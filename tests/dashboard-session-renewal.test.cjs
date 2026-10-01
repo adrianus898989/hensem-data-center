@@ -13,7 +13,8 @@ const START = Date.parse('2026-09-11T12:00:00.000Z');
 const A = '00000000-0000-4000-8000-000000000001';
 const B = '00000000-0000-4000-8000-000000000002';
 const clone = value => JSON.parse(JSON.stringify(value));
-const json = (body, status=200) => new Response(JSON.stringify(body), {status,headers:{'Content-Type':'application/json'}});
+const json = (body, status=200) => new Response(JSON.stringify(status===200&&body?.access_token&&body?.refresh_token&&body?.user?{ok:true,tokens:body}:body), {status,headers:{'Content-Type':'application/json'}});
+const gatewayAction=call=>call.url.endsWith('/api/dashboard-auth')?JSON.parse(call.body||'{}').action:null;
 const deferred = () => {let resolve,reject;const promise=new Promise((r,j)=>{resolve=r;reject=j;});return {promise,resolve,reject};};
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function session(label='old', seconds=3600, userId=A) {
@@ -72,8 +73,8 @@ function harness(group=storageGroup()) {
     loadClient,
     now:()=>clock,advance:ms=>{clock+=ms;},setFetch:fn=>{implementation=fn;},
     saved:()=>{const raw=group.values.get(SESSION_KEY);return raw?JSON.parse(raw):null;},
-    refreshCalls:()=>calls.filter(c=>c.url.includes('grant_type=refresh_token')),
-    dataCalls:()=>calls.filter(c=>!c.url.includes('/auth/v1/token'))};
+    refreshCalls:()=>calls.filter(c=>gatewayAction(c)==='refresh'),
+    dataCalls:()=>calls.filter(c=>!c.url.endsWith('/api/dashboard-auth'))};
 }
 const tests=[];
 function test(name,fn){tests.push([name,fn]);}
@@ -81,7 +82,7 @@ const dataURL='https://supabase.offline.invalid/rest/v1/offline_table';
 
 test('near-expiry concurrent requests share one refresh and use the same new token',async()=>{
   const h=harness(),old=session('old',5),next=session('fresh');h.api.saveDashboardSession(old);
-  const gate=deferred();h.setFetch(call=>call.url.includes('grant_type=refresh_token')?gate.promise:json([]));
+  const gate=deferred();h.setFetch(call=>gatewayAction(call)==='refresh'?gate.promise:json([]));
   const pending=Array.from({length:5},()=>h.api.dashboardAuthenticatedFetch(dataURL,{method:'GET'},old));
   await tick();assert.equal(h.refreshCalls().length,1);
   gate.resolve(json(next));await Promise.all(pending);
@@ -102,7 +103,7 @@ test('403 does not trigger refresh or retry',async()=>{
 });
 test('GET 401 refreshes once and retries once with updated authorization',async()=>{
   const h=harness(),old=session(),next=session('fresh');h.api.saveDashboardSession(old);
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?json(next):
+  h.setFetch(call=>gatewayAction(call)==='refresh'?json(next):
     call.headers.get('authorization')==='Bearer '+old.access_token?json({message:'expired'},401):json([]));
   assert.equal((await h.api.dashboardAuthenticatedFetch(dataURL,{},old)).status,200);
   assert.equal(h.refreshCalls().length,1);assert.equal(h.dataCalls().length,2);
@@ -110,7 +111,7 @@ test('GET 401 refreshes once and retries once with updated authorization',async(
 test('concurrent GET 401 responses share one refresh, including a late old-token response',async()=>{
   const h=harness(),old=session(),next=session('fresh'),gate=deferred(),late=deferred();h.api.saveDashboardSession(old);
   let oldRequests=0;
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?gate.promise:
+  h.setFetch(call=>gatewayAction(call)==='refresh'?gate.promise:
     call.headers.get('authorization')==='Bearer '+old.access_token?
       (++oldRequests===3?late.promise:json({message:'expired'},401)):json([]));
   const pending=Array.from({length:3},()=>h.api.dashboardAuthenticatedFetch(dataURL,{},old));
@@ -122,20 +123,20 @@ test('concurrent GET 401 responses share one refresh, including a late old-token
 });
 test('a second GET 401 stops instead of entering a refresh loop',async()=>{
   const h=harness(),old=session();h.api.saveDashboardSession(old);
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?json(session('fresh')):json({message:'still unauthorized'},401));
+  h.setFetch(call=>gatewayAction(call)==='refresh'?json(session('fresh')):json({message:'still unauthorized'},401));
   const result=await h.api.dashboardAuthenticatedFetch(dataURL,{},old).catch(error=>error);
   assert.ok(result instanceof Error||result.status===401);
   assert.equal(h.refreshCalls().length,1);assert.equal(h.dataCalls().length,2);
 });
 test('POST 401 never automatically replays the mutation',async()=>{
   const h=harness(),old=session();h.api.saveDashboardSession(old);
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?json(session('fresh')):json({message:'expired'},401));
+  h.setFetch(call=>gatewayAction(call)==='refresh'?json(session('fresh')):json({message:'expired'},401));
   await h.api.dashboardAuthenticatedFetch(dataURL,{method:'POST',body:'{"reason":"synthetic"}'},old).catch(()=>null);
   assert.equal(h.dataCalls().length,1);assert.equal(h.dataCalls()[0].method,'POST');
 });
 test('POST may proactively refresh before sending, but is still sent only once',async()=>{
   const h=harness(),old=session('old',5),next=session('fresh');h.api.saveDashboardSession(old);
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?json(next):json([]));
+  h.setFetch(call=>gatewayAction(call)==='refresh'?json(next):json([]));
   await h.api.dashboardAuthenticatedFetch(dataURL,{method:'POST',body:'{"reason":"synthetic"}'},old);
   assert.equal(h.refreshCalls().length,1);assert.equal(h.dataCalls().length,1);
   assert.equal(h.dataCalls()[0].headers.get('authorization'),'Bearer '+next.access_token);
@@ -237,7 +238,7 @@ test('JWT exp supplies expiry when explicit expiry fields are absent',async()=>{
 });
 test('opaque legacy token with unknown expiry uses a single GET 401 refresh fallback',async()=>{
   const h=harness(),old=session();delete old.expires_at;delete old.expires_in;h.api.saveDashboardSession(old);
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?json(session('fresh')):
+  h.setFetch(call=>gatewayAction(call)==='refresh'?json(session('fresh')):
     call.headers.get('authorization')==='Bearer '+old.access_token?json({message:'expired'},401):json([]));
   const result=await h.api.ensureDashboardSession(old);
   assert.equal(result.access_token,old.access_token);assert.equal(h.refreshCalls().length,0);
@@ -246,7 +247,7 @@ test('opaque legacy token with unknown expiry uses a single GET 401 refresh fall
 });
 test('logout still permits a fresh interactive login before it is saved',async()=>{
   const h=harness(),next=session('new-login');h.api.saveDashboardSession(session());h.api.saveDashboardSession(null);
-  h.setFetch(call=>call.url.includes('grant_type=password')?json(next):json([]));
+  h.setFetch(call=>gatewayAction(call)==='login'?json(next):json([]));
   const signedIn=await h.api.signInDashboard('offline-user','offline-password');
   assert.equal((await h.api.ensureDashboardSession(signedIn)).access_token,next.access_token);
   assert.equal((await h.api.dashboardAuthenticatedFetch(dataURL,{},signedIn)).status,200);
@@ -317,7 +318,7 @@ test('actual notes, reasons, AR config and Panda config clients share the same r
   const h=harness(),old=session('old',5),gate=deferred();h.api.saveDashboardSession(old);
   const notes=h.loadClient('autoWithdrawNotesClient'),reasons=h.loadClient('autoWithdrawReasonsClient');
   const ar=h.loadClient('arAutoWithdrawConfigClient'),panda=h.loadClient('pandaAutoWithdrawConfigClient');
-  h.setFetch(call=>call.url.includes('grant_type=refresh_token')?gate.promise:json([]));
+  h.setFetch(call=>gatewayAction(call)==='refresh'?gate.promise:json([]));
   const signal=new AbortController().signal;
   const pending=Promise.all([
     notes.listAutoWithdrawNotes(old,'2026-09-09','2026-09-09'),
@@ -335,6 +336,15 @@ test('actual note save preserves one POST even after a 401 response',async()=>{
   h.setFetch(()=>json({message:'synthetic expired'},401));
   await assert.rejects(()=>notes.saveAutoWithdrawNote(old,{date:'2026-09-09',country:'印度',platform:'TPPLAY',reason:'synthetic reason'}));
   assert.equal(h.calls.length,1);assert.equal(h.calls[0].method,'POST');
+});
+
+test('interactive login only reaches trusted gateway, without sending Supabase API credentials',async()=>{
+  const h=harness();h.setFetch(()=>json(session('new-login')));await h.api.signInDashboard('offline-user','offline-password');
+  assert.equal(h.calls.length,1);assert.equal(h.calls[0].url,h.api.APPLICATION_GATEWAY+'/api/dashboard-auth');assert.equal(h.calls[0].headers.get('apikey'),null);assert.equal(h.calls[0].headers.get('authorization'),null);assert.deepEqual(JSON.parse(h.calls[0].body),{action:'login',username:'offline-user',password:'offline-password'});
+});
+test('logout still revokes the captured server session after browser storage is cleared',async()=>{
+  const h=harness(),old=session();h.api.saveDashboardSession(old);h.api.saveDashboardSession(null);h.setFetch(()=>json({ok:true}));await h.api.signOutDashboard(old);
+  assert.equal(h.calls.length,1);assert.equal(h.calls[0].url,h.api.APPLICATION_GATEWAY+'/api/dashboard-auth');assert.equal(h.calls[0].headers.get('authorization'),'Bearer '+old.access_token);assert.equal(h.calls[0].headers.get('apikey'),null);assert.deepEqual(JSON.parse(h.calls[0].body),{action:'logout'});assert.equal(h.saved(),null);
 });
 
 (async()=>{

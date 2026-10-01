@@ -1,6 +1,7 @@
 import DashboardAuthGate from "@/components/DashboardAuthGate";
 import OfficialDashboard from "@/components/OfficialDashboard";
+import DashboardEmbeddingGuard from "@/components/DashboardEmbeddingGuard";
 
 export default function Home() {
-  return <DashboardAuthGate><OfficialDashboard /></DashboardAuthGate>;
+  return <DashboardEmbeddingGuard><DashboardAuthGate><OfficialDashboard /></DashboardAuthGate></DashboardEmbeddingGuard>;
 }

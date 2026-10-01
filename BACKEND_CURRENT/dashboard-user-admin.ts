@@ -1,4 +1,4 @@
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient } from "jsr:@supabase/supabase-js@2.117.2";
 
 type PermissionKey = "home" | "third_party" | "auto_withdraw" | "work_orders" | "customer_service";
 type DashboardPermissions = Record<PermissionKey, boolean>;
@@ -62,16 +62,41 @@ function requestedDataScope(body: Record<string, unknown>, actor: { role?: strin
   return scope;
 }
 
-function corsHeaders(request: Request) {
-  const allowed = String(Deno.env.get("DASHBOARD_ALLOWED_ORIGIN") || "*").trim() || "*";
+function allowedOrigin(origin: string): boolean {
+  const configured = String(Deno.env.get("DASHBOARD_ALLOWED_ORIGIN") || "").trim();
+  return ["https://adrianus898989.github.io", "https://data-center.workdesk-hub.workers.dev", ...(configured && configured !== "*" ? [configured] : [])].includes(origin);
+}
+function corsHeaders(request: Request): Record<string, string> {
   const origin = request.headers.get("origin") || "";
-  const value = allowed === "*" || !origin ? allowed : (origin === allowed ? origin : allowed);
   return {
-    "Access-Control-Allow-Origin": value,
+    ...(origin && allowedOrigin(origin) ? {"Access-Control-Allow-Origin": origin} : {}),
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-sync-secret",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "private, no-store, max-age=0",
+    "CDN-Cache-Control": "no-store",
+    "Vary": "Origin, Authorization",
+    "X-Content-Type-Options": "nosniff",
   };
+}
+async function readAdminBody(request: Request): Promise<Record<string, unknown>> {
+  const reader = request.body?.getReader();
+  if (!reader) throw new DataScopeError("请求格式不正确", 400);
+  let size = 0; const chunks: Uint8Array[] = [];
+  try {
+    for (;;) {
+      const part = await reader.read(); if (part.done) break;
+      size += part.value.length;
+      if (size > 32768) { await reader.cancel(); throw new DataScopeError("请求过大", 413); }
+      chunks.push(part.value);
+    }
+  } finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(size); let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+  let value: unknown;
+  try { value = JSON.parse(new TextDecoder("utf-8", {fatal:true}).decode(bytes)); } catch { throw new DataScopeError("请求格式不正确", 400); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new DataScopeError("请求格式不正确", 400);
+  return value as Record<string, unknown>;
 }
 
 function json(request: Request, body: unknown, status = 200) {
@@ -81,15 +106,15 @@ function json(request: Request, body: unknown, status = 200) {
 function normalizeUsername(value: unknown): string {
   const username = String(value || "").trim().toLowerCase();
   if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
-    throw new Error("账号只能使用 3-32 位英文、数字、点、下划线或短横线");
+    throw new DataScopeError("账号只能使用 3-32 位英文、数字、点、下划线或短横线", 400);
   }
   return username;
 }
 
 function validatePassword(value: unknown): string {
   const password = String(value || "");
-  if (password.length < 8) throw new Error("密码至少 8 位");
-  if (password.length > 128) throw new Error("密码太长");
+  if (password.length < 8) throw new DataScopeError("密码至少 8 位", 400);
+  if (password.length > 128) throw new DataScopeError("密码太长", 400);
   return password;
 }
 
@@ -119,30 +144,6 @@ function sanitizeManagementPermissions(value: unknown): ManagementPermissions {
 }
 
 
-function requestClientIp(request: Request): string {
-  const direct = [
-    request.headers.get("cf-connecting-ip"),
-    request.headers.get("x-real-ip"),
-    request.headers.get("fly-client-ip"),
-    request.headers.get("sb-client-ip"),
-  ].map((value) => String(value || "").trim()).find(Boolean);
-  if (direct) return direct.replace(/^::ffff:/i, "");
-  const forwarded = String(request.headers.get("x-forwarded-for") || "").split(",")[0].trim();
-  return forwarded.replace(/^::ffff:/i, "");
-}
-
-function validateIp(value: unknown): string {
-  const ip = String(value || "").trim().replace(/^::ffff:/i, "");
-  if (!ip || ip.length > 64) throw new Error("IP 格式不正确");
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) {
-    const parts = ip.split(".").map(Number);
-    if (parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) return ip;
-    throw new Error("IPv4 格式不正确");
-  }
-  if (/^[0-9a-f:]+$/i.test(ip) && ip.includes(":")) return ip.toLowerCase();
-  throw new Error("只支持单个 IPv4 / IPv6 地址，不支持网段");
-}
-
 function dateInManila(offsetDays = 0): string {
   const base = new Date(Date.now() + offsetDays * 86400000);
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -156,19 +157,20 @@ function dateInManila(offsetDays = 0): string {
 }
 
 Deno.serve(async (request) => {
-  if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders(request) });
+  const origin = request.headers.get("origin");
+  if (origin !== null && !allowedOrigin(origin)) return json(request, {ok:false, code:"origin_denied", message:"来源不允许"}, 403);
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(request) });
   if (request.method !== "POST") return json(request, { ok: false, message: "只支持 POST" }, 405);
 
   try {
     const supabaseUrl = String(Deno.env.get("SUPABASE_URL") || "");
     const serviceRoleKey = String(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "");
-    if (!supabaseUrl || !serviceRoleKey) throw new Error("Supabase 内置环境变量缺失");
+    if (!supabaseUrl || !serviceRoleKey) throw new DataScopeError("Supabase 内置环境变量缺失", 503);
     const admin = createClient(supabaseUrl, serviceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    let body: any = {};
-    try { body = await request.json(); } catch { body = {}; }
+    const body: any = await readAdminBody(request);
     const action = String(body?.action || "").trim();
 
     async function audit(actor: { id?: string; username?: string } | null, auditAction: string, targetUsername = "", details: Record<string, unknown> = {}) {
@@ -185,6 +187,20 @@ Deno.serve(async (request) => {
       }
     }
 
+    async function requireApprovedSession(token: string, userId: string) {
+      // Called only after getUser verifies this exact token.
+      let sessionId = "";
+      try { sessionId = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).session_id; } catch { /* fail closed */ }
+      if (typeof sessionId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) throw new DataScopeError("登录已失效，请重新登录", 403);
+      const { data, error } = await admin.rpc("application_session_check", { p_user_id: userId, p_session_id: sessionId, p_surface: "dashboard" });
+      if (error) throw new DataScopeError("登录验证暂时不可用", 503);
+      if (data?.allowed !== true) throw new DataScopeError("登录已失效或账号已自动停用，请重新登录", 403);
+    }
+    async function revokeSessions(userId: string) {
+      const { error } = await admin.rpc("application_revoke_user_sessions", { p_user_id: userId, p_surface: "dashboard" });
+      if (error) throw new DataScopeError("无法撤销原登录状态，操作未完成，请重试", 503);
+    }
+
     async function requireAssignedRole(token: string, actorRole: string) {
       const anonKey = String(Deno.env.get("SUPABASE_ANON_KEY") || "").trim();
       if (!anonKey) throw new DataScopeError("角色权限验证暂时不可用，请重试。", 503);
@@ -194,7 +210,7 @@ Deno.serve(async (request) => {
           method: "POST", headers: { apikey: anonKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
           body: "{}", cache: "no-store", redirect: "error", signal: AbortSignal.timeout(10000),
         });
-        if (!response.ok) throw new Error("role_access_unavailable");
+        if (!response.ok) throw new DataScopeError("role_access_unavailable", 503);
         access = await response.json();
       } catch { throw new DataScopeError("角色权限验证暂时不可用，请重试。", 503); }
       if (!access || !["owner", "legacy", "assigned"].includes(access.mode) || typeof access.canView !== "boolean"
@@ -222,11 +238,12 @@ Deno.serve(async (request) => {
     async function requireManager() {
       const authHeader = String(request.headers.get("authorization") || "");
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-      if (!token) throw new Error("未登录");
+      if (!token) throw new DataScopeError("未登录", 401);
 
       const { data: userData, error: userError } = await admin.auth.getUser(token);
       const caller = userData?.user;
-      if (userError || !caller) throw new Error("登录状态无效");
+      if (userError || !caller) throw new DataScopeError("登录状态无效", 401);
+      await requireApprovedSession(token, caller.id);
 
       const { data: callerProfile, error: profileError } = await admin
         .from("dashboard_profiles")
@@ -234,7 +251,7 @@ Deno.serve(async (request) => {
         .eq("auth_user_id", caller.id)
         .maybeSingle();
       if (profileError) throw new Error(`读取管理员权限失败：${profileError.message}`);
-      if (!callerProfile?.active || !["owner", "admin"].includes(String(callerProfile.role || ""))) throw new Error("只有管理账号可以执行这个操作");
+      if (!callerProfile?.active || !["owner", "admin"].includes(String(callerProfile.role || ""))) throw new DataScopeError("只有管理账号可以执行这个操作", 403);
       await requireAssignedRole(token, callerProfile.role);
       return { token, caller, profile: callerProfile, actor: { id: caller.id, username: String(callerProfile.username || "admin") } };
     }
@@ -242,23 +259,24 @@ Deno.serve(async (request) => {
     async function requireAuthenticated() {
       const authHeader = String(request.headers.get("authorization") || "");
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
-      if (!token) throw new Error("未登录");
+      if (!token) throw new DataScopeError("未登录", 401);
       const { data: userData, error: userError } = await admin.auth.getUser(token);
       const caller = userData?.user;
-      if (userError || !caller) throw new Error("登录状态无效");
+      if (userError || !caller) throw new DataScopeError("登录状态无效", 401);
+      await requireApprovedSession(token, caller.id);
       const { data: callerProfile, error: profileError } = await admin
         .from("dashboard_profiles")
         .select("username,role,active,permissions,management_permissions,data_scope")
         .eq("auth_user_id", caller.id)
         .maybeSingle();
       if (profileError) throw new Error(`读取账号权限失败：${profileError.message}`);
-      if (!callerProfile?.active) throw new Error("这个账号已被停用");
+      if (!callerProfile?.active) throw new DataScopeError("这个账号已被停用", 403);
       return { token, caller, profile: callerProfile, actor: { id: caller.id, username: String(callerProfile.username || "user") } };
     }
 
     async function requireOwner() {
       const ctx = await requireManager();
-      if (ctx.profile.role !== "owner") throw new Error("只有总管理员可以管理 IP 白名单");
+      if (ctx.profile.role !== "owner") throw new DataScopeError("只有总管理员可以管理 IP 白名单", 403);
       return ctx;
     }
 
@@ -276,7 +294,7 @@ Deno.serve(async (request) => {
       const ctx = await requireManager();
       if (ctx.profile.role === "owner") return ctx;
       const permissions = sanitizeManagementPermissions(ctx.profile.management_permissions);
-      if (!permissions[key]) throw new Error("当前管理员没有这个后台管理权限");
+      if (!permissions[key]) throw new DataScopeError("当前管理员没有这个后台管理权限", 403);
       if (key !== "manage_viewers" && storedDataScope(ctx.profile).mode !== "all") {
         throw new DataScopeError("当前账号仅可见指定数据范围，不能访问全局同步或全局操作记录", 403);
       }
@@ -284,161 +302,20 @@ Deno.serve(async (request) => {
     }
 
     if (action === "check-access") {
-      const ctx = await requireAuthenticated();
-      const currentIp = requestClientIp(request);
+      await requireAuthenticated();
       const security = await loadIpSecurity();
-      if (!security.enabled) return json(request, { ok: true, allowed: true, enabled: false, currentIp });
-      if (!currentIp) return json(request, { ok: false, allowed: false, enabled: true, currentIp: "", message: "无法识别当前 IP，已拒绝登录" }, 403);
-      const { data: allowedRow, error } = await admin
-        .from("dashboard_ip_whitelist")
-        .select("id,ip,note,active")
-        .eq("ip", currentIp)
-        .eq("active", true)
-        .maybeSingle();
-      if (error) throw new Error(`检查 IP 白名单失败：${error.message}`);
-      if (!allowedRow) {
-        await audit(ctx.actor, "login_ip_denied", ctx.actor.username || "", { ip: currentIp });
-        return json(request, { ok: false, allowed: false, enabled: true, currentIp, message: `当前 IP ${currentIp} 不在登录白名单` }, 403);
-      }
-      return json(request, { ok: true, allowed: true, enabled: true, currentIp, note: allowedRow.note || "" });
+      return json(request, { ok: true, allowed: true, enabled: security.enabled, currentIp: "" });
     }
 
-    if (action === "ip-settings") {
+    if (["ip-settings", "add-ip", "set-ip-active", "delete-ip", "set-ip-mode"].includes(action)) {
       await requireOwner();
-      const security = await loadIpSecurity();
-      const { data: rows, error } = await admin
-        .from("dashboard_ip_whitelist")
-        .select("id,ip,note,active,created_at,updated_at")
-        .order("active", { ascending: false })
-        .order("id", { ascending: true });
-      if (error) throw new Error(`读取 IP 白名单失败：${error.message}`);
-      return json(request, { ok: true, enabled: security.enabled, currentIp: requestClientIp(request), rows: rows || [] });
+      return json(request, { ok: false, code: "security_settings_moved", message: "请在登录安全页面管理 IP 白名单" }, 410);
     }
 
-    if (action === "add-ip") {
-      const ctx = await requireOwner();
-      const ip = validateIp(body?.ip || requestClientIp(request));
-      const note = String(body?.note || "").trim().slice(0, 100);
-      const { error } = await admin.from("dashboard_ip_whitelist").upsert({
-        ip, note, active: true, created_by: ctx.caller.id, updated_at: new Date().toISOString(),
-      }, { onConflict: "ip" });
-      if (error) throw new Error(`添加 IP 失败：${error.message}`);
-      await audit(ctx.actor, "ip_whitelist_add", ip, { ip, note });
-      return json(request, { ok: true, ip, message: "IP 已加入白名单" });
-    }
-
-    if (action === "set-ip-active") {
-      const ctx = await requireOwner();
-      const id = Number(body?.id || 0);
-      if (!id) throw new Error("IP 记录 ID 无效");
-      const active = Boolean(body?.active);
-      const { data: row, error } = await admin.from("dashboard_ip_whitelist")
-        .update({ active, updated_at: new Date().toISOString() })
-        .eq("id", id)
-        .select("id,ip,note,active")
-        .maybeSingle();
-      if (error) throw new Error(`更新 IP 状态失败：${error.message}`);
-      if (!row) throw new Error("IP 记录不存在");
-      await audit(ctx.actor, "ip_whitelist_update", String(row.ip || ""), { ip: row.ip, active });
-      return json(request, { ok: true, row, message: active ? "IP 已启用" : "IP 已停用" });
-    }
-
-    if (action === "delete-ip") {
-      const ctx = await requireOwner();
-      const id = Number(body?.id || 0);
-      if (!id) throw new Error("IP 记录 ID 无效");
-      const { data: row } = await admin.from("dashboard_ip_whitelist").select("id,ip").eq("id", id).maybeSingle();
-      const { error } = await admin.from("dashboard_ip_whitelist").delete().eq("id", id);
-      if (error) throw new Error(`删除 IP 失败：${error.message}`);
-      await audit(ctx.actor, "ip_whitelist_delete", String(row?.ip || ""), { ip: row?.ip || "" });
-      return json(request, { ok: true, message: "IP 已删除" });
-    }
-
-    if (action === "set-ip-mode") {
-      const ctx = await requireOwner();
-      const enabled = Boolean(body?.enabled);
-      const currentIp = requestClientIp(request);
-      if (enabled) {
-        if (!currentIp) throw new Error("无法识别当前 IP，不能开启白名单限制");
-        const { data: currentAllowed, error: allowError } = await admin.from("dashboard_ip_whitelist")
-          .select("id")
-          .eq("ip", currentIp)
-          .eq("active", true)
-          .maybeSingle();
-        if (allowError) throw new Error(`检查当前 IP 失败：${allowError.message}`);
-        if (!currentAllowed) throw new Error(`请先把当前 IP ${currentIp} 加入并启用，再开启白名单限制`);
-      }
-      const { error } = await admin.from("dashboard_security_settings").upsert({
-        id: 1, ip_whitelist_enabled: enabled, updated_by: ctx.caller.id, updated_at: new Date().toISOString(),
-      }, { onConflict: "id" });
-      if (error) throw new Error(`保存 IP 登录模式失败：${error.message}`);
-      await audit(ctx.actor, "ip_whitelist_mode", "", { enabled, currentIp });
-      return json(request, { ok: true, enabled, currentIp, message: enabled ? "已开启：只有白名单 IP 可以登录" : "已关闭：账号密码正确即可登录" });
-    }
-
-    if (action === "bootstrap-admin") {
-      const expected = String(Deno.env.get("SYNC_SECRET") || "");
-      const provided = String(request.headers.get("x-sync-secret") || "");
-      if (!expected || provided !== expected) return json(request, { ok: false, message: "SYNC_SECRET 不正确" }, 401);
-
-      const { count, error: countError } = await admin
-        .from("dashboard_profiles")
-        .select("auth_user_id", { count: "exact", head: true })
-        .in("role", ["owner", "admin"])
-        .eq("active", true);
-      if (countError) throw new Error(`检查管理员失败：${countError.message}`);
-      if ((count || 0) > 0) return json(request, { ok: false, message: "管理员已经初始化过，禁止再次 bootstrap" }, 409);
-
-      const username = normalizeUsername(body?.username);
-      const password = validatePassword(body?.password);
-      const { data: created, error: createError } = await admin.auth.admin.createUser({
-        email: usernameEmail(username),
-        password,
-        email_confirm: true,
-        user_metadata: { username, dashboard_role: "owner" },
-      });
-      if (createError || !created.user) throw new Error(`建立 Admin 登录账号失败：${createError?.message || "unknown"}`);
-
-      const { error: profileError } = await admin.from("dashboard_profiles").insert({
-        auth_user_id: created.user.id,
-        username,
-        role: "owner",
-        active: true,
-        permissions: ADMIN_PERMISSIONS,
-        management_permissions: ADMIN_MANAGEMENT,
-        created_by: created.user.id,
-      });
-      if (profileError) {
-        await admin.auth.admin.deleteUser(created.user.id).catch(() => undefined);
-        throw new Error(`建立 Admin 权限资料失败：${profileError.message}`);
-      }
-      await audit({ id: created.user.id, username }, "bootstrap_owner", username, { role: "owner" });
-      return json(request, { ok: true, username, role: "owner", permissions: ADMIN_PERMISSIONS, management_permissions: ADMIN_MANAGEMENT, message: "总管理员初始化完成" });
-    }
-
-    if (action === "reset-admin-password") {
-      const expected = String(Deno.env.get("SYNC_SECRET") || "");
-      const provided = String(request.headers.get("x-sync-secret") || "");
-      if (!expected || provided !== expected) {
-        return json(request, { ok: false, message: "SYNC_SECRET 不正确" }, 401);
-      }
-
-      const username = normalizeUsername(body?.username || "admin");
-      const password = validatePassword(body?.password);
-      const { data: target, error: targetError } = await admin
-        .from("dashboard_profiles")
-        .select("auth_user_id,username,role,active")
-        .eq("username", username)
-        .maybeSingle();
-      if (targetError) throw new Error(`读取 Admin 账号失败：${targetError.message}`);
-      if (!target) return json(request, { ok: false, message: "Admin 账号不存在" }, 404);
-      if (!["owner", "admin"].includes(String(target.role || ""))) return json(request, { ok: false, message: "这个账号不是管理账号" }, 403);
-
-      const { error: updateError } = await admin.auth.admin.updateUserById(target.auth_user_id, { password });
-      if (updateError) throw new Error(`重置 Admin 密码失败：${updateError.message}`);
-
-      await audit(null, "reset_admin_password", username, { via: "sync_secret" });
-      return json(request, { ok: true, username, role: "admin", message: "Admin 密码已重置" });
+    // Collector synchronization credentials must never grant account-management
+    // authority. Emergency owner recovery is handled outside this public Edge.
+    if (["bootstrap-admin", "reset-admin-password"].includes(action)) {
+      return json(request, { ok: false, code: "operation_retired", message: "此运维入口已关闭，请使用总管理员账号管理功能" }, 410);
     }
 
     if (action === "create-account") {
@@ -591,6 +468,7 @@ Deno.serve(async (request) => {
         }
       }
       // Do not let a concurrent promotion turn a viewer edit into an admin edit.
+      if (patch.active === false) await revokeSessions(target.auth_user_id);
       let update = admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id).eq("role", target.role);
       if (target.updated_at) update = update.eq("updated_at", target.updated_at);
       const { data: updated, error } = await update.select("role").maybeSingle();
@@ -620,6 +498,7 @@ Deno.serve(async (request) => {
       if (dataScope !== undefined) patch.data_scope = dataScope;
       if (typeof body?.active === "boolean") patch.active = body.active;
       if (body?.permissions) patch.permissions = sanitizePermissions(body.permissions);
+      if (patch.active === false) await revokeSessions(target.auth_user_id);
       let update = admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id).eq("role", "viewer");
       if (target.updated_at) update = update.eq("updated_at", target.updated_at);
       const { data: updated, error } = await update.select("role").maybeSingle();
@@ -645,8 +524,10 @@ Deno.serve(async (request) => {
       if (target.role === "admin" && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以重置小管理员密码" }, 403);
       if (target.role === "viewer" && ctx.profile.role !== "owner" && !sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
       assertTargetDataScope(ctx.profile, target);
+      await revokeSessions(target.auth_user_id);
       const { error } = await admin.auth.admin.updateUserById(target.auth_user_id, { password });
       if (error) throw new Error(`重置密码失败：${error.message}`);
+      await revokeSessions(target.auth_user_id);
       await audit(actor, "reset_password", username, {});
       return json(request, { ok: true, username, message: "密码已重置" });
     }
@@ -665,6 +546,7 @@ Deno.serve(async (request) => {
       if (target.role === "admin" && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以删除小管理员" }, 403);
       if (target.role === "viewer" && ctx.profile.role !== "owner" && !sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
       assertTargetDataScope(ctx.profile, target);
+      await revokeSessions(target.auth_user_id);
       const { error } = await admin.auth.admin.deleteUser(target.auth_user_id);
       if (error) throw new Error(`删除账号失败：${error.message}`);
       await audit(ctx.actor, "delete_account", username, { role: target.role });
@@ -765,7 +647,7 @@ Deno.serve(async (request) => {
       const { actor } = await requireCapability("refresh_data");
       const job = String(body?.job || "").trim();
       const syncSecret = String(Deno.env.get("SYNC_SECRET") || "");
-      if (!syncSecret) throw new Error("SYNC_SECRET 未配置");
+      if (!syncSecret) throw new DataScopeError("SYNC_SECRET 未配置", 503);
       const thirdPartyFunctionName = String(Deno.env.get("THIRD_PARTY_SYNC_FUNCTION") || "bright-responder").trim() || "bright-responder";
       const autoWithdrawFunctionName = String(Deno.env.get("AUTO_WITHDRAW_SYNC_FUNCTION") || "sync-auto-withdraw-raw").trim() || "sync-auto-withdraw-raw";
       let functionName = thirdPartyFunctionName;
@@ -803,7 +685,7 @@ Deno.serve(async (request) => {
       try { result = text ? JSON.parse(text) : {}; } catch { result = { message: text }; }
       if (!response.ok || result?.ok === false) {
         await audit(actor, "manual_sync_failed", "", { job, message: result?.message || `HTTP ${response.status}` });
-        return json(request, { ok: false, job, message: result?.message || `同步失败 HTTP ${response.status}` }, 502);
+        return json(request, { ok: false, job, message: "同步服务暂时不可用，请稍后重试" }, 502);
       }
       await audit(actor, "manual_sync", "", { job, requested: result?.requested || null, written: result?.written || null });
       return json(request, { ok: true, job, result, message: "刷新完成" });
@@ -814,8 +696,8 @@ Deno.serve(async (request) => {
       message: "action 请使用 check-access / ip-settings / add-ip / set-ip-active / delete-ip / set-ip-mode / bootstrap-admin / reset-admin-password / create-account / create-viewer / list-users / update-account / update-viewer / reset-password / delete-account / list-audit / history-status / auto-withdraw-history-status / trigger-sync",
     }, 400);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const status = error instanceof DataScopeError ? error.status : /未登录|登录状态/.test(message) ? 401 : /只有|没有这个后台管理权限|不能|总管理员/.test(message) ? 403 : 500;
-    return json(request, { ok: false, message }, status);
+    const known = error instanceof DataScopeError;
+    return json(request, { ok: false, code: known ? "request_denied" : "service_unavailable",
+      message: known ? error.message : "后台服务暂时不可用，请稍后重试" }, known ? error.status : 503);
   }
 });

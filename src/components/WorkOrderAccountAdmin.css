@@ -30,3 +30,5 @@
 .wo-account-scope-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:0;padding:0;list-style:none}
 .wo-account-scope-list li{padding:9px 12px;border:1px solid #dbe4f0;border-radius:6px;background:#f7f9fe;overflow-wrap:anywhere}
 @media(max-width:700px){.wo-account-scope-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.wo-account-login-state{display:block;font-size:10px;margin-top:4px;color:#6f839f;white-space:normal;line-height:1.45}
