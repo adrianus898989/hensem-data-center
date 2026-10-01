@@ -423,7 +423,9 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
  // frame boundary. The menu independently validates its allowed page IDs.
  window.hensemAdminPageUrl=function(page){return typeof page==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(page)?${encode(pageBase)}+'#admin/'+(page==='channelquality'?'providers':page):''};
  window.hensemLiveRequest=function(request,options={}){return new Promise((resolve,reject)=>{
-   const page=window.hensemCurrentAdminPage?.()||window.hensemAdminInitialPage;
+   // Configuration batches continue while the user browses another page. Keep
+   // their original permission context; the server still checks this page and action.
+   const page=request?.action==='payoutConfig'?'payout_config':window.hensemCurrentAdminPage?.()||window.hensemAdminInitialPage;
    const operation=request?.action==='withdrawNote'?'edit':request?.action==='configurationWrite'?(request.operation==='grant'?'grant':'edit'):['catalog','providerOptions','configurationAccess'].includes(request?.action)?'view':'query';
    if(!window.hensemRoleAllowed(page,operation)){reject(error('当前角色没有此页面或操作权限','ROLE_DENIED'));return;}
    const detail=['details','query'].includes(request?.action)||request?.action==='submissionAnalysis'&&request.operation==='members'||request?.action==='aggregate'&&request.view==='drilldown'||request?.action==='workorderRecords'&&['detail','orderDetail'].includes(request.operation)||request?.action==='depositStatistics'&&request.section==='details'||request?.action==='depositIssues'&&page==='deposit_statistics';
@@ -433,7 +435,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
    const id='live_'+(++seq),deadline=Date.now()+${LIVE_REQUEST_TIMEOUT_MS};
    const q={resolve,reject,request,signal,deadline,abort:()=>cancel(id),timer:null};requests.set(id,q);
    q.timer=setTimeout(()=>cancel(id,true),${LIVE_REQUEST_TIMEOUT_MS});if(signal)signal.addEventListener('abort',q.abort,{once:true});
-   try{parent.postMessage({type:'${LIVE_REQUEST}',channel,id,request,page:window.hensemCurrentAdminPage?.()||window.hensemAdminInitialPage,deadline},hostOrigin)}catch(e){release(id);reject(e)}
+   try{parent.postMessage({type:'${LIVE_REQUEST}',channel,id,request,page,deadline},hostOrigin)}catch(e){release(id);reject(e)}
  })};
  // Navigation cancels read requests only; an in-flight edit must keep its outcome.
  window.hensemLiveCancelRequests=function(actions){let count=0;for(const [id,q]of [...requests]){if(['configurationWrite','withdrawNote'].includes(q.request&&q.request.action))continue;if(Array.isArray(actions)&&!actions.includes(q.request&&q.request.action))continue;cancel(id);count++;}return count};

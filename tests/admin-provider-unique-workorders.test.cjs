@@ -74,7 +74,7 @@ test('source date gaps and row-specific gaps have separate, escaped reasons with
  const h=setup();h.L.workorders.coverage={complete:false,capturedPlatformDays:2,expectedPlatformDays:4,platforms:[{platform:'<Missing>',days:0,expectedDays:2,complete:false},{platform:'Complete',days:2,expectedDays:2,complete:true}]};
  h.L.workorders.byProvider=h.L.workorders.byProvider.map(r=>({...r,uniqueCoverage:{...r.uniqueCoverage,complete:false,status:'partial'}}));h.render();assert.match(h.html(),/2 个三方/);assert.match(h.html(),/查看原因/);
  h.root.providerSummaryCoverage();let html=h.drawers.at(-1).html;assert.match(html,/2 \/ 4 平台日/);assert.match(html,/不代表每家三方都单独缺订单/);assert.match(html,/&lt;Missing&gt;/);assert.doesNotMatch(html,/<Missing>/);assert.match(html,/代收／代付订单统计和刷单剔除另行计算/);assert.equal(h.networkCalls(),0);
- h.L.workorders.coverage.complete=true;h.L.workorders.byProvider[0].uniqueCoverage.detailMismatchCount=7;h.render();h.root.providerSummaryCoverage();html=h.drawers.at(-1).html;assert.match(html,/日汇总与原始明细数量相差 7 条/);assert.doesNotMatch(html,/日期未收齐/);assert.equal(h.networkCalls(),0);
+ h.L.workorders.coverage.complete=true;h.L.workorders.byProvider[0].uniqueCoverage.detailMismatchCount=7;h.render();h.root.providerSummaryCoverage();html=h.drawers.at(-1).html;assert.match(html,/7条汇总与明细差异待核对/);assert.doesNotMatch(html,/日期未收齐/);assert.equal(h.networkCalls(),0);
 });
 
 test('fully read collection and payout cards separately identify named workorder gap platforms',()=>{
@@ -89,7 +89,7 @@ test('fully read collection and payout cards separately identify named workorder
   ]};
   h.render(direction);assert.equal(h.api.queryCoverage(h.L).received,2);assert.doesNotMatch(h.html(),/provider-api-coverage/);assert.match(h.html(),/工单缺项 2 平台/);assert.doesNotMatch(h.html(),/缺失 \d+ 个平台|provider-kpi-warning/);
   const gaps=h.api.workorderPlatformGaps(h.L,direction);assert.equal(gaps.length,2);assert.equal(gaps.find(p=>p.id==='new-dhani').providers.length,2);
-  h.root.providerSummaryWorkorderPlatforms();const drawer=h.drawers.at(-1);assert.equal(drawer.title,'工单缺项平台');assert.match(drawer.html,/82LOTTERY/);assert.match(drawer.html,/DHANIWIN/);assert.match(drawer.html,/TukPay、RushPay/);assert.match(drawer.html,/工单日期已收 0 \/ 1 天/);assert.match(drawer.html,/2条采集字段未提供原订单号/);assert.match(drawer.html,/3条缺原始明细/);assert.doesNotMatch(drawer.html,/Outside scope/);assert.equal(h.networkCalls(),0);
+  h.root.providerSummaryWorkorderPlatforms();const drawer=h.drawers.at(-1);assert.equal(drawer.title,'工单缺项平台');assert.match(drawer.html,/82LOTTERY/);assert.match(drawer.html,/DHANIWIN/);assert.match(drawer.html,/TukPay、RushPay/);assert.match(drawer.html,/工单日期已收 0 \/ 1 天/);assert.match(drawer.html,/2条采集字段未提供原订单号/);assert.match(drawer.html,/3条汇总与明细差异待核对/);assert.doesNotMatch(drawer.html,/Outside scope/);assert.equal(h.networkCalls(),0);
  }
 });
 
@@ -106,6 +106,25 @@ test('workorder gap card does not guess unsupported sources, ambiguous names, op
  h.L.workorders.byPlatformProvider.push(fact('<Unsafe>',{platform:'Shared',country:'印度',source:'NEW_AR',uniqueCoverage:{complete:false,missingAmountCount:1}}));h.render();assert.match(h.html(),/工单缺项 1 平台/);assert.equal(h.api.workorderPlatformGaps(h.L,'withdraw')[0].id,'new-a');
  h.root.providerSummaryWorkorderPlatforms();const html=h.drawers.at(-1).html;assert.match(html,/&lt;Unsafe&gt;/);assert.doesNotMatch(html,/<Unsafe>/);assert.match(html,/1条金额缺失/);assert.equal(h.networkCalls(),0);
  const count=h.drawers.length;h.L.dirty=true;h.root.providerSummaryWorkorderPlatforms();assert.equal(h.drawers.length,count);
+});
+
+test('platform diagnosis sums record gaps by reason and keeps pending exclusions separate from unexplained differences',()=>{
+ const h=fixture([order('a','ar',1000,10,{direction:'charge',provider:'AlphaPay',platform:'Alpha'})]);
+ h.L.queryPlatforms=[{id:'a',name:'Alpha',country:'印度',source:'ar'}];
+ const covered={status:'partial',complete:false,diagnosticVersion:2,detailCount:18,missingDetailCount:2,detailMismatchCount:2,pendingExcludedDetailCount:2,unexplainedDetailMismatchCount:0};
+ const alpha=fact('AlphaPay',{direction:'charge',platformId:'a',platform:'Alpha',country:'印度',source:'ar',uniqueCoverage:{...covered,diagnosticDays:[{date:'2026-09-30',expectedCount:20,detailCount:18,pendingExcludedDetailCount:2,unexplainedDetailMismatchCount:0}]}});
+ const beta={...alpha,provider:'BetaPay',uniqueCoverage:{...covered,providerConflictCount:1}};
+ const gamma={...alpha,provider:'GammaPay',uniqueCoverage:{...covered,pendingExcludedDetailCount:0,unexplainedDetailMismatchCount:3,providerConflictCount:1}};
+ h.L.workorders={byProvider:[alpha],byPlatformProvider:[alpha,beta,gamma],byDirection:{charge:alpha}};h.render('charge');
+ const gap=h.api.workorderPlatformGaps(h.L,'charge')[0];assert.equal(gap.reasonGroups.find(g=>g.key==='pendingExcludedDetailCount').count,4);
+ h.root.providerSummaryWorkorderPlatforms();const html=h.drawers.at(-1).html;
+ assert.match(html,/4条待处理未纳入明细/);assert.match(html,/3条汇总与明细差异待核对/);assert.match(html,/三方冲突 · 涉及 2 个三方/);
+ assert.doesNotMatch(html,/2组三方冲突|缺原始明细/);assert.match(html,/2026-09-30/);assert.match(html,/汇总 20 \/ 明细 18/);
+ assert.match(html,/provider-workorder-gap-table/);assert.match(html,/<details class="provider-workorder-details">/);assert.equal(h.networkCalls(),0);
+ h.root.providerSummaryCoverage();assert.match(h.drawers.at(-1).html,/2条待处理未纳入明细/);assert.doesNotMatch(h.drawers.at(-1).html,/缺原始明细/);
+ assert.match(h.html(),/当前仅为已知原单，覆盖不完整/,'pending explanation must not silently mark unique totals complete');
+ Object.assign(alpha.uniqueCoverage,{pendingExcludedDetailCount:0,unexplainedDetailMismatchCount:0,excludedWorkorderTypeCount:3,excludedTypeExplainedMismatchCount:3});
+ h.render('charge');h.root.providerSummaryWorkorderPlatforms();assert.match(h.drawers.at(-1).html,/3条USDT工单类型未纳入原单统计/);assert.match(h.drawers.at(-1).html,/记录已采集/);
 });
 
 test('collection KYC count and amount are separate deduplicated backend columns including platform and full-scope totals',()=>{

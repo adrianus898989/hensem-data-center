@@ -335,3 +335,15 @@ body.live-admin .provider-summary-report .provider-inline-status{font-size:10px;
 body.live-admin .provider-summary-report .provider-workorder-notices{display:flex;align-items:center;gap:14px;padding:4px 10px;border-bottom:1px solid #edf1f7}
 body.live-admin .provider-summary-report .provider-workorder-notices :is(.provider-order-coverage,.provider-workorder-coverage-button){display:inline-block;padding:0;margin:0;border:0;background:none;color:#9b560e;font-size:10px;line-height:16px;text-align:left}
 body.live-admin .provider-summary-report .submission-coverage-compact{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;max-width:100%;margin:0;padding:0;border:0;background:none;font-size:10px;line-height:18px;color:#6a7d9a}
+
+/* Named platform diagnostics stay readable inside the narrow details drawer. */
+body.live-admin .provider-workorder-gap-table table{table-layout:fixed;width:100%;min-width:0}
+body.live-admin .provider-workorder-gap-table :is(th,td){white-space:normal;overflow-wrap:anywhere;text-align:left;vertical-align:top}
+body.live-admin .provider-workorder-gap-table :is(th,td):first-child{position:sticky;left:0;width:100px;background:#fff;z-index:1}
+body.live-admin .provider-workorder-gap-table :is(th,td):nth-child(2){width:40%}
+body.live-admin .provider-workorder-reason{margin:0 0 4px;line-height:1.6}
+body.live-admin .provider-workorder-providers{display:block;margin-bottom:8px;line-height:1.6}
+body.live-admin .provider-workorder-details summary{cursor:pointer;color:#3458db}
+body.live-admin .provider-workorder-details section{margin-top:10px;padding-top:8px;border-top:1px solid #e7edf7;line-height:1.6}
+body.live-admin .provider-workorder-details ul{margin:6px 0;padding-left:18px}
+body.live-admin .provider-workorder-details li{margin:0 0 8px}

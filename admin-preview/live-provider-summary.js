@@ -337,6 +337,22 @@
  }
  // Intake status belongs in the compact platform card; detailed reasons open on demand.
  function intakeNotice(){return ''}
+ function workorderGapReasons(coverage){
+  const c=coverage||{},items=[];
+  const add=(key,label,unit='条',distinct=false)=>{const count=knownNumber(c[key]);if(count>0)items.push({key,count,label,unit,distinct,text:count+unit+label})};
+  add('missingOrderNumberCount','采集字段未提供原订单号');
+  add('excludedWorkorderTypeCount','USDT工单类型未纳入原单统计');
+  if(Number(c.diagnosticVersion)>=2||Object.hasOwn(c,'pendingExcludedDetailCount')){
+   add('pendingExcludedDetailCount','待处理未纳入明细');
+   add('unexplainedDetailMismatchCount','汇总与明细差异待核对');
+  }else{
+   const count=Math.max(Number(c.missingDetailCount)||0,Number(c.detailMismatchCount)||0);
+   if(count>0)items.push({key:'unexplainedDetailMismatchCount',count,label:'汇总与明细差异待核对',unit:'条',text:count+'条汇总与明细差异待核对'});
+  }
+  add('missingAmountCount','金额缺失','条',true);add('amountConflictCount','金额冲突','组',true);
+  add('providerConflictCount','三方冲突','组',true);add('unresolvedProviderOrderCount','原单三方未确认','组',true);
+  return items;
+ }
  function workorderPlatformGaps(L,direction){
   if(!L.workorders)return [];
   const scope=Array.isArray(L.queryPlatforms)&&L.queryPlatforms.length?L.queryPlatforms:(L.results||[]).map(r=>r.platform).filter(Boolean);
@@ -350,12 +366,17 @@
      (!row.source||normalized(row.source)===normalized(p.source))&&names(p).some(name=>rowNames.includes(name))));
    return candidates.length===1?candidates[0]:null;
   };
-  const add=(row,reasons)=>{
+  const add=(row,reasons,coverage=null)=>{
    const platform=match(row);if(!platform)return;
    const id=platform.id||JSON.stringify([platform.country,platform.source,platform.name]);
-   if(!gaps.has(id))gaps.set(id,{id:platform.id||'',name:platform.name||platform.sourceName||'未提供平台',source:platform.source||'',reasons:new Set(),providers:new Set()});
+   if(!gaps.has(id))gaps.set(id,{id:platform.id||'',name:platform.name||platform.sourceName||'未提供平台',source:platform.source||'',reasons:new Set(),providers:new Set(),reasonGroups:new Map(),details:[]});
    const gap=gaps.get(id);for(const reason of reasons)gap.reasons.add(reason);
    if(row.provider)gap.providers.add(providerName(canonical(row.provider,L.country)));
+   if(coverage){
+    const provider=providerName(canonical(row.provider,L.country)),items=workorderGapReasons(coverage);
+    for(const item of items){const group=gap.reasonGroups.get(item.key)||{...item,count:0,providers:new Set()};group.count+=item.count;group.providers.add(provider);gap.reasonGroups.set(item.key,group)}
+    gap.details.push({provider,expected:knownNumber(row.submittedCount),received:knownNumber(coverage.detailCount),reasons:items.map(i=>i.text),days:coverage.diagnosticDays||[]});
+   }
   };
   for(const row of L.workorders.coverage?.platforms||[]){
    const days=knownNumber(row.days),expected=knownNumber(row.expectedDays);
@@ -366,11 +387,10 @@
    // A missing platform row alone is not proof of missing collection. Only
    // named date gaps or an explicit incomplete original-order fact qualify.
    if(row.direction!==direction||!coverage||coverage.complete===true)continue;
-   const reasons=[['missingOrderNumberCount','条采集字段未提供原订单号'],['missingDetailCount','条缺原始明细'],['missingAmountCount','条金额缺失'],['amountConflictCount','组金额冲突'],['providerConflictCount','组三方冲突'],['unresolvedProviderOrderCount','组原单三方未确认']].filter(([key])=>Number(coverage[key])>0).map(([key,text])=>Number(coverage[key])+text);
-   if(Number(coverage.detailMismatchCount)>0&&!Number(coverage.missingDetailCount))reasons.push('日汇总与原始明细数量相差 '+Number(coverage.detailMismatchCount)+' 条');
-   add(row,reasons.length?reasons:['原单覆盖未确认']);
+   const reasons=workorderGapReasons(coverage).map(i=>i.text);
+   add(row,reasons.length?[]:['完整性待核验'],coverage);
   }
-  return [...gaps.values()].map(gap=>({...gap,reasons:[...gap.reasons],providers:[...gap.providers]}));
+  return [...gaps.values()].map(gap=>({...gap,reasons:[...gap.reasons],providers:[...gap.providers],reasonGroups:[...gap.reasonGroups.values()].map(g=>({...g,providers:[...g.providers]}))}));
  }
  function readNotice(ctx){
   const {L,E,C}=ctx,c=queryCoverage(L);if(!c.partial)return '';
@@ -474,7 +494,10 @@
   root.providerSummaryWorkorderPlatforms=function(){
    if(L.dirty)return;
    const gaps=workorderPlatformGaps(L,direction);
-   openDrawer('工单缺项平台','<p>工单缺项 '+C(gaps.length)+' 平台 · '+name+'</p>'+table(['平台','包网','涉及三方','工单缺项原因'],gaps.map(p=>[E(p.name),E(p.source||'—'),E(p.providers.join('、')||'—'),E(p.reasons.join('；'))]))+'<p class="live-definition">仅核对本次所选平台的工单日期与原单明细，缺项平台按平台去重。此处缺项不代表该平台的代收／代付订单读取失败。</p>');
+   const count=value=>value===null?'未提供':C(value),lines=values=>values.map(value=>'<div class="provider-workorder-reason">'+E(value)+'</div>').join('');
+   const detail=p=>'<details class="provider-workorder-details"><summary>查看三方 / 日期</summary>'+p.details.map(d=>'<section><strong>'+E(d.provider)+'</strong><div>汇总 '+count(d.expected)+' · 明细 '+count(d.received)+'</div>'+lines(d.reasons.length?d.reasons:['完整性待核验'])+(d.days.length?'<ul>'+d.days.map(day=>'<li>'+E(day.date||'日期未提供')+' · 汇总 '+count(knownNumber(day.expectedCount))+' / 明细 '+count(knownNumber(day.detailCount))+lines(workorderGapReasons(day).map(i=>i.text))+'</li>').join('')+'</ul>':'')+'</section>').join('')+'</details>';
+   const platformRows=gaps.map(p=>[E(p.name)+'<small class="cell-sub">'+E(p.source||'—')+'</small>',lines([...p.reasons,...p.reasonGroups.map(g=>g.distinct?g.label+' · 涉及 '+C(g.providers.length)+' 个三方（分项见明细）':C(g.count)+g.unit+g.label)]),'<span class="provider-workorder-providers">'+E(p.providers.join('、')||'—')+'</span>'+detail(p)]);
+   openDrawer('工单缺项平台','<p>需核对 '+C(gaps.length)+' 平台 · '+name+'</p>'+table(['平台','原因','涉及三方与明细'],platformRows,'provider-workorder-gap-table')+'<p class="live-definition">“待处理未纳入明细”表示采集器跳过待处理；“USDT工单类型未纳入原单统计”表示记录已采集，但当前原单统计未接入此类型。这两类仍不计完整，其他差异另列待核对。</p>');
   };
   root.providerSummarySort=function(key){if(!parentKeys.has(key))return;L.providerSortAsc=sort===key?!L.providerSortAsc:textSortKeys.has(key);L.providerSort=key;L.localPage=1;ctx.render()};
   const expanded=L.providerExpanded||(L.providerExpanded={}),rowKey=r=>JSON.stringify([direction,r.provider,r.currency]);
@@ -510,14 +533,13 @@
   const feeCell=r=>readState.empty?'—':L.feeLookupLoading?'读取中…':L.feeLookupError?'读取失败':'<span tabindex="0" title="'+E(feeCoverageText(r))+'">'+N(r.estimated_fee)+(!r.fee_complete&&Number(r.fee_eligible_count)>0?'<span class="provider-partial">'+(Number(r.fee_matched_count)>0?'部分':'未匹配')+'</span>':'')+'</span>';
   const issueRate=w=>!w?'—':'<span'+(Number(w.uniqueOrderCount)>0&&Number(w.uniqueSuccessCount)/Number(w.uniqueOrderCount)<0.3?' class="workorder-rate-low"':'')+' title="去重工单金额成功率 '+R(w.uniqueSuccessAmount,w.uniqueOrderAmount)+'">'+R(w.uniqueSuccessCount,w.uniqueOrderCount)+'</span>';
   const uniqueGaps=coverage=>{
-   const gaps=[['missingOrderNumberCount','条采集字段未提供原订单号'],['missingDetailCount','条缺原始明细'],['missingAmountCount','条金额缺失'],['amountConflictCount','组金额冲突'],['providerConflictCount','组三方冲突'],['unresolvedProviderOrderCount','组原单三方未确认']].filter(([key])=>Number(coverage?.[key])>0).map(([key,text])=>C(coverage[key])+text);
-   if(Number(coverage?.detailMismatchCount)>0&&!Number(coverage?.missingDetailCount))gaps.push('日汇总与原始明细数量相差 '+C(coverage.detailMismatchCount)+' 条');
+   const gaps=workorderGapReasons(coverage).map(i=>C(i.count)+i.unit+i.label);
    const localSource=coverage?.sourceCoverage;
    if(localSource?.complete===false){
     const missing=(localSource.platforms||[]).filter(p=>p.complete===false||(p.missingDates||[]).length);
     gaps.push(missing.length?'该统计范围的工单日期未收齐：'+missing.map(p=>(p.platform||p.sourcePlatform||'未提供平台')+((p.missingDates||[]).length?'（'+p.missingDates.join('、')+'）':'')).join('；'):'该统计范围的工单日期未收齐');
    }
-   if(!gaps.length&&coverage?.complete!==true)gaps.push('原单覆盖状态未确认');
+   if(!gaps.length&&coverage?.complete!==true)gaps.push('完整性待核验');
    if(Number(coverage?.resolvedProviderOrderCount)>0)gaps.push(C(coverage.resolvedProviderOrderCount)+'组原单按唯一已知三方归并');
    if(Number(coverage?.unknownProviderRecordCount)>0)gaps.push(C(coverage.unknownProviderRecordCount)+'条来源三方未填写');
    return gaps;
@@ -571,8 +593,8 @@
     if(!daily.has(key))daily.set(key,{...day,provider});
    }
    const dayReasons=day=>{
-    const reasons=[['missingDetailCount','条未收到原始明细'],['missingOrderNumberCount','条采集字段未提供原订单号'],['newarExplicitReferenceMissingCount','条 NEWAR 原订单引用字段缺失'],['arPaymentOrderMissingCount','条 AR 充值原订单号缺失'],['unsupportedReferenceTypeCount','条原订单引用字段类型不支持'],['missingAmountCount','条金额缺失'],['amountConflictCount','组金额冲突'],['providerConflictCount','组三方冲突'],['unresolvedProviderOrderCount','组原单三方未确认']].filter(([key])=>Number(day[key])>0).map(([key,label])=>C(day[key])+label);
-    if(Number(day.detailMismatchCount)>0&&!Number(day.missingDetailCount))reasons.push('日汇总与明细数量相差 '+C(day.detailMismatchCount)+' 条');
+    const reasons=workorderGapReasons(day).map(i=>C(i.count)+i.unit+i.label);
+    reasons.push(...[['newarExplicitReferenceMissingCount','条 NEWAR 原订单引用字段缺失'],['arPaymentOrderMissingCount','条 AR 充值原订单号缺失'],['unsupportedReferenceTypeCount','条原订单引用字段类型不支持']].filter(([key])=>Number(day[key])>0).map(([key,label])=>C(day[key])+label));
     if(Number(day.resolvedProviderOrderCount)>0)reasons.push(C(day.resolvedProviderOrderCount)+'组原单按唯一已知三方归并');
     if(Number(day.unknownProviderRecordCount)>0)reasons.push(C(day.unknownProviderRecordCount)+'条来源三方未填写');
     if(Number(day.sourceOrderOnlyCount)>0)reasons.push(C(day.sourceOrderOnlyCount)+'条仅采集到来源订单号');
