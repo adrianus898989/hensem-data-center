@@ -208,3 +208,85 @@ test('the additive deployment is atomic, idempotent and matches canonical helper
  assert.equal(await scalar("select has_function_privilege('anon','public.dashboard_admin_live_withdraw_reasons(jsonb)','execute') value"),false);
  for(const role of ['anon','authenticated'])assert.equal(await scalar('select has_function_privilege($1,\'private.dashboard_admin_live_blocking_details(text)\',\'execute\') value',[role]),false);
 });
+
+const financialDifference=(actual='-0.25',limit='500.00',suffix='')=>`充提差负盈利金额小于${limit},当前充提差负盈利金额：${actual},不能自动出款,(用户充值总额：800.00,历史提现总额:700.00,待处理金额：100.00,用户余额:0.25)${suffix}`;
+const turnoverAfter=(actual='2.5282115869017632241813602015',limit='3.00')=>`打码倍数小于${limit},不能自动出款,上次提现后的有效投注(sumLotteryAmount)：100.00,上次提现后的成功充值总额：40.00,当前用户打码倍数(userBetTurnoverMultiple)：${actual}`;
+const turnoverLast=(actual='2.50',limit='3.00')=>`打码倍数小于${limit},不能自动出款,最后投注统计(sumLotteryAmount)：100.00,最后一笔实际支付金额:40.00,当前用户打码倍数(userBetTurnoverMultiple)：${actual},不能自动出款`;
+test('financial difference diagnostics merge actual amounts only, retaining threshold and signed actual value',async()=>{
+ const details=value=>scalar('select private.dashboard_admin_live_blocking_details($1) value',[value]);
+ for(const actual of ['-0.03','-0.28','0.00','0.21','+0.25','-12.123456789012345678901234567890']){
+  assert.deepEqual(await details(financialDifference(actual)),{reason:'充提差负盈利金额小于500，不能自动出款',threshold:'500',actualField:'当前充提差负盈利金额',actualValue:actual});
+ }
+ assert.equal(await blocking(financialDifference('-0.25','500')),'充提差负盈利金额小于500，不能自动出款');
+ assert.equal(await blocking(financialDifference('-0.25','1000')),'充提差负盈利金额小于1000，不能自动出款');
+ assert.equal(await blocking(financialDifference().replace('金额小于','金额小于等于')),'充提差负盈利金额小于等于500，不能自动出款');
+ assert.equal(await blocking('充提差负盈利金额小于500.00...\n\n'+financialDifference()),'充提差负盈利金额小于500，不能自动出款');
+ for(const value of [financialDifference('-0.25','500.00','；会员备注需人工'),financialDifference().replace('待处理金额','提款次数'),financialDifference().replace('负盈利金额：','正盈利金额：'),financialDifference().slice(0,-1),financialDifference().replace('不能自动出款','可以自动出款'),financialDifference().replace('500.00','-500.00'),financialDifference('0.'+'1'.repeat(41)),financialDifference('1'.repeat(25)),financialDifference('1'.repeat(4096))]){
+  assert.deepEqual(await details(value),{reason:value,threshold:null,actualField:null,actualValue:null});
+ }
+});
+
+test('turnover windows, limit comparators and pass outcomes stay distinct while exact diagnostic amounts collapse',async()=>{
+ const details=value=>scalar('select private.dashboard_admin_live_blocking_details($1) value',[value]);
+ assert.deepEqual(await details(turnoverAfter()),{reason:'上次提现后打码倍数小于3，不能自动出款',threshold:'3',actualField:'当前用户打码倍数',actualValue:'2.5282115869017632241813602015'});
+ assert.equal(await blocking(turnoverAfter('0.00')),'上次提现后打码倍数小于3，不能自动出款');
+ assert.equal(await blocking(turnoverLast()),'最后一笔充值打码倍数小于3，不能自动出款');
+ assert.equal(await blocking(turnoverLast('0.2','5')),'最后一笔充值打码倍数小于5，不能自动出款');
+ assert.notEqual(await blocking(turnoverAfter()),await blocking(turnoverLast()));
+ assert.equal(await blocking('打码倍数校验通过@2026-09-30 10:05:02.123(倍数4.25≥3.00,有效投注425.00,充值100.00)'),'打码倍数校验通过（倍数≥3）');
+ assert.equal(await blocking('打码倍数校验通过@2026-09-30 10:05:02(倍数5.10>3.00,有效投注510.00,充值100.00)'),'打码倍数校验通过（倍数>3）');
+ assert.equal(await blocking('打码倍数0.20小于3.00,充提差负盈利金额125.00大于100.00,按充提差负盈利放行'),'打码倍数小于3，充提差负盈利金额大于100，按充提差负盈利放行');
+ assert.equal(await blocking('打码倍数1.20小于等于3.00,充提差负盈利金额160.00大于100.00,按充提差负盈利放行'),'打码倍数小于等于3，充提差负盈利金额大于100，按充提差负盈利放行');
+ assert.equal(await blocking('打码倍数10.25大于3.00(累计打码量1025.00/需要打码量100.00)'),'打码倍数大于3（累计打码量 / 需要打码量）');
+ for(const value of [turnoverAfter()+'；另一条规则',turnoverLast().replace('最后一笔实际支付金额','会员ID'),turnoverAfter().replace('2.5282115869017632241813602015','2.5万'),'打码倍数校验通过@2026-09-30(倍数4≥3,有效投注400,充值100)']){
+  assert.equal(await blocking(value),value);
+ }
+});
+
+test('manual deposit templates preserve day window and bonus distinction and reject mismatched diagnostic fields',async()=>{
+ assert.deepEqual(await scalar('select private.dashboard_admin_live_blocking_details($1) value',['3日内人工充值彩金金额大于1000.00,3日内人工充值彩金金额：1250.00']),{reason:'3日内人工充值彩金金额大于1000',threshold:'1000',actualField:'3日内人工充值彩金金额',actualValue:'1250.00'});
+ for(const [value,expected]of [
+  ['3日内人工充值彩金金额大于1000.00,3日内人工充值彩金金额：1250.00','3日内人工充值彩金金额大于1000'],
+  ['7日内人工充值彩金金额大于1000.00,7日内人工充值彩金金额：1750.00','7日内人工充值彩金金额大于1000'],
+  ['3日内人工充值金额大于1000.00,3日内人工充值金额：1250.00','3日内人工充值金额大于1000'],
+  ['3日内人工充值金额小于等于1000.00,3日内人工充值金额：125.00','3日内人工充值金额小于等于1000']])assert.equal(await blocking(value),expected);
+ for(const value of ['3日内人工充值彩金金额大于1000.00,7日内人工充值彩金金额：1250.00','3日内人工充值彩金金额大于1000.00,3日内人工充值金额：1250.00','3日内人工充值金额大于1000.00,3日内人工充值金额：1250.00,错误码501'])assert.equal(await blocking(value),value);
+});
+
+test('known source-validation diagnostics group only their verified numeric payload without swallowing other failures',async()=>{
+ const heading='存在单号为空、缺少完成时间或实付金额、备份表重复或主备表不一致的成功充值单,无法核对打码倍数,不能自动出款';
+ for(const value of ['100001','100001,100002','100001,100002等25笔','123456789012345678901234567890'])assert.equal(await blocking(heading+',单号：'+value),heading);
+ for(const value of [heading+',单号：100001；银行不支持',heading+',单号：ABC-10'])assert.equal(await blocking(value),value);
+ const coverage='打码统计源无法覆盖上次提现后的完整周期,无法核对打码倍数,不能自动出款';
+ assert.equal(await blocking(coverage+',上次提现后的成功充值总额：1250.00'),coverage);
+ assert.equal(await blocking(coverage+',上次提现后的成功充值总额：1250.00,错误码501'),coverage+',上次提现后的成功充值总额：1250.00,错误码501');
+});
+
+test('diagnostic groups conserve original variants, manual statuses and complete order amounts in drilldown',async()=>{
+ const notes=[financialDifference('-0.03'),financialDifference('-0.28'),financialDifference('0.00'),financialDifference('-0.03','1000'),turnoverAfter()];
+ for(let i=0;i<notes.length;i++)await db.query("insert into ar_collected_orders values('AR','IN','SYNTHETIC','withdraw',$1,$2,$3,'operator-a','2026-09-06 12:00','2026-09-06 12:01',$4,null,'',now())",['DIAG-'+i,100+i,['已支付','未通过','待审核','已支付','未通过'][i],notes[i]]);
+ const result=await call({date:'2026-09-06',kind:'blocking'});assert.equal(result.noteCount,5);assert.equal(result.total,3);assert.equal(result.rows.reduce((n,r)=>n+r.count,0),5);
+ const rule=result.rows.find(r=>r.reason==='充提差负盈利金额小于500，不能自动出款');assert.equal(rule.count,3);assert.equal(rule.sourceVariantCount,3);assert.deepEqual([rule.success,rule.rejected,rule.other],[1,1,1]);
+ const variants=await call({date:'2026-09-06',kind:'blockingVariants',reasonKey:rule.reasonKey});assert.equal(variants.total,3);assert.deepEqual(new Set(variants.rows.map(r=>r.sourceReason)),new Set(notes.slice(0,3)));
+ const orders=await call({date:'2026-09-06',kind:'blockingOrders',reasonKey:rule.reasonKey});assert.equal(orders.total,3);assert.deepEqual(new Set(orders.rows.map(r=>r.rawManualRemark)),new Set(notes.slice(0,3)));assert.deepEqual(new Set(orders.rows.map(r=>r.blockingActualValue)),new Set(['-0.03','-0.28','0.00']));
+ assert.deepEqual(orders.rows.map(r=>r.amount).sort((a,b)=>a-b),[100,101,102]);assert(orders.rows.every(r=>r.blockingThreshold==='500'));
+});
+
+test('latest diagnostic migration installs exactly the canonical helpers, keeps ACL private and is safe to repeat',async()=>{
+ const migration=fs.readFileSync(path.join(repo,'supabase/migrations/20261001080037_withdraw_reason_compact_evaluation.sql'),'utf8');
+ const helper=patch.slice(patch.indexOf('-- Only complete, observed diagnostic templates'),patch.indexOf('create or replace function private.dashboard_admin_live_rejection_category('));
+ assert(migration.includes(helper));assert.doesNotMatch(migration,/\b(?:update|delete\s+from|insert\s+into|drop\s+(?:table|view))\b/i);
+ const before=await call({date:'2026-09-06',kind:'blocking'});await db.exec(helper);await db.exec(helper);assert.deepEqual(await call({date:'2026-09-06',kind:'blocking'}),before);
+ for(const name of ['blocking_category(text)','blocking_details(text)','blocking_details_cleaned(text)'])for(const role of ['anon','authenticated'])assert.equal(await scalar('select has_function_privilege($1,$2,\'execute\') value',[role,'private.dashboard_admin_live_'+name]),false);
+});
+
+
+test('raw wrapper and already-clean core normalize exactly once, including non-idempotent nested entities',async()=>{
+ const detail=value=>scalar('select private.dashboard_admin_live_blocking_details($1) value',[value]);
+ const core=value=>scalar('select private.dashboard_admin_live_blocking_details_cleaned($1) value',[value]);
+ for(const value of [financialDifference(), '充提差负盈利金额小于500.00...\n\n'+financialDifference(),'首存金额大于100.00,首存金额&#58;200.00','&amp;amp;amp;amp;#65;']){
+  assert.deepEqual(await detail(value),await core(await clean(value)));
+ }
+ const raw='&amp;amp;amp;amp;#65;';const once=await clean(raw);assert.notEqual(once,await clean(once));
+ assert.equal((await core(once)).reason,once);assert.equal((await detail(raw)).reason,once);
+});
