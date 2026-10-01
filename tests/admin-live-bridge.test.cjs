@@ -50,6 +50,13 @@ test('live RPC uses fresh auth and a fixed origin; user changes and malformed ho
   for(const options of [{base:'http://offline.invalid'},{base:'https://offline.invalid/other'},{base:'https://user:pass@offline.invalid'},{ensure:async current=>({...current,user:{id:'different-user'}})}]){const denied=load(options);await assert.rejects(denied.api.adminLiveRequest(session,query));assert.equal(denied.calls.length,0);}
 });
 
+test('exclusive amount upper bounds retain numeric precision and reject unsupported or empty ranges',async()=>{
+ const h=load(),q={...query,action:'aggregate',view:'full',amountMin:200,amountMax:250,amountMaxExclusive:true};
+ await h.api.adminLiveRequest(session,q);assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:q});
+ for(const patch of [{amountMaxExclusive:'true'},{amountMaxExclusive:1},{amountMaxExclusive:null},{amountMax:undefined},{amountMin:250},{amountMin:251},{action:'catalog',view:undefined},{action:'depositIssues',view:undefined},{action:'query',view:undefined},{action:'details',view:undefined},{view:'drilldown',kind:'hourly'},{amountMax:undefined,amountMaxExclusive:false}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
+ for(const patch of [{amountMin:250,amountMaxExclusive:false},{amountMin:250,amountMaxExclusive:undefined},{amountMin:undefined},{amountMin:0,amountMax:0.00000001}])assert.doesNotThrow(()=>h.api.validateAdminLiveRequest({...q,...patch}));
+});
+
 test('errors do not expose raw backend messages or credentials',async()=>{
   for(const [status,message,expected] of [[403,'sensitive detail','未获授权'],[400,'unsupported_filter','未提供'],[500,'57014: statement timeout','读取超时'],[500,'private SQL and offline-token','未完成']]){
     const h=load({fetch:async()=>({ok:false,status,json:async()=>({message})})});await assert.rejects(h.api.adminLiveRequest(session,query),error=>error.message.includes(expected)&&!error.message.includes('private SQL')&&!error.message.includes('offline-token'));
