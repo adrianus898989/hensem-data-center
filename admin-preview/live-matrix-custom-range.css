@@ -1,0 +1,11 @@
+body.live-admin .matrix-custom-controls{display:flex;align-items:end;flex-wrap:wrap;gap:8px;padding:9px 12px;background:#fff;border:1px solid #dfe7f3;border-radius:7px;margin:0 0 10px;font-size:11px}
+body.live-admin .matrix-custom-controls strong{align-self:center;margin-right:4px;font-size:12px}
+body.live-admin .matrix-custom-controls label{display:flex;flex-direction:column;gap:4px;color:#7588a5;font-size:10px}
+body.live-admin .matrix-custom-controls input{height:29px;width:125px;min-width:0;border:1px solid #dbe3ef;border-radius:5px;padding:4px 7px;font:inherit;color:#30486b}
+body.live-admin .matrix-custom-controls>span{align-self:center}
+body.live-admin .matrix-custom-controls button{height:29px}
+body.live-admin .matrix-custom-controls>small{align-self:center;color:#7588a5;font-size:10px}
+body.live-admin .matrix-custom-status{padding:6px 10px;font-size:11px;margin:0 0 8px;border-radius:5px}
+body.live-admin .matrix-custom-label{display:block;line-height:12px;font-weight:400;font-size:9px}
+body.live-admin .matrix-custom-label:first-child{font-weight:600;color:#3658b5}
+body.live-admin .matrix-hours-view tfoot .matrix-cell{display:flex;flex-direction:column;gap:2px;align-items:center;font-size:10px;font-weight:400}

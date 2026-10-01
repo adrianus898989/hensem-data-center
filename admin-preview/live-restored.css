@@ -44,6 +44,15 @@
 /* Country bands spell out inclusive/exclusive boundaries without squeezing hourly values. */
 body.live-admin .live-matrix th:first-child,body.live-admin .live-matrix td:first-child{width:128px;white-space:normal;overflow-wrap:normal;line-height:1.5;padding:6px!important}
 
+/* Summary matrices use the same frozen label and dedicated 24-hour total column. */
+body.live-admin .matrix-hours-view>.live-matrix>table{min-width:1660px!important;border-collapse:separate;border-spacing:0}
+body.live-admin .matrix-hours-view>.live-matrix>table>thead>tr>th:first-child,
+body.live-admin .matrix-hours-view>.live-matrix>table>tbody>tr:not(.analysis-expanded-row)>td:first-child,
+body.live-admin .matrix-hours-view>.live-matrix>table>tfoot>tr>td:first-child{position:sticky;left:0;z-index:2;background:#f4f7fc;box-shadow:3px 0 5px #233b5c15}
+body.live-admin .matrix-hours-view>.live-matrix>table>thead>tr>th:first-child{z-index:3;background:#edf2fa}
+body.live-admin .matrix-hours-view>.live-matrix>table>thead>tr>th:nth-child(26),
+body.live-admin .matrix-hours-view>.live-matrix>table>tbody>tr:not(.analysis-expanded-row)>td:nth-child(26){width:176px;min-width:176px;background:#f5f8ff}
+
 /* Column guides are painted inside cells: no border width, layout or sticky-shadow changes.
  * Zero specificity lets each table keep its existing sticky/relative positioning.
  * A full-width expansion/empty row has one last cell, so it receives no extra guide. */
