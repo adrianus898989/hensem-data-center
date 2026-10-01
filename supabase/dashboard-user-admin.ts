@@ -217,7 +217,7 @@ Deno.serve(async (request) => {
         || !Array.isArray(access.permissions) || access.permissions.length > 1000
         || !access.permissions.every((key: unknown) => typeof key === "string" && /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/.test(key))
         || (access.mode === "owner" && actorRole !== "owner")) throw new DataScopeError("角色权限验证暂时不可用，请重试。", 503);
-      if (access.mode !== "assigned") return;
+      if (access.mode !== "assigned") return access;
       const required: Record<string, string[]> = {
         "list-users": ["access.view"],
         "create-account": ["access.view", "access.create"], "create-viewer": ["access.view", "access.create"],
@@ -233,6 +233,7 @@ Deno.serve(async (request) => {
       const keys = required[action];
       if (["update-account", "update-viewer"].includes(action) && typeof body.active === "boolean") keys?.push("access.status");
       if (!access.canView || !keys || !keys.every(key => access.permissions.includes(key))) throw new DataScopeError("当前角色没有此项操作权限。", 403);
+      return access;
     }
 
     async function requireManager() {
@@ -251,9 +252,23 @@ Deno.serve(async (request) => {
         .eq("auth_user_id", caller.id)
         .maybeSingle();
       if (profileError) throw new Error(`读取管理员权限失败：${profileError.message}`);
-      if (!callerProfile?.active || !["owner", "admin"].includes(String(callerProfile.role || ""))) throw new DataScopeError("只有管理账号可以执行这个操作", 403);
-      await requireAssignedRole(token, callerProfile.role);
-      return { token, caller, profile: callerProfile, actor: { id: caller.id, username: String(callerProfile.username || "admin") } };
+      if (!callerProfile?.active || !["owner", "admin", "viewer"].includes(String(callerProfile.role || ""))) throw new DataScopeError("只有获授权账号可以执行这个操作", 403);
+      const roleAccess = await requireAssignedRole(token, callerProfile.role);
+      if (callerProfile.role === "viewer" && roleAccess.mode !== "assigned") throw new DataScopeError("当前账号没有管理权限", 403);
+      return { token, caller, roleAccess, profile: callerProfile, actor: { id: caller.id, username: String(callerProfile.username || "admin") } };
+    }
+
+    async function requireTargetAction(ctx: Awaited<ReturnType<typeof requireManager>>, targetId: string, permission: string) {
+      if (ctx.profile.role === "owner" || ctx.roleAccess.mode !== "assigned") return;
+      const anonKey = String(Deno.env.get("SUPABASE_ANON_KEY") || "").trim();
+      try {
+        const response = await fetch(supabaseUrl.replace(/\/$/, "") + "/rest/v1/rpc/dashboard_account_action_allowed", {
+          method: "POST", headers: { apikey: anonKey, Authorization: `Bearer ${ctx.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({p_target: targetId, p_permission: permission}), cache: "no-store", redirect: "error", signal: AbortSignal.timeout(10000),
+        });
+        if (!response.ok) throw new DataScopeError("目标账号权限验证暂时不可用", 503);
+        if (await response.json() !== true) throw new DataScopeError("当前角色不能管理此账号", 403);
+      } catch (error) { if (error instanceof DataScopeError) throw error; throw new DataScopeError("目标账号权限验证暂时不可用", 503); }
     }
 
     async function requireAuthenticated() {
@@ -295,6 +310,10 @@ Deno.serve(async (request) => {
     async function requireCapability(key: keyof ManagementPermissions) {
       const ctx = await requireManager();
       if (ctx.profile.role === "owner") return ctx;
+      if (ctx.roleAccess.mode === "assigned") {
+        if (key !== "manage_viewers" && storedDataScope(ctx.profile).mode !== "all") throw new DataScopeError("当前账号仅可见指定数据范围，不能访问全局同步或全局操作记录", 403);
+        return ctx;
+      }
       const permissions = sanitizeManagementPermissions(ctx.profile.management_permissions);
       if (!permissions[key]) throw new DataScopeError("当前管理员没有这个后台管理权限", 403);
       if (key !== "manage_viewers" && storedDataScope(ctx.profile).mode !== "all") {
@@ -322,6 +341,7 @@ Deno.serve(async (request) => {
 
     if (action === "create-account") {
       const ctx = await requireManager();
+      if (ctx.roleAccess.mode === "assigned") return json(request, {ok:false, message:"请由总管理员建立账号，再在角色页分配获授权角色"}, 403);
       const username = normalizeUsername(body?.username);
       const password = validatePassword(body?.password);
       const requestedRole = String(body?.role || "viewer") === "admin" ? "admin" : "viewer";
@@ -330,7 +350,7 @@ Deno.serve(async (request) => {
       }
       if (requestedRole === "viewer" && ctx.profile.role !== "owner") {
         const management = sanitizeManagementPermissions(ctx.profile.management_permissions);
-        if (!management.manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
+        if (ctx.roleAccess.mode !== "assigned" && !management.manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
       }
 
       const permissions = requestedRole === "admin" ? { ...ADMIN_PERMISSIONS, ...sanitizePermissions(body?.permissions) } : sanitizePermissions(body?.permissions);
@@ -366,7 +386,9 @@ Deno.serve(async (request) => {
     }
 
     if (action === "create-viewer") {
-      const { caller, actor, profile: callerProfile } = await requireCapability("manage_viewers");
+      const ctx = await requireCapability("manage_viewers");
+      if (ctx.roleAccess.mode === "assigned") return json(request, {ok:false, message:"请由总管理员建立账号，再在角色页分配获授权角色"}, 403);
+      const { caller, actor, profile: callerProfile } = ctx;
       const username = normalizeUsername(body?.username);
       const password = validatePassword(body?.password);
       const permissions = sanitizePermissions(body?.permissions);
@@ -408,7 +430,7 @@ Deno.serve(async (request) => {
         .order("created_at", { ascending: true });
       if (error) throw new Error(`读取账号列表失败：${error.message}`);
       const scope = storedDataScope(ctx.profile);
-      const users = scope.mode === "all" ? data || [] : (data || []).filter(user =>
+      const users = ctx.roleAccess.mode === "assigned" ? (data || []).filter(user => user.role === "viewer" && dataScopeSubset(storedDataScope(user), scope)) : scope.mode === "all" ? data || [] : (data || []).filter(user =>
         sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers
         && user.role === "viewer" && dataScopeSubset(storedDataScope(user), scope));
       return json(request, { ok: true, users });
@@ -416,6 +438,7 @@ Deno.serve(async (request) => {
 
     if (action === "update-account") {
       const ctx = await requireManager();
+      if (ctx.roleAccess.mode === "assigned" && (body.permissions || body.management_permissions || Object.prototype.hasOwnProperty.call(body,"role"))) return json(request, {ok:false,message:"已分配角色的目录权限请在角色页修改，不能写入旧版权限"}, 403);
       const hasRole = Object.prototype.hasOwnProperty.call(body, "role");
       if (hasRole && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以修改账号角色" }, 403);
       if (hasRole && !["admin", "viewer"].includes(body.role)) return json(request, { ok: false, message: "角色只能选择管理员或查看账号" }, 400);
@@ -433,9 +456,11 @@ Deno.serve(async (request) => {
       if (target.role === "admin" && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以修改小管理员" }, 403);
       if (target.role === "viewer" && ctx.profile.role !== "owner") {
         const management = sanitizeManagementPermissions(ctx.profile.management_permissions);
-        if (!management.manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
+        if (ctx.roleAccess.mode !== "assigned" && !management.manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
       }
 
+      await requireTargetAction(ctx, target.auth_user_id, "access.edit");
+      if (typeof body.active === "boolean") await requireTargetAction(ctx, target.auth_user_id, "access.status");
       assertTargetDataScope(ctx.profile, target);
       const dataScope = requestedDataScope(body, ctx.profile, false);
 
@@ -481,7 +506,9 @@ Deno.serve(async (request) => {
     }
 
     if (action === "update-viewer") {
-      const { actor, profile: callerProfile } = await requireCapability("manage_viewers");
+      const ctx = await requireCapability("manage_viewers");
+      const { actor, profile: callerProfile } = ctx;
+      if (ctx.roleAccess.mode === "assigned" && body.permissions) return json(request, {ok:false,message:"请在角色页修改目录权限"}, 403);
       if (Object.prototype.hasOwnProperty.call(body, "role")) return json(request, { ok: false, message: "请使用账号角色设置修改角色" }, 400);
       const username = normalizeUsername(body?.username);
       const { data: target, error: targetError } = await admin
@@ -493,6 +520,8 @@ Deno.serve(async (request) => {
       if (!target) return json(request, { ok: false, message: "账号不存在" }, 404);
       if (target.role !== "viewer") return json(request, { ok: false, message: "不能在这里修改 Admin" }, 403);
 
+      await requireTargetAction(ctx, target.auth_user_id, "access.edit");
+      if (typeof body.active === "boolean") await requireTargetAction(ctx, target.auth_user_id, "access.status");
       assertTargetDataScope(callerProfile, target);
       const dataScope = requestedDataScope(body, callerProfile, false);
 
@@ -524,7 +553,8 @@ Deno.serve(async (request) => {
       if (!target) return json(request, { ok: false, message: "账号不存在" }, 404);
       if (target.role === "owner") return json(request, { ok: false, message: "总管理员密码请由本人在个人资料修改" }, 403);
       if (target.role === "admin" && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以重置小管理员密码" }, 403);
-      if (target.role === "viewer" && ctx.profile.role !== "owner" && !sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
+      if (target.role === "viewer" && ctx.profile.role !== "owner" && ctx.roleAccess.mode !== "assigned" && !sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
+      await requireTargetAction(ctx, target.auth_user_id, action === "reset-password" ? "access.reset_password" : "access.delete");
       assertTargetDataScope(ctx.profile, target);
       await revokeSessions(target.auth_user_id);
       const { error } = await admin.auth.admin.updateUserById(target.auth_user_id, { password });
@@ -546,7 +576,8 @@ Deno.serve(async (request) => {
       if (!target) return json(request, { ok: false, message: "账号不存在" }, 404);
       if (target.role === "owner") return json(request, { ok: false, message: "总管理员账号不能删除" }, 403);
       if (target.role === "admin" && ctx.profile.role !== "owner") return json(request, { ok: false, message: "只有总管理员可以删除小管理员" }, 403);
-      if (target.role === "viewer" && ctx.profile.role !== "owner" && !sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
+      if (target.role === "viewer" && ctx.profile.role !== "owner" && ctx.roleAccess.mode !== "assigned" && !sanitizeManagementPermissions(ctx.profile.management_permissions).manage_viewers) return json(request, { ok: false, message: "当前管理员没有账号管理权限" }, 403);
+      await requireTargetAction(ctx, target.auth_user_id, action === "reset-password" ? "access.reset_password" : "access.delete");
       assertTargetDataScope(ctx.profile, target);
       await revokeSessions(target.auth_user_id);
       const { error } = await admin.auth.admin.deleteUser(target.auth_user_id);

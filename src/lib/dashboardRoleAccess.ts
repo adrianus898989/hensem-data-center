@@ -16,10 +16,14 @@ export function validateDashboardRoleAccess(value: unknown): DashboardRoleAccess
   const v = value as DashboardRoleAccess;
   if (!v || typeof v !== "object" || !["owner", "legacy", "assigned"].includes(v.mode)
     || typeof v.canView !== "boolean" || !Number.isSafeInteger(v.version) || v.version < 0
-    || !Array.isArray(v.permissions) || v.permissions.some(key => typeof key !== "string" || !codes.has(key) && !retiredCodes.has(key))
+    || !Array.isArray(v.permissions) || v.permissions.length > 500
+    || v.permissions.some(key => typeof key !== "string" || key.length > 160 || !/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/.test(key))
     || (v.mode === "assigned" && (typeof v.roleId !== "string" || !/^[0-9a-f-]{36}$/i.test(v.roleId)))
     || (v.roleName !== null && typeof v.roleName !== "string")) throw Error("角色权限响应不完整，请重新验证。");
-  const permissions = v.permissions.filter(key => !retiredCodes.has(key));
+  // During a rolling release the server may know newer permissions. Unknown
+  // read keys grant nothing locally; role creation/assignment still uses the
+  // separate strict catalog validator and the authoritative SQL gateway.
+  const permissions = Array.from(new Set(v.permissions.filter(key => codes.has(key) && !retiredCodes.has(key))));
   return {...v, permissions, canView: v.canView && (v.mode !== "assigned" || permissions.some(key => key.endsWith(".view")))};
 }
 export function dashboardRoleAllows(access: DashboardRoleAccess | null | undefined, page: string, action = "view"): boolean {

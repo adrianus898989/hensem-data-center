@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { serve } from './worker.mjs';
+import { servePublicStatic as serve } from './worker.mjs';
 const host = 'https://data-center.workdesk-hub.workers.dev';
 const site = '/hensem-data-center/';
 const request = (path, init) => new Request(host + path, init);

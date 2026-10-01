@@ -11,8 +11,8 @@ export function createSecurityAdminHandler(gateway:SecurityAdminGateway,options:
    const user=await gateway.getUser(token),session=verifiedSessionId(token);
    if(!user||!uuid(user.id)||!session)throw new SecurityError(401,'login_required','登录已失效');
    const body=await readSecurityBody(request),surface=body.surface,action=String(body.action||'');
-   if((surface!=='dashboard'&&surface!=='workorder')||!['policy','list-rules','upsert-rule','set-rule-active','delete-rule','account-security','list-account-security','set-account-policy','unlock-account','account-ip-rules','set-account-ip-mode','upsert-account-ip-rule','set-account-ip-rule-active','delete-account-ip-rule'].includes(action))throw new SecurityError(400,'invalid_request','操作不支持');
-   // SQL rechecks current owner + approved session and performs the mutation in
+   if((surface!=='dashboard'&&surface!=='workorder')||!['policy','list-rules','upsert-rule','set-rule-active','delete-rule','account-security','list-account-security','set-account-policy','unlock-account','account-ip-rules','set-account-ip-mode','upsert-account-ip-rule','set-account-ip-rule-active','delete-account-ip-rule','upsert-ip-rule','set-ip-rule-active','delete-ip-rule'].includes(action))throw new SecurityError(400,'invalid_request','操作不支持');
+   // SQL rechecks live role permissions + approved session and performs the mutation in
    // one transaction; JSON actor/session/IP fields are never used as authority.
    return securityResponse(await gateway.admin({actor:user.id,session,ip,surface,action,body}));
   }catch(error){return securityFailure(error);}

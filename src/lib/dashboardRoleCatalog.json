@@ -37,7 +37,8 @@
         "pendingSnapshot",
         "autoWithdraw",
         "details",
-        "query"
+        "query",
+        "analysisOrders"
       ]
     },
     {
@@ -106,7 +107,8 @@
         "reportSummary",
         "collectedData",
         "details",
-        "query"
+        "query",
+        "analysisOrders"
       ]
     },
     {
@@ -142,7 +144,8 @@
         "reportSummary",
         "collectedData",
         "details",
-        "query"
+        "query",
+        "analysisOrders"
       ]
     },
     {
@@ -178,7 +181,8 @@
         "reportSummary",
         "collectedData",
         "details",
-        "query"
+        "query",
+        "analysisOrders"
       ]
     },
     {
@@ -214,7 +218,8 @@
         "reportSummary",
         "collectedData",
         "details",
-        "query"
+        "query",
+        "analysisOrders"
       ]
     },
     {
@@ -250,7 +255,8 @@
         "reportSummary",
         "collectedData",
         "details",
-        "query"
+        "query",
+        "analysisOrders"
       ]
     },
     {
@@ -556,7 +562,8 @@
         "query",
         "workorders",
         "submissionAnalysis",
-        "memberDaily"
+        "memberDaily",
+        "analysisOrders"
       ]
     },
     {
@@ -595,7 +602,8 @@
         "query",
         "workorders",
         "submissionAnalysis",
-        "memberDaily"
+        "memberDaily",
+        "analysisOrders"
       ]
     },
     {
@@ -634,7 +642,8 @@
         "query",
         "workorders",
         "submissionAnalysis",
-        "memberDaily"
+        "memberDaily",
+        "analysisOrders"
       ]
     },
     {
@@ -698,7 +707,8 @@
         "reportSummary",
         "collectedData",
         "details",
-        "query"
+        "query",
+        "analysisOrders"
       ]
     },
     {
@@ -731,7 +741,8 @@
         "intakeCoverage",
         "submissionAnalysis",
         "memberDaily",
-        "aggregate"
+        "aggregate",
+        "analysisOrders"
       ]
     },
     {
@@ -813,7 +824,8 @@
         "collectedData",
         "details",
         "query",
-        "memberDaily"
+        "memberDaily",
+        "analysisOrders"
       ]
     },
     {
@@ -850,7 +862,8 @@
         "collectedData",
         "details",
         "query",
-        "memberDaily"
+        "memberDaily",
+        "analysisOrders"
       ]
     },
     {
@@ -887,7 +900,8 @@
         "collectedData",
         "details",
         "query",
-        "memberDaily"
+        "memberDaily",
+        "analysisOrders"
       ]
     },
     {
@@ -924,7 +938,8 @@
         "collectedData",
         "details",
         "query",
-        "memberDaily"
+        "memberDaily",
+        "analysisOrders"
       ]
     },
     {
@@ -960,7 +975,8 @@
         "reportSummary",
         "collectedData",
         "details",
-        "query"
+        "query",
+        "analysisOrders"
       ]
     },
     {
@@ -996,7 +1012,8 @@
         "reportSummary",
         "collectedData",
         "details",
-        "query"
+        "query",
+        "analysisOrders"
       ]
     },
     {
@@ -1032,7 +1049,8 @@
         "reportSummary",
         "collectedData",
         "details",
-        "query"
+        "query",
+        "analysisOrders"
       ]
     },
     {
@@ -1150,6 +1168,11 @@
         {
           "id": "view",
           "label": "查看目录与页面"
+        },
+        {
+          "id": "edit",
+          "label": "新增 / 修改 IP 白名单",
+          "sensitive": true
         }
       ],
       "requests": []

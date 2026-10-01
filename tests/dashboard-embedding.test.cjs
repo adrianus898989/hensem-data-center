@@ -2,7 +2,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const root=path.resolve(__dirname,'..');
 const compile=file=>ts.transpileModule(fs.readFileSync(path.join(root,file),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
 const lib={exports:{}};
-vm.runInNewContext(compile('src/lib/dashboardEmbedding.ts'),{module:lib,exports:lib.exports});
+vm.runInNewContext(compile('src/lib/dashboardEmbedding.ts'),{module:lib,exports:lib.exports,URL});
 const {dashboardIsTopLevel}=lib.exports;
 const ownWindow=()=>{const w={};w.self=w;w.top=w;return w;};
 function fixture(win){
@@ -62,4 +62,12 @@ test('deployment actions are immutable and build does not receive deployment pri
   assert.doesNotMatch(permissions,/pages:\s*write|id-token:\s*write/);
   assert.match(build,/persist-credentials:\s*false/);assert.match(build,/install --frozen-lockfile/);
   assert.match(workflow.split('  deploy:')[1],/pages:\s*write/);
+});
+
+test('old public Pages links redirect to the gated Worker before auth is mounted and do not transfer query credentials',()=>{
+ const redirect=lib.exports.dashboardSecureEntryRedirect;
+ assert.equal(redirect('https://adrianus898989.github.io/hensem-data-center/?token=private#admin/access'),'https://data-center.workdesk-hub.workers.dev/hensem-data-center/#admin/access');
+ for(const href of ['https://data-center.workdesk-hub.workers.dev/hensem-data-center/','https://evil.invalid/hensem-data-center/','https://adrianus898989.github.io/other/','https://adrianus898989.github.io/hensem-data-center-evil/','not a url'])assert.equal(redirect(href),null);
+ const w=ownWindow(),f=fixture(w),child={type:'protected-auth',props:{}};let next='';w.location={href:'https://adrianus898989.github.io/hensem-data-center/#admin/ip',replace:url=>{next=url;}};
+ f.render(child);f.flush();assert.equal(next,'https://data-center.workdesk-hub.workers.dev/hensem-data-center/#admin/ip');assert.equal(nodes(f.render(child)).some(n=>n===child),false);
 });

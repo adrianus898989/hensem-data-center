@@ -19,9 +19,11 @@ function ui(options={}){
   if(name.endsWith('.css'))return{};
   if(name==='./AccountLoginPolicy')return{default:function AccountLoginPolicy(){}};if(name==='./AccountIpAdmin')return{default:function AccountIpAdmin(){}};if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};
   if(name==='./AccountRoleEditor')return{default:function AccountRoleEditor(){}};
+  if(name==='./AccountAssignedRoleDialog')return{default:function AccountAssignedRoleDialog(){}};
+  if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};
   if(name==='./AccountPermissionDialog')return{default:function AccountPermissionDialog(){}};
   if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async()=>{calls.push({action:'list'});return options.list?options.list():options.users||[owner,brazil,india]},listDashboardAudit:async()=>{calls.push({action:'audit'});return[]},createDashboardAccount:async(...args)=>{calls.push({action:'create',args:plain(args)});return options.create?options.create(...args):{role:args[3],username:args[1]}},updateDashboardAccount:async(...args)=>{calls.push({action:'update',args:plain(args)});if(options.update)return options.update(...args)},resetDashboardUserPassword:async(...args)=>calls.push({action:'password',args:plain(args)})};
-  if(name.endsWith('/dashboardRoleClient'))return{dashboardRoleRequest:async(...args)=>{roleCalls.push(plain(args));return options.roles?options.roles():{roles:[],accounts:(options.users||[owner,brazil,india]).map(account=>({...account,role_id:null,assignment_version:0}))}}};
+  if(name.endsWith('/dashboardRoleClient'))return{dashboardRolePages:require('../src/lib/dashboardRoleCatalog.json').pages,dashboardRoleRequest:async(...args)=>{roleCalls.push(plain(args));return options.roles?options.roles():{roles:[],accounts:(options.users||[owner,brazil,india]).map(account=>({...account,role_id:null,assignment_version:0}))}}};
   if(name.startsWith('@/lib/'))return loadTs(path.join(root,'src/lib',name.slice(6)+'.ts'));
   throw Error('Unexpected module: '+name);
  }});
@@ -149,7 +151,7 @@ test('owner login security is only mounted after an authoritative directory read
  security.props.onSnapshot({status:'ready',states:{[brazil.auth_user_id]:{failed_count:5,failure_limit:null,locked:true,locked_at:'2026-10-01',version:3}},failureLimit:5});
  h.field('状态').props.onChange({target:{value:'locked'}});assert.equal(h.rows().length,1);assert.match(text(h.rows()),/brazil-fixture.*自动锁定/);
  h.button('登录安全').props.onClick();security=h.all().find(n=>n.type?.name==='AccountLoginPolicy');assert.equal(security.props.target.id,brazil.auth_user_id);assert.equal(security.props.target.active,true);assert.equal(h.calls.length,1);
- const limited=ui({actor:manager,manualQuery:true,roleAccess:assigned(['access.view'])});limited.button('查询账号').props.onClick();await flush();assert(!limited.all().some(n=>n.type?.name==='AccountLoginPolicy'));assert(!limited.all().some(n=>n.type==='button'&&text(n)==='登录安全'));
+ const limited=ui({actor:manager,manualQuery:true,roleAccess:assigned(['access.view'])});limited.button('查询账号').props.onClick();await flush();assert(limited.all().some(n=>n.type?.name==='AccountLoginPolicy')); assert(limited.all().some(n=>n.type==='button'&&text(n)==='登录安全'));
 });
 
 const vipRole={id:'role-vip',name:'VIP',active:true,permissions:['overview.view','collect.view','collect.query'],version:1};
@@ -165,12 +167,25 @@ test('backend account list shows confirmed assigned VIP and its permissions with
 test('unknown role metadata is visibly unverified, never silently called independent authorization',async()=>{
  const h=ui({users:[brazil],roles:()=>Promise.reject(Error('fixture'))});await flush();
  assert.match(text(h.rows()),/角色读取失败，请刷新列表/);assert.doesNotMatch(text(h.rows()),/账号独立授权|VIP/);
+ h.button('配置权限').props.onClick();assert.match(text(h.dialog()),/角色读取尚未完成/);assert(!h.all().some(n=>n.type?.name==='AccountPermissionDialog'));
+ h.dialog().props.onClose();h.button('账号设置').props.onClick();assert(!h.all().some(n=>n.type?.name==='AccountRoleEditor'),'unverified assigned status never enables legacy identity editing');
  const missing=ui({users:[brazil],roles:()=>({roles:[],accounts:[]})});await flush();assert.match(text(missing.rows()),/角色待核对/);assert.doesNotMatch(text(missing.rows()),/账号独立授权/);
- const admin=ui({actor:manager,users:[brazil]});await flush();assert.equal(admin.roleCalls.length,0,'owner-only role roster is never requested by admins');
+ const admin=ui({actor:manager,users:[brazil]});await flush();assert.equal(admin.roleCalls.length,1,'existing authorized admins also read the server-scoped assigned role roster');assert.match(text(admin.rows()),/未分配角色/);
+});
+test('assigned account permission configuration uses its actual role and never the legacy profile editor',async()=>{
+ const h=ui({users:[brazil],roles:vipRoster});await flush();h.button('配置权限').props.onClick();
+ const dialog=h.all().find(n=>n.type?.name==='AccountAssignedRoleDialog');assert(dialog);assert.equal(dialog.props.account.role_id,vipRole.id);assert.equal(dialog.props.roles[0].name,'VIP');
+ assert(!h.all().some(n=>n.type?.name==='AccountPermissionDialog'));assert(h.calls.every(call=>call.action==='list'));
 });
 test('late role roster cannot leak a previous owner identity into the new account directory',async()=>{
- let resolve;const h=ui({manualQuery:true,users:[brazil],roles:()=>new Promise(r=>resolve=r)});
+ const resolves=[];const h=ui({manualQuery:true,users:[brazil],roles:()=>new Promise(r=>resolves.push(r))});
  h.button('查询账号').props.onClick();await flush();assert.match(text(h.rows()),/角色待核对/);
- h.actor(manager);h.button('查询账号').props.onClick();await flush();resolve(vipRoster());await flush();
- assert.doesNotMatch(text(h.rows()),/VIP|账号独立授权/);assert.equal(h.roleCalls.length,1);
+ h.actor(manager);h.button('查询账号').props.onClick();await flush();resolves[0](vipRoster());await flush();
+ assert.doesNotMatch(text(h.rows()),/VIP|账号独立授权/);assert.equal(h.roleCalls.length,2);
+ resolves[1](vipRoster());await flush();assert.match(text(h.rows()),/VIP/);
+});
+test('legacy admin sees the assigned role as read-only instead of changing ineffective profile permissions',async()=>{
+ const h=ui({actor:manager,users:[brazil],roles:vipRoster});await flush();assert.match(text(h.rows()),/VIP/);h.button('查看权限').props.onClick();
+ const dialog=h.all().find(n=>n.type?.name==='AccountAssignedRoleDialog');assert(dialog);assert.equal(dialog.props.editable,false);assert(!h.all().some(n=>n.type?.name==='AccountPermissionDialog'));
+ assert(h.calls.every(call=>call.action==='list'));assert.equal(h.roleCalls.length,1);
 });

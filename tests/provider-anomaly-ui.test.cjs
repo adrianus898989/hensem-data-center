@@ -4,7 +4,10 @@ const {createRequire}=require('node:module');const {renderToStaticMarkup}=requir
 const {loadTs,root}=require('./load-typescript.cjs');
 const sourceText=fs.readFileSync(path.join(root,'src/components/Dashboard.tsx'),'utf8');
 const source=ts.createSourceFile('Dashboard.tsx',sourceText,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
-const dashboard=source.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='Dashboard');
+// The retained panes belong to LegacyDashboard after the current workspace was
+// separated from this component. Exercise the actual legacy routing function.
+const dashboard=source.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='LegacyDashboard');
+assert.ok(dashboard,'the retained legacy route component is present');
 const switchNode=dashboard.body.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='switchModule');
 const branch=dashboard.body.statements.find(n=>ts.isIfStatement(n)&&n.expression.getText(source)==='activeModule === "provider-anomalies"');
 let button;
