@@ -262,6 +262,15 @@ test('reference totals retain exactly six compact cards per direction with indep
  assert.match(groups[0][2],/1,000\.00/);assert.match(groups[1][2],/2,000\.00/);assert.doesNotMatch(h.html(),/3,000\.00|60\.00%/);h.L.direction='charge';h.c.render();assert.equal([...h.html().matchAll(/data-metric=/g)].length,6);assert.doesNotMatch(h.html(),/data-direction="withdraw"/);
 });
 
+test('shared metric cards and overview show independent amount and count changes without rereading data',async()=>{
+ const h=await ready(),current=completeAggregate(P,80,8),previous=completeAggregate(P,100,12);
+ current.summary[0].all_amount=8000;current.summary[0].success_amount=1200;previous.summary[0].all_amount=10000;previous.summary[0].success_amount=900;
+ h.L.results=[current];h.L.comparisonResults=[previous];h.L.comparisonStatus='ready';h.L.direction='charge';h.L.comparisonLabel='较前一日同一时段';const before=JSON.stringify([h.L.results,h.L.comparisonResults]),calls=h.calls.length;
+ for(const page of ['matrix','time','amount','orders','merchants','teamops']){h.c.state.page=page;h.L.platform=P.id;h.L.multi.platform=[P.id];h.c.render();const cards=h.html().match(/<section class="live-reference-direction"[^]*?<\/section>/)?.[0];assert(cards,page);const visible=plain(cards);assert.match(visible,/较昨日 -2,000\.00（-20\.00%）/,page);assert.match(visible,/较昨日 -20 笔（-20\.00%）/,page);assert.match(visible,/较昨日 \+300\.00（\+33\.33%）/,page);assert.match(visible,/较昨日 -4 笔（-33\.33%）/,page);assert.match(visible,/较昨日 -2\.00 个百分点/,page)}
+ h.c.state.page='overview';h.c.render();const flow=h.html().match(/<section class="df-card" id="df-collect">([^]*?)<\/section>/)?.[1];assert(flow);assert.match(plain(flow),/较昨日 -2,000\.00（-20\.00%）/);assert.match(plain(flow),/较昨日 -20 笔（-20\.00%）/);assert.match(plain(flow),/较昨日 -2\.00 个百分点/);
+ assert.equal(JSON.stringify([h.L.results,h.L.comparisonResults]),before);assert.equal(h.calls.length,calls);
+});
+
 test('paired business tables retain unknown totals without a provider confirmation panel',async()=>{
  const h=await ready(),r=completeAggregate(P,10,3),withdraw={...completeAggregate(P,20,15).summary[0],direction:'withdraw'};
  r.summary.push(withdraw);
@@ -621,7 +630,7 @@ test('provider KPI comparisons use the same direction and distinguish money diff
  const cards=h.html().split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];
  assert.match(cards,/6,000\.00/);assert.match(cards,/昨日 5,000\.00/);assert.match(cards,/\+1,000\.00.*\+20\.00%/);assert.match(cards,/\+10\.00 个百分点/);assert.match(cards,/120\.00/);assert.match(cards,/昨日 100\.00/);assert.doesNotMatch(cards,/90,000/);
  assert.equal((cards.match(/<strong>/g)||[]).length,8,'all eight primary metrics remain visible');
- assert.doesNotMatch(plain(cards),/昨日|同期|5,000\.00|\+1,000\.00/,'prior values and absolute differences stay in hover details');
+ assert.doesNotMatch(plain(cards),/5,000\.00/,'the previous value stays in hover details');assert.match(plain(cards),/\+1,000\.00（\+20\.00%）/,'absolute amount difference is directly visible');assert.match(plain(cards),/\+10 笔（\+20\.00%）/,'absolute count difference is directly visible');
  assert.match(plain(cards),/\+20\.00%/);assert.match(plain(cards),/\+10\.00个百分点/,'percentage-point change remains distinct from relative percent');
  assert.match(cards,/title="[^"]*昨日 5,000\.00 · 较昨日同期 \+1,000\.00 · \+20\.00%"/);
  assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/业务方向/);

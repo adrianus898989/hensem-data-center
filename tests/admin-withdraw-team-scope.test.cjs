@@ -9,6 +9,23 @@ function fixture({catalog=m8,withdrawCatalog=ph,country='巴西',team='胖虎',v
  const calls=[],L={catalogReady:true,catalog,withdrawCatalog,country,team,multi:{team:team==='all'?[]:[team]},from:'2026-09-24T00:00:00',to:'2026-09-25T23:59:59'},context={Date,Intl,document:{getElementById:()=>null,querySelector:()=>null},HensemLiveFilters:{multi:({items})=>'<div class="test-platforms">'+items.map(x=>E(x[0])).join('|')+'</div>'}};context.window=context;vm.createContext(context);vm.runInContext(source('live-report-data.js'),context);vm.runInContext(source('live-withdraw-pages.js'),context);
  const page=context.HensemLiveWithdrawPages.create({L,E,C:String,N:String,R:(n,d)=>d?String(n/d*100)+'%':'—',box:(_,body)=>body,table:(headers,rows)=>'<table>'+rows.map(row=>'<tr>'+row.map(cell=>'<td>'+cell+'</td>').join('')+'</tr>').join('')+'</table>',render:()=>{},page:()=>view,request:async q=>{calls.push(plain(q));if(respond)return respond(q);if(q.action==='withdrawReasons')return {available:false};if(q.action==='withdrawNote')return {...q,version:'saved'};return {rows:[{country:q.country,platform:'SAME',total:4,success:3,rejected:1}],totals:{total:4},notes:[],canWriteNotes:true}}});return {L,context,page,calls};
 }
+test('withdraw and operator cards show count differences rather than confusing share changes with count growth',async()=>{
+ for(const view of ['auto_withdraw','withdraw_operators']){
+  const f=fixture({view});f.L.from='2026-09-25T00:00:00';await f.page.load();
+  Object.assign(f.page.state.data,{totals:{total:120,processed:120,success:90,rejected:30,autoCount:60,manualCount:60,operators:6,avgSeconds:90},previousTotals:{total:100,processed:100,success:80,rejected:20,autoCount:50,manualCount:50,operators:4,avgSeconds:120},comparison:{complete:true},rows:[{country:'胖虎巴西',platform:'SAME',total:120,processed:120,success:90,rejected:30,avgSeconds:90,previous:{total:100,processed:100,success:80,rejected:20,avgSeconds:120}}]});
+  const html=f.page.render(),cards=html.split('withdraw-kpis')[1].split('</section>')[0];
+  assert.match(cards,/\+20 笔（\+20\.00%）/);assert.match(cards,/\+10 笔（\+12\.50%）/);assert.doesNotMatch(cards,/ pp/);
+  assert.match(html,/-5\.00 pp/,'success share comparison remains a percentage point value in the table');
+  assert.match(html,/−30\.00 秒（-25\.00%）/);
+  if(view==='withdraw_operators')assert.match(cards,/\+2 人（\+50\.00%）/);
+ }
+});
+test('withdraw comparisons keep absolute zero-baseline changes and suppress missing/incomplete baselines',async()=>{
+ const f=fixture();f.L.from='2026-09-25T00:00:00';await f.page.load();
+ Object.assign(f.page.state.data,{totals:{total:10,success:4},previousTotals:{total:0,success:null},comparison:{complete:true}});
+ let cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/\+10 笔（无基数）/);assert.match(cards,/对比值未提供/);assert.doesNotMatch(cards,/NaN|Infinity|\+4 笔/);
+ f.page.state.data.comparison.complete=false;cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.doesNotMatch(cards,/\+10 笔/);assert.match(cards,/对比日期暂无数据/);
+});
 
 test('WG display aliases use raw site keys for auto, operators, reasons and daily drilldown only',async()=>{
  for(const rawField of ['sourceName','source_name'])for(const view of ['auto_withdraw','withdraw_operators']){

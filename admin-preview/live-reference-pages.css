@@ -328,7 +328,8 @@ body.live-admin .submission-members-modal .submission-pager{display:flex;justify
 /* One-line status actions keep every summary card at the same compact height. */
 body.live-admin .provider-summary-report .provider-platform-coverage-button{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;line-height:14px;font-size:10px}
 body.live-admin .provider-summary-report .provider-kpi-value label{max-width:100%;overflow:hidden;text-overflow:ellipsis}
-body.live-admin .provider-summary-report .provider-kpi-comparison{overflow:hidden;min-height:14px;max-height:14px}
+body.live-admin .provider-summary-report .provider-kpi-comparison{min-height:14px;height:auto;max-height:none}
+body.live-admin .provider-summary-report .provider-kpi-change{white-space:normal;overflow-wrap:anywhere;line-height:14px}
 body.live-admin .provider-summary-report .provider-status-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:10px;color:#6a7d9a;margin:0 0 6px}
 body.live-admin .provider-summary-report .provider-status-actions:empty{display:none}
 body.live-admin .provider-summary-report .provider-inline-status{font-size:10px;line-height:18px}

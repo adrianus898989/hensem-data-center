@@ -187,8 +187,11 @@
  }
  function compareMetric(key,current,rate=false,direction,rateBasis='success'){
   const pending=comparisonNote();if(pending)return pending;const previous=successTimeSummary(comparisonRows(direction),direction);
-  const d=rate?(rateBasis==='success'?HensemLiveCompare.ratioDelta(current.success_count,current.all_count,previous.success_count,previous.all_count):HensemLiveCompare.rateDelta(current.created_success_count??current.success_count,current.all_count,previous.created_success_count??previous.success_count,previous.all_count)):HensemLiveCompare.delta(current[key],previous[key]);
-  return '<span class="live-compare '+E(d.trend)+'">'+E(L.comparisonLabel||'较前一日')+' '+E(d.display)+'</span>';
+  const options={previous,comparisonStatus:L.comparisonStatus,comparisonLabel:L.comparisonLabel,comparisonError:L.comparisonError,money:N,count:C},html=value=>'<span class="live-compare '+E(value.tone)+'" title="'+E(value.title)+'">'+E(value.text)+'</span>';
+  if(rate){const currentPair=[rateBasis==='success'?current.success_count:current.created_success_count??current.success_count,current.all_count],previousPair=[rateBasis==='success'?previous.success_count:previous.created_success_count??previous.success_count,previous.all_count];return html(HensemLiveLayout.comparison(currentPair,previousPair,{...options,rateDelta:rateBasis==='success'?HensemLiveCompare.ratioDelta:HensemLiveCompare.rateDelta},true))}
+  const changes=[html(HensemLiveLayout.comparison(current[key],previous[key],options,false,key.endsWith('_count')?'count':'amount'))];
+  if(key.endsWith('_amount')){const countKey=key.replace(/_amount$/,'_count');changes.push(html(HensemLiveLayout.comparison(current[countKey],previous[countKey],options,false,'count')))}
+  return '<span class="live-metric-comparisons">'+changes.join('')+'</span>';
  }
  function comparisonCaption(){
   const q=L.results[0],prior=L.comparisonResults[0],zone=q?.platform?.timezone;

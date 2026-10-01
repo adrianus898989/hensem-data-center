@@ -64,11 +64,11 @@ test('raw and unique handling statistics retain independent amounts and explicit
 test('zero, missing and unknown linkage values remain distinct and use returned comparisons',async()=>{
  const h=harness(),s=summary();Object.assign(s.current,{kycYesCount:0,kycNoCount:20,kycUnknownCount:0,utrYesCount:null,utrNoCount:undefined,utrUnknownCount:0});
  Object.assign(s.previous,{kycYesCount:4,kycNoCount:3,kycUnknownCount:3,utrUnknownCount:0});s.changes=changes(s.current,s.previous);response(h,s);await h.module.load();const html=h.html();
- assert.match(plain(linkageMetric(html,'kycYesCount')),/是0昨日 4 笔增减 -4（-100\.00%）/);
- assert.match(plain(linkageMetric(html,'kycUnknownCount')),/未知0昨日 3 笔增减 -3（-100\.00%）/);
- assert.match(plain(linkageMetric(html,'utrYesCount')),/是—昨日 2 笔未提供可比值或覆盖不完整/);
+ assert.match(plain(linkageMetric(html,'kycYesCount')),/是0(?:0\.00%)昨日 4 笔 · 占比 40\.00%增减 -4（-100\.00%）/);
+ assert.match(plain(linkageMetric(html,'kycUnknownCount')),/未提供0(?:0\.00%)昨日 3 笔 · 占比 30\.00%增减 -3（-100\.00%）/);
+ assert.match(plain(linkageMetric(html,'utrYesCount')),/是——昨日 2 笔 · 占比 20\.00%未提供可比值或覆盖不完整/);
  assert.match(plain(linkageMetric(html,'utrNoCount')),/否—/);
- assert.match(plain(linkageMetric(html,'utrUnknownCount')),/未知0昨日 0 笔增减 0（前期为 0，增幅不适用）/);
+ assert.match(plain(linkageMetric(html,'utrUnknownCount')),/未提供0(?:0\.00%)昨日 0 笔 · 占比 0\.00%增减 0（前期为 0，增幅不适用）/);
  assert.doesNotMatch(html,/NaN|Infinity/);
 });
 test('missing amounts or server deltas never become client-subtracted estimates',async()=>{
@@ -134,4 +134,30 @@ test('complete statistics and previous-only gaps never mark current values parti
  assert.match(card(h.html(),'uniqueOrderCount'),/未提供可比值或覆盖不完整/);
  s.previous.coverage={...s.previous.coverage,missingOrderNumberCount:0};response(h,s);await h.module.load(true);
  assert.doesNotMatch(h.html(),/class="wo-stat-partial"/);assert.match(plain(card(h.html(),'uniqueOrderCount')),/笔数增减 \+4（\+50\.00%）/);
+});
+
+
+test('KYC and UTR shares include unknown tickets, use each period denominator and show percentage points separately',async()=>{
+ const h=harness();response(h);await h.module.load();const html=h.html(),yes=plain(linkageMetric(html,'kycYesCount')),unknown=plain(linkageMetric(html,'kycUnknownCount'));
+ assert.match(html,/占已采集原始工单 20 笔 · 含未提供/);
+ assert.match(yes,/是1155\.00%昨日 4 笔 · 占比 40\.00%增减 \+7（\+175\.00%）占比增减 \+15\.00 个百分点/);
+ assert.match(plain(linkageMetric(html,'kycNoCount')),/否630\.00%.*占比增减 0\.00 个百分点/);
+ assert.match(unknown,/未提供315\.00%昨日 3 笔 · 占比 30\.00%.*占比增减 -15\.00 个百分点/);
+ assert.match(plain(linkageMetric(html,'utrYesCount')),/是945\.00%昨日 2 笔 · 占比 20\.00%.*占比增减 \+25\.00 个百分点/);
+});
+test('linkage shares never turn missing or zero denominators into 0 percent and retain known counts',async()=>{
+ for(const total of [0,null,undefined]){
+  const h=harness(),s=summary();s.current.ticketCount=total;s.previous.ticketCount=total;response(h,s);await h.module.load();
+  const yes=plain(linkageMetric(h.html(),'kycYesCount'));assert.match(yes,/是11—昨日 4 笔 · 占比 —/);assert.match(yes,/占比增减 —/);assert.doesNotMatch(yes,/NaN|Infinity|个百分点/);
+ }
+ const h=harness(),s=summary();s.current.kycYesCount=null;response(h,s);await h.module.load();
+ assert.match(plain(linkageMetric(h.html(),'kycYesCount')),/是——.*占比增减 —/);
+ assert.match(plain(linkageMetric(h.html(),'kycNoCount')),/否630\.00%/);
+});
+test('linkage comparison uses the committed multi-day label and never invents history comparisons',async()=>{
+ const h=harness(),s=summary({comparison:{label:'前5天',startDate:'2026-09-15',endDate:'2026-09-19'}});response(h,s);await h.module.load();
+ assert.match(plain(linkageMetric(h.html(),'kycYesCount')),/前5天 4 笔 · 占比 40\.00%/);
+ assert.doesNotMatch(linkageMetric(h.html(),'kycYesCount'),/昨日/);
+ s.comparison=null;s.previous=null;s.changes={};response(h,s);await h.module.load(true);
+ assert.match(plain(linkageMetric(h.html(),'kycYesCount')),/55\.00%.*无日期对比/);assert.doesNotMatch(linkageMetric(h.html(),'kycYesCount'),/个百分点/);
 });
