@@ -23,7 +23,7 @@ const goodProfile = { auth_user_id: userId, active: true, role: 'owner' };
 const request = (query = '', headers = {}, method = 'GET', body) => new Request('https://unit.supabase.co/functions/v1/owner-admin-preview' + query, {
   method, body, headers: { origin: PREVIEW_ORIGIN, authorization: 'Bearer test-user-jwt', ...headers },
 });
-function fixture({ authStatus = 200, auth = { id: userId }, profileStatus = 200, profile = [goodProfile], payload = payloadBase64, failure = false,
+function fixture({ authStatus = 200, auth = { id: userId }, profileStatus = 200, profile = [goodProfile], profileRaw, payload = payloadBase64, failure = false,
   sessionAllowed = true, sessionStatus = 200, roleAccess, roleStatus = 200, grants = [], grantStatus = 200, target = [{auth_user_id:otherId,role:'viewer',active:true}], accounts = [{...goodProfile,username:'Owner'},
     {auth_user_id:otherId,username:'Viewer',role:'viewer',active:true}], total = accounts.length, grantSaveStatus = 200 } = {}) {
   const calls = [];
@@ -43,7 +43,8 @@ function fixture({ authStatus = 200, auth = { id: userId }, profileStatus = 200,
         value = grants; status = grantStatus;
         if (init.method === 'POST') { const mutation=JSON.parse(init.body); value=[{auth_user_id:mutation.auth_user_id,can_view:mutation.can_view}]; status=grantSaveStatus; }
       }
-      return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json', ...extraHeaders } });
+      const body = profileRaw !== undefined && parsed.pathname.endsWith('/dashboard_profiles') && !service ? profileRaw : JSON.stringify(value);
+      return new Response(body, { status, headers: { 'content-type': 'application/json', ...extraHeaders } });
     },
   });
   return { handler, calls };
@@ -83,6 +84,35 @@ test('fresh profile requires exactly the verified user and active boolean true',
   }
   await denied(await fixture({ profileStatus: 403 }).handler(request()), 403);
   await denied(await fixture({ profileStatus: 401 }).handler(request()), 401);
+});
+test('a profile pre-request session denial retains its code without authorizing or exposing upstream details', async () => {
+  for (const profile of [
+    { code: '42501', message: 'application_session_denied', details: 'UPSTREAM_PRIVATE_BODY_TOKEN', hint: userId },
+    { code: 'application_session_denied', message: 'UPSTREAM_PRIVATE_BODY_TOKEN' },
+  ]) for (const query of ['', '?check=1', '?action=access', '?action=grants']) {
+    const { handler, calls } = fixture({ profileStatus: 403, profile, payload: 'invalid base64' });
+    const response = await handler(request(query));
+    await denied(response.clone(), 403);
+    assert.deepEqual(await response.json(), { ok: false, code: 'application_session_denied' });
+    assert.equal(calls.length, 2);
+    assert(calls.every(call => call.init.headers.apikey === 'test-publishable-key'));
+    assert(!calls.some(call => call.url.includes('/rpc/') || call.url.includes('/dashboard_admin_preview_grants')));
+  }
+});
+test('unrelated or malformed profile 403 bodies remain denied as profile errors', async () => {
+  for (const profileRaw of [
+    JSON.stringify({ code: '42501', message: 'permission denied for table dashboard_profiles' }),
+    JSON.stringify({ code: '42501', message: 'application_session_denied extra' }),
+    JSON.stringify({ code: 'another_code', message: 'application_session_denied' }),
+    JSON.stringify([{ code: 'application_session_denied' }]),
+    JSON.stringify('application_session_denied'), 'null', '{invalid json', '',
+  ]) {
+    const { handler, calls } = fixture({ profileStatus: 403, profileRaw });
+    const response = await handler(request());
+    await denied(response.clone(), 403);
+    assert.deepEqual(await response.json(), { ok: false, code: 'profile_denied' });
+    assert.equal(calls.length, 2);
+  }
 });
 test('current owner receives the exact gzip payload through user-scoped auth calls', async () => {
   const { handler, calls } = fixture();

@@ -77,7 +77,7 @@
    const values=[...S.results.values()],ready=S.applied&&values.length>0,complete=ready&&!S.loading&&!S.error&&!S.failures.length&&values.length===S.targets.length;
    if(!ready)return {data:Object.fromEntries(fields.map(key=>[key,null])),complete:false};
    // Use original parts: merged groups can otherwise conceal a missing metric.
-   const rows=values.flatMap(result=>(result._parts||[result]).flatMap(part=>part.groups.hourly)).filter(row=>row.direction===direction&&(!row.currency||row.currency===L.currency)&&finite(row.hour)&&finite(row.hour)&&Number.isInteger(Number(row.hour))&&Number(row.hour)>=0&&Number(row.hour)<24&&(hour===undefined||Number(row.hour)===hour));
+   const rows=values.flatMap(result=>(result._parts||[result]).flatMap(part=>part.groups.hourly)).filter(row=>row.direction===direction&&(!row.currency||row.currency===L.currency)&&finite(row.hour)&&Number.isInteger(Number(row.hour))&&Number(row.hour)>=0&&Number(row.hour)<24&&(hour===undefined||Number(row.hour)===hour));
    const data=zero();for(const key of fields)data[key]=rows.some(row=>!finite(row[key]))?null:rows.reduce((n,row)=>n+Number(row[key]),0);
    if(c.successUnavailable(direction)||values.some(r=>direction==='withdraw'&&(r.withdrawSuccessTimeAvailable===false||(r.capabilities||r.platform?.capabilities)?.withdrawSuccessTimeAvailable===false))){data.success_count=null;data.success_amount=null}
    return {data,complete};

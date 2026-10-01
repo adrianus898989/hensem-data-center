@@ -15,6 +15,7 @@ vm.runInNewContext(transpile(fs.readFileSync(documentPath, 'utf8')), {
   module: documentModule, exports: documentModule.exports,
 }, { filename: documentPath });
 const api = documentModule.exports;
+const authErrors = require('./load-typescript.cjs').loadTs(path.join(repo,'src/lib/dashboardAuthClient.ts'));
 const KEYS = Array.from(api.OWNER_PREVIEW_DRAFT_KEYS), KEY = KEYS[0];
 const AUTH = 'hensem:dashboard:auth-session:v2';
 const HTML = '<!doctype html><html><head><title>Hensem</title></head><body><script>window.sampleLoaded=localStorage.getItem(' + JSON.stringify(KEY) + ');</script></body></html>';
@@ -132,7 +133,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     if (name.endsWith('/adminPreviewRestore')) return { restoreApprovedAdmin(html) { phases.push('restore'); restoreCalls.push(html); return options.restore ? options.restore(html) : html+'<!-- synthetic approved restoration -->'; } };
     if (name.endsWith('/ownerPreviewDocument')) return { ...api, makeOwnerPreviewDocument(...args) { phases.push('draft-document'); return api.makeOwnerPreviewDocument(...args); } };
     if (name.endsWith('/ownerPreviewShell')) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/ownerPreviewShell.ts'),'utf8')),{module:helper,exports:helper.exports,document:environment.document});return {...helper.exports,makeOwnerPreviewShellDocument(...args){phases.push('shell-document');return helper.exports.makeOwnerPreviewShellDocument(...args)}}; }
-    if (name.endsWith('/dashboardAuthClient')) return { ensureDashboardSession: async candidate => candidate, normalizedManagementPermissions: profile=>({manage_viewers:profile.management_permissions?.manage_viewers!==false}) };
+    if (name.endsWith('/dashboardAuthClient')) return { dashboardResponseError: authErrors.dashboardResponseError, ensureDashboardSession: async candidate => candidate, normalizedManagementPermissions: profile=>({manage_viewers:profile.management_permissions?.manage_viewers!==false}) };
     if (['adminConfigurationRequest','adminWorkorderRecordsRequest','depositStatisticsRequest','portalOperationLogsRequest'].some(helper=>name.endsWith('/'+helper))) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/'+name.split('/').pop()+'.ts'),'utf8')),{module:helper,exports:helper.exports});return helper.exports; }
     if (name.endsWith('/adminLiveBridge')) {
       if (!liveClient) { const module={exports:{}};const filename=path.join(repo,'src/lib/adminLiveBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module,exports:module.exports,setTimeout,clearTimeout},{filename});liveClient={...module.exports,makeAdminLiveDocument(...args){phases.push('live-document');return module.exports.makeAdminLiveDocument(...args)}}; }
@@ -305,9 +306,9 @@ function requestHarness(options = {}) {
   const fresh = { ...session, user: { id: options.freshUser || session.user.id }, access_token: 'offline-fresh-token' };
   vm.runInNewContext(transpile(fs.readFileSync(filename, 'utf8')), {
     module: box, exports: box.exports, URL,
-    require: name => { assert.equal(name, './dashboardAuthClient'); return { ensureDashboardSession: async () => fresh }; },
+    require: name => { assert.equal(name, './dashboardAuthClient'); return { dashboardResponseError: authErrors.dashboardResponseError, ensureDashboardSession: async () => fresh }; },
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: options.base || 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
-    fetch: async (url, init) => { calls.push({ url, init }); return { ok: !(options.status >= 400), status: options.status || 200, json: async () => ({ canView: true, canManage: false }) }; },
+    fetch: async (url, init) => { calls.push({ url, init }); return { ok: !(options.status >= 400), status: options.status || 200, json: async () => (options.body || { canView: true, canManage: false }) }; },
   }, { filename });
   return { api: box.exports, session, calls };
 }
@@ -419,5 +420,14 @@ test('WG data stays in the existing formal iframe with no separate workspace or 
   assert(!all.some(n=>n.type?.name==='WGRealtimeDashboard'||n.props?.className==='owner-preview-wg-page'));
   assert(!all.some(n=>n.type==='button'&&n.props?.children==='返回运营中心'));
   h.dispose();
+ }
+});
+
+test('preview request retains the structured session denial and distinguishes missing profile authorization',async()=>{
+ for(const code of ['application_session_denied','profile_denied']){
+  const h=requestHarness({status:403,body:{code,message:'private server detail'}});
+  const error=await h.api.adminPreviewRequest(h.session).catch(error=>error);
+  assert.equal(error.code,code);assert.equal(error.status,403);assert.equal(authErrors.isDashboardAuthTerminalError(error),true);
+  assert.doesNotMatch(error.message,/private server detail|停用/);assert.match(error.message,code==='application_session_denied'?/会话已失效/:/后台权限/);assert.equal(h.calls.length,1);
  }
 });

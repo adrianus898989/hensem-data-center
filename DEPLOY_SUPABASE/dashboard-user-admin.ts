@@ -26,7 +26,7 @@ const VIEWER_MANAGEMENT: ManagementPermissions = { manage_viewers: false, refres
 type DataScope = { mode: "all" | "selected"; countries: string[] };
 const DATA_GROUPS = new Set(["BR_PANGHU", "BR", "IN", "PK", "ID", "VN", "PH", "MY", "MM", "NG", "CO", "MX", "CL", "SA", "BR_NATIVE", "USDT"]);
 class DataScopeError extends Error {
-  constructor(message: string, readonly status: number) { super(message); }
+  constructor(message: string, readonly status: number, readonly code = "request_denied") { super(message); }
 }
 function parseDataScope(value: unknown): DataScope {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new DataScopeError("可见数据范围格式不正确", 400);
@@ -191,10 +191,10 @@ Deno.serve(async (request) => {
       // Called only after getUser verifies this exact token.
       let sessionId = "";
       try { sessionId = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).session_id; } catch { /* fail closed */ }
-      if (typeof sessionId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) throw new DataScopeError("登录已失效，请重新登录", 403);
+      if (typeof sessionId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) throw new DataScopeError("登录会话已失效，请重新登录。", 403, "application_session_denied");
       const { data, error } = await admin.rpc("application_session_check", { p_user_id: userId, p_session_id: sessionId, p_surface: "dashboard" });
-      if (error) throw new DataScopeError("登录验证暂时不可用", 503);
-      if (data?.allowed !== true) throw new DataScopeError("登录已失效或账号已自动停用，请重新登录", 403);
+      if (error) throw new DataScopeError("登录验证暂时不可用", 503, "auth_unavailable");
+      if (data?.allowed !== true) throw new DataScopeError("登录会话已失效，请重新登录。", 403, "application_session_denied");
     }
     async function revokeSessions(userId: string) {
       const { error } = await admin.rpc("application_revoke_user_sessions", { p_user_id: userId, p_surface: "dashboard" });
@@ -270,7 +270,9 @@ Deno.serve(async (request) => {
         .eq("auth_user_id", caller.id)
         .maybeSingle();
       if (profileError) throw new Error(`读取账号权限失败：${profileError.message}`);
-      if (!callerProfile?.active) throw new DataScopeError("这个账号已被停用", 403);
+      if (!callerProfile) throw new DataScopeError("这个账号还没有配置后台权限", 403, "profile_denied");
+      if (typeof callerProfile.active !== "boolean" || !["owner", "admin", "viewer"].includes(callerProfile.role)) throw new DataScopeError("账号权限响应不完整，请稍后重试", 503, "profile_response_invalid");
+      if (callerProfile.active === false) throw new DataScopeError("这个账号已被停用，请联系管理员。", 403, "account_disabled");
       return { token, caller, profile: callerProfile, actor: { id: caller.id, username: String(callerProfile.username || "user") } };
     }
 
@@ -697,7 +699,7 @@ Deno.serve(async (request) => {
     }, 400);
   } catch (error) {
     const known = error instanceof DataScopeError;
-    return json(request, { ok: false, code: known ? "request_denied" : "service_unavailable",
+    return json(request, { ok: false, code: known ? error.code : "service_unavailable",
       message: known ? error.message : "后台服务暂时不可用，请稍后重试" }, known ? error.status : 503);
   }
 });

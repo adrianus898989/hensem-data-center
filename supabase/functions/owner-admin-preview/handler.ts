@@ -87,7 +87,16 @@ export function createOwnerAdminPreviewHandler(options: PreviewOptions): (reques
       const query = new URLSearchParams({ select: "auth_user_id,role,active", auth_user_id: `eq.${userId}`, limit: "2" });
       const profileResult = await read(`/rest/v1/dashboard_profiles?${query}`);
       if (profileResult.status === 401) return errorResponse(origin, 401, "login_required");
-      if (profileResult.status === 403) return errorResponse(origin, 403, "profile_denied");
+      if (profileResult.status === 403) {
+        // The Data API pre-request guard can reject an old session before the
+        // profile is read. Preserve that exact denial without exposing its body.
+        const problem: unknown = await profileResult.json().catch(() => null);
+        const detail = problem && typeof problem === "object" && !Array.isArray(problem)
+          ? problem as { code?: unknown; message?: unknown } : null;
+        const sessionDenied = detail?.code === "application_session_denied"
+          || detail?.code === "42501" && detail?.message === "application_session_denied";
+        return errorResponse(origin, 403, sessionDenied ? "application_session_denied" : "profile_denied");
+      }
       if (!profileResult.ok) return errorResponse(origin, 503, "auth_unavailable");
       const rows: unknown = await profileResult.json();
       const profile = Array.isArray(rows) && rows.length === 1 ? rows[0] : null;

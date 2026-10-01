@@ -347,6 +347,67 @@ test('logout still revokes the captured server session after browser storage is 
   assert.equal(h.calls.length,1);assert.equal(h.calls[0].url,h.api.APPLICATION_GATEWAY+'/api/dashboard-auth');assert.equal(h.calls[0].headers.get('authorization'),'Bearer '+old.access_token);assert.equal(h.calls[0].headers.get('apikey'),null);assert.deepEqual(JSON.parse(h.calls[0].body),{action:'logout'});assert.equal(h.saved(),null);
 });
 
+test('REST session denial is a terminal re-login error, never a disabled account or a refresh retry',async()=>{
+  const h=harness(),active=session();h.api.saveDashboardSession(active);
+  h.setFetch(()=>json({code:'42501',message:'application_session_denied'},403));
+  const error=await h.api.fetchDashboardProfile(active).catch(error=>error);
+  assert.equal(error.code,'application_session_denied');assert.match(error.message,/会话已失效.*重新登录/);assert.doesNotMatch(error.message,/停用/);
+  assert.equal(h.api.isDashboardAuthTerminalError(error),true);assert.equal(h.calls.length,1);assert.equal(h.refreshCalls().length,0);
+});
+test('only an explicitly disabled valid profile is called disabled; malformed profiles retain retry semantics',async()=>{
+  const h=harness(),active=session(),profile={auth_user_id:A,username:'fixture',role:'viewer',active:true};
+  h.setFetch(()=>json([profile]));assert.equal((await h.api.fetchDashboardProfile(active)).role,'viewer');
+  h.setFetch(()=>json([{...profile,active:false}]));let error=await h.api.fetchDashboardProfile(active).catch(error=>error);
+  assert.equal(error.code,'account_disabled');assert.match(error.message,/已被停用/);assert.equal(h.api.isDashboardAuthTerminalError(error),true);
+  for(const value of [{...profile,active:null},{...profile,active:undefined},{...profile,active:'false'},{...profile,auth_user_id:B},{...profile,role:'bogus'}]){
+    h.setFetch(()=>json([value]));error=await h.api.fetchDashboardProfile(active).catch(error=>error);
+    assert.equal(error.code,'profile_response_invalid');assert.equal(error.status,503);assert.equal(h.api.isDashboardAuthTerminalError(error),false);assert.doesNotMatch(error.message,/停用/);
+  }
+  h.setFetch(()=>json([]));error=await h.api.fetchDashboardProfile(active).catch(error=>error);assert.equal(error.code,'profile_denied');assert.doesNotMatch(error.message,/停用/);
+});
+test('access-check distinguishes expired application session, disabled account and transient auth service failure without replaying',async()=>{
+  for(const [status,code] of [[403,'application_session_denied'],[403,'account_disabled'],[503,'auth_unavailable']]){
+    const h=harness();h.setFetch(()=>json({ok:false,code,message:'fixture'},status));
+    const error=await h.api.verifyDashboardAccess(session()).catch(error=>error);assert.equal(error.code,code);assert.equal(error.status,status);
+    assert.equal(h.api.isDashboardAuthTerminalError(error),status===403);assert.equal(h.calls.length,1);
+    if(code==='application_session_denied')assert.doesNotMatch(error.message,/停用/);
+  }
+});
+
+// Render the real gate with minimal hooks to verify terminal-error presentation and stale-request isolation.
+function gateHarness(profileRead) {
+  const h=harness(),old=session();h.api.saveDashboardSession(old);
+  let index=0,eindex=0;const states=[],deps=[],pending=[],cleanups=[];
+  const react={Fragment:'fragment',createContext:()=>({Provider:'provider'}),useContext:()=>({}),useMemo:fn=>fn(),
+    useRef:value=>{const i=index++;return states[i]||(states[i]={current:value});},
+    useState:value=>{const i=index++;if(!(i in states))states[i]=typeof value==='function'?value():value;return[states[i],value=>{states[i]=typeof value==='function'?value(states[i]):value;}];},
+    useEffect:(fn,values)=>{const i=eindex++;if(!deps[i]||values.some((v,k)=>v!==deps[i][k])){deps[i]=values;pending.push(()=>{cleanups[i]?.();cleanups[i]=fn();});}}};
+  const box={exports:{}},filename=path.join(repo,'src/components/DashboardAuthGate.tsx');
+  const text=ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+  vm.runInNewContext(text,{module:box,exports:box.exports,Error,window:h.window,document:{addEventListener(){},removeEventListener(){}},StorageEvent:class extends Event{},Date,
+    require:name=>{
+      if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
+      if(name.endsWith('/dashboardAuthClient'))return{...h.api,dashboardAuthEnabled:()=>true,fetchDashboardProfile:profileRead,verifyDashboardAccess:async()=>({}),signOutDashboard:async()=>({})};
+      if(name.endsWith('/dashboardDataScope'))return{effectiveDashboardDataScope:()=>({mode:'all',countries:[]}),dashboardScopeLabel:()=>''};
+      if(name.endsWith('/dashboardDataClient'))return{clearDashboardDataCaches(){},setDashboardDataViewer:()=>true,DASHBOARD_PROFILE_EVENT:'fixture-profile'};
+      if(name.endsWith('/dashboardIdle'))return{DASHBOARD_IDLE_MS:Infinity,readLastActivity:()=>Date.now(),writeLastActivity(){},clearLastActivity(){},installDashboardIdleMonitor:()=>()=>{}};
+      throw Error('Unexpected gate dependency '+name);
+    }});
+  const draw=()=>{index=eindex=0;return box.exports.default({children:'authorized-child'});};
+  const render=()=>{const tree=draw();pending.splice(0).forEach(fn=>fn());return tree;};
+  const content=x=>Array.isArray(x)?x.map(content).join(''):x&&typeof x==='object'?content(x.props?.children):typeof x==='string'?x:'';
+  render();return{h,render,text:()=>content(draw()),dispose:()=>cleanups.forEach(fn=>fn?.())};
+}
+test('gate restores a denied old session to the login form with an explicit re-login reason',async()=>{
+  const g=gateHarness(async()=>{const error=Error('登录会话已失效，请重新登录。');Object.setPrototypeOf(error,g.h.api.DashboardHttpError.prototype);error.status=403;error.code='application_session_denied';throw error;});
+  await tick();assert.equal(g.h.saved(),null);assert.match(g.text(),/登录会话已失效，请重新登录/);assert.doesNotMatch(g.text(),/停用/);g.dispose();
+});
+test('gate retains an old session on a transient profile failure and never clears a newer account on late denial',async()=>{
+  const network=gateHarness(async()=>{throw Error('temporary');});await tick();assert(network.h.saved());assert.match(network.text(),/已保留登录状态/);network.dispose();
+  const wait=deferred(),late=gateHarness(()=>wait.promise);await tick();late.h.api.saveDashboardSession(session('new-account',3600,B));
+  wait.reject(new late.h.api.DashboardHttpError('登录会话已失效',403,'application_session_denied'));await tick();assert.equal(late.h.saved().user.id,B);assert.doesNotMatch(late.text(),/停用/);late.dispose();
+});
+
 (async()=>{
   let passed=0;const failed=[];
   for(const [name,run]of tests){try{await run();passed++;}catch(error){failed.push({name,error:error.message});}}
