@@ -45,10 +45,10 @@ body.live-admin .matrix-hours-view>.analysis-expand-table>table>tfoot>tr>td:firs
 body.live-admin .matrix-hours-view>.analysis-expand-table>table>thead>tr>th:first-child{z-index:3;background:#edf2fa}
 body.live-admin .matrix-hours-view>.analysis-expand-table>table>thead>tr>th:nth-child(26),
 body.live-admin .matrix-hours-view>.analysis-expand-table>table>tbody>tr:not(.analysis-expanded-row)>td:nth-child(26),
-body.live-admin .matrix-hours-view>.analysis-expand-table>table>tfoot>tr>td:nth-child(26){width:176px;min-width:176px;background:#f5f8ff}
+body.live-admin .matrix-hours-view>.analysis-expand-table>table>tfoot>tr>td:nth-child(26){width:142px;min-width:142px;background:#f5f8ff}
 body.live-admin .matrix-hours-view .matrix-band-label{display:block;font-size:inherit;font-weight:inherit;line-height:1.5}
-body.live-admin .matrix-hours-view .matrix-row-total{display:flex;flex-direction:column;gap:1px;min-width:158px;line-height:12px;font-size:9px;font-variant-numeric:tabular-nums}
-body.live-admin .matrix-hours-view .matrix-row-total>span{display:flex;align-items:baseline;justify-content:space-between;gap:8px;white-space:nowrap}
+body.live-admin .matrix-hours-view .matrix-row-total{display:flex;flex-direction:column;gap:1px;min-width:128px;line-height:12px;font-size:9px;font-variant-numeric:tabular-nums}
+body.live-admin .matrix-hours-view .matrix-row-total>span{display:flex;align-items:baseline;justify-content:space-between;gap:4px;white-space:nowrap}
 body.live-admin .matrix-hours-view .matrix-row-total>span>small{font-size:9px;color:#7588a6;font-weight:400}
 body.live-admin .matrix-hours-view .matrix-row-total>span>b{font-size:10px;font-weight:600;color:#344c70}
 body.live-admin .matrix-hours-view .matrix-total-partial{font-size:9px;line-height:12px;color:#9b7128;font-weight:400;text-align:left}
