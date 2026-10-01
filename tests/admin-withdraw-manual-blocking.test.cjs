@@ -5,6 +5,8 @@ const repo=path.resolve(__dirname,'..'),read=p=>fs.readFileSync(path.join(repo,p
 const baselineMigration=read('supabase/migrations/20261001061919_withdraw_manual_blocking_reasons.sql');
 const coverageMigration=read('supabase/migrations/20261001064747_withdraw_manual_reason_coverage.sql');
 const migration=read('supabase/migrations/20261001071746_withdraw_manual_empty_reason_category.sql');
+const normalizationOnceMigration=read('supabase/migrations/20261001074329_withdraw_reason_normalize_once.sql');
+const compactMigration=read('supabase/migrations/20261001080037_withdraw_reason_compact_evaluation.sql');
 let db,originalRejections,originalWgRejections,acl;
 const scalar=async(sql,args=[])=>(await db.query(sql,args)).rows[0].value;
 const call=extra=>scalar('select private.dashboard_admin_live_withdraw_reasons($1::jsonb) value',[JSON.stringify({country:'印度',platform:'AR-A',date:'2026-09-30',kind:'blocking',...extra})]);
@@ -50,7 +52,7 @@ before(async()=>{
  await db.exec(read('tests/fixtures/withdraw-blocking-manual-baseline.sql'));
  await db.exec(`revoke all on function private.dashboard_admin_live_withdraw_reasons(jsonb) from public,anon;grant execute on function private.dashboard_admin_live_withdraw_reasons(jsonb) to authenticated;revoke all on function private.dashboard_admin_wg_withdraw_reasons(jsonb,jsonb) from public,anon,authenticated;`);
  originalRejections=await Promise.all(rejectKinds.map(kind=>call({kind})));originalWgRejections=await Promise.all(rejectKinds.map(kind=>call({kind,platform:'WG-A'})));acl=await permissions();
- await db.exec(baselineMigration);await db.exec(coverageMigration);await db.exec(migration);
+ await db.exec(baselineMigration);await db.exec(coverageMigration);await db.exec(migration);await db.exec(read('supabase/migrations/20261001074259_withdraw_blocking_diagnostic_templates.sql'));await db.exec(normalizationOnceMigration);await db.exec(compactMigration);
 });
 after(async()=>{await db?.close()});
 
@@ -97,7 +99,7 @@ test('snapshots count explicit manual empty classifications without inventing mi
  assert.deepEqual(await scalar("select snapshot value from withdraw_reasons_daily where platform='SNAP-A'"),snapshot);
 });
 test('idempotent migration preserves WG dispatch, privileges and scope protection',async()=>{
- assert.deepEqual(await permissions(),acl);const before=await call();await db.exec(migration);assert.deepEqual(await call(),before);assert.deepEqual(await permissions(),acl);
+ assert.deepEqual(await permissions(),acl);const before=await call();await db.exec(compactMigration);assert.deepEqual(await call(),before);assert.deepEqual(await permissions(),acl);
  await assert.rejects(()=>call({platform:'FOREIGN'}),/scope_denied/);
  assert.match(await scalar("select prosrc value from pg_proc where oid='private.dashboard_admin_live_withdraw_reasons(jsonb)'::regprocedure"),/wg_existing_reasons_v1/);
 });
@@ -172,4 +174,31 @@ test('encoded blank notes use the empty category after real normalization and ke
   const b=await call({platform:'SNAP-A',date:'2026-09-27'});assert.equal(b.noteCount,6);assert.equal(b.rows.length,1);assert.equal(b.rows[0].reason,'检测没备注');assert.equal(b.summary.operatorCounts.manualWithReason,0);assert.equal(b.summary.operatorCounts.manualWithoutReason,6);assert.equal(b.summary.operatorCounts.manual,null);
   assert.deepEqual(await scalar("select snapshot value from withdraw_reasons_daily where platform='SNAP-A' and stat_date='2026-09-27'"),snapshot);
  }finally{await db.exec('rollback')}
+});
+
+// Compare all public response shapes before/after optimization on the same rows.
+test('normalization reuse preserves every AR response including filtered order pages',async()=>{
+ const arDefinition=sql=>sql.slice(sql.indexOf('CREATE OR REPLACE FUNCTION private.dashboard_admin_live_withdraw_reasons'),sql.indexOf('$function$;',sql.indexOf('CREATE OR REPLACE FUNCTION private.dashboard_admin_live_withdraw_reasons'))+'$function$;'.length);
+ const requests=rejectKinds.flatMap(kind=>[{kind},{kind,query:'HUMAN-'}]).concat([{kind:'blocking'}]);
+ const list=await call();
+ for(const group of list.rows){requests.push({kind:'blockingVariants',reasonKey:group.reasonKey},{kind:'blockingOrders',reasonKey:group.reasonKey},{kind:'blockingOrders',reasonKey:group.reasonKey,query:'HUMAN-'},{kind:'blockingOrders',reasonKey:group.reasonKey,offset:20});}
+ const optimized=await Promise.all(requests.map(call));
+ try{
+  await db.exec(arDefinition(migration));
+  const baseline=await Promise.all(requests.map(call));
+  assert.deepEqual(optimized,baseline);
+ }finally{await db.exec(arDefinition(compactMigration));}
+});
+
+test('compact migration refuses an unexpected AR definition',async()=>{
+ await db.exec('begin');
+ try{
+  await db.exec("create or replace function private.dashboard_admin_live_withdraw_reasons(p_request jsonb) returns jsonb language plpgsql stable security definer set search_path='' as $$begin return null;end$$");
+  await assert.rejects(()=>db.exec(compactMigration),/baseline changed/);
+ }finally{await db.exec('rollback');}
+});
+
+test('cleaned-note parser core is private and never callable by public clients',async()=>{
+ const row=(await db.query("select has_function_privilege('anon','private.dashboard_admin_live_blocking_details_cleaned(text)','execute') anon,has_function_privilege('authenticated','private.dashboard_admin_live_blocking_details_cleaned(text)','execute') authenticated")).rows[0];
+ assert.deepEqual(row,{anon:false,authenticated:false});
 });
