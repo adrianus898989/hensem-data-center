@@ -149,6 +149,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     if (name === './AdminPreviewGrants') return { default: () => null };
     if (name === './AdminControlCenter') return { default: function AdminControlCenter(){} };
     if (name === './WorkOrderAccountAdmin') return { default: function WorkOrderAccountAdmin(){} };
+    if (name === './AccountIpAdmin') return { default: function AccountIpAdmin(){} };
     if (name === './DashboardRoleManager') return { default: function DashboardRoleManager(){} };
     if (name.endsWith('/dashboardRoleCatalog.json')) return {default:JSON.parse(fs.readFileSync(path.join(repo,'src/lib/dashboardRoleCatalog.json'),'utf8'))};
     if (name.endsWith('/dashboardRoleAccess')) {

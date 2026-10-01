@@ -56,6 +56,7 @@ async function fixture(options, run) {
       role: options.scope ? 'viewer' : 'owner', permissions: { third_party: true },
       ...(options.scope ? { data_scope: options.scope } : {})
     }]);
+    if (url.pathname === '/rest/v1/rpc/application_session_guard') return Response.json(true);
     if (url.pathname === '/rest/v1/rpc/dashboard_role_access') return Response.json({ mode: options.scope ? 'legacy' : 'owner', roleId: null, roleName: null, version: 0, permissions: [], canView: true });
     const body = JSON.parse(init.body); calls.push({ name: url.pathname.split('/').pop(), body });
     assert.equal(url.pathname, '/rest/v1/rpc/dashboard_game66_charge_volume');
