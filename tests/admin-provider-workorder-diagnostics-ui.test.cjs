@@ -113,7 +113,17 @@ test('resolved attribution explanations do not upgrade a known pending-scope dif
  const row=diagnosticFact('KnownScopePlatform','KnownPay',14,13,{pendingExcludedDetailCount:1,resolvedProviderOrderCount:1,unknownProviderRecordCount:1,unresolvedProviderOrderCount:0});
  const h=platformDiagnosis([row]);h.root.providerSummaryWorkorderPlatforms();const html=h.drawers.at(-1).html;
  assert.match(html,/1 个仅有已知范围差异，0 个含待确认项/);
- assert.match(html,/已归并：1组原单/);assert.match(html,/1条来源三方未填写/);
+ assert.match(html,/已归并：1组原单/);assert.match(html,/来源三方未填写 · 涉及 1 个三方（分项见明细）/);
  assert.equal(h.L.workorders.byPlatformProvider[0].uniqueCoverage.complete,false);
  assert.doesNotMatch(html,/组三方冲突/);assert.equal(h.networkCalls(),0);
+});
+
+test('shared unknown source records across conflicting providers are not summed as distinct platform records',()=>{
+ const facts=['KnownA','KnownB'].map(provider=>diagnosticFact('ConflictPlatform',provider,1,1,{providerConflictCount:1,unknownProviderRecordCount:1,resolvedProviderOrderCount:0,unresolvedProviderOrderCount:0}));
+ const h=platformDiagnosis(facts),before=JSON.stringify(h.L.workorders);h.root.providerSummaryWorkorderPlatforms();const html=h.drawers.at(-1).html;
+ assert.match(html,/来源三方未填写 · 涉及 2 个三方（分项见明细）/);
+ assert.doesNotMatch(html,/2条来源三方未填写/);
+ for(const provider of ['KnownA','KnownB'])assert.match(html,new RegExp('<td>'+provider+'</td><td>0</td><td>1</td><td>0</td>'));
+ assert.match(html,/同一条来源未标记记录可能关联多个冲突三方分项，各分项数量不能直接相加/);
+ assert.equal(JSON.stringify(h.L.workorders),before);assert.equal(h.networkCalls(),0);
 });

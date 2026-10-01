@@ -351,7 +351,7 @@
   }
   add('missingAmountCount','金额缺失','条',true);add('amountConflictCount','金额冲突','组',true);
   add('providerConflictCount','三方冲突','组',true);add('unresolvedProviderOrderCount','原单三方未确认','组',true);
-  add('resolvedProviderOrderCount','原单按唯一已知三方归并','组',true,true);add('unknownProviderRecordCount','来源三方未填写','条',false,true);
+  add('resolvedProviderOrderCount','原单按唯一已知三方归并','组',true,true);add('unknownProviderRecordCount','来源三方未填写','条',true,true);
   return items;
  }
  function workorderPlatformGaps(L,direction){
@@ -534,7 +534,7 @@
      const expected=day.expectedAvailable===false?null:knownNumber(day.expectedCount),received=knownNumber(day.detailCount),date=day.date||'期间汇总（未提供每日拆分）',diff=difference(expected,received);
      return [E(d.provider)+'<small class="cell-sub">'+E(date)+'</small>',day.expectedAvailable===false?'未收到':count(expected),count(received),E(differenceText(diff)),count(day.pendingExcludedDetailCount),count(day.unexplainedDetailMismatchCount),'<div class="provider-workorder-day-context">'+E('汇总 '+count(expected)+' / 明细 '+count(received))+'</div>'+explanation(day,d).map(text=>'<p>'+E(text)+'</p>').join('')+'<p class="provider-workorder-next"><strong>下一步：</strong>'+E(sourceInstructions(p,d,day))+'</p>'];
     });
-    const attribution=(p.attributionFacts||[]).length?'<div class="provider-workorder-attribution"><p><strong>本平台已返回的原单归属诊断：</strong>以下为各三方分项，不能据此把“未标记三方”汇总行直接归给某一家；源标签汇总与按原单归并后的分项范围不同。</p>'+table(['原单三方分项','已按唯一已知三方归并（原单组）','来源三方未填写（记录条）','原单三方仍未确认（组）'],p.attributionFacts.map(f=>[E(f.provider),count(f.resolved),count(f.unknown),count(f.unresolved)]),'provider-workorder-attribution-table')+'</div>':'';
+    const attribution=(p.attributionFacts||[]).length?'<div class="provider-workorder-attribution"><p><strong>本平台已返回的原单归属诊断：</strong>以下为各三方分项，不能据此把“未标记三方”汇总行直接归给某一家；源标签汇总与按原单归并后的分项范围不同。同一条来源未标记记录可能关联多个冲突三方分项，各分项数量不能直接相加。</p>'+table(['原单三方分项','已按唯一已知三方归并（原单组）','来源三方未填写（记录条）','原单三方仍未确认（组）'],p.attributionFacts.map(f=>[E(f.provider),count(f.resolved),count(f.unknown),count(f.unresolved)]),'provider-workorder-attribution-table')+'</div>':'';
     return '<details class="provider-workorder-details"><summary><span class="provider-workorder-platform"><strong>'+E(p.name)+'</strong><small>'+E(p.source||'包网未提供')+'</small><em class="'+(confirm?'needs-confirmation':'known-scope')+'">'+(confirm?'含待确认项':'已知范围差异')+'</em></span><span class="provider-workorder-counts"><small>所列差异三方小计 · 非全平台</small><span>汇总 <b>'+count(expected)+'</b> / 明细 <b>'+count(received)+'</b></span><span>净差（汇总 − 明细）<b>'+E(differenceText(difference(expected,received)))+'</b></span></span><span class="provider-workorder-reasons">'+reasons.map(text=>'<span>'+E(text)+'</span>').join('')+'</span><span class="provider-workorder-expand">展开每日核对</span></summary><div class="provider-workorder-platform-body"><p class="provider-workorder-providers">涉及三方：'+E(p.providers.join('、')||'未提供')+'</p>'+(p.reasonGroups.some(g=>g.key==='excludedWorkorderTypeCount')?'<p>USDT 记录已采集，但此类型当前未纳入原单统计；无需将已采集记录重复补采。</p>':'')+(p.sourceDays.length?'<p>'+E('日期覆盖：'+(dates.length?'未收齐 '+dates.join('、'):'尚未提供具体缺少日期；不能指定缺少哪一天。'))+'</p>':'')+(daily.length?table(['三方 / 提交日期','日报汇总','已采集明细','差额（汇总 − 明细）','已知待处理跳过','未解释差异（条）','原因含义与下一步'],daily,'provider-workorder-day-table'):'<p>尚无三方逐日诊断。请在源后台按 '+E(p.name+' · '+business+' · '+(dates.join('、')||period))+' 检查日报及对应日期的同步结果，不能将未知数量当作 0。</p>')+attribution+'</div></details>';
    }).join('');
    const confirms=gaps.filter(needsConfirmation).length;
