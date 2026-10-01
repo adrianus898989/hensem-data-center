@@ -268,7 +268,23 @@ test('hour by amount matrix preserves one amount band per row, 24 hours and thre
  const h=await ready(),r=completeAggregate(P,10,3);h.L.results=[r];h.L.direction='charge';h.L.matrixMode='exact';h.c.state.page='matrix';h.c.render();
  const matrices=renderedTables(h.html()).filter(t=>t.headers[0]==='金额 / 时');assert.equal(matrices.length,1);const matrix=matrices[0];assert.equal(matrix.headers.length,26);assert.deepEqual(matrix.headers.slice(1,-1),Array.from({length:24},(_,hour)=>String(hour).padStart(2,'0')+'时'));assert.equal(matrix.rows.length,10);assert.equal(new Set(matrix.rows.map(row=>plain(row[0]))).size,10);
  for(const row of matrix.rows){assert.equal(row.length,26);for(const cell of row.slice(1,-1)){assert.equal([...cell.matchAll(/class="matrix-cell analysis-matrix-cell"/g)].length,1);assert.equal([...cell.matchAll(/<b\b/g)].length,1);assert.equal([...cell.matchAll(/<span\b/g)].length,2)}}
- const known=matrix.rows.find(row=>plain(row[0])==='200')[13];assert.match(known,/>10笔<\/b>/);assert.match(known,/>1,000<\/span>/);assert.match(known,/>30\.00%<\/span>/);
+ const known=matrix.rows.find(row=>plain(row[0]).startsWith('200成功 '))[13];assert.match(known,/>10笔<\/b>/);assert.match(known,/>1,000<\/span>/);assert.match(known,/>30\.00%<\/span>/);
+});
+
+test('matrix amount labels total successful orders across all hours without mixing directions or currencies',async()=>{
+ const h=await ready({adaptive:true}),r=completeAggregate(P,100,1),s=r.summary[0];
+ r.groups.matrix_range=[{...s,bucket:'band:0',hour:0,success_count:2,success_amount:'250.50'},{...s,bucket:'band:0',hour:23,success_count:3,success_amount:'499.75'},{...s,direction:'withdraw',bucket:'band:0',hour:12,success_count:99,success_amount:'99999'},{...s,bucket:'band:1',hour:12,success_count:7,success_amount:'1800'}];
+ h.L.results=[r];h.L.direction='charge';h.L.matrixMode='range';h.L.amountBandProfiles={charge:{edges:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]}};h.c.state.page='matrix';h.c.render();
+ const first=()=>renderedTables(h.html()).find(t=>t.headers[0]==='金额 / 时').rows[0][0];
+ assert.match(first(),/100 ≤ 金额 &lt; 200/);assert.match(first(),/>成功 5 笔</);assert.match(first(),/>金额 750.25</);assert.match(first(),/所选日期范围内 00–23 时成功合计/);assert.doesNotMatch(first(),/99,999|1,800|10,000/);
+ h.L.to='2026-09-24T23:59:59';h.c.render();assert.match(first(),/所选日期范围内/);
+ r.groups.matrix_range[1].currency='USD';h.c.render();assert.match(first(),/>成功 5 笔</);assert.match(first(),/>金额 —</);
+ r.groups.matrix_range[1].currency='INR';delete r.groups.matrix_range[1].success_count;r.groups.matrix_range[1].success_amount=null;h.c.render();assert.match(first(),/>成功 — 笔</);assert.match(first(),/>金额 —</);
+ r.groups.matrix_range=[];h.c.render();assert.match(first(),/>成功 0 笔</);assert.match(first(),/>金额 0.00</);
+ delete r.groups.matrix_range;h.c.render();assert.match(first(),/>成功 — 笔</);assert.match(first(),/>金额 —</);
+ r.groups.matrix_range=[];r.complete=false;h.c.render();assert.match(first(),/>成功 — 笔</);
+ r.complete=true;h.L.queryWarnings=['Synthetic missing platform'];h.c.render();assert.match(first(),/部分平台已读取/);
+ h.L.direction='withdraw';r.withdrawSuccessTimeAvailable=false;h.c.render();assert.match(first(),/>成功 — 笔</);assert.match(first(),/>金额 —</);
 });
 
 test('rejected and unknown statuses remain explicit in the reference direction analysis',async()=>{
@@ -906,7 +922,7 @@ test('main filters retain all authorized Panghu seeds after report catalog failu
 
 test('matrix cell selection renders only that hour below its band and supports closing it',async()=>{
  const h=await ready(),r=completeAggregate(P,10,4);r.groups.matrix.push({...r.groups.matrix[0],hour:13,success_amount:'99000',success_count:990,all_amount:'100000',all_count:1000});h.L.results=[r];h.L.matrixMode='exact';h.L.direction='charge';h.c.state.page='matrix';h.c.render();const before=h.calls.length,encoded=encodeURIComponent(JSON.stringify({kind:'matrix',direction:'charge',hour:12,bucket:'200'}));h.c.liveMatrixSegment(encoded);
- let html=h.html(),detail=html.match(/<div class="analysis-drilldown">([^]*?)<div class="analysis-note">/)[1];assert.match(detail,/12时 × 200/);assert.doesNotMatch(detail,/24小时合计|99,000/);assert.match(detail,/400\.00/);assert.match(detail,/金额占比 100\.00%/);assert(html.indexOf('<div class="analysis-drilldown">')<html.indexOf('<tr><td>300</td>'));assert.equal(h.calls.length,before);
+ let html=h.html(),detail=html.match(/<div class="analysis-drilldown">([^]*?)<div class="analysis-note">/)[1];assert.match(detail,/12时 × 200/);assert.doesNotMatch(detail,/24小时合计|99,000/);assert.match(detail,/400\.00/);assert.match(detail,/金额占比 100\.00%/);assert(html.indexOf('<div class="analysis-drilldown">')<html.indexOf('<span class="matrix-band-label">300</span>'));assert.equal(h.calls.length,before);
  h.c.liveMatrixSegment(encoded);assert.doesNotMatch(h.html(),/<div class="analysis-drilldown">/);assert.equal(h.calls.length,before);
 });
 
