@@ -9,6 +9,15 @@ const response=(daily=[day('2026-09-28'),day()],extra={})=>({version:1,basis:'se
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 function setup(options={}){const L={from:'2026-09-28T00:00:00',to:'2026-09-29T23:59:59',country:'印度',dirty:false,withdrawCatalog:[]},calls=[];let selected=[platform()],providers=[],handler=async()=>response(),renders=0;const ui=create({L,selected:()=>selected,providers:()=>providers,request:q=>{calls.push(q);return handler(q);},prepare:options.prepare,render:()=>renders++});return {L,ui,calls,setSelected:x=>selected=x,setProviders:x=>providers=x,handler:x=>handler=x,get renders(){return renders;}};}
 const range=['2026-09-28','2026-09-29'];
+test('pending snapshot comparison shows amount and count differences without inventing missing or zero baselines',async()=>{
+ const h=setup();h.handler(async()=>response([day('2026-09-28',[group('Pay A',100,2)]),day('2026-09-29',[group('Pay A',150,5)])]));await h.ui.load();
+ assert.match(h.ui.page(),/\+50\.00（\+50\.00%）/);
+ globalThis.livePendingAnalysisMetric('count');assert.match(h.ui.page(),/\+3 笔（\+150\.00%）/);
+ h.handler(async()=>response([day('2026-09-28',[group('Pay A',0,0)]),day('2026-09-29',[group('Pay A',150,5)])]));await h.ui.load();
+ globalThis.livePendingAnalysisMetric('amount');assert.match(h.ui.page(),/\+150\.00（无基数）/);assert.doesNotMatch(h.ui.page(),/NaN|Infinity/);
+ h.handler(async()=>response([day('2026-09-28',[group('Pay A',100,2)],{complete:false}),day('2026-09-29',[group('Pay A',150,5)])]));await h.ui.load();
+ assert.doesNotMatch(h.ui.page(),/\+50\.00（\+50\.00%）/);
+});
 
 test('no request on construction or display; manual load uses selected days and authorized scope',async()=>{const h=setup();assert.equal(h.calls.length,0);assert.match(h.ui.page(),/点击查询/);assert.equal(h.calls.length,0);h.setProviders(['Pay A','Pay A']);await h.ui.load();assert.deepEqual(h.calls,[{action:'pendingAnalysis',startDate:'2026-09-28',endDate:'2026-09-29',platformIds:[A],providers:['Pay A']}]);assert.match(h.ui.page(),/所选三方范围/);assert.match(h.ui.page(),/采集于 2026\/9\/30/);});
 

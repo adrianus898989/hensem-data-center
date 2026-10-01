@@ -56,7 +56,7 @@
    const rows=days.map(d=>{const available=!d.missing&&numeric(d[metric])!==null,n=available?d[metric]:null,top=leaders(d,metric),note=d.complete?'完整':d.missing?'未采到':'部分采集';return '<div class="pa-trend-row'+(!d.complete?' pa-incomplete':'')+'"><span>'+E(d.date.slice(5))+'</span><div class="pa-track"><i style="width:'+(n!==null&&max>0?Math.max(0,Math.min(100,n/max*100)):0)+'%"></i></div><strong>'+value(n)+'</strong><span class="pa-trend-leader" title="'+E(top.join(' / '))+'">'+E(top.length?(top.length>1?'并列：':'')+top.join(' / '):d.complete?'—':note)+'</span></div>';});
    return panel('每日代付中趋势','<div class="pa-trend-caption"><span>日期</span><span>'+ (metric==='amount'?'金额':'笔数')+'</span><span>当日最多三方</span></div><div class="pa-trend">'+rows.join('')+'</div>');
   }
-  const delta=(now,before)=>numeric(now)===null||numeric(before)===null?'—':before===0?now>0?'新增':'持平':((now-before)/before*100>0?'+':'')+((now-before)/before*100).toFixed(2)+'%';
+  const delta=(now,before)=>{if(numeric(now)===null||numeric(before)===null)return '—';const diff=now-before,format=S.metric==='amount'?N:C,absolute=(diff>0?'+':diff<0?'−':'')+format(Math.abs(diff))+(S.metric==='count'?' 笔':'');return absolute+'（'+(before===0?(now===0?'持平':'无基数'):(diff>0?'+':'')+(diff/Math.abs(before)*100).toFixed(2)+'%')+'）'};
   function platformTable(latest,previous,aging){
    if(!latest||latest.missing)return panel('平台与三方分布','<div class="pa-empty">结束日没有可用快照</div>');
    const sorted=[...latest.rows,...S.unsupported.map(p=>({...p,state:'unsupported'}))].sort((a,b)=>(numeric(b[S.metric])??-1)-(numeric(a[S.metric])??-1)||String(a.name).localeCompare(String(b.name))),rows=[];

@@ -83,8 +83,8 @@ test('provider duration sort reuses its loaded band response and keeps provider-
 test('platform daily ordering keeps missing days last and computes comparisons from the previous date, not the sorted neighbor',()=>{
  const h=analysis();h.L.to='2026-09-22T23:59:59';h.instance.open(segment,'8时');const state=h.instance.snapshot().states.get(JSON.stringify(segment));
  state.tab='daily';state.daily.set('all',{loading:false,failures:[],total:2,results:new Map(h.L.results.map(r=>[r.platform.id,{platform:r.platform,startAt:'2026-09-19T18:30:00Z',endAt:'2026-09-22T18:30:00Z',groups:{daily:[{...r.groups.hourly[0],date:'2026-09-20',success_amount:10},{...r.groups.hourly[0],date:'2026-09-21',success_amount:20}]}}]))});
- h.instance.panel(segment);h.action(segment,'sort',JSON.stringify(['daily:all',3]));let data=detailRows(h,segment);assert.match(data[0][0],/2026-09-21/);assert.equal(data[0].at(-1),'100.00%');assert.match(data.at(-1)[0],/2026-09-22/);
- h.action(segment,'sort',JSON.stringify(['daily:all',3]));data=detailRows(h,segment);assert.match(data[0][0],/2026-09-20/);assert.equal(data[1].at(-1),'100.00%');assert.match(data.at(-1)[0],/2026-09-22/);assert(data.at(-1).slice(1).every(v=>v==='—'));assert.equal(h.calls.length,0);
+ h.instance.panel(segment);h.action(segment,'sort',JSON.stringify(['daily:all',3]));let data=detailRows(h,segment);assert.match(data[0][0],/2026-09-21/);assert.equal(data[0].at(-1),'+20.00+100.00%');assert.match(data.at(-1)[0],/2026-09-22/);
+ h.action(segment,'sort',JSON.stringify(['daily:all',3]));data=detailRows(h,segment);assert.match(data[0][0],/2026-09-20/);assert.equal(data[1].at(-1),'+20.00+100.00%');assert.match(data.at(-1)[0],/2026-09-22/);assert(data.at(-1).slice(1).every(v=>v==='—'));assert.equal(h.calls.length,0);
 });
 
 test('platform overview adds successful member counts as column eight, with local sorting and full-scope partial totals',async()=>{

@@ -43,7 +43,7 @@ test('stale ranges, foreign identities and duplicated intake identities cannot c
  h.L.providerIntake=h.intake();h.L.providerIntake.platforms=[h.L.providerIntake.platforms[0],h.L.providerIntake.platforms[0],{id:'foreign',name:'Other',received:true,complete:true,status:'complete'}];h.render();const c=h.api.intakeCoverage(h.L);assert.equal(c.requested,2);assert.equal(c.received,2,'known nonzero creation rows remain observed despite unusable intake metadata');assert.equal(c.complete,0);h.root.providerSummaryPlatformCoverage();assert.doesNotMatch(h.drawers.at(-1).html,/>Other</);
 });
 test('comparison uses explicitly labelled read scope when only intake completeness is unverified',()=>{
- const h=fixture(1);h.L.providerComparisonIntake.platforms[0].complete=false;h.render();assert.match(h.html(),/较昨日 · 按已读 1 平台/);assert.match(h.html(),/>无基数</);
+ const h=fixture(1);h.L.providerComparisonIntake.platforms[0].complete=false;h.render();assert.match(h.html(),/较昨日 · 按已读 1 平台/);assert.match(h.html(),/（无基数）</);
  h.L.providerComparisonIntake=h.intake('2026-09-25');h.render();assert.doesNotMatch(h.html(),/对比期创建数据完整性待核验|创建数据完整性待核验，暂不可比/);
 });
 test('details use loaded source evidence, escape strings, and refuse dirty filters without a request',()=>{
@@ -61,6 +61,14 @@ test('source evidence uses readable notes and does not leak internal codes or du
 
 function metric(html,label){const match=html.match(new RegExp('<div class="provider-kpi provider-kpi-[^"]+" title="([^"]*)"><div class="provider-kpi-value"><label>'+label+'(?:<span[^>]*>[^<]*</span>)?</label><strong>([^<]*)</strong></div><div class="provider-kpi-comparison">(?:<span class="provider-kpi-change ([^"]*)">([^<]*)</span>)?</div></div>'));assert(match,label+' metric exists');return {detail:match[1],value:match[2],trend:match[3],change:match[4]}}
 function previousRows(h,overrides={}){h.L.comparisonResults=h.L.results.map(result=>({...result,groups:{provider:result.groups.provider.map(row=>({...row,...overrides}))}}))}
+test('provider amount and count cards show absolute differences while rate remains percentage points',()=>{
+ const h=fixture(1);previousRows(h,{all_amount:800,all_count:8,success_amount:500,success_count:5});h.render();
+ assert.equal(metric(h.html(),'代收创建金额').change,'+200.00（+25.00%）');
+ assert.equal(metric(h.html(),'代收创建笔数').change,'+2 笔（+25.00%）');
+ assert.equal(metric(h.html(),'代收成功金额').change,'+200.00（+40.00%）');
+ assert.equal(metric(h.html(),'代收成功笔数').change,'+2 笔（+40.00%）');
+ assert.equal(metric(h.html(),'代收成功率').change,'+7.50个百分点');
+});
 test('an intake timeout preserves observed 15 creation sources, names the one unobserved platform, and restores read-scope deltas',()=>{
  const h=fixture(),missing=h.orders[0];missing.all_count=0;missing.all_amount=0;
  previousRows(h,{all_count:20,all_amount:2000,success_count:5,success_amount:500});
@@ -68,13 +76,13 @@ test('an intake timeout preserves observed 15 creation sources, names the one un
  h.L.providerComparisonIntake={status:'error',from:'2026-09-25',to:'2026-09-25',error:'同步检查超时'};h.render();
  assert.match(h.html(),/<label>平台<\/label><strong>15 \/ 16<\/strong>/);assert.match(h.html(),/>未见创建 51GAME<\/button>/);
  assert.doesNotMatch(h.html(),/provider-intake-coverage|provider-intake-summary|provider-api-coverage|>缺 51GAME</);assert.equal(h.api.intakeCoverage(h.L).complete,0);assert.equal(h.api.intakeCoverage(h.L).missing.length,0);
- assert.match(h.html(),/较昨日 · 按已读 16 平台/);assert.equal(metric(h.html(),'代收创建金额').change,'-53.13%');assert.equal(metric(h.html(),'代收成功金额').change,'+40.00%');
+ assert.match(h.html(),/较昨日 · 按已读 16 平台/);assert.equal(metric(h.html(),'代收创建金额').change,'−17,000.00（-53.13%）');assert.equal(metric(h.html(),'代收成功金额').change,'+3,200.00（+40.00%）');
  h.root.providerSummaryPlatformCoverage();assert.match(h.drawers.at(-1).html,/同步检查超时/);
 });
 test('confirmed missing source is excluded from both periods, while cards retain all known success values',()=>{
  const h=fixture(2);h.orders[0].success_amount=900000;h.orders[0].success_count=900;const p=h.L.providerIntake.platforms[0];p.status='missing';p.received=false;p.complete=false;p.missingDates=['2026-09-26'];
  previousRows(h,{all_amount:800,all_count:8,success_amount:400,success_count:4});h.L.comparisonResults[0].groups.provider[0].success_amount=800000;h.render();
- assert.match(h.html(),/较昨日 · 同范围 1 平台/);assert.equal(metric(h.html(),'代收成功金额').value,'900,700.00');assert.equal(metric(h.html(),'代收成功金额').change,'+75.00%');assert.equal(metric(h.html(),'代收创建金额').change,'+25.00%');assert.equal(metric(h.html(),'代收成功率').change,'+20.00个百分点');assert.match(metric(h.html(),'代收成功金额').detail,/昨日 400.00/);
+ assert.match(h.html(),/较昨日 · 同范围 1 平台/);assert.equal(metric(h.html(),'代收成功金额').value,'900,700.00');assert.equal(metric(h.html(),'代收成功金额').change,'+300.00（+75.00%）');assert.equal(metric(h.html(),'代收创建金额').change,'+200.00（+25.00%）');assert.equal(metric(h.html(),'代收成功率').change,'+20.00个百分点');assert.match(metric(h.html(),'代收成功金额').detail,/昨日 400.00/);
 });
 test('loading and failed intake retain completed named evidence rather than resetting every platform to unknown',()=>{
  const h=fixture(2),p=h.L.providerIntake.platforms[0];p.status='missing';p.received=false;p.complete=false;p.missingDates=['2026-09-26'];
@@ -88,12 +96,12 @@ test('comparison never combines different identities, currencies, zones, source 
  for(const key of ['id','currency','timezone','country','source','duplicate']){const h=fixture(1);previousRows(h,{all_amount:500});if(key==='duplicate')h.L.comparisonResults.push(h.L.comparisonResults[0]);else h.L.comparisonResults[0]={...h.L.comparisonResults[0],platform:{...h.L.comparisonResults[0].platform,[key]:'different'}};h.render();assert.equal(metric(h.html(),'代收创建金额').change,undefined,key);assert.match(h.html(),/没有同范围的两期数据，暂不可比/)}
 });
 test('confirmed gaps from either period are excluded symmetrically and missing prior data keeps its reason',()=>{
- const h=fixture(2);previousRows(h,{all_amount:500,all_count:5});const p=h.L.providerComparisonIntake.platforms[0];p.status='missing';p.received=false;p.complete=false;p.missingDates=['2026-09-25'];h.render();assert.match(h.html(),/同范围 1 平台/);assert.equal(metric(h.html(),'代收创建金额').change,'+100.00%');
+ const h=fixture(2);previousRows(h,{all_amount:500,all_count:5});const p=h.L.providerComparisonIntake.platforms[0];p.status='missing';p.received=false;p.complete=false;p.missingDates=['2026-09-25'];h.render();assert.match(h.html(),/同范围 1 平台/);assert.equal(metric(h.html(),'代收创建金额').change,'+500.00（+100.00%）');
  h.L.comparisonStatus='error';h.L.comparisonError='前期数据读取未完成：timeout';h.render();assert.equal(metric(h.html(),'代收创建金额').change,undefined);assert.match(h.html(),/前期数据读取未完成：timeout/);
 });
 test('zero comparison denominator shows no-baseline rather than infinity or a fake percentage',()=>{
- const h=fixture(1);previousRows(h,{all_amount:0,all_count:0,success_amount:0,success_count:0});h.render();assert.equal(metric(h.html(),'代收创建金额').change,'无基数');assert.equal(metric(h.html(),'代收成功率').change,'暂无对比');assert.doesNotMatch(h.html(),/NaN|Infinity/);
- h.orders[0].all_amount=0;h.orders[0].all_count=0;h.render();assert.equal(metric(h.html(),'代收创建金额').change,'持平');
+ const h=fixture(1);previousRows(h,{all_amount:0,all_count:0,success_amount:0,success_count:0});h.render();assert.equal(metric(h.html(),'代收创建金额').change,'+1,000.00（无基数）');assert.equal(metric(h.html(),'代收成功率').change,'暂无对比');assert.doesNotMatch(h.html(),/NaN|Infinity/);
+ h.orders[0].all_amount=0;h.orders[0].all_count=0;h.render();assert.equal(metric(h.html(),'代收创建金额').change,'0.00（持平）');
 });
 test('observed creation evidence is restricted to the displayed direction and never claims completeness',()=>{
  const h=fixture(1);h.L.providerIntake=null;h.orders[0].direction='withdraw';assert.equal(h.api.intakeCoverage(h.L,'charge').received,0);assert.equal(h.api.intakeCoverage(h.L,'withdraw').received,1);assert.equal(h.api.intakeCoverage(h.L,'withdraw').complete,0);
@@ -103,7 +111,7 @@ test('received channel mismatches remain 15 of 16 platforms and do not shrink co
  const h=fixture();h.orders[0].all_count=0;h.orders[0].all_amount=0;previousRows(h,{all_count:20,all_amount:2000,success_count:5,success_amount:500});
  const missing=h.L.providerIntake.platforms[0];Object.assign(missing,{status:'missing',received:false,complete:false,missingDates:['2026-09-26'],days:[{date:'2026-09-26',dataset:'orders',direction:'charge',status:'not_received',received:false,complete:false,evidence:'only_success_day_records_received'}]});
  for(const p of h.L.providerIntake.platforms.slice(1,14)){p.status='missing';p.complete=false;p.received=true;p.missingDates=['2026-09-26'];p.days=[{date:'2026-09-26',dataset:'orders',direction:'charge',status:'partial',received:true,complete:false,expected:true,evidence:'source_created_channel_mismatch'}];}
- h.render();let c=h.api.intakeCoverage(h.L);assert.equal(c.received,15);assert.equal(c.complete,2);assert.equal(c.missing.length,1);assert.equal(c.platforms.filter(p=>p.difference).length,13);assert.equal(c.partial,true);assert.match(h.html(),/<label>平台<\/label><strong>15 \/ 16<\/strong>/);assert.match(h.html(),/>缺 51GAME<\/button>/);assert.match(h.html(),/较昨日 · 同范围 15 平台/);assert.equal(metric(h.html(),'代收创建金额').change,'-50.00%');assert.match(h.html(),/代收三方汇总（部分结果）/);
+ h.render();let c=h.api.intakeCoverage(h.L);assert.equal(c.received,15);assert.equal(c.complete,2);assert.equal(c.missing.length,1);assert.equal(c.platforms.filter(p=>p.difference).length,13);assert.equal(c.partial,true);assert.match(h.html(),/<label>平台<\/label><strong>15 \/ 16<\/strong>/);assert.match(h.html(),/>缺 51GAME<\/button>/);assert.match(h.html(),/较昨日 · 同范围 15 平台/);assert.equal(metric(h.html(),'代收创建金额').change,'−15,000.00（-50.00%）');assert.match(h.html(),/代收三方汇总（部分结果）/);
  h.root.providerSummaryPlatformCoverage();assert.match(h.drawers.at(-1).html,/已收到 · 核验有差异/);assert.match(h.drawers.at(-1).html,/创建订单与渠道分组不一致/);
  for(const p of h.L.providerIntake.platforms.slice(1,14)){p.status='received';p.missingDates=[];}h.render();c=h.api.intakeCoverage(h.L);assert.equal(c.received,15);assert.equal(c.partial,true);assert.equal(c.missing.length,1);assert.match(h.html(),/较昨日 · 同范围 15 平台/);
 });

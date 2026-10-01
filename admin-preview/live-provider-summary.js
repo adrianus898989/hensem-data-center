@@ -441,22 +441,23 @@
   const range=root.HensemLiveCompare.windowFor(L.from,L.to,L.results?.[0]?.platform?.timezone,L.queryNow);
   const caption=(L.comparisonLabel||'较前一日同一时段').replace('较前一日同一时段','较昨日同期');
   const priorLabel=range.calendarDays>1?'前期':'昨日',signed=(value,format)=>(value>0?'+':value<0?'−':'')+format(Math.abs(value));
-  const changes=(now,before,format,isRate=false,reason='')=>{
+  const changes=(now,before,format,isRate=false,reason='',unit='')=>{
    const error=reason||unavailable;if(error)return {detail:error,text:reason?(L.feeLookupLoading?'费率读取中':L.feeLookupError?'费率读取失败':'费率未齐'):'',trend:'unknown'};
    if(isRate){const d=root.HensemLiveCompare.ratioDelta(compared.total.success_count,compared.total.all_count,previous.total.success_count,previous.total.all_count);
     return {detail:comparison.detail+'。'+priorLabel+' '+R(previous.total.success_count,previous.total.all_count)+' · '+caption+' '+(d.value===null?'暂无可比成功率':d.display),text:d.value===null?'暂无对比':d.display.replace(' 个百分点','个百分点'),trend:d.trend}}
    if(now==null||before==null||!Number.isFinite(Number(now))||!Number.isFinite(Number(before)))return {detail:'金额口径不完整，暂不可比',text:'暂无对比',trend:'unknown'};
    const d=root.HensemLiveCompare.delta(now,before);
-   return {detail:comparison.detail+'。'+priorLabel+' '+format(before)+' · '+caption+' '+signed(Number(now)-Number(before),format)+' · '+d.display,text:d.display==='新增 / 无基数'?'无基数':d.display,trend:d.trend};
+   const absolute=signed(Number(now)-Number(before),format)+unit;
+   return {detail:comparison.detail+'。'+priorLabel+' '+format(before)+unit+' · '+caption+' '+absolute+' · '+d.display,text:absolute+'（'+(d.display==='新增 / 无基数'?'无基数':d.display)+'）',trend:d.trend};
   };
   const fees=current.fees,feeReason=L.feeLookupLoading?'费率读取中…':L.feeLookupError?'费率读取失败，暂不可比':!compared.fees.complete||!previous.fees.complete?'费率未完全匹配，暂不比较':'';
   const cards=[
-   {label:'统一三方',value:C(current.providers),change:changes(compared.providers,previous.providers,C),tone:'neutral'},
+   {label:'统一三方',value:C(current.providers),change:changes(compared.providers,previous.providers,C,false,'',' 个'),tone:'neutral'},
    {label:'平台',platformCoverage:true,value:(intake.received||intake.requested>0&&intake.missing.length===intake.requested?C(intake.received):'—')+' / '+C(intake.requested),change:{detail:intake.platforms.map(p=>p.name+'：'+p.label+'，'+p.message).join('；'),text:'',trend:'unknown'},tone:partial?'warning':'neutral'},
    {label:name+'创建金额',value:N(current.total.all_amount),change:changes(compared.total.all_amount,previous.total.all_amount,N),tone:'neutral'},
-   {label:name+'创建笔数',value:C(current.total.all_count),change:changes(compared.total.all_count,previous.total.all_count,C),tone:'neutral'},
+   {label:name+'创建笔数',value:C(current.total.all_count),change:changes(compared.total.all_count,previous.total.all_count,C,false,'',' 笔'),tone:'neutral'},
    {label:name+'成功金额',value:N(current.total.success_amount),change:changes(compared.total.success_amount,previous.total.success_amount,N),tone:'amount'},
-   {label:name+'成功笔数',value:C(current.total.success_count),change:changes(compared.total.success_count,previous.total.success_count,C),tone:'amount'},
+   {label:name+'成功笔数',value:C(current.total.success_count),change:changes(compared.total.success_count,previous.total.success_count,C,false,'',' 笔'),tone:'amount'},
    {label:name+'成功率',value:R(current.total.success_count,current.total.all_count),change:changes(null,null,null,true),tone:'rate'},
    {label:'估算手续费',value:N(fees.amount),badge:!fees.complete?'部分':'',change:changes(compared.fees.amount,previous.fees.amount,N,false,feeReason),tone:'fee'}
   ];
