@@ -35,6 +35,7 @@ jobs:
       - run: pnpm test:migration
       - run: pnpm test:platform-filters
       - run: pnpm test:comparisons
+      - run: pnpm test:security-identity
       - run: pnpm test:admin-preview
       - run: pnpm test:wg-realtime
       - run: pnpm test:wg-existing

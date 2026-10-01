@@ -19,7 +19,7 @@ test('production entry denies root, documents, assets and unsupported methods be
 test('only trusted CF ingress IP crosses the gate; credentials, claimed account and spoofed forwarding headers never do',async()=>{
  const {serve}=await worker();const calls=[];
  const r=await serve(request(site+'?ip=198.51.100.7&account=synthetic-owner',{headers:{Authorization:'Bearer private',Cookie:'private=1','x-portal-proxy-key':'forged','x-portal-client-ip':'198.51.100.7','X-Forwarded-For':'198.51.100.7','X-Real-IP':'198.51.100.7'}}),env,async(url,options)=>{
-  calls.push(url);if(url===gate){assert.deepEqual(options.headers,{'Content-Type':'application/json',apikey:'sb_publishable_0DFLEmUvGBp1GYQ7jNo4IA_O1PeA9zV','x-portal-proxy-key':key,'x-portal-client-ip':'203.0.113.7'});assert.equal(options.body,'{}');assert.equal(options.redirect,'error');assert.equal(options.cache,'no-store');assert(options.signal);return decision(true)}
+  calls.push(url);if(url===gate){assert.deepEqual(options.headers,{'Content-Type':'application/json',apikey:'sb_publishable_0DFLEmUvGBp1GYQ7jNo4IA_O1PeA9zV','x-portal-proxy-key':key,'x-portal-client-ip':'203.0.113.7'});assert.equal(options.body,'{}');assert.equal(options.redirect,'manual');assert.equal(options.cache,'no-store');assert(options.signal);return decision(true)}
   assert.equal(url,'https://adrianus898989.github.io/hensem-data-center/');assert.deepEqual(Object.keys(options.headers).sort(),['Accept','Cache-Control']);return new Response('public page',{headers:{'Content-Type':'text/html'}});
  });assert.equal(r.status,200);assert.equal(await r.text(),'public page');assert.equal(r.headers.get('cache-control'),'private, no-store');assert.equal(calls.length,2);
 });
@@ -46,6 +46,43 @@ test('an address removal is effective on the next asset request; protected asset
 test('valid IPv6 is normalized and authorized root redirects retain no credentials',async()=>{
  const {serve}=await worker();const r=await serve(request(site.replace('/hensem-data-center/','/')+'?token=private',{headers:{'CF-Connecting-IP':'2001:0db8:0:0::7'}}),env,async(url,options)=>{assert.equal(url,gate);assert.equal(options.headers['x-portal-client-ip'],'2001:db8::7');return decision(true)});
  assert.equal(r.status,302);assert.equal(r.headers.get('location'),'/hensem-data-center/');assert.equal(r.headers.get('cache-control'),'private, no-store');
+});
+
+test('operator secret trailing newline is normalized without trusting caller proof',async()=>{
+ const {serve}=await worker();let checks=0;
+ const r=await serve(request(site,{headers:{'x-portal-proxy-key':'forged'}}),{PORTAL_PROXY_KEY:'\n'+key+'\r\n'},async(url,options)=>{
+  if(url===gate){checks++;assert.equal(options.headers['x-portal-proxy-key'],key);return decision(true)}
+  return new Response('public page');
+ });assert.equal(r.status,200);assert.equal(checks,1);
+});
+test('entry fetch uses workerd-supported manual redirects and never follows a proof-bearing redirect',async()=>{
+ const {serve}=await worker();let calls=0;
+ const strictRuntime=async(url,options)=>{
+  if(!['follow','manual'].includes(options.redirect))throw new TypeError('Invalid redirect value');
+  calls++;if(url===gate)return decision(true);return new Response('public page');
+ };
+ assert.equal((await serve(request(),env,strictRuntime)).status,200);assert.equal(calls,2);
+ for(const status of [301,302,303,307,308]){
+  calls=0;const r=await serve(request(),env,async(url,options)=>{
+   calls++;assert.equal(url,gate);assert.equal(options.redirect,'manual');
+   return new Response(null,{status,headers:{Location:'https://untrusted.invalid/'+key}});
+  });assert.equal(r.status,403);assert.equal(await r.text(),'Access denied');assert.equal(calls,1);
+ }
+});
+test('entry failure diagnostics are fixed stage codes and public responses expose no private cause',async()=>{
+ const {serve}=await worker(),logs=[],old=console.warn;console.warn=value=>logs.push(value);
+ try{
+  for(const [respond,reason]of [
+   [()=>{throw new TypeError('secret='+key+' IP=203.0.113.7')},'gate_fetch_TypeError'],
+   [()=>new Response('private backend error',{status:403}),'gate_http_403'],
+   [()=>new Response('not json'),'gate_content_type'],
+   [()=>new Response('bad JSON',{headers:{'Content-Type':'application/json'}}),'gate_json_SyntaxError'],
+   [()=>decision(false),'gate_decision_denied'],
+  ]){
+   const r=await serve(request(),env,respond);assert.equal(r.status,403);assert.equal(await r.text(),'Access denied');assert.equal(logs.at(-1),'dashboard_entry_denied:'+reason);
+  }
+  assert(logs.every(value=>!value.includes(key)&&!value.includes('203.0.113.7')&&!value.includes('https://')&&!value.includes('private')));
+ }finally{console.warn=old;}
 });
 
 const cache=new Map();
