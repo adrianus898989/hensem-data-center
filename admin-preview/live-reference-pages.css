@@ -336,14 +336,33 @@ body.live-admin .provider-summary-report .provider-workorder-notices{display:fle
 body.live-admin .provider-summary-report .provider-workorder-notices :is(.provider-order-coverage,.provider-workorder-coverage-button){display:inline-block;padding:0;margin:0;border:0;background:none;color:#9b560e;font-size:10px;line-height:16px;text-align:left}
 body.live-admin .provider-summary-report .submission-coverage-compact{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;max-width:100%;margin:0;padding:0;border:0;background:none;font-size:10px;line-height:18px;color:#6a7d9a}
 
-/* Named platform diagnostics stay readable inside the narrow details drawer. */
-body.live-admin .provider-workorder-gap-table table{table-layout:fixed;width:100%;min-width:0}
-body.live-admin .provider-workorder-gap-table :is(th,td){white-space:normal;overflow-wrap:anywhere;text-align:left;vertical-align:top}
-body.live-admin .provider-workorder-gap-table :is(th,td):first-child{position:sticky;left:0;width:100px;background:#fff;z-index:1}
-body.live-admin .provider-workorder-gap-table :is(th,td):nth-child(2){width:40%}
-body.live-admin .provider-workorder-reason{margin:0 0 4px;line-height:1.6}
-body.live-admin .provider-workorder-providers{display:block;margin-bottom:8px;line-height:1.6}
-body.live-admin .provider-workorder-details summary{cursor:pointer;color:#3458db}
-body.live-admin .provider-workorder-details section{margin-top:10px;padding-top:8px;border-top:1px solid #e7edf7;line-height:1.6}
-body.live-admin .provider-workorder-details ul{margin:6px 0;padding-left:18px}
-body.live-admin .provider-workorder-details li{margin:0 0 8px}
+/* Diagnostic cards distinguish known collection scope from issues that need confirmation. */
+body.live-admin :is(.provider-workorder-gap-intro,.provider-workorder-gap-help){padding:10px 14px;border:1px solid #dce5f2;border-radius:7px;background:#f6f8fc;line-height:1.65;font-size:11px}
+body.live-admin :is(.provider-workorder-gap-intro,.provider-workorder-gap-help) p{margin:3px 0}
+body.live-admin .provider-workorder-gap-help{margin-top:12px;background:#fffcf4;border-color:#eadfbd}
+body.live-admin .provider-workorder-details{margin-top:9px;border:1px solid #dce5f2;border-radius:7px;overflow:hidden;background:#fff}
+body.live-admin .provider-workorder-details>summary{display:grid;grid-template-columns:110px minmax(205px,1fr) minmax(200px,1.2fr) 80px;align-items:center;gap:12px;padding:12px;cursor:pointer;list-style:none;color:#355075}
+body.live-admin .provider-workorder-details>summary::-webkit-details-marker{display:none}
+body.live-admin .provider-workorder-details>summary:focus-visible{outline:2px solid #4662ff;outline-offset:-2px}
+body.live-admin .provider-workorder-details[open]>summary{background:#f4f7ff;border-bottom:1px solid #dce5f2}
+body.live-admin .provider-workorder-platform,body.live-admin .provider-workorder-counts,body.live-admin .provider-workorder-reasons{display:flex;flex-direction:column;gap:4px;min-width:0;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+body.live-admin .provider-workorder-platform strong{font-size:13px}
+body.live-admin .provider-workorder-platform small,body.live-admin .provider-workorder-counts>small{color:#7b8ba3;font-size:10px}
+body.live-admin .provider-workorder-platform em{font-size:10px;font-style:normal;align-self:flex-start;padding:1px 5px;border-radius:3px}
+body.live-admin .provider-workorder-platform .known-scope{color:#24775e;background:#eaf6f1}
+body.live-admin .provider-workorder-platform .needs-confirmation{color:#9b621e;background:#fff3df}
+body.live-admin .provider-workorder-counts b{font-variant-numeric:tabular-nums}
+body.live-admin .provider-workorder-expand{font-size:11px;color:#3458db}
+body.live-admin .provider-workorder-platform-body{padding:9px 12px;font-size:11px;line-height:1.6}
+body.live-admin .provider-workorder-providers{margin:0 0 8px}
+body.live-admin .provider-workorder-day-table{max-width:100%;overflow-x:auto}
+body.live-admin .provider-workorder-day-table table{table-layout:fixed;width:100%;min-width:920px}
+body.live-admin .provider-workorder-day-table :is(th,td){white-space:normal;overflow-wrap:anywhere;text-align:left;vertical-align:top;padding:8px!important;font-size:11px;line-height:1.6}
+body.live-admin .provider-workorder-day-table :is(th,td):first-child{width:140px}
+body.live-admin .provider-workorder-day-table :is(th,td):nth-child(2),body.live-admin .provider-workorder-day-table :is(th,td):nth-child(3){width:66px;font-variant-numeric:tabular-nums}
+body.live-admin .provider-workorder-day-table :is(th,td):nth-child(4){width:104px}
+body.live-admin .provider-workorder-day-table :is(th,td):nth-child(5),body.live-admin .provider-workorder-day-table :is(th,td):nth-child(6){width:80px;font-variant-numeric:tabular-nums}
+body.live-admin .provider-workorder-day-table p{margin:0 0 5px}
+body.live-admin .provider-workorder-day-context{font-size:10px;color:#7b8ba3;margin-bottom:5px}
+body.live-admin .provider-workorder-next{padding-top:5px;border-top:1px solid #e6edf7}
+@media(max-width:900px){body.live-admin .provider-workorder-details>summary{grid-template-columns:105px minmax(0,1fr)}body.live-admin .provider-workorder-reasons{grid-column:1/-1}body.live-admin .provider-workorder-expand{grid-column:2;text-align:right}}

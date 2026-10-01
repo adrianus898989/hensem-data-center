@@ -87,9 +87,9 @@ test('fully read collection and payout cards separately identify named workorder
    fact('RushPay',{direction,platformId:'new-dhani',platform:'DHANIWIN',source:'NEW_AR',uniqueCoverage:{complete:false,missingDetailCount:3}}),
    fact('AliasPay',{direction,platformId:'old-82',platform:'INDIA82',source:'ar',uniqueCoverage:incomplete})
   ]};
-  h.render(direction);assert.equal(h.api.queryCoverage(h.L).received,2);assert.doesNotMatch(h.html(),/provider-api-coverage/);assert.match(h.html(),/工单缺项 2 平台/);assert.doesNotMatch(h.html(),/缺失 \d+ 个平台|provider-kpi-warning/);
+  h.render(direction);assert.equal(h.api.queryCoverage(h.L).received,2);assert.doesNotMatch(h.html(),/provider-api-coverage/);assert.match(h.html(),/工单统计差异 2 平台/);assert.doesNotMatch(h.html(),/缺失 \d+ 个平台|provider-kpi-warning/);
   const gaps=h.api.workorderPlatformGaps(h.L,direction);assert.equal(gaps.length,2);assert.equal(gaps.find(p=>p.id==='new-dhani').providers.length,2);
-  h.root.providerSummaryWorkorderPlatforms();const drawer=h.drawers.at(-1);assert.equal(drawer.title,'工单缺项平台');assert.match(drawer.html,/82LOTTERY/);assert.match(drawer.html,/DHANIWIN/);assert.match(drawer.html,/TukPay、RushPay/);assert.match(drawer.html,/工单日期已收 0 \/ 1 天/);assert.match(drawer.html,/2条采集字段未提供原订单号/);assert.match(drawer.html,/3条汇总与明细差异待核对/);assert.doesNotMatch(drawer.html,/Outside scope/);assert.equal(h.networkCalls(),0);
+  h.root.providerSummaryWorkorderPlatforms();const drawer=h.drawers.at(-1);assert.equal(drawer.title,'工单统计差异说明');assert.match(drawer.html,/82LOTTERY/);assert.match(drawer.html,/DHANIWIN/);assert.match(drawer.html,/TukPay、RushPay/);assert.match(drawer.html,/工单日期已收 0 \/ 1 天/);assert.match(drawer.html,/2条采集字段未提供原订单号/);assert.match(drawer.html,/3条汇总与明细差异待核对/);assert.doesNotMatch(drawer.html,/Outside scope/);assert.equal(h.networkCalls(),0);
  }
 });
 
@@ -102,8 +102,8 @@ test('workorder gap card does not guess unsupported sources, ambiguous names, op
   fact('Other country',{country:'巴西',platformId:'known',uniqueCoverage:{complete:false}}),
   fact('Foreign id',{platformId:'outside',platform:'Complete',uniqueCoverage:{complete:false}})
  ]};
- h.render();assert.equal(h.api.workorderPlatformGaps(h.L,'withdraw').length,0);assert.doesNotMatch(h.html(),/工单缺项 \d+ 平台|缺失 \d+ 个平台/);
- h.L.workorders.byPlatformProvider.push(fact('<Unsafe>',{platform:'Shared',country:'印度',source:'NEW_AR',uniqueCoverage:{complete:false,missingAmountCount:1}}));h.render();assert.match(h.html(),/工单缺项 1 平台/);assert.equal(h.api.workorderPlatformGaps(h.L,'withdraw')[0].id,'new-a');
+ h.render();assert.equal(h.api.workorderPlatformGaps(h.L,'withdraw').length,0);assert.doesNotMatch(h.html(),/工单统计差异 \d+ 平台|缺失 \d+ 个平台/);
+ h.L.workorders.byPlatformProvider.push(fact('<Unsafe>',{platform:'Shared',country:'印度',source:'NEW_AR',uniqueCoverage:{complete:false,missingAmountCount:1}}));h.render();assert.match(h.html(),/工单统计差异 1 平台/);assert.equal(h.api.workorderPlatformGaps(h.L,'withdraw')[0].id,'new-a');
  h.root.providerSummaryWorkorderPlatforms();const html=h.drawers.at(-1).html;assert.match(html,/&lt;Unsafe&gt;/);assert.doesNotMatch(html,/<Unsafe>/);assert.match(html,/1条金额缺失/);assert.equal(h.networkCalls(),0);
  const count=h.drawers.length;h.L.dirty=true;h.root.providerSummaryWorkorderPlatforms();assert.equal(h.drawers.length,count);
 });
