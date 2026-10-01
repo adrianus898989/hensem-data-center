@@ -1,7 +1,7 @@
 /* Synthetic-only VM tests for the production UI adapter. No credentials/network/real orders. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8');
-const layoutSources=['live-amount-bands.js','live-member-counts.js','live-submission-analysis.js','live-analysis-drilldown.js','live-reference-layout.js','live-pages-reference.js','live-pending-snapshot.js','live-pending-analysis.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js', 'live-withdraw-pages.js','live-workorder-operations.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
+const layoutSources=['live-amount-bands.js','live-member-counts.js','live-submission-analysis.js','live-analysis-drilldown.js','live-matrix-custom-range.js','live-reference-layout.js','live-pages-reference.js','live-pending-snapshot.js','live-pending-analysis.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js', 'live-withdraw-pages.js','live-workorder-operations.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
 const comparisonSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-comparison.js'),'utf8');
 test('overview merges same providers across sources while preserving stable platform identities and other source reports',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222',source:'NEW_AR'},p3={...P,id:'33333333-3333-4333-8333-333333333333'};
@@ -281,27 +281,49 @@ test('overview duration sections split collection and payout and retain explicit
  assert.match(h.html(),/class="grid equal live-duration-paired"/);assert.match(h.html(),/充值 \/ 代收成功耗时/);assert.match(h.html(),/提款 \/ 代付成功耗时/);assert.match(h.html(),/成功订单合计/);assert.match(h.html(),/所选创建范围 · 仍待付订单等待时长/);assert.match(h.html(),/本期仍代付中合计/);
 });
 
-test('hour by amount matrix preserves one amount band per row, 24 hours and three independent cell values',async()=>{
+test('hour by amount matrix preserves each band label and adds four totals after the 24 hourly cells',async()=>{
  const h=await ready(),r=completeAggregate(P,10,3);h.L.results=[r];h.L.direction='charge';h.L.matrixMode='exact';h.c.state.page='matrix';h.c.render();
- const matrices=renderedTables(h.html()).filter(t=>t.headers[0]==='金额 / 时');assert.equal(matrices.length,1);const matrix=matrices[0];assert.equal(matrix.headers.length,26);assert.deepEqual(matrix.headers.slice(1,-1),Array.from({length:24},(_,hour)=>String(hour).padStart(2,'0')+'时'));assert.equal(matrix.rows.length,10);assert.equal(new Set(matrix.rows.map(row=>plain(row[0]))).size,10);
- for(const row of matrix.rows){assert.equal(row.length,26);for(const cell of row.slice(1,-1)){assert.equal([...cell.matchAll(/class="matrix-cell analysis-matrix-cell"/g)].length,1);assert.equal([...cell.matchAll(/<b\b/g)].length,1);assert.equal([...cell.matchAll(/<span\b/g)].length,2)}}
- const known=matrix.rows.find(row=>plain(row[0]).startsWith('200成功 '))[13];assert.match(known,/>10笔<\/b>/);assert.match(known,/>1,000<\/span>/);assert.match(known,/>30\.00%<\/span>/);
+ const matrices=renderedTables(h.html()).filter(t=>t.headers[0]==='金额 / 时');assert.equal(matrices.length,1);const matrix=matrices[0];assert.equal(matrix.headers.length,27);assert.deepEqual(matrix.headers.slice(1,25),Array.from({length:24},(_,hour)=>String(hour).padStart(2,'0')+'时'));assert.deepEqual(matrix.headers.slice(25),['24小时合计','整段明细']);assert.equal(matrix.rows.length,10);assert.equal(new Set(matrix.rows.map(row=>plain(row[0]))).size,10);
+ for(const row of matrix.rows){assert.equal(row.length,27);assert.doesNotMatch(row[0],/成功|金额合计|matrix-band-total/);for(const cell of row.slice(1,25)){assert.equal([...cell.matchAll(/class="matrix-cell analysis-matrix-cell"/g)].length,1);assert.equal([...cell.matchAll(/<b\b/g)].length,1);assert.equal([...cell.matchAll(/<span\b/g)].length,2)}}
+ const row=matrix.rows.find(row=>plain(row[0])==='200'),known=row[13];assert.match(known,/>10笔<\/b>/);assert.match(known,/>1,000<\/span>/);assert.match(known,/>30\.00%<\/span>/);
+ assert.deepEqual([...row[25].matchAll(/<small>([^<]+)<\/small><b>([^<]+)<\/b>/g)].map(m=>[m[1],m[2]]),[['全部笔数','10 笔'],['全部金额','1,000.00'],['成功笔数','3 笔'],['成功金额','300.00']]);
+ const footer=matrix.html.match(/<tfoot>([^]*?)<\/tfoot>/)?.[1];assert(footer);const customCells=[...footer.matchAll(/<td\b[^>]*>([^]*?)<\/td>/g)].map(m=>m[1]);assert.equal(customCells.length,27);assert.match(customCells[0],/自定义金额/);assert.match(customCells[25],/matrix-row-total/);assert.match(h.html(),/aria-label="自定义金额区间"/);
 });
 
-test('matrix amount labels total successful orders across all hours without mixing directions or currencies',async()=>{
+test('matrix 24-hour totals preserve direction, currency, missing fields and daily aggregate completeness',async()=>{
  const h=await ready({adaptive:true}),r=completeAggregate(P,100,1),s=r.summary[0];
  r.groups.matrix_range=[{...s,bucket:'band:0',hour:0,success_count:2,success_amount:'250.50'},{...s,bucket:'band:0',hour:23,success_count:3,success_amount:'499.75'},{...s,direction:'withdraw',bucket:'band:0',hour:12,success_count:99,success_amount:'99999'},{...s,bucket:'band:1',hour:12,success_count:7,success_amount:'1800'}];
  h.L.results=[r];h.L.direction='charge';h.L.matrixMode='range';h.L.amountBandProfiles={charge:{edges:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]}};h.c.state.page='matrix';h.c.render();
- const first=()=>renderedTables(h.html()).find(t=>t.headers[0]==='金额 / 时').rows[0][0];
- assert.match(first(),/100 ≤ 金额 &lt; 200/);assert.match(first(),/>成功 5 笔</);assert.match(first(),/>金额 750.25</);assert.match(first(),/所选日期范围内 00–23 时成功合计/);assert.doesNotMatch(first(),/99,999|1,800|10,000/);
- h.L.to='2026-09-24T23:59:59';h.c.render();assert.match(first(),/所选日期范围内/);
- r.groups.matrix_range[1].currency='USD';h.c.render();assert.match(first(),/>成功 5 笔</);assert.match(first(),/>金额 —</);
- r.groups.matrix_range[1].currency='INR';delete r.groups.matrix_range[1].success_count;r.groups.matrix_range[1].success_amount=null;h.c.render();assert.match(first(),/>成功 — 笔</);assert.match(first(),/>金额 —</);
- r.groups.matrix_range=[];h.c.render();assert.match(first(),/>成功 0 笔</);assert.match(first(),/>金额 0.00</);
- delete r.groups.matrix_range;h.c.render();assert.match(first(),/>成功 — 笔</);assert.match(first(),/>金额 —</);
- r.groups.matrix_range=[];r.complete=false;h.c.render();assert.match(first(),/>成功 — 笔</);
- r.complete=true;h.L.queryWarnings=['Synthetic missing platform'];h.c.render();assert.match(first(),/部分平台已读取/);
- h.L.direction='withdraw';r.withdrawSuccessTimeAvailable=false;h.c.render();assert.match(first(),/>成功 — 笔</);assert.match(first(),/>金额 —</);
+ const first=()=>renderedTables(h.html()).find(t=>t.headers[0]==='金额 / 时').rows[0],totals=()=>Object.fromEntries([...first()[25].matchAll(/<small>([^<]+)<\/small><b>([^<]+)<\/b>/g)].map(m=>[m[1],m[2]]));
+ assert.match(first()[0],/100 ≤ 金额 &lt; 200/);assert.doesNotMatch(first()[0],/成功|合计/);assert.deepEqual(totals(),{'全部笔数':'200 笔','全部金额':'20,000.00','成功笔数':'5 笔','成功金额':'750.25'});assert.match(first()[25],/所选日期范围内 00–23 时合计/);assert.match(first()[25],/金额单位 INR/);
+ h.L.to='2026-09-24T23:59:59';r._parts=[{complete:true,groups:{matrix_range:[{...r.groups.matrix_range[0]}]}},{complete:true,groups:{matrix_range:[{...r.groups.matrix_range[1]}]}}];h.c.render();assert.equal(totals()['成功金额'],'750.25');
+ r.hasMore=true;h.c.render();assert.equal(totals()['成功笔数'],'5 笔','detail pagination does not invalidate a complete aggregate');
+ delete r._parts[1].groups.matrix_range[0].success_count;h.c.render();assert.equal(totals()['成功笔数'],'— 笔','original part fields remain unknown even if merged rows contain numeric totals');r._parts[1].groups.matrix_range[0].success_count=3;
+ delete r._parts[1].groups.matrix_range;h.c.render();assert.deepEqual(totals(),{'全部笔数':'— 笔','全部金额':'—','成功笔数':'— 笔','成功金额':'—'});delete r._parts;
+ const validRows=r.groups.matrix_range.slice();r.groups.matrix_range.push(...[null,'',-1,24].map(hour=>({...s,bucket:'band:0',hour,all_count:900,all_amount:'90000',success_count:900,success_amount:'90000'})));h.c.render();assert.equal(totals()['全部笔数'],'200 笔');assert.equal(totals()['成功金额'],'750.25');r.groups.matrix_range=validRows;
+ r.groups.matrix_range[1].currency='USD';h.c.render();assert.deepEqual(totals(),{'全部笔数':'200 笔','全部金额':'—','成功笔数':'5 笔','成功金额':'—'});
+ r.groups.matrix_range[1].currency='INR';delete r.groups.matrix_range[1].all_count;r.groups.matrix_range[1].all_amount=null;delete r.groups.matrix_range[1].success_count;r.groups.matrix_range[1].success_amount=null;h.c.render();assert.deepEqual(totals(),{'全部笔数':'— 笔','全部金额':'—','成功笔数':'— 笔','成功金额':'—'});
+ r.groups.matrix_range=[];h.c.render();assert.deepEqual(totals(),{'全部笔数':'0 笔','全部金额':'0.00','成功笔数':'0 笔','成功金额':'0.00'});
+ delete r.groups.matrix_range;h.c.render();assert.deepEqual(totals(),{'全部笔数':'— 笔','全部金额':'—','成功笔数':'— 笔','成功金额':'—'});
+ r.groups.matrix_range=[];r.complete=false;h.c.render();assert.equal(totals()['成功笔数'],'— 笔');
+ r.complete=true;h.L.queryWarnings=['Synthetic missing platform'];h.c.render();assert.match(first()[25],/部分平台已读取/);assert.match(first()[25],/部分已读/);
+ h.L.direction='withdraw';r.withdrawSuccessTimeAvailable=false;h.c.render();assert.equal(totals()['成功笔数'],'— 笔');assert.equal(totals()['成功金额'],'—');
+});
+
+test('matrix custom interval queries independently and restores its footer without changing primary totals or bands',async()=>{
+ const h=await ready({page:'matrix'}),main=completeAggregate(P,10,3),custom=completeAggregate(P,4,3);
+ custom.groups.hourly=[{...custom.summary[0],hour:12,all_amount:'935.50',success_amount:'731.25'}];
+ h.setHandler(q=>structuredClone(q.amountMin!==undefined?custom:main));setScope(h,{direction:'charge'});await h.c.liveQuery();await settle();
+ assert.equal(h.L.pageQueried,true);assert.equal(h.L.dirty,false);assert.match(h.html(),/aria-label="自定义金额区间"/);
+ const matrix=()=>renderedTables(h.html()).find(t=>t.headers[0]==='金额 / 时'),primary=()=>[...h.html().matchAll(/class="kpi-value">([^]*?)<\/div>/g)].map(m=>plain(m[1]));
+ const fixedBefore=JSON.stringify(matrix().rows),primaryBefore=primary(),sourceBefore=JSON.stringify(h.L.results),callsBefore=h.calls.length;
+ assert.equal(primaryBefore.length,6);h.c.liveMatrixAmountSet('min','115.25');h.c.liveMatrixAmountSet('max','360.50');await h.c.liveMatrixAmountQuery({reportValidity:()=>true});await settle();
+ const requests=h.calls.slice(callsBefore).filter(q=>q.action==='aggregate');assert.equal(requests.length,1);assert.equal(requests[0].amountMin,115.25);assert.equal(requests[0].amountMax,360.5);assert.equal(requests[0].platformId,P.id);assert.equal(requests[0].direction,'charge');assert.equal(requests[0].view,'full');assert.equal(requests[0].startAt,'2026-09-21T18:30:00.000Z');assert.equal(requests[0].endAt,'2026-09-22T00:30:00.000Z');
+ assert.deepEqual(primary(),primaryBefore);assert.equal(JSON.stringify(matrix().rows),fixedBefore);assert.equal(JSON.stringify(h.L.results),sourceBefore);
+ const footer=()=>matrix().html.match(/<tfoot>([^]*?)<\/tfoot>/)?.[1],footerBefore=footer(),cells=[...footerBefore.matchAll(/<td\b[^>]*>([^]*?)<\/td>/g)].map(m=>m[1]);
+ assert.equal(cells.length,27);assert.match(cells[0],/115\.25 ≤ 金额 ≤ 360\.50/);assert.match(cells[13],/>4笔<\/b>/);assert.match(cells[13],/>935\.50<\/span>/);assert.match(cells[13],/>75\.00%<\/span>/);assert.deepEqual([...cells[25].matchAll(/<small>([^<]+)<\/small><b>([^<]+)<\/b>/g)].map(m=>[m[1],m[2]]),[['全部笔数','4 笔'],['全部金额','935.50'],['成功笔数','3 笔'],['成功金额','731.25']]);
+ const afterQuery=h.calls.length;h.c.setPage('amount');await settle();h.c.setPage('matrix');await settle();
+ assert.equal(h.c.state.page,'matrix');assert.equal(h.calls.length,afterQuery,'restoring a page tab reuses the primary and independent interval results');assert.equal(footer(),footerBefore);assert.equal(JSON.stringify(matrix().rows),fixedBefore);assert.deepEqual(primary(),primaryBefore);assert.match(h.html(),/aria-label="自定义最低金额"[^>]*value="115\.25"/);assert.match(h.html(),/aria-label="自定义最高金额"[^>]*value="360\.50"/);
 });
 
 test('rejected and unknown statuses remain explicit in the reference direction analysis',async()=>{

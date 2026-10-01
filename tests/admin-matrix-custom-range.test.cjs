@@ -1,0 +1,121 @@
+/* Synthetic VM only. No credentials, network, database or production orders. */
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-matrix-custom-range.js'),'utf8');
+const copy=value=>JSON.parse(JSON.stringify(value));
+const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
+const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve))};
+const platform=(id='A',currency='INR',source='ar')=>({id,name:'Platform '+id,currency,source,country:'印度',timezone:'Asia/Kolkata'});
+const hour=(extra={})=>({direction:'charge',currency:'INR',hour:1,all_count:4,all_amount:'800',success_count:2,success_amount:'400',...extra});
+const result=(id='A',rows=[hour()],extra={})=>({platform:{id},summary:[],groups:{hourly:rows},...extra});
+const plain=html=>String(html).replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+const valid=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value));
+function setup(options={}){
+ const root={},calls=[],renders=[];let page='matrix',allowed=true,handler=options.handler,active=0,maxActive=0;
+ const platforms=options.platforms||[platform()],L={serial:1,queryScope:'MAIN-SCOPE',queryNow:123,country:'印度',currency:'INR',from:'2026-09-29T00:00:00',to:'2026-09-29T23:59:59',direction:'all',status:'all',pageQueried:true,loading:false,queryRetrying:false,dirty:false,queryPlatforms:platforms,results:[result('MAIN',[hour({all_count:999,all_amount:'123456'})])],...options.L};
+ const ctx={L,E:value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),N:value=>valid(value)?Number(value).toFixed(2):'—',C:value=>valid(value)?String(Number(value)):'—',R:(n,d)=>valid(n)&&valid(d)&&Number(d)>0?(Number(n)/Number(d)*100).toFixed(2)+'%':'—',
+  page:()=>page,allowed:()=>allowed,selected:()=>platforms,render:()=>renders.push(true),successUnavailable:direction=>options.successUnavailable?.(direction)||false,
+  query:(p,action)=>({action,platformId:p.id,startAt:'2026-09-28T18:30:00.000Z',endAt:'2026-09-29T18:30:00.000Z',direction:L.direction,status:L.status,currency:L.currency,providers:['SelectedPay'],offset:80,limit:20,...options.baseRequest}),
+  request:async(q,serial)=>{calls.push({q:copy(q),serial});active++;maxActive=Math.max(maxActive,active);try{return handler?await handler(q,serial):result(q.platformId)}finally{active--}}
+ };
+ vm.runInNewContext(source,{window:root},{filename:'live-matrix-custom-range.js'});const api=root.HensemMatrixCustomRange.create(ctx);
+ const set=(min,max)=>{root.liveMatrixAmountSet('min',min);root.liveMatrixAmountSet('max',max)};
+ return {root,api,L,calls,renders,platforms,set,query:(form,event)=>root.liveMatrixAmountQuery(form,event),clear:()=>root.liveMatrixAmountClear(),row:direction=>api.row(direction),controls:()=>api.controls(),setHandler:value=>handler=value,setPage:value=>page=value,setAllowed:value=>allowed=value,get maxActive(){return maxActive},get active(){return active}};
+}
+
+test('equal bounds are inclusive, zero is valid and blank ends are omitted from independent full requests',async()=>{
+ for(const [min,max,expected]of [['200','200',{amountMin:200,amountMax:200}],['0','0',{amountMin:0,amountMax:0}],['','300',{amountMax:300}],['100','',{amountMin:100}],['  ','0',{amountMax:0}],['0.01','10.50',{amountMin:.01,amountMax:10.5}]]){
+  const h=setup(),main=copy(h.L.results);h.set(min,max);assert.equal(h.renders.length,0,'draft edits retain focused controls');await h.query();const q=h.calls[0].q;
+  assert.deepEqual(Object.fromEntries(Object.entries(q).filter(([key])=>key.startsWith('amount'))),expected);assert.equal(q.action,'aggregate');assert.equal(q.view,'full');assert.equal(q.offset,0);assert.deepEqual(q.providers,['SelectedPay']);assert.equal(q.currency,'INR');assert.equal(h.calls[0].serial,1);assert.deepEqual(h.L.results,main);
+  assert.match(h.controls(),/含上下限/);assert.match(h.row('charge')[0],/金额/);
+ }
+});
+
+test('invalid, negative, unsafe and reversed ranges reject before issuing any request',async()=>{
+ for(const [min,max]of [['',''],['-1','100'],['abc','100'],['Infinity',''],['NaN',''],['9007199254740992',''],['100','99']]){
+  const h=setup();h.set(min,max);await h.query();assert.equal(h.calls.length,0,min+'/'+max);assert.match(h.controls(),/role="alert"/);assert.doesNotMatch(h.row('charge').join(''),/NaN|Infinity/);
+ }
+ const h=setup();h.set('1','2');await h.query({reportValidity:()=>false});assert.equal(h.calls.length,0,'invalid native form cannot issue a request');
+});
+
+test('query requires the queried matrix page and its query permission',async()=>{
+ for(const flag of ['pageQueried','loading','queryRetrying','dirty']){
+  const h=setup();h.set('1','2');h.L[flag]=flag!=='pageQueried';await h.query();assert.equal(h.calls.length,0,flag);
+ }
+ const denied=setup();denied.set('1','2');denied.setAllowed(false);await denied.query();assert.equal(denied.calls.length,0);
+ const other=setup();other.set('1','2');other.setPage('overview');await other.query();assert.equal(other.calls.length,0);
+});
+
+test('mixed or mismatched selected currencies reject instead of silently presenting a partial scope',async()=>{
+ for(const platforms of [[platform('A'),platform('B','USD')],[platform('A','USD')]]){
+  const h=setup({platforms});h.set('1','100');await h.query();assert.equal(h.calls.length,0);assert.match(h.controls(),/同一币种的平台/);assert.match(h.controls(),/disabled/);
+ }
+});
+
+test('hourly and four total metrics isolate direction and currency without changing main results',async()=>{
+ const h=setup({platforms:[platform('A'),platform('B')],handler:q=>result(q.platformId,[hour(),hour({hour:2,all_count:1,all_amount:'250.50',success_count:1,success_amount:'250.50'}),hour({direction:'withdraw',all_count:3,all_amount:'900',success_count:1,success_amount:'300'}),hour({currency:'USD',all_count:99,all_amount:'9900',success_count:99,success_amount:'9900'})])}),before=copy(h.L.results);
+ h.set('200','300');await h.query();assert.deepEqual(h.calls.map(x=>x.q.platformId),['A','B']);const charge=h.row('charge'),withdraw=h.row('withdraw');assert.equal(charge.length,26);
+ assert.equal(plain(charge[2]),'8笔 1600 50.00%');assert.equal(plain(charge[3]),'2笔 501 100.00%');assert.equal(plain(charge[1]),'0笔 0 —');
+ assert.equal(plain(charge.at(-1)),'全部笔数 10 笔 全部金额 2101.00 成功笔数 6 笔 成功金额 1301.00');assert.equal(plain(withdraw.at(-1)),'全部笔数 6 笔 全部金额 1800.00 成功笔数 2 笔 成功金额 600.00');assert.deepEqual(h.L.results,before);
+});
+
+test('missing hourly metrics stay unknown and are never converted to zero',async()=>{
+ for(const field of ['all_count','all_amount','success_count','success_amount']){
+  const h=setup({handler:()=>result('A',[hour(),hour({hour:2,[field]:null})])});h.set('0','');await h.query();assert.match(h.row('charge').at(-1),/—/);assert.doesNotMatch(h.row('charge').join(''),/NaN|Infinity/);
+  const expected={all_count:'全部笔数 — 笔',all_amount:'全部金额 —',success_count:'成功笔数 — 笔',success_amount:'成功笔数 4 笔 成功金额 —'}[field];assert(plain(h.row('charge').at(-1)).includes(expected),field);
+ }
+});
+
+test('WG withdrawal capability or existing page coverage keeps success unknown, including empty hours',async()=>{
+ for(const extra of [{withdrawSuccessTimeAvailable:false},{capabilities:{withdrawSuccessTimeAvailable:false}},{}]){
+  const h=setup({platforms:[platform('A','INR','wg')],successUnavailable:direction=>Object.keys(extra).length===0&&direction==='withdraw',handler:()=>result('A',[hour({direction:'withdraw'})],extra)});h.set('0','');await h.query();
+  assert.equal(plain(h.row('withdraw').at(-1)),'全部笔数 4 笔 全部金额 800.00 成功笔数 — 笔 成功金额 —');assert.equal(plain(h.row('withdraw')[2]),'4笔 800 —');assert.equal(plain(h.row('withdraw')[1]),'0笔 0 —');
+ }
+});
+
+test('full aggregate hasMore is accepted and original split parts supply all hourly metrics',async()=>{
+ const first=result('A',[hour()],{hasMore:true}),second=result('A',[hour({hour:2,all_count:6,all_amount:'900',success_count:3,success_amount:'500'})],{hasMore:true});
+ const h=setup({handler:()=>({...result('A',[],{hasMore:true}),_parts:[first,second]})});h.set('0','1000');await h.query();assert.equal(plain(h.row('charge').at(-1)),'全部笔数 10 笔 全部金额 1700.00 成功笔数 5 笔 成功金额 900.00');assert.doesNotMatch(h.controls(),/role="alert"/);
+});
+
+test('missing hourly, summary or explicitly incomplete original parts fail instead of showing zero',async()=>{
+ for(const invalid of [{summary:[],groups:{}},{groups:{hourly:[]}},{summary:[],groups:{hourly:[]},complete:false}]){
+  const h=setup({handler:()=>({...result(),_parts:[result(),invalid]})});h.set('0','');await h.query();assert.match(h.controls(),/小时汇总未完整返回/);assert.equal(plain(h.row('charge').at(-1)),'全部笔数 — 笔 全部金额 — 成功笔数 — 笔 成功金额 —');
+ }
+ const mismatch=setup({handler:()=>result('UNREQUESTED')});mismatch.set('0','');await mismatch.query();assert.match(mismatch.controls(),/平台返回不匹配/);
+});
+
+test('invalid hours reject the whole platform rather than silently omitting malformed facts',async()=>{
+ for(const value of [null,undefined,'',-1,24,1.5,'invalid',Infinity]){
+  const h=setup({handler:()=>result('A',[hour(),hour({hour:value,all_count:123})])});h.set('0','');await h.query();
+  assert.match(h.controls(),/小时汇总未完整返回/);assert.equal(plain(h.row('charge').at(-1)),'全部笔数 — 笔 全部金额 — 成功笔数 — 笔 成功金额 —');assert.doesNotMatch(h.row('charge').join(''),/123笔/);
+ }
+});
+
+test('empty or malformed split parts and top-level incomplete aggregates explicitly fail',async()=>{
+ for(const extra of [{_parts:[]},{_parts:{}},{_parts:null},{complete:false},{complete:false,_parts:[result()]}]){
+  const h=setup({handler:()=>result('A',[hour()],extra)});h.set('0','');await h.query();assert.match(h.controls(),/role="alert"/);assert.match(h.controls(),/小时汇总未完整返回|平台返回不匹配/);
+  assert.equal(plain(h.row('charge').at(-1)),'全部笔数 — 笔 全部金额 — 成功笔数 — 笔 成功金额 —');assert.equal(h.api.capture().results.size,0,'malformed aggregate is never retained as a zero result');
+ }
+});
+
+test('only two platform requests run concurrently and partial results never expose a complete success rate',async()=>{
+ const pending=new Map(),h=setup({platforms:['A','B','C','D','E'].map(id=>platform(id)),handler:q=>{const task=deferred();pending.set(q.platformId,task);return task.promise}});h.set('0','');const task=h.query();await settle();assert.equal(h.calls.length,2);assert.equal(h.active,2);
+ pending.get('A').resolve(result('A'));await settle();assert.equal(h.calls.length,3);assert.equal(h.active,2);assert.equal(plain(h.row('charge')[2]),'4笔 800 —');assert.match(h.row('charge')[0],/读取 1\/5 平台/);
+ pending.get('B').resolve(result('B'));await settle();pending.get('C').resolve(result('C'));await settle();pending.get('D').resolve(result('D'));pending.get('E').resolve(result('E'));await task;
+ assert.equal(h.maxActive,2);assert.equal(plain(h.row('charge').at(-1)),'全部笔数 20 笔 全部金额 4000.00 成功笔数 10 笔 成功金额 2000.00');assert.equal(plain(h.row('charge')[2]),'20笔 4000 50.00%');
+});
+
+test('clearing an in-flight query suppresses its late result and old queued requests',async()=>{
+ const old=deferred(),fresh=deferred(),h=setup({platforms:['A','B','C'].map(id=>platform(id)),handler:q=>q.amountMin===1?old.promise:fresh.promise});h.set('1','2');const a=h.query();await settle();assert.equal(h.calls.length,2);h.clear();h.set('100','200');const b=h.query();await settle();assert.equal(h.calls.length,2,'replacement waits for occupied transport slots');
+ old.resolve(result('A',[hour({all_count:99})]));await settle();assert.equal(h.calls.filter(x=>x.q.amountMin===1).length,2,'old queued platform C was never requested');assert.equal(h.maxActive,2);
+ fresh.resolve({summary:[],groups:{hourly:[hour({all_count:7,all_amount:'700',success_count:1,success_amount:'100'})]}});await Promise.all([a,b]);assert.equal(h.maxActive,2);assert.equal(plain(h.row('charge').at(-1)),'全部笔数 21 笔 全部金额 2100.00 成功笔数 3 笔 成功金额 300.00');assert.doesNotMatch(h.row('charge').join(''),/99笔/);
+});
+
+test('capture and restore preserve the independent interval while main-query serial changes invalidate it',async()=>{
+ const h=setup();h.set('200','300');await h.query();const saved=h.api.capture(),before=h.row('charge').join('');h.clear();assert.match(h.row('charge')[0],/待查询/);h.L.serial++;h.api.restore(saved);assert.equal(h.row('charge').join(''),before);assert.match(h.controls(),/value="200"/);assert.match(h.controls(),/value="300"/);assert.equal(h.calls.length,1);
+ h.L.serial++;assert.match(h.row('charge')[0],/待查询/);assert.equal(plain(h.row('charge').at(-1)),'全部笔数 — 笔 全部金额 — 成功笔数 — 笔 成功金额 —');assert.match(h.controls(),/value="200"/,'new main query preserves draft but invalidates old statistics');
+});
+
+test('late response after a main-query serial change cannot repopulate the cleared interval',async()=>{
+ const pending=deferred(),h=setup({handler:()=>pending.promise});h.set('0','10');const task=h.query();await settle();h.L.serial++;h.controls();pending.resolve(result('A',[hour({all_count:999})]));await task;assert.match(h.row('charge')[0],/待查询/);assert.doesNotMatch(h.row('charge').join(''),/999笔/);
+});

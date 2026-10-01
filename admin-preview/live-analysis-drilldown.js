@@ -147,7 +147,7 @@
   }
   function table(config){
    sync();const aligned=config.aligned===true||config.headers.length===11&&config.headers[0]==='方向'&&config.headers[2]==='全部金额',columnCount=config.headers.length+1;
-   return '<div class="table-wrap analysis-expand-table'+(aligned?' analysis-aligned-table':'')+'"><table><thead><tr>'+[...config.headers,config.exclusive?'整段明细':'明细'].map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+config.rows.map(row=>{
+   return '<div class="table-wrap analysis-expand-table'+(aligned?' analysis-aligned-table':'')+'"'+(String(config.exclusive||'').startsWith('matrix-')?' tabindex="0" aria-label="24小时金额矩阵"':'')+'><table><thead><tr>'+[...config.headers,config.exclusive?'整段明细':'明细'].map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+config.rows.map(row=>{
     const segment=config.segment(row),label=config.label(row),selection=config.rowDetail?.(row);let selected=segment,selectedLabel=label;
     if(selection){const chosen=state(selection.segment,selection.label);if(config.exclusive)chosen.exclusiveGroup=config.exclusive;if(chosen.open){selected=selection.segment;selectedLabel=selection.label;}}
     const detail=aligned?alignedPanel(selected,selectedLabel,columnCount):panel(selected,selectedLabel);
