@@ -34,7 +34,7 @@ test('incomplete, duplicate and mismatched success responses cannot overwrite UI
  assert.throws(()=>h.api.validateDashboardRoleResponse({role:{...role,version:2}},{operation:'update',roleId,name:role.name,description:role.description,permissions:role.permissions,expectedVersion:2}),/不完整/);
 });
 test('CAS conflict is actionable and raw server detail or credentials are not reflected',async()=>{
- for(const [status,payload,pattern]of[[409,{message:'private-db-detail'},/其他管理员修改.*草稿已保留/],[400,{code:'P0001',message:'role_version_conflict secret'},/草稿已保留/],[403,{message:'private-db-detail'},/总管理员/],[500,{message:'private-db-detail'},/角色服务处理失败/],[400,{code:'42702',message:'column reference r.id is ambiguous private-db-detail'},/角色服务处理失败/]]){
+ for(const [status,payload,pattern]of[[409,{message:'private-db-detail'},/其他管理员修改.*草稿已保留/],[400,{code:'P0001',message:'role_version_conflict secret'},/草稿已保留/],[403,{message:'private-db-detail'},/当前角色没有/],[500,{message:'private-db-detail'},/角色服务处理失败/],[400,{code:'42702',message:'column reference r.id is ambiguous private-db-detail'},/角色服务处理失败/]]){
   const h=client({fetch:async()=>({ok:false,status,json:async()=>payload})});await assert.rejects(h.api.dashboardRoleRequest(session,{operation:'list'}),error=>{assert.match(error.message,pattern);assert.doesNotMatch(error.message,/private-db|secret/);return true});assert.equal(h.calls.length,1);
  }
 });
@@ -51,7 +51,7 @@ function ui(handler,initial={}){
  const states=[],refs=[],dependencies=[],effects=[],cleanup=[],calls=[];let s=0,r=0,e=0,props={session,profile,manualQuery:true,...initial};const mod={exports:{}};
  const react={useState(initial){const k=s++;if(!(k in states))states[k]=typeof initial==='function'?initial():initial;return[states[k],value=>states[k]=typeof value==='function'?value(states[k]):value]},useRef(initial){const k=r++;return refs[k]||(refs[k]={current:initial})},useEffect(fn,values){const k=e++;if(!dependencies[k]||values.some((v,n)=>v!==dependencies[k][n])){dependencies[k]=values;effects.push(()=>{cleanup[k]?.();cleanup[k]=fn()})}}};
  const real=client().api;
- vm.runInNewContext(compile('src/components/DashboardRoleManager.tsx'),{module:mod,exports:mod.exports,AbortController,Error,window:{confirm:()=>true},require(name){if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};if(name.includes('dashboardRoleClient'))return{...real,dashboardRoleRequest:async(s,q,signal)=>{calls.push(plain(q));return handler?handler(q,signal):listing()}};if(name.includes('dashboardDataScope'))return{dashboardScopeLabel:scope=>scope?.mode==='all'?'全部数据':(scope?.countries||[]).join('、')};if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};if(name.endsWith('.css'))return{};throw Error(name)}});
+ vm.runInNewContext(compile('src/components/DashboardRoleManager.tsx'),{module:mod,exports:mod.exports,AbortController,Error,window:{confirm:()=>true},require(name){if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};if(name.includes('dashboardRoleClient'))return{...real,dashboardRoleRequest:async(s,q,signal)=>{calls.push(plain(q));return handler?handler(q,signal):listing()}};if(name.includes('dashboardDataScope'))return{dashboardScopeLabel:scope=>scope?.mode==='all'?'全部数据':(scope?.countries||[]).join('、')};if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};if(name.endsWith('.css'))return{};throw Error(name)}});
  const h={calls,api:mod.exports,draw(){s=r=e=0;return mod.exports.default(props)},effects(){effects.splice(0).forEach(fn=>fn())},setProps(next){props={...props,...next}},button(label){const value=nodes(h.draw()).find(node=>node.type==='button'&&text(node)===label);assert(value,'button '+label);return value},findLabel(label){const value=nodes(h.draw()).find(node=>node.props?.['aria-label']===label);assert(value,'aria-label '+label);return value},form(){return nodes(h.draw()).find(node=>node.type==='form')},async load(){const label=nodes(h.draw()).some(node=>node.type==='button'&&text(node)==='刷新列表')?'刷新列表':'查询角色与账号';h.button(label).props.onClick();await flush();return h.draw()},dispose(){cleanup.forEach(fn=>fn?.())}};
  h.draw();h.effects();return h;
 }
@@ -144,4 +144,39 @@ test('list refresh preserves local filters while actor changes clear all filters
  await h.load();assert.equal(h.findLabel('搜索角色名称或说明').props.value,'历史');assert.equal(h.findLabel('搜索现有账号').props.value,'disabled');assert.equal(accountRows(h).length,1);
  h.setProps({session:{...session,user:{id:otherId}},profile:{...profile,auth_user_id:otherId}});assert.doesNotMatch(text(h.draw()),/disabled-agent|existing-staff/);h.effects();assert.equal(h.findLabel('搜索角色名称或说明').props.value,'');assert.equal(h.findLabel('角色状态筛选').props.value,'all');await h.load();
  assert.equal(h.findLabel('搜索现有账号').props.value,'');assert.equal(h.findLabel('账号角色筛选').props.value,'all');assert.equal(h.findLabel('账号状态筛选').props.value,'all');assert.equal(roleRows(h).length,3);assert.equal(accountRows(h).length,4);assert(h.calls.every(call=>call.operation==='list'));
+});
+
+test('assigned viewer with explicit account view can read live role roster without old admin flags',async()=>{
+ const h=ui(null,{profile:{...profile,role:'viewer'},roleAccess:{mode:'assigned',canView:true,permissions:['access.view']}});await h.load();assert.deepEqual(h.calls,[{operation:'list'}]);assert.match(text(h.draw()),/existing-staff/);assert.equal(h.button('新建角色').props.disabled,true);assert.equal(h.button('分配角色').props.disabled,true);assert.equal(h.button('配置权限').props.disabled,true);
+});
+test('delegated assignment offers only roles contained in actual permissions and never mutates shared roles',async()=>{
+ const high={...role,id:otherId,name:'High',permissions:[...role.permissions,'overview.export']};
+ const h=ui(async q=>q.operation==='list'?{roles:[role,high],accounts:[account,owner]}:{account:{...account,role_id:q.roleId,assignment_version:1}},{profile:{...profile,role:'viewer'},roleAccess:{mode:'assigned',canView:true,permissions:['access.view','access.edit',...role.permissions]}});
+ await h.load();assert.equal(h.button('配置权限').props.disabled,true);assert.equal(h.button('停用角色').props.disabled,true);h.button('分配角色').props.onClick();assert.deepEqual(nodes(h.findLabel('选择自定义角色')).filter(node=>node.type==='option').map(node=>node.props.value),['',roleId]);
+ h.findLabel('选择自定义角色').props.onChange({target:{value:roleId}});await h.form().props.onSubmit({preventDefault(){}});assert.equal(h.calls[1].operation,'assign');assert.equal(h.calls[1].expectedVersion,0);assert(!h.calls.some(call=>['create','update','archive'].includes(call.operation)));
+});
+
+function assignedDialog(overrides={},handler){
+ const mod={exports:{}},states=[],calls=[];let cursor=0;
+ const props={session,account:{...account,role_id:roleId,assignment_version:2},roles:[role,{...role,id:otherId,name:'Limited',permissions:['overview.view']}],isOwner:true,editable:true,onSaved:async()=>calls.push({operation:'reload'}),onClose:()=>calls.push({operation:'close'}),...overrides};
+ vm.runInNewContext(compile('src/components/AccountAssignedRoleDialog.tsx'),{module:mod,exports:mod.exports,Error,require(name){
+  if(name==='react')return{useState(initial){const k=cursor++;if(!(k in states))states[k]=initial;return[states[k],value=>states[k]=value]}};
+  if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
+  if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};
+  if(name.includes('dashboardRoleClient'))return{dashboardRolePages:catalog.pages,dashboardRoleRequest:async(s,q)=>{calls.push(plain(q));if(handler)return handler(q);return{account:{...account,role_id:q.roleId,assignment_version:3}}}};
+  if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};throw Error(name);
+ }});
+ const draw=()=>{cursor=0;return mod.exports.default(props)},h={draw,calls,select:()=>nodes(draw()).find(node=>node.type==='select'),form:()=>nodes(draw()).find(node=>node.type==='form')};draw();return h;
+}
+test('account assigned-role editor uses explicit assignment CAS and preserves legacy profile and scope',async()=>{
+ const h=assignedDialog();assert.match(text(h.draw()),/运营查看/);h.select().props.onChange({target:{value:otherId}});await h.form().props.onSubmit({preventDefault(){}});
+ assert.deepEqual(h.calls,[{operation:'assign',accountId:staffId,roleId:otherId,expectedVersion:2},{operation:'reload'},{operation:'close'}]);
+});
+test('account assigned-role editor independently rejects missing action, self and fixed-owner changes',()=>{
+ const rights={mode:'assigned',canView:true,permissions:['access.view','access.edit','overview.view']};
+ const scoped=assignedDialog({session:{...session,user:{id:'delegate'}},isOwner:false,roleAccess:rights});assert.deepEqual(nodes(scoped.select()).filter(node=>node.type==='option').map(node=>node.props.value),['',otherId]);
+ for(const change of [{roleAccess:{...rights,permissions:['access.view']}},{session:{...session,user:{id:staffId}}},{account:{...account,role:'owner'}}]){const h=assignedDialog({session:{...session,user:{id:'delegate'}},isOwner:false,roleAccess:rights,...change});assert(!h.form());assert.equal(h.calls.length,0);}
+});
+test('assigned-role conflict preserves chosen role for review and does not close or retry',async()=>{
+ const h=assignedDialog({},()=>{throw Error('角色分配已被其他管理员修改，草稿已保留')});h.select().props.onChange({target:{value:otherId}});await h.form().props.onSubmit({preventDefault(){}});assert.equal(h.calls.length,1);assert.equal(h.select().props.value,otherId);assert.match(text(h.draw()),/草稿已保留/);
 });

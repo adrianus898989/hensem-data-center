@@ -29,7 +29,16 @@ test('role policy requires assigned page view plus each action; owner/legacy ret
  assert.equal(api.dashboardRoleAllows(a,'providers','query'),false);assert.equal(api.dashboardRoleAllows(a,'rates'),true);assert.equal(api.dashboardRoleAllows(a,'rates','query'),false);
  assert.equal(api.dashboardRoleAllows({...a,canView:false},'rates'),false);assert.equal(api.dashboardRoleAllows(null,'rates'),false);
  for(const mode of ['owner','legacy'])assert.equal(api.dashboardRoleAllows({mode,permissions:[],canView:true},'providers','query'),true);
- for(const value of [{},{...a,permissions:['unknown.view']},{...a,version:-1},{...a,canView:'true'},{...a,roleId:'bad'}])assert.throws(()=>api.validateDashboardRoleAccess(value));
+ for(const value of [{},{...a,permissions:['unknown/view']},{...a,version:-1},{...a,canView:'true'},{...a,roleId:'bad'}])assert.throws(()=>api.validateDashboardRoleAccess(value));
+});
+test('rolling catalog reads drop well-formed unknown keys without granting them or hiding known permissions',()=>{
+ const {api}=roleModule();
+ const a=api.validateDashboardRoleAccess(assigned(['providers.view','providers.query','future_page.view','future_page.edit']));
+ assert.deepEqual(Array.from(a.permissions),['providers.view','providers.query']);assert.equal(a.canView,true);
+ assert.equal(api.dashboardRoleAllows(a,'future_page'),false);assert.equal(api.dashboardRoleAllows(a,'future_page','edit'),false);
+ const empty=api.validateDashboardRoleAccess(assigned(['future_page.view']));assert.deepEqual(Array.from(empty.permissions),[]);assert.equal(empty.canView,false);
+ for(const permissions of [['bad/key'],['x.view\n'],['X.view'],['x.'],[{}],['x'.repeat(161)+'.view'],Array(501).fill('providers.view')])assert.throws(()=>api.validateDashboardRoleAccess(assigned(permissions)),/不完整/);
+ for(const mode of ['owner','legacy'])assert.equal(api.validateDashboardRoleAccess({mode,roleId:null,roleName:null,version:0,permissions:[],canView:true}).canView,true);
 });
 test('role reads use refreshed same-account token, fixed caller RPC and no cache on every request',async()=>{
  const h=roleModule(),abort=new AbortController();await h.api.readDashboardRoleAccess(session,abort.signal);await h.api.readDashboardRoleAccess(session,abort.signal);
@@ -111,7 +120,7 @@ test('iframe detail prechecks match SQL for raw query, workorders and deposit st
 test('retired stability permissions are discarded without granting providers or rejecting unrelated valid grants',()=>{
  const {api}=roleModule(),input=assigned(['channelquality.view','channelquality.query','providers.view']),a=api.validateDashboardRoleAccess(input);assert.deepEqual(Array.from(a.permissions),['providers.view']);assert.equal(a.canView,true);assert.equal(input.permissions.length,3);assert.equal(api.dashboardRoleAllows(a,'providers'),true);assert.equal(api.dashboardRoleAllows(a,'providers','query'),false);
  const only=api.validateDashboardRoleAccess(assigned(['channelquality.view','channelquality.export']));assert.equal(only.canView,false);assert.equal(only.permissions.length,0);
- for(const mode of ['owner','legacy'])assert.equal(api.dashboardRoleAllows({mode,permissions:[],canView:true},'channelquality'),false);assert.throws(()=>api.validateDashboardRoleAccess(assigned(['channelquality.delete'])),/不完整/);
+ for(const mode of ['owner','legacy'])assert.equal(api.dashboardRoleAllows({mode,permissions:[],canView:true},'channelquality'),false);assert.equal(api.validateDashboardRoleAccess(assigned(['channelquality.delete'])).canView,false);
  assert(!JSON.parse(fs.readFileSync(path.join(root,'src/lib/dashboardRoleCatalog.json'),'utf8')).pages.some(p=>p.id==='channelquality'));
 });
 

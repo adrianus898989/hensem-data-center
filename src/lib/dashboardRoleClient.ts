@@ -96,7 +96,7 @@ export async function dashboardRoleRequest(session:DashboardSession,input:Dashbo
    const code=record(data)?String(data.code||data.error||""):"",message=record(data)?String(data.message||""):"";
    if(response.status===409||/conflict|version|stale/i.test(code+" "+message))throw new DashboardRoleError("已被其他管理员修改，草稿已保留；请重新查询后核对再保存","conflict");
    if(response.status===401)throw new DashboardRoleError("会话已失效，请重新登录","unauthorized");
-   if(response.status===403||/owner|denied|forbidden/i.test(code+" "+message))throw new DashboardRoleError("仅总管理员可管理角色与分配账号","forbidden");
+   if(response.status===403||/owner|denied|forbidden/i.test(code+" "+message))throw new DashboardRoleError("当前角色没有此操作权限，或目标账号／角色超出可管理范围","forbidden");
    if(/assigned|in_use/i.test(code+" "+message))throw new DashboardRoleError("此角色仍有账号使用，请先为这些账号分配其他角色","role_in_use");
    if(/duplicate|name_exists|23505/i.test(code+" "+message))throw new DashboardRoleError("角色名称已存在，请使用其他名称","duplicate");
    if(response.status>=500||/^42[0-9A-Z]{3}$/.test(code))throw new DashboardRoleError("角色服务处理失败，请稍后重试","backend_error");

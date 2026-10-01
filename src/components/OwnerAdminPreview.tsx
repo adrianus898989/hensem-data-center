@@ -29,7 +29,8 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   const [accountView,setAccountView]=useState<"accounts"|"workorder"|"roles"|null>(null);
   const [securityBounds,setSecurityBounds]=useState<{top:number;left:number;width:number}|null>(null);
   const [accountBounds,setAccountBounds]=useState<{top:number;left:number;width:number}|null>(null);
-  const canManageAccounts=profile.active===true&&(owner||(profile.role==="admin"&&normalizedManagementPermissions(profile).manage_viewers));
+  const canManageAccounts=profile.active===true&&(owner||(roleAccess?.mode==="assigned"?dashboardRoleAllows(roleAccess,"access"):profile.role==="admin"&&normalizedManagementPermissions(profile).manage_viewers));
+  const canViewRoles=owner||roleAccess?.mode==="assigned"&&dashboardRoleAllows(roleAccess,"access");
   const activeAccountView=accountView||(owner?"workorder":"accounts");
 
   useEffect(()=>mountOwnerPreviewHostShell(),[]);
@@ -66,14 +67,14 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
       <div role="tablist" aria-label="账号类型" className="owner-preview-account-tabs">
         <button type="button" role="tab" id="owner-workorder-tab" aria-controls="owner-workorder-panel" aria-selected={activeAccountView==="workorder"} disabled={!owner} title={owner?undefined:"仅总管理员可管理前端工单账号"} onClick={()=>setAccountView("workorder")}>前端工单账号</button>
         <button type="button" role="tab" id="owner-backend-tab" aria-controls="owner-backend-panel" aria-selected={activeAccountView==="accounts"} disabled={!canManageAccounts} onClick={()=>setAccountView("accounts")}>后台账号</button>
-        {owner&&<button type="button" role="tab" id="owner-roles-tab" aria-controls="owner-roles-panel" aria-selected={activeAccountView==="roles"} onClick={()=>setAccountView("roles")}>角色与目录权限</button>}
+        {canViewRoles&&<button type="button" role="tab" id="owner-roles-tab" aria-controls="owner-roles-panel" aria-selected={activeAccountView==="roles"} onClick={()=>setAccountView("roles")}>角色与目录权限</button>}
       </div>
       <div role="tabpanel" id={activeAccountView==="workorder"?"owner-workorder-panel":activeAccountView==="roles"?"owner-roles-panel":"owner-backend-panel"} aria-labelledby={activeAccountView==="workorder"?"owner-workorder-tab":activeAccountView==="roles"?"owner-roles-tab":"owner-backend-tab"} className="owner-preview-account-body">
-        {activeAccountView==="roles"&&owner?<DashboardRoleManager key={accountId} session={session} profile={profile}/>:activeAccountView==="accounts"&&canManageAccounts?<AdminControlCenter key={accountId} open session={session} profile={profile} roleAccess={roleAccess} section="accounts" embedded accountsOnlyLoading manualQuery onClose={()=>{}}/>:activeAccountView==="workorder"&&owner?<WorkOrderAccountAdmin key={accountId} session={session} manualQuery/>:<p role="alert" className="owner-preview-account-denied">当前账号没有此项账号管理权限。</p>}
+        {activeAccountView==="roles"&&canViewRoles?<DashboardRoleManager key={accountId} session={session} profile={profile} roleAccess={roleAccess}/>:activeAccountView==="accounts"&&canManageAccounts?<AdminControlCenter key={accountId} open session={session} profile={profile} roleAccess={roleAccess} section="accounts" embedded accountsOnlyLoading manualQuery onClose={()=>{}}/>:activeAccountView==="workorder"&&owner?<WorkOrderAccountAdmin key={accountId} session={session} manualQuery/>:<p role="alert" className="owner-preview-account-denied">当前账号没有此项账号管理权限。</p>}
       </div>
     </section>}
 
-    {allowed&&hasDocument&&securityBounds&&dashboardRoleAllows(roleAccess,"ip")&&<section aria-label="IP 白名单" className="owner-preview-account-page" style={{top:Math.max(48,securityBounds.top),left:securityBounds.left,width:securityBounds.width}}><div className="owner-preview-account-body">{owner?<AccountIpAdmin key={accountId} session={session}/>:<p role="alert" className="owner-preview-account-denied">仅总管理员可管理登录 IP 白名单。</p>}</div></section>}
+    {allowed&&hasDocument&&securityBounds&&dashboardRoleAllows(roleAccess,"ip")&&<section aria-label="IP 白名单" className="owner-preview-account-page" style={{top:Math.max(48,securityBounds.top),left:securityBounds.left,width:securityBounds.width}}><div className="owner-preview-account-body"><AccountIpAdmin key={accountId} session={session}/></div></section>}
     {error&&documentHtml&&<div role="status" className="owner-preview-shell-warning">{error}</div>}
   </section>;
 }

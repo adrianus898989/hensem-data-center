@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict'),path=require('node:path');
-const worker=()=>import(path.join(__dirname,'../cloudflare/data-center/worker.mjs'));
+const worker=async()=>{const {servePublicStatic}=await import(path.join(__dirname,'../cloudflare/data-center/worker.mjs'));return{serve:servePublicStatic}};
 function headers(response){assert.equal(response.headers.get('content-security-policy'),"frame-ancestors 'none'");assert.equal(response.headers.get('x-frame-options'),'DENY');assert.equal(response.headers.get('permissions-policy'),'camera=(), microphone=(), geolocation=()');assert.equal(response.headers.get('strict-transport-security'),'max-age=31536000');assert.equal(response.headers.get('referrer-policy'),'no-referrer');assert.equal(response.headers.get('x-content-type-options'),'nosniff')}
 const url='https://data-center.workdesk-hub.workers.dev/hensem-data-center/';
 test('dedicated entry protects actual HTTP documents without adding directives that block srcdoc inline scripts',async()=>{

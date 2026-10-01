@@ -3,6 +3,7 @@ const repo=path.resolve(__dirname,'..'),ts=require(path.join(repo,'node_modules/
 const compile=file=>ts.transpileModule(fs.readFileSync(path.join(repo,file),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
 const plain=value=>JSON.parse(JSON.stringify(value)),flush=()=>new Promise(r=>setImmediate(r));
 const session={user:{id:'owner-id'},access_token:'synthetic-token'};
+const capabilities={manage_policy:true,manage_ip:true,manage_account_policy:true,unlock:true};
 const security={failed_count:5,failure_limit:null,locked:true,locked_at:'2026-09-27T01:00:00Z',version:3,ip_mode:'inherit',ip_rules:[]};
 const target={id:'staff-id',username:'staff',active:false};
 function nodes(node){if(Array.isArray(node))return node.flatMap(nodes);return node&&typeof node==='object'?[node,...nodes(node.props?.children)]:[]}
@@ -15,7 +16,7 @@ function ui(handler,initial={}){
   if(name==='react')return react;
   if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
   if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};
-  if(name.endsWith('/accountSecurityClient'))return{securityRequest:async(s,q,signal)=>{calls.push({session:s,request:plain(q),signal});if(handler)return handler(q,signal);if(q.action==='policy')return{ok:true,policy:{failure_limit:5,ip_enabled:false,version:1}};if(q.action==='list-account-security')return{ok:true,states:[{user_id:target.id,...security}]};return{ok:true,security}}};
+  if(name.endsWith('/accountSecurityClient'))return{securityRequest:async(s,q,signal)=>{calls.push({session:s,request:plain(q),signal});if(handler){const result=await handler(q,signal);return {...result,capabilities:Object.hasOwn(result,'capabilities')?result.capabilities:{...capabilities}};}if(q.action==='policy')return{ok:true,capabilities:{...capabilities},policy:{failure_limit:5,ip_enabled:false,version:1}};if(q.action==='list-account-security')return{ok:true,capabilities:{...capabilities},states:[{user_id:target.id,...security}]};return{ok:true,capabilities:{...capabilities},security}}};
   if(name.endsWith('.css'))return{};throw Error(name);
  }});
  const draw=()=>{i=r=e=0;return mod.exports.default(props)};
@@ -30,7 +31,7 @@ test('two batched reads fill one namespace without one request per account or in
  const dashboard=ui(null,{surface:'dashboard'});await flush();assert(dashboard.calls.every(c=>c.request.surface==='dashboard'));assert.match(text(dashboard.draw()),/后台登录失败限制/);
 });
 test('changing the default threshold includes its optimistic version and updates inherited list state only after acknowledgement',async()=>{
- const h=ui(async q=>{if(q.action==='list-account-security')return{ok:true,states:[{user_id:target.id,...security}]};return{ok:true,policy:{failure_limit:q.patch?.failure_limit??5,version:q.patch?2:1}}});await flush();h.select('默认阈值').props.onChange({target:{value:'7'}});await h.form().props.onSubmit({preventDefault(){}});
+ const h=ui(async q=>{if(q.action==='list-account-security')return{ok:true,capabilities:{...capabilities},states:[{user_id:target.id,...security}]};return{ok:true,policy:{failure_limit:q.patch?.failure_limit??5,version:q.patch?2:1}}});await flush();h.select('默认阈值').props.onChange({target:{value:'7'}});await h.form().props.onSubmit({preventDefault(){}});
  assert.deepEqual(h.calls.at(-1).request,{action:'policy',surface:'workorder',patch:{failure_limit:7},expected_version:1});assert.equal(h.snapshots.at(-1).failureLimit,7);assert.equal(h.snapshots.at(-1).states[target.id].failure_limit,null);assert.match(text(h.draw()),/默认失败阈值已保存/);assert.equal(h.calls.length,3);
 });
 test('per-account overrides and unlock use the returned version and never turn a manually disabled account on',async()=>{
@@ -85,4 +86,24 @@ test('incomplete per-account IP data never enables mutations or pretends IP prot
  const h=ui(async q=>q.action==='policy'?{ok:true,policy:{failure_limit:5,version:1}}:q.action==='list-account-security'?{ok:true,states:[]}:{ok:true,security:{...security,...ipFields}},{target});await flush();
  assert.match(text(h.draw()),/IP.*返回不完整/);assert(!nodes(h.draw()).some(n=>n.type==='button'&&text(n)==='保存 IP 模式'));
  }
+});
+
+test('missing or read-only server capabilities never allow a threshold, unlock or IP write',async()=>{
+ for(const returned of [undefined,{manage_policy:false,manage_ip:false,manage_account_policy:false,unlock:false}]){
+ const h=ui(async q=>q.action==='policy'?{ok:true,capabilities:returned,policy:{failure_limit:5,version:1}}:q.action==='list-account-security'?{ok:true,capabilities:returned,states:[{user_id:target.id,...security}]}:{ok:true,capabilities:returned,security},{target});await flush();
+ for(const label of ['保存阈值','保存账号阈值','解除自动锁定','保存 IP 模式'])assert.equal(h.button(label).props.disabled,true,label);
+ h.select('默认阈值').props.onChange({target:{value:'7'}});await h.form().props.onSubmit({preventDefault(){}});h.button('保存账号阈值').props.onClick();h.button('解除自动锁定').props.onClick();h.select('账号 IP 模式').props.onChange({target:{value:'allowlist'}});h.button('保存 IP 模式').props.onClick();await flush();assert.equal(h.calls.length,3);assert.match(text(h.draw()),/安全设置为只读/);
+ }
+});
+test('an IP manager cannot change failure thresholds or unlock an account without those grants',async()=>{
+ const permissions={manage_policy:false,manage_ip:true,manage_account_policy:false,unlock:false};
+ const h=ui(async q=>q.action==='policy'?{ok:true,capabilities:permissions,policy:{failure_limit:5,version:1}}:q.action==='list-account-security'?{ok:true,capabilities:permissions,states:[{user_id:target.id,...security}]}:{ok:true,capabilities:permissions,security},{target});await flush();assert.equal(h.button('保存账号阈值').props.disabled,true);assert.equal(h.button('解除自动锁定').props.disabled,true);assert.equal(h.input('账号 IP / CIDR').props.disabled,false);
+ h.select('账号 IP 模式').props.onChange({target:{value:'allowlist'}});h.button('保存 IP 模式').props.onClick();await flush();assert.equal(h.calls.at(-1).request.action,'set-account-ip-mode');assert.equal(h.calls.length,4);
+});
+
+test('a late account write cannot replace the newly selected account state or permissions',async()=>{
+ let finishWrite;const second={...security,failed_count:1,locked:false,version:8};
+ const h=ui(async q=>q.action==='policy'?{ok:true,policy:{failure_limit:5,version:1}}:q.action==='list-account-security'?{ok:true,states:[]}:q.action==='set-account-policy'?new Promise(resolve=>{finishWrite=resolve}):{ok:true,security:q.user_id==='second-id'?second:security},{target});await flush();
+ h.select('该账号失败阈值').props.onChange({target:{value:'7'}});h.button('保存账号阈值').props.onClick();await flush();assert(finishWrite);h.setProps({target:{id:'second-id',username:'second',active:true}});await flush();assert.match(text(h.draw()),/连续失败1 次/);
+ finishWrite({ok:true,capabilities:{...capabilities},security:{...security,failed_count:42,failure_limit:7,version:4}});await flush();assert.match(text(h.draw()),/连续失败1 次/);assert.doesNotMatch(text(h.draw()),/42 次/);assert.equal(h.snapshots.at(-1).states['second-id'].version,8);assert.equal(h.snapshots.at(-1).states[target.id],undefined);
 });

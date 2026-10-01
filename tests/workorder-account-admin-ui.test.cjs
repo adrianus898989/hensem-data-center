@@ -71,7 +71,7 @@ test('a concurrent edit error preserves the draft without silently overwriting o
  const h=ui(async q=>{if(q.action==='list-accounts')return{ok:true,accounts:[account],catalog};throw Error('该账号已被其他管理员修改，请刷新列表后重试')});await flush();h.button('编辑范围 / 角色').props.onClick();h.change('显示名称','新显示名称');await h.form().props.onSubmit({preventDefault(){}});assert(h.form());assert.equal(h.field('显示名称').props.value,'新显示名称');assert.match(text(h.draw()),/其他管理员修改/);assert.equal(h.calls.length,2);
 });
 
-test('embedded backend list exposes create and existing permission editor directly without another page',async()=>{
+test('embedded backend list exposes create and the assigned directory role editor directly without another page',async()=>{
  const {loadTs}=require('./load-typescript.cjs'),auth=loadTs(path.join(repo,'src/lib/dashboardAuthClient.ts'));
  const actor={auth_user_id:'fixture-owner',username:'owner-fixture',role:'owner',active:true,data_scope:{mode:'all',countries:[]}};
  const target={auth_user_id:'fixture-viewer',username:'viewer-fixture',role:'viewer',active:true,data_scope:{mode:'all',countries:[]}};
@@ -85,8 +85,10 @@ test('embedded backend list exposes create and existing permission editor direct
   if(name==='./AccountLoginPolicy')return{default:function AccountLoginPolicy(){}};if(name==='./AccountIpAdmin')return{default:function AccountIpAdmin(){}};if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};
   if(name==='./AccountRoleEditor')return{default:function AccountRoleEditor(){}};
   if(name==='./AccountPermissionDialog')return{default:function AccountPermissionDialog(){}};
+  if(name==='./AccountAssignedRoleDialog')return{default:function AccountAssignedRoleDialog(){}};
+  if(name.endsWith('/dashboardRoleAccess'))return{dashboardRoleAllows:(access,page,action='view')=>!!access&&access.canView&&(access.mode!=='assigned'||access.permissions.includes(page+'.view')&&access.permissions.includes(page+'.'+action))};
   if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async()=>{calls.push('list');return [target]},listDashboardAudit:async()=>{calls.push('audit');return[]},getDashboardHistoryStatus:async()=>{calls.push('history')},getDashboardIpSettings:async()=>{calls.push('ip')}};
-  if(name.endsWith('/dashboardRoleClient'))return{dashboardRoleRequest:async(current,request)=>{
+  if(name.endsWith('/dashboardRoleClient'))return{dashboardRolePages:require('../src/lib/dashboardRoleCatalog.json').pages,dashboardRoleRequest:async(current,request)=>{
    assert.equal(current.user.id,actor.auth_user_id);assert.equal(actor.role,'owner');assert.deepEqual(plain(request),{operation:'list'});calls.push('roles');
    return{roles:[{id:'33333333-3333-4333-8333-333333333333',name:'VIP',description:'',active:true,version:1,permissions:['providers.view']}],accounts:[{...target,role_id:'33333333-3333-4333-8333-333333333333',assignment_version:2}]};
   }};
@@ -96,6 +98,6 @@ test('embedded backend list exposes create and existing permission editor direct
  const draw=()=>{cursor=0;return mod.exports.default({open:true,session:{...session,user:{id:actor.auth_user_id}},profile:actor,onClose(){},section:'accounts',embedded:true,accountsOnlyLoading:true})};
  draw();effects.splice(0).forEach(fn=>fn());await flush();assert.deepEqual(calls,['list','roles'],'only account and owner-authorized role directories are read');
  let all=nodes(draw());assert.match(text(draw()),/viewer-fixture/);assert.match(text(draw()),/VIP/);assert.match(text(draw()),/系统身份：VIEWER · 角色授权/);assert.doesNotMatch(text(draw()),/账号独立授权/);assert.equal(target.role,'viewer','displaying a custom role never promotes the account system identity');assert(!all.some(n=>n.props?.className==='admin-inline-header'),'no secondary management page heading');assert(all.some(n=>n.type==='button'&&text(n)==='+ 新建账号'));
- all.find(n=>n.type==='button'&&text(n)==='配置权限').props.onClick();all=nodes(draw());const dialog=all.find(n=>n.type?.name==='AccountPermissionDialog');assert(dialog,'the existing permission editor is reachable from the backend list');assert.equal(dialog.props.actor,actor);assert.equal(dialog.props.user,target);assert.equal(dialog.props.initialModule,'home');
+ all.find(n=>n.type==='button'&&text(n)==='配置权限').props.onClick();all=nodes(draw());const dialog=all.find(n=>n.type?.name==='AccountAssignedRoleDialog');assert(dialog,'assigned directory roles use the current role editor from the backend list');assert.equal(dialog.props.account.auth_user_id,target.auth_user_id);assert.equal(dialog.props.account.role_id,'33333333-3333-4333-8333-333333333333');assert.equal(dialog.props.account.assignment_version,2);assert.equal(dialog.props.roles[0].name,'VIP');assert.equal(dialog.props.isOwner,true);assert.equal(dialog.props.editable,true);assert(!all.some(n=>n.type?.name==='AccountPermissionDialog'),'assigned roles do not open legacy independent permissions');
  assert.equal(all.filter(n=>n.props?.className?.includes('admin-account-management-table')).length,1);assert.deepEqual(calls,['list','roles'],'opening existing permission controls does not save or expand grants');
 });

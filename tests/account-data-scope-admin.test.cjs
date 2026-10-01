@@ -63,7 +63,7 @@ async function edge(action, patch={}, options={}) {
     };return query;
   }};
   vm.runInNewContext(compiled,{createClient:()=>client,Deno:{env:{get:()=> 'fixture'},serve:fn=>{handler=fn;}},Request,Response,Date,Intl,console,AbortSignal,atob,TextEncoder,TextDecoder,Uint8Array,
-    fetch:async(url,init)=>{assert(String(url).endsWith('/rest/v1/rpc/dashboard_role_access'),'only fresh role validation may use network');assert.equal(init.headers.Authorization,'Bearer '+token);assert.equal(init.headers.apikey,'fixture');assert.equal(init.method,'POST');assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');if(options.roleFailure)throw Error('synthetic network');return Response.json(options.roleAccess||{mode:caller.role==='owner'?'owner':'legacy',canView:true,permissions:[]},{status:options.roleStatus||200})}});
+    fetch:async(url,init)=>{if(String(url).endsWith('/rest/v1/rpc/dashboard_account_action_allowed')){assert.equal(init.headers.Authorization,'Bearer '+token);assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');if(options.targetRoleFailure)throw Error('TARGET_LOOKUP_FAILED');return Response.json(options.targetAllowed!==false,{status:options.targetStatus||200});}assert(String(url).endsWith('/rest/v1/rpc/dashboard_role_access'),'only fresh role validation may use network');assert.equal(init.headers.Authorization,'Bearer '+token);assert.equal(init.headers.apikey,'fixture');assert.equal(init.method,'POST');assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');if(options.roleFailure)throw Error('synthetic network');return Response.json(options.roleAccess||{mode:caller.role==='owner'?'owner':'legacy',canView:true,permissions:[]},{status:options.roleStatus||200})}});
   const body={action,username:action.startsWith('create')?'newuser':'target',password:'fixture-password',...patch};
   const response=await handler(new Request('https://fixture.invalid',{method:'POST',headers:{...(options.noToken?{}:{authorization:'Bearer '+token}),...options.headers},body:JSON.stringify(body)}));
   return {status:response.status,body:await response.json(),writes,authCalls,audits,reads,target};
@@ -251,7 +251,8 @@ test('assigned account permissions gate each action including legacy viewer alia
       assert.equal(result.reads.length,1,'only the caller profile is read before role denial');
     }
     const result=await edge(action,{}, {roleAccess:assignedRole(keys)});
-    assert.equal(result.status,200,action+': matching assigned rights');
+    assert.equal(result.status,action.startsWith('create')?403:200,action+': matching assigned rights');
+    if(action.startsWith('create')){assert.deepEqual(result.authCalls,[]);assert.match(result.body.message,/总管理员建立账号/);}
   }
 });
 test('status changes require both edit and status, including legacy update-viewer alias',async()=>{
@@ -279,11 +280,12 @@ test('assigned audit, sync and IP rights cannot be substituted by account rights
     assert.equal(result.reads.length,1);assert.deepEqual(result.authCalls,[]);assert.deepEqual(result.writes,[]);
   }
 });
-test('assigned grants remain AND with old manager role, management flag, country scope and owner-only IP guard',async()=>{
-  for(const options of [{role:'viewer'},{caller:{management_permissions:{manage_viewers:false}}},{caller:{data_scope:PANGHU},target:{data_scope:ALL}}]){
+test('assigned role is the authority while target scope and owner-only retired IP guard remain enforced',async()=>{
+  for(const options of [{targetAllowed:false},{caller:{data_scope:PANGHU},target:{data_scope:ALL}}]){
     const result=await edge('reset-password',{}, {...options,roleAccess:assignedRole(['access.view','access.reset_password'])});
     assert.equal(result.status,403);assert.deepEqual(result.authCalls,[]);
   }
+  for(const options of [{role:'viewer'},{caller:{management_permissions:{manage_viewers:false}}}]){const result=await edge('reset-password',{}, {...options,roleAccess:assignedRole(['access.view','access.reset_password'])});assert.equal(result.status,200);}
   const security=await edge('ip-settings',{}, {roleAccess:assignedRole(['ip.view'])});
   assert.equal(security.status,403);assert.doesNotMatch(security.body.message,/角色没有此项操作权限/);assert.equal(security.reads.length,1);
   const list=await edge('list-users',{}, {caller:{data_scope:PANGHU},users:[profile('yes','viewer',{data_scope:PANGHU}),profile('no','viewer',{data_scope:ALL})],roleAccess:assignedRole(['access.view'])});
@@ -334,4 +336,11 @@ test('check-access gives distinct denial codes for an expired session, actual di
   if(code==='application_session_denied'||code==='auth_unavailable')assert.deepEqual(result.reads,[],'denied session never reads a profile');
   assert(!JSON.stringify(result.body).includes('PRIVATE_SESSION_FAILURE'));
  }
+});
+
+test('assigned account operations reject stale target rights, malformed guard and old permission writes before Auth mutation',async()=>{
+ for(const action of ['update-account','update-viewer','reset-password','delete-account'])for(const options of [{targetAllowed:false},{targetStatus:503},{targetRoleFailure:true}]){
+  const result=await edge(action,{}, {...options,role:'viewer',roleAccess:assignedRole(['access.view','access.edit','access.reset_password','access.delete'])});assert([403,503].includes(result.status));assert.deepEqual(result.writes,[]);assert.deepEqual(result.authCalls,[]);
+ }
+ for(const action of ['update-account','update-viewer']){const result=await edge(action,{permissions:full},{role:'viewer',roleAccess:assignedRole(['access.view','access.edit'])});assert.equal(result.status,403);assert.deepEqual(result.writes,[]);}
 });

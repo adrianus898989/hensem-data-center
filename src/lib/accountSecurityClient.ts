@@ -3,12 +3,14 @@ import { APPLICATION_GATEWAY, ensureDashboardSession, type DashboardSession } fr
 
 export type AccountSurface = "workorder" | "dashboard";
 export type SecurityPolicy = { failure_limit: number; ip_enabled: boolean; version: number };
-export type IpRule = { id: string | number; network: string; note: string; active: boolean; version: number };
+export type IpRule = { id: string | number; network: string; note: string; active: boolean; version: number; scope: "global" | "account"; user_id: string | null; username: string | null; ip_mode?: "inherit" | "allowlist"; updated_by: string | null; updated_at: string | null };
+export type IpAccount = { id: string; username: string; active: boolean; ip_mode: "inherit" | "allowlist"; version: number };
+export type SecurityCapabilities = { view?: boolean; manage_global?: boolean; manage_account?: boolean; manage_policy?: boolean; manage_ip?: boolean; manage_account_policy?: boolean; unlock?: boolean };
 export type AccountIpRule = { id: string | number; network: string; note: string; active: boolean };
 export type AccountSecurityState = { ip_mode: "inherit" | "allowlist"; ip_rules: AccountIpRule[]; user_id?: string; failed_count: number; failure_limit: number | null; locked: boolean; locked_at: string | null; version: number };
-export type SecurityResponse = { ok: true; policy?: SecurityPolicy; currentIp?: string; lastOwnerProtected?: boolean; rules?: IpRule[]; security?: AccountSecurityState; states?: AccountSecurityState[]; message?: string };
+export type SecurityResponse = { ok: true; policy?: SecurityPolicy; currentIp?: string; lastOwnerProtected?: boolean; rules?: IpRule[]; accounts?: IpAccount[]; capabilities?: SecurityCapabilities; security?: AccountSecurityState; states?: AccountSecurityState[]; message?: string };
 export { APPLICATION_GATEWAY };
-const actions = new Set(["policy", "list-rules", "upsert-rule", "set-rule-active", "delete-rule", "account-security", "list-account-security", "set-account-policy", "unlock-account", "account-ip-rules", "set-account-ip-mode", "upsert-account-ip-rule", "set-account-ip-rule-active", "delete-account-ip-rule"]);
+const actions = new Set(["policy", "list-rules", "upsert-rule", "set-rule-active", "delete-rule", "upsert-ip-rule", "set-ip-rule-active", "delete-ip-rule", "account-security", "list-account-security", "set-account-policy", "unlock-account", "account-ip-rules", "set-account-ip-mode", "upsert-account-ip-rule", "set-account-ip-rule-active", "delete-account-ip-rule"]);
 
 export async function securityRequest(session: DashboardSession, request: Record<string, unknown> & {action: string; surface: AccountSurface}, signal?: AbortSignal): Promise<SecurityResponse> {
   if (!actions.has(request.action) || !["workorder", "dashboard"].includes(request.surface)) throw Error("不支持的安全设置操作");
