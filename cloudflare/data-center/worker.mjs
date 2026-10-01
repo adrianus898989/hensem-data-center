@@ -97,41 +97,69 @@ function clientIp(request) {
 }
 
 async function entryAllowed(request, env, fetchGate) {
-  const ip = clientIp(request), key = env?.PORTAL_PROXY_KEY;
-  if (!ip || typeof key !== 'string' || key.length < 16 || key.length > 256) return false;
+  // Operator secret input can retain a final newline. Normalize the binding,
+  // never an untrusted request header, before constructing the upstream proof.
+  const ip = clientIp(request), value = env?.PORTAL_PROXY_KEY;
+  const key = typeof value === 'string' ? value.trim() : '';
+  const denied = reason => {
+    // Keep operational evidence private and bounded. Never log the address,
+    // key, URL, response body, or an upstream exception message.
+    console.warn('dashboard_entry_denied:' + reason);
+    return false;
+  };
+  if (!ip) return denied('ingress_ip');
+  if (key.length < 16 || key.length > 256) return denied('proxy_binding');
   let response;
+  let stage = 'gate_fetch';
   try {
     response = await fetchGate(ENTRY_GATE, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: PUBLISHABLE_KEY,
         'x-portal-proxy-key': key, 'x-portal-client-ip': ip },
       body: '{}',
-      redirect: 'error',
+      // workerd accepts follow/manual only. Reject 3xx below rather than
+      // following a redirect with this server-only proof header.
+      redirect: 'manual',
       cache: 'no-store',
       signal: AbortSignal.timeout(5000),
     });
-    if (!response.ok || !/^application\/json(?:;|$)/i.test(response.headers.get('Content-Type') || '')) {
+    stage = 'gate_response';
+    if (!response.ok) {
       await response.body?.cancel();
-      return false;
+      return denied(response.status === 401 ? 'gate_http_401'
+        : response.status === 403 ? 'gate_http_403'
+        : response.status === 503 ? 'gate_http_503' : 'gate_http_other');
+    }
+    if (!/^application\/json(?:;|$)/i.test(response.headers.get('Content-Type') || '')) {
+      await response.body?.cancel();
+      return denied('gate_content_type');
     }
     // The gate returns one small decision, never account names or IP rules.
     const reader = response.body?.getReader();
-    if (!reader) return false;
+    if (!reader) return denied('gate_body_missing');
+    stage = 'gate_body';
     let size = 0;
     const chunks = [];
     for (;;) {
       const part = await reader.read();
       if (part.done) break;
       size += part.value.length;
-      if (size > 1024) { await reader.cancel(); return false; }
+      if (size > 1024) { await reader.cancel(); return denied('gate_body_limit'); }
       chunks.push(part.value);
     }
     const bytes = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    stage = 'gate_json';
     const decision = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-    return decision?.ok === true && decision?.allowed === true;
-  } catch { return false; }
+    if (decision?.ok !== true) return denied('gate_decision_invalid');
+    if (decision?.allowed !== true) return denied('gate_decision_denied');
+    return true;
+  } catch (error) {
+    const name = ['AbortError', 'TimeoutError', 'TypeError', 'SyntaxError', 'Error'].includes(error?.name)
+      ? error.name : 'other';
+    return denied(stage + '_' + name);
+  }
 }
 
 // The production handler checks every route before redirects, files or method

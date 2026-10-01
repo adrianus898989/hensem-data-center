@@ -361,3 +361,58 @@ test('date caches preserve invalid calendar and both DST boundary rejections',()
  assert.equal(h.instant('2026-11-01T01:30:00','Asia/Kolkata'),'2026-10-31T20:00:00.000Z');
  assert.throws(()=>h.instant('2026-11-01T01:30:00','America/New_York'),'another timezone cache must not bypass ambiguity');
 });
+
+// Exercise the production read/cache/merge engine independently of painting.
+// This keeps every exact request field visible and models native aggregate
+// facts without using order rows or member-day counts as an aggregate oracle.
+const largeAr={...P,id:'5e952cbb-e42f-d6b1-a24a-a0d42d165df9',name:'91CLUB',source:'ar',scopeGroup:'IN'};
+function aggregateReadHarness(handler,platform=largeAr){
+ const context={Date,console,L:{serial:1,catalog:[platform],queryRetrying:false},state:{page:'overview'},providerDirection:()=>null,isFlowPage:()=>false,orderSource:p=>String(p?.source||'').toLowerCase().replaceAll('_',''),displayIdentity:p=>p};
+ const calls=[];let active=0,maxActive=0;context.window=context;context.hensemLiveRequest=async q=>{calls.push(JSON.parse(JSON.stringify(q)));active++;maxActive=Math.max(active,maxActive);try{return await handler(q,calls.length)}finally{active--}};
+ const counts=source.slice(source.indexOf(' const countKeys='),source.indexOf(' const amountBands='));
+ const read=source.slice(source.indexOf(' function mergeParts('),source.indexOf(' // Read deeper overview sections',source.indexOf(' function mergeParts(')));
+ vm.runInNewContext(counts+read+';globalThis.engine={readAggregate,mergeParts,cachedAggregate};',context);
+ return {c:context,...context.engine,calls,maxActive:()=>maxActive};
+}
+const largeRequest=extra=>({action:'aggregate',platformId:largeAr.id,startAt:'2026-09-29T18:45:00.000Z',endAt:'2026-09-30T01:10:00.000Z',direction:'charge',status:'all',currency:'INR',offset:0,limit:20,...extra});
+const plain=value=>JSON.parse(JSON.stringify(value));
+function splitFact(q,index=1){const r=completeAggregate(largeAr,index+2,index),s=r.summary[0];s.negative_amount_count=index;r.groups.provider[0]={...r.groups.provider[0],negative_amount_count:index,fee_low_count:index,fee_low_amount:String(index*100),fee_high_count:0,fee_high_amount:'0',fee_gap_count:0,fee_gap_amount:'0',fee_unpriced_count:0};r.latencySummary=[{direction:'charge',currency:'INR',valid_count:index,mean_ms:index*100,p50_ms:index*75,p95_ms:index*200}];return {...r,startAt:q.startAt,endAt:q.endAt};}
+test('the measured AR platform starts exact contiguous two-hour full reads without waiting for a timeout',async()=>{
+ const h=aggregateReadHarness(splitFact),q=largeRequest({providers:['ExactAlias'],channelTypes:['BANK'],memberId:'exact-member',amountMin:'200',amountMax:'250',amountMaxExclusive:true,durationVersion:2,amountBands:{charge:[100,200,300,400,500,750,1000,2000,5000,10000,50000]}}),r=await h.readAggregate(q,1);
+ assert.deepEqual(h.calls.map(x=>[x.startAt,x.endAt]),[['2026-09-29T18:45:00.000Z','2026-09-29T20:45:00.000Z'],['2026-09-29T20:45:00.000Z','2026-09-29T22:45:00.000Z'],['2026-09-29T22:45:00.000Z','2026-09-30T00:45:00.000Z'],['2026-09-30T00:45:00.000Z','2026-09-30T01:10:00.000Z']]);
+ for(const call of h.calls)assert.deepEqual({...call,startAt:q.startAt,endAt:q.endAt},q,'only half-open event-clock bounds change');
+ assert.equal(h.maxActive(),1,'windows share the existing platform lane');assert.equal(r.startAt,q.startAt);assert.equal(r.endAt,q.endAt);assert.equal(r._parts.length,4);assert.equal(r.summary[0].all_count,18);assert.equal(r.summary[0].success_count,10);assert.equal(r.summary[0].created_success_count,10);assert.equal(r.summary[0].negative_amount_count,10);assert.equal(r.groups.provider[0].fee_low_count,10);assert.equal(r.groups.provider[0].fee_low_amount,1000);
+ assert.deepEqual(plain(r.latencySummary),[],'quantiles are not averaged');assert.equal(r._parts[2].latencySummary[0].valid_count,3,'source statistics remain available to the validated timing adapter');
+});
+test('compact provider reads start with four-hour windows and preserve their explicit view',async()=>{
+ const h=aggregateReadHarness(splitFact),q=largeRequest({view:'providers',endAt:'2026-09-30T04:45:00.000Z'}),r=await h.readAggregate(q,1);
+ assert.equal(h.calls.length,3);assert.deepEqual(h.calls.map(x=>Date.parse(x.endAt)-Date.parse(x.startAt)),[14400000,14400000,7200000]);assert(h.calls.every(x=>x.view==='providers'));assert.equal(r.total,12);assert.equal(h.maxActive(),1);
+});
+test('window policy is exact to the authorized AR source and does not shorten member or withdrawal requests',async()=>{
+ for(const [platform,extra]of [[P,{}],[{...largeAr,source:'newar'},{}],[largeAr,{direction:'withdraw'}],[largeAr,{action:'memberDaily'}]]){
+  const h=aggregateReadHarness(splitFact,platform),q=largeRequest({...extra,platformId:platform.id});await h.readAggregate(q,1);assert.equal(h.calls.length,1);assert.deepEqual(h.calls[0],q);
+ }
+});
+test('a two-hour timeout retries only its exact one-hour children and never duplicates the failed range',async()=>{
+ const h=aggregateReadHarness(q=>{if(Date.parse(q.endAt)-Date.parse(q.startAt)>3600000)throw Error('statement timeout');return splitFact(q)}),q=largeRequest({endAt:'2026-09-29T21:15:00.000Z',providers:['OnePay'],status:'success'}),r=await h.readAggregate(q,1);
+ assert.equal(h.calls.length,4);assert.equal(r._parts.length,3);assert.deepEqual(plain(r._parts.map(p=>[p.startAt,p.endAt])),[['2026-09-29T18:45:00.000Z','2026-09-29T19:45:00.000Z'],['2026-09-29T19:45:00.000Z','2026-09-29T20:45:00.000Z'],['2026-09-29T20:45:00.000Z','2026-09-29T21:15:00.000Z']]);assert(h.calls.every(x=>x.status==='success'&&x.providers[0]==='OnePay'));assert.equal(r.total,9);
+});
+test('an incomplete range never becomes a whole result and retry reuses only the exact completed chunks',async()=>{
+ let fail=true;const h=aggregateReadHarness((q,n)=>{if(fail&&n===2)throw Error('source unavailable');return splitFact(q)}),q=largeRequest({endAt:'2026-09-30T00:45:00.000Z'});
+ await assert.rejects(h.readAggregate(q,1),/source unavailable/);assert.equal(h.calls.length,2);assert.equal(h.cachedAggregate(q),null);
+ fail=false;h.c.L.queryRetrying=true;const r=await h.readAggregate(q,1);assert.equal(h.calls.length,4,'only the first exact successful two-hour chunk is reused');assert.equal(r._parts.length,3);assert.equal(r.total,9);assert.equal(h.cachedAggregate({...q,providers:['AnotherPay']}),null);
+});
+test('cancellation after a pending chunk prevents later windows and prevents stale cache writes',async()=>{
+ const pending=deferred(),h=aggregateReadHarness(q=>pending.promise.then(()=>splitFact(q))),q=largeRequest(),run=h.readAggregate(q,1);assert.equal(h.calls.length,1);h.c.L.serial=2;pending.resolve();await assert.rejects(run,/查询已替换/);assert.equal(h.calls.length,1);assert.equal(h.cachedAggregate(q),null);
+});
+test('optional fee facts stay unknown if any contributing chunk lacks them',async()=>{
+ const h=aggregateReadHarness((q,n)=>{const r=splitFact(q);if(n===2)delete r.groups.provider[0].fee_low_amount;return r;}),q=largeRequest({endAt:'2026-09-29T22:45:00.000Z'}),r=await h.readAggregate(q,1);assert.equal(r.groups.provider[0].fee_low_amount,null);assert.equal(r.groups.provider[0].fee_low_count,2);
+ const ordinary=aggregateReadHarness(q=>completeAggregate(largeAr));const unknown=await ordinary.readAggregate(q,1);assert(!Object.hasOwn(unknown.groups.provider[0],'fee_low_amount'),'older source capabilities do not turn into fabricated zero fees');
+});
+
+test('split totals keep null and absent capability unknown rather than inventing zero',()=>{
+ const h=aggregateReadHarness(splitFact),q=largeRequest(),a=splitFact(q),b=splitFact(q);
+ for(const unknown of [null,undefined]){b.total=unknown;const r=h.mergeParts([a,b]);assert.equal(r.total,null);assert.equal(r.summary[0].all_count,6,'known scoped summary facts still merge');}
+ delete a.total;delete b.total;assert(!Object.hasOwn(h.mergeParts([a,b]),'total'));
+ a.total=0;b.total=0;assert.equal(h.mergeParts([a,b]).total,0,'a source-confirmed empty range remains zero');
+});
