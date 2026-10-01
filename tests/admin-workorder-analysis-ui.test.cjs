@@ -104,3 +104,34 @@ test('compact primary filters expose business status and both order searches, wi
  await h.module.load(true);assert.equal(h.calls.at(-1).filters.kyc,'unknown');assert.equal(h.calls.at(-1).filters.utrMatch,'unknown');
  for(const page of ['workorder_reconciliation','workorder_workload','workorder_operation_logs']){h.setPage(page);h.respond({rows:[],total:0});await h.module.load();assert.match(h.html(),/aria-label="支付订单号"/);assert.equal((h.html().match(/aria-label="UTR"/g)||[]).length,1);}
 });
+
+test('missing original numbers label only visible unique metrics partial beside cards, with coverage before statistics',async()=>{
+ const h=harness(),s=summary();s.current.coverage={...s.current.coverage,status:'partial',missingOrderNumberCount:1100};s.byProvider=[{provider:'FPay',issueKind:'deposit',ticketCount:20}];response(h,s);await h.module.load();const html=h.html();
+ for(const key of ['uniqueOrderCount','uniqueProcessedCount','uniqueUnprocessedCount']){
+  assert.match(card(html,key),new RegExp('data-coverage-for="'+key+'"[^>]*>部分</em>'));
+  assert.match(card(html,key),new RegExp('data-coverage-for="'+key.replace('Count','Amount')+'"[^>]*>部分</em>'));
+ }
+ for(const key of ['ticketCount','processedTicketCount','unprocessedTicketCount'])assert.doesNotMatch(card(html,key),/wo-stat-partial/);
+ assert.match(html,/title="1100 张工单缺原单号，未计入去重"/);
+ assert(html.indexOf('数据覆盖：')<html.indexOf('<div class="wo-analysis-groups">'));
+ assert.equal((html.match(/数据覆盖：/g)||[]).length,1);
+});
+test('amount gaps label unique amounts without marking complete counts or raw data partial',async()=>{
+ const h=harness(),s=summary();s.current.coverage={...s.current.coverage,status:'partial',amountConflictCount:2,missingAmountCount:1};response(h,s);await h.module.load();
+ for(const key of ['uniqueOrderCount','uniqueProcessedCount','uniqueUnprocessedCount']){
+  assert.doesNotMatch(card(h.html(),key),new RegExp('data-coverage-for="'+key+'"'));
+  assert.match(card(h.html(),key),new RegExp('data-coverage-for="'+key.replace('Count','Amount')+'"[^>]*>部分</em>'));
+ }
+ assert.match(h.html(),/title="2 个原单金额不一致；1 个原单缺金额"/);
+ assert.doesNotMatch(card(h.html(),'ticketCount'),/wo-stat-partial/);
+ s.current.uniqueOrderAmount=null;response(h,s);await h.module.load(true);
+ assert.doesNotMatch(card(h.html(),'uniqueOrderCount'),/data-coverage-for="uniqueOrderAmount"/);
+ assert.match(plain(card(h.html(),'uniqueOrderCount')),/笔 · — INR/);
+});
+test('complete statistics and previous-only gaps never mark current values partial',async()=>{
+ const h=harness(),s=summary();s.previous.coverage={...s.previous.coverage,missingOrderNumberCount:2};response(h,s);await h.module.load();
+ assert.doesNotMatch(h.html(),/class="wo-stat-partial"/);assert.doesNotMatch(h.html(),/数据覆盖：/);
+ assert.match(card(h.html(),'uniqueOrderCount'),/未提供可比值或覆盖不完整/);
+ s.previous.coverage={...s.previous.coverage,missingOrderNumberCount:0};response(h,s);await h.module.load(true);
+ assert.doesNotMatch(h.html(),/class="wo-stat-partial"/);assert.match(plain(card(h.html(),'uniqueOrderCount')),/笔数增减 \+4（\+50\.00%）/);
+});
