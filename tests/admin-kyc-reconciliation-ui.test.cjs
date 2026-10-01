@@ -55,3 +55,11 @@ test('unresolved processing states are visible without long prose and UTR presen
  h.panel.render(snapshot({dimension:'orders',rows:[{sourceUtrPresent:null,onlineUtr:'查看下方比对状态'}]}));assert.match(h.panel.render(),/原：待核实 · 在线：待核实/);
  const missing=h.panel.render(snapshot({summary:{...summary(),unknownProcessing:{count:null}}}));assert.doesNotMatch(missing,/状态待核对 0|状态待核对 —/);
 });
+
+test('drill-down and return restore the displayed scope atomically without draft leakage or duplicate reads',async()=>{
+ const h=harness(),back=h.panel.getState();h.panel.filter('provider','unsent-provider');h.panel.dispatch('detail',0);const displayed=h.details[0].filters;
+ assert.equal(displayed.provider,'');assert.equal(h.panel.restoreFilters({...displayed,platform:'Synthetic platform',dimension:'orders',offset:0}),true);assert.equal(h.calls.length,0);await h.panel.query();assert.equal(h.calls.length,1);assert.equal(h.calls[0].provider,'');assert.equal(h.calls[0].dimension,'orders');
+ await h.panel.dispatch('category','connected');const reads=h.calls.length;assert.equal(h.panel.restoreFilters({...back,offset:20,limit:20}),true);assert.equal(h.calls.length,reads);assert.equal(h.panel.getState().kycStatus,'all');assert.equal(h.panel.getState().dimension,'platform');await h.panel.query();assert.equal(h.calls.length,reads+1);assert.equal(h.calls.at(-1).offset,20);
+ const stable=JSON.stringify(h.panel.getState());for(const invalid of [{kycStatus:'wrong'},{dimension:'wrong'},{processing:'wrong'},{matchStatus:'wrong'},{query:null},{from:'2026-02-31'},{from:'2026-10-02',to:'2026-10-01'},{offset:-1},{offset:1.5},{offset:Number.MAX_SAFE_INTEGER+1},{limit:21},{unexpected:true}]){assert.equal(h.panel.restoreFilters({...back,...invalid}),false);assert.equal(JSON.stringify(h.panel.getState()),stable,'invalid restoration is atomic')}
+ let finish;const pending=harness({handler:()=>new Promise(resolve=>finish=resolve)}),request=pending.panel.query();assert.equal(pending.panel.restoreFilters({...back,kycStatus:'unknown'}),true);finish(snapshot({scopeLabel:'Stale navigation response'}));await request;assert.notEqual(pending.panel.getSnapshot().scopeLabel,'Stale navigation response');assert.equal(pending.panel.getState().kycStatus,'unknown');assert.equal(pending.calls.length,1);
+});
