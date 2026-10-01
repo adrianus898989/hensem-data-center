@@ -405,6 +405,7 @@ body.live-admin .wo-analysis-unprocessed{background:#fff8ef;border-color:#f0dfc6
 body.live-admin .wo-analysis-counts .wo-analysis-values{align-items:baseline;gap:3px}
 body.live-admin .wo-analysis-counts .wo-analysis-values>strong{font-size:18px;line-height:1.5;font-variant-numeric:tabular-nums}
 body.live-admin .wo-analysis-counts .wo-analysis-values>span{font-size:10px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+body.live-admin .wo-stat-partial{display:inline-block;margin-left:4px;padding:0 4px;border:1px solid #efcea0;border-radius:3px;background:#fff3dd;color:#96631f;font-size:9px;font-style:normal;font-weight:400;line-height:15px;white-space:nowrap;vertical-align:middle}
 body.live-admin .wo-analysis-comparison{margin-top:6px;padding-top:4px;border-top:1px solid #dbe4ef}
 body.live-admin .wo-analysis-comparison small{font-size:9px;line-height:1.55;margin-top:2px;overflow-wrap:anywhere}
 body.live-admin .wo-delta-positive{color:#2861b9;font-weight:500}
