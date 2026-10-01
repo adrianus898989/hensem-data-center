@@ -23,7 +23,7 @@ test('daily diagnostics explain source fields and counts without inventing order
 });
 test('diagnostic notes escape source text, reject opposite flow, and keep absent counts unknown',()=>{
  const {h,tuk}=setup();tuk.uniqueCoverage.diagnosticDays=[{platform:'<Platform>',source:'<Source>',provider:'TukPay',date:'2026-09-25',direction:'withdraw',missingDetailCount:1},{platform:'Opposite',source:'ar',direction:'charge',date:'2026-09-25',missingDetailCount:20}];h.render();h.root.providerSummaryCoverage();const html=h.drawers.at(-1).html;
- assert.match(html,/&lt;Platform&gt;/);assert.match(html,/&lt;Source&gt;/);assert.doesNotMatch(html,/<Platform>|<Source>|Opposite/);assert.match(html,/<td>未提供<\/td><td>未提供<\/td><td>1条未收到原始明细/);assert.equal(h.networkCalls(),0);
+ assert.match(html,/&lt;Platform&gt;/);assert.match(html,/&lt;Source&gt;/);assert.doesNotMatch(html,/<Platform>|<Source>|Opposite/);assert.match(html,/<td>未提供<\/td><td>未提供<\/td><td>1条汇总与明细差异待核对/);assert.equal(h.networkCalls(),0);
 });
 test('missing daily source report is not displayed as zero even when detail records exist',()=>{
  const {h,tuk}=setup();tuk.uniqueCoverage.diagnosticDays=[{platform:'DHANIWIN',source:'newar',provider:'TukPay',direction:'withdraw',date:'2026-09-25',expectedAvailable:false,expectedCount:null,detailCount:8,missingDetailCount:null,detailMismatchCount:null}];h.render();h.root.providerSummaryCoverage();const html=h.drawers.at(-1).html;

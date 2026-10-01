@@ -26,13 +26,13 @@ async function fixture(kind){
  vm.runInContext(source('live-empty-pages.js'),c);const api=c.HensemLiveEmpty,page=api.pages.find(p=>p!=='access');c.document.getElementById=()=>({set innerHTML(v){changed++;calls.push({local:true})}});return {c,calls,html:api.render(page)};
 }
 for(const kind of ['deposit','provider','platform','payout','empty'])test(kind+' query button and Enter work without submit; invalid inputs and IME never issue requests',async()=>{
- const h=await fixture(kind),wire=handlers(h.html);let checks=0;const form={elements:{platform:{value:'DEMO'}},reportValidity(){checks++;return true}};
- invoke(h.c,wire.click,{form});await settle();assert.equal(h.calls.length,1,'one click = one query');assert.equal(checks,1);
- const key=enter();invoke(h.c,wire.key,form,key);await settle();assert.equal(h.calls.length,2);assert.equal(key.defaultPrevented,true,'prevent subsequent native submission');
- assert.equal(invoke(h.c,wire.submit,form,{}),false);assert.equal(h.calls.length,2,'submit cannot duplicate query');
+ const h=await fixture(kind),wire=handlers(h.html),reads=n=>kind==='payout'?0:n;let checks=0;const form={elements:{platform:{value:'DEMO'}},reportValidity(){checks++;return true}};
+ invoke(h.c,wire.click,{form});await settle();assert.equal(h.calls.length,reads(1),'one click queries once; cached config search stays local');assert.equal(checks,1);
+ const key=enter();invoke(h.c,wire.key,form,key);await settle();assert.equal(h.calls.length,reads(2));assert.equal(key.defaultPrevented,true,'prevent subsequent native submission');
+ assert.equal(invoke(h.c,wire.submit,form,{}),false);assert.equal(h.calls.length,reads(2),'submit cannot duplicate query');
  for(const event of [enter({isComposing:true}),enter({keyCode:229}),enter({repeat:true}),enter({defaultPrevented:true}),enter({key:'Escape'}),enter({ctrlKey:true}),enter({target:{tagName:'TEXTAREA',type:'textarea'}}),enter({target:{tagName:'SELECT',type:'select-one'}}),enter({target:{tagName:'BUTTON',type:'button'}}),enter({target:{tagName:'INPUT',type:'checkbox'}}),enter({target:{tagName:'INPUT',type:'radio'}})])invoke(h.c,wire.key,form,event);
- await settle();assert.equal(h.calls.length,2,'keyboard selection, IME, held key and already-handled event are ignored');
- form.reportValidity=()=>false;invoke(h.c,wire.click,{form});const invalid=enter();invoke(h.c,wire.key,form,invalid);await settle();assert.equal(invalid.defaultPrevented,true);assert.equal(h.calls.length,2,'native field validity is preserved');
+ await settle();assert.equal(h.calls.length,reads(2),'keyboard selection, IME, held key and already-handled event are ignored');
+ form.reportValidity=()=>false;invoke(h.c,wire.click,{form});const invalid=enter();invoke(h.c,wire.key,form,invalid);await settle();assert.equal(invalid.defaultPrevented,true);assert.equal(h.calls.length,reads(2),'native field validity is preserved');
 });
 test('deposit amount validation still rejects an inverted range after the native checks pass',async()=>{
  const h=await fixture('deposit'),wire=handlers(h.html);h.changeAmount('100','10');invoke(h.c,wire.click,{form:{reportValidity:()=>true}});await settle();assert.equal(h.calls.length,0);assert.match(h.state.depositIssuesError,/最低金额不能大于最高金额/);

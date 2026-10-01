@@ -71,6 +71,17 @@ test('iframe rejects missing page grants, query and detail grants before sending
 test('iframe owner/legacy do not gain assigned restrictions',async()=>{
  for(const mode of ['owner','legacy']){const h=frame({mode,permissions:[],canView:true});const pending=h.c.hensemLiveRequest({action:'details'});assert.equal(h.posts.length,1);const rejected=assert.rejects(pending,/查询已取消/);h.c.hensemLiveCancelRequests();await rejected;}
 });
+test('configuration batch envelopes retain payout permissions across navigation without granting other pages',async()=>{
+ const h=frame(assigned(['payout_config.view','payout_config.query','providers.view']), 'payout_config');
+ let current='payout_config';h.c.hensemCurrentAdminPage=()=>current;
+ const index=h.c.hensemLiveRequest({action:'payoutConfig',operation:'index',system:'AR'});current='providers';
+ const snapshot=h.c.hensemLiveRequest({action:'payoutConfig',operation:'snapshot',system:'AR',country:'IN',platform:'SYNTHETIC'});
+ assert.equal(h.posts.length,2);assert(h.posts.every(x=>x.data.page==='payout_config'));
+ await assert.rejects(h.c.hensemLiveRequest({action:'aggregate'}),/没有此页面或操作权限/);assert.equal(h.posts.length,2);
+ h.c.hensemRoleAccess=assigned(['providers.view','providers.query']);await assert.rejects(h.c.hensemLiveRequest({action:'payoutConfig',operation:'index',system:'WG'}),/没有此页面或操作权限/);assert.equal(h.posts.length,2);
+ const rejected=[assert.rejects(index,/查询已取消/),assert.rejects(snapshot,/查询已取消/)];h.c.hensemLiveCancelRequests();await Promise.all(rejected);
+ const server=load();await server.api.adminLiveRequest(session,h.posts[1].data.request,undefined,{assigned:true,page:h.posts[1].data.page});assert.equal(server.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_execute');assert.equal(JSON.parse(server.calls[0].init.body).p_page,'payout_config');
+});
 
 let navigationPrefix=fs.readFileSync(path.join(__dirname,'admin-navigation-performance.test.cjs'),'utf8').split(/\ntest\(/)[0];
 navigationPrefix=navigationPrefix.replace('context.window=context;vm.createContext(context);','context.window=context;if(options.rolePolicy){context.hensemRoleAccess=options.rolePolicy;context.hensemRoleAllowed=options.roleAllows;}vm.createContext(context);');

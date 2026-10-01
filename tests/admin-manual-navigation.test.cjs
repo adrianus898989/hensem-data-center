@@ -46,15 +46,14 @@ test('deposit statistics tabs and reset only change the selected view until Quer
   await h.c.liveQuery();await settle();assert(h.calls.some(q=>q.action===(page==='deposit_tracking'?'depositIssues':'depositStatistics')));
  }
 });
-test('configuration deep links and source tabs wait for a manual query and never choose a default over the target',async()=>{
+test('configuration deep links wait for a query then source tabs reuse the authorized cache',async()=>{
  const h=harness();await settle();const n=h.calls.length,api=h.c.HensemLivePayoutConfig;
  api.openTarget({system:'AR',country:'IN',platform:'SYNTHETIC_CONFIG_PLATFORM'});h.c.setPage('payout_config');await settle();assert.equal(h.calls.length,n);assert.match(h.html(),/IN \/ SYNTHETIC_CONFIG_PLATFORM/);
  await h.c.liveQuery();await settle();assert.equal(api.state().platform,'SYNTHETIC_CONFIG_PLATFORM');const before=h.calls.length;
- api.selectSystem(1);await settle();assert.equal(h.calls.length,before);assert.equal(api.state().snapshotStatus,'idle');assert.match(h.html(),/点击查询/);
+ api.selectSystem(1);await settle();assert.equal(h.calls.length,before);assert.equal(api.state().snapshotStatus,'ready');assert.match(h.html(),/SYNTHETIC_CONFIG_PLATFORM/);
 });
-test('leaving configuration during its directory query prevents the next snapshot query from starting',async()=>{
- const h=harness({page:'payout_config'});await settle();let resolveIndex;
- h.setHandler(q=>q.action==='payoutConfig'?new Promise(resolve=>{resolveIndex=resolve}):{rows:[],total:0});
- const pending=h.c.liveQuery();await settle();assert(resolveIndex);h.c.setPage('amount');const n=h.calls.length;
- resolveIndex({version:1,system:'AR',readOnly:true,targets:[{platform:'PRIVATE_CONFIG',country_code:'IN'}],summaries:[]});await pending;await settle();assert.equal(h.calls.length,n);assert(!h.calls.some(q=>q.operation==='snapshot'));h.c.setPage('payout_config');await settle();assert.equal(h.calls.length,n);
+test('configuration query continues across navigation and results remain when returning',async()=>{
+ const h=harness({page:'payout_config'});await settle();let release;const gate=new Promise(resolve=>{release=resolve});
+ h.setHandler(async q=>{await gate;const target={platform:'PRIVATE_CONFIG',country_code:'IN'};return q.operation==='index'?{version:1,system:q.system,readOnly:true,targets:[target],summaries:[]}:{version:1,system:q.system,readOnly:true,target,snapshot:{configuration:{fields:[],groups:[]}}};});
+ const pending=h.c.liveQuery();await settle();h.c.setPage('amount');release();await pending;await settle();assert.equal(h.calls.filter(q=>q.operation==='snapshot').length,6);assert.doesNotMatch(h.html(),/PRIVATE_CONFIG/);const n=h.calls.length;h.c.setPage('payout_config');await settle();assert.equal(h.calls.length,n);assert.match(h.html(),/PRIVATE_CONFIG/);assert.equal(h.c.HensemLivePayoutConfig.state().snapshotStatus,'ready');
 });

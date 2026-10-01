@@ -396,15 +396,15 @@ test('split date and second-precision time inputs preserve the unchanged half-op
 });
 
 test('automatic-payout configuration stays in the merchant center after workorders move out',async()=>{
- const h=await ready(),merchant=h.c.navGroupsV3.find(g=>g[0]==='merchant');assert(merchant);assert.equal(h.c.pages.filter(p=>p[0]==='payout_config').length,1);assert.deepEqual(Array.from(merchant[3]),['merchants','merchantproviders','payout_config','auto_withdraw','withdraw_operators']);assert.equal(h.c.groupForV3('payout_config')[0],'merchant');assert(!h.c.navGroupsV3.find(g=>g[0]==='analysis')[3].includes('payout_config'));const before=h.calls.length;h.c.setPage('payout_config');await settle();await h.c.liveQuery();await settle();const requests=h.calls.slice(before);assert.deepEqual(requests.map(q=>[q.action,q.operation]),[['payoutConfig','index'],['payoutConfig','snapshot']]);assert.equal(h.c.state.navGroup,'merchant');assert.match(h.nodes.get('nav').innerHTML,/自动出款配置/);assert.match(h.html(),/class="live-payout-config"/);assert.match(h.html(),/SYNTHETIC_CONFIG_PLATFORM/);assert.match(h.html(),/原后台配置 · 只读同步/);assert.match(h.html(),/否（只读）/);assert.match(h.html(),/>0<\/span>/);assert.doesNotMatch(h.html(),/<(?:button|input)[^>]*>保存|onclick="[^"]*(?:save|update|delete)/);assert.equal(h.nodes.get('liveFilters').style.display,'none');
+ const h=await ready(),merchant=h.c.navGroupsV3.find(g=>g[0]==='merchant');assert(merchant);assert.equal(h.c.pages.filter(p=>p[0]==='payout_config').length,1);assert.deepEqual(Array.from(merchant[3]),['merchants','merchantproviders','payout_config','auto_withdraw','withdraw_operators']);assert.equal(h.c.groupForV3('payout_config')[0],'merchant');assert(!h.c.navGroupsV3.find(g=>g[0]==='analysis')[3].includes('payout_config'));const before=h.calls.length;h.c.setPage('payout_config');await settle();await h.c.liveQuery();await settle();const requests=h.calls.slice(before);assert.equal(requests.length,12);assert.equal(requests.filter(q=>q.operation==='index').length,6);assert.equal(requests.filter(q=>q.operation==='snapshot').length,6);assert.equal(h.c.state.navGroup,'merchant');assert.match(h.nodes.get('nav').innerHTML,/自动出款配置/);assert.match(h.html(),/class="live-payout-config"/);assert.match(h.html(),/SYNTHETIC_CONFIG_PLATFORM/);assert.match(h.html(),/原后台配置 · 只读同步/);assert.match(h.html(),/否（只读）/);assert.match(h.html(),/>0<\/span>/);assert.doesNotMatch(h.html(),/<(?:button|input)[^>]*>保存|onclick="[^"]*(?:save|update|delete)/);assert.equal(h.nodes.get('liveFilters').style.display,'none');
 });
 
 test('configuration route and refresh use only exact read-only index/snapshot requests despite dirty order filters',async()=>{
- const h=await ready();h.c.liveSet('orderNumber','SYNTHETIC_STALE_ORDER_QUERY');const before=h.calls.length,originalResults=JSON.stringify(h.L.results);h.c.setPage('payout_config');await settle();await h.c.liveQuery();const requests=h.calls.slice(before);assert.equal(requests.length,2);for(const q of requests){assert.equal(q.action,'payoutConfig');assert(['index','snapshot'].includes(q.operation));assert(!('startAt' in q));assert(!('orderNumber' in q));assert(!('direction' in q));assert(!('currency' in q));if(q.operation==='snapshot')assert.deepEqual(Object.keys(q).sort(),['action','country','operation','platform','system'])}assert.equal(h.L.results.length,0);assert.match(h.html(),/当前保存值/);assert.doesNotMatch(h.html(),/筛选条件已修改/);const direct=await ready({page:'payout_config'});assert.equal(direct.calls.filter(q=>q.action==='catalog').length,1);assert.equal(direct.calls.filter(q=>['aggregate','details','rates'].includes(q.action)).length,0);assert.deepEqual(direct.calls.filter(q=>q.action==='payoutConfig').map(q=>q.operation),['index','snapshot']);assert.equal(direct.c.HensemLivePayoutConfig.state().snapshotStatus,'ready');h.c.setPage('overview');await settle();assert.equal(JSON.stringify(h.L.results),originalResults);
+ const h=await ready();h.c.liveSet('orderNumber','SYNTHETIC_STALE_ORDER_QUERY');const before=h.calls.length,originalResults=JSON.stringify(h.L.results);h.c.setPage('payout_config');await settle();await h.c.liveQuery();const requests=h.calls.slice(before);assert.equal(requests.length,12);for(const q of requests){assert.equal(q.action,'payoutConfig');assert(['index','snapshot'].includes(q.operation));assert(!('startAt' in q));assert(!('orderNumber' in q));assert(!('direction' in q));assert(!('currency' in q));if(q.operation==='snapshot')assert.deepEqual(Object.keys(q).sort(),['action','country','operation','platform','system'])}assert.equal(h.L.results.length,0);assert.match(h.html(),/当前保存值/);assert.doesNotMatch(h.html(),/筛选条件已修改/);const direct=await ready({page:'payout_config'});assert.equal(direct.calls.filter(q=>q.action==='catalog').length,1);assert.equal(direct.calls.filter(q=>['aggregate','details','rates'].includes(q.action)).length,0);assert.equal(direct.calls.filter(q=>q.action==='payoutConfig'&&q.operation==='index').length,6);assert.equal(direct.calls.filter(q=>q.action==='payoutConfig'&&q.operation==='snapshot').length,6);assert.equal(direct.c.HensemLivePayoutConfig.state().snapshotStatus,'ready');h.c.setPage('overview');await settle();assert.equal(JSON.stringify(h.L.results),originalResults);
 });
 
 test('configuration permission failures clear the displayed snapshot and never fall back to order data',async()=>{
- const h=await ready({page:'payout_config'});assert.match(h.html(),/SYNTHETIC_CONFIG_PLATFORM/);const before=h.calls.length;h.setHandler(async q=>{assert.equal(q.action,'payoutConfig');throw Error('403 permission denied')});await h.c.liveQuery();assert.match(h.html(),/授权已失效/);assert.doesNotMatch(h.html(),/SYNTHETIC_CONFIG_PLATFORM|否（只读）/);assert.equal(h.calls.length,before+1);assert.equal(h.c.HensemLivePayoutConfig.state().indexStatus,'error');
+ const h=await ready({page:'payout_config'});assert.match(h.html(),/SYNTHETIC_CONFIG_PLATFORM/);const before=h.calls.length;h.setHandler(async q=>{assert.equal(q.action,'payoutConfig');throw Error('403 permission denied')});await h.c.liveQuery();assert.match(h.html(),/授权已失效/);assert.doesNotMatch(h.html(),/SYNTHETIC_CONFIG_PLATFORM|否（只读）/);assert.equal(h.calls.length,before+3);assert.equal(h.c.HensemLivePayoutConfig.state().indexStatus,'error');
 });
 
 test('later forced fee query wins over stale requests',async()=>{
@@ -1108,11 +1108,11 @@ test('Brazil selectable directory keeps all 8 native and 60 report seeds without
  const h=await ready({manualOverview:true,reports:true,platforms,handler:q=>q.action==='catalog'?{platforms,withdrawPlatforms:[...seeds,seeds[0],{...platforms[0],source:'withdraw'}]}:q.action==='collectedData'?{rows:feeds}:q.action==='reportSummary'?{feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'not_received',groups:[]}))}:q.action==='rates'?{rows:[],total:0}:completeAggregate(platforms.find(p=>p.id===q.platformId)||platforms[0],10,8)});
  let html=h.nodes.get('liveFilters').innerHTML;
  assert.match(html,/可选目录 68 个平台/);assert.match(html,/订单目录 8 平台/);assert.match(html,/仅目录 60 平台 · 数据待确认/);assert.doesNotMatch(html,/已接入日报|所选日期有订单数据|仅日报/);
- assert.match(html,/live-filter-fields/);assert.match(html,/live-date-trigger/);assert.match(html,/live-query-actions/);assert.match(h.html(),/>查询数据<\/button>/);
+ assert.match(html,/live-filter-fields/);assert.match(html,/live-date-trigger/);assert.match(html,/live-query-actions/);assert.doesNotMatch(h.html(),/>查询数据<\/button>/);
  assert.equal(businessCalls(h).length,0);assert.equal(h.calls.filter(q=>q.action==='collectedData').length,0);
  await h.c.liveQuery();await settle();html=h.nodes.get('liveFilters').innerHTML;
  assert.match(html,/可选目录 68 个平台/);assert.match(html,/已接入日报 \/ 配置 2 平台/);assert.match(html,/仅目录 58 平台 · 数据待确认/);assert.equal(h.L.queryPlatforms.length,8);assert.equal(new Set(h.L.queryPlatforms.map(p=>p.id)).size,8);
- h.c.liveSet('from','2026-09-20T00:00:00');assert.match(h.html(),/>查询数据<\/button>/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据/);
+ h.c.liveSet('from','2026-09-20T00:00:00');assert.doesNotMatch(h.html(),/>查询数据<\/button>/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据/);
 });
 
 test('platform assignment input changes invalidate in-flight results and successful scopes are stamped',async()=>{
@@ -1138,6 +1138,24 @@ test('compact time panel keeps exact drafts and manual shortcuts while chrome ke
  for(const [,handler]of html.matchAll(/onclick="(livePeriod[^";]+)"/g))vm.runInContext(handler,h.c);
  await settle();assert.equal(businessCalls(h).length,previous,'date shortcuts only stage conditions even on provider pages');assert.equal(h.L.dirty,true);
  h.L.catalogReady=false;h.L.catalogLoading=true;h.c.render();html=h.nodes.get('liveFilters').innerHTML;assert.match(html,/平台目录读取中/);assert.doesNotMatch(html,/可选目录 0|订单目录 0|0 三方|0 团队|0 国家/);
+});
+
+test('report empty states keep the filter Query action without a duplicate lower button',async()=>{
+ const h=await ready({manualOverview:true,submissions:true});const before=businessCalls(h).length;
+ for(const page of ['overview','providers','payout','merchantproviders','events','stuck','latency','time','amount','matrix','provider_daily','teamops','teamcountries','teamplatforms','merchants','collection','risk']){
+  h.c.state.page=page;h.L.pageQueried=false;h.c.render();
+  assert.notEqual(h.nodes.get('liveFilters').style.display,'none',page+' has visible filters');
+  assert.match(h.nodes.get('liveFilters').innerHTML,/onclick="liveDateRangeToggle\(false\);liveQuery\(\)"/);
+  assert.match(h.html(),/请选择筛选条件，点击查询/);assert.doesNotMatch(h.html(),/查询数据<\/button>|onclick="liveQuery\(\)"/);
+ }
+ h.c.state.page='providers';h.L.pageQueried=true;h.L.dirty=true;h.c.render();
+ assert.match(h.html(),/筛选条件已修改，点击查询/);assert.doesNotMatch(h.html(),/查询数据<\/button>/);assert.equal(businessCalls(h).length,before);
+});
+
+test('standalone rates empty state retains its only Query action',async()=>{
+ const h=await ready({manualOverview:true});h.c.state.page='rates';h.L.feeView='normalized';h.L.fees=null;h.L.feeLoading=false;h.L.feeError='';h.c.render();
+ assert.equal(h.nodes.get('liveFilters').style.display,'none');assert.match(h.html(),/onclick="liveQuery\(\)">查询数据<\/button>/);
+ const before=h.calls.filter(q=>q.action==='rates').length;await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='rates').length,before+1);assert.match(h.html(),/当前三方费率表/);
 });
 
 
