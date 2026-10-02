@@ -35,6 +35,13 @@ test('platform changes cancel late responses and updated totals never masquerade
  h.setHandler(()=>({total:4,rows:h.records.b}));await h.root.liveProviderOrderBasis('created');assert.match(h.html(),/来源订单已更新/);assert.doesNotMatch(h.html(),/SYNTHETIC-b-0/);
 });
 
+test('failed detail reads show a retry without an empty-order result and retry preserves the original scope',async()=>{
+ const h=fixture();h.setHandler(()=>{throw Error('读取超时')});await h.api.open('USDT','','charge','b');
+ assert.match(h.html(),/读取超时/);assert.match(h.html(),/>重试<\/button>/);assert.match(h.html(),/3 笔 · 按平台分页/);assert.doesNotMatch(h.html(),/<table>|SYNTHETIC-/);
+ h.setHandler(q=>({total:h.records[q.platformId].length,rows:h.records[q.platformId].slice(q.offset,q.offset+q.limit)}));await h.root.liveProviderOrderPage(1);
+ assert.equal(h.requests.at(-1).platformId,'b');assert.equal(h.requests.at(-1).providers[0],'USDT');assert.equal(h.requests.at(-1).offset,0);assert.match(h.html(),/SYNTHETIC-b-0/);assert.doesNotMatch(h.html(),/读取超时/);
+});
+
 test('original USDT labels are escaped, missing evidence stays missing, and known merchant names are not rewritten',async()=>{
  const h=fixture(),raw='<img src=x onerror=alert(1)> USDT " &';h.records.a[0].raw_provider=raw;await h.api.open('USDT','','charge','a');assert.match(h.html(),/&lt;img/);assert.doesNotMatch(h.html(),/<img/);h.root.liveProviderOrder(0);assert.match(h.html(),/&quot;/);assert.doesNotMatch(h.html(),/<img/);
  assert.match(h.api.reason({provider:'USDT',raw_provider:null}),/原始通道未提供/);assert.equal(h.api.reason({provider:'UniPayUSDT',raw_provider:'UniPayUSDT',channel_type:'USDT'}),'按原始三方展示');
