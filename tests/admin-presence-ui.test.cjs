@@ -1,0 +1,32 @@
+// Offline host/frame envelopes and synthetic online accounts only.
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript');
+const bridgeSource=fs.readFileSync(path.join(__dirname,'../src/lib/dashboardPresenceBridge.ts'),'utf8');
+const bridgeCode=ts.transpileModule(bridgeSource,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+const stamp='2026-10-02T00:00:00.000Z';
+const snapshot=(extra={})=>({onlineCount:1,observedAt:stamp,windowSeconds:120,heartbeatSeconds:30,scope:'authorized',accounts:[{username:'synthetic001',lastSeenAt:stamp}],loading:false,reason:null,...extra});
+function bridgeHarness(){const module={exports:{}},listeners=new Set(),target={addEventListener:(name,fn)=>{assert.equal(name,'message');listeners.add(fn)},removeEventListener:(_name,fn)=>listeners.delete(fn)};vm.runInNewContext(bridgeCode,{module,exports:module.exports,URL,require:name=>{assert.equal(name,'./dashboardPresenceClient');return {}}});return {api:module.exports,target,send:event=>[...listeners].forEach(fn=>fn(event)),listeners}}
+
+test('only the current opaque frame receives sanitized presence; access.view and identity changes cannot leak lists',()=>{
+ const h=bridgeHarness(),messages=[],child={postMessage:(data,origin)=>messages.push({data,origin})};let source=child,channel='synthetic-channel',viewer='synthetic-a',canView=true,callback,refreshes=0,unsubscribed=false;
+ const stop=h.api.installDashboardPresenceBridge({target:h.target,source:()=>source,channel:()=>channel,accountId:()=> 'synthetic-a',viewer:()=>viewer,canViewAccounts:()=>canView,refresh:()=>refreshes++,snapshot:()=>snapshot(),subscribe:fn=>{callback=fn;fn(snapshot({token:'secret',accounts:[{username:'synthetic001',lastSeenAt:stamp,ip:'private-ip'}]}));return ()=>unsubscribed=true}});
+ assert.equal(messages.length,1);assert.equal(messages[0].origin,'*');assert.doesNotMatch(JSON.stringify(messages),/secret|private-ip/);const valid={source:child,origin:'null',data:{type:h.api.PRESENCE_REQUEST,channel,command:'refresh'}};
+ for(const bad of [{...valid,source:{}},{...valid,origin:'https://imposter.invalid'},{...valid,data:{...valid.data,channel:'old'}},{...valid,data:{...valid.data,user:'arbitrary'}},{...valid,data:{...valid.data,command:'heartbeat'}}])h.send(bad);assert.equal(refreshes,0);h.send(valid);assert.equal(refreshes,1);
+ canView=false;callback(snapshot());assert.equal(messages.at(-1).data.snapshot.accounts,null);assert.equal(messages.at(-1).data.snapshot.onlineCount,1);
+ viewer='synthetic-b';callback(snapshot());assert.equal(messages.at(-1).data.snapshot.onlineCount,null);assert.equal(messages.at(-1).data.snapshot.accounts,null);h.send(valid);assert.equal(refreshes,1);
+ source={postMessage:child.postMessage};channel='new-channel';h.send(valid);assert.equal(refreshes,1);stop();assert.equal(unsubscribed,true);assert.equal(h.listeners.size,0);const before=messages.length;callback(snapshot());assert.equal(messages.length,before);
+});
+
+test('frame bootstrap validates parent origin/channel and does not carry credentials or arbitrary snapshot fields',()=>{
+ const h=bridgeHarness(),nonce='</script>\u2028synthetic',messages=[],callbacks=new Map(),parent={postMessage:(data,origin)=>messages.push({data,origin})};const html=h.api.makeDashboardPresenceDocument('<!doctype html><html></html>',nonce,'https://dashboard.invalid');assert.doesNotMatch(html,/access_token|refresh_token|Authorization|localStorage|sessionStorage/);assert.equal((html.match(/<script>/g)||[]).length,1);const script=html.match(/<script>([\s\S]*)<\/script>/)[1],context={parent,document:{readyState:'complete'},addEventListener:(name,fn)=>callbacks.set(name,fn),Date};context.window=context;vm.runInNewContext(script,context);assert.equal(messages[0].origin,'https://dashboard.invalid');assert.equal(messages[0].data.command,'ready');const seen=[];context.hensemPresenceSubscribe(s=>seen.push(s));const good={source:parent,origin:'https://dashboard.invalid',data:{type:h.api.PRESENCE_UPDATE,channel:nonce,snapshot:snapshot({token:'never-forward'})}};
+ for(const bad of [{...good,source:{}},{...good,origin:'null'},{...good,data:{...good.data,channel:'wrong'}},{...good,data:{...good.data,snapshot:snapshot({onlineCount:'1'})}},{...good,data:{...good.data,snapshot:snapshot({onlineCount:0})}}])callbacks.get('message')(bad);assert.equal(seen.length,1);assert.equal(seen[0],null);callbacks.get('message')(good);assert.equal(seen.at(-1).onlineCount,1);assert.doesNotMatch(JSON.stringify(seen),/never-forward/);context.hensemPresenceRefresh();assert.equal(messages.at(-1).data.command,'refresh');
+ for(const origin of ['https://user:pass@dashboard.invalid','http://dashboard.invalid/','https://dashboard.invalid/path'])assert.throws(()=>h.api.makeDashboardPresenceDocument('<!doctype html>',nonce,origin));
+});
+
+test('online presentation keeps unknown, explicit zero and unauthorized lists distinct without starting heartbeats on navigation',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-presence.js'),'utf8');let subscribed=0,receive;const context={document:{addEventListener(){},getElementById:()=>null},hensemPresenceSubscribe:fn=>{subscribed++;receive=fn;fn(null)},hensemLiveRequest:()=>{throw Error('online UI must not use business queries')},Date};context.window=context;vm.runInNewContext(source,context);const api=context.HensemLivePresence;
+ for(let i=0;i<5;i++)assert.match(api.button('<svg></svg>'),/在线 —/);assert.equal(subscribed,1);assert.match(api.panel(),/在线状态尚未读取/);assert.doesNotMatch(api.panel(),/暂无在线/);
+ receive(snapshot({onlineCount:0,accounts:[]}));assert.match(api.button(''),/在线 0/);assert.match(api.panel(),/暂无在线后台账号/);
+ receive(snapshot({accounts:null}));assert.match(api.panel(),/没有在线名单查看权限/);assert.doesNotMatch(api.panel(),/synthetic001/);
+ receive(snapshot({accounts:[{username:'<img src=x onerror=alert(1)>',lastSeenAt:stamp}]}));assert.match(api.panel(),/&lt;img/);assert.doesNotMatch(api.panel(),/<img|onclick=|onerror="/);assert.match(api.panel(),/最近 120 秒心跳/);assert.doesNotMatch(api.panel(),/员工|最近登录/);
+ receive(snapshot({onlineCount:null,accounts:null,observedAt:null,scope:null,reason:'timeout'}));assert.match(api.button(''),/在线 —/);assert.match(api.panel(),/读取超时/);assert.doesNotMatch(api.panel(),/synthetic001|暂无在线/);
+});

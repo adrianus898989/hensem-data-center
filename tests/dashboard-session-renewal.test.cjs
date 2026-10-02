@@ -377,7 +377,7 @@ test('access-check distinguishes expired application session, disabled account a
 // Render the real gate with minimal hooks to verify terminal-error presentation and stale-request isolation.
 function gateHarness(profileRead) {
   const h=harness(),old=session();h.api.saveDashboardSession(old);
-  let index=0,eindex=0;const states=[],deps=[],pending=[],cleanups=[];
+  let index=0,eindex=0;const states=[],deps=[],pending=[],cleanups=[],presence=[];
   const react={Fragment:'fragment',createContext:()=>({Provider:'provider'}),useContext:()=>({}),useMemo:fn=>fn(),
     useRef:value=>{const i=index++;return states[i]||(states[i]={current:value});},
     useState:value=>{const i=index++;if(!(i in states))states[i]=typeof value==='function'?value():value;return[states[i],value=>{states[i]=typeof value==='function'?value(states[i]):value;}];},
@@ -388,7 +388,8 @@ function gateHarness(profileRead) {
     require:name=>{
       if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
       if(name.endsWith('/dashboardAuthClient'))return{...h.api,dashboardAuthEnabled:()=>true,fetchDashboardProfile:profileRead,verifyDashboardAccess:async()=>({}),signOutDashboard:async()=>({})};
-      if(name.endsWith('/dashboardDataScope'))return{effectiveDashboardDataScope:()=>({mode:'all',countries:[]}),dashboardScopeLabel:()=>''};
+      if(name.endsWith('/dashboardDataScope'))return{effectiveDashboardDataScope:()=>({mode:'all',countries:[]}),dashboardScopeLabel:()=>'',dashboardScopeIdentity:profile=>JSON.stringify([profile.auth_user_id,profile.data_scope,profile.updated_at])};
+      if(name.endsWith('/dashboardPresenceClient'))return{setDashboardPresenceSession:(active,identity)=>presence.push({action:'set',active,identity}),stopDashboardPresence:()=>presence.push({action:'stop'})};
       if(name.endsWith('/dashboardDataClient'))return{clearDashboardDataCaches(){},setDashboardDataViewer:()=>true,DASHBOARD_PROFILE_EVENT:'fixture-profile'};
       if(name.endsWith('/dashboardIdle'))return{DASHBOARD_IDLE_MS:Infinity,readLastActivity:()=>Date.now(),writeLastActivity(){},clearLastActivity(){},installDashboardIdleMonitor:()=>()=>{}};
       throw Error('Unexpected gate dependency '+name);
@@ -396,8 +397,18 @@ function gateHarness(profileRead) {
   const draw=()=>{index=eindex=0;return box.exports.default({children:'authorized-child'});};
   const render=()=>{const tree=draw();pending.splice(0).forEach(fn=>fn());return tree;};
   const content=x=>Array.isArray(x)?x.map(content).join(''):x&&typeof x==='object'?content(x.props?.children):typeof x==='string'?x:'';
-  render();return{h,render,text:()=>content(draw()),dispose:()=>cleanups.forEach(fn=>fn?.())};
+  render();return{h,render,presence,text:()=>content(draw()),dispose:()=>cleanups.forEach(fn=>fn?.())};
 }
+test('gate starts shared presence only after verification and stops immediately on logout or account replacement',async()=>{
+  const pending=deferred(),g=gateHarness(()=>pending.promise);
+  assert.equal(g.presence.some(event=>event.action==='set'),false);
+  const profile={auth_user_id:A,username:'fixture',role:'viewer',active:true,data_scope:{mode:'all',countries:[]},updated_at:'2026-10-02T00:00:00Z'};
+  pending.resolve(profile);await tick();
+  const first=g.presence.find(event=>event.action==='set');assert(first);assert.equal(first.active.user.id,A);assert.match(first.identity,/2026-10-02T00:00:00Z/);
+  const tree=g.render();assert.equal(tree.type,'provider');tree.props.value.logout();assert.equal(g.presence.at(-1).action,'stop');assert.equal(g.h.saved(),null);g.dispose();
+  const changed=gateHarness(async()=>profile);await tick();changed.render();changed.h.api.saveDashboardSession(session('different',3600,B));assert.equal(changed.presence.at(-1).action,'stop');changed.dispose();
+  const network=gateHarness(async()=>{throw Error('temporary');});await tick();assert.equal(network.presence.some(event=>event.action==='set'),false);network.dispose();
+});
 test('gate restores a denied old session to the login form with an explicit re-login reason',async()=>{
   const g=gateHarness(async()=>{const error=Error('登录会话已失效，请重新登录。');Object.setPrototypeOf(error,g.h.api.DashboardHttpError.prototype);error.status=403;error.code='application_session_denied';throw error;});
   await tick();assert.equal(g.h.saved(),null);assert.match(g.text(),/登录会话已失效，请重新登录/);assert.doesNotMatch(g.text(),/停用/);g.dispose();

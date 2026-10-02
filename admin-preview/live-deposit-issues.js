@@ -12,6 +12,7 @@
   const entryUrl='https://docs.google.com/spreadsheets/d/1UBnMj2JS4eDfT-gdE-flUVLWs387FgoR6Rw2baLYzoE/edit?gid=2140568082#gid=2140568082';
   Object.assign(L,{depositIssuesView:'entries',depositIssuesSection:'details',depositIssuesDateMode:'range',depositIssuesDateInitialized:false,depositIssuesMatch:'all',depositIssuesFollowupStatus:'',depositIssuesOrderNumber:'',depositIssuesWorkOrderNumber:'',depositIssuesUtr:'',depositIssuesUpiId:'',depositIssuesKycUpiId:'',depositIssuesReply:'',depositIssuesUtrMatch:'',depositIssuesKycCorrect:'',depositIssuesStaffCode:'',depositIssuesSourceKind:'all',depositIssuesAmountMin:'',depositIssuesAmountMax:''});
   const facets={};
+  let lastReadAt=0,refreshTimer=null;
   function ensureDateRange(){if(L.depositIssuesDateInitialized||!L.catalogReady)return;const range=root.HensemWorkorderUI.recentSevenDays(L.country,L.catalog);L.from=range.from+'T00:00:00';L.to=range.to+'T23:59:59';L.depositIssuesDateMode='range';L.depositIssuesDateInitialized=true;}
 
   const isStatistics=()=>ctx.page?.()==='deposit_statistics';
@@ -78,7 +79,7 @@
    return box(entries?'员工跟进明细':'表格核对明细',table(entries?headers.map(label=>'<span title="'+E(label)+'">'+E(label==='距今天数'?'天数':label)+'</span>'):headers,rendered,'deposit-issues-columns'+(entries?' deposit-entry-details':' deposit-result-details'))+currentPager(Number(result.total||0),L.depositIssuesPage,L.depositIssuesSize));
   }
   function view(){
-   syncView();const head=toolbar();
+   syncView();startRefresh();const head=toolbar();
 
    if(L.depositIssuesLoading&&!L.depositIssues)return head+'<div class="live-status">正在读取记录…</div>';
    if(L.depositIssuesError&&!L.depositIssues)return head+'<div class="live-status live-error">'+E(L.depositIssuesError)+' <button class="btn" onclick="depositIssuesLoad()">重试</button></div>';
@@ -86,11 +87,11 @@
    const choices=entries?[]:[['summary','汇总'],['details','UPI核对'],['providers','三方查看'],['daily','每日汇总']];
    const tabs='<div class="live-tabs deposit-section-tabs">'+choices.map(([v,l])=>'<button class="'+(section===v?'on':'')+'" onclick="depositIssuesSection(\''+v+'\')">'+l+'</button>').join('')+'</div>';
    const content=!L.depositIssues?'<div class="live-status">选择条件后点击查询。</div>':section==='summary'?'<div class="deposit-summary-grid">'+(entries?groupTable(result,'platforms',true)+groupTable(result,'statuses',true):groupTable(result,'providers',true)+groupTable(result,'daily',true))+'</div>':section==='details'?details(result):groupTable(result,section);
-   return head+(L.depositIssuesError?'<div class="live-status live-error">'+E(L.depositIssuesError)+' · 保留上次结果</div>':'')+(L.depositIssuesLoading?'<div class="wo-loading">读取中…</div>':'')+(section==='summary'&&L.depositIssues?summaryCards(result):'')+'<div class="deposit-context"><button type="button" class="deposit-table-link" onclick="depositIssuesMethod()">统计口径</button><span>同步于 '+E(result.updatedAt?formatTime(result.updatedAt,'Asia/Kolkata'):'—')+' · 印度时间</span></div>'+tabs+'<div class="deposit-tables">'+content+'</div>';
+   return head+(L.depositIssuesError?'<div class="live-status live-error">'+E(L.depositIssuesError)+' · 保留上次结果</div>':'')+(L.depositIssuesLoading?'<div class="wo-loading">读取中…</div>':'')+(section==='summary'&&L.depositIssues?summaryCards(result):'')+'<div class="deposit-context"><button type="button" class="deposit-table-link" onclick="depositIssuesMethod()">统计口径</button>'+(entries&&L.depositIssues?'<button type="button" class="deposit-table-link" onclick="depositIssuesRefresh()" '+(L.depositIssuesLoading||L.depositIssuesDirty?'disabled':'')+'>刷新</button><span>每 30 秒更新</span>':'')+'<span>同步于 '+E(result.updatedAt?formatTime(result.updatedAt,'Asia/Kolkata'):'—')+' · 印度时间</span></div>'+tabs+'<div class="deposit-tables">'+content+'</div>';
   }
-  async function load(reset=false){
+  async function load(reset=false,background=false){
    if(!L.catalogReady)return;syncView();ensureDateRange();if(reset)L.depositIssuesPage=1;const serial=++L.depositIssuesSerial;
-   L.depositIssuesLoading=true;L.depositIssuesError='';L.depositIssuesDirty=false;L.dirty=false;render();
+   L.depositIssuesLoading=true;L.depositIssuesError='';L.depositIssuesDirty=false;L.dirty=false;if(!background)render();
    try{
     const q={action:isStatistics()?'depositStatistics':'depositIssues',...(isStatistics()?{section:L.depositIssuesSection}:{view:'entries'}),dateMode:L.depositIssuesDateMode,startAt:L.from.slice(0,10)+'T00:00:00.000Z',endAt:L.to.slice(0,10)+'T23:59:59.000Z',offset:(L.depositIssuesPage-1)*L.depositIssuesSize,limit:L.depositIssuesSize};
     if(L.country!=='all')q.country=L.country;if(L.depositIssuesPlatform&&L.depositIssuesPlatform!=='all')q.platform=L.depositIssuesPlatform;
@@ -101,9 +102,19 @@
     if(q.amountMin!==undefined&&q.amountMax!==undefined&&q.amountMin>q.amountMax)throw Error('最低金额不能大于最高金额');
     if(L.depositIssuesView==='entries'){if(L.depositIssuesFollowupStatus)q.followupStatus=L.depositIssuesFollowupStatus}else{if(L.depositIssuesStatus!=='all')q.status=L.depositIssuesStatus;if(L.depositIssuesMatch!=='all')q.match=L.depositIssuesMatch}
     if(isStatistics()&&L.depositIssuesConfirmation)q.confirmation=L.depositIssuesConfirmation;
-    const data=await request(q);if(serial!==L.depositIssuesSerial)return;const max=Math.max(1,Math.ceil(Number(data.total||0)/L.depositIssuesSize));if(L.depositIssuesPage>max){L.depositIssuesPage=max;L.depositIssuesLoading=false;return load();}L.depositIssues=data;facets[L.depositIssuesView]=data.facets||{};L.depositIssuesLoading=false;render();
+    const data=await request(q);if(serial!==L.depositIssuesSerial)return;const max=Math.max(1,Math.ceil(Number(data.total||0)/L.depositIssuesSize));if(L.depositIssuesPage>max){L.depositIssuesPage=max;L.depositIssuesLoading=false;return load();}L.depositIssues=data;facets[L.depositIssuesView]=data.facets||{};L.depositIssuesLoading=false;lastReadAt=Date.now();render();
    }catch(e){if(serial!==L.depositIssuesSerial)return;L.depositIssuesLoading=false;L.depositIssuesError=e.message||'存款核对记录读取失败';render()}
   }
+  function refresh(force=false){
+   if(ctx.page?.()!=='deposit_tracking'||!L.depositIssues||!L.catalogReady||L.depositIssuesLoading||L.depositIssuesDirty)return;
+   if(root.document?.visibilityState==='hidden'||root.document?.activeElement?.closest?.('form')||root.document?.querySelector?.('.drawer-backdrop,.withdraw-drawer-backdrop'))return;
+   if(!force&&Date.now()-lastReadAt<30000)return;
+   return load(false,true);
+  }
+  root.depositIssuesRefresh=()=>refresh(true);
+  const onFocus=()=>refresh(),onVisibility=()=>{if(root.document?.visibilityState==='visible')refresh()};
+  function startRefresh(){if(refreshTimer!==null||ctx.page?.()!=='deposit_tracking'||!L.depositIssues||L.depositIssuesDirty||!root.document||!root.setInterval)return;refreshTimer=root.setInterval(()=>refresh(),30000);root.addEventListener?.('focus',onFocus);root.document.addEventListener?.('visibilitychange',onVisibility);}
+  function destroy(){if(refreshTimer!==null)root.clearInterval?.(refreshTimer);refreshTimer=null;root.removeEventListener?.('focus',onFocus);root.document?.removeEventListener?.('visibilitychange',onVisibility);}
   root.depositIssuesQuery=(form,event)=>readQuery(form,event,()=>{if(!L.depositIssuesLoading)return load(true)});
   function dirty(doRender=true){L.depositIssuesPage=1;L.depositIssuesSerial++;L.depositIssuesDirty=true;L.depositIssuesLoading=false;if(doRender)render()}
   root.depositIssuesSet=function(key,value){
@@ -138,6 +149,6 @@
    else if(kind==='statuses')L.depositIssuesFollowupStatus=row.status;
    L.depositIssuesSection='details';load(true);
   };
-  return {render:view,load};
+  return {render:view,load,refresh,destroy};
  }};
 })(window);

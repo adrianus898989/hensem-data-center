@@ -17,7 +17,7 @@ function harness(initial=makeProfile()){
   const window=new EventTarget();Object.assign(window,{localStorage:storage,location:{origin:'https://dashboard.fixture'}});
   const CustomEvent=class extends Event{constructor(type,options){super(type);this.detail=options.detail;}};
   let session=makeSession(initial.auth_user_id),profileHandler=async()=>initial,httpHandler=async()=>new Response('{}');
-  const httpCalls=[],profileCalls=[],applied=[];
+  const httpCalls=[],profileCalls=[],applied=[],presence=[];
   class DashboardHttpError extends Error{constructor(message,status=0,code='http_error'){super(message);this.status=status;this.code=code;}}
   const auth={DashboardHttpError,readSavedDashboardSession:()=>session,ensureDashboardSession:async value=>value,fetchDashboardProfile:async active=>{profileCalls.push(active);return profileHandler(active);}};
   const module={exports:{}};
@@ -30,14 +30,14 @@ function harness(initial=makeProfile()){
   const gate=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='DashboardAuthGate');
   const apply=gate.body.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='applyAuthenticated');
   const applyCode=ts.transpileModule(apply.getText(source),{compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText;
-  const context={...scope,...client,readSavedDashboardSession:()=>session,saveDashboardSession:value=>{session=value;},sessionRef:{current:session},setSession:()=>{},setProfile:value=>applied.push(value),setRestorePending:()=>{},setAuthWarning:()=>{},setReady:()=>{}};
+  const context={...scope,...client,setDashboardPresenceSession:(active,identity)=>presence.push({active,identity}),readSavedDashboardSession:()=>session,saveDashboardSession:value=>{session=value;},sessionRef:{current:session},setSession:()=>{},setProfile:value=>applied.push(value),setRestorePending:()=>{},setAuthWarning:()=>{},setReady:()=>{}};
   const applyAuthenticated=Function(...Object.keys(context),applyCode+'\nreturn applyAuthenticated;')(...Object.values(context));
   const effect=gate.body.statements.find(node=>node.getText(source).includes('const verified=')&&node.getText(source).includes('DASHBOARD_PROFILE_EVENT'));
   assert(effect,'verified-profile listener must remain present');
   const effectCode=ts.transpileModule(effect.getText(source),{compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText;
   Function('useEffect','window','DASHBOARD_PROFILE_EVENT','readSavedDashboardSession','applyAuthenticated',effectCode)(callback=>callback(),window,client.DASHBOARD_PROFILE_EVENT,()=>session,applyAuthenticated);
   client.setDashboardDataViewer(initial);
-  return {client,window,storage,auth,httpCalls,profileCalls,applied,applyAuthenticated,
+  return {client,window,storage,auth,httpCalls,profileCalls,applied,presence,applyAuthenticated,
     setSession:value=>{session=value;},getSession:()=>session,
     profile:value=>{profileHandler=typeof value==='function'?value:async()=>value;},http:handler=>{httpHandler=handler;},
     event:profile=>window.dispatchEvent(new CustomEvent(client.DASHBOARD_PROFILE_EVENT,{detail:{profile,session}})),
@@ -58,8 +58,9 @@ test('late old all profile cannot roll back a newer selected Gate state or its c
 test('real Gate rejects a profile version downgrade, missing version and same-version scope contradiction',()=>{
   const current=makeProfile('user-a',PANGHU,'2026-09-12T10:01:00.000Z'),h=harness(current);
   for(const profile of [makeProfile(),{...current,data_scope:ALL},{...current,updated_at:undefined,data_scope:ALL}])h.applyAuthenticated(h.getSession(),profile);
-  assert.deepEqual(h.applied,[]);assert.equal(h.client.dashboardProfileCanAdvance(current),true);
+  assert.deepEqual(h.applied,[]);assert.deepEqual(h.presence,[]);assert.equal(h.client.dashboardProfileCanAdvance(current),true);
   const next={...current,updated_at:'2026-09-12T10:02:00.000Z'};h.applyAuthenticated(h.getSession(),next);assert.deepEqual(h.applied,[next]);
+  assert.equal(h.presence.length,1);assert.equal(h.presence[0].identity,scope.dashboardScopeIdentity(next));
 });
 test('A→B→A identity sequence still rejects old in-flight HTTP by generation',async()=>{
   const a=makeProfile(),h=harness(a),response=deferred();h.http(()=>response.promise);

@@ -126,7 +126,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const localStorage = { getItem: key => values.get(key) ?? null,
     setItem(key, value) { if (throwOnWrite) throw Error('Synthetic quota failure'); values.set(key, value); },
     removeItem(key) { if (throwOnWrite) throw Error('Synthetic quota failure'); values.delete(key); } };
-  let environment, client, liveClient, roleClient;
+  let environment, client, liveClient, roleClient, presenceClient;
   const requireStub = name => {
     if (name === 'react') return react;
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx };
@@ -138,6 +138,10 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     if (name.endsWith('/adminLiveBridge')) {
       if (!liveClient) { const module={exports:{}};const filename=path.join(repo,'src/lib/adminLiveBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module,exports:module.exports,setTimeout,clearTimeout},{filename});liveClient={...module.exports,makeAdminLiveDocument(...args){phases.push('live-document');return module.exports.makeAdminLiveDocument(...args)}}; }
       return liveClient;
+    }
+    if (name.endsWith('/dashboardPresenceBridge')) {
+      if (!presenceClient) { const helper={exports:{}};const filename=path.join(repo,'src/lib/dashboardPresenceBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module:helper,exports:helper.exports,require:()=>({}),URL},{filename});presenceClient={...helper.exports,installDashboardPresenceBridge:()=>()=>{},makeDashboardPresenceDocument(...args){phases.push('presence-document');return helper.exports.makeDashboardPresenceDocument(...args)}}; }
+      return presenceClient;
     }
     if (name.endsWith('/adminPreviewClient')) {
       if (!client) {
@@ -198,16 +202,18 @@ test('host sends session only to its protected fetch; iframe has no same-origin 
   for (const secret of ['offline-host-access', 'offline-host-refresh', 'offline-host-auth-must-not-enter-frame', 'other-account-draft'])
     assert.equal(iframe.props.srcDoc.includes(secret), false);
   assert(iframe.props.srcDoc.includes('this-account-draft'));
+  assert(iframe.props.srcDoc.includes('window.hensemPresenceSubscribe'));
+  assert(iframe.props.srcDoc.includes('hensem-dashboard-presence-update'));
   h.dispose();
 });
 
-test('authorized HTML is restored before live bridge, shell and draft bootstrap; permission checks do not transform bodies', async () => {
+test('authorized HTML is restored before live, presence, shell and draft bootstraps; permission checks do not transform bodies', async () => {
   let resolveHTML;const pending=new Promise(resolve=>{resolveHTML=resolve});
   const h=componentHarness('offline-restoration-order',{fetch:async url=>url.endsWith('?check=1')?{ok:true,status:200,text:async()=>{throw Error('check body must not be read')}}:{ok:true,status:200,text:()=>pending}});
   try {
     await flush();assert.deepEqual(h.phases,['fetch','response:text']);assert.equal(h.restoreCalls.length,0);assert.equal(findElement(h.draw(),'iframe'),undefined);
-    resolveHTML(HTML);await flush();assert.deepEqual(h.phases,['fetch','response:text','restore','live-document','shell-document','draft-document']);assert.deepEqual(h.restoreCalls,[HTML]);const before=findElement(h.draw(),'iframe').props.srcDoc;assert(before.includes('synthetic approved restoration'));
-    h.checkPermission();await flush();assert.equal(h.calls.length,2);assert(h.calls[1].url.endsWith('?check=1'));assert.deepEqual(h.phases,['fetch','response:text','restore','live-document','shell-document','draft-document','fetch']);assert.equal(h.restoreCalls.length,1);assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);
+    resolveHTML(HTML);await flush();assert.deepEqual(h.phases,['fetch','response:text','restore','live-document','presence-document','shell-document','draft-document']);assert.deepEqual(h.restoreCalls,[HTML]);const before=findElement(h.draw(),'iframe').props.srcDoc;assert(before.includes('synthetic approved restoration'));
+    h.checkPermission();await flush();assert.equal(h.calls.length,2);assert(h.calls[1].url.endsWith('?check=1'));assert.deepEqual(h.phases,['fetch','response:text','restore','live-document','presence-document','shell-document','draft-document','fetch']);assert.equal(h.restoreCalls.length,1);assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);
   } finally {resolveHTML(HTML);h.dispose()}
 });
 
