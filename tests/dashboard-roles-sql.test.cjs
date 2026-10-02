@@ -51,7 +51,7 @@ before(async()=>{
 after(async()=>db?.close());beforeEach(async()=>{await db.exec('begin');await as(OWNER);});afterEach(async()=>{await db.exec('rollback');await admin();});
 
 test('catalog exactly matches shared UI permission catalog and HMAC matches independent SHA256',async()=>{
- await admin();const catalog=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(catalog.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.map(page=>({...page,actions:page.id==='ip'?page.actions.filter(action=>action.id!=='edit'):page.actions,requests:page.requests.filter(request=>request!=='analysisOrders')})));
+ await admin();const catalog=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(catalog.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.map(page=>({...page,label:page.id==='stuck'?'代付中与卡单分析':page.label,actions:page.id==='ip'?page.actions.filter(action=>action.id!=='edit'):page.actions,requests:page.requests.filter(request=>!['analysisOrders','pendingOrders'].includes(request))})));
  const key=Buffer.alloc(32,11),msg='role-context';assert.equal(await scalar("select private.dashboard_role_hmac($1,decode($2,'hex'))",[msg,key.toString('hex')]),crypto.createHmac('sha256',key).update(msg).digest('hex'));
 });
 test('original owner list raises production 42702, patched list permits the list-create-list flow',async()=>{

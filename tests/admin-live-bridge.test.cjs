@@ -50,6 +50,13 @@ test('live RPC uses fresh auth and a fixed origin; user changes and malformed ho
   for(const options of [{base:'http://offline.invalid'},{base:'https://offline.invalid/other'},{base:'https://user:pass@offline.invalid'},{ensure:async current=>({...current,user:{id:'different-user'}})}]){const denied=load(options);await assert.rejects(denied.api.adminLiveRequest(session,query));assert.equal(denied.calls.length,0);}
 });
 
+test('pending order drilldown validates exact observation and uses its dedicated role gateway',async()=>{
+ const h=load(),q={action:'pendingOrders',date:'2026-10-01',platformIds:['55555555-5555-4555-8555-555555555555'],observedAt:'2026-10-01T18:31:00Z',mode:'midnight',offset:0,limit:50};
+ await h.api.adminLiveRequest(session,q);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_pending_orders');
+ await h.api.adminLiveRequest(session,q,undefined,{assigned:true,page:'stuck'});assert.equal(h.calls[1].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_execute');assert.deepEqual(JSON.parse(h.calls[1].init.body),{p_page:'stuck',p_request:q});
+ for(const patch of [{date:'2026-02-30'},{observedAt:'tomorrow'},{mode:'latest'},{archiveId:'anything'},{platformIds:[q.platformIds[0],q.platformIds[0]]},{provider:' Pay'},{limit:'50'},{offset:-1}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
+});
+
 test('exclusive amount upper bounds retain numeric precision and reject unsupported or empty ranges',async()=>{
  const h=load(),q={...query,action:'aggregate',view:'full',amountMin:200,amountMax:250,amountMaxExclusive:true};
  await h.api.adminLiveRequest(session,q);assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:q});

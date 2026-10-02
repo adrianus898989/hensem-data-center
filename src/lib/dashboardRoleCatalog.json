@@ -749,7 +749,7 @@
       "id": "stuck",
       "moduleId": "risk",
       "moduleLabel": "智能风控中心",
-      "label": "代付中与卡单分析",
+      "label": "代付中分析",
       "actions": [
         {
           "id": "view",
@@ -774,7 +774,8 @@
         "syncHealth",
         "intakeCoverage",
         "pendingAnalysis",
-        "pendingSnapshot"
+        "pendingSnapshot",
+        "pendingOrders"
       ]
     },
     {
