@@ -30,9 +30,9 @@ test('missing or malformed ingress/proxy configuration never falls back to forwa
  }
  for(const config of [{},{PORTAL_PROXY_KEY:''},{PORTAL_PROXY_KEY:'tiny'},{PORTAL_PROXY_KEY:'x'.repeat(257)}])assert.equal((await serve(request(),config,()=>assert.fail('network must not run'))).status,403);
 });
-test('gate timeouts, redirects, invalid/oversized responses and nonboolean decisions all fail closed',async()=>{
+test('gate redirects, unknown errors, invalid/oversized responses and nonboolean decisions are terminal denials',async()=>{
  const {serve}=await worker();
- for(const responder of [()=>{throw Error('private upstream detail')},()=>new Response(null,{status:302,headers:{Location:'https://untrusted.invalid/'}}),()=>new Response('{}',{status:503}),()=>new Response('public HTML'),()=>new Response('not JSON',{headers:{'Content-Type':'application/json'}}),()=>new Response(' '.repeat(1025),{headers:{'Content-Type':'application/json'}}),()=>new Response('{"ok":true,"allowed":"true"}',{headers:{'Content-Type':'application/json'}}),()=>new Response('{"allowed":true}',{headers:{'Content-Type':'application/json'}})]){
+ for(const responder of [()=>{throw Error('private upstream detail')},()=>new Response(null,{status:302,headers:{Location:'https://untrusted.invalid/'}}),()=>new Response('public HTML'),()=>new Response('not JSON',{headers:{'Content-Type':'application/json'}}),()=>new Response(' '.repeat(1025),{headers:{'Content-Type':'application/json'}}),()=>new Response('{"ok":true,"allowed":"true"}',{headers:{'Content-Type':'application/json'}}),()=>new Response('{"allowed":true}',{headers:{'Content-Type':'application/json'}}),()=>new Response(new Uint8Array([0xff]),{headers:{'Content-Type':'application/json'}})]){
   let calls=0;const r=await serve(request(),env,url=>{calls++;assert.equal(url,gate);return responder()});assert.equal(r.status,403);assert.equal(await r.text(),'Access denied');assert.equal(calls,1);
  }
 });
@@ -72,17 +72,101 @@ test('entry fetch uses workerd-supported manual redirects and never follows a pr
 test('entry failure diagnostics are fixed stage codes and public responses expose no private cause',async()=>{
  const {serve}=await worker(),logs=[],old=console.warn;console.warn=value=>logs.push(value);
  try{
-  for(const [respond,reason]of [
-   [()=>{throw new TypeError('secret='+key+' IP=203.0.113.7')},'gate_fetch_TypeError'],
-   [()=>new Response('private backend error',{status:403}),'gate_http_403'],
-   [()=>new Response('not json'),'gate_content_type'],
-   [()=>new Response('bad JSON',{headers:{'Content-Type':'application/json'}}),'gate_json_SyntaxError'],
-   [()=>decision(false),'gate_decision_denied'],
+  for(const [respond,reason,status]of [
+   [()=>{throw new TypeError('secret='+key+' IP=203.0.113.7')},'gate_fetch_TypeError',503],
+   [()=>new Response('private backend error',{status:403}),'gate_http_403',403],
+   [()=>new Response('not json'),'gate_content_type',403],
+   [()=>new Response('bad JSON',{headers:{'Content-Type':'application/json'}}),'gate_json_SyntaxError',403],
+   [()=>decision(false),'gate_decision_denied',403],
   ]){
-   const r=await serve(request(),env,respond);assert.equal(r.status,403);assert.equal(await r.text(),'Access denied');assert.equal(logs.at(-1),'dashboard_entry_denied:'+reason);
+   const r=await serve(request(),env,respond);assert.equal(r.status,status);assert.equal(await r.text(),status===503?'Site temporarily unavailable':'Access denied');assert.equal(logs.at(-1),'dashboard_entry_denied:'+reason);
   }
   assert(logs.every(value=>!value.includes(key)&&!value.includes('203.0.113.7')&&!value.includes('https://')&&!value.includes('private')));
  }finally{console.warn=old;}
+});
+
+test('a temporary gate failure retries fresh checks before serving either a script or a stylesheet',async()=>{
+ const {serve}=await worker();
+ for(const [asset,type]of [['_next/static/chunks/56a63c4f-3ae2412623b574a1.js','application/javascript'],['_next/static/css/d74ef5113584ca48.css','text/css']]){
+  const checks=[],assets=[];
+  const r=await serve(request(site+asset,{headers:{Authorization:'Bearer synthetic-private',Cookie:'synthetic-private=1','x-portal-client-ip':'198.51.100.8'}}),env,async(url,init)=>{
+   if(url===gate){checks.push(init);return checks.length===1?new Response('private failure',{status:503}):decision(true)}
+   assets.push([url,init]);assert.equal(checks.length,2);return new Response('synthetic asset',{headers:{'Content-Type':type}});
+  });
+  assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),type);assert.equal(await r.text(),'synthetic asset');
+  assert.equal(r.headers.get('cache-control'),'private, no-store');assert.equal(r.headers.get('x-content-type-options'),'nosniff');
+  assert.equal(checks.length,2);assert.notEqual(checks[0].signal,checks[1].signal);
+  for(const init of checks){assert.deepEqual(init.headers,{'Content-Type':'application/json',apikey:'sb_publishable_0DFLEmUvGBp1GYQ7jNo4IA_O1PeA9zV','x-portal-proxy-key':key,'x-portal-client-ip':'203.0.113.7'});assert.equal(init.redirect,'manual');assert.equal(init.cache,'no-store');assert.equal(init.body,'{}')}
+  assert.equal(assets.length,1);assert.equal(assets[0][0],'https://adrianus898989.github.io/hensem-data-center/'+asset);assert.deepEqual(Object.keys(assets[0][1].headers).sort(),['Accept','Cache-Control']);
+ }
+});
+
+test('known transport failures including a body-read failure can recover only through a fresh positive gate decision',async()=>{
+ const {serve}=await worker();
+ for(const name of ['TypeError','AbortError','TimeoutError','NetworkError','body']){
+  let checks=0,assets=0;
+  const r=await serve(request(),env,async url=>{
+   if(url!==gate){assets++;return new Response('synthetic page')}
+   if(++checks===2)return decision(true);
+   if(name==='body')return new Response(new ReadableStream({start(c){c.error(new TypeError('synthetic interrupted body'))}}),{headers:{'Content-Type':'application/json'}});
+   const error=new Error('synthetic network interruption');error.name=name;throw error;
+  });assert.equal(r.status,200);assert.equal(checks,2);assert.equal(assets,1);
+ }
+});
+
+test('two temporary failures return unavailable without static content, stale allows or dropped security headers',async()=>{
+ const {serve}=await worker();let allowed=true,checks=0,assets=0;
+ const asset=site+'_next/static/css/d74ef5113584ca48.css';
+ const fetcher=async url=>{if(url===gate){checks++;return allowed?decision(true):new Response('private gate detail',{status:525})}assets++;return new Response('synthetic style',{headers:{'Content-Type':'text/css'}})};
+ assert.equal((await serve(request(asset),env,fetcher)).status,200);allowed=false;
+ for(const method of ['GET','HEAD']){
+  const before=checks,r=await serve(request(asset,{method}),env,fetcher);assert.equal(r.status,503);assert.equal(checks-before,2);assert.equal(assets,1);
+  assert.equal(await r.text(),method==='HEAD'?'':'Site temporarily unavailable');assert.equal(r.headers.get('retry-after'),'1');assert.equal(r.headers.get('cache-control'),'no-store');
+  assert.equal(r.headers.get('content-security-policy'),"frame-ancestors 'none'");assert.equal(r.headers.get('x-frame-options'),'DENY');assert.equal(r.headers.get('x-content-type-options'),'nosniff');assert.equal(r.headers.get('strict-transport-security'),'max-age=31536000');
+ }
+});
+
+test('a retry never overrides the fresh denial or malformed decision it receives',async()=>{
+ const {serve}=await worker();
+ for(const terminal of [()=>decision(false),()=>new Response(null,{status:401}),()=>new Response(null,{status:403}),()=>new Response('bad JSON',{headers:{'Content-Type':'application/json'}}),()=>new Response('{"ok":true,"allowed":1}',{headers:{'Content-Type':'application/json'}})]){
+  let checks=0;const r=await serve(request(),env,url=>{assert.equal(url,gate);return ++checks===1?new Response(null,{status:503}):terminal()});
+  assert.equal(r.status,403);assert.equal(await r.text(),'Access denied');assert.equal(checks,2);
+ }
+});
+
+test('known denials stay immediate even when body cancellation never settles',async()=>{
+ const {serve}=await worker();
+ for(const variant of ['403','oversized']){
+  let checks=0,cancels=0;
+  const body=new ReadableStream({start(c){c.enqueue(new TextEncoder().encode(' '.repeat(1025)))},cancel(){cancels++;return new Promise(()=>{})}});
+  const r=await serve(request(),env,url=>{assert.equal(url,gate);checks++;return new Response(body,{status:variant==='403'?403:200,headers:{'Content-Type':'application/json'}})});
+  assert.equal(r.status,403);assert.equal(checks,1);assert.equal(cancels,1);assert.equal(await r.text(),'Access denied');
+ }
+});
+
+test('a stalled gate body is fenced and the subsequent fresh denial remains terminal',async()=>{
+ const {serve}=await worker();let checks=0,cancels=0,firstSignal;
+ const started=Date.now();
+ const r=await serve(request(site+'_next/static/chunks/56a63c4f-3ae2412623b574a1.js'),env,(url,init)=>{
+  assert.equal(url,gate);checks++;
+  if(checks===2)return decision(false);
+  firstSignal=init.signal;
+  return new Response(new ReadableStream({cancel(){cancels++}}),{headers:{'Content-Type':'application/json'}});
+ });
+ assert.equal(r.status,403);assert.equal(await r.text(),'Access denied');assert.equal(checks,2);assert.equal(cancels,1);assert.equal(firstSignal.aborted,true);
+ assert(Date.now()-started<9000,'the stalled first body must end at its five-second deadline');
+});
+
+test('a fetch ignoring cancellation cannot publish a late allow after the fresh check denied access',async()=>{
+ const {serve}=await worker();let checks=0,late,signal,assets=0;
+ const r=await serve(request(),env,(url,init)=>{
+  if(url!==gate){assets++;return new Response('must not be fetched')}
+  checks++;if(checks===2)return decision(false);signal=init.signal;
+  return new Promise(resolve=>{late=resolve});
+ });
+ assert.equal(r.status,403);assert.equal(checks,2);assert.equal(signal.aborted,true);assert.equal(assets,0);
+ late(decision(true));await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(await r.text(),'Access denied');assert.equal(assets,0);assert.equal(checks,2);
 });
 
 const cache=new Map();
