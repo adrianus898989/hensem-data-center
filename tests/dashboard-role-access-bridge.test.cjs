@@ -132,3 +132,8 @@ test('role policy lookup preserves revoked application-session errors instead of
  const retry=roleModule({status:503,value:{code:'service_unavailable',message:'private detail'}});
  const temporary=await retry.api.readDashboardRoleAccess(session).catch(error=>error);assert.equal(authErrors.isDashboardAuthTerminalError(temporary),false);assert.doesNotMatch(temporary.message,/private detail/);
 });
+
+test('pending capture order action requires detail permission inside the iframe before any post',async()=>{
+ const h=frame(assigned(['stuck.view','stuck.query']),'stuck');
+ await assert.rejects(h.c.hensemLiveRequest({action:'pendingOrders'}),/查看明细权限/);assert.equal(h.posts.length,0);
+});
