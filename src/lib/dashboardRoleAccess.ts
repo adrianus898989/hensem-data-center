@@ -1,4 +1,5 @@
 "use client";
+import { ownerPreviewTransportRead } from "./ownerPreviewVerification";
 import { dashboardResponseError, ensureDashboardSession, type DashboardSession } from "./dashboardAuthClient";
 import catalog from "./dashboardRoleCatalog.json";
 
@@ -36,9 +37,9 @@ export async function readDashboardRoleAccess(session: DashboardSession, signal?
   const base = String(process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim().replace(/\/$/, "");
   const url = new URL(base);
   if (url.protocol !== "https:" || url.origin !== base) throw Error("后台地址配置无效");
-  const response = await fetch(base + "/rest/v1/rpc/dashboard_role_access", {method: "POST", body: "{}", signal,
+  const response = await ownerPreviewTransportRead(() => fetch(base + "/rest/v1/rpc/dashboard_role_access", {method: "POST", body: "{}", signal,
     cache: "no-store", redirect: "error", credentials: "omit", headers: {Authorization: `Bearer ${current.access_token}`,
-      apikey: String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""), "Content-Type": "application/json"}});
+      apikey: String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""), "Content-Type": "application/json"}}), signal);
   if (!response.ok) {
     let payload: unknown; try { payload = await response.json(); } catch { payload = null; }
     const data = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
@@ -46,5 +47,5 @@ export async function readDashboardRoleAccess(session: DashboardSession, signal?
     const fallback = [401, 403].includes(response.status) ? "角色权限验证未通过，请重新登录或联系管理员。" : "角色权限暂时无法读取，请重试。";
     throw dashboardResponseError(response.status, {code, message: fallback}, fallback);
   }
-  return validateDashboardRoleAccess(await response.json());
+  return validateDashboardRoleAccess(await ownerPreviewTransportRead(() => response.json(), signal));
 }

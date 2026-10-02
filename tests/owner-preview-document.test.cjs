@@ -143,6 +143,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
       if (!presenceClient) { const helper={exports:{}};const filename=path.join(repo,'src/lib/dashboardPresenceBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module:helper,exports:helper.exports,require:()=>({}),URL},{filename});presenceClient={...helper.exports,installDashboardPresenceBridge:()=>()=>{},makeDashboardPresenceDocument(...args){phases.push('presence-document');return helper.exports.makeDashboardPresenceDocument(...args)}}; }
       return presenceClient;
     }
+    if (name.endsWith('/ownerPreviewVerification')||name==='./ownerPreviewVerification') {const helper={exports:{}};const filename=path.join(repo,'src/lib/ownerPreviewVerification.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module:helper,exports:helper.exports},{filename});return helper.exports;}
     if (name.endsWith('/adminPreviewClient')) {
       if (!client) {
         const box = { exports: {} }, filename = path.join(repo, 'src/lib/adminPreviewClient.ts');
@@ -170,11 +171,11 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     throw Error('Unexpected component test import: ' + name);
   };
   environment = {
-    module: box, exports: box.exports, require: requireStub, window, localStorage, URL, AbortController, Error,
+    module: box, exports: box.exports, require: requireStub, window, localStorage, URL, AbortController, Error, setTimeout:options.setTimeout||setTimeout,clearTimeout:options.clearTimeout||clearTimeout,
     crypto: { randomUUID: () => 'offline-frame-channel' },
     document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
-    fetch: async (url, init) => { if(url.endsWith('/rest/v1/rpc/dashboard_role_access')){roleCalls.push({url,init});return {ok:true,status:200,json:async()=>({mode:(options.role||'owner')==='owner'?'owner':'legacy',roleId:null,roleName:null,version:0,permissions:[],canView:true})};} phases.push('fetch'); calls.push({ url, init }); const response=options.fetch ? await options.fetch(url, init) : { ok: true, status: 200, text: async () => HTML }; return typeof response.text==='function'?{...response,text:async()=>{phases.push('response:text');return response.text()}}:response; },
+    fetch: async (url, init) => { if(url.endsWith('/rest/v1/rpc/dashboard_role_access')){roleCalls.push({url,init});if(options.roleFetch)return options.roleFetch(url,init);return {ok:true,status:200,json:async()=>({mode:(options.role||'owner')==='owner'?'owner':'legacy',roleId:null,roleName:null,version:0,permissions:[],canView:true})};} phases.push('fetch'); calls.push({ url, init }); const response=options.fetch ? await options.fetch(url, init) : url.endsWith('?check=1')?{ok:true,status:200,json:async()=>({ok:true,canView:true,canManage:(options.role||'owner')==='owner'})}:{ ok: true, status: 200, text: async () => HTML }; return typeof response.text==='function'?{...response,text:async()=>{phases.push('response:text');return response.text()}}:response; },
   };
   vm.runInNewContext(transpile(fs.readFileSync(componentPath, 'utf8')), environment, { filename: componentPath });
   const props = { canView: options.canView ?? true, session: currentSession,
@@ -214,7 +215,7 @@ test('host sends session only to its protected fetch; iframe has no same-origin 
 
 test('authorized HTML is restored before live, presence, shell and draft bootstraps; permission checks do not transform bodies', async () => {
   let resolveHTML;const pending=new Promise(resolve=>{resolveHTML=resolve});
-  const h=componentHarness('offline-restoration-order',{fetch:async url=>url.endsWith('?check=1')?{ok:true,status:200,text:async()=>{throw Error('check body must not be read')}}:{ok:true,status:200,text:()=>pending}});
+  const h=componentHarness('offline-restoration-order',{fetch:async url=>url.endsWith('?check=1')?{ok:true,status:200,json:async()=>({ok:true,canView:true,canManage:true}),text:async()=>{throw Error('check HTML body must not be read')}}:{ok:true,status:200,text:()=>pending}});
   try {
     await flush();assert.deepEqual(h.phases,['fetch','response:text']);assert.equal(h.restoreCalls.length,0);assert.equal(findElement(h.draw(),'iframe'),undefined);
     resolveHTML(HTML);await flush();assert.deepEqual(h.phases,['fetch','response:text','restore','live-document','presence-document','shell-document','draft-document']);assert.deepEqual(h.restoreCalls,[HTML]);const before=findElement(h.draw(),'iframe').props.srcDoc;assert(before.includes('synthetic approved restoration'));
@@ -317,7 +318,7 @@ function requestHarness(options = {}) {
   const fresh = { ...session, user: { id: options.freshUser || session.user.id }, access_token: 'offline-fresh-token' };
   vm.runInNewContext(transpile(fs.readFileSync(filename, 'utf8')), {
     module: box, exports: box.exports, URL,
-    require: name => { assert.equal(name, './dashboardAuthClient'); return { dashboardResponseError: authErrors.dashboardResponseError, ensureDashboardSession: async () => fresh }; },
+    require: name => { if(name==='./ownerPreviewVerification')return require('./load-typescript.cjs').loadTs(path.join(repo,'src/lib/ownerPreviewVerification.ts'));assert.equal(name, './dashboardAuthClient'); return { dashboardResponseError: authErrors.dashboardResponseError, ensureDashboardSession: async () => fresh }; },
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: options.base || 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
     fetch: async (url, init) => { calls.push({ url, init }); return { ok: !(options.status >= 400), status: options.status || 200, json: async () => (options.body || { canView: true, canManage: false }) }; },
   }, { filename });
@@ -441,4 +442,62 @@ test('preview request retains the structured session denial and distinguishes mi
   assert.equal(error.code,code);assert.equal(error.status,403);assert.equal(authErrors.isDashboardAuthTerminalError(error),true);
   assert.doesNotMatch(error.message,/private server detail|停用/);assert.match(error.message,code==='application_session_denied'?/会话已失效/:/后台权限/);assert.equal(h.calls.length,1);
  }
+});
+
+function retryClock(){let id=0;const timers=new Map(),delays=[];return{setTimeout(fn,ms){delays.push(ms);timers.set(++id,fn);return id},clearTimeout(id){timers.delete(id)},delays,timers,next(){const item=timers.entries().next().value;assert(item,'a short retry is scheduled');timers.delete(item[0]);item[1]();}}}
+test('temporary entry 503 automatically rereads role and fresh HTML after short backoff, without publishing stale permissions',async()=>{
+ const clock=retryClock();let n=0;const h=componentHarness('offline-recovery',{...clock,fetch:async()=>++n===1?{ok:false,status:503,json:async()=>({code:'profile_unavailable'})}:{ok:true,status:200,text:async()=>HTML}});
+ try{await flush();assert.equal(h.calls.length,1);assert.equal(h.states[0],null);assert(!findElement(h.draw(),'iframe'));assert.match(JSON.stringify(h.draw()),/重新验证查看权限.*2\/3/);assert.deepEqual(clock.delays,[500]);h.checkPermission();await flush();assert.equal(h.calls.length,1,'focus/timer verification cannot restart the backoff budget');clock.next();await flush();assert.equal(h.calls.length,2);assert.equal(h.roleCalls.length,2);assert(findElement(h.draw(),'iframe'));assert.equal(h.states[2],'');assert.equal(clock.timers.size,0);assert(!findElement(h.draw(),'iframe').props.srcDoc.includes('offline-host-access'));}
+ finally{h.dispose()}
+});
+test('three transient failures stop automatic attempts and expose reload and logout controls',async()=>{
+ const clock=retryClock(),h=componentHarness('offline-permanent-outage',{...clock,fetch:async()=>({ok:false,status:503,json:async()=>({code:'role_access_unavailable'})})});
+ try{await flush();clock.next();await flush();clock.next();await flush();assert.equal(h.calls.length,3);assert.equal(h.roleCalls.length,3);assert.deepEqual(clock.delays,[500,1500]);assert.equal(clock.timers.size,0);assert(!findElement(h.draw(),'iframe'));assert(h.states[2]);const buttons=elements(h.draw()).filter(n=>n.type==='button');assert(buttons.some(n=>n.props.children==='重新加载'));assert(buttons.some(n=>n.props.children==='退出登录'));h.checkPermission();await flush();assert.equal(h.calls.length,3);}
+ finally{h.dispose()}
+});
+test('periodic temporary failure clears old authorization and rebuilds the frame only with a fresh narrower role',async()=>{
+ const clock=retryClock();let roleReads=0,reads=0;const narrow={mode:'assigned',roleId:'33333333-3333-4333-8333-333333333333',roleName:'Synthetic narrowed',version:2,permissions:['providers.view'],canView:true};
+ const h=componentHarness('offline-recheck',{...clock,role:'viewer',roleFetch:async()=>({ok:true,status:200,json:async()=>++roleReads===1?{mode:'legacy',roleId:null,roleName:null,version:0,permissions:[],canView:true}:narrow}),fetch:async url=>++reads===2?{ok:false,status:503,json:async()=>({code:'profile_unavailable'})}:{ok:true,status:200,text:async()=>HTML,json:async()=>({ok:true,canView:true,canManage:false})}});
+ try{await flush();const before=findElement(h.draw(),'iframe').props.srcDoc;assert(before.includes('"mode":"legacy"'));h.checkPermission();await flush();assert.equal(h.states[0],null);assert.equal(h.states[1],'');assert(!findElement(h.draw(),'iframe'));clock.next();await flush();assert.equal(h.calls.length,3);assert.equal(h.roleCalls.length,3);assert(!h.calls[2].url.endsWith('?check=1'),'recovery fetches protected HTML, not a check-only body');const after=findElement(h.draw(),'iframe').props.srcDoc;assert(after.includes('Synthetic narrowed'));assert(after.includes('"permissions":["providers.view"]'));assert(!after.includes('"mode":"legacy"'));}
+ finally{h.dispose()}
+});
+test('network read errors retry, while malformed role/check responses and denial never do',async()=>{
+ for(const status of [401,403]){const clock=retryClock(),h=componentHarness('offline-terminal-'+status,{...clock,fetch:async()=>({ok:false,status,json:async()=>({code:'account_disabled'})})});try{await flush();assert.equal(h.calls.length,1);assert.equal(clock.timers.size,0);assert(!findElement(h.draw(),'iframe'));assert(h.states[2]);}finally{h.dispose()}}
+ const malformed=componentHarness('offline-malformed-role',{roleFetch:async()=>({ok:true,status:200,json:async()=>({canView:true})})});try{await flush();assert.equal(malformed.roleCalls.length,1);assert.equal(malformed.calls.length,0);assert.match(malformed.states[2],/不完整/);}finally{malformed.dispose()}
+ const badCheck=componentHarness('offline-malformed-check',{fetch:async url=>url.endsWith('?check=1')?{ok:true,status:200,json:async()=>({ok:true})}:{ok:true,status:200,text:async()=>HTML}});try{await flush();badCheck.checkPermission();await flush();assert.equal(badCheck.calls.length,2);assert.equal(badCheck.states[0],null);assert.equal(badCheck.states[1],'');assert.match(badCheck.states[2],/不完整/);}finally{badCheck.dispose()}
+ const clock=retryClock();let first=true;const network=componentHarness('offline-network-read',{...clock,fetch:async()=>{if(first){first=false;throw new TypeError('synthetic failed fetch')}return{ok:true,status:200,text:async()=>HTML}}});try{await flush();assert.equal(network.calls.length,1);clock.next();await flush();assert.equal(network.calls.length,2);assert(findElement(network.draw(),'iframe'));}finally{network.dispose()}
+});
+test('unmount cancels backoff and a late retry response cannot publish into the next account lifecycle',async()=>{
+ const waiting=retryClock(),a=componentHarness('offline-cancel-wait',{...waiting,fetch:async()=>({ok:false,status:503,json:async()=>({code:'profile_unavailable'})})});await flush();assert.equal(waiting.timers.size,1);a.dispose();await flush();assert.equal(waiting.timers.size,0);assert.equal(a.calls.length,1);
+ let resolve;const pending=new Promise(r=>{resolve=r}),clock=retryClock();let n=0;const old=componentHarness('offline-account-old',{...clock,fetch:async()=>++n===1?{ok:false,status:503,json:async()=>({code:'profile_unavailable'})}:{ok:true,status:200,text:()=>pending}});
+ try{await flush();clock.next();await flush();old.dispose();const next=componentHarness('offline-account-new');try{await flush();assert(findElement(next.draw(),'iframe'));resolve(HTML+'<!-- late old account -->');await flush();assert.equal(old.states[1],'');assert.equal(old.states[0],null);assert.equal(old.restoreCalls.length,0);assert(!findElement(next.draw(),'iframe').props.srcDoc.includes('late old account'));}finally{next.dispose()}}finally{resolve(HTML);old.dispose()}
+});
+
+test('changed role is closed before fresh HTML arrives and a malformed HTML document is never automatically replayed',async()=>{
+ let read=0,resolve;const pending=new Promise(r=>{resolve=r}),narrow={mode:'assigned',roleId:'33333333-3333-4333-8333-333333333333',roleName:'Synthetic changed',version:2,permissions:['providers.view'],canView:true};
+ const h=componentHarness('offline-role-changed',{role:'viewer',roleFetch:async()=>({ok:true,status:200,json:async()=>++read===1?{mode:'legacy',roleId:null,roleName:null,version:0,permissions:[],canView:true}:narrow}),fetch:async url=>url.endsWith('?check=1')?{ok:true,status:200,json:async()=>({ok:true,canView:true,canManage:false})}:{ok:true,status:200,text:()=>read>1?pending:HTML}});
+ try{await flush();assert(findElement(h.draw(),'iframe'));h.checkPermission();await flush();assert.equal(h.states[0],null);assert.equal(h.states[1],'');assert(!findElement(h.draw(),'iframe'));resolve(HTML);await flush();assert(findElement(h.draw(),'iframe').props.srcDoc.includes('Synthetic changed'));}finally{resolve(HTML);h.dispose()}
+ const clock=retryClock(),bad=componentHarness('offline-invalid-html',{...clock,restore:()=>{throw new TypeError('Synthetic invalid protected HTML')},fetch:async()=>({ok:true,status:200,text:async()=>HTML})});try{await flush();assert.equal(bad.calls.length,1);assert.equal(clock.timers.size,0);assert.match(bad.states[2],/invalid protected HTML/);assert(!findElement(bad.draw(),'iframe'));}finally{bad.dispose()}
+});
+test('retry classification rejects policy, permission and ordinary validation errors even with misleading status or names',async()=>{
+ const helper=require('./load-typescript.cjs').loadTs(path.join(repo,'src/lib/ownerPreviewVerification.ts'));
+ for(const code of ['account_disabled','application_session_denied','preview_denied','invalid_role_response','session_changed','42501'])assert.equal(helper.ownerPreviewRetryable({status:503,code}),false);
+ for(const cause of [new TypeError('not an endpoint transport error'),new SyntaxError('malformed JSON'),new Error('incomplete permissions'),{status:429},{status:400},{status:0,code:'http_error'},{name:'AbortError',status:503}])assert.equal(helper.ownerPreviewRetryable(cause),false);
+ for(const status of [500,503,520,525])assert.equal(helper.ownerPreviewRetryable({status,code:'upstream_unavailable'}),true);
+ const controller=new AbortController();controller.abort();await assert.rejects(helper.retryOwnerPreviewVerification(async()=>true,controller.signal,()=>assert.fail('cancelled operation must not retry')),{name:'AbortError'});
+});
+
+test('temporary role transport failures recover before any protected document request; malformed role JSON remains terminal',async()=>{
+ for(const mode of ['network','upstream']){const clock=retryClock();let read=0;const h=componentHarness('offline-role-'+mode,{...clock,roleFetch:async()=>{if(++read===1){if(mode==='network')throw new TypeError('synthetic role network failure');return{ok:false,status:525,json:async()=>({code:'upstream_unavailable'})}}return{ok:true,status:200,json:async()=>({mode:'owner',roleId:null,roleName:null,version:0,permissions:[],canView:true})}}});
+ try{await flush();assert.equal(h.roleCalls.length,1);assert.equal(h.calls.length,0);assert.equal(h.states[0],null);clock.next();await flush();assert.equal(h.roleCalls.length,2);assert.equal(h.calls.length,1);assert(findElement(h.draw(),'iframe'));}finally{h.dispose()}}
+ const clock=retryClock(),invalid=componentHarness('offline-invalid-role-json',{...clock,roleFetch:async()=>({ok:true,status:200,json:async()=>{throw new SyntaxError('malformed role JSON')}})});try{await flush();assert.equal(invalid.roleCalls.length,1);assert.equal(invalid.calls.length,0);assert.equal(clock.timers.size,0);assert(!findElement(invalid.draw(),'iframe'));}finally{invalid.dispose()}
+});
+test('a session/profile account mismatch immediately hides the frame and ignores the older buffered document',async()=>{
+ let resolve;const pending=new Promise(r=>{resolve=r}),h=componentHarness('offline-account-a',{fetch:async()=>({ok:true,status:200,text:()=>pending})});
+ try{await flush();h.rerenderSession({...h.session,user:{id:'offline-account-b'}});resolve(HTML);await flush();assert(!findElement(h.draw(),'iframe'));assert.equal(h.restoreCalls.length,0);assert.equal(h.states[1],'');}
+ finally{resolve(HTML);h.dispose()}
+});
+
+test('a mismatched account cannot use grant controls from an already loaded owner frame',async()=>{
+ const h=componentHarness('offline-loaded-owner');try{await flush();assert(findElement(h.draw(),'iframe'));h.states[4]=true;h.rerenderSession({...h.session,user:{id:'offline-another-account'}});const all=elements(h.draw());assert(!all.some(n=>n.type==='iframe'));assert(all.find(n=>n.props?.['aria-label']==='管理后台查看授权').props.disabled);assert(!all.some(n=>n.type?.name==='AdminPreviewGrants'));}finally{h.dispose()}
 });

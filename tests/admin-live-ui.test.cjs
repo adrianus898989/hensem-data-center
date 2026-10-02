@@ -1363,7 +1363,31 @@ test('leaving or editing a pending snapshot query cancels its action and ignores
 test('a report-only withdrawal snapshot platform still renders without native order aggregates',async()=>{
  const seed={...P,name:'Synthetic report-only snapshot platform',team:'M8',source:'withdraw',directions:['withdraw']};
  const h=harness({page:'stuck',reports:true,handler:q=>q.action==='catalog'?{platforms:[],withdrawPlatforms:[seed]}:q.action==='collectedData'?{rows:[]}:q.action==='rates'?{rows:[],total:0}:{rows:[]}});await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);await h.c.liveQuery();await settle();
- assert.equal(h.calls.filter(q=>q.action==='pendingAnalysis').length,1);assert.deepEqual(h.calls.find(q=>q.action==='pendingAnalysis').platformIds,[P.id]);assert.match(h.html(),/data-pending-analysis="ready"/);assert(!h.calls.some(q=>['aggregate','reportSummary','details'].includes(q.action)));
+ assert.equal(h.calls.filter(q=>q.action==='pendingAnalysis').length,1);assert.deepEqual(h.calls.find(q=>q.action==='pendingAnalysis').platformIds,[P.id]);assert.match(h.html(),/data-pending-analysis="ready"/);assert(!h.calls.some(q=>['aggregate','reportSummary','details','collectedData'].includes(q.action)));
+});
+
+test('pending analysis queries sixteen authorized scoped identities without the failing historical report inventory',async()=>{
+ const selected=Array.from({length:16},(_,i)=>({...P,id:'00000000-0000-4000-8000-'+String(i+1).padStart(12,'0'),name:'Synthetic pending '+i,team:'M8'}));
+ const excluded=[{...P,id:'00000000-0000-4000-8000-000000000099',team:'Other team'},{...P,id:'00000000-0000-4000-8000-000000000098',team:'M8',country:'越南',currency:'VND'}];
+ for(const message of ['读取超时，不代表没有数据；请重试','日报目录暂不可用']){
+  const h=harness({page:'stuck',reports:true,handler:q=>{if(q.action==='catalog')return {platforms:[...selected,...excluded],withdrawPlatforms:[]};if(q.action==='collectedData')throw Error(message);throw Error('Unexpected ancillary request: '+q.action);}});
+  await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog'],'initial entry still does not query snapshots');
+  setScope(h,{country:'印度',team:'M8',from:'2026-10-01T00:00:00',to:'2026-10-01T23:59:59'});h.L.multi.team=['M8'];
+  await h.c.liveQuery();await settle();
+  const requests=h.calls.filter(q=>q.action==='pendingAnalysis');assert.equal(requests.length,1);assert.deepEqual(requests[0].platformIds,selected.map(p=>p.id).sort());assert.equal(requests[0].startDate,'2026-10-01');assert.equal(requests[0].endDate,'2026-10-01');
+  assert.equal(h.calls.filter(q=>q.action==='collectedData').length,0);assert.match(h.html(),/data-pending-analysis="ready"/);assert.doesNotMatch(h.html(),/快照平台目录读取失败/);
+ }
+});
+
+test('pending analysis never falls back to reports or an unscoped query when its core directory is unavailable or empty',async()=>{
+ for(const kind of ['failed','empty']){
+  const h=harness({page:'stuck',reports:true,handler:q=>{if(q.action==='catalog'){if(kind==='failed')throw Error('Synthetic core directory unavailable');return {platforms:[],withdrawPlatforms:[]};}if(q.action==='collectedData')throw Error('Must not read report inventory');throw Error('Unexpected request: '+q.action);}});
+  await settle();setScope(h);await h.c.liveQuery();await settle();
+  assert.equal(h.calls.filter(q=>q.action==='pendingAnalysis').length,0);assert.equal(h.calls.filter(q=>q.action==='collectedData').length,0);
+  assert.match(h.html(),kind==='failed'?/Synthetic core directory unavailable/:/当前范围没有可查询的代付中快照平台/);
+ }
+ const h=harness({page:'stuck',reports:true});await settle();h.L.withdrawCatalog=null;setScope(h);await h.c.liveQuery();await settle();
+ assert.equal(h.calls.filter(q=>q.action==='pendingAnalysis').length,0);assert.match(h.html(),/快照平台目录尚未就绪/);
 });
 
 
