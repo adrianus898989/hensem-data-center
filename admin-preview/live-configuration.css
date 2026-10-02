@@ -65,10 +65,16 @@ body.live-admin .withdraw-stat-table table{width:100%;min-width:100%;max-width:n
 body.live-admin .withdraw-stat-table th{position:sticky;top:0;background:#f4f7ff;z-index:2}
 body.live-admin .withdraw-stat-table th .link{display:inline-flex;align-items:center;white-space:nowrap;font:inherit;font-weight:600;color:#6880a5}
 body.live-admin .withdraw-stat-table tfoot td{background:#eef3ff;font-weight:600}
-body.live-admin .withdraw-stat-table td:first-child{background:#fff}
 body.live-admin .withdraw-stat-table td,body.live-admin .withdraw-stat-table th{white-space:nowrap}
-body.live-admin .withdraw-stat-table th:first-child,body.live-admin .withdraw-stat-table td:first-child{position:sticky;left:0;width:72px;min-width:72px;background:inherit;z-index:1}
-body.live-admin .withdraw-stat-table th:nth-child(2),body.live-admin .withdraw-stat-table td:nth-child(2){min-width:104px}
+body.live-admin .withdraw-stat-table:not(.withdraw-daily-table) th:first-child,body.live-admin .withdraw-stat-table:not(.withdraw-daily-table) td:first-child,body.live-admin .withdraw-stat-table.withdraw-daily-table th:nth-child(2),body.live-admin .withdraw-stat-table.withdraw-daily-table td:nth-child(2){position:sticky;left:0;box-sizing:border-box;width:132px;min-width:132px;max-width:132px;background:#fff;z-index:3;box-shadow:2px 0 0 #e3eaf7}
+body.live-admin .withdraw-stat-table:not(.withdraw-daily-table) th:first-child,body.live-admin .withdraw-stat-table.withdraw-daily-table th:nth-child(2){background:#f4f7ff;z-index:4}
+body.live-admin .withdraw-stat-table:not(.withdraw-daily-table) tfoot td:first-child,body.live-admin .withdraw-stat-table.withdraw-daily-table tfoot td:nth-child(2){background:#eef3ff}
+body.live-admin .withdraw-platform-identity,body.live-admin .withdraw-platform-heading{display:flex;flex-direction:column;gap:3px;width:108px;max-width:108px;white-space:normal;overflow-wrap:anywhere;text-align:left}
+body.live-admin .withdraw-platform-identity strong{font-size:11px;color:#304e7d}
+body.live-admin .withdraw-platform-identity>span,body.live-admin .withdraw-platform-heading>.link:last-child{font-size:10px;font-weight:400;color:#7185a4}
+body.live-admin .withdraw-stat-table.withdraw-daily-table td:first-child,body.live-admin .withdraw-stat-table.withdraw-daily-table th:first-child{min-width:92px}
+body.live-admin .withdraw-coverage-table td{white-space:normal}
+body.live-admin .withdraw-coverage-table th:first-child,body.live-admin .withdraw-coverage-table td:first-child{width:132px;min-width:132px}
 body.live-admin .withdraw-stat-table th:last-child,body.live-admin .withdraw-stat-table td:last-child{width:230px;min-width:230px}
 body.live-admin .withdraw-reason-table{min-width:0;overflow:auto}
 body.live-admin .withdraw-reason-table table{min-width:700px}

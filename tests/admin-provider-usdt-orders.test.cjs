@@ -59,3 +59,17 @@ test('sheet-only workorder USDT summaries do not expose fabricated transaction o
 });
 
 test('a platform with only created orders opens its populated time basis rather than another platform success basis',async()=>{const h=fixture();h.L.results[1].groups.provider[0].success_count=0;await h.api.open('USDT','','charge','b');assert.equal(h.requests[0].status,'all');assert.match(h.html(),/创建时间读取/);assert.equal(h.requests[0].platformId,'b')});
+
+test('first asynchronous detail paint shows loading, never an empty-record caption, before the real rows arrive',async()=>{
+ const h=fixture();let resolve;h.setHandler(()=>new Promise(r=>{resolve=r}));const pending=h.api.open('USDT','','charge','b');
+ assert.match(h.html(),/正在读取订单明细/);assert.doesNotMatch(h.html(),/<table>|当前筛选范围没有已入库记录/);
+ resolve({total:3,rows:h.records.b});await pending;assert.match(h.html(),/SYNTHETIC-b-0/);assert.doesNotMatch(h.html(),/正在读取订单明细|当前筛选范围没有已入库记录/);
+});
+
+test('WG original transfer type remains readable with raw NULL and explicit zero fee; other sources are not exempted by name',async()=>{
+ const h=fixture();h.platforms[1].source='wg';h.L.results[1].groups.provider[0].provider='提现转充值';
+ h.records.b=h.records.b.map(r=>({...r,provider:'提现转充值',direction:'charge',channel_type:'提现转充值',raw_provider:null,currency:'VND',fee_exempt:true,fee_version_estimated_amount:'0'}));
+ await h.api.open('提现转充值','wg','charge','b');assert.match(h.html(),/WG 原始类型为提现转充值/);assert.match(h.html(),/手续费 0/);assert.match(h.html(),/（空）/);
+ h.root.liveProviderOrder(0);assert.match(h.html(),/0（提现转充值）/);assert.match(h.html(),/原始类型/);assert.match(h.html(),/（空）/);
+ assert.doesNotMatch(h.api.reason({platform:{source:'ar'},provider:'提现转充值',direction:'charge',channel_type:'提现转充值',raw_provider:null,fee_exempt:true}),/手续费 0|内部转账/);
+});

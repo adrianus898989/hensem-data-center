@@ -1345,8 +1345,8 @@ test('stuck initializes and resets to seven completed local days without startin
 
 test('opening a fresh stuck tab defaults independently while revisits restore snapshot data and local controls',async()=>{
  const h=await ready();h.L.from='2026-09-01T04:00:00';h.L.to='2026-09-01T05:00:00';const n=h.calls.length;h.c.setPage('stuck');await settle();assert.equal(h.calls.length,n);assert.equal(h.L.from,'2026-09-16T00:00:00');assert.equal(h.L.to,'2026-09-22T23:59:59');
- await h.c.liveQuery();h.c.livePendingAnalysisMetric('count');h.c.livePendingAnalysisExpand(P.id);assert.match(h.html(),/aria-pressed="true"[^>]*>按笔数/);assert.match(h.html(),/class="pa-provider"/);const calls=h.calls.length;
- h.c.setPage('amount');h.c.setPage('stuck');await settle();assert.equal(h.calls.length,calls);assert.match(h.html(),/aria-pressed="true"[^>]*>按笔数/);assert.match(h.html(),/class="pa-provider"/);assert.match(h.html(),/875.50/);
+ await h.c.liveQuery();assert.match(h.html(),/aria-pressed="true"[^>]*>三方展开/);assert.doesNotMatch(h.html(),/class="pa-provider"/);h.c.livePendingAnalysisMetric('count');h.c.livePendingAnalysisExpandProvider('Synthetic snapshot provider');assert.match(h.html(),/aria-pressed="true"[^>]*>按笔数/);assert.match(h.html(),/class="pa-provider"/);assert.match(h.html(),/Synthetic snapshot platform/);const calls=h.calls.length;
+ h.c.setPage('amount');h.c.setPage('stuck');await settle();assert.equal(h.calls.length,calls);assert.match(h.html(),/aria-pressed="true"[^>]*>三方展开/);assert.match(h.html(),/aria-pressed="true"[^>]*>按笔数/);assert.match(h.html(),/class="pa-provider"/);assert.match(h.html(),/Synthetic snapshot platform/);assert.match(h.html(),/875.50/);
 });
 
 test('leaving or editing a pending snapshot query cancels its action and ignores late results until a new manual query',async()=>{
@@ -1356,7 +1356,7 @@ test('leaving or editing a pending snapshot query cancels its action and ignores
   if(edit)h.c.liveSet('from','2026-09-18T00:00:00');else h.c.setPage('amount');const before=h.calls.length;
   pending.resolve(pendingAnalysisResult(first,'Stale snapshot platform'));await task;await settle();assert.equal(h.calls.length,before);assert(cancelled.includes('pendingAnalysis'));assert.doesNotMatch(h.html(),/Stale snapshot platform/);
   if(!edit){h.c.setPage('stuck');await settle();assert.equal(h.calls.length,before);assert.match(h.html(),/暂停|点击查询/);}
-  await h.c.liveQuery();assert.equal(requests,2);assert.match(h.html(),/Fresh snapshot platform/);assert.doesNotMatch(h.html(),/Stale snapshot platform/);
+  await h.c.liveQuery();assert.equal(requests,2);assert.match(h.html(),/aria-pressed="true"[^>]*>三方展开/);assert.doesNotMatch(h.html(),/class="pa-provider"/);h.c.livePendingAnalysisExpandProvider('Synthetic snapshot provider');assert.match(h.html(),/class="pa-provider"/);assert.match(h.html(),/Fresh snapshot platform/);assert.doesNotMatch(h.html(),/Stale snapshot platform/);
  }
 });
 

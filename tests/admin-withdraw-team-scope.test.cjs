@@ -33,7 +33,7 @@ test('WG display aliases use raw site keys for auto, operators, reasons and dail
   const other={id:'ar-vn',name:'OTHER-DISPLAY',sourceName:'OTHER-RAW',source:'ar',country:'越南',team:'M8'};
   const f=fixture({country:'越南',team:'M8',view,catalog:[native,other],withdrawCatalog:[{name:'98VV',source:'wg',country:'VN',team:'M8'}],respond:q=>q.action==='autoWithdraw'?{rows:[{country:'VN',platform:'98VV',total:2,processed:2,success:1,rejected:1}],totals:{total:2,processed:2},platforms:['98VV'],notes:[]}:q.action==='withdrawReasons'?{available:false}:{...q,version:'saved'}});
   await f.page.load();assert.deepEqual(f.calls[0].platforms,['98VV','OTHER-DISPLAY']);assert.equal(f.calls[0].view,view==='withdraw_operators'?'operators':'auto');
-  assert.match(f.page.render(),/<td>98VV\.COM<\/td>/);assert.doesNotMatch(f.page.render(),/test-platforms">[^<]*(?:^|\|)98VV(?:\||<)/);
+  assert.match(f.page.render(),/<strong title="98VV\.COM">98VV\.COM<\/strong>/);assert.doesNotMatch(f.page.render(),/test-platforms">[^<]*(?:^|\|)98VV(?:\||<)/);
   f.page.state.platforms=['98VV.COM'];await f.page.load();assert.deepEqual(f.calls.at(-1).platforms,['98VV']);
   f.context.withdrawReasons(0,'blocking');await new Promise(setImmediate);assert.equal(f.calls.at(-1).platform,'98VV');assert.match(f.page.render(),/越南 · 98VV\.COM/);
   f.context.withdrawReasonKind('operators');await new Promise(setImmediate);assert.equal(f.calls.at(-1).platform,'98VV');assert.equal(f.calls.at(-1).kind,'operators');
@@ -114,7 +114,7 @@ test('historical source switch requires the exact authorized identity, has a fix
 
 test('historical table, reason and note displays use Philippines while every detail request preserves LG',async()=>{
  const f=fixture({catalog:[],withdrawCatalog:[{name:'SUPERLG',country:'LG',team:'M8'}],country:'菲律宾',team:'M8',respond:q=>q.action==='autoWithdraw'?{rows:[{country:'LG',platform:'SUPERLG',total:1,success:1,rejected:0}],totals:{total:1},notes:[],canWriteNotes:true}:q.action==='withdrawReasons'?{available:false}:{...q,version:'saved'}});
- f.L.from='2026-07-30T00:00:00';f.L.to='2026-07-30T23:59:59';f.context.withdrawHistorical('historical');await f.page.load();assert.match(f.page.render(),/<td>菲律宾<\/td><td>SUPERLG<\/td>/);assert.doesNotMatch(f.page.render(),/<td>LG<\/td>/);
+ f.L.from='2026-07-30T00:00:00';f.L.to='2026-07-30T23:59:59';f.context.withdrawHistorical('historical');await f.page.load();assert.match(f.page.render(),/<strong title="SUPERLG">SUPERLG<\/strong><span>菲律宾<\/span>/);assert.doesNotMatch(f.page.render(),/<span>LG<\/span>/);
  f.context.withdrawReasons(0,'blocking');await new Promise(setImmediate);assert.equal(f.calls.at(-1).country,'LG');assert.equal(f.calls.at(-1).platform,'SUPERLG');assert.match(f.page.render(),/<span>菲律宾 · SUPERLG<\/span>/);assert.equal(f.page.state.reason.country,'LG');
  f.context.withdrawNoteOpen(0);assert.match(f.page.render(),/class="config-context">菲律宾 · SUPERLG<\/div>/);assert.equal(f.page.state.note.country,'LG');f.context.withdrawNoteInput('Synthetic historical note');await f.context.withdrawNoteSave();assert.equal(f.calls.at(-1).country,'LG');assert.equal(f.calls.at(-1).platform,'SUPERLG');
 });

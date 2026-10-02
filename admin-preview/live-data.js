@@ -28,6 +28,9 @@
  if(window.HensemLivePayoutConfig)HensemLivePayoutConfig.configure({request:r=>window.hensemLiveRequest(r),onChange:()=>{if(state.page==='payout_config')render()}});
  const submissionPage=pages.find(p=>p[0]==='events');if(submissionPage){submissionPage[2]='刷单风控';submissionPage[4]='刷单风控'}
  const pendingPage=pages.find(p=>p[0]==='stuck');if(pendingPage){pendingPage[2]='代付中分析';pendingPage[4]='代付中分析'}
+ // Keep the existing page/permission key while moving its visible navigation group.
+ const pendingAnalysisGroup=navGroupsV3.find(g=>g[0]==='analysis');
+ if(pendingAnalysisGroup){for(const group of navGroupsV3)group[3]=group[3].filter(id=>id!=='stuck');pendingAnalysisGroup[3].push('stuck');if(state.page==='stuck')state.navGroup='analysis';}
  const removedRiskPages=new Set(['dropped','anomaly']);
  const retiredPages=new Set([...removedRiskPages,'channelquality']);
  const currentPage=key=>key==='channelquality'?'providers':removedRiskPages.has(key)?'events':key;

@@ -151,6 +151,8 @@
   if(!isProviderBusiness(row?.provider))return {amount:null,matched:0,reason:feeExempt(row?.provider)?null:'missing_provider'};
   const facts=versionFeeFacts(row);
   if(!facts)return {amount:null,matched:0,label:'历史费率待接入',reason:'missing_fee_history'};
+  const exemptOnly=row.source==='wg'&&row.direction==='charge'&&Number(row.success_count)>0&&knownNumber(row.fee_exempt_count)===Number(row.success_count)&&facts.unmatched===0&&facts.amount===0;
+  if(exemptOnly)return {amount:0,matched:facts.matched,label:'免手续费',exemptOnly:true,issues:[]};
   return {amount:facts.amount,matched:facts.matched,label:'按订单创建时间匹配费率'+(facts.unmatched?'（部分未匹配）':''),issues:facts.unmatched?[{reason:'missing_fee_history',count:facts.unmatched}]:[]};
  }
 
@@ -219,11 +221,12 @@
    const localCountry=item.country||country,payout=item.direction==='withdraw';
    const fact=estimateFacts(item,rates,localCountry),unmatched=Math.max(0,Number(item.success_count||0)-fact.matched);
    if(unmatched)for(const gap of fact.issues||[{reason:fact.reason||'missing_rate',count:unmatched}])issues.push({provider:item.provider,platform:item.platform||'未提供平台',reason:gap.reason,count:gap.count});
-   const candidates=feeCandidates(item,rates,localCountry),values=new Map();
+   const candidates=fact.exemptOnly?[]:feeCandidates(item,rates,localCountry),values=new Map();
    for(const r of candidates){const parsed=parseFee(r[payout?'payoutFee':'collectFee'],r[payout?'payoutSingleFee':'collectSingleFee']);if(parsed)values.set(JSON.stringify(parsed),parsed);else values.set('unknown',null)}
    if(fact.label)labels.add(fact.label);
    const tier=tieredFeeRule(item,localCountry);
-   if(tier)references.add(tier.label);
+   if(fact.exemptOnly)references.add('免手续费');
+   else if(tier)references.add(tier.label);
    else if(values.size===1&&!values.has('unknown')){const rule=[...values.values()][0];references.add((rule.percent*100).toFixed(2)+'%'+(rule.fixed?' + '+Number(rule.fixed.toFixed(8))+' / 笔':''))}
    else if(values.size>1)references.add('待核对费率');else references.add('未匹配');
    if(fact.amount!==null){matched+=fact.matched;amount+=fact.amount}
@@ -609,7 +612,7 @@
   const providerLabel=(row,index)=>(issueOnly(row)?'<button class="link" aria-expanded="'+!!expanded[rowKey(row)]+'" title="展开已读取的平台工单汇总；此汇总接口不提供工单号" onclick="providerSummaryToggle('+index+')">'+E(issueLabelFor(row))+'</button><small class="cell-sub">仅工单汇总</small>':providerCell(row)+(String(row.provider).trim().toUpperCase()==='USDT'?'<small class="cell-sub"><button class="link" title="查看原始通道、类型与逐笔订单；USDT不代表已确认支付商" onclick="providerSummaryOrders('+index+')">原始通道 / 订单</button></small>':''))+(workorderAttributedElsewhere(row.uniqueOrders?.coverage)?'<small class="cell-sub" title="'+E('该来源标签的 '+(knownNumber(row.uniqueOrders.coverage.attributedElsewhereDetailCount)===null?'已采集':C(row.uniqueOrders.coverage.attributedElsewhereDetailCount))+' 条记录已按唯一已知三方归并；此标签不重复增加原单笔数和金额。')+'">已归并来源标签</small>':'');
   const workorderBasis='工单提交、成功、未到账六列统一按原存款订单号在所选期间去重，同一原订单只保留1条；取款未到账同样适用。工单未到账为去重提交减去重成功，不等于仍在等待到账。原订单号缺失时显示 —；覆盖不完整统一提示，缺失部分不按0计算。';
   const tierExplanation=tier=>'已确认：按每笔成功金额分档估算。'+tier.label+'。2,000 < 金额 < 2,001 的记录待核对，不计入已匹配笔数。';
-  const displayedRate=(row,original)=>{const tier=tieredFeeRule(row,L.country);return tier?tierExplanation(tier):original};
+  const displayedRate=(row,original)=>{if(row.fee_reference_label==='免手续费')return '免手续费';const tier=tieredFeeRule(row,L.country);return tier?tierExplanation(tier):original};
   root.providerSummaryRate=function(index){
    const row=shown[index];if(!row)return;const tier=tieredFeeRule(row,L.country),rule=confirmedFeeRule(row,L.country),records=rateRecords(row,L.feeLookupRows,L.country),used=new Set(row.items.flatMap(r=>feeCandidates(r,L.feeLookupRows,L.country)));
    const relevant=records.filter(r=>r.scopeType!=='platform'||row.items.some(item=>platformKey(item.platform,item,L.country)===platformKey(r.platform,item,L.country)));

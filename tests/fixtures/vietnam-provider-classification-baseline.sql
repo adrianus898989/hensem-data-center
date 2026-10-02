@@ -1,0 +1,1228 @@
+-- Safe production definitions only; no business rows or credentials.
+CREATE OR REPLACE FUNCTION private.dashboard_admin_live_remap_groups(p_rows jsonb, p_country text, p_platform text, p_daily boolean DEFAULT false)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  r jsonb; old_row jsonb; out_rows jsonb := '{}'::jsonb; key text; canonical text;
+  k text; n numeric; fields text[] := array['all_count','missing_amount_count','negative_amount_count',
+    'success_count','created_success_count','pending_count','failed_count','rejected_count','unknown_count','fee_low_count','fee_high_count','fee_gap_count','fee_unpriced_count','fee_version_matched_count','fee_version_unmatched_count'];
+  amount_fields text[] := array['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount','fee_low_amount','fee_high_amount','fee_gap_amount','fee_version_estimated_amount'];
+begin
+  for r in select value from jsonb_array_elements(coalesce(p_rows,'[]'::jsonb)) loop
+    canonical:=private.dashboard_admin_live_provider_canonical(p_country,p_platform,r->>'provider');
+    key:=coalesce(r->>'direction','')||chr(31)||coalesce(r->>'currency','')||chr(31)||coalesce(canonical,'')||
+      case when p_daily then chr(31)||coalesce(r->>'date','') else '' end;
+    if not (out_rows ? key) then
+      out_rows:=out_rows||jsonb_build_object(key,jsonb_set(r,'{provider}',to_jsonb(canonical),true));
+    else
+      old_row:=out_rows->key;
+      foreach k in array fields loop
+        if r->>k is null or old_row->>k is null then
+          old_row:=jsonb_set(old_row,array[k],'null'::jsonb,true);
+        else
+          n:=coalesce((old_row->>k)::numeric,0)+coalesce((r->>k)::numeric,0);
+          old_row:=jsonb_set(old_row,array[k],to_jsonb(n),true);
+        end if;
+      end loop;
+      if old_row?'fee_version_state' or r?'fee_version_state' then
+        old_row:=jsonb_set(old_row,'{fee_version_state}',to_jsonb(case
+          when old_row->>'fee_version_unmatched_count'='0' then 'complete'
+          when (old_row->>'fee_version_matched_count')::numeric>0 then 'partial' else 'unknown' end));
+      end if;
+      foreach k in array amount_fields loop
+        if k='fee_version_estimated_amount' and (old_row->>'fee_version_matched_count')::numeric>0 then
+          n:=coalesce((old_row->>k)::numeric,0)+coalesce((r->>k)::numeric,0);
+          old_row:=jsonb_set(old_row,array[k],to_jsonb(n::text),true);
+        elsif r->>k is null or old_row->>k is null then
+          old_row:=jsonb_set(old_row,array[k],'null'::jsonb,true);
+        else
+          n:=coalesce((old_row->>k)::numeric,0)+coalesce((r->>k)::numeric,0);
+          old_row:=jsonb_set(old_row,array[k],to_jsonb(trim(to_char(n,'FM999999999999999999999999999999990D99999999'))),true);
+        end if;
+      end loop;
+      if coalesce(r->>'latest_synced_at','')>coalesce(old_row->>'latest_synced_at','') then
+        old_row:=jsonb_set(old_row,'{latest_synced_at}',to_jsonb(r->>'latest_synced_at'),true);
+      end if;
+      out_rows:=jsonb_set(out_rows,array[key],old_row,true);
+    end if;
+  end loop;
+  return coalesce((select jsonb_agg(value order by value->>'provider',value->>'direction',value->>'currency',value->>'date') from jsonb_each(out_rows)),'[]'::jsonb);
+end;
+$function$;
+revoke all on function private.dashboard_admin_live_remap_groups(jsonb,text,text,boolean) from public,anon,authenticated,service_role;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_live_confirmed_usdt_provider(p_country text, p_raw text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+ select case when coalesce($countries${"IN":"印度","INDIA":"印度","印度线下":"印度","印度盘口":"印度","印度线下盘口":"印度","香港":"印度","红膏蟹":"印度","紅膏蟹":"印度","HK_TEAM":"印度","HONG_KONG":"印度","GAME66_HK":"印度","RED_CRAB":"印度","GAME66_RED_CRAB":"印度"}$countries$::jsonb->>upper(btrim(p_country)),p_country)='印度'
+ then $confirmed${"ffpay": "FFPay", "rushpay": "RushPay", "wallet66": "Wallet66", "basepay-qr": "FFPay", "rushpay-bank": "RushPay", "wallet66-bsc": "Wallet66", "usdt(bep20)-5": "Wallet66", "usdt(trc20)-3": "TronPayUSDT", "usdt(trc20)-4": "UniPayUSDT", "usdt(trc20)-5": "Wallet66", "wallet66-usdt": "Wallet66"}$confirmed$::jsonb->>regexp_replace(lower(btrim(regexp_replace(btrim(p_raw),$suffix$(?:\s*[-_‐‑‒–—﹘﹣－]?\s*(?:跑分|唤醒)|\s*[-_‐‑‒–—﹘﹣－]?\s*[（(【\[]\s*(?:跑分|唤醒)\s*[）)】\]])+$$suffix$,''))),'[[:space:]]*[-‐‑‒–—﹘﹣－][[:space:]]*','-','g') end;
+$function$;
+revoke all on function private.dashboard_admin_live_confirmed_usdt_provider(text,text) from public,anon,authenticated,service_role;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_live_provider_canonical(p_country text, p_platform text, p_raw text)
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+ select private.dashboard_admin_live_provider_alias(p_country,coalesce(
+  (select coalesce(o.canonical_provider,a.canonical_provider)
+   from private.dashboard_admin_wg_provider_aliases() a
+   left join private.dashboard_admin_provider_overrides o on o.country=a.country and o.platform=a.platform and o.raw_provider=a.raw_provider
+   where p_country in (a.country_code,a.country) and p_platform=a.platform and btrim(p_raw)=a.raw_provider),
+  (select coalesce(o.canonical_provider,private.dashboard_admin_live_confirmed_usdt_provider(r.country,r.raw_provider),case when cardinality(n.names)=1 then n.names[1] end)
+    from private.dashboard_admin_provider_registry r left join private.dashboard_admin_provider_overrides o using(country,platform,raw_provider)
+    cross join lateral (select private.dashboard_admin_live_provider_alias_values(r.country,r.canonical_values) names)n
+    where r.country=p_country and r.platform=p_platform and r.raw_provider=case when p_raw='未识别通道' then '' else coalesce(btrim(p_raw),'') end),p_raw));
+$function$;
+revoke all on function private.dashboard_admin_live_provider_canonical(text,text,text) from public,anon,authenticated,service_role;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_live_expand_provider_filter(p_request jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  v_id uuid;
+  v_platform record;
+  v_scope jsonb;
+  v_selected text[];
+  v_raw text[];
+begin
+ -- wg_existing_orders_v1
+  -- A missing key has SQL NULL type, so `type <> 'array'` alone does not return.
+  -- All-provider queries must not normalize the entire provider directory.
+  if p_request is null or coalesce(jsonb_typeof(p_request->'providers'),'null')<>'array' then
+    return p_request;
+  end if;
+  if jsonb_array_length(p_request->'providers')=0 then return p_request; end if;
+  if jsonb_array_length(p_request->'providers')>200 or exists(
+    select 1 from jsonb_array_elements(p_request->'providers') a
+    where jsonb_typeof(a)<>'string' or length(a#>>'{}') not between 1 and 200
+      or (a#>>'{}') ~ '[[:cntrl:]]'
+  ) then raise exception using errcode='22023',message='invalid_filter'; end if;
+  begin
+    v_id:=(p_request->>'platformId')::uuid;
+  exception when others then
+    return p_request;
+  end;
+  if v_id is null then return p_request; end if;
+  -- Keep the existing authenticated, active-profile, grant and platform checks.
+  select * into v_platform from private.dashboard_admin_live_platforms() p where p.id=v_id;
+  if not found then return p_request; end if;
+  v_scope:=private.dashboard_admin_live_scope();
+  select array_agg(value order by value) into v_selected
+    from jsonb_array_elements_text(p_request->'providers') value;
+  if v_platform.source='wg' then
+    with names as materialized (
+      -- Canonicalize once per distinct native name, never once per historical order.
+      -- The shared helper enumerates every raw name by the existing site/provider index.
+      select provider from private.dashboard_admin_wg_provider_names(
+        v_platform.scope_group,v_platform.source_name,coalesce(p_request->>'direction','all'))
+    ), matches as (
+      select unnest(v_selected) provider union select n.provider from names n
+      where private.dashboard_admin_live_provider_canonical(v_platform.country,v_platform.source_name,n.provider)=any(v_selected)
+    )select array_agg(distinct provider order by provider) into v_raw from matches;
+    return jsonb_set(p_request,'{providers}',to_jsonb(coalesce(v_raw,'{}'::text[])),true);
+  end if;
+  if v_platform.source='lg' then
+    with names as materialized (
+      select distinct coalesce(nullif(btrim(d.third_party),''),nullif(btrim(d.raw_channel),''),'未识别通道') as provider
+      from public.lg_success_daily d
+      where d.country_code=v_platform.scope_group and d.platform=v_platform.source_name
+        and d.scope_type in ('third_party','channel')
+        and d.order_kind=any(case coalesce(p_request->>'direction','all') when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)
+    ), matches as (
+      select unnest(v_selected) as provider union
+      select n.provider from names n
+      where private.dashboard_admin_live_provider_canonical(v_platform.country,v_platform.source_name,n.provider)=any(v_selected)
+    ) select array_agg(distinct provider order by provider) into v_raw from matches;
+    return jsonb_set(p_request,'{providers}',to_jsonb(coalesce(v_raw,'{}'::text[])),true);
+  end if;
+  with scoped as materialized (
+    -- Restrict by the registry's indexed country/platform before evaluating
+    -- aliases; provider_rows() materializes all authorized platforms first.
+    select r.country,r.platform,r.raw_provider,r.canonical_values
+    from private.dashboard_admin_provider_registry r
+    where r.country=v_platform.country
+      and r.platform=any(array[v_platform.name,v_platform.source_name]::text[])
+      and private.dashboard_scope_allows(v_scope,r.country,r.platform)
+  ), normalized as materialized (
+    select r.country,r.platform,r.raw_provider,
+      case when private.dashboard_admin_live_confirmed_usdt_provider(r.country,r.raw_provider) is not null
+        then array[private.dashboard_admin_live_confirmed_usdt_provider(r.country,r.raw_provider)]
+        else private.dashboard_admin_live_provider_alias_values(r.country,r.canonical_values) end canonical_values
+    from scoped r
+  ), mapped as (
+    select value as raw_provider from unnest(v_selected) value
+    union
+    select coalesce(nullif(r.raw_provider,''),'未识别通道')
+    from normalized r
+    left join private.dashboard_admin_provider_overrides o using(country,platform,raw_provider)
+    where coalesce(private.dashboard_admin_live_provider_alias(r.country,o.canonical_provider),
+      case when cardinality(r.canonical_values)=1 then r.canonical_values[1] end)=any(v_selected)
+  )
+  select array_agg(distinct raw_provider order by raw_provider) into v_raw from mapped;
+  return jsonb_set(p_request,'{providers}',to_jsonb(coalesce(v_raw,'{}'::text[])),true);
+end;
+$function$;
+revoke all on function private.dashboard_admin_live_expand_provider_filter(jsonb) from public,anon,authenticated,service_role;
+grant execute on function private.dashboard_admin_live_expand_provider_filter(jsonb) to authenticated;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_live_provider_rows()
+ RETURNS TABLE(country text, platform text, raw_provider text, canonical_provider text, canonical_values text[], directions text[], charge_count bigint, withdraw_count bigint, matched_count bigint, last_data_date date, updated_at timestamp with time zone, status text, version text, manual boolean)
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_scope jsonb:=private.dashboard_admin_live_scope();
+begin
+ return query with approved as materialized (select * from private.dashboard_admin_wg_provider_aliases()),
+ observed as materialized (
+  select a.country,a.platform,a.raw_provider,a.canonical_provider,
+   exists(select 1 from public.wg_recharge_details r where r.country=s.country_code and r.platform=s.platform
+    and r.site_code=s.site_code and r.provider=a.raw_provider) has_charge,
+   exists(select 1 from public.wg_withdraw_details w where w.country=s.country_code and w.platform=s.platform
+    and w.site_code=s.site_code and w.provider=a.raw_provider) has_withdraw
+  from approved a join private.dashboard_admin_wg_sites() s on s.country_code=a.country_code and s.country=a.country and s.platform=a.platform
+  where private.dashboard_scope_allows(v_scope,a.country,a.platform) and private.dashboard_scope_allows(v_scope,s.country_code,s.platform)
+   and not exists(select 1 from private.dashboard_admin_provider_registry stored where stored.country=a.country and stored.platform=a.platform and stored.raw_provider=a.raw_provider)
+ ),
+ normalized as materialized (
+  select stored.country,stored.platform,stored.raw_provider,
+   case when a.canonical_provider is not null then array[a.canonical_provider]
+    when private.dashboard_admin_live_confirmed_usdt_provider(stored.country,stored.raw_provider) is not null
+     then array[private.dashboard_admin_live_confirmed_usdt_provider(stored.country,stored.raw_provider)]
+    else private.dashboard_admin_live_provider_alias_values(stored.country,stored.canonical_values) end canonical_values,
+   stored.directions,stored.charge_count,stored.withdraw_count,stored.matched_count,stored.last_data_date,stored.updated_at
+  from private.dashboard_admin_provider_registry stored
+  left join approved a on a.country=stored.country and a.platform=stored.platform and a.raw_provider=stored.raw_provider
+  where private.dashboard_scope_allows(v_scope,stored.country,stored.platform)
+  union all
+  select n.country,n.platform,n.raw_provider,array[n.canonical_provider],
+   array_remove(array[case when n.has_withdraw then '代付'::text end,case when n.has_charge then '代收'::text end],null),
+   case when n.has_charge then null::bigint else 0::bigint end,
+   case when n.has_withdraw then null::bigint else 0::bigint end,
+   null::bigint,null::date,null::timestamptz
+  from observed n where n.has_charge or n.has_withdraw
+ ) select r.country,r.platform,r.raw_provider,
+  coalesce(private.dashboard_admin_live_provider_alias(r.country,o.canonical_provider),case when cardinality(r.canonical_values)=1 then r.canonical_values[1] end),
+  r.canonical_values,r.directions,r.charge_count,r.withdraw_count,r.matched_count,r.last_data_date,
+  coalesce(o.updated_at,r.updated_at),case when o.canonical_provider is not null or cardinality(r.canonical_values)=1 then 'assigned'
+   when cardinality(r.canonical_values)>1 then 'conflict' else 'unassigned' end,
+  md5(jsonb_build_array(r.canonical_values,coalesce(o.version,0))::text),o.canonical_provider is not null
+ from normalized r left join private.dashboard_admin_provider_overrides o using(country,platform,raw_provider);
+end;
+$function$;
+revoke all on function private.dashboard_admin_live_provider_rows() from public,anon,authenticated,service_role;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_live_provider_options(p_request jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare v_ids uuid[]; v_result jsonb; v_scope jsonb:=private.dashboard_admin_live_scope();
+begin
+ -- wg_existing_orders_v1
+  if p_request is null or jsonb_typeof(p_request)<>'object' or p_request-array['platformIds','direction']<>'{}'::jsonb
+    or jsonb_typeof(p_request->'platformIds') is distinct from 'array' or jsonb_array_length(p_request->'platformIds')>200
+    or coalesce(p_request->>'direction','all') not in('all','charge','withdraw') then
+    raise exception using errcode='22023',message='invalid_request';
+  end if;
+  if exists(select 1 from jsonb_array_elements(p_request->'platformIds') a where jsonb_typeof(a)<>'string'
+    or a#>>'{}' !~ '^[0-9a-fA-F-]{36}$') then raise exception using errcode='22023',message='invalid_filter';end if;
+  select array_agg(value::uuid) into v_ids from jsonb_array_elements_text(p_request->'platformIds');
+  with platforms as materialized (select * from private.dashboard_admin_live_platforms() where id=any(v_ids)),
+  scoped as materialized (
+    select distinct r.country,r.platform,r.raw_provider,r.canonical_values
+    from private.dashboard_admin_provider_registry r join platforms p on r.country=p.country and (r.platform=p.name or r.platform=p.source_name)
+    where p.source not in('lg','wg') and private.dashboard_scope_allows(v_scope,r.country,r.platform)
+      and (coalesce(p_request->>'direction','all')='all' or case p_request->>'direction' when 'charge' then '代收' else '代付' end=any(r.directions))
+  ), name_sets as materialized (
+    select distinct country,canonical_values from scoped
+  ), names as materialized (
+    select country,canonical_values,private.dashboard_admin_live_provider_alias_values(country,canonical_values) as names from name_sets
+  ), matches as (
+    select distinct coalesce(private.dashboard_admin_live_provider_alias(r.country,o.canonical_provider),
+      private.dashboard_admin_live_confirmed_usdt_provider(r.country,r.raw_provider),
+      case when cardinality(n.names)=1 then n.names[1] end,
+      nullif(private.dashboard_admin_live_provider_alias(r.country,r.raw_provider),''),'未识别通道') as provider
+    from scoped r join names n on n.country=r.country and n.canonical_values=r.canonical_values
+    left join private.dashboard_admin_provider_overrides o on o.country=r.country and o.platform=r.platform and o.raw_provider=r.raw_provider
+  ), lg_names as materialized (
+    -- Provider names come from the collector's small classifications, never a
+    -- whole-order scan. Values match the native LG provider projection.
+    select distinct p.country,p.source_name,
+      coalesce(nullif(btrim(d.third_party),''),nullif(btrim(d.raw_channel),''),'未识别通道') as raw_provider
+    from platforms p join public.lg_success_daily d
+      on p.source='lg' and d.country_code=p.scope_group and d.platform=p.source_name
+    where d.scope_type in ('third_party','channel')
+      and d.order_kind=any(case coalesce(p_request->>'direction','all') when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)
+  ), all_matches as (
+    select provider from matches union
+    select private.dashboard_admin_live_provider_canonical(country,source_name,raw_provider) from lg_names
+    union
+    select private.dashboard_admin_live_provider_canonical(p.country,p.source_name,n.provider)
+    from platforms p join private.dashboard_admin_wg_sites()s on p.source='wg' and p.scope_group=s.country_code and p.source_name=s.platform
+    cross join lateral (
+      select provider from private.dashboard_admin_wg_provider_names(
+        s.country_code,s.platform,coalesce(p_request->>'direction','all'))
+    )n
+  )
+  select jsonb_build_object('providers',coalesce((select jsonb_agg(provider order by provider) from all_matches),'[]'::jsonb),
+    'platformCount',(select count(*) from platforms),'basis','existing_classification') into v_result;
+  return v_result;
+end;
+$function$;
+revoke all on function private.dashboard_admin_live_provider_options(jsonb) from public,anon,authenticated,service_role;
+grant execute on function private.dashboard_admin_live_provider_options(jsonb) to authenticated;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_live_workorder_provider_batch(p_names jsonb)
+ RETURNS TABLE(country text, platform text, raw_provider text, channel_type text, provider text)
+ LANGUAGE sql
+ STABLE
+ SET search_path TO ''
+AS $function$
+ with inputs as materialized (
+  select distinct i.*,btrim(coalesce(i.raw_provider,'')) raw,btrim(coalesce(i.channel_type,'')) channel,
+   regexp_replace(lower(btrim(coalesce(i.raw_provider,''))),'[^a-z0-9一-龥]+','','g') r,
+   regexp_replace(lower(btrim(coalesce(i.channel_type,''))),'[^a-z0-9一-龥]+','','g') c
+  from jsonb_to_recordset(p_names) i(country text,platform text,raw_provider text,channel_type text)
+ ), rules as materialized (
+  select i.*,case when i.country='印度' and (r='arbpayinr' or c='arbpayinr') then 'ArbPay'
+   else o.canonical_provider end direct,
+   case when i.country='印度' and r='paytm' then case c
+    when 'haoxpayinr' then 'WPay' when 'wpayinr' then 'WPay' when 'ic2payinr' then 'ICPay'
+    when 'ninepayinr' then 'NinePay' when 'ox2payinr' then 'OXPay' when 'rapayinr' then 'RAPay'
+    when 'umoneypayinr' then 'UmoneyPay' when 'wepay2inr' then 'WePay' end
+   when i.country='印度' and r='qr' then case c when 'umoneypayinr' then 'UmoneyPay' when 'wepay2inr' then 'WePay' end
+   when i.country='缅甸' and r in ('kbzpay','wavepay') then case c when 'kingpaymmk' then 'KingPay' when 'ytpaymmk' then 'YTPay' end
+   when i.country='马来' and r='duitnow' and c='fpaymyr' then 'FPay'
+   when i.country='马来' and r='touchngo' and c='truepaymyr' then 'TruePay' end named,
+   (i.country='印度' and r in ('paytm','qr') or i.country='缅甸' and r in ('kbzpay','wavepay')
+     or i.country='马来' and r in ('duitnow','touchngo')) generic
+  from inputs i left join private.dashboard_admin_provider_overrides o
+   on o.country=i.country and o.platform=i.platform and o.raw_provider=i.raw
+ ), lookup as materialized (
+  select *,case when named is null and generic and c<>'' and c<>r then raw||' / '||channel else coalesce(named,raw) end lookup_name
+  from rules
+ ), registry as materialized (
+  select l.*,r.raw_provider registry_raw,r.canonical_values,o.canonical_provider override_name
+  from lookup l left join private.dashboard_admin_provider_registry r
+   on l.direct is null and r.country=l.country and r.platform=l.platform
+    and r.raw_provider=case when l.lookup_name='未识别通道' then '' else l.lookup_name end
+  left join private.dashboard_admin_provider_overrides o
+   on o.country=r.country and o.platform=r.platform and o.raw_provider=r.raw_provider
+ ), sets as materialized (
+  select distinct country,canonical_values from registry where direct is null and override_name is null and registry_raw is not null
+ ), names as materialized (
+  select country,canonical_values,private.dashboard_admin_live_provider_alias_values(country,canonical_values) values from sets
+ ), candidates as materialized (
+  select r.*,coalesce(r.override_name,
+   case when registry_raw is not null then private.dashboard_admin_live_confirmed_usdt_provider(r.country,registry_raw) end,
+   case when cardinality(n.values)=1 then n.values[1] end,lookup_name) canonical_input
+  from registry r left join names n on n.country=r.country and n.canonical_values is not distinct from r.canonical_values
+ ), aliases as materialized (
+  select country,canonical_input,private.dashboard_admin_live_provider_alias(country,canonical_input) result
+  from (select distinct country,canonical_input from candidates where direct is null) x
+ )
+ select c.country,c.platform,c.raw_provider,c.channel_type,coalesce(c.direct,a.result)
+ from candidates c left join aliases a on a.country is not distinct from c.country and a.canonical_input is not distinct from c.canonical_input;
+$function$;
+revoke all on function private.dashboard_admin_live_workorder_provider_batch(jsonb) from public,anon,authenticated,service_role;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_wg_order_source(p_utr text, p_latency boolean DEFAULT false)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+ select format($source$
+  select md5(jsonb_build_array('WG',w.site_code,w.business,w.order_number)::text)::uuid as id,
+   null::text as system_order_id,w.order_number,w.third_order_number as third_party_order_number,w.member_id,
+   coalesce(nullif(btrim(w.provider),''),'未识别通道') as provider,
+   coalesce(nullif(btrim(w.channel),''),'其他类型') as channel_type,
+   case w.business when 'recharge' then 'charge' else 'withdraw' end as direction,
+   w.status_code::text as status,
+   case w.status_group when 'paying' then 'pending' when 'cancelled' then 'failed'
+    when 'forced' then 'unknown' else w.status_group end as status_group,
+   w.created_at,case when w.business='recharge' and w.status_code=2 then w.success_at end as success_at,
+   w.member_amount as amount,
+   case when w.settlement_currency=w.member_currency then w.settlement_amount end as actual_amount,
+   case when w.settlement_currency=w.member_currency then w.settlement_fee end as withdraw_fee,
+   w.member_currency as currency,w.stored_at as synced_at,w.utr,w.provider as raw_provider
+  from (select * from public.wg_recharge_details union all select * from public.wg_withdraw_details) w
+  where w.site_code=(select s.site_code from private.dashboard_admin_wg_sites()s where s.country_code=$3 and s.platform=$22)
+   and w.business=any(case $7 when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)
+   and ((%2$L::boolean and w.business='recharge' and w.status_code=2 and w.success_at>=$5 and w.success_at<$6)
+    or (not %2$L::boolean and (
+     ($19<>'aggregate' and $8<>'success' and w.created_at>=$5 and w.created_at<$6)
+     or (($19='aggregate' or $8='success') and (w.created_at>=$5 and w.created_at<$6
+      or(w.business='recharge' and w.status_code=2 and w.success_at>=$5 and w.success_at<$6))))))
+   and ($9 is null or w.member_id=$9) and ($10 is null or w.order_number=$10)
+   and ($23 is null or w.third_order_number=$23) and (%1$L::text is null or w.utr=%1$L::text)
+ $source$,p_utr,coalesce(p_latency,false));
+$function$;
+revoke all on function private.dashboard_admin_wg_order_source(text,boolean) from public,anon,authenticated,service_role;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_fee_intervals(p_country text, p_platform text, p_provider text, p_direction text, p_currency text, p_category text)
+ RETURNS TABLE(effective_from timestamp with time zone, effective_until timestamp with time zone, percent_rate numeric, fixed_fee numeric, version_ids jsonb)
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+ with versions as materialized (
+   select v.*,lead(v.effective_from) over(partition by v.rule_key order by v.effective_from) until_at
+   from private.fee_rate_versions v where v.country=p_country and v.direction=p_direction
+   and (nullif(btrim(p_category),'') is null or upper(btrim(v.category))=upper(btrim(p_category)))
+   and private.dashboard_admin_live_provider_canonical(p_country,p_platform,v.provider)=private.dashboard_admin_live_provider_canonical(p_country,p_platform,p_provider)
+ ), eligible as materialized (
+   select v.* from versions v where nullif(p_currency,'') is not null and v.pricing_state='ready'
+   and (v.currency=p_currency or (v.currency is null and v.fixed_fee=0))
+   -- An invalid/removed current source cannot extend the last open interval.
+   and (v.until_at is not null or exists(select 1 from private.fee_rate_current_evidence e join private.fee_rate_generations g on g.id=e.generation_id
+     join public.third_party_rates r on r.id=e.source_id where e.rule_key=v.rule_key and e.version_id=v.id and e.state='ready' and r.updated_at=g.published_at))
+   and (v.until_at is not null or not exists(
+     select 1 from private.fee_rate_current_evidence bad join public.third_party_rates r on r.id=bad.source_id
+     join private.fee_rate_generations generation on generation.id=bad.generation_id
+     where bad.direction=p_direction and (bad.version_id is null or bad.state<>'ready' or r.updated_at is distinct from generation.published_at)
+     and private.dashboard_data_group(r.country,'')=p_country
+     and (nullif(btrim(p_category),'') is null or upper(btrim(r.category))=upper(btrim(p_category)))
+     and private.dashboard_admin_live_provider_canonical(p_country,p_platform,r.third_party)=private.dashboard_admin_live_provider_canonical(p_country,p_platform,p_provider)))
+ ), boundaries as (select effective_from t from versions union select until_at from versions where until_at is not null),
+ segments as (select t,lead(t) over(order by t) until_at from boundaries), priced as (
+   select s.t,s.until_at,count(distinct jsonb_build_array(e.percent_rate,e.fixed_fee)) rule_count,
+    min(e.percent_rate) percent,min(e.fixed_fee) fixed,jsonb_agg(e.id order by e.id) ids
+   from segments s join eligible e on e.effective_from<=s.t and (e.until_at is null or s.t<e.until_at)
+   -- An overlapping unpriceable category makes this provider ambiguous too.
+   where not exists(select 1 from versions b where b.effective_from<=s.t and (b.until_at is null or s.t<b.until_at)
+     and (b.currency is null or b.currency=p_currency)
+     and not exists(select 1 from eligible good where good.id=b.id))
+   group by s.t,s.until_at
+ ) select t,until_at,percent,fixed,ids from priced where rule_count=1;
+$function$;
+revoke all on function private.dashboard_admin_fee_intervals(text,text,text,text,text,text) from public,anon,authenticated,service_role;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_fee_quote(p_country text, p_platform text, p_provider text, p_direction text, p_currency text, p_created_at timestamp with time zone, p_amount numeric, p_category text)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+ select coalesce((select jsonb_build_object('fee_version_state','complete','fee_version_ids',v.version_ids,
+ 'fee_version_percent_rate',v.percent_rate::text,'fee_version_fixed_fee',v.fixed_fee::text,
+ 'fee_version_category',nullif(upper(btrim(p_category)),''),'fee_version_effective_from',v.effective_from,'fee_version_effective_until',v.effective_until,
+ 'fee_version_estimated_amount',(p_amount*v.percent_rate+v.fixed_fee)::text,'fee_version_basis','order_created_at')
+ from private.dashboard_admin_fee_intervals(p_country,p_platform,p_provider,p_direction,p_currency,p_category) v
+ where isfinite(p_created_at) and p_created_at>=v.effective_from and (v.effective_until is null or p_created_at<v.effective_until)
+ and p_amount>=0 and p_amount::text not in ('NaN','Infinity','-Infinity')),
+ jsonb_build_object('fee_version_state','unknown','fee_version_ids','[]'::jsonb,'fee_version_effective_from',null,
+ 'fee_version_effective_until',null,'fee_version_estimated_amount',null,'fee_version_basis','order_created_at'));
+$function$;
+revoke all on function private.dashboard_admin_fee_quote(text,text,text,text,text,timestamp with time zone,numeric,text) from public,anon,authenticated,service_role;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_live_query_raw(p_request jsonb DEFAULT '{"action": "catalog"}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+ SET jit TO 'off'
+AS $function$
+declare
+  v_action text; v_options jsonb; v_platform record; v_meta jsonb; v_capabilities jsonb;
+  v_id uuid; v_start timestamptz; v_end timestamptz; v_asof timestamptz := statement_timestamp();
+  v_direction text; v_status text; v_order text; v_third text; v_member text; v_system text; v_utr text;
+  v_providers text[]; v_types text[]; v_currency text; v_min numeric; v_max numeric;
+  v_offset integer; v_limit integer; v_key text; v_source text; v_sql text; v_result jsonb;
+  v_confirmations jsonb := '{}'::jsonb;
+  v_fee_country text; v_fee_currency_proven boolean := false;
+  -- aggregate_exclusive_amount_max_v1: one parsed boolean, never epsilon math.
+  v_max_exclusive boolean := false;
+  -- duration_precision_ranges_v2: parse once, use bound numeric parameters.
+  v_duration jsonb;v_duration_version integer;v_duration_min numeric;v_duration_max numeric;v_duration_custom boolean;
+  -- dynamic_amount_bands_v1: validate/parse once, never once per order.
+  v_amount_bands jsonb; v_charge_edges numeric[]; v_withdraw_edges numeric[];
+begin
+ -- wg_existing_orders_v1
+  -- Catalog helper validates Auth, active profile, independent grant and scope
+  -- on every call, including queries with no matching orders.
+  select coalesce(jsonb_agg(to_jsonb(p) order by p.scope_group,p.name,p.source),'[]'::jsonb)
+    into v_options from private.dashboard_admin_live_platforms() p;
+  if p_request is null or jsonb_typeof(p_request)<>'object' or octet_length(p_request::text)>32768
+    or exists(select 1 from jsonb_object_keys(p_request) k where k<>all(array[
+      'action','platformId','startAt','endAt','direction','status','orderNumber','thirdPartyOrderNumber','memberId','systemOrderId',
+      'utr','providers','channelTypes','currency','amountMin','amountMax','amountMaxExclusive','amountBands','durationVersion','durationRange','offset','limit','view'])) then
+    raise exception using errcode='22023',message='invalid_request';
+  end if;
+  v_action:=coalesce(p_request->>'action','catalog');
+  v_duration:=private.dashboard_admin_validate_duration(p_request);
+  v_duration_version:=(v_duration->>'version')::integer;
+  v_duration_min:=(v_duration->>'min_ms')::numeric;v_duration_max:=(v_duration->>'max_ms')::numeric;
+  v_duration_custom:=coalesce((v_duration->>'custom')::boolean,false);
+  v_amount_bands:=private.dashboard_admin_validate_amount_bands(p_request->'amountBands',coalesce(p_request->>'direction','all'));
+  select array_agg(value::numeric order by ordinality) into v_charge_edges
+    from jsonb_array_elements_text(v_amount_bands->'charge') with ordinality;
+  select array_agg(value::numeric order by ordinality) into v_withdraw_edges
+    from jsonb_array_elements_text(v_amount_bands->'withdraw') with ordinality;
+  if p_request ? 'view' and (jsonb_typeof(p_request->'view')<>'string' or p_request->>'view' not in ('full','providers') or v_action<>'aggregate') then
+    raise exception using errcode='22023',message='invalid_view';
+  end if;
+  if v_action not in ('catalog','query','aggregate','details') then raise exception using errcode='22023',message='invalid_action'; end if;
+  if v_action='catalog' then
+    if p_request-array['action']<>'{}'::jsonb then raise exception using errcode='22023',message='invalid_catalog_request'; end if;
+    return jsonb_build_object('version',1,'asOf',v_asof,'platforms',(
+      select coalesce(jsonb_agg((p-array['scope_group','source_name'])||jsonb_build_object('scopeGroup',p->'scope_group','sourceName',p->'source_name',
+        'capabilities',jsonb_build_object('systemOrderId',p->>'source'='newar','thirdPartyOrderNumber',p->>'source' in ('newar','game66'),'utr',false,
+          'historicalFees',true,'actualAmount',p->>'source'<>'ar','recordedFee',p->>'source' in ('newar','game66'),'scopeGroupIsGeographicCountry',p->>'source'<>'game66')||case when p->>'source'='wg' then private.dashboard_admin_wg_capabilities() else '{}'::jsonb end)),'[]'::jsonb)
+      from jsonb_array_elements(v_options) p));
+  end if;
+  foreach v_key in array array['platformId','startAt','endAt','direction','status','orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr','currency'] loop
+    if p_request ? v_key and p_request->v_key<>'null'::jsonb and
+      (jsonb_typeof(p_request->v_key)<>'string' or length(p_request->>v_key)>200 or p_request->>v_key ~ '[[:cntrl:]]') then
+      raise exception using errcode='22023',message='invalid_filter';
+    end if;
+  end loop;
+  begin
+    v_id:=(p_request->>'platformId')::uuid;
+    if coalesce(p_request->>'startAt','') !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}([.][0-9]{1,6})?(Z|[+-]\d{2}:\d{2})$'
+      or coalesce(p_request->>'endAt','') !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}([.][0-9]{1,6})?(Z|[+-]\d{2}:\d{2})$' then
+      raise exception using errcode='22023',message='invalid_time';
+    end if;
+    v_start:=(p_request->>'startAt')::timestamptz; v_end:=(p_request->>'endAt')::timestamptz;
+    v_offset:=coalesce((p_request->>'offset')::integer,0); v_limit:=coalesce((p_request->>'limit')::integer,20);
+    v_min:=nullif(p_request->>'amountMin','')::numeric; v_max:=nullif(p_request->>'amountMax','')::numeric;
+  exception when invalid_text_representation or numeric_value_out_of_range or invalid_datetime_format or datetime_field_overflow then
+    raise exception using errcode='22023',message='invalid_filter';
+  end;
+  if p_request?'amountMaxExclusive' then
+    if v_action<>'aggregate' or jsonb_typeof(p_request->'amountMaxExclusive') is distinct from 'boolean'
+      or v_max is null then
+      raise exception using errcode='22023',message='invalid_amount_max_exclusive';
+    end if;
+    v_max_exclusive:=(p_request->>'amountMaxExclusive')::boolean;
+    if v_max_exclusive and v_min>=v_max then
+      raise exception using errcode='22023',message='invalid_range';
+    end if;
+  end if;
+  select * into v_platform from jsonb_to_recordset(v_options)
+    as p(id uuid,name text,team text,country text,scope_group text,source text,timezone text,currency text,source_name text) where p.id=v_id;
+  if not found then raise exception using errcode='42501',message='platform_denied'; end if;
+  -- Fee evidence is stricter than the legacy display projection. In particular
+  -- a country-default AR currency is not source currency proof.
+  v_fee_country:=v_platform.scope_group;
+  if v_platform.source='ar' then
+    v_fee_currency_proven:=exists(select 1 from public.ar_config_targets t
+      where t.source_system='AR' and t.country_code=v_platform.scope_group and t.platform=v_platform.source_name
+        and nullif(btrim(t.currency),'') is not null and t.currency=v_platform.currency);
+  elsif v_platform.source in ('newar','wg') then
+    -- These adapters project each order's explicit native currency.
+    v_fee_currency_proven:=true;
+  elsif v_platform.source='lg' then
+    -- Existing confirmed LG adapters have an explicit currency contract; no
+    -- generic country fallback or unknown-country adapter may price orders.
+    v_fee_currency_proven:=case v_platform.scope_group when 'PH' then v_platform.currency='PHP'
+      when 'ID' then v_platform.currency='IDR' when 'PK' then v_platform.currency='PKR' else false end;
+  elsif v_platform.source='game66' then
+    -- GAME66's source scope identifies the owning team, while its native
+    -- monetary unit is explicitly INR. Authorization still uses that scope.
+    v_fee_country:='IN';
+    v_fee_currency_proven:=v_platform.scope_group in ('HK_TEAM','RED_CRAB') and v_platform.currency='INR';
+  end if;
+  if v_start is null or v_end is null or not isfinite(v_start) or not isfinite(v_end) or v_start>=v_end
+    or (v_end at time zone v_platform.timezone)-(v_start at time zone v_platform.timezone)>interval '31 days'
+    or v_offset<0 or v_limit not in (20,30,50,100,500)
+    or (p_request ? 'offset' and coalesce(p_request->>'offset','0') !~ '^[0-9]+$')
+    or (p_request ? 'limit' and coalesce(p_request->>'limit','20') !~ '^[0-9]+$')
+    or v_min::text in ('NaN','Infinity','-Infinity') or v_max::text in ('NaN','Infinity','-Infinity')
+    or v_min>v_max then raise exception using errcode='22023',message='invalid_range'; end if;
+  v_direction:=coalesce(p_request->>'direction','all'); v_status:=coalesce(p_request->>'status','all');
+  if v_direction not in ('all','charge','withdraw') or v_status not in ('all','success','pending','failed','rejected','unknown') then
+    raise exception using errcode='22023',message='invalid_status_or_direction';
+  end if;
+  v_order:=nullif(btrim(p_request->>'orderNumber'),''); v_third:=nullif(btrim(p_request->>'thirdPartyOrderNumber'),''); v_member:=nullif(btrim(p_request->>'memberId'),'');
+  v_system:=nullif(btrim(p_request->>'systemOrderId'),''); v_utr:=nullif(btrim(p_request->>'utr'),'');
+  v_currency:=nullif(btrim(p_request->>'currency'),'');
+  if (v_utr is not null and v_platform.source<>'wg') or (v_system is not null and v_platform.source<>'newar') or (v_third is not null and v_platform.source not in ('newar','game66','wg')) then
+    raise exception using errcode='22023',message='unsupported_filter';
+  end if;
+  foreach v_key in array array['providers','channelTypes'] loop
+    if p_request ? v_key and p_request->v_key<>'null'::jsonb then
+      if jsonb_typeof(p_request->v_key)<>'array' or jsonb_array_length(p_request->v_key)>2000 then
+        raise exception using errcode='22023',message='invalid_filter';
+      end if;
+      if exists(select 1 from jsonb_array_elements(p_request->v_key) a where jsonb_typeof(a)<>'string'
+        or length(a#>>'{}') not between 1 and 200 or (a#>>'{}') ~ '[[:cntrl:]]') then
+        raise exception using errcode='22023',message='invalid_filter';
+      end if;
+    end if;
+  end loop;
+  if jsonb_typeof(p_request->'providers')='array' then select array_agg(value) into v_providers from jsonb_array_elements_text(p_request->'providers'); end if;
+  if jsonb_typeof(p_request->'channelTypes')='array' then select array_agg(value) into v_types from jsonb_array_elements_text(p_request->'channelTypes'); end if;
+  v_capabilities:=jsonb_build_object('systemOrderId',v_platform.source='newar','thirdPartyOrderNumber',v_platform.source in ('newar','game66'),'utr',false,'historicalFees',true,
+    'timeBasis','created_for_all_and_non_success','successTimeBasis','success_at','successCohort','success_at_in_selected_range',
+    'latencyBasis','success_at_to_created_at','customerPaymentTime',false,
+    'pendingBasis','selected_created_cohort_current_stored_status','asOfBasis','query_time_not_source_snapshot',
+    'sourceCompletenessVerified',false,'actualAmount',v_platform.source<>'ar','recordedFee',v_platform.source in ('newar','game66'));
+  if v_platform.source='wg' then
+    if v_status='success' and v_direction<>'charge' then
+      raise exception using errcode='22023',message='unsupported_success_time_filter_for_wg_withdraw';
+    end if;
+    v_capabilities:=v_capabilities||private.dashboard_admin_wg_capabilities(v_direction);
+  end if;
+  v_meta:=jsonb_build_object('id',v_platform.id,'name',v_platform.name,'source',v_platform.source,'sourceName',v_platform.source_name,
+    'scopeGroup',v_platform.scope_group,'country',v_platform.country,'team',v_platform.team,
+    'timezone',v_platform.timezone,'currency',v_platform.currency,'capabilities',v_capabilities);
+  -- All branches project an explicit safe allowlist. No raw JSON, contact,
+  -- account/UPI fields, comments, free text, or credentials are selected.
+  if v_platform.source='ar' then
+    -- Read the small, platform-scoped confirmation map once, outside the order scan.
+    -- Optional for older installations; ordinary unknown records remain unknown.
+    if to_regclass('private.dashboard_admin_order_provider_confirmations') is not null then
+      execute 'select coalesce(jsonb_object_agg(order_kind||chr(31)||order_no,confirmed_provider),''{}''::jsonb)
+        from private.dashboard_admin_order_provider_confirmations
+        where source_system=$1 and country_code=$2 and platform=$3 and active'
+        into v_confirmations using 'AR',v_platform.scope_group,v_platform.source_name;
+    end if;
+    v_source:=$q$
+      select md5(jsonb_build_array(a.source_system,a.country_code,a.platform,a.order_kind,a.order_no)::text)::uuid as id,
+        null::text as system_order_id,a.order_no as order_number,null::text as third_party_order_number,a.member_id,
+        case when a.order_kind='withdraw' and coalesce(btrim(a.raw_channel),'') in ('','人工取消')
+          and a.status in ('未通过','拒绝','驳回','已拒绝','人工取消','已取消','失败','提现失败','出款失败') then '无三方（驳回）'
+          else coalesce(nullif(btrim(a.raw_channel),''),$24->>(a.order_kind||chr(31)||a.order_no),'未识别通道') end as provider,
+        coalesce(nullif(btrim(a.channel_type),''),'其他类型') as channel_type,
+        case a.order_kind when 'recharge' then 'charge' else 'withdraw' end as direction,a.status,
+        case when a.order_kind='recharge' then case a.status when '已支付' then 'success' when '待支付' then 'pending'
+          when '已取消' then 'failed' else 'unknown' end
+        else case when a.status='已通过' then 'success' when a.status='已提交' then 'pending'
+          when a.status in ('未通过','拒绝','驳回','已拒绝','人工取消','已取消') then 'rejected'
+          when a.status in ('失败','提现失败','出款失败') then case when coalesce(btrim(a.raw_channel),'') in ('','人工取消') then 'rejected' else 'failed' end
+          else 'unknown' end end as status_group,
+        a.applied_at at time zone $4 as created_at,
+        case when (a.order_kind='recharge' and a.status='已支付') or (a.order_kind='withdraw' and a.status='已通过')
+          then a.completed_at at time zone $4 end as success_at,
+        coalesce(a.amount,case
+          when a.country_code='IN' and a.order_kind='recharge' and btrim(a.raw_channel)='人工充值'
+            and length(btrim(a.amount_text))<=24 and btrim(a.amount_text) ~ '^-[0-9]+([.][0-9]+)?$' then btrim(a.amount_text)::numeric
+          when a.country_code='IN' and a.order_kind='recharge' and btrim(a.raw_channel) ~ '^USDT[(]TRC20[)]-[0-9]+$'
+            and length(a.amount_text)<=250 then substring(replace(a.amount_text,chr(92)||'n',chr(10)) from
+            '^[[:space:]]*金额[：:][[:space:]]*([0-9]{1,18}([.][0-9]{1,8})?)[[:space:]]+兑换比例[：:][[:space:]]*[0-9]+([.][0-9]+)?[[:space:]]+USDT[：:][[:space:]]*[0-9]+([.][0-9]+)?[[:space:]]*$')::numeric end) as amount,
+        null::numeric as actual_amount,null::numeric as withdraw_fee,$21::text as currency,a.updated_at as synced_at,null::text as utr,a.raw_channel as raw_provider
+      from public.ar_collected_orders a where a.country_code=$3 and a.platform=$22 and a.source_system='AR'
+        and a.order_kind=any(case $7 when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)
+        and (($19<>'aggregate' and $8<>'success' and a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
+          or (($19='aggregate' or $8='success') and (
+            (a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
+            or (((a.order_kind='recharge' and a.status='已支付') or (a.order_kind='withdraw' and a.status='已通过'))
+              and a.completed_at is not null
+              and a.completed_at >= ($5 at time zone $4) and a.completed_at < ($6 at time zone $4)))))
+        and ($9 is null or a.member_id=$9) and ($10 is null or a.order_no=$10)
+    $q$;
+    -- custom_ar_date_union_v1: index each clock, retain each source row once.
+    if position($ar_guard$        and (($19<>'aggregate' and $8<>'success' and a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
+          or (($19='aggregate' or $8='success') and (
+            (a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
+            or (((a.order_kind='recharge' and a.status='已支付') or (a.order_kind='withdraw' and a.status='已通过'))
+              and a.completed_at is not null
+              and a.completed_at >= ($5 at time zone $4) and a.completed_at < ($6 at time zone $4)))))$ar_guard$ in v_source)=0 then raise exception using errcode='55000',message='analytical_query_contract_drift';end if;
+      v_source:=replace(v_source,$ar_old$        and (($19<>'aggregate' and $8<>'success' and a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
+          or (($19='aggregate' or $8='success') and (
+            (a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4))
+            or (((a.order_kind='recharge' and a.status='已支付') or (a.order_kind='withdraw' and a.status='已通过'))
+              and a.completed_at is not null
+              and a.completed_at >= ($5 at time zone $4) and a.completed_at < ($6 at time zone $4)))))$ar_old$,$ar_created$        and a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4)$ar_created$);
+    if v_action='aggregate' or v_status='success' then
+      v_source:=v_source||' union all '||replace(v_source,$ar_created$        and a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4)$ar_created$,$ar_success$        and ((a.order_kind='recharge' and a.status='已支付') or (a.order_kind='withdraw' and a.status='已通过'))
+        and a.completed_at>=($5 at time zone $4) and a.completed_at<($6 at time zone $4)
+        and (a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4)) is not true$ar_success$);
+    end if;
+  elsif v_platform.source='newar' then
+    v_source:=$q$
+      select n.id,n.source_id as system_order_id,n.order_number,n.third_party_order_number,n.member_id,
+        case when n.dataset='charge' and coalesce(btrim(n.provider),'')='' and n.channel_type='ManualRecharge' then '人工充值'
+          when n.dataset='withdraw' and n.status_group in ('failed','rejected') and coalesce(btrim(n.provider),'') in ('','人工取消') then '无三方（驳回）'
+          else coalesce(nullif(btrim(n.provider),''),'未识别通道') end as provider,coalesce(nullif(btrim(n.channel_type),''),'其他类型') as channel_type,
+        n.dataset as direction,n.status_code as status,
+        case when n.dataset='withdraw' and n.status_group='failed' and coalesce(btrim(n.provider),'') in ('','人工取消') then 'rejected'
+          when n.status_group in ('success','pending','failed','rejected') then n.status_group else 'unknown' end as status_group,
+        n.created_at,case when n.status_group='success' then n.success_at end as success_at,
+        n.amount,n.actual_amount,n.fee as withdraw_fee,n.currency,n.received_at as synced_at,null::text as utr,n.provider as raw_provider
+      from public.newar_detail_records n join public.newar_detail_platforms t on t.platform=n.platform
+      where n.platform=$22 and n.dataset=any(case $7 when 'all' then array['charge','withdraw'] else array[$7] end)
+        and (($19<>'aggregate' and $8<>'success' and n.created_at>=$5 and n.created_at<$6)
+          or (($19='aggregate' or $8='success') and (n.created_at>=$5 and n.created_at<$6
+            or (n.status_group='success' and n.success_at is not null and n.success_at>=$5 and n.success_at<$6))))
+        and (t.launch_at is null or n.created_at>=t.launch_at)
+        and ($9 is null or n.member_id=$9) and ($10 is null or n.order_number=$10)
+        and ($23 is null or n.third_party_order_number=$23)
+        and ($11 is null or n.source_id=$11)
+    $q$;
+  elsif v_platform.source='lg' then
+    -- LG timestamps are already timestamptz; never reinterpret them as local
+    -- timestamps or restrict paid events to the creation-day stat_date.
+    v_source:=$q$
+      select md5(jsonb_build_array('LG',l.country_code,l.platform,l.order_kind,l.order_no)::text)::uuid as id,
+        null::text as system_order_id,l.order_no as order_number,null::text as third_party_order_number,l.member_id,
+        coalesce(nullif(btrim(l.third_party),''),nullif(btrim(l.raw_channel),''),'未识别通道') as provider,
+        coalesce(nullif(btrim(l.payment_method),''),'其他类型') as channel_type,
+        case l.order_kind when 'recharge' then 'charge' else 'withdraw' end as direction,l.status_text as status,
+        case when l.status_class in ('success','pending','rejected') then l.status_class else 'unknown' end as status_group,
+        l.created_at,case when l.status_class='success' then l.paid_at end as success_at,
+        l.metric_amount as amount,l.actual_amount,null::numeric as withdraw_fee,$21::text as currency,
+        l.updated_at as synced_at,null::text as utr,l.raw_channel as raw_provider
+      from public.lg_orders l
+      where l.country_code=$3 and l.platform=$22 and l.source_system='LG'
+        and l.order_kind=any(case $7 when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)
+        and (($19<>'aggregate' and $8<>'success' and l.created_at>=$5 and l.created_at<$6)
+          or (($19='aggregate' or $8='success') and (l.created_at>=$5 and l.created_at<$6
+            or (l.status_class='success' and l.paid_at is not null and l.paid_at>=$5 and l.paid_at<$6))))
+        and ($9 is null or l.member_id=$9) and ($10 is null or l.order_no=$10)
+    $q$;
+  elsif v_platform.source='wg' then
+    v_source:=private.dashboard_admin_wg_order_source(v_utr,false);
+  elsif v_platform.source='game66' then
+    v_source:=$q$
+      select c.id,null::text as system_order_id,c.order_num as order_number,c.out_trade_no as third_party_order_number,c.uid as member_id,
+        coalesce(nullif(btrim(c.pay_method_name),''),'未识别通道') as provider,coalesce(nullif(btrim(c.pay_mode),''),'其他类型') as channel_type,
+        'charge'::text as direction,coalesce(nullif(c.status_text,''),c.status_code) as status,
+        case c.status_code when '1' then 'success' when '0' then
+          case when c.status_group in ('pending','failed') then c.status_group else 'pending' end else 'unknown' end as status_group,
+        c.create_time as created_at,case when c.status_code='1' then c.pay_time end as success_at,
+        coalesce(c.amount_display,c.amount_minor/100.0) as amount,null::numeric as actual_amount,null::numeric as withdraw_fee,
+        'INR'::text as currency,c.last_seen_at as synced_at,null::text as utr,c.pay_method_name as raw_provider
+      from public.game66_charge_orders c where c.platform_id=$1 and $7 in ('all','charge')
+        and (($19<>'aggregate' and $8<>'success' and c.create_time>=$5 and c.create_time<$6)
+          or (($19='aggregate' or $8='success') and (c.create_time>=$5 and c.create_time<$6
+            or (c.status_code='1' and c.pay_time is not null and c.pay_time>=$5 and c.pay_time<$6))))
+        and ($9 is null or c.uid=$9)
+        and ($10 is null or c.order_num=$10) and ($23 is null or c.out_trade_no=$23)
+      union all
+      select w.id,null::text,w.order_num,w.out_trade_no,w.uid,
+        case when w.status_code in ('2','-1') and coalesce(nullif(btrim(w.pay_channel),''),nullif(btrim(w.pay_method_name),''),'') in ('','人工取消') then '无三方（驳回）'
+          else coalesce(nullif(btrim(w.pay_channel),''),nullif(btrim(w.pay_method_name),''),'未识别通道') end,
+        coalesce(nullif(btrim(w.payout_mode),''),'其他类型'),'withdraw',coalesce(nullif(w.status_text,''),w.status_code),
+        case w.status_code when '3' then 'success' when '1' then 'pending' when '2' then case when coalesce(nullif(btrim(w.pay_channel),''),nullif(btrim(w.pay_method_name),''),'') in ('','人工取消') then 'rejected' else 'failed' end when '-1' then 'rejected' else 'unknown' end,
+        w.create_time,case when w.status_code='3' then w.update_time end,coalesce(w.amount_display,w.amount_minor/100.0),
+        coalesce(w.real_amount_display,w.real_amount_minor/100.0),coalesce(w.fee_display,w.fee_minor/100.0),
+        'INR',w.last_seen_at,null::text,coalesce(nullif(w.pay_channel,''),w.pay_method_name)
+      from public.game66_withdraw_orders w where w.platform_id=$1 and $7 in ('all','withdraw')
+        and (($19<>'aggregate' and $8<>'success' and w.create_time>=$5 and w.create_time<$6)
+          or (($19='aggregate' or $8='success') and (w.create_time>=$5 and w.create_time<$6
+            or (w.status_code='3' and w.update_time is not null and w.update_time>=$5 and w.update_time<$6))))
+        and ($9 is null or w.uid=$9)
+        and ($10 is null or w.order_num=$10) and ($23 is null or w.out_trade_no=$23)
+    $q$;
+  else
+    raise exception using errcode='22023',message='unsupported_source';
+  end if;
+  -- Group and page the identical materialized, filtered source set. The old
+  -- detail RPC is never paged repeatedly to manufacture aggregate totals.
+  -- Details lets PostgreSQL inline the shared predicate: COUNT can prune all
+  -- display/time calculations, and the page can use source time indexes.
+  -- Aggregate materializes only compact analytical values (no order IDs/MD5).
+  v_sql:='with orders as ('||v_source||'), filtered as '||
+    case when v_action='details' then 'not materialized' else 'materialized' end||$q$ (
+    select case when $19<>'aggregate' then id end as id,
+      case when $19<>'aggregate' then system_order_id end as system_order_id,
+      case when $19<>'aggregate' then order_number end as order_number,
+      case when $19<>'aggregate' then third_party_order_number end as third_party_order_number,
+      case when $19<>'aggregate' then member_id end as member_id,provider,
+      case when $19<>'aggregate' then raw_provider end as raw_provider,
+      channel_type,direction,
+      case when $19<>'aggregate' then status end as status,status_group,
+      created_at,success_at,case when amount::text not in ('NaN','Infinity','-Infinity') then amount end as amount,
+      case when $19<>'aggregate' and actual_amount::text not in ('NaN','Infinity','-Infinity') then actual_amount end as actual_amount,
+      case when $19<>'aggregate' and withdraw_fee::text not in ('NaN','Infinity','-Infinity') then withdraw_fee end as withdraw_fee,
+      currency,synced_at,utr,
+      (created_at >= $5 and created_at < $6) as created_in_range,
+      (success_at >= $5 and success_at < $6) as success_in_range,
+      (created_at at time zone $4)::date as local_date,
+      extract(hour from created_at at time zone $4)::integer as local_hour,
+      (success_at at time zone $4)::date as success_local_date,
+      extract(hour from success_at at time zone $4)::integer as success_local_hour,
+      case when amount is null or amount::text in ('NaN','Infinity','-Infinity') then 'unknown'
+        when amount in (100,200,300,400,500,750,1000,1500,2000,5000) then trunc(amount)::text else 'other' end as amount_bucket,
+      -- Disjoint amount ranges with the labels used by the admin UI. Integer
+      -- boundaries are explicit: 100–200, 201–300, and so on. Every order
+      -- remains in exactly one range; low/missing values stay visible.
+      case when (case when direction='charge' then $25::numeric[] else $26::numeric[] end) is not null then case
+        when amount is null or amount::text in ('NaN','Infinity','-Infinity') then 'unknown'
+        when amount<(case when direction='charge' then $25::numeric[] else $26::numeric[] end)[1] then 'below'
+        when amount>(case when direction='charge' then $25::numeric[] else $26::numeric[] end)[11] then 'above'
+        else 'band:'||(least(width_bucket(amount,(case when direction='charge' then $25::numeric[] else $26::numeric[] end)),10)-1)::text end
+        else case when amount is null or amount::text in ('NaN','Infinity','-Infinity') then 'unknown'
+        when amount<100 then 'other' when amount<=200 then '100–200'
+        when amount<=300 then '201–300' when amount<=400 then '301–400'
+        when amount<=500 then '401–500' when amount<=750 then '501–750'
+        when amount<=1000 then '751–1,000' when amount<=2000 then '1,001–2,000'
+        when amount<=5000 then '2,001–5,000' else '≥5,001' end end as amount_range_bucket,
+      case when status_group='success' and isfinite(success_at) and success_at>=created_at and success_at<=$20
+        then extract(epoch from success_at-created_at)*1000 end as latency_ms,
+      case when direction='withdraw' and status_group='pending' and created_at<=$20 then extract(epoch from $20-created_at)*1000 end as pending_wait_ms
+    from orders where ($8='all' or status_group=$8) and ($12 is null or provider=any($12))
+      and ($13 is null or channel_type=any($13)) and ($14 is null or currency=$14)
+      and ($15 is null or amount>=$15) and ($16 is null or case when $31 then amount<$16 else amount<=$16 end)
+  ), fee_subjects as materialized (
+    select distinct direction,currency,provider,channel_type from filtered where $19<>'details' and status_group='success' and success_in_range
+      and $33 and exists(select 1 from private.fee_rate_versions where country=$32)
+  ), fee_intervals as materialized (
+    select s.direction,s.currency,s.provider,s.channel_type,v.* from fee_subjects s
+    cross join lateral private.dashboard_admin_fee_intervals($32,$2,s.provider,s.direction,s.currency,private.dashboard_admin_fee_category($32,s.channel_type)) v
+  ), fee_version_facts as (
+    select f.direction,f.currency,f.provider,jsonb_build_object(
+      'fee_version_matched_count',count(v.effective_from) filter(where f.amount>=0),
+      'fee_version_unmatched_count',count(*)-count(v.effective_from) filter(where f.amount>=0),
+      'fee_version_estimated_amount',(sum(f.amount*v.percent_rate+v.fixed_fee) filter(where f.amount>=0))::text,
+      'fee_version_state',case when count(v.effective_from) filter(where f.amount>=0)=count(*) then 'complete'
+        when count(v.effective_from) filter(where f.amount>=0)>0 then 'partial' else 'unknown' end
+    ) value from filtered f left join fee_intervals v on v.direction=f.direction and v.currency=f.currency and v.provider=f.provider
+      and v.channel_type is not distinct from f.channel_type
+      and f.amount>=0 and f.amount::text not in ('NaN','Infinity','-Infinity')
+      and isfinite(f.created_at) and f.created_at>=v.effective_from and (v.effective_until is null or f.created_at<v.effective_until)
+    where $19<>'details' and f.status_group='success' and f.success_in_range
+      and $33 and exists(select 1 from private.fee_rate_versions where country=$32)
+    group by f.direction,f.currency,f.provider
+  ), fee_bands as (
+      -- fee_bands_v1: successful orders use their success-time window. Aggregate
+      -- only amount/count facts; do not expose order identifiers or raw payload.
+      select direction,currency,provider,jsonb_build_object(
+        'fee_low_count',count(*) filter(where status_group='success' and success_in_range and amount>=0 and amount<=2000),
+        'fee_low_amount',coalesce(sum(amount) filter(where status_group='success' and success_in_range and amount>=0 and amount<=2000),0)::text,
+        'fee_high_count',count(*) filter(where status_group='success' and success_in_range and amount>=2001),
+        'fee_high_amount',coalesce(sum(amount) filter(where status_group='success' and success_in_range and amount>=2001),0)::text,
+        'fee_gap_count',count(*) filter(where status_group='success' and success_in_range and amount>2000 and amount<2001),
+        'fee_gap_amount',coalesce(sum(amount) filter(where status_group='success' and success_in_range and amount>2000 and amount<2001),0)::text,
+        'fee_unpriced_count',count(*) filter(where status_group='success' and success_in_range and (amount is null or amount<0))
+      ) as fee_facts from filtered where $19<>'details'
+      group by direction,currency,provider
+    ), created_metrics as (
+    select direction,currency,provider,local_date,local_hour,amount_bucket,amount_range_bucket,
+      case when grouping(local_date)=0 then 'daily' when grouping(local_hour,amount_bucket)=0 then 'matrix'
+        when grouping(local_hour,amount_range_bucket)=0 then 'matrix_range'
+        when grouping(local_hour)=0 then 'hourly' when grouping(amount_bucket)=0 then 'amount'
+        when grouping(amount_range_bucket)=0 then 'amount_range'
+        when grouping(provider)=0 then 'provider' else 'summary' end as kind,
+      count(*) as all_count,case when count(amount)=count(*) then sum(amount) end as all_amount,
+      count(*) filter(where amount is null) as missing_amount_count,
+      count(*) filter(where amount<0) as negative_amount_count,
+      count(*) filter(where status_group='success') as created_success_count,
+      0::bigint as success_count,0::numeric as success_amount,
+      count(*) filter(where status_group='pending') as pending_count,
+      case when count(amount) filter(where status_group='pending')=count(*) filter(where status_group='pending') then coalesce(sum(amount) filter(where status_group='pending'),0) end as pending_amount,
+      count(*) filter(where status_group='failed') as failed_count,
+      case when count(amount) filter(where status_group='failed')=count(*) filter(where status_group='failed') then coalesce(sum(amount) filter(where status_group='failed'),0) end as failed_amount,
+      count(*) filter(where status_group='rejected') as rejected_count,
+      case when count(amount) filter(where status_group='rejected')=count(*) filter(where status_group='rejected') then coalesce(sum(amount) filter(where status_group='rejected'),0) end as rejected_amount,
+      count(*) filter(where status_group='unknown') as unknown_count,
+      case when count(amount) filter(where status_group='unknown')=count(*) filter(where status_group='unknown') then coalesce(sum(amount) filter(where status_group='unknown'),0) end as unknown_amount,
+      max(synced_at) as latest_synced_at
+    from filtered where $19<>'details' and created_in_range and $8<>'success'
+    group by grouping sets ((direction,currency),(direction,currency,provider),
+      (direction,currency,provider,local_date),(direction,currency,local_hour),
+      (direction,currency,amount_bucket),(direction,currency,local_hour,amount_bucket),
+      (direction,currency,amount_range_bucket),(direction,currency,local_hour,amount_range_bucket))
+  ), success_metrics as (
+    select direction,currency,provider,success_local_date as local_date,success_local_hour as local_hour,amount_bucket,amount_range_bucket,
+      case when grouping(success_local_date)=0 then 'daily' when grouping(success_local_hour,amount_bucket)=0 then 'matrix'
+        when grouping(success_local_hour,amount_range_bucket)=0 then 'matrix_range'
+        when grouping(success_local_hour)=0 then 'hourly' when grouping(amount_bucket)=0 then 'amount'
+        when grouping(amount_range_bucket)=0 then 'amount_range'
+        when grouping(provider)=0 then 'provider' else 'summary' end as kind,
+      case when $8='success' then count(*) else 0 end as all_count,
+      case when $8='success' then case when count(amount)=count(*) then sum(amount) end else 0 end as all_amount,
+      case when $8='success' then count(*) filter(where amount is null) else 0 end as missing_amount_count,
+      case when $8='success' then count(*) filter(where amount<0) else 0 end as negative_amount_count,
+      0::bigint as created_success_count,
+      count(*) as success_count,
+      case when count(amount)=count(*) then coalesce(sum(amount),0) end as success_amount,
+      0::bigint as pending_count,0::numeric as pending_amount,
+      0::bigint as failed_count,0::numeric as failed_amount,
+      0::bigint as rejected_count,0::numeric as rejected_amount,
+      0::bigint as unknown_count,0::numeric as unknown_amount,
+      max(synced_at) as latest_synced_at
+    from filtered where $19<>'details' and status_group='success' and success_in_range and $8 in ('all','success')
+    group by grouping sets ((direction,currency),(direction,currency,provider),
+      (direction,currency,provider,success_local_date),(direction,currency,success_local_hour),
+      (direction,currency,amount_bucket),(direction,currency,success_local_hour,amount_bucket),
+      (direction,currency,amount_range_bucket),(direction,currency,success_local_hour,amount_range_bucket))
+  ), metrics_raw as (
+    select * from created_metrics union all select * from success_metrics
+  ), metrics as (
+    select direction,currency,provider,local_date,local_hour,amount_bucket,amount_range_bucket,kind,
+      sum(all_count)::bigint as all_count,
+      case when bool_or(all_count>0 and all_amount is null) then null::numeric else coalesce(sum(all_amount),0) end as all_amount,
+      sum(missing_amount_count)::bigint as missing_amount_count,
+      sum(negative_amount_count)::bigint as negative_amount_count,
+      sum(created_success_count)::bigint as created_success_count,
+      sum(success_count)::bigint as success_count,
+      case when bool_or(success_count>0 and success_amount is null) then null::numeric else coalesce(sum(success_amount),0) end as success_amount,
+      sum(pending_count)::bigint as pending_count,
+      case when bool_or(pending_count>0 and pending_amount is null) then null::numeric else coalesce(sum(pending_amount),0) end as pending_amount,
+      sum(failed_count)::bigint as failed_count,
+      case when bool_or(failed_count>0 and failed_amount is null) then null::numeric else coalesce(sum(failed_amount),0) end as failed_amount,
+      sum(rejected_count)::bigint as rejected_count,
+      case when bool_or(rejected_count>0 and rejected_amount is null) then null::numeric else coalesce(sum(rejected_amount),0) end as rejected_amount,
+      sum(unknown_count)::bigint as unknown_count,
+      case when bool_or(unknown_count>0 and unknown_amount is null) then null::numeric else coalesce(sum(unknown_amount),0) end as unknown_amount,
+      max(latest_synced_at) as latest_synced_at
+    from metrics_raw
+    group by direction,currency,provider,local_date,local_hour,amount_bucket,amount_range_bucket,kind
+  ), metric_json as (
+    select kind,(to_jsonb(m)-array['kind','local_date','local_hour','amount_bucket','amount_range_bucket','all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount'])
+      || jsonb_build_object('date',local_date,'hour',local_hour,'bucket',coalesce(amount_range_bucket,amount_bucket),'all_amount',all_amount::text,
+        'success_amount',success_amount::text,'pending_amount',pending_amount::text,'failed_amount',failed_amount::text,
+        'rejected_amount',rejected_amount::text,'unknown_amount',unknown_amount::text) || coalesce(f.fee_facts,'{}'::jsonb) || case when m.kind='provider' then coalesce(fv.value,jsonb_build_object('fee_version_matched_count',0,'fee_version_unmatched_count',m.success_count,'fee_version_estimated_amount',case when m.success_count=0 then '0' end,'fee_version_state',case when m.success_count=0 then 'complete' else 'unknown' end)) else '{}'::jsonb end as value
+    from metrics m left join fee_bands f on m.kind='provider' and f.direction=m.direction and f.currency is not distinct from m.currency and f.provider is not distinct from m.provider
+      left join fee_version_facts fv on m.kind='provider' and fv.direction=m.direction and fv.currency is not distinct from m.currency and fv.provider is not distinct from m.provider
+  ), time_bounds(kind,bucket,min_ms,max_ms) as (
+    select k.kind,b.* from (values('pending_age'::text),('latency'::text))k(kind)
+    cross join (values
+      (0,null::numeric,300000::numeric),(1,300000,1800000),(2,1800000,3600000),(3,3600000,10800000),
+      (4,10800000,21600000),(5,21600000,43200000),(6,43200000,86400000),
+      (7,86400000,172800000),(8,172800000,259200000),(9,259200000,null))b(bucket,min_ms,max_ms)
+    where k.kind='pending_age' or $27<>2
+    union all select 'latency',b.* from (values
+      (0,null::numeric,60000::numeric),(1,60000,180000),(2,180000,300000),
+      (3,300000,1800000),(4,1800000,3600000),(5,3600000,10800000),
+      (6,10800000,21600000),(7,21600000,43200000),(8,43200000,86400000),
+      (9,86400000,172800000),(10,172800000,259200000),(11,259200000,null))b(bucket,min_ms,max_ms)
+    where $27=2),
+  duration_rows as materialized (
+    select direction,currency,amount,
+      case when status_group='success' then 'latency'::text else 'pending_age'::text end as kind,
+      case when status_group='success' then latency_ms else pending_wait_ms end as duration_ms,
+      case when status_group='success' then
+        case when success_at is null then 'missing_success_at' when not isfinite(success_at) then 'invalid_success_at'
+          when success_at<created_at then 'reversed_time' when success_at>$20 then 'future_success_at' end
+        else case when created_at>$20 then 'future_created_at' end end as excluded_reason
+    from filtered where $19<>'details' and ((status_group='success' and success_in_range)
+      or (direction='withdraw' and status_group='pending' and created_in_range))
+  ), duration_summary as (
+    select kind,direction,currency,count(*) as candidate_count,
+      count(duration_ms) as valid_count,count(*) filter(where duration_ms is null) as excluded_count,
+      case when count(amount) filter(where duration_ms is not null)=count(duration_ms)
+        then coalesce(sum(amount) filter(where duration_ms is not null),0) end as valid_amount,
+      count(*) filter(where duration_ms is not null and amount is null) as missing_amount_count,
+      jsonb_build_object('missing_success_at',count(*) filter(where excluded_reason='missing_success_at'),
+        'invalid_success_at',count(*) filter(where excluded_reason='invalid_success_at'),
+        'reversed_time',count(*) filter(where excluded_reason='reversed_time'),
+        'future_success_at',count(*) filter(where excluded_reason='future_success_at'),
+        'future_created_at',count(*) filter(where excluded_reason='future_created_at')) as excluded_reasons,
+      avg(duration_ms) as mean_ms,percentile_cont(0.5) within group(order by duration_ms) as p50_ms,
+      percentile_cont(0.95) within group(order by duration_ms) as p95_ms,max(duration_ms) as max_ms
+    from duration_rows group by kind,direction,currency
+  ), duration_bucket_totals as materialized (
+    -- Classify each valid order once. Maxima are inclusive; subsequent bins
+    -- have strict lower bounds. No join of every order to every threshold.
+    select kind,direction,currency,
+      case when kind='latency' and $27=2 then case when duration_ms<=60000 then 0 when duration_ms<=180000 then 1 when duration_ms<=300000 then 2 else (case when duration_ms<=300000 then 0 when duration_ms<=1800000 then 1
+        when duration_ms<=3600000 then 2 when duration_ms<=10800000 then 3
+        when duration_ms<=21600000 then 4 when duration_ms<=43200000 then 5
+        when duration_ms<=86400000 then 6 when duration_ms<=172800000 then 7
+        when duration_ms<=259200000 then 8 else 9 end)+2 end else case when duration_ms<=300000 then 0 when duration_ms<=1800000 then 1
+        when duration_ms<=3600000 then 2 when duration_ms<=10800000 then 3
+        when duration_ms<=21600000 then 4 when duration_ms<=43200000 then 5
+        when duration_ms<=86400000 then 6 when duration_ms<=172800000 then 7
+        when duration_ms<=259200000 then 8 else 9 end end as bucket,
+      count(*) as count,count(*) filter(where amount is null) as missing_amount_count,
+      coalesce(sum(amount),0) as known_amount
+    from duration_rows where duration_ms is not null group by 1,2,3,4
+  ), duration_bins as materialized (
+    select s.kind,s.direction,s.currency,b.bucket,b.min_ms,b.max_ms,coalesce(r.count,0) as count,
+      case when coalesce(r.missing_amount_count,0)=0 then coalesce(r.known_amount,0) end as amount,
+      s.valid_count,s.valid_amount
+    from duration_summary s join time_bounds b on b.kind=s.kind left join duration_bucket_totals r
+      on r.kind=s.kind and r.direction=s.direction and r.currency is not distinct from s.currency and r.bucket=b.bucket
+  ), duration_thresholds as (
+    -- Only ten tiny aggregate bins are scanned here. Excluding the current
+    -- inclusive bin makes these cumulative values strictly > threshold.
+    select kind,direction,currency,bucket,max_ms as threshold_ms,
+      coalesce(sum(count) over tail,0) as count,
+      case when count(*) filter(where amount is null) over tail=0 then coalesce(sum(amount) over tail,0) end as amount,
+      valid_count,valid_amount
+    from duration_bins
+    window tail as (partition by kind,direction,currency order by bucket rows between 1 following and unbounded following)
+  ), duration_json as (
+    select kind,false as cumulative,bucket,(to_jsonb(b)-array['kind','amount','valid_amount'])
+      ||jsonb_build_object('amount',amount::text,'valid_amount',valid_amount::text,
+        'count_share',count::numeric/nullif(valid_count,0),'amount_share',case when valid_amount>0 then amount/valid_amount end) as value
+    from duration_bins b
+    union all
+    select kind,true,bucket,(to_jsonb(t)-array['kind','amount','valid_amount'])
+      ||jsonb_build_object('amount',amount::text,'valid_amount',valid_amount::text,
+        'count_share',count::numeric/nullif(valid_count,0),'amount_share',case when valid_amount>0 then amount/valid_amount end)
+    from duration_thresholds t where threshold_ms is not null
+  ), duration_custom as (
+    select r.direction,r.currency,$28::numeric as min_ms,$29::numeric as max_ms,
+      count(*) filter(where duration_ms is not null and ($28 is null or duration_ms>$28) and ($29 is null or duration_ms<=$29)) as count,
+      case when count(*) filter(where duration_ms is not null and ($28 is null or duration_ms>$28) and ($29 is null or duration_ms<=$29) and amount is null)=0
+        then coalesce(sum(amount) filter(where duration_ms is not null and ($28 is null or duration_ms>$28) and ($29 is null or duration_ms<=$29)),0) end as amount,
+      s.valid_count,s.valid_amount
+    from duration_rows r join duration_summary s on s.kind=r.kind and s.direction=r.direction and s.currency is not distinct from r.currency
+    where $30 and r.kind='latency' group by r.direction,r.currency,s.valid_count,s.valid_amount
+  ), duration_custom_json as (
+    select (to_jsonb(c)-array['amount','valid_amount'])||jsonb_build_object('amount',amount::text,'valid_amount',valid_amount::text,
+      'count_share',count::numeric/nullif(valid_count,0),'amount_share',case when valid_amount>0 then amount/valid_amount end) as value
+    from duration_custom c
+  ), page as (
+    select id,system_order_id,order_number,third_party_order_number,member_id,provider,raw_provider,channel_type,direction,status,status_group,
+      created_at,success_at,amount::text,actual_amount::text,withdraw_fee::text,currency,synced_at,utr,latency_ms,pending_wait_ms
+    from filtered where $19<>'aggregate'
+      and ($8<>'success' or (status_group='success' and success_in_range))
+      order by case when $8='success' then success_at else created_at end desc,direction desc,id desc limit $18 offset $17
+  ) select jsonb_build_object('total',(select case when $8='success'
+      then count(*) filter(where status_group='success' and success_in_range)
+      else count(*) filter(where created_in_range) end from filtered),
+    'summary',coalesce((select jsonb_agg(value order by value->>'direction',value->>'currency') from metric_json where kind='summary'),'[]'::jsonb),
+    'groups',jsonb_build_object(
+      'provider',coalesce((select jsonb_agg(value order by value->>'provider',value->>'direction',value->>'currency') from metric_json where kind='provider'),'[]'::jsonb),
+      'daily',coalesce((select jsonb_agg(value order by value->>'date',value->>'provider',value->>'direction',value->>'currency') from metric_json where kind='daily'),'[]'::jsonb),
+      'hourly',coalesce((select jsonb_agg(value order by (value->>'hour')::integer,value->>'direction',value->>'currency') from metric_json where kind='hourly'),'[]'::jsonb),
+      'amount',coalesce((select jsonb_agg(value order by value->>'bucket',value->>'direction',value->>'currency') from metric_json where kind='amount'),'[]'::jsonb),
+      'matrix',coalesce((select jsonb_agg(value order by (value->>'hour')::integer,value->>'bucket',value->>'direction',value->>'currency') from metric_json where kind='matrix'),'[]'::jsonb),
+      'amount_range',coalesce((select jsonb_agg(value order by value->>'bucket',value->>'direction',value->>'currency') from metric_json where kind='amount_range'),'[]'::jsonb),
+      'matrix_range',coalesce((select jsonb_agg(value order by (value->>'hour')::integer,value->>'bucket',value->>'direction',value->>'currency') from metric_json where kind='matrix_range'),'[]'::jsonb),
+      'latency',coalesce((select jsonb_agg(value order by value->>'direction',value->>'currency',bucket) from duration_json where kind='latency' and not cumulative),'[]'::jsonb),
+      'latency_thresholds',coalesce((select jsonb_agg(value order by value->>'direction',value->>'currency',bucket) from duration_json where kind='latency' and cumulative),'[]'::jsonb),
+      'pending_age',coalesce((select jsonb_agg(value order by value->>'direction',value->>'currency',bucket) from duration_json where kind='pending_age' and not cumulative),'[]'::jsonb),
+      'pending_age_thresholds',coalesce((select jsonb_agg(value order by value->>'direction',value->>'currency',bucket) from duration_json where kind='pending_age' and cumulative),'[]'::jsonb))
+      ||case when $30 then jsonb_build_object('latency_custom',coalesce((select jsonb_agg(value order by value->>'direction',value->>'currency') from duration_custom_json),'[]'::jsonb)) else '{}'::jsonb end,
+    'latencySummary',coalesce((select jsonb_agg((to_jsonb(s)-array['kind','valid_amount'])||jsonb_build_object('valid_amount',valid_amount::text) order by direction,currency) from duration_summary s where kind='latency'),'[]'::jsonb),
+    'pendingSummary',coalesce((select jsonb_agg((to_jsonb(s)-array['kind','valid_amount'])||jsonb_build_object('valid_amount',valid_amount::text) order by direction,currency) from duration_summary s where kind='pending_age'),'[]'::jsonb),
+    'rows',coalesce((select jsonb_agg(to_jsonb(p) order by case when $8='success' then success_at else created_at end desc,direction desc,id desc) from page p),'[]'::jsonb))
+  $q$;
+
+  -- Provider pages do not need the eight chart grouping sets or duration bins.
+  -- Reuse exactly the same scoped source and predicates, with two grouping sets.
+  if p_request->>'view'='providers' and v_action='aggregate' then
+    if v_status<>'all' then raise exception using errcode='22023',message='unsupported_filter';end if;
+    v_sql:='with orders as ('||v_source||$q$), filtered as materialized (
+      select direction,currency,provider,channel_type,status_group,created_at,success_at,
+        case when amount::text not in ('NaN','Infinity','-Infinity') then amount end as amount,synced_at,
+        (created_at >= $5 and created_at < $6) as created_in_range,
+        (success_at >= $5 and success_at < $6 and status_group='success') as success_in_range
+      from orders where ($8='all' or status_group=$8) and ($12 is null or provider=any($12))
+        and ($13 is null or channel_type=any($13)) and ($14 is null or currency=$14)
+        and ($15 is null or amount>=$15) and ($16 is null or case when $31 then amount<$16 else amount<=$16 end)
+    ), fee_subjects as materialized (
+    select distinct direction,currency,provider,channel_type from filtered where $19<>'details' and status_group='success' and success_in_range
+      and $33 and exists(select 1 from private.fee_rate_versions where country=$32)
+  ), fee_intervals as materialized (
+    select s.direction,s.currency,s.provider,s.channel_type,v.* from fee_subjects s
+    cross join lateral private.dashboard_admin_fee_intervals($32,$2,s.provider,s.direction,s.currency,private.dashboard_admin_fee_category($32,s.channel_type)) v
+  ), fee_version_facts as (
+    select f.direction,f.currency,f.provider,jsonb_build_object(
+      'fee_version_matched_count',count(v.effective_from) filter(where f.amount>=0),
+      'fee_version_unmatched_count',count(*)-count(v.effective_from) filter(where f.amount>=0),
+      'fee_version_estimated_amount',(sum(f.amount*v.percent_rate+v.fixed_fee) filter(where f.amount>=0))::text,
+      'fee_version_state',case when count(v.effective_from) filter(where f.amount>=0)=count(*) then 'complete'
+        when count(v.effective_from) filter(where f.amount>=0)>0 then 'partial' else 'unknown' end
+    ) value from filtered f left join fee_intervals v on v.direction=f.direction and v.currency=f.currency and v.provider=f.provider
+      and v.channel_type is not distinct from f.channel_type
+      and f.amount>=0 and f.amount::text not in ('NaN','Infinity','-Infinity')
+      and isfinite(f.created_at) and f.created_at>=v.effective_from and (v.effective_until is null or f.created_at<v.effective_until)
+    where $19<>'details' and f.status_group='success' and f.success_in_range
+      and $33 and exists(select 1 from private.fee_rate_versions where country=$32)
+    group by f.direction,f.currency,f.provider
+  ), fee_bands as (
+      -- fee_bands_v1: successful orders use their success-time window. Aggregate
+      -- only amount/count facts; do not expose order identifiers or raw payload.
+      select direction,currency,provider,jsonb_build_object(
+        'fee_low_count',count(*) filter(where status_group='success' and success_in_range and amount>=0 and amount<=2000),
+        'fee_low_amount',coalesce(sum(amount) filter(where status_group='success' and success_in_range and amount>=0 and amount<=2000),0)::text,
+        'fee_high_count',count(*) filter(where status_group='success' and success_in_range and amount>=2001),
+        'fee_high_amount',coalesce(sum(amount) filter(where status_group='success' and success_in_range and amount>=2001),0)::text,
+        'fee_gap_count',count(*) filter(where status_group='success' and success_in_range and amount>2000 and amount<2001),
+        'fee_gap_amount',coalesce(sum(amount) filter(where status_group='success' and success_in_range and amount>2000 and amount<2001),0)::text,
+        'fee_unpriced_count',count(*) filter(where status_group='success' and success_in_range and (amount is null or amount<0))
+      ) as fee_facts from filtered where $19<>'details'
+      group by direction,currency,provider
+    ), metric as (
+      select direction,currency,provider,case when grouping(provider)=0 then 'provider' else 'summary' end as kind,
+        count(*) filter(where created_in_range) as all_count,
+        case when count(*) filter(where created_in_range and amount is null)=0
+          then coalesce(sum(amount) filter(where created_in_range),0) end as all_amount,
+        count(*) filter(where created_in_range and amount is null) as missing_amount_count,
+        count(*) filter(where created_in_range and amount<0) as negative_amount_count,
+        count(*) filter(where created_in_range and status_group='success') as created_success_count,
+        count(*) filter(where success_in_range) as success_count,
+        case when count(*) filter(where success_in_range and amount is null)=0
+          then coalesce(sum(amount) filter(where success_in_range),0) end as success_amount,
+        count(*) filter(where created_in_range and status_group='pending') as pending_count,
+        case when count(*) filter(where created_in_range and status_group='pending' and amount is null)=0
+          then coalesce(sum(amount) filter(where created_in_range and status_group='pending'),0) end as pending_amount,
+        count(*) filter(where created_in_range and status_group='failed') as failed_count,
+        case when count(*) filter(where created_in_range and status_group='failed' and amount is null)=0
+          then coalesce(sum(amount) filter(where created_in_range and status_group='failed'),0) end as failed_amount,
+        count(*) filter(where created_in_range and status_group='rejected') as rejected_count,
+        case when count(*) filter(where created_in_range and status_group='rejected' and amount is null)=0
+          then coalesce(sum(amount) filter(where created_in_range and status_group='rejected'),0) end as rejected_amount,
+        count(*) filter(where created_in_range and status_group='unknown') as unknown_count,
+        case when count(*) filter(where created_in_range and status_group='unknown' and amount is null)=0
+          then coalesce(sum(amount) filter(where created_in_range and status_group='unknown'),0) end as unknown_amount,
+        max(synced_at) as latest_synced_at
+      from filtered group by grouping sets ((direction,currency),(direction,currency,provider))
+    ), output as (
+      select kind,(to_jsonb(m)-'kind')||jsonb_build_object('all_amount',all_amount::text,
+        'success_amount',success_amount::text,'pending_amount',pending_amount::text,
+        'failed_amount',failed_amount::text,'rejected_amount',rejected_amount::text,
+        'unknown_amount',unknown_amount::text) || coalesce(f.fee_facts,'{}'::jsonb) || case when m.kind='provider' then coalesce(fv.value,jsonb_build_object('fee_version_matched_count',0,'fee_version_unmatched_count',m.success_count,'fee_version_estimated_amount',case when m.success_count=0 then '0' end,'fee_version_state',case when m.success_count=0 then 'complete' else 'unknown' end)) else '{}'::jsonb end as value from metric m
+      left join fee_bands f on m.kind='provider' and f.direction=m.direction and f.currency is not distinct from m.currency and f.provider is not distinct from m.provider
+      left join fee_version_facts fv on m.kind='provider' and fv.direction=m.direction and fv.currency is not distinct from m.currency and fv.provider is not distinct from m.provider
+    ) select jsonb_build_object('total',(select count(*) from filtered where created_in_range),
+      'summary',coalesce((select jsonb_agg(value) from output where kind='summary'),'[]'::jsonb),
+      'groups',jsonb_build_object('provider',coalesce((select jsonb_agg(value order by value->>'provider')
+        from output where kind='provider'),'[]'::jsonb)),'rows','[]'::jsonb)
+    $q$;
+  end if;
+
+  execute v_sql into v_result using v_id,v_platform.name,v_platform.scope_group,v_platform.timezone,v_start,v_end,
+    v_direction,v_status,v_member,v_order,v_system,v_providers,v_types,v_currency,v_min,v_max,v_offset,v_limit,v_action,v_asof,v_platform.currency,v_platform.source_name,v_third,v_confirmations,v_charge_edges,v_withdraw_edges,v_duration_version,v_duration_min,v_duration_max,v_duration_custom,v_max_exclusive,v_fee_country,v_fee_currency_proven;
+  if v_action='details' then
+    v_result:=jsonb_set(v_result,'{rows}',coalesce((select jsonb_agg(x||private.dashboard_admin_fee_quote(v_fee_country,v_platform.name,
+      x->>'provider',x->>'direction',case when v_fee_currency_proven then x->>'currency' end,(x->>'created_at')::timestamptz,(x->>'amount')::numeric,private.dashboard_admin_fee_category(v_fee_country,x->>'channel_type')) order by n)
+      from jsonb_array_elements(v_result->'rows') with ordinality t(x,n)),'[]'::jsonb));
+  end if;
+  if v_action='details' and v_platform.source='ar' then v_result:=private.dashboard_admin_ar_order_money(v_result,v_platform.scope_group,v_platform.source_name);end if;
+  if v_platform.source='wg' then v_result:=private.dashboard_admin_wg_order_result(v_result,v_platform.scope_group,v_platform.source_name);end if;
+  return v_result||case when v_duration_version=2 then jsonb_build_object('durationVersion',2)
+      ||case when v_duration_custom then jsonb_build_object('durationRange',v_duration->'range') else '{}'::jsonb end else '{}'::jsonb end
+    ||case when v_amount_bands is null then '{}'::jsonb else jsonb_build_object('amountBands',v_amount_bands,'amountBandsVersion',1) end
+    ||jsonb_build_object('version',1,'platform',v_meta,'basis','mixed_created_success','startAt',v_start,'endAt',v_end,
+    'asOf',v_asof,'offset',v_offset,'limit',v_limit,'hasMore',(v_result->>'total')::bigint>v_offset::bigint+v_limit,
+    'capabilities',v_capabilities);
+end;
+$function$;
+revoke all on function private.dashboard_admin_live_query_raw(jsonb) from public,anon,authenticated,service_role;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_validate_amount_bands(p_bands jsonb, p_direction text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+declare direction_key text; edge jsonb; previous_edge numeric; current_edge numeric;
+begin
+  if p_bands is null then return null; end if;
+  if jsonb_typeof(p_bands) is distinct from 'object' then
+    raise exception using errcode='22023',message='invalid_amount_bands';
+  end if;
+  if p_direction not in ('all','charge','withdraw') or p_direction is null
+    or exists(select 1 from jsonb_object_keys(p_bands) k where k not in ('charge','withdraw'))
+    or (p_direction in ('all','charge') and not p_bands ? 'charge')
+    or (p_direction in ('all','withdraw') and not p_bands ? 'withdraw') then
+    raise exception using errcode='22023',message='invalid_amount_bands';
+  end if;
+  foreach direction_key in array array['charge','withdraw'] loop
+    if not p_bands ? direction_key then continue; end if;
+    if jsonb_typeof(p_bands->direction_key) is distinct from 'array' then
+      raise exception using errcode='22023',message='invalid_amount_bands';
+    end if;
+    if jsonb_array_length(p_bands->direction_key)<>11 then
+      raise exception using errcode='22023',message='invalid_amount_bands';
+    end if;
+    previous_edge:=null;
+    for edge in select value from jsonb_array_elements(p_bands->direction_key) loop
+      if jsonb_typeof(edge) is distinct from 'number' then
+        raise exception using errcode='22023',message='invalid_amount_bands';
+      end if;
+      current_edge:=(edge#>>'{}')::numeric;
+      if current_edge::text in ('NaN','Infinity','-Infinity') or current_edge<0
+        or current_edge>1000000000000000 or current_edge<=previous_edge then
+        raise exception using errcode='22023',message='invalid_amount_bands';
+      end if;
+      previous_edge:=current_edge;
+    end loop;
+  end loop;
+  return p_bands;
+end;
+$function$;
+revoke all on function private.dashboard_admin_validate_amount_bands(jsonb,text) from public,anon,authenticated,service_role;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_validate_duration(p_request jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+declare v_version integer:=1;v_range jsonb;v_min numeric;v_max numeric;v_key text;
+begin
+ if not (p_request?'durationVersion' or p_request?'durationRange') then return jsonb_build_object('version',1);end if;
+ if p_request->'durationVersion' is distinct from '2'::jsonb then raise exception using errcode='22023',message='invalid_duration_version';end if;
+ v_version:=2;
+ if p_request->>'action' is distinct from 'aggregate'
+  or coalesce(p_request->>'view','full') not in('full','drilldown')
+  or (p_request->>'view'='drilldown' and p_request->>'kind' is distinct from 'latency')
+ then raise exception using errcode='22023',message='invalid_duration_view';end if;
+ if p_request?'durationRange' then
+  v_range:=p_request->'durationRange';
+  if jsonb_typeof(v_range) is distinct from 'object' or v_range-array['minSeconds','maxSeconds']<>'{}'::jsonb then
+   raise exception using errcode='22023',message='invalid_duration_range';end if;
+  foreach v_key in array array['minSeconds','maxSeconds'] loop
+   if v_range?v_key and v_range->v_key<>'null'::jsonb then
+    if jsonb_typeof(v_range->v_key) is distinct from 'number' or (v_range->>v_key)::numeric<>trunc((v_range->>v_key)::numeric)
+     or (v_range->>v_key)::numeric not between 0 and 315360000 then raise exception using errcode='22023',message='invalid_duration_range';end if;
+   end if;
+  end loop;
+  v_min:=(v_range->>'minSeconds')::numeric*1000;v_max:=(v_range->>'maxSeconds')::numeric*1000;
+  if (v_min is null and v_max is null) or v_min>=v_max then raise exception using errcode='22023',message='invalid_duration_range';end if;
+  if p_request->>'view'='drilldown' and (p_request?'bucket' or p_request?'cumulative') then
+   raise exception using errcode='22023',message='ambiguous_duration_segment';end if;
+ end if;
+ return jsonb_build_object('version',v_version,'custom',v_range is not null,'min_ms',v_min,'max_ms',v_max,
+  'range',case when v_range is not null then jsonb_build_object('minSeconds',v_min/1000,'maxSeconds',v_max/1000) end);
+end;$function$;
+revoke all on function private.dashboard_admin_validate_duration(jsonb) from public,anon,authenticated,service_role;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_wg_capabilities(p_direction text DEFAULT 'all'::text)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+ SET search_path TO ''
+AS $function$
+ select jsonb_build_object('thirdPartyOrderNumber',true,'utr',true,'actualAmount',true,'recordedFee',true,
+  'amountBasis','normalized_member_amount','actualAmountBasis','settlement_amount_only_when_same_currency',
+  'recordedFeeBasis','settlement_fee_only_when_same_currency','separateSettlementCurrency',true,
+  'sourceDetailSystem','WG','sourcePriority','native_details_only_no_legacy_daily_union',
+  'successTimeAvailable',p_direction='charge','withdrawSuccessTimeAvailable',false,
+  'successTimeBasis','recharge_notify_time_only','latencyBasis','recharge_notify_time_minus_created',
+  'successCohort','recharge_success_at_in_selected_range_withdraw_unavailable',
+  'createdSuccessBasis','recharge_status_2_withdraw_status_4',
+  'pendingBasis','created_cohort_current_pending_or_paying_not_midnight_snapshot',
+  'statusProjection',jsonb_build_object('paying','pending','cancelled','failed','forced','unknown'),
+  'sourceCompletenessVerified',false,'coverageBasis','separate_collector_committed_windows');
+$function$;
+revoke all on function private.dashboard_admin_wg_capabilities(text) from public,anon,authenticated,service_role;
+CREATE OR REPLACE FUNCTION private.dashboard_admin_wg_order_result(p_result jsonb, p_country text, p_platform text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE
+ SET search_path TO ''
+AS $function$
+declare v_result jsonb:=p_result;v_key text;v_rows jsonb;v_site text;
+begin
+ select site_code into strict v_site from private.dashboard_admin_wg_sites() where country_code=p_country and platform=p_platform;
+ for v_key in select 'summary' union all select key from jsonb_each(coalesce(v_result->'groups','{}')) loop
+  select coalesce(jsonb_agg(case when r->>'direction'='withdraw' then
+   r || case when r?'success_count' then jsonb_build_object('success_count',null,'success_amount',null,'success_time_available',false) else '{}'::jsonb end
+     || case when r?'fee_low_count' then jsonb_build_object('fee_low_count',null,'fee_low_amount',null,'fee_high_count',null,'fee_high_amount',null,'fee_gap_count',null,'fee_gap_amount',null,'fee_unpriced_count',null) else '{}'::jsonb end
+   else r end order by n),'[]') into v_rows
+  from jsonb_array_elements(case when v_key='summary' then coalesce(v_result->'summary','[]') else coalesce(v_result#>array['groups',v_key],'[]') end) with ordinality x(r,n);
+  v_result:=jsonb_set(v_result,case when v_key='summary' then array['summary'] else array['groups',v_key] end,v_rows,true);
+ end loop;
+ -- Join only the already-authorized, bounded result page by site/order PK.
+ select coalesce(jsonb_agg(r||jsonb_build_object(
+  'site_code',v_site,'source_status_code',w.status_code,'source_status_group',w.status_group,
+  'source_updated_at',w.updated_at,'operated_at',w.operated_at,'completion_at_unverified',w.completion_at_unverified,
+  'member_currency',w.member_currency,'member_unit_scale',w.member_unit_scale,'member_amount_units',w.member_amount_units::text,
+  'settlement_currency',w.settlement_currency,'settlement_amount',w.settlement_amount::text,
+  'settlement_fee',w.settlement_fee::text,'exchange_rate',w.exchange_rate::text,
+  'operator_name',w.business_fields->>'operator_name','operator_class',w.business_fields->>'operator_class',
+  'remark_sanitized',w.business_fields->>'remark_sanitized','rejection_reason',w.business_fields->>'rejection_reason',
+  'interception_reason',w.business_fields->>'interception_reason','interception_codes',w.business_fields->'interception_codes',
+  'front_note_sanitized',w.business_fields->>'front_note_sanitized','back_note_sanitized',w.business_fields->>'back_note_sanitized'
+ ) order by n),'[]') into v_rows
+ from jsonb_array_elements(coalesce(v_result->'rows','[]')) with ordinality x(r,n)
+ join lateral (select status_code,status_group,updated_at,operated_at,completion_at_unverified,member_currency,member_unit_scale,member_amount_units,settlement_currency,settlement_amount,settlement_fee,exchange_rate,business_fields
+   from public.wg_recharge_details where site_code=v_site and order_number=r->>'order_number' and r->>'direction'='charge'
+  union all select status_code,status_group,updated_at,operated_at,completion_at_unverified,member_currency,member_unit_scale,member_amount_units,settlement_currency,settlement_amount,settlement_fee,exchange_rate,business_fields
+   from public.wg_withdraw_details where site_code=v_site and order_number=r->>'order_number' and r->>'direction'='withdraw')w on true;
+ if v_result?'rows' then v_result:=jsonb_set(v_result,'{rows}',v_rows,true);end if;
+ return v_result||jsonb_build_object('nativeSource','WG','sourcePolicy','details_only','withdrawSuccessTimeAvailable',false);
+end;
+$function$;
+revoke all on function private.dashboard_admin_wg_order_result(jsonb,text,text) from public,anon,authenticated,service_role;
