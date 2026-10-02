@@ -3,6 +3,7 @@ const {test,before,after}=require('node:test'),assert=require('node:assert/stric
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),{createRequire}=require('node:module'),crypto=require('node:crypto');
 const root=path.join(__dirname,'..'),read=p=>fs.readFileSync(path.join(root,p),'utf8');
 const migration=read('supabase/migrations/20261002080803_immutable_fee_effective_versions.sql');
+const scopedDelete=read('supabase/migrations/20261002092348_fee_current_evidence_scoped_delete.sql');
 let f,db,seq=0;
 async function bootstrap(){const filename=path.join(__dirname,'admin-duration-precision-ranges.test.cjs'),req=createRequire(filename);let setup;
  const ctx={require:n=>n==='node:test'?{test(){},before:fn=>setup=fn,after(){}}:req(n),__dirname,process,console,structuredClone};vm.createContext(ctx);vm.runInContext(fs.readFileSync(filename,'utf8')+'\nglobalThis.fixture={get db(){return db},request,call,add,as};',ctx,{filename});await setup();return ctx.fixture;}
@@ -22,6 +23,7 @@ before(async()=>{f=await bootstrap();db=f.db;
  for(const name of ['query-raw','rates','remap-groups'])await db.exec(read('tests/fixtures/fee-versions/production-'+name+'.sql'));
  await db.exec('revoke all on function private.dashboard_admin_live_query_raw(jsonb),private.dashboard_admin_live_remap_groups(jsonb,text,text,boolean),private.dashboard_admin_live_rates(jsonb) from public,anon,authenticated;grant execute on function private.dashboard_admin_live_rates(jsonb) to authenticated;');
  await db.exec(migration);
+ await db.exec(scopedDelete);
 });
 after(()=>db?.close());
 test('complete publication updates both projections atomically and retry is idempotent',async()=>rollback(async()=>{
@@ -189,4 +191,49 @@ test('confirmed LG currency contract matches only its country and rejects change
 test('native aggregate non-finite monetary input remains an unmatched success rather than a priced Infinity',async()=>rollback(async()=>{
  await publish(input());await db.exec('delete from ar_collected_orders');for(const [i,amount] of ['Infinity','-Infinity','NaN'].entries())await f.add('ar','charge','NONFINITE-'+i,amount);
  for(const view of ['full','providers']){const out=await f.call(f.request('ar',{direction:'charge',view})),row=out.groups.provider[0];assert.equal(row.success_count,3);assert.equal(row.fee_version_matched_count,0);assert.equal(row.fee_version_unmatched_count,3);assert.equal(row.fee_version_estimated_amount,null);assert.equal(row.fee_version_state,'unknown');}
+}));
+test('scoped cleanup permits first publication with zero current evidence',async()=>rollback(async()=>{
+ assert.equal(await scalar('select count(*)::int from private.fee_rate_current_evidence'),0);
+ const x=input();const out=await publish(x);assert.equal(out.ok,true);assert.equal(out.rates,1);assert.equal(out.platformStatuses,1);
+ assert.equal(await scalar('select count(*)::int from private.fee_rate_current_evidence where generation_id=$1',[x.id]),2);
+}));
+test('scoped cleanup removes every same-source generation but cannot delete another source evidence',async()=>rollback(async()=>{
+ const first=input();await publish(first);const second=input();await publish(second);
+ await db.query("update private.fee_rate_current_evidence set generation_id=$1 where direction='charge'",[first.id]);
+ assert.equal(await scalar('select count(distinct generation_id)::int from private.fee_rate_current_evidence'),2);
+ const foreign=crypto.randomUUID();await db.query("insert into private.fee_rate_generations(id,source_key,observed_at,payload_hash,receipt) values($1,'foreign-source','2026-09-01Z','synthetic','{}')",[foreign]);
+ await db.query("insert into private.fee_rate_current_evidence(source_id,direction,rule_key,state,provenance,generation_id) values('foreign-evidence','charge','foreign-rule','unknown','{}',$1)",[foreign]);
+ const third=input();assert.equal((await publish(third)).ok,true);
+ assert.equal(await scalar('select count(*)::int from private.fee_rate_current_evidence where generation_id=$1',[third.id]),2);
+ assert.equal(await scalar('select count(*)::int from private.fee_rate_current_evidence where generation_id in($1,$2)',[first.id,second.id]),0);
+ assert.equal(await scalar('select count(*)::int from private.fee_rate_current_evidence where generation_id=$1',[foreign]),1);
+ assert.equal(await scalar('select count(*)::int from private.fee_rate_generations'),4,'immutable source receipts remain');
+ await db.exec('savepoint changedsource');await assert.rejects(scalar('select public.fee_rate_publish_generation($1,$2,$3,$4,$5,$6,$7)',[crypto.randomUUID(),'foreign-source',input().at,JSON.stringify(third.rates),JSON.stringify(third.status),JSON.stringify(third.ev),JSON.stringify(third.manifest)]),/fee_source_identity_changed/);await db.exec('rollback to changedsource');
+}));
+test('failed projection after scoped cleanup restores all evidence generations and version receipts',async()=>rollback(async()=>{
+ const first=input();await publish(first);const second=input();await publish(second);await db.query("update private.fee_rate_current_evidence set generation_id=$1 where direction='charge'",[first.id]);
+ const snapshot=()=>scalar("select jsonb_build_array((select jsonb_agg(to_jsonb(e) order by source_id,direction) from private.fee_rate_current_evidence e),(select count(*) from private.fee_rate_generations),(select count(*) from private.fee_rate_versions),(select jsonb_agg(to_jsonb(r) order by id) from third_party_rates r))");
+ const before=await snapshot();await db.exec("alter table third_party_platform_status add constraint scoped_cleanup_failure check(platform<>'FAIL');savepoint failedgeneration");
+ const x=input([rate({collect_fee:'4%'})],[evidence({effectiveFrom:'2026-09-19T00:00:00Z'})]);x.status[0].platform='FAIL';await assert.rejects(publish(x),/scoped_cleanup_failure/);await db.exec('rollback to failedgeneration');assert.deepEqual(await snapshot(),before);
+}));
+test('forward migration replaces exactly one statement and preserves every function metadata field',async()=>rollback(async()=>{
+ const signature='public.fee_rate_publish_generation(uuid,text,timestamptz,jsonb,jsonb,jsonb,jsonb)';
+ const start=migration.indexOf('create function public.fee_rate_publish_generation('),end=migration.indexOf('end $function$;',start)+'end $function$;'.length;
+ const original=migration.slice(start,end).replace('create function','create or replace function');const patch=scopedDelete.match(/do \$fee_scoped_delete\$[\s\S]*?end \$fee_scoped_delete\$;/)[0];
+ const metadata=()=>scalar("select to_jsonb(p)-'prosrc' from pg_proc p where oid=$1::regprocedure",[signature]);
+ await db.exec(original);const before=await metadata();await db.exec('savepoint originalpublisher');await db.exec(patch);assert.deepEqual(await metadata(),before);
+ const actual=await scalar('select prosrc from pg_proc where oid=$1::regprocedure',[signature]);assert.equal(crypto.createHash('md5').update(actual).digest('hex'),'5e7f94ebc83434433ee589fce7ae3df4');
+ const originalBody=original.split('$function$')[1];assert.equal(actual,originalBody.replace('delete from private.fee_rate_current_evidence;','delete from private.fee_rate_current_evidence c where exists (select 1 from private.fee_rate_generations g where g.id=c.generation_id and g.source_key=p_source_key);'));
+ await db.exec('rollback to originalpublisher');
+ for(const change of ["grant execute on function "+signature+" to authenticated","alter function "+signature+" set work_mem='8MB'","create or replace function "+signature+" returns jsonb language plpgsql security definer set search_path='' as $$begin return '{}';end$$"]){
+  await db.exec('savepoint publisherdrift');if(change.startsWith('create or replace')){await db.exec(original.replace('begin\n if p_generation_id','begin\n -- drift\n if p_generation_id'));}else await db.exec(change);
+  await assert.rejects(db.exec(patch),/fee_publisher_(baseline|metadata)_drift/);await db.exec('rollback to publisherdrift');
+ }
+}));
+test('production-safe-update shape is preserved for every deployed publisher DELETE without disabling safeguards',async()=>rollback(async()=>{
+ const actual=await scalar("select prosrc from pg_proc where oid='public.fee_rate_publish_generation(uuid,text,timestamptz,jsonb,jsonb,jsonb,jsonb)'::regprocedure");
+ const deletes=[...actual.matchAll(/\bdelete\s+from\b[^;]*;/gi)].map(m=>m[0]);assert.equal(deletes.length,3);for(const statement of deletes)assert.match(statement,/\bwhere\b/i);
+ assert.doesNotMatch(scopedDelete,/safeupdate\s*[.=]|set\s+(?:session_)?(?:preload_libraries|role)/i);
+ const available=await scalar("select count(*)::int from pg_available_extensions where name in('safeupdate','safeupdates')");
+ console.log('native safeupdate extension available in PGlite:',available,'; production pg_net failure is recorded separately, scope/rollback behavior is executed above');
 }));
