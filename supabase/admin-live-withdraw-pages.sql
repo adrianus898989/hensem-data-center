@@ -7,12 +7,12 @@ returns text language sql immutable set search_path='' as $$
  when 'VEER.GAME' then 'VEERGAME' else upper(btrim(p_name)) end;
 $$;
 revoke all on function private.dashboard_admin_live_withdraw_key(text) from public,anon,authenticated;
-create or replace function private.dashboard_admin_live_game66_withdraw(
-  p_start date,
-  p_end date, p_country text, p_platforms text[]
-)
-returns jsonb
-language plpgsql stable security definer set search_path = '' as $$
+create or replace function private.dashboard_admin_live_game66_withdraw(p_start date, p_end date, p_country text, p_platforms text[])
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
 declare
   v_scope jsonb;
   v_rows jsonb := '[]'::jsonb;
@@ -31,43 +31,71 @@ begin
   v_start_at := p_start::timestamp at time zone 'Asia/Kolkata';
   v_end_at := (p_end + 1)::timestamp at time zone 'Asia/Kolkata';
 
-  with daily_grouped as (
-    select
-      (w.create_time at time zone 'Asia/Kolkata')::date as data_date,
+  -- Offline candidate: source facts flow through one parameterized platform
+  -- scan and one aggregate. No raw fact materialization or weighted-average
+  -- rewriting; daily and operator AVG retain independent original states.
+  with allowed_platforms as materialized (
+    select p.id,
       case p.team_code
         when 'hong_kong' then 'HK_TEAM'
         when 'red_crab' then 'RED_CRAB'
         else upper(p.team_code)
       end as country_code,
       coalesce(nullif(pg_catalog.btrim(p.team_name), ''), nullif(pg_catalog.btrim(p.team_code), ''), '未分组团队') as country,
-      coalesce(nullif(pg_catalog.btrim(p.platform_name), ''), nullif(pg_catalog.btrim(p.platform_code), ''), '未标记平台') as platform,
-      count(*)::bigint as total,
-      count(*) filter (where w.status_code in ('1', '3'))::bigint as success,
-      count(*) filter (where w.status_code = '-1')::bigint as rejected,
-      count(*) filter (where w.auto_commit = '2')::bigint as auto_count,
-      count(*) filter (where w.auto_commit is distinct from '2')::bigint as manual_count,
-      count(*) filter (where w.status_code = '1')::bigint as submitted_count,
-      count(*) filter (where w.status_code = '3')::bigint as paid_count,
-      count(*) filter (where w.status_code = '2')::bigint as payout_failed_count,
-      coalesce(avg(greatest(0::numeric, extract(epoch from (
-        coalesce(w.update_time, w.submit_time, w.last_seen_at, w.create_time) - w.create_time
-      )))) filter (where w.create_time is not null), 0)::numeric as avg_seconds,
-      max(coalesce(w.last_seen_at, w.update_time, w.submit_time, w.create_time)) as updated_at
-    from public.game66_withdraw_orders w
-    join public.game66_platforms p on p.id = w.platform_id
-    where p.team_name=p_country and (p_platforms is null or private.dashboard_admin_live_withdraw_key(p.platform_name)=any(p_platforms)) and w.create_time >= v_start_at
-      and w.create_time < v_end_at
-      and private.dashboard_scope_allows(
-        v_scope,
+      coalesce(nullif(pg_catalog.btrim(p.platform_name), ''), nullif(pg_catalog.btrim(p.platform_code), ''), '未标记平台') as platform
+    from public.game66_platforms p
+    where p.team_name=p_country
+      and (p_platforms is null or private.dashboard_admin_live_withdraw_key(p.platform_name)=any(p_platforms))
+      and private.dashboard_scope_allows(v_scope,
         case p.team_code
           when 'hong_kong' then 'HK_TEAM'
           when 'red_crab' then 'RED_CRAB'
           else upper(p.team_code)
-        end,
-        p.platform_name
-      )
-    group by 1, 2, 3, 4
-  )
+        end,p.platform_name)
+  ), facts as (
+    select (w.create_time at time zone 'Asia/Kolkata')::date as data_date,
+      p.country_code,p.country,p.platform,
+      case when w.auto_commit = '2' then '自动审核'
+        else coalesce(nullif(pg_catalog.btrim(w.audit_admin), ''),
+          nullif(pg_catalog.btrim(w.lock_admin), ''),
+          nullif(pg_catalog.btrim(w.lock_user_admin), ''),
+          '人工审核（未标记账号）') end as account,
+      w.status_code,w.auto_commit,w.create_time,
+      greatest(0::numeric,extract(epoch from (
+        coalesce(w.update_time,w.submit_time,w.last_seen_at,w.create_time)-w.create_time
+      ))) as handle_seconds,
+      coalesce(w.last_seen_at,w.update_time,w.submit_time,w.create_time) as updated_at
+    from allowed_platforms p cross join lateral (
+      select w.create_time,w.status_code,w.auto_commit,w.audit_admin,
+        w.lock_admin,w.lock_user_admin,w.update_time,w.submit_time,w.last_seen_at
+      from public.game66_withdraw_orders w
+      where w.platform_id=p.id and w.create_time>=v_start_at and w.create_time<v_end_at
+      offset 0
+    ) w
+  ), source_stats as materialized (
+    select data_date,country_code,country,platform,account,
+      grouping(account) as grouping_level,
+      count(*)::bigint as total,
+      count(*) filter (where status_code in ('1','3'))::bigint as success,
+      count(*) filter (where status_code = '-1')::bigint as rejected,
+      count(*) filter (where auto_commit = '2')::bigint as auto_count,
+      count(*) filter (where auto_commit is distinct from '2')::bigint as manual_count,
+      count(*) filter (where status_code = '1')::bigint as submitted_count,
+      count(*) filter (where status_code = '3')::bigint as paid_count,
+      count(*) filter (where status_code = '2')::bigint as payout_failed_count,
+      coalesce(avg(handle_seconds) filter (where create_time is not null),0)::numeric as avg_seconds,
+      max(updated_at) as updated_at
+    from facts
+    group by grouping sets (
+      (data_date,country_code,country,platform),
+      (data_date,country_code,country,platform,account)
+    )
+  ), daily_grouped as (
+    select * from source_stats where grouping_level=1
+  ), operator_grouped as (
+    select data_date,country_code,country,platform,account,total as processed,rejected,avg_seconds,updated_at
+    from source_stats where grouping_level=0
+  ), daily_result(rows,latest) as (
   select coalesce(jsonb_agg(jsonb_build_object(
       'id', md5(concat_ws('|||', 'game66', data_date::text, country_code, platform)),
       'data_date', data_date,
@@ -93,49 +121,8 @@ begin
       'updated_at', updated_at
     ) order by data_date, country_code, platform), '[]'::jsonb),
     max(updated_at)
-  into v_rows, v_latest
-  from daily_grouped;
-
-  with operator_grouped as (
-    select
-      (w.create_time at time zone 'Asia/Kolkata')::date as data_date,
-      case p.team_code
-        when 'hong_kong' then 'HK_TEAM'
-        when 'red_crab' then 'RED_CRAB'
-        else upper(p.team_code)
-      end as country_code,
-      coalesce(nullif(pg_catalog.btrim(p.team_name), ''), nullif(pg_catalog.btrim(p.team_code), ''), '未分组团队') as country,
-      coalesce(nullif(pg_catalog.btrim(p.platform_name), ''), nullif(pg_catalog.btrim(p.platform_code), ''), '未标记平台') as platform,
-      case
-        when w.auto_commit = '2' then '自动审核'
-        else coalesce(
-          nullif(pg_catalog.btrim(w.audit_admin), ''),
-          nullif(pg_catalog.btrim(w.lock_admin), ''),
-          nullif(pg_catalog.btrim(w.lock_user_admin), ''),
-          '人工审核（未标记账号）'
-        )
-      end as account,
-      count(*)::bigint as processed,
-      count(*) filter (where w.status_code = '-1')::bigint as rejected,
-      coalesce(avg(greatest(0::numeric, extract(epoch from (
-        coalesce(w.update_time, w.submit_time, w.last_seen_at, w.create_time) - w.create_time
-      )))) filter (where w.create_time is not null), 0)::numeric as avg_seconds,
-      max(coalesce(w.last_seen_at, w.update_time, w.submit_time, w.create_time)) as updated_at
-    from public.game66_withdraw_orders w
-    join public.game66_platforms p on p.id = w.platform_id
-    where p.team_name=p_country and (p_platforms is null or private.dashboard_admin_live_withdraw_key(p.platform_name)=any(p_platforms)) and w.create_time >= v_start_at
-      and w.create_time < v_end_at
-      and private.dashboard_scope_allows(
-        v_scope,
-        case p.team_code
-          when 'hong_kong' then 'HK_TEAM'
-          when 'red_crab' then 'RED_CRAB'
-          else upper(p.team_code)
-        end,
-        p.platform_name
-      )
-    group by 1, 2, 3, 4, 5
-  )
+  from daily_grouped
+  ), operator_result(rows,latest) as (
   select coalesce(jsonb_agg(jsonb_build_object(
       'id', md5(concat_ws('|||', 'game66-operator', data_date::text, country_code, platform, account)),
       'data_date', data_date,
@@ -153,8 +140,11 @@ begin
       'updated_at', updated_at
     ) order by data_date, country_code, platform, account), '[]'::jsonb),
     max(updated_at)
-  into v_operator_rows, v_operator_latest
-  from operator_grouped;
+  from operator_grouped
+  )
+  select d.rows,d.latest,o.rows,o.latest
+  into v_rows,v_latest,v_operator_rows,v_operator_latest
+  from daily_result d cross join operator_result o;
 
   v_latest := greatest(v_latest, v_operator_latest);
   return jsonb_build_object(
@@ -164,8 +154,9 @@ begin
     'latestWriteAt', v_latest
   );
 end;
-$$;
+$function$
 
+;
 
 revoke all on function private.dashboard_admin_live_game66_withdraw(date,date,text,text[]) from public,anon,authenticated;
 create or replace function private.dashboard_admin_live_can_note()
