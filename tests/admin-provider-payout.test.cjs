@@ -18,6 +18,7 @@ function fixture(orders){
  ctx.render();return {root,L,drawers,api:root.HensemProviderSummary,html:()=>html,networkCalls:()=>networkCalls,render(flow=direction){direction=flow;ctx.render()}};
 }
 function order(platformId,source,successAmount,successCount,other={}){return {provider:'SyntheticPay',platformId,platform:'Same displayed platform',source,currency:'INR',direction:'withdraw',all_amount:10000,all_count:20,success_amount:successAmount,success_count:successCount,created_success_count:2,pending_amount:500,pending_count:3,...other}}
+const verifiedFee=(row,amount)=>({...row,fee_version_state:'complete',fee_version_matched_count:row.success_count,fee_version_unmatched_count:0,fee_version_estimated_amount:amount});
 const plain=html=>html.replace(/<[^>]*>/g,'').trim();
 function breakdown(html){
  assert.match(html,/<div class="provider-platform-breakdown">/,'expanded platform heading is rendered');
@@ -59,7 +60,7 @@ test('confirmed UpiPay payout row supplies both percentage and per-order charge 
  const confirmed={scopeType:'country',country:'印度',provider:'UpiPay',sheetName:'印度线下',sourceRow:4,payoutFee:'2.50%',payoutSingleFee:'6'};
  const inactive={...confirmed,sourceRow:47,payoutFee:'2.80%',status:'停用'};
  const blankPlatform={...confirmed,scopeType:'platform',platform:row.platform,payoutFee:'',payoutSingleFee:''};
- assert.equal(h.api.estimate(row,[inactive,blankPlatform,confirmed],'印度'),85);
+ assert.equal(h.api.estimate(verifiedFee(row,83.25),[inactive,blankPlatform,confirmed],'印度'),83.25,'only the explicit backend historical fee supplies the amount');
  assert.equal(h.api.feeCandidates(row,[inactive,blankPlatform,confirmed],'印度')[0],confirmed);
  assert.equal(h.api.estimate(row,[inactive,blankPlatform],'印度'),null,'missing confirmed row must stay unmatched');
 });
@@ -67,11 +68,11 @@ test('typed provider aliases merge transaction/workorder totals once and retain 
  const h=fixture([]),orders=[order('a','ar',100,10,{provider:'RushPay唤醒'}),order('b','game66',200,20,{provider:'RushPay跑分'}),order('a','ar',50,5,{provider:'T3Pay唤醒'}),order('b','game66',75,7,{provider:'3TPay'})];
  const issues=[{provider:'RushPay唤醒',direction:'withdraw',submittedAmount:40,submittedCount:4,successAmount:30,successCount:3,notReceivedAmount:10,notReceivedCount:1},{provider:'RushPay跑分',direction:'withdraw',submittedAmount:60,submittedCount:6,successAmount:40,successCount:4,notReceivedAmount:20,notReceivedCount:2}];
  const rates=[{provider:'RushPay唤醒',country:'印度',scopeType:'country',payoutFee:'1%',sheetName:'印度线下',sourceRow:5,sourceType:'唤醒',sourceTypeProvider:'RushPay唤醒',sourceTypeCell:'B5'},{provider:'RushPay跑分',country:'印度',scopeType:'country',payoutFee:'1%',sheetName:'印度线下',sourceRow:6,sourceType:'跑分',sourceTypeProvider:'RushPay跑分',sourceTypeCell:'B6'}];
- const before=structuredClone({orders,issues,rates}),rows=h.api.buildRows({orders,issues,rates,country:'印度',direction:'withdraw',plus,combine,coverage:{complete:true,capturedPlatformDays:2}});
+ orders[0]=verifiedFee(orders[0],0.75);orders[1]=verifiedFee(orders[1],2.25);const before=structuredClone({orders,issues,rates}),rows=h.api.buildRows({orders,issues,rates,country:'印度',direction:'withdraw',plus,combine,coverage:{complete:true,capturedPlatformDays:2}});
  assert.equal(rows.length,3);const rush=rows.find(r=>r.provider==='RushPay');assert.equal(rush.success_amount,300);assert.equal(rush.success_count,30);assert.equal(rush.issues.submittedCount,10);assert.equal(rush.issues.notReceivedCount,3);assert.equal(rush.issues.notReceivedAmount,30);
  const type=h.api.providerType(rush,rates,'印度');assert.equal(type.label,'多种类型');assert.deepEqual(new Set(type.types),new Set(['跑分','唤醒']));assert.match(type.detail,/B5/);assert.match(type.detail,/B6/);
  assert.equal(h.api.estimate(rush,rates,'印度'),3,'same fee does not charge twice after alias merge');
- assert.equal(h.api.estimate(rush,[rates[0],{...rates[1],payoutFee:'2%'}],'印度'),null,'conflicting source rates require review');
+ assert.equal(h.api.estimate(rush,[rates[0],{...rates[1],payoutFee:'2%'}],'印度'),3,'today source-rate conflict cannot replace verified historical prices');
  assert.deepEqual({orders,issues,rates},before);
 });
 

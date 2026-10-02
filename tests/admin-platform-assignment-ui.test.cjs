@@ -39,3 +39,10 @@ test('changing a filter only refreshes the result region and restored unstamped 
  h.L.teamPlatformQuery='';delete h.L.platformAssignmentsAppliedRequest;assert.doesNotMatch(h.module.platformView(),/<table>|SYNTHETIC-BR/);
  h.L.platformAssignmentsAppliedRequest={country:'巴西',offset:20,limit:50};assert.match(h.module.platformView(),/<table>/,'paging does not alter filter identity');
 });
+
+test('provider association counts distinguish unknown source coverage from verified zero',()=>{
+ const h=make();h.L.country='巴西';h.L.providerConfig={rows:[{country:'巴西',platform:'SYNTHETIC-BR',rawProvider:'Source-A',canonicalProvider:'Known-A',canonicalProviders:['Known-A'],chargeCount:null,withdrawCount:0,matchedCount:null,status:'assigned'}],total:1,summary:{rawProviders:1,assigned:1,unassigned:0,conflict:0},options:{countries:['巴西']}};h.L.providerConfigPage=1;h.L.providerConfigSize=20;
+ let html=h.module.providerView();assert.match(html,/SYNTHETIC-BR\|—\|0\|—\|已归类/);
+ for(const invalid of [undefined,'',true,-1,'NaN','Infinity']){h.L.providerConfig.rows[0].chargeCount=invalid;html=h.module.providerView();assert.match(html,/SYNTHETIC-BR\|—\|0\|—\|已归类/);}
+ h.L.providerConfig.rows[0].chargeCount='123';h.L.providerConfig.rows[0].matchedCount=123;assert.match(h.module.providerView(),/SYNTHETIC-BR\|123\|0\|123\|已归类/);
+});

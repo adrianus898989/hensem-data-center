@@ -417,3 +417,11 @@ test('pending analysis failures preserve missing-data and permission distinction
   await assert.rejects(h.api.adminLiveRequest(session,request),error=>error.message.includes(expected)&&!/private|token/.test(error.message));
  }
 });
+
+
+test('rate source mode uses only minimal verified scope metadata; missing metadata fails closed',()=>{
+ const h=load();const run=scope=>{const html=h.api.makeAdminLiveDocument('<!doctype html><html><head></head><body></body></html>','scope-channel',undefined,scope),ctx={window:null,parent:{postMessage(){}},Map,Error,URL,setTimeout,clearTimeout,addEventListener(){},document:{}};ctx.window=ctx;vm.runInNewContext([...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)][0][1],ctx);return {html,scope:JSON.parse(JSON.stringify(ctx.hensemDataScope))};};
+ assert.deepEqual(run().scope,{mode:'selected',identity:'unverified'});
+ const verified=run({mode:'all',identity:'synthetic:all',access_token:'forbidden-token',password:'forbidden-password'});assert.deepEqual(verified.scope,{mode:'all',identity:'synthetic:all'});assert.doesNotMatch(verified.html,/forbidden-token|forbidden-password/);
+ const escaped=run({mode:'selected',identity:'<script>\u2028test'});assert.equal(escaped.scope.identity,'<script>\u2028test');assert.equal((escaped.html.match(/<script>/g)||[]).length,1);
+});

@@ -339,7 +339,7 @@ test('directory connection metadata distinguishes real report records from empty
 
 test('confirmed alias display uses RAJA while preserving raw query identities and rejecting cross-scope aliases',()=>{
  const f=fixture({catalog:[{id:'old',name:'RAJALOTTERY',sourceName:'RAJALOTTERY',country:'印度',team:'M8',source:'AR'},{id:'data',name:'RAJA',sourceName:'RAJA',country:'印度',team:'M8',source:'AR'}],feeds:[]});
- const row=f.page.catalog()[0];assert.equal(f.page.catalog().length,1);assert.equal(row.name,'RAJA');assert.equal(row.id,'data');assert.equal(row.sourceName,'RAJA');assert.deepEqual(plain(row.aliasPlatformIds),['old','data']);
+ const row=f.page.catalog()[0];assert.equal(f.page.catalog().length,1);assert.equal(row.name,'RAJA');assert.equal(row.id,'data');assert.equal(row.sourceName,'RAJA');assert.deepEqual(plain(row.aliasPlatformIds),['old','data','report:'+encodeURIComponent(JSON.stringify(['印度','RAJA']))]);
  const api=f.context.HensemLiveReportData;assert.equal(api.confirmedAliasKey(row),api.confirmedAliasKey({name:'RAJALOTTERY',country:'印度',team:'M8',source:'ar'}));
  for(const other of [{country:'巴西',team:'M8',source:'ar'},{country:'印度',team:'Other',source:'ar'},{country:'印度',team:'M8',source:'newar'}])assert.equal(api.confirmedAliasKey({name:'RAJALOTTERY',...other}),null);
  assert.equal(api.normalizeIdentity({name:'RAJALOTTERY',country:'印度',team:'M8',source:'ar'}).rawPlatform,'RAJALOTTERY');

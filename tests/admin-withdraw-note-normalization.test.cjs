@@ -110,11 +110,11 @@ function uiFixture(reasonData){
  page.state.reason={...q,kind:'orders'};page.state.reasonData=reasonData;ctx.render();return {root,page,requests,html:()=>html,draw:ctx.render};
 }
 
-test('UI shows decoded escaped full remarks and never injects source HTML',()=>{
+test('UI preserves escaped original rejection remarks and never injects source HTML',()=>{
  const malicious='&#40;IFSC Code Incorrect&#41; '+ '&lt;img src=x onerror=alert(1)&gt;'+' Long content'.repeat(20);
  const h=uiFixture({available:true,source:'Synthetic',noteCount:1,total:1,rows:[{orderNumber:'TEST-1',category:'IFSC 错误（IFSC Code Incorrect）',rejectionReason:malicious}],summary:{totalRejected:1},coverage:{}});
- assert.match(h.html(),/\(IFSC Code Incorrect\)/);assert.match(h.html(),/&lt;img/);assert.doesNotMatch(h.html(),/<img|&amp;#40;/);
- h.root.withdrawReasonOriginal(malicious);assert.match(h.html(),/aria-label="驳回原文"/);assert.match(h.html(),/Long content Long content/);assert.doesNotMatch(h.html(),/<img/);
+ assert.match(h.html(),/&amp;#40;IFSC Code Incorrect&amp;#41;/);assert.match(h.html(),/&amp;lt;img/);assert.doesNotMatch(h.html(),/<img/);
+ h.root.withdrawReasonOriginal(malicious,'驳回原文',true);assert.match(h.html(),/aria-label="驳回原文"/);assert.match(h.html(),/Long content Long content/);assert.doesNotMatch(h.html(),/<img/);
 });
 
 test('category drilldown sends the selected category key and preserves the full-data denominator',async()=>{

@@ -14,6 +14,7 @@
   const select=(key,label,value,items)=>'<div class="live-field"><label for="'+key+'">'+label+'</label><select id="'+key+'" onchange="'+(key.startsWith('providerConfig')?'providerConfigSet':'platformAssignmentsSet')+'(\''+key+'\',this.value)">'+items.map(([id,text])=>'<option value="'+E(id)+'" '+(id===value?'selected':'')+'>'+E(text)+'</option>').join('')+'</select></div>';
   const notice=(loading,error)=>loading?'<div class="live-status">正在刷新归类目录…</div>':error?'<div class="live-status live-error">'+E(error)+'</div>':'';
   const permission=result=>'<div class="config-help">'+(result.canManage?'可编辑当前授权范围的归类。':'当前账号可查看归类；编辑需由总管理员授权。')+(result.canGrant?' <button class="link" onclick="configPermissions()">管理归类权限</button>':'')+'</div>';
+  const sourceCount=n=>n==null||n===''||typeof n==='boolean'||!Number.isSafeInteger(Number(n))||Number(n)<0?'—':C(n);
   function providerView(){
    const result=L.providerConfig||{},rows=result.rows||[],opts=result.options||{},sum=result.summary||{};
    const countries=[...new Set([L.country,...(opts.countries||[])].filter(Boolean))];
@@ -27,7 +28,7 @@
     metric('原始通道',C(sum.rawProviders))+metric('已归类',C(sum.assigned))+metric('未归类',C(sum.unassigned))+metric('归类冲突',C(sum.conflict))+'</div>'+
     box('三方归类',table(['原始通道','统一三方','历史归类','国家','平台','代收笔数','代付笔数','合计笔数','状态','最后数据日','操作'],rows.map((r,i)=>[
      E(r.rawProvider||'（原始通道为空）'),E(r.canonicalProvider||'未归类'),E((r.canonicalProviders||[]).join(' / ')||'—'),E(r.country),E(r.platform),
-     C(r.chargeCount),C(r.withdrawCount),C(r.matchedCount),E(r.manual?'手动归类':({assigned:'已归类',unassigned:'未归类',conflict:'归类冲突'})[r.status]||'未归类'),E(r.lastDataDate||'—'),
+     sourceCount(r.chargeCount),sourceCount(r.withdrawCount),sourceCount(r.matchedCount),E(r.manual?'手动归类':({assigned:'已归类',unassigned:'未归类',conflict:'归类冲突'})[r.status]||'未归类'),E(r.lastDataDate||'—'),
      result.canManage?'<button class="btn small" onclick="configEditProvider('+i+')">归类</button>':'<span class="muted">只读</span>'
     ]))+pager(Number(result.total||0),L.providerConfigPage,L.providerConfigSize,'provider-config'),
     '沿用已有历史归类；手动归类优先并即时生效。历史目录每 5 分钟更新，笔数为历史覆盖量。原始通道为空的记录保留待确认。');
@@ -77,7 +78,7 @@
    const row=L.providerConfig?.rows?.[index];if(!row||!L.providerConfig.canManage)return;
    dialog={type:'provider',row};
    modal('三方归类','<div class="config-context">国家：'+E(row.country)+'<br>平台：'+E(row.platform)+'<br>原始通道：'+E(row.rawProvider||'（为空）')+
-    '<br>覆盖历史记录：'+C(row.matchedCount)+' 笔</div>'+editInput('canonicalProvider','归类到统一三方',row.canonicalProvider,L.providerConfig.options?.canonicalProviders||[])+
+    '<br>覆盖历史记录：'+sourceCount(row.matchedCount)+' 笔</div>'+editInput('canonicalProvider','归类到统一三方',row.canonicalProvider,L.providerConfig.options?.canonicalProviders||[])+
     '<p class="config-help">同一国家、平台、原始通道共用归类。'+(!row.rawProvider?'此处原始通道为空，请先确认这些订单确实属于同一三方。':'')+'</p>');
   };
   root.configEditPlatform=function(index){

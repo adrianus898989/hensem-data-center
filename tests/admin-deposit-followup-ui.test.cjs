@@ -17,6 +17,20 @@ function harness(response={rows:[],total:0,summary:{}},options={}){
 }
 const settle=async()=>{for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve))};
 
+test('follow-up and statistics Today stage one local day, preserve filters and require explicit Query',async()=>{
+ for(const page of ['deposit_tracking','deposit_statistics'])for(const [country,timezone,date]of [['印度','Asia/Kolkata','2026-10-01'],['巴西','America/Sao_Paulo','2026-09-30'],['平台时区','Pacific/Auckland','2026-10-01']]){
+  const h=harness(undefined,{page,country,timezone,now:'2026-09-30T18:30:00Z'});h.page.render();h.root.depositIssuesSet('orderNumber','EXACT-ORDER');h.root.depositIssuesSet('utr','000123');h.root.depositIssuesSet('dateMode','all');
+  assert.equal((h.page.render().match(/>今天<\/button>/g)||[]).length,1);h.root.depositIssuesToday();assert.equal(h.calls.length,0);assert.equal(h.L.depositIssuesDirty,true);
+  assert.equal(h.L.depositIssuesDateMode,'range');assert.equal(h.L.from,date+'T00:00:00');assert.equal(h.L.to,date+'T23:59:59');
+  await h.page.load(true);assert.equal(h.calls[0].startAt,date+'T00:00:00.000Z');assert.equal(h.calls[0].endAt,date+'T23:59:59.000Z');assert.equal(h.calls[0].orderNumber,'EXACT-ORDER');assert.equal(h.calls[0].utr,'000123');
+ }
+});
+test('Today stops follow-up refresh until Query and ignores a late old-period response',async()=>{
+ const h=harness();let resolve;h.setHandler(()=>new Promise(r=>{resolve=r}));const loading=h.page.load();await settle();
+ h.root.depositIssuesToday();assert.equal(h.L.depositIssuesLoading,false);assert.equal(h.L.depositIssuesDirty,true);h.root.depositIssuesRefresh();assert.equal(h.calls.length,1);
+ resolve({rows:[{orderNumber:'OLD-PERIOD'}],summary:{count:1},total:1});await loading;assert.equal(h.L.depositIssues,undefined);assert.doesNotMatch(h.html(),/OLD-PERIOD/);
+});
+
 test('follow-up and statistics initialize seven local business days without querying, including date boundaries',async()=>{
  for(const page of ['deposit_tracking','deposit_statistics'])for(const [country,timezone,now,from,to] of [
   ['印度','Asia/Kolkata','2026-09-30T18:30:00Z','2026-09-25','2026-10-01'],

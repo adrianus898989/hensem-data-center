@@ -98,7 +98,7 @@ test('the standalone patch is repeatable and never writes source data, overrides
 
 test('fee candidates stay separate and TRX source fees are not interpreted as INR estimates',()=>{
  const api=browser.HensemProviderSummary,rates=[{provider:'TronPayUSDT',country:'印度',scopeType:'country',collectFee:'1%'},{provider:'UniPayUSDT',country:'印度',scopeType:'country',collectFee:'2%'},{provider:'Wallet66',country:'印度',scopeType:'country',collectFee:'3%'}];
- for(const [raw,expected]of pairs){const order={provider:raw,country:'印度',currency:'INR',direction:'charge',success_amount:100,success_count:1};const candidates=api.feeCandidates(order,rates,'印度');assert.deepEqual(Array.from(candidates,r=>r.provider),[expected]);assert.equal(api.estimate(order,rates,'印度'),expected==='TronPayUSDT'?1:expected==='UniPayUSDT'?2:3)}
+ for(const [raw,expected]of pairs){const order={provider:raw,country:'印度',currency:'INR',direction:'charge',success_amount:100,success_count:1};const candidates=api.feeCandidates(order,rates,'印度');assert.deepEqual(Array.from(candidates,r=>r.provider),[expected]);assert.equal(api.estimate(order,rates,'印度'),null,'current source rates cannot price orders without effective-version evidence')}
  const trx=rates.map(r=>({...r,country:'USDT通道',collectFee:'3TRX'}));assert.equal(api.estimate({provider:'Wallet66',currency:'INR',direction:'charge',success_amount:100,success_count:1},trx,'印度'),null);
  assert.equal(api.estimate({provider:'USDT',currency:'INR',direction:'charge',success_amount:100,success_count:1},rates,'印度'),null);
 });

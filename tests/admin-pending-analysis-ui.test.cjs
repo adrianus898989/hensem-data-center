@@ -116,3 +116,16 @@ test('frequency uses only complete dates, includes true zeros, excludes zero-den
 test('order callbacks require detail permission and retain exact observation scope, never current-order fallback',async()=>{
  const L={from:'2026-09-29',to:'2026-09-29',country:'印度',dirty:false,withdrawCatalog:[]},opened=[];let allowed=false;const ui=create({L,selected:()=>[platform()],providers:()=>[],request:async()=>({...response([day()]),startDate:'2026-09-29'}),render:()=>{},canDetail:()=>allowed,openDetail:q=>opened.push(q)});await ui.load();assert.doesNotMatch(ui.page(),/>订单明细<\/button>/);global.livePendingAnalysisDetail('2026-09-29',A,'Pay A');assert.equal(opened.length,0);allowed=true;assert.match(ui.page(),/>订单明细<\/button>/);global.livePendingAnalysisDetail('2026-09-29',A,'Pay A');assert.equal(opened.length,1);assert.equal(opened[0].date,'2026-09-29');assert.deepEqual(opened[0].platformIds,[A]);assert.equal(opened[0].observedAt,'2026-09-29T18:32:00Z');assert.equal(opened[0].mode,'midnight');global.livePendingAnalysisMode('captured');global.livePendingAnalysisDetail('2026-09-29',A,'Pay A');assert.equal(opened[1].mode,'observed');global.livePendingAnalysisDetail('2026-09-28',A,'Pay A');global.livePendingAnalysisDetail('2026-09-29',B,'Pay A');global.livePendingAnalysisDetail('2026-09-29',A,'Synthetic unknown');assert.equal(opened.length,2);
 });
+
+test('missing or invalid observations have no dead order button; late valid captures still open exact observed orders',async()=>{
+ for(const extra of [{state:'missing'}, {observedAt:null,snapshotAt:null}, {observedAt:'not-a-time',snapshotAt:null}, {observedAt:'Infinity'}]){
+  const L={from:'2026-09-29',to:'2026-09-29',country:'印度',dirty:false,withdrawCatalog:[]},opened=[];
+  const r=row(A,'2026-09-29',[group('Pay A',100)],extra),d=withPlatforms('2026-09-29',[r]);
+  const ui=create({L,selected:()=>[platform()],providers:()=>[],request:async()=>({...response([d]),startDate:L.from}),render:()=>{},canDetail:()=>true,openDetail:q=>opened.push(q)});
+  await ui.load();assert.doesNotMatch(ui.page(),/onclick="livePendingAnalysisDetail/);global.livePendingAnalysisDetail(L.from,A,'Pay A');assert.equal(opened.length,0);
+ }
+ const L={from:'2026-09-29',to:'2026-09-29',country:'印度',dirty:false,withdrawCatalog:[]},opened=[];
+ const d=withPlatforms(L.from,[row(A,L.from,[group('Pay A',100)],{timingState:'late',observedAt:'2026-09-29T19:50:00Z',delaySeconds:4800})]);
+ const ui=create({L,selected:()=>[platform()],providers:()=>[],request:async()=>({...response([d]),startDate:L.from}),render:()=>{},canDetail:()=>true,openDetail:q=>opened.push(q)});
+ await ui.load();assert.match(ui.page(),/>实际采集订单<\/button>/);global.livePendingAnalysisDetail(L.from,A,'Pay A');assert.equal(opened[0].mode,'observed');assert.equal(opened[0].observedAt,'2026-09-29T19:50:00Z');
+});

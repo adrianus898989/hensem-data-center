@@ -161,6 +161,11 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
       if(!roleClient){const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/dashboardRoleAccess.ts'),'utf8')),{...environment,module:helper,exports:helper.exports});roleClient=helper.exports;}
       return roleClient;
     }
+    if (name.endsWith('/dashboardDataScope') || name==='./platformDisplayCountry') {
+      const helper={exports:{}},relative=name==='./platformDisplayCountry'?'platformDisplayCountry':'dashboardDataScope';
+      vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/'+relative+'.ts'),'utf8')),{...environment,module:helper,exports:helper.exports,require:requireStub});
+      return helper.exports;
+    }
     if (name.endsWith('/dashboardIdle')) return {recordDashboardActivity:()=>true};
     throw Error('Unexpected component test import: ' + name);
   };
