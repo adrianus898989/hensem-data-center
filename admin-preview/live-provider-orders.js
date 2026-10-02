@@ -34,9 +34,10 @@
    const platformFilter='<div class="live-filters"><label>平台<select aria-label="三方订单平台" onchange="liveProviderOrderPlatform(this.value)"><option value="">全部已查询平台</option>'+s.targets.map(t=>'<option value="'+E(t.platform.id)+'" '+(s.platformId===t.platform.id?'selected':'')+'>'+E(t.platform.name+' · '+t.platform.source)+' · '+C(t[s.mode])+' 笔</option>').join('')+'</select></label></div>';
    const usdt=String(s.provider).trim().toUpperCase()==='USDT'?'<div class="live-definition">USDT 是汇总分类，支付商尚未确认。请按原始通道和订单核对。</div>':'';
    const rows=s.rows.map((r,i)=>[E(r.platform.name),E(r.platform.source),'<button class="link mono" onclick="liveProviderOrder('+i+')">'+E(r.order_number||r.order_no||'—')+'</button>',moneyCell(r,{E,N}),E(r.raw_provider===undefined?'接口未提供':r.raw_provider==null||r.raw_provider===''?'（空）':r.raw_provider),E(r.channel_type||'—'),E(r.status||r.status_group||'—'),E(formatTime(r.created_at,r.platform.timezone)),E(formatTime(r.success_at,r.platform.timezone)),E(reason(r))]);
-   const nav='<div class="live-pager"><span>'+C(total)+' 笔 · 按平台分页</span><div class="right"><button '+(s.loading||s.page===1?'disabled':'')+' onclick="liveProviderOrderPage('+(s.page-1)+')">上一页</button><span>'+s.page+' / '+max+'</span><button '+(s.loading||s.page>=max?'disabled':'')+' onclick="liveProviderOrderPage('+(s.page+1)+')">下一页</button></div></div>';
-   const status=s.loading?'<div class="live-status">正在读取订单明细…</div>':s.error?'<div class="live-status live-error">'+E(s.error)+'</div>':'';
-   openDrawer(s.provider+' · '+(s.direction==='charge'?'代收':'代付')+'订单',tabs+platformFilter+note+usdt+status+box('订单号与归类依据',table(['平台','包网来源','订单号','金额','原始三方 / 通道','原始类型','原始状态','创建时间','成功时间','归类依据'],rows,'live-provider-orders')+nav));
+   const nav='<div class="live-pager"><span>'+C(total)+' 笔 · 按平台分页</span><div class="right"><button '+(s.loading||s.error||s.page===1?'disabled':'')+' onclick="liveProviderOrderPage('+(s.page-1)+')">上一页</button><span>'+s.page+' / '+max+'</span><button '+(s.loading||s.error||s.page>=max?'disabled':'')+' onclick="liveProviderOrderPage('+(s.page+1)+')">下一页</button></div></div>';
+   const status=s.loading?'<div class="live-status">正在读取订单明细…</div>':s.error?'<div class="live-status live-error">'+E(s.error)+' <button class="btn small" onclick="liveProviderOrderPage('+s.page+')">重试</button></div>':'';
+   const orderTable=s.loading||s.error?'':table(['平台','包网来源','订单号','金额','原始三方 / 通道','原始类型','原始状态','创建时间','成功时间','归类依据'],rows,'live-provider-orders');
+   openDrawer(s.provider+' · '+(s.direction==='charge'?'代收':'代付')+'订单',tabs+platformFilter+note+usdt+status+box('订单号与归类依据',orderTable+nav));
   }
   async function load(){
    if(!current)return;const s=current,token=++serial;s.loading=true;s.error='';s.rows=[];show();
