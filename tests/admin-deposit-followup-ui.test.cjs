@@ -7,13 +7,13 @@ function harness(response={rows:[],total:0,summary:{}},options={}){
  class Clock extends Date {constructor(...args){super(...(args.length?args:[instant]))}static now(){return Date.parse(instant)}}
  const L={catalogReady:true,catalog:[{country,name:'SYNTHETIC',...(options.timezone?{timezone:options.timezone}:{})}],country,from:'2026-09-01T00:00:00',to:'2026-09-27T23:59:59',depositIssuesPage:1,depositIssuesSize:20,depositIssuesSerial:0,depositIssuesPlatform:'all',depositIssuesProvider:'',depositIssuesStatus:'all',depositIssuesQuery:''},calls=[];
  let html='',drawer='',renders=0,page,route=options.page||'deposit_tracking',handler=async()=>response;
- const root={};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-workorder-operations.js'),'utf8'),{window:root,Date:Clock});vm.runInNewContext(source,{window:root,Date:Clock});
+ const root={document:options.document,setInterval:options.setInterval,clearInterval:options.clearInterval};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-workorder-operations.js'),'utf8'),{window:root,Date:Clock});vm.runInNewContext(source,{window:root,Date:Clock});
  page=root.HensemLiveDepositIssues.create({L,E:escape,C:v=>String(v??0),N:v=>Number(v).toFixed(2),R:(a,b)=>b?String(a/b*100):'—',formatTime:v=>v,
   metric:(title,value)=>'<div>'+title+':'+value+'</div>',box:(title,body)=>'<section><h2>'+title+'</h2>'+body+'</section>',pager:(total,p,size)=>'<footer data-total="'+total+'">'+p+'/'+size+'</footer>',
   table:(headers,rows,classes)=>'<div class="'+classes+'"><table><thead><tr>'+headers.map(h=>'<th>'+h+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>',
   openDrawer:options.drawer===false?undefined:(title,body)=>{drawer=title+body},page:()=>route,render:()=>{renders++;html=page.render()},request:async q=>{calls.push({...q});return handler(q)}});
  root.setPage=value=>{route=value;void page.load(true)};
- return {L,root,page,calls,html:()=>html,drawer:()=>drawer,renders:()=>renders,setHandler:next=>{handler=next},setNow:value=>{instant=value}};
+ return {L,root,page,calls,html:()=>html,drawer:()=>drawer,renders:()=>renders,setHandler:next=>{handler=next},setNow:value=>{instant=value},setRoute:value=>{route=value}};
 }
 const settle=async()=>{for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve))};
 
@@ -96,4 +96,37 @@ test('method explanation is opened on demand without a read and remains compatib
 test('compact rows retain complete escaped values in titles and a complete read-only detail view',async()=>{
  const full='long-upi-0000000000@example',reply='first line\nsecond line <img src=x onerror=alert(1)>';
  const h=harness({rows:[{platform:'SYNTHETIC',orderNumber:'000ORDER',upiId:full,providerReply:reply,amount:0,sourceKind:'portal',firstActor:'staff'}],total:1});await h.page.load();assert.match(h.html(),/wo-cell-value/);assert(h.html().includes('title="'+full+'"'));assert.match(h.html(),/depositIssuesDetail\(0\)/);const n=h.calls.length;h.root.depositIssuesDetail(0);assert.equal(h.calls.length,n);assert(h.drawer().includes(full));assert.match(h.drawer(),/000ORDER/);assert.match(h.drawer(),/second line &lt;img/);assert.doesNotMatch(h.drawer(),/<img/);assert.match(h.drawer(),/0.00/);
+});
+
+
+test('queried employee followups refresh the same bounded filters and page; drafts and other pages never auto-read',async()=>{
+ const document={visibilityState:'visible',activeElement:{closest:()=>null},querySelector:()=>null};
+ const h=harness({rows:[],total:60,summary:{}},{document});
+ assert.equal(h.page.refresh(),undefined);assert.equal(h.calls.length,0);
+ h.L.depositIssuesPage=2;await h.page.load();const query={...h.calls[0]};
+ h.setNow('2026-09-30T12:00:29Z');assert.equal(h.page.refresh(),undefined);assert.equal(h.calls.length,1);
+ h.setNow('2026-09-30T12:00:30Z');await h.page.refresh();assert.deepEqual(h.calls.at(-1),query);assert.equal(h.L.depositIssuesPage,2);
+ assert.match(h.html(),/每 30 秒更新/);
+ h.setNow('2026-09-30T12:01:10Z');document.visibilityState='hidden';await h.page.refresh();assert.equal(h.calls.length,2);
+ document.visibilityState='visible';document.activeElement.closest=()=>({});await h.page.refresh();assert.equal(h.calls.length,2);
+ document.activeElement.closest=()=>null;document.querySelector=()=>({});await h.page.refresh();assert.equal(h.calls.length,2);
+ document.querySelector=()=>null;h.setRoute('overview');await h.page.refresh();assert.equal(h.calls.length,2);
+ h.setRoute('deposit_statistics');await h.page.refresh();assert.equal(h.calls.length,2);
+ h.setRoute('deposit_tracking');h.root.depositIssuesSet('orderNumber','unqueried-draft');await h.page.refresh();assert.equal(h.calls.length,2);
+});
+
+test('automatic followup refresh is single-flight, preserves failed reads and rejects superseded responses',async()=>{
+ const h=harness({rows:[{platform:'old'}],total:1,summary:{}});await h.page.load();h.setNow('2026-09-30T12:01:00Z');
+ let finish;h.setHandler(()=>new Promise(resolve=>{finish=resolve}));const next=h.page.refresh();
+ assert.equal(h.calls.length,2);assert.equal(h.L.depositIssuesLoading,true);await h.page.refresh();assert.equal(h.calls.length,2);
+ h.root.depositIssuesSet('platformName','SYNTHETIC');finish({rows:[{platform:'stale'}],total:1});await next;assert.equal(h.L.depositIssues.rows[0].platform,'old');
+ h.setHandler(async()=>{throw Error('temporary failure')});await h.page.load();assert.equal(h.L.depositIssues.rows[0].platform,'old');assert.match(h.L.depositIssuesError,/temporary failure/);
+});
+
+
+test('refresh scheduling starts only after a tracking query and stops on destroy',async()=>{
+ const timers=[],cleared=[];const h=harness({rows:[],total:0,summary:{}},{document:{visibilityState:'visible'},setInterval:(run,delay)=>{timers.push({run,delay});return timers.length},clearInterval:id=>cleared.push(id)});
+ h.page.render();assert.equal(timers.length,0);await h.page.load();assert.equal(timers.length,1);assert.equal(timers[0].delay,30000);
+ h.page.render();assert.equal(timers.length,1);h.setNow('2026-09-30T12:00:31Z');await timers[0].run();assert.equal(h.calls.length,2);
+ h.setRoute('overview');h.setNow('2026-09-30T12:01:31Z');await timers[0].run();assert.equal(h.calls.length,2);h.page.destroy();assert.deepEqual(cleared,[1]);
 });

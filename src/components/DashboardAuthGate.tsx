@@ -23,6 +23,7 @@ import {
 } from "@/lib/dashboardAuthClient";
 
 import { DASHBOARD_IDLE_MS, readLastActivity, writeLastActivity, clearLastActivity, installDashboardIdleMonitor } from "@/lib/dashboardIdle";
+import { setDashboardPresenceSession, stopDashboardPresence } from "@/lib/dashboardPresenceClient";
 
 type AuthContextValue = {
   session: DashboardSession | null;
@@ -68,6 +69,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     if(!setDashboardDataViewer(nextProfile))return;
     const saved = readSavedDashboardSession();
     if (saved?.access_token !== nextSession.access_token || saved?.refresh_token !== nextSession.refresh_token) saveDashboardSession(nextSession);
+    setDashboardPresenceSession(nextSession, dashboardScopeIdentity(nextProfile));
     sessionRef.current = nextSession;
     setSession(nextSession);
     setProfile(nextProfile);
@@ -78,6 +80,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
 
   function clearAuthenticatedView() {
     operationRef.current += 1;
+    stopDashboardPresence();
     clearLastActivity();
     clearDashboardDataCaches();
     setDashboardDataViewer(null);
@@ -190,6 +193,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       }
       if (previous.user.id !== saved.user.id) {
         operationRef.current += 1;
+        stopDashboardPresence();
         setDashboardDataViewer(null);
         clearDashboardDataCaches();
         sessionRef.current = null; setSession(null); setProfile(null);
@@ -203,6 +207,12 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     return () => { window.removeEventListener(DASHBOARD_SESSION_EVENT, receive); window.removeEventListener("storage", receive); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled || !session || profile?.active !== true) { stopDashboardPresence(); return; }
+    setDashboardPresenceSession(session, dashboardScopeIdentity(profile));
+  }, [enabled, session, profile]);
+  useEffect(() => () => stopDashboardPresence(), []);
 
   useEffect(() => {
     if (!enabled || !session?.user.id) return;
