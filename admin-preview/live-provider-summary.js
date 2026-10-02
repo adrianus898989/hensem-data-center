@@ -731,6 +731,14 @@
    return '<tr class="provider-expanded-row"><td colspan="'+headers.length+'"><div class="provider-platform-breakdown"><strong>'+E(issueOnly(row)?issueLabelFor(row):row.provider)+' · 平台明细</strong><span class="live-definition">'+definition+'</span></div></td></tr><tr class="provider-platform-labels">'+columns.map(([text,key],i)=>'<td>'+header(i===0?'平台':i===1?'包网':key?text:'',i===0?'platform':i===1?'source':key,childSort?.key||'',!!childSort?.ascending,index)+'</td>').join('')+'</tr>'+details;
   };
   let reportTable=table(headers,shown.map((r,i)=>cells(r,providerLabel(r,i),false,i)),'provider-summary-table provider-compact-table',footers).replace('<table>','<table style="min-width:'+tableWidth+'px"><colgroup>'+widths.map(width=>'<col style="width:'+width+'px">').join('')+'</colgroup>');
+  // An empty provider row set cannot establish an empty query while platforms
+  // are still pending, failed or paused. Keep the same table and known totals.
+  if(!shown.length&&(readState.partial||L.loading||L.queryRetrying||L.queryPaused)){
+   const status=L.queryRetrying?'retrying':L.loading?'loading':L.queryPaused?'paused':'incomplete';
+   const message={retrying:'正在重试订单读取…',loading:'正在读取订单…',paused:'订单查询已暂停，请继续查询。',incomplete:'订单读取未完成，请重试。'}[status];
+   const coverage=readState.received?'已返回 '+C(readState.received)+' / '+C(readState.requested)+' 个平台；当前已读范围暂无记录，未返回平台不按 0 计算。':'尚无平台返回，不能判断是否有记录。';
+   reportTable=reportTable.replace(/<div class="live-empty">[^<]*<\/div>/,'<div class="live-empty provider-query-empty" role="status" data-query-read-state="'+status+'">'+E(message+coverage)+'</div>');
+  }
   if(shown.some(r=>expanded[rowKey(r)])){
    const body=shown.map((r,i)=>'<tr>'+cells(r,providerLabel(r,i),false,i).map(c=>'<td>'+c+'</td>').join('')+'</tr>'+(expanded[rowKey(r)]?breakdown(r,i):'')).join('');
    reportTable=reportTable.replace(/<tbody>[\s\S]*?<\/tbody>/,()=>'<tbody>'+body+'</tbody>');

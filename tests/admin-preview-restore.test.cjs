@@ -66,7 +66,22 @@ test('overlay generation rejects legacy matcher drift before writing a bundle',(
 });
 
 test('host restores only the authorized HTML body, while authorization checks and the original endpoint stay unchanged',()=>{
- const component=fs.readFileSync(path.resolve(__dirname,'../src/components/OwnerAdminPreview.tsx'),'utf8'),client=fs.readFileSync(path.resolve(__dirname,'../src/lib/adminPreviewClient.ts'),'utf8');assert.match(component,/await adminPreviewRequest\(sessionRef\.current,check\?"\?check=1":"",\{signal:controller\.signal\}\)/);assert.match(component,/if\(!check\)\{const html=await response\.text\(\);if\(!cancelled\)setDocumentHtml\([^\n]*makeAdminLiveDocument\(restoreApprovedAdmin\(html\),channel\.current,policy,\{mode:dataScope\.mode,identity:scopeIdentity\}\)/);assert.equal((component.match(/restoreApprovedAdmin\(html\)/g)||[]).length,1);assert.match(component,/request\(\)\.catch\(fail\)/);assert.match(component,/request\(true\)\.catch\(fail\)/);assert.match(component,/controller\.abort\(\);setDocumentHtml\(""\)/);assert.match(client,/base\+"\/functions\/v1\/owner-admin-preview"\+query/);assert.doesNotMatch(source,/\bfetch\s*\(|localStorage|sessionStorage|access_token|Authorization|window\.|document\./);
+ const component=fs.readFileSync(path.resolve(__dirname,'../src/components/OwnerAdminPreview.tsx'),'utf8'),client=fs.readFileSync(path.resolve(__dirname,'../src/lib/adminPreviewClient.ts'),'utf8');
+ assert.match(component,/const policy=await readDashboardRoleAccess\(sessionRef\.current,controller\.signal\)/);
+ assert.match(component,/if\(!policy\.canView\)throw Error/);
+ assert.match(component,/const quick=check&&!recovering/);
+ assert.match(component,/await adminPreviewRequest\(sessionRef\.current,quick\?"\?check=1":"",\{signal:controller\.signal\}\)/);
+ assert.match(component,/access\.ok!==true\|\|access\.canView!==true\|\|typeof access\.canManage!=="boolean"\)throw Error/);
+ assert.match(component,/if\(quick&&\(!published\|\|changed\)\)response=await adminPreviewRequest\(sessionRef\.current,"",\{signal:controller\.signal\}\)/);
+ assert.match(component,/const html=quick&&published&&!changed\?null:await ownerPreviewTransportRead\(\(\)=>response\.text\(\),controller\.signal\)/);
+ assert.match(component,/makeAdminLiveDocument\(restoreApprovedAdmin\(result\.html\),channel\.current,result\.policy,\{mode:dataScope\.mode,identity:scopeIdentity\}\)/);
+ assert.equal((component.match(/restoreApprovedAdmin\(result\.html\)/g)||[]).length,1);
+ assert.match(component,/if\(html!==null\)\{published=true;setDocumentHtml\(html\)\}/);
+ assert.match(component,/void request\(\)/);assert.match(component,/void request\(true\)\.finally/);
+ assert.match(component,/const fail=\(e:unknown\)=>\{[^\n]*controller\.abort\(\);clearPreview\(\)/);
+ assert.match(component,/const clearPreview=\(\)=>\{[\s\S]*?setDocumentHtml\(""\);roleAccessRef\.current=null;setRoleAccess\(null\)/);
+ assert.match(client,/base\+"\/functions\/v1\/owner-admin-preview"\+query/);
+ assert.doesNotMatch(source,/\bfetch\s*\(|localStorage|sessionStorage|access_token|Authorization|window\.|document\./);
 });
 
 test('published overlay matches every reviewed renderer and style source exactly',()=>{

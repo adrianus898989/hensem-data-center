@@ -9,7 +9,7 @@ const C=value=>Number(value||0).toLocaleString('en-US');
 const R=(n,d)=>d?((Number(n)/Number(d))*100).toFixed(2)+'%':'—';
 function plus(rows){return Object.fromEntries([...moneyKeys,...countKeys].map(key=>[key,rows.some(r=>r[key]===null)?null:rows.reduce((sum,r)=>sum+Number(r[key]||0),0)]))}
 function combine(rows,keys){const groups=new Map();for(const row of rows){const id=JSON.stringify(keys.map(key=>row[key]));if(!groups.has(id))groups.set(id,[]);groups.get(id).push(row)}return [...groups.values()].map(items=>({...Object.fromEntries(keys.map(key=>[key,items[0][key]])),...plus(items),items}))}
-function table(headers,rows,css='',footers=[]){const cells=(row,tag)=>'<tr>'+row.map(c=>'<'+tag+'>'+c+'</'+tag+'>').join('')+'</tr>';return '<div class="'+css+'"><table><thead>'+cells(headers,'th')+'</thead><tbody>'+rows.map(row=>cells(row,'td')).join('')+'</tbody><tfoot>'+footers.map(row=>cells(row,'td')).join('')+'</tfoot></table></div>'}
+function table(headers,rows,css='',footers=[]){const cells=(row,tag)=>'<tr>'+row.map(c=>'<'+tag+'>'+c+'</'+tag+'>').join('')+'</tr>';return '<div class="'+css+'"><table><thead>'+cells(headers,'th')+'</thead><tbody>'+rows.map(row=>cells(row,'td')).join('')+'</tbody><tfoot>'+footers.map(row=>cells(row,'td')).join('')+'</tfoot></table>'+(rows.length?'':'<div class="live-empty">当前筛选范围没有已入库记录</div>')+'</div>'}
 function fixture(orders){
  let html='',direction='withdraw',networkCalls=0;const drawers=[];const root={Intl,Date,fetch(){networkCalls++;throw Error('Expanding a report must not request data')}};root.window=root;
  vm.createContext(root);for(const name of ['live-provider-aliases.js','live-comparison.js','live-provider-summary.js'])vm.runInContext(fs.readFileSync(path.join(folder,name),'utf8'),root,{filename:name});
@@ -90,6 +90,29 @@ test('partial collection and payout reports identify the returned platform cover
 });
 test('all failed platforms show unavailable amounts and counts rather than false zero totals',()=>{
  const h=fixture([]);h.L.results=[];h.L.queryPlatforms=[{id:'failure',name:'Failed platform'}];h.L.queryFailures=[{id:'failure',name:'Failed platform',message:'timeout'}];h.render();const html=h.html(),cards=html.split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];assert.match(html,/本次尚无平台返回/);assert.match(html,/已返回 0 \/ 1 个平台/);assert.doesNotMatch(cards,/<strong>0(?:\.00)?<\/strong>/);assert.match(cards,/代付成功金额<\/label><strong>—<\/strong>/);const footer=html.match(/<tfoot>([\s\S]*?)<\/tfoot>/)[1];assert.doesNotMatch(footer,/>0\.00</);assert.match(footer,/已读取合计/);
+});
+test('empty collection and payout tables remain loading until selected platform reads finish',()=>{
+ for(const direction of ['charge','withdraw']){
+  const h=fixture([]);h.L.queryPlatforms=Array.from({length:16},(_,i)=>({id:'read-'+i,name:'Read platform '+i}));h.L.results=[];h.L.loading=true;h.render(direction);
+  assert.match(h.html(),/订单 0 \/ 16 · 读取中/);assert.match(h.html(),/role="status" data-query-read-state="loading">正在读取订单…尚无平台返回，不能判断是否有记录。/);assert.doesNotMatch(h.html(),/当前筛选范围没有已入库记录/);
+  assert.match(h.html(),new RegExp('代'+(direction==='charge'?'收':'付')+'成功金额<\\/label><strong>—<\\/strong>'));
+  assert.match(h.html(),/<tbody><\/tbody>/);assert.match(h.html(),/<tfoot>/);assert.equal(h.networkCalls(),0);
+ }
+});
+test('failed paused and retrying empty reports cannot claim a completed empty query',()=>{
+ for(const direction of ['charge','withdraw']){
+  const h=fixture([]);h.L.queryPlatforms=[{id:'waiting',name:'Waiting platform'}];h.L.results=[];h.L.queryFailures=[{id:'waiting',name:'Waiting platform',message:'Synthetic timeout'}];h.render(direction);
+  assert.match(h.html(),/data-query-read-state="incomplete">订单读取未完成，请重试。/);assert.doesNotMatch(h.html(),/当前筛选范围没有已入库记录/);
+  h.L.queryPaused=true;h.render(direction);assert.match(h.html(),/data-query-read-state="paused">订单查询已暂停，请继续查询。/);assert.doesNotMatch(h.html(),/当前筛选范围没有已入库记录/);
+  h.L.queryPaused=false;h.L.queryRetrying=true;h.render(direction);assert.match(h.html(),/data-query-read-state="retrying">正在重试订单读取…/);assert.doesNotMatch(h.html(),/当前筛选范围没有已入库记录/);assert.equal(h.networkCalls(),0);
+ }
+});
+test('a returned zero platform does not make the missing platform an empty result',()=>{
+ for(const direction of ['charge','withdraw']){
+  const h=fixture([]),platforms=[{id:'read-zero',name:'Returned zero platform'},{id:'missing',name:'Missing platform'}];h.L.queryPlatforms=platforms;h.L.results=[{platform:platforms[0],groups:{provider:[]}}];h.L.queryFailures=[{...platforms[1],message:'Synthetic timeout'}];h.render(direction);
+  assert.match(h.html(),/已返回 1 \/ 2 个平台；当前已读范围暂无记录，未返回平台不按 0 计算。/);assert.match(h.html(),/已读取合计/);assert.doesNotMatch(h.html(),/当前筛选范围没有已入库记录/);assert.equal(h.api.queryCoverage(h.L).partial,true);
+  h.L.queryFailures=[];h.L.results.push({platform:platforms[1],groups:{provider:[]}});h.render(direction);assert.equal(h.api.queryCoverage(h.L).partial,false);assert.match(h.html(),/<div class="live-empty">当前筛选范围没有已入库记录<\/div>/);assert.doesNotMatch(h.html(),/provider-query-empty/);assert.equal(h.networkCalls(),0);
+ }
 });
 test('an incomplete current scope cannot regain yesterday comparisons merely because returned identities match',()=>{
  const h=fixture([order('platform-a','ar',100,1)]);h.L.queryPlatforms=[{id:'platform-a'},{id:'missing'}];h.L.comparisonStatus='ready';h.L.comparisonResults=[{...h.L.results[0],groups:{provider:[]}}];h.render();assert.match(h.html(),/没有同范围的两期数据/);assert.doesNotMatch(h.html(),/新增 \/ 无基数/);

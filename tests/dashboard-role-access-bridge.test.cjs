@@ -10,7 +10,7 @@ function roleModule(options={}){
  const calls=[],auth=[],module={exports:{}};
  const text=ts.transpileModule(fs.readFileSync(path.join(root,'src/lib/dashboardRoleAccess.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
  vm.runInNewContext(text,{module,exports:module.exports,URL,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://role.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public'}},
-  require:name=>name==='./dashboardRoleCatalog.json'?{default:JSON.parse(fs.readFileSync(path.join(root,'src/lib/dashboardRoleCatalog.json'),'utf8'))}:{dashboardResponseError:authErrors.dashboardResponseError,ensureDashboardSession:async current=>{auth.push(current);return options.ensure?options.ensure(current):{...current,access_token:'synthetic-fresh'};}},
+  require:name=>name==='./ownerPreviewVerification'?require('./load-typescript.cjs').loadTs(path.join(root,'src/lib/ownerPreviewVerification.ts')):name==='./dashboardRoleCatalog.json'?{default:JSON.parse(fs.readFileSync(path.join(root,'src/lib/dashboardRoleCatalog.json'),'utf8'))}:{dashboardResponseError:authErrors.dashboardResponseError,ensureDashboardSession:async current=>{auth.push(current);return options.ensure?options.ensure(current):{...current,access_token:'synthetic-fresh'};}},
   fetch:async(url,init)=>{calls.push({url,init});return Response.json(options.value||assigned(['providers.view']),{status:options.status||200});}
  });return {api:module.exports,calls,auth};
 }
