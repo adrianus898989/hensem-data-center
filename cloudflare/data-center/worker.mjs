@@ -3,6 +3,8 @@ const BASE = '/hensem-data-center';
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 const ENTRY_GATE = 'https://gmfyfzsxpxmaqtuuwgxb.supabase.co/functions/v1/application-entry-gate';
 const PUBLISHABLE_KEY = 'sb_publishable_0DFLEmUvGBp1GYQ7jNo4IA_O1PeA9zV';
+const GATE_TIMEOUT_MS = 5000;
+const GATE_RETRY_DELAY_MS = 150;
 // This dedicated HTTPS entry can emit real anti-framing headers. Restrict only
 // ancestors here: the authorized internal srcdoc preview needs its inline code.
 const SECURITY_HEADERS = {
@@ -96,7 +98,87 @@ function clientIp(request) {
   return null;
 }
 
-async function entryAllowed(request, env, fetchGate) {
+async function readEntryDecision(ip, key, fetchGate) {
+  let response, reader, timer;
+  let stage = 'gate_fetch';
+  const controller = new AbortController();
+  const cancel = body => {
+    // Cleanup cannot postpone a known denial or turn it into a retriable error.
+    try { body?.cancel()?.catch(() => {}); } catch { /* cleanup only */ }
+  };
+  // Fence both fetch and body consumption. A stalled body must not leave one
+  // script waiting forever after the rest of the page has passed its checks.
+  const deadline = new Promise(resolve => {
+    timer = setTimeout(() => {
+      controller.abort();
+      cancel(reader);
+      resolve({ status: 'unavailable', reason: stage + '_TimeoutError' });
+    }, GATE_TIMEOUT_MS);
+  });
+  const read = async () => {
+    try {
+      response = await fetchGate(ENTRY_GATE, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: PUBLISHABLE_KEY,
+          'x-portal-proxy-key': key, 'x-portal-client-ip': ip },
+        body: '{}',
+        // workerd accepts follow/manual only. Never follow this proof to a 3xx.
+        redirect: 'manual',
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      stage = 'gate_response';
+      if (!response.ok) {
+        cancel(response.body);
+        if (response.status >= 500 && response.status <= 599) {
+          return { status: 'unavailable', reason: 'gate_http_5xx' };
+        }
+        return { status: 'denied', reason: response.status === 401 ? 'gate_http_401'
+          : response.status === 403 ? 'gate_http_403' : 'gate_http_other' };
+      }
+      if (!/^application\/json(?:;|$)/i.test(response.headers.get('Content-Type') || '')) {
+        cancel(response.body);
+        return { status: 'denied', reason: 'gate_content_type' };
+      }
+      // The gate returns one small decision, never account names or IP rules.
+      reader = response.body?.getReader();
+      if (!reader) return { status: 'denied', reason: 'gate_body_missing' };
+      stage = 'gate_body';
+      let size = 0;
+      const chunks = [];
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        size += part.value.length;
+        if (size > 1024) {
+          cancel(reader);
+          return { status: 'denied', reason: 'gate_body_limit' };
+        }
+        chunks.push(part.value);
+      }
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+      stage = 'gate_json';
+      const decision = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+      if (decision?.ok !== true) return { status: 'denied', reason: 'gate_decision_invalid' };
+      if (decision?.allowed !== true) return { status: 'denied', reason: 'gate_decision_denied' };
+      return { status: 'allowed' };
+    } catch (error) {
+      const name = ['AbortError', 'TimeoutError', 'NetworkError', 'TypeError', 'SyntaxError', 'Error'].includes(error?.name)
+        ? error.name : 'other';
+      // UTF-8/JSON/decision validation failures are terminal, even if a decoder
+      // throws TypeError. Only transport failures may get a fresh gate read.
+      const temporary = (stage === 'gate_fetch' || stage === 'gate_body')
+        && ['AbortError', 'TimeoutError', 'NetworkError', 'TypeError'].includes(name);
+      return { status: temporary ? 'unavailable' : 'denied', reason: stage + '_' + name };
+    }
+  };
+  try { return await Promise.race([read(), deadline]); }
+  finally { clearTimeout(timer); }
+}
+
+async function entryDecision(request, env, fetchGate) {
   // Operator secret input can retain a final newline. Normalize the binding,
   // never an untrusted request header, before constructing the upstream proof.
   const ip = clientIp(request), value = env?.PORTAL_PROXY_KEY;
@@ -105,67 +187,30 @@ async function entryAllowed(request, env, fetchGate) {
     // Keep operational evidence private and bounded. Never log the address,
     // key, URL, response body, or an upstream exception message.
     console.warn('dashboard_entry_denied:' + reason);
-    return false;
+    return { status: 'denied', reason };
   };
   if (!ip) return denied('ingress_ip');
   if (key.length < 16 || key.length > 256) return denied('proxy_binding');
-  let response;
-  let stage = 'gate_fetch';
-  try {
-    response = await fetchGate(ENTRY_GATE, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey: PUBLISHABLE_KEY,
-        'x-portal-proxy-key': key, 'x-portal-client-ip': ip },
-      body: '{}',
-      // workerd accepts follow/manual only. Reject 3xx below rather than
-      // following a redirect with this server-only proof header.
-      redirect: 'manual',
-      cache: 'no-store',
-      signal: AbortSignal.timeout(5000),
-    });
-    stage = 'gate_response';
-    if (!response.ok) {
-      await response.body?.cancel();
-      return denied(response.status === 401 ? 'gate_http_401'
-        : response.status === 403 ? 'gate_http_403'
-        : response.status === 503 ? 'gate_http_503' : 'gate_http_other');
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const decision = await readEntryDecision(ip, key, fetchGate);
+    if (decision.status === 'allowed') return decision;
+    if (decision.status === 'denied') return denied(decision.reason);
+    if (attempt === 2) {
+      console.warn('dashboard_entry_denied:' + decision.reason);
+      return decision;
     }
-    if (!/^application\/json(?:;|$)/i.test(response.headers.get('Content-Type') || '')) {
-      await response.body?.cancel();
-      return denied('gate_content_type');
-    }
-    // The gate returns one small decision, never account names or IP rules.
-    const reader = response.body?.getReader();
-    if (!reader) return denied('gate_body_missing');
-    stage = 'gate_body';
-    let size = 0;
-    const chunks = [];
-    for (;;) {
-      const part = await reader.read();
-      if (part.done) break;
-      size += part.value.length;
-      if (size > 1024) { await reader.cancel(); return denied('gate_body_limit'); }
-      chunks.push(part.value);
-    }
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-    stage = 'gate_json';
-    const decision = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-    if (decision?.ok !== true) return denied('gate_decision_invalid');
-    if (decision?.allowed !== true) return denied('gate_decision_denied');
-    return true;
-  } catch (error) {
-    const name = ['AbortError', 'TimeoutError', 'TypeError', 'SyntaxError', 'Error'].includes(error?.name)
-      ? error.name : 'other';
-    return denied(stage + '_' + name);
+    await new Promise(resolve => setTimeout(resolve, GATE_RETRY_DELAY_MS));
   }
 }
 
 // The production handler checks every route before redirects, files or method
 // errors. Decisions are not cached: a revoked rule affects the next request.
 export async function serve(request, env = {}, fetchRemote = fetch) {
-  if (!await entryAllowed(request, env, fetchRemote)) {
+  const decision = await entryDecision(request, env, fetchRemote);
+  if (decision.status === 'unavailable') {
+    return reply(request.method === 'HEAD' ? null : 'Site temporarily unavailable', 503, { 'Retry-After': '1' });
+  }
+  if (decision.status !== 'allowed') {
     return reply(request.method === 'HEAD' ? null : 'Access denied', 403);
   }
   const response = await servePublicStatic(request, fetchRemote);

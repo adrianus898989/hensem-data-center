@@ -3,7 +3,9 @@
 Public entry: `https://data-center.workdesk-hub.workers.dev/hensem-data-center/`.
 The root redirects to this path to preserve the existing Next.js base path.
 
-Before every document, asset, redirect or error response, this Worker sends only Cloudflare's trusted `CF-Connecting-IP` and its server-side `PORTAL_PROXY_KEY` proof to `application-entry-gate`. The Edge uses the service-only `application_dashboard_entry_allowed` RPC to return one boolean. Missing configuration, unavailable authorization and unlisted addresses return HTTP 403 with the plain text `Access denied`; no login UI or static file is served.
+Before every document, asset, redirect or error response, this Worker sends only Cloudflare's trusted `CF-Connecting-IP` and its server-side `PORTAL_PROXY_KEY` proof to `application-entry-gate`. The Edge uses the service-only `application_dashboard_entry_allowed` RPC to return one boolean. Missing configuration, unlisted addresses, explicit denials and malformed authorization responses return HTTP 403 with the plain text `Access denied`; no login UI or static file is served.
+
+Temporary gate network failures, timeouts and HTTP 5xx receive at most two fresh checks, each with a five-second deadline covering fetch and response-body reading, separated by 150ms. A fresh positive decision is required before any asset is fetched. If both checks are temporarily unavailable, the Worker returns HTTP 503 `Site temporarily unavailable` with `Retry-After: 1` and `no-store`. It never reuses an earlier allow decision. Real denials, HTTP 4xx/redirects and malformed responses are not retried. A recovered second check serves the original resource normally; exhausted temporary failures are not misreported as revoked IPs.
 
 An enabled global IP rule permits opening the login page for any account. A bound account IP rule permits opening it while the account is active, not locked/banned/deleted, and uses a separate allowlist. Login still checks the entered account independently: a bound IP cannot authenticate another account unless that account's own/global rule permits it. The opening decision grants no role permissions or data access.
 
