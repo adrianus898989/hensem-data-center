@@ -8,6 +8,7 @@
   return base+(r.settlement_currency&&r.settlement_currency!==currency?'<small class="analysis-metric-share">结算 '+settlement(r,tools)+'</small>':'');}
  function moneyRows(r,tools){const {E,N}=tools,currency=r.member_currency||r.currency,rows=[[r.member_currency?'法币金额':'订单金额',N(r.amount)+(currency?' '+E(currency):'')]];
   if(Object.hasOwn(r,'settlement_currency')){rows.push(['结算金额',settlement(r,tools)]);if(knownMoney(r.settlement_fee))rows.push(['结算手续费',N(r.settlement_fee)+(r.settlement_currency?' '+E(r.settlement_currency):'')]);if(knownMoney(r.exchange_rate)&&Number(r.exchange_rate)>0)rows.push(['来源汇率',E(r.exchange_rate)]);}
+  if(r.platform?.source==='wg'&&r.direction==='charge'&&r.channel_type==='提现转充值'&&r.fee_exempt===true)rows.push(['手续费','0（提现转充值）']);
   return rows;}
  root.HensemProviderOrders={moneyCell,moneyRows,create:function({L,E,N,C,table,box,formatTime,query,orderFieldValue=(p,key,value)=>value,request,openDrawer}){
   let current=null,serial=0;
@@ -15,6 +16,7 @@
   if(typeof previousClose==='function')root.closeDrawer=function(...args){cancel();return previousClose.apply(this,args)};
   const missing=value=>value==null||String(value).trim()===''||['未识别通道','未识别三方','未提供'].includes(String(value).trim());
   function reason(row){
+   if(row.platform?.source==='wg'&&row.direction==='charge'&&row.channel_type==='提现转充值')return 'WG 原始类型为提现转充值；内部转账'+(row.fee_exempt===true?'，手续费 0':'');
    if(String(row.provider||'').trim().toUpperCase()==='USDT')return missing(row.raw_provider)?'仅有 USDT 汇总分类，原始通道未提供，支付商待核对':'USDT 是汇总分类；保留原始通道编号，支付商待核对';
    if(row.provider==='人工充值'&&row.channel_type==='ManualRecharge')return '原始类型为 ManualRecharge，归为人工充值';
    if(row.raw_provider==='人工确认')return '原始记录明确标记人工确认';
@@ -37,7 +39,8 @@
    const nav='<div class="live-pager"><span>'+C(total)+' 笔 · 按平台分页</span><div class="right"><button '+(s.loading||s.error||s.page===1?'disabled':'')+' onclick="liveProviderOrderPage('+(s.page-1)+')">上一页</button><span>'+s.page+' / '+max+'</span><button '+(s.loading||s.error||s.page>=max?'disabled':'')+' onclick="liveProviderOrderPage('+(s.page+1)+')">下一页</button></div></div>';
    const status=s.loading?'<div class="live-status">正在读取订单明细…</div>':s.error?'<div class="live-status live-error">'+E(s.error)+' <button class="btn small" onclick="liveProviderOrderPage('+s.page+')">重试</button></div>':'';
    const orderTable=s.loading||s.error?'':table(['平台','包网来源','订单号','金额','原始三方 / 通道','原始类型','原始状态','创建时间','成功时间','归类依据'],rows,'live-provider-orders');
-   openDrawer(s.provider+' · '+(s.direction==='charge'?'代收':'代付')+'订单',tabs+platformFilter+note+usdt+status+box('订单号与归类依据',orderTable+nav));
+   const orderPanel=s.loading||s.error?nav:box('订单号与归类依据',orderTable+nav);
+   openDrawer(s.provider+' · '+(s.direction==='charge'?'代收':'代付')+'订单',tabs+platformFilter+note+usdt+status+orderPanel);
   }
   async function load(){
    if(!current)return;const s=current,token=++serial;s.loading=true;s.error='';s.rows=[];show();
@@ -64,7 +67,7 @@
     return {platform:result.platform,created:rows.reduce((n,r)=>n+Number(r.all_count||0),0),success:rows.reduce((n,r)=>n+Number(r.success_count||0),0),request:{...query(result.platform,'details'),providers:[provider],direction,offset:0,limit:20}};
    }).filter(t=>t.created||t.success).sort((a,b)=>String(a.platform.name).localeCompare(String(b.platform.name))||String(a.platform.id).localeCompare(String(b.platform.id)));
    if(platformId&&!targets.some(t=>t.platform.id===platformId))return;
-   current={provider,source,direction,targets,platformId,status:L.status,mode:L.status==='success'||targets.some(t=>(!platformId||t.platform.id===platformId)&&t.success)?'success':'created',page:1,rows:[],error:'',loading:false,querySerial:L.serial,from:L.from,to:L.to,currency:L.currency};
+   current={provider,source,direction,targets,platformId,status:L.status,mode:L.status==='success'||targets.some(t=>(!platformId||t.platform.id===platformId)&&t.success)?'success':'created',page:1,rows:[],error:'',loading:true,querySerial:L.serial,from:L.from,to:L.to,currency:L.currency};
    await load();
   }
   root.liveProviderOrders=open;

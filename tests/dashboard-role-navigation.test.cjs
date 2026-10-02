@@ -42,3 +42,14 @@ test('retired channelquality never appears or gains permission through a bookmar
 test('account and standalone system shells render immediately without a business catalog',async()=>{
  for(const page of ['access','rules','ip','login_logs','operation_logs']){const h=harness(options([page+'.view'],page));await settle();assert.equal(h.calls.length,0,page);assert.equal(h.L.catalogReady,false);assert.match(h.html(),new RegExp('hle-'+page));assert.doesNotMatch(h.html(),/正在读取账号可见的平台目录|平台目录未读取成功/);}
 });
+
+test('the stable stuck permission and deep link live under data analysis without an automatic query',async()=>{
+ const riskFixture=prefix.replace("['analysis','','数据分析',keys.filter(k=>!merchantKeys.includes(k))]","['risk','','智能风控', ['stuck']],['analysis','','数据分析',keys.filter(k=>k!=='stuck'&&!merchantKeys.includes(k))]").replace("navGroup:'analysis'","navGroup:'risk'");assert.notEqual(riskFixture,prefix);
+ const migrated=new Function('require','__dirname',riskFixture+';return {harness};')(require,__dirname);
+ const h=migrated.harness(options(['stuck.view','stuck.query','stuck.detail'],'stuck'));await settle();
+ assert.deepEqual(Array.from(h.c.pages,p=>p[0]),['stuck']);assert.equal(h.c.state.page,'stuck');
+ assert.equal(h.c.state.navGroup,'analysis');assert(h.c.navGroupsV3.find(g=>g[0]==='analysis').at(3).includes('stuck'));
+ assert(!h.c.navGroupsV3.some(g=>g[0]!=='analysis'&&g[3].includes('stuck')));
+ assert.equal(h.c.groupForV3('stuck')[0],'analysis');assert.deepEqual(h.calls.filter(q=>q.action!=='catalog'),[]);
+ h.c.render();assert.match(h.nodes.get('nav').innerHTML,/stuck/);assert.match(h.nodes.get('crumbTitle').textContent,/数据分析.*代付中分析/);
+});

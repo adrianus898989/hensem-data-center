@@ -747,8 +747,8 @@
     },
     {
       "id": "stuck",
-      "moduleId": "risk",
-      "moduleLabel": "智能风控中心",
+      "moduleId": "analysis",
+      "moduleLabel": "数据分析中心",
       "label": "代付中分析",
       "actions": [
         {
