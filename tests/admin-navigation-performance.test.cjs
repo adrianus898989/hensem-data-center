@@ -166,7 +166,7 @@ test('collection and payout show received orders while loading, with source repo
    return flowAggregate(platforms.find(p=>p.id===q.platformId)||P,direction);
   }});await settle();h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2,'only two heavy platform reads at once');assert.equal(h.calls.filter(q=>q.action==='collectedData'||q.action==='reportSummary').length,0);
   pending[0].resolve(flowAggregate(platforms[0],direction,17));await settle();assert.equal(h.L.loading,true);assert.equal(h.L.results.length,1);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,3);assert.match(h.html(),/尚非完整总计/);assert.match(h.html(),/Synthetic provider/);assert.match(h.html(),new RegExp('三方经营汇总 · '+(direction==='charge'?'代收':'代付')));assert.doesNotMatch(h.html(),/日报读取未完成/);assert.equal(h.calls.filter(q=>q.action==='rates').length,0);
-  initial=false;pending[1].resolve(flowAggregate(platforms[1],direction,19));pending[2].resolve(flowAggregate(platforms[2],direction,23));await settle();assert.equal(h.L.loading,false);assert.equal(h.L.results.length,3);assert(h.calls.some(q=>q.action==='collectedData'));assert.match(h.html(),/Synthetic provider/);assert.match(h.html(),/日报读取未完成/);assert.doesNotMatch(h.html(),/尚非完整总计/);
+  initial=false;pending[1].resolve(flowAggregate(platforms[1],direction,19));pending[2].resolve(flowAggregate(platforms[2],direction,23));await settle();assert.equal(h.L.loading,false);assert.equal(h.L.results.length,3);assert(!h.calls.some(q=>q.action==='collectedData'||q.action==='reportSummary'));assert.match(h.html(),/Synthetic provider/);assert.doesNotMatch(h.html(),/日报读取未完成|源日报数据/);assert.doesNotMatch(h.html(),/尚非完整总计/);
  }
 });
 
@@ -178,7 +178,7 @@ test('leaving a pending flow query cannot launch its deferred reports or repaint
 test('flow query failures retain successful platforms and retry only the missing platform',async()=>{
  for(const [page,direction]of[['collection','charge'],['payout','withdraw']]){
   const p2={...P,id:'22222222-2222-4222-8222-222222222222'};let fail=true;
-  const h=harness({page,reports:true,handler:q=>{if(q.action==='catalog')return {platforms:[P,p2]};if(q.action==='collectedData'||q.action==='rates')return {rows:[],total:0};if(q.action==='aggregate'&&q.platformId===p2.id&&fail)throw Error('missing platform');return flowAggregate(q.platformId===p2.id?p2:P,direction)}});await settle();h.c.liveQuery();await settle();assert.equal(h.L.queryFailures.length,1);assert.equal(h.L.results.length,1);assert(h.calls.some(q=>q.action==='collectedData'),'reports still read after a native partial failure');assert.match(h.html(),/仅为已读取结果/);
+  const h=harness({page,reports:true,handler:q=>{if(q.action==='catalog')return {platforms:[P,p2]};if(q.action==='collectedData'||q.action==='rates')return {rows:[],total:0};if(q.action==='aggregate'&&q.platformId===p2.id&&fail)throw Error('missing platform');return flowAggregate(q.platformId===p2.id?p2:P,direction)}});await settle();h.c.liveQuery();await settle();assert.equal(h.L.queryFailures.length,1);assert.equal(h.L.results.length,1);assert(!h.calls.some(q=>q.action==='collectedData'||q.action==='reportSummary'),'removed source reports never hold partial results');assert.match(h.html(),/仅为已读取结果/);
   const before=h.calls.filter(q=>q.action==='aggregate').length;fail=false;await h.c.liveRetryFailed();await settle();const retry=h.calls.filter(q=>q.action==='aggregate').slice(before);assert.equal(retry.length,1);assert.equal(retry[0].platformId,p2.id);assert.equal(h.L.queryFailures.length,0);assert.equal(h.L.results.length,2);assert.doesNotMatch(h.html(),/missing platform/);
  }
 });
@@ -208,7 +208,7 @@ test('overview and provider summaries prioritize two primary reads before ancill
    const platform=platforms.find(p=>p.id===q.platformId)||P;if(q.action==='aggregate'&&initial)return pending[platforms.indexOf(platform)].promise;return flowAggregate(platform,direction);
   }});await settle();const run=h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2,page+' bounds concurrent primary reads');
   pending[0].resolve(flowAggregate(platforms[0],direction));await settle();assert.equal(h.L.results.length,1);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,3);assert.equal(h.calls.filter(q=>['rates','collectedData','reportSummary'].includes(q.action)).length,0,'ancillary reads wait for primary completion');
-  initial=false;pending[1].resolve(flowAggregate(platforms[1],direction));pending[2].resolve(flowAggregate(platforms[2],direction));await run;await settle();assert.equal(h.L.results.length,3);assert.equal(h.L.loading,false);assert.equal(h.calls.some(q=>q.action==='collectedData'),page==='overview','provider summaries do not load removed source reports');assert(h.calls.some(q=>q.action==='rates'));
+  initial=false;pending[1].resolve(flowAggregate(platforms[1],direction));pending[2].resolve(flowAggregate(platforms[2],direction));await run;await settle();assert.equal(h.L.results.length,3);assert.equal(h.L.loading,false);assert.equal(h.calls.some(q=>q.action==='collectedData'),false,'source reports are removed from business queries');assert(h.calls.some(q=>q.action==='rates'));
  }
 });
 

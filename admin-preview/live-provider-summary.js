@@ -23,7 +23,7 @@
  }
  function feeSortValue(row){
   // Different platform tiers cannot be represented by a single comparable rate.
-  const match=String(row.fee_rate_label??'').match(/^(\d+(?:\.\d+)?)%(?: \+ (\d+(?:\.\d+)?) \/ 笔)?$/);
+  const match=String(row.fee_reference_label??row.fee_rate_label??'').match(/^(\d+(?:\.\d+)?)%(?: \+ (\d+(?:\.\d+)?) \/ 笔)?$/);
   return match?[Number(match[1]),Number(match[2]||0)]:null;
  }
  // Reused by already-loaded tables. Callers supply raw getters, a local state,
@@ -104,8 +104,8 @@
   if(fixed){if(/^0(?:\.0+)?%?$/.test(fixed)){}else if(/^\d+(?:\.\d+)?(?:\s*\/\s*笔)?$/.test(fixed))f+=parseFloat(fixed);else return null;}
   return {percent:p,fixed:f};
  }
- // Owner confirmed 2026-09-27. This is a current estimate, not a historical
- // charged fee. The 2000 < amount < 2001 gap has no confirmed rate.
+ // Owner confirmed current reference rule, 2026-09-27. Historical estimates
+ // require backend effective-version facts; this label cannot price old orders.
  function tieredFeeRule(row,country){
   return ['印度','in','india'].includes(normalized(country))&&row.direction==='withdraw'
    &&row.currency==='INR'&&normalized(canonical(row.provider,country))==='speed2pay'
@@ -132,30 +132,64 @@
   if(facts.fee_gap_count===0?facts.fee_gap_amount!==0:!(facts.fee_gap_amount>facts.fee_gap_count*2000&&facts.fee_gap_amount<facts.fee_gap_count*2001))return false;
   return true;
  }
+ function versionFeeFacts(row){
+  const total=knownNumber(row?.success_count),currency=typeof row?.currency==='string'&&row.currency.trim()?row.currency:null;
+  if(!Number.isSafeInteger(total)||total<0||!currency)return null;
+  if(row.items?.length){
+   if(row.items.some(item=>item.currency!==currency))return null;
+   const parts=row.items.map(versionFeeFacts);if(parts.some(part=>!part))return null;
+   const combined=parts.reduce((sum,part)=>({matched:sum.matched+part.matched,unmatched:sum.unmatched+part.unmatched,amount:sum.amount+(part.amount??0)}),{matched:0,unmatched:0,amount:0});
+   return combined.matched+combined.unmatched===total&&Number.isSafeInteger(combined.matched)&&Number.isSafeInteger(combined.unmatched)&&Number.isFinite(combined.amount)?{...combined,amount:combined.matched?combined.amount:null}:null;
+  }
+  const matched=knownNumber(row.fee_version_matched_count),unmatched=knownNumber(row.fee_version_unmatched_count),amount=knownNumber(row.fee_version_estimated_amount),state=row.fee_version_state;
+  if(!Number.isSafeInteger(matched)||!Number.isSafeInteger(unmatched)||matched<0||unmatched<0||matched+unmatched!==total||!['complete','partial','unknown'].includes(state))return null;
+  if(state==='complete'&&unmatched!==0||state==='partial'&&!(matched>0&&unmatched>0)||state==='unknown'&&matched!==0)return null;
+  if(matched>0&&(amount===null||amount<0)||matched===0&&amount!==null&&amount!==0)return null;
+  return {matched,unmatched,amount:matched?amount:null};
+ }
  function estimateFacts(row,rates,country){
   if(!isProviderBusiness(row?.provider))return {amount:null,matched:0,reason:feeExempt(row?.provider)?null:'missing_provider'};
-  const tier=tieredFeeRule(row,country);
-  if(tier){
-   const bands=feeBands(row);if(!bands)return {amount:null,matched:0,label:tier.label+'（分档未读取）',reason:'missing_fee_bands'};
-   const matched=bands.fee_low_count+bands.fee_high_count;
-   return {amount:matched?bands.fee_low_amount*tier.lowPercent+bands.fee_low_count*tier.lowFixed+bands.fee_high_amount*tier.highPercent:null,
-    matched,label:tier.label+(bands.fee_gap_count||bands.fee_unpriced_count?'（部分待核对）':''),issues:[{reason:'unconfirmed_amount_band',count:bands.fee_gap_count},{reason:'invalid_success_amount',count:bands.fee_unpriced_count}].filter(x=>x.count>0)};
-  }
-  const payout=row.direction==='withdraw',feeKey=payout?'payoutFee':'collectFee',singleKey=payout?'payoutSingleFee':'collectSingleFee';
-  const candidates=feeCandidates(row,rates,country);
-  const unique=new Map();for(const r of candidates){const value=parseFee(r[feeKey],r[singleKey]);if(!value)return {amount:null,matched:0,reason:'unsupported_rate'};unique.set(JSON.stringify(value),value)}
-  if(unique.size!==1)return {amount:null,matched:0,reason:unique.size?'conflicting_rates':'missing_rate'};
-  if(knownNumber(row.success_amount)===null)return {amount:null,matched:0,reason:'missing_success_amount'};
-  const value=[...unique.values()][0];return {amount:Number(row.success_amount)*value.percent+Number(row.success_count||0)*value.fixed,matched:Number(row.success_count||0)};
+  const facts=versionFeeFacts(row);
+  if(!facts)return {amount:null,matched:0,label:'历史费率待接入',reason:'missing_fee_history'};
+  return {amount:facts.amount,matched:facts.matched,label:'按订单创建时间匹配费率'+(facts.unmatched?'（部分未匹配）':''),issues:facts.unmatched?[{reason:'missing_fee_history',count:facts.unmatched}]:[]};
  }
+
  function estimate(row,rates,country){return estimateFacts(row,rates,country).amount}
  // Each value must come from one backend aggregate over the full requested
  // range. Distinct order counts cannot be added across days or provider aliases.
  function uniqueWorkorderFacts(records){
   if(!Array.isArray(records)||records.length!==1)return null;
   const row=records[0],coverage=row?.uniqueCoverage;
-  if(!coverage||!['complete','partial','unavailable'].includes(coverage.status))return null;
+  if(!coverage||!['complete','partial','unavailable'].includes(coverage.status)&&!workorderAttributedElsewhere(coverage))return null;
+  // An attributed source label is context, not another set of original money.
+  if(workorderAttributedElsewhere(coverage))return {...Object.fromEntries(uniqueIssueKeys.map(key=>[key,null])),coverage};
   return {...Object.fromEntries(uniqueIssueKeys.map(key=>{const value=knownNumber(row[key]);return [key,value!==null&&(!key.endsWith('Count')||value>=0&&Number.isSafeInteger(value))?value:null]})),coverage};
+ }
+ function workorderAttributedElsewhere(c){return Number(c?.diagnosticVersion)===5&&c.status==='attributed_elsewhere'&&c.diagnosisStatus==='attributed_elsewhere'&&c.attributedElsewhere===true&&c.complete===true&&c.needsReview===false;}
+ function workorderNeedsReview(c){
+  // Complete original-order coverage is not proof that raw report money agrees.
+  if(Number(c?.diagnosticVersion)===5&&(c.needsReview===true||c.diagnosisStatus==='review_required'||(c.diagnosticDays||[]).some(day=>{const money=rawWorkorderAmountComparison(day,c);return money?.unexplainedDifferenceAmount!=null&&money.unexplainedDifferenceAmount!==0;})))return true;
+  if(c?.complete===true)return false;
+  // Only the explicit v5 diagnosis separates known collection policy from an
+  // unresolved discrepancy. v4 absence is not an implied zero or confirmation.
+  if(Number(c?.diagnosticVersion)===5&&c.needsReview===false&&c.diagnosisStatus==='explained_range_difference'&&c.sourceCoverage?.complete===true
+    &&!['missingOrderNumberCount','missingAmountCount','amountConflictCount','providerConflictCount','unresolvedProviderOrderCount','unexplainedDetailMismatchCount'].some(k=>knownNumber(c[k])>0)
+    &&!(c.diagnosticDays||[]).some(day=>day.expectedAvailable===false||['missingOrderNumberCount','missingAmountCount','amountConflictCount','providerConflictCount','unresolvedProviderOrderCount','unexplainedDetailMismatchCount'].some(k=>knownNumber(day[k])>0)
+      ||rawWorkorderAmountComparison(day,c)?.unexplainedDifferenceAmount!=null&&rawWorkorderAmountComparison(day,c).unexplainedDifferenceAmount!==0))return false;
+  return true;
+ }
+ function rawWorkorderAmountComparison(day,coverage){
+  const r=day?.rawAmountComparison;
+  if(Number(coverage?.diagnosticVersion??day?.diagnosticVersion)!==5||r?.basis!=='source_workorder_records')return null;
+  const number=v=>typeof v==='number'||typeof v==='string'?knownNumber(v):null,nonnegative=v=>{const n=number(v);return n!==null&&n>=0?n:null},currency=v=>typeof v==='string'&&/^[A-Z0-9]{3,8}$/.test(v)?v:null;
+  const expected=day.expectedAvailable===false?null:nonnegative(r.expectedAmount),detail=nonnegative(r.detailAmount),supplied=number(r.differenceAmount);
+  const comparable=expected!==null&&detail!==null&&supplied!==null&&Math.abs((expected-detail)-supplied)<=1e-6;
+  return {basis:r.basis,expectedAmount:expected,detailAmount:detail,differenceAmount:comparable?supplied:null,currency:currency(r.currency),
+   pendingExcludedDifferenceAmount:comparable?nonnegative(r.pendingExcludedDifferenceAmount):null,
+   pendingRangeNetDifferenceAmount:comparable?number(r.pendingRangeNetDifferenceAmount):null,amountComparisonStatus:r.amountComparisonStatus,
+   excludedTypeDifferenceAmount:comparable?nonnegative(r.excludedTypeDifferenceAmount):null,
+   excludedTypeAmount:nonnegative(r.excludedTypeAmount),excludedTypeCurrency:currency(r.excludedTypeCurrency),
+   unexplainedDifferenceAmount:comparable?number(r.unexplainedDifferenceAmount):null};
  }
  function uniqueKycValue(facts,key){
   if(!facts)return null;
@@ -179,7 +213,7 @@
  // Applying one rate after a merge would misprice platform-specific and fixed fees.
  function feeFacts(items,rates,country,successCount){
   if(items.some(item=>item.success_count===null))return {estimated_fee:null,fee_matched_count:0,fee_issues:[],fee_exclusions:[],fee_eligible_count:null,fee_applicable_count:null,fee_excluded_count:0,fee_complete:false,fee_unknown:true,fee_rate_label:'成功时间口径未提供'};
-  let matched=0,amount=0,excluded=0;const labels=new Set(),issues=[],exclusions=[];
+  let matched=0,amount=0,excluded=0;const labels=new Set(),references=new Set(),issues=[],exclusions=[];
   for(const item of items){
    if(feeExempt(item.provider)){excluded+=Number(item.success_count||0);exclusions.push({provider:item.provider,count:Number(item.success_count||0)});continue}
    const localCountry=item.country||country,payout=item.direction==='withdraw';
@@ -188,8 +222,10 @@
    const candidates=feeCandidates(item,rates,localCountry),values=new Map();
    for(const r of candidates){const parsed=parseFee(r[payout?'payoutFee':'collectFee'],r[payout?'payoutSingleFee':'collectSingleFee']);if(parsed)values.set(JSON.stringify(parsed),parsed);else values.set('unknown',null)}
    if(fact.label)labels.add(fact.label);
-   else if(values.size===1&&!values.has('unknown')){const rule=[...values.values()][0];labels.add((rule.percent*100).toFixed(2)+'%'+(rule.fixed?' + '+Number(rule.fixed.toFixed(8))+' / 笔':''))}
-   else if(values.size>1)labels.add('待核对费率');else labels.add('未匹配');
+   const tier=tieredFeeRule(item,localCountry);
+   if(tier)references.add(tier.label);
+   else if(values.size===1&&!values.has('unknown')){const rule=[...values.values()][0];references.add((rule.percent*100).toFixed(2)+'%'+(rule.fixed?' + '+Number(rule.fixed.toFixed(8))+' / 笔':''))}
+   else if(values.size>1)references.add('待核对费率');else references.add('未匹配');
    if(fact.amount!==null){matched+=fact.matched;amount+=fact.amount}
   }
   const eligible=Math.max(0,successCount-excluded),hasUnattributed=items.reduce((n,r)=>n+Number(r.success_count||0),0)<successCount;
@@ -197,7 +233,8 @@
   const exemptOnly=items.length>0&&items.every(r=>feeExempt(r.provider))&&!hasUnattributed;
   return {estimated_fee:exemptOnly?null:matched>0?amount:successCount===0?0:null,fee_matched_count:matched,
    fee_issues:mergeFeeIssues(issues),fee_exclusions:mergeFeeIssues(exclusions),fee_eligible_count:eligible,fee_applicable_count:eligible,fee_excluded_count:excluded,fee_complete:matched===eligible,
-   fee_rate_label:exemptOnly?'不适用':[...labels].sort().join(' / ')||'未匹配'};
+   fee_rate_label:exemptOnly?'不适用':[...labels].sort().join(' / ')||'未匹配',
+   fee_reference_label:exemptOnly?'不适用':[...references].sort().join(' / ')||'未匹配'};
  }
  function feeSummary(rows){
   const total=(rows||[]).reduce((s,r)=>{s.successCount+=Number(r.fee_eligible_count??r.success_count??0);s.excludedCount+=Number(r.fee_excluded_count||0);s.matchedCount+=Number(r.fee_matched_count||0);if(r.estimated_fee!=null)s.amount+=Number(r.estimated_fee);return s},{amount:0,matchedCount:0,successCount:0,excludedCount:0});
@@ -207,14 +244,14 @@
   if(new Set((rows||[]).map(r=>r.currency).filter(Boolean)).size>1){total.amount=null;total.complete=false}
   return total;
  }
- const feeReasons={missing_provider:'未识别三方，无法匹配费率',missing_rate:'当前方向未找到可用费率',conflicting_rates:'同一适用范围存在不同费率',unsupported_rate:'原表费率为未支持的复杂规则',missing_success_amount:'成功金额未完整提供',missing_fee_bands:'逐笔金额分档未完整读取',unconfirmed_amount_band:'金额落在尚未确认费率的区间',invalid_success_amount:'成功金额缺失或不符合计费要求',missing_provider_breakdown:'成功订单缺少三方分组明细'};
+ const feeReasons={missing_fee_history:'订单创建时的费率版本或币种未确认',missing_provider:'未识别三方，无法匹配费率',missing_rate:'当前方向未找到可用费率',conflicting_rates:'同一适用范围存在不同费率',unsupported_rate:'原表费率为未支持的复杂规则',missing_success_amount:'成功金额未完整提供',missing_fee_bands:'逐笔金额分档未完整读取',unconfirmed_amount_band:'金额落在尚未确认费率的区间',invalid_success_amount:'成功金额缺失或不符合计费要求',missing_provider_breakdown:'成功订单缺少三方分组明细'};
  function mergeFeeIssues(rows){const map=new Map();for(const row of rows){if(!(Number(row.count)>0))continue;const key=JSON.stringify([row.provider,row.platform,row.reason]);if(!map.has(key))map.set(key,{...row,count:0});map.get(key).count+=Number(row.count)}return [...map.values()].sort((a,b)=>b.count-a.count)}
  function feeCoverageText(row){
   if(row.fee_unknown)return '成功时间口径未提供，不能计算手续费或完整匹配率';
   const eligible=Number(row.fee_eligible_count??row.successCount??row.success_count??0),excluded=Number(row.fee_excluded_count??row.excludedCount??0),matched=Number(row.fee_matched_count??row.matchedCount??0),issues=row.fee_issues||row.issues||[],exclusions=row.fee_exclusions||row.exclusions||[],count=n=>Number(n||0).toLocaleString('en-US');
   return '成功总笔数 '+count(eligible+excluded)+'；不计三方手续费 '+count(excluded)+'；应匹配 '+count(eligible)+'；已匹配 '+count(matched)+'；未匹配 '+count(Math.max(0,eligible-matched))+' 笔。'+
    (exclusions.length?'不计费：'+exclusions.map(x=>x.provider+' '+count(x.count)+' 笔').join('、')+'。':'')+
-   (issues.length?'未匹配：'+issues.map(x=>(x.platform&&x.platform!=='未提供平台'?x.platform+' / ':'')+x.provider+' '+count(x.count)+' 笔（'+(feeReasons[x.reason]||'费率待核对')+'）').join('；')+'。':'')+'按当前费率估算；未匹配部分不按零手续费计算。';
+   (issues.length?'未匹配：'+issues.map(x=>(x.platform&&x.platform!=='未提供平台'?x.platform+' / ':'')+x.provider+' '+count(x.count)+' 笔（'+(feeReasons[x.reason]||'费率待核对')+'）').join('；')+'。':'')+'按订单创建时间匹配费率版本；未匹配部分不按零手续费计算。';
  }
  function overviewDimensions({orders,summaries,rates,country,key,plus,combine}){
   if(!['team','country','platform','provider'].includes(key))return [];
@@ -387,7 +424,7 @@
    const coverage=row.uniqueCoverage;
    // A missing platform row alone is not proof of missing collection. Only
    // named date gaps or an explicit incomplete original-order fact qualify.
-   if(row.direction!==direction||!coverage||coverage.complete===true)continue;
+   if(row.direction!==direction||!coverage||coverage.complete===true&&!workorderNeedsReview(coverage))continue;
    const reasons=workorderGapReasons(coverage).filter(i=>!i.informational).map(i=>i.text),unknownLabel=unknownProviderNames.has(String(row.provider??'').trim()),hasDays=(coverage.diagnosticDays||[]).some(day=>!day.direction||day.direction===direction);
    add(row,unknownLabel&&!hasDays?['源标签为未标记三方；本标签原单归属明细未返回']:reasons.length?[]:['完整性待核验'],coverage);
   }
@@ -400,6 +437,13 @@
    (gap.attributionFacts||(gap.attributionFacts=[])).push({provider:providerName(canonical(row.provider,L.country)),resolved:knownNumber(c.resolvedProviderOrderCount),unknown:knownNumber(c.unknownProviderRecordCount),unresolved:knownNumber(c.unresolvedProviderOrderCount)});
   }
   return [...gaps.values()].map(gap=>({...gap,reasons:[...gap.reasons],providers:[...gap.providers],reasonGroups:[...gap.reasonGroups.values()].map(g=>({...g,providers:[...g.providers]}))}));
+ }
+ function workorderPlatformNeedsReview(p){
+  if(p.sourceDays.length||!p.details.length)return true;
+  if(p.details.some(d=>Number(d.coverage.diagnosticVersion)===5&&workorderNeedsReview(d.coverage)))return true;
+  if(p.details.every(d=>Number(d.coverage.diagnosticVersion)===5))return false;
+  const knownScope=new Set(['pendingExcludedDetailCount','excludedWorkorderTypeCount']);
+  return p.reasons.length>0||!p.reasonGroups.length||p.reasonGroups.some(g=>!g.informational&&!knownScope.has(g.key))||p.details.some(d=>d.coverage.sourceCoverage?.complete===false||d.coverage.expectedAvailable===false||knownNumber(d.coverage.unexplainedDetailMismatchCount)===null&&(d.expected===null||d.received===null||d.expected!==d.received));
  }
  function readNotice(ctx){
   const {L,E,C}=ctx,c=queryCoverage(L);if(!c.partial)return '';
@@ -508,14 +552,26 @@
    const sum=(items,key)=>!items.length||items.some(d=>knownNumber(d[key])===null)?null:items.reduce((n,d)=>n+Number(d[key]),0);
    const difference=(expected,received)=>expected===null||received===null?null:expected-received;
    const differenceText=value=>value===null?'无法比较':(value>0?'+':'')+C(value)+(value>0?' · 汇总多 '+C(value):value<0?' · 明细多 '+C(-value):' · 数量一致');
-   const knownScope=new Set(['pendingExcludedDetailCount','excludedWorkorderTypeCount']);
-   const needsConfirmation=p=>p.reasons.length>0||!p.reasonGroups.length||p.reasonGroups.some(g=>!g.informational&&!knownScope.has(g.key))||p.details.some(d=>d.coverage.sourceCoverage?.complete===false||d.coverage.expectedAvailable===false||knownNumber(d.coverage.unexplainedDetailMismatchCount)===null&&difference(d.expected,d.received)!==0);
+   const money=(value,currency)=>value===null?'未提供':N(value)+' '+(currency||'（币种未提供）');
+   const amountCell=(day,coverage)=>{const a=rawWorkorderAmountComparison(day,coverage);return a?'<div>日报 '+E(money(a.expectedAmount,a.currency))+'</div><div>明细 '+E(money(a.detailAmount,a.currency))+'</div><small class="cell-sub">净差 '+E(a.differenceAmount===null?'无法比较':(a.differenceAmount>0?'+':'')+money(a.differenceAmount,a.currency))+'</small>':'<span>未提供</span><small class="cell-sub">未接入金额诊断</small>';};
+   const needsConfirmation=workorderPlatformNeedsReview;
    const isUnmarkedDetail=d=>unknownProviderNames.has(String(d.sourceProvider??d.provider??'').trim())&&!d.days.length;
    const explanation=(day,d)=>{
     const notes=[],pending=knownNumber(day.pendingExcludedDetailCount),unexplained=knownNumber(day.unexplainedDetailMismatchCount),excluded=knownNumber(day.excludedWorkorderTypeCount);
     if(pending>0)notes.push('已知范围差异：数量差额中有 '+C(pending)+' 条与待处理数一致，采集器跳过待处理；这是数量解释，不代表已逐笔匹配。');
     if(excluded>0)notes.push('已知范围差异：'+C(excluded)+'条USDT工单类型未纳入原单统计，记录已采集；请单独核对 USDT 类型，不要重复补采。');
     if(unexplained>0)notes.push('待确认：还有 '+C(unexplained)+' 条差异未被现有原因解释，可能涉及范围或同步时点；尚不能认定为源后台漏单。');
+    const amount=rawWorkorderAmountComparison(day,d.coverage);
+    if(amount){
+     notes.push('金额口径：日报与明细的原始工单记录金额，可含同一原单重复提交；不是去重原支付订单金额。');
+     if(amount.pendingRangeNetDifferenceAmount!==null&&pending>0)notes.push('范围净差 '+money(amount.pendingRangeNetDifferenceAmount,amount.currency)+'；待处理笔数已对上，金额尚待逐笔核对。');
+     else if(amount.pendingExcludedDifferenceAmount!==null&&pending>0)notes.push('待处理范围金额净差 '+money(amount.pendingExcludedDifferenceAmount,amount.currency)+'；尚未逐笔核对。');
+     if(amount.excludedTypeDifferenceAmount!==null&&excluded>0)notes.push('USDT 类型范围解释的金额差额 '+money(amount.excludedTypeDifferenceAmount,amount.currency)+'；此类型与原单统计分开。');
+     if(amount.excludedTypeAmount!==null&&excluded>0)notes.push('已采集 USDT 类型记录金额 '+money(amount.excludedTypeAmount,amount.excludedTypeCurrency)+'；币种不明确时不得并入其他币种金额。');
+     if(amount.unexplainedDifferenceAmount!==null&&amount.unexplainedDifferenceAmount!==0)notes.push('待确认：未解释金额净差 '+(amount.unexplainedDifferenceAmount>0?'+':'')+money(amount.unexplainedDifferenceAmount,amount.currency)+'，即使条数相同也要核对原始金额。');
+     if(amount.differenceAmount===null)notes.push('金额证据未齐，净差无法比较；缺失金额或币种不以 0 或当前页面币种代替。');
+     else if(!amount.currency)notes.push('金额币种未提供，以上数值仅作本项来源记录对比，不计入当前页面币种合计。');
+    }else notes.push('接口尚未提供原始工单金额差异，金额保持未提供，不用去重原单金额代算。');
     if(day.expectedAvailable===false)notes.push('未收到该日日报，不能把汇总当作 0；先核对这天的日报采集。');
     if(Number(day.missingOrderNumberCount)>0)notes.push('待确认：'+C(day.missingOrderNumberCount)+'条采集字段未提供原订单号，影响按原支付订单去重。请查看源记录的原订单引用字段。');
     if(Number(day.missingAmountCount)>0||Number(day.amountConflictCount)>0)notes.push('待确认：'+workorderGapReasons(day).filter(i=>['missingAmountCount','amountConflictCount'].includes(i.key)).map(i=>C(i.count)+i.unit+i.label).join('；')+'。请按原支付订单号核对记录金额，不能以 0 代替。');
@@ -533,10 +589,10 @@
     const dates=[...new Set(p.sourceDays.flatMap(row=>row.missingDates))].sort();
     const daily=rowsFor(p).sort((a,b)=>String(a.day.date||'').localeCompare(String(b.day.date||''))||a.d.provider.localeCompare(b.d.provider)).map(({d,day})=>{
      const expected=day.expectedAvailable===false?null:knownNumber(day.expectedCount),received=knownNumber(day.detailCount),date=day.date||'期间汇总（未提供每日拆分）',diff=difference(expected,received);
-     return [E(d.provider)+'<small class="cell-sub">'+E(date)+'</small>',day.expectedAvailable===false?'未收到':count(expected),count(received),E(differenceText(diff)),count(day.pendingExcludedDetailCount),count(day.unexplainedDetailMismatchCount),'<div class="provider-workorder-day-context">'+E('汇总 '+count(expected)+' / 明细 '+count(received))+'</div>'+explanation(day,d).map(text=>'<p>'+E(text)+'</p>').join('')+'<p class="provider-workorder-next"><strong>下一步：</strong>'+E(sourceInstructions(p,d,day))+'</p>'];
+     return [E(d.provider)+'<small class="cell-sub">'+E(date)+'</small>',day.expectedAvailable===false?'未收到':count(expected),count(received),E(differenceText(diff)),count(day.pendingExcludedDetailCount),count(day.unexplainedDetailMismatchCount),amountCell(day,d.coverage),'<div class="provider-workorder-day-context">'+E('汇总 '+count(expected)+' / 明细 '+count(received))+'</div>'+explanation(day,d).map(text=>'<p>'+E(text)+'</p>').join('')+'<p class="provider-workorder-next"><strong>下一步：</strong>'+E(sourceInstructions(p,d,day))+'</p>'];
     });
     const attribution=(p.attributionFacts||[]).length?'<div class="provider-workorder-attribution"><p><strong>本平台已返回的原单归属诊断：</strong>以下为各三方分项，不能据此把“未标记三方”汇总行直接归给某一家；源标签汇总与按原单归并后的分项范围不同。同一条来源未标记记录可能关联多个冲突三方分项，各分项数量不能直接相加。</p>'+table(['原单三方分项','已按唯一已知三方归并（原单组）','来源三方未填写（记录条）','原单三方仍未确认（组）'],p.attributionFacts.map(f=>[E(f.provider),count(f.resolved),count(f.unknown),count(f.unresolved)]),'provider-workorder-attribution-table')+'</div>':'';
-    return '<details class="provider-workorder-details"><summary><span class="provider-workorder-platform"><strong>'+E(p.name)+'</strong><small>'+E(p.source||'包网未提供')+'</small><em class="'+(confirm?'needs-confirmation':'known-scope')+'">'+(confirm?'含待确认项':'已知范围差异')+'</em></span><span class="provider-workorder-counts"><small>所列差异三方小计 · 非全平台</small><span>汇总 <b>'+count(expected)+'</b> / 明细 <b>'+count(received)+'</b></span><span>净差（汇总 − 明细）<b>'+E(differenceText(difference(expected,received)))+'</b></span></span><span class="provider-workorder-reasons">'+reasons.map(text=>'<span>'+E(text)+'</span>').join('')+'</span><span class="provider-workorder-expand">展开每日核对</span></summary><div class="provider-workorder-platform-body"><p class="provider-workorder-providers">涉及三方：'+E(p.providers.join('、')||'未提供')+'</p>'+(p.reasonGroups.some(g=>g.key==='excludedWorkorderTypeCount')?'<p>USDT 记录已采集，但此类型当前未纳入原单统计；无需将已采集记录重复补采。</p>':'')+(p.sourceDays.length?'<p>'+E('日期覆盖：'+(dates.length?'未收齐 '+dates.join('、'):'尚未提供具体缺少日期；不能指定缺少哪一天。'))+'</p>':'')+(daily.length?table(['三方 / 提交日期','日报汇总','已采集明细','差额（汇总 − 明细）','已知待处理跳过','未解释差异（条）','原因含义与下一步'],daily,'provider-workorder-day-table'):'<p>尚无三方逐日诊断。请在源后台按 '+E(p.name+' · '+business+' · '+(dates.join('、')||period))+' 检查日报及对应日期的同步结果，不能将未知数量当作 0。</p>')+attribution+'</div></details>';
+    return '<details class="provider-workorder-details"><summary><span class="provider-workorder-platform"><strong>'+E(p.name)+'</strong><small>'+E(p.source||'包网未提供')+'</small><em class="'+(confirm?'needs-confirmation':'known-scope')+'">'+(confirm?'含待确认项':'已知范围差异')+'</em></span><span class="provider-workorder-counts"><small>所列差异三方小计 · 非全平台</small><span>汇总 <b>'+count(expected)+'</b> / 明细 <b>'+count(received)+'</b></span><span>净差（汇总 − 明细）<b>'+E(differenceText(difference(expected,received)))+'</b></span></span><span class="provider-workorder-reasons">'+reasons.map(text=>'<span>'+E(text)+'</span>').join('')+'</span><span class="provider-workorder-expand">展开每日核对</span></summary><div class="provider-workorder-platform-body"><p class="provider-workorder-providers">涉及三方：'+E(p.providers.join('、')||'未提供')+'</p>'+(p.reasonGroups.some(g=>g.key==='excludedWorkorderTypeCount')?'<p>USDT 记录已采集，但此类型当前未纳入原单统计；无需将已采集记录重复补采。</p>':'')+(p.sourceDays.length?'<p>'+E('日期覆盖：'+(dates.length?'未收齐 '+dates.join('、'):'尚未提供具体缺少日期；不能指定缺少哪一天。'))+'</p>':'')+(daily.length?table(['三方 / 提交日期','日报汇总','已采集明细','差额（汇总 − 明细）','已知待处理跳过','未解释差异（条）','原始工单金额对比','原因含义与下一步'],daily,'provider-workorder-day-table'):'<p>尚无三方逐日诊断。请在源后台按 '+E(p.name+' · '+business+' · '+(dates.join('、')||period))+' 检查日报及对应日期的同步结果，不能将未知数量当作 0。</p>')+attribution+'</div></details>';
    }).join('');
    const confirms=gaps.filter(needsConfirmation).length;
    openDrawer('工单统计差异说明','<div class="provider-workorder-gap-intro"><p><strong>'+E(L.country+' · '+name+' · 工单提交日期 '+period)+'</strong></p><p>'+C(gaps.length)+' 个平台存在统计差异：'+C(gaps.length-confirms)+' 个仅有已知范围差异，'+C(confirms)+' 个含待确认项。已知原因不等于统计已完整。</p><p>这里只影响工单提交、成功、未到账及工单成功率；代收／代付订单金额、笔数和刷单剔除另行计算。</p><p>差额 = 日报汇总 − 已采集明细。正数表示汇总较多，负数表示明细较多；未解释差异是扣除已知原因后的差异条数，不表示已确认缺单。不同三方、日期的正负差额可能抵消。</p></div><div class="provider-workorder-gap-table">'+platformCards+'</div><div class="provider-workorder-gap-help"><p><strong>如何查已采集记录：</strong>AR 来源可在工单运营中心 → 工单未到账，选择上述国家、平台、提交日期、'+business+'业务和全部状态，查看原支付订单及其工单明细。此页按原订单去重，不能直接用列表行数与日报原始工单条数比较；三方和待处理仍需在源后台同条件核对。NEWAR（含 DHANIWIN 的 USDT 类型）请到对应源后台核对；当前“工单未到账”入口尚未提供这些 NEWAR 明细，不能用该入口的空结果认定未采集。</p><p><strong>定位限制：</strong>汇总无逐笔号，不能指定缺失哪张工单。当前诊断只能定位到平台、三方、日期与字段原因；未确认差异不能自动补单，已有统计不会因此改为完整。</p></div>');
@@ -550,7 +606,7 @@
   const issueOnly=row=>!row.items?.length&&row.issues!=null;
   const issueLabelFor=row=>unknownProviderNames.has(String(row.provider??'').trim())?'三方未填写（源工单）':row.provider+'（源工单）';
   root.providerSummaryOrders=function(index,platformId=''){const row=shown[index];if(!row||issueOnly(row)||platformId&&!row.items.some(r=>r.platformId===platformId))return;root.liveProviderOrders?.(row.provider,'',direction,platformId)};
-  const providerLabel=(row,index)=>issueOnly(row)?'<button class="link" aria-expanded="'+!!expanded[rowKey(row)]+'" title="展开已读取的平台工单汇总；此汇总接口不提供工单号" onclick="providerSummaryToggle('+index+')">'+E(issueLabelFor(row))+'</button><small class="cell-sub">仅工单汇总</small>':providerCell(row)+(String(row.provider).trim().toUpperCase()==='USDT'?'<small class="cell-sub"><button class="link" title="查看原始通道、类型与逐笔订单；USDT不代表已确认支付商" onclick="providerSummaryOrders('+index+')">原始通道 / 订单</button></small>':'');
+  const providerLabel=(row,index)=>(issueOnly(row)?'<button class="link" aria-expanded="'+!!expanded[rowKey(row)]+'" title="展开已读取的平台工单汇总；此汇总接口不提供工单号" onclick="providerSummaryToggle('+index+')">'+E(issueLabelFor(row))+'</button><small class="cell-sub">仅工单汇总</small>':providerCell(row)+(String(row.provider).trim().toUpperCase()==='USDT'?'<small class="cell-sub"><button class="link" title="查看原始通道、类型与逐笔订单；USDT不代表已确认支付商" onclick="providerSummaryOrders('+index+')">原始通道 / 订单</button></small>':''))+(workorderAttributedElsewhere(row.uniqueOrders?.coverage)?'<small class="cell-sub" title="'+E('该来源标签的 '+(knownNumber(row.uniqueOrders.coverage.attributedElsewhereDetailCount)===null?'已采集':C(row.uniqueOrders.coverage.attributedElsewhereDetailCount))+' 条记录已按唯一已知三方归并；此标签不重复增加原单笔数和金额。')+'">已归并来源标签</small>':'');
   const workorderBasis='工单提交、成功、未到账六列统一按原存款订单号在所选期间去重，同一原订单只保留1条；取款未到账同样适用。工单未到账为去重提交减去重成功，不等于仍在等待到账。原订单号缺失时显示 —；覆盖不完整统一提示，缺失部分不按0计算。';
   const tierExplanation=tier=>'已确认：按每笔成功金额分档估算。'+tier.label+'。2,000 < 金额 < 2,001 的记录待核对，不计入已匹配笔数。';
   const displayedRate=(row,original)=>{const tier=tieredFeeRule(row,L.country);return tier?tierExplanation(tier):original};
@@ -563,7 +619,7 @@
     ?box('当前确认规则','<p class="live-definition">'+E(tierExplanation(tier))+'</p>')+box('原表费率记录',sourceTable)
     :box('当前匹配规则','<p class="live-definition">'+E(rule?.note||'优先匹配有费率内容的平台专属记录，再匹配国家记录。存在不同费率时，保留差异供核对。')+'</p>'+sourceTable)));
   };
-  const columns=[['统一三方','provider'],['平台','platform_count'],['类型','type'],['全部金额','all_amount'],['全部笔数','all_count'],['成功金额','success_amount'],['成功笔数','success_count'],['金额占比','amount_share'],['笔数占比','count_share'],['成功率','success_rate'],...(direction==='charge'?[['剔除后成功率','adjusted_rate'],['无充值人数','invalid_members'],['无效笔数','invalid_count']]:[]),...(direction==='withdraw'?[['代付中金额','pending_amount'],['代付中笔数','pending_count']]:[]),['匹配费率','fee_rate'],['估算手续费','estimated_fee'],['手续费占比','fee_share'],
+  const columns=[['统一三方','provider'],['平台','platform_count'],['类型','type'],['全部金额','all_amount'],['全部笔数','all_count'],['成功金额','success_amount'],['成功笔数','success_count'],['金额占比','amount_share'],['笔数占比','count_share'],['成功率','success_rate'],...(direction==='charge'?[['剔除后成功率','adjusted_rate'],['无充值人数','invalid_members'],['无效笔数','invalid_count']]:[]),...(direction==='withdraw'?[['代付中金额','pending_amount'],['代付中笔数','pending_count']]:[]),['当前参考费率','fee_rate'],['估算手续费','estimated_fee'],['手续费占比','fee_share'],
    ['工单提交金额','issue_submittedAmount'],['工单提交笔数','issue_submittedCount'],['工单成功金额','issue_successAmount'],['工单成功笔数','issue_successCount'],['工单未到账金额','issue_notReceivedAmount'],['工单未到账笔数','issue_notReceivedCount'],...(direction==='charge'?[['未到账KYC匹配笔数','issue_uniqueNotReceivedKycCount'],['未到账KYC匹配金额','issue_uniqueNotReceivedKycAmount']]:[]),['工单成功率','issue_success_rate'],['平台明细',null]];
   const header=(text,key,active=sort,ascending=!!L.providerSortAsc,index=null)=>{if(!key)return E(text);const next=active===key?!ascending:textSortKeys.has(key),basis=key==='fee_rate'?'按百分比、单笔费依次排序；多档或未匹配置后。':key.startsWith('issue_')?'按原订单号去重后的工单数据排序。':'';return '<button class="link provider-sort-heading" title="'+E(basis+'点击按'+text+(next?'升序':'降序')+'排列；空值置后')+'" onclick="'+(index===null?'providerSummarySort(\''+key+'\')':'providerSummaryPlatformSort('+index+',\''+key+'\')')+'">'+E(text).replace(/(金额|笔数)$/, '<span class="provider-heading-unit">$1</span>')+' <span class="provider-sort-arrow" aria-hidden="true">'+(active===key?(ascending?'↑':'↓'):'↕')+'</span></button>'};
   const headers=columns.map(([text,key])=>header(text,key));
@@ -587,6 +643,7 @@
   const uniqueCell=(facts,key)=>{
    if(!facts)return '—';
    const coverage=facts.coverage||{},value=facts[key];
+   if(workorderAttributedElsewhere(coverage))return '<span class="provider-unique-value" tabindex="0" title="已归并来源标签：原单已计入唯一已知三方，此标签不重复增加笔数和金额。">—</span>';
    const gaps=uniqueGaps(coverage);
    const note='工单关联的原订单，在整个所选日期范围内按平台及业务方向去重；同一原订单重复提交只计一次。'+(gaps.length?gaps.join('；')+'。':'')+(coverage.complete===true?'当前已读工单原单完整。':'当前仅为已知原单，覆盖不完整；缺失部分不按零计算。');
    const partial=coverage.complete!==true,label=value===null?'—':key.endsWith('Count')?C(value):N(value);
@@ -616,7 +673,7 @@
    const fees=scopedFees(ctx,items,direction);r.estimated_fee=fees.amount;r.fee_complete=fees.complete;r.fee_eligible_count=fees.successCount;r.fee_excluded_count=fees.excludedCount;r.fee_issues=fees.issues;r.fee_exclusions=fees.exclusions;
    r.issues=L.workorders&&items.some(i=>i.issues)?Object.fromEntries(issueKeys.map(k=>[k,items.reduce((n,i)=>n+Number(i.issues?.[k]||0),0)])):null;r.uniqueOrders=fullScope?uniqueWorkorderFacts([L.workorders?.byDirection?.[direction]]):null;return cells(r,'<strong>'+label+'</strong>',true)};
   const coverage=L.workorders?.coverage;
-  const partialOrderRows=rows.filter(r=>r.uniqueOrders&&r.uniqueOrders.coverage?.complete!==true);
+  const partialOrderRows=rows.filter(r=>r.uniqueOrders&&workorderNeedsReview(r.uniqueOrders.coverage));
   root.providerSummaryCoverage=function(){
    const selectedProviders=new Set(partialOrderRows.map(r=>r.provider));
    const missingPlatforms=(coverage?.platforms||[]).filter(p=>p.complete===false||Number.isFinite(Number(p.expectedDays))&&Number(p.days)<Number(p.expectedDays));
@@ -630,12 +687,13 @@
    for(const row of [...partialOrderRows.map(r=>({provider:r.provider,uniqueCoverage:r.uniqueOrders.coverage})),...details])for(const day of row.uniqueCoverage?.diagnosticDays||[]){
     if(day.direction&&day.direction!==direction)continue;
     const provider=providerName(canonical(day.provider||row.provider,L.country)),key=JSON.stringify([day.countryCode,day.source,day.platform,day.sourcePlatform,provider,day.direction||direction,day.date]);
-    if(!daily.has(key))daily.set(key,{...day,provider});
+    if(!daily.has(key))daily.set(key,{...day,provider,diagnosticVersion:row.uniqueCoverage.diagnosticVersion});
    }
    const dayReasons=day=>{
     const reasons=workorderGapReasons(day).map(i=>C(i.count)+i.unit+i.label);
     reasons.push(...[['newarExplicitReferenceMissingCount','条 NEWAR 原订单引用字段缺失'],['arPaymentOrderMissingCount','条 AR 充值原订单号缺失'],['unsupportedReferenceTypeCount','条原订单引用字段类型不支持']].filter(([key])=>Number(day[key])>0).map(([key,label])=>C(day[key])+label));
     if(Number(day.sourceOrderOnlyCount)>0)reasons.push(C(day.sourceOrderOnlyCount)+'条仅采集到来源订单号');
+    const amount=rawWorkorderAmountComparison(day);if(amount?.unexplainedDifferenceAmount!==null&&amount?.unexplainedDifferenceAmount!==undefined&&amount.unexplainedDifferenceAmount!==0)reasons.push('未解释金额净差 '+(amount.unexplainedDifferenceAmount>0?'+':'')+N(amount.unexplainedDifferenceAmount)+' '+(amount.currency||'（币种未提供）'));
     return reasons.join('；')||'来源数据待核对';
    };
    const dailyDetails=daily.size?box('问题日期与采集字段',table(['平台','包网','日期','三方','日汇总笔数','原始明细条数','需核对内容'],[...daily.values()].sort((a,b)=>String(a.platform).localeCompare(String(b.platform))||String(a.date).localeCompare(String(b.date))).map(day=>[E(day.platform||day.sourcePlatform||'未提供'),E(day.source||'—'),E(day.date||'日期未提供'),E(day.provider),day.expectedAvailable===false?'未收到':count(day.expectedCount),count(day.detailCount),E(dayReasons(day))]))):'';
@@ -643,7 +701,8 @@
   };
   const workorderGaps=workorderPlatformGaps(L,direction);
   const uniqueCoverageNote=partialOrderRows.length?'<button type="button" class="link provider-order-coverage" onclick="providerSummaryCoverage()" title="工单原单待核对 · '+C(partialOrderRows.length)+' 个三方，点击查看原因">工单待核对 '+C(partialOrderRows.length)+' 三方</button>':'';
-  const workorderGapNote=workorderGaps.length?'<button type="button" class="link provider-workorder-coverage-button" onclick="providerSummaryWorkorderPlatforms()">工单统计差异 '+C(workorderGaps.length)+' 平台</button>':'';
+  const workorderReviewCount=workorderGaps.filter(workorderPlatformNeedsReview).length;
+  const workorderGapNote=workorderGaps.length?'<button type="button" class="link provider-workorder-coverage-button" onclick="providerSummaryWorkorderPlatforms()">工单统计差异 '+C(workorderGaps.length)+' 平台 · 待确认 '+C(workorderReviewCount)+' / 已解释 '+C(workorderGaps.length-workorderReviewCount)+'</button>':'';
   const coverageNote='';
   const workNote=L.workordersUnsupported?'<span class="provider-inline-status">工单未接入</span>':L.workordersError?'<span class="provider-inline-status" title="'+E(L.workordersError)+'">工单读取未完成 <button type="button" class="link" onclick="liveProviderWorkordersRetry()">只重试工单</button></span>':
    L.workordersLoading?'<span class="provider-inline-status">工单读取中…</span>':!L.workorders?'<span class="provider-inline-status">'+(L.dirty?'筛选已更改，请查询':L.loading?'工单待载入':'工单未读取 <button type="button" class="link" onclick="liveProviderWorkordersRetry()">加载工单</button>')+'</span>':'';
@@ -659,7 +718,7 @@
     const values=[E(r.platform)+(unknown?'<small class="cell-sub">仅有工单数据</small>':''),E(r.source||'未提供'),providerTypeCell({...r,provider:row.provider},L.feeLookupRows,L.country,E,L),
      amount('all_amount'),count('all_count'),amount('success_amount'),count('success_count'),unknown?'—':share(r.success_amount,row.success_amount),unknown?'—':share(r.success_count,row.success_count),
      '<span title="按成功 / 创建：'+C(r.success_count)+' / '+C(r.all_count)+' 笔">'+(unknown?'—':rate)+'</span>',...(direction==='charge'?(unknown?['—','—','—']:submissionCells(r)):[]),
-     ...(direction==='withdraw'?[amount('pending_amount'),count('pending_count')]:[]),rateButton(displayedRate(r,r.fee_rate_label),index),unknown?'—':feeCell(r),unknown?'—':share(r.estimated_fee,row.estimated_fee),
+     ...(direction==='withdraw'?[amount('pending_amount'),count('pending_count')]:[]),rateButton(displayedRate(r,r.fee_reference_label||'—'),index),unknown?'—':feeCell(r),unknown?'—':share(r.estimated_fee,row.estimated_fee),
      ...issueKeys.map(key=>uniqueCell(r.uniqueOrders,displayedIssueKeys[key])),...(direction==='charge'?kycIssueKeys.map(key=>kycCell(r.uniqueOrders,key)):[]),
      issueRate(w),!unknown&&r.platformId&&(Number(r.success_count)>0||Number(r.all_count)>0)?'<button class="link" title="'+E(r.platform+' · 查看'+row.provider+'原始通道与订单')+'" onclick="providerSummaryOrders('+index+','+E(JSON.stringify(r.platformId))+')">查看订单</button>':'—'];
     return '<tr class="provider-platform-row">'+values.map(value=>'<td>'+value+'</td>').join('')+'</tr>';
@@ -678,6 +737,6 @@
    box(name+'三方汇总'+(partial?'（部分结果）':'')+' · '+issueLabel+'工单',(uniqueCoverageNote||workorderGapNote?'<div class="provider-workorder-notices">'+uniqueCoverageNote+workorderGapNote+'</div>':'')+reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
     '')+'</div>';
  }
- root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,tieredFeeRule,feeSummary,feeCoverageText,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
+ root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,tieredFeeRule,feeSummary,feeCoverageText,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,workorderPlatformNeedsReview,rawWorkorderAmountComparison,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
  if(typeof module!=='undefined')module.exports=root.HensemProviderSummary;
 })(typeof window!=='undefined'?window:globalThis);

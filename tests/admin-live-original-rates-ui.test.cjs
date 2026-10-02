@@ -30,7 +30,7 @@ const meta={title:'测试原表',sheets,fetchedAt:'2026-01-01T00:00:00Z'};
  const pending=api.load();await new Promise(resolve=>setImmediate(resolve));await api.selectSheet(2);resolveOld(grid(1));await pending;assert.equal(api.snapshot().sheetId,2);assert.equal(api.snapshot().hasGrid,false);await api.load();assert.equal(api.snapshot().hasGrid,true);
  // Revocation/network error clears every cached source value, retaining headers.
  api.configure({request:async()=>{throw Error('当前账号没有原表查看权限')}});await api.load();html=api.render();assert(html.includes('<thead>'));assert(html.includes('当前账号没有原表查看权限'));assert(!html.includes('TEST-'));assert(!html.includes('甲国'));assert.equal(api.snapshot().hasGrid,false);
- let fallback=false;api.configure({onUnavailable:()=>fallback=true});api.unavailable();assert(fallback);api.clear();assert(!api.snapshot().hasGrid);
+ assert(!api.render().includes('授权范围费率'));assert(api.render().includes('original-rates-filter-actions'));api.clear();assert(!api.snapshot().hasGrid);
  assert.doesNotMatch(code,/\b(?:fetch|XMLHttpRequest)\s*\(|localStorage|service_role|createClient\s*\(/);
  console.log('PASS: original model/CSS, source-order tabs, AND filters, full/compact matrix, safe exact text, paging, merge anchors, stale-response guard, denied empty header.');
 })().catch(error=>{console.error(error);process.exitCode=1});

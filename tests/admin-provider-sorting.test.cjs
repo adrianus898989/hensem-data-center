@@ -1,7 +1,7 @@
 /* Synthetic loaded summaries only; sorting must not issue any requests. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const shared=fs.readFileSync(path.join(__dirname,'admin-provider-payout.test.cjs'),'utf8').split(/\ntest\(/)[0];
-const {fixture,order}=new Function('require','__dirname',shared+';return {fixture,order};')(require,__dirname);
+const {fixture,order,verifiedFee}=new Function('require','__dirname',shared+';return {fixture,order,verifiedFee};')(require,__dirname);
 const plain=s=>s.replace(/<[^>]*>/g,'').trim();
 const body=html=>html.match(/<tbody>([\s\S]*?)<\/tbody>/)[1];
 const names=h=>[...body(h.html()).matchAll(/<tr><td>([\s\S]*?)<\/td>/g)].map(m=>plain(m[1]));
@@ -32,7 +32,7 @@ test('amount and count sorts use numbers before pagination, with missing values 
 });
 
 test('success rates and amount/count/fee shares compare raw fractions and keep unknown denominators blank',()=>{
- const h=fixture([named('HigherPay',10,2,{all_count:3}),named('LowerPay',20,9,{all_count:100}),named('NoBasePay',0,0,{all_count:0})]);
+ const h=fixture([verifiedFee(named('HigherPay',10,2,{all_count:3}),1),verifiedFee(named('LowerPay',20,9,{all_count:100}),0.4),named('NoBasePay',0,0,{all_count:0})]);
  assert.deepEqual(sort(h,'success_rate',true),['LowerPay','HigherPay','NoBasePay']);
  assert.deepEqual(sort(h,'success_rate',false),['HigherPay','LowerPay','NoBasePay']);
  assert.deepEqual(sort(h,'amount_share',false),['LowerPay','HigherPay','NoBasePay']);

@@ -424,7 +424,7 @@ export function adminPreviewPageUrl(page:unknown,location:{origin:string;pathnam
  target.hash="admin/"+(page==="channelquality"?"providers":page);
  return target.href;
 }
-export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:DashboardRoleAccess):string{
+export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:DashboardRoleAccess,dataScope?:{mode:"all"|"selected";identity:string}):string{
  const encode=(value:string)=>JSON.stringify(value).replace(/</g,"\\u003c").replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029");
  const origin=typeof window!=="undefined"?window.location?.origin:"";
  if(!origin||!/^https?:$/.test(new URL(origin).protocol)||new URL(origin).origin!==origin)throw Error("后台页面来源无效");
@@ -437,6 +437,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
  const cancel=(id,timeout=false)=>{const q=release(id);if(!q)return;try{parent.postMessage({type:'${LIVE_CANCEL}',channel,id,reason:timeout?'timeout':'cancelled'},hostOrigin)}catch{}q.reject(error(timeout?'正式数据读取超时，请重试':'查询已取消',timeout?'ADMIN_LIVE_TIMEOUT':'ADMIN_LIVE_CANCELLED'))};
  window.HENSEM_PRODUCTION=true;
  window.hensemRoleAccess=${JSON.stringify(roleAccess||{mode:"legacy",permissions:[],canView:true}).replace(/</g,"\\u003c")};
+ window.hensemDataScope=${JSON.stringify({mode:dataScope?.mode==="all"?"all":"selected",identity:typeof dataScope?.identity==="string"?dataScope.identity.slice(0,1000):"unverified"}).replace(/</g,"\\u003c").replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029")};
  window.hensemRoleAllowed=function(page,action='view'){const access=window.hensemRoleAccess;return page!=='channelquality'&&access.canView===true&&(access.mode!=='assigned'||access.permissions.includes(page+'.view')&&access.permissions.includes(page+'.'+action))};
  window.hensemAdminInitialPage=${encode(initialPage)};
  // No arbitrary URL, host query string or authentication fragment crosses the

@@ -16,12 +16,14 @@ import { installDashboardPresenceBridge, makeDashboardPresenceDocument } from "@
 import { OWNER_PREVIEW_HOST_CSS, ownerPreviewActivityTime, ownerPreviewAccountCommand, ownerPreviewAccountPage, ownerPreviewSecurityPage, makeOwnerPreviewShellDocument, mountOwnerPreviewHostShell } from "@/lib/ownerPreviewShell";
 
 import { recordDashboardActivity } from "@/lib/dashboardIdle";
+import { dashboardScopeIdentity, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
 
 type Props = { canView:boolean; session: DashboardSession; profile: DashboardProfile; onLogout: () => void };
 export default function OwnerAdminPreview({session,profile,onLogout,canView}: Props) {
   const frame=useRef<HTMLIFrameElement>(null),channel=useRef("");
   const sessionRef=useRef(session);sessionRef.current=session;
   const accountId=profile.auth_user_id;
+  const scopeIdentity=dashboardScopeIdentity(profile),dataScope=effectiveDashboardDataScope(profile);
   const roleAccessRef=useRef<DashboardRoleAccess|null>(null);
   const [roleAccess,setRoleAccess]=useState<DashboardRoleAccess|null>(null);
   const [documentHtml,setDocumentHtml]=useState(""),[error,setError]=useState(""),[reload,setReload]=useState(0);
@@ -47,7 +49,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
       if(check&&JSON.stringify(policy)!==JSON.stringify(roleAccessRef.current)){setReload(x=>x+1);return;}
       roleAccessRef.current=policy;setRoleAccess(policy);
       const response=await adminPreviewRequest(sessionRef.current,check?"?check=1":"",{signal:controller.signal});
-      if(!check){const html=await response.text();if(!cancelled)setDocumentHtml(makeOwnerPreviewDocument(makeOwnerPreviewShellDocument(makeDashboardPresenceDocument(makeAdminLiveDocument(restoreApprovedAdmin(html),channel.current,policy),channel.current,window.location.origin),channel.current,owner),readDrafts(),channel.current));}
+      if(!check){const html=await response.text();if(!cancelled)setDocumentHtml(makeOwnerPreviewDocument(makeOwnerPreviewShellDocument(makeDashboardPresenceDocument(makeAdminLiveDocument(restoreApprovedAdmin(html),channel.current,policy,{mode:dataScope.mode,identity:scopeIdentity}),channel.current,window.location.origin),channel.current,owner),readDrafts(),channel.current));}
     };
     const fail=(e:unknown)=>{if(cancelled)return;cancelled=true;controller.abort();setDocumentHtml("");setError(e instanceof Error?e.message:"后台加载失败")};
     request().catch(fail);
@@ -55,7 +57,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
     const timer=window.setInterval(verify,60000);
     const focused=()=>{if(document.visibilityState==="visible")verify()};document.addEventListener("visibilitychange",focused);
     return()=>{cancelled=true;controller.abort();window.clearInterval(timer);document.removeEventListener("visibilitychange",focused)};
-  },[allowed,accountId,reload,readDrafts,owner]);
+  },[allowed,accountId,reload,readDrafts,owner,scopeIdentity]);
   useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{const data=event.data;const activity=ownerPreviewActivityTime(event,frame.current?.contentWindow,channel.current);if(activity!==null){recordDashboardActivity(activity);return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){setAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);return}const securityPage=ownerPreviewSecurityPage(event,frame.current?.contentWindow,channel.current);if(securityPage){setSecurityBounds(securityPage.active?securityPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,canManageAccounts,owner]);
   const hasDocument=Boolean(documentHtml);
   useEffect(()=>{if(!allowed||!hasDocument)return;return installAdminLiveBridge({source:()=>frame.current?.contentWindow,channel:()=>channel.current,session:()=>sessionRef.current,roleAccess:()=>roleAccessRef.current})},[allowed,hasDocument,accountId]);
