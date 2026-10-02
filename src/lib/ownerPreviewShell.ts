@@ -92,6 +92,7 @@ body .topbar .crumb{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;wh
 body .topbar .top-right{display:flex!important;flex-shrink:0;min-width:0;gap:8px!important}
 body .topbar .top-right>.owner{display:none!important}
 body .topbar .header-activity-v3{display:flex!important}
+body #drawerBackdrop>.drawer{top:48px!important}
 body .sidebar .nav{min-height:0}
 body:has(#hle-access) .title-actions,body:has(#hle-access) .bottom-note,body:has(#hle-ip) .title-actions,body:has(#hle-ip) .bottom-note{display:none!important}
 body .sidebar .side-bottom{flex-shrink:0;padding:10px 0 0}
