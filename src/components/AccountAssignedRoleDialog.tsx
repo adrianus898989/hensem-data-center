@@ -26,6 +26,6 @@ export default function AccountAssignedRoleDialog({session,account,roles,roleAcc
    return <span className="admin-module-permission-chip" key={moduleId}><span>{pages[0].moduleLabel}</span><b>{current.active?codes.filter(code=>current.permissions.includes(code)).length:0}/{codes.length}</b></span>;
   })}</div>}
   {error&&<p role="alert" className="admin-account-feedback error">{error}</p>}
-  {mutable&&<form onSubmit={save}><label>分配新版角色<select aria-label="分配新版角色" value={roleId} disabled={busy} onChange={event=>setRoleId(event.target.value)}><option value="">请选择角色</option>{choices.map(role=><option value={role.id} key={role.id}>{role.name}</option>)}</select></label><p>数据范围保持账号设置；只能分配自身已拥有权限的角色。共享角色的权限由总管理员在「角色与目录权限」维护。</p><button type="submit" disabled={busy||!candidate||!choices.some(role=>role.id===roleId)||roleId===account.role_id}>{busy?"保存中…":"保存角色分配"}</button></form>}
+  {mutable&&<form onSubmit={save}><label>分配新版角色<select aria-label="分配新版角色" value={roleId} disabled={busy} onChange={event=>setRoleId(event.target.value)}><option value="">请选择角色</option>{choices.map(role=><option value={role.id} key={role.id}>{role.name}</option>)}</select></label><p>数据范围保持账号设置；只能分配自身已拥有权限的角色。共享角色的权限由总管理员在「角色管理」维护。</p><button type="submit" disabled={busy||!candidate||!choices.some(role=>role.id===roleId)||roleId===account.role_id}>{busy?"保存中…":"保存角色分配"}</button></form>}
  </AccountEditorDialog>;
 }

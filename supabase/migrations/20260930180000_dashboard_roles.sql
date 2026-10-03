@@ -18,7 +18,7 @@ begin
   ('private.dashboard_role_require_gateway()','0e9013820396aab2c7230dc133c3888b'),
   ('private.dashboard_role_legacy_allowed()','1c96180c728287e427c4760cda344684'),
   ('public.dashboard_role_manage(jsonb)','f7c1917834e93bfb5e6436496109cb85'),
-  ('public.dashboard_admin_execute(text,jsonb)','7c2a4c306a2ceb8b18354625a3015c94')
+  ('public.dashboard_admin_execute(text,jsonb)','5b0f510650b88193eed498c3d7424238')
  ) v(signature,body_hash) loop
   select prosrc,proowner into p from pg_proc where oid=to_regprocedure(spec.signature);
   if found and (p.proowner<>(select oid from pg_roles where rolname=current_user) or md5(p.prosrc)<>spec.body_hash) then
@@ -264,7 +264,7 @@ begin
  if action in ('details','query') or action='aggregate' and v_view='drilldown'
   or action='submissionAnalysis' and v_operation='members'
   or action='workorderRecords' and v_operation in ('detail','orderDetail')
-  or action='depositStatistics' and p_request->>'section'='details'
+  or action='depositStatistics' and (p_request->>'section'='details' or p_request->>'section'='kyc' and p_request->>'dimension'='orders')
   or action='depositIssues' and p_page='deposit_statistics'
  then needed:=array_append(needed,p_page||'.detail');end if;
  if not (a->'permissions') ?& needed then raise exception using errcode='42501',message='role_permission_denied';end if;

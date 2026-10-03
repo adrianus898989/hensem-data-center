@@ -48,9 +48,9 @@ function diagnosticFact(platform,provider,expected,detail,extra={}){
 test('platform cards distinguish explained collection scope from issues needing confirmation and retain daily numbers',()=>{
  const a=diagnosticFact('51GAME','ArbPay',14,13,{pendingExcludedDetailCount:1}),b=diagnosticFact('DHANIWIN','UniPayUSDT',3,0,{excludedWorkorderTypeCount:3,excludedTypeExplainedMismatchCount:3});
  const h=platformDiagnosis([a,b]),before=JSON.stringify(h.L.workorders);h.root.providerSummaryWorkorderPlatforms();const drawer=h.drawers.at(-1),html=drawer.html;
- assert.equal(drawer.title,'工单统计差异说明');assert.match(html,/印度 · 代付 · 工单提交日期 2026-09-25 至 2026-09-25/);assert.match(html,/2 个仅有已知范围差异，0 个含待确认项/);assert.match(html,/所列差异三方小计 · 非全平台/);assert.match(html,/汇总 <b>14<\/b> \/ 明细 <b>13<\/b>/);
+ assert.equal(drawer.title,'日报/明细差异说明');assert.match(html,/印度 · 代付 · 工单提交日期 2026-09-25 至 2026-09-25/);assert.match(html,/2 个仅有已知范围差异，0 个含待确认项/);assert.match(html,/所列差异三方小计 · 非全平台/);assert.match(html,/汇总 <b>14<\/b> \/ 明细 <b>13<\/b>/);
  assert.match(html,/<td>14<\/td><td>13<\/td><td>\+1 · 汇总多 1<\/td><td>1<\/td><td>0<\/td>/);assert.match(html,/数量差额中有 1 条与待处理数一致，采集器跳过待处理/);assert.match(html,/这是数量解释，不代表已逐笔匹配/);assert.match(html,/USDT 记录已采集/);assert.match(html,/AR 来源可在工单运营中心/);assert.match(html,/当前“工单未到账”入口尚未提供这些 NEWAR 明细/);assert.match(html,/3条USDT工单类型未纳入原单统计/);
- assert.match(html,/源后台 ar → 51GAME → 取款未到账工单；提交日期 2026-09-25；三方 ArbPay；先选全部状态对比，再筛待处理/);assert.match(html,/这里只影响工单提交、成功、未到账及工单成功率/);assert.match(html,/汇总无逐笔号，不能指定缺失哪张工单/);assert.match(html,/不能直接用列表行数与日报原始工单条数比较/);
+ assert.match(html,/源后台 ar → 51GAME → 取款未到账工单；提交日期 2026-09-25；三方 ArbPay；先选全部状态对比，再筛待处理/);assert.match(html,/这里只影响工单提交、已处理、未处理及工单处理率/);assert.match(html,/汇总无逐笔号，不能指定缺失哪张工单/);assert.match(html,/不能直接用列表行数与日报原始工单条数比较/);
  assert.equal(JSON.stringify(h.L.workorders),before);assert.equal(h.networkCalls(),0);assert.doesNotMatch(html,/需核对 2 平台|源后台缺少 1|已确认缺少/);
 });
 test('platform daily diagnostics distinguish negative differences, unavailable reports and unknown breakdowns without fabricated zeros',()=>{

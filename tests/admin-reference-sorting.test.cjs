@@ -3,9 +3,11 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const harnessSource=fs.readFileSync(path.join(__dirname,'admin-navigation-performance.test.cjs'),'utf8').split(/\ntest\(/)[0];
 const {ready,completeAggregate,P}=new Function('require','__dirname',harnessSource+';return {ready,completeAggregate,P};')(require,__dirname);
 const plain=s=>s.replace(/<span\b[^>]*aria-hidden="true"[^>]*>[\s\S]*?<\/span>/g,'').replace(/<[^>]*>/g,'').trim();
-const rows=html=>[...(html.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1]||'').matchAll(/<tr(?: [^>]*)?>([\s\S]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td>([\s\S]*?)<\/td>/g)].map(c=>plain(c[1])));
+const rawRows=html=>[...(html.match(/<tbody\b[^>]*>([\s\S]*?)<\/tbody>/)?.[1]||'').matchAll(/<tr(?: [^>]*)?>([\s\S]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(c=>c[1]));
+const rows=html=>rawRows(html).map(row=>row.map(plain));
 const section=(h,id)=>h.html().match(new RegExp('<section[^>]*id="'+id+'"[\\s\\S]*?<\\/section>'))?.[0]||'';
 const table=html=>html.match(/<table\b[^>]*>[\s\S]*?<\/table>/)?.[0]||'';
+const sortedTable=(h,id)=>[...h.html().matchAll(/<table\b[^>]*>[\s\S]*?<\/table>/g)].find(m=>m[0].includes('liveReferenceTableSort(&#39;'+encodeURIComponent(id)+'&#39;'))?.[0]||'';
 const sort=(h,id,index)=>h.c.liveReferenceTableSort(encodeURIComponent(id),index);
 async function setup(page='overview'){
  const platforms=['Small','Large','Unknown'].map((name,i)=>({...P,id:String(i+1).repeat(8)+'-1111-4111-8111-111111111111',name,team:'Team '+name,country:'印度'})),h=await ready({platforms,page});
@@ -26,8 +28,8 @@ test('overview dimensions sort complete records before independent pagination; n
 
 test('team and merchant tables share raw numeric ordering without changing their displayed or aggregated fields',async()=>{
  for(const page of ['teamops','teamcountries','teamplatforms','merchants']){
-  const h=await setup(page),before=h.calls.length,id='business-dimension-charge';assert.match(section(h,id),/liveReferenceTableSort/);sort(h,id,2);
-  const shown=rows(section(h,id));if(page==='teamcountries')assert.equal(shown.length,1);else assert.deepEqual(shown.map(r=>r[0]),['Large','Unknown','Small']);
+  const h=await setup(page),before=h.calls.length,merchant=page==='merchants',id=merchant?'merchant-platforms-unified':'business-dimension-charge',getTable=()=>merchant?sortedTable(h,id):section(h,id),original=JSON.stringify(h.L.results);assert.match(getTable(),/liveReferenceTableSort/);sort(h,id,merchant?1:2);
+  const shown=rows(getTable());if(page==='teamcountries')assert.equal(shown.length,1);else if(merchant){const raw=rawRows(getTable());assert.deepEqual(raw.map(r=>plain(r[0].match(/<strong\b[^>]*>([\s\S]*?)<\/strong>/)[1])),['Large','Unknown','Small']);assert.deepEqual(raw.map(r=>plain(r[1].match(/<strong>([\s\S]*?)<\/strong>/)[1])),['10,000.00','2,000.00','1,000.00']);assert.deepEqual(raw.map(r=>r[1].match(/>([\d,]+) 笔<\/small>/)[1]),['100','20','10']);assert.equal(JSON.stringify(h.L.results),original,'paired amount/count sorting never rewrites source facts');}else assert.deepEqual(shown.map(r=>r[0]),['Large','Unknown','Small']);
   assert.equal(h.calls.length,before);
  }
 });
@@ -45,7 +47,7 @@ test('hour and amount sorting retain exact segments and inline expansion while s
 });
 
 test('page snapshots retain reference sort state independently of later table changes',async()=>{
- const h=await setup('merchants'),id='business-dimension-charge';sort(h,id,3);const saved=JSON.parse(JSON.stringify(h.L.tablePages));
+ const h=await setup('merchants'),id='merchant-platforms-unified';sort(h,id,2);const saved=JSON.parse(JSON.stringify(h.L.tablePages));assert.deepEqual(saved['sort:'+id],{column:2,ascending:false});
  h.c.setPage('time');h.L.tablePages['sort:'+id]={column:0,ascending:true};h.c.setPage('merchants');
  assert.deepEqual(JSON.parse(JSON.stringify(h.L.tablePages['sort:'+id])),saved['sort:'+id]);
 });

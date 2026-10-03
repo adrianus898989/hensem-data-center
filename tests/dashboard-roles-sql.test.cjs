@@ -214,3 +214,14 @@ test('unknown replacement of new gateway API is rejected instead of overwritten 
  await admin();await db.exec("create or replace function public.dashboard_role_access() returns jsonb language sql stable security definer as $$select '{}'::jsonb$$");
  await assert.rejects(()=>db.exec(migration.replace(/^begin;$/m,'').replace(/^commit;$/m,'')),/dashboard_role_new_function_drift/);
 });
+
+
+test('KYC concrete payment orders require detail ACL server-side while aggregates retain query ACL',async()=>{
+ await admin();await db.exec(`create function private.dashboard_admin_deposit_statistics(p_request jsonb) returns jsonb language plpgsql stable security definer set search_path='' as $$begin perform private.dashboard_admin_live_scope();return p_request;end$$;grant execute on function private.dashboard_admin_deposit_statistics(jsonb) to authenticated;`);
+ const r=await granted(VIEWER,['deposit_statistics.view','deposit_statistics.query']);
+ assert.equal((await execute('deposit_statistics',{action:'depositStatistics',section:'kyc',dimension:'platform'})).dimension,'platform');
+ await denied(()=>execute('deposit_statistics',{action:'depositStatistics',section:'kyc',dimension:'orders'}),/role_permission_denied/);
+ await denied(()=>execute('deposit_statistics',{action:'depositStatistics',section:'details'}),/role_permission_denied/);
+ await as(OWNER);await manage({operation:'update',roleId:r.id,expectedVersion:1,permissions:[...r.permissions,'deposit_statistics.detail']});await as(VIEWER);
+ assert.equal((await execute('deposit_statistics',{action:'depositStatistics',section:'kyc',dimension:'orders'})).dimension,'orders');
+});
