@@ -57,6 +57,19 @@ test('pending order drilldown validates exact observation and uses its dedicated
  for(const patch of [{date:'2026-02-30'},{observedAt:'tomorrow'},{mode:'latest'},{archiveId:'anything'},{platformIds:[q.platformIds[0],q.platformIds[0]]},{provider:' Pay'},{limit:'50'},{offset:-1}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
 });
 
+test('explicit current and midnight pending modes retain the existing overview role gateway',async()=>{
+ const h=load(),platformIds=['55555555-5555-4555-8555-555555555555'];
+ const current={action:'pendingSnapshot',mode:'current',platformIds},midnight={action:'pendingSnapshot',mode:'midnight',date:'2026-10-02',platformIds};
+ await h.api.adminLiveRequest(session,current,undefined,{assigned:true,page:'overview'});
+ assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_execute');
+ assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_page:'overview',p_request:current});
+ await h.api.adminLiveRequest(session,midnight);assert.equal(h.calls[1].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_pending_snapshot');
+ assert.deepEqual(JSON.parse(h.calls[1].init.body),{p_request:{mode:'midnight',date:'2026-10-02',platformIds}});
+ for(const q of [{...current,date:'2026-10-02'},{...current,mode:'latest'},{...current,mode:null},{...current,mode:1},{...current,mode:{}},{...current,mode:['current']},{...midnight,date:'2026-02-30'},{...midnight,date:'2000-01-01'},{...current,startDate:'2026-10-01'}])assert.throws(()=>h.api.validateAdminLiveRequest(q));
+ const failed=load({fetch:async()=>({ok:false,status:504,json:async()=>({message:'57014 private query'})})});
+ for(const q of [current,midnight])await assert.rejects(failed.api.adminLiveRequest(session,q),/代付中存量读取超时/);
+});
+
 test('exclusive amount upper bounds retain numeric precision and reject unsupported or empty ranges',async()=>{
  const h=load(),q={...query,action:'aggregate',view:'full',amountMin:200,amountMax:250,amountMaxExclusive:true};
  await h.api.adminLiveRequest(session,q);assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:q});
