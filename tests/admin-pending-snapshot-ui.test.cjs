@@ -10,6 +10,12 @@ const previous=date=>new Date(Date.parse(date+'T00:00:00Z')-86400000).toISOStrin
 function row(id=A,extra={}){return {...p(id),selectedIds:[id],state:'complete',coverageScope:'all_current_pending',wholeStockComplete:true,windowComplete:true,knownCount:9,knownAmount:'1250.50',count:9,amount:'1250.50',observedAt:'2026-10-03T11:59:00Z',captureId:'synthetic-capture',settlementAmounts:[],groups:[{provider:'Synthetic Pay',rawChannel:'Synthetic original',channelType:'wallet',currency:'INR',knownCount:9,knownAmount:'1250.50',count:9,amount:'1250.50',settlementAmounts:[]}],...extra};}
 function response(q,extra={}){const current=q.mode==='current',rows=q.platformIds.map(id=>row(id));return {version:2,mode:q.mode,basis:current?'current_all_pending_stock':'local_midnight_pending_snapshot',date:current?null:q.date,sourceDate:current?null:previous(q.date),queriedAt:'2026-10-03T12:00:00Z',currency:'INR',complete:true,expectedPlatformCount:rows.length,receivedPlatformCount:rows.length,missingPlatforms:[],amount:String(rows.length*1250.5),count:rows.length*9,knownAmount:String(rows.length*1250.5),knownCount:rows.length*9,rows,...extra};}
 function orderResult(platform=p(A),extra={}){const metric={direction:'withdraw',currency:platform.currency,pending_count:3,pending_amount:'345.67'};return {platform,summary:[metric],groups:{provider:[{...metric,provider:'Synthetic Pay'}]},...extra};}
+// Exercise the production merger: it normalizes absent fields to zero before
+// the pending overlay sees them, so fixture-only aggregate objects miss this case.
+const aggregateSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8'),aggregationStart=aggregateSource.indexOf(' const countKeys='),aggregationEnd=aggregateSource.indexOf(' const amountBands=',aggregationStart),mergeStart=aggregateSource.indexOf(' function mergeParts('),mergeEnd=aggregateSource.indexOf(' // Reuse only data',mergeStart),mergerContext={};
+assert(aggregationStart>=0&&aggregationEnd>aggregationStart&&mergeStart>=0&&mergeEnd>mergeStart);
+vm.createContext(mergerContext);vm.runInContext(aggregateSource.slice(aggregationStart,aggregationEnd)+aggregateSource.slice(mergeStart,mergeEnd)+';globalThis.merge=mergeParts;',mergerContext);
+const mergeOrders=parts=>mergerContext.merge(parts);
 function harness(options={}){const L={country:'印度',from:'2026-10-02T01:00:00',to:'2026-10-02T02:00:00',queryNow:now,dirty:false,withdrawCatalog:[]},calls=[],drawers=[];let selected=[p(A)],providers=[],timezone='Asia/Kolkata',handler=async q=>response(q),orders={platforms:[p(A)],results:[orderResult()],loading:false,retrying:false,paused:false,failures:[],queriedAt:new Date(now).toISOString(),scopeMatches:true,status:'all'};const ui=create({L,E:escape,N:number,C:v=>Number(v).toLocaleString('en-US'),selected:()=>selected,providers:()=>providers,scopeZone:()=>timezone,currentOrders:()=>orders,prepare:options.prepare,request:q=>{calls.push(q);return handler(q)},render(){},open:(title,body)=>drawers.push({title,body})});return {ui,L,calls,drawers,select:v=>selected=v,providers:v=>providers=v,timezone:v=>timezone=v,handler:v=>handler=v,orders:v=>orders=v,current:()=>{L.from='2026-10-03T00:00:00';L.to='2026-10-03T23:59:59'},get orderContext(){return orders}};}
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
 
@@ -129,6 +135,42 @@ test('pending amount and count retain separate validity, including valid zeroes 
  const h=harness();h.current();for(const [count,amount,countText,amountText]of [[7,null,'7 笔','—'],[null,'80.25','— 笔','80.25'],[0,null,'0 笔','—'],[null,'0','— 笔','0.00'],[undefined,undefined,'— 笔','—']]){
   h.orderContext.results=[orderResult(p(A),{summary:[{direction:'withdraw',currency:'INR',pending_count:count,pending_amount:amount}]})];await h.ui.load();assert(h.ui.metric().includes(countText));assert(h.ui.metric().includes('>'+amountText+'<'));assert.match(h.ui.metric(),/待补齐/);
  }
+});
+
+test('real split aggregation cannot turn absent pending fields into verified zero or a complete subtotal',async()=>{
+ const h=harness();h.current();
+ const part=(count,amount)=>{const metric={direction:'withdraw',currency:'INR',pending_count:count,pending_amount:amount};return orderResult(p(A),{summary:[metric],groups:{provider:[{...metric,provider:'Synthetic Pay'}]}});};
+ for(const [parts,count,amount]of [
+  [[part(undefined,undefined),part(undefined,undefined)],null,null],
+  [[part(3,'30'),part(2,undefined)],5,null],
+  [[part(3,'30'),part(undefined,'80.25')],null,110.25],
+  [[part(0,undefined),part(0,undefined)],0,null],
+  [[part(undefined,'0'),part(undefined,'0')],null,0]
+ ]){
+  const merged=mergeOrders(parts);h.orderContext.results=[merged];await h.ui.load();const data=h.ui.state.data;
+  assert.equal(data.count,count);assert.equal(data.amount,amount);assert.equal(data.complete,false);assert.equal(data.rows[0].groups[0].count,count);assert.equal(data.rows[0].groups[0].amount,amount);assert.equal(data.rows[0].groups[0].wholeStockComplete,false);
+  if(count===null)assert.match(h.ui.metric(),/>— 笔</);if(amount===null)assert.doesNotMatch(h.ui.metric(),/>0.00</);h.ui.details();assert.match(h.drawers.at(-1).body,/字段待补齐/);assert.match(h.drawers.at(-1).body,/<td>—<\/td>/);
+ }
+ assert.equal(mergeOrders([part(undefined,undefined),part(undefined,undefined)]).summary[0].pending_count,0,'the fixture reproduces the real generic merger risk');
+});
+
+test('split pending responses validate every original summary and currency, including cached nested windows',async()=>{
+ const h=harness();h.current();
+ for(const bad of [{platform:p(A),groups:{provider:[]}},orderResult(p(A),{summary:null}),orderResult(p(A),{summary:[{currency:'INR',pending_count:0,pending_amount:'0'}]})]){
+  const merged=mergeOrders([orderResult(),bad]);h.orderContext.results=[merged];await h.ui.load();assert.equal(h.ui.state.data.complete,false);assert.equal(h.ui.state.data.count,null);assert.equal(h.ui.state.data.amount,null);assert.doesNotMatch(h.ui.metric(),/345.67|>0.00<|>0 笔</);
+ }
+ for(const currency of [null,'',true]){const bad=orderResult(p(A),{summary:[{direction:'withdraw',currency,pending_count:0,pending_amount:'0'}]});h.orderContext.results=[mergeOrders([orderResult(),bad])];await h.ui.load();assert.equal(h.ui.state.data.count,3);assert.equal(h.ui.state.data.amount,null);assert.match(h.ui.metric(),/金额待补齐/);}
+ const bad=orderResult(p(A),{summary:[{direction:'withdraw',currency:'INR'}]});h.orderContext.results=[mergeOrders([mergeOrders([bad,bad]),orderResult()])];await h.ui.load();assert.equal(h.ui.state.data.count,null);assert.equal(h.ui.state.data.amount,null);assert.equal(h.ui.state.data.complete,false);
+});
+
+test('normal split windows and successful empty windows retain exact pending totals and verified zero',async()=>{
+ const h=harness();h.current();h.orderContext.results=[mergeOrders([orderResult(),orderResult()])];await h.ui.load();assert.equal(h.ui.state.data.complete,true);assert.equal(h.ui.state.data.count,6);assert.equal(h.ui.state.data.amount,691.34);h.ui.details();assert.match(h.drawers.at(-1).body,/<td>6<\/td><td>691.34<\/td>/);
+ const empty=orderResult(p(A),{summary:[],groups:{provider:[]}});for(const [parts,count,amount]of [[[empty],0,0],[[empty,empty],0,0],[[empty,orderResult()],3,345.67]]){h.orderContext.results=[mergeOrders(parts)];await h.ui.load();assert.equal(h.ui.state.data.complete,true);assert.equal(h.ui.state.data.count,count);assert.equal(h.ui.state.data.amount,amount);}
+});
+
+test('provider details inspect source fields even when complete split summary totals are available',async()=>{
+ const h=harness();h.current();const bad=orderResult(p(A),{groups:{provider:[{direction:'withdraw',currency:'INR',provider:'Synthetic Pay'}]}});h.orderContext.results=[mergeOrders([orderResult(),bad])];await h.ui.load();assert.equal(h.ui.state.data.complete,true);const group=h.ui.state.data.rows[0].groups[0];assert.equal(group.count,null);assert.equal(group.amount,null);assert.equal(group.wholeStockComplete,false);h.ui.details();assert.match(h.drawers.at(-1).body,/<td>Synthetic Pay<\/td><td>—<\/td><td>—<\/td>/);
+ const missing=orderResult(p(A),{groups:{}});h.orderContext.results=[mergeOrders([orderResult(),missing])];await h.ui.load();assert.equal(h.ui.state.data.complete,true);assert.equal(h.ui.state.data.rows[0].groups[0].wholeStockComplete,false);h.ui.details();assert.match(h.drawers.at(-1).body,/<td>Synthetic Pay<\/td><td>—<\/td><td>—<\/td>/);
 });
 
 test('current failed or paused reads preserve only returned subtotals and offer ordinary query retry',async()=>{

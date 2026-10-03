@@ -65,15 +65,24 @@
    const selected=c.selected(),platforms=context.platforms||[],results=context.results||[],failures=context.failures||[],native=new Set(platforms.map(p=>p.id)),currencies=new Set();
    if(!selected.length)return {status:'error',data:null,unsupported:[],error:'当前范围没有可查询平台'};
    const field=(rows,name,isCount=false)=>{if(!rows.every(r=>(isCount?countKnown:known)(r[name])))return null;const sum=rows.reduce((sum,r)=>sum+Number(r[name]),0);return (isCount?countKnown:known)(sum)?sum:null;};
+   // Generic aggregate merging treats absent numeric fields as zero. Pending
+   // completeness must instead inspect the original response for every window.
+   const sourceParts=(result,seen=new Set())=>{if(!result||seen.has(result))return null;if(!Object.prototype.hasOwnProperty.call(result,'_parts'))return [result];if(!Array.isArray(result._parts)||!result._parts.length)return null;seen.add(result);const parts=result._parts.map(part=>sourceParts(part,seen));seen.delete(result);return parts.every(Boolean)?parts.flat():null;};
+   const validRows=rows=>Array.isArray(rows)&&rows.every(r=>r&&typeof r==='object'&&['charge','withdraw'].includes(r.direction));
+   const validCurrency=value=>typeof value==='string'&&value.trim()!=='';
    const rows=selected.map(p=>{
     const found=results.filter(r=>r.platform?.id===p.id),failure=failures.find(f=>f.id===p.id),base={...p,selectedIds:[p.id],coverageScope:'queried_creation_range',count:null,amount:null,knownCount:null,knownAmount:null,wholeStockComplete:false,settlementAmounts:[],groups:[],observedAt:null};
     if(p.reportOnly)return {...base,state:'unsupported',reason:'orders_not_available'};
     if(!native.has(p.id)||!found.length||failure)return {...base,state:'missing',reason:failure?'orders_query_failed':'orders_not_read',error:failure?.message||''};
     if(found.length!==1||!Array.isArray(found[0].summary))return {...base,state:'invalid',reason:'orders_response_invalid'};
-    const result=found[0],summary=result.summary.filter(r=>r.direction==='withdraw'),rowCurrencies=new Set(summary.map(r=>r.currency).filter(Boolean)),currency=summary.length?rowCurrencies.size===1&&summary.every(r=>r.currency)?[...rowCurrencies][0]:null:p.currency||null;
-    for(const r of summary)if(r.currency)currencies.add(r.currency);
+    const result=found[0],parts=sourceParts(result);
+    if(!parts||!parts.every(part=>validRows(part.summary)))return {...base,state:'invalid',reason:'orders_response_invalid'};
+    const summary=parts.flatMap(part=>part.summary.filter(r=>r.direction==='withdraw')),rowCurrencies=new Set(summary.map(r=>r.currency).filter(validCurrency)),currency=summary.length?rowCurrencies.size===1&&summary.every(r=>validCurrency(r.currency))?[...rowCurrencies][0]:null:validCurrency(p.currency)?p.currency:null;
+    for(const r of summary)if(validCurrency(r.currency))currencies.add(r.currency);
     const count=field(summary,'pending_count',true),amount=currency?field(summary,'pending_amount'):null;
-    const groups=(result.groups?.provider||[]).filter(r=>r.direction==='withdraw').map(g=>({provider:g.provider,currency:g.currency||null,count:countKnown(g.pending_count)?Number(g.pending_count):null,amount:known(g.pending_amount)?Number(g.pending_amount):null,knownCount:countKnown(g.pending_count)?Number(g.pending_count):null,knownAmount:known(g.pending_amount)?Number(g.pending_amount):null,countComplete:countKnown(g.pending_count),amountComplete:!!g.currency&&known(g.pending_amount),wholeStockComplete:!!g.currency&&countKnown(g.pending_count)&&known(g.pending_amount),settlementAmounts:[]}));
+    const providerPartsValid=parts.every(part=>validRows(part.groups?.provider)),providerRows=new Map();
+    for(const part of parts)for(const g of Array.isArray(part.groups?.provider)?part.groups.provider:[]){if(!g||g.direction!=='withdraw')continue;const key=JSON.stringify([g.provider??null,g.currency??null]);if(!providerRows.has(key))providerRows.set(key,[]);providerRows.get(key).push(g);}
+    const groups=[...providerRows.values()].map(items=>{const g=items[0],currency=validCurrency(g.currency)?g.currency:null,count=providerPartsValid?field(items,'pending_count',true):null,amount=providerPartsValid&&currency?field(items,'pending_amount'):null;return {provider:g.provider,currency,count,amount,knownCount:count,knownAmount:amount,countComplete:count!==null,amountComplete:amount!==null,wholeStockComplete:count!==null&&amount!==null,settlementAmounts:[]};});
     if(!summary.length&&currency)currencies.add(currency);
     const valid=count!==null&&amount!==null;
     return {...base,currency,count,amount,knownCount:count,knownAmount:amount,countComplete:count!==null,amountComplete:amount!==null,wholeStockComplete:valid,state:valid?'complete':'partial',reason:!currency?'orders_currency_unknown':count===null?'orders_count_unknown':amount===null?'orders_amount_unknown':'',groups,read:true};
