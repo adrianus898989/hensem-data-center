@@ -18,7 +18,7 @@ async function order(platform,no,amount,options={}){
 async function capture(platform,orders=[],o={}){
  const sid=id(1000+(o.n||0));
  const query=`insert into lg_pending_runs(snapshot_id,platform,country_code,capture_date,observed_at,captured_at,expected_count,expected_chunks,source_total,fetched_count,status,pending_window_days)
- values($1,$2,'PH',coalesce($7::date,(statement_timestamp() at time zone 'Asia/Manila')::date),coalesce($8::timestamptz,statement_timestamp()-$11::integer*interval '1 minute'),coalesce($8::timestamptz+interval '1 second',statement_timestamp()-interval '1 minute'),$3,$4,$5,$6,$9,$10)`;
+ values($1,$2,'PH',coalesce($7::date,(coalesce($8::timestamptz,statement_timestamp()-$11::integer*interval '1 minute') at time zone 'Asia/Manila')::date),coalesce($8::timestamptz,statement_timestamp()-$11::integer*interval '1 minute'),coalesce($8::timestamptz+interval '1 second',statement_timestamp()-interval '1 minute'),$3,$4,$5,$6,$9,$10)`;
  await db.query(query,[sid,platform,o.expected??orders.length,orders.length?1:0,o.total??orders.length,o.fetched??orders.length,o.date||null,o.at||null,o.status||'published',o.window??null,o.age||5]);
  if(orders.length)await db.query('insert into lg_pending_chunks values($1,0,$2)',[sid,o.chunkCount??orders.length]);
  for(let i=0;i<orders.length;i++)await db.query('insert into lg_pending_snapshot_orders values($1,$2,$3,$4,$5,$6,$7,$8)',[sid,'SYNTHETIC_'+i,orders[i].amount,orders[i].actual??null,'2020-01-01',orders[i].provider||'PAY',orders[i].provider||'PAY','BANK']);return sid;
@@ -95,6 +95,14 @@ test('latest complete full capture includes superseded finish, while 7-day and c
 });
 test('stale source capture is labelled with actual source time, not the query time',async()=>{
  const a=await target(1);await capture('SYNTHETIC_1',[{amount:10}],{age:90});const r=await call([a]);assert.equal(r.complete,false);assert.equal(r.rows[0].state,'stale');assert.equal(r.knownAmount,'10');assert.notEqual(r.rows[0].observedAt,r.queriedAt);
+});
+test('capture fixture dates follow their source observation across Manila midnight',async()=>{
+ const a=await target(1),clock=(await db.query(`with clock as(select ((statement_timestamp() at time zone 'Asia/Manila')::date::timestamp at time zone 'Asia/Manila') midnight)
+ select (midnight-interval '90 minutes')::text observed_at,(midnight at time zone 'Asia/Manila')::date::text query_day,((midnight-interval '90 minutes') at time zone 'Asia/Manila')::date::text observed_day from clock`)).rows[0];
+ const sid=await capture('SYNTHETIC_1',[{amount:10}],{at:clock.observed_at});
+ const stored=(await db.query("select capture_date::text capture_day,(observed_at at time zone 'Asia/Manila')::date::text observed_day from lg_pending_runs where snapshot_id=$1",[sid])).rows[0];
+ assert.notEqual(clock.observed_day,clock.query_day);assert.equal(stored.capture_day,clock.observed_day);assert.equal(stored.capture_day,stored.observed_day);
+ const r=await call([a]);assert.equal(r.rows[0].state,'stale');assert.equal(r.rows[0].reason,'latest_capture_stale');assert.equal(r.knownAmount,'10');assert.equal(r.complete,false);
 });
 test('broken published detail/chunk receipts do not become trusted subtotals',async()=>{
  const a=await target(1);await capture('SYNTHETIC_1',[{amount:10}],{chunkCount:0});let r=await call([a]);assert.equal(r.knownCount,null);assert.equal(r.rows[0].state,'invalid');
