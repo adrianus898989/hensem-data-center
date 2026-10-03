@@ -107,3 +107,14 @@ test('current and comparison workloads never exceed two simultaneous intake requ
  let active=0,peak=0;const feeds=Array.from({length:8},(_,i)=>({...feed,id:'f'+i,platformId:'p'+i})),platforms=feeds.map(f=>({...p,id:f.platformId})),loader=api.create({request:async q=>{active++;peak=Math.max(peak,active);await new Promise(r=>setImmediate(r));active--;return q.operation==='orderCatalog'?{version:1,complete:true,feeds}:rowsFor(q);}});
  await Promise.all([loader.load({platforms,direction:'charge',from,to}),loader.load({platforms,direction:'charge',from:'2026-09-28',to:'2026-09-28'})]);assert.equal(peak,2);
 });
+
+test('verified pre-launch days remain visible without becoming missing or received platforms',()=>{
+ const before=day({status:'not_expected',expected:false,received:false,complete:false,evidence:'before_verified_launch'});
+ const item=api.summarize({...p,name:'MAAN.WIN'},feed,[before],from,to);
+ assert.equal(item.status,'not_expected');assert.equal(item.expected,false);assert.equal(item.received,false);assert.equal(item.complete,false);assert.deepEqual(Array.from(item.missingDates),[]);assert.equal(item.days[0].date,from);assert.match(item.message,/开通时间/);
+ // A range that reaches opening still expects its opened date, including missing data.
+ const mixed=api.summarize(p,feed,[before,day({date:'2026-09-30',status:'not_received',received:false,evidence:'no_created_orders_received'})],from,'2026-09-30');
+ assert.equal(mixed.expected,true);assert.equal(mixed.status,'missing');assert.deepEqual(Array.from(mixed.missingDates),['2026-09-30']);
+ // Missing or contradictory evidence cannot manufacture a pre-launch exclusion.
+ for(const row of [{...before,evidence:'source_timezone_unknown'},{...before,expected:true},{...before,received:true}])assert.equal(api.summarize(p,feed,[row],from,to).expected,true);
+});

@@ -51,3 +51,58 @@ test('unmatched historical fees use a separate compact line and do not guess a s
  assert.match(css,/\.provider-summary-table \.cell-sub\{display:block/,'the label uses the existing separate-line style within the fixed fee column');
  assert.equal(h.requests(),0);
 });
+
+const evidence=(state='missing_effective_time',cell='BC2',extra={})=>({state,effectiveFrom:null,versionId:null,source:{sheetName:'Synthetic fee sheet',effectiveCell:cell},...extra});
+function withEvidence(h,direction,e){h.L.feeLookupRows[0].feeEffective={[direction]:e};h.root.providerSummaryToggle(0);return h;}
+const feeBadges=html=>[...html.matchAll(/<small class="provider-partial cell-sub">([^<]*)<\/small>/g)].map(m=>m[1]);
+
+test('explicit missing effective time identifies the source cell without calculating a current-rate fee',()=>{
+ for(const direction of ['charge','withdraw']){
+  const h=withEvidence(fixture(direction,'4%','ExamplePay'),direction,evidence());
+  assert(feeBadges(h.html()).length>=2);assert(feeBadges(h.html()).every(label=>label==='缺少生效时间'));
+  assert.match(h.html(),/Synthetic fee sheet BC2/);assert.match(h.html(),/已匹配 0；未匹配 100 笔/);
+  assert.match(h.html(),/—<small class="provider-partial cell-sub">缺少生效时间/);
+  const rows=h.root.HensemProviderSummary.buildRows({orders:[order('platform-a','ar',123456.78,100,{provider:'ExamplePay',direction})],issues:null,rates:h.L.feeLookupRows,country:'印度',direction,plus,combine});
+  assert.equal(rows[0].estimated_fee,null);assert.equal(rows[0].fee_matched_count,0);
+  h.root.providerSummaryRate(0);const drawer=h.drawer().body;
+  assert.match(drawer,/历史生效状态/);assert.match(drawer,/生效时间 \/ 来源/);assert.match(drawer,/缺少生效时间/);assert.match(drawer,/Synthetic fee sheet BC2 · 未提供生效时间/);
+  assert.match(drawer,/需在源表填写真实生效时间/);assert.match(drawer,/不能自动使用今天或把当前费率套到所有历史订单/);assert.equal(h.requests(),0);
+ }
+});
+
+test('only evidence for the selected direction and applicable platform can identify the historical gap',()=>{
+ const h=fixture('charge','4%','ExamplePay');h.L.feeLookupRows[0].feeEffective={withdraw:evidence()};h.root.providerSummaryToggle(0);
+ assert(feeBadges(h.html()).every(label=>label==='历史费率未匹配'));
+ const country=h.L.feeLookupRows[0];country.feeEffective={charge:evidence()};
+ h.L.feeLookupRows.push({...country,scopeType:'platform',platform:'Same displayed platform',collectFee:'9%',feeEffective:{charge:evidence('ready','BC9',{effectiveFrom:'2026-09-26T00:00:00+05:30',versionId:'synthetic-version'})}});
+ h.root.providerSummaryToggle(0);h.root.providerSummaryToggle(0);
+ assert(feeBadges(h.html()).every(label=>label==='历史费率未匹配'),'country-row gaps cannot replace the selected platform rule');
+ assert.doesNotMatch(h.html(),/当前费率来源缺项/);
+});
+
+test('mixed, missing and contradictory evidence never guesses one cause for an entire provider',()=>{
+ for(const extra of [undefined,evidence('invalid_effective_time','BC3'),evidence('ready','BC3',{versionId:'synthetic-version',effectiveFrom:'2026-09-26T00:00:00+05:30'})]){
+  const h=fixture('charge','4%','ExamplePay');h.L.feeLookupRows[0].feeEffective={charge:evidence()};
+  h.L.feeLookupRows.push({...h.L.feeLookupRows[0],sourceRow:31,feeEffective:extra?{charge:extra}:undefined});h.root.providerSummaryToggle(0);
+  assert(feeBadges(h.html()).every(label=>label==='历史费率未匹配'));assert.doesNotMatch(h.html(),/当前费率来源缺项/);
+ }
+ for(const contradictory of [{versionId:'synthetic-version'},{effectiveFrom:'2026-09-25T00:00:00+05:30'}]){
+  const h=withEvidence(fixture('charge','4%','ExamplePay'),'charge',evidence('missing_effective_time','BC2',contradictory));
+  assert(feeBadges(h.html()).every(label=>label==='历史费率未匹配'));
+ }
+});
+
+test('partial or fully matched backend fee amounts remain authoritative when current source evidence changes',()=>{
+ for(const [state,matched,amount] of [['partial',40,17.25],['complete',100,71.25]]){
+  const h=withEvidence(fixture('charge','9%','ExamplePay',{fee_version_state:state,fee_version_matched_count:matched,fee_version_unmatched_count:100-matched,fee_version_estimated_amount:amount}),'charge',evidence());
+  assert.match(h.html(),new RegExp(amount.toFixed(2).replace('.','\\.')));assert.match(h.html(),new RegExp('手续费已匹配 '+matched+' \\/ 100'));
+  if(state==='partial')assert(feeBadges(h.html()).every(label=>label==='部分'));
+  else {assert.equal(feeBadges(h.html()).length,0);assert.doesNotMatch(h.html(),/当前费率来源缺项/)}
+ }
+});
+
+test('source-sheet text and effective coordinates are escaped in fee cells and the source drawer',()=>{
+ const value=evidence();value.source={sheetName:'<script>alert(1)</script> & "sheet"',effectiveCell:'BC2<img src=x>'};
+ const h=withEvidence(fixture('charge','4%','ExamplePay'),'charge',value);h.root.providerSummaryRate(0);
+ for(const html of [h.html(),h.drawer().body]){assert.doesNotMatch(html,/<script|<img/);assert.match(html,/&lt;script&gt;/);assert.match(html,/BC2&lt;img/)}
+});
