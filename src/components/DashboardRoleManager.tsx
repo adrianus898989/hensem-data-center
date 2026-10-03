@@ -2,13 +2,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { DashboardProfile, DashboardSession } from "@/lib/dashboardAuthClient";
 import { dashboardScopeLabel } from "@/lib/dashboardDataScope";
-import { dashboardRolePages, dashboardRoleRequest, type DashboardCustomRole, type DashboardRoleAccount, type DashboardRoleRequest, type DashboardRoleResponse } from "@/lib/dashboardRoleClient";
+import { dashboardRoleRequest, type DashboardCustomRole, type DashboardRoleAccount, type DashboardRoleRequest, type DashboardRoleResponse } from "@/lib/dashboardRoleClient";
+import { dashboardRoleDisplayPages, dashboardRoleDisplayPermissionCount, dashboardRoleDisplayPageCount } from "@/lib/dashboardRoleDisplay";
 import AccountEditorDialog from "./AccountEditorDialog";
 import { dashboardRoleAllows, type DashboardRoleAccess } from "@/lib/dashboardRoleAccess";
 import "./DashboardRoleManager.css";
 
-const modules=Array.from(new Map(dashboardRolePages.map(page=>[page.moduleId,{id:page.moduleId,label:page.moduleLabel}])).values());
-const moduleCodes=(moduleId:string)=>dashboardRolePages.filter(page=>page.moduleId===moduleId).flatMap(page=>page.actions.map(action=>page.id+"."+action.id));
+const modules=Array.from(new Map(dashboardRoleDisplayPages.map(page=>[page.moduleId,{id:page.moduleId,label:page.moduleLabel}])).values());
+const moduleCodes=(moduleId:string)=>dashboardRoleDisplayPages.filter(page=>page.moduleId===moduleId).flatMap(page=>page.actions.map(action=>page.id+"."+action.id));
 type Draft={name:string;description:string;permissions:string[]};
 type Editor={role:DashboardCustomRole|null;draft:Draft};
 const draftOf=(role:DashboardCustomRole|null):Draft=>({name:role?.name||"",description:role?.description||"",permissions:[...(role?.permissions||[])]});
@@ -75,7 +76,7 @@ export default function DashboardRoleManager({session,profile,manualQuery=true,r
   const result=await mutate(role?{operation:"update",roleId:role.id,expectedVersion:role.version,...fields}:{operation:"create",...fields});
   if(result){setEditor(null);setMessage(role?"角色已保存，分配此角色的账号将按新权限生效":"角色已创建，可分配给现有账号");}
  }
- const visiblePages=dashboardRolePages.filter(page=>page.moduleId===moduleId&&(!search.trim()||[page.label,page.moduleLabel,page.id,...page.actions.map(action=>action.label)].join(" ").toLowerCase().includes(search.trim().toLowerCase())));
+ const visiblePages=dashboardRoleDisplayPages.filter(page=>page.moduleId===moduleId&&(!search.trim()||[page.label,page.moduleLabel,page.id,...page.actions.map(action=>action.label)].join(" ").toLowerCase().includes(search.trim().toLowerCase())));
  const selectedPermissions=editor?.draft.permissions||[],selectedAccount=accounts.find(account=>account.auth_user_id===assignment?.accountId);
  const manageable=(account:DashboardRoleAccount)=>account.role!=="owner"&&(owner||account.role==="viewer"&&account.auth_user_id!==session.user.id&&(!account.role_id||roles.some(role=>role.id===account.role_id&&grantable(role))));
  const editableAccounts=accounts.filter(manageable),activeRoles=roles.filter(role=>role.active&&grantable(role));
@@ -113,7 +114,7 @@ export default function DashboardRoleManager({session,profile,manualQuery=true,r
     <p className="drm-help">勾选「查看」后开放对应目录；导出、编辑等操作单独授权。数据范围沿用账号设置，后台账号管理和 IP 白名单按新版角色单独授权；只能向范围内账号分配自身已有权限的角色。</p>
     <div className="drm-permission-pages">{visiblePages.map(page=><section key={page.id} className="drm-permission-page"><h4>{page.label}</h4><div>{page.actions.map(action=>{const code=page.id+"."+action.id;return <label key={code} className={action.sensitive?"drm-sensitive":""}><input type="checkbox" aria-label={page.label+" · "+action.label} disabled={locked} checked={selectedPermissions.includes(code)} onChange={event=>toggle(code,event.target.checked)}/>{action.label}{action.sensitive&&<small>敏感操作</small>}</label>;})}</div></section>)}{!visiblePages.length&&<p className="drm-empty">当前模块没有匹配的目录。</p>}</div>
     </div></div>
-   <footer className="drm-editor-footer"><span>已启用 {selectedPermissions.length} 项权限 · {dashboardRolePages.filter(page=>selectedPermissions.includes(page.id+".view")).length} 个目录</span><div className="drm-actions"><button type="button" disabled={locked} onClick={closeEditor}>取消</button><button type="submit" className="primary" disabled={locked||!editor.draft.name.trim()}>{busy?"保存中…":"保存角色"}</button></div></footer>
+   <footer className="drm-editor-footer"><span>已启用 {dashboardRoleDisplayPermissionCount(selectedPermissions)} 项权限 · {dashboardRoleDisplayPageCount(selectedPermissions)} 个目录</span><div className="drm-actions"><button type="button" disabled={locked} onClick={closeEditor}>取消</button><button type="submit" className="primary" disabled={locked||!editor.draft.name.trim()}>{busy?"保存中…":"保存角色"}</button></div></footer>
   </form></AccountEditorDialog>}
   {assignment&&<AccountEditorDialog title="分配角色给现有账号" busy={locked} onClose={()=>{setAssignment(null);setError("")}} bodyClassName="dashboard-role-assignment"><form onSubmit={saveAssignment}>
    {error&&<p role="alert" className="drm-error">{error}</p>}<label>现有账号<select aria-label="选择现有账号" required disabled={locked} value={assignment.accountId} onChange={event=>setAssignment({...assignment,accountId:event.target.value})}><option value="">请选择账号</option>{editableAccounts.map(account=><option key={account.auth_user_id} value={account.auth_user_id}>{account.username}{account.active?"":"（已停用）"}</option>)}</select></label>

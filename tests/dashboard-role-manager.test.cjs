@@ -1,5 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript');
 const repo=path.resolve(__dirname,'..'),catalog=require('../src/lib/dashboardRoleCatalog.json');
+const display=require('./load-role-display.cjs');
 const plain=value=>JSON.parse(JSON.stringify(value)),flush=()=>new Promise(resolve=>setImmediate(resolve));
 const compile=file=>ts.transpileModule(fs.readFileSync(path.join(repo,file),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
 const ownerId='11111111-1111-4111-8111-111111111111',staffId='22222222-2222-4222-8222-222222222222',roleId='33333333-3333-4333-8333-333333333333',otherId='44444444-4444-4444-8444-444444444444';
@@ -51,7 +52,7 @@ function ui(handler,initial={}){
  const states=[],refs=[],dependencies=[],effects=[],cleanup=[],calls=[];let s=0,r=0,e=0,props={session,profile,manualQuery:true,...initial};const mod={exports:{}};
  const react={useState(initial){const k=s++;if(!(k in states))states[k]=typeof initial==='function'?initial():initial;return[states[k],value=>states[k]=typeof value==='function'?value(states[k]):value]},useRef(initial){const k=r++;return refs[k]||(refs[k]={current:initial})},useEffect(fn,values){const k=e++;if(!dependencies[k]||values.some((v,n)=>v!==dependencies[k][n])){dependencies[k]=values;effects.push(()=>{cleanup[k]?.();cleanup[k]=fn()})}}};
  const real=client().api;
- vm.runInNewContext(compile('src/components/DashboardRoleManager.tsx'),{module:mod,exports:mod.exports,AbortController,Error,window:{confirm:()=>true},require(name){if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};if(name.includes('dashboardRoleClient'))return{...real,dashboardRoleRequest:async(s,q,signal)=>{calls.push(plain(q));return handler?handler(q,signal):listing()}};if(name.includes('dashboardDataScope'))return{dashboardScopeLabel:scope=>scope?.mode==='all'?'全部数据':(scope?.countries||[]).join('、')};if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};if(name.endsWith('.css'))return{};throw Error(name)}});
+ vm.runInNewContext(compile('src/components/DashboardRoleManager.tsx'),{module:mod,exports:mod.exports,AbortController,Error,window:{confirm:()=>true},require(name){if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};if(name.includes('dashboardRoleDisplay'))return display;if(name.includes('dashboardRoleClient'))return{...real,dashboardRoleRequest:async(s,q,signal)=>{calls.push(plain(q));return handler?handler(q,signal):listing()}};if(name.includes('dashboardDataScope'))return{dashboardScopeLabel:scope=>scope?.mode==='all'?'全部数据':(scope?.countries||[]).join('、')};if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};if(name.endsWith('.css'))return{};throw Error(name)}});
  const h={calls,api:mod.exports,draw(){s=r=e=0;return mod.exports.default(props)},effects(){effects.splice(0).forEach(fn=>fn())},setProps(next){props={...props,...next}},button(label){const value=nodes(h.draw()).find(node=>node.type==='button'&&text(node)===label);assert(value,'button '+label);return value},findLabel(label){const value=nodes(h.draw()).find(node=>node.props?.['aria-label']===label);assert(value,'aria-label '+label);return value},form(){return nodes(h.draw()).find(node=>node.type==='form')},async load(){const label=nodes(h.draw()).some(node=>node.type==='button'&&text(node)==='刷新列表')?'刷新列表':'查询角色';h.button(label).props.onClick();await flush();return h.draw()},dispose(){cleanup.forEach(fn=>fn?.())}};
  h.draw();h.effects();return h;
 }
@@ -167,7 +168,7 @@ function assignedDialog(overrides={},handler){
   if(name==='react')return{useState(initial){const k=cursor++;if(!(k in states))states[k]=initial;return[states[k],value=>states[k]=value]}};
   if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
   if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};
-  if(name.includes('dashboardRoleClient'))return{dashboardRolePages:catalog.pages,dashboardRoleRequest:async(s,q)=>{calls.push(plain(q));if(handler)return handler(q);return{account:{...account,role_id:q.roleId,assignment_version:3}}}};
+  if(name.includes('dashboardRoleDisplay'))return display;if(name.includes('dashboardRoleClient'))return{dashboardRolePages:catalog.pages,dashboardRoleRequest:async(s,q)=>{calls.push(plain(q));if(handler)return handler(q);return{account:{...account,role_id:q.roleId,assignment_version:3}}}};
   if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};throw Error(name);
  }});
  const draw=()=>{cursor=0;return mod.exports.default(props)},h={draw,calls,select:()=>nodes(draw()).find(node=>node.type==='select'),form:()=>nodes(draw()).find(node=>node.type==='form')};draw();return h;
@@ -183,4 +184,37 @@ test('account assigned-role editor independently rejects missing action, self an
 });
 test('assigned-role conflict preserves chosen role for review and does not close or retry',async()=>{
  const h=assignedDialog({},()=>{throw Error('角色分配已被其他管理员修改，草稿已保留')});h.select().props.onChange({target:{value:otherId}});await h.form().props.onSubmit({preventDefault(){}});assert.equal(h.calls.length,1);assert.equal(h.select().props.value,otherId);assert.match(text(h.draw()),/草稿已保留/);
+});
+
+const legacyMerchantCodes=['merchantproviders.view','merchantproviders.query','merchantproviders.detail','merchantproviders.export'];
+test('display catalog hides only the retired merchant page without altering canonical validation or saved permissions',async()=>{
+ const before=JSON.stringify(catalog),permissions=[...role.permissions,...legacyMerchantCodes],snapshot=[...permissions];
+ assert.deepEqual(plain(display.dashboardRoleDisplayPages.map(page=>page.id)),catalog.pages.filter(page=>page.id!=='merchantproviders').map(page=>page.id));
+ assert.equal(display.dashboardRoleDisplayPermissionCount(permissions),2);assert.equal(display.dashboardRoleDisplayPageCount(permissions),1);
+ assert.equal(display.dashboardRoleDisplayPermissionCount(legacyMerchantCodes),0);assert.deepEqual(permissions,snapshot);assert.equal(JSON.stringify(catalog),before);
+ const h=client({response:{role:{...role,permissions,version:3}}});
+ await h.api.dashboardRoleRequest(session,{operation:'update',roleId,expectedVersion:2,name:role.name,description:role.description,permissions});
+ assert.deepEqual(JSON.parse(h.calls[0].init.body).p_request.permissions,permissions);assert(!permissions.some(code=>code.startsWith('merchants.')));
+});
+test('retired merchant permissions are absent from role editor and all display counts but survive visible selection and save',async()=>{
+ const saved={...role,permissions:[...role.permissions,...legacyMerchantCodes]},h=ui(async q=>q.operation==='list'?{roles:[saved],accounts:[account,owner]}:{role:{...saved,name:q.name,permissions:q.permissions,version:3}});await h.load();
+ const matrix=h.findLabel('角色目录权限矩阵'),heads=nodes(matrix).filter(node=>node.type==='th').map(text),index=heads.findIndex(label=>label.startsWith('商户运营中心'));assert(index>=0);
+ const merchantTotal=catalog.pages.filter(page=>page.moduleId==='merchant'&&page.id!=='merchantproviders').reduce((n,page)=>n+page.actions.length,0);
+ const cells=nodes(matrix).filter(node=>node.type==='tr'&&nodes(node).some(cell=>cell.type==='td')).map(row=>nodes(row).filter(node=>node.type==='td'));
+ assert.equal(text(cells[0][index]),merchantTotal+' / '+merchantTotal);assert.equal(text(cells[1][index]),'0 / '+merchantTotal);
+ h.button('配置权限').props.onClick();assert.match(text(h.draw()),/已启用 2 项权限 · 1 个目录/);
+ const merchantButton=nodes(h.findLabel('角色权限模块')).find(node=>node.type==='button'&&text(node).startsWith('商户运营中心'));merchantButton.props.onClick();
+ assert.doesNotMatch(text(h.draw()),/平台三方分析/);assert.match(text(h.draw()),/平台汇总/);
+ h.findLabel('搜索目录或操作权限').props.onChange({target:{value:'merchantproviders'}});assert.match(text(h.draw()),/当前模块没有匹配的目录/);assert.equal(h.button('全选当前结果').props.disabled,true);
+ h.findLabel('搜索目录或操作权限').props.onChange({target:{value:''}});h.button('全选当前结果').props.onClick();h.button('取消当前结果').props.onClick();
+ assert.match(text(h.draw()),/已启用 2 项权限 · 1 个目录/);h.findLabel('角色名称').props.onChange({target:{value:'仅修改名称'}});await h.form().props.onSubmit({preventDefault(){}});
+ assert.deepEqual(h.calls[1].permissions,[...saved.permissions].sort());assert(!h.calls[1].permissions.some(code=>code.startsWith('merchants.')));assert.deepEqual(saved.permissions,[...role.permissions,...legacyMerchantCodes]);
+});
+test('assignment display excludes retired counters but delegation still requires every original permission',async()=>{
+ const restrictedRole={...role,permissions:[...role.permissions,...legacyMerchantCodes]},rights={mode:'assigned',canView:true,permissions:['access.view','access.edit',...role.permissions]};
+ const h=assignedDialog({roles:[restrictedRole],isOwner:true});
+ const chip=nodes(h.draw()).find(node=>node.props?.className==='admin-module-permission-chip'&&text(node).startsWith('商户运营中心'));
+ const total=catalog.pages.filter(page=>page.moduleId==='merchant'&&page.id!=='merchantproviders').reduce((n,page)=>n+page.actions.length,0);assert.equal(text(chip),'商户运营中心0/'+total);
+ const delegated=assignedDialog({roles:[restrictedRole],isOwner:false,session:{...session,user:{id:'delegate'}},roleAccess:rights});assert.deepEqual(nodes(delegated.select()).filter(node=>node.type==='option').map(node=>node.props.value),['']);
+ const manager=ui(async()=>({roles:[restrictedRole],accounts:[account,owner]}),{profile:{...profile,role:'viewer'},roleAccess:rights});await manager.load();assert.equal(manager.button('分配账号').props.disabled,true);assert(manager.calls.every(call=>call.operation==='list'));
 });

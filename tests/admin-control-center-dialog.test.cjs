@@ -25,6 +25,7 @@ function ui(options={}){
   if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};
   if(name==='./AccountPermissionDialog')return{default:function AccountPermissionDialog(){}};
   if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async()=>{calls.push({action:'list'});return options.list?options.list():options.users||[owner,brazil,india]},listDashboardAudit:async()=>{calls.push({action:'audit'});return[]},createDashboardRoleAccount:async(...args)=>{calls.push({action:'create',args:plain(args)});return options.create?options.create(...args):{account:{username:args[1],role_name:EMPTY_ROLE.name}}},updateDashboardAccount:async(...args)=>{calls.push({action:'update',args:plain(args)});if(options.update)return options.update(...args)},resetDashboardUserPassword:async(...args)=>calls.push({action:'password',args:plain(args)})};
+  if(name.endsWith('/dashboardRoleDisplay'))return require('./load-role-display.cjs');
   if(name.endsWith('/dashboardRoleClient'))return{dashboardRolePages:require('../src/lib/dashboardRoleCatalog.json').pages,dashboardRoleRequest:async(...args)=>{roleCalls.push(plain(args));return options.roles?options.roles():{roles:[EMPTY_ROLE,VIP_ROLE],accounts:(options.users||[owner,brazil,india]).map(account=>({...account,role_id:null,assignment_version:0}))}}};
   if(name.startsWith('@/lib/'))return loadTs(path.join(root,'src/lib',name.slice(6)+'.ts'));
   throw Error('Unexpected module: '+name);
@@ -157,7 +158,7 @@ test('owner login security is only mounted after an authoritative directory read
  const limited=ui({actor:manager,manualQuery:true,roleAccess:assigned(['access.view'])});limited.button('查询账号').props.onClick();await flush();assert(limited.all().some(n=>n.type?.name==='AccountLoginPolicy')); assert(limited.all().some(n=>n.type==='button'&&text(n)==='登录安全'));
 });
 
-const vipRole={id:'role-vip',name:'VIP',active:true,permissions:['overview.view','collect.view','collect.query'],version:1};
+const vipRole={id:'role-vip',name:'VIP',active:true,permissions:['overview.view','providers.view','providers.query'],version:1};
 const vipRoster=()=>({roles:[vipRole],accounts:[{...brazil,role_id:vipRole.id,assignment_version:2}]});
 test('backend account list shows confirmed assigned VIP and its permissions without changing the system identity or issuing writes',async()=>{
  const h=ui({manualQuery:true,users:[brazil],roles:vipRoster});assert.equal(h.roleCalls.length,0);
@@ -212,4 +213,22 @@ test('role directory failure and pending reads never fall back to legacy creatio
 test('creation actor change clears role/credentials and a late completed request cannot reopen or overwrite new actor state',async()=>{
  let resolve;const h=ui({create:()=>new Promise(r=>{resolve=r})});await flush();h.button('+ 新建账号').props.onClick();h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});h.all().find(n=>n.props.id==='admin-new-username').props.onChange({target:{value:'synthetic-new'}});h.all().find(n=>n.props.id==='admin-new-password').props.onChange({target:{value:'synthetic-password'}});
  const pending=nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});h.actor({...manager,data_scope:IN});h.draw();assert(!h.dialog());assert(!JSON.stringify(h.states).includes('synthetic-password'));resolve({account:{username:'synthetic-new',role_name:'Old role'}});await pending;assert(!h.dialog());assert.doesNotMatch(text(h.draw()),/已建立，角色/);
+});
+
+test('account summaries and creation hints count only current pages while retaining the complete assigned role',async()=>{
+ const permissions=[...VIP_ROLE.permissions,'merchantproviders.view','merchantproviders.query','merchantproviders.detail','merchantproviders.export'];
+ const saved={...VIP_ROLE,permissions},h=ui({users:[brazil],roles:()=>({roles:[saved],accounts:[{...brazil,role_id:saved.id,assignment_version:2}]})});await flush();
+ assert.match(text(h.rows()),/1 个目录 · 1 项权限/);assert.doesNotMatch(text(h.rows()),/5 项权限/);
+ h.button('账号设置').props.onClick();assert.match(text(h.dialog()),/1 个目录 · 1 项权限/);h.dialog().props.onClose();
+ h.button('配置权限').props.onClick();const assigned=h.all().find(node=>node.type?.name==='AccountAssignedRoleDialog');assert.deepEqual(plain(assigned.props.roles[0].permissions),permissions);assigned.props.onClose();
+ h.button('+ 新建账号').props.onClick();const select=h.all().find(node=>node.props.id==='admin-new-role');assert.match(text(select),/VIP · 1 项权限/);select.props.onChange({target:{value:saved.id}});
+ assert.match(text(h.dialog()),/1 个页面、1 项权限/);assert.doesNotMatch(text(h.dialog()),/平台三方分析/);
+ h.all().find(node=>node.props.id==='admin-new-username').props.onChange({target:{value:'display-fixture'}});h.all().find(node=>node.props.id==='admin-new-password').props.onChange({target:{value:'fixture-password'}});
+ await nodes(h.dialog()).find(node=>node.type==='form').props.onSubmit({preventDefault(){}});const create=h.calls.find(call=>call.action==='create');assert.deepEqual(create.args[3],{id:saved.id,version:saved.version});assert.deepEqual(create.args[4],ALL);assert.deepEqual(saved.permissions,permissions);
+});
+test('display-hidden permissions remain part of delegated account creation grant checks',async()=>{
+ const saved={...EMPTY_ROLE,permissions:['merchantproviders.view','merchantproviders.query']};
+ const h=ui({actor:manager,roleAccess:assigned(['access.view','access.create','access.edit']),roles:()=>({roles:[saved],accounts:[]})});await flush();h.button('+ 新建账号').props.onClick();
+ const select=h.all().find(node=>node.props.id==='admin-new-role');assert(!nodes(select).some(node=>node.type==='option'&&node.props.value===saved.id));select.props.onChange({target:{value:saved.id}});
+ await nodes(h.dialog()).find(node=>node.type==='form').props.onSubmit({preventDefault(){}});assert(!h.calls.some(call=>call.action==='create'));
 });

@@ -53,21 +53,27 @@
      if(Number(result.total)!==target[s.mode])throw Error('来源订单已更新，请重新查询汇总后打开明细，避免笔数不一致');
      const take=Math.min(remaining,target[s.mode]-offset),rows=(result.rows||[]).slice(0,take);
      if(rows.length!==take)throw Error('订单页未完整返回，请重试');
+     if(s.currencyScoped&&rows.some(row=>row.currency!==s.currency))throw Error('订单币种与汇总行不一致，请重新查询后查看明细');
      s.rows.push(...rows.map(r=>({...r,platform:target.platform})));remaining-=rows.length;offset=0;
      if(!remaining)break;
     }
    }catch(e){if(token!==serial||s!==current||s.querySerial!==L.serial)return;s.rows=[];s.error=e.message||'订单读取失败'}
    if(token!==serial||s!==current||s.querySerial!==L.serial)return;s.loading=false;show();
   }
-  async function open(provider,source,direction,platformId=''){
+  async function open(provider,source,direction,platformId='',currency){
    if(L.loading||L.dirty)return;
+   const currencyScoped=currency!==undefined;
+   if(currencyScoped&&(typeof currency!=='string'||!/^[A-Z]{3,6}$/.test(currency))){cancel();openDrawer('订单明细','<div class="live-status live-error">该行币种未确认，暂不能读取订单明细</div>');return;}
    const targets=L.results.filter(r=>!source||r.platform?.source===source).map(result=>{
     const canonical=value=>root.HensemProviderNames?.canonical(value,result.platform?.country)??String(value??'');
-    const rows=(result.groups?.provider||[]).filter(r=>canonical(r.provider)===canonical(provider)&&r.direction===direction);
-    return {platform:result.platform,created:rows.reduce((n,r)=>n+Number(r.all_count||0),0),success:rows.reduce((n,r)=>n+Number(r.success_count||0),0),request:{...query(result.platform,'details'),providers:[provider],direction,offset:0,limit:20}};
-   }).filter(t=>t.created||t.success).sort((a,b)=>String(a.platform.name).localeCompare(String(b.platform.name))||String(a.platform.id).localeCompare(String(b.platform.id)));
+    const rows=(result.groups?.provider||[]).filter(r=>canonical(r.provider)===canonical(provider)&&r.direction===direction&&(!currencyScoped||r.currency===currency));
+    const created=rows.reduce((n,r)=>n+Number(r.all_count||0),0),success=rows.reduce((n,r)=>n+Number(r.success_count||0),0);
+    if(!(created||success))return null;
+    return {platform:result.platform,created,success,request:{...query(result.platform,'details'),...(currencyScoped?{currency}:{}),providers:[provider],direction,offset:0,limit:20}};
+   }).filter(Boolean).sort((a,b)=>String(a.platform.name).localeCompare(String(b.platform.name))||String(a.platform.id).localeCompare(String(b.platform.id)));
    if(platformId&&!targets.some(t=>t.platform.id===platformId))return;
-   current={provider,source,direction,targets,platformId,status:L.status,mode:L.status==='success'||targets.some(t=>(!platformId||t.platform.id===platformId)&&t.success)?'success':'created',page:1,rows:[],error:'',loading:true,querySerial:L.serial,from:L.from,to:L.to,currency:L.currency};
+   if(currencyScoped&&!targets.length){cancel();openDrawer('订单明细','<div class="live-status live-error">当前已查询结果没有该三方与币种的订单明细</div>');return;}
+   current={provider,source,direction,targets,platformId,status:L.status,mode:L.status==='success'||targets.some(t=>(!platformId||t.platform.id===platformId)&&t.success)?'success':'created',page:1,rows:[],error:'',loading:true,querySerial:L.serial,from:L.from,to:L.to,currency:currencyScoped?currency:L.currency,currencyScoped};
    await load();
   }
   root.liveProviderOrders=open;
