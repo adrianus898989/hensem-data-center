@@ -173,7 +173,7 @@ test('unknown role metadata is visibly unverified, never silently called indepen
  h.button('配置权限').props.onClick();assert.match(text(h.dialog()),/角色读取尚未完成/);assert(!h.all().some(n=>n.type?.name==='AccountPermissionDialog'));
  h.dialog().props.onClose();h.button('账号设置').props.onClick();assert(!h.all().some(n=>n.type?.name==='AccountRoleEditor'),'unverified assigned status never enables legacy identity editing');
  const missing=ui({users:[brazil],roles:()=>({roles:[],accounts:[]})});await flush();assert.match(text(missing.rows()),/角色待核对/);assert.doesNotMatch(text(missing.rows()),/账号独立授权/);
- const admin=ui({actor:manager,users:[brazil]});await flush();assert.equal(admin.roleCalls.length,1,'existing authorized admins also read the server-scoped assigned role roster');assert.match(text(admin.rows()),/未分配角色/);
+ const admin=ui({actor:manager,users:[brazil]});await flush();assert.equal(admin.roleCalls.length,1,'existing authorized admins also read the server-scoped assigned role roster');assert.match(text(admin.rows()),/未分配新版角色/);
 });
 test('assigned account permission configuration uses its actual role and never the legacy profile editor',async()=>{
  const h=ui({users:[brazil],roles:vipRoster});await flush();h.button('配置权限').props.onClick();

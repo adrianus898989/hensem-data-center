@@ -152,7 +152,6 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
       }
       return client;
     }
-    if (name === './AdminPreviewGrants') return { default: () => null };
     if (name === './AdminControlCenter') return { default: function AdminControlCenter(){} };
     if (name === './WorkOrderAccountAdmin') return { default: function WorkOrderAccountAdmin(){} };
     if (name === './AccountIpAdmin') return { default: function AccountIpAdmin(){} };
@@ -498,6 +497,6 @@ test('a session/profile account mismatch immediately hides the frame and ignores
  finally{resolve(HTML);h.dispose()}
 });
 
-test('a mismatched account cannot use grant controls from an already loaded owner frame',async()=>{
- const h=componentHarness('offline-loaded-owner');try{await flush();assert(findElement(h.draw(),'iframe'));h.states[4]=true;h.rerenderSession({...h.session,user:{id:'offline-another-account'}});const all=elements(h.draw());assert(!all.some(n=>n.type==='iframe'));assert(all.find(n=>n.props?.['aria-label']==='管理后台查看授权').props.disabled);assert(!all.some(n=>n.type?.name==='AdminPreviewGrants'));}finally{h.dispose()}
+test('the formal owner page keeps role management and does not expose the retired grant control',async()=>{
+ const h=componentHarness('offline-loaded-owner');try{await flush();assert(findElement(h.draw(),'iframe'));let all=elements(h.draw());assert(!all.some(n=>n.props?.['aria-label']==='管理后台查看授权'));assert(!all.some(n=>n.type?.name==='AdminPreviewGrants'));h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command:'account-page',active:true,bounds:{top:120,left:240,width:1000}}});all=elements(h.draw());const roleTab=all.find(n=>n.props?.id==='owner-roles-tab');assert(roleTab,'owner still manages the new role permissions');roleTab.props.onClick();assert(elements(h.draw()).some(n=>n.type?.name==='DashboardRoleManager'));h.rerenderSession({...h.session,user:{id:'offline-another-account'}});all=elements(h.draw());assert(!all.some(n=>n.type==='iframe'));assert(!all.some(n=>n.type?.name==='DashboardRoleManager'));assert(!all.some(n=>n.props?.['aria-label']==='管理后台查看授权'));}finally{h.dispose()}
 });

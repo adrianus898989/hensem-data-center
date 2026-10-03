@@ -270,8 +270,54 @@ test('upstream login timeout is translated and credentials are never replayed',a
   const h=harness();h.setFetch(()=>json({message:'Gateway Timeout'},504));
   const error=await h.api.signInDashboard('offline-user','offline-password').catch(value=>value);
   assert.equal(error.code,'auth_service_unavailable');assert.equal(error.status,504);
-  assert.equal(error.message,'登录服务暂时繁忙，请稍后重试');
+  assert.equal(error.message,'登录验证超时，请稍后重试');
   assert.equal(h.calls.length,1);assert.equal(h.calls[0].method,'POST');
+});
+
+test('login retains safe service codes while hiding upstream private messages',async()=>{
+  for(const [status,code,message] of [
+    [503,'auth_unavailable','账号验证服务暂时不可用，请稍后重试'],
+    [503,'service_unavailable','登录验证服务暂时不可用，请稍后重试'],
+    [503,'gateway_unavailable','登录入口暂时无法连接验证服务，请稍后重试'],
+    [504,'gateway_timeout','登录验证超时，请稍后重试'],
+    [502,'gateway_invalid_response','登录验证响应异常，请稍后重试'],
+    [503,'unexpected_upstream_code','登录服务暂时不可用，请稍后重试'],
+  ]){
+    const h=harness();h.setFetch(()=>json({code,message:'PRIVATE-UPSTREAM-CREDENTIALS'},status));
+    const error=await h.api.signInDashboard('offline-user','offline-password').catch(value=>value);
+    assert.equal(error.status,status);assert.equal(error.code,code);assert.equal(error.message,message);
+    assert.equal(h.calls.length,1);assert.doesNotMatch(error.message,/PRIVATE|offline-password/);
+  }
+});
+
+test('malformed successful login responses retain their invalid-response classification',async()=>{
+  for(const response of [json({ok:true}),json({ok:false,code:'denied'}),json(null),new Response('not-json',{status:200})]){
+    const h=harness();h.setFetch(()=>response);
+    const error=await h.api.signInDashboard('offline-user','offline-password').catch(value=>value);
+    assert.equal(error.status,502);assert.equal(error.code,'auth_invalid_response');
+    assert.equal(error.message,'登录响应不完整，请稍后重试');assert.equal(h.calls.length,1);
+  }
+});
+
+test('login preserves credential, account and IP denial statuses without replay',async()=>{
+  for(const [status,code,message] of [
+    [401,'invalid_credentials','账号或密码不正确'],
+    [403,'account_locked','账号因连续登录失败已自动停用，请联系管理员启用'],
+    [403,'ip_denied','当前 IP 不在登录白名单'],
+    [403,'account_denied','后台账号未启用或未授权'],
+  ]){
+    const h=harness();h.setFetch(()=>json({code,message},status));
+    const error=await h.api.signInDashboard('offline-user','offline-password').catch(value=>value);
+    assert.equal(error.status,status);assert.equal(error.code,code);assert.equal(error.message,message);assert.equal(h.calls.length,1);
+  }
+});
+
+test('login reservation busy is distinct from rate limiting and retains the server code',async()=>{
+  for(const [code,message] of [['login_busy','已有登录请求正在验证，请稍后重试'],['over_request_rate_limit','登录请求过于频繁，请稍后再试']]){
+    const h=harness();h.setFetch(()=>json({code,message:'PRIVATE-UPSTREAM'},429));
+    const error=await h.api.signInDashboard('offline-user','offline-password').catch(value=>value);
+    assert.equal(error.status,429);assert.equal(error.code,code);assert.equal(error.message,message);assert.equal(h.calls.length,1);
+  }
 });
 test('profile read retries one safe GET and translates a repeated network failure',async()=>{
   const h=harness(),active=session();h.setFetch(()=>Promise.reject(new TypeError('Failed to fetch')));

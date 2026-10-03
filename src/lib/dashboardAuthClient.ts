@@ -328,20 +328,30 @@ export async function signInDashboard(usernameInput: string, password: string): 
   let payload: unknown;
   try {
     const result=await readJson(response);
-    if(result.ok!==true || !result.tokens)throw new DashboardHttpError("登录状态不完整，请重试",502,"auth_invalid_response");
+    if(result?.ok!==true || !result?.tokens)throw new DashboardHttpError("登录响应不完整，请稍后重试",502,"auth_invalid_response");
     payload = result.tokens;
   } catch (error) {
     if (error instanceof DashboardHttpError
-        && error.status === 400
+        && [400, 401].includes(error.status)
         && (error.code === "invalid_credentials" || /invalid login credentials/i.test(error.message))) {
-      throw new DashboardHttpError("账号或密码不正确", 400, "invalid_credentials");
+      throw new DashboardHttpError("账号或密码不正确", error.status, "invalid_credentials");
     }
-    if (error instanceof DashboardHttpError && (error.status === 429 || error.status >= 500)) {
-      throw new DashboardHttpError(
-        error.status === 429 ? "登录请求过于频繁，请稍后再试" : "登录服务暂时繁忙，请稍后重试",
-        error.status,
-        error.status === 429 ? "auth_rate_limited" : "auth_service_unavailable",
-      );
+    if (error instanceof DashboardHttpError && error.status === 429) {
+      throw new DashboardHttpError(error.code === "login_busy" ? "已有登录请求正在验证，请稍后重试" : "登录请求过于频繁，请稍后再试",
+        error.status, error.code === "http_error" ? "auth_rate_limited" : error.code);
+    }
+    if (error instanceof DashboardHttpError && error.status >= 500) {
+      // Keep safe machine codes for diagnosis; never expose an upstream error body.
+      const messages: Record<string, string> = {
+        auth_invalid_response: "登录响应不完整，请稍后重试",
+        gateway_invalid_response: "登录验证响应异常，请稍后重试",
+        gateway_timeout: "登录验证超时，请稍后重试",
+        gateway_unavailable: "登录入口暂时无法连接验证服务，请稍后重试",
+        auth_unavailable: "账号验证服务暂时不可用，请稍后重试",
+        service_unavailable: "登录验证服务暂时不可用，请稍后重试",
+      };
+      throw new DashboardHttpError(Object.hasOwn(messages, error.code) ? messages[error.code] : (error.status === 504 ? "登录验证超时，请稍后重试" : "登录服务暂时不可用，请稍后重试"),
+        error.status, error.code === "http_error" ? "auth_service_unavailable" : error.code);
     }
     throw error;
   }
