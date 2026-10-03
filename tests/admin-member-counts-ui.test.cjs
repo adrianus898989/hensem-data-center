@@ -113,6 +113,41 @@ test('ensure does not restart a paused same-scope query until an explicit retry'
 const dailyResponse=(q,platform=p(q.platformId))=>response(q,requestFor(platform,()=>q).days.flatMap(date=>(q.direction==='all'?['charge','withdraw']:[q.direction]).map(direction=>row(date,direction))),{platform});
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 
+test('16-platform cohort finishes before one timeout retry, retaining the 15 successful results and the exact authorized request',async()=>{
+ const h=harness(),platforms=[p(),...Array.from({length:15},(_,i)=>p((0x30000000+i).toString(16)+'-0000-4000-8000-'+String(i).padStart(12,'0')))],last=platforms.at(-1).id,late=deferred(),attempts=new Map(),settled=new Set();
+ h.select(platforms);h.L.multi.provider=['Synthetic B Pay','Synthetic A Pay'];
+ h.handler(q=>{const attempt=(attempts.get(q.platformId)||0)+1;attempts.set(q.platformId,attempt);if(q.platformId===A&&attempt===1){settled.add(A);throw Object.assign(Error('canceling statement due to statement limit'),{code:'57014'});}if(attempt===2){assert.equal(settled.size,16,'no retry overlaps an unfinished initial platform');return response(q);}if(q.platformId===last)return late.promise.then(value=>{settled.add(last);return value});settled.add(q.platformId);return response(q);});
+ const loading=h.ui.ensure();await tick();assert.equal(h.calls.length,16);assert.equal(attempts.get(A),1);assert.equal(h.ui.state.results.length,14);const successes=[...h.ui.state.results];
+ late.resolve(response(h.calls.find(q=>q.platformId===last)));await loading;
+ assert.equal(h.calls.length,17);assert.equal(h.calls.filter(q=>q.platformId===A).length,2);assert(platforms.slice(1).every(platform=>attempts.get(platform.id)===1));assert.strictEqual(h.calls.at(-1),h.calls[0],'retry reuses the same request object including direction/date/currency/provider scope');
+ assert.equal(h.ui.state.results.length,16);assert.equal(new Set(h.ui.state.results.map(result=>result.platform.id)).size,16);assert(successes.every(result=>h.ui.state.results.includes(result)));assert.equal(h.ui.state.failures.length,0);assert.equal(h.ui.platformMetric(platforms.map(platform=>platform.id),'charge').value,144);assert.match(h.ui.metric('charge'),/读取 16 \/ 16 平台/);
+});
+
+test('multiple timeout platforms retry sequentially only once after all initial reads, never duplicating successful platform counts',async()=>{
+ const h=harness(),third='33333333-3333-4333-8333-333333333333',attempts=new Map(),initialSettled=new Set();h.select([p(),p(B),p(third)]);let active=0,retryActive=0,maxRetryActive=0,maximum=0;
+ h.handler(async q=>{const attempt=(attempts.get(q.platformId)||0)+1;attempts.set(q.platformId,attempt);active++;maximum=Math.max(maximum,active);if(attempt===2){assert.equal(initialSettled.size,3);retryActive++;maxRetryActive=Math.max(maxRetryActive,retryActive);}try{await tick();if(attempt===1){initialSettled.add(q.platformId);if(q.platformId!==third)throw Error('Synthetic timed out');}return response(q);}finally{active--;if(attempt===2)retryActive--;}});
+ await h.ui.ensure();assert.equal(maximum,2);assert.equal(maxRetryActive,1);assert.equal(h.calls.length,5);assert.deepEqual(h.calls.slice(3).map(q=>q.platformId),[A,B]);assert.equal(attempts.get(third),1);assert.equal(h.ui.state.results.length,3);assert.equal(h.ui.state.failures.length,0);assert.match(h.ui.metric('charge'),/36 \/ 27/);assert.match(h.ui.metric('withdraw'),/36 \/ 27/);
+});
+
+test('serial retry is bounded and timeout-only: permission, network, rate limit and invalid response errors are not retried',async()=>{
+ for(const error of [Object.assign(Error('permission denied'),{code:'42501'}),Error('Failed to fetch'),Object.assign(Error('Too many requests'),{code:'429'}),Object.assign(Error('query replaced'),{name:'AbortError'})]){const h=harness();h.handler(()=>{throw error});await h.ui.ensure();assert.equal(h.calls.length,1);assert.equal(h.ui.state.results.length,0);assert.equal(h.ui.state.status,'error');}
+ const h=harness();h.handler(()=>{throw Object.assign(Error('statement limit'),{code:'57014'})});await h.ui.ensure();assert.equal(h.calls.length,2);assert.equal(h.ui.state.failures.length,1);assert.equal(h.ui.state.results.length,0);assert.match(h.ui.metric('charge'),/— \/ —/);await h.ui.ensure();assert.equal(h.calls.length,2,'render/ensure does not start another retry loop');
+ const invalid=harness();invalid.handler(q=>{if(invalid.calls.length===1)throw Error('读取超时');return response(q,undefined,{platform:p(B)})});await invalid.ui.ensure();assert.equal(invalid.calls.length,2);assert.equal(invalid.ui.state.results.length,0);assert.equal(invalid.ui.state.status,'error');assert.match(invalid.ui.state.failures[0].error,/响应范围或口径不一致/);
+});
+
+test('cancellation before the initial cohort finishes prevents the retry phase entirely',async()=>{
+ const h=harness(),late=deferred();h.select([p(),p(B)]);h.handler(q=>{if(q.platformId===A)throw Error('Synthetic timeout');return late.promise});const loading=h.ui.ensure();await tick();assert.equal(h.calls.length,2);h.ui.cancel();late.resolve(response(h.calls[1]));await loading;assert.equal(h.calls.length,2);assert.equal(h.ui.state.status,'paused');assert.equal(h.ui.state.results.length,0);
+});
+
+test('cancel or restored tabs during serial retry reject late results and prevent queued timeout retries',async()=>{
+ for(const action of ['cancel','restore']){const h=harness(),late=deferred();h.select([p(),p(B)]);h.handler(q=>{if(h.calls.length<=2)throw Error('Synthetic timeout');return late.promise});const loading=h.ui.ensure();await tick();assert.equal(h.calls.length,3);if(action==='cancel')h.ui.cancel();else h.ui.restore(null);late.resolve(response(h.calls[2]));await loading;assert.equal(h.calls.length,3);assert.equal(h.ui.state.results.length,0);assert.equal(h.ui.state.status,action==='cancel'?'paused':'idle');assert.match(h.ui.metric('charge'),/— \/ —/);}
+});
+
+test('changed scope during serial retry does not retry old queued platforms or overwrite newer scope results',async()=>{
+ const h=harness(),late=deferred();h.select([p(),p(B)]);h.handler(()=>{if(h.calls.length<=2)throw Error('Synthetic timeout');return late.promise});const first=h.ui.ensure();await tick();assert.equal(h.calls.length,3);const staleRequest=h.calls[2];h.L.multi.provider=['New Scope'];h.handler(q=>response(q,[row('2026-09-26','charge',{success_member_count:2}),row('2026-09-26','withdraw',{success_member_count:3})]));await h.ui.ensure();late.resolve(response(staleRequest));await first;
+ assert.equal(h.calls.length,5);assert(h.calls.slice(3).every(q=>q.providers[0]==='New Scope'));assert.equal(h.calls.filter(q=>q.platformId===B&&!q.providers?.length).length,1);assert.equal(h.ui.state.results.length,2);assert.equal(h.ui.platformMetric([A,B],'charge').value,4);assert.equal(h.ui.platformMetric([A,B],'withdraw').value,6);assert.equal(h.ui.state.failures.length,0);
+});
+
 test('multi-day timeout retries whole local days exactly once, preserving first/last partial days and provider union',async()=>{
  const h=harness();h.L.from='2026-09-26T05:00:00';h.L.to='2026-09-28T11:00:00';h.L.multi.provider=['Synthetic A Pay','Synthetic B Pay'];h.query({startAt:'2026-09-25T23:30:00Z',endAt:'2026-09-28T05:30:01Z'});
  h.handler(q=>{if(Date.parse(q.endAt)-Date.parse(q.startAt)>86400000)throw Object.assign(Error('Synthetic database timeout'),{code:'57014'});return dailyResponse(q)});
@@ -130,11 +165,11 @@ test('daily fallback boundaries use calendar days across DST, with no UTC 24-hou
 test('a failed fallback day excludes that entire platform, keeps other complete platforms as partial, and never splits into hours',async()=>{
  const h=harness();h.select([p(),p(B)]);h.L.to='2026-09-28T23:59:59';h.query({endAt:'2026-09-28T18:30:00Z'});
  h.handler(q=>{if(q.platformId===A&&Date.parse(q.endAt)-Date.parse(q.startAt)>86400000)throw Error('读取超时');if(q.platformId===A&&q.startAt==='2026-09-26T18:30:00.000Z')throw Error('Synthetic day timeout');return dailyResponse(q)});
- await h.ui.ensure();assert.equal(h.ui.state.status,'ready');assert.equal(h.ui.state.results.length,1);assert.equal(h.ui.state.results[0].platform.id,B);assert.equal(h.calls.filter(q=>q.platformId===A).length,3);assert.match(h.ui.metric('charge'),/36 \/ 27/);assert.match(h.ui.metric('charge'),/读取 1 \/ 2 平台.*部分数据/);h.ui.details();assert.match(h.drawers[0].body,/1\/3 天已读取，平台未计入合计/);
+ await h.ui.ensure();assert.equal(h.ui.state.status,'ready');assert.equal(h.ui.state.results.length,1);assert.equal(h.ui.state.results[0].platform.id,B);assert.equal(h.calls.filter(q=>q.platformId===A).length,4);assert.deepEqual(h.calls.at(-1),h.calls[0],'one bounded serial retry uses the original request, without another daily fallback');assert.match(h.ui.metric('charge'),/36 \/ 27/);assert.match(h.ui.metric('charge'),/读取 1 \/ 2 平台.*部分数据/);h.ui.details();assert.match(h.drawers[0].body,/1\/3 天已读取，平台未计入合计/);
 });
 
-test('fallback retries only timeout errors over multiple days, never a single day or invalid response',async()=>{
- for(const [multiple,message]of [[false,'Synthetic timeout'],[true,'permission denied']]){const h=harness();if(multiple){h.L.to='2026-09-27T23:59:59';h.query({endAt:'2026-09-27T18:30:00Z'});}h.handler(()=>{throw Error(message)});await h.ui.ensure();assert.equal(h.calls.length,1);assert.equal(h.ui.state.status,'error');}
+test('daily fallback is only for multi-day timeouts; single-day timeout has just one serial retry, while invalid responses do not',async()=>{
+ for(const [multiple,message,calls]of [[false,'Synthetic timeout',2],[true,'permission denied',1]]){const h=harness();if(multiple){h.L.to='2026-09-27T23:59:59';h.query({endAt:'2026-09-27T18:30:00Z'});}h.handler(()=>{throw Error(message)});await h.ui.ensure();assert.equal(h.calls.length,calls);assert.equal(h.ui.state.status,'error');}
  const h=harness();h.L.to='2026-09-27T23:59:59';h.query({endAt:'2026-09-27T18:30:00Z'});h.handler(q=>response(q));await h.ui.ensure();assert.equal(h.calls.length,1);assert.equal(h.ui.state.status,'error');
 });
 

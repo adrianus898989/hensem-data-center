@@ -59,12 +59,13 @@
   const retry=s=>s.status==='error'||s.status==='paused'||s.failures.length?' <button type="button" class="link" onclick="liveMemberCountsRetry()">重试</button>':'';
   function cancel(){serial++;pending=null;waiters.splice(0).forEach(wake=>wake());if(S.status==='loading')S={...S,status:'paused',results:[],error:'人数读取已暂停'};}
   async function limitedRequest(request,id){while(inFlight>=2){if(!valid(id))throw Error('人数查询已替换');await new Promise(resolve=>waiters.push(resolve));}if(!valid(id))throw Error('人数查询已替换');inFlight++;try{return await c.request(request)}finally{inFlight--;waiters.splice(0).forEach(wake=>wake());}}
+  async function readExact(item,id){const response=await limitedRequest(item.request,id);if(!valid(id))throw Error('人数查询已替换');return validate(response,item);}
   async function readPlatform(item,id){
-   try{const response=await limitedRequest(item.request,id);if(!valid(id))throw Error('人数查询已替换');return validate(response,item);}
+   try{return await readExact(item,id);}
    catch(error){
     if(!valid(id)||!timedOut(error)||item.days.length<2)throw error;
     const slices=dailySlices(item),parts=[];
-    for(const slice of slices){if(!valid(id))throw Error('人数查询已替换');try{const response=await limitedRequest(slice.request,id);if(!valid(id))throw Error('人数查询已替换');parts.push(validate(response,slice));}catch(failure){if(!valid(id))throw failure;throw Error(slice.days[0]+'：'+(failure?.message||'人数读取失败')+'（'+parts.length+'/'+slices.length+' 天已读取，平台未计入合计）');}}
+    for(const slice of slices){if(!valid(id))throw Error('人数查询已替换');try{parts.push(await readExact(slice,id));}catch(failure){if(!valid(id))throw failure;throw Object.assign(Error(slice.days[0]+'：'+(failure?.message||'人数读取失败')+'（'+parts.length+'/'+slices.length+' 天已读取，平台未计入合计）'),{code:failure?.code});}}
     // Publish only a complete platform. Distinct counts within a day are never added.
     return {platform:parts[0].platform,rows:parts.flatMap(part=>part.rows),sourceCompletenessVerified:parts.every(part=>part.sourceCompletenessVerified),frequencySupported:parts.every(part=>part.frequencySupported)};
    }
@@ -76,9 +77,14 @@
    const id=++serial;S={...initial(),status:'loading',key:q.key,items:q.items,unsupported:q.unsupported};c.render();
    const run=(async()=>{
     if(!q.items.length){S={...S,status:'ready'};c.render();return;}
-    let index=0;
-    async function worker(){while(index<q.items.length&&valid(id)){const item=q.items[index++];try{const result=await readPlatform(item,id);if(!valid(id))return;S.results.push(result);}catch(error){if(!valid(id))return;S.failures.push({id:item.platform.id,name:item.platform.name,error:error?.message||'人数读取失败'});}if(valid(id))c.render();}}
-    await Promise.all(Array.from({length:Math.min(2,q.items.length)},()=>worker()));if(!valid(id))return;S={...S,status:S.failures.length&&!S.results.length?'error':'ready',error:S.failures.length&&!S.results.length?'所选平台人数读取失败':''};c.render();
+    let index=0;const timedOutItems=[];
+    const failure=(item,error)=>({id:item.platform.id,name:item.platform.name,error:error?.message||'人数读取失败'});
+    async function worker(){while(index<q.items.length&&valid(id)){const item=q.items[index++];try{const result=await readPlatform(item,id);if(!valid(id))return;S.results.push(result);}catch(error){if(!valid(id))return;S.failures.push(failure(item,error));if(timedOut(error))timedOutItems.push(item);}if(valid(id))c.render();}}
+    await Promise.all(Array.from({length:Math.min(2,q.items.length)},()=>worker()));if(!valid(id))return;
+    // Finish the initial cohort before one serial retry of failed timeout scopes.
+    // Retry the original request only: no successful platform reads or extra fallback.
+    for(const item of timedOutItems){if(!valid(id))return;try{const result=await readExact(item,id);if(!valid(id))return;S.results.push(result);S.failures=S.failures.filter(row=>row.id!==item.platform.id);}catch(error){if(!valid(id))return;const message=error?.message||'人数读取失败';S.failures=S.failures.map(row=>row.id===item.platform.id?{...row,error:row.error===message?message:row.error+'；重试失败：'+message}:row);}if(valid(id))c.render();}
+    if(!valid(id))return;S={...S,status:S.failures.length&&!S.results.length?'error':'ready',error:S.failures.length&&!S.results.length?'所选平台人数读取失败':''};c.render();
    })();pending=run;run.finally(()=>{if(id===serial)pending=null});return run;
   }
   function aggregate(s,direction,basis){const all=s.results.flatMap(r=>r.rows.filter(row=>row.direction===direction)),unavailable=all.filter(row=>row[basis+'_available']===false),rows=all.filter(row=>row[basis+'_available']!==false),members=rows.reduce((n,r)=>n+r[basis+'_member_count'],0),orders=rows.reduce((n,r)=>n+r[basis+'_order_count'],0),missing=rows.reduce((n,r)=>n+r[basis+'_missing_member_count'],0),received=s.results.filter(r=>r.rows.some(row=>row.direction===direction&&row[basis+'_available']!==false)).length,expected=s.items.length+s.unsupported.length,partial=received<expected||missing>0;return {members,orders,missing,received,expected,partial,unavailable:[...new Set(unavailable.map(row=>unavailableReason(row,basis)))],display:received===0||members===0&&partial?'—':C(members)};}
