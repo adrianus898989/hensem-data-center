@@ -2,7 +2,8 @@
 import {useState} from "react";
 import type {DashboardSession} from "@/lib/dashboardAuthClient";
 import {dashboardRoleAllows,type DashboardRoleAccess} from "@/lib/dashboardRoleAccess";
-import {dashboardRolePages,dashboardRoleRequest,type DashboardCustomRole,type DashboardRoleAccount} from "@/lib/dashboardRoleClient";
+import {dashboardRoleRequest,type DashboardCustomRole,type DashboardRoleAccount} from "@/lib/dashboardRoleClient";
+import { dashboardRoleDisplayPages } from "@/lib/dashboardRoleDisplay";
 import AccountEditorDialog from "./AccountEditorDialog";
 
 export default function AccountAssignedRoleDialog({session,account,roles,roleAccess,isOwner,editable,onSaved,onClose}:{
@@ -21,8 +22,8 @@ export default function AccountAssignedRoleDialog({session,account,roles,roleAcc
  }
  return <AccountEditorDialog title={"目录权限 · "+account.username} busy={busy} onClose={onClose}>
   <p>当前角色：<b>{current?.name||"未分配角色"}</b>。此页面显示实际生效的新版目录权限。</p>
-  {current&&<div className="admin-module-permission-grid">{Array.from(new Set(dashboardRolePages.map(page=>page.moduleId))).map(moduleId=>{
-   const pages=dashboardRolePages.filter(page=>page.moduleId===moduleId),codes=pages.flatMap(page=>page.actions.map(action=>page.id+"."+action.id));
+  {current&&<div className="admin-module-permission-grid">{Array.from(new Set(dashboardRoleDisplayPages.map(page=>page.moduleId))).map(moduleId=>{
+   const pages=dashboardRoleDisplayPages.filter(page=>page.moduleId===moduleId),codes=pages.flatMap(page=>page.actions.map(action=>page.id+"."+action.id));
    return <span className="admin-module-permission-chip" key={moduleId}><span>{pages[0].moduleLabel}</span><b>{current.active?codes.filter(code=>current.permissions.includes(code)).length:0}/{codes.length}</b></span>;
   })}</div>}
   {error&&<p role="alert" className="admin-account-feedback error">{error}</p>}

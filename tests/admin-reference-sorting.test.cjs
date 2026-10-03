@@ -28,8 +28,8 @@ test('overview dimensions sort complete records before independent pagination; n
 
 test('team and merchant tables share raw numeric ordering without changing their displayed or aggregated fields',async()=>{
  for(const page of ['teamops','teamcountries','teamplatforms','merchants']){
-  const h=await setup(page),before=h.calls.length,merchant=page==='merchants',id=merchant?'merchant-platforms-unified':'business-dimension-charge',getTable=()=>merchant?sortedTable(h,id):section(h,id),original=JSON.stringify(h.L.results);assert.match(getTable(),/liveReferenceTableSort/);sort(h,id,merchant?1:2);
-  const shown=rows(getTable());if(page==='teamcountries')assert.equal(shown.length,1);else if(merchant){const raw=rawRows(getTable());assert.deepEqual(raw.map(r=>plain(r[0].match(/<strong\b[^>]*>([\s\S]*?)<\/strong>/)[1])),['Large','Unknown','Small']);assert.deepEqual(raw.map(r=>plain(r[1].match(/<strong>([\s\S]*?)<\/strong>/)[1])),['10,000.00','2,000.00','1,000.00']);assert.deepEqual(raw.map(r=>r[1].match(/>([\d,]+) 笔<\/small>/)[1]),['100','20','10']);assert.equal(JSON.stringify(h.L.results),original,'paired amount/count sorting never rewrites source facts');}else assert.deepEqual(shown.map(r=>r[0]),['Large','Unknown','Small']);
+  const h=await setup(page),before=h.calls.length,merchant=page==='merchants',id=merchant?'merchant-platforms-unified':'business-dimension-charge',getTable=()=>merchant?sortedTable(h,id):section(h,id),original=JSON.stringify(h.L.results);assert.match(getTable(),/liveReferenceTableSort/);sort(h,id,merchant?3:2);
+  const shown=rows(getTable());if(page==='teamcountries')assert.equal(shown.length,1);else if(merchant){const raw=rawRows(getTable());assert.deepEqual(raw.map(r=>plain(r[0].match(/<strong\b[^>]*>([\s\S]*?)<\/strong>/)[1])),['Large','Unknown','Small']);assert.deepEqual(raw.map(r=>plain(r[3])),['10,000.00','2,000.00','1,000.00']);assert.deepEqual(raw.map(r=>plain(r[4])),['100','20','10']);assert.equal(JSON.stringify(h.L.results),original,'independent amount/count sorting never rewrites source facts');}else assert.deepEqual(shown.map(r=>r[0]),['Large','Unknown','Small']);
   assert.equal(h.calls.length,before);
  }
 });
@@ -47,7 +47,7 @@ test('hour and amount sorting retain exact segments and inline expansion while s
 });
 
 test('page snapshots retain reference sort state independently of later table changes',async()=>{
- const h=await setup('merchants'),id='merchant-platforms-unified';sort(h,id,2);const saved=JSON.parse(JSON.stringify(h.L.tablePages));assert.deepEqual(saved['sort:'+id],{column:2,ascending:false});
+ const h=await setup('merchants'),id='merchant-platforms-unified';sort(h,id,5);const saved=JSON.parse(JSON.stringify(h.L.tablePages));assert.deepEqual(saved['sort:'+id],{column:5,ascending:false});
  h.c.setPage('time');h.L.tablePages['sort:'+id]={column:0,ascending:true};h.c.setPage('merchants');
  assert.deepEqual(JSON.parse(JSON.stringify(h.L.tablePages['sort:'+id])),saved['sort:'+id]);
 });

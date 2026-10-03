@@ -88,6 +88,7 @@ test('backend settings show actual roles and route assigned/unassigned accounts 
   if(name==='./AccountAssignedRoleDialog')return{default:function AccountAssignedRoleDialog(){}};
   if(name.endsWith('/dashboardRoleAccess'))return{dashboardRoleAllows:(access,page,action='view')=>!!access&&access.canView&&(access.mode!=='assigned'||access.permissions.includes(page+'.view')&&access.permissions.includes(page+'.'+action))};
   if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async()=>{calls.push('list');return [target]},listDashboardAudit:async()=>{calls.push('audit');return[]},getDashboardHistoryStatus:async()=>{calls.push('history')},getDashboardIpSettings:async()=>{calls.push('ip')}};
+  if(name.endsWith('/dashboardRoleDisplay'))return require('./load-role-display.cjs');
   if(name.endsWith('/dashboardRoleClient'))return{dashboardRolePages:require('../src/lib/dashboardRoleCatalog.json').pages,dashboardRoleRequest:async(current,request)=>{
    assert.equal(current.user.id,actor.auth_user_id);assert.equal(actor.role,'owner');assert.deepEqual(plain(request),{operation:'list'});calls.push('roles');
    return{roles:[{id:'33333333-3333-4333-8333-333333333333',name:'VIP',description:'',active:true,version:1,permissions:['providers.view']}],accounts:[{...target,role_id:assigned?'33333333-3333-4333-8333-333333333333':null,assignment_version:2}]};

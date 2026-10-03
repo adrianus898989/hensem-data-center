@@ -5,7 +5,8 @@ import "./AdminControlCenter.css";
 import AccountAssignedRoleDialog from "./AccountAssignedRoleDialog";
 import AccountIpAdmin from "./AccountIpAdmin";
 import { dashboardRoleAllows, type DashboardRoleAccess } from "@/lib/dashboardRoleAccess";
-import { dashboardRolePages, dashboardRoleRequest, type DashboardCustomRole, type DashboardRoleAccount, type DashboardRoleResponse } from "@/lib/dashboardRoleClient";
+import { dashboardRoleRequest, type DashboardCustomRole, type DashboardRoleAccount, type DashboardRoleResponse } from "@/lib/dashboardRoleClient";
+import { dashboardRoleDisplayPages, dashboardRoleDisplayPermissionCount, dashboardRoleDisplayPageCount } from "@/lib/dashboardRoleDisplay";
 import AccountEditorDialog from "./AccountEditorDialog";
 import AccountLoginPolicy, {type AccountLoginSnapshot} from "./AccountLoginPolicy";
 import { DASHBOARD_DATA_GROUPS, dashboardScopeLabel, effectiveDashboardDataScope, isDashboardDataScopeSubset, normalizeDashboardDataScope, type DashboardDataScope } from "@/lib/dashboardDataScope";
@@ -322,7 +323,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     if (account?.role_id === null) return {label: "未分配新版角色", detail: identity, summary: "现有授权保持不变；分配新版角色并保存后生效"};
     const role = account?.role_id ? data?.roles?.find(role => role.id === account.role_id) : undefined;
     if (role) return {label: role.name, detail: `${identity} · ${role.active ? "角色授权" : "角色已停用"}`,
-      summary: role.active ? `角色配置：${role.permissions.filter(code => code.endsWith(".view")).length} 个目录 · ${role.permissions.length} 项权限` : "角色已停用"};
+      summary: role.active ? `角色配置：${dashboardRoleDisplayPageCount(role.permissions)} 个目录 · ${dashboardRoleDisplayPermissionCount(role.permissions)} 项权限` : "角色已停用"};
     const unavailable = roleDirectory.scope === directoryScope && roleDirectory.status === "error";
     return {label: roleLabel(user.role), detail: identity, summary: unavailable ? "角色读取失败，请刷新列表" : "角色待核对"};
   }
@@ -341,7 +342,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     return Boolean(account && (account.role_id===null || accountAssignedRole(user)));
   }
   function assignedModuleCount(role: DashboardCustomRole,moduleId:string) {
-    const codes=dashboardRolePages.filter(page=>page.moduleId===moduleId).flatMap(page=>page.actions.map(action=>page.id+"."+action.id));
+    const codes=dashboardRoleDisplayPages.filter(page=>page.moduleId===moduleId).flatMap(page=>page.actions.map(action=>page.id+"."+action.id));
     return {enabled:role.active?codes.filter(code=>role.permissions.includes(code)).length:0,total:codes.length};
   }
 
@@ -465,7 +466,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   const creationRoles = creationRolesReady ? (roleDirectory.data?.roles || []).filter(role => role.active
     && (isOwner || assignedActor && role.permissions.every(permission => roleAccess.permissions.includes(permission)))) : [];
   const selectedCreationRole = creationRoles.find(role => role.id === newRoleId);
-  const selectedCreationPages = selectedCreationRole ? dashboardRolePages.filter(page => selectedCreationRole.permissions.includes(page.id + ".view")) : [];
+  const selectedCreationPages = selectedCreationRole ? dashboardRoleDisplayPages.filter(page => selectedCreationRole.permissions.includes(page.id + ".view")) : [];
 
   if (!open || !canEnterAdmin) return null;
 
@@ -680,7 +681,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
               <div>{tab === "accounts" ? <><h3>账号列表</h3><p>建立账号，管理角色、启停状态、数据范围与密码。</p></> : <><h3>按模块、页面和具体操作配置权限</h3><p>按新版角色统一配置页面与操作；数据范围独立设置。</p></>}</div>
               <div className="admin-account-toolbar-actions"><button type="button" className="admin-light-btn" disabled={loading || !canUseAccountAction("view")} onClick={() => void loadUsers()}>{loading ? "读取中…" : manualQuery && !directoryReady ? "查询账号" : "刷新列表"}</button>{tab === "accounts" && <button type="button" className="admin-account-create-toggle" aria-haspopup="dialog" disabled={loading || Boolean(savingUser) || !canCreateRoleAccount} onClick={() => { if (!canCreateRoleAccount) return; setMessage(""); setNewRoleId(""); setCreateOpen(true); if (!creationRolesReady) void loadUsers(); }}>+ 新建账号</button>}</div>
             </div>
-            {tab === "permissions" ? <div className="admin-permission-overview"><div><b>{directoryReady ? users.length : "—"}</b> 当前账号</div><div><b>{new Set(dashboardRolePages.map(page => page.moduleId)).size}</b> 权限模块</div><div><b>{dashboardRolePages.reduce((sum, page) => sum + page.actions.length, 0)}</b> 权限项</div><div><b>{dashboardRolePages.filter(page => page.moduleId === "system").reduce((sum, page) => sum + page.actions.length, 0)}</b> 后台权限</div><span>权限项与现有系统一致，不新增授权范围</span></div> : <div className="admin-permission-overview admin-account-overview"><div><b>{directoryReady ? users.length : "—"}</b> 全部账号</div><div><b>{directoryReady ? stats.owners : "—"}</b> 总管理员</div><div><b>{directoryReady ? stats.admins : "—"}</b> 管理员</div><div><b>{directoryReady ? stats.viewers : "—"}</b> 查看账号</div><div><b>{directoryReady ? stats.disabled : "—"}</b> 已停用</div></div>}
+            {tab === "permissions" ? <div className="admin-permission-overview"><div><b>{directoryReady ? users.length : "—"}</b> 当前账号</div><div><b>{new Set(dashboardRoleDisplayPages.map(page => page.moduleId)).size}</b> 权限模块</div><div><b>{dashboardRoleDisplayPages.reduce((sum, page) => sum + page.actions.length, 0)}</b> 权限项</div><div><b>{dashboardRoleDisplayPages.filter(page => page.moduleId === "system").reduce((sum, page) => sum + page.actions.length, 0)}</b> 后台权限</div><span>权限项与现有系统一致，不新增授权范围</span></div> : <div className="admin-permission-overview admin-account-overview"><div><b>{directoryReady ? users.length : "—"}</b> 全部账号</div><div><b>{directoryReady ? stats.owners : "—"}</b> 总管理员</div><div><b>{directoryReady ? stats.admins : "—"}</b> 管理员</div><div><b>{directoryReady ? stats.viewers : "—"}</b> 查看账号</div><div><b>{directoryReady ? stats.disabled : "—"}</b> 已停用</div></div>}
           {tab === "accounts" && createOpen && canCreateRoleAccount && <AccountEditorDialog title="新建后台账号" busy={createBusy} onClose={closeCreate} bodyClassName="admin-users-compact"><section id="admin-create-account" className="admin-create-card-v249 admin-account-create-panel">
             {message && <p role="alert" className="admin-account-feedback error">{message}</p>}
             <fieldset disabled={createBusy}>
@@ -690,11 +691,11 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
               <label htmlFor="admin-new-role">新版角色</label>
               <div className="admin-account-role-create-row"><select id="admin-new-role" value={newRoleId} disabled={!creationRolesReady} onChange={event => setNewRoleId(event.target.value)}>
                 <option value="">{creationRolesReady ? "请选择角色" : roleDirectory.status === "error" ? "角色读取失败，请刷新" : "正在读取新版角色…"}</option>
-                {creationRoles.map(role => <option key={role.id} value={role.id}>{role.name} · {role.permissions.length} 项权限</option>)}
+                {creationRoles.map(role => <option key={role.id} value={role.id}>{role.name} · {dashboardRoleDisplayPermissionCount(role.permissions)} 项权限</option>)}
               </select>
               <button type="button" className="admin-light-btn" disabled={createBusy || loading} onClick={() => void loadUsers()}>刷新角色</button></div>
-              <p className="admin-account-edit-hint" role="status">{selectedCreationRole ? selectedCreationRole.permissions.length
-                ? `${selectedCreationRole.name}：${selectedCreationPages.length} 个页面、${selectedCreationRole.permissions.length} 项权限；后续随该角色统一更新。`
+              <p className="admin-account-edit-hint" role="status">{selectedCreationRole ? dashboardRoleDisplayPermissionCount(selectedCreationRole.permissions)
+                ? `${selectedCreationRole.name}：${selectedCreationPages.length} 个页面、${dashboardRoleDisplayPermissionCount(selectedCreationRole.permissions)} 项权限；后续随该角色统一更新。`
                 : `${selectedCreationRole.name}：0 项权限。账号保持启用，角色开放权限后才能进入相应页面。`
                 : "请明确选择新版角色，账号权限与该角色同步。"}</p>
               {selectedCreationPages.length > 0 && <div className="admin-account-permission-summary">{selectedCreationPages.map(page => page.label).join(" / ")}</div>}
@@ -718,16 +719,16 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
               {filteredUsers.map((user) => {
                 const customRole = accountAssignedRole(user);
                 const roleUnverified = canManageUsers && user.role !== "owner" && !accountRoleVerified(user);
-                const permissionTotal = dashboardRolePages.flatMap(page=>page.actions).length;
-                const enabled = user.role === "owner" ? permissionTotal : customRole?.active ? customRole.permissions.length : 0;
+                const permissionTotal = dashboardRoleDisplayPages.flatMap(page=>page.actions).length;
+                const enabled = user.role === "owner" ? permissionTotal : customRole?.active ? dashboardRoleDisplayPermissionCount(customRole.permissions) : 0;
                 const editable = canEditTarget(user);
                 const canConfigureTargetRole = editable && (!customRole || isOwner || assignedActor);
                 const expanded = tab === "accounts" && editable && canOpenAccountSettings && editingUsername === user.username;
                 const editId = `admin-account-edit-${user.auth_user_id}`;
                 return <Fragment key={user.auth_user_id}><tr className={expanded ? "is-editing" : ""}>
                   <th scope="row"><div className="admin-matrix-identity"><div><strong>{user.username}</strong>{user.role === "owner" && <span className="admin-matrix-protected">锁定</span>}</div><div className="admin-matrix-identity-meta"><span className={`admin-user-role ${user.role}`}>{accountRoleDisplay(user).label}</span><span className={user.active ? "admin-user-state active" : "admin-user-state off"}>{user.active ? "正常" : "停用"}</span></div><small>{accountRoleDisplay(user).detail}</small>{tab === "accounts" && canViewLoginSecurity && <small>{loginSnapshot.status==="ready"&&loginSnapshot.states[user.auth_user_id]?`${loginSnapshot.states[user.auth_user_id].locked?"自动锁定 · ":""}失败 ${loginSnapshot.states[user.auth_user_id].failed_count} / ${loginSnapshot.states[user.auth_user_id].failure_limit??loginSnapshot.failureLimit??"—"}`:"登录状态待读取"}</small>}</div></th>
-                  <td><div className="admin-account-scope-summary" title={dashboardScopeLabel(accountStoredScope(user))}><b>数据范围</b><span>{dashboardScopeLabel(accountStoredScope(user))}</span></div>{tab === "permissions" && !roleUnverified && (customRole || user.role === "owner") ? <div className="admin-module-permission-grid">{Array.from(new Map(dashboardRolePages.map(page=>[page.moduleId,{id:page.moduleId,label:page.moduleLabel}])).values()).map((module) => {
-                    const total = dashboardRolePages.filter(page=>page.moduleId===module.id).reduce((sum,page)=>sum+page.actions.length,0);
+                  <td><div className="admin-account-scope-summary" title={dashboardScopeLabel(accountStoredScope(user))}><b>数据范围</b><span>{dashboardScopeLabel(accountStoredScope(user))}</span></div>{tab === "permissions" && !roleUnverified && (customRole || user.role === "owner") ? <div className="admin-module-permission-grid">{Array.from(new Map(dashboardRoleDisplayPages.map(page=>[page.moduleId,{id:page.moduleId,label:page.moduleLabel}])).values()).map((module) => {
+                    const total = dashboardRoleDisplayPages.filter(page=>page.moduleId===module.id).reduce((sum,page)=>sum+page.actions.length,0);
                     const count = customRole ? assignedModuleCount(customRole,module.id) : {enabled:total,total};
                     const state = count.enabled === count.total ? "all" : count.enabled === 0 ? "none" : "partial";
                     return <button type="button" key={module.id} className={`admin-module-permission-chip ${state} module-${module.id}`} aria-label={`${user.username} · ${module.label}，已开 ${count.enabled} / ${count.total} 项，查看权限`} aria-haspopup="dialog" disabled={!canConfigureAccount} onClick={() => canConfigureAccount && setPermissionTarget({ username: user.username, module: module.id })}><span>{module.label}</span><b>{count.enabled}<small>/{count.total}</small></b></button>;

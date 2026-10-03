@@ -47,6 +47,23 @@ test('original USDT labels are escaped, missing evidence stays missing, and know
  assert.match(h.api.reason({provider:'USDT',raw_provider:null}),/原始通道未提供/);assert.equal(h.api.reason({provider:'UniPayUSDT',raw_provider:'UniPayUSDT',channel_type:'USDT'}),'按原始三方展示');
 });
 
+test('an explicit merchant-row currency limits authorized targets, counts, pages and requests without mixing another currency',async()=>{
+ const h=fixture();h.records.a=h.records.a.map((r,i)=>({...r,currency:i<23?'INR':'USDT'}));h.records.b=h.records.b.map(r=>({...r,currency:'INR'}));h.L.results[0].groups.provider=[{provider:'USDT',direction:'charge',currency:'INR',all_count:23,success_count:23},{provider:'USDT',direction:'charge',currency:'USDT',all_count:2,success_count:2}];h.L.results[1].groups.provider[0].currency='INR';
+ h.setHandler(q=>{const rows=h.records[q.platformId].filter(r=>r.currency===q.currency);return {total:rows.length,rows:rows.slice(q.offset,q.offset+q.limit)}});const before=JSON.stringify(h.L);
+ await h.api.open('USDT','','charge','','INR');assert.match(h.html(),/26 笔 · 按平台分页/);assert.equal(h.requests[0].platformId,'a');assert.equal(h.requests[0].currency,'INR');assert.match(h.html(),/SYNTHETIC-a-19/);assert.doesNotMatch(h.html(),/SYNTHETIC-a-23|SYNTHETIC-a-24/);
+ await h.root.liveProviderOrderPage(2);assert(h.requests.every(q=>q.currency==='INR'));assert.match(h.html(),/SYNTHETIC-a-22/);assert.match(h.html(),/SYNTHETIC-b-2/);assert.doesNotMatch(h.html(),/SYNTHETIC-a-23|SYNTHETIC-a-24/);assert.equal(JSON.stringify(h.L),before);
+ await h.api.open('USDT','','charge','','USDT');assert.equal(h.requests.at(-1).platformId,'a');assert.equal(h.requests.at(-1).currency,'USDT');assert.match(h.html(),/2 笔 · 按平台分页/);assert.match(h.html(),/SYNTHETIC-a-23/);assert.match(h.html(),/SYNTHETIC-a-24/);assert.doesNotMatch(h.html(),/SYNTHETIC-b-|value="b"/);const calls=h.requests.length;await h.root.liveProviderOrderPlatform('b');await h.root.liveProviderOrderPlatform('unqueried-platform');assert.equal(h.requests.length,calls);
+});
+
+test('unknown, invalid and unobserved explicit currencies never fall back to the current dashboard currency',async()=>{
+ const h=fixture();for(const currency of [null,'','inr','INR<script>']){await h.api.open('USDT','','charge','',currency);assert.match(h.html(),/币种未确认/);assert.equal(h.requests.length,0);}
+ await h.api.open('USDT','','charge','','INR');assert.match(h.html(),/已查询结果没有该三方与币种/);assert.equal(h.requests.length,0,'provider groups with missing currency are not silently labelled INR from L.currency');assert.doesNotMatch(h.html(),/0 笔|<table>/);
+});
+
+test('currency-scoped detail responses with missing or another currency remain errors rather than displayed mixed records',async()=>{
+ const h=fixture();h.L.results[1].groups.provider[0].currency='INR';for(const currency of [undefined,'USDT']){h.setHandler(()=>({total:3,rows:h.records.b.map(r=>({...r,currency}))}));await h.api.open('USDT','','charge','b','INR');assert.equal(h.requests.at(-1).currency,'INR');assert.match(h.html(),/订单币种与汇总行不一致/);assert.match(h.html(),/>重试<\/button>/);assert.doesNotMatch(h.html(),/<table>|SYNTHETIC-b-/);}
+});
+
 const shared=fs.readFileSync(path.join(__dirname,'admin-provider-payout.test.cjs'),'utf8').split(/\ntest\(/)[0];
 const {fixture:summaryFixture,order}=new Function('require','__dirname',shared+';return {fixture,order};')(require,__dirname);
 test('USDT summary has a visible original-channel entry and platform rows carry only their stable IDs',()=>{
