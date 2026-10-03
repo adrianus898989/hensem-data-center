@@ -157,6 +157,35 @@
  }
 
  function estimate(row,rates,country){return estimateFacts(row,rates,country).amount}
+ const feeEvidenceLabels={missing_effective_time:'缺少生效时间',missing_effective_column:'缺少生效时间列',invalid_effective_time:'生效时间格式无效',ambiguous_effective_column:'生效时间列不唯一',inherited_fee_without_time_proof:'继承费率缺少生效凭证',same_effective_time_conflict:'同一生效时间费率冲突',backdated_version_rejected:'回填时间早于已发布版本',unknown_currency:'费率币种未确认',invalid_currency:'费率币种无效',ambiguous_currency_column:'币种列不唯一',ambiguous_source_rule:'同一来源费率冲突',unknown_source_identity:'费率来源未确认'};
+ function feeEvidenceSource(record,evidence){
+  const proof=evidence?.source||{},sheet=String(proof.sheetName||record.sheetName||'原表'),cell=String(proof.effectiveCell||'').trim();
+  return sheet+(cell?' '+cell:record.sourceRow!=null?' 第 '+record.sourceRow+' 行':'');
+ }
+ function feeHistoryDiagnosis(row,candidates,unmatched){
+  if(!(unmatched>0)||!candidates.length)return null;
+  const evidence=candidates.map(record=>({record,evidence:record.feeEffective?.[row.direction]}));
+  // Current source evidence explains a missing version only when every
+  // applicable candidate agrees. Absent/ready/mixed evidence cannot identify
+  // the cause of an unmatched historical order.
+  const state=evidence[0].evidence?.state;
+  if(!feeEvidenceLabels[state]||evidence.some(x=>x.evidence?.state!==state||x.evidence.versionId!=null
+   ||state==='missing_effective_time'&&x.evidence.effectiveFrom!=null))return null;
+  return {provider:row.provider,platform:row.platform||'未提供平台',count:unmatched,reason:state,
+   sources:[...new Set(evidence.map(x=>feeEvidenceSource(x.record,x.evidence)))]};
+ }
+ function feeHistoryLabel(row){
+  const diagnostics=row.fee_history_diagnostics||[],unmatched=Math.max(0,Number(row.fee_eligible_count||0)-Number(row.fee_matched_count||0));
+  const reasons=new Set(diagnostics.map(x=>x.reason)),covered=diagnostics.reduce((n,x)=>n+Number(x.count||0),0);
+  return Number(row.fee_matched_count)>0?'部分':reasons.size===1&&covered===unmatched&&unmatched>0
+   ?feeEvidenceLabels[diagnostics[0].reason]||'历史费率未匹配':'历史费率未匹配';
+ }
+ function feeEvidenceCells(record,direction){
+  const evidence=record.feeEffective?.[direction],state=evidence?.state;
+  const label=state==='ready'&&evidence.versionId?'已发布生效版本':feeEvidenceLabels[state]||'历史生效信息未提供';
+  const source=feeEvidenceSource(record,evidence);
+  return {label,detail:source+(evidence?.effectiveFrom?' · '+evidence.effectiveFrom:' · 未提供生效时间')};
+ }
  // Each value must come from one backend aggregate over the full requested
  // range. Distinct order counts cannot be added across days or provider aliases.
  function uniqueWorkorderFacts(records){
@@ -215,13 +244,14 @@
  // Applying one rate after a merge would misprice platform-specific and fixed fees.
  function feeFacts(items,rates,country,successCount){
   if(items.some(item=>item.success_count===null))return {estimated_fee:null,fee_matched_count:0,fee_issues:[],fee_exclusions:[],fee_eligible_count:null,fee_applicable_count:null,fee_excluded_count:0,fee_complete:false,fee_unknown:true,fee_rate_label:'成功时间口径未提供'};
-  let matched=0,amount=0,excluded=0;const labels=new Set(),references=new Set(),issues=[],exclusions=[];
+  let matched=0,amount=0,excluded=0;const labels=new Set(),references=new Set(),issues=[],exclusions=[],historyDiagnostics=[];
   for(const item of items){
    if(feeExempt(item.provider)){excluded+=Number(item.success_count||0);exclusions.push({provider:item.provider,count:Number(item.success_count||0)});continue}
    const localCountry=item.country||country,payout=item.direction==='withdraw';
    const fact=estimateFacts(item,rates,localCountry),unmatched=Math.max(0,Number(item.success_count||0)-fact.matched);
    if(unmatched)for(const gap of fact.issues||[{reason:fact.reason||'missing_rate',count:unmatched}])issues.push({provider:item.provider,platform:item.platform||'未提供平台',reason:gap.reason,count:gap.count});
    const candidates=fact.exemptOnly?[]:feeCandidates(item,rates,localCountry),values=new Map();
+   const diagnosis=feeHistoryDiagnosis(item,candidates,unmatched);if(diagnosis)historyDiagnostics.push(diagnosis);
    for(const r of candidates){const parsed=parseFee(r[payout?'payoutFee':'collectFee'],r[payout?'payoutSingleFee':'collectSingleFee']);if(parsed)values.set(JSON.stringify(parsed),parsed);else values.set('unknown',null)}
    if(fact.label)labels.add(fact.label);
    const tier=tieredFeeRule(item,localCountry);
@@ -235,13 +265,14 @@
   if(hasUnattributed){labels.add('未匹配');issues.push({provider:'未分配三方',platform:'未提供平台',reason:'missing_provider_breakdown',count:successCount-items.reduce((n,r)=>n+Number(r.success_count||0),0)})}
   const exemptOnly=items.length>0&&items.every(r=>feeExempt(r.provider))&&!hasUnattributed;
   return {estimated_fee:exemptOnly?null:matched>0?amount:successCount===0?0:null,fee_matched_count:matched,
-   fee_issues:mergeFeeIssues(issues),fee_exclusions:mergeFeeIssues(exclusions),fee_eligible_count:eligible,fee_applicable_count:eligible,fee_excluded_count:excluded,fee_complete:matched===eligible,
+   fee_issues:mergeFeeIssues(issues),fee_exclusions:mergeFeeIssues(exclusions),fee_history_diagnostics:historyDiagnostics,fee_eligible_count:eligible,fee_applicable_count:eligible,fee_excluded_count:excluded,fee_complete:matched===eligible,
    fee_rate_label:exemptOnly?'不适用':[...labels].sort().join(' / ')||'未匹配',
    fee_reference_label:exemptOnly?'不适用':[...references].sort().join(' / ')||'未匹配'};
  }
  function feeSummary(rows){
   const total=(rows||[]).reduce((s,r)=>{s.successCount+=Number(r.fee_eligible_count??r.success_count??0);s.excludedCount+=Number(r.fee_excluded_count||0);s.matchedCount+=Number(r.fee_matched_count||0);if(r.estimated_fee!=null)s.amount+=Number(r.estimated_fee);return s},{amount:0,matchedCount:0,successCount:0,excludedCount:0});
   total.issues=mergeFeeIssues((rows||[]).flatMap(r=>r.fee_issues||[]));total.exclusions=mergeFeeIssues((rows||[]).flatMap(r=>r.fee_exclusions||[]));
+  total.historyDiagnostics=(rows||[]).flatMap(r=>r.fee_history_diagnostics||[]);
   total.complete=total.matchedCount===total.successCount;if(!total.matchedCount&&(total.successCount||total.excludedCount))total.amount=null;
   if((rows||[]).some(row=>row.fee_unknown||row.success_count===null)){total.amount=null;total.successCount=null;total.complete=false;total.fee_unknown=true}
   if(new Set((rows||[]).map(r=>r.currency).filter(Boolean)).size>1){total.amount=null;total.complete=false}
@@ -254,7 +285,8 @@
   const eligible=Number(row.fee_eligible_count??row.successCount??row.success_count??0),excluded=Number(row.fee_excluded_count??row.excludedCount??0),matched=Number(row.fee_matched_count??row.matchedCount??0),issues=row.fee_issues||row.issues||[],exclusions=row.fee_exclusions||row.exclusions||[],count=n=>Number(n||0).toLocaleString('en-US');
   return '成功总笔数 '+count(eligible+excluded)+'；不计三方手续费 '+count(excluded)+'；应匹配 '+count(eligible)+'；已匹配 '+count(matched)+'；未匹配 '+count(Math.max(0,eligible-matched))+' 笔。'+
    (exclusions.length?'不计费：'+exclusions.map(x=>x.provider+' '+count(x.count)+' 笔').join('、')+'。':'')+
-   (issues.length?'未匹配：'+issues.map(x=>(x.platform&&x.platform!=='未提供平台'?x.platform+' / ':'')+x.provider+' '+count(x.count)+' 笔（'+(feeReasons[x.reason]||'费率待核对')+'）').join('；')+'。':'')+'按订单创建时间匹配费率版本；未匹配部分不按零手续费计算。';
+   (issues.length?'未匹配：'+issues.map(x=>(x.platform&&x.platform!=='未提供平台'?x.platform+' / ':'')+x.provider+' '+count(x.count)+' 笔（'+(feeReasons[x.reason]||'费率待核对')+'）').join('；')+'。':'')+
+   ((row.fee_history_diagnostics||row.historyDiagnostics||[]).length?'当前费率来源缺项：'+[...new Set((row.fee_history_diagnostics||row.historyDiagnostics).map(x=>x.provider+'（'+(feeEvidenceLabels[x.reason]||'历史生效信息待核对')+' · '+x.sources.join('、')+'）'))].join('；')+'。':'')+'按订单创建时间匹配费率版本；未匹配部分不按零手续费计算。';
  }
  function overviewDimensions({orders,summaries,rates,country,key,plus,combine}){
   if(!['team','country','platform','provider'].includes(key))return [];
@@ -337,10 +369,10 @@
   return {platforms,missing,failures:missing.filter(p=>p.status==='failed'),received,requested:platforms.length,
    partial:missing.length>0,empty:received===0&&platforms.length>0,pending:missing.filter(p=>p.status!=='failed').length};
  }
- const intakeStatusLabels={complete:'已核验完整',zero_complete:'零笔已确认',received:'已收到 · 完整性待核验',difference:'已收到 · 核验有差异',missing:'缺少创建数据',unverified:'待核验'};
+ const intakeStatusLabels={not_expected:'开通前 · 不计缺失',complete:'已核验完整',zero_complete:'零笔已确认',received:'已收到 · 完整性待核验',difference:'已收到 · 核验有差异',missing:'缺少创建数据',unverified:'待核验'};
  const intakeDifference=day=>day.expected!==false&&day.evidence!=='only_success_day_records_received'&&day.received===true&&day.complete!==true&&(['partial','failed'].includes(day.status)||['source_count_mismatch','source_created_count_mismatch','source_created_channel_mismatch','source_snapshot_invalid','completed_zero_conflicts_with_records'].includes(day.evidence));
  const intakeDatasetLabels={orders:'创建订单',collection_success:'成功数据快照',volume:'三方金额 / 笔数日报'};
- const intakeReasonLabels={only_success_day_records_received:'仅有该日成功记录，未见该创建日订单',records_received_completeness_unverified:'已收到创建记录，尚无整日收齐证明',no_order_records_received:'未收到该创建日订单',no_created_orders_received:'未收到该创建日订单',no_collection_run_evidence:'未见该日采集任务或创建记录',source_collection_failed:'采集任务失败',source_task_not_finished:'采集任务尚未完成',source_counts_not_verified:'来源总数尚未核对，不能确认收齐',no_daily_report_received:'未收到该日三方金额 / 笔数日报',source_count_mismatch:'采集笔数与源数据笔数不一致',source_created_counts_reconciled:'创建总数与渠道分组已核对',source_created_count_mismatch:'创建笔数与源总数不一致',source_created_channel_mismatch:'创建订单与渠道分组不一致',source_snapshot_invalid:'来源核对快照无效'};
+ const intakeReasonLabels={only_success_day_records_received:'仅有该日成功记录，未见该创建日订单',records_received_completeness_unverified:'已收到创建记录，尚无整日收齐证明',no_order_records_received:'未收到该创建日订单',no_created_orders_received:'未收到该创建日订单',no_collection_run_evidence:'未见该日采集任务或创建记录',source_collection_failed:'采集任务失败',source_task_not_finished:'采集任务尚未完成',source_counts_not_verified:'来源总数尚未核对，不能确认收齐',no_daily_report_received:'未收到该日三方金额 / 笔数日报',source_count_mismatch:'采集笔数与源数据笔数不一致',source_created_counts_reconciled:'创建总数与渠道分组已核对',source_created_count_mismatch:'创建笔数与源总数不一致',source_created_channel_mismatch:'创建订单与渠道分组不一致',source_snapshot_invalid:'来源核对快照无效',before_verified_launch:'早于已确认开通时间，不计缺失'};
  const intakeReason=row=>{
   const notes=row?.message?[row.message]:Array.isArray(row?.notes)?row.notes:row?.notes?[row.notes]:[];
   return [...new Set(notes.filter(Boolean).map(note=>intakeReasonLabels[note]||(/^[a-z]+(?:_[a-z]+)+$/.test(String(note))?'采集依据待核验':note)))].join('；')||(row?.evidence?intakeReasonLabels[row.evidence]||'采集依据待核验':'');
@@ -359,6 +391,9 @@
    const raw=scoped?index.get(String(platform.id).trim().toLowerCase()):null;
    const declaredMissing=raw&&Array.isArray(raw.missingDates)?[...new Set(raw.missingDates.filter(date=>typeof date==='string'&&date>=from&&date<=to))].sort():[];
    const days=raw&&Array.isArray(raw.days)?raw.days.filter(day=>day&&typeof day==='object'&&typeof day.date==='string'&&day.date>=from&&day.date<=to):[];
+   const rangeDays=(Date.parse(to)-Date.parse(from))/86400000+1;
+   const beforeLaunch=days.length===rangeDays&&rangeDays>0&&new Set(days.map(day=>day.date)).size===rangeDays&&days.every(day=>day.status==='not_expected'&&day.expected===false&&day.evidence==='before_verified_launch'&&day.received===false&&day.complete===false&&day.zeroConfirmed!==true);
+   if(beforeLaunch)return {...platform,readStatus:platform.status,readLabel:platform.label,readMessage:platform.message,status:'not_expected',label:intakeStatusLabels.not_expected,expected:false,received:false,complete:false,difference:false,observedOnly:false,observedCreated,days,missingDates:[],message:'所选日期早于已确认开通时间，不计缺失'};
    const differenceDays=days.filter(intakeDifference),dates=declaredMissing.filter(date=>!differenceDays.some(day=>day.date===date));
    const sourceMissing=days.filter(day=>day.expected!==false&&(['not_received','not_started','missing'].includes(day.status)||day.evidence==='only_success_day_records_received'));
    for(const day of sourceMissing)if(!dates.includes(day.date))dates.push(day.date);dates.sort();
@@ -372,8 +407,8 @@
     !scoped?'当前查询的创建数据采集情况尚未核验':data.status==='loading'?'正在核对创建数据采集情况':data.status==='error'?data.error||'创建数据采集核验失败':'该平台的创建数据采集情况尚未核验';
    return {...platform,readStatus:platform.status,readLabel:platform.label,readMessage:platform.message,status,label:difference&&!hasMissing?intakeStatusLabels.difference:intakeStatusLabels[status],received,complete,difference,observedOnly,observedCreated,days,missingDates:dates,message};
   });
-  const missing=platforms.filter(p=>p.status==='missing'),unverified=platforms.filter(p=>!p.complete),received=platforms.filter(p=>p.received).length,complete=platforms.filter(p=>p.complete).length;
-  return {platforms,missing,unverified,received,complete,requested:query.requested,ready,active:!!data,partial:missing.length>0||platforms.some(p=>p.difference)||!!data&&(!ready||platforms.some(p=>!p.received)),from,to,error:scoped&&data.status==='error'?data.error||'采集核验失败':''};
+  const expectedPlatforms=platforms.filter(p=>p.expected!==false),notExpected=platforms.filter(p=>p.expected===false),missing=expectedPlatforms.filter(p=>p.status==='missing'),unverified=expectedPlatforms.filter(p=>!p.complete),received=expectedPlatforms.filter(p=>p.received).length,complete=expectedPlatforms.filter(p=>p.complete).length;
+  return {platforms,notExpected,missing,unverified,received,complete,requested:expectedPlatforms.length,ready,active:!!data,partial:missing.length>0||expectedPlatforms.some(p=>p.difference)||!!data&&(!ready||expectedPlatforms.some(p=>!p.received)),from,to,error:scoped&&data.status==='error'?data.error||'采集核验失败':''};
  }
  // Intake status belongs in the compact platform card; detailed reasons open on demand.
  function intakeNotice(){return ''}
@@ -462,16 +497,17 @@
   if(!period.valid)return empty(period.error||'对比时段不可用');
   const query=queryCoverage(L),intake=intakeCoverage(L,direction);
   const priorIntake=intakeCoverage({...L,results:L.comparisonResults,from:period.previousFrom,to:period.previousTo,providerIntake:L.providerComparisonIntake},direction);
-  const blocked=new Set([...intake.missing,...priorIntake.missing].map(p=>String(p.id).trim().toLowerCase()));
-  const expected=new Set(query.platforms.map(p=>String(p.id).trim().toLowerCase()));
+  const blocked=new Set([...intake.missing,...priorIntake.missing,...intake.notExpected,...priorIntake.notExpected].map(p=>String(p.id).trim().toLowerCase()));
+  const expected=new Set(query.platforms.filter(p=>!blocked.has(String(p.id).trim().toLowerCase())).map(p=>String(p.id).trim().toLowerCase()));
   const index=results=>{const map=new Map();for(const r of results||[]){const p=r.platform,id=String(p?.id||'').trim().toLowerCase();if(!id||!expected.has(id)||blocked.has(id)||!Array.isArray(r.groups?.provider))continue;map.set(id,map.has(id)?null:r)}return map};
   const a=index(L.results),b=index(L.comparisonResults),current=[],previous=[];
   for(const [id,r] of a){const prior=b.get(id);if(!r||!prior)continue;const p=r.platform,q=prior.platform;if(!p.currency||!p.timezone||!p.country||p.currency!==L.currency||p.country!==L.country||['country','currency','timezone','source'].some(k=>p[k]!==q[k]))continue;current.push(r);previous.push(prior)}
   if(!current.length)return empty('没有同范围的两期数据，暂不可比');
-  const full=current.length===query.requested&&!query.partial&&intake.complete===intake.requested&&priorIntake.complete===priorIntake.requested;
+  const expectedCount=query.requested-intake.notExpected.length;
+  const full=current.length===expectedCount&&!query.partial&&intake.complete===intake.requested&&priorIntake.complete===priorIntake.requested;
   const names=current.map(r=>r.platform.name||r.platform.id).join('、');
-  const label=full?'':(current.length<query.requested?'同范围 ':'按已读 ')+current.length+' 平台';
-  return {reason:'',current,previous,count:current.length,label,detail:(full?'全部所选平台':'仅比较两期共同已读取的平台；完整性未确认的记录按已读结果计算')+'：'+names+(blocked.size?'；两期均剔除已确认缺少创建数据的平台':'')};
+  const label=full?'':(current.length<expectedCount?'同范围 ':'按已读 ')+current.length+' 平台';
+  return {reason:'',current,previous,count:current.length,label,detail:(full?'全部所选平台':'仅比较两期共同已读取的平台；完整性未确认的记录按已读结果计算')+'：'+names+([...intake.missing,...priorIntake.missing].length?'；两期均剔除已确认缺少创建数据的平台':'')+(intake.notExpected.length||priorIntake.notExpected.length?'；开通前平台不计入两期比较':'')};
  }
  const scopedTotal=(ctx,rows,direction)=>ctx.successTimeSummary?ctx.successTimeSummary(rows,direction):ctx.plus(rows);
  const scopedFees=(ctx,rows,direction)=>{const fees=feeSummary(rows);return ctx.successTimeUnavailable?.(direction)?{...fees,amount:null,successCount:null,complete:false,fee_unknown:true}:fees;};
@@ -500,7 +536,7 @@
   const fees=current.fees,feeReason=L.feeLookupLoading?'费率读取中…':L.feeLookupError?'费率读取失败，暂不可比':!compared.fees.complete||!previous.fees.complete?'费率未完全匹配，暂不比较':'';
   const cards=[
    {label:'统一三方',value:C(current.providers),change:changes(compared.providers,previous.providers,C,false,'',' 个'),tone:'neutral'},
-   {label:'平台',platformCoverage:true,value:(intake.received||intake.requested>0&&intake.missing.length===intake.requested?C(intake.received):'—')+' / '+C(intake.requested),change:{detail:intake.platforms.map(p=>p.name+'：'+p.label+'，'+p.message).join('；'),text:'',trend:'unknown'},tone:partial?'warning':'neutral'},
+   {label:'平台',platformCoverage:true,value:(intake.received||intake.requested>0&&intake.missing.length===intake.requested||intake.requested===0&&intake.notExpected.length>0?C(intake.received):'—')+' / '+C(intake.requested),change:{detail:intake.platforms.map(p=>p.name+'：'+p.label+'，'+p.message).join('；'),text:'',trend:'unknown'},tone:partial?'warning':'neutral'},
    {label:name+'创建金额',value:N(current.total.all_amount),change:changes(compared.total.all_amount,previous.total.all_amount,N),tone:'neutral'},
    {label:name+'创建笔数',value:C(current.total.all_count),change:changes(compared.total.all_count,previous.total.all_count,C,false,'',' 笔'),tone:'neutral'},
    {label:name+'成功金额',value:N(current.total.success_amount),change:changes(compared.total.success_amount,previous.total.success_amount,N),tone:'amount'},
@@ -509,7 +545,7 @@
    {label:'估算手续费',value:N(fees.amount),badge:!fees.complete?'部分':'',change:changes(compared.fees.amount,previous.fees.amount,N,false,feeReason),tone:'fee'}
   ];
   if(partial)for(const card of cards){if(!card.platformCoverage){if(readState.empty)card.value='—'}}
-  const unseen=intake.platforms.filter(p=>p.readStatus==='received'&&!p.received&&!p.complete&&!intake.missing.includes(p));
+  const unseen=intake.platforms.filter(p=>p.expected!==false&&p.readStatus==='received'&&!p.received&&!p.complete&&!intake.missing.includes(p));
   const names=items=>items.map(p=>p.name).join('、');
   const platformText=intake.missing.length?'缺 '+names(intake.missing):readState.partial?'未读 '+names(readState.missing):unseen.length?'未见创建 '+names(unseen):intake.complete!==intake.requested?'完整性待核验':'查看平台';
   return '<div class="provider-summary-kpis">'+cards.map(c=>'<div class="provider-kpi provider-kpi-'+c.tone+'" title="'+E(c.change.detail)+'"><div class="provider-kpi-value"><label>'+c.label+(c.badge?'<span class="provider-partial">'+c.badge+'</span>':'')+'</label><strong>'+c.value+'</strong></div><div class="provider-kpi-comparison">'+(c.platformCoverage?'<button type="button" class="link provider-platform-coverage-button" onclick="providerSummaryPlatformCoverage()" title="'+E(platformText+(intake.error?'；'+intake.error:'')+'；点击查看采集与接口读取明细')+'">'+E(platformText)+'</button>':'')+(c.change.text?'<span class="provider-kpi-change '+E(c.change.trend)+'">'+E(c.change.text)+'</span>':'')+'</div></div>').join('')+'</div>'+
@@ -546,7 +582,7 @@
      return [E(p.name),E(p.source||'—'),E(day.date),E((day.direction?({charge:'代收',withdraw:'代付'}[day.direction]||day.direction)+' · ':'')+type),E(status),E(intakeReason(day)||p.message)];
     });
    });
-   openDrawer('平台采集与读取情况',(coverage.error?'<p>'+E(coverage.error)+'</p>':'')+'<p>创建数据 '+(coverage.ready||coverage.received?C(coverage.received):'待核验')+' / '+C(coverage.requested)+' 个平台 · 完整性已核验 '+C(coverage.complete)+' 个 · 待核验 '+C(coverage.unverified.length)+' 个'+(coverage.missing.length?' · 缺少创建数据 '+C(coverage.missing.length)+' 平台':'')+'</p>'+table(['平台','包网','日期','数据类型','采集状态','原因'],detailRows)+box('接口读取状态',table(['平台','包网','读取状态','原因'],query.platforms.map(p=>[E(p.name),E(p.source||'—'),E(p.label),E(p.message)])))+'<p class="live-definition">按本次查询所选平台及创建日期逐日核对。返回零订单也计为已读取，但只有源数据明确确认零笔才算零笔已确认；仅有成功日记录不能补齐创建日订单。完整性仍待核验的平台不标记为已齐；工单原单缺项另行核对。</p>');
+   openDrawer('平台采集与读取情况',(coverage.error?'<p>'+E(coverage.error)+'</p>':'')+'<p>创建数据 '+(coverage.ready||coverage.received?C(coverage.received):'待核验')+' / '+C(coverage.requested)+' 个平台 · 完整性已核验 '+C(coverage.complete)+' 个 · 待核验 '+C(coverage.unverified.length)+' 个'+(coverage.notExpected.length?' · 开通前 '+C(coverage.notExpected.length)+' 个，不计缺失':'')+(coverage.missing.length?' · 缺少创建数据 '+C(coverage.missing.length)+' 平台':'')+'</p>'+table(['平台','包网','日期','数据类型','采集状态','原因'],detailRows)+box('接口读取状态',table(['平台','包网','读取状态','原因'],query.platforms.map(p=>[E(p.name),E(p.source||'—'),E(p.label),E(p.message)])))+'<p class="live-definition">按本次查询所选平台及创建日期逐日核对。返回零订单也计为已读取，但只有源数据明确确认零笔才算零笔已确认；仅有成功日记录不能补齐创建日订单。完整性仍待核验的平台不标记为已齐；工单原单缺项另行核对。</p>');
   };
   root.providerSummaryWorkorderPlatforms=function(){
    if(L.dirty)return;
@@ -617,8 +653,9 @@
    const row=shown[index];if(!row)return;const tier=tieredFeeRule(row,L.country),rule=confirmedFeeRule(row,L.country),records=rateRecords(row,L.feeLookupRows,L.country),used=new Set(row.items.flatMap(r=>feeCandidates(r,L.feeLookupRows,L.country)));
    const relevant=records.filter(r=>r.scopeType!=='platform'||row.items.some(item=>platformKey(item.platform,item,L.country)===platformKey(r.platform,item,L.country)));
    const coverageNote='<p class="live-definition">'+E(feeCoverageText(row))+'</p>';
-   const sourceTable=table(['使用情况','来源表 / 行','原表三方','范围','业务类型','通道类型','代收','代收单笔','代付','代付单笔','原状态'],relevant.map(r=>[tier?'原表参考':used.has(r)?'当前匹配':'未采用',E((r.sheetName||'未提供')+' / '+(r.sourceRow??'—')),E(r.sourceTypeProvider||r.provider||'—'),E(r.platform||r.country||r.scopeGroup),providerTypeCell(row,[r],L.country,E),E(r.category||'—'),E(r.collectFee||'—'),E(r.collectSingleFee||'—'),E(r.payoutFee||'—'),E(r.payoutSingleFee||'—'),E(r.status||r.rawStatus||'—')]),'provider-rate-details');
-   openDrawer(row.provider+' · 费率依据',coverageNote+(tier
+   const historyNote='<p class="live-definition">当前参考费率只用于查看原表规则；历史手续费按订单创建时间匹配已发布生效版本。缺少生效时间时不能回算，需在源表填写真实生效时间；不能自动使用今天或把当前费率套到所有历史订单。</p>';
+   const sourceTable=table(['使用情况','来源表 / 行','原表三方','范围','业务类型','通道类型','代收','代收单笔','代付','代付单笔','历史生效状态','生效时间 / 来源','原状态'],relevant.map(r=>{const evidence=feeEvidenceCells(r,direction);return [tier?'原表参考':used.has(r)?'当前匹配':'未采用',E((r.sheetName||'未提供')+' / '+(r.sourceRow??'—')),E(r.sourceTypeProvider||r.provider||'—'),E(r.platform||r.country||r.scopeGroup),providerTypeCell(row,[r],L.country,E),E(r.category||'—'),E(r.collectFee||'—'),E(r.collectSingleFee||'—'),E(r.payoutFee||'—'),E(r.payoutSingleFee||'—'),E(evidence.label),E(evidence.detail),E(r.status||r.rawStatus||'—')]}),'provider-rate-details');
+   openDrawer(row.provider+' · 费率依据',coverageNote+historyNote+(tier
     ?box('当前确认规则','<p class="live-definition">'+E(tierExplanation(tier))+'</p>')+box('原表费率记录',sourceTable)
     :box('当前匹配规则','<p class="live-definition">'+E(rule?.note||'优先匹配有费率内容的平台专属记录，再匹配国家记录。存在不同费率时，保留差异供核对。')+'</p>'+sourceTable)));
   };
@@ -631,7 +668,7 @@
   const columnWidth=key=>key==='provider'?94:key==='platform_count'?40:key==='type'?62:key==='fee_rate'?88:key===null?54:key==='estimated_fee'?108:kycIssueKeys.some(k=>key==='issue_'+k)?108:key.endsWith('_amount')||key.endsWith('Amount')?98:key.endsWith('_count')||key.endsWith('Count')?70:70;
   const widths=columns.map(([,key])=>columnWidth(key)),tableWidth=widths.reduce((sum,width)=>sum+width,0);
   const rateButton=(value,index)=>{const full=String(value||'未匹配'),long=full.length>24||/[\r\n]/.test(full),label=long?(/以上|以下|分档|阶梯|[≥≤<>]/.test(full)?'分档费率 · 查看':'费率详情 · 查看'):full;return '<button class="link provider-fee-preview" title="'+E(full+' · 点击查看来源及匹配依据')+'" aria-label="'+E('费率：'+full+'，查看来源及匹配依据')+'" onclick="providerSummaryRate('+index+')">'+E(label)+'</button>'};
-  const feeCell=r=>readState.empty?'—':L.feeLookupLoading?'读取中…':L.feeLookupError?'读取失败':'<span tabindex="0" title="'+E(feeCoverageText(r))+'">'+N(r.estimated_fee)+(!r.fee_complete&&Number(r.fee_eligible_count)>0?'<small class="provider-partial cell-sub">'+(Number(r.fee_matched_count)>0?'部分':'历史费率未匹配')+'</small>':'')+'</span>';
+  const feeCell=r=>readState.empty?'—':L.feeLookupLoading?'读取中…':L.feeLookupError?'读取失败':'<span tabindex="0" title="'+E(feeCoverageText(r))+'">'+N(r.estimated_fee)+(!r.fee_complete&&Number(r.fee_eligible_count)>0?'<small class="provider-partial cell-sub">'+E(feeHistoryLabel(r))+'</small>':'')+'</span>';
   const issueRate=w=>!w?'—':'<span'+(Number(w.uniqueOrderCount)>0&&Number(w.uniqueSuccessCount)/Number(w.uniqueOrderCount)<0.3?' class="workorder-rate-low"':'')+' title="去重工单金额处理率 '+R(w.uniqueSuccessAmount,w.uniqueOrderAmount)+'；笔数处理率 = 已处理原单 / 提交原单；关联工单状态4不代表原订单已到账">'+R(w.uniqueSuccessCount,w.uniqueOrderCount)+'</span>';
   const uniqueGaps=coverage=>{
    const gaps=workorderGapReasons(coverage).map(i=>C(i.count)+i.unit+i.label);
@@ -673,7 +710,7 @@
     issueRate(w),summary?'':'<button class="link" aria-expanded="'+!!expanded[rowKey(r)]+'" onclick="providerSummaryToggle('+index+')">'+(expanded[rowKey(r)]?'收起':'展开')+'</button>'];
   };
   const sumRow=(items,label,fullScope=false)=>{const r={...scopedTotal(ctx,items,direction),_submissionIds:[...new Set(items.flatMap(i=>(i.items||[]).map(x=>x.platformId)).filter(Boolean))],_submissionTotal:fullScope,_submissionUnavailable:!fullScope,platforms:[...new Set(items.flatMap(i=>i.platforms))],fee_matched_count:items.reduce((n,i)=>n+i.fee_matched_count,0)};
-   const fees=scopedFees(ctx,items,direction);r.estimated_fee=fees.amount;r.fee_complete=fees.complete;r.fee_eligible_count=fees.successCount;r.fee_excluded_count=fees.excludedCount;r.fee_issues=fees.issues;r.fee_exclusions=fees.exclusions;
+   const fees=scopedFees(ctx,items,direction);r.estimated_fee=fees.amount;r.fee_complete=fees.complete;r.fee_eligible_count=fees.successCount;r.fee_excluded_count=fees.excludedCount;r.fee_issues=fees.issues;r.fee_exclusions=fees.exclusions;r.fee_history_diagnostics=fees.historyDiagnostics;
    r.issues=L.workorders&&items.some(i=>i.issues)?Object.fromEntries(issueKeys.map(k=>[k,items.reduce((n,i)=>n+Number(i.issues?.[k]||0),0)])):null;r.uniqueOrders=fullScope?uniqueWorkorderFacts([L.workorders?.byDirection?.[direction]]):null;return cells(r,'<strong>'+label+'</strong>',true)};
   const coverage=L.workorders?.coverage;
   const partialOrderRows=rows.filter(r=>r.uniqueOrders&&workorderNeedsReview(r.uniqueOrders.coverage));

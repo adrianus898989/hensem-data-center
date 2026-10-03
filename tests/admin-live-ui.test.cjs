@@ -1370,11 +1370,27 @@ test('overview uses one independent end-day backlog snapshot in both withdrawal 
  h.c.liveSet('direction','charge');const count=h.calls.filter(q=>q.action==='pendingSnapshot').length;await h.c.liveQuery();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,count,'collection-only queries do not read withdrawal snapshots');
 });
 
-test('overview Today uses local current stock without future snapshot or order creation-window filters',async()=>{
- const h=await ready();h.c.livePeriod('today');await h.c.liveQuery();await settle();
- const q=h.calls.filter(q=>q.action==='pendingSnapshot').at(-1);assert.equal(q.mode,'current');assert.equal(q.date,undefined);assert.equal(q.startAt,undefined);assert.equal(q.endAt,undefined);assert.deepEqual(q.platformIds,[P.id]);
- assert.match(h.html(),/实时代付中金额 \/ 笔数/);assert.match(h.html(),/<h2>实时代付中<\/h2>/);assert.doesNotMatch(h.html(),/近7天代付中/);
+test('overview Today uses the latest pending status of today-created orders in both cards without a stock request',async()=>{
+ const h=await ready(),snapshots=h.calls.filter(q=>q.action==='pendingSnapshot').length;
+ h.setNow('2026-09-22T19:00:00Z');h.setHandler(q=>{const r=aggregate(P);if(q.action==='aggregate'){const s={...stats(),direction:'withdraw',pending_amount:'345.67',pending_count:2};r.summary.push(s);r.groups.provider.push({...s,provider:'Synthetic payout'});}return r;});
+ h.c.livePeriod('today');await h.c.liveQuery();await settle();
+ assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,snapshots,'today reuses the order query rather than reading an unrelated stock layer');
+ const q=h.calls.findLast(q=>q.action==='aggregate'&&q.startAt.startsWith('2026-09-22'));assert(q);assert.equal(q.startAt,'2026-09-22T18:30:00.000Z');
+ assert.match(h.html(),/今日实时代付中金额 \/ 笔数/);assert.match(h.html(),/<h2>今日实时代付中<\/h2>/);assert.doesNotMatch(h.html(),/近7天代付中|暂无已核实合计/);
+ assert.match(h.html(),/按订单创建时生效费率/);assert.doesNotMatch(h.html(),/按当前费率估算/);
+ for(const id of ['payout','backlog']){const card=h.html().match(new RegExp('<section class="df-card" id="df-'+id+'">([^]*?)<\\/section>'))?.[1];assert(card);assert.match(card,/345.67/);assert.match(card,/2(?: 笔|<)/);}
+ h.c.livePendingSnapshotDetails();assert.match(h.drawers.at(-1).html,/Synthetic payout/);assert.match(h.drawers.at(-1).html,/所选创建范围/);
  h.c.livePeriod('yesterday');await h.c.liveQuery();await settle();const midnight=h.calls.filter(q=>q.action==='pendingSnapshot').at(-1);assert.equal(midnight.mode,'midnight');assert.equal(midnight.date,'2026-09-22');assert.match(h.html(),/<h2>00:00代付中<\/h2>/);
+});
+
+test('today pending retry keeps completed order results and reads only the failed platform',async()=>{
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Synthetic failed payout'},h=await ready({platforms:[P,p2]});
+ const pendingResult=(p,amount,count)=>{const r=aggregate(p),s={...stats(),direction:'withdraw',pending_amount:amount,pending_count:count};r.summary.push(s);r.groups.provider.push({...s,provider:'Synthetic payout'});return r;};
+ h.setNow('2026-09-22T19:00:00Z');h.setHandler(q=>{if(q.platformId===p2.id)throw Error('Synthetic failed payout');return pendingResult(P,'345.67',2);});h.c.livePeriod('today');await h.c.liveQuery();await settle();
+ assert.equal(h.L.queryFailures.length,1);assert.match(h.html(),/345.67/);assert.match(h.html(),/1\/2 平台/);const saved=h.L.results[0],calls=[];
+ h.setHandler(q=>{calls.push(q);return pendingResult(p2,'100.00',1);});await h.c.livePendingSnapshotRetry();await settle();
+ assert.equal(h.L.results[0],saved);assert.equal(h.L.queryFailures.length,0);assert(calls.filter(q=>q.action==='aggregate').every(q=>q.platformId===p2.id));assert(!calls.some(q=>q.action==='pendingSnapshot'));
+ assert.match(h.html(),/445.67/);assert.match(h.html(),/2\/2 平台/);
 });
 
 test('first overview snapshot waits for delayed report directory and keeps new unresolved platforms visible as partial',async()=>{

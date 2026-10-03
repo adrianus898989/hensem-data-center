@@ -1,4 +1,4 @@
-/* Synthetic fixtures only: independent stock semantics, local dates and stale-response protection. */
+/* Synthetic fixtures only: current order readthrough, historical local dates and stale-response protection. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const {create,resolvePlatforms,requestPeriod}=require('../admin-preview/live-pending-snapshot.js');
 const A='11111111-1111-4111-8111-111111111111',B='22222222-2222-4222-8222-222222222222';
@@ -9,7 +9,8 @@ const now=Date.parse('2026-10-03T12:00:00Z');
 const previous=date=>new Date(Date.parse(date+'T00:00:00Z')-86400000).toISOString().slice(0,10);
 function row(id=A,extra={}){return {...p(id),selectedIds:[id],state:'complete',coverageScope:'all_current_pending',wholeStockComplete:true,windowComplete:true,knownCount:9,knownAmount:'1250.50',count:9,amount:'1250.50',observedAt:'2026-10-03T11:59:00Z',captureId:'synthetic-capture',settlementAmounts:[],groups:[{provider:'Synthetic Pay',rawChannel:'Synthetic original',channelType:'wallet',currency:'INR',knownCount:9,knownAmount:'1250.50',count:9,amount:'1250.50',settlementAmounts:[]}],...extra};}
 function response(q,extra={}){const current=q.mode==='current',rows=q.platformIds.map(id=>row(id));return {version:2,mode:q.mode,basis:current?'current_all_pending_stock':'local_midnight_pending_snapshot',date:current?null:q.date,sourceDate:current?null:previous(q.date),queriedAt:'2026-10-03T12:00:00Z',currency:'INR',complete:true,expectedPlatformCount:rows.length,receivedPlatformCount:rows.length,missingPlatforms:[],amount:String(rows.length*1250.5),count:rows.length*9,knownAmount:String(rows.length*1250.5),knownCount:rows.length*9,rows,...extra};}
-function harness(options={}){const L={country:'印度',from:'2026-10-02T01:00:00',to:'2026-10-02T02:00:00',queryNow:now,dirty:false,withdrawCatalog:[]},calls=[],drawers=[];let selected=[p(A)],providers=[],timezone='Asia/Kolkata',handler=async q=>response(q);const ui=create({L,E:escape,N:number,C:v=>Number(v).toLocaleString('en-US'),selected:()=>selected,providers:()=>providers,scopeZone:()=>timezone,prepare:options.prepare,request:q=>{calls.push(q);return handler(q)},render(){},open:(title,body)=>drawers.push({title,body})});return {ui,L,calls,drawers,select:v=>selected=v,providers:v=>providers=v,timezone:v=>timezone=v,handler:v=>handler=v};}
+function orderResult(platform=p(A),extra={}){const metric={direction:'withdraw',currency:platform.currency,pending_count:3,pending_amount:'345.67'};return {platform,summary:[metric],groups:{provider:[{...metric,provider:'Synthetic Pay'}]},...extra};}
+function harness(options={}){const L={country:'印度',from:'2026-10-02T01:00:00',to:'2026-10-02T02:00:00',queryNow:now,dirty:false,withdrawCatalog:[]},calls=[],drawers=[];let selected=[p(A)],providers=[],timezone='Asia/Kolkata',handler=async q=>response(q),orders={platforms:[p(A)],results:[orderResult()],loading:false,retrying:false,paused:false,failures:[],queriedAt:new Date(now).toISOString(),scopeMatches:true,status:'all'};const ui=create({L,E:escape,N:number,C:v=>Number(v).toLocaleString('en-US'),selected:()=>selected,providers:()=>providers,scopeZone:()=>timezone,currentOrders:()=>orders,prepare:options.prepare,request:q=>{calls.push(q);return handler(q)},render(){},open:(title,body)=>drawers.push({title,body})});return {ui,L,calls,drawers,select:v=>selected=v,providers:v=>providers=v,timezone:v=>timezone=v,handler:v=>handler=v,orders:v=>orders=v,current:()=>{L.from='2026-10-03T00:00:00';L.to='2026-10-03T23:59:59'},get orderContext(){return orders}};}
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
 
 test('historical request reads the selected end-day 00:00 only; day 2 requires source day 1',async()=>{
@@ -19,9 +20,9 @@ test('historical request reads the selected end-day 00:00 only; day 2 requires s
  h.handler(q=>response(q,{sourceDate:'2026-10-02'}));await h.ui.load();assert.equal(h.ui.state.status,'error');assert.doesNotMatch(h.ui.metric(),/1,250.50/);
 });
 
-test('today requests current all-pending stock without date, start or creation window; never tomorrow',async()=>{
- const h=harness();h.L.to='2026-10-03T23:59:59';await h.ui.load();assert.deepEqual(h.calls[0],{action:'pendingSnapshot',mode:'current',platformIds:[A]});assert.equal(h.ui.state.status,'ready');assert.match(h.ui.metric(),/实时代付中金额 \/ 笔数/);assert.match(h.ui.subtitle(),/读取于 2026-10-03 17:30:00 · Asia\/Kolkata/);
- h.L.from='2026-09-01T00:00:00';await h.ui.load();assert.deepEqual(h.calls[1],h.calls[0]);h.L.to='2026-10-04T00:00:00';const before=h.calls.length;await h.ui.load();assert.equal(h.calls.length,before);assert.match(h.ui.metric(),/结束日期不能晚于当地今天/);assert.doesNotMatch(h.ui.metric(),/1,250.50/);
+test('today reads the same queried creation-range pending orders without a stock request',async()=>{
+ const h=harness();h.current();await h.ui.load();assert.equal(h.calls.length,0);assert.equal(h.ui.state.status,'ready');assert.match(h.ui.metric(),/今日实时代付中金额 \/ 笔数/);assert.match(h.ui.metric(),/>345.67</);assert.match(h.ui.metric(),/3 笔/);assert.match(h.ui.subtitle(),/2026-10-03 · Asia\/Kolkata · 查询 17:30:00/);assert.match(h.ui.summary(),/>345.67</);
+ h.L.from='2026-09-01T00:00:00';await h.ui.load();assert.equal(h.calls.length,0);assert.match(h.ui.metric(),/本期实时代付中/);assert.match(h.ui.subtitle(),/2026-09-01 至 2026-10-03/);h.L.to='2026-10-04T00:00:00';await h.ui.load();assert.equal(h.calls.length,0);assert.match(h.ui.metric(),/结束日期不能晚于当地今天/);assert.doesNotMatch(h.ui.metric(),/345.67/);
 });
 
 test('today follows selected country timezone rather than browser/UTC calendar',async()=>{
@@ -29,7 +30,7 @@ test('today follows selected country timezone rather than browser/UTC calendar',
  assert.deepEqual(requestPeriod('2026-10-03','Asia/Kolkata',instant),{mode:'current'});
  assert.deepEqual(requestPeriod('2026-10-02','America/Sao_Paulo',instant),{mode:'current'});
  assert.deepEqual(requestPeriod('2026-10-02','Asia/Kolkata',instant),{mode:'midnight',date:'2026-10-02'});
- const h=harness();h.L.queryNow=instant;h.L.to='2026-10-03T10:00:00';await h.ui.load();assert.equal(h.calls[0].mode,'current');h.timezone('America/Sao_Paulo');h.L.to='2026-10-02T10:00:00';await h.ui.load();assert.equal(h.calls[1].mode,'current');
+ const h=harness();h.L.queryNow=instant;h.L.to='2026-10-03T10:00:00';await h.ui.load();assert.equal(h.calls.length,0);assert.equal(h.ui.state.data.mode,'current');h.timezone('America/Sao_Paulo');h.L.to='2026-10-02T10:00:00';await h.ui.load();assert.equal(h.calls.length,0);assert.equal(h.ui.state.data.mode,'current');
 });
 
 test('invalid calendar day or timezone fails locally without a broad request',async()=>{
@@ -86,8 +87,8 @@ test('truncated original-channel groups explicitly disclose the 200-group limit 
 
 test('legacy seven-day response, malformed scope, mixed fiat and mismatched midnight/current are rejected',async()=>{
  const h=harness();for(const bad of [{version:1,basis:'seven_day_pending_snapshot'},{basis:'orders'},{sourceDate:'2026-10-02'},{date:'2026-10-01'},{rows:null},{receivedPlatformCount:0},{rows:[row(B)]},{currency:'VND'},{rows:[row(A,{currency:'VND'})]},{complete:false,amount:'1250.50',count:9},{rows:[row(A,{state:'partial',wholeStockComplete:false})]},{count:100.5},{knownCount:100.5},{count:true},{knownCount:true},{knownAmount:true},{rows:[row(A,{count:1.5})]},{rows:[row(A,{knownCount:1.5})]},{count:1},{knownCount:'9007199254740992'},{rows:[row(A,{groups:[{currency:'INR',count:null,amount:null,knownCount:100.5,knownAmount:'5',settlementAmounts:[]}]})]},{rows:[row(A,{settlementAmounts:[{currency:'USDT',amount:'1',count:1.5,missingCount:0,state:'partial'}]})]}]){h.handler(q=>response(q,bad));await h.ui.load();assert.equal(h.ui.state.status,'error',JSON.stringify(bad));assert.doesNotMatch(h.ui.metric(),/1,250.50/);}
- h.L.to='2026-10-03T23:59:59';h.handler(q=>response(q,{mode:'midnight',date:'2026-10-03',sourceDate:'2026-10-02'}));await h.ui.load();assert.equal(h.ui.state.status,'error');
- h.select([p('report:unbound')]);const count=h.calls.length;await h.ui.load();assert.equal(h.calls.length,count);assert.match(h.ui.metric(),/尚无可查询/);
+ h.L.to='2026-10-03T23:59:59';h.handler(q=>response(q,{mode:'midnight',date:'2026-10-03',sourceDate:'2026-10-02'}));const count=h.calls.length;await h.ui.load();assert.equal(h.calls.length,count);assert.equal(h.ui.state.data.basis,'created_range_latest_pending_orders');assert.match(h.ui.metric(),/345.67/);
+ h.select([{...p('report:unbound'),reportOnly:true}]);await h.ui.load();assert.equal(h.calls.length,count);assert.match(h.ui.metric(),/0\/1 平台 · 1 未读取/);h.ui.details();assert.match(h.drawers.at(-1).body,/未接入逐笔订单/);
 });
 
 test('transport error cannot be rendered as no data or a zero total',async()=>{
@@ -111,4 +112,46 @@ test('parent summary header consumes overlay dynamic title, local subtitle and d
  context.window.HensemProviderSummary={overviewDimensions:()=>[],buildRows:()=>[],isProviderBusiness:()=>true,feeSummary:()=>({amount:null,successCount:0}),feeCoverageText:()=>'',knownNumber:()=>null,fraction:()=>null};
  const page=context.window.HensemLivePages.create(c);let html=page.render('overview');assert.match(html,/<h2>实时代付中<\/h2>/);assert.match(html,/2026-10-03 17:30:00/);assert.match(html,/平台明细 →/);assert.doesNotMatch(html,/近7天代付中/);
  c.pendingSnapshot.title=()=> '00:00代付中';c.pendingSnapshot.subtitle=()=> '2026-10-02 00:00 · Asia/Kolkata';html=page.render('overview');assert.match(html,/<h2>00:00代付中<\/h2>/);assert.match(html,/2026-10-02 00:00/);
+});
+
+test('current values and provider details read through aggregate updates without another load',async()=>{
+ const h=harness();h.current();await h.ui.load();assert.match(h.ui.metric(),/>345.67</);h.orderContext.results=[orderResult(p(A),{summary:[{direction:'withdraw',currency:'INR',pending_count:7,pending_amount:'901.25'}],groups:{provider:[{direction:'withdraw',currency:'INR',provider:'<script>Provider</script>',pending_count:0,pending_amount:'0'},{direction:'charge',currency:'INR',provider:'Ignore collection',pending_count:50,pending_amount:'50000'}]}})];
+ assert.match(h.ui.metric(),/>901.25</);assert.match(h.ui.summary(),/>7</);h.ui.details();const html=h.drawers.at(-1).body;assert.match(html,/订单已读取/);assert.match(html,/本次查询读到的最新采集状态为准/);assert.match(html,/创建范围 2026-10-03 00:00:00 至 2026-10-03 23:59:59/);assert.match(html,/三方明细（1）/);assert.match(html,/&lt;script&gt;Provider&lt;\/script&gt;/);assert.match(html,/>0<\/td><td>0.00</);assert.doesNotMatch(html,/全量已核实|原通道|Ignore collection|<script>/);assert.equal(h.calls.length,0);
+});
+
+test('empty successful native responses prove zero, while unreturned and report-only platforms remain unknown',async()=>{
+ const h=harness();h.current();h.orderContext.results=[orderResult(p(A),{summary:[],groups:{provider:[]}})];await h.ui.load();assert.match(h.ui.metric(),/>0.00</);assert.match(h.ui.metric(),/>0 笔</);assert.match(h.ui.metric(),/已读取 1\/1 平台/);
+ h.select([p(A),p(B,'Unread B')]);h.orderContext.platforms=[p(A),p(B)];assert.doesNotMatch(h.ui.metric(),/>0.00<|>0 笔</);assert.match(h.ui.metric(),/已读取小计 · 1\/2 平台 · 1 未读取/);
+ h.select([{...p(A),id:'report:only',reportOnly:true}]);h.L.withdrawCatalog=[p(A)];assert.doesNotMatch(h.ui.metric(),/>0.00<|>0 笔</);h.ui.details();assert.match(h.drawers.at(-1).body,/未接入逐笔订单/);
+});
+
+test('pending amount and count retain separate validity, including valid zeroes and missing fields',async()=>{
+ const h=harness();h.current();for(const [count,amount,countText,amountText]of [[7,null,'7 笔','—'],[null,'80.25','— 笔','80.25'],[0,null,'0 笔','—'],[null,'0','— 笔','0.00'],[undefined,undefined,'— 笔','—']]){
+  h.orderContext.results=[orderResult(p(A),{summary:[{direction:'withdraw',currency:'INR',pending_count:count,pending_amount:amount}]})];await h.ui.load();assert(h.ui.metric().includes(countText));assert(h.ui.metric().includes('>'+amountText+'<'));assert.match(h.ui.metric(),/待补齐/);
+ }
+});
+
+test('current failed or paused reads preserve only returned subtotals and offer ordinary query retry',async()=>{
+ const h=harness();h.current();h.select([p(A),p(B,'Failed <B>')]);h.orderContext.platforms=[p(A),p(B)];h.orderContext.failures=[{id:B,message:'Timeout <test>'}];await h.ui.load();assert.match(h.ui.metric(),/345.67/);assert.match(h.ui.metric(),/3 笔/);assert.match(h.ui.metric(),/已读取小计 · 1\/2 平台 · 1 未读取/);assert.match(h.ui.metric(),/livePendingSnapshotRetry\(\).*重试未完成平台/);h.ui.details();assert.match(h.drawers.at(-1).body,/Timeout &lt;test&gt;/);assert.match(h.drawers.at(-1).body,/Failed &lt;B&gt;/);
+ h.orderContext.failures=[];h.orderContext.paused=true;assert.match(h.ui.metric(),/订单读取已暂停/);assert.match(h.ui.metric(),/继续读取/);h.orderContext.paused=false;h.orderContext.loading=true;h.orderContext.results=[];assert.match(h.ui.metric(),/正在读取订单 · 0\/2 平台/);assert.doesNotMatch(h.ui.metric(),/345.67|>0.00<|>0 笔</);assert.equal(h.calls.length,0);
+});
+
+test('mixed or missing currency cannot produce a fiat sum, but valid pending counts remain visible',async()=>{
+ const h=harness();h.current();h.select([p(A),{...p(B),currency:'USDT'}]);h.orderContext.platforms=[p(A),{...p(B),currency:'USDT'}];h.orderContext.results=[orderResult(),orderResult({...p(B),currency:'USDT'})];await h.ui.load();assert.match(h.ui.metric(),/>—</);assert.match(h.ui.metric(),/6 笔/);assert.match(h.ui.metric(),/多币种金额不相加/);assert.doesNotMatch(h.ui.metric(),/691.34/);h.ui.details();assert.match(h.drawers.at(-1).body,/INR/);assert.match(h.drawers.at(-1).body,/USDT/);
+ h.select([p(A)]);h.orderContext.platforms=[p(A)];h.orderContext.results=[orderResult(p(A),{summary:[{direction:'withdraw',currency:null,pending_count:0,pending_amount:'0'}]})];assert.match(h.ui.metric(),/>—</);assert.match(h.ui.metric(),/0 笔/);assert.match(h.ui.metric(),/金额待补齐/);
+});
+
+test('dirty, changed query scope and success-only filters never expose previous current pending values',async()=>{
+ const h=harness();h.current();await h.ui.load();const saved=h.ui.capture();h.L.dirty=true;assert.doesNotMatch(h.ui.metric(),/345.67/);h.L.dirty=false;h.orderContext.scopeMatches=false;h.ui.restore(saved);assert.doesNotMatch(h.ui.metric(),/345.67/);h.orderContext.scopeMatches=true;h.orderContext.status='success';assert.match(h.ui.metric(),/请选择全部状态或代付中/);assert.doesNotMatch(h.ui.metric(),/345.67|>0.00<|>0 笔</);h.orderContext.status='pending';assert.match(h.ui.metric(),/345.67/);
+});
+
+test('current ignores wrong, duplicate, missing-summary and failed native results rather than inventing zero',async()=>{
+ const h=harness();h.current();for(const results of [[orderResult(p(B))],[orderResult(),orderResult()],[{platform:p(A)}]]){h.orderContext.results=results;await h.ui.load();assert.doesNotMatch(h.ui.metric(),/345.67|>0.00<|>0 笔</);}
+ h.orderContext.results=[orderResult()];h.orderContext.failures=[{id:A,message:'Synthetic failure'}];assert.doesNotMatch(h.ui.metric(),/345.67/);assert.match(h.ui.metric(),/0\/1 平台 · 1 未读取/);
+});
+
+test('current orders need no source catalog preparation and ignore a late historical response',async()=>{
+ let prepared=0;const h=harness({prepare:async()=>{prepared++}});h.current();await h.ui.load();assert.equal(prepared,0);assert.equal(h.calls.length,0);assert.match(h.ui.metric(),/345.67/);
+ const late=deferred(),history=harness({prepare:()=>late.promise});const loading=history.ui.load();history.current();late.resolve();await loading;assert.equal(history.calls.length,0);assert.match(history.ui.metric(),/345.67/);
+ const data=deferred(),switching=harness();switching.handler(()=>data.promise);const pending=switching.ui.load();await Promise.resolve();switching.current();data.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[A]}));await pending;assert.match(switching.ui.metric(),/345.67/);assert.doesNotMatch(switching.ui.metric(),/1,250.50/);assert.equal(switching.calls.length,1);
 });
