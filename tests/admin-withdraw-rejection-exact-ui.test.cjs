@@ -59,3 +59,8 @@ test('WG original distribution retains absence state and operators call unknown 
  const h=fixture({...stateData,rows:stateGroups.map(x=>({...x,reason:x.category,reasonKey:x.categoryKey}))},'rejection');assert.match(h.html(),/源业务备注已隐藏，驳回备注待核对/);assert.match(h.html(),/未采集到明确驳回备注/);assert.match(h.html(),/（源备注为空）/);
  const operators=fixture({...stateData,total:1,rows:[{operator:'synthetic-agent',count:11,categoryCount:1,missingReasonCount:10,operatorKey:'a'.repeat(32)}]},'operators');assert.match(operators.html(),/已知原备注种类\|无可用驳回备注/);assert.doesNotMatch(operators.html(),/不同原备注\|备注为空/);
 });
+
+test('verified front evidence displays the confirmed text and provenance without claiming original collector text was recovered',()=>{
+ const h=fixture({...stateData,total:1,rows:[{orderNumber:'SYNTHETIC-VERIFIED',status:'rejected',rawRejectionReason:'Synthetic confirmed front business text',rejectionReason:'Synthetic confirmed front business text',rejectionNoteState:'present',sourceNoteStates:{remark:'template',front:'withheld',back:'empty'},hiddenNoteSources:['front'],verifiedRejectionNote:{sourceField:'frontRemark',verificationMethod:'manual_source_ui',verifiedAt:'2026-09-30T05:00:00Z'}}]},'orders');
+ assert.match(h.html(),/Synthetic confirmed front business text/);assert.match(h.html(),/前台备注：已在源站核实/);assert.doesNotMatch(h.html(),/前台备注：已隐藏/);assert.equal(h.page.state.reasonData.rows[0].sourceNoteStates.front,'withheld');
+});
