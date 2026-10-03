@@ -60,6 +60,7 @@
   function currentOrdersView(){
    const context=c.currentOrders?.();
    if(L.dirty||!context?.scopeMatches)return idle();
+   if(L.direction==='charge')return {status:'error',data:null,unsupported:[],error:'请选择全部业务或代付，当前仅代收查询不包含代付中订单'};
    if(context.status&&!['all','pending'].includes(context.status))return {status:'error',data:null,unsupported:[],error:'请选择全部状态或代付中，当前状态筛选不包含全部代付中订单'};
    const selected=c.selected(),platforms=context.platforms||[],results=context.results||[],failures=context.failures||[],native=new Set(platforms.map(p=>p.id)),currencies=new Set();
    if(!selected.length)return {status:'error',data:null,unsupported:[],error:'当前范围没有可查询平台'};

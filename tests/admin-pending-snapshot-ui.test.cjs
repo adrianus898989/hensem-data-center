@@ -141,6 +141,10 @@ test('mixed or missing currency cannot produce a fiat sum, but valid pending cou
  h.select([p(A)]);h.orderContext.platforms=[p(A)];h.orderContext.results=[orderResult(p(A),{summary:[{direction:'withdraw',currency:null,pending_count:0,pending_amount:'0'}]})];assert.match(h.ui.metric(),/>—</);assert.match(h.ui.metric(),/0 笔/);assert.match(h.ui.metric(),/金额待补齐/);
 });
 
+test('collection-only queries cannot prove zero pending payouts',async()=>{
+ const h=harness();h.current();h.L.direction='charge';h.orderContext.results=[orderResult(p(A),{summary:[{direction:'charge',currency:'INR',pending_count:8,pending_amount:'800'}]})];await h.ui.load();assert.equal(h.ui.state.data,null);assert.match(h.ui.metric(),/请选择全部业务或代付/);assert.doesNotMatch(h.ui.metric(),/>0.00<|>0 笔</);assert.doesNotMatch(h.ui.summary(),/>0.00<|>0<\/strong>/);assert.equal(h.calls.length,0);h.L.direction='withdraw';h.orderContext.results=[orderResult()];assert.match(h.ui.metric(),/>345.67</);
+});
+
 test('dirty, changed query scope and success-only filters never expose previous current pending values',async()=>{
  const h=harness();h.current();await h.ui.load();const saved=h.ui.capture();h.L.dirty=true;assert.doesNotMatch(h.ui.metric(),/345.67/);h.L.dirty=false;h.orderContext.scopeMatches=false;h.ui.restore(saved);assert.doesNotMatch(h.ui.metric(),/345.67/);h.orderContext.scopeMatches=true;h.orderContext.status='success';assert.match(h.ui.metric(),/请选择全部状态或代付中/);assert.doesNotMatch(h.ui.metric(),/345.67|>0.00<|>0 笔</);h.orderContext.status='pending';assert.match(h.ui.metric(),/345.67/);
 });
