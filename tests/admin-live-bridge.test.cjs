@@ -438,3 +438,10 @@ test('rate source mode uses only minimal verified scope metadata; missing metada
  const verified=run({mode:'all',identity:'synthetic:all',access_token:'forbidden-token',password:'forbidden-password'});assert.deepEqual(verified.scope,{mode:'all',identity:'synthetic:all'});assert.doesNotMatch(verified.html,/forbidden-token|forbidden-password/);
  const escaped=run({mode:'selected',identity:'<script>\u2028test'});assert.equal(escaped.scope.identity,'<script>\u2028test');assert.equal((escaped.html.match(/<script>/g)||[]).length,1);
 });
+
+test('KYC imported-candidate filters retain existing authenticated RPC and strict ISO contract',async()=>{
+ const h=load(),q={action:'depositStatistics',section:'kyc',dimension:'platform',country:'IN',dateMode:'range',startAt:'2026-09-01T00:00:00Z',endAt:'2026-09-30T23:59:59Z',kycStatus:'unknown',processing:'rejected',matchStatus:'exact_unique',query:'SYNTHETIC',platform:'RAJALOTTERY',provider:'Pay',offset:0,limit:20};
+ await h.api.adminLiveRequest(session,q);assert(h.calls[0].url.endsWith('/rpc/dashboard_admin_deposit_statistics'));const p=JSON.parse(h.calls[0].init.body).p_request;assert.equal(p.section,'kyc');assert.equal(p.dimension,'platform');assert.equal(p.action,undefined);assert.equal(h.authCalls.length,1);
+ for(const change of [{dimension:null},{dimension:{}},{dimension:[]},{kycStatus:'YES'},{processing:0},{matchStatus:'paid'},{query:[]},{from:'2026-09-01'},{sourceKind:'portal'},{raw:true},{dateMode:null},{startAt:'2026-02-30T00:00:00Z'},{section:{toString:()=> 'kyc'}}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...change}));
+ for(const section of [null,{},[],0])assert.throws(()=>h.api.validateAdminLiveRequest({action:'depositStatistics',section}));
+});

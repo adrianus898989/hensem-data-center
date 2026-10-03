@@ -12,7 +12,6 @@ const moduleCodes=(moduleId:string)=>dashboardRolePages.filter(page=>page.module
 type Draft={name:string;description:string;permissions:string[]};
 type Editor={role:DashboardCustomRole|null;draft:Draft};
 const draftOf=(role:DashboardCustomRole|null):Draft=>({name:role?.name||"",description:role?.description||"",permissions:[...(role?.permissions||[])]});
-const systemRoles={owner:"总管理员",admin:"管理员",viewer:"查看账号"};
 export function changeRolePermission(current:string[],code:string,checked:boolean):string[]{
  const next=new Set(current),page=code.slice(0,code.lastIndexOf("."));
  if(checked){next.add(code);next.add(page+".view");}else{next.delete(code);if(code.endsWith(".view"))for(const entry of next)if(entry.startsWith(page+"."))next.delete(entry);}
@@ -32,9 +31,9 @@ export default function DashboardRoleManager({session,profile,manualQuery=true,r
  const [loaded,setLoaded]=useState(false),[loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(""),[message,setMessage]=useState("");
  const [editor,setEditor]=useState<Editor|null>(null),[moduleId,setModuleId]=useState(modules[0]?.id||""),[search,setSearch]=useState("");
  const [assignment,setAssignment]=useState<{accountId:string;roleId:string}|null>(null),[archive,setArchive]=useState<DashboardCustomRole|null>(null);
- const [roleSearch,setRoleSearch]=useState(""),[roleStatus,setRoleStatus]=useState("all"),[accountSearch,setAccountSearch]=useState(""),[accountRole,setAccountRole]=useState("all"),[accountStatus,setAccountStatus]=useState("all");
+ const [roleSearch,setRoleSearch]=useState(""),[roleStatus,setRoleStatus]=useState("all");
  useEffect(()=>{
-  setDataIdentity(identity);setRoles([]);setAccounts([]);setLoaded(false);setError("");setMessage("");setEditor(null);setAssignment(null);setArchive(null);setLoading(false);setBusy(false);setRoleSearch("");setRoleStatus("all");setAccountSearch("");setAccountRole("all");setAccountStatus("all");busyRef.current=false;
+  setDataIdentity(identity);setRoles([]);setAccounts([]);setLoaded(false);setError("");setMessage("");setEditor(null);setAssignment(null);setArchive(null);setLoading(false);setBusy(false);setRoleSearch("");setRoleStatus("all");busyRef.current=false;
   if(allowed&&!manualQuery)void load();
   return()=>{actor.current.epoch++;for(const controller of controllers.current)controller.abort();controllers.current.clear();};
  // The actor key invalidates every result even if the new account later switches back.
@@ -81,17 +80,9 @@ export default function DashboardRoleManager({session,profile,manualQuery=true,r
  const manageable=(account:DashboardRoleAccount)=>account.role!=="owner"&&(owner||account.role==="viewer"&&account.auth_user_id!==session.user.id&&(!account.role_id||roles.some(role=>role.id===account.role_id&&grantable(role))));
  const editableAccounts=accounts.filter(manageable),activeRoles=roles.filter(role=>role.active&&grantable(role));
  const roleName=(id:string|null)=>id?roles.find(role=>role.id===id)?.name||"角色待核对":"未分配";
- const roleQuery=roleSearch.trim().toLowerCase(),accountQuery=accountSearch.trim().toLowerCase();
+ const roleQuery=roleSearch.trim().toLowerCase();
  const showOwner=owner&&(roleStatus==="all"||roleStatus==="fixed")&&"总管理员 owner 固定全部权限".includes(roleQuery);
  const filteredRoles=roles.filter(role=>(roleStatus==="all"||(roleStatus==="active"&&role.active)||(roleStatus==="inactive"&&!role.active))&&[role.name,role.description].join(" ").toLowerCase().includes(roleQuery));
- const accountScope=(account:DashboardRoleAccount)=>account.role==="owner"?"全部数据":dashboardScopeLabel(account.data_scope);
- const filteredAccounts=accounts.filter(account=>{
-  const matchesRole=accountRole==="all"||(accountRole==="owner"?account.role==="owner":accountRole==="unassigned"?account.role!=="owner"&&!account.role_id:account.role!=="owner"&&account.role_id===accountRole);
-  const matchesStatus=accountStatus==="all"||(accountStatus==="active"?account.active:!account.active);
-  const customRole=account.role==="owner"?"Owner 固定全部权限":roleName(account.role_id);
-  const scopeCodes=account.role==="owner"?"":typeof account.data_scope==="object"&&account.data_scope!==null&&"countries" in account.data_scope&&Array.isArray(account.data_scope.countries)?account.data_scope.countries.join(" "):"";
-  return matchesRole&&matchesStatus&&[account.username,customRole,systemRoles[account.role],accountScope(account),scopeCodes].join(" ").toLowerCase().includes(accountQuery);
- });
  function toggle(code:string,checked:boolean){setEditor(previous=>previous?{...previous,draft:{...previous.draft,permissions:changeRolePermission(previous.draft.permissions,code,checked)}}:null);}
  function selectVisible(checked:boolean){setEditor(previous=>{if(!previous)return null;let next=[...previous.draft.permissions];for(const page of visiblePages){if(checked){for(const action of page.actions)next=changeRolePermission(next,page.id+"."+action.id,true);}else next=changeRolePermission(next,page.id+".view",false);}return {...previous,draft:{...previous.draft,permissions:next}};});}
  function assign(accountId="",roleId=""){if(!canAssign||roleId&&!activeRoles.some(role=>role.id===roleId))return;setError("");setMessage("");setAssignment({accountId,roleId});}
@@ -101,21 +92,19 @@ export default function DashboardRoleManager({session,profile,manualQuery=true,r
   if(result){setAssignment(null);setMessage("角色已分配，账号和登录密码继续使用原来的");}
  }
  if(!allowed)return <p role="alert" className="dashboard-role-manager">当前账号没有角色查看权限；仅总管理员可创建或修改共享角色。</p>;
- if(dataIdentity!==identity)return <p role="status" className="dashboard-role-manager">账号已切换，请重新查询角色与账号。</p>;
+ if(dataIdentity!==identity)return <p role="status" className="dashboard-role-manager">账号已切换，请重新查询角色。</p>;
  const locked=busy||loading;
  return <div className="dashboard-role-manager">
-  <div className="drm-toolbar"><div><h3>角色与账号分配</h3></div><div className="drm-actions"><button type="button" disabled={locked} onClick={()=>void load()}>{loaded?"刷新列表":"查询角色与账号"}</button><button type="button" className="primary" disabled={locked||!loaded||!owner} onClick={()=>edit(null)}>新建角色</button></div></div>
+  <div className="drm-toolbar"><div><h3>角色管理</h3></div><div className="drm-actions"><button type="button" disabled={locked} onClick={()=>void load()}>{loaded?"刷新列表":"查询角色"}</button><button type="button" className="primary" disabled={locked||!loaded||!owner} onClick={()=>edit(null)}>新建角色</button></div></div>
   {!editor&&!assignment&&!archive&&error&&<p role="alert" className="drm-error">{error}</p>}{message&&<p role="status" className="drm-success">{message}</p>}
-  {loading&&<p role="status">正在读取角色与账号…</p>}{!loaded&&!loading&&!error&&<p className="drm-empty">点击「查询角色与账号」查看现有配置。</p>}
+  {loading&&<p role="status">正在读取角色…</p>}{!loaded&&!loading&&!error&&<p className="drm-empty">点击「查询角色」查看现有配置。</p>}
   <div className="drm-list-filters" aria-label="角色列表筛选"><input aria-label="搜索角色名称或说明" placeholder="搜索角色名称或说明" value={roleSearch} onChange={event=>setRoleSearch(event.target.value)}/><select aria-label="角色状态筛选" value={roleStatus} onChange={event=>setRoleStatus(event.target.value)}><option value="all">全部状态</option><option value="active">启用</option><option value="inactive">已停用</option><option value="fixed">固定角色</option></select><button type="button" disabled={!roleSearch&&roleStatus==="all"} onClick={()=>{setRoleSearch("");setRoleStatus("all")}}>重置角色筛选</button>{loaded&&<span className="drm-filter-count" role="status">显示 {filteredRoles.length+Number(showOwner)} / {roles.length+Number(owner)} 个角色</span>}</div>
   {loaded&&<><div className="drm-table"><table aria-label="角色目录权限矩阵"><thead><tr><th>角色</th>{modules.map(module=><th key={module.id}>{module.label}<small>启用 / 全部权限</small></th>)}<th>账号数</th><th>状态</th><th>操作</th></tr></thead><tbody>
    {showOwner&&<tr className="drm-owner"><td><b>总管理员（Owner）</b><small>固定全部权限</small></td>{modules.map(module=><td key={module.id}>{moduleCodes(module.id).length} / {moduleCodes(module.id).length}</td>)}<td>{accounts.filter(account=>account.role==="owner").length}</td><td>固定</td><td>无需分配</td></tr>}
    {filteredRoles.map(role=><tr key={role.id}><td><b>{role.name}</b><small>{role.description||"—"}</small></td>{modules.map(module=>{const codes=moduleCodes(module.id);return <td key={module.id}>{codes.filter(code=>role.permissions.includes(code)).length} / {codes.length}</td>;})}<td>{accounts.filter(account=>account.role_id===role.id).length}</td><td>{role.active?"启用":"已停用"}</td><td><div className="drm-actions"><button type="button" disabled={locked||!role.active||!owner} onClick={()=>edit(role)}>配置权限</button><button type="button" disabled={locked||!role.active||!editableAccounts.length||!canAssign||!grantable(role)} onClick={()=>assign("",role.id)}>分配账号</button><button type="button" disabled={locked||!role.active||!owner||accounts.some(account=>account.role_id===role.id)} title={accounts.some(account=>account.role_id===role.id)?"请先将使用此角色的账号分配到其他角色":undefined} onClick={()=>{setError("");setArchive(role)}}>停用角色</button></div></td></tr>)}
    {!showOwner&&!filteredRoles.length&&<tr><td colSpan={modules.length+4} className="drm-no-results">没有符合筛选条件的角色。</td></tr>}
   </tbody></table></div>{!roles.length&&!roleSearch&&roleStatus==="all"&&<p className="drm-empty">尚未创建自定义角色。</p>}
-  <div className="drm-account-head"><h4>现有后台账号</h4></div>
-  <div className="drm-list-filters" aria-label="账号列表筛选"><input aria-label="搜索现有账号" placeholder="搜索账号、角色或数据范围" value={accountSearch} onChange={event=>setAccountSearch(event.target.value)}/><select aria-label="账号角色筛选" value={accountRole} onChange={event=>setAccountRole(event.target.value)}><option value="all">全部角色</option><option value="owner">总管理员（Owner）</option><option value="unassigned">未分配自定义角色</option>{roles.map(role=><option key={role.id} value={role.id}>{role.name}{role.active?"":"（已停用）"}</option>)}</select><select aria-label="账号状态筛选" value={accountStatus} onChange={event=>setAccountStatus(event.target.value)}><option value="all">全部状态</option><option value="active">启用</option><option value="inactive">停用</option></select><button type="button" disabled={!accountSearch&&accountRole==="all"&&accountStatus==="all"} onClick={()=>{setAccountSearch("");setAccountRole("all");setAccountStatus("all")}}>重置账号筛选</button><span className="drm-filter-count" role="status">显示 {filteredAccounts.length} / {accounts.length} 个账号</span></div>
-  <div className="drm-table"><table aria-label="现有账号角色分配"><thead><tr><th>账号</th><th>系统身份</th><th>状态</th><th>数据范围</th><th>自定义角色</th><th>操作</th></tr></thead><tbody>{filteredAccounts.map(account=><tr key={account.auth_user_id}><td>{account.username}</td><td>{systemRoles[account.role]}</td><td>{account.active?"启用":"停用"}</td><td>{accountScope(account)}</td><td>{account.role==="owner"?"固定全部权限":roleName(account.role_id)}</td><td>{account.role==="owner"?<span>固定，不可修改</span>:<button type="button" disabled={locked||!activeRoles.length||!canAssign||!manageable(account)} onClick={()=>assign(account.auth_user_id,activeRoles.some(role=>role.id===account.role_id)?account.role_id!:"")}>分配角色</button>}</td></tr>)}{!filteredAccounts.length&&<tr><td colSpan={6} className="drm-no-results">没有符合筛选条件的账号。</td></tr>}</tbody></table></div></>}
+  </>}
   {editor&&<AccountEditorDialog title={editor.role?"配置角色 · "+editor.role.name:"新建角色"} busy={locked} onClose={closeEditor} bodyClassName="dashboard-role-editor"><form onSubmit={save}>
    <div className="drm-role-fields"><label>角色名称<input aria-label="角色名称" required maxLength={80} disabled={locked} value={editor.draft.name} onChange={event=>setEditor({...editor,draft:{...editor.draft,name:event.target.value}})}/></label><label>角色说明<input aria-label="角色说明" maxLength={500} disabled={locked} value={editor.draft.description} onChange={event=>setEditor({...editor,draft:{...editor.draft,description:event.target.value}})}/></label></div>
    {error&&<p role="alert" className="drm-error">{error}</p>}

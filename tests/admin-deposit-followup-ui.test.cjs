@@ -96,7 +96,7 @@ test('late responses from the previous source cannot replace current entries',as
 });
 
 test('statistics keep other-order and other-provider classifications independent from the raw sheet mark',async()=>{
- const h=harness({rows:[{platform:'SYNTHETIC',orderNumber:'RC20260926SYNTHETIC',amount:100,status:'已入款',confirmation:'入其他订单',statisticsStatus:'other_order'}],total:1,summary:{count:1,otherOrderCount:1,otherOrderAmount:100,receivedCount:0,unreceivedCount:0}});h.root.depositIssuesSource('results');await settle();assert.match(h.html(),/入其他订单:1/);assert.match(h.html(),/本订单入款标记:0/);h.root.depositIssuesMethod();assert.match(h.drawer(),/入其他订单、转其他三方单独统计/);h.root.depositIssuesSection('details');await h.page.load(true);await settle();assert.match(h.html(),/统计归类/);assert.match(h.html(),/入其他订单/);assert.match(h.html(),/已入款/);
+ const h=harness({rows:[{platform:'SYNTHETIC',orderNumber:'RC20260926SYNTHETIC',amount:100,status:'已入款',confirmation:'入其他订单',statisticsStatus:'other_order'}],total:1,summary:{count:1,otherOrderCount:1,otherOrderAmount:100,receivedCount:0,unreceivedCount:0}});h.root.depositIssuesSource('results');await settle();assert.match(h.html(),/入其他订单<\/span><strong>1/);assert.match(h.html(),/本订单入款标记<\/span><strong>0/);h.root.depositIssuesMethod();assert.match(h.drawer(),/入其他订单、转其他三方单独统计/);h.root.depositIssuesSection('details');await h.page.load(true);await settle();assert.match(h.html(),/核对分类/);assert.match(h.html(),/入其他订单/);h.root.depositIssuesDetail(0);assert.match(h.drawer(),/统计归类/);assert.match(h.drawer(),/已入款/);
 });
 
 test('method explanation is opened on demand without a read and remains compatible with contexts lacking a drawer',async()=>{

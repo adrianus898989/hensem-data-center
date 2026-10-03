@@ -20,7 +20,7 @@ function setup(facts){
 const diagnostic=h=>{h.root.providerSummaryWorkorderPlatforms();return h.drawers.at(-1).html;};
 test('v5 explained pending scope shows exact raw money without labelling it an unresolved or deduplicated amount',()=>{
  const r=fact('pending'),h=setup([r]),before=JSON.stringify(h.L.workorders),html=diagnostic(h);
- assert.match(html,/1 个仅有已知范围差异，0 个含待确认项/);assert.match(h.html(),/待确认 0 \/ 已解释 1/);assert.doesNotMatch(h.html(),/工单待核对 1 三方/);
+ assert.match(html,/1 个仅有已知范围差异，0 个含待确认项/);assert.match(h.html(),/待确认 0 \/ 原因已说明 1/);assert.doesNotMatch(h.html(),/原单待核对 1 三方/);
  assert.match(html,/日报 450\.00 INR/);assert.match(html,/明细 200\.00 INR/);assert.match(html,/净差 \+250\.00 INR/);
  assert.match(html,/范围净差 250\.00 INR/);assert.match(html,/金额尚待逐笔核对/);
  assert.match(html,/不是去重原支付订单金额/);assert.match(h.html(),/>100\.00</);assert.equal(r.uniqueCoverage.complete,false);
@@ -38,17 +38,17 @@ test('equal counts with an unexplained monetary difference still require review'
  r.uniqueCoverage.complete=true;r.uniqueCoverage.status='complete';r.uniqueCoverage.needsReview=true;r.uniqueCoverage.diagnosisStatus='review_required';
  r.uniqueCoverage.providerConflictCount=0;d.providerConflictCount=0;d.rawAmountComparison={...d.rawAmountComparison,expectedAmount:250,detailAmount:200,differenceAmount:50,unexplainedDifferenceAmount:50};
  const h=setup([r]),html=diagnostic(h);assert.match(html,/0 个仅有已知范围差异，1 个含待确认项/);assert.match(html,/0 · 数量一致/);
- assert.match(html,/待确认：未解释金额净差 \+50\.00 INR/);assert.match(html,/即使条数相同也要核对原始金额/);assert.match(h.html(),/工单待核对 1 三方/);
+ assert.match(html,/待确认：未解释金额净差 \+50\.00 INR/);assert.match(html,/即使条数相同也要核对原始金额/);assert.match(h.html(),/原单待核对 1 三方/);
  h.root.providerSummaryCoverage();assert.match(h.drawers.at(-1).html,/未解释金额净差 \+50\.00 INR/);assert.equal(h.networkCalls(),0);
 });
 test('real provider conflict remains review-required even when raw amount and count agree',()=>{
  const h=setup([fact('actualConflict')]),html=diagnostic(h);assert.match(html,/1 个含待确认项/);assert.match(html,/1组三方冲突/);assert.match(html,/净差 0\.00 INR/);
- assert.match(h.html(),/工单待核对 1 三方/);assert.equal(h.networkCalls(),0);
+ assert.match(h.html(),/原单待核对 1 三方/);assert.equal(h.networkCalls(),0);
 });
 test('v4 remains compatible and does not borrow v5 monetary fields or invent its currency',()=>{
  const r=fact('pending');r.uniqueCoverage.diagnosticVersion=4;delete r.uniqueCoverage.diagnosisStatus;delete r.uniqueCoverage.needsReview;
  const h=setup([r]),html=diagnostic(h);assert.match(html,/未接入金额诊断/);assert.match(html,/接口尚未提供原始工单金额差异/);
- assert.doesNotMatch(html,/450\.00 INR|250\.00 INR/);assert.match(h.html(),/工单待核对 1 三方/);assert.equal(h.networkCalls(),0);
+ assert.doesNotMatch(html,/450\.00 INR|250\.00 INR/);assert.match(h.html(),/原单待核对 1 三方/);assert.equal(h.networkCalls(),0);
 });
 test('missing report, nonfinite values and inconsistent amount DTOs remain unknown',()=>{
  const h=setup([fact('actualConflict')]);
@@ -71,7 +71,7 @@ test('strict attributed source label is informational and adds no second origina
  Object.assign(attributed,{uniqueOrderCount:999,uniqueOrderAmount:999999,uniqueNotReceivedCount:999,uniqueNotReceivedAmount:999999});
  const known=fact('pending','SYNTHETIC ATTRIBUTED','SYNTHETIC KNOWN');Object.assign(known.uniqueCoverage,{status:'complete',complete:true,diagnosisStatus:'complete',needsReview:false,diagnosticDays:[],pendingExcludedDetailCount:0});
  const h=setup([attributed,known]),before=JSON.stringify(h.L.workorders);assert.match(h.html(),/已归并来源标签/);assert.match(h.html(),/此标签不重复增加原单笔数和金额/);
- assert.doesNotMatch(h.html(),/>999,999\.00</);assert.doesNotMatch(h.html(),/工单待核对|工单统计差异/);assert.equal(h.api.workorderPlatformGaps(h.L,'charge').length,0);
+ assert.doesNotMatch(h.html(),/>999,999\.00</);assert.doesNotMatch(h.html(),/原单待核对|日报\/明细差异/);assert.equal(h.api.workorderPlatformGaps(h.L,'charge').length,0);
  const built=h.api.buildRows({orders:[order(attributed.platformId,'ar',100,1,{direction:'charge',provider:'未标记三方',platform:attributed.platform})],issues:[attributed],rates:[],country:'印度',direction:'charge',plus:rows=>Object.fromEntries(['all_amount','all_count','success_amount','success_count'].map(k=>[k,rows.reduce((n,r)=>n+Number(r[k]||0),0)])),combine:(rows)=>rows.map(r=>({...r,items:[r]})),coverage:{complete:true}});
  assert.equal(built[0].uniqueOrders.uniqueOrderCount,null);assert.equal(built[0].uniqueOrders.uniqueOrderAmount,null);
  assert.equal(JSON.stringify(h.L.workorders),before);assert.equal(h.networkCalls(),0);
@@ -81,7 +81,7 @@ test('explicit flags cannot hide source gaps or conflicts in malformed v5 diagno
  const h=setup([r]);assert.equal(h.api.workorderPlatformNeedsReview(h.api.workorderPlatformGaps(h.L,'charge')[0]),true);
  const missing=fact('pending');missing.uniqueCoverage.sourceCoverage.complete=false;const other=setup([missing]);assert.match(diagnostic(other),/1 个含待确认项/);assert.equal(other.networkCalls(),0);
  const money=fact('pending');money.uniqueCoverage.diagnosticDays[0].rawAmountComparison.unexplainedDifferenceAmount=250;
- const financial=setup([money]);assert.match(diagnostic(financial),/1 个含待确认项/);assert.match(financial.html(),/工单待核对 1 三方/);
+ const financial=setup([money]);assert.match(diagnostic(financial),/1 个含待确认项/);assert.match(financial.html(),/原单待核对 1 三方/);
 });
 test('negative unexplained raw gap remains signed and is not called omitted pending',()=>{
  const r=fact('actualConflict'),d=r.uniqueCoverage.diagnosticDays[0];d.rawAmountComparison={...d.rawAmountComparison,expectedAmount:100,detailAmount:200,differenceAmount:-100,unexplainedDifferenceAmount:-100};

@@ -433,6 +433,33 @@ body.live-admin .wo-analysis-basis{font-size:10px;margin:6px 0 8px}
 
 body.live-admin .deposit-stat-metrics{grid-template-columns:repeat(5,minmax(0,1fr))}
 body.live-admin .deposit-stat-metrics .live-metric small{display:block;margin-top:3px;color:#7889a5;font-size:10px}
+body.live-admin .deposit-workspace-nav{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}
+body.live-admin .deposit-workspace-nav button{padding:8px 14px;border:1px solid #dce5f3;border-radius:6px;background:white;color:#617898;font-size:12px;cursor:pointer}
+body.live-admin .deposit-workspace-nav button.on{background:#355ae8;border-color:#355ae8;color:white}
+body.live-admin .deposit-source-actions{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px;color:#7589a8;font-size:11px}
+body.live-admin .deposit-source-actions>div{display:flex;gap:6px}
+body.live-admin .deposit-import-sources{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:#7487a5;margin-bottom:10px}
+body.live-admin .deposit-overview-cards{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+body.live-admin .deposit-overview-card{border:1px solid #dce6f5;border-top:3px solid #6088da;border-radius:7px;background:white;padding:12px;min-width:0}
+body.live-admin .deposit-overview-card>span{color:#6c819f;font-size:11px}
+body.live-admin .deposit-overview-card>strong{display:block;margin:7px 0 5px;font-size:23px;color:#294269;font-variant-numeric:tabular-nums}
+body.live-admin .deposit-overview-card small{font-size:10px;font-weight:normal;color:#8391a8}
+body.live-admin .deposit-overview-card>div{font-size:12px;color:#526b90;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+body.live-admin .deposit-tone-received{border-top-color:#38a77f}body.live-admin .deposit-tone-unreceived{border-top-color:#eea248}body.live-admin .deposit-tone-unknown{border-top-color:#96a5bb}
+body.live-admin .deposit-quality-strip{display:flex;gap:15px;flex-wrap:wrap;margin:10px 0 14px;font-size:11px;color:#8190a8}
+body.live-admin .deposit-quality-strip b{color:#556c8f;font-variant-numeric:tabular-nums}
+body.live-admin .deposit-compact-details{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+body.live-admin .deposit-compact-details table{width:100%;min-width:920px;table-layout:fixed}
+body.live-admin .deposit-compact-details th:first-child{width:25%}body.live-admin .deposit-compact-details th:last-child{width:58px}
+body.live-admin .deposit-compact-details td,body.live-admin .deposit-compact-details th{padding:8px;font-size:11px;line-height:1.6;text-align:left;min-width:0;overflow-wrap:anywhere}
+body.live-admin .deposit-compact-details td small,body.live-admin .deposit-group-compact td small{display:block;color:#8191aa;font-size:10px;font-weight:normal}
+body.live-admin .deposit-compact-details th:last-child,body.live-admin .deposit-compact-details td:last-child{position:sticky;right:0;background:#fff;box-shadow:-3px 0 5px #142c5210;text-align:center}
+body.live-admin .deposit-compact-details th:last-child{background:#f5f7fc;z-index:3}
+body.live-admin .deposit-group-compact table{min-width:680px;width:100%;table-layout:fixed}
+body.live-admin .deposit-group-compact th,body.live-admin .deposit-group-compact td{padding:8px;font-size:11px;font-variant-numeric:tabular-nums;min-width:0;overflow-wrap:anywhere}
+body.live-admin .deposit-group-compact th:first-child{width:19%}
+@media(max-width:1400px){body.live-admin .deposit-overview-cards{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:650px){body.live-admin .deposit-overview-cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:1100px){body.live-admin .deposit-stat-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
 body.live-admin .withdraw-blocking-orders table{min-width:1280px}
 body.live-admin .withdraw-blocking-orders td{vertical-align:top;text-align:left}

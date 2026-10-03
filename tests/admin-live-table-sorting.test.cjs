@@ -5,7 +5,7 @@ const {ready,completeAggregate,P,settle}=new Function('require','__dirname',pref
 const plain=s=>s.replace(/<span\b[^>]*aria-hidden="true"[^>]*>[\s\S]*?<\/span>/g,'').replace(/<[^>]*>/g,'').trim();
 const allTables=html=>[...html.matchAll(/<table\b[^>]*>[\s\S]*?<\/table>/g)].map(m=>m[0]);
 const tableFor=(h,label)=>allTables(h.html()).find(s=>s.includes(label))||'';
-const rows=html=>[...(html.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1]||'').matchAll(/<tr(?: [^>]*)?>([\s\S]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td>([\s\S]*?)<\/td>/g)].map(c=>plain(c[1])));
+const rows=html=>[...(html.match(/<tbody\b[^>]*>([\s\S]*?)<\/tbody>/)?.[1]||'').matchAll(/<tr(?: [^>]*)?>([\s\S]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(c=>plain(c[1])));
 const sort=(h,id,column)=>h.c.liveLoadedTableSort(encodeURIComponent(h.c.state.page+'|'+id),column);
 const refSort=(h,id,column)=>h.c.liveReferenceTableSort(encodeURIComponent(id),column);
 const rate=(provider,percent,fixed='')=>({country:'印度',scopeType:'country',provider,collectFee:percent,payoutFee:percent,collectSingleFee:fixed,payoutSingleFee:fixed});
@@ -57,9 +57,10 @@ test('amount-band and matrix sorting retain numeric bucket order, original segme
 });
 
 test('loaded quality, risk and fee tables sort real metrics before their independent pagers without fabricating unavailable fields',async()=>{
- for(const [page,id,column]of[['risk','provider-risk',7],['merchantproviders','provider-fees',4]]){
-  const h=await setup(page);if(page==='merchantproviders')h.L.view='fees';h.L.tableSizes[id]=2;h.L.tablePages[id]=2;h.c.render();const calls=h.calls.length;refSort(h,id,column);assert.equal(h.L.tablePages[id],1,id);
-  const table=tableFor(h,'liveReferenceTableSort'),items=rows(table);assert.equal(items[0][0],'LargePay');assert.equal(items.length,2);assert.match(table,/正式数据尚未提供此项/);assert.equal(h.calls.length,calls);
+ for(const [page,id,column]of[['risk','provider-risk',7],['merchants','merchant-providers-unified',3]]){
+  const h=await setup(page);if(page==='merchants'){h.L.view='providers';for(const [i,amount]of[[0,'20'],[1,'1000']]){const row=h.L.results[i].groups.provider[0];Object.assign(row,{fee_version_state:'complete',fee_version_matched_count:row.success_count,fee_version_unmatched_count:0,fee_version_estimated_amount:amount});}}h.L.tableSizes[id]=2;h.L.tablePages[id]=2;h.c.render();const calls=h.calls.length;refSort(h,id,column);assert.equal(h.L.tablePages[id],1,id);
+  const table=tableFor(h,'liveReferenceTableSort'),items=rows(table);assert(items[0][0].startsWith('LargePay'));assert.equal(items.length,2);assert.match(table,/正式数据尚未提供此项/);assert.equal(h.calls.length,calls);
+  if(page==='merchants'){const footer=table.match(/<tfoot>[\s\S]*?<\/tfoot>/)[0];refSort(h,id,7);assert(rows(tableFor(h,'liveReferenceTableSort'))[0][0].startsWith('LargePay'));assert.equal(rows(tableFor(h,'liveReferenceTableSort'))[0][7],'1,000.00');refSort(h,id,7);const ascending=rows(tableFor(h,'liveReferenceTableSort'));assert(ascending[0][0].startsWith('SmallPay'));assert.equal(ascending[0][7],'20.00');h.L.tableSizes[id]=20;h.c.render();assert(rows(tableFor(h,'liveReferenceTableSort')).at(-1)[0].startsWith('UnknownPay'),'unknown historical fees remain last');assert.equal(tableFor(h,'liveReferenceTableSort').match(/<tfoot>[\s\S]*?<\/tfoot>/)[0],footer);assert.equal(h.calls.length,calls);}
  }
 });
 

@@ -52,13 +52,14 @@ function ui(handler,initial={}){
  const react={useState(initial){const k=s++;if(!(k in states))states[k]=typeof initial==='function'?initial():initial;return[states[k],value=>states[k]=typeof value==='function'?value(states[k]):value]},useRef(initial){const k=r++;return refs[k]||(refs[k]={current:initial})},useEffect(fn,values){const k=e++;if(!dependencies[k]||values.some((v,n)=>v!==dependencies[k][n])){dependencies[k]=values;effects.push(()=>{cleanup[k]?.();cleanup[k]=fn()})}}};
  const real=client().api;
  vm.runInNewContext(compile('src/components/DashboardRoleManager.tsx'),{module:mod,exports:mod.exports,AbortController,Error,window:{confirm:()=>true},require(name){if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};if(name.includes('dashboardRoleClient'))return{...real,dashboardRoleRequest:async(s,q,signal)=>{calls.push(plain(q));return handler?handler(q,signal):listing()}};if(name.includes('dashboardDataScope'))return{dashboardScopeLabel:scope=>scope?.mode==='all'?'全部数据':(scope?.countries||[]).join('、')};if(name==='./AccountEditorDialog')return{default:function AccountEditorDialog(){}};if(name.endsWith('.css'))return{};throw Error(name)}});
- const h={calls,api:mod.exports,draw(){s=r=e=0;return mod.exports.default(props)},effects(){effects.splice(0).forEach(fn=>fn())},setProps(next){props={...props,...next}},button(label){const value=nodes(h.draw()).find(node=>node.type==='button'&&text(node)===label);assert(value,'button '+label);return value},findLabel(label){const value=nodes(h.draw()).find(node=>node.props?.['aria-label']===label);assert(value,'aria-label '+label);return value},form(){return nodes(h.draw()).find(node=>node.type==='form')},async load(){const label=nodes(h.draw()).some(node=>node.type==='button'&&text(node)==='刷新列表')?'刷新列表':'查询角色与账号';h.button(label).props.onClick();await flush();return h.draw()},dispose(){cleanup.forEach(fn=>fn?.())}};
+ const h={calls,api:mod.exports,draw(){s=r=e=0;return mod.exports.default(props)},effects(){effects.splice(0).forEach(fn=>fn())},setProps(next){props={...props,...next}},button(label){const value=nodes(h.draw()).find(node=>node.type==='button'&&text(node)===label);assert(value,'button '+label);return value},findLabel(label){const value=nodes(h.draw()).find(node=>node.props?.['aria-label']===label);assert(value,'aria-label '+label);return value},form(){return nodes(h.draw()).find(node=>node.type==='form')},async load(){const label=nodes(h.draw()).some(node=>node.type==='button'&&text(node)==='刷新列表')?'刷新列表':'查询角色';h.button(label).props.onClick();await flush();return h.draw()},dispose(){cleanup.forEach(fn=>fn?.())}};
  h.draw();h.effects();return h;
 }
-test('owner role manager stays network-idle until explicit query and shows existing account identity and scope',async()=>{
- const h=ui();assert.equal(h.calls.length,0);assert.match(text(h.draw()),/点击「查询角色与账号」/);assert.equal(h.button('新建角色').props.disabled,true);await h.load();assert.deepEqual(h.calls,[{operation:'list'}]);assert.match(text(h.draw()),/existing-staff/);assert.match(text(h.draw()),/固定，不可修改/);assert.match(text(h.draw()),/IN/);assert(!nodes(h.draw()).some(node=>node.type==='input'&&node.props.type==='password'));
- assert.equal(h.button('新建角色').props.disabled,false);
- assert.doesNotMatch(text(h.draw()),/继续使用原来的账号和密码。先配置角色|前端工单账号、工单操作日志、配置授权/);
+test('owner role manager stays network-idle and lists only role matrices and account counts',async()=>{
+ const h=ui();assert.equal(h.calls.length,0);assert.match(text(h.draw()),/点击「查询角色」/);assert.equal(h.button('新建角色').props.disabled,true);await h.load();assert.deepEqual(h.calls,[{operation:'list'}]);
+ assert.match(text(h.draw()),/角色管理|总管理员（Owner）|固定全部权限|账号数/);assert.doesNotMatch(text(h.draw()),/existing-staff|现有账号角色分配|现有后台账号/);
+ assert.equal(nodes(h.draw()).filter(node=>node.type==='table').length,1);assert(!nodes(h.draw()).some(node=>node.type==='input'&&node.props.type==='password'));assert.equal(h.button('新建角色').props.disabled,false);
+ assert(!nodes(h.draw()).some(node=>node.props?.['aria-label']==='账号列表筛选'));
 });
 test('non-owner or session/profile mismatch cannot read or mutate roles',async()=>{
  for(const next of [{profile:{...profile,role:'admin'}},{profile:{...profile,active:false}},{session:{...session,user:{id:otherId}}}]){const h=ui(null,{...next,manualQuery:false});await flush();assert.match(text(h.draw()),/仅总管理员/);assert.equal(h.calls.length,0);assert(!nodes(h.draw()).some(node=>node.type==='button'));}
@@ -78,17 +79,21 @@ test('create only sends explicit permissions and never assigns an account automa
 test('conflict leaves role name and permission draft open without retry or overwriting',async()=>{
  const h=ui(async q=>{if(q.operation==='list')return listing();throw Error('已被其他管理员修改，草稿已保留')});await h.load();h.button('配置权限').props.onClick();h.findLabel('角色名称').props.onChange({target:{value:'我的草稿'}});await h.form().props.onSubmit({preventDefault(){}});assert.equal(h.findLabel('角色名称').props.value,'我的草稿');assert.match(text(h.draw()),/草稿已保留/);assert.equal(h.calls[1].expectedVersion,2);assert.deepEqual(h.calls[1].permissions,[...role.permissions].sort());assert.equal(h.calls.length,2);
 });
-test('existing account assignment uses CAS and original identity, no password or system role updates',async()=>{
- const h=ui(async q=>q.operation==='list'?listing():{account:{...account,role_id:q.roleId,assignment_version:1}});await h.load();h.button('分配角色').props.onClick();h.findLabel('选择自定义角色').props.onChange({target:{value:roleId}});await h.form().props.onSubmit({preventDefault(){}});assert.deepEqual(h.calls[1],{operation:'assign',accountId:staffId,roleId,expectedVersion:0});assert.match(text(h.draw()),/账号和登录密码继续使用原来的/);assert(!h.form());
+test('role assignment dialog preserves original account identity and scope and sends only assignment CAS',async()=>{
+ const h=ui(async q=>q.operation==='list'?listing():{account:{...account,role_id:q.roleId,assignment_version:1}});await h.load();h.button('分配账号').props.onClick();
+ assert.equal(h.findLabel('选择自定义角色').props.value,roleId);assert.deepEqual(nodes(h.findLabel('选择现有账号')).filter(node=>node.type==='option').map(node=>node.props.value),['',staffId]);
+ assert.match(text(h.findLabel('选择现有账号')),/existing-staff/);h.findLabel('选择现有账号').props.onChange({target:{value:staffId}});
+ assert.match(text(h.draw()),/数据范围：IN/);assert.match(text(h.draw()),/继续使用原来的账号和密码/);assert(!nodes(h.draw()).some(node=>node.type==='input'&&node.props.type==='password'));
+ await h.form().props.onSubmit({preventDefault(){}});assert.deepEqual(h.calls[1],{operation:'assign',accountId:staffId,roleId,expectedVersion:0});assert.match(text(h.draw()),/账号和登录密码继续使用原来的/);assert(!h.form());assert.doesNotMatch(text(h.draw()),/existing-staff/);
 });
 test('Owner is excluded from assignment and roles still assigned to accounts cannot archive',async()=>{
  const h=ui(async()=>({...listing(),accounts:[{...account,role_id:roleId},owner]}));await h.load();assert.equal(h.button('停用角色').props.disabled,true);h.button('分配账号').props.onClick();assert.deepEqual(nodes(h.findLabel('选择现有账号')).filter(node=>node.type==='option').map(node=>node.props.value),['',staffId]);
 });
 test('switching actor cancels pending reads and does not restore stale accounts',async()=>{
- let resolve;const h=ui(()=>new Promise(r=>resolve=r));h.button('查询角色与账号').props.onClick();await flush();h.setProps({session:{...session,user:{id:otherId}},profile:{...profile,auth_user_id:otherId}});assert.doesNotMatch(text(h.draw()),/existing-staff/);h.effects();resolve(listing());await flush();assert.doesNotMatch(text(h.draw()),/existing-staff/);assert.match(text(h.draw()),/点击「查询角色与账号」/);assert.equal(h.calls.length,1);
+ let resolve;const h=ui(()=>new Promise(r=>resolve=r));h.button('查询角色').props.onClick();await flush();h.setProps({session:{...session,user:{id:otherId}},profile:{...profile,auth_user_id:otherId}});assert.doesNotMatch(text(h.draw()),/existing-staff|运营查看/);h.effects();resolve(listing());await flush();assert.doesNotMatch(text(h.draw()),/existing-staff|运营查看/);assert.match(text(h.draw()),/点击「查询角色」/);assert.equal(h.calls.length,1);
 });
 test('refresh error clears stale rows and cannot present failed read as zero accounts',async()=>{
- let fail=false;const h=ui(async()=>{if(fail)throw Error('读取失败');return listing()});await h.load();fail=true;await h.load();assert.match(text(h.draw()),/读取失败/);assert.doesNotMatch(text(h.draw()),/existing-staff|尚未创建自定义角色/);assert.equal(h.button('新建角色').props.disabled,true);
+ let fail=false;const h=ui(async()=>{if(fail)throw Error('读取失败');return listing()});await h.load();fail=true;await h.load();assert.match(text(h.draw()),/读取失败/);assert.doesNotMatch(text(h.draw()),/existing-staff|运营查看|尚未创建自定义角色/);assert.equal(h.button('新建角色').props.disabled,true);
 });
 
 test('list only exposes safe role/account fields and rejects absent or mismatched role references',()=>{
@@ -105,7 +110,7 @@ test('existing roles drop only retired channelquality keys from reads and never 
  await assert.rejects(h.api.dashboardRoleRequest(session,{operation:'create',name:'Retired',description:'',permissions:retired}),/权限/);assert.equal(h.calls.length,0);
 });
 test('stale visible event callback cannot start an operation under a newly switched actor',()=>{
- const h=ui(),button=h.button('查询角色与账号');h.setProps({session:{...session,user:{id:otherId}},profile:{...profile,auth_user_id:otherId}});h.draw();button.props.onClick();assert.equal(h.calls.length,0);h.effects();
+ const h=ui(),button=h.button('查询角色');h.setProps({session:{...session,user:{id:otherId}},profile:{...profile,auth_user_id:otherId}});h.draw();button.props.onClick();assert.equal(h.calls.length,0);h.effects();
 });
 test('modal draft survives changing modules and search without saving or assigning',async()=>{
  const h=ui();await h.load();h.button('新建角色').props.onClick();h.findLabel('角色名称').props.onChange({target:{value:'待配置'}});h.findLabel('总览 · 查看目录与页面').props.onChange({target:{checked:true}});
@@ -114,7 +119,6 @@ test('modal draft survives changing modules and search without saving or assigni
 
 
 const roleRows=h=>nodes(h.findLabel('角色目录权限矩阵')).filter(node=>node.type==='tr'&&nodes(node).some(cell=>cell.type==='td')).map(text);
-const accountRows=h=>nodes(h.findLabel('现有账号角色分配')).filter(node=>node.type==='tr'&&nodes(node).some(cell=>cell.type==='td')).map(text);
 const archivedRole={...role,id:otherId,name:'历史运营',description:'暂停使用的角色',active:false};
 const filterListing=()=>({roles:[plain(role),plain(archivedRole)],accounts:[plain(account),plain(owner),{...plain(account),auth_user_id:'55555555-5555-4555-8555-555555555555',username:'assigned-agent',role_id:roleId},{...plain(account),auth_user_id:'66666666-6666-4666-8666-666666666666',username:'disabled-agent',role_id:otherId,active:false,data_scope:{mode:'selected',countries:['BR']}}]});
 test('role search combines name or description with active, disabled or fixed status without querying or changing permissions',async()=>{
@@ -127,33 +131,33 @@ test('role search combines name or description with active, disabled or fixed st
  h.findLabel('搜索角色名称或说明').props.onChange({target:{value:'OWNER'}});assert.equal(roleRows(h).length,1);
  h.button('重置角色筛选').props.onClick();assert.equal(roleRows(h).length,3);assert.equal(h.button('重置角色筛选').props.disabled,true);assert.deepEqual(h.calls,[{operation:'list'}]);
 });
-test('account filters combine scope search, custom role including archived roles, Owner and unassigned without treating Owner as unassigned',async()=>{
- const h=ui(filterListing);await h.load();assert.equal(accountRows(h).length,4);assert.match(text(h.findLabel('账号列表筛选')),/显示 4 \/ 4 个账号/);
- h.findLabel('搜索现有账号').props.onChange({target:{value:'  br  '}});assert.equal(accountRows(h).length,1);assert.match(accountRows(h)[0],/disabled-agent/);
- h.findLabel('账号状态筛选').props.onChange({target:{value:'active'}});assert.deepEqual(accountRows(h),['没有符合筛选条件的账号。']);assert.match(text(h.findLabel('账号列表筛选')),/显示 0 \/ 4 个账号/);
- h.button('重置账号筛选').props.onClick();h.findLabel('账号角色筛选').props.onChange({target:{value:roleId}});assert.equal(accountRows(h).length,1);assert.match(accountRows(h)[0],/assigned-agent/);
- h.findLabel('账号角色筛选').props.onChange({target:{value:otherId}});assert.equal(accountRows(h).length,1);assert.match(accountRows(h)[0],/disabled-agent/);h.findLabel('账号状态筛选').props.onChange({target:{value:'inactive'}});assert.equal(accountRows(h).length,1);
- h.button('重置账号筛选').props.onClick();h.findLabel('账号角色筛选').props.onChange({target:{value:'owner'}});assert.equal(accountRows(h).length,1);assert.match(accountRows(h)[0],/owner/);
- h.findLabel('账号角色筛选').props.onChange({target:{value:'unassigned'}});assert.equal(accountRows(h).length,1);assert.match(accountRows(h)[0],/existing-staff/);assert.doesNotMatch(accountRows(h)[0],/owner/);
- h.button('重置账号筛选').props.onClick();h.findLabel('搜索现有账号').props.onChange({target:{value:'全部数据'}});assert.equal(accountRows(h).length,1);assert.match(accountRows(h)[0],/owner/);
- h.button('重置账号筛选').props.onClick();assert.equal(accountRows(h).length,4);assert.equal(h.button('重置账号筛选').props.disabled,true);assert.deepEqual(h.calls,[{operation:'list'}]);
+test('no duplicate account table or filters remain; role counts and eligible assignment options are retained',async()=>{
+ const h=ui(filterListing);await h.load();const all=nodes(h.draw());assert.equal(all.filter(node=>node.type==='table').length,1);
+ for(const label of ['现有账号角色分配','账号列表筛选','搜索现有账号','账号角色筛选','账号状态筛选'])assert(!all.some(node=>node.props?.['aria-label']===label));
+ const rows=nodes(h.findLabel('角色目录权限矩阵')).filter(node=>node.type==='tr'&&nodes(node).some(cell=>cell.type==='td'));
+ assert.deepEqual(rows.map(row=>nodes(row).filter(node=>node.type==='td').at(-3)).map(text),['1','1','1']);
+ assert.doesNotMatch(text(h.draw()),/existing-staff|assigned-agent|disabled-agent/);
+ h.button('分配账号').props.onClick();assert.deepEqual(nodes(h.findLabel('选择现有账号')).filter(node=>node.type==='option').map(text),['请选择账号','existing-staff','assigned-agent','disabled-agent（已停用）']);
+ assert.deepEqual(nodes(h.findLabel('选择自定义角色')).filter(node=>node.type==='option').map(node=>node.props.value),['',roleId]);assert.deepEqual(h.calls,[{operation:'list'}]);
 });
-test('list refresh preserves local filters while actor changes clear all filters and hide previous results',async()=>{
- const h=ui(filterListing);await h.load();assert(h.button('刷新列表'));assert.equal(nodes(h.draw()).filter(node=>node.type==='button'&&['刷新列表','查询角色与账号'].includes(text(node))).length,1);
- h.findLabel('搜索角色名称或说明').props.onChange({target:{value:'历史'}});h.findLabel('角色状态筛选').props.onChange({target:{value:'inactive'}});h.findLabel('搜索现有账号').props.onChange({target:{value:'disabled'}});h.findLabel('账号角色筛选').props.onChange({target:{value:otherId}});h.findLabel('账号状态筛选').props.onChange({target:{value:'inactive'}});
- await h.load();assert.equal(h.findLabel('搜索角色名称或说明').props.value,'历史');assert.equal(h.findLabel('搜索现有账号').props.value,'disabled');assert.equal(accountRows(h).length,1);
- h.setProps({session:{...session,user:{id:otherId}},profile:{...profile,auth_user_id:otherId}});assert.doesNotMatch(text(h.draw()),/disabled-agent|existing-staff/);h.effects();assert.equal(h.findLabel('搜索角色名称或说明').props.value,'');assert.equal(h.findLabel('角色状态筛选').props.value,'all');await h.load();
- assert.equal(h.findLabel('搜索现有账号').props.value,'');assert.equal(h.findLabel('账号角色筛选').props.value,'all');assert.equal(h.findLabel('账号状态筛选').props.value,'all');assert.equal(roleRows(h).length,3);assert.equal(accountRows(h).length,4);assert(h.calls.every(call=>call.operation==='list'));
+test('list refresh preserves role filters while actor changes clear drafts and hide previous results',async()=>{
+ const h=ui(filterListing);await h.load();assert(h.button('刷新列表'));assert.equal(nodes(h.draw()).filter(node=>node.type==='button'&&['刷新列表','查询角色'].includes(text(node))).length,1);
+ h.findLabel('搜索角色名称或说明').props.onChange({target:{value:'历史'}});h.findLabel('角色状态筛选').props.onChange({target:{value:'inactive'}});
+ await h.load();assert.equal(h.findLabel('搜索角色名称或说明').props.value,'历史');assert.equal(h.findLabel('角色状态筛选').props.value,'inactive');assert.equal(roleRows(h).length,1);
+ h.setProps({session:{...session,user:{id:otherId}},profile:{...profile,auth_user_id:otherId}});assert.doesNotMatch(text(h.draw()),/历史运营|existing-staff/);h.effects();assert.equal(h.findLabel('搜索角色名称或说明').props.value,'');assert.equal(h.findLabel('角色状态筛选').props.value,'all');await h.load();
+ assert.equal(roleRows(h).length,3);assert(h.calls.every(call=>call.operation==='list'));
+ h.button('分配账号').props.onClick();h.findLabel('选择现有账号').props.onChange({target:{value:staffId}});const staleSubmit=h.form().props.onSubmit;
+ h.setProps({session,profile});assert.doesNotMatch(text(h.draw()),/existing-staff/);assert(!h.form());h.effects();await staleSubmit({preventDefault(){}});assert(!h.calls.some(call=>call.operation==='assign'));
 });
 
 test('assigned viewer with explicit account view can read live role roster without old admin flags',async()=>{
- const h=ui(null,{profile:{...profile,role:'viewer'},roleAccess:{mode:'assigned',canView:true,permissions:['access.view']}});await h.load();assert.deepEqual(h.calls,[{operation:'list'}]);assert.match(text(h.draw()),/existing-staff/);assert.equal(h.button('新建角色').props.disabled,true);assert.equal(h.button('分配角色').props.disabled,true);assert.equal(h.button('配置权限').props.disabled,true);
+ const h=ui(null,{profile:{...profile,role:'viewer'},roleAccess:{mode:'assigned',canView:true,permissions:['access.view']}});await h.load();assert.deepEqual(h.calls,[{operation:'list'}]);assert.match(text(h.draw()),/运营查看/);assert.doesNotMatch(text(h.draw()),/existing-staff/);assert.equal(h.button('新建角色').props.disabled,true);assert.equal(h.button('分配账号').props.disabled,true);assert.equal(h.button('配置权限').props.disabled,true);
 });
 test('delegated assignment offers only roles contained in actual permissions and never mutates shared roles',async()=>{
  const high={...role,id:otherId,name:'High',permissions:[...role.permissions,'overview.export']};
  const h=ui(async q=>q.operation==='list'?{roles:[role,high],accounts:[account,owner]}:{account:{...account,role_id:q.roleId,assignment_version:1}},{profile:{...profile,role:'viewer'},roleAccess:{mode:'assigned',canView:true,permissions:['access.view','access.edit',...role.permissions]}});
- await h.load();assert.equal(h.button('配置权限').props.disabled,true);assert.equal(h.button('停用角色').props.disabled,true);h.button('分配角色').props.onClick();assert.deepEqual(nodes(h.findLabel('选择自定义角色')).filter(node=>node.type==='option').map(node=>node.props.value),['',roleId]);
- h.findLabel('选择自定义角色').props.onChange({target:{value:roleId}});await h.form().props.onSubmit({preventDefault(){}});assert.equal(h.calls[1].operation,'assign');assert.equal(h.calls[1].expectedVersion,0);assert(!h.calls.some(call=>['create','update','archive'].includes(call.operation)));
+ await h.load();assert.equal(h.button('配置权限').props.disabled,true);assert.equal(h.button('停用角色').props.disabled,true);h.button('分配账号').props.onClick();assert.deepEqual(nodes(h.findLabel('选择自定义角色')).filter(node=>node.type==='option').map(node=>node.props.value),['',roleId]);
+ h.findLabel('选择现有账号').props.onChange({target:{value:staffId}});h.findLabel('选择自定义角色').props.onChange({target:{value:roleId}});await h.form().props.onSubmit({preventDefault(){}});assert.equal(h.calls[1].operation,'assign');assert.equal(h.calls[1].expectedVersion,0);assert(!h.calls.some(call=>['create','update','archive'].includes(call.operation)));
 });
 
 function assignedDialog(overrides={},handler){
@@ -169,7 +173,7 @@ function assignedDialog(overrides={},handler){
  const draw=()=>{cursor=0;return mod.exports.default(props)},h={draw,calls,select:()=>nodes(draw()).find(node=>node.type==='select'),form:()=>nodes(draw()).find(node=>node.type==='form')};draw();return h;
 }
 test('account assigned-role editor uses explicit assignment CAS and preserves legacy profile and scope',async()=>{
- const h=assignedDialog();assert.match(text(h.draw()),/运营查看/);h.select().props.onChange({target:{value:otherId}});await h.form().props.onSubmit({preventDefault(){}});
+ const h=assignedDialog();assert.match(text(h.draw()),/运营查看/);assert.match(text(h.draw()),/在「角色管理」维护/);h.select().props.onChange({target:{value:otherId}});await h.form().props.onSubmit({preventDefault(){}});
  assert.deepEqual(h.calls,[{operation:'assign',accountId:staffId,roleId:otherId,expectedVersion:2},{operation:'reload'},{operation:'close'}]);
 });
 test('account assigned-role editor independently rejects missing action, self and fixed-owner changes',()=>{

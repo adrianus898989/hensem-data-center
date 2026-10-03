@@ -173,8 +173,60 @@
   return '<div class="analysis-compact">'+totals()+nav+(c.matrixCustom?.pageControls(time?'time':'amount')||'')+body+'</div>';
  }
  function bars(rows){const max=Math.max(1,...rows.map(r=>Number(r.value)||0));return '<div class="panel-body">'+rows.map(r=>'<div class="live-reference-bar"><span>'+r.name+'</span><div><i style="width:'+Math.max(0,(Number(r.value)||0)/max*100)+'%"></i></div><b>'+N(r.value)+'</b></div>').join('')+'</div>'}
- function business(page){const team=['teamops','teamcountries','teamplatforms'].includes(page),merchant=page==='merchants',dimension=page==='teamcountries'?'country':'platform';let items=team?[['business',page==='teamcountries'?'国家表现':'平台经营'],['trend',page==='teamops'?'团队订单趋势 / 国家分布':'全部订单金额 / 国家 × 商户关联'],['providers','团队三方使用情况']]:merchant?[['business','商户经营清单'],['trend','商户订单趋势 / 商户状态分布'],['providers','该商户的三方经营表现']]:[['business','平台内三方表现'],['fees','平台内三方成本']];const nav=choose(items);const context='<div class="workspace-context"><div><strong>'+E(team?(L.team==='all'?'全部团队经营范围':L.team):L.platform==='all'?'全部商户（平台）':L.catalog.find(x=>x.id===L.platform)?.name||'商户')+'</strong><small>'+(team?'团队 → 国家 → 平台':'商户 = 平台；归属团队 → 国家 → 平台 → 三方订单')+'</small></div><button class="btn soft" onclick="setPage(\''+(team?'teams':'teamops')+'\')">'+(team?'团队平台配置':'所属团队')+' →</button></div>';
- let body=L.view==='providers'?providersView():L.view==='fees'?providerFees():L.view==='trend'?'<div class="grid equal">'+dirs().map(d=>box(name(d)+'订单趋势',chart(groupRows('hourly').filter(r=>r.direction===d)))).join('')+dimensions('country','国家分布','team-country')+'</div>':page==='merchantproviders'?providersView():dimensions(dimension,items[0][1],'business-dimension');return context+totals()+nav+body}
+ const merchantDirections=['charge','withdraw'];
+ function merchantRows(provider=false){
+  let rows;
+  if(provider){
+   const orders=groupRows('provider');
+   rows=[...new Set(orders.map(r=>r.source||''))].flatMap(source=>sorting.overviewDimensions({orders:orders.filter(r=>(r.source||'')===source),summaries:raw().filter(r=>(r.source||'')===source),rates:L.feeLookupRows,country:L.country,key:'provider',plus,combine}).map(r=>({...r,source})));
+  }else rows=sorting.overviewDimensions({orders:groupRows('provider'),summaries:raw(),rates:L.feeLookupRows,country:L.country,key:'platform',plus,combine});
+  const pairs=new Map(),id=r=>JSON.stringify(provider?[r.provider,r.source,r.currency||'']:[(r._platformIdentity||r.platformId||JSON.stringify([r.source,r.country,r.platform])),r.currency||'']);
+  for(const row of rows){if(!merchantDirections.includes(row.direction))continue;const key=id(row);if(!pairs.has(key))pairs.set(key,{...row,directions:{}});pairs.get(key).directions[row.direction]=row;}
+  if(!provider){
+   const populated=new Set(rows.map(r=>r.platformId).filter(Boolean)),seen=new Set();
+   for(const emptyRow of [...emptyPlatformCells('charge',1),...emptyPlatformCells('withdraw',1)]){
+    if(populated.has(emptyRow.platformId)||seen.has(emptyRow.platformId))continue;seen.add(emptyRow.platformId);
+    const p=(L.queryPlatforms||[]).find(p=>p.id===emptyRow.platformId)||{};
+    const row={...emptyRow,source:p.source||'',currency:p.currency||L.currency||'',directions:{}};pairs.set(id(row),row);
+   }
+  }
+  return [...pairs.values()].sort((a,b)=>String(provider?a.provider:a.platform).localeCompare(String(provider?b.provider:b.platform))||String(a.source||'').localeCompare(String(b.source||''))||String(a.currency||'').localeCompare(String(b.currency||'')));
+ }
+ function merchantBusiness(provider=false){
+  const id=provider?'merchant-providers-unified':'merchant-platforms-unified',rows=merchantRows(provider),metrics=['all','success','pending','failed','success_rate','fee',...(!provider?['members']:[])],labels={all:'全部',success:'成功',pending:'处理中',failed:'失败',success_rate:'成功率',fee:'手续费',members:String(L.from||'').slice(0,10)===String(L.to||'').slice(0,10)?'实际人数':'实际人次'},prefix=provider?['三方','包网来源']:['平台 / 来源'];
+  const rowFor=(r,d)=>r.directions[d]?{...r.directions[d],...successTotal([r.directions[d]],d)}:null;
+  const memberFact=(r,d)=>c.memberCounts?.platformMetric?.(r.platformIds||[r.platformId],d);
+  const getter=(r,d,key)=>{const row=rowFor(r,d);if(!row)return null;if(key==='success_rate')return sorting.fraction(row.success_count,row.all_count);if(key==='fee')return c.successTimeUnavailable?.(d)?null:sorting.knownNumber(row.estimated_fee);if(key==='members')return memberFact(row,d)?.value??null;return sorting.knownNumber(row[key+'_amount']);};
+  const headings=[...prefix,...merchantDirections.flatMap(d=>metrics.map(key=>'<span class="muted">'+name(d)+'</span><br>'+E(labels[key])))],columns=[{value:r=>provider?r.provider:r.platform,ascending:true},...(provider?[textual('source')]:[]),...merchantDirections.flatMap(d=>metrics.map(key=>({value:r=>getter(r,d,key)})))];
+  const totalsByCurrency=[...new Set(rows.map(r=>r.currency||''))].map(currency=>{
+   const subset=rows.filter(r=>(r.currency||'')===currency),total={currency,directions:{},platform:'已读汇总',provider:'已读汇总',_total:true};
+   for(const d of merchantDirections){const facts=subset.map(r=>r.directions[d]).filter(Boolean);if(!facts.length)continue;const fees=scopedFeeSummary(facts,d);total.directions[d]={...successTotal(facts,d),direction:d,currency,estimated_fee:fees.amount,fee_complete:fees.complete,fee_eligible_count:fees.successCount,fee_matched_count:fees.matchedCount,fee_excluded_count:fees.excludedCount,fee_issues:fees.issues,fee_exclusions:fees.exclusions,platformIds:[...new Set(subset.flatMap(r=>r.platformIds||[r.platformId]).filter(Boolean))]};}
+   return total;
+  });
+  function metricCell(r,d,key){
+   const row=rowFor(r,d);if(!row)return unavailable;
+   if(key==='success_rate')return '<span title="成功时间内成功笔数 ÷ 创建时间内全部笔数；含跨日成功，可超过100%">'+R(row.success_count,row.all_count)+'</span>';
+   if(key==='members')return memberFact(row,d)?.html||unavailable;
+   if(key==='fee')return c.successTimeUnavailable?.(d)?unavailable:feeCell(row);
+   const tail=key==='failed'?'<small class="muted" title="驳回金额 '+E(N(row.rejected_amount))+'；未知状态金额 '+E(N(row.unknown_amount))+'">驳回 '+C(row.rejected_count)+' · 未知 '+C(row.unknown_count)+'</small>':'';
+   return '<div class="merchant-amount-count" data-business-direction="'+d+'" data-business-metric="'+key+'"><strong>'+N(row[key+'_amount'])+'</strong><small style="display:block">'+C(row[key+'_count'])+' 笔</small>'+tail+'</div>';
+  }
+  function providerDetail(r,d){if(!r.directions[d])return '';return '<button class="link" title="'+E(r.provider)+' · '+name(d)+'订单号与归类依据" onclick="liveProviderOrders('+E(JSON.stringify(r.provider))+','+E(JSON.stringify(r.source||''))+','+E(JSON.stringify(d))+')">'+name(d)+'明细</button>';}
+  function cells(r){
+   const first=r._total?'<strong>已读汇总</strong>':provider?'<strong title="'+E(r.provider)+'">'+E(r.provider)+'</strong><small style="display:block">'+merchantDirections.map(d=>providerDetail(r,d)).filter(Boolean).join(' · ')+'</small>':'<strong title="'+E(r.platform)+'">'+E(r.platform)+'</strong><small style="display:block">'+E(r.sources?.join(' / ')||r.source||'—')+'</small>';
+   return [first+'<small class="muted" style="display:block">'+E(r.currency||'币种未提供')+'</small>',...(provider?[E(r.source||'—')]:[]),...merchantDirections.flatMap(d=>metrics.map(key=>metricCell(r,d,key)))];
+  }
+  function renderTable(headers,body,footer){
+   const firstWidth=provider?180:200,sourceWidth=88,metricWidth=88,fixedCount=provider?2:1,width=firstWidth+(provider?sourceWidth:0)+merchantDirections.length*metrics.length*metricWidth;
+   const fixed=(index,header=false)=>index<fixedCount?'position:sticky;left:'+(index===0?0:firstWidth)+'px;z-index:'+(header?4:2)+';background:'+(header?'#f5f7fd':'#fff')+';text-align:left;white-space:normal;':'';
+   const style=(index,header=false)=>fixed(index,header)+'vertical-align:middle;'+(index===fixedCount||index===fixedCount+metrics.length?'border-left:2px solid #d5def2;':'')+(header&&index>=fixedCount?'background:'+(index<fixedCount+metrics.length?'#eff4ff':'#eef9f7')+';':'');
+   const htmlRows=list=>list.map(row=>'<tr>'+row.map((cell,index)=>'<td style="'+style(index)+'">'+cell+'</td>').join('')+'</tr>').join('');
+   return '<div class="table-wrap merchant-unified-table" style="overflow:auto" tabindex="0" role="region" aria-label="'+(provider?'三方':'平台')+'代收代付经营明细"><table style="table-layout:fixed;min-width:'+width+'px;width:100%;font-size:11px"><colgroup><col style="width:'+firstWidth+'px">'+(provider?'<col style="width:'+sourceWidth+'px">':'')+Array.from({length:merchantDirections.length*metrics.length},()=>'<col>').join('')+'</colgroup><thead><tr>'+headers.map((label,index)=>'<th scope="col" style="'+style(index,true)+'">'+label+'</th>').join('')+'</tr></thead><tbody>'+htmlRows(body)+'</tbody>'+(footer.length?'<tfoot>'+htmlRows(footer)+'</tfoot>':'')+'</table>'+(body.length?'':'<div class="live-empty">当前范围没有已入库经营记录</div>')+'</div>';
+  }
+  return box(provider?'该商户的三方经营表现':'商户经营清单',sortedPageTable(id,headings,rows,columns,cells,totalsByCurrency.map(cells),renderTable),'金额 / 笔数；全部与处理中按创建时间，成功按成功时间。手续费按订单创建时费率。');
+ }
+ function business(page){const team=['teamops','teamcountries','teamplatforms'].includes(page),merchant=page==='merchants',legacy=page==='merchantproviders',dimension=page==='teamcountries'?'country':'platform';let items=team?[['business',page==='teamcountries'?'国家表现':'平台经营'],['trend',page==='teamops'?'团队订单趋势 / 国家分布':'全部订单金额 / 国家 × 商户关联'],['providers','团队三方使用情况']]:merchant?[['business','商户经营清单'],['trend','商户订单趋势'],['providers','该商户的三方经营表现']]:legacy?[['business','该商户的三方经营表现']]:[['business','平台内三方表现'],['fees','平台内三方成本']];const nav=choose(items);const context='<div class="workspace-context"><div><strong>'+E(team?(L.team==='all'?'全部团队经营范围':L.team):L.platform==='all'?'全部商户（平台）':L.catalog.find(x=>x.id===L.platform)?.name||'商户')+'</strong><small>'+(team?'团队 → 国家 → 平台':'商户 = 平台；归属团队 → 国家 → 平台 → 三方订单')+'</small></div><button class="btn soft" onclick="setPage(\''+(team?'teams':'teamops')+'\')">'+(team?'团队平台配置':'所属团队')+' →</button></div>';
+ let body=legacy?merchantBusiness(true):L.view==='providers'?(merchant?merchantBusiness(true):providersView()):L.view==='fees'?providerFees():L.view==='trend'?'<div class="grid equal">'+(merchant?merchantDirections:dirs()).map(d=>box(name(d)+'订单趋势',chart(groupRows('hourly').filter(r=>r.direction===d)))).join('')+(merchant?'':dimensions('country','国家分布','team-country'))+'</div>':merchant?merchantBusiness():dimensions(dimension,items[0][1],'business-dimension');return context+totals()+nav+body}
  function providerFees(){ensureTypes();const rows=combine(groupRows('provider'),['provider','source','direction']);if(L.feeLookupRows===null&&!L.feeLookupLoading)ensureFeeLookup();return box('三方手续费汇总',sortedPageTable('provider-fees',['三方','类型','包网来源','方向','成功金额','成功笔数','估算手续费','有效费率','实际手续费'],rows,[...providerSortPrefix(),numeric('success_amount'),numeric('success_count'),feeSort,feeSort,null],r=>[E(r.provider),typeCell(r),E(r.source||'—'),name(r.direction),N(r.success_amount),C(r.success_count),feeForRow(r),feeForRow(r),unavailable]),'按当前国家与平台专属费率优先匹配；复杂阶梯或无对应记录显示“多档费率 / 未匹配”，不把费率误算成订单费用')+box('费率变更历史',refTable(['三方','方向','版本','生效时间','失效时间','百分比费率','固定费'],[]),'历史生效版本尚未接入')}
  function providers(){const nav=choose([['business','经营总览'],['fees','费用与历史版本'],['cases','工单未到账'],['decision','加量评估']]);return totals()+nav+(L.view==='fees'?providerFees():L.view==='cases'?cases():L.view==='decision'?riskPage():providersView())}
  function flowPage(d){const nav=choose([['business','三方经营明细'],['trend',name(d)+'时段表现 / 订单状态分布'],['contribution','平台贡献 / 主力金额'],['checks','独立掉单与异常']]);let body=L.view==='trend'?box(name(d)+'时段表现',chart(groupRows('hourly').filter(r=>r.direction===d)))+box('订单状态分布',refTable(['状态','金额','笔数'],['success','pending','failed','rejected','unknown'].map(k=>[({success:'成功',pending:'处理中',failed:'失败',rejected:'拒绝',unknown:'未知'})[k],N(stat(d)[k+'_amount']),C(stat(d)[k+'_count'])]))):L.view==='contribution'?dimensions('platform','平台'+name(d)+'贡献','flow-platform')+c.overviewAmounts():L.view==='checks'?exceptions():providersView();return totals()+nav+body+latencyView(false)+(d==='withdraw'?latencyView(true):'')}

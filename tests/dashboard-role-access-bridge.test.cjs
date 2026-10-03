@@ -112,7 +112,7 @@ test('assigned empty or malformed host page is rejected before auth or transport
  for(const page of ['',undefined,'bad/page','Rates']){const h=load();await assert.rejects(h.api.adminLiveRequest(session,{action:'rates'},undefined,{assigned:true,page}),/当前角色/);assert.equal(h.authCalls.length,0);assert.equal(h.calls.length,0);}
 });
 test('iframe detail prechecks match SQL for raw query, workorders and deposit statistics',async()=>{
- for(const [page,request] of [['orders',{action:'query'}],['workorders',{action:'workorderRecords',operation:'detail'}],['workorders',{action:'workorderRecords',operation:'orderDetail'}],['deposit_statistics',{action:'depositStatistics',section:'details'}],['deposit_statistics',{action:'depositIssues'}]]){
+ for(const [page,request] of [['orders',{action:'query'}],['workorders',{action:'workorderRecords',operation:'detail'}],['workorders',{action:'workorderRecords',operation:'orderDetail'}],['deposit_statistics',{action:'depositStatistics',section:'details'}],['deposit_statistics',{action:'depositStatistics',section:'kyc',dimension:'orders'}],['deposit_statistics',{action:'depositIssues'}]]){
   const h=frame(assigned([page+'.view',page+'.query']),page);await assert.rejects(h.c.hensemLiveRequest(request),/没有查看明细权限/);assert.equal(h.posts.length,0);
  }
 });

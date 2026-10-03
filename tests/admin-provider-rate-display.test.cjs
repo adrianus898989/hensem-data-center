@@ -35,6 +35,19 @@ test('expanded Speed2Pay fee tooltip uses the confirmed rule while collection ke
 test('rate preview changes do not recalculate the historical matched amount and absent versions remain unknown',()=>{
  const facts={fee_version_state:'complete',fee_version_matched_count:100,fee_version_unmatched_count:0,fee_version_estimated_amount:71.25};
  for(const label of [longRate,'9% + 99 / 笔']){const h=fixture('withdraw',label,'Speed2Pay',facts);assert.match(h.html(),/71\.25/);assert.match(h.html(),/手续费已匹配 100 \/ 100/);}
- const absent=fixture();assert.match(absent.html(),/历史费率待接入|订单创建时的费率版本或币种未确认/);assert.match(absent.html(),/—<span class="provider-partial">未匹配/);
+ const absent=fixture();assert.match(absent.html(),/历史费率未匹配|订单创建时的费率版本或币种未确认/);assert.match(absent.html(),/—<small class="provider-partial cell-sub">历史费率未匹配/);
  const partial=fixture('withdraw',longRate,'Speed2Pay',{...facts,fee_version_state:'partial',fee_version_matched_count:40,fee_version_unmatched_count:60,fee_version_estimated_amount:17.25});assert.match(partial.html(),/17\.25/);assert.match(partial.html(),/未匹配 60 笔/);assert.match(partial.html(),/手续费已匹配 40 \/ 100/);
+});
+
+test('unmatched historical fees use a separate compact line and do not guess a source-cell cause',()=>{
+ const h=fixture('charge','4%','ExamplePay');h.root.providerSummaryToggle(0);const html=h.html();
+ assert.match(html,/>4%<\/button>/,'current reference is still readable');
+ const badges=[...html.matchAll(/<small class="provider-partial cell-sub">([^<]*)<\/small>/g)];
+ assert(badges.length>=2,'parent and platform child both show the same historical coverage label');
+ assert(badges.every(m=>m[1]==='历史费率未匹配'));
+ assert.doesNotMatch(html,/BC6|缺少生效时间|自动回算/,'generic unmatched facts cannot identify one particular missing cell or offer repricing');
+ assert.match(html,/按订单创建时间匹配费率版本；未匹配部分不按零手续费计算/);
+ const css=fs.readFileSync(path.join(__dirname,'../admin-preview/live-configuration.css'),'utf8');
+ assert.match(css,/\.provider-summary-table \.cell-sub\{display:block/,'the label uses the existing separate-line style within the fixed fee column');
+ assert.equal(h.requests(),0);
 });

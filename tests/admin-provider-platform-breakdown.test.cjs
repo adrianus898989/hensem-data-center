@@ -61,7 +61,7 @@ test('known covered zero and uncovered data differ; provider/direction/country f
 });
 
 test('missing amounts stay unknown while manual and unmatched fees stay honest',()=>{
- const h=fixture([source('a',null,3),source('b',100,7)]);h.L.feeLookupRows=[];h.render();h.root.providerSummaryToggle(0);const rows=children(h.html()),cols=columns(h.html()),share=cols.indexOf('金额占比'),fee=cols.indexOf('估算手续费');assert(rows.every(r=>plain(r[share])==='—'));assert(rows.every(r=>plain(r[fee])==='—未匹配'));assert(rows.every(r=>r[fee].includes('订单创建时的费率版本或币种未确认')));assert.doesNotMatch(h.html(),/NaN|Infinity/);
+ const h=fixture([source('a',null,3),source('b',100,7)]);h.L.feeLookupRows=[];h.render();h.root.providerSummaryToggle(0);const rows=children(h.html()),cols=columns(h.html()),share=cols.indexOf('金额占比'),fee=cols.indexOf('估算手续费');assert(rows.every(r=>plain(r[share])==='—'));assert(rows.every(r=>plain(r[fee])==='—历史费率未匹配'));assert(rows.every(r=>r[fee].includes('订单创建时的费率版本或币种未确认')));assert.doesNotMatch(h.html(),/NaN|Infinity/);
 });
 
 

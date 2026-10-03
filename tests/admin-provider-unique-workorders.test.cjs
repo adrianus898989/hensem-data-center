@@ -14,13 +14,26 @@ const issueSlice=row=>row.length===26?row.slice(-10,-4):row.slice(-8,-2);
 
 test('the original six workorder columns now show deduplicated values and no duplicate column group',()=>{
  const h=setup(),html=h.html(),body=rows(html),footer=rows(html,'tfoot');
- for(const label of ['工单提交金额','工单提交笔数','工单成功金额','工单成功笔数','工单未到账金额','工单未到账笔数'])assert.match(html,new RegExp(label));
+ for(const label of ['工单提交金额','工单提交笔数','工单已处理金额','工单已处理笔数','工单未处理金额','工单未处理笔数'])assert.match(html,new RegExp(label));
  for(const label of ['去重订单金额','去重订单笔数','去重成功金额','去重成功笔数','去重未到账金额','去重未到账笔数'])assert.doesNotMatch(html,new RegExp(label));
  for(const field of ['submittedAmount','submittedCount','successAmount','successCount','notReceivedAmount','notReceivedCount'])assert.match(html,new RegExp("providerSummarySort\\('issue_"+field+"'\\)"));
  assert.equal(body[0].length,23);assert.deepEqual(issueSlice(body[0]).map(plain),['500.00','5','300.00','3','200.00','2']);
  assert.deepEqual(issueSlice(footer[0]).map(plain),['1,100.00','11','600.00','6','200.00','2']);
  assert.doesNotMatch(html,/>2,000\.00<|>1,200\.00</,'raw complete totals are no longer displayed in the workorder columns');
  assert.equal(h.networkCalls(),0);
+});
+
+test('workorder processing labels and KYC connection evidence never imply payment receipt or mutate source facts',()=>{
+ const h=setup(),before=JSON.stringify(h.L.workorders),html=h.html();
+ const headings=[...html.matchAll(/<th>([\s\S]*?)<\/th>/g)].map(m=>plain(m[1]).replace(/\s*[↕↑↓]$/,''));
+ for(const name of ['工单已处理金额','工单已处理笔数','工单未处理金额','工单未处理笔数','工单处理率'])assert(headings.includes(name));
+ assert(headings.includes('成功率'),'payment-order success rate retains its distinct meaning');
+ assert(!headings.some(name=>/工单成功|工单未到账/.test(name)));
+ const first=rows(html)[0];assert.match(first.at(-2),/笔数处理率 = 已处理原单 \/ 提交原单/);assert.equal(plain(first.at(-2)),'60.00%');
+ for(const cell of issueSlice(first)){assert.match(cell,/已处理依据关联工单状态4，不代表原订单已到账/);assert.match(cell,/可含已驳回等状态/);assert.match(cell,/同一原订单重复提交只计一次/);}
+ h.root.providerSummaryToggle(0);assert.equal(plain(cells(h.html().match(/<tr class="provider-platform-row">([\s\S]*?)<\/tr>/)[1]).at(-2)),'60.00%');
+ h.root.providerSummaryCoverage();assert.match(h.drawers.at(-1).html,/关联工单状态4表示已处理，不表示原订单已到账/);
+ assert.equal(JSON.stringify(h.L.workorders),before);assert.equal(h.networkCalls(),0);
 });
 
 test('platform expansion keeps the same six deduplicated workorder fields aligned',()=>{
@@ -87,9 +100,9 @@ test('fully read collection and payout cards separately identify named workorder
    fact('RushPay',{direction,platformId:'new-dhani',platform:'DHANIWIN',source:'NEW_AR',uniqueCoverage:{complete:false,missingDetailCount:3}}),
    fact('AliasPay',{direction,platformId:'old-82',platform:'INDIA82',source:'ar',uniqueCoverage:incomplete})
   ]};
-  h.render(direction);assert.equal(h.api.queryCoverage(h.L).received,2);assert.doesNotMatch(h.html(),/provider-api-coverage/);assert.match(h.html(),/工单统计差异 2 平台/);assert.doesNotMatch(h.html(),/缺失 \d+ 个平台|provider-kpi-warning/);
+  h.render(direction);assert.equal(h.api.queryCoverage(h.L).received,2);assert.doesNotMatch(h.html(),/provider-api-coverage/);assert.match(h.html(),/日报\/明细差异 2 平台/);assert.doesNotMatch(h.html(),/缺失 \d+ 个平台|provider-kpi-warning/);
   const gaps=h.api.workorderPlatformGaps(h.L,direction);assert.equal(gaps.length,2);assert.equal(gaps.find(p=>p.id==='new-dhani').providers.length,2);
-  h.root.providerSummaryWorkorderPlatforms();const drawer=h.drawers.at(-1);assert.equal(drawer.title,'工单统计差异说明');assert.match(drawer.html,/82LOTTERY/);assert.match(drawer.html,/DHANIWIN/);assert.match(drawer.html,/TukPay、RushPay/);assert.match(drawer.html,/工单日期已收 0 \/ 1 天/);assert.match(drawer.html,/2条采集字段未提供原订单号/);assert.match(drawer.html,/3条汇总与明细差异待核对/);assert.doesNotMatch(drawer.html,/Outside scope/);assert.equal(h.networkCalls(),0);
+  h.root.providerSummaryWorkorderPlatforms();const drawer=h.drawers.at(-1);assert.equal(drawer.title,'日报/明细差异说明');assert.match(drawer.html,/82LOTTERY/);assert.match(drawer.html,/DHANIWIN/);assert.match(drawer.html,/TukPay、RushPay/);assert.match(drawer.html,/工单日期已收 0 \/ 1 天/);assert.match(drawer.html,/2条采集字段未提供原订单号/);assert.match(drawer.html,/3条汇总与明细差异待核对/);assert.doesNotMatch(drawer.html,/Outside scope/);assert.equal(h.networkCalls(),0);
  }
 });
 
@@ -102,8 +115,8 @@ test('workorder gap card does not guess unsupported sources, ambiguous names, op
   fact('Other country',{country:'巴西',platformId:'known',uniqueCoverage:{complete:false}}),
   fact('Foreign id',{platformId:'outside',platform:'Complete',uniqueCoverage:{complete:false}})
  ]};
- h.render();assert.equal(h.api.workorderPlatformGaps(h.L,'withdraw').length,0);assert.doesNotMatch(h.html(),/工单统计差异 \d+ 平台|缺失 \d+ 个平台/);
- h.L.workorders.byPlatformProvider.push(fact('<Unsafe>',{platform:'Shared',country:'印度',source:'NEW_AR',uniqueCoverage:{complete:false,missingAmountCount:1}}));h.render();assert.match(h.html(),/工单统计差异 1 平台/);assert.equal(h.api.workorderPlatformGaps(h.L,'withdraw')[0].id,'new-a');
+ h.render();assert.equal(h.api.workorderPlatformGaps(h.L,'withdraw').length,0);assert.doesNotMatch(h.html(),/日报\/明细差异 \d+ 平台|缺失 \d+ 个平台/);
+ h.L.workorders.byPlatformProvider.push(fact('<Unsafe>',{platform:'Shared',country:'印度',source:'NEW_AR',uniqueCoverage:{complete:false,missingAmountCount:1}}));h.render();assert.match(h.html(),/日报\/明细差异 1 平台/);assert.equal(h.api.workorderPlatformGaps(h.L,'withdraw')[0].id,'new-a');
  h.root.providerSummaryWorkorderPlatforms();const html=h.drawers.at(-1).html;assert.match(html,/&lt;Unsafe&gt;/);assert.doesNotMatch(html,/<Unsafe>/);assert.match(html,/1条金额缺失/);assert.equal(h.networkCalls(),0);
  const count=h.drawers.length;h.L.dirty=true;h.root.providerSummaryWorkorderPlatforms();assert.equal(h.drawers.length,count);
 });
@@ -132,12 +145,13 @@ test('collection KYC count and amount are separate deduplicated backend columns 
  const alpha=fact('AlphaPay',{direction:'charge',uniqueNotReceivedKycCount:1,uniqueNotReceivedKycAmount:120}),beta=fact('BetaPay',{direction:'charge',uniqueNotReceivedKycCount:2,uniqueNotReceivedKycAmount:450});
  for(const row of [alpha,beta])row.uniqueCoverage={...row.uniqueCoverage,kycUnknownOrderCount:0};
  h.L.workorders={byProvider:[alpha,beta],byDirection:{charge:{...alpha,uniqueNotReceivedKycCount:4,uniqueNotReceivedKycAmount:600}},byPlatformProvider:[{...alpha,country:'印度',platformId:'a',platform:'Alpha',source:'ar'}]};
- h.render('charge');let html=h.html();assert.match(html,/未到账KYC匹配<span class="provider-heading-unit">笔数/);assert.match(html,/未到账KYC匹配<span class="provider-heading-unit">金额/);
+ h.render('charge');let html=h.html();assert.match(html,/未处理KYC连接<span class="provider-heading-unit">笔数/);assert.match(html,/未处理KYC连接<span class="provider-heading-unit">金额/);
  assert.deepEqual(rows(html)[0].slice(-4,-2).map(plain),['1','120.00']);assert.deepEqual(rows(html,'tfoot')[0].slice(-4,-2).map(plain),['4','600.00'],'whole-scope metrics come from server originals, not provider-row sums');
  assert.match(rows(html)[0].at(-4),/同一原单只计一笔/);assert.match(rows(html)[0].at(-4),/源KYC连接明确为是/);
+ assert.match(rows(html)[0].at(-4),/这是源KYC连接字段匹配，不代表KYC资料已核验、UTR已匹配或原订单已到账/);
  h.root.providerSummaryToggle(0);const child=cells(h.html().match(/<tr class="provider-platform-row">([\s\S]*?)<\/tr>/)[1]);assert.equal(child.length,26);assert.deepEqual(child.slice(-4,-2).map(plain),['1','120.00']);
  for(const key of ['uniqueNotReceivedKycCount','uniqueNotReceivedKycAmount']){h.L.providerSort='success_amount';h.render('charge');h.root.providerSummarySort('issue_'+key);assert.equal(plain(rows(h.html())[0][0]),'BetaPay');}
- assert.equal(h.networkCalls(),0);h.render('withdraw');assert.doesNotMatch(h.html(),/未到账KYC匹配/);
+ assert.equal(h.networkCalls(),0);h.render('withdraw');assert.doesNotMatch(h.html(),/未处理KYC连接/);
 });
 
 test('KYC unknown status, original gaps and missing matching amounts stay distinct from confirmed zero',()=>{
@@ -145,10 +159,10 @@ test('KYC unknown status, original gaps and missing matching amounts stay distin
  const row=fact('AlphaPay',{direction:'charge',uniqueNotReceivedKycCount:0,uniqueNotReceivedKycAmount:0});row.uniqueCoverage={...row.uniqueCoverage,kycUnknownOrderCount:0};
  h.L.workorders={byProvider:[row],byDirection:{charge:row},byPlatformProvider:[]};h.render('charge');assert.deepEqual(rows(h.html())[0].slice(-4,-2).map(plain),['0','0.00']);
  row.uniqueCoverage.complete=false;h.render();assert.deepEqual(rows(h.html())[0].slice(-4,-2).map(plain),['—','—'],'incomplete original coverage cannot establish zero KYC matches');row.uniqueCoverage.complete=true;
- row.uniqueCoverage.kycUnknownOrderCount=2;h.render();assert.deepEqual(rows(h.html())[0].slice(-4,-2).map(plain),['—','—']);assert.match(rows(h.html())[0].at(-4),/2个去重未到账原单的KYC状态未确认/);
+ row.uniqueCoverage.kycUnknownOrderCount=2;h.render();assert.deepEqual(rows(h.html())[0].slice(-4,-2).map(plain),['—','—']);assert.match(rows(h.html())[0].at(-4),/2个去重未处理原单的KYC连接状态未确认/);
  row.uniqueNotReceivedKycCount=1;row.uniqueNotReceivedKycAmount=150;h.render();assert.deepEqual(rows(h.html())[0].slice(-4,-2).map(plain),['1部分','150.00部分']);assert.equal(plain(issueSlice(rows(h.html())[0]).at(-1)),'2','KYC unknown does not alter total outstanding orders');
  row.uniqueNotReceivedKycAmount=null;h.render();assert.equal(plain(rows(h.html())[0].at(-4)),'1部分');assert.equal(plain(rows(h.html())[0].at(-3)),'—');assert.match(rows(h.html())[0].at(-3),/金额缺失或冲突/);
- delete row.uniqueNotReceivedKycCount;delete row.uniqueNotReceivedKycAmount;delete row.uniqueCoverage.kycUnknownOrderCount;h.render();assert.deepEqual(rows(h.html())[0].slice(-4,-2).map(plain),['—','—']);assert.match(rows(h.html())[0].at(-4),/KYC核验结果尚未返回/);
+ delete row.uniqueNotReceivedKycCount;delete row.uniqueNotReceivedKycAmount;delete row.uniqueCoverage.kycUnknownOrderCount;h.render();assert.deepEqual(rows(h.html())[0].slice(-4,-2).map(plain),['—','—']);assert.match(rows(h.html())[0].at(-4),/源KYC连接字段尚未返回/);
  assert.equal(h.networkCalls(),0);
 });
 

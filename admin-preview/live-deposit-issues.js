@@ -10,14 +10,17 @@
   const {L,E,C,N,R,metric,box,table,pager,render,request,formatTime}=ctx;
   const sourceUrl='https://docs.google.com/spreadsheets/d/1Y110H-E0ny6Yj6ZEhn7tRLgCuRrSE5iDeFwaZ8-aCqg/edit?gid=1642433306#gid=1642433306';
   const entryUrl='https://docs.google.com/spreadsheets/d/1UBnMj2JS4eDfT-gdE-flUVLWs387FgoR6Rw2baLYzoE/edit?gid=2140568082#gid=2140568082';
-  Object.assign(L,{depositIssuesView:'entries',depositIssuesSection:'details',depositIssuesDateMode:'range',depositIssuesDateInitialized:false,depositIssuesMatch:'all',depositIssuesFollowupStatus:'',depositIssuesOrderNumber:'',depositIssuesWorkOrderNumber:'',depositIssuesUtr:'',depositIssuesUpiId:'',depositIssuesKycUpiId:'',depositIssuesReply:'',depositIssuesUtrMatch:'',depositIssuesKycCorrect:'',depositIssuesStaffCode:'',depositIssuesSourceKind:'all',depositIssuesAmountMin:'',depositIssuesAmountMax:''});
+  Object.assign(L,{depositIssuesView:'entries',depositIssuesSection:'details',depositIssuesWorkspace:'sheet',depositIssuesDateMode:'range',depositIssuesDateInitialized:false,depositIssuesMatch:'all',depositIssuesFollowupStatus:'',depositIssuesOrderNumber:'',depositIssuesWorkOrderNumber:'',depositIssuesUtr:'',depositIssuesUpiId:'',depositIssuesKycUpiId:'',depositIssuesReply:'',depositIssuesUtrMatch:'',depositIssuesKycCorrect:'',depositIssuesStaffCode:'',depositIssuesSourceKind:'all',depositIssuesAmountMin:'',depositIssuesAmountMax:''});
   const facets={};
+  const kycWorkspace=root.HensemLiveDepositWorkspace?.create(ctx);
+  const money=v=>v==null?'—':N(v);
+  function workspaceNav(){return isStatistics()?'<nav class="deposit-workspace-nav" aria-label="未到账数据视图"><button class="'+(L.depositIssuesSection==='kyc'?'':'on')+'" onclick="depositIssuesSection(\'summary\')">核对统计</button><button class="'+(L.depositIssuesSection==='kyc'?'on':'')+'" onclick="depositIssuesSection(\'kyc\')">KYC / NON-KYC 原单匹配</button><button onclick="depositIssuesSource(\'entries\')">员工跟进 →</button></nav>':'';}
   let lastReadAt=0,refreshTimer=null;
   function ensureDateRange(){if(L.depositIssuesDateInitialized||!L.catalogReady)return;const range=root.HensemWorkorderUI.recentSevenDays(L.country,L.catalog);L.from=range.from+'T00:00:00';L.to=range.to+'T23:59:59';L.depositIssuesDateMode='range';L.depositIssuesDateInitialized=true;}
 
   const isStatistics=()=>ctx.page?.()==='deposit_statistics';
   function syncView(){if(ctx.page){const view=isStatistics()?'results':'entries';if(L.depositIssuesView!==view){L.depositIssuesView=view;L.depositIssuesSection=view==='entries'?'details':'summary';L.depositIssues=null;L.depositIssuesError='';L.depositIssuesLoading=false;}}}
-  const classification=v=>({received:'本订单入款',unreceived:'本订单未入款',other_order:'入其他订单',other_provider:'转其他三方',unclassified:'未分类'}[v]||'未分类');
+  const classification=v=>({received:'本订单入款',unreceived:'本订单未入款',other_order:'入其他订单',other_provider:'转其他三方',unclassified:'未分类',conflict:'来源冲突'}[v]||'未分类');
   root.depositIssuesMethod=()=>{const entries=L.depositIssuesView==='entries';ctx.openDrawer?.('统计口径','<p>'+E(entries?'跟进记录与核对结果分别统计；成功到其他平台、账号或订单，不计为本订单入款。原表按同平台、完整订单号及 UTR 关联，重复或金额不一致时保留待核对。':'汇总、三方和每日视图来自同一份核对明细，不重复累计。入其他订单、转其他三方单独统计；未分类保留待核对。表格标记不代表已核实实际到账。')+'</p><p>'+E(entries?'日期按跟进日期筛选；未填写日期的记录可选“全部日期”查看。':'日期按完整 RC 订单号中的凭证日期筛选；无有效日期的记录可选“全部日期”查看。')+'</p>');};
   const currentPager=(total,page,size)=>root.HensemWorkorderUI?root.HensemWorkorderUI.pager(total,page,size,'depositIssues',L.depositIssuesLoading):pager(total,page,size,'deposit-issues');
   const followupName=value=>({success:'成功',pending:'尚未到账',other_id:'成功到其他账号',other_platform:'成功到其他平台',other_order:'成功到其他订单',over30:'超过 30 天 / 退款',over15:'超过 15 天 / 退款',need_evidence:'待补材料',no_refund:'不退款',appeal:'申诉跟进',unknown:'未填写（前端记录）','need to provide pdf/video':'待补 PDF / 视频','not yet received':'尚未收到','success to other platform':'成功到其他平台','success to other id':'成功到其他账号','success to other order':'成功到其他订单',refund:'退款','more than 30days/refund':'超过 30 天 / 退款','more than 15days refund':'超过 15 天 / 退款','save upi / no refund':'保存 UPI / 不退款'}[String(value||'').toLowerCase()]||value||'未填写');
@@ -37,18 +40,20 @@
   }
   function summaryCards(result){
    const s=result.summary||{},entries=L.depositIssuesView==='entries';
-   return '<div class="live-metrics deposit-metrics'+(entries?'':' deposit-stat-metrics')+'">'+(entries?[
-    ['跟进记录',C(s.count)],['工单前端记录',C(s.portalCount)],['已关联表格',C(s.linkedCount)],['未关联表格',C(s.unlinkedCount)],['关联待核对',C(s.reviewCount)],['待补 PDF / 视频',C(s.evidenceCount)],['退款相关跟进',C(s.refundCount)]
-   ]:[['核对表记录',C(s.count),N(s.amount)+' INR'],['本订单入款标记',C(s.receivedCount),N(s.receivedAmount)+' INR'],['本订单未入款标记',C(s.unreceivedCount),N(s.unreceivedAmount)+' INR'],['入其他订单',C(s.otherOrderCount),N(s.otherOrderAmount)+' INR'],['转其他三方',C(s.otherProviderCount),N(s.otherProviderAmount)+' INR'],['未分类',C(s.unclassifiedCount),N(s.unclassifiedAmount)+' INR'],['已确认',C(s.confirmedCount)],['待核查',C(s.pendingVerificationCount)],['对不上',C(s.unmatchedCount)],['未填写日期',C(s.undatedCount)]]).map(([label,value,sub])=>metric(label,value,sub)).join('')+'</div>';
+   if(entries)return '<div class="live-metrics deposit-metrics">'+[['跟进记录',C(s.count)],['工单前端记录',C(s.portalCount)],['已关联表格',C(s.linkedCount)],['未关联表格',C(s.unlinkedCount)],['关联待核对',C(s.reviewCount)],['待补 PDF / 视频',C(s.evidenceCount)],['退款相关跟进',C(s.refundCount)]].map(([label,value])=>metric(label,value)).join('')+'</div>';
+   const cards=[['原支付订单',s.count,s.amount,'all'],['本订单入款标记',s.receivedCount,s.receivedAmount,'received'],['本订单未入款标记',s.unreceivedCount,s.unreceivedAmount,'unreceived'],['入其他订单',s.otherOrderCount,s.otherOrderAmount,'other'],['转其他三方',s.otherProviderCount,s.otherProviderAmount,'other'],['未分类 / 来源冲突',s.unclassifiedCount,s.unclassifiedAmount,'unknown']];
+   const unit=typeof result.currency==='string'&&/^[A-Z]{3,6}$/.test(result.currency)?' '+E(result.currency):'';
+   return '<div class="deposit-overview-cards">'+cards.map(([label,count,amount,tone])=>'<article class="deposit-overview-card deposit-tone-'+tone+'"><span>'+E(label)+'</span><strong>'+C(count)+'<small> 笔</small></strong><div>'+money(amount)+(amount==null?'':unit||' · 币种未提供')+'</div></article>').join('')+'</div><div class="deposit-quality-strip">'+[['原表行',s.rawRowCount],['重复来源行',s.duplicateRows],['来源冲突',s.conflictCount],['原表已确认',s.confirmedCount],['待核实',s.pendingVerificationCount],['对不上',s.unmatchedCount],['无有效日期',s.undatedCount]].filter(([,v])=>v!=null).map(([label,v])=>'<span>'+E(label)+' <b>'+C(v)+'</b></span>').join('')+'</div>';
   }
   function groupTable(result,kind,preview=false){
    let headers,rows,title;
+   const pair=(count,amount)=>'<strong>'+C(count)+' <small>笔</small></strong><small>'+money(amount)+'</small>';
    if(kind==='providers'){
-    title='三方查看';headers=preview?['统一三方','对账','原表分类','记录数','金额']:['统一三方','对账','原表分类','记录数','金额','本订单入款笔数','本订单入款金额','本订单未入款笔数','本订单未入款金额','入其他订单笔数','入其他订单金额','转其他三方笔数','转其他三方金额','未分类笔数','未分类金额','最长天数'];
-    rows=(isStatistics()&&L.depositIssuesSection==='providers'?result.rows||[]:result.providerSummary||[]).map((r,i)=>['<button class="deposit-table-link" onclick="depositIssuesDrill(\'providers\','+i+')">'+E(r.provider)+'</button>',E(r.matchStatus),E(r.confirmation||'未分类'),C(r.count),N(r.amount),...(preview?[]:[C(r.receivedCount),N(r.receivedAmount),C(r.unreceivedCount),N(r.unreceivedAmount),C(r.otherOrderCount),N(r.otherOrderAmount),C(r.otherProviderCount),N(r.otherProviderAmount),C(r.unclassifiedCount),N(r.unclassifiedAmount),C(r.maxDays)])]);
+    title='三方核对分布';headers=['统一三方','对账 / 原表分类','原订单 / 金额','本订单入款','本订单未入款','其他订单 / 三方','未分类 / 最长'];
+    rows=(isStatistics()&&L.depositIssuesSection==='providers'?result.rows||[]:result.providerSummary||[]).map((r,i)=>['<button class="deposit-table-link" onclick="depositIssuesDrill(\'providers\','+i+')">'+E(r.provider)+'</button>',E(r.matchStatus||'待核对')+'<small>'+E(r.confirmation||'未分类')+'</small>',pair(r.count,r.amount),pair(r.receivedCount,r.receivedAmount),pair(r.unreceivedCount,r.unreceivedAmount),'<strong>'+C(r.otherOrderCount)+' / '+C(r.otherProviderCount)+'</strong><small>'+money(r.otherOrderAmount)+' / '+money(r.otherProviderAmount)+'</small>',C(r.unclassifiedCount)+'<small>'+(r.maxDays==null?'—':C(r.maxDays)+' 天')+'</small>']);
    }else if(kind==='daily'){
-    title='每日汇总';headers=preview?['凭证日期','合计','本订单入款','本订单未入款','入其他订单','转其他三方','未分类']:['凭证日期','合计','本订单入款笔数','本订单入款金额','本订单未入款笔数','本订单未入款金额','入其他订单笔数','入其他订单金额','转其他三方笔数','转其他三方金额','未分类笔数','未分类金额','已确认','待核查','对不上'];
-    rows=(isStatistics()&&L.depositIssuesSection==='daily'?result.rows||[]:result.dailySummary||[]).map((r,i)=>[r.date?'<button class="deposit-table-link" onclick="depositIssuesDrill(\'daily\','+i+')">'+E(r.date)+'</button>':'未填写日期',C(r.count),...(preview?[C(r.receivedCount),C(r.unreceivedCount),C(r.otherOrderCount),C(r.otherProviderCount),C(r.unclassifiedCount)]:[C(r.receivedCount),N(r.receivedAmount),C(r.unreceivedCount),N(r.unreceivedAmount),C(r.otherOrderCount),N(r.otherOrderAmount),C(r.otherProviderCount),N(r.otherProviderAmount),C(r.unclassifiedCount),N(r.unclassifiedAmount),C(r.confirmedCount),C(r.pendingVerificationCount),C(r.unmatchedCount)])]);
+    title='每日核对分布';headers=['凭证日期','原订单 / 金额','本订单入款','本订单未入款','其他订单 / 三方','未分类','已确认 / 待核实'];
+    rows=(isStatistics()&&L.depositIssuesSection==='daily'?result.rows||[]:result.dailySummary||[]).map((r,i)=>[r.date?'<button class="deposit-table-link" onclick="depositIssuesDrill(\'daily\','+i+')">'+E(r.date)+'</button>':'无有效日期',pair(r.count,r.amount),pair(r.receivedCount,r.receivedAmount),pair(r.unreceivedCount,r.unreceivedAmount),'<strong>'+C(r.otherOrderCount)+' / '+C(r.otherProviderCount)+'</strong><small>'+money(r.otherOrderAmount)+' / '+money(r.otherProviderAmount)+'</small>',pair(r.unclassifiedCount,r.unclassifiedAmount),C(r.confirmedCount)+' / '+C(r.pendingVerificationCount)]);
    }else if(kind==='platforms'){
     title=L.depositIssuesView==='entries'?'各平台录入进度':'各平台核对统计';headers=['平台','记录数','前端记录','已关联表格','待关联 / 待核对','表格未入款笔数','表格未入款金额'];
     rows=(result.platformSummary||[]).map((r,i)=>['<button class="deposit-table-link" onclick="depositIssuesDrill(\'platforms\','+i+')">'+E(r.platform)+'</button>',C(r.count),C(r.portalCount),C(r.linkedCount),C(r.unlinkedCount),C(r.unreceivedCount),N(r.unreceivedAmount)]);
@@ -59,27 +64,36 @@
    const id='deposit-'+kind,size=Number(L.tableSizes?.[id]||20),page=Math.min(Number(L.tablePages?.[id]||1),Math.max(1,Math.ceil(rows.length/size)));
    const part=preview?rows.slice(0,8):isStatistics()?rows:rows.slice((page-1)*size,page*size);
    const tail=preview?'<div class="deposit-group-more"><button class="btn" onclick="depositIssuesSection(\''+kind+'\')">查看全部 →</button></div>':isStatistics()?currentPager(Number(result.total||0),L.depositIssuesPage,L.depositIssuesSize):pager(rows.length,page,size,'ref-'+id);
-   return box(title,table(headers,part,'deposit-statistics')+tail);
+   return box(title,table(headers,part,'deposit-statistics deposit-group-compact')+tail);
   }
   let detailRows=[];
-  root.depositIssuesDetail=index=>{const row=detailRows[index];if(!row)return;ctx.openDrawer?.('跟进详情 · '+(row.platform||''),table(['字段','完整内容'],row.fields,'deposit-entry-full-detail'));};
+  root.depositIssuesDetail=index=>{const row=detailRows[index];if(!row)return;ctx.openDrawer?.((L.depositIssuesView==='entries'?'跟进详情':'核对详情')+' · '+(row.platform||''),table(['字段','完整内容'],row.fields,'deposit-entry-full-detail'));};
   function details(result){
    const entries=L.depositIssuesView==='entries',rows=result.rows||[];
    const sourceLink=(r)=>{
     if(r.sourceKind==='portal')return '<span title="记录 ID：'+E(r.portalCaseId||'未提供')+'">工单前端</span>';
+    if(r.sourceRow==null)return '<span>'+C(r.sourceCount||r.sourceRowCount||r.sources?.length)+' 个来源行 · 查看详情</span>';
     const url=entries&&r.sourceGid!=null&&Number.isSafeInteger(Number(r.sourceGid))?entryUrl.replace(/gid=2140568082/g,'gid='+Number(r.sourceGid)) : entries?entryUrl:sourceUrl;
     return '<a href="'+url+'&range=A'+Number(r.sourceRow||1)+':P'+Number(r.sourceRow||1)+'" target="_blank" rel="noopener noreferrer">第 '+C(r.sourceRow)+' 行 ↗</a>';
    };
    const headers=entries?['平台','订单号','工单号','UTR','UPI ID','KYC-UPI ID','金额','三方','跟进状态','三方回复','UTR 核验','KYC 核验','PDF / 视频','跟进时间','凭证日期','距今天数','原表员工编号','首次录入员工','最后跟进员工','表格关联','核对表日期','数据来源']:['凭证日期','平台','三方','订单号','UTR','UPI ID','KYC-UPI ID','金额','表格入款标记','距今天数','表格对账','原表分类','统计归类','UTR 匹配','KYC 正确','原表','三方回复'];
    const rendered=rows.map(r=>entries?[
     E(r.platform),E(r.orderNumber||'—'),E(r.workOrderNumber||'未填写'),E(r.utr||'—'),E(r.upiId||'—'),E(r.kycUpiId||'—'),r.amount==null?'—':N(r.amount),'<span title="原表三方：'+E(r.rawProvider||r.provider||'未填写')+'">'+E(r.provider||'未填写')+'</span>','<span title="'+E(r.followupStatus)+'">'+E(followupName(r.followupStatus))+'</span>',reply(r.providerReply),E(r.utrMatch||'未填写'),E(r.kycCorrect||'未填写'),reply(r.evidence),E(r.followupAt||'未填写'),'<span title="从 RC 开头订单号提取；原表文本仅保留为参考">'+E(r.orderDate||'—')+'</span>',r.daysSinceOrder==null?'—':C(r.daysSinceOrder),E(r.staffCode||'未提供'),E(r.firstActor||'未提供'),E(r.lastActor||'未提供'),linkState(r)+(r.linkStatus==='matched'?'<div>'+status(r.status,'表格：')+'</div>':''),E(r.resultDate||'—'),sourceLink(r)
-   ]:[E(r.orderDate||'未填写日期'),E(r.platform),'<span title="原始三方：'+E(r.rawProvider||r.provider)+'">'+E(r.provider||'—')+'</span>',E(r.orderNumber||'—'),E(r.utr||'—'),E(r.upiId||'—'),E(r.kycUpiId||'—'),N(r.amount),status(r.status),r.daysSinceOrder==null?'—':C(r.daysSinceOrder),E(r.matchStatus||'待核对'),E(r.confirmation||'未分类'),E(classification(r.statisticsStatus)),E(r.utrMatch||'—'),E(r.kycCorrect||'—'),sourceLink(r),reply(r.providerReply)]);
+   ]:[E(r.orderDate||'未填写日期'),E(r.platform),'<span title="原始三方：'+E(r.rawProvider||r.provider)+'">'+E(r.provider||'—')+'</span>',E(r.orderNumber||'—'),E(r.utr||'—'),E(r.upiId||'—'),E(r.kycUpiId||'—'),money(r.amount),status(r.status),r.daysSinceOrder==null?'—':C(r.daysSinceOrder),E(r.matchStatus||'待核对'),E(r.confirmation||'未分类'),E(classification(r.statisticsStatus)),E(r.utrMatch||'—'),E(r.kycCorrect||'—'),sourceLink(r),reply(r.providerReply)]);
    const fullText=html=>String(html).replace(/<[^>]*>/g,'').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
+   detailRows=rendered.map((cells,i)=>({platform:rows[i].platform,fields:headers.map((label,n)=>[label,cells[n]])}));
+   if(!entries){
+    rows.forEach((r,i)=>{if(Array.isArray(r.sources)&&r.sources.length)detailRows[i].fields.push(['来源行证据',table(['页 / 行','原金额','三方','状态 / 分类','人工 KYC / UTR'],r.sources.map(source=>[E(source.sourceTab||'UPI核对')+' / '+C(source.sourceRow),money(source.amount),E(source.provider||'未提供'),E(source.status||'未提供')+' / '+E(source.confirmation||'未提供'),E(source.manualKyc||'未提供')+' / '+E(source.manualUtr||'未提供')]),'deposit-entry-full-detail')+(r.sourcesTruncated?'<p>共 '+C(r.sourceCount)+' 个来源行，当前展示部分。</p>':'')]);});
+    const compact=rows.map((r,i)=>['<strong>'+E(r.platform||'—')+'</strong><small>'+E(r.orderNumber||'缺原单号')+'</small>',E(r.provider||'未填写'),money(r.amount),E(classification(r.statisticsStatus)),'<span>'+E(r.orderDate||'无有效日期')+'</span><small>'+ (r.daysSinceOrder==null?'—':C(r.daysSinceOrder)+' 天')+'</small>',E(r.matchStatus||'待核对')+'<small>'+E(r.confirmation||'未分类')+'</small>',E(r.kycCorrect||'未填写')+' / '+E(r.utrMatch||'未填写'),sourceLink(r),'<button type="button" class="deposit-table-link" onclick="depositIssuesDetail('+i+')">详情</button>']);
+    return box('原订单核对明细',table(['平台 / 原支付订单','统一三方','金额','核对分类','凭证日期 / 天数','对账 / 原表确认','人工 KYC / UTR','来源','操作'],compact,'deposit-compact-details')+currentPager(Number(result.total||0),L.depositIssuesPage,L.depositIssuesSize));
+   }
    if(entries){detailRows=rendered.map((cells,i)=>({platform:rows[i].platform,fields:headers.map((label,n)=>[label,cells[n]])}));rendered.forEach((cells,i)=>{for(let n=0;n<cells.length;n++)cells[n]='<span class="wo-cell-value" title="'+E(fullText(cells[n]))+'">'+cells[n]+'</span>';cells.push('<button type="button" class="link" title="查看完整跟进记录" aria-label="查看完整跟进记录" onclick="depositIssuesDetail('+i+')">详情</button>');});headers.push('操作');}
    return box(entries?'员工跟进明细':'表格核对明细',table(entries?headers.map(label=>'<span title="'+E(label)+'">'+E(label==='距今天数'?'天数':label)+'</span>'):headers,rendered,'deposit-issues-columns'+(entries?' deposit-entry-details':' deposit-result-details'))+currentPager(Number(result.total||0),L.depositIssuesPage,L.depositIssuesSize));
   }
   function view(){
-   syncView();startRefresh();const head=toolbar();
+   syncView();startRefresh();const nav=workspaceNav();
+   if(isStatistics()&&L.depositIssuesSection==='kyc')return nav+(kycWorkspace?kycWorkspace.render():'<div class="live-status live-error">原单匹配模块尚未加载，请刷新页面。</div>');
+   const head=nav+toolbar();
 
    if(L.depositIssuesLoading&&!L.depositIssues)return head+'<div class="live-status">正在读取记录…</div>';
    if(L.depositIssuesError&&!L.depositIssues)return head+'<div class="live-status live-error">'+E(L.depositIssuesError)+' <button class="btn" onclick="depositIssuesLoad()">重试</button></div>';
@@ -90,7 +104,7 @@
    return head+(L.depositIssuesError?'<div class="live-status live-error">'+E(L.depositIssuesError)+' · 保留上次结果</div>':'')+(L.depositIssuesLoading?'<div class="wo-loading">读取中…</div>':'')+(section==='summary'&&L.depositIssues?summaryCards(result):'')+'<div class="deposit-context"><button type="button" class="deposit-table-link" onclick="depositIssuesMethod()">统计口径</button>'+(entries&&L.depositIssues?'<button type="button" class="deposit-table-link" onclick="depositIssuesRefresh()" '+(L.depositIssuesLoading||L.depositIssuesDirty?'disabled':'')+'>刷新</button><span>每 30 秒更新</span>':'')+'<span>同步于 '+E(result.updatedAt?formatTime(result.updatedAt,'Asia/Kolkata'):'—')+' · 印度时间</span></div>'+tabs+'<div class="deposit-tables">'+content+'</div>';
   }
   async function load(reset=false,background=false){
-   if(!L.catalogReady)return;syncView();ensureDateRange();if(reset)L.depositIssuesPage=1;const serial=++L.depositIssuesSerial;
+   if(!L.catalogReady)return;syncView();if(isStatistics()&&L.depositIssuesSection==='kyc')return kycWorkspace?.load();ensureDateRange();if(reset)L.depositIssuesPage=1;const serial=++L.depositIssuesSerial;
    L.depositIssuesLoading=true;L.depositIssuesError='';L.depositIssuesDirty=false;L.dirty=false;if(!background)render();
    try{
     const q={action:isStatistics()?'depositStatistics':'depositIssues',...(isStatistics()?{section:L.depositIssuesSection}:{view:'entries'}),dateMode:L.depositIssuesDateMode,startAt:L.from.slice(0,10)+'T00:00:00.000Z',endAt:L.to.slice(0,10)+'T23:59:59.000Z',offset:(L.depositIssuesPage-1)*L.depositIssuesSize,limit:L.depositIssuesSize};
@@ -114,7 +128,7 @@
   root.depositIssuesRefresh=()=>refresh(true);
   const onFocus=()=>refresh(),onVisibility=()=>{if(root.document?.visibilityState==='visible')refresh()};
   function startRefresh(){if(refreshTimer!==null||ctx.page?.()!=='deposit_tracking'||!L.depositIssues||L.depositIssuesDirty||!root.document||!root.setInterval)return;refreshTimer=root.setInterval(()=>refresh(),30000);root.addEventListener?.('focus',onFocus);root.document.addEventListener?.('visibilitychange',onVisibility);}
-  function destroy(){if(refreshTimer!==null)root.clearInterval?.(refreshTimer);refreshTimer=null;root.removeEventListener?.('focus',onFocus);root.document?.removeEventListener?.('visibilitychange',onVisibility);}
+  function destroy(){kycWorkspace?.destroy();if(refreshTimer!==null)root.clearInterval?.(refreshTimer);refreshTimer=null;root.removeEventListener?.('focus',onFocus);root.document?.removeEventListener?.('visibilitychange',onVisibility);}
   root.depositIssuesQuery=(form,event)=>readQuery(form,event,()=>{if(!L.depositIssuesLoading)return load(true)});
   function dirty(doRender=true){L.depositIssuesPage=1;L.depositIssuesSerial++;L.depositIssuesDirty=true;L.depositIssuesLoading=false;if(doRender)render()}
   root.depositIssuesSet=function(key,value){
@@ -133,7 +147,7 @@
   };
   root.depositIssuesDate=function(key,value){ensureDateRange();if(!['from','to'].includes(key)||!/^\d{4}-\d{2}-\d{2}$/.test(value))return;L[key]=value+(key==='from'?'T00:00:00':'T23:59:59');L.depositIssuesDateMode='range';dirty()};
   root.depositIssuesSource=function(value){if(!['results','entries'].includes(value))return;if(ctx.page&&root.setPage){root.setPage(value==='entries'?'deposit_tracking':'deposit_statistics');return;}L.depositIssuesView=value;L.depositIssuesSection=value==='entries'?'details':'summary';L.depositIssues=null;dirty()};
-  root.depositIssuesSection=function(value){const valid=isStatistics()?['summary','details','providers','daily']:['details'];if(valid.includes(value)){L.depositIssuesSection=value;L.depositIssues=null;dirty()}};
+  root.depositIssuesSection=function(value){const valid=isStatistics()?['summary','details','providers','daily','kyc']:['details'];if(valid.includes(value)){const hadResult=!!L.depositIssues||L.depositIssuesSection==='kyc';if(L.depositIssuesSection==='kyc')kycWorkspace?.pause();L.depositIssuesSection=value;L.depositIssues=null;dirty();if(value==='kyc')return kycWorkspace?.load();if(hadResult)return load(true)}};
   root.depositIssuesMonth=()=>{if(!L.catalogReady)return;const range=root.HensemWorkorderUI.currentMonth(L.country,L.catalog);L.from=range.from+'T00:00:00';L.to=range.to+'T23:59:59';L.depositIssuesDateMode='range';L.depositIssuesDateInitialized=true;dirty();};
   root.depositIssuesToday=()=>{if(!L.catalogReady)return;const range=root.HensemWorkorderUI.today(L.country,L.catalog.filter(p=>!L.depositIssuesPlatform||L.depositIssuesPlatform==='all'||p.name===L.depositIssuesPlatform));L.from=range.from+'T00:00:00';L.to=range.to+'T23:59:59';L.depositIssuesDateMode='range';L.depositIssuesDateInitialized=true;dirty();};
   root.depositIssuesMore=()=>{L.depositIssuesMore=!L.depositIssuesMore;render()};
@@ -150,6 +164,6 @@
    else if(kind==='statuses')L.depositIssuesFollowupStatus=row.status;
    L.depositIssuesSection='details';load(true);
   };
-  return {render:view,load,refresh,destroy};
+  return {render:view,load,refresh,destroy,pause:()=>{L.depositIssuesSerial++;L.depositIssuesLoading=false;kycWorkspace?.pause();},capture:()=>kycWorkspace?.capture(),restore:value=>kycWorkspace?.restore(value),clear:key=>{if(key==='deposit_statistics')kycWorkspace?.clear();}};
  }};
 })(window);

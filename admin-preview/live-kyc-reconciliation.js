@@ -25,7 +25,7 @@
  const E=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const n=v=>(typeof v==='number'||typeof v==='string')&&String(v).trim()!==''&&Number.isSafeInteger(Number(v))&&Number(v)>=0?Number(v):null;
  const C=v=>n(v)===null?'—':n(v).toLocaleString('en-US');
- const currency=v=>typeof v==='string'&&/^[A-Z]{3}$/.test(v)?v:null;
+ const currency=v=>typeof v==='string'&&/^[A-Z]{3,6}$/.test(v)?v:null;
  function decimal(v){if(typeof v!=='number'&&typeof v!=='string')return null;const s=String(v),m=/^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(s);return m?m[1]+m[2].replace(/\B(?=(\d{3})+(?!\d))/g,',')+'.'+(m[3]||'').padEnd(2,'0'):null}
  const M=(v,unit)=>decimal(v)!==null&&currency(unit)?decimal(v)+' '+unit:'—';
  const ratio=(a,b)=>n(a)!==null&&n(b)>0?(n(a)/n(b)*100).toFixed(2)+'%':'—';
@@ -65,7 +65,7 @@
   function pager(){const total=n(snapshot?.total),size=filters.limit,page=Math.floor(filters.offset/size)+1,last=total===null?null:Math.max(1,Math.ceil(total/size));return '<div class="kr-pager"><span>共 '+C(total)+' '+(resultDimension==='orders'?'条记录':'组')+'</span><label>每页 <select aria-label="每页条数" '+action('size',[],'change',true)+'>'+[20,50,100].map(v=>'<option '+(v===size?'selected':'')+'>'+v+'</option>').join('')+'</select></label>'+button('上一页','page',[page-1],loading||page<=1?'disabled':'')+'<span>'+C(page)+' / '+C(last)+'</span>'+button('下一页','page',[page+1],loading||last===null||page>=last?'disabled':'')+'</div>'}
   function render(data,readFilters){if(arguments.length){snapshot=data??null;snapshotFilters={...(readFilters||filters)};resultDimension=Object.hasOwn(dimensions,snapshot?.dimension)?snapshot.dimension:snapshotFilters.dimension;if(n(snapshot?.offset)!==null)filters.offset=n(snapshot.offset);if([20,50,100].includes(n(snapshot?.limit)))filters.limit=n(snapshot.limit)}const cov=snapshot?.coverage,changed=snapshotFilters&&Object.keys(snapshotFilters).some(key=>snapshotFilters[key]!==filters[key]);return '<section class="kr-panel" data-kyc-reconciliation="'+E(id)+'"><header><h2>KYC · 原订单核对</h2><div>'+button('统计口径','explain',[],'class="kr-link"')+'<span>'+E(snapshot?.updatedAt?'更新于 '+snapshot.updatedAt:'尚未读取')+'</span></div></header>'+tabs()+filtersView()+(error?'<div class="kr-error" role="alert">'+E(error)+'</div>':'')+(loading?'<div class="kr-progress" role="status">读取中…</div>':'')+(snapshot?metrics():'')+'<div class="kr-toolbar"><nav aria-label="统计分组">'+Object.entries(dimensions).map(([key,label])=>button(label,'dimension',[key],'aria-pressed="'+(filters.dimension===key)+'"')).join('')+'</nav><span class="kr-statuses">'+(ctx.privatePreview===true?badge('本机私有'):'')+(snapshot&&!currency(snapshot.currency)?badge('币种待核实'):'')+(cov?.complete===false?badge('范围未完整','warn'):'')+(n(snapshot?.summary?.unknownProcessing?.count)>0?badge('状态待核对 '+C(snapshot.summary.unknownProcessing.count),'warn'):'')+(snapshot&&changed?badge('条件已修改，查询后更新'):'')+'</span></div>'+(resultDimension==='orders'?orderTable():groupTable())+pager()+'</section>'}
   function filter(key,value){if(!['query','platform','provider','from','to','processing','matchStatus'].includes(key))return;const allowed=key==='processing'?['all','processed','rejected','unprocessed','unknown']:key==='matchStatus'?['all',...Object.keys(matchLabels)]:null;if(key==='matchStatus')value=matchKind(value);if(allowed&&!allowed.includes(value))return;if(['from','to'].includes(key)&&value&&!/^\d{4}-\d{2}-\d{2}$/.test(value))return;filters[key]=String(value).slice(0,200);filters.offset=0;}
-  function restoreFilters(value){
+  function restoreFilters(value,notify=true){
    if(!value||typeof value!=='object'||Array.isArray(value))return false;
    const next={...defaultFilters(),...value};if(Object.keys(value).some(key=>!Object.hasOwn(filters,key)))return false;
    next.matchStatus=matchKind(next.matchStatus);
@@ -74,10 +74,13 @@
    if(['from','to'].some(key=>{const date=next[key];if(!date)return false;if(!/^\d{4}-\d{2}-\d{2}$/.test(date))return true;const parsed=new Date(date+'T00:00:00Z');return !Number.isFinite(parsed.getTime())||parsed.toISOString().slice(0,10)!==date}))return false;
    if(next.from&&next.to&&next.from>next.to)return false;
    if(n(next.offset)===null||![20,50,100].includes(n(next.limit)))return false;
-   next.offset=n(next.offset);next.limit=n(next.limit);requestSerial++;loading=false;error='';filters=next;emit();return true;
+   next.offset=n(next.offset);next.limit=n(next.limit);requestSerial++;loading=false;error='';filters=next;if(notify)emit();return true;
   }
   async function query(){if(typeof ctx.onQuery!=='function')return;if(filters.from&&filters.to&&filters.from>filters.to){error='开始日期不能晚于结束日期';emit();return}const own=++requestSerial,requested={...filters};loading=true;error='';emit();try{const result=await ctx.onQuery(requested);if(own!==requestSerial)return;if(result!==undefined)render(result,requested)}catch(e){if(own!==requestSerial)return;error=e?.message||'核对数据读取失败';ctx.onError?.(e)}finally{if(own===requestSerial){loading=false;emit()}}}
-  const api={render,query,filter,restoreFilters,getState:()=>({...filters}),getSnapshot:()=>snapshot,dispose:()=>{requestSerial++;instances.delete(id)},dispatch(method,...args){
+  function pause(){requestSerial++;if(loading)error='读取已暂停，点击查询更新';loading=false;}
+  function capture(){return {filters:{...filters},snapshot,snapshotFilters:snapshotFilters?{...snapshotFilters}:null,resultDimension,error:loading?'读取已暂停，点击查询更新':error,more};}
+  function restore(value){pause();if(!value){filters=defaultFilters();snapshot=null;snapshotFilters=null;resultDimension='platform';error='';more=false;return true;}if(!restoreFilters(value.filters,false))return false;snapshot=value.snapshot??null;snapshotFilters=value.snapshotFilters?{...value.snapshotFilters}:null;resultDimension=Object.hasOwn(dimensions,value.resultDimension)?value.resultDimension:'platform';error=String(value.error||'');more=!!value.more;return true;}
+  const api={render,query,filter,restoreFilters,pause,capture,restore,clear:()=>restore(null),getState:()=>({...filters}),getSnapshot:()=>snapshot,dispose:()=>{pause();instances.delete(id)},dispatch(method,...args){
    if(method==='filter'){filter(...args);return}
    if(method==='query')return query();
    if(method==='reset'){requestSerial++;loading=false;filters=defaultFilters();snapshot=null;snapshotFilters=null;resultDimension='platform';error='';emit();return}

@@ -405,7 +405,7 @@ test('account page opens a real list with permitted account and role tabs, keeps
   const h=componentHarness('account-fixture',options);await flush();const before=findElement(h.draw(),'iframe').props.srcDoc,reads=h.calls.length;
   const send=data=>h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),...data}});
   send({command:'account-page',active:true,bounds:{top:143,left:242,width:1200}});let tree=h.draw(),all=elements(tree);
-  const tabs=all.filter(n=>n.props?.role==='tab');assert.deepEqual(tabs.map(n=>n.props.children),options.role==='owner'?['前端工单账号','后台账号','角色与目录权限']:['前端工单账号','后台账号']);assert.equal(tabs[0].props.disabled,!options.workorder);assert.equal(tabs[1].props.disabled,!options.accounts);
+  const tabs=all.filter(n=>n.props?.role==='tab');assert.deepEqual(tabs.map(n=>n.props.children),options.role==='owner'?['前端工单账号','后台账号','角色管理']:['前端工单账号','后台账号']);assert.equal(tabs[0].props.disabled,!options.workorder);assert.equal(tabs[1].props.disabled,!options.accounts);
   assert.equal(all.some(n=>n.type?.name==='WorkOrderAccountAdmin'),options.workorder);assert.equal(all.some(n=>n.type?.name==='AdminControlCenter'),!options.workorder&&options.accounts);
   assert(!all.some(n=>n.props?.role==='dialog'||n.props?.['aria-modal']),'page is inline, not another dialog');
   assert(!all.some(n=>n.type==='button'&&/^(关闭|管理后台账号|管理工单账号)$/.test(n.props.children)));
