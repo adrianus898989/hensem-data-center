@@ -115,7 +115,7 @@ test('stale visible event callback cannot start an operation under a newly switc
 });
 test('modal draft survives changing modules and search without saving or assigning',async()=>{
  const h=ui();await h.load();h.button('新建角色').props.onClick();h.findLabel('角色名称').props.onChange({target:{value:'待配置'}});h.findLabel('总览 · 查看目录与页面').props.onChange({target:{checked:true}});
- const nav=h.findLabel('角色权限模块'),other=nodes(nav).find(node=>node.type==='button'&&text(node).startsWith('团队运营中心'));other.props.onClick();h.findLabel('搜索目录或操作权限').props.onChange({target:{value:'不存在'}});assert.equal(h.findLabel('角色名称').props.value,'待配置');assert.match(text(h.draw()),/已启用 1 项权限/);assert.match(text(h.draw()),/当前模块没有匹配/);assert.equal(h.calls.length,1);
+ const nav=h.findLabel('角色权限模块'),other=nodes(nav).find(node=>node.type==='button'&&text(node).startsWith('运营中心'));other.props.onClick();h.findLabel('搜索目录或操作权限').props.onChange({target:{value:'不存在'}});assert.equal(h.findLabel('角色名称').props.value,'待配置');assert.match(text(h.draw()),/已启用 1 项权限/);assert.match(text(h.draw()),/当前模块没有匹配/);assert.equal(h.calls.length,1);
 });
 
 
@@ -189,9 +189,9 @@ test('assigned-role conflict preserves chosen role for review and does not close
 const legacyMerchantCodes=['merchantproviders.view','merchantproviders.query','merchantproviders.detail','merchantproviders.export'];
 test('merchant directory display uses the current sidebar title without changing the canonical page or module permissions',async()=>{
  const before=JSON.stringify(catalog),canonical=catalog.pages.find(page=>page.id==='merchants'),page=display.dashboardRoleDisplayPages.find(page=>page.id==='merchants');
- assert.equal(canonical.label,'平台汇总');assert.deepEqual(plain(page),{...canonical,label:'商户经营'});assert.equal(JSON.stringify(catalog),before);
- const merchantPages=display.dashboardRoleDisplayPages.filter(page=>page.moduleId==='merchant');assert.equal(merchantPages.length,4);assert.equal(merchantPages.reduce((sum,page)=>sum+page.actions.length,0),16);
- const h=ui();await h.load();h.button('配置权限').props.onClick();nodes(h.findLabel('角色权限模块')).find(node=>node.type==='button'&&text(node).startsWith('商户运营中心')).props.onClick();
+ assert.equal(canonical.label,'平台汇总');assert.deepEqual(plain(page),{...canonical,label:'商户经营',moduleLabel:'运营中心'});assert.equal(JSON.stringify(catalog),before);
+ const merchantPages=display.dashboardRoleDisplayPages.filter(page=>page.moduleId==='merchant');assert.equal(merchantPages.length,7);assert.equal(merchantPages.reduce((sum,page)=>sum+page.actions.length,0),28);
+ const h=ui();await h.load();h.button('配置权限').props.onClick();nodes(h.findLabel('角色权限模块')).find(node=>node.type==='button'&&text(node).startsWith('运营中心')).props.onClick();
  assert(h.findLabel('商户经营 · 查看目录与页面'));assert.doesNotMatch(text(h.draw()),/平台汇总/);assert(h.calls.every(call=>call.operation==='list'));
 });
 test('display catalog hides only the retired merchant page without altering canonical validation or saved permissions',async()=>{
@@ -205,12 +205,12 @@ test('display catalog hides only the retired merchant page without altering cano
 });
 test('retired merchant permissions are absent from role editor and all display counts but survive visible selection and save',async()=>{
  const saved={...role,permissions:[...role.permissions,...legacyMerchantCodes]},h=ui(async q=>q.operation==='list'?{roles:[saved],accounts:[account,owner]}:{role:{...saved,name:q.name,permissions:q.permissions,version:3}});await h.load();
- const matrix=h.findLabel('角色目录权限矩阵'),heads=nodes(matrix).filter(node=>node.type==='th').map(text),index=heads.findIndex(label=>label.startsWith('商户运营中心'));assert(index>=0);
- const merchantTotal=catalog.pages.filter(page=>page.moduleId==='merchant'&&page.id!=='merchantproviders').reduce((n,page)=>n+page.actions.length,0);
+ const matrix=h.findLabel('角色目录权限矩阵'),heads=nodes(matrix).filter(node=>node.type==='th').map(text),index=heads.findIndex(label=>label.startsWith('运营中心'));assert(index>=0);
+ const merchantTotal=display.dashboardRoleDisplayPages.filter(page=>page.moduleId==='merchant').reduce((n,page)=>n+page.actions.length,0);
  const cells=nodes(matrix).filter(node=>node.type==='tr'&&nodes(node).some(cell=>cell.type==='td')).map(row=>nodes(row).filter(node=>node.type==='td'));
  assert.equal(text(cells[0][index]),merchantTotal+' / '+merchantTotal);assert.equal(text(cells[1][index]),'0 / '+merchantTotal);
  h.button('配置权限').props.onClick();assert.match(text(h.draw()),/已启用 2 项权限 · 1 个目录/);
- const merchantButton=nodes(h.findLabel('角色权限模块')).find(node=>node.type==='button'&&text(node).startsWith('商户运营中心'));merchantButton.props.onClick();
+ const merchantButton=nodes(h.findLabel('角色权限模块')).find(node=>node.type==='button'&&text(node).startsWith('运营中心'));merchantButton.props.onClick();
  assert.doesNotMatch(text(h.draw()),/平台三方分析|平台汇总/);assert.match(text(h.draw()),/商户经营/);
  h.findLabel('搜索目录或操作权限').props.onChange({target:{value:'merchantproviders'}});assert.match(text(h.draw()),/当前模块没有匹配的目录/);assert.equal(h.button('全选当前结果').props.disabled,true);
  h.findLabel('搜索目录或操作权限').props.onChange({target:{value:''}});h.button('全选当前结果').props.onClick();h.button('取消当前结果').props.onClick();
@@ -220,8 +220,17 @@ test('retired merchant permissions are absent from role editor and all display c
 test('assignment display excludes retired counters but delegation still requires every original permission',async()=>{
  const restrictedRole={...role,permissions:[...role.permissions,...legacyMerchantCodes]},rights={mode:'assigned',canView:true,permissions:['access.view','access.edit',...role.permissions]};
  const h=assignedDialog({roles:[restrictedRole],isOwner:true});
- const chip=nodes(h.draw()).find(node=>node.props?.className==='admin-module-permission-chip'&&text(node).startsWith('商户运营中心'));
- const total=catalog.pages.filter(page=>page.moduleId==='merchant'&&page.id!=='merchantproviders').reduce((n,page)=>n+page.actions.length,0);assert.equal(text(chip),'商户运营中心0/'+total);
+ const chip=nodes(h.draw()).find(node=>node.props?.className==='admin-module-permission-chip'&&text(node).startsWith('运营中心'));
+ const total=display.dashboardRoleDisplayPages.filter(page=>page.moduleId==='merchant').reduce((n,page)=>n+page.actions.length,0);assert.equal(text(chip),'运营中心0/'+total);
  const delegated=assignedDialog({roles:[restrictedRole],isOwner:false,session:{...session,user:{id:'delegate'}},roleAccess:rights});assert.deepEqual(nodes(delegated.select()).filter(node=>node.type==='option').map(node=>node.props.value),['']);
  const manager=ui(async()=>({roles:[restrictedRole],accounts:[account,owner]}),{profile:{...profile,role:'viewer'},roleAccess:rights});await manager.load();assert.equal(manager.button('分配账号').props.disabled,true);assert(manager.calls.every(call=>call.operation==='list'));
+});
+
+test('team views migrate to operations presentation while preserving every original saved grant',async()=>{
+ const before=JSON.stringify(catalog),keys=['teamops','teamcountries','teamplatforms'],saved={...role,permissions:['teamcountries.view','teamcountries.query']};
+ for(const id of keys){const original=catalog.pages.find(page=>page.id===id),visible=display.dashboardRoleDisplayPages.find(page=>page.id===id);assert.equal(original.moduleId,'team');assert.equal(visible.moduleId,'merchant');assert.equal(visible.moduleLabel,'运营中心');assert.deepEqual(plain(visible.actions),original.actions);assert.deepEqual(plain(visible.requests),original.requests);}
+ assert(!display.dashboardRoleDisplayPages.some(page=>page.moduleId==='team'));assert.equal(JSON.stringify(catalog),before);
+ const h=ui(async q=>q.operation==='list'?{roles:[saved],accounts:[account,owner]}:{role:{...saved,permissions:q.permissions,version:3}});await h.load();h.button('配置权限').props.onClick();
+ const modules=nodes(h.findLabel('角色权限模块')).filter(node=>node.type==='button');assert.equal(modules.filter(node=>text(node).startsWith('运营中心')).length,1);assert(!modules.some(node=>/团队运营中心|商户运营中心/.test(text(node))));
+ modules.find(node=>text(node).startsWith('运营中心')).props.onClick();assert(h.findLabel('团队经营 · 国家表现 · 查看目录与页面'));await h.form().props.onSubmit({preventDefault(){}});assert.deepEqual(h.calls[1].permissions,[...saved.permissions].sort());
 });

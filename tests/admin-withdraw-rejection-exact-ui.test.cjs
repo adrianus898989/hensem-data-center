@@ -40,3 +40,27 @@ test('empty source notes remain explicit and summary-only origins cannot open fa
 test('manual blocking original modal still uses its existing cleaned template presentation',()=>{
  const h=fixture({...data,rows:[]},'blocking');h.root.withdrawReasonOriginal('Alpha...\n\nAlpha full text','自动出款拦截原文');assert.equal(h.page.state.originalNote,'Alpha full text');assert.match(h.html(),/aria-label="自动出款拦截原文"/);
 });
+const stateGroups=[
+ {rejectionNoteState:'withheld',category:'（源业务备注已隐藏，驳回备注待核对）',sourceReason:null,sourceVariantCount:null,categoryKey:'a'.repeat(32),count:7},
+ {rejectionNoteState:'missing',category:'（未采集到明确驳回备注）',sourceReason:null,sourceVariantCount:null,categoryKey:'b'.repeat(32),count:2},
+ {rejectionNoteState:'empty',category:'（源备注为空）',sourceReason:null,sourceVariantCount:null,categoryKey:'c'.repeat(32),count:1},
+ {rejectionNoteState:'present',category:'source text',sourceReason:'source text',sourceVariantCount:1,categoryKey:'d'.repeat(32),count:1},
+];
+const stateData={...data,rejectionNoteStateVersion:'wg_source_note_state_v1',noteCount:11,total:4,categories:stateGroups,rows:stateGroups,summary:{totalRejected:11,knownReasonCount:1,withheldReason:7,missingReason:2,emptyReason:1,presentReason:1,operators:1}};
+test('WG summary and state groups distinguish hidden/missing/empty without counting unknown original texts',()=>{
+ const h=fixture(stateData),html=h.html();assert.match(html,/<span>已知原备注种类<\/span><strong>1<\/strong>/);assert.match(html,/<span>源业务备注已隐藏<\/span><strong>7<\/strong>/);assert.match(html,/<span>未采集明确驳回备注<\/span><strong>2<\/strong>/);assert.match(html,/<span>源备注为空<\/span><strong>1<\/strong>/);
+ assert.match(html,/原文种类待核对/);assert.match(html,/来源状态合桶不表示同一驳回原因/);assert.match(html,/63\.64%/);assert.match(html,/隐藏原文需在源平台核对/);assert.doesNotMatch(html,/不同原备注<\/span><strong>4|保留完整原备注/);
+});
+test('WG hidden state drills by its key and order detail exposes factual source states separately from interception',async()=>{
+ const h=fixture(q=>q.kind==='orders'?{...stateData,total:1,rows:[{orderNumber:'SYNTHETIC-HIDDEN',status:'rejected',rejectionReason:null,rawRejectionReason:null,rejectionNoteState:'withheld',sourceNoteStates:{remark:'template',front:'withheld',back:'empty'},hiddenNoteSources:['front'],manualRemark:'Synthetic auto-withdraw review template'}]}:stateData);
+ h.root.withdrawReasonDrill(0,'category');await settle();assert.equal(h.calls.at(-1).category,stateGroups[0].categoryKey);assert.match(h.html(),/前台备注已隐藏，驳回备注待核对/);assert.match(h.html(),/主备注：已采集业务模板 · 前台备注：已隐藏 · 后台备注：为空/);assert.match(h.html(),/Synthetic auto-withdraw review template/);assert.doesNotMatch(h.html(),/（源备注为空）/);assert.equal(h.page.state.reasonData.rows[0].rejectionReason,null);
+});
+test('WG original distribution retains absence state and operators call unknown notes unavailable',()=>{
+ const h=fixture({...stateData,rows:stateGroups.map(x=>({...x,reason:x.category,reasonKey:x.categoryKey}))},'rejection');assert.match(h.html(),/源业务备注已隐藏，驳回备注待核对/);assert.match(h.html(),/未采集到明确驳回备注/);assert.match(h.html(),/（源备注为空）/);
+ const operators=fixture({...stateData,total:1,rows:[{operator:'synthetic-agent',count:11,categoryCount:1,missingReasonCount:10,operatorKey:'a'.repeat(32)}]},'operators');assert.match(operators.html(),/已知原备注种类\|无可用驳回备注/);assert.doesNotMatch(operators.html(),/不同原备注\|备注为空/);
+});
+
+test('verified front evidence displays the confirmed text and provenance without claiming original collector text was recovered',()=>{
+ const h=fixture({...stateData,total:1,rows:[{orderNumber:'SYNTHETIC-VERIFIED',status:'rejected',rawRejectionReason:'Synthetic confirmed front business text',rejectionReason:'Synthetic confirmed front business text',rejectionNoteState:'present',sourceNoteStates:{remark:'template',front:'withheld',back:'empty'},hiddenNoteSources:['front'],verifiedRejectionNote:{sourceField:'frontRemark',verificationMethod:'manual_source_ui',verifiedAt:'2026-09-30T05:00:00Z'}}]},'orders');
+ assert.match(h.html(),/Synthetic confirmed front business text/);assert.match(h.html(),/前台备注：已在源站核实/);assert.doesNotMatch(h.html(),/前台备注：已隐藏/);assert.equal(h.page.state.reasonData.rows[0].sourceNoteStates.front,'withheld');
+});
