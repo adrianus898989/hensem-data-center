@@ -4,18 +4,18 @@ const filename=path.join(repo,'src/lib/ownerPreviewShell.ts');
 function load(document){const module={exports:{}};const code=ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;vm.runInNewContext(code,{module,exports:module.exports,document},{filename});return module.exports}
 const api=load();
 const html='<!doctype html><html><head><title>Hensem</title><style>.topbar{display:none}</style></head><body><aside class="sidebar"></aside><main class="main"><div class="topbar">Top</div><div>content</div></main></body></html>';
-test('one 48px sticky iframe bar reserves the real account and owner grant space',()=>{
+test('one 48px sticky iframe bar reserves the real account space equally for owner and viewer',()=>{
  const owner=api.makeOwnerPreviewShellDocument(html,'nonce',true),viewer=api.makeOwnerPreviewShellDocument(html,'nonce',false);
  assert(owner.indexOf('owner-preview-frame-shell-style')>owner.indexOf('.topbar{display:none}'));
  assert.match(owner,/position:sticky!important;top:0!important;z-index:30!important/);
  assert.match(owner,/height:48px!important;min-height:48px!important;display:flex!important;visibility:visible!important/);
- for(const css of ['padding-right:276px!important','padding-right:142px!important'])assert(owner.includes(css));
- for(const css of ['padding-right:184px!important','padding-right:60px!important'])assert(viewer.includes(css));
+ for(const css of ['padding-right:184px!important','padding-right:60px!important']){assert(owner.includes(css));assert(viewer.includes(css))}
+ assert.equal(owner,viewer,'the retired grant control no longer changes header geometry');
  assert.match(api.OWNER_PREVIEW_HOST_CSS,/auth-user-trigger\{[^}]*height:32px!important/);
  assert.match(api.OWNER_PREVIEW_HOST_CSS,/auth-user-menu-wrap\{top:8px!important;right:12px!important/);
  assert(!api.OWNER_PREVIEW_HOST_CSS.includes('height:38px'));
- for(const width of [1280,1024]){const frameRight=width-276,grantLeft=width-180-84,accountLeft=width-12-160;assert(grantLeft-frameRight>=12);assert(accountLeft-(width-180)>=8)}
- for(const width of [800,480]){assert((width-56-74)-(width-142)>=12);assert((width-12-36)-(width-56)>=8)}
+ for(const width of [1280,1024]){const frameRight=width-184,accountLeft=width-12-160;assert(accountLeft-frameRight>=12)}
+ for(const width of [800,480]){const frameRight=width-60,accountLeft=width-12-36;assert(accountLeft-frameRight>=12)}
 });
 test('host body marker restores the prior state on unmount',()=>{
  const names=new Set(['existing-module']);const body={classList:{contains:x=>names.has(x),add:x=>names.add(x),remove:x=>names.delete(x)}};const scoped=load({body});

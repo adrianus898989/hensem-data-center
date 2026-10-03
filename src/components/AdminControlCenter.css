@@ -274,3 +274,19 @@
 .admin-account-role-create-row select{flex:1;min-width:0;min-height:36px;border:1px solid #d8e0ea;border-radius:7px;padding:0 10px;background:#fff;color:#294363;font:inherit}
 .admin-account-role-create-row button{flex-shrink:0;min-height:36px}
 .admin-account-create-panel .admin-account-edit-hint{margin:8px 0;color:#617d9e;font-size:12px;line-height:1.6}
+
+/* Account settings use the same role assignment contract as the directory. */
+.admin-account-current-role { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px; border: 1px solid #cbdcf4; border-radius: 10px; background: #f4f8ff; }
+.admin-account-current-role small, .admin-account-current-role strong { display: block; }
+.admin-account-current-role small { color: #5f7591; font-size: 11px; }
+.admin-account-current-role strong { margin-top: 4px; color: #254e8b; font-size: 16px; }
+.admin-account-current-role p { margin: 5px 0 0; color: #61758f; font-size: 12px; }
+.admin-account-current-role button { flex-shrink: 0; }
+.admin-data-scope-modes label { padding: 9px 12px; border: 1px solid #dce6f4; border-radius: 8px; background: #f7faff; }
+.admin-data-scope-selected { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 12px 0; color: #456489; font-size: 12px; }
+.admin-data-scope-selected span { overflow-wrap: anywhere; }
+.admin-data-scope-picker input.admin-data-scope-search { width: 100%; height: 36px; margin-bottom: 8px; padding: 7px 10px; border: 1px solid #cbdcf4; border-radius: 7px; font: inherit; font-size: 12px; }
+.admin-data-scope-groups section + section { border-top: 1px solid #e7edf6; margin-top: 12px; padding-top: 10px; }
+.admin-data-scope-groups h4 { margin: 0; color: #5b718e; font-size: 11px; }
+.admin-data-scope-groups .admin-data-scope-options { padding-top: 9px; gap: 10px; }
+@media (max-width: 600px) { .admin-account-current-role { align-items: stretch; flex-direction: column; } }

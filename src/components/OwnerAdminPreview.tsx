@@ -6,7 +6,6 @@ import { makeOwnerPreviewDocument, OWNER_PREVIEW_DRAFT_KEYS, ownerPreviewDraftAl
 import { restoreApprovedAdmin } from "@/lib/adminPreviewRestore";
 import { ownerPreviewTransportRead, retryOwnerPreviewVerification } from "@/lib/ownerPreviewVerification";
 import { adminPreviewRequest } from "@/lib/adminPreviewClient";
-import AdminPreviewGrants from "./AdminPreviewGrants";
 import AdminControlCenter from "./AdminControlCenter";
 import WorkOrderAccountAdmin from "./WorkOrderAccountAdmin";
 import AccountIpAdmin from "./AccountIpAdmin";
@@ -30,7 +29,6 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   const [roleAccess,setRoleAccess]=useState<DashboardRoleAccess|null>(null);
   const [documentHtml,setDocumentHtml]=useState(""),[error,setError]=useState(""),[reload,setReload]=useState(0);
   const allowed=profile.active===true&&canView&&session.user.id===accountId,owner=profile.active===true&&profile.role==="owner";
-  const [showGrants,setShowGrants]=useState(false);
   const [accountView,setAccountView]=useState<"accounts"|"workorder"|"roles"|null>(null);
   const [securityBounds,setSecurityBounds]=useState<{top:number;left:number;width:number}|null>(null);
   const [accountBounds,setAccountBounds]=useState<{top:number;left:number;width:number}|null>(null);
@@ -44,7 +42,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   const readDrafts=useCallback(()=>{const values:Record<string,string>={};for(const key of OWNER_PREVIEW_DRAFT_KEYS){try{const value=localStorage.getItem(storagePrefix+key);if(value!==null&&ownerPreviewDraftAllowed(key,value))values[key]=value}catch{}}return values},[storagePrefix]);
   useEffect(()=>{
     const clearPreview=()=>{liveStopRef.current?.();liveStopRef.current=null;presenceStopRef.current?.();presenceStopRef.current=null;
-      setDocumentHtml("");roleAccessRef.current=null;setRoleAccess(null);setAccountBounds(null);setSecurityBounds(null);setAccountView(null);setShowGrants(false)};
+      setDocumentHtml("");roleAccessRef.current=null;setRoleAccess(null);setAccountBounds(null);setSecurityBounds(null);setAccountView(null)};
     clearPreview();setError("");setVerificationStatus("");if(!allowed)return;
     let cancelled=false,checking=false,retrying=false,revision=0,published=false;const controller=new AbortController();
     channel.current=crypto.randomUUID();
@@ -97,9 +95,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   useEffect(()=>{if(!allowed||!hasDocument)return;const stop=installDashboardPresenceBridge({source:()=>frame.current?.contentWindow,channel:()=>channel.current,accountId:()=>sessionRef.current.user.id,canViewAccounts:()=>!!roleAccessRef.current&&(roleAccessRef.current.mode!=="assigned"||dashboardRoleAllows(roleAccessRef.current,"access"))});presenceStopRef.current=stop;return()=>{if(presenceStopRef.current===stop)presenceStopRef.current=null;stop()}},[allowed,hasDocument,accountId]);
   return <section className="owner-preview-shell" aria-label="数据中控后台">
     <style>{OWNER_PREVIEW_HOST_CSS}</style>
-    {owner&&<button type="button" className="owner-preview-shell-grants" aria-label="管理后台查看授权" disabled={!allowed||!hasDocument} onClick={()=>setShowGrants(true)}>查看授权</button>}
     {allowed&&documentHtml?<iframe ref={frame} title="数据中控后台" sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" srcDoc={documentHtml} className="owner-preview-shell-frame"/>:<div role={error?"alert":"status"} className="owner-preview-shell-status">{!allowed?"当前账号没有后台查看权限":error||verificationStatus||"正在验证查看权限并加载后台…"}<div className="owner-preview-shell-status-actions"><button type="button" className="owner-preview-shell-return" onClick={onLogout}>退出登录</button>{error&&<button type="button" className="owner-preview-shell-return" onClick={()=>setReload(x=>x+1)}>重新加载</button>}</div></div>}
-    {owner&&allowed&&hasDocument&&showGrants&&<AdminPreviewGrants session={session} onClose={()=>setShowGrants(false)}/>}
     {allowed&&hasDocument&&accountBounds&&dashboardRoleAllows(roleAccess,"access")&&<section aria-label="账号与角色权限" className="owner-preview-account-page" style={{top:Math.max(48,accountBounds.top),left:accountBounds.left,width:accountBounds.width}}>
       <div role="tablist" aria-label="账号类型" className="owner-preview-account-tabs">
         <button type="button" role="tab" id="owner-workorder-tab" aria-controls="owner-workorder-panel" aria-selected={activeAccountView==="workorder"} disabled={!owner} title={owner?undefined:"仅总管理员可管理前端工单账号"} onClick={()=>setAccountView("workorder")}>前端工单账号</button>

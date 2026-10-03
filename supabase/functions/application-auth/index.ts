@@ -4,24 +4,18 @@ import { createClient } from 'jsr:@supabase/supabase-js@2.117.2';
 import { createApplicationAuthHandler, type AuthGateway, type Tokens } from './handler.ts';
 // @ts-ignore Deno source extension.
 import { SecurityError, PROXY_KEY_SHA256 } from '../_shared/application-security.ts';
+// @ts-ignore Deno source extension.
+import { parseAuthTokenResponse, type AuthTokenGrant } from './token-response.ts';
 declare const Deno:{env:{get(name:string):string|undefined};serve(handler:(r:Request)=>Promise<Response>):void};
 const url=(Deno.env.get('SUPABASE_URL')||'').replace(/\/$/,''), service=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')||'', anon=Deno.env.get('SUPABASE_ANON_KEY')||'';
 const timedFetch:typeof fetch=(input,init)=>fetch(input,{...init,signal:AbortSignal.timeout(12000),redirect:'error'});
 const admin=createClient(url,service,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:timedFetch}});
 function checked(result:any){if(result.error)throw new Error('Application authorization unavailable');return result.data;}
 async function rpc(name:string,args:Record<string,unknown>){return checked(await admin.rpc(name,args));}
-async function authTokens(kind:string,body:Record<string,string>):Promise<Tokens>{
+async function authTokens(kind:AuthTokenGrant,body:Record<string,string>):Promise<Tokens>{
  const res=await timedFetch(url+'/auth/v1/token?grant_type='+kind,{method:'POST',headers:{apikey:anon,'Content-Type':'application/json'},body:JSON.stringify(body)});
  const value=await res.json().catch(()=>null);
- if(!res.ok){
-  // Only GoTrue's invalid_credentials is a password failure. 429, unavailable,
-  // and upstream policy failures must not accidentally disable an account.
-  if(kind==='password'&&value?.code==='invalid_credentials')throw new SecurityError(401,'invalid_credentials','账号或密码不正确');
-  if(kind==='refresh_token'&&[400,401,403].includes(res.status))throw new SecurityError(401,'login_required','登录已失效');
-  throw new SecurityError(503,'auth_unavailable','登录服务暂时不可用');
- }
- if(!value||typeof value.access_token!=='string'||typeof value.refresh_token!=='string'||!Number.isFinite(value.expires_in)||!value.user?.id)throw new Error('Invalid Auth result');
- return {access_token:value.access_token,refresh_token:value.refresh_token,expires_in:value.expires_in,expires_at:Math.floor(Date.now()/1000)+value.expires_in,token_type:'bearer',user:{id:value.user.id,email:value.user.email}};
+ return parseAuthTokenResponse(kind,res.status,value);
 }
 const gateway:AuthGateway={
  begin:(surface,username,ip,attempt)=>rpc('application_auth_begin',{p_surface:surface,p_username:username,p_ip:ip,p_attempt_id:attempt}),

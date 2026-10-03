@@ -169,9 +169,9 @@ test('scope editor keeps draft local, sends only scope on explicit save and reta
   tree=render();assert(nodes(tree).some(node=>node.props?.role==='alert'));assert.deepEqual(nodes(tree).find(node=>typeof node.type==='function').props.value,PANGHU);
   nodes(tree).find(node=>node.type==='button'&&node.props.children==='取消范围修改').props.onClick();tree=render();assert.deepEqual(nodes(tree).find(node=>typeof node.type==='function').props.value,ALL);
 });
-test('scope picker uses Panghu first, leaves all read-only for limited actor, and requires nonempty selected',()=>{
+test('scope picker groups current scope keys, leaves all read-only for limited actor, and requires nonempty selected',()=>{
   const render=scopeUi('DataScopePicker',{id:'fixture',value:{mode:'selected',countries:[]},actor:profile('owner','owner'),disabled:false,onChange:()=>{}});
-  const tree=render(),labels=nodes(tree).filter(node=>node.type==='label');assert.equal(labels[2].props.children[1],'胖虎巴西');
+  const tree=render();assert.deepEqual(nodes(tree).filter(node=>node.type==='h4').map(node=>node.props.children),['国家 / 地区','团队','特定盘口 / 通道']);assert.equal(nodes(tree).filter(node=>node.type==='input'&&node.props.type==='checkbox').length,18);
   assert(nodes(tree).some(node=>node.props?.role==='status'));
   const limited=scopeUi('DataScopePicker',{id:'fixture',value:PANGHU,actor:profile('admin','admin',{data_scope:PANGHU}),disabled:false,onChange:()=>{}})();
   const all=nodes(limited).find(node=>node.type==='input'&&node.props.value==='all');assert.equal(all.props.disabled,true);
@@ -323,4 +323,26 @@ test('assigned account operations reject stale target rights, malformed guard an
   const result=await edge(action,{}, {...options,role:'viewer',roleAccess:assignedRole(['access.view','access.edit','access.reset_password','access.delete'])});assert([403,503].includes(result.status));assert.deepEqual(result.writes,[]);assert.deepEqual(result.authCalls,[]);
  }
  for(const action of ['update-account','update-viewer']){const result=await edge(action,{permissions:full},{role:'viewer',roleAccess:assignedRole(['access.view','access.edit'])});assert.equal(result.status,403);assert.deepEqual(result.writes,[]);}
+});
+
+
+test('scope search never drops saved selections or changes scope until explicit interaction',()=>{
+  const selected={mode:'selected',countries:['BR_PANGHU','HK_TEAM','IN']},calls=[];
+  const render=scopeUi('DataScopePicker',{id:'search-scope',value:selected,actor:profile('owner','owner'),disabled:false,onChange:value=>calls.push(value)});
+  let tree=render();nodes(tree).find(n=>n.props?.type==='search').props.onChange({target:{value:'香港'}});tree=render();
+  const choices=nodes(tree).filter(n=>n.props?.type==='checkbox');assert.equal(choices.length,1);assert.equal(choices[0].props.value,'HK_TEAM');assert.equal(choices[0].props.checked,true);assert.deepEqual(calls,[]);
+  choices[0].props.onChange({target:{checked:false}});assert.deepEqual(calls,[{mode:'selected',countries:['BR_PANGHU','IN']}]);
+  nodes(tree).find(n=>n.props?.type==='search').props.onChange({target:{value:'unmatched'}});tree=render();assert.equal(nodes(tree).filter(n=>n.props?.type==='checkbox').length,0);assert.deepEqual(selected.countries,['BR_PANGHU','HK_TEAM','IN']);assert.equal(calls.length,1);
+});
+test('unsaved selected-empty draft still shows the real saved all scope and cannot save',()=>{
+  const calls=[],render=scopeUi('AccountDataScopeEditor',{user:profile('target','viewer',{data_scope:ALL}),actor:profile('owner','owner'),busy:false,onSave:async patch=>{calls.push(patch);return true}});
+  let tree=render();nodes(tree).find(n=>typeof n.type==='function').props.onChange({mode:'selected',countries:[]});tree=render();
+  const saved=nodes(tree).find(n=>n.props?.className==='admin-account-scope-summary');assert.deepEqual(nodes(saved).filter(n=>n.type==='span').map(n=>n.props.children),['全部数据']);
+  const save=nodes(tree).find(n=>n.type==='button'&&n.props.children==='保存数据范围');assert.equal(save.props.disabled,true);save.props.onClick();assert.deepEqual(calls,[]);
+});
+test('disabled scope and limited-actor all handlers cannot produce wider scope changes',()=>{
+  const calls=[];const render=scopeUi('DataScopePicker',{id:'limited',value:PANGHU,actor:profile('manager','admin',{data_scope:PANGHU}),disabled:false,onChange:v=>calls.push(v)});
+  nodes(render()).find(n=>n.props?.type==='radio'&&n.props.value==='all').props.onChange();assert.deepEqual(calls,[]);
+  const disabled=scopeUi('DataScopePicker',{id:'disabled',value:PANGHU,actor:profile('owner','owner'),disabled:true,onChange:v=>calls.push(v)})();
+  nodes(disabled).find(n=>n.props?.type==='checkbox').props.onChange({target:{checked:false}});nodes(disabled).find(n=>n.props?.value==='all').props.onChange();assert.deepEqual(calls,[]);
 });
