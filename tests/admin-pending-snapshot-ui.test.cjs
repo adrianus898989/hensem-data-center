@@ -1,17 +1,40 @@
-/* Synthetic fixtures only: independent snapshot semantics and stale-response protection. */
-const test=require('node:test'),assert=require('node:assert/strict');
-const {create,resolvePlatforms}=require('../admin-preview/live-pending-snapshot.js');
+/* Synthetic fixtures only: independent stock semantics, local dates and stale-response protection. */
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const {create,resolvePlatforms,requestPeriod}=require('../admin-preview/live-pending-snapshot.js');
 const A='11111111-1111-4111-8111-111111111111',B='22222222-2222-4222-8222-222222222222';
 const p=(id,name='Synthetic A',team='Synthetic Team')=>({id,name,sourceName:name,country:'印度',team,source:'AR',timezone:'Asia/Kolkata',currency:'INR'});
 const escape=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const number=v=>Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-function response(ids=[A],overrides={}){return {version:1,basis:'seven_day_pending_snapshot',snapshotDate:'2026-09-26',windowStart:'2026-09-20',windowEnd:'2026-09-26',complete:true,expectedPlatformCount:ids.length,receivedPlatformCount:ids.length,missingPlatforms:[],amount:'1250.50',count:9,observedAt:'2026-09-27T00:30:00Z',firstObservedAt:'2026-09-27T00:00:00Z',rows:ids.map(id=>({...p(id),state:'complete',amount:'1250.50',count:9,snapshotAt:'2026-09-27T00:30:00Z',windowStart:'2026-09-20',windowEnd:'2026-09-26',groups:[{provider:'Synthetic Pay',rawChannel:'Synthetic original',channelType:'wallet',count:9,amount:'1250.50'}]})),...overrides};}
-function harness(options={}){const L={country:'印度',from:'2026-09-26T01:00:00',to:'2026-09-26T02:00:00',dirty:false,withdrawCatalog:[]},calls=[],drawers=[];let selected=[p(A)],providers=[],handler=async()=>response();const ui=create({L,E:escape,N:number,C:v=>Number(v).toLocaleString('en-US'),selected:()=>selected,providers:()=>providers,prepare:options.prepare,request:q=>{calls.push(q);return handler(q)},render(){},open:(title,body)=>drawers.push({title,body})});return {ui,L,calls,drawers,select:v=>selected=v,providers:v=>providers=v,handler:v=>handler=v};}
+const now=Date.parse('2026-10-03T12:00:00Z');
+const previous=date=>new Date(Date.parse(date+'T00:00:00Z')-86400000).toISOString().slice(0,10);
+function row(id=A,extra={}){return {...p(id),selectedIds:[id],state:'complete',coverageScope:'all_current_pending',wholeStockComplete:true,windowComplete:true,knownCount:9,knownAmount:'1250.50',count:9,amount:'1250.50',observedAt:'2026-10-03T11:59:00Z',captureId:'synthetic-capture',settlementAmounts:[],groups:[{provider:'Synthetic Pay',rawChannel:'Synthetic original',channelType:'wallet',currency:'INR',knownCount:9,knownAmount:'1250.50',count:9,amount:'1250.50',settlementAmounts:[]}],...extra};}
+function response(q,extra={}){const current=q.mode==='current',rows=q.platformIds.map(id=>row(id));return {version:2,mode:q.mode,basis:current?'current_all_pending_stock':'local_midnight_pending_snapshot',date:current?null:q.date,sourceDate:current?null:previous(q.date),queriedAt:'2026-10-03T12:00:00Z',currency:'INR',complete:true,expectedPlatformCount:rows.length,receivedPlatformCount:rows.length,missingPlatforms:[],amount:String(rows.length*1250.5),count:rows.length*9,knownAmount:String(rows.length*1250.5),knownCount:rows.length*9,rows,...extra};}
+function harness(options={}){const L={country:'印度',from:'2026-10-02T01:00:00',to:'2026-10-02T02:00:00',queryNow:now,dirty:false,withdrawCatalog:[]},calls=[],drawers=[];let selected=[p(A)],providers=[],timezone='Asia/Kolkata',handler=async q=>response(q);const ui=create({L,E:escape,N:number,C:v=>Number(v).toLocaleString('en-US'),selected:()=>selected,providers:()=>providers,scopeZone:()=>timezone,prepare:options.prepare,request:q=>{calls.push(q);return handler(q)},render(){},open:(title,body)=>drawers.push({title,body})});return {ui,L,calls,drawers,select:v=>selected=v,providers:v=>providers=v,timezone:v=>timezone=v,handler:v=>handler=v};}
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
 
-test('snapshot requests use only selected end day and authorized platforms/providers, regardless of start time or hours',async()=>{
- const h=harness();h.providers(['Synthetic Pay','Synthetic Pay']);await h.ui.load();assert.deepEqual(h.calls[0],{action:'pendingSnapshot',date:'2026-09-26',platformIds:[A],providers:['Synthetic Pay']});
- h.L.from='2026-09-01T21:22:23';h.L.to='2026-09-26T23:58:57';await h.ui.load();assert.deepEqual(h.calls[1],h.calls[0]);assert.match(h.ui.metric(),/1,250.50/);assert.match(h.ui.metric(),/9 笔/);assert.match(h.ui.metric(),/2026-09-20 至 2026-09-26/);assert.doesNotMatch(h.ui.metric(),/昨日|前一日|创建时间|较前/);
+test('historical request reads the selected end-day 00:00 only; day 2 requires source day 1',async()=>{
+ const h=harness();h.providers(['Synthetic Pay','Synthetic Pay']);await h.ui.load();assert.deepEqual(h.calls[0],{action:'pendingSnapshot',mode:'midnight',date:'2026-10-02',platformIds:[A],providers:['Synthetic Pay']});
+ assert.equal(h.ui.state.data.sourceDate,'2026-10-01');assert.match(h.ui.metric(),/00:00代付中金额 \/ 笔数/);assert.match(h.ui.metric(),/2026-10-02 00:00/);
+ h.L.from='2026-09-01T21:22:23';h.L.to='2026-10-02T23:58:57';await h.ui.load();assert.deepEqual(h.calls[1],h.calls[0]);assert.match(h.ui.metric(),/1,250.50/);assert.match(h.ui.metric(),/9 笔/);assert.doesNotMatch(h.ui.metric(),/昨日|前一日|创建时间|较前|近7天/);
+ h.handler(q=>response(q,{sourceDate:'2026-10-02'}));await h.ui.load();assert.equal(h.ui.state.status,'error');assert.doesNotMatch(h.ui.metric(),/1,250.50/);
+});
+
+test('today requests current all-pending stock without date, start or creation window; never tomorrow',async()=>{
+ const h=harness();h.L.to='2026-10-03T23:59:59';await h.ui.load();assert.deepEqual(h.calls[0],{action:'pendingSnapshot',mode:'current',platformIds:[A]});assert.equal(h.ui.state.status,'ready');assert.match(h.ui.metric(),/实时代付中金额 \/ 笔数/);assert.match(h.ui.subtitle(),/读取于 2026-10-03 17:30:00 · Asia\/Kolkata/);
+ h.L.from='2026-09-01T00:00:00';await h.ui.load();assert.deepEqual(h.calls[1],h.calls[0]);h.L.to='2026-10-04T00:00:00';const before=h.calls.length;await h.ui.load();assert.equal(h.calls.length,before);assert.match(h.ui.metric(),/结束日期不能晚于当地今天/);assert.doesNotMatch(h.ui.metric(),/1,250.50/);
+});
+
+test('today follows selected country timezone rather than browser/UTC calendar',async()=>{
+ const instant=Date.parse('2026-10-02T23:00:00Z');
+ assert.deepEqual(requestPeriod('2026-10-03','Asia/Kolkata',instant),{mode:'current'});
+ assert.deepEqual(requestPeriod('2026-10-02','America/Sao_Paulo',instant),{mode:'current'});
+ assert.deepEqual(requestPeriod('2026-10-02','Asia/Kolkata',instant),{mode:'midnight',date:'2026-10-02'});
+ const h=harness();h.L.queryNow=instant;h.L.to='2026-10-03T10:00:00';await h.ui.load();assert.equal(h.calls[0].mode,'current');h.timezone('America/Sao_Paulo');h.L.to='2026-10-02T10:00:00';await h.ui.load();assert.equal(h.calls[1].mode,'current');
+});
+
+test('invalid calendar day or timezone fails locally without a broad request',async()=>{
+ const h=harness();for(const date of ['2026-02-30','2026-13-01','2026-00-03','not-a-date']){h.L.to=date+'T00:00:00';await h.ui.load();assert.equal(h.ui.state.status,'error');assert.match(h.ui.metric(),/有效结束日期/);}
+ h.L.to='2026-10-02T00:00:00';h.timezone('Invalid/Zone');await h.ui.load();assert.match(h.ui.metric(),/时区待核对/);assert.equal(h.calls.length,0);
 });
 
 test('report-only selection resolves only its unique same-country same-team authorized seed',()=>{
@@ -20,34 +43,72 @@ test('report-only selection resolves only its unique same-country same-team auth
  const dedup=resolvePlatforms([p(A),report],[p(A)]);assert.deepEqual(dedup.platformIds,[A]);assert.equal(dedup.unsupported.length,0);
 });
 
-test('stale responses cannot overwrite a newer platform/date scope or restore after cancellation',async()=>{
- const h=harness(),old=deferred();h.handler(()=>old.promise);const first=h.ui.load();h.select([p(B,'Synthetic B')]);h.handler(async()=>response([B],{amount:'200.00',count:2}));await h.ui.load();old.resolve(response([A]));await first;assert.match(h.ui.metric(),/>200.00</);assert.doesNotMatch(h.ui.metric(),/1,250/);
- const late=deferred();h.handler(()=>late.promise);const next=h.ui.load();h.ui.cancel();late.resolve(response([B]));await next;assert.equal(h.ui.state.status,'paused');assert.doesNotMatch(h.ui.metric(),/1,250|200.00/);
- const changed=deferred();h.handler(()=>changed.promise);const another=h.ui.load();h.L.to='2026-09-25T23:59:59';changed.resolve(response([B]));await another;assert.doesNotMatch(h.ui.metric(),/1,250/);
+test('stale responses cannot overwrite a newer platform/date/mode or restore after cancellation',async()=>{
+ const h=harness(),old=deferred();h.handler(()=>old.promise);const first=h.ui.load();h.select([p(B,'Synthetic B')]);h.handler(q=>response(q,{amount:'200.00',count:2,knownAmount:'200.00',knownCount:2,rows:[row(B,{amount:'200.00',count:2,knownAmount:'200.00',knownCount:2})]}));await h.ui.load();old.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[A]}));await first;assert.match(h.ui.metric(),/>200.00</);assert.doesNotMatch(h.ui.metric(),/1,250/);
+ const late=deferred();h.handler(()=>late.promise);const next=h.ui.load();h.ui.cancel();late.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[B]}));await next;assert.equal(h.ui.state.status,'paused');assert.doesNotMatch(h.ui.metric(),/1,250|200.00/);
+ const changed=deferred();h.handler(()=>changed.promise);const another=h.ui.load();h.L.to='2026-10-03T23:59:59';changed.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[B]}));await another;assert.doesNotMatch(h.ui.metric(),/1,250/);assert.match(h.ui.metric(),/实时代付中/);
 });
 
-test('complete zero is distinct from partial zero, missing snapshot and transport failure',async()=>{
- const h=harness();h.handler(async()=>response([A],{amount:'0',count:0}));await h.ui.load();assert.match(h.ui.metric(),/>0.00</);assert.match(h.ui.metric(),/>0 笔</);assert.match(h.ui.metric(),/快照完整/);
- h.handler(async()=>response([A,B],{complete:false,amount:'0',count:0,expectedPlatformCount:2,receivedPlatformCount:1}));await h.ui.load();assert.match(h.ui.metric(),/>—</);assert.doesNotMatch(h.ui.metric(),/>0.00</);assert.match(h.ui.metric(),/快照不完整/);
- h.handler(async()=>response([A],{complete:false,amount:null,count:null,receivedPlatformCount:0,rows:[{...p(A),state:'missing',amount:null,count:null}]}));await h.ui.load();assert.match(h.ui.metric(),/尚无可用合计/);h.ui.details();assert.match(h.drawers.at(-1).body,/未采到当日快照/);
- h.handler(async()=>{throw Error('Synthetic timeout')});await h.ui.load();assert.match(h.ui.metric(),/快照读取失败/);assert.doesNotMatch(h.ui.metric(),/>0.00</);
+test('only full-stock verified zero displays 0; partial or absent zero remains unknown',async()=>{
+ const h=harness();h.handler(q=>response(q,{amount:'0',count:0,knownAmount:'0',knownCount:0,rows:[row(A,{amount:'0',count:0,knownAmount:'0',knownCount:0,groups:[]})]}));await h.ui.load();assert.match(h.ui.metric(),/>0.00</);assert.match(h.ui.metric(),/>0 笔</);assert.match(h.ui.metric(),/已核实 1 平台/);
+ h.handler(q=>response(q,{complete:false,amount:null,count:null,knownAmount:'0',knownCount:0,rows:[row(A,{state:'partial',wholeStockComplete:false,amount:null,count:null,knownAmount:'0',knownCount:0,groups:[]})]}));await h.ui.load();assert.equal(h.ui.state.status,'ready');assert.match(h.ui.metric(),/>—</);assert.doesNotMatch(h.ui.metric(),/>0.00</);assert.match(h.ui.metric(),/暂无已核实合计 · 入库 1\/1 · 1 未完整/);
+ h.handler(q=>response(q,{complete:false,amount:null,count:null,knownAmount:null,knownCount:null,receivedPlatformCount:0,rows:[row(A,{state:'missing',coverageScope:'unavailable',wholeStockComplete:false,amount:null,count:null,knownAmount:null,knownCount:null,groups:[]})]}));await h.ui.load();assert.match(h.ui.metric(),/暂无已核实合计/);h.ui.details();assert.match(h.drawers.at(-1).body,/未采到记录/);
 });
 
-test('partial positive values remain explicitly labeled subtotals and expose actual row dates and original channels',async()=>{
- const h=harness();h.select([p(A),p('report:unsupported','Synthetic unconnected')]);await h.ui.load();assert.match(h.ui.metric(),/已采集小计/);assert.match(h.ui.summary(),/已采集 1 \/ 2 平台/);h.ui.details();const text=h.drawers.at(-1).body;assert.match(text,/class="live-pending-snapshot-detail"/);assert.match(text,/Synthetic unconnected/);assert.match(text,/尚未接入快照/);assert.match(text,/2026-09-20 至 2026-09-26/);assert.match(text,/Synthetic original/);assert.match(text,/采集时间/);assert.doesNotMatch(text,/超过 1 天/);
+test('partial positive amount/count uses known subtotal, displays original sources and honest seven-day coverage only in details',async()=>{
+ const h=harness();h.handler(q=>response(q,{complete:false,amount:null,count:null,knownAmount:'1250.50',knownCount:9,rows:[row(A,{source:'wg',state:'partial',wholeStockComplete:false,coverageScope:'last_7_created_days',windowStart:'2026-09-25',windowEnd:'2026-10-01',reason:'last_7_created_days_only',amount:null,count:null,groups:[{provider:'Synthetic Pay',rawChannel:'Synthetic original',channelType:'wallet',currency:'INR',knownCount:9,knownAmount:'1250.50',count:null,amount:null,settlementAmounts:[]}]} )]}));await h.ui.load();assert.match(h.ui.metric(),/1,250.50/);assert.match(h.ui.metric(),/9 笔/);assert.match(h.ui.metric(),/已入库小计 · 入库 1\/1 · 1 未完整/);assert.doesNotMatch(h.ui.summary(),/最近7日/);h.ui.details();const text=h.drawers.at(-1).body;assert.match(text,/最近7日创建窗口（2026-09-25 至 2026-10-01）/);assert.match(text,/wg · 已入库小计/);assert.match(text,/Synthetic original/);assert.match(text,/wallet/);assert.match(text,/源刷新时间/);assert.match(text,/2026-10-03 17:29:00/);assert.doesNotMatch(text,/7day|近7天代付中合计/);
 });
 
-test('invalid responses never masquerade as a complete snapshot, and unqueryable selection makes no broad request',async()=>{
- const h=harness();for(const bad of [{basis:'orders'},{snapshotDate:'2026-09-25'},{rows:null},{receivedPlatformCount:0}]){h.handler(async()=>response([A],bad));await h.ui.load();assert.equal(h.ui.state.status,'error');assert.doesNotMatch(h.ui.metric(),/1,250.50/);}
+test('partial known money/count display independently; an unknown or partial zero counterpart remains dash',async()=>{
+ const h=harness();for(const [knownCount,knownAmount,countText,amountText] of [[17,null,'17 笔','—'],[null,'65.50','— 笔','65.50'],[0,'65.50','— 笔','65.50'],[17,'0','17 笔','—']]){
+  h.handler(q=>response(q,{complete:false,count:null,amount:null,knownCount,knownAmount,receivedPlatformCount:0,rows:[row(A,{state:'partial',wholeStockComplete:false,count:null,amount:null,knownCount,knownAmount,captureId:null,observedAt:null,lastRecordAt:'2026-10-03T11:30:00Z',groups:[]})]}));await h.ui.load();assert.equal(h.ui.state.status,'ready');assert.match(h.ui.metric(),new RegExp('>'+amountText+'<'));assert(h.ui.metric().includes(countText));assert.match(h.ui.metric(),/入库 1\/1/);assert.doesNotMatch(h.ui.metric(),/>0.00<|>0 笔</);h.ui.details();assert.match(h.drawers.at(-1).body,/完整 0\/1/);assert.match(h.drawers.at(-1).body,/入库 2026-10-03 17:00:00/);
+ }
+});
+
+test('stale partial values remain labeled and never become complete totals',async()=>{
+ const h=harness();h.handler(q=>response(q,{complete:false,amount:null,count:null,rows:[row(A,{state:'stale',reason:'latest_capture_stale',wholeStockComplete:false,amount:null,count:null})]}));await h.ui.load();assert.match(h.ui.metric(),/已入库小计/);assert.doesNotMatch(h.ui.metric(),/已核实 1 平台/);h.ui.details();assert.match(h.drawers.at(-1).body,/数据待刷新/);
+});
+
+test('unsupported selected platform makes a verified response only a visible subtotal',async()=>{
+ const h=harness();h.select([p(A),p('report:unsupported','Synthetic unconnected')]);await h.ui.load();assert.match(h.ui.metric(),/已入库小计 · 入库 1\/2 · 1 未完整/);h.ui.details();const text=h.drawers.at(-1).body;assert.match(text,/Synthetic unconnected/);assert.match(text,/尚未接入/);
+});
+
+test('native settlement money stays separate from fiat totals and escaped original channel',async()=>{
+ const h=harness();h.handler(q=>response(q,{rows:[row(A,{source:'wg',settlementAmounts:[{currency:'USDT',amount:'15.25',count:9,missingCount:0,state:'complete'}],groups:[{provider:'<script>Fake</script>',rawChannel:'TRON-PAY',channelType:'USDT-TRC20',currency:'INR',knownCount:9,knownAmount:'1250.50',count:9,amount:'1250.50',settlementAmounts:[{currency:'USDT',amount:'15.25',count:9,missingCount:1,state:'partial'}]}]} )]}));await h.ui.load();assert.match(h.ui.metric(),/1,250.50/);assert.doesNotMatch(h.ui.metric(),/1,265.75|15.25/);h.ui.details();const text=h.drawers.at(-1).body;assert.match(text,/原生结算金额/);assert.match(text,/USDT 15.25/);assert.match(text,/（部分）/);assert.match(text,/USDT-TRC20/);assert.match(text,/&lt;script&gt;Fake&lt;\/script&gt;/);assert.doesNotMatch(text,/<script>/);
+});
+
+test('truncated original-channel groups explicitly disclose the 200-group limit without changing known stock totals',async()=>{
+ const h=harness(),groups=Array.from({length:200},(_,i)=>({provider:'Synthetic Pay '+i,rawChannel:'Original '+i,channelType:'wallet',currency:'INR',knownCount:1,knownAmount:'1.00',count:null,amount:null,settlementAmounts:[]}));
+ h.handler(q=>response(q,{complete:false,count:null,amount:null,knownCount:250,knownAmount:'250.00',rows:[row(A,{state:'partial',wholeStockComplete:false,count:null,amount:null,knownCount:250,knownAmount:'250.00',groupsLimited:true,groups})]}));
+ await h.ui.load();assert.match(h.ui.metric(),/>250.00</);assert.match(h.ui.metric(),/250 笔/);h.ui.details();const html=h.drawers.at(-1).body;assert.match(html,/原通道明细（200） · 仅显示前200组，仍有未展示/);assert.match(html,/Original 199/);assert.doesNotMatch(html,/Original 200/);
+ h.handler(q=>response(q));await h.ui.load();h.ui.details();assert.doesNotMatch(h.drawers.at(-1).body,/仅显示前200组|仍有未展示/);
+});
+
+test('legacy seven-day response, malformed scope, mixed fiat and mismatched midnight/current are rejected',async()=>{
+ const h=harness();for(const bad of [{version:1,basis:'seven_day_pending_snapshot'},{basis:'orders'},{sourceDate:'2026-10-02'},{date:'2026-10-01'},{rows:null},{receivedPlatformCount:0},{rows:[row(B)]},{currency:'VND'},{rows:[row(A,{currency:'VND'})]},{complete:false,amount:'1250.50',count:9},{rows:[row(A,{state:'partial',wholeStockComplete:false})]},{count:100.5},{knownCount:100.5},{count:true},{knownCount:true},{knownAmount:true},{rows:[row(A,{count:1.5})]},{rows:[row(A,{knownCount:1.5})]},{count:1},{knownCount:'9007199254740992'},{rows:[row(A,{groups:[{currency:'INR',count:null,amount:null,knownCount:100.5,knownAmount:'5',settlementAmounts:[]}]})]},{rows:[row(A,{settlementAmounts:[{currency:'USDT',amount:'1',count:1.5,missingCount:0,state:'partial'}]})]}]){h.handler(q=>response(q,bad));await h.ui.load();assert.equal(h.ui.state.status,'error',JSON.stringify(bad));assert.doesNotMatch(h.ui.metric(),/1,250.50/);}
+ h.L.to='2026-10-03T23:59:59';h.handler(q=>response(q,{mode:'midnight',date:'2026-10-03',sourceDate:'2026-10-02'}));await h.ui.load();assert.equal(h.ui.state.status,'error');
  h.select([p('report:unbound')]);const count=h.calls.length;await h.ui.load();assert.equal(h.calls.length,count);assert.match(h.ui.metric(),/尚无可查询/);
 });
 
-test('saved tabs retain their own snapshot and paused loads never present an old full total',async()=>{
- const h=harness();await h.ui.load();const saved=h.ui.capture();h.ui.restore(null);assert.doesNotMatch(h.ui.metric(),/1,250/);h.ui.restore(saved);assert.match(h.ui.metric(),/1,250/);h.L.dirty=true;assert.doesNotMatch(h.ui.metric(),/1,250/);
+test('transport error cannot be rendered as no data or a zero total',async()=>{
+ const h=harness();h.handler(async()=>{throw Error('Synthetic timeout')});await h.ui.load();assert.match(h.ui.metric(),/待付读取失败/);assert.doesNotMatch(h.ui.metric(),/>0.00<|暂无已核实合计/);h.ui.details();assert.match(h.drawers.at(-1).body,/重试/);
 });
 
-test('snapshot waits for the same-query report directory before resolving its full platform scope',async()=>{
- const catalog=deferred(),h=harness({prepare:()=>catalog.promise});const loading=h.ui.load();assert.equal(h.calls.length,0);h.select([p(A),p('report:late','Synthetic late')]);catalog.resolve();await loading;assert.equal(h.calls.length,1);assert.deepEqual(h.calls[0].platformIds,[A]);assert.match(h.ui.summary(),/已采集 1 \/ 2 平台/);assert.match(h.ui.summary(),/快照不完整/);h.ui.details();assert.match(h.drawers.at(-1).body,/Synthetic late/);
+test('saved tabs retain their own v2 data; loading/cancelled/dirty restores expose no old full total',async()=>{
+ const h=harness();await h.ui.load();const saved=h.ui.capture();h.ui.restore(null);assert.doesNotMatch(h.ui.metric(),/1,250/);h.ui.restore(saved);assert.match(h.ui.metric(),/1,250/);h.L.dirty=true;assert.doesNotMatch(h.ui.metric(),/1,250/);h.L.dirty=false;
+ const wait=deferred();h.handler(()=>wait.promise);const pending=h.ui.load(),paused=h.ui.capture();assert.equal(paused.status,'paused');h.ui.restore(paused);wait.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[A]}));await pending;assert.equal(h.ui.state.status,'paused');assert.doesNotMatch(h.ui.metric(),/1,250/);
+});
+
+test('load resolves platform mapping only after preparing the same-query directory; cancellation prevents request',async()=>{
+ const catalog=deferred(),h=harness({prepare:()=>catalog.promise});h.select([p('report:late','Synthetic late')]);const loading=h.ui.load();assert.equal(h.calls.length,0);h.L.withdrawCatalog=[p(B,'Synthetic late')];catalog.resolve();await loading;assert.equal(h.calls.length,1);assert.deepEqual(h.calls[0].platformIds,[B]);assert.equal(h.ui.state.status,'ready');
  const late=deferred(),cancelled=harness({prepare:()=>late.promise});const pending=cancelled.ui.load();cancelled.ui.cancel();late.resolve();await pending;assert.equal(cancelled.calls.length,0);
- const failed=harness({prepare:async()=>{throw Error('Synthetic catalog error')}});await failed.ui.load();assert.equal(failed.calls.length,0);assert.match(failed.ui.summary(),/快照读取失败/);
+ const failed=harness({prepare:async()=>{throw Error('Synthetic catalog error')}});await failed.ui.load();assert.equal(failed.calls.length,0);assert.match(failed.ui.summary(),/待付读取失败/);
+});
+
+test('parent summary header consumes overlay dynamic title, local subtitle and detail label',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-pages-reference.js'),'utf8'),context={window:{},console};vm.createContext(context);vm.runInContext(source,context);
+ const h=harness(),c={L:{direction:'all',results:[],feeLookupRows:[],overviewSections:{status:'ready'},workorders:{}},E:escape,N:number,C:String,R:()=> '—',plus:()=>({}),combine:()=>[],groupRows:()=>[],empty:()=>'',table:()=>'',box:()=>'',pager:()=>'',totals:()=>'',comparisonRows:()=>[],compareMetric:()=>'',chart:()=>'',matrixBody:()=>'',latencyView:()=>'',detailsView:()=>'',providersView:()=>'',platformsView:()=>'',pagedTable:()=>'',feeForRow:()=>({}),ensureFeeLookup(){},providerCell:()=>'',pendingSnapshot:{title:()=> '实时代付中',subtitle:()=> '2026-10-03 17:30:00 · Asia/Kolkata',detailLabel:()=> '平台明细 →',summary:()=> '<p>Synthetic stock</p>',metric:()=> ''},overviewChart:()=>'',overviewAmounts:()=>'',overviewAnalysisRender:fn=>fn(),businessHeaders:[],businessCells:()=>[]};
+ context.window.HensemProviderSummary={overviewDimensions:()=>[],buildRows:()=>[],isProviderBusiness:()=>true,feeSummary:()=>({amount:null,successCount:0}),feeCoverageText:()=>'',knownNumber:()=>null,fraction:()=>null};
+ const page=context.window.HensemLivePages.create(c);let html=page.render('overview');assert.match(html,/<h2>实时代付中<\/h2>/);assert.match(html,/2026-10-03 17:30:00/);assert.match(html,/平台明细 →/);assert.doesNotMatch(html,/近7天代付中/);
+ c.pendingSnapshot.title=()=> '00:00代付中';c.pendingSnapshot.subtitle=()=> '2026-10-02 00:00 · Asia/Kolkata';html=page.render('overview');assert.match(html,/<h2>00:00代付中<\/h2>/);assert.match(html,/2026-10-02 00:00/);
 });

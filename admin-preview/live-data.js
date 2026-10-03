@@ -385,7 +385,7 @@
 
  const reportPages=new Set(['overview','collection','payout','merchants','merchantproviders','teamops','teamcountries','teamplatforms']);
  const reportData=window.HensemLiveReportData?.create({L,E,N,C,R,request:r=>window.hensemLiveRequest(r),render:()=>render()});
- pendingSnapshot=window.HensemLivePendingSnapshot?.create({L,E,N,C,selected:selectedVisible,providers:()=>activeValues('provider',''),prepare:async()=>{await reportData?.loadCatalog();if(reportData?.state.catalogError)throw Error('快照平台目录读取失败：'+reportData.state.catalogError)},request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
+ pendingSnapshot=window.HensemLivePendingSnapshot?.create({L,E,N,C,scopeZone,selected:selectedVisible,providers:()=>activeValues('provider',''),prepare:async()=>{await reportData?.loadCatalog();if(reportData?.state.catalogError)throw Error('快照平台目录读取失败：'+reportData.state.catalogError)},request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
  pendingOrders=window.HensemPendingOrders?.create({E,N,C,active:()=>state.page==='stuck'&&!L.dirty,scope:()=>JSON.stringify([L.from,L.to,L.country,L.team,L.source,L.platform,L.multi]),canDetail:()=>roleAllowed('stuck','detail'),request:r=>window.hensemLiveRequest(r),open:(title,html)=>openDrawer(title,html)})||null;
  // Snapshot identities are already in the authorized core/withdrawal catalog.
  // The historical report inventory adds no authority and must not gate this read.

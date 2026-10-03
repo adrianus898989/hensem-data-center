@@ -56,6 +56,14 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     if(p.providers!==undefined&&(!Array.isArray(p.providers)||p.providers.length>250||p.providers.some(v=>typeof v!=="string"||!v.trim()||v!==v.trim()||v.length>200||/[\u0000-\u001f\u007f]/.test(v))||new Set(p.providers).size!==p.providers.length))throw Error("代付中三方筛选无效");
     return {...p};
   }
+  if(p.action==="pendingSnapshot"){
+    if(Object.keys(p).some(k=>!["action","mode","date","platformIds","providers"].includes(k))||p.mode!==undefined&&(typeof p.mode!=='string'||!['current','midnight'].includes(p.mode)))throw Error("代付中快照参数无效");
+    if(p.mode==='current'){if(p.date!==undefined)throw Error("实时存量不使用创建日期筛选");}
+    else if(typeof p.date!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(p.date)||p.date<(p.mode==='midnight'?"2000-01-02":"2000-01-01")||!Number.isFinite(Date.parse(p.date+"T00:00:00Z"))||new Date(p.date+"T00:00:00Z").toISOString().slice(0,10)!==p.date)throw Error("代付中快照日期无效");
+    if(!Array.isArray(p.platformIds)||p.platformIds.length<1||p.platformIds.length>250||p.platformIds.some(id=>typeof id!=="string"||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id))||new Set(p.platformIds.map(id=>String(id).toLowerCase())).size!==p.platformIds.length)throw Error("请选择1至250个有效平台");
+    if(p.providers!==undefined&&(!Array.isArray(p.providers)||p.providers.length>250||p.providers.some(v=>typeof v!=="string"||!v.trim()||v!==v.trim()||v.length>200||/[\u0000-\u001f\u007f]/.test(v))||new Set(p.providers).size!==p.providers.length))throw Error("代付中三方筛选无效");
+    return {...p};
+  }
   if(p.action==="workorderRecords")return validateWorkorderRecordsRequest(p);
   if(p.action==="depositStatistics")return validateDepositStatisticsRequest(p);
   if(p.action==="portalOperationLogs")return validatePortalOperationLogsRequest(p);
@@ -77,13 +85,6 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     const bands=p.amountBands as Record<string,unknown>,directions=p.direction==='charge'||p.direction==='withdraw'?[String(p.direction)]:['charge','withdraw'];
     if(Object.keys(bands).some(key=>!['charge','withdraw'].includes(key))||directions.some(key=>!Object.prototype.hasOwnProperty.call(bands,key)))throw Error("金额档位方向无效");
     for(const edges of Object.values(bands))if(!Array.isArray(edges)||edges.length!==11||edges.some((n,i)=>typeof n!=="number"||!Number.isFinite(n)||n<0||n>1e15||(i>0&&n<=edges[i-1])))throw Error("金额区间必须包含11个递增边界（10档）");
-  }
-  if(p.action==="pendingSnapshot"){
-    if(Object.keys(p).some(k=>!["action","date","platformIds","providers"].includes(k)))throw Error("代付中快照参数无效");
-    if(typeof p.date!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(p.date)||p.date<"2000-01-01"||!Number.isFinite(Date.parse(p.date+"T00:00:00Z"))||new Date(p.date+"T00:00:00Z").toISOString().slice(0,10)!==p.date)throw Error("代付中快照日期无效");
-    if(!Array.isArray(p.platformIds)||p.platformIds.length<1||p.platformIds.length>250||p.platformIds.some(id=>typeof id!=="string"||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id))||new Set(p.platformIds.map(id=>String(id).toLowerCase())).size!==p.platformIds.length)throw Error("请选择1至250个有效平台");
-    if(p.providers!==undefined&&(!Array.isArray(p.providers)||p.providers.length>250||p.providers.some(v=>typeof v!=="string"||!v.trim()||v!==v.trim()||v.length>200||/[\u0000-\u001f\u007f]/.test(v))||new Set(p.providers).size!==p.providers.length))throw Error("代付中三方筛选无效");
-    return {...p};
   }
   if(p.action!=="intakeCoverage"&&p.feedIds!==undefined)throw Error("逐日覆盖来源仅用于平台数据接入");
   if(p.action==="intakeCoverage"){
@@ -318,11 +319,11 @@ function isAdminLiveEnvelope(event:MessageEvent,source:Window|null|undefined,cha
 export function isAdminLiveMessage(event:MessageEvent,source:Window|null|undefined,channel:string):boolean {
  return isAdminLiveEnvelope(event,source,channel)&&event.data.type===LIVE_REQUEST;
 }
-function adminLiveTimeoutMessage(action:unknown):string {
+function adminLiveTimeoutMessage(action:unknown,mode?:unknown):string {
  if(action==='catalog')return '平台目录读取超时，请重试读取目录';
  if(action==='pendingOrders')return '代付中订单读取超时，请重试；已显示统计不会清空';
  if(action==='pendingAnalysis')return '代付中分析读取超时，请重试；不能据此判断为0';
- if(action==='pendingSnapshot')return '近7天代付中快照读取超时，请重试；不能据此判断为0';
+ if(action==='pendingSnapshot')return mode===undefined?'近7天代付中快照读取超时，请重试；不能据此判断为0':'代付中存量读取超时，请重试；不能据此判断为0';
  return ['syncHealth','intakeCoverage'].includes(String(action))?'同步检查超时，请稍后重试；不能据此判断平台没有数据':action==='withdrawReasons'?'该平台当日原因读取超时，请点击重试':['aggregate','collectedData','reportSummary'].includes(String(action))?'读取超时，不代表没有数据；请重试':'读取超时，请缩短日期或选择单个平台后重试';
 }
 export async function adminLiveRequest(session:DashboardSession,input:unknown,signal?:AbortSignal,roleContext?:{assigned:boolean;page:string}):Promise<unknown>{
@@ -357,7 +358,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if(request.action==="intakeCoverage"&&request.operation==="orderCatalog"&&code==="invalid_coverage_request")throw Error("订单采集目录操作暂不支持");
  if(request.durationVersion===2&&code==="invalid_request")throw Error("到账时效统计接口尚未更新，请更新后重试");
  if(/unsupported_filter/.test(code))throw Error("此来源未提供该检索字段，请清空该字段后查询");
- if(/timeout|57014/i.test(code)||response.status===504)throw Error(adminLiveTimeoutMessage(request.action));
+ if(/timeout|57014/i.test(code)||response.status===504)throw Error(adminLiveTimeoutMessage(request.action,request.mode));
  throw Error("正式数据查询未完成，请重试；不能据此判断没有数据");}
  return response.json();
 }
@@ -370,7 +371,7 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
  const stop=(item:Pending,timeout=false)=>{
    if(item.settled)return;
    queued.delete(item.id);
-   finish(item,{error:timeout?adminLiveTimeoutMessage((item.request as {action?:unknown})?.action):"查询已取消",code:timeout?"ADMIN_LIVE_TIMEOUT":"ADMIN_LIVE_CANCELLED"});
+   finish(item,{error:timeout?adminLiveTimeoutMessage((item.request as {action?:unknown})?.action,(item.request as {mode?:unknown})?.mode):"查询已取消",code:timeout?"ADMIN_LIVE_TIMEOUT":"ADMIN_LIVE_CANCELLED"});
    item.controller?.abort();
    drain();
  };
