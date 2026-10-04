@@ -41,6 +41,21 @@ test('new success analysis requires owner or explicit assigned page actions, inc
  assert.equal(api.dashboardRoleAllows(assigned(['success_analysis.view']),'success_analysis','query'),false);
  assert.equal(api.dashboardRoleAllows(assigned(keys),'success_analysis','query'),true);
 });
+test('daily comparison denies legacy and separates assigned view/query/detail/export capabilities',()=>{
+ const {api}=roleModule(),keys=['daily_comparison.view','daily_comparison.query','daily_comparison.detail','daily_comparison.export'];
+ for(const action of ['view','query','detail','export']){
+  assert.equal(api.dashboardRoleAllows({mode:'legacy',canView:true,permissions:keys},'daily_comparison',action),false);
+  assert.equal(api.dashboardRoleAllows({mode:'owner',canView:true,permissions:[]},'daily_comparison',action),true);
+  assert.equal(api.dashboardRoleAllows(assigned(['merchants.view','merchants.query','merchants.detail','merchants.export']),'daily_comparison',action),false);
+ }
+ const readOnly=api.validateDashboardRoleAccess(assigned(['daily_comparison.view','daily_comparison.query']));
+ assert.equal(api.dashboardRoleAllows(readOnly,'daily_comparison','query'),true);
+ assert.equal(api.dashboardRoleAllows(readOnly,'daily_comparison','detail'),false);
+ assert.equal(api.dashboardRoleAllows(readOnly,'daily_comparison','export'),false);
+ assert.equal(api.dashboardRoleAllows(assigned(['daily_comparison.detail']),'daily_comparison','detail'),false);
+ assert.equal(api.dashboardRoleAllows(assigned(keys),'daily_comparison','detail'),true);
+ assert.equal(api.dashboardRoleAllows(assigned(keys),'daily_comparison','export'),true);
+});
 test('rolling catalog reads drop well-formed unknown keys without granting them or hiding known permissions',()=>{
  const {api}=roleModule();
  const a=api.validateDashboardRoleAccess(assigned(['providers.view','providers.query','future_page.view','future_page.edit']));
