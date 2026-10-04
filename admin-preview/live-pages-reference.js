@@ -1,6 +1,7 @@
 /* The approved v3 page structure, populated only from authorized aggregate results. */
 (function(){
  'use strict';
+ const merchantFeeDrawers=new WeakMap();let merchantFeeDrawerSerial=0,merchantFeeCloseWrapped=false;
  window.HensemLivePages={create:function(c){
  const {L,E,N,C,R,plus,combine,groupRows,empty,table,box,pager,totals,comparisonRows,compareMetric,chart,matrixBody,latencyView,detailsView,providersView,platformsView,pagedTable,feeForRow,ensureFeeLookup,providerCell}=c;
  const dirs=()=>L.direction==='all'?['charge','withdraw']:[L.direction];
@@ -174,8 +175,31 @@
  }
  function bars(rows){const max=Math.max(1,...rows.map(r=>Number(r.value)||0));return '<div class="panel-body">'+rows.map(r=>'<div class="live-reference-bar"><span>'+r.name+'</span><div><i style="width:'+Math.max(0,(Number(r.value)||0)/max*100)+'%"></i></div><b>'+N(r.value)+'</b></div>').join('')+'</div>'}
  const merchantDirections=['charge','withdraw'];
+ const merchantFeeMode=()=>L.feeEstimateMode==='historical'?'historical':'current';
+ const merchantFeeNote=()=>merchantFeeMode()==='current'?'当前费率参考估算：按所选成功时间内的成功金额、笔数，逐平台、逐三方匹配当前参考费率；不是历史实际手续费。仅汇总已匹配部分；币种、固定费币种或阶梯依据不足的部分保留待确认。':'历史生效费率：按订单创建时间匹配已发布的生效版本；缺少生效日期或未匹配的订单不会按当前参考价补算，也不会算成 0。';
+ const currentFeeReasons={missing_rate:'未找到当前费率',missing_category_rate:'未找到该原始类型的费率',rates_unavailable:'当前费率未读取',conflicting_rates:'适用费率冲突',unsupported_rate:'复杂规则待确认',unknown_currency:'订单币种未确认',unknown_leaf_identity:'原平台计费依据未确认',fixed_fee_currency_unconfirmed:'固定费币种未确认',fee_currency_mismatch:'费用币种不符',mixed_fee_exemption:'免手续费金额未拆分',missing_success_count:'成功笔数未提供',missing_fee_bands:'金额分档未完整提供',invalid_fee_bands:'金额分档待核对',unconfirmed_amount_band:'金额区间费率待确认',missing_provider_breakdown:'三方分组未完整提供',inconsistent_provider_breakdown:'三方分组计数待核对',missing_provider:'三方未识别',invalid_success_amount:'成功金额待确认',mixed_currency:'币种不能合计'};
+ function merchantModeFeeRow(row){
+  if(merchantFeeMode()==='historical')return row;
+  const fact=sorting.currentReferenceFeeFacts?.(row,L.feeLookupRows,L.country)||{amount:null,eligibleCount:null,matchedCount:null,excludedCount:0,unknownCount:null,complete:false,reasons:[]};
+  return {...row,estimated_fee:fact.amount,fee_matched_count:fact.matchedCount,fee_eligible_count:fact.eligibleCount,fee_excluded_count:fact.excludedCount,fee_complete:fact.complete,fee_unknown:fact.eligibleCount===null,fee_issues:fact.reasons||[],fee_history_diagnostics:[],fee_current_facts:fact};
+ }
+ const merchantFeeCoverage=row=>{
+  if(merchantFeeMode()==='historical')return sorting.feeCoverageText(row);
+  const fact=row.fee_current_facts||{},eligible=sorting.knownNumber(fact.eligibleCount),matched=sorting.knownNumber(fact.matchedCount),unknown=sorting.knownNumber(fact.unknownCount),rate=eligible>0&&matched!==null?R(matched,eligible):'—';
+  return '按当前费率参考估算，非历史实际手续费。成功总笔数 '+C(fact.successCount)+'；不计三方手续费 '+C(fact.excludedCount)+'；已匹配 '+C(matched)+' / '+C(eligible)+' 笔（'+rate+'）；待确认 '+C(unknown)+' 笔。'+(fact.reasons||[]).map(x=>(x.platform?x.platform+' / ':'')+(x.provider||'未识别三方')+' '+C(x.count)+' 笔（'+(currentFeeReasons[x.reason]||'计费依据待确认')+'）').join('；')+(eligible===null?'成功时间口径或计数未完整提供，不能确认完整估算。':'仅汇总已匹配部分，未匹配不计为零手续费。');
+ };
+ function merchantFeeControls(){
+  return '<div class="merchant-fee-mode"><label>手续费口径 <select class="btn small" aria-label="商户手续费估算口径" onchange="liveMerchantFeeMode(this.value)"><option value="current" '+(merchantFeeMode()==='current'?'selected':'')+'>当前费率参考估算</option><option value="historical" '+(merchantFeeMode()==='historical'?'selected':'')+'>历史生效费率</option></select></label><span class="merchant-fee-mode-note" role="note">'+E(merchantFeeNote())+'</span></div>';
+ }
+ window.liveMerchantFeeMode=function(value){
+  if(!['current','historical'].includes(value)||window.hensemCurrentAdminPage?.()!=='merchants'||typeof window.hensemRoleAllowed==='function'&&!window.hensemRoleAllowed('merchants','view'))return;
+  L.feeEstimateMode=value;(c.render||window.render)();window.liveMerchantFeeRefresh?.();
+ };
+ if(!merchantFeeCloseWrapped&&typeof window.closeDrawer==='function'){
+  const previousClose=window.closeDrawer;window.closeDrawer=function(...args){merchantFeeDrawers.delete(L);return previousClose.apply(this,args)};merchantFeeCloseWrapped=true;
+ }
  function merchantRows(provider=false){
-  const rows=sorting.overviewDimensions({orders:groupRows('provider'),summaries:raw(),rates:L.feeLookupRows,country:L.country,key:provider?'provider':'platform',plus,combine});
+  const rows=sorting.overviewDimensions({orders:groupRows('provider'),summaries:raw(),rates:L.feeLookupRows,country:L.country,key:provider?'provider':'platform',plus,combine}).map(merchantModeFeeRow);
   const pairs=new Map(),id=r=>JSON.stringify(provider?[r.provider,r.currency||'']:[(r._platformIdentity||r.platformId||JSON.stringify([r.source,r.country,r.platform])),r.currency||'']);
   for(const row of rows){
    if(!merchantDirections.includes(row.direction))continue;const key=id(row);
@@ -224,30 +248,49 @@
   const headings=[...prefix.map(column=>column.label),...merchantDirections.flatMap(d=>metrics.map(metric=>E(name(d)+metric.label))),...(provider?['订单明细']:[])],columns=[...prefix,...merchantDirections.flatMap(d=>metrics.map(metric=>({value:r=>getter(r,d,metric.key)}))),...(provider?[null]:[])];
   const totalsByCurrency=currencies.map(currency=>{
    const subset=rows.filter(r=>(r.currency||'')===currency),total={currency,directions:{},platform:'已读汇总',provider:'已读汇总',sources:[],platformIds:[...new Set(subset.flatMap(r=>r.platformIds||[r.platformId]).filter(Boolean))],_total:true};
-   for(const d of merchantDirections){const facts=subset.map(r=>r.directions[d]).filter(Boolean);if(!facts.length)continue;const fees=scopedFeeSummary(facts,d);total.directions[d]={...successTotal(facts,d),direction:d,currency,estimated_fee:fees.amount,fee_complete:fees.complete,fee_eligible_count:fees.successCount,fee_matched_count:fees.matchedCount,fee_excluded_count:fees.excludedCount,fee_issues:fees.issues,fee_exclusions:fees.exclusions,fee_history_diagnostics:fees.historyDiagnostics,platformIds:total.platformIds};}
+   for(const d of merchantDirections){const facts=subset.map(r=>r.directions[d]).filter(Boolean);if(!facts.length)continue;const fees=scopedFeeSummary(facts,d),base={...successTotal(facts,d),direction:d,currency,estimated_fee:fees.amount,fee_complete:fees.complete,fee_eligible_count:fees.successCount,fee_matched_count:fees.matchedCount,fee_excluded_count:fees.excludedCount,fee_issues:fees.issues,fee_exclusions:fees.exclusions,fee_history_diagnostics:fees.historyDiagnostics,platformIds:total.platformIds};total.directions[d]=merchantFeeMode()==='current'?merchantModeFeeRow({...base,fee_items:facts}):base;}
    return total;
   });
   function merchantFeeCell(row){
    if(row.fee_rate_label==='不适用'||L.feeLookupLoading||L.feeLookupError)return feeCell(row);
+   if(merchantFeeMode()==='current'){
+    const fact=row.fee_current_facts||{},eligible=sorting.knownNumber(fact.eligibleCount),matched=sorting.knownNumber(fact.matchedCount),coverage=eligible>0&&matched!==null?R(matched,eligible):eligible===0&&fact.complete?'无需计费':'待确认';
+    return '<span class="merchant-fee-value" tabindex="0" title="'+E(merchantFeeCoverage(row))+'">'+N(row.estimated_fee)+'<span class="merchant-fee-coverage-inline" aria-label="'+E('应计费成功笔数的匹配占比 '+coverage)+'">'+E(coverage)+'</span></span>';
+   }
    const label=sorting.feeHistoryLabel?.(row)||'历史费率未匹配',status=label==='部分'?'已匹配部分':label;
    return '<span class="merchant-fee-value" tabindex="0" title="'+E(sorting.feeCoverageText(row))+'">'+N(row.estimated_fee)+(!row.fee_complete&&Number(row.fee_eligible_count)>0?'<span class="merchant-fee-status">'+E(status)+'</span>':'')+'</span>';
   }
   const canUsageDetail=()=>typeof window.hensemRoleAllowed!=='function'||window.hensemRoleAllowed('merchants','view')&&window.hensemRoleAllowed('merchants','detail');
-  const detailRows=[...rows,...totalsByCurrency],queriedResults=L.results,scope=()=>JSON.stringify([L.from,L.to,L.country,L.currency,L.team,L.platform,L.source,L.provider,L.status,L.multi]),queriedScope=scope();
+  const detailRows=[...rows,...totalsByCurrency],queriedResults=L.results,scope=()=>JSON.stringify([L.from,L.to,L.country,L.currency,L.team,L.platform,L.source,L.provider,L.direction,L.status,L.multi]),queriedScope=scope(),queriedSerial=L.serial,queriedMode=merchantFeeMode();
+  const drawerIdentity=r=>JSON.stringify([!!r._total,r.currency||'',r.platform||'',[...(r.platformIds||[])].sort()]);
+  if(!provider)window.liveMerchantFeeRefresh=function(){
+   const active=merchantFeeDrawers.get(L);if(!active)return;
+   const marker=document.querySelector('[data-merchant-provider-detail="'+active.marker+'"]');
+   if(!marker?.isConnected||!canUsageDetail()||L.dirty||L.loading||L.results!==active.results||L.serial!==active.serial||scope()!==active.scope||window.hensemCurrentAdminPage?.()!=='merchants'||L.view!=='business'){merchantFeeDrawers.delete(L);return;}
+   const index=detailRows.findIndex(r=>drawerIdentity(r)===active.identity);if(index<0){merchantFeeDrawers.delete(L);return;}window.liveMerchantProviderUsage(index);
+  };
   if(!provider)window.liveMerchantProviderUsage=function(index){
-   if(!canUsageDetail()||!Number.isInteger(index)||!detailRows[index]||L.dirty||L.loading||L.results!==queriedResults||scope()!==queriedScope||window.hensemCurrentAdminPage?.()!=='merchants'||L.view!=='business')return;
+   if(!canUsageDetail()||!Number.isInteger(index)||!detailRows[index]||L.dirty||L.loading||L.results!==queriedResults||L.serial!==queriedSerial||scope()!==queriedScope||merchantFeeMode()!==queriedMode||window.hensemCurrentAdminPage?.()!=='merchants'||L.view!=='business')return;
    const r=detailRows[index],usage=providerUsage(r),pairs=new Map();
-   const scopedRows=sorting.overviewDimensions({orders:usage.leaves,summaries:usage.facts,rates:L.feeLookupRows,country:L.country,key:'provider',plus,combine});
+   const scopedRows=sorting.overviewDimensions({orders:usage.leaves,summaries:usage.facts,rates:L.feeLookupRows,country:L.country,key:'provider',plus,combine}).map(merchantModeFeeRow);
    for(const row of scopedRows){if(!usage.names.has(row.provider))continue;if(!pairs.has(row.provider))pairs.set(row.provider,{provider:row.provider,sources:[],directions:{}});const pair=pairs.get(row.provider);pair.directions[row.direction]=row;pair.sources=[...new Set([...pair.sources,...(row.sources||[row.source]).filter(Boolean)])];}
    const feeDetail=row=>{
     if(!row)return unavailable;
     const eligible=sorting.knownNumber(row.fee_eligible_count),matched=sorting.knownNumber(row.fee_matched_count),missing=eligible!==null&&matched!==null?Math.max(0,eligible-matched):null;
+    if(merchantFeeMode()==='current')return merchantFeeCell(row)+'<small class="merchant-fee-coverage">已匹配 '+C(matched)+' / '+C(eligible)+' 笔 · 待确认 '+C(eligible!==null&&matched!==null?missing:null)+' 笔</small>';
     const history=sorting.feeHistoryLabel?.(row)||'历史费率未匹配',pendingDate=['缺少生效时间','缺少生效时间列','继承费率缺少生效凭证'].includes(history);
     return merchantFeeCell(row)+'<small class="merchant-fee-coverage">已匹配 '+C(matched)+' / '+C(eligible)+' 笔 · 未匹配 '+C(missing)+' 笔</small>'+(!row.fee_complete&&eligible>0?'<small class="merchant-fee-coverage">'+E(pendingDate?'生效日期待确认（'+history+'）':history==='部分'?'已匹配部分订单，其余待确认':history)+'</small>':'');
    };
    // Current references remain readable when success-time facts are unknown.
-   // Resolve each original leaf with the shared rules; never assign an estimate.
+   // Do not present a country fallback as the applied current reference when
+   // the strict estimator rejects the native platform/category rule.
    const referenceFeeLabel=row=>{
+    if(merchantFeeMode()==='current'){
+     const reasons=new Set((row.fee_current_facts?.reasons||[]).map(x=>x.reason));
+     if(reasons.has('unsupported_rate')||reasons.has('conflicting_rates'))return '费率待核对';
+     if(reasons.has('missing_category_rate'))return '原始类型费率未匹配';
+     if(reasons.has('missing_rate'))return '未匹配';
+    }
     if(row.fee_reference_label)return row.fee_reference_label;
     const labels=new Set();
     for(const item of row.fee_items||row.items||[row]){
@@ -261,11 +304,12 @@
     return [...labels].sort().join(' / ')||'未匹配';
    };
    const detailHeaders=['三方 / 系统',...merchantDirections.flatMap(d=>['全部金额','全部笔数','成功金额','成功笔数','当前参考费率','手续费'].map(label=>name(d)+label))];
-   const detailCells=pair=>['<strong>'+E(pair.provider)+'</strong><small class="merchant-provider-source">'+E(sources(pair))+'</small>',...merchantDirections.flatMap(d=>{const row=rowFor(pair,d);return row?[N(row.all_amount),C(row.all_count),N(row.success_amount),C(row.success_count),'<span title="当前参考价仅供核对，不能代替订单创建时的生效版本">'+E(L.feeLookupLoading?'读取中…':L.feeLookupError?'读取失败':referenceFeeLabel(row))+'</span>',c.successTimeUnavailable?.(d)?unavailable:feeDetail(row)]:Array(6).fill(unavailable);})];
+   const detailCells=pair=>['<strong>'+E(pair.provider)+'</strong><small class="merchant-provider-source">'+E(sources(pair))+'</small>',...merchantDirections.flatMap(d=>{const row=rowFor(pair,d);return row?[N(row.all_amount),C(row.all_count),N(row.success_amount),C(row.success_count),'<span title="'+E(merchantFeeMode()==='current'?'当前参考费率用于本页估算；不是历史实际费率':'当前参考价仅供核对，不能代替订单创建时的生效版本')+'">'+E(L.feeLookupLoading?'读取中…':L.feeLookupError?'读取失败':referenceFeeLabel(row))+'</span>',c.successTimeUnavailable?.(d)?unavailable:feeDetail(row)]:Array(6).fill(unavailable);})];
    const details=[...pairs.values()].sort((a,b)=>a.provider.localeCompare(b.provider)),missingNotes=[usage.unidentified?'存在未识别支付商；未计入已识别三方数量。':'',usage.incomplete?'未完整返回三方分组事实；三方金额、笔数可能小于平台汇总。':''].filter(Boolean);
    const title=(r._total?'已读汇总':r.platform)+' · 使用三方',context=E((r.currency||'币种未提供')+' · '+String(L.from||'').slice(0,10)+' 至 '+String(L.to||'').slice(0,10));
-   const body='<div class="merchant-provider-detail"><p><strong>'+E(r._total?'当前已读平台':r.platform)+' · '+C(usage.value)+(usage.unknown&&usage.value!==null?'*':'')+' 个已识别三方</strong> · '+context+'</p>'+note('代收与代付按统一三方去重；合计数量不重复累加同一三方。全部金额/笔数按创建时间，成功金额/笔数按成功时间。人工充值、人工确认、无三方、提现转充值不计入支付商数量。')+(missingNotes.length?'<p class="merchant-provider-warning">'+E((usage.value!==null?'* 表示已识别小计。':'三方数量待确认。')+missingNotes.join(' '))+'</p>':'')+note('当前参考费率只供核对。手续费使用订单创建时已发布的生效版本；缺少生效日期或未匹配的订单不会按当前参考价补算，也不会算成 0。悬停手续费可查看匹配笔数、缺项及原表来源。')+'<div class="merchant-provider-detail-table">'+refTable(detailHeaders,details.map(detailCells))+'</div>'+(!details.length?'<p class="live-empty">'+E(!usage.leaves.length?'尚未返回三方原始分组事实，暂不能列出支付商。':usage.unidentified?'当前只有未识别支付商，暂不能确认使用了哪些三方。':'当前已返回分组没有实际使用的支付商。')+'</p>':'')+'</div>';
+   const marker=++merchantFeeDrawerSerial,body='<div class="merchant-provider-detail" data-merchant-provider-detail="'+marker+'"><p><strong>'+E(r._total?'当前已读平台':r.platform)+' · '+C(usage.value)+(usage.unknown&&usage.value!==null?'*':'')+' 个已识别三方</strong> · '+context+'</p>'+note('代收与代付按统一三方去重；合计数量不重复累加同一三方。全部金额/笔数按创建时间，成功金额/笔数按成功时间。人工充值、人工确认、无三方、提现转充值不计入支付商数量。')+(missingNotes.length?'<p class="merchant-provider-warning">'+E((usage.value!==null?'* 表示已识别小计。':'三方数量待确认。')+missingNotes.join(' '))+'</p>':'')+note(E(merchantFeeMode()==='historical'?'当前参考费率只供核对。'+merchantFeeNote():merchantFeeNote())+' 悬停手续费可查看匹配笔数与缺项。')+'<div class="merchant-provider-detail-table">'+refTable(detailHeaders,details.map(detailCells))+'</div>'+(!details.length?'<p class="live-empty">'+E(!usage.leaves.length?'尚未返回三方原始分组事实，暂不能列出支付商。':usage.unidentified?'当前只有未识别支付商，暂不能确认使用了哪些三方。':'当前已返回分组没有实际使用的支付商。')+'</p>':'')+'</div>';
    (c.openDrawer||window.openDrawer)?.(title,body);
+   merchantFeeDrawers.set(L,{marker,identity:drawerIdentity(r),results:queriedResults,scope:queriedScope,serial:queriedSerial});
   };
   function usageCell(r){const usage=providerUsage(r),label=C(usage.value)+(usage.unknown&&usage.value!==null?'*':'');if(!canUsageDetail())return '<span title="'+E(usage.title+'当前角色没有明细权限。')+'">'+label+'</span>';const index=detailRows.indexOf(r);return '<button type="button" class="link merchant-provider-usage" title="'+E(usage.title+'点击查看三方的代收、代付金额、笔数与手续费。')+'" aria-label="'+E((r._total?'已读汇总':r.platform)+'使用三方明细')+'" onclick="liveMerchantProviderUsage('+index+')">'+label+'</button>';}
   function metricCell(r,d,key){
@@ -284,7 +328,7 @@
   function renderTable(headers,body,footer){
    // Size numerical columns from every loaded row and its currency subtotal,
    // so compact cells retain the entire value even on a different table page.
-   const metricWidth=(d,metric)=>Math.max(metric.width,(name(d)+metric.label).length*9+16,...detailRows.map(r=>{const value=getter(r,d,metric.key),row=rowFor(r,d),status=metric.key==='fee'&&row&&!row.fee_complete&&Number(row.fee_eligible_count)>0?(sorting.feeHistoryLabel?.(row)||'历史费率未匹配'):'';if(value===null&&!status)return metric.width;const label=metric.key.endsWith('_amount')||metric.key==='fee'?N(value):metric.key==='success_rate'?R(value,1):C(value);return Math.ceil(String(label).length*6.2+(status==='部分'?6:status.length)*10+(status?6:0)+12);}));
+   const metricWidth=(d,metric)=>Math.max(metric.width,(name(d)+metric.label).length*9+16,...detailRows.map(r=>{const value=getter(r,d,metric.key),row=rowFor(r,d),status=metric.key==='fee'&&row?(merchantFeeMode()==='current'?(Number(row.fee_eligible_count)>0?R(row.fee_matched_count,row.fee_eligible_count):'待确认'):!row.fee_complete&&Number(row.fee_eligible_count)>0?(sorting.feeHistoryLabel?.(row)||'历史费率未匹配'):''):'';if(value===null&&!status)return metric.width;const label=metric.key.endsWith('_amount')||metric.key==='fee'?N(value):metric.key==='success_rate'?R(value,1):C(value);return Math.ceil(String(label).length*6.2+(status==='部分'?6:status.length)*(merchantFeeMode()==='current'?4.5:10)+(status?6:0)+12);}));
    const widths=[...prefix.map(column=>column.width),...merchantDirections.flatMap(d=>metrics.map(metric=>metricWidth(d,metric))),...(provider?[88]:[])],width=widths.reduce((sum,value)=>sum+value,0),firstWidth=prefix[0].width,fixedCount=2;
    const fixed=(index,header=false)=>index<fixedCount?'position:sticky;left:'+(index===0?0:firstWidth)+'px;z-index:'+(header?4:2)+';background:'+(header?'#f5f7fd':'#fff')+';text-align:left;overflow:hidden;text-overflow:ellipsis;':'';
    const style=(index,header=false)=>fixed(index,header)+'vertical-align:middle;white-space:nowrap;'+(index>=fixedCount?'overflow:visible;text-overflow:clip;':'')+(header?'font-size:9px;padding:5px 4px;':'font-size:10px;padding:5px 4px;')+(index===prefix.length||index===prefix.length+metrics.length?'border-left:2px solid #d5def2;':'')+(header&&index>=prefix.length&&index<prefix.length+metrics.length*2?'background:'+(index<prefix.length+metrics.length?'#eff4ff':'#eef9f7')+';':'');
@@ -292,7 +336,7 @@
    return '<div class="table-wrap merchant-unified-table" style="overflow:auto" tabindex="0" role="region" aria-label="'+(provider?'三方':'平台')+'代收代付经营明细"><table style="table-layout:fixed;min-width:'+width+'px;width:'+width+'px;font-size:10px"><colgroup>'+widths.map(value=>'<col style="width:'+value+'px">').join('')+'</colgroup><thead><tr>'+headers.map((label,index)=>'<th scope="col" style="'+style(index,true)+'">'+label+'</th>').join('')+'</tr></thead><tbody>'+htmlRows(body)+'</tbody>'+(footer.length?'<tfoot>'+htmlRows(footer)+'</tfoot>':'')+'</table>'+(body.length?'':'<div class="live-empty">当前范围没有已入库经营记录</div>')+'</div>';
   }
   const currencyNote=mixedCurrencies?'按币种分别统计':currencies[0]?'币种 '+E(currencies[0]):'币种未提供';
-  return box(provider?'该商户的三方经营表现':'商户经营清单',sortedPageTable(id,headings,rows,columns,cells,totalsByCurrency.map(cells),renderTable),currencyNote+' · 全部、处理中按创建时间，成功按成功时间；手续费按订单创建时费率。');
+  return merchantFeeControls()+box(provider?'该商户的三方经营表现':'商户经营清单',sortedPageTable(id,headings,rows,columns,cells,totalsByCurrency.map(cells),renderTable),currencyNote+' · 全部、处理中按创建时间，成功按成功时间；手续费口径：'+(merchantFeeMode()==='current'?'当前费率参考估算（非历史实际）':'历史生效费率'));
  }
 
  function business(page){const team=['teamops','teamcountries','teamplatforms'].includes(page),merchant=page==='merchants',legacy=page==='merchantproviders',dimension=page==='teamcountries'?'country':'platform';let items=team?[['business',page==='teamcountries'?'国家表现':page==='teamplatforms'?'平台经营':'经营明细'],['trend',page==='teamops'?'团队订单趋势 / 国家分布':'全部订单金额 / 国家 × 商户关联'],['providers','团队三方使用情况']]:merchant?[['business','商户经营清单'],['trend','商户订单趋势'],['providers','该商户的三方经营表现']]:legacy?[['business','该商户的三方经营表现']]:[['business','平台内三方表现'],['fees','平台内三方成本']];const nav=choose(items);const context='<div class="workspace-context"><div><strong>'+E(team?(L.team==='all'?'全部团队经营范围':L.team):L.platform==='all'?'全部商户（平台）':L.catalog.find(x=>x.id===L.platform)?.name||'商户')+'</strong><small>'+(team?'团队 → 国家 → 平台':'商户 = 平台；归属团队 → 国家 → 平台 → 三方订单')+'</small></div><button class="btn soft" onclick="setPage(\''+(team?'teams':'teamops')+'\')">'+(team?'团队平台配置':'团队经营')+' →</button></div>';

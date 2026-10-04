@@ -157,6 +157,100 @@
  }
 
  function estimate(row,rates,country){return estimateFacts(row,rates,country).amount}
+ // A separate what-if estimate using the current configuration. It never
+ // replaces the immutable creation-time fee facts or writes a rate version.
+ // Call with the authorized original leaves in fee_items/items and the full
+ // success-time count, so missing provider groups remain an explicit gap.
+ function currentReferenceFeeFacts(row,rates,country){
+  const currency=value=>typeof value==='string'&&/^[A-Z]{3,6}$/.test(value.trim())?value.trim():null;
+  const count=value=>{const n=knownNumber(value);return Number.isSafeInteger(n)&&n>=0?n:null};
+  const countryKey=value=>{const n=normalized(value);return {in:'印度',india:'印度',br:'巴西',brazil:'巴西',vn:'越南',vietnam:'越南',ph:'菲律宾',philippines:'菲律宾',pk:'巴基斯坦',pakistan:'巴基斯坦'}[n]||n};
+  const reason=(r,key,n)=>({reason:key,count:n,provider:r?.provider||'未分配三方',platform:r?.platform||'未提供平台'});
+  const unknown=(r,key)=>({amount:null,successCount:count(r?.success_count),eligibleCount:count(r?.success_count),matchedCount:0,excludedCount:0,complete:false,currency:currency(r?.currency),reasons:[reason(r,key,count(r?.success_count))]});
+  const sumKnown=values=>values.some(n=>n===null)?null:values.reduce((n,v)=>n+v,0);
+  const comparable=(a,b)=>Math.abs(a-b)<=Math.max(1e-8,Math.max(Math.abs(a),Math.abs(b))*1e-12);
+  function candidates(r){
+   // Keep blank/unsupported platform exceptions: they must not fall back to
+   // a country rate merely because they cannot yet be priced.
+   let records=rateRecords(r,rates,country),confirmed=confirmedFeeRule(r,country);
+   if(confirmed)records=records.filter(record=>matchesFeeRule(record,confirmed));
+   else {const specific=records.filter(record=>record.scopeType==='platform'&&platformKey(record.platform,r,country)===platformKey(r.platform,r,country));records=specific.length?specific:records.filter(record=>record.scopeType!=='platform');}
+   // A provider aggregate normally has no channel category. Different rates
+   // across its categories are therefore ambiguous. Only an explicit original
+   // leaf category may narrow them; neither currency nor provider implies it.
+   const explicit=String(r.fee_category||'').trim().toUpperCase(),native=String(r.channel_type||'').trim().toUpperCase(),category=explicit||native;
+   const knownCategory=!!explicit||['UPI','USDT','BANK','BANKQR','MOMO','ZALO','THẺ CÀO'].includes(native)||records.some(record=>String(record.category||'').trim().toUpperCase()===native);
+   return {records:category&&knownCategory?records.filter(record=>String(record.category||'').trim().toUpperCase()===category):records,category:category&&knownCategory};
+  }
+  function leaf(r){
+   const total=count(r?.success_count),unit=currency(r?.currency);
+   if(total===null)return unknown(r,'missing_success_count');
+   if(!unit)return unknown(r,'unknown_currency');
+   if(typeof r?.platformId!=='string'||!r.platformId.trim()||typeof r.platform!=='string'||!r.platform.trim()||typeof r.source!=='string'||!r.source.trim()||typeof r.country!=='string'||!r.country.trim()
+    ||countryKey(r.country)!==countryKey(country)||!['charge','withdraw'].includes(r.direction))return unknown(r,'unknown_leaf_identity');
+   if(feeExempt(r.provider))return {amount:null,successCount:total,eligibleCount:0,matchedCount:0,excludedCount:total,complete:true,currency:unit,reasons:[]};
+   if(!isProviderBusiness(r.provider))return unknown(r,'missing_provider');
+   const amount=knownNumber(r.success_amount);
+   if(total===0)return amount===0?{amount:0,successCount:0,eligibleCount:0,matchedCount:0,excludedCount:0,complete:true,currency:unit,reasons:[]}:unknown(r,'invalid_success_amount');
+   // Native WG transfer-to-recharge facts explicitly prove zero fees. The
+   // display provider name alone (or the same name in AR) is not proof.
+   if(r.source==='wg'&&r.direction==='charge'&&count(r.fee_exempt_count)===total&&versionFeeFacts(r)?.unmatched===0&&versionFeeFacts(r)?.amount===0)
+    return {amount:0,successCount:total,eligibleCount:total,matchedCount:total,excludedCount:0,complete:true,currency:unit,reasons:[],exemptOnly:true};
+   // A display alias may merge native transfer-to-recharge successes with
+   // billable successes. The aggregate has no separate billable amount, so
+   // multiplying its whole amount would charge the exempt orders as well.
+   if(r.source==='wg'&&r.direction==='charge'&&(knownNumber(r.fee_exempt_count)>0||r.fee_exempt_count!=null&&count(r.fee_exempt_count)===null))return unknown(r,'mixed_fee_exemption');
+   const tier=tieredFeeRule(r,country);
+   if(tier){
+    const bands=feeBands(r);
+    if(!bands||bands.fee_low_count===0&&bands.fee_low_amount!==0)return unknown(r,'missing_fee_bands');
+    const bandAmount=bands.fee_low_amount+bands.fee_high_amount+bands.fee_gap_amount;
+    if(bands.fee_unpriced_count===0&&(amount===null||amount<0||!comparable(bandAmount,amount)))return unknown(r,'invalid_fee_bands');
+    const matched=bands.fee_low_count+bands.fee_high_count,value=bands.fee_low_amount*tier.lowPercent+bands.fee_low_count*tier.lowFixed+bands.fee_high_amount*tier.highPercent;
+    if(!Number.isFinite(value)||value<0)return unknown(r,'invalid_success_amount');
+    const reasons=[];if(bands.fee_gap_count)reasons.push(reason(r,'unconfirmed_amount_band',bands.fee_gap_count));if(bands.fee_unpriced_count)reasons.push(reason(r,'invalid_success_amount',bands.fee_unpriced_count));
+    return {amount:matched?value:null,successCount:total,eligibleCount:total,matchedCount:matched,excludedCount:0,complete:matched===total,currency:unit,reasons};
+   }
+   if(amount===null||amount<0)return unknown(r,'invalid_success_amount');
+   const selection=candidates(r),records=selection.records;if(!records.length)return unknown(r,Array.isArray(rates)?selection.category?'missing_category_rate':'missing_rate':'rates_unavailable');
+   const payout=r.direction==='withdraw',rules=records.map(record=>({record,rule:parseFee(record[payout?'payoutFee':'collectFee'],record[payout?'payoutSingleFee':'collectSingleFee'])}));
+   if(rules.some(({rule})=>!rule||!Number.isFinite(rule.percent)||rule.percent<0||rule.percent>1||!Number.isFinite(rule.fixed)||rule.fixed<0||rule.fixed>1e9))return unknown(r,'unsupported_rate');
+   if(new Set(rules.map(({rule})=>JSON.stringify(rule))).size!==1)return unknown(r,'conflicting_rates');
+   const rule=rules[0].rule;
+   if(rules.some(({record})=>{const raw=record.feeEffective?.[r.direction]?.currency;return raw!=null&&String(raw).trim()&&currency(raw)!==unit;}))return unknown(r,'fee_currency_mismatch');
+   if(rule.fixed){
+    // The current production reader does not expose this monetary evidence.
+    // Future explicit source currency proof can price fixed fees; a category
+    // named USDT or a country's usual currency can never supply the unit.
+    const proof=record=>record.feeEffective?.[r.direction],proved=rules.every(({record})=>currency(proof(record)?.currency)===unit&&String(proof(record)?.source?.currencyCell||'').trim());
+    if(!proved)return unknown(r,'fixed_fee_currency_unconfirmed');
+   }
+   const value=amount*rule.percent+total*rule.fixed;
+   if(!Number.isFinite(value)||value<0)return unknown(r,'invalid_success_amount');
+   return {amount:value,successCount:total,eligibleCount:total,matchedCount:total,excludedCount:0,complete:true,currency:unit,reasons:[]};
+  }
+  function visit(r){
+   if(!r||typeof r!=='object')return unknown(r,'unknown_leaf_identity');
+   const children=Object.hasOwn(r,'fee_items')?r.fee_items:r.items;
+   if(Object.hasOwn(r,'fee_items')&&!Array.isArray(children))return unknown(r,'missing_provider_breakdown');
+   if(!Array.isArray(children))return leaf(r);
+   const total=count(r.success_count),unit=currency(r.currency);
+   if(!unit)return unknown(r,'unknown_currency');
+   if(children.some(child=>currency(child?.currency)!==unit))return unknown(r,'mixed_currency');
+   const parts=children.map(visit),childCount=sumKnown(parts.map(p=>p.successCount)),knownChildCount=parts.reduce((n,p)=>n+(p.successCount??0),0);
+   if(total!==null&&knownChildCount>total)return unknown(r,'inconsistent_provider_breakdown');
+   const expectedAmount=knownNumber(r.success_amount),childAmount=sumKnown(children.map(child=>knownNumber(child.success_amount)));
+   if(total!==null&&childCount===total&&expectedAmount!==null&&childAmount!==null&&!comparable(expectedAmount,childAmount))return unknown(r,'inconsistent_provider_breakdown');
+   const excluded=sumKnown(parts.map(p=>p.excludedCount)),matched=sumKnown(parts.map(p=>p.matchedCount)),reasons=parts.flatMap(p=>p.reasons);
+   if(total===null||childCount===null)reasons.push(reason(r,'missing_success_count',null));
+   else if(total>childCount)reasons.push(reason(r,'missing_provider_breakdown',total-childCount));
+   const eligible=total===null||childCount===null||excluded===null?null:total-excluded,amounts=parts.filter(p=>p.amount!==null).map(p=>p.amount),value=amounts.reduce((n,v)=>n+v,0);
+   if(!Number.isSafeInteger(matched)||excluded!==null&&!Number.isSafeInteger(excluded)||!Number.isFinite(value))return unknown(r,'invalid_success_amount');
+   return {amount:amounts.length?value:total===0?0:null,successCount:total,eligibleCount:eligible,matchedCount:matched,excludedCount:excluded,complete:total!==null&&childCount===total&&parts.every(p=>p.complete)&&matched===eligible,currency:unit,reasons};
+  }
+  const facts=visit(row),unknownCount=facts.eligibleCount===null?null:Math.max(0,facts.eligibleCount-facts.matchedCount);
+  return {...facts,unknownCount,label:'按当前费率参考估算'};
+ }
  const feeEvidenceLabels={missing_effective_time:'缺少生效时间',missing_effective_column:'缺少生效时间列',invalid_effective_time:'生效时间格式无效',ambiguous_effective_column:'生效时间列不唯一',inherited_fee_without_time_proof:'继承费率缺少生效凭证',same_effective_time_conflict:'同一生效时间费率冲突',backdated_version_rejected:'回填时间早于已发布版本',unknown_currency:'费率币种未确认',invalid_currency:'费率币种无效',ambiguous_currency_column:'币种列不唯一',ambiguous_source_rule:'同一来源费率冲突',unknown_source_identity:'费率来源未确认'};
  function feeEvidenceSource(record,evidence){
   const proof=evidence?.source||{},sheet=String(proof.sheetName||record.sheetName||'原表'),cell=String(proof.effectiveCell||'').trim();
@@ -787,6 +881,6 @@
    box(name+'三方汇总'+(partial?'（部分结果）':'')+' · '+issueLabel+'工单',(uniqueCoverageNote||workorderGapNote||detailOnlyNote?'<div class="provider-workorder-notices">'+uniqueCoverageNote+workorderGapNote+detailOnlyNote+'</div>':'')+reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
     '')+'</div>';
  }
- root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,tieredFeeRule,feeSummary,feeCoverageText,feeHistoryLabel,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,workorderPlatformNeedsReview,rawWorkorderAmountComparison,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
+ root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,currentReferenceFeeFacts,tieredFeeRule,feeSummary,feeCoverageText,feeHistoryLabel,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,workorderPlatformNeedsReview,rawWorkorderAmountComparison,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
  if(typeof module!=='undefined')module.exports=root.HensemProviderSummary;
 })(typeof window!=='undefined'?window:globalThis);

@@ -32,7 +32,14 @@
    return card(name,money(current[key+'_amount']),foot,key,icon,name+'；'+countText+'；金额'+amountCompare.text+'；笔数'+countCompare.text);
   });
   cards.push(card('成功率',rate(current.success_count,current.all_count),compareHtml(comparison([current.success_count,current.all_count],[previous.success_count,previous.all_count],options,true)),'success_rate','▥','成功笔数按成功时间；全部订单笔数按创建时间；含跨日成功，可超过100%'));
-  cards.push(card('估算手续费','—','<span class="metric-compare neutral" title="历史生效费率尚未完整匹配，不按当前费率重算旧订单">对比 —</span>','fee','▥','历史生效费率尚未接入，手续费暂不可用'));
+  if(options.fee){
+   const fee=options.fee,label=fee.label||'估算手续费',matched=known(fee.matchedCount),eligible=known(fee.eligibleCount),excluded=known(fee.excludedCount),loading=fee.status==='loading',failed=fee.status==='error';
+   const basis=fee.mode==='historical'?'按订单创建时间匹配生效版本':'按当前参考费率估算，非历史实际手续费';
+   const coverage=loading?'费率读取中':failed?'费率读取失败':matched!==null&&eligible!==null?'已匹配 '+count(matched)+' / '+count(eligible)+' 笔'+(fee.complete?'':' · 部分'):'匹配范围待确认';
+   const foot='<span class="live-reference-count">'+esc(coverage)+'</span><span class="metric-compare neutral">'+esc(basis)+'</span>';
+   const title=basis+'；'+coverage+(excluded!==null&&excluded>0?'；不计三方手续费 '+count(excluded)+' 笔':'')+(fee.note?'；'+fee.note:'')+'；未匹配部分不计为零手续费';
+   cards.push(card(label,loading||failed?'—':money(fee.amount),foot,'fee','▥',title));
+  }else cards.push(card('估算手续费','—','<span class="metric-compare neutral" title="历史生效费率尚未完整匹配，不按当前费率重算旧订单">对比 —</span>','fee','▥','历史生效费率尚未接入，手续费暂不可用'));
   return '<div class="kpis dense-metrics comparison-kpis live-reference-metrics">'+cards.join('')+'</div>';
  }
  function totals(options={}){

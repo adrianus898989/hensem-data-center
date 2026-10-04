@@ -23,6 +23,20 @@ test('workorder combined rate uses dedup original counts and preserves absent, u
 test('WG success time gaps affect its own withdrawal column and invalid or missing payment counts remain unknown',()=>{
  const a=api(),p=props({queryPlatforms:[A,W],results:[payment(A,[row('withdraw',10,6)]),payment(W,[row('withdraw',10,6),row('charge',10,3)])],workorders:null}),m=a.buildModel(p);assert.equal(m.rows[0].withdraw[0].value,60);assert.equal(m.rows[0].withdraw[1].value,null);assert.equal(m.rows[0].charge[1].value,30);p.L.results[0].platform={...A,capabilities:{withdrawSuccessTimeAvailable:false}};assert.equal(a.buildModel(p).rows[0].withdraw[0].value,null);p.L.results[0].platform=A;p.L.results[0].groups.provider[0].success_count='';assert.equal(a.buildModel(p).rows[0].withdraw[0].value,null);
 });
+test('each matrix ranks its own submitted volume across native platforms, with empty rows last',()=>{
+ const a=api(),p=props({results:[payment(A,[row('charge',3,1,'A small'),row('charge',90,20,'Z busiest'),row('withdraw',200,100,'P payout'),row('charge',null,null,'Empty')]),payment(B,[row('charge',20,10,'Z busiest'),row('withdraw',5,1,'A small')])],workorders:{byPlatformProvider:[ticket(A,'charge',2,1,'Z busiest'),ticket(A,'charge',30,3,'T tickets'),ticket(B,'withdraw',40,4,'T tickets'),ticket(A,'withdraw',20,8,'A small')]}}),before=JSON.stringify(p),m=a.buildModel(p);
+ assert.deepEqual(Array.from(a.rankedRows(m,'charge'),r=>r.provider),['Z busiest','A small','Empty','P payout','T tickets']);
+ assert.deepEqual(Array.from(a.rankedRows(m,'withdraw'),r=>r.provider),['P payout','A small','Empty','T tickets','Z busiest']);
+ assert.deepEqual(Array.from(a.rankedRows(m,'workorder'),r=>r.provider),['T tickets','A small','Z busiest','Empty','P payout']);
+ const tables=a.render(p).match(/<tbody>.*?<\/tbody>/g),names=html=>Array.from(html.matchAll(/<th scope="row">(.*?)<\/th>/g),x=>x[1]);
+ assert.equal(names(tables[0])[0],'Z busiest');assert.equal(names(tables[1])[0],'P payout');assert.equal(names(tables[2])[0],'T tickets');
+ assert.equal(m.rows.find(r=>r.provider==='Z busiest').volumes.charge,110);assert.equal(m.rows.find(r=>r.provider==='T tickets').volumes.workorder,70);assert.equal(JSON.stringify(p),before);
+});
+test('known WG submission volume ranks ahead of smaller flows even when its rate cannot be verified',()=>{
+ const a=api(),p=props({queryPlatforms:[A,W],results:[payment(A,[row('withdraw',10,5,'Small'),row('withdraw',0,0,'Zero')]),payment(W,[row('withdraw',50,20,'Busy WG')])],workorders:null}),m=a.buildModel(p);
+ assert.deepEqual(Array.from(a.rankedRows(m,'withdraw'),r=>r.provider),['Busy WG','Small','Zero']);assert.equal(m.rows.find(r=>r.provider==='Busy WG').withdraw[1].value,null);assert.equal(m.rows.find(r=>r.provider==='Busy WG').volumes.withdraw,50);
+ const html=a.render(p);assert.match(html,/提交笔数从多到少/);assert.match(html,/空数据置后/);assert.match(html,/>—<\/span>/);
+});
 test('dirty, foreign scope, multi-day and invalid-date snapshots never reveal rates',()=>{
  const a=api();for(const p of [props({dirty:true}),{...props(),scopeMatches:false},props({to:'2026-10-04T23:59:59'}),props({from:'2026-99-03',to:'2026-99-03'})]){assert.equal(a.buildModel(p).ready,false);assert.doesNotMatch(a.render(p),/<table|40\.00%|ATPay/);}
  const p={...props(),workordersScopeMatches:false};assert.equal(a.buildModel(p).rows[0].workorder[0].value,null);p.workordersScopeMatches=true;p.L.workorders.startDate='2026-10-02';assert.equal(a.buildModel(p).rows[0].workorder[0].value,null);
