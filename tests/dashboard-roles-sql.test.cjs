@@ -51,8 +51,32 @@ before(async()=>{
 after(async()=>db?.close());beforeEach(async()=>{await db.exec('begin');await as(OWNER);});afterEach(async()=>{await db.exec('rollback');await admin();});
 
 test('catalog exactly matches shared UI permission catalog and HMAC matches independent SHA256',async()=>{
- await admin();const catalog=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(catalog.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.map(page=>({...page,...(page.id==='stuck'?{label:'代付中与卡单分析',moduleId:'risk',moduleLabel:'智能风控中心'}:{}),actions:page.id==='ip'?page.actions.filter(action=>action.id!=='edit'):page.actions,requests:page.requests.filter(request=>!['analysisOrders','pendingOrders'].includes(request))})));
+ await admin();const catalog=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(catalog.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.filter(page=>page.id!=='success_analysis').map(page=>({...page,...(page.id==='stuck'?{label:'代付中与卡单分析',moduleId:'risk',moduleLabel:'智能风控中心'}:{}),actions:page.id==='ip'?page.actions.filter(action=>action.id!=='edit'):page.actions,requests:page.requests.filter(request=>!['analysisOrders','pendingOrders'].includes(request))})));
  const key=Buffer.alloc(32,11),msg='role-context';assert.equal(await scalar("select private.dashboard_role_hmac($1,decode($2,'hex'))",[msg,key.toString('hex')]),crypto.createHmac('sha256',key).update(msg).digest('hex'));
+});
+test('new success analysis entry requires explicit assigned page grants and cannot borrow another analysis page',async()=>{
+ await admin();await db.exec(read('tests/fixtures/success-analysis-role-catalog-baseline.sql'));
+ await db.exec(`create function private.dashboard_admin_live_workorders(p_request jsonb) returns jsonb language plpgsql stable security definer set search_path='' as $$begin perform private.dashboard_admin_live_scope();return jsonb_build_object('request',p_request,'context',private.dashboard_role_context_valid());end$$;`);
+ await db.exec(read('supabase/migrations/20261004093506_success_analysis_role_catalog.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,''));
+ await granted(VIEWER,['time.view','time.query']);await denied(()=>execute('success_analysis',{action:'aggregate'}),/page_action_denied/);
+ await as(OWNER);const role=await create(['success_analysis.view']);await assign(ADMIN,role);await as(ADMIN);
+ assert.equal((await execute('success_analysis',{action:'catalog'})).request.action,'catalog');
+ for(const action of ['aggregate','workorders'])await denied(()=>execute('success_analysis',{action}),/role_permission_denied/);
+ await as(OWNER);await manage({operation:'update',roleId:role.id,expectedVersion:1,permissions:['success_analysis.view','success_analysis.query','success_analysis.export']});await as(ADMIN);
+ for(const action of ['aggregate','workorders'])assert.equal((await execute('success_analysis',{action})).context,true);
+ await denied(()=>execute('success_analysis',{action:'details'}),/page_action_denied/);
+ await denied(()=>execute('providers',{action:'aggregate'}),/page_action_denied/);
+});
+test('success analysis registration retains existing owner and legacy modes while legacy cannot call the assigned gateway',async()=>{
+ await admin();await db.exec(read('tests/fixtures/success-analysis-role-catalog-baseline.sql'));
+ await db.exec(read('supabase/migrations/20261004093506_success_analysis_role_catalog.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,''));
+ await as(OWNER);assert.equal((await access()).mode,'owner');assert((await access()).permissions.includes('success_analysis.query'));
+ await as(LEGACY);assert.equal((await access()).mode,'legacy');
+ // Legacy access still lists the historical full catalog. Its mode must remain
+ // an independent gate for the new UI; it is not an assigned role permission.
+ assert((await access()).permissions.includes('success_analysis.query'));
+ await denied(()=>execute('success_analysis',{action:'aggregate'}),/assigned_role_required/);
+ assert.deepEqual((await scalar("select public.dashboard_admin_live_query('{}')")).scope,{mode:'restricted',platforms:['C']});
 });
 test('original owner list raises production 42702, patched list permits the list-create-list flow',async()=>{
  await admin();await db.exec('savepoint old_list');await db.exec(originalRoleFunction('public.dashboard_role_manage'));await as(OWNER);

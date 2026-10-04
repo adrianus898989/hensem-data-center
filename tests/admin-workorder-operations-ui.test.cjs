@@ -105,3 +105,44 @@ test('all teams retains authorized historical source-platform options only for t
  h.root.workorderOperationsSet('platform','HISTORICAL-ALIAS');h.root.workorderOperationsSet('team','M8');assert.doesNotMatch(options(),/HISTORICAL-ALIAS/);assert.equal(h.module.state().draft.platform,'');
  h.root.workorderOperationsSet('team','');assert.match(options(),/HISTORICAL-ALIAS/);h.root.workorderOperationsSet('country','巴西');assert.doesNotMatch(options(),/HISTORICAL-ALIAS/);assert.match(options(),/value="BR"/);
 });
+
+const portalWorkload=(extra={})=>({sourceStatus:'ready',source:'portal_events',view:'workload',country:'印度',timezone:'Asia/Kolkata',rows:[{date:'2026-09-27',actorId:'synthetic-actor',actorName:'<employee>',team:'M8',platform:'SHREEWIN',createdCount:1,followedCount:0,followedCaseCount:0,markedPaidCaseCount:0,latestOperatedAt:'2026-09-27T15:56:54.958Z'}],platforms:['SHREEWIN'],total:1,summary:{createdCount:1,followedCount:0,followedCaseCount:0,markedPaidCaseCount:0},...extra});
+test('employee workload shows saved manual registration independently of empty collected operator rows',async()=>{
+ const h=harness();h.setPage('workorder_workload');h.respond(q=>q.action==='portalOperationLogs'?portalWorkload():{sourceStatus:'ready',rows:[],total:0,summary:{unknownOperationCount:2}});
+ for(const [k,v]of Object.entries({from:'2026-09-08',to:'2026-10-31',operator:'actual-employee',orderNo:'EXACT-RC',utr:'000123'}))h.root.workorderOperationsSet(k,v,false);
+ await h.module.load(true);assert.deepEqual(h.calls.map(q=>q.action),['workorderRecords','portalOperationLogs']);const q=h.calls[1];assert.equal(q.view,'workload');assert.deepEqual(Object.keys(q.filters).sort(),['from','to','platform','operator','orderNo','workorderNo','utr'].sort());assert.equal(q.filters.from,'2026-09-08');assert.equal(q.filters.to,'2026-10-31');assert.equal(q.filters.operator,'actual-employee');assert.equal(q.filters.orderNo,'EXACT-RC');assert.equal(q.filters.utr,'000123');assert.equal(q.limit,20);assert.equal(q.offset,0);
+ const html=h.html();assert.match(html,/工单工作台员工操作/);assert.match(html,/采集源后台操作员/);assert(html.indexOf('工单工作台员工操作')<html.indexOf('采集源后台操作员'));assert.match(html,/2026-09-27.*&lt;employee&gt;.*SHREEWIN.*1\|0\|0\|0/);assert.match(html,/新增登记/);assert.match(html,/登记为成功案件数/);assert.doesNotMatch(html,/<employee>/);assert.match(html,/不代表已核实支付到账/);assert.match(html,/操作开始日期/);assert.match(html,/value="SHREEWIN"/);assert.equal(h.module.state().result.rows.length,0);assert.equal(h.module.state().portalResult.summary.createdCount,1);
+});
+test('workbench and collected failures do not replace the other source with a fabricated zero',async()=>{
+ const h=harness();h.setPage('workorder_workload');h.respond(q=>q.action==='portalOperationLogs'?portalWorkload():Promise.reject(Error('采集源暂时读取失败')));await h.module.load(true);assert.match(h.html(),/SHREEWIN/);assert.match(h.html(),/采集源暂时读取失败/);assert.equal(h.module.state().portalResult.summary.createdCount,1);
+ h.respond(q=>q.action==='portalOperationLogs'?Promise.reject(Error('当前账号没有工作台操作查看权限')):{sourceStatus:'ready',rows:[{...record,operatorAccount:'source-only'}],total:1});await h.module.load(true);assert.match(h.html(),/source-only/);assert.match(h.html(),/当前账号没有工作台操作查看权限/);assert.equal(h.module.state().portalResult,null);assert.doesNotMatch(h.html(),/SHREEWIN/);
+});
+test('workbench pagination and full-range summary remain independent of collected pagination and uncommitted edits',async()=>{
+ const h=harness();h.setPage('workorder_workload');h.respond(q=>q.action==='portalOperationLogs'?portalWorkload({total:75,summary:{createdCount:137,followedCount:23,followedCaseCount:11,markedPaidCaseCount:3}}):{sourceStatus:'ready',rows:[],total:0});h.root.workorderOperationsSet('platform','SHREEWIN');await h.module.load(true);
+ const n=h.calls.length;h.root.workorderOperationsSet('platform','UNCOMMITTED');await h.root.workorderWorkloadPortalPage(2);assert.equal(h.calls.length,n+1);assert.equal(h.calls.at(-1).action,'portalOperationLogs');assert.equal(h.calls.at(-1).offset,20);assert.equal(h.calls.at(-1).filters.platform,'SHREEWIN');assert.equal(h.module.state().current,1);assert.equal(h.module.state().portalResult.summary.createdCount,137);assert.match(h.html(),/137/);
+ await h.root.workorderWorkloadPortalSize(50);assert.equal(h.calls.at(-1).limit,50);assert.equal(h.calls.at(-1).offset,0);assert.equal(h.module.state().size,20);h.root.workorderWorkloadPortalSize(500);assert.equal(h.module.state().portalSize,50);await h.root.workorderWorkloadPortalJump('2');assert.equal(h.calls.at(-1).offset,50);
+});
+test('Today and reset invalidate pending workbench reads without querying or accepting stale manual activity',async()=>{
+ for(const control of ['workorderOperationsToday','workorderOperationsReset']){
+  const h=harness();h.setPage('workorder_workload');let resolve;h.respond(q=>q.action==='portalOperationLogs'?new Promise(r=>{resolve=r}):{sourceStatus:'ready',rows:[],total:0});const pending=h.module.load(true);await new Promise(r=>setImmediate(r));assert.equal(h.module.state().portalBusy,true);const n=h.calls.length;h.root[control]();assert.equal(h.calls.length,n);resolve(portalWorkload());await pending;assert.equal(h.module.state().portalResult,null);assert.equal(h.module.state().portalBusy,false);assert.doesNotMatch(h.html(),/SHREEWIN/);
+ }
+});
+test('source-only filters cannot silently widen workbench activity and a malformed response is not zero',async()=>{
+ const h=harness();h.setPage('workorder_workload');h.respond({sourceStatus:'ready',rows:[],total:0});h.root.workorderOperationsSet('provider','ExactSourceProvider');await h.module.load(true);assert.equal(h.calls.length,1);assert.match(h.html(),/不支持 来源三方 筛选/);assert.equal(h.module.state().portalResult,null);
+ h.root.workorderOperationsSet('provider','');h.root.workorderOperationsSet('issueKind','withdraw');await h.module.load(true);assert.equal(h.calls.length,2);assert.match(h.html(),/目前记录存款登记/);
+ h.root.workorderOperationsSet('issueKind','');h.respond(q=>q.action==='portalOperationLogs'?portalWorkload({summary:{createdCount:null,followedCount:0,followedCaseCount:0,markedPaidCaseCount:0}}):{sourceStatus:'ready',rows:[],total:0});await h.module.load(true);assert.match(h.html(),/工作台员工统计返回异常/);assert.equal(h.module.state().portalResult,null);
+});
+test('navigation clear and session pause reject a late workbench response and erase its prior authorized activity',async()=>{
+ for(const control of ['clear','pause']){
+  const h=harness();h.setPage('workorder_workload');h.respond(q=>q.action==='portalOperationLogs'?portalWorkload():{sourceStatus:'ready',rows:[],total:0});await h.module.load(true);
+  const s=h.module.state();assert.equal(s.portalResult.summary.createdCount,1);let resolve;h.respond(q=>q.action==='portalOperationLogs'?new Promise(r=>{resolve=r}):{sourceStatus:'ready',rows:[],total:0});const pending=h.root.workorderWorkloadPortalRetry();await new Promise(r=>setImmediate(r));assert.equal(s.portalBusy,true);
+  h.setPage('workorders');if(control==='clear')h.module.clear('workorder_workload');else h.module.pause();assert.equal(s.portalBusy,false);assert.equal(s.portalResult,null);resolve(portalWorkload({rows:[{...portalWorkload().rows[0],actorName:'STALE-AUTHORIZED-ACTOR'}]}));await pending;
+  h.setPage('workorder_workload');assert.equal(h.module.state().portalResult,null);assert.doesNotMatch(h.module.render(),/STALE-AUTHORIZED-ACTOR|SHREEWIN/);
+ }
+});
+test('negative, nonfinite, fractional and unsafe workload counts fail closed in summary and grouped rows',async()=>{
+ for(const invalid of [-1,Infinity,NaN,0.5,Number.MAX_SAFE_INTEGER+1])for(const target of ['summary','rows']){
+  const h=harness();h.setPage('workorder_workload');const bad=portalWorkload();if(target==='summary')bad.summary.createdCount=invalid;else bad.rows[0].followedCaseCount=invalid;
+  h.respond(q=>q.action==='portalOperationLogs'?bad:{sourceStatus:'ready',rows:[],total:0});await h.module.load(true);assert.equal(h.module.state().portalResult,null);assert.match(h.html(),/工作台员工统计返回异常/);assert.doesNotMatch(h.html(),/SHREEWIN/);
+ }
+});
