@@ -46,7 +46,7 @@
   const directions=Array.isArray(options.directions)?options.directions:[];
   return '<div class="live-reference-totals">'+directions.map(direction=>{
    const settings={...options,...direction},label=direction.label||(direction.key==='charge'?'代收':direction.key==='withdraw'?'代付':'订单');
-   return '<section class="live-reference-direction" data-direction="'+esc(direction.key||'')+'"><div class="live-reference-heading"><h3>'+esc(label)+'</h3>'+(settings.currency?'<span>'+esc(settings.currency)+'</span>':'')+'</div>'+renderMetrics(direction.summary,{...settings,label})+'</section>';
+   return '<section class="live-reference-direction" data-direction="'+esc(direction.key||'')+'"><div class="live-reference-heading"><h3>'+esc(label)+'</h3>'+(settings.currency?'<span>'+esc(settings.currency)+'</span>':'')+(direction.coverageHtml||'')+'</div>'+renderMetrics(direction.summary,{...settings,label})+'</section>';
   }).join('')+'</div>';
  }
  root.HensemLiveLayout=Object.freeze({renderMetrics,totals,comparison});

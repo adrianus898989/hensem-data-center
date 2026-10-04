@@ -416,6 +416,26 @@ test('daily exclusion bridge accepts 15 for summaries and member details without
  for(const threshold of [14,16,'15',15.5,null])assert.throws(()=>h.api.validateAdminLiveRequest({...q,threshold}));
 });
 
+test('consecutive submission jobs validate start scope separately from bounded job operations',async()=>{
+ const h=load(),base={action:'submissionStreak',platformId:query.platformId,startAt:query.startAt,endAt:query.endAt,direction:'charge',currency:'INR',operation:'start',lookbackDays:30,clientRequestId:'22222222-2222-4222-8222-222222222222'};
+ for(const lookbackDays of [7,15,30])assert.equal(h.api.validateAdminLiveRequest({...base,lookbackDays}).lookbackDays,lookbackDays);
+ for(const patch of [{lookbackDays:31},{lookbackDays:0},{lookbackDays:'30'},{lookbackDays:null},{clientRequestId:undefined},{clientRequestId:'bad'},{jobId:base.clientRequestId},{threshold:10},{level:'all'},{charts:true},{streakDays:3},{offset:0},{limit:20},{memberId:'123'},{startAt:'bad'},{startAt:'2026-02-30T00:00:00Z',endAt:'2026-03-03T00:00:00Z'},{endAt:base.startAt},{operation:'streakSql'},{direction:'withdraw'},{platformId:'all'},{providers:[' Pay']},{providers:['Pay','Pay']},{providers:[null]}])assert.throws(()=>h.api.validateAdminLiveRequest({...base,...patch}),JSON.stringify(patch));
+ const job={action:'submissionStreak',operation:'summary',jobId:base.clientRequestId};
+ for(const operation of ['step','summary']){assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest({...job,operation}))),{...job,operation});for(const patch of [{jobId:'bad'},{jobId:null},{platformId:base.platformId},{providers:[]},{memberId:'123'},{streakDays:3},{lookbackDays:7},{clientRequestId:base.clientRequestId},{sql:'select'}])assert.throws(()=>h.api.validateAdminLiveRequest({...job,operation,...patch}));}
+ const members={...job,operation:'members',streakDays:3,memberId:'synthetic-id',offset:20,limit:20};
+ for(const streakDays of [3,5,10])assert.equal(h.api.validateAdminLiveRequest({...members,streakDays}).streakDays,streakDays);
+ for(const patch of [{streakDays:undefined},{streakDays:null},{streakDays:'3'},{streakDays:4},{offset:-1},{limit:1000},{memberId:'\n'},{threshold:10}])assert.throws(()=>h.api.validateAdminLiveRequest({...members,...patch}));
+ for(const operation of ['streaks','streakMembers'])assert.throws(()=>h.api.validateAdminLiveRequest({...base,action:'submissionAnalysis',operation}));
+ await h.api.adminLiveRequest(session,base);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_live_submission_streak');assert.deepEqual(JSON.parse(h.calls[0].init.body).p_request,Object.fromEntries(Object.entries(base).filter(([key])=>key!=='action')));
+ await h.api.adminLiveRequest(session,members,undefined,{assigned:true,page:'events'});assert.deepEqual(JSON.parse(h.calls[1].init.body),{p_page:'events',p_request:members});assert.equal(h.calls[1].init.cache,'no-store');
+});
+
+test('consecutive job failures expose a bounded actionable message without server internals',async()=>{
+ for(const [message,expected] of [['analysis_expired','已过期'],['analysis_busy','正在计算'],['analysis_job_denied','查看权限'],['analysis_not_ready','尚未完成'],['analysis_nonce_conflict','筛选已改变'],['analysis_job_limit','任务较多'],['statement timeout private detail','进度保留']]){
+  const h=load({fetch:async()=>({ok:false,status:400,json:async()=>({message})})});await assert.rejects(h.api.adminLiveRequest(session,{action:'submissionStreak',operation:'step',jobId:query.platformId}),error=>error.message.includes(expected)&&!error.message.includes('private'));
+ }
+});
+
 
 test('pending analysis validates inclusive daily ranges and uses only the authenticated snapshot-analysis RPC',async()=>{
  const request={action:'pendingAnalysis',startDate:'2026-09-01',endDate:'2026-09-30',platformIds:[query.platformId],providers:['ExamplePay']},h=load();
