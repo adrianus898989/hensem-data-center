@@ -713,12 +713,14 @@
    const fees=scopedFees(ctx,items,direction);r.estimated_fee=fees.amount;r.fee_complete=fees.complete;r.fee_eligible_count=fees.successCount;r.fee_excluded_count=fees.excludedCount;r.fee_issues=fees.issues;r.fee_exclusions=fees.exclusions;r.fee_history_diagnostics=fees.historyDiagnostics;
    r.issues=L.workorders&&items.some(i=>i.issues)?Object.fromEntries(issueKeys.map(k=>[k,items.reduce((n,i)=>n+Number(i.issues?.[k]||0),0)])):null;r.uniqueOrders=fullScope?uniqueWorkorderFacts([L.workorders?.byDirection?.[direction]]):null;return cells(r,'<strong>'+label+'</strong>',true)};
   const coverage=L.workorders?.coverage;
+  const detailOnly=direction==='charge'?coverage?.detailOnly:null;
+  const detailOnlyNote=knownNumber(detailOnly?.platformDays)>0?'<span class="provider-inline-status" title="'+E('所选平台与日期已收到 '+C(detailOnly.collectedTickets)+' 条存款工单；最近入库 '+(detailOnly.latestReceivedAt||'时间未提供')+'。明细已用于原单统计，但没有完整日报，不能认定整日已收齐。')+'">工单已读采集明细 · '+C(detailOnly.platformDays)+' 平台日尚无日报，完整性待核验</span>':'';
   const partialOrderRows=rows.filter(r=>r.uniqueOrders&&workorderNeedsReview(r.uniqueOrders.coverage));
   root.providerSummaryCoverage=function(){
    const selectedProviders=new Set(partialOrderRows.map(r=>r.provider));
    const missingPlatforms=(coverage?.platforms||[]).filter(p=>p.complete===false||Number.isFinite(Number(p.expectedDays))&&Number(p.days)<Number(p.expectedDays));
    const count=value=>value==null?'未提供':C(value);
-   const sourceNote=coverage?.complete===false?'<p>工单日期已收 '+count(coverage.capturedPlatformDays)+' / '+count(coverage.expectedPlatformDays)+' 平台日。来源未收齐会使相关三方一起标记为待核对，不代表每家三方都单独缺订单。</p>':'';
+   const sourceNote=(detailOnlyNote?'<p>已采集的存款工单已经参与原单统计。所选平台与日期已收到 '+count(detailOnly.collectedTickets)+' 条存款工单；'+count(detailOnly.platformDays)+' 个平台日尚未收到日报，整日完整性待核验。最近入库 '+E(detailOnly.latestReceivedAt||'时间未提供')+'。</p>':'')+(coverage?.complete===false?'<p>工单日期已收 '+count(coverage.capturedPlatformDays)+' / '+count(coverage.expectedPlatformDays)+' 平台日。来源未收齐会使相关三方一起标记为待核对，不代表每家三方都单独缺订单。</p>':'');
    const platforms=missingPlatforms.length?box('未收齐的平台',table(['平台','包网','缺少日期','已收天数','应收天数'],missingPlatforms.map(p=>[E(p.platform||p.sourcePlatform||'未提供'),E(p.source||'—'),E((p.missingDates||[]).join('、')||'日期未提供'),count(p.days),count(p.expectedDays)]))):'';
    const reasons=box('三方核对原因',table(['三方','当前原因'],partialOrderRows.map(r=>[E(r.provider),E(uniqueGaps(r.uniqueOrders.coverage).join('；'))])));
    const details=(L.workorders?.byPlatformProvider||[]).filter(r=>r.direction===direction&&selectedProviders.has(providerName(canonical(r.provider,L.country)))&&r.uniqueCoverage&&r.uniqueCoverage.complete!==true);
@@ -782,9 +784,9 @@
   }
   return '<div class="provider-summary-report">'+readNotice(ctx)+intakeNotice(ctx)+'<div class="provider-summary-heading"><span class="provider-scope-note">'+E(L.country)+' · '+E(L.currency)+' · '+E(L.from.replace('T',' '))+' 至 '+E(L.to.replace('T',' '))+coverageNote+'</span></div>'+
    renderMetrics(ctx,direction,rows)+'<div class="provider-status-actions">'+workNote+(direction==='charge'?(submissionAnalysis?.note(true)||''):'')+'</div>'+
-   box(name+'三方汇总'+(partial?'（部分结果）':'')+' · '+issueLabel+'工单',(uniqueCoverageNote||workorderGapNote?'<div class="provider-workorder-notices">'+uniqueCoverageNote+workorderGapNote+'</div>':'')+reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
+   box(name+'三方汇总'+(partial?'（部分结果）':'')+' · '+issueLabel+'工单',(uniqueCoverageNote||workorderGapNote||detailOnlyNote?'<div class="provider-workorder-notices">'+uniqueCoverageNote+workorderGapNote+detailOnlyNote+'</div>':'')+reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
     '')+'</div>';
  }
- root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,tieredFeeRule,feeSummary,feeCoverageText,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,workorderPlatformNeedsReview,rawWorkorderAmountComparison,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
+ root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,tieredFeeRule,feeSummary,feeCoverageText,feeHistoryLabel,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,workorderPlatformNeedsReview,rawWorkorderAmountComparison,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};
  if(typeof module!=='undefined')module.exports=root.HensemProviderSummary;
 })(typeof window!=='undefined'?window:globalThis);

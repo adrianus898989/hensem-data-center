@@ -258,6 +258,27 @@ body.live-admin .live-pending-snapshot-detail{min-width:0}
 body.live-admin .live-pending-snapshot-detail .live-definition{line-height:1.7}
 body.live-admin .live-pending-snapshot-detail summary{cursor:pointer;text-align:left;padding:6px 0}
 
+/* Merchant ledgers keep independent numbers compact; only identities truncate. */
+body.live-admin .merchant-unified-table table{font-variant-numeric:tabular-nums}
+body.live-admin .merchant-unified-table .live-sort-heading>span{font-size:7px}
+body.live-admin .merchant-unified-table .merchant-provider-usage{font:inherit;padding:2px 4px;text-decoration:underline;text-underline-offset:2px}
+body.live-admin .merchant-fee-status{display:inline-block;margin-left:5px;padding:1px 3px;border-radius:3px;background:#fff5df;color:#9b6e24;font-size:9px;white-space:nowrap}
+body.live-admin .merchant-fee-value{white-space:nowrap}
+body.live-admin .drawer:has(.merchant-provider-detail){width:min(1320px,96vw)}
+body.live-admin .merchant-provider-detail{min-width:0;font-size:11px;line-height:1.6}
+body.live-admin .merchant-provider-detail .live-definition{padding:5px 8px;background:#f6f9ff;color:#667c9b;line-height:1.7}
+body.live-admin .merchant-provider-warning{padding:7px 9px;background:#fff7e8;border:1px solid #f1dfbd;border-radius:5px;color:#946b2a}
+body.live-admin .merchant-provider-detail-table{overflow:auto;max-width:100%}
+body.live-admin .merchant-provider-detail-table table{width:100%;min-width:1240px!important;table-layout:auto!important;font-variant-numeric:tabular-nums}
+body.live-admin .merchant-provider-detail-table :is(th,td){padding:6px!important;font-size:10px!important;white-space:nowrap;text-align:right;overflow:visible;word-break:normal;overflow-wrap:normal}
+body.live-admin .merchant-provider-detail-table th{font-size:9px!important}
+body.live-admin .merchant-provider-detail-table :is(th,td):first-child{text-align:left;min-width:100px}
+body.live-admin .merchant-provider-detail-table th:nth-child(n+2):nth-child(-n+7){background:#eff4ff}
+body.live-admin .merchant-provider-detail-table th:nth-child(n+8){background:#eef9f7}
+body.live-admin .merchant-provider-detail-table :is(th,td):nth-child(8){border-left:2px solid #d5def2}
+body.live-admin .merchant-provider-detail-table td:is(:nth-child(7),:nth-child(13)){min-width:150px;white-space:normal}
+body.live-admin .merchant-provider-source,body.live-admin .merchant-fee-coverage{display:block;color:#7285a2;font-size:9px;line-height:1.5;margin-top:3px}
+
 /* Member counts remain a compact line beneath the existing business metrics. */
 body.live-admin .df-member-counts{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;margin:0 10px 7px;padding:6px 9px;border:1px solid #dce6f3;border-radius:6px;background:#f7faff;font-size:11px}
 body.live-admin .df-member-counts>span{color:#536a89}

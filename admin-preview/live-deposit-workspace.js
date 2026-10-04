@@ -1,4 +1,4 @@
-/* Authenticated adapter for the source-export reconciliation presentation.
+/* Authenticated adapter for collected-workorder reconciliation.
  * Source workorder KYC connection and manual Sheet checks remain separate. */
 (function(root){
  'use strict';
@@ -8,6 +8,9 @@
   const enumValue=(value,allowed)=>allowed.includes(value)?value:allowed[0];
   const sourceEvidence=r=>{
    const sources=Array.isArray(r.sources)?r.sources:[];
+   if(panel?.getSnapshot()?.source==='collected-workorders')return sources.length?table(['系统 / 原平台','工单','原支付单引用','统计提交日期 / 提交时间','这笔工单的采集时间','原金额 / 币种'],sources.map(s=>[
+    E(s.sourceSystem||'未提供')+' / '+E(s.sourcePlatform||'未提供'),E(s.workOrderId||'未提供'),(Array.isArray(s.paymentOrderReferences)&&s.paymentOrderReferences.length?s.paymentOrderReferences.map(E).join(' / '):'未提供')+(s.referenceConflict?'<small>原单引用冲突，未认定唯一原单</small>':''),E(s.submittedDate||'日期未提供')+' / '+E(s.submittedAt?formatTime(s.submittedAt,'Asia/Kolkata'):'时间未提供'),E(s.observedAt?formatTime(s.observedAt,'Asia/Kolkata'):'未提供'),s.amount==null?'—':E(String(s.amount)+' '+(s.currency||'币种未提供'))
+   ]),'deposit-entry-full-detail')+(r.sourcesTruncated?'<p>来源较多，当前展示已返回的采集记录。</p>':''):'采集来源未提供';
    return sources.length?table(['系统 / 文件','来源页 / 行','全部页 / 行','工单','原金额 / 币种'],sources.map(s=>[
     E(s.sourceSystem||'未提供')+' · '+E(s.sourceFile||'未提供'),E(s.sourceTab||'未提供')+' / '+C(s.sourceRow),E(s.allSourceTab||'未提供')+' / '+C(s.allSourceRow),E(s.workOrderId||'未提供'),s.amount==null?'—':E(String(s.amount)+' '+(s.currency||'币种未提供'))
    ]),'deposit-entry-full-detail')+(r.sourcesTruncated?'<p>来源行较多，当前仅展示已返回的来源。</p>':''):
@@ -16,16 +19,19 @@
   const onlineEvidence=r=>Array.isArray(r.onlineSources)&&r.onlineSources.length?table(['原表行','原金额','三方','原表分类','人工 KYC / UTR'],r.onlineSources.map(s=>[C(s.sourceRow),s.amount==null?'—':E(String(s.amount)),E(s.provider||'未提供'),E(s.confirmation||s.status||'未提供'),E(s.manualKyc||s.kycCorrect||'未提供')+' / '+E(s.manualUtr||s.utrMatch||'未提供')]),'deposit-entry-full-detail')+(r.onlineSourcesTruncated?'<p>在线来源共 '+C(r.onlineSourceCount)+' 行，当前展示部分。</p>':''):'未提供';
   const detailValues=r=>[
    ['平台',E(r.platform||'未提供')],['原支付订单',E(r.paymentOrderId||'未提供')],['原工单',E(r.workOrderId||'未提供')],
-   ['原导出 KYC 连接',E(({connected:'已连接',disconnected:'未连接',unknown:'待核实'})[r.kycStatus]||'待核实')],
-   ['文件标签',E(r.declaredFileKyc||'未提供')],['原工单处理状态',E(r.sourceWorkorderState||'未提供')],
+   [panel?.getSnapshot()?.source==='collected-workorders'?'原工单 KYC 连接':'原导出 KYC 连接',E(({connected:'已连接',disconnected:'未连接',unknown:'待核实'})[r.kycStatus]||'待核实')],
+   [panel?.getSnapshot()?.source==='collected-workorders'?'采集系统':'文件标签',E(r.sourceSystem||r.declaredFileKyc||'未提供')],['原工单处理状态',E(r.sourceWorkorderState||'未提供')],
    ['原金额',r.amount==null?'—':E(String(r.amount)+' '+(r.currency||'币种未提供'))],['原三方',E(r.provider||'未提供')],
    ['在线匹配',E(r.matchStatus||'未比较')],['在线原表状态',E(r.onlineState||'未提供')],
    ['人工 KYC 核验',E(r.manualKyc||'未提供')],['人工 UTR 核验',E(r.manualUtr||'未提供')],
    ['到账核实',E(r.receiptState==='received_verified'?'已核实入款':r.receiptState==='unreceived_verified'?'已核实未入款':'待核实')],
    ['来源证据',sourceEvidence(r)],['在线来源证据',onlineEvidence(r)],
-   ['重复来源行',C(r.exportRows)],['员工跟进记录',C(r.followupCount)],['最后跟进',E(r.lastFollowupAt||'未提供')],['三方回复',E(r.providerReply||'未提供')]
+   ...(r.referenceConflictWorkorderCount>0?[['原单引用冲突工单',C(r.referenceConflictWorkorderCount)+' 笔 · 候选号保留为证据，不认定唯一原单']]:[]),
+   [panel?.getSnapshot()?.source==='collected-workorders'?'所选范围采集记录':'来源记录数',C(r.rawRecords??r.exportRows)],
+   ...(panel?.getSnapshot()?.source==='collected-workorders'?[['关联来源记录',C(r.sourceCount)],['关联工单',C(r.relatedWorkorderCount)]]:[]),
+   ['员工跟进记录',C(r.followupCount)],['最后跟进',E(r.lastFollowupAt||'未提供')],['三方回复',E(r.providerReply||'未提供')]
   ];
-  panel=root.HensemLiveKycReconciliation.create({id:'deposit-source-kyc',queryLabel:'工单号 / 原支付单号',
+  panel=root.HensemLiveKycReconciliation.create({id:'deposit-source-kyc',source:'collected-workorders',queryLabel:'工单号 / 原支付单号',getDefaultFilters:()=>root.HensemWorkorderUI.today('印度',L.catalog),
    onRender:render,
    onQuery:async f=>{
     const q={action:'depositStatistics',section:'kyc',country:'印度',dimension:enumValue(f.dimension,['platform','provider','date','orders']),kycStatus:enumValue(f.kycStatus,['all','connected','disconnected','unknown']),processing:f.processing,matchStatus:f.matchStatus,offset:f.offset,limit:f.limit,dateMode:f.from||f.to?'range':'all'};
@@ -52,9 +58,21 @@
    f.offset=0;if(panel.restoreFilters(f))return panel.query();
   };
   function manifest(){
+   if(panel.getSnapshot()?.source==='collected-workorders'){
+    const platforms=panel.getSnapshot()?.sourceManifest?.platforms||[];
+    return platforms.length?'<div class="deposit-import-sources"><span>采集情况 · '+C(platforms.length)+' 个平台</span><button class="btn" onclick="depositKycCoverage()">平台采集情况</button></div>':'';
+   }
    const sources=panel.getSnapshot()?.sourceManifest?.batches||[];
-   return sources.length?'<div class="deposit-import-sources">'+sources.map(s=>'<span title="'+E(s.label||s.fileName)+'">'+E(s.label||s.fileName)+' · '+C(s.rowCount)+' 行</span>').join('')+'</div>':'';
+   const date=value=>/^\d{4}-\d{2}-\d{2}$/.test(value||'')?value:'';
+   return sources.length?'<div class="deposit-import-sources">'+sources.map(s=>{
+    const from=date(s.submittedDateFrom),to=date(s.submittedDateTo),range=from&&to?' · 提交日期 '+E(from)+(from===to?'':' 至 '+E(to)):'';
+    return '<span title="'+E(s.label||s.fileName)+'">'+E(s.label||s.fileName)+' · '+C(s.rowCount)+' 行'+range+'</span>';
+   }).join('')+'</div>':'';
   }
-  return {render:()=>'<div class="deposit-source-actions"><span>印度 · 原导出数据</span><div><button class="btn" onclick="depositKycDate(\'today\')">今天</button><button class="btn" onclick="depositKycDate(\'month\')">本月</button><button class="btn" onclick="depositKycDate(\'all\')">全部日期</button></div></div>'+manifest()+panel.render(),load:()=>panel.query(),pause:()=>panel.pause(),capture:()=>panel.capture(),restore:value=>panel.restore(value),clear:()=>panel.clear(),destroy:()=>panel.dispose()};
+  root.depositKycCoverage=()=>{
+   const platforms=panel.getSnapshot()?.sourceManifest?.platforms||[];
+   ctx.openDrawer?.('工单平台采集情况',table(['平台','系统','所选日期已采集工单','最新工单日期','最新提交工单的采集时间'],platforms.map(p=>[E(p.platform||'未提供'),E(p.system||'未提供'),C(p.selectedWorkorders),E(p.latestSubmittedDate||'未提供'),E(p.lastObservedAt?formatTime(p.lastObservedAt,'Asia/Kolkata'):'未提供')]),'deposit-entry-full-detail')+'<p>已采集记录数不代表源后台总工单数；未上传的平台或日期不能按真实零工单认定。采集时间来自最新提交的那笔工单，不代表所有工单的最后更新时间。</p>');
+  };
+  return {render:()=>'<div class="deposit-source-actions"><span>印度 · 已采集存款工单</span><div><button class="btn" onclick="depositKycDate(\'today\')">今天</button><button class="btn" onclick="depositKycDate(\'month\')">本月</button><button class="btn" onclick="depositKycDate(\'all\')">全部日期</button></div></div><p class="muted">按工单提交日期读取已采集的存款工单，与核对表的原支付订单匹配。工单处理状态、KYC 连接和实际到账分别核对。</p>'+manifest()+panel.render(),load:()=>panel.query(),pause:()=>panel.pause(),capture:()=>panel.capture(),restore:value=>panel.restore(value),clear:()=>panel.clear(),destroy:()=>panel.dispose()};
  }};
 })(window);
