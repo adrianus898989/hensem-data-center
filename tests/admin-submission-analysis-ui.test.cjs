@@ -195,3 +195,142 @@ test('render snapshots expire before date, platform or filter changes and async 
  h.L.dirty=true;assert.equal(paint().available,false);h.L.dirty=false;assert.equal(paint().available,true);
  let done;h.handler(q=>new Promise(resolve=>{done=()=>resolve(response(q))}));const pending=h.ui.load();assert.equal(paint().available,false);done();await pending;assert.equal(paint().available,true,'the next paint includes completed async work');
 });
+
+const streakJobs=new Map();let streakJobSequence=0;
+function streakResponse(q,{count=1,complete=true,member='<Synthetic member>',rows=true}={}){
+ let jobId,progress={};
+ if(q.action==='submissionStreak'){
+  if(q.operation==='start'){const job=[...streakJobs.values()].find(x=>x.request.clientRequestId===q.clientRequestId)||{request:{...q,operation:'streaks'},processedDays:0,totalDays:q.lookbackDays,jobId:'10000000-0000-4000-8000-'+String(++streakJobSequence).padStart(12,'0')};streakJobs.set(job.jobId,job);return {version:1,jobId:job.jobId,status:job.processedDays===job.totalDays?'complete':'pending',processedDays:job.processedDays,totalDays:q.lookbackDays,platformId:q.platformId,lookbackDays:q.lookbackDays,clientRequestId:q.clientRequestId,startAt:q.startAt,endAt:q.endAt,expiresAt:new Date(Date.now()+3600000).toISOString()};}
+  const job=streakJobs.get(q.jobId);if(!job)throw Error('job_unavailable');jobId=job.jobId;
+  if(q.operation==='step'){job.processedDays=Math.min(job.processedDays+1,job.totalDays);return {version:1,jobId,status:job.processedDays===job.totalDays?'complete':'pending',processedDays:job.processedDays,totalDays:job.totalDays,platformId:job.request.platformId,lookbackDays:job.request.lookbackDays,clientRequestId:job.request.clientRequestId,startAt:job.request.startAt,endAt:job.request.endAt,expiresAt:new Date(Date.now()+3600000).toISOString()};}
+  progress={status:job.processedDays===job.totalDays?'complete':'pending',processedDays:job.processedDays,totalDays:job.totalDays,platformId:job.request.platformId,clientRequestId:job.request.clientRequestId,expiresAt:new Date(Date.now()+3600000).toISOString()};q={...job.request,...q,operation:q.operation==='members'?'streakMembers':'streaks'};
+ }
+
+ const streaks=[3,5,10].map(days=>{const n=days<=3?count:0,memberDays=n*3,submitted=n*30;return {days,member_count:complete?n:null,member_days:complete?memberDays:null,submitted_count:complete?submitted:null,submitted_amount:String(submitted*100),observed_member_count:n,observed_member_days:memberDays,observed_submitted_count:submitted,observed_submitted_amount:String(submitted*100)}});
+ return {...progress,version:1,jobId,basis:'platform_local_complete_days_all_providers_zero_success_consecutive',operation:q.operation,platform:platform(q.platformId),startAt:q.startAt,endAt:q.endAt,lookbackDays:q.lookbackDays,threshold:10,thresholdComparison:'gte',evaluatedStartDate:'2026-08-31',evaluatedEndDate:'2026-09-29',coverage:{orderCount:200,missingMemberCount:complete?0:1,unknownStatusCount:0,orderSequenceUncertainCount:0,missingAmountCount:0,missingSuccessTimeCount:0,coveredDayCount:3,noRecordDayCount:q.lookbackDays-3,completeDayCount:q.lookbackDays,excludedPartialDayCount:0,sourceCompletenessVerified:false,calculationComplete:complete},streaks,...(q.operation==='streakMembers'?{streakDays:q.streakDays,offset:q.offset,limit:q.limit,total:count,rows:count&&rows?[{member_id:member,max_streak_days:3,start_day:'2026-09-27',end_day:'2026-09-29',qualifying_days:3,submitted_count:30,submitted_amount:'3000',providers:['Pay A','Pay B'],days:[27,28,29].map((day,i)=>({day:'2026-09-'+day,submitted_count:10,platform_submitted_count:10,submitted_amount:'1000',platform_submitted_amount:'1000',success_count:0,qualifies:true,run_days:i+1,providers:['Pay A','Pay B']}))}]:[]}:{} )};
+}
+const streakTable=html=>html.split('<table aria-label="连续未充值平台统计">')[1]?.split('</table>')[0]||'';
+
+test('streak queries are explicit, use independent complete-day lookback and whitelist payload fields',async()=>{
+ const h=harness();await h.ui.load();assert.equal(h.calls.length,1);assert.match(h.ui.render(),/查询连续未充值 ID/);assert.match(h.ui.render(),/连续 ≥10 天/);
+ h.handler(q=>streakResponse(q));await global.liveSubmissionStreakLoad(30);const q=h.calls.find(q=>q.action==='submissionStreak'&&q.operation==='start');
+ assert.deepEqual(Object.keys(q).sort(),['action','clientRequestId','currency','direction','endAt','lookbackDays','operation','platformId','providers','startAt'].sort());assert.equal(q.operation,'start');assert.match(q.clientRequestId,/^[a-f0-9-]{36}$/);assert.deepEqual(Object.keys(h.calls.at(-1)).sort(),['action','jobId','operation']);assert.equal(h.calls.at(-1).operation,'summary');assert.equal(q.lookbackDays,30);assert.equal(q.startAt,h.calls[0].startAt);assert.deepEqual(q.providers,['Pay A','Pay B']);
+ const html=h.ui.render();assert.match(html,/最长连续天数在回看范围内计算/);assert.match(html,/未结束的今天不计/);assert.match(streakTable(html),/>1<\/button>/);assert.match(streakTable(html),/>0<\/button>/);assert.match(html,/0 仅表示已采集范围内未发现符合 ID/);
+});
+
+test('streak platform summaries are serialized and discard pending results when parent query changes',async()=>{
+ const h=harness();h.select([platform(),platform('b')]);await h.ui.load();const deferred=[];h.handler(q=>new Promise(resolve=>deferred.push(()=>resolve(streakResponse(q)))));
+ const loading=global.liveSubmissionStreakLoad(15);assert.equal(deferred.length,1);deferred.shift()();await new Promise(resolve=>setImmediate(resolve));assert.equal(deferred.length,1);assert.equal(h.calls.filter(q=>q.action==='submissionStreak').length,2);assert.equal(h.calls.at(-1).operation,'step');
+ h.L.dirty=true;h.ui.cancel();deferred.shift()();await loading;assert.doesNotMatch(h.ui.render(),/连续未充值平台统计/);
+});
+
+test('streak counts with incomplete IDs stay unavailable while known IDs are explicitly partial',async()=>{
+ const h=harness();await h.ui.load();h.handler(q=>streakResponse(q,{complete:false,count:0}));await global.liveSubmissionStreakLoad(30);
+ const html=h.ui.render();assert.match(html,/完整数量未确认/);assert.match(html,/已知符合 ≥3 天 0 个 ID/);assert.doesNotMatch(streakTable(html),/>0<\/button>/);assert.match(streakTable(html),/>—<\/button>/);
+ await global.liveSubmissionStreakMembers('a',3);assert.match(h.ui.render(),/已知符合 ID 0 个；完整数量待核对/);
+});
+
+test('fully calculated observed empty results display zero, while failed reads are never zero',async()=>{
+ const h=harness();await h.ui.load();h.handler(q=>streakResponse(q,{count:0}));await global.liveSubmissionStreakLoad(30);assert.match(streakTable(h.ui.render()),/>0<\/button>/);
+ h.handler(()=>{throw Error('network unavailable')});await global.liveSubmissionStreakLoad(30);assert.match(h.ui.render(),/暂不能判断为 0/);assert.match(h.ui.render(),/重试未完成/);assert.equal(streakTable(h.ui.render()),'');
+});
+
+test('streak summaries reject malformed zero coercion, scope, cohort and currency values',async()=>{
+ const h=harness();await h.ui.load();for(const mutate of [r=>r.threshold=15,r=>r.thresholdComparison='gt',r=>r.lookbackDays=7,r=>r.platform.id='outside',r=>r.coverage.calculationComplete=false,r=>r.streaks[0].observed_submitted_count=-1,r=>r.streaks[0].submitted_amount='not-money',r=>r.streaks[0].member_count=0,r=>r.streaks[0].observed_member_days=2]){
+  h.handler(q=>{const r=streakResponse(q);if(q.operation==='summary'||q.operation==='members')mutate(r);return r});await global.liveSubmissionStreakLoad(30);assert.equal(streakTable(h.ui.render()),'');assert.match(h.ui.render(),/响应范围或数据不完整|计算进度无效/);
+ }
+});
+
+test('streak members use inline evidence, escape IDs and maintain amount and count shares separately',async()=>{
+ const h=harness();await h.ui.load();h.handler(q=>streakResponse(q));await global.liveSubmissionStreakLoad(30);await global.liveSubmissionStreakMembers('a',3);
+ const q=h.calls.at(-1);assert.equal(q.operation,'members');assert.deepEqual(Object.keys(q).sort(),['action','operation','jobId','streakDays','offset','limit'].sort());assert.equal(q.streakDays,3);assert.equal(q.limit,20);assert.equal(q.offset,0);assert.equal(h.drawers.length,0);let html=h.ui.render();assert.match(html,/&lt;Synthetic member&gt;/);assert.doesNotMatch(html,/<Synthetic member>/);assert.match(html,/<th>笔数占比<\/th><th>金额占比<\/th>/);
+ assert.doesNotMatch(html,/逐日提交证据/);global.liveSubmissionStreakExpand(0);html=h.ui.render();assert.match(html,/逐日提交证据/);assert.match(html,/<td>2026-09-27<\/td><td>10<\/td><td>1000<\/td><td>10<\/td><td>1000<\/td><td>0<\/td><td>1<\/td>/);global.liveSubmissionStreakExpand(0);assert.doesNotMatch(h.ui.render(),/逐日提交证据/);
+});
+
+test('streak members reject success, sub-threshold and inconsistent daily evidence',async()=>{
+ const h=harness();await h.ui.load();h.handler(q=>streakResponse(q));await global.liveSubmissionStreakLoad(30);
+ for(const mutate of [r=>r.rows[0].days[0].success_count=1,r=>r.rows[0].days[0].platform_submitted_count=9,r=>r.rows[0].submitted_count=31,r=>r.rows[0].qualifying_days=4,r=>r.rows[0].days[0].day='2026-10-01',r=>r.streakDays=5,r=>r.rows[0].max_streak_days=2]){
+  h.handler(q=>{const r=streakResponse(q);if(q.operation==='summary'||q.operation==='members')mutate(r);return r});await global.liveSubmissionStreakMembers('a',3);assert.match(h.ui.render(),/响应范围或数据不完整/);assert.doesNotMatch(h.ui.render(),/逐日提交证据/);
+ }
+});
+
+test('changing streak window or selected cohort invalidates old member evidence and detail responses',async()=>{
+ const h=harness();await h.ui.load();h.handler(q=>streakResponse(q));await global.liveSubmissionStreakLoad(30);let finish;h.handler(q=>new Promise(resolve=>finish=()=>resolve(streakResponse(q))));const pending=global.liveSubmissionStreakMembers('a',3);
+ global.liveSubmissionStreakDays(5);finish();await pending;assert.doesNotMatch(h.ui.render(),/连续未充值会员明细/);
+ h.handler(q=>streakResponse(q));await global.liveSubmissionStreakMembers('a',3);assert.match(h.ui.render(),/连续未充值会员明细/);await global.liveSubmissionStreakLoad(15);assert.doesNotMatch(h.ui.render(),/连续未充值会员明细/);
+});
+
+test('a same-scope requery prevents stale streak summaries contaminating refreshed statistics',async()=>{
+ const h=harness();await h.ui.load();let finish;h.handler(q=>new Promise(resolve=>finish=()=>resolve(streakResponse(q))));const pending=global.liveSubmissionStreakLoad(30);
+ h.handler(q=>response(q));await h.ui.load();finish();await pending;assert.equal(streakTable(h.ui.render()),'');assert.match(h.ui.render(),/点击查询，单独读取/);
+});
+
+test('monitoring separates amount and count shares, sorts platforms by volume, and weights total success',async()=>{
+ const h=harness();h.select([platform(),platform('b')]);h.handler(q=>{const r=chartResponse(q);if(q.platformId==='b'){r.dashboard.monitoring.forEach(x=>{x.invalid_count=60;x.invalid_amount='2000';x.success_count=20});r.dashboard.hourly[0].count=60;r.dashboard.daily[0].invalid_count=60;r.dashboard.amounts[0].count=60;r.metrics.forEach(x=>{if(x.threshold<30)x.invalid_count=60})}return r});await h.ui.load();const table=monitoringTable(h.ui.render());
+ for(const label of ['无效笔数占比','无效金额占比','占总无效笔数','占总无效金额'])assert(table.includes('<th>'+label+'</th>'));assert(table.indexOf('Synthetic b')<table.indexOf('Synthetic a'));assert.match(table,/<tfoot>/);assert.match(table,/已读取汇总/);assert.match(table,/<td>35.00%<\/td>/);assert.match(table,/<td>63.64%<\/td>/);assert.doesNotMatch(table,/<th>会员明细<\/th>/);
+});
+
+test('query-only roles see aggregate streak counts without active member detail controls or requests',async()=>{
+ const h=harness();await h.ui.load();h.handler(q=>streakResponse(q));await global.liveSubmissionStreakLoad(30);const saved=global.hensemRoleAllowed;global.hensemRoleAllowed=(page,action)=>page==='events'&&action!=='detail';
+ try{const html=h.ui.render();assert.doesNotMatch(streakTable(html),/liveSubmissionStreakMembers/);assert.match(streakTable(html),/<td>1<\/td>/);const count=h.calls.length;await global.liveSubmissionStreakMembers('a',3);assert.equal(h.calls.length,count)}finally{if(saved===undefined)delete global.hensemRoleAllowed;else global.hensemRoleAllowed=saved}
+});
+
+test('streak requests wait for ordinary platform queries instead of adding another database lane',async()=>{
+ const h=harness();let finish;h.handler(q=>new Promise(resolve=>finish=()=>resolve(response(q))));const loading=h.ui.load();const count=h.calls.length;await global.liveSubmissionStreakLoad(30);assert.equal(h.calls.length,count);assert.match(h.ui.render(),/aria-label="连续未充值回看天数" disabled/);finish();await loading;
+});
+
+test('selected-provider zero days still show qualifying platform evidence without coercing the threshold',async()=>{
+ const h=harness();await h.ui.load();h.handler(q=>{const r=streakResponse(q);if(!r.streaks)return r;r.streaks[0].submitted_count=r.streaks[0].observed_submitted_count=2;r.streaks[0].submitted_amount=r.streaks[0].observed_submitted_amount='200';if(q.operation==='members'){r.rows[0].submitted_count=2;r.rows[0].submitted_amount='200';r.rows[0].days.forEach((d,i)=>{d.submitted_count=i===0?2:0;d.submitted_amount=i===0?'200':'0';d.providers=i===0?['Pay A']:[]})}return r});await global.liveSubmissionStreakLoad(30);assert.match(streakTable(h.ui.render()),/>1<\/button>/);await global.liveSubmissionStreakMembers('a',3);global.liveSubmissionStreakExpand(0);const html=h.ui.render();assert.doesNotMatch(html,/响应范围或数据不完整/);assert.match(html,/<th>平台提交笔数<\/th><th>平台提交金额<\/th><th>所选三方笔数<\/th>/);assert.match(html,/<td>2026-09-28<\/td><td>10<\/td><td>1000<\/td><td>0<\/td><td>0<\/td><td>0<\/td>/);
+});
+
+test('daily streak jobs show progress, never expose interim zero, and summarize only after completion',async()=>{
+ const h=harness();await h.ui.load();let release,step=0;h.handler(q=>{const r=streakResponse(q);if(q.operation==='step'&&++step===2)return new Promise(resolve=>release=()=>resolve(r));return r});
+ const loading=global.liveSubmissionStreakLoad(7);await new Promise(resolve=>setImmediate(resolve));assert.match(h.ui.render(),/Synthetic a · 1 \/ 7 日/);assert.equal(streakTable(h.ui.render()),'');assert.equal(h.calls.filter(q=>q.operation==='summary').length,1,'only ordinary existing summary before job completes');release();await loading;
+ assert.equal(h.calls.filter(q=>q.action==='submissionStreak'&&q.operation==='step').length,7);assert.equal(h.calls.filter(q=>q.action==='submissionStreak'&&q.operation==='summary').length,1);assert.match(streakTable(h.ui.render()),/>1<\/button>/);
+});
+
+test('failed daily steps stop without retry and resume the same job without rereading finished days',async()=>{
+ const h=harness();await h.ui.load();let failed=false,steps=0;h.handler(q=>{if(q.operation==='step'&&++steps===3&&!failed){failed=true;throw Error('timeout')}return streakResponse(q)});await global.liveSubmissionStreakLoad(7);
+ assert.equal(steps,3);assert.equal(streakTable(h.ui.render()),'');const old=h.ui.capture().streak.jobs.a;assert.equal(old.processedDays,2);assert.match(h.ui.render(),/重试未完成/);
+ h.handler(q=>streakResponse(q));await global.liveSubmissionStreakLoad(7,true);assert.equal(h.calls.filter(q=>q.action==='submissionStreak'&&q.operation==='start').length,2);assert.equal(h.ui.capture().streak.jobs.a.jobId,old.jobId);assert.equal(h.calls.filter(q=>q.action==='submissionStreak'&&q.operation==='step').length,8);assert.match(streakTable(h.ui.render()),/>1<\/button>/);
+});
+
+test('unknown start outcome retains idempotency nonce for the explicit retry',async()=>{
+ const h=harness();await h.ui.load();let first=true;h.handler(q=>{if(q.operation==='start'&&first){first=false;throw Error('network unavailable')}return streakResponse(q)});await global.liveSubmissionStreakLoad(7);const firstRequest=h.calls.at(-1);assert.equal(firstRequest.operation,'start');await global.liveSubmissionStreakLoad(7,true);const starts=h.calls.filter(q=>q.action==='submissionStreak'&&q.operation==='start');assert.equal(starts.length,2);assert.equal(starts[0].clientRequestId,starts[1].clientRequestId);
+});
+
+test('stalled, wrong-job and malformed progress cannot spin the daily job loop',async()=>{
+ for(const bad of ['stalled','wrong-job','complete-too-soon','wrong-days']){
+  const h=harness();await h.ui.load();h.handler(q=>{const r=streakResponse(q);if(q.operation==='step'){if(bad==='stalled')r.processedDays=0;if(bad==='wrong-job')r.jobId='20000000-0000-4000-8000-000000000001';if(bad==='complete-too-soon')r.status='complete';if(bad==='wrong-days')r.totalDays=30}return r});await global.liveSubmissionStreakLoad(7);assert.equal(h.calls.filter(q=>q.operation==='step').length,1);assert.equal(streakTable(h.ui.render()),'');assert.match(h.ui.render(),/计算进度/);
+ }
+});
+
+test('summary and member results must match the actor-bound job before any values render',async()=>{
+ const h=harness();await h.ui.load();h.handler(q=>{const r=streakResponse(q);if(q.operation==='summary')r.jobId='20000000-0000-4000-8000-000000000001';return r});await global.liveSubmissionStreakLoad(7);assert.match(h.ui.render(),/统计任务不一致/);assert.equal(streakTable(h.ui.render()),'');
+ h.handler(q=>streakResponse(q));await global.liveSubmissionStreakLoad(7,true);h.handler(q=>{const r=streakResponse(q);r.jobId='20000000-0000-4000-8000-000000000001';return r});await global.liveSubmissionStreakMembers('a',3);assert.match(h.ui.render(),/统计任务不一致/);assert.doesNotMatch(h.ui.render(),/连续未充值会员明细/);
+});
+
+test('daily job progress is bound to native platform, range, nonce and lookback before starting work',async()=>{
+ for(const patch of [{platformId:'outside'},{startAt:'2026-08-01T00:00:00Z'},{clientRequestId:'20000000-0000-4000-8000-000000000001'},{lookbackDays:30},{expiresAt:'bad'}]){
+  const h=harness();await h.ui.load();h.handler(q=>({...streakResponse(q),...patch}));await global.liveSubmissionStreakLoad(7);assert.equal(h.calls.filter(q=>q.operation==='step').length,0);assert.equal(streakTable(h.ui.render()),'');assert.match(h.ui.render(),/计算进度无效/);
+ }
+});
+
+test('explicit pause stops further days and resume synchronizes a step that finished without a response',async()=>{
+ const h=harness();await h.ui.load();let finish,steps=0;h.handler(q=>{const r=streakResponse(q);if(q.operation==='step'&&++steps===2)return new Promise(resolve=>finish=()=>resolve(r));return r});const loading=global.liveSubmissionStreakLoad(7);await new Promise(resolve=>setImmediate(resolve));assert.match(h.ui.render(),/>暂停<\/button>/);global.liveSubmissionStreakPause();assert.match(h.ui.render(),/>继续读取<\/button>/);finish();await loading;assert.equal(h.calls.filter(q=>q.operation==='step').length,2);assert.equal(streakTable(h.ui.render()),'');const nonce=h.ui.capture().streak.jobs.a.clientRequestId;
+ h.handler(q=>streakResponse(q));await global.liveSubmissionStreakLoad(7,true);assert.equal(h.calls.filter(q=>q.operation==='step').length,7);assert.equal(h.ui.capture().streak.jobs.a.clientRequestId,nonce);assert.match(streakTable(h.ui.render()),/>1<\/button>/);
+});
+
+test('expired analysis clears its saved job and explicit retry creates a fresh nonce',async()=>{
+ const h=harness();await h.ui.load();h.handler(q=>{if(q.operation==='step')throw Error('连续提交分析已过期，请重新查询');return streakResponse(q)});await global.liveSubmissionStreakLoad(7);const oldNonce=h.calls.find(q=>q.operation==='start').clientRequestId;assert.equal(h.ui.capture().streak.jobs.a,undefined);assert.match(h.ui.render(),/已过期/);
+ h.handler(q=>streakResponse(q));await global.liveSubmissionStreakLoad(7,true);assert.notEqual(h.ui.capture().streak.jobs.a.clientRequestId,oldNonce);assert.match(streakTable(h.ui.render()),/>1<\/button>/);
+});
+
+test('a valid-looking cohort cannot render before the daily job is complete',async()=>{
+ const h=harness();await h.ui.load();h.handler(q=>{const r=streakResponse(q);if(q.operation==='summary'){r.status='pending';r.processedDays=6}return r});await global.liveSubmissionStreakLoad(7);assert.equal(streakTable(h.ui.render()),'');assert.match(h.ui.render(),/任务尚未完成/);
+});
+
+test('missing secure random support leaves a retryable error instead of an unhandled loading state',async()=>{
+ const h=harness();await h.ui.load();const property=Object.getOwnPropertyDescriptor(global,'crypto');Object.defineProperty(global,'crypto',{configurable:true,value:{}});
+ try{await global.liveSubmissionStreakLoad(7);assert.match(h.ui.render(),/安全随机数不可用/);assert.equal(h.ui.capture().streak.status,'error');assert.equal(h.calls.filter(q=>q.action==='submissionStreak').length,0)}finally{Object.defineProperty(global,'crypto',property)}
+});

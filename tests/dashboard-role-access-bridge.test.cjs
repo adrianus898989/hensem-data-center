@@ -91,6 +91,14 @@ test('iframe rejects missing page grants, query and detail grants before sending
 test('iframe owner/legacy do not gain assigned restrictions',async()=>{
  for(const mode of ['owner','legacy']){const h=frame({mode,permissions:[],canView:true});const pending=h.c.hensemLiveRequest({action:'details'});assert.equal(h.posts.length,1);const rejected=assert.rejects(pending,/查询已取消/);h.c.hensemLiveCancelRequests();await rejected;}
 });
+
+test('consecutive submission IDs require detail permission while summary needs only query',async()=>{
+ const h=frame(assigned(['events.view','events.query']),'events');
+ await assert.rejects(h.c.hensemLiveRequest({action:'submissionStreak',operation:'members',streakDays:3}),/没有查看明细权限/);assert.equal(h.posts.length,0);
+ const summary=h.c.hensemLiveRequest({action:'submissionStreak',operation:'summary'});assert.equal(h.posts.length,1);const cancelled=assert.rejects(summary,/查询已取消/);h.c.hensemLiveCancelRequests();await cancelled;
+ h.c.hensemRoleAccess=assigned(['events.view','events.query','events.detail']);
+ const detail=h.c.hensemLiveRequest({action:'submissionStreak',operation:'members',streakDays:10});const requests=h.posts.filter(x=>x.data.type==='hensem-admin-live-request');assert.equal(requests.length,2);assert.equal(requests[1].data.page,'events');const detailCancelled=assert.rejects(detail,/查询已取消/);h.c.hensemLiveCancelRequests();await detailCancelled;
+});
 test('configuration batch envelopes retain payout permissions across navigation without granting other pages',async()=>{
  const h=frame(assigned(['payout_config.view','payout_config.query','providers.view']), 'payout_config');
  let current='payout_config';h.c.hensemCurrentAdminPage=()=>current;

@@ -1,0 +1,22 @@
+/* Current-query platform presence. Native details keeps the list inline. */
+.live-reference-heading:has(.live-platform-coverage){flex-wrap:wrap;align-items:center}
+.live-platform-coverage{margin-left:auto;min-width:0;font-size:12px;font-weight:400;color:#536c92}
+.live-platform-coverage>summary{cursor:pointer;list-style-position:inside;white-space:nowrap;padding:3px 0;color:#466287}
+.live-platform-coverage>summary strong{color:#253a5e;margin-left:3px;font-weight:600}
+.live-platform-coverage-toggle{color:#385cda;margin-left:8px;font-size:11px}
+.live-platform-coverage[open]{flex-basis:100%;margin-left:0}
+.live-platform-coverage[open]>summary{width:max-content;margin-left:auto}
+.live-platform-coverage-body{margin-top:5px;border:1px solid #dce5f4;border-radius:5px;overflow:hidden;background:#fff}
+.live-platform-coverage-note{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;padding:7px 9px;background:#f6f8fd;font-size:11px;font-weight:400;color:#60789b}
+.live-platform-coverage-body table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:11px;font-weight:400}
+.live-platform-coverage-body th,.live-platform-coverage-body td{padding:6px 9px;border-bottom:1px solid #e5ebf5;text-align:left;overflow-wrap:anywhere;font-weight:400}
+.live-platform-coverage-body th{background:#f1f5ff;color:#5d759c}
+.live-platform-coverage-body th:nth-child(1){width:22%}
+.live-platform-coverage-body th:nth-child(2){width:12%}
+.live-platform-coverage-body th:nth-child(3){width:36%}
+.live-platform-coverage-body th:nth-child(n+4),.live-platform-coverage-body td:nth-child(n+4){text-align:right;width:15%;font-variant-numeric:tabular-nums}
+.live-platform-coverage-body tbody tr:last-child td{border-bottom:0}
+.live-platform-coverage-body [data-coverage-status="data"] td:nth-child(3){color:#087c65}
+.live-platform-coverage-body [data-coverage-status="failed"] td:nth-child(3){color:#b34a43}
+.live-platform-coverage-body [data-coverage-status="loading"] td:nth-child(3),.live-platform-coverage-body [data-coverage-status="paused"] td:nth-child(3),.live-platform-coverage-body [data-coverage-status="unknown"] td:nth-child(3){color:#9b6c22}
+@media(max-width:640px){.live-platform-coverage{font-size:11px}.live-platform-coverage-body th,.live-platform-coverage-body td{padding:6px 4px}.live-platform-coverage-body th:nth-child(1){width:24%}.live-platform-coverage-body th:nth-child(2){width:12%}.live-platform-coverage-body th:nth-child(3){width:34%}}

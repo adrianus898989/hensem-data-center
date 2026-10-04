@@ -15,6 +15,31 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
   if(p.amountMaxExclusive!==undefined&&(!["aggregate","analysisOrders"].includes(String(p.action))||(p.action==="analysisOrders"||p.view==="drilldown")&&p.kind!=="custom"||typeof p.amountMaxExclusive!=="boolean"||p.amountMax===undefined||p.amountMaxExclusive&&p.amountMin!==undefined&&Number(p.amountMin)>=Number(p.amountMax)))throw Error("金额上限条件无效");
+  if(p.action==="submissionStreak"){
+    const uuid=(v:unknown)=>typeof v==="string"&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(v);
+    const start=p.operation==="start",members=p.operation==="members";
+    const allowed=start?["action","operation","platformId","startAt","endAt","direction","currency","providers","lookbackDays","clientRequestId"]:["action","operation","jobId",...(members?["streakDays","memberId","offset","limit"]:[])];
+    if(!["start","step","summary","members"].includes(String(p.operation))||Object.keys(p).some(k=>!allowed.includes(k)))throw Error("连续提交分析参数无效");
+    if(start){
+      if(!uuid(p.platformId)||!uuid(p.clientRequestId))throw Error("连续提交分析平台或请求编号无效");
+      for(const k of ["startAt","endAt"]){
+        const v=p[k],parts=typeof v==="string"?/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(v):null;
+        if(!parts||parts[1]<"2000-01-01"||!Number.isFinite(Date.parse(String(v)))||new Date(parts[1]+"T00:00:00Z").toISOString().slice(0,10)!==parts[1]||Number(parts[2])>23||Number(parts[3])>59||Number(parts[4])>59||Number(parts[5]||0)>23||Number(parts[6]||0)>59)throw Error("连续提交分析日期无效");
+      }
+      const span=Date.parse(String(p.endAt))-Date.parse(String(p.startAt));if(span<=0||span>31*86400000)throw Error("连续提交分析最多31天");
+      if(p.direction!==undefined&&p.direction!=="charge")throw Error("连续提交分析仅支持代收");
+      if(p.lookbackDays!==undefined&&(typeof p.lookbackDays!=="number"||![7,15,30].includes(p.lookbackDays)))throw Error("连续提交观察天数无效");
+      if(p.currency!==undefined&&(typeof p.currency!=="string"||!p.currency||p.currency.trim()!==p.currency||p.currency.length>200||/[\u0000-\u001f\u007f]/.test(p.currency)))throw Error("连续提交币种无效");
+      if(p.providers!==undefined&&(!Array.isArray(p.providers)||p.providers.length>200||p.providers.some(v=>typeof v!=="string"||!v.trim()||v.trim()!==v||v.length>200||/[\u0000-\u001f\u007f]/.test(v))||new Set(p.providers).size!==p.providers.length))throw Error("连续提交三方无效");
+    }else if(!uuid(p.jobId))throw Error("连续提交分析任务无效");
+    if(members){
+      if(typeof p.streakDays!=="number"||![3,5,10].includes(p.streakDays))throw Error("连续提交天数无效");
+      if(p.memberId!==undefined&&(typeof p.memberId!=="string"||!p.memberId||p.memberId.length>200||/[\u0000-\u001f\u007f]/.test(p.memberId)))throw Error("连续提交会员无效");
+      if(p.offset!==undefined&&(!Number.isSafeInteger(p.offset)||Number(p.offset)<0||Number(p.offset)>9999999))throw Error("连续提交页码无效");
+      if(p.limit!==undefined&&(typeof p.limit!=="number"||![20,50,100].includes(p.limit)))throw Error("连续提交分页无效");
+    }
+    return {...p};
+  }
   if(p.action==="submissionAnalysis"){
     const allowed=["action","platformId","startAt","endAt","direction","currency","providers","operation","threshold","level","memberId","offset","limit","amountBands","charts"];
     if(Object.keys(p).some(k=>!allowed.includes(k)))throw Error("刷单分析参数无效");
@@ -320,6 +345,7 @@ export function isAdminLiveMessage(event:MessageEvent,source:Window|null|undefin
  return isAdminLiveEnvelope(event,source,channel)&&event.data.type===LIVE_REQUEST;
 }
 function adminLiveTimeoutMessage(action:unknown,mode?:unknown):string {
+ if(action==='submissionStreak')return '连续提交分析本日计算超时，已完成进度保留，请稍后继续；不能据此判断为0';
  if(action==='catalog')return '平台目录读取超时，请重试读取目录';
  if(action==='pendingOrders')return '代付中订单读取超时，请重试；已显示统计不会清空';
  if(action==='pendingAnalysis')return '代付中分析读取超时，请重试；不能据此判断为0';
@@ -340,7 +366,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  }
  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,""),url=new URL(base);
  if(url.protocol!=="https:"||url.origin!==base)throw Error("后台地址配置无效");
- const specialRpc:Record<string,string>={analysisOrders:"dashboard_admin_live_analysis_orders",submissionAnalysis:"dashboard_admin_live_submission_analysis",memberDaily:"dashboard_admin_live_member_daily",pendingSnapshot:"dashboard_admin_live_pending_snapshot",pendingAnalysis:"dashboard_admin_live_pending_analysis",pendingOrders:"dashboard_admin_live_pending_orders",depositStatistics:"dashboard_admin_deposit_statistics",workorderRecords:"dashboard_admin_live_workorder_records",intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
+ const specialRpc:Record<string,string>={analysisOrders:"dashboard_admin_live_analysis_orders",submissionAnalysis:"dashboard_admin_live_submission_analysis",submissionStreak:"dashboard_admin_live_submission_streak",memberDaily:"dashboard_admin_live_member_daily",pendingSnapshot:"dashboard_admin_live_pending_snapshot",pendingAnalysis:"dashboard_admin_live_pending_analysis",pendingOrders:"dashboard_admin_live_pending_orders",depositStatistics:"dashboard_admin_deposit_statistics",workorderRecords:"dashboard_admin_live_workorder_records",intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
  const rpc=request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
  const response=await fetch(base+"/rest/v1/rpc/"+(roleContext?.assigned?"dashboard_admin_execute":rpc),{method:"POST",body:JSON.stringify(roleContext?.assigned?{p_page:roleContext.page,p_request:request}:{p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
  if(!response.ok){let code="";try{const body=await response.json();code=String(body.message||"")}catch{}
@@ -352,6 +378,12 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if(request.action==="workorderRecords"&&/scope_denied|preview_denied/.test(code))throw Error("当前账号没有此范围的工单查看权限");
  if(["pendingSnapshot","pendingAnalysis","pendingOrders"].includes(String(request.action))&&/scope_denied|preview_denied|platform_denied/.test(code))throw Error("当前账号没有此范围的代付中查看权限");
  if(["pendingSnapshot","pendingAnalysis","pendingOrders"].includes(String(request.action))&&/mixed_currency/.test(code))throw Error("请选择同一币种的平台查看代付中快照");
+ if(request.action==="submissionStreak"&&/job_expired|streak_expired|analysis_expired/.test(code))throw Error("连续提交分析已过期，请重新查询");
+ if(request.action==="submissionStreak"&&/job_busy|streak_busy|analysis_busy|55P03/.test(code))throw Error("连续提交分析正在计算，请稍后继续");
+ if(request.action==="submissionStreak"&&/analysis_not_ready/.test(code))throw Error("连续提交分析尚未完成，请继续计算后查看结果");
+ if(request.action==="submissionStreak"&&/analysis_nonce_conflict/.test(code))throw Error("连续提交分析筛选已改变，请重新查询");
+ if(request.action==="submissionStreak"&&/analysis_job_limit|analysis_day_limit/.test(code))throw Error("连续提交分析任务较多，请稍后继续已开始的查询");
+ if(request.action==="submissionStreak"&&/scope_denied|preview_denied|platform_denied|job_denied/.test(code))throw Error("当前账号没有此平台或分析任务的查看权限");
  if(/configuration_denied|scope_denied/.test(code))throw Error("当前账号没有此范围的归类权限");
  if(/mapping_not_found|invalid_classification/.test(code))throw Error("归类来源或国家配置已改变，请刷新后重试");
  if([401,403].includes(response.status))throw Error("正式数据读取未获授权，或会话已失效");
@@ -450,7 +482,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
    const page=request?.action==='payoutConfig'?'payout_config':window.hensemCurrentAdminPage?.()||window.hensemAdminInitialPage;
    const operation=request?.action==='withdrawNote'?'edit':request?.action==='configurationWrite'?(request.operation==='grant'?'grant':'edit'):['catalog','providerOptions','configurationAccess'].includes(request?.action)?'view':'query';
    if(!window.hensemRoleAllowed(page,operation)){reject(error('当前角色没有此页面或操作权限','ROLE_DENIED'));return;}
-   const detail=['details','query','analysisOrders','pendingOrders'].includes(request?.action)||request?.action==='submissionAnalysis'&&request.operation==='members'||request?.action==='aggregate'&&request.view==='drilldown'||request?.action==='workorderRecords'&&['detail','orderDetail'].includes(request.operation)||request?.action==='depositStatistics'&&(request.section==='details'||request.section==='kyc'&&request.dimension==='orders')||request?.action==='depositIssues'&&page==='deposit_statistics';
+   const detail=['details','query','analysisOrders','pendingOrders'].includes(request?.action)||['submissionAnalysis','submissionStreak'].includes(request?.action)&&request.operation==='members'||request?.action==='aggregate'&&request.view==='drilldown'||request?.action==='workorderRecords'&&['detail','orderDetail'].includes(request.operation)||request?.action==='depositStatistics'&&(request.section==='details'||request.section==='kyc'&&request.dimension==='orders')||request?.action==='depositIssues'&&page==='deposit_statistics';
    if(detail&&!window.hensemRoleAllowed(page,'detail')){reject(error('当前角色没有查看明细权限','ROLE_DENIED'));return;}
 
    const signal=options.signal;if(signal&&signal.aborted){reject(error('查询已取消','ADMIN_LIVE_CANCELLED'));return;}

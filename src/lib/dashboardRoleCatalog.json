@@ -742,7 +742,8 @@
         "submissionAnalysis",
         "memberDaily",
         "aggregate",
-        "analysisOrders"
+        "analysisOrders",
+        "submissionStreak"
       ]
     },
     {
