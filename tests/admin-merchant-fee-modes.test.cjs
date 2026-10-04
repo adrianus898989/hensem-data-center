@@ -19,15 +19,20 @@ async function setup(){
  h.c.render();return h;
 }
 function open(h,platform='Alpha'){
- const t=ledger(h),row=platform==='total'?t.footer[0]:t.rows.find(r=>plain(r[0])===platform),index=Number(cell(t,row,'使用三方').match(/liveMerchantProviderUsage\((\d+)\)/)[1]);
- h.c.liveMerchantProviderUsage(index);return h.drawers.at(-1);
+ const t=ledger(h),row=platform==='total'?t.footer[0]:t.rows.find(r=>plain(r[0])===platform),usage=cell(t,row,'使用三方'),index=Number(usage.match(/liveMerchantProviderUsage\((\d+)\)/)[1]);
+ if(!usage.includes('aria-expanded="true"'))h.c.liveMerchantProviderUsage(index);
+ return currentInline(h,platform);
 }
-function connectedDrawer(h){
- const query=h.c.document.querySelector,openDrawer=h.c.openDrawer;let marker=null,closed=0;
- h.c.openDrawer=(title,html)=>{marker=html.match(/data-merchant-provider-detail="(\d+)"/)?.[1]||null;openDrawer(title,html);};
- h.c.document.querySelector=selector=>selector.startsWith('[data-merchant-provider-detail=')?marker&&selector==='[data-merchant-provider-detail="'+marker+'"]'?{isConnected:true}:null:query(selector);
- h.c.closeDrawer=()=>{closed++;marker=null;};h.c.render();
- return {replace(){marker=null;},closed:()=>closed};
+function currentInline(h,platform='Alpha'){
+ const t=ledger(h),entries=[...t.html.matchAll(/<tr\b([^>]*)>([\s\S]*?)<\/tr>/g)],index=entries.findIndex(r=>!r[1].includes('merchant-provider-')&&plain(r[2].match(/<td\b[^>]*>([\s\S]*?)<\/td>/)?.[1]||'')===(platform==='total'?'已读汇总 · INR':platform)),note=entries[index+1];assert.match(note?.[1]||'',/merchant-provider-inline-note/);
+ const children=[];for(const r of entries.slice(index+2)){if(!r[1].includes('merchant-provider-inline-row'))break;children.push(r[0]);}
+ return {html:note[0]+'<table>'+t.html.match(/<thead>[\s\S]*?<\/thead>/)[0]+'<tbody>'+children.join('')+'</tbody></table>'};
+}
+const reference=(row,d)=>row[0].match(new RegExp(d+'当前参考费率：([\\s\\S]*?)(?=；代(?:收|付)当前参考费率：|"|$)'))?.[1]||'';
+function connectedInline(h){
+ const query=h.c.document.querySelector;let detached=false;
+ h.c.document.querySelector=selector=>{if(selector.startsWith('[data-merchant-provider-inline=')){const marker=selector.match(/"(\d+)"/)?.[1];return !detached&&h.html().includes('data-merchant-provider-inline="'+marker+'"')?{isConnected:true}:null;}return query(selector);};
+ return {replace(){detached=true;}};
 }
 function feeCard(h,direction){const section=h.html().match(new RegExp('<section class="live-reference-direction" data-direction="'+direction+'">[\\s\\S]*?<\\/section>'))?.[0]||'',html=section.slice(section.indexOf('<div class="kpi" data-metric="fee"'));return {html,value:plain(html.match(/<div class="kpi-value">([\s\S]*?)<\/div>/)?.[1]||'')};}
 
@@ -53,27 +58,27 @@ test('switching to historical reuses immutable verified fees and changes sorting
  h.c.liveMerchantFeeMode('current');t=ledger(h);assert.equal(amount(cell(t,t.footer[0],'代收手续费')),'70.00');assert.equal(JSON.stringify(h.L.results),before);assert.equal(h.calls.length,calls);
 });
 
-test('usage drawer shows canonical per-provider current amounts, matching coverage and direction-specific unknowns in the exact native scope',async()=>{
- const h=await setup(),calls=h.calls.length,drawer=open(h),t=tables(drawer.html).find(t=>t.headers[0]==='三方 / 系统'),pay=t.rows.find(r=>plain(r[0]).startsWith('ExamplePay')),fixed=t.rows.find(r=>plain(r[0]).startsWith('FixedPay'));
- assert.equal(t.rows.length,2);assert.match(drawer.html,/当前费率参考估算/);assert.match(drawer.html,/不是历史实际手续费/);assert.equal(amount(cell(t,pay,'代收手续费')),'8.00');assert.match(cell(t,pay,'代收手续费'),/已匹配 4 \/ 4 笔 · 待确认 0 笔/);assert.equal(plain(cell(t,pay,'代收当前参考费率')),'2.00%');assert.equal(amount(cell(t,pay,'代付手续费')),'9.00');assert.equal(amount(cell(t,fixed,'代收手续费')),'—');assert.match(cell(t,fixed,'代收手续费'),/固定费币种未确认/);assert.match(cell(t,fixed,'代收手续费'),/待确认 1 笔/);assert.equal(plain(cell(t,fixed,'代付手续费')),'—');assert.doesNotMatch(drawer.html,/30\.00|90\.00|历史费率未匹配|生效日期待确认/);assert.equal(h.calls.length,calls);
- const all=open(h,'total'),allTable=tables(all.html).find(t=>t.headers[0]==='三方 / 系统');assert.equal(allTable.rows.length,2);assert.equal(amount(cell(allTable,allTable.rows.find(r=>plain(r[0]).startsWith('ExamplePay')),'代收手续费')),'38.00');
+test('inline usage shows canonical per-provider current amounts, matching coverage and direction-specific unknowns in the exact native scope',async()=>{
+ const h=await setup(),calls=h.calls.length,drawer=open(h),t=tables(drawer.html).find(t=>t.headers[0]==='平台'),pay=t.rows.find(r=>plain(r[0]).startsWith('ExamplePay')),fixed=t.rows.find(r=>plain(r[0]).startsWith('FixedPay'));
+ assert.equal(t.rows.length,2);assert.match(drawer.html,/当前费率参考估算/);assert.match(drawer.html,/不是历史实际手续费/);assert.equal(amount(cell(t,pay,'代收手续费')),'8.00');assert.match(cell(t,pay,'代收手续费'),/已匹配 4 \/ 4 笔（100\.00%）/);assert.equal(reference(pay,'代收'),'2.00%');assert.equal(amount(cell(t,pay,'代付手续费')),'9.00');assert.equal(amount(cell(t,fixed,'代收手续费')),'—');assert.match(cell(t,fixed,'代收手续费'),/固定费币种未确认/);assert.match(cell(t,fixed,'代收手续费'),/待确认 1 笔/);assert.equal(plain(cell(t,fixed,'代付手续费')),'—');assert.doesNotMatch([cell(t,pay,'代收手续费'),cell(t,pay,'代付手续费'),cell(t,fixed,'代收手续费')].join(''),/>30\.00<|>90\.00<|历史费率未匹配|生效日期待确认/);assert.equal(h.calls.length,calls);
+ const all=open(h,'total'),allTable=tables(all.html).find(t=>t.headers[0]==='平台');assert.equal(allTable.rows.length,2);assert.equal(amount(cell(allTable,allTable.rows.find(r=>plain(r[0]).startsWith('ExamplePay')),'代收手续费')),'38.00');
 });
 
-test('a connected merchant drawer refreshes its mode, while an old mode callback cannot reopen historical facts',async()=>{
- const h=await setup();connectedDrawer(h);open(h);const callback=h.c.liveMerchantProviderUsage,calls=h.calls.length,before=h.drawers.length;
- h.c.liveMerchantFeeMode('historical');assert.equal(h.drawers.length,before+1);assert.match(h.drawers.at(-1).html,/历史生效费率/);assert.match(h.drawers.at(-1).html,/80\.00/);assert.match(h.drawers.at(-1).html,/当前参考费率只供核对/);
- callback(0);assert.equal(h.drawers.length,before+1,'a handler from the old estimate mode expires');h.c.liveMerchantFeeMode('current');assert.match(h.drawers.at(-1).html,/8\.00/);assert.doesNotMatch(h.drawers.at(-1).html,/80\.00/);assert.equal(h.calls.length,calls);
+test('expanded merchant rows refresh their mode, while an old mode callback cannot collapse or reopen historical facts',async()=>{
+ const h=await setup();connectedInline(h);open(h);const callback=h.c.liveMerchantProviderUsage,calls=h.calls.length;
+ h.c.liveMerchantFeeMode('historical');assert.match(currentInline(h).html,/历史生效费率/);assert.match(currentInline(h).html,/80\.00/);assert.match(currentInline(h).html,/当前参考费率只供核对/);
+ const html=h.html();callback(0);assert.equal(h.html(),html,'a handler from the old estimate mode expires');h.c.liveMerchantFeeMode('current');assert.match(currentInline(h).html,/8\.00/);assert.doesNotMatch(currentInline(h).html,/80\.00/);assert.equal(h.calls.length,calls);assert.equal(h.drawers.length,0);
 });
 
-test('current reference load completion updates an open exact drawer once without another order request',async()=>{
- const h=await setup();connectedDrawer(h);let resolveRates;h.setHandler(q=>q.action==='rates'?new Promise(resolve=>{resolveRates=resolve}):{rows:[],total:0});h.L.feeLookupRows=null;h.c.render();assert.equal(h.L.feeLookupLoading,true);open(h);assert.match(h.drawers.at(-1).html,/读取中…/);const before=h.drawers.length,calls=h.calls.length;
- resolveRates({rows:[rate({collectFee:'5%'})],total:1});await settle();assert.equal(h.drawers.length,before+1);const drawer=h.drawers.at(-1),t=tables(drawer.html).find(t=>t.headers[0]==='三方 / 系统'),pay=t.rows.find(r=>plain(r[0]).startsWith('ExamplePay'));
- assert.equal(plain(cell(t,pay,'代收当前参考费率')),'5.00%');assert.equal(amount(cell(t,pay,'代收手续费')),'20.00');assert.match(cell(t,pay,'代收手续费'),/已匹配 4 \/ 4 笔（100\.00%）/);assert.equal(h.calls.length,calls);assert.equal(h.calls.filter(q=>q.action==='rates').length,1);
+test('current reference load completion updates expanded exact rows without another order request',async()=>{
+ const h=await setup();connectedInline(h);let resolveRates;h.setHandler(q=>q.action==='rates'?new Promise(resolve=>{resolveRates=resolve}):{rows:[],total:0});h.L.feeLookupRows=null;h.c.render();assert.equal(h.L.feeLookupLoading,true);assert.match(open(h).html,/读取中…/);const calls=h.calls.length;
+ resolveRates({rows:[rate({collectFee:'5%'})],total:1});await settle();const t=tables(currentInline(h).html).find(t=>t.headers[0]==='平台'),pay=t.rows.find(r=>plain(r[0]).startsWith('ExamplePay'));
+ assert.equal(reference(pay,'代收'),'5.00%');assert.equal(amount(cell(t,pay,'代收手续费')),'20.00');assert.equal(plain(cell(t,pay,'代收匹配占比')),'100.00%');assert.match(cell(t,pay,'代收手续费'),/已匹配 4 \/ 4 笔（100\.00%）/);assert.equal(h.calls.length,calls);assert.equal(h.calls.filter(q=>q.action==='rates').length,1);assert.equal(h.drawers.length,0);
 });
 
-test('close, replacement, permission loss, edited scope, new query and navigation all expire an asynchronous drawer refresh',async()=>{
- const mutations=[h=>h.c.closeDrawer(),(h,d)=>d.replace(),h=>{h.L.dirty=true;},h=>{h.L.loading=true;},h=>{h.L.from='2026-09-21T00:00:00';},h=>{h.L.serial++;},h=>{h.L.results=[...h.L.results];},h=>{h.c.state.page='overview';},h=>{h.L.view='providers';},h=>{h.c.hensemRoleAllowed=(page,action)=>action!=='detail';}];
- for(const change of mutations){const h=await setup(),d=connectedDrawer(h);open(h);const before=h.drawers.length,calls=h.calls.length;change(h,d);h.c.liveMerchantFeeRefresh();assert.equal(h.drawers.length,before);assert.equal(h.calls.length,calls);}
+test('collapse, replacement, permission loss, edited scope, new query and navigation all expire an asynchronous inline refresh',async()=>{
+ const mutations=[h=>h.c.liveMerchantProviderUsage(0),(h,d)=>d.replace(),h=>{h.L.dirty=true;},h=>{h.L.loading=true;},h=>{h.L.from='2026-09-21T00:00:00';},h=>{h.L.serial++;},h=>{h.L.results=[...h.L.results];},h=>{h.c.state.page='overview';},h=>{h.L.view='providers';},h=>{h.c.hensemRoleAllowed=(page,action)=>action!=='detail';}];
+ for(const change of mutations){const h=await setup(),d=connectedInline(h);open(h);change(h,d);const before=h.html(),writes=h.writes.length,calls=h.calls.length;h.L.feeLookupRows=[rate({collectFee:'7%'})];h.c.liveMerchantFeeRefresh();assert.equal(h.html(),before);assert.equal(h.writes.length,writes);assert.equal(h.drawers.length,0);assert.equal(h.calls.length,calls);}
 });
 
 test('unknown success, unknown native currency and unsupported reference rules do not turn into zero estimates or complete coverage',async()=>{
@@ -99,8 +104,8 @@ test('merchant top fee cards share the current and historical table facts, while
  assert.equal(h.calls.length,calls);
 });
 
-test('current drawer does not show a borrowed country rate after its native platform exception or category has failed closed',async()=>{
+test('current inline rows do not show a borrowed country rate after its native platform exception or category has failed closed',async()=>{
  for(const mutation of [h=>{h.L.feeLookupRows=h.L.feeLookupRows.map(r=>r.platform==='Alpha'?{...r,collectFee:''}:r);},h=>{h.L.results[0].groups.provider[0].channel_type='USDT';h.L.feeLookupRows=h.L.feeLookupRows.map(r=>r.platform==='Alpha'?{...r,category:'UPI'}:r);}]){
-  const h=await setup();mutation(h);h.c.render();const drawer=open(h),t=tables(drawer.html).find(t=>t.headers[0]==='三方 / 系统'),pay=t.rows.find(r=>plain(r[0]).startsWith('ExamplePay'));assert.equal(amount(cell(t,pay,'代收手续费')),'—');assert.match(plain(cell(t,pay,'代收当前参考费率')),/费率待核对|原始类型费率未匹配/);assert.doesNotMatch(plain(cell(t,pay,'代收当前参考费率')),/4\.00%|2\.00%/);
+  const h=await setup();mutation(h);h.c.render();const drawer=open(h),t=tables(drawer.html).find(t=>t.headers[0]==='平台'),pay=t.rows.find(r=>plain(r[0]).startsWith('ExamplePay'));assert.equal(amount(cell(t,pay,'代收手续费')),'—');assert.match(reference(pay,'代收'),/费率待核对|原始类型费率未匹配/);assert.doesNotMatch(reference(pay,'代收'),/4\.00%|2\.00%/);
  }
 });

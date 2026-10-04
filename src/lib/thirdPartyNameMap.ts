@@ -101,6 +101,9 @@ export const CONFIRMED_INDIA_RAW_PROVIDER_ALIASES = new Map<string, string>([
   ["ffpay", "FFPay"],
   // Owner-confirmed 2026-10-04: this exact India QR label is ATPay.
   ["atpay-qr", "ATPay"],
+  // Owner-confirmed 2026-10-04: the exact India collection/payout pair is WYPay.
+  ["wypay", "WYPay"],
+  ["wypay-qr", "WYPay"],
 ]);
 
 const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([

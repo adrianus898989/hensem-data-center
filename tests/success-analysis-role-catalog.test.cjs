@@ -30,9 +30,9 @@ test('success analysis catalog adds only its exact entry and three permissions w
   const before=await catalog(db),beforeMeta=await metadata(db),beforeGrants=await grants(db);
   assert.equal(await scalar(db,"select md5(prosrc) from pg_proc where oid='private.dashboard_role_catalog()'::regprocedure"),'0245134da03be7f9852c2e9a0cf62ceb');
   assert.equal(await scalar(db,"select md5(pg_get_functiondef('private.dashboard_role_catalog()'::regprocedure))"),'d0636e1c6d1613cff65a8e097a99ef85');
-  await db.exec(migration);const after=await catalog(db),entry=require('../src/lib/dashboardRoleCatalog.json').pages.find(p=>p.id==='success_analysis');
+  await db.exec(migration);const after=await catalog(db),currentPages=require('../src/lib/dashboardRoleCatalog.json').pages.map(p=>p.id==='success_analysis'?{...p,requests:p.requests.filter(r=>r!=='rates')}:p),entry=currentPages.find(p=>p.id==='success_analysis');
   assert.deepEqual(after.pages.find(p=>p.id==='success_analysis'),entry);
-  assert.deepEqual(after.pages,require('../src/lib/dashboardRoleCatalog.json').pages);
+  assert.deepEqual(after.pages,currentPages);
   assert.deepEqual(after.pages.filter(p=>p.id!=='success_analysis'),before.pages);
   assert.deepEqual(after.permissions.slice(0,before.permissions.length),before.permissions);
   assert.deepEqual(after.permissions.slice(before.permissions.length),['view','query','export'].map(action=>({key:'success_analysis.'+action})));
@@ -62,4 +62,24 @@ test('security, volatility, search path and other definition drift are rejected 
 });
 test('a missing role catalog aborts without creating a new public-executable helper',async()=>{
  const db=new PGlite();try{await db.exec('create schema private');await assert.rejects(()=>db.exec(migration),/success_analysis_catalog_missing/);await db.exec('rollback');assert.equal(await scalar(db,"select to_regprocedure('private.dashboard_role_catalog()')"),null);}finally{await db.close();}
+});
+
+const typeMigration=read('supabase/migrations/20261004114740_success_analysis_provider_type_reader.sql');
+test('provider type reader adds rates only to the existing page, preserves native function metadata and all saved grants',async()=>{
+ const db=await fixture();try{
+  await db.exec(migration);const before=await catalog(db),meta=await metadata(db),saved=await grants(db);
+  await db.exec(typeMigration);const after=await catalog(db);
+  assert.deepEqual(after.pages,require('../src/lib/dashboardRoleCatalog.json').pages);
+  assert.deepEqual(after.pages.filter(p=>p.id!=='success_analysis'),before.pages.filter(p=>p.id!=='success_analysis'));
+  const old=before.pages.find(p=>p.id==='success_analysis'),now=after.pages.find(p=>p.id==='success_analysis');
+  assert.deepEqual(now,{...old,requests:[...old.requests,'rates']});
+  assert.deepEqual({...after,pages:before.pages},before);assert.deepEqual(await metadata(db),meta);assert.deepEqual(await grants(db),saved);
+  assert.equal(await scalar(db,"select md5(pg_get_functiondef('private.dashboard_role_catalog()'::regprocedure))"),'aff46e4d81404c6db383001cc8cc2443');
+  await db.exec(typeMigration);assert.deepEqual(await catalog(db),after);assert.deepEqual(await metadata(db),meta);assert.deepEqual(await grants(db),saved);
+ }finally{await db.close();}
+});
+test('provider type reader rejects changed function security and body contracts on baseline and replay',async()=>{
+ for(const applied of [false,true])for(const change of ["grant execute on function private.dashboard_role_catalog() to authenticated",'alter function private.dashboard_role_catalog() security definer','alter function private.dashboard_role_catalog() cost 999']){
+  const db=await fixture();try{await db.exec(migration);if(applied)await db.exec(typeMigration);await db.exec(change);const before=await catalog(db),meta=await metadata(db);await assert.rejects(()=>db.exec(typeMigration),/success_type_catalog_(metadata|baseline)_drift/);await db.exec('rollback');assert.deepEqual(await catalog(db),before);assert.deepEqual(await metadata(db),meta);}finally{await db.close();}
+ }
 });

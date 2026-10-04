@@ -57,13 +57,16 @@ test('catalog exactly matches shared UI permission catalog and HMAC matches inde
 test('new success analysis entry requires explicit assigned page grants and cannot borrow another analysis page',async()=>{
  await admin();await db.exec(read('tests/fixtures/success-analysis-role-catalog-baseline.sql'));
  await db.exec(`create function private.dashboard_admin_live_workorders(p_request jsonb) returns jsonb language plpgsql stable security definer set search_path='' as $$begin perform private.dashboard_admin_live_scope();return jsonb_build_object('request',p_request,'context',private.dashboard_role_context_valid());end$$;`);
+ await db.exec(`create function private.dashboard_admin_live_rates(p_request jsonb) returns jsonb language plpgsql stable security definer set search_path='' as $$begin return jsonb_build_object('request',p_request,'scope',private.dashboard_admin_live_scope(),'context',private.dashboard_role_context_valid());end$$;`);
  await db.exec(read('supabase/migrations/20261004093506_success_analysis_role_catalog.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,''));
+ await db.exec(read('supabase/migrations/20261004114740_success_analysis_provider_type_reader.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,''));
  await granted(VIEWER,['time.view','time.query']);await denied(()=>execute('success_analysis',{action:'aggregate'}),/page_action_denied/);
  await as(OWNER);const role=await create(['success_analysis.view']);await assign(ADMIN,role);await as(ADMIN);
  assert.equal((await execute('success_analysis',{action:'catalog'})).request.action,'catalog');
- for(const action of ['aggregate','workorders'])await denied(()=>execute('success_analysis',{action}),/role_permission_denied/);
+ for(const action of ['aggregate','workorders','rates'])await denied(()=>execute('success_analysis',{action}),/role_permission_denied/);
  await as(OWNER);await manage({operation:'update',roleId:role.id,expectedVersion:1,permissions:['success_analysis.view','success_analysis.query','success_analysis.export']});await as(ADMIN);
- for(const action of ['aggregate','workorders'])assert.equal((await execute('success_analysis',{action})).context,true);
+ for(const action of ['aggregate','workorders','rates'])assert.equal((await execute('success_analysis',{action})).context,true);
+ assert.deepEqual((await execute('success_analysis',{action:'rates',scopeType:'all'})).scope,{mode:'restricted',platforms:['A']});
  await denied(()=>execute('success_analysis',{action:'details'}),/page_action_denied/);
  await denied(()=>execute('providers',{action:'aggregate'}),/page_action_denied/);
 });

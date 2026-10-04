@@ -230,7 +230,7 @@
    return {amount:value,successCount:total,eligibleCount:total,matchedCount:total,excludedCount:0,complete:true,currency:unit,reasons:[]};
   }
   function visit(r){
-   if(!r||typeof r!=='object')return unknown(r,'unknown_leaf_identity');
+   if(!r||typeof r!=='object'||r.nativeFeeIdentityVerified===false)return unknown(r,'unknown_leaf_identity');
    const children=Object.hasOwn(r,'fee_items')?r.fee_items:r.items;
    if(Object.hasOwn(r,'fee_items')&&!Array.isArray(children))return unknown(r,'missing_provider_breakdown');
    if(!Array.isArray(children))return leaf(r);

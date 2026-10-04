@@ -929,7 +929,8 @@
         "providerOptions",
         "syncHealth",
         "aggregate",
-        "workorders"
+        "workorders",
+        "rates"
       ]
     },
     {
