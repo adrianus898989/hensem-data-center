@@ -69,14 +69,14 @@ const bodyTable=(html,name)=>html.split('aria-label="'+name+'"')[1]?.split('</ta
 
 test('late and unknown captures never enter midnight stocks, comparisons or daily rankings',async()=>{
  const h=setup(),raw=response([day('2026-09-28'),withPlatforms('2026-09-29',[row(A,'2026-09-29',[group('Pay Late',999999,20)],{timingState:'late',delaySeconds:4800,observedAt:'2026-09-29T19:50:00Z'})])]);h.handler(async()=>raw);await h.ui.load();
- assert.match(h.ui.page(),/2026-09-30 00:00（2026-09-29日结束）/);assert.match(h.ui.page(),/00:00后5分内采集/);assert.match(h.ui.page(),/迟采 1小时/);assert.match(h.ui.page(),/代付中金额<\/span><strong>—/);assert.doesNotMatch(h.ui.page(),/999,999\.00/);
+ assert.match(h.ui.page(),/2026-09-30 00:00（2026-09-29日结束）/);assert.match(h.ui.page(),/00:00后5分内采集/);assert.match(h.ui.page(),/迟采 1小时/);assert.match(h.ui.page(),/代付中金额<\/span><strong>—/);assert.doesNotMatch(bodyTable(h.ui.page(),'当日三方平台分布'),/999,999\.00/);assert.match(bodyTable(h.ui.page(),'全部平台采集情况'),/999,999\.00/);
  global.livePendingAnalysisMode('captured');assert.match(h.ui.page(),/代付中金额<\/span><strong>999,999\.00/);assert.match(h.ui.page(),/不能视为真实00:00库存/);assert.equal(h.calls.length,1);assert.equal(raw.daily[1].rows[0].amount,'999999');
  const p=project({daily:[withPlatforms('2026-09-29',[row(A,'2026-09-29',[],{timingState:'unknown'})])]},['2026-09-29'],[],'midnight')[0];assert.equal(p.count,null);assert.equal(p.complete,false);
 });
 
 test('one on-time platform remains a verified subtotal while late platforms and global shares are explicit',async()=>{
  const h=setup();h.setSelected([platform(),platform(B)]);h.handler(async()=>response([withPlatforms('2026-09-28',[row(A,'2026-09-28',[group('Pay A',100,2)]),row(B,'2026-09-28',[group('Pay B',900,8)])]),withPlatforms('2026-09-29',[row(A,'2026-09-29',[group('Pay A',150,5)]),row(B,'2026-09-29',[group('Pay B',500000,8)],{timingState:'late',delaySeconds:600})])]));await h.ui.load();
- assert.match(h.ui.page(),/已核实 1 \/ 2 平台/);assert.match(h.ui.page(),/代付中金额<\/span><strong>150\.00/);assert.doesNotMatch(h.ui.page(),/500,000\.00/);global.livePendingAnalysisDimension('platform');assert.match(bodyTable(h.ui.page(),'代付中平台与三方分布'),/\+50\.00（\+50\.00%）/);
+ assert.match(h.ui.page(),/已核实 1 \/ 2 平台/);assert.match(h.ui.page(),/代付中金额<\/span><strong>150\.00/);assert.doesNotMatch(bodyTable(h.ui.page(),'当日三方平台分布'),/500,000\.00/);assert.match(bodyTable(h.ui.page(),'全部平台采集情况'),/500,000\.00/);global.livePendingAnalysisDimension('platform');assert.match(bodyTable(h.ui.page(),'代付中平台与三方分布'),/\+50\.00（\+50\.00%）/);
  assert.equal(standings(project(h.ui.capture().data,range,[],'midnight'),'amount').find(x=>x.provider==='Pay A').wins,0);
 });
 

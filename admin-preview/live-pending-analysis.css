@@ -78,14 +78,15 @@ body.live-admin .live-pending-analysis{min-width:0;width:100%;max-width:100%;col
 .live-pending-analysis .pa-controls button{font-size:11px;padding:6px 10px}
 .live-pending-analysis .pa-panel-head{padding:9px 12px}
 .live-pending-analysis h2{font-size:13px}
-.live-pending-analysis .pa-selected-table{min-width:960px;font-size:12px}
-.live-pending-analysis .pa-selected-table th,.live-pending-analysis .pa-selected-table td{padding:8px}
+.live-pending-analysis .pa-selected-table{min-width:920px;font-size:11px;table-layout:auto}
+.live-pending-analysis .pa-selected-table th,.live-pending-analysis .pa-selected-table td{padding:6px 5px;white-space:nowrap;overflow-wrap:normal}
 .live-pending-analysis .pa-selected-table th:first-child{width:126px}
-.live-pending-analysis .pa-selected-table th:nth-child(2){width:135px}
-.live-pending-analysis .pa-selected-table th:nth-child(3){width:111px}
-.live-pending-analysis .pa-selected-table th:nth-child(4){width:125px}
-.live-pending-analysis .pa-selected-table th:nth-child(5),.live-pending-analysis .pa-selected-table th:nth-child(6),.live-pending-analysis .pa-selected-table th:nth-child(7){width:65px}
-.live-pending-analysis .pa-selected-table th:nth-child(8){width:91px}
+.live-pending-analysis .pa-selected-table th:nth-child(2){width:105px}
+.live-pending-analysis .pa-selected-table th:nth-child(3){width:60px}
+.live-pending-analysis .pa-selected-table th:nth-child(4),.live-pending-analysis .pa-selected-table th:nth-child(5){width:68px}
+.live-pending-analysis .pa-selected-table th:nth-child(6){width:112px}
+.live-pending-analysis .pa-selected-table th:nth-child(7),.live-pending-analysis .pa-selected-table th:nth-child(8),.live-pending-analysis .pa-selected-table th:nth-child(9){width:60px}
+.live-pending-analysis .pa-selected-table th:nth-child(10){width:75px}
 .live-pending-analysis .pa-selected-table th:last-child{width:98px}
 .live-pending-analysis .pa-selected-table th:last-child,.live-pending-analysis .pa-selected-table td:last-child{position:sticky;right:0;box-shadow:-1px 0 0 #e6ecf5;text-align:center}
 .live-pending-analysis .pa-selected-table td:last-child{z-index:1}
@@ -97,7 +98,17 @@ body.live-admin .live-pending-analysis{min-width:0;width:100%;max-width:100%;col
 .live-pending-analysis .pa-coverage-badge{border:1px solid #dae4f3;border-radius:4px;background:#fff;padding:3px 6px;white-space:nowrap}
 .live-pending-analysis .pa-coverage,.live-pending-analysis .pa-history{margin:0 0 10px;border:1px solid #dce5f3;border-radius:6px;background:#fff;min-width:0;overflow:hidden}
 .live-pending-analysis .pa-coverage>summary,.live-pending-analysis .pa-history>summary{padding:9px 12px;cursor:pointer;font-size:12px;font-weight:600;color:#56729b}
-.live-pending-analysis .pa-coverage-table{min-width:620px}
+.live-pending-analysis .pa-coverage-table{min-width:900px;table-layout:auto;font-size:11px}
+.live-pending-analysis .pa-coverage-table th,.live-pending-analysis .pa-coverage-table td{padding:5px;white-space:nowrap;overflow-wrap:normal}
+.live-pending-analysis .pa-coverage-table th:nth-child(2),.live-pending-analysis .pa-coverage-table td:nth-child(2){text-align:left;white-space:normal;min-width:150px;max-width:260px}
+.live-pending-analysis .pa-coverage-summary{padding:8px 12px 4px;color:#4e6587;font-size:11px;font-weight:600}
+.live-pending-analysis .pa-coverage-note{padding:0 12px 8px;color:#7e8da4;font-size:10px;line-height:1.6}
+.live-pending-analysis .pa-coverage>summary{padding:10px 12px;cursor:pointer;display:list-item;list-style-position:inside;color:#405575;font-size:11px}
+.live-pending-analysis .pa-coverage>summary strong{font-size:12px}
+.live-pending-analysis .pa-coverage>summary .pa-coverage-summary{display:inline;padding:0 0 0 12px;font-weight:400}
+.live-pending-analysis .pa-capture-valid td:nth-child(2){color:#27836a}
+.live-pending-analysis .pa-capture-gap td:nth-child(2){color:#b57832}
+.live-pending-analysis .pa-not-launched td{color:#8796ad;background:#fafbfe}
 .live-pending-analysis .pa-history>.pa-panel{margin:0 10px 10px}
 .live-pending-analysis .pa-history-note{padding:0 12px 8px;color:#8392aa;font-size:10px}
 .live-pending-analysis .pa-single-day{grid-template-columns:minmax(0,1fr)}

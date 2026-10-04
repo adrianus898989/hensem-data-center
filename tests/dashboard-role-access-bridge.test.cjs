@@ -31,6 +31,16 @@ test('role policy requires assigned page view plus each action; owner/legacy ret
  for(const mode of ['owner','legacy'])assert.equal(api.dashboardRoleAllows({mode,permissions:[],canView:true},'providers','query'),true);
  for(const value of [{},{...a,permissions:['unknown/view']},{...a,version:-1},{...a,canView:'true'},{...a,roleId:'bad'}])assert.throws(()=>api.validateDashboardRoleAccess(value));
 });
+test('new success analysis requires owner or explicit assigned page actions, including when legacy receives catalog keys',()=>{
+ const {api}=roleModule();
+ const keys=['success_analysis.view','success_analysis.query','success_analysis.export'];
+ assert.equal(api.dashboardRoleAllows({mode:'legacy',canView:true,permissions:keys},'success_analysis','query'),false);
+ assert.equal(api.dashboardRoleAllows({mode:'owner',canView:true,permissions:[]},'success_analysis','query'),true);
+ assert.equal(api.dashboardRoleAllows(assigned(['matrix.view','matrix.query']),'success_analysis'),false);
+ assert.equal(api.dashboardRoleAllows(assigned(['success_analysis.view']),'success_analysis'),true);
+ assert.equal(api.dashboardRoleAllows(assigned(['success_analysis.view']),'success_analysis','query'),false);
+ assert.equal(api.dashboardRoleAllows(assigned(keys),'success_analysis','query'),true);
+});
 test('rolling catalog reads drop well-formed unknown keys without granting them or hiding known permissions',()=>{
  const {api}=roleModule();
  const a=api.validateDashboardRoleAccess(assigned(['providers.view','providers.query','future_page.view','future_page.edit']));

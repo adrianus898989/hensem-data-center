@@ -1,11 +1,13 @@
 // The browser carries its current backend session to one fixed read-only endpoint.
 export function validatePortalOperationLogsRequest(value:Record<string,unknown>):Record<string,unknown>{
- const allowed=['action','country','filters','offset','limit'];
+ const allowed=['action','view','country','filters','offset','limit'];
  if(Object.keys(value).some(k=>!allowed.includes(k))||!['印度','IN'].includes(String(value.country)))throw Error('工单操作日志目前仅接入印度');
+ if(value.view!==undefined&&(typeof value.view!=='string'||!['logs','workload'].includes(value.view)))throw Error('工单操作视图无效');
  const filters=value.filters??{};
  if(!filters||typeof filters!=='object'||Array.isArray(filters))throw Error('日志筛选无效');
  const f=filters as Record<string,unknown>;
- if(Object.keys(f).some(k=>!['from','to','platform','operator','action','orderNo','workorderNo','utr'].includes(k)))throw Error('日志筛选字段无效');
+ const fields=value.view==='workload'?['from','to','platform','operator','orderNo','workorderNo','utr']:['from','to','platform','operator','action','orderNo','workorderNo','utr'];
+ if(Object.keys(f).some(k=>!fields.includes(k)))throw Error('日志筛选字段无效');
  for(const v of Object.values(f))if(typeof v!=='string'||v.length>200||/[\u0000-\u001f\u007f]/.test(v))throw Error('日志筛选内容无效');
  if(f.action&&!['create','follow','approve','reopen','link','assign'].includes(String(f.action)))throw Error('日志操作类型无效');
  if(f.from||f.to){

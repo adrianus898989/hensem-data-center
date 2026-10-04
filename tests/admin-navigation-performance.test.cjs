@@ -367,7 +367,7 @@ test('date caches preserve invalid calendar and both DST boundary rejections',()
 // facts without using order rows or member-day counts as an aggregate oracle.
 const largeAr={...P,id:'5e952cbb-e42f-d6b1-a24a-a0d42d165df9',name:'91CLUB',source:'ar',scopeGroup:'IN'};
 function aggregateReadHarness(handler,platform=largeAr){
- const context={Date,console,L:{serial:1,catalog:[platform],queryRetrying:false},state:{page:'overview'},providerDirection:()=>null,isFlowPage:()=>false,orderSource:p=>String(p?.source||'').toLowerCase().replaceAll('_',''),displayIdentity:p=>p};
+ const context={Date,console,L:{serial:1,catalog:[platform],queryRetrying:false},state:{page:'overview'},isSuccessAnalysis:()=>context.state.page==='success_analysis',providerDirection:()=>null,isFlowPage:()=>false,orderSource:p=>String(p?.source||'').toLowerCase().replaceAll('_',''),displayIdentity:p=>p};
  const calls=[];let active=0,maxActive=0;context.window=context;context.hensemLiveRequest=async q=>{calls.push(JSON.parse(JSON.stringify(q)));active++;maxActive=Math.max(active,maxActive);try{return await handler(q,calls.length)}finally{active--}};
  const counts=source.slice(source.indexOf(' const countKeys='),source.indexOf(' const amountBands='));
  const read=source.slice(source.indexOf(' function mergeParts('),source.indexOf(' // Read deeper overview sections',source.indexOf(' function mergeParts(')));

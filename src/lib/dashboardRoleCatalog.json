@@ -906,6 +906,33 @@
       ]
     },
     {
+      "id": "success_analysis",
+      "moduleId": "analysis",
+      "moduleLabel": "数据分析中心",
+      "label": "成功率分析",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "providerOptions",
+        "syncHealth",
+        "aggregate",
+        "workorders"
+      ]
+    },
+    {
       "id": "latency",
       "moduleId": "analysis",
       "moduleLabel": "数据分析中心",

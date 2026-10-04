@@ -196,6 +196,7 @@
   return [...pairs.values()].sort((a,b)=>String(provider?a.provider:a.platform).localeCompare(String(provider?b.provider:b.platform))||String(a.source||'').localeCompare(String(b.source||''))||String(a.currency||'').localeCompare(String(b.currency||'')));
  }
  function merchantBusiness(provider=false){
+  if(!L.loading&&!L.restoredPage)ensureTypes();
   const id=provider?'merchant-providers-unified':'merchant-platforms-unified',rows=merchantRows(provider),currencies=[...new Set(rows.map(r=>r.currency||''))],mixedCurrencies=currencies.length>1;
   const sourceLabel=value=>({ar:'AR',newar:'新AR',new_ar:'新AR',wg:'WG',lg:'LG',game66:'GAME66','66game':'GAME66'}[String(value||'').toLowerCase()]||String(value||'—'));
   const sources=r=>[...new Set((r.sources||[r.source]).filter(Boolean).map(sourceLabel))].join(' / ')||'—';
@@ -244,8 +245,23 @@
     const history=sorting.feeHistoryLabel?.(row)||'历史费率未匹配',pendingDate=['缺少生效时间','缺少生效时间列','继承费率缺少生效凭证'].includes(history);
     return merchantFeeCell(row)+'<small class="merchant-fee-coverage">已匹配 '+C(matched)+' / '+C(eligible)+' 笔 · 未匹配 '+C(missing)+' 笔</small>'+(!row.fee_complete&&eligible>0?'<small class="merchant-fee-coverage">'+E(pendingDate?'生效日期待确认（'+history+'）':history==='部分'?'已匹配部分订单，其余待确认':history)+'</small>':'');
    };
+   // Current references remain readable when success-time facts are unknown.
+   // Resolve each original leaf with the shared rules; never assign an estimate.
+   const referenceFeeLabel=row=>{
+    if(row.fee_reference_label)return row.fee_reference_label;
+    const labels=new Set();
+    for(const item of row.fee_items||row.items||[row]){
+     const country=item.country||L.country,tier=sorting.tieredFeeRule(item,country),fact=sorting.estimateFacts(item,L.feeLookupRows,country),values=new Map(),payout=item.direction==='withdraw';
+     if(fact.exemptOnly){labels.add('免手续费');continue;}
+     if(tier){labels.add(tier.label);continue;}
+     for(const record of sorting.feeCandidates(item,L.feeLookupRows,country)){const rule=sorting.parseFee(record[payout?'payoutFee':'collectFee'],record[payout?'payoutSingleFee':'collectSingleFee']);values.set(rule?JSON.stringify(rule):'unknown',rule);}
+     if(values.size===1&&!values.has('unknown')){const rule=[...values.values()][0];labels.add((rule.percent*100).toFixed(2)+'%'+(rule.fixed?' + '+Number(rule.fixed.toFixed(8))+' / 笔':''));}
+     else labels.add(values.size>1?'待核对费率':'未匹配');
+    }
+    return [...labels].sort().join(' / ')||'未匹配';
+   };
    const detailHeaders=['三方 / 系统',...merchantDirections.flatMap(d=>['全部金额','全部笔数','成功金额','成功笔数','当前参考费率','手续费'].map(label=>name(d)+label))];
-   const detailCells=pair=>['<strong>'+E(pair.provider)+'</strong><small class="merchant-provider-source">'+E(sources(pair))+'</small>',...merchantDirections.flatMap(d=>{const row=rowFor(pair,d);return row?[N(row.all_amount),C(row.all_count),N(row.success_amount),C(row.success_count),'<span title="当前参考价仅供核对，不能代替订单创建时的生效版本">'+E(L.feeLookupLoading?'读取中…':L.feeLookupError?'读取失败':row.fee_reference_label||'未匹配')+'</span>',c.successTimeUnavailable?.(d)?unavailable:feeDetail(row)]:Array(6).fill(unavailable);})];
+   const detailCells=pair=>['<strong>'+E(pair.provider)+'</strong><small class="merchant-provider-source">'+E(sources(pair))+'</small>',...merchantDirections.flatMap(d=>{const row=rowFor(pair,d);return row?[N(row.all_amount),C(row.all_count),N(row.success_amount),C(row.success_count),'<span title="当前参考价仅供核对，不能代替订单创建时的生效版本">'+E(L.feeLookupLoading?'读取中…':L.feeLookupError?'读取失败':referenceFeeLabel(row))+'</span>',c.successTimeUnavailable?.(d)?unavailable:feeDetail(row)]:Array(6).fill(unavailable);})];
    const details=[...pairs.values()].sort((a,b)=>a.provider.localeCompare(b.provider)),missingNotes=[usage.unidentified?'存在未识别支付商；未计入已识别三方数量。':'',usage.incomplete?'未完整返回三方分组事实；三方金额、笔数可能小于平台汇总。':''].filter(Boolean);
    const title=(r._total?'已读汇总':r.platform)+' · 使用三方',context=E((r.currency||'币种未提供')+' · '+String(L.from||'').slice(0,10)+' 至 '+String(L.to||'').slice(0,10));
    const body='<div class="merchant-provider-detail"><p><strong>'+E(r._total?'当前已读平台':r.platform)+' · '+C(usage.value)+(usage.unknown&&usage.value!==null?'*':'')+' 个已识别三方</strong> · '+context+'</p>'+note('代收与代付按统一三方去重；合计数量不重复累加同一三方。全部金额/笔数按创建时间，成功金额/笔数按成功时间。人工充值、人工确认、无三方、提现转充值不计入支付商数量。')+(missingNotes.length?'<p class="merchant-provider-warning">'+E((usage.value!==null?'* 表示已识别小计。':'三方数量待确认。')+missingNotes.join(' '))+'</p>':'')+note('当前参考费率只供核对。手续费使用订单创建时已发布的生效版本；缺少生效日期或未匹配的订单不会按当前参考价补算，也不会算成 0。悬停手续费可查看匹配笔数、缺项及原表来源。')+'<div class="merchant-provider-detail-table">'+refTable(detailHeaders,details.map(detailCells))+'</div>'+(!details.length?'<p class="live-empty">'+E(!usage.leaves.length?'尚未返回三方原始分组事实，暂不能列出支付商。':usage.unidentified?'当前只有未识别支付商，暂不能确认使用了哪些三方。':'当前已返回分组没有实际使用的支付商。')+'</p>':'')+'</div>';

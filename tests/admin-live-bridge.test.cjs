@@ -348,6 +348,13 @@ test('portal operation logs use refreshed backend auth with a fixed portal desti
  for(const status of [401,403,500]){const denied=load({fetch:async()=>({ok:false,status,json:async()=>({error:'private token'})})});await assert.rejects(denied.api.adminLiveRequest(session,q),e=>!/private token/.test(e.message)&&/登录|权限|未完成/.test(e.message));}
 });
 
+test('portal workload forwards only supported read filters under the same owner authentication boundary',async()=>{
+ const h=load(),q={action:'portalOperationLogs',view:'workload',country:'印度',filters:{from:'2026-10-03',to:'2026-10-04',platform:'SYNTHETIC',operator:'员工',orderNo:'RC',workorderNo:'WO',utr:'000123'},offset:20,limit:20};
+ await h.api.adminLiveRequest(session,q);assert.equal(h.calls.length,1);assert.equal(h.calls[0].url,'https://hensem-india-workorder.workdesk-hub.workers.dev/api/owner-operation-logs');assert.equal(h.calls[0].init.credentials,'omit');assert.equal(h.calls[0].init.redirect,'error');assert.equal(h.calls[0].init.headers.Authorization,'Bearer offline-fresh-token');assert.deepEqual(JSON.parse(h.calls[0].init.body),{view:q.view,country:q.country,filters:q.filters,offset:q.offset,limit:q.limit});
+ for(const patch of [{view:'raw'},{view:null},{view:['workload']},{team:'M8'},{filters:{team:'M8'}},{filters:{action:'follow'}},{filters:{status:'success'}},{filters:{operator:null}},{filters:{platform:'SYNTHETIC\u0000'}},{limit:500}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
+ const denied=load();await assert.rejects(denied.api.adminLiveRequest(session,q,undefined,{assigned:true,page:'workorder_employees'}),/仅总管理员/);assert.equal(denied.calls.length,0);
+});
+
 test('blocking drilldowns require a rule key and cannot reuse rejected-order filters',async()=>{
  const h=load(),base={action:'withdrawReasons',date:'2026-09-26',country:'巴基斯坦',platform:'SYNTHETIC',reasonKey:'a'.repeat(32)};
  for(const kind of ['blockingOrders','blockingVariants']){
