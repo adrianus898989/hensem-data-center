@@ -1,18 +1,18 @@
 /* Synthetic current-scope facts only: no network, credentials or source orders. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const base=path.join(__dirname,'../admin-preview'),renderer=fs.readFileSync(path.join(base,'live-success-analysis.js'),'utf8');
-function api(){const c={};c.window=c;vm.createContext(c);vm.runInContext(fs.readFileSync(path.join(base,'live-provider-aliases.js'),'utf8'),c);vm.runInContext(renderer,c);return c.HensemLiveSuccessAnalysis;}
+function api(){const c={};c.window=c;vm.createContext(c);for(const name of ['live-provider-aliases.js','live-report-data.js','live-provider-summary.js'])vm.runInContext(fs.readFileSync(path.join(base,name),'utf8'),c);vm.runInContext(renderer,c);return c.HensemLiveSuccessAnalysis;}
 const A={id:'native-ar',name:'Same platform',source:'AR',country:'印度'},B={...A,id:'native-newar',source:'NEW_AR'},W={...A,id:'native-wg',source:'WG'};
 const row=(direction='charge',all=10,success=4,provider='ATPay')=>({direction,all_count:all,success_count:success,provider,currency:'INR'});
-const payment=(platform,rows)=>({platform,groups:{provider:rows}});
+const payment=(platform,rows,summary)=>({platform,groups:{provider:rows},...(summary===undefined?{}:{summary})});
 const ticket=(platform,direction='charge',total=10,success=4,provider='ATPay',complete=true)=>({platformId:platform.id,country:platform.country,source:platform.source,provider,direction,uniqueOrderCount:total,uniqueSuccessCount:success,uniqueCoverage:{status:complete?'complete':'partial',complete}});
-function props(overrides={}){const L={pageQueried:true,dirty:false,from:'2026-10-03T00:00:00',to:'2026-10-03T23:59:59',queryPlatforms:[A,B],results:[payment(A,[row()]),payment(B,[row('charge',5,1,'ATPay-QR')])],queryFailures:[],workorders:{startDate:'2026-10-03',endDate:'2026-10-03',byPlatformProvider:[ticket(A),ticket(A,'withdraw',5,5),ticket(B,'charge',6,1,'ATPay-QR',false)]},...overrides};return {L,scopeMatches:true,workordersScopeMatches:true};}
+function props(overrides={}){const L={pageQueried:true,dirty:false,from:'2026-10-03T00:00:00',to:'2026-10-03T23:59:59',queryPlatforms:[A,B],results:[payment(A,[row()]),payment(B,[row('charge',5,1,'ATPay-QR')])],queryFailures:[],feeLookupRows:[],feeLookupLoading:false,feeLookupError:'',country:'印度',workorders:{startDate:'2026-10-03',endDate:'2026-10-03',byPlatformProvider:[ticket(A),ticket(A,'withdraw',5,5),ticket(B,'charge',6,1,'ATPay-QR',false)]},...overrides};return {L,scopeMatches:true,workordersScopeMatches:true};}
 test('canonical provider rows keep native platform identity and three vertical rate-only matrices',()=>{
  const a=api(),p=props(),before=JSON.stringify(p),model=a.buildModel(p);assert.equal(model.rows.length,1);assert.equal(model.rows[0].provider,'ATPay');assert.deepEqual(Array.from(model.rows[0].charge,v=>v.value),[40,20]);assert.equal(model.rows[0].workorder[0].value,60);assert.equal(model.rows[0].workorder[0].partial,false);assert(Math.abs(model.rows[0].workorder[1].value-100/6)<1e-10);assert.equal(model.rows[0].workorder[1].partial,true);
  const html=a.render(p);assert.equal((html.match(/<table /g)||[]).length,3);assert.equal((html.match(/<th scope="row">ATPay<\/th>/g)||[]).length,3);assert.match(html,/新AR/);assert.match(html,/状态 4/);assert.match(html,/不代表实际到账/);assert.match(html,/完整原单号去重/);assert.doesNotMatch(html,/全部金额|手续费|到账成功金额/);assert.equal(JSON.stringify(p),before);
 });
 test('strict below-40 color applies to all matrices, unknown neutral and above-100 rates are preserved',()=>{
- const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',100,39),row('withdraw',10,4)])],workorders:{byPlatformProvider:[ticket(A,'charge',100,39),ticket(A,'withdraw',0,0)]}});let html=a.render(p);assert.equal((html.match(/class="success-rate-low"/g)||[]).length,2);assert.match(html,/>40\.00%<\/span>/);assert.match(html,/>39\.00%/);
+ const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',100,39),row('withdraw',10,4)])],workorders:{byPlatformProvider:[ticket(A,'charge',100,39),ticket(A,'withdraw',0,0)]}});let html=a.render(p);assert.equal((html.match(/<tbody>.*?<\/tbody>/g).join('').match(/class="success-rate-low"/g)||[]).length,2);assert.equal((html.match(/<tfoot.*?<\/tfoot>/g).join('').match(/class="success-rate-low"/g)||[]).length,1);assert.match(html,/>40\.00%<\/span>/);assert.match(html,/>39\.00%/);
  p.L.results=[payment(A,[row('charge',10,12),row('withdraw',10,null)])];p.L.workorders.byPlatformProvider=[ticket(A,'charge',0,0)];html=a.render(p);assert.match(html,/>120\.00%<\/span>/);assert.doesNotMatch(html,/success-rate-low/);assert.match(html,/>—<\/span>/);
 });
 test('workorder combined rate uses dedup original counts and preserves absent, unknown and duplicate cohort evidence',()=>{
@@ -46,6 +46,96 @@ test('unknown native identity or cross-country/source rows cannot be assigned by
  p.L.results=[payment(A,[row()]),payment(A,[row()])];p.L.workorders=null;assert.equal(a.buildModel(p).rows.length,0,'ambiguous duplicate aggregate platform is not summed');
 });
 
+test('each matrix ranks platform columns independently without moving native cells or mutating the model inputs',()=>{
+ const C={...A,id:'native-lg',source:'LG'},E={...A,id:'native-empty',source:'WG'},a=api(),p=props({queryPlatforms:[A,B,C,E],results:[payment(A,[row('charge',1,1)], [row('charge',10,4),row('withdraw',50,40)]),payment(B,[row('charge',2,1)],[row('charge',30,9),row('withdraw',10,4)]),payment(C,[row('charge',3,1)],[row('charge',20,10),row('withdraw',40,20)])],workorders:{byPlatformProvider:[],byPlatformDirection:[ticket(A,'charge',2,1),ticket(B,'charge',4,1),ticket(C,'charge',8,3),ticket(C,'withdraw',2,1)]}}),before=JSON.stringify(p),m=a.buildModel(p);
+ assert.deepEqual(Array.from(m.columns,p=>p.id),[A.id,B.id,C.id,E.id]);
+ assert.deepEqual(Array.from(a.rankedColumnIndexes(m,'charge'),i=>m.columns[i].id),[B.id,C.id,A.id,E.id]);assert.deepEqual(Array.from(a.rankedColumnIndexes(m,'withdraw'),i=>m.columns[i].id),[A.id,C.id,B.id,E.id]);assert.deepEqual(Array.from(a.rankedColumnIndexes(m,'workorder'),i=>m.columns[i].id),[C.id,B.id,A.id,E.id]);
+ assert.equal(m.rows[0].charge[0].value,100);assert.equal(m.rows[0].charge[1].value,50);assert(Math.abs(m.rows[0].charge[2].value-100/3)<1e-10);assert.equal(m.rows[0].charge[3].value,null);
+ const tables=a.render(p).match(/<table[^>]*>.*?<\/table>/g),headIds=html=>Array.from(html.matchAll(/<th scope="col" title="[^"]* · (native-[\w-]+) · 已读取/g),match=>match[1]);
+ assert.deepEqual(headIds(tables[0]),[B.id,C.id,A.id,E.id]);assert.deepEqual(headIds(tables[1]),[A.id,C.id,B.id,E.id]);assert.deepEqual(headIds(tables[2]),[C.id,B.id,A.id,E.id]);
+ assert.match(tables[0],/<th scope="row">ATPay<\/th><td class="success-provider-type">.*?<\/td><td[^>]*><span[^>]*>50\.00%/);assert.equal(JSON.stringify(p),before);
+});
+test('equal known platform volumes use stable native IDs and known zero sorts ahead of missing data',()=>{
+ const Z={...A,id:'z-native'},N={...A,id:'a-native'},Zero={...A,id:'zero-native'},Missing={...A,id:'missing-native'},a=api(),m=a.buildModel(props({queryPlatforms:[Z,Missing,Zero,N],results:[payment(Z,[row()], [row('charge',10,4)]),payment(N,[row()],[row('charge',10,3)]),payment(Zero,[],[row('charge',0,0)])],workorders:null}));
+ assert.deepEqual(Array.from(a.rankedColumnIndexes(m,'charge'),i=>m.columns[i].id),[N.id,Z.id,Zero.id,Missing.id]);assert.equal(m.footers.charge[2].value,null);assert.equal(m.footers.charge[2].volume,0);
+});
+test('payment footers weight authoritative direction summary counts instead of averaging provider percentages or losing omitted providers',()=>{
+ const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',1,1,'Tiny 100'),row('charge',9,0,'Big 0')],[{...row('charge',10,1),currency:'INR'},{...row('charge',90,45),currency:'USDT'},row('withdraw',20,8)])],workorders:null}),m=a.buildModel(p),value=m.footers.charge[0];
+ assert.equal(value.total,100);assert.equal(value.success,46);assert.equal(value.value,46);assert.equal(value.partial,false);assert.notEqual(value.value,50);assert.equal(m.footers.withdraw[0].value,40);
+ const tables=a.render(p).match(/<table[^>]*>.*?<\/table>/g);assert.match(tables[0],/<tfoot[^>]*>.*汇总成功率.*>46\.00%<\/span>/);assert.doesNotMatch(tables[0].match(/<tfoot.*?<\/tfoot>/)[0],/aria-label="部分来源"/);
+ const noProviders=props({queryPlatforms:[A],results:[{platform:A,summary:[row('charge',200,100)]}],workorders:null});assert.equal(a.buildModel(noProviders).rows.length,0);assert.equal(a.buildModel(noProviders).footers.charge[0].value,50);assert.match(a.render(noProviders),/汇总成功率.*>50\.00%/);
+});
+test('missing payment summary uses only known provider counts as explicit partial while invalid native summary never borrows those groups',()=>{
+ const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',3,1),row('charge',7,null,'Unknown')])],workorders:null}),value=()=>a.buildModel(p).footers.charge[0];assert.equal(value().total,3);assert.equal(value().success,1);assert.equal(value().partial,true);assert.equal(value().volume,10);assert.match(value().note,/仅按.*三方分组/);assert.match(a.render(p),/汇总成功率.*33\.33%<sup/);
+ p.L.results[0].summary=[row('charge',20,null)];assert.equal(value().value,null);assert.equal(value().volume,20);assert.equal(value().partial,false);
+ p.L.results[0].summary=[row('charge',10,4),row('charge',10,4)];assert.equal(value().value,null);assert.equal(value().volume,null);assert.match(value().note,/重复币种/);
+ p.L.results[0].summary=[row('charge',Number.MAX_SAFE_INTEGER,1),{...row('charge',1,1),currency:'USDT'}];assert.equal(value().value,null);assert.equal(value().volume,null);
+ for(const all_count of [null,true,-1,1.5,'']){p.L.results[0].summary=[{...row(),all_count}];assert.equal(value().value,null);assert.equal(value().volume,null);}
+});
+test('workorder footers consume platform-direction original cohorts across providers and never sum provider unique totals',()=>{
+ const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row()])],workorders:{byPlatformProvider:[ticket(A,'charge',10,4,'First'),ticket(A,'charge',10,8,'Second')],byPlatformDirection:[ticket(A,'charge',11,4),ticket(A,'withdraw',9,6)]}}),value=()=>a.buildModel(p).footers.workorder[0];assert.equal(value().total,20);assert.equal(value().success,10);assert.equal(value().value,50);assert.equal(value().partial,false);assert.equal(value().volume,20);assert.notEqual(value().success,12);
+ delete p.L.workorders.byPlatformDirection;assert.equal(value().value,null);assert.equal(value().volume,null);assert.match(value().note,/不能将三方原单笔数相加/);assert.match(a.render(p).match(/<table[^>]*>.*?<\/table>/g)[2],/<tfoot[^>]*>.*汇总成功率.*>—<\/span>/);
+});
+test('workorder platform footers preserve partial direction/source evidence and reject identity, duplicate, unsafe or inconsistent counts',()=>{
+ const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row()])],workorders:{byPlatformProvider:[],byPlatformDirection:[ticket(A,'charge',8,4)]}}),value=()=>a.buildModel(p).footers.workorder[0];assert.equal(value().value,50);assert.equal(value().partial,true);assert.match(value().note,/取款平台原单汇总未提供/);assert.match(a.render(p),/汇总成功率.*50\.00%<sup/);
+ p.L.workorders.byPlatformDirection=[ticket(A,'charge',8,4),{...ticket(A,'withdraw',2,1),uniqueCoverage:{status:'complete',complete:true,sourceCoverage:{complete:false}}}];assert.equal(value().value,50);assert.equal(value().partial,true);
+ for(const extra of [{country:'巴西'},{source:'WG'},{platformId:null},{country:null},{source:null}]){p.L.workorders.byPlatformDirection=[{...ticket(A),...extra}];assert.equal(value().value,null);assert.equal(value().volume,null);}
+ for(const extra of [{uniqueOrderCount:null},{uniqueOrderCount:true},{uniqueOrderCount:-1},{uniqueOrderCount:Number.MAX_SAFE_INTEGER+1},{uniqueSuccessCount:11},{uniqueCoverage:{status:'unavailable',complete:false}}]){p.L.workorders.byPlatformDirection=[{...ticket(A),...extra}];assert.equal(value().value,null);assert.equal(value().volume,null);}
+ p.L.workorders.byPlatformDirection=[ticket(A),ticket(A)];assert.equal(value().value,null);assert.match(value().note,/多条去重汇总/);
+});
+test('platform footer rates keep strict red threshold, above-100 payment rates, zero denominators and WG withdrawal unknown',()=>{
+ const a=api(),p=props({queryPlatforms:[A,W],results:[payment(A,[row()],[row('charge',10,12),row('withdraw',10,4)]),payment(W,[row('withdraw',99,98)],[row('charge',100,39),row('withdraw',99,98)])],workorders:{byPlatformProvider:[],byPlatformDirection:[ticket(A,'charge',100,39),ticket(A,'withdraw',0,0),ticket(W,'charge',0,0)]}}),m=a.buildModel(p);assert.equal(m.footers.charge[0].value,120);assert.equal(m.footers.withdraw[0].value,40);assert.equal(m.footers.withdraw[1].value,null);assert.equal(m.footers.withdraw[1].volume,99);assert.equal(m.footers.workorder[0].value,39);assert.equal(m.footers.workorder[1].value,null);
+ const footerHtml=a.render(p).match(/<tfoot.*?<\/tfoot>/g).join('');assert.match(footerHtml,/>120\.00%<\/span>/);assert.match(footerHtml,/>40\.00%<\/span>/);assert.equal((footerHtml.match(/class="success-rate-low"/g)||[]).length,2);
+});
+test('footer provider counts use positive same-section submissions and canonical identity, excluding non-payment labels',()=>{
+ const a=api(),p=props({queryPlatforms:[A,B],results:[payment(A,[row('charge',10,4),row('charge',5,2,'ATPay-QR'),row('charge',20,5,'OtherPay'),row('withdraw',0,5,'ATPay'),row('withdraw',2,1,'PayoutPay'),row('withdraw',5,2,'人工确认')],[row('charge',35,11),row('withdraw',7,8)]),payment(B,[],[row('charge',9,4),row('withdraw',0,0)])],workorders:null}),m=a.buildModel(p);
+ assert.equal(m.footers.charge[0].providerCount,2);assert.equal(m.footers.charge[0].providerCountPartial,false);assert.equal(m.footers.withdraw[0].providerCount,1);assert.equal(m.footers.withdraw[0].providerCountPartial,false);
+ assert.equal(m.footers.charge[1].providerCount,null);assert.equal(m.footers.withdraw[1].providerCount,0);assert.equal(m.footers.withdraw[1].providerCountPartial,false);
+ const html=a.render(p);assert.match(html,/success-analysis-provider-count[^>]*>2 三方<\/small>/);assert.match(html,/success-analysis-provider-count[^>]*>三方数未提供<\/small>/);assert.match(html,/success-analysis-provider-count[^>]*>0 三方<\/small>/);
+});
+test('footer provider counts preserve missing breakdown, unknown submission counts and unidentified providers as partial instead of zero',()=>{
+ const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',10,4)],[row('charge',20,8)])],workorders:null}),value=()=>a.buildModel(p).footers.charge[0];assert.equal(value().providerCount,1);assert.equal(value().providerCountPartial,true);assert.match(a.render(p),/1 三方<sup aria-label="已识别三方小计">\*/);
+ p.L.results[0].groups.provider=[row('charge',10,4),row('charge',null,null,'OtherPay')];assert.equal(value().providerCount,1);assert.equal(value().providerCountPartial,true);
+ for(const name of ['（三方未提供）','未识别通道','USDT']){p.L.results[0].groups.provider=[row('charge',20,8,name)];assert.equal(value().providerCount,null);assert.equal(value().providerCountPartial,true);}
+ p.L.results[0].groups.provider=[row('charge',0,0)];assert.equal(value().providerCount,null);
+ p.L.results[0].groups.provider=[row('charge',20,8,'人工充值')];assert.equal(value().providerCount,0);assert.equal(value().providerCountPartial,false);
+ delete p.L.results[0].summary;p.L.results[0].groups.provider=[row('charge',0,0)];assert.equal(value().providerCount,null,'provider zero alone does not prove a platform has no other running provider');
+});
+test('workorder footer provider counts are canonical activity subtotals, without inventing names for conflicting or unresolved originals',()=>{
+ const a=api(),p=props({queryPlatforms:[A],results:[],workorders:{byPlatformProvider:[ticket(A,'charge',7,4),ticket(A,'withdraw',2,1,'ATPay-QR')],byPlatformDirection:[ticket(A,'charge',10,5),ticket(A,'withdraw',2,1)]}}),value=()=>a.buildModel(p).footers.workorder[0];assert.equal(value().providerCount,1);assert.equal(value().providerCountPartial,true);assert.equal(value().value,50);assert.match(value().providerCountNote,/未归属原单/);
+ p.L.workorders.byPlatformDirection=[ticket(A,'charge',7,4),ticket(A,'withdraw',2,1)];assert.equal(value().providerCount,1);assert.equal(value().providerCountPartial,false);
+ for(const key of ['providerConflictCount','unresolvedProviderOrderCount']){p.L.workorders.byPlatformDirection[0].uniqueCoverage[key]=1;assert.equal(value().providerCount,1);assert.equal(value().providerCountPartial,true);delete p.L.workorders.byPlatformDirection[0].uniqueCoverage[key];}
+ p.L.workorders.byPlatformProvider=[];p.L.workorders.byPlatformDirection=[ticket(A,'charge',0,0),ticket(A,'withdraw',0,0)];assert.equal(value().providerCount,0);assert.equal(value().providerCountPartial,false);p.L.workorders.byPlatformDirection.pop();assert.equal(value().providerCount,null);
+ p.L.workorders.byPlatformProvider=[{...ticket(A),uniqueCoverage:{status:'unavailable',complete:false}}];p.L.workorders.byPlatformDirection=[ticket(A),ticket(A,'withdraw',0,0)];assert.equal(value().providerCount,null);assert.equal(value().providerCountPartial,true);
+});
+
+const typeRate=(extra={})=>({country:'印度',scopeType:'country',provider:'ATPay',category:'UPI',sourceType:'跑分',sourceTypeProvider:'ATPay-QR',sheetName:'Synthetic original type sheet',sourceTypeCell:'B2',...extra});
+test('payment matrices show original business types after provider using the actual shared source-type helper, without inventing workorder types',()=>{
+ const a=api(),p=props({feeLookupRows:[typeRate()],results:[payment(A,[{...row(),channel_type:'QR'},row('withdraw',10,4)])]}),before=JSON.stringify(p),model=a.buildModel(p),html=a.render(p),tables=html.match(/<table[^>]*>.*?<\/table>/g);
+ assert.equal(model.rows[0].typeItems.charge[0].country,'印度');assert.equal(model.rows[0].typeItems.charge[0].platformId,A.id);assert.equal(model.rows[0].typeItems.charge[0].source,'AR');
+ for(const table of tables.slice(0,2)){assert.match(table,/<th scope="col">三方<\/th><th scope="col" class="success-provider-type">类型<\/th>/);assert.match(table,/<th scope="row">ATPay<\/th><td class="success-provider-type"><span class="provider-business-type known" title="[^"]*B2[^"]*">跑分<\/span><\/td>/);assert.match(table,/<tfoot[^>]*>.*<th scope="row">汇总成功率<\/th><td class="success-provider-type">—<\/td>/);}
+ assert.doesNotMatch(tables[2],/success-provider-type|>类型</);assert.doesNotMatch(html,/>UPI<|>QR</);assert.equal(JSON.stringify(p),before);
+});
+test('business types keep country, canonical source-provider and original platform precedence, exposing unresolved or mixed type evidence',()=>{
+ const a=api(),Alpha={...A,name:'Alpha'},Beta={...B,name:'Beta'},p=props({queryPlatforms:[Alpha,Beta],results:[payment(Alpha,[row()]),payment(Beta,[row()])],workorders:null,feeLookupRows:[typeRate({country:'巴西',sourceType:'BRAZIL ONLY'}),typeRate({sourceType:'跑分'}),typeRate({scopeType:'platform',platform:'Alpha',sourceType:'钱包'})]}),typeBody=()=>a.render(p).match(/<tbody>.*?<\/tbody>/)[0];
+ assert.match(typeBody(),/provider-business-type mixed[^>]*>多种类型</);assert.match(typeBody(),/B2：钱包/);assert.match(typeBody(),/B2：跑分/);assert.doesNotMatch(typeBody(),/BRAZIL ONLY/);
+ p.L.feeLookupRows=[typeRate({country:'巴西',sourceType:'BRAZIL ONLY'})];assert.match(typeBody(),/>未标注</);assert.doesNotMatch(typeBody(),/BRAZIL ONLY/);
+ p.L.feeLookupRows=[typeRate({sourceTypeProvider:'OtherPay',sourceType:'WRONG SOURCE TYPE'})];assert.match(typeBody(),/>待核对</);assert.doesNotMatch(typeBody(),/WRONG SOURCE TYPE/);
+ p.L.feeLookupRows=[typeRate({scopeType:'platform',platform:'Alpha',sourceType:'钱包'})];assert.match(typeBody(),/>类型未齐</);assert.doesNotMatch(typeBody(),/provider-business-type known/);
+ p.L.feeLookupRows=[typeRate({sourceType:'<img src=x onerror=bad>'})];assert.match(typeBody(),/&lt;img src=x onerror=bad&gt;/);assert.doesNotMatch(typeBody(),/<img/);
+ p.L.results=[payment(Alpha,[row('withdraw')])];assert.match(typeBody(),/>—<\/span>/,'a provider present only in the other direction has no invented charge type');
+});
+test('type lookup loads only for a current queried scope, then renders loading, error and actual source types without refetching restored results',()=>{
+ const a=api(),p=props({feeLookupRows:null});let reads=0;p.ensureFeeLookup=()=>{reads++;p.L.feeLookupLoading=true;};let html=a.render(p);assert.equal(reads,1);assert.match(html,/>读取中…</);a.render(p);assert.equal(reads,1);
+ p.L.feeLookupLoading=false;p.L.feeLookupRows=[typeRate()];assert.match(a.render(p),/>跑分</);assert.equal(reads,1);p.L.feeLookupRows=[];p.L.feeLookupError='Synthetic type read failure';html=a.render(p);assert.match(html,/>读取失败</);assert.doesNotMatch(html,/>未标注</);assert.equal(reads,1);
+ for(const state of [{loading:true},{restoredPage:true},{dirty:true},{pageQueried:false}]){const q={...props({feeLookupRows:null,...state}),ensureFeeLookup:()=>reads++};a.render(q);}a.render({...props({feeLookupRows:null}),scopeMatches:false,ensureFeeLookup:()=>reads++});assert.equal(reads,1);
+});
+test('type column width, empty colspan and footer cell preserve the native payment and workorder matrix alignment',()=>{
+ const C={...A,id:'third-native'},D={...A,id:'fourth-native'},a=api(),tables=a.render(props({queryPlatforms:[A,B,C,D],results:[],workorders:null})).match(/<table[^>]*>.*?<\/table>/g);
+ for(const table of tables.slice(0,2)){assert.match(table,/min-width:484px/);assert.match(table,/<tbody><tr><td colspan="6">/);assert.equal((table.match(/class="success-provider-type"/g)||[]).length,2);}
+ assert.match(tables[2],/min-width:424px/);assert.match(tables[2],/<tbody><tr><td colspan="5">/);assert.doesNotMatch(tables[2],/success-provider-type/);
+});
+
 // Reuse the established synthetic DOM fixture without registering its tests.
 function harness(options={}){
  const fixture=fs.readFileSync(path.join(__dirname,'admin-live-ui.test.cjs'),'utf8'),start=fixture.indexOf('const P='),end=fixture.indexOf("test('team country",start),source=fs.readFileSync(path.join(base,'live-data.js'),'utf8');assert(start>0&&end>start);
@@ -59,8 +149,8 @@ const owner={mode:'owner',canView:true,permissions:[]};
 async function ready(options={}){const h=harness({initialPage:'success_analysis',roleAccess:owner,roleAllowed:()=>true,...options});await settle();return h;}
 test('single-date production adapter uses one aggregate per platform plus existing workorders and skips unrelated reads',async()=>{
  const h=await ready({adaptive:true,ancillaryHandler:true});assert.equal(h.c.state.page,'success_analysis');assert.equal(h.L.pageQueried,false);assert.match(h.nodes.get('liveFilters').innerHTML,/id="liveSuccessDate"/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/livePeriod\('week'|livePeriod\('month'|liveDate-from|liveDate-to/);
- h.c.liveSuccessDate('2026-09-22');h.L.amountBandProfiles={charge:{edges:[0,1]}};h.L.multi.provider=['ATPay'];h.L.provider='ATPay';h.setHandler(q=>{if(q.action==='providerOptions')return {providers:['ATPay']};if(q.action==='workorders')return {startDate:'2026-09-22',endDate:'2026-09-22',byPlatformProvider:[],byProvider:[],byDirection:{},rows:[]};return {platform:h.L.catalog[0],groups:{provider:[row()]},summary:[],rows:[]};});h.calls.length=0;await h.c.liveQuery();await settle();
- const aggregates=h.calls.filter(q=>q.action==='aggregate');assert.equal(aggregates.length,1);assert.equal(aggregates[0].view,'providers');assert.equal(aggregates[0].direction,'all');assert.equal(aggregates[0].status,'all');assert.equal(aggregates[0].startAt,'2026-09-21T18:30:00.000Z');assert.equal(aggregates[0].endAt,'2026-09-22T18:30:00.000Z');assert.equal(aggregates[0].amountBands,undefined);assert.equal(h.calls.filter(q=>q.action==='workorders').length,1);assert(h.calls.every(q=>['providerOptions','aggregate','workorders'].includes(q.action)));assert.equal(h.L.comparisonResults.length,0);assert.match(h.html(),/代收成功率/);
+ h.c.liveSuccessDate('2026-09-22');h.L.amountBandProfiles={charge:{edges:[0,1]}};h.L.multi.provider=['ATPay'];h.L.provider='ATPay';h.setHandler(q=>{if(q.action==='providerOptions')return {providers:['ATPay']};if(q.action==='rates')return {rows:[typeRate()],total:1};if(q.action==='workorders')return {startDate:'2026-09-22',endDate:'2026-09-22',byPlatformProvider:[],byProvider:[],byDirection:{},rows:[]};return {platform:h.L.catalog[0],groups:{provider:[row()]},summary:[],rows:[]};});h.calls.length=0;await h.c.liveQuery();await settle();
+ const aggregates=h.calls.filter(q=>q.action==='aggregate');assert.equal(aggregates.length,1);assert.equal(aggregates[0].view,'providers');assert.equal(aggregates[0].direction,'all');assert.equal(aggregates[0].status,'all');assert.equal(aggregates[0].startAt,'2026-09-21T18:30:00.000Z');assert.equal(aggregates[0].endAt,'2026-09-22T18:30:00.000Z');assert.equal(aggregates[0].amountBands,undefined);assert.equal(h.calls.filter(q=>q.action==='workorders').length,1);assert.equal(h.calls.filter(q=>q.action==='rates').length,1);assert(h.calls.every(q=>['providerOptions','aggregate','workorders','rates'].includes(q.action)));assert.equal(h.L.comparisonResults.length,0);assert.match(h.html(),/代收成功率/);assert.match(h.html(),/>跑分</);const loadedCalls=h.calls.length;h.c.setPage('overview');h.c.setPage('success_analysis');assert.equal(h.calls.length,loadedCalls);
 });
 test('new-page catalog ACL never inherits legacy or sibling analysis grants, and query/retry/export require own action',async()=>{
  for(const options of [{roleAccess:undefined,roleAllowed:()=>true},{roleAccess:{mode:'legacy',canView:true,permissions:[]},roleAllowed:()=>true},{roleAccess:{mode:'assigned',canView:true,permissions:['matrix.view','matrix.query']},roleAllowed:()=>true}]){const h=await ready(options);assert.notEqual(h.c.state.page,'success_analysis');assert(!h.c.pages.some(p=>p[0]==='success_analysis'));const n=h.calls.length;h.c.setPage('success_analysis');assert.notEqual(h.c.state.page,'success_analysis');assert.equal(h.calls.length,n);}
