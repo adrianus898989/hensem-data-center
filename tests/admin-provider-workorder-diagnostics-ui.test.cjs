@@ -127,3 +127,20 @@ test('shared unknown source records across conflicting providers are not summed 
  assert.match(html,/同一条来源未标记记录可能关联多个冲突三方分项，各分项数量不能直接相加/);
  assert.equal(JSON.stringify(h.L.workorders),before);assert.equal(h.networkCalls(),0);
 });
+
+test('accepted NEWAR deposit tickets show known original totals while their missing daily receipt remains explicit',()=>{
+ const h=fixture([order('dhani','newar',1000,10,{provider:'UpiPay',platform:'DHANIWIN',direction:'charge'})]);
+ const fact={provider:'UpiPay',direction:'charge',submittedCount:3,uniqueOrderCount:2,uniqueOrderAmount:300,uniqueSuccessCount:1,uniqueSuccessAmount:100,uniqueNotReceivedCount:1,uniqueNotReceivedAmount:200,uniqueCoverage:{complete:false,status:'partial',detailCount:3,missingOrderNumberCount:0,sourceCoverage:{complete:false,platforms:[{platform:'DhaniWin',source:'newar',complete:false,missingDates:['2026-09-25']}]}}};
+ h.L.workorders={coverage:{complete:false,capturedPlatformDays:0,expectedPlatformDays:1,platforms:[{platform:'DhaniWin',source:'newar',days:0,expectedDays:1,complete:false,missingDates:['2026-09-25']}],detailOnly:{basis:'accepted_newar_deposit_tickets_without_daily_receipt',platformDays:1,collectedTickets:4,latestReceivedAt:'<Untrusted intake>'}},byProvider:[fact],byPlatformProvider:[{...fact,platform:'DHANIWIN',platformId:'dhani',source:'newar',country:'印度'}]};
+ const before=JSON.stringify(h.L.workorders);h.render('charge');
+ assert.match(h.html(),/工单已读采集明细 · 1 平台日尚无日报，完整性待核验/);
+ assert.match(h.html(),/>300\.00</);assert.match(h.html(),/>200\.00</,'known original amounts remain visible despite missing daily evidence');
+ h.root.providerSummaryCoverage();const html=h.drawers.at(-1).html;
+ assert.match(html,/已采集的存款工单已经参与原单统计/);
+ assert.match(html,/所选平台与日期已收到 4 条存款工单/,'receipt count is explicitly platform and date scope, not provider or deduplicated originals');
+ assert.match(html,/1 个平台日尚未收到日报，整日完整性待核验/);
+ assert.match(html,/工单日期已收 0 \/ 1 平台日/);assert.match(html,/最近入库 &lt;Untrusted intake&gt;/);assert.doesNotMatch(html,/<Untrusted intake>/);
+ h.render('withdraw');assert.doesNotMatch(h.html(),/工单已读采集明细/);h.root.providerSummaryCoverage();assert.doesNotMatch(h.drawers.at(-1).html,/已采集的存款工单已经参与原单统计/);
+ assert.equal(JSON.stringify(h.L.workorders),before);assert.equal(h.networkCalls(),0);
+ delete h.L.workorders.coverage.detailOnly;h.render('charge');assert.doesNotMatch(h.html(),/工单已读采集明细/,'old daily-only responses retain existing presentation');
+});

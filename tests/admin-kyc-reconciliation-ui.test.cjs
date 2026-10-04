@@ -21,6 +21,14 @@ test('counts keep export duplicates, workorders, payment orders, rejected and pe
  const zero=h.panel.render(snapshot({currency:'INR',summary:{...summary(),processed:{count:0,amount:'0.00'}}}));assert.match(zero,/>0<\/strong><small>0\.00 INR<\/small>/);
 });
 
+test('collected workorders expose ingestion coverage and use collection units without file claims',()=>{
+ const h=harness({snapshot:snapshot({source:'collected-workorders',summary:{...summary(),rawRecords:7,duplicateSourceRows:3},rows:[{key:'SYNTHETIC',...summary(),rawRecords:7,duplicateSourceRows:3}],coverage:{complete:false,label:'今天尚无已采集工单，覆盖未确认'}})});
+ assert.match(h.html(),/采集记录/);assert.match(h.html(),/重复采集记录/);assert.match(h.html(),/采集 \/ 唯一工单/);assert.match(h.html(),/今天尚无已采集工单，覆盖未确认/);assert.match(h.html(),/最近采集/);assert.doesNotMatch(h.html(),/原始导出行|重复导出行|导出行/);
+ h.panel.dispatch('explain');assert.match(h.explanations[0].text,/采集工单的连接字段/);assert.match(h.explanations[0].text,/不代表实际到账/);
+ assert.match(h.panel.render(),/完整性待确认/);assert.doesNotMatch(h.panel.render(),/范围未完整/);
+ const html=h.panel.render(snapshot({source:'collected-workorders',dimension:'orders',rows:[{kycStatus:'unknown',declaredFileKyc:'kyc',sourceUtrPresent:null,receiptState:'unverified'}]}));assert.match(html,/待核实/);assert.doesNotMatch(html,/文件标签/);
+});
+
 test('CSP-safe delegated filters preserve typed strings and make bounded reads only on explicit actions',async()=>{
  const h=harness();assert.equal(h.calls.length,0);assert.doesNotMatch(h.html(),/\bon(?:click|input|change|submit)=/);const renders=h.renders();
  h.event('input','filter',['query'],'000RC-A');h.event('change','filter',['processing'],'rejected');h.event('change','filter',['matchStatus'],'platform_not_in_online_snapshot');h.event('change','filter',['platform'],'Synthetic platform');

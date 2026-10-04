@@ -14,7 +14,7 @@
   const facets={};
   const kycWorkspace=root.HensemLiveDepositWorkspace?.create(ctx);
   const money=v=>v==null?'—':N(v);
-  function workspaceNav(){return isStatistics()?'<nav class="deposit-workspace-nav" aria-label="未到账数据视图"><button class="'+(L.depositIssuesSection==='kyc'?'':'on')+'" onclick="depositIssuesSection(\'summary\')">核对统计</button><button class="'+(L.depositIssuesSection==='kyc'?'on':'')+'" onclick="depositIssuesSection(\'kyc\')">KYC / NON-KYC 原单匹配</button><button onclick="depositIssuesSource(\'entries\')">员工跟进 →</button></nav>':'';}
+  function workspaceNav(){return isStatistics()?'<nav class="deposit-workspace-nav" aria-label="未到账数据视图"><button class="'+(L.depositIssuesSection==='kyc'?'':'on')+'" onclick="depositIssuesSection(\'summary\')">核对统计</button><button class="'+(L.depositIssuesSection==='kyc'?'on':'')+'" onclick="depositIssuesSection(\'kyc\')">KYC / NON-KYC 原单匹配</button></nav>':'';}
   let lastReadAt=0,refreshTimer=null;
   function ensureDateRange(){if(L.depositIssuesDateInitialized||!L.catalogReady)return;const range=root.HensemWorkorderUI.recentSevenDays(L.country,L.catalog);L.from=range.from+'T00:00:00';L.to=range.to+'T23:59:59';L.depositIssuesDateMode='range';L.depositIssuesDateInitialized=true;}
 

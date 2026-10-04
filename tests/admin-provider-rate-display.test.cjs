@@ -106,3 +106,23 @@ test('source-sheet text and effective coordinates are escaped in fee cells and t
  const h=withEvidence(fixture('charge','4%','ExamplePay'),'charge',value);h.root.providerSummaryRate(0);
  for(const html of [h.html(),h.drawer().body]){assert.doesNotMatch(html,/<script|<img/);assert.match(html,/&lt;script&gt;/);assert.match(html,/BC2&lt;img/)}
 });
+
+test('shared merchant fee label describes the verified historical gap without pricing the current reference',()=>{
+ for(const direction of ['charge','withdraw']){
+  const h=withEvidence(fixture(direction,'9%','ExamplePay'),direction,evidence()),api=h.root.HensemProviderSummary;
+  assert.equal(typeof api.feeHistoryLabel,'function');
+  const rows=api.overviewDimensions({orders:[order('platform-a','ar',123456.78,100,{provider:'ExamplePay',direction})],summaries:[],rates:h.L.feeLookupRows,country:'印度',key:'provider',plus,combine});
+  assert.equal(rows.length,1);assert.equal(api.feeHistoryLabel(rows[0]),'缺少生效时间');
+  assert.equal(rows[0].estimated_fee,null);assert.equal(rows[0].fee_matched_count,0);assert.equal(rows[0].fee_reference_label,'9.00%');
+  assert.match(api.feeCoverageText(rows[0]),/Synthetic fee sheet BC2/,'the compact label and full explanation share the same verified evidence');
+ }
+});
+
+test('shared merchant fee label preserves partial backend amounts and does not guess mixed evidence',()=>{
+ const h=fixture('charge','9%','ExamplePay'),api=h.root.HensemProviderSummary;
+ const row=api.buildRows({orders:[order('platform-a','ar',123456.78,100,{provider:'ExamplePay',direction:'charge',fee_version_state:'partial',fee_version_matched_count:40,fee_version_unmatched_count:60,fee_version_estimated_amount:17.25})],issues:null,rates:h.L.feeLookupRows,country:'印度',direction:'charge',plus,combine})[0];
+ assert.equal(api.feeHistoryLabel(row),'部分');assert.equal(row.estimated_fee,17.25);
+ const unknown={fee_matched_count:0,fee_eligible_count:100,fee_history_diagnostics:[{count:40,reason:'missing_effective_time',sources:['Synthetic BC2']},{count:60,reason:'invalid_effective_time',sources:['Synthetic BC3']}]};
+ assert.equal(api.feeHistoryLabel(unknown),'历史费率未匹配');
+ assert.equal(api.feeHistoryLabel({...unknown,fee_history_diagnostics:[]}),'历史费率未匹配');
+});
