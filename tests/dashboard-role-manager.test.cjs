@@ -190,9 +190,9 @@ const legacyMerchantCodes=['merchantproviders.view','merchantproviders.query','m
 test('merchant directory display uses the current sidebar title without changing the canonical page or module permissions',async()=>{
  const before=JSON.stringify(catalog),canonical=catalog.pages.find(page=>page.id==='merchants'),page=display.dashboardRoleDisplayPages.find(page=>page.id==='merchants');
  assert.equal(canonical.label,'平台汇总');assert.deepEqual(plain(page),{...canonical,label:'商户经营',moduleLabel:'运营中心'});assert.equal(JSON.stringify(catalog),before);
- const merchantPages=display.dashboardRoleDisplayPages.filter(page=>page.moduleId==='merchant');assert.equal(merchantPages.length,7);assert.equal(merchantPages.reduce((sum,page)=>sum+page.actions.length,0),28);
+ const merchantPages=display.dashboardRoleDisplayPages.filter(page=>page.moduleId==='merchant');assert.equal(merchantPages.length,8);assert.equal(merchantPages.reduce((sum,page)=>sum+page.actions.length,0),32);
  const h=ui();await h.load();h.button('配置权限').props.onClick();nodes(h.findLabel('角色权限模块')).find(node=>node.type==='button'&&text(node).startsWith('运营中心')).props.onClick();
- assert(h.findLabel('商户经营 · 查看目录与页面'));assert.doesNotMatch(text(h.draw()),/平台汇总/);assert(h.calls.every(call=>call.operation==='list'));
+ assert(h.findLabel('商户经营 · 查看目录与页面'));assert(h.findLabel('每日对比 · 查看目录与页面'));assert.doesNotMatch(text(h.draw()),/平台汇总/);assert(h.calls.every(call=>call.operation==='list'));
 });
 test('display catalog hides only the retired merchant page without altering canonical validation or saved permissions',async()=>{
  const before=JSON.stringify(catalog),permissions=[...role.permissions,...legacyMerchantCodes],snapshot=[...permissions];

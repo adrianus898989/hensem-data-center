@@ -51,7 +51,7 @@ before(async()=>{
 after(async()=>db?.close());beforeEach(async()=>{await db.exec('begin');await as(OWNER);});afterEach(async()=>{await db.exec('rollback');await admin();});
 
 test('catalog exactly matches shared UI permission catalog and HMAC matches independent SHA256',async()=>{
- await admin();const catalog=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(catalog.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.filter(page=>page.id!=='success_analysis').map(page=>({...page,...(page.id==='stuck'?{label:'代付中与卡单分析',moduleId:'risk',moduleLabel:'智能风控中心'}:{}),actions:page.id==='ip'?page.actions.filter(action=>action.id!=='edit'):page.actions,requests:page.requests.filter(request=>!['analysisOrders','pendingOrders','submissionStreak'].includes(request))})));
+ await admin();const catalog=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(catalog.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.filter(page=>!['success_analysis','daily_comparison'].includes(page.id)).map(page=>({...page,...(page.id==='stuck'?{label:'代付中与卡单分析',moduleId:'risk',moduleLabel:'智能风控中心'}:{}),actions:page.id==='ip'?page.actions.filter(action=>action.id!=='edit'):page.actions,requests:page.requests.filter(request=>!['analysisOrders','pendingOrders','submissionStreak'].includes(request))})));
  const key=Buffer.alloc(32,11),msg='role-context';assert.equal(await scalar("select private.dashboard_role_hmac($1,decode($2,'hex'))",[msg,key.toString('hex')]),crypto.createHmac('sha256',key).update(msg).digest('hex'));
 });
 test('new success analysis entry requires explicit assigned page grants and cannot borrow another analysis page',async()=>{
