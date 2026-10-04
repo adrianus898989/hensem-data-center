@@ -264,6 +264,10 @@ body.live-admin .merchant-unified-table .live-sort-heading>span{font-size:7px}
 body.live-admin .merchant-unified-table .merchant-provider-usage{font:inherit;padding:2px 4px;text-decoration:underline;text-underline-offset:2px}
 body.live-admin .merchant-fee-status{display:inline-block;margin-left:5px;padding:1px 3px;border-radius:3px;background:#fff5df;color:#9b6e24;font-size:9px;white-space:nowrap}
 body.live-admin .merchant-fee-value{white-space:nowrap}
+body.live-admin .merchant-fee-mode{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:0 0 9px;font-size:11px;color:#526989}
+body.live-admin .merchant-fee-mode button{font-size:10px;padding:5px 9px;white-space:nowrap}
+body.live-admin .merchant-fee-mode-note{margin:3px 0 8px;color:#7285a2;font-size:10px;line-height:1.5}
+body.live-admin .merchant-fee-coverage-inline{display:inline-block;margin-left:5px;color:#8b6a36;font-size:8px;white-space:nowrap}
 body.live-admin .drawer:has(.merchant-provider-detail){width:min(1320px,96vw)}
 body.live-admin .merchant-provider-detail{min-width:0;font-size:11px;line-height:1.6}
 body.live-admin .merchant-provider-detail .live-definition{padding:5px 8px;background:#f6f9ff;color:#667c9b;line-height:1.7}

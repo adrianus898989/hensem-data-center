@@ -64,8 +64,23 @@
    if(!present)return unknown('未返回该平台与三方的原单工单汇总。');
    return {...fact(success,total,partial,notes.join('；')+'。按平台、业务、完整原支付单号去重；有关联工单状态 4 计已处理，不代表实际到账。'+(partial?'部分来源，仅基于已采集且可去重原单。':'')),basis:'workorder'};
   }
-  const rows=[...providers].sort((a,b)=>a.localeCompare(b,'zh-CN')).map(name=>({provider:name,charge:columns.map(p=>payment(p,name,'charge')),withdraw:columns.map(p=>payment(p,name,'withdraw')),workorder:columns.map(p=>workorder(p,name))}));
+  const paymentVolume=(name,direction)=>{
+   const values=columns.flatMap(p=>(payments.get(JSON.stringify([p.id,name,direction]))?.rows||[]).map(row=>count(row.all_count))).filter(value=>value!==null);
+   const total=values.reduce((sum,value)=>sum+value,0);return values.length&&Number.isSafeInteger(total)?total:null;
+  };
+  const rows=[...providers].sort((a,b)=>a.localeCompare(b,'zh-CN')).map(name=>{
+   const cohort=columns.map(p=>workorder(p,name)),totals=cohort.map(value=>value.total).filter(value=>value!==null),workorderTotal=totals.reduce((sum,value)=>sum+value,0);
+   return {provider:name,charge:columns.map(p=>payment(p,name,'charge')),withdraw:columns.map(p=>payment(p,name,'withdraw')),workorder:cohort,volumes:{charge:paymentVolume(name,'charge'),withdraw:paymentVolume(name,'withdraw'),workorder:totals.length&&Number.isSafeInteger(workorderTotal)?workorderTotal:null}};
+  });
   return {ready:true,date,columns,rows,ignored,workordersCurrent};
+ }
+ function rankedRows(model,key){
+  return model.rows.slice().sort((a,b)=>{
+   const left=a.volumes[key],right=b.volumes[key];
+   if(left===null)return right===null?a.provider.localeCompare(b.provider,'zh-CN'):1;
+   if(right===null)return -1;
+   return right-left||a.provider.localeCompare(b.provider,'zh-CN');
+  });
  }
  function cell(value){
   const known=value.value!==null&&Number.isFinite(value.value),label=known?value.value.toFixed(2)+'%':'—';
@@ -84,7 +99,7 @@
   if(model.ignored)notices.push('有 '+model.ignored+' 条工单汇总无法匹配已授权平台身份，未分摊到平台。');
   const sections=[['charge','代收成功率','成功时间内成功笔数 ÷ 创建时间内全部笔数。'],['withdraw','代付成功率','成功时间内成功笔数 ÷ 创建时间内全部笔数；WG 未提供可核验成功时间时显示 —。'],['workorder','工单成功率','已处理原支付单 ÷ 全部提交原支付单；按平台、业务、完整原单号去重，状态 4 计已处理，不代表实际到账。']];
   const head='<thead><tr><th scope="col">三方</th>'+model.columns.map(p=>'<th scope="col" title="'+escape(p.name+' · '+system(p.source)+' · '+p.id)+'">'+escape(p.name)+'<small>'+escape(system(p.source))+'</small></th>').join('')+'</tr></thead>';
-  return '<div class="live-success-analysis">'+(notices.length?'<div class="live-status">'+notices.join('<br>')+'</div>':'')+'<p class="success-analysis-note">'+escape(model.date)+' · 平台当地日期。低于 40% 标红；— 表示未提供或无法核验；* 为部分来源，仅基于已采集原单。跨日成功可能使代收、代付成功率超过 100%。今天截至查询时刻，手动查询更新。</p>'+sections.map(([key,title,note])=>'<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2>'+(key==='workorder'&&L.workordersError?'<button type="button" class="link" onclick="liveProviderWorkordersRetry()">重试工单</button>':'')+'</div><p>'+note+'</p><div class="success-analysis-scroll" tabindex="0" role="region" aria-label="'+title+'"><table style="min-width:'+Math.max(400,112+model.columns.length*78)+'px">'+head+'<tbody>'+ (model.rows.length?model.rows.map(row=>'<tr><th scope="row">'+escape(row.provider)+'</th>'+row[key].map(cell).join('')+'</tr>').join(''):'<tr><td colspan="'+(model.columns.length+1)+'">'+(L.loading?'正在读取三方汇总…':'当前条件下未返回三方数据')+'</td></tr>')+'</tbody></table></div></section>').join('')+'</div>';
+  return '<div class="live-success-analysis">'+(notices.length?'<div class="live-status">'+notices.join('<br>')+'</div>':'')+'<p class="success-analysis-note">'+escape(model.date)+' · 平台当地日期。各区按已读取提交笔数从多到少排列，空数据置后；低于 40% 标红；— 表示未提供或无法核验；* 为部分来源，仅基于已采集原单。跨日成功可能使代收、代付成功率超过 100%。今天截至查询时刻，手动查询更新。</p>'+sections.map(([key,title,note])=>'<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2>'+(key==='workorder'&&L.workordersError?'<button type="button" class="link" onclick="liveProviderWorkordersRetry()">重试工单</button>':'')+'</div><p>'+note+'</p><div class="success-analysis-scroll" tabindex="0" role="region" aria-label="'+title+'"><table style="min-width:'+Math.max(400,112+model.columns.length*78)+'px">'+head+'<tbody>'+ (model.rows.length?rankedRows(model,key).map(row=>'<tr><th scope="row">'+escape(row.provider)+'</th>'+row[key].map(cell).join('')+'</tr>').join(''):'<tr><td colspan="'+(model.columns.length+1)+'">'+(L.loading?'正在读取三方汇总…':'当前条件下未返回三方数据')+'</td></tr>')+'</tbody></table></div></section>').join('')+'</div>';
  }
- window.HensemLiveSuccessAnalysis=Object.freeze({render,buildModel,fact});
+ window.HensemLiveSuccessAnalysis=Object.freeze({render,buildModel,fact,rankedRows});
 })();
