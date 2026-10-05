@@ -1,8 +1,9 @@
 export function validateDepositStatisticsRequest(value:Record<string,unknown>):Record<string,unknown>{
  if(value.section==='kyc')return validateKycRequest(value);
  const textKeys=['country','platform','provider','status','match','confirmation','orderNumber','utr','upiId','kycUpiId','reply','utrMatch','kycCorrect'];
- const allowed=new Set(['action','section','dateMode','startAt','endAt','offset','limit','amountMin','amountMax',...textKeys]);
+ const allowed=new Set(['action','section','dateMode','startAt','endAt','offset','limit','amountMin','amountMax','followupState',...textKeys]);
  if(Object.keys(value).some(key=>!allowed.has(key)))throw Error('统计筛选字段无效');
+ if(value.followupState!==undefined&&(typeof value.followupState!=='string'||!['all','unresolved','received'].includes(value.followupState)))throw Error('跟进状态无效');
  if(value.section!==undefined&&(typeof value.section!=='string'||!['summary','details','providers','daily'].includes(value.section))||value.dateMode!==undefined&&(typeof value.dateMode!=='string'||!['all','range'].includes(value.dateMode)))throw Error('统计视图无效');
  for(const key of textKeys)if(value[key]!==undefined&&(typeof value[key]!=='string'||value[key].length>200||/[\u0000-\u001f\u007f]/.test(value[key])))throw Error('统计筛选内容无效');
  if(value.country!==undefined&&!['','all','印度','IN'].includes(String(value.country)))throw Error('核对统计目前仅接入印度');

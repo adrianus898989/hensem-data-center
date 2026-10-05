@@ -23,6 +23,7 @@ before(async()=>{db=new PGlite();await db.exec(`create schema private;create rol
  gateway=gateway.replace("or action='depositStatistics' and (p_request->>'section'='details' or p_request->>'section'='kyc' and p_request->>'dimension'='orders')","or action='depositStatistics' and p_request->>'section'='details'");await db.exec(gateway);await db.exec('revoke all on function public.dashboard_admin_execute(text,jsonb) from public,anon,service_role;grant execute on function public.dashboard_admin_execute(text,jsonb) to authenticated');
  beforeMeta=await meta();const hash=await scalar("select md5(prosrc) from pg_proc where oid='public.dashboard_admin_execute(text,jsonb)'::regprocedure");
  await db.exec(read('admin-deposit-reconciliation-v2.sql').replace('58412f1681b8e151d8e1f603bcbaec85',hash));
+ await db.exec(read('migrations/20261005113528_deposit_unresolved_order_filter.sql'));
 });
 after(async()=>db?.close());beforeEach(async()=>db.exec('begin'));afterEach(async()=>db.exec('rollback'));
 
@@ -112,4 +113,32 @@ test('source evidence is bounded and paired; full counts and duplicate totals su
 });
 test('definition/configuration drift fails before table mutation and original function metadata is preserved',async()=>{
  const script=read('admin-deposit-reconciliation-v2.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,'');await db.exec('savepoint metadata_drift');await db.exec("alter function private.dashboard_admin_deposit_statistics(jsonb) set search_path='public'");await rejects(()=>db.exec(script),/deposit_statistics_definition_changed/);await db.exec('rollback to savepoint metadata_drift');assert.deepEqual(await meta(),beforeMeta);
+});
+
+test('unresolved filter runs before paging and grouping, excludes only current original confirmed received',async()=>{
+ for(let i=1;i<=23;i++)await sheet('row'+i,'RC20260925PENDING'+i,i);
+ await sheet('row30','RC20260925SUCCESS',100,{confirmation_status:'已入款'});
+ await sheet('row31','RC20260925OTHER',200,{status:'已入款',confirmation_status:'入其他订单'});
+ await sheet('row32','RC20260925TRANSFER',300,{status:'已入款',confirmation_status:'转其他三方'});
+ await sheet('row33','RC20260925UNKNOWN',null,{status:null,confirmation_status:null});
+ await sheet('row34','RC20260925CONFLICT',30);await sheet('row35','RC20260925CONFLICT',30,{confirmation_status:'已入款'});
+ const first=await call({section:'details',followupState:'unresolved',offset:0,limit:20}),last=await call({section:'details',followupState:'unresolved',offset:20,limit:20});
+ assert.equal(first.total,27);assert.equal(first.summary.count,27);assert.equal(first.rows.length,20);assert.equal(last.rows.length,7);assert.equal(first.summary.receivedCount,0);assert.equal(first.summary.unresolvedCount,27);assert.equal(first.summary.unresolvedAmount,null);assert.equal(first.summary.unknownAmountCount,2);
+ assert([...first.rows,...last.rows].every(r=>r.statisticsStatus!=='received'));
+ assert.equal(new Set([...first.rows,...last.rows].map(r=>r.id)).size,27);
+ for(const section of ['providers','daily']){const r=await call({section,followupState:'unresolved',limit:100});assert.equal(r.rows.reduce((n,x)=>n+x.count,0),27);assert.equal(r.summary.count,27);}
+ const paid=await call({section:'details',followupState:'received'});assert.equal(paid.total,1);assert.equal(paid.rows[0].orderNumber,'RC20260925SUCCESS');assert.equal(paid.summary.amount,100);
+ const all=await call({followupState:'all'});assert.equal(all.summary.count,28);assert.equal(all.summary.receivedCount,1);assert.equal(all.summary.unresolvedCount,27);
+});
+test('unresolved request enum validated; source links retain exact per-record provenance',async()=>{
+ for(const followupState of [null,{},0,'pending','unresolved\n'])await rejects(()=>call({followupState}),/invalid_followup_state/);
+ await sheet('row1','RC20260925P',10,{source_sheet:'current-sheet',source_tab:'91CLUB'});
+ const r=await call({section:'details',followupState:'unresolved'});assert.equal(r.rows[0].sourceSheet,'current-sheet');assert.equal(r.rows[0].sourceTab,'91CLUB');assert.equal(r.rows[0].sourceRow,1);
+ await sheet('row2','RC20260925P',10,{source_sheet:'historic-sheet',source_tab:'Historic'});
+ const merged=await call({section:'details',followupState:'unresolved'});assert.equal(merged.rows[0].sourceSheet,null);assert.deepEqual(new Set(merged.rows[0].sources.map(s=>s.sourceSheet)),new Set(['current-sheet','historic-sheet']));
+});
+test('unresolved migration retains helper identity and metadata, is idempotent, and rejects drift',async()=>{
+ const functionMeta=()=>scalar("select to_jsonb(p)-'prosrc' from pg_proc p where oid='private.dashboard_admin_deposit_sheet_statistics_v2(jsonb)'::regprocedure");
+ const original=await functionMeta();const migration=read('migrations/20261005113528_deposit_unresolved_order_filter.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,'');await db.exec(migration);assert.deepEqual(await functionMeta(),original);
+ await db.exec('savepoint helper_drift');await db.exec("alter function private.dashboard_admin_deposit_sheet_statistics_v2(jsonb) set search_path='public'");await rejects(()=>db.exec(migration),/deposit_sheet_statistics_definition_changed/);await db.exec('rollback to savepoint helper_drift');assert.deepEqual(await functionMeta(),original);
 });

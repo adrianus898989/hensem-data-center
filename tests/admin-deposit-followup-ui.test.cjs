@@ -96,7 +96,7 @@ test('late responses from the previous source cannot replace current entries',as
 });
 
 test('statistics keep other-order and other-provider classifications independent from the raw sheet mark',async()=>{
- const h=harness({rows:[{platform:'SYNTHETIC',orderNumber:'RC20260926SYNTHETIC',amount:100,status:'已入款',confirmation:'入其他订单',statisticsStatus:'other_order'}],total:1,summary:{count:1,otherOrderCount:1,otherOrderAmount:100,receivedCount:0,unreceivedCount:0}});h.root.depositIssuesSource('results');await settle();assert.match(h.html(),/入其他订单<\/span><strong>1/);assert.match(h.html(),/本订单入款标记<\/span><strong>0/);h.root.depositIssuesMethod();assert.match(h.drawer(),/入其他订单、转其他三方单独统计/);h.root.depositIssuesSection('details');await h.page.load(true);await settle();assert.match(h.html(),/核对分类/);assert.match(h.html(),/入其他订单/);h.root.depositIssuesDetail(0);assert.match(h.drawer(),/统计归类/);assert.match(h.drawer(),/已入款/);
+ const h=harness({rows:[{platform:'SYNTHETIC',orderNumber:'RC20260926SYNTHETIC',amount:100,status:'已入款',confirmation:'入其他订单',statisticsStatus:'other_order'}],total:1,summary:{count:1,otherOrderCount:1,otherOrderAmount:100,receivedCount:0,unreceivedCount:0}});h.root.depositIssuesSource('results');await settle();assert.match(h.html(),/入其他订单<\/td><td>1<\/td>/);assert.match(h.html(),/本订单入款标记<\/td><td>0<\/td>/);h.root.depositIssuesMethod();assert.match(h.drawer(),/入其他订单、转其他三方单独统计/);h.root.depositIssuesSection('details');await h.page.load(true);await settle();assert.match(h.html(),/核对分类/);assert.match(h.html(),/入其他订单/);h.root.depositIssuesDetail(0);assert.match(h.html(),/deposit-inline-detail/);assert.match(h.html(),/统计归类/);assert.match(h.html(),/已入款/);
 });
 
 test('method explanation is opened on demand without a read and remains compatible with contexts lacking a drawer',async()=>{
@@ -143,4 +143,29 @@ test('refresh scheduling starts only after a tracking query and stops on destroy
  h.page.render();assert.equal(timers.length,0);await h.page.load();assert.equal(timers.length,1);assert.equal(timers[0].delay,30000);
  h.page.render();assert.equal(timers.length,1);h.setNow('2026-09-30T12:00:31Z');await timers[0].run();assert.equal(h.calls.length,2);
  h.setRoute('overview');h.setNow('2026-09-30T12:01:31Z');await timers[0].run();assert.equal(h.calls.length,2);h.page.destroy();assert.deepEqual(cleared,[1]);
+});
+
+test('unresolved shortcut requests the complete server result, resets paging and retains scope',async()=>{
+ const h=harness({rows:[],total:0,summary:{}},{page:'deposit_statistics'});h.page.render();h.root.depositIssuesSet('platformName','SYNTHETIC');h.root.depositIssuesSet('provider','Pay');h.root.depositIssuesSet('utr','000123');h.L.depositIssuesPage=4;
+ h.setHandler(q=>({section:q.section,rows:[{platform:'SYNTHETIC',orderNumber:'OTHER-ORDER',status:'已入款',confirmation:'入其他订单',statisticsStatus:'other_order',amount:0}],total:65,summary:{count:65,unresolvedCount:65}}));
+ await h.root.depositIssuesPending();const q=h.calls.at(-1);assert.equal(q.action,'depositStatistics');assert.equal(q.section,'details');assert.equal(q.followupState,'unresolved');assert.equal(q.offset,0);assert.equal(q.limit,20);assert.equal(q.platform,'SYNTHETIC');assert.equal(q.provider,'Pay');assert.equal(q.utr,'000123');assert.match(h.html(),/未成功订单明细/);assert.match(h.html(),/OTHER-ORDER/);assert.match(h.html(),/共 <b>65<\/b> 条/);
+ h.root.depositIssuesPage(2);await settle();assert.equal(h.calls.at(-1).offset,20);assert.equal(h.calls.at(-1).followupState,'unresolved');
+ h.root.depositIssuesSection('details');await settle();assert.equal(h.calls.at(-1).followupState,undefined);assert.equal(h.calls.at(-1).offset,0);
+});
+
+test('summary separates counts, money and denominator shares; absent money is never rendered as zero',async()=>{
+ const h=harness({rows:[],total:0,currency:'INR',summary:{count:10,amount:100,receivedCount:4,receivedAmount:80,unreceivedCount:6,unreceivedAmount:20,unresolvedCount:6,unresolvedAmount:20,otherOrderCount:0,otherOrderAmount:0,otherProviderCount:0,otherProviderAmount:0,unclassifiedCount:0,unclassifiedAmount:0}},{page:'deposit_statistics'});
+ await h.page.load();assert.match(h.html(),/<th>笔数<\/th><th>笔数占比<\/th><th>金额 INR<\/th><th>金额占比<\/th>/);assert.match(h.html(),/本订单入款标记<\/td><td>4<\/td><td>40.00%<\/td><td>80.00<\/td><td>80.00%/);assert.match(h.html(),/本订单未入款标记<\/td><td>6<\/td><td>60.00%<\/td><td>20.00<\/td><td>20.00%/);
+ h.setHandler(()=>({rows:[],total:0,summary:{count:1,amount:null,receivedCount:0,receivedAmount:0,unreceivedCount:1,unreceivedAmount:null,unresolvedCount:1}}));await h.page.load();assert.match(h.html(),/本订单未入款标记<\/td><td>1<\/td><td>100.00%<\/td><td>—<\/td><td>—/);
+});
+
+test('statistics inline evidence links to its actual source workbook/tab and preserves conflicts',async()=>{
+ const sourceSheet='actual-workbook-id-0000000000000001',tab="July ' source",row={platform:'SYNTHETIC',orderNumber:'00000000000123456789',amount:null,statisticsStatus:'conflict',status:'来源冲突',matchStatus:'待核对',sourceCount:2,sources:[{sourceSheet,sourceTab:tab,sourceRow:7,amount:10,provider:'<Pay>',status:'已入款'},{sourceSheet:'another-workbook-id-000000000000002',sourceGid:42,sourceTab:'Other',sourceRow:8,amount:11,status:'未入款'}]};
+ const h=harness({rows:[row],total:1,summary:{}},{page:'deposit_statistics'});h.page.render();h.root.depositIssuesSection('details');await h.page.load();const before=h.calls.length;h.root.depositIssuesDetail(0);assert.equal(h.calls.length,before);assert.equal(h.drawer(),'');assert.match(h.html(),/deposit-inline-detail/);assert.match(h.html(),/来源冲突/);assert.match(h.html(),/00000000000123456789/);assert.match(h.html(),/actual-workbook-id-0000000000000001\/edit#range=/);assert.match(h.html(),/another-workbook-id-000000000000002\/edit\?gid=42#gid=42&amp;range=A8%3AAZ8/);assert.match(h.html(),/&lt;Pay&gt;/);assert.doesNotMatch(h.html(),/href="javascript:|<Pay>/);h.root.depositIssuesDetail(0);assert.doesNotMatch(h.html(),/deposit-inline-detail/);
+});
+
+
+test('sheet-only unresolved entry labels its receipt-marker basis without claiming collected processing status',async()=>{
+ const h=harness({rows:[],total:0,summary:{count:1,unresolvedCount:1}},{page:'deposit_statistics'});await h.page.load();assert.match(h.html(),/表格未成功订单 · 入款标记口径/);assert.match(h.html(),/>表格未成功订单<\/button>/);
+ await h.root.depositIssuesPending();const q=h.calls.at(-1);assert.equal(q.action,'depositStatistics');assert.equal(q.followupState,'unresolved');assert.equal(q.successBasis,undefined);assert.match(h.html(),/工单处理状态请看漏登与状态核对/);
 });
