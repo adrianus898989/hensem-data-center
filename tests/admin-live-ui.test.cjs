@@ -1,7 +1,7 @@
 /* Synthetic-only VM tests for the production UI adapter. No credentials/network/real orders. */
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8');
-const layoutSources=['live-amount-bands.js','live-member-counts.js','live-submission-analysis.js','live-analysis-drilldown.js','live-matrix-custom-range.js','live-reference-layout.js','live-pages-reference.js','live-pending-snapshot.js','live-pending-analysis.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js','live-provider-intake.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js', 'live-withdraw-pages.js','live-workorder-operations.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
+const layoutSources=['live-amount-bands.js','live-member-counts.js','live-submission-analysis.js','live-analysis-drilldown.js','live-matrix-custom-range.js','live-reference-layout.js','live-pages-reference.js','live-pending-snapshot.js','live-pending-analysis.js','live-empty-pages.js','live-duration-reference.js','live-payout-config.js','live-filter-controls.js','live-configuration.js','live-provider-aliases.js','live-provider-summary.js','live-provider-intake.js', 'live-provider-orders.js','live-provider-sticky.js','live-collected-data.js','live-report-data.js', 'live-withdraw-pages.js','live-workorder-reconciliation-batch.js','live-workorder-operations.js','live-deposit-issues.js'].map(name=>({name,source:fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8')}));
 const comparisonSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-comparison.js'),'utf8');
 // Read the actual aligned child rows under one native platform, excluding other
 // expanded native scopes and retaining the production table's actual headers.
@@ -147,7 +147,7 @@ function harness(options={}){
  const pages=keys.map(k=>[k,'',k,'',k]),groups=options.groups?options.groups.map(g=>[g[0],g[1],g[2],[...g[3]]]):[['analysis','','数据分析',keys.filter(k=>!merchantKeys.includes(k))],['merchant','','商户中心',merchantKeys]];
  class FixedDate extends Date{constructor(...args){super(...(args.length?args:[clock]))}static now(){return clock}}
  class TestURL extends URL{static createObjectURL(blob){blobs.push(blob);return 'blob:synthetic'}static revokeObjectURL(){}}
- const context={console,Intl,Date:FixedDate,URL:TestURL,Blob,state:{page:options.page||'overview',navGroup:'analysis'},pages,navGroupsV3:groups,location:{hash:options.hash||''},
+ const context={console,Intl,AbortController,Date:FixedDate,URL:TestURL,Blob,state:{page:options.page||'overview',navGroup:'analysis'},pages,navGroupsV3:groups,location:{hash:options.hash||''},
   document:{title:'',body:{classList:{add(){},remove(){}},appendChild(n){nodes.set(n.id,n)}},getElementById:id=>nodes.get(id)||null,querySelector:selector=>nodes.get(selector)||null,createElement:tag=>node(tag)},
   render(){nodes.get('page').innerHTML='INDEPENDENT_SNAPSHOT'},syncFilters(){},groupForV3:key=>groups.find(g=>g[3].includes(key))||groups[0],toggleCenterV3(){},setPage(){},headerIconV3:()=>'<svg></svg>',openDrawer:(title,html)=>drawers.push({title,html}),toast(){},scrollTo(){},
   setInterval:(fn,ms)=>{intervals.push({fn,ms});return intervals.length},clearInterval(){},setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},
@@ -1495,9 +1495,22 @@ test('first overview snapshot waits for delayed report directory and keeps new u
 test('workorder records and deposit follow-up pages manually query the last seven business days',async()=>{
  const routes=['workorders','deposit_tracking','deposit_statistics','workorder_reconciliation','workorder_workload','workorder_operation_logs'];
  for(const page of routes){
-  const h=harness({page,handler:q=>q.action==='catalog'?{platforms:[P]}:{rows:[],total:0,summary:{}}});await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);await h.c.liveQuery();await settle();
-  const q=h.calls.find(q=>['workorderRecords','depositIssues','depositStatistics','portalOperationLogs'].includes(q.action));assert(q,page+' reads after clicking query');
+  const reconciliationPlatform='SYNTHETIC_WORKORDER_PLATFORM';
+  const h=harness({page,handler:q=>{
+   if(q.action==='catalog')return {platforms:[P]};
+   if(q.action==='workorderRecords'&&q.operation==='reconciliationPlatforms')return {ok:true,version:2,operation:'reconciliationPlatforms',view:'missing',country:'印度',countryCode:'IN',currency:'INR',platforms:[reconciliationPlatform]};
+   if(q.action==='workorderRecords'&&q.view==='missing')return {ok:true,version:2,sourceStatus:'ready',countryCode:'IN',currency:'INR',successBasis:q.filters.successBasis,platforms:[q.filters.platform],rows:[],total:0,
+    summary:{candidateCount:0,pendingCount:0,excludedSuccessCount:0,missingCount:0,matchedCount:0,reviewCount:0,unknownAmountCount:0,missingAmount:0,missingAmountExact:'0',matchedAmount:0,matchedAmountExact:'0',reviewAmount:0,reviewAmountExact:'0',latestCollectedAt:null},
+    coverage:{expectedPlatforms:1,platformsWithRecords:0,platforms:[{platform:q.filters.platform,selectedWorkorders:0,registrationPresent:true}]}};
+   return {rows:[],total:0,summary:{}};
+  }});await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);await h.c.liveQuery();await settle();
+  const q=h.calls.find(q=>['workorderRecords','depositIssues','depositStatistics','portalOperationLogs'].includes(q.action)&&q.operation!=='reconciliationPlatforms');assert(q,page+' reads after clicking query');
   if(q.filters){assert.equal(q.filters.from,page==='workorders'?'2026-09-17':'2026-09-01',page);assert.equal(q.filters.to,page==='workorders'?'2026-09-23':'2026-09-30',page);}else{assert.equal(q.dateMode,'range',page);assert.equal(q.startAt,'2026-09-17T00:00:00.000Z',page);assert.equal(q.endAt,'2026-09-23T23:59:59.000Z',page);}
+  if(page==='workorder_reconciliation'){
+   const workorderReads=h.calls.filter(q=>q.action==='workorderRecords');assert.deepEqual(workorderReads.map(q=>q.operation),['reconciliationPlatforms','list']);
+   assert.deepEqual(workorderReads[0].filters,{dateBasis:'submission',issueKind:'deposit'});assert.equal(q.filters.platform,reconciliationPlatform,'actual records use the authorized workorder directory, not the display catalog');
+   assert.equal(q.filters.successBasis,'processed');assert.equal(q.filters.registrationStatus,'missing');assert.match(h.html(),/已读取 1 \/ 1 个平台/);assert.match(h.html(),/当前条件下没有未登记未成功订单/);assert.doesNotMatch(h.html(),/组件未加载|响应不完整|读取失败/);
+  }
  }
  const h=await ready();h.c.setPage('deposit_tracking');await settle();h.c.depositIssuesDate('from','2026-08-01');h.c.depositIssuesDate('to','2026-08-31');await h.c.depositIssuesLoad();h.c.setPage('deposit_statistics');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).startAt,'2026-09-17T00:00:00.000Z');h.c.setPage('deposit_tracking');await settle();assert.equal(h.L.from,'2026-08-01T00:00:00');
  h.c.depositIssuesSet('dateMode','all');await h.c.depositIssuesLoad();assert.equal(h.calls.at(-1).dateMode,'all');h.c.depositIssuesReset();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).dateMode,'range');assert.equal(h.calls.at(-1).startAt,'2026-09-17T00:00:00.000Z');
