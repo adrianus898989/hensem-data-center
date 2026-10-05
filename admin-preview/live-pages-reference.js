@@ -49,9 +49,18 @@
   const label=window.HensemProviderSummary.feeCoverageText(r);
   return '<span tabindex="0" title="'+E(label)+'">'+N(r.estimated_fee)+(!r.fee_complete?'<small class="provider-partial">部分</small>':'')+'</span>';
  }
+ function overviewIntakeCoverage(direction){
+  const data=L.overviewIntake?.[direction];
+  return window.hensemCurrentAdminPage?.()==='overview'&&data?.direction===direction?sorting.intakeCoverage({...L,providerIntake:data},direction):null;
+ }
+ function recentOrderDate(platformId,direction){
+  const rows=(c.reportCatalogRows||[]).filter(row=>row.dataset==='orders'&&row.platformId===platformId&&Array.isArray(row.directions)&&row.directions.length===1&&row.directions[0]===direction);
+  const date=rows.length===1?rows[0].lastDate:null;
+  return typeof date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(date)&&Number.isFinite(Date.parse(date))&&new Date(date+'T00:00:00Z').toISOString().slice(0,10)===date?date:null;
+ }
  function emptyPlatformCells(direction,columnCount){
   if(L.dirty)return [];
-  const failed=new Set((L.queryFailures||[]).map(p=>p.id)),received=new Map((L.results||[]).map(r=>[r.platform?.id,r])),seen=new Set(),cells=[];
+  const failed=new Set((L.queryFailures||[]).map(p=>p.id)),received=new Map((L.results||[]).map(r=>[r.platform?.id,r])),seen=new Set(),cells=[],intake=overviewIntakeCoverage(direction);
   // A retained tab can still contain the old mapped-only alias response.
   // Suppress only confirmed aliases whose sibling returned this direction.
   const populatedAliases=new Set((L.results||[]).filter(r=>!failed.has(r.platform?.id)&&((r.summary||[]).some(s=>s.direction===direction)||Object.values(r.groups||{}).some(rows=>Array.isArray(rows)&&rows.some(s=>s.direction===direction)))).map(r=>aliasKey(r.platform)).filter(Boolean));
@@ -62,7 +71,9 @@
    if(!result.summary.length&&(result.total==null||!Number.isFinite(Number(result.total))||Number(result.total)!==0))continue;
    if(Object.values(result.groups||{}).some(rows=>Array.isArray(rows)&&rows.some(row=>row.direction===direction)))continue;
    seen.add(identity);const name=displayPlatform(platform).name||result.platform?.name||'未提供';
-   const reason='本期未收到订单数据';cells.push({platform:name,platformId:platform.id,_emptyCells:[E(name)+'<small class="muted">'+reason+'</small>',...Array.from({length:columnCount-1},()=>'<span class="muted" title="'+reason+'">—</span>')]});
+   const prelaunch=intake?.platforms.find(item=>item.id===platform.id)?.expected===false,latest=prelaunch?null:recentOrderDate(platform.id,direction);
+   const reason=prelaunch?'所选日期尚未上线':'本期未收到订单数据',detail=prelaunch?'所选日期 '+String(L.from||'').slice(0,10)+(String(L.from||'').slice(0,10)!==String(L.to||'').slice(0,10)?' 至 '+String(L.to||'').slice(0,10):'')+'；不计应采缺口':latest?'最近订单日期 '+latest:'';
+   cells.push({platform:name,platformId:platform.id,_emptyCells:[E(name)+'<small class="muted" title="'+E(reason+(detail?'；'+detail:''))+'">'+(prelaunch?'尚未上线':'本期未收到')+'</small>'+(latest?'<small class="muted" title="'+E(detail)+'">最近 '+E(latest.slice(5))+'</small>':''),...Array.from({length:columnCount-1},()=>'<span class="muted" title="'+E(reason)+'">—</span>')]});
   }
   return cells;
  }
@@ -84,10 +95,11 @@
    const displayRows=key==='platform'?[...subset,...emptyPlatformCells(d,headers.length)]:subset;
    const columns=[textual(key),...(isProvider?[typeSort]:[]),numeric('all_amount'),numeric('all_count'),numeric('success_amount'),...(isProvider?[numeric('success_amount_share')]:[]),numeric('success_count'),...(isProvider?[numeric('success_count_share')]:[]),{value:r=>isProvider&&!sorting.isProviderBusiness(r.provider)?null:sorting.fraction(r.success_count,r.all_count)},...(isProvider?[{value:r=>L.feeLookupLoading||L.feeLookupError?null:sorting.feeSortValue(r)}]:[]),{value:r=>L.feeLookupLoading||L.feeLookupError?null:sorting.knownNumber(r.estimated_fee)},...(isProvider?[{value:r=>L.feeLookupLoading||L.feeLookupError?null:sorting.knownNumber(r.fee_share)}]:[])];
    if(isPlatform)columns.push({value:r=>memberFact(r.platformId)?.value??null});
-   const rowCells=r=>{if(r._emptyCells)return isPlatform?[...r._emptyCells.slice(0,-1),memberCell(r.platformId)]:r._emptyCells;return [isProvider?providerCell({...r,source:''}):E(r[key]||'未提供'),...(isProvider?[typeCell(r)]:[]),...cells(r),...(isPlatform?[memberCell(r.platformId)]:[])];};
+   const rowCells=r=>{if(r._emptyCells)return r._emptyCells;return [isProvider?providerCell({...r,source:''}):E(r[key]||'未提供'),...(isProvider?[typeCell(r)]:[]),...cells(r),...(isPlatform?[memberCell(r.platformId)]:[])];};
    const body=sortedPageTable(id+'-'+d,headers,displayRows,columns,rowCells,[['<strong>'+E(name(d)+'汇总')+'</strong>',...(isProvider?['—']:[]),...cells(total,true),...(isPlatform?[memberCell([...new Set(displayRows.map(r=>r.platformId))])]:[])]],isProvider?providerSummaryTable:isPlatform?platformSummaryTable:refTable);
    const feeStatus=L.feeLookupLoading?'手续费匹配中…':L.feeLookupError?'费率读取失败':'手续费已匹配 '+C(fees.matchedCount)+' / '+C(fees.successCount)+' 笔'+(fees.complete?'':' · 部分费率未匹配');
-   return dblock(id+'-'+d,title+' · '+name(d),'<div class="df-business-summary'+(isProvider?' df-provider-business-summary':isPlatform?' df-platform-business-summary':'')+'">'+body+'</div>',E(L.currency)+' · <span tabindex="0" title="'+E(L.feeLookupLoading?'正在读取费率':L.feeLookupError?'费率读取失败':window.HensemProviderSummary.feeCoverageText(fees))+'">'+(subset.length?feeStatus:'当前方向无数据')+'</span>');
+   const intake=isPlatform?overviewIntakeCoverage(d):null,coverage=intake?.notExpected.length?' · 应采 '+C(intake.requested)+' 平台 · 所选日期尚未上线 '+C(intake.notExpected.length)+' 平台（不计缺口）':'';
+   return dblock(id+'-'+d,title+' · '+name(d),'<div class="df-business-summary'+(isProvider?' df-provider-business-summary':isPlatform?' df-platform-business-summary':'')+'">'+body+'</div>',E(L.currency)+' · <span tabindex="0" title="'+E(L.feeLookupLoading?'正在读取费率':L.feeLookupError?'费率读取失败':window.HensemProviderSummary.feeCoverageText(fees))+'">'+(subset.length?feeStatus:'当前方向无数据')+'</span>'+coverage);
 
   };
   return dblock(id,title,'<div class="df-grid df-two">'+dirs().map(renderDirection).join('')+'</div>',(isProvider?'同名三方合并；占比按本方向成功数据；手续费占比按已匹配费用。人工不参与三方成功率比较。':'手续费逐平台、逐三方匹配后汇总。')+' 成功率＝成功时间内成功笔数 ÷ 创建时间内全部笔数，含跨日成功。');
