@@ -8,3 +8,13 @@ test('old open pages retain operation-date missing contract without adopting the
  const r=validate({...q,filters:{...q.filters,dateBasis:'operation',statusCode:'3',operator:'source-user'}});assert.equal(r.filters.dateBasis,'operation');assert.equal(r.filters.operator,'source-user');assert(!('successBasis' in r.filters));
  const omitted=validate({...q,filters:{issueKind:'deposit'}});assert(!('dateBasis' in omitted.filters));assert(!('successBasis' in omitted.filters));assert.throws(()=>validate({...q,filters:{...q.filters,dateBasis:'operation',statusCode:'1'}}));
 });
+
+test('reconciliation platform directory has a narrow non-paginated India deposit contract',()=>{
+ const directory={action:'workorderRecords',view:'missing',operation:'reconciliationPlatforms',country:'IN',filters:{dateBasis:'submission',issueKind:'deposit'}};
+ assert.deepEqual(JSON.parse(JSON.stringify(validate(directory))),directory);
+ assert.deepEqual(JSON.parse(JSON.stringify(validate({...directory,country:'印度',filters:{...directory.filters,platform:' RAJA '}}))),{...directory,country:'印度',filters:{...directory.filters,platform:'RAJA'}});
+ for(const change of [{view:'records'},{view:'orders'},{view:'workload'},{country:'BR'},{country:['IN']},{offset:0},{limit:20},{filters:null},{filters:[]},{filters:{}},{filters:{dateBasis:'submission',issueKind:'withdraw'}},{filters:{dateBasis:'operation',issueKind:'deposit'}}])assert.throws(()=>validate({...directory,...change}));
+ for(const extra of [{team:'M8'},{from:'2026-10-01'},{statusCode:'4'},{registrationStatus:'missing'},{successBasis:'processed'},{platform:['RAJA']},{platform:null},{platform:'x'.repeat(201)},{platform:'RAJA\u0000'}])assert.throws(()=>validate({...directory,filters:{...directory.filters,...extra}}));
+ for(const limit of [20,50,100])assert.equal(validate({...q,limit}).limit,limit);
+ assert.throws(()=>validate({...q,limit:21}));
+});

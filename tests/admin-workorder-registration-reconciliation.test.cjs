@@ -269,3 +269,118 @@ test('set-matching migration is guarded and idempotent with unchanged OIDs, owne
  assert.equal(await scalar("select md5(prosrc) from pg_proc where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure"),'82332dfe28f2103981addfc26c95f12d');
  for(const change of ["grant execute on function private.dashboard_admin_workorder_registration(jsonb) to authenticated","alter function private.dashboard_admin_workorder_registration(jsonb) security definer","alter function private.dashboard_admin_live_workorder_records(jsonb) set statement_timeout='21s'", "create or replace function private.dashboard_admin_workorder_registration(p_query jsonb) returns jsonb language plpgsql stable set search_path='' as $$begin return '{}'::jsonb;end$$"]){await db.exec('savepoint set_matching_drift');await db.exec(change);await assert.rejects(()=>db.exec(setMatching),/REGISTRATION_SET_MATCHING_/);await db.exec('rollback to savepoint set_matching_drift;release savepoint set_matching_drift')}
 });
+
+const historyKeys=read('migrations/20261005133615_workorder_registration_history_keys.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,'');
+test('history-key matching preserves full JSON including cross-day success and physical identity conflicts',async()=>{
+ await applyProcessedDefault();await db.exec(setMatching);
+ // The same registration matches both the original and several workorder aliases:
+ // it must still count once, with the original amount counted once.
+ await ar('LINK-A',{payment_order_no:'RC-LINK',status_code:1});
+ await ar('LINK-B',{payment_order_no:'RC-LINK',status_code:3,submitted_date:'2026-09-01',submitted_at:'2026-08-31T20:00:00Z'});
+ await ar('LINK-A',{platform:'RAJALOTTERY',payment_order_no:'RC-LINK',status_code:1});
+ await entry('same-id','RC-LINK',{source_kind:'portal',portal_team:'M8',work_order_number:'WN-LINK-A',portal_payload:{entry:{outcome:'pending'},workorders:['LINK-A','WN-LINK-A','LINK-B','WN-LINK-B']}});
+ await entry('historical','RC-LINK',{source_sheet:'INPUT-HISTORICAL',followup_date:'2020-01-01'});
+ await sheet('same-id','RC-LINK');
+ await ar('OPEN',{payment_order_no:'RC-SUCCESS',status_code:3});
+ await ar('HANDLED',{payment_order_no:'RC-SUCCESS',status_code:4,submitted_date:'2026-09-01',amount:99,third_party:'OtherPay'});
+ await entry('success-open2','RC-SUCCESS');
+ await ar('PAID');await entry('paid3','RC-PAID',{followup_status:'Success'});
+ await ar('AMOUNT');await entry('amount4','RC-AMOUNT',{amount:999});
+ await ar('ID');await entry('id5','RC-WRONG',{work_order_number:'WN-ID'});
+ await ar('CONFLICT',{payment_order_no:'RC-STATUS-CONFLICT',status_code:4});await ar('CONFLICT',{platform:'RAJALOTTERY',payment_order_no:'RC-STATUS-CONFLICT',status_code:1});
+ await ar('MISSING');await ar('OTHER',{platform:'OTHER'});await entry('other6','RC-OTHER',{platform:'OTHER'});
+ await ar('HIDDEN',{platform:'HIDDEN'});await entry('hidden7','RC-HIDDEN',{platform:'HIDDEN'});
+ await entry('wrong-team8','RC-LINK',{source_kind:'portal',portal_team:'OTHER',portal_payload:{entry:{outcome:'success'}}});
+ await entry('wrong-country9','RC-LINK',{country:'PK',followup_status:'Success'});
+ await newar('AMBIG',{status_code:'1',raw:{depositOrderNo:'RC-ONE',rechargeNumber:'RC-OTHER'}});
+ await newar('NEWAR-OPEN',{status_code:'1'});await newar('NEWAR-DONE',{status_code:'4'});
+ for(let i=0;i<24;i++)await ar('PAGE'+String(i).padStart(2,'0'));for(let i=0;i<45;i++)await entry('PAGE-E'+i,'RC-PAGE00',{source_row:100+i});
+ await db.exec(`insert into public.ar_workorder_issue_details(system_name,country_code,platform,work_order_id,work_order_no,payment_order_no,issue_kind,amount,third_party,status_code,submitted_date,submitted_at,observed_at)
+ select 'AR','IN','RAJA','CAPPED-'||i,'WN-CAPPED-'||i,'RC-CAPPED','deposit',12.34,'Pay',1,'2026-10-04','2026-10-03T19:00:00Z','2026-10-04T02:00:00Z' from generate_series(1,101) i`);
+ await ar('LONG-UTR',{utr:'u'.repeat(5000),status_code:1});
+ await ar('LONG-PROVIDER',{third_party:'供'.repeat(700),status_code:1});
+ // Exact physical keys must not pull unrelated country/business/native-ID peers.
+ await ar('BOUNDARY',{payment_order_no:'RC-BOUNDARY',status_code:1});
+ await ar('BOUNDARY',{country_code:'PK',payment_order_no:'RC-BOUNDARY',status_code:4,submitted_date:'2026-09-01'});
+ await ar('BOUNDARY',{platform:'RAJALOTTERY',issue_kind:'withdrawal',payment_order_no:'RC-BOUNDARY',status_code:4,submitted_date:'2026-09-01'});
+ await ar('EMPTY-ALIAS',{payment_order_no:null,status_code:1});
+ await ar('EMPTY-ALIAS',{platform:'RAJALOTTERY',payment_order_no:'RC-AMBIG-ALIAS',status_code:4,submitted_date:'2026-09-01'});
+ await db.exec("insert into private.test_catalog(source_name,name,scope_group,country,currency,source,team) values('RAJALOTTERY','RAJALOTTERY','IN','印度','INR','newar','M8');insert into public.newar_detail_platforms values('RAJALOTTERY','IN','印度','INR','Asia/Kolkata',true,null)");
+ await ar('CROSS-ID',{payment_order_no:'RC-AR-NATIVE',status_code:1});
+ await newar('CROSS-ID',{platform:'RAJALOTTERY',created_at:'2026-09-01T00:00:00Z',raw:{depositOrderNo:'RC-NEW-NATIVE'}});
+ await ar('CROSS-ORIGINAL',{payment_order_no:'RC-CROSS-ORIGINAL',status_code:1});
+ await newar('NEW-RELATED',{platform:'RAJALOTTERY',created_at:'2026-09-01T00:00:00Z',raw:{depositOrderNo:'RC-CROSS-ORIGINAL'}});
+ const queries=[{}, {successBasis:'receipt'}, {registrationStatus:'missing'}, {registrationStatus:'matched'}, {registrationStatus:'review'}, {platform:'RAJA'}, {orderNo:'RC-LINK'}, {workorderNo:'LINK-B'}, {statusCode:'1'}, {minAmount:'13'}, {utr:'not present'}, {kyc:'yes'}];
+ const before=[];for(const filters of queries)before.push(await call(filters));
+ const nextBefore=await call({}, {offset:20,limit:20});
+ await db.exec(read('migrations/20261005134030_workorder_deposit_safe_cover.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,''));await db.exec(historyKeys);
+ const legacyShape=r=>{const copy=structuredClone(r);for(const key of ['missingAmountExact','matchedAmountExact','reviewAmountExact'])delete copy.summary[key];return copy};
+ for(let i=0;i<queries.length;i++){const actual=await call(queries[i]);for(const kind of ['missing','matched','review']){assert.equal(actual.summary[kind+'AmountExact']===null,actual.summary[kind+'Amount']===null);if(actual.summary[kind+'AmountExact']!==null)assert.equal(Number(actual.summary[kind+'AmountExact']),actual.summary[kind+'Amount'])}assert.deepEqual(legacyShape(actual),before[i],JSON.stringify(queries[i]))}
+ assert.deepEqual(legacyShape(await call({}, {offset:20,limit:20})),nextBefore);
+ const linked=(await call({orderNo:'RC-LINK'})).rows[0];assert.equal(linked.registrationMatchCount,3);assert.equal(linked.workorderCount,2);assert.equal(linked.amount,12.34);assert.equal(linked.registrationStatus,'matched');
+ const capped=(await call({orderNo:'RC-CAPPED'})).rows[0];assert.equal(capped.workorderCount,101);assert.equal(capped.workorders.length,100);assert.equal(capped.workordersTruncated,true);
+ assert(!JSON.stringify(await call()).includes('RC-HIDDEN'));
+ assert.equal((await call({orderNo:'RC-BOUNDARY'})).total,1);assert.equal((await call({orderNo:'RC-AR-NATIVE'})).total,1);assert.equal((await call({orderNo:'RC-CROSS-ORIGINAL'})).total,0);
+ assert.equal((await call({workorderId:'EMPTY-ALIAS'})).rows[0].reason,'no_identifiers');
+ await db.exec("select set_config('test.authorized_platform','OTHER',true)");const restricted=await call();assert.equal(restricted.total,1);assert.equal(restricted.rows[0].platform,'OTHER');assert(!JSON.stringify(restricted).includes('RC-LINK'));
+ await db.exec("select set_config('test.denied','yes',true)");await rejects(()=>call(),/preview_denied/);
+});
+test('history-key migration preserves permissions and OIDs and restores only its local memory setting',async()=>{
+ await applyProcessedDefault();await db.exec(setMatching);
+ const router=await scalar("select to_jsonb(p) from pg_proc p where oid='private.dashboard_admin_live_workorder_records(jsonb)'::regprocedure"),helper=await scalar("select to_jsonb(p)-'prosrc'-'proconfig' from pg_proc p where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure");
+ const memory=await scalar("select current_setting('work_mem')");await db.exec(historyKeys);await db.exec(historyKeys);
+ assert.deepEqual(await scalar("select to_jsonb(p) from pg_proc p where oid='private.dashboard_admin_live_workorder_records(jsonb)'::regprocedure"),router);
+ assert.deepEqual(await scalar("select to_jsonb(p)-'prosrc'-'proconfig' from pg_proc p where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure"),helper);
+ assert.deepEqual(await scalar("select proconfig from pg_proc where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure"),['search_path=""','work_mem=32MB']);
+ await call();assert.equal(await scalar("select current_setting('work_mem')"),memory);
+ await rejects(()=>call({successBasis:'invalid'}),/unsupported_registration_filter/);assert.equal(await scalar("select current_setting('work_mem')"),memory);
+ for(const change of ["grant execute on function private.dashboard_admin_workorder_registration(jsonb) to authenticated","alter function private.dashboard_admin_workorder_registration(jsonb) security definer","alter function private.dashboard_admin_live_workorder_records(jsonb) set statement_timeout='21s'","alter function private.dashboard_admin_workorder_registration(jsonb) set work_mem='64MB'"]){await db.exec('savepoint history_drift');await db.exec(change);await assert.rejects(()=>db.exec(historyKeys),/REGISTRATION_HISTORY_/);await db.exec('rollback to savepoint history_drift;release savepoint history_drift')}
+});
+test('history-key batch retains 80000 physical records and original totals without repeated full CTE scans',async t=>{
+ await applyProcessedDefault();await db.exec(setMatching);
+ await db.exec(read('migrations/20261005134030_workorder_deposit_safe_cover.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,''));
+ await db.exec(historyKeys);
+ await db.exec(`insert into public.ar_workorder_issue_details(system_name,country_code,platform,work_order_id,work_order_no,payment_order_no,issue_kind,amount,third_party,status_code,submitted_date,submitted_at,observed_at)
+ select 'AR','IN',case when i%2=0 then 'RAJA' else 'OTHER' end,'HISTORY-'||i,'WN-HISTORY-'||i,'RC-HISTORY-'||i,'deposit',10.25,'Pay',case when i%3=0 then 4 else 1 end,'2026-10-04','2026-10-03T19:00:00Z','2026-10-04T02:00:00Z' from generate_series(1,50000) i;
+ insert into public.ar_workorder_issue_details(system_name,country_code,platform,work_order_id,work_order_no,payment_order_no,issue_kind,amount,third_party,status_code,submitted_date,submitted_at,observed_at)
+ select 'AR','IN',case when i%2=0 then 'RAJA' else 'OTHER' end,'OLDER-'||i,'WN-OLDER-'||i,'RC-HISTORY-'||i,'deposit',10.25,'Pay',case when i%5=0 then 4 else 3 end,'2026-09-01','2026-08-31T19:00:00Z','2026-09-01T02:00:00Z' from generate_series(1,30000) i;
+ insert into public.admin_deposit_followup_rows(id,source_sheet,source_tab,source_row,country,platform,order_number,amount,source_kind,followup_status)
+ select 'HISTORY-E'||i,'INPUT','T',i,'印度',case when i%2=0 then 'RAJA' else 'OTHER' end,'RC-HISTORY-'||i,10.25,'sheet','Not Yet Received' from generate_series(1,50000) i;
+ analyze public.ar_workorder_issue_details;analyze public.admin_deposit_followup_rows;`);
+ const filters={from:'2026-10-01',to:'2026-10-31',registrationStatus:'matched'};
+ const r=await call(filters);assert.equal(r.summary.candidateCount,50000);assert.equal(r.summary.excludedSuccessCount,20666);assert.equal(r.total,29334);assert.equal(r.summary.matchedAmount,300673.5);assert.equal(r.rows.length,20);
+ const body=await scalar("select prosrc from pg_proc where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure");
+ let sql=body.slice(body.indexOf('with catalog as materialized ('),body.indexOf(' into v_result;')).replace(/\bf->>/g,"('{\"registrationStatus\":\"matched\"}'::jsonb)->>");
+ for(const [name,value] of Object.entries({v_scope:"'{}'::jsonb",v_dates:"'range'",v_start:"date '2026-10-01'",v_end:"date '2026-10-31'",v_basis:"'processed'",v_offset:'0',v_limit:'20'}))sql=sql.replace(new RegExp('\\b'+name+'\\b','g'),value);
+ await db.exec("set local work_mem='32MB'");const plan=(await scalar('explain(analyze,timing off,format json) '+sql))[0],nodes=[];
+ function walk(n){nodes.push(n);for(const p of n.Plans||[])walk(p)}walk(plan.Plan);
+ const related=nodes.find(n=>n['Subplan Name']==='CTE ar_related_safe_rows');assert.equal(related['Actual Rows'],80000);
+ const fallbacks=nodes.find(n=>n['Subplan Name']==='CTE ar_fallback_keys');assert.equal(fallbacks['Actual Rows'],0);
+ assert.deepEqual(nodes.filter(n=>n['Node Type']==='CTE Scan'&&n['Actual Rows']*n['Actual Loops']>80000*20).map(n=>[n['CTE Name'],n['Actual Loops']]),[]);
+ const rejected=nodes.reduce((sum,n)=>sum+(n['Rows Removed by Join Filter']||0)*(n['Actual Loops']||0),0);assert(rejected<80000*100,JSON.stringify({rejected}));
+ t.diagnostic(`50000 selected originals / 80000 physical records: ${plan['Execution Time']} ms; ${rejected} discarded join comparisons; long text preservation is covered by full-JSON equivalence`);
+});
+test('exact summary amount strings retain decimal precision and unknown totals alongside legacy numbers',async()=>{
+ await applyProcessedDefault();await db.exec(setMatching);await db.exec(historyKeys);
+ await ar('PRECISE-A',{amount:'9007199254740991.12345678',status_code:1});await ar('PRECISE-B',{amount:'0.00000001',status_code:1});
+ await entry('SOURCE-COVERAGE','UNRELATED');const precise=await call({orderNo:'PRECISE'});
+ assert.equal(precise.summary.missingAmountExact,'9007199254740991.12345679');assert.equal(typeof precise.summary.missingAmount,'number');
+ assert.equal(precise.summary.matchedAmountExact,'0');assert.equal(precise.summary.reviewAmountExact,'0');
+ await ar('PRECISE-UNKNOWN',{amount:null,status_code:1});const unknown=await call({orderNo:'PRECISE'});
+ assert.equal(unknown.summary.missingAmount,null);assert.equal(unknown.summary.missingAmountExact,null);
+});
+test('NEWAR hash candidates require complete original identity recheck even under forced candidate collisions',async()=>{
+ await applyProcessedDefault();await db.exec(setMatching);await db.exec(historyKeys);
+ await newar('EXACT-OPEN',{status_code:'1',raw:{depositOrderNo:'RC-EXACT-OPEN'}});
+ await newar('UNRELATED-HANDLED',{created_at:'2026-09-01T00:00:00Z',status_code:'4',raw:{depositOrderNo:'RC-DIFFERENT'}});
+ const before=await call();assert.equal(before.summary.candidateCount,1);assert.equal(before.summary.excludedSuccessCount,0);
+ let definition=await scalar("select pg_get_functiondef('private.dashboard_admin_workorder_registration(jsonb)'::regprocedure)");
+ for(const field of ['depositOrderNo','rechargeNumber'])definition=definition.replaceAll("md5(upper(nullif(btrim(d.raw->>'"+field+"'),'')))","'forced-candidate-collision'::text");
+ definition=definition.replaceAll('md5(o.payment_id)',"'forced-candidate-collision'::text");
+ assert.equal((definition.match(/forced-candidate-collision/g)||[]).length,4);await db.exec(definition);
+ assert.deepEqual(await call(),before);
+ const body=await scalar("select prosrc from pg_proc where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure");
+ let sql=body.slice(body.indexOf('with catalog as materialized ('),body.indexOf('), projected as'))+') select (select count(*) from newar_related_keys) candidates,(select count(*) from newar_related) exact_matches';
+ sql=sql.replace(/\bf->>/g,"('{}'::jsonb)->>");for(const [name,value]of Object.entries({v_scope:"'{}'::jsonb",v_dates:"'range'",v_start:"date '2026-10-04'",v_end:"date '2026-10-04'"}))sql=sql.replace(new RegExp('\\b'+name+'\\b','g'),value);
+ const counts=(await db.query(sql)).rows[0];assert.equal(counts.candidates,2);assert.equal(counts.exact_matches,1);
+});
