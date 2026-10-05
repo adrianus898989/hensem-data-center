@@ -7,6 +7,19 @@
  const count=value=>(typeof value==='number'||typeof value==='string')&&String(value).trim()!==''&&Number.isSafeInteger(Number(value))&&Number(value)>=0?Number(value):null;
  const day=value=>{const text=String(value||'').slice(0,10),parsed=new Date(text+'T00:00:00Z');return /^\d{4}-\d{2}-\d{2}$/.test(text)&&Number.isFinite(parsed.getTime())&&parsed.toISOString().slice(0,10)===text?text:null;};
  const provider=(name,country)=>String(window.HensemProviderNames?.canonical(name,country)??name??'').trim()||'（三方未提供）';
+ const unknownProviderNames=new Set(['（三方未提供）','未识别通道','未识别三方','未提供','未标记三方','USDT']);
+ const nonProviderNames=new Set(['人工充值','人工确认','人工取消','无三方（驳回）','无三方(驳回)','提现转充值','无三方','manual','manualrecharge','manualconfirmation']);
+ const providerKind=name=>unknownProviderNames.has(name)?'unidentified':nonProviderNames.has(name)||nonProviderNames.has(name.toLowerCase())?'manual':'provider';
+ const positive=value=>(typeof value==='number'||typeof value==='string')&&String(value).trim()!==''&&Number.isFinite(Number(value))&&Number(value)>0;
+ // Visibility follows this section's activity evidence, independently of
+ // whether its success rate can be calculated. Amounts are never summed here.
+ function activityEvidence(rows,work=false){
+  if(!rows.length)return 'absent';
+  const counts=work?['uniqueOrderCount','uniqueSuccessCount','submittedCount','successCount']:['all_count','success_count','pending_count','failed_count','rejected_count','unknown_count'];
+  const amounts=work?['uniqueOrderAmount','uniqueSuccessAmount','submittedAmount','successAmount']:['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount'];
+  if(rows.some(row=>counts.some(key=>count(row[key])>0)||amounts.some(key=>positive(row[key]))))return 'active';
+  return rows.some(row=>count(row[work?'uniqueOrderCount':'all_count'])===null||count(row[work?'uniqueSuccessCount':'success_count'])===null)?'unknown':'zero';
+ }
  function fact(success,total,partial=false,note=''){
   const n=count(success),d=count(total);
   return {value:n!==null&&d!==null&&d>0?n/d*100:null,success:n,total:d,partial,note};
@@ -78,10 +91,10 @@
   function providerActivity(p,key,footer){
    const response=platformResponses.get(p.id),work=key==='workorder',groupRows=work?platformProviderRows.get(p.id)||[]:Array.isArray(response?.groups?.provider)?response.groups.provider.filter(row=>row?.direction===key):[];
    if(footer.authoritativeTotal&&footer.volume===0&&(!work||!footer.partial))return {providerCount:0,providerCountPartial:false,providerCountNote:'平台原生汇总已确认该业务没有提交订单，运行三方数为 0。'};
-   const names=new Set(),counts=[],unknownNames=new Set(['（三方未提供）','未识别通道','未识别三方','未提供','未标记三方','USDT']),excludedNames=new Set(['人工充值','人工确认','人工取消','无三方（驳回）','无三方(驳回)','提现转充值','无三方','manual','manualrecharge','manualconfirmation']);let unknownCount=false,unknownProvider=false;
+   const names=new Set(),counts=[];let unknownCount=false,unknownProvider=false;
    for(const row of groupRows){
     const n=count(work?row.uniqueOrderCount:row.all_count);if(n===null||work&&!['complete','partial'].includes(row.uniqueCoverage?.status)){unknownCount=true;continue;}counts.push(n);if(!n)continue;
-    const name=provider(row.provider,p.country);if(unknownNames.has(name)){unknownProvider=true;continue;}if(excludedNames.has(name)||excludedNames.has(name.toLowerCase()))continue;names.add(name);
+    const name=provider(row.provider,p.country),kind=providerKind(name);if(kind==='unidentified'){unknownProvider=true;continue;}if(kind!=='provider')continue;names.add(name);
    }
    const unresolved=work&&['charge','withdraw'].some(direction=>(platformTickets.get(JSON.stringify([p.id,direction]))||[]).some(row=>['providerConflictCount','unresolvedProviderOrderCount'].some(key=>count(row.uniqueCoverage?.[key])>0)));
    const knownTotal=safeSum(counts),partial=footer.partial||!footer.authoritativeTotal||unknownCount||unknownProvider||unresolved||knownTotal===null||footer.volume===null||knownTotal!==footer.volume;
@@ -121,7 +134,8 @@
   const typeItems=(name,direction)=>columns.flatMap(p=>(payments.get(JSON.stringify([p.id,name,direction]))?.rows||[]).map(row=>({...row,provider:name,platform:p.name,platformId:p.id,country:p.country,source:p.source,scopeGroup:p.scopeGroup})));
   const rows=[...providers].sort((a,b)=>a.localeCompare(b,'zh-CN')).map(name=>{
    const cohort=columns.map(p=>workorder(p,name)),totals=cohort.map(value=>value.total).filter(value=>value!==null),workorderTotal=totals.reduce((sum,value)=>sum+value,0);
-   return {provider:name,charge:columns.map(p=>payment(p,name,'charge')),withdraw:columns.map(p=>payment(p,name,'withdraw')),workorder:cohort,typeItems:{charge:typeItems(name,'charge'),withdraw:typeItems(name,'withdraw')},volumes:{charge:paymentVolume(name,'charge'),withdraw:paymentVolume(name,'withdraw'),workorder:totals.length&&Number.isSafeInteger(workorderTotal)?workorderTotal:null}};
+   const activity={charge:activityEvidence(columns.flatMap(p=>payments.get(JSON.stringify([p.id,name,'charge']))?.rows||[])),withdraw:activityEvidence(columns.flatMap(p=>payments.get(JSON.stringify([p.id,name,'withdraw']))?.rows||[])),workorder:activityEvidence(columns.flatMap(p=>['charge','withdraw'].flatMap(direction=>tickets.get(JSON.stringify([p.id,name,direction]))||[])),true)};
+   return {provider:name,kind:providerKind(name),activity,charge:columns.map(p=>payment(p,name,'charge')),withdraw:columns.map(p=>payment(p,name,'withdraw')),workorder:cohort,typeItems:{charge:typeItems(name,'charge'),withdraw:typeItems(name,'withdraw')},volumes:{charge:paymentVolume(name,'charge'),withdraw:paymentVolume(name,'withdraw'),workorder:totals.length&&Number.isSafeInteger(workorderTotal)?workorderTotal:null}};
   });
   const footers={charge:columns.map(p=>paymentPlatform(p,'charge')),withdraw:columns.map(p=>paymentPlatform(p,'withdraw')),workorder:columns.map(workorderPlatform)};
   for(const key of ['charge','withdraw','workorder'])footers[key]=footers[key].map((footer,index)=>({...footer,...providerActivity(columns[index],key,footer)}));
@@ -131,12 +145,17 @@
   return model.columns.map((p,index)=>({index,id:String(p.id),volume:model.footers[key][index].volume})).sort((a,b)=>a.volume===null?(b.volume===null?a.id.localeCompare(b.id):1):b.volume===null?-1:b.volume-a.volume||a.id.localeCompare(b.id)).map(item=>item.index);
  }
  function rankedRows(model,key){
-  return model.rows.slice().sort((a,b)=>{
+  return model.rows.filter(row=>row.kind==='provider'&&row.activity[key]==='active').sort((a,b)=>{
    const left=a.volumes[key],right=b.volumes[key];
    if(left===null)return right===null?a.provider.localeCompare(b.provider,'zh-CN'):1;
    if(right===null)return -1;
    return right-left||a.provider.localeCompare(b.provider,'zh-CN');
   });
+ }
+ function otherRecords(model,key){
+  const other=model.rows.filter(row=>row.kind!=='provider'&&row.activity[key]==='active'),unavailable=model.rows.filter(row=>row.activity[key]==='unknown');
+  if(!other.length&&!unavailable.length)return '';
+  return '<details class="success-analysis-other"><summary>其他记录与未完整提供的分组'+(other.length?' · '+other.length+' 类非三方 / 未归属记录':'')+(unavailable.length?' · '+unavailable.length+' 个分组活动未确认':'')+'</summary>'+(other.length?'<p>以下是人工操作、无三方业务或三方归属待确认的记录，不列为支付三方：'+other.map(row=>escape(row.provider)+'（已读提交 '+(row.volumes[key]===null?'未提供':row.volumes[key]+' 笔')+'）').join('；')+'。底部汇总仍按来源原汇总计算，不因收起这些记录而扣减。</p>':'')+(unavailable.length?'<p>以下分组未提供可确认的活动笔数或金额，未按零处理：'+unavailable.map(row=>escape(row.provider)).join('、')+'。</p>':'')+'</details>';
  }
  function cell(value,footer=false){
   const known=value.value!==null&&Number.isFinite(value.value),label=known?value.value.toFixed(2)+'%':'—';
@@ -171,9 +190,9 @@
   if(L.queryFailures?.length)notices.push('部分平台读取失败：'+escape(L.queryFailures.map(p=>p.name).join('、'))+'。<button class="link" onclick="liveRetryFailed()">重试未完成平台</button>');
   if(model.ignored)notices.push('有 '+model.ignored+' 条工单汇总无法匹配已授权平台身份，未分摊到平台。');
   const sections=[['charge','代收成功率','成功时间内成功笔数 ÷ 创建时间内全部笔数。'],['withdraw','代付成功率','成功时间内成功笔数 ÷ 创建时间内全部笔数；WG 未提供可核验成功时间时显示 —。'],['workorder','工单成功率','已处理原支付单 ÷ 全部提交原支付单；按平台、业务、完整原单号去重，状态 4 计已处理，不代表实际到账。']];
-  return '<div class="live-success-analysis">'+(notices.length?'<div class="live-status">'+notices.join('<br>')+'</div>':'')+'<p class="success-analysis-note">'+escape(model.date)+' · 平台当地日期。各区三方行与平台列分别按已读取提交笔数从多到少排列，空数据置后；低于 40% 标红；— 表示未提供或无法核验；* 为部分汇总，仅基于已提供的分组、业务或来源。底部汇总按总成功笔数 ÷ 总提交笔数计算，不平均百分比。跨日成功可能使代收、代付成功率超过 100%。今天截至查询时刻，手动查询更新。</p>'+sections.map(([key,title,note])=>{
-   const withType=key!=='workorder',indexes=rankedColumnIndexes(model,key),head='<thead><tr><th scope="col">三方</th>'+(withType?'<th scope="col" class="success-provider-type">类型</th>':'')+indexes.map(index=>{const p=model.columns[index],volume=model.footers[key][index].volume;return '<th scope="col" title="'+escape(p.name+' · '+system(p.source)+' · '+p.id+' · 已读取提交笔数 '+(volume===null?'未提供':volume)+(model.footers[key][index].partial?'（部分）':''))+'">'+escape(p.name)+'<small>'+escape(system(p.source))+'</small></th>';}).join('')+'</tr></thead>';
-   return '<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2>'+(key==='workorder'&&L.workordersError?'<button type="button" class="link" onclick="liveProviderWorkordersRetry()">重试工单</button>':'')+'</div><p>'+note+'</p><div class="success-analysis-scroll" tabindex="0" role="region" aria-label="'+title+'"><table style="min-width:'+Math.max(400,112+(withType?60:0)+model.columns.length*78)+'px">'+head+'<tbody>'+ (model.rows.length?rankedRows(model,key).map(row=>'<tr><th scope="row">'+escape(row.provider)+'</th>'+(withType?typeCell(row,key,L):'')+indexes.map(index=>cell(row[key][index])).join('')+'</tr>').join(''):'<tr><td colspan="'+(model.columns.length+1+(withType?1:0))+'">'+(L.loading?'正在读取三方汇总…':'当前条件下未返回三方数据')+'</td></tr>')+'</tbody><tfoot class="success-analysis-footer"><tr><th scope="row">汇总成功率</th>'+(withType?'<td class="success-provider-type">—</td>':'')+indexes.map(index=>cell(model.footers[key][index],true)).join('')+'</tr></tfoot></table></div></section>';
+  return '<div class="live-success-analysis">'+(notices.length?'<div class="live-status">'+notices.join('<br>')+'</div>':'')+'<div class="success-analysis-context"><p class="success-analysis-note">'+escape(model.date)+' · 平台当地日期 · 提交笔数从多到少 · 仅显示本业务有活动的支付三方 · 低于 40% 标红</p><details class="success-analysis-method"><summary>统计口径</summary><p>各区三方行与平台列分别按已读取提交笔数从多到少排列；没有本业务活动的三方不占表格行，未返回的平台列置后。— 表示未提供或无法核验，未按零处理；* 为部分汇总，仅基于已提供的分组、业务或来源。底部汇总按总成功笔数 ÷ 总提交笔数计算，不平均百分比。跨日成功可能使代收、代付成功率超过 100%。今天截至查询时刻，手动查询更新。</p></details></div>'+sections.map(([key,title,note])=>{
+   const visibleRows=rankedRows(model,key),withType=key!=='workorder',indexes=rankedColumnIndexes(model,key),head='<thead><tr><th scope="col">三方</th>'+(withType?'<th scope="col" class="success-provider-type">类型</th>':'')+indexes.map(index=>{const p=model.columns[index],volume=model.footers[key][index].volume;return '<th scope="col" title="'+escape(p.name+' · '+system(p.source)+' · '+p.id+' · 已读取提交笔数 '+(volume===null?'未提供':volume)+(model.footers[key][index].partial?'（部分）':''))+'">'+escape(p.name)+'<small>'+escape(system(p.source))+'</small></th>';}).join('')+'</tr></thead>';
+   return '<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2>'+(key==='workorder'&&L.workordersError?'<button type="button" class="link" onclick="liveProviderWorkordersRetry()">重试工单</button>':'')+'</div><p>'+note+'</p><div class="success-analysis-scroll" tabindex="0" role="region" aria-label="'+title+'"><table style="min-width:'+Math.max(400,112+(withType?80:0)+model.columns.length*78)+'px">'+head+'<tbody>'+ (visibleRows.length?visibleRows.map(row=>'<tr><th scope="row">'+escape(row.provider)+'</th>'+(withType?typeCell(row,key,L):'')+indexes.map(index=>cell(row[key][index])).join('')+'</tr>').join(''):'<tr><td colspan="'+(model.columns.length+1+(withType?1:0))+'">'+(L.loading?'正在读取三方汇总…':'当前条件下暂无已确认活动的支付三方')+'</td></tr>')+'</tbody><tfoot class="success-analysis-footer"><tr><th scope="row">汇总成功率</th>'+(withType?'<td class="success-provider-type">—</td>':'')+indexes.map(index=>cell(model.footers[key][index],true)).join('')+'</tr></tfoot></table></div>'+otherRecords(model,key)+'</section>';
   }).join('')+'</div>';
  }
  window.HensemLiveSuccessAnalysis=Object.freeze({render,buildModel,fact,rankedRows,rankedColumnIndexes});

@@ -104,6 +104,9 @@ export const CONFIRMED_INDIA_RAW_PROVIDER_ALIASES = new Map<string, string>([
   // Owner-confirmed 2026-10-04: the exact India collection/payout pair is WYPay.
   ["wypay", "WYPay"],
   ["wypay-qr", "WYPay"],
+  // Owner-confirmed 2026-10-05: exact INR channels belong to the same provider.
+  ["wypayinr-paytmqr", "WYPay"],
+  ["wypayinr-bank", "WYPay"],
 ]);
 
 const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
