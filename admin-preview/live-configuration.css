@@ -65,6 +65,7 @@ body.live-admin .withdraw-stat-table table{width:100%;min-width:100%;max-width:n
 body.live-admin .withdraw-stat-table th{position:sticky;top:0;background:#f4f7ff;z-index:2}
 body.live-admin .withdraw-stat-table th .link{display:inline-flex;align-items:center;white-space:nowrap;font:inherit;font-weight:600;color:#6880a5}
 body.live-admin .withdraw-stat-table tfoot td{background:#eef3ff;font-weight:600}
+body.live-admin .withdraw-stat-table:not(.withdraw-operators-table)>table>tfoot{position:sticky;bottom:0;z-index:5;box-shadow:0 -2px 0 #c9d7f1}
 body.live-admin .withdraw-stat-table td,body.live-admin .withdraw-stat-table th{white-space:nowrap}
 body.live-admin .withdraw-stat-table:not(.withdraw-daily-table) th:first-child,body.live-admin .withdraw-stat-table:not(.withdraw-daily-table) td:first-child,body.live-admin .withdraw-stat-table.withdraw-daily-table th:nth-child(2),body.live-admin .withdraw-stat-table.withdraw-daily-table td:nth-child(2){position:sticky;left:0;box-sizing:border-box;width:132px;min-width:132px;max-width:132px;background:#fff;z-index:3;box-shadow:2px 0 0 #e3eaf7}
 body.live-admin .withdraw-stat-table:not(.withdraw-daily-table) th:first-child,body.live-admin .withdraw-stat-table.withdraw-daily-table th:nth-child(2){background:#f4f7ff;z-index:4}
