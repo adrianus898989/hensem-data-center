@@ -14,11 +14,11 @@ test('retained raw RAJA data suppresses the confirmed alias empty row without mu
  assert.equal(rows(h).length,1);assert.equal(rows(h)[0][0],'RAJA');assert.equal(rows(h)[0][4],'8');assert.doesNotMatch(table(h),/RAJALOTTERY|本期未收到订单数据/);assert.equal(JSON.stringify(results),before);
 });
 test('two confirmed alias empty responses retain one truthful empty row',async()=>{
- const h=await render([alias,raw],[noData(alias),noData(raw)]);assert.equal(rows(h).length,1);assert.match(rows(h)[0][0],/^RAJA本期未收到订单数据$/);assert.equal(rows(h)[0][1],'—');
+ const h=await render([alias,raw],[noData(alias),noData(raw)]);assert.equal(rows(h).length,1);assert.match(rows(h)[0][0],/^RAJA本期未收到$/);assert.equal(rows(h)[0][1],'—');
 });
 test('same spelling in a different backend, country or team remains separate',async()=>{
  const other=[{...alias,id:'other-source',source:'newar'},{...alias,id:'other-country',country:'巴基斯坦',scopeGroup:'PK'},{...alias,id:'other-team',team:'Other team'}];
- const h=await render([raw,alias,...other],[completeAggregate(raw,10,8),noData(alias),...other.map(noData)]);assert.equal(rows(h).length,4);assert.equal(rows(h).filter(r=>r[0].includes('本期未收到订单数据')).length,3);
+ const h=await render([raw,alias,...other],[completeAggregate(raw,10,8),noData(alias),...other.map(noData)]);assert.equal(rows(h).length,4);assert.equal(rows(h).filter(r=>r[0].includes('本期未收到')).length,3);
 });
 
 test('platform picker shows one RAJA after review snapshots arrive and keeps the old report selection usable for native orders',async()=>{
