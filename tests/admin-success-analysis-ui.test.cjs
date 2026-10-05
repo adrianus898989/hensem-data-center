@@ -9,7 +9,7 @@ const ticket=(platform,direction='charge',total=10,success=4,provider='ATPay',co
 function props(overrides={}){const L={pageQueried:true,dirty:false,from:'2026-10-03T00:00:00',to:'2026-10-03T23:59:59',queryPlatforms:[A,B],results:[payment(A,[row()]),payment(B,[row('charge',5,1,'ATPay-QR')])],queryFailures:[],feeLookupRows:[],feeLookupLoading:false,feeLookupError:'',country:'印度',workorders:{startDate:'2026-10-03',endDate:'2026-10-03',byPlatformProvider:[ticket(A),ticket(A,'withdraw',5,5),ticket(B,'charge',6,1,'ATPay-QR',false)]},...overrides};return {L,scopeMatches:true,workordersScopeMatches:true};}
 test('canonical provider rows keep native platform identity and three vertical rate-only matrices',()=>{
  const a=api(),p=props(),before=JSON.stringify(p),model=a.buildModel(p);assert.equal(model.rows.length,1);assert.equal(model.rows[0].provider,'ATPay');assert.deepEqual(Array.from(model.rows[0].charge,v=>v.value),[40,20]);assert.equal(model.rows[0].workorder[0].value,60);assert.equal(model.rows[0].workorder[0].partial,false);assert(Math.abs(model.rows[0].workorder[1].value-100/6)<1e-10);assert.equal(model.rows[0].workorder[1].partial,true);
- const html=a.render(p);assert.equal((html.match(/<table /g)||[]).length,3);assert.equal((html.match(/<th scope="row">ATPay<\/th>/g)||[]).length,3);assert.match(html,/新AR/);assert.match(html,/状态 4/);assert.match(html,/不代表实际到账/);assert.match(html,/完整原单号去重/);assert.doesNotMatch(html,/全部金额|手续费|到账成功金额/);assert.equal(JSON.stringify(p),before);
+ const html=a.render(p);assert.equal((html.match(/<table /g)||[]).length,3);assert.equal((html.match(/<th scope="row">ATPay<\/th>/g)||[]).length,2);assert.match(html,/新AR/);assert.match(html,/状态 4/);assert.match(html,/不代表实际到账/);assert.match(html,/完整原单号去重/);assert.doesNotMatch(html,/全部金额|手续费|到账成功金额/);assert.equal(JSON.stringify(p),before);
 });
 test('strict below-40 color applies to all matrices, unknown neutral and above-100 rates are preserved',()=>{
  const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',100,39),row('withdraw',10,4)])],workorders:{byPlatformProvider:[ticket(A,'charge',100,39),ticket(A,'withdraw',0,0)]}});let html=a.render(p);assert.equal((html.match(/<tbody>.*?<\/tbody>/g).join('').match(/class="success-rate-low"/g)||[]).length,2);assert.equal((html.match(/<tfoot.*?<\/tfoot>/g).join('').match(/class="success-rate-low"/g)||[]).length,1);assert.match(html,/>40\.00%<\/span>/);assert.match(html,/>39\.00%/);
@@ -23,19 +23,34 @@ test('workorder combined rate uses dedup original counts and preserves absent, u
 test('WG success time gaps affect its own withdrawal column and invalid or missing payment counts remain unknown',()=>{
  const a=api(),p=props({queryPlatforms:[A,W],results:[payment(A,[row('withdraw',10,6)]),payment(W,[row('withdraw',10,6),row('charge',10,3)])],workorders:null}),m=a.buildModel(p);assert.equal(m.rows[0].withdraw[0].value,60);assert.equal(m.rows[0].withdraw[1].value,null);assert.equal(m.rows[0].charge[1].value,30);p.L.results[0].platform={...A,capabilities:{withdrawSuccessTimeAvailable:false}};assert.equal(a.buildModel(p).rows[0].withdraw[0].value,null);p.L.results[0].platform=A;p.L.results[0].groups.provider[0].success_count='';assert.equal(a.buildModel(p).rows[0].withdraw[0].value,null);
 });
-test('each matrix ranks its own submitted volume across native platforms, with empty rows last',()=>{
+test('each matrix ranks only its own active providers across native platforms, leaving unknown evidence in a disclosure',()=>{
  const a=api(),p=props({results:[payment(A,[row('charge',3,1,'A small'),row('charge',90,20,'Z busiest'),row('withdraw',200,100,'P payout'),row('charge',null,null,'Empty')]),payment(B,[row('charge',20,10,'Z busiest'),row('withdraw',5,1,'A small')])],workorders:{byPlatformProvider:[ticket(A,'charge',2,1,'Z busiest'),ticket(A,'charge',30,3,'T tickets'),ticket(B,'withdraw',40,4,'T tickets'),ticket(A,'withdraw',20,8,'A small')]}}),before=JSON.stringify(p),m=a.buildModel(p);
- assert.deepEqual(Array.from(a.rankedRows(m,'charge'),r=>r.provider),['Z busiest','A small','Empty','P payout','T tickets']);
- assert.deepEqual(Array.from(a.rankedRows(m,'withdraw'),r=>r.provider),['P payout','A small','Empty','T tickets','Z busiest']);
- assert.deepEqual(Array.from(a.rankedRows(m,'workorder'),r=>r.provider),['T tickets','A small','Z busiest','Empty','P payout']);
+ assert.deepEqual(Array.from(a.rankedRows(m,'charge'),r=>r.provider),['Z busiest','A small']);
+ assert.deepEqual(Array.from(a.rankedRows(m,'withdraw'),r=>r.provider),['P payout','A small']);
+ assert.deepEqual(Array.from(a.rankedRows(m,'workorder'),r=>r.provider),['T tickets','A small','Z busiest']);
  const tables=a.render(p).match(/<tbody>.*?<\/tbody>/g),names=html=>Array.from(html.matchAll(/<th scope="row">(.*?)<\/th>/g),x=>x[1]);
- assert.equal(names(tables[0])[0],'Z busiest');assert.equal(names(tables[1])[0],'P payout');assert.equal(names(tables[2])[0],'T tickets');
+ assert.deepEqual(names(tables[0]),['Z busiest','A small']);assert.deepEqual(names(tables[1]),['P payout','A small']);assert.deepEqual(names(tables[2]),['T tickets','A small','Z busiest']);assert.match(a.render(p),/<details class="success-analysis-other">.*活动未确认.*未按零处理：Empty/);
  assert.equal(m.rows.find(r=>r.provider==='Z busiest').volumes.charge,110);assert.equal(m.rows.find(r=>r.provider==='T tickets').volumes.workorder,70);assert.equal(JSON.stringify(p),before);
 });
 test('known WG submission volume ranks ahead of smaller flows even when its rate cannot be verified',()=>{
  const a=api(),p=props({queryPlatforms:[A,W],results:[payment(A,[row('withdraw',10,5,'Small'),row('withdraw',0,0,'Zero')]),payment(W,[row('withdraw',50,20,'Busy WG')])],workorders:null}),m=a.buildModel(p);
- assert.deepEqual(Array.from(a.rankedRows(m,'withdraw'),r=>r.provider),['Busy WG','Small','Zero']);assert.equal(m.rows.find(r=>r.provider==='Busy WG').withdraw[1].value,null);assert.equal(m.rows.find(r=>r.provider==='Busy WG').volumes.withdraw,50);
- const html=a.render(p);assert.match(html,/提交笔数从多到少/);assert.match(html,/空数据置后/);assert.match(html,/>—<\/span>/);
+ assert.deepEqual(Array.from(a.rankedRows(m,'withdraw'),r=>r.provider),['Busy WG','Small']);assert.equal(m.rows.find(r=>r.provider==='Busy WG').withdraw[1].value,null);assert.equal(m.rows.find(r=>r.provider==='Busy WG').volumes.withdraw,50);
+ const html=a.render(p);assert.match(html,/提交笔数从多到少/);assert.match(html,/仅显示本业务有活动的支付三方/);assert.match(html,/>—<\/span>/);assert.doesNotMatch(html,/<th scope="row">Zero<\/th>/);
+});
+test('manual and unresolved labels never become provider rows while their native summary contribution and evidence remain available',()=>{
+ const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',10,0,'Real failure'),row('charge',4,4,'人工确认'),row('charge',3,0,'无三方（驳回）'),row('charge',2,1,'未标记三方'),row('charge',1,0,'未识别通道'),row('withdraw',0,0,'人工确认')],[row('charge',20,5),row('withdraw',0,0)])],workorders:{byPlatformProvider:[ticket(A,'charge',8,4,'Real failure'),ticket(A,'charge',2,1,'未标记三方')],byPlatformDirection:[ticket(A,'charge',10,5),ticket(A,'withdraw',0,0)]}}),before=JSON.stringify(p),m=a.buildModel(p),html=a.render(p),sections=html.match(/<section class="success-analysis-panel">.*?<\/section>/g);
+ assert.deepEqual(Array.from(a.rankedRows(m,'charge'),r=>r.provider),['Real failure']);assert.deepEqual(Array.from(a.rankedRows(m,'withdraw'),r=>r.provider),[]);assert.deepEqual(Array.from(a.rankedRows(m,'workorder'),r=>r.provider),['Real failure']);
+ assert.equal(m.footers.charge[0].value,25);assert.equal(m.footers.charge[0].total,20);assert.equal(m.footers.charge[0].providerCount,1);assert.equal(m.footers.charge[0].providerCountPartial,true);assert.equal(m.footers.workorder[0].value,50);assert.equal(m.footers.workorder[0].total,10);
+ assert.match(sections[0],/<th scope="row">Real failure<\/th>.*class="success-rate-low"[^>]*>0\.00%/);assert.doesNotMatch(html,/<th scope="row">(?:人工确认|无三方（驳回）|未标记三方|未识别通道)<\/th>/);assert.match(sections[0],/<details class="success-analysis-other">.*4 类非三方 \/ 未归属记录.*人工确认（已读提交 4 笔）.*不因收起这些记录而扣减/);assert.doesNotMatch(sections[1],/success-analysis-other/);assert.match(sections[2],/未标记三方（已读提交 2 笔）/);assert.equal(JSON.stringify(p),before);
+});
+test('activity visibility preserves real zero rates, cross-day successes and amount-only evidence without inventing zero for missing rates',()=>{
+ const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',10,0,'FailedPay'),row('charge',0,2,'CrossDayPay'),{...row('charge',null,null,'AmountOnlyPay'),all_amount:25},row('charge',0,0,'DormantPay'),row('charge',null,null,'UnknownPay'),row('withdraw',99,80,'PayoutOnlyPay')],[row('charge',10,2)])],workorders:null}),m=a.buildModel(p),table=a.render(p).match(/<table[^>]*>.*?<\/table>/g)[0];
+ assert.deepEqual(Array.from(a.rankedRows(m,'charge'),r=>r.provider),['FailedPay','CrossDayPay','AmountOnlyPay']);assert.equal(m.rows.find(r=>r.provider==='FailedPay').charge[0].value,0);assert.equal(m.rows.find(r=>r.provider==='CrossDayPay').charge[0].value,null);assert.equal(m.rows.find(r=>r.provider==='AmountOnlyPay').charge[0].value,null);assert.equal(m.footers.charge[0].value,20);
+ assert.match(table,/<th scope="row">FailedPay<\/th>.*class="success-rate-low"[^>]*>0\.00%/);assert.doesNotMatch(table,/<th scope="row">(?:DormantPay|UnknownPay|PayoutOnlyPay)<\/th>/);assert.match(a.render(p),/分组未提供可确认的活动笔数或金额，未按零处理：UnknownPay/);
+});
+test('known raw workorder activity keeps an unverifiable original-order rate visible without using raw counts as the rate denominator',()=>{
+ const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',50,25,'PaymentOnlyPay')])],workorders:{byPlatformProvider:[{...ticket(A,'charge',null,null,'RawTicketPay'),submittedCount:30,successCount:20},ticket(A,'charge',0,0,'DormantTicketPay')],byPlatformDirection:[ticket(A,'charge',null,null),ticket(A,'withdraw',0,0)]}}),m=a.buildModel(p),table=a.render(p).match(/<table[^>]*>.*?<\/table>/g)[2];
+ assert.deepEqual(Array.from(a.rankedRows(m,'workorder'),r=>r.provider),['RawTicketPay']);assert.equal(m.rows.find(r=>r.provider==='RawTicketPay').workorder[0].value,null);assert.equal(m.rows.find(r=>r.provider==='RawTicketPay').volumes.workorder,null);assert.equal(m.footers.workorder[0].value,null);assert.match(table,/<th scope="row">RawTicketPay<\/th>.*原支付单去重笔数未完整提供.*>—<\/span>/);assert.doesNotMatch(table,/<th scope="row">(?:PaymentOnlyPay|DormantTicketPay)<\/th>|66\.67%/);
 });
 test('dirty, foreign scope, multi-day and invalid-date snapshots never reveal rates',()=>{
  const a=api();for(const p of [props({dirty:true}),{...props(),scopeMatches:false},props({to:'2026-10-04T23:59:59'}),props({from:'2026-99-03',to:'2026-99-03'})]){assert.equal(a.buildModel(p).ready,false);assert.doesNotMatch(a.render(p),/<table|40\.00%|ATPay/);}
@@ -123,7 +138,7 @@ test('business types keep country, canonical source-provider and original platfo
  p.L.feeLookupRows=[typeRate({sourceTypeProvider:'OtherPay',sourceType:'WRONG SOURCE TYPE'})];assert.match(typeBody(),/>待核对</);assert.doesNotMatch(typeBody(),/WRONG SOURCE TYPE/);
  p.L.feeLookupRows=[typeRate({scopeType:'platform',platform:'Alpha',sourceType:'钱包'})];assert.match(typeBody(),/>类型未齐</);assert.doesNotMatch(typeBody(),/provider-business-type known/);
  p.L.feeLookupRows=[typeRate({sourceType:'<img src=x onerror=bad>'})];assert.match(typeBody(),/&lt;img src=x onerror=bad&gt;/);assert.doesNotMatch(typeBody(),/<img/);
- p.L.results=[payment(Alpha,[row('withdraw')])];assert.match(typeBody(),/>—<\/span>/,'a provider present only in the other direction has no invented charge type');
+ p.L.results=[payment(Alpha,[row('withdraw')])];assert.match(typeBody(),/暂无已确认活动的支付三方/,'a provider present only in the other direction does not create an empty charge row');assert.doesNotMatch(typeBody(),/success-provider-type/);
 });
 test('type lookup loads only for a current queried scope, then renders loading, error and actual source types without refetching restored results',()=>{
  const a=api(),p=props({feeLookupRows:null});let reads=0;p.ensureFeeLookup=()=>{reads++;p.L.feeLookupLoading=true;};let html=a.render(p);assert.equal(reads,1);assert.match(html,/>读取中…</);a.render(p);assert.equal(reads,1);
@@ -132,7 +147,7 @@ test('type lookup loads only for a current queried scope, then renders loading, 
 });
 test('type column width, empty colspan and footer cell preserve the native payment and workorder matrix alignment',()=>{
  const C={...A,id:'third-native'},D={...A,id:'fourth-native'},a=api(),tables=a.render(props({queryPlatforms:[A,B,C,D],results:[],workorders:null})).match(/<table[^>]*>.*?<\/table>/g);
- for(const table of tables.slice(0,2)){assert.match(table,/min-width:484px/);assert.match(table,/<tbody><tr><td colspan="6">/);assert.equal((table.match(/class="success-provider-type"/g)||[]).length,2);}
+ for(const table of tables.slice(0,2)){assert.match(table,/min-width:504px/);assert.match(table,/<tbody><tr><td colspan="6">/);assert.equal((table.match(/class="success-provider-type"/g)||[]).length,2);}
  assert.match(tables[2],/min-width:424px/);assert.match(tables[2],/<tbody><tr><td colspan="5">/);assert.doesNotMatch(tables[2],/success-provider-type/);
 });
 
