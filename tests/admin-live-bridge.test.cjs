@@ -480,3 +480,14 @@ test('deposit unresolved filtering reaches the existing authorized detail gatewa
  for(const followupState of ['all','received','unresolved'])assert.equal(h.api.validateAdminLiveRequest({...q,followupState}).followupState,followupState);
  for(const followupState of [null,{},0,'pending','unresolved\n'])assert.throws(()=>h.api.validateAdminLiveRequest({...q,followupState}));
 });
+
+test('reconciliation platform directory retains refreshed owner RPC and assigned-page authorization',async()=>{
+ const q={action:'workorderRecords',view:'missing',operation:'reconciliationPlatforms',country:'IN',filters:{dateBasis:'submission',issueKind:'deposit'}};
+ const h=load();await h.api.adminLiveRequest(session,q);
+ assert.equal(h.authCalls.length,1);assert(h.calls[0].url.endsWith('/rpc/dashboard_admin_live_workorder_records'));
+ assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_request:{view:'missing',operation:q.operation,country:'IN',filters:q.filters}});
+ const assigned=load();await assigned.api.adminLiveRequest(session,q,undefined,{assigned:true,page:'workorder_reconciliation'});
+ assert(assigned.calls[0].url.endsWith('/rpc/dashboard_admin_execute'));
+ assert.deepEqual(JSON.parse(assigned.calls[0].init.body),{p_page:'workorder_reconciliation',p_request:q});
+ for(const patch of [{view:'records'},{country:'PK'},{offset:0},{filters:{dateBasis:'submission',issueKind:'deposit',team:'M8'}}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
+});

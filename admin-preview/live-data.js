@@ -469,7 +469,7 @@
  function autoWithdrawView(){return withdrawPages.render()}
  async function autoWithdrawLoad(reset=false){return withdrawPages.load(reset)}
  const depositPages=HensemLiveDepositIssues.create({L,E,C,N,R,metric,box,table,pager,formatTime,openDrawer:(title,html)=>openDrawer(title,html),page:()=>state.page,request:q=>window.hensemLiveRequest(q),render:()=>{if(['deposit_tracking','deposit_statistics'].includes(state.page))render()}});
- const workorderOperations=window.HensemLiveWorkorderOperations?.create({L,E,C,N,box,table,formatTime,page:()=>state.page,request:q=>window.hensemLiveRequest(q),render:()=>{if(isWorkorderOperations(state.page))render()},openDrawer:(title,html)=>openDrawer(title,html),renderDaily:workordersView,loadDaily:workordersLoad});
+ const workorderOperations=window.HensemLiveWorkorderOperations?.create({L,E,C,N,box,table,formatTime,page:()=>state.page,request:(q,options)=>window.hensemLiveRequest(q,options),render:()=>{if(isWorkorderOperations(state.page))render()},openDrawer:(title,html)=>openDrawer(title,html),renderDaily:workordersView,loadDaily:workordersLoad});
  function depositIssuesView(){return depositPages.render()}
  async function depositIssuesLoad(reset=false){return depositPages.load(reset)}
   function providerConfigView(){return configuration.providerView()}

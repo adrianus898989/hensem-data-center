@@ -3,6 +3,16 @@ const filterKeys=['team','platform','from','to','dateBasis','issueKind','statusC
 export function validateWorkorderRecordsRequest(p:Record<string,unknown>):Record<string,unknown>{
  if(p.action!=='workorderRecords'||Object.keys(p).some(k=>!['action','view','operation','country','filters','offset','limit'].includes(k)))throw Error('工单记录参数无效');
  const view=p.view??'records',operation=p.operation??'list';
+ // A small authorized directory for bounded India deposit reconciliation reads.
+ // It cannot carry detail filters or pagination into the legacy reader.
+ if(operation==='reconciliationPlatforms'){
+  if(view!=='missing'||typeof p.country!=='string'||!['IN','印度'].includes(p.country)||'offset' in p||'limit' in p)throw Error('核对平台目录参数无效');
+  const raw=p.filters;if(!raw||typeof raw!=='object'||Array.isArray(raw))throw Error('核对平台目录筛选无效');
+  const filters:Record<string,string>={};
+  for(const [k,v] of Object.entries(raw)){if(!['dateBasis','issueKind','platform'].includes(k)||typeof v!=='string'||v.length>200||/[\u0000-\u001f\u007f]/.test(v))throw Error('核对平台目录筛选无效');filters[k]=v.trim();}
+  if(filters.dateBasis!=='submission'||filters.issueKind!=='deposit')throw Error('核对平台目录仅支持印度存款提交工单');
+  return{action:'workorderRecords',view,operation,country:p.country,filters};
+ }
  if(typeof view!=='string'||!['records','orders','missing','workload'].includes(view)||!['list','detail','summary','orderDetail'].includes(String(operation))||operation==='detail'&&view!=='records'||operation==='orderDetail'&&view!=='orders'||operation==='summary'&&!['records','orders'].includes(view))throw Error('工单记录页面无效');
  if(typeof p.country!=='string'||!['IN','印度','BR','巴西','PK','巴基斯坦','ID','印尼','VN','越南','PH','菲律宾','MY','马来','MM','缅甸','NG','尼日利亚','CO','哥伦比亚','MX','墨西哥','CL','智利'].includes(p.country))throw Error('请选择国家');
  const registration=view==='missing'&&['IN','印度'].includes(p.country)&&Boolean(p.filters&&typeof p.filters==='object'&&!Array.isArray(p.filters)&&(p.filters as Record<string,unknown>).dateBasis==='submission'&&['','deposit'].includes(String((p.filters as Record<string,unknown>).issueKind??'')));
