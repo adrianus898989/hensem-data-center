@@ -11,11 +11,11 @@ function response(platform,q,total,extra={}){
  return {ok:true,version:2,countryCode:'IN',sourceStatus:'ready',currency:'INR',successBasis:q.filters.successBasis,total,platforms:[platform],coverage:{expectedPlatforms:1,platformsWithRecords:total?1:0,platforms:[{platform,selectedWorkorders:total+5,registrationPresent:true}]},rows:Array.from({length:Math.min(q.limit,Math.max(0,total-q.offset))},(_,i)=>({id:platform+'-'+(q.offset+i),platform,orderNo:'000000000000000000'+(q.offset+i),amount:'1',currency:'INR',workorderCount:1,processingState:'unprocessed',registrationStatus:q.filters.registrationStatus,submittedAt:'2026-10-05T01:00:00Z'})),...extra,summary};
 }
 function harness(handler){const root={},calls=[];vm.runInNewContext(moduleSource,{window:root,AbortController});const loader=root.HensemWorkorderReconciliationBatch.create({request:async(q,options)=>{calls.push({q,options});return handler(q,options,calls);},scopeIdentity:()=>root.scope||'scope-a',now:()=> '2026-10-05T01:30:00Z'});return {root,calls,loader};}
-test('all-platform first read has exactly two workers, server directory, canonical partition order, and progress',async()=>{
+test('all-platform first read is serial, with server directory, canonical partition order, and progress',async()=>{
  const platforms=Array.from({length:17},(_,i)=>'P'+String(i).padStart(2,'0'));let active=0,max=0;
  const h=harness(async q=>{if(q.operation==='reconciliationPlatforms')return directory(platforms);active++;max=Math.max(max,active);await tick();active--;return response(q.filters.platform,q,Number(q.filters.platform.slice(1))+1);});const progress=[];
  const result=await h.loader.load(query(),{onProgress:v=>progress.push(v)});
- assert.equal(max,2);assert.equal(h.calls.length,18);assert.deepEqual(plain(h.calls[0].q),{action:'workorderRecords',view:'missing',operation:'reconciliationPlatforms',country:'印度',filters:{dateBasis:'submission',issueKind:'deposit'}});
+ assert.equal(max,1);assert.equal(h.calls.length,18);assert.deepEqual(plain(h.calls[0].q),{action:'workorderRecords',view:'missing',operation:'reconciliationPlatforms',country:'印度',filters:{dateBasis:'submission',issueKind:'deposit'}});
  assert.equal(result.total,153);assert.equal(result.summary.pendingCount,153);assert.equal(result.summary.excludedSuccessCount,85);assert.equal(result.coverage.expectedPlatforms,17);assert.equal(result.batch.successfulPlatforms,17);
  assert.equal(result.rows.length,20);assert.equal(result.rows[0].platform,'P16');assert.equal(result.rows[16].platform,'P16');assert.equal(result.rows[17].platform,'P15');assert.equal(progress.filter(p=>p.phase==='platforms'&&p.done===17).length,1);
  assert.equal(h.calls.slice(1).every(c=>c.q.offset===0&&c.q.limit===20),true);
@@ -26,9 +26,13 @@ test('global pages are platform intervals, including boundaries and direct last-
  result=await h.loader.load(query({offset:200}));assert.deepEqual(plain(result.rows.map(r=>r.id)),[...Array.from({length:5},(_,i)=>'A-'+(200+i)),...Array.from({length:15},(_,i)=>'B-'+i)]);assert.equal(h.calls.length,5);assert.equal(h.calls[4].q.offset,200);assert.equal(h.calls[4].q.limit,20);
  const before=h.calls.length;result=await h.loader.load(query({offset:340}));assert.equal(result.rows.length,18);assert.equal(result.rows[0].id,'C-13');assert.equal(result.rows.at(-1).id,'C-30');assert.equal(h.calls.length,before+1);assert.equal(h.calls.at(-1).q.filters.platform,'C');assert.equal(h.calls.at(-1).q.offset,13);assert.equal(h.calls.at(-1).q.limit,20);
 });
-test('partial interval requests round to existing supported limits and trim surplus rows without skipping',async()=>{
- const totals={A:149,B:101};const h=harness(q=>q.operation==='reconciliationPlatforms'?directory(['A','B']):response(q.filters.platform,q,totals[q.filters.platform]));await h.loader.load(query());
- const result=await h.loader.load(query({offset:100,limit:100}));assert.equal(result.rows.length,100);assert.equal(result.rows[48].id,'A-148');assert.equal(result.rows[49].id,'B-0');assert.equal(result.rows.at(-1).id,'B-50');assert.deepEqual(h.calls.slice(-2).map(c=>[c.q.filters.platform,c.q.offset,c.q.limit]),[['A',100,50],['B',0,100]]);
+test('partial interval requests stay serial, round to supported limits and trim surplus rows without skipping',async()=>{
+ const totals={A:149,B:101};let active=0,max=0;const h=harness(async q=>{if(q.operation==='reconciliationPlatforms')return directory(['A','B']);active++;max=Math.max(max,active);await tick();active--;return response(q.filters.platform,q,totals[q.filters.platform]);});await h.loader.load(query());max=0;
+ const result=await h.loader.load(query({offset:100,limit:100}));assert.equal(max,1);assert.equal(result.rows.length,100);assert.equal(result.rows[48].id,'A-148');assert.equal(result.rows[49].id,'B-0');assert.equal(result.rows.at(-1).id,'B-50');assert.deepEqual(h.calls.slice(-2).map(c=>[c.q.filters.platform,c.q.offset,c.q.limit]),[['A',100,50],['B',0,100]]);
+});
+test('cancelling an uncached cross-platform page aborts its only active read and skips the next platform',async()=>{
+ const totals={A:149,B:101};let paused=false;const h=harness((q,{signal})=>q.operation==='reconciliationPlatforms'?directory(['A','B']):paused?new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Object.assign(Error('cancelled'),{name:'AbortError'})),{once:true})):response(q.filters.platform,q,totals[q.filters.platform]));
+ await h.loader.load(query());paused=true;const before=h.calls.length,running=h.loader.load(query({offset:100,limit:100}));await tick();assert.equal(h.calls.length,before+1);assert.equal(h.calls.at(-1).q.filters.platform,'A');h.loader.cancel();await assert.rejects(running,/查询已取消/);await tick();assert.equal(h.calls.length,before+1);assert.equal(h.calls.at(-1).options.signal.aborted,true);
 });
 test('decimal strings retain 8 places beyond Number precision and unknown amounts remain unknown',async()=>{
  const h=harness(q=>q.operation==='reconciliationPlatforms'?directory(['A','B']):response(q.filters.platform,q,1,{summary:q.filters.platform==='A'?{missingAmount:1234567890123456,missingAmountExact:'1234567890123456.12345678',reviewAmountExact:null}:{missingAmount:0.00000002,missingAmountExact:'0.00000002',reviewAmountExact:'0'}}));
@@ -44,7 +48,7 @@ test('platform failure never becomes zero or a full-scope total; explicit refres
 });
 test('cancellation aborts active reads and never starts queued platforms or publishes stale completion',async()=>{
  const h=harness((q,{signal})=>q.operation==='reconciliationPlatforms'?directory(['A','B','C','D']):new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Object.assign(Error('cancelled'),{name:'AbortError'})),{once:true})));
- const running=h.loader.load(query());await tick();assert.equal(h.calls.length,3);h.loader.cancel();await assert.rejects(running,/查询已取消/);await tick();assert.equal(h.calls.length,3);assert.equal(h.calls.slice(1).every(c=>c.options.signal.aborted),true);
+ const running=h.loader.load(query());await tick();assert.equal(h.calls.length,2);h.loader.cancel();await assert.rejects(running,/查询已取消/);await tick();assert.equal(h.calls.length,2);assert.equal(h.calls.slice(1).every(c=>c.options.signal.aborted),true);
 });
 test('scope and committed-filter changes discard cached platform summaries',async()=>{
  const h=harness(q=>q.operation==='reconciliationPlatforms'?directory(['A']):response('A',q,q.filters.from==='2026-10-02'?2:1));
@@ -70,7 +74,7 @@ test('production UI reads authority directory, shows grouped ordering and partia
 });
 test('production UI filter edits stop remaining platform work and suppress stale responses',async()=>{
  const h=uiHarness((q,options)=>q.operation==='reconciliationPlatforms'?Promise.resolve(directory(['A','B','C'])):new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true})));
- const pending=h.api.load(true);await tick();assert.equal(h.calls.length,3);assert.match(h.html(),/分平台读取 0 \/ 3/);h.root.workorderOperationsSet('orderNo','EXACT-NEW-FILTER',false);await pending;assert.equal(h.api.state().result,null);assert.equal(h.api.state().busy,false);assert.equal(h.calls.length,3);assert.equal(h.calls.slice(1).every(c=>c.options.signal.aborted),true);
+ const pending=h.api.load(true);await tick();assert.equal(h.calls.length,2);assert.match(h.html(),/分平台读取 0 \/ 3/);h.root.workorderOperationsSet('orderNo','EXACT-NEW-FILTER',false);await pending;assert.equal(h.api.state().result,null);assert.equal(h.api.state().busy,false);assert.equal(h.calls.length,2);assert.equal(h.calls.slice(1).every(c=>c.options.signal.aborted),true);
 });
 test('UI all-failed response says unknown rather than no orders, and bundled production includes loader',async()=>{
  const h=uiHarness(q=>q.operation==='reconciliationPlatforms'?Promise.resolve(directory(['A'])):Promise.reject(Error('timeout')));await h.api.load(true);assert.match(h.html(),/订单笔数和金额未知/);assert.doesNotMatch(h.html(),/当前条件下没有未登记|共 <b>0/);assert.equal(h.api.state().result.summary.missingCount,null);
@@ -90,7 +94,7 @@ test('editing a busy order/date input cancels reads and refreshes only results, 
   const h=uiHarness((q,options)=>q.operation==='reconciliationPlatforms'?Promise.resolve(directory(['A','B','C'])):paused?new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true})):Promise.resolve(response(q.filters.platform,q,1)),{document,rendered:html=>{fullRenders++;input={value:'',type};document.activeElement=null;button.disabled=/disabled/.test(html.match(/<button[^>]*onclick="workorderOperationsLoad\(true\)"[^>]*>查询<\/button>/)?.[0]||'');results.innerHTML=html.match(/<div class="wo-operations-results">([\s\S]*)<\/div>$/)?.[1]||'';}});
   const running=h.api.load(true);await tick();assert.equal(button.disabled,true);assert.match(results.innerHTML,/分平台读取 0 \/ 3/);const renderCount=fullRenders,updateCount=resultUpdates;input.value=value;input.selectionStart=2;input.selectionEnd=5;document.activeElement=input;const retainedInput=input;
   h.root.workorderOperationsSet(key,value,false);assert.equal(fullRenders,renderCount,'oninput must not rebuild the form');assert.equal(document.activeElement,retainedInput);assert.equal(input.value,value);assert.equal(input.selectionStart,2);assert.equal(input.selectionEnd,5);assert.equal(button.disabled,false);assert.equal(resultUpdates,updateCount+1);assert.doesNotMatch(results.innerHTML,/正在读取|分平台读取|读取中/);assert.match(results.innerHTML,/选择条件后查询/);
-  await running;assert.equal(fullRenders,renderCount,'old finally cannot redraw the edited form');assert.equal(h.calls.length,3,'third queued platform was cancelled');assert.equal(document.activeElement,retainedInput);
+  await running;assert.equal(fullRenders,renderCount,'old finally cannot redraw the edited form');assert.equal(h.calls.length,2,'remaining queued platforms were cancelled');assert.equal(document.activeElement,retainedInput);
   paused=false;await h.root.workorderOperationsLoad(true);assert.equal(h.calls.filter(c=>c.q.operation==='list').at(-1).q.filters[key],value);assert.equal(h.api.state().result.total,3);assert.equal(h.api.state().busy,false);
  }
 });

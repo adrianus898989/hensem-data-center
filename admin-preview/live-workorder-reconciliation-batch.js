@@ -34,7 +34,8 @@
    const key=JSON.stringify([scopeIdentity(),query.country,Object.entries(query.filters).sort(([a],[b])=>compare(a,b))]);
    if(refresh||cache?.key!==key)cache=null;
    const read=async q=>{check();const controller=new AbortController();controllers.add(controller);try{const value=await request(q,{signal:controller.signal});check();return value;}finally{controllers.delete(controller);}};
-   async function bounded(tasks,run){let cursor=0;async function worker(){while(cursor<tasks.length){check();await run(tasks[cursor++]);}}await Promise.all(Array.from({length:Math.min(2,tasks.length)},worker));check();}
+   // Initial summaries and page reads share a serial queue to avoid competing heavy database queries.
+   async function bounded(tasks,run){for(const task of tasks){check();await run(task);}check();}
    let index=cache;
    if(!index){
     onProgress({phase:'directory',done:0,total:null,failed:0});
