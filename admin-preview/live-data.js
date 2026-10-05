@@ -488,7 +488,7 @@
  }});
  const analysis=window.HensemAnalysisDrilldown?.create({L,E,N,C,R,query,formatTime,openDrawer:(title,html)=>openDrawer(title,html),customRows:segment=>matrixCustom?.detailRows(segment),customResults:segment=>matrixCustom?.customResults(segment),request:q=>window.hensemLiveRequest(q),render:()=>render()});
  matrixCustom=window.HensemMatrixCustomRange?.create({L,E,N,C,R,analysis,page:()=>state.page,allowed:()=>roleAllowed(state.page,'query'),selected,query,request:(q,serial)=>readAggregate(q,serial,false,true),successUnavailable:successTimeUnavailable,render:()=>render()});
- function referencePage(){return HensemLivePages.create({analysis,matrixCustom,pendingSnapshot,memberCounts,successTimeSummary,successTimeUnavailable,amountBandKeys,amountLabel,amountNote,L,E,N,C,R,plus,combine,groupRows,empty,table,box,pager,totals,comparisonRows,compareMetric,chart,matrixBody,latencyView,detailsView,providersView,platformsView,pagedTable,overviewChart,overviewAmounts,overviewAnalysisRender,businessHeaders,businessCells,feeForRow,ensureFeeLookup,providerCell,loadedFeeValue}).render(state.page)}
+ function referencePage(){return HensemLivePages.create({analysis,matrixCustom,pendingSnapshot,memberCounts,reportCatalogRows:reportData?.state.catalogError?[]:reportData?.state.catalogRows,successTimeSummary,successTimeUnavailable,amountBandKeys,amountLabel,amountNote,L,E,N,C,R,plus,combine,groupRows,empty,table,box,pager,totals,comparisonRows,compareMetric,chart,matrixBody,latencyView,detailsView,providersView,platformsView,pagedTable,overviewChart,overviewAmounts,overviewAnalysisRender,businessHeaders,businessCells,feeForRow,ensureFeeLookup,providerCell,loadedFeeValue}).render(state.page)}
   // Report pages already have Query in the filter bar. Only standalone views
   // without that bar (the legacy rates view) need an action in the empty state.
   const queryPrompt=(text,showQueryAction=false)=>'<div class="live-status live-query-prompt"><span>'+E(text)+'</span>'+(showQueryAction?'<button type="button" class="btn primary" onclick="liveQuery()">查询数据</button>':'')+'</div>';
@@ -580,7 +580,7 @@
   // A single document owns all tabs. Only small controls are copied; aggregate
   // result objects are shared by reference, never cloned into multiple iframes.
   const pageTabs=new Map([[state.page,{page:state.page}]]);
-  const pageFields=('pageQueried overviewQueried comparisonResults comparisonStatus comparisonError comparisonLabel queryNow overviewTab overviewAnalysis overviewSections overviewWorkordersStatus providerIntake providerComparisonIntake queryWarnings queryFailures queryPlatforms queryScope queryPaused multi team providerOptions providerOptionsKey providerOptionsError multiSearch country countryTouched currency platform source provider direction status from to orderNumber thirdPartyOrderNumber memberId systemOrderId utr page size detail view feeEstimateMode localPage localSize groups results loadedView dirty error progress workorders workordersError workordersUnsupported workordersScope workordersPage workordersSize successDateNotice providerExpanded providerSort providerSortAsc matrixMode amountBandProfiles tablePages tableSizes analysisMatrixSelection dailyDay dailyMetric dailyView durationDetail durationGroup durationMode durationOrderQuery durationQuery durationThreshold restoredPage').split(' ');
+  const pageFields=('pageQueried overviewQueried comparisonResults comparisonStatus comparisonError comparisonLabel queryNow overviewTab overviewAnalysis overviewSections overviewWorkordersStatus overviewIntake providerIntake providerComparisonIntake queryWarnings queryFailures queryPlatforms queryScope queryPaused multi team providerOptions providerOptionsKey providerOptionsError multiSearch country countryTouched currency platform source provider direction status from to orderNumber thirdPartyOrderNumber memberId systemOrderId utr page size detail view feeEstimateMode localPage localSize groups results loadedView dirty error progress workorders workordersError workordersUnsupported workordersScope workordersPage workordersSize successDateNotice providerExpanded providerSort providerSortAsc matrixMode amountBandProfiles tablePages tableSizes analysisMatrixSelection dailyDay dailyMetric dailyView durationDetail durationGroup durationMode durationOrderQuery durationQuery durationThreshold restoredPage').split(' ');
   const copiedControls=new Set(['multi','multiSearch','providerExpanded','tablePages','tableSizes','analysisMatrixSelection']);
   const initialTeamView=Object.fromEntries(pageFields.filter(key=>Object.prototype.hasOwnProperty.call(L,key)).map(key=>[key,copyControls(L[key])]));
   const teamQueryFilterFields=('multi multiSearch team country countryTouched currency platform source provider direction status from to orderNumber thirdPartyOrderNumber memberId systemOrderId utr size localSize tableSizes providerOptions providerOptionsKey providerOptionsError matrixMode amountBandProfiles').split(' ');
@@ -603,6 +603,7 @@
    entry.bootstrap=!L.catalogReady;entry.scroll=pageScroll();entry.view={};for(const key of pageFields)if(Object.prototype.hasOwnProperty.call(L,key))entry.view[key]=copiedControls.has(key)?copyControls(L[key]):L[key];
    if(entry.bootstrap)entry.view.dirty=true;
    for(const key of ['providerIntake','providerComparisonIntake'])if(entry.view[key]?.status==='loading')entry.view[key]={...entry.view[key],status:'error',error:'采集核对已暂停，点击查询重新核对'};
+   if(entry.view.overviewIntake)entry.view.overviewIntake=Object.fromEntries(Object.entries(entry.view.overviewIntake).map(([direction,data])=>[direction,data.status==='loading'?{...data,status:'error',error:'采集核对已暂停，点击查询重新核对'}:data]));
    if(L.providerOptionsBusy){entry.view.providerOptionsKey='';entry.view.providerOptionsError='目录读取已暂停，点击查询更新';}
    if(L.overviewSections)entry.view.overviewSections={...L.overviewSections,status:L.overviewSections.status==='loading'?'partial':L.overviewSections.status};
    if(L.overviewWorkordersStatus==='loading')entry.view.overviewWorkordersStatus='paused';
@@ -793,7 +794,22 @@
  function aggregateQueryScope(){return JSON.stringify([isTeamWorkspace(state.page)?'teamops':state.page,selected().map(p=>p.id),L.from,L.to,L.direction,L.status,activeValues('provider'),L.orderNumber,L.memberId,L.systemOrderId,L.thirdPartyOrderNumber,L.overviewAnalysis])}
 
 
+ async function loadOverviewIntake(serial){
+  const from=L.from?.slice(0,10),to=L.to?.slice(0,10),failed=new Set((L.queryFailures||[]).map(p=>p.id)),results=new Map(L.results.map(r=>[r.platform?.id,r]));
+  // Inspect only successful empty reads. Populated platforms already have
+  // order evidence, and failed aggregates must not be relabelled as empty.
+  for(const direction of L.direction==='all'?['charge','withdraw']:[L.direction]){
+   if(serial!==L.serial||state.page!=='overview')return;
+   const platforms=L.queryPlatforms.filter(p=>{const r=results.get(p.id);return !p.reportOnly&&!failed.has(p.id)&&r&&Array.isArray(r.summary)&&!r.summary.some(row=>row.direction===direction)&&(r.summary.length||r.total!=null&&Number(r.total)===0)&&!Object.values(r.groups||{}).some(rows=>Array.isArray(rows)&&rows.some(row=>row.direction===direction));});
+   if(!platforms.length)continue;
+   const publish=data=>{if(serial===L.serial&&state.page==='overview'){L.overviewIntake={...L.overviewIntake,[direction]:{...data,direction}};render();}};
+   publish({status:'loading',from,to,platforms:[],error:''});
+   try{if(!providerIntake)throw Error('采集核对暂不可用');publish(await providerIntake.load({platforms,direction,from,to,onProgress:publish}));}
+   catch(e){publish({status:'error',from,to,platforms:[],error:e.message||'采集核对失败'});}
+  }
+ }
  async function loadProviderIntake(serial,previous=false){
+  if(state.page==='overview')return previous?undefined:loadOverviewIntake(serial);
   if(!providerDirection(state.page))return;
   const key=previous?'providerComparisonIntake':'providerIntake',range=HensemLiveCompare.windowFor(L.from,L.to,scopeZone(),L.queryNow);
   const from=(previous?range.previousFrom:L.from)?.slice(0,10),to=(previous?range.previousTo:L.to)?.slice(0,10);
@@ -819,7 +835,7 @@
   if(state.page==='orders'&&!orderPlatform()){L.serial++;cancelDataReads();L.queryRetrying=false;L.detailSerial++;L.loading=false;L.detailBusy=false;L.results=[];L.detail=null;L.error='';L.queryWarnings=[];L.queryFailures=[];L.queryPlatforms=[];L.queryScope='';L.comparisonResults=[];L.comparisonStatus='idle';L.dirty=true;providerOrders.cancel();loadProviderOptions();render();return}
   const scope=aggregateQueryScope();
   if(!L.catalogReady||L.loading&&!L.dirty&&L.inflightScope===scope)return;L.inflightScope=scope;
-  L.restoredPage=false;const platforms=selected();if(force)aggregateCache.clear();loadProviderOptions();const serial=++L.serial;cancelDataReads();L.providerIntake=null;L.providerComparisonIntake=null;L.queryScope=scope;L.queryPaused=false;L.queryPlatforms=platforms.slice();L.queryFailures=[];L.queryRetrying=false;providerOrders.cancel();L.detailSerial++;L.workordersSerial++;L.workorders=null;L.workordersLoading=false;L.workordersError='';L.workordersScope='';L.queryNow=Date.now();L.comparisonResults=[];L.comparisonStatus='idle';L.comparisonError='';L.error='';L.queryWarnings=[];L.dirty=false;L.loading=true;L.progress='正在读取正式订单…';L.detail=null;L.page=1;L.localPage=1;L.tablePages={};L.results=[];L.loadedView=L.status==='all'?aggregateMode():'full';render();
+  L.restoredPage=false;const platforms=selected();if(force)aggregateCache.clear();loadProviderOptions();const serial=++L.serial;cancelDataReads();L.overviewIntake=null;L.providerIntake=null;L.providerComparisonIntake=null;L.queryScope=scope;L.queryPaused=false;L.queryPlatforms=platforms.slice();L.queryFailures=[];L.queryRetrying=false;providerOrders.cancel();L.detailSerial++;L.workordersSerial++;L.workorders=null;L.workordersLoading=false;L.workordersError='';L.workordersScope='';L.queryNow=Date.now();L.comparisonResults=[];L.comparisonStatus='idle';L.comparisonError='';L.error='';L.queryWarnings=[];L.dirty=false;L.loading=true;L.progress='正在读取正式订单…';L.detail=null;L.page=1;L.localPage=1;L.tablePages={};L.results=[];L.loadedView=L.status==='all'?aggregateMode():'full';render();
   let index=0,done=0;const results=[];let submissionBatch=null;
   try{
    if(!isSuccessAnalysis()&&window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;
