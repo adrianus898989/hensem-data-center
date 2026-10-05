@@ -196,3 +196,76 @@ test('processed default migration is idempotent, preserves router and helper met
  assert.equal(await scalar("select md5(prosrc) from pg_proc where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure"),'f0cec4e43873303811948d00f12eb7bb');
  for(const change of ["grant execute on function private.dashboard_admin_workorder_registration(jsonb) to authenticated","alter function private.dashboard_admin_workorder_registration(jsonb) security definer","alter function private.dashboard_admin_live_workorder_records(jsonb) set statement_timeout='21s'"]){await db.exec('savepoint processed_drift');await db.exec(change);await assert.rejects(()=>db.exec(processedDefault),/REGISTRATION_PROCESSED_/);await db.exec('rollback to savepoint processed_drift;release savepoint processed_drift')}
 });
+
+const setMatching=read('migrations/20261005123905_workorder_registration_set_matching.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,'');
+test('set matching preserves full JSON across original identity, status, registration evidence and pagination',async()=>{
+ await applyProcessedDefault();
+ // The same registration matches both the original and several workorder aliases:
+ // it must still count once, with the original amount counted once.
+ await ar('LINK-A',{payment_order_no:'RC-LINK',status_code:1});
+ await ar('LINK-B',{payment_order_no:'RC-LINK',status_code:3,submitted_date:'2026-09-01',submitted_at:'2026-08-31T20:00:00Z'});
+ await ar('LINK-A',{platform:'RAJALOTTERY',payment_order_no:'RC-LINK',status_code:1});
+ await entry('same-id','RC-LINK',{source_kind:'portal',portal_team:'M8',work_order_number:'WN-LINK-A',portal_payload:{entry:{outcome:'pending'},workorders:['LINK-A','WN-LINK-A','LINK-B','WN-LINK-B']}});
+ await entry('historical','RC-LINK',{source_sheet:'INPUT-HISTORICAL',followup_date:'2020-01-01'});
+ await sheet('same-id','RC-LINK');
+ await ar('OPEN',{payment_order_no:'RC-SUCCESS',status_code:3});
+ await ar('HANDLED',{payment_order_no:'RC-SUCCESS',status_code:4,submitted_date:'2026-09-01',amount:99,third_party:'OtherPay'});
+ await entry('success-open2','RC-SUCCESS');
+ await ar('PAID');await entry('paid3','RC-PAID',{followup_status:'Success'});
+ await ar('AMOUNT');await entry('amount4','RC-AMOUNT',{amount:999});
+ await ar('ID');await entry('id5','RC-WRONG',{work_order_number:'WN-ID'});
+ await ar('CONFLICT',{payment_order_no:'RC-STATUS-CONFLICT',status_code:4});await ar('CONFLICT',{platform:'RAJALOTTERY',payment_order_no:'RC-STATUS-CONFLICT',status_code:1});
+ await ar('MISSING');await ar('OTHER',{platform:'OTHER'});await entry('other6','RC-OTHER',{platform:'OTHER'});
+ await ar('HIDDEN',{platform:'HIDDEN'});await entry('hidden7','RC-HIDDEN',{platform:'HIDDEN'});
+ await entry('wrong-team8','RC-LINK',{source_kind:'portal',portal_team:'OTHER',portal_payload:{entry:{outcome:'success'}}});
+ await entry('wrong-country9','RC-LINK',{country:'PK',followup_status:'Success'});
+ await newar('AMBIG',{status_code:'1',raw:{depositOrderNo:'RC-ONE',rechargeNumber:'RC-OTHER'}});
+ await newar('NEWAR-OPEN',{status_code:'1'});await newar('NEWAR-DONE',{status_code:'4'});
+ for(let i=0;i<24;i++)await ar('PAGE'+String(i).padStart(2,'0'));for(let i=0;i<45;i++)await entry('PAGE-E'+i,'RC-PAGE00',{source_row:100+i});
+ await db.exec(`insert into public.ar_workorder_issue_details(system_name,country_code,platform,work_order_id,work_order_no,payment_order_no,issue_kind,amount,third_party,status_code,submitted_date,submitted_at,observed_at)
+ select 'AR','IN','RAJA','CAPPED-'||i,'WN-CAPPED-'||i,'RC-CAPPED','deposit',12.34,'Pay',1,'2026-10-04','2026-10-03T19:00:00Z','2026-10-04T02:00:00Z' from generate_series(1,101) i`);
+ const queries=[{}, {successBasis:'receipt'}, {registrationStatus:'missing'}, {registrationStatus:'matched'}, {registrationStatus:'review'}, {platform:'RAJA'}, {orderNo:'RC-LINK'}, {workorderNo:'LINK-B'}, {statusCode:'1'}, {minAmount:'13'}, {utr:'not present'}, {kyc:'yes'}];
+ const before=[];for(const filters of queries)before.push(await call(filters));
+ const nextBefore=await call({}, {offset:20,limit:20});
+ await db.exec(setMatching);
+ for(let i=0;i<queries.length;i++)assert.deepEqual(await call(queries[i]),before[i],JSON.stringify(queries[i]));
+ assert.deepEqual(await call({}, {offset:20,limit:20}),nextBefore);
+ const linked=(await call({orderNo:'RC-LINK'})).rows[0];assert.equal(linked.registrationMatchCount,3);assert.equal(linked.workorderCount,2);assert.equal(linked.amount,12.34);assert.equal(linked.registrationStatus,'matched');
+ const capped=(await call({orderNo:'RC-CAPPED'})).rows[0];assert.equal(capped.workorderCount,101);assert.equal(capped.workorders.length,100);assert.equal(capped.workordersTruncated,true);
+ assert(!JSON.stringify(await call()).includes('RC-HIDDEN'));
+ await db.exec("select set_config('test.authorized_platform','OTHER',true)");const restricted=await call();assert.equal(restricted.total,1);assert.equal(restricted.rows[0].platform,'OTHER');assert(!JSON.stringify(restricted).includes('RC-LINK'));
+ await db.exec("select set_config('test.denied','yes',true)");await rejects(()=>call(),/preview_denied/);
+});
+test('dense registration batch avoids quadratic evidence and pagination rejoins even with low cardinality estimates',async t=>{
+ await applyProcessedDefault();await db.exec(setMatching);
+ const size=5000;
+ await db.exec(`insert into public.ar_workorder_issue_details(system_name,country_code,platform,work_order_id,work_order_no,payment_order_no,issue_kind,amount,third_party,status_code,submitted_date,submitted_at,observed_at)
+ select 'AR','IN',case when i%2=0 then 'RAJA' else 'OTHER' end,'DENSE-'||i,'WN-DENSE-'||i,'RC-DENSE-'||i,'deposit',10.25,'Pay',case when i%3=0 then 4 else 1 end,'2026-10-04','2026-10-03T19:00:00Z','2026-10-04T02:00:00Z' from generate_series(1,${size}) i`);
+ await db.exec(`insert into public.admin_deposit_followup_rows(id,source_sheet,source_tab,source_row,country,platform,order_number,amount,source_kind,followup_status)
+ select 'DENSE-E'||i,'INPUT','T',i,'印度',case when i%2=0 then 'RAJA' else 'OTHER' end,'RC-DENSE-'||i,10.25,'sheet','Not Yet Received' from generate_series(1,${size}) i`);
+ const filters={from:'2026-10-01',to:'2026-10-31',registrationStatus:'matched'};
+ const r=await call(filters);assert.equal(r.summary.candidateCount,size);assert.equal(r.summary.excludedSuccessCount,1666);assert.equal(r.total,3334);assert.equal(r.summary.matchedAmount,34173.5);assert.equal(r.rows.length,20);assert(r.rows.every(x=>x.registrationMatchCount===1));
+ const body=await scalar("select prosrc from pg_proc where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure");
+ let sql=body.slice(body.indexOf(' with catalog as materialized ('),body.indexOf(' into v_result;')).replace(/\bf->>/g,"('{\"registrationStatus\":\"matched\"}'::jsonb)->>");
+ const constants={v_scope:"'{}'::jsonb",v_dates:"'range'",v_start:"date '2026-10-01'",v_end:"date '2026-10-31'",v_basis:"'processed'",v_offset:'0',v_limit:'20'};
+ for(const [name,value]of Object.entries(constants))sql=sql.replace(new RegExp('\\b'+name+'\\b','g'),value);
+ const explanation=await scalar('explain(analyze,format json) '+sql),plan=explanation[0],nodes=[];
+ function walk(n){nodes.push(n);for(const p of n.Plans||[])walk(p)}walk(plan.Plan);
+ // Assert executed work rather than a flaky wall-clock limit. The old reader
+ // performs >66 million discarded join comparisons for this 5,000-row fixture.
+ const rejected=nodes.reduce((sum,n)=>sum+(n['Rows Removed by Join Filter']||0)*(n['Actual Loops']||0),0);
+ assert(rejected<size*50,JSON.stringify({rejected,size}));
+ const repeated=nodes.filter(n=>n['Node Type']==='CTE Scan'&&n['Actual Rows']*n['Actual Loops']>size*30);
+ assert.deepEqual(repeated.map(n=>[n['CTE Name'],n['Actual Rows'],n['Actual Loops']]),[]);
+ assert(nodes.filter(n=>['CTE page_workorders','CTE page_evidence'].includes(n['Subplan Name'])).every(n=>n['Actual Loops']===1));
+ t.diagnostic(`${size} originals + ${size} registrations: ${plan['Execution Time']} ms; ${rejected} discarded join comparisons`);
+});
+test('set-matching migration is guarded and idempotent with unchanged OIDs, owners, ACLs, volatility and timeouts',async()=>{
+ await applyProcessedDefault();
+ const router=await scalar("select to_jsonb(p) from pg_proc p where oid='private.dashboard_admin_live_workorder_records(jsonb)'::regprocedure"),helper=await scalar("select to_jsonb(p)-'prosrc' from pg_proc p where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure");
+ await db.exec(setMatching);await db.exec(setMatching);
+ assert.deepEqual(await scalar("select to_jsonb(p) from pg_proc p where oid='private.dashboard_admin_live_workorder_records(jsonb)'::regprocedure"),router);
+ assert.deepEqual(await scalar("select to_jsonb(p)-'prosrc' from pg_proc p where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure"),helper);
+ assert.equal(await scalar("select md5(prosrc) from pg_proc where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure"),'82332dfe28f2103981addfc26c95f12d');
+ for(const change of ["grant execute on function private.dashboard_admin_workorder_registration(jsonb) to authenticated","alter function private.dashboard_admin_workorder_registration(jsonb) security definer","alter function private.dashboard_admin_live_workorder_records(jsonb) set statement_timeout='21s'", "create or replace function private.dashboard_admin_workorder_registration(p_query jsonb) returns jsonb language plpgsql stable set search_path='' as $$begin return '{}'::jsonb;end$$"]){await db.exec('savepoint set_matching_drift');await db.exec(change);await assert.rejects(()=>db.exec(setMatching),/REGISTRATION_SET_MATCHING_/);await db.exec('rollback to savepoint set_matching_drift;release savepoint set_matching_drift')}
+});
