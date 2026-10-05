@@ -472,3 +472,11 @@ test('KYC imported-candidate filters retain existing authenticated RPC and stric
  for(const change of [{dimension:null},{dimension:{}},{dimension:[]},{kycStatus:'YES'},{processing:0},{matchStatus:'paid'},{query:[]},{from:'2026-09-01'},{sourceKind:'portal'},{raw:true},{dateMode:null},{startAt:'2026-02-30T00:00:00Z'},{section:{toString:()=> 'kyc'}}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...change}));
  for(const section of [null,{},[],0])assert.throws(()=>h.api.validateAdminLiveRequest({action:'depositStatistics',section}));
 });
+
+test('deposit unresolved filtering reaches the existing authorized detail gateway with strict enum validation',async()=>{
+ const h=load(),q={action:'depositStatistics',section:'details',followupState:'unresolved',dateMode:'all',country:'IN',limit:20,offset:20};
+ await h.api.adminLiveRequest(session,q,undefined,{assigned:true,page:'deposit_statistics'});
+ assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_execute');assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_page:'deposit_statistics',p_request:q});
+ for(const followupState of ['all','received','unresolved'])assert.equal(h.api.validateAdminLiveRequest({...q,followupState}).followupState,followupState);
+ for(const followupState of [null,{},0,'pending','unresolved\n'])assert.throws(()=>h.api.validateAdminLiveRequest({...q,followupState}));
+});

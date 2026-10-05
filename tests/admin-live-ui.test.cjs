@@ -893,7 +893,7 @@ test('workorder page restores filters and resets the inherited payout or collect
 test('deposit tracking and statistics are separate pages and receipt dates never reuse source day counts',async()=>{
  const h=await ready();h.setHandler(q=>['depositIssues','depositStatistics'].includes(q.action)?{rows:[{platform:'Synthetic platform',provider:'Synthetic Provider',orderNumber:'SYNTHETIC-ORDER',amount:900,status:'已入款',unreceivedDays:90,providerReply:'成功 <script>',utrMatch:'一致',kycCorrect:'正确'}],total:1,summary:{count:1,amount:900,unreceivedAmount:0,unreceivedCount:0,receivedCount:1}}:{rows:[],total:0});
  h.L.from='2026-09-23T00:00:00';h.L.to='2026-09-23T23:59:59';h.c.setPage('deposit_tracking');await settle();await h.c.liveQuery();await settle();const q=h.calls.at(-1);assert.equal(q.action,'depositIssues');assert.equal(q.view,'entries');assert.equal(q.dateMode,'range');assert.equal(q.startAt,'2026-09-17T00:00:00.000Z');assert.equal(q.endAt,'2026-09-23T23:59:59.000Z');assert.match(h.html(),/员工跟进明细/);assert.doesNotMatch(h.html(),/表格核对结果|onclick="depositIssuesSource/);
- h.c.setPage('deposit_statistics');await settle();h.c.depositIssuesSection('details');await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).action,'depositStatistics');assert.equal(h.calls.at(-1).section,'details');const stats=renderedTables(h.html()).find(t=>t.headers[0]==='平台 / 原支付订单');assert(stats);assert.match(plain(stats.rows[0][stats.headers.indexOf('凭证日期 / 天数')]),/—/);h.c.depositIssuesDetail(0);assert.match(h.drawers.at(-1).html,/成功 &lt;script&gt;/);assert.doesNotMatch(h.drawers.at(-1).html,/<script>/);
+ h.c.setPage('deposit_statistics');await settle();h.c.depositIssuesSection('details');await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).action,'depositStatistics');assert.equal(h.calls.at(-1).section,'details');const stats=renderedTables(h.html()).find(t=>t.headers[0]==='平台'&&t.headers[1]==='原支付订单');assert(stats);assert.match(plain(stats.rows[0][stats.headers.indexOf('天数')]),/—/);h.c.depositIssuesDetail(0);assert.match(h.html(),/deposit-inline-detail/);assert.match(h.html(),/成功 &lt;script&gt;/);assert.doesNotMatch(h.html(),/<script>/);
  h.c.setPage('deposit_tracking');await settle();await h.c.liveQuery();await settle();assert.match(h.html(),/员工跟进明细/);h.c.depositIssuesDate('from','2026-09-22');assert.match(h.html(),/SYNTHETIC-ORDER/,'old result stays visible until an explicit query');await h.c.depositIssuesLoad();assert.equal(h.calls.at(-1).startAt,'2026-09-22T00:00:00.000Z');
 });
 test('revisiting a reason tab reuses its bounded cache, while refresh invalidates it',async()=>{
@@ -1588,4 +1588,12 @@ test('order monetary fields and effective-version facts stay distinct through bu
  h.c.liveReferenceSet('view','orderFees');let t=renderedTables(h.html()).find(t=>t.headers.includes('估算手续费'));assert.equal(plain(t.rows[0][t.headers.indexOf('估算手续费')]),'0.00');assert.match(t.html,/已匹配|SYNTHETIC-RATE-VERSION/);
  h.c.liveReferenceSet('view','orderRates');t=renderedTables(h.html()).find(t=>t.headers.includes('百分比费率'));assert.equal(plain(t.rows[0][t.headers.indexOf('百分比费率')]),'0.00%');assert.equal(plain(t.rows[0][t.headers.indexOf('费率版本')]),'SYNTHETIC-RATE-VERSION');assert.doesNotMatch(t.html,/历史费率版本与生效时间未接入/);
  h.c.liveOrder(0);const html=h.drawers.at(-1).html;assert.match(html,/法币金额/);assert.match(html,/结算金额/);assert.match(html,/12\.50001234 USDT/);assert.match(html,/来源汇率/);assert.match(html,/SYNTHETIC-RATE-VERSION/);assert.equal(h.calls.length,calls);
+});
+
+test('current-page CSV excludes expanded reconciliation rows and their nested evidence tables',async()=>{
+ const h=await ready(),expanded='.deposit-inline-detail,.wo-reconciliation-expanded';
+ const row=(text,inside=false)=>({cells:[{innerText:text}],closest:selector=>selector===expanded&&inside?{}:null});
+ const main={closest:()=>null,querySelectorAll:()=>[row('订单号'),row('ORDER-ONE'),row('SHEET-EVIDENCE-ROW',true),row('PORTAL-EVIDENCE-ROW',true)]};
+ const nested={closest:selector=>selector===expanded?{}:null,querySelectorAll:()=>[row('NESTED-EVIDENCE-HEADER'),row('NESTED-EVIDENCE-VALUE')]};
+ h.nodes.get('page').querySelectorAll=()=>[main,nested];h.c.liveExport();assert.equal(h.blobs.length,1);const csv=await h.blobs[0].text();assert.match(csv,/ORDER-ONE/);assert.doesNotMatch(csv,/EVIDENCE/);assert.equal((csv.match(/ORDER-ONE/g)||[]).length,1);
 });

@@ -2,15 +2,22 @@
 // The private admin page reads Supabase; it never calls Google directly.
 const DEFAULT_SOURCE_ID = "1Y110H-E0ny6Yj6ZEhn7tRLgCuRrSE5iDeFwaZ8-aCqg";
 const SHEET_TAB = "UPI核对";
-const DEFAULT_ENTRY_SOURCE_ID = "1UBnMj2JS4eDfT-gdE-flUVLWs387FgoR6Rw2baLYzoE";
+const DEFAULT_ENTRY_SOURCE_ID = "1o0nhJfztjVX9gNwH43uPWg5BUuhBxDMZ-_WUWdRd588";
+const HISTORICAL_ENTRY_SOURCE_ID = "1UBnMj2JS4eDfT-gdE-flUVLWs387FgoR6Rw2baLYzoE";
 const ENTRY_TABS = new Set(["SHREEWIN", "VEERGAME", "DHANIWIN", "91CLUB", "BIGMUMBAI", "TPPLAY", "INDIA82", "6CLUB", "OKWIN", "JALWA", "JAICLUB", "RAJALOTTERY", "51GAME", "55CLUB", "IN999", "LOTTERY77"]);
+// The October workbook adds 9KCLUB. Mirroring that exact tab does not create a
+// platform mapping or grant its records to any account's scope.
+const CURRENT_ENTRY_TABS = new Set([...ENTRY_TABS, "9KCLUB"]);
 const MAX_ROWS = 40000;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 120_000;
 const encoder = new TextEncoder();
 
 type Runtime = { env: (name: string) => string | undefined; fetch: typeof fetch; now: () => number; crypto: Crypto };
-type Settings = { sourceId: string; entrySourceId: string; email: string; privateKey: string; supabaseUrl: string; serviceKey: string };
+type Settings = { sourceId: string; entrySourceId: string; entrySourceMigrated: boolean; email: string; privateKey: string; supabaseUrl: string; serviceKey: string };
+type SyncStage = "configuration" | "token" | "result_read" | "entry_metadata" | "entry_read" | "db_upsert" | "db_archive" | "complete";
+type MirrorTarget = { table: string; rows: Record<string, unknown>[]; source: string; tabs: string[] };
+type SourceResult = { ok: boolean; stage: SyncStage; code?: string; rowsRead: number; rowsWritten: number; tabsRead: number; syncedAt?: string };
 class SyncError extends Error { constructor(readonly code: string, readonly status = 503) { super(code); } }
 
 function json(body: Record<string, unknown>, status = 200): Response {
@@ -47,7 +54,13 @@ function config(runtime: Runtime): Settings {
     const url = new URL(supabaseUrl);
     if (url.protocol !== "https:" || url.origin !== supabaseUrl || url.username || url.password || url.port || !url.hostname.endsWith(".supabase.co")) throw new Error();
   } catch { throw new SyncError("sync_configuration_incomplete", 500); }
-  return { sourceId: sourceId(source), entrySourceId: sourceId(runtime.env("DEPOSIT_FOLLOWUP_SHEET_ID") || DEFAULT_ENTRY_SOURCE_ID), email, privateKey, supabaseUrl, serviceKey };
+  const configuredEntrySource = sourceId(runtime.env("DEPOSIT_FOLLOWUP_SHEET_ID") || DEFAULT_ENTRY_SOURCE_ID);
+  // The owner moved the active follow-up workbook to October. Treat only the
+  // known legacy ID (including its Google URL form) as a retired configuration;
+  // unrelated custom source IDs retain their existing override behavior.
+  const entrySourceMigrated = configuredEntrySource === HISTORICAL_ENTRY_SOURCE_ID;
+  const entrySourceId = entrySourceMigrated ? DEFAULT_ENTRY_SOURCE_ID : configuredEntrySource;
+  return { sourceId: sourceId(source), entrySourceId, entrySourceMigrated, email, privateKey, supabaseUrl, serviceKey };
 }
 async function assertion(settings: Settings, runtime: Runtime): Promise<string> {
   const header = base64Url(encoder.encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
@@ -181,13 +194,16 @@ function entryRowsFromValues(values: unknown[][], sourceSheet: string, tab: stri
   }
   return rows;
 }
-async function readEntrySheets(settings: Settings, runtime: Runtime, headers: Record<string, string>, collectedAt: string): Promise<{rows: Record<string, unknown>[]; tabs: string[]}> {
+async function readEntrySheets(settings: Settings, runtime: Runtime, headers: Record<string, string>, collectedAt: string, onStage: (stage: SyncStage) => void = () => {}): Promise<{rows: Record<string, unknown>[]; tabs: string[]}> {
   const base = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(settings.entrySourceId)}`;
+  onStage("entry_metadata");
   const metadata = await requestJson(runtime, base + "?fields=sheets.properties", { method: "GET", headers }, 256 * 1024);
-  const tabs = (Array.isArray(metadata?.sheets) ? metadata.sheets : []).map((s: any) => s?.properties).filter((p: any) => p && !p.hidden && ENTRY_TABS.has(p.title) && Number.isSafeInteger(p.sheetId));
+  const expectedTabs = settings.entrySourceId === DEFAULT_ENTRY_SOURCE_ID ? CURRENT_ENTRY_TABS : ENTRY_TABS;
+  const tabs = (Array.isArray(metadata?.sheets) ? metadata.sheets : []).map((s: any) => s?.properties).filter((p: any) => p && !p.hidden && expectedTabs.has(p.title) && Number.isSafeInteger(p.sheetId));
   // An incomplete workbook read must never remove the previous complete mirror.
-  if (tabs.length !== ENTRY_TABS.size || new Set(tabs.map((t: any) => t.title)).size !== ENTRY_TABS.size) throw new SyncError("entry_tabs_incomplete", 502);
+  if (tabs.length !== expectedTabs.size || new Set(tabs.map((t: any) => t.title)).size !== expectedTabs.size) throw new SyncError("entry_tabs_incomplete", 502);
   const rows: Record<string, unknown>[] = [];
+  onStage("entry_read");
   for (let at = 0; at < tabs.length; at += 4) {
     const group = tabs.slice(at, at + 4), query = new URLSearchParams({ valueRenderOption: "FORMATTED_VALUE", majorDimension: "ROWS" });
     group.forEach((t: any) => query.append("ranges", `'${t.title}'!A1:P${MAX_ROWS + 1}`));
@@ -205,47 +221,82 @@ export function createDepositIssueSyncHandler(runtime: Runtime) {
     if (!(await sameSecret(runtime.env("SYNC_SECRET") || "", request.headers.get("x-sync-secret") || "", runtime.crypto))) return json({ ok: false, code: "unauthorized" }, 401);
     let body: any = {}; try { body = await request.json(); } catch { return json({ ok: false, code: "invalid_sync_request" }, 400); }
     if (!body || typeof body !== "object" || Array.isArray(body) || body.action !== "sync") return json({ ok: false, code: "invalid_sync_request" }, 400);
+    let stage: SyncStage = "configuration";
     try {
       const settings = config(runtime), collectedAt = new Date(runtime.now()).toISOString();
+      stage = "token";
       const assertionValue = await assertion(settings, runtime);
       const token = await requestJson(runtime, "https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: assertionValue }).toString() }, 64 * 1024);
       if (typeof token?.access_token !== "string" || !token.access_token) throw new SyncError("google_source_unavailable");
-      // Read the result rows and two derived business columns in one bounded snapshot.
-      // AV:BC (including member IDs) is deliberately outside this projection.
-      const ranges = [`${SHEET_TAB}!A1:N${MAX_ROWS + 1}`, `${SHEET_TAB}!AB1:AB${MAX_ROWS + 1}`, `${SHEET_TAB}!AS1:AS${MAX_ROWS + 1}`];
-      const params = new URLSearchParams({valueRenderOption:"FORMATTED_VALUE",majorDimension:"ROWS"});
-      for (const range of ranges) params.append("ranges",range);
-      const sourceUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(settings.sourceId)}/values:batchGet?${params}`;
-      const batch = await requestJson(runtime, sourceUrl, { method: "GET", headers: { Authorization: "Bearer " + token.access_token, Accept: "application/json" } }, MAX_RESPONSE_BYTES);
-      if (!Array.isArray(batch?.valueRanges) || batch.valueRanges.length !== 3) throw new SyncError("source_columns_incomplete",502);
-      const source = batch.valueRanges[0];
-      if (!Array.isArray(source?.values) || source.values.length > MAX_ROWS) throw new SyncError("source_row_limit_reached", 413);
-      const derived = source.values.map((_: unknown,index: number) => [batch.valueRanges[1]?.values?.[index]?.[0],batch.valueRanges[2]?.values?.[index]?.[0]]);
-      const rows = rowsFromValues(source.values, settings.sourceId, collectedAt, derived);
-      const entries = await readEntrySheets(settings, runtime, { Authorization: "Bearer " + token.access_token, Accept: "application/json" }, collectedAt);
-      const targets = [{ table: "admin_deposit_issue_rows", rows, source: settings.sourceId, tabs: [SHEET_TAB] },
-        { table: "admin_deposit_followup_rows", rows: entries.rows, source: settings.entrySourceId, tabs: entries.tabs }];
       const databaseHeaders = { apikey: settings.serviceKey, Authorization: "Bearer " + settings.serviceKey };
-      // Read and validate both sources before writing. Current rows are reactivated.
-      // Only a complete successful mirror may archive older Sheet rows; no data is deleted.
-      for (const target of targets) for (let at = 0; at < target.rows.length; at += 500) {
-        await requestJson(runtime, settings.supabaseUrl + "/rest/v1/" + target.table + "?on_conflict=source_sheet,source_tab,source_row", { method: "POST", headers: { ...databaseHeaders, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(target.rows.slice(at, at + 500)) }, 128 * 1024);
+      const googleHeaders = { Authorization: "Bearer " + token.access_token, Accept: "application/json" };
+      // Two independent workbook snapshots. Each worker validates its complete
+      // source before writing, then archives only that source. One slow/failed
+      // workbook cannot stop the other from refreshing. Within each worker all
+      // requests remain sequential: at most two requests are in flight, no retries.
+      async function mirror(read: (onStage: (value: SyncStage) => void) => Promise<MirrorTarget>, firstStage: SyncStage) {
+        const result: SourceResult = { ok: false, stage: firstStage, rowsRead: 0, rowsWritten: 0, tabsRead: 0 };
+        try {
+          const target = await read(value => { result.stage = value; });
+          result.rowsRead = target.rows.length; result.tabsRead = target.tabs.length;
+          result.stage = "db_upsert";
+          for (let at = 0; at < target.rows.length; at += 500) {
+            const chunk = target.rows.slice(at, at + 500);
+            await requestJson(runtime, settings.supabaseUrl + "/rest/v1/" + target.table + "?on_conflict=source_sheet,source_tab,source_row", { method: "POST", headers: { ...databaseHeaders, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(chunk) }, 128 * 1024);
+            result.rowsWritten += chunk.length;
+          }
+          result.stage = "db_archive";
+          for (const tab of target.tabs) {
+            // Historical workbooks are never rescanned or archived. This exact
+            // source/tab scope also protects portal rows and newer overlapping runs.
+            const filters = new URLSearchParams({ source_sheet: "eq." + target.source, source_tab: "eq." + tab,
+              updated_at: "lt." + collectedAt, stale_at: "is.null" });
+            if (target.table === "admin_deposit_followup_rows") filters.set("source_kind", "eq.sheet");
+            await requestJson(runtime, settings.supabaseUrl + "/rest/v1/" + target.table + "?" + filters,
+              { method: "PATCH", headers: { ...databaseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
+                body: JSON.stringify({ stale_at: collectedAt }) }, 64 * 1024);
+          }
+          result.ok = true; result.stage = "complete"; result.syncedAt = collectedAt;
+          return { result, status: 200 };
+        } catch (error) {
+          result.code = error instanceof SyncError ? error.code : "deposit_issue_sync_failed";
+          return { result, status: error instanceof SyncError ? error.status : 503 };
+        }
       }
-      for (const target of targets) for (const tab of target.tabs) {
-        // Scope by the exact successfully read workbook and tab. Sheet archival
-        // cannot touch portal mirrors, other sources, or a newer overlapping run.
-        const filters = new URLSearchParams({ source_sheet: "eq." + target.source, source_tab: "eq." + tab,
-          updated_at: "lt." + collectedAt, stale_at: "is.null" });
-        if (target.table === "admin_deposit_followup_rows") filters.set("source_kind", "eq.sheet");
-        await requestJson(runtime, settings.supabaseUrl + "/rest/v1/" + target.table + "?" + filters,
-          { method: "PATCH", headers: { ...databaseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
-            body: JSON.stringify({ stale_at: collectedAt }) }, 64 * 1024);
-      }
-      return json({ ok: true, action: "sync", source: settings.sourceId, tab: SHEET_TAB, rowsRead: rows.length, rowsWritten: rows.length, entryRows: entries.rows.length, entryTabs: entries.tabs.length, collectedAt });
+      const [resultMirror, entryMirror] = await Promise.all([
+        mirror(async () => {
+          // Keep the result columns in one bounded snapshot. AV:BC (including
+          // member IDs) remains outside the authorized projection.
+          const ranges = [`${SHEET_TAB}!A1:N${MAX_ROWS + 1}`, `${SHEET_TAB}!AB1:AB${MAX_ROWS + 1}`, `${SHEET_TAB}!AS1:AS${MAX_ROWS + 1}`];
+          const params = new URLSearchParams({ valueRenderOption: "FORMATTED_VALUE", majorDimension: "ROWS" });
+          for (const range of ranges) params.append("ranges", range);
+          const sourceUrl = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(settings.sourceId)}/values:batchGet?${params}`;
+          const batch = await requestJson(runtime, sourceUrl, { method: "GET", headers: googleHeaders }, MAX_RESPONSE_BYTES);
+          if (!Array.isArray(batch?.valueRanges) || batch.valueRanges.length !== 3) throw new SyncError("source_columns_incomplete", 502);
+          const source = batch.valueRanges[0];
+          if (!Array.isArray(source?.values) || source.values.length > MAX_ROWS) throw new SyncError("source_row_limit_reached", 413);
+          const derived = source.values.map((_: unknown, index: number) => [batch.valueRanges[1]?.values?.[index]?.[0], batch.valueRanges[2]?.values?.[index]?.[0]]);
+          return { table: "admin_deposit_issue_rows", rows: rowsFromValues(source.values, settings.sourceId, collectedAt, derived), source: settings.sourceId, tabs: [SHEET_TAB] };
+        }, "result_read"),
+        mirror(async onStage => {
+          const entries = await readEntrySheets(settings, runtime, googleHeaders, collectedAt, onStage);
+          return { table: "admin_deposit_followup_rows", rows: entries.rows, source: settings.entrySourceId, tabs: entries.tabs };
+        }, "entry_metadata"),
+      ]);
+      const ok = resultMirror.result.ok && entryMirror.result.ok;
+      const failures = [resultMirror, entryMirror].filter(value => !value.result.ok);
+      const code = ok ? undefined : failures.length === 1 ? "deposit_issue_sync_partial" : failures[0].result.code === failures[1].result.code ? failures[0].result.code : "deposit_issue_sync_failed";
+      return json({ ok, ...(code ? { code } : {}), action: "sync", source: settings.sourceId, tab: SHEET_TAB,
+        rowsRead: resultMirror.result.rowsRead, rowsWritten: resultMirror.result.rowsWritten,
+        entrySource: settings.entrySourceId, entrySourceRole: "current", entrySourceMigrated: settings.entrySourceMigrated,
+        historicalEntrySources: [{ source: HISTORICAL_ENTRY_SOURCE_ID, role: "historical", sync: false }],
+        entryRows: entryMirror.result.rowsRead, entryTabs: entryMirror.result.tabsRead, collectedAt,
+        sourceResults: { result: resultMirror.result, entries: entryMirror.result } }, ok ? 200 : failures[0].status);
     } catch (error) {
       const code = error instanceof SyncError ? error.code : "deposit_issue_sync_failed";
       const status = error instanceof SyncError ? error.status : 503;
-      return json({ ok: false, code }, status);
+      const notStarted: SourceResult = { ok: false, stage, code, rowsRead: 0, rowsWritten: 0, tabsRead: 0 };
+      return json({ ok: false, code, sourceResults: { result: notStarted, entries: notStarted } }, status);
     }
   };
 }
