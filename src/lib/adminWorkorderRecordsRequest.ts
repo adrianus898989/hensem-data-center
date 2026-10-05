@@ -16,7 +16,7 @@ export function validateWorkorderRecordsRequest(p:Record<string,unknown>):Record
  for(const [k,choices] of Object.entries({dateBasis:['submission','operation'],issueKind:['deposit','withdraw'],statusCode:['1','2','3','4','5'],kyc:['yes','no','unknown'],utrMatch:['yes','no','unknown'],registrationStatus:['missing','matched','review']}))if(f[k]&&!choices.includes(f[k]))throw Error('工单筛选选项无效');
  if(view!=='missing'&&f.registrationStatus||view==='missing'&&!registration&&f.statusCode&&f.statusCode!=='3'||view==='workload'&&f.statusCode)throw Error('该条件不适用于当前页面');
  if('successBasis' in f&&(!registration||!['','receipt','processed'].includes(f.successBasis)))throw Error('成功排除口径无效');
- if(registration){if(f.dateBasis&&f.dateBasis!=='submission'||f.sourceOrderNo||f.operator||f.utrMatch)throw Error('漏登核对按提交日期和完整订单核对');f.dateBasis='submission';f.successBasis=f.successBasis||'receipt';}
+ if(registration){if(f.dateBasis&&f.dateBasis!=='submission'||f.sourceOrderNo||f.operator||f.utrMatch)throw Error('漏登核对按提交日期和完整订单核对');f.dateBasis='submission';f.successBasis=f.successBasis||'processed';}
  for(const k of ['minAmount','maxAmount'])if(f[k]&&!/^\d{1,16}(\.\d{1,8})?$/.test(f[k]))throw Error('金额范围无效');
  if(f.minAmount&&f.maxAmount&&Number(f.minAmount)>Number(f.maxAmount))throw Error('金额范围无效');
  const offset=p.offset??0,limit=p.limit??50;if(!Number.isSafeInteger(offset)||Number(offset)<0||Number(offset)>1000000||typeof limit!=='number'||![20,50,100].includes(limit))throw Error('分页参数无效');

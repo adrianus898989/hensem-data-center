@@ -168,3 +168,31 @@ test('actual router keeps old operation requests and explicitly routes new submi
  await db.exec(compat);assert.deepEqual(await call(),current);assert.deepEqual(await scalar("select to_jsonb(p) from pg_proc p where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure"),helperBefore);
  for(const change of ["alter function private.dashboard_admin_live_workorder_records(jsonb) set search_path='public'","grant execute on function private.dashboard_admin_live_workorder_records(jsonb) to anon"]){await db.exec('savepoint compat_drift');await db.exec(change);await assert.rejects(()=>db.exec(compat),/REGISTRATION_COMPATIBILITY_/);await db.exec('rollback to savepoint compat_drift;release savepoint compat_drift')}
 });
+
+const processedDefault=read('migrations/20261005115805_workorder_processed_success_default.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,'');
+const applyProcessedDefault=async()=>{await db.exec(read('migrations/20261005114818_workorder_registration_route_compatibility.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,''));await db.exec(processedDefault)};
+test('user-confirmed default excludes handled AR and NEWAR originals while explicit receipt stays unchanged',async()=>{
+ await ar('AR-HANDLED',{status_code:4});await newar('NEWAR-HANDLED');await ar('UNHANDLED',{status_code:1});
+ const receiptBefore=await call({successBasis:'receipt'});await applyProcessedDefault();
+ const r=await call();assert.equal(r.successBasis,'processed');assert.equal(r.total,1);assert.equal(r.rows[0].orderNo,'RC-UNHANDLED');assert.equal(r.summary.excludedSuccessCount,2);
+ assert.deepEqual(await call({successBasis:''}),r);assert.deepEqual(await call({successBasis:'processed'}),r);assert.deepEqual(await call({successBasis:'receipt'}),receiptBefore);
+});
+test('reliable handled original stays excluded despite monetary/provider or registration differences',async()=>{
+ await ar('OPEN',{payment_order_no:'RC-HANDLED-ORIGINAL',status_code:3});await ar('DONE',{payment_order_no:'RC-HANDLED-ORIGINAL',status_code:4,submitted_date:'2026-10-03',amount:99,third_party:'OtherPay'});
+ await entry('e1','RC-HANDLED-ORIGINAL',{amount:50,followup_status:'Not Yet Received'});
+ await applyProcessedDefault();const r=await call();assert.equal(r.total,0);assert.equal(r.summary.candidateCount,1);assert.equal(r.summary.excludedSuccessCount,1);
+ const receipt=await call({successBasis:'receipt'});assert.equal(receipt.total,1);assert.equal(receipt.rows[0].registrationStatus,'review');
+});
+test('ambiguous original identity and conflicting status on one workorder remain separately reviewable',async()=>{
+ await ar('CONFLICT',{payment_order_no:'RC-STATUS-CONFLICT',status_code:4});await ar('CONFLICT',{platform:'RAJALOTTERY',payment_order_no:'RC-STATUS-CONFLICT',status_code:1});
+ await ar('NO-ORIGINAL',{payment_order_no:null,status_code:4});await newar('AMBIGUOUS',{raw:{depositOrderNo:'RC-ONE',rechargeNumber:'RC-OTHER'}});
+ await entry('e1','RC-UNRELATED');await applyProcessedDefault();const r=await call();assert.equal(r.total,3);assert.equal(r.summary.excludedSuccessCount,0);assert.equal(r.summary.reviewCount,3);
+ const state=r.rows.find(x=>x.orderNo==='RC-STATUS-CONFLICT');assert.equal(state.reason,'processing_conflict');assert.equal(state.registrationStatus,'review');assert.equal(state.processingState,'unknown');assert(r.rows.filter(x=>!x.orderNo).every(x=>x.reason==='no_identifiers'));
+});
+test('processed default migration is idempotent, preserves router and helper metadata, and rejects drift',async()=>{
+ await db.exec(read('migrations/20261005114818_workorder_registration_route_compatibility.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,''));
+ const router=await scalar("select to_jsonb(p) from pg_proc p where oid='private.dashboard_admin_live_workorder_records(jsonb)'::regprocedure"),helper=await scalar("select to_jsonb(p)-'prosrc' from pg_proc p where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure");
+ await db.exec(processedDefault);await db.exec(processedDefault);assert.deepEqual(await scalar("select to_jsonb(p) from pg_proc p where oid='private.dashboard_admin_live_workorder_records(jsonb)'::regprocedure"),router);assert.deepEqual(await scalar("select to_jsonb(p)-'prosrc' from pg_proc p where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure"),helper);
+ assert.equal(await scalar("select md5(prosrc) from pg_proc where oid='private.dashboard_admin_workorder_registration(jsonb)'::regprocedure"),'f0cec4e43873303811948d00f12eb7bb');
+ for(const change of ["grant execute on function private.dashboard_admin_workorder_registration(jsonb) to authenticated","alter function private.dashboard_admin_workorder_registration(jsonb) security definer","alter function private.dashboard_admin_live_workorder_records(jsonb) set statement_timeout='21s'"]){await db.exec('savepoint processed_drift');await db.exec(change);await assert.rejects(()=>db.exec(processedDefault),/REGISTRATION_PROCESSED_/);await db.exec('rollback to savepoint processed_drift;release savepoint processed_drift')}
+});

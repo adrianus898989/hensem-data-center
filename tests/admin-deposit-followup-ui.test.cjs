@@ -163,3 +163,9 @@ test('statistics inline evidence links to its actual source workbook/tab and pre
  const sourceSheet='actual-workbook-id-0000000000000001',tab="July ' source",row={platform:'SYNTHETIC',orderNumber:'00000000000123456789',amount:null,statisticsStatus:'conflict',status:'来源冲突',matchStatus:'待核对',sourceCount:2,sources:[{sourceSheet,sourceTab:tab,sourceRow:7,amount:10,provider:'<Pay>',status:'已入款'},{sourceSheet:'another-workbook-id-000000000000002',sourceGid:42,sourceTab:'Other',sourceRow:8,amount:11,status:'未入款'}]};
  const h=harness({rows:[row],total:1,summary:{}},{page:'deposit_statistics'});h.page.render();h.root.depositIssuesSection('details');await h.page.load();const before=h.calls.length;h.root.depositIssuesDetail(0);assert.equal(h.calls.length,before);assert.equal(h.drawer(),'');assert.match(h.html(),/deposit-inline-detail/);assert.match(h.html(),/来源冲突/);assert.match(h.html(),/00000000000123456789/);assert.match(h.html(),/actual-workbook-id-0000000000000001\/edit#range=/);assert.match(h.html(),/another-workbook-id-000000000000002\/edit\?gid=42#gid=42&amp;range=A8%3AAZ8/);assert.match(h.html(),/&lt;Pay&gt;/);assert.doesNotMatch(h.html(),/href="javascript:|<Pay>/);h.root.depositIssuesDetail(0);assert.doesNotMatch(h.html(),/deposit-inline-detail/);
 });
+
+
+test('sheet-only unresolved entry labels its receipt-marker basis without claiming collected processing status',async()=>{
+ const h=harness({rows:[],total:0,summary:{count:1,unresolvedCount:1}},{page:'deposit_statistics'});await h.page.load();assert.match(h.html(),/表格未成功订单 · 入款标记口径/);assert.match(h.html(),/>表格未成功订单<\/button>/);
+ await h.root.depositIssuesPending();const q=h.calls.at(-1);assert.equal(q.action,'depositStatistics');assert.equal(q.followupState,'unresolved');assert.equal(q.successBasis,undefined);assert.match(h.html(),/工单处理状态请看漏登与状态核对/);
+});
