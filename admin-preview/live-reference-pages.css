@@ -199,6 +199,14 @@ body.live-admin .provider-daily-v3 .analysis-provider-day table{min-width:0!impo
 body.live-admin .provider-daily-v3 .analysis-provider-day :is(th,td):first-child{position:static!important;width:auto!important;text-align:left!important}
 body.live-admin .provider-daily-v3 .analysis-provider-day :is(th,td){text-align:right!important}
 body.live-admin .provider-daily-v3 .analysis-value-button.is-selected{background:#e7edff;color:#214ac5;box-shadow:inset 0 0 0 1px #4567e8;border-radius:3px}
+/* This 31-day provider matrix has its own widths and 45% warning threshold. */
+body.live-admin .provider-daily-v3 .pd-matrix-wrap>.provider-daily-matrix-table{width:max(100%,var(--provider-daily-table-width))!important;min-width:var(--provider-daily-table-width)!important;max-width:none;table-layout:fixed!important;border-collapse:separate;border-spacing:0}
+body.live-admin .provider-daily-v3 .pd-matrix-wrap>.provider-daily-matrix-table>:is(thead,tbody)>tr:not(.provider-daily-detail-row)>:is(th,td){width:auto!important;min-width:0!important;max-width:none!important;box-sizing:border-box;padding:8px 5px!important;font-size:11px!important;line-height:17px;white-space:nowrap;font-variant-numeric:tabular-nums}
+body.live-admin .provider-daily-v3 .pd-matrix-wrap>.provider-daily-matrix-table>:is(thead,tbody)>tr:not(.provider-daily-detail-row)>:is(th,td):first-child{text-align:left!important}
+body.live-admin .provider-daily-v3 .pd-matrix-wrap>.provider-daily-matrix-table .provider-business-type{max-width:100%;box-sizing:border-box}
+body.live-admin .provider-daily-v3 .provider-daily-rate{color:#111;font-weight:400}
+body.live-admin .provider-daily-v3 .provider-daily-rate.provider-daily-rate-low{color:#d92d43}
+body.live-admin .provider-daily-v3 .provider-daily-rate>button.link{color:inherit!important;font-size:inherit;font-weight:400;line-height:inherit}
 @media(max-width:760px){body.live-admin .provider-daily-v3 .analysis-provider-day{width:calc(100vw - 48px)}}
 
 body.live-admin .provider-summary-table .workorder-rate-low{color:#d6374a!important}
