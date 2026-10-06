@@ -1154,6 +1154,17 @@
       "requests": []
     },
     {
+      "id": "collector_control",
+      "moduleId": "system",
+      "moduleLabel": "系统管理后台",
+      "label": "采集管理",
+      "actions": [
+        { "id": "view", "label": "查看电脑与任务" },
+        { "id": "edit", "label": "连接电脑与启停任务", "sensitive": true }
+      ],
+      "requests": ["collectorControl"]
+    },
+    {
       "id": "provider_config",
       "moduleId": "system",
       "moduleLabel": "系统管理后台",

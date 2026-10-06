@@ -5,6 +5,9 @@ const ENTRY_GATE = 'https://gmfyfzsxpxmaqtuuwgxb.supabase.co/functions/v1/applic
 const PUBLISHABLE_KEY = 'sb_publishable_0DFLEmUvGBp1GYQ7jNo4IA_O1PeA9zV';
 const GATE_TIMEOUT_MS = 5000;
 const GATE_RETRY_DELAY_MS = 150;
+const COLLECTOR_PATH = BASE + '/api/collector-control';
+const COLLECTOR_ENDPOINT = 'https://gmfyfzsxpxmaqtuuwgxb.supabase.co/functions/v1/collector-control';
+const COLLECTOR_ACTIONS = new Set(['overview', 'createPairing', 'revokeDevice', 'setDesired']);
 // This dedicated HTTPS entry can emit real anti-framing headers. Restrict only
 // ancestors here: the authorized internal srcdoc preview needs its inline code.
 const SECURITY_HEADERS = {
@@ -203,6 +206,70 @@ async function entryDecision(request, env, fetchGate) {
   }
 }
 
+async function boundedJson(body, limit, signal) {
+  const reader = body?.getReader();
+  if (!reader) throw new Error('missing_body');
+  const abort = () => { reader.cancel().catch(() => {}); };
+  signal.addEventListener('abort', abort, { once: true });
+  const chunks = []; let size = 0;
+  try {
+    signal.throwIfAborted();
+    for (;;) {
+      const part = await reader.read(); signal.throwIfAborted();
+      if (part.done) break;
+      size += part.value.length;
+      if (size > limit) { reader.cancel().catch(() => {}); throw new Error('body_limit'); }
+      chunks.push(part.value);
+    }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  } finally { signal.removeEventListener('abort', abort); reader.releaseLock(); }
+}
+
+// Only registered human actions cross this fixed proxy. Device pairing/polling
+// use their separately scoped Edge credentials and cannot use this route.
+async function serveCollectorControl(request, env, fetchRemote) {
+  const json = (value, status) => reply(JSON.stringify(value), status,
+    { 'Content-Type': 'application/json; charset=utf-8' });
+  if (request.method !== 'POST') return json({ ok: false, code: 'method_not_allowed' }, 405);
+  const origin = request.headers.get('origin');
+  if (origin && origin !== new URL(request.url).origin) return json({ ok: false, code: 'origin_denied' }, 403);
+  const authorization = request.headers.get('authorization') || '';
+  if (!/^Bearer [^\s,]{1,4096}$/.test(authorization)) return json({ ok: false, code: 'login_required' }, 401);
+  if (!/^application\/json(?:;|$)/i.test(request.headers.get('content-type') || '')) return json({ ok: false, code: 'json_required' }, 415);
+  if (Number(request.headers.get('content-length') || 0) > 65536) return json({ ok: false, code: 'request_too_large' }, 413);
+  const readController = new AbortController();
+  const readTimer = setTimeout(() => readController.abort(), 10000);
+  let body;
+  try { body = await boundedJson(request.body, 65536, readController.signal); }
+  catch { return json({ ok: false, code: 'invalid_request' }, 400); }
+  finally { clearTimeout(readTimer); }
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !COLLECTOR_ACTIONS.has(body.action)) {
+    return json({ ok: false, code: 'invalid_request' }, 400);
+  }
+  const ip = clientIp(request), key = typeof env?.PORTAL_PROXY_KEY === 'string' ? env.PORTAL_PROXY_KEY.trim() : '';
+  if (!ip || key.length < 16 || key.length > 256) return json({ ok: false, code: 'proxy_denied' }, 403);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetchRemote(COLLECTOR_ENDPOINT, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', apikey: PUBLISHABLE_KEY,
+        Authorization: authorization, 'x-portal-proxy-key': key, 'x-portal-client-ip': ip },
+      body: JSON.stringify(body), redirect: 'manual', cache: 'no-store', signal: controller.signal,
+    });
+    if (REDIRECTS.has(response.status) || !/^application\/json(?:;|$)/i.test(response.headers.get('content-type') || '')) {
+      response.body?.cancel().catch(() => {}); return json({ ok: false, code: 'service_unavailable' }, 502);
+    }
+    const value = await boundedJson(response.body, 8 * 1024 * 1024, controller.signal);
+    if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.ok !== 'boolean') {
+      return json({ ok: false, code: 'service_unavailable' }, 502);
+    }
+    return json(value, response.status);
+  } catch { return json({ ok: false, code: 'service_unavailable' }, 503); }
+  finally { clearTimeout(timer); }
+}
+
 // The production handler checks every route before redirects, files or method
 // errors. Decisions are not cached: a revoked rule affects the next request.
 export async function serve(request, env = {}, fetchRemote = fetch) {
@@ -213,7 +280,9 @@ export async function serve(request, env = {}, fetchRemote = fetch) {
   if (decision.status !== 'allowed') {
     return reply(request.method === 'HEAD' ? null : 'Access denied', 403);
   }
-  const response = await servePublicStatic(request, fetchRemote);
+  const response = new URL(request.url).pathname === COLLECTOR_PATH
+    ? await serveCollectorControl(request, env, fetchRemote)
+    : await servePublicStatic(request, fetchRemote);
   const headers = new Headers(response.headers);
   // Do not let a browser or intermediary reuse a protected response after its
   // address is removed. Public upstream hash caching is separate from access.

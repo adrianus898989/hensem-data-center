@@ -12,7 +12,7 @@ test('role editor relocation preserves permissions, requests, other pages, OID a
   const after=await scalar(db,'select private.dashboard_role_catalog()');
   const expected=JSON.parse(JSON.stringify(before)),page=expected.pages.find(p=>p.id==='stuck');page.moduleId='analysis';page.moduleLabel='数据分析中心';
   assert.deepEqual(after,expected);
-  assert.deepEqual(after.pages,require('../src/lib/dashboardRoleCatalog.json').pages.filter(page=>!['success_analysis','daily_comparison'].includes(page.id)).map(p=>({...p,requests:p.requests.filter(r=>r!=='submissionStreak')})));
+  assert.deepEqual(after.pages,require('../src/lib/dashboardRoleCatalog.json').pages.filter(page=>!['success_analysis','daily_comparison','collector_control'].includes(page.id)).map(p=>({...p,requests:p.requests.filter(r=>r!=='submissionStreak')})));
   assert.deepEqual(await scalar(db,"select to_jsonb(p)-'prosrc' from pg_proc p where oid='private.dashboard_role_catalog()'::regprocedure"),meta);
  }finally{await db.close()}
 });

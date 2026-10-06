@@ -54,14 +54,17 @@
  if(!pages.some(p=>p[0]==='daily_comparison'))pages.push(['daily_comparison','▦','每日对比','DAILY COMPARISON','每日对比','']);
  const dailyGroup=navGroupsV3.find(g=>g[0]==='merchant');if(dailyGroup&&!dailyGroup[3].includes('daily_comparison')){const index=dailyGroup[3].indexOf('merchants');dailyGroup[3].splice(index>=0?index+1:dailyGroup[3].length,0,'daily_comparison');}
  if(location.hash==='#daily_comparison')state.page='daily_comparison';
+ if(!pages.some(p=>p[0]==='collector_control')){pages.push(['collector_control','▣','采集管理','COLLECTOR CONTROL','采集管理','']);const group=navGroupsV3.find(g=>g[0]==='system'||g[3].includes('access'));if(group)group[3].push('collector_control')}
  const isSuccessAnalysis=()=>state.page==='success_analysis';
  const isDailyComparison=()=>state.page==='daily_comparison';
- const roleAllowed=(page,action='view')=>['success_analysis','daily_comparison'].includes(page)
+ const roleAllowed=(page,action='view')=>['success_analysis','daily_comparison','collector_control'].includes(page)
   ? !!window.hensemRoleAccess&&window.hensemRoleAccess.canView===true&&(window.hensemRoleAccess.mode==='owner'||window.hensemRoleAccess.mode==='assigned'&&window.hensemRoleAccess.permissions?.includes(page+'.view')&&window.hensemRoleAccess.permissions?.includes(page+'.'+action))&&typeof window.hensemRoleAllowed==='function'&&window.hensemRoleAllowed(page,action)
   : typeof window.hensemRoleAllowed!=='function'||window.hensemRoleAllowed(page,action);
  const canExportCurrentPage=()=>roleAllowed(state.page,'export')&&(!(isTeamWorkspace(state.page)||isSuccessAnalysis()||isDailyComparison())||roleAllowed(state.page,'query'));
  const teamNavigationEntry=()=>isTeamWorkspace(state.page)&&roleAllowed(state.page)?state.page:teamWorkspaceKeys.find(key=>pages.some(page=>page[0]===key)&&roleAllowed(key));
  function teamWorkspaceNavigation(){return '<div class="section-switcher live-team-workspace"><div class="tabs">'+[['teamops','团队经营'],['teamcountries','国家表现'],['teamplatforms','平台经营']].filter(([key])=>pages.some(page=>page[0]===key)&&roleAllowed(key)).map(([key,label])=>'<button type="button" class="'+(state.page===key?'on':'')+'" aria-pressed="'+(state.page===key)+'" onclick="liveTeamView(\''+key+'\')">'+label+'</button>').join('')+'</div></div>';}
+ const collectorControl=window.HensemCollectorControl?.create({request:r=>window.hensemLiveRequest(r),active:()=>state.page==='collector_control',canEdit:()=>roleAllowed('collector_control','edit'),onChange:()=>{if(state.page==='collector_control')render()}});
+ window.collectorRefresh=()=>collectorControl?.refresh();window.collectorName=value=>collectorControl?.setName(value);window.collectorPair=()=>collectorControl?.pair();window.collectorDesired=(deviceId,taskId,desiredState)=>collectorControl?.desired(deviceId,taskId,desiredState);window.collectorRevoke=deviceId=>collectorControl?.revoke(deviceId);window.collectorCancelRevoke=()=>collectorControl?.cancelRevoke();
  window.hensemCurrentAdminPage=()=>state.page;
  // Remove inaccessible pages before restoring tabs or applying a bookmarked route.
  for(let i=pages.length-1;i>=0;i--)if(!roleAllowed(pages[i][0]))pages.splice(i,1);
@@ -553,6 +556,7 @@
   }
   const businessLiveHeader=window.liveHeader;
   window.liveHeader=function(){
+   if(state.page==='collector_control'){const host=document.querySelector('.top-right'),sample=host.querySelector('.sample'),currency=host.querySelector('span:nth-of-type(3)');if(sample){sample.textContent='采集管理';sample.title='电脑回报的任务状态'}if(currency)currency.textContent='';const activity=document.getElementById('headerActivityV3');if(activity)activity.innerHTML='';return;}
    if(!isSupervisorPage(state.page))return businessLiveHeader();
    const host=document.querySelector('.top-right'),sample=host.querySelector('.sample'),currency=host.querySelector('span:nth-of-type(3)');
    if(sample){sample.textContent='员工测试站 · 待接通';sample.title='员工测试站尚未接通'}
@@ -560,6 +564,7 @@
    const activity=document.getElementById('headerActivityV3');if(activity)activity.innerHTML='';
   };
   let navigationBatch=0,navigationRevision=0,renderingPage=false;
+  function renderCollectorPage(){const field=document.activeElement,editing=field?.id==='collectorComputerName',selection=editing?[field.selectionStart,field.selectionEnd]:null;chrome();document.getElementById('liveFilters')?.style.setProperty('display','none');document.querySelector('.title-actions').innerHTML='';collectorControl?.activate();document.getElementById('page').innerHTML=collectorControl?collectorControl.render():'<div class="live-status" role="alert">采集管理组件尚未载入，请重新加载后台。</div>';if(editing){const next=document.getElementById('collectorComputerName');if(next&&!next.disabled){next.focus({preventScroll:true});next.setSelectionRange?.(...selection)}}document.querySelector('.bottom-note').innerHTML='<span>本机采集管理</span><span>订单入库状态需逐份接入</span>';}
   function renderPage(){normalizePageDirection();prepareOverviewSections();document.body.classList.add('live-admin');HensemProviderSticky?.clear();if(isWorkorderOperations(state.page)&&workorderOperations){chrome();if(workorderOperations.isDaily())filters();else document.getElementById('liveFilters')?.style.setProperty('display','none');document.getElementById('page').innerHTML=workorderOperations.render();liveHeader();document.querySelector('.bottom-note').innerHTML='<span>工单运营中心</span><span>按当前筛选手动查询</span>';return}if(['deposit_tracking','deposit_statistics'].includes(state.page)){chrome();document.getElementById('liveFilters')?.style.setProperty('display','none');document.getElementById('page').innerHTML=depositIssuesView();liveHeader();document.querySelector('.bottom-note').innerHTML='<span>'+ (state.page==='deposit_tracking'?'员工原表与工单前端跟进记录':'UPI核对原始行与派生统计') +'</span><span>按当前筛选手动查询</span>';return}if(state.page==='provider_config'){chrome();document.getElementById('liveFilters')?.style.setProperty('display','none');document.getElementById('page').innerHTML=providerConfigView();liveHeader();document.querySelector('.bottom-note').innerHTML='<span>Supabase 正式归类读模型</span><span>代收、代付共用分类；冲突与未归类单独列出</span>';return}if(state.page==='teams'||state.page==='platform_systems'){chrome();document.getElementById('liveFilters')?.style.setProperty('display','none');document.getElementById('page').innerHTML=platformAssignmentsView();liveHeader();document.querySelector('.bottom-note').innerHTML='<span>Supabase 团队 / 平台归属</span><span>映射可见；未配置平台单独列出</span>';return}chrome();filters();document.getElementById('page').innerHTML=content();HensemProviderSticky?.mount();mountOverviewSections();if((state.page==='overview'&&L.overviewQueried||state.page==='merchants'&&L.pageQueried&&L.status==='all'&&!['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'].some(key=>L[key]))&&L.catalogReady&&!L.loading&&!L.dirty&&!L.error&&!L.restoredPage)memberCounts?.ensure();if(L.pageQueried&&(state.page==='events'||state.page==='providers')&&L.catalogReady&&!L.loading&&!L.queryRetrying&&!L.dirty&&!L.error&&!L.restoredPage)submissionAnalysis?.ensure();}
   // Synchronous loader notifications belong to one navigation paint. Reentrant
   // renders from a lazy loader are already reflected by the current render.
@@ -573,7 +578,7 @@
     if(action&&!roleAllowed(state.page,action)){button.disabled=true;button.title='当前角色没有此操作权限';}
    }
   }
-  render=function(){if(navigationBatch||renderingPage)return;renderingPage=true;try{const paint=()=>{renderPageTabs();if(isSupervisorPage(state.page))renderSupervisorPage();else renderPage();roleControls()};if(submissionAnalysis?.withSnapshot)submissionAnalysis.withSnapshot(paint);else paint()}finally{renderingPage=false}};
+  render=function(){if(navigationBatch||renderingPage)return;renderingPage=true;try{const paint=()=>{renderPageTabs();if(state.page==='collector_control')renderCollectorPage();else if(isSupervisorPage(state.page))renderSupervisorPage();else renderPage();roleControls()};if(submissionAnalysis?.withSnapshot)submissionAnalysis.withSnapshot(paint);else paint()}finally{renderingPage=false}};
  syncFilters=function(){};
  toggleCenterV3=function(id){state.navGroup=state.navGroup===id?'':id;renderNavigation()};
 
@@ -907,7 +912,7 @@
  window.liveExport=function(){if(!canExportCurrentPage()){toast('当前角色没有导出权限');return}if(isSupervisorPage(state.page)){toast('员工测试站尚未接通，暂无可导出记录');return}if(isDailyComparison()&&(L.dirty||!L.pageQueried||!dailyComparison?.canExport?.())){toast('请先查询当前筛选条件，读取完成后再导出');return;}const page=document.getElementById('page'),tables=[...page.querySelectorAll('table')].filter(t=>!t.closest?.('.deposit-inline-detail,.wo-reconciliation-expanded'));if(!tables.length&&!isDailyComparison()){toast('当前没有可导出的表格');return}const rows=isDailyComparison()?dailyComparison.exportRows():tables.flatMap(t=>[...t.querySelectorAll(':scope > thead > tr, :scope > tbody > tr:not(.provider-expanded-row), :scope > tfoot > tr')].filter(tr=>!tr.closest?.('.deposit-inline-detail,.wo-reconciliation-expanded')).map(tr=>[...tr.cells].map(td=>td.innerText)));if(!rows.length){toast('当前没有可导出的表格');return;}const quote=v=>'"'+String(/^[=+@\-\t\r]/.test(v)?"'"+v:v).replace(/"/g,'""')+'"',url=URL.createObjectURL(new Blob(['\ufeff'+rows.map(r=>r.map(quote).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download='Hensem-当前页-'+state.page+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('已导出当前可见表格页')};
   let initialLoad=null,initialDataDeferred=false;
   function initializeLiveData(){
-   if(['access','rules','ip','login_logs','operation_logs','workorder_permissions'].includes(state.page)){render();return Promise.resolve();}
+   if(['access','rules','ip','login_logs','operation_logs','workorder_permissions','collector_control'].includes(state.page)){render();return Promise.resolve();}
    if(initialLoad)return initialLoad;
    if(L.catalogReady){initialDataDeferred=false;render();return Promise.resolve();}
    L.catalogLoading=true;L.catalogError='';L.error='';render();
