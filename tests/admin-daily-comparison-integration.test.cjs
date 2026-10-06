@@ -78,8 +78,8 @@ function realHarness(handler){return harness({page:'daily_comparison',roleAccess
 test('real daily module reads bounded native provider days and renders without the generic aggregate path',async()=>{
  const h=realHarness(q=>nativeResponse(q));await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);await h.c.liveQuery();await settle();
  const queries=h.calls.filter(q=>q.action==='aggregate');assert.equal(queries.length,8,'seven trend days plus the first-day comparison baseline');assert(queries.every(q=>q.view==='providers'&&q.direction==='all'&&q.platformId===P.id));assert(queries.every(q=>Date.parse(q.endAt)-Date.parse(q.startAt)===86400000));assert.equal(queries[0].startAt,'2026-09-21T18:30:00.000Z');
- assert.match(h.html(),/规模与占比/);assert.match(h.html(),/Synthetic platform/);assert.match(h.html(),/50\.00%/);assert.doesNotMatch(h.html(),/每日对比暂不可用/);
- const readCount=h.calls.length;h.c.setPage('overview');h.c.setPage('daily_comparison');await settle();assert.equal(h.calls.length,readCount);assert.match(h.html(),/规模与占比/);
+ assert.match(h.html(),/平台每日明细/);assert.match(h.html(),/Synthetic platform/);assert.match(h.html(),/50\.00%/);assert.doesNotMatch(h.html(),/每日对比暂不可用/);
+ const readCount=h.calls.length;h.c.setPage('overview');h.c.setPage('daily_comparison');await settle();assert.equal(h.calls.length,readCount);assert.match(h.html(),/平台每日明细/);
 });
 
 test('real module navigation cancellation blocks queued days and old response repaint',async()=>{
@@ -90,7 +90,7 @@ test('real module navigation cancellation blocks queued days and old response re
 
 test('real comparison export uses the active query and is blocked after date changes',async()=>{
  const h=realHarness(q=>nativeResponse(q));await settle();h.c.liveExport();assert.equal(h.blobs.length,0);await h.c.liveQuery();h.c.liveExport();assert.equal(h.blobs.length,1);
- const csv=await h.blobs[0].text();assert.match(csv,/提交金额/);assert.match(csv,/金额占比/);assert.match(csv,/提交笔数/);assert.match(csv,/笔数占比/);assert.match(csv,/2026-09-22/);assert.match(csv,/按当前费率估算/);
+ const csv=await h.blobs[0].text();assert.match(csv,/全部金额/);assert.match(csv,/金额占比/);assert.match(csv,/全部笔数/);assert.match(csv,/笔数占比/);assert.match(csv,/成功金额占比/);assert.match(csv,/成功笔数较前日/);assert.match(csv,/2026-09-22/);assert.match(csv,/7天汇总/);assert.match(csv,/按当前费率估算/);
  h.c.liveDailyStatisticsDate('2026-09-21');h.c.liveExport();assert.equal(h.blobs.length,1);
 });
 

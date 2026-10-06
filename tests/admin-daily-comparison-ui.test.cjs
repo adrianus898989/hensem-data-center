@@ -55,7 +55,7 @@ test('every aggregate segment must belong to the requested native platform and c
  for(const corrupt of ['identity','gap']){const h=harness({platforms:[P],handler:q=>segmented(q,corrupt)});await h.module.load();assert.equal(h.module.model().now.all_count,null);assert.equal(h.module.capture().status,'partial');}
 });
 test('CSV includes visible inline native-platform breakdown and selected daily history with distinct changes',async()=>{
- const h=harness();await h.module.load();h.c.liveDailyDimension('provider');h.c.liveDailyExpand(0);const rows=h.module.exportRows();assert(rows.some(r=>r[0]==='↳ 91CLUB'));assert(rows.some(r=>r[0]==='↳ 55CLUB'));assert(rows.some(r=>r.includes('金额较前日')&&r.includes('笔数较前日')));assert(rows.some(r=>r[0]==='Pay'&&r[1]==='7天趋势'));assert.equal(rows.filter(r=>/^2026-\d\d-\d\d$/.test(r[0])).length,7);assert.equal(rows.some(r=>r.some(v=>/<[^>]+>/.test(v))),false);
+ const h=harness();await h.module.load();h.c.liveDailyDimension('provider');h.c.liveDailyExpand(0);const rows=h.module.exportRows();assert(rows.some(r=>r[0]==='↳ 91CLUB'));assert(rows.some(r=>r[0]==='↳ 55CLUB'));assert(rows.some(r=>r.includes('全部金额较前日')&&r.includes('全部笔数较前日')));assert(rows.some(r=>r[0]==='Pay'&&r[1]==='7天趋势'));assert.equal(rows.filter(r=>/^2026-\d\d-\d\d$/.test(r[0])).length,7);assert.equal(rows.some(r=>r.some(v=>/<[^>]+>/.test(v))),false);
 });
 test('native GAME66 identity remains separate from normalized display country in segmented results and fees',async()=>{
  const p={...P,name:'66GAME',source:'game66',sourceName:'66GAME',identityCountry:'红膏蟹',rawCountry:'红膏蟹'},raw={...p,country:'红膏蟹'};
@@ -64,4 +64,53 @@ test('native GAME66 identity remains separate from normalized display country in
 });
 test('revoking detail after expansion hides and stops exporting restored children',async()=>{
  let detail=true;const h=harness({permission:action=>action!=='detail'||detail});await h.module.load();h.c.liveDailyExpand(0);const saved=h.module.capture();assert.match(h.module.render(),/daily-inline/);detail=false;h.module.restore(saved);assert.doesNotMatch(h.module.render(),/daily-inline/);assert.equal(h.module.exportRows().some(r=>r[0]?.startsWith('↳ ')),false);
+});
+
+const plain=value=>String(value).replace(/<[^>]*>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
+function withFacts(p,facts){const result=aggregate(p);result.summary=result.summary.map(row=>({...row,...facts}));result.groups.provider=result.summary.map(row=>({...row,provider:'Pay'}));return result;}
+function historyView(h){
+ const table=h.module.render().match(/<table\b[^>]*class="[^"]*\bdaily-history\b[^"]*"[^>]*>([\s\S]*?)<\/table>/)?.[1];assert(table,'daily history table is visible');
+ const parse=section=>[...table.match(new RegExp('<'+section+'>([\\s\\S]*?)<\\/'+section+'>'))[1].matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map(match=>Object.fromEntries([...match[1].matchAll(/<td\b[^>]*data-label="([^"]+)"[^>]*>([\s\S]*?)<\/td>/g)].map(cell=>[plain(cell[1]),plain(cell[2])])));
+ return {rows:parse('tbody'),footer:parse('tfoot')[0]};
+}
+function csvHistory(h){const rows=h.module.exportRows(),at=rows.findIndex(row=>row[0]==='日期'),heads=rows[at];assert(at>=0);return {heads,rows:Array.from(rows.slice(at+1),row=>Object.fromEntries(heads.map((head,i)=>[head,row[i]])))};}
+
+test('daily detail gives each of the four amount and count metrics its own share denominator without more reads',async()=>{
+ const a={all_amount:10000,all_count:75,success_amount:4000,success_count:10},b={all_amount:30000,all_count:25,success_amount:16000,success_count:90};
+ const h=harness({handler:q=>withFacts(q.platformId===P.id?P:Q,q.platformId===P.id?a:b)});await h.module.load();const reads=h.calls.length,view=historyView(h),row=view.rows[0];
+ assert.equal(row['全部金额'],'10,000.00');assert.equal(row['全部笔数'],'75');assert.equal(row['成功金额'],'4,000.00');assert.equal(row['成功笔数'],'10');
+ assert.equal(row['全部金额占比'],'25.00%');assert.equal(row['全部笔数占比'],'75.00%');assert.equal(row['成功金额占比'],'20.00%');assert.equal(row['成功笔数占比'],'10.00%');
+ const csv=h.module.exportRows(),heads=csv[1],platform=csv.find(row=>row[0]==='91CLUB');assert.equal(heads.length,18);assert.equal(platform[heads.indexOf('成功金额')],'4,000.00');assert.equal(platform[heads.indexOf('成功笔数占比')],'10.00%');
+ h.c.liveDailyExpand(0);h.c.liveDailySort('all_amount');h.c.liveDailyDirection('withdraw');h.c.liveDailyDimension('provider');h.module.render();h.module.exportRows();assert.equal(h.calls.length,reads,'detail, sorting, business switch and export reuse the queried daily facts');
+});
+
+test('new success changes compare only the same available native platforms across both dates',async()=>{
+ const h=harness({handler:q=>{const current=day(q)==='2026-10-03',p=q.platformId===P.id?P:Q;if(p===Q&&!current)throw Error('prior not available');return withFacts(p,p===Q?{all_amount:90000,all_count:900,success_amount:9000,success_count:500}:current?{all_amount:2000,all_count:20,success_amount:300,success_count:12}:{all_amount:1000,all_count:10,success_amount:200,success_count:8});}});
+ await h.module.load();h.c.liveDailyTrend(-1);const row=historyView(h).rows[0];assert.equal(row['成功金额'],'9,300.00');assert.equal(row['成功笔数'],'512');assert.equal(row['成功金额较前日'],'+50.00%');assert.equal(row['成功笔数较前日'],'+50.00%');assert.equal(row['全部金额较前日'],'+100.00%');
+ const m=h.module.model();assert.equal(m.comparison.count,1);const csv=h.module.exportRows(),heads=csv[1],total=csv.find(row=>row[0]==='已读汇总');assert.equal(total[heads.indexOf('成功金额涨跌')],'+50.00%');assert.equal(total[heads.indexOf('成功笔数涨跌')],'+50.00%');
+});
+
+test('unknown success amounts stay unknown independently of known success counts and real zero',async()=>{
+ const h=harness({platforms:[P],handler:q=>withFacts(P,{all_amount:1000,all_count:10,success_amount:day(q)==='2026-10-03'?null:0,success_count:day(q)==='2026-10-03'?5:0})});await h.module.load();const view=historyView(h),current=view.rows[0],previous=view.rows[1];
+ assert.equal(current['成功金额'],'—');assert.equal(current['成功金额占比'],'—');assert.equal(current['成功金额较前日'],'—');assert.equal(current['成功笔数'],'5');assert.equal(current['成功笔数占比'],'100.00%');assert.equal(current['成功率'],'50.00%');
+ assert.equal(previous['成功金额'],'0.00');assert.equal(previous['成功笔数'],'0');assert.equal(previous['成功金额占比'],'—','zero divided by zero is not a known share');assert.equal(view.footer['成功金额'],'—');assert.equal(view.footer['成功笔数'],'5');
+ const wg=harness({platforms:[{...P,source:'wg'}]});await wg.module.load();wg.c.liveDailyDirection('withdraw');const payout=historyView(wg).rows[0];assert.equal(payout['全部金额'],'10,000.00');assert.equal(payout['成功金额'],'—');assert.equal(payout['成功笔数'],'—');assert.equal(payout['成功率'],'—');
+});
+
+test('daily history footer totals successful amounts and counts and computes a weighted success rate',async()=>{
+ const h=harness({platforms:[P],handler:q=>withFacts(P,day(q)==='2026-10-03'?{all_amount:1000,all_count:10,success_amount:800,success_count:8}:day(q)==='2026-10-02'?{all_amount:6000,all_count:30,success_amount:3000,success_count:15}:{all_amount:0,all_count:0,success_amount:0,success_count:0})});await h.module.load();const {footer}=historyView(h);
+ assert.equal(footer['全部金额'],'7,000.00');assert.equal(footer['全部笔数'],'40');assert.equal(footer['成功金额'],'3,800.00');assert.equal(footer['成功笔数'],'23');assert.equal(footer['成功率'],'57.50%','23 / 40, not the mean of 80% and 50%');assert.equal(footer['成功金额占比'],'100.00%');assert.equal(footer['成功笔数占比'],'100.00%');
+ for(const key of ['全部金额较前日','全部笔数较前日','成功金额较前日','成功笔数较前日','变化（百分点）'])assert.equal(footer[key],'—','period footer has no single-day change: '+key);
+});
+
+test('today history suppresses new success changes and CSV includes exactly the visible history plus its footer',async()=>{
+ const h=harness({date:'2026-10-04',platforms:[P],handler:q=>withFacts(P,day(q)==='2026-10-04'?{all_amount:3000,all_count:30,success_amount:2700,success_count:27}:{all_amount:1000,all_count:10,success_amount:400,success_count:4})});await h.module.load();const view=historyView(h),current=view.rows[0],csv=csvHistory(h);
+ for(const key of ['全部金额较前日','全部笔数较前日','成功金额较前日','成功笔数较前日','变化（百分点）'])assert.equal(current[key],'—','unfinished day must not compare with prior full day: '+key);
+ assert.equal(current['成功金额'],'2,700.00');assert.equal(current['成功笔数'],'27');assert.equal(csv.heads.length,17);assert.equal(csv.rows.length,8);assert.deepEqual(csv.rows,[...view.rows,view.footer]);assert.equal(csv.rows[0]['日期'],'2026-10-04','today remains a plain ISO date in CSV');assert(csv.rows.slice(0,-1).every(row=>/^\d{4}-\d{2}-\d{2}$/.test(row['日期'])));assert.equal(csv.rows.at(-1)['日期'],'7天汇总');
+ assert.equal(h.calls.length,9,'today still uses only its same-clock comparison plus the existing history/baseline reads');
+});
+
+test('workorder daily details preserve handled metrics and exclude incomplete-day changes',async()=>{
+ const h=harness({platforms:[P],workHandler:q=>tickets(P,q.startAt.slice(0,10),q.startAt.startsWith('2026-10-03')?20:100,!q.startAt.startsWith('2026-10-03'))});h.c.liveDailyDirection('workorder');await h.module.load();const row=historyView(h).rows[0],csv=csvHistory(h);
+ assert.equal(row['已处理金额'],'1,000.00');assert.equal(row['已处理笔数'],'10');assert.equal(row['处理率'],'50.00%');assert.equal(row['已处理金额较前日'],'—');assert.equal(row['已处理笔数较前日'],'—');assert.equal(row['参考手续费'],'—');assert(!('成功金额'in row));assert(csv.heads.includes('已处理金额'));assert(csv.heads.includes('已处理笔数'));assert.equal(h.calls.length,0);
 });
