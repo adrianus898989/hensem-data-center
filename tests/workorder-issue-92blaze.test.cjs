@@ -166,11 +166,21 @@ test('Edge credentials cannot broaden source, duplicate scope or authorize fourt
   assert.equal((await handlerWith(c)(request({action:'ingest',snapshot:snapshot()}))).status,403);
   const check=await handlerWith(credential())(request({action:'check'}));assert.deepEqual(await check.json(),{ok:true,source_system:'AR_WORKORDER',scope_count:3});
 });
-test('migration leaves publisher, credentials, source checks, ACL and RLS unchanged; Edge deploy mirrors tested code',()=>{
+test('migration leaves publisher, credentials, source checks, ACL and RLS unchanged; fresh Edge retains existing platform semantics',()=>{
   assert.ok(!/create or replace function public\.publish_workorder_issue_snapshot/i.test(migration));
   assert.ok(!/\b(insert into|update|delete from)\s+public\.workorder_issue_credentials/i.test(migration));
   assert.ok(!/\b(grant|revoke|policy|disable row level|security definer)\b/i.test(migration));
   assert.ok(!migration.includes('public.test_clock()'));
-  const deploy=read('supabase/functions/workorder-issue-ingest/index.ts');
-  assert.ok(deploy.includes(read('BACKEND_CURRENT/workorder-issue-ingest.ts').trim()));
+  const {loadEdge}=require('./load-edge-typescript.cjs');
+  const deploy=loadEdge(path.join(root,'supabase/functions/workorder-issue-ingest/index.ts'));
+  for (const scope of scopes) {
+    const s=snapshot(scope.platform);
+    assert.deepEqual(deploy.validateWorkorderIssueSnapshot(s,now),edge.validateWorkorderIssueSnapshot(s,now));
+    assert.equal(deploy.allowedWorkorderIssueScope(scope),true);
+  }
+  for (const patch of [{country_code:'VN'},{timezone:'UTC'},{platform:'OTHER'}]) {
+    const s={...snapshot(),...patch};
+    assert.throws(()=>deploy.validateWorkorderIssueSnapshot(s,now));
+    assert.throws(()=>edge.validateWorkorderIssueSnapshot(s,now));
+  }
 });
