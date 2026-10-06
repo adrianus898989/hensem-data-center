@@ -1,3 +1,4 @@
+import { canonicalMaanScope, validMaanSnapshot } from "../_shared/newar-platform-identity.ts";
 // Deploy collection-success-ingest with verify_jwt=false: EVERY request instead
 // authenticates a dedicated, revocable, platform-scoped X-Collection-Key below.
 // The collector never receives a Supabase service role key or dashboard read access.
@@ -39,7 +40,9 @@ function validZone(value: unknown): value is string {
   try { dateInZone(new Date(), value); return true; } catch { return false; }
 }
 export function validateCollectionSnapshot(value: unknown, now = new Date()): JsonObject {
+  value = canonicalMaanScope(value);
   if (!object(value)) invalid("snapshot");
+  if (!validMaanSnapshot(value, now.getTime(), ["RECHARGE_REVIEW", "WITHDRAW_REVIEW"])) invalid("maan_launch");
   onlyKeys(value, ["schema_version", "source_system", "country_code", "platform", "stat_date", "timezone", "snapshot_id", "snapshot_at", "coverage", "totals", "groups"], "snapshot");
   if (new TextEncoder().encode(JSON.stringify(value)).byteLength > MAX_BODY_BYTES) invalid("snapshot.size");
   if (value.schema_version !== 1 || !["RECHARGE_REVIEW", "WITHDRAW_REVIEW"].includes(String(value.source_system))) invalid("schema_version/source_system");
@@ -54,6 +57,11 @@ export function validateCollectionSnapshot(value: unknown, now = new Date()): Js
     || timestamp > now.getTime() + 5 * 60_000) invalid("snapshot_at");
   // A complete snapshot is only valid AFTER its entire backend business day ends.
   if (value.stat_date >= dateInZone(now, value.timezone) || value.stat_date >= dateInZone(new Date(timestamp), value.timezone)) invalid("stat_date.incomplete_day");
+  if (value.platform === "92NOVA") {
+    if (value.country_code !== "PK" || value.timezone !== "Asia/Karachi") invalid("scope");
+    if (value.stat_date < "2026-10-11" || timestamp < Date.parse("2026-10-10T19:00:00Z")
+      || now.getTime() < Date.parse("2026-10-10T19:00:00Z")) invalid("stat_date.launch");
+  }
   if (!object(value.coverage) || !object(value.totals)) invalid("coverage/totals");
   const coverage = value.coverage, totals = value.totals;
   onlyKeys(coverage, ["complete", "expected_count", "fetched_count", "unique_count"], "coverage");
@@ -169,4 +177,3 @@ export function createCollectionSuccessHandler(dependencies: Dependencies): (req
 if (import.meta.main) {
   Deno.serve(createCollectionSuccessHandler({ env: { SUPABASE_URL: Deno.env.get("SUPABASE_URL"), SUPABASE_SERVICE_ROLE_KEY: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") } }));
 }
-

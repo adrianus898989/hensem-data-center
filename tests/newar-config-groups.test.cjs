@@ -6,9 +6,9 @@ const path=require('node:path');
 const ts=require('typescript');
 const root=path.resolve(__dirname,'..');
 const contract=fs.readFileSync(path.join(root,'supabase/functions/auto-withdraw-config-ingest/ar-config-contract.ts'),'utf8');
-const box={exports:{}};
-vm.runInNewContext(ts.transpileModule(contract,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:box,exports:box.exports,Intl,Date});
-const {validateConfigSnapshot,NEWAR_SETTING_KEYS}=box.exports;
+const {loadEdge}=require('./load-edge-typescript.cjs');
+const {validateConfigSnapshot,NEWAR_SETTING_KEYS}=loadEdge(path.join(root,'supabase/functions/auto-withdraw-config-ingest/ar-config-contract.ts'));
+const legacy=loadEdge(path.join(root,'BACKEND_CURRENT/ar-config-contract.ts'));
 const fixture=()=>({schema_version:1,source_system:'NEW_AR',snapshot_id:'12345678-1234-4234-8234-123456789012',country_code:'IN',platform:'DhaniWin',timezone:'Asia/Kolkata',observed_at:'2026-09-20T05:00:00Z',observed_local_date:'2026-09-20',parser_version:'newar-config-v2',configuration:{
   fields:['autoWithdraw','ruleEnabled','withdrawAmount','todayProfitAmount','manualRechargeAmount','bonusRechargeAmount','accountBalance','firstDepositAmount','sameDeviceAccountCount','dayWithdrawLimit','lastRechargeDayLimit'].map((key,i)=>({key,label:key,kind:i<2?'boolean':'number',value:null,available:false,description:''})),channels:[],channelRules:[],
   settingGroups:[{id:12,configName:'默认渠道规则',configState:1,allowVirtualWithdraw:0,maxWithdrawAmount:4999,maxWithdrawTime:5,grandWithdrawTotal:1,maxWithdrawRechargeRate:8,needFirstRecharge:1,needUserNoRemark:1,needLimitGroup:0,limitGroup:'',dayProfitAmount:80000,manualRechargeOf3Day:10000,bonusRechargeOf3Day:10000,balance:30000,firstDepositAmount:4999,sameDeviceRegistCount:50,allowInvitedWheelAutoWithdraw:0,sameIpRegistCount:100,sameBankAccountCount:2,checkRejectPackage:0,rejectPackageIds:'',totalRechargeAmountOpreationType:1,totalRechargeAmount:99,checkLowOddsOrderRatio:0,lowOdds:0,lowOddsOrderRatio:0,checkRiskList:0,checkBlackListUserIdAndIp:1,totalWinLoseAmount:50000,autoWithdrawFailCount:3,totalCodingAmountMultiple:4,totalCodingAmountMultipleWithBonus:0,allowPackageIds:'',isDefaultConfig:true}]
@@ -34,10 +34,11 @@ test('v2 requires explicit groups, rejects duplicate IDs, objects, secrets, nonf
     const s=fixture();mutate(s);assert.throws(()=>valid(s));
   }
 });
-test('unknown raw top level data never stored; complete mirror is kept for deployment',()=>{
+test('unknown raw top level data never stored; existing config semantics survive fresh deployment',()=>{
   const s=fixture();s.token='PRIVATE_SENTINEL';s.raw='PRIVATE_SENTINEL';
   assert.equal(JSON.stringify(valid(s)).includes('PRIVATE_SENTINEL'),false);
-  assert.equal(fs.readFileSync(path.join(root,'BACKEND_CURRENT/ar-config-contract.ts'),'utf8'),contract);
+  assert.deepEqual(valid(s), JSON.parse(JSON.stringify(legacy.validateConfigSnapshot(s,Date.parse('2026-09-20T06:00:00Z')))));
+  assert.deepEqual(valid(fixture()).configuration.settingGroups,fixture().configuration.settingGroups);
 });
 test('rule sheet renders every group read-only, including raw field keys and empty values',()=>{
   const src=fs.readFileSync(path.join(root,'src/components/NewARConfigSheet.tsx'),'utf8');

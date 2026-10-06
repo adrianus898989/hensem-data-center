@@ -1,3 +1,4 @@
+import { canonicalMaanScope } from "../_shared/newar-platform-identity.ts";
 declare const Deno: {env:{get(name:string):string|undefined}; serve(handler:(request:Request)=>Promise<Response>):unknown};
 // Deploy with verify_jwt=false only when this dedicated, revocable and
 // platform-scoped credential check remains enabled. The collector must never
@@ -60,8 +61,8 @@ export function safeWorkorderDescriptor(value: unknown, max: number): value is s
 // Keep exact tuples aligned with workorder_issue_scopes_are_allowed.
 export function allowedWorkorderIssueScope(value: unknown): value is Scope {
   if (!object(value) || Object.keys(value).sort().join(",") !== "country_code,platform,timezone") return false;
-  return (value.country_code === "PK" && typeof value.platform === "string" && ["POPZAR", "92BLAZE"].includes(value.platform) && value.timezone === "Asia/Karachi")
-    || (value.country_code === "IN" && value.platform === "DhaniWin" && value.timezone === "Asia/Kolkata");
+  return (value.country_code === "PK" && typeof value.platform === "string" && ["POPZAR", "92BLAZE", "92NOVA"].includes(value.platform) && value.timezone === "Asia/Karachi")
+    || (value.country_code === "IN" && typeof value.platform === "string" && ["DhaniWin", "MAANWIN"].includes(value.platform) && value.timezone === "Asia/Kolkata");
 }
 function count(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -117,6 +118,7 @@ function validateStatusCounts(value: unknown, group: JsonObject, path: string): 
 }
 
 export function validateWorkorderIssueSnapshot(value: unknown, now = new Date()): JsonObject {
+  value = canonicalMaanScope(value);
   if (!object(value)) invalid("snapshot");
   onlyKeys(value, [
     "schema_version", "source_system", "country_code", "country", "platform", "stat_date", "timezone",
@@ -146,6 +148,14 @@ export function validateWorkorderIssueSnapshot(value: unknown, now = new Date())
   if (value.platform === "92BLAZE" && (value.stat_date < "2026-09-22"
     || timestamp < Date.parse("2026-09-21T19:00:00Z")
     || now.getTime() < Date.parse("2026-09-21T19:00:00Z"))) invalid("stat_date.launch");
+
+  if (value.platform === "MAANWIN" && (value.stat_date < "2026-10-06"
+    || timestamp < Date.parse("2026-10-05T18:30:00Z")
+    || now.getTime() < Date.parse("2026-10-05T18:30:00Z"))) invalid("stat_date.launch");
+
+  if (value.platform === "92NOVA" && (value.stat_date < "2026-10-11"
+    || timestamp < Date.parse("2026-10-10T19:00:00Z")
+    || now.getTime() < Date.parse("2026-10-10T19:00:00Z"))) invalid("stat_date.launch");
 
   if (!object(value.coverage) || !object(value.totals)) invalid("coverage/totals");
   const coverage = value.coverage, totals = value.totals;
@@ -268,7 +278,7 @@ export function createWorkorderIssueHandler(dependencies: Dependencies): (reques
         || !Number.isFinite(Date.parse(credential.expires_at)) || Date.parse(credential.expires_at) <= now().getTime()) {
         throw new RequestError(401, "invalid_key", "Work-order issue key is invalid or expired");
       }
-      if (!Array.isArray(credential.allowed_scopes) || !credential.allowed_scopes.length || credential.allowed_scopes.length > 3
+      if (!Array.isArray(credential.allowed_scopes) || !credential.allowed_scopes.length || credential.allowed_scopes.length > 5
         || credential.allowed_scopes.some(scope => !allowedWorkorderIssueScope(scope))
         || new Set(credential.allowed_scopes.map(scope => scope.platform)).size !== credential.allowed_scopes.length) {
         throw new RequestError(401, "invalid_key", "Work-order issue key has no valid scope");

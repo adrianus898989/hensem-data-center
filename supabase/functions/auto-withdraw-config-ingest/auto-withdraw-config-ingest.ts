@@ -1,3 +1,4 @@
+import { canonicalNewarPlatform, echoMaanScope } from "../_shared/newar-platform-identity.ts";
 import { validateConfigSnapshot } from "./ar-config-contract.ts";
 
 // This custom, scoped credential is never exposed to the dashboard browser.
@@ -34,9 +35,11 @@ Deno.serve(async(req:Request)=>{
     const body=await boundedJson(req);
     if(body.action==="report") {
       if(body.platforms!==undefined && (!Array.isArray(body.platforms) || body.platforms.length>100 || body.platforms.some((p:any)=>typeof p!=="string"))) return reply({ok:false,error:"invalid_report"},400);
+      const platforms=body.platforms?.map(canonicalNewarPlatform);
       const rows=await db("ar_config_latest?select=country_code,platform,observed_at,observed_local_date,received_at,configuration_hash,snapshot_id&limit=1000");
       return reply({ok:true,snapshots:rows.filter((r:any)=>credential.allowed_targets.includes(r.country_code+":"+r.platform)
-        && (!body.country_code || body.country_code===r.country_code) && (!body.platforms?.length || body.platforms.includes(r.platform)))});
+        && (!body.country_code || body.country_code===r.country_code) && (!platforms?.length || platforms.includes(r.platform)))
+        .map((r:any)=>echoMaanScope(r,body.platforms?.includes("MAAN.WIN") ? "MAAN.WIN" : null))});
     }
     if(body.action!=="ingest")return reply({ok:false,error:"invalid_action"},400);
     let s;
@@ -53,4 +56,3 @@ Deno.serve(async(req:Request)=>{
     return reply({ok:false,error:known?(e as Error).message:"config_sync_failed"},known?400:503);
   }
 });
-

@@ -1,3 +1,4 @@
+import { canonicalMaanScope, validMaanSnapshot } from "../_shared/newar-platform-identity.ts";
 // Separate from withdrawal reasons. Persist only whitelisted configuration controls.
 export const FIELD_KINDS: Record<string, string> = {"autoWithdraw":"boolean","withdrawAmount":"number","totalLoss":"number","withdrawTimes":"number","grandWithdrawTotal":"number","todayProfitAmount":"number","manualRechargeAmount":"number","bonusRechargeAmount":"number","accountBalance":"number","firstDepositAmount":"number","sameDeviceAccountCount":"number","dayWithdrawLimit":"number","lastRechargeDayLimit":"number","isOpenAgentRedLimit":"boolean","maxRedRechargeRate":"number","receiveRedSumAmount":"number","lastRechgRecvReadSumAmount":"number","allowvirtualwithdraw":"boolean","betTurnoverMultiple":"number","isOpenRevisitPoorProfit":"boolean","revisitPoorProfitAmount":"number","firstRecharge":"boolean","checkRemark":"boolean","limitGroup":"boolean","isAutoPayment":"boolean","isCurrencyLimit":"boolean","isBankCardToArPay":"boolean","isGameNegativeProfitLimit":"boolean"};
 const object = (v: any) => v && typeof v === "object" && !Array.isArray(v);
@@ -59,6 +60,11 @@ function validateNewARConfigSnapshot(s:any, now:number) {
   if (!platform || !/^\d{4}-\d{2}-\d{2}T/.test(s.observed_at) || !/(Z|[+]00:00)$/.test(s.observed_at)) return fail();
   const t=Date.parse(s.observed_at);
   if (!Number.isFinite(t) || t>now+600000 || t<Date.UTC(2020,0,1)) return fail();
+  // New 92NOVA only: Pakistan opens at local 2026-10-11 midnight.
+  // Reject pre-launch observations/clock skew; all older targets are unchanged.
+  if (platform==="92NOVA" && (s.country_code!=="PK" || timezone!=="Asia/Karachi"
+    || now<Date.parse("2026-10-10T19:00:00Z") || t<Date.parse("2026-10-10T19:00:00Z")
+    || s.observed_local_date<"2026-10-11")) return fail();
   const parts=new Intl.DateTimeFormat("en-CA",{timeZone:timezone,year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(t);
   const part=(key:string)=>parts.find(p=>p.type===key)?.value;
   if (s.observed_local_date!==[part("year"),part("month"),part("day")].join("-")) return fail();
@@ -95,6 +101,8 @@ function validateNewARConfigSnapshot(s:any, now:number) {
 }
 
 export function validateConfigSnapshot(s: any, now = Date.now()) {
+  s = canonicalMaanScope(s);
+  if (object(s) && !validMaanSnapshot(s, now, "NEW_AR")) return fail();
   if (s?.source_system==="NEW_AR") return validateNewARConfigSnapshot(s,now);
   if (!object(s) || s.source_system !== "AR" || s.schema_version !== 1
     || s.parser_version !== "ar-config-v1" || !/^[A-Z]{2}$/.test(s.country_code)
