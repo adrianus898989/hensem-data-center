@@ -2,3 +2,31 @@
 @media(max-width:1250px){.daily-metrics strong{font-size:16px}.daily-metrics>div{padding:8px 7px}.daily-table th,.daily-table td{padding:6px 5px}.daily-table{font-size:10px}.daily-panel-title>span{font-size:10px}}
 @media(max-width:900px){.daily-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.daily-metrics>div:nth-child(3){border-right:0}.daily-metrics>div:nth-child(-n+3){border-bottom:1px solid #e4ebf6}.daily-metrics strong{font-size:18px}.daily-table th,.daily-table td{padding:6px 4px}.daily-table{font-size:10px}.daily-panel-title{padding:8px}.daily-rank{min-width:15px}}
 @media(max-width:640px){.daily-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.daily-metrics>div:nth-child(3){border-right:1px solid #e4ebf6}.daily-metrics>div:nth-child(2n){border-right:0}.daily-metrics>div:nth-child(4){border-bottom:1px solid #e4ebf6}.daily-metrics strong{font-size:16px}.daily-charts{grid-template-columns:1fr}.daily-table{font-size:11px;min-width:670px}.daily-coverage-table{min-width:430px}.daily-history{min-width:570px}.daily-note{font-size:10px}.daily-toolbar button{padding:6px}.daily-panel-title>span{max-width:100%}}
+
+/* Explicit colgroups keep history, platform and provider metrics aligned.
+ * The imported dashboard also styles its first two table columns; reset those
+ * cell widths/offsets here before fixing only the actual identity column. */
+body.live-admin .daily-comparison .daily-panel{min-width:0}
+body.live-admin .daily-comparison .daily-table-wrap:has(>.daily-detail-table){position:relative;isolation:isolate;max-width:100%;max-height:min(72vh,760px);overflow:auto;overscroll-behavior-x:contain;scroll-padding-left:132px;scrollbar-width:thin;scrollbar-color:#b6c6df #f3f6fb}
+body.live-admin .daily-comparison .daily-table-wrap:has(>.daily-detail-table)::-webkit-scrollbar{height:9px}
+body.live-admin .daily-comparison .daily-table-wrap:has(>.daily-detail-table)::-webkit-scrollbar-track{background:#f3f6fb}
+body.live-admin .daily-comparison .daily-table-wrap:has(>.daily-detail-table)::-webkit-scrollbar-thumb{background:#b6c6df;border:2px solid #f3f6fb;border-radius:5px}
+body.live-admin .daily-comparison table.daily-detail-table{width:max(100%,var(--daily-table-width,1592px))!important;min-width:var(--daily-table-width,1592px)!important;max-width:none;table-layout:fixed!important;border-collapse:separate;border-spacing:0;font-size:11px;line-height:1.45;font-variant-numeric:tabular-nums}
+body.live-admin .daily-comparison .daily-detail-table>:is(thead,tbody,tfoot)>tr>:is(th,td){box-sizing:border-box;position:relative!important;inset:auto!important;width:auto!important;min-width:0!important;max-width:none!important;height:auto;padding:7px 6px!important;text-align:right!important;vertical-align:middle;white-space:nowrap;word-break:normal;overflow-wrap:normal;color:inherit;font-size:11px!important;line-height:16px;font-weight:400;background:#fff}
+body.live-admin .daily-comparison .daily-detail-table>thead>tr>th{position:sticky!important;top:0!important;z-index:3;height:34px;white-space:normal;background:#f2f6ff;color:#617a9d;font-weight:500;line-height:15px}
+body.live-admin .daily-comparison .daily-grouped-table>thead>tr:first-child>th{height:28px;padding-top:5px!important;padding-bottom:5px!important}
+body.live-admin .daily-comparison .daily-grouped-table>thead>tr:first-child>th[colspan]{text-align:center!important;color:#385c8c;border-bottom-color:#d7e3f5}
+body.live-admin .daily-comparison .daily-grouped-table>thead>tr:nth-child(2)>th{top:28px!important;height:32px;padding-top:5px!important;padding-bottom:5px!important}
+body.live-admin .daily-comparison .daily-detail-table>thead>tr:first-child>th:first-child,
+body.live-admin .daily-comparison .daily-detail-table>tbody>tr:not(.daily-inline)>td:first-child,
+body.live-admin .daily-comparison .daily-detail-table>tfoot>tr>td:first-child{position:sticky!important;left:0!important;z-index:2;text-align:left!important;box-shadow:1px 0 #d8e2f2,3px 0 5px #263f6410}
+body.live-admin .daily-comparison .daily-detail-table>thead>tr:first-child>th:first-child{z-index:5}
+body.live-admin .daily-comparison .daily-detail-table>tfoot>tr>td{position:sticky!important;bottom:0!important;z-index:3;background:#edf3ff;font-weight:600;border-top:1px solid #cad8f1}
+body.live-admin .daily-comparison .daily-detail-table>tfoot>tr>td:first-child{z-index:4}
+body.live-admin .daily-comparison .daily-detail-table>tbody>tr:not(.daily-inline):hover>td{background:#f6f9ff}
+body.live-admin .daily-comparison .daily-detail-table>tbody>tr.daily-inline>td{position:relative!important;left:auto!important;padding:0!important;white-space:normal}
+body.live-admin .daily-comparison .daily-detail-table .daily-name{font-size:11px;line-height:16px;text-align:left}
+body.live-admin .daily-comparison .daily-detail-table .daily-rank{min-width:17px;font-size:11px}
+body.live-admin .daily-comparison .daily-detail-table .daily-up{color:#0b967b}
+body.live-admin .daily-comparison .daily-detail-table :is(.daily-down,.daily-low){color:#e34459}
+body.live-admin .daily-comparison .daily-detail-table :is(.daily-unknown,.daily-flat){color:#7c8eaa}
