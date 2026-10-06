@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "test": "node --test tests/*.test.cjs",
+    "test:collector-control": "node --test tests/collector-control-backend.test.cjs tests/collector-control-ui.test.cjs tests/collector-control-worker.test.cjs",
     "test:security-identity": "node --test tests/dashboard-entry-ip-gate.test.cjs tests/collector-exact-identity-sql.test.cjs tests/admin-order-intake-wg-probe.test.cjs tests/dashboard-role-account-create-edge.test.cjs tests/dashboard-role-account-create-sql.test.cjs tests/dashboard-role-account-create-client.test.cjs tests/application-presence-edge.test.cjs tests/application-presence-sql.test.cjs tests/dashboard-presence-client.test.cjs",
     "test:wg-realtime": "node --test tests/wg-realtime-dashboard.test.cjs",
     "test:wg-existing": "node --test tests/wg-existing-*.test.cjs tests/admin-wg-existing-pages.test.cjs",

@@ -28,6 +28,7 @@ export function validateDashboardRoleAccess(value: unknown): DashboardRoleAccess
   return {...v, permissions, canView: v.canView && (v.mode !== "assigned" || permissions.some(key => key.endsWith(".view")))};
 }
 export function dashboardRoleAllows(access: DashboardRoleAccess | null | undefined, page: string, action = "view"): boolean {
+  if(page === "collector_control")return !!access && access.canView && (access.mode === "owner" || access.mode === "assigned" && access.permissions.includes(page + ".view") && access.permissions.includes(page + "." + action));
   return page !== "channelquality" && !!access && access.canView && (!["success_analysis", "daily_comparison"].includes(page) || access.mode !== "legacy") && (access.mode !== "assigned"
     || access.permissions.includes(page + ".view") && access.permissions.includes(page + "." + action));
 }

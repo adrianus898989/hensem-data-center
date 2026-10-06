@@ -1,0 +1,14 @@
+{
+  "endpoint": "https://YOUR_PROJECT.supabase.co/functions/v1/collector-control",
+  "tasks": [
+    {
+      "id": "demo",
+      "label": "无采集示例（仅验证后台启停）",
+      "python": "/absolute/path/to/python3",
+      "python_args": ["-B", "-u"],
+      "script": "/absolute/path/to/collector-manager/demo_collector.py",
+      "args": [],
+      "cwd": "/absolute/path/to/collector-manager"
+    }
+  ]
+}

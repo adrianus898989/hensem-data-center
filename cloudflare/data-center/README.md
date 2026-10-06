@@ -3,6 +3,16 @@
 Public entry: `https://data-center.workdesk-hub.workers.dev/hensem-data-center/`.
 The root redirects to this path to preserve the existing Next.js base path.
 
+The fixed same-origin POST route `/hensem-data-center/api/collector-control` proxies
+only the four registered human control actions to the `collector-control` Edge
+Function. It still passes the entry gate first. The Worker replaces client-supplied
+proof/IP headers with its existing server proof and trusted `CF-Connecting-IP`,
+forwards only the bearer and bounded JSON, and never retries an ambiguous mutation.
+The Edge verifies registered dashboard sessions, the account's current IP policy,
+and explicit collector permissions independently. Device `pair`/`poll` are rejected
+on this route and use the separately authenticated direct Edge path instead.
+Neither this route nor the Edge accepts arbitrary commands or local file paths.
+
 Before every document, asset, redirect or error response, this Worker sends only Cloudflare's trusted `CF-Connecting-IP` and its server-side `PORTAL_PROXY_KEY` proof to `application-entry-gate`. The Edge uses the service-only `application_dashboard_entry_allowed` RPC to return one boolean. Missing configuration, unlisted addresses, explicit denials and malformed authorization responses return HTTP 403 with the plain text `Access denied`; no login UI or static file is served.
 
 Temporary gate network failures, timeouts and HTTP 5xx receive at most two fresh checks, each with a five-second deadline covering fetch and response-body reading, separated by 150ms. A fresh positive decision is required before any asset is fetched. If both checks are temporarily unavailable, the Worker returns HTTP 503 `Site temporarily unavailable` with `Retry-After: 1` and `no-store`. It never reuses an earlier allow decision. Real denials, HTTP 4xx/redirects and malformed responses are not retried. A recovered second check serves the original resource normally; exhausted temporary failures are not misreported as revoked IPs.

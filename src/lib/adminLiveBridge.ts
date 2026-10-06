@@ -11,9 +11,19 @@ export const LIVE_CANCEL = "hensem-admin-live-cancel";
 export const LIVE_REQUEST_TIMEOUT_MS = 90000;
 const actions = ["memberDaily","catalog","syncHealth","intakeCoverage","reportSummary","pendingSnapshot","collectedData","query","aggregate","details","analysisOrders","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
 const keys = new Set(["basis","durationVersion","durationRange","scopeTargets","amountBands","feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","amountMaxExclusive","hourRange","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"]);
+export function validateCollectorControlRequest(p:Record<string,unknown>):Record<string,unknown>{
+ const fields:Record<string,string[]>={overview:[],createPairing:["name"],revokeDevice:["deviceId"],setDesired:["deviceId","taskId","desiredState","expectedRevision"]};
+ const operation=typeof p.operation==="string"?p.operation:"",required=Object.prototype.hasOwnProperty.call(fields,operation)?fields[operation]:undefined;
+ if(p.action!=="collectorControl"||!required||Object.keys(p).some(key=>!["action","operation",...required].includes(key))||required.some(key=>!(key in p)))throw Error("采集管理参数无效");
+ if(operation==="createPairing"&&(typeof p.name!=="string"||!p.name.trim()||p.name!==p.name.trim()||p.name.length>80||/[\u0000-\u001f\u007f]/.test(p.name)))throw Error("请填写1至80字的电脑名称");
+ if(required.includes("deviceId")&&(typeof p.deviceId!=="string"||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(p.deviceId)))throw Error("电脑标识无效");
+ if(operation==="setDesired"&&(typeof p.taskId!=="string"||!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(p.taskId)||!["running","stopped"].includes(String(p.desiredState))||!Number.isSafeInteger(p.expectedRevision)||Number(p.expectedRevision)<0))throw Error("任务或版本无效，请刷新后重试");
+ return {...p};
+}
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
+  if(p.action==="collectorControl")return validateCollectorControlRequest(p);
   if(p.amountMaxExclusive!==undefined&&(!["aggregate","analysisOrders"].includes(String(p.action))||(p.action==="analysisOrders"||p.view==="drilldown")&&p.kind!=="custom"||typeof p.amountMaxExclusive!=="boolean"||p.amountMax===undefined||p.amountMaxExclusive&&p.amountMin!==undefined&&Number(p.amountMin)>=Number(p.amountMax)))throw Error("金额上限条件无效");
   if(p.action==="submissionStreak"){
     const uuid=(v:unknown)=>typeof v==="string"&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(v);
@@ -345,6 +355,7 @@ export function isAdminLiveMessage(event:MessageEvent,source:Window|null|undefin
  return isAdminLiveEnvelope(event,source,channel)&&event.data.type===LIVE_REQUEST;
 }
 function adminLiveTimeoutMessage(action:unknown,mode?:unknown):string {
+ if(action==='collectorControl')return '采集管理响应超时，操作结果尚未确认；请刷新状态后核对';
  if(action==='submissionStreak')return '连续提交分析本日计算超时，已完成进度保留，请稍后继续；不能据此判断为0';
  if(action==='catalog')return '平台目录读取超时，请重试读取目录';
  if(action==='pendingOrders')return '代付中订单读取超时，请重试；已显示统计不会清空';
@@ -363,6 +374,24 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
   const response=await fetch("https://hensem-india-workorder.workdesk-hub.workers.dev/api/owner-operation-logs",{method:"POST",headers:{Authorization:`Bearer ${current.access_token}`,"Content-Type":"application/json"},body:JSON.stringify(Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))),signal,cache:"no-store",redirect:"error",credentials:"omit"});
   if(!response.ok){if(response.status===401)throw Error("后台登录已失效，请重新登录");if(response.status===403)throw Error("当前账号没有此范围的操作日志查看权限");throw Error("操作日志读取未完成，请重试；不能据此判断没有日志");}
   return response.json();
+ }
+ if(request.action==="collectorControl"){
+  const {operation,...fields}=request;delete fields.action;
+  const response=await fetch("https://data-center.workdesk-hub.workers.dev/hensem-data-center/api/collector-control",{method:"POST",body:JSON.stringify({action:operation,...fields}),headers:{Authorization:`Bearer ${current.access_token}`,"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error",credentials:"omit"});
+  if(response.status===401)throw Error("登录已失效，请重新登录");
+  let data:unknown;try{data=await response.json()}catch{if(response.status===403)throw Error("当前账号没有采集管理操作权限");throw Error("采集管理服务尚未接通，请完成首次部署后刷新")}
+  if(response.status===403){
+   const code=data&&typeof data==="object"?(data as {code?:unknown}).code:null;
+   if(code==="application_session_denied")throw Error("登录已失效，请重新登录");
+   if(code==="ip_denied")throw Error("当前网络未获后台访问授权");
+   throw Error("当前账号没有采集管理操作权限");
+  }
+  if(!response.ok||!data||typeof data!=="object"||(data as {ok?:unknown}).ok!==true){
+   if(response.status===409)throw Error("任务状态已被修改，请刷新后核对再操作");
+   if(response.status===404||response.status>=500)throw Error("采集管理服务尚未接通或暂不可用，请完成首次部署后刷新");
+   throw Error("采集管理操作未确认，请刷新状态后核对");
+  }
+  return data;
  }
  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,""),url=new URL(base);
  if(url.protocol!=="https:"||url.origin!==base)throw Error("后台地址配置无效");
@@ -411,7 +440,12 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
    if(!current(item)||item.settled){clearTimeout(item.timer);return;}
    if(Date.now()>=item.deadline){stop(item,true);return;}
    const controller=new AbortController();item.controller=controller;active.set(item.id,item);
-   try{const result=await adminLiveRequest(typeof options.session==="function"?options.session():options.session,item.request,controller.signal,{assigned:options.roleAccess?.()?.mode==="assigned",page:item.page});if(Date.now()>=item.deadline)stop(item,true);else finish(item,{result})}
+   try{
+    if((item.request as {action?:unknown})?.action==="collectorControl"){
+     const request=validateAdminLiveRequest(item.request),access=options.roleAccess?.(),permission=request.operation==="overview"?"view":"edit";
+     if(item.page!=="collector_control"||!access?.canView||!(access.mode==="owner"||access.mode==="assigned"&&access.permissions.includes("collector_control.view")&&access.permissions.includes("collector_control."+permission)))throw Error("当前账号没有采集管理操作权限");
+    }
+    const result=await adminLiveRequest(typeof options.session==="function"?options.session():options.session,item.request,controller.signal,{assigned:options.roleAccess?.()?.mode==="assigned",page:item.page});if(Date.now()>=item.deadline)stop(item,true);else finish(item,{result})}
    catch(e){finish(item,{error:e instanceof Error?e.message:"读取失败"})}
    finally{clearTimeout(item.timer);if(active.get(item.id)===item)active.delete(item.id);drain()}
  };
@@ -471,7 +505,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
  window.HENSEM_PRODUCTION=true;
  window.hensemRoleAccess=${JSON.stringify(roleAccess||{mode:"legacy",permissions:[],canView:true}).replace(/</g,"\\u003c")};
  window.hensemDataScope=${JSON.stringify({mode:dataScope?.mode==="all"?"all":"selected",identity:typeof dataScope?.identity==="string"?dataScope.identity.slice(0,1000):"unverified"}).replace(/</g,"\\u003c").replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029")};
- window.hensemRoleAllowed=function(page,action='view'){const access=window.hensemRoleAccess;return page!=='channelquality'&&access.canView===true&&(access.mode!=='assigned'||access.permissions.includes(page+'.view')&&access.permissions.includes(page+'.'+action))};
+ window.hensemRoleAllowed=function(page,action='view'){const access=window.hensemRoleAccess;if(page==='collector_control')return access.canView===true&&(access.mode==='owner'||access.mode==='assigned'&&access.permissions.includes(page+'.view')&&access.permissions.includes(page+'.'+action));return page!=='channelquality'&&access.canView===true&&(access.mode!=='assigned'||access.permissions.includes(page+'.view')&&access.permissions.includes(page+'.'+action))};
  window.hensemAdminInitialPage=${encode(initialPage)};
  // No arbitrary URL, host query string or authentication fragment crosses the
  // frame boundary. The menu independently validates its allowed page IDs.
@@ -480,7 +514,8 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
    // Configuration batches continue while the user browses another page. Keep
    // their original permission context; the server still checks this page and action.
    const page=request?.action==='payoutConfig'?'payout_config':window.hensemCurrentAdminPage?.()||window.hensemAdminInitialPage;
-   const operation=request?.action==='withdrawNote'?'edit':request?.action==='configurationWrite'?(request.operation==='grant'?'grant':'edit'):['catalog','providerOptions','configurationAccess'].includes(request?.action)?'view':'query';
+   const operation=request?.action==='collectorControl'?(request.operation==='overview'?'view':'edit'):request?.action==='withdrawNote'?'edit':request?.action==='configurationWrite'?(request.operation==='grant'?'grant':'edit'):['catalog','providerOptions','configurationAccess'].includes(request?.action)?'view':'query';
+   if(request?.action==='collectorControl'&&page!=='collector_control'){reject(error('采集管理页面无效','ROLE_DENIED'));return;}
    if(!window.hensemRoleAllowed(page,operation)){reject(error('当前角色没有此页面或操作权限','ROLE_DENIED'));return;}
    const detail=['details','query','analysisOrders','pendingOrders'].includes(request?.action)||['submissionAnalysis','submissionStreak'].includes(request?.action)&&request.operation==='members'||request?.action==='aggregate'&&request.view==='drilldown'||request?.action==='workorderRecords'&&['detail','orderDetail'].includes(request.operation)||request?.action==='depositStatistics'&&(request.section==='details'||request.section==='kyc'&&request.dimension==='orders')||request?.action==='depositIssues'&&page==='deposit_statistics';
    if(detail&&!window.hensemRoleAllowed(page,'detail')){reject(error('当前角色没有查看明细权限','ROLE_DENIED'));return;}
@@ -492,7 +527,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
    try{parent.postMessage({type:'${LIVE_REQUEST}',channel,id,request,page,deadline},hostOrigin)}catch(e){release(id);reject(e)}
  })};
  // Navigation cancels read requests only; an in-flight edit must keep its outcome.
- window.hensemLiveCancelRequests=function(actions){let count=0;for(const [id,q]of [...requests]){if(['configurationWrite','withdrawNote'].includes(q.request&&q.request.action))continue;if(Array.isArray(actions)&&!actions.includes(q.request&&q.request.action))continue;cancel(id);count++;}return count};
+ window.hensemLiveCancelRequests=function(actions){let count=0;for(const [id,q]of [...requests]){if(['configurationWrite','withdrawNote'].includes(q.request&&q.request.action)||q.request?.action==='collectorControl'&&q.request.operation!=='overview')continue;if(Array.isArray(actions)&&!actions.includes(q.request&&q.request.action))continue;cancel(id);count++;}return count};
  addEventListener('message',event=>{const data=event.data;if(event.source!==parent||event.origin!==hostOrigin||!data||data.type!=='${LIVE_RESPONSE}'||data.channel!==channel||typeof data.id!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(data.id))return;const pending=requests.get(data.id);if(!pending)return;if(Date.now()>=pending.deadline){cancel(data.id,true);return;}const q=release(data.id);data.error?q.reject(error(data.error,data.code)):q.resolve(data.result)});
 })();</script>`;
  return html.replace(/(<!doctype html>)/i,"$1"+script);
