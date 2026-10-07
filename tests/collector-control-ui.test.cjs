@@ -9,6 +9,64 @@ function setup(handler){let clock=now,seq=0,active=true,edit=true,paint=0;const 
  const api=ctx.HensemCollectorControl.create({request:async q=>{calls.push(clone(q));return handler?handler(q):overview()},active:()=>active,canEdit:()=>edit,onChange:()=>paint++});
  return {api,calls,timers,ctx,setClock:value=>clock=value,setActive:value=>active=value,setEdit:value=>edit=value,paint:()=>paint};
 }
+// Exercise handlers emitted by render(), through the actual host-page globals.
+// Native sandbox behaviour is additionally covered by the browser regression.
+function pairingWires(h){
+ const html=h.api.render(),form=html.match(/<form\b[^>]*class="collector-pair"[^>]*>[\s\S]*?<\/form>/)?.[0];assert(form,'pairing form is rendered');
+ const opening=form.match(/^<form\b[^>]*>/)[0],button=form.match(/<button\b[^>]*>生成配对码<\/button>/)?.[0];assert(button,'pairing button is rendered');
+ const attr=(tag,name)=>{const value=tag.match(new RegExp('\\b'+name+'="([^"]*)"'))?.[1];assert.notEqual(value,undefined,name+' is wired');return value;};
+ const host=fs.readFileSync(path.join(root,'admin-preview/live-data.js'),'utf8');h.ctx.collectorControl=h.api;
+ for(const name of ['collectorPair','collectorName']){const binding=host.match(new RegExp('window\\.'+name+'=[^;]+;'))?.[0];assert(binding,'actual '+name+' binding exists');vm.runInContext(binding,h.ctx);}
+ return {form,button,click:attr(button,'onclick'),key:attr(opening,'onkeydown'),submit:attr(opening,'onsubmit'),input:attr(form.match(/<input\b[^>]*>/)[0],'oninput')};
+}
+function invokeWire(h,code,event,element={}){h.ctx.wireEvent=event;h.ctx.wireElement=element;return vm.runInContext('(function(event){'+code+'}).call(wireElement,wireEvent)',h.ctx);}
+function pairingEnter(extra={}){let prevented=0;const event={key:'Enter',keyCode:13,target:{tagName:'INPUT',id:'collectorComputerName',disabled:false,isContentEditable:false},preventDefault(){prevented++;},...extra};return {event,prevented:()=>prevented};}
+const syntheticPairing=()=>({ok:true,code:'SYNTHETIC_PAIR_WIRED',expiresAt:new Date(now+600000).toISOString()});
+test('rendered pairing click and Enter reach the actual global binding once without form submission',async()=>{
+ for(const kind of ['click','key']){
+  const h=setup(q=>q.operation==='createPairing'?syntheticPairing():overview({devices:[]}));await h.api.refresh();const wire=pairingWires(h);
+  assert.match(wire.button,/type="button"/);assert.doesNotMatch(wire.form,/type="submit"/);
+  invokeWire(h,wire.input,undefined,{value:'  Jun  '});
+  assert.equal(invokeWire(h,wire.submit),false);assert.equal(h.calls.length,1,'onsubmit never calls the pairing endpoint');
+  const key=pairingEnter();invokeWire(h,wire[kind],kind==='key'?key.event:undefined);await flush();
+  assert.deepEqual(h.calls.filter(q=>q.operation==='createPairing'),[{action:'collectorControl',operation:'createPairing',name:'Jun'}]);
+  assert.equal(key.prevented(),kind==='key'?1:0);assert.match(h.api.render(),/SYNTHETIC_PAIR_WIRED/);
+  await h.api.refresh();assert.match(h.api.render(),/SYNTHETIC_PAIR_WIRED/,'status polling retains the transient pairing code');
+  assert(!JSON.stringify(h.api.snapshot()).includes('SYNTHETIC_PAIR_WIRED'));
+ }
+});
+test('rendered pairing Enter ignores composition, repeats, modifiers and unrelated controls',async()=>{
+ const h=setup();await h.api.refresh();h.api.setName('Jun');const wire=pairingWires(h);
+ const ignored=[{isComposing:true},{keyCode:229},{repeat:true},{defaultPrevented:true},{ctrlKey:true},{metaKey:true},{altKey:true},{shiftKey:true},{key:'Escape'},{key:' '},{target:null},
+  {target:{tagName:'BUTTON',id:'collectorComputerName'}},{target:{tagName:'SELECT',id:'collectorComputerName'}},{target:{tagName:'TEXTAREA',id:'collectorComputerName'}},
+  {target:{tagName:'INPUT',id:'other'}},{target:{tagName:'INPUT',id:'collectorComputerName',disabled:true}},{target:{tagName:'INPUT',id:'collectorComputerName',isContentEditable:true}}];
+ for(const extra of ignored){const key=pairingEnter(extra);invokeWire(h,wire.key,key.event);await flush();assert.equal(key.prevented(),0,JSON.stringify(extra));}
+ assert.equal(h.calls.length,1,'no ignored key reaches createPairing');
+});
+test('pairing button keyboard activation remains a single native click path',async()=>{
+ const h=setup(q=>q.operation==='createPairing'?syntheticPairing():overview());await h.api.refresh();h.api.setName('Jun');const wire=pairingWires(h),key=pairingEnter({target:{tagName:'BUTTON',type:'button'}});
+ invokeWire(h,wire.key,key.event);await flush();assert.equal(h.calls.length,1);assert.equal(key.prevented(),0);
+ invokeWire(h,wire.click);await flush();assert.equal(h.calls.filter(q=>q.operation==='createPairing').length,1);
+});
+test('wired pairing keeps blank-name validation, pending deduplication and read-only guards',async()=>{
+ for(const kind of ['click','key']){
+  let finish;const h=setup(q=>q.operation==='createPairing'?new Promise(resolve=>finish=resolve):overview());await h.api.refresh();const wire=pairingWires(h);
+  invokeWire(h,wire.input,undefined,{value:'   '});invokeWire(h,wire[kind],kind==='key'?pairingEnter().event:undefined);await flush();
+  assert.equal(h.calls.length,1);assert.match(h.api.render(),/请填写1至80字的电脑名称/);
+  invokeWire(h,wire.input,undefined,{value:'Jun'});invokeWire(h,wire[kind],kind==='key'?pairingEnter().event:undefined);await flush();
+  assert.equal(h.api.snapshot().mutating,true);assert.match(pairingWires(h).button,/\bdisabled\b/);
+  invokeWire(h,wire.click);invokeWire(h,wire.key,pairingEnter().event);await flush();assert.equal(h.calls.filter(q=>q.operation==='createPairing').length,1);
+  finish(syntheticPairing());await flush();assert.equal(h.api.snapshot().mutating,false);
+  h.setEdit(false);invokeWire(h,wire.click);invokeWire(h,wire.key,pairingEnter().event);await flush();assert.equal(h.calls.filter(q=>q.operation==='createPairing').length,1);
+ }
+ const denied=setup(()=>overview({canEdit:false}));await denied.api.refresh();denied.api.setName('Jun');const wire=pairingWires(denied);assert.match(wire.button,/\bdisabled\b/);
+ invokeWire(denied,wire.click);invokeWire(denied,wire.key,pairingEnter().event);await flush();assert.equal(denied.calls.length,1);
+});
+test('pairing click fix retains the host sandbox and forbids native form/network destinations',()=>{
+ const host=fs.readFileSync(path.join(root,'src/components/OwnerAdminPreview.tsx'),'utf8'),document=fs.readFileSync(path.join(root,'src/lib/ownerPreviewDocument.ts'),'utf8');
+ assert.match(host,/sandbox="allow-scripts allow-downloads"/);assert.doesNotMatch(host,/allow-forms|allow-same-origin/);
+ assert.match(document,/form-action 'none'/);assert.match(document,/connect-src 'none'/);assert.match(document,/base-uri 'none'/);
+});
 test('empty inventory gives setup steps and does not invent registered computers or data health',async()=>{
  const h=setup(()=>overview({devices:[]}));h.api.activate();await flush();assert.deepEqual(h.calls,[{action:'collectorControl',operation:'overview'}]);assert.match(h.api.render(),/还没有连接电脑/);assert.match(h.api.render(),/入库时间尚未接入/);assert.doesNotMatch(h.api.render(),/已采集.*笔|测试电脑 A/);h.api.activate();await flush();assert.equal(h.calls.length,1);
 });

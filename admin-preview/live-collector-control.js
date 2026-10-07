@@ -41,7 +41,14 @@
    catch(error){if(!disposed)s.error=error instanceof Error?error.message:String(error?.message||'操作未确认，请刷新状态后核对');return false;}
    finally{if(!disposed){s.mutating=false;changed();}}
   }
-  async function pair(){
+  async function pair(event){
+   // The host deliberately disallows native form submission in its sandbox.
+   // Use explicit click/Enter handlers without widening the iframe permissions.
+   if(event){
+    const input=event.target;
+    if(event.defaultPrevented||event.key!=='Enter'||event.isComposing||event.keyCode===229||event.repeat||event.ctrlKey||event.metaKey||event.altKey||event.shiftKey||input?.tagName!=='INPUT'||input.id!=='collectorComputerName'||input.disabled||input.isContentEditable)return false;
+    event.preventDefault();
+   }
    const name=s.name.trim();if(!label(name)){s.notice='请填写1至80字的电脑名称';changed();return false;}
    return mutate('createPairing',{name},result=>{
     if(typeof result.code!=='string'||result.code.length<6||result.code.length>100||!/^[a-zA-Z0-9_-]+$/.test(result.code)||typeof result.expiresAt!=='string'||!Number.isFinite(Date.parse(result.expiresAt)))throw Error('配对码响应不完整，请重新生成');
@@ -71,7 +78,7 @@
    html+='<div class="collector-message">本版支持连接电脑、运行和请求停止。登录状态、最后采集时间、最后入库时间尚未接入；“进程运行中”不代表订单已成功入库。停止按脚本原有退出方式处理，当前批次保护需逐份接入验证。</div>';
    if(s.error)html+='<div class="collector-error" role="alert">'+escape(s.error)+(s.data?'<p>以下为上次回报，当前状态未确认；刷新成功后才能操作。</p>':'<p>首次使用需要部署采集管理服务，再连接电脑上的运行管理器。</p>')+'</div>';
    if(s.notice)html+='<div class="collector-notice" role="status">'+escape(s.notice)+'</div>';
-   if(s.data&&options.canEdit())html+='<form class="collector-pair" onsubmit="event.preventDefault();collectorPair()"><label>新电脑名称<input id="collectorComputerName" maxlength="80" autocomplete="off" value="'+escape(s.name)+'" oninput="collectorName(this.value)" placeholder="例如：采集电脑 A"'+(!editable||s.mutating?' disabled':'')+'></label><button class="btn primary" type="submit"'+(!editable||disabled?' disabled':'')+'>生成配对码</button><span>任务的PY路径和启动参数在该电脑本地登记。</span></form>';
+   if(s.data&&options.canEdit())html+='<form class="collector-pair" onsubmit="return false" onkeydown="collectorPair(event)"><label>新电脑名称<input id="collectorComputerName" maxlength="80" autocomplete="off" value="'+escape(s.name)+'" oninput="collectorName(this.value)" placeholder="例如：采集电脑 A"'+(!editable||s.mutating?' disabled':'')+'></label><button class="btn primary" type="button" onclick="collectorPair()"'+(!editable||disabled?' disabled':'')+'>生成配对码</button><span>任务的PY路径和启动参数在该电脑本地登记。</span></form>';
    if(s.pairing){const expired=Date.parse(s.pairing.expiresAt)<=Date.now();html+='<div class="collector-pair-code" role="status"><span>'+escape(s.pairing.name)+' · '+(expired?'配对码已过期，请重新生成':'仅用于这一次连接')+'</span>'+(expired?'':'<code>'+escape(s.pairing.code)+'</code>')+'<span>有效期至 '+stamp(s.pairing.expiresAt)+'。请在对应电脑输入，勿发到群里。</span></div>';}
    if(!s.data&&!s.error)html+='<p class="collector-empty" role="status">正在读取电脑与任务…</p>';
    if(s.data&&!s.data.devices.length)html+='<div class="collector-empty"><h3>还没有连接电脑</h3><p>'+(editable?'生成配对码，在第一台电脑运行管理器并完成配对。先使用演示任务验证启停，再登记正式PY。':'请由有管理权限的账号连接第一台电脑。')+'</p></div>';
