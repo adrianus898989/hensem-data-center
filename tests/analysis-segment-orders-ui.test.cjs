@@ -39,3 +39,8 @@ test('unregistered rows, mismatched scope and unsupported source failures never 
 test('only separate expansion remains and historical both snapshots normalize to a single platform view',()=>{
  const h=setup();h.instance.open(segment,'08时');let html=h.instance.panel(segment);assert.doesNotMatch(html,/一起展示|analysis-dual-detail/);const saved=h.instance.capture();saved[0][1].tab='both';h.instance.restore(saved);html=h.instance.panel(segment);assert.doesNotMatch(html,/一起展示|analysis-dual-detail/);assert.equal(h.instance.snapshot().states.get(JSON.stringify(segment)).tab,'platform');assert.match(h.instance.button(segment),/三方展开/);assert.match(h.instance.button(segment),/收起平台/);
 });
+
+
+test('DUOLI interval success drilldown preserves the updated-time label and never offers actual latency totals',async()=>{
+ const h=setup(q=>Promise.resolve(response(q))),p=h.L.results[0].platform;p.source='duoli';p.capabilities={successTimeBasis:'order_updated_at',chargeSuccessTimeAvailable:true,withdrawSuccessTimeAvailable:true,paymentSuccessTimeAvailable:false,latencyAvailable:false};h.instance.open(segment,'08时');const link=links(h.instance.panel(segment)).find(x=>x.value.platformId===p.id&&x.value.basis==='success');assert(link);h.root.liveAnalysisOrders(link.key);await flush();assert.equal(h.calls.at(-1).basis,'success');assert.match(h.drawers.at(-1).html,/成功统计时间（订单更新时间）/);h.root.liveAnalysisOrder(0);assert.match(h.drawers.at(-1).html,/成功统计时间（订单更新时间）/);const rows=h.instance.platformRows({kind:'latency',direction:'charge',bucket:0});assert.equal(rows.find(r=>r.platformId===p.id).success_count,null);assert.equal(rows.find(r=>r.platformId===p.id).success_amount,null);
+});

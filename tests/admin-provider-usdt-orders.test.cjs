@@ -90,3 +90,8 @@ test('WG original transfer type remains readable with raw NULL and explicit zero
  h.root.liveProviderOrder(0);assert.match(h.html(),/0（提现转充值）/);assert.match(h.html(),/原始类型/);assert.match(h.html(),/（空）/);
  assert.doesNotMatch(h.api.reason({platform:{source:'ar'},provider:'提现转充值',direction:'charge',channel_type:'提现转充值',raw_provider:null,fee_exempt:true}),/手续费 0|内部转账/);
 });
+
+
+test('DUOLI provider success drilldown labels the order update timestamp while other source columns stay unchanged',async()=>{
+ const h=fixture();h.platforms[0].source='duoli';h.platforms[0].capabilities={successTimeBasis:'order_updated_at',chargeSuccessTimeAvailable:true,withdrawSuccessTimeAvailable:true,paymentSuccessTimeAvailable:false,latencyAvailable:false};await h.api.open('USDT','','charge','a');assert.equal(h.requests.at(-1).status,'success');assert.match(h.html(),/成功统计时间（多利按更新时间）/);h.root.liveProviderOrder(0);assert.match(h.html(),/成功统计时间（订单更新时间）/);await h.root.liveProviderOrderPlatform('b');assert.doesNotMatch(h.html(),/订单更新时间/);assert.match(h.html(),/成功时间/);
+});

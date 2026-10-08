@@ -119,3 +119,8 @@ test('pending distribution preserves its legacy ten mutually exclusive bands and
  const r=result('A');r.summary[0].direction='withdraw';r.groups.pending_age=Array.from({length:10},(_,bucket)=>({direction:'withdraw',currency:'INR',bucket,count:bucket===0?2:0,amount:bucket===0?200:0,valid_count:2,valid_amount:200}));
  const h=setup([r],{direction:'withdraw'});h.render('stuck');const table=h.tables.find(t=>t.headers[0]==='已等待时长');assert.equal(table.rows[0][0],'≤ 5 分钟');assert.equal(table.rows.length,12);assert.equal(table.rows[9][0],'超过 3 天');assert.equal(table.rows[0][2],'2');
 });
+
+
+test('DUOLI success totals are usable but updated timestamps never become actual payment latency',()=>{
+ for(const direction of ['charge','withdraw']){const r=result('DUOLI');r.platform.source='duoli';r.platform.capabilities={successTimeBasis:'order_updated_at',chargeSuccessTimeAvailable:true,withdrawSuccessTimeAvailable:true,paymentSuccessTimeAvailable:false,latencyAvailable:false};for(const rows of [r.summary,r.latencySummary,...Object.values(r.groups)])for(const row of rows)row.direction=direction;const h=setup([r],{direction}),html=h.render('latency');assert.match(html,/到账时效暂不可统计/);assert.match(html,/订单更新时间不能用于到账时效/);const distribution=h.tables.find(t=>t.headers[0]==='成功耗时区间');assert.equal(distribution.rows[0][2],'—');assert.equal(distribution.rows[0][3],'—');assert.doesNotMatch(html,/<span>平均 \/ P50 耗时<\/span><strong>1分<\/strong>/);}
+});
