@@ -25,8 +25,8 @@
   const detail=()=>L.durationDetail==='orders'?'orders':'groups';
   const selectedRows=(rows,d)=>(Array.isArray(rows)?rows:[]).filter(r=>r.direction===d&&(!r.currency||!L.currency||r.currency===L.currency));
   const sourceRows=(result,d)=>selectedRows(result.summary,d);
-  const unavailable=d=>(L.results||[]).some(result=>d==='withdraw'&&(result.capabilities||result.platform?.capabilities)?.withdrawSuccessTimeAvailable===false);
-  const unavailableNote='WG 提现尚未提供已核实成功时间；操作时间不能当作成功时间。到账时效暂不可统计，不按 0 秒或 0% 展示。';
+  const unavailable=d=>(L.results||[]).some(result=>(result.capabilities||result.platform?.capabilities)?.[d+'SuccessTimeAvailable']===false||String(result.platform?.source).toLowerCase()==='duoli');
+  const unavailableNote='所选来源尚未提供已核实成功时间；操作时间不能当作成功时间。到账时效暂不可统计，不按 0 秒或 0% 展示。';
   function timingParts(result,d,pending){
    const direct=selectedRows(result[pending?'pendingSummary':'latencySummary'],d);
    if(direct.length===1)return {rows:direct,complete:true,split:result._parts?.length>1};

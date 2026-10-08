@@ -11,6 +11,28 @@ function fixture({catalog=[],withdrawCatalog=[],feeds=[feed()],respond,onCatalog
 }
 const scope={country:'胖虎巴西',direction:'all',from:'2026-09-24T00:00:00',to:'2026-09-25T23:59:59'};
 
+test('DUOLI and legacy DOLI retain raw report queries but one exact authorized platform identity',async()=>{
+ const native={id:'duoli-id',name:'UANG',sourceName:'UANG',source:'duoli',country:'印尼',team:'M8',currency:'IDR',timezone:'Asia/Jakarta'};
+ const f=fixture({catalog:[native],feeds:[feed({system:'DOLI',country:'印尼',rawCountry:'ID',name:'UANG',rawPlatform:'UANG',team:'M8',directions:['charge']})]});
+ await f.page.load({country:'印尼',sources:['duoli'],direction:'charge',from:scope.from,to:scope.to});
+ assert.equal(f.page.catalog().length,1);assert.equal(f.page.catalog()[0].id,native.id);assert.equal(f.page.catalog()[0].reportOnly,false);
+ assert.equal(f.calls.find(q=>q.action==='reportSummary').feeds[0].system,'DOLI','raw backend query key stays untouched');
+});
+
+test('DUOLI native days replace only matching full local-day legacy rows, retaining older reports and source isolation',async()=>{
+ const native={id:'duoli-id',name:'UANG',sourceName:'UANG',source:'duoli',country:'印尼',team:'M8',currency:'IDR',timezone:'Asia/Jakarta'};
+ const days=[{date:'2026-09-24',records:1,metrics:metrics(123,1),providers:[{provider:'HISTORICAL-PAY',records:1,metrics:metrics(123,1)}]},{date:'2026-09-25',records:1,metrics:metrics(999,9),providers:[{provider:'CURRENT-PAY',records:1,metrics:metrics(999,9)}]}];
+ const f=fixture({catalog:[native],feeds:[feed({system:'DOLI',country:'印尼',rawCountry:'ID',name:'UANG',rawPlatform:'UANG',team:'M8',directions:['charge']})],respond:q=>({feeds:q.feeds.map(x=>summary(x,{currency:'IDR',groups:[{grain:'provider',records:2,metrics:metrics(1122,10),providers:days.flatMap(d=>d.providers),daily:days}]}))})});
+ f.L.direction='charge';f.L.results=[{platform:native,capabilities:{sourceCompletenessVerified:true},startAt:'2026-09-24T17:00:00Z',endAt:'2026-09-25T17:00:00Z',summary:[{direction:'charge',currency:'IDR',all_count:20,success_count:null}]}];
+ await f.page.load({country:'印尼',sources:['duoli'],direction:'charge',from:scope.from,to:scope.to});const original=JSON.stringify(f.page.state.result),render=()=>f.page.render({page:'overview'});
+ assert.match(render(),/>123\.00</);assert.doesNotMatch(render(),/>1122\.00</);assert.match(render(),/原生未覆盖日期的源日报/);assert.equal(JSON.stringify(f.page.state.result),original);
+ for(const patch of [{capabilities:{sourceCompletenessVerified:false}},{platform:{...native,id:'another-id'}},{platform:{...native,country:'印度'}},{platform:{...native,source:'ar'}},{platform:{...native,currency:'USDT'}},{startAt:'2026-09-25T01:00:00Z'}]){
+  const prior=f.L.results[0];f.L.results[0]={...prior,...patch};assert.match(render(),/>1122\.00</,'unmatched or incomplete native query cannot hide the report');f.L.results[0]=prior;
+ }
+ const group=f.page.state.result.feeds[0].groups[0],daily=group.daily;group.daily=[daily[1]];assert.match(render(),/>1122\.00</,'incomplete daily breakdown cannot erase an aggregate report');group.daily=[daily[1],daily[1]];assert.match(render(),/>1122\.00</,'duplicate dates cannot be summed or dropped');group.daily=daily;
+ f.L.results=[];assert.match(render(),/>1122\.00</,'older or unqueried native dates keep separately labelled source reports');
+});
+
 test('report transport labels never replace the actual backend when a platform has one known system',async()=>{
  const rows=['LG','REPORT'].map(system=>feed({system,name:'REPORT ONLY LG',country:'菲律宾',rawCountry:'PH',team:'M8'}));
  const f=fixture({feeds:rows});await f.page.loadCatalog();

@@ -40,6 +40,8 @@ jobs:
       - run: pnpm test:admin-preview
       - run: pnpm test:wg-realtime
       - run: pnpm test:wg-existing
+      - run: pnpm test:duoli
+      - run: pnpm test:withdraw-duration
       - run: pnpm build
         env:
           PAGES_BASE_PATH: /hensem-data-center

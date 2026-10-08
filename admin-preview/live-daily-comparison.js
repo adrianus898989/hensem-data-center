@@ -13,7 +13,7 @@
  const fraction=(n,d)=>number(n)!==null&&number(d)>0?Number(n)/Number(d)*100:null;
  const percent=x=>number(x)===null?'—':Number(x).toFixed(2)+'%';
  const src=x=>String(x||'').toLowerCase().replaceAll('_','');
- const system=x=>({ar:'AR',newar:'新AR',wg:'WG',lg:'LG',game66:'AA'}[src(x)]||x||'—');
+ const system=x=>({ar:'AR',newar:'新AR',wg:'WG',lg:'LG',game66:'AA',duoli:'多利',doli:'多利'}[src(x)]||x||'—');
  const copy=x=>JSON.parse(JSON.stringify(x));
  const zero=()=>({all_amount:0,all_count:0,success_amount:0,success_count:0});
  const unknown=note=>({...Object.fromEntries(fields.map(k=>[k,null])),ready:false,partial:true,note,leaves:[]});
@@ -54,7 +54,7 @@
     if(cursor!==Date.parse(q.endAt))throw Error('分段查询未完整覆盖当日');
    }
    // Per-segment proof was checked; retain the merged facts without duplicating every response.
-   return {platform:response.platform,summary:response.summary,groups:{provider:response.groups.provider},capabilities:response.capabilities,withdrawSuccessTimeAvailable:response.withdrawSuccessTimeAvailable};
+   return {platform:response.platform,summary:response.summary,groups:{provider:response.groups.provider},capabilities:response.capabilities,withdrawSuccessTimeAvailable:response.withdrawSuccessTimeAvailable,chargeSuccessTimeAvailable:response.chargeSuccessTimeAvailable};
   }
   async function runQueue(tasks,token){let next=0;await Promise.all(Array.from({length:Math.min(2,tasks.length)},async()=>{while(next<tasks.length&&token===serial&&active()&&matches()){const task=tasks[next++];await task();}}));}
   async function load(force=false){
@@ -113,9 +113,9 @@
     if(!subset.length&&!complete)return unknown('三方分组未完整，缺失分组不能视为零');
     metrics=subset.length?total(subset):zero();
    }else metrics=raw.length?total(raw):allLeaves.length?total(allLeaves):zero();
-   const unavailable=d==='withdraw'&&(src(p.source)==='wg'||response.withdrawSuccessTimeAvailable===false||(response.capabilities||response.platform?.capabilities)?.withdrawSuccessTimeAvailable===false||p.capabilities?.withdrawSuccessTimeAvailable===false);
+   const timeKey=d+'SuccessTimeAvailable',unavailable=src(p.source)==='duoli'||d==='withdraw'&&src(p.source)==='wg'||response[timeKey]===false||(response.capabilities||response.platform?.capabilities)?.[timeKey]===false||p.capabilities?.[timeKey]===false;
    if(unavailable){metrics.success_count=null;metrics.success_amount=null;}
-   return {...metrics,ready:true,partial:!complete||fields.some(k=>metrics[k]===null)||!raw.length&&allLeaves.length>0,note:unavailable?'该来源未提供可核验代付成功时间':!raw.length&&allLeaves.length?'仅返回三方分组小计':!complete?'平台汇总已返回；三方分组未完整':'已读取订单记录',leaves:subset};
+   return {...metrics,ready:true,partial:!complete||fields.some(k=>metrics[k]===null)||!raw.length&&allLeaves.length>0,note:unavailable?'该来源未提供可核验'+(d==='charge'?'代收':'代付')+'成功时间':!raw.length&&allLeaves.length?'仅返回三方分组小计':!complete?'平台汇总已返回；三方分组未完整':'已读取订单记录',leaves:subset};
   }
   function tickets(day,p,providerName){
    const entry=S.workorders[day]?.[p.id];if(entry?.status!=='ready')return unknown(entry?.note||'工单尚未查询');

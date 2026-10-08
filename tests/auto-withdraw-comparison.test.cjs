@@ -25,11 +25,25 @@ async function withDatabase(rows, run) {
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://comparison-test.invalid";
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-public-key";
   const queries = [];
-  global.fetch = async (input) => {
+  let roleChecks = 0;
+  global.fetch = async (input, init) => {
     const url = new URL(String(input));
     if (url.pathname === "/auth/v1/user") return Response.json({ id: "test-user" });
     if (url.pathname.endsWith("/dashboard_profiles")) {
       return Response.json([{ auth_user_id: "test-user", username: "tester", role: "owner", active: true }]);
+    }
+    if (url.pathname === "/rest/v1/rpc/dashboard_role_access") {
+      roleChecks++;
+      assert.equal(init.method, "POST");
+      assert.equal(init.headers.Authorization, "Bearer test-token");
+      return Response.json({ mode: "owner", canView: true, permissions: [] });
+    }
+    // This fixture supplies historical daily rows only; native sources are empty.
+    if (url.pathname === "/rest/v1/rpc/dashboard_game66_withdraw_daily") {
+      return Response.json({ rows: [], operatorRows: [], latestWriteAt: null });
+    }
+    if (url.pathname === "/rest/v1/rpc/dashboard_newar_business_snapshots") {
+      return Response.json({ source: "newar_direct", snapshots: [] });
     }
     queries.push(url);
     const [gte, lte] = url.searchParams.getAll("data_date");
@@ -44,6 +58,7 @@ async function withDatabase(rows, run) {
       headers: { Authorization: "Bearer test-token" },
     });
     await run(request, queries);
+    assert.equal(roleChecks, 1, "the real reader must verify its current role before reading data");
   } finally {
     global.fetch = oldFetch;
     if (oldUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
