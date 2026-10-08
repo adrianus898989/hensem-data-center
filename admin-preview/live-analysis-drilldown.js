@@ -37,7 +37,7 @@
     let metric;
     if(segment.kind==='latency'){
      const summary=(result.summary||[]).find(r=>r.direction===direction&&(!r.currency||r.currency===L.currency));
-     const available=versionReady&&(Array.isArray(source)&&source.some(r=>r.direction===direction&&(!r.currency||r.currency===L.currency))||summary?.success_count!==null&&summary?.success_count!==undefined&&Number(summary.success_count)===0||confirmedEmptyDirection(result,direction));
+     const caps=result.capabilities||result.platform?.capabilities||{},available=caps.latencyAvailable!==false&&caps.paymentSuccessTimeAvailable!==false&&versionReady&&(Array.isArray(source)&&source.some(r=>r.direction===direction&&(!r.currency||r.currency===L.currency))||summary?.success_count!==null&&summary?.success_count!==undefined&&Number(summary.success_count)===0||confirmedEmptyDirection(result,direction));
      metric={...zero(),success_amount:available?sum(rows,'amount'):null,success_count:available?sum(rows,'count'):null};
     }else metric=Array.isArray(source)?totals(rows):Object.fromEntries(fields.map(k=>[k,null]));
     return {...metric,platformId:result.platform?.id,platform:result.platform?.name||'未提供平台',source:result.platform?.source||'—',direction,currency:result.platform?.currency||L.currency};
@@ -76,16 +76,17 @@
   }
   function cancelOrders(){orderSerial++;orderView=null;}
   const sameValue=(a,b)=>a===b||a&&b&&typeof a==='object'&&typeof b==='object'&&Object.keys(a).length===Object.keys(b).length&&Object.keys(a).every(k=>Object.prototype.hasOwnProperty.call(b,k)&&sameValue(a[k],b[k]));
+  const successTimeLabel=p=>c.successTimeLabel?c.successTimeLabel(p):p?.capabilities?.successTimeBasis==='order_updated_at'?'成功统计时间（订单更新时间）':'成功时间';
   const orderTime=(v,p)=>c.formatTime?c.formatTime(v,p.timezone):v||'—';
   function showOrders(){
    const s=orderView;if(!s||s.scope!==signature()||L.dirty)return;
-   const p=s.targets[s.target],label=s.basis==='success'?'成功订单 · 成功时间':'全部订单 · 创建时间';
+   const p=s.targets[s.target],label=s.basis==='success'?'成功订单 · '+successTimeLabel(p):'全部订单 · 创建时间';
    const select=s.targets.length>1?'<label>平台 <select aria-label="区间订单平台" onchange="liveAnalysisOrderPlatform(Number(this.value))">'+s.targets.map((p,i)=>'<option value="'+i+'" '+(i===s.target?'selected':'')+'>'+E(p.name)+' · '+E(p.source)+'</option>').join('')+'</select></label>':'';
    const summary='<p class="analysis-note">'+E(s.label||'当前区间')+' · '+E(name(s.direction))+' · '+E(s.currency)+' · '+E(L.from)+' 至 '+E(L.to)+'。'+(s.dimension==='provider'?'当前三方 '+E(s.provider)+'；各平台的原始订单独立读取，可切换平台。':'')+'</p>';
    const error=s.error?'<p class="live-status live-error">'+E(s.error)+' <button class="link" onclick="liveAnalysisOrderPage(0,true)">重试</button></p>':'';
    const rows=s.rows.map((r,i)=>['<button class="link" onclick="liveAnalysisOrder('+i+')">'+E(r.order_number||r.id||'未提供订单号')+'</button>',E(r.provider),E(r.direction==='withdraw'?'代付':'代收'),(root.HensemProviderOrders?.moneyCell(r,{E,N})||N(r.amount)+' '+E(r.currency)),E(r.status||r.status_group),E(orderTime(r.created_at,p)),E(orderTime(r.success_at,p))]);
    const count=s.total===null?'尚未读取':C(s.total)+' 笔',pager='<div class="pager">'+E(p.name)+' · '+E(p.source)+' · '+count+' <button class="btn small" onclick="liveAnalysisOrderPage(-1)" '+(s.loading||!s.offset?'disabled':'')+'>上一页</button> '+(Math.floor(s.offset/20)+1)+' <button class="btn small" onclick="liveAnalysisOrderPage(1)" '+(s.loading||!s.hasMore?'disabled':'')+'>下一页</button></div>';
-   c.openDrawer(label+' · '+(s.provider||p.name),summary+select+(s.loading?'<p class="analysis-status">正在读取此区间的原始订单…</p>':error||(!rows.length?'<p class="muted">当前平台此区间没有匹配订单。</p>':''))+(rows.length?smallTable(['订单号','三方','方向','金额','状态','创建时间','成功时间'],rows):'')+pager);
+   c.openDrawer(label+' · '+(s.provider||p.name),summary+select+(s.loading?'<p class="analysis-status">正在读取此区间的原始订单…</p>':error||(!rows.length?'<p class="muted">当前平台此区间没有匹配订单。</p>':''))+(rows.length?smallTable(['订单号','三方','方向','金额','状态','创建时间',successTimeLabel(p)],rows):'')+pager);
   }
   async function loadOrders(){
    const s=orderView;if(!s||L.loading||L.dirty||s.scope!==signature())return;const p=s.targets[s.target],token=++orderSerial;s.loading=true;s.error='';s.rows=[];s.total=null;s.hasMore=false;showOrders();
@@ -111,7 +112,7 @@
   };
   root.liveAnalysisOrderPlatform=function(index){const s=orderView;if(!s||s.loading||!Number.isInteger(index)||!s.targets[index])return;s.target=index;s.offset=0;void loadOrders();};
   root.liveAnalysisOrderPage=function(delta,retry=false){const s=orderView;if(!s||s.loading||![-1,0,1].includes(delta)||delta===1&&!s.hasMore||delta===-1&&!s.offset)return;if(!retry)s.offset=Math.max(0,s.offset+delta*20);void loadOrders();};
-  root.liveAnalysisOrder=function(index){const s=orderView,r=s?.rows[index],p=s?.targets[s.target];if(!r||!Number.isInteger(index)||s.scope!==signature()||L.dirty)return;c.openDrawer('订单详情 · '+(r.order_number||r.id),'<button class="btn small" onclick="liveAnalysisOrdersBack()">← 返回区间订单</button>'+smallTable(['字段','内容'],[['订单号',E(r.order_number||'—')],['系统订单号',E(r.system_order_id||'未提供')],['原始稳定键',E(r.id)],['三方订单号',E(r.third_party_order_number||'未提供')],['会员 ID',E(r.member_id||'未提供')],['UTR',E(r.utr||'未提供')],['平台 / 包网',E(p.name+' / '+p.source)],['三方',E(r.provider)],['原始三方',E(r.raw_provider??'未提供')],...(root.HensemProviderOrders?.moneyRows(r,{E,N})||[['订单金额',N(r.amount)+' '+E(r.currency)]]),['状态',E(r.status||r.status_group)],['创建时间',E(orderTime(r.created_at,p))],['成功时间',E(orderTime(r.success_at,p))],['同步时间',E(orderTime(r.synced_at,p))],['时区',E(p.timezone)]]));};
+  root.liveAnalysisOrder=function(index){const s=orderView,r=s?.rows[index],p=s?.targets[s.target];if(!r||!Number.isInteger(index)||s.scope!==signature()||L.dirty)return;c.openDrawer('订单详情 · '+(r.order_number||r.id),'<button class="btn small" onclick="liveAnalysisOrdersBack()">← 返回区间订单</button>'+smallTable(['字段','内容'],[['订单号',E(r.order_number||'—')],['系统订单号',E(r.system_order_id||'未提供')],['原始稳定键',E(r.id)],['三方订单号',E(r.third_party_order_number||'未提供')],['会员 ID',E(r.member_id||'未提供')],['UTR',E(r.utr||'未提供')],['平台 / 包网',E(p.name+' / '+p.source)],['三方',E(r.provider)],['原始三方',E(r.raw_provider??'未提供')],...(root.HensemProviderOrders?.moneyRows(r,{E,N})||[['订单金额',N(r.amount)+' '+E(r.currency)]]),['状态',E(r.status||r.status_group)],['创建时间',E(orderTime(r.created_at,p))],[successTimeLabel(p),E(orderTime(r.success_at,p))],['同步时间',E(orderTime(r.synced_at,p))],['时区',E(p.timezone)]]));};
   root.liveAnalysisOrdersBack=showOrders;
   const previousClose=root.closeDrawer;if(typeof previousClose==='function')root.closeDrawer=function(...args){cancelOrders();return previousClose.apply(this,args);};
   const providerReady=result=>Array.isArray(result?.groups?.provider)&&Array.isArray(result?.groups?.provider_daily);

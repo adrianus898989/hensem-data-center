@@ -120,3 +120,8 @@ test('workorder daily details preserve handled metrics and exclude incomplete-da
  const h=harness({platforms:[P],workHandler:q=>tickets(P,q.startAt.slice(0,10),q.startAt.startsWith('2026-10-03')?20:100,!q.startAt.startsWith('2026-10-03'))});h.c.liveDailyDirection('workorder');await h.module.load();const row=historyView(h).rows[0],csv=csvHistory(h);
  assert.equal(row['已处理金额'],'1,000.00');assert.equal(row['已处理笔数'],'10');assert.equal(row['处理率'],'50.00%');assert.equal(row['已处理金额较前日'],'—');assert.equal(row['已处理笔数较前日'],'—');assert.equal(row['参考手续费'],'—');assert(!('成功金额'in row));assert(csv.heads.includes('已处理金额'));assert(csv.heads.includes('已处理笔数'));assert.equal(h.calls.length,0);
 });
+
+
+test('DUOLI updated-time success survives daily totals, weighted history and CSV without enabling payment latency',async()=>{
+ const p={...P,source:'duoli',capabilities:{successTimeBasis:'order_updated_at',chargeSuccessTimeAvailable:true,withdrawSuccessTimeAvailable:true,paymentSuccessTimeAvailable:false,latencyAvailable:false}},h=harness({platforms:[p]});await h.module.load();for(const [direction,success]of [['charge',50],['withdraw',80]]){h.c.liveDailyDirection(direction);const m=h.module.model();assert.equal(m.now.success_count,success);assert.equal(m.now.success_amount,success*100);assert.match(h.module.render(),/多利成功按成功状态＋订单更新时间统计/);assert(h.module.exportRows()[0].some(v=>v.includes?.('订单更新时间统计')));}h.setHandler(()=>({platform:p,summary:[],groups:{provider:[]}}));await h.module.load();for(const direction of ['charge','withdraw']){h.c.liveDailyDirection(direction);assert.equal(h.module.model().now.success_count,0);assert.equal(h.module.model().now.success_amount,0);}
+});

@@ -113,7 +113,7 @@
     if(!subset.length&&!complete)return unknown('三方分组未完整，缺失分组不能视为零');
     metrics=subset.length?total(subset):zero();
    }else metrics=raw.length?total(raw):allLeaves.length?total(allLeaves):zero();
-   const timeKey=d+'SuccessTimeAvailable',unavailable=src(p.source)==='duoli'||d==='withdraw'&&src(p.source)==='wg'||response[timeKey]===false||(response.capabilities||response.platform?.capabilities)?.[timeKey]===false||p.capabilities?.[timeKey]===false;
+   const timeKey=d+'SuccessTimeAvailable',unavailable=d==='withdraw'&&src(p.source)==='wg'||response[timeKey]===false||(response.capabilities||response.platform?.capabilities)?.[timeKey]===false||p.capabilities?.[timeKey]===false;
    if(unavailable){metrics.success_count=null;metrics.success_amount=null;}
    return {...metrics,ready:true,partial:!complete||fields.some(k=>metrics[k]===null)||!raw.length&&allLeaves.length>0,note:unavailable?'该来源未提供可核验'+(d==='charge'?'代收':'代付')+'成功时间':!raw.length&&allLeaves.length?'仅返回三方分组小计':!complete?'平台汇总已返回；三方分组未完整':'已读取订单记录',leaves:subset};
   }
@@ -234,12 +234,13 @@
    const name=(r,i,click)=>'<span title="'+(r.now.partial?'含未读取平台或待确认指标，仅已读小计':'已读范围')+'">'+(r.now.partial?'<em>*</em>':'')+'</span><span class="daily-rank">'+(i+1)+'</span>'+(click&&allowed('detail')?'<button class="daily-name" onclick="liveDailyExpand('+i+')" aria-expanded="'+(S.expanded===r.key)+'">'+E(r.name)+(S.expanded===r.key?' −':' +')+'</button>':E(r.name));
    const tables='<section class="daily-panel"><div class="daily-panel-title"><h2>'+(S.dimension==='platform'?'平台':'三方')+'每日明细</h2><span>按全部'+(S.sort==='all_count'?'笔数':'金额')+'从多到少 · 点击原位展开</span></div>'+detailTable(detailColumns(),m.rows.map((r,i)=>'<tr>'+entityCells(r,m.now,name(r,i,true))+'</tr>'+(S.expanded===r.key&&allowed('detail')?inline(r):'')),'<tr>'+entityCells(footer,m.now,'已读汇总')+'</tr>')+'</section>';
    const today=S.scope.platforms.some(p=>c.localClock(S.scope.now,p.timezone).slice(0,10)===S.scope.date);
-   return '<div class="daily-comparison">'+controls+'<div class="daily-note">'+E(S.scope.country)+' · '+E(S.scope.currency)+' · '+E(S.scope.date)+' 对比 '+E(S.compareDate)+' · 可比 '+pair.count+' 个相同原生平台'+(today?(S.direction==='workorder'?' · 今日未结束，工单无同进度接口，暂不计算涨跌':' · 涨跌按同钟点；趋势历史日全天，今日截至查询时刻'):' · 各平台当地全天')+'。占比以当前已读范围为分母；缺失保留 —。</div>'+status+coverage(m)+top+trend(m)+tables+'<div class="daily-note">'+(S.direction==='workorder'?'原始工单不去重：已处理工单（源状态4）÷全部提交工单；不代表已核实到账。':'全部按创建日期，成功按成功日期，跨日成功可能使成功率超过100%；参考手续费按当前费率估算，非历史实际费用。')+' 已读取不代表采集完整；未知日期在图中留空。</div></div>';
+   return '<div class="daily-comparison">'+controls+'<div class="daily-note">'+E(S.scope.country)+' · '+E(S.scope.currency)+' · '+E(S.scope.date)+' 对比 '+E(S.compareDate)+' · 可比 '+pair.count+' 个相同原生平台'+(today?(S.direction==='workorder'?' · 今日未结束，工单无同进度接口，暂不计算涨跌':' · 涨跌按同钟点；趋势历史日全天，今日截至查询时刻'):' · 各平台当地全天')+'。占比以当前已读范围为分母；缺失保留 —。</div>'+status+coverage(m)+top+trend(m)+tables+'<div class="daily-note">'+(S.direction==='workorder'?'原始工单不去重：已处理工单（源状态4）÷全部提交工单；不代表已核实到账。':'全部按创建日期，成功按成功日期，跨日成功可能使成功率超过100%；参考手续费按当前费率估算，非历史实际费用。')+' '+updatedBasisNote()+' 已读取不代表采集完整；未知日期在图中留空。</div></div>';
   }
+  const updatedBasisNote=()=>S.direction!=='workorder'&&S.scope?.platforms.some(p=>p.capabilities?.successTimeBasis==='order_updated_at')?'多利成功按成功状态＋订单更新时间统计，不代表实际到账时间。':'';
   const canExport=()=>current()&&allowed('export')&&['ready','partial'].includes(S.direction==='workorder'?S.workStatus:S.status);
   function exportRows(){
    if(!canExport())return [];const m=model(),strip=x=>String(x).replace(/<[^>]*>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'"),plainCells=html=>[...html.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(x=>strip(x[1])),footer={kind:'—',now:m.now,prior:m.prior,comparison:m.comparison};
-   const rows=[[S.scope.country,S.scope.currency,S.direction,S.scope.date,S.compareDate,'按当前费率估算'],detailColumns().map(col=>col.label)];
+   const rows=[[S.scope.country,S.scope.currency,S.direction,S.scope.date,S.compareDate,'按当前费率估算',...(updatedBasisNote()?[updatedBasisNote()]:[])],detailColumns().map(col=>col.label)];
    for(const r of m.rows){rows.push(plainCells(entityCells(r,m.now,E(r.name))));if(S.expanded===r.key&&allowed('detail')){rows.push([r.name+' · 分项'],detailColumns(false,true).map(col=>col.label));for(const child of inlineRows(r))rows.push(plainCells(entityCells(child,r.now,'↳ '+E(child.name),true)));rows.push(detailColumns().map(col=>col.label));}}
    rows.push(plainCells(entityCells(footer,m.now,'已读汇总')));const history=historyRows(m);
    if(history){rows.push([],[history.selected.name,S.trendDays+'天趋势'],history.cols.map(col=>col.label));for(const values of [...history.rows,history.footer])rows.push(values.map(strip));}
