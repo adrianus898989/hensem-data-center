@@ -688,6 +688,15 @@ test('all menu pages can render with an empty authorized catalog without NaN or 
  const h=await ready({platforms:[]});for(const [key]of h.c.pages){h.c.setPage(key);await settle();assert(!h.html().includes('NaN'),key);assert(!h.html().includes('Infinity'),key);assert.equal(h.L.results.length,0,key)}assert.equal(h.calls.filter(q=>q.action==='aggregate'||q.action==='details').length,0);
 });
 
+test('estimated-fee exports include their selected basis without relabeling actual fee records',async()=>{
+ const h=await ready();h.nodes.get('page').querySelectorAll=()=>[{querySelectorAll:()=>[{cells:[{innerText:'三方'},{innerText:'估算手续费'}]},{cells:[{innerText:'ExamplePay'},{innerText:'40.00'}]}]}];
+ for(const page of ['providers','provider_payout','overview','collection','payout','teamops','teamcountries','teamplatforms','merchants']){
+  h.c.state.page=page;h.L.feeEstimateMode='current';h.c.liveExport();let csv=await h.blobs.at(-1).text();assert.match(csv,/按当前费率估算（非历史实际手续费）/);assert.match(csv,/仅汇总已匹配部分/);assert.match(csv,/40\.00/);assert.doesNotMatch(csv,/订单创建时生效费率/);
+  h.L.feeEstimateMode='historical';h.c.liveExport();csv=await h.blobs.at(-1).text();assert.match(csv,/按订单创建时生效费率估算/);assert.doesNotMatch(csv,/按当前费率估算/);
+ }
+ h.c.state.page='orders';h.L.feeEstimateMode='current';h.c.liveExport();assert.doesNotMatch(await h.blobs.at(-1).text(),/手续费口径|按当前费率估算/);
+});
+
 test('current-page CSV export escapes formulas and quotes from untrusted cells',async()=>{
  const h=await ready();h.nodes.get('page').querySelectorAll=()=>[{querySelectorAll:()=>[{cells:[{innerText:'订单号'},{innerText:'金额'}]},{cells:[{innerText:'=HYPERLINK("bad")'},{innerText:'200.00'}]},{cells:[{innerText:'@formula'},{innerText:'Raw/Pay'}]}]}];h.c.liveExport();assert.equal(h.blobs.length,1);const csv=await h.blobs[0].text();assert(csv.includes('"\'=HYPERLINK(""bad"")"'));assert(csv.includes('"\'@formula"'));assert(csv.includes('"Raw/Pay"'));assert(csv.includes('"200.00"'));
 });
@@ -764,6 +773,7 @@ test('late payout results cannot replace an edited scope or another subpage',asy
 
 test('direction provider summaries merge canonical names, match platform fees and split workorder cohorts',async()=>{
  const h=await ready(),p2={...P,id:'another-platform',name:'Second platform',source:'newar'},a=completeAggregate(P,10,4),b=completeAggregate(p2,20,6);
+ h.L.feeEstimateMode='historical';
  verifiedFee(a.groups.provider[0],11.25);verifiedFee(b.groups.provider[0],30.75);a.groups.provider[0].created_success_count=3;b.groups.provider[0].created_success_count=5;h.L.results=[a,b];h.L.feeLookupRows=[{scopeType:'country',country:'印度',provider:'Synthetic provider',collectFee:'2%',collectSingleFee:'1'},{scopeType:'platform',country:'印度',platform:p2.name,provider:'Synthetic provider',collectFee:'3%',collectSingleFee:'2'}];const coverage={status:'complete',complete:true,detailCount:3,missingOrderNumberCount:0,missingDetailCount:0,amountConflictCount:0,providerConflictCount:0};h.L.workorders={byProvider:[{provider:'Synthetic provider',direction:'charge',submittedAmount:300,submittedCount:3,successAmount:100,successCount:1,notReceivedAmount:200,notReceivedCount:2,uniqueOrderAmount:300,uniqueOrderCount:3,uniqueSuccessAmount:100,uniqueSuccessCount:1,uniqueNotReceivedAmount:200,uniqueNotReceivedCount:2,uniqueCoverage:coverage},{provider:'Synthetic provider',direction:'withdraw',submittedAmount:9000,submittedCount:90,successAmount:8000,successCount:80,notReceivedAmount:1000,notReceivedCount:10,uniqueOrderAmount:9000,uniqueOrderCount:90,uniqueSuccessAmount:8000,uniqueSuccessCount:80,uniqueNotReceivedAmount:1000,uniqueNotReceivedCount:10,uniqueCoverage:{...coverage,detailCount:90}}],coverage:{complete:true,capturedPlatformDays:2,expectedPlatformDays:2,platforms:[]}};h.c.state.page='providers';h.c.render();
  const t=renderedTables(h.html()).find(t=>t.headers[0]==='统一三方');assert(t);assert.equal(t.rows.length,1);const row=t.rows[0].map(plain),at=label=>row[t.headers.findIndex(v=>v===label||v.startsWith(label+' '))];assert.equal(at('平台'),'2');assert.equal(at('成功金额'),'1,000.00');assert.equal(at('成功笔数'),'10');assert.match(at('成功率'),/^33.33%/);assert(!t.headers.some(x=>/全部创建|处理中/.test(x)));assert.equal(at('估算手续费'),'42.00');assert.equal(at('工单提交金额'),'300.00');assert.equal(at('工单提交笔数'),'3');assert(!t.headers.some(x=>x.includes('取款未到账')));assert.doesNotMatch(t.html,/9,000/);assert.match(t.html,/>合计</);assert.doesNotMatch(t.html,/当前页汇总|全部汇总/);
  h.L.workorders.coverage={complete:false,capturedPlatformDays:0,expectedPlatformDays:2,platforms:[]};h.L.workorders.byProvider=[];h.c.render();const unknown=renderedTables(h.html()).find(t=>t.headers[0]==='统一三方');assert.equal(plain(unknown.rows[0][unknown.headers.indexOf('工单提交金额')]),'—');assert.doesNotMatch(h.html(),/成功数据按成功时间；成功率为|未采集显示 —/);
@@ -836,6 +846,7 @@ test('provider comparisons label the read scope when current or previous intake 
 
 test('confirmed India UpiPay row 4 drives current labels and server versions drive historical fees without falling back to the inactive tier',async()=>{
  const h=await ready(),r=completeAggregate(P,20,10);r.groups.provider[0].provider='UpiPay';verifiedFee(r.groups.provider[0],52);h.L.results=[r];h.c.state.page='providers';
+ h.L.feeEstimateMode='historical';
  // Explicit server fee versions supply money; current sheet references retain original identity.
  const confirmed={scopeType:'country',country:'印度',provider:'UpiPay',category:'USDT',sheetName:'印度线下',sourceRow:4,collectFee:'5.20%',payoutFee:'3.10%',payoutSingleFee:'7',status:'开启'};
  const inactive={...confirmed,category:'UPI',sourceRow:47,collectFee:'6.30%',payoutFee:'3.80%',status:'停用'};
@@ -872,7 +883,7 @@ test('amount ranges are sorted numerically in each direction with missing and ot
  assert.equal(tables.length,2);for(const table of tables)assert.deepEqual(table.rows.map(r=>plain(r[0])).slice(0,9),['100–200','201–300','301–400','401–500','501–750','751–1,000','1,001–2,000','2,001–5,000','≥5,001']);
 });
 test('overview uses success-time ratios including cross-day completions and matches fees independently',async()=>{
- const h=await ready(),r=completeAggregate(P,100,120);r.summary[0].created_success_count=60;r.summary.push({...r.summary[0],direction:'withdraw'});
+ const h=await ready(),r=completeAggregate(P,4000,4800);Object.assign(r.summary[0],{created_success_count:2400,all_amount:'40000',success_amount:'48000'});r.summary.push({...r.summary[0],direction:'withdraw'});
  r.groups.provider=['charge','withdraw'].flatMap(direction=>[900,750,500,250].map((success,i)=>({...stats(1000,'10000'),direction,provider:'TestPay'+i,success_count:1200,success_amount:'12000',created_success_count:success})));
  for(const row of r.groups.provider.filter(x=>x.provider==='TestPay0'))verifiedFee(row,row.direction==='charge'?240:120);h.L.results=[r];h.L.direction='all';h.L.feeLookupRows=[{scopeType:'country',country:'印度',provider:'TestPay0',collectFee:'2%',payoutFee:'1%'}];h.c.render();
  for(const [id,fee] of [['df-collect','240.00'],['df-payout','120.00']]){
@@ -1066,6 +1077,7 @@ test('provider multi-day reads start bounded, preserve exact endpoints and rejec
 
 test('overview fills all fee rollups, merges provider sources, and keeps manual amounts outside provider ranking',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Other platform',source:'newar'},h=await ready({platforms:[P,p2]});
+ h.L.feeEstimateMode='historical';
  const a=completeAggregate(P,10,3),b=completeAggregate(p2,20,7),manual={...stats(2,'200'),provider:'人工充值',success_count:2,created_success_count:2,success_amount:'200',pending_count:0,pending_amount:0,failed_count:0,failed_amount:0};
  a.groups.provider=[{...a.summary[0],provider:'UPI-QR'},manual];a.summary=[{...a.summary[0],all_count:12,all_amount:'1200',success_count:5,created_success_count:5,success_amount:'500'}];b.groups.provider=[{...b.summary[0],provider:'UPI-QR'}];
  verifiedFee(a.groups.provider[0],12);verifiedFee(b.groups.provider[0],35);h.L.results=[a,b];h.L.feeLookupRows=[{scopeType:'country',country:'印度',provider:'UPI-QR',collectFee:'4%'},{scopeType:'platform',country:'印度',platform:p2.name,provider:'UPI-QR',collectFee:'5%'}];h.L.direction='charge';h.L.comparisonStatus='idle';h.c.state.page='overview';h.c.render();
@@ -1468,7 +1480,7 @@ test('overview Today uses the latest pending status of today-created orders in b
  assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,snapshots,'today reuses the order query rather than reading an unrelated stock layer');
  const q=h.calls.findLast(q=>q.action==='aggregate'&&q.startAt.startsWith('2026-09-22'));assert(q);assert.equal(q.startAt,'2026-09-22T18:30:00.000Z');
  assert.match(h.html(),/今日实时代付中金额 \/ 笔数/);assert.match(h.html(),/<h2>今日实时代付中<\/h2>/);assert.doesNotMatch(h.html(),/近7天代付中|暂无已核实合计/);
- assert.match(h.html(),/按订单创建时生效费率/);assert.doesNotMatch(h.html(),/按当前费率估算/);
+ assert.match(h.html(),/按当前费率估算/);assert.doesNotMatch(h.html(),/按订单创建时生效费率/);
  for(const id of ['payout','backlog']){const card=h.html().match(new RegExp('<section class="df-card" id="df-'+id+'">([^]*?)<\\/section>'))?.[1];assert(card);assert.match(card,/345.67/);assert.match(card,/2(?: 笔|<)/);}
  h.c.livePendingSnapshotDetails();assert.match(h.drawers.at(-1).html,/Synthetic payout/);assert.match(h.drawers.at(-1).html,/所选创建范围/);
  h.c.livePeriod('yesterday');await h.c.liveQuery();await settle();const midnight=h.calls.filter(q=>q.action==='pendingSnapshot').at(-1);assert.equal(midnight.mode,'midnight');assert.equal(midnight.date,'2026-09-22');assert.match(h.html(),/<h2>00:00代付中<\/h2>/);
@@ -1520,6 +1532,7 @@ test('workorder records and deposit follow-up pages manually query the last seve
 
 test('YayaPay 924 renders one current source fee and identifies the unused 923 original row',async()=>{
  const h=await ready(),r=completeAggregate(P,20,10);r.groups.provider[0].provider='YayaPay';verifiedFee(r.groups.provider[0],52);h.L.results=[r];h.c.state.page='providers';
+ h.L.feeEstimateMode='historical';
  const selected={scopeType:'country',country:'印度',provider:'YayaPay',category:'UPI',sheetName:'印度线下',sourceRow:22,sourceTypeProvider:'YAYAPAY-924',sourceType:'混合四方',collectFee:'5.20%',payoutFee:'3.10%',payoutSingleFee:'7'};
  const other={...selected,sourceRow:30,sourceTypeProvider:'YAYAPAY-923',sourceType:'跑分',collectFee:'6.30%'};
  h.L.feeLookupRows=[other,selected];h.c.render();

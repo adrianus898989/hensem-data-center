@@ -8,6 +8,8 @@
  const dirs=()=>L.direction==='all'?['charge','withdraw']:[L.direction];
  const successBasisLabel=c.successBasisLabel||(()=>((L.results||[]).some(r=>(r.capabilities||r.platform?.capabilities)?.successTimeBasis==='order_updated_at')?'成功统计时间（多利按更新时间）':'成功时间'));
  const name=d=>d==='charge'?'代收':'代付';
+ const feeMode=()=>L.feeEstimateMode==='historical'?'historical':'current';
+ const feeBasis=()=>feeMode()==='current'?'按当前费率估算':'按订单创建时生效费率';
  const displayPlatform=p=>window.HensemLiveReportData?.normalizeIdentity(p||{})||p||{};
  const aliasKey=p=>window.HensemLiveReportData?.confirmedAliasKey?.(p||{})||null;
  const raw=()=>L.results.flatMap(x=>{const p=displayPlatform(x.platform);return (x.summary||[]).map(r=>({...r,platform:p.name,platformId:p.id,source:p.source,country:p.country,team:p.team||'未绑定团队'}))});
@@ -79,15 +81,15 @@
   return cells;
  }
  function dimensions(key,title,id){
-  const rows=window.HensemProviderSummary.overviewDimensions({orders:groupRows('provider'),summaries:raw(),rates:L.feeLookupRows,country:L.country,key,plus,combine}).sort((a,b)=>b.all_count-a.all_count),isProvider=key==='provider',isPlatform=key==='platform';
+  const rows=window.HensemProviderSummary.overviewDimensions({orders:groupRows('provider'),summaries:raw(),rates:L.feeLookupRows,country:L.country,key,plus,combine,feeMode:feeMode()}).sort((a,b)=>b.all_count-a.all_count),isProvider=key==='provider',isPlatform=key==='platform';
   const head=isProvider?['三方','类型','全部金额','全部笔数','成功金额','金额占比','成功笔数','笔数占比','成功率','手续费率','估算手续费','手续费占比']:[key==='team'?'团队':key==='country'?'国家':'平台','全部金额','全部笔数','成功金额','成功笔数','成功率','估算手续费'];
   const renderDirection=d=>{
    const memberTitle='按成功时间；同平台当地日按会员 ID 去重，跨三方只计一次。多日显示每日去重人次之和，不是整个期间去重人数；* 表示缺少部分会员 ID 或平台资料。';
    const headers=isPlatform?[...head,'<span title="'+E(memberTitle)+'">'+E(c.memberCounts?.platformLabel?.(d)||('实际'+(d==='charge'?'充值':'取款')+(String(L.from||'').slice(0,10)!==String(L.to||'').slice(0,10)?'人次':'人数')))+'</span>']:head;
    const memberFacts=new Map(),memberFact=ids=>{const key=JSON.stringify(ids??null);if(!memberFacts.has(key))memberFacts.set(key,c.memberCounts?.platformMetric?.(ids,d));return memberFacts.get(key)};
    const memberCell=ids=>memberFact(ids)?.html||'<span class="muted" title="人数统计尚未读取">—</span>';
-   const subset=rows.filter(r=>r.direction===d),fees=scopedFeeSummary(subset,d),total={...successTotal(subset,d),direction:d,estimated_fee:fees.amount,fee_matched_count:fees.matchedCount,fee_eligible_count:fees.successCount,fee_excluded_count:fees.excludedCount,fee_issues:fees.issues,fee_exclusions:fees.exclusions,fee_complete:fees.complete};
-   const rateCell=r=>{const value=r.fee_rate_label==='不适用'?'不适用':L.feeLookupLoading?'匹配中…':L.feeLookupError?'读取失败':r.fee_rate_label;return '<span class="df-fee-rate" title="'+E(value)+'">'+E(value)+'</span>'};
+   const subset=rows.filter(r=>r.direction===d),fees=scopedFeeSummary(subset,d),total={...successTotal(subset,d),direction:d,estimated_fee:fees.amount,fee_matched_count:fees.matchedCount,fee_eligible_count:fees.successCount,fee_excluded_count:fees.excludedCount,fee_issues:fees.issues,fee_exclusions:fees.exclusions,fee_complete:fees.complete,fee_unknown:fees.fee_unknown,fee_mode:fees.fee_mode};
+   const rateCell=r=>{const value=r.fee_rate_label==='不适用'?'不适用':L.feeLookupLoading?'匹配中…':L.feeLookupError?'读取失败':feeMode()==='current'?r.fee_reference_label:r.fee_rate_label;return '<span class="df-fee-rate" title="'+E(value)+'">'+E(value)+'</span>'};
    const successRateCell=r=>{const value=R(r.success_count,r.all_count),low=isPlatform&&d==='charge'&&Number.parseFloat(value)<=49.99;return '<span'+(low?' class="df-collection-rate-low"':'')+' title="成功时间内成功笔数 ÷ 创建时间内全部笔数；含跨日成功，可超过100%">'+value+'</span>'};
    const cells=(r,summary=false)=>[N(r.all_amount),C(r.all_count),N(r.success_amount),...(isProvider?[summary?(Number(total.success_amount)>0?'100.00%':'—'):share(r.success_amount_share)]:[]),C(r.success_count),...(isProvider?[summary?(Number(total.success_count)>0?'100.00%':'—'):share(r.success_count_share)]:[]),
     isProvider&&!summary&&!window.HensemProviderSummary.isProviderBusiness(r.provider)?'不适用':successRateCell(r),
@@ -103,9 +105,9 @@
    return dblock(id+'-'+d,title+' · '+name(d),'<div class="df-business-summary'+(isProvider?' df-provider-business-summary':isPlatform?' df-platform-business-summary':'')+'">'+body+'</div>',E(L.currency)+' · <span tabindex="0" title="'+E(L.feeLookupLoading?'正在读取费率':L.feeLookupError?'费率读取失败':window.HensemProviderSummary.feeCoverageText(fees))+'">'+(subset.length?feeStatus:'当前方向无数据')+'</span>'+coverage);
 
   };
-  return dblock(id,title,'<div class="df-grid df-two">'+dirs().map(renderDirection).join('')+'</div>',(isProvider?'同名三方合并；占比按本方向成功数据；手续费占比按已匹配费用。人工不参与三方成功率比较。':'手续费逐平台、逐三方匹配后汇总。')+' 成功率＝成功时间内成功笔数 ÷ 创建时间内全部笔数，含跨日成功。');
+  return dblock(id,title,'<div class="df-grid df-two">'+dirs().map(renderDirection).join('')+'</div>',(isProvider?'同名三方合并；占比按本方向成功数据；手续费占比按已匹配费用。人工不参与三方成功率比较。':'手续费逐平台、逐三方匹配后汇总。')+' '+feeBasis()+'。成功率＝成功时间内成功笔数 ÷ 创建时间内全部笔数，含跨日成功。');
  }
- function feeRows(direction){return window.HensemProviderSummary.buildRows({orders:groupRows('provider'),issues:[],rates:L.feeLookupRows,country:L.country,direction,plus,combine})}
+ function feeRows(direction){return window.HensemProviderSummary.overviewDimensions({orders:groupRows('provider'),summaries:raw(),rates:L.feeLookupRows,country:L.country,key:'platform',plus,combine,feeMode:feeMode()}).filter(row=>row.direction===direction)}
  function providerExtremes(direction){
   // A zero-success ordinary withdrawal is not a provider comparison candidate; keep its ledger row.
   const zeroOrdinaryPayout=r=>direction==='withdraw'&&String(r.provider).trim()==='普通提现'&&r.success_amount!=null&&r.success_count!=null&&Number(r.success_amount)===0&&Number(r.success_count)===0;
@@ -126,7 +128,7 @@
   const success='<div class="df-flow-metric df-flow-rate"><span>'+name(d)+'成功率 · 成功 / 创建</span><strong class="metric-link">'+R(a.success_count,a.all_count)+'</strong><small class="cell-sub" title="成功时间内成功笔数 ÷ 创建时间内全部笔数；两者日期口径不同，跨日成功可能使比值超过100%">本期成功 '+C(a.success_count)+' / 本期创建 '+C(a.all_count)+' 笔；含跨日成功</small>'+compareMetric('',a,true,d,'success')+'</div>';
   const feeNote=L.feeLookupError?'费率读取失败':L.feeLookupLoading?'正在匹配费率':fees.fee_unknown?'成功时间口径未提供，手续费暂不可统计':fees.successCount?'已匹配 '+C(fees.matchedCount)+' / '+C(fees.successCount)+' 笔'+(fees.complete?'':' · 部分匹配'):fees.excludedCount?'人工业务不计三方手续费':'本期无成功订单';
   const states='<div class="df-state-tail">'+[['rejected','驳回'],['unknown','未知状态']].map(([k,l])=>'<span>'+l+'金额 <b>'+N(a[k+'_amount'])+'</b></span><span>'+l+'笔数 <b>'+C(a[k+'_count'])+'</b></span>').join('')+'</div>';
-  return dblock('df-'+tone,name(d)+'经营总数据','<div class="df-flow-grid">'+metrics+success+providerExtremes(d)+'</div>'+(c.memberCounts?.metric(d)||'')+'<div class="df-flow-foot"><div class="df-flow-fee"><span>估算手续费</span><strong>'+N(fees.amount)+'</strong><small class="df-coverage" tabindex="0" title="'+E(L.feeLookupLoading?'正在读取费率':L.feeLookupError?'费率读取失败':window.HensemProviderSummary.feeCoverageText(fees))+'">'+E(feeNote)+' · 按订单创建时生效费率</small>'+states+'</div>'+workorderRanks(d)+'</div>','', '<span class="df-direction '+tone+'">'+(d==='charge'?'↙ 代收':'↗ 代付')+'</span>');
+  return dblock('df-'+tone,name(d)+'经营总数据','<div class="df-flow-grid">'+metrics+success+providerExtremes(d)+'</div>'+(c.memberCounts?.metric(d)||'')+'<div class="df-flow-foot"><div class="df-flow-fee"><span>估算手续费</span><strong>'+N(L.feeLookupLoading||L.feeLookupError?null:fees.amount)+'</strong><small class="df-coverage" tabindex="0" title="'+E(L.feeLookupLoading?'正在读取费率':L.feeLookupError?'费率读取失败':window.HensemProviderSummary.feeCoverageText(fees))+'">'+E(feeNote)+' · '+feeBasis()+'</small>'+states+'</div>'+workorderRanks(d)+'</div>','', '<span class="df-direction '+tone+'">'+(d==='charge'?'↙ 代收':'↗ 代付')+'</span>');
  }
  function workorderRanks(direction){
   const label=direction==='charge'?'存款':'取款',wrapper=body=>'<div class="df-workorder-ranks" data-live-overview-workorders aria-label="'+label+'工单三方排名">'+body+'</div>';
@@ -189,13 +191,11 @@
  }
  function bars(rows){const max=Math.max(1,...rows.map(r=>Number(r.value)||0));return '<div class="panel-body">'+rows.map(r=>'<div class="live-reference-bar"><span>'+r.name+'</span><div><i style="width:'+Math.max(0,(Number(r.value)||0)/max*100)+'%"></i></div><b>'+N(r.value)+'</b></div>').join('')+'</div>'}
  const merchantDirections=['charge','withdraw'];
- const merchantFeeMode=()=>L.feeEstimateMode==='historical'?'historical':'current';
+ const merchantFeeMode=feeMode;
  const merchantFeeNote=()=>merchantFeeMode()==='current'?'当前费率参考估算：按所选成功时间内的成功金额、笔数，逐平台、逐三方匹配当前参考费率；不是历史实际手续费。仅汇总已匹配部分；币种、固定费币种或阶梯依据不足的部分保留待确认。':'历史生效费率：按订单创建时间匹配已发布的生效版本；缺少生效日期或未匹配的订单不会按当前参考价补算，也不会算成 0。';
  const currentFeeReasons={missing_rate:'未找到当前费率',missing_category_rate:'未找到该原始类型的费率',rates_unavailable:'当前费率未读取',conflicting_rates:'适用费率冲突',unsupported_rate:'复杂规则待确认',unknown_currency:'订单币种未确认',unknown_leaf_identity:'原平台计费依据未确认',fixed_fee_currency_unconfirmed:'固定费币种未确认',fee_currency_mismatch:'费用币种不符',mixed_fee_exemption:'免手续费金额未拆分',missing_success_count:'成功笔数未提供',missing_fee_bands:'金额分档未完整提供',invalid_fee_bands:'金额分档待核对',unconfirmed_amount_band:'金额区间费率待确认',missing_provider_breakdown:'三方分组未完整提供',inconsistent_provider_breakdown:'三方分组计数待核对',missing_provider:'三方未识别',invalid_success_amount:'成功金额待确认',mixed_currency:'币种不能合计'};
  function merchantModeFeeRow(row){
-  if(merchantFeeMode()==='historical')return row;
-  const fact=sorting.currentReferenceFeeFacts?.(row,L.feeLookupRows,L.country)||{amount:null,eligibleCount:null,matchedCount:null,excludedCount:0,unknownCount:null,complete:false,reasons:[]};
-  return {...row,estimated_fee:fact.amount,fee_matched_count:fact.matchedCount,fee_eligible_count:fact.eligibleCount,fee_excluded_count:fact.excludedCount,fee_complete:fact.complete,fee_unknown:fact.eligibleCount===null,fee_issues:fact.reasons||[],fee_history_diagnostics:[],fee_current_facts:fact};
+  return sorting.feeModeRow(row,L.feeLookupRows,L.country,merchantFeeMode());
  }
  const merchantFeeCoverage=row=>{
   if(merchantFeeMode()==='historical')return sorting.feeCoverageText(row);
@@ -365,10 +365,16 @@
 
  function business(page){const team=['teamops','teamcountries','teamplatforms'].includes(page),merchant=page==='merchants',legacy=page==='merchantproviders',dimension=page==='teamcountries'?'country':'platform';let items=team?[['business',page==='teamcountries'?'国家表现':page==='teamplatforms'?'平台经营':'经营明细'],['trend',page==='teamops'?'团队订单趋势 / 国家分布':'全部订单金额 / 国家 × 商户关联'],['providers','团队三方使用情况']]:merchant?[['business','商户经营清单'],['trend','商户订单趋势'],['providers','该商户的三方经营表现']]:legacy?[['business','该商户的三方经营表现']]:[['business','平台内三方表现'],['fees','平台内三方成本']];const nav=choose(items);const context='<div class="workspace-context"><div><strong>'+E(team?(L.team==='all'?'全部团队经营范围':L.team):L.platform==='all'?'全部商户（平台）':L.catalog.find(x=>x.id===L.platform)?.name||'商户')+'</strong><small>'+(team?'团队 → 国家 → 平台':'商户 = 平台；归属团队 → 国家 → 平台 → 三方订单')+'</small></div><button class="btn soft" onclick="setPage(\''+(team?'teams':'teamops')+'\')">'+(team?'团队平台配置':'团队经营')+' →</button></div>';
  let body=legacy?merchantBusiness(true):L.view==='providers'?(merchant?merchantBusiness(true):providersView()):L.view==='fees'?providerFees():L.view==='trend'?'<div class="grid equal">'+(merchant?merchantDirections:dirs()).map(d=>box(name(d)+'订单趋势',chart(groupRows('hourly').filter(r=>r.direction===d)))).join('')+(merchant?'':dimensions('country','国家分布','team-country'))+'</div>':merchant?merchantBusiness():dimensions(dimension,items[0][1],'business-dimension');return context+totals()+nav+body}
- function providerFees(){ensureTypes();const rows=combine(groupRows('provider'),['provider','source','direction']);if(L.feeLookupRows===null&&!L.feeLookupLoading)ensureFeeLookup();return box('三方手续费汇总',sortedPageTable('provider-fees',['三方','类型','包网来源','方向','成功金额','成功笔数','估算手续费','有效费率','实际手续费'],rows,[...providerSortPrefix(),numeric('success_amount'),numeric('success_count'),feeSort,feeSort,null],r=>[E(r.provider),typeCell(r),E(r.source||'—'),name(r.direction),N(r.success_amount),C(r.success_count),feeForRow(r),feeForRow(r),unavailable]),'按当前国家与平台专属费率优先匹配；复杂阶梯或无对应记录显示“多档费率 / 未匹配”，不把费率误算成订单费用')+box('费率变更历史',refTable(['三方','方向','版本','生效时间','失效时间','百分比费率','固定费'],[]),'历史生效版本尚未接入')}
+ function providerFees(){
+  ensureTypes();const orders=groupRows('provider'),sources=[...new Set(orders.map(row=>row.source))];
+  const rows=sources.flatMap(source=>dirs().flatMap(direction=>sorting.buildRows({orders:orders.filter(row=>row.source===source),issues:[],rates:L.feeLookupRows,country:L.country,direction,plus,combine,feeMode:feeMode()}).map(row=>({...row,source}))));
+  const rateCell=row=>L.feeLookupLoading?'匹配中…':L.feeLookupError?'读取失败':E(feeMode()==='current'?row.fee_reference_label:row.fee_rate_label);
+  const feeAmountSort={value:row=>L.feeLookupLoading||L.feeLookupError?null:sorting.knownNumber(row.estimated_fee)};
+  return box('三方手续费汇总',sortedPageTable('provider-fees',['三方','类型','包网来源','方向','成功金额','成功笔数','估算手续费',feeMode()==='current'?'当前参考费率':'历史计费依据','实际手续费'],rows,[...providerSortPrefix(),numeric('success_amount'),numeric('success_count'),feeAmountSort,feeSort,null],row=>[E(row.provider),typeCell(row),E(row.source||'—'),name(row.direction),N(row.success_amount),C(row.success_count),feeCell(row),rateCell(row),unavailable]),feeBasis()+'；逐平台匹配后汇总，仅包含已匹配部分。实际手续费未提供时显示 —。')+box('费率变更历史',refTable(['三方','方向','版本','生效时间','失效时间','百分比费率','固定费'],[]),'历史生效版本尚未接入');
+ }
  function providers(){const nav=choose([['business','经营总览'],['fees','费用与历史版本'],['cases','工单未到账'],['decision','加量评估']]);return totals()+nav+(L.view==='fees'?providerFees():L.view==='cases'?cases():L.view==='decision'?riskPage():providersView())}
  function flowPage(d){const nav=choose([['business','三方经营明细'],['trend',name(d)+'时段表现 / 订单状态分布'],['contribution','平台贡献 / 主力金额'],['checks','独立掉单与异常']]);let body=L.view==='trend'?box(name(d)+'时段表现',chart(groupRows('hourly').filter(r=>r.direction===d)))+box('订单状态分布',refTable(['状态','金额','笔数'],['success','pending','failed','rejected','unknown'].map(k=>[({success:'成功',pending:'处理中',failed:'失败',rejected:'拒绝',unknown:'未知'})[k],N(stat(d)[k+'_amount']),C(stat(d)[k+'_count'])]))):L.view==='contribution'?dimensions('platform','平台'+name(d)+'贡献','flow-platform')+c.overviewAmounts():L.view==='checks'?exceptions():providersView();return totals()+nav+body+latencyView(false)+(d==='withdraw'?latencyView(true):'')}
- function riskPage(){ensureTypes();const rows=combine(groupRows('provider'),['provider','source','direction']);return '<div class="risk-summary">'+[['高风险','需要减量或暂停'],['关注','建议调整分量'],['正常','可结合容量加量'],['数据不足','规则事实未接入']].map(([l,s])=>'<div class="risk-tile"><div>'+l+'<small>'+s+'</small></div><b>—</b></div>').join('')+'</div>'+box('三方风险矩阵',sortedPageTable('provider-risk',['三方','类型','包网来源','方向','建议','成功率','掉单率','待付金额','待付笔数','笔数份额','异常笔数','超期金额','超期笔数','估算手续费','触发依据'],rows,[...providerSortPrefix(),null,ratio('success_count','all_count'),null,numeric('pending_amount'),numeric('pending_count'),{value:r=>sorting.fraction(r.all_count,stat(r.direction).all_count)},null,null,null,feeSort,null],r=>[E(r.provider),typeCell(r),E(r.source||'—'),name(r.direction),'待评估',(R(r.success_count,r.all_count)),unavailable,N(r.pending_amount),C(r.pending_count),R(r.all_count,stat(r.direction).all_count),unavailable,unavailable,unavailable,feeForRow(r),'正式风险规则未接入']),'待付为所选创建范围内仍待付；风险与核对指标保留待接入状态')}
+ function riskPage(){ensureTypes();const rows=combine(groupRows('provider'),['provider','source','direction']);return '<div class="risk-summary">'+[['高风险','需要减量或暂停'],['关注','建议调整分量'],['正常','可结合容量加量'],['数据不足','规则事实未接入']].map(([l,s])=>'<div class="risk-tile"><div>'+l+'<small>'+s+'</small></div><b>—</b></div>').join('')+'</div>'+box('三方风险矩阵',sortedPageTable('provider-risk',['三方','类型','包网来源','方向','建议','成功率','掉单率','待付金额','待付笔数','笔数份额','异常笔数','超期金额','超期笔数','当前参考费率','触发依据'],rows,[...providerSortPrefix(),null,ratio('success_count','all_count'),null,numeric('pending_amount'),numeric('pending_count'),{value:r=>sorting.fraction(r.all_count,stat(r.direction).all_count)},null,null,null,feeSort,null],r=>[E(r.provider),typeCell(r),E(r.source||'—'),name(r.direction),'待评估',(R(r.success_count,r.all_count)),unavailable,N(r.pending_amount),C(r.pending_count),R(r.all_count,stat(r.direction).all_count),unavailable,unavailable,unavailable,feeForRow(r),'正式风险规则未接入']),'待付为所选创建范围内仍待付；风险与核对指标保留待接入状态')}
  function orders(){const nav=choose([['business','业务明细'],['orderFees','费用依据'],['orderRates','费率版本']]);return totals()+nav+detailsView()}
  function daily(){
   ensureTypes();
