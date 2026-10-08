@@ -8,10 +8,29 @@ function plus(rows){const mixed=new Set(rows.map(r=>r.currency).filter(Boolean))
 function combine(rows,keys){const map=new Map();for(const row of rows){const id=JSON.stringify(keys.map(k=>row[k]??''));if(!map.has(id))map.set(id,[]);map.get(id).push(row)}return [...map.values()].map(items=>({...Object.fromEntries(keys.map(k=>[k,items[0][k]])),...plus(items),items}))}
 const order=(other={})=>({provider:'ExamplePay',platformId:'a',platform:'Alpha',source:'ar',country:'印度',currency:'INR',direction:'charge',all_amount:1200,all_count:12,success_amount:1000,success_count:10,created_success_count:8,...other});
 const rate=(other={})=>({provider:'ExamplePay',country:'印度',scopeType:'country',collectFee:'4%',payoutFee:'2.5%',payoutSingleFee:'6',...other});
-const dimensions=(orders,key='provider',rates=[rate()],summaries=orders.map(r=>({...r,team:'Example Team'})))=>api.overviewDimensions({orders,summaries,rates,country:'印度',key,plus,combine});
+const dimensions=(orders,key='provider',rates=[rate()],summaries=orders.map(r=>({...r,team:'Example Team'})),feeMode='historical')=>api.overviewDimensions({orders,summaries,rates,country:'印度',key,plus,combine,feeMode});
 const summaryOf=(orders,scope)=>({...plus(orders),currency:'INR',direction:'charge',...scope});
 
 const version=(row,amount,matched=row.success_count)=>({...row,fee_version_state:matched===row.success_count?'complete':matched?'partial':'unknown',fee_version_matched_count:matched,fee_version_unmatched_count:row.success_count-matched,fee_version_estimated_amount:amount});
+
+test('current mode uses native platform fees consistently in all overview dimensions while the default remains historical',()=>{
+ const orders=[version(order(),9),version(order({platformId:'b',platform:'Beta',source:'newar',success_amount:2000,success_count:20}),8)],rates=[rate(),rate({scopeType:'platform',platform:'Beta',collectFee:'5%'})],before=JSON.stringify(orders);
+ for(const key of ['team','country','platform','provider']){
+  const rows=dimensions(orders,key,rates,undefined,'current'),fees=api.feeSummary(rows);
+  assert.equal(fees.amount,140,key);assert.equal(fees.successCount,30);assert.equal(fees.matchedCount,30);assert.equal(fees.complete,true);assert.equal(fees.fee_mode,'current');
+  assert.match(api.feeCoverageText(fees),/按当前费率估算/);assert.doesNotMatch(api.feeCoverageText(fees),/订单创建时间/);
+  assert.equal(rows.reduce((n,row)=>n+row.fee_share,0),1);
+ }
+ assert.equal(api.feeSummary(dimensions(orders,'provider',rates)).amount,17);assert.equal(JSON.stringify(orders),before);
+});
+
+test('current platform and team coverage retain success orders missing from the provider breakdown',()=>{
+ const orders=[order()],summaries=[summaryOf(orders,{platformId:'a',platform:'Alpha',source:'ar',country:'印度',team:'Example Team',success_count:13,success_amount:1300})];
+ for(const key of ['platform','team','country']){
+  const rows=dimensions(orders,key,[rate()],summaries,'current'),fees=api.feeSummary(rows);
+  assert.equal(fees.amount,40);assert.equal(fees.matchedCount,10);assert.equal(fees.successCount,13);assert.equal(fees.complete,false);assert.match(api.feeCoverageText(fees),/三方分组未完整提供/);
+ }
+});
 
 test('same provider merges verified fee amounts across exact platform identities without repricing from current percentages',()=>{
  const orders=[version(order(),39.25),version(order({platformId:'b',platform:'Beta',source:'newar',success_amount:2000,success_count:20}),73.50)];

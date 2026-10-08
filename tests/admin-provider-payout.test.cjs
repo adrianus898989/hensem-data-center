@@ -13,7 +13,7 @@ function table(headers,rows,css='',footers=[]){const cells=(row,tag)=>'<tr>'+row
 function fixture(orders){
  let html='',direction='withdraw',networkCalls=0;const drawers=[];const root={Intl,Date,fetch(){networkCalls++;throw Error('Expanding a report must not request data')}};root.window=root;
  vm.createContext(root);for(const name of ['live-provider-aliases.js','live-comparison.js','live-provider-summary.js'])vm.runInContext(fs.readFileSync(path.join(folder,name),'utf8'),root,{filename:name});
- const L={country:'印度',currency:'INR',from:'2026-09-25T00:00:00',to:'2026-09-25T23:59:59',queryNow:Date.parse('2026-09-26T00:00:00Z'),results:[{platform:{id:'platform-a',country:'印度',currency:'INR',timezone:'Asia/Kolkata'}}],comparisonResults:[],comparisonStatus:'idle',feeLookupRows:[],localPage:1,localSize:20,workorders:null};
+ const L={feeEstimateMode:'historical',country:'印度',currency:'INR',from:'2026-09-25T00:00:00',to:'2026-09-25T23:59:59',queryNow:Date.parse('2026-09-26T00:00:00Z'),results:[{platform:{id:'platform-a',country:'印度',currency:'INR',timezone:'Asia/Kolkata'}}],comparisonResults:[],comparisonStatus:'idle',feeLookupRows:[],localPage:1,localSize:20,workorders:null};
  const ctx={L,E,N,C,R,plus,combine,groupRows:()=>orders,table,box:(title,body)=>'<section><h2>'+E(title)+'</h2>'+body+'</section>',pager:()=>'',providerCell:r=>E(r.provider),feeForRow:()=>'',ensureFeeLookup(){networkCalls++;throw Error('Already loaded rates should be reused')},openDrawer(title,html){drawers.push({title,html})},render(){html=root.HensemProviderSummary.render(ctx,direction)}};
  ctx.render();return {root,L,drawers,api:root.HensemProviderSummary,html:()=>html,networkCalls:()=>networkCalls,render(flow=direction){direction=flow;ctx.render()}};
 }

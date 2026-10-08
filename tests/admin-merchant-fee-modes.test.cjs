@@ -36,6 +36,27 @@ function connectedInline(h){
 }
 function feeCard(h,direction){const section=h.html().match(new RegExp('<section class="live-reference-direction" data-direction="'+direction+'">[\\s\\S]*?<\\/section>'))?.[0]||'',html=section.slice(section.indexOf('<div class="kpi" data-metric="fee"'));return {html,value:plain(html.match(/<div class="kpi-value">([\s\S]*?)<\/div>/)?.[1]||'')};}
 
+test('analysis summary cards share the current fee estimate and never fall back to a permanently blank historical card',async()=>{
+ const h=await setup(),before=JSON.stringify(h.L.results),calls=h.calls.length;
+ for(const page of ['time','amount','matrix','provider_daily']){
+  h.c.state.page=page;h.L.view='business';h.c.render();
+  assert.equal(feeCard(h,'charge').value,'38.00',page);assert.equal(feeCard(h,'withdraw').value,'9.00',page);
+  assert.match(feeCard(h,'charge').html,/按当前参考费率估算/);assert.match(feeCard(h,'charge').html,/已匹配 10 \/ 11 笔/);
+  assert.doesNotMatch(feeCard(h,'charge').html,/历史生效费率尚未接入/);
+ }
+ h.L.feeEstimateMode='historical';h.c.render();assert.equal(feeCard(h,'charge').value,'90.00');assert.equal(feeCard(h,'withdraw').value,'15.00');
+ assert.equal(JSON.stringify(h.L.results),before);assert.equal(h.calls.length,calls);
+});
+
+test('a directly queried analysis page loads current rates once and replaces loading with a verified estimate',async()=>{
+ const h=await setup(),rates=h.L.feeLookupRows;let resolveRates;
+ h.setHandler(q=>{assert.equal(q.action,'rates');return new Promise(resolve=>{resolveRates=resolve})});
+ Object.assign(h.L,{feeLookupRows:null,feeLookupLoading:false,feeLookupError:''});h.c.state.page='time';const calls=h.calls.length;
+ h.c.render();h.c.render();assert.equal(h.calls.length-calls,1);assert.match(feeCard(h,'charge').html,/费率读取中/);assert.equal(feeCard(h,'charge').value,'—');
+ resolveRates({rows:rates,total:rates.length});await settle();
+ assert.equal(feeCard(h,'charge').value,'38.00');assert.equal(feeCard(h,'withdraw').value,'9.00');assert.equal(h.calls.length-calls,1);
+});
+
 test('merchant defaults to current reference estimates with native platform exceptions, success-time counts and explicit partial coverage',async()=>{
  const h=await setup(),before=JSON.stringify(h.L.results),calls=h.calls.length,t=ledger(h),a=t.rows.find(r=>plain(r[0])==='Alpha'),b=t.rows.find(r=>plain(r[0])==='Beta');
  assert.equal(h.L.feeEstimateMode,'current');assert.match(h.html(),/aria-label="商户手续费估算口径"/);assert.match(h.html(),/<option value="current" selected>/);assert.match(h.html(),/不是历史实际手续费/);assert.match(h.html(),/所选成功时间内的成功金额、笔数/);
