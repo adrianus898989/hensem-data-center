@@ -118,3 +118,8 @@ test('verified pre-launch days remain visible without becoming missing or receiv
  // Missing or contradictory evidence cannot manufacture a pre-launch exclusion.
  for(const row of [{...before,evidence:'source_timezone_unknown'},{...before,expected:true},{...before,received:true}])assert.equal(api.summarize(p,feed,[row],from,to).expected,true);
 });
+
+
+test('DUOLI source-day evidence is readable and never claims full-day collection',()=>{
+ for(const [evidence,explanation]of [['duoli_updated_stream_only',/提现仅收到更新时间流，创建日完整性未确认/],['duoli_created_windows_status_unverified',/充值已收到实时创建订单，源状态覆盖尚未核验/]]){const result=api.summarize({...p,source:'duoli'},feed,[day({status:'partial',evidence})],from,to);assert.equal(result.complete,false);assert.match(result.message,explanation);}
+});

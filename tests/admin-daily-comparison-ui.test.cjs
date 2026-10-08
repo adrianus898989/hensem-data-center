@@ -23,6 +23,12 @@ test('known zero stays zero, failed/missing currency/metrics stay unknown and WG
  const wg={...P,source:'wg'},w=harness({platforms:[wg]});await w.module.load();w.c.liveDailyDirection('withdraw');assert.equal(w.module.model().now.success_count,null);assert.equal(w.module.model().now.all_count,100);assert.match(w.module.render(),/—/);
  const missing=harness({platforms:[P],handler:()=>{const r=aggregate(P);r.summary[0].all_amount=null;r.groups.provider[0].all_amount=null;return r;}});await missing.module.load();assert.equal(missing.module.model().now.all_amount,null);assert.equal(missing.module.model().now.all_count,100);
 });
+test('DUOLI daily comparison keeps collected amounts/counts and both unavailable success cohorts null',async()=>{
+ const p={...P,source:'duoli',capabilities:{chargeSuccessTimeAvailable:false,withdrawSuccessTimeAvailable:false}},h=harness({platforms:[p]});await h.module.load();
+ for(const direction of ['charge','withdraw']){h.c.liveDailyDirection(direction);const model=h.module.model();assert.equal(model.now.all_count,100);assert.equal(model.now.success_count,null);assert.equal(model.now.success_amount,null);assert.match(h.module.render(),/多利/);}
+ h.setHandler(()=>({platform:p,summary:[],groups:{provider:[]}}));await h.module.load();
+ for(const direction of ['charge','withdraw']){h.c.liveDailyDirection(direction);const model=h.module.model();assert.equal(model.now.all_count,0);assert.equal(model.now.success_count,null);assert.equal(model.now.success_amount,null);}
+});
 test('comparison totals use the same native platform intersection and groups retain partial attribution',async()=>{
  const h=harness({handler:q=>{const p=q.platformId===P.id?P:Q;if(p===Q&&day(q)==='2026-10-02')throw Error('prior failed');const r=aggregate(p,p===P?100:50);if(p===P)r.groups.provider[0].all_count=60;return r;}});await h.module.load();const m=h.module.model();assert.equal(m.now.all_count,150);assert.equal(m.comparison.count,1);assert.equal(m.comparison.current.all_count,100);assert.equal(m.comparison.previous.all_count,100);h.c.liveDailyDimension('provider');assert.equal(h.module.model().rows[0].now.partial,true);assert.match(h.module.render(),/可比 1 个/);
 });

@@ -229,3 +229,8 @@ test('platform people become daily visits over multiple days; stale and hidden d
  h.L.dirty=true;assert.equal(h.ui.platformMetric(A,'charge').value,null);h.L.dirty=false;h.L.multi.provider=['Changed'];assert.equal(h.ui.platformMetric(A,'charge').value,null);
  h.L.direction='withdraw';h.handler(q=>response(q,[row('2026-09-26','withdraw'),row('2026-09-27','withdraw')]));await h.ui.ensure();assert.equal(h.ui.platformMetric(A,'withdraw').value,18);assert.equal(h.ui.platformMetric(A,'charge').value,null);
 });
+
+
+test('DUOLI unavailable member capability displays unknown and never requests the unsupported reader',async()=>{
+ const h=harness();for(const source of ['duoli','ar']){h.select([p(A,{source,capabilities:{memberDailyAvailable:false}})]);await h.ui.ensure();assert.equal(h.calls.length,0);assert.match(h.ui.metric('charge'),/— \/ —/);assert.match(h.ui.metric('withdraw'),/— \/ —/);assert.match(h.ui.metric('charge'),/尚未接入会员明细/);const metric=h.ui.platformMetric(A,'charge');assert.equal(metric.value,null);assert.equal(metric.partial,true);}
+});

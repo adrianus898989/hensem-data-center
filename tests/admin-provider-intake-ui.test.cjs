@@ -133,3 +133,8 @@ test('opening-day and mixed ranges count the target, but unknown or incomplete l
 test('a query selecting only a verified pre-launch target shows zero expected without inventing a complete zero receipt',()=>{
  const h=fixture(1);h.L.providerIntake.platforms[0]=preLaunch(h.L.queryPlatforms[0],'2026-09-26');h.L.results[0].groups.provider=[];h.orders.splice(0);h.render();const c=h.api.intakeCoverage(h.L);assert.equal(c.requested,0);assert.equal(c.received,0);assert.equal(c.complete,0);assert.equal(c.partial,false);assert.match(h.html(),/<label>平台<\/label><strong>0 \/ 0<\/strong>/);assert.doesNotMatch(h.html(),/>缺 |零笔已确认/);
 });
+
+
+test('DUOLI incomplete stream coverage is pending verification, not a verified count mismatch',()=>{
+ const h=fixture(2);for(const [i,evidence]of ['duoli_updated_stream_only','duoli_created_windows_status_unverified'].entries()){const p=h.L.providerIntake.platforms[i];p.source='duoli';p.status='received';p.complete=false;Object.assign(p.days[0],{status:'partial',complete:false,evidence});}h.render();h.root.providerSummaryPlatformCoverage();const html=h.drawers.at(-1).html;assert.match(html,/提现仅收到更新时间流，创建日完整性未确认/);assert.match(html,/充值已收到实时创建订单，源状态覆盖尚未核验/);assert.match(html,/已收到 · 完整性待核验/);assert.doesNotMatch(html,/已收到 · 核验有差异/);
+});

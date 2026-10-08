@@ -3,7 +3,7 @@
  'use strict';
  const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const source=value=>String(value||'').toLowerCase().replaceAll('_','');
- const system=value=>({ar:'AR',newar:'新AR',wg:'WG',lg:'LG',game66:'AA'}[source(value)]||String(value||'来源未提供'));
+ const system=value=>({ar:'AR',newar:'新AR',wg:'WG',lg:'LG',game66:'AA',duoli:'多利',doli:'多利'}[source(value)]||String(value||'来源未提供'));
  const count=value=>(typeof value==='number'||typeof value==='string')&&String(value).trim()!==''&&Number.isSafeInteger(Number(value))&&Number(value)>=0?Number(value):null;
  const day=value=>{const text=String(value||'').slice(0,10),parsed=new Date(text+'T00:00:00Z');return /^\d{4}-\d{2}-\d{2}$/.test(text)&&Number.isFinite(parsed.getTime())&&parsed.toISOString().slice(0,10)===text?text:null;};
  const provider=(name,country)=>String(window.HensemProviderNames?.canonical(name,country)??name??'').trim()||'（三方未提供）';
@@ -59,14 +59,14 @@
    const key=JSON.stringify([p.id,row.direction]),entries=platformTickets.get(key)||[];entries.push(row);platformTickets.set(key,entries);
   }
   const safeSum=values=>{if(!values.length||values.includes(null))return null;const sum=values.reduce((n,v)=>n+v,0);return Number.isSafeInteger(sum)?sum:null;};
-  const successTimeUnavailable=(p,response)=>source(p.source)==='wg'||response?.withdrawSuccessTimeAvailable===false||(response?.capabilities||response?.platform?.capabilities)?.withdrawSuccessTimeAvailable===false||p.capabilities?.withdrawSuccessTimeAvailable===false;
+  const successTimeUnavailable=(p,response,direction)=>{const key=direction+'SuccessTimeAvailable';return source(p.source)==='duoli'||direction==='withdraw'&&source(p.source)==='wg'||response?.[key]===false||(response?.capabilities||response?.platform?.capabilities)?.[key]===false||p.capabilities?.[key]===false};
   function paymentPlatform(p,direction){
    const response=platformResponses.get(p.id);if(!response)return {...unknown('该平台尚未返回当前日期的汇总。'),volume:null};
    const native=Array.isArray(response.summary)?response.summary.filter(row=>row?.direction===direction):[],groups=Array.isArray(response.groups?.provider)?response.groups.provider:[],rows=native.length?native:groups.filter(row=>row?.direction===direction),partial=!native.length;
    if(!Array.isArray(rows)||!rows.length)return {...unknown('该业务方向未返回平台汇总；不按零处理。'),volume:null};
    if(native.length&&new Set(native.map(row=>String(row.currency??''))).size!==native.length)return {...unknown('平台方向汇总存在重复币种，不能重复相加。'),volume:null};
    const totals=rows.map(row=>count(row.all_count)),successes=rows.map(row=>count(row.success_count)),knownTotals=totals.filter(n=>n!==null),volume=safeSum(partial?knownTotals:totals);
-   if(direction==='withdraw'&&successTimeUnavailable(p,response))return {...fact(null,volume,partial,'该来源未提供可核验的代付成功时间；提交笔数仅用于平台列排序。'),volume,authoritativeTotal:!!native.length};
+   if(successTimeUnavailable(p,response,direction))return {...fact(null,volume,partial,'该来源未提供可核验的'+(direction==='charge'?'代收':'代付')+'成功时间；提交笔数仅用于平台列排序。'),volume,authoritativeTotal:!!native.length};
    if(native.length)return {...fact(safeSum(successes),safeSum(totals),false,'按平台原生方向汇总：总成功笔数 ÷ 总创建笔数；不平均三方百分比，含跨日成功。'),volume,authoritativeTotal:true};
    const known=rows.filter((row,i)=>totals[i]!==null&&successes[i]!==null),total=safeSum(known.map(row=>count(row.all_count))),success=safeSum(known.map(row=>count(row.success_count)));
    return {...fact(success,total,true,'未返回平台原生方向汇总；仅按同时提供成功、创建笔数的三方分组计算已读小计；列排序使用已知创建笔数，未提供的分组不按零填补。'),volume};
@@ -103,7 +103,7 @@
   function payment(p,name,direction){
    const entry=payments.get(JSON.stringify([p.id,name,direction]));
    if(!entry)return unknown('未返回该平台、三方与业务方向的数据；不按零处理。');
-   if(direction==='withdraw'&&successTimeUnavailable(p,entry.response))return unknown('该来源未提供可核验的代付成功时间。');
+   if(successTimeUnavailable(p,entry.response,direction))return unknown('该来源未提供可核验的'+(direction==='charge'?'代收':'代付')+'成功时间。');
    const totals=entry.rows.map(r=>count(r.all_count)),successes=entry.rows.map(r=>count(r.success_count));
    if(totals.includes(null)||successes.includes(null))return unknown('成功笔数或创建笔数未提供。');
    const total=totals.reduce((n,v)=>n+v,0),success=successes.reduce((n,v)=>n+v,0);
@@ -188,7 +188,7 @@
   if(L.queryPaused)notices.push('查询已暂停，保留已读取结果。<button class="link" onclick="liveRetryFailed(true)">继续查询</button>');
   if(L.queryFailures?.length)notices.push('部分平台读取失败：'+escape(L.queryFailures.map(p=>p.name).join('、'))+'。<button class="link" onclick="liveRetryFailed()">重试未完成平台</button>');
   if(model.ignored)notices.push('有 '+model.ignored+' 条工单汇总无法匹配已授权平台身份，未分摊到平台。');
-  const sections=[['charge','代收成功率','成功时间内成功笔数 ÷ 创建时间内全部笔数。'],['withdraw','代付成功率','成功时间内成功笔数 ÷ 创建时间内全部笔数；WG 未提供可核验成功时间时显示 —。'],['workorder','工单成功率','已处理原支付单 ÷ 全部提交原支付单；按平台、业务、完整原单号去重，状态 4 计已处理，不代表实际到账。']];
+  const sections=[['charge','代收成功率','成功时间内成功笔数 ÷ 创建时间内全部笔数。'],['withdraw','代付成功率','成功时间内成功笔数 ÷ 创建时间内全部笔数；未提供可核验成功时间时显示 —。'],['workorder','工单成功率','已处理原支付单 ÷ 全部提交原支付单；按平台、业务、完整原单号去重，状态 4 计已处理，不代表实际到账。']];
   return '<div class="live-success-analysis">'+(notices.length?'<div class="live-status">'+notices.join('<br>')+'</div>':'')+sections.map(([key,title,note])=>{
    const visibleRows=rankedRows(model,key),withType=key!=='workorder',indexes=rankedColumnIndexes(model,key),head='<thead><tr><th scope="col">三方</th>'+(withType?'<th scope="col" class="success-provider-type">类型</th>':'')+indexes.map(index=>{const p=model.columns[index],volume=model.footers[key][index].volume;return '<th scope="col" title="'+escape(p.name+' · '+system(p.source)+' · '+p.id+' · 已读取提交笔数 '+(volume===null?'未提供':volume)+(model.footers[key][index].partial?'（部分）':''))+'">'+escape(p.name)+'<small>'+escape(system(p.source))+'</small></th>';}).join('')+'</tr></thead>';
    return '<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2>'+(key==='workorder'&&L.workordersError?'<button type="button" class="link" onclick="liveProviderWorkordersRetry()">重试工单</button>':'')+'</div><p>'+note+'</p><div class="success-analysis-scroll" tabindex="0" role="region" aria-label="'+title+'"><table style="min-width:'+Math.max(400,112+(withType?80:0)+model.columns.length*78)+'px">'+head+'<tbody>'+ (visibleRows.length?visibleRows.map(row=>'<tr><th scope="row">'+escape(row.provider)+'</th>'+(withType?typeCell(row,key,L):'')+indexes.map(index=>cell(row[key][index])).join('')+'</tr>').join(''):'<tr><td colspan="'+(model.columns.length+1+(withType?1:0))+'">'+(L.loading?'正在读取三方汇总…':'当前条件下暂无已确认活动的支付三方')+'</td></tr>')+'</tbody><tfoot class="success-analysis-footer"><tr><th scope="row">汇总成功率</th>'+(withType?'<td class="success-provider-type">—</td>':'')+indexes.map(index=>cell(model.footers[key][index],true)).join('')+'</tr></tfoot></table></div>'+otherRecords(model,key)+'</section>';
