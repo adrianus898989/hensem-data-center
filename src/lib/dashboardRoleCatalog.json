@@ -255,6 +255,34 @@
       ]
     },
     {
+      "id": "channel_status",
+      "moduleId": "merchant",
+      "moduleLabel": "运营中心",
+      "label": "平台通道调整",
+      "actions": [
+        {
+          "id": "view",
+          "label": "查看目录与页面"
+        },
+        {
+          "id": "query",
+          "label": "查询数据"
+        },
+        {
+          "id": "detail",
+          "label": "查看明细"
+        },
+        {
+          "id": "export",
+          "label": "导出已查询数据"
+        }
+      ],
+      "requests": [
+        "catalog",
+        "channelStatus"
+      ]
+    },
+    {
       "id": "merchantproviders",
       "moduleId": "merchant",
       "moduleLabel": "商户运营中心",
@@ -676,34 +704,6 @@
         "submissionAnalysis",
         "memberDaily",
         "analysisOrders"
-      ]
-    },
-    {
-      "id": "channel_status",
-      "moduleId": "provider",
-      "moduleLabel": "三方通道中心",
-      "label": "通道状态",
-      "actions": [
-        {
-          "id": "view",
-          "label": "查看目录与页面"
-        },
-        {
-          "id": "query",
-          "label": "查询数据"
-        },
-        {
-          "id": "detail",
-          "label": "查看明细"
-        },
-        {
-          "id": "export",
-          "label": "导出已查询数据"
-        }
-      ],
-      "requests": [
-        "catalog",
-        "channelStatus"
       ]
     },
     {
