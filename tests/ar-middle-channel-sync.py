@@ -134,6 +134,55 @@ class NormalizationTests(unittest.TestCase):
         with self.assertRaisesRegex(C.SyncError, "SOURCE_CATEGORY_MISMATCH"):
             C.normalize_record(row(1), "1102", 0, {"categoryId": 99})
 
+    def test_all_native_category_names_survive_without_urls_or_system_ids(self):
+        normalized = C.normalize_record(row(1, categories=[
+            {"tenantCategoryId": 100710, "customName": "UPI", "sort": 22, "sysCategoryId": 1, "iconUrl": "https://unneeded-icon.invalid"},
+            {"tenantCategoryId": 100718, "customName": "Innate UPI-QR", "sort": 0, "merchantUrl": "https://private-merchant.invalid"},
+        ]), "1102", 0, {"categoryId": 100710, "customName": "UPI"})
+        self.assertEqual(normalized["category_id"], "100710")
+        self.assertEqual(normalized["category_name"], "UPI")
+        self.assertEqual(normalized["channel_categories"], [
+            {"category_id": "100710", "category_name": "UPI", "sort": 22},
+            {"category_id": "100718", "category_name": "Innate UPI-QR", "sort": 0},
+        ])
+        stored = json.dumps(normalized["channel_categories"])
+        for excluded in ("iconUrl", "merchantUrl", "sysCategoryId", "https://"):
+            self.assertNotIn(excluded, stored)
+
+    def test_withdraw_without_categories_falls_back_to_its_own_category(self):
+        normalized = C.normalize_record(row(1, categories=None), "1102", 0)
+        self.assertEqual(normalized["channel_categories"], [{"category_id": "100710", "category_name": "UPI", "sort": None}])
+        with self.assertRaises(C.SyncError):
+            C.normalize_record(row(1, categories=[{"sysCategoryId": 1, "customName": "not a tenant category"}]), "1102", 0)
+        with self.assertRaisesRegex(C.SyncError, "SOURCE_CATEGORY_ID_CONFLICT"):
+            C.normalize_record(row(1, categories=[{"tenantCategoryId": 100710, "categoryId": 100718}]), "1102", 0)
+
+    def test_signed_category_sort_and_optional_category_name_privacy(self):
+        normalized = C.normalize_record(row(1, categories=[
+            {"tenantCategoryId": 100710, "customName": "UPI", "sort": -1},
+            {"tenantCategoryId": 100718, "customName": "token=private-value", "sort": 0},
+        ]), "1102", 0)
+        self.assertEqual(normalized["channel_categories"], [
+            {"category_id": "100710", "category_name": "UPI", "sort": -1},
+            {"category_id": "100718", "category_name": None, "sort": 0},
+        ])
+        for value in ("https://private.invalid", "javascript:alert(1)", "data:text/html,private", "<b>UPI</b>", "password=private", "Bearer private", "name\nsecret"):
+            with self.subTest(value=value): self.assertIsNone(C.optional_metadata_name(value))
+        with self.assertRaises(C.SyncError):
+            C.normalize_record(row(1, categories=[{"tenantCategoryId": 100710, "sort": -2147483649}]), "1102", 0)
+
+    def test_original_system_name_is_explicit_and_never_custom_or_provider(self):
+        self.assertIsNone(C.normalize_record(row(1, payCode="ProviderINR"), "1102", 0)["source_channel_name"])
+        for key in ("name", "channelName", "sysChannelName"):
+            with self.subTest(key=key):
+                normalized = C.normalize_record(row(1, sysChannel={"sysChannelId": 88, key: "System QR"}), "1102", 0)
+                self.assertEqual(normalized["source_channel_name"], "System QR")
+                self.assertEqual(normalized["channel_name"], "Example Pay")
+        self.assertIsNone(C.source_channel_name({"customName": "Unconfirmed label", "thirdChannelCode": "Not a name"}))
+        self.assertIsNone(C.source_channel_name({"name": "One name", "channelName": "Different name"}))
+        self.assertIsNone(C.source_channel_name({"name": "https://private-system.invalid"}))
+        self.assertIsNone(C.source_channel_name({"name": "password=private"}))
+
 
 class PaginationTests(unittest.TestCase):
     def test_grouped_deposit_counts_channels_and_reconfirms_anchor(self):
@@ -231,7 +280,7 @@ class RestartAndConfigurationTests(unittest.TestCase):
         path = self.directory / "config.json"
         C.init_config(path)
         config = C.load_config(path)
-        self.assertEqual(config["interval_seconds"], 600)
+        self.assertEqual(config["interval_seconds"], 300)
         self.assertEqual(config["source_origin"], C.ORIGIN)
         self.assertTrue(all(t["verified"] for t in config["targets"] if t["enabled"]))
         self.assertEqual(len(config["targets"]), 40)
@@ -250,8 +299,26 @@ class RestartAndConfigurationTests(unittest.TestCase):
         with C.process_lock(self.directory):
             with self.assertRaisesRegex(C.SyncError, "COLLECTOR_ALREADY_RUNNING"):
                 with C.process_lock(self.directory): pass
-        self.assertEqual(C.cycle_delay(1000, 1060), 540)
-        self.assertEqual(C.cycle_delay(1000, 1700), 0)
+        self.assertEqual(C.cycle_delay(1000, 1060), 240)
+        self.assertEqual(C.cycle_delay(1000, 1700), 200)
+        self.assertEqual(C.cycle_delay(1000, 1300), 0)
+        self.assertEqual(C.cycle_delay(1000, 1060, interval_seconds=600), 540)
+
+    def test_default_five_minutes_and_legacy_ten_minutes_configuration(self):
+        path = self.directory / "config.json"
+        C.init_config(path)
+        raw = json.loads(path.read_text())
+        self.assertEqual(raw["interval_seconds"], 300)
+        raw["interval_seconds"] = 600
+        path.write_text(json.dumps(raw))
+        self.assertEqual(C.load_config(path)["interval_seconds"], 600)
+        raw.pop("interval_seconds")
+        path.write_text(json.dumps(raw))
+        self.assertEqual(C.load_config(path)["interval_seconds"], 300)
+        for invalid in (1, 60, 299, 301, 300.0, "300", True):
+            raw["interval_seconds"] = invalid
+            path.write_text(json.dumps(raw))
+            with self.subTest(interval=invalid), self.assertRaises(C.SyncError): C.load_config(path)
 
     def test_source_spacing_and_fixed_read_only_routes(self):
         source = C.Source({"min_request_interval_seconds": 1})

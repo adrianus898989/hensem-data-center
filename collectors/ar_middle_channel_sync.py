@@ -2,7 +2,8 @@
 """Read-only M8 channel snapshots. Python 3.10+, standard library only.
 
 Run --init once, set AR_MIDDLE_BEARER and AR_MIDDLE_UPLOAD_KEY privately,
-then --check / --once / --loop. No login, channel editing or payment APIs.
+then --check / --once / --loop (every 300 seconds by default; legacy 600-second
+configuration is supported). No login, channel editing or payment APIs.
 All local configuration, logs and restart state live in one data directory.
 """
 from __future__ import annotations
@@ -35,7 +36,7 @@ ORIGIN = "https://m8-admin.payplatform-manager.com"
 INGEST_URL = "https://gmfyfzsxpxmaqtuuwgxb.supabase.co/functions/v1/ar-middle-channel-ingest"
 PATHS = {"deposit": "/api/RechargeChannel/GetCategoryChannelPageList",
          "withdrawal": "/api/WithdrawChannel/GetPageList"}
-INTERVAL = 600
+INTERVAL = 300
 MAX_PAGES = 1000
 MAX_RESPONSE = 16 * 1024 * 1024
 # Bound against the native M8 tenant catalog, then checked against the existing
@@ -116,12 +117,12 @@ def decimal_text(value, *, signed=False, percent=False):
     return result
 
 
-def optional_integer(value):
+def optional_integer(value, *, signed=False):
     if value is None or value == "":
         return None
-    result = decimal_text(value)
+    result = decimal_text(value, signed=signed)
     number = Decimal(result)
-    if number != number.to_integral_value() or number > 2_147_483_647:
+    if number != number.to_integral_value() or number > 2_147_483_647 or number < -2_147_483_648:
         raise SyncError("SOURCE_INTEGER_INVALID")
     return int(number)
 
@@ -240,6 +241,59 @@ def optional_integer_timestamp(value):
     return int(value)
 
 
+def optional_metadata_name(value):
+    if not isinstance(value, str) or not value.strip(): return None
+    try:
+        name = safe_text(value)
+    except SyncError:
+        return None
+    if re.search(r"(?i)[a-z][a-z0-9+.-]*://|(?:javascript|data):|<[^>]*>|\bbearer\s+\S+|\b(?:token|password|secret|authorization|api[_-]?key|access_token|cookie)\s*[:=]", name):
+        return None
+    return name
+
+
+def channel_categories(row, own_category, outer_category):
+    """Keep all native tenant categories; system category IDs are unrelated."""
+    categories = row.get("categories")
+    if categories is not None and not isinstance(categories, list):
+        raise SyncError("SOURCE_CATEGORIES_INVALID")
+    if categories and len(categories) > 1000: raise SyncError("SOURCE_CATEGORIES_TOO_MANY")
+    if not categories:
+        category_id = own_category.get("categoryId")
+        if category_id is None: category_id = outer_category.get("categoryId")
+        if category_id is None: return []
+        return [{"category_id": native_id(category_id),
+                 "category_name": optional_metadata_name(own_category.get("categoryName") or outer_category.get("customName")),
+                 "sort": optional_integer(own_category.get("sort") if own_category.get("sort") is not None else outer_category.get("sort"), signed=True)}]
+    result, seen = [], {}
+    for category in categories:
+        if not isinstance(category, dict): raise SyncError("SOURCE_CATEGORIES_INVALID")
+        tenant_id, ordinary_id = category.get("tenantCategoryId"), category.get("categoryId")
+        if tenant_id is not None and ordinary_id is not None and native_id(tenant_id) != native_id(ordinary_id):
+            raise SyncError("SOURCE_CATEGORY_ID_CONFLICT")
+        category_id = native_id(tenant_id if tenant_id is not None else ordinary_id)
+        item = {"category_id": category_id,
+                "category_name": optional_metadata_name(category.get("customName") or category.get("categoryName")),
+                "sort": optional_integer(category.get("sort"), signed=True)}
+        if category_id in seen:
+            if seen[category_id] != item: raise SyncError("SOURCE_CATEGORY_DUPLICATE_CONFLICT")
+            continue
+        seen[category_id] = item
+        result.append(item)
+    return result
+
+
+def source_channel_name(system_channel):
+    """An original system name is optional; customName and provider are separate."""
+    names = []
+    for field in ("sysChannelName", "channelName", "name"):
+        value = system_channel.get(field)
+        name = optional_metadata_name(value)
+        if name is not None: names.append(name)
+    # Conflicting names lack sufficient evidence to select one as the original.
+    return names[0] if names and len(set(names)) == 1 else None
+
+
 def normalize_record(row, tenant_id, position, category=None):
     if not isinstance(row, dict) or native_id(row.get("tenantId")) != str(tenant_id):
         raise SyncError("SOURCE_TENANT_MISMATCH")
@@ -257,7 +311,7 @@ def normalize_record(row, tenant_id, position, category=None):
     if own_id is not None and group_id is not None and native_id(own_id) != native_id(group_id):
         raise SyncError("SOURCE_CATEGORY_MISMATCH")
     category_id = own_id if own_id is not None else group_id
-    category_name = safe_text(own_category.get("categoryName") or category.get("customName"))
+    category_name = optional_metadata_name(own_category.get("categoryName") or category.get("customName"))
     source_state = safe_text(row.get("state"))
     channel_state = safe_text(row.get("channelState"))
     merchant_state = safe_text(row.get("merchantState"))
@@ -272,10 +326,12 @@ def normalize_record(row, tenant_id, position, category=None):
     fee_rate = decimal_text(row.get("thirdPayFeeRate"))
     out = {
         "channel_id": channel_id, "channel_name": channel_name, "status_text": status,
+        "source_channel_name": source_channel_name(system_channel),
         "provider": safe_text(row.get("payCode") or row.get("merchantCustomName")), "channel_type": category_name,
         "payment_method": category_name,
         "category_id": native_id(category_id) if category_id is not None else None,
         "category_name": category_name,
+        "channel_categories": channel_categories(row, own_category, category),
         "sys_channel_id": native_id(system_channel["sysChannelId"]) if system_channel.get("sysChannelId") is not None else None,
         "third_pay_merchant_id": native_id(row["thirdPayMerchantId"]) if row.get("thirdPayMerchantId") is not None else None,
         "source_state": source_state, "source_channel_state": channel_state, "source_merchant_state": merchant_state,
@@ -760,8 +816,12 @@ def load_config(path):
         config = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise SyncError("CONFIG_INVALID") from None
-    if not isinstance(config, dict) or config.get("source_origin") != ORIGIN or config.get("interval_seconds", INTERVAL) != INTERVAL:
+    if not isinstance(config, dict) or config.get("source_origin") != ORIGIN:
         raise SyncError("CONFIG_ORIGIN_OR_INTERVAL_INVALID")
+    interval = config.get("interval_seconds", INTERVAL)
+    if type(interval) is not int or interval not in (300, 600):
+        raise SyncError("CONFIG_ORIGIN_OR_INTERVAL_INVALID")
+    config["interval_seconds"] = interval
     page_size = config.get("page_size", 300)
     if type(page_size) is not int or not 1 <= page_size <= 300:
         raise SyncError("CONFIG_PAGE_SIZE_INVALID")
@@ -808,8 +868,12 @@ def make_logger(directory):
     return logger
 
 
-def cycle_delay(started, now=None):
-    return max(0, INTERVAL - ((time.monotonic() if now is None else now) - started))
+def cycle_delay(started, now=None, interval_seconds=INTERVAL):
+    elapsed = max(0, (time.monotonic() if now is None else now) - started)
+    if elapsed <= interval_seconds: return interval_seconds - elapsed
+    # Skip missed ticks after an overrun instead of immediately catching up.
+    remainder = elapsed % interval_seconds
+    return interval_seconds - remainder if remainder else 0
 
 
 def main(argv=None):
@@ -849,9 +913,9 @@ def main(argv=None):
                 while True:
                     started = time.monotonic()
                     failures = run_cycle(config, source, upload, store, logger, args.dry_run)
-                    logger.info("CYCLE_FINISHED failed_tenants=%s interval_seconds=%s dry_run=%s", failures, INTERVAL, args.dry_run)
+                    logger.info("CYCLE_FINISHED failed_tenants=%s interval_seconds=%s dry_run=%s", failures, config["interval_seconds"], args.dry_run)
                     if not args.loop: return 1 if failures else 0
-                    time.sleep(cycle_delay(started))
+                    time.sleep(cycle_delay(started, interval_seconds=config["interval_seconds"]))
             finally:
                 store.close()
     except KeyboardInterrupt:
