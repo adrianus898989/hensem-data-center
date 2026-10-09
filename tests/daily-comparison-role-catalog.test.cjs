@@ -29,7 +29,7 @@ test('daily comparison registers exactly one operations entry and four permissio
   const before=await catalog(db),meta=await metadata(db),saved=await grants(db);
   assert.equal(await scalar(db,"select md5(prosrc) from pg_proc where oid='private.dashboard_role_catalog()'::regprocedure"),'b1c7a223fd9d4b5ea488ad0114bba9d4');
   assert.equal(await scalar(db,"select md5(pg_get_functiondef('private.dashboard_role_catalog()'::regprocedure))"),'db24d518ed7aa439aae1c9fa87c33dab');
-  await db.exec(migration);const after=await catalog(db),pages=require('../src/lib/dashboardRoleCatalog.json').pages.filter(p=>p.id!=='collector_control');
+  await db.exec(migration);const after=await catalog(db),pages=require('../src/lib/dashboardRoleCatalog.json').pages.filter(p=>!['collector_control','channel_status'].includes(p.id));
   assert.deepEqual(after.pages,pages);
   const entry=after.pages.find(p=>p.id==='daily_comparison');assert.equal(entry.moduleId,'merchant');assert.equal(entry.moduleLabel,'运营中心');
   assert.deepEqual(entry.actions.map(a=>a.id),['view','query','detail','export']);

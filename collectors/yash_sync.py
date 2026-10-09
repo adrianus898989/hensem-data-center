@@ -2,19 +2,21 @@
 """YASH.BET → Hensem 单文件采集程序（Python 3.11+，无需 pip）。
 
 直接运行：python yash_sync.py
-首次激活只需粘贴后台订单列表 Copy as cURL (bash)，确认后台显示时区。
+连接本机 Chrome CDP，只读取已打开并登录的 YASH 页面；首次只需确认后台显示时区。
 充值、提现从 2026-10-01 补齐，每 10 分钟同步；无需建表或填写数据库密钥。
-登录过期：python yash_sync.py --refresh
+充值、提现通道每 60 秒独立刷新；只读取配置，不修改通道或下单测试。
+登录过期后在浏览器重新登录；程序会继续重试。配置时区：python yash_sync.py --refresh
 只检测：python yash_sync.py --check
 补齐一轮：python yash_sync.py --once
 
 配置和断点自动保存到本机，电脑需保持开机联网；不要分享配置或激活版脚本。
-只上传订单业务字段，不上传附件、图片、视频、PDF、银行卡号或备注。
+只上传订单与通道业务字段；不上传附件、图片、视频、PDF、银行卡号或订单备注。
+通道业务备注经过脱敏，不保留原始 HTML。
 """
 from __future__ import annotations
 
 import argparse
-import shlex
+import base64
 import sys
 import tempfile
 import contextlib
@@ -25,7 +27,10 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import socket
+import struct
 import time
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -34,16 +39,31 @@ from html.parser import HTMLParser
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
-from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 UTC = timezone.utc
 LOG = logging.getLogger("yash-sync")
+# CDP / browser: fixed local debugging endpoint; existing YASH tabs only.
+CDP_HTTP = "http://127.0.0.1:9222"
+CHECK_INTERVAL_SECONDS = 10
+RUN_ON_START = False
+YASH_ORIGIN = "https://yash.y-o-admin.com"
+MAX_CDP_MESSAGE_BYTES = 32 * 1024 * 1024
 YASH_UPLOAD_URL = "https://gmfyfzsxpxmaqtuuwgxb.supabase.co/functions/v1/yash-order-ingest"
 YASH_UPLOAD_TOKEN = "__YASH_UPLOAD_TOKEN__"
 MAX_RECEIPT_KEYS = 50000
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_WINDOW_SECONDS = 36 * 3600
+MAX_CHANNELS = 2000
+CHANNEL_INTERVAL_SECONDS = 60
+CHANNEL_TABS = {"deposit": "depositChannel", "withdrawal": "withdrawChannel"}
+CHANNEL_RATE_HEADERS = {
+    "近10分钟成功率": "success_rate_10m", "近30分钟成功率": "success_rate_30m",
+    "近1小时成功率": "success_rate_1h", "近4小时成功率": "success_rate_4h",
+    "近8小时成功率": "success_rate_8h", "近24小时成功率": "success_rate_24h",
+    "今日成功率": "success_rate_today", "总成功率": "success_rate_total",
+}
 RAW_FIELDS = frozenset({
     "UID", "订单号", "子订单号", "三方订单号", "订单状态", "提现状态", "充值金额", "提现金额",
     "手续费", "充值前余额", "提现后余额", "充值总金额", "优惠比例", "下单时间", "申请时间",
@@ -204,6 +224,130 @@ class Page:
     pages: int
 
 
+def channel_note(value):
+    """Retain business notes, never source account/contact/authentication details."""
+    value = " ".join(value.split())
+    value = re.sub(r"(?:密码|密钥|秘钥|口令|令牌|账号|账户|卡号|账户名|姓名|银行|电话|手机|联系人|谷歌验证|password|secret|token|cookie|authorization|api[_ -]?key|account|phone)\s*[:：=]?\s*[^,，;；\n]+", "[已隐藏]", value, flags=re.I)
+    value = re.sub(r"https?://\S+|www\.\S+|[^\s@]+@[^\s@]+|@[A-Za-z0-9_]+|(?:\d[\s().+-]*){7,}|[A-Za-z0-9_+/=-]{24,}", "[已隐藏]", value, flags=re.I)
+    return nullable(value[:400])
+
+
+def channel_decimal(value, *, percent=False, signed=False):
+    text = nullable(value)
+    if text in {None, "—", "--"}:
+        return None
+    if percent and not text.endswith("%"):
+        raise SyncError("通道成功率缺少百分号，未更新通道清单")
+    result = money(text, percent=percent)
+    number = Decimal(result)
+    if (not signed and number < 0) or (percent and number > 100):
+        raise SyncError("通道金额/比例超出有效范围，未更新通道清单")
+    if number == 0:
+        result = format(abs(number), "f")
+    if not re.fullmatch(r"-?\d{1,16}(?:\.\d{1,8})?" if signed else r"\d{1,16}(?:\.\d{1,8})?", result):
+        raise SyncError("通道金额/比例精度超出上传范围，未更新通道清单")
+    return result
+
+
+def channel_balance(value, *, signed=False):
+    """Only an explicit amount suffix proves the balance currency."""
+    text = nullable(value)
+    if text in {None, "—", "--"}:
+        return None, None
+    match = re.fullmatch(r"([+-]?[\d,]+(?:\.\d+)?)\s+([A-Za-z]{3,5})", text)
+    if match:
+        return channel_decimal(match[1], signed=signed), match[2].upper()
+    return channel_decimal(text, signed=signed), None
+
+
+def channel_integer(value):
+    text = nullable(value)
+    if text in {None, "—", "--"}:
+        return None
+    if not re.fullmatch(r"\d{1,10}", text) or int(text) > 2147483647:
+        raise SyncError("通道计数/优先级/权重格式改变，未更新通道清单")
+    return int(text)
+
+
+def parse_channel_page(html_text, kind):
+    if kind not in CHANNEL_TABS:
+        raise SyncError("通道业务方向无效")
+    parser = TreeParser()
+    parser.feed(html_text)
+    candidates = []
+    for table in parser.root.walk("table"):
+        headers = [cell_text(node) for node in table.walk("th")]
+        if "通道名称" in headers and "支付供应商" in headers:
+            candidates.append((table, headers))
+    if len(candidates) != 1:
+        raise SyncError("无法识别通道配置表，可能登录过期；通道清单保持原样")
+    table, headers = candidates[0]
+    required = {"通道名称", "支付供应商", "通道类型", "余额", "优先级", "权重", "状态", "备注", *CHANNEL_RATE_HEADERS}
+    required |= {"支付方式", "代收次数要求"} if kind == "deposit" else {"余额阈值"}
+    if not required.issubset(headers) or len(set(headers)) != len(headers):
+        raise SyncError("通道表头缺失或重复，未更新通道清单")
+    limit_headers = []
+    for prefix in ("最小交易金额", "最大交易金额"):
+        found = [(header, re.fullmatch(re.escape(prefix) + r"[（(]([A-Z]{3,5})[）)]", header)) for header in headers]
+        found = [(header, match[1]) for header, match in found if match]
+        if len(found) != 1:
+            raise SyncError("通道交易限额缺少明确币种，未更新通道清单")
+        limit_headers.append(found[0])
+    if limit_headers[0][1] != limit_headers[1][1]:
+        raise SyncError("通道交易限额币种不一致，未更新通道清单")
+    pagers = [node.text() for node in parser.root.walk() if "pager-analysis" in node.attrs.get("class", "").split()]
+    if len(pagers) != 1:
+        raise SyncError("通道分页信息缺失或含糊，未更新通道清单")
+    total_match = re.search(r"总计\s*([\d,]+)\s*条", pagers[0])
+    pages_match = re.search(r"共\s*([\d,]+)\s*页", pagers[0])
+    if not total_match or not pages_match:
+        raise SyncError("通道分页总数无法核验，未更新通道清单")
+    total, pages = int(total_match[1].replace(",", "")), int(pages_match[1].replace(",", ""))
+    if total > MAX_CHANNELS or pages > MAX_CHANNELS or (total > 0 and pages < 1):
+        raise SyncError("通道清单超过上限或分页无效，未更新通道清单")
+    rows = []
+    for tr in table.walk("tr"):
+        cells = [node for node in tr.children if isinstance(node, Node) and node.tag == "td"]
+        if not cells:
+            continue
+        if total == 0 and len(cells) == 1 and cells[0].attrs.get("colspan"):
+            continue
+        if len(cells) != len(headers):
+            raise SyncError("通道行列数不一致，未更新通道清单")
+        channel_id = tr.attrs.get("data-id", "")
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", channel_id):
+            raise SyncError("通道缺少稳定 ID，未更新通道清单")
+        values = {header: cell_text(cell) for header, cell in zip(headers, cells) if header != "操作"}
+        balance, balance_currency = channel_balance(values["余额"], signed=True)
+        threshold, threshold_currency = channel_balance(values.get("余额阈值", ""))
+        status = nullable(values["状态"])
+        record = {
+            "channel_id": channel_id, "channel_name": nullable(values["通道名称"]),
+            "provider": nullable(values["支付供应商"]), "channel_type": nullable(values["通道类型"]),
+            "payment_method": nullable(values.get("支付方式", "")),
+            "min_amount": channel_decimal(values[limit_headers[0][0]]),
+            "max_amount": channel_decimal(values[limit_headers[1][0]]), "limit_currency": limit_headers[0][1],
+            "balance": balance, "balance_currency": balance_currency,
+            "balance_threshold": threshold, "balance_threshold_currency": threshold_currency,
+            "required_deposit_count": channel_integer(values.get("代收次数要求", "")),
+            "priority": channel_integer(values["优先级"]), "weight": channel_integer(values["权重"]),
+            "status_text": status, "enabled": {"已启用": True, "已禁用": False, "可用": True, "禁用": False}.get(status),
+            "notes": channel_note(values["备注"]),
+        }
+        for field in ("channel_name", "provider", "channel_type", "status_text"):
+            if not record[field] or len(record[field]) > 200:
+                raise SyncError("通道业务字段缺失或超长，未更新通道清单")
+        if record["payment_method"] is not None and len(record["payment_method"]) > 200:
+            raise SyncError("通道支付方式超长，未更新通道清单")
+        if record["min_amount"] is not None and record["max_amount"] is not None and Decimal(record["min_amount"]) > Decimal(record["max_amount"]):
+            raise SyncError("通道最小限额大于最大限额，未更新通道清单")
+        record.update({field: channel_decimal(values[header], percent=True) for header, field in CHANNEL_RATE_HEADERS.items()})
+        rows.append(record)
+    if len(rows) > total or (total == 0 and rows):
+        raise SyncError("通道行数与分页不符，未更新通道清单")
+    return Page(rows, total, pages)
+
+
 def parse_page(html_text, order_type, source_site, site_timezone, observed_at):
     parser = TreeParser()
     parser.feed(html_text)
@@ -213,7 +357,7 @@ def parse_page(html_text, order_type, source_site, site_timezone, observed_at):
         if "UID" in headers and "订单号" in headers:
             candidates.append((table, headers))
     if len(candidates) != 1:
-        raise SyncError("响应不是可识别的订单列表，可能登录已过期或页面格式改变；请重新复制 cURL")
+        raise SyncError("响应不是可识别的订单列表；请确认浏览器中的 YASH 页面已登录")
     table, headers = candidates[0]
     required = {"UID", "订单号", "完成时间", "子订单号"}
     required |= {"充值金额", "下单时间", "订单状态"} if order_type == "deposit" else {"提现金额", "手续费", "申请时间", "提现状态"}
@@ -284,7 +428,7 @@ class Config:
     def from_file(cls, path):
         path = Path(path).resolve()
         data = json.loads(path.read_text(encoding="utf-8"))
-        for key in ("site_timezone", "backfill_start", "headers_file"):
+        for key in ("site_timezone", "backfill_start"):
             if not data.get(key) or "REPLACE" in str(data[key]):
                 raise SyncError(f"请先配置 {key}")
         site_zone(data["site_timezone"])
@@ -339,7 +483,7 @@ def http_request(url, headers, body=None, purpose="source"):
             # Never log URL, response body, headers, or exceptions with credentials.
             if purpose == "upload":
                 raise SyncError(f"上传接口 HTTP {code}；激活权限或数据确认失败，断点未推进") from None
-            raise SyncError(f"后台 HTTP {code}；登录过期请运行 --refresh 更新登录请求") from None
+            raise SyncError(f"读取接口 HTTP {code}；当前窗口进度未推进") from None
         except (URLError, TimeoutError, OSError, HTTPException):
             if attempt < 3:
                 time.sleep(2 ** attempt * 2)
@@ -347,29 +491,223 @@ def http_request(url, headers, body=None, purpose="source"):
             raise SyncError("网络请求失败；当前窗口进度未推进") from None
 
 
+def yash_tab_url(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        url = urlsplit(value)
+        return url.scheme == "https" and url.hostname == "yash.y-o-admin.com" and url.port in (None, 443) and not url.username and not url.password
+    except (TypeError, ValueError):
+        return False
+
+
+class LocalCDPSocket:
+    """Minimal bounded RFC 6455 client for one existing localhost page target."""
+    def __init__(self, debugger_url):
+        try:
+            url = urlsplit(debugger_url)
+            valid = (url.scheme == "ws" and url.hostname == "127.0.0.1" and url.port == 9222
+                and not url.username and not url.password and not url.query and not url.fragment
+                and re.fullmatch(r"/devtools/page/[A-Za-z0-9_-]{1,128}", url.path))
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise SyncError("CDP 返回了非本机页面连接，已拒绝")
+        self.path = url.path
+        self.sock = None
+        self.buffer = b""
+        self.deadline = 0
+
+    def __enter__(self):
+        try:
+            self.sock = socket.create_connection(("127.0.0.1", 9222), timeout=5)
+            self.deadline = time.monotonic() + 5
+            key = base64.b64encode(os.urandom(16)).decode("ascii")
+            request = (f"GET {self.path} HTTP/1.1\r\nHost: 127.0.0.1:9222\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n")
+            self.sock.sendall(request.encode("ascii"))
+            while b"\r\n\r\n" not in self.buffer:
+                if len(self.buffer) > 32768:
+                    raise SyncError("CDP 握手响应过长")
+                self._receive()
+            header, self.buffer = self.buffer.split(b"\r\n\r\n", 1)
+            lines = header.decode("iso-8859-1").split("\r\n")
+            fields = {}
+            for line in lines[1:]:
+                name, separator, value = line.partition(":")
+                if not separator or name.lower() in fields:
+                    raise SyncError("CDP 握手无效")
+                fields[name.lower()] = value.strip()
+            expected = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()).decode("ascii")
+            if (not re.fullmatch(r"HTTP/1\.[01] 101(?: .*)?", lines[0]) or fields.get("upgrade", "").lower() != "websocket"
+                    or "upgrade" not in [part.strip().lower() for part in fields.get("connection", "").split(",")]
+                    or fields.get("sec-websocket-accept") != expected or "sec-websocket-extensions" in fields):
+                raise SyncError("CDP WebSocket 握手校验失败")
+            return self
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+
+    def __exit__(self, *_):
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
+
+    def _receive(self):
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise SyncError("CDP 读取超时，未推进同步进度")
+        self.sock.settimeout(remaining)
+        chunk = self.sock.recv(65536)
+        if not chunk:
+            raise SyncError("CDP 页面连接已关闭，请保持 YASH 页面打开")
+        self.buffer += chunk
+
+    def _read(self, size):
+        while len(self.buffer) < size:
+            self._receive()
+        result, self.buffer = self.buffer[:size], self.buffer[size:]
+        return result
+
+    def _send(self, opcode, payload):
+        mask = os.urandom(4)
+        size = len(payload)
+        if size > MAX_CDP_MESSAGE_BYTES:
+            raise SyncError("CDP 请求超过大小上限")
+        header = bytes([0x80 | opcode, 0x80 | size]) if size < 126 else bytes([0x80 | opcode, 0x80 | 126]) + struct.pack("!H", size) if size <= 65535 else bytes([0x80 | opcode, 0x80 | 127]) + struct.pack("!Q", size)
+        encoded = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+        self.sock.sendall(header + mask + encoded)
+
+    def _message(self):
+        fragments = bytearray()
+        started = False
+        while True:
+            if time.monotonic() >= self.deadline:
+                raise SyncError("CDP 读取超时")
+            first, second = self._read(2)
+            final, opcode = bool(first & 0x80), first & 15
+            if first & 0x70 or second & 0x80:
+                raise SyncError("CDP 帧格式无效")
+            size = second & 127
+            if size == 126:
+                size = struct.unpack("!H", self._read(2))[0]
+            elif size == 127:
+                size = struct.unpack("!Q", self._read(8))[0]
+            if size > MAX_CDP_MESSAGE_BYTES or len(fragments) + size > MAX_CDP_MESSAGE_BYTES:
+                raise SyncError("CDP 页面响应过大，未推进同步进度")
+            if opcode >= 8 and (not final or size > 125):
+                raise SyncError("CDP 控制帧无效")
+            payload = self._read(size)
+            if opcode == 8:
+                raise SyncError("CDP 页面连接已关闭，请保持 YASH 页面打开")
+            if opcode == 9:
+                self._send(10, payload)
+                continue
+            if opcode == 10:
+                continue
+            if opcode == 1 and not started:
+                started = True
+            elif opcode != 0 or not started:
+                raise SyncError("CDP 消息格式无效")
+            fragments.extend(payload)
+            if final:
+                return bytes(fragments).decode("utf-8")
+
+    def evaluate(self, expression):
+        self.deadline = time.monotonic() + 70
+        self._send(1, json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {
+            "expression": expression, "awaitPromise": True, "returnByValue": True, "userGesture": False,
+            "timeout": 65000, "disableBreaks": True}}, ensure_ascii=True).encode("utf-8"))
+        while time.monotonic() < self.deadline:
+            response = json.loads(self._message())
+            if not isinstance(response, dict) or response.get("id") != 1:
+                continue
+            result = response.get("result")
+            if response.get("error") or not isinstance(result, dict) or result.get("exceptionDetails"):
+                raise SyncError("YASH 浏览器读取失败；请确认当前页面已登录")
+            value = result.get("result")
+            if not isinstance(value, dict):
+                raise SyncError("CDP 页面结果格式无效，未推进同步进度")
+            return value.get("value")
+        raise SyncError("CDP 读取超时")
+
+
+class CDPClient:
+    def target(self):
+        # Do not honor proxy env vars or redirects for the loopback debugging endpoint.
+        opener = build_opener(ProxyHandler({}), NoRedirect())
+        try:
+            with opener.open(Request(CDP_HTTP + "/json/list", headers={"Accept": "application/json"}), timeout=5) as response:
+                body = response.read(1024 * 1024 + 1)
+            if len(body) > 1024 * 1024:
+                raise SyncError("CDP 标签页目录过大")
+            pages = json.loads(body)
+        except (OSError, ValueError, HTTPException, URLError):
+            raise SyncError("无法连接本机 CDP 127.0.0.1:9222；请打开支持 CDP 的浏览器并登录 YASH") from None
+        if not isinstance(pages, list):
+            raise SyncError("CDP 标签页目录格式无效")
+        candidates = [page for page in pages if isinstance(page, dict) and page.get("type") == "page"
+            and yash_tab_url(page.get("url")) and isinstance(page.get("id"), str)
+            and isinstance(page.get("webSocketDebuggerUrl"), str)
+            and page["webSocketDebuggerUrl"].endswith("/devtools/page/" + page["id"])]
+        if not candidates:
+            raise SyncError("未找到已打开的 https://yash.y-o-admin.com 页面；不会打开或跳转其他后台")
+        return sorted(candidates, key=lambda page: (urlsplit(page["url"]).path in {"/login", "/admin/login"}, page["id"]))[0]["webSocketDebuggerUrl"]
+
+    def get_html(self, path, params):
+        if path == "/paymentChannel/config":
+            if set(params) != {"tab", "page", "limit"} or params.get("tab") not in CHANNEL_TABS.values():
+                raise SyncError("只允许完整通道清单 GET")
+        elif path in ENDPOINTS.values():
+            required = {"timeType", "startDate", "endDate", "page", "limit"}
+            if not required.issubset(params) or set(params) - required - {"orderNo"} or params.get("timeType") not in {"createTime", "completeTime"}:
+                raise SyncError("只允许订单列表 GET")
+        else:
+            raise SyncError("拒绝读取非 YASH 订单或通道配置路径")
+        url = YASH_ORIGIN + path + "?" + urlencode(params)
+        # No document/cookie reads, DOM writes, tab navigation, clicks or configuration actions.
+        expression = """(async()=>{
+          if(location.origin !== %s) return {ok:false,code:'wrong_origin'};
+          const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),60000);
+          try {
+            const response=await fetch(%s,{method:'GET',mode:'same-origin',credentials:'same-origin',redirect:'error',cache:'no-store',headers:{Accept:'text/html'},signal:controller.signal});
+            if(location.origin !== %s) return {ok:false,code:'wrong_origin'};
+            if(!response.ok) return {ok:false,code:'http_error'};
+            const type=response.headers.get('content-type') || '';
+            if(type && !type.includes('text/html')) return {ok:false,code:'not_html'};
+            return {ok:true,html:await response.text()};
+          } catch (_) { return {ok:false,code:'read_failed'}; }
+          finally {clearTimeout(timer);}
+        })()""" % (json.dumps(YASH_ORIGIN), json.dumps(url), json.dumps(YASH_ORIGIN))
+        try:
+            with LocalCDPSocket(self.target()) as connection:
+                result = connection.evaluate(expression)
+        except (OSError, ValueError, HTTPException):
+            raise SyncError("本机 CDP 连接中断；请保持 YASH 页面打开，稍后自动重试") from None
+        if not isinstance(result, dict) or result.get("ok") is not True or not isinstance(result.get("html"), str):
+            raise SyncError("YASH 浏览器列表读取失败；请确认该页面已登录且有查看权限")
+        return result["html"]
+
+
 class SourceClient:
     def __init__(self, cfg):
         self.cfg = cfg
+        self.browser = CDPClient()
+
+    def fetch_channels(self, kind, page):
+        if kind not in CHANNEL_TABS or not 1 <= page <= MAX_CHANNELS:
+            raise SyncError("通道业务或页码无效")
+        # Start from a clean query: never retain vendor/type/status filters or actions.
+        params = {"tab": CHANNEL_TABS[kind], "page": page, "limit": 1000}
+        html_text = self.browser.get_html("/paymentChannel/config", params)
+        time.sleep(float(self.cfg.get("request_delay_seconds", 0.25)))
+        return parse_channel_page(html_text, kind)
 
     def fetch(self, kind, time_type, start, end, page, order_no=None):
-        document = json.loads(self.cfg.path("headers_file").read_text(encoding="utf-8"))
-        document = document.get("source_headers", document)
-        headers = document.get(kind, document.get("default", document))
-        headers = {k: str(v) for k, v in headers.items()}
-        for k, v in headers.items():
-            if "\n" in v or "\r" in v:
-                raise SyncError("请求头存在换行，请运行 python yash_sync.py --refresh")
-        headers.setdefault("Accept", "text/html")
-        headers.setdefault("X-Requested-With", "XMLHttpRequest")
         params = {"timeType": time_type, "startDate": start.astimezone(self.cfg.zone).strftime("%Y-%m-%d %H:%M:%S"), "endDate": end.astimezone(self.cfg.zone).strftime("%Y-%m-%d %H:%M:%S"), "page": page, "limit": self.cfg.get("page_limit", 1000)}
         if order_no:
             params["orderNo"] = order_no
-        url = self.cfg.get("base_url", "https://yash.y-o-admin.com").rstrip("/") + ENDPOINTS[kind] + "?" + urlencode(params)
         observed = datetime.now(UTC)
-        body, response_headers = http_request(url, headers)
-        if "json" in response_headers.get("Content-Type", ""):
-            raise SyncError("来源返回 JSON，可能登录过期；此版本按附件 HTML 解析")
-        html_text = body.decode(response_headers.get_content_charset() or "utf-8", errors="strict")
+        html_text = self.browser.get_html(ENDPOINTS[kind], params)
         time.sleep(float(self.cfg.get("request_delay_seconds", 0.25)))
         result = parse_page(html_text, kind, "yash", self.cfg.get("site_timezone"), observed)
         if result.pages > self.cfg.get("max_pages", 10000):
@@ -385,6 +723,89 @@ class SourceClient:
         if len(page.rows) != page.total or page.total > 1 or any(r["order_no"] != order_no for r in page.rows):
             raise SyncError("旧订单复查响应不符合 orderNo 过滤；请核对请求参数")
         return filter_window(page.rows, "createTime", start, end)
+
+
+def collect_channels(source, kind, stop=None):
+    def fetch(page_no):
+        if stop is not None and stop.is_set():
+            raise SyncError("通道采集已停止")
+        return source.fetch_channels(kind, page_no)
+    first = fetch(1)
+    if first.total > MAX_CHANNELS or first.pages > MAX_CHANNELS or first.total < 0 or (first.total > 0 and first.pages < 1):
+        raise SyncError("通道分页超过上限或无效，未更新通道清单")
+    rows = list(first.rows)
+    for page_no in range(2, first.pages + 1):
+        page = fetch(page_no)
+        if (page.total, page.pages) != (first.total, first.pages) or not page.rows:
+            raise SyncError("通道分页总数变化或缺页，未更新通道清单")
+        rows.extend(page.rows)
+    keys = [row["channel_id"] for row in rows]
+    if len(rows) != first.total or len(set(keys)) != first.total:
+        raise SyncError("通道分页存在重复或缺失 ID，未更新通道清单")
+    # Recheck even an empty/single-page response before declaring missing channels.
+    confirm = fetch(1)
+    if (confirm.total, confirm.pages) != (first.total, first.pages) or [row["channel_id"] for row in confirm.rows] != [row["channel_id"] for row in first.rows]:
+        raise SyncError("通道清单在采集过程中变化，未更新通道清单")
+    return rows
+
+
+def channel_sync_cycle(source, target, stop=None, *, check_only=False):
+    successful = True
+    for kind in CHANNEL_TABS:
+        if stop is not None and stop.is_set():
+            return False
+        try:
+            observed = datetime.now(UTC)
+            rows = collect_channels(source, kind, stop)
+            if stop is not None and stop.is_set():
+                return False
+            if not check_only:
+                target.channels(kind, rows, observed)
+            LOG.info("%s %s通道：完整读取 %d 条%s", "检测" if check_only else "同步", "充值" if kind == "deposit" else "提现", len(rows), "" if check_only else "，更新已确认")
+        except (SyncError, OSError, ValueError, TypeError, KeyError) as exc:
+            successful = False
+            if stop is not None and stop.is_set():
+                return False
+            # No raw rows, notes, headers or exception response bodies in logs.
+            reason = str(exc) if isinstance(exc, SyncError) else "本机配置或页面格式异常"
+            LOG.error("%s通道未更新：%s；保留原清单，下一轮重试", "充值" if kind == "deposit" else "提现", reason)
+    return successful
+
+
+def poll_channels(cfg, stop):
+    # Dedicated clients and no SQLite access keep channel polling independent of backfill.
+    source, target = SourceClient(cfg), UploadClient(cfg)
+    next_due = time.monotonic() + (0 if RUN_ON_START else CHECK_INTERVAL_SECONDS)
+    while wait_until_due(next_due, stop):
+        tick = time.monotonic()
+        channel_sync_cycle(source, target, stop)
+        next_due = tick + CHANNEL_INTERVAL_SECONDS
+
+
+def wait_until_due(next_due, stop=None):
+    while stop is None or not stop.is_set():
+        remaining = next_due - time.monotonic()
+        if remaining <= 0:
+            return True
+        delay = min(CHECK_INTERVAL_SECONDS, remaining)
+        if stop is not None:
+            if stop.wait(delay):
+                return False
+        else:
+            time.sleep(delay)
+    return False
+
+
+@contextlib.contextmanager
+def channel_polling(cfg):
+    stop = threading.Event()
+    worker = threading.Thread(target=poll_channels, args=(cfg, stop), name="yash-channels", daemon=True)
+    worker.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        worker.join(timeout=2)
 
 
 def collect_window(source, kind, time_type, start, end):
@@ -452,6 +873,19 @@ class UploadClient:
         result = self.request({"action": "check"})
         if result.get("schema_version") != 1 or result.get("source_site") != "yash":
             raise SyncError("上传接口未确认 YASH 数据范围，请重新获取激活版脚本")
+
+    def channels(self, kind, rows, observed):
+        keys = [row["channel_id"] for row in rows]
+        if kind not in CHANNEL_TABS or len(rows) > MAX_CHANNELS or len(set(keys)) != len(rows):
+            raise SyncError("通道快照格式或完整性无效，清单保持原样")
+        # A full snapshot is atomic: never split it into batches that mark others missing.
+        result = self.request({"action": "channels", "schema_version": 1, "snapshot_id": str(uuid.uuid4()),
+            "order_type": kind, "observed_at": observed.isoformat(), "source_count": len(rows),
+            "fetched_count": len(rows), "records": rows})
+        if (result.get("snapshot_applied") is not True or type(result.get("accepted")) is not int
+                or result["accepted"] != len(rows) or type(result.get("source_count")) is not int
+                or result["source_count"] != len(rows)):
+            raise SyncError("通道完整快照未确认更新，下一轮重新采集")
 
     def upsert(self, rows):
         size = min(500, int(self.cfg.get("batch_size", 200)))
@@ -656,55 +1090,6 @@ def run_cycle(cfg, state, source, target, budget_seconds=None):
 
 DEFAULT_CONFIG = Path(__file__).resolve().with_name("yash_sync_config.json")
 
-def import_curl(text):
-    # Request bash-format even on Windows: it avoids PowerShell/cmd quoting ambiguity.
-    tokens = shlex.split(text.replace("\\\r\n", "").replace("\\\n", ""))
-    if not tokens or tokens[0] != "curl":
-        raise SyncError("请使用 DevTools 的 Copy as cURL (bash)，不是 Response 或 PowerShell 格式")
-    urls, headers = [], {}
-    i = 1
-    while i < len(tokens):
-        token = tokens[i]
-        if token in {"-H", "--header", "-b", "--cookie", "--url", "-X", "--request"}:
-            if i + 1 >= len(tokens):
-                raise SyncError("cURL 参数不完整")
-            value = tokens[i + 1]
-            i += 2
-            if token in {"-H", "--header"}:
-                name, sep, content = value.partition(":")
-                if not sep or not name.strip():
-                    raise SyncError("cURL 请求头格式错误")
-                headers[name.strip().lower()] = content.strip()
-            elif token in {"-b", "--cookie"}:
-                if "=" not in value:
-                    raise SyncError("不支持 Cookie 文件路径；请复制包含 Cookie 值的请求")
-                headers["cookie"] = value
-            elif token == "--url":
-                urls.append(value)
-            elif value.upper() != "GET":
-                raise SyncError("这里只导入订单列表 GET 请求")
-        elif token.startswith(("https://", "http://")):
-            urls.append(token)
-            i += 1
-        elif token in {"--compressed", "--globoff", "-s", "--silent"}:
-            i += 1
-        else:
-            # Do not execute shell operators, body arguments or unknown flags.
-            raise SyncError("cURL 含不支持的参数，请重新复制订单列表 GET 请求（bash 格式）")
-    if len(urls) != 1:
-        raise SyncError("cURL 必须只包含一个 URL")
-    url = urlsplit(urls[0])
-    if url.scheme != "https" or url.netloc != "yash.y-o-admin.com" or url.path not in {"/admin/order/index", "/admin/order/transfer"}:
-        raise SyncError("请选中 index? 或 transfer? 订单列表请求，不要选 JS 或登录请求")
-    # urllib handles transfer framing itself; compression is deliberately not requested.
-    omit = {"host", "content-length", "connection", "accept-encoding", "content-type"}
-    headers = {k: v for k, v in headers.items() if k not in omit and not k.startswith(":")}
-    if not any(k in headers for k in ("cookie", "authorization", "x-auth-token", "x-token")):
-        raise SyncError("cURL 没有 Cookie/鉴权头；复制时请包含请求头")
-    if any("\n" in v or "\r" in v for v in headers.values()):
-        raise SyncError("请求头含换行")
-    return headers
-
 
 def private_json(path, data):
     fd, temporary = tempfile.mkstemp(prefix=".yash-config-", dir=path.parent)
@@ -722,24 +1107,6 @@ def private_json(path, data):
             os.unlink(temporary)
 
 
-def read_request(prompt):
-    print(prompt)
-    print("Chrome Network 中右键 index? 或 transfer? → Copy as cURL (bash)。")
-    print("直接粘贴全部内容，然后单独输入 END 并回车；也可输入已保存的文件路径。")
-    first = input().strip()
-    if not first:
-        raise SyncError("未输入请求")
-    if not first.startswith("curl"):
-        path = Path(first.strip('"')).expanduser()
-        return import_curl(path.read_text(encoding="utf-8-sig"))
-    lines = [first]
-    while True:
-        line = input()
-        if line.strip() == "END":
-            break
-        lines.append(line)
-    return import_curl("\n".join(lines))
-
 
 def prepare_config(path, refresh=False):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -749,8 +1116,8 @@ def prepare_config(path, refresh=False):
         data = json.loads(path.read_text(encoding="utf-8"))
     else:
         if path.exists():
-            raise SyncError("配置已存在；直接运行开始同步，更新 Cookie 用 --refresh")
-        print("YASH.BET → Hensem；充值+提现；从印度时间 2026-10-01 零点补齐；每10分钟一轮。")
+            raise SyncError("配置已存在；直接运行开始同步，修改时区用 --refresh")
+        print("YASH.BET → Hensem；充值+提现从印度时间 2026-10-01 零点补齐，每10分钟一轮；两类通道每60秒独立刷新。")
         print("上传范围已固定，无需建表或填写数据库密钥。")
         data = {
             "base_url": "https://yash.y-o-admin.com", "backfill_start": "2026-10-01 00:00:00", "backfill_timezone": "UTC+05:30",
@@ -760,24 +1127,19 @@ def prepare_config(path, refresh=False):
             "pending_checks_per_cycle": 200, "cycle_budget_seconds": 480,
             "request_delay_seconds": 0.25, "batch_size": 200, "max_pages": 10000,
             "state_file": "yash_sync_state/progress.sqlite3", "lock_file": "yash_sync_state/sync.lock",
-            "headers_file": path.name,
         }
-    headers = read_request("请粘贴充值订单列表的完整 cURL（只是解析文字，不执行命令）：")
-    source_headers = {"default": headers}
-    separate = input("提现是否需单独请求头？需要输入 y，共用登录直接回车：").strip().lower()
-    if separate == "y":
-        source_headers["withdrawal"] = read_request("请粘贴提现订单列表的完整 cURL：")
-    data["source_headers"] = source_headers
-    if not refresh:
-        print("后台时区请确认：印度时间可填 UTC+05:30，中国时间可填 UTC+08:00。")
-        zone = input("后台时区（固定 UTC 偏移或 IANA 名称）：").strip()
-        site_zone(zone)
-        data["site_timezone"] = zone
-    # Older local configuration must not retain project-wide database credentials.
-    for key in ("supabase_url", "supabase_secret_key", "secrets_file", "table"):
+    print("只连接 http://127.0.0.1:9222 中已打开的 https://yash.y-o-admin.com；请在浏览器登录，无需复制请求或 Cookie。")
+    print("后台时区请确认：印度时间可填 UTC+05:30，中国时间可填 UTC+08:00。")
+    zone = input("后台显示时区（固定 UTC 偏移或 IANA 名称" + ("，回车保留现有配置" if refresh else "") + "）：").strip()
+    if not zone and refresh:
+        zone = data.get("site_timezone", "")
+    site_zone(zone)
+    data["site_timezone"] = zone
+    # The CDP collector does not read or retain source credentials or project DB keys.
+    for key in ("supabase_url", "supabase_secret_key", "secrets_file", "table", "source_headers", "headers_file"):
         data.pop(key, None)
     private_json(path, data)
-    print("登录信息已更新，断点保留。" if refresh else "配置已保存；直接运行本程序即可检测并开始同步。")
+    print("时区配置已更新，原时区断点保留。" if refresh else "配置已保存；启动后先等10秒检查，再按订单/通道各自周期同步。")
 
 
 def main():
@@ -785,10 +1147,10 @@ def main():
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--setup", action="store_true", help="首次配置后退出")
-    group.add_argument("--refresh", action="store_true", help="更新本机登录请求，保留断点")
+    group.add_argument("--refresh", action="store_true", help="确认/修改后台显示时区；登录由浏览器管理")
     group.add_argument("--check", action="store_true", help="只读检测来源和 Supabase，不写入")
     group.add_argument("--once", action="store_true", help="补抓/同步一轮，完成后退出")
-    group.add_argument("--loop", action="store_true", help="每600秒同步，历史补抓分批继续；不并发重叠")
+    group.add_argument("--loop", action="store_true", help="订单每600秒同步，通道每60秒独立刷新；历史补抓分批继续")
     args = parser.parse_args()
     if not (args.check or args.once or args.setup or args.refresh):
         args.loop = True
@@ -808,7 +1170,7 @@ def main():
         cfg = Config.from_file(config_path)
         source, target = SourceClient(cfg), UploadClient(cfg)
         with process_lock(cfg.path("lock_file", "state/sync.lock")):
-            if args.check or args.loop:
+            if args.check:
                 target.verify()
                 end = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=int(cfg.get("settle_seconds", 60)))
                 start = max(cfg.start, end - timedelta(minutes=10))
@@ -820,24 +1182,28 @@ def main():
                         LOG.info("检测 %s %s：第一页 %d 条，窗口共 %d 条/%d 页", kind, mode, len(page.rows), page.total, page.pages)
                 LOG.info("激活接口和后台订单读取检测通过；每个完整窗口入库后继续核验笔数")
                 if args.check:
-                    return 0
+                    return 0 if channel_sync_cycle(source, target, check_only=True) else 1
             identity = [YASH_UPLOAD_URL, "schema_version:1", cfg.get("base_url"), cfg.get("site_timezone"), cfg.get("backfill_start"), cfg.get("backfill_timezone", "UTC+05:30")]
             namespace = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
             state = State(cfg.path("state_file", "state/progress.sqlite3"), namespace)
-            while True:
-                tick = time.monotonic()
-                try:
-                    run_cycle(cfg, state, source, target, budget_seconds=int(cfg.get("cycle_budget_seconds", 480)) if args.loop else None)
-                except (SyncError, OSError, ValueError) as exc:
-                    message = str(exc) if isinstance(exc, SyncError) else "配置/编码/本地文件无效，请检查配置和文件权限"
-                    LOG.error("%s", message)
+            channels_ok = channel_sync_cycle(source, target) if args.once else True
+            with channel_polling(cfg) if args.loop else contextlib.nullcontext():
+                next_due = time.monotonic() + (0 if args.once or RUN_ON_START else CHECK_INTERVAL_SECONDS)
+                if args.loop:
+                    LOG.info("CDP 固定本机9222，只读取 YASH；每%d秒检查，启动立即采集=%s；订单600秒/通道60秒", CHECK_INTERVAL_SECONDS, RUN_ON_START)
+                while wait_until_due(next_due):
+                    tick = time.monotonic()
+                    try:
+                        run_cycle(cfg, state, source, target, budget_seconds=int(cfg.get("cycle_budget_seconds", 480)) if args.loop else None)
+                    except (SyncError, OSError, ValueError) as exc:
+                        message = str(exc) if isinstance(exc, SyncError) else "配置/编码/本地文件无效，请检查配置和文件权限"
+                        LOG.error("%s", message)
+                        if args.once:
+                            return 1
                     if args.once:
-                        return 1
-                if args.once:
-                    return 0
-                remaining = max(0, int(cfg.get("interval_seconds", 600)) - (time.monotonic() - tick))
-                LOG.info("等待 %.0f 秒后开始下一轮；登录过期可用 python yash_sync.py --refresh 更新登录", remaining)
-                time.sleep(remaining)
+                        return 0 if channels_ok else 1
+                    next_due = tick + int(cfg.get("interval_seconds", 600))
+                    LOG.info("订单本轮结束，通道继续独立刷新；登录过期请在浏览器重新登录 YASH")
     except EOFError:
         LOG.error("首次配置需要交互输入；请在终端运行 python yash_sync.py")
         return 1

@@ -29,7 +29,7 @@ export function validateDashboardRoleAccess(value: unknown): DashboardRoleAccess
 }
 export function dashboardRoleAllows(access: DashboardRoleAccess | null | undefined, page: string, action = "view"): boolean {
   if(page === "collector_control")return !!access && access.canView && (access.mode === "owner" || access.mode === "assigned" && access.permissions.includes(page + ".view") && access.permissions.includes(page + "." + action));
-  return page !== "channelquality" && !!access && access.canView && (!["success_analysis", "daily_comparison"].includes(page) || access.mode !== "legacy") && (access.mode !== "assigned"
+  return page !== "channelquality" && !!access && access.canView && (!["success_analysis", "daily_comparison", "channel_status"].includes(page) || access.mode !== "legacy") && (access.mode !== "assigned"
     || access.permissions.includes(page + ".view") && access.permissions.includes(page + "." + action));
 }
 export async function readDashboardRoleAccess(session: DashboardSession, signal?: AbortSignal): Promise<DashboardRoleAccess> {

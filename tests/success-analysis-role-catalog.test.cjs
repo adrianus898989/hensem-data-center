@@ -30,7 +30,7 @@ test('success analysis catalog adds only its exact entry and three permissions w
   const before=await catalog(db),beforeMeta=await metadata(db),beforeGrants=await grants(db);
   assert.equal(await scalar(db,"select md5(prosrc) from pg_proc where oid='private.dashboard_role_catalog()'::regprocedure"),'0245134da03be7f9852c2e9a0cf62ceb');
   assert.equal(await scalar(db,"select md5(pg_get_functiondef('private.dashboard_role_catalog()'::regprocedure))"),'d0636e1c6d1613cff65a8e097a99ef85');
-  await db.exec(migration);const after=await catalog(db),currentPages=require('../src/lib/dashboardRoleCatalog.json').pages.filter(p=>!['daily_comparison','collector_control'].includes(p.id)).map(p=>({...p,requests:p.requests.filter(r=>r!=='submissionStreak')})).map(p=>p.id==='success_analysis'?{...p,requests:p.requests.filter(r=>r!=='rates')}:p),entry=currentPages.find(p=>p.id==='success_analysis');
+  await db.exec(migration);const after=await catalog(db),currentPages=require('../src/lib/dashboardRoleCatalog.json').pages.filter(p=>!['daily_comparison','collector_control','channel_status'].includes(p.id)).map(p=>({...p,requests:p.requests.filter(r=>r!=='submissionStreak')})).map(p=>p.id==='success_analysis'?{...p,requests:p.requests.filter(r=>r!=='rates')}:p),entry=currentPages.find(p=>p.id==='success_analysis');
   assert.deepEqual(after.pages.find(p=>p.id==='success_analysis'),entry);
   assert.deepEqual(after.pages,currentPages);
   assert.deepEqual(after.pages.filter(p=>p.id!=='success_analysis'),before.pages);
@@ -69,7 +69,7 @@ test('provider type reader adds rates only to the existing page, preserves nativ
  const db=await fixture();try{
   await db.exec(migration);const before=await catalog(db),meta=await metadata(db),saved=await grants(db);
   await db.exec(typeMigration);const after=await catalog(db);
-  assert.deepEqual(after.pages,require('../src/lib/dashboardRoleCatalog.json').pages.filter(p=>!['daily_comparison','collector_control'].includes(p.id)).map(p=>({...p,requests:p.requests.filter(r=>r!=='submissionStreak')})));
+  assert.deepEqual(after.pages,require('../src/lib/dashboardRoleCatalog.json').pages.filter(p=>!['daily_comparison','collector_control','channel_status'].includes(p.id)).map(p=>({...p,requests:p.requests.filter(r=>r!=='submissionStreak')})));
   assert.deepEqual(after.pages.filter(p=>p.id!=='success_analysis'),before.pages.filter(p=>p.id!=='success_analysis'));
   const old=before.pages.find(p=>p.id==='success_analysis'),now=after.pages.find(p=>p.id==='success_analysis');
   assert.deepEqual(now,{...old,requests:[...old.requests,'rates']});
