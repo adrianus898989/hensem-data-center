@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """YASH.BET → Hensem 单文件采集程序（Python 3.11+，无需 pip）。
 
-直接运行：python yash_sync.py
+持续运行并自动补历史：python yash_sync.py --loop
 连接本机 Chrome CDP，只读取已打开并登录的 YASH 页面；首次只需确认后台显示时区。
 充值、提现从 2026-10-01 补齐，每 10 分钟同步；无需建表或填写数据库密钥。
-充值、提现通道每 60 秒独立刷新；只读取配置，不修改通道或下单测试。
+充值、提现通道也每 10 分钟独立更新；只读取配置，不修改通道或下单测试。
 登录过期后在浏览器重新登录；程序会继续重试。配置时区：python yash_sync.py --refresh
 只检测：python yash_sync.py --check
-补齐一轮：python yash_sync.py --once
+只执行一轮后退出：python yash_sync.py --once（失败会返回非零；持续采集直接使用 --loop）
 
-配置和断点自动保存到本机，电脑需保持开机联网；不要分享配置或激活版脚本。
+配置和断点统一保存在 ~/Desktop/PY_DATA/yashbet/，脚本目录只需保留本文件；电脑需保持开机联网。
+旧版同目录配置与断点会安全迁移；不要分享配置或激活版脚本。
 只上传订单与通道业务字段；不上传附件、图片、视频、PDF、银行卡号或订单备注。
 通道业务备注经过脱敏，不保留原始 HTML。
 """
@@ -28,6 +29,7 @@ from pathlib import Path
 import re
 import sqlite3
 import socket
+import ssl
 import struct
 import time
 import threading
@@ -39,11 +41,12 @@ from html.parser import HTMLParser
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
-from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
+from urllib.request import Request, build_opener, HTTPRedirectHandler, HTTPSHandler, ProxyHandler
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 UTC = timezone.utc
 LOG = logging.getLogger("yash-sync")
+COLLECTOR_VERSION = "2026.10.09.6"
 # CDP / browser: fixed local debugging endpoint; existing YASH tabs only.
 CDP_HTTP = "http://127.0.0.1:9222"
 CHECK_INTERVAL_SECONDS = 10
@@ -56,8 +59,11 @@ MAX_RECEIPT_KEYS = 50000
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_WINDOW_SECONDS = 36 * 3600
 MAX_CHANNELS = 2000
-CHANNEL_INTERVAL_SECONDS = 60
+# Both streams have a fixed ten-minute cadence, including old configurations.
+SYNC_INTERVAL_SECONDS = 600
+CHANNEL_INTERVAL_SECONDS = SYNC_INTERVAL_SECONDS
 CHANNEL_TABS = {"deposit": "depositChannel", "withdrawal": "withdrawChannel"}
+CHANNEL_PATH = "/admin/paymentChannel/config"
 CHANNEL_RATE_HEADERS = {
     "近10分钟成功率": "success_rate_10m", "近30分钟成功率": "success_rate_30m",
     "近1小时成功率": "success_rate_1h", "近4小时成功率": "success_rate_4h",
@@ -465,9 +471,61 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
+def upload_tls_context():
+    """Python.org macOS installs may have no CA until its installer is run."""
+    try:
+        context = ssl.create_default_context()
+    except (OSError, ssl.SSLError):
+        raise SyncError("上传连接：Python 证书配置无法加载，请检查 SSL_CERT_FILE / SSL_CERT_DIR；未上传数据") from None
+    explicit = any(os.environ.get(name) for name in ("SSL_CERT_FILE", "SSL_CERT_DIR"))
+    if context.cert_store_stats().get("x509_ca", 0) or explicit:
+        return context
+    candidates = ["/etc/ssl/cert.pem"] if sys.platform == "darwin" else []
+    try:
+        import certifi  # Optional existing dependency; never install or download a CA.
+        candidates.append(certifi.where())
+    except ImportError:
+        pass
+    for candidate in candidates:
+        if not isinstance(candidate, str) or not Path(candidate).is_file():
+            continue
+        try:
+            context.load_verify_locations(cafile=candidate)
+        except (OSError, ssl.SSLError):
+            continue
+        if context.cert_store_stats().get("x509_ca", 0):
+            return context
+    # Hashed certificate directories load certificates on demand.
+    if ssl.get_default_verify_paths().capath:
+        return context
+    raise SyncError("上传连接：Python 没有可用的受信任证书库；请修复 Python 证书安装，断点未推进")
+
+
+def network_failure(error, purpose):
+    """Fixed diagnostic categories only: no proxy URL, headers or raw errors."""
+    reason = error.reason if isinstance(error, URLError) else error
+    retry = True
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        detail, retry = "HTTPS 证书校验失败，请检查 Python 证书库、电脑时间及代理证书", False
+    elif isinstance(reason, ssl.SSLError):
+        detail = "TLS 安全连接未完成"
+    elif isinstance(reason, socket.gaierror):
+        detail = "域名解析失败，请检查网络、DNS及代理配置"
+    elif isinstance(reason, (TimeoutError, socket.timeout)):
+        detail = "连接或读取超时，请检查网络及代理配置"
+    elif isinstance(reason, ConnectionRefusedError):
+        detail = "连接被拒绝，请检查网络及代理是否运行"
+    elif isinstance(reason, OSError) and str(reason).startswith("Tunnel connection failed: 407"):
+        detail, retry = "代理要求认证，请检查系统或环境变量中的代理配置", False
+    else:
+        detail = "连接中断，请检查网络及代理配置"
+    stage = "Supabase 上传连接" if purpose == "upload" else "读取连接"
+    return f"{stage}失败：{detail}；当前窗口进度未推进", retry
+
+
 def http_request(url, headers, body=None, purpose="source"):
     # Separate request openers prevent source authentication being sent to Supabase.
-    opener = build_opener(NoRedirect())
+    opener = build_opener(NoRedirect(), HTTPSHandler(context=upload_tls_context()))
     for attempt in range(4):
         try:
             req = Request(url, data=body, headers=headers)
@@ -481,14 +539,24 @@ def http_request(url, headers, body=None, purpose="source"):
                     time.sleep(2 ** attempt * 2)
                     continue
             # Never log URL, response body, headers, or exceptions with credentials.
+            if code == 407:
+                raise SyncError("上传连接失败：代理要求认证，请检查代理配置；断点未推进") from None
+            stage = "Supabase 上传服务" if purpose == "upload" else "读取服务"
+            if 500 <= code <= 599:
+                raise SyncError(f"{stage}暂时不可用（HTTP {code}）；当前窗口未确认，断点未推进") from None
+            if code == 429:
+                raise SyncError(f"{stage}限制请求频率（HTTP 429）；当前窗口未确认，断点未推进") from None
             if purpose == "upload":
-                raise SyncError(f"上传接口 HTTP {code}；激活权限或数据确认失败，断点未推进") from None
+                if code in (401, 403):
+                    raise SyncError(f"上传授权未通过（HTTP {code}）；请核对激活权限，断点未推进") from None
+                raise SyncError(f"上传请求未被接受（HTTP {code}）；数据未确认，断点未推进") from None
             raise SyncError(f"读取接口 HTTP {code}；当前窗口进度未推进") from None
-        except (URLError, TimeoutError, OSError, HTTPException):
-            if attempt < 3:
+        except (URLError, TimeoutError, OSError, HTTPException) as error:
+            message, retry = network_failure(error, purpose)
+            if retry and attempt < 3:
                 time.sleep(2 ** attempt * 2)
                 continue
-            raise SyncError("网络请求失败；当前窗口进度未推进") from None
+            raise SyncError(message) from None
 
 
 def yash_tab_url(value):
@@ -623,7 +691,7 @@ class LocalCDPSocket:
                 continue
             result = response.get("result")
             if response.get("error") or not isinstance(result, dict) or result.get("exceptionDetails"):
-                raise SyncError("YASH 浏览器读取失败；请确认当前页面已登录")
+                raise SyncError("YASH 浏览器未完成只读请求；页面可能已跳转或执行受限，未推进同步进度")
             value = result.get("result")
             if not isinstance(value, dict):
                 raise SyncError("CDP 页面结果格式无效，未推进同步进度")
@@ -654,7 +722,7 @@ class CDPClient:
         return sorted(candidates, key=lambda page: (urlsplit(page["url"]).path in {"/login", "/admin/login"}, page["id"]))[0]["webSocketDebuggerUrl"]
 
     def get_html(self, path, params):
-        if path == "/paymentChannel/config":
+        if path == CHANNEL_PATH:
             if set(params) != {"tab", "page", "limit"} or params.get("tab") not in CHANNEL_TABS.values():
                 raise SyncError("只允许完整通道清单 GET")
         elif path in ENDPOINTS.values():
@@ -669,13 +737,13 @@ class CDPClient:
           if(location.origin !== %s) return {ok:false,code:'wrong_origin'};
           const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),60000);
           try {
-            const response=await fetch(%s,{method:'GET',mode:'same-origin',credentials:'same-origin',redirect:'error',cache:'no-store',headers:{Accept:'text/html'},signal:controller.signal});
+            const response=await fetch(%s,{method:'GET',mode:'same-origin',credentials:'same-origin',redirect:'error',cache:'no-store',headers:{Accept:'text/html','X-Requested-With':'XMLHttpRequest'},signal:controller.signal});
             if(location.origin !== %s) return {ok:false,code:'wrong_origin'};
-            if(!response.ok) return {ok:false,code:'http_error'};
-            const type=response.headers.get('content-type') || '';
-            if(type && !type.includes('text/html')) return {ok:false,code:'not_html'};
+            if(!response.ok) return {ok:false,code:'http_error',status:response.status};
+            const type=(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+            if(type && !['text/html','application/xhtml+xml'].includes(type)) return {ok:false,code:'not_html',mime:type};
             return {ok:true,html:await response.text()};
-          } catch (_) { return {ok:false,code:'read_failed'}; }
+          } catch (error) { return {ok:false,code:error && error.name==='AbortError'?'read_timeout':'read_failed'}; }
           finally {clearTimeout(timer);}
         })()""" % (json.dumps(YASH_ORIGIN), json.dumps(url), json.dumps(YASH_ORIGIN))
         try:
@@ -684,7 +752,34 @@ class CDPClient:
         except (OSError, ValueError, HTTPException):
             raise SyncError("本机 CDP 连接中断；请保持 YASH 页面打开，稍后自动重试") from None
         if not isinstance(result, dict) or result.get("ok") is not True or not isinstance(result.get("html"), str):
-            raise SyncError("YASH 浏览器列表读取失败；请确认该页面已登录且有查看权限")
+            # Report only fixed categories and bounded HTTP metadata, never source bodies,
+            # headers, exception strings or URLs that may contain authentication details.
+            result = result if isinstance(result, dict) else {}
+            code = result.get("code")
+            reason = "浏览器返回格式无效"
+            if code == "wrong_origin":
+                reason = "选中的标签页已离开固定 YASH 后台，请保持该页面打开"
+            elif code == "http_error":
+                status = result.get("status")
+                if type(status) is int and 100 <= status <= 599:
+                    reason = f"接口 HTTP {status}"
+                    if status in (401, 403):
+                        reason += "，请在浏览器确认登录及查看权限"
+                    elif status == 404:
+                        reason += "，源后台未找到该列表地址"
+                    elif status == 429:
+                        reason += "，源后台限制请求频率"
+                else:
+                    reason = "接口返回 HTTP 错误"
+            elif code == "not_html":
+                mime = result.get("mime")
+                category = {"application/json": "JSON", "text/plain": "纯文本", "application/octet-stream": "二进制"}.get(mime, "非 HTML") if isinstance(mime, str) else "非 HTML"
+                reason = f"接口返回 {category}，并非订单或通道列表；请在浏览器查看该页是否有登录或权限提示"
+            elif code == "read_timeout":
+                reason = "源后台请求超过 60 秒"
+            elif code == "read_failed":
+                reason = "浏览器请求失败（网络中断、请求被拦截或发生重定向）；请在浏览器确认该列表能正常打开"
+            raise SyncError(f"YASH 读取 {path} 失败：{reason}；未推进同步进度")
         return result["html"]
 
 
@@ -698,7 +793,7 @@ class SourceClient:
             raise SyncError("通道业务或页码无效")
         # Start from a clean query: never retain vendor/type/status filters or actions.
         params = {"tab": CHANNEL_TABS[kind], "page": page, "limit": 1000}
-        html_text = self.browser.get_html("/paymentChannel/config", params)
+        html_text = self.browser.get_html(CHANNEL_PATH, params)
         time.sleep(float(self.cfg.get("request_delay_seconds", 0.25)))
         return parse_channel_page(html_text, kind)
 
@@ -956,7 +1051,7 @@ class State:
 
 @contextlib.contextmanager
 def process_lock(path):
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with path.open("a+b") as handle:
         handle.seek(0)
         if not handle.read(1):
@@ -1088,7 +1183,21 @@ def run_cycle(cfg, state, source, target, budget_seconds=None):
     LOG.info("本轮完成；充值、提现四个时间视图已追平")
 
 
-DEFAULT_CONFIG = Path(__file__).resolve().with_name("yash_sync_config.json")
+def application_data_directory():
+    return Path.home() / "Desktop" / "PY_DATA" / "yashbet"
+
+
+def previous_application_data_directory():
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "YASHBET"
+    variable, fallback = ("LOCALAPPDATA", Path.home() / "AppData" / "Local") if sys.platform == "win32" else ("XDG_STATE_HOME", Path.home() / ".local" / "state")
+    configured = Path(os.environ.get(variable, "")).expanduser()
+    return (configured if configured.is_absolute() else fallback) / "YASHBET"
+
+
+DEFAULT_CONFIG = application_data_directory() / "yash_sync_config.json"
+LEGACY_CONFIG = Path(__file__).resolve().with_name("yash_sync_config.json")
+PREVIOUS_CONFIG = previous_application_data_directory() / "yash_sync_config.json"
 
 
 def private_json(path, data):
@@ -1107,6 +1216,137 @@ def private_json(path, data):
             os.unlink(temporary)
 
 
+def migrate_legacy_config(destination, legacy=None):
+    """Caller holds the new storage lock; never overwrite or merge existing state."""
+    legacy = LEGACY_CONFIG if legacy is None else Path(legacy)
+    destination = Path(destination)
+    if legacy == destination or not legacy.exists():
+        return False
+    if destination.exists():
+        LOG.info("已使用 PY_DATA/yashbet 配置；旧目录文件保留，不覆盖已有断点")
+        return False
+    if legacy.is_symlink():
+        raise SyncError("旧配置是链接，未自动搬移；原文件保持不变")
+    legacy = legacy.parent.resolve() / legacy.name
+    cfg = Config.from_file(legacy)
+    source_state = cfg.path("state_file", "state/progress.sqlite3")
+    source_lock = cfg.path("lock_file", "state/sync.lock")
+    # Only known files from this collector's old defaults are eligible for removal.
+    allowed_states = {legacy.parent / name / "progress.sqlite3" for name in ("state", "yash_sync_state")}
+    allowed_locks = {legacy.parent / name / "sync.lock" for name in ("state", "yash_sync_state")}
+    if (source_state.absolute() not in allowed_states or source_lock.absolute() not in allowed_locks
+            or any(path.is_symlink() or path.parent.is_symlink() for path in (source_state, source_lock))
+            or any(Path(str(source_state) + suffix).is_symlink() for suffix in ("-wal", "-shm", "-journal"))):
+        raise SyncError("检测到自定义或链接断点路径，未自动搬移；旧文件保持不变，可继续使用 --config 指定旧配置")
+    target_state = destination.parent / "state" / "progress.sqlite3"
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    published = []
+    committed = False
+    with process_lock(source_lock):
+        original = legacy.read_bytes()
+        # A concurrent old --refresh does not take its process lock; reject changed config.
+        if json.loads(original) != cfg.data:
+            raise SyncError("旧配置正在变化，未搬移；请先停止旧版程序后重试")
+        if destination.exists() or any(Path(str(target_state) + suffix).exists() for suffix in ("", "-wal", "-shm", "-journal")):
+            raise SyncError("PY_DATA/yashbet 已有配置或断点，未覆盖；旧文件保持不变")
+        if not source_state.exists() and any(Path(str(source_state) + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
+            raise SyncError("旧断点主文件缺失但仍有日志，未搬移；请保留旧目录")
+        with tempfile.TemporaryDirectory(prefix=".yash-migrate-", dir=destination.parent) as staging:
+            staged_state = Path(staging) / "progress.sqlite3"
+            staged_config = Path(staging) / "config.json"
+            try:
+                if source_state.exists():
+                    # Hold the writer reservation while backup reads committed WAL pages.
+                    # A byte copy/rename of only the .sqlite3 file would lose that progress.
+                    with contextlib.closing(sqlite3.connect(source_state, timeout=0, isolation_level=None)) as guard:
+                        guard.execute("begin immediate")
+                        try:
+                            with contextlib.closing(sqlite3.connect(source_state.as_uri() + "?mode=ro", uri=True, timeout=0)) as reader, contextlib.closing(sqlite3.connect(staged_state)) as copy:
+                                deadline = time.monotonic() + 30
+                                def backup_progress(status, remaining, total):
+                                    if status in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or time.monotonic() > deadline:
+                                        raise SyncError("旧断点正在使用或迁移超时，未搬移；请先停止旧版程序")
+                                reader.backup(copy, pages=256, progress=backup_progress)
+                                if copy.execute("pragma quick_check").fetchall() != [("ok",)]:
+                                    raise SyncError("旧断点完整性检查未通过，未搬移；请保留旧目录")
+                        finally:
+                            guard.execute("rollback")
+                        checkpoint = guard.execute("pragma wal_checkpoint(truncate)").fetchone()
+                        if checkpoint and checkpoint[0] != 0:
+                            raise SyncError("旧断点仍有活动读取，未搬移；请先停止旧版程序")
+                    if os.name != "nt":
+                        staged_state.chmod(0o600)
+                data = dict(cfg.data)
+                data.update(state_file="state/progress.sqlite3", lock_file="state/sync.lock")
+                for key in ("supabase_url", "supabase_secret_key", "secrets_file", "table", "source_headers", "headers_file"):
+                    data.pop(key, None)
+                private_json(staged_config, data)
+                if legacy.read_bytes() != original:
+                    raise SyncError("旧配置正在变化，未搬移；请先停止旧版程序后重试")
+                if staged_state.exists():
+                    target_state.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    # Exclusive publication also protects against an unexpected existing file.
+                    os.link(staged_state, target_state)
+                    published.append(target_state)
+                os.link(staged_config, destination)
+                published.append(destination)
+                committed = True
+            except sqlite3.Error:
+                raise SyncError("旧断点正在使用或无法完整读取，未搬移；原配置和断点保持不变") from None
+            finally:
+                if not committed:
+                    for path in reversed(published):
+                        path.unlink()
+        # Only remove originals after both new files are fully committed and checked.
+        legacy.unlink()
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            Path(str(source_state) + suffix).unlink(missing_ok=True)
+    source_lock.unlink(missing_ok=True)
+    for directory in {source_state.parent, source_lock.parent}:
+        try:
+            directory.rmdir()  # Keep any unrelated files in the old directory.
+        except OSError:
+            pass
+    LOG.info("配置与断点已迁至 ~/Desktop/PY_DATA/yashbet/，原时区和全部同步进度已保留")
+    return True
+
+
+def migrate_previous_locations(destination):
+    """Recognize the two shipped layouts without choosing between conflicting histories."""
+    destination = Path(destination)
+    candidates = {}
+    for location in (LEGACY_CONFIG, PREVIOUS_CONFIG):
+        location = Path(location)
+        resolved = location.resolve()
+        has_state = any((location.parent / name / ("progress.sqlite3" + suffix)).exists()
+            for name in ("state", "yash_sync_state") for suffix in ("", "-wal", "-shm", "-journal"))
+        if resolved != destination.resolve() and (location.exists() or has_state):
+            candidates[resolved] = location
+    if not candidates:
+        return False
+    if destination.exists():
+        LOG.info("已使用 PY_DATA/yashbet 配置；旧目录文件保留，不覆盖已有断点")
+        return False
+    if len(candidates) != 1:
+        raise SyncError("脚本旁和旧应用目录都存在 YASH 配置或进度，未自动选择或合并；两处原文件均保留")
+    location = next(iter(candidates.values()))
+    if not location.exists():
+        raise SyncError("旧目录有 YASH 断点但缺少配置，未新建或合并进度；请保留旧文件")
+    if location.resolve() == PREVIOUS_CONFIG.resolve():
+        # Version .3 holds this outer lock even during setup/refresh before sync.lock.
+        old_storage_lock = location.parent / "storage.lock"
+        with process_lock(old_storage_lock):
+            migrated = migrate_legacy_config(destination, location)
+        if migrated:
+            old_storage_lock.unlink(missing_ok=True)
+            try:
+                location.parent.rmdir()
+            except OSError:
+                pass  # Any unrelated files still belong to the user.
+        return migrated
+    return migrate_legacy_config(destination, location)
+
+
 
 def prepare_config(path, refresh=False):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1117,16 +1357,16 @@ def prepare_config(path, refresh=False):
     else:
         if path.exists():
             raise SyncError("配置已存在；直接运行开始同步，修改时区用 --refresh")
-        print("YASH.BET → Hensem；充值+提现从印度时间 2026-10-01 零点补齐，每10分钟一轮；两类通道每60秒独立刷新。")
+        print("YASH.BET → Hensem；充值+提现从印度时间 2026-10-01 零点补齐；订单和两类通道均每10分钟独立更新。")
         print("上传范围已固定，无需建表或填写数据库密钥。")
         data = {
             "base_url": "https://yash.y-o-admin.com", "backfill_start": "2026-10-01 00:00:00", "backfill_timezone": "UTC+05:30",
-            "interval_seconds": 600, "page_limit": 1000,
+            "interval_seconds": SYNC_INTERVAL_SECONDS, "page_limit": 1000,
             "window_seconds": 3600, "overlap_seconds": 3600, "settle_seconds": 60,
             "reconcile_days": 7, "reconcile_interval_seconds": 86400,
             "pending_checks_per_cycle": 200, "cycle_budget_seconds": 480,
             "request_delay_seconds": 0.25, "batch_size": 200, "max_pages": 10000,
-            "state_file": "yash_sync_state/progress.sqlite3", "lock_file": "yash_sync_state/sync.lock",
+            "state_file": "state/progress.sqlite3", "lock_file": "state/sync.lock",
         }
     print("只连接 http://127.0.0.1:9222 中已打开的 https://yash.y-o-admin.com；请在浏览器登录，无需复制请求或 Cookie。")
     print("后台时区请确认：印度时间可填 UTC+05:30，中国时间可填 UTC+08:00。")
@@ -1150,15 +1390,20 @@ def main():
     group.add_argument("--refresh", action="store_true", help="确认/修改后台显示时区；登录由浏览器管理")
     group.add_argument("--check", action="store_true", help="只读检测来源和 Supabase，不写入")
     group.add_argument("--once", action="store_true", help="补抓/同步一轮，完成后退出")
-    group.add_argument("--loop", action="store_true", help="订单每600秒同步，通道每60秒独立刷新；历史补抓分批继续")
+    group.add_argument("--loop", action="store_true", help="订单和通道均每10分钟更新；自动补抓历史，临时失败保留断点并继续")
     args = parser.parse_args()
     if not (args.check or args.once or args.setup or args.refresh):
         args.loop = True
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    LOG.info("YASH CDP 版本 %s · 固定本机9222 · 只读采集", COLLECTOR_VERSION)
     state = None
+    resources = contextlib.ExitStack()
     try:
         UploadClient(None).headers()
         config_path = Path(args.config).expanduser().resolve()
+        if config_path == DEFAULT_CONFIG.resolve():
+            resources.enter_context(process_lock(config_path.parent / "storage.lock"))
+            migrate_previous_locations(config_path)
         if args.refresh:
             prepare_config(config_path, refresh=True)
             return 0
@@ -1169,41 +1414,42 @@ def main():
             prepare_config(config_path)
         cfg = Config.from_file(config_path)
         source, target = SourceClient(cfg), UploadClient(cfg)
-        with process_lock(cfg.path("lock_file", "state/sync.lock")):
+        resources.enter_context(process_lock(cfg.path("lock_file", "state/sync.lock")))
+        if args.check:
+            target.verify()
+            end = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=int(cfg.get("settle_seconds", 60)))
+            start = max(cfg.start, end - timedelta(minutes=10))
+            if start > end:
+                raise SyncError("补抓开始日期在未来")
+            for kind in ENDPOINTS:
+                for mode in ("createTime", "completeTime"):
+                    page = source.fetch(kind, mode, start, end, 1)
+                    LOG.info("检测 %s %s：第一页 %d 条，窗口共 %d 条/%d 页", kind, mode, len(page.rows), page.total, page.pages)
+            LOG.info("激活接口和后台订单读取检测通过；每个完整窗口入库后继续核验笔数")
             if args.check:
-                target.verify()
-                end = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=int(cfg.get("settle_seconds", 60)))
-                start = max(cfg.start, end - timedelta(minutes=10))
-                if start > end:
-                    raise SyncError("补抓开始日期在未来")
-                for kind in ENDPOINTS:
-                    for mode in ("createTime", "completeTime"):
-                        page = source.fetch(kind, mode, start, end, 1)
-                        LOG.info("检测 %s %s：第一页 %d 条，窗口共 %d 条/%d 页", kind, mode, len(page.rows), page.total, page.pages)
-                LOG.info("激活接口和后台订单读取检测通过；每个完整窗口入库后继续核验笔数")
-                if args.check:
-                    return 0 if channel_sync_cycle(source, target, check_only=True) else 1
-            identity = [YASH_UPLOAD_URL, "schema_version:1", cfg.get("base_url"), cfg.get("site_timezone"), cfg.get("backfill_start"), cfg.get("backfill_timezone", "UTC+05:30")]
-            namespace = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
-            state = State(cfg.path("state_file", "state/progress.sqlite3"), namespace)
-            channels_ok = channel_sync_cycle(source, target) if args.once else True
-            with channel_polling(cfg) if args.loop else contextlib.nullcontext():
-                next_due = time.monotonic() + (0 if args.once or RUN_ON_START else CHECK_INTERVAL_SECONDS)
-                if args.loop:
-                    LOG.info("CDP 固定本机9222，只读取 YASH；每%d秒检查，启动立即采集=%s；订单600秒/通道60秒", CHECK_INTERVAL_SECONDS, RUN_ON_START)
-                while wait_until_due(next_due):
-                    tick = time.monotonic()
-                    try:
-                        run_cycle(cfg, state, source, target, budget_seconds=int(cfg.get("cycle_budget_seconds", 480)) if args.loop else None)
-                    except (SyncError, OSError, ValueError) as exc:
-                        message = str(exc) if isinstance(exc, SyncError) else "配置/编码/本地文件无效，请检查配置和文件权限"
-                        LOG.error("%s", message)
-                        if args.once:
-                            return 1
+                return 0 if channel_sync_cycle(source, target, check_only=True) else 1
+        identity = [YASH_UPLOAD_URL, "schema_version:1", cfg.get("base_url"), cfg.get("site_timezone"), cfg.get("backfill_start"), cfg.get("backfill_timezone", "UTC+05:30")]
+        namespace = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+        state = State(cfg.path("state_file", "state/progress.sqlite3"), namespace)
+        channels_ok = channel_sync_cycle(source, target) if args.once else True
+        with channel_polling(cfg) if args.loop else contextlib.nullcontext():
+            next_due = time.monotonic() + (0 if args.once or RUN_ON_START else CHECK_INTERVAL_SECONDS)
+            if args.loop:
+                LOG.info("CDP 固定本机9222，只读取 YASH；每%d秒检查，启动立即采集=%s；订单和通道均每10分钟更新（旧配置也适用）", CHECK_INTERVAL_SECONDS, RUN_ON_START)
+            while wait_until_due(next_due):
+                tick = time.monotonic()
+                try:
+                    run_cycle(cfg, state, source, target, budget_seconds=int(cfg.get("cycle_budget_seconds", 480)) if args.loop else None)
+                except (SyncError, OSError, ValueError) as exc:
+                    message = str(exc) if isinstance(exc, SyncError) else "配置/编码/本地文件无效，请检查配置和文件权限"
+                    LOG.error("%s", message)
                     if args.once:
-                        return 0 if channels_ok else 1
-                    next_due = tick + int(cfg.get("interval_seconds", 600))
-                    LOG.info("订单本轮结束，通道继续独立刷新；登录过期请在浏览器重新登录 YASH")
+                        return 1
+                    LOG.info("持续同步仍在运行：未完成窗口保留原断点，下一轮自动重试；通道独立按10分钟周期更新")
+                if args.once:
+                    return 0 if channels_ok else 1
+                next_due = tick + SYNC_INTERVAL_SECONDS
+                LOG.info("订单本轮结束，通道继续独立刷新；登录过期请在浏览器重新登录 YASH")
     except EOFError:
         LOG.error("首次配置需要交互输入；请在终端运行 python yash_sync.py")
         return 1
@@ -1217,8 +1463,11 @@ def main():
         LOG.info("已停止；下次启动按保存进度继续")
         return 0
     finally:
-        if state:
-            state.close()
+        try:
+            if state:
+                state.close()
+        finally:
+            resources.close()
 
 
 if __name__ == "__main__":
