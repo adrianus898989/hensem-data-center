@@ -106,8 +106,12 @@ def decimal_text(value, *, signed=False, percent=False):
     if not number.is_finite() or (not signed and number < 0) or (percent and number > 100):
         raise SyncError("SOURCE_DECIMAL_RANGE")
     result = format(number, "f")
+    if "." in result:
+        result = result.rstrip("0").rstrip(".")
+    if number == 0:
+        result = "0"
     digits = result.lstrip("-").split(".")
-    if len(digits[0].lstrip("0")) > 16 or (len(digits) == 2 and len(digits[1].rstrip("0")) > 8):
+    if len(digits[0].lstrip("0")) > 16 or (len(digits) == 2 and len(digits[1]) > 8):
         raise SyncError("SOURCE_DECIMAL_PRECISION")
     return result
 

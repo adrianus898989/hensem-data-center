@@ -93,7 +93,30 @@ class NormalizationTests(unittest.TestCase):
         self.assertNotIn("success_rate_10m", rates)
         for bad in ('{"recent30Minutes":90}', '{"10m":0.8}', '99%', '{"15m":-0.1}', '{"15m":true}'):
             with self.subTest(bad=bad): self.assertTrue(all(v is None for v in C.success_rates(bad).values()))
-        self.assertEqual(C.success_rates('{"recent30Minutes":0.587,"notKnown":12}')["success_rate_30m"], "58.700")
+        self.assertEqual(C.success_rates('{"recent30Minutes":0.587,"notKnown":12}')["success_rate_30m"], "58.7")
+
+    def test_decimal_canonical_output_removes_only_insignificant_zeros(self):
+        examples = {"100.0000000000": "100", "123.4500000000": "123.45",
+                    "0.123456780000": "0.12345678", "1.000000010000": "1.00000001",
+                    "0": "0", "0.0000000000": "0", "-0": "0", "-0.0000000000": "0"}
+        for value, expected in examples.items():
+            with self.subTest(value=value):
+                self.assertEqual(C.decimal_text(Decimal(value)), expected)
+                self.assertEqual(C.decimal_text(value, signed=True), expected)
+        self.assertEqual(C.decimal_text("-123.4500000000", signed=True), "-123.45")
+        for value in ("0.123456789", "100.000000001", "0.000000001", "-0.000000001"):
+            with self.subTest(value=value), self.assertRaisesRegex(C.SyncError, "SOURCE_DECIMAL_PRECISION"):
+                C.decimal_text(value, signed=True)
+
+    def test_all_normalized_decimal_fields_use_canonical_strings(self):
+        normalized = C.normalize_record(row(303619, minAmount=Decimal("100.0000000000"),
+                                             maxAmount=Decimal("50000.1250000000"), thirdBalance=Decimal("-0.0000000000"),
+                                             autoCloseBalance=Decimal("123.4500000000"), thirdPayFeeRate=Decimal("0.0150000000"),
+                                             thirdPayFeeAmount=Decimal("2.0000000000"), weight=Decimal("0.1250000000"),
+                                             recent15MinutesCount=Decimal("0.50000000")), "1102", 0)
+        self.assertEqual({field: normalized[field] for field in ("min_amount", "max_amount", "balance", "balance_threshold", "fee_rate", "fee_amount", "weight", "success_rate_15m")},
+                         {"min_amount": "100", "max_amount": "50000.125", "balance": "0", "balance_threshold": "123.45",
+                          "fee_rate": "0.015", "fee_amount": "2", "weight": "0.125", "success_rate_15m": "50"})
 
     def test_native_rate_count_fields_are_ratios_even_when_info_is_text(self):
         rates = C.success_rates_from_row({"recent15MinutesCount": Decimal("0.587"), "recent30MinutesCount": Decimal("0.638"),
