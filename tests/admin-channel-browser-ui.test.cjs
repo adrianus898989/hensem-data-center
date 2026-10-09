@@ -25,6 +25,16 @@ test('full authorized directory paginates independently and first automatic requ
  h.context.liveChannelSearch('AR 43');assert.match(h.mod.render(),/共 1 个 · 1–1/);assert.equal(h.calls.length,1);assert.equal(h.mod.capture().platformId,catalog[0].id);
 });
 
+
+test('directory distinguishes an unread platform, a read without a snapshot, and a received zero-channel snapshot',async()=>{
+ const second=platform(2),h=fixture({catalog:[AR,second]});await h.start();
+ const sidebar=()=>h.mod.render().split('<article>')[0],label=name=>new RegExp('<strong>'+name+'</strong><small>([^<]*)</small>').exec(sidebar())?.[1];
+ assert.equal(label(second.name),'待读取');assert.equal(h.calls.length,1);assert.doesNotMatch(sidebar(),/未采集/);
+ h.setHandler(()=>response(second,[],{snapshots:['charge','withdraw'].map(direction=>({platformId:second.id,source:'ar_middle',direction,observedAt:null,complete:false,sourceCount:null,channels:[]}))}));
+ h.context.liveChannelSelect(1);await flush();assert.equal(label(second.name),'尚未收到快照');assert.match(h.mod.render(),/尚未收到完整通道快照/);assert.equal(h.calls.length,2);
+ h.setHandler(()=>response(second,[]));await h.mod.load();assert.match(label(second.name),/10\/09 10:30/);assert.match(h.mod.render(),/0 个当前通道/);assert.match(h.mod.render(),/已采集，暂无通道/);assert.equal(h.calls.length,3);assert.doesNotMatch(sidebar(),/未采集|待读取|尚未收到快照/);
+});
+
 test('source and country tabs come only from directory and keep different source caches and exports isolated',async()=>{
  const BR=platform(3,{country:'巴西'}),h=fixture({catalog:[AR,BR,YASH]});await h.start();assert.match(h.mod.render(),/AR 系统/);assert.match(h.mod.render(),/YASH 系统/);assert.match(h.mod.render(),/巴西/);
  h.context.liveChannelCountry(1);await flush();assert.equal(h.calls[1].platformIds[0],BR.id);h.context.liveChannelCountry(0);await flush();assert.equal(h.calls.length,2);
