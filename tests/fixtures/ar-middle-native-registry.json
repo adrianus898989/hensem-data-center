@@ -1,0 +1,412 @@
+[
+  {
+    "platform_id": "b146bd7e-dc64-f7d0-6e2b-af1edecd5fac",
+    "source_system": "AR",
+    "country_code": "BR",
+    "source_platform": "POP555",
+    "team_name": "M8",
+    "timezone": "America/Sao_Paulo",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "2cc7b1cb-ba7e-ce93-7513-fe659ff0299a",
+    "source_system": "AR",
+    "country_code": "BR",
+    "source_platform": "POP678",
+    "team_name": "M8",
+    "timezone": "America/Sao_Paulo",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "0e1520d2-7fb5-7104-8030-a652765967df",
+    "source_system": "AR",
+    "country_code": "BR",
+    "source_platform": "POP888",
+    "team_name": "M8",
+    "timezone": "America/Sao_Paulo",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "ee3282fa-a863-20a3-4073-5624abfc8912",
+    "source_system": "AR",
+    "country_code": "BR",
+    "source_platform": "POPBEM",
+    "team_name": "M8",
+    "timezone": "America/Sao_Paulo",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "507f223c-93c0-8331-ebf0-8da771882608",
+    "source_system": "AR",
+    "country_code": "BR",
+    "source_platform": "POPBRA",
+    "team_name": "M8",
+    "timezone": "America/Sao_Paulo",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "951d95d1-89fa-ec96-b1a7-3e8b0aa11d41",
+    "source_system": "AR",
+    "country_code": "BR",
+    "source_platform": "POPCEU",
+    "team_name": "M8",
+    "timezone": "America/Sao_Paulo",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "6a118e56-f4af-5d03-cc4e-9734dc407ad3",
+    "source_system": "AR",
+    "country_code": "BR",
+    "source_platform": "POPLUA",
+    "team_name": "M8",
+    "timezone": "America/Sao_Paulo",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "2f33cb0d-d3f2-a967-95b8-d3f892319bf1",
+    "source_system": "AR",
+    "country_code": "BR",
+    "source_platform": "POPPG",
+    "team_name": "M8",
+    "timezone": "America/Sao_Paulo",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "acdeebb2-fb0a-e01b-e00d-c18506ecbe19",
+    "source_system": "AR",
+    "country_code": "ID",
+    "source_platform": "55FIVE",
+    "team_name": "M8",
+    "timezone": "Asia/Jakarta",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "e7c4101c-bd8e-d51d-436a-6ffa61077937",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "51GAME",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "5004c450-fef5-1ce9-d4b1-a61055cc0e2f",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "55CLUB",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "731dd8f6-db82-eef0-da03-99211387e514",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "6CLUB",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "3aa6d428-6da6-fa9b-3a61-2b269ce2c8f0",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "82LOTTERY",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "5e952cbb-e42f-d6b1-a24a-a0d42d165df9",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "91CLUB",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "b40ec767-829c-db68-d774-a940150deb2a",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "BIGMUMBAI",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "0c93b920-a24b-84f1-bba4-f4df868f6910",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "IN999",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "5c4e9b73-6a94-053f-c42c-22a35e03f959",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "JAICLUB",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "72b27b17-4cdd-8d41-e39a-875ff42cd25a",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "JALWA",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "40433510-a19b-1810-6ec0-2b32be9e1f72",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "LOTTERY7",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "43766f8a-87dd-8aab-e8c7-9d4853cdbca2",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "OKWIN",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "f6de813a-d0da-804d-e1e1-d38e4cc287a8",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "RAJA",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "fef148af-9325-e1b7-5daf-73c0e796d8a4",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "Shree.Win",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "57cd0f0e-c685-8be1-dc2b-52c9672e33df",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "TPPLAY",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "dba5345b-e924-e014-5bda-f4abc8895925",
+    "source_system": "AR",
+    "country_code": "IN",
+    "source_platform": "Veer.Game",
+    "team_name": "M8",
+    "timezone": "Asia/Kolkata",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "deb63af0-6724-d59c-8020-405d52d1e6cf",
+    "source_system": "AR",
+    "country_code": "MM",
+    "source_platform": "6LOTTERY",
+    "team_name": "M8",
+    "timezone": "Asia/Yangon",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "97ff76b2-dd16-0bbd-48fd-f0ad674b6c65",
+    "source_system": "AR",
+    "country_code": "MY",
+    "source_platform": "MZPLAY",
+    "team_name": "M8",
+    "timezone": "Asia/Kuala_Lumpur",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "3cba3f71-b9cf-42e6-f82b-b7a87963b1fe",
+    "source_system": "AR",
+    "country_code": "NG",
+    "source_platform": "FB999",
+    "team_name": "M8",
+    "timezone": "Africa/Lagos",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "904018b5-ead4-1f78-4c51-fc6ff938a872",
+    "source_system": "AR",
+    "country_code": "PK",
+    "source_platform": "92.GAME",
+    "team_name": "M8",
+    "timezone": "Asia/Karachi",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "8566c52a-797d-f24b-eb1b-2abfc254b08a",
+    "source_system": "AR",
+    "country_code": "PK",
+    "source_platform": "92COCO",
+    "team_name": "M8",
+    "timezone": "Asia/Karachi",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "ce7ee60b-d638-870d-2a02-52f47ed02bc6",
+    "source_system": "AR",
+    "country_code": "PK",
+    "source_platform": "92DADU",
+    "team_name": "M8",
+    "timezone": "Asia/Karachi",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "38d3b066-042f-b68c-6f67-62101a6d2834",
+    "source_system": "AR",
+    "country_code": "PK",
+    "source_platform": "92GLORY",
+    "team_name": "M8",
+    "timezone": "Asia/Karachi",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "ff64568e-0ed7-ca38-5538-ac196dd9e1e9",
+    "source_system": "AR",
+    "country_code": "PK",
+    "source_platform": "92GO",
+    "team_name": "M8",
+    "timezone": "Asia/Karachi",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "aee568b5-987b-aeec-e596-4f45cfdb471a",
+    "source_system": "AR",
+    "country_code": "PK",
+    "source_platform": "92PKR",
+    "team_name": "M8",
+    "timezone": "Asia/Karachi",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "bb0dc219-7bdb-27fb-c8b1-94dd2c922a35",
+    "source_system": "AR",
+    "country_code": "PK",
+    "source_platform": "92R",
+    "team_name": "M8",
+    "timezone": "Asia/Karachi",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "eafb312f-4221-225b-11ac-344ca712afd0",
+    "source_system": "AR",
+    "country_code": "PK",
+    "source_platform": "92STAR",
+    "team_name": "M8",
+    "timezone": "Asia/Karachi",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "11d55f3a-12a6-f6a8-51cf-b74ee412c496",
+    "source_system": "AR",
+    "country_code": "PK",
+    "source_platform": "92STRIKE",
+    "team_name": "M8",
+    "timezone": "Asia/Karachi",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "1a8720da-5bb1-f35f-70d6-5e124fdbd510",
+    "source_system": "AR",
+    "country_code": "PK",
+    "source_platform": "YAYWIN",
+    "team_name": "M8",
+    "timezone": "Asia/Karachi",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "dee4f36f-c1f5-fd9f-1c92-b4a801a5ee34",
+    "source_system": "AR",
+    "country_code": "VN",
+    "source_platform": "66CLUB",
+    "team_name": "M8",
+    "timezone": "Asia/Ho_Chi_Minh",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "3e9bb7e6-d192-dd9f-6731-cb20c76bcb21",
+    "source_system": "AR",
+    "country_code": "VN",
+    "source_platform": "82VN",
+    "team_name": "M8",
+    "timezone": "Asia/Ho_Chi_Minh",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "bf516e7b-f74e-cdeb-1e5b-fae110e838bb",
+    "source_system": "AR",
+    "country_code": "VN",
+    "source_platform": "92LOTTERY",
+    "team_name": "M8",
+    "timezone": "Asia/Ho_Chi_Minh",
+    "currency": null,
+    "exact_native_current": true
+  },
+  {
+    "platform_id": "79c5d5ee-6e9e-9739-22ec-9f6a271b3320",
+    "source_system": "AR",
+    "country_code": "VN",
+    "source_platform": "VN168",
+    "team_name": "M8",
+    "timezone": "Asia/Ho_Chi_Minh",
+    "currency": null,
+    "exact_native_current": true
+  }
+]

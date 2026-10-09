@@ -42,6 +42,7 @@ jobs:
       - run: pnpm test:wg-existing
       - run: pnpm test:duoli
       - run: pnpm test:yash
+      - run: pnpm test:ar-middle-channels
       - run: pnpm test:withdraw-duration
       - run: pnpm build
         env:
