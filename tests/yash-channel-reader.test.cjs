@@ -26,7 +26,7 @@ before(async()=>{
  for(const x of baseline){await f.db.exec(x.definition);await f.db.exec(`revoke all on function ${x.signature} from public,anon,authenticated,service_role;`);if(x.acl.includes('authenticated='))await f.db.exec(`grant execute on function ${x.signature} to authenticated;`);}
  await f.db.exec(read('supabase/migrations/20261009050436_yash_channel_snapshots.sql'));
  metadata=await f.scalar("select jsonb_object_agg(oid::regprocedure::text,to_jsonb(p)-'prosrc') from pg_proc p where oid=any($1::regprocedure[])",[baseline.map(x=>x.signature)]);
- await f.db.exec(migration);id=await f.scalar("select md5('kb:IN:YASH.BET')::uuid");
+ await f.db.exec(migration);await f.db.exec(read('supabase/migrations/20261009054909_platform_channel_operations_navigation.sql'));id=await f.scalar("select md5('kb:IN:YASH.BET')::uuid");
  await snapshot('deposit',[channel('D1'),channel('D2',{provider:'TwoPay',enabled:false,status_text:'停用',priority:null,success_rate_today:null,balance:'123.45',balance_currency:null})]);
 });
 after(async()=>f?.db.close());
