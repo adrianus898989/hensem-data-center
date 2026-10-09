@@ -549,16 +549,16 @@ class ChannelSyncTests(unittest.TestCase):
         with patch.object(client.browser,"get_html",return_value=channel_html()) as request:
             client.fetch_channels("deposit",1)
             path,params=request.call_args.args
-            self.assertEqual(path,"/paymentChannel/config")
+            self.assertEqual(path,"/admin/paymentChannel/config")
             self.assertEqual(params,{"tab":"depositChannel","page":1,"limit":1000})
             self.assertEqual(len(request.call_args.args),2)
 
-    def test_sixty_second_poll_waits_for_first_tick_then_uses_dedicated_clients(self):
+    def test_ten_minute_poll_waits_for_first_tick_then_uses_dedicated_clients(self):
         stop=Mock()
         with patch.object(S,"SourceClient") as source,patch.object(S,"UploadClient") as target,patch.object(S,"channel_sync_cycle") as cycle,patch.object(S,"run_cycle") as orders,patch.object(S,"State") as state,patch.object(S.time,"monotonic",side_effect=[100,110]),patch.object(S,"wait_until_due",side_effect=[True,False]) as waiter:
             S.poll_channels(cfg("."),stop)
             cycle.assert_called_once_with(source.return_value,target.return_value,stop)
-            self.assertEqual([call.args for call in waiter.call_args_list],[(110,stop),(170,stop)])
+            self.assertEqual([call.args for call in waiter.call_args_list],[(110,stop),(710,stop)])
             orders.assert_not_called();state.assert_not_called()
 
     def test_background_poll_runs_during_other_work_and_stops_on_context_exit(self):
@@ -640,14 +640,37 @@ class CDPTests(unittest.TestCase):
         browser=S.CDPClient();connection=Mock();connection.evaluate.return_value={"ok":True,"html":"<table/>"}
         socket_context=Mock();socket_context.__enter__=Mock(return_value=connection);socket_context.__exit__=Mock(return_value=False)
         with patch.object(browser,"target",return_value="ws://127.0.0.1:9222/devtools/page/id"),patch.object(S,"LocalCDPSocket",return_value=socket_context):
-            self.assertEqual(browser.get_html("/paymentChannel/config",{"tab":"depositChannel","page":1,"limit":1000}),"<table/>")
+            self.assertEqual(browser.get_html("/admin/paymentChannel/config",{"tab":"depositChannel","page":1,"limit":1000}),"<table/>")
         expression=connection.evaluate.call_args.args[0]
         for required in ("location.origin", "method:'GET'", "mode:'same-origin'", "credentials:'same-origin'", "redirect:'error'", "cache:'no-store'"):
             self.assertIn(required,expression)
+        self.assertIn("https://yash.y-o-admin.com/admin/paymentChannel/config?",expression)
+        self.assertIn("'X-Requested-With':'XMLHttpRequest'",expression)
+        self.assertIn(".toLowerCase()",expression)
         for forbidden in ("document.cookie","localStorage","window.open",".click(","location.href=","setStatus","delete","X-Yash-Key","Runtime.callFunctionOn"):
             self.assertNotIn(forbidden,expression)
-        for path,params in (("/paymentChannel/setStatus",{}),("/admin/order/index",{"action":"delete"}),("https://evil.example/",{}),("/paymentChannel/config",{"tab":"depositChannel","page":1,"limit":1000,"payment_supplier":"filter"})):
+        for path,params in (("/paymentChannel/setStatus",{}),("/admin/paymentChannel/setStatus",{}),("/admin/order/index",{"action":"delete"}),("https://evil.example/",{}),("/paymentChannel/config",{"tab":"depositChannel","page":1,"limit":1000}),("/admin/paymentChannel/config",{"tab":"depositChannel","page":1,"limit":1000,"payment_supplier":"filter"})):
             with self.assertRaises(S.SyncError):browser.get_html(path,params)
+
+    def test_fetch_diagnostics_keep_safe_reason_and_never_expose_server_secrets(self):
+        cases=[({"code":"http_error","status":404},"HTTP 404"),
+            ({"code":"http_error","status":403},"HTTP 403"),
+            ({"code":"http_error","status":429},"限制请求频率"),
+            ({"code":"http_error","status":"private-source-secret"},"HTTP 错误"),
+            ({"code":"not_html","mime":"application/json"},"返回 JSON"),
+            ({"code":"not_html","mime":"private-source-secret"},"返回 非 HTML"),
+            ({"code":"wrong_origin"},"已离开固定 YASH"),
+            ({"code":"read_timeout"},"超过 60 秒"),
+            ({"code":"read_failed"},"网络中断"),
+            ({"code":"private-source-secret"},"返回格式无效")]
+        for result,expected in cases:
+            with self.subTest(result=result):
+                browser=S.CDPClient();connection=Mock();connection.evaluate.return_value={"ok":False,"body":"private-source-secret","error":"private-source-secret",**result}
+                context=Mock();context.__enter__=Mock(return_value=connection);context.__exit__=Mock(return_value=False)
+                with patch.object(browser,"target",return_value="ws://127.0.0.1:9222/devtools/page/id"),patch.object(S,"LocalCDPSocket",return_value=context),self.assertRaises(S.SyncError) as error:
+                    browser.get_html(S.CHANNEL_PATH,{"tab":"depositChannel","page":1,"limit":1000})
+                self.assertIn(expected,str(error.exception));self.assertIn(S.CHANNEL_PATH,str(error.exception))
+                self.assertNotIn("private-source-secret",str(error.exception))
 
     def test_websocket_handshake_tail_fragmented_text_ping_and_masked_runtime_command(self):
         result=json.dumps({"id":1,"result":{"result":{"value":{"ok":True,"html":"<table>synthetic</table>"}}}}).encode()
@@ -689,6 +712,522 @@ class CDPTests(unittest.TestCase):
             self.assertEqual(source.fetch.call_count,4)
             channels.assert_called_once_with(source,target,check_only=True)
             waiter.assert_not_called();polling.assert_not_called();target.upsert.assert_not_called()
+
+
+
+class StorageMigrationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="yash-storage-test-")
+        self.addCleanup(self.tmp.cleanup)
+        self.directory = Path(self.tmp.name)
+        self.script = self.directory / "PY_CODE"
+        self.script.mkdir()
+        self.legacy = self.script / "yash_sync_config.json"
+        self.destination = self.directory / "Desktop" / "PY_DATA" / "yashbet" / "yash_sync_config.json"
+        self.previous = self.directory / "Library" / "Application Support" / "YASHBET" / "yash_sync_config.json"
+        previous_patch = patch.object(S, "PREVIOUS_CONFIG", self.previous)
+        previous_patch.start()
+        self.addCleanup(previous_patch.stop)
+        self.data = cfg(self.script, site_timezone="UTC+08:00", backfill_start="2026-10-01 00:00:00",
+            backfill_timezone="UTC+05:30", state_file="yash_sync_state/progress.sqlite3",
+            lock_file="yash_sync_state/sync.lock").data
+        self.legacy.write_text(json.dumps(self.data))
+        self.state_path = self.script / "yash_sync_state" / "progress.sqlite3"
+        self.state = S.State(self.state_path, "preserved-namespace")
+        self.state.set("deposit/createTime", "2030-02-01T11:00:00+00:00")
+        self.state.track([record()])
+        self.state.close()
+
+    def migrate(self):
+        return S.migrate_legacy_config(self.destination, self.legacy)
+
+    def test_platform_app_directories_keep_all_default_files_away_from_script(self):
+        home = self.directory / "home"
+        for platform, environment, expected in (
+            ("darwin", {}, home / "Library" / "Application Support" / "YASHBET"),
+            ("win32", {"LOCALAPPDATA": str(home / "local")}, home / "local" / "YASHBET"),
+            ("win32", {}, home / "AppData" / "Local" / "YASHBET"),
+            ("linux", {"XDG_STATE_HOME": str(home / "custom-state")}, home / "custom-state" / "YASHBET"),
+            ("linux", {"XDG_STATE_HOME": "relative-invalid"}, home / ".local" / "state" / "YASHBET"),
+        ):
+            with self.subTest(platform=platform, environment=environment), patch.object(S.sys, "platform", platform), patch.object(S.Path, "home", return_value=home), patch.dict(os.environ, environment, clear=True):
+                self.assertEqual(S.previous_application_data_directory(), expected)
+                self.assertEqual(S.application_data_directory(), home / "Desktop" / "PY_DATA" / "yashbet")
+
+    def test_migration_preserves_timezone_progress_watched_and_unrelated_files(self):
+        unrelated = self.script / "other.py"
+        unrelated.write_text("untouched")
+        self.assertTrue(self.migrate())
+        self.assertFalse(self.legacy.exists())
+        self.assertFalse(self.state_path.parent.exists())
+        self.assertEqual(unrelated.read_text(), "untouched")
+        migrated = S.Config.from_file(self.destination)
+        self.assertEqual(migrated.get("site_timezone"), "UTC+08:00")
+        self.assertEqual(migrated.get("backfill_timezone"), "UTC+05:30")
+        self.assertEqual(migrated.start, S.Config(self.data, self.script).start)
+        self.assertEqual(migrated.path("state_file"), (self.destination.parent / "state" / "progress.sqlite3").resolve())
+        self.assertEqual(migrated.path("lock_file"), (self.destination.parent / "state" / "sync.lock").resolve())
+        reopened = S.State(migrated.path("state_file"), "preserved-namespace")
+        try:
+            self.assertEqual(reopened.get("deposit/createTime"), "2030-02-01T11:00:00+00:00")
+            self.assertEqual(len(reopened.pending(10)), 1)
+        finally:
+            reopened.close()
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(self.destination.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(migrated.path("state_file").stat().st_mode), 0o600)
+        self.assertFalse(self.migrate())
+
+    def test_committed_wal_is_included_not_just_main_database_file(self):
+        db = S.sqlite3.connect(self.state_path)
+        try:
+            db.execute("pragma journal_mode=wal")
+            db.execute("pragma wal_autocheckpoint=0")
+            db.execute("insert into progress values (?,?,?)", ("second-timezone", "withdrawal/completeTime", "latest-wal-progress"))
+            db.commit()
+            self.assertGreater(Path(str(self.state_path) + "-wal").stat().st_size, 0)
+            self.assertTrue(self.migrate())
+        finally:
+            db.close()
+        db = S.State(self.destination.parent / "state" / "progress.sqlite3", "second-timezone")
+        try:
+            self.assertEqual(db.get("withdrawal/completeTime"), "latest-wal-progress")
+        finally:
+            db.close()
+
+    def test_active_legacy_process_lock_prevents_migration(self):
+        with S.process_lock(self.state_path.parent / "sync.lock"):
+            with self.assertRaisesRegex(S.SyncError, "已有一个同步进程"):
+                self.migrate()
+        self.assertTrue(self.legacy.exists())
+        self.assertTrue(self.state_path.exists())
+        self.assertFalse(self.destination.exists())
+
+    def test_active_sqlite_writer_prevents_migration_even_without_process_lock(self):
+        db = S.sqlite3.connect(self.state_path)
+        try:
+            db.execute("begin immediate")
+            with self.assertRaisesRegex(S.SyncError, "旧断点正在使用"):
+                self.migrate()
+        finally:
+            db.rollback()
+            db.close()
+        self.assertTrue(self.legacy.exists())
+        self.assertTrue(self.state_path.exists())
+        self.assertFalse(self.destination.exists())
+
+    def test_existing_destination_config_is_never_overwritten_or_merged(self):
+        self.destination.parent.mkdir(parents=True)
+        self.destination.write_text("existing-config")
+        self.assertFalse(self.migrate())
+        self.assertEqual(self.destination.read_text(), "existing-config")
+        self.assertTrue(self.legacy.exists())
+        self.assertTrue(self.state_path.exists())
+
+    def test_existing_destination_state_or_orphan_log_is_never_overwritten(self):
+        state = self.destination.parent / "state" / "progress.sqlite3"
+        state.parent.mkdir(parents=True)
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            path = Path(str(state) + suffix)
+            path.write_bytes(b"existing-state")
+            with self.assertRaisesRegex(S.SyncError, "已有配置或断点"):
+                self.migrate()
+            self.assertEqual(path.read_bytes(), b"existing-state")
+            self.assertTrue(self.legacy.exists())
+            self.assertFalse(self.destination.exists())
+            path.unlink()
+
+    def test_failed_publication_rolls_back_only_our_new_files(self):
+        actual_link = S.os.link
+        def link(source, destination):
+            if Path(destination) == self.destination:
+                raise OSError("synthetic config publication failure")
+            actual_link(source, destination)
+        with patch.object(S.os, "link", side_effect=link), self.assertRaises(OSError):
+            self.migrate()
+        self.assertTrue(self.state_path.exists())
+        self.assertTrue(self.legacy.exists())
+        self.assertFalse(self.destination.exists())
+        self.assertFalse((self.destination.parent / "state" / "progress.sqlite3").exists())
+        self.assertTrue(self.migrate())
+
+    def test_unrecognized_files_in_state_directory_are_preserved(self):
+        extra = self.state_path.parent / "other-app.sqlite3"
+        extra.write_bytes(b"not-ours")
+        self.migrate()
+        self.assertEqual(extra.read_bytes(), b"not-ours")
+        self.assertFalse(self.state_path.exists())
+        self.assertFalse(self.legacy.exists())
+
+    def test_corrupt_or_custom_state_is_preserved_and_never_reinitialized(self):
+        self.state_path.write_bytes(b"not-a-database")
+        with self.assertRaisesRegex(S.SyncError, "无法完整读取"):
+            self.migrate()
+        self.assertEqual(self.state_path.read_bytes(), b"not-a-database")
+        self.assertFalse(self.destination.exists())
+        self.data["state_file"] = "other-app/progress.sqlite3"
+        self.legacy.write_text(json.dumps(self.data))
+        with self.assertRaisesRegex(S.SyncError, "自定义"):
+            self.migrate()
+        self.assertTrue(self.legacy.exists())
+
+    @unittest.skipIf(os.name == "nt", "symlink creation may require Windows developer mode")
+    def test_symlinked_legacy_state_is_not_moved_or_deleted(self):
+        actual = self.script / "external-state"
+        self.state_path.parent.rename(actual)
+        self.state_path.parent.symlink_to(actual, target_is_directory=True)
+        with self.assertRaisesRegex(S.SyncError, "链接断点"):
+            self.migrate()
+        self.assertTrue(self.legacy.exists())
+        self.assertTrue((actual / "progress.sqlite3").exists())
+
+    def test_default_main_migrates_offline_then_check_remains_explicit(self):
+        with patch.object(S, "DEFAULT_CONFIG", self.destination), patch.object(S, "LEGACY_CONFIG", self.legacy), patch.object(sys, "argv", ["yash_sync.py", "--refresh"]), patch.object(S, "UploadClient") as target, patch.object(S, "SourceClient") as source, patch("builtins.input", return_value=""), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(S.main(), 0)
+            source.assert_not_called()
+            target.return_value.verify.assert_not_called()
+            target.return_value.request.assert_not_called()
+        self.assertFalse(self.legacy.exists())
+        self.assertEqual(json.loads(self.destination.read_text())["site_timezone"], "UTC+08:00")
+
+    def test_explicit_config_path_retains_existing_behavior_without_auto_migration(self):
+        with patch.object(sys, "argv", ["yash_sync.py", "--config", str(self.legacy), "--refresh"]), patch.object(S, "migrate_legacy_config") as migrate, patch.object(S, "UploadClient"), patch.object(S, "SourceClient") as source, patch("builtins.input", return_value=""), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(S.main(), 0)
+            migrate.assert_not_called()
+            source.assert_not_called()
+        self.assertTrue(self.legacy.exists())
+        self.assertFalse(self.destination.exists())
+
+    def prepare_previous_layout(self, keep_legacy=False):
+        self.previous.parent.mkdir(parents=True)
+        data = dict(self.data, state_file="state/progress.sqlite3", lock_file="state/sync.lock")
+        self.previous.write_text(json.dumps(data))
+        previous_state = self.previous.parent / "state" / "progress.sqlite3"
+        previous_state.parent.mkdir()
+        previous_state.write_bytes(self.state_path.read_bytes())
+        if not keep_legacy:
+            self.state_path.unlink()
+            self.state_path.parent.rmdir()
+            self.legacy.unlink()
+        return previous_state
+
+    def migrate_locations(self):
+        with patch.object(S, "LEGACY_CONFIG", self.legacy):
+            return S.migrate_previous_locations(self.destination)
+
+    def test_version_three_appsupport_layout_migrates_and_removes_only_known_files(self):
+        previous_state = self.prepare_previous_layout()
+        unrelated = self.previous.parent / "notes.txt"
+        unrelated.write_text("untouched")
+        self.assertTrue(self.migrate_locations())
+        self.assertTrue(self.destination.exists())
+        self.assertFalse(self.previous.exists())
+        self.assertFalse(previous_state.parent.exists())
+        self.assertFalse((self.previous.parent / "storage.lock").exists())
+        self.assertEqual(unrelated.read_text(), "untouched")
+        state = S.State(self.destination.parent / "state" / "progress.sqlite3", "preserved-namespace")
+        try:
+            self.assertEqual(state.get("deposit/createTime"), "2030-02-01T11:00:00+00:00")
+            self.assertEqual(len(state.pending(10)), 1)
+        finally:
+            state.close()
+        self.assertEqual(json.loads(self.destination.read_text())["site_timezone"], "UTC+08:00")
+        self.assertFalse(self.migrate_locations())
+
+    def test_version_three_storage_lock_blocks_migration_during_setup_or_refresh(self):
+        previous_state = self.prepare_previous_layout()
+        with S.process_lock(self.previous.parent / "storage.lock"):
+            with self.assertRaisesRegex(S.SyncError, "已有一个同步进程"):
+                self.migrate_locations()
+        self.assertTrue(self.previous.exists())
+        self.assertTrue(previous_state.exists())
+        self.assertFalse(self.destination.exists())
+
+    def test_multiple_legacy_locations_never_choose_or_combine_progress(self):
+        previous_state = self.prepare_previous_layout(keep_legacy=True)
+        snapshot = {path: path.read_bytes() for path in (self.legacy, self.state_path, self.previous, previous_state)}
+        with self.assertRaisesRegex(S.SyncError, "两处原文件均保留"):
+            self.migrate_locations()
+        self.assertFalse(self.destination.exists())
+        for path, before in snapshot.items():
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_existing_requested_destination_wins_without_touching_either_legacy(self):
+        previous_state = self.prepare_previous_layout(keep_legacy=True)
+        self.destination.parent.mkdir(parents=True)
+        self.destination.write_text("authoritative-new-config")
+        self.assertFalse(self.migrate_locations())
+        self.assertEqual(self.destination.read_text(), "authoritative-new-config")
+        for path in (self.legacy, self.state_path, self.previous, previous_state):
+            self.assertTrue(path.exists())
+
+    def test_orphan_old_state_is_not_silently_ignored_or_reinitialized(self):
+        self.legacy.unlink()
+        with self.assertRaisesRegex(S.SyncError, "有 YASH 断点但缺少配置"):
+            self.migrate_locations()
+        self.assertTrue(self.state_path.exists())
+        self.assertFalse(self.destination.exists())
+
+    def test_active_new_process_prevents_migration_and_source_initialization(self):
+        with S.process_lock(self.destination.parent / "storage.lock"), patch.object(S, "DEFAULT_CONFIG", self.destination), patch.object(S, "LEGACY_CONFIG", self.legacy), patch.object(sys, "argv", ["yash_sync.py", "--once"]), patch.object(S, "UploadClient"), patch.object(S, "SourceClient") as source, patch.object(S, "migrate_legacy_config") as migrate:
+            self.assertEqual(S.main(), 1)
+            migrate.assert_not_called()
+            source.assert_not_called()
+        self.assertTrue(self.legacy.exists())
+        self.assertFalse(self.destination.exists())
+
+    def test_main_keeps_process_lock_until_state_connection_closes(self):
+        events = []
+        @contextlib.contextmanager
+        def lock(path):
+            events.append("lock")
+            try:
+                yield
+            finally:
+                events.append("unlock")
+        state = Mock()
+        state.close.side_effect = lambda: events.append("close-state")
+        with patch.object(sys, "argv", ["yash_sync.py", "--config", str(self.legacy), "--once"]), patch.object(S, "UploadClient"), patch.object(S, "SourceClient"), patch.object(S, "State", return_value=state), patch.object(S, "process_lock", side_effect=lock), patch.object(S, "channel_sync_cycle", return_value=True), patch.object(S, "run_cycle"), patch.object(S, "wait_until_due", return_value=True):
+            self.assertEqual(S.main(), 0)
+        self.assertEqual(events, ["lock", "close-state", "unlock"])
+
+
+class FixedTenMinuteScheduleTests(unittest.TestCase):
+    def test_channels_keep_ten_minute_cadence_after_a_failed_cycle(self):
+        config = cfg(".", interval_seconds=60, channel_interval_seconds=60)
+        stop = threading.Event()
+        now = {"value": 100}
+        deadlines = []
+        def wait(due, event):
+            self.assertIs(event, stop)
+            deadlines.append(due)
+            now["value"] = due
+            return len(deadlines) < 3
+        with patch.object(S, "SourceClient"), patch.object(S, "UploadClient"), patch.object(S.time, "monotonic", side_effect=lambda: now["value"]), patch.object(S, "wait_until_due", side_effect=wait), patch.object(S, "channel_sync_cycle", side_effect=[False, True]) as cycle:
+            S.poll_channels(config, stop)
+        self.assertEqual(S.SYNC_INTERVAL_SECONDS, 600)
+        self.assertEqual(S.CHANNEL_INTERVAL_SECONDS, 600)
+        self.assertEqual(deadlines, [110, 710, 1310])
+        self.assertEqual(cycle.call_count, 2)
+
+    def test_loop_survives_upload_503_preserves_checkpoint_then_recovers_using_old_config(self):
+        with tempfile.TemporaryDirectory(prefix="yash-loop-retry-") as directory:
+            path = Path(directory) / "config.json"
+            config = cfg(directory, interval_seconds=60, channel_interval_seconds=60)
+            path.write_text(json.dumps(config.data))
+            state_path = Path(directory) / "state/progress.sqlite3"
+            source, target, opener = Mock(), Mock(), Mock()
+            private_marker = "SYNTHETIC_PRIVATE_HTTP_BODY"
+            opener.open.side_effect = S.HTTPError(S.YASH_UPLOAD_URL, 503, private_marker, {}, io.BytesIO(private_marker.encode()))
+            first_upload = {"pending": True}
+            def upsert(rows):
+                if first_upload["pending"]:
+                    first_upload["pending"] = False
+                    S.http_request(S.YASH_UPLOAD_URL, {"X-Yash-Key": "synthetic-upload-key"}, b"{}", purpose="upload")
+            target.upsert.side_effect = upsert
+            now, deadlines = {"value": 100}, []
+            def wait(due):
+                deadlines.append(due)
+                now["value"] = due
+                if len(deadlines) == 2:
+                    # A failed server response must not mark even an empty window complete.
+                    with S.sqlite3.connect(state_path) as db:
+                        self.assertEqual(db.execute("select count(*) from progress").fetchone()[0], 0)
+                    target.receipt.assert_not_called()
+                if len(deadlines) == 3:
+                    with S.sqlite3.connect(state_path) as db:
+                        progress = dict(db.execute("select name,value from progress"))
+                    for kind in S.ENDPOINTS:
+                        for basis in ("createTime", "completeTime"):
+                            self.assertEqual(progress[kind + "/" + basis], NOW.isoformat())
+                    raise KeyboardInterrupt()
+                return True
+            with patch.object(sys, "argv", ["yash_cdp.py", "--loop", "--config", str(path)]), patch.object(S, "SourceClient", return_value=source), patch.object(S, "UploadClient", return_value=target), patch.object(S, "channel_polling", return_value=contextlib.nullcontext()) as channels, patch.object(S, "collect_window", return_value=[]), patch.object(S, "datetime", FrozenDatetime), patch.object(S.time, "monotonic", side_effect=lambda: now["value"]), patch.object(S.time, "sleep") as sleep, patch.object(S, "wait_until_due", side_effect=wait), patch.object(S, "upload_tls_context", return_value=S.ssl.SSLContext(S.ssl.PROTOCOL_TLS_CLIENT)), patch.object(S, "build_opener", return_value=opener), self.assertLogs(S.LOG, level="INFO") as logs:
+                self.assertEqual(S.main(), 0)
+            self.assertEqual(deadlines, [110, 710, 1310])
+            self.assertEqual(opener.open.call_count, 4)
+            self.assertEqual([call.args for call in sleep.call_args_list], [(2,), (4,), (8,)])
+            self.assertEqual(target.receipt.call_count, 4)
+            channels.assert_called_once()
+            text = "\n".join(logs.output)
+            self.assertIn("服务暂时不可用（HTTP 503）", text)
+            self.assertIn("持续同步仍在运行", text)
+            self.assertNotIn(private_marker, text)
+            self.assertEqual(json.loads(path.read_text())["interval_seconds"], 60)
+
+    def test_once_still_reports_failure_instead_of_claiming_a_complete_backfill(self):
+        with tempfile.TemporaryDirectory(prefix="yash-once-retry-") as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(json.dumps(cfg(directory).data))
+            with patch.object(sys, "argv", ["yash_cdp.py", "--once", "--config", str(path)]), patch.object(S, "UploadClient"), patch.object(S, "SourceClient"), patch.object(S, "channel_sync_cycle", return_value=True), patch.object(S, "channel_polling") as background, patch.object(S, "run_cycle", side_effect=S.SyncError("Supabase 上传服务暂时不可用（HTTP 503）")), patch.object(S, "wait_until_due", return_value=True):
+                self.assertEqual(S.main(), 1)
+            background.assert_not_called()
+
+
+class UploadTLSTests(unittest.TestCase):
+    def tls(self):
+        # Real secure context, but no certificate or network operations in tests.
+        return S.ssl.SSLContext(S.ssl.PROTOCOL_TLS_CLIENT)
+
+    def test_empty_macos_default_store_loads_system_roots_without_relaxing_tls(self):
+        context = self.tls()
+        with patch.object(S.ssl, "create_default_context", return_value=context), patch.dict(os.environ, {}, clear=True), patch.object(S.sys, "platform", "darwin"), patch.dict(sys.modules, {"certifi": None}), patch.object(S.Path, "is_file", return_value=True), patch.object(S.ssl.SSLContext, "cert_store_stats", side_effect=[{"x509_ca": 0}, {"x509_ca": 128}]), patch.object(S.ssl.SSLContext, "load_verify_locations") as load:
+            self.assertIs(S.upload_tls_context(), context)
+        load.assert_called_once_with(cafile="/etc/ssl/cert.pem")
+        self.assertEqual(context.verify_mode, S.ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+
+    def test_existing_root_store_never_adds_alternate_bundle(self):
+        context = self.tls()
+        with patch.object(S.ssl, "create_default_context", return_value=context), patch.dict(os.environ, {}, clear=True), patch.object(S.ssl.SSLContext, "cert_store_stats", return_value={"x509_ca": 12}), patch.object(S.ssl.SSLContext, "load_verify_locations") as load:
+            self.assertIs(S.upload_tls_context(), context)
+        load.assert_not_called()
+        self.assertTrue(context.check_hostname)
+
+    def test_explicit_ssl_file_or_directory_does_not_fall_back_even_with_zero_roots(self):
+        for name in ("SSL_CERT_FILE", "SSL_CERT_DIR"):
+            with self.subTest(name=name):
+                context = self.tls()
+                with patch.object(S.ssl, "create_default_context", return_value=context), patch.dict(os.environ, {name: "/synthetic/explicit-trust"}, clear=True), patch.object(S.ssl.SSLContext, "cert_store_stats", return_value={"x509_ca": 0}), patch.object(S.ssl.SSLContext, "load_verify_locations") as load:
+                    self.assertIs(S.upload_tls_context(), context)
+                load.assert_not_called()
+                self.assertEqual(context.verify_mode, S.ssl.CERT_REQUIRED)
+
+    def test_existing_certifi_is_optional_fallback_when_system_bundle_is_missing(self):
+        context = self.tls()
+        certifi = Mock()
+        certifi.where.return_value = "/synthetic/certifi.pem"
+        with patch.object(S.ssl, "create_default_context", return_value=context), patch.dict(os.environ, {}, clear=True), patch.object(S.sys, "platform", "darwin"), patch.dict(sys.modules, {"certifi": certifi}), patch.object(S.Path, "is_file", autospec=True, side_effect=lambda p: str(p) == "/synthetic/certifi.pem"), patch.object(S.ssl.SSLContext, "cert_store_stats", side_effect=[{"x509_ca": 0}, {"x509_ca": 136}]), patch.object(S.ssl.SSLContext, "load_verify_locations") as load:
+            self.assertIs(S.upload_tls_context(), context)
+        load.assert_called_once_with(cafile="/synthetic/certifi.pem")
+        self.assertEqual(context.verify_mode, S.ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+
+    def test_all_ca_sources_missing_reports_actionable_error(self):
+        context = self.tls()
+        paths = Mock(capath=None)
+        with patch.object(S.ssl, "create_default_context", return_value=context), patch.dict(os.environ, {}, clear=True), patch.object(S.sys, "platform", "darwin"), patch.dict(sys.modules, {"certifi": None}), patch.object(S.Path, "is_file", return_value=False), patch.object(S.ssl.SSLContext, "cert_store_stats", return_value={"x509_ca": 0}), patch.object(S.ssl, "get_default_verify_paths", return_value=paths), patch.object(S.ssl.SSLContext, "load_verify_locations") as load:
+            with self.assertRaisesRegex(S.SyncError, "没有可用的受信任证书库"):
+                S.upload_tls_context()
+        load.assert_not_called()
+        self.assertEqual(context.verify_mode, S.ssl.CERT_REQUIRED)
+
+    def test_hashed_ca_directory_can_load_roots_lazily(self):
+        context = self.tls()
+        with patch.object(S.ssl, "create_default_context", return_value=context), patch.dict(os.environ, {}, clear=True), patch.object(S.sys, "platform", "linux"), patch.dict(sys.modules, {"certifi": None}), patch.object(S.ssl.SSLContext, "cert_store_stats", return_value={"x509_ca": 0}), patch.object(S.ssl, "get_default_verify_paths", return_value=Mock(capath="/synthetic/hashed-ca")):
+            self.assertIs(S.upload_tls_context(), context)
+        self.assertTrue(context.check_hostname)
+
+    def test_invalid_default_certificate_configuration_never_leaks_error_text(self):
+        with patch.object(S.ssl, "create_default_context", side_effect=OSError("SECRET.proxy:user@host/private.pem")):
+            with self.assertRaises(S.SyncError) as error:
+                S.upload_tls_context()
+        self.assertIn("证书配置无法加载", str(error.exception))
+        self.assertNotIn("SECRET", str(error.exception))
+
+    def request(self, opener):
+        context = self.tls()
+        with patch.object(S, "upload_tls_context", return_value=context), patch.object(S, "build_opener", return_value=opener) as build, patch.object(S.time, "sleep") as sleep:
+            try:
+                result = S.http_request(S.YASH_UPLOAD_URL, {"X-Yash-Key": "SYNTHETIC_PRIVATE_KEY"}, b"{}", purpose="upload")
+                error = None
+            except S.SyncError as exc:
+                result, error = None, exc
+        handlers = build.call_args.args
+        self.assertEqual(len(handlers), 2)
+        self.assertTrue(any(isinstance(handler, S.NoRedirect) for handler in handlers))
+        tls_handler = next(handler for handler in handlers if isinstance(handler, S.HTTPSHandler))
+        self.assertIs(tls_handler._context, context)
+        self.assertTrue(context.check_hostname)
+        self.assertEqual(context.verify_mode, S.ssl.CERT_REQUIRED)
+        return result, error, sleep
+
+    def test_certificate_failure_stops_immediately_without_blind_retries(self):
+        opener = Mock()
+        opener.open.side_effect = S.URLError(S.ssl.SSLCertVerificationError(1, "SYNTHETIC_PRIVATE_KEY certificate text"))
+        result, error, sleep = self.request(opener)
+        self.assertIsNone(result)
+        self.assertIn("HTTPS 证书校验失败", str(error))
+        self.assertIn("Supabase 上传连接", str(error))
+        self.assertNotIn("SYNTHETIC_PRIVATE_KEY", str(error))
+        self.assertEqual(opener.open.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_network_categories_are_sanitized_and_retries_bounded(self):
+        secret = "SYNTHETIC_PRIVATE_KEY https://user:password@proxy.invalid"
+        examples = (
+            (S.socket.gaierror(-2, secret), "域名解析失败"),
+            (TimeoutError(secret), "连接或读取超时"),
+            (ConnectionRefusedError(61, secret), "连接被拒绝"),
+            (S.ssl.SSLError(1, secret), "TLS 安全连接未完成"),
+            (OSError(secret), "连接中断"),
+            (secret, "连接中断"),
+        )
+        for reason, message in examples:
+            with self.subTest(category=message, kind=type(reason).__name__):
+                opener = Mock()
+                opener.open.side_effect = S.URLError(reason)
+                result, error, sleep = self.request(opener)
+                self.assertIsNone(result)
+                self.assertIn(message, str(error))
+                self.assertNotIn("SYNTHETIC_PRIVATE_KEY", str(error))
+                self.assertNotIn("password", str(error))
+                self.assertEqual(opener.open.call_count, 4)
+                self.assertEqual([call.args for call in sleep.call_args_list], [(2,), (4,), (8,)])
+
+    def test_proxy_tunnel_authentication_failure_does_not_blindly_retry(self):
+        opener = Mock()
+        opener.open.side_effect = S.URLError(OSError("Tunnel connection failed: 407 SYNTHETIC_PRIVATE_KEY"))
+        _, error, sleep = self.request(opener)
+        self.assertIn("代理要求认证", str(error))
+        self.assertNotIn("SYNTHETIC_PRIVATE_KEY", str(error))
+        self.assertEqual(opener.open.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_http_407_has_proxy_diagnostic_without_retry_or_response_leak(self):
+        opener = Mock()
+        error = S.HTTPError(S.YASH_UPLOAD_URL, 407, "SYNTHETIC_PRIVATE_KEY proxy authentication", {}, io.BytesIO(b"SYNTHETIC_PRIVATE_KEY"))
+        opener.open.side_effect = error
+        _, failure, sleep = self.request(opener)
+        self.assertIn("代理", str(failure))
+        self.assertNotIn("SYNTHETIC_PRIVATE_KEY", str(failure))
+        self.assertEqual(opener.open.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_http_service_errors_are_distinct_from_activation_and_bounded(self):
+        for code, fragment, attempts in ((503, "服务暂时不可用", 4), (502, "服务暂时不可用", 4), (429, "限制请求频率", 4), (401, "上传授权未通过", 1), (403, "上传授权未通过", 1), (400, "上传请求未被接受", 1)):
+            with self.subTest(code=code):
+                opener = Mock()
+                opener.open.side_effect = S.HTTPError(S.YASH_UPLOAD_URL, code, "SYNTHETIC_PRIVATE_KEY", {}, io.BytesIO(b"SYNTHETIC_PRIVATE_KEY"))
+                _, failure, sleep = self.request(opener)
+                self.assertIn(fragment, str(failure))
+                self.assertIn(str(code), str(failure))
+                self.assertNotIn("SYNTHETIC_PRIVATE_KEY", str(failure))
+                self.assertEqual(opener.open.call_count, attempts)
+                if attempts == 4:
+                    self.assertNotIn("激活", str(failure))
+                    self.assertEqual([call.args for call in sleep.call_args_list], [(2,), (4,), (8,)])
+                else:
+                    sleep.assert_not_called()
+
+    def test_transient_timeout_recovers_without_resetting_tls_or_upload_headers(self):
+        response = Mock()
+        response.read.return_value = b'{"ok":true}'
+        response.headers = {"Content-Type": "application/json"}
+        manager = Mock()
+        manager.__enter__ = Mock(return_value=response)
+        manager.__exit__ = Mock(return_value=False)
+        opener = Mock()
+        opener.open.side_effect = [S.URLError(TimeoutError("synthetic")), manager]
+        result, error, sleep = self.request(opener)
+        self.assertIsNone(error)
+        self.assertEqual(result, (b'{"ok":true}', response.headers))
+        self.assertEqual(opener.open.call_count, 2)
+        sleep.assert_called_once_with(2)
+        for call in opener.open.call_args_list:
+            self.assertEqual(call.args[0].get_header("X-yash-key"), "SYNTHETIC_PRIVATE_KEY")
+            self.assertEqual(call.args[0].data, b"{}")
+            self.assertEqual(call.kwargs, {"timeout": 60})
 
 
 if __name__=="__main__":

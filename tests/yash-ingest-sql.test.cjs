@@ -3,12 +3,13 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const {PGlite}=require('@electric-sql/pglite');
 const migration=fs.readFileSync('supabase/migrations/20261009044014_yash_order_ingest.sql','utf8');
+const timezoneFix=fs.readFileSync('supabase/migrations/20261009073115_yash_ingest_timezone_batch_cache.sql','utf8');
 let db; const token='a'.repeat(64), at='2026-10-02T10:00:00Z';
 function row(id,changes={}) {return {source_site:'yash',order_type:'deposit',order_no:id,uid:'SYNTHETIC-UID',status:'充值成功',amount:'123.45',fee:null,created_at:at,completed_at:'2026-10-02T10:10:00Z',observed_at:'2026-10-03T00:00:00Z',source_timezone:'Asia/Kolkata',currency:'INR',currency_basis:'platform_default',raw_fields:{'订单号':id,'备注':'PRIVATE-NOTE','提现账号':'PRIVATE-ACCOUNT','UID':'SYNTHETIC-UID'},...changes};}
 const call=async(request,key=token)=>(await db.query('select public.yash_order_ingest($1,$2) result',[key,request])).rows[0].result;
 const ingest=records=>call({action:'ingest',schema_version:1,records});
 function receipt(keys,changes={}) {return {action:'receipt',schema_version:1,order_type:'deposit',stream:'createTime',start_at:'2026-10-02T09:00:00Z',end_exclusive:'2026-10-02T11:00:00Z',snapshot_at:'2026-10-03T00:00:00Z',source_timezone:'Asia/Kolkata',source_count:keys.length,order_keys:keys,...changes};}
-before(async()=>{db=new PGlite(); await db.exec('create role anon;create role authenticated;create role service_role;');await db.exec(migration);await db.query("insert into private.yash_ingest_credentials(token_hash,label,expires_at) values($1,'synthetic',now()+interval '1 day')",[token]);});
+before(async()=>{db=new PGlite(); await db.exec('create role anon;create role authenticated;create role service_role;');await db.exec(migration);await db.exec(timezoneFix);await db.query("insert into private.yash_ingest_credentials(token_hash,label,expires_at) values($1,'synthetic',now()+interval '1 day')",[token]);});
 after(async()=>db?.close());
 test('scope has no anonymous/authenticated execution or raw-table grants; credential revocation enforced',async()=>{
  for(const role of ['anon','authenticated']){assert.equal((await db.query("select has_function_privilege($1,'public.yash_order_ingest(text,jsonb)','execute') ok",[role])).rows[0].ok,false);assert.equal((await db.query("select has_table_privilege($1,'private.yash_orders','select') ok",[role])).rows[0].ok,false);}
@@ -46,4 +47,22 @@ test('completion receipts count actual completion timestamps and reject future/i
  assert.equal((await call(receipt(['SYNTHETIC-1','USDT','UNKNOWN'],{stream:'completeTime'}))).verified,true);
  await assert.rejects(()=>call(receipt([],{end_exclusive:'2026-10-01T00:00:00Z'})),/YASH_INVALID_WINDOW/);
  await assert.rejects(()=>call(receipt([],{source_timezone:'Bogus/Zone'})),/YASH_INVALID_WINDOW/);
+});
+test('full 500-order batches accept fixed offsets, IANA names and mixed zones without changing timestamps',async()=>{
+ for(const [label,zones] of [['OFFSET',['UTC+05:30']],['IANA',['Asia/Kolkata']],['MIX',['UTC+05:30','Asia/Kolkata','UTC-08:00','Etc/UTC']]]) {
+  const rows=Array.from({length:500},(_,i)=>row(`BATCH-${label}-${i}`,{source_timezone:zones[i%zones.length]}));
+  assert.deepEqual(await ingest(rows),{ok:true,accepted:500});
+  const result=(await db.query('select count(*) n,count(distinct created_at) timestamps,min(created_at) created from private.yash_orders where order_no like $1',[`BATCH-${label}-%`])).rows[0];
+  assert.equal(result.n,500);assert.equal(result.timestamps,1);assert.equal(new Date(result.created).toISOString(),'2026-10-02T10:00:00.000Z');
+ }
+});
+test('invalid timezone in a later record rolls back the whole batch; invalid receipts remain rejected',async()=>{
+ for(const [i,zone] of [null,'','Bogus/Zone','UTC+14:01','UTC-15:00','UTC+05:60'].entries()) {
+  await assert.rejects(()=>ingest([row(`TZ-ROLLBACK-${i}`),row(`TZ-BAD-${i}`,{source_timezone:zone})]),/YASH_INVALID_TIME/);
+  assert.equal((await db.query('select count(*) n from private.yash_orders where order_no=$1',[`TZ-ROLLBACK-${i}`])).rows[0].n,0);
+  await assert.rejects(()=>call(receipt([],{source_timezone:zone})),/YASH_INVALID_WINDOW/);
+ }
+ for(const zone of ['UTC+05:30','UTC+14:00','UTC-14:00','Asia/Kolkata']) {
+  assert.equal((await call(receipt([],{source_timezone:zone,start_at:'2026-10-04T11:00:00Z',end_exclusive:'2026-10-04T12:00:00Z',snapshot_at:'2026-10-05T00:00:00Z'}))).verified,true);
+ }
 });
