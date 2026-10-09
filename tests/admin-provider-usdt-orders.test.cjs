@@ -95,3 +95,12 @@ test('WG original transfer type remains readable with raw NULL and explicit zero
 test('DUOLI provider success drilldown labels the order update timestamp while other source columns stay unchanged',async()=>{
  const h=fixture();h.platforms[0].source='duoli';h.platforms[0].capabilities={successTimeBasis:'order_updated_at',chargeSuccessTimeAvailable:true,withdrawSuccessTimeAvailable:true,paymentSuccessTimeAvailable:false,latencyAvailable:false};await h.api.open('USDT','','charge','a');assert.equal(h.requests.at(-1).status,'success');assert.match(h.html(),/成功统计时间（多利按更新时间）/);h.root.liveProviderOrder(0);assert.match(h.html(),/成功统计时间（订单更新时间）/);await h.root.liveProviderOrderPlatform('b');assert.doesNotMatch(h.html(),/订单更新时间/);assert.match(h.html(),/成功时间/);
 });
+
+
+test('KB source completion and DUOLI update labels remain distinct in selected and mixed provider views',async()=>{
+ const h=fixture();h.platforms[0].source='kb';h.platforms[0].capabilities={successTimeBasis:'source_completed_at'};
+ h.platforms[1].source='duoli';h.platforms[1].capabilities={successTimeBasis:'order_updated_at'};
+ await h.api.open('USDT','','charge','a');assert.match(h.html(),/成功时间（源订单完成时间）/);assert.doesNotMatch(h.html(),/多利按更新时间/);
+ await h.root.liveProviderOrderPlatform('');assert.match(h.html(),/多利按更新时间；KB按完成时间/);
+ await h.root.liveProviderOrderPlatform('b');assert.match(h.html(),/成功统计时间（多利按更新时间）/);assert.doesNotMatch(h.html(),/KB按完成时间/);
+});
