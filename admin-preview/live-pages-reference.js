@@ -233,7 +233,7 @@
  function merchantBusiness(provider=false){
   if(!L.loading&&!L.restoredPage)ensureTypes();
   const id=provider?'merchant-providers-unified':'merchant-platforms-unified',rows=merchantRows(provider),currencies=[...new Set(rows.map(r=>r.currency||''))],mixedCurrencies=currencies.length>1;
-  const sourceLabel=value=>({ar:'AR',newar:'新AR',new_ar:'新AR',wg:'WG',lg:'LG',duoli:'多利',doli:'多利',game66:'GAME66','66game':'GAME66'}[String(value||'').toLowerCase()]||String(value||'—'));
+  const sourceLabel=value=>({ar:'AR',newar:'新AR',new_ar:'新AR',wg:'WG',lg:'LG',duoli:'多利',doli:'多利',kb:'KB',game66:'GAME66','66game':'GAME66'}[String(value||'').toLowerCase()]||String(value||'—'));
   const sources=r=>[...new Set((r.sources||[r.source]).filter(Boolean).map(sourceLabel))].join(' / ')||'—';
   const metrics=[...['all','success','pending','failed'].flatMap(key=>[{key:key+'_amount',label:({all:'全部',success:'成功',pending:'处理中',failed:'失败'})[key]+'金额',width:94},{key:key+'_count',label:({all:'全部',success:'成功',pending:'处理中',failed:'失败'})[key]+'笔数',width:60}]),{key:'success_rate',label:'成功率',width:60},{key:'fee',label:'手续费',width:90},{key:'fee_coverage',label:'匹配占比',width:68},...(!provider?[{key:'members',label:String(L.from||'').slice(0,10)===String(L.to||'').slice(0,10)?'实际人数':'实际人次',width:64}]:[])];
   const rowFor=(r,d)=>r.directions[d]?{...r.directions[d],...successTotal([r.directions[d]],d)}:null;

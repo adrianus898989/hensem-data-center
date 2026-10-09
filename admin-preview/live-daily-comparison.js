@@ -13,7 +13,7 @@
  const fraction=(n,d)=>number(n)!==null&&number(d)>0?Number(n)/Number(d)*100:null;
  const percent=x=>number(x)===null?'—':Number(x).toFixed(2)+'%';
  const src=x=>String(x||'').toLowerCase().replaceAll('_','');
- const system=x=>({ar:'AR',newar:'新AR',wg:'WG',lg:'LG',game66:'AA',duoli:'多利',doli:'多利'}[src(x)]||x||'—');
+ const system=x=>({ar:'AR',newar:'新AR',wg:'WG',lg:'LG',game66:'AA',duoli:'多利',doli:'多利',kb:'KB'}[src(x)]||x||'—');
  const copy=x=>JSON.parse(JSON.stringify(x));
  const zero=()=>({all_amount:0,all_count:0,success_amount:0,success_count:0});
  const unknown=note=>({...Object.fromEntries(fields.map(k=>[k,null])),ready:false,partial:true,note,leaves:[]});
@@ -113,7 +113,7 @@
     if(!subset.length&&!complete)return unknown('三方分组未完整，缺失分组不能视为零');
     metrics=subset.length?total(subset):zero();
    }else metrics=raw.length?total(raw):allLeaves.length?total(allLeaves):zero();
-   const timeKey=d+'SuccessTimeAvailable',unavailable=d==='withdraw'&&src(p.source)==='wg'||response[timeKey]===false||(response.capabilities||response.platform?.capabilities)?.[timeKey]===false||p.capabilities?.[timeKey]===false;
+   const timeKey=d+'SuccessTimeAvailable',unavailable=d==='withdraw'&&src(p.source)==='wg'||response.successTimeAvailable===false||(response.capabilities||response.platform?.capabilities)?.successTimeAvailable===false||p.capabilities?.successTimeAvailable===false||response[timeKey]===false||(response.capabilities||response.platform?.capabilities)?.[timeKey]===false||p.capabilities?.[timeKey]===false;
    if(unavailable){metrics.success_count=null;metrics.success_amount=null;}
    return {...metrics,ready:true,partial:!complete||fields.some(k=>metrics[k]===null)||!raw.length&&allLeaves.length>0,note:unavailable?'该来源未提供可核验'+(d==='charge'?'代收':'代付')+'成功时间':!raw.length&&allLeaves.length?'仅返回三方分组小计':!complete?'平台汇总已返回；三方分组未完整':'已读取订单记录',leaves:subset};
   }
@@ -236,7 +236,7 @@
    const today=S.scope.platforms.some(p=>c.localClock(S.scope.now,p.timezone).slice(0,10)===S.scope.date);
    return '<div class="daily-comparison">'+controls+'<div class="daily-note">'+E(S.scope.country)+' · '+E(S.scope.currency)+' · '+E(S.scope.date)+' 对比 '+E(S.compareDate)+' · 可比 '+pair.count+' 个相同原生平台'+(today?(S.direction==='workorder'?' · 今日未结束，工单无同进度接口，暂不计算涨跌':' · 涨跌按同钟点；趋势历史日全天，今日截至查询时刻'):' · 各平台当地全天')+'。占比以当前已读范围为分母；缺失保留 —。</div>'+status+coverage(m)+top+trend(m)+tables+'<div class="daily-note">'+(S.direction==='workorder'?'原始工单不去重：已处理工单（源状态4）÷全部提交工单；不代表已核实到账。':'全部按创建日期，成功按成功日期，跨日成功可能使成功率超过100%；参考手续费按当前费率估算，非历史实际费用。')+' '+updatedBasisNote()+' 已读取不代表采集完整；未知日期在图中留空。</div></div>';
   }
-  const updatedBasisNote=()=>S.direction!=='workorder'&&S.scope?.platforms.some(p=>p.capabilities?.successTimeBasis==='order_updated_at')?'多利成功按成功状态＋订单更新时间统计，不代表实际到账时间。':'';
+  const updatedBasisNote=()=>S.direction==='workorder'?'':[S.scope?.platforms.some(p=>p.capabilities?.successTimeBasis==='order_updated_at')?'多利成功按成功状态＋订单更新时间统计，不代表实际到账时间。':'',S.scope?.platforms.some(p=>p.capabilities?.successTimeBasis==='source_completed_at')?'KB成功按成功状态＋源订单完成时间统计，不代表银行到账时间。':''].filter(Boolean).join(' ');
   const canExport=()=>current()&&allowed('export')&&['ready','partial'].includes(S.direction==='workorder'?S.workStatus:S.status);
   function exportRows(){
    if(!canExport())return [];const m=model(),strip=x=>String(x).replace(/<[^>]*>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'"),plainCells=html=>[...html.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(x=>strip(x[1])),footer={kind:'—',now:m.now,prior:m.prior,comparison:m.comparison};

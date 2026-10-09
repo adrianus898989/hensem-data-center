@@ -10,7 +10,7 @@
   if(Object.hasOwn(r,'settlement_currency')){rows.push(['结算金额',settlement(r,tools)]);if(knownMoney(r.settlement_fee))rows.push(['结算手续费',N(r.settlement_fee)+(r.settlement_currency?' '+E(r.settlement_currency):'')]);if(knownMoney(r.exchange_rate)&&Number(r.exchange_rate)>0)rows.push(['来源汇率',E(r.exchange_rate)]);}
   if(r.platform?.source==='wg'&&r.direction==='charge'&&r.channel_type==='提现转充值'&&r.fee_exempt===true)rows.push(['手续费','0（提现转充值）']);
   return rows;}
- root.HensemProviderOrders={moneyCell,moneyRows,create:function({L,E,N,C,table,box,formatTime,successTimeLabel=p=>p?.capabilities?.successTimeBasis==='order_updated_at'?'成功统计时间（订单更新时间）':'成功时间',query,orderFieldValue=(p,key,value)=>value,request,openDrawer}){
+ root.HensemProviderOrders={moneyCell,moneyRows,create:function({L,E,N,C,table,box,formatTime,successTimeLabel=p=>p?.capabilities?.successTimeBasis==='order_updated_at'?'成功统计时间（订单更新时间）':p?.capabilities?.successTimeBasis==='source_completed_at'?'成功时间（源订单完成时间）':'成功时间',query,orderFieldValue=(p,key,value)=>value,request,openDrawer}){
   let current=null,serial=0;
   const cancel=()=>{serial++;current=null},previousClose=root.closeDrawer;
   if(typeof previousClose==='function')root.closeDrawer=function(...args){cancel();return previousClose.apply(this,args)};
@@ -30,7 +30,7 @@
   function counts(mode){return targets().reduce((n,t)=>n+t[mode],0)}
   function show(){
    if(!current)return;
-   const s=current,total=counts(s.mode),max=Math.max(1,Math.ceil(total/20)),successLabel=targets().some(t=>successTimeLabel(t.platform)!=='成功时间')?'成功统计时间（多利按更新时间）':'成功时间';
+   const s=current,total=counts(s.mode),max=Math.max(1,Math.ceil(total/20)),successLabels=[...new Set(targets().map(t=>successTimeLabel(t.platform)))],successLabel=successLabels.length===1?successLabels[0]:'成功统计时间（'+[successLabels.some(x=>x.includes('更新时间'))?'多利按更新时间':'',successLabels.some(x=>x.includes('完成时间'))?'KB按完成时间':''].filter(Boolean).join('；')+'）';
    const tabs='<div class="tabs">'+(s.status==='success'?[['success',successLabel]]:[['success',successLabel],['created','创建时间']]).map(([mode,label])=>'<button class="'+(s.mode===mode?'on':'')+'" onclick="liveProviderOrderBasis(\''+mode+'\')">'+label+' · '+C(counts(mode))+' 笔</button>').join('')+'</div>';
    const note='<div class="live-definition">'+E(s.from.replace('T',' ')+' 至 '+s.to.replace('T',' '))+' · '+E(s.currency)+' · '+(s.mode==='success'?'按'+successLabel+'读取，包含此前创建、本期成功的订单。':'按创建时间读取本期全部订单。')+' 各平台当地时间。</div>';
    const platformFilter='<div class="live-filters"><label>平台<select aria-label="三方订单平台" onchange="liveProviderOrderPlatform(this.value)"><option value="">全部已查询平台</option>'+s.targets.map(t=>'<option value="'+E(t.platform.id)+'" '+(s.platformId===t.platform.id?'selected':'')+'>'+E(t.platform.name+' · '+t.platform.source)+' · '+C(t[s.mode])+' 笔</option>').join('')+'</select></label></div>';
