@@ -3,7 +3,9 @@
 body.live-admin .sidebar,body.live-admin .sidebar .nav{scrollbar-width:none}
 body.live-admin .sidebar .nav{overflow-y:auto}
 body.live-admin .sidebar::-webkit-scrollbar,body.live-admin .sidebar .nav::-webkit-scrollbar{display:none;width:0;height:0}
-body.live-admin .content{padding:17px 22px 22px}
+/* Fill the admin viewport, including the extra space exposed by browser zoom. */
+body.live-admin .main{max-width:none;min-width:0}
+body.live-admin .content{max-width:none;width:auto;min-width:0;margin-inline:0;box-sizing:border-box;padding:17px 22px 22px}
 body.live-admin .eyebrow,body.live-admin .bottom-note{display:none}
 body.live-admin .page-title{margin-bottom:14px}
 body.live-admin .page-title h1{font-size:23px}

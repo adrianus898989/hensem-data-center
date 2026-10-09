@@ -1,6 +1,3 @@
-/* Let this data-heavy page use the extra CSS viewport space created by browser zoom. */
-body.live-admin .content:has(.live-channel-status){max-width:none;width:auto;margin-inline:0}
-body.live-admin .main:has(.live-channel-status){max-width:none;min-width:0}
 .live-channel-status{color:#202a3b;font:12px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;min-width:0;width:100%}
 .live-channel-status *{box-sizing:border-box}
 .live-channel-status button,.live-channel-status input,.live-channel-status select{font:inherit}
@@ -79,13 +76,14 @@ body.live-admin .main:has(.live-channel-status){max-width:none;min-width:0}
 .channel-ar-source-table thead .channel-name{left:auto;width:auto}
 .channel-ar-source-table th,.channel-ar-source-table td{font-size:12px;white-space:normal;overflow-wrap:anywhere;vertical-align:middle;padding:8px}
 .channel-ar-source-table thead th{font-size:12px}
+.channel-ar-source-table .channel-rate-cell{white-space:nowrap;font-variant-numeric:tabular-nums}
 .channel-ar-source-table tbody tr:nth-child(even)>:is(th,td){background:#f8faff}
 .channel-ar-source-table .channel-provider{position:static;left:auto;width:auto;box-shadow:none}
 .channel-ar-source-table thead .channel-provider{position:sticky;top:0;z-index:3}
 .channel-ar-source-table :is(.channel-category,.channel-compact-state,.channel-id){position:sticky;z-index:2;background:#fff}
 .channel-ar-source-table .channel-category{left:0}
 .channel-ar-source-table .channel-compact-state{left:115px}
-.channel-ar-source-table .channel-id{left:235px;border-right-color:#cbd8eb;box-shadow:2px 0 3px #15274c12}
+.channel-ar-source-table .channel-id{left:255px;border-right-color:#cbd8eb;box-shadow:2px 0 3px #15274c12}
 .channel-ar-source-table thead :is(.channel-category,.channel-compact-state,.channel-id){z-index:5;background:#f3f6fc}
 .channel-category{text-align:left!important}
 .channel-category strong,.channel-identity strong,.channel-display-name strong{display:block;font-weight:600}
@@ -93,6 +91,8 @@ body.live-admin .main:has(.live-channel-status){max-width:none;min-width:0}
 .channel-identity,.channel-display-name{text-align:left!important;overflow-wrap:anywhere}
 .channel-identity span{display:block;color:#697b95;font-size:11px;margin-top:4px}
 .channel-switch-line{display:flex;align-items:center;justify-content:center;gap:5px;white-space:nowrap}
+.channel-state-label{color:#8592a7;font-size:10px;font-weight:400}
+.channel-availability .channel-state-label{margin-right:5px}
 .live-channel-status button.channel-readonly-switch,.live-channel-status button.channel-readonly-switch:disabled{position:relative;width:29px;height:16px;min-width:29px;border:0;border-radius:10px;padding:0;background:#b8c2cf;opacity:1;cursor:default;pointer-events:none;flex-shrink:0}
 .live-channel-status button.channel-readonly-switch.on{background:#3e82eb}
 .live-channel-status button.channel-readonly-switch.unknown{background:#e3e7ed;border:1px dashed #adb8c7}
@@ -103,10 +103,6 @@ body.live-admin .main:has(.live-channel-status){max-width:none;min-width:0}
 .channel-availability.available{color:#159569}
 .channel-availability.closed{color:#e04853}
 .channel-availability.unknown{color:#8592a7}
-.channel-rate-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px;align-items:center;font-variant-numeric:tabular-nums}
-.channel-rate-grid>div{display:flex;align-items:center;justify-content:space-between;gap:5px;white-space:nowrap;font-size:11px}
-.channel-rate-grid>div>span{font-size:10px;color:#7c8aa0}
-.channel-rate-grid strong{font-weight:500;font-size:12px}
 .channel-limits{font-variant-numeric:tabular-nums;font-size:11px!important}
 .channel-limits>div{line-height:1.5;overflow-wrap:normal}
 .channel-limits>div>span{color:#8592a7}
