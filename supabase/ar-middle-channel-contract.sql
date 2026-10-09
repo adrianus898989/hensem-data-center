@@ -74,19 +74,36 @@ revoke all on private.ar_middle_channel_platforms,private.ar_middle_channel_inge
 grant select on private.ar_middle_channel_platforms,private.ar_middle_channel_ingest_credentials to service_role;
 grant select,insert,update on private.ar_middle_channels,private.ar_middle_channel_sync_state to service_role;
 
-create function private.ar_middle_channel_clean_record(p_record jsonb)
+create or replace function private.ar_middle_channel_clean_record(p_record jsonb)
 returns jsonb language plpgsql immutable security invoker set search_path='' as $clean$
-declare k text;r jsonb:=p_record;notes text;
- text_keys constant text[]:=array['channel_id','channel_name','provider','channel_type','payment_method','status_text','category_id','category_name','source_state','source_channel_state','source_merchant_state','sys_channel_id','third_pay_merchant_id'];
+declare k text;r jsonb:=p_record;notes text;category jsonb;category_ids text[]:=array[]::text[];
+ text_keys constant text[]:=array['channel_id','channel_name','provider','channel_type','payment_method','status_text','category_id','category_name','source_state','source_channel_state','source_merchant_state','sys_channel_id','third_pay_merchant_id','source_channel_name'];
  money_keys constant text[]:=array['min_amount','max_amount','balance','balance_threshold','weight','fee_rate','fee_amount','success_rate_15m','success_rate_30m','success_rate_1h','success_rate_4h','success_rate_8h','success_rate_24h','success_rate_today','success_rate_total'];
+ unsafe_label constant text:='([a-z][a-z0-9+.-]*://|(javascript|data):|bearer[[:space:]]+[^[:space:]]|(password|passwd|token|secret|cookie|api[_-]?key|authorization|密码|密钥)[[:space:]]*[:=：][[:space:]]*[^[:space:]])';
 begin
- if jsonb_typeof(r) is distinct from 'object' or exists(select 1 from jsonb_object_keys(r)x where x<>all(text_keys||money_keys||array['limit_currency','balance_currency','balance_threshold_currency','required_deposit_count','priority','source_position','enabled','notes','source_updated_at','fee_rate_basis'])) then raise exception 'AR_MIDDLE_INVALID_RECORD';end if;
+ if jsonb_typeof(r) is distinct from 'object' or exists(select 1 from jsonb_object_keys(r)x where x<>all(text_keys||money_keys||array['limit_currency','balance_currency','balance_threshold_currency','required_deposit_count','priority','source_position','enabled','notes','source_updated_at','fee_rate_basis','channel_categories'])) then raise exception 'AR_MIDDLE_INVALID_RECORD';end if;
  foreach k in array array['channel_id','channel_name','status_text'] loop
   if jsonb_typeof(r->k) is distinct from 'string' or length(r->>k) not between 1 and 200 then raise exception 'AR_MIDDLE_INVALID_TEXT';end if;
  end loop;
  foreach k in array text_keys loop
   if r->>k is not null and (jsonb_typeof(r->k)<>'string' or length(r->>k) not between 1 and 200 or r->>k<>btrim(r->>k) or r->>k ~ '[[:cntrl:]]|<[^>]*>') then raise exception 'AR_MIDDLE_INVALID_TEXT';end if;
  end loop;
+ if r->>'source_channel_name' ~* unsafe_label then raise exception 'AR_MIDDLE_INVALID_SOURCE_LABEL';end if;
+ -- Optional for previous collectors. Preserve every source category in its original order.
+ if r->'channel_categories' is not null and jsonb_typeof(r->'channel_categories')<>'null' then
+  if jsonb_typeof(r->'channel_categories')<>'array' then raise exception 'AR_MIDDLE_INVALID_CATEGORIES';end if;
+  if jsonb_array_length(r->'channel_categories')>1000 then raise exception 'AR_MIDDLE_INVALID_CATEGORIES';end if;
+  for category in select value from jsonb_array_elements(r->'channel_categories') loop
+   if jsonb_typeof(category) is distinct from 'object' then raise exception 'AR_MIDDLE_INVALID_CATEGORIES';end if;
+   if not category ?& array['category_id','category_name','sort'] or exists(select 1 from jsonb_object_keys(category)x where x<>all(array['category_id','category_name','sort'])) then raise exception 'AR_MIDDLE_INVALID_CATEGORIES';end if;
+   if jsonb_typeof(category->'category_id') is distinct from 'string' or category->>'category_id'=any(category_ids) then raise exception 'AR_MIDDLE_INVALID_CATEGORIES';end if;
+   foreach k in array array['category_id','category_name'] loop
+    if category->>k is not null and (jsonb_typeof(category->k)<>'string' or length(category->>k) not between 1 and 200 or category->>k<>btrim(category->>k) or category->>k ~ '[[:cntrl:]]|<[^>]*>' or category->>k ~* unsafe_label) then raise exception 'AR_MIDDLE_INVALID_SOURCE_LABEL';end if;
+   end loop;
+   if category->>'sort' is not null and (jsonb_typeof(category->'sort')<>'number' or category->>'sort' !~ '^-?[0-9]{1,10}$' or (category->>'sort')::numeric not between -2147483648 and 2147483647) then raise exception 'AR_MIDDLE_INVALID_CATEGORIES';end if;
+   category_ids:=array_append(category_ids,category->>'category_id');
+  end loop;
+ end if;
  foreach k in array money_keys loop
   if r->>k is not null and (jsonb_typeof(r->k)<>'string' or r->>k !~ (case when k='balance' then '^-?[0-9]{1,16}(\.[0-9]{1,8})?$' else '^[0-9]{1,16}(\.[0-9]{1,8})?$' end)) then raise exception 'AR_MIDDLE_INVALID_NUMBER';end if;
   if k like 'success_rate_%' and r->>k is not null and (r->>k)::numeric>100 then raise exception 'AR_MIDDLE_INVALID_RATE';end if;

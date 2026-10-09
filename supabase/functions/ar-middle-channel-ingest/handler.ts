@@ -3,11 +3,11 @@
 export const AR_MIDDLE_ORIGIN = "https://m8-admin.payplatform-manager.com";
 export const MAX_AR_MIDDLE_BYTES = 8 * 1024 * 1024;
 const RATE_FIELDS = ["15m", "30m", "1h", "4h", "8h", "24h", "today", "total"].map(x => "success_rate_" + x);
-const TEXT_FIELDS = ["channel_name", "provider", "channel_type", "payment_method", "status_text", "category_id", "category_name", "source_state", "source_channel_state", "source_merchant_state", "sys_channel_id", "third_pay_merchant_id"];
+const TEXT_FIELDS = ["channel_name", "provider", "channel_type", "payment_method", "status_text", "category_id", "category_name", "source_state", "source_channel_state", "source_merchant_state", "sys_channel_id", "third_pay_merchant_id", "source_channel_name"];
 const MONEY_FIELDS = ["min_amount", "max_amount", "balance", "balance_threshold", "weight", "fee_rate", "fee_amount"];
 const INTEGER_FIELDS = ["required_deposit_count", "priority", "source_position"];
 const CURRENCY_FIELDS = ["limit_currency", "balance_currency", "balance_threshold_currency"];
-const RECORD_FIELDS = ["channel_id", ...TEXT_FIELDS, ...MONEY_FIELDS, ...RATE_FIELDS, ...INTEGER_FIELDS, ...CURRENCY_FIELDS, "enabled", "notes", "source_updated_at", "fee_rate_basis"];
+const RECORD_FIELDS = ["channel_id", ...TEXT_FIELDS, ...MONEY_FIELDS, ...RATE_FIELDS, ...INTEGER_FIELDS, ...CURRENCY_FIELDS, "enabled", "notes", "source_updated_at", "fee_rate_basis", "channel_categories"];
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const TENANT = /^[0-9]{1,18}$/;
 const DECIMAL = /^[0-9]{1,16}(?:\.[0-9]{1,8})?$/;
@@ -21,6 +21,24 @@ function only(value: Json, fields: readonly string[]): void { if (Object.keys(va
 function text(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && value.trim() === value
     && !/[\u0000-\u001f\u007f]|<[^>]*>/.test(value);
+}
+// These source labels carry names and native IDs only, never source URLs or credentials.
+function sourceLabel(value: unknown): value is string {
+  return text(value) && !/(?:[a-z][a-z0-9+.-]*:\/\/|(?:javascript|data):|bearer\s+\S|(?:password|passwd|token|secret|cookie|api[_-]?key|authorization|密码|密钥)\s*[:=：]\s*\S)/i.test(value);
+}
+function categories(value: unknown): void {
+  if (value == null) return; // Older collectors may omit the additional source fields.
+  if (!Array.isArray(value) || value.length > 1000) invalid();
+  const seen = new Set<string>();
+  for (const category of value) {
+    if (!object(category)) invalid();
+    only(category, ["category_id", "category_name", "sort"]);
+    if (!sourceLabel(category.category_id) || seen.has(category.category_id)
+      || !("category_name" in category) || !("sort" in category)
+      || (category.category_name !== null && !sourceLabel(category.category_name))
+      || (category.sort !== null && (!Number.isInteger(category.sort) || Number(category.sort) < -2147483648 || Number(category.sort) > 2147483647))) invalid();
+    seen.add(category.category_id);
+  }
 }
 function instant(value: unknown, now: number): number {
   if (typeof value !== "string" || !INSTANT.test(value)) invalid();
@@ -63,6 +81,8 @@ export function validateArMiddleChannelRequest(input: unknown, now = Date.now())
       if (!text(entry.channel_id) || seen.has(entry.channel_id) || !text(entry.channel_name) || !text(entry.status_text) || entry.source_position !== position) invalid();
       seen.add(entry.channel_id);
       for (const field of TEXT_FIELDS) if (entry[field] != null && !text(entry[field])) invalid();
+      if (entry.source_channel_name != null && !sourceLabel(entry.source_channel_name)) invalid();
+      categories(entry.channel_categories);
       for (const field of [...MONEY_FIELDS, ...RATE_FIELDS]) {
         const number = entry[field], pattern = field === "balance" ? SIGNED_DECIMAL : DECIMAL;
         if (number != null && (typeof number !== "string" || !pattern.test(number))) invalid();
