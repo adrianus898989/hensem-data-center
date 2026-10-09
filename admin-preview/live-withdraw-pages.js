@@ -156,7 +156,7 @@
    body+=box(operators?'操作人表现':'平台出款表现',table(headers,rows.map(cells),'withdraw-stat-table'+(S.daily?' withdraw-daily-table':'')+(operators?' withdraw-operators-table':''),Number(d.total||0)>S.size?[footer(rows,'当前页汇总'),footer([],'全部汇总',t)]:[footer([],'合计',t)])+pagebar(Number(d.total||0),S.page,S.size),
     '按来源当地日期读取，与现有后台使用相同日统计。新AR直传覆盖同平台同日副本；昨日对比不计入当日总计。平均处理用时按有效时间样本加权；WG 使用创建至操作处理时间，缺少或异常时间不计入，不代表支付到账时长。缺少前期记录时不显示涨跌。');
    if(!operators)body+=coveragePanel(d.platformCoverage);
-   return controls+'<div id="withdraw-content">'+body+reasonPanel()+'</div>'+noteDialog();
+   return controls+'<div id="withdraw-content">'+body+'</div><div id="withdraw-reason-overlay">'+reasonPanel()+'</div>'+noteDialog();
   }
   function noteDialog(){
    if(!S.note&&!S.noteSample)return '';
@@ -165,13 +165,25 @@
    return '<div class="live-config-modal-backdrop"><section class="live-config-modal" role="dialog" aria-modal="true" aria-label="每日备注"><h2>每日备注</h2><div class="config-context">'+E(identity({country:n.country,name:n.platform}).country)+' · '+E(platformLabel(n))+'</div><form onsubmit="event.preventDefault();withdrawNoteSave()"><label for="withdrawNoteDate">备注日期</label><input id="withdrawNoteDate" type="date" min="'+E(L.from.slice(0,10))+'" max="'+E(L.to.slice(0,10))+'" value="'+E(n.date)+'" onchange="withdrawNoteDate(this.value)" '+(S.noteSaving?'disabled':'')+'><label for="withdrawNoteText">当日原因 / 运营说明</label><textarea id="withdrawNoteText" rows="6" maxlength="1000" oninput="withdrawNoteInput(this.value)" '+(S.noteSaving?'disabled':'')+'>'+E(S.noteDraft)+'</textarea><p class="config-help">最多 1000 字。只保存该平台、该日期的人工备注；留空保存可清除备注。</p>'+(S.noteError?'<div class="config-message" role="alert">'+E(S.noteError)+'</div>':'')+'<div class="config-actions"><button type="button" class="btn" onclick="withdrawNoteClose()" '+(S.noteSaving?'disabled':'')+'>取消</button><button class="btn primary" '+(S.noteSaving?'disabled':'')+'>'+(S.noteSaving?'保存中…':'保存备注')+'</button></div></form></section></div>';
   }
   const reasonFocus=()=>document.getElementById('withdraw-reasons')?.focus?.({preventScroll:true});
+  // Detail interactions must leave the platform table (and its scroll container)
+  // mounted. A full-page paint resets its horizontal scroll and scroll anchor.
+  function renderReason(preserveBody=false){
+   const host=document.getElementById('withdraw-reason-overlay');
+   if(!host){render();return}
+   const body=preserveBody?host.querySelector?.('.withdraw-drawer-body'):null,position=body?{left:body.scrollLeft,top:body.scrollTop}:null;
+   const x=root.scrollX,y=root.scrollY;
+   host.innerHTML=reasonPanel();
+   const next=position?host.querySelector?.('.withdraw-drawer-body'):null;
+   if(next){next.scrollLeft=position.left;next.scrollTop=position.top}
+   if(Number.isFinite(x)&&Number.isFinite(y)&&(root.scrollX!==x||root.scrollY!==y))root.scrollTo?.(x,y);
+  }
   async function reasonsLoad(force=false){
    if(!S.reason)return;const query={action:'withdrawReasons',...S.reason,platform:rowPlatform(S.reason),offset:(S.reasonPage-1)*S.reasonSize,limit:S.reasonSize},key=JSON.stringify(query),cached=reasonCache.get(key),serial=++S.reasonSerial;
    S.reasonError='';
-   if(!force&&cached&&Date.now()-cached.time<60000){S.reasonData=cached.data;S.reasonBusy=false;render();reasonFocus();return}
-   S.reasonBusy=true;render();reasonFocus();
-   try{const data=await request(query);if(serial!==S.reasonSerial)return;const max=Math.max(1,Math.ceil(Number(data.total||0)/S.reasonSize));if(S.reasonPage>max){S.reasonPage=max;return reasonsLoad(force)}reasonCache.set(key,{data,time:Date.now()});if(reasonCache.size>30)reasonCache.delete(reasonCache.keys().next().value);S.reasonData=data;S.reasonBusy=false;render();reasonFocus()}
-   catch(e){if(serial!==S.reasonSerial)return;S.reasonError=e.message;S.reasonBusy=false;S.reasonData=null;render();reasonFocus()}
+   if(!force&&cached&&Date.now()-cached.time<60000){S.reasonData=cached.data;S.reasonBusy=false;renderReason();reasonFocus();return}
+   S.reasonBusy=true;renderReason();reasonFocus();
+   try{const data=await request(query);if(serial!==S.reasonSerial)return;const max=Math.max(1,Math.ceil(Number(data.total||0)/S.reasonSize));if(S.reasonPage>max){S.reasonPage=max;return reasonsLoad(force)}reasonCache.set(key,{data,time:Date.now()});if(reasonCache.size>30)reasonCache.delete(reasonCache.keys().next().value);S.reasonData=data;S.reasonBusy=false;renderReason();reasonFocus()}
+   catch(e){if(serial!==S.reasonSerial)return;S.reasonError=e.message;S.reasonBusy=false;S.reasonData=null;renderReason();reasonFocus()}
   }
   // The host iframe intentionally omits allow-forms. Direct actions must not
   // depend on native submit; Enter in text/date inputs follows the same path.
@@ -214,9 +226,9 @@
   root.withdrawReasonPage=page=>{if(S.reasonBusy||!Number.isInteger(page)||page<1)return;const max=Math.max(1,Math.ceil(Number(S.reasonData?.total||0)/S.reasonSize));S.reasonPage=Math.min(max,page);reasonsLoad()};
   root.withdrawReasonSize=size=>{if(![20,50,100].includes(Number(size)))return;S.reasonSize=Number(size);S.reasonPage=1;reasonsLoad()};
   root.withdrawReasonJump=value=>{if(/^\d+$/.test(String(value)))root.withdrawReasonPage(Number(value))};
-  root.withdrawReasonOriginal=(value,title='驳回原文',exact=false)=>{S.originalNote=exact?String(value??''):cleanNote(value);S.originalNoteTitle=String(title||'驳回原文');render();document.querySelector?.('.withdraw-original-dialog')?.querySelector('button')?.focus?.({preventScroll:true})};
-  root.withdrawReasonOriginalClose=()=>{S.originalNote='';render();reasonFocus()};
-  root.withdrawReasonClose=()=>{const trigger=S.reasonTrigger;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';render();if(trigger)document.querySelector?.('[data-withdraw-reason="'+trigger.index+'-'+trigger.kind+'"]')?.focus?.({preventScroll:true})};root.withdrawReasonRetry=()=>reasonsLoad(true);
+  root.withdrawReasonOriginal=(value,title='驳回原文',exact=false)=>{S.originalNote=exact?String(value??''):cleanNote(value);S.originalNoteTitle=String(title||'驳回原文');renderReason(true);document.querySelector?.('.withdraw-original-dialog')?.querySelector('button')?.focus?.({preventScroll:true})};
+  root.withdrawReasonOriginalClose=()=>{S.originalNote='';renderReason(true);reasonFocus()};
+  root.withdrawReasonClose=()=>{const trigger=S.reasonTrigger;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';renderReason();if(trigger)document.querySelector?.('[data-withdraw-reason="'+trigger.index+'-'+trigger.kind+'"]')?.focus?.({preventScroll:true})};root.withdrawReasonRetry=()=>reasonsLoad(true);
   root.withdrawReasonKey=event=>{if(event.key==='Escape'){event.preventDefault();root.withdrawReasonClose();return}if(event.key!=='Tab')return;const panel=document.getElementById('withdraw-reasons'),items=[...(panel?.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex="0"]')||[])].filter(e=>e.getClientRects().length);const first=items[0],last=items[items.length-1];if(!first)return;if(event.shiftKey&&(document.activeElement===first||document.activeElement===panel)){event.preventDefault();last.focus()}else if(!event.shiftKey&&(document.activeElement===last||document.activeElement===panel)){event.preventDefault();first.focus()}};
   function setNote(row,date){const previous=noteFor(row,date);S.note={country:row.country,platform:row.platform,date,storageCountry:previous?.country||row.country,storagePlatform:previous?.platform||row.platform,expectedVersion:previous?.version||'',original:previous?.reason||''};S.noteDraft=S.note.original;S.noteError='';S.noteSaving=false;render()}
   root.withdrawNoteOpen=index=>{const row=S.data?.rows?.[index];if(row&&S.data?.canWriteNotes)setNote(row,S.daily?row.dataDate:L.to.slice(0,10))};
