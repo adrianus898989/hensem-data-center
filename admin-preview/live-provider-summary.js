@@ -172,7 +172,11 @@
   function candidates(r){
    // Keep blank/unsupported platform exceptions: they must not fall back to
    // a country rate merely because they cannot yet be priced.
-   let records=rateRecords(r,rates,country),confirmed=confirmedFeeRule(r,country);
+   // Explicit reader provenance distinguishes connection matrix cells from
+   // actual platform contracts. Missing/unknown provenance stays fail-closed;
+   // even a marked status row cannot hide a nonempty or malformed fee rule.
+   let records=rateRecords(r,rates,country).filter(record=>!(record.scopeType==='platform'&&record.configurationRole==='connection_status'
+    &&['collectFee','payoutFee','totalFee','collectSingleFee','payoutSingleFee'].every(key=>!String(record[key]??'').trim()))),confirmed=confirmedFeeRule(r,country);
    if(confirmed)records=records.filter(record=>matchesFeeRule(record,confirmed));
    else {const specific=records.filter(record=>record.scopeType==='platform'&&platformKey(record.platform,r,country)===platformKey(r.platform,r,country));records=specific.length?specific:records.filter(record=>record.scopeType!=='platform');}
    // A provider aggregate normally has no channel category. Different rates
@@ -219,10 +223,17 @@
    const rule=rules[0].rule;
    if(rules.some(({record})=>{const raw=record.feeEffective?.[r.direction]?.currency;return raw!=null&&String(raw).trim()&&currency(raw)!==unit;}))return unknown(r,'fee_currency_mismatch');
    if(rule.fixed){
-    // The current production reader does not expose this monetary evidence.
-    // Future explicit source currency proof can price fixed fees; a category
-    // named USDT or a country's usual currency can never supply the unit.
-    const proof=record=>record.feeEffective?.[r.direction],proved=rules.every(({record})=>currency(proof(record)?.currency)===unit&&String(proof(record)?.source?.currencyCell||'').trim());
+    // Exact source-cell proof or a scoped, audited owner confirmation can
+    // price current fixed fees. Neither a category nor country implies money.
+    const proof=record=>record.feeEffective?.[r.direction],proved=rules.every(({record,rule:recordRule})=>{
+     if(currency(proof(record)?.currency)===unit&&String(proof(record)?.source?.currencyCell||'').trim())return true;
+     const confirmed=record.currentFeeCurrencyEvidence?.[r.direction];
+     return r.direction==='withdraw'&&unit==='INR'&&record.scopeType==='country'&&record.sheetName==='印度线下'
+      &&countryKey(record.country)==='印度'&&confirmed?.basis==='owner_confirmation'&&confirmed.confirmedAt==='2026-10-09'
+      &&confirmed.currency===unit&&confirmed.fixedFee===6&&recordRule.fixed===6
+      &&confirmed.sourceSheet===record.sheetName&&confirmed.sourceId===record.sourceId&&typeof record.sourceId==='string'&&record.sourceId.length>0
+      &&confirmed.provider===record.provider&&confirmed.country===record.country;
+    });
     if(!proved)return unknown(r,'fixed_fee_currency_unconfirmed');
    }
    const value=amount*rule.percent+total*rule.fixed;

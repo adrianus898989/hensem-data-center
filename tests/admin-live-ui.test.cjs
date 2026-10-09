@@ -1088,7 +1088,7 @@ test('overview fills all fee rollups, merges provider sources, and keeps manual 
  assert.equal(at(provider,pay,'估算手续费'),'47.00');assert.match(at(provider,pay,'手续费率'),/订单创建时间/);assert.equal(at(provider,pay,'手续费占比'),'100.00%');assert.equal(at(provider,pay,'成功金额'),'1,000.00');assert.equal(at(provider,pay,'金额占比'),'83.33%');assert.equal(at(provider,pay,'成功笔数'),'10');assert.equal(at(provider,pay,'笔数占比'),'83.33%');assert.equal(at(provider,pay,'成功率'),'33.33%');assert.equal(at(provider,man,'成功率'),'不适用');assert.equal(at(provider,man,'估算手续费'),'不适用');
  for(const first of ['团队','国家']){const t=tables.find(t=>t.headers[0]===first);assert.equal(at(t,t.rows[0],'估算手续费'),'47.00');assert.equal(at(t,t.rows[0],'成功金额'),'1,200.00')}
  const platform=tables.find(t=>t.headers[0]==='平台');assert.deepEqual(platform.rows.map(r=>at(platform,r,'估算手续费')).sort(),['12.00','35.00']);
- const ranks=h.html().match(/<div class="df-flow-provider-extremes"[^]*?<div class="df-flow-foot">/)[0];assert.doesNotMatch(ranks,/人工充值|人工确认/);assert.match(ranks,/暂无符合笔数条件的三方/);
+ const ranks=h.html().match(/<div class="df-flow-provider-extremes"[^]*?<div class="df-flow-foot">/)[0];assert.doesNotMatch(ranks,/人工充值|人工确认/);assert.match(ranks,/暂无满足入榜条件的三方/);assert.match(ranks,/创建 ≥ 1,000 笔/);
  for(const t of tables.filter(t=>['团队','国家','平台','三方'].includes(t.headers[0])))for(const row of t.rows)assert.equal(row.length,t.headers.length,'compact columns align');
 });
 test('merged canonical provider order drawer includes matching aliases from each source',async()=>{
@@ -1118,7 +1118,7 @@ test('overview shortlists major providers, excludes small samples and omits ArbP
  const h=await ready(),r=completeAggregate(P,50000,30000),row=(provider,count,success,direction='charge')=>({...stats(count,String(count*100)),provider,direction,success_count:success,success_amount:String(success*100),created_success_count:1});
  r.groups.provider=[row('ArbPay',15000,15000),row('TinyPerfect',9,9),...Array.from({length:11},(_,i)=>row('Major'+i,10000-i*500,6000-i*400)),row('ArbPay',15000,15000,'withdraw'),row('PayoutOther',12000,11000,'withdraw')];
  h.L.results=[r];h.L.direction='all';h.L.feeLookupRows=[];h.c.render();
- const cards=[...h.html().matchAll(/<div class="df-provider-rank high">([^]*?)<\/div><div class="df-provider-rank low">/g)].map(x=>x[1]);assert.equal(cards.length,2);
+ const cards=[...h.html().matchAll(/<div class="df-provider-rank high"[^>]*>([^]*?)<\/div><div class="df-provider-rank low"[^>]*>/g)].map(x=>x[1]);assert.equal(cards.length,2);assert(cards.every(card=>card.includes('创建 ≥ 1,000 笔')));
  assert.doesNotMatch(cards[0],/<span>ArbPay<\/span>|TinyPerfect|Major10/);assert.doesNotMatch(cards[0],/不含 ArbPay/);assert.match(cards[0],/Major0/);assert.match(cards[1],/<span>ArbPay<\/span>/);
  const providers=renderedTables(h.html()).filter(t=>t.headers[0]==='三方');assert(providers.some(t=>t.rows.some(r=>plain(r[0])==='ArbPay')),'ArbPay remains in ledger');
 });

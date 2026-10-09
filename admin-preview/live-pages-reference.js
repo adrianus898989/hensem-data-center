@@ -11,6 +11,9 @@
  const feeMode=()=>L.feeEstimateMode==='historical'?'historical':'current';
  const feeBasis=()=>feeMode()==='current'?'按当前费率估算':'按订单创建时生效费率';
  const displayPlatform=p=>window.HensemLiveReportData?.normalizeIdentity(p||{})||p||{};
+ const isYash=p=>String(p?.source||'').toLowerCase()==='kb'&&[p.sourceName,p.source_name,p.name,p.platform].includes('YASH.BET');
+ const missingYashProvider=row=>row.provider==='未识别通道'&&(row.fee_items||row.items||[]).length>0&&(row.fee_items||row.items).every(isYash);
+ const overviewProviderCell=row=>missingYashProvider(row)?'<button class="link" title="当前采集记录的三方／通道字段为空或未提供；订单仍计入总计，不按支付方式推定三方。" onclick="liveProviderOrders('+E(JSON.stringify(row.provider))+',\'\','+E(JSON.stringify(row.direction))+')">未提供三方／通道</button><small class="cell-sub" style="display:block">三方／通道字段未提供</small>':providerCell({...row,source:''});
  const aliasKey=p=>window.HensemLiveReportData?.confirmedAliasKey?.(p||{})||null;
  const raw=()=>L.results.flatMap(x=>{const p=displayPlatform(x.platform);return (x.summary||[]).map(r=>({...r,platform:p.name,platformId:p.id,source:p.source,country:p.country,team:p.team||'未绑定团队'}))});
  const successTotal=(rows,d)=>c.successTimeSummary?c.successTimeSummary(rows,d):plus(rows);
@@ -98,7 +101,7 @@
    const displayRows=key==='platform'?[...subset,...emptyPlatformCells(d,headers.length)]:subset;
    const columns=[textual(key),...(isProvider?[typeSort]:[]),numeric('all_amount'),numeric('all_count'),numeric('success_amount'),...(isProvider?[numeric('success_amount_share')]:[]),numeric('success_count'),...(isProvider?[numeric('success_count_share')]:[]),{value:r=>isProvider&&!sorting.isProviderBusiness(r.provider)?null:sorting.fraction(r.success_count,r.all_count)},...(isProvider?[{value:r=>L.feeLookupLoading||L.feeLookupError?null:sorting.feeSortValue(r)}]:[]),{value:r=>L.feeLookupLoading||L.feeLookupError?null:sorting.knownNumber(r.estimated_fee)},...(isProvider?[{value:r=>L.feeLookupLoading||L.feeLookupError?null:sorting.knownNumber(r.fee_share)}]:[])];
    if(isPlatform)columns.push({value:r=>memberFact(r.platformId)?.value??null});
-   const rowCells=r=>{if(r._emptyCells)return r._emptyCells;return [isProvider?providerCell({...r,source:''}):E(r[key]||'未提供'),...(isProvider?[typeCell(r)]:[]),...cells(r),...(isPlatform?[memberCell(r.platformId)]:[])];};
+   const rowCells=r=>{if(r._emptyCells)return r._emptyCells;return [isProvider?overviewProviderCell(r):E(r[key]||'未提供'),...(isProvider?[typeCell(r)]:[]),...cells(r),...(isPlatform?[memberCell(r.platformId)]:[])];};
    const body=sortedPageTable(id+'-'+d,headers,displayRows,columns,rowCells,[['<strong>'+E(name(d)+'汇总')+'</strong>',...(isProvider?['—']:[]),...cells(total,true),...(isPlatform?[memberCell([...new Set(displayRows.map(r=>r.platformId))])]:[])]],isProvider?providerSummaryTable:isPlatform?platformSummaryTable:refTable);
    const feeStatus=L.feeLookupLoading?'手续费匹配中…':L.feeLookupError?'费率读取失败':'手续费已匹配 '+C(fees.matchedCount)+' / '+C(fees.successCount)+' 笔'+(fees.complete?'':' · 部分费率未匹配');
    const intake=isPlatform?overviewIntakeCoverage(d):null,coverage=intake?.notExpected.length?' · 应采 '+C(intake.requested)+' 平台 · 所选日期尚未上线 '+C(intake.notExpected.length)+' 平台（不计缺口）':'';
@@ -109,14 +112,16 @@
  }
  function feeRows(direction){return window.HensemProviderSummary.overviewDimensions({orders:groupRows('provider'),summaries:raw(),rates:L.feeLookupRows,country:L.country,key:'platform',plus,combine,feeMode:feeMode()}).filter(row=>row.direction===direction)}
  function providerExtremes(direction){
+  const minCount=L.queryPlatforms?.length===1&&isYash(L.queryPlatforms[0])?300:1000;
   // A zero-success ordinary withdrawal is not a provider comparison candidate; keep its ledger row.
   const zeroOrdinaryPayout=r=>direction==='withdraw'&&String(r.provider).trim()==='普通提现'&&r.success_amount!=null&&r.success_count!=null&&Number(r.success_amount)===0&&Number(r.success_count)===0;
-  const list=combine(groupRows('provider').filter(r=>r.direction===direction),['provider','currency']).filter(r=>window.HensemProviderSummary.isProviderBusiness(r.provider)&&r.success_count!=null&&Number(r.all_count)>=1000&&!zeroOrdinaryPayout(r))
+  const list=combine(groupRows('provider').filter(r=>r.direction===direction),['provider','currency']).filter(r=>window.HensemProviderSummary.isProviderBusiness(r.provider)&&r.success_count!=null&&Number(r.all_count)>=minCount&&!zeroOrdinaryPayout(r))
    .map(r=>({...r,rate:Number(r.success_count)/Number(r.all_count)})),byVolume=(a,b)=>b.all_count-a.all_count||b.success_count-a.success_count||String(a.provider).localeCompare(String(b.provider)),byRate=(a,b)=>b.rate-a.rate||b.success_count-a.success_count||byVolume(a,b);
   // Only the collection high-rate shortlist excludes ArbPay; ledger totals and payout keep it.
   const high=list.filter(r=>direction!=='charge'||String(r.provider).trim().toLowerCase()!=='arbpay').sort(byVolume).slice(0,10).sort(byRate).slice(0,3),chosen=new Set(high.map(r=>r.provider));
   const low=list.slice().sort(byVolume).slice(0,10).filter(r=>!chosen.has(r.provider)).sort((a,b)=>a.rate-b.rate||byVolume(a,b)).slice(0,3);
-  const renderList=(rows,label,tone)=>'<div class="df-provider-rank '+tone+'"><b>主要三方 · '+label+'</b>'+(!rows.length?'<span class="muted">暂无符合笔数条件的三方</span>':'<div class="df-provider-rank-labels"><span>三方</span><span>成功金额</span><span>成功率</span><span>成功笔数</span></div>'+rows.map(r=>'<span class="df-provider-rank-item" title="成功金额、笔数按成功时间；成功率＝成功 '+C(r.success_count)+' / 创建 '+C(r.all_count)+' 笔，含跨日成功"><span>'+E(r.provider)+'</span><span class="df-rank-amount">'+N(r.success_amount)+'</span><strong>'+R(r.success_count,r.all_count)+'</strong><small>'+C(r.success_count)+'</small></span>').join(''))+'</div>';
+  const rankRule='每家三方创建至少 '+C(minCount)+' 笔；先取创建量前10，再按成功率排序；高低榜不重复。'+(direction==='charge'?'代收高榜排除 ArbPay。':''),emptyRank=tone=>tone==='low'&&list.length&&high.length?'符合条件的三方已列入高榜，低榜不重复展示。':'暂无满足入榜条件的三方。';
+  const renderList=(rows,label,tone)=>'<div class="df-provider-rank '+tone+'" data-provider-min-count="'+minCount+'"><b>主要三方 · '+label+'</b><small class="cell-sub" style="display:block" title="'+E(rankRule)+'">创建 ≥ '+C(minCount)+' 笔</small>'+(!rows.length?'<span class="muted">'+emptyRank(tone)+'</span>':'<div class="df-provider-rank-labels"><span>三方</span><span>成功金额</span><span>成功率</span><span>成功笔数</span></div>'+rows.map(r=>'<span class="df-provider-rank-item" title="成功金额、笔数按成功时间；成功率＝成功 '+C(r.success_count)+' / 创建 '+C(r.all_count)+' 笔，含跨日成功"><span>'+E(r.provider)+'</span><span class="df-rank-amount">'+N(r.success_amount)+'</span><strong>'+R(r.success_count,r.all_count)+'</strong><small>'+C(r.success_count)+'</small></span>').join(''))+'</div>';
   return '<div class="df-flow-provider-extremes" aria-label="'+name(direction)+'三方成功率比较">'+renderList(high,'成功率较高','high')+renderList(low,'成功率较低','low')+'</div>';
  }
  function flow(d){

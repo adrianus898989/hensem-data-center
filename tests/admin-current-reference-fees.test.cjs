@@ -31,6 +31,26 @@ test('blank, invalid or conflicting platform exceptions cannot borrow the countr
  const conflict=facts(leaf(),[rate(),rate({scopeType:'platform',platform:'Alpha',collectFee:'2%'}),rate({scopeType:'platform',platform:'Alpha',collectFee:'3%'})]);hasReason(conflict,'conflicting_rates');assert.equal(conflict.amount,null);
  assert.equal(facts(leaf(),[rate(),rate({scopeType:'platform',platform:'Other',collectFee:'3%'})]).amount,40);
 });
+test('explicit connection-status provenance does not override fees, while missing or nonempty contracts remain authoritative',()=>{
+ const status=rate({scopeType:'platform',platform:'Alpha',configurationRole:'connection_status',collectFee:'',payoutFee:'',rawStatus:'开启 🟢'});
+ assert.equal(facts(leaf(),[rate(),status]).amount,40);
+ assert.equal(facts(leaf(),[status]).amount,null,'status does not supply a zero fee');
+ for(const configurationRole of [null,undefined,'platform_rate','unrecognized']){const r=facts(leaf(),[rate(),{...status,configurationRole}]);assert.equal(r.amount,null);hasReason(r,'unsupported_rate');}
+ assert.equal(facts(leaf(),[rate(),{...status,collectFee:'2%'}]).amount,20,'nonempty platform pricing remains authoritative');
+ for(const extra of [{collectFee:'待确认'},{totalFee:'待确认'},{payoutSingleFee:'6'}]){const r=facts(leaf(),[rate(),{...status,...extra}]);assert.equal(r.amount,null);hasReason(r,'unsupported_rate');}
+});
+test('owner-confirmed India-sheet single 6 INR supports current payout only and remains bound to its exact source',()=>{
+ const payout=leaf({direction:'withdraw'}),fixed=rate({sourceId:'synthetic-country-fee',sheetName:'印度线下',payoutSingleFee:'6'});
+ const confirmation={withdraw:{currency:'INR',fixedFee:6,basis:'owner_confirmation',confirmedAt:'2026-10-09',sourceSheet:fixed.sheetName,sourceId:fixed.sourceId,provider:fixed.provider,country:fixed.country}};
+ const confirmed={...fixed,currentFeeCurrencyEvidence:confirmation};assert.equal(facts(payout,[confirmed]).amount,85);
+ assert.equal(api.estimateFacts(payout,[confirmed],'印度').amount,null,'confirmation does not invent a historical effective date');
+ for(const extra of [{scopeType:'platform',platform:'Alpha'},{sheetName:'USDT'},{payoutSingleFee:'7'},{sourceId:'other-row'},{provider:'OtherPay'},{country:'巴西'}])assert.equal(facts(payout,[{...confirmed,...extra}]).amount,null);
+ for(const extra of [{currency:'USDT'},{direction:'charge',provider:'ExamplePay'}]){const actual=facts({...payout,...extra},[{...confirmed,collectSingleFee:'6'}]);assert.equal(actual.amount,null);}
+ for(const extra of [{currency:'USD'},{fixedFee:7},{sourceSheet:'other'},{sourceId:'other'},{country:'BR'},{provider:'other'},{basis:'inferred_country'},{confirmedAt:null}])assert.equal(facts(payout,[{...fixed,currentFeeCurrencyEvidence:{withdraw:{...confirmation.withdraw,...extra}}}]).amount,null);
+ assert.equal(facts(payout,[{...confirmed,payoutSingleFee:''}]).amount,25,'blank fixed fee never becomes 6');
+ assert.equal(facts(payout,[{...confirmed,payoutFee:'0%',payoutSingleFee:''}]).amount,0,'explicit zero remains zero');
+ assert.equal(facts(payout,[{...confirmed,feeEffective:{withdraw:{currency:'USD',source:{currencyCell:'B4'}}}}]).amount,null,'contradictory source monetary evidence still blocks');
+});
 test('owner-confirmed UpiPay and YayaPay source identities still take precedence over unrelated source rows',()=>{
  const upi=leaf({provider:'UpiPay'}),confirmed=rate({provider:'UpiPay',sheetName:'印度线下',sourceRow:4}),other={...confirmed,sourceRow:48,collectFee:'9%'};
  assert.equal(facts(upi,[other,confirmed]).amount,40);assert.equal(facts(upi,[other]).amount,null);assert.equal(facts(upi,[other,{...confirmed,collectFee:''}]).amount,null);
