@@ -51,5 +51,5 @@ test('KB memberDaily is opt-in and keeps unavailable or malformed counts unknown
 
 test('KB validated completion duration is labelled processing time, never bank-arrival latency; false flags remain closed',()=>{
  const {setup,result:durationResult}=helpers('admin-duration-drilldown.test.cjs','setup,result');const r=durationResult(KB.id);r.platform=KB;r.capabilities=KB.capabilities;const h=setup([r]),html=h.render('latency');assert.match(html,/订单处理耗时/);assert.match(html,/不代表银行到账时效/);assert.match(html,/100\.00%/);assert.doesNotMatch(html,/<h2>[^<]*(?:到账时效|到账较慢|成功到账)/);assert.doesNotMatch(html,/所选来源尚未提供实际支付成功时间/);
- for(const patch of [{latencyAvailable:false},{latencyBasis:null},{chargeSuccessTimeAvailable:false}]){const blocked=setup([{...r,capabilities:{...KB.capabilities,...patch}}]);assert.doesNotMatch(blocked.render('latency'),/>100\.00%/);}
+ for(const patch of [{latencyAvailable:false},{latencyBasis:null},{chargeSuccessTimeAvailable:false},{successTimeAvailable:false}]){const blocked=setup([{...r,capabilities:{...KB.capabilities,...patch}}]);assert.doesNotMatch(blocked.render('latency'),/>100\.00%/);}
 });

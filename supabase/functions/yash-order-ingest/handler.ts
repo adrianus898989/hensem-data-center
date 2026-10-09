@@ -59,10 +59,46 @@ export function sanitizeYashRaw(value: unknown): Json {
   }
   return clean;
 }
+const CHANNEL_RATES = ["10m", "30m", "1h", "4h", "8h", "24h", "today", "total"].map(x => "success_rate_" + x);
+const CHANNEL_TEXT = ["channel_name", "provider", "channel_type", "payment_method", "status_text"];
+const CHANNEL_MONEY = ["min_amount", "max_amount", "balance", "balance_threshold"];
+const CHANNEL_INTS = ["required_deposit_count", "priority", "weight"];
+const CHANNEL_CURRENCIES = ["limit_currency", "balance_currency", "balance_threshold_currency"];
+function validateChannels(input: Json, now: number): Json {
+  only(input, ["action", "schema_version", "snapshot_id", "order_type", "observed_at", "source_count", "fetched_count", "records"]);
+  if (typeof input.snapshot_id !== "string" || !uuid.test(input.snapshot_id)
+    || typeof input.order_type !== "string" || !["deposit", "withdrawal"].includes(input.order_type)
+    || !Number.isInteger(input.source_count) || Number(input.source_count) < 0 || Number(input.source_count) > 2000
+    || input.fetched_count !== input.source_count || !Array.isArray(input.records) || input.records.length !== input.source_count) invalid();
+  timestamp(input.observed_at, now);
+  const seen = new Set<string>();
+  const records = input.records.map(value => {
+    if (!object(value)) invalid();
+    only(value, ["channel_id", ...CHANNEL_TEXT, ...CHANNEL_MONEY, ...CHANNEL_RATES, ...CHANNEL_INTS, ...CHANNEL_CURRENCIES, "enabled", "notes"]);
+    if (!text(value.channel_id) || seen.has(value.channel_id)) invalid(); seen.add(value.channel_id);
+    for (const field of ["channel_name", "provider", "channel_type", "status_text"]) if (!text(value[field])) invalid();
+    for (const field of CHANNEL_TEXT) if (value[field] != null && (!text(value[field]) || /<[^>]*>/.test(String(value[field])))) invalid();
+    for (const field of [...CHANNEL_MONEY, ...CHANNEL_RATES]) {
+      const number = value[field], rule = field === "balance" ? signedDecimal : unsignedDecimal;
+      if (number != null && (typeof number !== "string" || !rule.test(number))) invalid();
+      if (CHANNEL_RATES.includes(field) && number != null && Number(number) > 100) invalid();
+    }
+    if (value.min_amount != null && value.max_amount != null && Number(value.min_amount) > Number(value.max_amount)) invalid();
+    for (const field of CHANNEL_INTS) if (value[field] != null && (!Number.isInteger(value[field]) || Number(value[field]) < 0 || Number(value[field]) > 2147483647)) invalid();
+    for (const field of CHANNEL_CURRENCIES) if (value[field] != null && (typeof value[field] !== "string" || !/^[A-Z0-9]{3,8}$/.test(String(value[field])))) invalid();
+    if (value.limit_currency == null) invalid();
+    if (value.enabled != null && typeof value.enabled !== "boolean") invalid();
+    if (value.notes != null && (typeof value.notes !== "string" || value.notes.length > 400)) invalid();
+    const notes = typeof value.notes === "string" ? redactContact(value.notes.replace(/<[^>]*>/g, "")).replace(/(?:password|passwd|token|secret|cookie|密码|密钥)\s*[:=：]\s*[^\s;；,，]+/gi, "[已移除凭据]").slice(0, 400) || null : null;
+    return {...value, notes};
+  });
+  return {...input, records};
+}
 export function validateYashRequest(input: unknown, now = Date.now()): Json {
   if (!object(input)) invalid();
   if (input.action === "check") { only(input, ["action"]); return {action: "check"}; }
   if (input.schema_version !== 1) invalid();
+  if (input.action === "channels") return validateChannels(input, now);
   if (input.action === "ingest") {
     only(input, ["action", "schema_version", "batch_id", "records"]);
     if (typeof input.batch_id !== "string" || !uuid.test(input.batch_id) || !Array.isArray(input.records) || input.records.length < 1 || input.records.length > 500) invalid();
@@ -130,6 +166,9 @@ function reply(status: number, body: unknown): Response {
 function acknowledgement(data: unknown, request: Json): Json {
   if (!object(data) || data.ok !== true) throw new RequestError(503, "invalid_acknowledgement");
   if (request.action === "check" && data.schema_version === 1 && data.source_site === "yash") return {ok: true, schema_version: 1, source_site: "yash"};
+  if (request.action === "channels" && data.accepted === (request.records as unknown[]).length && data.source_count === request.source_count && typeof data.snapshot_applied === "boolean") {
+    return {ok: true, accepted: data.accepted, source_count: data.source_count, snapshot_applied: data.snapshot_applied};
+  }
   if (request.action === "ingest" && data.accepted === (request.records as unknown[]).length) return {ok: true, accepted: data.accepted};
   if (request.action === "receipt" && typeof data.verified === "boolean" && data.source_count === request.source_count
     && [data.source_count, data.uploaded_count, data.stored_count].every(x => Number.isSafeInteger(x) && Number(x) >= 0)
@@ -152,7 +191,7 @@ export function createYashIngestHandler(deps: {env: {SUPABASE_URL?: string; SUPA
       if (target.protocol !== "https:" || target.username || target.password || target.search || target.hash || target.pathname !== "/") throw new RequestError(503, "not_configured");
       const payload = validateYashRequest(await readBody(request), (deps.now || Date.now)());
       const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))].map(x => x.toString(16).padStart(2, "0")).join("");
-      const response = await (deps.fetch || fetch)(`${target.origin}/rest/v1/rpc/yash_order_ingest`, {
+      const response = await (deps.fetch || fetch)(`${target.origin}/rest/v1/rpc/${payload.action === "channels" ? "yash_channel_ingest" : "yash_order_ingest"}`, {
         method: "POST", headers: {apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json"},
         body: JSON.stringify({p_token_hash: hash, p_request: payload}), redirect: "error", cache: "no-store", signal: AbortSignal.timeout(20_000),
       });

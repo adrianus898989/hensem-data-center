@@ -58,7 +58,7 @@ after(async()=>db?.close());beforeEach(async()=>{await db.exec('begin');await as
 
 
 test('new IP edit exists in catalog without implicitly updating existing roles',async()=>{
- await admin();const c=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(c.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.filter(page=>!['success_analysis','daily_comparison'].includes(page.id)).map(page=>({...page,...(page.id==='stuck'?{label:'代付中与卡单分析',moduleId:'risk',moduleLabel:'智能风控中心'}:{}),requests:page.requests.filter(request=>!['analysisOrders','pendingOrders','submissionStreak'].includes(request))})));assert(c.permissions.some(p=>p.key==='ip.edit'));assert.equal(await scalar('select count(*)::int from private.dashboard_roles'),0);
+ await admin();const c=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(c.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.filter(page=>!['success_analysis','daily_comparison','collector_control','channel_status'].includes(page.id)).map(page=>({...page,...(page.id==='stuck'?{label:'代付中与卡单分析',moduleId:'risk',moduleLabel:'智能风控中心'}:{}),requests:page.requests.filter(request=>!['analysisOrders','pendingOrders','submissionStreak'].includes(request))})));assert(c.permissions.some(p=>p.key==='ip.edit'));assert.equal(await scalar('select count(*)::int from private.dashboard_roles'),0);
 });
 test('owner can assign an empty role while preserving the data scope and removing legacy page authority',async()=>{
  const role=await create([]);await assign(VIEWER,role);

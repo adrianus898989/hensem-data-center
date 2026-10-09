@@ -260,7 +260,7 @@ test('additive SQL preserves all prior catalog entries and metadata, and replays
   assert.deepEqual(await scalar('select to_jsonb(d) from private.collector_control_devices d'), device);
   assert.deepEqual(await scalar('select to_jsonb(t) from private.collector_control_tasks t'), task);
   const catalog = await scalar('select private.dashboard_role_catalog()');
-  const expectedPages = JSON.parse(fs.readFileSync(path.join(root, 'src/lib/dashboardRoleCatalog.json'), 'utf8')).pages;
+  const expectedPages = JSON.parse(fs.readFileSync(path.join(root, 'src/lib/dashboardRoleCatalog.json'), 'utf8')).pages.filter(p=>p.id!=='channel_status');
   assert.deepEqual(catalog.pages, expectedPages);
   assert.deepEqual(catalog.pages.filter(p => p.id !== 'collector_control'), baselineCatalog.pages);
   assert.deepEqual(catalog.permissions, [...baselineCatalog.permissions, { key: 'collector_control.view' }, { key: 'collector_control.edit' }]);

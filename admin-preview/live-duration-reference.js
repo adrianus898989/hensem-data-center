@@ -29,7 +29,7 @@
   const processingScope=()=>(L.results||[]).some(r=>processing(r.capabilities||r.platform?.capabilities||{}));
   const latencyTitle=()=>processingScope()?'订单处理耗时':'到账时效';
   const groupTitle=()=>processingScope()?'哪些三方 / 平台处理较慢':'哪些三方 / 平台到账较慢';
-  const unavailable=d=>(L.results||[]).some(result=>{const caps=result.capabilities||result.platform?.capabilities||{};return caps.latencyAvailable===false||caps.paymentSuccessTimeAvailable===false&&!processing(caps)||caps[d+'SuccessTimeAvailable']===false||caps.successTimeAvailable===false});
+  const unavailable=d=>(L.results||[]).some(result=>{const caps=result.capabilities||result.platform?.capabilities||{};return caps.latencyAvailable===false||caps.paymentSuccessTimeAvailable===false&&!processing(caps)||caps[d+'SuccessTimeAvailable']===false||caps.successTimeAvailable===false&&!(d==='charge'&&caps.successTimeBasis==='recharge_notify_time_only')});
   const unsupportedLatency=()=>(L.results||[]).some(result=>{const caps=result.capabilities||result.platform?.capabilities||{};return caps.latencyAvailable===false||caps.paymentSuccessTimeAvailable===false&&!processing(caps)});
   const unavailableNote='所选来源尚未提供实际支付成功时间；订单更新时间不能用于到账时效。到账时效暂不可统计，不按 0 秒或 0% 展示。';
   function timingParts(result,d,pending){
