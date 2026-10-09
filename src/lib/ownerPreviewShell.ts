@@ -17,6 +17,7 @@ export const OWNER_PREVIEW_HOST_CSS = `
 .owner-preview-account-tabs button{padding:9px 16px;border:1px solid #dce4f0;border-radius:6px;background:#fff;color:#405b84;font-family:inherit;font-size:13px;font-weight:500;line-height:1.4;cursor:pointer}
 .owner-preview-account-tabs button[aria-selected=true]{background:#365de1;border-color:#365de1;color:#fff}.owner-preview-account-tabs button:disabled{opacity:.5;cursor:default}.owner-preview-account-tabs button:focus-visible{outline:2px solid #5475df;outline-offset:2px}
 .owner-preview-account-body{padding:0 0 18px;overflow:auto;min-height:0;flex:1}.owner-preview-account-denied{padding:20px}
+.owner-preview-account-body .admin-inline-content{max-width:none;margin-inline:0;width:100%;min-width:0}
 body.owner-preview-shell-active .auth-user-menu-wrap{top:8px!important;right:12px!important;bottom:auto!important;z-index:1400!important}
 body.owner-preview-shell-active .auth-user-trigger{min-width:160px!important;width:160px!important;height:32px!important;padding:3px 7px 3px 4px!important;gap:6px;border-radius:6px!important;box-shadow:0 2px 6px #1b355008!important;transform:none!important}
 body.owner-preview-shell-active .auth-user-trigger>.auth-user-avatar{width:24px;height:24px;border-radius:5px;font-size:10px;box-shadow:none}

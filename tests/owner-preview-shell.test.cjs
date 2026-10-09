@@ -13,6 +13,7 @@ test('one 48px sticky iframe bar reserves the real account space equally for own
  assert.equal(owner,viewer,'the retired grant control no longer changes header geometry');
  assert.match(api.OWNER_PREVIEW_HOST_CSS,/auth-user-trigger\{[^}]*height:32px!important/);
  assert.match(api.OWNER_PREVIEW_HOST_CSS,/auth-user-menu-wrap\{top:8px!important;right:12px!important/);
+ const accountContent=api.OWNER_PREVIEW_HOST_CSS.match(/\.owner-preview-account-body \.admin-inline-content\{([^}]*)\}/)?.[1];assert(accountContent);assert.match(accountContent,/max-width:none/);assert.match(accountContent,/margin-inline:0/);assert.match(accountContent,/width:100%/);assert.match(accountContent,/min-width:0/);
  assert(!api.OWNER_PREVIEW_HOST_CSS.includes('height:38px'));
  for(const width of [1280,1024]){const frameRight=width-184,accountLeft=width-12-160;assert(accountLeft-frameRight>=12)}
  for(const width of [800,480]){const frameRight=width-60,accountLeft=width-12-36;assert(accountLeft-frameRight>=12)}

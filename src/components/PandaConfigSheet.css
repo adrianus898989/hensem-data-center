@@ -1,4 +1,4 @@
-.pwc-sheet{max-width:1060px;padding:24px 28px;color:#303640;font-size:14px;line-height:1.65}
+.pwc-sheet{max-width:none;min-width:0;padding:24px 28px;color:#303640;font-size:14px;line-height:1.65}
 .pwc-sheet *{box-sizing:border-box}
 .pwc-sheet-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}
 .pwc-sheet-heading h3{font-size:18px;margin:0;color:#21334f}

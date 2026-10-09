@@ -7,7 +7,7 @@
  * The imported dashboard also styles its first two table columns; reset those
  * cell widths/offsets here before fixing only the actual identity column. */
 body.live-admin .daily-comparison .daily-panel{min-width:0}
-body.live-admin .daily-comparison .daily-table-wrap:has(>.daily-detail-table){position:relative;isolation:isolate;max-width:100%;max-height:min(72vh,760px);overflow:auto;overscroll-behavior-x:contain;scroll-padding-left:132px;scrollbar-width:thin;scrollbar-color:#b6c6df #f3f6fb}
+body.live-admin .daily-comparison .daily-table-wrap:has(>.daily-detail-table){position:relative;isolation:isolate;max-width:100%;max-height:72vh;overflow:auto;overscroll-behavior-x:contain;scroll-padding-left:132px;scrollbar-width:thin;scrollbar-color:#b6c6df #f3f6fb}
 body.live-admin .daily-comparison .daily-table-wrap:has(>.daily-detail-table)::-webkit-scrollbar{height:9px}
 body.live-admin .daily-comparison .daily-table-wrap:has(>.daily-detail-table)::-webkit-scrollbar-track{background:#f3f6fb}
 body.live-admin .daily-comparison .daily-table-wrap:has(>.daily-detail-table)::-webkit-scrollbar-thumb{background:#b6c6df;border:2px solid #f3f6fb;border-radius:5px}
