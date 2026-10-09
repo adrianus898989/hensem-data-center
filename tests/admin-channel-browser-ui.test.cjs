@@ -20,7 +20,7 @@ const exported=h=>{const rows=h.mod.exportRows(),header=rows[3];return rows.slic
 
 test('full authorized directory paginates independently and first automatic request reads exactly one platform',async()=>{
  const catalog=Array.from({length:44},(_,i)=>platform(i+1)),h=fixture({catalog});await h.start();assert.deepEqual(h.calls,[{action:'channelStatus',platformIds:[catalog[0].id],direction:'all'}]);
- const html=h.mod.render();assert.match(html,/共 44 个 · 1–20/);assert.equal((html.match(/onclick="liveChannelSelect/g)||[]).length,20);assert.match(html,/每 5 分钟自动刷新/);
+ const html=h.mod.render();assert.match(html,/共 44 个 · 1–20/);assert.equal((html.match(/onclick="liveChannelSelect/g)||[]).length,20);assert.match(html,/每 5 分钟自动刷新/);assert.match(html,/channel-platform-directory/);assert.match(html,/<div class="channel-scope-tabs">[\s\S]*channel-source-tabs[\s\S]*channel-country-tabs[\s\S]*channel-refresh-note/);assert.doesNotMatch(html,/<aside\b|channel-browser-top/);
  h.context.liveChannelPage(3);assert.match(h.mod.render(),/共 44 个 · 41–44/);h.context.liveChannelPageSize('500');assert.equal((h.mod.render().match(/onclick="liveChannelSelect/g)||[]).length,44);assert.equal(h.calls.length,1);
  h.context.liveChannelSearch('AR 43');assert.match(h.mod.render(),/共 1 个 · 1–1/);assert.equal(h.calls.length,1);assert.equal(h.mod.capture().platformId,catalog[0].id);
 });
@@ -37,25 +37,48 @@ test('directory distinguishes an unread platform, a read without a snapshot, and
 
 test('source and country tabs come only from directory and keep different source caches and exports isolated',async()=>{
  const BR=platform(3,{country:'巴西'}),h=fixture({catalog:[AR,BR,YASH]});await h.start();assert.match(h.mod.render(),/AR 系统/);assert.match(h.mod.render(),/YASH 系统/);assert.match(h.mod.render(),/巴西/);
- h.context.liveChannelCountry(1);await flush();assert.equal(h.calls[1].platformIds[0],BR.id);h.context.liveChannelCountry(0);await flush();assert.equal(h.calls.length,2);
- h.context.liveChannelSource(1);await flush();assert.equal(h.calls[2].platformIds[0],YASH.id);assert.equal(exported(h)[0]['平台'],YASH.name);h.context.liveChannelSource(0);await flush();assert.equal(h.calls.length,3);assert.equal(exported(h)[0]['平台'],AR.name);
+ h.context.liveChannelCountry(1);await flush();assert.equal(h.calls[1].platformIds[0],BR.id);h.context.liveChannelCountry(0);await flush();assert.equal(h.calls.length,3);assert.equal(h.calls[2].platformIds[0],AR.id);
+ h.context.liveChannelSource(1);await flush();assert.equal(h.calls[3].platformIds[0],YASH.id);assert.equal(exported(h)[0]['平台'],YASH.name);h.context.liveChannelSource(0);await flush();assert.equal(h.calls.length,5);assert.equal(h.calls[4].platformIds[0],AR.id);assert.equal(exported(h)[0]['平台'],AR.name);
 });
 
-test('AR full independent columns preserve four native rates and all category memberships without inventing names',async()=>{
- const h=fixture();await h.start();const html=h.mod.render(),list=headers(html);assert.deepEqual(list.filter(x=>x.includes('成功率')),['近15分钟成功率','近30分钟成功率','近1小时成功率','近24小时成功率']);
- for(const label of ['充值大类','通道 ID','系统通道 ID','源通道名称','前台显示名称','支付供应商','最小交易金额 (INR)','最大交易金额 (INR)','余额','余额币种','代收次数要求','优先级','权重','状态','源启用状态','通道可用状态','商户可用状态','费率（源值）','固定手续费','第三方商户 ID','备注','源配置'])assert(list.includes(label),label);
- assert.doesNotMatch(list.join('|'),/通道类型|支付方式|近10分钟|近4小时|近8小时|今日成功率|总成功率/);assert.match(html,/QR 大类/);assert.match(html,/class="channel-original-name">—<\/td>/);assert.match(html,/0\.00%/);assert.match(html,/68\.40%/);assert.doesNotMatch(html,/99\.00%/);
- const row=exported(h)[0];assert.equal(row['源通道名称'],'—');assert.equal(row['全部大类 ID'],'upi / qr');assert.equal(row['通道可用状态'],'0');assert.equal(row['商户可用状态'],'1');assert.equal(row['余额'],-2.5);assert.equal(row['代收次数要求'],0);assert.equal(row['近1小时成功率'],'—');assert.equal(h.mod.exportRows()[3].length,h.mod.exportRows()[4].length);
- h.context.liveChannelSourceDetail(0);assert.match(h.mod.render(),/channel-source-details/);assert.match(h.mod.render(),/费率口径/);assert.match(h.mod.render(),/source_raw/);assert.match(h.mod.render(),/merchant-22/);assert.doesNotMatch(h.mod.render(),/2\.50%/);h.context.liveChannelCategory('qr');assert.equal(exported(h).length,1);assert.equal(h.calls.length,1);
+test('AR compact overview preserves source categories, identities and four rate labels while raw metadata stays in readonly detail',async()=>{
+ const h=fixture();await h.start();const html=h.mod.render();assert.deepEqual(headers(html),['充值大类','状态','通道 ID / 供应商','通道名称','成功率统计','限额','权重','详情']);
+ assert.match(html,/channel-ar-overview-table/);assert.match(html,/channel-rate-grid/);assert.match(html,/<div class="channel-table-toolbar"><div class="channel-tabs"[\s\S]*channel-local-filters[\s\S]*<section class="channel-panel"/);for(const label of ['近10分钟','近30分钟','近1小时','近24小时'])assert.match(html,new RegExp(label));assert.doesNotMatch(html,/近15分钟|近4小时|近8小时|今日成功率|总成功率/);
+ assert.match(html,/QR 大类/);assert.match(html,/0\.00%/);assert.match(html,/68\.40%/);assert.doesNotMatch(html,/99\.00%/);assert.match(html,/role="switch"[^>]*aria-checked="true"/);assert.match(html,/aria-readonly="true"/);assert.doesNotMatch(html,/onclick="liveQuery|onclick="liveReset|liveExport\(|<aside\b/);
+ const row=exported(h)[0];assert.equal(row['源通道名称'],'—');assert.equal(row['全部大类 ID'],'upi / qr');assert.equal(row['通道可用状态'],'0');assert.equal(row['商户可用状态'],'1');assert.equal(row['余额'],-2.5);assert.equal(row['代收次数要求'],0);assert.equal(row['近1小时成功率'],'—');assert.equal(row['近10分钟成功率'],'0.00%');assert.equal(row['近15分钟成功率'],undefined);assert.equal(h.mod.exportRows()[3].length,h.mod.exportRows()[4].length);
+ h.context.liveChannelSourceDetail(0);const detail=h.mod.render();assert.match(detail,/channel-source-details/);for(const value of ['费率口径','source_raw','merchant-22','sys-one','全部分类','源启用状态','通道可用状态','商户可用状态'])assert.match(detail,new RegExp(value));assert.doesNotMatch(detail,/2\.50%/);h.context.liveChannelCategory('qr');assert.equal(exported(h).length,1);assert.equal(h.calls.length,1);
+ h.context.liveChannelTab('withdraw');assert.deepEqual(headers(h.mod.render()),['提现大类','状态','通道 ID / 供应商','通道名称','成功率统计','限额','权重','余额','详情']);assert.match(h.mod.render(),/-2\.50/);assert.match(h.mod.render(),/未提供/);
 });
 
 test('YASH retains its eight rate windows and payment method while source fifteen-minute value is excluded',async()=>{
  const h=fixture({catalog:[YASH]});await h.start();const list=headers(h.mod.render());assert.equal(list.filter(x=>x.includes('成功率')).length,8);assert(list.includes('支付方式'));assert(!list.includes('近15分钟成功率'));assert.equal(exported(h)[0]['近10分钟成功率'],'99.00%');assert.doesNotMatch(h.mod.render(),/channel-original-name/);
 });
 
-test('provider, state, category, history and direction controls never issue source requests and CSV follows them',async()=>{
- const rows=[channel('a'),channel('b',{provider:'Other',enabled:false,source_position:1}),channel('old',{is_present:false,source_position:2})],h=fixture({handler:()=>response(AR,rows)});await h.start();
- h.context.liveChannelProvider('Other');assert.equal(exported(h).length,1);assert.equal(exported(h)[0]['支付供应商'],'Other');h.context.liveChannelStatus('on');assert.equal(exported(h).length,0);h.context.liveChannelProvider('');h.context.liveChannelStatus('all');h.context.liveChannelAbsent(true);assert.equal(exported(h).length,3);h.context.liveChannelTab('withdraw');assert.equal(exported(h)[0]['方向'],'提现');assert(headers(h.mod.render()).includes('余额阈值'));assert(!headers(h.mod.render()).includes('代收次数要求'));assert.equal(h.calls.length,1);
+test('provider, state, category, history and direction controls stay local with complete internal readonly rows',async()=>{
+ const rows=[channel('a'),channel('b',{provider:'Other',source_state:'0',enabled:false,source_position:1}),channel('old',{is_present:false,source_position:2})],h=fixture({handler:()=>response(AR,rows)});await h.start();
+ h.context.liveChannelProvider('Other');assert.equal(exported(h).length,1);assert.equal(exported(h)[0]['支付供应商'],'Other');h.context.liveChannelStatus('on');assert.equal(exported(h).length,0);h.context.liveChannelProvider('');h.context.liveChannelStatus('all');h.context.liveChannelAbsent(true);assert.equal(exported(h).length,3);h.context.liveChannelTab('withdraw');assert.equal(exported(h)[0]['方向'],'提现');assert(headers(h.mod.render()).includes('余额'));assert(!headers(h.mod.render()).includes('代收次数要求'));assert.equal(h.calls.length,1);
+});
+
+test('every platform click requests once even with a fresh cache, while an identical inflight click never overlaps',async()=>{
+ const second=platform(2),h=fixture({catalog:[AR,second]});await h.start();
+ h.context.liveChannelSelect(1);await flush();h.context.liveChannelSelect(0);await flush();h.context.liveChannelSelect(0);await flush();assert.deepEqual(h.calls.map(q=>q.platformIds[0]),[AR.id,second.id,AR.id,AR.id]);
+ let finish;h.setHandler(()=>new Promise(resolve=>finish=resolve));h.context.liveChannelSelect(0);await flush();assert.equal(h.calls.length,5);h.context.liveChannelSelect(0);await flush();assert.equal(h.calls.length,5);finish(response(AR));await flush();assert.equal(h.mod.capture().status,'ready');assert.equal(h.calls.length,5);
+ assert(h.calls.every(q=>q.action==='channelStatus'&&q.direction==='all'&&q.platformIds.length===1));
+});
+
+test('AR native switch and availability stay independent; unknown codes never manufacture disabled states',async()=>{
+ const cases=[
+  ['on-total-closed',{source_state:'1',source_channel_state:'0',source_merchant_state:'0',enabled:true},'true','总控通道关闭'],
+  ['off-available',{source_state:'0',source_channel_state:'1',source_merchant_state:'1',enabled:true},'false','可用'],
+  ['on-merchant-closed',{source_state:'1',source_channel_state:'1',source_merchant_state:'0',enabled:false},'true','三方商户关闭'],
+  ['unknown',{source_state:null,source_channel_state:null,source_merchant_state:null,enabled:false},null,'状态未提供'],
+  ['empty',{source_state:'',source_channel_state:'',source_merchant_state:'',enabled:false},null,'状态未提供'],
+ ];
+ const h=fixture({handler:()=>response(AR,cases.map(([id,extra],i)=>channel(id,{...extra,source_position:i})))});await h.start();const html=h.mod.render();
+ const rows=[...html.matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/g)].map(m=>m[0]);
+ for(const [id,,checked,label] of cases){const row=rows.find(x=>x.includes(id+'-charge'));assert(row,id);assert.match(row,new RegExp(label));if(checked===null){assert.match(row,/<span class="channel-status-unknown" aria-label="启用状态未提供">—<\/span>/);assert.doesNotMatch(row,/role="switch"|aria-checked|总控通道关闭|三方商户关闭/);}else{assert.match(row,new RegExp('role="switch"[^>]*aria-checked="'+checked+'"'));assert.match(row,/aria-readonly="true"/);const control=row.match(/<button\b[^>]*role="switch"[^>]*>/)?.[0];assert(control);assert.match(control,/disabled/);assert.match(row,/<button\b[^>]*role="switch"[^>]*><i[^>]*><\/i><\/button>/);assert.doesNotMatch(control,/onclick|onchange|<input/);}}
+ assert.doesNotMatch(html,/aria-checked="mixed"/);
+ assert.deepEqual(h.calls.map(q=>q.action),['channelStatus']);assert.doesNotMatch(html,/ar_middle_channel_ingest|yash_channel_ingest|method="POST"|<input[^>]*type="checkbox"/);
 });
 
 test('five-minute timer refreshes the current platform without overlapping pending requests',async()=>{
@@ -69,11 +92,11 @@ test('ordinary refresh failure preserves known snapshot, collection deadline and
 });
 
 test('synchronously thrown request can be retried and cannot leave an inflight lock',async()=>{
- const h=fixture({handler:()=>{throw Error('network failure')}});await h.start();assert.equal(h.mod.capture().status,'error');h.setHandler(()=>response(AR));await h.mod.load();assert.equal(h.calls.length,2);assert.equal(h.mod.capture().status,'ready');
+ const h=fixture({handler:()=>{throw Error('network failure')}});await h.start();assert.equal(h.mod.capture().status,'error');assert.match(h.mod.render(),/点击上方平台重试/);assert.doesNotMatch(h.mod.render(),/点击查询/);h.setHandler(()=>response(AR));await h.mod.load();assert.equal(h.calls.length,2);assert.equal(h.mod.capture().status,'ready');
 });
 
 test('authorization failure clears cached facts across all platforms and disables automatic retries',async()=>{
- const p=platform(2),h=fixture({catalog:[AR,p]});await h.start();h.context.liveChannelSelect(1);await flush();assert.equal(Object.keys(h.mod.capture().cache).length,2);h.setHandler(()=>{throw Object.assign(Error('正式数据读取未获授权，或会话已失效'),{status:403})});await h.mod.load();assert.deepEqual(Object.keys(h.mod.capture().cache),[]);assert.equal(h.mod.canExport(),false);assert.doesNotMatch(h.mod.render(),/Display one/);await h.advance(600000);assert.equal(h.calls.length,3);assert.match(h.mod.render(),/重新验证授权/);
+ const p=platform(2),h=fixture({catalog:[AR,p]});await h.start();h.context.liveChannelSelect(1);await flush();assert.equal(Object.keys(h.mod.capture().cache).length,2);h.setHandler(()=>{throw Object.assign(Error('正式数据读取未获授权，或会话已失效'),{status:403})});await h.mod.load();assert.deepEqual(Object.keys(h.mod.capture().cache),[]);assert.equal(h.mod.canExport(),false);assert.doesNotMatch(h.mod.render(),/Display one/);await h.advance(600000);assert.equal(h.calls.length,3);assert.match(h.mod.render(),/点击上方平台重新验证授权/);assert.doesNotMatch(h.mod.render(),/点击查询/);
 });
 
 test('query permission revocation purges cached facts and all direct actions remain permission checked',async()=>{
@@ -97,8 +120,8 @@ test('capture/restore keeps per-platform cache, local controls and original fres
  const h=fixture();await h.start();h.context.liveChannelTab('withdraw');h.context.liveChannelCategory('qr');h.context.liveChannelPageSize('50');const saved=h.mod.capture();h.mod.clear();h.setNow('2026-10-09T05:01:00Z');h.mod.restore(saved);h.mod.render();await flush();assert.equal(h.calls.length,1);assert.equal(h.mod.capture().tab,'withdraw');assert.equal(h.mod.capture().category,'qr');assert.equal(h.mod.capture().size,50);assert.equal(exported(h)[0]['快照采集时间'],NOW);h.unload();assert.equal(Object.keys(h.mod.capture().cache).length,0);assert(h.timers.every(t=>!t.active));
 });
 
-test('source sorting, legacy category fallback and safe text survive independent table fields',async()=>{
- const rows=[channel('second',{source_position:2,enabled:true,channel_categories:null}),channel('first',{source_position:1,enabled:false,channel_categories:undefined,category_name:'Legacy category',source_channel_name:'<img src=x>',notes:'<script>unsafe</script>'+ 'detail'.repeat(30)})],h=fixture({handler:()=>response(AR,rows)});await h.start();const html=h.mod.render();assert(html.indexOf('Display first')<html.indexOf('Display second'));assert.match(html,/Legacy category/);assert.match(html,/&lt;img src=x&gt;/);assert.doesNotMatch(html,/<script>|<img src=x>/);h.context.liveChannelToggle(0);assert.match(h.mod.render(),/收起备注/);
+test('source sorting, legacy category fallback and escaped raw metadata survive compact detail',async()=>{
+ const rows=[channel('second',{source_position:2,enabled:true,channel_categories:null}),channel('first',{source_position:1,enabled:false,channel_categories:undefined,category_name:'Legacy category',source_channel_name:'<img src=x>',notes:'<script>unsafe</script>'+ 'detail'.repeat(30)})],h=fixture({handler:()=>response(AR,rows)});await h.start();const html=h.mod.render();assert(html.indexOf('Display first')<html.indexOf('Display second'));assert.match(html,/Legacy category/);assert.doesNotMatch(html,/<script>|<img src=x>/);h.context.liveChannelSourceDetail(0);const detail=h.mod.render();assert.match(detail,/&lt;img src=x&gt;/);assert.match(detail,/&lt;script&gt;unsafe&lt;\/script&gt;/);assert.doesNotMatch(detail,/<script>|<img src=x>/);
 });
 
 test('missing snapshot, incomplete snapshot and complete empty snapshot keep separate indicators',async()=>{
