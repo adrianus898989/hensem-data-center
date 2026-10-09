@@ -37,7 +37,7 @@
     let metric;
     if(segment.kind==='latency'){
      const summary=(result.summary||[]).find(r=>r.direction===direction&&(!r.currency||r.currency===L.currency));
-     const caps=result.capabilities||result.platform?.capabilities||{},available=caps.latencyAvailable!==false&&caps.paymentSuccessTimeAvailable!==false&&versionReady&&(Array.isArray(source)&&source.some(r=>r.direction===direction&&(!r.currency||r.currency===L.currency))||summary?.success_count!==null&&summary?.success_count!==undefined&&Number(summary.success_count)===0||confirmedEmptyDirection(result,direction));
+     const caps=result.capabilities||result.platform?.capabilities||{},available=caps.latencyAvailable!==false&&(caps.paymentSuccessTimeAvailable!==false||caps.latencyAvailable===true&&caps.latencyBasis==='order_processing_duration')&&caps[direction+'SuccessTimeAvailable']!==false&&caps.successTimeAvailable!==false&&versionReady&&(Array.isArray(source)&&source.some(r=>r.direction===direction&&(!r.currency||r.currency===L.currency))||summary?.success_count!==null&&summary?.success_count!==undefined&&Number(summary.success_count)===0||confirmedEmptyDirection(result,direction));
      metric={...zero(),success_amount:available?sum(rows,'amount'):null,success_count:available?sum(rows,'count'):null};
     }else metric=Array.isArray(source)?totals(rows):Object.fromEntries(fields.map(k=>[k,null]));
     return {...metric,platformId:result.platform?.id,platform:result.platform?.name||'未提供平台',source:result.platform?.source||'—',direction,currency:result.platform?.currency||L.currency};
@@ -76,7 +76,7 @@
   }
   function cancelOrders(){orderSerial++;orderView=null;}
   const sameValue=(a,b)=>a===b||a&&b&&typeof a==='object'&&typeof b==='object'&&Object.keys(a).length===Object.keys(b).length&&Object.keys(a).every(k=>Object.prototype.hasOwnProperty.call(b,k)&&sameValue(a[k],b[k]));
-  const successTimeLabel=p=>c.successTimeLabel?c.successTimeLabel(p):p?.capabilities?.successTimeBasis==='order_updated_at'?'成功统计时间（订单更新时间）':'成功时间';
+  const successTimeLabel=p=>c.successTimeLabel?c.successTimeLabel(p):p?.capabilities?.successTimeBasis==='order_updated_at'?'成功统计时间（订单更新时间）':p?.capabilities?.successTimeBasis==='source_completed_at'?'成功时间（源订单完成时间）':'成功时间';
   const orderTime=(v,p)=>c.formatTime?c.formatTime(v,p.timezone):v||'—';
   function showOrders(){
    const s=orderView;if(!s||s.scope!==signature()||L.dirty)return;

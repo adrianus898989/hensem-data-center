@@ -1,3 +1,7 @@
 [functions.collector-control]
 # Human sessions and scoped device credentials are validated in the handler.
 verify_jwt = false
+
+[functions.yash-order-ingest]
+# Dedicated YASH token is checked in the atomic ingest RPC; no public JWT trust.
+verify_jwt = false

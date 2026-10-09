@@ -6,7 +6,7 @@
  const thresholds=[2,3,4,5];
  const fields=['created_member_count','success_member_count','created_order_count','success_order_count','created_missing_member_count','success_missing_member_count'];
  const uuid=v=>typeof v==='string'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(v);
- const native=p=>p.capabilities?.memberDailyAvailable!==false&&!p.reportOnly&&uuid(p.id)&&['ar','newar','lg','game66','wg'].includes(String(p.source||'').toLowerCase().replaceAll('_',''));
+ const native=p=>{const source=String(p.source||'').toLowerCase().replaceAll('_','');return p.capabilities?.memberDailyAvailable!==false&&!p.reportOnly&&uuid(p.id)&&(['ar','newar','lg','game66','wg'].includes(source)||source==='kb'&&p.capabilities?.memberDailyAvailable===true)};
  const count=v=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0;
  const unavailableReason=(row,basis)=>({source_member_id_unavailable:'WG 充值明细未提供会员 ID，人数不可统计',source_success_time_unavailable:'WG 提现未提供已核实成功时间，成功人数不可统计'})[row?.[basis+'_unavailable_reason']]||'此方向的人数口径不可统计';
  function localDay(value,zone){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(value));return ['year','month','day'].map(k=>parts.find(p=>p.type===k).value).join('-');}
