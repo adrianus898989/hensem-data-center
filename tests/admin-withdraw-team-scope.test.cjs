@@ -26,6 +26,10 @@ test('withdraw comparisons keep absolute zero-baseline changes and suppress miss
  let cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/\+10 笔（无基数）/);assert.match(cards,/对比值未提供/);assert.doesNotMatch(cards,/NaN|Infinity|\+4 笔/);
  f.page.state.data.comparison.complete=false;cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.doesNotMatch(cards,/\+10 笔/);assert.match(cards,/对比日期暂无数据/);
 });
+test('verified MAAN.WIN alias matches canonical row notes and does not add a second platform choice',async()=>{
+ const f=fixture({country:'印度',team:'M8',catalog:[{id:'maan',name:'MAAN.WIN',source:'newar',country:'印度',team:'M8'}],withdrawCatalog:[],respond:()=>({rows:[{country:'印度',platform:'MAANWIN',total:3,autoCount:1,manualCount:2}],total:1,totals:{total:3,autoCount:1,manualCount:2},platforms:['MAANWIN','MAAN.WIN'],canWriteNotes:true,notes:[{country:'印度',platform:'MAAN.WIN',date:'2026-09-25',reason:'SYNTHETIC-MAAN-NOTE',version:'existing-note-version'}]})});
+ await f.page.load();const html=f.page.render();assert.equal(html.match(/<div class="test-platforms">([^<]*)<\/div>/)[1],'MAAN.WIN');assert.match(html,/SYNTHETIC-MAAN-NOTE/);assert.match(html,/>编辑备注<\/button>/);f.context.withdrawNoteOpen(0);assert.equal(f.page.state.note.expectedVersion,'existing-note-version');assert.equal(f.page.state.note.storagePlatform,'MAAN.WIN');assert.deepEqual(f.calls[0].platforms,['MAAN.WIN']);
+});
 
 test('WG display aliases use raw site keys for auto, operators, reasons and daily drilldown only',async()=>{
  for(const rawField of ['sourceName','source_name'])for(const view of ['auto_withdraw','withdraw_operators']){

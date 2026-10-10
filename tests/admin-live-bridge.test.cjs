@@ -83,6 +83,7 @@ test('errors do not expose raw backend messages or credentials',async()=>{
   }
   const h=load({fetch:async()=>({ok:false,status:504,json:async()=>({message:'57014 statement timeout'})})});
   await assert.rejects(h.api.adminLiveRequest(session,{action:'catalog'}),error=>/平台目录读取超时/.test(error.message)&&!/缩短日期|选择单个平台/.test(error.message));
+  await assert.rejects(h.api.adminLiveRequest(session,{action:'autoWithdraw',country:'印度',startAt:'2026-10-10T00:00:00Z',endAt:'2026-10-10T23:59:59Z'}),error=>/自动出款统计读取超时/.test(error.message)&&!/缩短日期|选择单个平台/.test(error.message));
   await assert.rejects(h.api.adminLiveRequest(session,{action:'withdrawReasons',date:'2026-09-24',country:'印度',platform:'EXAMPLE',kind:'categories'}),error=>/当日原因读取超时/.test(error.message)&&!/缩短日期|选择单个平台/.test(error.message));
 });
 
