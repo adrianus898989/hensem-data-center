@@ -4,6 +4,8 @@ const {PGlite}=require('@electric-sql/pglite');
 const {loadTs,root}=require('./load-typescript.cjs');
 const {createArMiddleChannelIngestHandler,validateArMiddleChannelRequest,AR_MIDDLE_ORIGIN,MAX_AR_MIDDLE_BYTES}=loadTs(path.join(root,'supabase/functions/ar-middle-channel-ingest/handler.ts'));
 const sql=fs.readFileSync(path.join(root,'supabase/ar-middle-channel-contract.sql'),'utf8');
+const compositeBaseline=fs.readFileSync(path.join(root,'tests/fixtures/ar-middle-channel-composite-baseline.sql'),'utf8');
+const compositeMigration=fs.readFileSync(path.join(root,'supabase/migrations/20261010124929_ar_middle_deposit_category_identity.sql'),'utf8');
 const native=require('./fixtures/ar-middle-native-registry.json'),catalog=require('./fixtures/ar-middle-catalog-baseline.json');
 const token='synthetic_ar_middle_scoped_token_'+ 'x'.repeat(40),hash=createHash('sha256').update(token).digest('hex');
 const at='2026-10-07T00:00:00Z',later='2026-10-07T00:10:00Z',latest='2026-10-07T00:20:00Z',now=Date.parse('2026-10-09T06:00:00Z');
@@ -13,11 +15,11 @@ const record=(id='same-native-id',extra={})=>({channel_id:id,channel_name:'Synth
 function snapshot(extra={}){const digest=createHash('md5').update(extra.captured_at||at).digest('hex'),id=`${digest.slice(0,8)}-${digest.slice(8,12)}-${digest.slice(12,16)}-${digest.slice(16,20)}-${digest.slice(20)}`;const q={action:'channels',schema_version:1,source:'ar_middle',source_origin:AR_MIDDLE_ORIGIN,source_tenant_id:'1102',snapshot_id:id,captured_at:at,directions:['deposit','withdrawal'].map(order_type=>({order_type,observed_at:at,source_count:1,fetched_count:1,complete:true,page_count:1,records:[record()]})),...extra};return q;}
 const request=(data,headers={},options={})=>new Request('https://synthetic/functions/v1/ar-middle-channel-ingest',{method:'POST',headers:{'X-Collector-Key':token,'Content-Type':'application/json',...headers},body:typeof data==='string'?data:JSON.stringify(data),...options});
 const call=async(q,key=hash)=>(await db.query('select public.ar_middle_channel_ingest($1,$2::jsonb) result',[key,JSON.stringify(q)])).rows[0].result;
-const rows=async()=>(await db.query('select source_tenant_id,order_type,channel_id,channel_data,is_present,snapshot_id,observed_at,first_seen_at,last_seen_at,config_changed_at from private.ar_middle_channels order by source_tenant_id,order_type,channel_id')).rows;
+const rows=async()=>(await db.query('select source_tenant_id,order_type,channel_id,category_key,channel_data,is_present,snapshot_id,observed_at,first_seen_at,last_seen_at,config_changed_at from private.ar_middle_channels order by source_tenant_id,order_type,channel_id,category_key')).rows;
 const read=async(extra={})=>(await db.query('select public.dashboard_admin_live_channel_status($1::jsonb) result',[JSON.stringify({platformIds:[veer],...extra})])).rows[0].result;
 const setting=async(k,v)=>db.query('select set_config($1,$2,false)',[k,v]);
-before(async()=>{
- db=new PGlite();await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;create schema private;grant usage on schema private to service_role;set check_function_bodies=off;
+async function setupDatabase(schemaSQL=sql){
+ const db=new PGlite();await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;create schema private;grant usage on schema private to service_role;set check_function_bodies=off;
  create table public.ar_config_targets(country_code text,platform text,source_system text);grant select on public.ar_config_targets to service_role;
  create table private.collector_platform_identities(platform_id uuid,source_system text,country_code text,source_platform text);
  create function private.dashboard_admin_live_scope() returns jsonb language plpgsql stable as $$begin
@@ -33,8 +35,10 @@ before(async()=>{
  `);
  for(const n of native){await db.query('insert into public.ar_config_targets values($1,$2,$3)',[n.country_code,n.source_platform,n.source_system]);await db.query('insert into private.collector_platform_identities values($1,$2,$3,$4)',[n.platform_id,n.source_system,n.country_code,n.source_platform]);}
  await db.exec(catalog[0].definition);await db.exec('revoke all on function private.dashboard_admin_live_query_raw(jsonb) from public,anon,authenticated,service_role');
- await db.exec(sql);await db.query("insert into private.ar_middle_channel_ingest_credentials(token_hash,source_origin,allowed_tenant_ids,label,expires_at) values($1,$2,array['1102','1013','1001'],'synthetic',now()+interval '1 day')",[hash,AR_MIDDLE_ORIGIN]);
-});
+ await db.exec(schemaSQL);await db.query("insert into private.ar_middle_channel_ingest_credentials(token_hash,source_origin,allowed_tenant_ids,label,expires_at) values($1,$2,array['1102','1013','1001'],'synthetic',now()+interval '1 day')",[hash,AR_MIDDLE_ORIGIN]);
+ return db;
+}
+before(async()=>{db=await setupDatabase();});
 beforeEach(async()=>{await db.exec('truncate private.ar_middle_channels,private.ar_middle_channel_sync_state');for(const k of ['test.session','test.gateway','test.mode','test.view','test.hidden','test.detail'])await setting(k,'');});
 after(async()=>db?.close());
 
@@ -174,6 +178,7 @@ test('edge refuses bad methods, forged keys, oversized/chunked requests and unsa
 });
 
 test('native-field migration preserves existing privileges, matches the canonical bodies and refuses drift',async()=>{
+ const db=await setupDatabase(compositeBaseline);try{
  const migration=fs.readFileSync(path.join(root,'supabase/migrations/20261010053717_ar_middle_native_withdrawal_fields.sql'),'utf8');
  const audit=()=>db.query("select p.oid::regprocedure::text signature,md5(p.prosrc) body,p.proacl::text acl,p.prosecdef,p.proconfig from pg_proc p where p.oid in ('private.ar_middle_channel_clean_record(jsonb)'::regprocedure,'public.ar_middle_channel_ingest(text,jsonb)'::regprocedure,'private.dashboard_admin_live_channel_status(jsonb)'::regprocedure) order by 1");
  const before=(await audit()).rows;await db.exec(migration);assert.deepEqual((await audit()).rows,before);await db.exec(migration);assert.deepEqual((await audit()).rows,before);
@@ -183,4 +188,55 @@ test('native-field migration preserves existing privileges, matches the canonica
  await db.exec("alter function private.ar_middle_channel_clean_record(jsonb) set search_path=public");
  try{await assert.rejects(()=>db.exec(migration),/AR_MIDDLE_NATIVE_BASELINE_MISMATCH/);}finally{await db.exec("rollback;alter function private.ar_middle_channel_clean_record(jsonb) set search_path=''");}
  assert.deepEqual((await audit()).rows,before);
+ }finally{await db.close();}
+});
+
+function withDepositRows(categories,extra={}){
+ const q=snapshot(extra);q.directions.forEach(d=>d.observed_at=q.captured_at);
+ const d=q.directions[0];d.records=categories.map((category_id,source_position)=>record('same-native-id',{category_id,category_name:category_id===null?null:`Category ${category_id}`,priority:source_position,source_position,channel_categories:category_id===null?[]:[{category_id,category_name:`Category ${category_id}`,sort:source_position}]}));
+ d.source_count=d.fetched_count=d.records.length;return q;
+}
+test('deposit preserves native category/channel rows, null and zero identities, independent sort and unchanged total ACK',async()=>{
+ const q=withDepositRows(['100','200','0',null]);
+ const h=createArMiddleChannelIngestHandler({env:{SUPABASE_URL:'https://synthetic.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'synthetic-service-secret'},now:()=>now,fetch:async(_url,init)=>{const p=JSON.parse(init.body);return Response.json(await call(p.p_request,p.p_token_hash));}});
+ assert.equal(validateArMiddleChannelRequest(q,now).directions[0].records.length,4);
+ const response=await h(request(q));assert.equal(response.status,200);assert.deepEqual(await response.json(),{ok:true,source:'ar_middle',accepted:5,source_count:5,snapshot_applied:true,snapshot_id:q.snapshot_id});
+ const saved=await rows(),charge=saved.filter(r=>r.order_type==='deposit');assert.equal(charge.length,4);assert.deepEqual(charge.map(r=>r.category_key),['','id:0','id:100','id:200']);
+ const data=await read();const s=data.snapshots.find(s=>s.direction==='charge');assert.equal(s.sourceRowIdentity,'category_channel');assert.equal(s.sourceCount,4);assert.equal(s.complete,true);assert.deepEqual(s.channels.map(r=>r.category_id),['100','200','0',null]);assert.deepEqual(s.channels.map(r=>r.priority),[0,1,2,3]);assert.equal(data.snapshots.find(s=>s.direction==='withdraw').sourceRowIdentity,null);
+ const state=(await db.query('select * from private.ar_middle_channel_sync_state order by order_type')).rows;assert.equal((await call(q)).snapshot_applied,true);assert.deepEqual(await rows(),saved);assert.deepEqual((await db.query('select * from private.ar_middle_channel_sync_state order by order_type')).rows,state);
+});
+test('only the disappeared deposit category row is pruned and withdrawal remains channel-only when its category changes',async()=>{
+ await call(withDepositRows(['100','200']));const q=withDepositRows(['200'],{captured_at:later});q.directions[1].records[0].category_id='changed-withdrawal-category';await call(q);
+ let saved=await rows();assert.equal(saved.find(r=>r.category_key==='id:100').is_present,false);const kept=saved.find(r=>r.category_key==='id:200');assert.equal(kept.is_present,true);assert.equal(kept.first_seen_at.toISOString(),new Date(at).toISOString());
+ const withdraw=saved.filter(r=>r.order_type==='withdrawal');assert.equal(withdraw.length,1);assert.equal(withdraw[0].category_key,'');assert.equal(withdraw[0].channel_data.category_id,'changed-withdrawal-category');assert.equal(withdraw[0].first_seen_at.toISOString(),new Date(at).toISOString());
+ const response=await read();assert(response.snapshots.every(s=>s.complete));assert.equal(response.snapshots.find(s=>s.direction==='charge').channels.filter(r=>r.is_present).length,1);
+ await call(withDepositRows(['100','200'],{captured_at:latest}));saved=await rows();assert(saved.every(r=>r.is_present));assert.equal(saved.find(r=>r.category_key==='id:100').first_seen_at.toISOString(),new Date(at).toISOString());assert.equal(saved.find(r=>r.category_key==='id:100').config_changed_at.toISOString(),new Date(latest).toISOString());
+});
+test('duplicate category/channel tuple, null versus missing tuple and withdrawal duplicate IDs reject both directions atomically',async()=>{
+ await call(withDepositRows(['100','200']));const prior=await rows(),state=(await db.query('select * from private.ar_middle_channel_sync_state order by order_type')).rows;
+ const duplicated=withDepositRows(['100','100'],{captured_at:later});
+ const unknown=withDepositRows([null,null],{captured_at:later});delete unknown.directions[0].records[1].category_id;
+ const withdraw=withDepositRows(['100','200'],{captured_at:later});withdraw.directions[1].records.push(record('same-native-id',{category_id:'other',source_position:1}));withdraw.directions[1].source_count=withdraw.directions[1].fetched_count=2;
+ const incomplete=withDepositRows(['100','200'],{captured_at:later});incomplete.directions[0].source_count=1;
+ for(const q of [duplicated,unknown,withdraw,incomplete]){assert.throws(()=>validateArMiddleChannelRequest(q,now),/invalid_request/);await assert.rejects(()=>call(q),/DUPLICATE_KEYS|INVALID_COUNT/);assert.deepEqual(await rows(),prior);assert.deepEqual((await db.query('select * from private.ar_middle_channel_sync_state order by order_type')).rows,state);}
+});
+test('composite migration backfills generated keys without changing old snapshots, preserves ACL/RLS/OIDs and replays safely',async()=>{
+ const legacy=await setupDatabase(compositeBaseline);try{
+ const publish=async q=>(await legacy.query('select public.ar_middle_channel_ingest($1,$2::jsonb) result',[hash,JSON.stringify(q)])).rows[0].result;
+ const q=snapshot();delete q.directions[0].records[0].category_id;await publish(q);
+ const zero=snapshot({source_tenant_id:'1013'});zero.directions[0].records[0].category_id='0';await publish(zero);
+ const oldRows=(await legacy.query('select * from private.ar_middle_channels order by source_tenant_id,order_type,channel_id')).rows,state=(await legacy.query('select * from private.ar_middle_channel_sync_state order by source_tenant_id,order_type')).rows;
+ const metadata=async()=>({functions:(await legacy.query("select oid,proowner,proacl::text,prosecdef,provolatile,proconfig from pg_proc where oid in ('public.ar_middle_channel_ingest(text,jsonb)'::regprocedure,'private.dashboard_admin_live_channel_status(jsonb)'::regprocedure) order by oid")).rows,table:(await legacy.query("select relowner,relacl::text,relrowsecurity,relforcerowsecurity from pg_class where oid='private.ar_middle_channels'::regclass")).rows});
+ const before=await metadata();await legacy.exec(compositeMigration);assert.deepEqual(await metadata(),before);let saved=(await legacy.query('select * from private.ar_middle_channels order by source_tenant_id,order_type,channel_id')).rows;
+ assert.deepEqual(saved.map(({category_key,...r})=>r),oldRows);assert.equal(saved.find(r=>r.source_tenant_id==='1102'&&r.order_type==='deposit').category_key,'');assert.equal(saved.find(r=>r.source_tenant_id==='1013'&&r.order_type==='deposit').category_key,'id:0');assert(saved.filter(r=>r.order_type==='withdrawal').every(r=>r.category_key===''));
+ assert.deepEqual((await legacy.query('select * from private.ar_middle_channel_sync_state order by source_tenant_id,order_type')).rows,state);assert.equal((await publish(q)).snapshot_applied,true);assert.deepEqual((await legacy.query('select * from private.ar_middle_channels order by source_tenant_id,order_type,channel_id')).rows,saved);
+ const audit=async()=>({metadata:await metadata(),bodies:(await legacy.query("select oid,md5(prosrc) hash from pg_proc where oid in ('public.ar_middle_channel_ingest(text,jsonb)'::regprocedure,'private.dashboard_admin_live_channel_status(jsonb)'::regprocedure) order by oid")).rows});
+ const after=await audit();await legacy.exec(compositeMigration);assert.deepEqual(await audit(),after);
+ const current=(await db.query("select md5(prosrc) hash from pg_proc where oid in ('public.ar_middle_channel_ingest(text,jsonb)'::regprocedure,'private.dashboard_admin_live_channel_status(jsonb)'::regprocedure) order by proname")).rows;
+ const migrated=(await legacy.query("select md5(prosrc) hash from pg_proc where oid in ('public.ar_middle_channel_ingest(text,jsonb)'::regprocedure,'private.dashboard_admin_live_channel_status(jsonb)'::regprocedure) order by proname")).rows;assert.deepEqual(migrated,current);
+ await assert.rejects(()=>legacy.query("update private.ar_middle_channels set category_key='caller-key'"),/can only be updated to DEFAULT/);
+ await legacy.exec('grant select on private.ar_middle_channels to anon');try{await assert.rejects(()=>legacy.exec(compositeMigration),/TABLE_BASELINE_MISMATCH/);}finally{await legacy.exec('rollback;revoke select on private.ar_middle_channels from anon');}assert.deepEqual(await audit(),after);
+ await legacy.exec("alter function public.ar_middle_channel_ingest(text,jsonb) set search_path=public");try{await assert.rejects(()=>legacy.exec(compositeMigration),/FUNCTION_BASELINE_MISMATCH/);}finally{await legacy.exec("rollback;alter function public.ar_middle_channel_ingest(text,jsonb) set search_path=''");}assert.deepEqual(await audit(),after);
+ await legacy.exec('alter table private.ar_middle_channels alter column category_key drop expression');try{await assert.rejects(()=>legacy.exec(compositeMigration),/GENERATED_KEY_MISMATCH/);}finally{await legacy.exec('rollback;');}
+ }finally{await legacy.close();}
 });

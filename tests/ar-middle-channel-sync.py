@@ -376,6 +376,80 @@ class DictionaryTests(unittest.TestCase):
 
 
 class PaginationTests(unittest.TestCase):
+    def test_native_deposit_category_rows_keep_same_channel_and_independent_sort(self):
+        def category_page(number, total, entries, page_size=2):
+            response = page("deposit", number, total, [], page_size=page_size)
+            response["data"]["list"] = entries
+            return response
+        a = {"categoryId": 100710, "customName": "UPI", "channels": [row(1, sort=7, channelCategory={"categoryId": 100710, "categoryName": "UPI"})]}
+        b = {"categoryId": 100718, "customName": "QR", "channels": [row(1, sort=2, channelCategory={"categoryId": 100718, "categoryName": "QR"})]}
+        first = category_page(1, 2, [a, b])
+        result = C.collect_direction(SequenceSource([first, first]), "1102", "deposit", 2)
+        self.assertEqual((result["source_count"], result["fetched_count"]), (2, 2))
+        self.assertEqual([r["channel_id"] for r in result["records"]], ["1", "1"])
+        self.assertEqual([r["category_id"] for r in result["records"]], ["100710", "100718"])
+        self.assertEqual([r["priority"] for r in result["records"]], [7, 2])
+        self.assertEqual([r["source_position"] for r in result["records"]], [0, 1])
+        self.assertEqual([r["channel_categories"][0]["category_id"] for r in result["records"]], ["100710", "100718"])
+        # A category row may legitimately cross a page boundary; a repeated
+        # composite row may not. Neither the source total nor IDs are rewritten.
+        first = category_page(1, 2, [a], page_size=1)
+        second = category_page(2, 2, [b], page_size=1)
+        result = C.collect_direction(SequenceSource([first, second, first]), "1102", "deposit", 1)
+        self.assertEqual(result["fetched_count"], 2)
+        self.assertEqual([r["priority"] for r in result["records"]], [7, 2])
+
+    def test_deposit_unknown_and_zero_categories_are_distinct_without_fake_ids(self):
+        response = page("deposit", 1, 2, [])
+        response["data"]["list"] = [
+            {"categoryId": 0, "channels": [row(1, channelCategory={"categoryId": 0})]},
+            {"categoryId": None, "channels": [row(1, channelCategory={})]},
+        ]
+        total, pages, rows, ids = C.page_rows(response, "deposit", 1, "1102", 2)
+        self.assertEqual(ids, (("0", "1"), (None, "1")))
+        result = C.collect_direction(SequenceSource([response, response]), "1102", "deposit", 2)
+        self.assertEqual([r["category_id"] for r in result["records"]], ["0", None])
+        self.assertEqual([r["channel_id"] for r in result["records"]], ["1", "1"])
+        self.assertEqual(result["source_count"], total)
+        for own, group in (({}, {"categoryId": 0}), ({"categoryId": None}, {"categoryId": 0}), ({"categoryId": 0}, {}), ({"categoryId": 0}, {"categoryId": None})):
+            raw = page("deposit", 1, 1, [])
+            raw["data"]["list"] = [{**group, "channels": [row(1, channelCategory=own)]}]
+            with self.subTest(own=own, group=group):
+                self.assertEqual(C.page_rows(raw, "deposit", 1, "1102", 2)[3], (("0", "1"),))
+                self.assertEqual(C.collect_direction(SequenceSource([raw, raw]), "1102", "deposit", 2)["records"][0]["category_id"], "0")
+
+    def test_same_native_category_row_duplicate_rejects_with_only_public_identity_context(self):
+        for direction, second in (("deposit", row(1)), ("withdrawal", row(1, channelCategory={"categoryId": 100718}))):
+            response = page(direction, 1, 2, [row(1), second])
+            with self.subTest(direction=direction), self.assertRaises(C.SyncError) as error:
+                C.page_rows(response, direction, 1, "1102", 2)
+            message = str(error.exception)
+            self.assertIn("SOURCE_PAGE_DUPLICATE_CHANNEL", message)
+            self.assertIn("direction=" + direction, message)
+            self.assertIn("page=1 channel_id=1", message)
+            self.assertIn("category_id=100710" if direction == "deposit" else "category_id=not_applicable", message)
+            self.assertNotIn("do-not-persist", message)
+            self.assertNotIn("Example Pay", message)
+        unknown = page("deposit", 1, 2, [])
+        unknown["data"]["list"] = [{"categoryId": None, "channels": [row(1, channelCategory={})]},
+                                     {"channels": [row(1, channelCategory={"categoryId": None})]}]
+        with self.assertRaisesRegex(C.SyncError, "category_id=unknown"):
+            C.page_rows(unknown, "deposit", 1, "1102", 2)
+
+    def test_same_category_across_pages_and_changed_confirmation_category_still_fail(self):
+        first = page("deposit", 1, 2, [row(1)], page_size=1)
+        repeated = page("deposit", 2, 2, [row(1)], page_size=1)
+        with self.assertRaisesRegex(C.SyncError, "SOURCE_PAGINATION_DUPLICATE direction=deposit page=2 channel_id=1 category_id=100710"):
+            C.collect_direction(SequenceSource([first, repeated]), "1102", "deposit", 1)
+        second = page("deposit", 2, 2, [row(2)], page_size=1)
+        changed = page("deposit", 1, 2, [row(1, channelCategory={"categoryId": 100718})], page_size=1)
+        changed["data"]["list"][0]["categoryId"] = 100718
+        with self.assertRaisesRegex(C.SyncError, "SOURCE_FINAL_CONFIRMATION_DRIFT"):
+            C.collect_direction(SequenceSource([first, second, changed]), "1102", "deposit", 1)
+        mismatch = page("deposit", 1, 1, [row(1, channelCategory={"categoryId": 100718})])
+        with self.assertRaisesRegex(C.SyncError, "SOURCE_CATEGORY_MISMATCH"):
+            C.page_rows(mismatch, "deposit", 1, "1102", 2)
+
     def test_grouped_deposit_counts_channels_and_reconfirms_anchor(self):
         first = page("deposit", 1, 3, [row(1), row(2)])
         source = SequenceSource([first, page("deposit", 2, 3, [row(3)]), first])
@@ -506,6 +580,27 @@ class RestartAndConfigurationTests(unittest.TestCase):
         config = {"targets": [{"tenant_id": "1102", "enabled": True}], "page_size": 2}
         self.assertEqual(C.run_cycle(config, source, upload, store, self.logger), 1)
         self.assertEqual(store.pending(), [previous])
+        store.close()
+
+    def test_native_deposit_rows_do_not_publish_when_withdrawal_identity_conflicts(self):
+        store = C.StateStore(self.directory)
+        previous = {"source_tenant_id": "1102", "snapshot_id": "old-complete", "captured_at": "2026-10-09T00:00:00Z", "directions": []}
+        store.save_complete(previous)
+        store.acknowledge(previous)
+        deposit = page("deposit", 1, 2, [])
+        deposit["data"]["list"] = [
+            {"categoryId": 100710, "channels": [row(1, sort=7)]},
+            {"categoryId": 100718, "channels": [row(1, sort=2, channelCategory={"categoryId": 100718})]},
+        ]
+        withdraw = page("withdrawal", 1, 2, [row(1), row(1, channelCategory={"categoryId": 100718})])
+        source, upload, logger = SequenceSource([deposit, deposit, withdraw]), mock.Mock(), mock.Mock()
+        self.assertEqual(C.run_cycle({"targets": [{"tenant_id": "1102", "enabled": True}], "page_size": 2}, source, upload, store, logger), 1)
+        upload.apply.assert_not_called()
+        logger.info.assert_not_called()
+        self.assertIn("direction=withdrawal page=1 channel_id=1 category_id=not_applicable", logger.warning.call_args.args[2])
+        self.assertNotIn("do-not-persist", str(logger.warning.call_args))
+        retained = json.loads(store.db.execute("select payload from snapshots where tenant_id='1102'").fetchone()[0])
+        self.assertEqual(retained, previous)
         store.close()
 
     def test_failed_upload_survives_restart_and_exact_ack_releases(self):
