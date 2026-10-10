@@ -371,6 +371,7 @@ function adminLiveTimeoutMessage(action:unknown,mode?:unknown):string {
  if(action==='catalog')return '平台目录读取超时，请重试读取目录';
  if(action==='pendingOrders')return '代付中订单读取超时，请重试；已显示统计不会清空';
  if(action==='pendingAnalysis')return '代付中分析读取超时，请重试；不能据此判断为0';
+ if(action==='autoWithdraw')return '自动出款统计读取超时，请重试；不代表没有数据';
  if(action==='pendingSnapshot')return mode===undefined?'近7天代付中快照读取超时，请重试；不能据此判断为0':'代付中存量读取超时，请重试；不能据此判断为0';
  return ['syncHealth','intakeCoverage'].includes(String(action))?'同步检查超时，请稍后重试；不能据此判断平台没有数据':action==='withdrawReasons'?'该平台当日原因读取超时，请点击重试':['aggregate','collectedData','reportSummary'].includes(String(action))?'读取超时，不代表没有数据；请重试':'读取超时，请缩短日期或选择单个平台后重试';
 }

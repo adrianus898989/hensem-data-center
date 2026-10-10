@@ -2,11 +2,11 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const source=fs.readFileSync(path.join(__dirname,'../admin-preview/live-withdraw-pages.js'),'utf8');
 const E=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const yash=(extra={})=>({country:'印度',platform:'YASH.BET',dataDate:'2026-10-08',total:100,success:80,rejected:5,autoCount:null,manualCount:null,unclassifiedCount:100,classificationAvailable:false,reasonAvailable:false,avgSeconds:60,durationSampleCount:80,durationTotalSeconds:4800,durationBasis:'created_to_completed',...extra});
-function fixture(data,operators=false){
+function fixture(data,operators=false,respond){
  const tables=[],requests=[],root={Date,Intl,HensemLiveFilters:{multi:()=>''},document:{getElementById:()=>null,querySelector:()=>null}};root.window=root;
  vm.runInNewContext(source,root);
  const L={catalogReady:true,catalog:[{id:'yash',country:'印度',name:'YASH.BET',source:'kb',timezone:'Asia/Kolkata'}],country:'印度',from:'2026-10-08',to:'2026-10-08'};
- const page=root.HensemLiveWithdrawPages.create({L,page:()=>operators?'withdraw_operators':'auto_withdraw',E,C:v=>v===null?'—':Number(v||0).toLocaleString('en-US'),N:String,R:(n,d)=>d?(100*n/d).toFixed(2)+'%':'—',box:(_title,body)=>body,table:(headers,rows,cls,footers)=>{tables.push({headers,rows:Array.from(rows,row=>Array.from(row)),cls,footers:footers&&Array.from(footers,row=>Array.from(row))});return rows.flat().join('')},render:()=>{},request:async q=>{requests.push(q);return {available:false,rows:[]}}});
+ const page=root.HensemLiveWithdrawPages.create({L,page:()=>operators?'withdraw_operators':'auto_withdraw',E,C:v=>v===null?'—':Number(v||0).toLocaleString('en-US'),N:String,R:(n,d)=>d?(100*n/d).toFixed(2)+'%':'—',box:(_title,body)=>body,table:(headers,rows,cls,footers)=>{tables.push({headers,rows:Array.from(rows,row=>Array.from(row)),cls,footers:footers&&Array.from(footers,row=>Array.from(row))});return rows.flat().join('')},render:()=>{},request:async q=>{requests.push(q);return respond?respond(q):{available:false,rows:[]}}});
  page.state.data={startDate:'2026-10-08',endDate:'2026-10-08',rows:[yash()],total:1,totals:yash(),...data};
  return {root,page,L,tables,requests,render:()=>page.render(),stats:()=>tables.findLast(t=>t.cls?.includes('withdraw-stat-table'))};
 }
@@ -15,21 +15,51 @@ test('YASH shows real withdrawal counts while missing classification remains unk
  assert.deepEqual(row.slice(1,4),['100','80','5']);assert.match(row[4],/^80.00%/);assert.match(row[5],/^5.00%/);
  assert.deepEqual(row.slice(6,8),['—','—']);assert.match(row[8],/^—/);assert.match(row[9],/^—/);
  assert.match(html,/<label>自动出款<\/label><strong>—<\/strong>/);assert.match(html,/<label>人工处理<\/label><strong>—<\/strong>/);
- assert.match(html,/未分处理方式 100 笔 · 100.00%/);assert.match(html,/未分类订单不推定为人工/);
+ assert.match(html,/未分处理方式 100 笔 · 100.00%/);assert.match(html,/未分类单独列出，不推定为人工/);
 });
-test('mixed page and grand totals keep unknown classification rather than zero or a partial-source ratio',()=>{
+test('mixed classification shows confirmed sums against all received orders and leaves unknown orders separate',()=>{
  const ar=yash({platform:'AR-SYNTHETIC',total:40,success:30,rejected:10,classificationAvailable:true,reasonAvailable:true,autoCount:10,manualCount:30});
- const totals=yash({total:140,success:110,rejected:15}),f=fixture({rows:[yash(),ar],total:21,totals});f.render();const t=f.stats();
+ const totals=yash({total:140,success:110,rejected:15,autoCount:10,manualCount:30,unclassifiedCount:100,classificationPartial:true}),f=fixture({rows:[yash(),ar],total:21,totals}),html=f.render(),t=f.stats();
  assert.equal(t.rows[1][6],'10');assert.match(t.rows[1][8],/^<span class="red">25.00%/);
- for(const row of t.footers){assert.deepEqual(row.slice(1,4),['140','110','15']);assert.deepEqual(row.slice(6,8),['—','—']);assert.match(row[8],/^—/);assert.doesNotMatch(row[8],/7.14%|0.00%/);}
+ for(const row of t.footers){assert.deepEqual(row.slice(1,4),['140','110','15']);assert.deepEqual(row.slice(6,8),['10','30']);assert.match(row[8],/7.14%/);assert.match(row[9],/21.43%/);assert.match(row[0],/分类笔数仅已确认/);}
+ assert.match(html,/<label>自动出款<\/label><strong>10<\/strong>/);assert.match(html,/<label>人工处理<\/label><strong>30<\/strong>/);assert.match(html,/未分处理方式 100 笔 · 71.43%/);assert.match(html,/data-withdraw-classification="partial"/);assert.match(html,/已确认笔数 · 占已入库总笔数/);assert.match(html,/自动／人工显示已确认笔数，占比按已入库总笔数计算；未分类单独列出/);
 });
 test('classification capability overrides numeric placeholders, including previous-period comparison',()=>{
  const current=yash({autoCount:0,manualCount:100,previous:yash({autoCount:1,manualCount:99})}),f=fixture({rows:[current],totals:current,previousTotals:current.previous});
  const html=f.render(),row=f.stats().rows[0];assert.deepEqual(row.slice(6,8),['—','—']);assert.match(row[8],/^—.*对比值未提供/);assert.doesNotMatch(row[8],/1.00%|pp/);assert.match(html,/<label>自动出款<\/label><strong>—<\/strong>/);
 });
-test('missing values stay unknown in page sums while a genuinely classified zero stays zero',()=>{
+test('missing values stay unknown while page sums preserve a genuinely classified zero and its known subset',()=>{
  const unknown=yash({classificationAvailable:undefined,autoCount:undefined,manualCount:null}),known=yash({platform:'KNOWN',classificationAvailable:true,autoCount:0,manualCount:100}),f=fixture({rows:[unknown,known],total:21});f.render();
- const t=f.stats();assert.deepEqual(t.rows[0].slice(6,8),['—','—']);assert.equal(t.rows[1][6],'0');assert.match(t.rows[1][8],/0.00%/);assert.deepEqual(t.footers[0].slice(6,8),['—','—']);
+ const t=f.stats();assert.deepEqual(t.rows[0].slice(6,8),['—','—']);assert.equal(t.rows[1][6],'0');assert.match(t.rows[1][8],/0.00%/);assert.deepEqual(t.footers[0].slice(6,8),['0','100']);assert.deepEqual(t.footers[1].slice(6,8),['—','—']);
+});
+test('scope totals use server confirmed counts rather than reconstructing all platforms from a paginated page',()=>{
+ const ar=yash({platform:'AR-SYNTHETIC',total:40,classificationAvailable:true,autoCount:10,manualCount:30,unclassifiedCount:0});
+ const totals=yash({total:500,autoCount:90,manualCount:210,unclassifiedCount:200,classificationPartial:true}),f=fixture({rows:[ar],total:41,totals}),html=f.render(),t=f.stats();
+ assert.deepEqual(t.footers[0].slice(6,8),['10','30']);assert.deepEqual(t.footers[1].slice(6,8),['90','210']);assert.match(html,/<label>自动出款<\/label><strong>90<\/strong>/);assert.match(html,/未分处理方式 200 笔 · 40.00%/);assert.match(t.footers[1][8],/18.00%/);assert.match(t.footers[1][9],/42.00%/);
+});
+test('an explicit partial capability never manufactures an absent classification value or zero denominator',()=>{
+ const totals=yash({autoCount:0,manualCount:null,classificationPartial:true,total:0,unclassifiedCount:0}),f=fixture({totals}),html=f.render();
+ assert.match(html,/<label>自动出款<\/label><strong>0<\/strong>/);assert.match(html,/<label>人工处理<\/label><strong>—<\/strong>/);assert.doesNotMatch(html,/NaN|Infinity/);assert.match(f.stats().footers[0][8],/^—/);
+});
+test('partial classification suppresses count and share comparisons even when overall previous coverage is complete',()=>{
+ const current=yash({total:140,autoCount:10,manualCount:30,classificationPartial:true}),previous=yash({total:120,autoCount:8,manualCount:12,classificationPartial:true}),f=fixture({rows:[{...current,previous}],totals:current,previousTotals:previous,comparison:{complete:true}}),html=f.render(),row=f.stats().rows[0];
+ assert.match(row[8],/7.14%.*分类未完整，暂不比较/);assert.match(row[9],/21.43%.*分类未完整，暂不比较/);assert.doesNotMatch(row[8],/pp|昨日/);const cards=html.split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/<label>自动出款<\/label><strong>10<\/strong>/);assert.doesNotMatch(cards,/\+2 笔|\+18 笔/);
+});
+const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no});return {promise,resolve,reject}};
+test('same-query refresh is deduplicated, disables query controls and preserves the previous result on failure',async()=>{
+ const data={startDate:'2026-10-08',endDate:'2026-10-08',rows:[yash({platform:'RETAINED-SYNTHETIC'})],total:1,totals:yash()},pending=deferred();let refreshing=false;
+ const f=fixture({},false,()=>refreshing?pending.promise:data);await f.page.load();assert.equal(f.requests.length,1);
+ refreshing=true;const first=f.page.load();assert.equal(f.requests.length,2);await f.page.load();await f.root.withdrawQueryForm();assert.equal(f.requests.length,2,'repeated query actions do not create another server read');
+ let html=f.render();assert.match(html,/disabled aria-disabled="true" onclick="withdrawQueryForm\(this.form\)">正在读取/);assert.match(html,/disabled aria-disabled="true" onclick="withdrawLoad\(\)">刷新备注/);assert.match(html,/RETAINED-SYNTHETIC/);assert.match(html,/同一筛选的上次成功结果仍显示，尚未刷新/);
+ pending.reject(Error('57014 synthetic statement timeout <script>'));await first;html=f.render();assert.equal(f.page.state.loading,false);assert.match(html,/刷新失败，同一筛选的上次成功结果已保留/);assert.match(html,/RETAINED-SYNTHETIC/);assert.match(html,/57014 synthetic statement timeout &lt;script&gt;/);assert.doesNotMatch(html,/<script>/);assert.match(html,/onclick="withdrawLoad\(\)">重试/);assert.doesNotMatch(html,/disabled aria-disabled="true" onclick="withdrawQueryForm/);
+ refreshing=false;await f.root.withdrawLoad();assert.equal(f.requests.length,3);assert.equal(f.page.state.error,'');assert.doesNotMatch(f.render(),/刷新失败/);
+});
+test('editing dates removes old results before a new request and a failure cannot relabel them as the new day',async()=>{
+ const data={startDate:'2026-10-08',endDate:'2026-10-08',rows:[yash({platform:'OLD-DAY-SYNTHETIC'})],total:1,totals:yash()},pending=deferred();let changed=false;
+ const f=fixture({},false,()=>changed?pending.promise:data);await f.page.load();assert.match(f.render(),/OLD-DAY-SYNTHETIC/);
+ f.root.withdrawDate('from','2026-10-09');f.root.withdrawDate('to','2026-10-09');assert.doesNotMatch(f.render(),/OLD-DAY-SYNTHETIC/);
+ changed=true;const next=f.page.load();assert.equal(f.page.state.data,null);assert.doesNotMatch(f.render(),/OLD-DAY-SYNTHETIC|上次成功结果/);assert.equal(f.requests.at(-1).startAt,'2026-10-09T00:00:00.000Z');
+ pending.reject(Error('synthetic request timeout'));await next;const html=f.render();assert.match(html,/synthetic request timeout/);assert.doesNotMatch(html,/OLD-DAY-SYNTHETIC|上次成功结果/);assert.equal(f.page.state.data,null);
 });
 test('unavailable YASH reasons are explained beside a working daily entry without issuing a reason request',()=>{
  const f=fixture();f.render();const actions=f.stats().rows[0].at(-1);
