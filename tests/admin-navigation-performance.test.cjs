@@ -33,7 +33,7 @@ function harness(options={}){
   setInterval:(fn,ms)=>{intervals.push({fn,ms});return intervals.length},clearInterval(){},setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},
   hensemRoleAccess:options.roleAccess,hensemRoleAllowed:options.roleAllowed,HENSEM_PRODUCTION:options.production!==false,hensemAdminInitialPage:options.initialPage,hensemAdminPageUrl:key=>'https://dashboard.example/app/#owner-admin-preview/'+key,scrollX:0,scrollY:0,
   hensemLiveRequest:async request=>{calls.push(JSON.parse(JSON.stringify(request)));if(!options.ancillaryHandler&&request.action==='providerOptions')return {providers:['Synthetic provider']};if(!options.ancillaryHandler&&request.action==='workorders')return {rows:[],byProvider:[],total:0,summary:{},byDirection:{}};if(handler)return handler(request);if(request.action==='catalog')return {platforms:options.platforms||[P]};if(request.action==='details')return detail((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65,request.offset,request.limit);if(request.action==='rates')return {rows:[],total:0,options:{countries:[],platforms:[],providers:[]}};if(request.action==='payoutConfig')return payoutConfig(request,(options.platforms||[P]).length>0);return aggregate((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65)}
- };if(options.observe)context.IntersectionObserver=class{constructor(callback){observations.push(callback)}observe(){}disconnect(){}};context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>m.name!=='live-report-data.js'||options.reports))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});if(options.submission){vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-submission-analysis.js'),'utf8'),context);if(options.onSubmissionQuery){const create=context.HensemSubmissionAnalysis.create;context.HensemSubmissionAnalysis.create=config=>create({...config,query(...args){options.onSubmissionQuery();return config.query(...args)}})}}vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
+ };if(options.observe)context.IntersectionObserver=class{constructor(callback){observations.push(callback)}observe(){}disconnect(){}};context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>m.name!=='live-report-data.js'||options.reports))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});if(options.submission){vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-submission-analysis.js'),'utf8'),context);if(options.onSubmissionQuery){const create=context.HensemSubmissionAnalysis.create;context.HensemSubmissionAnalysis.create=config=>create({...config,query(...args){options.onSubmissionQuery();return config.query(...args)}})}}for(const name of options.extraModules||[])vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8'),context,{filename:name,timeout:2000});options.beforeLive?.(context);vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
  return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,scrolled,observations,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
 }
 async function ready(options){const h=harness(options);await settle();if(h.L){h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';if(options?.page&&h.c.state.page!=='overview'){h.c.liveQuery();await settle();}}return h}
@@ -42,6 +42,66 @@ function completeAggregate(p=P,count=10,success=5){const r=aggregate(p,count),s=
 
 const pageWrites=h=>h.writes.filter(w=>w.id==='page').length;
 const filterWrites=h=>h.writes.filter(w=>w.id==='section').length;
+
+function moduleSnapshots(){
+ const captured=[],restored=[];
+ function beforeLive(c){
+  for(const [name,global]of [['channel','HensemLiveChannelStatus'],['daily','HensemLiveDailyComparison'],['submission','HensemSubmissionAnalysis']]){
+   const create=c[global].create;
+   c[global].create=config=>{
+    const api=create(config),capture=api.capture,restore=api.restore;
+    api.capture=()=>{const value=capture();value.navigationTestOwner=c.state.page;captured.push({name,page:c.state.page});return value};
+    api.restore=value=>{restored.push({name,page:c.state.page,owner:value?.navigationTestOwner??null});return restore(value)};
+    return api;
+   };
+  }
+ }
+ return {captured,restored,options:{submission:true,extraModules:['live-channel-status.js','live-daily-comparison.js'],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true,beforeLive}};
+}
+
+test('large channel, daily and submission snapshots belong only to their consuming tabs across repeated navigation',async()=>{
+ const snapshots=moduleSnapshots(),h=await ready(snapshots.options),before=h.calls.length;
+ for(const page of ['channel_status','daily_comparison','events','providers'])h.c.setPage(page);
+ h.c.setPage('workorder_workload');
+ assert.deepEqual(snapshots.captured.map(({name,page})=>[name,page]),[['channel','channel_status'],['daily','daily_comparison'],['submission','events'],['submission','providers']]);
+ const copies=snapshots.captured.length;
+ for(let i=0;i<30;i++)for(const page of ['time','amount','rates','workorder_workload'])h.c.setPage(page);
+ assert.equal(snapshots.captured.length,copies,'unrelated tabs never deep-copy complete independent results');
+ for(const page of ['channel_status','daily_comparison','events','providers'])h.c.setPage(page);
+ assert(snapshots.restored.some(x=>x.name==='channel'&&x.page==='channel_status'&&x.owner==='channel_status'));
+ assert(snapshots.restored.some(x=>x.name==='daily'&&x.page==='daily_comparison'&&x.owner==='daily_comparison'));
+ assert(snapshots.restored.some(x=>x.name==='submission'&&x.page==='events'&&x.owner==='events'));
+ assert(snapshots.restored.some(x=>x.name==='submission'&&x.page==='providers'&&x.owner==='providers'));
+ assert(snapshots.captured.every(x=>x.name==='channel'?x.page==='channel_status':x.name==='daily'?x.page==='daily_comparison':['events','providers'].includes(x.page)));
+ assert.equal(h.calls.length,before,'snapshot ownership never initiates a business read');
+});
+
+test('closing a heavy-data tab cannot resurrect its snapshot from an unrelated restored tab',async()=>{
+ const snapshots=moduleSnapshots(),h=await ready(snapshots.options);
+ h.c.setPage('channel_status');h.c.setPage('daily_comparison');h.c.setPage('events');h.c.setPage('time');h.c.setPage('amount');
+ for(const page of ['channel_status','daily_comparison','events'])h.c.liveClosePage(page);
+ const before=snapshots.restored.length;
+ h.c.setPage('time');h.c.setPage('amount');
+ assert(snapshots.restored.slice(before).every(x=>x.owner===null),'unrelated tabs restore empty independent modules after owner tabs close');
+ h.c.setPage('channel_status');h.c.setPage('daily_comparison');h.c.setPage('events');
+ assert(snapshots.restored.slice(before).every(x=>x.owner===null),'reopened owner tabs start without a closed snapshot');
+});
+
+test('configuration permissions completing after navigation cannot open a dialog or repaint the new page',async()=>{
+ const h=await ready({page:'provider_config'}),pending=deferred();h.setHandler(q=>q.action==='configurationAccess'?pending.promise:aggregate());
+ const read=h.c.configPermissions();await settle();h.c.setPage('time');const writes=pageWrites(h),html=h.html();pending.resolve({rows:[{username:'Synthetic editor',canView:true,canManage:true}]});await read;await settle();
+ assert.equal(h.c.state.page,'time');assert.equal(pageWrites(h),writes);assert.equal(h.html(),html);assert(!h.nodes.has('liveConfigDialog'));
+});
+
+test('configuration saving and its refresh prevent page switching or tab deletion without repeating a write',async()=>{
+ const h=await ready(),write=deferred(),catalog=deferred();h.c.setPage('time');h.c.setPage('provider_config');
+ h.L.providerConfig={canManage:true,rows:[{country:'印度',platform:'Synthetic platform',rawProvider:'Synthetic source',canonicalProvider:'Synthetic provider',version:1}],options:{canonicalProviders:[]}};
+ h.setHandler(q=>q.action==='configurationWrite'?write.promise:q.action==='catalog'?catalog.promise:q.action==='providerConfig'?h.L.providerConfig:aggregate());
+ h.c.configEditProvider(0);const saving=h.c.configSave();await h.c.configSave();assert.equal(h.calls.filter(q=>q.action==='configurationWrite').length,1);
+ const tabs=h.nodes.get('livePageTabs').innerHTML;h.c.setPage('time');h.c.liveClosePage('provider_config');h.c.liveCloseOtherPages();h.c.liveCloseAllPages();assert.equal(h.c.state.page,'provider_config');assert.equal(h.nodes.get('livePageTabs').innerHTML,tabs);
+ write.resolve({ok:true});await settle();h.c.setPage('time');h.c.liveCloseAllPages();assert.equal(h.c.state.page,'provider_config','post-write directory refresh cannot race a newly selected report');
+ catalog.resolve({platforms:[P]});await saving;await settle();h.c.setPage('time');assert.equal(h.c.state.page,'time');assert.equal(h.calls.filter(q=>q.action==='configurationWrite').length,1);
+});
 
 test('opening or closing navigation groups updates only the menu, never recomputes the current report',async()=>{
  const h=await ready(),before=pageWrites(h),filters=filterWrites(h),requests=h.calls.length,html=h.html();

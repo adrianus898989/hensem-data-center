@@ -101,6 +101,12 @@ test('bootstrap precedes original scripts and requires no eval or network CSP al
 
 function componentHarness(userId = 'offline-user-a', options = {}) {
   const listeners = new Map(), effects = [], effectDeps = [], refs = [], states = [], cleanups = [], calls = [], roleCalls = [], phases = [], restoreCalls = [];
+  const lifecycle=options.commitEffects===true,effectRecords=[],callbackRecords=[],documentListeners=new Map(),intervals=new Map(),bridgeRecords=[],presenceSubscriptions=new Set(),liveCalls=[],posted=[];
+  let renderPending=false,disposed=false,intervalId=0,channelId=0,currentChild=null;
+  const sameDeps=(a,b)=>Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((value,index)=>Object.is(value,b[index]));
+  function addListener(registry,name,callback){if(!registry.has(name))registry.set(name,new Set());registry.get(name).add(callback)}
+  function removeListener(registry,name,callback){const set=registry.get(name);set?.delete(callback);if(!set?.size)registry.delete(name)}
+  function trackedBridge(kind,install,settings){const stop=install(settings),record={kind,source:settings.source(),channel:settings.channel(),active:true};bridgeRecords.push(record);return()=>{stop();record.active=false}}
   const values = new Map([[AUTH, 'offline-host-auth-must-not-enter-frame']]);
   const prefix = `hensem:owner-preview:${userId}:`;
   values.set(prefix + KEY, 'this-account-draft');
@@ -109,10 +115,10 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const callbacks = [];
   const react = {
     useState(initial) { const index = hookIndex++; if (!(index in states)) states[index] = initial;
-      return [states[index], value => { states[index] = typeof value === 'function' ? value(states[index]) : value; }]; },
+      return [states[index], value => { const next=typeof value === 'function' ? value(states[index]) : value;if(lifecycle&&!Object.is(next,states[index]))renderPending=true;states[index]=next; }]; },
     useRef(initial) { const index = refIndex++; return refs[index] || (refs[index] = { current: initial }); },
-    useCallback(callback) { const index = callbackIndex++; return callbacks[index] || (callbacks[index] = callback); },
-    useEffect(callback, deps) { effectDeps[effectIndex++]=deps; effects.push(callback); },
+    useCallback(callback,deps) { const index = callbackIndex++;if(lifecycle){if(!sameDeps(callbackRecords[index]?.deps,deps))callbackRecords[index]={deps,callback};return callbackRecords[index].callback}return callbacks[index] || (callbacks[index] = callback); },
+    useEffect(callback, deps) { const index=effectIndex++;effectDeps[index]=deps;if(lifecycle){effectRecords[index]={...effectRecords[index],callback,nextDeps:deps}}else effects.push(callback); },
   };
   const jsx = (type, props) => ({ type, props });
   const currentSession = { user: { id: userId }, access_token: 'offline-host-access', refresh_token: 'offline-host-refresh' };
@@ -120,8 +126,8 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const window = {
     location: { origin: 'https://app.offline.invalid', href: 'https://app.offline.invalid/#owner-admin-preview', search: '', ...options.location },
     history: {replaceState(_state,_title,url){window.location.href=String(url);window.location.search=new URL(url).search;}},
-    addEventListener: (name, callback) => listeners.set(name, callback), removeEventListener: name => listeners.delete(name),
-    setInterval: callback => { intervalCheck = callback; return 1; }, clearInterval: () => {},
+    addEventListener: (name, callback) => lifecycle?addListener(listeners,name,callback):listeners.set(name, callback), removeEventListener: (name,callback) => lifecycle?removeListener(listeners,name,callback):listeners.delete(name),
+    setInterval: callback => { intervalCheck = callback;if(lifecycle){intervals.set(++intervalId,callback);return intervalId}return 1; }, clearInterval: id => {if(lifecycle){const callback=intervals.get(id);intervals.delete(id);if(intervalCheck===callback)intervalCheck=null}},
   };
   const localStorage = { getItem: key => values.get(key) ?? null,
     setItem(key, value) { if (throwOnWrite) throw Error('Synthetic quota failure'); values.set(key, value); },
@@ -136,11 +142,11 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     if (name.endsWith('/dashboardAuthClient')) return { dashboardResponseError: authErrors.dashboardResponseError, ensureDashboardSession: async candidate => candidate, normalizedManagementPermissions: profile=>({manage_viewers:profile.management_permissions?.manage_viewers!==false}) };
     if (['adminConfigurationRequest','adminWorkorderRecordsRequest','depositStatisticsRequest','portalOperationLogsRequest'].some(helper=>name.endsWith('/'+helper))) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/'+name.split('/').pop()+'.ts'),'utf8')),{module:helper,exports:helper.exports});return helper.exports; }
     if (name.endsWith('/adminLiveBridge')) {
-      if (!liveClient) { const module={exports:{}};const filename=path.join(repo,'src/lib/adminLiveBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module,exports:module.exports,setTimeout,clearTimeout},{filename});liveClient={...module.exports,makeAdminLiveDocument(...args){phases.push('live-document');return module.exports.makeAdminLiveDocument(...args)}}; }
+      if (!liveClient) { const module={exports:{}};const filename=path.join(repo,'src/lib/adminLiveBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module,exports:module.exports,setTimeout,clearTimeout},{filename});liveClient={...module.exports,...(lifecycle?{installAdminLiveBridge:settings=>trackedBridge('live',module.exports.installAdminLiveBridge,settings)}:{}),makeAdminLiveDocument(...args){phases.push('live-document');return module.exports.makeAdminLiveDocument(...args)}}; }
       return liveClient;
     }
     if (name.endsWith('/dashboardPresenceBridge')) {
-      if (!presenceClient) { const helper={exports:{}};const filename=path.join(repo,'src/lib/dashboardPresenceBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module:helper,exports:helper.exports,require:()=>({}),URL},{filename});presenceClient={...helper.exports,installDashboardPresenceBridge:()=>()=>{},makeDashboardPresenceDocument(...args){phases.push('presence-document');return helper.exports.makeDashboardPresenceDocument(...args)}}; }
+      if (!presenceClient) { const helper={exports:{}};const filename=path.join(repo,'src/lib/dashboardPresenceBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module:helper,exports:helper.exports,require:()=>({}),URL},{filename});presenceClient={...helper.exports,installDashboardPresenceBridge:lifecycle?settings=>trackedBridge('presence',helper.exports.installDashboardPresenceBridge,{...settings,subscribe:callback=>{presenceSubscriptions.add(callback);return()=>presenceSubscriptions.delete(callback)},viewer:()=>props.session.user.id,snapshot:()=>({onlineCount:0,observedAt:'2026-10-10T00:00:00Z',scope:'authorized',accounts:[],loading:false,reason:'initial'}),refresh:()=>{}}):()=>()=>{},makeDashboardPresenceDocument(...args){phases.push('presence-document');return helper.exports.makeDashboardPresenceDocument(...args)}}; }
       return presenceClient;
     }
     if (name.endsWith('/ownerPreviewVerification')||name==='./ownerPreviewVerification') {const helper={exports:{}};const filename=path.join(repo,'src/lib/ownerPreviewVerification.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module:helper,exports:helper.exports},{filename});return helper.exports;}
@@ -171,19 +177,35 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   };
   environment = {
     module: box, exports: box.exports, require: requireStub, window, localStorage, URL, AbortController, Error, setTimeout:options.setTimeout||setTimeout,clearTimeout:options.clearTimeout||clearTimeout,
-    crypto: { randomUUID: () => 'offline-frame-channel' },
-    document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} },
+    crypto: { randomUUID: () => lifecycle?'offline-frame-channel-'+(++channelId):'offline-frame-channel' },
+    document: { visibilityState: 'visible', addEventListener(name,callback) {if(lifecycle)addListener(documentListeners,name,callback)}, removeEventListener(name,callback) {if(lifecycle)removeListener(documentListeners,name,callback)} },
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
-    fetch: async (url, init) => { if(url.endsWith('/rest/v1/rpc/dashboard_role_access')){roleCalls.push({url,init});if(options.roleFetch)return options.roleFetch(url,init);return {ok:true,status:200,json:async()=>({mode:(options.role||'owner')==='owner'?'owner':'legacy',roleId:null,roleName:null,version:0,permissions:[],canView:true})};} phases.push('fetch'); calls.push({ url, init }); const response=options.fetch ? await options.fetch(url, init) : url.endsWith('?check=1')?{ok:true,status:200,json:async()=>({ok:true,canView:true,canManage:(options.role||'owner')==='owner'})}:{ ok: true, status: 200, text: async () => HTML }; return typeof response.text==='function'?{...response,text:async()=>{phases.push('response:text');return response.text()}}:response; },
+    fetch: async (url, init) => { if(url.endsWith('/rest/v1/rpc/dashboard_role_access')){roleCalls.push({url,init});if(options.roleFetch)return options.roleFetch(url,init);return {ok:true,status:200,json:async()=>({mode:(options.role||'owner')==='owner'?'owner':'legacy',roleId:null,roleName:null,version:0,permissions:[],canView:true})};}if(lifecycle&&url.includes('/rest/v1/rpc/')){liveCalls.push({url,init});return options.liveFetch?options.liveFetch(url,init):{ok:true,status:200,json:async()=>({platforms:[]})}} phases.push('fetch'); calls.push({ url, init }); const response=options.fetch ? await options.fetch(url, init) : url.endsWith('?check=1')?{ok:true,status:200,json:async()=>({ok:true,canView:true,canManage:(options.role||'owner')==='owner'})}:{ ok: true, status: 200, text: async () => HTML }; return typeof response.text==='function'?{...response,text:async()=>{phases.push('response:text');return response.text()}}:response; },
   };
   vm.runInNewContext(transpile(fs.readFileSync(componentPath, 'utf8')), environment, { filename: componentPath });
   const props = { canView: options.canView ?? true, session: currentSession,
-    profile: { active: options.active ?? true, role: options.role || 'owner', permissions:options.permissions, management_permissions:options.management_permissions, auth_user_id: userId }, onLogout: options.onLogout || (()=>{}) };
+    profile: { active: options.active ?? true, role: options.role || 'owner', permissions:options.permissions, management_permissions:options.management_permissions, auth_user_id: userId,...(options.profile||{}) }, onLogout: options.onLogout || (()=>{}) };
   const draw = () => { hookIndex = refIndex = callbackIndex = effectIndex = 0; return box.exports.default(props); };
-  draw(); const child = {}; refs[0].current = { contentWindow: child };
-  for (const effect of effects.splice(0)) { const cleanup = effect(); if (cleanup) cleanups.push(cleanup); }
-  return { values, prefix, child, calls, roleCalls, states, draw, effectDeps, phases, restoreCalls, rerenderSession:next=>{props.session=next;return draw()}, session:currentSession, channel: () => refs[1].current,
-    send: event => listeners.get('message')?.(event), dispose: () => cleanups.forEach(cleanup => cleanup()),
+  const commit=()=>{
+    assert(lifecycle&&!disposed,'committed effects require a live lifecycle fixture');
+    for(let attempt=0;attempt<20;attempt++){
+      renderPending=false;const tree=draw(),mounted=!!findElement(tree,'iframe');
+      if(mounted){if(!currentChild)currentChild={postMessage(data,target){posted.push({source:this,data,target})}};refs[0].current={contentWindow:currentChild}}
+      else {currentChild=null;refs[0].current=null}
+      const changed=effectRecords.filter(record=>!record.committed||!sameDeps(record.deps,record.nextDeps));
+      // React commits refs, then cleans up changed passive effects before setup.
+      for(const record of changed){record.cleanup?.();record.cleanup=null}
+      for(const record of changed){record.deps=record.nextDeps;record.committed=true;record.cleanup=record.callback()||null}
+      if(!renderPending)return tree;
+    }
+    throw Error('Synthetic effect commit did not settle');
+  };
+  const child = {};
+  if(lifecycle)commit();else{draw();refs[0].current={contentWindow:child};for(const effect of effects.splice(0)){const cleanup=effect();if(cleanup)cleanups.push(cleanup)}}
+  return { values, prefix, get child(){return lifecycle?currentChild:child}, calls, roleCalls, states, draw, commit,effectDeps, phases, restoreCalls,liveCalls,posted,bridgeRecords,
+    rerenderSession:next=>{props.session=next;return lifecycle?commit():draw()},rerenderProps:next=>{Object.assign(props,next);return lifecycle?commit():draw()},profile:()=>props.profile,session:currentSession, channel: () => refs[1].current,
+    activeBridges:kind=>bridgeRecords.filter(record=>record.kind===kind&&record.active).length,presenceSubscribers:()=>presenceSubscriptions.size,listenerCount:name=>lifecycle?listeners.get(name)?.size||0:Number(listeners.has(name)),documentListenerCount:name=>documentListeners.get(name)?.size||0,intervalCount:()=>intervals.size,
+    send: event => lifecycle?[...(listeners.get('message')||[])].forEach(callback=>callback(event)):listeners.get('message')?.(event), dispose: () => {if(disposed)return;disposed=true;if(lifecycle){for(const record of effectRecords){record.cleanup?.();record.cleanup=null}refs[0].current=null;currentChild=null}else cleanups.forEach(cleanup=>cleanup())},
     checkPermission: () => intervalCheck?.(),
     failStorage: () => { throwOnWrite = true; } };
 }
@@ -446,12 +468,12 @@ test('preview request retains the structured session denial and distinguishes mi
 function retryClock(){let id=0;const timers=new Map(),delays=[];return{setTimeout(fn,ms){delays.push(ms);timers.set(++id,fn);return id},clearTimeout(id){timers.delete(id)},delays,timers,next(){const item=timers.entries().next().value;assert(item,'a short retry is scheduled');timers.delete(item[0]);item[1]();}}}
 test('temporary entry 503 automatically rereads role and fresh HTML after short backoff, without publishing stale permissions',async()=>{
  const clock=retryClock();let n=0;const h=componentHarness('offline-recovery',{...clock,fetch:async()=>++n===1?{ok:false,status:503,json:async()=>({code:'profile_unavailable'})}:{ok:true,status:200,text:async()=>HTML}});
- try{await flush();assert.equal(h.calls.length,1);assert.equal(h.states[0],null);assert(!findElement(h.draw(),'iframe'));assert.match(JSON.stringify(h.draw()),/重新验证查看权限.*2\/3/);assert.deepEqual(clock.delays,[500]);h.checkPermission();await flush();assert.equal(h.calls.length,1,'focus/timer verification cannot restart the backoff budget');clock.next();await flush();assert.equal(h.calls.length,2);assert.equal(h.roleCalls.length,2);assert(findElement(h.draw(),'iframe'));assert.equal(h.states[2],'');assert.equal(clock.timers.size,0);assert(!findElement(h.draw(),'iframe').props.srcDoc.includes('offline-host-access'));}
+ try{await flush();assert.equal(h.calls.length,1);assert.equal(h.states[0],null);assert(!findElement(h.draw(),'iframe'));assert.match(JSON.stringify(h.draw()),/重新验证查看权限.*2\/3/);assert.deepEqual(clock.delays,[15000,500]);assert.equal(clock.timers.size,1,'the completed attempt clears its deadline and leaves only backoff');h.checkPermission();await flush();assert.equal(h.calls.length,1,'focus/timer verification cannot restart the backoff budget');clock.next();await flush();assert.equal(h.calls.length,2);assert.equal(h.roleCalls.length,2);assert(findElement(h.draw(),'iframe'));assert.equal(h.states[2],'');assert.equal(clock.timers.size,0);assert(!findElement(h.draw(),'iframe').props.srcDoc.includes('offline-host-access'));}
  finally{h.dispose()}
 });
 test('three transient failures stop automatic attempts and expose reload and logout controls',async()=>{
  const clock=retryClock(),h=componentHarness('offline-permanent-outage',{...clock,fetch:async()=>({ok:false,status:503,json:async()=>({code:'role_access_unavailable'})})});
- try{await flush();clock.next();await flush();clock.next();await flush();assert.equal(h.calls.length,3);assert.equal(h.roleCalls.length,3);assert.deepEqual(clock.delays,[500,1500]);assert.equal(clock.timers.size,0);assert(!findElement(h.draw(),'iframe'));assert(h.states[2]);const buttons=elements(h.draw()).filter(n=>n.type==='button');assert(buttons.some(n=>n.props.children==='重新加载'));assert(buttons.some(n=>n.props.children==='退出登录'));h.checkPermission();await flush();assert.equal(h.calls.length,3);}
+ try{await flush();clock.next();await flush();clock.next();await flush();assert.equal(h.calls.length,3);assert.equal(h.roleCalls.length,3);assert.deepEqual(clock.delays,[15000,500,15000,1500,15000]);assert.equal(clock.timers.size,0);assert(!findElement(h.draw(),'iframe'));assert(h.states[2]);const buttons=elements(h.draw()).filter(n=>n.type==='button');assert(buttons.some(n=>n.props.children==='重新加载'));assert(buttons.some(n=>n.props.children==='退出登录'));h.checkPermission();await flush();assert.equal(h.calls.length,3);}
  finally{h.dispose()}
 });
 test('periodic temporary failure clears old authorization and rebuilds the frame only with a fresh narrower role',async()=>{
@@ -499,4 +521,85 @@ test('a session/profile account mismatch immediately hides the frame and ignores
 
 test('the formal owner page keeps role management and does not expose the retired grant control',async()=>{
  const h=componentHarness('offline-loaded-owner');try{await flush();assert(findElement(h.draw(),'iframe'));let all=elements(h.draw());assert(!all.some(n=>n.props?.['aria-label']==='管理后台查看授权'));assert(!all.some(n=>n.type?.name==='AdminPreviewGrants'));h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command:'account-page',active:true,bounds:{top:120,left:240,width:1000}}});all=elements(h.draw());const roleTab=all.find(n=>n.props?.id==='owner-roles-tab');assert(roleTab,'owner still manages the new role permissions');roleTab.props.onClick();assert(elements(h.draw()).some(n=>n.type?.name==='DashboardRoleManager'));h.rerenderSession({...h.session,user:{id:'offline-another-account'}});all=elements(h.draw());assert(!all.some(n=>n.type==='iframe'));assert(!all.some(n=>n.type?.name==='DashboardRoleManager'));assert(!all.some(n=>n.props?.['aria-label']==='管理后台查看授权'));}finally{h.dispose()}
+});
+
+
+test('a temporary periodic failure hides and freezes the mounted document; identical fresh authorization resumes it',async()=>{
+ const clock=retryClock();let reads=0;const h=componentHarness('offline-stable-reconnect',{...clock,fetch:async()=>++reads===2?{ok:false,status:503,json:async()=>({code:'profile_unavailable'})}:{ok:true,status:200,text:async()=>HTML}});
+ try{
+  await flush();const before=findElement(h.draw(),'iframe').props.srcDoc;h.checkPermission();await flush();
+  const paused=findElement(h.draw(),'iframe');assert.equal(paused.props.srcDoc,before);assert.equal(paused.props.style.display,'none');assert.equal(paused.props['aria-hidden'],true);assert.equal(h.states[0],null);
+  h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-draft',channel:h.channel(),key:KEY,value:'not-authorized-while-paused'}});assert.equal(h.values.get(h.prefix+KEY),'this-account-draft');
+  clock.next();await flush();const resumed=findElement(h.draw(),'iframe');assert.equal(resumed.props.srcDoc,before);assert.equal(resumed.props.style,undefined);assert.equal(h.restoreCalls.length,1);assert.equal(h.calls.length,3);assert(!h.calls[2].url.endsWith('?check=1'));assert(h.states[0]);
+ }finally{h.dispose()}
+});
+test('an extended outage retains hidden state and reconnects with fresh HTML; denial still destroys it immediately',async()=>{
+ for(const outcome of ['same','changed','denied']){
+  const clock=retryClock();let mode='ok';const h=componentHarness('offline-extended-'+outcome,{...clock,fetch:async url=>mode==='outage'?{ok:false,status:503,json:async()=>({code:'profile_unavailable'})}:mode==='denied'?{ok:false,status:403,json:async()=>({code:'preview_denied'})}:{ok:true,status:200,text:async()=>HTML+(mode==='changed'?'<!-- new protected version -->':''),json:async()=>({ok:true,canView:true,canManage:true})}});
+  try{
+   await flush();const before=findElement(h.draw(),'iframe').props.srcDoc;mode='outage';h.checkPermission();await flush();clock.next();await flush();clock.next();await flush();
+   assert.equal(h.calls.length,4);assert.equal(clock.timers.size,0);assert.equal(findElement(h.draw(),'iframe').props.style.display,'none');assert.equal(h.states[0],null);
+   const reconnect=elements(h.draw()).find(n=>n.type==='button'&&n.props.children==='重新连接');assert(reconnect);
+   mode=outcome;reconnect.props.onClick();await flush();assert.equal(h.calls.length,5);
+   if(outcome==='denied'){assert(!findElement(h.draw(),'iframe'));assert.equal(h.states[1],'');assert.equal(h.states[0],null)}
+   else{const resumed=findElement(h.draw(),'iframe');assert.equal(resumed.props.style,undefined);assert.equal(h.restoreCalls.length,outcome==='same'?1:2);assert.equal(resumed.props.srcDoc===before,outcome==='same')}
+  }finally{h.dispose()}
+ }
+});
+
+const deferredRead=()=>{let resolve;const promise=new Promise(r=>{resolve=r});return {promise,resolve}};
+const protectedResponse=html=>({ok:true,status:200,text:async()=>html,json:async()=>({ok:true,canView:true,canManage:true})});
+const liveEnvelope=(h,id,source=h.child,channel=h.channel())=>({source,origin:'null',data:{type:'hensem-admin-live-request',id,channel,request:{action:'catalog'},page:'overview'}});
+function assertBridgeCounts(h,count){
+ assert.equal(h.activeBridges('live'),count);assert.equal(h.activeBridges('presence'),count);assert.equal(h.presenceSubscribers(),count);
+ assert.equal(h.listenerCount('message'),1+count*2,'one host receiver and at most one receiver per bridge');
+ assert.equal(h.documentListenerCount('visibilitychange'),1);assert.equal(h.intervalCount(),1);
+}
+
+test('committed recovery effects reinstall one live/presence bridge and cancel active and queued reads without accumulating listeners',async()=>{
+ const clock=retryClock();let failNext=false,held=null;
+ const h=componentHarness('offline-effect-cycle',{commitEffects:true,...clock,
+  fetch:async()=>{if(failNext){failNext=false;return {ok:false,status:503,json:async()=>({code:'profile_unavailable'})}}return protectedResponse(HTML)},
+  liveFetch:async()=>held?held.promise:{ok:true,status:200,json:async()=>({platforms:[],marker:'fresh-result'})}});
+ try{
+  await flush();const initial=h.commit(),html=findElement(initial,'iframe').props.srcDoc,child=h.child,channel=h.channel();assertBridgeCounts(h,1);
+  for(let cycle=0;cycle<4;cycle++){
+   const read=deferredRead();held=read;const before=h.liveCalls.length,ids=Array.from({length:5},(_,i)=>'held-'+cycle+'-'+i);
+   for(const id of ids)h.send(liveEnvelope(h,id));await flush();assert.equal(h.liveCalls.length-before,4,'the fifth read remains queued');
+   failNext=true;h.checkPermission();await flush();const paused=h.commit();assertBridgeCounts(h,0);assert.equal(findElement(paused,'iframe').props.style.display,'none');assert.equal(h.child,child);assert.equal(h.channel(),channel);
+   const cancelled=h.posted.filter(x=>ids.includes(x.data.id));assert.equal(cancelled.length,5);assert(cancelled.every(x=>x.data.code==='ADMIN_LIVE_CANCELLED'&&!Object.hasOwn(x.data,'result')));
+   assert(h.liveCalls.slice(before).every(x=>x.init.signal.aborted),'all old transport controllers abort on suspension');
+   held=null;clock.next();await flush();const resumed=h.commit();assertBridgeCounts(h,1);assert.equal(h.child,child);assert.equal(h.channel(),channel);assert.equal(findElement(resumed,'iframe').props.srcDoc,html);
+   read.resolve({ok:true,status:200,json:async()=>({marker:'late-obsolete-result'})});await flush();h.commit();assert.equal(h.liveCalls.length-before,4,'cancelled queue never launches after recovery');assert.equal(h.posted.filter(x=>ids.includes(x.data.id)).length,5,'late old responses emit no second reply');
+   const fresh='fresh-'+cycle;h.send(liveEnvelope(h,fresh));await flush();const reply=h.posted.filter(x=>x.data.id===fresh);assert.equal(reply.length,1);assert.equal(reply[0].data.result.marker,'fresh-result');assertBridgeCounts(h,1);
+  }
+  assert.equal(h.bridgeRecords.filter(x=>x.kind==='live').length,5);assert.equal(h.bridgeRecords.filter(x=>x.kind==='presence').length,5);
+ }finally{h.dispose();assert.equal(h.activeBridges('live'),0);assert.equal(h.activeBridges('presence'),0);assert.equal(h.presenceSubscribers(),0);assert.equal(h.listenerCount('message'),0);assert.equal(h.documentListenerCount('visibilitychange'),0);assert.equal(h.intervalCount(),0);assert.equal(clock.timers.size,0)}
+});
+
+test('committed scope replacement during recovery discards the old bridge and requires new protected HTML before reconnecting',async()=>{
+ const clock=retryClock(),fresh=deferredRead();let mode='ok';const h=componentHarness('offline-effect-scope',{commitEffects:true,...clock,role:'viewer',profile:{data_scope:{mode:'selected',countries:['IN']},updated_at:'scope-v1'},fetch:async()=>{
+  if(mode==='outage'){mode='ok';return {ok:false,status:503,json:async()=>({code:'profile_unavailable'})}}
+  return mode==='new-scope'?{ok:true,status:200,text:()=>fresh.promise}:protectedResponse(HTML);
+ }});
+ try{
+  await flush();h.commit();const oldChild=h.child,oldChannel=h.channel();assertBridgeCounts(h,1);mode='outage';h.checkPermission();await flush();h.commit();assertBridgeCounts(h,0);
+  mode='new-scope';h.rerenderProps({profile:{...h.profile(),data_scope:{mode:'selected',countries:['PK']},updated_at:'scope-v2'}});await flush();const waiting=h.commit();assert(!findElement(waiting,'iframe'));assert.notEqual(h.channel(),oldChannel);assertBridgeCounts(h,0);assert(h.bridgeRecords.filter(x=>x.channel===oldChannel).every(x=>!x.active));
+  fresh.resolve(HTML+'<!-- fresh narrowed scope -->');await flush();const ready=h.commit();assertBridgeCounts(h,1);assert.notEqual(h.child,oldChild);assert(findElement(ready,'iframe').props.srcDoc.includes('fresh narrowed scope'));
+  const reads=h.liveCalls.length;h.send(liveEnvelope(h,'old-scope-source',oldChild,h.channel()));h.send(liveEnvelope(h,'old-scope-channel',h.child,oldChannel));await flush();assert.equal(h.liveCalls.length,reads);assert(h.bridgeRecords.filter(x=>x.active).every(x=>x.channel===h.channel()&&x.source===h.child));
+ }finally{fresh.resolve(HTML);h.dispose();assert.equal(h.listenerCount('message'),0);assert.equal(clock.timers.size,0)}
+});
+
+test('committed account replacement aborts the old recovery body and never reinstalls its frame or bridge',async()=>{
+ const clock=retryClock(),oldBody=deferredRead(),newBody=deferredRead();let mode='ok';const h=componentHarness('offline-effect-account-a',{commitEffects:true,...clock,fetch:async()=>{
+  if(mode==='outage'){mode='old-recovery';return {ok:false,status:503,json:async()=>({code:'profile_unavailable'})}}
+  if(mode==='old-recovery')return {ok:true,status:200,text:()=>oldBody.promise};if(mode==='new-account')return {ok:true,status:200,text:()=>newBody.promise};return protectedResponse(HTML);
+ }});
+ try{
+  await flush();h.commit();const oldChild=h.child,oldChannel=h.channel();assertBridgeCounts(h,1);mode='outage';h.checkPermission();await flush();h.commit();assertBridgeCounts(h,0);clock.next();await flush();h.commit();const oldRequest=h.calls.at(-1);assert.equal(oldRequest.init.signal.aborted,false,'the old recovery body is still pending');
+  mode='new-account';h.rerenderProps({session:{...h.session,user:{id:'offline-effect-account-b'}},profile:{...h.profile(),auth_user_id:'offline-effect-account-b'}});await flush();h.commit();assert.equal(oldRequest.init.signal.aborted,true);assertBridgeCounts(h,0);assert.notEqual(h.channel(),oldChannel);
+  oldBody.resolve(HTML+'<!-- obsolete account A -->');await flush();assert(!findElement(h.commit(),'iframe'));assert(h.bridgeRecords.filter(x=>x.channel===oldChannel).every(x=>!x.active));
+  newBody.resolve(HTML+'<!-- account B -->');await flush();const ready=h.commit();assertBridgeCounts(h,1);assert.notEqual(h.child,oldChild);const html=findElement(ready,'iframe').props.srcDoc;assert(html.includes('account B'));assert(!html.includes('obsolete account A'));assert(!html.includes('this-account-draft'));
+  const reads=h.liveCalls.length;h.send(liveEnvelope(h,'old-account-source',oldChild,h.channel()));h.send(liveEnvelope(h,'old-account-channel',h.child,oldChannel));await flush();assert.equal(h.liveCalls.length,reads);assert(h.bridgeRecords.filter(x=>x.active).every(x=>x.source===h.child&&x.channel===h.channel()));
+ }finally{oldBody.resolve(HTML);newBody.resolve(HTML);h.dispose();assert.equal(h.listenerCount('message'),0);assert.equal(h.presenceSubscribers(),0);assert.equal(clock.timers.size,0)}
 });

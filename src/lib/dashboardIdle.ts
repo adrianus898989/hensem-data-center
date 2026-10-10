@@ -10,7 +10,10 @@ export function readLastActivity(): number {
   if (typeof window === "undefined") return 0;
   try {
     const value = Number(window.localStorage.getItem(DASHBOARD_LAST_ACTIVITY_KEY) || 0);
-    return Number.isFinite(value) ? value : 0;
+    // Another tab may have recorded the newest trusted input. Retain that
+    // observed time if browser storage later becomes temporarily unavailable.
+    memoryActivity = Number.isFinite(value) ? value : 0;
+    return memoryActivity;
   } catch { return memoryActivity; }
 }
 
@@ -66,7 +69,11 @@ export function installDashboardIdleMonitor(onLogout: () => void): () => void {
       const last = readLastActivity();
       if (!last || Date.now() - last >= DASHBOARD_IDLE_MS) expire();
     }
-    if (event.key === "hensem:dashboard:auth-session:v2" && !event.newValue) expire();
+    if (event.key === "hensem:dashboard:auth-session:v2" && !event.newValue) {
+      // Storage events are queued; a newer login may already have replaced
+      // the session removed by this event. Honor only the current removal.
+      try { if (!window.localStorage.getItem(event.key)) expire(); } catch { /* Unknown storage is not evidence of logout. */ }
+    }
   };
   DASHBOARD_INPUT_EVENTS.forEach(name => window.addEventListener(name, input, { passive: true, capture: true }));
   window.addEventListener(ACTIVITY_EVENT, check);

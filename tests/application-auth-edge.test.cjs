@@ -50,7 +50,7 @@ test('only exact invalid_credentials with password grant and HTTP 400 or 401 is 
   assert.equal((await result.json()).code,'auth_unavailable');assert.equal(f.calls.find(call=>call[0]==='finish')[2],'unavailable');
  }
  for(const response of [authTokenErrors.invalidCredentialsNumericCode,authTokenErrors.invalidCredentialsStringCode]){
-  assert.throws(()=>parseAuthTokenResponse('refresh_token',response.status,response.body),error=>error instanceof SecurityError&&error.code==='login_required');
+  assert.throws(()=>parseAuthTokenResponse('refresh_token',response.status,response.body),error=>error instanceof SecurityError&&error.code==='auth_unavailable');
  }
 });
 test('token parsing keeps expiry and identity and successful login still performs every security check',async()=>{

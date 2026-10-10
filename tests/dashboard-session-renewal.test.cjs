@@ -158,6 +158,41 @@ test('definitively invalid refresh token clears that session',async()=>{
   h.setFetch(()=>json({code:'refresh_token_not_found',error_code:'refresh_token_not_found',msg:'Invalid Refresh Token: Refresh Token Not Found'},400));
   await assert.rejects(()=>h.api.ensureDashboardSession(old));assert.equal(h.saved(),null);
 });
+test('refresh HTTP failures with unknown or non-JSON bodies preserve tokens and reject the pending read',async()=>{
+  for(const status of [400,401,403])for(const body of [null,[],{},
+    {code:status},{error_code:'conflict'},{code:'invalid_credentials'},
+    {error_code:'unknown',code:'refresh_token_not_found'},{code:'unknown',message:'synthetic-private-refresh-value'},
+    '<html>synthetic-private-refresh-value</html>']){
+    const h=harness(),old=session('old',5);h.api.saveDashboardSession(old);
+    h.setFetch(()=>typeof body==='string'?new Response(body,{status}):json(body,status));
+    await assert.rejects(()=>h.api.dashboardAuthenticatedFetch(dataURL,{},old),error=>{
+      assert.equal(error.status,503);assert.equal(error.code,'auth_unavailable');
+      assert.equal(h.api.isDashboardAuthTerminalError(error),false);
+      assert(!error.message.includes('synthetic-private-refresh-value'));return true;
+    });
+    assert.equal(h.saved().refresh_token,old.refresh_token);assert.equal(h.refreshCalls().length,1);assert.equal(h.dataCalls().length,0);
+  }
+});
+test('explicit refresh termination codes clear only the matching expired session',async()=>{
+  for(const code of ['login_required','refresh_invalid','refresh_token_not_found','refresh_token_already_used','session_expired','session_not_found','user_banned','user_not_found']){
+    const h=harness(),old=session('old',5);h.api.saveDashboardSession(old);h.setFetch(()=>json({code,message:'synthetic-private-refresh-value'},401));
+    await assert.rejects(()=>h.api.ensureDashboardSession(old),error=>{
+      assert.equal(error.code,'refresh_invalid');assert.equal(h.api.isDashboardAuthTerminalError(error),true);
+      assert(!error.message.includes('synthetic-private-refresh-value'));return true;
+    });
+    assert.equal(h.saved(),null);assert.equal(h.refreshCalls().length,1);
+  }
+});
+test('refresh preserves explicit account, IP and application session denials while unknown 403 cannot impersonate them',async()=>{
+  for(const code of ['application_session_denied','account_disabled','account_denied','account_locked','ip_denied','profile_denied']){
+    const h=harness(),old=session('old',5);h.api.saveDashboardSession(old);h.setFetch(()=>json({code,message:'synthetic-private-refresh-value'},403));
+    await assert.rejects(()=>h.api.ensureDashboardSession(old),error=>{
+      assert.equal(error.status,403);assert.equal(error.code,code);assert.equal(h.api.isDashboardAuthTerminalError(error),true);
+      assert(!error.message.includes('synthetic-private-refresh-value'));return true;
+    });
+    assert.equal(h.refreshCalls().length,1);assert.equal(h.dataCalls().length,0);
+  }
+});
 test('malformed successful refresh response is rejected without losing the saved session',async()=>{
   const h=harness(),old=session('old',5);h.api.saveDashboardSession(old);
   h.setFetch(()=>json({access_token:'offline-incomplete-response'}));
@@ -423,6 +458,12 @@ test('access-check distinguishes expired application session, disabled account a
 // Render the real gate with minimal hooks to verify terminal-error presentation and stale-request isolation.
 function gateHarness(profileRead) {
   const h=harness(),old=session();h.api.saveDashboardSession(old);
+  const intervals=new Map(),listeners=new Map();let timerId=0;
+  h.window.setInterval=(fn,ms)=>{intervals.set(++timerId,{fn,ms});return timerId;};
+  h.window.clearInterval=id=>intervals.delete(id);
+  const add=h.window.addEventListener.bind(h.window),remove=h.window.removeEventListener.bind(h.window);
+  h.window.addEventListener=(name,fn,options)=>{if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name).add(fn);add(name,fn,options);};
+  h.window.removeEventListener=(name,fn,options)=>{listeners.get(name)?.delete(fn);remove(name,fn,options);};
   let index=0,eindex=0;const states=[],deps=[],pending=[],cleanups=[],presence=[];
   const react={Fragment:'fragment',createContext:()=>({Provider:'provider'}),useContext:()=>({}),useMemo:fn=>fn(),
     useRef:value=>{const i=index++;return states[i]||(states[i]={current:value});},
@@ -443,7 +484,7 @@ function gateHarness(profileRead) {
   const draw=()=>{index=eindex=0;return box.exports.default({children:'authorized-child'});};
   const render=()=>{const tree=draw();pending.splice(0).forEach(fn=>fn());return tree;};
   const content=x=>Array.isArray(x)?x.map(content).join(''):x&&typeof x==='object'?content(x.props?.children):typeof x==='string'?x:'';
-  render();return{h,render,presence,text:()=>content(draw()),dispose:()=>cleanups.forEach(fn=>fn?.())};
+  render();return{h,render,presence,intervals,listeners,text:()=>content(draw()),dispose:()=>cleanups.forEach(fn=>fn?.())};
 }
 test('gate starts shared presence only after verification and stops immediately on logout or account replacement',async()=>{
   const pending=deferred(),g=gateHarness(()=>pending.promise);
@@ -463,6 +504,24 @@ test('gate retains an old session on a transient profile failure and never clear
   const network=gateHarness(async()=>{throw Error('temporary');});await tick();assert(network.h.saved());assert.match(network.text(),/已保留登录状态/);network.dispose();
   const wait=deferred(),late=gateHarness(()=>wait.promise);await tick();late.h.api.saveDashboardSession(session('new-account',3600,B));
   wait.reject(new late.h.api.DashboardHttpError('登录会话已失效',403,'application_session_denied'));await tick();assert.equal(late.h.saved().user.id,B);assert.doesNotMatch(late.text(),/停用/);late.dispose();
+});
+test('a verified gate keeps its authenticated children through a temporary periodic profile failure and cleans all listeners',async()=>{
+  const profile={auth_user_id:A,username:'fixture',role:'viewer',active:true};let reads=0;
+  const g=gateHarness(async()=>{if(++reads===1)return profile;throw Error('synthetic network interruption');});
+  await tick();assert.equal(g.render().type,'provider');await tick();
+  const after=g.render();assert.equal(after.type,'provider');assert.equal(after.props.value.profile.auth_user_id,A);
+  assert.match(g.text(),/已保留会话，正在自动重试/);assert(g.h.saved());
+  g.dispose();assert.equal(g.intervals.size,0);assert.equal([...g.listeners.values()].some(set=>set.size),false);
+});
+test('a delayed same-account old-token denial cannot remove a freshly renewed verified gate',async()=>{
+  const profile={auth_user_id:A,username:'fixture',role:'viewer',active:true},wait=deferred();let reads=0;
+  const g=gateHarness(()=>++reads===2?wait.promise:Promise.resolve(profile));
+  await tick();g.render();await tick();assert.equal(reads,2);
+  const fresh=session('renewed-before-old-denial');g.h.api.saveDashboardSession(fresh);g.render();await tick();
+  wait.reject(new g.h.api.DashboardHttpError('登录会话已失效',401,'application_session_denied'));await tick();
+  const after=g.render();assert.equal(after.type,'provider');assert.equal(after.props.value.session.access_token,fresh.access_token);
+  assert.equal(g.h.saved().access_token,fresh.access_token);assert.doesNotMatch(g.text(),/登录会话已失效/);g.dispose();
+  assert.equal(g.intervals.size,0);
 });
 
 (async()=>{
