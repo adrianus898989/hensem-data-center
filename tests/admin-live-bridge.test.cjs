@@ -491,3 +491,12 @@ test('reconciliation platform directory retains refreshed owner RPC and assigned
  assert.deepEqual(JSON.parse(assigned.calls[0].init.body),{p_page:'workorder_reconciliation',p_request:q});
  for(const patch of [{view:'records'},{country:'PK'},{offset:0},{filters:{dateBasis:'submission',issueKind:'deposit',team:'M8'}}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
 });
+
+test('member invalid-order drilldown validates exact member/day and retains the scoped detail gateway',async()=>{
+ const h=load(),q={action:'submissionAnalysis',platformId:query.platformId,startAt:query.startAt,endAt:query.endAt,direction:'charge',operation:'memberOrders',memberId:'synthetic-member',day:'2026-09-22',threshold:15,level:'all',providers:['Synthetic Pay'],currency:'INR',limit:100,offset:0};
+ assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(q))),q);
+ await h.api.adminLiveRequest(session,q,undefined,{assigned:true,page:'events'});assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_page:'events',p_request:q});
+ for(const patch of [{memberId:undefined},{memberId:null},{memberId:' '},{memberId:' padded'},{day:undefined},{day:null},{day:'2026-02-30'},{day:'2026-09-22T00:00:00Z'},{day:1},{memberId:'bad\n'},{limit:500},{amount:100}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
+ for(const operation of ['summary','members'])assert.throws(()=>h.api.validateAdminLiveRequest({...q,operation}));
+ assert.match(sourceText,/\['submissionAnalysis','submissionStreak'\][^\n]+\['members','memberOrders'\]\.includes\(request.operation\)/);
+});

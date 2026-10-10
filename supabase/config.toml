@@ -5,3 +5,7 @@ verify_jwt = false
 [functions.yash-order-ingest]
 # Dedicated YASH token is checked in the atomic ingest RPC; no public JWT trust.
 verify_jwt = false
+
+[functions.ar-order-ingest]
+# Existing scoped X-AR-Key validation and RPC credential checks remain active.
+verify_jwt = false

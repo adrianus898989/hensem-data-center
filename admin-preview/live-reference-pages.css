@@ -341,13 +341,28 @@ body.live-admin .submission-members-table{overflow:visible}
 body.live-admin .submission-members-table table{width:100%;min-width:0!important;table-layout:fixed;white-space:normal;font-variant-numeric:tabular-nums}
 body.live-admin .submission-members-table :is(th,td){box-sizing:border-box;padding:9px 8px;white-space:normal;overflow-wrap:anywhere;line-height:1.5;text-align:right;vertical-align:top}
 body.live-admin .submission-members-table th{position:sticky;top:-16px;z-index:1;background:#f4f7fd}
-body.live-admin .submission-members-table :is(th,td):is(:nth-child(1),:nth-child(2),:nth-child(3),:nth-child(6),:nth-child(7),:last-child){text-align:left}
+body.live-admin .submission-members-table :is(th,td):is(:nth-child(1),:nth-child(2),:nth-child(3),:nth-child(7),:nth-child(8),:last-child){text-align:left}
 body.live-admin .submission-members-table :is(th,td){font-size:12px;padding:9px 8px}
-body.live-admin .submission-members-table :is(th,td):is(:nth-child(1),:nth-child(5)){width:10%}
-body.live-admin .submission-members-table :is(th,td):is(:nth-child(2),:last-child){width:14%}
-body.live-admin .submission-members-table :is(th,td):is(:nth-child(3),:nth-child(4)){width:8%}
-body.live-admin .submission-members-table :is(th,td):is(:nth-child(6),:nth-child(7)){width:18%}
+body.live-admin .submission-members-table :is(th,td):nth-child(1){width:9%}
+body.live-admin .submission-members-table :is(th,td):is(:nth-child(2),:last-child){width:13%}
+body.live-admin .submission-members-table :is(th,td):is(:nth-child(3),:nth-child(5)){width:8%}
+body.live-admin .submission-members-table :is(th,td):nth-child(4){width:7%}
+body.live-admin .submission-members-table :is(th,td):nth-child(6){width:10%}
+body.live-admin .submission-members-table :is(th,td):is(:nth-child(7),:nth-child(8)){width:16%}
 body.live-admin .submission-members-modal .submission-pager{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px;font-size:11px}
+body.live-admin .submission-member-orders-nav{margin-bottom:12px}
+body.live-admin .submission-member-orders-heading{font-size:14px;margin:16px 0 8px}
+body.live-admin :is(.submission-member-orders-table,.submission-member-amount-table){overflow:auto}
+body.live-admin :is(.submission-member-orders-table,.submission-member-amount-table) table{width:100%;table-layout:fixed;font-variant-numeric:tabular-nums}
+body.live-admin .submission-member-orders-table table{min-width:740px!important}
+body.live-admin .submission-member-amount-table table{min-width:420px!important}
+body.live-admin :is(.submission-member-orders-table,.submission-member-amount-table) :is(th,td){padding:9px 8px;font-size:12px;white-space:normal;overflow-wrap:anywhere;vertical-align:top}
+body.live-admin .submission-member-orders-table :is(th,td):is(:nth-child(1),:nth-child(2),:nth-child(3)){width:21%}
+body.live-admin .submission-member-orders-table :is(th,td):nth-child(4){width:15%;text-align:right}
+body.live-admin .submission-member-orders-table :is(th,td):nth-child(5){width:8%}
+body.live-admin .submission-member-orders-table :is(th,td):nth-child(6){width:14%}
+body.live-admin .submission-member-amount-table :is(th,td):is(:nth-child(1),:nth-child(3),:nth-child(4)){text-align:right}
+body.live-admin .submission-order-raw-provider{display:block;color:#78869b;font-size:11px;margin-top:3px}
 @media(max-width:900px){body.live-admin .submission-members-modal{width:calc(100vw - 16px);max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px)}body.live-admin .submission-members-content{padding:10px}body.live-admin .submission-members-table :is(th,td){font-size:10px;padding:6px 3px}}
 
 /* One-line status actions keep every summary card at the same compact height. */
