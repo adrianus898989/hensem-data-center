@@ -16,13 +16,14 @@ function harness(options={}){
   useState(value){const i=cursor++;if(!slots[i])slots[i]={value:typeof value==='function'?value():value};return[slots[i].value,next=>{const value=typeof next==='function'?next(slots[i].value):next;if(!Object.is(value,slots[i].value)){slots[i].value=value;dirty=true}}]},
   useEffect(fn,deps){const i=cursor++,old=slots[i];if(!old||deps.some((v,j)=>!Object.is(v,old.deps[j]))){slots[i]={deps,cleanup:old?.cleanup};pending.push(()=>{slots[i].cleanup?.();slots[i].cleanup=fn()})}},
  };
- const readAccess=async session=>{requests.push(session);return options.access?options.access(session):{canView:options.canView!==false}};
- const module={exports:{}};vm.runInNewContext(source,{module,exports:module.exports,window:{location,history:{replaceState(_state,_title,url){replacements.push(url);location.hash=url.slice(url.indexOf('#'))}},setInterval(fn,ms){assert.equal(ms,60000);const id=timers.size+1;timers.set(id,fn);return id},clearInterval:id=>timers.delete(id),addEventListener(name,fn){if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name).add(fn)},removeEventListener(name,fn){listeners.get(name)?.delete(fn)}},require(name){
+ const readAccess=async (session,signal)=>{requests.push(session);return options.access?options.access(session,signal):{canView:options.canView!==false}};
+ const module={exports:{}};vm.runInNewContext(source,{module,exports:module.exports,AbortController,window:{location,history:{replaceState(_state,_title,url){replacements.push(url);location.hash=url.slice(url.indexOf('#'))}},setInterval(fn,ms){assert.equal(ms,60000);const id=timers.size+1;timers.set(id,fn);return id},clearInterval:id=>timers.delete(id),addEventListener(name,fn){if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name).add(fn)},removeEventListener(name,fn){listeners.get(name)?.delete(fn)}},require(name){
   if(name==='react')return react;
   if(name==='react/jsx-runtime')return{jsx:(type,props,key)=>({type,props,key}),jsxs:(type,props,key)=>({type,props,key})};
   if(name==='./DashboardAuthGate')return{useDashboardAuth:()=>auth};
   if(name==='./OwnerAdminPreview')return{default:shell};
   if(name.endsWith('/adminPreviewClient'))return{readAdminPreviewAccess:readAccess};
+  if(name.endsWith('/ownerPreviewVerification')){const m={exports:{}};vm.runInNewContext(compile('src/lib/ownerPreviewVerification.ts'),{module:m,exports:m.exports,AbortController,Error,setTimeout:options.setTimeout||setTimeout,clearTimeout:options.clearTimeout||clearTimeout});return m.exports;}
   if(name.endsWith('/adminLiveBridge'))return bridge.exports;
   if(name.endsWith('/dashboardAuthClient'))return{canOpenAdminCenter:p=>p?.role==='owner'||p?.role==='admin'};
   if(name.endsWith('/ownerPreviewShell'))return{OWNER_PREVIEW_HOST_CSS:'',mountOwnerPreviewHostShell:()=>()=>{}};
@@ -55,16 +56,16 @@ test('inactive or mismatched owner sessions cannot mount or request the backend'
  const other=harness({role:'owner'});other.setAuth({session:{user:{id:'different-account'}}});assert.equal(other.frame(),null);other.dispose();
 });
 test('account switches and late permission responses cannot reuse a prior grant',async()=>{
- const resolves=[];const h=harness({access:()=>new Promise(resolve=>resolves.push(resolve))});
- h.setAuth({profile:{active:true,role:'viewer',auth_user_id:'account-b'},session:{user:{id:'account-b'}}});
+ const resolves=[];const h=harness({access:()=>new Promise(resolve=>resolves.push(resolve))});await flush();
+ h.setAuth({profile:{active:true,role:'viewer',auth_user_id:'account-b'},session:{user:{id:'account-b'}}});await flush();
  resolves[0]({canView:true});await flush();assert.equal(h.frame(),null);resolves[1]({canView:false});await flush();assert.equal(h.frame(),null);assert.match(h.text(),/没有后台查看权限/);h.dispose();
 });
-test('access revocation unmounts the frame; a retry can restore independently authorized access',async()=>{
- let canView=true;const h=harness({access:async()=>({canView})});await flush();assert(h.frame());canView=false;h.tick();await flush();assert.equal(h.frame(),null);
- canView=true;nodes(h.render()).find(n=>n.type==='button'&&n.props.children==='重新验证').props.onClick();h.render();await flush();assert(h.frame());h.dispose();
+test('the mounted preview owns periodic authorization without a duplicate outer poll resetting the frame',async()=>{
+ let fail=false;const h=harness({access:async()=>{if(fail)throw Error('synthetic transport failure');return{canView:true}}});await flush();const key=h.frame().key;
+ fail=true;for(let i=0;i<3;i++)h.tick();await flush();assert.equal(h.requests.length,1);assert.equal(h.frame().key,key);h.dispose();
 });
-test('session token refresh keeps the page and the permission poll uses the refreshed session',async()=>{
- const h=harness();await flush();const key=h.frame().key;h.setAuth({session:{user:{id:'account-a'},access_token:'synthetic-refreshed'}});assert.equal(h.frame().key,key);h.tick();await flush();assert.equal(h.requests.at(-1).access_token,'synthetic-refreshed');assert.equal(h.frame().key,key);h.dispose();
+test('session token refresh keeps the page and passes the fresh session to its authorization owner',async()=>{
+ const h=harness();await flush();const key=h.frame().key;h.setAuth({session:{user:{id:'account-a'},access_token:'synthetic-refreshed'}});assert.equal(h.frame().key,key);assert.equal(h.frame().props.session.access_token,'synthetic-refreshed');h.tick();await flush();assert.equal(h.requests.length,1);assert.equal(h.frame().key,key);h.dispose();
 });
 test('authorized account-menu navigation mounts the current access page even on repeated requests',async()=>{
  const h=harness({role:'admin'});await flush();const first=h.frame().key;h.send('hensem:open-admin');assert.equal(h.location.hash,'#admin/access');assert.notEqual(h.frame().key,first);const second=h.frame().key;h.send('hensem:open-admin');assert.notEqual(h.frame().key,second);assert.equal(h.requests.length,1,'navigation starts no business or additional permission query');h.dispose();
@@ -75,4 +76,10 @@ test('old module links and hash changes redirect to safe formal pages without le
  const h=harness({role:'owner'});
  const cases={'#channelquality':'providers','#admin/channelquality':'providers','#owner-admin-preview/channelquality':'providers','#home':'overview','#auto':'auto_withdraw','#config':'payout_config','#operator':'withdraw_operators','#volume':'providers','#work':'workorders','#orders':'orders','#provider-anomalies':'risk','#admin':'access','#owner-admin-preview/stuck':'stuck','#admin/providers':'providers','#admin/../../foreign':'overview','#https://evil.invalid':'overview'};
  for(const [hash,page] of Object.entries(cases)){const old=h.frame().key;h.location.hash=hash;h.send('hashchange');assert.equal(h.location.hash,'#admin/'+page);assert(h.frame());assert.notEqual(h.frame().key,old)}assert.equal(h.requests.length,0);h.frame().props.onLogout();assert.equal(h.loggedOut(),1);h.dispose();
+});
+
+test('initial access body timeout becomes retryable UI and a late result never mounts an unauthorized frame',async()=>{
+ const timers=new Map();let signal,resolve,seq=0;const h=harness({access:(_session,s)=>{signal=s;return new Promise(r=>resolve=r)},setTimeout:(fn,ms)=>{timers.set(++seq,{fn,ms});return seq},clearTimeout:id=>timers.delete(id)});
+ await flush();assert.equal(h.frame(),null);assert.equal(timers.size,1);const timer=[...timers.values()][0];assert.equal(timer.ms,15000);timer.fn();await flush();assert.equal(signal.aborted,true);assert.equal(timers.size,0);assert.match(h.text(),/重新验证/);assert.equal(h.frame(),null);
+ resolve({canView:true});await flush();assert.equal(h.frame(),null);h.dispose();
 });

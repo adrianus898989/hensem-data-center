@@ -17,7 +17,7 @@ export async function ownerPreviewTransportRead<T>(read: () => Promise<T>, signa
 
 const terminalCodes = new Set(["account_disabled", "application_session_denied", "profile_denied", "role_permission_denied",
   "preview_denied", "invalid_role_response", "invalid_profile", "refresh_invalid", "session_changed", "session_logged_out", "permission_denied", "access_denied", "42501"]);
-const networkCodes = new Set(["owner_preview_network_error", "refresh_network_error", "network_error", "auth_network_error", "auth_timeout"]);
+const networkCodes = new Set(["owner_preview_network_error", "owner_preview_timeout", "refresh_network_error", "network_error", "auth_network_error", "auth_timeout"]);
 export function ownerPreviewRetryable(cause: unknown): boolean {
   if (!cause || typeof cause !== "object") return false;
   const error = cause as {status?: unknown; code?: unknown; name?: unknown};
@@ -53,4 +53,27 @@ export async function retryOwnerPreviewVerification<T>(read: () => Promise<T>, s
     }
   }
   throw cancelled();
+}
+
+// Bound the whole permission/HTML attempt, including a stalled body or auth
+// refresh. Aborting the parent or the deadline invalidates any late response.
+export async function ownerPreviewVerificationAttempt<T>(read: (signal: AbortSignal) => Promise<T>, parent: AbortSignal): Promise<T> {
+  if (parent.aborted) throw cancelled();
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort = () => {};
+  const stopped = new Promise<never>((_resolve, reject) => {
+    abort = () => { reject(cancelled()); controller.abort(); };
+    parent.addEventListener("abort", abort, {once: true});
+    timer = setTimeout(() => {
+      const error = new Error("后台验证连接超时，请重试。");
+      Object.assign(error, {status: 0, code: "owner_preview_timeout"});
+      reject(error);controller.abort();
+    }, 15000);
+  });
+  try { return await Promise.race([Promise.resolve().then(() => {
+    if (controller.signal.aborted) throw cancelled();
+    return read(controller.signal);
+  }), stopped]); }
+  finally { clearTimeout(timer); parent.removeEventListener("abort", abort);controller.abort(); }
 }

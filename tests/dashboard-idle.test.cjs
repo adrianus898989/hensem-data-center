@@ -37,6 +37,21 @@ test('after a suspended tab exceeds 60 minutes, late input cannot revive it; sta
  const h=fixture();h.advance(50*MIN);h.window.dispatchEvent({type:'keydown',isTrusted:true});h.window.dispatchEvent({type:'storage',key:'hensem.dashboard.idle_logout_at',newValue:String(START)});assert.equal(h.loggedOut(),0);
  h.sleep(61*MIN);h.window.dispatchEvent({type:'keydown',isTrusted:true});assert.equal(h.loggedOut(),1);assert.equal(h.idle.readLastActivity(),START+50*MIN);
 });
+test('a queued old session-removal event cannot log out a newer saved login',()=>{
+ const h=fixture(),key='hensem:dashboard:auth-session:v2';h.advance(10*MIN);
+ h.values.set(key,JSON.stringify({access_token:'synthetic-new-token',refresh_token:'synthetic-new-refresh',user:{id:'synthetic-user'}}));
+ h.idle.writeLastActivity();h.window.dispatchEvent({type:'storage',key,newValue:null});
+ assert.equal(h.loggedOut(),0);assert(h.values.has(key));
+ h.values.delete(key);h.window.dispatchEvent({type:'storage',key,newValue:null});assert.equal(h.loggedOut(),1);
+ h.stop();assert.equal(h.timers.size,0);assert.equal([...h.window.listeners.values()].flat().length,0);
+});
+test('storage unavailability retains the latest actual other-tab activity without extending the idle policy',()=>{
+ const h=fixture();h.advance(45*MIN);h.values.set('hensem.dashboard.last_activity',String(h.now()));
+ h.window.dispatchEvent({type:'storage',key:'hensem.dashboard.last_activity',newValue:String(h.now())});
+ h.window.localStorage.getItem=()=>{throw Error('synthetic storage unavailable')};
+ h.advance(20*MIN);h.window.dispatchEvent({type:'focus'});assert.equal(h.loggedOut(),0);
+ assert.equal(h.idle.readLastActivity(),START+45*MIN);h.advance(40*MIN);assert.equal(h.loggedOut(),1);h.stop();
+});
 test('activity bridge rejects other windows, old channels, forged events, background commands and invalid timestamps',()=>{
  const h=fixture(),valid={source:h.source,origin:'null',isTrusted:true,data:{type:h.shell.OWNER_PREVIEW_SHELL_MESSAGE,channel:'channel',command:'user-activity',occurredAt:h.now()}};
  assert.equal(h.shell.ownerPreviewActivityTime(valid,h.source,'channel',h.now()),h.now());

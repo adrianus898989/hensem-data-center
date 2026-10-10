@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import OwnerAdminPreview from "./OwnerAdminPreview";
+import { ownerPreviewVerificationAttempt } from "@/lib/ownerPreviewVerification";
 import { readAdminPreviewAccess } from "@/lib/adminPreviewClient";
 import { adminPreviewPageFromHash } from "@/lib/adminLiveBridge";
 import { canOpenAdminCenter } from "@/lib/dashboardAuthClient";
@@ -38,21 +39,23 @@ export default function OfficialDashboard() {
     let stopped = false, checking = false;
     setAccess({ accountId, canView: false, ready: false, error: "" });
     if (!active || owner) return;
+    const controller = new AbortController();
     const check = async () => {
       if (stopped || checking) return;
       const current = sessionRef.current;
       if (!current || current.user.id !== accountId) return;
       checking = true;
       try {
-        const result = await readAdminPreviewAccess(current);
+        const result = await ownerPreviewVerificationAttempt(signal => readAdminPreviewAccess(current, signal), controller.signal);
         if (!stopped) setAccess({ accountId, canView: result.canView === true, ready: true, error: "" });
       } catch (error) {
         if (!stopped) setAccess({ accountId, canView: false, ready: true, error: error instanceof Error ? error.message : "查看权限验证失败，请重试。" });
       } finally { checking = false; }
     };
     void check();
-    const timer = window.setInterval(check, 60000);
-    return () => { stopped = true; window.clearInterval(timer); };
+    // The mounted preview owns periodic, bounded permission revalidation.
+    // A second one-shot poll here used to unmount it on a transient failure.
+    return () => { stopped = true; controller.abort(); };
   }, [active, owner, accountId, retry]);
 
   useEffect(() => {

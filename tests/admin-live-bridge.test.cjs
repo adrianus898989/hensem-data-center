@@ -30,9 +30,9 @@ function load(options = {}) {
   }, {filename});
   return {api:module.exports,calls,authCalls,listeners,timers,target,now:()=>now,advance:ms=>now+=ms,send:event=>[...listeners].forEach(fn=>fn(event))};
 }
-function bridge(h) {
+function bridge(h, options={}) {
   const replies = [], child = {postMessage:(data,origin)=>replies.push({data,origin})};let currentSource=child,currentChannel='offline-channel';
-  const cleanup=h.api.installAdminLiveBridge({source:()=>currentSource,channel:()=>currentChannel,session,target:h.target});
+  const cleanup=h.api.installAdminLiveBridge({source:()=>currentSource,channel:()=>currentChannel,session,target:h.target,...options});
   const event=(id='request_1',request=query)=>({source:child,origin:'null',data:{type:h.api.LIVE_REQUEST,id,channel:currentChannel,request}});
   return {replies,child,event,cleanup,replaceSource:value=>currentSource=value,replaceChannel:value=>currentChannel=value};
 }
@@ -500,4 +500,12 @@ test('member invalid-order drilldown validates exact member/day and retains the 
  for(const patch of [{memberId:undefined},{memberId:null},{memberId:' '},{memberId:' padded'},{day:undefined},{day:null},{day:'2026-02-30'},{day:'2026-09-22T00:00:00Z'},{day:1},{memberId:'bad\n'},{limit:500},{amount:100}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
  for(const operation of ['summary','members'])assert.throws(()=>h.api.validateAdminLiveRequest({...q,operation}));
  assert.match(sourceText,/\['submissionAnalysis','submissionStreak'\][^\n]+\['members','memberOrders'\]\.includes\(request.operation\)/);
+});
+
+
+test('suspending a retained frame cancels active and queued promises once without delivering late data',async()=>{
+ const waiting=deferred(),h=load({fetch:()=>waiting.promise}),b=bridge(h,{cancelPendingOnDispose:true});
+ for(let i=0;i<6;i++)h.send(b.event('suspend_'+i));await flush();assert.equal(h.calls.length,4);
+ b.cleanup();b.cleanup();assert.equal(h.listeners.size,0);assert.equal(h.timers.size,0);assert.equal(b.replies.length,6);assert(b.replies.every(r=>r.data.code==='ADMIN_LIVE_CANCELLED'&&!r.data.result));assert(h.calls.every(c=>c.init.signal.aborted));
+ waiting.resolve({ok:true,json:async()=>({private:'late'})});await flush();assert.equal(b.replies.length,6);assert.equal(h.calls.length,4);
 });

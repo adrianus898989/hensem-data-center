@@ -435,7 +435,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  throw Error("正式数据查询未完成，请重试；不能据此判断没有数据");}
  return response.json();
 }
-export function installAdminLiveBridge(options:{source:()=>Window|null|undefined;channel:()=>string;session:DashboardSession|(()=>DashboardSession);target?:Window;roleAccess?:()=>DashboardRoleAccess|null}):()=>void{
+export function installAdminLiveBridge(options:{source:()=>Window|null|undefined;channel:()=>string;session:DashboardSession|(()=>DashboardSession);target?:Window;roleAccess?:()=>DashboardRoleAccess|null;cancelPendingOnDispose?:boolean}):()=>void{
  type Pending={id:string;request:unknown;page:string;source:Window;channel:string;deadline:number;timer?:ReturnType<typeof setTimeout>;controller?:AbortController;settled:boolean};
  const target=options.target||window,active=new Map<string,Pending>(),queued=new Map<string,Pending>();let closed=false;
  const current=(item:Pending)=>!closed&&item.source===options.source()&&item.channel===options.channel();
@@ -484,7 +484,7 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
    void run(item);
  };
  target.addEventListener("message",receive);
- return ()=>{if(closed)return;closed=true;target.removeEventListener("message",receive);for(const item of [...active.values(),...queued.values()]){item.settled=true;clearTimeout(item.timer);item.controller?.abort()}active.clear();queued.clear()};
+ return ()=>{if(closed)return;if(options.cancelPendingOnDispose)for(const item of [...active.values(),...queued.values()])finish(item,{error:"连接正在重新验证，请稍后重试",code:"ADMIN_LIVE_CANCELLED"});closed=true;target.removeEventListener("message",receive);for(const item of [...active.values(),...queued.values()]){item.settled=true;clearTimeout(item.timer);item.controller?.abort()}active.clear();queued.clear()};
 }
 // A hash route only selects presentation. The host's existing active-account
 // and preview-grant checks still run before any document or data is returned.

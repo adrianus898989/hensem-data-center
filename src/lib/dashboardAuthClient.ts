@@ -378,12 +378,41 @@ async function requestRefreshedSession(refreshToken: string): Promise<DashboardS
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "refresh", refresh_token: refreshToken }),
     });
-    if ([400, 401, 403].includes(response.status)) {
-      // Do not reflect token endpoint payloads or token values into an error.
-      throw new DashboardHttpError("登录已失效，请重新登录", response.status, "refresh_invalid");
+    let result: any;
+    // Read the body while the deadline is active. HTML/proxy errors and unknown
+    // machine codes cannot prove that the stored refresh token was revoked.
+    const text = await response.text();
+    try { result = JSON.parse(text); } catch {
+      throw new DashboardHttpError("登录续期响应暂时无法验证，请稍后重试", 503, "auth_unavailable");
     }
-    const result=await readJson(response);
-    if(result.ok!==true || !result.tokens)throw new DashboardHttpError("登录续期状态不完整，请重新登录",502,"auth_invalid_response");
+    if (!response.ok) {
+      const data = result && typeof result === "object" && !Array.isArray(result) ? result : {};
+      const code = typeof data.error_code === "string" ? data.error_code : typeof data.code === "string" ? data.code : "";
+      const terminal = ["login_required", "refresh_invalid", "refresh_token_not_found", "refresh_token_already_used",
+        "session_expired", "session_not_found", "user_banned", "user_not_found"];
+      if ([400, 401, 403].includes(response.status) && terminal.includes(code)) {
+        throw new DashboardHttpError("登录已失效，请重新登录", response.status, "refresh_invalid");
+      }
+      // These are explicit gateway policy denials, independent of token expiry.
+      // Keep their terminal behavior and fixed public messages; never reflect
+      // an upstream payload or token value into an error.
+      const denials: Record<string, string> = {
+        application_session_denied: "登录会话已失效，请重新登录。",
+        account_disabled: "这个账号已被停用，请联系管理员。",
+        account_denied: "这个账号没有后台访问权限，请联系管理员。",
+        account_locked: "账号已被锁定，请联系管理员。",
+        ip_denied: "当前 IP 不在登录白名单。",
+        profile_denied: "这个账号还没有配置后台权限，请联系管理员。",
+      };
+      if ([401, 403].includes(response.status) && Object.hasOwn(denials, code)) {
+        throw new DashboardHttpError(denials[code], response.status, code);
+      }
+      if (response.status === 429) {
+        throw new DashboardHttpError("登录续期请求过于频繁，请稍后重试", 429, "auth_rate_limited");
+      }
+      throw new DashboardHttpError("登录续期暂时不可用，请稍后重试", 503, "auth_unavailable");
+    }
+    if(result?.ok!==true || !result?.tokens)throw new DashboardHttpError("登录续期状态不完整，请稍后重试",502,"auth_invalid_response");
     return receivedSession(result.tokens);
   } catch (error) {
     if (error instanceof DashboardHttpError) throw error;

@@ -16,4 +16,4 @@ export async function adminPreviewRequest(session:DashboardSession,query="",init
   }
   return response;
 }
-export async function readAdminPreviewAccess(session:DashboardSession):Promise<PreviewAccess>{return (await adminPreviewRequest(session,"?action=access")).json()}
+export async function readAdminPreviewAccess(session:DashboardSession,signal?:AbortSignal):Promise<PreviewAccess>{const response=await adminPreviewRequest(session,"?action=access",{signal});return ownerPreviewTransportRead(()=>response.json(),signal)}

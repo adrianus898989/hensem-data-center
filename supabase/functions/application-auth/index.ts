@@ -5,7 +5,7 @@ import { createApplicationAuthHandler, type AuthGateway, type Tokens } from './h
 // @ts-ignore Deno source extension.
 import { SecurityError, PROXY_KEY_SHA256 } from '../_shared/application-security.ts';
 // @ts-ignore Deno source extension.
-import { parseAuthTokenResponse, type AuthTokenGrant } from './token-response.ts';
+import { parseAuthTokenResponse, isTerminalAuthUserError, type AuthTokenGrant } from './token-response.ts';
 declare const Deno:{env:{get(name:string):string|undefined};serve(handler:(r:Request)=>Promise<Response>):void};
 const url=(Deno.env.get('SUPABASE_URL')||'').replace(/\/$/,''), service=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')||'', anon=Deno.env.get('SUPABASE_ANON_KEY')||'';
 const timedFetch:typeof fetch=(input,init)=>fetch(input,{...init,signal:AbortSignal.timeout(12000),redirect:'error'});
@@ -22,7 +22,7 @@ const gateway:AuthGateway={
  password:(email,password)=>authTokens('password',{email,password}),
  finish:(attempt,result,session)=>rpc('application_auth_finish',{p_attempt_id:attempt,p_result:result,p_session_id:session||null}),
  refresh:(refresh_token)=>authTokens('refresh_token',{refresh_token}),
- async getUser(token){const r=await admin.auth.getUser(token);if(r.error){if([401,403].includes(r.error.status))return null;throw new Error('Auth temporarily unavailable');}return r.data.user;},
+ async getUser(token){const r=await admin.auth.getUser(token);if(r.error){if(isTerminalAuthUserError(r.error))return null;throw new SecurityError(503,'auth_unavailable','账号验证服务暂时不可用');}return r.data.user;},
  check:(user,session,surface)=>rpc('application_session_check',{p_user_id:user,p_session_id:session,p_surface:surface}),
  ipCheck:(surface,ip,userId)=>rpc('application_auth_ip_check',{p_surface:surface,p_ip:ip,p_user_id:userId}),
  async me(surface,token,user,request){

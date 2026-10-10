@@ -8,6 +8,25 @@ function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
+// Supabase Auth documents these exact codes as a revoked/missing/expired
+// session or an unavailable account. An HTTP 403 alone is not that evidence.
+const TERMINAL_REFRESH_CODES = new Set([
+  'refresh_token_not_found', 'refresh_token_already_used', 'session_not_found',
+  'session_expired', 'user_banned', 'user_not_found',
+]);
+
+// getUser returns SDK errors: session_not_found can be translated into the
+// named AuthSessionMissingError (HTTP 400, no code). Other unclassified SDK
+// 401/403 errors are not proof that a verified user/session ceased to exist.
+export function isTerminalAuthUserError(value: unknown): boolean {
+  const error = record(value);
+  if (!error || ![400, 401, 403].includes(error.status as number)) return false;
+  if (typeof error.code === 'string') {
+    return ['bad_jwt', 'session_expired', 'session_not_found', 'user_not_found', 'user_banned'].includes(error.code);
+  }
+  return error.name === 'AuthSessionMissingError' && error.status === 400 && error.code === undefined;
+}
+
 export function parseAuthTokenResponse(kind: AuthTokenGrant, status: number, value: unknown, now = Math.floor(Date.now() / 1000)): Tokens {
   const data = record(value);
   if (status < 200 || status >= 300) {
@@ -18,7 +37,11 @@ export function parseAuthTokenResponse(kind: AuthTokenGrant, status: number, val
       throw new SecurityError(401, 'invalid_credentials', '账号或密码不正确');
     }
     if (status === 429) throw new SecurityError(429, 'auth_rate_limited', '登录请求过于频繁，请稍后再试');
-    if (kind === 'refresh_token' && [400, 401, 403].includes(status)) throw new SecurityError(401, 'login_required', '登录已失效');
+    const code = typeof data?.error_code === 'string' ? data.error_code
+      : typeof data?.code === 'string' ? data.code : '';
+    if (kind === 'refresh_token' && [400, 401, 403].includes(status) && TERMINAL_REFRESH_CODES.has(code)) {
+      throw new SecurityError(401, 'login_required', '登录已失效');
+    }
     throw new SecurityError(503, 'auth_unavailable', '登录服务暂时不可用');
   }
   const user = record(data?.user);
