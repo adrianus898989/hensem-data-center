@@ -19,7 +19,7 @@
     "test:duoli": "node --test tests/duoli-existing-orders.test.cjs tests/duoli-updated-success.test.cjs tests/admin-duoli-existing-pages.test.cjs",
     "test:withdraw-duration": "node --test tests/wg-withdraw-processing-duration.test.cjs tests/admin-withdraw-processing-duration-ui.test.cjs",
     "test:yash": "node --test tests/yash-*.test.cjs tests/admin-yash-existing-pages.test.cjs tests/admin-channel-status-ui.test.cjs tests/admin-channel-browser-ui.test.cjs tests/platform-channel-operations-navigation.test.cjs && python3 tests/yash-collector-sync.py",
-    "test:ar-middle-channels": "node --test tests/ar-middle-channel-contract.test.cjs && python3 tests/ar-middle-channel-sync.py"
+    "test:ar-middle-channels": "node --test tests/ar-middle-channel-contract.test.cjs && python3 tests/ar-middle-channel-sync.py && python3 tests/ar-middle-browser-login.py"
   },
   "dependencies": {
     "googleapis": "^144.0.0",

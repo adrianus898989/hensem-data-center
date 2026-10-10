@@ -84,6 +84,60 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(normalized["source_state"], "1")
         self.assertEqual(normalized["source_channel_state"], "0")
 
+    def test_core_native_ids_stay_positive_and_decimal_ids_are_exact(self):
+        for value, expected in ((Decimal("303619.000"), "303619"),
+                                (Decimal("3000000000000000001.0"), "3000000000000000001"),
+                                (Decimal("1E+3"), "1000")):
+            with self.subTest(value=value):
+                self.assertEqual(C.native_id(value), expected)
+        for value in (0, "0", Decimal("0"), Decimal("-0.00"), -1, Decimal("1.01"),
+                      Decimal("NaN"), Decimal("Infinity"), Decimal("10000000000000000000"), 1.0, True, False, None, "", "1.5", "invalid"):
+            with self.subTest(value=value), self.assertRaises(C.SyncError):
+                C.native_id(value)
+        normalized = C.normalize_record(row(Decimal("3000000000000000001.0"),
+                                            tenantId=Decimal("1102.000")), "1102", 0)
+        self.assertEqual(normalized["channel_id"], "3000000000000000001")
+
+    def test_metadata_ids_preserve_zero_without_relaxing_invalid_values(self):
+        for value in (0, "0", Decimal("0.000"), Decimal("-0.000")):
+            with self.subTest(value=value):
+                self.assertEqual(C.metadata_id(value), "0")
+        self.assertEqual(C.metadata_id(Decimal("3000000000000000001.000")), "3000000000000000001")
+        for value in (None, "", "invalid", -1, "-1", Decimal("-1"), Decimal("0.25"),
+                      Decimal("NaN"), Decimal("Infinity"), 0.0, 1.0, True, False):
+            with self.subTest(value=value), self.assertRaises(C.SyncError):
+                C.metadata_id(value)
+
+    def test_zero_category_sys_and_merchant_metadata_survive_normalization(self):
+        normalized = C.normalize_record(row(1, channelCategory={"categoryId": 0, "categoryName": "Uncategorized"},
+                                             categories=[{"tenantCategoryId": Decimal("0.0"), "categoryId": 0,
+                                                          "customName": "Uncategorized", "sort": 0}],
+                                             sysChannel={"sysChannelId": Decimal("0.00")},
+                                             thirdPayMerchantId=0), "1102", 0, {"categoryId": 0})
+        self.assertEqual(normalized["channel_id"], "1")
+        self.assertEqual(normalized["category_id"], "0")
+        self.assertEqual(normalized["channel_categories"], [
+            {"category_id": "0", "category_name": "Uncategorized", "sort": 0}])
+        self.assertEqual(normalized["sys_channel_id"], "0")
+        self.assertEqual(normalized["third_pay_merchant_id"], "0")
+        fallback = C.normalize_record(row(1, channelCategory={"categoryId": 0}, categories=None), "1102", 0)
+        self.assertEqual(fallback["channel_categories"], [{"category_id": "0", "category_name": None, "sort": None}])
+        with self.assertRaisesRegex(C.SyncError, "SOURCE_CATEGORY_MISMATCH"):
+            C.normalize_record(row(1, channelCategory={"categoryId": 0}), "1102", 0, {"categoryId": 100710})
+
+    def test_invalid_identity_errors_identify_the_field_without_leaking_values(self):
+        cases = [(row(0), "SOURCE_CHANNEL_ID_INVALID"),
+                 (row(1, tenantId=0), "SOURCE_TENANT_ID_INVALID"),
+                 (row(1, channelCategory={"categoryId": "invalid-private-id"}), "SOURCE_CATEGORY_ID_INVALID"),
+                 (row(1, categories=[{"tenantCategoryId": "invalid-private-id"}]), "SOURCE_CATEGORY_ID_INVALID"),
+                 (row(1, sysChannel={"sysChannelId": "invalid-private-id"}), "SOURCE_SYS_CHANNEL_ID_INVALID"),
+                 (row(1, thirdPayMerchantId="invalid-private-id"), "SOURCE_MERCHANT_ID_INVALID")]
+        for raw, code in cases:
+            with self.subTest(code=code), self.assertRaises(C.SyncError) as caught:
+                C.normalize_record(raw, "1102", 0)
+            self.assertEqual(str(caught.exception), code)
+            self.assertNotIn("invalid-private-id", str(caught.exception))
+
     def test_rates_have_actual_windows_and_percent_units(self):
         rates = C.success_rates('{"recent15Minutes":0.95,"recent30Minutes":0.875,"recent1Hour":1,"recent24Hours":0}')
         self.assertEqual(Decimal(rates["success_rate_15m"]), Decimal("95"))
@@ -94,6 +148,81 @@ class NormalizationTests(unittest.TestCase):
         for bad in ('{"recent30Minutes":90}', '{"10m":0.8}', '99%', '{"15m":-0.1}', '{"15m":true}'):
             with self.subTest(bad=bad): self.assertTrue(all(v is None for v in C.success_rates(bad).values()))
         self.assertEqual(C.success_rates('{"recent30Minutes":0.587,"notKnown":12}')["success_rate_30m"], "58.7")
+
+    def test_withdrawal_metadata_preserves_source_counts_codes_and_dictionary_names(self):
+        dynamic = {"code": 0, "data": {
+            "sysPayChannelList": [{"sysChannelId": 88, "sysChannelName": "Native withdrawal", "inOutType": "Withdraw"},
+                                  {"sysChannelId": 88, "sysChannelName": "Native deposit", "inOutType": "Recharge"}],
+            "thirdPayMerchantList": [{"merchantId": 150, "customName": "Merchant nickname"}],
+            "tenantList": [{"tenantId": 1102, "tenantName": "Native tenant"}]}}
+        dictionaries = C.parse_dynamic_dictionary(dynamic)
+        dictionaries.update(C.parse_common_dictionary({"code": 0, "data": {
+            "withdrawCategoryEnumList": [{"id": 12, "name": "Built-in UPI"}]}}))
+        raw = row(1, payCode="Provider code", merchantCode="1234567890" * 6 + "1234",
+                  balanceUpdateTime=Decimal("1791533239385.0"), todaySubmitCount=0, recent1HourSuccessCount=197,
+                  thirdChannelCode="channel-01", autoCloseBalance=Decimal("20000.0000"),
+                  sysChannel={"sysChannelId": 88, "sysCategoryId": 12, "isUseChannelCode": True,
+                              "isFixedChannelCode": False, "thirdPayApiUrl": "https://GATEWAY.invalid/payout?token=private#private",
+                              "notifyWhiteIpList": "192.0.2.7, 2001:db8::1,192.0.2.7,198.51.100.7/24"},
+                  lastUpdateMan="Native operator")
+        result = C.normalize_record(raw, "1102", 0, order_type="withdrawal", dictionaries=dictionaries)
+        self.assertEqual(result["source_channel_name"], "Native withdrawal")
+        self.assertEqual(result["provider"], "Provider code")
+        self.assertEqual(result["balance_threshold"], "20000")
+        self.assertEqual(result["category_id"], "100710")
+        self.assertEqual(result["withdrawal_details"], {
+            "source_tenant_name": "Native tenant", "balance_updated_at": "2026-10-09T08:07:19.385Z",
+            "today_submit_count": 0, "recent_1h_success_count": 197,
+            "merchant_code": "1234567890" * 6 + "1234", "merchant_name": "Merchant nickname",
+            "third_channel_code": "channel-01", "is_use_channel_code": True, "is_fixed_channel_code": False,
+            "system_category_id": "12", "system_category_name": "Built-in UPI",
+            "third_pay_api_url": "https://gateway.invalid/payout",
+            "notify_white_ips": ["192.0.2.7", "2001:db8::1", "198.51.100.0/24"],
+            "last_update_by": "Native operator", "last_updated_at": "2026-10-09T08:07:19.385Z"})
+        self.assertNotIn("private", json.dumps(result))
+
+    def test_withdrawal_unknowns_do_not_invent_names_codes_counts_or_times(self):
+        result = C.normalize_record(row(1, merchantCode="", merchantCustomName="", balanceUpdateTime=-1,
+                                        todaySubmitCount=-1, recent1HourSuccessCount=Decimal("1.5"),
+                                        lastUpdateMan="token=private", sysChannel={"sysChannelId": 88}),
+                                    "1102", 0, order_type="withdrawal")
+        details = result["withdrawal_details"]
+        self.assertEqual(len(details), 15)
+        self.assertIsNone(result["source_channel_name"])
+        self.assertIsNone(result["provider"])
+        for key in details:
+            if key != "last_updated_at":
+                self.assertIsNone(details[key], key)
+        self.assertEqual(details["last_updated_at"], "2026-10-09T08:07:19.385Z")
+        self.assertEqual(result["source_updated_at"], "2026-10-09T08:07:19.385Z")
+        named = C.normalize_record(row(1, merchantCustomName="Merchant only"), "1102", 0, order_type="withdrawal")
+        self.assertEqual(named["withdrawal_details"]["merchant_name"], "Merchant only")
+        self.assertIsNone(named["provider"])
+
+    def test_withdrawal_display_metadata_filters_credentials_without_dropping_ordinary_ids(self):
+        for identifier in ("0", "f" * 64, "merchant-1234", "a25fbd88-7229-4b4b-a239-122ab5303344", 0):
+            self.assertEqual(C.optional_display_text(identifier), str(identifier))
+        for value in ("Bearer private", "token=private", "password:private", "api_key=private", "passwd：private", "密码：private", "密钥=private", "https://secret.invalid", "<script>private</script>", "private\x00", "private\x7f"):
+            with self.subTest(value=value):
+                self.assertIsNone(C.optional_display_text(value))
+        self.assertEqual(C.display_gateway_url("http://gateway.invalid:8080/pay?auth=private#private"), "http://gateway.invalid:8080/pay")
+        for value in ("https://user:private@gateway.invalid/pay", "https://gateway.invalid/token/private", "https://gateway.invalid/pay%3Ftoken%3Dprivate", "https://gateway.invalid/<private>", "javascript:private", "https://gateway.invalid:bad/pay", "https://gateway.invalid/path with space", "https://gateway.invalid/pay%xx", "https://gateway.invalid/passwd/private", "https://gateway.invalid/pay%253Ftoken%253Dprivate"):
+            with self.subTest(value=value):
+                self.assertIsNone(C.display_gateway_url(value))
+        self.assertEqual(C.display_white_ips("192.0.2.1,192.0.2.1;2001:0db8::1"), ["192.0.2.1", "2001:db8::1"])
+        self.assertEqual(C.display_white_ips(""), [])
+        for value in ("192.0.2.1,token=private", "https://secret.invalid", "999.0.2.1", ["192.0.2.1", False]):
+            self.assertIsNone(C.display_white_ips(value))
+
+    def test_realtime_weight_is_deposit_only_and_never_falls_back_to_preset(self):
+        for value, expected in ((Decimal("82.810000"), "82.81"), (0, "0"), (None, None)):
+            result = C.normalize_record(row(1, weight=100, realTimeWeight=value), "1102", 0, order_type="deposit")
+            self.assertEqual(result["weight"], "100")
+            self.assertEqual(result["real_time_weight"], expected)
+            self.assertNotIn("withdrawal_details", result)
+        self.assertIsNone(C.normalize_record(row(1, weight=100), "1102", 0, order_type="deposit")["real_time_weight"])
+        self.assertNotIn("real_time_weight", C.normalize_record(row(1, realTimeWeight=83), "1102", 0, order_type="withdrawal"))
+        self.assertNotIn("withdrawal_details", C.normalize_record(row(1), "1102", 0))
 
     def test_decimal_canonical_output_removes_only_insignificant_zeros(self):
         examples = {"100.0000000000": "100", "123.4500000000": "123.45",
@@ -184,6 +313,66 @@ class NormalizationTests(unittest.TestCase):
         self.assertIsNone(C.source_channel_name({"name": "password=private"}))
 
 
+class DictionaryTests(unittest.TestCase):
+    def test_native_dictionary_shapes_filter_direction_and_conflicting_or_private_labels(self):
+        response = {"code": 0, "data": {"items": {
+            "SysPayChannelList": [
+                {"sysChannelId": Decimal("88.000"), "sysChannelName": "Withdraw system", "inOutType": "Withdraw", "password": "never persisted"},
+                {"sysChannelId": 88, "sysChannelName": "Recharge system", "inOutType": "Recharge"},
+                {"sysChannelId": 89, "sysChannelName": "First", "inOutType": "Withdraw"},
+                {"sysChannelId": 89, "sysChannelName": "Conflicting", "inOutType": "Withdraw"},
+                {"sysChannelId": 89, "sysChannelName": "First", "inOutType": "Withdraw"}],
+            "thirdPayMerchantList": [{"merchantId": 0, "customName": "Zero merchant"}, {"merchantId": 1, "customName": "密码：private"}],
+            "tenantList": [{"tenantId": 1102, "tenantName": "Native tenant"}, {"tenantId": 1013, "tenantName": "https://private.invalid"}]}}}
+        result = C.parse_dynamic_dictionary(response)
+        self.assertEqual(result, {"system_channel_names": {"deposit": {"88": "Recharge system"}, "withdrawal": {"88": "Withdraw system"}},
+                                  "merchant_names": {"0": "Zero merchant"}, "tenant_names": {"1102": "Native tenant"}})
+        self.assertNotIn("private", json.dumps(result))
+        for bad in ({"code": 1, "data": {}}, {"code": True, "data": {}}, {"code": 0, "data": []}):
+            with self.assertRaisesRegex(C.SyncError, "SOURCE_DICTIONARY_UNAVAILABLE"):
+                C.parse_dynamic_dictionary(bad)
+
+    def test_cycle_reads_each_fixed_dictionary_once_and_later_failure_discards_names(self):
+        source, logger = C.Source({}), mock.Mock()
+        dynamic = {"code": 0, "data": {"tenantList": [{"tenantId": 1102, "tenantName": "Current tenant"}]}}
+        common = {"code": 0, "data": {"withdrawCategoryEnumList": [{"id": 1, "name": "Current category"}]}}
+        with mock.patch.object(source, "fetch_readonly_path", side_effect=[dynamic, common, C.SyncError("private failure"), OSError("private failure")]) as fetch:
+            source.refresh_dictionaries(logger)
+            self.assertEqual(source.dictionaries["tenant_names"], {"1102": "Current tenant"})
+            self.assertEqual(source.dictionaries["system_category_names"], {"1": "Current category"})
+            source.refresh_dictionaries(logger)
+        self.assertEqual(source.dictionaries, {})
+        self.assertEqual([call.args[0] for call in fetch.call_args_list], [C.DICTIONARY_PATHS["dynamic"], C.DICTIONARY_PATHS["common"]] * 2)
+        for call in fetch.call_args_list:
+            payload = call.args[1]
+            self.assertEqual(payload["signature"], C.source_signature(payload))
+            self.assertIs(type(payload["random"]), int)
+        self.assertEqual(fetch.call_args_list[0].args[1]["keys"], list(C.DYNAMIC_DICTIONARY_KEYS))
+        self.assertEqual(set(fetch.call_args_list[1].args[1]), {"random", "language", "timestamp", "signature"})
+        self.assertNotIn("private", str(logger.warning.call_args_list))
+
+    def test_run_cycle_refreshes_dictionary_once_for_multiple_tenants(self):
+        source, logger = mock.Mock(), mock.Mock()
+        snapshot = {"directions": [{"order_type": "withdrawal", "fetched_count": 1}], "captured_at": "2026-10-09T08:00:00Z"}
+        config = {"page_size": 300, "targets": [{"enabled": True, "tenant_id": "1102"}, {"enabled": True, "tenant_id": "1013"}]}
+        with mock.patch.object(C, "build_snapshot", return_value=snapshot) as build:
+            self.assertEqual(C.run_cycle(config, source, mock.Mock(), mock.Mock(), logger, dry_run=True), 0)
+        source.refresh_dictionaries.assert_called_once_with(logger)
+        self.assertEqual(build.call_count, 2)
+
+    def test_dictionary_allowlist_never_allows_payment_routes_or_unrequested_keys(self):
+        source = C.Source({"cdp_url": "http://127.0.0.1:9777"})
+        with mock.patch.object(C, "http_json") as request:
+            for method in (source.fetch_readonly_path, source.fetch_path_in_browser):
+                with self.assertRaisesRegex(C.SyncError, "SOURCE_ROUTE_NOT_ALLOWED"):
+                    method("/api/WithdrawChannel/UpdateState", {})
+                with self.assertRaisesRegex(C.SyncError, "SOURCE_DICTIONARY_KEYS_NOT_ALLOWED"):
+                    method(C.DICTIONARY_PATHS["dynamic"], {"keys": ["userName"]})
+            request.assert_not_called()
+        with self.assertRaisesRegex(C.SyncError, "SOURCE_ROUTE_NOT_ALLOWED"):
+            C.dictionary_payload("payment")
+
+
 class PaginationTests(unittest.TestCase):
     def test_grouped_deposit_counts_channels_and_reconfirms_anchor(self):
         first = page("deposit", 1, 3, [row(1), row(2)])
@@ -195,12 +384,80 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual([r["channel_id"] for r in snapshot["records"]], ["1", "2", "3"])
         self.assertEqual(source.calls, [("deposit", 1, 1102), ("deposit", 2, 1102), ("deposit", 1, 1102)])
 
+    def test_empty_recharge_groups_ignore_their_category_id_without_losing_channels(self):
+        for empty_id in (0, None, ""):
+            with self.subTest(empty_id=empty_id):
+                first = page("deposit", 1, 3, [row(1), row(2)])
+                first["data"]["list"].insert(0, {"categoryId": empty_id, "channels": []})
+                second = page("deposit", 2, 3, [row(3)])
+                second["data"]["list"].append({"categoryId": empty_id, "channels": []})
+                result = C.collect_direction(SequenceSource([first, second, first]), "1102", "deposit", 2)
+                self.assertEqual(result["source_count"], 3)
+                self.assertEqual(result["fetched_count"], 3)
+                self.assertEqual(result["page_count"], 2)
+                self.assertEqual([r["channel_id"] for r in result["records"]], ["1", "2", "3"])
+                self.assertTrue(result["complete"])
+        short = page("deposit", 1, 2, [row(1)])
+        short["data"]["list"].append({"categoryId": None, "channels": []})
+        with self.assertRaisesRegex(C.SyncError, "SOURCE_PAGE_INCOMPLETE"):
+            C.page_rows(short, "deposit", 1, "1102", 2)
+
+    def test_recharge_group_shape_and_nonempty_category_ids_remain_validated(self):
+        for channels in (None, {}, "", 0):
+            raw = page("deposit", 1, 1, [row(1)])
+            raw["data"]["list"].insert(0, {"categoryId": None, "channels": channels})
+            with self.subTest(channels=channels), self.assertRaisesRegex(C.SyncError, "SOURCE_RECHARGE_GROUP_INVALID"):
+                C.page_rows(raw, "deposit", 1, "1102", 2)
+        raw = page("deposit", 1, 1, [row(1, channelCategory={"categoryId": 0})])
+        raw["data"]["list"][0]["categoryId"] = 0
+        result = C.collect_direction(SequenceSource([raw, raw]), "1102", "deposit", 2)
+        self.assertEqual(result["records"][0]["category_id"], "0")
+        self.assertEqual(result["fetched_count"], 1)
+        missing_outer = page("deposit", 1, 1, [row(1)])
+        missing_outer["data"]["list"][0]["categoryId"] = None
+        own_result = C.collect_direction(SequenceSource([missing_outer, missing_outer]), "1102", "deposit", 2)
+        self.assertEqual(own_result["records"][0]["category_id"], "100710")
+        unknown_category = page("deposit", 1, 1, [row(1, channelCategory={})])
+        unknown_category["data"]["list"][0].pop("categoryId")
+        unknown_result = C.collect_direction(SequenceSource([unknown_category, unknown_category]), "1102", "deposit", 2)
+        self.assertIsNone(unknown_result["records"][0]["category_id"])
+        self.assertEqual(unknown_result["records"][0]["channel_categories"], [])
+        self.assertEqual(unknown_result["source_count"], 1)
+        self.assertEqual(unknown_result["records"][0]["channel_id"], "1")
+        for value in ("", -1, Decimal("0.5"), True):
+            bad = page("deposit", 1, 1, [row(1)])
+            bad["data"]["list"][0]["categoryId"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(C.SyncError, "SOURCE_CATEGORY_ID_INVALID"):
+                C.page_rows(bad, "deposit", 1, "1102", 2)
+
+    def test_page_core_identity_errors_are_specific_and_decimal_integers_are_preserved(self):
+        for field, code in (("id", "SOURCE_CHANNEL_ID_INVALID"), ("tenantId", "SOURCE_TENANT_ID_INVALID")):
+            bad_row = row(1)
+            bad_row[field] = 0
+            with self.subTest(field=field), self.assertRaisesRegex(C.SyncError, code):
+                C.page_rows(page("withdrawal", 1, 1, [bad_row]), "withdrawal", 1, "1102", 2)
+        raw = page("withdrawal", 1, 1, [row(Decimal("3000000000000000001.0"), tenantId=Decimal("1102.000"))])
+        total, pages, records, identifiers = C.page_rows(raw, "withdrawal", 1, "1102", 2)
+        self.assertEqual((total, pages, len(records)), (1, 1, 1))
+        self.assertEqual(identifiers, ("3000000000000000001",))
+
     def test_explicit_zero_is_a_complete_snapshot(self):
-        empty = page("withdrawal", 1, 0, [], pages=0)
-        result = C.collect_direction(SequenceSource([empty, empty]), "1102", "withdrawal", 2)
-        self.assertEqual(result["records"], [])
-        self.assertEqual(result["source_count"], 0)
-        self.assertTrue(result["complete"])
+        empty_groups = page("deposit", 1, 0, [], pages=0)
+        empty_groups["data"]["list"] = [{"categoryId": value, "channels": []} for value in (0, None, "")]
+        for direction, empty in (("withdrawal", page("withdrawal", 1, 0, [], pages=0)),
+                                 ("deposit", page("deposit", 1, 0, [], pages=0)),
+                                 ("deposit", empty_groups)):
+            with self.subTest(direction=direction, has_groups=bool(empty["data"]["list"])):
+                source = SequenceSource([empty, empty])
+                result = C.collect_direction(source, "1102", direction, 2)
+                self.assertEqual(result["records"], [])
+                self.assertEqual(result["source_count"], 0)
+                self.assertEqual(result["fetched_count"], 0)
+                self.assertTrue(result["complete"])
+                self.assertEqual(len(source.calls), 2)
+        contradictory = page("deposit", 1, 0, [row(1)], pages=0)
+        with self.assertRaisesRegex(C.SyncError, "SOURCE_ZERO_NOT_PROVEN"):
+            C.collect_direction(SequenceSource([contradictory]), "1102", "deposit", 2)
 
     def test_failure_cannot_become_zero(self):
         for response in ({"code": 1, "data": {"list": []}}, {"code": 0, "data": {"list": []}},

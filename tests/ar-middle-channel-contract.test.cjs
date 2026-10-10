@@ -24,7 +24,7 @@ before(async()=>{
   if current_setting('test.session',true)='denied' then raise exception 'application_session_denied';end if;
   if current_setting('test.gateway',true)='denied' then raise exception 'role_gateway_required';end if;
   return '{}'::jsonb;end$$;
- create function private.dashboard_role_access() returns jsonb language sql stable as $$select jsonb_build_object('mode',coalesce(nullif(current_setting('test.mode',true),''),'owner'),'canView',current_setting('test.view',true) is distinct from 'denied')$$;
+ create function private.dashboard_role_access() returns jsonb language sql stable as $$select jsonb_build_object('mode',coalesce(nullif(current_setting('test.mode',true),''),'owner'),'canView',current_setting('test.view',true) is distinct from 'denied','permissions',case when current_setting('test.detail',true)='allowed' then '["channel_status.view","channel_status.query","channel_status.detail"]'::jsonb else '["channel_status.view","channel_status.query"]'::jsonb end)$$;
  create function private.dashboard_admin_live_platforms() returns table(id uuid,name text,team text,country text,scope_group text,source text,timezone text,currency text,source_name text) language sql stable as $$
   select i.platform_id,i.source_platform,'M8'::text,i.country_code,i.country_code,'ar'::text,'Asia/Kolkata'::text,null::text,i.source_platform from private.collector_platform_identities i where i.source_platform is distinct from current_setting('test.hidden',true)
   union all select md5('kb:IN:YASH.BET')::uuid,'YASH.BET','M8','印度','IN','kb','Asia/Kolkata','INR','YASH.BET'$$;
@@ -35,7 +35,7 @@ before(async()=>{
  await db.exec(catalog[0].definition);await db.exec('revoke all on function private.dashboard_admin_live_query_raw(jsonb) from public,anon,authenticated,service_role');
  await db.exec(sql);await db.query("insert into private.ar_middle_channel_ingest_credentials(token_hash,source_origin,allowed_tenant_ids,label,expires_at) values($1,$2,array['1102','1013','1001'],'synthetic',now()+interval '1 day')",[hash,AR_MIDDLE_ORIGIN]);
 });
-beforeEach(async()=>{await db.exec('truncate private.ar_middle_channels,private.ar_middle_channel_sync_state');for(const k of ['test.session','test.gateway','test.mode','test.view','test.hidden'])await setting(k,'');});
+beforeEach(async()=>{await db.exec('truncate private.ar_middle_channels,private.ar_middle_channel_sync_state');for(const k of ['test.session','test.gateway','test.mode','test.view','test.hidden','test.detail'])await setting(k,'');});
 after(async()=>db?.close());
 
 test('40 verified IDs bind existing native catalog tuples; unsupported pop and historical aliases mint no identity',async()=>{
@@ -72,6 +72,46 @@ test('optional categories support empty or unknown values and bounded native lab
  const r=snapshot({captured_at:later});r.directions.forEach(d=>{d.observed_at=later;d.records[0].channel_categories=[];d.records[0].source_channel_name=null;});await call(validateArMiddleChannelRequest(r,now));assert((await read()).snapshots.every(s=>s.channels[0].channel_categories.length===0&&s.channels[0].source_channel_name===null));
  const full=Array.from({length:1000},(_,i)=>({category_id:String(i),category_name:null,sort:i}));const clean=(await db.query('select private.ar_middle_channel_clean_record($1::jsonb) result',[JSON.stringify(record('large-categories',{channel_categories:full}))])).rows[0].result;assert.equal(clean.channel_categories.length,1000);const edge=snapshot();edge.directions[0].records[0].channel_categories=full;assert.equal(validateArMiddleChannelRequest(edge,now).directions[0].records[0].channel_categories.length,1000);
  full.push({category_id:'overflow',category_name:null,sort:null});assert.throws(()=>validateArMiddleChannelRequest(edge,now),/invalid_request/);await assert.rejects(()=>db.query('select private.ar_middle_channel_clean_record($1::jsonb)',[JSON.stringify(record('large-categories',{channel_categories:full}))]),/INVALID_CATEGORIES/);
+});
+const withdrawalDetails=(extra={})=>({balance_updated_at:at,today_submit_count:0,recent_1h_success_count:2147483647,merchant_code:'0123456789abcdef'.repeat(4),merchant_name:'Native merchant',third_channel_code:'native-third-code',is_use_channel_code:false,is_fixed_channel_code:true,system_category_id:'0',system_category_name:'Native system category',third_pay_api_url:'https://gateway.example:8443/api/pay',notify_white_ips:['192.0.2.1','198.51.100.0/24','2001:db8::1','2001:db8::/64'],last_update_by:'Native operator',last_updated_at:at,source_tenant_name:'Native tenant',...extra});
+function withDetails(details=withdrawalDetails(),extra={}){const q=snapshot(extra);q.directions[1].records[0].withdrawal_details=details;return q;}
+test('native withdrawal details and deposit real-time weight survive edge, storage, reader and idempotent ACK without replacing preset weight',async()=>{
+ const q=withDetails();q.directions[0].records[0].real_time_weight='0';
+ const h=createArMiddleChannelIngestHandler({env:{SUPABASE_URL:'https://synthetic.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'synthetic-service-secret'},now:()=>now,fetch:async(_url,init)=>{const p=JSON.parse(init.body);return Response.json(await call(p.p_request,p.p_token_hash));}});
+ const response=await h(request(q));assert.equal(response.status,200);assert.deepEqual(await response.json(),{ok:true,source:'ar_middle',accepted:2,source_count:2,snapshot_applied:true,snapshot_id:q.snapshot_id});
+ const saved=await rows();assert.deepEqual(saved.find(r=>r.order_type==='withdrawal').channel_data.withdrawal_details,q.directions[1].records[0].withdrawal_details);assert.equal(saved.find(r=>r.order_type==='deposit').channel_data.real_time_weight,'0');
+ const result=await read();assert.deepEqual(result.snapshots.find(s=>s.direction==='withdraw').channels[0].withdrawal_details,withdrawalDetails());const charge=result.snapshots.find(s=>s.direction==='charge').channels[0];assert.equal(charge.real_time_weight,'0');assert.equal(charge.weight,'1.25');assert(!('withdrawal_details'in charge));assert.equal((await (await h(request(q))).json()).snapshot_applied,true);
+});
+test('withdrawal details are removed server-side for assigned overview roles and restored only for explicit channel detail permission',async()=>{
+ await call(withDetails());await setting('test.mode','assigned');let result=await read();for(const s of result.snapshots){assert(!('withdrawal_details'in s.channels[0]));assert.equal(s.channels[0].balance,'-1.12345678');assert.equal(s.channels[0].sys_channel_id,'sys-1');}assert(!JSON.stringify(result).includes('gateway.example'));
+ await setting('test.detail','allowed');result=await read();assert.deepEqual(result.snapshots.find(s=>s.direction==='withdraw').channels[0].withdrawal_details,withdrawalDetails());
+ await setting('test.detail','');await setting('test.mode','owner');assert.deepEqual((await read()).snapshots.find(s=>s.direction==='withdraw').channels[0].withdrawal_details,withdrawalDetails());
+});
+test('optional withdrawal values preserve absent, null, empty and zero states and bounded labels/IP inventories',async()=>{
+ const nulls=Object.fromEntries(Object.keys(withdrawalDetails()).map(key=>[key,null]));
+ for(const details of [undefined,null,{},nulls,withdrawalDetails({merchant_code:'M'.repeat(200),system_category_id:'9'.repeat(19),notify_white_ips:[],today_submit_count:0,recent_1h_success_count:0})]){
+  await db.exec('truncate private.ar_middle_channels,private.ar_middle_channel_sync_state');const q=withDetails(details);if(details===undefined)delete q.directions[1].records[0].withdrawal_details;await call(validateArMiddleChannelRequest(q,now));const r=(await read()).snapshots.find(s=>s.direction==='withdraw').channels[0];if(details===undefined)assert(!('withdrawal_details'in r));else assert.deepEqual(r.withdrawal_details,details);
+ }
+ const ips=Array.from({length:100},(_,i)=>`192.0.2.${i}`);await db.exec('truncate private.ar_middle_channels,private.ar_middle_channel_sync_state');await call(validateArMiddleChannelRequest(withDetails(withdrawalDetails({notify_white_ips:ips,third_pay_api_url:'http://[2001:db8::1]:8080/pay%20gateway'})),now));assert.equal((await rows()).find(r=>r.order_type==='withdrawal').channel_data.withdrawal_details.notify_white_ips.length,100);
+});
+test('illegal withdrawal metadata or deposit/withdrawal cross-wiring reject both paths without changing either snapshot',async()=>{
+ await call(withDetails());const prior=await rows(),state=(await db.query('select * from private.ar_middle_channel_sync_state order by order_type')).rows;
+ const invalid=[[],true,{raw_source:'untrusted'},withdrawalDetails({today_submit_count:'0'}),withdrawalDetails({recent_1h_success_count:2147483648}),withdrawalDetails({today_submit_count:-1}),withdrawalDetails({today_submit_count:0.5}),withdrawalDetails({is_use_channel_code:0}),withdrawalDetails({merchant_code:'token=private'}),withdrawalDetails({merchant_name:'https://source.example/private'}),withdrawalDetails({last_update_by:'<b>name</b>'}),withdrawalDetails({source_tenant_name:'x'.repeat(201)}),withdrawalDetails({system_category_id:'-1'}),withdrawalDetails({system_category_id:0}),withdrawalDetails({notify_white_ips:['127.1']}),withdrawalDetails({notify_white_ips:['192.0.2.999']}),withdrawalDetails({notify_white_ips:['192.0.2.1/33']}),withdrawalDetails({notify_white_ips:['2001:::1']}),withdrawalDetails({notify_white_ips:['2001:db8::1/129']}),withdrawalDetails({notify_white_ips:['192.0.2.1','192.0.2.1']}),withdrawalDetails({notify_white_ips:Array.from({length:101},(_,i)=>`192.0.2.${i}`)}),withdrawalDetails({last_updated_at:'2026-10-07T24:00:00Z'}),withdrawalDetails({balance_updated_at:'2026-10-07 00:00:00'}),withdrawalDetails({third_pay_api_url:'https://user:password@gateway.example/pay'}),withdrawalDetails({third_pay_api_url:'https://gateway.example/pay?token=private'}),withdrawalDetails({third_pay_api_url:'https://gateway.example/pay#private'}),withdrawalDetails({third_pay_api_url:'javascript:private'}),withdrawalDetails({third_pay_api_url:'https://gateway.example/token%3Dprivate'}),withdrawalDetails({third_pay_api_url:'https://gateway.example/access_token/private'}),withdrawalDetails({third_pay_api_url:'https://gateway.example/%74oken%3Dprivate'}),withdrawalDetails({third_pay_api_url:'https://gateway.example:99999/pay'}),withdrawalDetails({third_pay_api_url:'https://gateway.example/%zz'})];
+ for(const details of invalid){const q=withDetails(details,{captured_at:later});q.directions.forEach(d=>d.observed_at=later);assert.throws(()=>validateArMiddleChannelRequest(q,now),/invalid_request/);await assert.rejects(()=>call(q));assert.deepEqual(await rows(),prior);assert.deepEqual((await db.query('select * from private.ar_middle_channel_sync_state order by order_type')).rows,state);}
+ for(const mutate of [q=>q.directions[0].records[0].withdrawal_details={},q=>q.directions[1].records[0].real_time_weight='0',q=>q.directions[0].records[0].real_time_weight='-1',q=>q.directions[0].records[0].real_time_weight=0]){const q=withDetails(withdrawalDetails(),{captured_at:later});q.directions.forEach(d=>d.observed_at=later);mutate(q);assert.throws(()=>validateArMiddleChannelRequest(q,now),/invalid_request/);await assert.rejects(()=>call(q));assert.deepEqual(await rows(),prior);}
+});
+test('live withdrawal counts, timestamps and real-time weight update without implying configuration changes',async()=>{
+ const q=withDetails();q.directions[0].records[0].real_time_weight='82.81';await call(q);
+ const fresh=withDetails(withdrawalDetails({today_submit_count:200,recent_1h_success_count:1,balance_updated_at:later,last_updated_at:later}),{captured_at:later});fresh.directions.forEach(d=>d.observed_at=later);fresh.directions[0].records[0].real_time_weight='0';await call(fresh);assert((await rows()).every(r=>r.config_changed_at.toISOString()===new Date(at).toISOString()));
+ const changed=withDetails(withdrawalDetails({merchant_name:'Updated merchant'}),{captured_at:latest});changed.directions.forEach(d=>d.observed_at=latest);changed.directions[0].records[0].real_time_weight='0';await call(changed);assert.equal((await rows()).find(r=>r.order_type==='withdrawal').config_changed_at.toISOString(),new Date(latest).toISOString());assert.equal((await rows()).find(r=>r.order_type==='deposit').config_changed_at.toISOString(),new Date(at).toISOString());
+});
+test('consecutive omitted, explicit null and populated withdrawal details publish atomically without scalar deletion',async()=>{
+ const sequence=[undefined,null,null,withdrawalDetails(),null,null];
+ for(let i=0;i<sequence.length;i++){
+  const captured=new Date(Date.parse(at)+i*60000).toISOString(),details=sequence[i],q=withDetails(details,{captured_at:captured});q.directions.forEach(d=>d.observed_at=captured);if(details===undefined)delete q.directions[1].records[0].withdrawal_details;
+  assert.equal((await call(validateArMiddleChannelRequest(q,now))).snapshot_applied,true);const result=await read(),withdraw=result.snapshots.find(s=>s.direction==='withdraw').channels[0];if(details===undefined)assert(!('withdrawal_details'in withdraw));else assert.deepEqual(withdraw.withdrawal_details,details);assert(result.snapshots.every(s=>s.complete&&s.snapshotId===q.snapshot_id));
+  const changed=(await rows()).find(r=>r.order_type==='withdrawal').config_changed_at.toISOString();assert.equal(changed,new Date(Date.parse(at)+(i<3?0:i===3?3:4)*60000).toISOString());
+ }
 });
 test('invalid or secret-bearing category fields in the second direction reject at edge and SQL and retain both previous directions',async()=>{
  await call(snapshot());const prior=await rows(),state=(await db.query('select * from private.ar_middle_channel_sync_state order by order_type')).rows;
@@ -131,4 +171,16 @@ test('edge refuses bad methods, forged keys, oversized/chunked requests and unsa
  assert.equal(calls,0);const denied=await h()(request(snapshot()));assert.equal(denied.status,401);assert.doesNotMatch(await denied.text(),/synthetic|secret|AR_MIDDLE/);
  const badAck=await h(Response.json({ok:true,source:'ar_middle',accepted:0,source_count:0,snapshot_applied:true,snapshot_id:snapshot().snapshot_id,secret:token}))(request(snapshot()));assert.equal(badAck.status,503);
  let cancelled=false;const chunk=new Uint8Array(1024*1024),body=new ReadableStream({start(c){for(let i=0;i<9;i++)c.enqueue(chunk);},cancel(){cancelled=true;}});const oversized=new Request('https://synthetic',{method:'POST',headers:{'X-Collector-Key':token,'Content-Type':'application/json','Content-Length':'1'},body,duplex:'half'});assert.equal((await h()(oversized)).status,413);assert.equal(cancelled,true);
+});
+
+test('native-field migration preserves existing privileges, matches the canonical bodies and refuses drift',async()=>{
+ const migration=fs.readFileSync(path.join(root,'supabase/migrations/20261010053717_ar_middle_native_withdrawal_fields.sql'),'utf8');
+ const audit=()=>db.query("select p.oid::regprocedure::text signature,md5(p.prosrc) body,p.proacl::text acl,p.prosecdef,p.proconfig from pg_proc p where p.oid in ('private.ar_middle_channel_clean_record(jsonb)'::regprocedure,'public.ar_middle_channel_ingest(text,jsonb)'::regprocedure,'private.dashboard_admin_live_channel_status(jsonb)'::regprocedure) order by 1");
+ const before=(await audit()).rows;await db.exec(migration);assert.deepEqual((await audit()).rows,before);await db.exec(migration);assert.deepEqual((await audit()).rows,before);
+ await db.exec('grant execute on function private.ar_middle_channel_clean_record(jsonb) to anon');
+ try{await assert.rejects(()=>db.exec(migration),/AR_MIDDLE_NATIVE_BASELINE_MISMATCH/);}finally{await db.exec('rollback;revoke execute on function private.ar_middle_channel_clean_record(jsonb) from anon');}
+ assert.deepEqual((await audit()).rows,before);
+ await db.exec("alter function private.ar_middle_channel_clean_record(jsonb) set search_path=public");
+ try{await assert.rejects(()=>db.exec(migration),/AR_MIDDLE_NATIVE_BASELINE_MISMATCH/);}finally{await db.exec("rollback;alter function private.ar_middle_channel_clean_record(jsonb) set search_path=''");}
+ assert.deepEqual((await audit()).rows,before);
 });

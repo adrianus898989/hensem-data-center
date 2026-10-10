@@ -1,78 +1,13 @@
--- Dedicated AR middle-platform channel snapshots. No payment/source writes.
--- Credentials are provisioned separately: only SHA-256 hashes belong in SQL.
+-- Native withdrawal metadata and independent deposit live weight.
+-- Replace existing bodies only; keep relation schema, ownership and EXECUTE ACLs.
 begin;
-create table private.ar_middle_channel_platforms (
- source_origin text not null check(source_origin='https://m8-admin.payplatform-manager.com'),
- source_tenant_id text not null check(source_tenant_id ~ '^[0-9]{1,18}$'),
- dashboard_platform_id uuid not null unique,
- country_code text not null check(country_code ~ '^[A-Z]{2}$'),
- native_platform text not null check(length(native_platform) between 1 and 200),
- enabled boolean not null default true,
- verified_at timestamptz not null default clock_timestamp(),
- primary key(source_origin,source_tenant_id)
-);
--- Native getTenantFlatList evidence plus the prior PLATFORM_TENANT_ID_MAP and
--- current exact registry confirm these 40 bindings. 1040 "pop" stays unbound:
--- historical POPBRA uses tenant 3044, so no alias can attach it to this ID.
--- Select exact native tuples; never mint IDs from display names or aliases.
-insert into private.ar_middle_channel_platforms(source_origin,source_tenant_id,dashboard_platform_id,country_code,native_platform)
-select 'https://m8-admin.payplatform-manager.com',v.tenant,md5('ar:'||t.country_code||':'||t.platform)::uuid,t.country_code,t.platform
-from (values
- ('1102','IN','Veer.Game'),('1093','IN','JAICLUB'),('1031','IN','IN999'),('1023','IN','51GAME'),('1041','IN','BIGMUMBAI'),
- ('1008','IN','RAJA'),('1101','IN','Shree.Win'),('1016','IN','TPPLAY'),('1001','IN','82LOTTERY'),('1064','IN','6CLUB'),
- ('1014','IN','LOTTERY7'),('1048','IN','91CLUB'),('1077','IN','JALWA'),('1013','IN','OKWIN'),('1021','IN','55CLUB'),
- ('1076','PK','92GO'),('1092','PK','YAYWIN'),('1072','PK','92DADU'),('1069','PK','92R'),('1078','PK','92COCO'),
- ('1067','PK','92PKR'),('1087','PK','92GLORY'),('1099','PK','92.GAME'),('1090','PK','92STRIKE'),('1089','PK','92STAR'),
- ('1074','BR','POPLUA'),('1082','BR','POPCEU'),('1003','BR','POPPG'),('1002','BR','POP678'),('1080','BR','POPBEM'),
- ('1038','BR','POP888'),('1019','BR','POP555'),('1045','ID','55FIVE'),('1035','VN','82VN'),('1042','VN','66CLUB'),
- ('1036','VN','VN168'),('1043','VN','92LOTTERY'),('1044','MM','6LOTTERY'),('1046','MY','MZPLAY'),('1004','NG','FB999')
-)v(tenant,country_code,native_name)
-join public.ar_config_targets t on t.source_system='AR' and t.country_code=v.country_code and t.platform=v.native_name
-where exists(select 1 from private.collector_platform_identities i where i.platform_id=md5('ar:'||t.country_code||':'||t.platform)::uuid
- and i.source_system='AR' and i.country_code=t.country_code and i.source_platform=t.platform);
-do $verified$ begin
- if (select count(*) from private.ar_middle_channel_platforms)<>40 then raise exception 'AR_MIDDLE_NATIVE_REGISTRY_DRIFT';end if;
-end $verified$;
-
-create table private.ar_middle_channel_ingest_credentials (
- token_hash text primary key check(token_hash ~ '^[a-f0-9]{64}$'),
- source_origin text not null check(source_origin='https://m8-admin.payplatform-manager.com'),
- allowed_tenant_ids text[] not null check(cardinality(allowed_tenant_ids) between 1 and 500),
- action_scope text not null default 'channels' check(action_scope='channels'),
- label text not null check(length(label) between 1 and 200),
- expires_at timestamptz not null,revoked_at timestamptz,
- created_at timestamptz not null default clock_timestamp()
-);
-create table private.ar_middle_channels (
- source_origin text not null,source_tenant_id text not null,
- order_type text not null check(order_type in ('deposit','withdrawal')),
- channel_id text not null check(length(channel_id) between 1 and 200),
- channel_data jsonb not null check(jsonb_typeof(channel_data)='object'),
- is_present boolean not null default true,
- snapshot_id uuid not null,observed_at timestamptz not null,received_at timestamptz not null,
- first_seen_at timestamptz not null,last_seen_at timestamptz not null,config_changed_at timestamptz not null,
- primary key(source_origin,source_tenant_id,order_type,channel_id),
- foreign key(source_origin,source_tenant_id) references private.ar_middle_channel_platforms(source_origin,source_tenant_id)
-);
-create index ar_middle_channels_present_idx on private.ar_middle_channels(source_origin,source_tenant_id,order_type,is_present);
-create table private.ar_middle_channel_sync_state (
- source_origin text not null,source_tenant_id text not null,
- order_type text not null check(order_type in ('deposit','withdrawal')),
- snapshot_id uuid not null,captured_at timestamptz not null,
- observed_at timestamptz not null,received_at timestamptz not null,
- source_count integer not null check(source_count between 0 and 10000),
- page_count integer not null check(page_count between 1 and 1000),
- payload_hash text not null,
- primary key(source_origin,source_tenant_id,order_type),
- foreign key(source_origin,source_tenant_id) references private.ar_middle_channel_platforms(source_origin,source_tenant_id)
-);
-alter table private.ar_middle_channel_platforms enable row level security;
-alter table private.ar_middle_channel_ingest_credentials enable row level security;
-alter table private.ar_middle_channels enable row level security;
-alter table private.ar_middle_channel_sync_state enable row level security;
-revoke all on private.ar_middle_channel_platforms,private.ar_middle_channel_ingest_credentials,private.ar_middle_channels,private.ar_middle_channel_sync_state from public,anon,authenticated,service_role;
-grant select on private.ar_middle_channel_platforms,private.ar_middle_channel_ingest_credentials to service_role;
-grant select,insert,update on private.ar_middle_channels,private.ar_middle_channel_sync_state to service_role;
+do $baseline$
+begin
+ if not exists(select 1 from pg_proc p where p.oid=to_regprocedure('private.ar_middle_channel_clean_record(jsonb)') and pg_get_userbyid(p.proowner)='postgres' and p.proacl::text='{postgres=X/postgres,service_role=X/postgres}' and p.prosecdef=false and p.provolatile='i' and p.proconfig=ARRAY['search_path=""']::text[] and md5(p.prosrc) in ('92efc5d686b50c250772e9215ba3df26','49a77c062800d42d484669154dc5d913')) then raise exception 'AR_MIDDLE_NATIVE_BASELINE_MISMATCH: private.ar_middle_channel_clean_record';end if;
+ if not exists(select 1 from pg_proc p where p.oid=to_regprocedure('public.ar_middle_channel_ingest(text,jsonb)') and pg_get_userbyid(p.proowner)='postgres' and p.proacl::text='{postgres=X/postgres,service_role=X/postgres}' and p.prosecdef=false and p.provolatile='v' and p.proconfig=ARRAY['search_path=""']::text[] and md5(p.prosrc) in ('16ee8f517301d2e8f3fd1bfba8e0e5ad','5d7452ba7387bddafa22d55d65132414')) then raise exception 'AR_MIDDLE_NATIVE_BASELINE_MISMATCH: public.ar_middle_channel_ingest';end if;
+ if not exists(select 1 from pg_proc p where p.oid=to_regprocedure('private.dashboard_admin_live_channel_status(jsonb)') and pg_get_userbyid(p.proowner)='postgres' and p.proacl::text='{postgres=X/postgres}' and p.prosecdef=true and p.provolatile='s' and p.proconfig=ARRAY['search_path=""']::text[] and md5(p.prosrc) in ('3195fcc2a404e570571a64094e275f3d','814902dbd24fe5dd71c4aa206475b13d')) then raise exception 'AR_MIDDLE_NATIVE_BASELINE_MISMATCH: private.dashboard_admin_live_channel_status';end if;
+end;
+$baseline$;
 
 create or replace function private.ar_middle_channel_clean_record(p_record jsonb)
 returns jsonb language plpgsql immutable security invoker set search_path='' as $clean$
@@ -171,10 +106,8 @@ begin
  notes:=regexp_replace(notes,'(password|passwd|token|secret|cookie|密码|密钥)[[:space:]]*[:=：][^[:space:];；,，]+','[已移除凭据]','gi');
  return r||jsonb_build_object('notes',nullif(btrim(notes),''));
 end $clean$;
-revoke all on function private.ar_middle_channel_clean_record(jsonb) from public,anon,authenticated;
-grant execute on function private.ar_middle_channel_clean_record(jsonb) to service_role;
 
-create function public.ar_middle_channel_ingest(p_token_hash text,p_request jsonb)
+create or replace function public.ar_middle_channel_ingest(p_token_hash text,p_request jsonb)
 returns jsonb language plpgsql security invoker set search_path='' as $ingest$
 declare t timestamptz:=clock_timestamp();origin text;tenant text;sid uuid;captured timestamptz;obs timestamptz;d jsonb;r jsonb;clean jsonb;kind text;time_key text;n integer;total integer:=0;digest text;state private.ar_middle_channel_sync_state;previous private.ar_middle_channels;changed timestamptz;direction_count integer;
  volatile_keys constant text[]:=array['balance','source_updated_at','real_time_weight','success_rate_15m','success_rate_30m','success_rate_1h','success_rate_4h','success_rate_8h','success_rate_24h','success_rate_today','success_rate_total'];
@@ -242,19 +175,8 @@ begin
  end loop;
  return jsonb_build_object('ok',true,'source','ar_middle','accepted',total,'source_count',total,'snapshot_applied',true,'snapshot_id',sid);
 end $ingest$;
-revoke all on function public.ar_middle_channel_ingest(text,jsonb) from public,anon,authenticated;
-grant execute on function public.ar_middle_channel_ingest(text,jsonb) to service_role;
 
-create function private.ar_middle_channel_capabilities(p_platform_id uuid)
-returns jsonb language sql stable security invoker set search_path='' as $cap$
- select case when exists(select 1 from private.ar_middle_channel_platforms b join public.ar_config_targets t on t.source_system='AR' and t.country_code=b.country_code and t.platform=b.native_platform and b.dashboard_platform_id=md5('ar:'||t.country_code||':'||t.platform)::uuid where b.dashboard_platform_id=p_platform_id and b.enabled)
- then jsonb_build_object('channelStatusAvailable',true,'channelStatusSource','ar_middle') else '{}'::jsonb end;
-$cap$;
-revoke all on function private.ar_middle_channel_capabilities(uuid) from public,anon,authenticated,service_role;
-
--- Keep the existing YASH implementation and its semantics byte-for-byte.
-alter function private.dashboard_admin_live_channel_status(jsonb) rename to dashboard_admin_yash_live_channel_status;
-create function private.dashboard_admin_live_channel_status(p_request jsonb)
+create or replace function private.dashboard_admin_live_channel_status(p_request jsonb)
 returns jsonb language plpgsql stable security definer set search_path='' as $reader$
 declare scope jsonb:=private.dashboard_admin_live_scope();access jsonb:=private.dashboard_role_access();can_detail boolean;ids uuid[];providers text[];v_direction text;platform record;binding private.ar_middle_channel_platforms;result jsonb;yash jsonb;snapshots jsonb:='[]'::jsonb;platforms jsonb:='[]'::jsonb;
 begin
@@ -293,25 +215,12 @@ begin
  end loop;
  return jsonb_build_object('version',1,'queriedAt',statement_timestamp(),'basis','source_channel_snapshot','platforms',platforms,'snapshots',snapshots);
 end $reader$;
-revoke all on function private.dashboard_admin_live_channel_status(jsonb),private.dashboard_admin_yash_live_channel_status(jsonb) from public,anon,authenticated,service_role;
-create or replace function public.dashboard_admin_live_channel_status(p_request jsonb)
-returns jsonb language sql stable security definer set search_path='' as $public_reader$ select private.dashboard_admin_live_channel_status(p_request);$public_reader$;
-revoke all on function public.dashboard_admin_live_channel_status(jsonb) from public,anon,authenticated,service_role;
-grant execute on function public.dashboard_admin_live_channel_status(jsonb) to authenticated;
 
--- Add channel capability only to verified existing AR catalog IDs. The other
--- source/order capability expressions and their ACLs remain unchanged.
-do $catalog$
-declare p pg_proc%rowtype;d text;marker text:= $marker$case when p->>'source'='kb' then private.dashboard_admin_yash_capabilities()$marker$;old_acl aclitem[];old_owner oid;
+do $verified$
 begin
- select * into strict p from pg_proc where oid='private.dashboard_admin_live_query_raw(jsonb)'::regprocedure;
- if md5(p.prosrc)<>'9480eb53fa7d7b3fad368ff011b3d41a' or not p.prosecdef or p.provolatile<>'s' or p.proconfig is distinct from array['search_path=""','jit=off'] then raise exception 'AR_MIDDLE_CATALOG_CONTRACT_DRIFT';end if;
- d:=pg_get_functiondef(p.oid);old_acl:=p.proacl;old_owner:=p.proowner;
- if (length(d)-length(replace(d,marker,'')))/length(marker)<>1 then raise exception 'AR_MIDDLE_CATALOG_MARKER_DRIFT';end if;
- d:=replace(d,marker,$replacement$case when p->>'source'='ar' then private.ar_middle_channel_capabilities((p->>'id')::uuid)
-      when p->>'source'='kb' then private.dashboard_admin_yash_capabilities()$replacement$);
- execute d;
- if exists(select 1 from pg_proc where oid=p.oid and (proacl is distinct from old_acl or proowner is distinct from old_owner)) then raise exception 'AR_MIDDLE_CATALOG_ACL_DRIFT';end if;
-end $catalog$;
-notify pgrst,'reload schema';
+ if not exists(select 1 from pg_proc p where p.oid=to_regprocedure('private.ar_middle_channel_clean_record(jsonb)') and pg_get_userbyid(p.proowner)='postgres' and p.proacl::text='{postgres=X/postgres,service_role=X/postgres}' and p.prosecdef=false and p.provolatile='i' and p.proconfig=ARRAY['search_path=""']::text[] and md5(p.prosrc)='49a77c062800d42d484669154dc5d913') then raise exception 'AR_MIDDLE_NATIVE_VERIFY_FAILED: private.ar_middle_channel_clean_record';end if;
+ if not exists(select 1 from pg_proc p where p.oid=to_regprocedure('public.ar_middle_channel_ingest(text,jsonb)') and pg_get_userbyid(p.proowner)='postgres' and p.proacl::text='{postgres=X/postgres,service_role=X/postgres}' and p.prosecdef=false and p.provolatile='v' and p.proconfig=ARRAY['search_path=""']::text[] and md5(p.prosrc)='5d7452ba7387bddafa22d55d65132414') then raise exception 'AR_MIDDLE_NATIVE_VERIFY_FAILED: public.ar_middle_channel_ingest';end if;
+ if not exists(select 1 from pg_proc p where p.oid=to_regprocedure('private.dashboard_admin_live_channel_status(jsonb)') and pg_get_userbyid(p.proowner)='postgres' and p.proacl::text='{postgres=X/postgres}' and p.prosecdef=true and p.provolatile='s' and p.proconfig=ARRAY['search_path=""']::text[] and md5(p.prosrc)='814902dbd24fe5dd71c4aa206475b13d') then raise exception 'AR_MIDDLE_NATIVE_VERIFY_FAILED: private.dashboard_admin_live_channel_status';end if;
+end;
+$verified$;
 commit;
