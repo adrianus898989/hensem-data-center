@@ -51,8 +51,7 @@ create table private.ar_middle_channels (
  is_present boolean not null default true,
  snapshot_id uuid not null,observed_at timestamptz not null,received_at timestamptz not null,
  first_seen_at timestamptz not null,last_seen_at timestamptz not null,config_changed_at timestamptz not null,
- category_key text generated always as (case when order_type='deposit' and channel_data->>'category_id' is not null then 'id:'||(channel_data->>'category_id') else '' end) stored not null,
- primary key(source_origin,source_tenant_id,order_type,channel_id,category_key),
+ primary key(source_origin,source_tenant_id,order_type,channel_id),
  foreign key(source_origin,source_tenant_id) references private.ar_middle_channel_platforms(source_origin,source_tenant_id)
 );
 create index ar_middle_channels_present_idx on private.ar_middle_channels(source_origin,source_tenant_id,order_type,is_present);
@@ -203,7 +202,7 @@ begin
    or jsonb_typeof(d->'records') is distinct from 'array' or exists(select 1 from jsonb_object_keys(d)x where x<>all(array['order_type','observed_at','source_count','fetched_count','complete','page_count','records'])) then raise exception 'AR_MIDDLE_INVALID_SNAPSHOT';end if;
   n:=jsonb_array_length(d->'records');
   if n>10000 or jsonb_typeof(d->'source_count') is distinct from 'number' or jsonb_typeof(d->'fetched_count') is distinct from 'number' or d->>'source_count' !~ '^[0-9]{1,5}$' or d->>'fetched_count' !~ '^[0-9]{1,5}$' or (d->>'source_count')::integer is distinct from n or (d->>'fetched_count')::integer is distinct from n or jsonb_typeof(d->'page_count') is distinct from 'number' or d->>'page_count' !~ '^[0-9]{1,4}$' or (d->>'page_count')::integer not between 1 and 1000 then raise exception 'AR_MIDDLE_INVALID_COUNT';end if;
-  if (select count(distinct (x->>'channel_id',case when kind='deposit' and x->>'category_id' is not null then 'id:'||(x->>'category_id') else '' end)) from jsonb_array_elements(d->'records')x)<>n then raise exception 'AR_MIDDLE_DUPLICATE_KEYS';end if;
+  if (select count(distinct x->>'channel_id') from jsonb_array_elements(d->'records')x)<>n then raise exception 'AR_MIDDLE_DUPLICATE_KEYS';end if;
   if exists(select 1 from jsonb_array_elements(d->'records') with ordinality item(record,position) where jsonb_typeof(item.record->'source_position') is distinct from 'number' or item.record->>'source_position' is distinct from (item.position-1)::text) then raise exception 'AR_MIDDLE_INVALID_SOURCE_POSITION';end if;
   for r in select value from jsonb_array_elements(d->'records') loop
    clean:=private.ar_middle_channel_clean_record(r);
@@ -230,13 +229,13 @@ begin
   kind:=d->>'order_type';obs:=(d->>'observed_at')::timestamptz;n:=jsonb_array_length(d->'records');
   for r in select value from jsonb_array_elements(d->'records') loop
    clean:=private.ar_middle_channel_clean_record(r);
-   select * into previous from private.ar_middle_channels c where c.source_origin=origin and c.source_tenant_id=tenant and c.order_type=kind and c.channel_id=clean->>'channel_id' and c.category_key=(case when kind='deposit' and clean->>'category_id' is not null then 'id:'||(clean->>'category_id') else '' end);
+   select * into previous from private.ar_middle_channels c where c.source_origin=origin and c.source_tenant_id=tenant and c.order_type=kind and c.channel_id=clean->>'channel_id';
    changed:=case when previous.channel_id is null or not previous.is_present or ((previous.channel_data-volatile_keys-'withdrawal_details')||jsonb_build_object('withdrawal_details',coalesce(nullif(previous.channel_data->'withdrawal_details','null'::jsonb),'{}'::jsonb)-withdrawal_volatile_keys)) is distinct from ((clean-volatile_keys-'withdrawal_details')||jsonb_build_object('withdrawal_details',coalesce(nullif(clean->'withdrawal_details','null'::jsonb),'{}'::jsonb)-withdrawal_volatile_keys)) then obs else previous.config_changed_at end;
    insert into private.ar_middle_channels(source_origin,source_tenant_id,order_type,channel_id,channel_data,is_present,snapshot_id,observed_at,received_at,first_seen_at,last_seen_at,config_changed_at)
    values(origin,tenant,kind,clean->>'channel_id',clean,true,sid,obs,t,coalesce(previous.first_seen_at,obs),obs,changed)
-   on conflict(source_origin,source_tenant_id,order_type,channel_id,category_key) do update set channel_data=excluded.channel_data,is_present=true,snapshot_id=excluded.snapshot_id,observed_at=excluded.observed_at,received_at=excluded.received_at,last_seen_at=excluded.last_seen_at,config_changed_at=excluded.config_changed_at;
+   on conflict(source_origin,source_tenant_id,order_type,channel_id) do update set channel_data=excluded.channel_data,is_present=true,snapshot_id=excluded.snapshot_id,observed_at=excluded.observed_at,received_at=excluded.received_at,last_seen_at=excluded.last_seen_at,config_changed_at=excluded.config_changed_at;
   end loop;
-  update private.ar_middle_channels c set is_present=false,snapshot_id=sid,observed_at=obs,received_at=t,config_changed_at=obs where c.source_origin=origin and c.source_tenant_id=tenant and c.order_type=kind and c.is_present and not exists(select 1 from jsonb_array_elements(d->'records')x where x->>'channel_id'=c.channel_id and (case when kind='deposit' and x->>'category_id' is not null then 'id:'||(x->>'category_id') else '' end)=c.category_key);
+  update private.ar_middle_channels c set is_present=false,snapshot_id=sid,observed_at=obs,received_at=t,config_changed_at=obs where c.source_origin=origin and c.source_tenant_id=tenant and c.order_type=kind and c.is_present and not exists(select 1 from jsonb_array_elements(d->'records')x where x->>'channel_id'=c.channel_id);
   insert into private.ar_middle_channel_sync_state(source_origin,source_tenant_id,order_type,snapshot_id,captured_at,observed_at,received_at,source_count,page_count,payload_hash)
   values(origin,tenant,kind,sid,captured,obs,t,n,(d->>'page_count')::integer,digest)
   on conflict(source_origin,source_tenant_id,order_type) do update set snapshot_id=excluded.snapshot_id,captured_at=excluded.captured_at,observed_at=excluded.observed_at,received_at=excluded.received_at,source_count=excluded.source_count,page_count=excluded.page_count,payload_hash=excluded.payload_hash;
@@ -280,12 +279,12 @@ begin
   end if;
   select * into strict binding from private.ar_middle_channel_platforms b where b.dashboard_platform_id=platform.id and b.enabled;
   platforms:=platforms||jsonb_build_array(to_jsonb(platform)||jsonb_build_object('capabilities',private.ar_middle_channel_capabilities(platform.id)));
-  select jsonb_agg(jsonb_build_object('platformId',platform.id,'direction',d.direction,'source','ar_middle','sourceOrigin',binding.source_origin,'sourceTenantId',binding.source_tenant_id,'sourceRowIdentity',case when d.order_type='deposit' then 'category_channel' else null end,
+  select jsonb_agg(jsonb_build_object('platformId',platform.id,'direction',d.direction,'source','ar_middle','sourceOrigin',binding.source_origin,'sourceTenantId',binding.source_tenant_id,
    'snapshotId',s.snapshot_id,'capturedAt',s.captured_at,'observedAt',s.observed_at,'receivedAt',s.received_at,'sourceCount',s.source_count,'staleAfterSeconds',900,'stale',s.observed_at is null or statement_timestamp()-s.observed_at>interval '15 minutes',
    'complete',s.observed_at is not null and s.source_count=(select count(*) from private.ar_middle_channels c where c.source_origin=binding.source_origin and c.source_tenant_id=binding.source_tenant_id and c.order_type=d.order_type and c.is_present)
     and (select count(distinct z.snapshot_id)=1 and count(distinct z.captured_at)=1 and count(distinct z.payload_hash)=1 and count(*)=2 from private.ar_middle_channel_sync_state z where z.source_origin=binding.source_origin and z.source_tenant_id=binding.source_tenant_id)
     and not exists(select 1 from private.ar_middle_channels c where c.source_origin=binding.source_origin and c.source_tenant_id=binding.source_tenant_id and c.order_type=d.order_type and c.is_present and (c.snapshot_id is distinct from s.snapshot_id or c.observed_at is distinct from s.observed_at)),
-   'channels',coalesce((select jsonb_agg((case when can_detail then c.channel_data else c.channel_data-'withdrawal_details' end)||jsonb_build_object('channel_id',c.channel_id,'success_rate_10m',null,'is_present',c.is_present,'snapshot_id',c.snapshot_id,'observed_at',c.observed_at,'received_at',c.received_at,'first_seen_at',c.first_seen_at,'last_seen_at',c.last_seen_at,'config_changed_at',c.config_changed_at) order by c.is_present desc,(c.channel_data->>'source_position')::integer nulls last,c.channel_id,c.category_key)
+   'channels',coalesce((select jsonb_agg((case when can_detail then c.channel_data else c.channel_data-'withdrawal_details' end)||jsonb_build_object('channel_id',c.channel_id,'success_rate_10m',null,'is_present',c.is_present,'snapshot_id',c.snapshot_id,'observed_at',c.observed_at,'received_at',c.received_at,'first_seen_at',c.first_seen_at,'last_seen_at',c.last_seen_at,'config_changed_at',c.config_changed_at) order by c.is_present desc,(c.channel_data->>'source_position')::integer nulls last,c.channel_id)
      from private.ar_middle_channels c where c.source_origin=binding.source_origin and c.source_tenant_id=binding.source_tenant_id and c.order_type=d.order_type and (providers is null or c.channel_data->>'provider'=any(providers))),'[]'::jsonb)) order by d.direction) into result
   from (values('deposit','charge'),('withdrawal','withdraw'))d(order_type,direction)
   left join private.ar_middle_channel_sync_state s on s.source_origin=binding.source_origin and s.source_tenant_id=binding.source_tenant_id and s.order_type=d.order_type

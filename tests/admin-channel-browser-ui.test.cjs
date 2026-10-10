@@ -22,6 +22,46 @@ const headers=html=>[...html.matchAll(/<th[^>]*scope="col"[^>]*>([^<]*)<\/th>/g)
 const firstTableRow=html=>{const names=headers(html),body=html.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1]||'',row=body.match(/<tr\b[^>]*>([\s\S]*?)<\/tr>/)?.[1]||'',values=[...row.matchAll(/<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)>/g)].map(m=>m[1].replace(/<[^>]+>/g,''));assert.equal(values.length,names.length);return Object.fromEntries(names.map((name,i)=>[name,values[i]]));};
 const exported=h=>{const rows=h.mod.exportRows(),header=rows[3];return rows.slice(4).map(row=>Object.fromEntries(header.map((name,i)=>[name,row[i]])));};
 
+function categoryRowsResponse(rows,p=AR){
+ const data=response(p,[]),s=data.snapshots.find(x=>x.direction==='charge');
+ Object.assign(s,{sourceRowIdentity:'category_channel',sourceCount:rows.filter(r=>r.is_present!==false).length,channels:rows});
+ return data;
+}
+
+test('AR recharge preserves native category-channel rows, category-specific values and filtering',async()=>{
+ const rows=[channel('same',{category_id:'upi',category_name:'UPI',weight:'10',source_position:0}),channel('same',{category_id:'qr',category_name:'QR 大类',weight:'25',source_position:1})];
+ const h=fixture({handler:()=>categoryRowsResponse(rows)});await h.start();
+ assert.equal(h.mod.canExport(),true);assert.equal(exported(h).length,2);
+ assert.deepEqual(JSON.parse(JSON.stringify(exported(h).map(r=>[r['通道 ID'],r['通道大类 ID'],r['权重']]))),[['same','upi','10'],['same','qr','25']]);
+ assert.equal(firstTableRow(h.mod.render())['充值大类'],'UPI');
+ assert.match(h.mod.render(),/QR 大类 \(1\)/);assert.match(h.mod.render(),/UPI \(1\)/);
+ h.context.liveChannelCategory('qr');assert.equal(exported(h).length,1);
+ assert.equal(firstTableRow(h.mod.render())['充值大类'],'QR 大类');assert.equal(exported(h)[0]['权重'],'25');
+ assert.equal(exported(h)[0]['全部大类 ID'],'upi / qr');
+ const saved=h.mod.capture();h.mod.clear();h.mod.restore(saved);h.mod.render();
+ assert.equal(exported(h).length,1);assert.equal(exported(h)[0]['通道大类 ID'],'qr');
+});
+
+test('AR recharge distinguishes unknown and zero category while rejecting true duplicate rows',async()=>{
+ const rows=[channel('same',{category_id:null,category_name:null,channel_categories:[],source_position:0}),channel('same',{category_id:'0',category_name:'Zero',channel_categories:[],source_position:1})];
+ const h=fixture({handler:()=>categoryRowsResponse(rows)});await h.start();assert.equal(exported(h).length,2);
+ h.context.liveChannelCategory('0');assert.equal(exported(h).length,1);assert.equal(exported(h)[0]['通道大类 ID'],'0');
+ for(const duplicate of [channel('same',{category_id:null}),channel('same',{category_id:undefined})]){
+  const bad=fixture({handler:()=>categoryRowsResponse([rows[0],duplicate])});await bad.start();
+  assert.equal(bad.mod.canExport(),false);assert.match(bad.mod.render(),/通道身份缺失或重复/);
+ }
+});
+
+test('category-channel identity never relaxes withdrawal or YASH channel uniqueness',async()=>{
+ const rows=[channel('same',{category_id:'upi'}),channel('same',{category_id:'qr',source_position:1})];
+ for(const direction of ['charge','withdraw']){
+  const p=direction==='charge'?YASH:AR;
+  const data=response(p,[]);Object.assign(data.snapshots.find(s=>s.direction===direction),{sourceCount:2,channels:rows});
+  const h=fixture({catalog:[p],handler:()=>data});await h.start();
+  assert.equal(h.mod.canExport(),false);assert.match(h.mod.render(),/通道身份缺失或重复/);
+ }
+});
+
 test('AR withdrawal follows the requested seventeen columns, exact decimals, two counts and disabled source actions',async()=>{
  const details={source_tenant_name:'6club',balance_updated_at:NOW,today_submit_count:0,recent_1h_success_count:42,merchant_name:'Native merchant',merchant_code:'MCH-0',third_channel_code:'WD-X',is_use_channel_code:true,is_fixed_channel_code:true,system_category_id:'0',system_category_name:'BANK',third_pay_api_url:'https://gateway.example/withdraw',notify_white_ips:['192.0.2.1','2001:db8::/32'],last_update_by:'<admin>',last_updated_at:NOW};
  const row=channel('native',{sys_channel_id:'22',source_channel_name:'Native Bank',channel_name:'Bank outgoing',provider:'QPAY',balance:'-2.51234567',weight:'100.12345678',min_amount:'0.00000001',max_amount:'50000.5000',balance_threshold:'0.00000002',notes:'<img src=x onerror=alert(1)>',withdrawal_details:details}),h=fixture({handler:()=>response(AR,[row])});await h.start();h.context.liveChannelTab('withdraw');const html=h.mod.render(),cells=firstTableRow(html);

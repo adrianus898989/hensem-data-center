@@ -41,7 +41,7 @@ PATHS = {"deposit": "/api/RechargeChannel/GetCategoryChannelPageList",
 DICTIONARY_PATHS = {"dynamic": "/api/Common/GetDynamicDictionary", "common": "/api/Common/GetDictionary"}
 DYNAMIC_DICTIONARY_KEYS = ("sysPayChannelList", "thirdPayMerchantList", "tenantList")
 INTERVAL = 300
-COLLECTOR_VERSION = "2026-10-10-auth-guard-1"
+COLLECTOR_VERSION = "2026-10-10-category-rows-1"
 MAX_PAGES = 1000
 MAX_RESPONSE = 16 * 1024 * 1024
 UNSAFE_DISPLAY_TEXT = re.compile(r"[a-z][a-z0-9+.-]*://|(?:javascript|data):|<[^>]*>|\bbearer\s+\S+|(?:\b(?:token|password|passwd|secret|authorization|api[_-]?key|access_token|cookie)|密码|密钥)\s*[:=：]", re.IGNORECASE)
@@ -473,6 +473,30 @@ def source_channel_name(system_channel):
     return names[0] if names and len(set(names)) == 1 else None
 
 
+def resolve_row_category(row, category=None):
+    """Use the real native primary category; zero and unknown are distinct."""
+    own_category, category = row.get("channelCategory") or {}, category or {}
+    if not isinstance(own_category, dict) or not isinstance(category, dict):
+        raise SyncError("SOURCE_CATEGORY_INVALID")
+    own_id = metadata_id(own_category["categoryId"]) if own_category.get("categoryId") is not None else None
+    group_id = metadata_id(category["categoryId"]) if category.get("categoryId") is not None else None
+    if own_id is not None and group_id is not None and own_id != group_id:
+        raise SyncError("SOURCE_CATEGORY_MISMATCH")
+    category_id = own_id if own_id is not None else group_id
+    category_name = optional_metadata_name(own_category.get("categoryName") or category.get("customName"))
+    return category_id, category_name, own_category, category
+
+
+def source_row_error(code, order_type, page_no, identity):
+    """Only validated native IDs and local request facts may enter a log."""
+    if order_type == "deposit":
+        category_id, channel_id = identity
+        category_id = category_id if category_id is not None else "unknown"
+    else:
+        channel_id, category_id = identity, "not_applicable"
+    return SyncError(f"{code} direction={order_type} page={page_no} channel_id={channel_id} category_id={category_id}")
+
+
 def normalize_record(row, tenant_id, position, category=None, *, order_type=None, dictionaries=None):
     if not isinstance(row, dict) or native_id(row.get("tenantId"), "SOURCE_TENANT_ID_INVALID") != str(tenant_id):
         raise SyncError("SOURCE_TENANT_MISMATCH")
@@ -480,17 +504,10 @@ def normalize_record(row, tenant_id, position, category=None, *, order_type=None
     channel_name = safe_text(row.get("customName"))
     if not channel_name:
         raise SyncError("SOURCE_CHANNEL_NAME_MISSING")
-    own_category = row.get("channelCategory") or {}
+    category_id, category_name, own_category, category = resolve_row_category(row, category)
     system_channel = row.get("sysChannel") or {}
-    if not isinstance(own_category, dict) or not isinstance(system_channel, dict):
+    if not isinstance(system_channel, dict):
         raise SyncError("SOURCE_CATEGORY_INVALID")
-    category = category or {}
-    own_id = own_category.get("categoryId")
-    group_id = category.get("categoryId")
-    if own_id is not None and group_id is not None and metadata_id(own_id) != metadata_id(group_id):
-        raise SyncError("SOURCE_CATEGORY_MISMATCH")
-    category_id = own_id if own_id is not None else group_id
-    category_name = optional_metadata_name(own_category.get("categoryName") or category.get("customName"))
     source_state = safe_text(row.get("state"))
     channel_state = safe_text(row.get("channelState"))
     merchant_state = safe_text(row.get("merchantState"))
@@ -576,13 +593,18 @@ def page_rows(response, order_type, page_no, tenant_id, page_size):
     expected = 0 if total == 0 else min(page_size, total - (page_no - 1) * page_size)
     if len(records) != expected:
         raise SyncError("SOURCE_PAGE_INCOMPLETE")
-    ids = []
-    for row, _category in records:
+    ids, seen = [], set()
+    for row, category in records:
         if not isinstance(row, dict) or native_id(row.get("tenantId"), "SOURCE_TENANT_ID_INVALID") != str(tenant_id):
             raise SyncError("SOURCE_TENANT_MISMATCH")
-        ids.append(native_id(row.get("id"), "SOURCE_CHANNEL_ID_INVALID"))
-    if len(ids) != len(set(ids)):
-        raise SyncError("SOURCE_PAGE_DUPLICATE_CHANNEL")
+        channel_id = native_id(row.get("id"), "SOURCE_CHANNEL_ID_INVALID")
+        # Native recharge row-key is categoryId-channelId; its per-category
+        # sort/configuration must survive rather than collapse into one row.
+        identity = (resolve_row_category(row, category)[0], channel_id) if order_type == "deposit" else channel_id
+        if identity in seen:
+            raise source_row_error("SOURCE_PAGE_DUPLICATE_CHANNEL", order_type, page_no, identity)
+        seen.add(identity)
+        ids.append(identity)
     return total, pages, records, tuple(ids)
 
 
@@ -599,7 +621,8 @@ def collect_direction(source, tenant_id, order_type, page_size=300, dictionaries
             if (current_total, current_pages) != (total, pages):
                 raise SyncError("SOURCE_TOTAL_DRIFT")
         if ids and (ids in fingerprints or seen_ids.intersection(ids)):
-            raise SyncError("SOURCE_PAGINATION_DUPLICATE")
+            repeated = next((identity for identity in ids if identity in seen_ids), ids[0])
+            raise source_row_error("SOURCE_PAGINATION_DUPLICATE", order_type, page_no, repeated)
         fingerprints.add(ids)
         seen_ids.update(ids)
         for row, group in raw_rows:
@@ -608,6 +631,9 @@ def collect_direction(source, tenant_id, order_type, page_size=300, dictionaries
     final_response = source.fetch(order_type, request_payload(tenant_id, 1, page_size))
     confirmed_total, confirmed_pages, _rows, confirmed_ids = page_rows(final_response, order_type, 1, tenant_id, page_size)
     if (confirmed_total, confirmed_pages, confirmed_ids) != (total, pages, first_ids):
+        changed = next((identity for i, identity in enumerate(confirmed_ids) if i >= len(first_ids) or identity != first_ids[i]), None)
+        if changed is not None:
+            raise source_row_error("SOURCE_FINAL_CONFIRMATION_DRIFT", order_type, 1, changed)
         raise SyncError("SOURCE_FINAL_CONFIRMATION_DRIFT")
     observed_at = utc_now()  # The final source verification has actually completed.
     if len(records) != total or len(seen_ids) != total:

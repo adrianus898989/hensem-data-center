@@ -122,9 +122,13 @@ export function validateArMiddleChannelRequest(input: unknown, now = Date.now())
     const records = value.records.map((entry, position) => {
       if (!object(entry)) invalid();
       only(entry, RECORD_FIELDS);
-      if (!text(entry.channel_id) || seen.has(entry.channel_id) || !text(entry.channel_name) || !text(entry.status_text) || entry.source_position !== position) invalid();
-      seen.add(entry.channel_id);
+      if (!text(entry.channel_id) || !text(entry.channel_name) || !text(entry.status_text) || entry.source_position !== position) invalid();
       for (const field of TEXT_FIELDS) if (entry[field] != null && !text(entry[field])) invalid();
+      // The native recharge table identifies a row by category + channel.
+      // Withdrawal channels retain their original channel-only identity.
+      const rowKey = JSON.stringify([entry.channel_id, value.order_type === "deposit" ? entry.category_id ?? null : null]);
+      if (seen.has(rowKey)) invalid();
+      seen.add(rowKey);
       if (entry.source_channel_name != null && !sourceLabel(entry.source_channel_name)) invalid();
       categories(entry.channel_categories);
       withdrawalDetails(entry.withdrawal_details, value.order_type, now);
