@@ -80,12 +80,13 @@
 .channel-ar-source-table tbody tr:nth-child(even)>:is(th,td){background:#f8faff}
 .channel-ar-source-table .channel-provider{position:static;left:auto;width:auto;box-shadow:none}
 .channel-ar-source-table thead .channel-provider{position:sticky;top:0;z-index:3}
-.channel-ar-charge-table :is(.channel-category,.channel-compact-state,.channel-id,.channel-provider){position:sticky;z-index:2;background:#fff}
+.channel-ar-charge-table :is(.channel-category,.channel-compact-state,.channel-id,.channel-provider,.channel-display-name){position:sticky;z-index:2;background:#fff}
 .channel-ar-charge-table .channel-category{left:0}
 .channel-ar-charge-table .channel-compact-state{left:115px}
 .channel-ar-charge-table .channel-id{left:255px}
-.channel-ar-charge-table .channel-provider{left:355px;width:auto;border-right-color:#cbd8eb;box-shadow:2px 0 3px #15274c12}
-.channel-ar-charge-table thead :is(.channel-category,.channel-compact-state,.channel-id,.channel-provider){z-index:5;background:#f3f6fc}
+.channel-ar-charge-table .channel-provider{left:355px;width:auto;border-right-color:#e3eaf5;box-shadow:none}
+.channel-ar-charge-table .channel-display-name{left:485px;width:180px;border-right-color:#cbd8eb;box-shadow:2px 0 3px #15274c12}
+.channel-ar-charge-table thead :is(.channel-category,.channel-compact-state,.channel-id,.channel-provider,.channel-display-name){z-index:5;background:#f3f6fc}
 .channel-category{text-align:left!important}
 .channel-category strong,.channel-identity strong,.channel-display-name strong{display:block;font-weight:600}
 .channel-category small,.channel-display-name small,.channel-limits small,.channel-compact-balance small{display:block;color:#8592a7;font-size:10px;margin-top:3px;line-height:1.4}
@@ -112,9 +113,6 @@
 .channel-builtin-category{display:inline-block;padding:1px 6px;border:1px solid #b9dfce;border-radius:3px;background:#eefaf4;color:#25885f;font-size:11px}
 .channel-ar-withdraw-table :is(.channel-category,.channel-compact-state,.channel-id){position:static;left:auto;box-shadow:none}
 .channel-ar-withdraw-table thead :is(.channel-category,.channel-compact-state,.channel-id){position:sticky;top:0;z-index:3}
-.channel-ar-withdraw-table .channel-tenant{position:sticky;left:0;z-index:2;background:#fff;border-right-color:#cbd8eb;box-shadow:2px 0 3px #15274c12;text-align:center}
-.channel-ar-withdraw-table thead .channel-tenant{top:0;z-index:5;background:#f3f6fc}
-.channel-tenant-label{display:inline-block;max-width:100%;padding:2px 7px;border:1px solid #1677ff;border-radius:3px;color:#1677ff;background:#e6f4ff;font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
 .channel-ar-withdraw-table :is(.channel-withdraw-name,.channel-withdraw-id,.channel-withdraw-gateway,.channel-withdraw-update){text-align:left}
 .channel-ar-withdraw-table .channel-compact-state{text-align:left}
 .channel-ar-withdraw-table .channel-switch-line{justify-content:flex-start}
