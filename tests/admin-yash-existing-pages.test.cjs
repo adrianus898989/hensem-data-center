@@ -31,9 +31,12 @@ test('KB exports retain completion semantics and never inherit the DUOLI update-
  const h=harness({platforms:[KB],roleAllowed:()=>true});await settle();scope(h);show(h);const row={cells:[{innerText:'成功金额'},{innerText:'600.00'}],closest:()=>null};h.nodes.get('page').querySelectorAll=()=>[{closest:()=>null,querySelectorAll:()=>[row]}];h.c.liveExport();assert.equal(h.blobs.length,1);const csv=await h.blobs[0].text();assert.match(csv,/KB成功按成功状态＋源订单完成时间统计/);assert.match(csv,/不代表银行到账时效/);assert.doesNotMatch(csv,/多利成功/);
 });
 
-test('KB order support does not invent workorders or submission-risk statistics',async()=>{
+test('KB workorders stay unavailable while only the exact native YASH submission identity can query',async()=>{
  const h=harness({platforms:[KB],page:'providers'});await settle();scope(h);await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='workorders').length,0);assert.equal(h.L.workordersUnsupported,true);
- const risk=harness({platforms:[KB],page:'events',submission:true});await settle();scope(risk);await risk.c.liveQuery();await settle();assert.equal(risk.calls.filter(q=>q.action==='submissionAnalysis'||q.action==='submissionStreaks').length,0);assert.match(risk.html(),/YASH\.BET：暂无此统计/);
+ const risk=harness({platforms:[KB],page:'events',submission:true});await settle();scope(risk);await risk.c.liveQuery();await settle();const calls=risk.calls.filter(q=>q.action==='submissionAnalysis');assert.equal(calls.length,1);assert.equal(calls[0].platformId,KB.id);assert.equal(calls[0].operation,'summary');assert.equal(calls[0].startAt,'2026-09-21T18:30:00.000Z');assert.equal(calls[0].endAt,'2026-09-22T18:30:00.000Z');assert.doesNotMatch(risk.html(),/YASH\.BET：暂无此统计/);
+ for(const patch of [{sourceName:'OTHER_KB'},{sourceName:'yash.bet'},{scopeGroup:'BR'}]){
+  const blocked=harness({platforms:[{...KB,...patch}],page:'events',submission:true});await settle();scope(blocked);await blocked.c.liveQuery();await settle();assert.equal(blocked.calls.filter(q=>q.action==='submissionAnalysis'||q.action==='submissionStreak').length,0);assert.match(blocked.html(),/YASH\.BET：暂无此统计/);
+ }
 });
 
 test('KB success analysis shows both real success cohorts while workorders remain unavailable',()=>{
