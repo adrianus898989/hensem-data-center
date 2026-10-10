@@ -270,10 +270,11 @@ class AutoLoginSource(sync.Source):
         try:
             result = super().fetch_readonly_path(path, payload)
         except sync.SyncError as exc:
-            if not self.login.enabled or str(exc) not in ("CDP_SOURCE_REQUEST_FAILED", "SOURCE_SESSION_REQUIRED", "SOURCE_SESSION_EXPIRED", "SOURCE_SESSION_INVALID", "HTTP_STATUS_401"):
+            if not self.login.enabled or str(exc) not in ("CDP_SOURCE_REQUEST_FAILED", "SOURCE_SESSION_REQUIRED", "SOURCE_SESSION_EXPIRED", "SOURCE_SESSION_INVALID", "HTTP_STATUS_401", "SOURCE_BROWSER_LOGIN_REQUIRED", "SOURCE_BROWSER_SESSION_EXPIRED"):
                 raise
+            explicit_browser_auth = str(exc) in ("SOURCE_BROWSER_LOGIN_REQUIRED", "SOURCE_BROWSER_SESSION_EXPIRED")
             state = self.login.state()
-            if state not in ("login_form", "expired_dialog", "session_expired"):
+            if not explicit_browser_auth and state not in ("login_form", "expired_dialog", "session_expired"):
                 raise
             self.login.ensure()
         else:
