@@ -8,6 +8,8 @@ import json
 import logging
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -521,7 +523,9 @@ class RestartAndConfigurationTests(unittest.TestCase):
         self.assertEqual(C.resume_pending(restarted, failed_upload, self.logger), 1)
         self.assertEqual(restarted.pending(), [payload])
         good_upload = mock.Mock()
-        self.assertEqual(C.resume_pending(restarted, good_upload, self.logger), 0)
+        retry_logger = mock.Mock()
+        self.assertEqual(C.resume_pending(restarted, good_upload, retry_logger), 0)
+        retry_logger.info.assert_called_once_with("UPLOAD_RETRY_CONFIRMED tenant=%s snapshot=%s original_captured_at=%s", payload["source_tenant_id"], payload["snapshot_id"], payload["captured_at"])
         self.assertEqual(restarted.pending(), [])
         retained = restarted.db.execute("SELECT payload FROM snapshots WHERE tenant_id='1102'").fetchone()
         self.assertIsNotNone(retained)
@@ -617,7 +621,8 @@ class RestartAndConfigurationTests(unittest.TestCase):
         self.assertEqual(sent["method"], "Runtime.evaluate")
         expression = sent["params"]["expression"]
         self.assertIn("localStorage.getItem('ACCESS-TOKEN')", expression)
-        self.assertEqual(expression.count("location.origin !== origin"), 2)
+        self.assertIn("const assertAuthenticated = () =>", expression)
+        self.assertEqual(expression.count("assertAuthenticated();"), 3)
         self.assertIn("await response.text()", expression)
         self.assertIn("return text", expression)
         self.assertIn("new AbortController()", expression)
@@ -688,6 +693,117 @@ class RestartAndConfigurationTests(unittest.TestCase):
             session_path.write_text(json.dumps({"value": "refreshed-test-value", "expire": 4102444800000}))
             self.assertEqual(C.source_bearer({"session_file": str(session_path)}), "Bearer refreshed-test-value")
         self.assertNotIn("ephemeral-test-value", SOURCE_FILE.read_text())
+
+
+class SourceFactoryAndAuthenticationTests(unittest.TestCase):
+    def test_enabled_factory_loads_login_source_and_disabled_never_imports_it(self):
+        factory = mock.Mock(return_value=object())
+        with mock.patch.dict(C.sys.modules, {"ar_middle_browser_login": SimpleNamespace(AutoLoginSource=factory)}), mock.patch.object(C, "Source") as plain:
+            enabled = {"auto_login": {"enabled": True}}
+            self.assertIs(C.create_source(enabled), factory.return_value)
+            factory.assert_called_once_with(enabled)
+            plain.assert_not_called()
+            self.assertIs(C.create_source({"auto_login": {"enabled": False}}), plain.return_value)
+        for settings in ({"enabled": "true"}, {"enabled": 1}, [], "private-invalid-value"):
+            with self.assertRaisesRegex(C.SyncError, "AUTO_LOGIN_CONFIG_INVALID"):
+                C.create_source({"auto_login": settings})
+
+    def test_standalone_factory_shares_core_module_identity_and_rejects_conflicting_module(self):
+        factory = mock.Mock(return_value=object())
+        with mock.patch.object(C, "__name__", "__main__"), mock.patch.dict(C.sys.modules, {"__main__": C, "ar_middle_browser_login": SimpleNamespace(AutoLoginSource=factory)}):
+            C.sys.modules.pop("ar_middle_channel_sync", None)
+            C.create_source({"auto_login": {"enabled": True}})
+            self.assertIs(C.sys.modules["ar_middle_channel_sync"], C)
+            C.sys.modules["ar_middle_channel_sync"] = object()
+            with self.assertRaisesRegex(C.SyncError, "AUTO_LOGIN_CORE_MODULE_CONFLICT"):
+                C.create_source({"auto_login": {"enabled": True}})
+            self.assertEqual(factory.call_count, 1)
+
+    def test_every_cli_read_mode_uses_one_injected_factory_and_one_shared_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = {"_state_dir": Path(directory), "auto_login": {"enabled": True}, "page_size": 300,
+                      "interval_seconds": 300, "targets": [{"enabled": True, "tenant_id": "1102"}]}
+            for mode in ("check", "once", "loop"):
+                source, upload, logger = mock.Mock(), mock.Mock(), mock.Mock()
+                source.fetch.return_value = page("deposit", 1, 0, [], pages=0)
+                factory = mock.Mock(return_value=source)
+                with mock.patch.object(C, "load_config", return_value=config), mock.patch.object(C, "make_logger", return_value=logger), \
+                     mock.patch.object(C, "create_source") as fallback, mock.patch.object(C, "Upload", return_value=upload), \
+                     mock.patch.object(C, "StateStore"), mock.patch.object(C, "run_cycle", return_value=0) as cycle, \
+                     mock.patch.object(C.time, "sleep", side_effect=KeyboardInterrupt), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(C.main(["--" + mode, "--dry-run"], source_factory=factory), 130 if mode == "loop" else 0)
+                factory.assert_called_once_with(config)
+                fallback.assert_not_called()
+                if mode == "check":
+                    self.assertEqual(source.fetch.call_count, 2)
+                else:
+                    self.assertIs(cycle.call_args.args[1], source)
+                self.assertEqual(logger.info.call_args_list[0].args[2], mode)
+
+    def test_startup_log_reports_only_version_mode_port_and_flags(self):
+        logger = mock.Mock()
+        config = {"cdp_url": "http://127.0.0.1:9777", "upload_key": "fictional-upload-private", "session_file": "fictional-private-session",
+                  "auto_login": {"enabled": True, "username": "fictional-user-private", "password": "fictional-password-private", "totp_secret": "fictional-seed-private"}}
+        C.log_startup(logger, config, "loop", dry_run=True)
+        self.assertEqual(logger.info.call_args.args[1:], (C.COLLECTOR_VERSION, "loop", 9777, True, True))
+        self.assertNotIn("fictional", str(logger.info.call_args))
+        self.assertNotIn("127.0.0.1", str(logger.info.call_args))
+
+    def test_authentication_failure_cannot_replace_a_complete_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = C.StateStore(Path(directory))
+            previous = {"source_tenant_id": "1102", "snapshot_id": "old-complete", "captured_at": "2026-10-09T00:00:00Z", "directions": []}
+            store.save_complete(previous)
+            store.acknowledge(previous)
+            empty = page("deposit", 1, 0, [], pages=0)
+            logger = mock.Mock()
+            source = SequenceSource([empty, empty, C.SyncError("SOURCE_BROWSER_LOGIN_REQUIRED")])
+            upload = mock.Mock()
+            self.assertEqual(C.run_cycle({"targets": [{"tenant_id": "1102", "enabled": True}], "page_size": 2}, source, upload, store, logger), 1)
+            upload.apply.assert_not_called()
+            logger.info.assert_not_called()
+            retained = json.loads(store.db.execute("select payload from snapshots where tenant_id='1102'").fetchone()[0])
+            self.assertEqual(retained, previous)
+            store.close()
+
+    def test_cdp_auth_errors_are_public_codes_without_exception_text(self):
+        source = C.Source({"cdp_url": "http://127.0.0.1:9777"})
+        target = {"id": "fixture", "type": "page", "url": C.ORIGIN + "/login", "webSocketDebuggerUrl": "ws://127.0.0.1:9777/devtools/page/fixture"}
+        for public in ("SOURCE_BROWSER_LOGIN_REQUIRED", "SOURCE_BROWSER_SESSION_EXPIRED", "SOURCE_SESSION_INVALID", "SOURCE_ORIGIN_MISMATCH", "OTHER_PRIVATE_ERROR fictional-private-value"):
+            websocket = mock.Mock()
+            websocket.receive.return_value = json.dumps({"id": 1, "result": {"exceptionDetails": {"exception": {"description": "Error: " + public + "\nprivate stack"}}}}).encode()
+            with mock.patch.object(C, "http_json", return_value=[target]), mock.patch.object(C, "WebSocket", return_value=websocket), self.assertRaises(C.SyncError) as error:
+                source.fetch_in_browser("deposit", C.request_payload("1102", 1, 300))
+            self.assertEqual(str(error.exception), "CDP_SOURCE_REQUEST_FAILED" if public.startswith("OTHER") else public)
+            self.assertTrue(websocket.close.called)
+
+    @unittest.skipUnless(shutil.which("node") or Path("/Users/jun/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node").is_file(), "Node runtime unavailable")
+    def test_actual_browser_read_guard_rejects_login_and_expiry_before_and_during_read(self):
+        source = C.Source({"cdp_url": "http://127.0.0.1:9777"})
+        target = {"id": "fixture", "type": "page", "url": C.ORIGIN + "/finance/recharge", "webSocketDebuggerUrl": "ws://127.0.0.1:9777/devtools/page/fixture"}
+        websocket = mock.Mock()
+        websocket.receive.return_value = json.dumps({"id": 1, "result": {"result": {"value": '{"code":0}'}}}).encode()
+        with mock.patch.object(C, "http_json", return_value=[target]), mock.patch.object(C, "WebSocket", return_value=websocket):
+            source.fetch_in_browser("deposit", C.request_payload("1102", 1, 300))
+        expression = json.loads(websocket.send.call_args.args[0])["params"]["expression"]
+        harness = r"""
+const vm=require('node:vm'),fs=require('node:fs');const {expression,mode}=JSON.parse(fs.readFileSync(0,'utf8'));
+let fetches=0,bodies=0,expired=mode==='expired',hidden=mode==='hidden';
+const location={origin:'https://m8-admin.payplatform-manager.com',pathname:mode==='login'?'/login':'/finance/recharge'};
+const document={querySelectorAll:()=>expired||hidden?[{getClientRects:()=>hidden?[]:[{}],textContent:'登录身份已失效，请重新登录!'}]:[]};
+const mutate=()=>{if(mode.includes('login'))location.pathname='/login';if(mode.includes('expiry'))expired=true;};
+const context={location,document,getComputedStyle:()=>({visibility:'visible'}),localStorage:{getItem:()=>JSON.stringify({value:'fictional-browser-token',expire:4102444800000})},
+Date,JSON,AbortController,setTimeout:()=>1,clearTimeout:()=>{},fetch:async()=>{fetches++;if(mode.startsWith('fetch-'))mutate();return {ok:true,text:async()=>{bodies++;if(mode.startsWith('body-'))mutate();return '{"code":0}';}}}};
+vm.createContext(context);Promise.resolve(vm.runInContext(expression,context)).then(value=>process.stdout.write(JSON.stringify({code:'OK',fetches,bodies}))).catch(error=>process.stdout.write(JSON.stringify({code:error.message,fetches,bodies})));
+"""
+        node = shutil.which("node") or "/Users/jun/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node"
+        for mode, code, fetches, bodies in (("login", "SOURCE_BROWSER_LOGIN_REQUIRED", 0, 0), ("expired", "SOURCE_BROWSER_SESSION_EXPIRED", 0, 0),
+                                          ("fetch-login", "SOURCE_BROWSER_LOGIN_REQUIRED", 1, 0), ("fetch-expiry", "SOURCE_BROWSER_SESSION_EXPIRED", 1, 0),
+                                          ("body-login", "SOURCE_BROWSER_LOGIN_REQUIRED", 1, 1), ("body-expiry", "SOURCE_BROWSER_SESSION_EXPIRED", 1, 1),
+                                          ("normal", "OK", 1, 1), ("hidden", "OK", 1, 1)):
+            result = subprocess.run([node, "-e", harness], input=json.dumps({"expression": expression, "mode": mode}), text=True, capture_output=True, timeout=10, check=True)
+            with self.subTest(mode=mode):
+                self.assertEqual(json.loads(result.stdout), {"code": code, "fetches": fetches, "bodies": bodies})
 
 
 if __name__ == "__main__":

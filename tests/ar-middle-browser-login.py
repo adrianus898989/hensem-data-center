@@ -271,6 +271,30 @@ class SourceRecoveryTests(unittest.TestCase):
         self.assertEqual(fetch.call_count, 2)
         self.assertEqual(self.login.failures, 1)
 
+    def test_precise_login_or_expiry_guard_recovers_then_reads_fresh_response_once(self):
+        for code, state in (("SOURCE_BROWSER_LOGIN_REQUIRED", "login_form"), ("SOURCE_BROWSER_SESSION_EXPIRED", "expired_dialog"), ("SOURCE_BROWSER_LOGIN_REQUIRED", "authenticated")):
+            fresh = {"code": 0, "data": {"fresh": True}}
+            with mock.patch.object(S.Source, "fetch_readonly_path", side_effect=[S.SyncError(code), fresh]) as fetch, \
+                 mock.patch.object(self.login, "state", return_value=state), mock.patch.object(self.login, "ensure", return_value=True) as ensure:
+                self.assertIs(self.source.fetch("deposit", S.request_payload("1102", 1, 300)), fresh)
+            ensure.assert_called_once_with()
+            self.assertEqual(fetch.call_count, 2)
+        with mock.patch.object(S.Source, "fetch_readonly_path", side_effect=S.SyncError("SOURCE_BROWSER_LOGIN_REQUIRED")) as fetch, \
+             mock.patch.object(self.login, "state", return_value="login_form"), mock.patch.object(self.login, "ensure", return_value=True):
+            with self.assertRaisesRegex(S.SyncError, "SOURCE_BROWSER_LOGIN_REQUIRED"):
+                self.source.fetch("withdrawal", S.request_payload("1102", 1, 300))
+        self.assertEqual(fetch.call_count, 2)
+
+    def test_disabled_login_guard_waits_without_attempting_login_or_accepting_old_success(self):
+        source = M.AutoLoginSource(config(False))
+        for code in ("SOURCE_BROWSER_LOGIN_REQUIRED", "SOURCE_BROWSER_SESSION_EXPIRED"):
+            with mock.patch.object(S.Source, "fetch_readonly_path", side_effect=S.SyncError(code)), \
+                 mock.patch.object(source.login, "state") as state, mock.patch.object(source.login, "ensure") as ensure:
+                with self.assertRaisesRegex(S.SyncError, code):
+                    source.fetch("withdrawal", S.request_payload("1102", 1, 300))
+            state.assert_not_called()
+            ensure.assert_not_called()
+
     def test_disabled_login_retains_source_failure_and_never_evaluates_browser(self):
         source = M.AutoLoginSource(config(False))
         with mock.patch.object(S.Source, "fetch_readonly_path", return_value={"code": 4}), mock.patch.object(source.login, "ensure") as ensure:

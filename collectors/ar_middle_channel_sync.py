@@ -3,7 +3,8 @@
 
 Run --init once, set AR_MIDDLE_BEARER and AR_MIDDLE_UPLOAD_KEY privately,
 then --check / --once / --loop (every 300 seconds by default; legacy 600-second
-configuration is supported). No login, channel editing or payment APIs.
+configuration is supported). Optional browser login recovery uses the native
+login form; channel editing and payment APIs are never called.
 All local configuration, logs and restart state live in one data directory.
 """
 from __future__ import annotations
@@ -40,6 +41,7 @@ PATHS = {"deposit": "/api/RechargeChannel/GetCategoryChannelPageList",
 DICTIONARY_PATHS = {"dynamic": "/api/Common/GetDynamicDictionary", "common": "/api/Common/GetDictionary"}
 DYNAMIC_DICTIONARY_KEYS = ("sysPayChannelList", "thirdPayMerchantList", "tenantList")
 INTERVAL = 300
+COLLECTOR_VERSION = "2026-10-10-auth-guard-1"
 MAX_PAGES = 1000
 MAX_RESPONSE = 16 * 1024 * 1024
 UNSAFE_DISPLAY_TEXT = re.compile(r"[a-z][a-z0-9+.-]*://|(?:javascript|data):|<[^>]*>|\bbearer\s+\S+|(?:\b(?:token|password|passwd|secret|authorization|api[_-]?key|access_token|cookie)|密码|密钥)\s*[:=：]", re.IGNORECASE)
@@ -834,7 +836,7 @@ class Source:
     def fetch_in_browser(self, order_type, payload):
         if order_type not in PATHS:
             raise SyncError("SOURCE_ROUTE_NOT_ALLOWED")
-        return self.fetch_path_in_browser(PATHS[order_type], payload)
+        return self.fetch_readonly_path(PATHS[order_type], payload)
 
     def fetch_path_in_browser(self, path, payload):
         if path not in (*PATHS.values(), *DICTIONARY_PATHS.values()):
@@ -854,7 +856,16 @@ class Source:
         # Only the source JSON is returned. ACCESS-TOKEN never leaves the browser.
         expression = """(async () => {
           const origin = ORIGIN_VALUE, path = PATH_VALUE, payload = PAYLOAD_VALUE;
-          if (location.origin !== origin) throw new Error('SOURCE_ORIGIN_MISMATCH');
+          const assertAuthenticated = () => {
+            if (location.origin !== origin) throw new Error('SOURCE_ORIGIN_MISMATCH');
+            if (location.pathname.replace(/\\/+$/, '') === '/login')
+              throw new Error('SOURCE_BROWSER_LOGIN_REQUIRED');
+            const visible = el => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+            if ([...document.querySelectorAll('[role="dialog"],[role="alertdialog"],.n-dialog')]
+                .some(el => visible(el) && el.textContent.includes('登录身份已失效，请重新登录!')))
+              throw new Error('SOURCE_BROWSER_SESSION_EXPIRED');
+          };
+          assertAuthenticated();
           let session;
           try { session = JSON.parse(localStorage.getItem('ACCESS-TOKEN') || 'null'); }
           catch { throw new Error('SOURCE_SESSION_INVALID'); }
@@ -868,9 +879,10 @@ class Source:
             const response = await fetch(origin + path, {method:'POST', redirect:'error', credentials:'same-origin',
               signal:controller.signal, headers:{'Content-Type':'application/json','Authorization':bearer,'domainurl':origin},
               body:JSON.stringify(payload)});
+            assertAuthenticated();
             if (!response.ok) throw new Error('SOURCE_HTTP_FAILURE');
             const text = await response.text();
-            if (location.origin !== origin) throw new Error('SOURCE_ORIGIN_MISMATCH');
+            assertAuthenticated();
             return text;
           } finally { clearTimeout(timer); }
         })()""".replace("ORIGIN_VALUE", json.dumps(ORIGIN)).replace("PATH_VALUE", json.dumps(path)).replace("PAYLOAD_VALUE", json_bytes(payload).decode("utf-8"))
@@ -887,6 +899,13 @@ class Source:
                         break
                 result = message.get("result", {})
                 if "error" in message or result.get("exceptionDetails"):
+                    details = result.get("exceptionDetails") or {}
+                    exception = (details.get("exception") or {}) if isinstance(details, dict) else {}
+                    description = (exception.get("description") or exception.get("value")) if isinstance(exception, dict) else None
+                    if isinstance(description, str):
+                        public = re.match(r"^(?:Error: )?(SOURCE_BROWSER_LOGIN_REQUIRED|SOURCE_BROWSER_SESSION_EXPIRED|SOURCE_SESSION_REQUIRED|SOURCE_SESSION_INVALID|SOURCE_ORIGIN_MISMATCH)(?:\n|$)", description)
+                        if public:
+                            raise SyncError(public[1])
                     raise SyncError("CDP_SOURCE_REQUEST_FAILED")
                 value = result.get("result", {}).get("value")
                 if not isinstance(value, str): raise SyncError("CDP_RESPONSE_INVALID")
@@ -957,7 +976,7 @@ def resume_pending(store, upload, logger):
         try:
             upload.apply(payload)
             store.acknowledge(payload)
-            logger.info("UPLOAD_CONFIRMED tenant=%s snapshot=%s", payload["source_tenant_id"], payload["snapshot_id"])
+            logger.info("UPLOAD_RETRY_CONFIRMED tenant=%s snapshot=%s original_captured_at=%s", payload["source_tenant_id"], payload["snapshot_id"], payload.get("captured_at", "unknown"))
         except SyncError as exc:
             errors += 1
             logger.warning("UPLOAD_RETAINED tenant=%s code=%s", payload["source_tenant_id"], str(exc))
@@ -1099,7 +1118,36 @@ def cycle_delay(started, now=None, interval_seconds=INTERVAL):
     return interval_seconds - remainder if remainder else 0
 
 
-def main(argv=None):
+def auto_login_enabled(config):
+    settings = config.get("auto_login")
+    if settings is None:
+        return False
+    if not isinstance(settings, dict) or type(settings.get("enabled", False)) is not bool:
+        raise SyncError("AUTO_LOGIN_CONFIG_INVALID")
+    return settings.get("enabled", False)
+
+
+def create_source(config):
+    if not auto_login_enabled(config):
+        return Source(config)
+    # Standalone execution must share this exact core module/SyncError class
+    # with the optional login module. Embedded launchers inject their factory.
+    if __name__ == "__main__":
+        current = sys.modules[__name__]
+        if sys.modules.get("ar_middle_channel_sync", current) is not current:
+            raise SyncError("AUTO_LOGIN_CORE_MODULE_CONFLICT")
+        sys.modules["ar_middle_channel_sync"] = current
+    from ar_middle_browser_login import AutoLoginSource
+    return AutoLoginSource(config)
+
+
+def log_startup(logger, config, mode, *, dry_run=False):
+    port = validate_cdp_url(config["cdp_url"]).port or 80 if config.get("cdp_url") else "disabled"
+    logger.info("COLLECTOR_STARTED version=%s mode=%s cdp_port=%s auto_login_enabled=%s dry_run=%s",
+                COLLECTOR_VERSION, mode, port, auto_login_enabled(config), bool(dry_run))
+
+
+def main(argv=None, *, source_factory=None):
     parser = argparse.ArgumentParser(description=__doc__)
     action = parser.add_mutually_exclusive_group()
     for flag in ("init", "check", "once", "loop"):
@@ -1118,7 +1166,8 @@ def main(argv=None):
         if os.name != "nt": os.chmod(directory, 0o700)
         logger = make_logger(directory)
         with process_lock(directory):
-            source, upload = Source(config), Upload(config)
+            source, upload = (source_factory or create_source)(config), Upload(config)
+            log_startup(logger, config, "check" if args.check else "loop" if args.loop else "once", dry_run=args.dry_run)
             if args.check:
                 if not args.dry_run:
                     result = upload.send({"action": "check", "source": "ar_middle", "source_origin": ORIGIN})
