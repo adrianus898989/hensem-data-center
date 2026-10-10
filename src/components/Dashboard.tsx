@@ -25,7 +25,7 @@ import AutoWithdrawConfig from "./AutoWithdrawConfig";
 import { autoWithdrawDisplayPayload } from "@/lib/autoWithdrawDisplayPayload";
 import { platformDisplayCountry } from "@/lib/platformDisplayCountry";
 import { dashboardBusinessFetch, isDashboardDataDenied, readDashboardDataCache, writeDashboardDataCache } from "@/lib/dashboardDataClient";
-import { dashboardScopeAllows, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
+import { dashboardScopeMayReadCountry, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
@@ -1097,7 +1097,7 @@ function LegacyDashboard() {
     return sortAutoPanes(uniq([
       ...DEFAULT_AUTO_COUNTRY_PANES,
       ...autoCountries
-    ])).filter(pane=>pane===NPG_PANE_LABEL ? scope.mode==="all"||scope.countries.some(key=>["CO","MX","CL"].includes(key)) : dashboardScopeAllows(scope,pane));
+    ])).filter(pane=>pane===NPG_PANE_LABEL ? ["CO","MX","CL"].some(country=>dashboardScopeMayReadCountry(scope,country)) : dashboardScopeMayReadCountry(scope,pane));
   }, [payload,profile]);
 
   const operatorCountryPanes = useMemo(() => {
@@ -1106,7 +1106,7 @@ function LegacyDashboard() {
     return sortAutoPanes(uniq([
       ...DEFAULT_AUTO_COUNTRY_PANES,
       ...operatorCountries.map(countryPaneLabelFor)
-    ])).filter(pane=>pane===NPG_PANE_LABEL ? scope.mode==="all"||scope.countries.some(key=>["CO","MX","CL"].includes(key)) : dashboardScopeAllows(scope,pane));
+    ])).filter(pane=>pane===NPG_PANE_LABEL ? ["CO","MX","CL"].some(country=>dashboardScopeMayReadCountry(scope,country)) : dashboardScopeMayReadCountry(scope,pane));
   }, [payload,profile]);
 
   useEffect(() => {

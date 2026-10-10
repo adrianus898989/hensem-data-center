@@ -67,13 +67,15 @@ test('overlay generation rejects legacy matcher drift before writing a bundle',(
 
 test('host restores only the authorized HTML body, while authorization checks and the original endpoint stay unchanged',()=>{
  const component=fs.readFileSync(path.resolve(__dirname,'../src/components/OwnerAdminPreview.tsx'),'utf8'),client=fs.readFileSync(path.resolve(__dirname,'../src/lib/adminPreviewClient.ts'),'utf8');
- assert.match(component,/const policy=await readDashboardRoleAccess\(sessionRef\.current,controller\.signal\)/);
+ assert.match(component,/ownerPreviewVerificationAttempt\(async attemptSignal=>/);
+ assert.match(component,/\},controller\.signal\),controller\.signal,nextAttempt=>/);
+ assert.match(component,/const policy=await readDashboardRoleAccess\(sessionRef\.current,attemptSignal\)/);
  assert.match(component,/if\(!policy\.canView\)throw Error/);
  assert.match(component,/const quick=check&&!recovering/);
- assert.match(component,/await adminPreviewRequest\(sessionRef\.current,quick\?"\?check=1":"",\{signal:controller\.signal\}\)/);
+ assert.match(component,/await adminPreviewRequest\(sessionRef\.current,quick\?"\?check=1":"",\{signal:attemptSignal\}\)/);
  assert.match(component,/access\.ok!==true\|\|access\.canView!==true\|\|typeof access\.canManage!=="boolean"\)throw Error/);
- assert.match(component,/if\(quick&&\(!published\|\|changed\)\)response=await adminPreviewRequest\(sessionRef\.current,"",\{signal:controller\.signal\}\)/);
- assert.match(component,/const html=quick&&published&&!changed\?null:await ownerPreviewTransportRead\(\(\)=>response\.text\(\),controller\.signal\)/);
+ assert.match(component,/if\(quick&&\(!published\|\|changed\)\)response=await adminPreviewRequest\(sessionRef\.current,"",\{signal:attemptSignal\}\)/);
+ assert.match(component,/const html=quick&&published&&!changed\?null:await ownerPreviewTransportRead\(\(\)=>response\.text\(\),attemptSignal\)/);
  assert.match(component,/makeAdminLiveDocument\(restoreApprovedAdmin\(result\.html\),channel\.current,result\.policy,\{mode:dataScope\.mode,identity:scopeIdentity\}\)/);
  assert.equal((component.match(/restoreApprovedAdmin\(result\.html\)/g)||[]).length,1);
  assert.match(component,/if\(html!==null\)\{published=true;setDocumentHtml\(html\)\}/);

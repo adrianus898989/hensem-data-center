@@ -23,7 +23,8 @@ const ADMIN_PERMISSIONS: DashboardPermissions = {
 const ADMIN_MANAGEMENT: ManagementPermissions = { manage_viewers: true, refresh_data: true, view_audit: true };
 const VIEWER_MANAGEMENT: ManagementPermissions = { manage_viewers: false, refresh_data: false, view_audit: false };
 
-type DataScope = { mode: "all" | "selected"; countries: string[] };
+type PlatformScope = {country:string;platform:string};
+type DataScope = { mode: "all" | "selected"; countries: string[];platforms?:PlatformScope[] };
 const DATA_GROUPS = new Set(["BR_PANGHU", "BR", "IN", "PK", "ID", "VN", "PH", "MY", "MM", "NG", "CO", "MX", "CL", "SA", "BR_NATIVE", "USDT", "HK_TEAM", "RED_CRAB"]);
 class DataScopeError extends Error {
   constructor(message: string, readonly status: number, readonly code = "request_denied") { super(message); }
@@ -31,20 +32,38 @@ class DataScopeError extends Error {
 function parseDataScope(value: unknown): DataScope {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new DataScopeError("可见数据范围格式不正确", 400);
   const raw = value as Record<string, unknown>;
-  if (Object.keys(raw).sort().join(",") !== "countries,mode" || !Array.isArray(raw.countries)
+  const hasPlatforms=Object.prototype.hasOwnProperty.call(raw,"platforms");
+  if (Object.keys(raw).sort().join(",") !== (hasPlatforms?"countries,mode,platforms":"countries,mode") || !Array.isArray(raw.countries)
       || raw.countries.length > DATA_GROUPS.size || !raw.countries.every(key => typeof key === "string" && DATA_GROUPS.has(key))) {
     throw new DataScopeError("可见数据范围包含未知国家或盘口组", 400);
   }
-  if (raw.mode === "all" && raw.countries.length === 0) return { mode: "all", countries: [] };
-  if (raw.mode !== "selected" || raw.countries.length === 0) throw new DataScopeError("请至少选择一个可见国家或盘口组", 400);
-  return { mode: "selected", countries: Array.from(new Set(raw.countries as string[])).sort() };
+  if (raw.mode === "all" && raw.countries.length === 0 && !hasPlatforms) return { mode: "all", countries: [] };
+  if (raw.mode !== "selected" || (!raw.countries.length && !hasPlatforms)) throw new DataScopeError("请至少选择一个可见国家或平台", 400);
+  const countries=Array.from(new Set(raw.countries as string[])).sort();
+  if(!hasPlatforms)return {mode:"selected",countries};
+  if(!Array.isArray(raw.platforms)||raw.platforms.length>500)throw new DataScopeError("平台授权范围格式不正确",400);
+  const unique=new Map<string,PlatformScope>();
+  for(const value of raw.platforms){
+    if(!value||typeof value!=="object"||Array.isArray(value)||Object.keys(value).sort().join(",")!=="country,platform")throw new DataScopeError("平台授权范围格式不正确",400);
+    const row=value as Record<string,unknown>;
+    if(typeof row.country!=="string"||!DATA_GROUPS.has(row.country)||typeof row.platform!=="string")throw new DataScopeError("平台授权范围格式不正确",400);
+    const platform=row.platform.trim().toUpperCase();
+    if(!platform||Array.from(platform).length>200||/[\u0000-\u001f\u007f-\u009f]/.test(platform)||(countries.length&&!countries.includes(row.country)))throw new DataScopeError("平台授权范围格式不正确",400);
+    unique.set(JSON.stringify([row.country,platform]),{country:row.country,platform});
+  }
+  const lexical=(a:string,b:string)=>a<b?-1:a>b?1:0;
+  return {mode:"selected",countries,platforms:[...unique.values()].sort((a,b)=>lexical(a.country,b.country)||lexical(a.platform,b.platform))};
 }
 function storedDataScope(profile: { role?: string; data_scope?: unknown }): DataScope {
   if (profile.role === "owner" || profile.data_scope == null) return { mode: "all", countries: [] };
   try { return parseDataScope(profile.data_scope); } catch { return { mode: "selected", countries: [] }; }
 }
 function dataScopeSubset(child: DataScope, parent: DataScope): boolean {
-  return parent.mode === "all" || child.mode === "selected" && child.countries.every(key => parent.countries.includes(key));
+  if(parent.mode==="all")return true;
+  if(child.mode!=="selected"||(!child.countries.length&&child.platforms===undefined))return false;
+  if(parent.mode!=="selected"||(!parent.countries.length&&parent.platforms===undefined))return false;
+  if(child.platforms!==undefined)return child.platforms.every(pair=>(!parent.countries.length||parent.countries.includes(pair.country))&&(parent.platforms===undefined||parent.platforms.some(p=>p.country===pair.country&&p.platform===pair.platform)));
+  return parent.platforms===undefined&&child.countries.every(key=>parent.countries.includes(key));
 }
 function assertTargetDataScope(actor: { role?: string; data_scope?: unknown }, target: { role?: string; data_scope?: unknown }) {
   // Disabled accounts retain their real scope; resetting or enabling one must
@@ -57,7 +76,7 @@ function requestedDataScope(body: Record<string, unknown>, actor: { role?: strin
   const present = Object.prototype.hasOwnProperty.call(body, "data_scope");
   if (!present && !creating) return undefined;
   const scope = present ? parseDataScope(body.data_scope) : storedDataScope(actor);
-  if (scope.mode === "selected" && !scope.countries.length) throw new DataScopeError("请至少选择一个可见国家或盘口组", 400);
+  if (scope.mode === "selected" && !scope.countries.length && scope.platforms===undefined) throw new DataScopeError("请至少选择一个可见国家或平台", 400);
   if (actor.role !== "owner" && !dataScopeSubset(scope, storedDataScope(actor))) throw new DataScopeError("不能授予超出自己可见数据范围的权限", 403);
   return scope;
 }
@@ -273,6 +292,25 @@ Deno.serve(async (request) => {
       } catch (error) { if (error instanceof DataScopeError) throw error; throw new DataScopeError("目标账号权限验证暂时不可用", 503); }
     }
 
+    async function saveAccountDataScope(ctx: Awaited<ReturnType<typeof requireManager>>, target: any, scope: DataScope) {
+      if(typeof target.updated_at!=="string"||!Number.isFinite(Date.parse(target.updated_at)))throw new DataScopeError("账号信息已变更，请刷新列表后重试",409,"account_scope_version_conflict");
+      let reply: any;
+      try {reply=await admin.rpc("dashboard_update_account_data_scope",{p_actor:ctx.caller.id,p_session_id:ctx.sessionId,p_target:target.auth_user_id,p_expected_role:target.role,p_expected_updated_at:target.updated_at,p_scope:scope});}
+      catch {throw new DataScopeError("数据范围保存结果待核对，请刷新账号列表确认。",503,"account_scope_result_unknown");}
+      if(reply.error){
+        const code=String(reply.error.code||"");
+        if(code==="42501")throw new DataScopeError("当前权限已变更，不能修改此账号数据范围。",403,"account_scope_update_denied");
+        if(code==="40001")throw new DataScopeError("账号信息已变更，请刷新列表后重试",409,"account_scope_version_conflict");
+        if(code==="22023")throw new DataScopeError("数据范围格式不正确",400,"invalid_data_scope");
+        throw new DataScopeError("数据范围保存结果待核对，请刷新账号列表确认。",503,"account_scope_result_unknown");
+      }
+      const value=reply.data;
+      let sameScope=false;try {sameScope=JSON.stringify(parseDataScope(value?.data_scope))===JSON.stringify(scope);}catch {/* fail closed */}
+      if(!value||value.ok!==true||value.auth_user_id!==target.auth_user_id||value.username!==target.username||value.role!==target.role||!sameScope)
+        throw new DataScopeError("数据范围保存结果待核对，请刷新账号列表确认。",503,"account_scope_result_unknown");
+      return json(request,{ok:true,username:target.username,role:value.role,message:"账号数据范围已更新"});
+    }
+
     async function requireAuthenticated() {
       const authHeader = String(request.headers.get("authorization") || "");
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
@@ -477,6 +515,10 @@ Deno.serve(async (request) => {
           patch.management_permissions = { ...VIEWER_MANAGEMENT };
         }
       }
+      if(patch.data_scope!==undefined){
+        if(Object.keys(body).some(key=>!["action","username","data_scope"].includes(key)))throw new DataScopeError("数据范围请单独保存，不能与其它账号设置一起提交。",400,"data_scope_mixed_patch");
+        return await saveAccountDataScope(ctx,target,dataScope!);
+      }
       // Do not let a concurrent promotion turn a viewer edit into an admin edit.
       if (patch.active === false) await revokeSessions(target.auth_user_id);
       let update = admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id).eq("role", target.role);
@@ -512,6 +554,10 @@ Deno.serve(async (request) => {
       if (dataScope !== undefined) patch.data_scope = dataScope;
       if (typeof body?.active === "boolean") patch.active = body.active;
       if (body?.permissions) patch.permissions = sanitizePermissions(body.permissions);
+      if(patch.data_scope!==undefined){
+        if(Object.keys(body).some(key=>!["action","username","data_scope"].includes(key)))throw new DataScopeError("数据范围请单独保存，不能与其它账号设置一起提交。",400,"data_scope_mixed_patch");
+        return await saveAccountDataScope(ctx,target,dataScope!);
+      }
       if (patch.active === false) await revokeSessions(target.auth_user_id);
       let update = admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id).eq("role", "viewer");
       if (target.updated_at) update = update.eq("updated_at", target.updated_at);

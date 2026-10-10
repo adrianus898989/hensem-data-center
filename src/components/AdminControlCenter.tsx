@@ -9,7 +9,7 @@ import { dashboardRoleRequest, type DashboardCustomRole, type DashboardRoleAccou
 import { dashboardRoleDisplayPages, dashboardRoleDisplayPermissionCount, dashboardRoleDisplayPageCount } from "@/lib/dashboardRoleDisplay";
 import AccountEditorDialog from "./AccountEditorDialog";
 import AccountLoginPolicy, {type AccountLoginSnapshot} from "./AccountLoginPolicy";
-import { DASHBOARD_DATA_GROUPS, dashboardScopeLabel, effectiveDashboardDataScope, isDashboardDataScopeSubset, normalizeDashboardDataScope, type DashboardDataScope } from "@/lib/dashboardDataScope";
+import { DASHBOARD_DATA_GROUPS, dashboardScopeIdentity, dashboardScopeLabel, effectiveDashboardDataScope, isDashboardDataScopeSubset, normalizeDashboardDataScope, type DashboardDataScope } from "@/lib/dashboardDataScope";
 import {
   canOpenAdminCenter,
   createDashboardRoleAccount,
@@ -33,6 +33,8 @@ import {
   type ManualSyncJob,
 } from "@/lib/dashboardAuthClient";
 
+import { readDashboardScopeCatalog, type DashboardScopePlatform } from "@/lib/dashboardScopeCatalogClient";
+
 type Props = {
   open: boolean;
   session: DashboardSession;
@@ -51,33 +53,72 @@ function accountStoredScope(user: DashboardProfile): DashboardDataScope {
   return user.role === "owner" ? { mode: "all", countries: [] } : normalizeDashboardDataScope(user.data_scope);
 }
 
-function DataScopePicker({ id, value, actor, disabled, onChange }: {
-  id: string; value: DashboardDataScope; actor: DashboardProfile; disabled: boolean; onChange: (value: DashboardDataScope) => void;
+function scopeSelectionPresent(value:DashboardDataScope):boolean {
+  return value.mode === "all" || (value.platforms !== undefined ? value.platforms.length > 0 : value.countries.length > 0);
+}
+
+function DataScopePicker({ id, value, actor, session, disabled, onChange, onValidityChange }: {
+  id: string; value: DashboardDataScope; actor: DashboardProfile; session:DashboardSession; disabled: boolean; onChange: (value: DashboardDataScope) => void; onValidityChange?: (valid:boolean)=>void;
 }) {
   const [search, setSearch] = useState("");
-  const allowed = effectiveDashboardDataScope(actor);
-  const choices = DASHBOARD_DATA_GROUPS.filter(group => allowed.mode === "all" || allowed.countries.includes(group.key));
+  const [countryFilter,setCountryFilter]=useState("all");
+  const [reload,setReload]=useState(0);
+  const [catalog,setCatalog]=useState<{key:string;status:"loading"|"ready"|"error";rows:DashboardScopePlatform[];error:string}>({key:"",status:"loading",rows:[],error:""});
+  const allowed = effectiveDashboardDataScope(actor),platformMode=value.mode==="selected"&&value.platforms!==undefined;
+  const scopeKey=dashboardScopeIdentity(actor)+":"+session.user.id;
+  const sessionRef=useRef(session);sessionRef.current=session;
+  useEffect(()=>{
+    if(!platformMode)return;
+    const controller=new AbortController();let current=true;
+    setCatalog({key:scopeKey,status:"loading",rows:[],error:""});
+    void readDashboardScopeCatalog(sessionRef.current,controller.signal).then(rows=>{
+      if(current&&!controller.signal.aborted)setCatalog({key:scopeKey,status:"ready",rows:rows.filter(row=>isDashboardDataScopeSubset({mode:"selected",countries:[],platforms:[{country:row.country,platform:row.platform}]},allowed)),error:""});
+    }).catch(error=>{if(current&&!controller.signal.aborted)setCatalog({key:scopeKey,status:"error",rows:[],error:error instanceof Error?error.message:"平台目录读取失败，请重试。"});});
+    return()=>{current=false;controller.abort()};
+  },[platformMode,scopeKey,reload]);
+  const choices = DASHBOARD_DATA_GROUPS.filter(group => allowed.mode === "all" || allowed.platforms===undefined&&allowed.countries.includes(group.key));
   const sections = [
     {label: "国家 / 地区", keys: ["BR", "IN", "PK", "ID", "VN", "PH", "MY", "MM", "NG", "CO", "MX", "CL", "SA"]},
     {label: "团队", keys: ["HK_TEAM", "RED_CRAB"]},
     {label: "特定盘口 / 通道", keys: ["BR_PANGHU", "BR_NATIVE", "USDT"]},
   ];
-  const query = search.trim().toLocaleLowerCase();
+  const query = search.trim().toLocaleLowerCase(),ready=catalog.key===scopeKey&&catalog.status==="ready";
   const visible = choices.filter(group => !query || `${group.label} ${group.key}`.toLocaleLowerCase().includes(query));
-  function selectMode(mode: "all" | "selected") {
-    if (disabled || mode === "all" && allowed.mode !== "all") return;
-    onChange(mode === "all" ? {mode: "all", countries: []} : {mode: "selected", countries: value.mode === "selected" ? value.countries : []});
+  const countryLabel=(key:string)=>DASHBOARD_DATA_GROUPS.find(group=>group.key===key)?.label||key;
+  const rows=ready?catalog.rows:[],pairs=value.platforms||[];
+  const filtered=rows.filter(row=>(countryFilter==="all"||row.country===countryFilter)&&(!query||`${row.platform} ${row.label} ${row.source||""} ${row.country} ${countryLabel(row.country)}`.toLocaleLowerCase().includes(query)));
+  const pairKey=(row:{country:string;platform:string})=>JSON.stringify([row.country,row.platform]);
+  const selectionSignature=JSON.stringify(value);
+  const selectionVerified=!platformMode||ready&&pairs.length>0&&pairs.every(pair=>rows.some(row=>pairKey(row)===pairKey(pair)));
+  const validityRef=useRef(onValidityChange);validityRef.current=onValidityChange;
+  useEffect(()=>{validityRef.current?.(selectionVerified);},[selectionVerified,selectionSignature,scopeKey,reload]);
+  function selectMode(mode:"all"|"selected"|"platforms") {
+    if(disabled||mode==="all"&&allowed.mode!=="all"||mode==="selected"&&allowed.platforms!==undefined)return;
+    setSearch("");setCountryFilter("all");
+    onChange(mode==="all"?{mode:"all",countries:[]}:mode==="platforms"?{mode:"selected",countries:[],platforms:platformMode?pairs:[]}:{mode:"selected",countries:value.mode==="selected"&&!platformMode?value.countries:[]});
+  }
+  function togglePlatform(row:DashboardScopePlatform,checked:boolean){
+    if(disabled||!ready)return;const selected=checked?[...pairs.filter(p=>pairKey(p)!==pairKey(row)),{country:row.country,platform:row.platform}]:pairs.filter(p=>pairKey(p)!==pairKey(row));
+    if(selected.length>500)return;onChange({mode:"selected",countries:[],platforms:selected});
   }
   return <fieldset className="admin-data-scope-picker" disabled={disabled}>
     <legend>数据授权范围</legend>
     <p>角色决定可用页面与操作，数据范围决定可见内容。</p>
     <div className="admin-data-scope-modes">
       <label><input type="radio" name={`${id}-scope-mode`} value="all" checked={value.mode === "all"} disabled={disabled || allowed.mode !== "all"} onChange={() => selectMode("all")} />全部数据</label>
-      <label><input type="radio" name={`${id}-scope-mode`} value="selected" checked={value.mode === "selected"} onChange={() => selectMode("selected")} />选择授权范围</label>
+      <label><input type="radio" name={`${id}-scope-mode`} value="selected" checked={value.mode === "selected"&&!platformMode} disabled={disabled||allowed.platforms!==undefined} onChange={() => selectMode("selected")} />按国家 / 分组</label>
+      <label><input type="radio" name={`${id}-scope-mode`} value="platforms" checked={platformMode} onChange={() => selectMode("platforms")} />指定平台</label>
     </div>
-    <div className="admin-data-scope-selected" aria-live="polite"><b>{value.mode === "all" ? "已选：全部数据" : `已选 ${value.countries.length} 项`}</b><span>{value.mode === "selected" ? dashboardScopeLabel(value) : "所有数据范围；页面与操作仍由角色控制"}</span></div>
+    <div className="admin-data-scope-selected" aria-live="polite"><b>{value.mode === "all" ? "已选：全部数据" : platformMode?`已选 ${pairs.length} 个平台`:`已选 ${value.countries.length} 项`}</b><span>{value.mode === "selected" ? dashboardScopeLabel(value) : "所有数据范围；页面与操作仍由角色控制"}</span></div>
     {value.mode === "selected" && <>
-      <input className="admin-data-scope-search" type="search" aria-label="搜索数据授权范围" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索国家、团队或盘口组" />
+      <input className="admin-data-scope-search" type="search" aria-label="搜索数据授权范围" value={search} onChange={event => setSearch(event.target.value)} placeholder={platformMode?"搜索平台名称、国家或系统":"搜索国家、团队或盘口组"} />
+      {platformMode?<>
+        <div className="admin-scope-platform-toolbar"><label>国家 / 地区 <select aria-label="平台授权国家筛选" value={countryFilter} onChange={event=>setCountryFilter(event.target.value)}><option value="all">全部国家 / 地区</option>{DASHBOARD_DATA_GROUPS.filter(group=>rows.some(row=>row.country===group.key)).map(group=><option key={group.key} value={group.key}>{group.label}</option>)}</select></label><span>{ready?`显示 ${filtered.length} / ${rows.length} 个可授权平台`:""}</span></div>
+        <p>只允许查看勾选的平台；国家筛选仅用于查找平台。</p>
+        {pairs.length>0&&<div className="admin-scope-platform-selected">{pairs.map(pair=><button type="button" key={pairKey(pair)} aria-label={`移除 ${countryLabel(pair.country)} / ${pair.platform}`} onClick={()=>{if(!disabled)onChange({mode:"selected",countries:[],platforms:pairs.filter(p=>pairKey(p)!==pairKey(pair))})}}>{pair.platform}<span>{countryLabel(pair.country)}</span> ×</button>)}</div>}
+        {catalog.key!==scopeKey||catalog.status==="loading"?<div role="status" className="admin-scope-platform-status">正在读取可授权的平台…</div>:catalog.status==="error"?<div role="alert" className="admin-scope-platform-status">{catalog.error}<button type="button" className="admin-light-btn" onClick={()=>{validityRef.current?.(false);setReload(n=>n+1)}}>重试读取平台</button></div>:<div className="admin-scope-platform-list">{filtered.map(row=><label key={pairKey(row)}><input type="checkbox" checked={pairs.some(pair=>pairKey(pair)===pairKey(row))} disabled={disabled||pairs.length>=500&&!pairs.some(pair=>pairKey(pair)===pairKey(row))} onChange={event=>togglePlatform(row,event.target.checked)}/><span><b>{row.label}</b><small>{countryLabel(row.country)}{row.source?` · ${row.source}`:""}</small></span></label>)}{!filtered.length&&<div role="status">{rows.length?"没有匹配的平台，已选内容保持不变。":"当前账号没有可授权的平台。"}</div>}</div>}
+        {ready&&pairs.some(pair=>!rows.some(row=>pairKey(row)===pairKey(pair)))&&<small role="alert">部分已选平台已不在当前可授权目录，请移除后重新选择。</small>}
+      </>:<>
       <div className="admin-data-scope-groups">{sections.map(section => {
         const items = visible.filter(group => section.keys.includes(group.key));
         if (!items.length) return null;
@@ -87,21 +128,23 @@ function DataScopePicker({ id, value, actor, disabled, onChange }: {
         }} />{group.label}</label>)}</div></section>;
       })}</div>
       {!visible.length && <small role="status">没有匹配的范围；已选内容保持不变。</small>}
+      </>}
     </>}
-    {value.mode === "selected" && !value.countries.length && <small role="status">尚未选择数据范围，请选择后保存。</small>}
+    {value.mode === "selected" && !scopeSelectionPresent(value) && <small role="status">{platformMode?"尚未选择平台，请至少勾选一个平台后保存。":"尚未选择数据范围，请选择后保存。"}</small>}
     {allowed.mode !== "all" && <small>只能分配自己可见的范围。</small>}
   </fieldset>;
 }
 
-function AccountDataScopeEditor({ user, actor, busy, onSave }: {
-  user: DashboardProfile; actor: DashboardProfile; busy: boolean; onSave: (patch: DashboardAccountPatch) => Promise<boolean>;
+function AccountDataScopeEditor({ user, actor, session, busy, onSave }: {
+  user: DashboardProfile; actor: DashboardProfile; session:DashboardSession; busy: boolean; onSave: (patch: DashboardAccountPatch) => Promise<boolean>;
 }) {
   const current = accountStoredScope(user);
   const [draft, setDraft] = useState<DashboardDataScope>(() => current);
   const [error, setError] = useState("");
+  const [catalogValid,setCatalogValid]=useState(false);
   const normalized = normalizeDashboardDataScope(draft);
   const changed = JSON.stringify(normalized) !== JSON.stringify(current);
-  const valid = (draft.mode === "all" || draft.countries.length > 0) && isDashboardDataScopeSubset(normalized, effectiveDashboardDataScope(actor));
+  const valid = (normalized.platforms===undefined||catalogValid) && scopeSelectionPresent(normalized) && isDashboardDataScopeSubset(normalized, effectiveDashboardDataScope(actor));
   async function save() {
     if (busy || !changed || !valid) return;
     setError("");
@@ -109,8 +152,8 @@ function AccountDataScopeEditor({ user, actor, busy, onSave }: {
   }
   return <div className="admin-account-data-scope-editor">
     <div className="admin-account-scope-summary"><b>已保存范围</b><span>{dashboardScopeLabel(current)}</span></div>
-    <DataScopePicker id={`edit-${user.auth_user_id}`} value={draft} actor={actor} disabled={busy} onChange={setDraft} />
-    <div className="admin-data-scope-actions"><button type="button" disabled={busy || !changed || !valid} onClick={() => void save()}>{busy ? "保存中…" : "保存数据范围"}</button>{changed && <button type="button" disabled={busy} onClick={() => { setDraft(current); setError(""); }}>取消范围修改</button>}</div>
+    <DataScopePicker id={`edit-${user.auth_user_id}`} value={draft} actor={actor} session={session} disabled={busy} onChange={value=>{setCatalogValid(false);setDraft(value)}} onValidityChange={setCatalogValid} />
+    <div className="admin-data-scope-actions"><button type="button" disabled={busy || !changed || !valid} onClick={() => void save()}>{busy ? "保存中…" : "保存数据范围"}</button>{changed && <button type="button" disabled={busy} onClick={() => { setDraft(current); setCatalogValid(false); setError(""); }}>取消范围修改</button>}</div>
     {error && <p role="alert">{error}</p>}
   </div>;
 }
@@ -283,6 +326,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [newDataScope, setNewDataScope] = useState<DashboardDataScope>(() => effectiveDashboardDataScope(profile));
+  const [newScopeCatalogValid,setNewScopeCatalogValid]=useState(false);
   const [createBusy, setCreateBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [securityTarget,setSecurityTarget]=useState<DashboardProfile|null>(null);
@@ -351,7 +395,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     return users.filter((user) => {
       if (userScopeFilter !== "all") {
         const scope = accountStoredScope(user);
-        if (scope.mode !== "all" && !scope.countries.some(code => code === userScopeFilter)) return false;
+        if (scope.mode !== "all" && !scope.countries.some(code => code === userScopeFilter) && !scope.platforms?.some(pair=>pair.country===userScopeFilter)) return false;
       }
       if (userRoleFilter !== "all" && user.role !== userRoleFilter) return false;
       if (userStatusFilter === "active" && !user.active) return false;
@@ -449,7 +493,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, profile.role, manualQuery, directoryScope]);
 
-  useEffect(() => { setNewRoleId(""); setNewUsername(""); setNewPassword(""); setCreateOpen(false); }, [directoryScope]);
+  useEffect(() => { setNewRoleId(""); setNewUsername(""); setNewPassword(""); setCreateOpen(false); setCreateBusy(false); setNewScopeCatalogValid(false); setEditingUsername(""); setPermissionTarget(null); setSecurityTarget(null); setSavingUser(""); setMessage(""); }, [directoryScope]);
 
   useEffect(() => {
     setTab(section);
@@ -460,7 +504,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     setCreateOpen(false);
   }, [section]);
 
-  useEffect(() => { setNewDataScope(JSON.parse(actorDataScopeKey) as DashboardDataScope); }, [profile.auth_user_id, actorDataScopeKey]);
+  useEffect(() => { setNewDataScope(JSON.parse(actorDataScopeKey) as DashboardDataScope);setNewScopeCatalogValid(false); }, [profile.auth_user_id, actorDataScopeKey]);
 
   const creationRolesReady = roleDirectory.scope === directoryScope && roleDirectory.status === "ready";
   const creationRoles = creationRolesReady ? (roleDirectory.data?.roles || []).filter(role => role.active
@@ -476,7 +520,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     setNewUsername("");
     setNewPassword("");
     setNewRoleId("");
-    setNewDataScope(effectiveDashboardDataScope(profile));
+    setNewDataScope(effectiveDashboardDataScope(profile));setNewScopeCatalogValid(false);
     setMessage("");
   }
 
@@ -486,7 +530,8 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     const selectedRole = creationRoles.find(role => role.id === newRoleId);
     if (!selectedRole) { setMessage("请明确选择已启用的新版角色；如角色已变更，请刷新角色列表。"); return; }
     const creatingScope = directoryScope;
-    if (newDataScope.mode === "selected" && !newDataScope.countries.length) { setMessage("请至少选择一个可见国家或盘口组。"); return; }
+    if(newDataScope.platforms!==undefined&&!newScopeCatalogValid){setMessage("请先读取并选择当前可授权的平台。");return;}
+    if (!scopeSelectionPresent(normalizeDashboardDataScope(newDataScope))) { setMessage("请至少选择一个可见平台、国家或分组。"); return; }
     if (!isDashboardDataScopeSubset(newDataScope, effectiveDashboardDataScope(profile))) { setMessage("不能授予超出自己可见数据范围的权限。"); return; }
     setCreateBusy(true);
     setMessage("");
@@ -497,12 +542,12 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
       setNewUsername("");
       setNewPassword("");
       setNewRoleId("");
-      setNewDataScope(effectiveDashboardDataScope(profile));
+      setNewDataScope(effectiveDashboardDataScope(profile));setNewScopeCatalogValid(false);
       setCreateOpen(false);
       await Promise.all([loadUsers(), canViewAudit ? loadAudit() : Promise.resolve()]);
     } catch (error) {
       if (directoryRequest.current.scope === creatingScope) setMessage(error instanceof Error ? error.message : "建立账号失败");
-    } finally { setCreateBusy(false); }
+    } finally { if(directoryRequest.current.scope===creatingScope)setCreateBusy(false); }
   }
 
   function canEditTarget(user: DashboardProfile) {
@@ -518,16 +563,18 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
 
   async function saveAccount(user: DashboardProfile, patch: DashboardAccountPatch): Promise<boolean> {
     if (!canConfigureAccount || typeof patch.active === "boolean" && !canUseAccountAction("status") || !canEditTarget(user) || savingUser || (patch.role && !isOwner)) return false;
-    if (patch.data_scope && (!isDashboardDataScopeSubset(patch.data_scope, effectiveDashboardDataScope(profile)) || patch.data_scope.mode === "selected" && !patch.data_scope.countries.length)) return false;
+    if (patch.data_scope && (!isDashboardDataScopeSubset(patch.data_scope, effectiveDashboardDataScope(profile)) || !scopeSelectionPresent(normalizeDashboardDataScope(patch.data_scope)))) return false;
+    const savingScope=directoryScope;
     setSavingUser(user.username);
     setMessage("");
     try {
       await updateDashboardAccount(session, user.username, patch);
+      if(directoryRequest.current.scope!==savingScope)return false;
       setMessage(patch.role ? `${user.username} 已改为${roleLabel(patch.role)}。该账号刷新页面或重新登录后可看到新权限。` : `${user.username} 已更新。`);
       await Promise.all([loadUsers(), canViewAudit ? loadAudit() : Promise.resolve()]);
       return true;
-    } catch (error) { setMessage(error instanceof Error ? error.message : "更新失败"); return false; }
-    finally { setSavingUser(""); }
+    } catch (error) { if(directoryRequest.current.scope===savingScope)setMessage(error instanceof Error ? error.message : "更新失败"); return false; }
+    finally { if(directoryRequest.current.scope===savingScope)setSavingUser(""); }
   }
 
   async function submitResetPassword(event: React.FormEvent) {
@@ -699,8 +746,8 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
                 : `${selectedCreationRole.name}：0 项权限。账号保持启用，角色开放权限后才能进入相应页面。`
                 : "请明确选择新版角色，账号权限与该角色同步。"}</p>
               {selectedCreationPages.length > 0 && <div className="admin-account-permission-summary">{selectedCreationPages.map(page => page.label).join(" / ")}</div>}
-              <DataScopePicker id="new-account" value={newDataScope} actor={profile} disabled={createBusy} onChange={setNewDataScope} />
-              <button className="admin-primary-btn" type="submit" disabled={createBusy || !selectedCreationRole || newDataScope.mode === "selected" && !newDataScope.countries.length}>{createBusy ? "建立中..." : "建立后台账号"}</button>
+              <DataScopePicker id="new-account" value={newDataScope} actor={profile} session={session} disabled={createBusy} onChange={value=>{setNewScopeCatalogValid(false);setNewDataScope(value)}} onValidityChange={setNewScopeCatalogValid} />
+              <button className="admin-primary-btn" type="submit" disabled={createBusy || !selectedCreationRole || !scopeSelectionPresent(normalizeDashboardDataScope(newDataScope)) || newDataScope.platforms!==undefined&&!newScopeCatalogValid}>{createBusy ? "建立中..." : "建立后台账号"}</button>
 
               <button type="button" className="admin-light-btn admin-create-cancel" onClick={closeCreate}>取消</button>
             </form></fieldset>
@@ -710,7 +757,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
             <div className="admin-search-toolbar admin-user-search-toolbar">
               <div className="admin-search-field wide"><label>{tab === "accounts" ? "搜索账号" : "搜索账号 / 权限"}</label><input aria-label="后台账号搜索" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder={tab === "accounts" ? "输入账号、角色、系统身份或数据范围" : "输入账号、角色、模块或后台权限"} /></div>
               <div className="admin-search-field"><label>系统身份</label><select aria-label="后台账号系统身份筛选" value={userRoleFilter} onChange={(e) => setUserRoleFilter(e.target.value as any)}><option value="all">全部身份</option><option value="owner">总管理员</option><option value="admin">管理员</option><option value="viewer">查看账号</option></select></div>
-              <div className="admin-search-field"><label>数据范围</label><select aria-label="后台账号数据范围筛选" value={userScopeFilter} onChange={e => setUserScopeFilter(e.target.value)}><option value="all">全部范围</option>{DASHBOARD_DATA_GROUPS.filter(group => users.some(user => { const scope = accountStoredScope(user); return scope.mode === "all" || scope.countries.includes(group.key); })).map(group => <option key={group.key} value={group.key}>{group.label}</option>)}</select></div>
+              <div className="admin-search-field"><label>数据范围</label><select aria-label="后台账号数据范围筛选" value={userScopeFilter} onChange={e => setUserScopeFilter(e.target.value)}><option value="all">全部范围</option>{DASHBOARD_DATA_GROUPS.filter(group => users.some(user => { const scope = accountStoredScope(user); return scope.mode === "all" || scope.countries.includes(group.key) || scope.platforms?.some(pair=>pair.country===group.key); })).map(group => <option key={group.key} value={group.key}>{group.label}</option>)}</select></div>
               <div className="admin-search-field"><label>状态</label><select aria-label="后台账号状态筛选" value={userStatusFilter} onChange={(e) => setUserStatusFilter(e.target.value as any)}><option value="all">全部状态</option><option value="active">正常</option><option value="disabled">停用</option>{tab === "accounts" && canViewLoginSecurity && <option value="locked" disabled={loginSnapshot.status!=="ready"}>自动锁定</option>}</select></div>
               <button type="button" className="admin-light-btn" onClick={() => { setUserSearch(""); setUserRoleFilter("all"); setUserStatusFilter("all"); setUserScopeFilter("all"); }}>重置筛选</button>
             </div>
@@ -739,7 +786,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
                     {message && <p role="status" className="admin-account-feedback">{message}</p>}
                     <div className="admin-account-edit-hint"><strong>{user.username} · 账号设置</strong><span>{savingUser === user.username ? "正在保存…" : "管理新版角色、数据范围、账号状态与密码"}</span></div>
                     <section className="admin-account-current-role"><div><small>当前新版角色</small><strong>{roleUnverified ? "角色尚未读取" : accountRoleDisplay(user).label}</strong><p>{accountRoleDisplay(user).summary}</p></div><button type="button" className="admin-matrix-configure" aria-haspopup="dialog" disabled={Boolean(savingUser) || !canConfigureAccount} onClick={() => { if (savingUser || !canConfigureAccount) return; setEditingUsername(""); setResetTarget(""); setResetPassword(""); setPermissionTarget({username: user.username, module: "home"}); }}>配置权限 / 选择角色</button></section>
-                    {canConfigureAccount && <AccountDataScopeEditor key={`scope-${user.auth_user_id}:${user.updated_at || "legacy"}`} user={user} actor={profile} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />}
+                    {canConfigureAccount && <AccountDataScopeEditor key={`scope-${user.auth_user_id}:${user.updated_at || "legacy"}`} user={user} actor={profile} session={session} busy={Boolean(savingUser)} onSave={(patch) => saveAccount(user, patch)} />}
                     <div className="admin-user-buttons-v249"><button type="button" disabled={savingUser === user.username || !canConfigureAccount || !canUseAccountAction("status")} onClick={() => void saveAccount(user, { active: !user.active })}>{user.active ? "停用" : "启用"}</button><button type="button" disabled={savingUser === user.username || !canUseAccountAction("reset_password")} onClick={() => { if (!canUseAccountAction("reset_password")) return; setResetTarget(resetTarget === user.username ? "" : user.username); setResetPassword(""); }}>重置密码</button><button className="danger" type="button" disabled={savingUser === user.username || !canUseAccountAction("delete")} onClick={() => void removeAccount(user)}>删除账号</button></div>
                     {canUseAccountAction("reset_password") && resetTarget === user.username && <form className="admin-inline-reset" onSubmit={submitResetPassword}><input type="password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} placeholder="输入新的临时密码（至少 8 位）" autoFocus /><button type="submit" disabled={savingUser === user.username}>保存新密码</button><button type="button" onClick={() => setResetTarget("")}>取消</button></form>}
                     {accountFeedback[user.username] && <p className={`admin-account-feedback ${accountFeedback[user.username].tone}`} role={accountFeedback[user.username].tone === "error" ? "alert" : "status"}>{accountFeedback[user.username].text}</p>}

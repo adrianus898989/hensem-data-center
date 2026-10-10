@@ -10,6 +10,7 @@ const { renderToStaticMarkup } = require('react-dom/server');
 const { loadTs, root } = require('./load-typescript.cjs');
 const helper = loadTs(path.join(root, 'src/lib/thirdPartyPlatform.ts'));
 const countryHelper = loadTs(path.join(root, 'src/lib/platformDisplayCountry.ts'));
+const scopeHelper = loadTs(path.join(root, 'src/lib/dashboardDataScope.ts'));
 const names = loadTs(path.join(root, 'src/lib/thirdPartyNameMap.ts'));
 const workorders = loadTs(path.join(root, 'src/lib/workOrderDeposit.ts'));
 const orderTime = loadTs(path.join(root, 'src/lib/orderTimeVolume.ts'));
@@ -355,7 +356,8 @@ test('mount and identity changes only prefill controls and invalidate old reques
   const context = {
     profile: {}, COUNTRY_NAV_TABS: ['印度', '巴基斯坦'],
     sourceDay: (zone, offset) => orderClock.sourceDay(zone, offset, Date.parse('2026-09-19T12:00:00Z')),
-    effectiveDashboardDataScope: () => ({ mode: 'all' }), dashboardScopeAllows: () => true,
+    effectiveDashboardDataScope: () => ({ mode: 'all', countries: [] }), dashboardScopeAllows: () => true,
+    dashboardScopeMayReadCountry: scopeHelper.dashboardScopeMayReadCountry,
     queryIntentRef: { current: 7 }, loadRequestSequenceRef: { current: 9 },
     loadFlightRef: { current: { abort: () => { aborted += 1; } } }, queryInFlightRef: { current: true },
     payloadRef: { current: { rows: [{ country: '印度' }] } }, timeQuery: { clearResult: () => { cleared += 1; } },
