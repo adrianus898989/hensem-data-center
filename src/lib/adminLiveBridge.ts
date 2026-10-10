@@ -58,12 +58,16 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     return {...p};
   }
   if(p.action==="submissionAnalysis"){
-    const allowed=["action","platformId","startAt","endAt","direction","currency","providers","operation","threshold","level","memberId","offset","limit","amountBands","charts"];
+    const allowed=["action","platformId","startAt","endAt","direction","currency","providers","operation","threshold","level","memberId","day","offset","limit","amountBands","charts"];
     if(Object.keys(p).some(k=>!allowed.includes(k)))throw Error("刷单分析参数无效");
     if(typeof p.platformId!=="string"||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(p.platformId))throw Error("刷单分析平台无效");
     for(const k of ["startAt","endAt"])if(typeof p[k]!=="string"||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(String(p[k]))||!Number.isFinite(Date.parse(String(p[k]))))throw Error("刷单分析日期无效");
     const span=Date.parse(String(p.endAt))-Date.parse(String(p.startAt));if(span<=0||span>31*86400000)throw Error("刷单分析最多31天");
-    if(p.direction!==undefined&&p.direction!=="charge"||p.operation!==undefined&&!["summary","members"].includes(String(p.operation)))throw Error("刷单分析操作无效");
+    if(p.direction!==undefined&&p.direction!=="charge"||p.operation!==undefined&&!["summary","members","memberOrders"].includes(String(p.operation)))throw Error("刷单分析操作无效");
+    if(p.operation==="memberOrders"){
+      if(typeof p.memberId!=="string"||!p.memberId.trim()||p.memberId!==p.memberId.trim())throw Error("请选择有效会员");
+      if(typeof p.day!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(p.day)||!Number.isFinite(Date.parse(p.day+"T00:00:00Z"))||new Date(p.day+"T00:00:00Z").toISOString().slice(0,10)!==p.day)throw Error("无效订单日期无效");
+    }else if(p.day!==undefined)throw Error("刷单分析日期参数无效");
     if(p.charts!==undefined&&typeof p.charts!=="boolean")throw Error("刷单图表参数无效");
     if(p.amountBands!==undefined){
       const bands=p.amountBands as Record<string,unknown>;
@@ -524,7 +528,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
    const operation=request?.action==='collectorControl'?(request.operation==='overview'?'view':'edit'):request?.action==='withdrawNote'?'edit':request?.action==='configurationWrite'?(request.operation==='grant'?'grant':'edit'):['catalog','providerOptions','configurationAccess'].includes(request?.action)?'view':'query';
    if(request?.action==='collectorControl'&&page!=='collector_control'){reject(error('采集管理页面无效','ROLE_DENIED'));return;}
    if(!window.hensemRoleAllowed(page,operation)){reject(error('当前角色没有此页面或操作权限','ROLE_DENIED'));return;}
-   const detail=['details','query','analysisOrders','pendingOrders'].includes(request?.action)||['submissionAnalysis','submissionStreak'].includes(request?.action)&&request.operation==='members'||request?.action==='aggregate'&&request.view==='drilldown'||request?.action==='workorderRecords'&&['detail','orderDetail'].includes(request.operation)||request?.action==='depositStatistics'&&(request.section==='details'||request.section==='kyc'&&request.dimension==='orders')||request?.action==='depositIssues'&&page==='deposit_statistics';
+   const detail=['details','query','analysisOrders','pendingOrders'].includes(request?.action)||['submissionAnalysis','submissionStreak'].includes(request?.action)&&['members','memberOrders'].includes(request.operation)||request?.action==='aggregate'&&request.view==='drilldown'||request?.action==='workorderRecords'&&['detail','orderDetail'].includes(request.operation)||request?.action==='depositStatistics'&&(request.section==='details'||request.section==='kyc'&&request.dimension==='orders')||request?.action==='depositIssues'&&page==='deposit_statistics';
    if(detail&&!window.hensemRoleAllowed(page,'detail')){reject(error('当前角色没有查看明细权限','ROLE_DENIED'));return;}
 
    const signal=options.signal;if(signal&&signal.aborted){reject(error('查询已取消','ADMIN_LIVE_CANCELLED'));return;}
