@@ -4,15 +4,20 @@ export const AR_MIDDLE_ORIGIN = "https://m8-admin.payplatform-manager.com";
 export const MAX_AR_MIDDLE_BYTES = 8 * 1024 * 1024;
 const RATE_FIELDS = ["15m", "30m", "1h", "4h", "8h", "24h", "today", "total"].map(x => "success_rate_" + x);
 const TEXT_FIELDS = ["channel_name", "provider", "channel_type", "payment_method", "status_text", "category_id", "category_name", "source_state", "source_channel_state", "source_merchant_state", "sys_channel_id", "third_pay_merchant_id", "source_channel_name"];
-const MONEY_FIELDS = ["min_amount", "max_amount", "balance", "balance_threshold", "weight", "fee_rate", "fee_amount"];
+const MONEY_FIELDS = ["min_amount", "max_amount", "balance", "balance_threshold", "weight", "real_time_weight", "fee_rate", "fee_amount"];
 const INTEGER_FIELDS = ["required_deposit_count", "priority", "source_position"];
 const CURRENCY_FIELDS = ["limit_currency", "balance_currency", "balance_threshold_currency"];
-const RECORD_FIELDS = ["channel_id", ...TEXT_FIELDS, ...MONEY_FIELDS, ...RATE_FIELDS, ...INTEGER_FIELDS, ...CURRENCY_FIELDS, "enabled", "notes", "source_updated_at", "fee_rate_basis", "channel_categories"];
+const RECORD_FIELDS = ["channel_id", ...TEXT_FIELDS, ...MONEY_FIELDS, ...RATE_FIELDS, ...INTEGER_FIELDS, ...CURRENCY_FIELDS, "enabled", "notes", "source_updated_at", "fee_rate_basis", "channel_categories", "withdrawal_details"];
+const WITHDRAWAL_LABELS = ["merchant_code", "merchant_name", "third_channel_code", "system_category_name", "last_update_by", "source_tenant_name"];
+const WITHDRAWAL_COUNTS = ["today_submit_count", "recent_1h_success_count"];
+const WITHDRAWAL_TIMES = ["balance_updated_at", "last_updated_at"];
+const WITHDRAWAL_BOOLEANS = ["is_use_channel_code", "is_fixed_channel_code"];
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const TENANT = /^[0-9]{1,18}$/;
 const DECIMAL = /^[0-9]{1,16}(?:\.[0-9]{1,8})?$/;
 const SIGNED_DECIMAL = /^-?[0-9]{1,16}(?:\.[0-9]{1,8})?$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)$/;
+const UNSAFE_SOURCE_LABEL = /(?:[a-z][a-z0-9+.-]*:\/\/|(?:javascript|data):|bearer\s+\S|(?:password|passwd|token|access[_-]?token|secret|cookie|api[_-]?key|auth|authorization|密码|密钥)\s*[:=：]\s*\S)/i;
 type Json = Record<string, unknown>;
 function object(value: unknown): value is Json { return !!value && typeof value === "object" && !Array.isArray(value); }
 class RequestError extends Error { constructor(readonly status: number, readonly code: string) { super(code); } }
@@ -24,7 +29,7 @@ function text(value: unknown): value is string {
 }
 // These source labels carry names and native IDs only, never source URLs or credentials.
 function sourceLabel(value: unknown): value is string {
-  return text(value) && !/(?:[a-z][a-z0-9+.-]*:\/\/|(?:javascript|data):|bearer\s+\S|(?:password|passwd|token|secret|cookie|api[_-]?key|authorization|密码|密钥)\s*[:=：]\s*\S)/i.test(value);
+  return text(value) && !UNSAFE_SOURCE_LABEL.test(value);
 }
 function categories(value: unknown): void {
   if (value == null) return; // Older collectors may omit the additional source fields.
@@ -46,6 +51,45 @@ function instant(value: unknown, now: number): number {
   if (!Number.isFinite(time) || time < Date.UTC(2020, 0, 1) || time > now + 300_000
     || new Date(time).toISOString().slice(0, 19) !== value.slice(0, 19)) invalid();
   return time;
+}
+function ipAddress(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 49 || !/^[0-9a-f:.]+(?:\/[0-9]{1,3})?$/.test(value)) return false;
+  const [address, prefix] = value.split("/");
+  const ipv4 = (s: string) => s.split(".").length === 4 && s.split(".").every(part => /^(?:0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255);
+  if (!address.includes(":")) return ipv4(address) && (prefix === undefined || Number(prefix) <= 32);
+  if (prefix !== undefined && Number(prefix) > 128) return false;
+  const halves = address.split("::");
+  if (halves.length > 2) return false;
+  const groups = halves.flatMap(half => half ? half.split(":") : []);
+  let size = 0;
+  for (let i = 0; i < groups.length; i++) {
+    const group = groups[i];
+    if (/^[0-9a-f]{1,4}$/.test(group)) size++;
+    else if (i === groups.length - 1 && ipv4(group)) size += 2;
+    else return false;
+  }
+  return halves.length === 2 ? size < 8 : size === 8;
+}
+function withdrawalDetails(value: unknown, orderType: unknown, now: number): void {
+  if (value == null) return;
+  if (orderType !== "withdrawal" || !object(value)) invalid();
+  only(value, [...WITHDRAWAL_LABELS, ...WITHDRAWAL_COUNTS, ...WITHDRAWAL_TIMES, ...WITHDRAWAL_BOOLEANS, "system_category_id", "third_pay_api_url", "notify_white_ips"]);
+  for (const key of WITHDRAWAL_LABELS) if (value[key] != null && !sourceLabel(value[key])) invalid();
+  for (const key of WITHDRAWAL_COUNTS) if (value[key] != null && (!Number.isInteger(value[key]) || Number(value[key]) < 0 || Number(value[key]) > 2147483647)) invalid();
+  for (const key of WITHDRAWAL_TIMES) if (value[key] != null) instant(value[key], now);
+  for (const key of WITHDRAWAL_BOOLEANS) if (value[key] != null && typeof value[key] !== "boolean") invalid();
+  if (value.system_category_id != null && (typeof value.system_category_id !== "string" || !/^[0-9]{1,19}$/.test(value.system_category_id))) invalid();
+  if (value.notify_white_ips != null && (!Array.isArray(value.notify_white_ips) || value.notify_white_ips.length > 100
+    || !value.notify_white_ips.every(ipAddress) || new Set(value.notify_white_ips).size !== value.notify_white_ips.length)) invalid();
+  if (value.third_pay_api_url != null) {
+    const raw = value.third_pay_api_url;
+    if (typeof raw !== "string" || raw.length > 2048 || !/^https?:\/\/[a-z0-9.:[\]-]+(?:\/[^?#]*)?$/i.test(raw)
+      || /[\u0000-\u0020\u007f\\]|<[^>]*>|%0[0-9a-f]|%1[0-9a-f]|%7f/i.test(raw)) invalid();
+    let url: URL; try { url = new URL(raw); } catch { invalid(); }
+    if (url.username || url.password || url.search || url.hash) invalid();
+    let path: string; try { path = decodeURIComponent(url.pathname); } catch { invalid(); }
+    if (UNSAFE_SOURCE_LABEL.test(path) || /[\u0000-\u001f\u007f\\]|<[^>]*>|\/(?:password|passwd|token|access[_-]?token|secret|cookie|api[_-]?key|auth|authorization)\/[^/]+/i.test(path)) invalid();
+  }
 }
 function sanitizeNotes(value: string): string | null {
   return value.replace(/<[^>]*>/g, "")
@@ -83,6 +127,8 @@ export function validateArMiddleChannelRequest(input: unknown, now = Date.now())
       for (const field of TEXT_FIELDS) if (entry[field] != null && !text(entry[field])) invalid();
       if (entry.source_channel_name != null && !sourceLabel(entry.source_channel_name)) invalid();
       categories(entry.channel_categories);
+      withdrawalDetails(entry.withdrawal_details, value.order_type, now);
+      if (entry.real_time_weight != null && value.order_type !== "deposit") invalid();
       for (const field of [...MONEY_FIELDS, ...RATE_FIELDS]) {
         const number = entry[field], pattern = field === "balance" ? SIGNED_DECIMAL : DECIMAL;
         if (number != null && (typeof number !== "string" || !pattern.test(number))) invalid();

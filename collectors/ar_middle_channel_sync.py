@@ -14,6 +14,7 @@ import contextlib
 import datetime as dt
 from decimal import Decimal, InvalidOperation
 import hashlib
+import ipaddress
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -36,9 +37,12 @@ ORIGIN = "https://m8-admin.payplatform-manager.com"
 INGEST_URL = "https://gmfyfzsxpxmaqtuuwgxb.supabase.co/functions/v1/ar-middle-channel-ingest"
 PATHS = {"deposit": "/api/RechargeChannel/GetCategoryChannelPageList",
          "withdrawal": "/api/WithdrawChannel/GetPageList"}
+DICTIONARY_PATHS = {"dynamic": "/api/Common/GetDynamicDictionary", "common": "/api/Common/GetDictionary"}
+DYNAMIC_DICTIONARY_KEYS = ("sysPayChannelList", "thirdPayMerchantList", "tenantList")
 INTERVAL = 300
 MAX_PAGES = 1000
 MAX_RESPONSE = 16 * 1024 * 1024
+UNSAFE_DISPLAY_TEXT = re.compile(r"[a-z][a-z0-9+.-]*://|(?:javascript|data):|<[^>]*>|\bbearer\s+\S+|(?:\b(?:token|password|passwd|secret|authorization|api[_-]?key|access_token|cookie)|密码|密钥)\s*[:=：]", re.IGNORECASE)
 # Bound against the native M8 tenant catalog, then checked against the existing
 # platform registry. Unbound tenant 1040 (pop) is deliberately not enabled.
 DEFAULT_TARGETS = [
@@ -89,10 +93,38 @@ def request_payload(tenant_id, page_no, page_size):
     return payload
 
 
-def native_id(value, code="SOURCE_ID_INVALID"):
-    if isinstance(value, bool) or not isinstance(value, (int, str)) or not re.fullmatch(r"[1-9][0-9]{0,18}", str(value)):
+def dictionary_payload(kind):
+    if kind not in DICTIONARY_PATHS:
+        raise SyncError("SOURCE_ROUTE_NOT_ALLOWED")
+    payload = {"random": secrets.randbelow(900_000_000_000) + 100_000_000_000,
+               "language": "zh", "timestamp": int(time.time())}
+    if kind == "dynamic":
+        payload["keys"] = list(DYNAMIC_DICTIONARY_KEYS)
+    payload["signature"] = source_signature(payload)
+    return payload
+
+
+def source_id(value, code, *, allow_zero=False):
+    # JSON numbers with a decimal point are parsed as Decimal. Accept only
+    # exact integers; never round IDs or convert them through binary floats.
+    if isinstance(value, Decimal):
+        if not value.is_finite() or not 0 <= value < 10 ** 19 or value != value.to_integral_value():
+            raise SyncError(code)
+        value = int(value)
+    pattern = r"(?:0|[1-9][0-9]{0,18})" if allow_zero else r"[1-9][0-9]{0,18}"
+    if isinstance(value, bool) or not isinstance(value, (int, str)) or not re.fullmatch(pattern, str(value)):
         raise SyncError(code)
     return str(value)
+
+
+def native_id(value, code="SOURCE_ID_INVALID"):
+    """Tenant and channel identities must be positive integers."""
+    return source_id(value, code)
+
+
+def metadata_id(value, code="SOURCE_CATEGORY_ID_INVALID"):
+    """Preserve native zero-valued category/system/merchant metadata IDs."""
+    return source_id(value, code, allow_zero=True)
 
 
 def decimal_text(value, *, signed=False, percent=False):
@@ -133,7 +165,7 @@ def safe_text(value, maximum=200):
     if not isinstance(value, (str, int, Decimal)) or isinstance(value, bool):
         raise SyncError("SOURCE_TEXT_INVALID")
     text = str(value).strip()
-    if len(text) > maximum or any(ord(c) < 32 for c in text):
+    if len(text) > maximum or any(ord(c) < 32 or ord(c) == 127 for c in text):
         raise SyncError("SOURCE_TEXT_INVALID")
     return text or None
 
@@ -236,6 +268,10 @@ def source_updated_at(value):
 
 
 def optional_integer_timestamp(value):
+    if isinstance(value, Decimal):
+        if not value.is_finite() or value != value.to_integral_value():
+            raise SyncError("SOURCE_UPDATE_TIME_INVALID")
+        value = int(value)
     if isinstance(value, bool) or not isinstance(value, (int, str)) or not re.fullmatch(r"[0-9]{12,13}", str(value)):
         raise SyncError("SOURCE_UPDATE_TIME_INVALID")
     return int(value)
@@ -247,9 +283,150 @@ def optional_metadata_name(value):
         name = safe_text(value)
     except SyncError:
         return None
-    if re.search(r"(?i)[a-z][a-z0-9+.-]*://|(?:javascript|data):|<[^>]*>|\bbearer\s+\S+|\b(?:token|password|secret|authorization|api[_-]?key|access_token|cookie)\s*[:=]", name):
+    if UNSAFE_DISPLAY_TEXT.search(name):
         return None
     return name
+
+
+def optional_display_text(value, maximum=200):
+    """Ordinary merchant IDs may be long numeric, hexadecimal or UUID strings."""
+    try:
+        text = safe_text(value, maximum)
+    except SyncError:
+        return None
+    if text is None or UNSAFE_DISPLAY_TEXT.search(text):
+        return None
+    return text
+
+
+def display_gateway_url(value):
+    """Display-only URL: never follow it, and never retain URL credentials."""
+    if not isinstance(value, str) or not value.strip() or len(value) > 2048:
+        return None
+    text = value.strip()
+    if re.search(r"[\s<>\\]|%(?![0-9a-fA-F]{2})", text) or any(ord(c) == 127 for c in text):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(text)
+        if parts.scheme.lower() not in ("http", "https") or not parts.hostname or parts.username is not None or parts.password is not None:
+            return None
+        port = parts.port
+        host = parts.hostname.lower()
+        if ":" in host:
+            host = "[" + str(ipaddress.IPv6Address(host)) + "]"
+        elif not re.fullmatch(r"[a-z0-9.-]+", host) or ".." in host:
+            return None
+        path = parts.path
+        for _ in range(3):
+            decoded = urllib.parse.unquote(path)
+            if decoded == path:
+                break
+            path = decoded
+        if re.search(r"(?i)(?:\b(?:token|password|passwd|secret|authorization|api[_-]?key|access_token|cookie)|密码|密钥)\s*[:=：]|/(?:token|password|passwd|secret|authorization|api[_-]?key|access_token|cookie|密码|密钥)/|\bbearer\s+", path) or any(ord(c) < 32 or ord(c) == 127 for c in path) or re.search(r"[<>\\]", path):
+            return None
+        netloc = host + (":" + str(port) if port is not None else "")
+        return urllib.parse.urlunsplit((parts.scheme.lower(), netloc, parts.path, "", ""))
+    except (ValueError, TypeError):
+        return None
+
+
+def display_white_ips(value):
+    if value is None:
+        return None
+    if isinstance(value, str) and len(value) <= 16000:
+        tokens = re.split(r"[,;，；\s]+", value.strip()) if value.strip() else []
+    elif isinstance(value, list) and len(value) <= 100:
+        tokens = value
+    else:
+        return None
+    result = []
+    for token in tokens:
+        if not isinstance(token, str) or not re.fullmatch(r"[0-9a-fA-F.:/]+", token):
+            return None  # An invalid partial whitelist must not look complete.
+        try:
+            parsed = str(ipaddress.ip_network(token, strict=False) if "/" in token else ipaddress.ip_address(token))
+        except ValueError:
+            return None
+        if parsed not in result:
+            result.append(parsed)
+        if len(result) > 100:
+            return None
+    return result
+
+
+def optional_withdrawal_value(parser, value):
+    try:
+        return parser(value)
+    except (SyncError, ValueError, TypeError, InvalidOperation):
+        return None
+
+
+def dictionary_data(response):
+    if not isinstance(response, dict) or isinstance(response.get("code"), bool) or response.get("code") not in (0, "0") or not isinstance(response.get("data"), dict):
+        raise SyncError("SOURCE_DICTIONARY_UNAVAILABLE")
+    return response["data"]
+
+
+def dictionary_labels(entries, id_field, label_field, direction=None):
+    result = {}
+    if not isinstance(entries, list) or len(entries) > 100000:
+        return result
+    for entry in entries:
+        if not isinstance(entry, dict) or (direction is not None and entry.get("inOutType") != direction):
+            continue
+        identifier = optional_withdrawal_value(metadata_id, entry.get(id_field))
+        label = optional_metadata_name(entry.get(label_field))
+        if identifier is None or label is None:
+            continue
+        if identifier in result and result[identifier] != label:
+            result[identifier] = None  # Conflicting dictionary labels stay unknown.
+        else:
+            result[identifier] = label
+    return {identifier: label for identifier, label in result.items() if label is not None}
+
+
+def parse_dynamic_dictionary(response):
+    data = dictionary_data(response)
+    def entries(key):
+        if key in data:
+            return data[key]
+        items = data.get("items")
+        if isinstance(items, dict):
+            return items.get(key, items.get(key[0].upper() + key[1:]))
+        return None
+    system = entries("sysPayChannelList")
+    return {"system_channel_names": {
+                "deposit": dictionary_labels(system, "sysChannelId", "sysChannelName", "Recharge"),
+                "withdrawal": dictionary_labels(system, "sysChannelId", "sysChannelName", "Withdraw")},
+            "merchant_names": dictionary_labels(entries("thirdPayMerchantList"), "merchantId", "customName"),
+            "tenant_names": dictionary_labels(entries("tenantList"), "tenantId", "tenantName")}
+
+
+def parse_common_dictionary(response):
+    return {"system_category_names": dictionary_labels(dictionary_data(response).get("withdrawCategoryEnumList"), "id", "name")}
+
+
+def withdrawal_details(row, system_channel, tenant_id, dictionaries=None):
+    dictionaries = dictionaries if isinstance(dictionaries, dict) else {}
+    merchant_id = optional_withdrawal_value(metadata_id, row.get("thirdPayMerchantId"))
+    system_category_id = optional_withdrawal_value(metadata_id, system_channel.get("sysCategoryId"))
+    return {
+        "source_tenant_name": optional_metadata_name(dictionaries.get("tenant_names", {}).get(str(tenant_id))),
+        "balance_updated_at": optional_withdrawal_value(source_updated_at, row.get("balanceUpdateTime")),
+        "today_submit_count": optional_withdrawal_value(optional_integer, row.get("todaySubmitCount")),
+        "recent_1h_success_count": optional_withdrawal_value(optional_integer, row.get("recent1HourSuccessCount")),
+        "merchant_code": optional_display_text(row.get("merchantCode")),
+        "merchant_name": optional_metadata_name(row.get("merchantCustomName")) or optional_metadata_name(dictionaries.get("merchant_names", {}).get(merchant_id)),
+        "third_channel_code": optional_display_text(row.get("thirdChannelCode")),
+        "is_use_channel_code": system_channel.get("isUseChannelCode") if type(system_channel.get("isUseChannelCode")) is bool else None,
+        "is_fixed_channel_code": system_channel.get("isFixedChannelCode") if type(system_channel.get("isFixedChannelCode")) is bool else None,
+        "system_category_id": system_category_id,
+        "system_category_name": optional_metadata_name(dictionaries.get("system_category_names", {}).get(system_category_id)),
+        "third_pay_api_url": display_gateway_url(system_channel.get("thirdPayApiUrl")),
+        "notify_white_ips": display_white_ips(system_channel.get("notifyWhiteIpList")),
+        "last_update_by": optional_display_text(row.get("lastUpdateMan")),
+        "last_updated_at": optional_withdrawal_value(source_updated_at, row.get("lastUpdateTime")),
+    }
 
 
 def channel_categories(row, own_category, outer_category):
@@ -262,16 +439,16 @@ def channel_categories(row, own_category, outer_category):
         category_id = own_category.get("categoryId")
         if category_id is None: category_id = outer_category.get("categoryId")
         if category_id is None: return []
-        return [{"category_id": native_id(category_id),
+        return [{"category_id": metadata_id(category_id),
                  "category_name": optional_metadata_name(own_category.get("categoryName") or outer_category.get("customName")),
                  "sort": optional_integer(own_category.get("sort") if own_category.get("sort") is not None else outer_category.get("sort"), signed=True)}]
     result, seen = [], {}
     for category in categories:
         if not isinstance(category, dict): raise SyncError("SOURCE_CATEGORIES_INVALID")
         tenant_id, ordinary_id = category.get("tenantCategoryId"), category.get("categoryId")
-        if tenant_id is not None and ordinary_id is not None and native_id(tenant_id) != native_id(ordinary_id):
+        if tenant_id is not None and ordinary_id is not None and metadata_id(tenant_id) != metadata_id(ordinary_id):
             raise SyncError("SOURCE_CATEGORY_ID_CONFLICT")
-        category_id = native_id(tenant_id if tenant_id is not None else ordinary_id)
+        category_id = metadata_id(tenant_id if tenant_id is not None else ordinary_id)
         item = {"category_id": category_id,
                 "category_name": optional_metadata_name(category.get("customName") or category.get("categoryName")),
                 "sort": optional_integer(category.get("sort"), signed=True)}
@@ -294,10 +471,10 @@ def source_channel_name(system_channel):
     return names[0] if names and len(set(names)) == 1 else None
 
 
-def normalize_record(row, tenant_id, position, category=None):
-    if not isinstance(row, dict) or native_id(row.get("tenantId")) != str(tenant_id):
+def normalize_record(row, tenant_id, position, category=None, *, order_type=None, dictionaries=None):
+    if not isinstance(row, dict) or native_id(row.get("tenantId"), "SOURCE_TENANT_ID_INVALID") != str(tenant_id):
         raise SyncError("SOURCE_TENANT_MISMATCH")
-    channel_id = native_id(row.get("id"))
+    channel_id = native_id(row.get("id"), "SOURCE_CHANNEL_ID_INVALID")
     channel_name = safe_text(row.get("customName"))
     if not channel_name:
         raise SyncError("SOURCE_CHANNEL_NAME_MISSING")
@@ -308,7 +485,7 @@ def normalize_record(row, tenant_id, position, category=None):
     category = category or {}
     own_id = own_category.get("categoryId")
     group_id = category.get("categoryId")
-    if own_id is not None and group_id is not None and native_id(own_id) != native_id(group_id):
+    if own_id is not None and group_id is not None and metadata_id(own_id) != metadata_id(group_id):
         raise SyncError("SOURCE_CATEGORY_MISMATCH")
     category_id = own_id if own_id is not None else group_id
     category_name = optional_metadata_name(own_category.get("categoryName") or category.get("customName"))
@@ -324,16 +501,19 @@ def normalize_record(row, tenant_id, position, category=None):
     balance = decimal_text(row.get("thirdBalance"), signed=True)
     threshold = decimal_text(row.get("autoCloseBalance"))
     fee_rate = decimal_text(row.get("thirdPayFeeRate"))
+    dictionaries = dictionaries if isinstance(dictionaries, dict) else {}
+    system_id = metadata_id(system_channel["sysChannelId"], "SOURCE_SYS_CHANNEL_ID_INVALID") if system_channel.get("sysChannelId") is not None else None
+    dictionary_name = dictionaries.get("system_channel_names", {}).get(order_type, {}).get(system_id)
     out = {
         "channel_id": channel_id, "channel_name": channel_name, "status_text": status,
-        "source_channel_name": source_channel_name(system_channel),
-        "provider": safe_text(row.get("payCode") or row.get("merchantCustomName")), "channel_type": category_name,
+        "source_channel_name": source_channel_name(system_channel) or optional_metadata_name(dictionary_name),
+        "provider": safe_text(row.get("payCode") if order_type == "withdrawal" else row.get("payCode") or row.get("merchantCustomName")), "channel_type": category_name,
         "payment_method": category_name,
-        "category_id": native_id(category_id) if category_id is not None else None,
+        "category_id": metadata_id(category_id) if category_id is not None else None,
         "category_name": category_name,
         "channel_categories": channel_categories(row, own_category, category),
-        "sys_channel_id": native_id(system_channel["sysChannelId"]) if system_channel.get("sysChannelId") is not None else None,
-        "third_pay_merchant_id": native_id(row["thirdPayMerchantId"]) if row.get("thirdPayMerchantId") is not None else None,
+        "sys_channel_id": system_id,
+        "third_pay_merchant_id": metadata_id(row["thirdPayMerchantId"], "SOURCE_MERCHANT_ID_INVALID") if row.get("thirdPayMerchantId") is not None else None,
         "source_state": source_state, "source_channel_state": channel_state, "source_merchant_state": merchant_state,
         "min_amount": decimal_text(row.get("minAmount")), "max_amount": decimal_text(row.get("maxAmount")),
         "limit_currency": unit, "balance": balance, "balance_currency": unit if balance is not None else None,
@@ -347,6 +527,10 @@ def normalize_record(row, tenant_id, position, category=None):
         "notes": redact_notes(row.get("remark")),
         "source_updated_at": source_updated_at(row.get("lastUpdateTime")),
     }
+    if order_type == "withdrawal":
+        out["withdrawal_details"] = withdrawal_details(row, system_channel, tenant_id, dictionaries)
+    elif order_type == "deposit":
+        out["real_time_weight"] = decimal_text(row.get("realTimeWeight"))
     out.update(success_rates_from_row(row))
     if out["min_amount"] is not None and out["max_amount"] is not None and Decimal(out["min_amount"]) > Decimal(out["max_amount"]):
         raise SyncError("SOURCE_AMOUNT_RANGE_INVALID")
@@ -366,7 +550,7 @@ def page_rows(response, order_type, page_no, tenant_id, page_size):
     if data["pageNo"] != page_no or pages > MAX_PAGES:
         raise SyncError("SOURCE_PAGE_ECHO_MISMATCH")
     if total == 0:
-        if data["list"] or pages not in (0, 1) or page_no != 1:
+        if pages not in (0, 1) or page_no != 1:
             raise SyncError("SOURCE_ZERO_NOT_PROVEN")
     elif pages < 1 or pages != (total + page_size - 1) // page_size or page_no > pages:
         raise SyncError("SOURCE_TOTAL_PAGE_MISMATCH")
@@ -375,25 +559,32 @@ def page_rows(response, order_type, page_no, tenant_id, page_size):
         for group in data["list"]:
             if not isinstance(group, dict) or not isinstance(group.get("channels"), list):
                 raise SyncError("SOURCE_RECHARGE_GROUP_INVALID")
-            native_id(group.get("categoryId"))
+            # Native UI flattens channels: empty groups contribute no records,
+            # including unclassified groups with zero/missing category IDs.
+            if not group["channels"]:
+                continue
+            if group.get("categoryId") is not None:
+                metadata_id(group["categoryId"])
             for row in group["channels"]:
                 records.append((row, group))
     else:
         records = [(row, None) for row in data["list"]]
+    if total == 0 and records:
+        raise SyncError("SOURCE_ZERO_NOT_PROVEN")
     expected = 0 if total == 0 else min(page_size, total - (page_no - 1) * page_size)
     if len(records) != expected:
         raise SyncError("SOURCE_PAGE_INCOMPLETE")
     ids = []
     for row, _category in records:
-        if not isinstance(row, dict) or native_id(row.get("tenantId")) != str(tenant_id):
+        if not isinstance(row, dict) or native_id(row.get("tenantId"), "SOURCE_TENANT_ID_INVALID") != str(tenant_id):
             raise SyncError("SOURCE_TENANT_MISMATCH")
-        ids.append(native_id(row.get("id")))
+        ids.append(native_id(row.get("id"), "SOURCE_CHANNEL_ID_INVALID"))
     if len(ids) != len(set(ids)):
         raise SyncError("SOURCE_PAGE_DUPLICATE_CHANNEL")
     return total, pages, records, tuple(ids)
 
 
-def collect_direction(source, tenant_id, order_type, page_size=300):
+def collect_direction(source, tenant_id, order_type, page_size=300, dictionaries=None):
     response = source.fetch(order_type, request_payload(tenant_id, 1, page_size))
     total, pages, first_rows, first_ids = page_rows(response, order_type, 1, tenant_id, page_size)
     records, seen_ids, fingerprints = [], set(), set()
@@ -410,7 +601,7 @@ def collect_direction(source, tenant_id, order_type, page_size=300):
         fingerprints.add(ids)
         seen_ids.update(ids)
         for row, group in raw_rows:
-            records.append(normalize_record(row, tenant_id, len(records), group))
+            records.append(normalize_record(row, tenant_id, len(records), group, order_type=order_type, dictionaries=dictionaries))
     # A second first-page query proves the count and anchor did not drift.
     final_response = source.fetch(order_type, request_payload(tenant_id, 1, page_size))
     confirmed_total, confirmed_pages, _rows, confirmed_ids = page_rows(final_response, order_type, 1, tenant_id, page_size)
@@ -608,20 +799,48 @@ class Source:
         self.config = config
         self.context = tls_context(config.get("ca_bundle"))
         self.next_request_at = 0.0
+        self.dictionaries = {}
 
     def fetch(self, order_type, payload):
         if order_type not in PATHS:
             raise SyncError("SOURCE_ROUTE_NOT_ALLOWED")
+        return self.fetch_readonly_path(PATHS[order_type], payload)
+
+    def fetch_readonly_path(self, path, payload):
+        if path not in (*PATHS.values(), *DICTIONARY_PATHS.values()):
+            raise SyncError("SOURCE_ROUTE_NOT_ALLOWED")
+        if path == DICTIONARY_PATHS["dynamic"] and (not isinstance(payload, dict) or payload.get("keys") != list(DYNAMIC_DICTIONARY_KEYS)):
+            raise SyncError("SOURCE_DICTIONARY_KEYS_NOT_ALLOWED")
         delay = self.next_request_at - time.monotonic()
         if delay > 0: time.sleep(delay)
         self.next_request_at = time.monotonic() + self.config.get("min_request_interval_seconds", 1)
         if self.config.get("cdp_url"):
-            return self.fetch_in_browser(order_type, payload)
-        return http_json(ORIGIN + PATHS[order_type], payload,
+            return self.fetch_path_in_browser(path, payload)
+        return http_json(ORIGIN + path, payload,
                          {"Content-Type": "application/json", "Authorization": source_bearer(self.config),
                           "Origin": ORIGIN, "Referer": ORIGIN + "/", "domainurl": ORIGIN}, context=self.context)
 
+    def refresh_dictionaries(self, logger):
+        # Metadata is fetched once per run cycle, never once per tenant. Do not
+        # reuse old dictionary names after a failed refresh in a later cycle.
+        self.dictionaries = {}
+        for kind, parser in (("dynamic", parse_dynamic_dictionary), ("common", parse_common_dictionary)):
+            try:
+                response = self.fetch_readonly_path(DICTIONARY_PATHS[kind], dictionary_payload(kind))
+                self.dictionaries.update(parser(response))
+            except Exception:
+                logger.warning("SOURCE_DICTIONARY_UNAVAILABLE kind=%s", kind)
+
     def fetch_in_browser(self, order_type, payload):
+        if order_type not in PATHS:
+            raise SyncError("SOURCE_ROUTE_NOT_ALLOWED")
+        return self.fetch_path_in_browser(PATHS[order_type], payload)
+
+    def fetch_path_in_browser(self, path, payload):
+        if path not in (*PATHS.values(), *DICTIONARY_PATHS.values()):
+            raise SyncError("SOURCE_ROUTE_NOT_ALLOWED")
+        if path == DICTIONARY_PATHS["dynamic"] and (not isinstance(payload, dict) or payload.get("keys") != list(DYNAMIC_DICTIONARY_KEYS)):
+            raise SyncError("SOURCE_DICTIONARY_KEYS_NOT_ALLOWED")
         cdp = self.config["cdp_url"].rstrip("/")
         validate_cdp_url(cdp)
         targets = http_json(cdp + "/json", direct_connection=True)
@@ -654,7 +873,7 @@ class Source:
             if (location.origin !== origin) throw new Error('SOURCE_ORIGIN_MISMATCH');
             return text;
           } finally { clearTimeout(timer); }
-        })()""".replace("ORIGIN_VALUE", json.dumps(ORIGIN)).replace("PATH_VALUE", json.dumps(PATHS[order_type])).replace("PAYLOAD_VALUE", json_bytes(payload).decode("utf-8"))
+        })()""".replace("ORIGIN_VALUE", json.dumps(ORIGIN)).replace("PATH_VALUE", json.dumps(path)).replace("PAYLOAD_VALUE", json_bytes(payload).decode("utf-8"))
         try:
             websocket = WebSocket(matching[0]["webSocketDebuggerUrl"], cdp, matching[0]["id"])
             try:
@@ -725,8 +944,9 @@ class Upload:
 
 
 def build_snapshot(source, target, page_size):
-    tenant_id = native_id(target["tenant_id"])
-    directions = [collect_direction(source, tenant_id, order_type, page_size) for order_type in PATHS]
+    tenant_id = native_id(target["tenant_id"], "CONFIG_TENANT_INVALID")
+    dictionaries = getattr(source, "dictionaries", None)
+    directions = [collect_direction(source, tenant_id, order_type, page_size, dictionaries) for order_type in PATHS]
     return {"action": "channels", "schema_version": 1, "source": "ar_middle", "source_origin": ORIGIN,
             "source_tenant_id": tenant_id, "snapshot_id": str(uuid.uuid4()), "captured_at": utc_now(), "directions": directions}
 
@@ -748,6 +968,9 @@ def run_cycle(config, source, upload, store, logger, dry_run=False):
     failures = 0
     if not dry_run:
         resume_pending(store, upload, logger)
+    refresh = getattr(source, "refresh_dictionaries", None)
+    if callable(refresh):
+        refresh(logger)
     for target in config["targets"]:
         if not target["enabled"]:
             continue

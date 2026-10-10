@@ -103,6 +103,27 @@
 .channel-availability.available{color:#159569}
 .channel-availability.closed{color:#e04853}
 .channel-availability.unknown{color:#8592a7}
+.channel-native-grid{display:grid;grid-template-columns:max-content minmax(0,1fr);align-items:baseline;column-gap:4px;row-gap:2px;line-height:1.8;text-align:left}
+.channel-native-label{color:#8592a7;white-space:nowrap;font-size:11px}
+.channel-native-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+.channel-native-muted,.channel-detail-denied,.channel-dictionary-pending{color:#8592a7;font-size:11px}
+.channel-pay-code{display:inline-block;margin-left:10px;padding:1px 6px;border:1px solid #c2d8f0;border-radius:3px;background:#f2f7ff;color:#3979bd;font-size:11px;vertical-align:middle}
+.channel-builtin-category{display:inline-block;padding:1px 6px;border:1px solid #b9dfce;border-radius:3px;background:#eefaf4;color:#25885f;font-size:11px}
+.channel-ar-withdraw-table :is(.channel-category,.channel-compact-state,.channel-id){position:static;left:auto;box-shadow:none}
+.channel-ar-withdraw-table thead :is(.channel-category,.channel-compact-state,.channel-id){position:sticky;top:0;z-index:3}
+.channel-ar-withdraw-table .channel-tenant{position:sticky;left:0;z-index:2;background:#fff;border-right-color:#cbd8eb;box-shadow:2px 0 3px #15274c12;text-align:center}
+.channel-ar-withdraw-table thead .channel-tenant{top:0;z-index:5;background:#f3f6fc}
+.channel-tenant-label{display:inline-block;max-width:100%;padding:2px 7px;border:1px solid #1677ff;border-radius:3px;color:#1677ff;background:#e6f4ff;font-weight:400;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.channel-ar-withdraw-table :is(.channel-withdraw-name,.channel-withdraw-id,.channel-withdraw-gateway,.channel-withdraw-update){text-align:left}
+.channel-ar-withdraw-table .channel-compact-state{text-align:left}
+.channel-ar-withdraw-table .channel-switch-line{justify-content:flex-start}
+.channel-ar-withdraw-table .channel-switch-line .channel-state-label{min-width:55px}
+.channel-ar-withdraw-table .channel-availability{margin-top:3px;font-size:12px;line-height:1.8}
+.channel-ar-withdraw-table .channel-availability .channel-state-label{display:inline-block;min-width:55px;margin-right:5px}
+.channel-withdraw-range{font-variant-numeric:tabular-nums}
+.channel-readonly-actions{display:flex;justify-content:center;gap:7px;flex-wrap:wrap}
+.live-channel-status button.channel-readonly-action,.live-channel-status button.channel-readonly-action:disabled{padding:0;border:0;background:transparent;color:#8a96a9;font-size:11px;opacity:1;cursor:default;pointer-events:none}
+.channel-withdraw-actions small{display:block;margin-top:3px}
 .channel-limits{font-variant-numeric:tabular-nums;font-size:11px!important}
 .channel-limits>div{line-height:1.5;overflow-wrap:normal}
 .channel-limits>div>span{color:#8592a7}
