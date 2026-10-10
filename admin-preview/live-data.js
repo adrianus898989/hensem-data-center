@@ -493,7 +493,7 @@
  window.livePendingSnapshotDetails=()=>pendingSnapshot?.details();
  channelStatus=window.HensemLiveChannelStatus?.create({L,getPage:()=>state.page,catalog:visibleCatalog,selected:selectedVisible,activeValues,roleAllowed:action=>roleAllowed('channel_status',action),request:r=>window.hensemLiveRequest(r),render:()=>{if(isChannelStatus())render()}})||null;
  dailyComparison=window.HensemLiveDailyComparison?.create({L,E,N,C,R,getPage:()=>state.page,selected:selectedVisible,nativePlatforms:selected,readAggregate:(q,serial)=>readAggregate(q,serial??L.serial,false,true),instant,localClock,activeValues,ensureFeeLookup,scopeZone,render:()=>{if(isDailyComparison())render()},roleAllowed:action=>roleAllowed('daily_comparison',action),allowed:action=>roleAllowed('daily_comparison',action),request:r=>window.hensemLiveRequest(r)})||null;
- submissionAnalysis=window.HensemSubmissionAnalysis?.create({L,E,N,C,dashboard:()=>state.page==='events',selected:selectedVisible,query,request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html),box,table})||null;
+ submissionAnalysis=window.HensemSubmissionAnalysis?.create({L,E,N,C,dashboard:()=>state.page==='events',selected:selectedVisible,query,request:(r,options)=>window.hensemLiveRequest(r,options),render:()=>render(),open:(title,html)=>openDrawer(title,html),box,table})||null;
  memberCounts=window.HensemLiveMemberCounts?.create({L,E,N,C,selected:selectedVisible,query,request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
  window.liveMemberCountsDetails=(tab,basis)=>memberCounts?.details(tab,basis);
  window.liveMemberCountsRetry=()=>{if(state.page==='overview'&&!L.dirty)return memberCounts?.load()};

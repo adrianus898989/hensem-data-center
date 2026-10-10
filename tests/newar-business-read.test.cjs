@@ -18,6 +18,8 @@ async function fixture(options,run){
     if(url.pathname==='/auth/v1/user')return Response.json({id:'one'});
     if(url.pathname==='/rest/v1/dashboard_profiles')return Response.json([{auth_user_id:'one',active:true,role:options.scope?'viewer':'owner',permissions:{third_party:!options.denied,auto_withdraw:!options.denied,work_orders:!options.denied},...(options.scope?{data_scope:options.scope}:{})}]);
     const name=url.pathname.split('/').pop();calls.push(name);
+    if(name==='application_session_guard')return Response.json(true);
+    if(name==='dashboard_role_access')return Response.json({mode:options.scope?'legacy':'owner',roleId:null,roleName:null,version:0,canView:true,permissions:[]});
     if(name==='auto_withdraw_daily')return Response.json([{data_date:day,country:'PK',platform:'POPZAR',total:99,success:90,rejected:9,auto_count:90,manual_count:9,avg_seconds:9},{data_date:'2026-09-17',country:'PK',platform:'POPZAR',total:50,success:40,rejected:10,auto_count:30,manual_count:20,avg_seconds:20}]);
     if(name==='withdraw_operator_daily')return Response.json([{data_date:day,country:'PK',platform:'POPZAR',account:'old-worker',processed:90,rejected:9,avg_seconds:9}]);
     if(name==='workorder_daily_bundle')return Response.json([{system_name:'AR',stat_date:day,country:'巴基斯坦',country_code:'PK',platform:'POPZAR',daily_rows:[{total_count:99,completed_count:90,rejected_count:9}],type_rows:[{order_type:'old',total_count:99}],employee_rows:[{employee_name:'old-worker',total_count:99}]},{system_name:'AR',stat_date:'2026-09-17',country:'巴基斯坦',country_code:'PK',platform:'POPZAR',daily_rows:[{total_count:5}],type_rows:[],employee_rows:[]}]);
@@ -56,5 +58,13 @@ for(const [name,reader] of readers){
   }));
   test(`${name}: unauthorized foreign direct source is discarded after authenticated RPC scope checks`,async()=>fixture({scope:{mode:'selected',countries:['IN']}},async request=>{
     const result=await reader.readSupabaseAutoWithdraw(request,day,day);assert.equal(result.dailyRows.length,0);assert.equal(result.operatorRows.length,0);
+  }));
+  test(`${name}: platform-only routing reads the authorized source and recomputes totals after discarding other platforms`,async()=>fixture({scope:{mode:'selected',countries:[],platforms:[{country:'PK',platform:'POPZAR'}]}},async(request,calls)=>{
+    const result=await reader.readSupabaseThirdPartyVolume(request,day,day,'巴基斯坦');
+    assert.ok(calls.includes('dashboard_newar_business_snapshots'),'platform-only users still read their native source');
+    assert.deepEqual(result.rows.map(row=>row.platform),['POPZAR','POPZAR']);assert.equal(result.summary.amount,850);assert(!JSON.stringify(result).includes('OtherPay'));
+    const auto=await reader.readSupabaseAutoWithdraw(request,day,day);assert.deepEqual(auto.dailyRows.map(row=>row.platform),['POPZAR']);assert.equal(auto.dailyRows[0].total,10);
+    const work=await reader.readSupabaseWorkOrderMonths(request,['2026_09']);assert(work.rows.length>0);assert(work.rows.every(row=>row.platform==='POPZAR'));
+    const before=calls.length;await assert.rejects(reader.readSupabaseThirdPartyVolume(request,day,day,'印度'),error=>error.status===403);assert.deepEqual(calls.slice(before).filter(name=>!['application_session_guard','dashboard_role_access'].includes(name)),[],'foreign country denied before data reads');
   }));
 }

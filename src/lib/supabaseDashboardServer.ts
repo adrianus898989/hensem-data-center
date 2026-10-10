@@ -18,7 +18,7 @@ import type {
 import { formatDuration, parseDurationToSeconds } from "./format";
 import { aggregateWithdrawRows } from "./parseAutoWithdraw";
 import { platformDisplayCountry } from "./platformDisplayCountry";
-import { dashboardScopeAllows } from "./dashboardDataScope";
+import { dashboardScopeAllows, dashboardScopeMayReadCountry } from "./dashboardDataScope";
 import { collectionSuccessCountry, collectionSuccessPeriod } from "./collectionSuccess";
 import { withdrawPendingCountry } from "./withdrawPending";
 import { requireDashboardDataAccess, requireDashboardAllData, dashboardAllowedRows, DashboardDataAccessError } from "./dashboardDataAccessServer";
@@ -478,7 +478,7 @@ export async function readSupabaseAutoWithdraw(request: Request, startInput: str
     };
   })();
 
-  const canReadNewar = dashboardScopeAllows(access.scope, "巴基斯坦") || dashboardScopeAllows(access.scope, "印度");
+  const canReadNewar = dashboardScopeMayReadCountry(access.scope, "巴基斯坦") || dashboardScopeMayReadCountry(access.scope, "印度");
   const [dailyFetched, operatorFetched, game66Result, newarFetched] = await Promise.all([
     fetchPaged<DbAutoWithdrawRow>("auto_withdraw_daily", dailyQuery, token),
     fetchPaged<DbOperatorRow>("withdraw_operator_daily", operatorQuery, token),
@@ -499,7 +499,7 @@ export async function readSupabaseAutoWithdraw(request: Request, startInput: str
   const updatedAt = [
     ...dailyRaw.map((row) => String(row.updated_at || row.source_updated_at || "")),
     ...operatorRaw.map((row) => String(row.updated_at || row.source_updated_at || "")),
-    String(game66Result.latestWriteAt || ""),
+    String(access.scope.mode === "all" ? game66Result.latestWriteAt || "" : ""),
     ...newarSnapshots.map(snapshot => snapshot.captured_at),
   ].filter(Boolean).sort().pop() || new Date().toISOString();
 
@@ -526,7 +526,7 @@ export async function readSupabaseThirdPartyWorkOrderMetrics(request: Request, s
     && Number.isFinite(Date.parse(value+"T00:00:00Z")) && new Date(value+"T00:00:00Z").toISOString().slice(0,10)===value;
   if (!validDay(start)||!validDay(end)||start>end||Date.parse(end)-Date.parse(start)>=31*86400000||!country.trim())
     throw new DashboardDataAccessError(400,"invalid_range","工单日期范围须为1至31天，并指定国家。");
-  if (!dashboardScopeAllows(access.scope,country))
+  if (!dashboardScopeMayReadCountry(access.scope,country))
     throw new DashboardDataAccessError(403,"scope_denied","当前账号没有此国家的查看权限。");
   const query = new URLSearchParams({
     select:"system_name,source_system,stat_date,country_code,country,platform,third_party,channel_type,submitted_count,submitted_amount,success_count,success_amount,withdraw_not_received_count,withdraw_not_received_amount,withdraw_success_count,withdraw_success_amount,source_updated_at",
@@ -551,7 +551,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
   const start = isoDate(startInput) || yesterday;
   const end = isoDate(endInput) || start;
   const country = String(countryInput || "").trim();
-  if (country && !dashboardScopeAllows(access.scope, country)) throw new DashboardDataAccessError(403, "scope_denied", "当前账号没有此国家或盘口组的数据权限。");
+  if (country && !dashboardScopeMayReadCountry(access.scope, country)) throw new DashboardDataAccessError(403, "scope_denied", "当前账号没有此国家或盘口组的数据权限。");
   const queryStart = previousDate(start);
   const normalizedCountry = country.toLowerCase().replace(/[\s_-]+/g, "");
   const redCrabTeamCountry = ["红膏蟹", "红膏蟹盘口", "redcrab"].includes(normalizedCountry);
@@ -673,7 +673,7 @@ export async function readSupabaseThirdPartyVolume(request: Request, startInput 
       latestWriteAt: null
     };
   });
-  const canReadNewar = shouldReadLegacy && includesNewarCountry(country) && (dashboardScopeAllows(access.scope, "巴基斯坦") || dashboardScopeAllows(access.scope, "印度"));
+  const canReadNewar = shouldReadLegacy && includesNewarCountry(country) && (dashboardScopeMayReadCountry(access.scope, "巴基斯坦") || dashboardScopeMayReadCountry(access.scope, "印度"));
   const [results, game66Result, newarFetched] = await Promise.all([legacyVolumeRead, game66Read,
     canReadNewar ? readNewarBusiness("third_party_volume", start, end, country, token) : Promise.resolve([] as NewarBusinessSnapshot[])]);
   const newarSnapshots = dashboardAllowedRows(access, newarFetched);
@@ -850,7 +850,7 @@ export async function readSupabaseWorkOrderMonths(request: Request, monthKeys: s
     order: "stat_date.asc,platform.asc",
   });
   query.append("stat_date", `lte.${end}`);
-  const canReadNewar = dashboardScopeAllows(access.scope, "巴基斯坦") || dashboardScopeAllows(access.scope, "印度");
+  const canReadNewar = dashboardScopeMayReadCountry(access.scope, "巴基斯坦") || dashboardScopeMayReadCountry(access.scope, "印度");
   const [bundles, newarFetched] = await Promise.all([
     fetchPaged<DbWorkOrderBundle>("workorder_daily_bundle", query, access.token),
     canReadNewar ? readNewarBusiness("workorder_daily_bundle", start, end, "", access.token) : Promise.resolve([] as NewarBusinessSnapshot[]),
@@ -997,6 +997,7 @@ function buildRateSummary(rates: ThirdPartyRateRow[], statuses: ThirdPartyPlatfo
 
 export async function readSupabaseThirdPartyRates(request: Request): Promise<ThirdPartyRatePayload> {
   const access = await requireDashboardDataAccess(request, "third_party");
+  if (access.scope.platforms !== undefined) throw new DashboardDataAccessError(403, "platform_fee_scope_denied", "当前按平台授权，国家级费率没有平台归属，无法读取。");
   const {token} = access;
   // The volume dashboard only needs the national fee table for all-data
   // accounts.  Avoid transferring the 4k+ platform-status matrix on that hot

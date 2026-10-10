@@ -289,4 +289,17 @@
 .admin-data-scope-groups section + section { border-top: 1px solid #e7edf6; margin-top: 12px; padding-top: 10px; }
 .admin-data-scope-groups h4 { margin: 0; color: #5b718e; font-size: 11px; }
 .admin-data-scope-groups .admin-data-scope-options { padding-top: 9px; gap: 10px; }
+.admin-scope-platform-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:4px 0 10px; color:#7487a1; font-size:12px; }
+.admin-scope-platform-toolbar label { display:flex; align-items:center; gap:8px; margin:0; }
+.admin-scope-platform-toolbar select { width:auto; min-width:140px; }
+.admin-scope-platform-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:8px; max-height:270px; overflow:auto; padding:4px; border:1px solid #e1e9f5; border-radius:8px; }
+.admin-scope-platform-list label { display:flex; align-items:center; gap:8px; min-width:0; margin:0; padding:10px; border:1px solid #e1e9f5; border-radius:6px; background:#fafcff; cursor:pointer; }
+.admin-scope-platform-list label:has(input:checked) { border-color:#7294ec; background:#eff4ff; }
+.admin-scope-platform-list label span { min-width:0; overflow-wrap:anywhere; }
+.admin-scope-platform-list label b { color:#31547e; font-size:12px; }
+.admin-data-scope-picker .admin-scope-platform-list small { margin:3px 0 0; color:#7487a1; }
+.admin-scope-platform-selected { display:flex; flex-wrap:wrap; gap:6px; max-height:110px; overflow:auto; margin-bottom:10px; }
+.admin-scope-platform-selected button { display:flex; gap:6px; padding:5px 8px; color:#315ba3; background:#eef4ff; border:1px solid #c7d9f6; border-radius:5px; font-size:12px; }
+.admin-scope-platform-selected span { color:#7487a1; }
+.admin-scope-platform-status { display:flex; align-items:center; gap:10px; padding:14px 8px; color:#7487a1; font-size:12px; }
 @media (max-width: 600px) { .admin-account-current-role { align-items: stretch; flex-direction: column; } }

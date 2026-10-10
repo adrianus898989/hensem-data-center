@@ -24,7 +24,20 @@ async function edge(action, patch={}, options={}) {
   const users=clone(options.users||[target]);
   const writes=[],authCalls=[],audits=[],reads=[];
   let handler;
-  const client={rpc:async name=>({data:name==="application_session_check"?{allowed:options.sessionAllowed!==false}:null,error:options.sessionFailure&&name==="application_session_check"?{message:"PRIVATE_SESSION_FAILURE"}:options.revokeFailure&&name==="application_revoke_user_sessions"?{message:"PRIVATE_REVOKE_FAILURE"}:null}),auth:{
+  const client={rpc:async(name,args)=>{
+    if(name==='dashboard_update_account_data_scope'){
+      reads.push({rpc:name,args:clone(args)});
+      if(options.scopeRpcDenied)return {error:{code:'42501',message:'fixture authority revoked'}};
+      if(options.race)return {error:{code:'40001',message:'fixture version conflict'}};
+      if(options.scopeRpcFailure)throw Error('fixture unavailable');
+      if(options.scopeRpcBadAck)return {data:{ok:true},error:null};
+      assert.equal(args.p_actor,caller.auth_user_id);assert.equal(args.p_target,target.auth_user_id);
+      assert.equal(args.p_session_id,'33333333-3333-4333-8333-333333333333');assert.equal(args.p_expected_updated_at,target.updated_at);
+      const value={data_scope:clone(args.p_scope),updated_at:new Date().toISOString()};writes.push(value);Object.assign(target,value);
+      return {data:{ok:true,auth_user_id:target.auth_user_id,username:target.username,role:target.role,...value},error:null};
+    }
+    return {data:name==="application_session_check"?{allowed:options.sessionAllowed!==false}:null,error:options.sessionFailure&&name==="application_session_check"?{message:"PRIVATE_SESSION_FAILURE"}:options.revokeFailure&&name==="application_revoke_user_sessions"?{message:"PRIVATE_REVOKE_FAILURE"}:null};
+  },auth:{
     getUser:async()=>({data:{user:options.invalidToken?null:{id:caller.auth_user_id,user_metadata:{dashboard_role:'owner',data_scope:ALL}}}}),
     admin:{
       createUser:async data=>{authCalls.push({action:'create',data});return {data:{user:{id:'fixture-created'}}};},
@@ -64,7 +77,7 @@ async function edge(action, patch={}, options={}) {
   }};
   vm.runInNewContext(compiled,{createClient:()=>client,Deno:{env:{get:()=> 'fixture'},serve:fn=>{handler=fn;}},Request,Response,Date,Intl,console,AbortSignal,atob,TextEncoder,TextDecoder,Uint8Array,
     fetch:async(url,init)=>{if(String(url).endsWith('/rest/v1/rpc/dashboard_account_action_allowed')){assert.equal(init.headers.Authorization,'Bearer '+token);assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');if(options.targetRoleFailure)throw Error('TARGET_LOOKUP_FAILED');return Response.json(options.targetAllowed!==false,{status:options.targetStatus||200});}assert(String(url).endsWith('/rest/v1/rpc/dashboard_role_access'),'only fresh role validation may use network');assert.equal(init.headers.Authorization,'Bearer '+token);assert.equal(init.headers.apikey,'fixture');assert.equal(init.method,'POST');assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');if(options.roleFailure)throw Error('synthetic network');return Response.json(options.roleAccess||{mode:caller.role==='owner'?'owner':'legacy',canView:true,permissions:[]},{status:options.roleStatus||200})}});
-  const body={action,username:action.startsWith('create')?'newuser':'target',password:'fixture-password',...patch};
+  const body={action,username:action.startsWith('create')?'newuser':'target',...(action.startsWith('create')||action==='reset-password'?{password:'fixture-password'}:{}),...patch};
   const response=await handler(new Request('https://fixture.invalid',{method:'POST',headers:{...(options.noToken?{}:{authorization:'Bearer '+token}),...options.headers},body:JSON.stringify(body)}));
   return {status:response.status,body:await response.json(),writes,authCalls,audits,reads,target};
 }
@@ -79,7 +92,8 @@ test('scope-only update leaves permissions, active, role and management untouche
     const result=await edge(action,{data_scope:PANGHU},{target:{data_scope:ALL}});assert.equal(result.status,200);
     assert.deepEqual(Object.keys(result.writes[0]).sort(),['data_scope','updated_at']);
     assert.deepEqual(result.target.permissions,full);assert.equal(result.target.role,'viewer');assert.equal(result.target.active,true);
-    assert(result.reads.some(read=>read.filters.some(([key,value])=>key==='updated_at'&&value==='2026-09-01')));
+    assert(result.reads.some(read=>read.rpc==='dashboard_update_account_data_scope'&&read.args.p_expected_updated_at==='2026-09-01'));
+    assert.equal(result.reads.filter(read=>read.rpc==='dashboard_update_account_data_scope').length,1);
     assert.equal((await edge(action,{data_scope:PANGHU},{race:true})).status,409);
   }
 });
@@ -151,12 +165,14 @@ test('UI catalog scope guard matches Edge; disabled all target does not become a
 function scopeUi(name, props) {
   const filename=path.join(root,'src/components/AdminControlCenter.tsx');
   const source=ts.createSourceFile(filename,fs.readFileSync(filename,'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
-  const functions=source.statements.filter(node=>ts.isFunctionDeclaration(node)&&['accountStoredScope','DataScopePicker','AccountDataScopeEditor'].includes(node.name?.text));
+  const functions=source.statements.filter(node=>ts.isFunctionDeclaration(node)&&['accountStoredScope','scopeSelectionPresent','DataScopePicker','AccountDataScopeEditor'].includes(node.name?.text));
   const runtime=ts.transpileModule(functions.map(node=>node.getText(source)).join('\n'),{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
   let cursor=0;const states=[];const api=loadTs(path.join(root,'src/lib/dashboardDataScope.ts'));
   const jsx=(type,props)=>({type,props:props||{}});
   const useState=initial=>{const index=cursor++;if(!(index in states))states[index]=typeof initial==='function'?initial():initial;return [states[index],value=>{states[index]=value;}];};
-  const renderFunction=Function('require','exports','useState',...Object.keys(api),runtime+`\nreturn ${name};`)(()=>({jsx,jsxs:jsx}),{},useState,...Object.values(api));
+  const useRef=initial=>{const index=cursor++;return states[index]||(states[index]={current:initial});};
+  const renderFunction=Function('require','exports','useState','useRef','useEffect',...Object.keys(api),runtime+`\nreturn ${name};`)(()=>({jsx,jsxs:jsx}),{},useState,useRef,()=>{},...Object.values(api));
+  props={session:{user:{id:props.actor.auth_user_id}},...props};
   return ()=>{cursor=0;return renderFunction(props);};
 }
 const nodes=(node)=>!node||typeof node!=='object'?[]:[node,...[node.props?.children].flat(Infinity).flatMap(nodes)];
@@ -205,7 +221,8 @@ test('actual create handler refuses empty/outside draft and submits Panghu only 
   const source=ts.createSourceFile('admin.tsx',fs.readFileSync(path.join(root,'src/components/AdminControlCenter.tsx'),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
   const component=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='AdminControlCenter');
   const handler=component.body.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='submitCreate');
-  const output=ts.transpileModule(handler.getText(source),{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS}}).outputText;
+  const selection=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='scopeSelectionPresent');
+  const output=ts.transpileModule(selection.getText(source)+'\n'+handler.getText(source),{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS}}).outputText;
   const scope=loadTs(path.join(root,'src/lib/dashboardDataScope.ts'));
   for(const [newDataScope,expected] of [[{mode:'selected',countries:[]},0],[VN,0],[PANGHU,1]]){
     const calls=[],messages=[];const actor=profile('manager','admin',{data_scope:PANGHU});
@@ -345,4 +362,16 @@ test('disabled scope and limited-actor all handlers cannot produce wider scope c
   nodes(render()).find(n=>n.props?.type==='radio'&&n.props.value==='all').props.onChange();assert.deepEqual(calls,[]);
   const disabled=scopeUi('DataScopePicker',{id:'disabled',value:PANGHU,actor:profile('owner','owner'),disabled:true,onChange:v=>calls.push(v)})();
   nodes(disabled).find(n=>n.props?.type==='checkbox').props.onChange({target:{checked:false}});nodes(disabled).find(n=>n.props?.value==='all').props.onChange();assert.deepEqual(calls,[]);
+});
+
+test('platform scope editor refuses saving unverified catalog selections and enables only current verified choices',async()=>{
+ const calls=[],render=scopeUi('AccountDataScopeEditor',{user:profile('target','viewer',{data_scope:ALL}),actor:profile('owner','owner'),busy:false,onSave:async patch=>{calls.push(patch);return true}});
+ const picker=()=>nodes(render()).find(n=>typeof n.type==='function');
+ const save=()=>nodes(render()).find(n=>n.type==='button'&&n.props.children==='保存数据范围');
+ const selected={mode:'selected',countries:[],platforms:[{country:'IN',platform:'91CLUB'}]};
+ picker().props.onChange(selected);assert.equal(save().props.disabled,true);save().props.onClick();await new Promise(r=>setImmediate(r));assert.equal(calls.length,0);
+ picker().props.onValidityChange(true);assert.equal(save().props.disabled,false);
+ picker().props.onValidityChange(false);assert.equal(save().props.disabled,true);
+ picker().props.onValidityChange(true);picker().props.onChange({...selected,platforms:[{country:'IN',platform:'6CLUB'}]});assert.equal(save().props.disabled,true);
+ picker().props.onValidityChange(true);save().props.onClick();await new Promise(r=>setImmediate(r));assert.deepEqual(calls,[{data_scope:{mode:'selected',countries:[],platforms:[{country:'IN',platform:'6CLUB'}]}}]);
 });

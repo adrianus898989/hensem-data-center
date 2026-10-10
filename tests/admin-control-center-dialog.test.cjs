@@ -232,3 +232,20 @@ test('display-hidden permissions remain part of delegated account creation grant
  const select=h.all().find(node=>node.props.id==='admin-new-role');assert(!nodes(select).some(node=>node.type==='option'&&node.props.value===saved.id));select.props.onChange({target:{value:saved.id}});
  await nodes(h.dialog()).find(node=>node.type==='form').props.onSubmit({preventDefault(){}});assert(!h.calls.some(call=>call.action==='create'));
 });
+
+test('specified platform creation waits for a verified catalog then submits a platform-only scope',async()=>{
+ const h=ui();await flush();h.button('+ 新建账号').props.onClick();
+ h.all().find(n=>n.props.id==='admin-new-username').props.onChange({target:{value:'platform-fixture'}});
+ h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});
+ const scope={mode:'selected',countries:[],platforms:[{country:'IN',platform:'91CLUB'}]};
+ const picker=()=>h.all().find(n=>n.type?.name==='DataScopePicker');
+ picker().props.onChange(scope);
+ assert.equal(h.button('建立后台账号').props.disabled,true);
+ await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});
+ assert(!h.calls.some(c=>c.action==='create'));
+ picker().props.onValidityChange(true);assert.equal(h.button('建立后台账号').props.disabled,false);
+ picker().props.onValidityChange(false);assert.equal(h.button('建立后台账号').props.disabled,true);
+ picker().props.onValidityChange(true);
+ await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});
+ assert.deepEqual(h.calls.find(c=>c.action==='create').args[4],scope);
+});

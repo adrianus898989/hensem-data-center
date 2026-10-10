@@ -17,6 +17,19 @@ test('creation client rejects missing/old role selectors and invalid data ranges
  for(const role of [null,{}, {id:'viewer',version:7},{id:ROLE,version:0},{id:ROLE,version:'7'}]){const c=client();await assert.rejects(c.create(role),/新版角色/);assert.equal(c.calls.length,0);}
  for(const scope of [null,{}, {mode:'all'}, {mode:'selected',countries:[]},{mode:'selected',countries:['invalid']},{...BR,extra:true},{mode:'selected',countries:['BR_PANGHU','BR_PANGHU']}]){const c=client();await assert.rejects(c.create(undefined,scope),/数据范围/);assert.equal(c.calls.length,0);}
 });
+test('creation preserves canonical platform-only scope and rejects omitted or broadened whitelist acknowledgements',async()=>{
+ const input={mode:'selected',countries:[],platforms:[{country:'IN',platform:' b '},{country:'IN',platform:'a'},{country:'IN',platform:' A '}]},canonical={mode:'selected',countries:[],platforms:[{country:'IN',platform:'A'},{country:'IN',platform:'B'}]};
+ const c=client({...response,account:{...response.account,data_scope:canonical}}),created=await c.create(undefined,input);
+ assert.deepEqual(c.calls[0].body.data_scope,canonical);assert.deepEqual(plain(created.account.data_scope),canonical);input.platforms[0].platform='changed';assert.deepEqual(plain(created.account.data_scope),canonical);
+ for(const data_scope of [{mode:'all',countries:[]},{mode:'selected',countries:['IN']},{...canonical,platforms:[]},{...canonical,platforms:[...canonical.platforms,{country:'IN',platform:'C'}]},{...canonical,unknown:true}]){
+  const bad=client({...response,account:{...response.account,data_scope}});await assert.rejects(bad.create(undefined,{...canonical}),/待核对/);assert.equal(bad.calls.length,1);
+ }
+});
+test('creation rejects malformed or crossing platform constraints before sending any account write',async()=>{
+ for(const scope of [{mode:'all',countries:[],platforms:[]},{mode:'selected',countries:['IN'],platforms:null},...[
+  {country:'PK',platform:'A'},{country:'IN',platform:'A\u0085B'},{country:'IN',platform:'A\u0001B'},{country:'IN',platform:'😀'.repeat(201)},{country:'IN',platform:'A',extra:true},
+ ].map(pair=>({mode:'selected',countries:['IN'],platforms:[pair]})),{mode:'selected',countries:[],platforms:Array.from({length:501},(_,i)=>({country:'IN',platform:'A'+i}))}]){const c=client();await assert.rejects(c.create(undefined,scope),/数据范围/);assert.equal(c.calls.length,0);}
+});
 test('unknown or mismatched creation acknowledgements cannot become success; no mutation is automatically retried',async()=>{
  for(const body of [{}, {ok:true},{...response,ok:false},'invalid JSON',...[
   {auth_user_id:ACTOR},{auth_user_id:'invalid'}, {username:'someone-else'},{role:'admin'},{active:false},{role_id:NEW},{role_name:''},{role_version:6},{assignment_version:0},{assignment_version:2},{data_scope:{mode:'all',countries:[]}},
