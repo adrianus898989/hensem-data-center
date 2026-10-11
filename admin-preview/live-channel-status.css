@@ -124,6 +124,10 @@
 .live-channel-status button.channel-readonly-action,.live-channel-status button.channel-readonly-action:disabled{padding:0;border:0;background:transparent;color:#8a96a9;font-size:11px;opacity:1;cursor:default;pointer-events:none}
 .channel-withdraw-actions small{display:block;margin-top:3px}
 .channel-limits{font-variant-numeric:tabular-nums;font-size:11px!important}
+.channel-weight-summary{display:flex;flex-wrap:wrap;align-items:center;gap:5px 14px;padding:7px 10px;margin:6px 0;color:#536783;background:#f3f6fc;border:1px solid #e3eaf5;border-radius:5px;font-size:11px;line-height:1.5}
+.channel-weight-summary>span{font-variant-numeric:tabular-nums}
+.channel-weight-summary>small{color:#7b879b;font-size:10px}
+.channel-weight-summary .channel-weight-scope{color:#3557ad;font-weight:600}
 .channel-limits>div{line-height:1.5;overflow-wrap:normal}
 .channel-limits>div>span{color:#8592a7}
 @media(max-width:900px){.channel-browser article{padding:10px}.channel-directory-toolbar{align-items:flex-start}.channel-platforms button{padding:6px 9px}.channel-platforms small{font-size:9px}}

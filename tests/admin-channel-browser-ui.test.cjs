@@ -20,7 +20,7 @@ function fixture(options={}){
 }
 const headers=html=>[...html.matchAll(/<th[^>]*scope="col"[^>]*>([^<]*)<\/th>/g)].map(m=>m[1]);
 const firstTableRow=html=>{const names=headers(html),body=html.match(/<tbody>([\s\S]*?)<\/tbody>/)?.[1]||'',row=body.match(/<tr\b[^>]*>([\s\S]*?)<\/tr>/)?.[1]||'',values=[...row.matchAll(/<(?:td|th)\b[^>]*>([\s\S]*?)<\/(?:td|th)>/g)].map(m=>m[1].replace(/<[^>]+>/g,''));assert.equal(values.length,names.length);return Object.fromEntries(names.map((name,i)=>[name,values[i]]));};
-const exported=h=>{const rows=h.mod.exportRows(),header=rows[3];return rows.slice(4).map(row=>Object.fromEntries(header.map((name,i)=>[name,row[i]])));};
+const exported=h=>{const rows=h.mod.exportRows(),header=rows[3];return Array.from(rows.slice(4),row=>Object.fromEntries(header.map((name,i)=>[name,row[i]])));};
 
 function categoryRowsResponse(rows,p=AR){
  const data=response(p,[]),s=data.snapshots.find(x=>x.direction==='charge');
@@ -86,6 +86,64 @@ test('AR charge polling weight keeps preset and real-time source values independ
  for(const [real,expected]of [[undefined,'—'],[null,'—'],['0','0'],['82.81','82.81']]){const h=fixture({handler:()=>response(AR,[channel('weights',{weight:'100',real_time_weight:real})])});await h.start();assert.equal(firstTableRow(h.mod.render())['轮询权重'],'预设权重：100实时权重：'+expected);const csv=exported(h)[0];assert.equal(csv['权重'],'100');assert.equal(csv['实时权重'],expected);assert.equal(h.mod.exportRows()[3].length,h.mod.exportRows()[4].length);const labels=headers(h.mod.render()),widths=[...h.mod.render().matchAll(/<col style="width:(\d+)px"/g)].map(m=>Number(m[1]));assert.equal(widths[labels.indexOf('轮询权重')],160);h.context.liveChannelTab('withdraw');assert.equal(firstTableRow(h.mod.render())['自动出款权重'],'100');assert.equal(exported(h)[0]['实时权重'],undefined);}
  const yash=fixture({catalog:[YASH],handler:()=>response(YASH,[channel('yash',{weight:'100',real_time_weight:'82.81'})])});await yash.start();assert(!headers(yash.mod.render()).includes('轮询权重'));assert.equal(exported(yash)[0]['实时权重'],undefined);assert.equal(firstTableRow(yash.mod.render())['权重'],'100');
 });
+test('AR recharge shares use complete same-currency enabled pools independent of display filters',async()=>{
+ const rows=[channel('alpha',{provider:'A',weight:'100',real_time_weight:'82.81'}),channel('beta',{provider:'B',weight:'300',real_time_weight:'17.19',source_position:1}),channel('off',{weight:'9000',real_time_weight:'9000',source_state:'0',enabled:true,source_position:2}),channel('unknown',{weight:'9000',real_time_weight:'9000',source_state:null,enabled:true,source_position:3}),channel('old',{weight:'9000',real_time_weight:'9000',is_present:false,source_position:4}),channel('usd',{weight:'100',real_time_weight:'100',limit_currency:'USD',source_position:5}),channel('no-currency',{weight:'100',real_time_weight:'100',limit_currency:null,source_position:6}),channel('also-no-currency',{weight:'100',real_time_weight:'100',limit_currency:null,source_position:7})];
+ const h=fixture({handler:()=>categoryRowsResponse(rows)});await h.start();
+ const values=()=>Object.fromEntries(exported(h).map(r=>[r['通道 ID'],[r['预设权重占比'],r['实际权重占比']]]));
+ assert.deepEqual(values().alpha,['25.00%','82.81%']);assert.deepEqual(values().beta,['75.00%','17.19%']);
+ assert.deepEqual(values().off,['—','—']);assert.deepEqual(values().unknown,['—','—']);assert.deepEqual(values().usd,['100.00%','100.00%']);
+ assert.deepEqual(values()['no-currency'],['—','—']);assert.deepEqual(values()['also-no-currency'],['—','—']);
+ assert.match(h.mod.render(),/INR<\/b> · 已开启 2 行 · 预设合计 400 · 实际合计 100 · 1 行状态未知未计入/);
+ assert.match(h.mod.render(),/币种未提供<\/b> · 已开启 2 行 · 占比 —/);
+ h.context.liveChannelProvider('A');assert.equal(exported(h).length,1);assert.deepEqual(values().alpha,['25.00%','82.81%']);
+ h.context.liveChannelClearFilters();h.context.liveChannelQuery('alpha','');assert.deepEqual(values().alpha,['25.00%','82.81%']);
+ h.context.liveChannelClearFilters();h.context.liveChannelStatus('off');assert.deepEqual(values().off,['—','—']);
+ h.context.liveChannelClearFilters();h.context.liveChannelAbsent(true);assert.deepEqual(values().old,['—','—']);
+ assert.equal(h.calls.length,1,'all share calculations and filters stay local');
+ assert.match(h.mod.exportRows()[0][1],/三方\/状态\/搜索\/分页不改分母/);assert.match(h.mod.exportRows()[0][1],/不是订单或流量占比/);
+ const css=fs.readFileSync(path.join(__dirname,'../admin-preview/live-channel-status.css'),'utf8');assert.match(css,/\.channel-ar-charge-table \.channel-display-name\{left:485px/);
+});
+test('AR recharge category-channel rows retain independent weight shares and category pools',async()=>{
+ const rows=[channel('same',{category_id:'upi',weight:'10',real_time_weight:'30'}),channel('same',{category_id:'qr',category_name:'QR',weight:'20',real_time_weight:'70',source_position:1}),channel('other',{category_id:'upi',weight:'30',real_time_weight:'70',source_position:2})];
+ const h=fixture({handler:()=>categoryRowsResponse(rows)});await h.start();
+ assert.deepEqual(exported(h).map(r=>r['预设权重占比']),['16.67%','33.33%','50.00%']);
+ h.context.liveChannelCategory('upi');assert.deepEqual(exported(h).map(r=>[r['通道 ID'],r['预设权重占比'],r['实际权重占比']]),[['same','25.00%','30.00%'],['other','75.00%','70.00%']]);
+ h.context.liveChannelQuery('same','');assert.deepEqual(exported(h).map(r=>[r['预设权重占比'],r['实际权重占比']]),[['25.00%','30.00%']]);
+ assert.equal(h.calls.length,1);assert.equal(h.mod.exportRows()[3].length,h.mod.exportRows()[4].length);
+});
+test('missing weights, zero totals and incomplete snapshots never become invented shares',async()=>{
+ for(const real of [undefined,null,'',-1,'NaN']){
+  const h=fixture({handler:()=>categoryRowsResponse([channel('a',{weight:'0',real_time_weight:'10'}),channel('b',{weight:'100',real_time_weight:real,source_position:1})])});await h.start();
+  assert.deepEqual(exported(h).map(r=>r['实际权重占比']),['—','—']);assert.deepEqual(exported(h).map(r=>r['预设权重占比']),['0.00%','100.00%']);
+  assert.match(h.mod.render(),/实际合计 10（1 行未提供，占比 —）/);
+ }
+ const zero=fixture({handler:()=>categoryRowsResponse([channel('zero',{weight:'0',real_time_weight:'0'})])});await zero.start();assert.equal(firstTableRow(zero.mod.render())['预设权重占比'],'—');assert.equal(firstTableRow(zero.mod.render())['实际权重占比'],'—');
+ const incomplete=fixture({handler:()=>{const r=categoryRowsResponse([channel('a',{weight:'100',real_time_weight:'100'})]);r.snapshots[0].complete=false;return r;}});await incomplete.start();assert.equal(firstTableRow(incomplete.mod.render())['预设权重占比'],'—');assert.equal(firstTableRow(incomplete.mod.render())['实际权重占比'],'—');assert.match(incomplete.mod.render(),/快照未完整，占比 —/);
+ const presetMissing=fixture({handler:()=>categoryRowsResponse([channel('a',{weight:null,real_time_weight:'30'}),channel('b',{weight:'100',real_time_weight:'70',source_position:1})])});await presetMissing.start();assert.deepEqual(exported(presetMissing).map(r=>r['预设权重占比']),['—','—']);assert.deepEqual(exported(presetMissing).map(r=>r['实际权重占比']),['30.00%','70.00%']);
+});
+test('weight sums retain decimal precision and refresh failures retain the prior snapshot basis',async()=>{
+ const h=fixture({handler:()=>categoryRowsResponse([channel('big',{weight:'9007199254740993',real_time_weight:'0.00000001'}),channel('small',{weight:'1',real_time_weight:'0.00000003',source_position:1})])});await h.start();
+ assert.match(h.mod.render(),/预设合计 9,007,199,254,740,994 · 实际合计 0\.00000004/);
+ assert.deepEqual(exported(h).map(r=>r['实际权重占比']),['25.00%','75.00%']);
+ h.setHandler(()=>Promise.reject(Error('synthetic network failure')));await h.mod.load();assert.deepEqual(exported(h).map(r=>r['实际权重占比']),['25.00%','75.00%']);assert.match(h.mod.render(),/保留上次成功读取的快照/);assert.match(h.mod.render(),/快照权重占比/);
+ h.context.liveChannelTab('withdraw');assert(!headers(h.mod.render()).includes('预设权重占比'));assert(!headers(h.mod.render()).includes('实际权重占比'));assert.doesNotMatch(h.mod.render(),/channel-weight-summary/);
+ const yash=fixture({catalog:[YASH],handler:()=>response(YASH,[channel('a',{weight:'100',real_time_weight:'30'})])});await yash.start();assert(!headers(yash.mod.render()).includes('实际权重占比'));assert.equal(exported(yash)[0]['实际权重占比'],undefined);assert.doesNotMatch(yash.mod.render(),/channel-weight-summary/);
+});
+test('numeric scientific weights within eight decimal places are exact and finer values stay unknown',async()=>{
+ const h=fixture({handler:()=>categoryRowsResponse([channel('one',{weight:1e-8,real_time_weight:1e-8}),channel('three',{weight:3e-8,real_time_weight:3e-8,source_position:1})])});await h.start();
+ assert.deepEqual(exported(h).map(r=>[r['预设权重占比'],r['实际权重占比']]),[['25.00%','25.00%'],['75.00%','75.00%']]);assert.match(h.mod.render(),/预设合计 0\.00000004 · 实际合计 0\.00000004/);
+ for(const invalid of [1e-9,0.123456789,9007199254740992,'1e-8','0.000000001']){
+  const bad=fixture({handler:()=>categoryRowsResponse([channel('bad',{weight:invalid,real_time_weight:invalid})])});await bad.start();assert.equal(exported(bad)[0]['预设权重占比'],'—');assert.equal(exported(bad)[0]['实际权重占比'],'—');assert.match(bad.mod.render(),/1 行未提供，占比 —/);
+ }
+});
+test('platform directory paging and other platform caches never change the selected weight denominator',async()=>{
+ const catalog=Array.from({length:41},(_,i)=>platform(i+1)),first=catalog[0],other=catalog[20];
+ const h=fixture({catalog,handler:q=>{const p=catalog.find(x=>x.id===q.platformIds[0]);return categoryRowsResponse(p.id===first.id?[channel('a',{weight:'100',real_time_weight:'30'}),channel('b',{weight:'300',real_time_weight:'70',source_position:1})]:[channel('foreign',{weight:'9999',real_time_weight:'9999'})],p);}});await h.start();
+ assert.equal(exported(h)[0]['预设权重占比'],'25.00%');h.context.liveChannelPage(2);assert.equal(exported(h)[0]['预设权重占比'],'25.00%');assert.equal(h.calls.length,1);
+ h.context.liveChannelSelect(20);await flush();assert.equal(exported(h)[0]['预设权重占比'],'100.00%');
+ h.context.liveChannelSelect(0);await flush();assert.equal(exported(h)[0]['预设权重占比'],'25.00%');assert.doesNotMatch(h.mod.render(),/预设合计 10,399/);
+ h.setCatalog([other]);h.mod.render();await flush();assert.equal(exported(h)[0]['预设权重占比'],'100.00%');assert.equal(h.mod.capture().cache[first.id],undefined);
+});
 
 test('AR withdrawal time headers follow the selected platform timezone and native ellipsis retains full escaped hover values',async()=>{
  const p=platform(9,{timezone:'America/Sao_Paulo',country:'巴西'}),row=channel('tz',{source_channel_name:'Bank <Native> "name"',withdrawal_details:{source_tenant_name:'Merchant "full"',balance_updated_at:NOW,last_updated_at:NOW,last_update_by:'Admin',merchant_code:'LONG-12345678901234567890',third_pay_api_url:'https://gateway.example/withdraw',notify_white_ips:['192.0.2.1','2001:db8::/32']}}),h=fixture({catalog:[p],handler:()=>response(p,[row])});await h.start();h.context.liveChannelTab('withdraw');const html=h.mod.render(),cells=firstTableRow(html);assert(headers(html).includes('通道余额 (UTC-3)'));assert(headers(html).includes('最后修改人 / 时间 (UTC-3)'));assert(!headers(html).some(label=>label.includes('UTC+5:30')));assert.equal(cells['通道余额 (UTC-3)'],'通道余额：-2.5更新时间：2026-10-09 02:00');assert.equal(cells['最后修改人 / 时间 (UTC-3)'],'Admin2026-10-09 02:00');assert.match(html,/class="channel-native-value" title="\[sys-tz\] Bank &lt;Native&gt; &quot;name&quot;"/);assert.match(html,/class="channel-native-value" title="LONG-12345678901234567890"/);assert.match(html,/class="channel-native-value" title="192\.0\.2\.1\|2001:db8::\/32"/);assert.doesNotMatch(html,/channel-tenant-label|Merchant &quot;full&quot;/);assert.equal(exported(h)[0]['源租户名称'],'Merchant "full"');assert.doesNotMatch(html,/&amp;lt;Native|<Native>/);const css=fs.readFileSync(path.join(__dirname,'../admin-preview/live-channel-status.css'),'utf8');assert.match(css,/\.channel-native-value\{[^}]*overflow:hidden;[^}]*text-overflow:ellipsis;[^}]*white-space:nowrap/);
@@ -120,7 +178,7 @@ test('source and country tabs come only from directory and keep different source
 });
 
 test('AR wide source table keeps the requested display fields visible without source-name or expandable details',async()=>{
- const h=fixture();await h.start();const html=h.mod.render(),cols=['充值大类','状态','通道 ID','支付供应商','前台显示名称','系统通道 ID',...AR_RATE_HEADERS,'限额','轮询权重','第三方商户 ID','费率（源值）','费率口径','固定手续费','优先级','代收次数要求','余额阈值','阈值币种','主大类 ID','主大类名称','全部大类 / ID / 排序','通道类型','支付方式','源启用状态原码','通道可用状态原码','商户可用状态原码','源站状态原文','源更新时间','源页顺序','备注'];assert.deepEqual(headers(html),cols);
+ const h=fixture();await h.start();const html=h.mod.render(),cols=['充值大类','状态','通道 ID','支付供应商','前台显示名称','系统通道 ID',...AR_RATE_HEADERS,'限额','轮询权重','预设权重占比','实际权重占比','第三方商户 ID','费率（源值）','费率口径','固定手续费','优先级','代收次数要求','余额阈值','阈值币种','主大类 ID','主大类名称','全部大类 / ID / 排序','通道类型','支付方式','源启用状态原码','通道可用状态原码','商户可用状态原码','源站状态原文','源更新时间','源页顺序','备注'];assert.deepEqual(headers(html),cols);
  assert.match(html,/channel-ar-source-table/);assert.equal((html.match(/<td class="channel-rate-cell num"/g)||[]).length,4);assert.match(html,/<div class="channel-table-toolbar"><div class="channel-tabs"[\s\S]*channel-local-filters[\s\S]*<section class="channel-panel"/);assert.doesNotMatch(html,/channel-rate-grid|成功率统计|近15分钟|近4小时|近8小时|今日成功率|总成功率|onclick="liveChannelSourceDetail|onclick="liveChannelToggle|channel-source-details|aria-expanded|collapsed/);assert.equal(h.context.liveChannelSourceDetail,undefined);
  const cells=firstTableRow(html);for(const [key,value] of Object.entries({'通道 ID':'one-charge','支付供应商':'Provider one','前台显示名称':'Display one','系统通道 ID':'sys-one','轮询权重':'预设权重：0实时权重：—','第三方商户 ID':'merchant-22','费率（源值）':'0.025','费率口径':'source_raw','固定手续费':'2.00','优先级':'0','代收次数要求':'0','余额阈值':'—','阈值币种':'—','主大类 ID':'upi','主大类名称':'UPI','通道类型':'native','支付方式':'pay-method','源启用状态原码':'1','通道可用状态原码':'0','商户可用状态原码':'1','源站状态原文':'开启','源更新时间':NOW,'源页顺序':'0','备注':'—',...Object.fromEntries(AR_RATE_HEADERS.map((name,i)=>[name,['0.00%','68.40%','—','60.20%'][i]]))}))assert.equal(cells[key],value,key);
  assert.match(cells['充值大类'],/UPI.*QR 大类/);assert.match(cells['全部大类 / ID / 排序'],/UPI · upi · 排序 2.*QR 大类 · qr · 排序 1/);assert.match(cells['状态'],/通道状态开启.*可用状态总控通道关闭/);assert.match(cells['限额'],/0\.00 – 50,000\.00INR/);assert.equal(cells['余额'],undefined);assert.doesNotMatch(html,/99\.00%|2\.50%/);assert.match(html,/role="switch"[^>]*aria-checked="true"/);assert.match(html,/aria-readonly="true"/);assert.doesNotMatch(html,/onclick="liveQuery|onclick="liveReset|liveExport\(|<aside\b/);
@@ -175,7 +233,7 @@ test('source zero sentinels remain zero while absent names, rates and currencies
 
 test('direct source columns and private source-name or merchant searches retain the existing detail permission',async()=>{
  const rows=[channel('public-one',{channel_name:'Public display',sys_channel_id:'Public-SYS',source_channel_name:'Private native name',third_pay_merchant_id:'77991'}),channel('public-two',{channel_name:'Other public',source_channel_name:'Other private',third_pay_merchant_id:'88221',source_position:1})],h=fixture({permissions:['view','query','export'],handler:()=>response(AR,rows)});await h.start();const html=h.mod.render();
- assert.deepEqual(headers(html),['充值大类','状态','通道 ID','支付供应商','前台显示名称','系统通道 ID',...AR_RATE_HEADERS,'限额','轮询权重']);assert.doesNotMatch(html,/Private native name|77991|源通道名称|费率（源值）|源启用状态原码|name="merchant"/);
+ assert.deepEqual(headers(html),['充值大类','状态','通道 ID','支付供应商','前台显示名称','系统通道 ID',...AR_RATE_HEADERS,'限额','轮询权重','预设权重占比','实际权重占比']);assert.doesNotMatch(html,/Private native name|77991|源通道名称|费率（源值）|源启用状态原码|name="merchant"/);
  h.context.liveChannelQuery('Private native name','');assert.equal(exported(h).length,0);h.context.liveChannelQuery('PUBLIC-SYS','');assert.equal(exported(h).length,1);h.context.liveChannelQuery('public display','');assert.equal(exported(h).length,1);h.context.liveChannelQuery('public-one-charge','');assert.equal(exported(h).length,1);h.context.liveChannelQuery('','77991');assert.equal(exported(h).length,2);assert.equal(h.mod.capture().merchantQuery,'');assert.equal(h.calls.length,1);
  h.setPermissions(['view','query','export','detail']);h.mod.render();assert(!headers(h.mod.render()).includes('源通道名称'));assert.equal(exported(h)[0]['源通道名称'],'Private native name');h.context.liveChannelQuery('Private native name','77991');assert.equal(exported(h).length,1);h.setPermissions(['view','query','export']);h.mod.render();assert.equal(exported(h).length,0);assert.doesNotMatch(h.mod.render(),/channel-source-name|name="merchant"/);h.context.liveChannelClearFilters();assert.equal(exported(h).length,2);assert.equal(h.calls.length,1);
 });
