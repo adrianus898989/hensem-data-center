@@ -12,7 +12,7 @@ function response(q,extra={}){const current=q.mode==='current',rows=q.platformId
 function orderResult(platform=p(A),extra={}){const metric={direction:'withdraw',currency:platform.currency,pending_count:3,pending_amount:'345.67'};return {platform,summary:[metric],groups:{provider:[{...metric,provider:'Synthetic Pay'}]},...extra};}
 // Exercise the production merger: it normalizes absent fields to zero before
 // the pending overlay sees them, so fixture-only aggregate objects miss this case.
-const aggregateSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8'),aggregationStart=aggregateSource.indexOf(' const countKeys='),aggregationEnd=aggregateSource.indexOf(' const amountBands=',aggregationStart),mergeStart=aggregateSource.indexOf(' function mergeParts('),mergeEnd=aggregateSource.indexOf(' // Reuse only data',mergeStart),mergerContext={};
+const aggregateSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8'),aggregationStart=aggregateSource.indexOf(' const countKeys='),aggregationEnd=aggregateSource.indexOf(' const amountBands=',aggregationStart),mergeStart=aggregateSource.indexOf(' function mergeParts('),mergeEnd=aggregateSource.indexOf(' const aggregateCache=',mergeStart),mergerContext={};
 assert(aggregationStart>=0&&aggregationEnd>aggregationStart&&mergeStart>=0&&mergeEnd>mergeStart);
 vm.createContext(mergerContext);vm.runInContext(aggregateSource.slice(aggregationStart,aggregationEnd)+aggregateSource.slice(mergeStart,mergeEnd)+';globalThis.merge=mergeParts;',mergerContext);
 const mergeOrders=parts=>mergerContext.merge(parts);

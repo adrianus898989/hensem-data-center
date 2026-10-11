@@ -96,12 +96,15 @@ test('previous full empty-hour coverage means genuine zeros; incomplete previous
 
 function actualAggregateRead(){
  const live=fs.readFileSync(path.join(root,'admin-preview/live-data.js'),'utf8'),ast=ts.createSourceFile('live-data.js',live,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS),functions=[],variables=[];
- const wantedFunctions=new Set(['query','successDateValid','aggregateView','aggregateScopeKey','cachedAggregate','rememberAggregate','readAggregate','mergeParts','combine','plus']),wantedVariables=new Set(['countKeys','amountKeys','empty','aggregateCache','isSuccessAnalysis']);
- function walk(n){if(ts.isFunctionDeclaration(n)&&wantedFunctions.has(n.name?.text))functions.push(n.getText(ast));if(ts.isVariableDeclaration(n)&&wantedVariables.has(n.name.getText(ast)))variables.push('const '+n.getText(ast)+';');ts.forEachChild(n,walk)}walk(ast);assert.equal(functions.length,10);assert.equal(variables.length,5);
+ const wantedFunctions=new Set(['query','successDateValid','readAggregate','mergeParts','combine','plus']),wantedVariables=new Set(['countKeys','amountKeys','empty','isSuccessAnalysis']);
+ function walk(n){if(ts.isFunctionDeclaration(n)&&wantedFunctions.has(n.name?.text))functions.push(n.getText(ast));if(ts.isVariableDeclaration(n)&&wantedVariables.has(n.name.getText(ast)))variables.push('const '+n.getText(ast)+';');ts.forEachChild(n,walk)}walk(ast);assert.equal(functions.length,6);assert.equal(variables.length,4);
+ // Include the real document-scoped cache and transport together; readAggregate
+ // now verifies permissions, source identity and exact response boundaries.
+ const cacheStart=live.indexOf(' const aggregateCache='),cacheEnd=live.indexOf(' async function readAggregate(',cacheStart);assert(cacheStart>=0&&cacheEnd>cacheStart);const cache=live.slice(cacheStart,cacheEnd);
  const p={id:'synthetic-platform',timezone:'UTC',currency:'INR'},calls=[],L={serial:1,catalog:[p],country:'IN',direction:'charge',status:'all',from:'2026-09-29T00:00:00',to:'2026-09-30T23:59:59',queryNow:0,page:1,size:20};
- const c={L,state:{page:'overview'},calls,normalizePageDirection(){},aggregateMode:()=> 'full',providerDirection:()=>null,isFlowPage:()=>false,orderSource:()=> 'ar',displayIdentity:p=>p,activeValues:()=>[],instant:v=>v+'Z',HensemLiveCompare:{windowFor:()=>({valid:true,calendarDays:2,currentFrom:'2026-09-29T00:00:00',currentTo:'2026-09-30T23:59:59',previousFrom:'2026-09-27T00:00:00',previousTo:'2026-09-28T23:59:59'})}};
- c.window=c;c.hensemLiveRequest=async q=>{calls.push({...q});return {platform:p,total:0,summary:[],groups:q.view==='providers'?{provider:[]}:{provider:[],hourly:[]}}};
- vm.runInNewContext(variables.join('\n')+'\n'+functions.join('\n')+'\nwindow.buildQuery=query;window.read=readAggregate;',c);return c;
+ const c={L,state:{page:'overview'},calls,AbortController,structuredClone,roleAllowed:()=>true,visibleCatalog:()=>L.catalog,localClock:ms=>new Date(ms).toISOString().slice(0,19),normalizePageDirection(){},aggregateMode:()=> 'full',providerDirection:()=>null,isFlowPage:()=>false,orderSource:()=> 'ar',displayIdentity:p=>p,activeValues:()=>[],instant:v=>v+'Z',HensemLiveCompare:{windowFor:()=>({valid:true,calendarDays:2,currentFrom:'2026-09-29T00:00:00',currentTo:'2026-09-30T23:59:59',previousFrom:'2026-09-27T00:00:00',previousTo:'2026-09-28T23:59:59'})}};
+ c.window=c;c.hensemLiveRequest=async q=>{calls.push({...q});return {platform:p,startAt:q.startAt,endAt:q.endAt,total:0,summary:[],rows:[],groups:q.view==='providers'?{provider:[]}:{provider:[],hourly:[]}}};
+ vm.runInNewContext(variables.join('\n')+'\n'+cache+'\n'+functions.join('\n')+'\nwindow.buildQuery=query;window.read=readAggregate;',c);return c;
 }
 
 test('actual previous query and split reads preserve their dimension mode while a cached full snapshot stays full',async()=>{
