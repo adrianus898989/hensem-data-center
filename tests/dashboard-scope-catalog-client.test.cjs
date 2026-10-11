@@ -2,7 +2,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {root,loadTs}=require('./load-typescript.cjs');
 const scope=loadTs(path.join(root,'src/lib/dashboardDataScope.ts'));
 const session={user:{id:'scope-admin'},access_token:'fixture-token'};
-const body={version:1,platforms:[{country:'IN',platform:'91CLUB',label:'91CLUB',name:'91CLUB',source:'AR'}]};
+const body={version:1,platforms:[{country:'IN',platform:'91CLUB',label:'91CLUB',name:'91CLUB',source:'AR',team:'M8'}]};
 const flush=()=>new Promise(r=>setImmediate(r));
 function harness(options={}){
  const mod={exports:{}},calls=[],timers=new Map();let saved=session,seq=0;
@@ -17,6 +17,14 @@ test('malformed, ambiguous or unknown platform identity fails closed while same 
  const h=harness();for(const row of [{country:'unknown',platform:'A',label:'A'},{country:'IN',platform:' a ',label:'A'},{country:'IN',platform:'A\n',label:'A'},{country:'IN',platform:'A'},{country:'IN',platform:'A'.repeat(201),label:'A'}])assert.throws(()=>h.validateDashboardScopeCatalog({version:1,platforms:[row]}),/平台目录/);
  assert.throws(()=>h.validateDashboardScopeCatalog({...body,platforms:[...body.platforms,...body.platforms]}),/重复/);assert.throws(()=>h.validateDashboardScopeCatalog({version:2,platforms:[]}),/返回不完整/);
  assert.equal(h.validateDashboardScopeCatalog({...body,platforms:[...body.platforms,{country:'BR',platform:'91CLUB',label:'91CLUB'}]}).length,2);
+});
+test('team is validated display metadata; missing and null team remain compatible and never change platform identity',()=>{
+ const h=harness(),row={country:'IN',platform:'91CLUB',label:'91CLUB'};
+ const values=h.validateDashboardScopeCatalog({version:1,platforms:[row,{country:'PK',platform:'91CLUB',label:'91CLUB',team:null}]});
+ assert.equal(values[0].team,undefined);assert.equal(values[1].team,null);
+ for(const team of ['', ' M8 ', 'M8\n', 'M8\u0085', 3, [], {}, '字'.repeat(201)])assert.throws(()=>h.validateDashboardScopeCatalog({version:1,platforms:[{...row,team}]}),/平台目录/);
+ assert.equal(h.validateDashboardScopeCatalog({version:1,platforms:[{...row,team:'字'.repeat(200)}]})[0].team.length,200);
+ assert.throws(()=>h.validateDashboardScopeCatalog({version:1,platforms:[{...row,team:'M8'},{...row,team:'OTHER'}]}),/重复/,'different teams cannot duplicate or widen a country/platform identity');
 });
 test('actor change during refresh prevents catalog dispatch',async()=>{
  let resolve;const h=harness({ensure:()=>new Promise(r=>resolve=r)}),pending=h.readDashboardScopeCatalog(session);h.saved({user:{id:'different'}});resolve(session);await assert.rejects(pending,/登录账号已改变/);assert.equal(h.calls.length,0);assert.equal(h.timers.size,0);

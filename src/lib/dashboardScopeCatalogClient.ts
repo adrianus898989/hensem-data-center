@@ -3,16 +3,16 @@
 import { ensureDashboardSession, readSavedDashboardSession, type DashboardSession } from "./dashboardAuthClient";
 import { DASHBOARD_DATA_GROUPS, type DashboardDataGroup } from "./dashboardDataScope";
 
-export type DashboardScopePlatform = {country:DashboardDataGroup;platform:string;label:string;source?:string};
+export type DashboardScopePlatform = {country:DashboardDataGroup;platform:string;label:string;source?:string;team?:string|null};
 
 export function validateDashboardScopeCatalog(value:unknown):DashboardScopePlatform[] {
   const payload=value as {version?:unknown;platforms?:unknown};
   if(!payload||payload.version!==1||!Array.isArray(payload.platforms)||payload.platforms.length>10000)throw Error("平台目录返回不完整，请重新读取。");
   const keys=new Set<string>(),groups=new Set<string>(DASHBOARD_DATA_GROUPS.map(x=>x.key));
   return payload.platforms.map(row=>{
-    if(!row||typeof row!=="object"||!groups.has(row.country)||typeof row.platform!=="string"||!row.platform||Array.from(row.platform).length>200||/[\u0000-\u001f\u007f-\u009f]/.test(row.platform)||row.platform!==row.platform.trim().toUpperCase()||typeof row.label!=="string"||!row.label.trim()||row.label.length>300||row.source!==undefined&&typeof row.source!=="string")throw Error("平台目录返回不完整，请重新读取。");
+    if(!row||typeof row!=="object"||!groups.has(row.country)||typeof row.platform!=="string"||!row.platform||Array.from(row.platform).length>200||/[\u0000-\u001f\u007f-\u009f]/.test(row.platform)||row.platform!==row.platform.trim().toUpperCase()||typeof row.label!=="string"||!row.label.trim()||row.label.length>300||row.source!==undefined&&typeof row.source!=="string"||row.team!==undefined&&row.team!==null&&(typeof row.team!=="string"||!row.team||row.team!==row.team.trim()||Array.from(row.team).length>200||/[\u0000-\u001f\u007f-\u009f]/.test(row.team)))throw Error("平台目录返回不完整，请重新读取。");
     const key=JSON.stringify([row.country,row.platform]);if(keys.has(key))throw Error("平台目录存在重复标识，请重新读取。");keys.add(key);
-    return {country:row.country,platform:row.platform,label:row.label,...(row.source?{source:row.source}:{})};
+    return {country:row.country,platform:row.platform,label:row.label,...(row.source?{source:row.source}:{}),...(row.team!==undefined?{team:row.team}:{})};
   });
 }
 

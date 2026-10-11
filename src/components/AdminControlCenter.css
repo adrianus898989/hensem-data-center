@@ -289,7 +289,8 @@
 .admin-data-scope-groups section + section { border-top: 1px solid #e7edf6; margin-top: 12px; padding-top: 10px; }
 .admin-data-scope-groups h4 { margin: 0; color: #5b718e; font-size: 11px; }
 .admin-data-scope-groups .admin-data-scope-options { padding-top: 9px; gap: 10px; }
-.admin-scope-platform-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:4px 0 10px; color:#7487a1; font-size:12px; }
+.admin-scope-platform-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px 12px; margin:4px 0 10px; color:#7487a1; font-size:12px; }
+.admin-scope-platform-filters { display:flex; flex-wrap:wrap; gap:10px 18px; min-width:0; }
 .admin-scope-platform-toolbar label { display:flex; align-items:center; gap:8px; margin:0; }
 .admin-scope-platform-toolbar select { width:auto; min-width:140px; }
 .admin-scope-platform-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:8px; max-height:270px; overflow:auto; padding:4px; border:1px solid #e1e9f5; border-radius:8px; }

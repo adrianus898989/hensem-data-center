@@ -278,24 +278,28 @@ begin
   raise exception using errcode='42501',message='account_scope_catalog_denied';end if;
  s:=private.dashboard_actor_data_scope(actor);
  with native as materialized (
-  select m.country_code country,m.source_platform platform,coalesce(nullif(m.platform_name,''),m.source_platform) name,m.source_system source
+  select m.country_code country,m.source_platform platform,coalesce(nullif(m.platform_name,''),m.source_platform) name,m.source_system source,m.team_name team
   from public.dashboard_platform_team_map m where m.active
-  union all select t.country_code,t.platform,t.platform,coalesce(t.source_system,'AR') from public.ar_config_targets t
-  union all select t.country_code,t.platform,t.platform,'PANDA' from public.panda_config_targets t
-  union all select t.country_code,t.platform,t.platform,'WG' from public.wg_config_targets t
-  union all select n.country_code,n.platform,n.platform,'NEW_AR' from public.newar_detail_platforms n where n.enabled and (n.launch_at is null or n.launch_at<=now())
-  union all select case g.team_code when 'hong_kong' then 'HK_TEAM' when 'red_crab' then 'RED_CRAB' else upper(g.team_code) end,g.platform_name,g.platform_name,'GAME66' from public.game66_platforms g where g.enabled
-  union all select a.country,a.platform,a.platform,'REPORT' from public.auto_withdraw_daily a
-  union all select a.country,a.platform,a.platform,'REPORT' from public.third_party_platform_status a
-  union all select 'IN','YASH.BET','YASH.BET','KB'
+  union all select t.country_code,t.platform,t.platform,coalesce(t.source_system,'AR'),null::text from public.ar_config_targets t
+  union all select t.country_code,t.platform,t.platform,'PANDA',null::text from public.panda_config_targets t
+  union all select t.country_code,t.platform,t.platform,'WG',null::text from public.wg_config_targets t
+  union all select n.country_code,n.platform,n.platform,'NEW_AR',null::text from public.newar_detail_platforms n where n.enabled and (n.launch_at is null or n.launch_at<=now())
+  union all select case g.team_code when 'hong_kong' then 'HK_TEAM' when 'red_crab' then 'RED_CRAB' else upper(g.team_code) end,g.platform_name,g.platform_name,'GAME66',g.team_name from public.game66_platforms g where g.enabled
+  union all select a.country,a.platform,a.platform,'REPORT',null::text from public.auto_withdraw_daily a
+  union all select a.country,a.platform,a.platform,'REPORT',null::text from public.third_party_platform_status a
+  union all select 'IN','YASH.BET','YASH.BET','KB',null::text
  ), canonical as (
-  select private.dashboard_data_group(n.country,n.platform) country,private.dashboard_scope_platform_key(n.platform) platform,n.name,n.source from native n
+  select private.dashboard_data_group(n.country,n.platform) country,private.dashboard_scope_platform_key(n.platform) platform,n.name,n.source,
+   case when char_length(btrim(n.team,U&'\0009\000A\000B\000C\000D\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF')) between 1 and 200
+    and btrim(n.team,U&'\0009\000A\000B\000C\000D\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF') !~ U&'[\0001-\001F\007F-\009F]'
+    then btrim(n.team,U&'\0009\000A\000B\000C\000D\0020\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000\FEFF') end team
+  from native n
  ), allowed as (
-  select c.country,c.platform,min(c.name collate "C") name,case when count(distinct c.source)=1 then min(c.source) end source
+  select c.country,c.platform,min(c.name collate "C") name,case when count(distinct c.source)=1 then min(c.source) end source,case when count(distinct c.team)=1 then min(c.team collate "C") end team
   from canonical c where c.country<>'' and c.platform is not null and char_length(c.platform)<=200 and c.platform !~ U&'[\0001-\001F\007F-\009F]'
    and private.dashboard_scope_allows(s,c.country,c.platform)
   group by c.country,c.platform
- ) select jsonb_build_object('version',1,'platforms',coalesce(jsonb_agg(jsonb_build_object('country',a.country,'platform',a.platform,'label',a.name,'name',a.name)
+ ) select jsonb_build_object('version',1,'platforms',coalesce(jsonb_agg(jsonb_build_object('country',a.country,'platform',a.platform,'label',a.name,'name',a.name,'team',a.team)
   ||case when a.source is not null then jsonb_build_object('source',a.source) else '{}'::jsonb end order by a.country collate "C",a.platform collate "C"),'[]'::jsonb)) into result from allowed a;
  return result;
 end;

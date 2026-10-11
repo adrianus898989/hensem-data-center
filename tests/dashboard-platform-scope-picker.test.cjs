@@ -16,7 +16,7 @@ function ui(options={}){
  const useState=initial=>{const i=cursor++;if(!(i in states))states[i]=typeof initial==='function'?initial():initial;return [states[i],v=>{states[i]=typeof v==='function'?v(states[i]):v}];};
  const useRef=initial=>{const i=cursor++;return states[i]||(states[i]={current:initial});};
  const useEffect=(fn,d)=>{const i=ecursor++;if(!deps[i]||d.some((v,j)=>v!==deps[i][j])){deps[i]=d;effects.push(()=>{cleanups[i]?.();cleanups[i]=fn()});}};
- const read=async(session,signal)=>{calls.push({session,signal});return options.read?options.read(session,signal):list;};
+ const read=async(session,signal)=>{calls.push({session,signal});return options.read?options.read(session,signal):options.catalog||list;};
  const render=Function('require','exports','useState','useRef','useEffect','readDashboardScopeCatalog',...Object.keys(api),code+'\nreturn DataScopePicker;')(()=>({jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})}),{},useState,useRef,useEffect,read,...Object.values(api));
  props.onChange=v=>{changes.push(v);props={...props,value:v};};
  const draw=()=>{cursor=ecursor=0;const tree=render(props);effects.splice(0).forEach(run=>run());return tree;};
@@ -31,6 +31,26 @@ test('search and country filter never change saved selections or authorize the w
  const h=ui({value:{mode:'selected',countries:[],platforms:[pair('IN','91CLUB')]}});await flush();h.all().find(n=>n.props?.type==='search').props.onChange({target:{value:'6CLUB'}});assert.equal(h.checkboxes().length,1);assert.equal(h.changes.length,0);
  h.checkboxes()[0].props.onChange({target:{checked:true}});assert.equal(h.value().platforms.length,2);
  h.all().find(n=>n.props?.['aria-label']==='平台授权国家筛选').props.onChange({target:{value:'BR'}});assert.equal(h.checkboxes().length,0);assert.equal(h.value().platforms.length,2);h.dispose();
+});
+test('team then country filters preserve exact platform grants selected across India and Pakistan',async()=>{
+ const catalog=[{...list[0],team:'M8'},{country:'PK',platform:'91CLUB',label:'91CLUB',team:'M8'},{country:'PK',platform:'92GO',label:'92GO',team:'M8'},{...list[2],team:'OTHER'},{country:'VN',platform:'UNASSIGNED',label:'UNASSIGNED',team:null}];
+ const h=ui({value:{mode:'selected',countries:[],platforms:[]},catalog});await flush();
+ const team=()=>h.all().find(n=>n.props?.['aria-label']==='平台授权团队筛选'),country=()=>h.all().find(n=>n.props?.['aria-label']==='平台授权国家筛选');
+ assert.deepEqual(nodes(team().props.children).filter(n=>n.type==='option').map(n=>n.props.value),['all','team:M8','team:OTHER','unknown']);
+ team().props.onChange({target:{value:'team:M8'}});assert.deepEqual(nodes(country().props.children).filter(n=>n.type==='option').map(n=>n.props.value),['all','IN','PK']);assert.equal(h.changes.length,0);
+ country().props.onChange({target:{value:'IN'}});assert.equal(h.checkboxes().length,1);h.checkboxes()[0].props.onChange({target:{checked:true}});
+ country().props.onChange({target:{value:'PK'}});assert.equal(h.checkboxes().length,2);assert.equal(h.checkboxes()[0].props.checked,false,'same platform spelling in another country is not selected');h.checkboxes()[1].props.onChange({target:{checked:true}});
+ assert.deepEqual(h.value(),{mode:'selected',countries:[],platforms:[pair('IN','91CLUB'),pair('PK','92GO')]});assert.equal(api.dashboardScopeAllows(h.value(),'PK','91CLUB'),false);
+ const selected=structuredClone(h.value()),writes=h.changes.length;team().props.onChange({target:{value:'team:OTHER'}});assert.equal(country().props.value,'all');assert.equal(h.checkboxes().length,1);assert.deepEqual(h.value(),selected);assert.equal(h.changes.length,writes);
+ assert.ok(h.all().some(n=>n.props?.['aria-label']==='移除 印度 / 91CLUB'));assert.ok(h.all().some(n=>n.props?.['aria-label']==='移除 巴基斯坦 / 92GO'));
+ team().props.onChange({target:{value:'team:M8'}});country().props.onChange({target:{value:'PK'}});assert.equal(h.checkboxes()[1].props.checked,true);
+ h.all().find(n=>n.props?.type==='search').props.onChange({target:{value:'no-match'}});assert.equal(h.checkboxes().length,0);assert.deepEqual(h.value(),selected);assert.equal(h.changes.length,writes);h.dispose();
+});
+test('unknown team metadata is explicit and remains a lookup filter rather than an authorization grant',async()=>{
+ const h=ui({value:{mode:'selected',countries:[],platforms:[]},catalog:[{...list[0],team:'all'},list[2]]});await flush();
+ const team=()=>h.all().find(n=>n.props?.['aria-label']==='平台授权团队筛选');team().props.onChange({target:{value:'unknown'}});assert.equal(h.checkboxes().length,1);assert.equal(h.changes.length,0);
+ team().props.onChange({target:{value:'team:all'}});assert.equal(h.checkboxes().length,1);h.checkboxes()[0].props.onChange({target:{checked:true}});
+ assert.deepEqual(h.value(),{mode:'selected',countries:[],platforms:[pair('IN','91CLUB')]});assert.ok(!('team' in h.value().platforms[0]));h.dispose();
 });
 test('a platform restricted manager cannot assign broad groups or another platform even with a broad catalog reply',async()=>{
  const scope={mode:'selected',countries:[],platforms:[pair('IN','91CLUB')]};const h=ui({value:scope,actor:{auth_user_id:'manager',role:'viewer',active:true,data_scope:scope},session:{user:{id:'manager'}}});await flush();

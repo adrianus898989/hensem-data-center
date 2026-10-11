@@ -61,6 +61,7 @@ function DataScopePicker({ id, value, actor, session, disabled, onChange, onVali
   id: string; value: DashboardDataScope; actor: DashboardProfile; session:DashboardSession; disabled: boolean; onChange: (value: DashboardDataScope) => void; onValidityChange?: (valid:boolean)=>void;
 }) {
   const [search, setSearch] = useState("");
+  const [teamFilter,setTeamFilter]=useState("all");
   const [countryFilter,setCountryFilter]=useState("all");
   const [reload,setReload]=useState(0);
   const [catalog,setCatalog]=useState<{key:string;status:"loading"|"ready"|"error";rows:DashboardScopePlatform[];error:string}>({key:"",status:"loading",rows:[],error:""});
@@ -86,7 +87,9 @@ function DataScopePicker({ id, value, actor, session, disabled, onChange, onVali
   const visible = choices.filter(group => !query || `${group.label} ${group.key}`.toLocaleLowerCase().includes(query));
   const countryLabel=(key:string)=>DASHBOARD_DATA_GROUPS.find(group=>group.key===key)?.label||key;
   const rows=ready?catalog.rows:[],pairs=value.platforms||[];
-  const filtered=rows.filter(row=>(countryFilter==="all"||row.country===countryFilter)&&(!query||`${row.platform} ${row.label} ${row.source||""} ${row.country} ${countryLabel(row.country)}`.toLocaleLowerCase().includes(query)));
+  const teams=Array.from(new Set(rows.map(row=>row.team).filter((team):team is string=>typeof team==="string"&&!!team))).sort();
+  const teamRows=rows.filter(row=>teamFilter==="all"||(teamFilter==="unknown"?!row.team:row.team===teamFilter.slice(5)));
+  const filtered=teamRows.filter(row=>(countryFilter==="all"||row.country===countryFilter)&&(!query||`${row.platform} ${row.label} ${row.team||""} ${row.source||""} ${row.country} ${countryLabel(row.country)}`.toLocaleLowerCase().includes(query)));
   const pairKey=(row:{country:string;platform:string})=>JSON.stringify([row.country,row.platform]);
   const selectionSignature=JSON.stringify(value);
   const selectionVerified=!platformMode||ready&&pairs.length>0&&pairs.every(pair=>rows.some(row=>pairKey(row)===pairKey(pair)));
@@ -94,7 +97,7 @@ function DataScopePicker({ id, value, actor, session, disabled, onChange, onVali
   useEffect(()=>{validityRef.current?.(selectionVerified);},[selectionVerified,selectionSignature,scopeKey,reload]);
   function selectMode(mode:"all"|"selected"|"platforms") {
     if(disabled||mode==="all"&&allowed.mode!=="all"||mode==="selected"&&allowed.platforms!==undefined)return;
-    setSearch("");setCountryFilter("all");
+    setSearch("");setTeamFilter("all");setCountryFilter("all");
     onChange(mode==="all"?{mode:"all",countries:[]}:mode==="platforms"?{mode:"selected",countries:[],platforms:platformMode?pairs:[]}:{mode:"selected",countries:value.mode==="selected"&&!platformMode?value.countries:[]});
   }
   function togglePlatform(row:DashboardScopePlatform,checked:boolean){
@@ -111,14 +114,15 @@ function DataScopePicker({ id, value, actor, session, disabled, onChange, onVali
     </div>
     <div className="admin-data-scope-selected" aria-live="polite"><b>{value.mode === "all" ? "已选：全部数据" : platformMode?`已选 ${pairs.length} 个平台`:`已选 ${value.countries.length} 项`}</b><span>{value.mode === "selected" ? dashboardScopeLabel(value) : "所有数据范围；页面与操作仍由角色控制"}</span></div>
     {value.mode === "selected" && <>
-      <input className="admin-data-scope-search" type="search" aria-label="搜索数据授权范围" value={search} onChange={event => setSearch(event.target.value)} placeholder={platformMode?"搜索平台名称、国家或系统":"搜索国家、团队或盘口组"} />
       {platformMode?<>
-        <div className="admin-scope-platform-toolbar"><label>国家 / 地区 <select aria-label="平台授权国家筛选" value={countryFilter} onChange={event=>setCountryFilter(event.target.value)}><option value="all">全部国家 / 地区</option>{DASHBOARD_DATA_GROUPS.filter(group=>rows.some(row=>row.country===group.key)).map(group=><option key={group.key} value={group.key}>{group.label}</option>)}</select></label><span>{ready?`显示 ${filtered.length} / ${rows.length} 个可授权平台`:""}</span></div>
-        <p>只允许查看勾选的平台；国家筛选仅用于查找平台。</p>
+        <div className="admin-scope-platform-toolbar"><div className="admin-scope-platform-filters"><label>团队 <select aria-label="平台授权团队筛选" value={teamFilter} onChange={event=>{setTeamFilter(event.target.value);setCountryFilter("all")}}><option value="all">全部团队</option>{teams.map(team=><option key={team} value={`team:${team}`}>{team}</option>)}{rows.some(row=>!row.team)&&<option value="unknown">未提供团队</option>}</select></label><label>国家 / 地区 <select aria-label="平台授权国家筛选" value={countryFilter} onChange={event=>setCountryFilter(event.target.value)}><option value="all">全部国家 / 地区</option>{DASHBOARD_DATA_GROUPS.filter(group=>teamRows.some(row=>row.country===group.key)).map(group=><option key={group.key} value={group.key}>{group.label}</option>)}</select></label></div><span>{ready?`显示 ${filtered.length} / ${rows.length} 个可授权平台`:""}</span></div>
+        <input className="admin-data-scope-search" type="search" aria-label="搜索数据授权范围" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索平台名称、团队、国家或系统" />
+        <p>只允许查看勾选的平台；切换团队、国家或搜索会保留已选平台。</p>
         {pairs.length>0&&<div className="admin-scope-platform-selected">{pairs.map(pair=><button type="button" key={pairKey(pair)} aria-label={`移除 ${countryLabel(pair.country)} / ${pair.platform}`} onClick={()=>{if(!disabled)onChange({mode:"selected",countries:[],platforms:pairs.filter(p=>pairKey(p)!==pairKey(pair))})}}>{pair.platform}<span>{countryLabel(pair.country)}</span> ×</button>)}</div>}
-        {catalog.key!==scopeKey||catalog.status==="loading"?<div role="status" className="admin-scope-platform-status">正在读取可授权的平台…</div>:catalog.status==="error"?<div role="alert" className="admin-scope-platform-status">{catalog.error}<button type="button" className="admin-light-btn" onClick={()=>{validityRef.current?.(false);setReload(n=>n+1)}}>重试读取平台</button></div>:<div className="admin-scope-platform-list">{filtered.map(row=><label key={pairKey(row)}><input type="checkbox" checked={pairs.some(pair=>pairKey(pair)===pairKey(row))} disabled={disabled||pairs.length>=500&&!pairs.some(pair=>pairKey(pair)===pairKey(row))} onChange={event=>togglePlatform(row,event.target.checked)}/><span><b>{row.label}</b><small>{countryLabel(row.country)}{row.source?` · ${row.source}`:""}</small></span></label>)}{!filtered.length&&<div role="status">{rows.length?"没有匹配的平台，已选内容保持不变。":"当前账号没有可授权的平台。"}</div>}</div>}
+        {catalog.key!==scopeKey||catalog.status==="loading"?<div role="status" className="admin-scope-platform-status">正在读取可授权的平台…</div>:catalog.status==="error"?<div role="alert" className="admin-scope-platform-status">{catalog.error}<button type="button" className="admin-light-btn" onClick={()=>{validityRef.current?.(false);setReload(n=>n+1)}}>重试读取平台</button></div>:<div className="admin-scope-platform-list">{filtered.map(row=><label key={pairKey(row)}><input type="checkbox" checked={pairs.some(pair=>pairKey(pair)===pairKey(row))} disabled={disabled||pairs.length>=500&&!pairs.some(pair=>pairKey(pair)===pairKey(row))} onChange={event=>togglePlatform(row,event.target.checked)}/><span><b>{row.label}</b><small>{row.team?`${row.team} · `:""}{countryLabel(row.country)}{row.source?` · ${row.source}`:""}</small></span></label>)}{!filtered.length&&<div role="status">{rows.length?"没有匹配的平台，已选内容保持不变。":"当前账号没有可授权的平台。"}</div>}</div>}
         {ready&&pairs.some(pair=>!rows.some(row=>pairKey(row)===pairKey(pair)))&&<small role="alert">部分已选平台已不在当前可授权目录，请移除后重新选择。</small>}
       </>:<>
+      <input className="admin-data-scope-search" type="search" aria-label="搜索数据授权范围" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索国家、团队或盘口组" />
       <div className="admin-data-scope-groups">{sections.map(section => {
         const items = visible.filter(group => section.keys.includes(group.key));
         if (!items.length) return null;
