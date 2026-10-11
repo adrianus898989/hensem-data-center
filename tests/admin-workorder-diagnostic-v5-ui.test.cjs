@@ -20,7 +20,7 @@ function setup(facts){
 const diagnostic=h=>{h.root.providerSummaryWorkorderPlatforms();return h.drawers.at(-1).html;};
 test('v5 explained pending scope shows exact raw money without labelling it an unresolved or deduplicated amount',()=>{
  const r=fact('pending'),h=setup([r]),before=JSON.stringify(h.L.workorders),html=diagnostic(h);
- assert.match(html,/1 个仅有已知范围差异，0 个含待确认项/);assert.match(h.html(),/待确认 0 \/ 原因已说明 1/);assert.doesNotMatch(h.html(),/原单待核对 1 三方/);
+ assert.match(html,/1 个仅有已知范围差异，0 个含待确认项/);assert.match(h.html(),/待确认 0 \/ 已知口径 1/);assert.doesNotMatch(h.html(),/原单待核对 1 三方/);
  assert.match(html,/日报 450\.00 INR/);assert.match(html,/明细 200\.00 INR/);assert.match(html,/净差 \+250\.00 INR/);
  assert.match(html,/范围净差 250\.00 INR/);assert.match(html,/金额尚待逐笔核对/);
  assert.match(html,/不是去重原支付订单金额/);assert.match(h.html(),/>100\.00</);assert.equal(r.uniqueCoverage.complete,false);
