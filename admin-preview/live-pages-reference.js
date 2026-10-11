@@ -208,7 +208,7 @@
   return '按当前费率参考估算，非历史实际手续费。成功总笔数 '+C(fact.successCount)+'；不计三方手续费 '+C(fact.excludedCount)+'；已匹配 '+C(matched)+' / '+C(eligible)+' 笔（'+rate+'）；待确认 '+C(unknown)+' 笔。'+(fact.reasons||[]).map(x=>(x.platform?x.platform+' / ':'')+(x.provider||'未识别三方')+' '+C(x.count)+' 笔（'+(currentFeeReasons[x.reason]||'计费依据待确认')+'）').join('；')+(eligible===null?'成功时间口径或计数未完整提供，不能确认完整估算。':'仅汇总已匹配部分，未匹配不计为零手续费。');
  };
  function merchantFeeControls(){
-  return '<div class="merchant-fee-mode"><label>手续费口径 <select class="btn small" aria-label="商户手续费估算口径" onchange="liveMerchantFeeMode(this.value)"><option value="current" '+(merchantFeeMode()==='current'?'selected':'')+'>当前费率参考估算</option><option value="historical" '+(merchantFeeMode()==='historical'?'selected':'')+'>历史生效费率</option></select></label><span class="merchant-fee-mode-note" role="note">'+E(merchantFeeNote())+'</span></div>';
+  return '<div class="merchant-fee-mode"><label>手续费口径 <select class="btn small" aria-label="商户手续费估算口径" onchange="liveMerchantFeeMode(this.value)"><option value="current" '+(merchantFeeMode()==='current'?'selected':'')+'>当前费率参考估算</option><option value="historical" '+(merchantFeeMode()==='historical'?'selected':'')+'>历史生效费率</option></select></label><span class="merchant-fee-mode-note" role="note">'+E(merchantFeeNote())+'</span>'+(L.feeLookupError?'<button type="button" class="btn small" onclick="liveRetryFeeLookup()" title="'+E(L.feeLookupError)+'">重试费率</button>':'')+'</div>';
  }
  window.liveMerchantFeeMode=function(value){
   if(!['current','historical'].includes(value)||window.hensemCurrentAdminPage?.()!=='merchants'||typeof window.hensemRoleAllowed==='function'&&!window.hensemRoleAllowed('merchants','view'))return;
@@ -268,7 +268,7 @@
    return total;
   });
   function merchantFeeCell(row){
-   if(row.fee_rate_label==='不适用'||L.feeLookupLoading||L.feeLookupError)return feeCell(row);
+   if(row.fee_rate_label==='不适用'||merchantFeeMode()==='current'&&(L.feeLookupLoading||L.feeLookupError))return feeCell(row);
    if(merchantFeeMode()==='current'){
     return '<span class="merchant-fee-value" tabindex="0" title="'+E(merchantFeeCoverage(row)+(row._referenceFeeLabel?' 当前参考费率：'+row._referenceFeeLabel:'') )+'">'+N(row.estimated_fee)+(row.estimated_fee!==null&&!row.fee_complete?'<span class="merchant-fee-status">部分</span>':'')+'</span>';
    }
@@ -276,8 +276,8 @@
    return '<span class="merchant-fee-value" tabindex="0" title="'+E(sorting.feeCoverageText(row)+' '+status+(row._referenceFeeLabel?' 当前参考费率仅供核对：'+row._referenceFeeLabel:''))+'">'+N(row.estimated_fee)+(row.estimated_fee!==null&&!row.fee_complete&&Number(row.fee_eligible_count)>0?'<span class="merchant-fee-status">部分</span>':'')+'</span>';
   }
   function merchantFeeMatchCell(row){
-   if(L.feeLookupLoading)return '<span class="muted">匹配中…</span>';
-   if(L.feeLookupError)return '<span class="muted" title="'+E(L.feeLookupError)+'">读取失败</span>';
+   if(merchantFeeMode()==='current'&&L.feeLookupLoading)return '<span class="muted">匹配中…</span>';
+   if(merchantFeeMode()==='current'&&L.feeLookupError)return '<span class="muted" title="'+E(L.feeLookupError)+'">读取失败</span>';
    const eligible=sorting.knownNumber(row.fee_eligible_count),matched=sorting.knownNumber(row.fee_matched_count),label=eligible>0&&matched!==null?R(matched,eligible):eligible===0&&row.fee_complete?'无需计费':'—';
    return '<span class="merchant-fee-match" tabindex="0" title="'+E(merchantFeeCoverage(row))+'" aria-label="'+E('应计费成功笔数的匹配占比 '+label)+'">'+E(label)+'</span>';
   }
@@ -338,7 +338,7 @@
   function usageCell(r){const usage=providerUsage(r),label=C(usage.value)+(usage.unknown&&usage.value!==null?'*':'');if(!canUsageDetail())return '<span title="'+E(usage.title+'当前角色没有明细权限。')+'">'+label+'</span>';const index=detailRows.indexOf(r),expanded=!!expansion?.open.has(nativeIdentity(r));return '<button type="button" class="link merchant-provider-usage" title="'+E(usage.title+'点击展开或收起本平台三方的代收、代付金额、笔数与手续费。')+'" aria-label="'+E((r._total?'已读汇总':r.platform)+'使用三方明细')+'" aria-expanded="'+expanded+'" onclick="liveMerchantProviderUsage('+index+')">'+label+'</button>';}
   function metricCell(r,d,key){
    const row=rowFor(r,d);if(!row)return unavailable;
-   if(key==='success_rate')return '<span title="成功时间内成功笔数 ÷ 创建时间内全部笔数；含跨日成功，可超过100%">'+R(row.success_count,row.all_count)+'</span>';
+   if(key==='success_rate'){const rate=sorting.fraction(row.success_count,row.all_count);return '<span class="merchant-success-rate'+(rate!==null&&rate<0.4999?' merchant-success-rate-low':'')+'" title="成功时间内成功笔数 ÷ 创建时间内全部笔数；含跨日成功，可超过100%">'+R(row.success_count,row.all_count)+'</span>';}
    if(key==='members')return r._providerDetail?'<span class="muted" title="平台会员按原会员去重，不按三方拆分">—</span>':memberFact(row,d)?.html||unavailable;
    if(key==='fee')return c.successTimeUnavailable?.(d)?unavailable:merchantFeeCell(row);
    if(key==='fee_coverage')return c.successTimeUnavailable?.(d)?unavailable:merchantFeeMatchCell(row);

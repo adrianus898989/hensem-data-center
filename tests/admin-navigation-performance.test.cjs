@@ -13,6 +13,23 @@ function clockHarness(){
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const settle=async()=>{for(let n=0;n<24;n++)await flush()};
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}};
+function feeFrame(h,read){
+ const prefix=fs.readFileSync(path.join(__dirname,'admin-live-bridge.test.cjs'),'utf8').split(/\ntest\(/)[0];
+ const {load}=new Function('require','__dirname',prefix+';return {load};')(require,__dirname),host=load();
+ const catalog=JSON.parse(fs.readFileSync(path.join(__dirname,'../src/lib/dashboardRoleCatalog.json'),'utf8'));
+ const access={mode:'assigned',roleId:'33333333-3333-4333-8333-333333333333',roleName:'Synthetic',version:1,assignmentVersion:1,canView:true,permissions:catalog.pages.flatMap(p=>p.actions.map(a=>p.id+'.'+a.id))};
+ host.target.location={origin:'https://dashboard.invalid',pathname:'/app/',hash:'#admin/overview'};
+ const html=host.api.makeAdminLiveDocument('<!doctype html><html><head></head><body></body></html>','synthetic-fee',access),listeners=[],posts=[],signals=[],original=h.c.hensemLiveRequest;
+ const send=(data,payload)=>listeners.forEach(fn=>fn({source:parent,origin:'https://dashboard.invalid',data:{type:'hensem-admin-live-response',channel:'synthetic-fee',id:data.id,...payload}}));
+ const parent={postMessage(data){posts.push(data);if(data.type!=='hensem-admin-live-request')return;const request=data.request;
+  if(request.action==='rates'&&!catalog.pages.find(p=>p.id===data.page)?.requests.includes('rates')){send(data,{error:'当前角色没有此页面或操作权限，请联系管理员'});return;}
+  Promise.resolve().then(()=>request.action==='rates'?read(request,data.page):original(request)).then(result=>send(data,{result}),error=>send(data,{error:error.message}));
+ }};
+ h.c.parent=parent;h.c.addEventListener=(type,fn)=>{if(type==='message')listeners.push(fn)};
+ vm.runInContext([...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)][0][1],h.c);
+ const framed=h.c.hensemLiveRequest;h.c.hensemLiveRequest=(request,options)=>{if(request.action==='rates')signals.push(options.signal);return framed(request,options)};
+ return {posts,signals,rates:()=>posts.filter(p=>p.type==='hensem-admin-live-request'&&p.request.action==='rates')};
+}
 const P={id:'11111111-1111-4111-8111-111111111111',name:'Synthetic platform',source:'AR',country:'印度',scopeGroup:'india',timezone:'Asia/Kolkata',currency:'INR'};
 const stats=(count=5,amount='1000.25')=>({direction:'charge',currency:'INR',all_count:count,all_amount:amount,success_count:3,created_success_count:3,success_amount:'600.15',pending_count:1,pending_amount:'200.05',failed_count:1,failed_amount:'200.05',rejected_count:0,rejected_amount:'0',unknown_count:0,unknown_amount:'0',missing_amount_count:0});
 function aggregate(p=P,count=5){const s=stats(count);return {platform:p,total:count,startAt:'2026-09-21T18:30:00.000Z',endAt:'2026-09-22T00:30:00.000Z',summary:[s],rows:[],groups:{provider:[{...s,provider:'Synthetic provider'}],daily:[{...s,provider:'Synthetic provider',date:'2026-09-22'}],hourly:[{...s,hour:12}],amount:[{...s,bucket:'200'}],matrix:[{...s,bucket:'200',hour:12}],latency:[],pending_age:[]}}}
@@ -27,7 +44,7 @@ function harness(options={}){
  const pages=keys.map(k=>[k,'',k,'',k]),groups=[['analysis','','数据分析',keys.filter(k=>!merchantKeys.includes(k))],['merchant','','商户中心',merchantKeys]];
  class FixedDate extends Date{constructor(...args){super(...(args.length?args:[clock]))}static now(){return clock}}
  class TestURL extends URL{static createObjectURL(blob){blobs.push(blob);return 'blob:synthetic'}static revokeObjectURL(){}}
- const context={console,Intl,Date:FixedDate,URL:TestURL,Blob,state:{page:options.page||'overview',navGroup:'analysis'},pages,navGroupsV3:groups,location:{hash:''},
+ const context={console,Intl,AbortController,Date:FixedDate,URL:TestURL,Blob,state:{page:options.page||'overview',navGroup:'analysis'},pages,navGroupsV3:groups,location:{hash:''},
   document:{title:'',body:{classList:{add(){},remove(){}},appendChild(n){nodes.set(n.id,n)}},getElementById:id=>nodes.get(id)||null,querySelector:selector=>nodes.get(selector)||null,createElement:tag=>node(tag)},
   render(){nodes.get('page').innerHTML='INDEPENDENT_SNAPSHOT'},syncFilters(){},groupForV3:key=>groups.find(g=>g[3].includes(key))||groups[0],toggleCenterV3(){},setPage(){},headerIconV3:()=>'<svg></svg>',openDrawer:(title,html)=>drawers.push({title,html}),toast(){},scrollTo(x,y){context.scrollX=x;context.scrollY=y;scrolled.push([x,y])},
   setInterval:(fn,ms)=>{intervals.push({fn,ms});return intervals.length},clearInterval(){},setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},
@@ -167,6 +184,53 @@ test('lazy fee lookup does not recursively rebuild the page during its first pai
  const h=await ready();await h.c.liveQuery();await settle();const pending=deferred();h.L.feeLookupRows=null;h.L.feeLookupLoading=false;h.L.feeLookupError='';h.c.state.page='providers';h.L.direction='charge';h.L.multi.direction=['charge'];h.setHandler(q=>q.action==='rates'?pending.promise:Promise.resolve(aggregate()));
  const before=pageWrites(h);h.c.render();assert.equal(pageWrites(h)-before,1);assert.equal(h.L.feeLookupLoading,true);
  pending.resolve({rows:[],total:0});await settle();assert.equal(pageWrites(h)-before,2,'completion still produces the required final view');assert.equal(h.L.feeLookupLoading,false);
+});
+
+test('manual fee retry clears a sticky error without duplicating a pending request or rerunning business aggregates',async()=>{
+ const h=await ready(),pending=deferred();h.L.feeLookupRows=[];h.L.feeLookupError='费率读取失败';h.setHandler(q=>q.action==='rates'?pending.promise:aggregate());
+ const before=h.calls.length,retry=h.c.liveRetryFeeLookup();await h.c.liveRetryFeeLookup();assert.equal(h.calls.length,before+1);assert.equal(h.calls.at(-1).action,'rates');assert.equal(h.L.feeLookupLoading,true);assert.equal(h.L.feeLookupError,'');
+ pending.resolve({rows:[{provider:'Synthetic fee'}],total:1});await retry;assert.equal(h.L.feeLookupLoading,false);assert.equal(h.L.feeLookupRows.length,1);assert.equal(h.L.feeLookupRows[0].provider,'Synthetic fee');assert.equal(h.L.feeLookupError,'');
+ h.c.setPage('ip');const after=h.calls.length;await h.c.liveRetryFeeLookup();assert.equal(h.calls.length,after,'non-fee pages cannot trigger the helper');
+ let viewAllowed=true;const denied=await ready({roleAllowed:(page,permission)=>permission!=='view'||viewAllowed}),deniedCalls=denied.calls.length;viewAllowed=false;await denied.c.liveRetryFeeLookup();assert.equal(denied.calls.length,deniedCalls,'view denial prevents retries');
+});
+
+test('a fee page deadline aborts transport and remains terminal even when the old transport ignores cancellation',async()=>{
+ const h=await ready(),old=deferred(),request=h.c.hensemLiveRequest;let signal;
+ h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(signal=options.signal,old.promise):request(q,options);
+ const retry=h.c.liveRetryFeeLookup(),deadline=h.timers.findLast(timer=>timer.ms===30000);assert(deadline);deadline.fn();await retry;assert.equal(signal.aborted,true);assert.equal(h.L.feeLookupLoading,false);assert.match(h.L.feeLookupError,/费率读取超时/);assert.equal(h.L.feeLookupRows.length,0);
+ h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?Promise.resolve({rows:[{provider:'Fresh fee'}],total:1}):request(q,options);await h.c.liveRetryFeeLookup();old.resolve({rows:[{provider:'Late old fee'}],total:1});await settle();assert.equal(h.L.feeLookupRows[0].provider,'Fresh fee');assert.equal(h.L.feeLookupError,'');assert.equal(h.L.feeLookupLoading,false);
+});
+
+test('navigation aborts a real framed fee batch without sending the next page under a new permission context',async()=>{
+ for(const target of ['workorders','merchants','collection'])for(const lateFailure of [false,true]){
+  const h=await ready(),old=deferred();let attempt=0;
+  const transport=feeFrame(h,request=>++attempt===1?old.promise:{rows:[{id:'fresh',provider:'Fresh fee'}],total:1,offset:request.offset,limit:500});
+  const reading=h.c.liveRetryFeeLookup();await settle();assert.equal(transport.rates()[0].page,'overview');
+  h.c.setPage(target);await reading;assert.equal(transport.signals[0].aborted,true);assert.equal(h.L.feeLookupLoading,false);assert.equal(h.L.feeLookupError,'');assert.equal(h.L.feeLookupRows,null);
+  assert(transport.posts.some(p=>p.type==='hensem-admin-live-cancel'&&p.id===transport.rates()[0].id));
+  if(lateFailure)old.reject(Error('Late old failure'));else old.resolve({rows:Array.from({length:500},(_,i)=>({id:'old-'+i,provider:'Old fee'})),total:501,offset:0,limit:500});
+  await settle();assert.equal(transport.rates().length,1,'cancelled first-page success must not issue offset 500');assert.equal(h.L.feeLookupRows,null);assert.equal(h.L.feeLookupError,'');
+  if(target==='workorders')h.c.setPage('overview');
+  await h.c.liveQuery();await settle();assert.equal(transport.rates().length,2,'the next business query automatically reads an uncached fee directory');assert.equal(transport.rates()[1].page,target==='workorders'?'overview':target);assert.equal(transport.rates()[1].request.offset,0);assert.equal(h.L.feeLookupRows[0].id,'fresh');assert.equal(h.L.feeLookupError,'');
+ }
+});
+
+test('cancelling a later fee page preserves a complete cache and late results cannot replace a newer batch',async()=>{
+ const h=await ready(),old=deferred(),fresh=deferred(),request=h.c.hensemLiveRequest,cached=[{id:'cached',provider:'Complete cached fee'}];let count=0,oldSignal;
+ h.L.feeLookupRows=cached;
+ h.c.hensemLiveRequest=(q,options)=>{if(q.action!=='rates')return request(q,options);count++;if(count===1)return Promise.resolve({rows:Array.from({length:500},(_,i)=>({id:'partial-'+i,provider:'Partial fee'})),total:501});if(count===2){oldSignal=options.signal;return old.promise;}return fresh.promise;};
+ const reading=h.c.liveRetryFeeLookup();await settle();assert.equal(count,2);h.c.setPage('collection');await reading;
+ assert.equal(oldSignal.aborted,true);assert.equal(h.L.feeLookupRows,cached);assert.equal(h.L.feeLookupError,'');assert.equal(h.L.feeLookupLoading,false);
+ const replacement=h.c.liveRetryFeeLookup();old.resolve({rows:[{id:'late-old',provider:'Old fee'}],total:501});await settle();assert.equal(h.L.feeLookupRows,cached);assert.equal(h.L.feeLookupLoading,true);assert.equal(h.L.feeLookupError,'');
+ fresh.resolve({rows:[{id:'new',provider:'New fee'}],total:1});await replacement;assert.equal(h.L.feeLookupRows[0].id,'new');assert.equal(h.L.feeLookupLoading,false);
+});
+
+test('cancelling retry after an earlier fee error restores idle rather than a false complete empty cache',async()=>{
+ const h=await ready(),old=deferred(),request=h.c.hensemLiveRequest;let attempt=0;
+ Object.assign(h.L,{feeLookupRows:[],feeLookupError:'Previous rate error'});
+ h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(++attempt===1?old.promise:Promise.resolve({rows:[{id:'new',provider:'New fee'}],total:1})):request(q,options);
+ const retry=h.c.liveRetryFeeLookup();h.c.setPage('merchants');await retry;assert.equal(h.L.feeLookupRows,null);assert.equal(h.L.feeLookupError,'');
+ await h.c.liveQuery();await settle();assert.equal(attempt,2);assert.equal(h.L.feeLookupRows[0].id,'new');old.reject(Error('Late cancelled failure'));await settle();assert.equal(h.L.feeLookupError,'');
 });
 
 test('provider options refresh updates search choices without touching business data',async()=>{
@@ -374,9 +438,16 @@ test('removed risk entries disappear from navigation and old page entry redirect
  assert.ok(h.c.navGroupsV3.every(g=>g[3].every(k=>!['dropped','anomaly'].includes(k))));
 });
 
-test('provider loading shares bounded lanes with exclusions and avoids removed report sections',async()=>{
+test('provider orders, comparison and workorders finish while a bounded supplementary exclusion lane is still waiting',async()=>{
  const platforms=[P,{...P,id:'22222222-2222-4222-8222-222222222222'},{...P,id:'33333333-3333-4333-8333-333333333333'}],pending=deferred();
- const h=harness({page:'providers',submission:true,reports:true,handler:q=>{if(q.action==='catalog')return {platforms};if(q.action==='rates')return {rows:[],total:0};if(q.action==='submissionAnalysis')return pending.promise.then(()=>({platform:platforms.find(p=>p.id===q.platformId),startAt:q.startAt,endAt:q.endAt,version:3,exemptCount:0,thresholdComparison:'gt',basis:'platform_local_day_all_providers_zero_success_whole_day_over_threshold',metrics:[10,15,20,30,50,100].map(threshold=>({provider:null,threshold,qualified_member_count:0,qualified_member_days:0,member_count:0,member_days:0,invalid_count:0,invalid_amount:'0',l0_members:0,new_members:0,funded_members:0,unknown_members:0})),coverage:{missingMemberCount:0}}));return flowAggregate(platforms.find(p=>p.id===q.platformId)||P,'charge')}});await settle();h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2);assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,2);assert.equal(h.L.results.length,2,'received aggregates paint before exclusion finishes');pending.resolve();await settle();assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,3);assert.equal(h.L.loading,false);assert.doesNotMatch(h.html(),/自动出款配置接入|源日报数据|无充值人数 \/ 无效笔数：|成功数据按成功时间；/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,0);
+ const h=harness({page:'providers',submission:true,reports:true,handler:q=>{if(q.action==='catalog')return {platforms};if(q.action==='rates')return {rows:[],total:0};if(q.action==='submissionAnalysis')return pending.promise.then(()=>({platform:platforms.find(p=>p.id===q.platformId),startAt:q.startAt,endAt:q.endAt,version:3,exemptCount:0,thresholdComparison:'gt',basis:'platform_local_day_all_providers_zero_success_whole_day_over_threshold',metrics:[10,15,20,30,50,100].map(threshold=>({provider:null,threshold,qualified_member_count:0,qualified_member_days:0,member_count:0,member_days:0,invalid_count:0,invalid_amount:'0',l0_members:0,new_members:0,funded_members:0,unknown_members:0})),coverage:{missingMemberCount:0}}));return flowAggregate(platforms.find(p=>p.id===q.platformId)||P,'charge')}});await settle();const main=h.c.liveQuery();await settle();await main;assert.equal(h.calls.filter(q=>q.action==='aggregate').length,6);assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,1);assert.equal(h.L.results.length,3,'all received aggregates paint before exclusion finishes');assert.equal(h.L.loading,false);assert.equal(h.L.comparisonStatus,'ready');assert(h.calls.some(q=>q.action==='workorders'),'workorders begin before exclusions settle');assert.match(h.html(),/剔除已完成 0\/3/);pending.resolve();await settle();assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,3);assert.equal(h.L.loading,false);assert.doesNotMatch(h.html(),/自动出款配置接入|源日报数据|无充值人数 \/ 无效笔数：|成功数据按成功时间；/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,0);
+});
+
+test('collection summary keeps the verified KB completion-time basis in compact help without its old inline notice',async()=>{
+ const kb={...P,source:'kb',scopeGroup:'IN',sourceName:'YASH.BET',capabilities:{successTimeBasis:'source_completed_at'}};
+ const h=await ready({page:'providers',platforms:[kb]}),calls=h.calls.length;
+ assert.doesNotMatch(h.html(),/data-kb-existing-source/);assert.match(h.html(),/onclick="providerSummaryBasis\(\)">统计口径/);
+ h.c.providerSummaryBasis();assert.match(h.drawers.at(-1).html,/KB成功按成功状态＋源订单完成时间统计/);assert.match(h.drawers.at(-1).html,/不代表银行到账时效/);assert.equal(h.calls.length,calls);
 });
 
 test('restored submission-only tab waits for a manual continuation without rereading completed platforms',async()=>{

@@ -213,6 +213,7 @@ body.live-admin .provider-daily-v3 .provider-daily-rate>button.link{color:inheri
 
 body.live-admin .provider-summary-table .workorder-rate-low{color:#d6374a!important}
 body.live-admin #df-platforms-charge .df-collection-rate-low{color:#d6374a!important}
+body.live-admin .merchant-success-rate-low{color:#d6374a!important;font-weight:600}
 
 /* Use the provider pages' full workspace; short ratios do not need amount-sized columns. */
 body.live-admin .content:has(.provider-summary-report){max-width:none;width:auto;margin:0;padding:12px 12px 20px}
