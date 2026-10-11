@@ -498,7 +498,7 @@ test('date caches preserve invalid calendar and both DST boundary rejections',()
 // facts without using order rows or member-day counts as an aggregate oracle.
 const largeAr={...P,id:'5e952cbb-e42f-d6b1-a24a-a0d42d165df9',name:'91CLUB',source:'ar',scopeGroup:'IN'};
 function aggregateReadHarness(handler,platform=largeAr){
- const context={Date,console,L:{serial:1,catalog:[platform],queryRetrying:false},state:{page:'overview'},isSuccessAnalysis:()=>context.state.page==='success_analysis',providerDirection:()=>null,isFlowPage:()=>false,orderSource:p=>String(p?.source||'').toLowerCase().replaceAll('_',''),displayIdentity:p=>p};
+ const context={Date,console,AbortController,structuredClone,L:{serial:1,catalog:[platform],queryRetrying:false},state:{page:'overview'},roleAllowed:()=>true,visibleCatalog:()=>context.L.catalog,localClock:epoch=>new Date(epoch).toISOString(),isSuccessAnalysis:()=>context.state.page==='success_analysis',providerDirection:()=>null,isFlowPage:()=>false,orderSource:p=>String(p?.source||'').toLowerCase().replaceAll('_',''),displayIdentity:p=>p};
  const calls=[];let active=0,maxActive=0;context.window=context;context.hensemLiveRequest=async q=>{calls.push(JSON.parse(JSON.stringify(q)));active++;maxActive=Math.max(active,maxActive);try{return await handler(q,calls.length)}finally{active--}};
  const counts=source.slice(source.indexOf(' const countKeys='),source.indexOf(' const amountBands='));
  const read=source.slice(source.indexOf(' function mergeParts('),source.indexOf(' // Read deeper overview sections',source.indexOf(' function mergeParts(')));
@@ -534,7 +534,7 @@ test('an incomplete range never becomes a whole result and retry reuses only the
  fail=false;h.c.L.queryRetrying=true;const r=await h.readAggregate(q,1);assert.equal(h.calls.length,4,'only the first exact successful two-hour chunk is reused');assert.equal(r._parts.length,3);assert.equal(r.total,9);assert.equal(h.cachedAggregate({...q,providers:['AnotherPay']}),null);
 });
 test('cancellation after a pending chunk prevents later windows and prevents stale cache writes',async()=>{
- const pending=deferred(),h=aggregateReadHarness(q=>pending.promise.then(()=>splitFact(q))),q=largeRequest(),run=h.readAggregate(q,1);assert.equal(h.calls.length,1);h.c.L.serial=2;pending.resolve();await assert.rejects(run,/查询已替换/);assert.equal(h.calls.length,1);assert.equal(h.cachedAggregate(q),null);
+ const pending=deferred(),h=aggregateReadHarness(q=>pending.promise.then(()=>splitFact(q))),q=largeRequest(),run=h.readAggregate(q,1);await flush();assert.equal(h.calls.length,1);h.c.L.serial=2;pending.resolve();await assert.rejects(run,/查询已替换/);assert.equal(h.calls.length,1);assert.equal(h.cachedAggregate(q),null);
 });
 test('optional fee facts stay unknown if any contributing chunk lacks them',async()=>{
  const h=aggregateReadHarness((q,n)=>{const r=splitFact(q);if(n===2)delete r.groups.provider[0].fee_low_amount;return r;}),q=largeRequest({endAt:'2026-09-29T22:45:00.000Z'}),r=await h.readAggregate(q,1);assert.equal(r.groups.provider[0].fee_low_amount,null);assert.equal(r.groups.provider[0].fee_low_count,2);
