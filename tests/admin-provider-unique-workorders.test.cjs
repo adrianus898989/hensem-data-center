@@ -12,6 +12,12 @@ function setup(){
 }
 const issueSlice=row=>row.length===26?row.slice(-10,-4):row.slice(-8,-2);
 
+test('compact statistics help preserves source time basis, fee coverage and comparison uncertainty without an inline explanation block',()=>{
+ const h=setup();h.L.comparisonStatus='loading';h.render();const before=h.networkCalls(),html=h.html();
+ assert.match(html,/onclick="providerSummaryBasis\(\)">统计口径/);assert.doesNotMatch(plain(html),/对比读取中|手续费已匹配|非历史实际手续费/);
+ h.root.providerSummaryBasis();const drawer=h.drawers.at(-1);assert.match(drawer.title,/汇总 · 统计口径/);assert.match(drawer.html,/创建金额和笔数按各平台当地创建时间/);assert.match(drawer.html,/成功率 = 成功笔数 ÷ 创建笔数/);assert.match(drawer.html,/昨日数据读取中/);assert.match(drawer.html,/按订单创建时间匹配费率版本/);assert.match(drawer.html,/工单按提交日期和原支付订单核对/);assert.equal(h.networkCalls(),before);
+});
+
 test('the original six workorder columns now show deduplicated values and no duplicate column group',()=>{
  const h=setup(),html=h.html(),body=rows(html),footer=rows(html,'tfoot');
  for(const label of ['工单提交金额','工单提交笔数','工单已处理金额','工单已处理笔数','工单未处理金额','工单未处理笔数'])assert.match(html,new RegExp(label));

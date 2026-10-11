@@ -42,13 +42,13 @@ const accountRule=(patch={})=>({id:'account-rule',network:'198.51.100.20/32',not
 test('one list shows global and account IPs, preserves attribution and filters by account/status',async()=>{
  const h=ui(async()=>({...data('dashboard'),rules:[...data('dashboard').rules,accountRule(),accountRule({id:'disabled',network:'198.51.100.21/32',active:false})]}));await flush();
  assert.match(text(h.draw()),/不限账号/);assert.match(text(h.draw()),/frog001独立白名单/);assert.match(text(h.draw()),/security-admin/);assert.match(text(h.draw()),/修改时间/);
- h.field('账号').props.onChange({target:{value:'frog001'}});h.field('状态').props.onChange({target:{value:'active'}});nodes(h.draw()).find(n=>n.type==='form'&&n.props.className==='account-ip-toolbar').props.onSubmit({preventDefault(){}});
+ h.field('账号').props.onChange({target:{value:'frog001'}});h.field('规则开关').props.onChange({target:{value:'active'}});nodes(h.draw()).find(n=>n.type==='form'&&n.props.className==='account-ip-toolbar').props.onSubmit({preventDefault(){}});
  assert.match(text(h.draw()),/198.51.100.20/);assert.doesNotMatch(text(h.draw()),/198.51.100.21|2001:db8/);assert.match(text(h.draw()),/共 1 条/);h.button('重置').props.onClick();assert.match(text(h.draw()),/198.51.100.21|2001:db8/);
 });
 test('new global IP omits the account, while a bound IP uses that account version and explains exclusive login',async()=>{
  for(const bound of [false,true]){
  const h=ui(async q=>q.action==='list-rules'?data(q.surface):{ok:true});await flush();h.button('新增 IP').props.onClick();h.field('IP / CIDR').props.onChange({target:{value:'198.51.100.8'}});if(bound)h.field('绑定账号').props.onChange({target:{value:'staff'}});
- assert.match(text(h.draw()),bound?/全局不限账号规则不替代账号限制/:/登录仍需有效账号及权限/);
+ assert.match(text(h.draw()),bound?/全局不限账号规则不替代账号限制/:/所有账号仍需通过账号、密码及权限验证/);
  nodes(h.draw()).filter(n=>n.type==='form').at(-1).props.onSubmit({preventDefault(){}});await flush();
  assert.deepEqual(JSON.parse(JSON.stringify(h.calls.at(-1))),bound?{action:'upsert-ip-rule',surface:'dashboard',scope:'account',user_id:'staff',expected_version:7,network:'198.51.100.8',note:'',active:true}:{action:'upsert-ip-rule',surface:'dashboard',scope:'global',network:'198.51.100.8',note:'',active:true});
  }
@@ -73,4 +73,41 @@ test('malformed attribution or missing capabilities cannot expose an editable li
 test('pagination preserves narrow searches and page size changes never hide the only matching row',async()=>{
  const records=Array.from({length:26},(_,i)=>({...data('dashboard').rules[0],id:'ip-'+i,network:'203.0.113.'+(i+1)+'/32',note:i===25?'最后一条':''}));const h=ui(async()=>({...data('dashboard'),rules:records}));await flush();assert.match(text(h.draw()),/共 26 条/);assert.doesNotMatch(text(h.draw()),/203.0.113.26\/32/);h.button('下一页').props.onClick();assert.match(text(h.draw()),/203.0.113.26\/32/);
  h.field('IP / 备注').props.onChange({target:{value:'最后一条'}});nodes(h.draw()).find(n=>n.type==='form'&&n.props.className==='account-ip-toolbar').props.onSubmit({preventDefault(){}});assert.match(text(h.draw()),/共 1 条/);assert.match(text(h.draw()),/203.0.113.26\/32/);assert.equal(h.button('下一页').props.disabled,true);h.field('每页').props.onChange({target:{value:'10'}});assert.match(text(h.draw()),/203.0.113.26\/32/);
+});
+
+const ruleState=(h,network)=>{
+ const row=nodes(h.draw()).find(n=>n.type==='tr'&&text(n).includes(network));assert(row,'rule '+network);
+ const cell=nodes(row).find(n=>n.type==='td'&&n.props.className==='ip-rule-state');assert(cell,'rule state');return cell;
+};
+test('an enabled inherited account rule is amber and unapplied, with a contextual mode hint and no automatic mutation',async()=>{
+ const h=ui(async()=>({...data('dashboard'),capabilities:{view:true,manage_global:false,manage_account:false,manage_policy:false},rules:[accountRule({ip_mode:'inherit'})]}));await flush();
+ const state=ruleState(h,'198.51.100.20/32');assert.equal(text(state),'已开启 · 未应用账号跟随全局');
+ assert(nodes(state).filter(n=>['span','small'].includes(n.type)).every(n=>n.props.className==='ip-not-applied'));
+ assert(!nodes(state).some(n=>n.props.className==='ip-enabled'));assert.match(text(h.draw()),/规则状态 \/ 生效情况/);
+ assert.match(text(h.draw()),/账号与角色权限 → 对应账号 → 登录安全 → 账号 IP 模式/);
+ assert.equal(h.calls.length,1);assert.equal(h.calls[0].action,'list-rules');
+ assert(!nodes(h.draw()).some(n=>n.type==='button'&&['新增 IP','编辑','删除','开启限制','关闭限制'].includes(text(n))));
+});
+test('account allowlist application is distinct from login permission and closed rules remain off',async()=>{
+ const base=data('dashboard');const h=ui(async()=>({...base,accounts:[{...base.accounts[0],active:false,ip_mode:'allowlist'}],rules:[accountRule(),accountRule({id:'closed',network:'198.51.100.21/32',active:false})]}));await flush();
+ const applied=ruleState(h,'198.51.100.20/32');assert.equal(text(applied),'已开启 · 已应用账号使用独立白名单');assert.equal(nodes(applied).find(n=>n.type==='span').props.className,'ip-enabled');
+ const closed=ruleState(h,'198.51.100.21/32');assert.equal(text(closed),'已关闭不参与 IP 验证');assert.equal(nodes(closed).find(n=>n.type==='span').props.className,'ip-off');
+ assert.match(text(h.draw()),/规则已应用不等于登录许可，账号状态、锁定、密码及权限仍需验证/);
+ assert.doesNotMatch(text(h.draw()),/IP 可登录|IP可登录/);assert(!nodes(h.draw()).some(n=>n.props.className==='account-ip-inherit-hint'));assert.equal(h.calls.length,1);
+});
+test('a disabled global entry policy leaves global rules unapplied without disabling independent account allowlists',async()=>{
+ const h=ui(async q=>{const base=data(q.surface);return {...base,accounts:[{...base.accounts[0],ip_mode:'allowlist'}],rules:[...base.rules,accountRule()]}});await flush();
+ assert.equal(text(ruleState(h,'2001:db8::/64')),'已开启 · 已应用用于跟随全局的账号');
+ h.button('前端工单白名单').props.onClick();h.draw();h.effects();await flush();
+ const global=ruleState(h,'203.0.113.8/32');assert.equal(text(global),'已开启 · 未应用入口白名单未开启');assert.equal(nodes(global).find(n=>n.type==='span').props.className,'ip-not-applied');
+ assert.equal(text(ruleState(h,'198.51.100.20/32')),'已开启 · 已应用账号使用独立白名单');
+ assert.match(text(h.draw()),/不与全局规则合并/);assert.deepEqual(h.calls.map(q=>q.action),['list-rules','list-rules']);
+});
+test('the rule-switch filter continues to include enabled unapplied rules and excludes closed rules',async()=>{
+ const h=ui(async()=>({...data('dashboard'),rules:[accountRule({ip_mode:'inherit'}),accountRule({id:'closed',network:'198.51.100.21/32',ip_mode:'inherit',active:false})]}));await flush();
+ const select=h.field('规则开关');assert.equal(select.props['aria-label'],'IP 规则开关');assert.deepEqual(nodes(select).filter(n=>n.type==='option').map(n=>n.props.value),['all','active','inactive']);
+ select.props.onChange({target:{value:'active'}});nodes(h.draw()).find(n=>n.type==='form'&&n.props.className==='account-ip-toolbar').props.onSubmit({preventDefault(){}});
+ assert.equal(text(ruleState(h,'198.51.100.20/32')),'已开启 · 未应用账号跟随全局');assert.doesNotMatch(text(h.draw()),/198\.51\.100\.21\/32/);assert.match(text(h.draw()),/共 1 条 \/ 全部 2 条/);
+ h.field('规则开关').props.onChange({target:{value:'inactive'}});nodes(h.draw()).find(n=>n.type==='form'&&n.props.className==='account-ip-toolbar').props.onSubmit({preventDefault(){}});
+ assert.equal(text(ruleState(h,'198.51.100.21/32')),'已关闭不参与 IP 验证');assert.doesNotMatch(text(h.draw()),/198\.51\.100\.20\/32/);assert.equal(h.calls.length,1);
 });

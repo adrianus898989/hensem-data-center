@@ -5,6 +5,7 @@ const plain=value=>JSON.parse(JSON.stringify(value)),flush=()=>new Promise(r=>se
 const session={user:{id:'owner-id'},access_token:'synthetic-token'};
 const capabilities={manage_policy:true,manage_ip:true,manage_account_policy:true,unlock:true};
 const security={failed_count:5,failure_limit:null,locked:true,locked_at:'2026-09-27T01:00:00Z',version:3,ip_mode:'inherit',ip_rules:[]};
+const enabledIpRule={id:'rule-one',network:'203.0.113.8/32',note:'Office',active:true};
 const target={id:'staff-id',username:'staff',active:false};
 function nodes(node){if(Array.isArray(node))return node.flatMap(nodes);return node&&typeof node==='object'?[node,...nodes(node.props?.children)]:[]}
 function text(node){if(Array.isArray(node))return node.map(text).join('');if(node&&typeof node==='object')return text(node.props?.children);return node==null||typeof node==='boolean'?'':String(node)}
@@ -97,7 +98,7 @@ test('missing or read-only server capabilities never allow a threshold, unlock o
 });
 test('an IP manager cannot change failure thresholds or unlock an account without those grants',async()=>{
  const permissions={manage_policy:false,manage_ip:true,manage_account_policy:false,unlock:false};
- const h=ui(async q=>q.action==='policy'?{ok:true,capabilities:permissions,policy:{failure_limit:5,version:1}}:q.action==='list-account-security'?{ok:true,capabilities:permissions,states:[{user_id:target.id,...security}]}:{ok:true,capabilities:permissions,security},{target});await flush();assert.equal(h.button('保存账号阈值').props.disabled,true);assert.equal(h.button('解除自动锁定').props.disabled,true);assert.equal(h.input('账号 IP / CIDR').props.disabled,false);
+ const h=ui(async q=>q.action==='policy'?{ok:true,capabilities:permissions,policy:{failure_limit:5,version:1}}:q.action==='list-account-security'?{ok:true,capabilities:permissions,states:[{user_id:target.id,...security}]}:{ok:true,capabilities:permissions,security:{...security,ip_rules:[enabledIpRule]}},{target});await flush();assert.equal(h.button('保存账号阈值').props.disabled,true);assert.equal(h.button('解除自动锁定').props.disabled,true);assert.equal(h.input('账号 IP / CIDR').props.disabled,false);
  h.select('账号 IP 模式').props.onChange({target:{value:'allowlist'}});h.button('保存 IP 模式').props.onClick();await flush();assert.equal(h.calls.at(-1).request.action,'set-account-ip-mode');assert.equal(h.calls.length,4);
 });
 
@@ -106,4 +107,50 @@ test('a late account write cannot replace the newly selected account state or pe
  const h=ui(async q=>q.action==='policy'?{ok:true,policy:{failure_limit:5,version:1}}:q.action==='list-account-security'?{ok:true,states:[]}:q.action==='set-account-policy'?new Promise(resolve=>{finishWrite=resolve}):{ok:true,security:q.user_id==='second-id'?second:security},{target});await flush();
  h.select('该账号失败阈值').props.onChange({target:{value:'7'}});h.button('保存账号阈值').props.onClick();await flush();assert(finishWrite);h.setProps({target:{id:'second-id',username:'second',active:true}});await flush();assert.match(text(h.draw()),/连续失败1 次/);
  finishWrite({ok:true,capabilities:{...capabilities},security:{...security,failed_count:42,failure_limit:7,version:4}});await flush();assert.match(text(h.draw()),/连续失败1 次/);assert.doesNotMatch(text(h.draw()),/42 次/);assert.equal(h.snapshots.at(-1).states['second-id'].version,8);assert.equal(h.snapshots.at(-1).states[target.id],undefined);
+});
+
+function ipDraftUi(initialMode,initialRules=[]){
+ let current={...security,ip_mode:initialMode,ip_rules:initialRules.map(rule=>({...rule}))};
+ const h=ui(async q=>{
+  if(q.action==='policy')return{ok:true,policy:{failure_limit:5,version:1}};
+  if(q.action==='list-account-security')return{ok:true,states:[{user_id:target.id,...current}]};
+  if(q.action==='set-account-ip-mode')current={...current,ip_mode:q.ip_mode,version:current.version+1};
+  if(q.action==='upsert-account-ip-rule')current={...current,ip_rules:[...current.ip_rules,{id:'new-rule',network:q.network,note:q.note,active:q.active}],version:current.version+1};
+  if(q.action==='set-account-ip-rule-active')current={...current,ip_rules:current.ip_rules.map(rule=>rule.id===q.id?{...rule,active:q.active}:rule),version:current.version+1};
+  if(q.action==='delete-account-ip-rule')current={...current,ip_rules:current.ip_rules.filter(rule=>rule.id!==q.id),version:current.version+1};
+  if(q.action==='set-account-policy')current={...current,failure_limit:q.failure_limit,version:current.version+1};
+  if(q.action==='unlock-account')current={...current,failed_count:0,locked:false,locked_at:null,version:current.version+1};
+  return{ok:true,security:{...current}};
+ },{target});
+ return h;
+}
+test('adding an IP preserves either unsaved mode draft and only an explicit mode save applies it with the newest version',async()=>{
+ for(const initialMode of ['inherit','allowlist']){
+  const desired=initialMode==='inherit'?'allowlist':'inherit',label=initialMode==='inherit'?'跟随全局':'单独白名单',desiredLabel=desired==='inherit'?'跟随全局':'单独白名单';
+  const h=ipDraftUi(initialMode,initialMode==='allowlist'?[enabledIpRule]:[]);await flush();h.select('账号 IP 模式').props.onChange({target:{value:desired}});
+  h.input('账号 IP / CIDR').props.onChange({target:{value:'198.51.100.8'}});h.input('账号 IP 备注').props.onChange({target:{value:' Home '}});
+  nodes(h.draw()).find(n=>n.type==='form'&&n.props.className==='account-ip-editor').props.onSubmit({preventDefault(){}});await flush();
+  assert.deepEqual(h.calls.at(-1).request,{action:'upsert-account-ip-rule',surface:'workorder',user_id:target.id,network:'198.51.100.8',note:'Home',active:true,expected_version:3});
+  assert.equal(h.select('账号 IP 模式').props.value,desired);assert.equal(h.snapshots.at(-1).states[target.id].ip_mode,initialMode);assert.equal(h.snapshots.at(-1).states[target.id].version,4);
+  assert.match(text(h.draw()),new RegExp('当前已保存模式：'+label+'。未保存选择：'+desiredLabel));assert.match(text(h.draw()),/点击“保存 IP 模式”后才会应用/);
+  if(initialMode==='inherit')assert.match(text(h.draw()),/已保存 1 条账号 IP 规则；账号仍跟随全局，这些规则尚未应用/);
+  assert.equal(h.input('账号 IP / CIDR').props.value,'');assert.equal(h.calls.length,4,'adding a rule must not submit an extra mode change');assert.equal(h.button('保存 IP 模式').props.disabled,false);
+  h.button('保存 IP 模式').props.onClick();await flush();assert.deepEqual(h.calls.at(-1).request,{action:'set-account-ip-mode',surface:'workorder',user_id:target.id,ip_mode:desired,expected_version:4});
+  assert.equal(h.snapshots.at(-1).states[target.id].ip_mode,desired);assert.equal(h.snapshots.at(-1).states[target.id].version,5);assert.equal(h.select('账号 IP 模式').props.value,desired);assert.equal(h.button('保存 IP 模式').props.disabled,true);assert.doesNotMatch(text(h.draw()),/未保存选择/);assert.equal(h.calls.length,5);
+ }
+});
+test('rule toggles, deletion, threshold saves and unlock preserve a pending mode without claiming it is applied',async()=>{
+ const h=ipDraftUi('inherit',[enabledIpRule]);await flush();h.select('账号 IP 模式').props.onChange({target:{value:'allowlist'}});
+ h.button('停用').props.onClick();await flush();assert.equal(h.calls.at(-1).request.action,'set-account-ip-rule-active');assert.equal(h.select('账号 IP 模式').props.value,'allowlist');assert.equal(h.button('保存 IP 模式').props.disabled,true);
+ h.button('删除').props.onClick();await flush();assert.equal(h.calls.at(-1).request.action,'delete-account-ip-rule');assert.equal(h.select('账号 IP 模式').props.value,'allowlist');assert.equal(h.snapshots.at(-1).states[target.id].ip_rules.length,0);
+ h.select('该账号失败阈值').props.onChange({target:{value:'7'}});h.button('保存账号阈值').props.onClick();await flush();assert.equal(h.select('账号 IP 模式').props.value,'allowlist');
+ h.button('解除自动锁定').props.onClick();await flush();assert.equal(h.select('账号 IP 模式').props.value,'allowlist');assert.equal(h.snapshots.at(-1).states[target.id].ip_mode,'inherit');assert.equal(h.snapshots.at(-1).states[target.id].version,7);
+ assert.match(text(h.draw()),/当前已保存模式：跟随全局。未保存选择：单独白名单/);assert(!h.calls.some(c=>c.request.action==='set-account-ip-mode'));
+});
+test('a standalone mode draft with no enabled rules is explained and cannot issue a mode write',async()=>{
+ for(const rules of [[],[{...enabledIpRule,active:false}]]){
+  const h=ipDraftUi('inherit',rules);await flush();h.select('账号 IP 模式').props.onChange({target:{value:'allowlist'}});
+  assert.equal(h.button('保存 IP 模式').props.disabled,true);assert.match(text(h.draw()),/启用单独白名单前，请先添加并开启至少一条账号 IP 规则/);
+  h.button('保存 IP 模式').props.onClick();await flush();assert.match(text(h.draw()),/单独白名单需要至少一条已开启的账号 IP 规则/);assert.equal(h.calls.length,3);assert.equal(h.select('账号 IP 模式').props.value,'allowlist');assert.equal(h.snapshots.at(-1).states[target.id].ip_mode,'inherit');assert.equal(h.snapshots.at(-1).states[target.id].version,3);
+ }
 });
