@@ -344,7 +344,7 @@ test('monthly overview and provider reads cover the exact half-open range in con
 test('bounded monthly reads preserve a partial final day and reuse successful chunks when retrying failures',async()=>{
  const h=await ready({manualOverview:true});h.setNow('2026-09-26T12:00:00Z');h.calls.length=0;setScope(h,{from:'2026-09-20T00:00:00',to:'2026-09-22T05:59:59'});
  const from='2026-09-19T18:30:00.000Z',middle='2026-09-20T18:30:00.000Z',last='2026-09-21T18:30:00.000Z',end='2026-09-22T00:30:00.000Z';let failed=true;
- h.setHandler(q=>{if(q.action==='aggregate'&&q.startAt===middle&&failed)throw Error('暂时读取失败');return q.action==='rates'?{rows:[],total:0}:completeAggregate(P,1,1)});
+ h.setHandler(q=>{if(q.action==='aggregate'&&q.startAt===middle&&failed)throw Error('暂时读取失败');return q.action==='rates'?{rows:[],total:0}:{...completeAggregate(P,1,1),startAt:q.startAt,endAt:q.endAt}});
  await h.c.liveQuery();await settle();assert.equal(h.L.queryFailures.length,1);assert.equal(h.L.results.length,0);assert.deepEqual(h.calls.filter(q=>q.action==='aggregate').map(q=>[q.startAt,q.endAt]),[[from,middle],[middle,last]]);
  failed=false;await h.c.liveRetryFailed();await settle();const reads=h.calls.filter(q=>q.action==='aggregate');assert.equal(reads.filter(q=>q.startAt===from).length,1,'completed first day is reused');assert.equal(reads.filter(q=>q.startAt===middle).length,2,'only failed day is retried');assert(reads.some(q=>q.startAt===last&&q.endAt===end),'six-hour final chunk is included');assert.equal(h.L.queryFailures.length,0);assert.equal(h.L.results[0].total,3);assert.equal(h.L.results[0]._parts.length,3);
 });
@@ -551,7 +551,7 @@ test('partial platform results stay labeled and cannot masquerade as complete to
 });
 
 test('later aggregate query wins over an earlier request regardless of completion order',async()=>{
- const h=await ready(),old=deferred(),fresh=deferred();let n=0;h.setHandler(()=>++n===1?old.promise:fresh.promise);const a=h.c.liveQuery();h.c.liveSet('provider','New scope');const b=h.c.liveQuery();fresh.resolve(aggregate(P,22));await b;old.resolve(aggregate(P,11));await a;assert.equal(h.L.results[0].total,22);assert.equal(h.L.loading,false);
+ const h=await ready(),old=deferred(),fresh=deferred();let n=0;h.setHandler(()=>++n===1?old.promise:fresh.promise);const a=h.c.liveQuery();await settle();h.c.liveSet('provider','New scope');const b=h.c.liveQuery();fresh.resolve(aggregate(P,22));await b;old.resolve(aggregate(P,11));await a;assert.equal(h.L.results[0].total,22);assert.equal(h.L.loading,false);
 });
 
 test('editing filters invalidates outstanding aggregate results and leaves explicit query state',async()=>{
@@ -595,20 +595,20 @@ test('successful orders show the completion column first while all-order views r
 
 test('explicit cache queries reuse recent matching aggregates without mixing directions, but explicit queries and expired or changed scopes reread',async()=>{
  const h=await ready();h.L.overviewAnalysis=true;setScope(h,{platform:P.id,direction:'all'});h.c.state.page='overview';
- h.setHandler(async q=>{const r=aggregate(P,5),w={...stats(2,'400'),direction:'withdraw'};r.summary.push(w);for(const key of Object.keys(r.groups))if(r.groups[key].length)r.groups[key].push({...r.groups[key][0],...w});r.summary=r.summary.filter(row=>q.direction==='all'||row.direction===q.direction);for(const key of Object.keys(r.groups))r.groups[key]=r.groups[key].filter(row=>q.direction==='all'||row.direction===q.direction);r.total=r.summary.reduce((n,row)=>n+row.all_count,0);return r});
+ h.setHandler(async q=>{const r={...aggregate(P,5),startAt:q.startAt,endAt:q.endAt},w={...stats(2,'400'),direction:'withdraw'};r.summary.push(w);for(const key of Object.keys(r.groups))if(r.groups[key].length)r.groups[key].push({...r.groups[key][0],...w});r.summary=r.summary.filter(row=>q.direction==='all'||row.direction===q.direction);for(const key of Object.keys(r.groups))r.groups[key]=r.groups[key].filter(row=>q.direction==='all'||row.direction===q.direction);r.total=r.summary.reduce((n,row)=>n+row.all_count,0);return r});
  const countReads=()=>h.calls.filter(q=>q.action==='aggregate').length;
  await h.c.liveQuery();const initial=countReads();assert.equal(h.L.results[0].total,7);
  h.c.setPage('providers');await settle();await h.c.liveQuery(false);await settle();assert.equal(countReads(),initial);assert.equal(h.L.results[0].total,5);assert(h.L.results[0].summary.every(r=>r.direction==='charge'));assert.equal(h.L.comparisonStatus,'ready');
  h.c.setPage('payout');await settle();await h.c.liveQuery(false);await settle();assert.equal(countReads(),initial);assert.equal(h.L.results[0].total,2);assert(h.L.results[0].summary.every(r=>r.direction==='withdraw'));assert.equal(h.L.comparisonResults[0].total,2);
  await h.c.liveQuery();assert.equal(countReads(),initial+2,'manual query rereads both dates');
- h.setNow('2026-09-23T12:01:01Z');await h.c.liveQuery(false);assert.equal(countReads(),initial+4,'navigation cache expires after one minute');
+ h.setNow('2026-09-23T12:05:01Z');await h.c.liveQuery(false);assert.equal(countReads(),initial+4,'both the 30-second full cache and five-minute historical provider cache have expired');
  h.L.provider='Another Provider';h.L.multi.provider=['Another Provider'];await h.c.liveQuery(false);assert.equal(countReads(),initial+6,'provider scope cannot reuse broader totals');
  h.L.currency='USD';h.L.catalog[0]={...h.L.catalog[0],currency:'USD'};await h.c.liveQuery(false);assert.equal(countReads(),initial+8,'currency scopes stay separate');
 });
 
 test('manual cached queries keep completion-cohort totals when narrowing a successful-order result by direction',async()=>{
  const h=await ready();setScope(h,{platform:P.id,direction:'all',status:'success'});h.c.state.page='overview';
- h.setHandler(async()=>{const r=aggregate(P,5);r.summary=[{...r.summary[0],success_count:7},{...stats(9),direction:'withdraw',success_count:2}];r.total=9;return r});
+ h.setHandler(async q=>{const r={...aggregate(P,5),startAt:q.startAt,endAt:q.endAt};r.summary=[{...r.summary[0],success_count:7},{...stats(9),direction:'withdraw',success_count:2}];r.total=9;return r});
  await h.c.liveQuery();const reads=h.calls.filter(q=>q.action==='aggregate').length;
  h.c.setPage('providers');await settle();await h.c.liveQuery(false);await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,reads);
  assert.equal(h.L.results[0].total,7);assert.equal(h.L.results[0]._parts[0].total,7);assert.equal(h.L.comparisonResults[0].total,7);
@@ -701,11 +701,11 @@ test('current-page CSV export escapes formulas and quotes from untrusted cells',
  const h=await ready();h.nodes.get('page').querySelectorAll=()=>[{querySelectorAll:()=>[{cells:[{innerText:'订单号'},{innerText:'金额'}]},{cells:[{innerText:'=HYPERLINK("bad")'},{innerText:'200.00'}]},{cells:[{innerText:'@formula'},{innerText:'Raw/Pay'}]}]}];h.c.liveExport();assert.equal(h.blobs.length,1);const csv=await h.blobs[0].text();assert(csv.includes('"\'=HYPERLINK(""bad"")"'));assert(csv.includes('"\'@formula"'));assert(csv.includes('"Raw/Pay"'));assert(csv.includes('"200.00"'));
 });
 
-test('aggregate queries use the full interval and bisect only after a timeout',async()=>{
+test('AR overview attempts the full interval then falls back to exact hourly windows only after a timeout',async()=>{
  const h=await ready();setScope(h,{platform:P.id,from:'2026-09-20T12:34:56',to:'2026-09-21T00:34:55'});const attempts=[],accepted=[];
  h.setHandler(async q=>{attempts.push(q);const width=Date.parse(q.endAt)-Date.parse(q.startAt);if(width>6*3600000)throw Error('Synthetic timeout');accepted.push(q);return aggregate(P,10)});
- await h.c.liveQuery();assert.equal(h.L.error,'');assert.equal(attempts.length,6);assert.equal(accepted.length,4);assert.equal(attempts[0].startAt,'2026-09-20T07:04:56.000Z');assert.equal(Date.parse(attempts[0].endAt)-Date.parse(attempts[0].startAt),12*3600000);assert(accepted.every(q=>{const width=Date.parse(q.endAt)-Date.parse(q.startAt);return width>5*3600000&&width<=6*3600000}));for(const period of [accepted.slice(0,2),accepted.slice(2)]){assert.equal(period.length,2);assert.equal(period[0].endAt,period[1].startAt)}
- const merged=h.L.results[0];assert.equal(merged._parts.length,2);assert.equal(merged.total,20);assert.equal(merged.summary[0].all_count,20);assert.equal(h.L.comparisonResults[0]._parts.length,2);assert.equal(merged.startAt,accepted[0].startAt);assert.equal(merged.endAt,accepted[1].endAt);assert.equal(h.L.comparisonResults[0].endAt,accepted[3].endAt);
+ await h.c.liveQuery();assert.equal(h.L.error,'');assert.equal(attempts.length,26);assert.equal(accepted.length,24);assert.equal(attempts[0].startAt,'2026-09-20T07:04:56.000Z');assert.equal(Date.parse(attempts[0].endAt)-Date.parse(attempts[0].startAt),12*3600000);assert(accepted.every(q=>Date.parse(q.endAt)-Date.parse(q.startAt)===3600000));for(const period of [accepted.slice(0,12),accepted.slice(12)]){assert.equal(period.length,12);for(let i=1;i<period.length;i++)assert.equal(period[i-1].endAt,period[i].startAt);assert.equal(Date.parse(period.at(-1).endAt)-Date.parse(period[0].startAt),12*3600000)}
+ const merged=h.L.results[0];assert.equal(merged._parts.length,12);assert.equal(merged.total,120);assert.equal(merged.summary[0].all_count,120);assert.equal(h.L.comparisonResults[0]._parts.length,12);assert.equal(merged.startAt,accepted[0].startAt);assert.equal(merged.endAt,accepted[11].endAt);assert.equal(h.L.comparisonResults[0].endAt,accepted[23].endAt);
 });
 
 test('full analysis timeout bisection covers the exact interval and stops retrying at or below the one-hour threshold',async()=>{

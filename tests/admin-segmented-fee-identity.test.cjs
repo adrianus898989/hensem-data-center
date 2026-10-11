@@ -11,8 +11,9 @@ const raw=(n=1,amount=100,extra={})=>({provider:'ExamplePay',direction:'charge',
 const rate=(extra={})=>({country:'印度',provider:'ExamplePay',scopeType:'country',collectFee:'4%',...extra});
 const part=(rows,platform=native)=>({platform:{...platform},summary:[{...raw(rows.reduce((n,r)=>n+r.success_count,0),rows.reduce((n,r)=>n+(r.success_amount||0),0)),provider:undefined}],groups:{provider:rows},total:rows.reduce((n,r)=>n+r.all_count,0)});
 function harness(handler,platform=native){
- const c={Date,console,L:{serial:1,catalog:platform?[platform]:[],queryRetrying:false},state:{page:'merchants'},isSuccessAnalysis:()=>false,providerDirection:()=>null,isFlowPage:()=>false,orderSource:p=>String(p?.source||'').toLowerCase().replaceAll('_',''),displayIdentity:p=>p};
- c.window=c;const calls=[];c.hensemLiveRequest=async q=>{calls.push({...q});return handler(q,calls.length)};
+ const c={Date,console,AbortController,structuredClone,L:{serial:1,catalog:platform?[platform]:[],queryRetrying:false},state:{page:'merchants'},roleAllowed:()=>true,isSuccessAnalysis:()=>false,providerDirection:()=>null,isFlowPage:()=>false,orderSource:p=>String(p?.source||'').toLowerCase().replaceAll('_',''),displayIdentity:p=>p};
+ c.visibleCatalog=()=>c.L.catalog;
+ c.window=c;const calls=[];c.hensemLiveRequest=async q=>{calls.push({...q});return {startAt:q.startAt,endAt:q.endAt,rows:[],...await handler(q,calls.length)}};
  vm.runInNewContext(counts+read+';globalThis.engine={mergeParts,readAggregate,plus,combine};',c);
  return {...c.engine,c,calls};
 }
@@ -78,6 +79,9 @@ test('verified marker cannot replace strict leaf validation and missing marker p
  assert.equal(facts({...valid,nativeFeeIdentityVerified:false}).amount,null);
 });
 test('a read whose native catalog entry disappears cannot reuse response identity as authorization proof',async()=>{
- const engine=harness(()=>part([raw(1,100,{platformId:native.id,platform:native.name,source:native.source,country:native.country})]),null),result=await engine.readAggregate({...request,endAt:'2026-10-02T19:00:00.000Z'},1);
+ const original=part([raw(1,100,{platformId:native.id,platform:native.name,source:native.source,country:native.country})]),engine=harness(()=>original,null);
+ await assert.rejects(engine.readAggregate({...request,endAt:'2026-10-02T19:00:00.000Z'},1),/查询权限或范围已变化/);
+ assert.equal(engine.calls.length,0,'missing source authorization prevents transport before any response can lend its identity');
+ const result=engine.mergeParts([original],undefined);
  assert.equal(rows(result)[0].nativeFeeIdentityVerified,false);assert.equal(facts(rows(result)[0]).amount,null);assert.equal(plain(result._parts[0].groups.provider[0]).nativeFeeIdentityVerified,undefined);
 });

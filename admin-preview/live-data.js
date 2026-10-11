@@ -528,12 +528,19 @@
  }});
  const analysis=window.HensemAnalysisDrilldown?.create({L,E,N,C,R,query,formatTime,successTimeLabel,openDrawer:(title,html)=>openDrawer(title,html),customRows:segment=>matrixCustom?.detailRows(segment),customResults:segment=>matrixCustom?.customResults(segment),request:q=>window.hensemLiveRequest(q),render:()=>render()});
  matrixCustom=window.HensemMatrixCustomRange?.create({L,E,N,C,R,analysis,page:()=>state.page,allowed:()=>roleAllowed(state.page,'query'),selected,query,request:(q,serial)=>readAggregate(q,serial,false,true),successUnavailable:successTimeUnavailable,render:()=>render()});
+ // A completed request is not proof of source collection coverage. This is
+ // strictly the requested platform-read state for the visible overview.
+ function aggregateReadStatus(){
+  const requested=[...new Map((L.queryPlatforms||[]).filter(p=>p.id).map(p=>[p.id,p])).values()],failed=new Map((L.queryFailures||[]).map(f=>[f.id,f])),returned=new Set((L.results||[]).map(r=>r.platform?.id));
+  const completed=requested.filter(p=>returned.has(p.id)&&!failed.has(p.id)),missing=requested.filter(p=>!returned.has(p.id)||failed.has(p.id));
+  return {total:requested.length,done:completed.length,incomplete:requested.length>0&&(!!L.loading||!!L.queryRetrying||!!L.queryPaused||missing.length>0),missing:missing.map(p=>({name:p.name||p.id,error:failed.get(p.id)?.message||''}))};
+ }
  function referencePage(){
   if(state.page==='merchants'&&L.view==='trend'&&L.loadedView!=='full'){
    const t=L.merchantTrend,loading=t?.status==='loading',note=loading?'正在按需读取订单趋势 '+(t.done||0)+' / '+(t.total||0)+' 平台':t?.status==='error'?'趋势读取未完成：'+t.error:'订单趋势尚未读取';
    return totals()+'<div class="section-switcher"><div class="tabs">'+[['business','商户经营清单'],['trend','商户订单趋势'],['providers','该商户的三方经营表现']].map(([key,label])=>'<button class="'+(L.view===key?'on':'')+'" onclick="liveReferenceSet(\'view\',\''+key+'\')">'+label+'</button>').join('')+'</div></div><div class="live-status" role="status">'+E(note)+(loading?'':' <button class="link" onclick="liveMerchantTrend()">读取订单趋势</button>')+'</div>';
   }
-  return HensemLivePages.create({analysis,matrixCustom,pendingSnapshot,memberCounts,reportCatalogRows:reportData?.state.catalogError?[]:reportData?.state.catalogRows,successTimeSummary,successTimeUnavailable,successBasisLabel,amountBandKeys,amountLabel,amountNote,L,E,N,C,R,plus,combine,groupRows,empty,table,box,pager,totals,comparisonRows,compareMetric,chart,matrixBody,latencyView,detailsView,providersView,platformsView,pagedTable,overviewChart,overviewAmounts,overviewAnalysisRender,businessHeaders,businessCells,feeForRow,ensureFeeLookup,providerCell,loadedFeeValue}).render(state.page)
+  return HensemLivePages.create({aggregateReadStatus,analysis,matrixCustom,pendingSnapshot,memberCounts,reportCatalogRows:reportData?.state.catalogError?[]:reportData?.state.catalogRows,successTimeSummary,successTimeUnavailable,successBasisLabel,amountBandKeys,amountLabel,amountNote,L,E,N,C,R,plus,combine,groupRows,empty,table,box,pager,totals,comparisonRows,compareMetric,chart,matrixBody,latencyView,detailsView,providersView,platformsView,pagedTable,overviewChart,overviewAmounts,overviewAnalysisRender,businessHeaders,businessCells,feeForRow,ensureFeeLookup,providerCell,loadedFeeValue}).render(state.page)
  }
   // Report pages already have Query in the filter bar. Only standalone views
   // without that bar (the legacy rates view) need an action in the empty state.
@@ -820,6 +827,10 @@
  async function readAggregate(request,serial,allowCache=false,bounded=false){
   if(allowCache){const cached=cachedAggregate(request);if(cached)return cached}
   const parts=[],boundedProviderRead=bounded||isSuccessAnalysis()||(state.page==='overview'&&request.view==='providers')||!!providerDirection(state.page)||isFlowPage(state.page),day=86400000;
+  // Only a real timeout switches AR overview windows to <= 1 hour. Reads
+  // stay sequential within each platform; the two-platform worker limit and
+  // exact half-open boundaries are unchanged. A failing <= 1h read stops.
+  const hourlyTimeoutFallback=state.page==='overview'&&request.action==='aggregate'&&request.view==='providers'&&orderSource(L.catalog.find(p=>p.id===request.platformId))==='ar';
   async function read(q,depth=0){
    if(serial!==L.serial)throw Error('查询已替换');
    try{const cached=(allowCache||L.queryRetrying)&&q!==request?cachedAggregate(q):null;const result=cached||await aggregateRead(q,serial);if(serial!==L.serial)throw Error('查询已替换');const part={...result,_aggregateCacheable:!!cached||aggregateComplete(q,result),startAt:q.startAt,endAt:q.endAt,_aggregateView:cached?cached._aggregateView||aggregateView(q):aggregateView(q)};parts.push(part);if(q!==request)rememberAggregate(q,part)}
@@ -827,7 +838,9 @@
     if(serial!==L.serial)throw Error('查询已替换');
     const from=Date.parse(q.startAt),to=Date.parse(q.endAt),width=to-from;
     if(!/超时|timeout/i.test(e.message))throw e;
-    if(boundedProviderRead&&width>day){
+    if(hourlyTimeoutFallback&&width>3600000){
+     for(let cursor=from;cursor<to;cursor+=3600000)await read({...q,startAt:new Date(cursor).toISOString(),endAt:new Date(Math.min(cursor+3600000,to)).toISOString()},0);
+    }else if(boundedProviderRead&&width>day){
      for(let cursor=from;cursor<to;cursor+=day)await read({...q,startAt:new Date(cursor).toISOString(),endAt:new Date(Math.min(cursor+day,to)).toISOString()},0);
     }else if(width>3600000&&(!boundedProviderRead||depth<3)){
      const mid=new Date(Math.floor((from+to)/2000)*1000).toISOString();await read({...q,endAt:mid},depth+1);await read({...q,startAt:mid},depth+1);
@@ -967,7 +980,7 @@
    if(!isSuccessAnalysis()&&window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;
    if(state.page==='providers')submissionBatch=submissionAnalysis?.startWithOrders();
    const requests=platforms.map(p=>query(p,'aggregate'));if(state.page==='overview'&&L.direction!=='charge')pendingSnapshot?.load();
-   async function worker(){while(index<requests.length&&serial===L.serial){const i=index++;try{const r=await readAggregate(requests[i],serial,!force);if(serial!==L.serial)return;results[i]=r}catch(e){if(serial!==L.serial)return;L.queryFailures.push({id:platforms[i].id,name:platforms[i].name,message:e.message||'读取失败'});L.queryWarnings=L.queryFailures.map(f=>f.name+'：'+f.message)}if(submissionBatch){L.results=results.filter(Boolean);render();void submissionBatch.read(platforms[i].id);}if(serial!==L.serial)return;done++;L.results=results.filter(Boolean);L.progress='正式数据读取 '+done+' / '+requests.length+' 个平台'+(L.queryWarnings.length?'，'+L.queryWarnings.length+' 个未完成':'');render()}}
+   async function worker(){while(index<requests.length&&serial===L.serial){const i=index++;try{const r=await readAggregate(requests[i],serial,!force);if(serial!==L.serial)return;results[i]=r}catch(e){if(serial!==L.serial)return;L.queryFailures.push({id:platforms[i].id,name:platforms[i].name,message:e.message||'读取失败'});L.queryWarnings=L.queryFailures.map(f=>f.name+'：'+f.message)}if(submissionBatch){L.results=results.filter(Boolean);render();void submissionBatch.read(platforms[i].id);}if(serial!==L.serial)return;done++;L.results=results.filter(Boolean);L.progress='正式数据读取：完整返回 '+results.filter(Boolean).length+' / '+requests.length+' 个平台'+(L.queryWarnings.length?'，失败 '+L.queryWarnings.length+' 个':'')+'；已处理 '+done+' 个';render()}}
    await Promise.all(Array.from({length:Math.min(2,requests.length)},()=>worker()));if(serial!==L.serial)return;void submissionBatch?.finish();
    L.results=results.filter(Boolean);L.providerOptions=[...new Set([...L.providerOptions,...L.results.flatMap(r=>(r.groups?.provider||[]).map(g=>window.HensemProviderNames?.canonical(g.provider,L.country)??g.provider)).filter(Boolean)])].sort();L.loading=false;
    // Source-day reconciliation is supplementary evidence. A slow check must
