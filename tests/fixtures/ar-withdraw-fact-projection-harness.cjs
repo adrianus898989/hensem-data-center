@@ -1,0 +1,40 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),{PGlite}=require('@electric-sql/pglite');
+const w=__dirname,root=path.resolve(w,'../..'),read=f=>fs.readFileSync(f==='stage1-install-draft.sql'?path.join(root,'supabase/migrations/20261011114914_ar_in_withdraw_fact_projection.sql'):path.join(w,'ar-withdraw-fact-backfill.sql'),'utf8'),install=read('stage1-install-draft.sql');
+const base=fs.readFileSync(path.join(w,'ar-withdraw-fact-reader-baseline.sql'),'utf8');
+async function fixture(){const db=new PGlite();await db.exec(`create schema private;create role anon;create role authenticated;create role service_role bypassrls;
+ create table public.ar_collected_orders(source_system text not null,country_code text not null,platform text not null,order_kind text not null,order_no text not null,status text,operator text,applied_at timestamp,completed_at timestamp,observed_at timestamptz not null,updated_at timestamptz not null,primary key(source_system,country_code,platform,order_kind,order_no));
+ alter table public.ar_collected_orders enable row level security;grant all on public.ar_collected_orders to postgres,service_role;
+ create table synthetic_catalog(id uuid,name text,team text,country text,scope_group text,source text,timezone text,currency text,source_name text);
+ create function private.dashboard_admin_live_platforms() returns setof synthetic_catalog language sql stable as $$select * from public.synthetic_catalog$$;
+ create function private.dashboard_admin_live_withdraw_key(text) returns text language sql immutable as $$select regexp_replace(upper(btrim($1)),'[^A-Z0-9]','','g')$$;
+ create function private.dashboard_scope_allows(jsonb,text,text) returns boolean language sql immutable as $$select $1->>'mode'='all'$$;
+ insert into synthetic_catalog values(md5('91')::uuid,'91CLUB','M8','印度','IN','ar','Asia/Kolkata','INR','91CLUB');`);await db.exec(base);await db.exec('revoke all on function private.dashboard_admin_ar_withdraw_days(jsonb,jsonb,date,date) from public');return db;}
+const row=async(db,id,patch={})=>{const v={source_system:'AR',country_code:'IN',platform:'91CLUB',order_kind:'withdraw',order_no:id,status:'已通过',operator:' Same account ',applied_at:'2026-10-10 01:00:00',completed_at:'2026-10-10 01:00:20',observed_at:'2026-10-11T00:00:00Z',updated_at:'2026-10-11T00:00:00Z',...patch},keys=Object.keys(v);await db.query(`insert into ar_collected_orders(${keys.join(',')}) values(${keys.map((_,i)=>'$'+(i+1)).join(',')})`,Object.values(v));};
+const count=async db=>(await db.query('select count(*)::int c from private.ar_withdraw_facts')).rows[0].c;
+const projectionSelect=`select * from private.ar_withdraw_fact(a.source_system,a.country_code,a.platform,a.order_kind,a.order_no,a.status,a.operator,a.applied_at,a.completed_at,a.observed_at,a.updated_at)`;
+const parity=async db=>(await db.query(`with expected as(select p.* from ar_collected_orders a cross join lateral private.ar_withdraw_fact(a.source_system,a.country_code,a.platform,a.order_kind,a.order_no,a.status,a.operator,a.applied_at,a.completed_at,a.observed_at,a.updated_at)p),diff as((select * from expected except select * from private.ar_withdraw_facts)union all(select * from private.ar_withdraw_facts except select * from expected))select count(*)::int c from diff`)).rows[0].c;
+async function main(){const db=await fixture();try{
+ await row(db,'HISTORIC');await row(db,'BEFORE-CUTOVER',{applied_at:'2026-10-09 23:59:59'});await row(db,'PK',{country_code:'PK'});await row(db,'CHARGE',{order_kind:'recharge'});
+ const sourceBefore=(await db.query('select jsonb_agg(to_jsonb(a) order by order_no) r from ar_collected_orders a')).rows[0].r;
+ await db.exec(install);assert.equal(await count(db),0,'install does not backfill or modify native rows');assert.deepEqual((await db.query('select jsonb_agg(to_jsonb(a) order by order_no) r from ar_collected_orders a')).rows[0].r,sourceBefore);
+ await db.exec(install);assert.equal(await count(db),0,'install replay');
+ await db.exec(read('backfill-one-batch.sql'));assert.equal(await count(db),1);assert.equal(await parity(db),0);
+ const examples=[['NULLS',null,null,null],['UNKNOWN','处理中','---',null],['DUAL','success rejected','Same account','2026-10-10 01:00:30'],['SYSTEM','成功','\u200b\ufeff SYSTEM \u3000','2026-10-10 01:00:00.999'],['BACK','failed','\u00a0manual\t','2026-10-10 00:59:59'],['ZERO','success','none','2026-10-10 01:00:00']];
+ for(const [id,status,operator,completed_at] of examples)await row(db,id,{status,operator,completed_at});assert.equal(await count(db),7);assert.equal(await parity(db),0);
+ // A stale backfill payload cannot overwrite the source trigger's accepted latest version.
+ const stale=(await db.query("select to_jsonb(f) r from private.ar_withdraw_facts f where order_no='SYSTEM'")).rows[0].r;
+ await db.query("update ar_collected_orders set status='failed',operator='Latest manual',completed_at='2026-10-10 01:01:00',observed_at='2026-10-11T00:10:00Z',updated_at='2026-10-11T00:10:00Z' where order_no='SYSTEM'");
+ const cols=Object.keys(stale);await db.query(`insert into private.ar_withdraw_facts(${cols.join(',')}) values(${cols.map((_,i)=>'$'+(i+1)).join(',')}) on conflict(source_system,country_code,platform,order_kind,order_no)do nothing`,Object.values(stale));assert.equal(await parity(db),0);
+ // Source monotonic ingestion accepts the newest observed state only; rejected old replay does not touch facts.
+ await db.query("update ar_collected_orders set status='已通过',operator='Old replay',observed_at='2026-10-10T00:00:00Z' where order_no='SYSTEM' and observed_at<='2026-10-10T00:00:00Z'");assert.equal(await parity(db),0);assert.equal((await db.query("select method from private.ar_withdraw_facts where order_no='SYSTEM'")).rows[0].method,'manual');
+ // PK/country/direction/date changes remove old eligibility; deferred FK does not block legitimate moves.
+ await db.exec("begin;update ar_collected_orders set country_code='PK' where order_no='HISTORIC';commit;");assert.equal((await db.query("select count(*)::int c from private.ar_withdraw_facts where order_no='HISTORIC'")).rows[0].c,0);
+ await db.exec("begin;update ar_collected_orders set order_no='SYSTEM-RENAMED' where order_no='SYSTEM';commit;");assert.equal(await parity(db),0);
+ await db.exec("update ar_collected_orders set applied_at='2026-10-09 23:59:59' where order_no='ZERO';update ar_collected_orders set order_kind='recharge' where order_no='BACK';");assert.equal(await parity(db),0);
+ const deleted=(await db.query("select to_jsonb(f) r from private.ar_withdraw_facts f where order_no='DUAL'")).rows[0].r;await db.exec("delete from ar_collected_orders where order_no='DUAL'");assert.equal(await parity(db),0);
+ await db.exec('begin');await db.query(`insert into private.ar_withdraw_facts(${cols.join(',')}) values(${cols.map((_,i)=>'$'+(i+1)).join(',')}) on conflict(source_system,country_code,platform,order_kind,order_no)do nothing`,Object.values(deleted));await assert.rejects(()=>db.exec('commit'),/foreign key/);await db.exec('rollback');assert.equal(await parity(db),0,'stale deleted row cannot commit as orphan');
+ await db.exec('set role service_role');await row(db,'SERVICE',{operator:'system'});await assert.rejects(()=>db.query('select * from private.ar_withdraw_facts'),/permission denied/);await db.exec('reset role');assert.equal(await parity(db),0,'service source writer invokes protected trigger');
+ const hash=(await db.query("select md5(prosrc) h from pg_proc where oid='private.dashboard_admin_ar_withdraw_days(jsonb,jsonb,date,date)'::regprocedure")).rows[0].h;assert.equal(hash,'53cf57763dca603f812cf91c1dea7bb7','stage1 does not cut over reader');
+ const report={synthetic_only:true,production_writes:0,install_backfill_separate:true,replay_passed:true,complete_field_parity:true,source_identity_moves_supported:true,source_replay_backfill_preserved:true,delete_orphan_rejected:true,service_writer_supported:true,private_access_denied:true,source_reader_unchanged:true,cross_connection_lock_test:false};return report;
+ }finally{await db.close();}}
+module.exports={fixture,row,parity,install,read,main};
