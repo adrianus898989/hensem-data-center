@@ -763,7 +763,7 @@ test('daily operational notes retain failed input and use an independent version
 });
 test('incomplete previous platform coverage suppresses total growth without hiding actual daily counts',async()=>{
  const h=await ready({page:'auto_withdraw',handler:q=>q.action==='autoWithdraw'?{...withdrawalData(q),comparison:{complete:false,matchedRows:0,totalRows:1}}:withdrawalHandler(q)});
- const kpis=h.html().split('withdraw-kpis')[1].split('</section>')[0];assert.match(kpis,/汇总不可比/);assert.match(kpis,/100/);assert.doesNotMatch(kpis,/25\.00%/);
+ const kpis=h.html().split('withdraw-kpis')[1].split('</section>')[0];assert.match(kpis,/两期范围或覆盖未对齐，汇总暂不比较/);assert.match(kpis,/100/);assert.doesNotMatch(kpis,/25\.00%/);
 });
 
 test('late payout results cannot replace an edited scope or another subpage',async()=>{

@@ -31,19 +31,40 @@ test('raw source evidence is scalar-only and allowlisted; contacts, credentials,
 
 test('money stays exact decimal text, bounds precision, and preserves signed balances only',()=>{
  assert.equal(validateYashRequest(batch([record({amount:'9999999999999999.99999999',balance_after:'-1'})]),now).records[0].amount,'9999999999999999.99999999');
- for(const changes of [{amount:1},{amount:null},{amount:'-1'},{fee:'-1'},{credited_amount:'-1'},{discount_percent:'-1'},{amount:'1e3'},{amount:'1,000'},{amount:'10000000000000000'},{amount:'1.123456789'},{fee:true}])assert.throws(()=>validateYashRequest(batch([record(changes)]),now),/invalid_request/);
+ for(const changes of [{amount:1},{amount:null},{amount:'-1'},{fee:'-1'},{credited_amount:'-1'},{amount:'1e3'},{amount:'1,000'},{amount:'10000000000000000'},{amount:'1.123456789'},{fee:true}])assert.throws(()=>validateYashRequest(batch([record(changes)]),now),/invalid_request/);
+ assert.equal(validateYashRequest(batch([record({discount_percent:'-99.12345678901234567890'})]),now).records[0].discount_percent,'-99.12345678901234567890');
 });
 
 test('UTC instants, source timezone metadata and time ordering fail closed without using the machine timezone',()=>{
  for(const source_timezone of ['Asia/Kolkata','Asia/Shanghai','UTC','UTC+05:30','UTC+08:00','UTC-03:00','UTC+14:00'])assert.equal(validateYashRequest(batch([record({source_timezone})]),now).records[0].source_timezone,source_timezone);
- for(const changes of [{source_timezone:'UTC+14:01'},{source_timezone:'UTC-15:00'},{source_timezone:'UTC+05:60'},{source_timezone:'Machine/Local'},{created_at:'2026-10-09 01:00:00'},{created_at:'2026-10-09T06:30:00+05:30'},{created_at:'2026-02-30T01:00:00Z'},{created_at:'2019-12-31T23:59:59Z'},{created_at:'2026-10-09T06:06:00Z'},{observed_at:'2026-10-09T00:00:00Z'},{completed_at:'2026-10-08T00:00:00Z'}])assert.throws(()=>validateYashRequest(batch([record(changes)]),now),/invalid_request/);
+ for(const changes of [{source_timezone:'UTC+14:01'},{source_timezone:'UTC-15:00'},{source_timezone:'UTC+05:60'},{source_timezone:'Machine/Local'},{created_at:'2026-10-09 01:00:00'},{created_at:'2026-10-09T06:30:00+05:30'},{created_at:'2026-02-30T01:00:00Z'},{created_at:'2019-12-31T23:59:59Z'},{created_at:'2026-10-09T06:06:00Z'},{observed_at:'2026-10-09T00:00:00Z'}])assert.throws(()=>validateYashRequest(batch([record(changes)]),now),/invalid_request/);
 });
 
 test('unknown token currency stays unpriced; currency evidence cannot be fabricated by defaults',()=>{
  for(const changes of [{currency:'INR',currency_basis:'platform_default'},{currency:'USDT',currency_basis:'source_field'},{currency:null,currency_basis:'token_type_unverified'}])assert.doesNotThrow(()=>validateYashRequest(batch([record(changes)]),now));
  for(const changes of [{currency:null,currency_basis:'source_field'},{currency:'USDT',currency_basis:'platform_default'},{currency:'INR',currency_basis:'token_type_unverified'},{currency:'inr'},{currency_basis:'guessed'}])assert.throws(()=>validateYashRequest(batch([record(changes)]),now),/invalid_request/);
 });
+test('withdrawal source notes remain independent and distinguish absent, null, empty and sanitized text',async()=>{
+ const id='12345678901234567890123456789',h=harness();
+ const response=await h.handler(request(batch([record({order_type:'withdrawal',order_no:id,order_note:'',risk_note:'余额不足；订单 '+id+'；token=must-not-persist；手机号:+91 9876543210；https://secret.example/x'})])));assert.equal(response.status,200);
+ const saved=h.calls[0].body.p_request.records[0];assert.equal(saved.order_note,'');assert.match(saved.risk_note,/余额不足/);assert.match(saved.risk_note,new RegExp(id));assert.doesNotMatch(saved.risk_note,/must-not-persist|9876543210|secret\.example/);assert.equal(Object.hasOwn(saved.raw_fields,'风控备注'),false);
+ const old=validateYashRequest(batch([record({order_type:'withdrawal'})]),now).records[0];assert.equal(Object.hasOwn(old,'order_note'),false);assert.equal(Object.hasOwn(old,'risk_note'),false);
+ const missing=validateYashRequest(batch([record({order_type:'withdrawal',order_note:null,risk_note:null})]),now).records[0];assert.equal(missing.order_note,null);assert.equal(missing.risk_note,null);
+ for(const changes of [{order_type:'deposit',risk_note:null},{order_type:'withdrawal',risk_note:1},{order_type:'withdrawal',order_note:[]},{order_type:'withdrawal',risk_note:'x'.repeat(2001)},{order_type:'withdrawal',risk_note:'\u0000secret'}])assert.throws(()=>validateYashRequest(batch([record(changes)]),now),/invalid_request/);
+ const labels=validateYashRequest(batch([record({supplier:'TestPay https://private.example/key',channel:'UPI +91 9876543210',completed_at:'2026-10-08T00:00:00Z'})]),now).records[0];assert.doesNotMatch(JSON.stringify(labels),/private\.example|9876543210/);assert.equal(labels.completed_at,'2026-10-08T00:00:00Z');
+});
+test('short native IDs cannot split and restore synthetic contact or credential values',()=>{
+ for(const id of ['1','123','91','9912398765']){
+  const value=validateYashRequest(batch([record({order_type:'withdrawal',order_no:id,risk_note:'订单 '+id+'；+91 9912398765；https://private.example/'+id+'；mail'+id+'@private.test；0x'+id.padEnd(40,'a')+'；Bearer abc'+id+'token'})]),now).records[0].risk_note;
+  assert.doesNotMatch(value,/\+91 9912398765|private\.example|private\.test|0x[0-9a-f]{40}|abc.*token/);if(id.length<7)assert.match(value,new RegExp('订单 '+id));
+ }
+ const id='12345678901234567890123456789',value=validateYashRequest(batch([record({order_type:'withdrawal',order_no:id,risk_note:'[业务标识\uE100]；订单 '+id})]),now).records[0].risk_note;assert.match(value,new RegExp(id));assert.match(value,/\[业务标识\uE100\]/,'a source marker collision does not turn into a second native ID');
+});
 
+test('short credential assignments never survive note sanitation',()=>{
+ const value=validateYashRequest(batch([record({order_type:'withdrawal',order_no:'123',risk_note:'订单 123；passwd=abcde；seed=seedvalue；totp=123456；otp_secret=abcdef；助记词=alpha beta gamma'})]),now).records[0].risk_note;
+ assert.match(value,/订单 123/);assert.doesNotMatch(value,/abcde|seedvalue|123456|alpha beta gamma/);
+});
 test('one malformed record or duplicate native identity rejects the entire batch and 500 is the hard cap',async()=>{
  const h=harness();for(const data of [batch([]),batch([record(),record()]),batch([record(),record({order_no:'second',amount:'bad'})]),batch(Array.from({length:501},(_,i)=>record({order_no:'order-'+i}))),{...batch(),batch_id:'not-uuid'},{...batch(),schema_version:'1'}]){assert.equal((await h.handler(request(data))).status,422);}assert.equal(h.calls.length,0);
  assert.equal(validateYashRequest(batch(Array.from({length:500},(_,i)=>record({order_no:'order-'+i}))),now).records.length,500);

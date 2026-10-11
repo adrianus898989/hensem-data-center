@@ -24,7 +24,43 @@ test('withdraw comparisons keep absolute zero-baseline changes and suppress miss
  const f=fixture();f.L.from='2026-09-25T00:00:00';await f.page.load();
  Object.assign(f.page.state.data,{totals:{total:10,success:4},previousTotals:{total:0,success:null},comparison:{complete:true}});
  let cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/\+10 笔（无基数）/);assert.match(cards,/对比值未提供/);assert.doesNotMatch(cards,/NaN|Infinity|\+4 笔/);
- f.page.state.data.comparison.complete=false;cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.doesNotMatch(cards,/\+10 笔/);assert.match(cards,/对比日期暂无数据/);
+ f.page.state.data.comparison.complete=false;cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.doesNotMatch(cards,/\+10 笔/);assert.match(cards,/两期范围或覆盖未对齐，汇总暂不比较/);assert.doesNotMatch(cards,/对比日期暂无数据/);
+});
+test('incomplete aggregate coverage does not erase existing previous totals or trusted platform comparisons',async()=>{
+ for(const view of ['auto_withdraw','withdraw_operators']){
+  const f=fixture({view});f.L.from='2026-09-25T00:00:00';await f.page.load();
+  const previous={total:100,processed:100,success:80,rejected:20,autoCount:50,manualCount:50,operators:4,avgSeconds:120},current={total:120,processed:120,success:90,rejected:30,autoCount:60,manualCount:60,operators:6,avgSeconds:90,unclassifiedCount:0,platforms:17};
+  Object.assign(f.page.state.data,{totals:current,previousTotals:previous,comparison:{complete:false,matchedRows:17,totalRows:17},rows:[{...current,country:'胖虎巴西',platform:'SAME',previous}]});
+  for(const [metadata,message] of [
+   [{newarCoverage:{currentComplete:true,previousComplete:false}},'前期覆盖不完整，汇总暂不比较'],
+   [{yashCoverage:{currentComplete:false,previousComplete:true}},'当期覆盖不完整，汇总暂不比较'],
+   [{wgCoverage:{currentComplete:false,previousComplete:false}},'两期覆盖不完整，汇总暂不比较'],
+   [{newarCoverage:{currentComplete:true,previousComplete:true}},'两期范围或覆盖未对齐，汇总暂不比较']
+  ]){
+   delete f.page.state.data.newarCoverage;delete f.page.state.data.yashCoverage;delete f.page.state.data.wgCoverage;Object.assign(f.page.state.data,metadata);
+   const html=f.page.render(),cards=html.split('withdraw-kpis')[1].split('</section>')[0];
+   assert.match(cards,new RegExp(message));assert.doesNotMatch(cards,/对比日期暂无数据|withdraw-delta|NaN|Infinity/);
+   assert.match(html,/-5\.00 pp/,'a platform with a previous row retains its own share comparison');
+   assert.equal(f.page.state.data.previousTotals,previous,'rendering keeps the provided previous-period values');
+   if(view==='auto_withdraw'){assert.match(html,/前期有记录 17 \/ 17 平台/);assert.doesNotMatch(html,/昨日覆盖 17/);}
+  }
+ }
+});
+test('comparison messages distinguish unavailable coverage from genuinely absent previous records',async()=>{
+ const f=fixture();f.L.from='2026-09-25T00:00:00';await f.page.load();
+ Object.assign(f.page.state.data,{totals:{total:10},previousTotals:null,comparison:{complete:false},newarCoverage:{currentComplete:true,previousComplete:false}});
+ let cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/前期覆盖不完整，汇总暂不比较/);assert.doesNotMatch(cards,/对比日期暂无数据|undefined|NaN/);
+ f.page.state.data.comparison={complete:true};cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/对比日期暂无数据/);assert.doesNotMatch(cards,/withdraw-delta/);
+});
+test('all current platforms can have prior records while the previous scope contains an extra platform',async()=>{
+ const f=fixture();f.L.from='2026-09-25T00:00:00';await f.page.load();
+ Object.assign(f.page.state.data,{totals:{total:126571,platforms:17,unclassifiedCount:7835},previousTotals:{total:140000,platforms:18},comparison:{complete:false,matchedRows:17,totalRows:17},newarCoverage:{currentComplete:true,previousComplete:true},yashCoverage:{currentComplete:true,previousComplete:true}});
+ const html=f.page.render(),cards=html.split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/两期平台范围不一致（当期17\/前期18），汇总暂不比较/);assert.doesNotMatch(cards,/对比日期暂无数据|withdraw-delta/);assert.match(html,/前期有记录 17 \/ 17 平台/);assert.match(html,/未分处理方式 7835 笔/);
+});
+test('unverified AR raw continuity is not mistaken for an absent previous day or certified completeness',async()=>{
+ const f=fixture();f.L.from='2026-09-25T00:00:00';await f.page.load();
+ Object.assign(f.page.state.data,{totals:{total:120,platforms:17},previousTotals:{total:100,platforms:17},comparison:{complete:false,matchedRows:3,totalRows:17},arCoverage:{coverageBasis:'unverified_source_continuity',currentComplete:false,previousComplete:false}});
+ const cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/AR 两期完整性尚未核验，汇总暂不比较/);assert.doesNotMatch(cards,/对比日期暂无数据|withdraw-delta|已完整/);
 });
 test('verified MAAN.WIN alias matches canonical row notes and does not add a second platform choice',async()=>{
  const f=fixture({country:'印度',team:'M8',catalog:[{id:'maan',name:'MAAN.WIN',source:'newar',country:'印度',team:'M8'}],withdrawCatalog:[],respond:()=>({rows:[{country:'印度',platform:'MAANWIN',total:3,autoCount:1,manualCount:2}],total:1,totals:{total:3,autoCount:1,manualCount:2},platforms:['MAANWIN','MAAN.WIN'],canWriteNotes:true,notes:[{country:'印度',platform:'MAAN.WIN',date:'2026-09-25',reason:'SYNTHETIC-MAAN-NOTE',version:'existing-note-version'}]})});
@@ -151,4 +187,9 @@ test('ordinary country code aliases deduplicate one source while special team sc
 test('reason search shares the keyboard guard and submits only one plain Enter',async()=>{
  const f=fixture();await f.page.load();f.context.withdrawReasons(0,'rejection');await new Promise(setImmediate);let submitted=0,prevented=0;f.context.withdrawReasonSearch=()=>{submitted++};const event={key:'Enter',target:{tagName:'INPUT',type:'search'},preventDefault(){prevented++}};
  for(const flag of ['repeat','defaultPrevented','ctrlKey','metaKey','altKey','shiftKey','isComposing'])f.context.withdrawReasonQueryKey({...event,[flag]:true});f.context.withdrawReasonQueryKey({...event,keyCode:229});assert.equal(submitted,0);assert.equal(prevented,0);f.context.withdrawReasonQueryKey(event);assert.equal(submitted,1);assert.equal(prevented,1);
+});
+
+test('AR withheld previous rows show unverified coverage while trustworthy source comparisons still work',async()=>{
+ const f=fixture();f.L.from='2026-09-25T00:00:00';await f.page.load();Object.assign(f.page.state.data,{arCoverage:{coverageBasis:'unverified_source_continuity',currentComplete:false,previousComplete:false},comparison:{complete:false},rows:[{country:'巴西',platform:'RAW-AR',source:'AR',total:100,success:70,rejected:30,autoCount:50,manualCount:50,previous:null},{country:'胖虎巴西',platform:'VALID-PREVIOUS',source:'PANDA',total:100,success:70,rejected:30,previous:{total:100,success:80,rejected:20}},{country:'巴西',platform:'AR-WITH-PREVIOUS',source:'AR',total:100,success:70,rejected:30,previous:{total:100,success:80,rejected:20}}]});
+ const html=f.page.render(),raw=html.match(/<tr><td>[^]*?RAW-AR[^]*?<\/tr>/)[0];assert.match(raw,/AR 两期完整性尚未核验，暂不比较/);assert.doesNotMatch(raw,/对比日期暂无数据/);assert.match(html,/昨日 80%/);assert.match(html,/-10\.00 pp/);
 });

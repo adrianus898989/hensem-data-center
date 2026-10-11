@@ -299,10 +299,16 @@ class RuntimeTests(unittest.TestCase):
             rows=S.window_sync(Mock(),target,self.config,"deposit","createTime",START,NOW)
         self.assertEqual(len(rows),2)
         self.assertEqual([(call.args[2],call.args[3]) for call in target.receipt.call_args_list],[(START,middle),(middle,NOW)])
-        target=Mock();target.receipt.side_effect=[None,S.SyncError("child rejected")]
+        target=Mock()
+        def receipt(kind,mode,start,end,rows,snapshot_at):
+            if kind=="deposit" and mode=="createTime" and start==middle:
+                raise S.SyncError("child rejected")
+        target.receipt.side_effect=receipt
         with patch.object(S,"collect_window",side_effect=collect),patch.object(S,"datetime",FrozenDatetime),self.assertRaises(S.SyncError):
             S.run_cycle(self.config,self.state,Mock(),target)
         self.assertIsNone(self.state.get("deposit/createTime"))
+        for key in ("deposit/completeTime", "withdrawal/createTime", "withdrawal/completeTime"):
+            self.assertEqual(self.state.get(key), NOW.isoformat())
 
     def test_failed_statuses_remain_watched_terminal_statuses_stop_and_state_persists(self):
         failed=record();failed["status"]="充值失败";self.state.track([failed]);self.assertEqual(len(self.state.pending(10)),1)
@@ -317,7 +323,8 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(S,"datetime",FrozenDatetime),patch.object(S,"window_sync",return_value=[]) as window,patch.object(S.time,"monotonic",side_effect=[0,0,11]):
             S.run_cycle(config,self.state,Mock(),Mock(),budget_seconds=10)
         self.assertEqual(window.call_count,5)
-        self.assertEqual(self.state.get("deposit/createTime"),(config.start+timedelta(hours=1)).isoformat())
+        self.assertEqual(self.state.get("deposit/createTime"),S.india_day_window_end(config.start,NOW).isoformat())
+        self.assertEqual(window.call_args_list[-1].args[-2:],(config.start,S.india_day_window_end(config.start,NOW)))
         for call in window.call_args_list[:4]:self.assertEqual(call.args[-2:],(START,NOW))
 
     def test_single_second_overflow_fails_without_unbounded_recursion(self):
@@ -1030,10 +1037,14 @@ class FixedTenMinuteScheduleTests(unittest.TestCase):
                 deadlines.append(due)
                 now["value"] = due
                 if len(deadlines) == 2:
-                    # A failed server response must not mark even an empty window complete.
+                    # v9 keeps the failed stream unchanged while independent streams progress.
                     with S.sqlite3.connect(state_path) as db:
-                        self.assertEqual(db.execute("select count(*) from progress").fetchone()[0], 0)
-                    target.receipt.assert_not_called()
+                        progress = dict(db.execute("select name,value from progress"))
+                    self.assertNotIn("deposit/createTime", progress)
+                    for key in ("deposit/completeTime", "withdrawal/createTime", "withdrawal/completeTime"):
+                        self.assertEqual(progress[key], NOW.isoformat())
+                    self.assertEqual(target.receipt.call_count, 3)
+                    self.assertTrue(all(call.args[:2] != ("deposit", "createTime") for call in target.receipt.call_args_list))
                 if len(deadlines) == 3:
                     with S.sqlite3.connect(state_path) as db:
                         progress = dict(db.execute("select name,value from progress"))
@@ -1047,7 +1058,7 @@ class FixedTenMinuteScheduleTests(unittest.TestCase):
             self.assertEqual(deadlines, [110, 710, 1310])
             self.assertEqual(opener.open.call_count, 4)
             self.assertEqual([call.args for call in sleep.call_args_list], [(2,), (4,), (8,)])
-            self.assertEqual(target.receipt.call_count, 4)
+            self.assertEqual(target.receipt.call_count, 7)
             channels.assert_called_once()
             text = "\n".join(logs.output)
             self.assertIn("服务暂时不可用（HTTP 503）", text)

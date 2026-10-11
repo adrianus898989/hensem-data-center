@@ -52,3 +52,12 @@ test('mixed unavailable coverage exposes only evidenced empty and missing subtot
  const h=fixture({...grouped,rows:[{reason:'检测没备注',reasonKey:'0'.repeat(32),count:7,blockingNoteState:'mixed',blockingNoteStates:{empty:3,missing:4,present:0,withheld:0}}]});
  assert.match(h.html(),/采集字段为空 3 笔 · 未取得说明 4 笔/);assert.doesNotMatch(h.html(),/源站没有填写|已隐藏 0/);assert.match(h.html(),/>未记录拦截说明<\/button>/);
 });
+
+test('sanitized unknown namespace differs from an identical literal present note throughout drilldown',async()=>{
+ for(const state of ['present','unknown']){
+  const key=(state==='present'?'7':'8').repeat(32),h=fixture(q=>({...grouped,reasonTextFormat:'sanitized_label_v1',reasonTextSanitized:true,noteCount:1,total:1,canViewBlockingOrders:true,summary:{operatorCounts:{manual:1,manualWithReason:state==='present'?1:0,manualWithoutReason:state==='unknown'?1:0}},rows:q.kind==='blockingOrders'?[{orderNumber:'SYNTHETIC-NAMESPACE',blockingReason:'检测没备注',manualRemark:state==='present'?'检测没备注':null,noteState:state}]:q.kind==='blockingVariants'?[{canonicalReason:'检测没备注',sourceReason:state==='present'?'检测没备注':null,reason:'检测没备注',noteState:state,count:1}]:[{reason:'检测没备注',reasonKey:key,noteState:state,count:1}]}));
+  if(state==='present'){assert.match(h.html(),/>检测没备注<\/button>/);assert.doesNotMatch(h.html(),/data-blocking-note-state="unavailable"/);}else assert.match(h.html(),/>未采集到说明<\/button>/);
+  h.root.withdrawBlockingDrill(0,'blockingVariants');await settle();assert.match(h.html(),new RegExp('当前规则：'+(state==='present'?'检测没备注':'未采集到说明')));assert.match(h.html(),/采集说明（已脱敏）/);assert.doesNotMatch(h.html(),/全部原文|完整原文/);if(state==='present')assert.doesNotMatch(h.html(),/源字段是否为空尚未核验/);
+  h.root.withdrawBlockingView('blockingOrders');await settle();assert.equal(h.calls.at(-1).reasonKey,key);assert.match(h.html(),/SYNTHETIC-NAMESPACE/);if(state==='present')assert.doesNotMatch(h.html(),/当前规则：未记录拦截说明|源字段是否为空尚未核验/);else assert.match(h.html(),/源字段是否为空尚未核验/);
+ }
+});
