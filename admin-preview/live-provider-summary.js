@@ -640,7 +640,7 @@
  const scopedFees=(ctx,rows,direction)=>{const fees=feeSummary(rows);return ctx.successTimeUnavailable?.(direction)?{...fees,amount:null,successCount:null,complete:false,fee_unknown:true}:fees;};
  function renderMetrics(ctx,direction,currentRows){
   const {L,E,N,C,R,plus,combine}=ctx,name=direction==='charge'?'代收':'代付',readState=queryCoverage(L),intake=intakeCoverage(L,direction),partial=readState.partial||intake.partial;
-  const comparison=comparisonScope(L,direction),unavailable=comparison.reason;
+  const comparison=comparisonScope(L,direction),unavailable=comparison.reason,currentFeeMode=L.feeEstimateMode!=='historical';
   const previousOrders=comparison.previous.flatMap(x=>(x.groups?.provider||[]).map(r=>({...r,platformId:x.platform?.id,platform:x.platform?.name,source:x.platform?.source,country:x.platform?.country})));
   const previousRows=buildRows({orders:previousOrders,issues:null,rates:L.feeLookupRows,country:L.country,direction,plus,combine,feeMode:L.feeEstimateMode==='historical'?'historical':'current'});
   const snapshot=rows=>({total:scopedTotal(ctx,rows,direction),fees:scopedFees(ctx,rows,direction),providers:new Set(rows.filter(r=>r.items?.length&&!['未识别通道','无三方（驳回）','未标记三方','人工确认','人工充值'].includes(r.provider)).map(r=>r.provider)).size,
@@ -652,7 +652,7 @@
   const caption=(L.comparisonLabel||'较前一日同一时段').replace('较前一日同一时段','较昨日同期');
   const priorLabel=range.calendarDays>1?'前期':'昨日',signed=(value,format)=>(value>0?'+':value<0?'−':'')+format(Math.abs(value));
   const changes=(now,before,format,isRate=false,reason='',unit='')=>{
-   const error=reason||unavailable;if(error)return {detail:error,text:reason?(L.feeLookupLoading?'费率读取中':L.feeLookupError?'费率读取失败':'费率未齐'):'',trend:'unknown'};
+   const error=reason||unavailable;if(error)return {detail:error,text:reason?(currentFeeMode&&L.feeLookupLoading?'费率读取中':currentFeeMode&&L.feeLookupError?'费率读取失败':'费率未齐'):'',trend:'unknown'};
    if(isRate){const d=root.HensemLiveCompare.ratioDelta(compared.total.success_count,compared.total.all_count,previous.total.success_count,previous.total.all_count);
     return {detail:comparison.detail+'。'+priorLabel+' '+R(previous.total.success_count,previous.total.all_count)+' · '+caption+' '+(d.value===null?'暂无可比成功率':d.display),text:d.value===null?'暂无对比':d.display.replace(' 个百分点','个百分点'),trend:d.trend}}
    if(now==null||before==null||!Number.isFinite(Number(now))||!Number.isFinite(Number(before)))return {detail:'金额口径不完整，暂不可比',text:'暂无对比',trend:'unknown'};
@@ -660,7 +660,7 @@
    const absolute=signed(Number(now)-Number(before),format)+unit;
    return {detail:comparison.detail+'。'+priorLabel+' '+format(before)+unit+' · '+caption+' '+absolute+' · '+d.display,text:absolute+'（'+(d.display==='新增 / 无基数'?'无基数':d.display)+'）',trend:d.trend};
   };
-  const fees=current.fees,feeReason=L.feeLookupLoading?'费率读取中…':L.feeLookupError?'费率读取失败，暂不可比':!compared.fees.complete||!previous.fees.complete?'费率未完全匹配，暂不比较':'';
+  const fees=current.fees,feeReason=currentFeeMode&&L.feeLookupLoading?'费率读取中…':currentFeeMode&&L.feeLookupError?'费率读取失败，暂不可比':!compared.fees.complete||!previous.fees.complete?'费率未完全匹配，暂不比较':'';
   const cards=[
    {label:'统一三方',value:C(current.providers),change:changes(compared.providers,previous.providers,C,false,'',' 个'),tone:'neutral'},
    {label:'平台',platformCoverage:true,value:(intake.received||intake.requested>0&&intake.missing.length===intake.requested||intake.requested===0&&intake.notExpected.length>0?C(intake.received):'—')+' / '+C(intake.requested),change:{detail:intake.platforms.map(p=>p.name+'：'+p.label+'，'+p.message).join('；'),text:'',trend:'unknown'},tone:partial?'warning':'neutral'},
@@ -683,7 +683,7 @@
   if(L.feeLookupRows===null&&!L.feeLookupLoading&&!L.feeLookupError)ensureFeeLookup();
   const feeMode=L.feeEstimateMode==='historical'?'historical':'current',feeNote=feeMode==='current'?'按当前费率估算 · 非历史实际手续费':'按订单创建时生效费率';
   root.providerSummaryFeeMode=function(value){const page=direction==='charge'?'providers':'provider_payout';if(!['current','historical'].includes(value)||L.dirty||typeof root.hensemCurrentAdminPage==='function'&&root.hensemCurrentAdminPage()!==page||typeof root.hensemRoleAllowed==='function'&&!root.hensemRoleAllowed(page,'view'))return;L.feeEstimateMode=value;ctx.render()};
-  const feeControls=()=>'<label>手续费口径 <select class="btn small" aria-label="三方手续费估算口径" onchange="providerSummaryFeeMode(this.value)"><option value="current" '+(feeMode==='current'?'selected':'')+'>当前费率估算</option><option value="historical" '+(feeMode==='historical'?'selected':'')+'>历史生效费率</option></select></label><button type="button" class="link" title="手续费已匹配 '+(fees.matchedCount==null?'—':C(fees.matchedCount))+' / '+(fees.successCount==null?'—':C(fees.successCount))+' 笔；点击查看统计依据" onclick="providerSummaryBasis()">统计口径</button>';
+  const feeControls=()=>'<label>手续费口径 <select class="btn small" aria-label="三方手续费估算口径" onchange="providerSummaryFeeMode(this.value)"><option value="current" '+(feeMode==='current'?'selected':'')+'>当前费率估算</option><option value="historical" '+(feeMode==='historical'?'selected':'')+'>历史生效费率</option></select></label><button type="button" class="link" title="手续费已匹配 '+(fees.matchedCount==null?'—':C(fees.matchedCount))+' / '+(fees.successCount==null?'—':C(fees.successCount))+' 笔；点击查看统计依据" onclick="providerSummaryBasis()">统计口径</button>'+(L.feeLookupError?'<button type="button" class="btn small" aria-label="重试读取费率" onclick="liveRetryFeeLookup()" title="'+E(L.feeLookupError)+'" '+(L.feeLookupLoading?'disabled':'')+'>重试费率</button>':'');
   const orderRows=groupRows('provider');let rows=buildRows({orders:orderRows,issues:L.workorders?.byProvider||null,rates:L.feeLookupRows,country:L.country,direction,plus,combine,coverage:L.workorders?.coverage,feeMode});
   const total=scopedTotal(ctx,rows,direction),fees=scopedFees(ctx,rows,direction),knownFee=fees.amount,readState=queryCoverage(L),intake=intakeCoverage(L,direction),partial=readState.partial||intake.partial;
   root.providerSummaryBasis=()=>{if(L.dirty)return;const comparison=comparisonScope(L,direction);openDrawer(name+'汇总 · 统计口径','<p>创建金额和笔数按各平台当地创建时间；成功金额和笔数按来源提供的成功统计时间，可能含跨日成功。成功率 = 成功笔数 ÷ 创建笔数。</p>'+(ctx.sourceBasis?'<p>'+E(ctx.sourceBasis)+'</p>':'')+'<p>'+E(feeNote)+'。'+E(feeCoverageText(fees))+'</p><p>昨日 / 前期对比：'+E(comparison.reason||comparison.detail||'同平台、同方向、同筛选范围')+'。</p><p>工单按提交日期和原支付订单核对；日报与明细差异不改变支付订单金额、笔数及刷单剔除。已知口径差异也不代表工单统计已完整。</p>')};
@@ -799,7 +799,7 @@
   const columnWidth=key=>key==='provider'?94:key==='platform_count'?40:key==='type'?62:key==='fee_rate'?88:key===null?54:key==='estimated_fee'?108:kycIssueKeys.some(k=>key==='issue_'+k)?108:key.endsWith('_amount')||key.endsWith('Amount')?98:key.endsWith('_count')||key.endsWith('Count')?70:70;
   const widths=columns.map(([,key])=>columnWidth(key)),tableWidth=widths.reduce((sum,width)=>sum+width,0);
   const rateButton=(value,index)=>{const full=String(value||'未匹配'),long=full.length>24||/[\r\n]/.test(full),label=long?(/以上|以下|分档|阶梯|[≥≤<>]/.test(full)?'分档费率 · 查看':'费率详情 · 查看'):full;return '<button class="link provider-fee-preview" title="'+E(full+' · 点击查看来源及匹配依据')+'" aria-label="'+E('费率：'+full+'，查看来源及匹配依据')+'" onclick="providerSummaryRate('+index+')">'+E(label)+'</button>'};
-  const feeCell=r=>readState.empty?'—':L.feeLookupLoading?'读取中…':L.feeLookupError?'读取失败':'<span tabindex="0" title="'+E(feeCoverageText(r))+'">'+N(r.estimated_fee)+(!r.fee_complete&&Number(r.fee_eligible_count)>0?'<small class="provider-partial cell-sub">'+E(r.fee_mode==='current'?(r.fee_matched_count>0?'部分':'待确认'):feeHistoryLabel(r))+'</small>':'')+'</span>';
+  const feeCell=r=>readState.empty?'—':feeMode==='current'&&L.feeLookupLoading?'读取中…':feeMode==='current'&&L.feeLookupError?'读取失败':'<span tabindex="0" title="'+E(feeCoverageText(r))+'">'+N(r.estimated_fee)+(!r.fee_complete&&Number(r.fee_eligible_count)>0?'<small class="provider-partial cell-sub">'+E(r.fee_mode==='current'?(r.fee_matched_count>0?'部分':'待确认'):feeHistoryLabel(r))+'</small>':'')+'</span>';
   const issueRate=w=>!w?'—':'<span'+(Number(w.uniqueOrderCount)>0&&Number(w.uniqueSuccessCount)/Number(w.uniqueOrderCount)<0.3?' class="workorder-rate-low"':'')+' title="去重工单金额处理率 '+R(w.uniqueSuccessAmount,w.uniqueOrderAmount)+'；笔数处理率 = 已处理原单 / 提交原单；关联工单状态4不代表原订单已到账">'+R(w.uniqueSuccessCount,w.uniqueOrderCount)+'</span>';
   const uniqueGaps=coverage=>{
    const gaps=workorderGapReasons(coverage).map(i=>C(i.count)+i.unit+i.label);
