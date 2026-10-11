@@ -1,6 +1,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript');
 const repo=path.resolve(__dirname,'..'),catalog=require('../src/lib/dashboardRoleCatalog.json');
 const display=require('./load-role-display.cjs');
+const dataScope=require('./load-typescript.cjs').loadTs(path.join(repo,'src/lib/dashboardDataScope.ts'));
 const plain=value=>JSON.parse(JSON.stringify(value)),flush=()=>new Promise(resolve=>setImmediate(resolve));
 const compile=file=>ts.transpileModule(fs.readFileSync(path.join(repo,file),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
 const ownerId='11111111-1111-4111-8111-111111111111',staffId='22222222-2222-4222-8222-222222222222',roleId='33333333-3333-4333-8333-333333333333',otherId='44444444-4444-4444-8444-444444444444';
@@ -12,7 +13,7 @@ const listing=()=>({roles:[plain(role)],accounts:[plain(account),plain(owner)]})
 function client(options={}){
  const mod={exports:{}},calls=[],timers=new Map();let tick=0,saved=session;
  const auth={ensureDashboardSession:async()=>options.ensure?options.ensure():{...session,access_token:'refreshed-synthetic-token'},readSavedDashboardSession:()=>saved};
- vm.runInNewContext(compile('src/lib/dashboardRoleClient.ts'),{module:mod,exports:mod.exports,URL,AbortController,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://project.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'public-test-key'}},setTimeout(fn){const id=++tick;timers.set(id,fn);return id},clearTimeout(id){timers.delete(id)},require(name){if(name.includes('dashboardAuthClient'))return auth;if(name.endsWith('dashboardRoleCatalog.json'))return catalog;throw Error(name)},fetch:async(url,init)=>{calls.push({url,init});return options.fetch?options.fetch(url,init):{ok:true,status:200,json:async()=>options.response||listing()}}});
+ vm.runInNewContext(compile('src/lib/dashboardRoleClient.ts'),{module:mod,exports:mod.exports,URL,AbortController,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://project.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'public-test-key'}},setTimeout(fn){const id=++tick;timers.set(id,fn);return id},clearTimeout(id){timers.delete(id)},require(name){if(name.includes('dashboardAuthClient'))return auth;if(name.includes('dashboardDataScope'))return dataScope;if(name.endsWith('dashboardRoleCatalog.json'))return catalog;throw Error(name)},fetch:async(url,init)=>{calls.push({url,init});return options.fetch?options.fetch(url,init):{ok:true,status:200,json:async()=>options.response||listing()}}});
  return{api:mod.exports,calls,timers,setSaved(value){saved=value},expire(){const tasks=[...timers.values()];timers.clear();tasks.forEach(fn=>fn())}};
 }
 test('manual role RPC reuses refreshed login, sends exact p_request and has no identity or password mutation',async()=>{
@@ -98,8 +99,14 @@ test('refresh error clears stale rows and cannot present failed read as zero acc
 });
 
 test('list only exposes safe role/account fields and rejects absent or mismatched role references',()=>{
- const h=client(),result=h.api.validateDashboardRoleResponse({roles:[{...role,password:'never-retain'}],accounts:[{...account,password:'never-retain',data_scope:{...account.data_scope,private:'never-retain'}}]},{operation:'list'});assert(!JSON.stringify(result).includes('never-retain'));
- for(const item of [{...account,data_scope:null},{...account,role_id:otherId}])assert.throws(()=>h.api.validateDashboardRoleResponse({roles:[role],accounts:[item]},{operation:'list'}),/不完整/);
+ const h=client(),result=h.api.validateDashboardRoleResponse({roles:[{...role,password:'never-retain'}],accounts:[{...account,password:'never-retain'}]},{operation:'list'});assert(!JSON.stringify(result).includes('never-retain'));
+ for(const item of [{...account,data_scope:null},{...account,role_id:otherId},{...account,data_scope:{...account.data_scope,private:'never-retain'}}])assert.throws(()=>h.api.validateDashboardRoleResponse({roles:[role],accounts:[item]},{operation:'list'}),/不完整/);
+});
+test('role roster preserves normalized platform constraints and fails closed for malformed or unknown scope fields',()=>{
+ const h=client(),data_scope={mode:'selected',countries:[],platforms:[{country:'IN',platform:' b '},{country:'IN',platform:'a'}]},listed=h.api.validateDashboardRoleResponse({roles:[role],accounts:[{...account,data_scope}]},{operation:'list'});
+ assert.deepEqual(plain(listed.accounts[0].data_scope),{mode:'selected',countries:[],platforms:[{country:'IN',platform:'A'},{country:'IN',platform:'B'}]});
+ assert.deepEqual(plain(h.api.validateDashboardRoleResponse({roles:[role],accounts:[{...account,data_scope:{mode:'selected',countries:['IN'],platforms:[]}}]},{operation:'list'}).accounts[0].data_scope),{mode:'selected',countries:['IN'],platforms:[]});
+ for(const bad of [{mode:'all',countries:[],platforms:[]},{...data_scope,extra:true},{...data_scope,platforms:null},{...data_scope,platforms:[{country:'IN',platform:'A',extra:true}]},{mode:'selected',countries:['IN'],platforms:[{country:'PK',platform:'A'}]}])assert.throws(()=>h.api.validateDashboardRoleResponse({roles:[role],accounts:[{...account,data_scope:bad}]},{operation:'list'}),/不完整/);
 });
 test('existing roles drop only retired channelquality keys from reads and never resubmit them',async()=>{
  const h=client(),retired=['channelquality.view','channelquality.query','channelquality.detail','channelquality.export'];

@@ -29,7 +29,7 @@ import { canonicalThirdPartyName, confirmedIndiaThirdPartyAlias, inferThirdParty
 import { canonicalThirdPartyPlatform, canonicalThirdPartyPlatformSelections, matchesThirdPartyPlatformSelection } from "@/lib/thirdPartyPlatform";
 import { platformDisplayCountry, withPlatformDisplayCountry } from "@/lib/platformDisplayCountry";
 import { dashboardBusinessFetch, isDashboardDataDenied, readDashboardDataCache, writeDashboardDataCache } from "@/lib/dashboardDataClient";
-import { dashboardScopeAllows, dashboardScopeIdentity, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
+import { dashboardScopeAllows, dashboardScopeMayReadCountry, dashboardScopeIdentity, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
 import type { DashboardProfile } from "@/lib/dashboardAuthClient";
 import { fetchPreferredMonthlyStatus, payloadSnapshotMonth, statusMatchesPayload, type ClientMonthlyStatus } from "@/lib/monthlyStatusClient";
 import ThirdPartyRatesDashboard from "./ThirdPartyRatesDashboard";
@@ -2326,9 +2326,9 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
   useEffect(() => {
     // Only prefill controls. Business data is loaded exclusively on submit.
     const yesterday = sourceDay("Asia/Kolkata", -1);
-    const initialCountry = COUNTRY_NAV_TABS.find((name) => dashboardScopeAllows(effectiveDashboardDataScope(profile), name)) || "";
+    const initialCountry = COUNTRY_NAV_TABS.find((name) => dashboardScopeMayReadCountry(effectiveDashboardDataScope(profile), name)) || "";
     setStartDate(old=>old||yesterday);setEndDate(old=>old||yesterday);
-    setCountryPage(old=>old&&dashboardScopeAllows(effectiveDashboardDataScope(profile),old)?old:initialCountry);
+    setCountryPage(old=>old&&dashboardScopeMayReadCountry(effectiveDashboardDataScope(profile),old)?old:initialCountry);
     setPlatformSelections([]);setCountrySelections([]);setChannel("");setChannelTypeSelections([]);setRatePayload(null);
     invalidateQuery();
     return () => {++queryIntentRef.current;++loadRequestSequenceRef.current;loadFlightRef.current?.abort();};
@@ -2345,7 +2345,7 @@ export default function ThirdPartyVolumeDashboard({onOpenOrders}:{onOpenOrders?:
   const countryTabs = useMemo(() => {
     const dynamic = countries.filter((item) => !isHiddenCountry(item) && !COUNTRY_NAV_TABS.includes(item));
     const scope=effectiveDashboardDataScope(profile);
-    return [...COUNTRY_NAV_TABS, ...sortCountries(dynamic)].filter(name=>dashboardScopeAllows(scope,name));
+    return [...COUNTRY_NAV_TABS, ...sortCountries(dynamic)].filter(name=>dashboardScopeMayReadCountry(scope,name));
   }, [countries,profile]);
   const activeCountryPage = countryPage && countryTabs.includes(countryPage) ? countryPage : (mainTab === "country" ? (countryTabs[0] || "") : "");
   queryContextRef.current = `${viewerIdentity}:${activeCountryPage}`;

@@ -2,10 +2,12 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const test=require('node:test');
+const ts=require('typescript');
 const {loadTs,root}=require('./load-typescript.cjs');
 const scope=loadTs(path.join(root,'src/lib/dashboardDataScope.ts'));
 const auth=loadTs(path.join(root,'src/lib/dashboardAuthClient.ts'));
 const client=loadTs(path.join(root,'src/lib/dashboardDataClient.ts'));
+const plain=value=>JSON.parse(JSON.stringify(value));
 const panghu={mode:'selected',countries:['BR_PANGHU']};
 const owner={auth_user_id:'owner-fixture',role:'owner',active:true,updated_at:'a',data_scope:{mode:'all',countries:[]}};
 const viewer={auth_user_id:'viewer-fixture',role:'viewer',active:true,updated_at:'b',data_scope:panghu};
@@ -31,6 +33,65 @@ test('malformed explicit scopes never expand; names/codes and NPG mapping are st
   assert.equal(scope.dashboardDataGroup('胖虎巴西盘口'),'BR_PANGHU');
   assert.equal(scope.dashboardDataGroup('巴西盘口'),'BR');
   assert.equal(scope.dashboardScopeLabel(panghu),'胖虎巴西');
+});
+test('platform whitelists retain exact country/name isolation, AND country bounds, and explicit empty denial',()=>{
+  const only={mode:'selected',countries:[],platforms:[{country:'IN',platform:' VEER.Game '}]};
+  const normalized=scope.normalizeDashboardDataScope(only);
+  assert.deepEqual(normalized,{mode:'selected',countries:[],platforms:[{country:'IN',platform:'VEER.GAME'}]});
+  assert.equal(scope.dashboardScopeAllows(normalized,'印度','veer.game'),true);
+  for(const [country,platform] of [['PK','VEER.GAME'],['IN','OTHER'],['IN',''],['IN',null],['','VEER.GAME']])assert.equal(scope.dashboardScopeAllows(normalized,country,platform),false);
+  assert.equal(scope.dashboardScopeAllows({mode:'selected',countries:['IN']},'IN','OTHER'),true,'omitted whitelist preserves country-only access');
+  assert.equal(scope.dashboardScopeAllows({mode:'selected',countries:['IN'],platforms:[]},'IN','VEER.GAME'),false);
+  assert.equal(scope.dashboardScopeAllows({mode:'selected',countries:['IN'],platforms:[{country:'IN',platform:'VEER.GAME'}]},'IN','OTHER'),false);
+  assert.deepEqual(scope.normalizeDashboardDataScope({mode:'selected',countries:['IN'],platforms:[{country:'PK',platform:'VEER.GAME'}]}),{mode:'selected',countries:[]});
+  assert.match(scope.dashboardScopeLabel(normalized),/指定平台：印度 · VEER\.GAME/);
+  assert.equal(scope.dashboardScopeLabel({mode:'selected',countries:['IN'],platforms:[]}),'无可见数据');
+});
+test('platform normalization deduplicates safe labels, enforces codepoint bounds and never drops malformed restrictions',()=>{
+  const source={mode:'selected',countries:['IN','IN'],platforms:[{country:'IN',platform:'\u00a0beta\ufeff'},{country:'IN',platform:'alpha'},{country:'IN',platform:' BETA '}]};
+  assert.deepEqual(scope.normalizeDashboardDataScope(source),{mode:'selected',countries:['IN'],platforms:[{country:'IN',platform:'ALPHA'},{country:'IN',platform:'BETA'}]});
+  assert.equal(scope.isDashboardDataScopeValid({mode:'selected',countries:[],platforms:[{country:'IN',platform:'😀'.repeat(200)}]}),true);
+  for(const data of [
+    {mode:'all',countries:[],platforms:[]},{mode:'selected',countries:['IN'],unknown:true},
+    ...[null,false,{},'IN'].map(platforms=>({mode:'selected',countries:['IN'],platforms})),
+    ...[{country:'unknown',platform:'A'},{country:'IN',platform:''},{country:'IN',platform:'A\u0085B'},{country:'IN',platform:'A\u0001B'},{country:'IN',platform:'😀'.repeat(201)},{country:'IN',platform:'ß'.repeat(200)},{country:'IN',platform:'A',extra:true}].map(pair=>({mode:'selected',countries:['IN'],platforms:[pair]})),
+    {mode:'selected',countries:[],platforms:Array.from({length:501},(_,i)=>({country:'IN',platform:'A'+i}))},
+  ]){assert.equal(scope.isDashboardDataScopeValid(data),false);assert.deepEqual(scope.normalizeDashboardDataScope(data),{mode:'selected',countries:[]});assert.equal(scope.dashboardScopeAllows(data,'IN','A'),false);}
+  const edge=fs.readFileSync(path.join(root,'supabase/functions/dashboard-api/lib/dashboardDataScope.ts'),'utf8');
+  assert.equal(edge.replace('from "./platformDisplayCountry.ts"','from "./platformDisplayCountry"'),fs.readFileSync(path.join(root,'src/lib/dashboardDataScope.ts'),'utf8'),'Edge and browser must use identical scope logic');
+});
+test('delegation cannot turn a platform whitelist into country-wide or same-name foreign access',()=>{
+  const parent={mode:'selected',countries:[],platforms:[{country:'IN',platform:'A'},{country:'IN',platform:'B'}]};
+  assert.equal(scope.isDashboardDataScopeSubset({mode:'selected',countries:[],platforms:[{country:'IN',platform:'A'}]},parent),true);
+  for(const child of [{mode:'all',countries:[]},{mode:'selected',countries:['IN']},{mode:'selected',countries:[],platforms:[{country:'PK',platform:'A'}]},{mode:'selected',countries:[],platforms:[{country:'IN',platform:'C'}]}])assert.equal(scope.isDashboardDataScopeSubset(child,parent),false);
+  assert.equal(scope.isDashboardDataScopeSubset({mode:'selected',countries:[],platforms:[{country:'IN',platform:'A'}]},{mode:'selected',countries:['IN']}),true);
+  assert.equal(scope.isDashboardDataScopeSubset({mode:'selected',countries:[],platforms:[]},parent),true);
+  assert.equal(scope.isDashboardDataScopeSubset(parent,{mode:'selected',countries:['IN'],platforms:[]}),false);
+  for(const invalid of [{mode:'selected',countries:[]},{mode:'all',countries:[],platforms:null},{mode:'selected',countries:['IN'],unknown:true}])assert.equal(scope.isDashboardDataScopeSubset(parent,invalid),false);
+});
+test('country navigation and routing allow existing platform groups without authorizing country-only totals',()=>{
+  const selected={mode:'selected',countries:[],platforms:[{country:'IN',platform:'A'}]};
+  assert.equal(scope.dashboardScopeMayReadCountry(selected,'印度'),true);assert.equal(scope.dashboardScopeMayReadCountry(selected,'巴基斯坦'),false);
+  assert.equal(scope.dashboardScopeAllows(selected,'印度'),false);assert.equal(scope.dashboardScopeMayReadCountry({...selected,platforms:[]},'印度'),false);
+  const callback=(file,name,context)=>{
+    const source=ts.createSourceFile(file,fs.readFileSync(path.join(root,file),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let found;
+    function walk(node){if(ts.isVariableDeclaration(node)&&node.name.getText(source)===name&&ts.isCallExpression(node.initializer)&&node.initializer.expression.getText(source)==='useMemo')found=node.initializer.arguments[0];ts.forEachChild(node,walk);}walk(source);assert(found,'production navigation callback exists');
+    const compiled=ts.transpileModule('const selector='+found.getText(source)+';', {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+    return Function(...Object.keys(context),compiled+'return selector();')(...Object.values(context));
+  };
+  const actor={role:'viewer',active:true,data_scope:selected},navigation={...scope,profile:actor,payload:null,uniq:values=>[...new Set(values)],sortAutoPanes:values=>values,countryPaneLabelFor:value=>value,DEFAULT_AUTO_COUNTRY_PANES:['印度','巴基斯坦','NPG'],NPG_PANE_LABEL:'NPG'};
+  for(const name of ['autoCountryPanes','operatorCountryPanes'])assert.deepEqual(callback('src/components/Dashboard.tsx',name,navigation),['印度']);
+  assert.deepEqual(callback('src/components/Dashboard.tsx','autoCountryPanes',{...navigation,profile:{...actor,data_scope:{mode:'selected',countries:[],platforms:[{country:'CO',platform:'A'}]}}}),['NPG']);
+  assert.deepEqual(callback('src/components/ThirdPartyVolumeDashboard.tsx','countryTabs',{...scope,profile:actor,countries:[],COUNTRY_NAV_TABS:['印度','巴基斯坦'],sortCountries:values=>values,isHiddenCountry:()=>false}),['印度']);
+});
+test('platform scope changes affect cache identity even without profile timestamp changes and clear old payloads on verified advance',()=>{
+  const win=browser(),current={...viewer,updated_at:'2026-10-10T00:00:00Z',data_scope:{mode:'selected',countries:[],platforms:[{country:'IN',platform:'A'}]}},other={...current,data_scope:{mode:'selected',countries:[],platforms:[{country:'IN',platform:'B'}]}};
+  assert.notEqual(scope.dashboardScopeIdentity(current),scope.dashboardScopeIdentity(other));
+  client.setDashboardDataViewer(current);client.writeDashboardDataCache('work',{rows:['only-A']},current);
+  assert.equal(client.dashboardProfileCanAdvance(other),false,'same-version scope contradictions remain denied');
+  assert.equal(client.readDashboardDataCache('work',other),null);
+  assert.equal(client.setDashboardDataViewer({...other,updated_at:'2026-10-10T00:01:00Z'}),true);
+  assert.equal(client.readDashboardDataCache('work',current),null);assert.equal(Object.keys(win.localStorage).filter(key=>key.startsWith('hensem:scoped-data:')).length,0);
 });
 test('changing user or scope removes old business cache without clearing login/preferences',()=>{
   const win=browser();win.localStorage.setItem('hensem:last-good:third-party-volume:v251-fast','legacy-secret');win.localStorage.setItem('login-preference','preserve');
@@ -71,5 +132,5 @@ test('actual UI clears denied payloads, remounts scope and never revives authori
   assert.doesNotMatch(read('ThirdPartyVolumeDashboard.tsx'),/if \(!volumeRows.length &&/);
   assert.doesNotMatch(read('WorkOrderDashboard.tsx'),/if \(!\(json.rows \|\| \[\]\).length &&/);
   assert.match(read('Dashboard.tsx'),/\.filter\(pane=>pane===NPG_PANE_LABEL/);
-  assert.match(read('ThirdPartyVolumeDashboard.tsx'),/filter\(name=>dashboardScopeAllows\(scope,name\)\)/);
+  assert.match(read('ThirdPartyVolumeDashboard.tsx'),/filter\(name=>dashboardScopeMayReadCountry\(scope,name\)\)/);
 });

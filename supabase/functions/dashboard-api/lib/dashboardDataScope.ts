@@ -10,26 +10,64 @@ export const DASHBOARD_DATA_GROUPS = [
   {key:"HK_TEAM",label:"香港团队"}, {key:"RED_CRAB",label:"红膏蟹团队"},
 ] as const;
 export type DashboardDataGroup = typeof DASHBOARD_DATA_GROUPS[number]["key"];
-export type DashboardDataScope = {mode:"all"|"selected";countries:DashboardDataGroup[]};
+export type DashboardPlatformScope = {country:DashboardDataGroup;platform:string};
+export type DashboardDataScope = {mode:"all"|"selected";countries:DashboardDataGroup[];platforms?:DashboardPlatformScope[]};
 export type DataScopedProfile = {role?:string;active?:boolean;auth_user_id?:string;updated_at?:string;data_scope?:unknown};
 const keys = new Set<string>(DASHBOARD_DATA_GROUPS.map(group=>group.key));
 export const ALL_DASHBOARD_DATA: DashboardDataScope = {mode:"all",countries:[]};
 
+const own=(value:object,key:string)=>Object.prototype.hasOwnProperty.call(value,key);
+const record=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==="object"&&!Array.isArray(value);
+const platformText=(value:unknown):string|null=>{
+  if(typeof value!=="string")return null;
+  const name=value.trim().toUpperCase();
+  return !name||Array.from(name).length>200||/[\u0000-\u001f\u007f-\u009f]/.test(name)?null:name;
+};
+// Unicode codepoint ordering also matches a PostgreSQL COLLATE "C" comparison.
+function compareText(a:string,b:string):number {
+  const left=Array.from(a),right=Array.from(b);
+  for(let i=0;i<Math.min(left.length,right.length);i++){
+    const difference=left[i].codePointAt(0)!-right[i].codePointAt(0)!;
+    if(difference)return difference;
+  }
+  return left.length-right.length;
+}
+function parsedScope(value:unknown):DashboardDataScope|null {
+  if(!record(value)||Object.keys(value).some(key=>!["mode","countries","platforms"].includes(key))
+    ||!Array.isArray(value.countries)||!value.countries.every(country=>typeof country==="string"&&keys.has(country)))return null;
+  const countries=Array.from(new Set(value.countries as DashboardDataGroup[])).sort();
+  if(value.mode==="all")return countries.length===0&&!own(value,"platforms")?{mode:"all",countries:[]}:null;
+  if(value.mode!=="selected")return null;
+  if(!own(value,"platforms"))return countries.length?{mode:"selected",countries}:null;
+  if(!Array.isArray(value.platforms)||value.platforms.length>500)return null;
+  const unique=new Map<string,DashboardPlatformScope>();
+  for(const entry of value.platforms){
+    if(!record(entry)||Object.keys(entry).sort().join(",")!=="country,platform"||typeof entry.country!=="string"||!keys.has(entry.country))return null;
+    const platform=platformText(entry.platform),country=entry.country as DashboardDataGroup;
+    if(platform===null||countries.length&&!countries.includes(country))return null;
+    unique.set(JSON.stringify([country,platform]),{country,platform});
+  }
+  return {mode:"selected",countries,platforms:[...unique.values()].sort((a,b)=>compareText(a.country,b.country)||compareText(a.platform,b.platform))};
+}
+export function isDashboardDataScopeValid(value:unknown):value is DashboardDataScope {
+  return parsedScope(value)!==null;
+}
 // Missing legacy fields mean all. Explicit malformed data always fails closed.
 export function normalizeDashboardDataScope(value: unknown): DashboardDataScope {
   if(value == null) return {mode:"all",countries:[]};
-  if(typeof value!=="object" || Array.isArray(value)) return {mode:"selected",countries:[]};
-  const raw=value as Record<string,unknown>;
-  if(raw.mode==="all" && Array.isArray(raw.countries) && raw.countries.length===0) return {mode:"all",countries:[]};
-  if(raw.mode!=="selected" || !Array.isArray(raw.countries) || !raw.countries.every(c=>typeof c==="string"&&keys.has(c))) return {mode:"selected",countries:[]};
-  return {mode:"selected",countries:Array.from(new Set(raw.countries as DashboardDataGroup[])).sort()};
+  return parsedScope(value)||{mode:"selected",countries:[]};
 }
 export function effectiveDashboardDataScope(profile:DataScopedProfile|null|undefined):DashboardDataScope {
   if(!profile || profile.active===false) return {mode:"selected",countries:[]};
   return profile.role==="owner" ? {mode:"all",countries:[]} : normalizeDashboardDataScope(profile.data_scope);
 }
 export function isDashboardDataScopeSubset(child:DashboardDataScope,parent:DashboardDataScope):boolean {
-  return parent.mode==="all" || (child.mode==="selected" && child.countries.every(key=>parent.countries.includes(key)));
+  const subset=normalizeDashboardDataScope(child),allowed=normalizeDashboardDataScope(parent);
+  if(allowed.mode==="all")return true;
+  if(subset.mode==="all")return false;
+  if(subset.platforms!==undefined)return subset.platforms.every(pair=>scopeAllows(allowed,pair.country,pair.platform));
+  if(!subset.countries.length)return true;
+  return allowed.platforms===undefined&&subset.countries.every(country=>allowed.countries.includes(country));
 }
 
 const COUNTRY_ALIASES:Record<string,DashboardDataGroup>={
@@ -55,16 +93,36 @@ export function dashboardDataGroup(country:unknown,platform:unknown=""):Dashboar
   return group || "";
 }
 export function dashboardScopeAllows(scope:DashboardDataScope,country:unknown,platform:unknown=""):boolean {
+  return scopeAllows(normalizeDashboardDataScope(scope),country,platform);
+}
+function scopeAllows(scope:DashboardDataScope,country:unknown,platform:unknown):boolean {
   if(scope.mode==="all")return true;
   const group=dashboardDataGroup(country,platform);
-  return !!group&&scope.countries.includes(group);
+  if(!group)return false;
+  if(scope.platforms!==undefined){
+    const name=platformText(platform);
+    return name!==null&&(!scope.countries.length||scope.countries.includes(group))&&scope.platforms.some(pair=>pair.country===group&&pair.platform===name);
+  }
+  return scope.countries.includes(group);
+}
+// Routing/navigation only: a visible country does not authorize its aggregate
+// or any row. Business records must still pass dashboardScopeAllows with a
+// concrete platform, and global endpoints keep their all-data gate.
+export function dashboardScopeMayReadCountry(value:DashboardDataScope,country:unknown):boolean {
+  const scope=normalizeDashboardDataScope(value);
+  if(scope.mode==="all")return true;
+  const group=dashboardDataGroup(country);
+  if(!group)return false;
+  return scope.platforms===undefined?scope.countries.includes(group):scope.platforms.some(pair=>pair.country===group&&(!scope.countries.length||scope.countries.includes(group)));
 }
 export function dashboardScopeLabel(value:unknown):string {
   const scope=normalizeDashboardDataScope(value);
-  return scope.mode==="all"?"全部数据":scope.countries.map(key=>DASHBOARD_DATA_GROUPS.find(g=>g.key===key)!.label).join("、")||"无可见数据";
+  if(scope.mode==="all")return "全部数据";
+  const label=(key:DashboardDataGroup)=>DASHBOARD_DATA_GROUPS.find(group=>group.key===key)!.label;
+  if(scope.platforms!==undefined)return scope.platforms.length?"指定平台："+scope.platforms.map(pair=>label(pair.country)+" · "+pair.platform).join("、"):"无可见数据";
+  return scope.countries.map(label).join("、")||"无可见数据";
 }
 export function dashboardScopeIdentity(profile:DataScopedProfile|null|undefined):string {
   const scope=effectiveDashboardDataScope(profile);
-  return `${profile?.auth_user_id||"anonymous"}:${scope.mode}:${scope.countries.join(",")}:${profile?.updated_at||""}`;
+  return `${profile?.auth_user_id||"anonymous"}:${scope.mode}:${scope.countries.join(",")}:${profile?.updated_at||""}${scope.platforms===undefined?"":":platforms="+JSON.stringify(scope.platforms)}`;
 }
-

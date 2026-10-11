@@ -52,6 +52,13 @@ for(const [name,server] of readers){
   test(name+': cancellation reaches the underlying request',async()=>{
     const c=new AbortController();await fixture({onFetch:init=>{c.abort();assert.equal(init.signal.aborted,true);}},()=>read(req(c.signal)));
   });
+  test(name+': country route accepts a platform-only grant but every business row retains exact country/platform checks',async()=>{
+    const scope={mode:'selected',countries:[],platforms:[{country:'IN',platform:'DHANIWIN'}]};
+    await fixture({scope,rows:[row(),row('IN','OTHER'),row('PK','DhaniWin'),{...row(),platform:''}]},async()=>{
+      assert.deepEqual((await read()).rows,[row()]);
+      await assert.rejects(read(req(),'2026-09-19','2026-09-19','巴基斯坦'),error=>error.status===403);
+    });
+  });
 }
 test('app and live Edge readers and platform aliases remain identical',()=>{
   const app=fs.readFileSync(path.join(root,'src/lib/supabaseDashboardServer.ts'),'utf8'),edge=fs.readFileSync(path.join(root,'supabase/functions/dashboard-api/lib/supabaseDashboardServer.ts'),'utf8');

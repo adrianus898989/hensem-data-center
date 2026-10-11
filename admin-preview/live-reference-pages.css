@@ -350,6 +350,16 @@ body.live-admin .submission-members-table :is(th,td):nth-child(4){width:7%}
 body.live-admin .submission-members-table :is(th,td):nth-child(6){width:10%}
 body.live-admin .submission-members-table :is(th,td):is(:nth-child(7),:nth-child(8)){width:16%}
 body.live-admin .submission-members-modal .submission-pager{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px;font-size:11px}
+body.live-admin .submission-members-controls{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+body.live-admin .submission-member-search{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px}
+body.live-admin .submission-member-search input{box-sizing:border-box;width:260px;max-width:100%;padding:7px 9px;border:1px solid #ccd8e9;border-radius:5px;font:inherit}
+body.live-admin .submission-members-controls .live-tabs{margin:0;gap:5px;flex-wrap:wrap}
+body.live-admin .submission-members-summary{padding:9px 12px;border:1px solid #dce5f3;background:#f5f8fd;border-radius:5px;color:#49658b;font-size:12px;font-variant-numeric:tabular-nums;margin-bottom:10px}
+body.live-admin .submission-members-modal .submission-members-pager{padding:12px 0;border-top:1px solid #e5ebf5;font-size:12px}
+body.live-admin .submission-members-count{margin-right:auto;font-variant-numeric:tabular-nums}
+body.live-admin .submission-members-pager :is(label,.submission-member-jump){display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap}
+body.live-admin .submission-members-pager :is(input,select){box-sizing:border-box;padding:5px 7px;border:1px solid #ccd8e9;border-radius:5px;background:#fff;font:inherit}
+body.live-admin .submission-member-jump input{width:70px}
 body.live-admin .submission-member-orders-nav{margin-bottom:12px}
 body.live-admin .submission-member-orders-heading{font-size:14px;margin:16px 0 8px}
 body.live-admin :is(.submission-member-orders-table,.submission-member-amount-table){overflow:auto}

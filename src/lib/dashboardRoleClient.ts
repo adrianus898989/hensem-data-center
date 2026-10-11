@@ -1,5 +1,6 @@
 "use client";
 import { ensureDashboardSession, readSavedDashboardSession, type DashboardSession } from "./dashboardAuthClient";
+import { isDashboardDataScopeValid, normalizeDashboardDataScope } from "./dashboardDataScope";
 import catalog from "./dashboardRoleCatalog.json";
 
 export type DashboardRolePage = { id:string; moduleId:string; moduleLabel:string; label:string; actions:{id:string;label:string;sensitive?:boolean}[]; requests:string[] };
@@ -36,10 +37,10 @@ function readableRole(value:unknown):unknown {
  return {...value,permissions:value.permissions.filter(code=>!retiredPermissionCodes.has(code))};
 }
 function scopeValid(value:unknown):boolean {
- return record(value)&&Array.isArray(value.countries)&&value.countries.every(country=>typeof country==="string"&&country.length>0)&&((value.mode==="all"&&value.countries.length===0)||value.mode==="selected");
+ return isDashboardDataScopeValid(value);
 }
 function cleanRole(value:DashboardCustomRole):DashboardCustomRole {return {id:value.id,name:value.name,description:value.description,permissions:[...value.permissions],active:value.active,version:value.version};}
-function cleanAccount(value:DashboardRoleAccount):DashboardRoleAccount {const scope=value.data_scope as {mode:string;countries:string[]};return {auth_user_id:value.auth_user_id,username:value.username,role:value.role,active:value.active,data_scope:{mode:scope.mode,countries:[...scope.countries]},role_id:value.role_id,assignment_version:value.assignment_version};}
+function cleanAccount(value:DashboardRoleAccount):DashboardRoleAccount {return {auth_user_id:value.auth_user_id,username:value.username,role:value.role,active:value.active,data_scope:normalizeDashboardDataScope(value.data_scope),role_id:value.role_id,assignment_version:value.assignment_version};}
 function accountValid(value:unknown):value is DashboardRoleAccount {
  return record(value)&&uuid(value.auth_user_id)&&typeof value.username==="string"&&!!value.username&&["owner","admin","viewer"].includes(String(value.role))
   &&typeof value.active==="boolean"&&scopeValid(value.data_scope)&&(value.role_id===null||uuid(value.role_id))&&version(value.assignment_version)

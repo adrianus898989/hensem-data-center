@@ -657,16 +657,34 @@ export async function createDashboardRoleAccount(
   const uuid = (value:unknown):value is string => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
   if (typeof password !== "string" || password.length < 8 || password.length > 128) throw new Error("密码应为 8-128 位");
   if (!selectedRole || !uuid(selectedRole.id) || !Number.isSafeInteger(selectedRole.version) || selectedRole.version < 1) throw new Error("请明确选择已启用的新版角色");
-  const validScope = (value:unknown):value is DashboardDataScope => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    const raw = value as DashboardDataScope;
-    return Object.keys(raw).sort().join(",") === "countries,mode" && Array.isArray(raw.countries)
-      && raw.countries.every(code => ["BR_PANGHU","BR","IN","PK","ID","VN","PH","MY","MM","NG","CO","MX","CL","SA","BR_NATIVE","USDT","HK_TEAM","RED_CRAB"].includes(code)) && new Set(raw.countries).size === raw.countries.length
-      && (raw.mode === "all" && !raw.countries.length || raw.mode === "selected" && raw.countries.length > 0);
+  const canonicalScope = (value:unknown):DashboardDataScope|null => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const raw = value as DashboardDataScope,groups=["BR_PANGHU","BR","IN","PK","ID","VN","PH","MY","MM","NG","CO","MX","CL","SA","BR_NATIVE","USDT","HK_TEAM","RED_CRAB"];
+    if(Object.keys(raw).some(key=>!["countries","mode","platforms"].includes(key))||!Array.isArray(raw.countries)
+      ||!raw.countries.every(code=>groups.includes(code))||new Set(raw.countries).size!==raw.countries.length)return null;
+    const countries=[...raw.countries].sort(),hasPlatforms=Object.prototype.hasOwnProperty.call(raw,"platforms");
+    if(raw.mode==="all")return !countries.length&&!hasPlatforms?{mode:"all",countries:[]}:null;
+    if(raw.mode!=="selected")return null;
+    if(!hasPlatforms)return countries.length?{mode:"selected",countries}:null;
+    if(!Array.isArray(raw.platforms)||raw.platforms.length>500)return null;
+    const pairs=new Map<string,{country:DashboardDataScope["countries"][number];platform:string}>();
+    for(const pair of raw.platforms){
+      if(!pair||typeof pair!=="object"||Array.isArray(pair)||Object.keys(pair).sort().join(",")!=="country,platform"
+        ||!groups.includes(pair.country)||typeof pair.platform!=="string"||countries.length&&!countries.includes(pair.country))return null;
+      const platform=pair.platform.trim().toUpperCase();
+      if(!platform||Array.from(platform).length>200||/[\u0000-\u001f\u007f-\u009f]/.test(platform))return null;
+      pairs.set(JSON.stringify([pair.country,platform]),{country:pair.country,platform});
+    }
+    const compare=(a:string,b:string)=>{
+      const left=Array.from(a),right=Array.from(b);
+      for(let i=0;i<Math.min(left.length,right.length);i++){const difference=left[i].codePointAt(0)!-right[i].codePointAt(0)!;if(difference)return difference;}
+      return left.length-right.length;
+    };
+    return {mode:"selected",countries,platforms:[...pairs.values()].sort((a,b)=>compare(a.country,b.country)||compare(a.platform,b.platform))};
   };
-  if (!validScope(dataScope)) throw new Error("请明确选择有效的数据范围");
+  const scope=canonicalScope(dataScope);
+  if (!scope) throw new Error("请明确选择有效的数据范围");
   const roleId = selectedRole.id.toLowerCase();
-  const scope = {mode:dataScope.mode,countries:[...dataScope.countries].sort()} as DashboardDataScope;
   const actor = session.user.id, started = readSavedDashboardSession();
   const guard = () => {const saved = readSavedDashboardSession(); if (saved && saved.user.id !== actor || started && !saved) throw new DashboardHttpError("当前登录账号已改变，请重新打开新建账号。",403,"session_changed");};
   guard(); const current = await ensureDashboardSession(session); guard();
@@ -678,11 +696,11 @@ export async function createDashboardRoleAccount(
     if (error instanceof DashboardHttpError && ["admin_timeout","admin_network_error"].includes(error.code)) throw new DashboardHttpError("账号创建结果待核对，请刷新账号列表确认；请勿重复创建。",503,"role_account_result_unknown");
     throw error;
   }
-  guard(); const account = result?.account;
+  guard(); const account = result?.account,returnedScope=canonicalScope(account?.data_scope);
   if (result?.ok !== true || !account || !uuid(account.auth_user_id) || account.auth_user_id === actor || account.username !== username
     || account.role !== "viewer" || account.active !== true || account.role_id !== roleId || account.role_version !== selectedRole.version || account.assignment_version !== 1
-    || typeof account.role_name !== "string" || !account.role_name.trim() || account.role_name.length > 80 || !validScope(account.data_scope)
-    || JSON.stringify({...account.data_scope,countries:[...account.data_scope.countries].sort()}) !== JSON.stringify(scope))
+    || typeof account.role_name !== "string" || !account.role_name.trim() || account.role_name.length > 80 || !returnedScope
+    || JSON.stringify(returnedScope) !== JSON.stringify(scope))
     throw new DashboardHttpError("账号创建结果待核对，请刷新角色与账号列表确认；请勿重复创建。",503,"role_account_response_invalid");
   return {ok:true,account:{auth_user_id:account.auth_user_id,username,role:"viewer",active:true,role_id:account.role_id,role_name:account.role_name,
     role_version:account.role_version,assignment_version:1,data_scope:scope}};
