@@ -13,9 +13,9 @@ export const OWNER_PREVIEW_HOST_CSS = `
 .owner-preview-shell-return{border:1px solid #dce4f0;background:#fff;color:#405b84;border-radius:5px;padding:7px 10px;cursor:pointer}
 .owner-preview-shell-warning{position:absolute;left:250px;bottom:12px;right:12px;z-index:3;padding:8px 12px;border:1px solid #efd49f;border-radius:5px;background:#fff8e7;color:#805b1b;font-size:12px}
 .owner-preview-account-page{position:fixed;bottom:0;z-index:3;display:flex;flex-direction:column;min-width:0;background:#f3f6fb;color:#253e62;overflow:hidden;border-radius:8px 8px 0 0;max-width:100vw}
-.owner-preview-account-tabs{display:flex;align-items:center;gap:6px;padding:0 0 12px;background:#f3f6fb;flex-shrink:0}
-.owner-preview-account-tabs button{padding:9px 16px;border:1px solid #dce4f0;border-radius:6px;background:#fff;color:#405b84;font-family:inherit;font-size:13px;font-weight:500;line-height:1.4;cursor:pointer}
-.owner-preview-account-tabs button[aria-selected=true]{background:#365de1;border-color:#365de1;color:#fff}.owner-preview-account-tabs button:disabled{opacity:.5;cursor:default}.owner-preview-account-tabs button:focus-visible{outline:2px solid #5475df;outline-offset:2px}
+.owner-preview-account-tabs{display:flex;align-items:center;gap:4px;padding:4px;margin-bottom:16px;width:fit-content;max-width:100%;background:#eaf0f7;border:1px solid #e0e7f1;border-radius:9px;overflow:auto;flex-shrink:0}
+.owner-preview-account-tabs button{flex-shrink:0;min-height:34px;padding:7px 16px;border:1px solid transparent;border-radius:6px;background:transparent;color:#6a7e98;font-family:inherit;font-size:12px;font-weight:500;line-height:1.4;white-space:nowrap;cursor:pointer}
+.owner-preview-account-tabs button[aria-selected=true]{background:#fff;border-color:#dce5f1;color:#315fc4;box-shadow:0 1px 3px #294c7810}.owner-preview-account-tabs button:disabled{opacity:.5;cursor:default}.owner-preview-account-tabs button:focus-visible{outline:2px solid #5475df;outline-offset:2px}
 .owner-preview-account-body{padding:0 0 18px;overflow:auto;min-height:0;flex:1}.owner-preview-account-denied{padding:20px}
 .owner-preview-account-body .admin-inline-content{max-width:none;margin-inline:0;width:100%;min-width:0}
 body.owner-preview-shell-active .auth-user-menu-wrap{top:8px!important;right:12px!important;bottom:auto!important;z-index:1400!important}

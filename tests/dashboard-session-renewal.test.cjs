@@ -5,6 +5,7 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const repo = path.resolve(__dirname, '..');
 const sourcePath = process.env.AUTH_CLIENT_PATH || path.join(repo, 'src/lib/dashboardAuthClient.ts');
 const ts = require(path.join(repo, 'node_modules/typescript'));
+const scopeHelpers = require('./load-typescript.cjs').loadTs(path.join(repo, 'src/lib/dashboardDataScope.ts'));
 const code = ts.transpileModule(fs.readFileSync(sourcePath, 'utf8'), {
   compilerOptions: {module:ts.ModuleKind.CommonJS, target:ts.ScriptTarget.ES2022},
 }).outputText;
@@ -50,7 +51,7 @@ function harness(group=storageGroup()) {
   window.dispatchEvent=event=>{events.push(event);return rawDispatch(event);};
   const box={exports:{}};
   const fetch=async(url,init={})=>{const call={url:String(url),method:String(init.method||'GET').toUpperCase(),headers:new Headers(init.headers),body:init.body,signal:init.signal};calls.push(call);return implementation(call);};
-  const context={module:box,exports:box.exports,window,localStorage:window.localStorage,navigator:{locks:group.locks},
+  const context={module:box,exports:box.exports,require:name=>{assert.equal(name,'./dashboardDataScope');return scopeHelpers;},window,localStorage:window.localStorage,navigator:{locks:group.locks},
     document:{visibilityState:'visible'},fetch,Date:FakeDate,URL,URLSearchParams,Headers,Request,Response,
     AbortController,AbortSignal,DOMException,Event,EventTarget,CustomEvent:CustomEventShim,
     setTimeout,clearTimeout,setInterval,clearInterval,atob,btoa,TextEncoder,TextDecoder,console,

@@ -304,3 +304,53 @@
 .admin-scope-platform-selected span { color:#7487a1; }
 .admin-scope-platform-status { display:flex; align-items:center; gap:10px; padding:14px 8px; color:#7487a1; font-size:12px; }
 @media (max-width: 600px) { .admin-account-current-role { align-items: stretch; flex-direction: column; } }
+
+/* Keep account administration legible in the embedded control centre as well
+   as the standalone view; native select defaults differ across the two. */
+.admin-users-compact .admin-account-directory { border:1px solid #e0e7f1; background:#fff; border-radius:12px; padding:20px; }
+.admin-account-overview { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; padding:4px 0 16px; }
+.admin-account-overview > div { display:flex; align-items:center; gap:10px; padding:13px 14px; border:1px solid #e5ebf4; border-radius:8px; background:#f8faff; }
+.admin-account-overview b { font-size:22px; }
+.admin-users-compact .admin-user-search-toolbar { display:grid; padding:14px; border:1px solid #e3eaf4; background:#f8fafd; }
+.admin-account-table-wrap { border:1px solid #e3eaf4; border-radius:8px; }
+.admin-account-directory > .admin-empty { display:grid; place-content:center; min-height:220px; padding:32px; border:1px solid #e3eaf4; border-radius:8px; background:#fbfcfe; color:#718198; text-align:center; }
+.admin-account-permission-preview { margin:10px 0 18px; border:1px solid #e1e8f2; border-radius:8px; background:#f8fafd; }
+.admin-account-permission-preview summary { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; color:#3f5778; font-size:12px; cursor:pointer; }
+.admin-account-permission-preview summary::before { content:'›'; font-size:18px; line-height:12px; }
+.admin-account-permission-preview[open] summary::before { transform:rotate(90deg); }
+.admin-account-permission-preview summary span { margin-left:auto; color:#7b8da5; font-weight:400; }
+.admin-account-permission-preview .admin-account-permission-summary { display:flex; flex-wrap:wrap; gap:6px; padding:0 12px 12px; }
+.admin-account-permission-preview .admin-account-permission-summary span { padding:4px 8px; border:1px solid #e0e7f1; border-radius:5px; background:white; color:#5b6e88; font-size:11px; }
+.account-editor-dialog-body .admin-account-create-panel .admin-data-scope-picker { margin:18px 0 0; padding:16px; border:1px solid #dfe7f2; border-radius:10px; background:#fff; }
+.admin-data-scope-picker .admin-data-scope-modes { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.admin-data-scope-picker .admin-data-scope-modes label { justify-content:center; min-height:40px; padding:10px 8px; background:#fff; border-color:#dce4f0; cursor:pointer; font-weight:500; }
+.admin-data-scope-picker .admin-data-scope-modes label:has(input:checked) { border-color:#5274ef; background:#f0f4ff; color:#2c55d6; box-shadow:0 0 0 1px #5274ef inset; }
+.admin-data-scope-picker .admin-data-scope-modes label:has(input:disabled) { cursor:not-allowed; opacity:.55; }
+.admin-data-scope-selected { align-items:center; padding:10px 0 0; margin:0 0 14px; font-size:12px; }
+.admin-data-scope-selected b { color:#3159a7; }
+.admin-data-scope-selected span { color:#7b8ba1; font-size:11px; }
+.admin-scope-platform-toolbar { align-items:flex-end; gap:12px; padding:12px; margin:0 0 10px; border-radius:8px; background:#f6f8fc; }
+.admin-scope-platform-filters { flex:1; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.admin-scope-platform-toolbar label { display:grid; gap:5px; color:#526984; font-size:12px; font-weight:500; }
+.admin-data-scope-picker .admin-scope-platform-toolbar select { width:100%; min-width:0; height:36px; padding:6px 10px; border:1px solid #d9e2ef; border-radius:6px; background:#fff; color:#294363; font:inherit; }
+.admin-scope-platform-toolbar > span { padding-bottom:9px; font-size:11px; white-space:nowrap; }
+.admin-data-scope-picker input.admin-data-scope-search { height:38px; border-color:#d9e2ef; }
+.admin-scope-platform-list { grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; max-height:300px; padding:10px; background:#f9fbfe; scrollbar-gutter:stable; }
+.admin-scope-platform-list label { min-height:60px; padding:10px 12px; border-color:#e0e7f1; background:#fff; border-radius:7px; }
+.admin-scope-platform-list label:hover { border-color:#a5b9ee; }
+.admin-scope-platform-list label:has(input:checked) { border-color:#6b8bf0; background:#eef3ff; }
+.admin-scope-platform-list label b { font-size:13px; font-weight:600; }
+.admin-data-scope-picker .admin-scope-platform-list small { font-size:11px; font-weight:400; line-height:1.5; }
+.admin-scope-platform-selected { max-height:84px; padding:2px 0; }
+.admin-scope-platform-selected button { align-items:center; min-height:28px; border-radius:6px; }
+.admin-scope-platform-status { justify-content:center; min-height:120px; border:1px dashed #dce5f1; border-radius:8px; background:#f9fbfe; }
+.admin-account-create-actions { position:sticky; bottom:-16px; display:flex; justify-content:flex-end; gap:8px; margin:16px -20px -16px; padding:14px 20px; border-top:1px solid #e5ebf4; background:#fff; z-index:1; }
+.account-editor-dialog-body .admin-account-create-panel .admin-account-create-actions button { min-height:38px; margin:0; padding:8px 18px; }
+@media(max-width:850px){ .admin-account-overview { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:600px){
+  .admin-account-overview { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+  .admin-scope-platform-list { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .admin-scope-platform-toolbar > span { width:100%; padding:0; }
+  .admin-data-scope-picker .admin-data-scope-modes label { font-size:11px; }
+}
+@media(max-width:700px){ .admin-account-create-actions { bottom:-12px; margin:14px -14px -12px; padding:12px 14px; } }

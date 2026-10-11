@@ -112,7 +112,7 @@ function DataScopePicker({ id, value, actor, session, disabled, onChange, onVali
       <label><input type="radio" name={`${id}-scope-mode`} value="selected" checked={value.mode === "selected"&&!platformMode} disabled={disabled||allowed.platforms!==undefined} onChange={() => selectMode("selected")} />按国家 / 分组</label>
       <label><input type="radio" name={`${id}-scope-mode`} value="platforms" checked={platformMode} onChange={() => selectMode("platforms")} />指定平台</label>
     </div>
-    <div className="admin-data-scope-selected" aria-live="polite"><b>{value.mode === "all" ? "已选：全部数据" : platformMode?`已选 ${pairs.length} 个平台`:`已选 ${value.countries.length} 项`}</b><span>{value.mode === "selected" ? dashboardScopeLabel(value) : "所有数据范围；页面与操作仍由角色控制"}</span></div>
+    <div className="admin-data-scope-selected" aria-live="polite"><b>{value.mode === "all" ? "已选：全部数据" : platformMode?`已选 ${pairs.length} 个平台`:`已选 ${value.countries.length} 项`}</b><span>{platformMode ? "可跨国家选择，只有勾选的平台会获得授权" : value.mode === "selected" ? dashboardScopeLabel(value) : "所有数据范围；页面与操作仍由角色控制"}</span></div>
     {value.mode === "selected" && <>
       {platformMode?<>
         <div className="admin-scope-platform-toolbar"><div className="admin-scope-platform-filters"><label>团队 <select aria-label="平台授权团队筛选" value={teamFilter} onChange={event=>{setTeamFilter(event.target.value);setCountryFilter("all")}}><option value="all">全部团队</option>{teams.map(team=><option key={team} value={`team:${team}`}>{team}</option>)}{rows.some(row=>!row.team)&&<option value="unknown">未提供团队</option>}</select></label><label>国家 / 地区 <select aria-label="平台授权国家筛选" value={countryFilter} onChange={event=>setCountryFilter(event.target.value)}><option value="all">全部国家 / 地区</option>{DASHBOARD_DATA_GROUPS.filter(group=>teamRows.some(row=>row.country===group.key)).map(group=><option key={group.key} value={group.key}>{group.label}</option>)}</select></label></div><span>{ready?`显示 ${filtered.length} / ${rows.length} 个可授权平台`:""}</span></div>
@@ -749,11 +749,9 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
                 ? `${selectedCreationRole.name}：${selectedCreationPages.length} 个页面、${dashboardRoleDisplayPermissionCount(selectedCreationRole.permissions)} 项权限；后续随该角色统一更新。`
                 : `${selectedCreationRole.name}：0 项权限。账号保持启用，角色开放权限后才能进入相应页面。`
                 : "请明确选择新版角色，账号权限与该角色同步。"}</p>
-              {selectedCreationPages.length > 0 && <div className="admin-account-permission-summary">{selectedCreationPages.map(page => page.label).join(" / ")}</div>}
+              {selectedCreationPages.length > 0 && <details className="admin-account-permission-preview"><summary>查看角色可用页面<span>{selectedCreationPages.length} 个页面</span></summary><div className="admin-account-permission-summary">{selectedCreationPages.map(page => <span key={page.id}>{page.label}</span>)}</div></details>}
               <DataScopePicker id="new-account" value={newDataScope} actor={profile} session={session} disabled={createBusy} onChange={value=>{setNewScopeCatalogValid(false);setNewDataScope(value)}} onValidityChange={setNewScopeCatalogValid} />
-              <button className="admin-primary-btn" type="submit" disabled={createBusy || !selectedCreationRole || !scopeSelectionPresent(normalizeDashboardDataScope(newDataScope)) || newDataScope.platforms!==undefined&&!newScopeCatalogValid}>{createBusy ? "建立中..." : "建立后台账号"}</button>
-
-              <button type="button" className="admin-light-btn admin-create-cancel" onClick={closeCreate}>取消</button>
+              <div className="admin-account-create-actions"><button type="button" className="admin-light-btn admin-create-cancel" onClick={closeCreate}>取消</button><button className="admin-primary-btn" type="submit" disabled={createBusy || !selectedCreationRole || !scopeSelectionPresent(normalizeDashboardDataScope(newDataScope)) || newDataScope.platforms!==undefined&&!newScopeCatalogValid}>{createBusy ? "建立中..." : "建立后台账号"}</button></div>
             </form></fieldset>
           </section></AccountEditorDialog>}
 

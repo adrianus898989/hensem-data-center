@@ -1,7 +1,7 @@
 "use client";
 
 import { ensureDashboardSession, readSavedDashboardSession, type DashboardSession } from "./dashboardAuthClient";
-import { DASHBOARD_DATA_GROUPS, type DashboardDataGroup } from "./dashboardDataScope";
+import { DASHBOARD_DATA_GROUPS, dashboardScopePlatformKey, type DashboardDataGroup } from "./dashboardDataScope";
 
 export type DashboardScopePlatform = {country:DashboardDataGroup;platform:string;label:string;source?:string;team?:string|null};
 
@@ -9,11 +9,26 @@ export function validateDashboardScopeCatalog(value:unknown):DashboardScopePlatf
   const payload=value as {version?:unknown;platforms?:unknown};
   if(!payload||payload.version!==1||!Array.isArray(payload.platforms)||payload.platforms.length>10000)throw Error("平台目录返回不完整，请重新读取。");
   const keys=new Set<string>(),groups=new Set<string>(DASHBOARD_DATA_GROUPS.map(x=>x.key));
-  return payload.platforms.map(row=>{
+  const identities=new Map<string,{row:DashboardScopePlatform;sources:Set<string>;teams:Set<string>;hasTeam:boolean}>();
+  for(const row of payload.platforms){
     if(!row||typeof row!=="object"||!groups.has(row.country)||typeof row.platform!=="string"||!row.platform||Array.from(row.platform).length>200||/[\u0000-\u001f\u007f-\u009f]/.test(row.platform)||row.platform!==row.platform.trim().toUpperCase()||typeof row.label!=="string"||!row.label.trim()||row.label.length>300||row.source!==undefined&&typeof row.source!=="string"||row.team!==undefined&&row.team!==null&&(typeof row.team!=="string"||!row.team||row.team!==row.team.trim()||Array.from(row.team).length>200||/[\u0000-\u001f\u007f-\u009f]/.test(row.team)))throw Error("平台目录返回不完整，请重新读取。");
-    const key=JSON.stringify([row.country,row.platform]);if(keys.has(key))throw Error("平台目录存在重复标识，请重新读取。");keys.add(key);
-    return {country:row.country,platform:row.platform,label:row.label,...(row.source?{source:row.source}:{}),...(row.team!==undefined?{team:row.team}:{})};
-  });
+    const rawKey=JSON.stringify([row.country,row.platform]);if(keys.has(rawKey))throw Error("平台目录存在重复标识，请重新读取。");keys.add(rawKey);
+    const platform=dashboardScopePlatformKey(row.country,row.platform)!;
+    const key=JSON.stringify([row.country,platform]),previous=identities.get(key);
+    if(previous){
+      // Different physical aliases can be reported by several source systems.
+      // The explicit country-aware identity proves the merge, never its team.
+      previous.row.label=platform;
+      if(row.source)previous.sources.add(row.source);
+      if(row.team)previous.teams.add(row.team);
+      previous.hasTeam ||= row.team!==undefined;
+    }else{
+      identities.set(key,{row:{country:row.country,platform,label:dashboardScopePlatformKey(row.country,row.label)===platform?platform:row.label},
+        sources:new Set(row.source?[row.source]:[]),teams:new Set(row.team?[row.team]:[]),hasTeam:row.team!==undefined});
+    }
+  }
+  return [...identities.values()].map(({row,sources,teams,hasTeam})=>({...row,
+    ...(sources.size===1?{source:[...sources][0]}:{}),...(hasTeam?{team:teams.size===1?[...teams][0]:null}:{})}));
 }
 
 export async function readDashboardScopeCatalog(session:DashboardSession,signal?:AbortSignal):Promise<DashboardScopePlatform[]> {

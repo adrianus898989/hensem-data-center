@@ -29,6 +29,15 @@ const DATA_GROUPS = new Set(["BR_PANGHU", "BR", "IN", "PK", "ID", "VN", "PH", "M
 class DataScopeError extends Error {
   constructor(message: string, readonly status: number, readonly code = "request_denied") { super(message); }
 }
+// Country-scoped, already-confirmed aliases. No punctuation or suffix guessing.
+function scopePlatformIdentity(country:string,value:string):string {
+  const platform=value.trim().toUpperCase();
+  const aliases:Record<string,Record<string,string>>={
+    IN:{BIG:"BIGMUMBAI",INDIA82:"82LOTTERY","82BET":"82LOTTERY","OK.WIN":"OKWIN",VEERGAME:"VEER.GAME","SHREE.WIN":"SHREEWIN","DHANI.WIN":"DHANIWIN","DHANIWIN(新AR)":"DHANIWIN","MAAN.WIN":"MAANWIN",RAJALOTTERY:"RAJA",RAJAGAME:"RAJA",RAJAGAMES:"RAJA"},
+    PK:{"3PATISUPER":"3PATTI-SUPER","92.GAME":"92GAME"},
+  };
+  return aliases[country]?.[platform]||platform;
+}
 function parseDataScope(value: unknown): DataScope {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new DataScopeError("可见数据范围格式不正确", 400);
   const raw = value as Record<string, unknown>;
@@ -47,7 +56,7 @@ function parseDataScope(value: unknown): DataScope {
     if(!value||typeof value!=="object"||Array.isArray(value)||Object.keys(value).sort().join(",")!=="country,platform")throw new DataScopeError("平台授权范围格式不正确",400);
     const row=value as Record<string,unknown>;
     if(typeof row.country!=="string"||!DATA_GROUPS.has(row.country)||typeof row.platform!=="string")throw new DataScopeError("平台授权范围格式不正确",400);
-    const platform=row.platform.trim().toUpperCase();
+    const platform=scopePlatformIdentity(row.country,row.platform);
     if(!platform||Array.from(platform).length>200||/[\u0000-\u001f\u007f-\u009f]/.test(platform)||(countries.length&&!countries.includes(row.country)))throw new DataScopeError("平台授权范围格式不正确",400);
     unique.set(JSON.stringify([row.country,platform]),{country:row.country,platform});
   }
@@ -62,7 +71,7 @@ function dataScopeSubset(child: DataScope, parent: DataScope): boolean {
   if(parent.mode==="all")return true;
   if(child.mode!=="selected"||(!child.countries.length&&child.platforms===undefined))return false;
   if(parent.mode!=="selected"||(!parent.countries.length&&parent.platforms===undefined))return false;
-  if(child.platforms!==undefined)return child.platforms.every(pair=>(!parent.countries.length||parent.countries.includes(pair.country))&&(parent.platforms===undefined||parent.platforms.some(p=>p.country===pair.country&&p.platform===pair.platform)));
+  if(child.platforms!==undefined)return child.platforms.every(pair=>(!parent.countries.length||parent.countries.includes(pair.country))&&(parent.platforms===undefined||parent.platforms.some(p=>p.country===pair.country&&scopePlatformIdentity(p.country,p.platform)===scopePlatformIdentity(pair.country,pair.platform))));
   return parent.platforms===undefined&&child.countries.every(key=>parent.countries.includes(key));
 }
 function assertTargetDataScope(actor: { role?: string; data_scope?: unknown }, target: { role?: string; data_scope?: unknown }) {

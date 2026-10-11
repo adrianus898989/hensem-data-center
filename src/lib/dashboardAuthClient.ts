@@ -1,6 +1,6 @@
 "use client";
 
-import type { DashboardDataScope } from "./dashboardDataScope";
+import { isDashboardDataScopeValid, normalizeDashboardDataScope, type DashboardDataScope } from "./dashboardDataScope";
 
 export const APPLICATION_GATEWAY = "https://hensem-india-workorder.workdesk-hub.workers.dev";
 
@@ -658,29 +658,8 @@ export async function createDashboardRoleAccount(
   if (typeof password !== "string" || password.length < 8 || password.length > 128) throw new Error("密码应为 8-128 位");
   if (!selectedRole || !uuid(selectedRole.id) || !Number.isSafeInteger(selectedRole.version) || selectedRole.version < 1) throw new Error("请明确选择已启用的新版角色");
   const canonicalScope = (value:unknown):DashboardDataScope|null => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const raw = value as DashboardDataScope,groups=["BR_PANGHU","BR","IN","PK","ID","VN","PH","MY","MM","NG","CO","MX","CL","SA","BR_NATIVE","USDT","HK_TEAM","RED_CRAB"];
-    if(Object.keys(raw).some(key=>!["countries","mode","platforms"].includes(key))||!Array.isArray(raw.countries)
-      ||!raw.countries.every(code=>groups.includes(code))||new Set(raw.countries).size!==raw.countries.length)return null;
-    const countries=[...raw.countries].sort(),hasPlatforms=Object.prototype.hasOwnProperty.call(raw,"platforms");
-    if(raw.mode==="all")return !countries.length&&!hasPlatforms?{mode:"all",countries:[]}:null;
-    if(raw.mode!=="selected")return null;
-    if(!hasPlatforms)return countries.length?{mode:"selected",countries}:null;
-    if(!Array.isArray(raw.platforms)||raw.platforms.length>500)return null;
-    const pairs=new Map<string,{country:DashboardDataScope["countries"][number];platform:string}>();
-    for(const pair of raw.platforms){
-      if(!pair||typeof pair!=="object"||Array.isArray(pair)||Object.keys(pair).sort().join(",")!=="country,platform"
-        ||!groups.includes(pair.country)||typeof pair.platform!=="string"||countries.length&&!countries.includes(pair.country))return null;
-      const platform=pair.platform.trim().toUpperCase();
-      if(!platform||Array.from(platform).length>200||/[\u0000-\u001f\u007f-\u009f]/.test(platform))return null;
-      pairs.set(JSON.stringify([pair.country,platform]),{country:pair.country,platform});
-    }
-    const compare=(a:string,b:string)=>{
-      const left=Array.from(a),right=Array.from(b);
-      for(let i=0;i<Math.min(left.length,right.length);i++){const difference=left[i].codePointAt(0)!-right[i].codePointAt(0)!;if(difference)return difference;}
-      return left.length-right.length;
-    };
-    return {mode:"selected",countries,platforms:[...pairs.values()].sort((a,b)=>compare(a.country,b.country)||compare(a.platform,b.platform))};
+    if(!isDashboardDataScopeValid(value)||new Set(value.countries).size!==value.countries.length)return null;
+    return normalizeDashboardDataScope(value);
   };
   const scope=canonicalScope(dataScope);
   if (!scope) throw new Error("请明确选择有效的数据范围");
