@@ -23,6 +23,21 @@ const platformText=(value:unknown):string|null=>{
   const name=value.trim().toUpperCase();
   return !name||Array.from(name).length>200||/[\u0000-\u001f\u007f-\u009f]/.test(name)?null:name;
 };
+// Confirmed identities only. Country remains part of every grant; punctuation
+// and source suffixes on any other name must not create additional access.
+const PLATFORM_ALIASES:Partial<Record<DashboardDataGroup,Record<string,string>>>={
+  IN:{BIG:"BIGMUMBAI",INDIA82:"82LOTTERY","82BET":"82LOTTERY","OK.WIN":"OKWIN",
+    VEERGAME:"VEER.GAME","SHREE.WIN":"SHREEWIN","DHANI.WIN":"DHANIWIN",
+    "DHANIWIN(新AR)":"DHANIWIN",RAJALOTTERY:"RAJA",RAJAGAME:"RAJA",RAJAGAMES:"RAJA",
+    "MAAN.WIN":"MAANWIN"},
+  PK:{"3PATISUPER":"3PATTI-SUPER","92.GAME":"92GAME"},
+};
+export function dashboardScopePlatformKey(country:unknown,platform:unknown):string|null {
+  const name=platformText(platform);
+  if(name===null)return null;
+  const group=dashboardDataGroup(country,name);
+  return group?PLATFORM_ALIASES[group]?.[name]||name:name;
+}
 // Unicode codepoint ordering also matches a PostgreSQL COLLATE "C" comparison.
 function compareText(a:string,b:string):number {
   const left=Array.from(a),right=Array.from(b);
@@ -43,7 +58,7 @@ function parsedScope(value:unknown):DashboardDataScope|null {
   const unique=new Map<string,DashboardPlatformScope>();
   for(const entry of value.platforms){
     if(!record(entry)||Object.keys(entry).sort().join(",")!=="country,platform"||typeof entry.country!=="string"||!keys.has(entry.country))return null;
-    const platform=platformText(entry.platform),country=entry.country as DashboardDataGroup;
+    const country=entry.country as DashboardDataGroup,platform=dashboardScopePlatformKey(country,entry.platform);
     if(platform===null||countries.length&&!countries.includes(country))return null;
     unique.set(JSON.stringify([country,platform]),{country,platform});
   }
@@ -100,7 +115,7 @@ function scopeAllows(scope:DashboardDataScope,country:unknown,platform:unknown):
   const group=dashboardDataGroup(country,platform);
   if(!group)return false;
   if(scope.platforms!==undefined){
-    const name=platformText(platform);
+    const name=dashboardScopePlatformKey(group,platform);
     return name!==null&&(!scope.countries.length||scope.countries.includes(group))&&scope.platforms.some(pair=>pair.country===group&&pair.platform===name);
   }
   return scope.countries.includes(group);

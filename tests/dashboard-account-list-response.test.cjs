@@ -1,8 +1,9 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript');
+const scopeHelpers=require('./load-typescript.cjs').loadTs(path.resolve(__dirname,'../src/lib/dashboardDataScope.ts'));
 const source=ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../src/lib/dashboardAuthClient.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 function client(body,status=200){
  const module={exports:{}},calls=[];
- vm.runInNewContext(source,{module,exports:module.exports,console,Error,AbortController,setTimeout,clearTimeout,Headers,URL,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://fixture.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'fixture-public'}},fetch:async(url,init)=>{calls.push({url,body:JSON.parse(init.body)});return new Response(typeof body==='string'?body:JSON.stringify(body),{status})}});
+ vm.runInNewContext(source,{module,exports:module.exports,require:name=>{assert.equal(name,'./dashboardDataScope');return scopeHelpers;},console,Error,AbortController,setTimeout,clearTimeout,Headers,URL,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://fixture.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'fixture-public'}},fetch:async(url,init)=>{calls.push({url,body:JSON.parse(init.body)});return new Response(typeof body==='string'?body:JSON.stringify(body),{status})}});
  return{read:()=>module.exports.listDashboardUsers({user:{id:'fixture-user'},access_token:'fixture-token'}),calls};
 }
 const row={auth_user_id:'fixture-user',username:'existing-user',role:'viewer',active:true,permissions:{third_party:false,work_orders:true},management_permissions:{manage_viewers:false},data_scope:{mode:'selected',countries:['IN']}};

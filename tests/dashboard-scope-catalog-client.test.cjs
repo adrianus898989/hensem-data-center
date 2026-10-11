@@ -26,6 +26,29 @@ test('team is validated display metadata; missing and null team remain compatibl
  assert.equal(h.validateDashboardScopeCatalog({version:1,platforms:[{...row,team:'字'.repeat(200)}]})[0].team.length,200);
  assert.throws(()=>h.validateDashboardScopeCatalog({version:1,platforms:[{...row,team:'M8'},{...row,team:'OTHER'}]}),/重复/,'different teams cannot duplicate or widen a country/platform identity');
 });
+test('confirmed aliases collapse across sources while country identity and unknown teams remain honest',()=>{
+ const h=harness(),raw=[
+  {country:'IN',platform:'RAJA',label:'RAJA',source:'AR',team:'M8'},
+  {country:'IN',platform:'RAJALOTTERY',label:'RAJALOTTERY',source:'REPORT',team:null},
+  {country:'PK',platform:'3PATISUPER',label:'3PATISUPER',source:'AR',team:'M8'},
+  {country:'PK',platform:'3PATTI-SUPER',label:'3PATTI-SUPER',source:'REPORT'},
+  {country:'PK',platform:'92.GAME',label:'92.GAME',team:'M8'},
+  {country:'PK',platform:'92GAME',label:'92GAME',team:'OTHER'},
+  {country:'IN',platform:'92.GAME',label:'92.GAME',team:'M8'},
+  {country:'PK',platform:'RAJALOTTERY',label:'RAJALOTTERY'},
+  {country:'IN',platform:'91CLUB',label:'91CLUB'},
+  {country:'IN',platform:'9K.CLUB',label:'9K.CLUB'},
+ ];
+ assert.deepEqual(JSON.parse(JSON.stringify(h.validateDashboardScopeCatalog({version:1,platforms:raw}))),[
+  {country:'IN',platform:'RAJA',label:'RAJA',team:'M8'},
+  {country:'PK',platform:'3PATTI-SUPER',label:'3PATTI-SUPER',team:'M8'},
+  {country:'PK',platform:'92GAME',label:'92GAME',team:null},
+  ...raw.slice(6),
+ ]);
+ const single=h.validateDashboardScopeCatalog({version:1,platforms:[{country:'IN',platform:'RAJALOTTERY',label:'Raja lottery source',source:'AR'}]});
+ assert.equal(single[0].platform,'RAJA');assert.equal(single[0].label,'Raja lottery source','a descriptive name is not guessed from an identity alias');
+ assert.throws(()=>h.validateDashboardScopeCatalog({version:1,platforms:[raw[0],{...raw[0],source:'REPORT'}]}),/重复/,'duplicate physical identities remain invalid');
+});
 test('actor change during refresh prevents catalog dispatch',async()=>{
  let resolve;const h=harness({ensure:()=>new Promise(r=>resolve=r)}),pending=h.readDashboardScopeCatalog(session);h.saved({user:{id:'different'}});resolve(session);await assert.rejects(pending,/登录账号已改变/);assert.equal(h.calls.length,0);assert.equal(h.timers.size,0);
 });

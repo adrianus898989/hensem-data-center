@@ -69,6 +69,39 @@ test('delegation cannot turn a platform whitelist into country-wide or same-name
   assert.equal(scope.isDashboardDataScopeSubset(parent,{mode:'selected',countries:['IN'],platforms:[]}),false);
   for(const invalid of [{mode:'selected',countries:[]},{mode:'all',countries:[],platforms:null},{mode:'selected',countries:['IN'],unknown:true}])assert.equal(scope.isDashboardDataScopeSubset(parent,invalid),false);
 });
+test('confirmed IN and PK platform aliases preserve existing grants in both directions without generic name folding',()=>{
+  const aliases={IN:[['BIG','BIGMUMBAI'],['INDIA82','82LOTTERY'],['82BET','82LOTTERY'],['OK.WIN','OKWIN'],['VEERGAME','VEER.GAME'],['SHREE.WIN','SHREEWIN'],['DHANI.WIN','DHANIWIN'],['DHANIWIN(新AR)','DHANIWIN'],['RAJALOTTERY','RAJA'],['RAJAGAME','RAJA'],['RAJAGAMES','RAJA'],['MAAN.WIN','MAANWIN']],PK:[['3PATISUPER','3PATTI-SUPER'],['92.GAME','92GAME']]};
+  for(const [country,pairs] of Object.entries(aliases))for(const [alias,canonical] of pairs){
+    const grant=platform=>({mode:'selected',countries:[],platforms:[{country,platform}]});
+    assert.equal(scope.dashboardScopePlatformKey(country,' '+alias.toLowerCase()+' '),canonical);
+    assert.equal(scope.isDashboardDataScopeValid(grant(alias)),true,'old alias grants remain valid');
+    assert.deepEqual(scope.normalizeDashboardDataScope({...grant(alias),platforms:[{country,platform:alias},{country,platform:canonical}]}),grant(canonical));
+    for(const stored of [alias,canonical])for(const requested of [alias,canonical]){
+      assert.equal(scope.dashboardScopeAllows(grant(stored),country,requested),true);
+      assert.equal(scope.isDashboardDataScopeSubset(grant(requested),grant(stored)),true);
+      assert.equal(scope.dashboardScopeAllows(grant(stored),country==='IN'?'PK':'IN',requested),false);
+    }
+    assert.equal(scope.dashboardScopePlatformKey(country==='IN'?'PK':'IN',alias),alias,'aliases do not move to another country');
+    assert.equal(scope.isDashboardDataScopeSubset({mode:'selected',countries:[country]},grant(alias)),false,'an alias cannot create country-wide access');
+  }
+  assert.equal(scope.dashboardScopeAllows({mode:'selected',countries:['IN'],platforms:[{country:'IN',platform:'RAJA'}]},'印度盘口','rajalottery'),true);
+  assert.equal(scope.dashboardScopeAllows({mode:'selected',countries:['PK'],platforms:[{country:'PK',platform:'92.GAME'}]},'巴基斯坦盘口','92game'),true);
+  for(const [country,stored,requested] of [['IN','RAJA','RAJA.LOTTERY'],['IN','RAJA','RAJA(AR)'],['PK','92GAME','92-GAME'],['PK','3PATTI-SUPER','3PATTISUPER'],['IN','91CLUB','9K.CLUB']])
+    assert.equal(scope.dashboardScopeAllows({mode:'selected',countries:[],platforms:[{country,platform:stored}]},country,requested),false);
+  assert.equal(scope.dashboardScopePlatformKey('IN',null),null);assert.equal(scope.dashboardScopePlatformKey('IN','RAJA\u0085X'),null);
+  assert.equal(scope.dashboardScopeAllows({mode:'selected',countries:['IN'],platforms:[]},'IN','RAJALOTTERY'),false);
+});
+test('alias canonicalization keeps equivalent profile versions and caches stable without crossing countries',()=>{
+  browser();const original={...viewer,updated_at:'2026-10-10T00:00:00Z',data_scope:{mode:'selected',countries:[],platforms:[{country:'IN',platform:'RAJALOTTERY'}]}};
+  const canonical={...original,data_scope:{...original.data_scope,platforms:[{country:'IN',platform:'RAJA'}]}};
+  assert.equal(scope.dashboardScopeIdentity(original),scope.dashboardScopeIdentity(canonical));
+  client.setDashboardDataViewer(original);client.writeDashboardDataCache('alias',{rows:['synthetic-authorized']},original);
+  assert.equal(client.dashboardProfileCanAdvance(canonical),true);assert.equal(client.setDashboardDataViewer(canonical),true);
+  assert.deepEqual(client.readDashboardDataCache('alias',canonical),{rows:['synthetic-authorized']});
+  const foreign={...canonical,data_scope:{...canonical.data_scope,platforms:[{country:'PK',platform:'RAJA'}]}};
+  assert.notEqual(scope.dashboardScopeIdentity(canonical),scope.dashboardScopeIdentity(foreign));
+  assert.equal(client.dashboardProfileCanAdvance(foreign),false);assert.equal(client.readDashboardDataCache('alias',foreign),null);
+});
 test('country navigation and routing allow existing platform groups without authorizing country-only totals',()=>{
   const selected={mode:'selected',countries:[],platforms:[{country:'IN',platform:'A'}]};
   assert.equal(scope.dashboardScopeMayReadCountry(selected,'印度'),true);assert.equal(scope.dashboardScopeMayReadCountry(selected,'巴基斯坦'),false);

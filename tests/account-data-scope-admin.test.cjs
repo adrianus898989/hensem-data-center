@@ -34,7 +34,7 @@ async function edge(action, patch={}, options={}) {
       assert.equal(args.p_actor,caller.auth_user_id);assert.equal(args.p_target,target.auth_user_id);
       assert.equal(args.p_session_id,'33333333-3333-4333-8333-333333333333');assert.equal(args.p_expected_updated_at,target.updated_at);
       const value={data_scope:clone(args.p_scope),updated_at:new Date().toISOString()};writes.push(value);Object.assign(target,value);
-      return {data:{ok:true,auth_user_id:target.auth_user_id,username:target.username,role:target.role,...value},error:null};
+      return {data:{ok:true,auth_user_id:target.auth_user_id,username:target.username,role:target.role,...value,...(options.scopeRpcAckScope?{data_scope:clone(options.scopeRpcAckScope)}:{})},error:null};
     }
     return {data:name==="application_session_check"?{allowed:options.sessionAllowed!==false}:null,error:options.sessionFailure&&name==="application_session_check"?{message:"PRIVATE_SESSION_FAILURE"}:options.revokeFailure&&name==="application_revoke_user_sessions"?{message:"PRIVATE_REVOKE_FAILURE"}:null};
   },auth:{

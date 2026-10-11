@@ -32,3 +32,29 @@
 @media(max-width:700px){.wo-account-scope-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .wo-account-login-state{display:block;font-size:10px;margin-top:4px;color:#6f839f;white-space:normal;line-height:1.45}
+
+.wo-account-card{min-width:0;padding:20px;background:#fff;border:1px solid #e0e7f1;border-radius:12px;box-shadow:0 2px 8px #23395e04}
+.wo-account-card>.wo-account-toolbar{padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid #edf1f6}
+.wo-account-subtitle{margin:5px 0 0;color:#8290a6;font-size:12px;line-height:1.5}
+.wo-account-card>.wo-account-filters{background:#f8fafd;border-color:#e9eef5;padding:14px;margin-bottom:18px}
+.wo-account-list-state{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:210px;padding:30px 20px;text-align:center;color:#71839d}
+.wo-account-state-icon{position:relative;display:grid;place-items:center;width:48px;height:48px;margin-bottom:12px;border-radius:14px;background:#f0f4fa;color:#7c94b4}
+.wo-account-state-icon svg{width:25px;height:25px}
+.wo-account-list-state h4{margin:0;color:#3c526f;font-size:14px;font-weight:600;line-height:1.6}
+.wo-account-list-state p{max-width:560px;margin:7px 0 0;font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.wo-account-list-state[data-state=error] .wo-account-state-icon{background:#fff0ed;color:#b65c4b}
+.wo-account-list-state[data-state=error] p{color:#a44331}
+.wo-account-list-state[data-state=loading] svg{opacity:0}
+.wo-account-list-state[data-state=loading] .wo-account-state-icon:before{content:"";position:absolute;width:22px;height:22px;border:2px solid #cddaf3;border-top-color:#365de1;border-radius:50%;animation:wo-account-spin 1s linear infinite}
+@keyframes wo-account-spin{to{transform:rotate(360deg)}}
+.wo-account-card .wo-account-count{margin:0 0 12px;color:#6d7f97}
+.wo-account-table tbody tr:hover{background:#f8fbff}
+.wo-account-table tbody tr:last-child td{border-bottom:0}
+.wo-account-table td>.active,.wo-account-table td>.inactive{display:inline-block;padding:3px 8px;border-radius:5px;font-size:11px;background:#eaf7f0}
+.wo-account-table td>.inactive{background:#f4eef0}
+.wo-account-pagination{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-top:16px;color:#788aa3;font-size:12px}
+.wo-account-pagination>div,.wo-account-pagination label{display:flex;align-items:center;gap:8px}
+.workorder-account-admin .wo-account-pagination select{padding:5px 8px;min-width:60px}
+.workorder-account-admin .wo-account-pagination button{padding:6px 10px;font-size:12px}
+@media(max-width:700px){.wo-account-card{padding:14px}.wo-account-pagination>div{flex-wrap:wrap}.wo-account-card>.wo-account-toolbar{gap:12px}.wo-account-list-state{min-height:180px}}
+@media(prefers-reduced-motion:reduce){.wo-account-list-state[data-state=loading] .wo-account-state-icon:before{animation:none}}

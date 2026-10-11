@@ -1,4 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript');
+const scopeHelpers=require('./load-typescript.cjs').loadTs(path.resolve(__dirname,'../src/lib/dashboardDataScope.ts'));
 const source=ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../src/lib/dashboardAuthClient.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
 const ACTOR='11111111-1111-4111-8111-111111111111',NEW='22222222-2222-4222-8222-222222222222',ROLE='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const BR={mode:'selected',countries:['BR_PANGHU']};
@@ -7,7 +8,7 @@ const response={ok:true,account:{auth_user_id:NEW,username:'synthetic-new',role:
 const plain=value=>JSON.parse(JSON.stringify(value));
 function client(body=response,options={}){
  const module={exports:{}},calls=[];
- vm.runInNewContext(source,{module,exports:module.exports,console,Error,AbortController,setTimeout,clearTimeout,Headers,URL,URLSearchParams,Date,Set,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://fixture.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public'}},fetch:async(url,init)=>{calls.push({url,init:{...init,signal:null},body:init.body?JSON.parse(init.body):null});if(options.fetch)return options.fetch(url,init,module.exports);return new Response(typeof body==='string'?body:JSON.stringify(body),{status:options.status||200})}});
+ vm.runInNewContext(source,{module,exports:module.exports,require:name=>{assert.equal(name,'./dashboardDataScope');return scopeHelpers;},console,Error,AbortController,setTimeout,clearTimeout,Headers,URL,URLSearchParams,Date,Set,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://fixture.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'synthetic-public'}},fetch:async(url,init)=>{calls.push({url,init:{...init,signal:null},body:init.body?JSON.parse(init.body):null});if(options.fetch)return options.fetch(url,init,module.exports);return new Response(typeof body==='string'?body:JSON.stringify(body),{status:options.status||200})}});
  return{auth:module.exports,calls,create:(role={id:ROLE,version:7},scope=BR,password='synthetic-password')=>module.exports.createDashboardRoleAccount(session,' Synthetic-New ',password,role,scope)};
 }
 test('new creation client sends only explicit actual role/version/scope and validates authoritative created identity',async()=>{
@@ -29,6 +30,18 @@ test('creation rejects malformed or crossing platform constraints before sending
  for(const scope of [{mode:'all',countries:[],platforms:[]},{mode:'selected',countries:['IN'],platforms:null},...[
   {country:'PK',platform:'A'},{country:'IN',platform:'A\u0085B'},{country:'IN',platform:'A\u0001B'},{country:'IN',platform:'😀'.repeat(201)},{country:'IN',platform:'A',extra:true},
  ].map(pair=>({mode:'selected',countries:['IN'],platforms:[pair]})),{mode:'selected',countries:[],platforms:Array.from({length:501},(_,i)=>({country:'IN',platform:'A'+i}))}]){const c=client();await assert.rejects(c.create(undefined,scope),/数据范围/);assert.equal(c.calls.length,0);}
+});
+test('creation and authoritative acknowledgements use the same confirmed country-aware alias identity',async()=>{
+ const requested={mode:'selected',countries:[],platforms:[{country:'IN',platform:'RAJALOTTERY'},{country:'IN',platform:'RAJA'},{country:'PK',platform:'3PATISUPER'},{country:'PK',platform:'92.GAME'}]};
+ const canonical={mode:'selected',countries:[],platforms:[{country:'IN',platform:'RAJA'},{country:'PK',platform:'3PATTI-SUPER'},{country:'PK',platform:'92GAME'}]};
+ for(const returned of [canonical,requested]){
+  const h=client({...response,account:{...response.account,data_scope:returned}}),result=await h.create(undefined,requested);
+  assert.deepEqual(h.calls[0].body.data_scope,canonical);assert.deepEqual(plain(result.account.data_scope),canonical);assert.equal(h.calls.length,1);
+ }
+ for(const added of [{country:'PK',platform:'RAJA'},{country:'IN',platform:'92GAME'},{country:'IN',platform:'RAJA(AR)'},{country:'PK',platform:'92-GAME'}]){
+  const h=client({...response,account:{...response.account,data_scope:{...canonical,platforms:[...canonical.platforms,added]}}});
+  await assert.rejects(h.create(undefined,requested),/待核对/);assert.equal(h.calls.length,1,'broadened acknowledgements must not trigger retries');
+ }
 });
 test('unknown or mismatched creation acknowledgements cannot become success; no mutation is automatically retried',async()=>{
  for(const body of [{}, {ok:true},{...response,ok:false},'invalid JSON',...[
