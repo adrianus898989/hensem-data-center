@@ -85,15 +85,27 @@ test('country/platform scope, denied session, aliases and unknown accounts remai
   await db.query("select set_config('test.scope',$1,false)",[JSON.stringify({targets:[]})]);assert.deepEqual((await call(db)).rows,[]);await db.exec("set test.denied='yes'");await assert.rejects(()=>call(db),/synthetic_session_denied/);
  }finally{await db.close();}
 });
-test('production UI exposes retained actual prior values but never shows pp/time deltas or infers YASH methods',async()=>{
+test('production UI compares four observed finite shares with completeness qualifiers, suppresses time deltas and preserves unknown YASH methods',async()=>{
  const file=path.join(repo,'tests/admin-withdraw-processing-duration-ui.test.cjs');
  const c=vm.createContext({__dirname:path.dirname(file),require:n=>n==='node:test'?()=>{}:createRequire(file)(n)});
  vm.runInContext(fs.readFileSync(file,'utf8').split("test('WG")[0]+';globalThis.setup=setup;',c);
  for(const source of ['NEWAR','KB']){
-  const row={source,country:'印度',platform:'Synthetic',total:100,success:70,rejected:10,autoCount:source==='KB'?null:40,manualCount:source==='KB'?null:50,unclassifiedCount:source==='KB'?100:10,avgSeconds:null,durationBasis:source==='KB'?'created_to_completed':'source_submitted_to_handled',classificationAvailable:source!=='KB',comparisonComparable:false,comparisonBasis:'source_coverage_not_aligned',previous:{total:100,success:70,rejected:10,autoCount:source==='KB'?null:30,manualCount:source==='KB'?null:60,avgSeconds:12,durationBasis:source==='KB'?'created_to_completed':'source_submitted_to_handled',classificationAvailable:source!=='KB'}};
-  const f=c.setup({rows:[row],total:1,totals:row,comparison:{complete:false}});f.page.render();const cells=f.tables.find(t=>t.headers.some(h=>h.includes('昨日处理用时'))).rows[0];
-  assert.match(cells[11],/12秒/);assert.match(cells[12],/不计算涨跌/);assert.doesNotMatch(cells.join(''),/withdraw-delta| pp/);
-  assert.match(cells[8],source==='KB'?/昨日 —/:/昨日 30\.00%/);
+  const row={source,country:'印度',platform:'Synthetic',total:100,success:70,rejected:10,autoCount:source==='KB'?null:40,manualCount:source==='KB'?null:50,unclassifiedCount:source==='KB'?100:10,avgSeconds:24,durationBasis:source==='KB'?'created_to_completed':'source_submitted_to_handled',classificationAvailable:source!=='KB',comparisonComparable:false,comparisonBasis:'source_coverage_not_aligned',previous:{total:200,success:120,rejected:10,autoCount:source==='KB'?null:60,manualCount:source==='KB'?null:120,unclassifiedCount:source==='KB'?200:20,avgSeconds:12,durationBasis:source==='KB'?'created_to_completed':'source_submitted_to_handled',classificationAvailable:source!=='KB'}};
+  const before=structuredClone(row),f=c.setup({rows:[row],total:1,totals:row,comparison:{complete:false}});f.page.render();const cells=f.tables.find(t=>t.headers.some(h=>h.includes('昨日处理用时'))).rows[0];
+  const observedShares=source==='KB'?[[4,'60.00%','+10.00 pp'],[5,'5.00%','+5.00 pp']]:[[4,'60.00%','+10.00 pp'],[5,'5.00%','+5.00 pp'],[8,'30.00%','+10.00 pp'],[9,'60.00%','-10.00 pp']];
+  for(const [index,prior,change]of observedShares){
+   assert(cells[index].includes('昨日 '+prior),source+' retained prior share '+index);
+   assert(cells[index].includes(change),source+' exact observed share delta '+index);
+   assert.match(cells[index],/title="按已入库数据计算；两期完整性尚未核验"/);
+  }
+  assert.match(cells[10],/24秒/);assert.match(cells[11],/12秒/);assert.match(cells[12],/不计算涨跌/);
+  assert.doesNotMatch(cells[12],/withdraw-delta| pp/,'known time values remain incomparable when coverage is unaligned');
+  if(source==='KB'){
+   for(const index of [6,7])assert.equal(cells[index],'—','unknown YASH method count remains unknown');
+   for(const index of [8,9]){assert.match(cells[index],/对比值未提供/);assert.doesNotMatch(cells[index],/withdraw-delta| pp|昨日|0\.00%|NaN|Infinity/);}
+   assert.equal(row.autoCount,null);assert.equal(row.manualCount,null);assert.equal(row.previous.autoCount,null);assert.equal(row.previous.manualCount,null);
+  }
+  assert.deepEqual(row,before,'rendering does not infer or change source facts');
  }
 });
 test('guarded patch keeps full function metadata/ACL, replays, and rejects unreviewed body/security drift',async()=>{
