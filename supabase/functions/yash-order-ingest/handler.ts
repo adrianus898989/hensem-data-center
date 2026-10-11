@@ -9,12 +9,16 @@ export const YASH_RAW_KEYS = [
 ] as const;
 const TEXT_FIELDS = ["uid", "child_order_no", "supplier_order_no", "supplier", "channel", "payment_method", "source_category", "order_category"];
 const MONEY_FIELDS = ["amount", "fee", "balance_before", "balance_after", "credited_amount", "discount_percent"];
+const WITHDRAW_NOTE_FIELDS = ["order_note", "risk_note"];
 const RECORD_KEYS = ["source_site", "order_type", "order_no", ...TEXT_FIELDS, "operator", ...MONEY_FIELDS,
-  "status", "created_at", "completed_at", "source_timezone", "is_first_order", "currency", "currency_basis", "raw_fields", "observed_at"];
+  "status", "created_at", "completed_at", "source_timezone", "is_first_order", "currency", "currency_basis", "raw_fields", "observed_at", ...WITHDRAW_NOTE_FIELDS];
 const RAW_LABELS = new Set(["供应商商户", "支付通道", "支付方式", "提现账户类型", "来源", "充值类型", "提现类型"]);
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const unsignedDecimal = /^[0-9]{1,16}(?:\.[0-9]{1,8})?$/;
 const signedDecimal = /^-?[0-9]{1,16}(?:\.[0-9]{1,8})?$/;
+// A displayed discount ratio is source metadata, not a nonnegative money amount.
+// Retain its sign/precision; the SQL column also stores it without rounding.
+const discountDecimal = /^-?[0-9]{1,16}(?:\.[0-9]{1,64})?$/;
 const instant = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)$/;
 type Json = Record<string, unknown>;
 function object(value: unknown): value is Json { return !!value && typeof value === "object" && !Array.isArray(value); }
@@ -47,6 +51,27 @@ function redactContact(value: string): string {
     .replace(/0x[a-f0-9]{40}|(?:bc1|tb1)[a-z0-9]{20,90}|\bT[1-9A-HJ-NP-Za-km-z]{33}\b/gi, "[已移除地址]")
     .replace(/\+?\d[\d\s().-]{5,}\d/g, "[已移除号码]")
     .replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+}
+export function sanitizeYashBusinessNote(value: unknown, identifiers: unknown[] = []): string | null {
+  if (value == null) return null;
+  if (typeof value !== "string" || Array.from(value).length > 2000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) invalid();
+  let clean = value.replace(/<[^>]*>/g, " ").replace(/(?:密码|密钥|秘钥|口令|令牌|账号|账户|卡号|账户名|姓名|银行|电话|手机|联系人|谷歌验证|password|secret|token|cookie|authorization|api[_ -]?key|account|phone)\s*[:：=]?\s*[^,，;；\n]+/gi, "[已隐藏]").replace(/(?:passwd|seed|totp|otp[_ -]?secret|助记词)\s*[:：=]\s*[^,，;；\n]+/gi, "[已隐藏]").replace(/\bbearer\s+[^\s,，;；]+/gi, "[已隐藏]");
+  clean = clean.replace(/https?:\/\/\S+|www\.\S+/gi, "[已移除链接]")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[已移除邮箱]")
+    .replace(/0x[a-f0-9]{40}|(?:bc1|tb1)[a-z0-9]{20,90}|\bT[1-9A-HJ-NP-Za-km-z]{33}\b/gi, "[已移除地址]")
+    .replace(/\+\d[\d\s().-]{5,}\d/g, "[已移除号码]");
+  const protectedIds = [...new Set(identifiers.filter((id): id is string => typeof id === "string" && id.length >= 7 && id.length <= 200))].sort((a, b) => b.length - a.length);
+  const replacements: Array<[string, string]> = [];
+  protectedIds.forEach((id, index) => {
+    let marker = '[业务标识' + String.fromCharCode(0xE100 + index) + ']';
+    while (clean.includes(marker)) marker += '甲';
+    const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    clean = clean.replace(new RegExp('(?<![A-Za-z0-9])' + escaped + '(?![A-Za-z0-9])', 'g'), () => marker);
+    replacements.push([marker, id]);
+  });
+  clean = redactContact(clean.replace(/@[A-Za-z0-9_]+|[A-Za-z0-9_+/=-]{24,}/g, "[已隐藏]"));
+  replacements.forEach(([marker, id]) => { clean = clean.replaceAll(marker, id); });
+  return clean;
 }
 export function sanitizeYashRaw(value: unknown): Json {
   if (!object(value)) invalid();
@@ -110,14 +135,22 @@ export function validateYashRequest(input: unknown, now = Date.now()): Json {
       const key = JSON.stringify([value.order_type, value.order_no]); if (seen.has(key)) invalid(); seen.add(key);
       for (const field of TEXT_FIELDS) if (value[field] != null && !text(value[field])) invalid();
       if (value.operator != null && (typeof value.operator !== "string" || value.operator.length > 200)) invalid();
+      const notes: Json = {};
+      for (const field of WITHDRAW_NOTE_FIELDS) if (Object.hasOwn(value, field)) {
+        if (value.order_type !== "withdrawal") invalid();
+        notes[field] = sanitizeYashBusinessNote(value[field], [value.order_no, value.child_order_no, value.supplier_order_no]);
+      }
       for (const field of MONEY_FIELDS) {
         const amount = value[field];
         if (field === "amount" && amount == null) invalid();
-        const rule = ["balance_before", "balance_after"].includes(field) ? signedDecimal : unsignedDecimal;
+        const rule = field === "discount_percent" ? discountDecimal : ["balance_before", "balance_after"].includes(field) ? signedDecimal : unsignedDecimal;
         if (amount != null && (typeof amount !== "string" || !rule.test(amount))) invalid();
       }
       const created = timestamp(value.created_at, now), observed = timestamp(value.observed_at, now);
-      if (observed < created || value.completed_at != null && timestamp(value.completed_at, now) < created) invalid();
+      if (observed < created) invalid();
+      // Preserve source chronology anomalies; never clamp completion to creation.
+      // SQL readers flag reversed times and omit them from duration statistics.
+      if (value.completed_at != null) timestamp(value.completed_at, now);
       timezone(value.source_timezone);
       if (value.is_first_order != null && typeof value.is_first_order !== "boolean") invalid();
       if (value.currency != null && (typeof value.currency !== "string" || !/^[A-Z0-9]{3,8}$/.test(value.currency))) invalid();
@@ -125,7 +158,11 @@ export function validateYashRequest(input: unknown, now = Date.now()): Json {
         || value.currency_basis === 'token_type_unverified' && value.currency !== null
         || value.currency_basis === 'platform_default' && value.currency !== 'INR'
         || value.currency_basis === 'source_field' && value.currency == null) invalid();
-      return {...value, operator: typeof value.operator === "string" ? (/^operator-[a-f0-9]{16}$/.test(value.operator) ? value.operator : redactContact(value.operator) || null) : null, raw_fields: sanitizeYashRaw(value.raw_fields)};
+      const labels: Json = {};
+      for (const field of ["supplier", "channel", "payment_method", "source_category", "order_category"]) {
+        if (typeof value[field] === "string") labels[field] = redactContact(value[field]) || null;
+      }
+      return {...value, ...labels, ...notes, operator: typeof value.operator === "string" ? (/^operator-[a-f0-9]{16}$/.test(value.operator) ? value.operator : redactContact(value.operator) || null) : null, raw_fields: sanitizeYashRaw(value.raw_fields)};
     });
     return {...input, records};
   }

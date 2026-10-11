@@ -3,7 +3,8 @@
 
 持续运行并自动补历史：python yash_sync.py --loop
 连接本机 Chrome CDP，只读取已打开并登录的 YASH 页面；首次只需确认后台显示时区。
-充值、提现从 2026-10-01 补齐，每 10 分钟同步；无需建表或填写数据库密钥。
+充值、提现从 2026-10-01 按印度自然日续补，每 10 分钟同步；无需建表或填写数据库密钥。
+历史补齐后只更新增量并定点复查未完成订单，不每天重扫历史；已完成旧单若完成时间未变，不会自动全扫核对。
 充值、提现通道也每 10 分钟独立更新；只读取配置，不修改通道或下单测试。
 登录过期后在浏览器重新登录；程序会继续重试。配置时区：python yash_sync.py --refresh
 只检测：python yash_sync.py --check
@@ -11,8 +12,10 @@
 
 配置和断点统一保存在 ~/Desktop/PY_DATA/yashbet/，脚本目录只需保留本文件；电脑需保持开机联网。
 旧版同目录配置与断点会安全迁移；不要分享配置或激活版脚本。
-只上传订单与通道业务字段；不上传附件、图片、视频、PDF、银行卡号或订单备注。
-通道业务备注经过脱敏，不保留原始 HTML。
+只上传订单与通道业务字段；不上传附件、图片、视频、PDF或银行卡号；提现订单备注与风控备注仅保留脱敏业务文本。
+通道及订单业务备注经过脱敏，不保留原始 HTML。
+独立补提现历史备注：python yash_sync.py --backfill-notes-from 2026-10-09 --backfill-notes-to 2026-10-10（印度日期，结束日包含）。
+补备注使用独立断点；不重置订单、通道或未完成订单进度。先停止正在运行的同一份采集器，再执行补采，结束后恢复 --loop。
 """
 from __future__ import annotations
 
@@ -46,7 +49,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 UTC = timezone.utc
 LOG = logging.getLogger("yash-sync")
-COLLECTOR_VERSION = "2026.10.09.6"
+COLLECTOR_VERSION = "2026.10.11.10"
 # CDP / browser: fixed local debugging endpoint; existing YASH tabs only.
 CDP_HTTP = "http://127.0.0.1:9222"
 CHECK_INTERVAL_SECONDS = 10
@@ -205,7 +208,14 @@ def money(value, percent=False):
         result = Decimal(value.replace(",", "").removesuffix("%") if percent else value.replace(",", ""))
         if not result.is_finite():
             raise InvalidOperation
-        return format(result, "f")
+        # Remove only representations that are numerically identical. Never
+        # round source amounts or turn an actual negative amount positive.
+        if result == 0:
+            result = abs(result)
+        formatted = format(result, "f")
+        if "." in formatted and len(formatted.split(".", 1)[1]) > 8:
+            formatted = formatted.rstrip("0").rstrip(".")
+        return formatted
     except InvalidOperation:
         raise SyncError("发现无法解析的金额/比例；未推进同步进度") from None
 
@@ -228,6 +238,7 @@ class Page:
     rows: list[dict]
     total: int
     pages: int
+    note_headers_complete: bool = False
 
 
 def channel_note(value):
@@ -236,6 +247,38 @@ def channel_note(value):
     value = re.sub(r"(?:密码|密钥|秘钥|口令|令牌|账号|账户|卡号|账户名|姓名|银行|电话|手机|联系人|谷歌验证|password|secret|token|cookie|authorization|api[_ -]?key|account|phone)\s*[:：=]?\s*[^,，;；\n]+", "[已隐藏]", value, flags=re.I)
     value = re.sub(r"https?://\S+|www\.\S+|[^\s@]+@[^\s@]+|@[A-Za-z0-9_]+|(?:\d[\s().+-]*){7,}|[A-Za-z0-9_+/=-]{24,}", "[已隐藏]", value, flags=re.I)
     return nullable(value[:400])
+
+
+def order_business_note(value, identifiers=()):
+    """Keep optional safe business text; unknown never becomes source-empty."""
+    if value is None:
+        return None, False
+    if not isinstance(value, str) or len(value) > 2000 or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", value):
+        return None, True
+    value = re.sub(r"<[^>]*>", " ", value)
+    value = re.sub(r"(?:密码|密钥|秘钥|口令|令牌|账号|账户|卡号|账户名|姓名|银行|电话|手机|联系人|谷歌验证|password|secret|token|cookie|authorization|api[_ -]?key|account|phone)\s*[:：=]?\s*[^,，;；\n]+", "[已隐藏]", value, flags=re.I)
+    value = re.sub(r"\bbearer\s+[^\s,，;；]+", "[已移除凭据]", value, flags=re.I)
+    # Do not protect identifiers inside contact, URL or credential assignments.
+    value = re.sub(r"https?://\S+|www\.\S+", "[已移除链接]", value, flags=re.I)
+    value = re.sub(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", "[已移除邮箱]", value, flags=re.I)
+    value = re.sub(r"0x[a-f0-9]{40}|(?:bc1|tb1)[a-z0-9]{20,90}|\bT[1-9A-HJ-NP-Za-km-z]{33}\b", "[已移除地址]", value, flags=re.I)
+    value = re.sub(r"\+\d[\d\s().-]{5,}\d", "[已移除号码]", value)
+    protected = []
+    for identifier in sorted({x for x in identifiers if isinstance(x, str) and 7 <= len(x) <= 200}, key=len, reverse=True):
+        marker = "[业务标识" + chr(0xE100 + len(protected)) + "]"
+        while marker in value:
+            marker += "甲"
+        value, count = re.subn(r"(?<![A-Za-z0-9])" + re.escape(identifier) + r"(?![A-Za-z0-9])", lambda match: marker, value)
+        if count:
+            protected.append((marker, identifier))
+    value = re.sub(r"@[A-Za-z0-9_]+|[A-Za-z0-9_+/=-]{24,}", "[已隐藏]", value)
+    value = re.sub(r"\+?\d[\d\s().-]{5,}\d", "[已移除号码]", value)
+    value = " ".join(value.split())
+    for marker, identifier in protected:
+        value = value.replace(marker, identifier)
+    if len(value) > 2000:
+        return None, True
+    return value, False
 
 
 def channel_decimal(value, *, percent=False, signed=False):
@@ -380,6 +423,8 @@ def parse_page(html_text, order_type, source_site, site_timezone, observed_at):
     if isinstance(observed_at, datetime):
         observed_at = observed_at.astimezone(UTC).isoformat()
     result = []
+    unknown_note_fields = 0
+    note_headers_complete = order_type == "withdrawal" and {"订单备注", "风控备注"}.issubset(headers)
     for tr in table.walk("tr"):
         cells = [n for n in tr.children if isinstance(n, Node) and n.tag == "td"]
         if not cells:
@@ -402,6 +447,15 @@ def parse_page(html_text, order_type, source_site, site_timezone, observed_at):
         if first not in {None, "是", "否"}:
             raise SyncError("无法识别是否首单字段")
         currency, currency_basis = currency_facts(raw)
+        notes = {}
+        if order_type == "withdrawal":
+            columns = {h: cell_text(c) for h, c in zip(headers, cells) if h in {"订单备注", "风控备注"}}
+            identifiers = (order_no, raw.get("子订单号"), raw.get("三方订单号"))
+            for field, header in (("order_note", "订单备注"), ("risk_note", "风控备注")):
+                if header not in columns:
+                    continue
+                notes[field], unavailable = order_business_note(columns[header], identifiers)
+                unknown_note_fields += int(unavailable)
         result.append({
             "source_site": "yash", "order_type": order_type, "order_no": order_no,
             "uid": raw["UID"], "child_order_no": raw.get("子订单号"),
@@ -418,11 +472,13 @@ def parse_page(html_text, order_type, source_site, site_timezone, observed_at):
             "source_category": raw.get("来源"), "order_category": raw.get("充值类型", raw.get("提现类型")),
             "is_first_order": None if first is None else first == "是", "raw_fields": {key: value for key, value in raw.items() if value is None or len(value) <= 256},
             "observed_at": observed_at, "currency": currency, "currency_basis": currency_basis,
-            "operator": operator,
+            "operator": operator, **notes,
         })
+    if unknown_note_fields:
+        LOG.warning("本页 %d 个提现备注字段超长或格式不安全，按未知保留；订单仍继续同步，不表示源备注为空", unknown_note_fields)
     if (total == 0 and result) or (total > 0 and pages < 1):
         raise SyncError("分页总数与明细不一致")
-    return Page(result, total, pages)
+    return Page(result, total, pages, note_headers_complete)
 
 
 @dataclass
@@ -903,25 +959,40 @@ def channel_polling(cfg):
         worker.join(timeout=2)
 
 
-def collect_window(source, kind, time_type, start, end):
+def collect_window(source, kind, time_type, start, end, *, require_notes=False):
+    description = window_description(kind, time_type, start, end)
+    LOG.info("%s：开始读取第 1 页", description)
     first = source.fetch(kind, time_type, start, end, 1)
+    if require_notes and not first.note_headers_complete:
+        raise SyncError("提现备注补采缺少订单备注/风控备注真实表头，独立断点未推进")
     if first.total > MAX_RECEIPT_KEYS:
         raise WindowTooLarge("窗口超过完整性回执上限，将缩小时间范围")
     rows = list(first.rows)
+    LOG.info("%s：已读取第 1/%d 页，累计 %d/%d 笔", description, max(1, first.pages), len(rows), first.total)
+    last_progress = time.monotonic()
     for page_no in range(2, first.pages + 1):
         page = source.fetch(kind, time_type, start, end, page_no)
+        if require_notes and not page.note_headers_complete:
+            raise SyncError("提现备注补采分页缺少备注表头，独立断点未推进")
         if (page.total, page.pages) != (first.total, first.pages) or not page.rows:
             raise SyncError("分页总数变化或缺页；窗口将重试，进度未推进")
         rows.extend(page.rows)
+        if time.monotonic() - last_progress >= 15:
+            LOG.info("%s：已读取第 %d/%d 页，累计 %d/%d 笔", description, page_no, first.pages, len(rows), first.total)
+            last_progress = time.monotonic()
     keys = {(row["source_site"], row["order_type"], row["order_no"]) for row in rows}
     if len(rows) != first.total or len(keys) != first.total:
         raise SyncError("分页出现重复/缺失订单；窗口将重试，进度未推进")
     # Fetch page 1 again to detect page shifts during this window.
     if first.pages > 1:
         confirm = source.fetch(kind, time_type, start, end, 1)
+        if require_notes and not confirm.note_headers_complete:
+            raise SyncError("提现备注补采复核页缺少备注表头，独立断点未推进")
         if (confirm.total, confirm.pages) != (first.total, first.pages) or [r["order_no"] for r in confirm.rows] != [r["order_no"] for r in first.rows]:
             raise SyncError("分页过程中排序变化；窗口将重试")
-    return filter_window(rows, time_type, start, end)
+    result = filter_window(rows, time_type, start, end)
+    LOG.info("%s：%d 页已读齐并复核，本窗口 %d 笔；准备上传", description, max(1, first.pages), len(result))
+    return result
 
 
 def filter_window(rows, time_type, start, end):
@@ -942,6 +1013,97 @@ def filter_window(rows, time_type, start, end):
     return result
 
 
+def validate_order_upload(rows):
+    """Match receiver field constraints locally without logging source values."""
+    now = datetime.now(UTC)
+    seen = set()
+    labels = {
+        "order_no": "订单号", "status": "状态", "uid": "UID", "child_order_no": "子订单号",
+        "supplier_order_no": "三方订单号", "supplier": "供应商", "channel": "支付通道",
+        "payment_method": "支付方式", "source_category": "来源", "order_category": "订单类型",
+        "operator": "操作人", "amount": "金额", "fee": "手续费", "balance_before": "充值前余额",
+        "balance_after": "提现后余额", "credited_amount": "充值总金额", "discount_percent": "优惠比例",
+        "created_at": "创建时间", "completed_at": "完成时间", "observed_at": "采集时间",
+        "source_timezone": "后台时区", "currency": "币种", "currency_basis": "币种依据",
+        "is_first_order": "是否首单", "raw_fields": "原始业务字段", "scope": "业务范围",
+        "order_note": "订单备注", "risk_note": "风控备注",
+    }
+    for index, row in enumerate(rows, 1):
+        def fail(field, reason):
+            raise SyncError(f"上传前校验未通过：本批第 {index} 笔，{labels[field]}{reason}；该窗口未确认，断点未推进")
+        def valid_text(value):
+            return (isinstance(value, str) and 0 < len(value.encode("utf-16-le")) // 2 <= 200
+                and value.strip() == value and not re.search(r"[\x00-\x1f\x7f]", value))
+        if not isinstance(row, dict) or row.get("source_site") != "yash" or row.get("order_type") not in ("deposit", "withdrawal"):
+            fail("scope", "无效")
+        for field in ("order_no", "status", "uid", "child_order_no", "supplier_order_no", "supplier", "channel", "payment_method", "source_category", "order_category"):
+            value = row.get(field)
+            if value is None and field not in ("order_no", "status"):
+                continue
+            if not valid_text(value):
+                fail(field, "缺失、超长或含控制字符")
+        key = (row["order_type"], row["order_no"])
+        if key in seen:
+            fail("order_no", "在本批重复")
+        seen.add(key)
+        for field in ("amount", "fee", "balance_before", "balance_after", "credited_amount", "discount_percent"):
+            value = row.get(field)
+            if value is None and field != "amount":
+                continue
+            # Source discount is descriptive metadata, not a payment amount.
+            # Preserve its sign and precision; never round it to unblock a batch.
+            pattern = (r"-?[0-9]{1,16}(?:\.[0-9]{1,64})?" if field == "discount_percent" else
+                r"-?[0-9]{1,16}(?:\.[0-9]{1,8})?" if field in ("balance_before", "balance_after") else
+                r"[0-9]{1,16}(?:\.[0-9]{1,8})?")
+            if not isinstance(value, str) or not re.fullmatch(pattern, value):
+                if field == "discount_percent":
+                    fail(field, "格式无效或超出16位整数/64位小数范围，需核对源记录")
+                fail(field, "缺失、为不允许的负数或超出16位整数/8位小数范围")
+        times = {}
+        for field in ("created_at", "observed_at", "completed_at"):
+            value = row.get(field)
+            if value is None and field == "completed_at":
+                continue
+            if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)", value):
+                fail(field, "缺失或不是UTC格式")
+            try:
+                parsed = datetime.fromisoformat(value)
+            except ValueError:
+                fail(field, "日期无效")
+            if not datetime(2020, 1, 1, tzinfo=UTC) <= parsed <= now + timedelta(minutes=5):
+                fail(field, "超出有效范围，请检查电脑时间及后台时区")
+            times[field] = parsed
+        if times["observed_at"] < times["created_at"]:
+            fail("observed_at", "早于创建时间，请检查电脑时间及后台时区")
+        # Some source orders really report completion before creation. Preserve
+        # both valid instants; the reader flags the anomaly and excludes latency.
+        try:
+            site_zone(row.get("source_timezone"))
+        except (SyncError, TypeError, ValueError):
+            fail("source_timezone", "无效")
+        if row.get("is_first_order") is not None and type(row["is_first_order"]) is not bool:
+            fail("is_first_order", "无效")
+        currency, basis = row.get("currency"), row.get("currency_basis")
+        if currency is not None and (not isinstance(currency, str) or not re.fullmatch(r"[A-Z0-9]{3,8}", currency)):
+            fail("currency", "无效")
+        if (basis not in ("source_field", "platform_default", "token_type_unverified")
+                or basis == "source_field" and currency is None
+                or basis == "platform_default" and currency != "INR"
+                or basis == "token_type_unverified" and currency is not None):
+            fail("currency_basis", "与币种不一致")
+        for field in ("order_note", "risk_note"):
+            if field not in row:
+                continue
+            value = row[field]
+            if row["order_type"] != "withdrawal":
+                fail(field, "仅允许提现记录")
+            if value is not None and (not isinstance(value, str) or len(value) > 2000
+                    or value != value.strip() or re.search(r"[\x00-\x1f\x7f]", value)):
+                fail(field, "不是单行脱敏业务文本或超过2000字")
+        if not isinstance(row.get("raw_fields"), dict):
+            fail("raw_fields", "格式无效")
+
+
 class UploadClient:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -952,6 +1114,8 @@ class UploadClient:
         return {"X-Yash-Key": YASH_UPLOAD_TOKEN, "Content-Type": "application/json", "Accept": "application/json"}
 
     def request(self, payload):
+        if payload.get("action") == "ingest":
+            validate_order_upload(payload["records"])
         body = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
         if len(body) > MAX_REQUEST_BYTES:
             raise WindowTooLarge("上传请求超过大小上限，将拆分后重新核验")
@@ -1029,6 +1193,11 @@ class State:
         self.db.execute("insert into progress values (?,?,?) on conflict(namespace,name) do update set value=excluded.value", (self.namespace, name, value))
         self.db.commit()
 
+    def set_many(self, values):
+        with self.db:
+            self.db.executemany("insert into progress values (?,?,?) on conflict(namespace,name) do update set value=excluded.value",
+                [(self.namespace, name, value) for name, value in values.items()])
+
     def close(self):
         self.db.close()
 
@@ -1077,31 +1246,137 @@ def process_lock(path):
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def window_sync(source, target, cfg, kind, mode, start, end):
+class WindowSyncError(SyncError):
+    """A safe failure already labeled with its precise source window."""
+
+
+class CycleSyncError(SyncError):
+    """Independent streams have finished their attempts, but some remain incomplete."""
+
+
+def india_day_start(value):
+    return value.astimezone(site_zone("UTC+05:30")).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+
+
+def india_day_window_end(start, limit):
+    # Fixed India business days; source display timezone only affects API formatting.
+    return min(india_day_start(start) + timedelta(days=1), limit)
+
+
+def window_description(kind, mode, start, end):
+    business = {"deposit": "充值", "withdrawal": "提现"}[kind]
+    basis = {"createTime": "创建", "completeTime": "完成"}[mode]
+    zone = site_zone("UTC+05:30")
+    return f"{business}{basis}（印度时间 {start.astimezone(zone):%Y-%m-%d %H:%M:%S} 至 {end.astimezone(zone):%Y-%m-%d %H:%M:%S}）"
+
+
+def window_failure(error, kind, mode, start, end):
+    if isinstance(error, WindowSyncError):
+        return error
+    return WindowSyncError(f"{window_description(kind, mode, start, end)}未完成：{error}")
+
+
+def log_day_progress(progress, phase):
+    for day, streams in sorted(progress.items()):
+        labels = []
+        for (kind, mode), count in streams.items():
+            business = {"deposit": "充值", "withdrawal": "提现"}[kind]
+            basis = {"createTime": "创建", "completeTime": "完成"}[mode]
+            labels.append(f"{business}{basis} {count} 笔")
+        LOG.info("印度 %s %s：本轮已确认 %s；断点已保存", day, phase, "、".join(labels))
+
+
+def window_sync(source, target, cfg, kind, mode, start, end, *, require_notes=False):
     if end - start > timedelta(seconds=MAX_WINDOW_SECONDS):
         middle = start + timedelta(seconds=int((end - start).total_seconds()) // 2)
-        return window_sync(source, target, cfg, kind, mode, start, middle) + window_sync(source, target, cfg, kind, mode, middle, end)
+        return window_sync(source, target, cfg, kind, mode, start, middle, require_notes=require_notes) + window_sync(source, target, cfg, kind, mode, middle, end, require_notes=require_notes)
     last = None
     for attempt in range(3):
         try:
-            rows = collect_window(source, kind, mode, start, end)
+            rows = collect_window(source, kind, mode, start, end, require_notes=True) if require_notes else collect_window(source, kind, mode, start, end)
             snapshot_at = datetime.now(UTC)
-            target.upsert(rows)
+            description = window_description(kind, mode, start, end)
+            reversed_times = 0
+            for row in rows:
+                try:
+                    if row.get("completed_at") is not None and datetime.fromisoformat(row["completed_at"]) < datetime.fromisoformat(row["created_at"]):
+                        reversed_times += 1
+                except (ValueError, TypeError, KeyError):
+                    # Malformed timestamps still fail the ordinary upload preflight.
+                    pass
+            if reversed_times:
+                LOG.warning("%s：%d 笔源完成时间早于创建时间；保留原始时间，不修正或跳过订单", description, reversed_times)
+            batch_size = max(1, min(500, int(cfg.get("batch_size", 200))))
+            batch_count = (len(rows) + batch_size - 1) // batch_size
+            LOG.info("%s：开始上传 %d 笔，共 %d 批", description, len(rows), batch_count)
+            last_progress = time.monotonic()
+            if not rows:
+                target.upsert(rows)
+            for offset in range(0, len(rows), batch_size):
+                batch = rows[offset:offset + batch_size]
+                target.upsert(batch)
+                confirmed = offset + len(batch)
+                if confirmed == len(rows) or time.monotonic() - last_progress >= 15:
+                    LOG.info("%s：已确认上传 %d/%d 批、%d/%d 笔", description, offset // batch_size + 1, batch_count, confirmed, len(rows))
+                    last_progress = time.monotonic()
+            LOG.info("%s：正在核验完整窗口回执；核验通过后才保存断点", description)
             target.receipt(kind, mode, start, end, rows, snapshot_at)
-            LOG.info("%s %s 窗口 %s..%s：%d 条已入库并核验", kind, mode, start.isoformat(), end.isoformat(), len(rows))
+            LOG.info("%s：%d 笔入库及完整性核验均已确认", description, len(rows))
             return rows
         except WindowTooLarge:
             seconds = int((end - start).total_seconds())
             if seconds <= 1:
-                raise SyncError("一秒窗口仍超过回执上限，未推进断点，请联系维护人员") from None
+                raise window_failure(SyncError("一秒窗口仍超过回执上限，未推进断点，请联系维护人员"), kind, mode, start, end) from None
             middle = start + timedelta(seconds=seconds // 2)
-            return window_sync(source, target, cfg, kind, mode, start, middle) + window_sync(source, target, cfg, kind, mode, middle, end)
+            return window_sync(source, target, cfg, kind, mode, start, middle, require_notes=require_notes) + window_sync(source, target, cfg, kind, mode, middle, end, require_notes=require_notes)
         except SyncError as exc:
             last = exc
             if "分页" not in str(exc):
-                raise
+                raise window_failure(exc, kind, mode, start, end) from None
             time.sleep(2 ** attempt)
-    raise last
+    raise window_failure(last, kind, mode, start, end) from None
+
+
+def notes_backfill_bounds(first_day, last_day, now):
+    if not isinstance(first_day, str) or not isinstance(last_day, str) or not re.fullmatch(r"20[0-9]{2}-[0-9]{2}-[0-9]{2}", first_day) or not re.fullmatch(r"20[0-9]{2}-[0-9]{2}-[0-9]{2}", last_day):
+        raise SyncError("备注补采日期须为 YYYY-MM-DD")
+    try:
+        start = datetime.fromisoformat(first_day).replace(tzinfo=site_zone("UTC+05:30")).astimezone(UTC)
+        end = (datetime.fromisoformat(last_day).replace(tzinfo=site_zone("UTC+05:30")) + timedelta(days=1)).astimezone(UTC)
+    except (ValueError, OverflowError):
+        raise SyncError("备注补采日期无效") from None
+    if start >= end or start < datetime(2020, 1, 1, tzinfo=site_zone("UTC+05:30")).astimezone(UTC) or end > now:
+        raise SyncError("备注补采范围须为已结束的印度自然日，开始日不能晚于结束日")
+    return start, end
+
+
+def run_notes_backfill(cfg, state, source, target, start, end):
+    """Explicit history replay; never mutate four-stream/reconcile/watched state."""
+    name = "withdrawal/notes_v1/createTime/" + start.isoformat() + "/" + end.isoformat()
+    checkpoint = state.get(name)
+    try:
+        cursor = datetime.fromisoformat(checkpoint) if checkpoint else start
+        if cursor.tzinfo is None or not start <= cursor <= end:
+            raise ValueError
+        unknown = int(state.get(name + "/unknown_fields") or 0)
+        if unknown < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise SyncError("独立备注断点无效，未重置任何原始进度，请保留状态库") from None
+    target.verify()
+    LOG.info("提现备注独立补采：印度 %s 至 %s，保留原订单/通道断点和未完成订单队列",
+        start.astimezone(site_zone("UTC+05:30")).strftime("%Y-%m-%d"),
+        (end - timedelta(seconds=1)).astimezone(site_zone("UTC+05:30")).strftime("%Y-%m-%d"))
+    while cursor < end:
+        window_end = india_day_window_end(cursor, end)
+        rows = window_sync(source, target, cfg, "withdrawal", "createTime", cursor, window_end, require_notes=True)
+        unknown += sum(row.get(field) is None for row in rows for field in ("order_note", "risk_note"))
+        state.set_many({name: window_end.isoformat(), name + "/unknown_fields": str(unknown)})
+        cursor = window_end
+    if unknown:
+        LOG.warning("提现备注补采日期已处理，仍有 %d 个字段为未知/未补齐；不表示源空或全部备注完整", unknown)
+    else:
+        LOG.info("提现备注补采日期已处理，所有读取字段均为已采集文本或源空；不认证订单统计完整性")
 
 
 def run_cycle(cfg, state, source, target, budget_seconds=None):
@@ -1110,7 +1385,13 @@ def run_cycle(cfg, state, source, target, budget_seconds=None):
     now = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=int(cfg.get("settle_seconds", 60)))
     if cfg.start > now:
         raise SyncError("补抓开始日期晚于当前可抓取时间")
-    width = timedelta(seconds=int(cfg.get("window_seconds", 3600)))
+    failures = []
+    def record_failure(label, error):
+        failures.append(label)
+        LOG.error("%s失败：%s；该项保留原断点，继续其他采集流", label, error)
+    def finish_failures():
+        if failures:
+            raise CycleSyncError("本轮部分未完成（" + "、".join(failures) + "）；其他已确认进度已保存，失败项下一轮自动重试")
     positions = {}
     for kind in ENDPOINTS:
         for mode in ("createTime", "completeTime"):
@@ -1120,43 +1401,80 @@ def run_cycle(cfg, state, source, target, budget_seconds=None):
             overlap = timedelta(seconds=int(cfg.get("overlap_seconds", 3600)))
             # Rewind only when near the current head; historical cursors must make forward progress.
             positions[(kind, mode)] = max(cfg.start, cursor - overlap) if cursor >= now - overlap else cursor
-    if budget_seconds and any(start < now - width for start in positions.values()):
-        LOG.info("先同步当前窗口，历史补抓按保存进度分批继续")
+    if budget_seconds and any(start < india_day_start(now) for start in positions.values()):
+        LOG.info("先同步当前增量；历史按印度自然日补抓，已有小时断点接着补到当天结束")
+        current_counts = []
         for kind in ENDPOINTS:
             for mode in ("createTime", "completeTime"):
-                rows = window_sync(source, target, cfg, kind, mode, max(cfg.start, now - timedelta(seconds=int(cfg.get("overlap_seconds", 3600)))), now)
-                state.track(rows)
+                label = ("充值" if kind == "deposit" else "提现") + ("创建" if mode == "createTime" else "完成")
+                try:
+                    rows = window_sync(source, target, cfg, kind, mode, max(cfg.start, now - timedelta(seconds=int(cfg.get("overlap_seconds", 3600)))), now)
+                    state.track(rows)
+                    current_counts.append(f"{label} {len(rows)} 笔")
+                except SyncError as exc:
+                    record_failure("当前增量" + label, exc)
+        if current_counts:
+            LOG.info("印度 %s 当前增量已确认：%s；历史断点继续保留",
+                     now.astimezone(site_zone("UTC+05:30")).strftime("%Y-%m-%d %H:%M"), "、".join(current_counts))
     pending = state.pending(int(cfg.get("pending_checks_per_cycle", 200)))
     checked = 0
+    pending_failed = set()
     pending_deadline = min(deadline, time.monotonic() + budget_seconds * 0.15) if budget_seconds else deadline
     for kind, order_no, created_at in pending:
         if time.monotonic() >= pending_deadline:
             break
-        rows = source.fetch_order(kind, order_no, created_at)
-        target.upsert(rows)
-        state.track(rows)
-        state.mark_checked(kind, order_no)
-        checked += 1
-    LOG.info("本轮复查 %d 笔未完成旧订单（分批轮询）", checked)
-    # Round robin, with durable cursors per time view, gives every stream backfill time.
-    while any(start < now for start in positions.values()):
-        for (kind, mode), start in list(positions.items()):
-            if start >= now:
-                continue
-            end = min(start + width, now)
-            rows = window_sync(source, target, cfg, kind, mode, start, end)
+        if kind in pending_failed:
+            continue
+        try:
+            rows = source.fetch_order(kind, order_no, created_at)
+            target.upsert(rows)
             state.track(rows)
-            # Both page reads and all write batches must succeed before committing.
-            state.set(f"{kind}/{mode}", end.isoformat())
-            positions[(kind, mode)] = end
-            if time.monotonic() >= deadline:
-                LOG.info("本轮补抓时间用完，下轮先同步当前窗口再从断点继续")
+            state.mark_checked(kind, order_no)
+            checked += 1
+        except SyncError as exc:
+            pending_failed.add(kind)
+            record_failure(("充值" if kind == "deposit" else "提现") + "未完成旧单复查", exc)
+    if checked:
+        LOG.info("本轮复查 %d 笔未完成旧订单（分批轮询）", checked)
+    # Round robin, with durable cursors per time view, gives every stream backfill time.
+    failed_streams = set()
+    attempted_streams = {key for key, cursor in positions.items() if cursor >= now}
+    while any(start < now and key not in failed_streams for key, start in positions.items()):
+        progress = {}
+        for (kind, mode), start in list(positions.items()):
+            if start >= now or (kind, mode) in failed_streams:
+                continue
+            end = india_day_window_end(start, now)
+            attempted_streams.add((kind, mode))
+            try:
+                rows = window_sync(source, target, cfg, kind, mode, start, end)
+                state.track(rows)
+                # Both page reads and all write batches must succeed before committing.
+                state.set(f"{kind}/{mode}", end.isoformat())
+                positions[(kind, mode)] = end
+                day = start.astimezone(site_zone("UTC+05:30")).strftime("%Y-%m-%d")
+                progress.setdefault(day, {})[(kind, mode)] = len(rows)
+            except SyncError as exc:
+                failed_streams.add((kind, mode))
+                label = ("充值" if kind == "deposit" else "提现") + ("创建" if mode == "createTime" else "完成")
+                record_failure(label, window_failure(exc, kind, mode, start, end))
+            # A slow failed stream must not consume the entire budget every cycle
+            # before the other streams get even their first independent attempt.
+            if time.monotonic() >= deadline and (not failures or len(attempted_streams) == len(positions)):
+                log_day_progress(progress, "同步")
+                LOG.info("本轮补抓时间用完，下轮先同步当前增量，再按保存日期继续")
+                finish_failures()
                 return
-    # Daily replay catches status edits without completeTime inside this configured horizon.
+        log_day_progress(progress, "同步")
+    finish_failures()
+    # An optional daily replay catches edits with no completeTime change. It is off
+    # by default: old configurations' reconcile_days must not silently re-read a
+    # completed historical backfill. Pending-order checks and completion deltas stay on.
     last = state.get("reconcile")
+    reconcile_enabled = cfg.get("reconcile_enabled", False) is True
     # Initial backfill has already replayed every creation window.
-    due = last is not None and (now - datetime.fromisoformat(last)).total_seconds() >= int(cfg.get("reconcile_interval_seconds", 86400))
-    planned_end = state.get("reconcile_target")
+    due = reconcile_enabled and last is not None and (now - datetime.fromisoformat(last)).total_seconds() >= int(cfg.get("reconcile_interval_seconds", 86400))
+    planned_end = state.get("reconcile_target") if reconcile_enabled else None
     if due and not planned_end:
         planned_end = now.isoformat()
         start = max(cfg.start, now - timedelta(days=int(cfg.get("reconcile_days", 7))))
@@ -1165,22 +1483,27 @@ def run_cycle(cfg, state, source, target, budget_seconds=None):
         state.set("reconcile_target", planned_end)
     if planned_end:
         reconcile_end = datetime.fromisoformat(planned_end)
+        progress = {}
         for kind in ENDPOINTS:
             start = datetime.fromisoformat(state.get(f"reconcile/{kind}"))
             while start < reconcile_end:
-                end = min(start + width, reconcile_end)
+                end = india_day_window_end(start, reconcile_end)
                 rows = window_sync(source, target, cfg, kind, "createTime", start, end)
                 state.track(rows)
                 state.set(f"reconcile/{kind}", end.isoformat())
+                day = start.astimezone(site_zone("UTC+05:30")).strftime("%Y-%m-%d")
+                progress.setdefault(day, {})[(kind, "createTime")] = len(rows)
                 start = end
                 if time.monotonic() >= deadline:
-                    LOG.info("每日复查分批进行，下轮按断点继续")
+                    log_day_progress(progress, "每日状态复核")
+                    LOG.info("每日状态复核分批进行，下轮按日期断点继续；仅复核创建记录，不重扫四条历史流")
                     return
+        log_day_progress(progress, "每日状态复核")
         state.set("reconcile", planned_end)
         state.set("reconcile_target", "")
     elif last is None:
         state.set("reconcile", now.isoformat())
-    LOG.info("本轮完成；充值、提现四个时间视图已追平")
+    LOG.info("本轮完成；充值、提现创建与完成记录已同步至印度 %s", now.astimezone(site_zone("UTC+05:30")).strftime("%Y-%m-%d %H:%M"))
 
 
 def application_data_directory():
@@ -1362,8 +1685,8 @@ def prepare_config(path, refresh=False):
         data = {
             "base_url": "https://yash.y-o-admin.com", "backfill_start": "2026-10-01 00:00:00", "backfill_timezone": "UTC+05:30",
             "interval_seconds": SYNC_INTERVAL_SECONDS, "page_limit": 1000,
-            "window_seconds": 3600, "overlap_seconds": 3600, "settle_seconds": 60,
-            "reconcile_days": 7, "reconcile_interval_seconds": 86400,
+            "window_seconds": 86400, "overlap_seconds": 3600, "settle_seconds": 60,
+            "reconcile_enabled": False, "reconcile_days": 7, "reconcile_interval_seconds": 86400,
             "pending_checks_per_cycle": 200, "cycle_budget_seconds": 480,
             "request_delay_seconds": 0.25, "batch_size": 200, "max_pages": 10000,
             "state_file": "state/progress.sqlite3", "lock_file": "state/sync.lock",
@@ -1391,8 +1714,13 @@ def main():
     group.add_argument("--check", action="store_true", help="只读检测来源和 Supabase，不写入")
     group.add_argument("--once", action="store_true", help="补抓/同步一轮，完成后退出")
     group.add_argument("--loop", action="store_true", help="订单和通道均每10分钟更新；自动补抓历史，临时失败保留断点并继续")
+    parser.add_argument("--backfill-notes-from", help="独立补提现备注的印度开始日 YYYY-MM-DD")
+    parser.add_argument("--backfill-notes-to", help="独立补提现备注的印度结束日（包含），与开始日一起使用")
     args = parser.parse_args()
-    if not (args.check or args.once or args.setup or args.refresh):
+    notes_requested = args.backfill_notes_from is not None or args.backfill_notes_to is not None
+    if notes_requested and (not args.backfill_notes_from or not args.backfill_notes_to or args.check or args.once or args.setup or args.refresh or args.loop):
+        parser.error("补备注请同时提供 --backfill-notes-from/--backfill-notes-to，且不与其它运行模式混用")
+    if not notes_requested and not (args.check or args.once or args.setup or args.refresh):
         args.loop = True
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     LOG.info("YASH CDP 版本 %s · 固定本机9222 · 只读采集", COLLECTOR_VERSION)
@@ -1431,6 +1759,11 @@ def main():
         identity = [YASH_UPLOAD_URL, "schema_version:1", cfg.get("base_url"), cfg.get("site_timezone"), cfg.get("backfill_start"), cfg.get("backfill_timezone", "UTC+05:30")]
         namespace = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
         state = State(cfg.path("state_file", "state/progress.sqlite3"), namespace)
+        if notes_requested:
+            now = datetime.now(UTC).replace(microsecond=0) - timedelta(seconds=int(cfg.get("settle_seconds", 60)))
+            start, end = notes_backfill_bounds(args.backfill_notes_from, args.backfill_notes_to, now)
+            run_notes_backfill(cfg, state, source, target, start, end)
+            return 0
         channels_ok = channel_sync_cycle(source, target) if args.once else True
         with channel_polling(cfg) if args.loop else contextlib.nullcontext():
             next_due = time.monotonic() + (0 if args.once or RUN_ON_START else CHECK_INTERVAL_SECONDS)
