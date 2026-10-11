@@ -58,3 +58,12 @@ test('leaving a trend read or changing filters prevents a late response from rep
   const h=await ready();await h.c.liveQuery();const wait=deferred();h.setHandler(q=>q.action==='aggregate'?wait.promise:aggregate());const run=h.c.liveReferenceSet('view','trend');await settle();change(h);const results=h.L.results;wait.resolve(response(request({view:'full'}),P,{total:999}));await run;assert.equal(h.L.results,results);assert(!h.L.results.some(r=>r.total===999));
  }
 });
+test('a new host query replaces an unstarted aggregate without sending old filters or leaving a pending query',async()=>{
+ const h=await ready(),old=h.c.liveQuery();h.c.liveSet('provider','SYNTHETIC-NEW-SCOPE');const fresh=h.c.liveQuery();await Promise.all([old,fresh]);await settle();
+ assert.equal(queries(h).length,2,'only the current and previous windows under the new filters reach transport');assert(queries(h).every(q=>q.providers?.length===1&&q.providers[0]==='SYNTHETIC-NEW-SCOPE'));assert.equal(h.L.results.length,1);assert.equal(h.L.results[0].total,65);assert.equal(h.L.queryFailures.length,0);assert.equal(h.L.loading,false);assert.equal(stats(h).inflight,0);assert.equal(stats(h).entries,2);
+});
+test('a bounded multi-day failure caches only completed leaves and retry preserves their exact clocks',async()=>{
+ const h=await ready(),from='2026-09-19T18:30:00.000Z',middle='2026-09-20T18:30:00.000Z',last='2026-09-21T18:30:00.000Z',end='2026-09-22T00:30:00.000Z',q=request({startAt:from,endAt:end});let failed=true;
+ h.setHandler(r=>{if(r.startAt===middle&&failed)throw Error('Synthetic source offline');return response(r);});await assert.rejects(h.c.__cacheTest.readAggregate(q,h.L.serial,false,true),/Synthetic source offline/);assert.equal(stats(h).entries,1,'an incomplete overall period is never cached as complete');assert.equal(h.c.__cacheTest.cachedAggregate(q),null);
+ failed=false;const r=await h.c.__cacheTest.readAggregate(q,h.L.serial,true,true);assert.equal(queries(h).filter(x=>x.startAt===from).length,1);assert.equal(queries(h).filter(x=>x.startAt===middle).length,2);assert(queries(h).some(x=>x.startAt===last&&x.endAt===end));assert.deepEqual(Array.from(r._parts,p=>[p.startAt,p.endAt]),[[from,middle],[middle,last],[last,end]]);assert.equal(r.total,195);const before=queries(h).length;assert.equal((await read(h,q)).total,195);assert.equal(queries(h).length,before,'only the successful contiguous whole range can be reused on the next query');
+});

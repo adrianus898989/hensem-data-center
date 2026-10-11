@@ -551,7 +551,7 @@ test('partial platform results stay labeled and cannot masquerade as complete to
 });
 
 test('later aggregate query wins over an earlier request regardless of completion order',async()=>{
- const h=await ready(),old=deferred(),fresh=deferred();let n=0;h.setHandler(()=>++n===1?old.promise:fresh.promise);const a=h.c.liveQuery();await settle();h.c.liveSet('provider','New scope');const b=h.c.liveQuery();fresh.resolve(aggregate(P,22));await b;old.resolve(aggregate(P,11));await a;assert.equal(h.L.results[0].total,22);assert.equal(h.L.loading,false);
+ const h=await ready(),old=deferred(),fresh=deferred();let n=0;h.setHandler(()=>++n===1?old.promise:fresh.promise);const a=h.c.liveQuery();await settle();assert.equal(n,1,'old aggregate transport has started before changing scope');h.c.liveSet('provider','New scope');const b=h.c.liveQuery();fresh.resolve(aggregate(P,22));await b;old.resolve(aggregate(P,11));await a;assert.equal(h.L.results[0].total,22);assert.equal(h.L.loading,false);
 });
 
 test('editing filters invalidates outstanding aggregate results and leaves explicit query state',async()=>{
@@ -1663,3 +1663,4 @@ test('current-page CSV excludes expanded reconciliation rows and their nested ev
  const nested={closest:selector=>selector===expanded?{}:null,querySelectorAll:()=>[row('NESTED-EVIDENCE-HEADER'),row('NESTED-EVIDENCE-VALUE')]};
  h.nodes.get('page').querySelectorAll=()=>[main,nested];h.c.liveExport();assert.equal(h.blobs.length,1);const csv=await h.blobs[0].text();assert.match(csv,/ORDER-ONE/);assert.doesNotMatch(csv,/EVIDENCE/);assert.equal((csv.match(/ORDER-ONE/g)||[]).length,1);
 });
+

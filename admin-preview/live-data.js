@@ -801,8 +801,8 @@
   }
   return null;
  }
- function rememberAggregate(request,result){
-  if(!roleAllowed(state.page,'query')||!aggregateNativeIdentity(request)||!aggregateComplete(request,result)||result._aggregateCacheHit||result._aggregateAccessContext!==aggregateAccessContext())return;
+ function rememberAggregate(request,result,assembled=false){
+  if(!roleAllowed(state.page,'query')||!aggregateNativeIdentity(request)||!aggregateComplete(request,result)||result._aggregateCacheHit&&!assembled||result._aggregateAccessContext!==aggregateAccessContext())return;
   const scope=aggregateScopeKey(request),view=aggregateView(request),key=JSON.stringify([scope,view,request.direction]),at=result._aggregateReadAt||Date.now();
   let copy,bytes;try{copy=aggregateCopy(result);bytes=JSON.stringify(copy).length*2;}catch{return;}
   if(bytes>2*1024*1024)return;deleteAggregateEntry(key);aggregateCache.set(key,{scope,view,direction:request.direction,at,expiresAt:at+aggregateTtl(request),bytes,result:copy});aggregateCacheBytes+=bytes;
@@ -853,7 +853,7 @@
   // Keep all filters and the independent creation/success clocks unchanged.
   const largeAr=request.action==='aggregate'&&request.platformId==='5e952cbb-e42f-d6b1-a24a-a0d42d165df9'&&orderSource(platform)==='ar'&&['all','charge'].includes(request.direction);
   const initialWidth=largeAr?(request.view==='providers'?4:2)*3600000:boundedProviderRead?day:Infinity;
-  if(to-from>initialWidth){for(let cursor=from;cursor<to;cursor+=initialWidth)await read({...request,startAt:new Date(cursor).toISOString(),endAt:new Date(Math.min(cursor+initialWidth,to)).toISOString()})}else await read(request);const merged=mergeParts(parts,platform);merged._aggregateView=parts.every(part=>part._aggregateView==='full')?'full':'providers';merged._aggregateReadAt=Math.min(...parts.map(part=>part._aggregateReadAt||Date.now()));merged._aggregateCacheHit=parts.some(part=>part._aggregateCacheHit===true);if(merged.platform)merged.platform=displayIdentity(merged.platform);if(serial===L.serial)rememberAggregate(request,merged);return merged;
+  if(to-from>initialWidth){for(let cursor=from;cursor<to;cursor+=initialWidth)await read({...request,startAt:new Date(cursor).toISOString(),endAt:new Date(Math.min(cursor+initialWidth,to)).toISOString()})}else await read(request);const merged=mergeParts(parts,platform);merged._aggregateView=parts.every(part=>part._aggregateView==='full')?'full':'providers';merged._aggregateReadAt=Math.min(...parts.map(part=>part._aggregateReadAt||Date.now()));merged._aggregateCacheHit=parts.some(part=>part._aggregateCacheHit===true);if(merged.platform)merged.platform=displayIdentity(merged.platform);if(serial===L.serial)rememberAggregate(request,merged,true);return merged;
  }
  // The merchant ledger needs provider totals. Read the chart dimensions only
  // when its trend tab is requested; keep the ledger until every platform ends.

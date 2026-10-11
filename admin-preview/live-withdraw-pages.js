@@ -84,18 +84,25 @@
   const countKnown=(row,key)=>known(row?.[key])&&(!['autoCount','manualCount'].includes(key)||Number(row[key])>=0&&(row.classificationAvailable!==false||row.classificationPartial===true));
   const shareKnown=(row,key,denominator)=>countKnown(row,key)&&[row[key],row[denominator]].every(value=>(typeof value==='number'||typeof value==='string'&&value.trim()!=='')&&Number.isFinite(Number(value)))&&Number(row[key])>=0&&Number(row[denominator])>0&&Number(row[key])<=Number(row[denominator]);
   const countCell=(row,key)=>countKnown(row,key)?C(row[key]):'—';
+  const processingBases={created_to_operated:'创建至操作处理',created_to_completed:'创建至源订单完成',applied_to_completed:'申请至完成',source_submitted_to_handled:'源提交至处理完成',source_reported_processing:'源日报处理用时'};
+  const processingValueKnown=value=>(typeof value==='number'||typeof value==='string'&&value.trim()!=='')&&Number.isFinite(Number(value))&&Number(value)>=0;
   function durationCell(row){
-   if(!row)return '—';if(!known(row.avgSeconds))return row.source==='NEWAR'?'<span title="缺少有效处理完成时间，暂不能计算">—</span>':'—';
-   const samples=known(row.durationSampleCount)?Number(row.durationSampleCount):null,total=Number(row.total??row.processed);
-   const basis=row.durationBasis==='created_to_operated'?'创建至操作处理的用时，不是支付到账时长。':row.durationBasis==='created_to_completed'?'创建至源订单完成的处理用时，不代表银行到账时长。':row.durationBasis==='applied_to_completed'?'申请至完成的用时。':row.durationBasis==='source_reported_processing'?'原日报提供的处理用时。':row.durationBasis==='mixed_source_processing'?'按各来源处理用时及有效样本数加权。':'按来源提供的处理用时统计。';
+   if(!row)return '—';if(!processingValueKnown(row.avgSeconds))return row.source==='NEWAR'?'<span title="缺少有效处理完成时间，暂不能计算">—</span>':'—';
+   const samples=processingValueKnown(row.durationSampleCount)?Number(row.durationSampleCount):null,reported=row.durationSource==='historical_source_report'&&row.durationBasis==='source_reported_processing',total=reported?NaN:Number(row.total??row.processed);
+   const basis=row.durationBasis==='created_to_operated'?'创建至操作处理的用时，不是支付到账时长。':row.durationBasis==='created_to_completed'?'创建至源订单完成的处理用时，不代表银行到账时长。':row.durationBasis==='applied_to_completed'?'申请至完成的用时。':row.durationBasis==='source_submitted_to_handled'?'源提交至处理完成的用时，不代表银行到账时长。':row.durationBasis==='source_reported_processing'?'原日报提供的处理用时。':row.durationBasis==='mixed_source_processing'?'按各来源处理用时及有效样本数加权。':'按来源提供的处理用时统计。';
    const partial=samples!==null&&Number.isFinite(total)&&samples<total;
-   return '<span title="'+E(basis+(samples!==null?'有效时间样本 '+C(samples)+' 笔'+(Number.isFinite(total)?' / '+C(total)+' 笔':'')+'。':''))+'">'+duration(row.avgSeconds)+(partial?'<sup aria-label="部分时间样本">*</sup>':'')+'</span>';
+   return '<span title="'+E(basis+(samples!==null?(reported?'日报':'')+'有效时间样本 '+C(samples)+' 笔'+(Number.isFinite(total)?' / '+C(total)+' 笔':'')+'。':'')+(reported?'不与订单笔数换算覆盖率。':''))+'">'+duration(row.avgSeconds)+(partial?'<sup aria-label="部分时间样本">*</sup>':'')+'</span>'+(reported?'<small class="cell-sub">源日报用时</small>':'');
   }
   function absoluteComparison(current,previous,key,unit=' 笔',format=C,betterUp=true){
-   if(current.comparisonComparable===false||key==='avgSeconds'&&(previous?.comparisonComparable===false||current.durationBasis&&previous?.durationBasis&&current.durationBasis!==previous.durationBasis))return '<span title="两期统计口径或覆盖未对齐，保留原值，不计算涨跌">—</span>';
+   if(key==='avgSeconds'){
+    const valid=row=>row&&processingValueKnown(row.avgSeconds);
+    if(!valid(current)||!valid(previous))return '—';
+    if(!processingBases[current.durationBasis]||!processingBases[previous.durationBasis]||current.durationBasis!==previous.durationBasis)return '<span title="两期处理用时口径不同或未提供，保留原值，不计算涨跌">口径不同</span>';
+   }else if(current.comparisonComparable===false)return '<span title="两期统计口径或覆盖未对齐，保留原值，不计算涨跌">—</span>';
    if(!previous||!known(current[key])||!known(previous[key]))return '—';
    const a=Number(current[key]),b=Number(previous[key]),diff=a-b,percent=b===0?(a===0?'持平':'无基数'):(diff>0?'+':'')+(diff/Math.abs(b)*100).toFixed(2)+'%',tone=diff===0?'flat':(diff>0)===betterUp?'good':'bad';
-   return '<span class="withdraw-delta '+tone+'" title="前一日 '+E(format(b)+unit)+'">'+(diff>0?'+':diff<0?'−':'')+E(format(Math.abs(diff))+unit)+'（'+percent+'）</span>';
+   const observed=key==='avgSeconds'&&(current.comparisonComparable===false||previous.comparisonComparable===false);
+   return '<span class="withdraw-delta '+tone+'" title="'+(observed?'已观察用时差；仅比较同口径有效时间样本，两期完整性尚未核验。':'')+'前一日 '+E(format(b)+unit)+'">'+(diff>0?'+':diff<0?'−':'')+E(format(Math.abs(diff))+unit)+'（'+percent+'）'+(observed?'<sup aria-label="已观察用时差，完整性未核验">*</sup>':'')+'</span>';
   }
   function summaryComparisonIssue(data){
    if(data.comparison?.complete!==false)return '';

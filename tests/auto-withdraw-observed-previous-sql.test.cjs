@@ -85,7 +85,7 @@ test('country/platform scope, denied session, aliases and unknown accounts remai
   await db.query("select set_config('test.scope',$1,false)",[JSON.stringify({targets:[]})]);assert.deepEqual((await call(db)).rows,[]);await db.exec("set test.denied='yes'");await assert.rejects(()=>call(db),/synthetic_session_denied/);
  }finally{await db.close();}
 });
-test('production UI compares four observed finite shares with completeness qualifiers, suppresses time deltas and preserves unknown YASH methods',async()=>{
+test('production UI compares observed shares and same-basis time samples with completeness qualifiers while preserving unknown YASH methods',async()=>{
  const file=path.join(repo,'tests/admin-withdraw-processing-duration-ui.test.cjs');
  const c=vm.createContext({__dirname:path.dirname(file),require:n=>n==='node:test'?()=>{}:createRequire(file)(n)});
  vm.runInContext(fs.readFileSync(file,'utf8').split("test('WG")[0]+';globalThis.setup=setup;',c);
@@ -98,8 +98,8 @@ test('production UI compares four observed finite shares with completeness quali
    assert(cells[index].includes(change),source+' exact observed share delta '+index);
    assert.match(cells[index],/title="按已入库数据计算；两期完整性尚未核验"/);
   }
-  assert.match(cells[10],/24秒/);assert.match(cells[11],/12秒/);assert.match(cells[12],/不计算涨跌/);
-  assert.doesNotMatch(cells[12],/withdraw-delta| pp/,'known time values remain incomparable when coverage is unaligned');
+  assert.match(cells[10],/24秒/);assert.match(cells[11],/12秒/);assert.match(cells[12],/\+12\.00 秒（\+100\.00%）/);
+  assert.match(cells[12],/仅比较同口径有效时间样本，两期完整性尚未核验/);assert.doesNotMatch(cells[12],/ pp/,'time changes use seconds and percent, independently of count shares');
   if(source==='KB'){
    for(const index of [6,7])assert.equal(cells[index],'—','unknown YASH method count remains unknown');
    for(const index of [8,9]){assert.match(cells[index],/对比值未提供/);assert.doesNotMatch(cells[index],/withdraw-delta| pp|昨日|0\.00%|NaN|Infinity/);}
