@@ -12,7 +12,7 @@ function fixture({catalog=m8,withdrawCatalog=ph,country='巴西',team='胖虎',v
 test('withdraw and operator cards show count differences rather than confusing share changes with count growth',async()=>{
  for(const view of ['auto_withdraw','withdraw_operators']){
   const f=fixture({view});f.L.from='2026-09-25T00:00:00';await f.page.load();
-  Object.assign(f.page.state.data,{totals:{total:120,processed:120,success:90,rejected:30,autoCount:60,manualCount:60,operators:6,avgSeconds:90},previousTotals:{total:100,processed:100,success:80,rejected:20,autoCount:50,manualCount:50,operators:4,avgSeconds:120},comparison:{complete:true},rows:[{country:'胖虎巴西',platform:'SAME',total:120,processed:120,success:90,rejected:30,avgSeconds:90,previous:{total:100,processed:100,success:80,rejected:20,avgSeconds:120}}]});
+  Object.assign(f.page.state.data,{totals:{total:120,processed:120,success:90,rejected:30,autoCount:60,manualCount:60,operators:6,avgSeconds:90,durationBasis:'source_reported_processing'},previousTotals:{total:100,processed:100,success:80,rejected:20,autoCount:50,manualCount:50,operators:4,avgSeconds:120,durationBasis:'source_reported_processing'},comparison:{complete:true},rows:[{country:'胖虎巴西',platform:'SAME',total:120,processed:120,success:90,rejected:30,avgSeconds:90,durationBasis:'source_reported_processing',previous:{total:100,processed:100,success:80,rejected:20,avgSeconds:120,durationBasis:'source_reported_processing'}}]});
   const html=f.page.render(),cards=html.split('withdraw-kpis')[1].split('</section>')[0];
   assert.match(cards,/\+20 笔（\+20\.00%）/);assert.match(cards,/\+10 笔（\+12\.50%）/);assert.doesNotMatch(cards,/ pp/);
   assert.match(html,/-5\.00 pp/,'success share comparison remains a percentage point value in the table');

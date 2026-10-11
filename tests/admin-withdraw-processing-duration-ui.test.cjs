@@ -22,7 +22,7 @@ test('absent time samples remain unknown without a fabricated zero duration or c
  const current=row({avgSeconds:null,durationSampleCount:0,durationTotalSeconds:null,previous:row()}),f=setup({rows:[current],total:1,totals:current});f.page.render();
  const t=f.tables.find(t=>t.headers.some(h=>h.includes('平均处理用时')));assert.equal(t.rows[0][10],'—');assert.equal(t.rows[0][12],'—');
 });
-test('AR historical rates compare observed counts with an unverified tooltip while time changes stay disabled',()=>{
+test('AR historical rates compare observed counts while different duration bases stay explicitly incomparable',()=>{
  const previous=row({total:200,autoCount:120,manualCount:80,avgSeconds:1567.860932,durationBasis:'source_reported_processing'});
  const current=row({source:'AR',total:100,autoCount:40,manualCount:50,unclassifiedCount:10,avgSeconds:3351,durationBasis:'applied_to_completed',comparisonComparable:false,previous});
  const f=setup({rows:[current],total:1,totals:current,comparison:{complete:false},arCoverage:{coverageBasis:'unverified_source_continuity',currentComplete:false,previousComplete:false}}),html=f.page.render();
@@ -32,7 +32,7 @@ test('AR historical rates compare observed counts with an unverified tooltip whi
  assert.match(t.rows[0][8],/-20\.00 pp/);assert.match(t.rows[0][9],/\+10\.00 pp/);
  for(const i of [8,9])assert.match(t.rows[0][i],/title="按已入库数据计算；两期完整性尚未核验"/);
  assert.doesNotMatch(t.rows[0][12],/withdraw-delta| pp/);assert.doesNotMatch(t.rows[0].join(''),/AR 两期完整性/);
- assert.match(t.rows[0][12],/不计算涨跌/);assert.equal((html.match(/AR 两期完整性尚未核验，汇总暂不比较/g)||[]).length,1);
+ assert.match(t.rows[0][12],/口径不同.*口径不同|不计算涨跌.*口径不同/);assert.equal((html.match(/AR 两期完整性尚未核验，汇总暂不比较/g)||[]).length,1);
  assert.equal(current.previous,previous);assert.equal(current.total,100);
 });
 test('different duration bases independently suppress misleading time deltas',()=>{
@@ -61,5 +61,17 @@ test('observed share comparisons preserve real zero and reject absent, nonnumeri
 
 test('previous unverified flag labels observed shares without changing counts or suppressing valid arithmetic',()=>{
  const previous=row({total:200,autoCount:80,manualCount:100,unclassifiedCount:20,comparisonComparable:false}),current=row({total:100,autoCount:50,manualCount:40,unclassifiedCount:10,previous}),f=setup({rows:[current],total:1,totals:current});
- f.page.render();const cells=f.tables[0].rows[0];assert.match(cells[8],/\+10\.00 pp/);assert.match(cells[9],/-10\.00 pp/);assert.match(cells[8],/两期完整性尚未核验/);assert.doesNotMatch(cells[12],/withdraw-delta/);assert.match(cells[12],/不计算涨跌/);assert.equal(current.previous,previous);assert.equal(current.unclassifiedCount,10);
+ f.page.render();const cells=f.tables[0].rows[0];assert.match(cells[8],/\+10\.00 pp/);assert.match(cells[9],/-10\.00 pp/);assert.match(cells[8],/两期完整性尚未核验/);assert.match(cells[12],/0\.00 秒（持平|0\.00%）/);assert.match(cells[12],/已观察用时差/);assert.equal(current.previous,previous);assert.equal(current.unclassifiedCount,10);
+});
+test('same explicit AR processing basis restores an observed duration change despite unrelated coverage gates',()=>{
+ const previous=row({avgSeconds:1568,durationBasis:'applied_to_completed'}),current=row({source:'AR',avgSeconds:3539,durationBasis:'applied_to_completed',comparisonComparable:false,previous}),before=structuredClone(current),f=setup({rows:[current],total:1,totals:current,comparison:{complete:false},arCoverage:{coverageBasis:'unverified_source_continuity',currentComplete:false,previousComplete:false}});f.page.render();const cells=f.tables[0].rows[0];assert.match(cells[10],/58分59秒/);assert.match(cells[11],/26分8秒/);assert.match(cells[12],/\+1971\.00 秒（\+125\.70%）/);assert.match(cells[12],/已观察用时差.*两期完整性尚未核验/);assert.deepEqual(current,before);
+});
+test('observed processing changes preserve zero, reject malformed values and never calculate across different bases',()=>{
+ for(const current of [row({avgSeconds:null}),row({avgSeconds:''}),row({avgSeconds:' '}),row({avgSeconds:true}),row({avgSeconds:[]}),row({avgSeconds:-1}),row({avgSeconds:'Infinity'})]){current.previous=row();const f=setup({rows:[current],total:1,totals:current});f.page.render();assert.equal(f.tables[0].rows[0][12],'—');}
+ const current=row({avgSeconds:0,comparisonComparable:false,previous:row({avgSeconds:0})}),f=setup({rows:[current],total:1,totals:current});f.page.render();assert.match(f.tables[0].rows[0][12],/0\.00 秒（持平）/);assert.doesNotMatch(f.tables[0].rows[0][12],/NaN|Infinity/);
+ const unknown=row({durationBasis:null,previous:row()}),u=setup({rows:[unknown],total:1,totals:unknown});u.page.render();assert.match(u.tables[0].rows[0][12],/口径不同/);assert.doesNotMatch(u.tables[0].rows[0][12],/withdraw-delta/);
+});
+test('NEWAR retains a real historical report mean with its source while missing current completion time stays unknown',()=>{
+ const previous=row({source:'NEWAR',total:20000,avgSeconds:'972.0450335533248295',durationBasis:'source_reported_processing',durationSource:'historical_source_report',durationSampleCount:18031,durationTotalSeconds:17526944}),current=row({source:'NEWAR',avgSeconds:null,durationBasis:'source_submitted_to_handled',durationSampleCount:0,durationTotalSeconds:null,previous}),before=structuredClone(current),f=setup({rows:[current],total:1,totals:current});f.page.render();const cells=f.tables[0].rows[0];
+ assert.match(cells[10],/缺少有效处理完成时间，暂不能计算/);assert.match(cells[11],/16分12秒/);assert.match(cells[11],/源日报用时/);assert.match(cells[11],/日报有效时间样本 18031 笔/);assert.match(cells[11],/不与订单笔数换算覆盖率/);assert.doesNotMatch(cells[11],/18031 笔 \/ 20000|部分时间样本/);assert.equal(cells[12],'—');assert.deepEqual(current,before);
 });
