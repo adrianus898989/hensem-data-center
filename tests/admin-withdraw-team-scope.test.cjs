@@ -191,5 +191,5 @@ test('reason search shares the keyboard guard and submits only one plain Enter',
 
 test('AR withheld previous rows show unverified coverage while trustworthy source comparisons still work',async()=>{
  const f=fixture();f.L.from='2026-09-25T00:00:00';await f.page.load();Object.assign(f.page.state.data,{arCoverage:{coverageBasis:'unverified_source_continuity',currentComplete:false,previousComplete:false},comparison:{complete:false},rows:[{country:'巴西',platform:'RAW-AR',source:'AR',total:100,success:70,rejected:30,autoCount:50,manualCount:50,previous:null},{country:'胖虎巴西',platform:'VALID-PREVIOUS',source:'PANDA',total:100,success:70,rejected:30,previous:{total:100,success:80,rejected:20}},{country:'巴西',platform:'AR-WITH-PREVIOUS',source:'AR',total:100,success:70,rejected:30,previous:{total:100,success:80,rejected:20}}]});
- const html=f.page.render(),raw=html.match(/<tr><td>[^]*?RAW-AR[^]*?<\/tr>/)[0];assert.match(raw,/AR 两期完整性尚未核验，暂不比较/);assert.doesNotMatch(raw,/对比日期暂无数据/);assert.match(html,/昨日 80%/);assert.match(html,/-10\.00 pp/);
+ const html=f.page.render(),raw=html.match(/<tr><td>[^]*?RAW-AR[^]*?<\/tr>/)[0];assert.match(raw,/昨日 —/);assert.doesNotMatch(raw,/AR 两期完整性尚未核验/);assert.doesNotMatch(raw,/对比日期暂无数据/);assert.match(html,/昨日 80%/);assert.match(html,/-10\.00 pp/);
 });

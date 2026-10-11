@@ -1,0 +1,34 @@
+AR withdrawal report repair, 2026-10-11
+
+Rollout order
+1. Publish the UI that respects comparisonComparable=false.
+2. Apply ar_withdraw_keep_reported_previous. It retains the existing prior
+   daily values and their source_reported_processing duration basis, without
+   claiming raw-order continuity or calculating cross-basis deltas.
+
+Performance maintenance (already applied to the production project)
+- ar_order_vacuum_cadence sets the order table vacuum scale factor to 0.02.
+- ar_withdraw_report_covering_index.sql is an independent online maintenance
+  command. CREATE INDEX CONCURRENTLY cannot run inside a migration transaction.
+  Validate the resulting index before recording the matching migration; the
+  migration only verifies exact metadata and never silently accepts an invalid
+  index. An interrupted online build must be inspected and recovered separately.
+- ar_withdraw_report_single_operator_pass adds the equivalent literal date
+  cutoff for generic-plan index eligibility and aggregates operators once per
+  day/platform. Classification, timestamps, counts and completeness do not change.
+
+Validation
+- Full 17-column helper JSON: 20 synthetic requests, no output differences.
+- Guard replay, privilege/config/output-contract drift rejection passed.
+- Production helper actual execution: 4,464.727 ms within an 8-second budget;
+  Index Only Scan used ar_collected_withdraw_report_cover_idx. This timing is
+  for the AR source helper, not the complete authenticated dashboard request.
+- Prior restoration: 7 SQL tests, including scopes, null versus observed zero,
+  multi-day presentation, unchanged non-AR JSON and metadata preservation.
+- UI regression: 294 tests, 293 passed, 1 existing skip; production build passed.
+
+Known separate work
+- NEWAR lock operators are not proof of manual withdrawal. Repair and source
+  provenance validation are separate from this AR performance/prior-value patch.
+- The 91CLUB submission-exclusion slow query is a separate reader and is not
+  fixed by this withdrawal index.
