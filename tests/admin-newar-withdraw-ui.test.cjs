@@ -13,7 +13,7 @@ function fixture(extra={},operators=false){
 test('complete NewAR coverage is shown without changing current order statistics',()=>{
  const f=fixture({newarCoverage:{currentComplete:true,previousComplete:true,days:[day()]}}),html=f.render();
  assert.match(html,/data-newar-coverage="complete"/);assert.match(html,/复用每 10 分钟入库明细/);assert.match(html,/按各平台当地创建日期统计/);assert.match(html,/不与旧日报重复累加/);
- assert.deepEqual(f.table().rows[0].slice(1,4),['10','5','2']);assert.deepEqual(f.table().rows[0].slice(6,8),['3','4']);assert.match(html,/未分处理方式 3 笔/);
+ assert.deepEqual(f.table().rows[0].slice(1,4).map(value=>value.split('<')[0]),['10','5','2']);assert.match(f.table().rows[0][1],/未分类 3 笔/);assert.deepEqual(f.table().rows[0].slice(6,8),['3','4']);assert.match(html,/未分处理方式 3 笔/);
 });
 test('partial, absent, duplicate and previous-only day lists cannot claim completion',()=>{
  for(const days of [[],[day('MAANWIN','2026-10-09',false)],[day(),day()],[day('MAANWIN','2026-10-08')]]){
