@@ -20,3 +20,21 @@
 
 .drm-list-filters{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 10px}.drm-list-filters input{flex:1 1 240px;max-width:420px}.drm-list-filters select{max-width:240px}.drm-list-filters button{height:36px}.drm-filter-count{margin-left:auto;color:#7a8ba4;font-size:12px;white-space:nowrap}.drm-table .drm-no-results{text-align:center;color:#8191a8;padding:24px}.drm-account-head{margin-bottom:10px}
 @media(max-width:760px){.drm-list-filters input{flex-basis:100%;max-width:none}.drm-list-filters select{flex:1;max-width:100%;min-width:120px}.drm-filter-count{margin-left:0}.drm-list-filters button{margin-right:auto}}
+
+/* Match the account directories while keeping the permission editor's own
+   scroll regions and sticky actions intact. */
+div.dashboard-role-manager{min-width:0;padding:16px;border:1px solid #e0e7f1;border-radius:12px;background:#fff;box-shadow:0 2px 8px #23395e04}
+.dashboard-role-manager>.drm-toolbar{padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid #edf1f6}
+.drm-toolbar .drm-subtitle{margin:5px 0 0;color:#7b8ba2;font-size:12px}
+.dashboard-role-manager>.drm-list-filters{gap:10px;padding:12px;border:1px solid #e3eaf4;border-radius:8px;background:#f8fafd;margin-bottom:12px}
+.dashboard-role-manager .drm-list-filters input{max-width:none}
+.dashboard-role-manager>.drm-empty,.dashboard-role-manager>.drm-loading{display:flex;align-items:center;justify-content:center;min-height:180px;padding:24px;border:1px solid #e3eaf4;border-radius:8px;background:#fbfcfe;color:#718198;text-align:center;font-size:12px}
+.dashboard-role-manager>.drm-table{margin-bottom:0}
+.drm-table table{min-width:1050px}
+.drm-table td{vertical-align:middle}
+.drm-table tbody tr:hover{background:#f8fbff}
+.drm-table td:first-child{max-width:240px;overflow-wrap:anywhere}
+.drm-table td:first-child small{max-height:64px;overflow:auto;margin-top:4px}
+.drm-table td:last-child{min-width:250px}
+.drm-table .drm-actions{gap:6px}
+@media(max-width:700px){div.dashboard-role-manager{padding:12px}.dashboard-role-manager>.drm-toolbar{gap:12px}.dashboard-role-manager .drm-filter-count{white-space:normal}}

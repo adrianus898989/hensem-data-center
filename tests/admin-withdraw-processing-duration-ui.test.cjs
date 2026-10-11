@@ -22,14 +22,16 @@ test('absent time samples remain unknown without a fabricated zero duration or c
  const current=row({avgSeconds:null,durationSampleCount:0,durationTotalSeconds:null,previous:row()}),f=setup({rows:[current],total:1,totals:current});f.page.render();
  const t=f.tables.find(t=>t.headers.some(h=>h.includes('平均处理用时')));assert.equal(t.rows[0][10],'—');assert.equal(t.rows[0][12],'—');
 });
-test('AR historical values survive unverified continuity without invented rate or time changes',()=>{
+test('AR historical rates compare observed counts with an unverified tooltip while time changes stay disabled',()=>{
  const previous=row({total:200,autoCount:120,manualCount:80,avgSeconds:1567.860932,durationBasis:'source_reported_processing'});
  const current=row({source:'AR',total:100,autoCount:40,manualCount:50,unclassifiedCount:10,avgSeconds:3351,durationBasis:'applied_to_completed',comparisonComparable:false,previous});
  const f=setup({rows:[current],total:1,totals:current,comparison:{complete:false},arCoverage:{coverageBasis:'unverified_source_continuity',currentComplete:false,previousComplete:false}}),html=f.page.render();
  const t=f.tables.find(t=>t.headers.some(h=>h.includes('昨日处理用时')));
  assert.match(t.rows[0][1],/未分类 10 笔/);assert.match(t.rows[0][11],/26分8秒/);assert.match(t.rows[0][11],/原日报提供的处理用时/);
  assert.match(t.rows[0][8],/昨日 60\.00%/);assert.match(t.rows[0][9],/昨日 40\.00%/);
- assert.doesNotMatch(t.rows[0].join(''),/withdraw-delta| pp|AR 两期完整性/);
+ assert.match(t.rows[0][8],/-20\.00 pp/);assert.match(t.rows[0][9],/\+10\.00 pp/);
+ for(const i of [8,9])assert.match(t.rows[0][i],/title="按已入库数据计算；两期完整性尚未核验"/);
+ assert.doesNotMatch(t.rows[0][12],/withdraw-delta| pp/);assert.doesNotMatch(t.rows[0].join(''),/AR 两期完整性/);
  assert.match(t.rows[0][12],/不计算涨跌/);assert.equal((html.match(/AR 两期完整性尚未核验，汇总暂不比较/g)||[]).length,1);
  assert.equal(current.previous,previous);assert.equal(current.total,100);
 });
@@ -38,4 +40,26 @@ test('different duration bases independently suppress misleading time deltas',()
  const f=setup({rows:[current],total:1,totals:current});f.page.render();
  const t=f.tables.find(t=>t.headers.some(h=>h.includes('昨日处理用时')));
  assert.match(t.rows[0][11],/1分40秒/);assert.doesNotMatch(t.rows[0][12],/withdraw-delta/);
+});
+test('summary rows do not mislabel existing platform history as absent',()=>{
+ const current=row({previous:row({total:2000})});
+ const f=setup({rows:[current],total:21,totals:row(),previousTotals:row({total:2000}),comparison:{complete:false}});f.page.render();
+ const t=f.tables.find(t=>t.footers?.length===2);
+ assert.match(t.rows[0].join(''),/昨日/);
+ for(const footer of t.footers){assert.doesNotMatch(footer.join(''),/对比日期暂无数据|昨日|withdraw-delta/);assert.match(footer[4],/97\.08%/);}
+});
+
+
+test('observed share comparisons preserve real zero and reject absent, nonnumeric or impossible counts and denominators',()=>{
+ const prior=row({total:200,autoCount:50,manualCount:150});
+ for(const current of [row({total:100,autoCount:null,previous:prior}),row({total:100,autoCount:undefined,previous:prior}),row({total:100,autoCount:-1,previous:prior}),row({total:100,autoCount:101,previous:prior}),row({total:0,autoCount:0,previous:prior}),row({total:null,autoCount:0,previous:prior}),row({total:' ',autoCount:0,previous:prior}),row({total:true,autoCount:0,previous:prior}),row({total:100,autoCount:[],previous:prior}),row({total:100,autoCount:0,previous:row({total:0,autoCount:0})}),row({total:100,autoCount:0,previous:row({total:100,autoCount:null})})]){
+  const f=setup({rows:[current],total:1,totals:current});f.page.render();const cell=f.tables[0].rows[0][8];assert.doesNotMatch(cell,/ pp|withdraw-delta|NaN|Infinity/);
+ }
+ const current=row({total:100,autoCount:0,comparisonComparable:false,previous:row({total:100,autoCount:0})}),f=setup({rows:[current],total:1,totals:current});f.page.render();
+ assert.match(f.tables[0].rows[0][8],/昨日 0\.00%.*0\.00 pp/);assert.match(f.tables[0].rows[0][8],/两期完整性尚未核验/);
+});
+
+test('previous unverified flag labels observed shares without changing counts or suppressing valid arithmetic',()=>{
+ const previous=row({total:200,autoCount:80,manualCount:100,unclassifiedCount:20,comparisonComparable:false}),current=row({total:100,autoCount:50,manualCount:40,unclassifiedCount:10,previous}),f=setup({rows:[current],total:1,totals:current});
+ f.page.render();const cells=f.tables[0].rows[0];assert.match(cells[8],/\+10\.00 pp/);assert.match(cells[9],/-10\.00 pp/);assert.match(cells[8],/两期完整性尚未核验/);assert.doesNotMatch(cells[12],/withdraw-delta/);assert.match(cells[12],/不计算涨跌/);assert.equal(current.previous,previous);assert.equal(current.unclassifiedCount,10);
 });

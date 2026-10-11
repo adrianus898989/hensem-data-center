@@ -354,3 +354,49 @@
   .admin-data-scope-picker .admin-data-scope-modes label { font-size:11px; }
 }
 @media(max-width:700px){ .admin-account-create-actions { bottom:-12px; margin:14px -14px -12px; padding:12px 14px; } }
+
+/* Backend accounts use compact directory rows; module permission cards stay
+   on the permission view. Full data scopes remain available in each row. */
+.admin-users-compact .admin-account-directory-compact { padding:16px; }
+.admin-account-directory-compact .admin-account-overview { display:flex; flex-wrap:wrap; gap:8px 24px; padding:2px 0 14px; margin-bottom:12px; border-bottom:1px solid #e7edf5; }
+.admin-account-directory-compact .admin-account-overview > div { gap:7px; padding:3px 0; border:0; background:transparent; border-radius:0; }
+.admin-account-directory-compact .admin-account-overview b { font-size:20px; }
+.admin-account-directory-compact .admin-user-search-toolbar { padding:12px; }
+.admin-account-management-table { table-layout:fixed; min-width:1080px; }
+.admin-account-management-table > thead > tr > th:nth-child(1) { width:170px; }
+.admin-account-management-table > thead > tr > th:nth-child(2) { width:255px; }
+.admin-account-management-table > thead > tr > th:nth-child(4) { width:130px; }
+.admin-account-management-table > thead > tr > th:last-child { width:275px; }
+.admin-account-management-table > tbody > tr > th,
+.admin-account-management-table > tbody > tr > td { height:74px; padding:11px 14px; vertical-align:middle; }
+.admin-account-management-table .admin-matrix-identity strong { font-size:13px; }
+.admin-account-management-table .admin-matrix-actions { flex-direction:row; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px; }
+.admin-account-management-table .admin-matrix-configure { min-height:30px; padding:5px 9px; white-space:nowrap; }
+.admin-account-management-table .admin-account-readonly { margin-right:auto; }
+.admin-account-role-cell > small,
+.admin-account-status-cell > small { display:block; margin-top:5px; color:#7b8ba2; font-size:10px; font-weight:400; line-height:1.4; }
+.admin-account-role-cell > p { margin:5px 0 0; color:#63758e; font-size:11px; line-height:1.4; }
+.admin-account-scope-all { display:inline-flex; padding:4px 9px; border-radius:5px; background:#f1f5fb; color:#4e6686; font-size:12px; }
+.admin-account-scope-details { min-width:0; color:#4f6788; font-size:12px; }
+.admin-account-scope-details summary { display:flex; align-items:center; flex-wrap:wrap; gap:8px; width:fit-content; cursor:pointer; font-weight:500; }
+.admin-account-scope-details summary::before { content:'›'; color:#7d90ac; font-size:16px; }
+.admin-account-scope-details[open] summary::before { transform:rotate(90deg); }
+.admin-account-scope-details summary > span { color:#3165c5; font-size:11px; font-weight:400; }
+.admin-account-scope-details > p { max-height:160px; overflow:auto; overflow-wrap:anywhere; margin:8px 0 0; padding:9px 11px; border:1px solid #e1e8f2; border-radius:6px; background:#f8fafd; color:#5b6f8b; line-height:1.6; }
+.admin-directory-state strong { color:#405876; font-size:14px; font-weight:600; }
+.admin-directory-state p { margin:8px 0 0; font-size:12px; line-height:1.6; }
+.admin-data-scope-picker .admin-data-scope-broad-help { padding:10px 12px; border:1px solid #eedebe; border-radius:6px; background:#fffbf3; color:#876836; font-size:12px; }
+.admin-account-scope-details summary:focus-visible { outline:2px solid #7594ec; outline-offset:4px; border-radius:3px; }
+@media(max-width:700px) {
+  .admin-users-compact .admin-account-directory-compact { padding:12px; }
+  .admin-account-directory-compact .admin-account-overview { gap:8px 18px; }
+}
+.admin-users-compact .admin-user-search-toolbar .admin-search-field { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.admin-users-compact .admin-user-search-toolbar .admin-search-field label { color:#60738e; font-size:11px; font-weight:500; }
+.admin-users-compact .admin-user-search-toolbar input,
+.admin-users-compact .admin-user-search-toolbar select { width:100%; min-width:0; height:34px; padding:6px 9px; border:1px solid #d7e1ee; border-radius:6px; background:#fff; color:#294363; font:inherit; font-size:12px; box-sizing:border-box; }
+.admin-account-management-table .admin-user-role { display:inline-flex; padding:3px 7px; border-radius:5px; background:#edf3ff; color:#4165a7; font-size:11px; font-weight:500; }
+.admin-account-management-table .admin-user-role.owner { background:#f2eefe; color:#7b5aa8; }
+.admin-account-management-table .admin-user-state { display:inline-flex; padding:3px 8px; border-radius:5px; font-size:11px; }
+.admin-account-management-table .admin-user-state.active { background:#eaf7f0; color:#237d60; }
+.admin-account-management-table .admin-user-state.off { background:#f8eef0; color:#956570; }

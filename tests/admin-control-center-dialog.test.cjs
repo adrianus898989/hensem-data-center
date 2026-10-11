@@ -30,7 +30,7 @@ function ui(options={}){
   if(name.startsWith('@/lib/'))return loadTs(path.join(root,'src/lib',name.slice(6)+'.ts'));
   throw Error('Unexpected module: '+name);
  }});
- const draw=()=>{cursor=ecursor=0;return mod.exports.default({open:true,session:currentSession,profile:actor,onClose(){},section:'accounts',embedded:true,accountsOnlyLoading:true,manualQuery:options.manualQuery,roleAccess})};
+ const draw=()=>{cursor=ecursor=0;return mod.exports.default({open:true,session:currentSession,profile:actor,onClose(){},section:options.section||'accounts',embedded:true,accountsOnlyLoading:true,manualQuery:options.manualQuery,roleAccess})};
  const all=()=>nodes(draw());
  const button=(label,within)=>{const node=nodes(within||draw()).find(n=>n.type==='button'&&text(n)===label);assert(node,'button '+label);return node};
  const field=(label)=>{const wrap=all().find(n=>n.type==='div'&&n.props.className?.includes('admin-search-field')&&nodes(n).some(c=>c.type==='label'&&text(c)===label));assert(wrap,'filter '+label);return nodes(wrap).find(n=>['select','input'].includes(n.type))};
@@ -54,7 +54,7 @@ test('create opens a modal; cancel clears credentials and scope draft with no wr
  const h=ui();await flush();h.button('+ 新建账号').props.onClick();let d=h.dialog();assert.equal(d.props.title,'新建后台账号');
  h.all().find(n=>n.props.id==='admin-new-username').props.onChange({target:{value:'draft'}});h.all().find(n=>n.props.id==='admin-new-password').props.onChange({target:{value:'fixture-password'}});
  h.all().find(n=>n.type?.name==='DataScopePicker').props.onChange(BR);h.dialog().props.onClose();assert(!h.dialog());assert(!JSON.stringify(h.states).includes('fixture-password'));assert(!h.calls.some(c=>c.action==='create'));
- h.button('+ 新建账号').props.onClick();assert.equal(h.all().find(n=>n.props.id==='admin-new-username').props.value,'');assert.deepEqual(plain(h.all().find(n=>n.type?.name==='DataScopePicker').props.value),ALL);
+ h.button('+ 新建账号').props.onClick();assert.equal(h.all().find(n=>n.props.id==='admin-new-username').props.value,'');assert.deepEqual(plain(h.all().find(n=>n.type?.name==='DataScopePicker').props.value),{mode:'selected',countries:[],platforms:[]});
 });
 
 test('create uses explicit new role/version/scope and blocks dismissal or duplicate submit while busy',async()=>{
@@ -70,7 +70,7 @@ test('create uses explicit new role/version/scope and blocks dismissal or duplic
 
 test('creation error is visible inside the dialog and preserves the draft for correction',async()=>{
  const h=ui({create:()=>{throw Error('账号已存在')}});await flush();h.button('+ 新建账号').props.onClick();h.all().find(n=>n.props.id==='admin-new-username').props.onChange({target:{value:'duplicate'}});
- h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});assert(h.dialog());assert.match(text(h.dialog()),/账号已存在/);assert.equal(h.all().find(n=>n.props.id==='admin-new-username').props.value,'duplicate');
+ h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});h.all().find(n=>n.type?.name==='DataScopePicker').props.onChange(BR);await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});assert(h.dialog());assert.match(text(h.dialog()),/账号已存在/);assert.equal(h.all().find(n=>n.props.id==='admin-new-username').props.value,'duplicate');
 });
 
 test('existing editable account opens the same modal without an inline table row or implicit mutation',async()=>{
@@ -174,7 +174,7 @@ test('unknown role metadata is visibly unverified, never silently called indepen
  h.button('配置权限').props.onClick();assert.match(text(h.dialog()),/角色读取尚未完成/);assert(!h.all().some(n=>n.type?.name==='AccountPermissionDialog'));
  h.dialog().props.onClose();h.button('账号设置').props.onClick();assert(!h.all().some(n=>n.type?.name==='AccountRoleEditor'),'unverified assigned status never enables legacy identity editing');
  const missing=ui({users:[brazil],roles:()=>({roles:[],accounts:[]})});await flush();assert.match(text(missing.rows()),/角色待核对/);assert.doesNotMatch(text(missing.rows()),/账号独立授权/);
- const admin=ui({actor:manager,users:[brazil]});await flush();assert.equal(admin.roleCalls.length,1,'existing authorized admins also read the server-scoped assigned role roster');assert.match(text(admin.rows()),/未分配新版角色/);
+ const admin=ui({actor:manager,users:[brazil]});await flush();assert.equal(admin.roleCalls.length,1,'existing authorized admins also read the server-scoped assigned role roster');assert.match(text(admin.rows()),/未分配角色/);
 });
 test('assigned account permission configuration uses its actual role and never the legacy profile editor',async()=>{
  const h=ui({users:[brazil],roles:vipRoster});await flush();h.button('配置权限').props.onClick();
@@ -199,7 +199,7 @@ test('new role choice has no default VIP or legacy module checkboxes; empty role
  const h=ui();await flush();h.button('+ 新建账号').props.onClick();assert.equal(h.all().find(n=>n.props.id==='admin-new-role').props.value,'');
  assert(!nodes(h.dialog()).some(n=>n.type==='input'&&n.props.type==='checkbox'),'creation does not use legacy module permissions');
  await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});assert(!h.calls.some(c=>c.action==='create'));assert.match(text(h.dialog()),/明确选择/);
- h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});assert.match(text(h.dialog()),/0 项权限/);assert.equal(h.button('建立后台账号',h.dialog()).props.disabled,false);
+ h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});assert.match(text(h.dialog()),/0 项权限/);assert.equal(h.button('建立后台账号',h.dialog()).props.disabled,true,'a chosen role does not imply a data grant');h.all().find(n=>n.type?.name==='DataScopePicker').props.onChange(BR);assert.equal(h.button('建立后台账号',h.dialog()).props.disabled,false);
  h.dialog().props.onClose();h.button('+ 新建账号').props.onClick();assert.equal(h.all().find(n=>n.props.id==='admin-new-role').props.value,'');
 });
 test('delegated creation requires create plus edit, filters ungrantable roles and cannot forge hidden role selection',async()=>{
@@ -212,7 +212,7 @@ test('role directory failure and pending reads never fall back to legacy creatio
 });
 test('creation actor change clears role/credentials and a late completed request cannot reopen or overwrite new actor state',async()=>{
  let resolve;const h=ui({create:()=>new Promise(r=>{resolve=r})});await flush();h.button('+ 新建账号').props.onClick();h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});h.all().find(n=>n.props.id==='admin-new-username').props.onChange({target:{value:'synthetic-new'}});h.all().find(n=>n.props.id==='admin-new-password').props.onChange({target:{value:'synthetic-password'}});
- const pending=nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});h.actor({...manager,data_scope:IN});h.draw();assert(!h.dialog());assert(!JSON.stringify(h.states).includes('synthetic-password'));resolve({account:{username:'synthetic-new',role_name:'Old role'}});await pending;assert(!h.dialog());assert.doesNotMatch(text(h.draw()),/已建立，角色/);
+ h.all().find(n=>n.type?.name==='DataScopePicker').props.onChange(BR);const pending=nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});h.actor({...manager,data_scope:IN});h.draw();assert(!h.dialog());assert(!JSON.stringify(h.states).includes('synthetic-password'));resolve({account:{username:'synthetic-new',role_name:'Old role'}});await pending;assert(!h.dialog());assert.doesNotMatch(text(h.draw()),/已建立，角色/);
 });
 
 test('account summaries and creation hints count only current pages while retaining the complete assigned role',async()=>{
@@ -224,7 +224,7 @@ test('account summaries and creation hints count only current pages while retain
  h.button('+ 新建账号').props.onClick();const select=h.all().find(node=>node.props.id==='admin-new-role');assert.match(text(select),/VIP · 1 项权限/);select.props.onChange({target:{value:saved.id}});
  assert.match(text(h.dialog()),/1 个页面、1 项权限/);assert.doesNotMatch(text(h.dialog()),/平台三方分析/);
  h.all().find(node=>node.props.id==='admin-new-username').props.onChange({target:{value:'display-fixture'}});h.all().find(node=>node.props.id==='admin-new-password').props.onChange({target:{value:'fixture-password'}});
- await nodes(h.dialog()).find(node=>node.type==='form').props.onSubmit({preventDefault(){}});const create=h.calls.find(call=>call.action==='create');assert.deepEqual(create.args[3],{id:saved.id,version:saved.version});assert.deepEqual(create.args[4],ALL);assert.deepEqual(saved.permissions,permissions);
+ h.all().find(node=>node.type?.name==='DataScopePicker').props.onChange(ALL);await nodes(h.dialog()).find(node=>node.type==='form').props.onSubmit({preventDefault(){}});const create=h.calls.find(call=>call.action==='create');assert.deepEqual(create.args[3],{id:saved.id,version:saved.version});assert.deepEqual(create.args[4],ALL);assert.deepEqual(saved.permissions,permissions);
 });
 test('display-hidden permissions remain part of delegated account creation grant checks',async()=>{
  const saved={...EMPTY_ROLE,permissions:['merchantproviders.view','merchantproviders.query']};
@@ -248,4 +248,37 @@ test('specified platform creation waits for a verified catalog then submits a pl
  picker().props.onValidityChange(true);
  await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});
  assert.deepEqual(h.calls.find(c=>c.action==='create').args[4],scope);
+});
+
+
+test('new accounts start with no platform grants for owners and restricted managers, never inheriting actor scope',async()=>{
+ const scope={mode:'selected',countries:[],platforms:[{country:'IN',platform:'91CLUB'}]};
+ for(const options of [{},{actor:{...manager,data_scope:scope},roleAccess:assigned(['access.view','access.create','access.edit'])}]){
+  const h=ui(options);await flush();h.button('+ 新建账号').props.onClick();
+  const picker=()=>h.all().find(n=>n.type?.name==='DataScopePicker');
+  assert.deepEqual(plain(picker().props.value),{mode:'selected',countries:[],platforms:[]});
+  h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});
+  assert.equal(h.button('建立后台账号').props.disabled,true);
+  await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});assert(!h.calls.some(c=>c.action==='create'));
+  picker().props.onChange(scope);picker().props.onValidityChange(true);h.dialog().props.onClose();h.button('+ 新建账号').props.onClick();
+  assert.deepEqual(plain(picker().props.value),{mode:'selected',countries:[],platforms:[]});assert.equal(h.button('建立后台账号').props.disabled,true);h.dispose();
+ }
+});
+
+test('compact account rows separate identity, role, full scope disclosure, status and bounded actions without writes',async()=>{
+ const scope={mode:'selected',countries:[],platforms:[{country:'IN',platform:'91CLUB'},{country:'PK',platform:'92GO'}]};
+ const h=ui({users:[{...brazil,data_scope:scope}]});await flush();
+ const table=h.all().find(n=>n.type==='table'&&n.props.className.includes('admin-account-management-table'));
+ assert.deepEqual(nodes(table).filter(n=>n.type==='th'&&n.props.scope==='col').map(text),['账号','角色 / 页面权限','数据授权范围','状态','操作']);
+ const row=h.rows()[0];assert.equal(nodes(row).filter(n=>n.type==='th'||n.type==='td').length,5);
+ const disclosure=nodes(row).find(n=>n.type==='details'&&n.props.className==='admin-account-scope-details');assert(disclosure);assert.equal(disclosure.props.open,undefined);
+ assert.match(text(disclosure),/2 个指定平台/);assert.match(text(disclosure),/印度.*91CLUB/);assert.match(text(disclosure),/巴基斯坦.*92GO/);
+ assert(h.calls.every(c=>c.action==='list'));h.button('账号设置',row).props.onClick();assert.deepEqual(plain(h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.user.data_scope),scope);
+ const css=fs.readFileSync(path.join(root,'src/components/AdminControlCenter.css'),'utf8');assert.match(css,/\.admin-account-management-table \.admin-matrix-actions\s*\{[^}]*flex-direction:row/);assert.match(css,/\.admin-account-scope-details > p\s*\{[^}]*max-height:160px/);h.dispose();
+});
+
+test('module permission view retains its permission matrix rather than receiving compact account columns',async()=>{
+ const h=ui({section:'permissions'});await flush();const table=h.all().find(n=>n.type==='table'&&n.props.className.includes('admin-permission-matrix'));
+ assert.deepEqual(nodes(table).filter(n=>n.type==='th'&&n.props.scope==='col').map(text),['账号 / 角色','模块权限 · 已开 / 权限总数','操作']);
+ assert(h.all().some(n=>n.type==='section'&&n.props.className.includes('admin-permission-directory')));assert(h.calls.every(c=>c.action==='list'));h.dispose();
 });

@@ -58,3 +58,8 @@
 .workorder-account-admin .wo-account-pagination button{padding:6px 10px;font-size:12px}
 @media(max-width:700px){.wo-account-card{padding:14px}.wo-account-pagination>div{flex-wrap:wrap}.wo-account-card>.wo-account-toolbar{gap:12px}.wo-account-list-state{min-height:180px}}
 @media(prefers-reduced-motion:reduce){.wo-account-list-state[data-state=loading] .wo-account-state-icon:before{animation:none}}
+/* Leave enough room for all four actions; smaller panels scroll the table
+   instead of clipping the login-security button. */
+.wo-account-table table{min-width:1130px}
+.wo-account-table .wo-col-status{width:118px}
+.wo-account-table .wo-col-actions{width:365px}

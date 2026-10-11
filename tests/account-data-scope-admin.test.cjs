@@ -187,7 +187,7 @@ test('scope editor keeps draft local, sends only scope on explicit save and reta
 });
 test('scope picker groups current scope keys, leaves all read-only for limited actor, and requires nonempty selected',()=>{
   const render=scopeUi('DataScopePicker',{id:'fixture',value:{mode:'selected',countries:[]},actor:profile('owner','owner'),disabled:false,onChange:()=>{}});
-  const tree=render();assert.deepEqual(nodes(tree).filter(node=>node.type==='h4').map(node=>node.props.children),['国家 / 地区','团队','特定盘口 / 通道']);assert.equal(nodes(tree).filter(node=>node.type==='input'&&node.props.type==='checkbox').length,18);
+  const tree=render();assert.deepEqual(nodes(tree).filter(node=>node.type==='h4').map(node=>node.props.children),['国家 / 地区','团队数据分组','其他数据范围']);assert.equal(nodes(tree).filter(node=>node.type==='input'&&node.props.type==='checkbox').length,18);
   assert(nodes(tree).some(node=>node.props?.role==='status'));
   const limited=scopeUi('DataScopePicker',{id:'fixture',value:PANGHU,actor:profile('admin','admin',{data_scope:PANGHU}),disabled:false,onChange:()=>{}})();
   const all=nodes(limited).find(node=>node.type==='input'&&node.props.value==='all');assert.equal(all.props.disabled,true);
