@@ -75,3 +75,30 @@ test('catalog verification refuses loading, failed and removed platform selectio
  h.all().find(n=>n.props?.['aria-label']==='移除 印度 / REMOVED').props.onClick();h.checkboxes()[0].props.onChange({target:{checked:true}});h.draw();assert.equal(validations.at(-1),true);
  h.dispose();
 });
+
+
+test('specific platforms are the primary mode and broad groups explicitly grant their whole range',()=>{
+ const h=ui({value:{mode:'selected',countries:['IN']}});
+ assert.deepEqual(h.all().filter(n=>n.type==='input'&&n.props.type==='radio').map(n=>n.props.value),['platforms','selected','all']);
+ assert.match(text(h.draw()),/将授予该范围内的全部平台/);assert.match(text(h.draw()),/只需部分平台时/);
+ assert.deepEqual(h.value(),{mode:'selected',countries:['IN']});assert.equal(h.changes.length,0);assert.equal(h.calls.length,0);h.dispose();
+});
+
+test('real catalog alias normalization and team-country interaction select one identity per platform across countries',async()=>{
+ const catalogApi=loadTs(path.join(root,'src/lib/dashboardScopeCatalogClient.ts'));
+ const catalog=catalogApi.validateDashboardScopeCatalog({version:1,platforms:[
+  {country:'IN',platform:'RAJA',label:'RAJA',team:'M8',source:'AR'},
+  {country:'IN',platform:'RAJALOTTERY',label:'RAJALOTTERY',team:'M8',source:'REPORT'},
+  {country:'PK',platform:'92.GAME',label:'92.GAME',team:'M8',source:'AR'},
+  {country:'PK',platform:'92GAME',label:'92GAME',team:'M8',source:'REPORT'},
+  {country:'BR',platform:'RAJA',label:'RAJA',team:'OTHER'}]});
+ const h=ui({value:{mode:'selected',countries:[],platforms:[]},catalog});await flush();
+ const filter=label=>h.all().find(n=>n.props?.['aria-label']===label);
+ filter('平台授权团队筛选').props.onChange({target:{value:'team:M8'}});
+ filter('平台授权国家筛选').props.onChange({target:{value:'IN'}});assert.equal(h.checkboxes().length,1);h.checkboxes()[0].props.onChange({target:{checked:true}});
+ filter('平台授权国家筛选').props.onChange({target:{value:'PK'}});assert.equal(h.checkboxes().length,1);h.checkboxes()[0].props.onChange({target:{checked:true}});
+ assert.deepEqual(h.value(),{mode:'selected',countries:[],platforms:[pair('IN','RAJA'),pair('PK','92GAME')]});
+ assert.equal(h.all().filter(n=>n.type==='button'&&n.props?.['aria-label']?.startsWith('移除 ')).length,2);
+ assert.equal(api.dashboardScopeAllows(h.value(),'BR','RAJA'),false);assert.equal(api.dashboardScopeAllows(h.value(),'IN','RAJALOTTERY'),true);
+ filter('平台授权国家筛选').props.onChange({target:{value:'IN'}});assert.equal(h.checkboxes()[0].props.checked,true);h.dispose();
+});

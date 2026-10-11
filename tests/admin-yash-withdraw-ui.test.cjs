@@ -41,9 +41,9 @@ test('an explicit partial capability never manufactures an absent classification
  const totals=yash({autoCount:0,manualCount:null,classificationPartial:true,total:0,unclassifiedCount:0}),f=fixture({totals}),html=f.render();
  assert.match(html,/<label>自动出款<\/label><strong>0<\/strong>/);assert.match(html,/<label>人工处理<\/label><strong>—<\/strong>/);assert.doesNotMatch(html,/NaN|Infinity/);assert.match(f.stats().footers[0][8],/^—/);
 });
-test('partial classification suppresses count and share comparisons even when overall previous coverage is complete',()=>{
+test('partial classification compares observed shares while preserving unknown counts and suppressing absolute count changes',()=>{
  const current=yash({total:140,autoCount:10,manualCount:30,classificationPartial:true}),previous=yash({total:120,autoCount:8,manualCount:12,classificationPartial:true}),f=fixture({rows:[{...current,previous}],totals:current,previousTotals:previous,comparison:{complete:true}}),html=f.render(),row=f.stats().rows[0];
- assert.match(row[8],/7.14%.*分类未完整，暂不比较/);assert.match(row[9],/21.43%.*分类未完整，暂不比较/);assert.doesNotMatch(row[8],/pp|昨日/);const cards=html.split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/<label>自动出款<\/label><strong>10<\/strong>/);assert.doesNotMatch(cards,/\+2 笔|\+18 笔/);
+ assert.match(row[8],/7.14%.*昨日 6.67%.*\+0\.48 pp/);assert.match(row[9],/21.43%.*昨日 10.00%.*\+11\.43 pp/);for(const i of [8,9])assert.match(row[i],/按已入库数据计算；两期完整性尚未核验/);assert.match(html,/未分处理方式 100 笔/);const cards=html.split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/<label>自动出款<\/label><strong>10<\/strong>/);assert.doesNotMatch(cards,/\+2 笔|\+18 笔/);
 });
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no});return {promise,resolve,reject}};
 test('same-query refresh is deduplicated, disables query controls and preserves the previous result on failure',async()=>{

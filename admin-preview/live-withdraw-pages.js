@@ -82,6 +82,7 @@
   const delta=(value,unit,betterUp=true)=>'<span class="withdraw-delta '+(value===0?'flat':(value>0)===betterUp?'good':'bad')+'">'+(value>0?'+':'')+value.toFixed(2)+unit+'</span>';
   const known=value=>value!==null&&value!==undefined&&value!==''&&typeof value!=='boolean'&&Number.isFinite(Number(value));
   const countKnown=(row,key)=>known(row?.[key])&&(!['autoCount','manualCount'].includes(key)||Number(row[key])>=0&&(row.classificationAvailable!==false||row.classificationPartial===true));
+  const shareKnown=(row,key,denominator)=>countKnown(row,key)&&[row[key],row[denominator]].every(value=>(typeof value==='number'||typeof value==='string'&&value.trim()!=='')&&Number.isFinite(Number(value)))&&Number(row[key])>=0&&Number(row[denominator])>0&&Number(row[key])<=Number(row[denominator]);
   const countCell=(row,key)=>countKnown(row,key)?C(row[key]):'—';
   function durationCell(row){
    if(!row)return '—';if(!known(row.avgSeconds))return row.source==='NEWAR'?'<span title="缺少有效处理完成时间，暂不能计算">—</span>':'—';
@@ -91,7 +92,7 @@
    return '<span title="'+E(basis+(samples!==null?'有效时间样本 '+C(samples)+' 笔'+(Number.isFinite(total)?' / '+C(total)+' 笔':'')+'。':''))+'">'+duration(row.avgSeconds)+(partial?'<sup aria-label="部分时间样本">*</sup>':'')+'</span>';
   }
   function absoluteComparison(current,previous,key,unit=' 笔',format=C,betterUp=true){
-   if(current.comparisonComparable===false||key==='avgSeconds'&&current.durationBasis&&previous?.durationBasis&&current.durationBasis!==previous.durationBasis)return '<span title="两期统计口径或覆盖未对齐，保留原值，不计算涨跌">—</span>';
+   if(current.comparisonComparable===false||key==='avgSeconds'&&(previous?.comparisonComparable===false||current.durationBasis&&previous?.durationBasis&&current.durationBasis!==previous.durationBasis))return '<span title="两期统计口径或覆盖未对齐，保留原值，不计算涨跌">—</span>';
    if(!previous||!known(current[key])||!known(previous[key]))return '—';
    const a=Number(current[key]),b=Number(previous[key]),diff=a-b,percent=b===0?(a===0?'持平':'无基数'):(diff>0?'+':'')+(diff/Math.abs(b)*100).toFixed(2)+'%',tone=diff===0?'flat':(diff>0)===betterUp?'good':'bad';
    return '<span class="withdraw-delta '+tone+'" title="前一日 '+E(format(b)+unit)+'">'+(diff>0?'+':diff<0?'−':'')+E(format(Math.abs(diff))+unit)+'（'+percent+'）</span>';
@@ -107,14 +108,20 @@
   function comparison(current,previous,numerator,denominator,issue=''){
    if(!singleDay()&&!S.daily)return '';
    if(issue)return '';
-   if(current.comparisonComparable===false){
+   if(current.comparisonComparable===false&&!(denominator&&previous)){
     const prior=previous&&countKnown(previous,numerator)&&(denominator?known(previous[denominator])&&Number(previous[denominator])>0:true)?denominator?R(previous[numerator],previous[denominator]):C(previous[numerator]):'—';
     return '<small class="cell-sub" title="两期统计口径或覆盖未对齐；昨日原值保留，不计算涨跌">昨日 '+prior+'</small>';
    }
    if(!previous)return '<small class="cell-sub">对比日期暂无数据</small>';
-   if(['autoCount','manualCount'].includes(numerator)&&(current.classificationPartial===true||previous.classificationPartial===true)&&!(current.classificationComparable===true&&previous.classificationComparable===true))return '<small class="cell-sub">分类未完整，暂不比较</small>';
+   const partialClassification=['autoCount','manualCount'].includes(numerator)&&(current.classificationPartial===true||previous.classificationPartial===true)&&!(current.classificationComparable===true&&previous.classificationComparable===true);
+   if(partialClassification&&!denominator)return '<small class="cell-sub">分类未完整，暂不比较</small>';
    if(!countKnown(current,numerator)||!countKnown(previous,numerator))return '<small class="cell-sub">对比值未提供</small>';
-   if(denominator){const before=Number(previous[denominator]),now=Number(current[denominator]);if(!known(previous[denominator])||!known(current[denominator])||before<=0||now<=0)return '<small class="cell-sub">对比样本不足</small>';const change=100*(Number(current[numerator])/now-Number(previous[numerator])/before);return '<small class="cell-sub">昨日 '+R(previous[numerator],previous[denominator])+' '+delta(change,' pp',!['rejected','manualCount'].includes(numerator))+'</small>'}
+   if(denominator){
+    if(!shareKnown(current,numerator,denominator)||!shareKnown(previous,numerator,denominator))return '<small class="cell-sub">对比样本不足</small>';
+    const before=Number(previous[denominator]),now=Number(current[denominator]),change=100*(Number(current[numerator])/now-Number(previous[numerator])/before);
+    const unverified=current.comparisonComparable===false||previous.comparisonComparable===false||partialClassification;
+    return '<small class="cell-sub"'+(unverified?' title="按已入库数据计算；两期完整性尚未核验"':'')+'>昨日 '+R(previous[numerator],previous[denominator])+' '+delta(change,' pp',!['rejected','manualCount'].includes(numerator))+'</small>';
+   }
    return '<small class="cell-sub">较前一日 '+absoluteComparison(current,previous,numerator,numerator==='operators'?' 人':numerator==='avgSeconds'?' 秒':' 笔',numerator==='avgSeconds'?v=>Number(v).toFixed(2):C,!['rejected','manualCount','avgSeconds'].includes(numerator))+'</small>';
   }
   function pagebar(total,page,size,reason=false){if(reason&&root.HensemWorkorderUI)return root.HensemWorkorderUI.pager(total,page,size,'withdrawReason',S.reasonBusy);const max=Math.max(1,Math.ceil(total/size)),fn=reason?'withdrawReasonPage':'withdrawPage';return '<div class="withdraw-pager"><span>共 '+C(total)+' 条'+(total?' · '+C((page-1)*size+1)+'–'+C(Math.min(page*size,total)):'')+'</span>'+(reason?'':'<select aria-label="每页行数" onchange="withdrawSize(this.value)">'+[20,30,50,100,500].map(n=>'<option value="'+n+'" '+(n===size?'selected':'')+'>'+n+' 条 / 页</option>').join('')+'</select>')+'<button class="btn small" '+(page<=1?'disabled':'')+' onclick="'+fn+'('+(page-1)+')">上一页</button><span>'+page+' / '+max+'</span><button class="btn small" '+(page>=max?'disabled':'')+' onclick="'+fn+'('+(page+1)+')">下一页</button></div>'}
@@ -200,7 +207,7 @@
    return '<div class="live-panel-note" data-newar-coverage="'+(complete?'complete':'partial')+'"><strong>新 AR 提现明细：</strong>'+(complete?'所选创建日已完整采集。':'<strong>所选创建日尚未完整采集，显示已入库部分，不能作为完整总计。</strong>')+' 按各平台当地创建日期统计，订单状态为当前已采集状态；复用每 10 分钟入库明细，不与旧日报重复累加。'+(coverage.previousComplete===false?' 前期覆盖不完整，暂不比较涨跌。':'')+(operators?' 操作人按订单记录的当前操作人汇总，不代表历史操作次数。':'')+'</div>';
   }
   function draw(){const operators=view()==='operators',d=S.data||{},t=d.totals||{},prior=d.previousTotals,comparisonIssue=summaryComparisonIssue(d),den=operators?'processed':'total',rows=d.rows||[];
-   const ratio=(r,key)=>{const count=r[key],total=r[den];if(!countKnown(r,key)||!known(total)||Number(count)<0||Number(total)<=0)return '—';const value=R(count,total);return key==='autoCount'&&Number(count)/Number(total)<0.45?'<span class="red">'+value+'</span>':value};
+   const ratio=(r,key)=>{const count=r[key],total=r[den];if(!shareKnown(r,key,den))return '—';const value=R(count,total);return key==='autoCount'&&Number(count)/Number(total)<0.45?'<span class="red">'+value+'</span>':value};
    const controls=toolbar();let body='';if(S.dirty)return controls+'<div class="live-status">筛选条件已修改，点击查询读取正式统计。</div>';
    if(S.loading){body+='<div class="live-status" role="status">正在读取'+(operators?'操作人统计':'自动出款统计')+'…'+(S.data?'同一筛选的上次成功结果仍显示，尚未刷新。':'')+'</div>';if(!S.data)return controls+body}
    if(S.error){body+='<div class="live-status live-error" role="alert">'+(S.data?'刷新失败，同一筛选的上次成功结果已保留。':'')+E(S.error)+' <button class="link" onclick="withdrawLoad()">重试</button></div>';if(!S.data)return controls+body}
@@ -216,7 +223,7 @@
     (!operators?'<div class="live-panel-note">未分处理方式 '+(known(t.unclassifiedCount)?C(t.unclassifiedCount):'—')+' 笔 · '+ratio(t,'unclassifiedCount')+' · 当前覆盖 '+C(t.platforms||0)+' 平台'+(singleDay()&&comparisonIssue?' · '+(Number.isSafeInteger(d.comparison.matchedRows)&&Number.isSafeInteger(d.comparison.totalRows)&&d.comparison.matchedRows>=0&&d.comparison.totalRows>=d.comparison.matchedRows?'前期有记录 '+C(d.comparison.matchedRows)+' / '+C(d.comparison.totalRows)+' 平台 · ':'')+E(comparisonIssue):'')+'</div>':comparisonIssue?'<div class="live-panel-note">'+E(comparisonIssue)+'</div>':'')+'</section>';
    const sort=(label,key)=>'<button class="link" onclick="withdrawSort(\''+key+'\')">'+label+' '+(S.sort===key?(S.asc?'↑':'↓'):'↕')+'</button>';
    const comparisonRow=r=>r.source==='AR'&&d.arCoverage?.coverageBasis==='unverified_source_continuity'&&(d.arCoverage.currentComplete===false||d.arCoverage.previousComplete===false)?{...r,comparisonComparable:false}:r;
-   const rate=(r,key)=>ratio(r,key)+comparison(comparisonRow(r),r.previous,key,den);
+   const rate=(r,key)=>ratio(r,key)+(r.country?comparison(comparisonRow(r),r.previous,key,den):'');
    const headers=[...(S.daily?['日期']:[]),'<span class="withdraw-platform-heading">'+sort('盘口 / 平台','platform')+sort('国家','country')+'</span>',...(operators?['操作人',sort('处理笔数','processed'),sort('成功','success'),sort('驳回','rejected'),sort('成功占比','successRate'),sort('驳回占比','rejectRate')]:[sort('总提现笔数','total'),sort('成功','success'),sort('驳回','rejected'),sort('成功占比','successRate'),sort('驳回占比','rejectRate'),sort('自动出款','autoCount'),sort('人工处理','manualCount'),sort('自动占比','autoRate'),sort('人工占比','manualRate')]),sort('平均处理用时','avgSeconds'),sort('昨日处理用时','previousAvgSeconds'),sort('用时增减 / %','durationChange'),...(!operators?['原因 / 每日备注','详情']:[])];
    const totalCell=r=>countCell(r,'total')+(r.country&&r.classificationAvailable!==false&&known(r.unclassifiedCount)&&Number(r.unclassifiedCount)>0&&Number(r.unclassifiedCount)<=Number(r.total)?'<small class="cell-sub" title="自动、人工及未分类相加为总笔数；占比均按总笔数计算">未分类 '+C(r.unclassifiedCount)+' 笔</small>':'');
    const cells=(r,i)=>[...(S.daily?[E(r.dataDate)]:[]),identityCell(r),...(operators?[E(r.account),countCell(r,'processed'),countCell(r,'success'),countCell(r,'rejected'),rate(r,'success'),rate(r,'rejected')]:[totalCell(r),countCell(r,'success'),countCell(r,'rejected'),rate(r,'success'),rate(r,'rejected'),countCell(r,'autoCount'),countCell(r,'manualCount'),rate(r,'autoCount'),rate(r,'manualCount')]),
