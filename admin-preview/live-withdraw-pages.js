@@ -15,7 +15,7 @@
  }
  root.HensemLiveWithdrawPages={create(ctx){
   const {L,E,C,R,N,box,table,request,render}=ctx;
-  const S={data:null,dataKey:'',loadingKey:'',error:'',loading:false,dirty:false,serial:0,view:'auto',platforms:[],rowCountry:'',account:'',sort:'total',asc:false,daily:false,historical:false,page:1,size:20,open:false,search:'',reason:null,reasonData:null,reasonError:'',reasonBusy:false,reasonSerial:0,reasonPage:1,reasonSize:20,reasonLabel:'',reasonQuery:'',reasonTrigger:null,originalNote:'',originalNoteTitle:'驳回原文',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false};
+  const S={localSnapshot:false,serverPaging:false,data:null,dataKey:'',loadingKey:'',error:'',loading:false,dirty:false,serial:0,view:'auto',platforms:[],rowCountry:'',account:'',sort:'total',asc:false,daily:false,historical:false,page:1,size:20,open:false,search:'',reason:null,reasonData:null,reasonError:'',reasonBusy:false,reasonSerial:0,reasonPage:1,reasonSize:20,reasonLabel:'',reasonQuery:'',reasonTrigger:null,originalNote:'',originalNoteTitle:'驳回原文',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false};
   const initialState={...S,platforms:[]};
   const jsArgument=value=>JSON.stringify(String(value??'')).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const sourceNote=(value,empty='（源备注为空）',title='驳回原文',label='',exact=false)=>{const sanitized=S.reasonData?.reasonTextSanitized===true&&S.reasonData?.reasonTextFormat==='sanitized_label_v1';if(sanitized&&title!=='备注来源状态')title='采集说明（已脱敏）';const raw=String(value??''),full=exact?(raw.trim()?raw:empty):cleanNote(value)||empty,preview=label||(full.length>96?full.slice(0,96)+'…':full);return '<button type="button" class="withdraw-source-note" title="'+(title==='备注来源状态'?'点击查看备注来源状态':sanitized?'点击查看采集说明（已脱敏）':'点击查看完整原文')+'" onclick="withdrawReasonOriginal('+jsArgument(full)+','+jsArgument(title)+(exact?',true':'')+')">'+E(preview)+'</button>'};
@@ -46,23 +46,24 @@
    const chosen=S.platforms.length?list.filter(p=>S.platforms.includes(p.name)):list;
    const platforms=S.platforms.length||S.historical||activeTeams().length?[...new Set(chosen.map(requestPlatform))]:[];
    if(platforms.length>200)throw Error('当前团队平台较多，请选择不超过 200 个平台。');
-   const base={action:'autoWithdraw',...dates(),country:countries.length===1?countries[0]:displayCountry(),platforms,view:view(),sort:S.sort,ascending:S.asc,daily:S.daily,...(view()==='operators'&&S.account?{account:S.account}:{}),offset:(S.page-1)*S.size,limit:S.size};
+   const base={action:'autoWithdraw',...dates(),country:countries.length===1?countries[0]:displayCountry(),platforms,view:view(),sort:S.sort,ascending:S.asc,daily:S.daily,...(view()==='operators'&&S.account?{account:S.account}:{}),offset:view()==='auto'&&!S.daily&&!S.serverPaging?0:(S.page-1)*S.size,limit:view()==='auto'&&!S.daily&&!S.serverPaging?500:S.size};
+   if(view()==='auto'&&!S.daily&&!S.serverPaging){base.sort='total';base.ascending=false;}
    if(countries.length>1){
     base.scopeTargets=countries.map(country=>({country,platforms:[...new Set(chosen.filter(p=>rawTarget(p)===country).map(requestPlatform))]})).filter(t=>t.platforms.length);
     if(base.scopeTargets.some(t=>t.platforms.length>200))throw Error('当前团队平台较多，请选择不超过 200 个平台。');
    }
    return base;
   }
-  function invalidate(){S.serial++;S.loading=false;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;S.page=1}
+  function invalidate(){S.localSnapshot=false;S.serverPaging=false;S.serial++;S.loading=false;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;S.page=1}
   async function load(reset=false){
    if(!L.catalogReady)return;if(reset){S.page=1;reasonCache.clear()}
    const scope=selectionKey();if(S.scopeKey&&S.scopeKey!==scope){S.platforms=[];S.rowCountry='';S.search='';S.data=null;S.page=1}S.scopeKey=scope;
-   const target=view();if(S.view!==target){S.view=target;S.page=1;S.sort=target==='operators'?'processed':'total';S.asc=false;S.daily=false;S.reason=null}
+   const target=view();if(S.view!==target){S.view=target;S.localSnapshot=false;S.serverPaging=false;S.page=1;S.sort=target==='operators'?'processed':'total';S.asc=false;S.daily=false;S.reason=null}
    let targetQuery,key;try{targetQuery=query();key=JSON.stringify([scope,targetQuery])}catch(e){S.serial++;S.data=null;S.loading=false;S.loadingKey='';S.error=e.message||'读取失败';S.dirty=false;render();return}
    if(S.loading&&S.loadingKey===key)return;
    if(S.dataKey!==key)S.data=null;
    const serial=++S.serial;S.loadingKey=key;S.loading=true;S.error='';S.dirty=false;render();
-   try{const data=await request(targetQuery);if(serial!==S.serial)return;S.data={...data,country:displayCountry(),rawCountry:targetQuery.country,scopeTargets:targetQuery.scopeTargets||null,scopeKey:scope};S.dataKey=key;S.loading=false;S.loadingKey='';render()}
+   try{const data=await request(targetQuery);if(serial!==S.serial)return;S.data={...data,country:displayCountry(),rawCountry:targetQuery.country,scopeTargets:targetQuery.scopeTargets||null,scopeKey:scope};S.dataKey=key;S.localSnapshot=target==='auto'&&!targetQuery.daily&&targetQuery.offset===0&&targetQuery.limit===500&&Array.isArray(data.rows)&&data.total!==null&&data.total!==undefined&&data.total!==''&&typeof data.total!=='boolean'&&Number.isSafeInteger(Number(data.total))&&Number(data.total)>=0&&Number(data.total)<=500&&data.rows.length===Number(data.total);if(target==='auto'&&!targetQuery.daily&&!S.localSnapshot){S.serverPaging=true;if(targetQuery.limit===500){S.sort=targetQuery.sort;S.asc=targetQuery.ascending;S.page=1;}if(Array.isArray(S.data.rows)&&S.data.rows.length>S.size)S.data.rows=S.data.rows.slice(0,S.size);}S.page=Math.min(S.page,Math.max(1,Math.ceil(Number(data.total||0)/S.size)));S.loading=false;S.loadingKey='';render()}
    catch(e){if(serial!==S.serial)return;S.loading=false;S.loadingKey='';S.error=e.message||'读取失败';render()}
   }
   const singleDay=()=>L.from.slice(0,10)===L.to.slice(0,10);
@@ -224,7 +225,39 @@
    const complete=coverage.currentComplete===true&&platforms.size>0&&days.length===expected*platforms.size&&new Set(days.map(day=>JSON.stringify([day.country,day.platform,day.date]))).size===days.length&&days.every(day=>day.complete===true&&typeof day.country==='string'&&typeof day.platform==='string');
    return '<div class="live-panel-note" data-newar-coverage="'+(complete?'complete':'partial')+'"><strong>新 AR 提现明细：</strong>'+(complete?'所选创建日已完整采集。':'<strong>所选创建日尚未完整采集，显示已入库部分，不能作为完整总计。</strong>')+' 按各平台当地创建日期统计，订单状态为当前已采集状态；复用每 10 分钟入库明细，不与旧日报重复累加。'+(coverage.previousComplete===false?' 前期覆盖不完整，暂不比较涨跌。':'')+(operators?' 操作人按订单记录的当前操作人汇总，不代表历史操作次数。':'')+'</div>';
   }
-  function draw(){const operators=view()==='operators',d=S.data||{},t=d.totals||{},prior=d.previousTotals,comparisonIssue=summaryComparisonIssue(d),den=operators?'processed':'total',rows=d.rows||[];
+  function decimalSort(value){
+   if(value===null||value===undefined||typeof value==='boolean'||typeof value==='string'&&!value.trim()||!Number.isFinite(Number(value)))return null;
+   const m=String(value).trim().match(/^([+-]?)(\d+)(?:\.(\d*))?(?:e([+-]?\d+))?$/i);if(!m)return null;
+   const scale=(m[3]||'').length-Number(m[4]||0);if(Math.abs(scale)>400)return null;
+   let n=BigInt(m[2]+(m[3]||''))*(m[1]==='-'?-1n:1n),d=1n;if(scale>0)d=10n**BigInt(scale);else n*=10n**BigInt(-scale);return {n,d};
+  }
+  function numericOrder(a,b){const left=a.n*b.d,right=b.n*a.d;return left<right?-1:left>right?1:0;}
+  function textOrder(a,b){const left=Array.from(String(a)),right=Array.from(String(b));for(let i=0;i<Math.min(left.length,right.length);i++){const delta=left[i].codePointAt(0)-right[i].codePointAt(0);if(delta)return delta<0?-1:1;}return left.length-right.length;}
+  function nullableOrder(a,b,compare){return a==null?b==null?0:1:b==null?-1:compare(a,b);}
+  function sortValue(row,key){
+   if(['country','platform','account'].includes(key))return row[key]??null;
+   if(key==='previousAvgSeconds')return processingValueKnown(row.previous?.avgSeconds)?decimalSort(row.previous.avgSeconds):null;
+   if(key==='avgSeconds')return processingValueKnown(row.avgSeconds)?decimalSort(row.avgSeconds):null;
+   if(key==='durationChange'){
+    const a=decimalSort(row.avgSeconds),b=decimalSort(row.previous?.avgSeconds);if(!processingBases[row.durationBasis]||row.durationBasis!==row.previous?.durationBasis||!a||!b||a.n<0n||b.n<0n)return null;
+    if(b.n===0n)return a.n===0n?{n:0n,d:1n}:null;return {n:a.n*b.d-b.n*a.d,d:a.d*b.n};
+   }
+   const ratios={successRate:'success',rejectRate:'rejected',autoRate:'autoCount',manualRate:'manualCount'};
+   if(ratios[key]){if(!shareKnown(row,ratios[key],['successRate','rejectRate'].includes(key)?row.total!==null&&row.total!==undefined?'total':'processed':'total'))return null;const a=decimalSort(row[ratios[key]]),b=decimalSort(['successRate','rejectRate'].includes(key)?row.total??row.processed:row.total);if(!a||!b||b.n===0n)return null;const n=a.n*b.d,d=a.d*b.n;return d<0n?{n:-n,d:-d}:{n,d};}
+   return ['autoCount','manualCount'].includes(key)&&!countKnown(row,key)?null:decimalSort(row[key]);
+  }
+  function localReady(){if(!S.localSnapshot||!S.data||S.dirty||view()!=='auto'||S.daily||!L.catalogReady||S.data.scopeKey!==selectionKey())return false;try{return S.dataKey===JSON.stringify([selectionKey(),query()]);}catch{return false;}}
+  function renderLocal(){
+   const x=root.scrollX,y=root.scrollY,previous=document.querySelector?.('.withdraw-stat-table'),left=previous?.scrollLeft,top=previous?.scrollTop;render();const next=document.querySelector?.('.withdraw-stat-table');if(next&&Number.isFinite(left)){next.scrollLeft=left;if(Number.isFinite(top))next.scrollTop=top;}if(Number.isFinite(x)&&Number.isFinite(y)&&(root.scrollX!==x||root.scrollY!==y))root.scrollTo?.(x,y);
+  }
+  function displayedRows(){
+   const rows=S.data?.rows||[];if(!localReady())return rows;
+   const text=['country','platform','account'].includes(S.sort),ordered=rows.map((row,index)=>({row,index,value:sortValue(row,S.sort)})).sort((a,b)=>{
+    let primary=nullableOrder(a.value,b.value,text?textOrder:numericOrder);if(a.value!=null&&b.value!=null&&S.asc===false)primary=-primary;if(primary)return primary;
+    for(const key of ['country','platform','dataDate','account']){const tie=nullableOrder(a.row[key]??null,b.row[key]??null,textOrder);if(tie)return tie;}return a.index-b.index;
+   });const max=Math.max(1,Math.ceil(ordered.length/S.size));S.page=Math.min(S.page,max);return ordered.slice((S.page-1)*S.size,S.page*S.size).map(item=>item.row);
+  }
+  function draw(){const operators=view()==='operators',d=S.data||{},t=d.totals||{},prior=d.previousTotals,comparisonIssue=summaryComparisonIssue(d),den=operators?'processed':'total',rows=displayedRows();
    const ratio=(r,key)=>{const count=r[key],total=r[den];if(!shareKnown(r,key,den))return '—';const value=R(count,total);return key==='autoCount'&&Number(count)/Number(total)<0.45?'<span class="red">'+value+'</span>':value};
    const controls=toolbar();let body='';if(S.dirty)return controls+'<div class="live-status">筛选条件已修改，点击查询读取正式统计。</div>';
    if(S.loading){body+='<div class="live-status" role="status">正在读取'+(operators?'操作人统计':'自动出款统计')+'…'+(S.data?'同一筛选的上次成功结果仍显示，尚未刷新。':'')+'</div>';if(!S.data)return controls+body}
@@ -259,7 +292,7 @@
     }
     a.country='';a.platform=label+(a.classificationPartial===true?'（分类笔数仅已确认）':'');a.account='';const row=cells(a,0);if(!operators){row[row.length-1]='';row[row.length-2]=''}return row;
    };
-   body+=box(operators?'操作人表现':'平台出款表现',table(headers,rows.map(cells),'withdraw-stat-table'+(S.daily?' withdraw-daily-table':'')+(operators?' withdraw-operators-table':''),Number(d.total||0)>S.size?[footer(rows,'当前页汇总'),footer([],'全部汇总',t)]:[footer([],'合计',t)])+pagebar(Number(d.total||0),S.page,S.size),
+   body+=box(operators?'操作人表现':'平台出款表现',table(headers,rows.map((row,index)=>cells(row,localReady()?(d.rows||[]).indexOf(row):index)),'withdraw-stat-table'+(S.daily?' withdraw-daily-table':'')+(operators?' withdraw-operators-table':''),Number(d.total||0)>S.size?[footer(rows,'当前页汇总'),footer([],'全部汇总',t)]:[footer([],'合计',t)])+pagebar(Number(d.total||0),S.page,S.size),
     '按来源当地日期读取，与现有后台使用相同日统计。新AR直传覆盖同平台同日副本；昨日对比不计入当日总计。平均处理用时按有效时间样本加权；WG 使用创建至操作处理时间，缺少或异常时间不计入，不代表支付到账时长。缺少前期记录时不显示涨跌。');
    if(!operators)body+=coveragePanel(d.platformCoverage);
    return controls+'<div id="withdraw-content">'+body+'</div><div id="withdraw-reason-overlay">'+reasonPanel()+'</div>'+noteDialog();
@@ -314,10 +347,10 @@
   root.withdrawReset=()=>{S.historical=false;S.platforms=[];S.rowCountry='';S.account='';S.daily=false;root.withdrawPeriod('yesterday')};
   root.withdrawShift=n=>{L.from=addDay(L.from.slice(0,10),n)+'T00:00:00';L.to=addDay(L.to.slice(0,10),n)+'T23:59:59';invalidate();render()};
   root.withdrawPeriod=key=>{const zone=scopeCatalog().find(p=>p.timezone)?.timezone||(displayCountry()==='巴西'?'America/Sao_Paulo':'Asia/Kolkata'),today=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());let start=today,end=today;if(key==='yesterday')start=end=addDay(today,-1);if(key==='before')start=end=addDay(today,-2);if(key==='week'||key==='lastweek'){const day=new Date(today+'T00:00:00Z').getUTCDay();start=addDay(today,-((day+6)%7));if(key==='lastweek'){end=addDay(start,-1);start=addDay(start,-7)}}if(key==='month')start=today.slice(0,8)+'01';if(key==='lastmonth'){end=addDay(today.slice(0,8)+'01',-1);start=end.slice(0,8)+'01'}L.from=start+'T00:00:00';L.to=end+'T23:59:59';invalidate();render()};
-  root.withdrawPage=page=>{if(!Number.isInteger(page)||page<1)return;S.page=page;if(!S.dirty&&S.data)load();else render()};
-  root.withdrawSize=size=>{if(![20,30,50,100,500].includes(Number(size)))return;S.size=Number(size);if(!S.dirty&&S.data)load(true);else render()};
-  root.withdrawSort=key=>{if(!['country','platform','account','total','processed','success','rejected','autoCount','manualCount','avgSeconds','successRate','rejectRate','autoRate','manualRate','previousAvgSeconds','durationChange'].includes(key))return;S.asc=S.sort===key?!S.asc:false;S.sort=key;if(!S.dirty&&S.data)load(true);else render()};
-  root.withdrawDaily=index=>{const row=S.data?.rows?.[index];if(!row)return;S.platforms=[platformLabel(row)];S.rowCountry=rawTarget(row);S.daily=!S.daily;load(true)};
+  root.withdrawPage=page=>{if(!Number.isInteger(page)||page<1)return;S.page=page;if(localReady()){S.page=Math.min(page,Math.max(1,Math.ceil(S.data.rows.length/S.size)));renderLocal();}else if(!S.dirty&&S.data&&!S.loading)load();else render()};
+  root.withdrawSize=size=>{if(![20,30,50,100,500].includes(Number(size)))return;S.size=Number(size);S.page=1;if(localReady()||S.loading&&view()==='auto'&&!S.daily&&!S.serverPaging)renderLocal();else if(!S.dirty&&S.data)load(true);else render()};
+  root.withdrawSort=key=>{if(!['country','platform','account','total','processed','success','rejected','autoCount','manualCount','avgSeconds','successRate','rejectRate','autoRate','manualRate','previousAvgSeconds','durationChange'].includes(key))return;S.asc=S.sort===key?!S.asc:false;S.sort=key;S.page=1;if(localReady()||S.loading&&view()==='auto'&&!S.daily&&!S.serverPaging)renderLocal();else if(!S.dirty&&S.data)load(true);else render()};
+  root.withdrawDaily=index=>{const row=S.data?.rows?.[index];if(!row)return;S.platforms=[platformLabel(row)];S.rowCountry=rawTarget(row);S.daily=!S.daily;S.localSnapshot=false;S.serverPaging=false;load(true)};
   function clearReasonFilters(){if(!S.reason)return;for(const key of ['category','reasonKey','operatorKey','query'])delete S.reason[key];S.reasonLabel='';S.reasonQuery='';S.reasonPage=1}
   root.withdrawReasons=(index,kind='blocking')=>{const row=S.data?.rows?.[index];if(!row||row.reasonAvailable===false||!['blocking','rejection'].includes(kind))return;S.reason={country:row.country,platform:rowPlatform(row),date:S.daily?row.dataDate:L.from.slice(0,10),kind:kind==='rejection'?'categories':kind};S.reasonTrigger={index,kind};S.reasonData=null;clearReasonFilters();reasonsLoad()};
   root.withdrawReasonKind=kind=>{if(!S.reason||!['blocking','categories','rejection','operators','orders'].includes(kind))return;if(kind==='blocking'||kind==='categories'||blockingKinds.includes(S.reason.kind))clearReasonFilters();S.reason.kind=kind;S.reasonPage=1;reasonsLoad()};
