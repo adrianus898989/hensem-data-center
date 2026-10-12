@@ -30,9 +30,20 @@
   const now=()=>c.now?c.now():Date.now();
   // Reuse only a verified successful result in this document and exact actor,
   // native platform and query scope. Failed or incomplete reads have no cache.
+  function cacheCoverageComplete(r,item){
+   const cover=r.coverage,count=n=>Number.isSafeInteger(n)&&n>=0;
+   if(!cover||!['orderCount','missingMemberCount','unknownStatusCount','orderSequenceUncertainCount'].every(k=>Object.hasOwn(cover,k)&&count(cover[k]))||['missingMemberCount','unknownStatusCount','orderSequenceUncertainCount'].some(k=>cover[k]!==0))return false;
+   if(['coverageUnknownDays','missingSuccessTimeCount'].some(k=>cover[k]!==undefined&&(!count(cover[k])||cover[k]!==0)))return false;
+   if(yash(item.platform))return cover.calculationComplete===true&&cover.sourceCompletenessVerified===true&&cover.coverageUnknownDays===0&&cover.missingSuccessTimeCount===0;
+   if(cover.calculationComplete===true)return true;
+   // AR/NEWAR version3 summaries predate calculationComplete. Their explicit
+   // zero calculation-gap counters permit reuse without asserting source coverage.
+   const source=String(item.platform.source||'').toLowerCase().replaceAll('_','');
+   return ['ar','newar'].includes(source)&&!Object.hasOwn(cover,'calculationComplete')&&cover.sourceCompletenessVerified===false;
+  }
   const reusable=(r,item)=>{
    const stamp=r._submissionReadAt,time=now(),ttl=Date.parse(item.request.endAt)<=time-86400000?300000:30000;
-   return !!c.accessContext?.()&&Number.isSafeInteger(stamp)&&time>=stamp&&time-stamp<ttl&&r.coverage?.calculationComplete===true&&!Number(r.coverage?.missingMemberCount||0)&&!Number(r.coverage?.unknownStatusCount||0)&&!Number(r.coverage?.orderSequenceUncertainCount||0)&&!Number(r.coverage?.coverageUnknownDays||0)&&!Number(r.coverage?.missingSuccessTimeCount||0)&&(item.request.charts!==true||r.dashboard?.version===responseVersion);
+   return !!c.accessContext?.()&&Number.isSafeInteger(stamp)&&time>=stamp&&time-stamp<ttl&&cacheCoverageComplete(r,item)&&(item.request.charts!==true||r.dashboard?.version===responseVersion);
   };
   const currentKey=()=>{try{return scope().key}catch{return ''}};
   const view=()=>renderSnapshot||(L.dirty||S.key!==currentKey()?initial():S);
