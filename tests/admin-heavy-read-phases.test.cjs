@@ -59,3 +59,24 @@ test('a changed-scope query releases the old phase and late completion cannot cl
 test('retry of several failed platforms owns one lane and keeps already completed platform data',async()=>{
  const h=await setup(),first=h.c.liveQuery();await settle();await advance(h,Error('Synthetic first failure'));await advance(h);await advance(h,Error('Synthetic second failure'));await finish(h,first);assert.equal(h.L.queryFailures.length,2);const retained=h.L.results[0],start=h.history.length,retry=h.c.liveRetryFailed();await settle();assert.equal(h.active(),1);await finish(h,retry);assert.equal(h.max(),1);assert.equal(h.L.queryFailures.length,0);assert.equal(h.L.results.find(r=>r.platform.id===R.id),retained);assert.deepEqual(h.history.slice(start).filter(q=>q.action==='aggregate').map(q=>q.platformId),[P.id,Q.id]);
 });
+
+
+async function failedMerchantMembers(){
+ const h=await setup('merchants'),run=h.c.liveQuery();for(let n=0;n<100;n++){await settle();if(h.waiting.length){const q=h.waiting[0].q;await advance(h,q.action==='memberDaily'?Error('Synthetic member read failed'):null);}else if(!h.L.loading&&!h.html().includes('live-read-phase'))break;}await run;await settle();h.c.liveMemberCountsDetails();assert.match(h.drawers.at(-1).html,/liveMemberCountsRetry/);assert.equal(h.history.filter(q=>q.action==='memberDaily').length,3);return h;
+}
+
+test('merchant member dialog retries real failed reads in one owned lane without duplicating clicks or rerunning aggregates',async()=>{
+ const h=await failedMerchantMembers(),start=h.history.length,cancels=h.controls.cancels,run=h.c.liveMemberCountsRetry();await settle();assert.equal(h.active(),1);assert.equal(h.history.at(-1).action,'memberDaily');assert.match(h.html(),/重新读取会员人数/);assert.equal(h.controls.ready(),false);assert(h.controls.cancels>cancels);const count=h.history.length;await h.c.liveMemberCountsRetry();await h.c.liveRetryFeeLookup();await settle();assert.equal(h.history.length,count);await finish(h,run);assert.equal(h.max(),1);assert.deepEqual(h.history.slice(start).map(q=>q.action),['memberDaily','memberDaily','memberDaily']);assert.equal(h.controls.ready(),true);h.c.liveMemberCountsDetails();assert.doesNotMatch(h.drawers.at(-1).html,/所选平台人数读取失败/);assert(!h.html().includes('live-read-phase'));
+});
+
+test('merchant member retry rejects missing view/query permission, changed scopes and another active page read',async()=>{
+ const h=await failedMerchantMembers(),count=h.history.length;
+ for(const mutate of [()=>h.c.hensemRoleAllowed=(page,action)=>action!=='view',()=>h.c.hensemRoleAllowed=(page,action)=>action!=='query',()=>h.L.dirty=true,()=>h.L.from='2026-09-20T00:00:00',()=>h.L.queryScope='',()=>h.L.pageQueried=false,()=>h.L.catalogReady=false,()=>h.L.loading=true,()=>h.L.queryRetrying=true]){
+  const saved={allowed:h.c.hensemRoleAllowed,dirty:h.L.dirty,from:h.L.from,queryScope:h.L.queryScope,pageQueried:h.L.pageQueried,catalogReady:h.L.catalogReady,loading:h.L.loading,queryRetrying:h.L.queryRetrying};mutate();await h.c.liveMemberCountsRetry();assert.equal(h.history.length,count);h.c.hensemRoleAllowed=saved.allowed;delete saved.allowed;Object.assign(h.L,saved);
+ }
+ const query=h.c.liveQuery(true);await settle();const n=h.history.length;await h.c.liveMemberCountsRetry();await settle();assert.equal(h.history.length,n,'the active report phase has exclusive ownership');await finish(h,query);assert.equal(h.max(),1);
+});
+
+test('navigation during merchant member retry stops remaining platforms and ignores late success without reclaiming the phase',async()=>{
+ const h=await failedMerchantMembers(),count=h.history.length,run=h.c.liveMemberCountsRetry();await settle();const old=h.waiting.shift();h.c.setPage('providers');await settle();old.d.resolve(reply(old.q));await run;await settle();assert.equal(h.history.length,count+1);assert.equal(h.c.state.page,'providers');assert(!h.html().includes('live-read-phase'));assert.equal(h.active(),0);
+});

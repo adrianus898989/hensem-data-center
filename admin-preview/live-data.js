@@ -511,7 +511,12 @@
  submissionAnalysis=window.HensemSubmissionAnalysis?.create({L,E,N,C,dashboard:()=>state.page==='events',selected:selectedVisible,query,request:(r,options)=>window.hensemLiveRequest(r,options),canStart:()=>!phasedReadBusy(),render:()=>render(),open:(title,html)=>openDrawer(title,html),box,table})||null;
  memberCounts=window.HensemLiveMemberCounts?.create({L,E,N,C,selected:selectedVisible,query,request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
  window.liveMemberCountsDetails=(tab,basis)=>memberCounts?.details(tab,basis);
- window.liveMemberCountsRetry=()=>{if(state.page==='overview'&&!L.dirty)return memberCounts?.load()};
+ window.liveMemberCountsRetry=async()=>{
+  if(state.page==='overview'&&!L.dirty)return memberCounts?.load();
+  if(state.page!=='merchants'||!memberCounts||!roleAllowed('merchants','view')||!roleAllowed('merchants','query')||!L.pageQueried||!L.catalogReady||L.dirty||L.loading||L.queryRetrying||phasedReadBusy()||L.queryScope!==aggregateQueryScope()||memberCounts.state.status==='loading')return;
+  const serial=L.serial;beginReadPhases(serial);setReadPhase(serial,'重新读取会员人数');
+  try{return await memberCounts.ensure(true,1)}finally{endReadPhases(serial)}
+ };
  const collectedPage=HensemLiveCollectedData.create({L,E,C,N,box,table,request:q=>window.hensemLiveRequest(q),render:()=>{if(state.page==='collected_data')render()}});
  const withdrawPages=HensemLiveWithdrawPages.create({L,E,C,R,N,box,table,request:q=>window.hensemLiveRequest(q),render:()=>{if(isWithdrawPage(state.page))render()},page:()=>state.page});
  function autoWithdrawView(){return withdrawPages.render()}
