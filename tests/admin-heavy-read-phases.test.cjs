@@ -26,7 +26,7 @@ test('three-platform query activates aggregate then exclusion per platform and s
  h.setNow('2026-09-23T12:01:00Z');await settle();assert.equal(h.timers.length,timerCount,'waiting exclusion has no 30s execution timer');
  await advance(h);assert.equal(h.history[1].action,'submissionAnalysis');assert.equal(h.active(),1);assert(h.timers.length>timerCount);await finish(h,run);
  assert.equal(h.max(),1);assert.deepEqual(h.history.slice(0,6).map(q=>[q.action,q.platformId]),platforms.flatMap(p=>[['aggregate',p.id],['submissionAnalysis',p.id]]));
- const actions=h.history.map(q=>q.action),lastAggregate=actions.lastIndexOf('aggregate'),firstIntake=actions.indexOf('intakeCoverage'),work=actions.indexOf('workorders'),fee=actions.indexOf('rates');assert(lastAggregate<firstIntake&&firstIntake<work&&work<fee);assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.L.providerIntake.status,'ready');assert.equal(h.L.providerComparisonIntake.status,'ready');assert.equal(h.controls.ready(),true);assert(h.controls.cancels>0);assert(!h.html().includes('live-read-phase'));
+ const actions=h.history.map(q=>q.action),lastAggregate=actions.lastIndexOf('aggregate'),firstIntake=actions.indexOf('intakeCoverage'),work=actions.indexOf('workorders'),fee=actions.indexOf('rates');assert(fee<lastAggregate&&lastAggregate<firstIntake&&firstIntake<work);assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.L.providerIntake.status,'ready');assert.equal(h.L.providerComparisonIntake.status,'ready');assert.equal(h.controls.ready(),true);assert(h.controls.cancels>0);assert(!h.html().includes('live-read-phase'));
 });
 
 test('early aggregate and exclusion failure stay terminal while later platforms and auxiliary phases still finish',async()=>{
@@ -48,7 +48,7 @@ test('manual workorder, fee and exclusion retries cannot bypass the active page 
 });
 
 test('merchant trend click defers until current phases finish, then owns one lane with no repeat on failure',async()=>{
- const h=await setup('merchants'),run=h.c.liveQuery();await settle();await h.c.liveView('trend');assert.equal(h.history.length,1);assert.equal(h.L.merchantTrend,null);await finish(h,run);assert.equal(h.max(),1);assert.equal(h.L.loadedView,'full');assert.equal(h.L.merchantTrend.status,'ready');const people=h.history.map(q=>q.action).indexOf('memberDaily'),fees=h.history.map(q=>q.action).indexOf('rates');assert(people>=0&&people<fees,'merchant member reads finish one at a time before fees');assert.equal(h.history.filter(q=>q.action==='memberDaily').length,3);
+ const h=await setup('merchants'),run=h.c.liveQuery();await settle();await h.c.liveView('trend');assert.equal(h.history.length,1);assert.equal(h.L.merchantTrend,null);await finish(h,run);assert.equal(h.max(),1);assert.equal(h.L.loadedView,'full');assert.equal(h.L.merchantTrend.status,'ready');const people=h.history.map(q=>q.action).indexOf('memberDaily'),fees=h.history.map(q=>q.action).indexOf('rates');assert(fees>=0&&fees<people,'fees render before merchant member reads while preserving the one lane');assert.equal(h.history.filter(q=>q.action==='memberDaily').length,3);
 });
 
 
@@ -79,4 +79,42 @@ test('merchant member retry rejects missing view/query permission, changed scope
 
 test('navigation during merchant member retry stops remaining platforms and ignores late success without reclaiming the phase',async()=>{
  const h=await failedMerchantMembers(),count=h.history.length,run=h.c.liveMemberCountsRetry();await settle();const old=h.waiting.shift();h.c.setPage('providers');await settle();old.d.resolve(reply(old.q));await run;await settle();assert.equal(h.history.length,count+1);assert.equal(h.c.state.page,'providers');assert(!h.html().includes('live-read-phase'));assert.equal(h.active(),0);
+});
+
+test('completed main results receive paginated fees before slow comparison/intake without acquiring another lane',async()=>{
+ const h=await setup(),run=h.c.liveQuery();await settle();
+ for(let n=0;n<6;n++)await advance(h);
+ assert.equal(h.L.results.length,3);assert.equal(h.L.loading,false);assert.equal(h.history.at(-1).action,'rates');assert.equal(h.L.feeLookupLoading,true);assert.equal(h.active(),1);assert.equal(h.controls.ready(),false);
+ assert(!h.history.some(q=>q.action==='intakeCoverage'||q.action==='workorders'));assert.match(h.html(),/读取费率目录/);
+ const fee=h.waiting.shift();fee.d.resolve({total:501,rows:Array.from({length:500},(_,i)=>({id:'synthetic-rate-'+i,provider:'Synthetic provider',collectFee:'4%',scopeType:'all'}))});await settle();
+ assert.equal(h.history.at(-1).action,'rates');assert.equal(h.history.at(-1).offset,500);assert.equal(h.active(),1);assert(!h.history.some(q=>q.action==='intakeCoverage'));
+ const page=h.waiting.shift();page.d.resolve({total:501,rows:[{id:'synthetic-rate-last',provider:'Synthetic provider',collectFee:'4%',scopeType:'all'}]});await settle();
+ assert.equal(h.L.feeLookupLoading,false);assert.equal(h.L.feeLookupRows.length,501);assert(h.history.at(-1).action==='aggregate','previous orders only start after fees settle');
+ for(let n=0;n<3;n++)await advance(h);assert.equal(h.history.at(-1).action,'intakeCoverage');assert.equal(h.L.feeLookupRows.length,501,'fee result remains usable while reconciliation waits');assert.equal(h.max(),1);
+ await finish(h,run);const initial=h.history.length,repeated=h.c.liveQuery();await finish(h,repeated);assert(!h.history.slice(initial).some(q=>q.action==='rates'),'complete fee cache is reused');assert(!h.history.slice(initial).some(q=>q.action==='aggregate'),'successful aggregate windows reuse TTL');assert.equal(h.max(),1);
+});
+test('fee failure is terminal and does not stop comparison or reconciliation, or retry automatically',async()=>{
+ const h=await setup(),run=h.c.liveQuery();await settle();for(let n=0;n<6;n++)await advance(h);assert.equal(h.history.at(-1).action,'rates');await advance(h,Error('Synthetic fee read failure'));assert.equal(h.L.feeLookupLoading,false);assert.match(h.L.feeLookupError,/Synthetic fee read failure/);assert.equal(h.history.at(-1).action,'aggregate');
+ await finish(h,run);assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.L.providerIntake.status,'ready');assert.equal(h.L.providerComparisonIntake.status,'ready');assert(h.L.workorders);assert.equal(h.history.filter(q=>q.action==='rates').length,1);assert.equal(h.max(),1);
+});
+test('navigation or a new scope during early fee loading aborts its active page and cannot restore stale results',async()=>{
+ const h=await setup(),old=h.c.liveQuery();await settle();for(let n=0;n<6;n++)await advance(h);const prior=h.waiting.shift();assert.equal(prior.q.action,'rates');h.c.setPage('amount');assert.equal(prior.signal.aborted,true);await old;await settle();assert.equal(h.active(),0);assert.equal(h.history.length,7);assert.equal(h.L.feeLookupLoading,false);assert.equal(h.L.feeLookupRows,null);assert.equal(h.L.feeLookupError,'');
+ prior.d.resolve({total:1,rows:[{id:'STALE-FEE'}]});await settle();assert.equal(h.L.feeLookupRows,null);h.c.setPage('providers');const fresh=h.c.liveQuery();await settle();await finish(h,fresh);assert.equal(h.max(),1);assert.deepEqual(Array.from(h.L.feeLookupRows),[]);assert.equal(h.L.results.length,3);
+ const next=h.c.liveQuery(true);await settle();for(let n=0;n<6;n++)await advance(h); // Existing complete fee cache must skip the fee transport entirely.
+ assert.equal(h.history.at(-1).action,'aggregate');assert.equal(h.history.filter(q=>q.action==='rates').length,2);await finish(h,next);assert.equal(h.max(),1);
+});
+
+test('a changed query during fee loading aborts old fees and an old finally cannot release the fresh phase',async()=>{
+ const h=await setup(),old=h.c.liveQuery();await settle();for(let n=0;n<6;n++)await advance(h);const prior=h.waiting.shift();assert.equal(prior.q.action,'rates');
+ h.c.liveSet('provider','Synthetic next provider');const next=h.c.liveQuery();await settle();assert.equal(prior.signal.aborted,true);assert.equal(h.active(),1);assert.equal(h.history.at(-1).action,'aggregate');assert.match(h.html(),/live-read-phase/);
+ prior.d.resolve({total:1,rows:[{id:'STALE-FEE'}]});await old;await settle();assert.equal(h.L.feeLookupRows,null);assert.equal(h.L.feeLookupError,'');assert.equal(h.active(),1);assert.match(h.html(),/live-read-phase/);await finish(h,next);
+ assert.equal(h.max(),1);assert.deepEqual(Array.from(h.L.feeLookupRows),[]);assert(h.history.slice(7).filter(q=>q.action==='aggregate').every(q=>q.providers?.[0]==='Synthetic next provider'));assert(!h.html().includes('live-read-phase'));
+});
+
+
+test('provider payout reads its existing fee phase immediately after current native orders without starting deposit exclusion',async()=>{
+ const h=await setup('provider_payout'),run=h.c.liveQuery();await settle();
+ for(let n=0;n<3;n++){assert.equal(h.waiting[0].q.action,'aggregate');assert.equal(h.waiting[0].q.direction,'withdraw');await advance(h)}
+ assert.equal(h.L.loading,false);assert.equal(h.L.results.length,3);assert.equal(h.history.at(-1).action,'rates');assert.equal(h.history.filter(q=>q.action==='submissionAnalysis').length,0);assert.equal(h.history.filter(q=>q.action==='aggregate').length,3);assert.equal(h.active(),1);assert.equal(h.controls.ready(),false);
+ await advance(h);assert.equal(h.history.at(-1).action,'aggregate','payout comparison starts only after the fee phase settles');await finish(h,run);assert.equal(h.max(),1);assert.equal(h.L.feeLookupLoading,false);assert.equal(h.L.feeLookupError,'');assert.equal(h.controls.ready(),true);
 });
