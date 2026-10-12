@@ -13,7 +13,7 @@ test('Panda native order request uses its UUID, Brazil midnight, server paginati
 });
 
 test('Panda reviewed withdrawals keep creation-cohort facts, unavailable success metrics and explicit scope',async()=>{
- const h=harness({platforms:[PANDA],page:'time'});await settle();scope(h);show(h);const html=h.html();assert.match(html,/data-panda-existing-source/);assert.match(html,/已审核提现创建单当前成功 6 \/ 10 笔/);assert.match(html,/旧日报快照独立展示，不与明细相加/);assert.match(html,/成功时间统计|成功时间窗口/);assert.doesNotMatch(html,/本期成功 0 \/ 本期创建/);
+ const h=harness({platforms:[PANDA],page:'time'});await settle();scope(h);const startAt='2026-09-22T03:00:00.000Z',endAt='2026-09-23T03:00:00.000Z';show(h,{...result(),startAt,endAt,pandaCoverage:{complete:true,directions:['charge','withdraw'].map(direction=>({direction,complete:true,startAt,endAt}))}});const html=h.html();assert.match(html,/data-panda-existing-source/);assert.match(html,/已审核提现创建单当前成功 6 \/ 10 笔/);assert.match(html,/旧日报快照独立展示，不与明细相加/);assert.match(html,/成功时间统计|成功时间窗口/);assert.doesNotMatch(html,/本期成功 0 \/ 本期创建/);
 });
 
 test('Panda success-time filtering stays closed until that axis has complete coverage',async()=>{
@@ -65,11 +65,11 @@ test('Panda explicitly unsupported amount/fee columns are omitted instead of sho
 });
 
 test('Panda partial details remain paginated and explicitly incomplete without fabricated overview totals',async()=>{
- const h=harness({platforms:[PANDA],page:'orders'});await settle();scope(h);h.setHandler(q=>q.action==='details'?{platform:PANDA,pandaCoverage:{complete:false,directions:[]},total:1,rows:[detailRow({channel_type:'Original source channel'})]}:{rows:[],groups:{}});await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);assert.equal(h.calls.filter(q=>q.action==='details').length,1);assert.match(h.html(),/已入库部分，尚未完整采集/);assert.match(h.html(),/Original source channel/);assert.doesNotMatch(h.html(),/id="df-collect"|id="df-payout"|所选创建窗口已完整采集/);
+ const h=harness({platforms:[PANDA],page:'orders'});await settle();scope(h);h.setHandler(q=>q.action==='details'?{platform:PANDA,pandaCoverage:{complete:false,directions:[]},total:1,rows:[detailRow({channel_type:'Original source channel'})]}:{rows:[],groups:{}});await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);assert.equal(h.calls.filter(q=>q.action==='details').length,1);assert.match(h.html(),/完整性尚未确认/);assert.match(h.html(),/Original source channel/);assert.doesNotMatch(h.html(),/id="df-collect"|id="df-payout"|所选创建窗口已完整采集/);
 });
 
 test('Panda incomplete, missing or wrong-window receipt coverage cannot enter aggregate totals or cache',async()=>{
- for(const evidence of [undefined,{complete:false,directions:[]},{complete:true,directions:[]}]){const h=harness({platforms:[PANDA],page:'time'});await settle();scope(h);h.setHandler(q=>q.action==='aggregate'?{...result(),pandaCoverage:evidence}:{rows:[],total:0});await h.c.liveQuery();await settle();assert.equal(h.L.results.length,0);assert.match(h.L.queryWarnings.join(' '),/尚未完整采集/);assert.doesNotMatch(h.html(),/本期成功 6/);}
+ for(const evidence of [undefined,{complete:false,directions:[]},{complete:true,directions:[]}]){const h=harness({platforms:[PANDA],page:'time'});await settle();scope(h);h.setHandler(q=>q.action==='aggregate'?{...result(),pandaCoverage:evidence}:{rows:[],total:0});await h.c.liveQuery();await settle();assert.equal(h.L.results.length,0);assert.match(h.L.queryWarnings.join(' '),/完整性尚未确认/);assert.doesNotMatch(h.html(),/本期成功 6/);}
  const h=harness({platforms:[PANDA],page:'time'});await settle();scope(h);h.setHandler(q=>q.action==='aggregate'?{...result(),startAt:q.startAt,endAt:q.endAt,pandaCoverage:{complete:true,directions:['charge','withdraw'].map(direction=>({direction,complete:true,startAt:q.startAt,endAt:q.endAt}))}}:{rows:[],total:0});await h.c.liveQuery();await settle();assert.equal(h.L.results.length,1);assert.equal(h.L.queryFailures.length,0);assert.match(h.html(),/所选创建窗口已完整采集/);assert.match(h.html(),/充值创建单当前成功 6 \/ 10 笔/);
 });
 
@@ -87,12 +87,51 @@ test('Panda native catalog injection cannot replace a legacy feed identity or au
 
 test('Panda completeness notice requires every selected platform, never only successful results',async()=>{
  const second={...PANDA,id:'88888888-8888-4888-8888-888888888888',name:'Synthetic Panda B'},h=harness({platforms:[PANDA,second],page:'time'});await settle();scope(h);h.L.platform='all';h.L.multi.platform=[PANDA.id,second.id];const startAt='2026-09-22T03:00:00.000Z',endAt='2026-09-23T03:00:00.000Z',covered=p=>({...result(p),startAt,endAt,pandaCoverage:{complete:true,directions:['charge','withdraw'].map(direction=>({direction,complete:true,startAt,endAt}))}});
- show(h,covered(PANDA));h.L.queryPlatforms=[PANDA,second];h.L.queryFailures=[{id:second.id,message:'Synthetic unavailable'}];h.c.render();assert.match(h.html(),/已入库部分，尚未完整采集/);assert.doesNotMatch(h.html(),/所选创建窗口已完整采集/);
+ show(h,covered(PANDA));h.L.queryPlatforms=[PANDA,second];h.L.queryFailures=[{id:second.id,message:'Synthetic unavailable'}];h.c.render();assert.match(h.html(),/完整性尚未确认/);assert.doesNotMatch(h.html(),/所选创建窗口已完整采集/);
  h.L.queryFailures=[];h.c.render();assert.doesNotMatch(h.html(),/所选创建窗口已完整采集/,'missing result cannot qualify even without an error item');h.L.results.push(covered(second));h.c.render();assert.match(h.html(),/所选创建窗口已完整采集/);
 });
 
 test('Panda cached results from another window or direction never claim current scope complete',async()=>{
  const h=harness({platforms:[PANDA],page:'time'});await settle();scope(h);const startAt='2026-09-22T03:00:00.000Z',endAt='2026-09-23T03:00:00.000Z',r={...result(),startAt,endAt,pandaCoverage:{complete:true,directions:['charge','withdraw'].map(direction=>({direction,complete:true,startAt,endAt}))}};show(h,r);assert.match(h.html(),/所选创建窗口已完整采集/);
- h.L.from='2026-09-21T00:00:00';h.L.to='2026-09-21T23:59:59';h.c.render();assert.doesNotMatch(h.html(),/所选创建窗口已完整采集/);assert.match(h.html(),/已入库部分，尚未完整采集/);
+ h.L.from='2026-09-21T00:00:00';h.L.to='2026-09-21T23:59:59';h.c.render();assert.doesNotMatch(h.html(),/所选创建窗口已完整采集/);assert.match(h.html(),/完整性尚未确认/);
  scope(h,'withdraw');r.pandaCoverage.directions=r.pandaCoverage.directions.filter(d=>d.direction==='charge');h.c.render();assert.doesNotMatch(h.html(),/所选创建窗口已完整采集/);
+});
+
+
+test('Panda real reference orders renderer never creates zero aggregate cards and uses detail total for platform presence',async()=>{
+ let references=0,total=7438,complete=true;const h=harness({platforms:[PANDA],page:'orders',beforeLive(c){const create=c.HensemLivePages.create;c.HensemLivePages.create=options=>{const api=create(options),render=api.render;return {...api,render(page){if(page==='orders')references++;return render(page);}};};}});await settle();scope(h);
+ h.setHandler(q=>q.action==='details'?{platform:PANDA,startAt:q.startAt,endAt:q.endAt,pandaCoverage:{complete,directions:['charge','withdraw'].map(direction=>({direction,complete,startAt:q.startAt,endAt:q.endAt}))},total,rows:total===0?[]:Array.from({length:20},(_,i)=>detailRow({id:'row-'+(q.offset+i),order_number:'safe-page-order-'+(q.offset+i)}))}:{rows:[],total:0});
+ await h.c.liveQuery();await settle();assert(references>0,'test must traverse HensemLivePages reference renderer');assert.match(h.html(),/业务明细/);assert.match(h.html(),/7,438/);assert.equal(h.L.results.length,0);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);assert.doesNotMatch(h.html(),/live-reference-totals|live-reference-metrics|data-platform-coverage|>0\.00</);assert.match(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据 1 平台/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据 0 平台/);
+ h.c.livePage(2,'server');await settle();assert.equal(h.calls.filter(q=>q.action==='details').at(-1).offset,20);assert.match(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据 1 平台/);assert.doesNotMatch(h.html(),/live-reference-totals|live-reference-metrics|data-platform-coverage/);
+ complete=false;await h.c.liveQuery();await settle();assert.match(h.html(),/完整性尚未确认/);assert.match(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据 1 平台/);assert.doesNotMatch(h.html(),/live-reference-totals|live-reference-metrics/);
+ total=0;await h.c.liveQuery();await settle();assert.match(h.nodes.get('liveFilters').innerHTML,/尚无入库明细 · 完整性未确认/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据 0 平台/);assert.doesNotMatch(h.html(),/live-reference-totals|live-reference-metrics/);
+ complete=true;await h.c.liveQuery();await settle();assert.match(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据 0 平台/);assert.doesNotMatch(h.html(),/live-reference-totals|live-reference-metrics/);
+ h.L.detail.total=null;h.c.render();assert.match(h.nodes.get('liveFilters').innerHTML,/订单数据待确认/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据 0 平台/);
+ h.L.detailBusy=true;h.c.render();assert.match(h.nodes.get('liveFilters').innerHTML,/订单数据待读取/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据 0 平台/);h.L.detailBusy=false;h.L.error='Synthetic detail failure';h.c.render();assert.match(h.nodes.get('liveFilters').innerHTML,/订单数据读取失败/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据 0 平台/);
+});
+
+
+test('Other native sources retain order-page aggregate cards in the reference renderer',async()=>{
+ const h=harness({platforms:[P],page:'orders'});await settle();Object.assign(h.L,{platform:P.id,country:P.country,direction:'all',from:'2026-09-22T00:00:00',to:'2026-09-22T23:59:59'});h.L.multi.platform=[P.id];await h.c.liveQuery();await settle();assert(h.calls.some(q=>q.action==='aggregate'));assert.match(h.html(),/live-reference-totals/);assert.match(h.html(),/live-reference-metrics/);
+});
+
+function completeResponse(q,p=PANDA){const r=result(p);return {...r,startAt:q.startAt,endAt:q.endAt,pandaCoverage:{complete:true,directions:(q.direction==='all'?['charge','withdraw']:[q.direction]).map(direction=>({direction,complete:true,startAt:q.startAt,endAt:q.endAt}))}};}
+for(const page of ['time','amount','matrix','provider_daily'])test('Panda '+page+' blocks the actual analysis renderer on unverified or mixed incomplete scopes',async()=>{
+ const other={...P,id:'99999999-9999-4999-8999-999999999999',name:'Other synthetic native',country:'巴西',currency:'BRL',timezone:'America/Sao_Paulo'};let refs=0,mode='panda_fail';const h=harness({platforms:[PANDA,other],page,beforeLive(c){const create=c.HensemLivePages.create;c.HensemLivePages.create=options=>{const api=create(options),render=api.render;return {...api,render(name){if(name===page)refs++;return render(name);}};};}});await settle();scope(h,page==='provider_daily'?'charge':'all');
+ h.setHandler(q=>{if(q.action!=='aggregate')return {rows:[],total:0};const p=q.platformId===PANDA.id?PANDA:other;if(mode==='panda_fail'&&p===PANDA||mode==='other_fail'&&p===other)throw Error('PANDA_COVERAGE_INCOMPLETE');return completeResponse(q,p);});
+ const blocked=()=>{assert.match(h.html(),/data-panda-aggregate-blocked/);assert.match(h.html(),/完整性尚未确认/);assert.match(h.html(),/重新核验/);assert.doesNotMatch(h.html(),/live-reference-totals|live-reference-metrics|analysis-compact|provider-daily-matrix-table|<table\b|<svg\b|>0\.00</);assert.match(h.nodes.get('liveFilters').innerHTML,/订单数据待确认/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/所选日期有订单数据 0 平台/);};
+ refs=0;await h.c.liveQuery(true);await settle();blocked();assert.equal(refs,0,'blocked results never enter the reference renderer');
+ h.L.platform='all';h.L.multi.platform=[PANDA.id,other.id];refs=0;await h.c.liveQuery(true);await settle();assert(h.L.results.some(r=>r.platform.id===other.id));blocked();assert.equal(refs,0);
+ mode='other_fail';refs=0;await h.c.liveQuery(true);await settle();assert(h.L.results.some(r=>r.platform.id===PANDA.id));blocked();assert.equal(refs,0,'Panda complete cannot hide another requested native failure');
+ mode='ok';await h.c.liveQuery(true);await settle();assert(refs>0,'verified control enters the real reference/fallback renderer');assert.doesNotMatch(h.html(),/data-panda-aggregate-blocked/);assert.match(h.html(),/live-reference-totals/);
+ const saved=h.L.results[0].startAt;h.L.results[0].startAt='2020-01-01T00:00:00Z';h.c.render();blocked();h.L.results[0].startAt=saved;h.L.results=h.L.results.filter(r=>r.platform.id!==other.id);h.c.render();blocked();
+});
+
+for(const page of ['time','amount'])test('Verified sparse Panda '+page+' keeps missing success and reviewed-pending cells unknown in the real table',async()=>{
+ const h=harness({platforms:[PANDA],page});await settle();scope(h);h.setHandler(q=>q.action==='aggregate'?completeResponse(q):{rows:[],total:0});await h.c.liveQuery(true);await settle();h.L.tableSizes={'analysis-state':100};h.c.render();assert.doesNotMatch(h.html(),/data-panda-aggregate-blocked/);
+ const text=value=>value.replace(/<[^>]+>/g,'').replace(/&[^;]+;/g,' ').trim();const rows=[...h.html().matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)].map(m=>[...m[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map(x=>text(x[1]))).filter(c=>c.length>=11&&['代收','代付'].includes(c[0]));assert.equal(rows.length,page==='time'?48:18,'24 hours or 9 configured fallback ranges per direction');assert(rows.some(c=>c[0]==='代收')&&rows.some(c=>c[0]==='代付'));assert(rows.some(c=>c[3]==='0'),'confirmed empty creation buckets are present');for(const cells of rows){assert.equal(cells[4],'—');assert.equal(cells[5],'—');assert.equal(cells[10],'—');if(cells[0]==='代付'){assert.equal(cells[6],'—');assert.equal(cells[7],'—');}}
+});
+
+test('Verified sparse Panda matrix never fabricates zero success rates for absent cells',async()=>{
+ const h=harness({platforms:[PANDA],page:'matrix'});await settle();scope(h);h.setHandler(q=>q.action==='aggregate'?completeResponse(q):{rows:[],total:0});await h.c.liveQuery(true);await settle();assert.doesNotMatch(h.html(),/data-panda-aggregate-blocked/);const cells=[...h.html().matchAll(/<(?:button|div) class="matrix-cell[^>]*>([\s\S]*?)<\/(?:button|div)>/g)].map(m=>m[1]);assert(cells.length>24);for(const cell of cells)assert.match(cell,/<span>—<\/span>$/);assert.doesNotMatch(h.html(),/<small>成功(?:笔数|金额)<\/small><b>0/);
 });
