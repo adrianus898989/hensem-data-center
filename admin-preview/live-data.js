@@ -519,7 +519,23 @@
 
  const reportPages=new Set(['overview','collection','payout','merchants','merchantproviders','teamops','teamcountries','teamplatforms']);
  const reportData=window.HensemLiveReportData?.create({L,E,N,C,R,nativeCatalog:()=>L.catalog.filter(p=>orderSource(p)!=='panda'),request:r=>window.hensemLiveRequest(r),render:()=>render()});
- pendingSnapshot=window.HensemLivePendingSnapshot?.create({L,E,N,C,scopeZone,selected:selectedVisible,providers:()=>activeValues('provider',''),currentOrders:()=>({platforms:L.queryPlatforms,results:L.results,loading:L.loading,retrying:L.queryRetrying,paused:L.queryPaused,failures:L.queryFailures,queriedAt:new Date(L.queryNow).toISOString(),scopeMatches:!L.dirty&&L.queryScope===aggregateQueryScope()&&state.page==='overview',status:L.status}),prepare:async()=>{await reportData?.loadCatalog();if(reportData?.state.catalogError)throw Error('快照平台目录读取失败：'+reportData.state.catalogError)},request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
+ let pendingCatalogTask=null,pendingCatalogContext=null;
+ const pendingCatalogScope=()=>JSON.stringify([L.country,L.from,L.to,L.direction,L.status,...['team','source','platform','provider'].map(key=>activeValues(key))]);
+ function preparePendingCatalog(){
+  if(!L.catalogReady||!Array.isArray(L.catalog)||!Array.isArray(L.withdrawCatalog))throw Error('快照平台目录尚未就绪，请重试读取目录');
+  if(!reportData)return;
+  pendingCatalogContext={serial:L.serial,navigation:navigationRevision,scope:pendingCatalogScope()};
+  if(pendingCatalogTask)return;
+  // Preserve supplementary directory discovery, but never await it before a
+  // scoped snapshot read. Only this unchanged manual query may refresh later.
+  const task=reportData.loadCatalog();pendingCatalogTask=task;
+  const settled=()=>{if(pendingCatalogTask!==task)return;pendingCatalogTask=null;const context=pendingCatalogContext;if(context.serial===L.serial&&context.navigation===navigationRevision&&state.page==='overview'&&!L.dirty&&context.scope===pendingCatalogScope())pendingSnapshot?.refreshScope();};
+  void task.then(settled,settled);
+ }
+ const pendingCatalogComplete=()=>{const chosen=activeValues('platform');return !reportData||chosen.length>0&&chosen.every(id=>selectedVisible().some(p=>p.id===id||(p.aliasPlatformIds||[]).includes(id)))||reportData.state.catalogLoaded&&!reportData.state.catalogBusy&&!reportData.state.catalogError;};
+ // Midnight snapshots use the same authorized base directories as pending analysis;
+ // an unrelated historical report inventory timeout must not block their read.
+ pendingSnapshot=window.HensemLivePendingSnapshot?.create({L,E,N,C,scopeZone,selected:selectedVisible,providers:()=>activeValues('provider',''),currentOrders:()=>({platforms:L.queryPlatforms,results:L.results,loading:L.loading,retrying:L.queryRetrying,paused:L.queryPaused,failures:L.queryFailures,queriedAt:new Date(L.queryNow).toISOString(),scopeMatches:!L.dirty&&L.queryScope===aggregateQueryScope()&&state.page==='overview',status:L.status}),prepare:preparePendingCatalog,catalogComplete:pendingCatalogComplete,request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
  pendingOrders=window.HensemPendingOrders?.create({E,N,C,active:()=>state.page==='stuck'&&!L.dirty,scope:()=>JSON.stringify([L.from,L.to,L.country,L.team,L.source,L.platform,L.multi]),canDetail:()=>roleAllowed('stuck','detail'),request:r=>window.hensemLiveRequest(r),open:(title,html)=>openDrawer(title,html)})||null;
  // Snapshot identities are already in the authorized core/withdrawal catalog.
  // The historical report inventory adds no authority and must not gate this read.
