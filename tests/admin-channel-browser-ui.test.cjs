@@ -16,6 +16,8 @@ function fixture(options={}){
  const context={console,Intl,Promise,Date:class extends Date{constructor(...a){super(...(a.length?a:[clock]))}static now(){return clock}},document:{visibilityState:'visible',addEventListener:(name,fn)=>events[name]=fn},addEventListener:(name,fn)=>rootEvents[name]=fn,setTimeout:(fn,ms)=>{const item={fn,ms,due:clock+ms,active:true};timers.push(item);return item;},clearTimeout:item=>{item.active=false;}};
  context.window=context;vm.createContext(context);vm.runInContext(source,context);
  const L={catalogReady:true,dirty:true,pageQueried:false,country:'印度'},mod=context.HensemLiveChannelStatus.create({L,getPage:()=>page,catalog:()=>catalog,roleAllowed:action=>permissions.has(action),request:q=>{calls.push(JSON.parse(JSON.stringify(q)));return handler(q)},render:()=>paints.push(mod.render())});
+ // Legacy source-sheet contracts remain covered explicitly; production host tests below use the unified default.
+ mod.restore({...mod.capture(),mode:'single'});
  return {context,L,mod,calls,paints,timers,start:async()=>{mod.render();await flush();},setHandler:fn=>handler=fn,setPage:value=>page=value,setCatalog:value=>catalog=value,setPermissions:value=>permissions=new Set(value),hide:()=>{context.document.visibilityState='hidden';events.visibilitychange();},show:async()=>{context.document.visibilityState='visible';events.visibilitychange();await flush();},unload:()=>rootEvents.pagehide(),advance:async(ms)=>{clock+=ms;for(const timer of [...timers])if(timer.active&&timer.due<=clock){timer.active=false;timer.fn();}await flush();},setNow:value=>clock=Date.parse(value)};
 }
 const headers=html=>[...html.matchAll(/<th[^>]*scope="col"[^>]*>([^<]*)<\/th>/g)].map(m=>m[1]);
@@ -221,7 +223,7 @@ test('channel and merchant searches combine with local source filters, preserve 
  h.context.liveChannelClearFilters();assert.deepEqual(ids(),['alpha-charge','beta-charge','gamma-charge']);h.context.liveChannelStatus('on');assert.deepEqual(ids(),['alpha-charge']);h.context.liveChannelStatus('off');assert.deepEqual(ids(),['gamma-charge']);h.context.liveChannelStatus('unknown');assert.deepEqual(ids(),['beta-charge']);
  h.context.liveChannelClearFilters();h.context.liveChannelCategory('qr');assert.deepEqual(ids(),['alpha-charge','gamma-charge']);h.context.liveChannelProvider('PayOne');h.context.liveChannelCurrency('INR');h.context.liveChannelQuery('SYSTEM QR','150');assert.deepEqual(ids(),['alpha-charge']);
  const saved=h.mod.capture();h.mod.clear();h.mod.restore(saved);h.mod.render();await flush();assert.deepEqual(ids(),['alpha-charge']);assert.equal(h.calls.length,1);assert.equal(h.mod.capture().platformId,AR.id);
- h.context.liveChannelQuery('does not exist','');assert.deepEqual(ids(),[]);assert.match(h.mod.render(),/当前筛选没有匹配通道/);h.context.liveChannelClearFilters();assert.deepEqual(ids(),['alpha-charge','beta-charge','gamma-charge']);
+ h.context.liveChannelQuery('does not exist','');assert.deepEqual(ids(),[]);assert.match(h.mod.render(),/当前快照没有匹配通道/);h.context.liveChannelClearFilters();assert.deepEqual(ids(),['alpha-charge','beta-charge','gamma-charge']);
  h.context.liveChannelSearch('AR 1');assert.deepEqual(ids(),['alpha-charge','beta-charge','gamma-charge']);assert.equal(h.calls.length,1);assert.match(h.mod.render(),/liveChannelQuery/);assert.doesNotMatch(h.mod.render(),/onclick="liveChannelSourceDetail|channel-source-details/);
 });
 
@@ -309,10 +311,16 @@ test('missing snapshot, incomplete snapshot and complete empty snapshot keep sep
 
 const navigationPrefix=fs.readFileSync(path.join(__dirname,'admin-navigation-performance.test.cjs'),'utf8').split(/\ntest\(/)[0].replace('vm.runInContext(source,context',"vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-channel-status.js'),'utf8'),context);vm.runInContext(source,context");
 const {harness,settle}=new Function('require','__dirname',navigationPrefix+';return {harness,settle};')(require,__dirname);
-function integrated(options={}){const catalog=options.catalog||[AR],access=options.access||{mode:'owner',canView:true,permissions:[]};return harness({page:'channel_status',roleAccess:access,roleAllowed:()=>true,...options,handler:q=>q.action==='catalog'?{platforms:catalog}:q.action==='channelStatus'?response(catalog.find(p=>p.id===q.platformIds[0])):{}});}
+function integrated(options={}){const catalog=options.catalog||[AR],access=options.access||{mode:'owner',canView:true,permissions:[]};return harness({page:'channel_status',roleAccess:access,roleAllowed:()=>true,...options,handler:q=>q.action==='catalog'?{platforms:catalog}:q.action==='channelStatus'?batchResponse(catalog,q,()=>[channel()]):{}});}
 
-test('live host uses full visible catalog, hides shared filters, automatically loads only one platform and restores the tab without IO',async()=>{
- const catalog=Array.from({length:42},(_,i)=>platform(i+1)),h=integrated({catalog});await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog','channelStatus']);assert.equal(h.calls[1].platformIds.length,1);assert.equal(h.nodes.get('liveFilters').style.display,'none');assert.match(h.html(),/共 42 个/);assert.equal(h.L.pageQueried,true);assert.equal(h.L.dirty,false);h.c.liveExport();assert.equal(h.blobs.length,1);h.c.setPage('overview');h.c.setPage('channel_status');await settle();assert.match(h.html(),/Display one/);assert.equal(h.calls.filter(q=>q.action==='channelStatus').length,1);h.c.liveReset();await settle();assert.equal(h.calls.filter(q=>q.action==='channelStatus').length,2);h.c.liveClosePage('channel_status');h.c.setPage('channel_status');await settle();assert.equal(h.calls.filter(q=>q.action==='channelStatus').length,3);
+test('live host uses unified authorized country/system scope, batches all platforms and restores the tab without IO',async()=>{
+ const scoped=Array.from({length:42},(_,i)=>platform(i+1)),otherCountry=platform(43,{country:'巴基斯坦'}),otherSystem=platform(44,{source:'kb',capabilities:{channelStatusAvailable:true}}),catalog=[...scoped,otherCountry,otherSystem],h=integrated({catalog});await settle();
+ const reads=()=>h.calls.filter(q=>q.action==='channelStatus');
+ assert.deepEqual(h.calls.map(q=>q.action),['catalog','channelStatus','channelStatus','channelStatus']);assert.deepEqual(reads().map(q=>q.platformIds.length),[20,20,2]);assert.deepEqual(reads().flatMap(q=>q.platformIds),scoped.map(p=>p.id));assert(reads().every(q=>q.direction==='all'));
+ assert.equal(h.nodes.get('liveFilters').style.display,'none');assert.doesNotMatch(h.html(),/单平台配置|跨平台查通道/);assert.match(h.html(),/AR 1/);assert.match(h.html(),/AR 42/);assert.equal(h.L.pageQueried,true);assert.equal(h.L.dirty,false);h.c.liveExport();assert.equal(h.blobs.length,1);
+ h.c.setPage('overview');h.c.setPage('channel_status');await settle();assert.match(h.html(),/Display one/);assert.equal(reads().length,3,'navigation restores all cached platform snapshots');
+ h.c.liveReset();await settle();assert.equal(reads().length,6,'explicit reset reloads the complete current scope in bounded batches');assert.deepEqual(reads().slice(3).flatMap(q=>q.platformIds),scoped.map(p=>p.id));
+ h.c.liveClosePage('channel_status');h.c.setPage('channel_status');await settle();assert.equal(reads().length,9,'closing the tab discards its session snapshot');assert.deepEqual(reads().slice(6).flatMap(q=>q.platformIds),scoped.map(p=>p.id));
 });
 
 test('live host view-only role receives authorized directory but no automatic channel facts or export',async()=>{
