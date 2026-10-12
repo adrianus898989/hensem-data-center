@@ -22,6 +22,7 @@
   const rejectionSourceNote=(value,row={})=>{if(row.rejectionNoteState==='withheld'){const labels={remark:'主备注',front:'前台备注',back:'后台备注'},sources=(row.hiddenNoteSources||[]).map(key=>labels[key]).filter(Boolean);return sourceNote(null,'（'+(sources.length?sources.join('、'):'源业务备注')+'已隐藏，驳回备注待核对）','备注来源状态','',true)}if(row.rejectionNoteState==='missing')return sourceNote(null,'（未采集到明确驳回备注）','备注来源状态','',true);if(row.rejectionNoteState==='empty')return sourceNote(null,'（源备注为空）','备注来源状态','',true);return sourceNote(value,'（源备注为空）','驳回原文','',true)};
   const sourceNoteStates=row=>{if(!row.sourceNoteStates)return '';const labels={remark:'主备注',front:'前台备注',back:'后台备注'},hidden=new Set(row.hiddenNoteSources||[]);return '<small class="cell-sub">'+Object.entries(labels).map(([key,label])=>{const state=row.sourceNoteStates[key],text=key==='front'&&row.verifiedRejectionNote?.sourceField==='frontRemark'&&row.verifiedRejectionNote?.verificationMethod==='manual_source_ui'?'已在源站核实':state==='empty'?'为空':hidden.has(key)?state==='redacted'?'部分已隐藏':'已隐藏':state==='template'?'已采集业务模板':'未取得可用文本';return E(label+'：'+text)}).join(' · ')+'</small>'};
   const reasonCache=new Map();
+  let reasonSnapshot=null;
   const view=()=>ctx.page()==='withdraw_operators'?'operators':'auto';
   const sumKey=()=>view()==='operators'?'processed':'total';
   const dates=()=>({startAt:L.from.slice(0,10)+'T00:00:00.000Z',endAt:L.to.slice(0,10)+'T23:59:59.000Z'});
@@ -54,9 +55,9 @@
    }
    return base;
   }
-  function invalidate(){S.localSnapshot=false;S.serverPaging=false;S.serial++;S.loading=false;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;S.page=1}
+  function invalidate(){reasonSnapshot=null;S.localSnapshot=false;S.serverPaging=false;S.serial++;S.loading=false;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;S.page=1}
   async function load(reset=false){
-   if(!L.catalogReady)return;if(reset){S.page=1;reasonCache.clear()}
+   if(!L.catalogReady)return;if(reset){S.page=1;reasonCache.clear();reasonSnapshot=null}
    const scope=selectionKey();if(S.scopeKey&&S.scopeKey!==scope){S.platforms=[];S.rowCountry='';S.search='';S.data=null;S.page=1}S.scopeKey=scope;
    const target=view();if(S.view!==target){S.view=target;S.localSnapshot=false;S.serverPaging=false;S.page=1;S.sort=target==='operators'?'processed':'total';S.asc=false;S.daily=false;S.reason=null}
    let targetQuery,key;try{targetQuery=query();key=JSON.stringify([scope,targetQuery])}catch(e){S.serial++;S.data=null;S.loading=false;S.loadingKey='';S.error=e.message||'读取失败';S.dirty=false;render();return}
@@ -125,7 +126,13 @@
   }
   function comparison(current,previous,numerator,denominator,issue=''){
    if(!singleDay()&&!S.daily)return '';
-   if(issue)return '';
+   if(issue){
+    // Incomplete comparison coverage forbids a growth claim, not displaying
+    // the previous period's actual stored value. Never fill missing values as 0.
+    const valid=previous&&processingValueKnown(previous[numerator])&&(numerator==='avgSeconds'||countKnown(previous,numerator));
+    const value=valid?(numerator==='avgSeconds'?duration(previous.avgSeconds):denominator?(shareKnown(previous,numerator,denominator)?R(previous[numerator],previous[denominator]):'—'):C(previous[numerator])):'—';
+    return '<small class="cell-sub" data-comparison-baseline="observed" title="仅展示前一日已入库值；两期范围或完整性未核验，不计算汇总涨跌。">昨日已入库 '+value+(valid&&!denominator&&numerator!=='avgSeconds'?(numerator==='operators'?' 人':' 笔'):'')+' · 暂不计算涨跌</small>';
+   }
    if(current.comparisonComparable===false&&!(denominator&&previous)){
     const prior=previous&&countKnown(previous,numerator)&&(denominator?known(previous[denominator])&&Number(previous[denominator])>0:true)?denominator?R(previous[numerator],previous[denominator]):C(previous[numerator]):'—';
     return '<small class="cell-sub" title="两期统计口径或覆盖未对齐；昨日原值保留，不计算涨跌">昨日 '+prior+'</small>';
@@ -316,12 +323,24 @@
    if(next){next.scrollLeft=position.left;next.scrollTop=position.top}
    if(Number.isFinite(x)&&Number.isFinite(y)&&(root.scrollX!==x||root.scrollY!==y))root.scrollTo?.(x,y);
   }
-  async function reasonsLoad(force=false){
-   if(!S.reason)return;const query={action:'withdrawReasons',...S.reason,platform:rowPlatform(S.reason),offset:(S.reasonPage-1)*S.reasonSize,limit:S.reasonSize},key=JSON.stringify(query),cached=reasonCache.get(key),serial=++S.reasonSerial;
+  function rememberReasonSnapshot(scope,query,data){
+   // Only a proven complete result may be sliced locally. Source coverage is a
+   // separate fact: this does not claim that every upstream order was collected.
+   const total=data?.total;
+   if(data?.available===true&&!data.error&&data.hasMore!==true&&data.partial!==true&&data.complete!==false&&query.offset===0&&total!==null&&total!==undefined&&total!==''&&typeof total!=='boolean'&&Number.isSafeInteger(Number(total))&&Number(total)>=0&&Array.isArray(data.rows)&&data.rows.length===Number(total))reasonSnapshot={scope,data};
+  }
+  async function reasonsLoad(force=false,presentationOnly=false){
+   if(!S.reason)return;const base={action:'withdrawReasons',...S.reason,platform:rowPlatform(S.reason)},scope=JSON.stringify(base),query={...base,offset:(S.reasonPage-1)*S.reasonSize,limit:S.reasonSize},key=JSON.stringify(query),cached=reasonCache.get(key),serial=++S.reasonSerial;
    S.reasonError='';
-   if(!force&&cached&&Date.now()-cached.time<60000){S.reasonData=cached.data;S.reasonBusy=false;renderReason();reasonFocus();return}
+   // Changing page size is a presentation change, not a refresh. Keep the
+   // displayed snapshot even past its request-cache TTL; explicit retry still
+   // fetches fresh data, and every date/platform/filter has a different scope.
+   if(!force&&presentationOnly&&reasonSnapshot?.scope===scope){const data=reasonSnapshot.data;S.reasonPage=Math.min(S.reasonPage,Math.max(1,Math.ceil(Number(data.total)/S.reasonSize)));const offset=(S.reasonPage-1)*S.reasonSize;S.reasonData={...data,rows:data.rows.slice(offset,offset+S.reasonSize),offset,limit:S.reasonSize};S.reasonBusy=false;renderReason(true);reasonFocus();return}
+   reasonSnapshot=null;
+   if(force)for(const [cacheKey,value] of reasonCache)if(value.scope===scope)reasonCache.delete(cacheKey);
+   if(!force&&cached&&Date.now()-cached.time<60000){S.reasonData=cached.data;rememberReasonSnapshot(scope,query,cached.data);S.reasonBusy=false;renderReason();reasonFocus();return}
    S.reasonBusy=true;renderReason();reasonFocus();
-   try{const data=await request(query);if(serial!==S.reasonSerial)return;const max=Math.max(1,Math.ceil(Number(data.total||0)/S.reasonSize));if(S.reasonPage>max){S.reasonPage=max;return reasonsLoad(force)}reasonCache.set(key,{data,time:Date.now()});if(reasonCache.size>30)reasonCache.delete(reasonCache.keys().next().value);S.reasonData=data;S.reasonBusy=false;renderReason();reasonFocus()}
+   try{const data=await request(query);if(serial!==S.reasonSerial)return;const max=Math.max(1,Math.ceil(Number(data.total||0)/S.reasonSize));if(S.reasonPage>max){S.reasonPage=max;return reasonsLoad(force)}reasonCache.set(key,{data,scope,time:Date.now()});if(reasonCache.size>30)reasonCache.delete(reasonCache.keys().next().value);rememberReasonSnapshot(scope,query,data);S.reasonData=data;S.reasonBusy=false;renderReason();reasonFocus()}
    catch(e){if(serial!==S.reasonSerial)return;S.reasonError=e.message;S.reasonBusy=false;S.reasonData=null;renderReason();reasonFocus()}
   }
   // The host iframe intentionally omits allow-forms. Direct actions must not
@@ -362,12 +381,12 @@
   root.withdrawReasonVariants=index=>{const row=S.reasonData?.rows?.[index];if(!S.reason||!row||!/^[a-f0-9]{32}$/.test(row.categoryKey||''))return;S.reason.category=row.categoryKey;S.reasonLabel=row.sourceReason??row.reason??row.category??'（源备注为空）';S.reason.kind='rejection';S.reasonPage=1;reasonsLoad()};
   root.withdrawReasonQuery=value=>{S.reasonQuery=String(value).slice(0,200)};
   root.withdrawReasonSearch=()=>{if(!S.reason)return;S.reason.query=S.reasonQuery.trim();S.reasonPage=1;reasonsLoad()};
-  root.withdrawReasonPage=page=>{if(S.reasonBusy||!Number.isInteger(page)||page<1)return;const max=Math.max(1,Math.ceil(Number(S.reasonData?.total||0)/S.reasonSize));S.reasonPage=Math.min(max,page);reasonsLoad()};
-  root.withdrawReasonSize=size=>{if(![20,50,100].includes(Number(size)))return;S.reasonSize=Number(size);S.reasonPage=1;reasonsLoad()};
+  root.withdrawReasonPage=page=>{if(S.reasonBusy||!Number.isInteger(page)||page<1)return;const max=Math.max(1,Math.ceil(Number(S.reasonData?.total||0)/S.reasonSize)),next=Math.min(max,page);if(next===S.reasonPage)return;S.reasonPage=next;reasonsLoad(false,true)};
+  root.withdrawReasonSize=size=>{if(S.reasonBusy||![20,50,100].includes(Number(size))||S.reasonSize===Number(size))return;S.reasonSize=Number(size);S.reasonPage=1;reasonsLoad(false,true)};
   root.withdrawReasonJump=value=>{if(/^\d+$/.test(String(value)))root.withdrawReasonPage(Number(value))};
   root.withdrawReasonOriginal=(value,title='驳回原文',exact=false)=>{S.originalNote=exact?String(value??''):cleanNote(value);S.originalNoteTitle=String(title||'驳回原文');renderReason(true);document.querySelector?.('.withdraw-original-dialog')?.querySelector('button')?.focus?.({preventScroll:true})};
   root.withdrawReasonOriginalClose=()=>{S.originalNote='';renderReason(true);reasonFocus()};
-  root.withdrawReasonClose=()=>{const trigger=S.reasonTrigger;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';renderReason();if(trigger)document.querySelector?.('[data-withdraw-reason="'+trigger.index+'-'+trigger.kind+'"]')?.focus?.({preventScroll:true})};root.withdrawReasonRetry=()=>reasonsLoad(true);
+  root.withdrawReasonClose=()=>{const trigger=S.reasonTrigger;reasonSnapshot=null;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';renderReason();if(trigger)document.querySelector?.('[data-withdraw-reason="'+trigger.index+'-'+trigger.kind+'"]')?.focus?.({preventScroll:true})};root.withdrawReasonRetry=()=>reasonsLoad(true);
   root.withdrawReasonKey=event=>{if(event.key==='Escape'){event.preventDefault();root.withdrawReasonClose();return}if(event.key!=='Tab')return;const panel=document.getElementById('withdraw-reasons'),items=[...(panel?.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex="0"]')||[])].filter(e=>e.getClientRects().length);const first=items[0],last=items[items.length-1];if(!first)return;if(event.shiftKey&&(document.activeElement===first||document.activeElement===panel)){event.preventDefault();last.focus()}else if(!event.shiftKey&&(document.activeElement===last||document.activeElement===panel)){event.preventDefault();first.focus()}};
   function setNote(row,date){const previous=noteFor(row,date);S.note={country:row.country,platform:row.platform,date,storageCountry:previous?.country||row.country,storagePlatform:previous?.platform||row.platform,expectedVersion:previous?.version||'',original:previous?.reason||''};S.noteDraft=S.note.original;S.noteError='';S.noteSaving=false;render()}
   root.withdrawNoteOpen=index=>{const row=S.data?.rows?.[index];if(row&&S.data?.canWriteNotes)setNote(row,S.daily?row.dataDate:L.to.slice(0,10))};
@@ -377,9 +396,9 @@
   root.withdrawNoteClose=()=>{if(S.noteSaving)return;S.note=null;S.noteSample=false;S.noteError='';render()};
   root.withdrawNoteSave=async()=>{if(!S.note||S.noteSaving||!S.data?.canWriteNotes)return;const target=S.note;S.noteSaving=true;S.noteError='';render();try{const saved=await request({action:'withdrawNote',date:target.date,country:target.storageCountry||target.country,platform:target.storagePlatform,reason:S.noteDraft,expectedVersion:target.expectedVersion});if(S.note!==target)return;S.data.notes=[...(S.data.notes||[]).filter(n=>!(n.date===saved.date&&n.country===saved.country&&n.platform===saved.platform)),{...saved,sourceCountry:target.country}];S.noteSaving=false;S.note=null;render()}catch(e){if(S.note!==target)return;S.noteSaving=false;S.noteError=e.message||'备注保存失败，输入已保留';render()}};
   function capture(){return {...S,platforms:S.platforms.slice(),reasonTrigger:null,loading:false,reasonBusy:false,error:S.loading?'读取已暂停，点击查询继续':S.error,reasonError:S.reasonBusy?'明细读取已暂停，点击重试继续':S.reasonError};}
-  function pause(){S.serial++;S.reasonSerial++;S.loading=false;S.reasonBusy=false;reasonCache.clear();}
+  function pause(){reasonSnapshot=null;S.serial++;S.reasonSerial++;S.loading=false;S.reasonBusy=false;reasonCache.clear();}
   function restore(saved){pause();const serial=S.serial,reasonSerial=S.reasonSerial;for(const key of Object.keys(S))delete S[key];Object.assign(S,saved||initialState,{serial,reasonSerial,platforms:(saved?.platforms||[]).slice(),reasonTrigger:null,loading:false,reasonBusy:false});}
-  return {capture,pause,restore,render:draw,load,state:S,query,cancel:()=>{reasonCache.clear();S.serial++;S.reasonSerial++;S.loading=false;S.reasonBusy=false;S.reason=null;S.data=null;S.note=null;S.noteSample=false}};
+  return {capture,pause,restore,render:draw,load,state:S,query,cancel:()=>{reasonSnapshot=null;reasonCache.clear();S.serial++;S.reasonSerial++;S.loading=false;S.reasonBusy=false;S.reason=null;S.data=null;S.note=null;S.noteSample=false}};
  }};
  if(typeof module!=='undefined')module.exports={addDay,duration,cleanNote,decodeNote};
 })(typeof window!=='undefined'?window:globalThis);

@@ -58,16 +58,20 @@
    for(const entry of entries){const end=start+entry.value.total,left=Math.max(start,query.offset),right=Math.min(end,query.offset+query.limit);if(right>left)tasks.push({entry,offset:left-start,length:right-left});start=end;}
    const pages=new Map(),pageFailures=[];onProgress({phase:'page',done:index.platforms.length,total:index.platforms.length,failed:index.failures.length});
    await bounded(tasks,async task=>{
+    // Keep the stale marker on this scope's cache until Query explicitly refreshes it.
+    // Paging must neither rebuild every platform nor present cached first rows as current.
+    if(index.refreshRequired)return;
     const {entry,offset,length}=task;
     if(offset+length<=entry.first.length){pages.set(entry.platform,entry.first.slice(offset,offset+length));return;}
     try{const q={...query,filters:{...query.filters,platform:entry.platform},offset,limit:[20,50,100].find(n=>n>=length)},value=validateResult(await read(q),entry.platform,q);
-     if(fingerprint(value)!==entry.signature){cache=null;throw Error('数据已更新，请点击查询刷新汇总与分页');}
+     if(fingerprint(value)!==entry.signature){index.refreshRequired={platform:entry.platform,message:'数据已更新，请点击查询刷新汇总与分页'};throw Error(index.refreshRequired.message);}
      pages.set(entry.platform,value.rows.slice(0,length));
     }catch(error){check();pageFailures.push({platform:entry.platform,message:error.message||'当前页读取失败'});}
    });
+   if(index.refreshRequired){pages.clear();pageFailures.splice(0,pageFailures.length,{...index.refreshRequired});}
    check();return {ok:true,version:2,view:'missing',sourceStatus:index.failures.length||pageFailures.length?'partial':'ready',source:'collected-registration-reconciliation',country:'印度',countryCode:'IN',currency:'INR',timezone:'Asia/Kolkata',successBasis:query.filters.successBasis,dateBasis:'submission',offset:query.offset,limit:query.limit,total,platforms:index.platforms.slice(),summary,
     coverage:{complete:false,registrationSnapshotComplete:false,expectedPlatforms:index.platforms.length,platformsWithRecords:known?entries.reduce((n,e)=>n+e.value.coverage.platformsWithRecords,0):null,platforms:entries.flatMap(e=>e.value.coverage.platforms),label:'仅核对已采集存款工单；表格与工作台镜像未匹配不代表来源完整。分平台读取，各平台返回时刻可能不同；点击查询刷新全部平台。'},
-    rows:tasks.flatMap(task=>pages.get(task.entry.platform)||[]),batch:{partial:index.failures.length>0||pageFailures.length>0,successfulPlatforms:entries.length,expectedPlatforms:index.platforms.length,failures:index.failures.slice(),pageFailures,startedAt:index.startedAt,completedAt:index.completedAt,pageReadAt:now(),order:'platform-total-desc'}};
+    rows:tasks.flatMap(task=>pages.get(task.entry.platform)||[]),batch:{partial:index.failures.length>0||pageFailures.length>0,refreshRequired:!!index.refreshRequired,successfulPlatforms:entries.length,expectedPlatforms:index.platforms.length,failures:index.failures.slice(),pageFailures,startedAt:index.startedAt,completedAt:index.completedAt,pageReadAt:now(),order:'platform-total-desc'}};
   }
   return {load,cancel,clear:()=>cancel(true)};
  }};
