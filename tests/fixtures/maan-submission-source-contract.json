@@ -1,0 +1,275 @@
+[
+  {
+    "source_contract": {
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "default": "gen_random_uuid()",
+          "notNull": true,
+          "identity": "",
+          "collation": "0",
+          "generated": ""
+        },
+        {
+          "name": "platform",
+          "type": "text",
+          "default": null,
+          "notNull": true,
+          "identity": "",
+          "collation": "100",
+          "generated": ""
+        },
+        {
+          "name": "dataset",
+          "type": "text",
+          "default": null,
+          "notNull": true,
+          "identity": "",
+          "collation": "100",
+          "generated": ""
+        },
+        {
+          "name": "source_id",
+          "type": "text",
+          "default": null,
+          "notNull": true,
+          "identity": "",
+          "collation": "100",
+          "generated": ""
+        },
+        {
+          "name": "member_id",
+          "type": "text",
+          "default": null,
+          "notNull": false,
+          "identity": "",
+          "collation": "100",
+          "generated": ""
+        },
+        {
+          "name": "order_number",
+          "type": "text",
+          "default": null,
+          "notNull": false,
+          "identity": "",
+          "collation": "100",
+          "generated": ""
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "default": null,
+          "notNull": false,
+          "identity": "",
+          "collation": "100",
+          "generated": ""
+        },
+        {
+          "name": "channel_type",
+          "type": "text",
+          "default": null,
+          "notNull": false,
+          "identity": "",
+          "collation": "100",
+          "generated": ""
+        },
+        {
+          "name": "currency",
+          "type": "text",
+          "default": null,
+          "notNull": false,
+          "identity": "",
+          "collation": "100",
+          "generated": ""
+        },
+        {
+          "name": "amount",
+          "type": "numeric(24,8)",
+          "default": null,
+          "notNull": true,
+          "identity": "",
+          "collation": "0",
+          "generated": ""
+        },
+        {
+          "name": "status_code",
+          "type": "text",
+          "default": null,
+          "notNull": false,
+          "identity": "",
+          "collation": "100",
+          "generated": ""
+        },
+        {
+          "name": "status_group",
+          "type": "text",
+          "default": null,
+          "notNull": true,
+          "identity": "",
+          "collation": "100",
+          "generated": ""
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "notNull": true,
+          "identity": "",
+          "collation": "0",
+          "generated": ""
+        },
+        {
+          "name": "success_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "notNull": false,
+          "identity": "",
+          "collation": "0",
+          "generated": ""
+        },
+        {
+          "name": "captured_at",
+          "type": "timestamp with time zone",
+          "default": null,
+          "notNull": true,
+          "identity": "",
+          "collation": "0",
+          "generated": ""
+        },
+        {
+          "name": "raw",
+          "type": "jsonb",
+          "default": "'{}'::jsonb",
+          "notNull": true,
+          "identity": "",
+          "collation": "0",
+          "generated": ""
+        },
+        {
+          "name": "received_at",
+          "type": "timestamp with time zone",
+          "default": "now()",
+          "notNull": true,
+          "identity": "",
+          "collation": "0",
+          "generated": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "newar_detail_records_actual_amount_check",
+          "type": "c",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "CHECK (((actual_amount >= (0)::numeric) AND ((actual_amount)::text <> ALL (ARRAY['NaN'::text, 'Infinity'::text, '-Infinity'::text]))))"
+        },
+        {
+          "name": "newar_detail_records_amount_check",
+          "type": "c",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "CHECK (((amount >= (0)::numeric) AND ((amount)::text <> ALL (ARRAY['NaN'::text, 'Infinity'::text, '-Infinity'::text]))))"
+        },
+        {
+          "name": "newar_detail_records_check",
+          "type": "c",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "CHECK (((success_at IS NULL) OR ((status_group = 'success'::text) AND (success_at >= created_at))))"
+        },
+        {
+          "name": "newar_detail_records_check1",
+          "type": "c",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "CHECK (((processed_at IS NULL) OR (processed_at >= created_at)))"
+        },
+        {
+          "name": "newar_detail_records_currency_check",
+          "type": "c",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "CHECK (((currency IS NULL) OR (currency ~ '^[A-Z0-9]{3,8}$'::text)))"
+        },
+        {
+          "name": "newar_detail_records_dataset_check",
+          "type": "c",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "CHECK ((dataset = ANY (ARRAY['charge'::text, 'withdraw'::text, 'workorder'::text])))"
+        },
+        {
+          "name": "newar_detail_records_fee_check",
+          "type": "c",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "CHECK (((fee >= (0)::numeric) AND ((fee)::text <> ALL (ARRAY['NaN'::text, 'Infinity'::text, '-Infinity'::text]))))"
+        },
+        {
+          "name": "newar_detail_records_followup_count_check",
+          "type": "c",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "CHECK ((followup_count >= 0))"
+        },
+        {
+          "name": "newar_detail_records_pkey",
+          "type": "p",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "newar_detail_records_platform_dataset_source_id_key",
+          "type": "u",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "UNIQUE (platform, dataset, source_id)"
+        },
+        {
+          "name": "newar_detail_records_platform_fkey",
+          "type": "f",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "FOREIGN KEY (platform) REFERENCES newar_detail_platforms(platform)"
+        },
+        {
+          "name": "newar_detail_records_raw_check",
+          "type": "c",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "CHECK ((jsonb_typeof(raw) = 'object'::text))"
+        },
+        {
+          "name": "newar_detail_records_source_id_check",
+          "type": "c",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "CHECK (((length(source_id) >= 1) AND (length(source_id) <= 200)))"
+        },
+        {
+          "name": "newar_detail_records_status_group_check",
+          "type": "c",
+          "deferred": false,
+          "validated": true,
+          "deferrable": false,
+          "definition": "CHECK ((status_group = ANY (ARRAY['success'::text, 'pending'::text, 'failed'::text, 'rejected'::text, 'unknown'::text])))"
+        }
+      ]
+    }
+  }
+]
