@@ -112,6 +112,16 @@
    const coverage=[data.wgCoverage,data.yashCoverage,data.newarCoverage,data.arCoverage].filter(Boolean),current=coverage.some(value=>value.currentComplete===false),previous=coverage.some(value=>value.previousComplete===false);
    return current&&previous?'两期覆盖不完整，汇总暂不比较':current?'当期覆盖不完整，汇总暂不比较':previous?'前期覆盖不完整，汇总暂不比较':'两期范围或覆盖未对齐，汇总暂不比较';
   }
+  function manualClassificationBasisChanged(row){
+   // The Oct10 rule changes unknown rejected orders to manual; system auto is unchanged.
+   if(row.source!=='AR'||row.statisticBasis!=='applied_at_current_status')return false;
+   const day=value=>{if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))return null;const d=new Date(value+'T00:00:00Z');return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===value?value:null;};
+   const current=day(S.daily?row.dataDate:S.data?.startDate);
+   if(!current)return false;
+   const previous=S.daily?addDay(current,-1):day(S.data?.previousStartDate);
+   if(!S.daily&&(day(S.data?.endDate)!==current||day(S.data?.previousEndDate)!==previous||previous!==addDay(current,-1)))return false;
+   return current>='2026-10-10'&&previous<'2026-10-10';
+  }
   function comparison(current,previous,numerator,denominator,issue=''){
    if(!singleDay()&&!S.daily)return '';
    if(issue)return '';
@@ -125,6 +135,7 @@
    if(!countKnown(current,numerator)||!countKnown(previous,numerator))return '<small class="cell-sub">对比值未提供</small>';
    if(denominator){
     if(!shareKnown(current,numerator,denominator)||!shareKnown(previous,numerator,denominator))return '<small class="cell-sub">对比样本不足</small>';
+    if(numerator==='manualCount'&&manualClassificationBasisChanged(current))return '<small class="cell-sub" title="当期将无明确操作人的驳回计入人工，昨日沿用旧日报分类；保留原值，不计算百分点差。">昨日 '+R(previous[numerator],previous[denominator])+' · 分类口径不同</small>';
     const before=Number(previous[denominator]),now=Number(current[denominator]),change=100*(Number(current[numerator])/now-Number(previous[numerator])/before);
     const unverified=current.comparisonComparable===false||previous.comparisonComparable===false||partialClassification;
     return '<small class="cell-sub"'+(unverified?' title="按已入库数据计算；两期完整性尚未核验"':'')+'>昨日 '+R(previous[numerator],previous[denominator])+' '+delta(change,' pp',!['rejected','manualCount'].includes(numerator))+'</small>';
