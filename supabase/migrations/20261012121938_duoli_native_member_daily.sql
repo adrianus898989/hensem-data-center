@@ -1,0 +1,155 @@
+-- Native DUOLI member-day counts over existing collected orders only.
+-- Preserves authorization, stable platform IDs, Jakarta half-open windows and
+-- the already-approved successful-status + order-updated-time proxy. Never
+-- claims payment completion, latency or verified complete withdrawal creation.
+-- Generated with supabase migration new; production metadata captured 2026-10-12.
+begin;
+set local lock_timeout='3s';
+set local statement_timeout='20s';
+do $guard$
+declare r record; p record;
+begin
+ if current_user<>'postgres' then raise exception 'DUOLI member migration owner mismatch';end if;
+ if to_regprocedure('private.dashboard_admin_duoli_member_daily(jsonb,timestamptz,timestamptz,text,text[],text)') is not null then
+  raise exception 'DUOLI member helper already exists; review before applying';
+ end if;
+ for r in select * from (values
+  ('private.dashboard_admin_live_member_daily(jsonb)','b2e01cfbf56fa8a2ca905717f7d93c3e',true,'plpgsql',array['postgres=X/postgres','authenticated=X/postgres']::text[]),
+  ('private.dashboard_admin_duoli_capabilities()','77522fb9cfcf371f3a001831d86ef96d',false,'sql',array['postgres=X/postgres']::text[]),
+  ('private.dashboard_admin_duoli_provider(text)','cb64449a764566fe99cad1d2a03d61f5',false,'sql',array['postgres=X/postgres']::text[]),
+  ('private.dashboard_admin_duoli_status(text,text)','e112ca9b015f705a301aef600e0c5d92',false,'sql',array['postgres=X/postgres']::text[]),
+  ('private.dashboard_admin_duoli_success_updated_at(text,text,timestamp with time zone,timestamp with time zone,timestamp with time zone)','fc44e151913726253c141812ae5a2012',false,'sql',array['postgres=X/postgres']::text[])
+ ) t(signature,hash,definer,language,acl) loop
+  select pp.*,l.lanname,pg_get_userbyid(pp.proowner) owner_name into p from pg_proc pp join pg_language l on l.oid=pp.prolang where pp.oid=to_regprocedure(r.signature);
+  if not found or md5(pg_get_functiondef(p.oid))<>r.hash or p.owner_name<>'postgres' or p.prosecdef<>r.definer
+   or p.lanname<>r.language or p.proacl::text[] is distinct from r.acl then
+   raise exception 'DUOLI member dependency definition or permissions changed: %',r.signature;
+  end if;
+ end loop;
+end;
+$guard$;
+-- Only the authorized memberDaily entry point calls this private invoker.
+-- Counts cover stored orders, not verified complete source days. In particular,
+-- withdrawal collection currently has an updated stream, not created coverage.
+create function private.dashboard_admin_duoli_member_daily(
+ p_platform jsonb,p_start timestamptz,p_end timestamptz,p_direction text,p_providers text[],p_currency text)
+returns jsonb language plpgsql stable set search_path='' set jit=off as $$
+declare v_rows jsonb;v_source text:=p_platform->>'source_name';
+begin
+ if (p_platform->>'source'='duoli' and p_platform->>'scope_group'='ID'
+  and p_platform->>'timezone'='Asia/Jakarta' and p_platform->>'currency'='IDR'
+  and v_source=any(array['FB168','FB333','HOT985','IND666','UANG'])
+  and p_platform->>'id'=md5('duoli:ID:'||v_source)::uuid::text) is not true then
+  raise exception using errcode='42501',message='platform_denied';
+ end if;
+ if p_start is null or p_end is null or not isfinite(p_start) or not isfinite(p_end)
+  or p_start>=p_end or p_end-p_start>interval '31 days' then
+  raise exception using errcode='22023',message='invalid_range';
+ end if;
+ if p_direction is null or p_direction not in('all','charge','withdraw') then
+  raise exception using errcode='22023',message='invalid_direction';
+ end if;
+ with events as (
+  -- Separate native indexed clocks retain cross-day success updates.
+  select 'created'::text basis,d.created_at event_at,d.business,d.member_id,d.provider_code,d.currency
+  from private.duoli_order_details d
+  where d.platform=v_source and d.country='ID' and d.system_name='DOLI'
+   and d.business=any(case p_direction when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)
+   and d.created_at>=p_start and d.created_at<p_end
+  union all
+  select 'success',d.updated_at,d.business,d.member_id,d.provider_code,d.currency
+  from private.duoli_order_details d
+  where d.platform=v_source and d.country='ID' and d.system_name='DOLI'
+   and d.business=any(case p_direction when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)
+   and d.updated_at>=p_start and d.updated_at<p_end
+   and private.dashboard_admin_duoli_success_updated_at(d.business,d.status_code,d.created_at,d.updated_at,statement_timestamp()) is not null
+ ), filtered as (
+  select basis,(event_at at time zone 'Asia/Jakarta')::date date,
+   case business when 'recharge' then 'charge' else 'withdraw' end direction,nullif(btrim(member_id),'') member_id
+  from events where (p_providers is null or private.dashboard_admin_duoli_provider(provider_code)=any(p_providers))
+   and (p_currency is null or currency=p_currency)
+ ), members as (
+  select date,direction,member_id,count(*) filter(where basis='created') created_count,
+   count(*) filter(where basis='success') success_count from filtered group by date,direction,member_id
+ ), counts as (
+  select date,direction,
+   count(*) filter(where member_id is not null and created_count>0) created_member_count,
+   count(*) filter(where member_id is not null and success_count>0) success_member_count,
+   sum(created_count) created_order_count,sum(success_count) success_order_count,
+   coalesce(sum(created_count) filter(where member_id is null),0) created_missing_member_count,
+   coalesce(sum(success_count) filter(where member_id is null),0) success_missing_member_count,
+   count(*) filter(where member_id is not null and created_count>=2) created_members_ge2,
+   count(*) filter(where member_id is not null and created_count>=3) created_members_ge3,
+   count(*) filter(where member_id is not null and created_count>=4) created_members_ge4,
+   count(*) filter(where member_id is not null and created_count>=5) created_members_ge5,
+   count(*) filter(where member_id is not null and success_count>=2) success_members_ge2,
+   count(*) filter(where member_id is not null and success_count>=3) success_members_ge3,
+   count(*) filter(where member_id is not null and success_count>=4) success_members_ge4,
+   count(*) filter(where member_id is not null and success_count>=5) success_members_ge5
+  from members group by date,direction
+ ), days as (
+  select d::date date from generate_series((p_start at time zone 'Asia/Jakarta')::date::timestamp,
+   ((p_end-interval '1 microsecond') at time zone 'Asia/Jakarta')::date::timestamp,interval '1 day')d
+ ), rows as (
+  select days.date,d.direction,coalesce(c.created_member_count,0) created_member_count,
+   coalesce(c.success_member_count,0) success_member_count,coalesce(c.created_order_count,0) created_order_count,
+   coalesce(c.success_order_count,0) success_order_count,coalesce(c.created_missing_member_count,0) created_missing_member_count,
+   coalesce(c.success_missing_member_count,0) success_missing_member_count,
+   coalesce(c.created_members_ge2,0) created_members_ge2,coalesce(c.created_members_ge3,0) created_members_ge3,
+   coalesce(c.created_members_ge4,0) created_members_ge4,coalesce(c.created_members_ge5,0) created_members_ge5,
+   coalesce(c.success_members_ge2,0) success_members_ge2,coalesce(c.success_members_ge3,0) success_members_ge3,
+   coalesce(c.success_members_ge4,0) success_members_ge4,coalesce(c.success_members_ge5,0) success_members_ge5
+  from days cross join unnest(case p_direction when 'all' then array['charge','withdraw'] else array[p_direction] end)d(direction)
+  left join counts c on c.date=days.date and c.direction=d.direction
+ ) select coalesce(jsonb_agg(to_jsonb(r) order by date,direction),'[]'::jsonb) into v_rows from rows r;
+ return jsonb_build_object('version',1,'asOf',statement_timestamp(),'startAt',p_start,'endAt',p_end,
+  'platform',jsonb_build_object('id',p_platform->'id','name',p_platform->'name','country',p_platform->'country',
+   'team',p_platform->'team','source','duoli','sourceName',v_source,'scopeGroup','ID','timezone','Asia/Jakarta','currency','IDR'),
+  'rows',v_rows,'capabilities',jsonb_build_object('memberIdentity',true,'memberDailyAvailable',true,
+   'createdBasis','created_at','successBasis','success_at','dedupe','platform_local_date_direction_member',
+   'successTimeBasis','order_updated_at','successCohort','successful_status_updated_at_in_selected_range',
+   'paymentSuccessTimeAvailable',false,'latencyAvailable',false,'sourceCompletenessVerified',false,
+   'coverageBasis','collected_orders_only','withdrawCreatedCoverageAvailable',false,
+   'periodTotal','sum_daily_unique_member_visits','frequencyBasis','per_platform_local_day_order_count',
+   'frequencyThresholds',jsonb_build_array(2,3,4,5)));
+end;
+$$;
+revoke all on function private.dashboard_admin_duoli_member_daily(jsonb,timestamptz,timestamptz,text,text[],text) from public,anon,authenticated,service_role;
+
+do $patch$
+declare v_oid oid:='private.dashboard_admin_live_member_daily(jsonb)'::regprocedure;v_before jsonb;v_after jsonb;v_definition text;
+begin
+ select to_jsonb(p)-'prosrc',pg_get_functiondef(p.oid) into v_before,v_definition from pg_proc p where p.oid=v_oid;
+ if md5(v_definition)<>'b2e01cfbf56fa8a2ca905717f7d93c3e' then raise exception 'DUOLI member reader guard changed';end if;
+ if (length(v_definition)-length(replace(v_definition,$old$  -- wg_existing_members_v1: preserve all original source implementations.$old$,'')))/length($old$  -- wg_existing_members_v1: preserve all original source implementations.$old$)<>1 then
+  raise exception 'DUOLI member reader anchor changed';
+ end if;
+ execute replace(v_definition,$old$  -- wg_existing_members_v1: preserve all original source implementations.$old$,$new$  -- duoli_existing_members_v1: reuse the authorized native catalog identity.
+  if v_platform.source='duoli' then
+    return private.dashboard_admin_duoli_member_daily(to_jsonb(v_platform),v_start,v_end,v_direction,v_providers,v_currency);
+  end if;
+  -- wg_existing_members_v1: preserve all original source implementations.$new$);
+ select to_jsonb(p)-'prosrc' into v_after from pg_proc p where p.oid=v_oid;
+ if v_after is distinct from v_before or md5(pg_get_functiondef(v_oid))<>'9d936f445ee3111ae248265dfe7a705a' then
+  raise exception 'DUOLI member reader metadata drift';
+ end if;
+end;
+$patch$;
+
+do $patch$
+declare v_oid oid:='private.dashboard_admin_duoli_capabilities()'::regprocedure;v_before jsonb;v_after jsonb;v_definition text;
+begin
+ select to_jsonb(p)-'prosrc',pg_get_functiondef(p.oid) into v_before,v_definition from pg_proc p where p.oid=v_oid;
+ if md5(v_definition)<>'77522fb9cfcf371f3a001831d86ef96d' then raise exception 'DUOLI member reader guard changed';end if;
+ if (length(v_definition)-length(replace(v_definition,$old$'withdrawCreatedCoverageAvailable',false,'memberDailyAvailable',false$old$,'')))/length($old$'withdrawCreatedCoverageAvailable',false,'memberDailyAvailable',false$old$)<>1 then
+  raise exception 'DUOLI member reader anchor changed';
+ end if;
+ execute replace(v_definition,$old$'withdrawCreatedCoverageAvailable',false,'memberDailyAvailable',false$old$,$new$'withdrawCreatedCoverageAvailable',false,'memberDailyAvailable',true$new$);
+ select to_jsonb(p)-'prosrc' into v_after from pg_proc p where p.oid=v_oid;
+ if v_after is distinct from v_before or md5(pg_get_functiondef(v_oid))<>'ed91a7552500fbe1f0ff62cffde7827e' then
+  raise exception 'DUOLI member reader metadata drift';
+ end if;
+end;
+$patch$;
+
+commit;

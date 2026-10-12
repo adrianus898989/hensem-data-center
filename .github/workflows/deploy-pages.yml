@@ -47,6 +47,7 @@ jobs:
       - run: pnpm test:yash
       - run: pnpm test:ar-middle-channels
       - run: pnpm test:withdraw-duration
+      - run: pnpm test:detail-page-coverage
       - run: pnpm build
         env:
           PAGES_BASE_PATH: /hensem-data-center
