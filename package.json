@@ -3,6 +3,7 @@
   "version": "2.4.9",
   "private": true,
   "scripts": {
+    "test:lg-business-notes": "node --test tests/lg-business-note-sanitizer.test.cjs tests/lg-business-notes-receiver.test.cjs tests/lg-business-notes-reader.test.cjs tests/lg-business-notes-ui.test.cjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

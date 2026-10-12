@@ -1,0 +1,211 @@
+{
+  "synthetic_only": true,
+  "placeholder": "[已隐藏]",
+  "vectors": [
+    {
+      "id": 1,
+      "input": "需复核; 手工拒绝后重试",
+      "safe": "需复核; 手工拒绝后重试"
+    },
+    {
+      "id": 2,
+      "input": "---",
+      "safe": "---"
+    },
+    {
+      "id": 3,
+      "input": "name mismatch",
+      "safe": "name mismatch"
+    },
+    {
+      "id": 4,
+      "input": "Name invalid",
+      "safe": "Name invalid"
+    },
+    {
+      "id": 5,
+      "input": "姓名 不一致",
+      "safe": "姓名 不一致"
+    },
+    {
+      "id": 6,
+      "input": "synthetic-provider",
+      "safe": "synthetic-provider"
+    },
+    {
+      "id": 7,
+      "input": "Third Party Pay",
+      "safe": "Third Party Pay"
+    },
+    {
+      "id": 8,
+      "input": "name Alice Smith",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 9,
+      "input": "姓名 张三",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 10,
+      "input": "full name Alice Smith; retry",
+      "safe": "[已隐藏]; retry"
+    },
+    {
+      "id": 11,
+      "input": "98****1234",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 12,
+      "input": "4111****1111",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 13,
+      "input": "****1234",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 14,
+      "input": "09xx xxxx 1234",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 15,
+      "input": "+63 (917) 234-5678",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 16,
+      "input": "4111 1111 1111 1111",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 17,
+      "input": "１２３４５６７８９０",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 18,
+      "input": "0917​123​4567",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 19,
+      "input": "person@sample.test",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 20,
+      "input": "someone@ybl",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 21,
+      "input": "192.0.2.45",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 22,
+      "input": "2001:db8::1",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 23,
+      "input": "2001::1",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 24,
+      "input": "::1",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 25,
+      "input": "https://example.test/private?token=secret",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 26,
+      "input": "ftp://example.test/private",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 27,
+      "input": "example.test/private",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 28,
+      "input": "DE89 3704 0044 0532 0130 00",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 29,
+      "input": "AB1234567",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 30,
+      "input": "123.456.789-01",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 31,
+      "input": "51012319900101123X",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 32,
+      "input": "PIX: random-private-value",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 33,
+      "input": "姓名：张三",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 34,
+      "input": "name: Synthetic Unknown",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 35,
+      "input": "身份证：sensitive-document",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 36,
+      "input": "手机号：09123456789",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 37,
+      "input": "等待复核; 金额100.50; code 123456; 2026-10-12 10:30:00",
+      "safe": "等待复核; 金额100.50; code 123456; 2026-10-12 10:30:00"
+    },
+    {
+      "id": 38,
+      "input": "2026/10/12 10:30:00; retry",
+      "safe": "2026/10/12 10:30:00; retry"
+    },
+    {
+      "id": 39,
+      "input": "[已隐藏]",
+      "safe": "[已隐藏]"
+    },
+    {
+      "id": 40,
+      "input": "需复核 [已隐藏]",
+      "safe": "需复核 [已隐藏]"
+    },
+    {
+      "id": 41,
+      "input": "[内容超长已截断]",
+      "safe": "[内容超长已截断]"
+    }
+  ]
+}
