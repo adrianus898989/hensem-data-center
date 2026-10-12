@@ -1,0 +1,1316 @@
+{
+  "scopes": [
+    {
+      "currency": "BRL",
+      "platform": "platform_12601",
+      "region_id": 1,
+      "tenant_id": 6106691,
+      "country_code": "BR",
+      "platform_label": "POPSEN"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_12609",
+      "region_id": 1,
+      "tenant_id": 8358361,
+      "country_code": "BR",
+      "platform_label": "POPTAM"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_13610",
+      "region_id": 1,
+      "tenant_id": 5621308,
+      "country_code": "BR",
+      "platform_label": "POPFEZ"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_16615",
+      "region_id": 1,
+      "tenant_id": 6704993,
+      "country_code": "BR",
+      "platform_label": "POPBUL"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_170",
+      "region_id": 1,
+      "tenant_id": 7752287,
+      "country_code": "BR",
+      "platform_label": "SSS55"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_17530",
+      "region_id": 1,
+      "tenant_id": 2592271,
+      "country_code": "BR",
+      "platform_label": "BET9756"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_1930841",
+      "region_id": 1,
+      "tenant_id": 1930841,
+      "country_code": "BR",
+      "platform_label": "POPCRA"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_208",
+      "region_id": 1,
+      "tenant_id": 7910097,
+      "country_code": "BR",
+      "platform_label": "VIP345"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_222vip",
+      "region_id": 1,
+      "tenant_id": 4203051,
+      "country_code": "BR",
+      "platform_label": "222VIP"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_2231",
+      "region_id": 1,
+      "tenant_id": 6846137,
+      "country_code": "BR",
+      "platform_label": "PLAYER BR"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_2250",
+      "region_id": 1,
+      "tenant_id": 1859716,
+      "country_code": "BR",
+      "platform_label": "POPSUR"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_2269",
+      "region_id": 1,
+      "tenant_id": 2954683,
+      "country_code": "BR",
+      "platform_label": "POPTIG"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_2279",
+      "region_id": 1,
+      "tenant_id": 5223676,
+      "country_code": "BR",
+      "platform_label": "POPNOV"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_231",
+      "region_id": 1,
+      "tenant_id": 3801128,
+      "country_code": "BR",
+      "platform_label": "TPTP"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_234t",
+      "region_id": 1,
+      "tenant_id": 7425762,
+      "country_code": "BR",
+      "platform_label": "234T"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_235",
+      "region_id": 1,
+      "tenant_id": 8419440,
+      "country_code": "BR",
+      "platform_label": "FF555"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_2382",
+      "region_id": 1,
+      "tenant_id": 3200575,
+      "country_code": "BR",
+      "platform_label": "POPZOE"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_2431",
+      "region_id": 1,
+      "tenant_id": 2473688,
+      "country_code": "BR",
+      "platform_label": "9596BET"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_2461",
+      "region_id": 1,
+      "tenant_id": 2914229,
+      "country_code": "BR",
+      "platform_label": "POPBEA"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_2470",
+      "region_id": 1,
+      "tenant_id": 1239254,
+      "country_code": "BR",
+      "platform_label": "POPFOI"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_2537",
+      "region_id": 1,
+      "tenant_id": 5235420,
+      "country_code": "BR",
+      "platform_label": "27FF"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_2v222",
+      "region_id": 1,
+      "tenant_id": 8602599,
+      "country_code": "BR",
+      "platform_label": "2V222"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_345f",
+      "region_id": 1,
+      "tenant_id": 9569322,
+      "country_code": "BR",
+      "platform_label": "345F"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_406",
+      "region_id": 1,
+      "tenant_id": 2731434,
+      "country_code": "BR",
+      "platform_label": "KKVIP"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_428",
+      "region_id": 1,
+      "tenant_id": 4097783,
+      "country_code": "BR",
+      "platform_label": "KK345"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_447",
+      "region_id": 1,
+      "tenant_id": 8985043,
+      "country_code": "BR",
+      "platform_label": "POPWB"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_448",
+      "region_id": 1,
+      "tenant_id": 4289004,
+      "country_code": "BR",
+      "platform_label": "POPMEL"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_45ff",
+      "region_id": 1,
+      "tenant_id": 2312575,
+      "country_code": "BR",
+      "platform_label": "45FF"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_559k",
+      "region_id": 1,
+      "tenant_id": 6761204,
+      "country_code": "BR",
+      "platform_label": "559K"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_56l",
+      "region_id": 1,
+      "tenant_id": 1162561,
+      "country_code": "BR",
+      "platform_label": "56L"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_596",
+      "region_id": 1,
+      "tenant_id": 3582445,
+      "country_code": "BR",
+      "platform_label": "43R"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_609",
+      "region_id": 1,
+      "tenant_id": 7515286,
+      "country_code": "BR",
+      "platform_label": "AA45"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_613",
+      "region_id": 1,
+      "tenant_id": 9797598,
+      "country_code": "BR",
+      "platform_label": "POPBOA"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_620",
+      "region_id": 1,
+      "tenant_id": 6680705,
+      "country_code": "BR",
+      "platform_label": "POPDEZ"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_647",
+      "region_id": 1,
+      "tenant_id": 6194693,
+      "country_code": "BR",
+      "platform_label": "BOOMRIO"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_67vip",
+      "region_id": 1,
+      "tenant_id": 1499382,
+      "country_code": "BR",
+      "platform_label": "67VIP"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_723",
+      "region_id": 1,
+      "tenant_id": 2730053,
+      "country_code": "BR",
+      "platform_label": "POPLUZ"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_737",
+      "region_id": 1,
+      "tenant_id": 4753880,
+      "country_code": "BR",
+      "platform_label": "8599BET"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_755",
+      "region_id": 1,
+      "tenant_id": 3298024,
+      "country_code": "BR",
+      "platform_label": "222O"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_756",
+      "region_id": 1,
+      "tenant_id": 2332315,
+      "country_code": "BR",
+      "platform_label": "58EE"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_759",
+      "region_id": 1,
+      "tenant_id": 8256285,
+      "country_code": "BR",
+      "platform_label": "POPVAI"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_76pp",
+      "region_id": 1,
+      "tenant_id": 6475857,
+      "country_code": "BR",
+      "platform_label": "76PP"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_776f",
+      "region_id": 1,
+      "tenant_id": 9582071,
+      "country_code": "BR",
+      "platform_label": "776F"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_798",
+      "region_id": 1,
+      "tenant_id": 4415725,
+      "country_code": "BR",
+      "platform_label": "32QQ"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_800",
+      "region_id": 1,
+      "tenant_id": 4749728,
+      "country_code": "BR",
+      "platform_label": "POPN1"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_801",
+      "region_id": 1,
+      "tenant_id": 1672026,
+      "country_code": "BR",
+      "platform_label": "POPBIS"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_802",
+      "region_id": 1,
+      "tenant_id": 1531005,
+      "country_code": "BR",
+      "platform_label": "POPFLU"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_8566bet",
+      "region_id": 1,
+      "tenant_id": 9235499,
+      "country_code": "BR",
+      "platform_label": "8566BET"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_888hh",
+      "region_id": 1,
+      "tenant_id": 6202107,
+      "country_code": "BR",
+      "platform_label": "888HH"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_96f",
+      "region_id": 1,
+      "tenant_id": 5037933,
+      "country_code": "BR",
+      "platform_label": "96F"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_985",
+      "region_id": 1,
+      "tenant_id": 4965667,
+      "country_code": "BR",
+      "platform_label": "5V555"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_987",
+      "region_id": 1,
+      "tenant_id": 6594579,
+      "country_code": "BR",
+      "platform_label": "F75"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_998",
+      "region_id": 1,
+      "tenant_id": 5821595,
+      "country_code": "BR",
+      "platform_label": "25RR"
+    },
+    {
+      "currency": "BRL",
+      "platform": "platform_bet5697",
+      "region_id": 1,
+      "tenant_id": 5819555,
+      "country_code": "BR",
+      "platform_label": "BET5697"
+    }
+  ],
+  "columns": [
+    {
+      "type": "text",
+      "table": "order_scopes",
+      "column": "platform",
+      "schema": "panda_private"
+    },
+    {
+      "type": "text",
+      "table": "order_scopes",
+      "column": "platform_label",
+      "schema": "panda_private"
+    },
+    {
+      "type": "text",
+      "table": "order_scopes",
+      "column": "country_code",
+      "schema": "panda_private"
+    },
+    {
+      "type": "bigint",
+      "table": "order_scopes",
+      "column": "tenant_id",
+      "schema": "panda_private"
+    },
+    {
+      "type": "integer",
+      "table": "order_scopes",
+      "column": "region_id",
+      "schema": "panda_private"
+    },
+    {
+      "type": "text",
+      "table": "order_scopes",
+      "column": "currency",
+      "schema": "panda_private"
+    },
+    {
+      "type": "uuid",
+      "table": "order_scans",
+      "column": "scan_id",
+      "schema": "panda_private"
+    },
+    {
+      "type": "uuid",
+      "table": "order_scans",
+      "column": "credential_id",
+      "schema": "panda_private"
+    },
+    {
+      "type": "text",
+      "table": "order_scans",
+      "column": "platform",
+      "schema": "panda_private"
+    },
+    {
+      "type": "text",
+      "table": "order_scans",
+      "column": "direction",
+      "schema": "panda_private"
+    },
+    {
+      "type": "text",
+      "table": "order_scans",
+      "column": "window_axis",
+      "schema": "panda_private"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "order_scans",
+      "column": "window_start",
+      "schema": "panda_private"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "order_scans",
+      "column": "window_end",
+      "schema": "panda_private"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "order_scans",
+      "column": "observed_at",
+      "schema": "panda_private"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "order_scans",
+      "column": "finalized_at",
+      "schema": "panda_private"
+    },
+    {
+      "type": "uuid",
+      "table": "order_scan_members",
+      "column": "scan_id",
+      "schema": "panda_private"
+    },
+    {
+      "type": "text",
+      "table": "order_scan_members",
+      "column": "order_id",
+      "schema": "panda_private"
+    },
+    {
+      "type": "uuid",
+      "table": "order_scan_members",
+      "column": "batch_id",
+      "schema": "panda_private"
+    },
+    {
+      "type": "text",
+      "table": "order_scan_members",
+      "column": "row_hash",
+      "schema": "panda_private"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "order_scan_members",
+      "column": "axis_value",
+      "schema": "panda_private"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_details",
+      "column": "platform",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_details",
+      "column": "direction",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_details",
+      "column": "order_id",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_details",
+      "column": "provider_id",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_details",
+      "column": "provider_name",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_details",
+      "column": "channel_id",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_details",
+      "column": "channel_name",
+      "schema": "public"
+    },
+    {
+      "type": "bigint",
+      "table": "panda_order_details",
+      "column": "amount_minor",
+      "schema": "public"
+    },
+    {
+      "type": "bigint",
+      "table": "panda_order_details",
+      "column": "pay_amount_minor",
+      "schema": "public"
+    },
+    {
+      "type": "bigint",
+      "table": "panda_order_details",
+      "column": "credited_amount_minor",
+      "schema": "public"
+    },
+    {
+      "type": "bigint",
+      "table": "panda_order_details",
+      "column": "discount_minor",
+      "schema": "public"
+    },
+    {
+      "type": "bigint",
+      "table": "panda_order_details",
+      "column": "fee_minor",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_details",
+      "column": "currency",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_details",
+      "column": "raw_status",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_details",
+      "column": "status",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_details",
+      "column": "credit_status",
+      "schema": "public"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "panda_order_details",
+      "column": "created_at",
+      "schema": "public"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "panda_order_details",
+      "column": "source_updated_at",
+      "schema": "public"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "panda_order_details",
+      "column": "completed_at",
+      "schema": "public"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "panda_order_details",
+      "column": "observed_at",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_details",
+      "column": "row_hash",
+      "schema": "public"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "panda_order_details",
+      "column": "received_at",
+      "schema": "public"
+    },
+    {
+      "type": "uuid",
+      "table": "panda_order_coverage_receipts",
+      "column": "scan_id",
+      "schema": "public"
+    },
+    {
+      "type": "uuid",
+      "table": "panda_order_coverage_receipts",
+      "column": "batch_id",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_coverage_receipts",
+      "column": "platform",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_coverage_receipts",
+      "column": "direction",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_coverage_receipts",
+      "column": "window_axis",
+      "schema": "public"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "panda_order_coverage_receipts",
+      "column": "window_start",
+      "schema": "public"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "panda_order_coverage_receipts",
+      "column": "window_end",
+      "schema": "public"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "panda_order_coverage_receipts",
+      "column": "observed_at",
+      "schema": "public"
+    },
+    {
+      "type": "integer",
+      "table": "panda_order_coverage_receipts",
+      "column": "expected_count",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_coverage_receipts",
+      "column": "member_ids_hash",
+      "schema": "public"
+    },
+    {
+      "type": "integer",
+      "table": "panda_order_coverage_receipts",
+      "column": "source_pages_total",
+      "schema": "public"
+    },
+    {
+      "type": "boolean",
+      "table": "panda_order_coverage_receipts",
+      "column": "row_axis_bounds_verified",
+      "schema": "public"
+    },
+    {
+      "type": "text",
+      "table": "panda_order_coverage_receipts",
+      "column": "coverage_kind",
+      "schema": "public"
+    },
+    {
+      "type": "timestamp with time zone",
+      "table": "panda_order_coverage_receipts",
+      "column": "received_at",
+      "schema": "public"
+    }
+  ],
+  "mapping": [
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "222O",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "222O"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "222VIP",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "222VIP"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "234T",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "234T"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "25RR",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "25RR"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "27FF",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "27FF"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "2V222",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "2V222"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "32QQ",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "32QQ"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "345F",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "345F"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "43R",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "43R"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "45FF",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "45FF"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "559K",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "559K"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "56L",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "56L"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "58EE",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "58EE"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "5V555",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "5V555"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "67VIP",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "67VIP"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "76PP",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "76PP"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "776F",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "776F"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "8566BET",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "8566BET"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "8599BET",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "8599BET"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "888HH",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "888HH"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "9596BET",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "9596BET"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "96F",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "96F"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "AA45",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "AA45"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "BET5697",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "BET5697"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "BOOMRIO",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "BOOMRIO"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "F75",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "F75"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "FF555",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "FF555"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "KK345",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "KK345"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "KKVIP",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "KKVIP"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "PLAYERBR",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "PLAYER BR"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPBEA",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPBEA"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPBIS",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPBIS"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPBOA",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPBOA"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPBUL",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPBUL"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPCRA",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPCRA"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPDEZ",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPDEZ"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPFEZ",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPFEZ"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPFLU",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPFLU"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPFOI",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPFOI"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPLUZ",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPLUZ"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPMEL",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPMEL"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPN1",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPN1"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPNOV",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPNOV"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPSEN",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPSEN"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPSUR",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPSUR"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPTAM",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPTAM"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPTIG",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPTIG"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPVAI",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPVAI"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPWB",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPWB"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "POPZOE",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "POPZOE"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "SSS55",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "SSS55"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "TPTP",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "TPTP"
+    },
+    {
+      "active": true,
+      "team_name": "胖虎",
+      "country_code": "BR_PANGHU",
+      "country_name": "巴西",
+      "platform_name": "VIP345",
+      "source_system": "PANDA",
+      "source_country": "巴西",
+      "source_platform": "VIP345"
+    },
+    {
+      "active": true,
+      "team_name": "M8",
+      "country_code": "PH",
+      "country_name": "菲律宾",
+      "platform_name": "PH19",
+      "source_system": "PANDA",
+      "source_country": "菲律宾",
+      "source_platform": "PH19"
+    }
+  ]
+}
