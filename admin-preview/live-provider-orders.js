@@ -10,7 +10,18 @@
   if(Object.hasOwn(r,'settlement_currency')){rows.push(['结算金额',settlement(r,tools)]);if(knownMoney(r.settlement_fee))rows.push(['结算手续费',N(r.settlement_fee)+(r.settlement_currency?' '+E(r.settlement_currency):'')]);if(knownMoney(r.exchange_rate)&&Number(r.exchange_rate)>0)rows.push(['来源汇率',E(r.exchange_rate)]);}
   if(r.platform?.source==='wg'&&r.direction==='charge'&&r.channel_type==='提现转充值'&&r.fee_exempt===true)rows.push(['手续费','0（提现转充值）']);
   return rows;}
- root.HensemProviderOrders={moneyCell,moneyRows,create:function({L,E,N,C,table,box,formatTime,successTimeLabel=p=>p?.capabilities?.successTimeBasis==='order_updated_at'?'成功统计时间（订单更新时间）':p?.capabilities?.successTimeBasis==='source_completed_at'?'成功时间（源订单完成时间）':'成功时间',query,orderFieldValue=(p,key,value)=>value,request,openDrawer}){
+ const isPanda=p=>String(p?.source||'').toLowerCase()==='panda';
+ const successAvailable=(p,d)=>isPanda(p)?p?.capabilities?.successCoverageAvailable===true&&p?.capabilities?.[d+'SuccessTimeAvailable']===true:p?.capabilities?.successTimeAvailable!==false&&p?.capabilities?.[d+'SuccessTimeAvailable']!==false;
+ const pandaChannel=r=>r.channel_name||(r.channel_type&&r.channel_type!=='其他类型'?r.channel_type:null)||'未提供';
+ function pandaRows(r,p,{E,N,formatTime}){const money=v=>N(v)+(v!=null?' '+E(r.currency||p.currency||''):'');return [
+  ['订单号',E(r.order_number||r.order_no||'—')],['平台 / 包网',E(p.name+' / 熊猫')],['范围',r.direction==='withdraw'?'已审核提现':'充值'],
+  ['三方',E(r.provider||'未识别三方')],['原始三方',E(r.raw_provider??'未提供')],['通道',E(pandaChannel(r))],...(Object.hasOwn(r,'channel_id')?[['通道编号',E(r.channel_id??'未提供')]]:[]),
+  ['订单金额',money(r.amount)],...(p.capabilities?.actualAmount===true?[['实际金额',money(r.actual_amount)]]:[]),...(p.capabilities?.recordedFee===true?[['已记录手续费',money(r.withdraw_fee)]]:[]),
+  ['订单状态',E(r.status_group||'unknown')],['原始状态',E(r.status||'未提供')],['创建时间',E(formatTime(r.created_at,p.timezone))],
+  ...(r.direction==='charge'&&p.capabilities?.chargeSourceCompletedTimeAvailable===true?[['成功时间（源订单完成时间）',E(formatTime(r.success_at,p.timezone))]]:[]),
+  ...(Object.hasOwn(r,'source_updated_at')?[['源更新时间',E(formatTime(r.source_updated_at,p.timezone))]]:[]),['数据同步时间',E(formatTime(r.synced_at,p.timezone))],['时区',E(p.timezone)]
+ ];}
+ root.HensemProviderOrders={moneyCell,moneyRows,isPanda,pandaRows,pandaChannel,create:function({L,E,N,C,table,box,formatTime,successTimeLabel=p=>p?.capabilities?.successTimeBasis==='order_updated_at'?'成功统计时间（订单更新时间）':p?.capabilities?.successTimeBasis==='source_completed_at'?'成功时间（源订单完成时间）':'成功时间',query,orderFieldValue=(p,key,value)=>value,request,openDrawer}){
   let current=null,serial=0;
   const cancel=()=>{serial++;current=null},previousClose=root.closeDrawer;
   if(typeof previousClose==='function')root.closeDrawer=function(...args){cancel();return previousClose.apply(this,args)};
@@ -31,7 +42,7 @@
   function show(){
    if(!current)return;
    const s=current,total=counts(s.mode),max=Math.max(1,Math.ceil(total/20)),successLabels=[...new Set(targets().map(t=>successTimeLabel(t.platform)))],successLabel=successLabels.length===1?(successLabels[0]==='成功统计时间（订单更新时间）'?'成功统计时间（多利按更新时间）':successLabels[0]):'成功统计时间（'+[successLabels.some(x=>x.includes('更新时间'))?'多利按更新时间':'',successLabels.some(x=>x.includes('完成时间'))?'KB按完成时间':''].filter(Boolean).join('；')+'）';
-   const tabs='<div class="tabs">'+(s.status==='success'?[['success',successLabel]]:[['success',successLabel],['created','创建时间']]).map(([mode,label])=>'<button class="'+(s.mode===mode?'on':'')+'" onclick="liveProviderOrderBasis(\''+mode+'\')">'+label+' · '+C(counts(mode))+' 笔</button>').join('')+'</div>';
+   const tabs='<div class="tabs">'+(s.status==='success'?[['success',successLabel]]:[...(targets().every(t=>successAvailable(t.platform,s.direction))?[['success',successLabel]]:[]),['created','创建时间']]).map(([mode,label])=>'<button class="'+(s.mode===mode?'on':'')+'" onclick="liveProviderOrderBasis(\''+mode+'\')">'+label+' · '+C(counts(mode))+' 笔</button>').join('')+'</div>';
    const note='<div class="live-definition">'+E(s.from.replace('T',' ')+' 至 '+s.to.replace('T',' '))+' · '+E(s.currency)+' · '+(s.mode==='success'?'按'+successLabel+'读取，包含此前创建、本期成功的订单。':'按创建时间读取本期全部订单。')+' 各平台当地时间。</div>';
    const platformFilter='<div class="live-filters"><label>平台<select aria-label="三方订单平台" onchange="liveProviderOrderPlatform(this.value)"><option value="">全部已查询平台</option>'+s.targets.map(t=>'<option value="'+E(t.platform.id)+'" '+(s.platformId===t.platform.id?'selected':'')+'>'+E(t.platform.name+' · '+t.platform.source)+' · '+C(t[s.mode])+' 笔</option>').join('')+'</select></label></div>';
    const usdt=String(s.provider).trim().toUpperCase()==='USDT'?'<div class="live-definition">USDT 是汇总分类，支付商尚未确认。请按原始通道和订单核对。</div>':'';
@@ -73,15 +84,15 @@
    }).filter(Boolean).sort((a,b)=>String(a.platform.name).localeCompare(String(b.platform.name))||String(a.platform.id).localeCompare(String(b.platform.id)));
    if(platformId&&!targets.some(t=>t.platform.id===platformId))return;
    if(currencyScoped&&!targets.length){cancel();openDrawer('订单明细','<div class="live-status live-error">当前已查询结果没有该三方与币种的订单明细</div>');return;}
-   current={provider,source,direction,targets,platformId,status:L.status,mode:L.status==='success'||targets.some(t=>(!platformId||t.platform.id===platformId)&&t.success)?'success':'created',page:1,rows:[],error:'',loading:true,querySerial:L.serial,from:L.from,to:L.to,currency:currencyScoped?currency:L.currency,currencyScoped};
+   current={provider,source,direction,targets,platformId,status:L.status,mode:targets.filter(t=>!platformId||t.platform.id===platformId).every(t=>successAvailable(t.platform,direction))&&(L.status==='success'||targets.some(t=>(!platformId||t.platform.id===platformId)&&t.success))?'success':'created',page:1,rows:[],error:'',loading:true,querySerial:L.serial,from:L.from,to:L.to,currency:currencyScoped?currency:L.currency,currencyScoped};
    await load();
   }
   root.liveProviderOrders=open;
   root.liveProviderOrderPlatform=async platformId=>{if(!current||platformId&&!current.targets.some(t=>t.platform.id===platformId))return;current.platformId=platformId;current.page=1;await load()};
-  root.liveProviderOrderBasis=async mode=>{if(!current||!['created','success'].includes(mode)||current.status==='success'&&mode==='created')return;current.mode=mode;current.page=1;await load()};
+  root.liveProviderOrderBasis=async mode=>{if(!current||!['created','success'].includes(mode)||mode==='success'&&!targets().every(t=>successAvailable(t.platform,current.direction))||current.status==='success'&&mode==='created')return;current.mode=mode;current.page=1;await load()};
   root.liveProviderOrderPage=async page=>{if(!current||current.loading||!Number.isInteger(page)||page<1||page>Math.max(1,Math.ceil(counts(current.mode)/20)))return;current.page=page;await load()};
   root.liveProviderOrder=index=>{
-   const r=current?.rows[index];if(!r)return;
+   const r=current?.rows[index];if(!r)return;if(isPanda(r.platform)){openDrawer('订单详情 · '+(r.order_number||r.order_no||''),'<button class="btn small" onclick="liveProviderOrdersBack()">← 返回三方订单</button>'+box('订单明细',table(['字段','内容'],pandaRows(r,r.platform,{E,N,formatTime}))));return;}
    openDrawer('订单详情 · '+(r.order_number||r.order_no||''),'<button class="btn small" onclick="liveProviderOrdersBack()">← 返回三方订单</button>'+box('订单与归类依据',table(['字段','内容'],[
     ['订单号',E(r.order_number||r.order_no||'—')],['系统订单号',E(orderFieldValue(r.platform,'systemOrderId',r.system_order_id||r.id)||'—')],['三方订单号',E(orderFieldValue(r.platform,'thirdPartyOrderNumber',r.third_party_order_number)||'—')],['平台 / 包网',E(r.platform.name+' / '+r.platform.source)],...moneyRows(r,{E,N}),['原始三方 / 通道',E(r.raw_provider===undefined?'接口未提供':r.raw_provider==null||r.raw_provider===''?'（空）':r.raw_provider)],['归类三方',E(r.provider||'未识别通道')],['原始类型',E(r.channel_type||'—')],['原始状态',E(r.status||r.status_group||'—')],['归类依据',E(reason(r))],['创建时间',E(formatTime(r.created_at,r.platform.timezone))],[successTimeLabel(r.platform),E(formatTime(r.success_at,r.platform.timezone))],['同步时间',E(formatTime(r.synced_at,r.platform.timezone))],['时区',E(r.platform.timezone)]
    ],'live-provider-order-detail')));

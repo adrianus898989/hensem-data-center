@@ -1,0 +1,73 @@
+{
+  "source": "panda",
+  "country": "巴西",
+  "timezone": "America/Sao_Paulo",
+  "currency": "BRL",
+  "catalogCount": 54,
+  "creationStatistics": {
+    "basis": "created_at_current_stored_status",
+    "requiredCoverage": "all selected directions exact requested creation interval",
+    "partialError": "PANDA_COVERAGE_INCOMPLETE",
+    "created_success_count": "current normalized status=success in creation cohort",
+    "created_success_amount": "exact same creation cohort monetary partition; alias reductions preserve partitions"
+  },
+  "details": {
+    "partialAllowed": true,
+    "pandaCoverageRequired": true,
+    "success_at": "deposit source completeTime only; finite and created <= completed <= observed/asof; not certified completion-window coverage",
+    "withdrawCompletedAt": null
+  },
+  "disabled": {
+    "successCoverageAvailable": false,
+    "successTimeAvailable": false,
+    "chargeSuccessTimeAvailable": false,
+    "withdrawSuccessTimeAvailable": false,
+    "latencyAvailable": false,
+    "chargeLatencyAvailable": false,
+    "withdrawLatencyAvailable": false,
+    "memberDailyAvailable": false,
+    "memberIdentity": false,
+    "autoWithdrawAvailable": false,
+    "operatorAvailable": false,
+    "workordersAvailable": false,
+    "pendingSnapshotAvailable": false
+  },
+  "sourceFields": {
+    "chargeSourceCompletedTimeAvailable": true,
+    "withdrawSourceCompletedTimeAvailable": false,
+    "sourceCompletionTimeBasis": "source_completed_at",
+    "actualAmount": "pay_amount_minor / 100, nullable",
+    "recordedFee": "fee_minor / 100, nullable",
+    "member_id": null
+  },
+  "successCohort": {
+    "error": "PANDA_SUCCESS_COVERAGE_UNAVAILABLE",
+    "metrics": [
+      "success_count",
+      "success_amount"
+    ],
+    "metricValue": null,
+    "latencyGroups": [],
+    "successFeeBands": null
+  },
+  "withdrawals": {
+    "scope": "reviewed_withdrawal_list_only",
+    "pending_count": null,
+    "pending_amount": null,
+    "unknown": "retained, never reclassified as failure"
+  },
+  "coverageBudgets": {
+    "maxCurrentMembers": 250000,
+    "maxNonRedundantReceipts": 64,
+    "maxExpectedMembersAcrossReceipts": 250000,
+    "perReceiptCountLimit": "expected_count + 1",
+    "budgetExceeded": "incomplete, never zero"
+  },
+  "oldSnapshotsAndGoogleImports": "unchanged; no report cutover",
+  "sourceFieldEvidence": {
+    "file": "work/panda-realtime-20261010/collector/panda_normalize.py",
+    "depositMapping": "completed_at <- source completeTime (not updateTime)",
+    "withdrawMapping": "completed_at = null"
+  },
+  "authenticatedGatewaySmoke": "required after deployment; offline tests stub only session/gateway and use actual captured scope functions"
+}
