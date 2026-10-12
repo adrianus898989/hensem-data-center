@@ -1,0 +1,213 @@
+{
+  "functions": [
+    {
+      "acl": "{postgres=X/postgres,authenticated=X/postgres}",
+      "md5": "b2e01cfbf56fa8a2ca905717f7d93c3e",
+      "args": "p_request jsonb",
+      "name": "dashboard_admin_live_member_daily",
+      "owner": "postgres",
+      "config": [
+        "search_path=\"\"",
+        "jit=off"
+      ],
+      "schema": "private",
+      "body_md5": "e1c4a724f124658baa9863cc9f2811b1",
+      "definition": "CREATE OR REPLACE FUNCTION private.dashboard_admin_live_member_daily(p_request jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\n SET jit TO 'off'\nAS $function$\ndeclare\n  v_platform record; v_id uuid; v_start timestamptz; v_end timestamptz;\n  v_direction text; v_currency text; v_key text; v_request jsonb;\n  v_providers text[]; v_confirmations jsonb:='{}'::jsonb;\n  v_basis text; v_axis text; v_source text; v_sources text[]:='{}'; v_sql text; v_rows jsonb;\nbegin\n  -- Same fresh Auth/profile/preview grant as the existing live order reader.\n  -- The authorized catalog retains raw source identity and excludes disabled,\n  -- future and replaced legacy order sources.\n  perform private.dashboard_admin_live_scope();\n  if p_request is null or jsonb_typeof(p_request)<>'object' or octet_length(p_request::text)>16384\n    or exists(select 1 from jsonb_object_keys(p_request) k where k<>all(array[\n      'platformId','startAt','endAt','direction','providers','currency'])) then\n    raise exception using errcode='22023',message='invalid_request';\n  end if;\n  foreach v_key in array array['platformId','startAt','endAt','direction','currency'] loop\n    if p_request ? v_key and p_request->v_key<>'null'::jsonb and\n      (jsonb_typeof(p_request->v_key)<>'string' or length(p_request->>v_key)>200 or p_request->>v_key ~ '[[:cntrl:]]') then\n      raise exception using errcode='22023',message='invalid_filter';\n    end if;\n  end loop;\n  begin\n    v_id:=(p_request->>'platformId')::uuid;\n    if coalesce(p_request->>'startAt','') !~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}([.][0-9]{1,6})?(Z|[+-]\\d{2}:\\d{2})$'\n      or coalesce(p_request->>'endAt','') !~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}([.][0-9]{1,6})?(Z|[+-]\\d{2}:\\d{2})$' then\n      raise exception using errcode='22023',message='invalid_time';\n    end if;\n    v_start:=(p_request->>'startAt')::timestamptz;v_end:=(p_request->>'endAt')::timestamptz;\n  exception when invalid_text_representation or invalid_datetime_format or datetime_field_overflow then\n    raise exception using errcode='22023',message='invalid_filter';\n  end;\n  select * into v_platform from private.dashboard_admin_live_platforms() p where p.id=v_id;\n  if not found then raise exception using errcode='42501',message='platform_denied';end if;\n  if v_start is null or v_end is null or not isfinite(v_start) or not isfinite(v_end) or v_start>=v_end\n    or (v_end at time zone v_platform.timezone)-(v_start at time zone v_platform.timezone)>interval '31 days' then\n    raise exception using errcode='22023',message='invalid_range';\n  end if;\n  v_direction:=coalesce(p_request->>'direction','all');v_currency:=nullif(btrim(p_request->>'currency'),'');\n  if v_direction not in ('all','charge','withdraw') then raise exception using errcode='22023',message='invalid_direction';end if;\n  if p_request ? 'providers' and p_request->'providers'<>'null'::jsonb then\n    if jsonb_typeof(p_request->'providers')<>'array' or jsonb_array_length(p_request->'providers')>200\n      or exists(select 1 from jsonb_array_elements(p_request->'providers') a where jsonb_typeof(a)<>'string'\n        or length(a#>>'{}') not between 1 and 200 or (a#>>'{}') ~ '[[:cntrl:]]') then\n      raise exception using errcode='22023',message='invalid_filter';\n    end if;\n  end if;\n  -- Expand canonical provider selections using the exact existing order-reader\n  -- mapping. All selected providers enter one DISTINCT set, never summed sets.\n  v_request:=private.dashboard_admin_live_expand_provider_filter(p_request);\n  if jsonb_typeof(v_request->'providers')='array' and jsonb_array_length(v_request->'providers')>0 then\n    select array_agg(value) into v_providers from jsonb_array_elements_text(v_request->'providers');\n  end if;\n  -- wg_existing_members_v1: preserve all original source implementations.\n  if v_platform.source='wg' then\n    return private.dashboard_admin_wg_member_daily(to_jsonb(v_platform),v_start,v_end,v_direction,v_providers,v_currency);\n  end if;\n  if v_platform.source='ar' and v_providers is not null\n    and to_regclass('private.dashboard_admin_order_provider_confirmations') is not null then\n    execute 'select coalesce(jsonb_object_agg(order_kind||chr(31)||order_no,confirmed_provider),''{}''::jsonb)\n      from private.dashboard_admin_order_provider_confirmations where source_system=$1 and country_code=$2 and platform=$3 and active'\n      into v_confirmations using 'AR',v_platform.scope_group,v_platform.source_name;\n  end if;\n\n  -- Separate indexed creation/success scans preserve cross-day successes. The\n  -- axes below are internal constants; every request value is a bound parameter.\n  foreach v_basis in array array['created','success'] loop\n    if v_platform.source='ar' and v_providers is null then\n      -- member_daily_read_performance_v1: expose exact kind/status predicates\n      -- to the existing partial covering indexes; keep both event clocks.\n      v_axis:=case v_basis when 'created' then 'applied_at' else 'completed_at' end;\n      v_source:=$q$\n        select '$basis$'::text as basis,a.$axis$ at time zone $4 as event_at,\n          'charge'::text as direction,a.member_id,null::text as provider,$10::text as currency\n        from public.ar_collected_orders a where a.country_code=$2 and a.platform=$3 and a.source_system='AR'\n          and $6 in ('all','charge') and a.order_kind='recharge'\n          and a.$axis$>=($5 at time zone $4) and a.$axis$<($11 at time zone $4) $charge_success$\n        union all\n        select '$basis$'::text,a.$axis$ at time zone $4,'withdraw',a.member_id,null::text,$10::text\n        from public.ar_collected_orders a where a.country_code=$2 and a.platform=$3 and a.source_system='AR'\n          and $6 in ('all','withdraw') and a.order_kind='withdraw'\n          and a.$axis$>=($5 at time zone $4) and a.$axis$<($11 at time zone $4) $withdraw_success$\n      $q$;\n      v_source:=replace(replace(v_source,\n        '$charge_success$',case v_basis when 'success' then 'and a.status=''已支付''' else '' end),\n        '$withdraw_success$',case v_basis when 'success' then 'and a.status=''已通过''' else '' end);\n    elsif v_platform.source='ar' then\n      v_axis:=case v_basis when 'created' then 'applied_at' else 'completed_at' end;\n      v_source:=$q$\n        select '$basis$'::text as basis,a.$axis$ at time zone $4 as event_at,\n          case a.order_kind when 'recharge' then 'charge' else 'withdraw' end as direction,a.member_id,\n          case when a.order_kind='withdraw' and coalesce(btrim(a.raw_channel),'') in ('','人工取消')\n            and a.status in ('未通过','拒绝','驳回','已拒绝','人工取消','已取消','失败','提现失败','出款失败') then '无三方（驳回）'\n            else coalesce(nullif(btrim(a.raw_channel),''),$9->>(a.order_kind||chr(31)||a.order_no),'未识别通道') end as provider,\n          $10::text as currency\n        from public.ar_collected_orders a where a.country_code=$2 and a.platform=$3 and a.source_system='AR'\n          and a.order_kind=any(case $6 when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)\n          and a.$axis$>=($5 at time zone $4) and a.$axis$<($11 at time zone $4)\n      $q$;\n      if v_basis='success' then v_source:=v_source||$q$ and ((a.order_kind='recharge' and a.status='已支付') or (a.order_kind='withdraw' and a.status='已通过'))$q$;end if;\n    elsif v_platform.source='newar' then\n      v_axis:=case v_basis when 'created' then 'created_at' else 'success_at' end;\n      v_source:=$q$\n        select '$basis$'::text as basis,n.$axis$ as event_at,n.dataset as direction,n.member_id,\n          case when n.dataset='charge' and coalesce(btrim(n.provider),'')='' and n.channel_type='ManualRecharge' then '人工充值'\n            when n.dataset='withdraw' and n.status_group in ('failed','rejected') and coalesce(btrim(n.provider),'') in ('','人工取消') then '无三方（驳回）'\n            else coalesce(nullif(btrim(n.provider),''),'未识别通道') end as provider,n.currency\n        from public.newar_detail_records n join public.newar_detail_platforms t on t.platform=n.platform\n        where n.platform=$3 and n.dataset=any(case $6 when 'all' then array['charge','withdraw'] else array[$6] end)\n          and n.$axis$>=$5 and n.$axis$<$11 and (t.launch_at is null or n.created_at>=t.launch_at)\n      $q$;\n      if v_basis='success' then v_source:=v_source||$q$ and n.status_group='success'$q$;end if;\n    elsif v_platform.source='lg' then\n      v_axis:=case v_basis when 'created' then 'created_at' else 'paid_at' end;\n      v_source:=$q$\n        select '$basis$'::text as basis,l.$axis$ as event_at,\n          case l.order_kind when 'recharge' then 'charge' else 'withdraw' end as direction,l.member_id,\n          coalesce(nullif(btrim(l.third_party),''),nullif(btrim(l.raw_channel),''),'未识别通道') as provider,$10::text as currency\n        from public.lg_orders l where l.country_code=$2 and l.platform=$3 and l.source_system='LG'\n          and l.order_kind=any(case $6 when 'all' then array['recharge','withdraw'] when 'charge' then array['recharge'] else array['withdraw'] end)\n          and l.$axis$>=$5 and l.$axis$<$11\n      $q$;\n      if v_basis='success' then v_source:=v_source||$q$ and l.status_class='success'$q$;end if;\n    elsif v_platform.source='kb' then\n      v_axis:=case v_basis when 'created' then 'created_at' else 'completed_at' end;\n      v_source:=replace(replace(replace($q$\n       select '$basis$'::text basis,y.$axis$ event_at,\n        case y.order_type when 'deposit' then 'charge' else 'withdraw' end direction,\n        y.uid member_id,private.dashboard_admin_yash_provider(y.supplier) provider,y.currency\n       from private.yash_orders y where $2='IN' and $3='YASH.BET' and y.source_site='yash'\n        and y.order_type=any(case $6 when 'all' then array['deposit','withdrawal'] when 'charge' then array['deposit'] else array['withdrawal'] end)\n        and y.$axis$ >= $5 and y.$axis$ < $11 $success$\n       $q$,'$basis$',v_basis),'$axis$',v_axis),'$success$',case when v_basis='success' then\n        'and private.dashboard_admin_yash_completed_at(y.order_type,y.status,y.created_at,y.completed_at,statement_timestamp()) is not null' else '' end);\n    elsif v_platform.source='game66' then\n      v_source:=$q$\n        select '$basis$'::text as basis,c.$charge_axis$ as event_at,'charge'::text as direction,c.uid as member_id,\n          coalesce(nullif(btrim(c.pay_method_name),''),'未识别通道') as provider,'INR'::text as currency\n        from public.game66_charge_orders c where c.platform_id=$1 and $6 in ('all','charge')\n          and c.$charge_axis$>=$5 and c.$charge_axis$<$11 $charge_success$\n        union all\n        select '$basis$'::text,w.$withdraw_axis$,'withdraw',w.uid,\n          case when w.status_code in ('2','-1') and coalesce(nullif(btrim(w.pay_channel),''),nullif(btrim(w.pay_method_name),''),'') in ('','人工取消') then '无三方（驳回）'\n            else coalesce(nullif(btrim(w.pay_channel),''),nullif(btrim(w.pay_method_name),''),'未识别通道') end,'INR'\n        from public.game66_withdraw_orders w where w.platform_id=$1 and $6 in ('all','withdraw')\n          and w.$withdraw_axis$>=$5 and w.$withdraw_axis$<$11 $withdraw_success$\n      $q$;\n      v_source:=replace(replace(replace(replace(v_source,\n        '$charge_axis$',case v_basis when 'created' then 'create_time' else 'pay_time' end),\n        '$withdraw_axis$',case v_basis when 'created' then 'create_time' else 'update_time' end),\n        '$charge_success$',case v_basis when 'success' then 'and c.status_code=''1''' else '' end),\n        '$withdraw_success$',case v_basis when 'success' then 'and w.status_code=''3''' else '' end);\n    else\n      raise exception using errcode='22023',message='unsupported_source';\n    end if;\n    v_sources:=array_append(v_sources,replace(replace(v_source,'$basis$',v_basis),'$axis$',coalesce(v_axis,'')));\n  end loop;\n\n  v_sql:='with events as ('||array_to_string(v_sources,' union all ')||$q$), filtered as (\n    select basis,(event_at at time zone $4)::date as date,direction,nullif(btrim(member_id),'') as member_id\n    from events where ($7::text[] is null or provider=any($7)) and ($8::text is null or currency=$8)\n  ), member_orders as (\n    -- member_daily_single_group_v1: include NULL IDs to preserve missing-order\n    -- coverage; they never count as a member or a frequency-threshold member.\n    select date,direction,member_id,\n      count(*) filter(where basis='created') as created_count,\n      count(*) filter(where basis='success') as success_count\n    from filtered group by date,direction,member_id\n  ), counts as (\n    select date,direction,\n      count(*) filter(where member_id is not null and created_count>0) as created_member_count,\n      count(*) filter(where member_id is not null and success_count>0) as success_member_count,\n      sum(created_count) as created_order_count,\n      sum(success_count) as success_order_count,\n      coalesce(sum(created_count) filter(where member_id is null),0) as created_missing_member_count,\n      coalesce(sum(success_count) filter(where member_id is null),0) as success_missing_member_count,\n      count(*) filter(where member_id is not null and created_count>=2) as created_members_ge2,\n      count(*) filter(where member_id is not null and created_count>=3) as created_members_ge3,\n      count(*) filter(where member_id is not null and created_count>=4) as created_members_ge4,\n      count(*) filter(where member_id is not null and created_count>=5) as created_members_ge5,\n      count(*) filter(where member_id is not null and success_count>=2) as success_members_ge2,\n      count(*) filter(where member_id is not null and success_count>=3) as success_members_ge3,\n      count(*) filter(where member_id is not null and success_count>=4) as success_members_ge4,\n      count(*) filter(where member_id is not null and success_count>=5) as success_members_ge5\n    from member_orders group by date,direction\n  ), days as (\n    select d::date as date from generate_series(($5 at time zone $4)::date::timestamp,\n      (($11-interval '1 microsecond') at time zone $4)::date::timestamp,interval '1 day') d\n  ), rows as (\n    select days.date,d.direction,coalesce(c.created_member_count,0) as created_member_count,\n      coalesce(c.success_member_count,0) as success_member_count,\n      coalesce(c.created_order_count,0) as created_order_count,coalesce(c.success_order_count,0) as success_order_count,\n      coalesce(c.created_missing_member_count,0) as created_missing_member_count,\n      coalesce(c.success_missing_member_count,0) as success_missing_member_count,\n      coalesce(c.created_members_ge2,0) as created_members_ge2,\n      coalesce(c.created_members_ge3,0) as created_members_ge3,\n      coalesce(c.created_members_ge4,0) as created_members_ge4,\n      coalesce(c.created_members_ge5,0) as created_members_ge5,\n      coalesce(c.success_members_ge2,0) as success_members_ge2,\n      coalesce(c.success_members_ge3,0) as success_members_ge3,\n      coalesce(c.success_members_ge4,0) as success_members_ge4,\n      coalesce(c.success_members_ge5,0) as success_members_ge5\n    from days cross join unnest(case $6 when 'all' then array['charge','withdraw'] else array[$6] end) d(direction)\n    left join counts c on c.date=days.date and c.direction=d.direction\n  ) select coalesce(jsonb_agg(to_jsonb(r) order by r.date,r.direction),'[]'::jsonb) from rows r$q$;\n  execute v_sql into v_rows using v_id,v_platform.scope_group,v_platform.source_name,v_platform.timezone,\n    v_start,v_direction,v_providers,v_currency,v_confirmations,v_platform.currency,v_end;\n  return jsonb_build_object('version',1,'asOf',statement_timestamp(),'startAt',v_start,'endAt',v_end,\n    'platform',jsonb_build_object('id',v_platform.id,'name',v_platform.name,'country',v_platform.country,\n      'team',v_platform.team,'source',v_platform.source,'sourceName',v_platform.source_name,\n      'scopeGroup',v_platform.scope_group,'timezone',v_platform.timezone,'currency',v_platform.currency),\n    'rows',v_rows,'capabilities',jsonb_build_object('memberIdentity',true,'createdBasis','created_at',\n      'successBasis','success_at','dedupe','platform_local_date_direction_member',\n      'sourceCompletenessVerified',false,'periodTotal','sum_daily_unique_member_visits',\n      'frequencyBasis','per_platform_local_day_order_count','frequencyThresholds',jsonb_build_array(2,3,4,5)));\nend;\n$function$\n",
+      "security_definer": true
+    },
+    {
+      "acl": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+      "md5": "e6342cb38d260f633a756811e7664449",
+      "args": "p_request jsonb",
+      "name": "dashboard_admin_live_member_daily",
+      "owner": "postgres",
+      "config": [
+        "search_path=\"\""
+      ],
+      "schema": "public",
+      "body_md5": "122167e55c967bff880594b0b51decc0",
+      "definition": "CREATE OR REPLACE FUNCTION public.dashboard_admin_live_member_daily(p_request jsonb)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n  select private.dashboard_admin_live_member_daily(p_request);\n$function$\n",
+      "security_definer": false
+    }
+  ],
+  "dependencies": [
+    {
+      "md5": "77522fb9cfcf371f3a001831d86ef96d",
+      "owner": "postgres",
+      "body_md5": "c58cb6804b2af1e517cc760cb502df44",
+      "language": "sql",
+      "metadata": {
+        "proacl": [
+          "postgres=X/postgres"
+        ],
+        "probin": null,
+        "procost": 100,
+        "prokind": "f",
+        "proname": "dashboard_admin_duoli_capabilities",
+        "prorows": 0,
+        "pronargs": 0,
+        "proconfig": [
+          "search_path=\"\""
+        ],
+        "proretset": false,
+        "prosecdef": false,
+        "prorettype": "3802",
+        "prosqlbody": null,
+        "prosupport": "-",
+        "proargmodes": null,
+        "proargnames": null,
+        "proargtypes": [],
+        "proisstrict": false,
+        "proparallel": "u",
+        "protrftypes": null,
+        "provariadic": "0",
+        "provolatile": "i",
+        "proleakproof": false,
+        "proallargtypes": null,
+        "proargdefaults": null,
+        "pronargdefaults": 0
+      },
+      "signature": "private.dashboard_admin_duoli_capabilities()",
+      "definition": "CREATE OR REPLACE FUNCTION private.dashboard_admin_duoli_capabilities()\n RETURNS jsonb\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO ''\nAS $function$\n select jsonb_build_object('sourceDetailSystem','DOLI','sourcePriority','native_details_only_no_legacy_daily_union',\n  'systemOrderId',false,'thirdPartyOrderNumber',false,'utr',false,'actualAmount',false,'recordedFee',false,\n  'historicalFees',false,'amountBasis','idr_original_price_div_1000_or_gold',\n  'successTimeAvailable',true,'chargeSuccessTimeAvailable',true,'withdrawSuccessTimeAvailable',true,\n  'paymentSuccessTimeAvailable',false,'latencyAvailable',false,\n  'successTimeBasis','order_updated_at','successCohort','successful_status_updated_at_in_selected_range',\n  'latencyBasis','unavailable_without_payment_success_timestamp','customerPaymentTime',false,\n  'createdSuccessBasis','current_status_recharge_2_withdraw_6_2','createdSuccessAmountAvailable',true,\n  'pendingBasis','selected_created_cohort_current_stored_status',\n  'sourceCompletenessVerified',false,'coverageBasis','separate_created_and_updated_receiver_windows',\n  'withdrawCreatedCoverageAvailable',false,'memberDailyAvailable',false);\n$function$\n"
+    },
+    {
+      "md5": "cb64449a764566fe99cad1d2a03d61f5",
+      "owner": "postgres",
+      "body_md5": "693bd9c6c00783da21857e011ff8681f",
+      "language": "sql",
+      "metadata": {
+        "proacl": [
+          "postgres=X/postgres"
+        ],
+        "probin": null,
+        "procost": 100,
+        "prokind": "f",
+        "proname": "dashboard_admin_duoli_provider",
+        "prorows": 0,
+        "pronargs": 1,
+        "proconfig": [
+          "search_path=\"\""
+        ],
+        "proretset": false,
+        "prosecdef": false,
+        "prorettype": "25",
+        "prosqlbody": null,
+        "prosupport": "-",
+        "proargmodes": null,
+        "proargnames": [
+          "p_code"
+        ],
+        "proargtypes": [
+          "25"
+        ],
+        "proisstrict": false,
+        "proparallel": "u",
+        "protrftypes": null,
+        "provariadic": "0",
+        "provolatile": "i",
+        "proleakproof": false,
+        "proallargtypes": null,
+        "proargdefaults": null,
+        "pronargdefaults": 0
+      },
+      "signature": "private.dashboard_admin_duoli_provider(text)",
+      "definition": "CREATE OR REPLACE FUNCTION private.dashboard_admin_duoli_provider(p_code text)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO ''\nAS $function$\n select case p_code when '1' then 'SecPay' when '32' then 'Transafe' when '35' then 'StarPay'\n  when '40' then 'OtgPay' when '45' then 'BayarPay' when '119' then 'JayaPay'\n  when '124' then 'YerePay' when '292' then 'UanggoPay' when '322' then 'TodayPay'\n  when '356' then 'Click2Pay' when '382' then 'nupaPay'\n  else case when p_code ~ '^[0-9]{1,10}$' then 'PAYCHN_'||p_code else '未识别通道' end end;\n$function$\n"
+    },
+    {
+      "md5": "e112ca9b015f705a301aef600e0c5d92",
+      "owner": "postgres",
+      "body_md5": "2c6e11c93ba7fc233cedc67378f1196d",
+      "language": "sql",
+      "metadata": {
+        "proacl": [
+          "postgres=X/postgres"
+        ],
+        "probin": null,
+        "procost": 100,
+        "prokind": "f",
+        "proname": "dashboard_admin_duoli_status",
+        "prorows": 0,
+        "pronargs": 2,
+        "proconfig": [
+          "search_path=\"\""
+        ],
+        "proretset": false,
+        "prosecdef": false,
+        "prorettype": "25",
+        "prosqlbody": null,
+        "prosupport": "-",
+        "proargmodes": null,
+        "proargnames": [
+          "p_business",
+          "p_status"
+        ],
+        "proargtypes": [
+          "25",
+          "25"
+        ],
+        "proisstrict": false,
+        "proparallel": "u",
+        "protrftypes": null,
+        "provariadic": "0",
+        "provolatile": "i",
+        "proleakproof": false,
+        "proallargtypes": null,
+        "proargdefaults": null,
+        "pronargdefaults": 0
+      },
+      "signature": "private.dashboard_admin_duoli_status(text,text)",
+      "definition": "CREATE OR REPLACE FUNCTION private.dashboard_admin_duoli_status(p_business text, p_status text)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO ''\nAS $function$\n select case when p_business='recharge' then case p_status\n  when '2' then 'success' when '0' then 'pending' when '4' then 'failed' else 'unknown' end\n when p_business='withdraw' then case\n  when p_status in('6','2') then 'success' when p_status in('0','1') then 'pending'\n  when p_status in('4','7') then 'rejected' else 'unknown' end else 'unknown' end;\n$function$\n"
+    },
+    {
+      "md5": "fc44e151913726253c141812ae5a2012",
+      "owner": "postgres",
+      "body_md5": "f83d357ab30d608292d4ed52dfe69abb",
+      "language": "sql",
+      "metadata": {
+        "proacl": [
+          "postgres=X/postgres"
+        ],
+        "probin": null,
+        "procost": 100,
+        "prokind": "f",
+        "proname": "dashboard_admin_duoli_success_updated_at",
+        "prorows": 0,
+        "pronargs": 5,
+        "proconfig": [
+          "search_path=\"\""
+        ],
+        "proretset": false,
+        "prosecdef": false,
+        "prorettype": "1184",
+        "prosqlbody": null,
+        "prosupport": "-",
+        "proargmodes": null,
+        "proargnames": [
+          "p_business",
+          "p_status",
+          "p_created",
+          "p_updated",
+          "p_asof"
+        ],
+        "proargtypes": [
+          "25",
+          "25",
+          "1184",
+          "1184",
+          "1184"
+        ],
+        "proisstrict": false,
+        "proparallel": "u",
+        "protrftypes": null,
+        "provariadic": "0",
+        "provolatile": "i",
+        "proleakproof": false,
+        "proallargtypes": null,
+        "proargdefaults": null,
+        "pronargdefaults": 0
+      },
+      "signature": "private.dashboard_admin_duoli_success_updated_at(text,text,timestamp with time zone,timestamp with time zone,timestamp with time zone)",
+      "definition": "CREATE OR REPLACE FUNCTION private.dashboard_admin_duoli_success_updated_at(p_business text, p_status text, p_created timestamp with time zone, p_updated timestamp with time zone, p_asof timestamp with time zone)\n RETURNS timestamp with time zone\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO ''\nAS $function$\n select case when ((p_business='recharge' and p_status='2') or (p_business='withdraw' and p_status in('6','2')))\n  and isfinite(p_created) and isfinite(p_updated) and isfinite(p_asof)\n  and p_updated>=p_created and p_updated<=p_asof then p_updated end;\n$function$\n"
+    }
+  ]
+}

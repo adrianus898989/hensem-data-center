@@ -10,6 +10,11 @@
   if(Object.hasOwn(r,'settlement_currency')){rows.push(['结算金额',settlement(r,tools)]);if(knownMoney(r.settlement_fee))rows.push(['结算手续费',N(r.settlement_fee)+(r.settlement_currency?' '+E(r.settlement_currency):'')]);if(knownMoney(r.exchange_rate)&&Number(r.exchange_rate)>0)rows.push(['来源汇率',E(r.exchange_rate)]);}
   if(r.platform?.source==='wg'&&r.direction==='charge'&&r.channel_type==='提现转充值'&&r.fee_exempt===true)rows.push(['手续费','0（提现转充值）']);
   return rows;}
+ function recordedMoneyRows(r,p,{E,N},fieldValue=(platform,key,value)=>value){
+  const currency=r.member_currency||r.currency;
+  const money=(key,value)=>{const available=p?.capabilities?.[key]!==false&&!(String(p?.source||'').toLowerCase()==='lg'&&key==='recordedFee'),v=available?fieldValue(p,key,value):null;return knownMoney(v)&&!(typeof v==='string'&&v.trim()==='')?N(v)+(currency?' '+E(currency):''):'—';};
+  return [['实际金额',money('actualAmount',r.actual_amount)],['已记录手续费',money('recordedFee',r.withdraw_fee)]];
+ }
  const isPanda=p=>String(p?.source||'').toLowerCase()==='panda';
  const successAvailable=(p,d)=>isPanda(p)?p?.capabilities?.successCoverageAvailable===true&&p?.capabilities?.[d+'SuccessTimeAvailable']===true:p?.capabilities?.successTimeAvailable!==false&&p?.capabilities?.[d+'SuccessTimeAvailable']!==false;
  const pandaChannel=r=>r.channel_name||(r.channel_type&&r.channel_type!=='其他类型'?r.channel_type:null)||'未提供';
@@ -21,7 +26,7 @@
   ...(r.direction==='charge'&&p.capabilities?.chargeSourceCompletedTimeAvailable===true?[['成功时间（源订单完成时间）',E(formatTime(r.success_at,p.timezone))]]:[]),
   ...(Object.hasOwn(r,'source_updated_at')?[['源更新时间',E(formatTime(r.source_updated_at,p.timezone))]]:[]),['数据同步时间',E(formatTime(r.synced_at,p.timezone))],['时区',E(p.timezone)]
  ];}
- root.HensemProviderOrders={moneyCell,moneyRows,isPanda,pandaRows,pandaChannel,create:function({L,E,N,C,table,box,formatTime,successTimeLabel=p=>p?.capabilities?.successTimeBasis==='order_updated_at'?'成功统计时间（订单更新时间）':p?.capabilities?.successTimeBasis==='source_completed_at'?'成功时间（源订单完成时间）':'成功时间',query,orderFieldValue=(p,key,value)=>value,request,openDrawer}){
+ root.HensemProviderOrders={moneyCell,moneyRows,recordedMoneyRows,isPanda,pandaRows,pandaChannel,create:function({L,E,N,C,table,box,formatTime,successTimeLabel=p=>p?.capabilities?.successTimeBasis==='order_updated_at'?'成功统计时间（订单更新时间）':p?.capabilities?.successTimeBasis==='source_completed_at'?'成功时间（源订单完成时间）':'成功时间',query,orderFieldValue=(p,key,value)=>value,request,openDrawer}){
   let current=null,serial=0;
   const cancel=()=>{serial++;current=null},previousClose=root.closeDrawer;
   if(typeof previousClose==='function')root.closeDrawer=function(...args){cancel();return previousClose.apply(this,args)};
@@ -94,7 +99,7 @@
   root.liveProviderOrder=index=>{
    const r=current?.rows[index];if(!r)return;if(isPanda(r.platform)){openDrawer('订单详情 · '+(r.order_number||r.order_no||''),'<button class="btn small" onclick="liveProviderOrdersBack()">← 返回三方订单</button>'+box('订单明细',table(['字段','内容'],pandaRows(r,r.platform,{E,N,formatTime}))));return;}
    openDrawer('订单详情 · '+(r.order_number||r.order_no||''),'<button class="btn small" onclick="liveProviderOrdersBack()">← 返回三方订单</button>'+box('订单与归类依据',table(['字段','内容'],[
-    ['订单号',E(r.order_number||r.order_no||'—')],['系统订单号',E(orderFieldValue(r.platform,'systemOrderId',r.system_order_id||r.id)||'—')],['三方订单号',E(orderFieldValue(r.platform,'thirdPartyOrderNumber',r.third_party_order_number)||'—')],['平台 / 包网',E(r.platform.name+' / '+r.platform.source)],...moneyRows(r,{E,N}),['原始三方 / 通道',E(r.raw_provider===undefined?'接口未提供':r.raw_provider==null||r.raw_provider===''?'（空）':r.raw_provider)],['归类三方',E(r.provider||'未识别通道')],['原始类型',E(r.channel_type||'—')],['原始状态',E(r.status||r.status_group||'—')],['归类依据',E(reason(r))],['创建时间',E(formatTime(r.created_at,r.platform.timezone))],[successTimeLabel(r.platform),E(formatTime(r.success_at,r.platform.timezone))],['同步时间',E(formatTime(r.synced_at,r.platform.timezone))],['时区',E(r.platform.timezone)]
+    ['订单号',E(r.order_number||r.order_no||'—')],['系统订单号',E(orderFieldValue(r.platform,'systemOrderId',r.system_order_id||r.id)||'—')],['三方订单号',E(orderFieldValue(r.platform,'thirdPartyOrderNumber',r.third_party_order_number)||'—')],['平台 / 包网',E(r.platform.name+' / '+r.platform.source)],...moneyRows(r,{E,N}),...recordedMoneyRows(r,r.platform,{E,N},orderFieldValue),['原始三方 / 通道',E(r.raw_provider===undefined?'接口未提供':r.raw_provider==null||r.raw_provider===''?'（空）':r.raw_provider)],['归类三方',E(r.provider||'未识别通道')],['原始类型',E(r.channel_type||'—')],['原始状态',E(r.status||r.status_group||'—')],['归类依据',E(reason(r))],['创建时间',E(formatTime(r.created_at,r.platform.timezone))],[successTimeLabel(r.platform),E(formatTime(r.success_at,r.platform.timezone))],['同步时间',E(formatTime(r.synced_at,r.platform.timezone))],['时区',E(r.platform.timezone)],...(root.HensemOrderBusiness?.rows(r,r.platform,{E,N,formatTime})||[])
    ],'live-provider-order-detail')));
   };
   root.liveProviderOrdersBack=show;
