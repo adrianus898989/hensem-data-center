@@ -107,3 +107,76 @@ test('individual results above one MiB are not retained, and total retention is 
  const h=harness();h.handler(q=>response(q,platform(),{rows:[row('2026-10-08','charge',{syntheticPadding:'x'.repeat(530000)}),row('2026-10-08','withdraw')]}));await h.query();await h.query();assert.equal(h.calls.length,2,'oversized result does not enter cache');
  const bounded=harness();bounded.handler(q=>response(q,platform(),{rows:[row('2026-10-08','charge',{syntheticPadding:'x'.repeat(290000)}),row('2026-10-08','withdraw')]}));for(let i=0;i<16;i++){bounded.L.multi.provider=['Synthetic '+i];await bounded.query();}bounded.L.multi.provider=['Synthetic 15'];await bounded.query();assert.equal(bounded.calls.length,16);bounded.L.multi.provider=['Synthetic 0'];await bounded.query();assert.equal(bounded.calls.length,17,'oldest result was evicted by byte limit long before entry limit');
 });
+
+const timeout=()=>Object.assign(Error('Synthetic statement timeout'),{code:'57014'});
+test('single-day all timeout reads serial exact directions, then caches a whole result with oldest time and TTL',async()=>{
+ const h=harness(),base=Date.parse('2026-10-12T08:00:00Z');h.L.multi.provider=['B Pay','A Pay','B Pay'];let active=0,maximum=0;
+ h.handler(async q=>{active++;maximum=Math.max(maximum,active);try{await settle();if(q.direction==='all')throw timeout();h.advance(1000);return response(q);}finally{active--;}});
+ await h.query();assert.equal(maximum,1);assert.deepEqual(h.calls.map(q=>q.direction),['all','charge','withdraw']);assert.deepEqual(h.calls.slice(1),['charge','withdraw'].map(direction=>({...h.calls[0],direction})));assert.deepEqual(h.calls[0].providers,['A Pay','B Pay']);assert.equal(Date.parse(h.calls[0].endAt)-Date.parse(h.calls[0].startAt),86400000);
+ const result=h.ui.state.results[0];assert.equal(h.ui.state.status,'ready');assert.equal(h.ui.state.failures.length,0);assert.deepEqual(result.rows.map(r=>r.direction),['charge','withdraw']);assert.equal(result._memberReadAt,base+1000);assert.equal(result._memberExpiresAt,base+301000);assert.equal(result.sourceCompletenessVerified,false);
+ await h.query();assert.equal(h.calls.length,3);assert.equal(h.ui.state.results[0]._memberCacheHit,true);assert.equal(h.ui.state.results[0]._memberReadAt,base+1000);h.now(base+300999);await h.query();assert.equal(h.calls.length,3);h.advance(1);await h.query();assert.equal(h.calls.length,6,'combined cache expires at the older direction deadline');
+});
+
+test('direction retry preserves missing identities and ANDs source and frequency capabilities',async()=>{
+ for(const unverified of ['charge','withdraw',null]){
+  const h=harness();h.handler(q=>{if(q.direction==='all')throw timeout();const r=response(q);r.capabilities.sourceCompletenessVerified=q.direction!==unverified;if(q.direction!==unverified){r.capabilities.frequencyBasis='per_platform_local_day_order_count';r.capabilities.frequencyThresholds=[2,3,4,5];}if(q.direction==='charge')r.rows[0].created_missing_member_count=3;return r;});
+  await h.query();assert.equal(h.ui.state.results.length,1);assert.equal(h.ui.state.results[0].sourceCompletenessVerified,unverified===null);assert.equal(h.ui.state.results[0].frequencySupported,unverified===null);assert.equal(h.ui.state.results[0].rows[0].created_missing_member_count,3);assert.match(h.ui.metric('charge'),/已知人数.*部分数据/);await h.query();assert.equal(h.calls.length,3);assert.match(h.ui.metric('charge'),/部分数据/);
+ }
+});
+
+test('one failed direction excludes the whole platform, retains successful peers and has no recursive retries',async()=>{
+ for(const failedDirection of ['charge','withdraw']){
+  const h=harness();h.select([platform(),platform(B)]);h.handler(q=>{if(q.platformId===A&&(q.direction==='all'||q.direction===failedDirection))throw timeout();return response(q);});await h.query();
+  assert.deepEqual(h.calls.filter(q=>q.platformId===A).map(q=>q.direction),failedDirection==='charge'?['all','charge']:['all','charge','withdraw']);assert.equal(h.ui.state.results.length,1);assert.equal(h.ui.state.results[0].platform.id,B);assert.equal(h.ui.state.failures.length,1);assert.match(h.ui.state.failures[0].error,new RegExp((failedDirection==='charge'?'0':'1')+'/2 方向已读取，平台未计入合计'));assert.match(h.ui.metric('charge'),/12 \/ 9/);assert.match(h.ui.metric('charge'),/读取 1 \/ 2 平台.*部分数据/);const n=h.calls.length;await h.ui.ensure();assert.equal(h.calls.length,n);
+ }
+});
+
+test('partial or invalid direction payload never creates a complete all result or caches that result',async()=>{
+ for(const alter of [r=>({...r,partial:true}),r=>({...r,complete:false}),r=>({...r,available:false}),r=>({...r,error:'incomplete'}),r=>({...r,meta:{partial:true}}),r=>({...r,coverage:{complete:false}}),r=>({...r,rows:[]}),r=>({...r,rows:[{...r.rows[0],direction:'charge'}]}),r=>({...r,endAt:r.startAt}),r=>({...r,platform:{...r.platform,timezone:'UTC'}})]){
+  const h=harness();h.handler(q=>{if(q.direction==='all')throw timeout();const r=response(q);return q.direction==='withdraw'?alter(r):r;});await h.query();assert.equal(h.ui.state.status,'error');assert.equal(h.ui.state.results.length,0);assert.equal(h.ui.state.failures.length,1);assert.match(h.ui.metric('withdraw'),/— \/ —/);await h.query();assert.equal(h.calls.filter(q=>q.direction==='all').length,2,'failed parent is not cached');assert.equal(h.calls.filter(q=>q.direction==='withdraw').length,2,'invalid child is not cached');assert.equal(h.calls.filter(q=>q.direction==='charge').length,1,'validated child cache may be reused without publishing a partial parent');
+ }
+});
+
+test('force all bypasses both direction caches and invalidates them even when the parent fails before fallback',async()=>{
+ const h=harness();h.L.direction='charge';await h.query();h.L.direction='withdraw';await h.query();h.L.direction='all';h.handler(q=>{if(q.direction==='all')throw timeout();return response(q);});await h.query(true);assert.deepEqual(h.calls.map(q=>q.direction),['charge','withdraw','all','charge','withdraw']);await h.query();assert.equal(h.calls.length,5);
+ h.handler(()=>{throw Error('Synthetic network error');});await h.query(true);assert.equal(h.ui.state.status,'error');h.L.direction='charge';h.handler(q=>response(q));await h.query();h.L.direction='withdraw';await h.query();assert.deepEqual(h.calls.slice(-3).map(q=>q.direction),['all','charge','withdraw']);
+});
+
+test('force one direction invalidates a composed all cache but retains the other exact direction cache',async()=>{
+ const h=harness();let chargeCount=12;h.handler(q=>{if(q.direction==='all')throw timeout();const r=response(q);if(q.direction==='charge')r.rows[0].created_member_count=chargeCount;return r;});await h.query();assert.equal(h.calls.length,3);
+ h.L.direction='charge';chargeCount=5;await h.query(true);assert.equal(h.calls.length,4);h.L.direction='all';await h.query();assert.equal(h.calls.length,5,'all parent is read again, then both still-valid child caches may satisfy its fallback');assert.equal(h.calls.at(-1).direction,'all');assert.equal(h.ui.state.results[0].rows.find(r=>r.direction==='charge').created_member_count,5);assert.equal(h.ui.state.results[0].rows.find(r=>r.direction==='withdraw').created_member_count,12);await h.query();assert.equal(h.calls.length,5);
+});
+
+test('cancel during either direction discards late results and prevents the next direction or parent cache fill',async()=>{
+ for(const waiting of ['charge','withdraw']){
+  const h=harness(),late=deferred();h.handler(q=>{if(q.direction==='all')throw timeout();return q.direction===waiting?late.promise:response(q);});const first=h.query();await settle();const old=h.calls.at(-1);assert.equal(old.direction,waiting);h.ui.cancel();late.resolve(response(old));await first;assert.equal(h.ui.state.status,'paused');assert.equal(h.ui.state.results.length,0);assert.equal(h.calls.length,waiting==='charge'?2:3);
+  h.handler(q=>{if(q.direction==='all')throw timeout();return response(q);});await h.query();assert.equal(h.ui.state.results.length,1);assert.equal(h.calls.filter(q=>q.direction==='all').length,2);assert.equal(h.calls.filter(q=>q.direction===waiting).length,2,'cancelled child cannot refill its cache');
+ }
+});
+
+test('authority revocation or context changes during direction fallback prevent late publication and old-cache reuse',async()=>{
+ for(const context of ['',{user:'different-user',scope:'selected',version:2}]){
+  const h=harness(),late=deferred();h.handler(q=>{if(q.direction==='all')throw timeout();return q.direction==='withdraw'?late.promise:response(q);});const first=h.query();await settle();assert.equal(h.calls.length,3);const old=h.calls.at(-1);h.context(context);late.resolve(response(old));await first;assert.equal(h.ui.state.results.length,0);assert.doesNotMatch(h.ui.metric('charge'),/12 \/ 9/);
+  if(context===''){await h.query();assert.equal(h.calls.length,3);assert.equal(h.ui.state.status,'error');h.context({user:'synthetic-user',scope:'all',version:3});}
+  h.handler(q=>{if(q.direction==='all')throw timeout();return response(q);});await h.query();assert.deepEqual(h.calls.slice(-3).map(q=>q.direction),['all','charge','withdraw']);assert.equal(h.calls.length,6);assert.equal(h.ui.state.results.length,1);
+ }
+});
+
+test('direction permission error clears successful child cache and is never retried recursively',async()=>{
+ const h=harness();h.handler(q=>{if(q.direction==='all')throw timeout();if(q.direction==='withdraw')throw Object.assign(Error('permission denied'),{code:'403'});return response(q);});await h.query();assert.equal(h.calls.length,3);assert.equal(h.ui.state.results.length,0);assert.match(h.ui.state.failures[0].error,/permission denied/);h.L.direction='charge';h.handler(q=>response(q));await h.query();assert.equal(h.calls.length,4,'the earlier successful direction was evicted on permission failure');
+});
+
+test('force during a direction read cannot compose late old counts into the refreshed result',async()=>{
+ const h=harness(),old=deferred();h.handler(q=>{if(q.direction==='all')throw timeout();return q.direction==='withdraw'?old.promise:response(q);});const first=h.query();await settle();assert.equal(h.calls.length,3);const oldRequest=h.calls.at(-1);
+ h.handler(q=>{if(q.direction==='all')throw timeout();const r=response(q);r.rows[0].created_member_count=5;return r;});await h.query(true);assert.equal(h.calls.length,6);old.resolve(response(oldRequest));await first;assert.equal(h.ui.state.results.length,1);assert.deepEqual(h.ui.state.results[0].rows.map(r=>r.created_member_count),[5,5]);await h.query();assert.equal(h.calls.length,6);assert.deepEqual(h.ui.state.results[0].rows.map(r=>r.created_member_count),[5,5]);
+});
+
+test('a slow second direction cannot renew the first direction realtime TTL',async()=>{
+ const h=harness(),base=Date.parse('2026-10-12T08:00:00Z');h.L.from='2026-10-12T00:00:00';h.L.to='2026-10-12T23:59:59';h.handler(q=>{if(q.direction==='all')throw timeout();if(q.direction==='withdraw')h.advance(30000);return response(q);});await h.query();assert.equal(h.ui.state.results[0]._memberReadAt,base);assert.equal(h.ui.state.results[0]._memberExpiresAt,base+30000);assert.match(h.ui.metric('charge'),/已过期，查询更新/);
+ h.handler(q=>{if(q.direction==='all')throw timeout();return response(q);});await h.query();assert.equal(h.calls.filter(q=>q.direction==='all').length,2);assert.equal(h.calls.filter(q=>q.direction==='charge').length,2);assert.equal(h.calls.filter(q=>q.direction==='withdraw').length,1);assert.equal(h.ui.state.results[0]._memberExpiresAt,base+60000);assert.doesNotMatch(h.ui.metric('charge'),/已过期/);
+});
+
+test('single-direction timeouts retain one identical original retry and partial-day all requests are never widened',async()=>{
+ for(const direction of ['charge','withdraw']){const h=harness();h.L.direction=direction;h.handler(q=>{if(h.calls.length===1)throw timeout();return response(q);});await h.query();assert.equal(h.calls.length,2);assert.strictEqual(h.calls[1],h.calls[0]);assert.equal(h.ui.state.results.length,1);}
+ const h=harness();h.extra({startAt:'2026-10-08T04:00:00.000Z',endAt:'2026-10-08T05:00:00.000Z'});h.handler(q=>{if(q.direction==='all')throw timeout();return response(q);});await h.query();assert.equal(h.calls.length,3);assert(h.calls.every(q=>q.startAt==='2026-10-08T04:00:00.000Z'&&q.endAt==='2026-10-08T05:00:00.000Z'));assert.equal(h.ui.state.results.length,1);
+});
