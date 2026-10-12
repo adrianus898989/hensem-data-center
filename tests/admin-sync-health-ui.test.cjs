@@ -78,6 +78,12 @@ test('integration waits for a manual page query and its main loading states',asy
  }
  const phased=setup();phased.setReady(evaluate('providers',L,{}, {},{serial:L.serial,page:'providers'}));phased.api.schedule('phase-scope');await phased.run();assert.equal(phased.calls.length,0,'the real busy predicate defers scheduling');
  phased.setReady(evaluate('providers',L));phased.api.schedule('phase-scope');await phased.run();assert.equal(phased.calls.length,1,'health becomes eligible once its query-owned phase ends');
+ for(const page of ['events','providers']){
+  assert.equal(evaluate(page,L,{}, {},null,{isLoading:()=>true}),false,page+' waits for the submission analysis read');
+  assert.equal(evaluate(page,L,{}, {},null,{isLoading:()=>false}),true,page+' permits health once the submission analysis read ends');
+ }
+ const submission=setup();submission.setReady(evaluate('providers',L,{}, {},null,{isLoading:()=>true}));submission.api.schedule('submission-scope');await submission.run();assert.equal(submission.calls.length,0,'submission analysis blocks the independent health query');
+ submission.setReady(evaluate('providers',L,{}, {},null,{isLoading:()=>false}));submission.api.schedule('submission-scope');await submission.run();assert.equal(submission.calls.length,1,'health resumes after submission analysis ends');
  const queried={...L,overviewQueried:true};assert.equal(evaluate('overview',queried),true,'health may run after an explicit overview query completes');
  for(const page of ['events','providers']){
   assert.equal(evaluate(page,L,{}, {},null,{isLoading:()=>true}),false,page+' waits for its running submission analysis');
@@ -89,3 +95,4 @@ test('integration waits for a manual page query and its main loading states',asy
 });
 
 test('an empty authorized source inventory is unverified, never all received',async()=>{const h=setup(async()=>response([],0));h.setReady(true);await h.api.refresh();h.api.open();assert.match(h.html(),/当前授权范围没有可核查来源/);assert.doesNotMatch(h.html(),/均已收到数据/)});
+
