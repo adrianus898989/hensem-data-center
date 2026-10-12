@@ -95,13 +95,14 @@
   const time=(value,timezone)=>{if(!value||!Number.isFinite(Date.parse(value)))return '—';try{return new Intl.DateTimeFormat('sv-SE',{timeZone:timezone||'UTC',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date(value))}catch{return '—'}};
   const current=()=>{try{return scope().request.mode==='current'}catch{return S.data?.mode==='current'}};
   const title=()=>current()?(String(L.from||'').slice(0,10)===String(L.to||'').slice(0,10)?'今日实时代付中':'本期实时代付中'):'00:00代付中';
-  const complete=s=>s.status==='ready'&&s.data?.complete===true&&!s.unsupported.length;
+  const catalogComplete=()=>c.catalogComplete?.()!==false;
+  const complete=s=>s.status==='ready'&&s.data?.complete===true&&!s.unsupported.length&&catalogComplete();
   const positive=s=>s.data&&(Number(s.data.knownCount)>0||Number(s.data.knownAmount)>0);
   const value=(s,field,format)=>{if(s.data?.basis==='created_range_latest_pending_orders'&&s.data[field+'Complete']&&known(s.data[field])||complete(s)&&known(s.data[field]))return format(s.data[field]);const subtotal=s.data?.['known'+field[0].toUpperCase()+field.slice(1)];return known(subtotal)&&Number(subtotal)>0?format(subtotal):'—'};
   const totals=s=>({amount:value(s,'amount',N),count:value(s,'count',C)});
   const coverageCounts=s=>({expected:(s.data?.expectedPlatformCount||0)+s.unsupported.length,full:(s.data?.rows||[]).filter(r=>r.wholeStockComplete).length,stored:(s.data?.rows||[]).filter(r=>r.wholeStockComplete||Number(r.knownCount)>0||Number(r.knownAmount)>0||['partial','stale'].includes(r.state)&&r.captureId&&Number.isFinite(Date.parse(r.observedAt))).length});
   const missing=s=>{const n=coverageCounts(s);return Math.max(0,n.expected-n.full)};
-  const status=s=>s.data?.basis==='created_range_latest_pending_orders'?(s.status==='loading'?'正在读取订单 · ':s.status==='paused'?'订单读取已暂停 · ':s.data.complete?'已读取 ':'已读取小计 · ')+C(s.data.receivedPlatformCount)+'/'+C(s.data.expectedPlatformCount)+' 平台'+(s.data.receivedPlatformCount<s.data.expectedPlatformCount?' · '+C(s.data.expectedPlatformCount-s.data.receivedPlatformCount)+' 未读取':'')+(s.data.multiCurrency?' · 多币种金额不相加':s.data.rows.some(r=>r.read&&!r.amountComplete)?' · 金额待补齐':'')+(s.data.rows.some(r=>r.read&&!r.countComplete)?' · 笔数待补齐':''):s.status==='loading'?'正在读取待付存量…':s.status==='error'?('待付读取失败：'+s.error):s.status==='paused'?s.error:!s.data?(current()?'点击查询读取代付订单':'点击查询读取待付存量'):complete(s)?'已核实 '+C(s.data.expectedPlatformCount)+' 平台':(positive(s)?'已入库小计':'暂无已核实合计')+' · 入库 '+C(coverageCounts(s).stored)+'/'+C(coverageCounts(s).expected)+' · '+C(missing(s))+' 未完整';
+  const status=s=>s.data?.basis==='created_range_latest_pending_orders'?(s.status==='loading'?'正在读取订单 · ':s.status==='paused'?'订单读取已暂停 · ':s.data.complete?'已读取 ':'已读取小计 · ')+C(s.data.receivedPlatformCount)+'/'+C(s.data.expectedPlatformCount)+' 平台'+(s.data.receivedPlatformCount<s.data.expectedPlatformCount?' · '+C(s.data.expectedPlatformCount-s.data.receivedPlatformCount)+' 未读取':'')+(s.data.multiCurrency?' · 多币种金额不相加':s.data.rows.some(r=>r.read&&!r.amountComplete)?' · 金额待补齐':'')+(s.data.rows.some(r=>r.read&&!r.countComplete)?' · 笔数待补齐':''):s.status==='loading'?'正在读取待付存量…':s.status==='error'?('待付读取失败：'+s.error):s.status==='paused'?s.error:!s.data?(current()?'点击查询读取代付订单':'点击查询读取待付存量'):complete(s)?'已核实 '+C(s.data.expectedPlatformCount)+' 平台':(positive(s)?'已入库小计':'暂无已核实合计')+' · 入库 '+C(coverageCounts(s).stored)+'/'+C(coverageCounts(s).expected)+(catalogComplete()?' · '+C(missing(s))+' 未完整':' · 平台目录待确认（仅已知平台）');
   const subtitle=()=>{const s=view();if(current()){const from=String(L.from||'').slice(0,10),to=String(L.to||'').slice(0,10);return (from===to?to:from+' 至 '+to)+' · '+zone()+(s.data?' · 查询 '+time(s.data.queriedAt,zone()).slice(11):'');}return String(L.to||'').slice(0,10)+' 00:00 · '+zone()};
   const retry=s=>current()?(s.status==='paused'||s.data?.rows.some(r=>r.reason==='orders_query_failed')?' <button type="button" class="link" onclick="livePendingSnapshotRetry()">'+(s.status==='paused'?'继续读取':'重试未完成平台')+'</button>':''):['error','paused'].includes(s.status)||s.status==='ready'&&!complete(s)?' <button type="button" class="link" onclick="livePendingSnapshotRetry()">重试</button>':'';
   async function load(){
@@ -118,6 +119,11 @@
     S={...S,status:'ready',data:validateResponse(r,q),error:''};
    }catch(error){if(id!==serial||!sameScope(q)||L.dirty)return;S={...S,status:'error',data:null,error:error?.message||'暂时无法读取'};}
    if(id===serial)c.render();
+  }
+  function refreshScope(){
+   if(L.dirty||!['loading','ready','error'].includes(S.status))return;
+   try{if(!current()&&S.key!==key(scope()))return load();}catch{return;}
+   c.render();
   }
   function metric(){const s=view(),values=totals(s);return '<div class="df-flow-metric df-pending-snapshot"><span>'+title()+'金额 / 笔数</span><strong class="metric-link">'+values.amount+'</strong><small class="cell-sub">'+values.count+' 笔</small><small class="cell-basis">'+E(subtitle())+'</small><small class="df-coverage">'+E(status(s))+retry(s)+'</small></div>';}
   function summary(){const s=view(),values=totals(s);return '<div class="pending-dash-grid">'+[['金额',values.amount],['笔数',values.count]].map(([label,value])=>'<div class="pending-metric"><span>'+title()+label+'</span><strong>'+value+'</strong></div>').join('')+'</div><div class="live-definition">'+E(status(s))+retry(s)+'</div>';}
@@ -143,7 +149,7 @@
    const body='<div class="live-definition">'+E(subtitle())+' · '+E(status(s))+'</div>'+coverageDetails+'<div class="live-table"><table><thead><tr><th>平台</th><th>来源 / 状态</th><th>覆盖范围</th><th>笔数</th><th>金额</th><th>法币</th><th>原生结算金额</th><th>源刷新时间</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+E(r.name||'—')+'</td><td>'+E(r.source||'—')+' · '+E(stateLabel(r))+(r.reason?'<small>'+E(reasons[r.reason]||r.reason)+'</small>':'')+'</td><td>'+E(coverage(r))+'</td><td>'+rowValue(r,'count',C)+'</td><td>'+rowValue(r,'amount',N)+'</td><td>'+E(r.currency||'—')+'</td><td>'+settlements(r.settlementAmounts)+'</td><td>'+E(time(r.observedAt,r.timezone))+(r.lastRecordAt?'<small>入库 '+E(time(r.lastRecordAt,r.timezone))+'</small>':'')+'</td></tr>'+(r.groups?.length?'<tr><td colspan="8">'+groups(r)+'</td></tr>':'')).join('')+'</tbody></table></div>';
    openDetails(title()+' · 平台明细',body);
   }
-  return {load,cancel,metric,summary,details,title,subtitle,detailLabel:()=> '平台明细 →',capture:()=>({...S,status:S.status==='loading'?'paused':S.status,error:S.status==='loading'?'读取已暂停，点击重试':S.error}),restore:value=>{serial++;S=value?{...value}: {status:'idle',key:'',data:null,unsupported:[],error:''};},get state(){return current()?view():S}};
+  return {load,cancel,refreshScope,metric,summary,details,title,subtitle,detailLabel:()=> '平台明细 →',capture:()=>({...S,status:S.status==='loading'?'paused':S.status,error:S.status==='loading'?'读取已暂停，点击重试':S.error}),restore:value=>{serial++;S=value?{...value}: {status:'idle',key:'',data:null,unsupported:[],error:''};},get state(){return current()?view():S}};
  }
  root.HensemLivePendingSnapshot={create,resolvePlatforms,requestPeriod};
  if(typeof module!=='undefined')module.exports={create,resolvePlatforms,requestPeriod};

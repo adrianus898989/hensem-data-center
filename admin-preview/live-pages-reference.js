@@ -137,11 +137,18 @@
   // No returned facts in this direction is still unknown while another
   // platform is pending; do not format an empty reduction as a full-scope 0.
   const value=key=>partial&&!directionRows.length?null:a[key],money=key=>N(value(key)),count=key=>C(value(key)),readLabel=partial?' · 已读小计':'';
-  const amountCaveat=(key)=>{if(a[key+'_amount']!==null||Number(a[key+'_count']||0)<=0)return '';if(multiCurrency)return '<small class="cell-warning" title="当前方向包含多个币种，系统不把不同币种相加">多币种 · 请按币种查看</small>';const missing=Number(a.missing_amount_count||0);return '<small class="cell-warning" title="金额不完整时不猜测总额">金额待补齐'+(missing?' · '+C(missing)+'笔缺少金额':'')+'</small>';};
+  const amountCaveat=(key)=>{
+   if(a[key+'_amount']!==null)return '';
+   if(multiCurrency)return '<small class="cell-warning" title="当前方向包含多个币种，系统不把不同币种相加">多币种 · 请按币种查看</small>';
+   // missing_amount_count describes the creation cohort, not successful orders
+   // or an individual status. No exact missing count is supplied for those metrics.
+   const missing=key==='all'?a.missing_amount_count:null,exact=Number.isSafeInteger(missing)&&missing>0;
+   return '<small class="cell-warning" title="金额不完整时不猜测总额；缺额笔数仅按对应指标的统计范围解释">该指标金额未确认'+(exact?' · 创建订单 '+C(missing)+' 笔缺少金额':'')+'</small>';
+  };
   const metrics=[['all','全部','创建时间'],['success','成功',successBasisLabel()],['pending','处理中','创建时间'],['failed','失败','创建时间']].map(([k,l,basis])=>d==='withdraw'&&k==='pending'?(c.pendingSnapshot?.metric()||'<div class="df-flow-metric"><span>代付中金额 / 笔数</span><strong>—</strong><small>快照模块尚未加载</small></div>'):'<div class="df-flow-metric"><span>'+l+'金额 / 笔数'+readLabel+'</span><strong class="metric-link">'+money(k+'_amount')+'</strong><small class="cell-sub">'+count(k+'_count')+' 笔</small><small class="cell-basis">按'+basis+'</small>'+amountCaveat(k)+compareMetric(k+'_amount',a,false,d)+'</div>').join('');
   const success='<div class="df-flow-metric df-flow-rate"><span>'+name(d)+'成功率 · 成功 / 创建'+(partial?' · 已读平台':'')+'</span><strong class="metric-link">'+R(value('success_count'),value('all_count'))+'</strong><small class="cell-sub" title="成功时间内成功笔数 ÷ 创建时间内全部笔数；两者日期口径不同，跨日成功可能使比值超过100%">本期成功 '+count('success_count')+' / 本期创建 '+count('all_count')+' 笔；含跨日成功</small>'+compareMetric('',a,true,d,'success')+'</div>';
   const feeNote=L.feeLookupError?'费率读取失败':L.feeLookupLoading?'正在匹配费率':fees.fee_unknown?'成功时间口径未提供，手续费暂不可统计':fees.successCount?'已匹配 '+C(fees.matchedCount)+' / '+C(fees.successCount)+' 笔'+(fees.complete?'':' · 部分匹配'):fees.excludedCount?'人工业务不计三方手续费':partial?'已读平台暂无成功订单，其他平台待返回':'本期无成功订单';
-  const states='<div class="df-state-tail">'+[['rejected','驳回'],['unknown','未知状态']].map(([k,l])=>'<span>'+l+'金额'+readLabel+' <b>'+money(k+'_amount')+'</b></span><span>'+l+'笔数'+readLabel+' <b>'+count(k+'_count')+'</b></span>').join('')+'</div>';
+  const states='<div class="df-state-tail">'+[['rejected','驳回'],['unknown','未知状态']].map(([k,l])=>'<span>'+l+'金额'+readLabel+' <b>'+money(k+'_amount')+'</b>'+amountCaveat(k)+'</span><span>'+l+'笔数'+readLabel+' <b>'+count(k+'_count')+'</b></span>').join('')+'</div>';
   return dblock('df-'+tone,name(d)+(partial?'经营已读小计（非完整总计）':'经营总数据'),'<div class="df-flow-grid">'+metrics+success+providerExtremes(d)+'</div>'+(c.memberCounts?.metric(d)||'')+'<div class="df-flow-foot"><div class="df-flow-fee"><span>估算手续费'+readLabel+'</span><strong>'+N(L.feeLookupLoading||L.feeLookupError||partial&&!directionRows.length?null:fees.amount)+'</strong><small class="df-coverage" tabindex="0" title="'+E(L.feeLookupLoading?'正在读取费率':L.feeLookupError?'费率读取失败':window.HensemProviderSummary.feeCoverageText(fees))+'">'+E(feeNote)+' · '+feeBasis()+'</small>'+states+'</div>'+workorderRanks(d)+'</div>','', '<span class="df-direction '+tone+'">'+(d==='charge'?'↙ 代收':'↗ 代付')+'</span>');
  }
  function workorderRanks(direction){

@@ -1496,11 +1496,21 @@ test('today pending retry keeps completed order results and reads only the faile
  assert.match(h.html(),/445.67/);assert.match(h.html(),/2\/2 平台/);
 });
 
-test('first overview snapshot waits for delayed report directory and keeps new unresolved platforms visible as partial',async()=>{
+test('overview snapshot reads before delayed report directory then includes newly discovered omissions',async()=>{
  let resolveCatalog;const catalogPromise=new Promise(resolve=>resolveCatalog=resolve);
  const native={...P,team:'Synthetic Team'},late={name:'Synthetic Late Report',rawPlatform:'Synthetic Late Report',country:'印度',rawCountry:'IN',team:'Synthetic Team',system:'REPORT',dataset:'volume',directions:['withdraw'],records:1,provenance:{kind:'direct'}};
  const h=await ready({manualOverview:true,reports:true,handler:q=>q.action==='catalog'?{platforms:[native]}:q.action==='collectedData'?catalogPromise:q.action==='reportSummary'?{feeds:q.feeds.map(f=>({...f,rawCountry:f.country,rawPlatform:f.platform,status:'not_received',groups:[]}))}:q.action==='rates'?{rows:[],total:0}:aggregate(native)});
- const query=h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,0);resolveCatalog({rows:[late]});await query;await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1);assert.match(h.html(),/已入库小计 · 入库 1\/2 · 1 未完整/);h.c.livePendingSnapshotDetails();assert.match(h.drawers.at(-1).html,/Synthetic Late Report/);assert.match(h.drawers.at(-1).html,/尚未接入/);
+ const query=h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1);assert.match(h.html(),/875.50/);assert.match(h.html(),/平台目录待确认/);assert.doesNotMatch(h.html(),/已核实 1 平台/);
+ resolveCatalog({rows:[late]});await query;await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,2);assert.equal(h.calls.filter(q=>q.action==='collectedData').length,1);assert.match(h.html(),/已入库小计 · 入库 1\/2 · 1 未完整/);h.c.livePendingSnapshotDetails();assert.match(h.drawers.at(-1).html,/Synthetic Late Report/);assert.match(h.drawers.at(-1).html,/尚未接入/);
+});
+
+test('late overview directory cannot restart a snapshot after editing filters or leaving its query',async()=>{
+ for(const leave of [h=>h.c.liveSet('to','2026-09-21T23:59:59'),h=>h.c.setPage('time')]){
+  const catalog=deferred(),native={...P,team:'Synthetic Team'},late={name:'Synthetic Late Report',rawPlatform:'Synthetic Late Report',country:'印度',rawCountry:'IN',team:'Synthetic Team',system:'REPORT',dataset:'volume',directions:['withdraw'],records:1};
+  const h=await ready({manualOverview:true,reports:true,handler:q=>q.action==='catalog'?{platforms:[native]}:q.action==='collectedData'?catalog.promise:q.action==='rates'?{rows:[],total:0}:aggregate(native)});
+  const query=h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1);leave(h);catalog.resolve({rows:[late]});await query;await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1);assert.equal(h.calls.filter(q=>q.action==='collectedData').length,1);
+  h.c.setPage('overview');await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1,'returning does not restart a manual query');assert.doesNotMatch(h.html(),/已核实 1 平台/);
+ }
 });
 
 

@@ -19,6 +19,82 @@ const mergeOrders=parts=>mergerContext.merge(parts);
 function harness(options={}){const L={country:'印度',from:'2026-10-02T01:00:00',to:'2026-10-02T02:00:00',queryNow:now,dirty:false,withdrawCatalog:[]},calls=[],drawers=[];let selected=[p(A)],providers=[],timezone='Asia/Kolkata',handler=async q=>response(q),orders={platforms:[p(A)],results:[orderResult()],loading:false,retrying:false,paused:false,failures:[],queriedAt:new Date(now).toISOString(),scopeMatches:true,status:'all'};const ui=create({L,E:escape,N:number,C:v=>Number(v).toLocaleString('en-US'),selected:()=>selected,providers:()=>providers,scopeZone:()=>timezone,currentOrders:()=>orders,prepare:options.prepare,request:q=>{calls.push(q);return handler(q)},render(){},open:(title,body)=>drawers.push({title,body})});return {ui,L,calls,drawers,select:v=>selected=v,providers:v=>providers=v,timezone:v=>timezone=v,handler:v=>handler=v,orders:v=>orders=v,current:()=>{L.from='2026-10-03T00:00:00';L.to='2026-10-03T23:59:59'},get orderContext(){return orders}};}
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
 
+// Run the actual overview wiring and authorized directory selection, not a
+// fixture replacement for prepare(). The historical inventory is independent.
+function overviewHarness(options={}){
+ const calls=[],drawers=[],L={country:'印度',from:'2026-10-02T01:00:00',to:'2026-10-02T02:00:00',queryNow:now,dirty:false,catalogReady:true,catalog:[p(A)],withdrawCatalog:[p(B,'Synthetic report')],direction:'all',team:'all',source:'all',platform:'all',multi:{team:['Synthetic Team'],source:[],platform:[],provider:[]},...options.L};
+ let catalogHandler=options.catalogHandler||(()=>{throw Error('Synthetic report catalog timeout')}),snapshotHandler=options.snapshotHandler||response;
+ const context={L,E:escape,N:number,C:String,R:()=>'',scopeZone:()=> 'Asia/Kolkata',render(){},openDrawer:(title,body)=>drawers.push({title,body}),state:{page:'overview'},navigationRevision:0,aggregateQueryScope:()=> 'synthetic',HensemLivePendingSnapshot:{create},hensemLiveRequest:async q=>{const request=JSON.parse(JSON.stringify(q));calls.push(request);if(q.action==='collectedData')return catalogHandler(request);assert.equal(q.action,'pendingSnapshot');return snapshotHandler(request)}};
+ context.window=context;vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-report-data.js'),'utf8'),context);
+ const declaration=prefix=>{const line=aggregateSource.split('\n').find(line=>line.startsWith(prefix));assert(line,'missing production declaration '+prefix);return line;};
+ const between=(start,end)=>{const from=aggregateSource.indexOf(start),to=aggregateSource.indexOf(end,from);assert(from>=0&&to>from,'missing production wiring '+start);return aggregateSource.slice(from,to);};
+ vm.runInContext([
+  'let pendingSnapshot;',declaration(' function activeValues('),declaration(' function matchesFilter('),declaration(' const displayIdentity='),declaration(' const platformTeam='),declaration(' const orderSource='),
+  between(' function visibleCatalog(){','\n const teamCatalog='),declaration(' const matchesPlatform='),declaration(' const selectedVisible='),
+  between(' const reportData=','\n pendingOrders='),
+  'globalThis.overview={ui:pendingSnapshot,report:reportData,selected:selectedVisible};'
+ ].join('\n'),context);
+ return {...context.overview,L,calls,drawers,context,catalogHandler:fn=>catalogHandler=fn,snapshotHandler:fn=>snapshotHandler=fn};
+}
+
+test('overview midnight snapshot reads authorized base and withdrawal catalogs after report inventory timeout',async()=>{
+ const h=overviewHarness();await h.report.loadCatalog();assert.match(h.report.state.catalogError,/timeout/);assert.equal(h.report.catalog().filter(p=>p.reportOnly).length,1);
+ await h.ui.load();assert.equal(h.ui.state.status,'ready');assert.deepEqual(h.calls.map(q=>q.action),['collectedData','collectedData','pendingSnapshot']);assert.deepEqual(h.calls.at(-1),{action:'pendingSnapshot',mode:'midnight',date:'2026-10-02',platformIds:[A,B]});assert.match(h.ui.metric(),/2,501.00/);assert.match(h.ui.metric(),/18 笔/);assert.match(h.ui.metric(),/平台目录待确认/);assert.doesNotMatch(h.ui.metric(),/已核实 2 平台/);
+ assert.match(h.report.state.catalogError,/timeout/,'snapshot success does not erase the separate report error');
+});
+
+test('overview midnight snapshot does not wait for an in-flight historical inventory',async()=>{
+ const catalog=deferred(),h=overviewHarness({catalogHandler:()=>catalog.promise}),loading=h.report.loadCatalog();let timeout;
+ try{
+  await Promise.race([h.ui.load(),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('snapshot waited for historical report inventory')),250)})]);
+  assert.equal(h.report.state.catalogBusy,true);assert.equal(h.ui.state.status,'ready');assert.deepEqual(h.calls.map(q=>q.action),['collectedData','pendingSnapshot']);assert.match(h.ui.metric(),/平台目录待确认/);assert.doesNotMatch(h.ui.metric(),/已核实 2 平台/);
+ }finally{clearTimeout(timeout);catalog.resolve({rows:[]});await loading;}
+});
+
+test('overview snapshot retains report-only omissions and explicit country/team/platform/provider scope on catalog failure',async()=>{
+ const C='33333333-3333-4333-8333-333333333333',D='44444444-4444-4444-8444-444444444444',F='55555555-5555-4555-8555-555555555555';
+ const h=overviewHarness({L:{catalog:[p(A),p(C,'Other team','Other Team'),{...p(D,'Other country'),country:'巴西'},p(F,'Unselected native')]},catalogHandler:()=>({rows:[{dataset:'volume',system:'AR',country:'印度',name:'Synthetic unmatched',team:'Synthetic Team',records:1,direction:'withdraw'}]})});
+ await h.report.loadCatalog();const reportId=h.report.catalog().find(p=>p.name==='Synthetic report').id,unmatchedId=h.report.catalog().find(p=>p.name==='Synthetic unmatched').id;
+ h.L.multi.platform=[A,reportId,unmatchedId,C,D,'66666666-6666-4666-8666-666666666666'];h.L.multi.provider=['Synthetic Pay'];h.catalogHandler(()=>{throw Error('Synthetic report catalog timeout')});await h.report.loadCatalog(true);
+ await h.ui.load();const request=h.calls.at(-1);assert.equal(h.ui.state.status,'ready');assert.deepEqual(request,{action:'pendingSnapshot',mode:'midnight',date:'2026-10-02',platformIds:[A,B],providers:['Synthetic Pay']});assert.equal(h.ui.state.unsupported.length,1);assert.equal(h.ui.state.unsupported[0].name,'Synthetic unmatched');assert.match(h.ui.metric(),/入库 2\/3/);assert.match(h.ui.metric(),/平台目录待确认/);h.ui.details();assert.match(h.drawers.at(-1).body,/Synthetic unmatched/);assert.match(h.drawers.at(-1).body,/尚未接入/);
+ assert.equal(h.calls.filter(q=>q.action==='collectedData').length,3,'the explicit read attempts supplementary inventory once without a broad snapshot fallback');
+ h.L.multi.source=['AR'];await h.ui.load();assert.deepEqual(h.calls.at(-1).platformIds,[A],'a report-only seed without a verified AR source is not silently included under AR');
+});
+
+test('overview snapshot with no selected authorized identity never falls back to the entire directory',async()=>{
+ const h=overviewHarness();h.L.multi.platform=['66666666-6666-4666-8666-666666666666'];await h.ui.load();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,0);assert.equal(h.ui.state.status,'error');assert.match(h.ui.metric(),/当前范围没有可查询平台/);assert.doesNotMatch(h.ui.metric(),/>0.00<|>0 笔</);
+});
+
+test('overview catalog decoupling preserves verified zero, partial zero and missing as different states',async()=>{
+ const h=overviewHarness({L:{withdrawCatalog:[]}});h.L.multi.platform=[A];await h.report.loadCatalog();
+ h.snapshotHandler(q=>response(q,{amount:'0',count:0,knownAmount:'0',knownCount:0,rows:[row(A,{amount:'0',count:0,knownAmount:'0',knownCount:0,groups:[]})]}));await h.ui.load();assert.match(h.ui.metric(),/>0.00</);assert.match(h.ui.metric(),/>0 笔</);
+ h.snapshotHandler(q=>response(q,{complete:false,amount:null,count:null,knownAmount:'0',knownCount:0,rows:[row(A,{state:'partial',coverageScope:'last_7_created_days',wholeStockComplete:false,amount:null,count:null,knownAmount:'0',knownCount:0,groups:[]})]}));await h.ui.load();assert.equal(h.ui.state.status,'ready');assert.doesNotMatch(h.ui.metric(),/>0.00<|>0 笔</);assert.match(h.ui.metric(),/暂无已核实合计/);
+ h.snapshotHandler(q=>response(q,{complete:false,amount:null,count:null,knownAmount:null,knownCount:null,receivedPlatformCount:0,rows:[row(A,{state:'missing',coverageScope:'unavailable',wholeStockComplete:false,windowComplete:false,amount:null,count:null,knownAmount:null,knownCount:null,groups:[]})]}));await h.ui.load();assert.equal(h.ui.state.status,'ready');assert.doesNotMatch(h.ui.metric(),/>0.00<|>0 笔</);h.ui.details();assert.match(h.drawers.at(-1).body,/未采到记录/);
+ assert(h.calls.filter(q=>q.action==='collectedData').length<=4,'at most one supplementary attempt per explicit read; an in-flight attempt is shared');
+});
+
+test('unknown directory-wide scope cannot promote a verified known-platform zero to an all-platform zero',async()=>{
+ const h=overviewHarness({L:{withdrawCatalog:[]},snapshotHandler:q=>response(q,{amount:'0',count:0,knownAmount:'0',knownCount:0,rows:[row(A,{amount:'0',count:0,knownAmount:'0',knownCount:0,groups:[]})]})});
+ await h.ui.load();assert.equal(h.ui.state.status,'ready');assert.doesNotMatch(h.ui.metric(),/>0.00<|>0 笔</);assert.match(h.ui.metric(),/平台目录待确认/);
+ for(let i=0;i<5;i++){h.ui.metric();h.ui.summary();await Promise.resolve();}assert.deepEqual(h.calls.map(q=>q.action),['collectedData','pendingSnapshot']);
+ h.L.multi.platform=[A];await h.ui.load();assert.match(h.ui.metric(),/>0.00</);assert.match(h.ui.metric(),/>0 笔</);
+});
+
+test('late catalog refresh belongs to the newest query and a superseded snapshot cannot overwrite it',async()=>{
+ const catalog=deferred(),old=deferred(),late={dataset:'volume',system:'REPORT',name:'Synthetic late',country:'印度',team:'Synthetic Team',records:1,direction:'withdraw'},settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));};
+ const h=overviewHarness({L:{serial:1,withdrawCatalog:[]},catalogHandler:()=>catalog.promise,snapshotHandler:q=>q.date==='2026-10-02'?old.promise:response(q)});
+ const first=h.ui.load();await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1);
+ h.L.serial=2;h.L.to='2026-10-01T23:59:59';await h.ui.load();assert.equal(h.ui.state.data.date,'2026-10-01');assert.match(h.ui.metric(),/平台目录待确认/);
+ catalog.resolve({rows:[late]});await settle();assert.equal(h.calls.filter(q=>q.action==='collectedData').length,1);assert.deepEqual(h.calls.filter(q=>q.action==='pendingSnapshot').map(q=>q.date),['2026-10-02','2026-10-01','2026-10-01']);assert.equal(h.ui.state.unsupported[0].name,'Synthetic late');assert.match(h.ui.metric(),/入库 1\/2 · 1 未完整/);
+ old.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[A]}));await first;assert.equal(h.ui.state.data.date,'2026-10-01');assert.equal(h.ui.state.unsupported[0].name,'Synthetic late');
+});
+
+test('overview snapshot fails closed while authorized base directories are not ready or invalid',async()=>{
+ for(const change of [{catalogReady:false},{catalog:null},{withdrawCatalog:null}]){
+  const h=overviewHarness({L:change});await h.ui.load();assert.equal(h.calls.length,0);assert.equal(h.ui.state.status,'error');assert.match(h.ui.metric(),/快照平台目录尚未就绪/);assert.doesNotMatch(h.ui.metric(),/>0.00<|>0 笔</);
+ }
+});
+
 test('historical request reads the selected end-day 00:00 only; day 2 requires source day 1',async()=>{
  const h=harness();h.providers(['Synthetic Pay','Synthetic Pay']);await h.ui.load();assert.deepEqual(h.calls[0],{action:'pendingSnapshot',mode:'midnight',date:'2026-10-02',platformIds:[A],providers:['Synthetic Pay']});
  assert.equal(h.ui.state.data.sourceDate,'2026-10-01');assert.match(h.ui.metric(),/00:00代付中金额 \/ 笔数/);assert.match(h.ui.metric(),/2026-10-02 00:00/);
