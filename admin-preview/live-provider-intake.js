@@ -32,12 +32,13 @@
  }
  const transient=error=>/超时|timeout|timed out|57014|network|failed to fetch|网络|连接中断/i.test(String(error?.code||'')+' '+String(error?.message||''));
  function create({request,now=()=>Date.now()}){
-  let revision=0,catalog=null,inFlight=0;const waiters=[],cache=new Map(),cacheMs=300000;
-  const cancel=()=>{revision++;catalog=null;cache.clear();waiters.splice(0).forEach(wake=>wake());};
-  async function limited(q,check){while(inFlight>=2){check();await new Promise(resolve=>waiters.push(resolve));}check();inFlight++;try{return await request(q)}finally{inFlight--;waiters.splice(0).forEach(wake=>wake());}}
-  async function load({platforms,direction,from,to,onProgress}){
+  let revision=0,catalog=null,inFlight=0;const waiters=[],controllers=new Set(),cache=new Map(),cacheMs=300000;
+  const cancel=()=>{revision++;for(const controller of controllers)controller?.abort();catalog=null;cache.clear();waiters.splice(0).forEach(wake=>wake());};
+  async function limited(q,check,concurrency){while(inFlight>=concurrency){check();await new Promise(resolve=>waiters.push(resolve));}check();const controller=typeof root.AbortController==='function'?new root.AbortController():null;controllers.add(controller);inFlight++;try{return await request(q,{signal:controller?.signal})}finally{controllers.delete(controller);inFlight--;waiters.splice(0).forEach(wake=>wake());}}
+  async function load({platforms,direction,from,to,onProgress,concurrency=2}){
+   concurrency=concurrency===1?1:2;
    const current=revision,check=()=>{if(current!==revision)throw Error('采集核对已暂停');},allDays=dates(from,to);
-   if(!catalog){const candidate=(async()=>{let r,operation='orderCatalog';for(let attempt=0;attempt<2;attempt++){try{r=await limited({action:'intakeCoverage',operation},check);break}catch(error){check();if(operation==='orderCatalog'&&/逐日覆盖参数无效|订单采集目录操作暂不支持|invalid_coverage_request|unsupported.*operation/i.test(String(error?.message||''))){operation='catalog';r=await limited({action:'intakeCoverage',operation},check);break;}if(attempt||!transient(error))throw error;}}if(r?.version!==1||r.complete!==true||!Array.isArray(r.feeds)||new Set(r.feeds.map(f=>f.id)).size!==r.feeds.length)throw Error('采集目录响应不完整');return r.feeds;})();catalog=candidate;candidate.catch(()=>{if(catalog===candidate)catalog=null;});}
+   if(!catalog){const candidate=(async()=>{let r,operation='orderCatalog';for(let attempt=0;attempt<2;attempt++){try{r=await limited({action:'intakeCoverage',operation},check,concurrency);break}catch(error){check();if(operation==='orderCatalog'&&/逐日覆盖参数无效|订单采集目录操作暂不支持|invalid_coverage_request|unsupported.*operation/i.test(String(error?.message||''))){operation='catalog';r=await limited({action:'intakeCoverage',operation},check,concurrency);break;}if(attempt||!transient(error))throw error;}}if(r?.version!==1||r.complete!==true||!Array.isArray(r.feeds)||new Set(r.feeds.map(f=>f.id)).size!==r.feeds.length)throw Error('采集目录响应不完整');return r.feeds;})();catalog=candidate;candidate.catch(()=>{if(catalog===candidate)catalog=null;});}
    const feeds=await catalog;check();
    const scope=[...new Map(platforms.map(p=>[p.id,p])).values()],matched=new Map();
    for(const p of scope){const candidates=feeds.filter(f=>f.dataset==='orders'&&f.direction===direction&&f.platformId===p.id);if(candidates.length===1)matched.set(p.id,candidates[0]);}
@@ -56,7 +57,7 @@
    }
    publish();
    async function read(batch,start,end,retry=true){check();try{
-    const response=await limited({action:'intakeCoverage',operation:'rows',feedIds:batch.map(f=>f.id),startAt:start,endAt:end},check);check();
+    const response=await limited({action:'intakeCoverage',operation:'rows',feedIds:batch.map(f=>f.id),startAt:start,endAt:end},check,concurrency);check();
     for(const [id,rows] of validate(response,batch,start,end)){groups.set(id,[...(groups.get(id)||[]),...rows]);cache.set(fragmentKey({id},start,end),{at:now(),rows});}publish();
    }catch(error){check();if(retry&&transient(error)){
      // Each affected platform gets at most one additional read, separately.
@@ -64,7 +65,7 @@
     }else{for(const f of batch)errors.set(f.id,[...(errors.get(f.id)||[]),{from:start,to:end,message:error.message||'采集核对读取失败'}]);publish();}}
    }
    let next=0;async function worker(){while(next<tasks.length){check();const task=tasks[next++];await read(task.batch,task.start,task.end);}}
-   await Promise.all(Array.from({length:Math.min(2,tasks.length)},()=>worker()));check();return output('ready');
+   await Promise.all(Array.from({length:Math.min(concurrency,tasks.length)},()=>worker()));check();return output('ready');
   }
   return {load,cancel};
  }

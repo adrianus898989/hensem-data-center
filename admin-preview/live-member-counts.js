@@ -58,7 +58,7 @@
   const valid=id=>id===serial&&!L.dirty&&S.key===currentKey();
   const retry=s=>s.status==='error'||s.status==='paused'||s.failures.length?' <button type="button" class="link" onclick="liveMemberCountsRetry()">重试</button>':'';
   function cancel(){serial++;pending=null;waiters.splice(0).forEach(wake=>wake());if(S.status==='loading')S={...S,status:'paused',results:[],error:'人数读取已暂停'};}
-  async function limitedRequest(request,id){while(inFlight>=2){if(!valid(id))throw Error('人数查询已替换');await new Promise(resolve=>waiters.push(resolve));}if(!valid(id))throw Error('人数查询已替换');inFlight++;try{return await c.request(request)}finally{inFlight--;waiters.splice(0).forEach(wake=>wake());}}
+  async function limitedRequest(request,id){while(inFlight>=readConcurrency){if(!valid(id))throw Error('人数查询已替换');await new Promise(resolve=>waiters.push(resolve));}if(!valid(id))throw Error('人数查询已替换');inFlight++;try{return await c.request(request)}finally{inFlight--;waiters.splice(0).forEach(wake=>wake());}}
   async function readExact(item,id){const response=await limitedRequest(item.request,id);if(!valid(id))throw Error('人数查询已替换');return validate(response,item);}
   async function readPlatform(item,id){
    try{return await readExact(item,id);}
@@ -70,17 +70,18 @@
     return {platform:parts[0].platform,rows:parts.flatMap(part=>part.rows),sourceCompletenessVerified:parts.every(part=>part.sourceCompletenessVerified),frequencySupported:parts.every(part=>part.frequencySupported)};
    }
   }
-  function ensure(force=false){
+  let readConcurrency=2;
+  function ensure(force=false,concurrency=2){
    if(L.dirty)return Promise.resolve();
    let q;try{q=scope()}catch(error){S={...initial(),status:'error',error:error.message||'人数统计筛选无效'};c.render();return Promise.resolve();}
    if(!force&&q.key===S.key&&S.status!=='idle')return pending||Promise.resolve();
-   const id=++serial;S={...initial(),status:'loading',key:q.key,items:q.items,unsupported:q.unsupported};c.render();
+   readConcurrency=concurrency===1?1:2;const id=++serial;S={...initial(),status:'loading',key:q.key,items:q.items,unsupported:q.unsupported};c.render();
    const run=(async()=>{
     if(!q.items.length){S={...S,status:'ready'};c.render();return;}
     let index=0;const timedOutItems=[];
     const failure=(item,error)=>({id:item.platform.id,name:item.platform.name,error:error?.message||'人数读取失败'});
     async function worker(){while(index<q.items.length&&valid(id)){const item=q.items[index++];try{const result=await readPlatform(item,id);if(!valid(id))return;S.results.push(result);}catch(error){if(!valid(id))return;S.failures.push(failure(item,error));if(timedOut(error))timedOutItems.push(item);}if(valid(id))c.render();}}
-    await Promise.all(Array.from({length:Math.min(2,q.items.length)},()=>worker()));if(!valid(id))return;
+    await Promise.all(Array.from({length:Math.min(readConcurrency,q.items.length)},()=>worker()));if(!valid(id))return;
     // Finish the initial cohort before one serial retry of failed timeout scopes.
     // Retry the original request only: no successful platform reads or extra fallback.
     for(const item of timedOutItems){if(!valid(id))return;try{const result=await readExact(item,id);if(!valid(id))return;S.results.push(result);S.failures=S.failures.filter(row=>row.id!==item.platform.id);}catch(error){if(!valid(id))return;const message=error?.message||'人数读取失败';S.failures=S.failures.map(row=>row.id===item.platform.id?{...row,error:row.error===message?message:row.error+'；重试失败：'+message}:row);}if(valid(id))c.render();}
