@@ -59,7 +59,7 @@ test('integration waits for a manual page query and its main loading states',asy
  const phaseDeclaration=live.match(/ const phasedReadBusy=\(\)=>[^\n]+;/)?.[0];
  assert(phaseDeclaration,'use the real query-owned phase classifier in the extracted readiness expression');
  assert(live.indexOf(phaseDeclaration)<live.indexOf(' window.HensemLiveSyncHealth?.configure('),'the production declaration exists before readiness is configured');
- const evaluate=(page,L,modules={},reportState={},readPhase=null)=>vm.runInNewContext(supervisorDeclarations+'\n'+phaseDeclaration+'\n'+ready,{pages:[],state:{page},L,readPhase,window:modules,collectedPage:{state:{busy:false}},reportData:{state:reportState}});
+ const evaluate=(page,L,modules={},reportState={},readPhase=null,submissionAnalysis=null)=>vm.runInNewContext(supervisorDeclarations+'\n'+phaseDeclaration+'\n'+ready,{pages:[],state:{page},L,readPhase,submissionAnalysis,window:modules,collectedPage:{state:{busy:false}},reportData:{state:reportState}});
  const L={serial:7,catalogReady:true,initialReadComplete:true,loading:false,overviewQueried:false,pageQueried:true};
  for(const page of ['auto_withdraw','rates','collected_data','payout_config','workorders','deposit_tracking','deposit_statistics','workorder_reconciliation','workorder_workload','workorder_operation_logs'])assert.equal(evaluate(page,L),true,page);
  for(const page of ['workorder_permissions']){
@@ -79,6 +79,10 @@ test('integration waits for a manual page query and its main loading states',asy
  const phased=setup();phased.setReady(evaluate('providers',L,{}, {},{serial:L.serial,page:'providers'}));phased.api.schedule('phase-scope');await phased.run();assert.equal(phased.calls.length,0,'the real busy predicate defers scheduling');
  phased.setReady(evaluate('providers',L));phased.api.schedule('phase-scope');await phased.run();assert.equal(phased.calls.length,1,'health becomes eligible once its query-owned phase ends');
  const queried={...L,overviewQueried:true};assert.equal(evaluate('overview',queried),true,'health may run after an explicit overview query completes');
+ for(const page of ['events','providers']){
+  assert.equal(evaluate(page,L,{}, {},null,{isLoading:()=>true}),false,page+' waits for its running submission analysis');
+  assert.equal(evaluate(page,L,{}, {},null,{isLoading:()=>false}),true,page+' becomes eligible after submission analysis settles');
+ }
  assert.equal(evaluate('rates',{...L,initialReadComplete:false}),false);assert.equal(evaluate('auto_withdraw',{...L,autoWithdrawLoading:true}),false);assert.equal(evaluate('rates',L,{HensemLiveRatesRestored:{snapshot:()=>({loading:true})}}),false);assert.equal(evaluate('payout_config',L,{HensemLivePayoutConfig:{state:()=>({indexStatus:'loading'})}}),false);
  assert.equal(evaluate('overview',{...queried,loading:true}),false);assert.equal(evaluate('overview',{...queried,overviewSections:{status:'loading'}}),false);assert.equal(evaluate('overview',queried,{}, {loading:true}),false);assert.equal(evaluate('overview',queried,{}, {catalogBusy:true}),false);
  assert.match(live,/finally\{initialLoad=null;L.catalogLoading=false;L.initialReadComplete=true;window.liveHeader\?\.\(\)\}/);

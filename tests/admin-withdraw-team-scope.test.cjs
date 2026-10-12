@@ -26,6 +26,16 @@ test('withdraw comparisons keep absolute zero-baseline changes and suppress miss
  let cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/\+10 笔（无基数）/);assert.match(cards,/对比值未提供/);assert.doesNotMatch(cards,/NaN|Infinity|\+4 笔/);
  f.page.state.data.comparison.complete=false;cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.doesNotMatch(cards,/\+10 笔/);assert.match(cards,/两期范围或覆盖未对齐，汇总暂不比较/);assert.doesNotMatch(cards,/对比日期暂无数据/);
 });
+test('unverified mixed-source summary keeps yesterday stored values visible without claiming complete growth',async()=>{
+ for(const view of ['auto_withdraw','withdraw_operators']){
+  const f=fixture({view});f.L.from='2026-09-25T00:00:00';await f.page.load();
+  Object.assign(f.page.state.data,{totals:{total:120,processed:120,autoCount:60,manualCount:60,success:110,rejected:10,operators:6,avgSeconds:90,platforms:37},previousTotals:{total:100,processed:100,autoCount:70,manualCount:30,success:99,rejected:0,operators:4,avgSeconds:120,platforms:37},comparison:{complete:false,matchedRows:37,totalRows:37},arCoverage:{coverageBasis:'unverified_source_continuity',currentComplete:false,previousComplete:false}});
+  let cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];
+  assert.match(cards,/昨日已入库 100 笔/);assert.match(cards,/昨日已入库 99 笔/);assert.match(cards,/昨日已入库 0 笔/);assert.match(cards,/AR 两期完整性尚未核验/);assert.doesNotMatch(cards,/withdraw-delta|较前一日|已完整/);
+  if(view==='auto_withdraw'){assert.match(cards,/昨日已入库 70 笔/);assert.match(cards,/昨日已入库 30 笔/)}else{assert.match(cards,/昨日已入库 4 人/);assert.match(cards,/昨日已入库 2分0秒/)}
+  for(const value of [null,undefined,'',' ',false,-1,'bad']){f.page.state.data.previousTotals.success=value;cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/昨日已入库 — · 暂不计算涨跌/);assert.doesNotMatch(cards,/NaN|undefined/)}
+ }
+});
 test('incomplete aggregate coverage does not erase existing previous totals or trusted platform comparisons',async()=>{
  for(const view of ['auto_withdraw','withdraw_operators']){
   const f=fixture({view});f.L.from='2026-09-25T00:00:00';await f.page.load();

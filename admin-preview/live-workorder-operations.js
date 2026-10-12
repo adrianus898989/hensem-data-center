@@ -161,7 +161,7 @@
    return analysisStyles+'<div class="wo-analysis-scope"><strong>已查询：'+E(scope)+'</strong><span>'+E(period)+'</span><small>本区仅统计已采集明细。源后台待处理（状态 1）当前被采集器跳过，不计入本区；未显示不代表没有待处理工单。</small>'+(coverageText(value)?'<small class="wo-coverage-note">数据覆盖：'+E(coverageText(value))+'。去重指标标注“部分”时，仅展示可识别原单的已知小计。</small>':'')+'</div><div class="wo-analysis-groups">'+groupHtml+'</div>'+linkageHtml+'<p class="wo-note wo-analysis-basis">已处理 = 工单状态 4；未处理 / 驳回 = 状态 1、2、3、5 或未知。去重“尚无已处理记录”指当前筛选范围内该原单没有状态 4 的工单，包含已驳回，不等同于仍待处理；已处理也不代表原支付订单到账。</p>'+(s.analysisBusy?'<p class="wo-note">统计刷新中…</p>':'')+(s.analysisError?'<p class="live-error">'+E(s.analysisError)+' <button type="button" onclick="workorderOperationsSummaryRetry()">重试统计</button></p>':'');
   }
   async function loadAnalysis(s,query,key,force=false){
-   const cache=JSON.stringify({country:query.country,filters:query.filters});if(!force&&s.analysisKey===cache&&(s.analysis||s.analysisBusy))return;
+   const cache=JSON.stringify({country:query.country,filters:query.filters});if(!force&&s.analysisKey===cache&&(s.analysis||s.analysisBusy||s.analysisError))return;
    const serial=++s.analysisSerial;s.analysisKey=cache;s.analysis=null;s.analysisBusy=true;s.analysisError='';if(page()===key)render();
    try{const data=await request({action:'workorderRecords',view:'records',operation:'summary',country:query.country,filters:query.filters});if(s.analysisSerial!==serial)return;if(!data.current)throw Error('统计数据暂不可用');s.analysis=data;}
    catch(error){if(s.analysisSerial===serial)s.analysisError=error.message||'请稍后重试';}
@@ -216,7 +216,7 @@
   root.workorderOriginalSize=value=>{if(!originalDrawer||![20,50,100].includes(Number(value)))return;originalDrawer.size=Number(value);originalDrawer.current=1;return originalLoad();};
   root.workorderOriginalJump=value=>{if(/^\d+$/.test(String(value)))return root.workorderOriginalPage(Number(value));};
   root.workorderOriginalRetry=originalLoad;
-  root.workorderOperationsSummaryRetry=()=>{const s=state(),filters={...(s.filters||s.draft)},country=filters.country;delete filters.country;return loadAnalysis(s,{country,filters},page(),true);};
+  root.workorderOperationsSummaryRetry=()=>{const s=state(),filters={...(s.filters||s.draft)},country=filters.country;delete filters.country;delete filters.successBasis;return loadAnalysis(s,{country,filters},page(),true);};
   root.workorderOperationsSort=key=>{if(page()!=='workorders'||state().mode!=='orders'||!orderSortKeys.has(key))return;const s=state();s.orderSort=s.orderSort?.key===key?{key,direction:s.orderSort.direction==='asc'?'desc':'asc'}:{key,direction:'desc'};s.orderDisplayRows=[];render();};
   function view(){
    const s=state(),kind=viewFor(page());if(page()==='workorders'&&s.mode==='daily')return tabs()+ctx.renderDaily();

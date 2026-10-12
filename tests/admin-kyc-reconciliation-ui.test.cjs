@@ -39,6 +39,37 @@ test('CSP-safe delegated filters preserve typed strings and make bounded reads o
  const reads=h.calls.length;h.event('click','detail',[0]);assert.equal(h.calls.length,reads);assert.equal(h.details[0].key,'synthetic-key');h.event('click','explain');assert.equal(h.calls.length,reads);assert.match(h.explanations[0].text,/唯一匹配均不代表实际到账/);
 });
 
+test('page and size never submit unqueried KYC drafts or relabel the displayed page',async()=>{
+ for(const [key,value] of Object.entries({platform:'UNSENT platform',provider:'UNSENT provider',query:'UNSENT query',from:'2026-10-01',to:'2026-10-02',processing:'rejected',matchStatus:'unmatched'})){
+  const h=harness();await h.panel.dispatch('page',2);const reads=h.calls.length,saved=h.panel.getSnapshot();
+  h.panel.filter(key,value);await h.panel.dispatch('page',3);await h.panel.dispatch('size','50');
+  assert.equal(h.calls.length,reads,key+' must remain an unsubmitted draft');assert.strictEqual(h.panel.getSnapshot(),saved);assert.equal(h.panel.getState()[key],value);assert.equal(h.panel.getState().limit,20);
+  assert.match(h.html(),/条件已修改，查询后更新/);assert.match(h.html(),/<select aria-label="每页条数" disabled/);assert.match(h.html(),/<span>2 \/ 3<\/span>/);
+  await h.panel.query();assert.equal(h.calls.length,reads+1);assert.equal(h.calls.at(-1)[key],value);assert.equal(h.calls.at(-1).offset,0);
+  await h.panel.dispatch('size','50');assert.equal(h.calls.length,reads+2);assert.equal(h.calls.at(-1)[key],value);assert.equal(h.calls.at(-1).limit,50);assert.equal(h.calls.at(-1).offset,0);
+ }
+});
+
+test('KYC pagination waits for an initial snapshot and does not supersede an active read',async()=>{
+ let finish;const h=harness({handler:()=>new Promise(resolve=>finish=resolve)});h.panel.clear();h.panel.filter('platform','UNSENT');
+ await h.panel.dispatch('size','50');await h.panel.dispatch('page',2);assert.equal(h.calls.length,0);
+ const pending=h.panel.query();assert.equal(h.calls.length,1);await h.panel.dispatch('size','50');await h.panel.dispatch('page',2);assert.equal(h.calls.length,1);assert.equal(h.panel.getState().limit,20);
+ finish(snapshot());await pending;assert.doesNotMatch(h.html(),/<select aria-label="每页条数" disabled/);
+});
+
+test('restored KYC drafts keep pagination blocked until the displayed scope is queried',async()=>{
+ const h=harness();h.panel.filter('platform','UNSENT');const saved=h.panel.capture();h.panel.clear();assert.equal(h.panel.restore(saved),true);
+ await h.panel.dispatch('page',2);await h.panel.dispatch('size','50');assert.equal(h.calls.length,0);assert.equal(h.panel.getState().platform,'UNSENT');assert.match(h.html(),/条件已修改，查询后更新/);
+ await h.panel.query();assert.equal(h.calls.length,1);await h.panel.dispatch('page',2);assert.equal(h.calls.length,2);assert.equal(h.calls.at(-1).platform,'UNSENT');assert.equal(h.calls.at(-1).offset,20);
+});
+
+test('failed KYC size changes cannot skip rows when paging the retained snapshot',async()=>{
+ const h=harness({handler:q=>{if(q.limit===50)throw Error('Synthetic size timeout');return snapshot({offset:q.offset,limit:q.limit,dimension:q.dimension})}}),saved=h.panel.getSnapshot();
+ await h.panel.dispatch('size','50');assert.equal(h.calls.length,1);assert.equal(h.calls[0].limit,50);assert.strictEqual(h.panel.getSnapshot(),saved);assert.match(h.html(),/Synthetic size timeout/);assert.match(h.html(),/<option selected>20<\/option>/);assert.match(h.html(),/<span>1 \/ 3<\/span>/);
+ await h.panel.dispatch('page',2);assert.equal(h.calls.length,2);assert.equal(h.calls[1].offset,20);assert.equal(h.calls[1].limit,20);assert.equal(h.panel.getState().limit,20);assert.match(h.html(),/<span>2 \/ 3<\/span>/);
+ await h.panel.dispatch('page',3);assert.equal(h.calls.length,3);assert.equal(h.calls[2].offset,40);assert.equal(h.calls[2].limit,20);assert.match(h.html(),/<span>3 \/ 3<\/span>/);
+});
+
 test('all current matching outcomes remain selectable; unknown and snapshot-missing outcomes are not false zeroes',async()=>{
  const h=harness();for(const [key,label]of Object.entries({exact_unique:'精确匹配',exact_duplicate:'重复来源一致',amount_conflict:'金额冲突',ambiguous_online:'线上多条冲突',online_amount_missing:'线上缺金额',unmatched:'未找到',platform_not_in_online_snapshot:'当前快照无此平台',missing_rc:'缺原订单号',source_conflict:'源数据冲突'})){assert(h.html().includes(label),label);h.panel.filter('matchStatus',key);assert.equal(h.panel.getState().matchStatus,key)}
  h.panel.filter('matchStatus','platform_missing_online');assert.equal(h.panel.getState().matchStatus,'platform_not_in_online_snapshot');h.panel.filter('matchStatus','wrong');assert.equal(h.panel.getState().matchStatus,'platform_not_in_online_snapshot');

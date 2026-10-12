@@ -55,10 +55,25 @@ test('scope and committed-filter changes discard cached platform summaries',asyn
  await h.loader.load(query());h.root.scope='scope-b';await h.loader.load(query());assert.equal(h.calls.length,4);
  const changed=query();changed.filters={...changed.filters,from:'2026-10-02'};const r=await h.loader.load(changed);assert.equal(h.calls.length,6);assert.equal(r.total,2);
 });
-test('changed child-page totals and summaries are reported rather than mixing rows with earlier totals',async()=>{
+test('changed child pages require explicit refresh and further pages never reread the scope or show stale cached rows',async()=>{
  let revision=0;const h=harness(q=>q.operation==='reconciliationPlatforms'?directory(['A']):response('A',q,revision?51:50));await h.loader.load(query());revision++;
- const r=await h.loader.load(query({offset:20}));assert.equal(r.rows.length,0);assert.equal(r.batch.pageFailures.length,1);assert.match(r.batch.pageFailures[0].message,/数据已更新/);assert.equal(r.batch.partial,true);
- await h.loader.load(query());assert.equal(h.calls.filter(c=>c.q.operation==='reconciliationPlatforms').length,2);
+ const r=await h.loader.load(query({offset:20}));assert.equal(r.rows.length,0);assert.equal(r.batch.pageFailures.length,1);assert.match(r.batch.pageFailures[0].message,/数据已更新/);assert.equal(r.batch.partial,true);assert.equal(r.batch.refreshRequired,true);
+ const reads=h.calls.length;h.loader.cancel();
+ for(const next of [query({offset:40}),query(),query({limit:50})]){
+  const blocked=await h.loader.load(next);assert.equal(h.calls.length,reads,'paging, cached first rows and page-size changes must not reread a stale scope');assert.equal(blocked.rows.length,0);assert.equal(blocked.sourceStatus,'partial');assert.equal(blocked.batch.partial,true);assert.equal(blocked.batch.refreshRequired,true);assert.match(blocked.batch.pageFailures[0].message,/点击查询/);assert.equal(blocked.summary.pendingCount,50,'the retained summary remains explicitly stale');
+ }
+ const refreshed=await h.loader.load(query(),{refresh:true});assert.equal(h.calls.length,reads+2);assert.equal(h.calls.filter(c=>c.q.operation==='reconciliationPlatforms').length,2);assert.equal(refreshed.total,51);assert.equal(refreshed.rows.length,20);assert.equal(refreshed.sourceStatus,'ready');assert.equal(refreshed.batch.refreshRequired,false);assert.equal(refreshed.batch.pageFailures.length,0);
+});
+test('a changed platform stops the remaining page reads and suppresses rows from earlier platform intervals',async()=>{
+ let changed=false;const totals={A:50,B:40,C:30};const h=harness(q=>q.operation==='reconciliationPlatforms'?directory(['A','B','C']):response(q.filters.platform,q,totals[q.filters.platform]+(changed&&q.filters.platform==='B'?1:0)));await h.loader.load(query());changed=true;
+ const before=h.calls.length,result=await h.loader.load(query({offset:40,limit:100}));assert.deepEqual(h.calls.slice(before).map(c=>c.q.filters.platform),['A','B'],'do not start C after B invalidates the snapshot');assert.equal(result.rows.length,0,'do not mix earlier A rows with a stale global page');assert.equal(result.batch.refreshRequired,true);assert.equal(result.batch.partial,true);assert.equal(result.batch.pageFailures[0].platform,'B');
+});
+test('clear, changed authorization scope and changed committed filters discard the stale marker and old data',async()=>{
+ for(const reset of ['clear','scope','filters']){
+  let changed=false;const h=harness(q=>q.operation==='reconciliationPlatforms'?directory([h.root.scope==='scope-b'?'AUTHORIZED-B':'A']):response(q.filters.platform,q,changed?51:50));await h.loader.load(query());changed=true;await h.loader.load(query({offset:20}));const reads=h.calls.length;
+  let next=query();if(reset==='clear')h.loader.clear();if(reset==='scope')h.root.scope='scope-b';if(reset==='filters')next={...next,filters:{...next.filters,from:'2026-10-02'}};
+  const result=await h.loader.load(next);assert.equal(h.calls.length,reads+2);assert.equal(result.sourceStatus,'ready');assert.equal(result.batch.refreshRequired,false);assert.equal(result.total,51);assert.equal(result.rows[0].platform,reset==='scope'?'AUTHORIZED-B':'A');if(reset==='scope'){assert.deepEqual(plain(result.platforms),['AUTHORIZED-B']);assert.equal(result.rows.some(r=>r.platform==='A'),false);}
+ }
 });
 test('malformed directories and out-of-scope or truncated child responses cannot masquerade as successful reads',async()=>{
  const dup=harness(()=>directory(['A','A']));await assert.rejects(dup.loader.load(query()),/授权工单平台目录/);assert.equal(dup.calls.length,1);
@@ -85,6 +100,13 @@ test('UI all-failed response says unknown rather than no orders, and bundled pro
 test('UI never presents page errors or incomplete zero results as no orders in the entire scope',async()=>{
  const failedPage=uiHarness(q=>q.operation==='reconciliationPlatforms'?Promise.resolve(directory(['A'])):q.offset>0?Promise.reject(Error('page timeout')):Promise.resolve(response('A',q,50)));await failedPage.api.load(true);await failedPage.root.workorderOperationsPage(2);await tick();assert.match(failedPage.html(),/当前页读取失败，不能判断本页订单/);assert.doesNotMatch(failedPage.html(),/当前条件下没有未登记未成功订单/);assert.equal(failedPage.api.state().result.summary.pendingCount,50);
  const partialZero=uiHarness(q=>q.operation==='reconciliationPlatforms'?Promise.resolve(directory(['A','B'])):q.filters.platform==='B'?Promise.reject(Error('timeout')):Promise.resolve(response('A',q,0)));await partialZero.api.load(true);assert.match(partialZero.html(),/已读取平台未发现当前分类订单；其余平台尚未读取/);assert.doesNotMatch(partialZero.html(),/当前条件下没有未登记未成功订单/);
+});
+
+test('UI keeps a stale-page error through navigation until the Query button explicitly refreshes it',async()=>{
+ let total=60;const h=uiHarness(q=>Promise.resolve(q.operation==='reconciliationPlatforms'?directory(['A']):response('A',q,total)));await h.api.load(true);total=61;
+ h.root.workorderOperationsPage(2);await tick();const reads=h.calls.length;
+ for(const page of [3,1]){h.root.workorderOperationsPage(page);await tick();assert.equal(h.calls.length,reads);assert.equal(h.api.state().result.batch.refreshRequired,true);assert.match(h.html(),/数据已更新，请点击查询刷新汇总与分页/);assert.match(h.html(),/当前页读取失败，不能判断本页订单/);assert.doesNotMatch(h.html(),/当前条件下没有未登记未成功订单/);}
+ await h.root.workorderOperationsLoad(true);assert.equal(h.calls.length,reads+2);assert.equal(h.api.state().result.total,61);assert.equal(h.api.state().result.batch.refreshRequired,false);assert.doesNotMatch(h.html(),/数据已更新，请点击查询刷新汇总与分页/);
 });
 
 test('editing a busy order/date input cancels reads and refreshes only results, preserving focus and enabling Query',async()=>{
