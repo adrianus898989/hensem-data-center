@@ -20,6 +20,7 @@
  function resolvePlatforms(selected,seeds){
   const ids=new Set(),unsupported=[];
   for(const p of selected||[]){
+   if(p.capabilities?.pendingSnapshotAvailable===false){unsupported.push({id:p.id||'',name:p.name||'未提供平台名',state:'unsupported',reason:'此来源未接入代付中存量'});continue;}
    if(uuid(p.id)){ids.add(p.id.toLowerCase());continue;}
    const candidates=(seeds||[]).filter(s=>uuid(s.id)&&s.country===p.country&&String(s.team||'__unassigned__')===String(p.team||'__unassigned__')&&[...names(s)].some(n=>names(p).has(n))),matches=[...new Set(candidates.map(s=>s.id.toLowerCase()))];
    if(matches.length===1)ids.add(matches[0]);else unsupported.push({id:p.id||'',name:p.name||'未提供平台名',state:'unsupported',reason:matches.length?'目录身份待核对':'尚无可查询的待付目录'});
@@ -72,7 +73,7 @@
    const validCurrency=value=>typeof value==='string'&&value.trim()!=='';
    const rows=selected.map(p=>{
     const found=results.filter(r=>r.platform?.id===p.id),failure=failures.find(f=>f.id===p.id),base={...p,selectedIds:[p.id],coverageScope:'queried_creation_range',count:null,amount:null,knownCount:null,knownAmount:null,wholeStockComplete:false,settlementAmounts:[],groups:[],observedAt:null};
-    if(p.reportOnly)return {...base,state:'unsupported',reason:'orders_not_available'};
+    if(p.reportOnly||p.capabilities?.pendingSnapshotAvailable===false)return {...base,state:'unsupported',reason:'orders_not_available'};
     if(!native.has(p.id)||!found.length||failure)return {...base,state:'missing',reason:failure?'orders_query_failed':'orders_not_read',error:failure?.message||''};
     if(found.length!==1||!Array.isArray(found[0].summary))return {...base,state:'invalid',reason:'orders_response_invalid'};
     const result=found[0],parts=sourceParts(result);

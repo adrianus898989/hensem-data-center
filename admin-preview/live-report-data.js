@@ -52,7 +52,7 @@
  const feedSource=feed=>['GAME66_HK','GAME66_RED_CRAB'].includes(token(feed.system))&&legacyTeams[token(feed.system)]===sourceIdentity(feed).group?'game66':feed.system;
  const feedMatchesSources=(feed,sources)=>!values(sources).length||!feed.system||['REPORT','SHEET','RECHARGE_REVIEW','WITHDRAW_REVIEW'].includes(String(feed.system).toUpperCase())||values(sources).some(value=>sameSource(value,feedSource(feed)));
  const sourceLabel=kind=>({direct:'直接写入 Supabase',google_sheets:'Google 表格 → Supabase',google_sheets_live:'Google 表格',mixed:'混合来源，待核对',unknown:'来源链路待核对'})[kind]||'来源链路待核对';
- root.HensemLiveReportData={normalizeIdentity,identityKey:keyFor,confirmedAliasKey:row=>confirmedRaja(row)?keyFor(row):null,create({L,E,N,C,R,request,render}){
+ root.HensemLiveReportData={normalizeIdentity,identityKey:keyFor,confirmedAliasKey:row=>confirmedRaja(row)?keyFor(row):null,create({L,E,N,C,R,request,render,nativeCatalog}){
   const S={catalogRows:[],catalogLoaded:false,catalogBusy:false,catalogError:'',catalogSerial:0,catalogAt:0,loading:false,error:'',result:null,serial:0,scope:null,scopeKey:'',expanded:new Set(),tabs:new Map()};let catalogPending=null,loadPending=null,completed=null;
   const notify=()=>{if(typeof render==='function')render()};
   let catalogMemo=null;
@@ -61,6 +61,7 @@
    // many scope/filter lookups in one render, not across refreshed directories.
    const inputs=[L.catalog,L.withdrawCatalog,S.catalogRows];
    if(catalogMemo&&inputs.every((rows,index)=>rows===catalogMemo.inputs[index]&&(rows?.length||0)===catalogMemo.lengths[index]))return catalogMemo.rows;
+   const nativePlatforms=typeof nativeCatalog==='function'?nativeCatalog():L.catalog||[];
    // Link report names only to an already-authorized native identity. Keep
    // raw feed keys for reads; ambiguous aliases and other countries stay apart.
    const aliases=new Map(),nativeSources=new Map(),aliasKey=row=>{
@@ -68,7 +69,7 @@
     const normalized=['IN','INDIA','印度'].includes(token(country))?token(name).replace(/^(DHANI|VEER|SHREE)[.]/,'$1'):name;
     return keyFor({...row,name:normalized});
    };
-   for(const p of L.catalog||[])for(const name of [p.name,p.sourceName,...(sameSource(p.source,'wg')?[p.source_name]:[])].filter(Boolean)){
+   for(const p of nativePlatforms)for(const name of [p.name,p.sourceName,...(sameSource(p.source,'wg')?[p.source_name]:[])].filter(Boolean)){
     const alias=aliasKey({...p,name}),key=keyFor(p);if(!aliases.has(alias))aliases.set(alias,new Set());aliases.get(alias).add(key);
     if(!nativeSources.has(key))nativeSources.set(key,new Set());nativeSources.get(key).add(p.source);
    }
@@ -83,11 +84,11 @@
    };
    // Realtime WG orders replace the same authorized platform's old business
    // summaries. Configuration feeds and other backends remain independent.
-   const wgNativeKeys=new Set((L.catalog||[]).filter(p=>sameSource(p.source,'wg')).map(keyFor));
+   const wgNativeKeys=new Set(nativePlatforms.filter(p=>sameSource(p.source,'wg')).map(keyFor));
    const groups=new Map(),seeds=new Map();for(const seed of L.withdrawCatalog||[]){if(!seed.name||legacyPanghu.has(token(seed.name)))continue;const key=directoryKey(seed);if(!seeds.has(key))seeds.set(key,seed);if(!groups.has(key))groups.set(key,[])}for(const f of S.catalogRows){const key=directoryKey(f);if(sameSource(f.system,'wg')&&datasets.has(f.dataset)&&wgNativeKeys.has(key))continue;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(f)}
-   const orderGroups=new Map();for(const p of L.catalog||[]){const key=keyFor(p);if(!orderGroups.has(key))orderGroups.set(key,[]);orderGroups.get(key).push(p)}
+   const orderGroups=new Map();for(const p of nativePlatforms){const key=keyFor(p);if(!orderGroups.has(key))orderGroups.set(key,[]);orderGroups.get(key).push(p)}
    const reportTeams=feeds=>[...new Set(feeds.map(f=>normalizeIdentity(f).team).filter(t=>!['__unassigned__','__team_pending__','__team_conflict__','归属待核对'].includes(t)))];
-   const chosenNative=(L.catalog||[]).filter(p=>{if(!confirmedRaja(p))return true;const peers=(orderGroups.get(keyFor(p))||[]).filter(confirmedRaja),preferred=peers.find(x=>token(x.sourceName||x.name)==='RAJA')||peers[0];return p===preferred});
+   const chosenNative=nativePlatforms.filter(p=>{if(!confirmedRaja(p))return true;const peers=(orderGroups.get(keyFor(p))||[]).filter(confirmedRaja),preferred=peers.find(x=>token(x.sourceName||x.name)==='RAJA')||peers[0];return p===preferred});
    // Review snapshots used a plain report key before joining the confirmed
    // alias. Retain those observed, same-scope IDs for saved filter selections.
    // The confirmed M8 AR saved key also works without loading source reports.
