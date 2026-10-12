@@ -50,10 +50,31 @@
  function create(c){
   const {L,E,N,C}=c;
   let serial=0,task=null,active=null,queued=null,S={status:'idle',key:'',data:null,unsupported:[],error:''};
+  // Successful historical reads only, scoped to this document and authorization
+  // context. No local/session storage, error caching, or current-order snapshots.
+  const cache=new Map(),cacheTTL=300000,cacheEntries=32,cacheBytes=4*1024*1024,cacheItemBytes=1024*1024;
+  let cacheSize=0,cacheAccess='';
+  const encode=value=>JSON.stringify(value,(_key,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.keys(item).sort().map(key=>[key,item[key]])):item);
+  const bytes=value=>{let size=0;for(const char of value){const code=char.codePointAt(0);size+=code<=127?1:code<=2047?2:code<=65535?3:4;}return size;};
+  const clock=()=>{const value=c.cacheNow?.()??Date.now();return Number.isFinite(value)?value:Date.now();};
+  const forget=key=>{const entry=cache.get(key);if(entry){cacheSize-=entry.bytes;cache.delete(key);}};
+  const clearCache=()=>{cache.clear();cacheSize=0;};
+  const access=()=>{let value='';try{const context=c.accessContext?.();if(typeof context==='string'&&context.trim()||context&&typeof context==='object'&&!Array.isArray(context)&&Object.keys(context).length)value=encode(context)||'';}catch{}if(value!==cacheAccess){clearCache();cacheAccess=value;}return value;};
   const zone=()=>c.scopeZone?.()||c.selected().find(p=>p.timezone)?.timezone||'UTC';
-  const scope=()=>{const mapped=resolvePlatforms(c.selected(),L.withdrawCatalog),providers=[...new Set(c.providers().filter(Boolean))].sort(),timezone=zone(),period=requestPeriod(String(L.to||'').slice(0,10),timezone,L.queryNow||Date.now());return {...mapped,request:{action:'pendingSnapshot',...period,platformIds:mapped.platformIds,...(providers.length?{providers}:{})},country:L.country,timezone};};
-  const key=q=>JSON.stringify([q.country,q.timezone,q.request,q.unsupported.map(p=>[p.id,p.name]),...(q.request.mode==='current'?[L.from,L.to,L.direction,L.status,c.selected().map(p=>p.id)]:[])]);
+  const scope=()=>{const selected=c.selected(),mapped=resolvePlatforms(selected,L.withdrawCatalog),providers=[...new Set(c.providers().filter(Boolean))].sort(),timezone=zone(),period=requestPeriod(String(L.to||'').slice(0,10),timezone,L.queryNow||Date.now()),filters=Object.fromEntries(['from','to','country','currency','team','source','platform','provider','direction','status','multi','orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'].map(field=>[field,L[field]??null]));return {...mapped,request:{action:'pendingSnapshot',...period,platformIds:mapped.platformIds,...(providers.length?{providers}:{})},country:L.country,timezone,access:access(),selection:encode(selected),filters:encode(filters)};};
+  const key=q=>encode([q.access,q.country,q.timezone,q.request,q.unsupported,q.selection,q.filters]);
   const sameScope=q=>{try{return key(q)===key(scope())}catch{return false}};
+  const completeForCache=(q,r)=>q.access&&q.request.mode==='midnight'&&!q.unsupported.length&&c.catalogComplete?.()!==false&&r.complete===true&&r.receivedPlatformCount===r.expectedPlatformCount&&(r.missingPlatforms===undefined||Array.isArray(r.missingPlatforms)&&!r.missingPlatforms.length)&&r.rows.every(row=>row.state==='complete'&&row.wholeStockComplete===true&&row.groupsLimited!==true&&[row,...row.groups].every(group=>(group.state===undefined||group.state==='complete')&&group.wholeStockComplete!==false&&countKnown(group.count)&&known(group.amount)&&group.settlementAmounts.every(value=>value.state==='complete'&&Number(value.missingCount)===0)));
+  function cached(q){
+   if(!q.access||q.request.mode!=='midnight'||q.unsupported.length||c.catalogComplete?.()===false)return null;
+   const now=clock();for(const [id,entry]of cache)if(now<entry.savedAt||now>=entry.savedAt+cacheTTL)forget(id);
+   const id=key(q),entry=cache.get(id);if(!entry)return null;
+   try{const data=validateResponse(JSON.parse(entry.json),q);if(!completeForCache(q,data)){forget(id);return null;}cache.delete(id);cache.set(id,entry);return {data,cachedAt:entry.savedAt};}catch{forget(id);return null;}
+  }
+  function remember(q,r){
+   if(!completeForCache(q,r))return;
+   try{const id=key(q),json=JSON.stringify(r),size=bytes(id)+bytes(json);if(size>cacheItemBytes)return;forget(id);while(cache.size>=cacheEntries||cacheSize+size>cacheBytes)forget(cache.keys().next().value);cache.set(id,{json,bytes:size,savedAt:clock()});cacheSize+=size;}catch{}
+  }
   // Invalidate publication, not the transport lock. The bridge cancels/bounds
   // its request; a replacement must still wait until that promise settles.
   const cancel=()=>{serial++;queued=null;if(S.status==='loading')S={...S,status:'paused',data:null,error:'读取已暂停，点击重试'};};
@@ -106,7 +127,8 @@
   const totals=s=>({amount:value(s,'amount',N),count:value(s,'count',C)});
   const coverageCounts=s=>({expected:(s.data?.expectedPlatformCount||0)+s.unsupported.length,full:(s.data?.rows||[]).filter(r=>r.wholeStockComplete).length,stored:(s.data?.rows||[]).filter(r=>r.wholeStockComplete||Number(r.knownCount)>0||Number(r.knownAmount)>0||['partial','stale'].includes(r.state)&&r.captureId&&Number.isFinite(Date.parse(r.observedAt))).length});
   const missing=s=>{const n=coverageCounts(s);return Math.max(0,n.expected-n.full)};
-  const status=s=>s.data?.basis==='created_range_latest_pending_orders'?(s.status==='loading'?'正在读取订单 · ':s.status==='paused'?'订单读取已暂停 · ':s.data.complete?'已读取 ':'已读取小计 · ')+C(s.data.receivedPlatformCount)+'/'+C(s.data.expectedPlatformCount)+' 平台'+(s.data.receivedPlatformCount<s.data.expectedPlatformCount?' · '+C(s.data.expectedPlatformCount-s.data.receivedPlatformCount)+' 未读取':'')+(s.data.multiCurrency?' · 多币种金额不相加':s.data.rows.some(r=>r.read&&!r.amountComplete)?' · 金额待补齐':'')+(s.data.rows.some(r=>r.read&&!r.countComplete)?' · 笔数待补齐':''):s.status==='loading'?'正在读取待付存量…':s.status==='error'?('待付读取失败：'+s.error):s.status==='paused'?s.error:!s.data?(current()?'点击查询读取代付订单':'点击查询读取待付存量'):complete(s)?'已核实 '+C(s.data.expectedPlatformCount)+' 平台':(positive(s)?'已入库小计':'暂无已核实合计')+' · 入库 '+C(coverageCounts(s).stored)+'/'+C(coverageCounts(s).expected)+(catalogComplete()?' · '+C(missing(s))+' 未完整':' · 平台目录待确认（仅已知平台）');
+  const cacheHint=s=>{if(!s.cacheHit)return '';const now=clock(),expired=!Number.isFinite(s.cachedAt)||now<s.cachedAt||now>=s.cachedAt+cacheTTL;return ' · 缓存读取于 '+time(s.data?.queriedAt,zone())+(expired?' · 缓存已过期，查询更新':'');};
+  const status=s=>s.data?.basis==='created_range_latest_pending_orders'?(s.status==='loading'?'正在读取订单 · ':s.status==='paused'?'订单读取已暂停 · ':s.data.complete?'已读取 ':'已读取小计 · ')+C(s.data.receivedPlatformCount)+'/'+C(s.data.expectedPlatformCount)+' 平台'+(s.data.receivedPlatformCount<s.data.expectedPlatformCount?' · '+C(s.data.expectedPlatformCount-s.data.receivedPlatformCount)+' 未读取':'')+(s.data.multiCurrency?' · 多币种金额不相加':s.data.rows.some(r=>r.read&&!r.amountComplete)?' · 金额待补齐':'')+(s.data.rows.some(r=>r.read&&!r.countComplete)?' · 笔数待补齐':''):s.status==='loading'?'正在读取待付存量…':s.status==='error'?('待付读取失败：'+s.error):s.status==='paused'?s.error:!s.data?(current()?'点击查询读取代付订单':'点击查询读取待付存量'):complete(s)?'已核实 '+C(s.data.expectedPlatformCount)+' 平台'+cacheHint(s):(positive(s)?'已入库小计':'暂无已核实合计')+' · 入库 '+C(coverageCounts(s).stored)+'/'+C(coverageCounts(s).expected)+(catalogComplete()?' · '+C(missing(s))+' 未完整':' · 平台目录待确认（仅已知平台）');
   const subtitle=()=>{const s=view();if(current()){const from=String(L.from||'').slice(0,10),to=String(L.to||'').slice(0,10);return (from===to?to:from+' 至 '+to)+' · '+zone()+(s.data?' · 查询 '+time(s.data.queriedAt,zone()).slice(11):'');}return String(L.to||'').slice(0,10)+' 00:00 · '+zone()};
   const retry=s=>current()?(s.status==='paused'||s.data?.rows.some(r=>r.reason==='orders_query_failed')?' <button type="button" class="link" onclick="livePendingSnapshotRetry()">'+(s.status==='paused'?'继续读取':'重试未完成平台')+'</button>':''):['error','paused'].includes(s.status)||s.status==='ready'&&!complete(s)?' <button type="button" class="link" onclick="livePendingSnapshotRetry()">重试</button>':'';
   async function read(job){
@@ -116,11 +138,15 @@
     if(q.request.mode==='current'){S={status:'idle',key:key(q),data:null,unsupported:[],error:''};c.render();return;}
     if(!q.request.platformIds.length)throw Error(q.unsupported.length?'所选平台尚无可查询的待付目录':'当前范围没有可查询平台');
     if(q.request.platformIds.length>250)throw Error('平台超过250个，请缩小筛选范围');
+    if(job.force)forget(job.key);
+    const hit=job.force?null:cached(q);
+    if(hit){S={...S,status:'ready',data:hit.data,error:'',cacheHit:true,cachedAt:hit.cachedAt};c.render();return;}
     // hensemLiveRequest owns the finite 90-second transport deadline. Do not
     // race it with a timer that could unlock while the old request is live.
     const r=await c.request(q.request);if(id!==serial||!sameScope(q)||!canLoad())return;
-    S={...S,status:'ready',data:validateResponse(r,q),error:''};
-   }catch(error){if(id!==serial||!sameScope(q)||!canLoad())return;S={...S,status:'error',data:null,error:error?.message||'暂时无法读取'};}
+    const data=validateResponse(r,q);remember(q,data);
+    S={...S,status:'ready',data,error:'',cacheHit:false,cachedAt:null};
+   }catch(error){if(/401|403|permission|denied|login_required|session_expired|权限|会话失效/i.test(String(error?.code||'')+' '+String(error?.message||'')))clearCache();if(id!==serial||!sameScope(q)||!canLoad())return;S={...S,status:'error',data:null,error:error?.message||'暂时无法读取'};}
    if(id===serial)c.render();
   }
   async function drain(){
@@ -131,15 +157,16 @@
    }
   }
   const startTask=()=>task=Promise.resolve().then(drain).finally(()=>{task=null;if(queued&&canLoad())return startTask();});
-  function load(){
+  function load(force=false){
    // The overview opens this gate only after its primary aggregate workers.
    // A click during those workers cannot start a competing snapshot request.
    if(!canLoad())return task||Promise.resolve();
    let q;try{q=scope()}catch(error){cancel();S={status:'error',key:'',data:null,unsupported:[],error:error.message};c.render();return task||Promise.resolve();}
    if(q.request.mode==='current'){cancel();S={status:'idle',key:key(q),data:null,unsupported:[],error:''};c.render();return Promise.resolve();}
    const nextKey=key(q),latest=queued||active;
-   if(latest?.id===serial&&latest.key===nextKey)return task;
-   queued={id:++serial,q,key:nextKey};S={status:'loading',key:nextKey,data:null,unsupported:q.unsupported,error:''};
+   if(!force&&latest?.id===serial&&latest.key===nextKey)return task;
+   if(force)forget(nextKey);
+   queued={id:++serial,q,key:nextKey,force:force===true};S={status:'loading',key:nextKey,data:null,unsupported:q.unsupported,error:'',cacheHit:false,cachedAt:null};
    // One latest-only queue serves explicit retries and late catalog refreshes.
    // All callers await its drain, including a refresh queued during the read.
    if(!task)startTask();
@@ -174,7 +201,7 @@
    const body='<div class="live-definition">'+E(subtitle())+' · '+E(status(s))+'</div>'+coverageDetails+'<div class="live-table"><table><thead><tr><th>平台</th><th>来源 / 状态</th><th>覆盖范围</th><th>笔数</th><th>金额</th><th>法币</th><th>原生结算金额</th><th>源刷新时间</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+E(r.name||'—')+'</td><td>'+E(r.source||'—')+' · '+E(stateLabel(r))+(r.reason?'<small>'+E(reasons[r.reason]||r.reason)+'</small>':'')+'</td><td>'+E(coverage(r))+'</td><td>'+rowValue(r,'count',C)+'</td><td>'+rowValue(r,'amount',N)+'</td><td>'+E(r.currency||'—')+'</td><td>'+settlements(r.settlementAmounts)+'</td><td>'+E(time(r.observedAt,r.timezone))+(r.lastRecordAt?'<small>入库 '+E(time(r.lastRecordAt,r.timezone))+'</small>':'')+'</td></tr>'+(r.groups?.length?'<tr><td colspan="8">'+groups(r)+'</td></tr>':'')).join('')+'</tbody></table></div>';
    openDetails(title()+' · 平台明细',body);
   }
-  return {load,cancel,refreshScope,metric,summary,details,title,subtitle,detailLabel:()=> '平台明细 →',capture:()=>({...S,status:S.status==='loading'?'paused':S.status,error:S.status==='loading'?'读取已暂停，点击重试':S.error}),restore:value=>{cancel();S=value?{...value}: {status:'idle',key:'',data:null,unsupported:[],error:''};},get state(){return current()?view():S}};
+  return {load,cancel,refreshScope,metric,summary,details,title,subtitle,detailLabel:()=> '平台明细 →',capture:()=>{const s=view();return {...s,status:s.status==='loading'?'paused':s.status,error:s.status==='loading'?'读取已暂停，点击重试':s.error};},restore:value=>{cancel();S=value?{...value}: {status:'idle',key:'',data:null,unsupported:[],error:''};},get state(){return view()}};
  }
  root.HensemLivePendingSnapshot={create,resolvePlatforms,requestPeriod};
  if(typeof module!=='undefined')module.exports={create,resolvePlatforms,requestPeriod};

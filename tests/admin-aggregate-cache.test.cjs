@@ -16,6 +16,22 @@ test('merchant repeat query reuses both periods; dedicated refresh bypasses cach
  h.setNow('2026-09-23T12:01:00Z');await h.c.liveQuery();await settle();assert.equal(queries(h).length,2);assert.equal(h.calls.length,allCalls,'same merchant query starts no extra RPC');assert.equal(h.L.results[0]._aggregateReadAt,original);assert.equal(h.L.results[0]._aggregateCacheHit,true);assert.match(h.nodes.get('liveFilters').innerHTML,/liveQuery\(true\)/);assert.match(h.nodes.get('liveFilters').innerHTML,/数据读取[^]*缓存/);
  await h.c.liveQuery(true);await settle();assert.equal(queries(h).length,4);assert.equal(h.L.results[0]._aggregateCacheHit,false);assert(h.L.results[0]._aggregateReadAt>original);
 });
+test('overview normal query reuses complete reads, displays original read time, and refresh bypasses cache',async()=>{
+ const h=await ready();h.c.setPage('overview');await settle();await h.c.liveQuery();await settle();const before=queries(h).length,readAt=h.L.results[0]._aggregateReadAt;
+ assert(before>0);h.setNow('2026-09-23T12:00:20Z');await h.c.liveQuery();await settle();assert.equal(queries(h).length,before);assert.equal(h.L.results[0]._aggregateReadAt,readAt);assert.equal(h.L.results[0]._aggregateCacheHit,true);assert.match(h.nodes.get('liveFilters').innerHTML,/liveQuery\(true\)/);assert.match(h.nodes.get('liveFilters').innerHTML,/数据读取[^]*缓存/);
+ await h.c.liveQuery(true);await settle();assert(queries(h).length>before);assert.equal(h.L.results[0]._aggregateCacheHit,false);assert(h.L.results[0]._aggregateReadAt>readAt);
+});
+test('live overview cache retains its exact as-of boundary, then advances on expiry or explicit refresh',async()=>{
+ const h=await ready();h.c.setPage('overview');await settle();h.L.from='2026-09-23T00:00:00';h.L.to='2026-09-23T23:59:59';h.L.dirty=true;await h.c.liveQuery();await settle();const before=queries(h).length,asOf=h.L.queryNow,end=h.L.results[0].endAt;
+ h.setNow('2026-09-23T12:00:20Z');await h.c.liveQuery();await settle();assert.equal(queries(h).length,before);assert.equal(h.L.queryNow,asOf);assert.equal(h.L.results[0].endAt,end);
+ h.setNow('2026-09-23T12:00:30Z');await h.c.liveQuery();await settle();assert(queries(h).length>before);assert(h.L.queryNow>asOf);assert(Date.parse(h.L.results[0].endAt)>Date.parse(end));const advanced=h.L.queryNow;
+ h.setNow('2026-09-23T12:00:35Z');await h.c.liveQuery(true);await settle();assert(h.L.queryNow>advanced);assert.equal(h.L.results[0]._aggregateCacheHit,false);
+});
+test('host query propagates normal or forced refresh to supplementary caches without launching the phase scheduler on overview',async()=>{
+ const members=[],snapshots=[];const h=harness({extraModules:['live-member-counts.js','live-pending-snapshot.js'],beforeLive(c){for(const [name,method,observed]of [['HensemLiveMemberCounts','beginQuery',members],['HensemLivePendingSnapshot','load',snapshots]]){const create=c[name].create;c[name].create=config=>{const api=create(config),run=api[method];api[method]=force=>{observed.push(force);return run(force)};return api;};}}});await settle();h.setHandler(q=>q.action==='aggregate'?response(q):{rows:[],providers:[]});h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';
+ await h.c.liveQuery();await settle();assert.equal(members.at(-1),false);assert.equal(snapshots.at(-1),false);
+ await h.c.liveQuery(true);await settle();assert.equal(members.at(-1),true);assert.equal(snapshots.at(-1),true);assert.equal(h.L.loading,false);
+});
 test('history providers expire at five minutes; current and asOf-dependent full responses at thirty seconds',async()=>{
  for(const [q,ttl] of [[request(),300000],[request({view:'full'}),30000],[request({startAt:'2026-09-23T00:00:00Z',endAt:'2026-09-23T12:00:00Z'}),30000]]){
   const h=await ready();await read(h,q);const initial=queries(h).length;h.setNow(new Date(Date.parse('2026-09-23T12:00:00Z')+ttl-1).toISOString());const hit=await read(h,q);assert.equal(queries(h).length,initial);assert.equal(hit._aggregateCacheHit,true);h.setNow(new Date(Date.parse('2026-09-23T12:00:00Z')+ttl).toISOString());await read(h,q);assert.equal(queries(h).length,initial+1);

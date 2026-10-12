@@ -89,6 +89,8 @@
  // Aggregate report pages share one query-owned heavy-read lane. Waiting
  // phases do not invoke transport or start its execution deadline.
  const usesReadPhases=page=>!!providerDirection(page)||page==='merchants';
+ // Cache policy is independent from the heavy-read phase scheduler.
+ const usesQueryCache=page=>page==='overview'||usesReadPhases(page);
  let readPhase=null,deferredMerchantTrend=false;
  const phasedReadBusy=()=>!!readPhase&&readPhase.serial===L.serial&&readPhase.page===state.page;
  function beginReadPhases(serial){if(!usesReadPhases(state.page))return;readPhase={serial,page:state.page,label:'读取当期订单'};cancelFeeLookup();window.HensemLiveSyncHealth?.cancel?.();window.hensemLiveCancelRequests?.(['syncHealth']);}
@@ -563,21 +565,23 @@
  const pendingCatalogComplete=()=>{const chosen=activeValues('platform');return !reportData||chosen.length>0&&chosen.every(id=>selectedVisible().some(p=>p.id===id||(p.aliasPlatformIds||[]).includes(id)))||reportData.state.catalogLoaded&&!reportData.state.catalogBusy&&!reportData.state.catalogError;};
  // Midnight snapshots use the same authorized base directories as pending analysis;
  // an unrelated historical report inventory timeout must not block their read.
- pendingSnapshot=window.HensemLivePendingSnapshot?.create({L,E,N,C,scopeZone,selected:selectedVisible,providers:()=>activeValues('provider',''),currentOrders:()=>({platforms:L.queryPlatforms,results:L.results,loading:L.loading,retrying:L.queryRetrying,paused:L.queryPaused,failures:L.queryFailures,queriedAt:new Date(L.queryNow).toISOString(),scopeMatches:!L.dirty&&L.queryScope===aggregateQueryScope()&&state.page==='overview',status:L.status}),canLoad:()=>state.page==='overview'&&L.direction!=='charge'&&!L.queryRetrying&&(!L.loading||pendingSnapshotPhase===L.serial),prepare:preparePendingCatalog,catalogComplete:pendingCatalogComplete,request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
+ pendingSnapshot=window.HensemLivePendingSnapshot?.create({L,E,N,C,accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():'',scopeZone,selected:selectedVisible,providers:()=>activeValues('provider',''),currentOrders:()=>({platforms:L.queryPlatforms,results:L.results,loading:L.loading,retrying:L.queryRetrying,paused:L.queryPaused,failures:L.queryFailures,queriedAt:new Date(L.queryNow).toISOString(),scopeMatches:!L.dirty&&L.queryScope===aggregateQueryScope()&&state.page==='overview',status:L.status}),canLoad:()=>state.page==='overview'&&L.direction!=='charge'&&!L.queryRetrying&&(!L.loading||pendingSnapshotPhase===L.serial),prepare:preparePendingCatalog,catalogComplete:pendingCatalogComplete,request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
  pendingOrders=window.HensemPendingOrders?.create({E,N,C,active:()=>state.page==='stuck'&&!L.dirty,scope:()=>JSON.stringify([L.from,L.to,L.country,L.team,L.source,L.platform,L.multi]),canDetail:()=>roleAllowed('stuck','detail'),request:r=>window.hensemLiveRequest(r),open:(title,html)=>openDrawer(title,html)})||null;
  // Snapshot identities are already in the authorized core/withdrawal catalog.
  // The historical report inventory adds no authority and must not gate this read.
  pendingAnalysis=window.HensemLivePendingAnalysis?.create({L,E,N,C,canDetail:()=>roleAllowed('stuck','detail'),openDetail:input=>pendingOrders?.open(input),selected:selectedVisible,providers:()=>activeValues('provider',''),prepare:()=>{if(!L.catalogReady||!Array.isArray(L.catalog)||!Array.isArray(L.withdrawCatalog))throw Error('快照平台目录尚未就绪，请重试读取目录')},request:r=>window.hensemLiveRequest(r),render:()=>{if(state.page==='stuck')render()}})||null;
  window.livePendingSnapshotRetry=()=>{
   if(state.page!=='overview'||L.dirty||L.direction==='charge')return;
-  try{if(window.HensemLivePendingSnapshot?.requestPeriod(String(L.to||'').slice(0,10),scopeZone(),L.queryNow).mode==='current')return L.queryFailures.length||L.queryPaused?window.liveRetryFailed(L.queryPaused):window.liveQuery();}catch{}
-  return pendingSnapshot?.load();
+  try{if(window.HensemLivePendingSnapshot?.requestPeriod(String(L.to||'').slice(0,10),scopeZone(),L.queryNow).mode==='current')return L.queryFailures.length||L.queryPaused?window.liveRetryFailed(L.queryPaused):window.liveQuery(true);}catch{}
+  // A retry while the same snapshot is already reading shares that read;
+  // completed/error states explicitly bypass their cached result.
+  return pendingSnapshot?.load(pendingSnapshot.state?.status!=='loading');
  };
  window.livePendingSnapshotDetails=()=>pendingSnapshot?.details();
  channelStatus=window.HensemLiveChannelStatus?.create({L,getPage:()=>state.page,catalog:visibleCatalog,selected:selectedVisible,activeValues,roleAllowed:action=>roleAllowed('channel_status',action),request:r=>window.hensemLiveRequest(r),render:()=>{if(isChannelStatus())render()}})||null;
  dailyComparison=window.HensemLiveDailyComparison?.create({L,E,N,C,R,getPage:()=>state.page,selected:selectedVisible,nativePlatforms:selected,readAggregate:(q,serial)=>readAggregate(q,serial??L.serial,false,true),instant,localClock,activeValues,ensureFeeLookup,scopeZone,render:()=>{if(isDailyComparison())render()},roleAllowed:action=>roleAllowed('daily_comparison',action),allowed:action=>roleAllowed('daily_comparison',action),request:r=>window.hensemLiveRequest(r)})||null;
  submissionAnalysis=window.HensemSubmissionAnalysis?.create({L,E,N,C,dashboard:()=>state.page==='events',selected:selectedVisible,query,request:(r,options)=>window.hensemLiveRequest(r,options),canStart:()=>!phasedReadBusy(),render:()=>render(),open:(title,html)=>openDrawer(title,html),box,table})||null;
- memberCounts=window.HensemLiveMemberCounts?.create({L,E,N,C,selected:selectedVisible,query,request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
+ memberCounts=window.HensemLiveMemberCounts?.create({L,E,N,C,accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():'',selected:selectedVisible,query,request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
  window.liveMemberCountsDetails=(tab,basis)=>memberCounts?.details(tab,basis);
  window.liveMemberCountsRetry=async()=>{
   if(state.page==='overview'&&!L.dirty)return memberCounts?.load();
@@ -658,8 +662,8 @@
    multiSelect('provider','三方',[['','全部三方'],...providerItems.map(p=>[p,p])])+
    (fixedDirection(state.page)||state.page==='provider_daily'?'':state.page==='latency'?select('direction','业务方向',[['charge','代收'],['withdraw','代付']]):multiSelect('direction','业务方向',[['all','全部'],['charge','代收'],['withdraw','代付']]));
   const shortcuts=[['today','今天'],['yesterday','昨日'],['before','前日'],...(!(isSuccessAnalysis()||isDailyComparison())?[['week','近1周'],['month','近1个月']]:[])].map(([k,l])=>'<button type="button" class="btn" '+(k==='today'?'title="'+(state.page==='stuck'?'按当地日期查看实际采集观察；午夜快照以真实采集证明为准':'按所选国家当地日期查看当前已入库数据')+'" ':'')+'onclick="livePeriod(\''+k+'\',false)">'+l+'</button>').join('');
-  const merchantCache=usesReadPhases(state.page)&&L.results.length?'<span class="muted" title="查询可复用本次登录中的完整读取结果；刷新会重新读取。实时汇总缓存30秒，历史汇总最多5分钟。">数据读取 '+E(formatTime(new Date(Math.min(...L.results.map(r=>r._aggregateReadAt||L.queryNow))).toISOString(),scopeZone()))+(L.results.some(r=>r._aggregateCacheHit)?' · 缓存':'')+'</span>':'';
-  const actions='<div class="live-actions live-query-actions"><button type="button" class="btn primary" onclick="liveDateRangeToggle(false);liveQuery()" '+(state.page==='orders'&&!orderPlatform()?'disabled title="请先选择一个商户（平台）"':'')+'>查询</button>'+(usesReadPhases(state.page)?'<button type="button" class="btn" onclick="liveQuery(true)" '+(L.loading||phasedReadBusy()?'disabled':'')+' title="忽略本次登录的查询缓存，重新读取">刷新</button>':'')+'<button type="button" class="btn" onclick="liveReset()">重置</button></div>';
+  const merchantCache=usesQueryCache(state.page)&&L.results.length?'<span class="muted" title="查询可复用本次登录中的完整读取结果；刷新会重新读取。实时汇总缓存30秒，历史汇总最多5分钟。">数据读取 '+E(formatTime(new Date(Math.min(...L.results.map(r=>r._aggregateReadAt||L.queryNow))).toISOString(),scopeZone()))+(L.results.some(r=>r._aggregateCacheHit)?' · 缓存':'')+'</span>':'';
+  const actions='<div class="live-actions live-query-actions"><button type="button" class="btn primary" onclick="liveDateRangeToggle(false);liveQuery()" '+(state.page==='orders'&&!orderPlatform()?'disabled title="请先选择一个商户（平台）"':'')+'>查询</button>'+(usesQueryCache(state.page)?'<button type="button" class="btn" onclick="liveQuery(true)" '+(L.loading||phasedReadBusy()?'disabled':'')+' title="忽略本次登录的查询缓存，重新读取">刷新</button>':'')+'<button type="button" class="btn" onclick="liveReset()">重置</button></div>';
   const search=state.page==='orders'?'<div class="live-search-row">'+input('systemOrderId','系统 ID','text',orderSearchAttributes('systemOrderId','源系统 ID'))+input('orderNumber','订单号')+input('thirdPartyOrderNumber','三方订单号','text',orderSearchAttributes('thirdPartyOrderNumber','三方订单号'))+input('utr','UTR 交易参考','text',orderSearchAttributes('utr','UTR'))+input('memberId','会员 ID','text',orderPlatform()?.capabilities?.memberIdentity===false?'disabled title="当前来源未提供会员身份"':'')+select('status','订单状态',[['all','全部状态'],['success','成功'],['pending','处理中'],['failed','失败'],['rejected','拒绝'],['unknown','未知']])+'</div>'+(wgSuccessFilterBlocked()?'<div class="live-panel-note" data-wg-success-filter>'+E(successFilterNote())+'</div>':''):'';
   const scopeMarkup=isChannelStatus()?'<span>最新通道快照</span><span>'+selectedVisible().filter(p=>p.capabilities?.channelStatusAvailable===true&&!p.reportOnly).length+' / '+selectedVisible().length+' 平台已接入</span><span>手动查询更新</span>':(!L.catalogReady?'<span>'+(L.catalogLoading?'平台目录读取中…':'暂未读到平台目录，请重试')+'</span>':directoryCoverage()+'<span>'+(L.providerOptionsBusy?'读取中':L.providerOptionsError?'目录读取失败':C(activeValues('provider','').length||providerItems.length))+' 三方</span><span>'+C(new Set(selectedVisible().map(platformTeam).filter(t=>!['__unassigned__','__team_pending__','__team_conflict__','归属待核对'].includes(t))).size)+' 团队</span><span>'+C(new Set(selectedVisible().map(p=>p.country)).size)+' 国家</span><span>'+E(zones.length===1?zones[0]:'各国家当地时间')+'</span><span>手动查询更新</span>'+(fullCatalog.some(p=>platformTeam(p)==='__team_pending__')?'<span>部分平台团队待读取</span>':'')+(fullCatalog.some(p=>['__team_conflict__','归属待核对'].includes(platformTeam(p)))?'<span>部分平台归属待核对</span>':''));
   // Native date/time change can fire during pointer-down on Query/Done. Keep
@@ -1044,7 +1048,7 @@
  }
 
 
-  window.liveQuery=function(force=!usesReadPhases(state.page)){return window.liveLoad(force,true)};
+  window.liveQuery=function(force=!usesQueryCache(state.page)){return window.liveLoad(force,true)};
   window.liveLoad=async function(force=true,manual=false){
   if((isTeamWorkspace(state.page)||isSuccessAnalysis()||isDailyComparison()||isChannelStatus())&&!roleAllowed(state.page,'query')){toast('当前角色没有此视图查询权限');return;}
   normalizePageDirection();if((isSuccessAnalysis()||isDailyComparison())&&L.catalogReady&&!successDateValid()){L.error=(isDailyComparison()?'每日对比':'成功率分析')+'每次只查询一个当地日，请重新选择日期';L.dirty=true;render();return;}
@@ -1060,7 +1064,10 @@
   if(state.page==='orders'&&!orderPlatform()){L.serial++;cancelDataReads();L.queryRetrying=false;L.detailSerial++;L.loading=false;L.detailBusy=false;L.results=[];L.detail=null;L.error='';L.queryWarnings=[];L.queryFailures=[];L.queryPlatforms=[];L.queryScope='';L.comparisonResults=[];L.comparisonStatus='idle';L.dirty=true;providerOrders.cancel();loadProviderOptions();render();return}
   const scope=aggregateQueryScope();
   if(!L.catalogReady||(L.loading||phasedReadBusy())&&!L.dirty&&L.inflightScope===scope)return;L.inflightScope=scope;
-  L.restoredPage=false;const platforms=selected();if(force)clearAggregateCache();loadProviderOptions();const serial=++L.serial;cancelDataReads();L.merchantTrend=null;L.overviewIntake=null;L.providerIntake=null;L.providerComparisonIntake=null;L.queryScope=scope;L.queryPaused=false;L.queryPlatforms=platforms.slice();L.queryFailures=[];L.queryRetrying=false;providerOrders.cancel();L.detailSerial++;L.workordersSerial++;L.workorders=null;L.workordersLoading=false;L.workordersError='';L.workordersScope='';L.queryNow=Date.now();L.comparisonResults=[];L.comparisonStatus='idle';L.comparisonError='';L.error='';L.queryWarnings=[];L.dirty=false;L.loading=true;L.progress='正在读取正式订单…';L.detail=null;L.page=1;L.localPage=1;L.tablePages={};L.results=[];L.loadedView=L.status==='all'?aggregateMode():'full';beginReadPhases(serial);render();
+  // Within the real-time TTL reuse the same exact as-of window, not a wider
+  // interval pretending that an older cached result already covers new seconds.
+  const queryNow=!force&&usesQueryCache(state.page)&&!L.dirty&&L.queryScope===scope&&Date.now()>=L.queryNow&&Date.now()-L.queryNow<30000?L.queryNow:Date.now();
+  L.restoredPage=false;const platforms=selected();if(force)clearAggregateCache();loadProviderOptions();const serial=++L.serial;cancelDataReads();L.merchantTrend=null;L.overviewIntake=null;L.providerIntake=null;L.providerComparisonIntake=null;L.queryScope=scope;L.queryPaused=false;L.queryPlatforms=platforms.slice();L.queryFailures=[];L.queryRetrying=false;providerOrders.cancel();L.detailSerial++;L.workordersSerial++;L.workorders=null;L.workordersLoading=false;L.workordersError='';L.workordersScope='';L.queryNow=queryNow;L.comparisonResults=[];L.comparisonStatus='idle';L.comparisonError='';L.error='';L.queryWarnings=[];L.dirty=false;L.loading=true;L.progress='正在读取正式订单…';L.detail=null;L.page=1;L.localPage=1;L.tablePages={};L.results=[];L.loadedView=L.status==='all'?aggregateMode():'full';beginReadPhases(serial);memberCounts?.beginQuery?.(force);render();
   let index=0,done=0;const results=[];let submissionBatch=null;
   try{
    if(!isSuccessAnalysis()&&window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;
@@ -1073,7 +1080,7 @@
     // Keep render-driven supplementary reads gated until the bounded snapshot
     // queue settles. Today's pending value still reads these aggregate results.
     pendingSnapshotPhase=serial;
-    try{await pendingSnapshot?.load();}finally{if(pendingSnapshotPhase===serial)pendingSnapshotPhase=null;}
+    try{await pendingSnapshot?.load(force);}finally{if(pendingSnapshotPhase===serial)pendingSnapshotPhase=null;}
     if(serial!==L.serial)return;
    }
    L.loading=false;

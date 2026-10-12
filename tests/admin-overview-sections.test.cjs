@@ -70,7 +70,7 @@ test('changing filters or leaving overview invalidates late analysis and prevent
 });
 test('a fresh query cancels pending analysis and restarts with compact providers',async()=>{
  const h=await queried(),wait=deferred();h.setHandler(()=>wait.promise);const old=h.c.liveOverviewAnalysis();await settle();
- const calls=[];h.setHandler(async q=>{calls.push(q);return completeAggregate(P,30,15)});await h.c.liveQuery();assert.equal(h.L.overviewSections.status,'idle');assert(calls.filter(q=>q.action==='aggregate').every(q=>q.view==='providers'));
+ const calls=[];h.setHandler(async q=>{calls.push(q);return completeAggregate(P,30,15)});await h.c.liveQuery(true);assert.equal(h.L.overviewSections.status,'idle');assert.equal(calls.filter(q=>q.action==='aggregate').length,2);assert(calls.filter(q=>q.action==='aggregate').every(q=>q.view==='providers'));
  wait.resolve(completeAggregate(P,999,999));await old;assert.equal(h.L.overviewSections.status,'idle');assert.equal(h.L.results[0].total,30);
 });
 test('analysis rendering uses only loaded analysis snapshots and restores core data even on exceptions',async()=>{

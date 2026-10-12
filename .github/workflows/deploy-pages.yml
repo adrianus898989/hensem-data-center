@@ -38,6 +38,7 @@ jobs:
       - run: pnpm test:security-identity
       - run: pnpm test:collector-control
       - run: pnpm test:admin-preview
+      - run: pnpm test:admin-cache
       - run: pnpm test:panda-native
       - run: pnpm test:wg-realtime
       - run: pnpm test:wg-existing
