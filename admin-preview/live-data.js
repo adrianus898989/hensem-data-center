@@ -1081,13 +1081,15 @@
    // not hold the previous-period figures or workorder attachment behind it.
    if(isSuccessAnalysis()){render();if(platforms.length)await workordersLoad();return;}
    if(phasedReadBusy()){
+    setReadPhase(serial,'读取费率目录');await ensureFeeLookup(false,true);
+    if(serial!==L.serial)return;
     if(L.queryWarnings.length){L.comparisonStatus='error';L.comparisonError='当前平台数据未完整，暂不比较昨日';}
     else{setReadPhase(serial,'读取昨日对比');await liveComparison(serial,!force,1);}
     if(serial!==L.serial)return;setReadPhase(serial,'核对当期采集完整性');await loadProviderIntake(serial,false,1);
     if(serial!==L.serial)return;if(!L.queryWarnings.length){setReadPhase(serial,'核对前期采集完整性');await loadProviderIntake(serial,true,1);}
     if(serial!==L.serial)return;if(providerDirection(state.page)&&platforms.length){setReadPhase(serial,'读取未到账工单');await workordersLoad(false,true);}
     if(serial!==L.serial)return;if(state.page==='merchants'&&L.status==='all'&&!['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'].some(key=>L[key])){setReadPhase(serial,'读取会员人数');await memberCounts?.ensure(false,1);}
-    if(serial!==L.serial)return;setReadPhase(serial,'读取费率目录');await ensureFeeLookup(false,true);return;
+    return;
    }
    const intakeRead=loadProviderIntake(serial);if(serial!==L.serial)return;
    if(L.queryWarnings.length){L.comparisonStatus='error';L.comparisonError='当前平台数据未完整，暂不比较昨日';render();await Promise.all([ensureProviderWorkorders(),intakeRead]);return}
