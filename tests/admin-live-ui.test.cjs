@@ -292,12 +292,13 @@ test('adapter does nothing outside production and never installs an automatic da
 const businessCalls=h=>h.calls.filter(q=>['aggregate','details','reportSummary','workorders','pendingSnapshot'].includes(q.action));
 
 test('overview first opening waits for query and existing queried tabs restore without fetching data',async()=>{
- const h=await ready({manualOverview:true,reports:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='collectedData'?{rows:[]}:q.action==='rates'?{rows:[],total:0}:aggregate()});
+ const h=await ready({manualOverview:true,reports:true,handler:q=>q.action==='catalog'?{platforms:[P]}:q.action==='collectedData'?{rows:[]}:q.action==='rates'?{rows:[],total:0}:{...aggregate(),startAt:q.startAt,endAt:q.endAt}});
  assert.equal(h.L.catalogReady,true);assert.equal(h.L.overviewQueried,false);assert.equal(businessCalls(h).length,0);assert.equal(h.calls.filter(q=>q.action==='catalog').length,1);assert.match(h.html(),/点击查询/);
  h.c.render();h.c.render();await settle();assert.equal(businessCalls(h).length,0);
  await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2);assert.equal(h.L.comparisonStatus,'ready');
  h.c.setPage('time');await settle();const before=businessCalls(h).length;h.c.setPage('overview');await settle();assert.equal(businessCalls(h).length,before);assert.equal(h.L.overviewQueried,true);assert.equal(h.L.dirty,false);assert.match(h.html(),/代收经营总数据/);
- const prior=h.calls.filter(q=>q.action==='aggregate').length;await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,prior+2,'an explicit returned overview reads current and comparison once');
+ const prior=h.calls.filter(q=>q.action==='aggregate').length;await h.c.liveQuery();await settle();assert.equal(h.L.overviewQueried,true);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,prior,'ordinary returned query reuses fresh exact current and comparison responses');assert(h.L.results.every(r=>r._aggregateCacheHit));
+ await h.c.liveQuery(true);await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,prior+2,'explicit Refresh still reads current and comparison once');assert(h.L.results.every(r=>!r._aggregateCacheHit));
 });
 
 test('overview quick dates and reset update only the filters, before and after a query',async()=>{
@@ -354,7 +355,7 @@ test('all direction remains selectable while charge and withdrawal totals are di
  const filters=h.nodes.get('liveFilters').innerHTML,direction=filters.match(/<details[^>]*data-multi="direction"[^]*?<\/details>/)?.[0];
  assert(direction,'direction multiselect exists');assert.match(direction,/value="charge"/);assert.match(direction,/value="withdraw"/);assert.match(direction,/>全部</);assert.doesNotMatch(direction,/代收 \+ 代付/);
  assert(h.calls.filter(q=>q.action==='aggregate').every(q=>q.direction==='all'));
- h.c.liveSet('direction','withdraw');await h.c.liveQuery();assert(h.calls.filter(q=>q.action==='aggregate').slice(-2).every(q=>q.direction==='withdraw'));
+ const before=h.calls.length;h.c.liveSet('direction','withdraw');await h.c.liveQuery();assert(h.L.results.flatMap(r=>r.summary).every(r=>r.direction==='withdraw'),'a narrower cached direction never displays charge facts');assert(h.calls.slice(before).filter(q=>q.action==='aggregate').every(q=>q.direction==='withdraw'));await h.c.liveQuery(true);assert(h.calls.filter(q=>q.action==='aggregate').slice(-2).every(q=>q.direction==='withdraw'));
  h.c.liveReset();await settle();assert.equal(h.L.direction,'all');assert(h.calls.filter(q=>q.action==='aggregate'||q.action==='details').every(q=>['all','charge','withdraw'].includes(q.direction)));await h.c.liveQuery();
  const r=completeAggregate(P,10,3),withdraw=completeAggregate(P,20,15).summary[0];withdraw.direction='withdraw';r.summary.push(withdraw);for(const key of ['provider','daily','hourly','amount','matrix'])r.groups[key].push({...r.groups[key][0],...withdraw});h.L.results=[r];h.L.comparisonStatus='idle';h.c.render();assert.match(h.html(),/代收/);assert.match(h.html(),/代付/);assert.match(h.html(),/1,000\.00/);assert.match(h.html(),/2,000\.00/);assert.match(h.html(),/30\.00%/);assert.match(h.html(),/75\.00%/);assert.doesNotMatch(h.html(),/3,000\.00|60\.00%/);
  for(const page of ['providers','orders','time','amount','matrix','provider_daily','risk','teamops','merchants']){h.c.state.page=page;h.c.render();assert.doesNotMatch(h.html(),/3,000\.00|60\.00%/,page+' must not pool direction amounts or rates')}
@@ -369,14 +370,14 @@ test('yesterday comparison performs a real previous-day query with the identical
 test('current totals publish before the baseline; a failed baseline never erases current or fabricates zero change',async()=>{
  const h=await ready(),baseline=deferred();setScope(h);let n=0;
  h.setHandler(q=>++n===1?Promise.resolve(completeAggregate(P,10,5)):baseline.promise);
- const pending=h.c.liveQuery();await settle();assert.equal(h.L.loading,false);assert.equal(h.L.results[0].total,10);assert.equal(h.L.comparisonStatus,'loading');assert.match(h.html(),/1,000/);
+ const pending=h.c.liveQuery(true);await settle();assert.equal(h.L.loading,false);assert.equal(h.L.results[0].total,10);assert.equal(h.L.comparisonStatus,'loading');assert.match(h.html(),/1,000/);
  baseline.reject(Error('Synthetic baseline unavailable'));await pending;assert.equal(h.L.results[0].total,10);assert.equal(h.L.error,'');assert.equal(h.L.comparisonStatus,'error');assert.equal(h.L.comparisonResults.length,0);assert.match(h.html(),/Synthetic baseline unavailable|比较.*失败|对比.*失败|对比.*不可用/);assert.doesNotMatch(h.html(),/[+−-]0\.00%/);
 });
 
 test('late previous-period response cannot replace the comparison for a newer query',async()=>{
  const h=await ready(),oldBaseline=deferred();setScope(h);let phase='old',oldCalls=0;
  h.setHandler(q=>{if(phase==='old')return ++oldCalls===1?Promise.resolve(completeAggregate(P,11,5)):oldBaseline.promise;return Promise.resolve(completeAggregate(P,q.startAt==='2026-09-21T18:30:00.000Z'?22:44,5))});
- const old=h.c.liveQuery();await settle();assert.equal(h.L.results[0].total,11);assert.equal(h.L.comparisonStatus,'loading');phase='new';const fresh=h.c.liveQuery();await fresh;assert.equal(h.L.results[0].total,22);assert.equal(h.L.comparisonResults[0].total,44);oldBaseline.resolve(completeAggregate(P,999,5));await old;assert.equal(h.L.results[0].total,22);assert.equal(h.L.comparisonResults[0].total,44);assert.equal(h.L.comparisonStatus,'ready');
+ const old=h.c.liveQuery(true);await settle();assert.equal(h.L.results[0].total,11);assert.equal(h.L.comparisonStatus,'loading');phase='new';const fresh=h.c.liveQuery(true);await fresh;assert.equal(h.L.results[0].total,22);assert.equal(h.L.comparisonResults[0].total,44);oldBaseline.resolve(completeAggregate(P,999,5));await old;assert.equal(h.L.results[0].total,22);assert.equal(h.L.comparisonResults[0].total,44);assert.equal(h.L.comparisonStatus,'ready');
 });
 
 test('today comparison and detail pagination share the frozen query cutoff',async()=>{
@@ -424,8 +425,8 @@ test('Today on pending analysis never turns a missing future midnight into a com
 });
 
 test('zero baseline is new activity and success-rate changes use percentage points',async()=>{
- const h=await ready();setScope(h);let n=0;h.setHandler(async()=>++n===1?completeAggregate(P,10,5):completeAggregate(P,0,0));await h.c.liveQuery();assert.match(h.html(),/新增/);assert.doesNotMatch(h.html(),/Infinity|NaN|\+100\.00%/);
- n=0;h.setHandler(async()=>++n===1?completeAggregate(P,10,5):completeAggregate(P,20,5));await h.c.liveQuery();assert.match(h.html(),/25(?:\.00)?\s*(?:个)?百分点/);assert.doesNotMatch(h.html(),/成功率[^]*?\+100\.00%/);
+ const h=await ready();setScope(h);let n=0;h.setHandler(async()=>++n===1?completeAggregate(P,10,5):completeAggregate(P,0,0));await h.c.liveQuery(true);assert.match(h.html(),/新增/);assert.doesNotMatch(h.html(),/Infinity|NaN|\+100\.00%/);
+ n=0;h.setHandler(async()=>++n===1?completeAggregate(P,10,5):completeAggregate(P,20,5));await h.c.liveQuery(true);assert.match(h.html(),/25(?:\.00)?\s*(?:个)?百分点/);assert.doesNotMatch(h.html(),/成功率[^]*?\+100\.00%/);
 });
 
 test('overview preserves all dashboard sections without the redundant navigation row or extra queries',async()=>{
@@ -547,7 +548,7 @@ test('money strings aggregate and unknown amounts remain unknown rather than fab
 });
 
 test('partial platform results stay labeled and cannot masquerade as complete totals after a failure',async()=>{
- const p2={...P,id:'22222222-2222-4222-8222-222222222222'},h=await ready({platforms:[P,p2]});setScope(h,{platform:'all'});h.setHandler(async q=>{if(q.platformId===p2.id)throw Error('Synthetic failure');return aggregate(P)});await h.c.liveQuery();assert.equal(h.L.results.length,1);assert.match(h.html(),/Synthetic failure/);assert.match(h.html(),/以下仅为已读取结果/);assert.equal(h.L.comparisonStatus,'error');
+ const p2={...P,id:'22222222-2222-4222-8222-222222222222'},h=await ready({platforms:[P,p2]});setScope(h,{platform:'all'});h.setHandler(async q=>{if(q.platformId===p2.id)throw Error('Synthetic failure');return aggregate(P)});await h.c.liveQuery(true);assert.equal(h.L.results.length,1);assert.match(h.html(),/Synthetic failure/);assert.match(h.html(),/以下仅为已读取结果/);assert.equal(h.L.comparisonStatus,'error');
 });
 
 test('later aggregate query wins over an earlier request regardless of completion order',async()=>{
@@ -666,7 +667,7 @@ test('later forced fee query wins over stale requests',async()=>{
 test('late sibling completion keeps the failed platform warning alongside the successful result',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222'},h=await ready({platforms:[P,p2]}),late=deferred();
  h.setHandler(q=>q.platformId===P.id?Promise.reject(Error('Synthetic failure')):late.promise);
- const run=h.c.liveQuery();await settle();assert.equal(h.L.queryWarnings.length,1);late.resolve(aggregate(p2,8));await run;
+ const run=h.c.liveQuery(true);await settle();assert.equal(h.L.queryWarnings.length,1);late.resolve(aggregate(p2,8));await run;
  assert.equal(h.L.results.length,1);assert.match(h.html(),/Synthetic failure/);assert.match(h.html(),/仅为已读取结果/);
 });
 
@@ -946,7 +947,7 @@ test('overview requests compact totals and providers, defers charts, and yesterd
 test('slow or failed platform keeps completed overview results visibly partial without duplicate queries',async()=>{
  const p2={...P,id:'22222222-2222-4222-8222-222222222222',name:'Slow platform'},wait=deferred();
  const h=await ready({platforms:[P,p2]});h.setHandler(q=>q.action==='aggregate'&&q.platformId===p2.id?wait.promise:aggregate(P));
- const run=h.c.liveQuery();await settle();assert.equal(h.L.loading,true);assert.equal(h.L.results.length,1);assert.match(h.html(),/部分结果/);assert.match(h.html(),/Synthetic platform/);
+ const run=h.c.liveQuery(true);await settle();assert.equal(h.L.loading,true);assert.equal(h.L.results.length,1);assert.match(h.html(),/部分结果/);assert.match(h.html(),/Synthetic platform/);
  const before=h.calls.length;await h.c.liveQuery();assert.equal(h.calls.length,before);
  wait.reject(Error('连接中断'));await run;assert.equal(h.L.results.length,1);assert.match(h.html(),/部分平台读取失败/);assert.match(h.html(),/Slow platform/);assert.equal(h.L.comparisonStatus,'error');
 });

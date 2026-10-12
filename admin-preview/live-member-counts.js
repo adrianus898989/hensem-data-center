@@ -51,50 +51,103 @@
  function create(c){
   const {L,E,C}=c;
   const initial=()=>({status:'idle',key:'',items:[],unsupported:[],results:[],failures:[],error:''});
-  let S=initial(),serial=0,pending=null,inFlight=0;const waiters=[];
-  function scope(){const selected=[...new Map((c.selected()||[]).map(p=>[p.id,p])).values()].sort((a,b)=>String(a.id).localeCompare(String(b.id))),items=[],unsupported=[];for(const p of selected){if(native(p))items.push(requestFor(p,c.query));else unsupported.push({id:p.id,name:p.name||'未提供平台名',reason:'此来源尚未接入会员明细'});}return {items,unsupported,key:JSON.stringify([L.country,L.from,L.to,L.direction,L.status,L.multi,items.map(i=>[i.request,i.platform.timezone,i.platform.name]),unsupported.map(p=>[p.id,p.name])])};}
+  let S=initial(),serial=0,pending=null,inFlight=0,nextForce=false;const waiters=[];
+  // Only validated counts live here, for this document; no credentials or
+  // results enter browser storage. The host still authorizes every source read.
+  const cache=new Map(),now=()=>typeof c.now==='function'?c.now():Date.now();
+  let cacheBytes=0,cacheContext='',cacheGeneration=0;
+  const stable=value=>Array.isArray(value)?value.map(stable):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,stable(value[key])])):value;
+  const encode=value=>JSON.stringify(stable(value));
+  const copy=value=>typeof structuredClone==='function'?structuredClone(value):JSON.parse(JSON.stringify(value));
+  function clearCache(){cache.clear();cacheBytes=0;cacheGeneration++;}
+  function accessContext(){
+   const a=root.hensemRoleAccess||{},s=root.hensemDataScope||{};
+   if(a.canView===false){clearCache();throw Error('当前账号没有此范围的人数查看权限');}
+   const context=typeof c.accessContext==='function'?c.accessContext():[s.mode||'document',s.identity||'document',a.mode||'document',a.roleId||'',a.version??null,a.assignmentVersion??null,a.canView??null,Array.isArray(a.permissions)?[...a.permissions].sort():[]];
+   if(context===null||context===undefined||context===''){clearCache();throw Error('人数查看权限尚未确认');}
+   const key=encode(context);if(key!==cacheContext){clearCache();cacheContext=key;}return key;
+  }
+  const identity=p=>[p.id,p.source,p.sourceName,p.name,p.country,p.timezone,p.currency,p.capabilities,p.reportOnly];
+  const family=item=>{const {startAt,endAt,...request}=item.request;return encode([identity(item.platform),request]);};
+  const cacheKey=(item,context)=>encode([context,identity(item.platform),item.request]);
+  function removeEntry(key){const entry=cache.get(key);if(entry){cacheBytes-=entry.bytes;cache.delete(key);}}
+  function cached(item,context){
+   const key=cacheKey(item,context),entry=cache.get(key);if(!entry)return null;
+   if(now()>=entry.expiresAt||now()<entry.result._memberReadAt){removeEntry(key);return null;}
+   cache.delete(key);cache.set(key,entry);return {...copy(entry.result),_memberCacheHit:true};
+  }
+  function remember(item,result,policy){
+   if(result._memberCacheable===false||policy.generation!==cacheGeneration||policy.context!==accessContext())return;
+   const at=result._memberReadAt,expiresAt=result._memberExpiresAt;if(!Number.isFinite(at)||!Number.isFinite(expiresAt)||now()>=expiresAt)return;
+   const key=cacheKey(item,policy.context),entryFamily=family(item);let value,bytes;try{value=copy(result);bytes=(JSON.stringify(value).length+key.length+entryFamily.length)*2+64;}catch{return;}
+   if(bytes>1024*1024)return;removeEntry(key);cache.set(key,{result:value,bytes,expiresAt,family:entryFamily,startAt:Date.parse(item.request.startAt),endAt:Date.parse(item.request.endAt)});cacheBytes+=bytes;
+   while(cache.size>128||cacheBytes>8*1024*1024)removeEntry(cache.keys().next().value);
+  }
+  function invalidate(items){
+   cacheGeneration++;
+   const ranges=items.map(item=>({family:family(item),start:Date.parse(item.request.startAt),end:Date.parse(item.request.endAt)}));
+   for(const [key,entry]of cache)if(ranges.some(range=>entry.family===range.family&&entry.startAt<range.end&&entry.endAt>range.start))removeEntry(key);
+  }
+  function scope(){const context=accessContext(),selected=[...new Map((c.selected()||[]).map(p=>[p.id,p])).values()].sort((a,b)=>String(a.id).localeCompare(String(b.id))),items=[],unsupported=[];for(const p of selected){if(native(p))items.push(requestFor(p,c.query));else unsupported.push({id:p.id,name:p.name||'未提供平台名',reason:'此来源尚未接入会员明细'});}return {context,items,unsupported,key:encode([context,L.country,L.from,L.to,L.direction,L.status,L.multi,items.map(i=>[i.request,identity(i.platform)]),unsupported.map(p=>[p.id,p.name])])};}
   const currentKey=()=>{try{return scope().key}catch{return ''}};
   const view=()=>L.dirty||S.key!==currentKey()?initial():S;
   const valid=id=>id===serial&&!L.dirty&&S.key===currentKey();
   const retry=s=>s.status==='error'||s.status==='paused'||s.failures.length?' <button type="button" class="link" onclick="liveMemberCountsRetry()">重试</button>':'';
-  function cancel(){serial++;pending=null;waiters.splice(0).forEach(wake=>wake());if(S.status==='loading')S={...S,status:'paused',results:[],error:'人数读取已暂停'};}
+  function cancel(){serial++;pending=null;nextForce=false;waiters.splice(0).forEach(wake=>wake());if(S.status==='loading')S={...S,status:'paused',results:[],error:'人数读取已暂停'};}
+  // A deliberate query reevaluates freshness. Render-time ensure never retries
+  // merely because a timer expired, so slow/partial reads cannot create a loop.
+  function beginQuery(force=false){cancel();nextForce=force===true;S=initial();if(nextForce){try{invalidate(scope().items);}catch{clearCache();}}}
   async function limitedRequest(request,id){while(inFlight>=readConcurrency){if(!valid(id))throw Error('人数查询已替换');await new Promise(resolve=>waiters.push(resolve));}if(!valid(id))throw Error('人数查询已替换');inFlight++;try{return await c.request(request)}finally{inFlight--;waiters.splice(0).forEach(wake=>wake());}}
-  async function readExact(item,id){const response=await limitedRequest(item.request,id);if(!valid(id))throw Error('人数查询已替换');return validate(response,item);}
-  async function readPlatform(item,id){
-   try{return await readExact(item,id);}
+  async function readExact(item,id,policy){
+   if(!valid(id))throw Error('人数查询已替换');const hit=!policy.force&&cached(item,policy.context);if(hit)return hit;
+   let response;try{response=await limitedRequest(item.request,id);}catch(error){if(/401|403|permission|denied|login_required|session_expired|权限|会话失效/i.test(String(error?.code||'')+' '+String(error?.message||'')))clearCache();throw error;}if(!valid(id))throw Error('人数查询已替换');
+   const result=validate(response,item),at=now(),historical=localDay(Date.parse(item.request.endAt)-1,item.platform.timezone)<localDay(at,item.platform.timezone);
+   const value={...result,_memberReadAt:at,_memberExpiresAt:at+(historical?300000:30000),_memberCacheHit:false,_memberCacheable:!(response.partial===true||response.complete===false||response.available===false||response.error||response.meta?.partial===true||response.coverage?.complete===false)};
+   remember(item,value,policy);return value;
+  }
+  async function readPlatform(item,id,policy){
+   try{return await readExact(item,id,policy);}
    catch(error){
     if(!valid(id)||!timedOut(error)||item.days.length<2)throw error;
     const slices=dailySlices(item),parts=[];
-    for(const slice of slices){if(!valid(id))throw Error('人数查询已替换');try{parts.push(await readExact(slice,id));}catch(failure){if(!valid(id))throw failure;throw Object.assign(Error(slice.days[0]+'：'+(failure?.message||'人数读取失败')+'（'+parts.length+'/'+slices.length+' 天已读取，平台未计入合计）'),{code:failure?.code});}}
+    for(const slice of slices){if(!valid(id))throw Error('人数查询已替换');try{parts.push(await readExact(slice,id,policy));}catch(failure){if(!valid(id))throw failure;throw Object.assign(Error(slice.days[0]+'：'+(failure?.message||'人数读取失败')+'（'+parts.length+'/'+slices.length+' 天已读取，平台未计入合计）'),{code:failure?.code});}}
     // Publish only a complete platform. Distinct counts within a day are never added.
-    return {platform:parts[0].platform,rows:parts.flatMap(part=>part.rows),sourceCompletenessVerified:parts.every(part=>part.sourceCompletenessVerified),frequencySupported:parts.every(part=>part.frequencySupported)};
+    const result={platform:parts[0].platform,rows:parts.flatMap(part=>part.rows),sourceCompletenessVerified:parts.every(part=>part.sourceCompletenessVerified),frequencySupported:parts.every(part=>part.frequencySupported),_memberReadAt:Math.min(...parts.map(part=>part._memberReadAt)),_memberExpiresAt:Math.min(...parts.map(part=>part._memberExpiresAt)),_memberCacheHit:parts.some(part=>part._memberCacheHit),_memberCacheable:parts.every(part=>part._memberCacheable!==false)};
+    remember(item,result,policy);return result;
    }
   }
   let readConcurrency=2;
   function ensure(force=false,concurrency=2){
    if(L.dirty)return Promise.resolve();
    let q;try{q=scope()}catch(error){S={...initial(),status:'error',error:error.message||'人数统计筛选无效'};c.render();return Promise.resolve();}
-   if(!force&&q.key===S.key&&S.status!=='idle')return pending||Promise.resolve();
+   force=force===true||nextForce;if(!force&&q.key===S.key&&S.status!=='idle')return pending||Promise.resolve();
+   nextForce=false;if(force)invalidate(q.items);const policy={force,context:q.context,generation:cacheGeneration};
    readConcurrency=concurrency===1?1:2;const id=++serial;S={...initial(),status:'loading',key:q.key,items:q.items,unsupported:q.unsupported};c.render();
    const run=(async()=>{
     if(!q.items.length){S={...S,status:'ready'};c.render();return;}
     let index=0;const timedOutItems=[];
     const failure=(item,error)=>({id:item.platform.id,name:item.platform.name,error:error?.message||'人数读取失败'});
-    async function worker(){while(index<q.items.length&&valid(id)){const item=q.items[index++];try{const result=await readPlatform(item,id);if(!valid(id))return;S.results.push(result);}catch(error){if(!valid(id))return;S.failures.push(failure(item,error));if(timedOut(error))timedOutItems.push(item);}if(valid(id))c.render();}}
+    async function worker(){while(index<q.items.length&&valid(id)){const item=q.items[index++];try{const result=await readPlatform(item,id,policy);if(!valid(id))return;S.results.push(result);}catch(error){if(!valid(id))return;S.failures.push(failure(item,error));if(timedOut(error))timedOutItems.push(item);}if(valid(id))c.render();}}
     await Promise.all(Array.from({length:Math.min(readConcurrency,q.items.length)},()=>worker()));if(!valid(id))return;
     // Finish the initial cohort before one serial retry of failed timeout scopes.
     // Retry the original request only: no successful platform reads or extra fallback.
-    for(const item of timedOutItems){if(!valid(id))return;try{const result=await readExact(item,id);if(!valid(id))return;S.results.push(result);S.failures=S.failures.filter(row=>row.id!==item.platform.id);}catch(error){if(!valid(id))return;const message=error?.message||'人数读取失败';S.failures=S.failures.map(row=>row.id===item.platform.id?{...row,error:row.error===message?message:row.error+'；重试失败：'+message}:row);}if(valid(id))c.render();}
+    for(const item of timedOutItems){if(!valid(id))return;try{const result=await readExact(item,id,policy);if(!valid(id))return;S.results.push(result);S.failures=S.failures.filter(row=>row.id!==item.platform.id);}catch(error){if(!valid(id))return;const message=error?.message||'人数读取失败';S.failures=S.failures.map(row=>row.id===item.platform.id?{...row,error:row.error===message?message:row.error+'；重试失败：'+message}:row);}if(valid(id))c.render();}
     if(!valid(id))return;S={...S,status:S.failures.length&&!S.results.length?'error':'ready',error:S.failures.length&&!S.results.length?'所选平台人数读取失败':''};c.render();
    })();pending=run;run.finally(()=>{if(id===serial)pending=null});return run;
   }
   function aggregate(s,direction,basis){const all=s.results.flatMap(r=>r.rows.filter(row=>row.direction===direction)),unavailable=all.filter(row=>row[basis+'_available']===false),rows=all.filter(row=>row[basis+'_available']!==false),members=rows.reduce((n,r)=>n+r[basis+'_member_count'],0),orders=rows.reduce((n,r)=>n+r[basis+'_order_count'],0),missing=rows.reduce((n,r)=>n+r[basis+'_missing_member_count'],0),received=s.results.filter(r=>r.rows.some(row=>row.direction===direction&&row[basis+'_available']!==false)).length,expected=s.items.length+s.unsupported.length,partial=received<expected||missing>0;return {members,orders,missing,received,expected,partial,unavailable:[...new Set(unavailable.map(row=>unavailableReason(row,basis)))],display:received===0||members===0&&partial?'—':C(members)};}
   const multiple=s=>new Set(s.items.flatMap(i=>i.days)).size>1||String(L.from||'').slice(0,10)!==String(L.to||'').slice(0,10);
   const status=s=>s.status==='loading'?'人数读取中':s.status==='paused'?s.error:s.status==='error'?s.error:s.status==='idle'?'查询后显示人数':!s.items.length?'所选来源尚未接入会员明细':'';
+  function readNotice(s){
+   const values=s.results.filter(result=>Number.isFinite(result._memberReadAt));if(!values.length)return '';
+   const at=Math.min(...values.map(result=>result._memberReadAt)),zones=[...new Set(values.map(result=>result.platform?.timezone).filter(Boolean))],zone=zones.length===1?zones[0]:'UTC';
+   let text;try{text=new Intl.DateTimeFormat('sv-SE',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date(at));}catch{text=new Date(at).toISOString();}
+   return '人数读取 '+text+' · '+zone+(values.some(result=>result._memberCacheHit)?' · 缓存':'')+(values.some(result=>now()>=result._memberExpiresAt)?' · 已过期，查询更新':'');
+  }
   function metric(direction){
    if(!directions.includes(direction))return '';
-   const s=view(),created=aggregate(s,direction,'created'),success=aggregate(s,direction,'success'),name=direction==='charge'?'充值':'提款',partial=created.partial||success.partial,label=multiple(s)?'每日去重人次 · '+name+' / 成功'+name:name+'人数 / 成功'+name+'人数',message=status(s)||('读取 '+C(created.received)+' / '+C(created.expected)+' 平台'+(partial?' · 部分数据':' · 已采集订单'))+([...new Set([...created.unavailable,...success.unavailable])].length?' · '+[...new Set([...created.unavailable,...success.unavailable])].join('；'):'');
-   return '<div class="df-flow-metric df-member-counts"><span>'+label+'</span><strong><button type="button" class="link metric-link" onclick="liveMemberCountsDetails()">'+created.display+' / '+success.display+'</button></strong><small class="cell-sub">'+(partial&&(created.members||success.members)?'已知人数 · ':'')+(multiple(s)?'各日、各平台分别去重后相加':'同平台跨三方去重')+'</small><small class="df-coverage">'+E(message)+retry(s)+'</small></div>';
+   const s=view(),created=aggregate(s,direction,'created'),success=aggregate(s,direction,'success'),name=direction==='charge'?'充值':'提款',partial=created.partial||success.partial,label=multiple(s)?'每日去重人次 · '+name+' / 成功'+name:name+'人数 / 成功'+name+'人数',message=status(s)||('读取 '+C(created.received)+' / '+C(created.expected)+' 平台'+(partial?' · 部分数据':' · 已采集订单'))+([...new Set([...created.unavailable,...success.unavailable])].length?' · '+[...new Set([...created.unavailable,...success.unavailable])].join('；'):''),notice=readNotice(s);
+   return '<div class="df-flow-metric df-member-counts"><span>'+label+'</span><strong><button type="button" class="link metric-link" onclick="liveMemberCountsDetails()">'+created.display+' / '+success.display+'</button></strong><small class="cell-sub">'+(partial&&(created.members||success.members)?'已知人数 · ':'')+(multiple(s)?'各日、各平台分别去重后相加':'同平台跨三方去重')+'</small><small class="df-coverage">'+E(message)+retry(s)+'</small>'+(notice?'<small class="cell-basis">'+E(notice)+'</small>':'')+'</div>';
   }
   // Platform ledger cells reuse the exact current member query; rendering and
   // sorting never request more data or infer identities from a display name.
@@ -144,9 +197,9 @@
     const rows=sorted.map(r=>'<tr><td>'+E(r.date)+'</td><td>'+platformCell(r)+'</td><td>'+rowValue(r.charge,'created')+'</td><td>'+rowValue(r.charge,'success')+'</td><td>'+rowValue(r.withdraw,'created')+'</td><td>'+rowValue(r.withdraw,'success')+'</td></tr>').join('');
     table='<div class="live-table"><table><thead><tr><th>日期</th><th>平台</th><th>充值人数</th><th>成功充值人数</th><th>提款人数</th><th>成功提款人数</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
    }
-   c.open('每日充值 / 提款人数','<div class="live-member-counts-detail">'+tabs+definition+coverage+(status(s)?'<div class="live-status">'+E(status(s))+retry(s)+'</div>':retry(s))+problems+table+'</div>');
+   const notice=readNotice(s);c.open('每日充值 / 提款人数','<div class="live-member-counts-detail">'+tabs+definition+coverage+(notice?'<div class="live-definition">'+E(notice)+'</div>':'')+(status(s)?'<div class="live-status">'+E(status(s))+retry(s)+'</div>':retry(s))+problems+table+'</div>');
   }
-  return {ensure,load:()=>ensure(true),cancel,metric,platformLabel,platformMetric,platformCount,details,capture:()=>({...S,status:S.status==='loading'?'paused':S.status,results:[...S.results],failures:[...S.failures],error:S.status==='loading'?'人数读取已暂停':S.error}),restore:value=>{serial++;pending=null;waiters.splice(0).forEach(wake=>wake());S=value?{...value,results:[...value.results],failures:[...value.failures]}:initial();},get state(){return S}};
+  return {ensure,beginQuery,load:(force=true)=>ensure(force),cancel,metric,platformLabel,platformMetric,platformCount,details,capture:()=>({...S,status:S.status==='loading'?'paused':S.status,results:[...S.results],failures:[...S.failures],error:S.status==='loading'?'人数读取已暂停':S.error}),restore:value=>{serial++;pending=null;nextForce=false;waiters.splice(0).forEach(wake=>wake());S=value?{...value,results:[...value.results],failures:[...value.failures]}:initial();},get state(){return S}};
  }
  root.HensemLiveMemberCounts={create};
  if(typeof module!=='undefined')module.exports={create,requestFor,validate,dailySlices};
