@@ -1496,6 +1496,31 @@ test('today pending retry keeps completed order results and reads only the faile
  assert.match(h.html(),/445.67/);assert.match(h.html(),/2\/2 平台/);
 });
 
+test('overview historical snapshot waits for all primary workers and gates supplementary reads until it settles',async()=>{
+ const second={...P,id:'22222222-2222-4222-8222-222222222222',name:'Synthetic second'},orders=[deferred(),deferred()],snapshot=deferred(),catalog=deferred();
+ const h=await ready({manualOverview:true,reports:true,platforms:[P,second],pendingSnapshotHandler:()=>snapshot.promise,handler:q=>q.action==='catalog'?{platforms:[P,second]}:q.action==='collectedData'?catalog.promise:q.action==='rates'?{rows:[],total:0}:q.action==='aggregate'&&q.startAt==='2026-09-21T18:30:00.000Z'?orders[q.platformId===P.id?0:1].promise:completeAggregate(q.platformId===second.id?second:P)});
+ const run=h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2);assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,0);assert.equal(h.L.loading,true);
+ await h.c.livePendingSnapshotRetry();orders[0].resolve(completeAggregate(P));await settle();assert.equal(h.L.results.length,1);assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,0,'neither manual retry nor the first finished worker starts the snapshot');
+ orders[1].resolve(completeAggregate(second));await settle();assert.equal(h.L.results.length,2);assert.equal(h.L.loading,true);assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,2,'previous-period reads wait too');assert.equal(h.calls.filter(q=>q.action==='rates'||q.action==='workorders'||q.action==='memberCounts').length,0);
+ const duplicate=h.c.livePendingSnapshotRetry();await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1);snapshot.reject(Object.assign(Error('Synthetic 90-second transport deadline'),{code:'ADMIN_LIVE_TIMEOUT'}));await Promise.all([run,duplicate]);assert.equal(h.L.loading,false);assert.equal(h.L.error,'');assert.equal(h.L.results.length,2);assert.equal(h.L.comparisonStatus,'ready');assert.match(h.html(),/待付读取失败/);assert.match(h.html(),/Synthetic 90-second transport deadline/);
+ // No directory completion is needed to release the query. An error settling
+ // later cannot create an automatic snapshot retry loop.
+ catalog.resolve({rows:[]});await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1);
+});
+
+test('overview cancelled primary work does not start a snapshot and cancelled snapshot keeps the next scope serialized',async()=>{
+ const primary=deferred(),snapshot=deferred();let pendingCalls=0;
+ const h=await ready({manualOverview:true,pendingSnapshotHandler:()=>++pendingCalls===1?snapshot.promise:Promise.reject(Error('Synthetic new scope timeout'))});h.setHandler(q=>q.action==='rates'?{rows:[],total:0}:primary.promise);
+ const cancelled=h.c.liveQuery();await settle();h.c.liveSet('provider','Next primary');primary.resolve(completeAggregate(P));await cancelled;assert.equal(pendingCalls,0);
+ h.setHandler(q=>q.action==='rates'?{rows:[],total:0}:completeAggregate(P));const old=h.c.liveQuery();await settle();assert.equal(pendingCalls,1);h.c.liveSet('from','2026-09-21T00:00:00');h.c.liveSet('to','2026-09-21T05:59:59');const fresh=h.c.liveQuery();await settle();assert.equal(pendingCalls,1,'new date still waits for the old snapshot transport to settle');assert.equal(h.L.loading,true);
+ snapshot.reject(Error('Synthetic cancelled old scope'));await Promise.all([old,fresh]);assert.equal(pendingCalls,2);assert.deepEqual(h.calls.filter(q=>q.action==='pendingSnapshot').map(q=>q.date),['2026-09-22','2026-09-21']);assert.equal(h.L.loading,false);assert.equal(h.L.results.length,1);assert.equal(h.L.error,'');assert.match(h.html(),/Synthetic new scope timeout/);assert.doesNotMatch(h.html(),/Synthetic cancelled old scope/);
+});
+
+test('overview pending retry after a snapshot failure does not requery aggregate workers or the whole page',async()=>{
+ let attempts=0;const h=await ready({manualOverview:true,pendingSnapshotHandler:()=>{attempts++;throw Error('Synthetic snapshot unavailable')}});await h.c.liveQuery();const results=h.L.results,aggregates=h.calls.filter(q=>q.action==='aggregate').length,calls=h.calls.length;
+ await Promise.all([h.c.livePendingSnapshotRetry(),h.c.livePendingSnapshotRetry()]);assert.equal(attempts,2);assert.equal(h.calls.length,calls+1);assert.equal(h.calls.at(-1).action,'pendingSnapshot');assert.equal(h.calls.filter(q=>q.action==='aggregate').length,aggregates);assert.strictEqual(h.L.results,results);assert.equal(h.L.loading,false);
+});
+
 test('overview snapshot reads before delayed report directory then includes newly discovered omissions',async()=>{
  let resolveCatalog;const catalogPromise=new Promise(resolve=>resolveCatalog=resolve);
  const native={...P,team:'Synthetic Team'},late={name:'Synthetic Late Report',rawPlatform:'Synthetic Late Report',country:'印度',rawCountry:'IN',team:'Synthetic Team',system:'REPORT',dataset:'volume',directions:['withdraw'],records:1,provenance:{kind:'direct'}};

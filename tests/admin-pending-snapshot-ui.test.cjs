@@ -16,7 +16,7 @@ const aggregateSource=fs.readFileSync(path.join(__dirname,'../admin-preview/live
 assert(aggregationStart>=0&&aggregationEnd>aggregationStart&&mergeStart>=0&&mergeEnd>mergeStart);
 vm.createContext(mergerContext);vm.runInContext(aggregateSource.slice(aggregationStart,aggregationEnd)+aggregateSource.slice(mergeStart,mergeEnd)+';globalThis.merge=mergeParts;',mergerContext);
 const mergeOrders=parts=>mergerContext.merge(parts);
-function harness(options={}){const L={country:'印度',from:'2026-10-02T01:00:00',to:'2026-10-02T02:00:00',queryNow:now,dirty:false,withdrawCatalog:[]},calls=[],drawers=[];let selected=[p(A)],providers=[],timezone='Asia/Kolkata',handler=async q=>response(q),orders={platforms:[p(A)],results:[orderResult()],loading:false,retrying:false,paused:false,failures:[],queriedAt:new Date(now).toISOString(),scopeMatches:true,status:'all'};const ui=create({L,E:escape,N:number,C:v=>Number(v).toLocaleString('en-US'),selected:()=>selected,providers:()=>providers,scopeZone:()=>timezone,currentOrders:()=>orders,prepare:options.prepare,request:q=>{calls.push(q);return handler(q)},render(){},open:(title,body)=>drawers.push({title,body})});return {ui,L,calls,drawers,select:v=>selected=v,providers:v=>providers=v,timezone:v=>timezone=v,handler:v=>handler=v,orders:v=>orders=v,current:()=>{L.from='2026-10-03T00:00:00';L.to='2026-10-03T23:59:59'},get orderContext(){return orders}};}
+function harness(options={}){const L={country:'印度',from:'2026-10-02T01:00:00',to:'2026-10-02T02:00:00',queryNow:now,dirty:false,withdrawCatalog:[]},calls=[],drawers=[];let selected=[p(A)],providers=[],timezone='Asia/Kolkata',handler=async q=>response(q),orders={platforms:[p(A)],results:[orderResult()],loading:false,retrying:false,paused:false,failures:[],queriedAt:new Date(now).toISOString(),scopeMatches:true,status:'all'};const ui=create({L,E:escape,N:number,C:v=>Number(v).toLocaleString('en-US'),selected:()=>selected,providers:()=>providers,scopeZone:()=>timezone,currentOrders:()=>orders,prepare:options.prepare,canLoad:options.canLoad,request:q=>{calls.push(q);return handler(q)},render(){},open:(title,body)=>drawers.push({title,body})});return {ui,L,calls,drawers,select:v=>selected=v,providers:v=>providers=v,timezone:v=>timezone=v,handler:v=>handler=v,orders:v=>orders=v,current:()=>{L.from='2026-10-03T00:00:00';L.to='2026-10-03T23:59:59'},get orderContext(){return orders}};}
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
 
 // Run the actual overview wiring and authorized directory selection, not a
@@ -49,6 +49,14 @@ test('overview midnight snapshot does not wait for an in-flight historical inven
   await Promise.race([h.ui.load(),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('snapshot waited for historical report inventory')),250)})]);
   assert.equal(h.report.state.catalogBusy,true);assert.equal(h.ui.state.status,'ready');assert.deepEqual(h.calls.map(q=>q.action),['collectedData','pendingSnapshot']);assert.match(h.ui.metric(),/平台目录待确认/);assert.doesNotMatch(h.ui.metric(),/已核实 2 平台/);
  }finally{clearTimeout(timeout);catalog.resolve({rows:[]});await loading;}
+});
+
+test('late report scope queues one snapshot refresh and the original phase awaits both serialized reads',async()=>{
+ const catalog=deferred(),firstResult=deferred(),secondResult=deferred(),late={dataset:'volume',system:'REPORT',name:'Synthetic late',country:'印度',team:'Synthetic Team',records:1,direction:'withdraw'};let calls=0,finished=false;
+ const h=overviewHarness({L:{serial:1,withdrawCatalog:[]},catalogHandler:()=>catalog.promise,snapshotHandler:()=>++calls===1?firstResult.promise:secondResult.promise});
+ const loading=h.ui.load();loading.then(()=>finished=true);await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,1);catalog.resolve({rows:[late]});await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,1,'catalog refresh cannot overlap the active snapshot');assert.equal(finished,false);
+ firstResult.resolve(response(h.calls.find(q=>q.action==='pendingSnapshot')));await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,2);assert.equal(finished,false,'the original overview barrier still waits for the queued refresh');assert.equal(h.ui.state.status,'loading');await h.ui.refreshScope();
+ secondResult.resolve(response(h.calls.filter(q=>q.action==='pendingSnapshot')[1]));await loading;assert.equal(finished,true);assert.equal(calls,2);assert.equal(h.calls.filter(q=>q.action==='collectedData').length,1);assert.equal(h.ui.state.unsupported[0].name,'Synthetic late');assert.match(h.ui.metric(),/入库 1\/2 · 1 未完整/);
 });
 
 test('overview snapshot retains report-only omissions and explicit country/team/platform/provider scope on catalog failure',async()=>{
@@ -84,9 +92,9 @@ test('late catalog refresh belongs to the newest query and a superseded snapshot
  const catalog=deferred(),old=deferred(),late={dataset:'volume',system:'REPORT',name:'Synthetic late',country:'印度',team:'Synthetic Team',records:1,direction:'withdraw'},settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));};
  const h=overviewHarness({L:{serial:1,withdrawCatalog:[]},catalogHandler:()=>catalog.promise,snapshotHandler:q=>q.date==='2026-10-02'?old.promise:response(q)});
  const first=h.ui.load();await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1);
- h.L.serial=2;h.L.to='2026-10-01T23:59:59';await h.ui.load();assert.equal(h.ui.state.data.date,'2026-10-01');assert.match(h.ui.metric(),/平台目录待确认/);
- catalog.resolve({rows:[late]});await settle();assert.equal(h.calls.filter(q=>q.action==='collectedData').length,1);assert.deepEqual(h.calls.filter(q=>q.action==='pendingSnapshot').map(q=>q.date),['2026-10-02','2026-10-01','2026-10-01']);assert.equal(h.ui.state.unsupported[0].name,'Synthetic late');assert.match(h.ui.metric(),/入库 1\/2 · 1 未完整/);
- old.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[A]}));await first;assert.equal(h.ui.state.data.date,'2026-10-01');assert.equal(h.ui.state.unsupported[0].name,'Synthetic late');
+ h.L.serial=2;h.L.to='2026-10-01T23:59:59';const second=h.ui.load();await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1,'replacement waits for the old request to settle');
+ catalog.resolve({rows:[late]});await settle();assert.equal(h.calls.filter(q=>q.action==='pendingSnapshot').length,1);
+ old.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[A]}));await Promise.all([first,second]);assert.equal(h.calls.filter(q=>q.action==='collectedData').length,1);assert.deepEqual(h.calls.filter(q=>q.action==='pendingSnapshot').map(q=>q.date),['2026-10-02','2026-10-01']);assert.equal(h.ui.state.data.date,'2026-10-01');assert.equal(h.ui.state.unsupported[0].name,'Synthetic late');assert.match(h.ui.metric(),/入库 1\/2 · 1 未完整/);
 });
 
 test('overview snapshot fails closed while authorized base directories are not ready or invalid',async()=>{
@@ -135,9 +143,35 @@ test('report-only selection resolves only its unique same-country same-team auth
 });
 
 test('stale responses cannot overwrite a newer platform/date/mode or restore after cancellation',async()=>{
- const h=harness(),old=deferred();h.handler(()=>old.promise);const first=h.ui.load();h.select([p(B,'Synthetic B')]);h.handler(q=>response(q,{amount:'200.00',count:2,knownAmount:'200.00',knownCount:2,rows:[row(B,{amount:'200.00',count:2,knownAmount:'200.00',knownCount:2})]}));await h.ui.load();old.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[A]}));await first;assert.match(h.ui.metric(),/>200.00</);assert.doesNotMatch(h.ui.metric(),/1,250/);
+ const h=harness(),old=deferred();h.handler(()=>old.promise);const first=h.ui.load();await new Promise(resolve=>setImmediate(resolve));h.select([p(B,'Synthetic B')]);h.handler(q=>response(q,{amount:'200.00',count:2,knownAmount:'200.00',knownCount:2,rows:[row(B,{amount:'200.00',count:2,knownAmount:'200.00',knownCount:2})]}));const second=h.ui.load();assert.equal(h.calls.length,1);old.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[A]}));await Promise.all([first,second]);assert.match(h.ui.metric(),/>200.00</);assert.doesNotMatch(h.ui.metric(),/1,250/);
  const late=deferred();h.handler(()=>late.promise);const next=h.ui.load();h.ui.cancel();late.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[B]}));await next;assert.equal(h.ui.state.status,'paused');assert.doesNotMatch(h.ui.metric(),/1,250|200.00/);
  const changed=deferred();h.handler(()=>changed.promise);const another=h.ui.load();h.L.to='2026-10-03T23:59:59';changed.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[B]}));await another;assert.doesNotMatch(h.ui.metric(),/1,250/);assert.match(h.ui.metric(),/实时代付中/);
+});
+
+test('historical retries are single-flight and replace queued scopes with only the latest selection',async()=>{
+ const h=harness(),firstResult=deferred(),latestResult=deferred();let concurrent=0,maximum=0;
+ h.handler(async q=>{maximum=Math.max(maximum,++concurrent);try{return await (q.platformIds[0]===A?firstResult.promise:latestResult.promise)}finally{concurrent--}});
+ const first=h.ui.load();assert.strictEqual(h.ui.load(),first,'duplicate before dispatch shares the drain');await new Promise(resolve=>setImmediate(resolve));assert.strictEqual(h.ui.load(),first,'duplicate in flight shares the drain');
+ h.select([p(B)]);h.L.to='2026-10-01T23:59:59';const intermediate=h.ui.load();h.L.to='2026-09-30T23:59:59';const latest=h.ui.load();await new Promise(resolve=>setImmediate(resolve));assert.equal(h.calls.length,1);
+ firstResult.resolve(response(h.calls[0]));await new Promise(resolve=>setImmediate(resolve));assert.equal(h.calls.length,2);assert.deepEqual(h.calls[1],{action:'pendingSnapshot',mode:'midnight',date:'2026-09-30',platformIds:[B]});assert.equal(h.ui.state.status,'loading');
+ let finished=false;first.then(()=>finished=true);await Promise.resolve();assert.equal(finished,false,'the primary phase waits for the latest queued request too');latestResult.resolve(response(h.calls[1]));await Promise.all([first,intermediate,latest]);assert.equal(maximum,1);assert.equal(h.ui.state.data.date,'2026-09-30');
+});
+
+test('cancelled or restored reads keep their transport lock and never run an obsolete queued scope',async()=>{
+ for(const invalidate of [ui=>ui.cancel(),ui=>ui.restore(null)]){
+  const h=harness(),old=deferred();h.handler(q=>q.platformIds[0]===A?old.promise:response(q));const first=h.ui.load();await new Promise(resolve=>setImmediate(resolve));h.L.to='2026-10-01T23:59:59';h.ui.load();invalidate(h.ui);h.select([p(B)]);h.L.to='2026-09-30T23:59:59';const fresh=h.ui.load();await new Promise(resolve=>setImmediate(resolve));assert.equal(h.calls.length,1,'cancel/restore cannot unlock an unsettled request');
+  old.resolve(response(h.calls[0]));await Promise.all([first,fresh]);assert.equal(h.calls.length,2);assert.equal(h.calls[1].date,'2026-09-30');assert.deepEqual(h.calls[1].platformIds,[B]);assert.equal(h.ui.state.data.date,'2026-09-30');
+ }
+});
+
+test('the primary-work gate blocks request preparation and retry without forgetting later explicit reads',async()=>{
+ let allowed=false,prepared=0;const h=harness({canLoad:()=>allowed,prepare:()=>prepared++});await h.ui.load();await h.ui.refreshScope();assert.equal(prepared,0);assert.equal(h.calls.length,0);
+ allowed=true;await h.ui.load();assert.equal(h.calls.length,1);assert.equal(prepared,1);allowed=false;h.select([p(B)]);await h.ui.refreshScope();await h.ui.load();assert.equal(h.calls.length,1);allowed=true;await h.ui.load();assert.equal(h.calls.length,2);assert.deepEqual(h.calls[1].platformIds,[B]);
+});
+
+test('bridge timeout releases the serialized queue as an error and only an explicit retry reads again',async()=>{
+ const h=harness();h.handler(()=>Promise.reject(Object.assign(Error('Synthetic 90-second transport deadline'),{code:'ADMIN_LIVE_TIMEOUT'})));await Promise.all([h.ui.load(),h.ui.load()]);assert.equal(h.calls.length,1);assert.equal(h.ui.state.status,'error');assert.doesNotMatch(h.ui.metric(),/>0.00<|>0 笔</);
+ await h.ui.refreshScope();assert.equal(h.calls.length,1,'a settled error is not an automatic retry loop');h.handler(response);await h.ui.load();assert.equal(h.calls.length,2);assert.equal(h.ui.state.status,'ready');
 });
 
 test('only full-stock verified zero displays 0; partial or absent zero remains unknown',async()=>{
@@ -283,5 +317,5 @@ test('current ignores wrong, duplicate, missing-summary and failed native result
 test('current orders need no source catalog preparation and ignore a late historical response',async()=>{
  let prepared=0;const h=harness({prepare:async()=>{prepared++}});h.current();await h.ui.load();assert.equal(prepared,0);assert.equal(h.calls.length,0);assert.match(h.ui.metric(),/345.67/);
  const late=deferred(),history=harness({prepare:()=>late.promise});const loading=history.ui.load();history.current();late.resolve();await loading;assert.equal(history.calls.length,0);assert.match(history.ui.metric(),/345.67/);
- const data=deferred(),switching=harness();switching.handler(()=>data.promise);const pending=switching.ui.load();await Promise.resolve();switching.current();data.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[A]}));await pending;assert.match(switching.ui.metric(),/345.67/);assert.doesNotMatch(switching.ui.metric(),/1,250.50/);assert.equal(switching.calls.length,1);
+ const data=deferred(),switching=harness();switching.handler(()=>data.promise);const pending=switching.ui.load();await new Promise(resolve=>setImmediate(resolve));switching.current();data.resolve(response({mode:'midnight',date:'2026-10-02',platformIds:[A]}));await pending;assert.match(switching.ui.metric(),/345.67/);assert.doesNotMatch(switching.ui.metric(),/1,250.50/);assert.equal(switching.calls.length,1);
 });

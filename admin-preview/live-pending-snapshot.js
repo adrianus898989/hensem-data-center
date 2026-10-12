@@ -49,12 +49,15 @@
  }
  function create(c){
   const {L,E,N,C}=c;
-  let serial=0,S={status:'idle',key:'',data:null,unsupported:[],error:''};
+  let serial=0,task=null,active=null,queued=null,S={status:'idle',key:'',data:null,unsupported:[],error:''};
   const zone=()=>c.scopeZone?.()||c.selected().find(p=>p.timezone)?.timezone||'UTC';
   const scope=()=>{const mapped=resolvePlatforms(c.selected(),L.withdrawCatalog),providers=[...new Set(c.providers().filter(Boolean))].sort(),timezone=zone(),period=requestPeriod(String(L.to||'').slice(0,10),timezone,L.queryNow||Date.now());return {...mapped,request:{action:'pendingSnapshot',...period,platformIds:mapped.platformIds,...(providers.length?{providers}:{})},country:L.country,timezone};};
   const key=q=>JSON.stringify([q.country,q.timezone,q.request,q.unsupported.map(p=>[p.id,p.name]),...(q.request.mode==='current'?[L.from,L.to,L.direction,L.status,c.selected().map(p=>p.id)]:[])]);
   const sameScope=q=>{try{return key(q)===key(scope())}catch{return false}};
-  const cancel=()=>{serial++;if(S.status==='loading')S={...S,status:'paused',data:null,error:'读取已暂停，点击重试'};};
+  // Invalidate publication, not the transport lock. The bridge cancels/bounds
+  // its request; a replacement must still wait until that promise settles.
+  const cancel=()=>{serial++;queued=null;if(S.status==='loading')S={...S,status:'paused',data:null,error:'读取已暂停，点击重试'};};
+  const canLoad=()=>!L.dirty&&c.canLoad?.()!==false;
   const idle=()=>({status:'idle',data:null,unsupported:[],error:''});
   // Read through the same query results on every render. A successful empty
   // native response proves zero; an absent, failed or report-only response does not.
@@ -106,20 +109,41 @@
   const status=s=>s.data?.basis==='created_range_latest_pending_orders'?(s.status==='loading'?'正在读取订单 · ':s.status==='paused'?'订单读取已暂停 · ':s.data.complete?'已读取 ':'已读取小计 · ')+C(s.data.receivedPlatformCount)+'/'+C(s.data.expectedPlatformCount)+' 平台'+(s.data.receivedPlatformCount<s.data.expectedPlatformCount?' · '+C(s.data.expectedPlatformCount-s.data.receivedPlatformCount)+' 未读取':'')+(s.data.multiCurrency?' · 多币种金额不相加':s.data.rows.some(r=>r.read&&!r.amountComplete)?' · 金额待补齐':'')+(s.data.rows.some(r=>r.read&&!r.countComplete)?' · 笔数待补齐':''):s.status==='loading'?'正在读取待付存量…':s.status==='error'?('待付读取失败：'+s.error):s.status==='paused'?s.error:!s.data?(current()?'点击查询读取代付订单':'点击查询读取待付存量'):complete(s)?'已核实 '+C(s.data.expectedPlatformCount)+' 平台':(positive(s)?'已入库小计':'暂无已核实合计')+' · 入库 '+C(coverageCounts(s).stored)+'/'+C(coverageCounts(s).expected)+(catalogComplete()?' · '+C(missing(s))+' 未完整':' · 平台目录待确认（仅已知平台）');
   const subtitle=()=>{const s=view();if(current()){const from=String(L.from||'').slice(0,10),to=String(L.to||'').slice(0,10);return (from===to?to:from+' 至 '+to)+' · '+zone()+(s.data?' · 查询 '+time(s.data.queriedAt,zone()).slice(11):'');}return String(L.to||'').slice(0,10)+' 00:00 · '+zone()};
   const retry=s=>current()?(s.status==='paused'||s.data?.rows.some(r=>r.reason==='orders_query_failed')?' <button type="button" class="link" onclick="livePendingSnapshotRetry()">'+(s.status==='paused'?'继续读取':'重试未完成平台')+'</button>':''):['error','paused'].includes(s.status)||s.status==='ready'&&!complete(s)?' <button type="button" class="link" onclick="livePendingSnapshotRetry()">重试</button>':'';
-  async function load(){
-   const id=++serial;let q;
-   try{q=scope()}catch(error){S={status:'error',key:'',data:null,unsupported:[],error:error.message};c.render();return;}
-   if(q.request.mode==='current'){S={status:'idle',key:key(q),data:null,unsupported:[],error:''};c.render();return;}
-   S={status:'loading',key:key(q),data:null,unsupported:q.unsupported,error:''};c.render();
+  async function read(job){
+   const {id}=job;let q=job.q;
    try{
-    await c.prepare?.();if(id!==serial||L.dirty)return;q=scope();S={...S,key:key(q),unsupported:q.unsupported};
+    await c.prepare?.();if(id!==serial||!canLoad())return;q=scope();job.key=key(q);S={...S,key:job.key,unsupported:q.unsupported};
     if(q.request.mode==='current'){S={status:'idle',key:key(q),data:null,unsupported:[],error:''};c.render();return;}
     if(!q.request.platformIds.length)throw Error(q.unsupported.length?'所选平台尚无可查询的待付目录':'当前范围没有可查询平台');
     if(q.request.platformIds.length>250)throw Error('平台超过250个，请缩小筛选范围');
-    const r=await c.request(q.request);if(id!==serial||!sameScope(q)||L.dirty)return;
+    // hensemLiveRequest owns the finite 90-second transport deadline. Do not
+    // race it with a timer that could unlock while the old request is live.
+    const r=await c.request(q.request);if(id!==serial||!sameScope(q)||!canLoad())return;
     S={...S,status:'ready',data:validateResponse(r,q),error:''};
-   }catch(error){if(id!==serial||!sameScope(q)||L.dirty)return;S={...S,status:'error',data:null,error:error?.message||'暂时无法读取'};}
+   }catch(error){if(id!==serial||!sameScope(q)||!canLoad())return;S={...S,status:'error',data:null,error:error?.message||'暂时无法读取'};}
    if(id===serial)c.render();
+  }
+  async function drain(){
+   while(queued){
+    const job=queued;queued=null;
+    if(job.id!==serial||!canLoad())continue;
+    active=job;try{await read(job);}finally{active=null;}
+   }
+  }
+  const startTask=()=>task=Promise.resolve().then(drain).finally(()=>{task=null;if(queued&&canLoad())return startTask();});
+  function load(){
+   // The overview opens this gate only after its primary aggregate workers.
+   // A click during those workers cannot start a competing snapshot request.
+   if(!canLoad())return task||Promise.resolve();
+   let q;try{q=scope()}catch(error){cancel();S={status:'error',key:'',data:null,unsupported:[],error:error.message};c.render();return task||Promise.resolve();}
+   if(q.request.mode==='current'){cancel();S={status:'idle',key:key(q),data:null,unsupported:[],error:''};c.render();return Promise.resolve();}
+   const nextKey=key(q),latest=queued||active;
+   if(latest?.id===serial&&latest.key===nextKey)return task;
+   queued={id:++serial,q,key:nextKey};S={status:'loading',key:nextKey,data:null,unsupported:q.unsupported,error:''};
+   // One latest-only queue serves explicit retries and late catalog refreshes.
+   // All callers await its drain, including a refresh queued during the read.
+   if(!task)startTask();
+   c.render();return task;
   }
   function refreshScope(){
    if(L.dirty||!['loading','ready','error'].includes(S.status))return;
@@ -150,7 +174,7 @@
    const body='<div class="live-definition">'+E(subtitle())+' · '+E(status(s))+'</div>'+coverageDetails+'<div class="live-table"><table><thead><tr><th>平台</th><th>来源 / 状态</th><th>覆盖范围</th><th>笔数</th><th>金额</th><th>法币</th><th>原生结算金额</th><th>源刷新时间</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+E(r.name||'—')+'</td><td>'+E(r.source||'—')+' · '+E(stateLabel(r))+(r.reason?'<small>'+E(reasons[r.reason]||r.reason)+'</small>':'')+'</td><td>'+E(coverage(r))+'</td><td>'+rowValue(r,'count',C)+'</td><td>'+rowValue(r,'amount',N)+'</td><td>'+E(r.currency||'—')+'</td><td>'+settlements(r.settlementAmounts)+'</td><td>'+E(time(r.observedAt,r.timezone))+(r.lastRecordAt?'<small>入库 '+E(time(r.lastRecordAt,r.timezone))+'</small>':'')+'</td></tr>'+(r.groups?.length?'<tr><td colspan="8">'+groups(r)+'</td></tr>':'')).join('')+'</tbody></table></div>';
    openDetails(title()+' · 平台明细',body);
   }
-  return {load,cancel,refreshScope,metric,summary,details,title,subtitle,detailLabel:()=> '平台明细 →',capture:()=>({...S,status:S.status==='loading'?'paused':S.status,error:S.status==='loading'?'读取已暂停，点击重试':S.error}),restore:value=>{serial++;S=value?{...value}: {status:'idle',key:'',data:null,unsupported:[],error:''};},get state(){return current()?view():S}};
+  return {load,cancel,refreshScope,metric,summary,details,title,subtitle,detailLabel:()=> '平台明细 →',capture:()=>({...S,status:S.status==='loading'?'paused':S.status,error:S.status==='loading'?'读取已暂停，点击重试':S.error}),restore:value=>{cancel();S=value?{...value}: {status:'idle',key:'',data:null,unsupported:[],error:''};},get state(){return current()?view():S}};
  }
  root.HensemLivePendingSnapshot={create,resolvePlatforms,requestPeriod};
  if(typeof module!=='undefined')module.exports={create,resolvePlatforms,requestPeriod};

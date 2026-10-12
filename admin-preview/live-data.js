@@ -547,7 +547,7 @@
 
  const reportPages=new Set(['overview','collection','payout','merchants','merchantproviders','teamops','teamcountries','teamplatforms']);
  const reportData=window.HensemLiveReportData?.create({L,E,N,C,R,nativeCatalog:()=>L.catalog.filter(p=>orderSource(p)!=='panda'),request:r=>window.hensemLiveRequest(r),render:()=>render()});
- let pendingCatalogTask=null,pendingCatalogContext=null;
+ let pendingCatalogTask=null,pendingCatalogContext=null,pendingSnapshotPhase=null;
  const pendingCatalogScope=()=>JSON.stringify([L.country,L.from,L.to,L.direction,L.status,...['team','source','platform','provider'].map(key=>activeValues(key))]);
  function preparePendingCatalog(){
   if(!L.catalogReady||!Array.isArray(L.catalog)||!Array.isArray(L.withdrawCatalog))throw Error('快照平台目录尚未就绪，请重试读取目录');
@@ -563,7 +563,7 @@
  const pendingCatalogComplete=()=>{const chosen=activeValues('platform');return !reportData||chosen.length>0&&chosen.every(id=>selectedVisible().some(p=>p.id===id||(p.aliasPlatformIds||[]).includes(id)))||reportData.state.catalogLoaded&&!reportData.state.catalogBusy&&!reportData.state.catalogError;};
  // Midnight snapshots use the same authorized base directories as pending analysis;
  // an unrelated historical report inventory timeout must not block their read.
- pendingSnapshot=window.HensemLivePendingSnapshot?.create({L,E,N,C,scopeZone,selected:selectedVisible,providers:()=>activeValues('provider',''),currentOrders:()=>({platforms:L.queryPlatforms,results:L.results,loading:L.loading,retrying:L.queryRetrying,paused:L.queryPaused,failures:L.queryFailures,queriedAt:new Date(L.queryNow).toISOString(),scopeMatches:!L.dirty&&L.queryScope===aggregateQueryScope()&&state.page==='overview',status:L.status}),prepare:preparePendingCatalog,catalogComplete:pendingCatalogComplete,request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
+ pendingSnapshot=window.HensemLivePendingSnapshot?.create({L,E,N,C,scopeZone,selected:selectedVisible,providers:()=>activeValues('provider',''),currentOrders:()=>({platforms:L.queryPlatforms,results:L.results,loading:L.loading,retrying:L.queryRetrying,paused:L.queryPaused,failures:L.queryFailures,queriedAt:new Date(L.queryNow).toISOString(),scopeMatches:!L.dirty&&L.queryScope===aggregateQueryScope()&&state.page==='overview',status:L.status}),canLoad:()=>state.page==='overview'&&L.direction!=='charge'&&!L.queryRetrying&&(!L.loading||pendingSnapshotPhase===L.serial),prepare:preparePendingCatalog,catalogComplete:pendingCatalogComplete,request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
  pendingOrders=window.HensemPendingOrders?.create({E,N,C,active:()=>state.page==='stuck'&&!L.dirty,scope:()=>JSON.stringify([L.from,L.to,L.country,L.team,L.source,L.platform,L.multi]),canDetail:()=>roleAllowed('stuck','detail'),request:r=>window.hensemLiveRequest(r),open:(title,html)=>openDrawer(title,html)})||null;
  // Snapshot identities are already in the authorized core/withdrawal catalog.
  // The historical report inventory adds no authority and must not gate this read.
@@ -1065,10 +1065,18 @@
   try{
    if(!isSuccessAnalysis()&&window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;
    if(state.page==='providers')submissionBatch=submissionAnalysis?.startWithOrders();
-   const requests=platforms.map(p=>query(p,'aggregate'));if(state.page==='orders'&&platforms.length===1&&orderSource(platforms[0])==='panda'){L.loading=false;await liveDetails();return;}if(state.page==='overview'&&L.direction!=='charge')pendingSnapshot?.load();
+   const requests=platforms.map(p=>query(p,'aggregate'));if(state.page==='orders'&&platforms.length===1&&orderSource(platforms[0])==='panda'){L.loading=false;await liveDetails();return;}
    async function worker(){while(index<requests.length&&serial===L.serial){const i=index++;if(phasedReadBusy())setReadPhase(serial,'读取 '+platforms[i].name+' 的当期订单');try{const r=await readAggregate(requests[i],serial,!force);if(serial!==L.serial)return;results[i]=r}catch(e){if(serial!==L.serial)return;L.queryFailures.push({id:platforms[i].id,name:platforms[i].name,message:e.message||'读取失败'});L.queryWarnings=L.queryFailures.map(f=>f.name+'：'+f.message)}if(submissionBatch){L.results=results.filter(Boolean);render();if(phasedReadBusy()){setReadPhase(serial,'读取 '+platforms[i].name+' 的剔除统计');await submissionBatch.read(platforms[i].id);}else void submissionBatch.read(platforms[i].id);}if(serial!==L.serial)return;done++;L.results=results.filter(Boolean);L.progress='正式数据读取：完整返回 '+results.filter(Boolean).length+' / '+requests.length+' 个平台'+(L.queryWarnings.length?'，失败 '+L.queryWarnings.length+' 个':'')+'；已处理 '+done+' 个';render()}}
    await Promise.all(Array.from({length:Math.min(phasedReadBusy()?1:2,requests.length)},()=>worker()));if(serial!==L.serial)return;if(phasedReadBusy())await submissionBatch?.finish();else void submissionBatch?.finish();
-   L.results=results.filter(Boolean);L.providerOptions=[...new Set([...L.providerOptions,...L.results.flatMap(r=>(r.groups?.provider||[]).map(g=>window.HensemProviderNames?.canonical(g.provider,L.country)??g.provider)).filter(Boolean)])].sort();L.loading=false;
+   L.results=results.filter(Boolean);L.providerOptions=[...new Set([...L.providerOptions,...L.results.flatMap(r=>(r.groups?.provider||[]).map(g=>window.HensemProviderNames?.canonical(g.provider,L.country)??g.provider)).filter(Boolean)])].sort();
+   if(state.page==='overview'&&L.direction!=='charge'){
+    // Keep render-driven supplementary reads gated until the bounded snapshot
+    // queue settles. Today's pending value still reads these aggregate results.
+    pendingSnapshotPhase=serial;
+    try{await pendingSnapshot?.load();}finally{if(pendingSnapshotPhase===serial)pendingSnapshotPhase=null;}
+    if(serial!==L.serial)return;
+   }
+   L.loading=false;
    // Source-day reconciliation is supplementary evidence. A slow check must
    // not hold the previous-period figures or workorder attachment behind it.
    if(isSuccessAnalysis()){render();if(platforms.length)await workordersLoad();return;}
