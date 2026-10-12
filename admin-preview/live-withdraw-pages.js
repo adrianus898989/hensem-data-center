@@ -84,12 +84,12 @@
   const countKnown=(row,key)=>known(row?.[key])&&(!['autoCount','manualCount'].includes(key)||Number(row[key])>=0&&(row.classificationAvailable!==false||row.classificationPartial===true));
   const shareKnown=(row,key,denominator)=>countKnown(row,key)&&[row[key],row[denominator]].every(value=>(typeof value==='number'||typeof value==='string'&&value.trim()!=='')&&Number.isFinite(Number(value)))&&Number(row[key])>=0&&Number(row[denominator])>0&&Number(row[key])<=Number(row[denominator]);
   const countCell=(row,key)=>countKnown(row,key)?C(row[key]):'—';
-  const processingBases={created_to_operated:'创建至操作处理',created_to_completed:'创建至源订单完成',applied_to_completed:'申请至完成',source_submitted_to_handled:'源提交至处理完成',source_reported_processing:'源日报处理用时'};
+  const processingBases={created_to_operated:'创建至操作处理',created_to_completed:'创建至源订单完成',applied_to_completed:'申请至完成',created_to_submitted:'创建至提交三方',source_submitted_to_handled:'源提交至处理完成',source_reported_processing:'源日报处理用时'};
   const processingValueKnown=value=>(typeof value==='number'||typeof value==='string'&&value.trim()!=='')&&Number.isFinite(Number(value))&&Number(value)>=0;
   function durationCell(row){
-   if(!row)return '—';if(!processingValueKnown(row.avgSeconds))return row.source==='NEWAR'?'<span title="缺少有效处理完成时间，暂不能计算">—</span>':'—';
+   if(!row)return '—';if(!processingValueKnown(row.avgSeconds))return row.durationBasis==='created_to_submitted'?'<span title="缺少有效创建或提交三方时间，暂不能计算">—</span>':row.source==='NEWAR'?'<span title="缺少有效处理完成时间，暂不能计算">—</span>':'—';
    const samples=processingValueKnown(row.durationSampleCount)?Number(row.durationSampleCount):null,reported=row.durationSource==='historical_source_report'&&row.durationBasis==='source_reported_processing',total=reported?NaN:Number(row.total??row.processed);
-   const basis=row.durationBasis==='created_to_operated'?'创建至操作处理的用时，不是支付到账时长。':row.durationBasis==='created_to_completed'?'创建至源订单完成的处理用时，不代表银行到账时长。':row.durationBasis==='applied_to_completed'?'申请至完成的用时。':row.durationBasis==='source_submitted_to_handled'?'源提交至处理完成的用时，不代表银行到账时长。':row.durationBasis==='source_reported_processing'?'原日报提供的处理用时。':row.durationBasis==='mixed_source_processing'?'按各来源处理用时及有效样本数加权。':'按来源提供的处理用时统计。';
+   const basis=row.durationBasis==='created_to_operated'?'创建至操作处理的用时，不是支付到账时长。':row.durationBasis==='created_to_completed'?'创建至源订单完成的处理用时，不代表银行到账时长。':row.durationBasis==='applied_to_completed'?'申请至完成的用时。':row.durationBasis==='created_to_submitted'?'创建至提交三方的用时，不代表支付到账。':row.durationBasis==='source_submitted_to_handled'?'源提交至处理完成的用时，不代表银行到账时长。':row.durationBasis==='source_reported_processing'?'原日报提供的处理用时。':row.durationBasis==='mixed_source_processing'?'按各来源处理用时及有效样本数加权。':'按来源提供的处理用时统计。';
    const partial=samples!==null&&Number.isFinite(total)&&samples<total;
    return '<span title="'+E(basis+(samples!==null?(reported?'日报':'')+'有效时间样本 '+C(samples)+' 笔'+(Number.isFinite(total)?' / '+C(total)+' 笔':'')+'。':'')+(reported?'不与订单笔数换算覆盖率。':''))+'">'+duration(row.avgSeconds)+(partial?'<sup aria-label="部分时间样本">*</sup>':'')+'</span>'+(reported?'<small class="cell-sub">源日报用时</small>':'');
   }
