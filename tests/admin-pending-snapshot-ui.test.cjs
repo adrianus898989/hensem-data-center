@@ -29,7 +29,7 @@ function overviewHarness(options={}){
  const declaration=prefix=>{const line=aggregateSource.split('\n').find(line=>line.startsWith(prefix));assert(line,'missing production declaration '+prefix);return line;};
  const between=(start,end)=>{const from=aggregateSource.indexOf(start),to=aggregateSource.indexOf(end,from);assert(from>=0&&to>from,'missing production wiring '+start);return aggregateSource.slice(from,to);};
  vm.runInContext([
-  'let pendingSnapshot;',declaration(' function activeValues('),declaration(' function matchesFilter('),declaration(' const displayIdentity='),declaration(' const platformTeam='),declaration(' const orderSource='),
+  'let pendingSnapshot;',declaration(' function activeValues('),declaration(' function matchesFilter('),declaration(' const displayIdentity='),declaration(' const platformTeam='),declaration(' const orderSource='),declaration(' const pandaNativePage='),
   between(' function visibleCatalog(){','\n const teamCatalog='),declaration(' const matchesPlatform='),declaration(' const selectedVisible='),
   between(' const reportData=','\n pendingOrders='),
   'globalThis.overview={ui:pendingSnapshot,report:reportData,selected:selectedVisible};'
@@ -91,8 +91,16 @@ test('late catalog refresh belongs to the newest query and a superseded snapshot
 
 test('overview snapshot fails closed while authorized base directories are not ready or invalid',async()=>{
  for(const change of [{catalogReady:false},{catalog:null},{withdrawCatalog:null}]){
-  const h=overviewHarness({L:change});await h.ui.load();assert.equal(h.calls.length,0);assert.equal(h.ui.state.status,'error');assert.match(h.ui.metric(),/快照平台目录尚未就绪/);assert.doesNotMatch(h.ui.metric(),/>0.00<|>0 笔</);
+  const h=overviewHarness({L:change});await h.ui.load();assert.equal(h.calls.length,0);assert.equal(h.ui.state.status,'error');assert.match(h.ui.metric(),/待付读取失败/);assert.doesNotMatch(h.ui.metric(),/>0.00<|>0 笔</);
+  // A malformed core array can fail during production selection before the
+  // readiness guard; the supported not-ready state retains its friendly error.
+  if(change.catalogReady===false)assert.match(h.ui.metric(),/快照平台目录尚未就绪/);
  }
+});
+
+test('merged Panda native pages do not add Panda identities to overview snapshot scope',async()=>{
+ const h=overviewHarness({L:{catalog:[p(A),{...p(B,'Synthetic Panda'),source:'panda'}],withdrawCatalog:[]},catalogHandler:()=>({rows:[]})});
+ await h.ui.load();assert.equal(h.ui.state.status,'ready');assert.deepEqual(h.calls.filter(q=>q.action==='pendingSnapshot').map(q=>q.platformIds),[[A]]);assert.equal(h.selected().some(p=>p.source==='panda'),false);
 });
 
 test('historical request reads the selected end-day 00:00 only; day 2 requires source day 1',async()=>{
