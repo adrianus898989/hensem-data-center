@@ -1,0 +1,326 @@
+# LG business fields v1. The source API proves these names, not a reason taxonomy.
+# Keep original financial/time/status handling and never retain source bodies.
+LGD_BUSINESS_AMOUNT_FIELDS = frozenset({
+    'beforeRechargeWithdrawDiff', 'currentProfitAmount', 'rechargeWithdrawDiff',
+})
+LGD_BUSINESS_INTEGER_FIELDS = frozenset({
+    'firstFlag', 'successNo', 'totalOrderNum', 'lockType',
+})
+LGD_BUSINESS_TEXT_FIELDS = frozenset({
+    'appCode', 'appName', 'transactionId', 'withdrawBankAppName',
+    'withdrawChannelName', 'withdrawMethodName', 'withdrawThirdName',
+    'withdrawTypeCode', 'withdrawTypeName', 'rechargeChannelName',
+    'rechargeMethodName', 'rechargeThirdName', 'rechargeTypeName',
+    'thirdMethodName', 'operatorName', 'lockOperatorName',
+})
+LGD_BUSINESS_NOTE_FIELDS = ('remark', 'appRemark')
+LGD_BUSINESS_NOTE_STATES = frozenset({'present', 'empty', 'redacted', 'missing'})
+LGD_BUSINESS_NOTE_LIMIT = 12000
+LGD_BUSINESS_TEXT_LIMIT = 500
+LGD_REDACTED = '[已隐藏]'
+# This is a stable platform identifier, not an account/phone/name projection.
+# Set only after the user explicitly authorizes retention of source userId.
+LGD_RETAIN_MEMBER_ID = True
+LGD_TRUNCATED = '[内容超长已截断]'
+LGD_ORDER_TEXT_FIELDS = frozenset({
+    'status_text', 'operator_name', 'third_party', 'raw_channel', 'mapping_code',
+    'payment_method', 'merchant_name',
+})
+LGD_ORDER_FIELDS = frozenset({
+    'order_no', 'member_id', 'status_code', 'status_text', 'status_class',
+    'order_amount', 'actual_amount', 'metric_amount', 'created_at', 'finished_at',
+    'operator_name', 'paid_at', 'operator_kind', 'handle_seconds', 'third_party',
+    'raw_channel', 'mapping_code', 'payment_method', 'merchant_name', 'raw',
+})
+
+
+def lgd_business_key(key):
+    import unicodedata
+    return re.sub(r'[^a-z0-9\u3400-\u9fff]', '', unicodedata.normalize('NFKC', str(key)).lower())
+
+
+def lgd_sensitive_source_key(key):
+    key = lgd_business_key(key)
+    exact = {
+        'name', 'username', 'fullname', 'realname', 'nickname', 'user', 'userid',
+        'memberid', 'membername', 'account', 'address', 'recipient', 'beneficiary',
+        'ip', 'bank', 'card', 'bankdetails', 'paymentdetails',
+        'contact', 'identity', 'idcard', 'passport', 'cpf', 'cnpj', 'ssn', 'pix',
+        'password', 'pwd', 'secret', 'token', 'authorization', 'cookie', 'wallet',
+        '姓名', '用户名', '会员姓名', '会员账号', '会员id', '手机', '手机号', '电话',
+        '邮箱', '地址', '身份证', '证件', '银行卡', '卡号', '银行账户', '收款人',
+    }
+    return key in exact or bool(re.search(
+        r'(phone|mobile|email|bankaccount|bankcard|bankno|cardnumber|cardno|'
+        r'accountnumber|accountno|accountname|iban|swift|ifsc|routing|'
+        r'passport|idcard|identitynumber|documentnumber|documentno|'
+        r'pixkey|walletaddress|recipientname|beneficiaryname|'
+        r'loginip|clientip|ipaddress|accesstoken|refreshtoken|credential|password)', key))
+
+
+def lgd_private_values(row):
+    """Use same-order sensitive scalars only in memory, including nested objects."""
+    values = set()
+
+    def walk(value, sensitive=False, depth=0):
+        if depth > 24:
+            raise lgd_SyncError('LG_SOURCE_PRIVATE_STRUCTURE_TOO_DEEP')
+        if isinstance(value, dict):
+            for key, item in value.items():
+                walk(item, sensitive or lgd_sensitive_source_key(key), depth + 1)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item, sensitive, depth + 1)
+        elif sensitive and value is not None and not isinstance(value, bool):
+            if isinstance(value, (str, int, Decimal)):
+                text = lgd_business_plain_text(str(value)).strip()
+                if text and text.lower() not in {'null', 'none', 'n/a', '-', '--', '----'}:
+                    values.add(text)
+    walk(row)
+    return tuple(sorted(values, key=lambda item: (-len(item), item)))
+
+
+def lgd_business_plain_text(value):
+    import unicodedata
+    text = unicodedata.normalize('NFKC', value)
+    # Join invisible separators before matching a phone/account split by them.
+    return ''.join(c for c in text if c in '\n\t' or unicodedata.category(c) not in {'Cc', 'Cf', 'Cs'})
+
+
+def lgd_redact_business_text(value, private_values=(), limit=LGD_BUSINESS_NOTE_LIMIT):
+    if not isinstance(value, str):
+        raise lgd_SyncError('LG_BUSINESS_TEXT_INVALID_TYPE')
+    text = lgd_business_plain_text(value)
+    for private in private_values:
+        # Whitespace variants of known names/accounts also need hiding.
+        pattern = r'\s*'.join(re.escape(part) for part in re.split(r'\s+', private))
+        if len(private) < 4 and private.isascii() and private.isalnum():
+            pattern = r'(?<![A-Za-z0-9])' + pattern + r'(?![A-Za-z0-9])'
+        text = re.sub(pattern, LGD_REDACTED, text, flags=re.IGNORECASE)
+    # Labels are removed with the value, so an all-private note is distinguishable.
+    labels = (
+        r'phone(?:\s*(?:no|number))?|mobile|tel(?:ephone)?|email|e-mail|'
+        r'(?:bank\s*)?(?:card|account)(?:\s*(?:no|number|name))?|'
+        r'full\s*name|real\s*name|user\s*name|name|recipient|beneficiary|'
+        r'address|passport|identity|id\s*(?:card|number|no)|document\s*(?:no|number)|'
+        r'cpf|cnpj|ssn|pix(?:\s*key)?|iban|swift|ifsc|routing|'
+        r'password|token|authorization|cookie|ip(?:\s*address)?|'
+        r'姓名|用户名|收款人|手机号|手机号码|联系电话|电话|邮箱|身份证(?:号)?|'
+        r'证件(?:号码|号)?|银行卡(?:号)?|卡号|银行账户|账户|账号|地址|密码'
+    )
+    text = re.sub(r'(?i)(?<![A-Za-z])(?:' + labels + r')\s*[:：=]\s*[^\n;；,，]+', LGD_REDACTED, text)
+
+    def hide_unpunctuated_name(match):
+        value = match.group(1).strip()
+        # These describe a business problem, not the value of a person's name.
+        if re.match(r'(?i)^(?:mismatch|error|invalid|missing|required|verification|does|not|is|must|check)\b', value):
+            return match.group(0)
+        if re.match(r'^(?:不符|错误|缺失|不一致|无效|未填写|未提供|需核对|需要核对|校验失败)', value):
+            return match.group(0)
+        return LGD_REDACTED
+
+    text = re.sub(r'(?i)(?<![A-Za-z])(?:full[ \t]+name|real[ \t]+name|user[ \t]+name|name|recipient|beneficiary)[ \t]+([^\n;；,，:：=]+)', hide_unpunctuated_name, text)
+    text = re.sub(r'(?:姓名|收款人|用户名)[ \t]+([^\n;；,，:：=]+)', hide_unpunctuated_name, text)
+    patterns = (
+        r'(?i)(?:(?:https?|ftp)://|www\.)[^\s<>\[\]，；]+',
+        r'(?i)[A-Z0-9.!#$%&\x27*+/=?^_`{|}~-]+@[A-Z0-9-]+(?:\.[A-Z0-9-]+)*',
+        r'(?i)(?<![A-Z0-9])[A-Z0-9-]+(?:\.[A-Z0-9-]+)*\.[A-Z]{2,24}(?:/[^\s<>\[\]，；]*)?',
+        r'(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])',
+        r'(?i)(?<![A-Z0-9])(?:[A-F0-9]{0,4}:){3,7}[A-F0-9]{0,4}(?![A-Z0-9])',
+        r'(?i)(?<![A-Z0-9])(?:[A-F0-9]{1,4}(?::[A-F0-9]{1,4})*)?::(?:[A-F0-9]{1,4}(?::[A-F0-9]{1,4})*)?(?![A-Z0-9])',
+        r'(?i)(?<![A-Z0-9])[A-Z]{2}\d{2}(?:[ -]?[A-Z0-9]){11,30}(?![A-Z0-9])',
+        r'(?i)(?<![A-Z0-9])[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}(?![A-Z0-9])',
+        r'(?i)(?<![A-Z0-9])[A-Z]{1,3}\d{5,12}(?![A-Z0-9])',
+        r'(?i)(?<![A-Z0-9])(?:\+?\d[\d ()+./-]{0,16})?[*x\u2022\u25cf\u00b7][*x\u2022\u25cf\u00b7 \t.-]{1,}[\d ()+./-]*\d(?![A-Z0-9])',
+        r'(?i)\b(?:Bearer\s+)?eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?',
+    )
+    for pattern in patterns:
+        text = re.sub(pattern, LGD_REDACTED, text)
+
+    # Handles plain, spaced, dashed, dotted, bracketed and Unicode-normalized IDs.
+    # Dates and clock strings are protected before matching separated numbers.
+    protected = []
+
+    def keep_date(match):
+        protected.append(match.group(0))
+        # Letters only: never confused with a source numeric identifier.
+        return '\ue100' + chr(0xE200 + len(protected)) + '\ue101'
+
+    text = re.sub(r'(?<!\d)20\d{2}[-/.](?:0[1-9]|1[0-2])[-/.](?:0[1-9]|[12]\d|3[01])(?:[ T](?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?(?:Z|[+-]\d{2}:?\d{2})?)?(?!\d)', keep_date, text)
+    text = re.sub(r'(?<![A-Za-z0-9])\+?\d(?:[\s()./-]*\d){6,}(?:[Xx])?(?![A-Za-z0-9])', LGD_REDACTED, text)
+    for index, original in enumerate(protected, 1):
+        text = text.replace('\ue100' + chr(0xE200 + index) + '\ue101', original)
+    text = re.sub(r'(?:\[已隐藏\][ \t]*){2,}', LGD_REDACTED, text).strip()
+    if len(text) > limit:
+        text = text[:limit - len(LGD_TRUNCATED)] + LGD_TRUNCATED
+    return text
+
+
+def lgd_note_value(row, key, private_values):
+    if key not in row:
+        return '', 'missing'
+    value = row[key]
+    if value is None or (isinstance(value, str) and not lgd_business_plain_text(value).strip()):
+        return '', 'empty'
+    if not isinstance(value, str):
+        # Never serialize an unexpected nested response into a free-text note.
+        raise lgd_SyncError('LG_BUSINESS_NOTE_INVALID_TYPE')
+    text = lgd_redact_business_text(value, private_values)
+    visible = re.sub(r'[\s\W_]+', '', text.replace(LGD_REDACTED, ''), flags=re.UNICODE)
+    return (LGD_REDACTED, 'redacted') if LGD_REDACTED in text and not visible else (text, 'present')
+
+
+def lgd_sanitize_raw(value: Any) -> dict:
+    result = lgd_legacy_sanitize_raw(value)
+    private_values = lgd_private_values(value)
+    result['businessSchemaVersion'] = 1
+    for key in LGD_BUSINESS_NOTE_FIELDS:
+        result[key], result[key + 'State'] = lgd_note_value(value, key, private_values)
+    for key in LGD_BUSINESS_AMOUNT_FIELDS:
+        if key in value and value[key] is not None:
+            result[key] = lgd_money(value[key])
+    for key in LGD_BUSINESS_INTEGER_FIELDS:
+        if key in value and value[key] is not None:
+            result[key] = lgd_exact_int(value[key], key)
+    for key in LGD_BUSINESS_TEXT_FIELDS:
+        if key in value and value[key] is not None:
+            if key == 'transactionId' and isinstance(value[key], str) and re.fullmatch(r'[A-Za-z0-9_.-]{0,200}', value[key]):
+                result[key] = LGD_REDACTED if lgd_member_matches_private_account(value[key], value) else value[key]
+            else:
+                result[key] = lgd_redact_business_text(value[key], private_values, 200 if key == 'transactionId' else LGD_BUSINESS_TEXT_LIMIT)
+    if 'groupList' in value:
+        groups = value['groupList']
+        if groups is None:
+            result['groupList'] = []
+        elif isinstance(groups, list):
+            result['groupList'] = []
+            for group in groups[:100]:
+                if not isinstance(group, dict):
+                    continue
+                kept = {}
+                if type(group.get('groupId')) is int:
+                    kept['groupId'] = group['groupId']
+                if isinstance(group.get('groupName'), str):
+                    kept['groupName'] = lgd_redact_business_text(group['groupName'], private_values, LGD_BUSINESS_TEXT_LIMIT)
+                if lgd_safe_color_tag(group.get('colorTag')) and lgd_redact_business_text(group['colorTag'], private_values, LGD_BUSINESS_TEXT_LIMIT) == group['colorTag']:
+                    kept['colorTag'] = group['colorTag']
+                if kept:
+                    result['groupList'].append(kept)
+            if len(groups) > 100:
+                result['groupListTruncated'] = True
+    return result
+
+
+def lgd_safe_color_tag(value):
+    return isinstance(value, str) and bool(re.fullmatch(r'(?:#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})|[A-Za-z]{1,32})', value))
+
+
+def lgd_member_matches_private_account(member, source):
+    def canonical(value):
+        return re.sub(r'[\s()+./-]', '', lgd_business_plain_text(str(value))).lower()
+
+    target = canonical(member)
+
+    def walk(value, private=False):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                normalized = lgd_business_key(key)
+                matched = private or normalized in {'account', 'bank', 'card', 'bankdetails', 'paymentdetails', 'wallet', 'pix'} or bool(re.search(
+                    r'(phone|mobile|bankaccount|bankcard|bankno|cardnumber|cardno|accountnumber|accountno|iban|pixkey|手机号|银行卡|卡号|账号|账户)', normalized))
+                if walk(item, matched):
+                    return True
+        elif isinstance(value, list):
+            return any(walk(item, private) for item in value)
+        elif private and isinstance(value, (str, int, Decimal)) and not isinstance(value, bool):
+            return canonical(value) == target
+        return False
+
+    return walk(source)
+
+
+def lgd_finalize_business_order(order, source):
+    private_values = lgd_private_values(source)
+    for key in LGD_ORDER_TEXT_FIELDS:
+        order[key] = lgd_redact_business_text(order[key], private_values, LGD_BUSINESS_TEXT_LIMIT)
+    if LGD_RETAIN_MEMBER_ID:
+        member = source.get('userId')
+        if member is not None and member != '':
+            if isinstance(member, bool) or not isinstance(member, (str, int)):
+                raise lgd_SyncError('LG_MEMBER_ID_INVALID_TYPE')
+            member = str(member)
+            if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', member):
+                raise lgd_SyncError('LG_MEMBER_ID_INVALID_FORMAT')
+            if not lgd_member_matches_private_account(member, source):
+                order['member_id'] = member
+    return order
+
+
+def lgd_validate_business_order(order):
+    """Validate without changing any cached value, UUID, chunk or content hash."""
+    if not isinstance(order, dict) or set(order) - LGD_ORDER_FIELDS:
+        raise lgd_SyncError('LG_PRIVATE_ORDER_FIELDS_REJECTED_CACHE_PRESERVED')
+    raw = order.get('raw')
+    if not isinstance(raw, dict):
+        raise lgd_SyncError('LG_PRIVATE_RAW_REJECTED_CACHE_PRESERVED')
+    legacy = lgd_legacy_sanitize_raw(raw)
+    if 'businessSchemaVersion' not in raw:
+        if raw != legacy or order.get('member_id') is not None:
+            raise lgd_SyncError('LG_PRIVATE_LEGACY_CACHE_REJECTED_CACHE_PRESERVED')
+    else:
+        fields = (set(legacy) | LGD_BUSINESS_AMOUNT_FIELDS | LGD_BUSINESS_INTEGER_FIELDS |
+                  LGD_BUSINESS_TEXT_FIELDS | {'businessSchemaVersion', 'remark', 'appRemark',
+                                             'remarkState', 'appRemarkState', 'groupList',
+                                             'groupListTruncated'})
+        if type(raw['businessSchemaVersion']) is not int or raw['businessSchemaVersion'] != 1 or set(raw) - fields:
+            raise lgd_SyncError('LG_BUSINESS_RAW_FIELDS_REJECTED_CACHE_PRESERVED')
+        for key in LGD_BUSINESS_NOTE_FIELDS:
+            state, text = raw.get(key + 'State'), raw.get(key)
+            if state not in LGD_BUSINESS_NOTE_STATES or not isinstance(text, str):
+                raise lgd_SyncError('LG_BUSINESS_NOTE_STATE_INVALID')
+            if (state in {'missing', 'empty'} and text != '') or (state == 'redacted' and text != LGD_REDACTED):
+                raise lgd_SyncError('LG_BUSINESS_NOTE_STATE_INVALID')
+            if state == 'present' and (not text.strip() or (LGD_REDACTED in text and not re.sub(r'[\s\W_]+', '', text.replace(LGD_REDACTED, '')))):
+                raise lgd_SyncError('LG_BUSINESS_NOTE_STATE_INVALID')
+            if lgd_redact_business_text(text) != text:
+                raise lgd_SyncError('LG_PRIVATE_NOTE_REJECTED_CACHE_PRESERVED')
+        for key in LGD_BUSINESS_AMOUNT_FIELDS & raw.keys():
+            if not isinstance(raw[key], str) or lgd_money(raw[key]) != raw[key]:
+                raise lgd_SyncError('LG_BUSINESS_AMOUNT_INVALID')
+        for key in LGD_BUSINESS_INTEGER_FIELDS & raw.keys():
+            if type(raw[key]) is not int:
+                raise lgd_SyncError('LG_BUSINESS_INTEGER_INVALID')
+        for key in LGD_BUSINESS_TEXT_FIELDS & raw.keys():
+            if key == 'transactionId' and isinstance(raw[key], str) and re.fullmatch(r'[A-Za-z0-9_.-]{0,200}', raw[key]):
+                continue
+            if lgd_redact_business_text(raw[key], limit=200 if key == 'transactionId' else LGD_BUSINESS_TEXT_LIMIT) != raw[key]:
+                raise lgd_SyncError('LG_PRIVATE_TEXT_REJECTED_CACHE_PRESERVED')
+        if 'groupList' in raw:
+            if not isinstance(raw['groupList'], list) or len(raw['groupList']) > 100:
+                raise lgd_SyncError('LG_BUSINESS_GROUP_INVALID')
+            for group in raw['groupList']:
+                if not isinstance(group, dict) or set(group) - {'groupId', 'groupName', 'colorTag'}:
+                    raise lgd_SyncError('LG_BUSINESS_GROUP_INVALID')
+                if 'groupId' in group and type(group['groupId']) is not int:
+                    raise lgd_SyncError('LG_BUSINESS_GROUP_INVALID')
+                if 'groupName' in group and lgd_redact_business_text(group['groupName'], limit=LGD_BUSINESS_TEXT_LIMIT) != group['groupName']:
+                    raise lgd_SyncError('LG_BUSINESS_GROUP_INVALID')
+                if 'colorTag' in group and not lgd_safe_color_tag(group['colorTag']):
+                    raise lgd_SyncError('LG_BUSINESS_GROUP_INVALID')
+        if 'groupListTruncated' in raw and raw['groupListTruncated'] is not True:
+            raise lgd_SyncError('LG_BUSINESS_GROUP_INVALID')
+        member = order.get('member_id')
+        if member is not None and (not LGD_RETAIN_MEMBER_ID or not isinstance(member, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', member)):
+            raise lgd_SyncError('LG_MEMBER_ID_INVALID_FORMAT')
+    for key in LGD_ORDER_TEXT_FIELDS:
+        if key in order and lgd_redact_business_text(order[key], limit=LGD_BUSINESS_TEXT_LIMIT) != order[key]:
+            raise lgd_SyncError('LG_PRIVATE_TEXT_REJECTED_CACHE_PRESERVED')
+
+
+def lgd_validate_business_snapshot(snapshot):
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get('chunks'), list):
+        raise lgd_SyncError('LG_BUSINESS_SNAPSHOT_INVALID')
+    for chunk in snapshot['chunks']:
+        if not isinstance(chunk, list):
+            raise lgd_SyncError('LG_BUSINESS_SNAPSHOT_INVALID')
+        for order in chunk:
+            lgd_validate_business_order(order)

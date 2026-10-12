@@ -1,0 +1,115 @@
+[
+  {
+    "schema_name": "public",
+    "function_name": "lg_callback_ingest",
+    "signature": "lg_callback_ingest(text,jsonb)",
+    "owner": "postgres",
+    "prosecdef": false,
+    "provolatile": "v",
+    "proparallel": "u",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "proacl": "{postgres=X/postgres,service_role=X/postgres}",
+    "procost": 100,
+    "definition_md5": "d60ed31d7bc85fed814dc5805af4747a",
+    "prosrc_md5": "033a827ce8b4be235ef2ef76690ba014"
+  },
+  {
+    "schema_name": "private",
+    "function_name": "dashboard_admin_live_member_daily",
+    "signature": "private.dashboard_admin_live_member_daily(jsonb)",
+    "owner": "postgres",
+    "prosecdef": true,
+    "provolatile": "s",
+    "proparallel": "u",
+    "proconfig": [
+      "search_path=\"\"",
+      "jit=off"
+    ],
+    "proacl": "{postgres=X/postgres,authenticated=X/postgres}",
+    "procost": 100,
+    "definition_md5": "9d936f445ee3111ae248265dfe7a705a",
+    "prosrc_md5": "7fca5c49a6fabb774e9aec20cbed1f46"
+  },
+  {
+    "schema_name": "public",
+    "function_name": "lg_sync_ingest",
+    "signature": "lg_sync_ingest(text,jsonb)",
+    "owner": "postgres",
+    "prosecdef": false,
+    "provolatile": "v",
+    "proparallel": "u",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "proacl": "{postgres=X/postgres,service_role=X/postgres}",
+    "procost": 100,
+    "definition_md5": "d6baf7ec1615ed56e8f96dfa06bfb380",
+    "prosrc_md5": "9034a0065199b41ed982523aa9bf2ff1"
+  },
+  {
+    "schema_name": "private",
+    "function_name": "lg_window_validate_order",
+    "signature": "private.lg_window_validate_order(jsonb,text,text,text,timestamp with time zone,timestamp with time zone)",
+    "owner": "postgres",
+    "prosecdef": false,
+    "provolatile": "s",
+    "proparallel": "u",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "proacl": "{postgres=X/postgres,service_role=X/postgres}",
+    "procost": 100,
+    "definition_md5": "57ee9a7c1749f8bc0ca5da306c5bf4e4",
+    "prosrc_md5": "822dad6ebc99ccc3f5608442e10fb81e"
+  },
+  {
+    "schema_name": "private",
+    "function_name": "dashboard_admin_live_auto_withdraw",
+    "signature": "private.dashboard_admin_live_auto_withdraw(jsonb)",
+    "owner": "postgres",
+    "prosecdef": true,
+    "provolatile": "s",
+    "proparallel": "u",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "proacl": "{postgres=X/postgres,authenticated=X/postgres}",
+    "procost": 100,
+    "definition_md5": "c65fbf2ff539b38b39eb668ba1dca6a0",
+    "prosrc_md5": "58e087fc9d04dec9256899b442ad22ad"
+  },
+  {
+    "schema_name": "private",
+    "function_name": "dashboard_admin_live_withdraw_reasons",
+    "signature": "private.dashboard_admin_live_withdraw_reasons(jsonb)",
+    "owner": "postgres",
+    "prosecdef": true,
+    "provolatile": "s",
+    "proparallel": "u",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "proacl": "{postgres=X/postgres,authenticated=X/postgres}",
+    "procost": 100,
+    "definition_md5": "994ee2a02619f403a075a6c14b393eae",
+    "prosrc_md5": "100dd15063ed4560470f76418ab89c5c"
+  },
+  {
+    "schema_name": "private",
+    "function_name": "dashboard_admin_order_business_result",
+    "signature": "private.dashboard_admin_order_business_result(jsonb,text,text,text,uuid)",
+    "owner": "postgres",
+    "prosecdef": false,
+    "provolatile": "s",
+    "proparallel": "u",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "proacl": "{postgres=X/postgres}",
+    "procost": 100,
+    "definition_md5": "04070a32f0cddbcd005f13aef4abe174",
+    "prosrc_md5": "5ccde0d571d96dc48580c85881c351db"
+  }
+]

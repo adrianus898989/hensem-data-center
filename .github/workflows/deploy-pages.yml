@@ -48,6 +48,7 @@ jobs:
       - run: pnpm test:ar-middle-channels
       - run: pnpm test:withdraw-duration
       - run: pnpm test:detail-page-coverage
+      - run: pnpm test:lg-business-notes
       - run: pnpm build
         env:
           PAGES_BASE_PATH: /hensem-data-center

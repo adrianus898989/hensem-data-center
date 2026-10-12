@@ -1,0 +1,211 @@
+[
+  {
+    "business": "withdraw",
+    "sample_rows": 20,
+    "source_reference": "4b16761d-13be-4132-9b0e-0430a3779643",
+    "note_meaning_verified": false,
+    "note_empty_in_all_sample_rows": true,
+    "fields": {
+      "account": [
+        "str"
+      ],
+      "appCode": [
+        "str"
+      ],
+      "appName": [
+        "str"
+      ],
+      "appRemark": [
+        "str"
+      ],
+      "beforeRechargeWithdrawDiff": [
+        "Decimal"
+      ],
+      "callbackTime": [
+        "int"
+      ],
+      "createTime": [
+        "int"
+      ],
+      "currentProfitAmount": [
+        "Decimal"
+      ],
+      "email": [
+        "str"
+      ],
+      "feeAmount": [
+        "Decimal"
+      ],
+      "firstFlag": [
+        "int"
+      ],
+      "groupList": [
+        "NoneType",
+        "list"
+      ],
+      "lockOperatorName": [
+        "NoneType"
+      ],
+      "lockType": [
+        "NoneType"
+      ],
+      "loginIp": [
+        "NoneType"
+      ],
+      "name": [
+        "str"
+      ],
+      "operatorAt": [
+        "int"
+      ],
+      "operatorName": [
+        "str"
+      ],
+      "orderAmount": [
+        "Decimal"
+      ],
+      "orderId": [
+        "int"
+      ],
+      "phone": [
+        "str"
+      ],
+      "realAmount": [
+        "Decimal"
+      ],
+      "rechargeWithdrawDiff": [
+        "Decimal"
+      ],
+      "remark": [
+        "str"
+      ],
+      "sameLoginIpCount": [
+        "NoneType"
+      ],
+      "status": [
+        "int"
+      ],
+      "successNo": [
+        "int"
+      ],
+      "thirdMethodName": [
+        "str"
+      ],
+      "totalOrderNum": [
+        "int"
+      ],
+      "transactionId": [
+        "str"
+      ],
+      "userId": [
+        "str"
+      ],
+      "withdrawBankAppName": [
+        "str"
+      ],
+      "withdrawChannelName": [
+        "str"
+      ],
+      "withdrawMethodName": [
+        "str"
+      ],
+      "withdrawThirdName": [
+        "str"
+      ],
+      "withdrawTypeCode": [
+        "str"
+      ],
+      "withdrawTypeName": [
+        "str"
+      ]
+    }
+  },
+  {
+    "business": "recharge",
+    "sample_rows": 20,
+    "source_reference": "d6103c74-f9d7-4ea8-ad78-2ed922b8b9dd",
+    "note_meaning_verified": false,
+    "note_empty_in_all_sample_rows": true,
+    "fields": {
+      "appCode": [
+        "str"
+      ],
+      "appName": [
+        "str"
+      ],
+      "appRemark": [
+        "str"
+      ],
+      "callbackAmount": [
+        "Decimal"
+      ],
+      "callbackTime": [
+        "int"
+      ],
+      "createTime": [
+        "int"
+      ],
+      "firstFlag": [
+        "int"
+      ],
+      "giveAmount": [
+        "Decimal"
+      ],
+      "lockOperatorName": [
+        "NoneType"
+      ],
+      "lockType": [
+        "NoneType",
+        "int"
+      ],
+      "operatorAt": [
+        "NoneType"
+      ],
+      "operatorName": [
+        "NoneType"
+      ],
+      "orderAmount": [
+        "Decimal"
+      ],
+      "orderId": [
+        "int"
+      ],
+      "realAmount": [
+        "Decimal"
+      ],
+      "rechargeChannelName": [
+        "str"
+      ],
+      "rechargeMethodName": [
+        "str"
+      ],
+      "rechargeThirdName": [
+        "str"
+      ],
+      "rechargeTypeName": [
+        "str"
+      ],
+      "remark": [
+        "str"
+      ],
+      "status": [
+        "int"
+      ],
+      "successNo": [
+        "int"
+      ],
+      "thirdMethodName": [
+        "str"
+      ],
+      "totalOrderNum": [
+        "int"
+      ],
+      "transactionId": [
+        "str"
+      ],
+      "userId": [
+        "str"
+      ]
+    }
+  }
+]

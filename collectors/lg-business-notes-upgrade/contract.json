@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "legacy_raw": "Unchanged existing positive-list numeric/time fields",
+  "required_raw": {
+    "businessSchemaVersion": 1,
+    "remark": "string <=12000",
+    "appRemark": "string <=12000",
+    "remarkState": [
+      "empty",
+      "missing",
+      "present",
+      "redacted"
+    ],
+    "appRemarkState": [
+      "empty",
+      "missing",
+      "present",
+      "redacted"
+    ]
+  },
+  "amount_fields": {
+    "beforeRechargeWithdrawDiff": "fixed-point decimal string; 30 integer digits / 18 fractional digits maximum",
+    "currentProfitAmount": "fixed-point decimal string; 30 integer digits / 18 fractional digits maximum",
+    "rechargeWithdrawDiff": "fixed-point decimal string; 30 integer digits / 18 fractional digits maximum"
+  },
+  "integer_fields": {
+    "firstFlag": "integer, not boolean",
+    "lockType": "integer, not boolean",
+    "successNo": "integer, not boolean",
+    "totalOrderNum": "integer, not boolean"
+  },
+  "text_fields": {
+    "appCode": "string <= 500",
+    "appName": "string <= 500",
+    "lockOperatorName": "string <= 500",
+    "operatorName": "string <= 500",
+    "rechargeChannelName": "string <= 500",
+    "rechargeMethodName": "string <= 500",
+    "rechargeThirdName": "string <= 500",
+    "rechargeTypeName": "string <= 500",
+    "thirdMethodName": "string <= 500",
+    "transactionId": "string <= 200",
+    "withdrawBankAppName": "string <= 500",
+    "withdrawChannelName": "string <= 500",
+    "withdrawMethodName": "string <= 500",
+    "withdrawThirdName": "string <= 500",
+    "withdrawTypeCode": "string <= 500",
+    "withdrawTypeName": "string <= 500"
+  },
+  "groupList": {
+    "type": "array <=100 entries",
+    "fields": {
+      "groupId": "integer not boolean",
+      "groupName": "sanitized string <=500",
+      "colorTag": "hex #3/#4/#6/#8 or ASCII letters 1..32"
+    },
+    "extra_keys": "removed",
+    "groupListTruncated": "optional boolean true only"
+  },
+  "member_id": {
+    "type": "null or string matching [A-Za-z0-9_-]{1,128}",
+    "source": "exact source userId only",
+    "conflict": "null if same-order sensitive account/phone/bank-card value matches after separator normalization",
+    "never": "No account/phone/name fallback, no rejection based solely on number length"
+  },
+  "canonical_text_sanitizer": {
+    "placeholder": "[已隐藏]",
+    "truncation": "[内容超长已截断] included in total limit",
+    "order": [
+      "NFKC; remove Cc/Cf/Cs except newline/tab",
+      "replace known same-order sensitive values recursively, longest first, case-insensitive, whitespace tolerant",
+      "replace sensitive labels and their values",
+      "apply generic ordered patterns",
+      "temporarily protect formatted business date/time strings",
+      "replace unknown numbers with 7+ digits including spaced/parenthesized/dashed/dotted/slashed forms",
+      "restore dates",
+      "collapse repeated hidden markers; trim; truncate only after full sanitization"
+    ],
+    "labels_python_regex": "phone(?:\\s*(?:no|number))?|mobile|tel(?:ephone)?|email|e-mail|(?:bank\\s*)?(?:card|account)(?:\\s*(?:no|number|name))?|full\\s*name|real\\s*name|user\\s*name|name|recipient|beneficiary|address|passport|identity|id\\s*(?:card|number|no)|document\\s*(?:no|number)|cpf|cnpj|ssn|pix(?:\\s*key)?|iban|swift|ifsc|routing|password|token|authorization|cookie|ip(?:\\s*address)?|姓名|用户名|收款人|手机号|手机号码|联系电话|电话|邮箱|身份证(?:号)?|证件(?:号码|号)?|银行卡(?:号)?|卡号|银行账户|账户|账号|地址|密码",
+    "generic_python_regexes": [
+      "(?i)(?:(?:https?|ftp)://|www\\.)[^\\s<>\\[\\]，；]+",
+      "(?i)[A-Z0-9.!#$%&\\x27*+/=?^_`{|}~-]+@[A-Z0-9-]+(?:\\.[A-Z0-9-]+)*",
+      "(?i)(?<![A-Z0-9])[A-Z0-9-]+(?:\\.[A-Z0-9-]+)*\\.[A-Z]{2,24}(?:/[^\\s<>\\[\\]，；]*)?",
+      "(?<![\\d.])(?:\\d{1,3}\\.){3}\\d{1,3}(?![\\d.])",
+      "(?i)(?<![A-Z0-9])(?:[A-F0-9]{0,4}:){3,7}[A-F0-9]{0,4}(?![A-Z0-9])",
+      "(?i)(?<![A-Z0-9])(?:[A-F0-9]{1,4}(?::[A-F0-9]{1,4})*)?::(?:[A-F0-9]{1,4}(?::[A-F0-9]{1,4})*)?(?![A-Z0-9])",
+      "(?i)(?<![A-Z0-9])[A-Z]{2}\\d{2}(?:[ -]?[A-Z0-9]){11,30}(?![A-Z0-9])",
+      "(?i)(?<![A-Z0-9])[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}(?![A-Z0-9])",
+      "(?i)(?<![A-Z0-9])[A-Z]{1,3}\\d{5,12}(?![A-Z0-9])",
+      "(?i)(?<![A-Z0-9])(?:\\+?\\d[\\d ()+./-]{0,16})?[*x\\u2022\\u25cf\\u00b7][*x\\u2022\\u25cf\\u00b7 \\t.-]{1,}[\\d ()+./-]*\\d(?![A-Z0-9])",
+      "(?i)\\b(?:Bearer\\s+)?eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)?"
+    ],
+    "label_value_pattern": "(?i)(?<![A-Za-z])(?:LABELS)\\s*[:：=]\\s*[^\\n;；,，]+",
+    "long_number_pattern": "(?<![A-Za-z0-9])\\+?\\d(?:[\\s()./-]*\\d){6,}(?:[Xx])?(?![A-Za-z0-9])",
+    "date_protection_pattern": "(?<!\\d)20\\d{2}[-/.](?:0[1-9]|1[0-2])[-/.](?:0[1-9]|[12]\\d|3[01])(?:[ T](?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d)?(?:Z|[+-]\\d{2}:?\\d{2})?)?(?!\\d)",
+    "transactionId_exception": "stable [A-Za-z0-9_.-]{0,200} may retain long business IDs; no URL/email; exact private account collision becomes hidden",
+    "name_labels_without_punctuation": {
+      "english_pattern": "(?i)(?<![A-Za-z])(?:full[ \\t]+name|real[ \\t]+name|user[ \\t]+name|name|recipient|beneficiary)[ \\t]+([^\\n;；,，:：=]+)",
+      "chinese_pattern": "(?:姓名|收款人|用户名)[ \\t]+([^\\n;；,，:：=]+)",
+      "preserve_english_value_prefix": "(?i)^(?:mismatch|error|invalid|missing|required|verification|does|not|is|must|check)\\b",
+      "preserve_chinese_value_prefix": "^(?:不符|错误|缺失|不一致|无效|未填写|未提供|需核对|需要核对|校验失败)",
+      "otherwise": "replace entire label+value match with [已隐藏]",
+      "stage": "after colon-label redaction and before generic patterns"
+    }
+  },
+  "cache_rule": "Validate without mutation. Pre-v1 legal payloads unchanged, including raw keys/UUID/chunks. Illegal caches fail before network and remain untouched.",
+  "note_states": {
+    "missing": "source field absent; text empty",
+    "empty": "source null or normalized whitespace-only string; text empty",
+    "redacted": "a redaction marker exists and no letters/digits remain outside markers; text exactly [已隐藏]",
+    "present": "other nonempty sanitized source text; preserve punctuation-only source notes, do not falsely label them redacted"
+  }
+}
