@@ -124,3 +124,14 @@ test('every reason kind actually executes after joined-field qualification; ordi
  for(const kind of ['blocking','rejection','categories','orders','operators'])assert.ok(await reasonCall(db,'91CLUB',{kind}));
  assert.equal((await db.query("select operator,manual_remark from ar_collected_orders where order_no='DETAIL-REASON'")).rows[0].operator,null);
  }finally{await db.close()}});
+
+test('fresh GAME66 source-notes delegation remains identical for every reason kind and retains scope denial',async()=>{const db=await fixture();try{
+ await db.exec(`create function private.dashboard_admin_game66_withdraw_reasons(p_request jsonb,p_scope jsonb,p_meta jsonb)returns jsonb language sql stable set search_path='' as $$select jsonb_build_object('available',true,'source','synthetic_game66_received_notes','request',p_request,'scope',p_scope,'nativeMeta',p_meta)$$;
+ insert into synthetic_catalog values(md5('synthetic-game66-detail')::uuid,'GAME66-SYNTH','M8','印度','IN','game66','Asia/Kolkata','INR','GAME66-SYNTH');`);
+ const kinds=['blocking','blockingOrders','blockingVariants','categories','rejection','operators','orders'],before={};
+ for(const kind of kinds)before[kind]=await reasonCall(db,'GAME66-SYNTH',{kind,...['blockingOrders','blockingVariants'].includes(kind)?{reasonKey:'a'.repeat(32)}:{}});
+ const state=await snapshots(db),g=await generations(db);await installObjects(db);await installReaders(db);
+ for(const kind of kinds){const got=await reasonCall(db,'GAME66-SYNTH',{kind,...['blockingOrders','blockingVariants'].includes(kind)?{reasonKey:'a'.repeat(32)}:{}});assert.deepEqual(got,before[kind]);assert.equal(got.source,'synthetic_game66_received_notes');assert.equal(got.nativeMeta.source,'game66');}
+ assert.deepEqual(await snapshots(db),state);assert.deepEqual(await generations(db),g);
+ await db.query("select set_config('test.scope',$1,false)",[JSON.stringify({mode:'selected',countries:[],platforms:[]})]);await assert.rejects(()=>reasonCall(db,'GAME66-SYNTH'),/scope_denied/);
+ }finally{await db.close()}});

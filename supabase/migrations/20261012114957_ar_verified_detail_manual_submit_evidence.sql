@@ -11,7 +11,7 @@ BEGIN
  SELECT p.* INTO f FROM pg_proc p WHERE p.oid=to_regprocedure('private.dashboard_admin_ar_withdraw_days(jsonb,jsonb,date,date)');
  IF NOT FOUND OR md5(f.prosrc)<>ALL(ARRAY['1bfc6398524bc3194b91f1d411960425','3645bf1a24efd1ae7b89897616172fa5']::text[]) OR pg_get_userbyid(f.proowner)<>'postgres' OR f.proconfig IS DISTINCT FROM ARRAY['search_path=""']::text[] OR f.proacl::text IS DISTINCT FROM '{postgres=X/postgres}' OR f.prosecdef IS DISTINCT FROM false OR f.provolatile<>'s' OR f.proparallel<>'u' OR f.proisstrict OR f.proleakproof OR f.prolang<>(SELECT oid FROM pg_language WHERE lanname='plpgsql') OR pg_get_function_arguments(f.oid)<>'p_request jsonb, p_scope jsonb, p_start date, p_end date' OR pg_get_function_result(f.oid)<>'TABLE(data_date date, country text, platform text, platform_key text, total bigint, success bigint, rejected bigint, auto_count bigint, manual_count bigint, avg_seconds numeric, duration_sample_count bigint, duration_total_seconds numeric, source_updated_at timestamp with time zone, updated_at timestamp with time zone, complete boolean, operator_rows jsonb, alias_keys text[])' THEN RAISE EXCEPTION 'AR_DETAIL_BASELINE_DRIFT_dashboard_admin_ar_withdraw_days'; END IF;
  SELECT p.* INTO f FROM pg_proc p WHERE p.oid=to_regprocedure('private.dashboard_admin_live_withdraw_reasons(jsonb)');
- IF NOT FOUND OR md5(f.prosrc)<>ALL(ARRAY['e5d7ffe578bf503374334b8097e8095f','5d1a566ee485f219f1d11986e900bfc2']::text[]) OR pg_get_userbyid(f.proowner)<>'postgres' OR f.proconfig IS DISTINCT FROM ARRAY['search_path=""']::text[] OR f.proacl::text IS DISTINCT FROM '{postgres=X/postgres,authenticated=X/postgres}' OR f.prosecdef IS DISTINCT FROM true OR f.provolatile<>'s' OR f.proparallel<>'u' OR f.proisstrict OR f.proleakproof OR f.prolang<>(SELECT oid FROM pg_language WHERE lanname='plpgsql') OR pg_get_function_arguments(f.oid)<>'p_request jsonb' OR pg_get_function_result(f.oid)<>'jsonb' THEN RAISE EXCEPTION 'AR_DETAIL_BASELINE_DRIFT_dashboard_admin_live_withdraw_reasons'; END IF;
+ IF NOT FOUND OR md5(f.prosrc)<>ALL(ARRAY['dc349a32d5a9863b90920a7bf69781bb','100dd15063ed4560470f76418ab89c5c']::text[]) OR pg_get_userbyid(f.proowner)<>'postgres' OR f.proconfig IS DISTINCT FROM ARRAY['search_path=""']::text[] OR f.proacl::text IS DISTINCT FROM '{postgres=X/postgres,authenticated=X/postgres}' OR f.prosecdef IS DISTINCT FROM true OR f.provolatile<>'s' OR f.proparallel<>'u' OR f.proisstrict OR f.proleakproof OR f.prolang<>(SELECT oid FROM pg_language WHERE lanname='plpgsql') OR pg_get_function_arguments(f.oid)<>'p_request jsonb' OR pg_get_function_result(f.oid)<>'jsonb' THEN RAISE EXCEPTION 'AR_DETAIL_BASELINE_DRIFT_dashboard_admin_live_withdraw_reasons'; END IF;
  SELECT p.* INTO f FROM pg_proc p WHERE p.oid=to_regprocedure('private.ar_historical_duration_generation()');
  IF NOT FOUND OR md5(f.prosrc)<>ALL(ARRAY['dab45cf30ff7388f2d0642737977460f','6ad649935379e96fae90ea7659be7b1c']::text[]) OR pg_get_userbyid(f.proowner)<>'postgres' OR f.proconfig IS DISTINCT FROM ARRAY['search_path=""']::text[] OR f.proacl::text IS DISTINCT FROM '{postgres=X/postgres}' OR f.prosecdef IS DISTINCT FROM false OR f.provolatile<>'s' OR f.proparallel<>'u' OR f.proisstrict OR f.proleakproof OR f.prolang<>(SELECT oid FROM pg_language WHERE lanname='sql') OR pg_get_function_arguments(f.oid)<>'' OR pg_get_function_result(f.oid)<>'text' THEN RAISE EXCEPTION 'AR_DETAIL_BASELINE_DRIFT_ar_historical_duration_generation'; END IF;
  SELECT p.* INTO f FROM pg_proc p WHERE p.oid=to_regprocedure('private.ar_withdraw_fact(text,text,text,text,text,text,text,timestamp,timestamp,timestamptz,timestamptz)');
@@ -301,7 +301,7 @@ BEGIN
 END;
 $function$
 ;$patch_dashboard_admin_ar_withdraw_days$; END IF;
- IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='private.dashboard_admin_live_withdraw_reasons(jsonb)'::regprocedure)<>'5d1a566ee485f219f1d11986e900bfc2' THEN EXECUTE $patch_dashboard_admin_live_withdraw_reasons$CREATE OR REPLACE FUNCTION private.dashboard_admin_live_withdraw_reasons(p_request jsonb)
+ IF (SELECT md5(prosrc) FROM pg_proc WHERE oid='private.dashboard_admin_live_withdraw_reasons(jsonb)'::regprocedure)<>'100dd15063ed4560470f76418ab89c5c' THEN EXECUTE $patch_dashboard_admin_live_withdraw_reasons$CREATE OR REPLACE FUNCTION private.dashboard_admin_live_withdraw_reasons(p_request jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql
  STABLE SECURITY DEFINER
@@ -373,6 +373,11 @@ begin
  -- yash_received_source_notes_v1: validated request and fresh scoped native metadata.
  if v_meta.source='kb' then
   v_rows:=private.dashboard_admin_yash_withdraw_reasons(p_request,v_scope,to_jsonb(v_meta));
+  if v_rows is not null then return v_rows;end if;
+ end if;
+ -- game66_received_source_notes_v1: request, scope and native identity were checked above.
+ if v_meta.source='game66' then
+  v_rows:=private.dashboard_admin_game66_withdraw_reasons(p_request,v_scope,to_jsonb(v_meta));
   if v_rows is not null then return v_rows;end if;
  end if;
  if v_meta.source='ar' then

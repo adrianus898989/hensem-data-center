@@ -202,6 +202,11 @@ begin
   v_rows:=private.dashboard_admin_yash_withdraw_reasons(p_request,v_scope,to_jsonb(v_meta));
   if v_rows is not null then return v_rows;end if;
  end if;
+ -- game66_received_source_notes_v1: request, scope and native identity were checked above.
+ if v_meta.source='game66' then
+  v_rows:=private.dashboard_admin_game66_withdraw_reasons(p_request,v_scope,to_jsonb(v_meta));
+  if v_rows is not null then return v_rows;end if;
+ end if;
  if v_meta.source='ar' then
   with source_orders as materialized (
    select case when v_kind in('orders','blockingOrders') or v_query is not null then order_no end order_no,
