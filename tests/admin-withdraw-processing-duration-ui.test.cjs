@@ -1,9 +1,9 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
-function setup(data){
+function setup(data,view='auto_withdraw'){
  const root={HensemLiveFilters:{multi:()=>''}},tables=[];root.window=root;
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-withdraw-pages.js'),'utf8'),root);
  const p={id:'77777777-7777-4777-8777-777777777777',name:'POPMIU',sourceName:'POPMIU',source:'wg',country:'巴西',team:'M8',timezone:'America/Sao_Paulo'};
- const page=root.HensemLiveWithdrawPages.create({L:{catalogReady:true,catalog:[p],country:'巴西',from:'2026-10-06',to:'2026-10-06'},page:()=> 'auto_withdraw',E:v=>String(v??'').replaceAll('"','&quot;'),C:String,N:String,R:(a,b)=>(a/b*100).toFixed(2)+'%',box:(_title,body)=>body,table:(headers,rows,cls,footers)=>{tables.push({headers,rows,footers});return '';},render:()=>{},request:async()=>({})});
+ const page=root.HensemLiveWithdrawPages.create({L:{catalogReady:true,catalog:[p],country:'巴西',from:'2026-10-06',to:'2026-10-06'},page:()=>view,E:v=>String(v??'').replaceAll('"','&quot;'),C:String,N:String,R:(a,b)=>(a/b*100).toFixed(2)+'%',box:(_title,body)=>body,table:(headers,rows,cls,footers)=>{tables.push({headers,rows,footers});return '';},render:()=>{},request:async()=>({})});
  page.state.data=data;return {page,tables};
 }
 const row=(more={})=>({country:'巴西',platform:'POPMIU',total:1026,success:996,rejected:7,autoCount:8,manualCount:1018,avgSeconds:445.702729,durationSampleCount:1026,durationTotalSeconds:457291,durationBasis:'created_to_operated',...more});
@@ -74,4 +74,23 @@ test('observed processing changes preserve zero, reject malformed values and nev
 test('NEWAR retains a real historical report mean with its source while missing current completion time stays unknown',()=>{
  const previous=row({source:'NEWAR',total:20000,avgSeconds:'972.0450335533248295',durationBasis:'source_reported_processing',durationSource:'historical_source_report',durationSampleCount:18031,durationTotalSeconds:17526944}),current=row({source:'NEWAR',avgSeconds:null,durationBasis:'source_submitted_to_handled',durationSampleCount:0,durationTotalSeconds:null,previous}),before=structuredClone(current),f=setup({rows:[current],total:1,totals:current});f.page.render();const cells=f.tables[0].rows[0];
  assert.match(cells[10],/缺少有效处理完成时间，暂不能计算/);assert.match(cells[11],/16分12秒/);assert.match(cells[11],/源日报用时/);assert.match(cells[11],/日报有效时间样本 18031 笔/);assert.match(cells[11],/不与订单笔数换算覆盖率/);assert.doesNotMatch(cells[11],/18031 笔 \/ 20000|部分时间样本/);assert.equal(cells[12],'—');assert.deepEqual(current,before);
+});
+test('NEWAR creation-to-third-party submission times compare only explicit matching bases without claiming payment completion',()=>{
+ for(const view of ['auto_withdraw','withdraw_operators']){
+  const previous=row({source:'NEWAR',avgSeconds:90,durationBasis:'created_to_submitted',durationSource:'native_created_to_submitted',durationSampleCount:2,durationTotalSeconds:180}),current=row({source:'NEWAR',total:100,processed:100,avgSeconds:60,durationBasis:'created_to_submitted',durationSource:'native_created_to_submitted',durationSampleCount:2,durationTotalSeconds:120,comparisonComparable:false,previous}),before=structuredClone(current),f=setup({rows:[current],total:1,totals:current},view);f.page.render();
+  const t=f.tables[0],i=t.headers.findIndex(h=>h.includes('平均处理用时'));
+  assert.match(t.rows[0][i],/1分0秒/);assert.match(t.rows[0][i],/创建至提交三方的用时，不代表支付到账/);assert.match(t.rows[0][i],/有效时间样本 2 笔 \/ 100 笔/);assert.match(t.rows[0][i],/部分时间样本/);
+  assert.match(t.rows[0][i+1],/1分30秒/);assert.match(t.rows[0][i+1],/创建至提交三方/);assert.match(t.rows[0][i+2],/−30\.00 秒（-33\.33%）/);assert.match(t.rows[0][i+2],/已观察用时差.*完整性尚未核验/);
+  assert.doesNotMatch(t.rows[0][i],/创建至源订单完成|源提交至处理完成|源日报用时/);assert.deepEqual(current,before);
+ }
+});
+test('creation-to-submission duration preserves absent samples and cannot compare with another or unspecified time basis',()=>{
+ const native={source:'NEWAR',durationBasis:'created_to_submitted',durationSource:'native_created_to_submitted'};
+ for(const priorBasis of ['source_reported_processing','source_submitted_to_handled',null,'unknown']){
+  const current=row({...native,avgSeconds:60,previous:row({avgSeconds:90,durationBasis:priorBasis})}),f=setup({rows:[current],total:1,totals:current});f.page.render();const cells=f.tables[0].rows[0];assert.match(cells[12],/口径不同/);assert.doesNotMatch(cells[12],/withdraw-delta|%/);
+ }
+ for(const avgSeconds of [null,'',-1,'Infinity']){
+  const current=row({...native,avgSeconds,durationSampleCount:0,durationTotalSeconds:null,previous:row({...native,avgSeconds:90})}),f=setup({rows:[current],total:1,totals:current});f.page.render();const cells=f.tables[0].rows[0];assert.match(cells[10],/缺少有效创建或提交三方时间，暂不能计算/);assert.doesNotMatch(cells[10],/0秒|处理完成时间/);assert.equal(cells[12],'—');
+ }
+ const current=row({...native,avgSeconds:0,previous:row({...native,avgSeconds:0})}),f=setup({rows:[current],total:1,totals:current});f.page.render();assert.match(f.tables[0].rows[0][12],/0\.00 秒（持平）/);assert.doesNotMatch(f.tables[0].rows[0][12],/NaN|Infinity/);
 });
