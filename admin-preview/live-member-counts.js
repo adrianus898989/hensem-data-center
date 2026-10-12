@@ -85,7 +85,10 @@
   }
   function invalidate(items){
    cacheGeneration++;
-   const ranges=items.map(item=>({family:family(item),start:Date.parse(item.request.startAt),end:Date.parse(item.request.endAt)}));
+   // An all-result may be composed from direction entries. Refreshing either
+   // child invalidates its parent; refreshing all invalidates both children.
+   const related=items.flatMap(item=>[item,...(item.request.direction==='all'?directions:['all']).map(direction=>({...item,request:{...item.request,direction}}))]);
+   const ranges=related.map(item=>({family:family(item),start:Date.parse(item.request.startAt),end:Date.parse(item.request.endAt)}));
    for(const [key,entry]of cache)if(ranges.some(range=>entry.family===range.family&&entry.startAt<range.end&&entry.endAt>range.start))removeEntry(key);
   }
   function scope(){const context=accessContext(),selected=[...new Map((c.selected()||[]).map(p=>[p.id,p])).values()].sort((a,b)=>String(a.id).localeCompare(String(b.id))),items=[],unsupported=[];for(const p of selected){if(native(p))items.push(requestFor(p,c.query));else unsupported.push({id:p.id,name:p.name||'未提供平台名',reason:'此来源尚未接入会员明细'});}return {context,items,unsupported,key:encode([context,L.country,L.from,L.to,L.direction,L.status,L.multi,items.map(i=>[i.request,identity(i.platform)]),unsupported.map(p=>[p.id,p.name])])};}
@@ -116,6 +119,26 @@
     remember(item,result,policy);return result;
    }
   }
+  async function retryTimedOut(item,id,policy){
+   // A one-day all-direction scan can exceed the statement budget even though
+   // either direction fits. Keep the exact full window and provider union;
+   // append separately deduplicated direction rows, never hourly distincts.
+   if(item.days.length!==1||item.request.direction!=='all')return readExact(item,id,policy);
+   const parts=[];
+   for(const direction of directions){
+    if(!valid(id))throw Error('人数查询已替换');
+    try{
+     const part=await readExact({...item,request:{...item.request,direction}},id,policy);
+     if(!valid(id))throw Error('人数查询已替换');
+     if(part._memberCacheable===false)throw Error('人数统计响应未完整');
+     parts.push(part);
+    }catch(error){if(!valid(id))throw error;throw Object.assign(Error((direction==='charge'?'充值':'提款')+'：'+(error?.message||'人数读取失败')+'（'+parts.length+'/2 方向已读取，平台未计入合计）'),{code:error?.code});}
+   }
+   const rows=parts.flatMap(part=>part.rows);
+   if(rows.length!==2||directions.some(direction=>rows.filter(row=>row.direction===direction&&row.date===item.days[0]).length!==1))throw Error('人数统计方向明细不完整');
+   const result={platform:parts[0].platform,rows,sourceCompletenessVerified:parts.every(part=>part.sourceCompletenessVerified),frequencySupported:parts.every(part=>part.frequencySupported),_memberReadAt:Math.min(...parts.map(part=>part._memberReadAt)),_memberExpiresAt:Math.min(...parts.map(part=>part._memberExpiresAt)),_memberCacheHit:parts.some(part=>part._memberCacheHit),_memberCacheable:true};
+   remember(item,result,policy);return result;
+  }
   let readConcurrency=2;
   function ensure(force=false,concurrency=2){
    if(L.dirty)return Promise.resolve();
@@ -130,8 +153,9 @@
     async function worker(){while(index<q.items.length&&valid(id)){const item=q.items[index++];try{const result=await readPlatform(item,id,policy);if(!valid(id))return;S.results.push(result);}catch(error){if(!valid(id))return;S.failures.push(failure(item,error));if(timedOut(error))timedOutItems.push(item);}if(valid(id))c.render();}}
     await Promise.all(Array.from({length:Math.min(readConcurrency,q.items.length)},()=>worker()));if(!valid(id))return;
     // Finish the initial cohort before one serial retry of failed timeout scopes.
-    // Retry the original request only: no successful platform reads or extra fallback.
-    for(const item of timedOutItems){if(!valid(id))return;try{const result=await readExact(item,id,policy);if(!valid(id))return;S.results.push(result);S.failures=S.failures.filter(row=>row.id!==item.platform.id);}catch(error){if(!valid(id))return;const message=error?.message||'人数读取失败';S.failures=S.failures.map(row=>row.id===item.platform.id?{...row,error:row.error===message?message:row.error+'；重试失败：'+message}:row);}if(valid(id))c.render();}
+    // Only one-day all-direction timeouts use two exact direction reads; all
+    // other scopes retain one original retry. No recursive fallback is allowed.
+    for(const item of timedOutItems){if(!valid(id))return;try{const result=await retryTimedOut(item,id,policy);if(!valid(id))return;S.results.push(result);S.failures=S.failures.filter(row=>row.id!==item.platform.id);}catch(error){if(!valid(id))return;const message=error?.message||'人数读取失败';S.failures=S.failures.map(row=>row.id===item.platform.id?{...row,error:row.error===message?message:row.error+'；重试失败：'+message}:row);}if(valid(id))c.render();}
     if(!valid(id))return;S={...S,status:S.failures.length&&!S.results.length?'error':'ready',error:S.failures.length&&!S.results.length?'所选平台人数读取失败':''};c.render();
    })();pending=run;run.finally(()=>{if(id===serial)pending=null});return run;
   }
