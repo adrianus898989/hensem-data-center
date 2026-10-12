@@ -415,3 +415,17 @@ test('partial name suggestions and supplier shortcut preserve raw values and IME
 test('batch query permission revoked between reads cannot start a later batch',async()=>{
  const catalog=Array.from({length:21},(_,i)=>platform(i+1));let h;h=crossFixture({catalog,handler:q=>{h.setPermissions(['view']);return batchResponse(catalog,q);}});await h.context.liveChannelCrossQuery('WPAY-QR');assert.equal(h.calls.length,1);assert.deepEqual(JSON.parse(JSON.stringify(h.mod.capture().cache)),{});assert.match(h.mod.render(),/未获查询权限/);
 });
+
+test('cross-platform AR status uses compact native switches and availability while raw text stays only in an escaped tooltip',async()=>{
+ const raw='state=1; channelState=1; merchantState=1 <unsafe>',cases=[
+  [{source_state:'1',source_channel_state:'1',source_merchant_state:'1'},'开启','可用'],
+  [{source_state:'0',source_channel_state:'1',source_merchant_state:'1'},'关闭','可用'],
+  [{source_state:null,source_channel_state:null,source_merchant_state:null,enabled:true},'状态未提供','未提供'],
+  [{source_state:'5',source_channel_state:'0',source_merchant_state:'1'},'状态未提供','总控通道关闭'],
+  [{source_state:'1',source_channel_state:'1',source_merchant_state:'0'},'开启','三方商户关闭']
+ ];
+ for(const [fields,label,available]of cases){const h=crossFixture({handler:q=>batchResponse([AR],q,()=>[channel('state',{provider:'WPayINR',channel_name:'WPAY-QR',status_text:raw,...fields})])});await h.context.liveChannelCrossQuery('WPAY-QR');const html=h.mod.render(),body=html.match(/<tbody>([\s\S]*?)<\/tbody>/)[1],cell=[...body.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)][2][1];assert.equal(cell.replace(/<[^>]*>/g,''),label+'可用状态：'+available);assert.match(cell,/title="state=1; channelState=1; merchantState=1 &lt;unsafe&gt;"/);assert.doesNotMatch(cell,/>[^<]*state=/);assert.doesNotMatch(html,/<unsafe>/);assert.match(body,/0\.00%/);assert.match(body,/68\.40%/);assert.equal(h.calls.length,1);}
+ const missing=crossFixture({handler:q=>batchResponse([AR],q,()=>[channel('old',{provider:'WPayINR',channel_name:'WPAY-QR',status_text:raw,is_present:false})])});await missing.context.liveChannelCrossQuery('WPAY-QR');missing.context.liveChannelCrossAbsent(true);let html=missing.mod.render(),body=html.match(/<tbody>([\s\S]*?)<\/tbody>/)[1];assert.match(body,/>本次未出现<\/span>/);assert.doesNotMatch(body,/可用状态：/);
+ const yash=crossFixture({catalog:[YASH],handler:q=>batchResponse([YASH],q,()=>[channel('yash',{provider:'WPayINR',channel_name:'WPAY-QR',status_text:'源站开启'})])});await yash.context.liveChannelCrossQuery('WPAY-QR');body=yash.mod.render().match(/<tbody>([\s\S]*?)<\/tbody>/)[1];assert.match(body,/>源站开启<\/span>/);assert.doesNotMatch(body,/可用状态：/);
+ const single=fixture({handler:()=>response(AR,[channel('single',{status_text:raw})])});await single.start();assert.equal(firstTableRow(single.mod.render())['状态'],'通道状态开启可用状态总控通道关闭');assert.deepEqual(exported(single)[0]['源站状态'],raw);
+});
