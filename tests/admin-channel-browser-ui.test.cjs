@@ -318,3 +318,100 @@ test('live host uses full visible catalog, hides shared filters, automatically l
 test('live host view-only role receives authorized directory but no automatic channel facts or export',async()=>{
  const h=integrated({access:{mode:'assigned',canView:true,permissions:['channel_status.view','channel_status.export']}});await settle();assert.deepEqual(h.calls.map(q=>q.action),['catalog']);assert.match(h.html(),/未获查询权限/);assert.doesNotMatch(h.html(),/Display one/);h.c.liveExport();assert.equal(h.blobs.length,0);
 });
+
+function batchResponse(catalog,q,rowsFor=()=>[channel('cross',{provider:'WPayINR',channel_name:'WPAY-QR'})]){
+ const parts=q.platformIds.map(id=>response(catalog.find(p=>p.id===id),rowsFor(catalog.find(p=>p.id===id))));
+ return {version:1,queriedAt:NOW,platforms:parts.flatMap(r=>r.platforms),snapshots:parts.flatMap(r=>r.snapshots)};
+}
+function crossFixture(options={}){const h=fixture(options);h.context.liveChannelMode('cross');return h;}
+function later(){let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject};}
+
+test('cross-platform channel mode reads all visible countries and matches source display name or supplier without provider aliases',async()=>{
+ const pk=platform(11,{country:'巴基斯坦',timezone:'Asia/Karachi'}),kb=platform(12,{source:'kb',country:'巴西',name:'YASH Brazil',capabilities:{channelStatusAvailable:true}}),off=platform(13,{capabilities:{channelStatusAvailable:false}}),report=platform(14,{reportOnly:true}),catalog=[AR,pk,kb,off,report];
+ const h=crossFixture({catalog,handler:q=>batchResponse(catalog,q,p=>[channel('cross',{provider:p.id===kb.id?'wpay':'WPayINR',channel_name:p.id===kb.id?'Another name':'WPAY-QR',success_rate_15m:'0',success_rate_10m:'71'})])});
+ assert.match(h.mod.render(),/全部国家/);assert.match(h.mod.render(),/跨平台查通道/);
+ await h.context.liveChannelCrossQuery('  wpay-qr  ');assert.equal(h.calls.length,1);assert.deepEqual(h.calls[0],{action:'channelStatus',platformIds:[AR.id,pk.id,kb.id],direction:'all'});
+ const html=h.mod.render();assert.match(html,/印度 \/ AR 系统/);assert.match(html,/巴基斯坦 \/ AR 系统/);assert.match(html,/巴西 \/ YASH 系统/);assert.match(html,/WPAY-QR/);assert.match(html,/WPayINR/);assert.match(html,/0\.00%/);assert.match(html,/未接入通道快照/);assert.match(html,/当前快照无匹配通道/);assert.doesNotMatch(html,/<th[^>]*>综合成功率|<th[^>]*>平均成功率|AR 14/);
+ assert.equal(h.mod.canExport(),false);await h.context.liveChannelCrossQuery('wpay');assert.equal(h.calls.length,1,'same complete snapshots serve a different exact local name');assert.match(h.mod.render(),/Another name/);
+ await h.context.liveChannelCrossQuery('WPAY');assert.equal(h.calls.length,1);assert.match(h.mod.render(),/Another name/);
+});
+
+test('cross-platform reads batches of at most twenty sequentially and coalesces the same in-flight query',async()=>{
+ const catalog=Array.from({length:42},(_,i)=>platform(i+1)),wait=later(),h=crossFixture({catalog,handler:q=>h.calls.length===1?wait.promise:batchResponse(catalog,q)});
+ const first=h.context.liveChannelCrossQuery('WPAY-QR');await flush();const duplicate=h.context.liveChannelCrossQuery('WPAY-QR');await flush();assert.equal(h.calls.length,1);assert.equal(h.calls[0].platformIds.length,20);
+ wait.resolve(batchResponse(catalog,h.calls[0]));await first;await duplicate;assert.deepEqual(h.calls.map(q=>q.platformIds.length),[20,20,2]);assert.equal(new Set(h.calls.flatMap(q=>q.platformIds)).size,42);assert.match(h.mod.render(),/已读取 42\/42 个平台/);
+});
+
+test('cross-platform country/system/platform filters stay within the authorized catalog and never merge country aliases',async()=>{
+ const pk=platform(5,{country:'巴基斯坦'}),yash=platform(6,{source:'kb',capabilities:{channelStatusAvailable:true}}),catalog=[AR,pk,yash],h=crossFixture({catalog,handler:q=>batchResponse(catalog,q)});
+ h.context.liveChannelCrossFilter('country','巴基斯坦');await h.context.liveChannelCrossQuery('WPAY-QR');assert.deepEqual(h.calls[0].platformIds,[pk.id]);
+ h.context.liveChannelCrossFilter('country','');h.context.liveChannelCrossFilter('source','YASH');await h.context.liveChannelCrossQuery('WPAY-QR');assert.deepEqual(h.calls[1].platformIds,[yash.id]);
+ h.context.liveChannelCrossFilter('source','AR');h.context.liveChannelCrossFilter('platformId',AR.id);await h.context.liveChannelCrossQuery('WPAY-QR');assert.deepEqual(h.calls[2].platformIds,[AR.id]);
+ h.context.liveChannelCrossFilter('platformId','99999999-1111-4111-8111-111111111111');await h.context.liveChannelCrossQuery('WPAY-QR');assert.equal(h.calls.length,3);
+ h.setCatalog([pk]);h.mod.render();assert.doesNotMatch(h.mod.render(),/WPAY-QR<\/td>/);assert.equal(h.mod.capture().cache[AR.id],undefined);
+});
+
+test('cross-platform group preserves native category-channel rows, rates, zero and status without inventing AR withdrawal percentages',async()=>{
+ const rows=[channel('same',{category_id:'upi',category_name:'UPI',provider:'WPayINR',channel_name:'WPAY-QR',success_rate_15m:'0',source_position:0}),channel('same',{category_id:'qr',category_name:'QR',provider:'WPayINR',channel_name:'WPAY-QR',success_rate_15m:'80.12',source_state:'0',status_text:'关闭',source_position:1})];
+ const h=crossFixture({handler:q=>({version:1,queriedAt:NOW,platforms:[AR],snapshots:[{platformId:AR.id,source:'ar_middle',sourceRowIdentity:'category_channel',direction:'charge',observedAt:NOW,complete:true,sourceCount:2,channels:rows},{platformId:AR.id,source:'ar_middle',direction:'withdraw',observedAt:NOW,complete:true,sourceCount:1,channels:[rows[0]]}]})});await h.context.liveChannelCrossQuery('WPAY-QR');
+ let html=h.mod.render();assert.match(html,/UPI/);assert.match(html,/QR/);assert.match(html,/0\.00%/);assert.match(html,/80\.12%/);assert.match(html,/关闭/);assert.match(html,/2 条匹配/);assert.doesNotMatch(html,/40\.06%/);
+ h.context.liveChannelTab('withdraw');html=h.mod.render();assert.match(html,/只提供笔数/);assert.doesNotMatch(html,/0\.00%|80\.12%/);assert.equal(h.calls.length,1);
+ const css=fs.readFileSync(path.join(__dirname,'../admin-preview/live-channel-status.css'),'utf8');assert.match(css,/\.channel-cross-scroll\{max-height:none;overflow-x:auto;overflow-y:visible/);
+});
+
+test('cross-platform distinguishes missing, incomplete, complete-empty and stale snapshots',async()=>{
+ const catalog=[AR,platform(2),platform(3),platform(4)],h=crossFixture({catalog,handler:q=>{const r=batchResponse(catalog,q,()=>[]);for(const s of r.snapshots){if(s.platformId===AR.id){s.observedAt=null;s.complete=false;}else if(s.platformId===catalog[1].id)s.complete=false;else if(s.platformId===catalog[3].id)s.observedAt='2026-10-09T04:00:00Z';}return r;}});await h.context.liveChannelCrossQuery('WPAY-QR');const html=h.mod.render();assert.match(html,/尚未收到快照/);assert.match(html,/采集未完整/);assert.match(html,/当前快照无匹配通道/);assert.match(html,/不能判定是否有匹配通道/);assert.match(html,/超过 15 分钟未更新/);
+});
+
+test('cross-platform failure retains complete snapshots, later batches continue, refresh bypasses cache and names are escaped',async()=>{
+ const catalog=Array.from({length:21},(_,i)=>platform(i+1)),h=crossFixture({catalog,handler:q=>batchResponse(catalog,q,()=>[channel('x',{provider:'WPayINR',channel_name:'<WPAY-QR>'})])});await h.context.liveChannelCrossQuery('<WPAY-QR>');assert.equal(h.calls.length,2);assert.match(h.mod.render(),/&lt;WPAY-QR&gt;/);assert.doesNotMatch(h.mod.render(),/<WPAY-QR>/);
+ h.setHandler(q=>{if(q.platformIds.length===20)throw Error('Synthetic network failure');return batchResponse(catalog,q);});await h.context.liveChannelCrossRefresh();assert.equal(h.calls.length,4);assert.match(h.mod.render(),/20 个读取失败/);assert.match(h.mod.render(),/保留上次成功读取的快照/);assert.match(h.mod.render(),/已读取 21\/21 个平台/);
+ h.setHandler(q=>batchResponse(catalog,q));await h.context.liveChannelCrossRefresh();assert.equal(h.calls.length,6);assert.doesNotMatch(h.mod.render(),/读取失败/);
+});
+
+test('cross-platform rejected batch scope or duplicate composite never replaces cached snapshots',async()=>{
+ const h=crossFixture({handler:q=>batchResponse([AR],q)});await h.context.liveChannelCrossQuery('WPAY-QR');const before=h.mod.capture().cache[AR.id].response;
+ h.setHandler(q=>{const r=batchResponse([AR],q);r.platforms.push(platform(99));return r;});await h.context.liveChannelCrossRefresh();assert.deepEqual(h.mod.capture().cache[AR.id].response,before);assert.match(h.mod.render(),/平台范围不匹配/);
+ h.setHandler(q=>{const r=batchResponse([AR],q);r.snapshots[0].channels.push({...r.snapshots[0].channels[0]});return r;});await h.context.liveChannelCrossRefresh();assert.deepEqual(h.mod.capture().cache[AR.id].response,before);assert.match(h.mod.render(),/通道身份缺失或重复/);
+});
+
+test('cross-platform navigation, scope change and permission denial discard late responses and clear unauthorized snapshots',async()=>{
+ const wait=later(),h=crossFixture({handler:()=>wait.promise}),pending=h.context.liveChannelCrossQuery('WPAY-QR');await flush();h.hide();wait.resolve(batchResponse([AR],h.calls[0]));await pending;assert.equal(h.mod.capture().cache[AR.id]?.response,null);
+ await h.show();h.setHandler(q=>batchResponse([AR],q));await h.context.liveChannelCrossQuery('WPAY-QR');assert.match(h.mod.render(),/WPAY-QR/);
+ const next=later();h.setHandler(()=>next.promise);const late=h.context.liveChannelCrossRefresh();await flush();h.setCatalog([]);h.mod.render();next.resolve(batchResponse([AR],h.calls.at(-1)));await late;assert.equal(h.mod.capture().cache[AR.id],undefined);
+ const denied=crossFixture({handler:()=>{const e=Error('permission_denied');e.status=403;throw e;}});await denied.context.liveChannelCrossQuery('WPAY-QR');assert.deepEqual(JSON.parse(JSON.stringify(denied.mod.capture().cache)),{});assert.match(denied.mod.render(),/permission_denied/);
+ const view=crossFixture({permissions:['view']});await view.context.liveChannelCrossQuery('WPAY-QR');assert.equal(view.calls.length,0);assert.match(view.mod.render(),/未获查询权限/);
+});
+
+test('cross-platform collapse, restore and direction switches reuse full snapshots while single-platform weights stay intact',async()=>{
+ const h=crossFixture({handler:q=>batchResponse([AR],q,()=>[channel('one',{provider:'WPayINR',channel_name:'WPAY-QR',weight:'100',real_time_weight:'25'}),channel('two',{provider:'Other',channel_name:'Another',weight:'300',real_time_weight:'75',source_position:1})])});await h.context.liveChannelCrossQuery('WPAY-QR');h.context.liveChannelCrossCollapse(0);assert.doesNotMatch(h.mod.render(),/<tbody>/);h.context.liveChannelCrossExpand();assert.match(h.mod.render(),/<tbody>/);
+ const saved=h.mod.capture();h.mod.clear();h.mod.restore(saved);h.mod.render();assert.equal(h.calls.length,1);assert.match(h.mod.render(),/WPAY-QR/);
+ h.context.liveChannelMode('single');assert.equal(firstTableRow(h.mod.render())['预设权重占比'],'25.00%');assert.equal(firstTableRow(h.mod.render())['实际权重占比'],'25.00%');assert.equal(h.calls.length,1);assert.equal(h.mod.canExport(),true);
+});
+
+test('sandbox-safe search buttons and Enter read the actual named form controls without form submission',async()=>{
+ const h=fixture({catalog:[AR,platform(3)],handler:q=>response(AR,[channel('match',{channel_name:'WPay-QR',provider:'WPayINR'}),channel('other',{channel_name:'Different'})])});await h.start();let html=h.mod.render();assert.doesNotMatch(html,/type="submit"/);assert.match(html,/onsubmit="return false"/);
+ const inputs={channel:{value:'WPAY-QR'},merchant:{value:''},platform:{value:'AR 1'}},form={elements:{namedItem:key=>inputs[key]||null}};
+ const click=html.match(/onclick="([^"]+)"[^>]*>搜索通道<\/button>/)[1];vm.runInContext('(function(){'+click+'}).call(button)',Object.assign(h.context,{button:{form}}));
+ assert.equal(h.mod.exportRows().length,5);assert.equal(exported(h)[0]['通道名称'],'WPay-QR');assert.equal(h.calls.length,1);
+ h.context.liveChannelClearFilters();inputs.channel.value='other';const keydown=html.match(/name="channel"[^>]*onkeydown="([^"]+)"/)[1];let prevented=0;h.context.event={key:'Enter',isComposing:false,preventDefault:()=>prevented++};h.context.input={form};vm.runInContext('(function(){'+keydown+'}).call(input)',h.context);assert.equal(prevented,1);assert.equal(exported(h)[0]['通道 ID'],'other-charge');
+ h.context.liveChannelMode('cross');html=h.mod.render();assert.doesNotMatch(html,/type="submit"/);inputs.provider={value:'wpay'};h.setHandler(q=>batchResponse([AR,platform(3)],q));const crossClick=html.match(/onclick="([^"]+)"[^>]*>查询<\/button>/)[1];vm.runInContext('(function(){'+crossClick+'}).call(button)',h.context);await flush();assert.match(h.mod.render(),/WPayINR/);
+ assert.equal(h.mod.capture().cross.query.name,'wpay');
+ const bridge=fs.readFileSync(path.join(__dirname,'../src/lib/adminLiveBridge.ts'),'utf8');assert.doesNotMatch(bridge,/allow-forms/);
+});
+
+test('cross-platform temporary directory pause settles loading cache and resumes without accepting the late response',async()=>{
+ const h=crossFixture({handler:q=>batchResponse([AR],q)});await h.context.liveChannelCrossQuery('WPAY-QR');const before=h.mod.capture().cache[AR.id].response,wait=later();h.setHandler(()=>wait.promise);const pending=h.context.liveChannelCrossRefresh();await flush();h.L.catalogReady=false;wait.resolve(batchResponse([AR],h.calls.at(-1),()=>[channel('late',{channel_name:'WPAY-QR'})]));await pending;
+ const paused=h.mod.capture();assert.equal(paused.cross.status,'paused');assert.equal(paused.cache[AR.id].status,'ready');assert.deepEqual(paused.cache[AR.id].response,before);
+ h.setHandler(q=>batchResponse([AR],q));h.L.catalogReady=true;h.mod.render();await flush();assert.equal(h.mod.capture().cross.status,'ready');assert.doesNotMatch(h.mod.render(),/读取中/);
+});
+
+test('partial name suggestions and supplier shortcut preserve raw values and IME drafts never start reads',async()=>{
+ const h=fixture({handler:q=>batchResponse([AR],q)});await h.start();h.context.liveChannelProvider('WPayINR');await h.context.liveChannelCrossFromProvider();assert.equal(h.mod.capture().mode,'cross');assert.equal(h.mod.capture().cross.query.label,'WPayINR');assert.equal(h.calls.length,1);assert.match(h.mod.render(),/<option value="WPAY-QR"/);
+ const painted=h.paints.length;h.context.liveChannelCrossDraft('微',true);assert.equal(h.paints.length,painted);assert.equal(h.calls.length,1);h.context.liveChannelCrossDraft('微支付',false,true);assert.equal(h.mod.capture().cross.draft,'微支付');assert.match(h.mod.render(),/筛选已变化/);assert.equal(h.calls.length,1);
+ await h.context.liveChannelCrossQuery('WPAY');assert.match(h.mod.render(),/WPAY-QR/);assert.equal(h.calls.length,1,'partial original-name search uses complete snapshot');
+});
+
+test('batch query permission revoked between reads cannot start a later batch',async()=>{
+ const catalog=Array.from({length:21},(_,i)=>platform(i+1));let h;h=crossFixture({catalog,handler:q=>{h.setPermissions(['view']);return batchResponse(catalog,q);}});await h.context.liveChannelCrossQuery('WPAY-QR');assert.equal(h.calls.length,1);assert.deepEqual(JSON.parse(JSON.stringify(h.mod.capture().cache)),{});assert.match(h.mod.render(),/未获查询权限/);
+});
