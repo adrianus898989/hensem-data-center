@@ -17,6 +17,9 @@
   const {L,E,C,R,N,box,table,request,render}=ctx;
   const S={localSnapshot:false,serverPaging:false,data:null,dataKey:'',loadingKey:'',error:'',loading:false,dirty:false,serial:0,view:'auto',platforms:[],rowCountry:'',account:'',sort:'total',asc:false,daily:false,historical:false,page:1,size:20,open:false,search:'',reason:null,reasonData:null,reasonError:'',reasonBusy:false,reasonSerial:0,reasonPage:1,reasonSize:20,reasonLabel:'',reasonQuery:'',reasonTrigger:null,originalNote:'',originalNoteTitle:'驳回原文',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false};
   const initialState={...S,platforms:[]};
+  let readController=null,pendingRead=null;
+  const setLoading=value=>{S.loading=value;ctx.onLoading?.(value)};
+  function stopRead(){readController?.abort();readController=null;pendingRead=null;}
   const jsArgument=value=>JSON.stringify(String(value??'')).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const sourceNote=(value,empty='（源备注为空）',title='驳回原文',label='',exact=false)=>{const sanitized=S.reasonData?.reasonTextSanitized===true&&S.reasonData?.reasonTextFormat==='sanitized_label_v1';if(sanitized&&title!=='备注来源状态')title='采集说明（已脱敏）';const raw=String(value??''),full=exact?(raw.trim()?raw:empty):cleanNote(value)||empty,preview=label||(full.length>96?full.slice(0,96)+'…':full);return '<button type="button" class="withdraw-source-note" title="'+(title==='备注来源状态'?'点击查看备注来源状态':sanitized?'点击查看采集说明（已脱敏）':'点击查看完整原文')+'" onclick="withdrawReasonOriginal('+jsArgument(full)+','+jsArgument(title)+(exact?',true':'')+')">'+E(preview)+'</button>'};
   const rejectionSourceNote=(value,row={})=>{if(row.rejectionNoteState==='withheld'){const labels={remark:'主备注',front:'前台备注',back:'后台备注'},sources=(row.hiddenNoteSources||[]).map(key=>labels[key]).filter(Boolean);return sourceNote(null,'（'+(sources.length?sources.join('、'):'源业务备注')+'已隐藏，驳回备注待核对）','备注来源状态','',true)}if(row.rejectionNoteState==='missing')return sourceNote(null,'（未采集到明确驳回备注）','备注来源状态','',true);if(row.rejectionNoteState==='empty')return sourceNote(null,'（源备注为空）','备注来源状态','',true);return sourceNote(value,'（源备注为空）','驳回原文','',true)};
@@ -55,17 +58,20 @@
    }
    return base;
   }
-  function invalidate(){reasonSnapshot=null;S.localSnapshot=false;S.serverPaging=false;S.serial++;S.loading=false;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;S.page=1}
+  function invalidate(){reasonSnapshot=null;S.localSnapshot=false;S.serverPaging=false;S.serial++;stopRead();setLoading(false);S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;S.page=1}
   async function load(reset=false){
    if(!L.catalogReady)return;if(reset){S.page=1;reasonCache.clear();reasonSnapshot=null}
    const scope=selectionKey();if(S.scopeKey&&S.scopeKey!==scope){S.platforms=[];S.rowCountry='';S.search='';S.data=null;S.page=1}S.scopeKey=scope;
    const target=view();if(S.view!==target){S.view=target;S.localSnapshot=false;S.serverPaging=false;S.page=1;S.sort=target==='operators'?'processed':'total';S.asc=false;S.daily=false;S.reason=null}
-   let targetQuery,key;try{targetQuery=query();key=JSON.stringify([scope,targetQuery])}catch(e){S.serial++;S.data=null;S.loading=false;S.loadingKey='';S.error=e.message||'读取失败';S.dirty=false;render();return}
-   if(S.loading&&S.loadingKey===key)return;
+   let targetQuery,key;try{targetQuery=query();key=JSON.stringify([scope,targetQuery])}catch(e){S.serial++;stopRead();S.data=null;setLoading(false);S.loadingKey='';S.error=e.message||'读取失败';S.dirty=false;render();return}
+   if(S.loading&&S.loadingKey===key)return pendingRead;
    if(S.dataKey!==key)S.data=null;
-   const serial=++S.serial;S.loadingKey=key;S.loading=true;S.error='';S.dirty=false;render();
-   try{const data=await request(targetQuery);if(serial!==S.serial)return;S.data={...data,country:displayCountry(),rawCountry:targetQuery.country,scopeTargets:targetQuery.scopeTargets||null,scopeKey:scope};S.dataKey=key;S.localSnapshot=target==='auto'&&!targetQuery.daily&&targetQuery.offset===0&&targetQuery.limit===500&&Array.isArray(data.rows)&&data.total!==null&&data.total!==undefined&&data.total!==''&&typeof data.total!=='boolean'&&Number.isSafeInteger(Number(data.total))&&Number(data.total)>=0&&Number(data.total)<=500&&data.rows.length===Number(data.total);if(target==='auto'&&!targetQuery.daily&&!S.localSnapshot){S.serverPaging=true;if(targetQuery.limit===500){S.sort=targetQuery.sort;S.asc=targetQuery.ascending;S.page=1;}if(Array.isArray(S.data.rows)&&S.data.rows.length>S.size)S.data.rows=S.data.rows.slice(0,S.size);}S.page=Math.min(S.page,Math.max(1,Math.ceil(Number(data.total||0)/S.size)));S.loading=false;S.loadingKey='';render()}
-   catch(e){if(serial!==S.serial)return;S.loading=false;S.loadingKey='';S.error=e.message||'读取失败';render()}
+   const serial=++S.serial;stopRead();const controller=typeof root.AbortController==='function'?new root.AbortController():null;readController=controller;S.loadingKey=key;setLoading(true);S.error='';S.dirty=false;render();
+   const run=(async()=>{
+    try{const data=await request(targetQuery,controller?{signal:controller.signal}:undefined);if(serial!==S.serial)return;S.data={...data,country:displayCountry(),rawCountry:targetQuery.country,scopeTargets:targetQuery.scopeTargets||null,scopeKey:scope};S.dataKey=key;S.localSnapshot=target==='auto'&&!targetQuery.daily&&targetQuery.offset===0&&targetQuery.limit===500&&Array.isArray(data.rows)&&data.total!==null&&data.total!==undefined&&data.total!==''&&typeof data.total!=='boolean'&&Number.isSafeInteger(Number(data.total))&&Number(data.total)>=0&&Number(data.total)<=500&&data.rows.length===Number(data.total);if(target==='auto'&&!targetQuery.daily&&!S.localSnapshot){S.serverPaging=true;if(targetQuery.limit===500){S.sort=targetQuery.sort;S.asc=targetQuery.ascending;S.page=1;}if(Array.isArray(S.data.rows)&&S.data.rows.length>S.size)S.data.rows=S.data.rows.slice(0,S.size);}S.page=Math.min(S.page,Math.max(1,Math.ceil(Number(data.total||0)/S.size)));setLoading(false);S.loadingKey='';render()}
+    catch(e){if(serial!==S.serial)return;setLoading(false);S.loadingKey='';S.error=e.message||'读取失败';render()}
+    finally{if(serial===S.serial){readController=null;pendingRead=null;}}
+   })();pendingRead=run;return run;
   }
   const singleDay=()=>L.from.slice(0,10)===L.to.slice(0,10);
   const platformKey=name=>String(name||'').toUpperCase().replace(/^(DHANI|VEER|SHREE|MAAN)[.]/,'$1');
@@ -424,9 +430,9 @@
   root.withdrawNoteClose=()=>{if(S.noteSaving)return;S.note=null;S.noteSample=false;S.noteError='';render()};
   root.withdrawNoteSave=async()=>{if(!S.note||S.noteSaving||!S.data?.canWriteNotes)return;const target=S.note;S.noteSaving=true;S.noteError='';render();try{const saved=await request({action:'withdrawNote',date:target.date,country:target.storageCountry||target.country,platform:target.storagePlatform,reason:S.noteDraft,expectedVersion:target.expectedVersion});if(S.note!==target)return;S.data.notes=[...(S.data.notes||[]).filter(n=>!(n.date===saved.date&&n.country===saved.country&&n.platform===saved.platform)),{...saved,sourceCountry:target.country}];S.noteSaving=false;S.note=null;render()}catch(e){if(S.note!==target)return;S.noteSaving=false;S.noteError=e.message||'备注保存失败，输入已保留';render()}};
   function capture(){return {...S,platforms:S.platforms.slice(),reasonTrigger:null,loading:false,reasonBusy:false,error:S.loading?'读取已暂停，点击查询继续':S.error,reasonError:S.reasonBusy?'明细读取已暂停，点击重试继续':S.reasonError};}
-  function pause(){reasonSnapshot=null;S.serial++;S.reasonSerial++;S.loading=false;S.reasonBusy=false;reasonCache.clear();}
+  function pause(){reasonSnapshot=null;S.serial++;stopRead();S.reasonSerial++;setLoading(false);S.reasonBusy=false;reasonCache.clear();}
   function restore(saved){pause();const serial=S.serial,reasonSerial=S.reasonSerial;for(const key of Object.keys(S))delete S[key];Object.assign(S,saved||initialState,{serial,reasonSerial,platforms:(saved?.platforms||[]).slice(),reasonTrigger:null,loading:false,reasonBusy:false});}
-  return {capture,pause,restore,render:draw,load,state:S,query,cancel:()=>{reasonSnapshot=null;reasonCache.clear();S.serial++;S.reasonSerial++;S.loading=false;S.reasonBusy=false;S.reason=null;S.data=null;S.note=null;S.noteSample=false}};
+  return {capture,pause,restore,render:draw,load,state:S,query,cancel:()=>{reasonSnapshot=null;reasonCache.clear();S.serial++;stopRead();S.reasonSerial++;setLoading(false);S.reasonBusy=false;S.reason=null;S.data=null;S.note=null;S.noteSample=false}};
  }};
  if(typeof module!=='undefined')module.exports={addDay,duration,cleanNote,decodeNote};
 })(typeof window!=='undefined'?window:globalThis);
