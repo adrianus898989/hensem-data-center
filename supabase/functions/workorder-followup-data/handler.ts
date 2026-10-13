@@ -3,6 +3,7 @@ export type Gateway = {
   identify(headers: Headers): Promise<unknown>;
   list(account: PortalAccount, filters: Record<string, string>, offset: number, limit: number): Promise<any>;
   mirror(record: Record<string, unknown>): Promise<boolean>;
+  upi?(actor: string, request: Record<string, unknown>): Promise<any>;
 };
 export class ApiError extends Error { constructor(public status: number, public code: string) { super(code); } }
 const fail = (code = 'invalid_request'): never => { throw new ApiError(400, code); };
@@ -65,8 +66,12 @@ async function forwarded(request: Request, hash: string): Promise<Headers> {
   if (!/^Bearer [^\s,]{1,16384}$/i.test(authorization)) throw new ApiError(401, 'login_required');
   return new Headers({ authorization, 'x-portal-proxy-key': key, 'x-portal-client-ip': ip });
 }
-function identity(value: unknown): PortalAccount {
+function identity(value: unknown, upiDirectory = false): PortalAccount {
   const result = object(value), a = object(result.account), catalog = object(result.catalog), teams = object(catalog.platformTeams);
+  if (upiDirectory && result.ok === true && result.identity_kind === 'dashboard_owner' && uuid(a.auth_user_id) && a.active === true && a.role === 'owner') {
+    if (!Array.isArray(a.platforms) || !a.platforms.length || a.platforms.length > 200 || a.platforms.some((p: unknown) => typeof p !== 'string' || !p || p.length > 100 || typeof teams[p] !== 'string')) throw new ApiError(403, 'scope_denied');
+    return { auth_user_id: a.auth_user_id.toLowerCase(), role: 'owner', active: true, team: '', platforms: [...new Set(a.platforms)] as string[] };
+  }
   if (result.ok !== true || result.identity_kind !== 'workorder' || !uuid(a.auth_user_id) || a.active !== true || !['agent', 'supervisor', 'auditor'].includes(a.role)) throw new ApiError(403, 'account_denied');
   const team = text(a.team, 100);
   if (!team || !Array.isArray(a.platforms) || !a.platforms.length || a.platforms.length > 200 || a.platforms.some((p: unknown) => typeof p !== 'string' || !p || p.length > 100 || teams[p] !== team)) throw new ApiError(403, 'scope_denied');
@@ -142,8 +147,17 @@ export function createWorkorderFollowupHandler(gateway: Gateway, options: { prox
       let count = 0, raw = ''; const decoder = new TextDecoder();
       while (true) { const { done, value } = await reader!.read(); if (done) break; count += value.length; if (count > 65536) { await reader!.cancel(); fail('request_too_large'); } raw += decoder.decode(value, { stream: true }); } raw += decoder.decode();
       let body: Record<string, any>; try { body = object(JSON.parse(raw)); } catch { fail(); }
-      if (!['list', 'mirror'].includes(body!.action) || Object.keys(body!).some(k => !(body!.action === 'list' ? ['action', 'filters', 'offset', 'limit'] : ['action', 'record']).includes(k))) fail();
-      const account = identity(await gateway.identify(authHeaders));
+      const upiDirectory = ['upi-catalog', 'upi-list', 'upi-add', 'upi-lookup'].includes(body!.action);
+      if (!['list', 'mirror', 'upi-catalog', 'upi-list', 'upi-add', 'upi-lookup'].includes(body!.action) || Object.keys(body!).some(k => !(upiDirectory ? ['action','platform','provider','upiId','query','offset','limit'] : body!.action === 'list' ? ['action', 'filters', 'offset', 'limit'] : ['action', 'record']).includes(k))) fail();
+      const account = identity(await gateway.identify(authHeaders), upiDirectory);
+      if (upiDirectory) {
+        if (!gateway.upi) throw new ApiError(503, 'service_unavailable');
+        const result = await gateway.upi(account.auth_user_id, { ...body!, action: String(body!.action).slice(4) });
+        if (!result || typeof result !== 'object' || typeof result.ok !== 'boolean') throw new ApiError(503, 'invalid_response');
+        // Existing portal followupRequest preserves structured business results;
+        // its new route assigns 400/403/409 without exposing upstream SQL errors.
+        return json(result);
+      }
       if (body!.action === 'mirror') { const record = mirrorRecord(body!.record, account, (options.now ?? Date.now)()); if (await gateway.mirror(record) !== true) throw new ApiError(503, 'mirror_failed'); return json({ ok: true, id: record.id }); }
       const query = filters(body!.filters, account), offset = pagination(body!.offset, 0, 1000000), limit = pagination(body!.limit, 50, 100, 1), result = await gateway.list(account, query, offset, limit);
       if (!result || !Array.isArray(result.rows) || result.rows.length > limit || !Number.isSafeInteger(result.total) || result.total < 0) throw new ApiError(503, 'invalid_response');

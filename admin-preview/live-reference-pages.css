@@ -429,3 +429,21 @@ body.live-admin .provider-workorder-next{padding-top:5px;border-top:1px solid #e
 @media(max-width:1000px){.submission-analysis .submission-streak-panel>header{display:block}.submission-analysis .submission-streak-controls{margin-top:8px}.submission-analysis .risk-grid{grid-template-columns:minmax(0,1fr)}.submission-analysis .risk-grid>.risk-panel:first-child{grid-column:auto}.submission-analysis .risk-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:600px){.submission-analysis .risk-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.submission-analysis .submission-streak-kpis{gap:5px;padding:8px}.submission-analysis .submission-streak-card{padding:8px;font-size:10px}.submission-analysis .submission-streak-card strong{font-size:18px}.submission-analysis .submission-streak-card strong small{display:block}.submission-analysis .submission-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .submission-analysis .risk-monitor-scroll .submission-total td{font-weight:700;background:#edf3ff;border-top:2px solid #d5e1fb}.submission-analysis .risk-monitor-scroll tfoot td:first-child,.submission-analysis .risk-monitor-scroll tfoot td:last-child{background:#edf3ff}
+
+/* Follow-up source fields stay complete in details; the list groups them by task. */
+body.live-admin .deposit-followup-compact{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+body.live-admin .deposit-followup-compact table{min-width:1480px;width:100%;table-layout:fixed;font-size:11px}
+body.live-admin .deposit-followup-compact :is(th,td){padding:8px 7px;vertical-align:top;overflow:hidden}
+body.live-admin .deposit-followup-compact th{white-space:normal;line-height:1.4}
+body.live-admin .deposit-followup-compact th:nth-child(2){width:190px}
+body.live-admin .deposit-followup-compact th:nth-child(5){width:210px}
+body.live-admin .deposit-followup-compact th:nth-child(7){width:180px}
+body.live-admin .deposit-followup-compact th:nth-child(8){width:170px}
+body.live-admin .deposit-followup-compact th:nth-child(9){width:145px}
+body.live-admin .deposit-followup-compact th:nth-child(3),body.live-admin .deposit-followup-compact td:nth-child(3){text-align:right;font-variant-numeric:tabular-nums}
+body.live-admin .deposit-followup-line{display:block;margin:0 0 4px;min-width:0}
+body.live-admin .deposit-followup-line>small{display:block;font-size:10px;color:#71829b;line-height:1.35}
+body.live-admin .deposit-followup-line .wo-cell-value,body.live-admin .deposit-followup-line .deposit-reply{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.6}
+body.live-admin .deposit-followup-compact :is(th,td):last-child{position:sticky;right:0;width:50px;background:#fff;box-shadow:-3px 0 5px #142c5208}
+body.live-admin .deposit-followup-compact th:last-child{background:#f5f7fc;z-index:2}
+body.live-admin .deposit-followup-guide{margin:0 0 10px;color:#617694;font-size:11px;line-height:1.6}

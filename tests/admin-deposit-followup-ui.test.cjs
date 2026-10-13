@@ -58,7 +58,7 @@ test('manual dates and the month shortcut persist until reset restores the curre
 });
 
 test('default opens employee details with all stored business fields and distinct provenance',async()=>{
- const h=harness({total:2,summary:{count:2},rows:[{platform:'SYNTHETIC',orderNumber:'ORDER-A',workOrderNumber:'TICKET-A',utr:'00001234',upiId:'synthetic@upi.invalid',kycUpiId:'***@bank.invalid',orderDate:'2026-09-25',daysSinceOrder:2,amount:0,provider:'UnifiedPay',rawProvider:'RawPay',followupStatus:'success to other platform',providerReply:'line one\n<script>private</script>',utrMatch:'YES',kycCorrect:'NO',evidence:'Need video',followupAt:'25/9/2026 13:00',sourceDateText:'23/9',receiptText:'29',staffCode:'007',sourceKind:'sheet',sourceGid:42,sourceRow:5,linkStatus:'matched',status:'已入款'},
+ const h=harness({total:2,summary:{count:2},rows:[{platform:'SYNTHETIC',orderNumber:'ORDER-A',workOrderNumber:'TICKET-A',utr:'00001234',upiId:'synthetic@upi.invalid',kycUpiId:'***@bank.invalid',orderDate:'2026-09-25',daysSinceOrder:2,amount:0,provider:'UnifiedPay',rawProvider:'RawPay',followupStatus:'success to other platform',providerReply:'line one\n<script>private</script>',utrMatch:'YES',kycCorrect:'NO',evidence:'Need video',followupAt:'25/9/2026 13:00',sourceDateText:'23/9',receiptText:'29',staffCode:'007',sourceKind:'sheet',sourceSheet:'synthetic-workbook-id-000000000001',sourceGid:42,sourceRow:5,linkStatus:'matched',status:'已入款'},
  {platform:'SYNTHETIC',orderNumber:'ORDER-B',amount:null,sourceKind:'portal',firstActor:'Synthetic creator',lastActor:'Synthetic follower',portalCaseId:'synthetic-case',linkStatus:'independent'}]});
  await h.page.load();assert.equal(h.calls[0].view,'entries');assert.equal(h.L.depositIssuesSection,'details');
  for(const label of ['员工跟进明细','凭证日期','距今天数','UPI ID','KYC-UPI ID','原表员工编号','首次录入员工','最后跟进员工','UTR 核验','KYC 核验','员工跟进明细'])assert(h.html().includes(label),label);
@@ -168,4 +168,17 @@ test('statistics inline evidence links to its actual source workbook/tab and pre
 test('sheet-only unresolved entry labels its receipt-marker basis without claiming collected processing status',async()=>{
  const h=harness({rows:[],total:0,summary:{count:1,unresolvedCount:1}},{page:'deposit_statistics'});await h.page.load();assert.match(h.html(),/表格未成功订单 · 入款标记口径/);assert.match(h.html(),/>表格未成功订单<\/button>/);
  await h.root.depositIssuesPending();const q=h.calls.at(-1);assert.equal(q.action,'depositStatistics');assert.equal(q.followupState,'unresolved');assert.equal(q.successBasis,undefined);assert.match(h.html(),/工单处理状态请看漏登与状态核对/);
+});
+
+test('follow-up grouped list retains twelve columns and every original field in read-only details',async()=>{
+ const row={platform:'MAANWIN',orderNumber:'RC-SYNTHETIC',workOrderNumber:'WO-SYNTHETIC',utr:'00000123',upiId:'synthetic@upi.invalid',kycUpiId:'***@bank.invalid',amount:0,provider:'Raw-Pay',followupStatus:'Success To Other Order',providerReply:'<b>reply</b>',utrMatch:'YES',kycCorrect:'NO',evidence:'PDF/VIDEO',followupAt:'13/10/2026 07:00:00',orderDate:'2026-10-06',daysSinceOrder:7,staffCode:'STAFF',sourceKind:'sheet',sourceRow:4,sourceTab:'MAANWIN',linkStatus:'review',sourceDateText:'original-date',receiptText:'7'};
+ const h=harness({rows:[row],total:1});assert.equal(h.calls.length,0);await h.page.load();const html=h.html();const header=html.match(/<thead>([\s\S]*?)<\/thead>/g).find(v=>v.includes('支付订单 / 工单'));assert.equal((header.match(/<th>/g)||[]).length,12);assert.match(html,/deposit-followup-compact/);assert.match(html,/成功到其他订单/);assert.match(html,/关联待核对/);assert.match(html,/人工 KYC \/ UTR 核验不代表工单 KYC 连接状态/);assert.doesNotMatch(html,/>已连接<|>已核实到账</);assert.match(html,/1o0nhJfztjVX9gNwH43uPWg5BUuhBxDMZ-_WUWdRd588/);assert.doesNotMatch(html,/1UBnMj2JS4eDfT/);
+ const reads=h.calls.length;h.root.depositIssuesDetail(0);assert.equal(h.calls.length,reads);for(const field of ['工单号','UTR','UPI ID','KYC-UPI ID','PDF / 视频','原表员工编号','首次录入员工','最后跟进员工','核对表日期','原表日期文本','原表天数文本'])assert(h.drawer().includes(field),field);assert.match(h.drawer(),/&lt;b&gt;reply&lt;\/b&gt;/);assert.doesNotMatch(h.drawer(),/<b>reply/);assert.match(h.drawer(),/0.00/);assert.match(h.drawer(),/original-date/);
+});
+test('empty followups explain undated rows without creating a read or an arrival conclusion',async()=>{
+ const h=harness({rows:[],total:0,summary:{}});await h.page.load();assert.match(h.html(),/当前条件下没有跟进记录/);assert.match(h.html(),/全部日期/);assert.equal(h.calls.length,1);
+});
+
+test('missing row source identity never links historical rows to the current October workbook',async()=>{
+ const h=harness({rows:[{platform:'MAANWIN',orderNumber:'SYNTHETIC-ORDER',amount:1,sourceKind:'sheet',sourceRow:7,sourceGid:42,sourceTab:'MAANWIN'}],total:1});await h.page.load();assert.match(h.html(),/来源表待确认/);assert.doesNotMatch(h.html(),/edit\?gid=42/);assert.doesNotMatch(h.html(),/range=A7/);assert.match(h.html(),/十月跟进表/);h.root.depositIssuesDetail(0);assert.match(h.drawer(),/来源表待确认/);assert.equal(h.calls.length,1);
 });

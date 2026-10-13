@@ -5,9 +5,9 @@ const SHEET_TAB = "UPI核对";
 const DEFAULT_ENTRY_SOURCE_ID = "1o0nhJfztjVX9gNwH43uPWg5BUuhBxDMZ-_WUWdRd588";
 const HISTORICAL_ENTRY_SOURCE_ID = "1UBnMj2JS4eDfT-gdE-flUVLWs387FgoR6Rw2baLYzoE";
 const ENTRY_TABS = new Set(["SHREEWIN", "VEERGAME", "DHANIWIN", "91CLUB", "BIGMUMBAI", "TPPLAY", "INDIA82", "6CLUB", "OKWIN", "JALWA", "JAICLUB", "RAJALOTTERY", "51GAME", "55CLUB", "IN999", "LOTTERY77"]);
-// The October workbook adds 9KCLUB. Mirroring that exact tab does not create a
-// platform mapping or grant its records to any account's scope.
-const CURRENT_ENTRY_TABS = new Set([...ENTRY_TABS, "9KCLUB"]);
+// The October workbook includes 9KCLUB and MAANWIN with the verified A:P
+// follow-up headers. Exact tab mirroring never creates a platform grant.
+const CURRENT_ENTRY_TABS = new Set([...ENTRY_TABS, "9KCLUB", "MAANWIN"]);
 const MAX_ROWS = 40000;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 120_000;
