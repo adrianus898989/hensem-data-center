@@ -467,9 +467,64 @@ test('rate source mode uses only minimal verified scope metadata; missing metada
  const escaped=run({mode:'selected',identity:'<script>\u2028test'});assert.equal(escaped.scope.identity,'<script>\u2028test');assert.equal((escaped.html.match(/<script>/g)||[]).length,1);
 });
 
-test('KYC imported-candidate filters retain existing authenticated RPC and strict ISO contract',async()=>{
+const kycRequest={action:'depositStatistics',section:'kyc',country:'印度',dimension:'platform',kycStatus:'all',processing:'all',matchStatus:'all',dateMode:'range',startAt:'2026-10-12T00:00:00.000Z',endAt:'2026-10-12T23:59:59.000Z',offset:0,limit:20};
+test('KYC owner and legacy read use one fixed endpoint, unchanged filters and fresh auth',async()=>{
+ for(const context of [undefined,{assigned:false,page:'deposit_statistics'}]){
+  const h=load(),controller=new AbortController(),q={...kycRequest,platform:'MAANWIN',provider:'Pay',query:'000-RC'};
+  await h.api.adminLiveRequest(session,q,controller.signal,context);
+  assert.equal(h.calls.length,1);assert.equal(h.authCalls.length,1);
+  const {url,init}=h.calls[0];assert.equal(url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_deposit_kyc');
+  assert.deepEqual(JSON.parse(init.body),{p_page:null,p_request:Object.fromEntries(Object.entries(q).filter(([key])=>key!=='action'))});
+  assert.equal(init.headers.Authorization,'Bearer offline-fresh-token');assert.equal(init.headers.apikey,'offline-public-key');assert.equal(init.signal,controller.signal);assert.equal(init.cache,'no-store');assert.equal(init.redirect,'error');assert.equal(init.method,'POST');assert.equal(q.action,'depositStatistics');
+ }
+});
+test('KYC assigned read passes its original page to the invoker endpoint without overriding context',async()=>{
+ for(const page of ['deposit_statistics','deposit_tracking']){
+  const h=load();await h.api.adminLiveRequest(session,kycRequest,undefined,{assigned:true,page});
+  assert.equal(h.calls.length,1);assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_deposit_kyc');
+  assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_page:page,p_request:Object.fromEntries(Object.entries(kycRequest).filter(([key])=>key!=='action'))});
+ }
+});
+test('all non-KYC deposit sections retain their existing owner RPC and assigned gateway',async()=>{
+ for(const section of [undefined,'summary','details','providers','daily']){
+  const q={action:'depositStatistics',dateMode:'all',country:'IN',offset:0,limit:20,...(section?{section}:{})};
+  const owner=load();await owner.api.adminLiveRequest(session,q);
+  assert.equal(owner.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_deposit_statistics');assert.deepEqual(JSON.parse(owner.calls[0].init.body),{p_request:Object.fromEntries(Object.entries(q).filter(([key])=>key!=='action'))});
+  const assigned=load();await assigned.api.adminLiveRequest(session,q,undefined,{assigned:true,page:'deposit_statistics'});
+  assert.equal(assigned.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_execute');assert.deepEqual(JSON.parse(assigned.calls[0].init.body),{p_page:'deposit_statistics',p_request:q});
+ }
+});
+test('KYC endpoint failures are sanitized and never retry through an old owner or assigned endpoint',async()=>{
+ for(const context of [undefined,{assigned:true,page:'deposit_statistics'}])for(const [status,message,expected]of [[403,'role_permission_denied PRIVATE_SENTINEL',/当前角色/],[401,'PRIVATE_SENTINEL',/未获授权/],[404,'PGRST202 PRIVATE_SENTINEL',/未完成/],[504,'57014 PRIVATE_SENTINEL',/读取超时/]]){
+  const h=load({fetch:async()=>({ok:false,status,json:async()=>({message})})});
+  await assert.rejects(h.api.adminLiveRequest(session,kycRequest,undefined,context),e=>expected.test(e.message)&&!e.message.includes('PRIVATE_SENTINEL'));
+  assert.equal(h.calls.length,1);assert(h.calls[0].url.endsWith('/dashboard_admin_deposit_kyc'));
+ }
+});
+test('queued KYC reads keep the captured page and use the fresh assigned routing context',async()=>{
+ const waiting=deferred(),h=load({fetch:()=>waiting.promise});let access={mode:'owner',permissions:[],canView:true};
+ const b=bridge(h,{roleAccess:()=>access});
+ for(let i=0;i<5;i++){const e=b.event('kyc_'+i,kycRequest);e.data.page='deposit_statistics';h.send(e);}
+ await flush();assert.equal(h.calls.length,4);assert(h.calls.every(c=>JSON.parse(c.init.body).p_page===null));
+ access={mode:'assigned',permissions:['deposit_statistics.view','deposit_statistics.query'],canView:true};waiting.resolve({ok:true,json:async()=>({rows:[],total:0})});await flush();await flush();
+ assert.equal(h.calls.length,5);assert.equal(h.calls[4].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_deposit_kyc');assert.equal(JSON.parse(h.calls[4].init.body).p_page,'deposit_statistics');assert.equal(b.replies.length,5);assert.equal(h.timers.size,0);b.cleanup();
+});
+test('KYC invalid payloads and page contexts fail before authentication or fetch',async()=>{
+ for(const patch of [{section:'KYC'},{section:null},{p_page:'deposit_statistics'},{action:'dashboard_admin_deposit_kyc'}]){
+  const h=load();await assert.rejects(h.api.adminLiveRequest(session,{...kycRequest,...patch}));assert.equal(h.calls.length,0);assert.equal(h.authCalls.length,0);
+ }
+ for(const page of ['',undefined,'deposit_statistics/other']){
+  const h=load();await assert.rejects(h.api.adminLiveRequest(session,kycRequest,undefined,{assigned:true,page}));assert.equal(h.calls.length,0);assert.equal(h.authCalls.length,0);
+ }
+});
+test('KYC cancellation and changed sessions retain the existing transport guards',async()=>{
+ const before=load(),controller=new AbortController();controller.abort();await assert.rejects(before.api.adminLiveRequest(session,kycRequest,controller.signal));assert.equal(before.calls.length,0);assert.equal(before.authCalls.length,0);
+ const auth=deferred(),during=load({ensure:()=>auth.promise}),signal=new AbortController();const read=during.api.adminLiveRequest(session,kycRequest,signal.signal);signal.abort();auth.resolve({...session,access_token:'offline-fresh-token'});await assert.rejects(read);assert.equal(during.calls.length,0);
+ const changed=load({ensure:async current=>({...current,user:{id:'different-user'}})});await assert.rejects(changed.api.adminLiveRequest(session,kycRequest));assert.equal(changed.calls.length,0);
+});
+test('KYC filters retain authenticated validation and strict ISO contract on the dedicated endpoint',async()=>{
  const h=load(),q={action:'depositStatistics',section:'kyc',dimension:'platform',country:'IN',dateMode:'range',startAt:'2026-09-01T00:00:00Z',endAt:'2026-09-30T23:59:59Z',kycStatus:'unknown',processing:'rejected',matchStatus:'exact_unique',query:'SYNTHETIC',platform:'RAJALOTTERY',provider:'Pay',offset:0,limit:20};
- await h.api.adminLiveRequest(session,q);assert(h.calls[0].url.endsWith('/rpc/dashboard_admin_deposit_statistics'));const p=JSON.parse(h.calls[0].init.body).p_request;assert.equal(p.section,'kyc');assert.equal(p.dimension,'platform');assert.equal(p.action,undefined);assert.equal(h.authCalls.length,1);
+ await h.api.adminLiveRequest(session,q);assert(h.calls[0].url.endsWith('/rpc/dashboard_admin_deposit_kyc'));const body=JSON.parse(h.calls[0].init.body),p=body.p_request;assert.equal(body.p_page,null);assert.equal(p.section,'kyc');assert.equal(p.dimension,'platform');assert.equal(p.action,undefined);assert.equal(h.authCalls.length,1);
  for(const change of [{dimension:null},{dimension:{}},{dimension:[]},{kycStatus:'YES'},{processing:0},{matchStatus:'paid'},{query:[]},{from:'2026-09-01'},{sourceKind:'portal'},{raw:true},{dateMode:null},{startAt:'2026-02-30T00:00:00Z'},{section:{toString:()=> 'kyc'}}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...change}));
  for(const section of [null,{},[],0])assert.throws(()=>h.api.validateAdminLiveRequest({action:'depositStatistics',section}));
 });
