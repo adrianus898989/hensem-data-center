@@ -6,6 +6,16 @@
   const {L,E,C,N,table,request,render,formatTime}=ctx;
   let panel;
   const enumValue=(value,allowed)=>allowed.includes(value)?value:allowed[0];
+  const platformOptions=()=>{
+   if(L.catalogReady===false)return [];
+   const entries=new Map();
+   for(const p of Array.isArray(L.catalog)?L.catalog:[]){
+    if(p.country!=='印度'||!['ar','newar'].includes(String(p.source||'').toLowerCase()))continue;
+    const value=String(p.sourceName||p.name||'').trim(),label=String(p.name||p.sourceName||'').trim();
+    if(value&&!entries.has(value))entries.set(value,{value,label});
+   }
+   return [...entries.values()].sort((a,b)=>a.label.localeCompare(b.label,'zh-CN'));
+  };
   const sourceEvidence=r=>{
    const sources=Array.isArray(r.sources)?r.sources:[];
    if(panel?.getSnapshot()?.source==='collected-workorders')return sources.length?table(['系统 / 原平台','工单','原支付单引用','统计提交日期 / 提交时间','这笔工单的采集时间','原金额 / 币种'],sources.map(s=>[
@@ -31,9 +41,10 @@
    ...(panel?.getSnapshot()?.source==='collected-workorders'?[['关联来源记录',C(r.sourceCount)],['关联工单',C(r.relatedWorkorderCount)]]:[]),
    ['员工跟进记录',C(r.followupCount)],['最后跟进',E(r.lastFollowupAt||'未提供')],['三方回复',E(r.providerReply||'未提供')]
   ];
-  panel=root.HensemLiveKycReconciliation.create({id:'deposit-source-kyc',source:'collected-workorders',queryLabel:'工单号 / 原支付单号',getDefaultFilters:()=>root.HensemWorkorderUI.today('印度',L.catalog),
+  panel=root.HensemLiveKycReconciliation.create({id:'deposit-source-kyc',source:'collected-workorders',queryLabel:'工单号 / 原支付单号',getDefaultFilters:()=>root.HensemWorkorderUI.today('印度',L.catalog),getPlatformOptions:platformOptions,
    onRender:render,
    onQuery:async f=>{
+    if(L.catalogReady===false)throw Error('平台目录尚未读取，请稍后重试');
     const q={action:'depositStatistics',section:'kyc',country:'印度',dimension:enumValue(f.dimension,['platform','provider','date','orders']),kycStatus:enumValue(f.kycStatus,['all','connected','disconnected','unknown']),processing:f.processing,matchStatus:f.matchStatus,offset:f.offset,limit:f.limit,dateMode:f.from||f.to?'range':'all'};
     if(q.dateMode==='range'){if(!f.from||!f.to)throw Error('请同时填写开始日期和结束日期');q.startAt=f.from+'T00:00:00.000Z';q.endAt=f.to+'T23:59:59.000Z'}
     if(f.query)q.query=f.query;if(f.platform)q.platform=f.platform;if(f.provider)q.provider=f.provider;
