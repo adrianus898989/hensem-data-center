@@ -22,3 +22,14 @@ test('old list results and authorization remain byte-equivalent to the productio
  assert.deepEqual(await(await call(m.exports.createWorkorderFollowupHandler)).json(),await(await call(base.exports.createWorkorderFollowupHandler)).json());
 });
 
+
+test('real Edge entrypoint maps only the explicit new SQL permission denial to HTTP403, concealing private errors',async()=>{
+ const vm=require('node:vm');const index=fs.readFileSync(path.join(__dirname,'../supabase/functions/workorder-followup-data/index.ts'),'utf8');
+ async function call(error){let serve;const fake={rpc:async()=>({data:null,error})};const context={module:{exports:{}},exports:{},require:(name)=>name.includes('supabase-js')?{createClient:()=>fake}:m.exports,Deno:{env:{get:(name)=>name==='SUPABASE_URL'?'https://synthetic.supabase.co':'SYNTHETIC-SERVER-ONLY'},serve:(handler)=>serve=handler},fetch:async()=>Response.json(identity),Request,Response,Headers,AbortSignal,TextEncoder,TextDecoder,Uint8Array,URL,crypto:webcrypto};context.exports=context.module.exports;vm.runInNewContext(ts.transpileModule(index,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
+ // The deployed proxy verifier is fixed; the actual handler's request boundary is independently tested above. Replace only the verifier to synthetic test credentials.
+ const handler=m.exports.createWorkorderFollowupHandler({identify:async()=>identity,upi:async(actor,body)=>{const start=index.indexOf('  async upi(actor, request) {');const end=index.indexOf('  async mirror(',start);const source=index.slice(start,end).trim().replace(/^async upi\(actor, request\) \{/,'').replace(/},$/,'');const wrapped=ts.transpileModule('export async function run(actor:string,request:any){'+source+'}',{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;const module={exports:{}};new Function('module','exports','admin','ApiError',wrapped)(module,module.exports,fake,m.exports.ApiError);return module.exports.run(actor,body);}}, {proxyKeySha256:hash});
+ return handler(new Request('https://synthetic.invalid/edge',{method:'POST',headers:{Authorization:'Bearer SYNTHETIC-ONLY','content-type':'application/json','x-portal-proxy-key':proxy,'x-portal-client-ip':'192.0.2.17'},body:JSON.stringify({action:'upi-list',platform:'PLATFORM-A',provider:'Pay-A'})}));}
+ const denied=await call({code:'42501',message:'permission_denied'});assert.equal(denied.status,403);assert.deepEqual(await denied.json(),{ok:false,code:'permission_denied'});
+ const hidden=await call({code:'42501',message:'PRIVATE_TABLE_SECRET'});assert.equal(hidden.status,503);assert(!JSON.stringify(await hidden.json()).includes('PRIVATE_TABLE_SECRET'));
+ const invalid=await call({code:'22023',message:'invalid_upi'});assert.equal(invalid.status,200);assert.deepEqual(await invalid.json(),{ok:false,code:'invalid_upi'});
+});

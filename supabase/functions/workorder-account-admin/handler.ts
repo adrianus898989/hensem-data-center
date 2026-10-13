@@ -1,4 +1,4 @@
-export type Account = { auth_user_id: string; username: string; display_name: string; role: string; team: string; platforms: string[]; active: boolean; created_at?: string; updated_at?: string };
+export type Account = { auth_user_id: string; username: string; display_name: string; role: string; team: string; platforms: string[]; active: boolean; permissions?: Record<string,boolean>|null; custom_role_id?: string|null; custom_role_name?: string|null; custom_role_version?: number|null; created_at?: string; updated_at?: string };
 export type Catalog = { teams: string[]; platforms: string[]; platformTeams: Record<string, string> };
 export type Gateway = {
   getUser(token: string): Promise<{ id: string; email?: string } | null>;
@@ -15,6 +15,7 @@ export type Gateway = {
   update(id: string, expected: string, patch: Record<string, unknown>, actor: string): Promise<Account | null>;
   resetPassword(id: string, password: string): Promise<void>;
   audit(actor: string, action: string, target: string): Promise<void>;
+  permissionRoles(actor: string, request: Record<string,unknown>): Promise<Record<string,unknown>>;
 };
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
@@ -22,7 +23,7 @@ export class ApiError extends Error {
 const bad = (message: string): never => { throw new ApiError(400, 'invalid_request', message); };
 const uid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const roles = new Set(['supervisor', 'agent', 'auditor']);
-const fields = 'auth_user_id,username,display_name,role,team,platforms,active,created_at,updated_at';
+const fields = 'auth_user_id,username,display_name,role,team,platforms,active,permissions,custom_role_id,created_at,updated_at';
 export const ACCOUNT_FIELDS = fields;
 export const ACCOUNT_DOMAIN = 'workorder.hensem.local';
 function username(value: unknown) {
@@ -58,7 +59,7 @@ function scope(body: Record<string, unknown>, catalog: Catalog) {
   return { team, platforms: [...new Set(body.platforms as string[])].sort() };
 }
 function publicAccount(account: Account): Account {
-  return Object.fromEntries(fields.split(',').filter(key => key in account).map(key => [key, (account as any)[key]])) as Account;
+  return Object.fromEntries((fields+',custom_role_name,custom_role_version').split(',').filter(key => key in account).map(key => [key, (account as any)[key]])) as Account;
 }
 async function trustedClientIp(request:Request,hash:string|undefined):Promise<string> {
   const key=request.headers.get('x-portal-proxy-key')||'', raw=(request.headers.get('x-portal-client-ip')||'').trim();
@@ -107,7 +108,7 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
       try { body = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes)); } catch { bad('请求格式不正确'); }
       if (!body! || typeof body! !== 'object' || Array.isArray(body!)) bad('请求格式不正确');
       const action = body!.action;
-      if (!['me', 'list-accounts', 'create-account', 'update-account', 'reset-password'].includes(String(action))) bad('操作不支持');
+      if (!['me', 'list-accounts', 'create-account', 'update-account', 'reset-password','list-roles','create-role','update-role'].includes(String(action))) bad('操作不支持');
       const profile = await gateway.profile(caller.id);
       const owner = !!profile && profile.auth_user_id === caller.id && profile.active === true && profile.role === 'owner';
       if (action !== 'me' && !owner) throw new ApiError(403, 'owner_required', '只有后台总管理员可以管理工单账号');
@@ -130,6 +131,10 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
         if (!account || account.auth_user_id !== caller.id || account.active !== true || !roles.has(account.role)
           || caller.email?.toLowerCase() !== `${account.username}@${ACCOUNT_DOMAIN}`) throw new ApiError(403, 'account_denied', '工单账号未启用或未授权');
       }
+      if (['list-roles','create-role','update-role'].includes(String(action))) {
+        try { return json(await gateway.permissionRoles(caller.id,body!)); }
+        catch (error) { const e=error as {code?:string,message?:string};if(e.code==='40001')throw new ApiError(409,'role_changed','角色已被其他操作修改，请刷新后重试');if(e.code==='23505')throw new ApiError(409,'role_exists','角色名称已存在');if(e.code==='22023'||e.code==='22P02'||e.code==='23514')throw new ApiError(400,'invalid_role','角色配置不正确');throw error; }
+      }
       const catalog = buildCatalog(await gateway.catalogRows());
       if (action === 'me') {
         if (owner) account = { auth_user_id: caller.id, username: profile!.username, display_name: profile!.username, role: 'owner', team: '', platforms: catalog.platforms, active: true };
@@ -139,16 +144,17 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
           account = { ...account!, platforms: available };
         }
         const visibleCatalog = owner ? catalog : buildCatalog(account!.platforms.map(platform => ({ team: account!.team, platform })));
-        return json({ ok: true, account: publicAccount(account!), catalog: visibleCatalog, identity_kind: owner ? 'dashboard_owner' : 'workorder' });
+        return json({ ok: true, account: { ...publicAccount(account!), ...(owner?{permissions:{'provider_upis.view':true,'provider_upis.add':true}}:{}) }, catalog: visibleCatalog, identity_kind: owner ? 'dashboard_owner' : 'workorder' });
       }
-      if (action === 'list-accounts') return json({ ok: true, accounts: (await gateway.accounts()).map(publicAccount), catalog });
+      if (action === 'list-accounts') { const configured=await gateway.permissionRoles(caller.id,{action:'list-roles'});return json({ ok: true, accounts: (await gateway.accounts()).map(publicAccount), catalog, roles:configured.roles }); }
       if (action === 'create-account') {
         const name = username(body!.username), pass = password(body!.password), display = label(body!.display_name, '显示名称');
         if (!roles.has(String(body!.role))) bad('工单角色不正确');
         const selected = scope(body!, catalog);
+        if ('custom_role_id' in body! && body!.custom_role_id!==null && !uid(body!.custom_role_id)) bad('工单角色标识不正确');
         const id = await gateway.createUser(`${name}@${ACCOUNT_DOMAIN}`, pass);
         let created: Account;
-        try { created = await gateway.insert({ auth_user_id: id, username: name, display_name: display, role: String(body!.role), ...selected, active: true }, caller.id); }
+        try { created = await gateway.insert({ auth_user_id: id, username: name, display_name: display, role: String(body!.role), ...selected, active: true,custom_role_id:body!.custom_role_id as string|null|undefined }, caller.id); }
         catch (error) { try { await gateway.deleteUser(id); } catch { /* An orphan Auth user has no portal row or dashboard profile, so fails closed. */ } throw error; }
         return json({ ok: true, account: publicAccount(created), message: '工单账号已创建' });
       }
@@ -164,10 +170,11 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
         return json({ ok: true, account: publicAccount(target), message: '工单密码已重置' });
       }
       const patch = body!.patch;
-      if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(k => !['display_name', 'role', 'team', 'platforms', 'active'].includes(k))) bad('修改内容不正确');
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(k => !['display_name', 'role', 'team', 'platforms', 'active','custom_role_id'].includes(k))) bad('修改内容不正确');
       const raw = patch as Record<string, unknown>, update: Record<string, unknown> = {};
       if ('display_name' in raw) update.display_name = label(raw.display_name, '显示名称');
       if ('role' in raw) { if (!roles.has(String(raw.role))) bad('工单角色不正确'); update.role = raw.role; }
+      if ('custom_role_id' in raw) {if(raw.custom_role_id!==null&&!uid(raw.custom_role_id))bad('工单角色标识不正确');update.custom_role_id=raw.custom_role_id;}
       if ('active' in raw) { if (typeof raw.active !== 'boolean') bad('启用状态不正确'); update.active = raw.active; }
       if ('team' in raw || 'platforms' in raw || raw.active === true) Object.assign(update, scope({ ...target, ...raw }, catalog));
       if (!Object.keys(update).length) bad('没有需要修改的内容');
@@ -178,6 +185,8 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
       if (!updated) throw new ApiError(409, 'account_changed', '账号已被其他操作修改，请刷新后重试');
       return json({ ok: true, account: publicAccount(updated), message: '工单账号已更新' });
     } catch (error) {
+      const database=error as {code?:string,message?:string};
+      if (database.code==='22023'&&database.message==='invalid_role'||database.code==='23503')return json({ok:false,code:'invalid_role',message:'所选角色不可用或与系统身份不符'},400);
       if (error instanceof ApiError) return json({ ok: false, code: error.code, message: error.message }, error.status);
       return json({ ok: false, code: 'service_unavailable', message: '账号服务暂时不可用，请稍后重试' }, 503);
     }

@@ -7,9 +7,10 @@ const url = Deno.env.get('SUPABASE_URL') || '', key = Deno.env.get('SUPABASE_SER
 const admin = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 function checked(result: any) { if (result.error) throw result.error; return result.data; }
 const gateway: Gateway = {
+  async permissionRoles(actor,request) { return checked(await admin.rpc('workorder_permission_role_admin',{p_actor:actor,p_request:request})); },
   async getUser(token) { const r = await admin.auth.getUser(token); if (r.error) return null; return r.data.user; },
   async profile(id) { return checked(await admin.from('dashboard_profiles').select('auth_user_id,username,role,active').eq('auth_user_id', id).maybeSingle()); },
-  async account(id) { return checked(await admin.from('workorder_portal_accounts').select(ACCOUNT_FIELDS).eq('auth_user_id', id).maybeSingle()); },
+  async account(id) { return checked(await admin.rpc('workorder_portal_account_context',{p_actor:id})); },
   async accounts() { return checked(await admin.from('workorder_portal_accounts').select(ACCOUNT_FIELDS).order('username').limit(1000)) || []; },
   async catalogRows() {
     const [mapped, game66] = await Promise.all([

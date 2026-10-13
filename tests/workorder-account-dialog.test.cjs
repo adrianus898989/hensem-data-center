@@ -42,6 +42,7 @@ function ui(handler, options={}) {
     require(name) {
       if (name === 'react') return react;
       if (name === 'react/jsx-runtime') return jsx;
+      if (name === './WorkOrderRoleManager') return {default: function WorkOrderRoleManager(){}};
       if (name === './AccountLoginPolicy') return {default: function AccountLoginPolicy(){}};
       if (name === './AccountEditorDialog') return {default: AccountEditorDialog};
       if (name.endsWith('.css')) return {};

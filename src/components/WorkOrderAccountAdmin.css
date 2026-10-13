@@ -63,3 +63,32 @@
 .wo-account-table table{min-width:1130px}
 .wo-account-table .wo-col-status{width:118px}
 .wo-account-table .wo-col-actions{width:365px}
+
+.wo-account-sections{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px;padding:5px;background:#eef3fa;border-radius:9px;width:fit-content}
+.workorder-account-admin .wo-account-sections button{border:0;background:transparent;padding:8px 18px;color:#627794}
+.workorder-account-admin .wo-account-sections button[aria-pressed=true]{background:#fff;color:#365de1;box-shadow:0 1px 4px #23395e12;font-weight:600}
+.wo-account-permission-choice{margin:16px 0;padding:14px;border:1px solid #e0e7f1;border-radius:8px;background:#f8fafd}
+.wo-account-permission-choice label{font-size:12px}
+.wo-account-permission-choice p,.wo-role-help{font-size:12px;color:#6c809a;line-height:1.7;margin:9px 0 0}
+.wo-account-permission-summary{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:12px;color:#3d5778}
+.wo-account-custom-role{display:block;margin-top:4px;color:#6c809a;font-size:11px}
+.wo-role-filters{display:flex;align-items:end;gap:14px;flex-wrap:wrap;padding:14px;border:1px solid #e9eef5;border-radius:8px;background:#f8fafd;margin-bottom:16px}
+.wo-role-filters label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:#687e9c}
+.wo-role-filters>span{margin-left:auto;color:#687e9c;font-size:12px;padding-bottom:9px}
+.wo-role-table{overflow:auto;border:1px solid #dbe4f0;border-radius:8px;background:#fff}
+.wo-role-table table{width:100%;min-width:790px;border-collapse:collapse;font-size:12px;text-align:left}
+.wo-role-table td,.wo-role-table th{padding:12px;border-bottom:1px solid #e7edf5;vertical-align:middle}
+.wo-role-table th{background:#f4f7fc;color:#607b9f;white-space:nowrap}
+.wo-role-table td:first-child{overflow-wrap:anywhere;min-width:140px;max-width:220px}
+.wo-role-table td:last-child{width:175px;white-space:nowrap}
+.wo-role-table tbody tr:last-child td{border-bottom:0}
+.wo-role-manager>.wo-role-help{margin:14px 0 0}
+.wo-role-permission-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:16px 0}
+.wo-role-permission-group{border:1px solid #e0e7f1;border-radius:8px;padding:14px;background:#fff;min-width:0}
+.wo-role-permission-group h4{font-size:13px;margin:0 0 10px;color:#294363}
+.wo-role-permission-group label{display:flex;flex-direction:row;align-items:flex-start;gap:8px;padding:7px 0;font-size:12px;line-height:1.5}
+.wo-role-permission-group input{margin:2px 0 0;flex-shrink:0}
+.wo-role-permission-group small{display:block;color:#8b98ac;font-size:11px}
+.wo-role-unavailable{color:#8796ac}
+.wo-role-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding-top:14px;border-top:1px solid #e7edf5;color:#687e9c;font-size:12px}
+@media(max-width:700px){.wo-role-permission-grid{grid-template-columns:1fr}.wo-role-filters>span{margin-left:0}.wo-account-sections{width:auto}}

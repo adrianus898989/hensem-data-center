@@ -16,7 +16,8 @@ const gateway: Gateway = {
   async upi(actor, request) {
     const { data, error } = await admin.rpc('workorder_provider_upi', { p_actor: actor, p_request: request });
     if (error) {
-      const allowed = new Set(['invalid_request','invalid_provider','invalid_upi','invalid_pagination','account_denied','scope_denied','readonly_account']);
+      if (error.code==='42501' && error.message==='permission_denied') throw new ApiError(403,'permission_denied');
+      const allowed = new Set(['invalid_request','invalid_provider','invalid_upi','invalid_pagination','account_denied','scope_denied','readonly_account','permission_denied']);
       if (['22023','42501'].includes(error.code) && allowed.has(error.message)) return { ok: false, code: error.message };
       throw new ApiError(503, 'service_unavailable');
     }
