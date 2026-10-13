@@ -22,7 +22,8 @@ function fixture(overrides={}) {
   const gateway={
     async getUser(token){calls.push(['auth',token]);return state.caller;},
     async profile(id){calls.push(['profile',id]);return id===ownerId?state.profile:state.targetProfile||null;},
-    async account(id){calls.push(['account',id]);return state.account?.auth_user_id===id?state.account:null;},
+    async account(id){calls.push(['account',id]);return state.account?.auth_user_id===id?{...state.account,permissions:state.effectivePermissions||{'provider_upis.view':true,'provider_upis.add':state.account.role!=='auditor'},custom_role_id:state.account.custom_role_id||null}:null;},
+    async permissionRoles(actor,request){calls.push(['roles',actor,request]);return {ok:true,roles:state.permissionRoles||[],permission_catalog:[]};},
     async accounts(){return [state.account];},async catalogRows(){return state.catalog;},
     async sessionAllowed(token,id,surface){calls.push(['session',token,id,surface]);return state.approved!==false;},
     async ipCheck(surface,ip,user){calls.push(['ip',surface,ip,user]);return state.ipAllowed!==false;},
@@ -123,4 +124,21 @@ test('account body is bounded in bytes before catalog or mutations',async()=>{
 test('portal service queries require trusted current IP and account override after verified session',async()=>{
   for(const headers of [{'x-portal-proxy-key':'forged'},{'x-portal-client-ip':'203.0.113.7, 198.51.100.1'},{'x-portal-proxy-key':'','x-portal-client-ip':''}]){const f=fixture({caller:{id:staffId,email:'worker1@workorder.hensem.local'}});assert.equal((await f.handler(req({action:'me'},headers))).status,403);assert(!f.calls.some(c=>c[0]==='ip'));}
   const f=fixture({caller:{id:staffId,email:'worker1@workorder.hensem.local'},ipAllowed:false});assert.equal((await f.handler(req())).status,403);assert.deepEqual(f.calls.find(c=>c[0]==='ip'),['ip','workorder','203.0.113.7',staffId]);
+});
+
+test('employee me returns only the fresh account permission map in one account read; owner capabilities are explicit',async()=>{
+ const f=fixture({caller:{id:staffId,email:'worker1@workorder.hensem.local'}});let r=await(await f.handler(req())).json();assert.equal(r.account.permissions['provider_upis.add'],true);assert.equal(f.calls.filter(c=>c[0]==='account').length,1);assert.equal(f.calls.filter(c=>c[0]==='roles').length,0);
+ f.state.effectivePermissions={'provider_upis.view':false,'provider_upis.add':false};r=await(await f.handler(req())).json();assert.equal(r.account.permissions['provider_upis.view'],false);assert(!('created_by' in r.account));assert(!('password' in r.account));
+ const ownerResult=await(await fixture().handler(req())).json();assert.deepEqual(ownerResult.account.permissions,{'provider_upis.view':true,'provider_upis.add':true});
+});
+test('custom role management requires fresh owner/session/IP before forwarding; unknown role actions remain denied',async()=>{
+ const f=fixture();const body={action:'create-role',name:'Synthetic Only',base_role:'agent',permissions:{'provider_upis.view':true}};assert.equal((await f.handler(req(body))).status,200);assert.deepEqual(JSON.parse(JSON.stringify(f.calls.find(c=>c[0]==='roles'))),['roles',ownerId,body]);
+ for(const overrides of [{caller:{id:staffId,email:'worker1@workorder.hensem.local'}},{approved:false},{ipAllowed:false}]){const g=fixture(overrides);assert.equal((await g.handler(req(body))).status,403);assert.equal(g.calls.filter(c=>c[0]==='roles').length,0);}
+ assert.equal((await fixture().handler(req({action:'delete-role'}))).status,400);
+ const list=await(await fixture({permissionRoles:[{id:'synthetic-role'}]}).handler(req({action:'list-accounts'}))).json();assert.deepEqual(list.roles,[{id:'synthetic-role'}]);
+});
+test('account explicit role assignment preserves the original optimistic guard; custom fields cannot overwrite authority',async()=>{
+ const f=fixture();const body={action:'update-account',auth_user_id:staffId,expected_updated_at:version,patch:{role:'agent',custom_role_id:ownerId}};assert.equal((await f.handler(req(body))).status,200);assert.equal(f.calls.find(c=>c[0]==='update')[3].custom_role_id,ownerId);
+ for(const patch of [{custom_role_id:'bad'},{permissions:{'provider_upis.add':true}},{custom_role_version:99}])assert.equal((await fixture().handler(req({...body,patch}))).status,400);
+ assert.equal((await fixture().handler(req({...body,expected_updated_at:''}))).status,400);
 });
