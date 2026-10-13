@@ -1,5 +1,5 @@
 /* Read-only KYC reconciliation presentation. No transport or matching rules.
- * create({id,onQuery,onDetail,onExplain,onRender,onError,getPlatformOptions}) -> render(snapshot).
+ * create({id,onQuery,onDetail,onExplain,onRender,onError,onLoading,getPlatformOptions}) -> render(snapshot).
  * Optional getPlatformOptions() supplies the current authorized directory;
  * otherwise platform choices continue to come from the result snapshot.
  * restoreFilters(filters) validates/replaces draft filters atomically without
@@ -44,6 +44,7 @@
   const collected=()=>(snapshot?.source||ctx.source)==='collected-workorders';
   const paginationBlocked=()=>loading||!snapshot||!snapshotFilters||Object.keys(snapshotFilters).some(key=>!['offset','limit'].includes(key)&&snapshotFilters[key]!==filters[key]);
   const emit=()=>ctx.onRender?.();
+  const setLoading=value=>{if(loading===value)return;loading=value;ctx.onLoading?.(value)};
   const action=(method,args=[],event='click',value=false)=>'data-kr-id="'+E(id)+'" data-kr-action="'+E(method)+'" data-kr-args="'+E(JSON.stringify(args))+'" data-kr-event="'+event+'"'+(value?' data-kr-value="true"':'');
   const button=(label,method,args=[],attrs='')=>'<button type="button" '+attrs+' '+action(method,args)+'>'+E(label)+'</button>';
   const badge=(label,tone='neutral')=>'<span class="kr-badge kr-'+tone+'">'+E(label)+'</span>';
@@ -79,16 +80,16 @@
    if(['from','to'].some(key=>{const date=next[key];if(!date)return false;if(!/^\d{4}-\d{2}-\d{2}$/.test(date))return true;const parsed=new Date(date+'T00:00:00Z');return !Number.isFinite(parsed.getTime())||parsed.toISOString().slice(0,10)!==date}))return false;
    if(next.from&&next.to&&next.from>next.to)return false;
    if(n(next.offset)===null||![20,50,100].includes(n(next.limit)))return false;
-   next.offset=n(next.offset);next.limit=n(next.limit);requestSerial++;loading=false;error='';filters=next;if(notify)emit();return true;
+   next.offset=n(next.offset);next.limit=n(next.limit);requestSerial++;setLoading(false);error='';filters=next;if(notify)emit();return true;
   }
-  async function query(){if(typeof ctx.onQuery!=='function')return;if(filters.from&&filters.to&&filters.from>filters.to){error='开始日期不能晚于结束日期';emit();return}const own=++requestSerial,requested={...filters};loading=true;error='';emit();try{const result=await ctx.onQuery(requested);if(own!==requestSerial)return;if(result!==undefined)render(result,requested)}catch(e){if(own!==requestSerial)return;error=e?.message||'核对数据读取失败';ctx.onError?.(e)}finally{if(own===requestSerial){loading=false;emit()}}}
-  function pause(){requestSerial++;if(loading)error='读取已暂停，点击查询更新';loading=false;}
+  async function query(){if(typeof ctx.onQuery!=='function')return;if(filters.from&&filters.to&&filters.from>filters.to){error='开始日期不能晚于结束日期';emit();return}const own=++requestSerial,requested={...filters};setLoading(true);error='';emit();try{const result=await ctx.onQuery(requested);if(own!==requestSerial)return;if(result!==undefined)render(result,requested)}catch(e){if(own!==requestSerial)return;error=e?.message||'核对数据读取失败';ctx.onError?.(e)}finally{if(own===requestSerial){setLoading(false);emit()}}}
+  function pause(){requestSerial++;if(loading)error='读取已暂停，点击查询更新';setLoading(false);}
   function capture(){return {filters:{...filters},snapshot,snapshotFilters:snapshotFilters?{...snapshotFilters}:null,resultDimension,error:loading?'读取已暂停，点击查询更新':error,more};}
   function restore(value){pause();if(!value){filters=defaultFilters();snapshot=null;snapshotFilters=null;resultDimension='platform';error='';more=false;return true;}if(!restoreFilters(value.filters,false))return false;snapshot=value.snapshot??null;snapshotFilters=value.snapshotFilters?{...value.snapshotFilters}:null;resultDimension=Object.hasOwn(dimensions,value.resultDimension)?value.resultDimension:'platform';error=String(value.error||'');more=!!value.more;return true;}
   const api={render,query,filter,restoreFilters,pause,capture,restore,clear:()=>restore(null),getState:()=>({...filters}),getSnapshot:()=>snapshot,dispose:()=>{pause();instances.delete(id)},dispatch(method,...args){
    if(method==='filter'){filter(...args);return}
    if(method==='query')return query();
-   if(method==='reset'){requestSerial++;loading=false;filters=defaultFilters();snapshot=null;snapshotFilters=null;resultDimension='platform';error='';emit();return}
+   if(method==='reset'){requestSerial++;setLoading(false);filters=defaultFilters();snapshot=null;snapshotFilters=null;resultDimension='platform';error='';emit();return}
    if(method==='more'){more=!more;emit();return}
    if(method==='category'&&['all',...Object.keys(kycLabels)].includes(args[0])){filters.kycStatus=args[0];filters.offset=0;return query()}
    if(method==='dimension'&&Object.hasOwn(dimensions,args[0])){filters.dimension=args[0];filters.offset=0;return query()}
