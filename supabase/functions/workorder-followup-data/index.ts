@@ -13,6 +13,15 @@ const gateway: Gateway = {
     const raw = await response.text(); if (raw.length > 65536) throw new ApiError(503, 'identity_unavailable'); return JSON.parse(raw);
   },
   async list(account, filters, offset, limit) { const { data, error } = await admin.rpc('workorder_followup_list', { p_account: account, p_filters: filters, p_offset: offset, p_limit: limit }); if (error) throw error; return data; },
+  async upi(actor, request) {
+    const { data, error } = await admin.rpc('workorder_provider_upi', { p_actor: actor, p_request: request });
+    if (error) {
+      const allowed = new Set(['invalid_request','invalid_provider','invalid_upi','invalid_pagination','account_denied','scope_denied','readonly_account']);
+      if (['22023','42501'].includes(error.code) && allowed.has(error.message)) return { ok: false, code: error.message };
+      throw new ApiError(503, 'service_unavailable');
+    }
+    return data;
+  },
   async mirror(record) { const { data, error } = await admin.rpc('workorder_followup_mirror', { p_record: record }); if (error) throw error; return data === true; },
 };
 Deno.serve(createWorkorderFollowupHandler(gateway, { proxyKeySha256: '0ab9c303e8845503a0bb32e9a4bb898228656ba4928c306e5bc4eff35fd7980f' }));

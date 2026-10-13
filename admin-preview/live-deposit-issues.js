@@ -9,7 +9,7 @@
  root.HensemLiveDepositIssues={create:function(ctx){
   const {L,E,C,N,R,metric,box,table,pager,render,request,formatTime}=ctx;
   const sourceUrl='https://docs.google.com/spreadsheets/d/1Y110H-E0ny6Yj6ZEhn7tRLgCuRrSE5iDeFwaZ8-aCqg/edit?gid=1642433306#gid=1642433306';
-  const entryUrl='https://docs.google.com/spreadsheets/d/1UBnMj2JS4eDfT-gdE-flUVLWs387FgoR6Rw2baLYzoE/edit?gid=2140568082#gid=2140568082';
+  const entryUrl='https://docs.google.com/spreadsheets/d/1o0nhJfztjVX9gNwH43uPWg5BUuhBxDMZ-_WUWdRd588/edit';
   Object.assign(L,{depositIssuesView:'entries',depositIssuesSection:'details',depositIssuesWorkspace:'sheet',depositIssuesDateMode:'range',depositIssuesDateInitialized:false,depositIssuesMatch:'all',depositIssuesFollowupState:'all',depositIssuesFollowupStatus:'',depositIssuesOrderNumber:'',depositIssuesWorkOrderNumber:'',depositIssuesUtr:'',depositIssuesUpiId:'',depositIssuesKycUpiId:'',depositIssuesReply:'',depositIssuesUtrMatch:'',depositIssuesKycCorrect:'',depositIssuesStaffCode:'',depositIssuesSourceKind:'all',depositIssuesAmountMin:'',depositIssuesAmountMax:''});
   const facets={};
   const kycWorkspace=root.HensemLiveDepositWorkspace?.create(ctx);
@@ -93,7 +93,8 @@
    const sourceLink=r=>{
     if(r.sourceKind==='portal')return '<span title="记录 ID：'+E(r.portalCaseId||'未提供')+'">工单工作台</span>';
     if(r.sourceRow==null)return '<span>'+C(r.sourceCount||r.sourceRowCount||r.sources?.length)+' 个来源行 · 展开查看</span>';
-    return sourceAnchor(r,r.sourceSheet?'':entries?entryUrl:sourceUrl);
+    if(entries&&!r.sourceSheet)return '<span title="来源表 ID 未返回，不推断历史或十月工作簿">'+E(r.sourceTab||'原表')+' · 第 '+C(r.sourceRow)+' 行<small class="deposit-muted">来源表待确认</small></span>';
+    return sourceAnchor(r,r.sourceSheet?'':sourceUrl);
    };
    const headers=entries?['平台','订单号','工单号','UTR','UPI ID','KYC-UPI ID','金额','三方','跟进状态','三方回复','UTR 核验','KYC 核验','PDF / 视频','跟进时间','凭证日期','距今天数','原表员工编号','首次录入员工','最后跟进员工','表格关联','核对表日期','数据来源']:['凭证日期','平台','三方','订单号','UTR','UPI ID','KYC-UPI ID','金额','表格入款标记','距今天数','表格对账','原表分类','统计归类','UTR 匹配','KYC 正确','原表','三方回复'];
    const rendered=rows.map(r=>entries?[
@@ -108,7 +109,24 @@
     if(Number.isInteger(L.depositIssuesExpanded)&&detailRows[L.depositIssuesExpanded]){let n=-1;grid=grid.replace(/<tbody>([\s\S]*?)<\/tbody>/,(_,body)=>'<tbody>'+body.replace(/<tr>[\s\S]*?<\/tr>/g,row=>++n===L.depositIssuesExpanded?row+'<tr class="deposit-inline-detail"><td colspan="11">'+table(['字段','完整内容'],detailRows[n].fields,'deposit-entry-full-detail')+'</td></tr>':row)+'</tbody>');}
     return box(L.depositIssuesFollowupState==='unresolved'?'表格未成功订单明细':'原订单核对明细',(!rows.length?'<div class="live-empty">'+(L.depositIssuesFollowupState==='unresolved'?'当前条件下没有表格未成功记录；此入口按表格入款标记筛选，工单处理状态请看漏登与状态核对。':'当前条件下没有核对记录。')+'</div>':grid)+currentPager(Number(result.total||0),L.depositIssuesPage,L.depositIssuesSize));
    }
-   if(entries){detailRows=rendered.map((cells,i)=>({platform:rows[i].platform,fields:headers.map((label,n)=>[label,cells[n]])}));rendered.forEach((cells,i)=>{for(let n=0;n<cells.length;n++)cells[n]='<span class="wo-cell-value" title="'+E(fullText(cells[n]))+'">'+cells[n]+'</span>';cells.push('<button type="button" class="link" title="查看完整跟进记录" aria-label="查看完整跟进记录" onclick="depositIssuesDetail('+i+')">详情</button>');});headers.push('操作');}
+   if(entries){
+    detailRows.forEach((detail,i)=>detail.fields.push(['原表日期文本',E(rows[i].sourceDateText||'未提供')],['原表天数文本',E(rows[i].receiptText||'未提供')]));
+    // Group the existing wire fields for scanning; details retain every field.
+    const cell=(label,value)=>'<span class="deposit-followup-line"><small>'+E(label)+'</small><span class="wo-cell-value" title="'+E(fullText(value))+'">'+value+'</span></span>';
+    const compact=rendered.map((cells,i)=>[
+     cells[0],cell('支付订单',cells[1])+cell('工单',cells[2]),cells[6],cells[7],
+     cell('跟进',cells[8])+cell('回复',cells[9])+cell('材料',cells[12]),
+     cell('UTR',cells[3])+cell('UTR 核验',cells[10])+cell('KYC 核验',cells[11]),
+     cell('UPI ID',cells[4])+cell('KYC-UPI ID',cells[5]),
+     cell('跟进时间',cells[13])+cell('凭证日期',cells[14])+cell('距今天数',cells[15]),
+     cell('原表员工编号',cells[16])+cell('首次录入员工',cells[17])+cell('最后跟进员工',cells[18]),
+     cells[19]+cell('核对表日期',cells[20]),cells[21],
+     '<button type="button" class="link" title="查看完整跟进记录" aria-label="查看完整跟进记录" onclick="depositIssuesDetail('+i+')">详情</button>'
+    ]);
+    const compactHeaders=['平台','支付订单 / 工单','金额','三方','跟进结果','UTR / 人工核验','UPI / KYC-UPI','日期 / 天数','跟进人员','核对表关联','来源','操作'];
+    const guide='<p class="deposit-followup-guide">十月表和历史跟进记录按来源保留；人工 KYC / UTR 核验不代表工单 KYC 连接状态。表格关联不代表已核实到账，完整字段与来源可点详情查看。<a href="'+E(entryUrl)+'" target="_blank" rel="noopener noreferrer">十月跟进表 ↗</a></p>';
+    return box('员工跟进明细',guide+(!rows.length?'<div class="live-empty">当前条件下没有跟进记录；无跟进日期的原表记录可选“全部日期”查看。</div>':table(compactHeaders,compact,'deposit-followup-compact deposit-readable-table'))+currentPager(Number(result.total||0),L.depositIssuesPage,L.depositIssuesSize));
+   }
    return box(entries?'员工跟进明细':'表格核对明细',table(entries?headers.map(label=>'<span title="'+E(label)+'">'+E(label==='距今天数'?'天数':label)+'</span>'):headers,rendered,'deposit-issues-columns'+(entries?' deposit-entry-details':' deposit-result-details'))+currentPager(Number(result.total||0),L.depositIssuesPage,L.depositIssuesSize));
   }
   function view(){

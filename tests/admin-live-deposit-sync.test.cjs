@@ -120,7 +120,7 @@ test('failed soft archival retains every persisted row and reports failure witho
 test('October follow-up source replaces only the known retired default or legacy environment value',async()=>{
  for(const configured of [undefined,'',DEFAULT_ENTRY_SOURCE_ID,HISTORICAL_ENTRY_SOURCE_ID,'https://docs.google.com/spreadsheets/d/'+HISTORICAL_ENTRY_SOURCE_ID+'/edit?gid=0#gid=0']){
   const h=harness({envOverrides:{DEPOSIT_FOLLOWUP_SHEET_ID:configured}}),response=await h.call();assert.equal(response.status,200);
-  const body=await response.json();assert.equal(body.entrySource,DEFAULT_ENTRY_SOURCE_ID);assert.equal(body.entrySourceRole,'current');assert.equal(body.entryTabs,17);
+  const body=await response.json();assert.equal(body.entrySource,DEFAULT_ENTRY_SOURCE_ID);assert.equal(body.entrySourceRole,'current');assert.equal(body.entryTabs,18);
   assert.equal(body.entrySourceMigrated,!!configured&&configured.includes(HISTORICAL_ENTRY_SOURCE_ID));
   assert.deepEqual(body.historicalEntrySources,[{source:HISTORICAL_ENTRY_SOURCE_ID,role:'historical',sync:false}]);
   const entryReads=h.calls.filter(x=>x.url.origin==='https://sheets.googleapis.com'&&!x.url.pathname.includes('synthetic_source_'));
@@ -148,7 +148,7 @@ test('switching to October preserves historical originals and portal rows throug
 
 test('9KCLUB is required in the current workbook and retained under its exact name without granting scope',async()=>{
  const h=harness({envOverrides:{DEPOSIT_FOLLOWUP_SHEET_ID:DEFAULT_ENTRY_SOURCE_ID},entryValues:{'9KCLUB':[entryHeaders,entryRow]}}),response=await h.call();assert.equal(response.status,200);
- const body=await response.json();assert.equal(body.entryRows,2);assert.equal(body.entryTabs,17);
+ const body=await response.json();assert.equal(body.entryRows,2);assert.equal(body.entryTabs,18);
  const row9k=h.writes.flat().find(r=>r.platform==='9KCLUB');assert(row9k);assert.equal(row9k.source_tab,'9KCLUB');assert.equal(row9k.source_sheet,DEFAULT_ENTRY_SOURCE_ID);assert.equal(row9k.followup_status,'Success To Other Platform');assert.equal(row9k.followup_date,'2026-09-25');assert.equal(row9k.receipt_text,'29');
  assert(!('team' in row9k));assert(!('scope' in row9k));assert(!('portal_team' in row9k));
  assert(h.calls.filter(x=>x.url.origin==='https://synthetic-project.supabase.co').every(x=>['admin_deposit_followup_rows','admin_deposit_issue_rows'].includes(x.url.pathname.split('/').at(-1))));
@@ -162,7 +162,7 @@ test('current source read failure exits once and leaves historical rows untouche
  assert.deepEqual(h.stored.get(old.table+':old'),old);assert.equal(h.stored.size,2,'result source independently refreshed');assert(!h.calls.some(x=>x.init.method==='DELETE'||x.init.method==='PATCH'&&x.url.pathname.endsWith('admin_deposit_followup_rows')));
 });
 
-test('a result timeout cannot hold up the complete current 17-tab mirror; partial receipt is explicit and safe',async()=>{
+test('a result timeout cannot hold up the complete current 18-tab mirror; partial receipt is explicit and safe',async()=>{
  let abortResult,timers=0,entryCommittedBeforeTimeout=false;
  const timedModule={exports:{}};
  new Function('module','exports','setTimeout','clearTimeout',compiled)(timedModule,timedModule.exports,(fn,delay)=>++timers===2?(abortResult=fn,-1):setTimeout(fn,delay),id=>{if(id!==-1)clearTimeout(id)});
@@ -176,7 +176,7 @@ test('a result timeout cannot hold up the complete current 17-tab mirror; partia
  }});
  const response=await h.call(),body=await response.json();assert.equal(response.status,504);assert.equal(body.ok,false);assert.equal(body.code,'deposit_issue_sync_partial');assert(entryCommittedBeforeTimeout);
  assert.deepEqual(body.sourceResults.result,{ok:false,stage:'result_read',code:'sync_request_timed_out',rowsRead:0,rowsWritten:0,tabsRead:0});
- assert.deepEqual(body.sourceResults.entries,{ok:true,stage:'complete',rowsRead:1,rowsWritten:1,tabsRead:17,syncedAt:'2026-09-24T10:00:00.000Z'});
+ assert.deepEqual(body.sourceResults.entries,{ok:true,stage:'complete',rowsRead:1,rowsWritten:1,tabsRead:18,syncedAt:'2026-09-24T10:00:00.000Z'});
  assert.equal(h.calls.filter(x=>x.url.origin==='https://sheets.googleapis.com'&&x.url.pathname.includes('synthetic_source_')).length,1);assert.equal(h.maxInFlight(),2);
  assert.deepEqual(h.stored.get(oldResult.table+':'+oldResult.id),oldResult);assert.deepEqual(h.stored.get(historical.table+':'+historical.id),historical);
  assert(!h.calls.some(x=>x.init.method==='PATCH'&&x.url.pathname.endsWith('admin_deposit_issue_rows')));
@@ -195,4 +195,16 @@ test('partial result failures can be rerun without changing history or duplicati
  const h=harness({failResultRead:true,envOverrides:{DEPOSIT_FOLLOWUP_SHEET_ID:DEFAULT_ENTRY_SOURCE_ID},initialRows:[historical]});
  const first=await (await h.call()).json();assert.equal(first.sourceResults.entries.ok,true);assert.equal(first.sourceResults.result.ok,false);const before=JSON.stringify([...h.stored.values()]);
  assert.equal((await h.call()).status,503);assert.equal(JSON.stringify([...h.stored.values()]),before);assert.equal(h.stored.size,2);assert.deepEqual(h.stored.get(historical.table+':'+historical.id),historical);
+});
+
+// The live October MAANWIN header was inspected; values below are synthetic.
+test('October MAANWIN uses only verified A:P fields and is required before archiving',async()=>{
+ const maanHeaders=entryHeaders.slice();maanHeaders[3]='UTR NUMBER';
+ const values=[maanHeaders,[...entryRow,'PRIVATE-UNKNOWN-Q','PRIVATE-UNKNOWN-R']];
+ const h=harness({envOverrides:{DEPOSIT_FOLLOWUP_SHEET_ID:DEFAULT_ENTRY_SOURCE_ID},entryValues:{MAANWIN:values}});
+ const r=await h.call();assert.equal(r.status,200);const body=await r.json();assert.equal(body.entryTabs,18);
+ const item=h.writes.flat().find(v=>v.platform==='MAANWIN');assert(item);assert.equal(item.country,'印度');assert.equal(item.source_tab,'MAANWIN');assert.equal(item.source_sheet,DEFAULT_ENTRY_SOURCE_ID);assert.equal(item.work_order_number,'SYNTHETIC-TICKET');assert.equal(item.utr,'00001234');assert.equal(item.kyc_correct,'YES');assert.equal(item.followup_date,'2026-09-25');assert(!JSON.stringify(item).includes('PRIVATE-'));assert.equal(item.amount,1250.5);
+ assert(h.calls.filter(v=>v.url.pathname.endsWith('/values:batchGet')).flatMap(v=>v.url.searchParams.getAll('ranges')).includes("'MAANWIN'!A1:P40001"));
+ const incomplete=harness({envOverrides:{DEPOSIT_FOLLOWUP_SHEET_ID:DEFAULT_ENTRY_SOURCE_ID},metadataTabs:[...CURRENT_ENTRY_TABS].filter(v=>v!=='MAANWIN')});assert.equal((await incomplete.call()).status,502);assert(!incomplete.calls.some(v=>v.init.method==='PATCH'&&v.url.pathname.endsWith('admin_deposit_followup_rows')));
+ assert.equal(ENTRY_TABS.has('MAANWIN'),false,'retired/custom 16-tab profile remains unchanged');
 });
