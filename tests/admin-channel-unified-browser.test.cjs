@@ -99,543 +99,109 @@ function exported(h) {
   return rows.slice(4).map(row => Object.fromEntries(header.map((name, index) => [name, row[index]])));
 }
 
-test('unified browser defaults to all platforms in the current country and system only', async () => {
-  const first = platform(1), second = platform(2);
-  const abroad = platform(3, { country: '巴西', timezone: 'America/Sao_Paulo' });
-  const yash = platform(4, { source: 'kb', name: 'YASH', capabilities: { channelStatusAvailable: true } });
-  const h = fixture({ catalog: [first, second, abroad, yash] });
-  await h.start();
-  const saved = h.mod.capture();
-  assert.equal(saved.mode, 'browse');
-  assert.equal(saved.source, 'AR');
-  assert.equal(saved.country, '印度');
-  assert.deepEqual(plain(saved.browse.platformIds), []);
-  assert.deepEqual(h.calls, [{ action: 'channelStatus', platformIds: [first.id, second.id], direction: 'all' }]);
-  assert.deepEqual([...groups(h.mod.render()).keys()], [first.id, second.id]);
-  for (const group of groups(h.mod.render()).values()) {
-    const row = tableRows(group)[0];
-    assert.equal(row['支付供应商'], 'PayOne');
-    assert.equal(row['系统通道 ID'], 'sys-same');
-    assert.equal(row['第三方商户 ID'], 'private-merchant');
-    assert.equal(row['预设权重占比'], '100.00%');
-  }
-});
+// The old all-platform/chip workspace is retired. These use the real single /
+// cross modes and the same authorized full-snapshot transport and cache.
+const cross=h=>{h.context.liveChannelMode('cross');};
+const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{promise,resolve,reject};};
+const matchedRows=(id='same',extra={})=>[channel(id,{provider:'WPayINR',channel_name:'WPay-QR',...extra})];
 
-test('platform search only narrows options and platform multiselect applies without redundant reads', async () => {
-  const catalog = [platform(1), platform(2), platform(3)], h = fixture({ catalog });
-  await h.start();
-  h.context.liveChannelBrowseSearch('platform', 'AR 2');
-  await flush();
-  assert.deepEqual([...groups(h.mod.render()).keys()], catalog.map(p => p.id));
-  assert.deepEqual(plain(h.mod.capture().browse.platformIds), []);
-  assert.equal(h.calls.length, 1);
-  h.context.liveChannelBrowsePlatform(catalog[0].id, false);
-  h.context.liveChannelBrowsePlatform(catalog[2].id, false);
-  assert.deepEqual([...groups(h.mod.render()).keys()], catalog.map(p => p.id));
-  h.context.liveChannelBrowseApplyPlatforms();
-  await flush();
-  assert.deepEqual(plain(h.mod.capture().browse.platformIds), [catalog[1].id]);
-  assert.deepEqual([...groups(h.mod.render()).keys()], [catalog[1].id]);
-  assert.equal(h.calls.length, 1);
-  h.context.liveChannelBrowsePlatform(catalog[2].id, true);
-  h.context.liveChannelBrowseApplyPlatforms();
-  await flush();
-  assert.deepEqual([...groups(h.mod.render()).keys()], [catalog[1].id, catalog[2].id]);
-  assert.equal(h.calls.length, 1);
-  h.context.liveChannelBrowseAllPlatforms();
-  h.context.liveChannelBrowseApplyPlatforms();
-  await flush();
-  assert.deepEqual([...groups(h.mod.render()).keys()], catalog.map(p => p.id));
-  assert.equal(h.calls.length, 1);
+test('default fifteen-platform catalog reads only one platform with original buttons and no chips or stacked groups',async()=>{
+ const catalog=Array.from({length:15},(_,i)=>platform(i+1)),h=fixture({catalog});await h.start();
+ assert.equal(h.mod.capture().version,4);assert.equal(h.mod.capture().mode,'single');assert.deepEqual(h.calls,[{action:'channelStatus',platformIds:[catalog[0].id],direction:'all'}]);
+ const html=h.mod.render();assert.match(html,/channel-platforms/);assert.match(html,/liveChannelSelect\(14\)/);assert.match(html,/按平台/);assert.match(html,/按三方/);assert.doesNotMatch(html,/channel-browse-providers|channel-browse-group|channel-cross-group/);assert.equal((html.match(/<tbody>/g)||[]).length,1);
 });
-
-test('an empty explicit platform draft never silently expands the selected scope', async () => {
-  const first = platform(1), second = platform(2), h = fixture({ catalog: [first, second] });
-  await h.start();
-  selectPlatforms(h, [first, second], [first]);
-  await flush();
-  h.context.liveChannelBrowsePlatform(first.id, false);
-  h.context.liveChannelBrowseApplyPlatforms();
-  await flush();
-  assert.deepEqual(plain(h.mod.capture().browse.platformIds), [first.id]);
-  assert.deepEqual([...groups(h.mod.render()).keys()], [first.id]);
-  assert.equal(h.calls.length, 1);
+test('version3 default all-platform state migrates to one platform without discarding its validated cache',async()=>{
+ const catalog=[platform(1),platform(2),platform(3)],h=fixture({catalog});await h.start();const old={...plain(h.mod.capture()),version:3,mode:'browse'};old.browse={...old.browse,platformIds:[],providers:[]};h.mod.clear();h.mod.restore(old);await h.start();
+ assert.equal(h.mod.capture().mode,'single');assert.equal(h.mod.capture().version,4);assert.equal(h.mod.capture().platformId,catalog[0].id);assert.equal(h.calls.length,1);assert.equal((h.mod.render().match(/<tbody>/g)||[]).length,1);
 });
-
-test('payment providers are exact multi-select values, not fuzzy display-name matches', async () => {
-  const rows = [
-    channel('exact', { provider: 'WPayINR' }),
-    channel('prefix', { provider: 'WPayINR Plus', source_position: 1 }),
-    channel('other', { provider: 'OtherPay', channel_name: 'WPayINR', source_position: 2 }),
-    channel('case', { provider: 'wpayinr', source_position: 3 }),
-  ];
-  const p = platform(1), h = fixture({ rowsFor: () => rows });
-  await h.start();
-  const ids = () => tableRows(groups(h.mod.render()).get(p.id)).map(row => row['通道 ID']);
-  assert.deepEqual(ids(), ['exact', 'prefix', 'other', 'case']);
-  h.context.liveChannelBrowseSearch('provider', 'wPay');
-  assert.deepEqual(ids(), ['exact', 'prefix', 'other', 'case']);
-  h.context.liveChannelBrowseProvider('WPayINR');
-  assert.deepEqual(ids(), ['exact']);
-  h.context.liveChannelBrowseProvider('OtherPay');
-  assert.deepEqual(ids(), ['exact', 'other']);
-  h.context.liveChannelBrowseProvider('WPayINR');
-  assert.deepEqual(ids(), ['other']);
-  h.context.liveChannelBrowseAllProviders();
-  assert.deepEqual(ids(), ['exact', 'prefix', 'other', 'case']);
-  h.context.liveChannelBrowseProvider('Not a catalog provider');
-  assert.deepEqual(ids(), ['exact', 'prefix', 'other', 'case']);
-  await flush();
-  assert.equal(h.calls.length, 1);
+test('version3 explicit platform/provider drafts migrate to the first still-authorized selected identity',async()=>{
+ const catalog=[platform(1),platform(2),platform(3)],h=fixture({catalog});await h.start();h.context.liveChannelSelect(1);await flush();const old={...plain(h.mod.capture()),version:3,mode:'browse',browse:{platformIds:[catalog[1].id,catalog[2].id],providers:['PayOne']}};h.mod.clear();h.mod.restore(old);await h.start();
+ const state=h.mod.capture();assert.equal(state.platformId,catalog[1].id);assert.equal(state.provider,'PayOne');assert.equal(state.mode,'single');assert.equal(h.calls.length,2);assert.equal(exported(h)[0]['平台'],catalog[1].name);
 });
-
-test('provider filtering retains independent platform/category row identities and weight denominators', async () => {
-  const first = platform(1), second = platform(2);
-  const rowsFor = p => p.id === first.id ? [
-    channel('shared', { provider: 'PayOne', weight: '100', real_time_weight: '25' }),
-    channel('shared', { provider: 'PayOne', category_id: 'qr', category_name: 'QR', channel_categories: [{ category_id: 'qr', category_name: 'QR', sort: 1 }], weight: '100', real_time_weight: '25', source_position: 1 }),
-    channel('other', { provider: 'PayTwo', weight: '200', real_time_weight: '50', source_position: 2 }),
-  ] : [channel('shared', { provider: 'PayOne', weight: '100', real_time_weight: '100' })];
-  // Withdrawals have channel-only identities, unlike native recharge category/channel rows.
-  const h = fixture({ catalog: [first, second], rowsFor: (p, direction) => direction === 'charge' ? rowsFor(p) : [channel('shared')] });
-  await h.start();
-  h.context.liveChannelBrowseProvider('PayOne');
-  const result = groups(h.mod.render()), firstRows = tableRows(result.get(first.id)), secondRows = tableRows(result.get(second.id));
-  assert.equal(firstRows.length, 2);
-  assert.deepEqual(firstRows.map(row => [row['通道 ID'], row['充值大类'], row['预设权重占比'], row['实际权重占比']]), [
-    ['shared', 'UPI', '25.00%', '25.00%'], ['shared', 'QR', '25.00%', '25.00%'],
-  ]);
-  assert.deepEqual(secondRows.map(row => [row['通道 ID'], row['预设权重占比']]), [['shared', '100.00%']]);
-  assert.match(result.get(first.id), /预设合计 400/);
-  assert.match(result.get(second.id), /预设合计 100/);
-  assert.equal(h.calls.length, 1);
+test('a removed legacy selected identity cannot trigger all-platform reads or resurrect its cache',async()=>{
+ const first=platform(1),second=platform(2),h=fixture({catalog:[first,second]});await h.start();const old={...plain(h.mod.capture()),version:3,mode:'browse',browse:{platformIds:[first.id],providers:[]}};h.setCatalog([second]);h.mod.restore(old);await h.start();
+ assert.equal(h.mod.capture().mode,'single');assert.equal(h.mod.capture().platformId,second.id);assert.deepEqual(h.calls.at(-1).platformIds,[second.id]);assert(!h.mod.capture().cache[first.id]);
 });
-
-test('direction and local source filters do not reread snapshots or flatten withdrawal fields', async () => {
-  const p = platform(1), h = fixture({ rowsFor: (p, direction) => [
-    channel('current', { withdrawal_details: { merchant_name: 'Native merchant', merchant_code: 'M-22', today_submit_count: 10, recent_1h_success_count: 4, last_update_by: 'Editor' } }),
-    channel('old', { is_present: false, source_position: 1 }),
-  ] });
-  await h.start();
-  h.context.liveChannelBrowseFilter('absent', true);
-  assert.equal(tableRows(groups(h.mod.render()).get(p.id)).length, 2);
-  h.context.liveChannelBrowseFilter('absent', false);
-  h.context.liveChannelBrowseQuery('current', '');
-  assert.equal(tableRows(groups(h.mod.render()).get(p.id)).length, 1);
-  h.context.liveChannelBrowseClearFilters();
-  h.context.liveChannelBrowseTab('withdraw');
-  const row = tableRows(groups(h.mod.render()).get(p.id))[0];
-  assert.equal(row['成功率统计'], '今日已提交笔数：10近1小时成功笔数：4');
-  assert.equal(row['三方商户昵称 / 商户号'], '昵称：Native merchant商户号：M-22');
-  assert.equal(row['近10分钟成功率'], undefined);
-  assert.match(groups(h.mod.render()).get(p.id), /Asia\/Kolkata/);
-  await flush();
-  assert.equal(h.calls.length, 1);
+test('legacy all-platform handlers cannot activate the retired mode or broaden the default selection',async()=>{
+ const h=fixture({catalog:[platform(1),platform(2)]});await h.start();h.context.liveChannelMode('browse');h.context.liveChannelBrowseAllPlatforms();h.context.liveChannelBrowseApplyPlatforms();await flush();assert.equal(h.mod.capture().mode,'single');assert.equal(h.calls.length,1);
 });
-
-test('platform requests are sequential and bounded to twenty platforms per batch', async () => {
-  const catalog = Array.from({ length: 45 }, (_, index) => platform(index + 1)), pending = [];
-  const h = fixture({ catalog, handler: q => new Promise(resolve => pending.push({ q, resolve })) });
-  await h.start();
-  assert.equal(h.calls.length, 1);
-  assert.deepEqual(h.calls[0].platformIds, catalog.slice(0, 20).map(p => p.id));
-  pending[0].resolve(response(catalog.slice(0, 20)));
-  await flush();
-  assert.equal(h.calls.length, 2);
-  assert.deepEqual(h.calls[1].platformIds, catalog.slice(20, 40).map(p => p.id));
-  pending[1].resolve(response(catalog.slice(20, 40)));
-  await flush();
-  assert.equal(h.calls.length, 3);
-  assert.deepEqual(h.calls[2].platformIds, catalog.slice(40).map(p => p.id));
-  pending[2].resolve(response(catalog.slice(40)));
-  await flush();
-  assert.equal(h.mod.capture().browse.status, 'ready');
-  assert.equal(Object.values(h.mod.capture().cache).filter(hit => hit.response).length, 45);
-  assert(h.calls.every(q => q.action === 'channelStatus' && q.direction === 'all' && q.platformIds.length <= 20));
+test('version4 capture/restore retains the single platform and filters without refetch',async()=>{
+ const h=fixture();await h.start();h.context.liveChannelProvider('PayOne');h.context.liveChannelCategory('upi');h.context.liveChannelTab('withdraw');h.context.liveChannelAbsent(true);const saved=h.mod.capture();h.mod.clear();h.mod.restore(saved);await h.start();
+ assert.equal(h.calls.length,1);assert.equal(h.mod.capture().tab,'withdraw');assert.equal(h.mod.capture().includeAbsent,true);assert.equal(h.mod.capture().platformId,platform(1).id);
 });
-
-test('country/system switches reuse current cache without crossing source identity or timezone', async () => {
-  const india = platform(1), brazil = platform(2, { country: '巴西', timezone: 'America/Sao_Paulo' });
-  const yash = platform(3, { source: 'kb', name: 'YASH', capabilities: { channelStatusAvailable: true } });
-  const h = fixture({ catalog: [india, brazil, yash] });
-  await h.start();
-  h.context.liveChannelBrowseCountry(1);
-  await flush();
-  assert.deepEqual([...groups(h.mod.render()).keys()], [brazil.id]);
-  assert.match(groups(h.mod.render()).get(brazil.id), /America\/Sao_Paulo/);
-  assert.match(groups(h.mod.render()).get(brazil.id), /02:00/);
-  assert.equal(h.calls.length, 2);
-  h.context.liveChannelBrowseCountry(0);
-  await flush();
-  assert.deepEqual([...groups(h.mod.render()).keys()], [india.id]);
-  assert.match(groups(h.mod.render()).get(india.id), /10:30/);
-  assert.equal(h.calls.length, 2);
-  h.context.liveChannelBrowseSource(1);
-  await flush();
-  assert.deepEqual([...groups(h.mod.render()).keys()], [yash.id]);
-  assert.equal(h.calls.length, 3);
-  assert.match(groups(h.mod.render()).get(yash.id), /近4小时成功率/);
-  h.context.liveChannelBrowseSource(0);
-  await flush();
-  assert.deepEqual([...groups(h.mod.render()).keys()], [india.id]);
-  assert.equal(h.calls.length, 3);
+test('switching to by-provider mode alone reads nothing and shows compact all-country controls',async()=>{
+ const h=fixture({catalog:Array.from({length:15},(_,i)=>platform(i+1))});await h.start();cross(h);await flush();const html=h.mod.render();assert.equal(h.calls.length,1);assert.equal(h.mod.capture().cross.country,'');assert.equal(h.mod.capture().cross.source,'');assert.match(html,/全部国家/);assert.match(html,/<datalist id="channel-cross-names">/);assert.match(html,/先选择三方或输入通道名称/);assert.doesNotMatch(html,/channel-browse-providers|channel-cross-group/);
 });
-
-test('explicit refresh rereads only selected platforms and failed refresh preserves its own last snapshot', async () => {
-  const first = platform(1), second = platform(2), h = fixture({ catalog: [first, second] });
-  await h.start();
-  selectPlatforms(h, [first, second], [second]);
-  await flush();
-  assert.equal(h.calls.length, 1);
-  h.setHandler(() => { throw Error('fixture transport unavailable'); });
-  await h.context.liveChannelBrowseRefresh();
-  await flush();
-  assert.equal(h.calls.length, 2);
-  assert.deepEqual(h.calls[1].platformIds, [second.id]);
-  assert.equal(tableRows(groups(h.mod.render()).get(second.id)).length, 1);
-  assert.match(groups(h.mod.render()).get(second.id), /fixture transport unavailable/);
-  assert.equal(h.mod.capture().cache[first.id].error, '');
+test('empty names, partial typing and unknown suggestion changes never start an unrequested full scan',async()=>{
+ const h=fixture();cross(h);await h.context.liveChannelCrossQuery('  ');h.context.liveChannelCrossDraft('WPay');h.context.liveChannelCrossChoose('not-a-known-suggestion');await flush();assert.equal(h.calls.length,0);assert.equal(h.mod.capture().cross.query,null);
 });
-
-test('role revocation while a batch is pending discards the response and stops following batches', async () => {
-  const catalog = Array.from({ length: 21 }, (_, index) => platform(index + 1));
-  let release;
-  const h = fixture({ catalog, handler: () => new Promise(resolve => release = resolve) });
-  await h.start();
-  h.setPermissions(['view']);
-  release(response(catalog.slice(0, 20)));
-  await flush();
-  assert.equal(h.calls.length, 1);
-  assert.deepEqual(plain(h.mod.capture().cache), {});
-  assert.equal(groups(h.mod.render()).size, 0);
-  assert.doesNotMatch(h.mod.render(), /private-merchant|Private native name/);
+test('selecting a real supplier suggestion queries remaining authorized platforms across all countries',async()=>{
+ const first=platform(1),foreign=platform(2,{country:'巴西',timezone:'America/Sao_Paulo'}),h=fixture({catalog:[first,foreign],rowsFor:()=>matchedRows()});await h.start();cross(h);assert.match(h.mod.render(),/<option value="WPayINR">/);await h.context.liveChannelCrossChoose('WPayINR');await flush();assert.deepEqual(h.calls.map(q=>q.platformIds),[[first.id],[foreign.id]]);assert(h.calls.every(q=>!Object.hasOwn(q,'providers')));assert.match(h.mod.render(),/巴西 \/ AR 系统/);
 });
-
-test('navigation away ignores late data and never starts the next platform batch', async () => {
-  const catalog = Array.from({ length: 21 }, (_, index) => platform(index + 1));
-  let release;
-  const h = fixture({ catalog, handler: () => new Promise(resolve => release = resolve) });
-  await h.start();
-  h.setPage('overview');
-  assert.equal(h.mod.render(), '');
-  release(response(catalog.slice(0, 20)));
-  await flush();
-  assert.equal(h.calls.length, 1);
-  assert.equal(Object.values(h.mod.capture().cache).filter(hit => hit.response).length, 0);
+test('display-channel search is case/trim compatible and never treats its name as an exact supplier RPC filter',async()=>{
+ const a=platform(1),b=platform(2),foreign=platform(3,{country:'巴基斯坦'}),h=fixture({catalog:[a,b,foreign],rowsFor:p=>p.id===b.id?[channel('other',{provider:'Other',channel_name:'Different'})]:matchedRows()});cross(h);await h.context.liveChannelCrossQuery('  WPAY-qr  ');
+ assert.deepEqual(h.calls[0].platformIds,[a.id,b.id,foreign.id]);assert(!Object.hasOwn(h.calls[0],'providers'));const html=h.mod.render();assert.match(html,/印度/);assert.match(html,/巴基斯坦/);assert.match(html,/1 个平台当前完整快照无匹配通道/);assert.equal((html.match(/class="channel-cross-country"/g)||[]).length,2);
 });
-
-test('a selected platform removed from the authorized directory never expands to all platforms', async () => {
-  const first = platform(1), second = platform(2), h = fixture({ catalog: [first, second] });
-  await h.start();
-  selectPlatforms(h, [first, second], [first]);
-  await flush();
-  h.setCatalog([second]);
-  h.mod.render();
-  await flush();
-  assert.equal(h.mod.capture().browse.scopeEmpty, true);
-  assert.equal(groups(h.mod.render()).size, 0);
-  assert.equal(h.calls.length, 1);
-  assert.equal(h.mod.capture().cache[first.id], undefined);
+test('switching back restores original platform, direction and all single-platform local filters',async()=>{
+ const h=fixture({catalog:[platform(1),platform(2)],rowsFor:()=>matchedRows()});await h.start();h.context.liveChannelSelect(1);await flush();h.context.liveChannelProvider('WPayINR');h.context.liveChannelCategory('upi');h.context.liveChannelCurrency('INR');h.context.liveChannelQuery('WPay','private-merchant');h.context.liveChannelAbsent(true);const saved=plain(h.mod.capture());cross(h);await h.context.liveChannelCrossQuery('WPay');h.context.liveChannelTab('withdraw');h.context.liveChannelCrossAbsent(false);h.context.liveChannelMode('single');await flush();const state=plain(h.mod.capture());for(const key of ['platformId','source','country','tab','provider','category','currency','channelQuery','merchantQuery','includeAbsent'])assert.equal(state[key],saved[key],key);assert.equal(state.singleView,null);
 });
-
-test('detail permission remains enforced for every platform and searches cannot expose masked fields', async () => {
-  const first = platform(1), second = platform(2), h = fixture({ catalog: [first, second], permissions: ['view', 'query', 'export'] });
-  await h.start();
-  assert.doesNotMatch(h.mod.render(), /private-merchant|Private native name|第三方商户 ID/);
-  h.context.liveChannelBrowseQuery('Private native name', 'private-merchant');
-  for (const group of groups(h.mod.render()).values()) assert.equal(tableRows(group).length, 0);
-  h.context.liveChannelBrowseClearFilters();
-  h.context.liveChannelBrowseTab('withdraw');
-  for (const group of groups(h.mod.render()).values()) {
-    const row = tableRows(group)[0];
-    assert.equal(row['三方商户昵称 / 商户号'], '未获明细权限');
-    assert.equal(row['成功率统计'], '未获明细权限');
-  }
-  assert.equal(h.calls.length, 1);
+test('supplier shortcut preserves the single-platform filters and its raw name without narrowing countries',async()=>{
+ const h=fixture({catalog:[platform(1),platform(2,{country:'巴西'})],rowsFor:()=>matchedRows()});await h.start();h.context.liveChannelProvider('WPayINR');await h.context.liveChannelCrossFromProvider();assert.equal(h.mod.capture().mode,'cross');assert.equal(h.mod.capture().cross.draft,'WPayINR');assert.equal(h.mod.capture().cross.country,'');h.context.liveChannelMode('single');assert.equal(h.mod.capture().provider,'WPayINR');
 });
-
-test('capture/restore retains local multiselection without an immediate repeat request', async () => {
-  const first = platform(1), second = platform(2), h = fixture({ catalog: [first, second] });
-  await h.start();
-  selectPlatforms(h, [first, second], [second]);
-  await flush();
-  h.context.liveChannelBrowseProvider('PayOne');
-  const saved = h.mod.capture();
-  h.mod.clear();
-  h.mod.restore(saved);
-  h.mod.render();
-  await flush();
-  assert.deepEqual(plain(h.mod.capture().browse.platformIds), [second.id]);
-  assert.deepEqual(plain(h.mod.capture().browse.providers), ['PayOne']);
-  assert.deepEqual([...groups(h.mod.render()).keys()], [second.id]);
-  assert.equal(h.calls.length, 1);
+test('cross-platform batches are sequential, at most twenty and identical pending requests coalesce',async()=>{
+ const catalog=Array.from({length:42},(_,i)=>platform(i+1)),pending=[],h=fixture({catalog,handler:q=>new Promise(resolve=>pending.push({q,resolve}))});cross(h);const original=h.context.liveChannelCrossQuery('PayOne');await flush();const joined=h.context.liveChannelCrossQuery('PayOne');await flush();assert.equal(h.calls.length,1);assert.equal(h.calls[0].platformIds.length,20);pending[0].resolve(response(catalog.slice(0,20)));await flush();assert.equal(h.calls.length,2);pending[1].resolve(response(catalog.slice(20,40)));await flush();assert.equal(h.calls.length,3);pending[2].resolve(response(catalog.slice(40)));await original;await joined;assert.deepEqual(h.calls.map(q=>q.platformIds.length),[20,20,2]);
 });
-
-test('a response from the previous country cannot replace the newly selected scope', async () => {
-  const india = platform(1), brazil = platform(2, { country: '巴西', timezone: 'America/Sao_Paulo' });
-  const pending = [], h = fixture({ catalog: [india, brazil], handler: q => new Promise(resolve => pending.push({ q, resolve })) });
-  await h.start();
-  h.context.liveChannelBrowseCountry(1);
-  await flush();
-  assert.equal(h.calls.length, 2);
-  assert.deepEqual(h.calls[1].platformIds, [brazil.id]);
-  pending[0].resolve(response([india], () => [channel('late-india')]));
-  await flush();
-  assert.equal(h.mod.capture().country, '巴西');
-  assert.doesNotMatch(h.mod.render(), /late-india/);
-  pending[1].resolve(response([brazil], () => [channel('current-brazil')]));
-  await flush();
-  assert.deepEqual([...groups(h.mod.render()).keys()], [brazil.id]);
-  assert.equal(tableRows(groups(h.mod.render()).get(brazil.id))[0]['通道 ID'], 'current-brazil');
-  assert.equal(h.mod.capture().browse.status, 'ready');
+test('query permission revocation while a batch is pending clears facts and prevents further batches',async()=>{
+ const catalog=Array.from({length:21},(_,i)=>platform(i+1)),wait=deferred(),h=fixture({catalog,handler:()=>wait.promise});cross(h);const p=h.context.liveChannelCrossQuery('PayOne');await flush();h.setPermissions(['view']);wait.resolve(response(catalog.slice(0,20)));await p;assert.equal(h.calls.length,1);assert.deepEqual(plain(h.mod.capture().cache),{});assert.doesNotMatch(h.mod.render(),/Display same/);
 });
-
-test('a malformed source refresh is rejected without replacing a previously validated platform', async () => {
-  const p = platform(1), h = fixture();
-  await h.start();
-  const before = plain(h.mod.capture().cache[p.id].response);
-  h.setHandler(() => {
-    const data = response([p], () => [channel('wrong-source')]);
-    data.snapshots[0].source = 'yash';
-    return data;
-  });
-  await h.context.liveChannelBrowseRefresh();
-  await flush();
-  assert.deepEqual(plain(h.mod.capture().cache[p.id].response), before);
-  assert.match(h.mod.render(), /通道快照来源不匹配/);
-  assert.doesNotMatch(h.mod.render(), /wrong-source/);
-  assert.equal(tableRows(groups(h.mod.render()).get(p.id))[0]['通道 ID'], 'same');
+test('navigation discards late cross data and cannot start the next batch or paint the destination',async()=>{
+ const catalog=Array.from({length:21},(_,i)=>platform(i+1)),wait=deferred(),h=fixture({catalog,handler:()=>wait.promise});cross(h);const p=h.context.liveChannelCrossQuery('PayOne');await flush();h.setPage('overview');h.mod.cancel();const paints=h.paints.length;wait.resolve(response(catalog.slice(0,20)));await p;assert.equal(h.calls.length,1);assert.equal(h.paints.length,paints);assert(!Object.values(h.mod.capture().cache).some(x=>x.response));
 });
-
-test('view-only roles make no backend calls and cannot activate selection or refresh reads', async () => {
-  const h = fixture({ permissions: ['view'] });
-  await h.start();
-  h.context.liveChannelBrowseAllPlatforms();
-  h.context.liveChannelBrowseApplyPlatforms();
-  h.context.liveChannelBrowseRefresh();
-  await flush();
-  assert.equal(h.calls.length, 0);
-  assert.equal(groups(h.mod.render()).size, 0);
-  assert.deepEqual(plain(h.mod.capture().cache), {});
+test('by-provider scope filters remain within fresh authorized countries, systems and platform UUIDs',async()=>{
+ const first=platform(1),foreign=platform(2,{country:'巴西'}),yash=platform(3,{source:'kb',capabilities:{channelStatusAvailable:true}}),h=fixture({catalog:[first,foreign,yash]});cross(h);h.context.liveChannelCrossFilter('country','巴西');h.context.liveChannelCrossFilter('platformId','hidden-uuid');await h.context.liveChannelCrossQuery('PayOne');assert.deepEqual(h.calls[0].platformIds,[foreign.id]);assert.equal(h.mod.capture().cross.platformId,'');
 });
-
-test('directory removal of the current all-platform country does not auto-query a different country', async () => {
-  const india = platform(1), brazil = platform(2, { country: '巴西', timezone: 'America/Sao_Paulo' });
-  const h = fixture({ catalog: [india, brazil] });
-  await h.start();
-  assert.deepEqual(plain(h.mod.capture().browse.platformIds), []);
-  h.setCatalog([brazil]);
-  h.mod.render();
-  await flush();
-  assert.equal(h.calls.length, 1, 'Passive authorization changes must not query a replacement country');
-  assert.equal(h.mod.capture().browse.scopeEmpty, true);
-  assert.equal(groups(h.mod.render()).size, 0);
+test('a removed authorized target cannot accept a pending batch or be exported through another platform',async()=>{
+ const first=platform(1),second=platform(2),wait=deferred(),h=fixture({catalog:[first,second],handler:()=>wait.promise});cross(h);const p=h.context.liveChannelCrossQuery('PayOne');await flush();h.setCatalog([first]);h.mod.render();wait.resolve(response([first,second]));await p;assert(!h.mod.capture().cache[second.id]);assert.equal(h.mod.canExport(),false);assert(!Object.values(h.mod.capture().cache).some(x=>x.response));
 });
-
-test('directory removal of the current all-platform system does not auto-query a replacement system', async () => {
-  const ar = platform(1), yash = platform(2, { source: 'kb', name: 'YASH', capabilities: { channelStatusAvailable: true } });
-  const h = fixture({ catalog: [ar, yash] });
-  await h.start();
-  h.setCatalog([yash]);
-  h.mod.render();
-  await flush();
-  assert.equal(h.calls.length, 1, 'Passive authorization changes must not query a replacement source');
-  assert.equal(h.mod.capture().browse.scopeEmpty, true);
-  assert.equal(groups(h.mod.render()).size, 0);
+test('different raw names and countries never silently apply country-specific supplier aliases',async()=>{
+ const first=platform(1),foreign=platform(2,{country:'巴基斯坦'}),h=fixture({catalog:[first,foreign],rowsFor:p=>p.id===first.id?matchedRows('one'):[channel('two',{provider:'WanguPay',channel_name:'Other'})]});cross(h);await h.context.liveChannelCrossQuery('WPayINR');const html=h.mod.render();assert.match(html,/WPayINR/);assert.doesNotMatch(html,/<td>WanguPay<\/td>/);assert.match(html,/当前完整快照无匹配通道/);
 });
-
-test('platform checkbox drafts survive rerenders and refreshes until explicitly applied', async () => {
-  const catalog = [platform(1), platform(2), platform(3)], h = fixture({ catalog });
-  await h.start();
-  h.context.liveChannelBrowsePlatform(catalog[1].id, false);
-  h.context.liveChannelBrowseSearch('platform', 'AR 3');
-  const draft = plain(h.mod.capture().browse.draftPlatformIds);
-  assert.deepEqual(draft, [catalog[0].id, catalog[2].id]);
-  h.mod.render();
-  await h.context.liveChannelBrowseRefresh();
-  await flush();
-  assert.deepEqual(plain(h.mod.capture().browse.draftPlatformIds), draft);
-  assert.equal(h.mod.capture().browse.draftAll, false);
-  assert.equal(h.mod.capture().browse.platformSearch, 'AR 3');
-  assert.deepEqual([...groups(h.mod.render()).keys()], catalog.map(p => p.id));
-  h.context.liveChannelBrowseApplyPlatforms();
-  await flush();
-  assert.deepEqual([...groups(h.mod.render()).keys()], draft);
-  assert.equal(h.calls.length, 2);
+test('different name searches reuse full snapshots without changing cached source inventory',async()=>{
+ const h=fixture({catalog:[platform(1),platform(2)],rowsFor:()=>[...matchedRows(),channel('other',{provider:'Other',source_position:1})]});cross(h);await h.context.liveChannelCrossQuery('WPay');const before=plain(h.mod.capture().cache);await h.context.liveChannelCrossQuery('Other');assert.equal(h.calls.length,1);assert.deepEqual(plain(h.mod.capture().cache),before);assert.match(h.mod.render(),/Other/);
 });
-
-test('a selected provider absent after refresh stays selected instead of revealing other providers', async () => {
-  const p = platform(1), h = fixture({ rowsFor: () => [channel('selected'), channel('other', { provider: 'PayTwo', source_position: 1 })] });
-  await h.start();
-  h.context.liveChannelBrowseProvider('PayOne');
-  h.setHandler(() => response([p], () => [channel('other', { provider: 'PayTwo' })]));
-  await h.context.liveChannelBrowseRefresh();
-  await flush();
-  assert.deepEqual(plain(h.mod.capture().browse.providers), ['PayOne']);
-  assert.equal(tableRows(groups(h.mod.render()).get(p.id)).length, 0);
-  assert.match(h.mod.render(), /aria-pressed="true"[^>]*liveChannelBrowseProvider\(.*?PayOne/);
-  assert.equal(h.calls.length, 2);
+test('single ordinary query reuses fresh snapshot while explicit platform selection refreshes it',async()=>{
+ const h=fixture();await h.start();await h.mod.load();assert.equal(h.calls.length,1);h.context.liveChannelSelect(0);await flush();assert.equal(h.calls.length,2);await h.mod.load();assert.equal(h.calls.length,2);
 });
-
-test('platform/provider Chinese IME input waits for composition end and preserves focused input selection', async () => {
-  const h = fixture();
-  await h.start();
-  for (const kind of ['platform', 'provider']) {
-    const focus = [], ranges = [], selectors = [];
-    h.context.document.activeElement = { selectionStart: 2, selectionEnd: 2 };
-    h.context.document.querySelector = selector => {
-      selectors.push(selector);
-      return { focus: () => focus.push(true), setSelectionRange: (start, end) => ranges.push([start, end]) };
-    };
-    const before = h.paints.length;
-    h.context.liveChannelBrowseSearch(kind, '印', true);
-    assert.equal(h.paints.length, before);
-    assert.equal(h.mod.capture().browse[kind + 'Search'], '印');
-    h.context.liveChannelBrowseSearch(kind, '印度', false);
-    assert.equal(h.paints.length, before + 1);
-    assert.deepEqual(focus, [true]);
-    assert.deepEqual(ranges, [[2, 2]]);
-    assert.deepEqual(selectors, ['.channel-browse-view input[name="' + kind + '"]']);
-  }
-  assert.equal(h.calls.length, 1);
+test('a failed explicit refresh retains its last successful source snapshot and original collection time',async()=>{
+ const h=fixture();await h.start();const old=plain(h.mod.capture().response);h.setHandler(()=>{throw Error('temporary failure')});h.context.liveChannelSelect(0);await flush();assert.deepEqual(plain(h.mod.capture().response),old);assert.match(h.mod.render(),/temporary failure/);assert.match(h.mod.render(),/保留上次成功读取/);
 });
-
-test('five-minute automatic refresh stays limited to the applied platform scope and pauses while hidden', async () => {
-  const first = platform(1), second = platform(2), h = fixture({ catalog: [first, second] });
-  await h.start();
-  selectPlatforms(h, [first, second], [second]);
-  await flush();
-  await h.advance(299999);
-  assert.equal(h.calls.length, 1);
-  await h.advance(1);
-  assert.equal(h.calls.length, 2);
-  assert.deepEqual(h.calls[1].platformIds, [second.id]);
-  h.hide();
-  await h.advance(300000);
-  assert.equal(h.calls.length, 2);
-  await h.show();
-  assert.equal(h.calls.length, 3);
-  assert.deepEqual(h.calls[2].platformIds, [second.id]);
+test('malformed batch source/identity cannot replace a previously validated snapshot',async()=>{
+ const first=platform(1),h=fixture({rowsFor:()=>matchedRows()});await h.start();const before=plain(h.mod.capture().cache[first.id].response);cross(h);await h.context.liveChannelCrossQuery('WPay');h.setHandler(()=>{const r=response([first]);r.snapshots[0].source='wrong-source';return r;});await h.context.liveChannelCrossRefresh();assert.deepEqual(plain(h.mod.capture().cache[first.id].response),before);assert.match(h.mod.render(),/通道快照来源不匹配/);
 });
-
-test('clearing platform selection only clears the draft, then selecting one applies exactly that platform', async () => {
-  const catalog = [platform(1), platform(2), platform(3)], h = fixture({ catalog });
-  await h.start();
-  h.context.liveChannelBrowseClearPlatforms();
-  assert.equal(h.mod.capture().browse.draftAll, false);
-  assert.deepEqual(plain(h.mod.capture().browse.draftPlatformIds), []);
-  h.context.liveChannelBrowseApplyPlatforms();
-  await flush();
-  assert.deepEqual([...groups(h.mod.render()).keys()], catalog.map(p => p.id));
-  assert.equal(h.calls.length, 1);
-  h.context.liveChannelBrowsePlatform(catalog[1].id, true);
-  h.context.liveChannelBrowseApplyPlatforms();
-  await flush();
-  assert.deepEqual([...groups(h.mod.render()).keys()], [catalog[1].id]);
-  assert.deepEqual(plain(h.mod.capture().browse.platformIds), [catalog[1].id]);
-  assert.equal(h.calls.length, 1);
+test('view-only role cannot query on entry, mode switching, suggestions or refresh',async()=>{
+ const h=fixture({permissions:['view'],catalog:[platform(1),platform(2)]});await h.start();cross(h);h.context.liveChannelCrossChoose('PayOne');await h.context.liveChannelCrossQuery('PayOne');h.context.liveChannelCrossRefresh();await flush();assert.equal(h.calls.length,0);assert.deepEqual(plain(h.mod.capture().cache),{});
 });
-
-test('unified export keeps current provider selection and each platform weight denominator without deduping equal channel IDs', async () => {
-  const first = platform(1), second = platform(2), h = fixture({ catalog: [first, second], rowsFor: p => p.id === first.id ? [
-    channel('shared', { weight: '100' }), channel('other', { provider: 'PayTwo', weight: '300', source_position: 1 }),
-  ] : [channel('shared', { weight: '100' })] });
-  await h.start();
-  h.context.liveChannelBrowseProvider('PayOne');
-  assert.equal(h.mod.canExport(), true);
-  assert.deepEqual(exported(h).map(row => [row['平台'], row['通道 ID'], row['支付供应商'], row['预设权重占比']]), [
-    [first.name, 'shared', 'PayOne', '25.00%'], [second.name, 'shared', 'PayOne', '100.00%'],
-  ]);
-  assert.match(h.mod.exportRows()[2][1], /2 个所选平台.*PayOne/);
-  assert.equal(h.calls.length, 1);
-  h.setPermissions(['view', 'query', 'detail']);
-  assert.equal(h.mod.canExport(), false);
-  assert.deepEqual(plain(h.mod.exportRows()), []);
+test('single platform exact provider filter preserves its full enabled weight denominator and row identity',async()=>{
+ const h=fixture({rowsFor:(_,direction)=>direction==='withdraw'?[channel('wd')]:[channel('same',{provider:'PayOne',weight:'100'}),channel('same',{provider:'PayOne',category_id:'qr',category_name:'QR',weight:'300',source_position:1}),channel('other',{provider:'PayTwo',weight:'300',source_position:2})]});await h.start();h.context.liveChannelProvider('PayOne');const rows=exported(h);assert.deepEqual(rows.map(r=>[r['通道 ID'],r['通道大类 ID'],r['预设权重占比']]),[['same','upi','14.29%'],['same','qr','42.86%']]);h.context.liveChannelCategory('upi');assert.equal(exported(h)[0]['预设权重占比'],'25.00%');cross(h);await h.context.liveChannelCrossQuery('PayOne');assert.equal(h.mod.canExport(),false);h.context.liveChannelMode('single');assert.equal(exported(h)[0]['预设权重占比'],'25.00%');
 });
-
-test('multi-platform CSV cannot bypass the detail permission used by source fields on screen', async () => {
-  const first = platform(1), second = platform(2), h = fixture({
-    catalog: [first, second], permissions: ['view', 'query', 'export'],
-    rowsFor: () => [channel('public-channel', { source_channel_name: 'PRIVATE-NATIVE', third_pay_merchant_id: 'PRIVATE-MERCHANT', notes: 'PRIVATE-NOTE' })],
-  });
-  await h.start();
-  assert.equal(h.mod.canExport(), true);
-  const rows = exported(h);
-  assert.equal(rows.length, 2);
-  for (const row of rows) {
-    assert.equal(row['源通道名称'], '—');
-    assert.equal(row['第三方商户 ID'], '—');
-    assert.equal(row['备注'], '—');
-    assert.equal(row['通道 ID'], 'public-channel');
-    assert.equal(row['支付供应商'], 'PayOne');
-  }
-  assert.doesNotMatch(JSON.stringify(h.mod.exportRows()), /PRIVATE-NATIVE|PRIVATE-MERCHANT|PRIVATE-NOTE/);
+test('single export cannot expose detail-only source values and cross mode export remains unavailable',async()=>{
+ const h=fixture({permissions:['view','query','export'],rowsFor:()=>[channel('one',{source_channel_name:'PRIVATE',third_pay_merchant_id:'SECRET',notes:'HIDDEN'})]});await h.start();assert.doesNotMatch(JSON.stringify(h.mod.exportRows()),/PRIVATE|SECRET|HIDDEN/);cross(h);await h.context.liveChannelCrossQuery('PayOne');assert.equal(h.mod.canExport(),false);assert.deepEqual(plain(h.mod.exportRows()),[]);
 });
-
-test('asynchronous platform batches never repaint an active Chinese composition before composition end', async () => {
-  const catalog = Array.from({ length: 21 }, (_, index) => platform(index + 1)), pending = [];
-  const h = fixture({ catalog, handler: q => new Promise(resolve => pending.push({ q, resolve })) });
-  await h.start();
-  h.context.liveChannelBrowseSearch('provider', '支付', true);
-  const before = h.paints.length;
-  pending[0].resolve(response(catalog.slice(0, 20)));
-  await flush();
-  assert.equal(h.calls.length, 2);
-  assert.equal(h.paints.length, before);
-  pending[1].resolve(response(catalog.slice(20)));
-  await flush();
-  assert.equal(h.paints.length, before);
-  assert.equal(h.mod.capture().browse.status, 'ready');
-  h.context.liveChannelBrowseSearch('provider', '支付三方', false);
-  assert.equal(h.paints.length, before + 1);
-  assert.equal(h.mod.capture().browse.providerSearch, '支付三方');
+test('cross results keep null versus zero rates and never manufacture AR withdrawal percentages',async()=>{
+ const h=fixture({rowsFor:()=>matchedRows('one',{success_rate_15m:'0',success_rate_30m:null})});cross(h);await h.context.liveChannelCrossQuery('WPay');assert.match(h.mod.render(),/0\.00%/);assert.match(h.mod.render(),/>—<\/td>/);h.context.liveChannelTab('withdraw');const html=h.mod.render();assert.doesNotMatch(html,/0\.00%/);assert.match(html,/只提供笔数/);assert.doesNotMatch(html,/平均成功率|综合成功率/);
 });
-
-test('five-minute background refresh preserves active composition but permission revocation does not defer clearing', async () => {
-  const h = fixture();
-  await h.start();
-  h.context.liveChannelBrowseSearch('platform', '印', true);
-  const before = h.paints.length;
-  await h.advance(300000);
-  assert.equal(h.calls.length, 2);
-  assert.equal(h.paints.length, before);
-  h.context.liveChannelBrowseSearch('platform', '印度', false);
-  assert.equal(h.paints.length, before + 1);
-  let release;
-  h.setHandler(() => new Promise(resolve => release = resolve));
-  h.context.liveChannelBrowseRefresh();
-  await flush();
-  h.context.liveChannelBrowseSearch('provider', '支', true);
-  const painted = h.paints.length;
-  h.setPermissions(['view']);
-  release(response([platform(1)]));
-  await flush();
-  assert(h.paints.length > painted, 'Security clearing must not wait for input composition');
-  assert.deepEqual(plain(h.mod.capture().cache), {});
-  assert.doesNotMatch(h.paints.at(-1), /private-merchant|Private native name/);
+test('no matches collapse separately from incomplete, stale or unsupported platform snapshots',async()=>{
+ const a=platform(1),b=platform(2),c=platform(3,{capabilities:{channelStatusAvailable:false}}),h=fixture({catalog:[a,b,c],handler:q=>{const r=response([a,b],()=>[]);r.snapshots.filter(s=>s.platformId===b.id).forEach(s=>Object.assign(s,{observedAt:null,complete:false,sourceCount:null}));return r;}});cross(h);await h.context.liveChannelCrossQuery('WPay');const html=h.mod.render();assert.match(html,/<details class="channel-cross-summary"><summary>1 个平台当前完整快照无匹配通道/);assert.match(html,/<details class="channel-cross-summary"><summary>2 个平台待确认/);assert.doesNotMatch(html,/class="channel-cross-country"/);
 });
-
-test('complete empty, incomplete, failed and unsupported platform snapshots remain distinct', async () => {
-  const empty = platform(1), incomplete = platform(2), unsupported = platform(3, { capabilities: { channelStatusAvailable: false } });
-  const h = fixture({ catalog: [empty, incomplete, unsupported], handler: q => {
-    const data = response([empty, incomplete], () => []);
-    for (const snapshot of data.snapshots.filter(s => s.platformId === incomplete.id)) {
-      snapshot.observedAt = null;
-      snapshot.complete = false;
-      snapshot.sourceCount = null;
-    }
-    return data;
-  } });
-  await h.start();
-  assert.deepEqual(h.calls[0].platformIds, [empty.id, incomplete.id]);
-  const result = groups(h.mod.render());
-  assert.match(result.get(empty.id), /0 个当前通道.*源通道数 0/);
-  assert.match(result.get(empty.id), /已采集，暂无通道/);
-  assert.match(result.get(incomplete.id), /尚未收到完整通道快照，不能判定是否有匹配通道/);
-  assert.doesNotMatch(result.get(incomplete.id), /0 个当前通道|已采集，暂无通道/);
-  assert.match(result.get(unsupported.id), /未接入通道快照/);
-  const failed = fixture({ handler: () => { throw Error('upstream temporarily unavailable'); } });
-  await failed.start();
-  assert.match(failed.mod.render(), /upstream temporarily unavailable/);
-  assert.doesNotMatch(failed.mod.render(), /已采集，暂无通道|0 个当前通道/);
+test('IME drafting preserves input selection and never starts reads until a real selection or query',async()=>{
+ const h=fixture();cross(h);h.context.document.activeElement={selectionStart:1,selectionEnd:1};const focus=[],ranges=[];h.context.document.querySelector=()=>({focus:()=>focus.push(true),setSelectionRange:(a,b)=>ranges.push([a,b])});h.context.liveChannelCrossDraft('支',true);assert.equal(h.calls.length,0);assert.equal(h.mod.capture().cross.draft,'支');h.context.liveChannelCrossDraft('支付',false,true);assert.equal(h.calls.length,0);assert.deepEqual(focus,[true]);assert.deepEqual(ranges,[[1,1]]);
+});
+test('five-minute auto refresh follows explicit provider query and pauses when the document is hidden',async()=>{
+ const first=platform(1),second=platform(2),h=fixture({catalog:[first,second]});cross(h);await h.context.liveChannelCrossQuery('PayOne');await h.advance(299999);assert.equal(h.calls.length,1);await h.advance(1);assert.equal(h.calls.length,2);h.hide();await h.advance(300000);assert.equal(h.calls.length,2);await h.show();assert.equal(h.calls.length,3);assert(h.calls.every(q=>q.platformIds.length===2));
+});
+test('directory pause settles loading cache and leaves a retryable provider query without accepting late data',async()=>{
+ const h=fixture({rowsFor:()=>matchedRows()});cross(h);await h.context.liveChannelCrossQuery('WPay');const old=plain(h.mod.capture().cache);const wait=deferred();h.setHandler(()=>wait.promise);const p=h.context.liveChannelCrossRefresh();await flush();h.L.catalogReady=false;wait.resolve(response([platform(1)],()=>matchedRows('new')));await p;assert.equal(h.mod.capture().cross.status,'paused');assert.equal(h.mod.capture().cache[platform(1).id].status,'ready');assert.deepEqual(plain(h.mod.capture().cache[platform(1).id].response),old[platform(1).id].response);h.L.catalogReady=true;h.setHandler(()=>response([platform(1)],()=>matchedRows('new')));h.mod.render();await flush();assert.equal(h.calls.length,2,'fresh prior snapshot remains valid but is not replaced by the late response');await h.context.liveChannelCrossRefresh();assert.equal(h.calls.length,3);assert.match(h.mod.render(),/new/);
+});
+test('generated compact selector remains sandbox-safe and uses exact native suggestion values',async()=>{
+ const h=fixture({rowsFor:()=>matchedRows()});await h.start();cross(h);const html=h.mod.render();assert.match(html,/list="channel-cross-names"/);assert.match(html,/onchange="liveChannelCrossChoose\(this.value\)"/);assert.match(html,/type="button" onclick="liveChannelCrossQuery/);assert.doesNotMatch(html,/type="submit"|channel-browse-providers/);await h.context.liveChannelCrossChoose('WPay-QR');assert.equal(h.mod.capture().cross.query.label,'WPay-QR');assert.equal(h.calls.length,1,'a known cached platform needs no repeat read');
 });

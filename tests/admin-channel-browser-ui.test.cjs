@@ -16,7 +16,7 @@ function fixture(options={}){
  const context={console,Intl,Promise,Date:class extends Date{constructor(...a){super(...(a.length?a:[clock]))}static now(){return clock}},document:{visibilityState:'visible',addEventListener:(name,fn)=>events[name]=fn},addEventListener:(name,fn)=>rootEvents[name]=fn,setTimeout:(fn,ms)=>{const item={fn,ms,due:clock+ms,active:true};timers.push(item);return item;},clearTimeout:item=>{item.active=false;}};
  context.window=context;vm.createContext(context);vm.runInContext(source,context);
  const L={catalogReady:true,dirty:true,pageQueried:false,country:'印度'},mod=context.HensemLiveChannelStatus.create({L,getPage:()=>page,catalog:()=>catalog,roleAllowed:action=>permissions.has(action),request:q=>{calls.push(JSON.parse(JSON.stringify(q)));return handler(q)},render:()=>paints.push(mod.render())});
- // Legacy source-sheet contracts remain covered explicitly; production host tests below use the unified default.
+ // Explicit restoration also exercises the current single-platform snapshot contract.
  mod.restore({...mod.capture(),mode:'single'});
  return {context,L,mod,calls,paints,timers,start:async()=>{mod.render();await flush();},setHandler:fn=>handler=fn,setPage:value=>page=value,setCatalog:value=>catalog=value,setPermissions:value=>permissions=new Set(value),hide:()=>{context.document.visibilityState='hidden';events.visibilitychange();},show:async()=>{context.document.visibilityState='visible';events.visibilitychange();await flush();},unload:()=>rootEvents.pagehide(),advance:async(ms)=>{clock+=ms;for(const timer of [...timers])if(timer.active&&timer.due<=clock){timer.active=false;timer.fn();}await flush();},setNow:value=>clock=Date.parse(value)};
 }
@@ -80,7 +80,7 @@ test('AR withdrawal legacy payloads and dictionary gaps stay unknown instead of 
 
 test('AR withdrawal detail permission masks new fields and rejects malformed refreshes without losing a complete snapshot',async()=>{
  const row=channel('private',{source_channel_name:'Private native',withdrawal_details:{source_tenant_name:'Private tenant',today_submit_count:15,recent_1h_success_count:4,merchant_name:'Private nickname',merchant_code:'PRIVATE-001',third_channel_code:'Private code',is_use_channel_code:true,is_fixed_channel_code:true,third_pay_api_url:'https://private.example/',notify_white_ips:['192.0.2.1'],system_category_name:'Private builtin',last_update_by:'Private editor',last_updated_at:NOW}}),h=fixture({permissions:['view','query','export'],handler:()=>response(AR,[row])});await h.start();h.context.liveChannelTab('withdraw');const html=h.mod.render(),cells=firstTableRow(html);assert.deepEqual(headers(html),AR_WITHDRAW_HEADERS);assert.doesNotMatch(html,/Private native|Private tenant|Private nickname|PRIVATE-001|Private code|private\.example|192\.0\.2\.1|Private builtin|Private editor/);assert.equal(cells['商户'],undefined);assert.match(cells['通道名称'],/未获明细权限.*出款显示名称：Display private/);for(const key of ['成功率统计','三方商户昵称 / 商户号','三方通道编码','自动关闭阈值','网关信息','内置提现大类','备注','最后修改人 / 时间 (UTC+5:30)'])assert.equal(cells[key],'未获明细权限',key);const csv=exported(h)[0];for(const key of ['今日已提交笔数','近1小时成功笔数','源租户名称','三方商户昵称','三方商户号','三方通道编码','网关地址','回调白名单 IP','内置提现大类','最后修改人'])assert.equal(csv[key],'—',key);
- h.setPermissions(['view','query','export','detail']);h.mod.render();assert.match(h.mod.render(),/Private nickname/);const before=h.mod.capture().response;h.setHandler(()=>response(AR,[channel('bad',{withdrawal_details:[]})]));await h.mod.load();assert.equal(h.mod.capture().status,'ready');assert.match(h.mod.render(),/更新失败.*提现通道配置返回不完整/);assert.deepEqual(h.mod.capture().response,before);assert.equal(h.calls.length,2);
+ h.setPermissions(['view','query','export','detail']);h.mod.render();assert.match(h.mod.render(),/Private nickname/);const before=h.mod.capture().response;h.setHandler(()=>response(AR,[channel('bad',{withdrawal_details:[]})]));await h.mod.load(false,true);assert.equal(h.mod.capture().status,'ready');assert.match(h.mod.render(),/更新失败.*提现通道配置返回不完整/);assert.deepEqual(h.mod.capture().response,before);assert.equal(h.calls.length,2);
  const invalid=fixture({handler:()=>response(AR,[channel('bad',{withdrawal_details:'invalid'})])});await invalid.start();assert.equal(invalid.mod.capture().status,'error');assert.equal(invalid.mod.canExport(),false);
 });
 
@@ -127,7 +127,7 @@ test('weight sums retain decimal precision and refresh failures retain the prior
  const h=fixture({handler:()=>categoryRowsResponse([channel('big',{weight:'9007199254740993',real_time_weight:'0.00000001'}),channel('small',{weight:'1',real_time_weight:'0.00000003',source_position:1})])});await h.start();
  assert.match(h.mod.render(),/预设合计 9,007,199,254,740,994 · 实际合计 0\.00000004/);
  assert.deepEqual(exported(h).map(r=>r['实际权重占比']),['25.00%','75.00%']);
- h.setHandler(()=>Promise.reject(Error('synthetic network failure')));await h.mod.load();assert.deepEqual(exported(h).map(r=>r['实际权重占比']),['25.00%','75.00%']);assert.match(h.mod.render(),/保留上次成功读取的快照/);assert.match(h.mod.render(),/快照权重占比/);
+ h.setHandler(()=>Promise.reject(Error('synthetic network failure')));await h.mod.load(false,true);assert.deepEqual(exported(h).map(r=>r['实际权重占比']),['25.00%','75.00%']);assert.match(h.mod.render(),/保留上次成功读取的快照/);assert.match(h.mod.render(),/快照权重占比/);
  h.context.liveChannelTab('withdraw');assert(!headers(h.mod.render()).includes('预设权重占比'));assert(!headers(h.mod.render()).includes('实际权重占比'));assert.doesNotMatch(h.mod.render(),/channel-weight-summary/);
  const yash=fixture({catalog:[YASH],handler:()=>response(YASH,[channel('a',{weight:'100',real_time_weight:'30'})])});await yash.start();assert(!headers(yash.mod.render()).includes('实际权重占比'));assert.equal(exported(yash)[0]['实际权重占比'],undefined);assert.doesNotMatch(yash.mod.render(),/channel-weight-summary/);
 });
@@ -170,7 +170,7 @@ test('directory distinguishes an unread platform, a read without a snapshot, and
  assert.equal(label(second.name),'待读取');assert.equal(h.calls.length,1);assert.doesNotMatch(sidebar(),/未采集/);
  h.setHandler(()=>response(second,[],{snapshots:['charge','withdraw'].map(direction=>({platformId:second.id,source:'ar_middle',direction,observedAt:null,complete:false,sourceCount:null,channels:[]}))}));
  h.context.liveChannelSelect(1);await flush();assert.equal(label(second.name),'尚未收到快照');assert.match(h.mod.render(),/尚未收到完整通道快照/);assert.equal(h.calls.length,2);
- h.setHandler(()=>response(second,[]));await h.mod.load();assert.match(label(second.name),/10\/09 10:30/);assert.match(h.mod.render(),/0 个当前通道/);assert.match(h.mod.render(),/已采集，暂无通道/);assert.equal(h.calls.length,3);assert.doesNotMatch(sidebar(),/未采集|待读取|尚未收到快照/);
+ h.setHandler(()=>response(second,[]));await h.mod.load(false,true);assert.match(label(second.name),/10\/09 10:30/);assert.match(h.mod.render(),/0 个当前通道/);assert.match(h.mod.render(),/已采集，暂无通道/);assert.equal(h.calls.length,3);assert.doesNotMatch(sidebar(),/未采集|待读取|尚未收到快照/);
 });
 
 test('source and country tabs come only from directory and keep different source caches and exports isolated',async()=>{
@@ -263,25 +263,25 @@ test('AR native switch and availability stay independent; unknown codes never ma
 });
 
 test('five-minute timer refreshes the current platform without overlapping pending requests',async()=>{
- const h=fixture();await h.start();let finish;h.setHandler(()=>new Promise(resolve=>finish=resolve));await h.advance(300000);assert.equal(h.calls.length,2);assert.equal(h.mod.capture().status,'loading');const overlap=h.mod.load();assert.equal(h.calls.length,2);await h.advance(300000);assert.equal(h.calls.length,2);h.setHandler(()=>response(AR));finish(response(AR));await overlap;await flush();assert.equal(h.calls.length,3);assert.equal(h.mod.capture().status,'ready');
+ const h=fixture();await h.start();let finish;h.setHandler(()=>new Promise(resolve=>finish=resolve));await h.advance(300000);assert.equal(h.calls.length,2);assert.equal(h.mod.capture().status,'loading');const overlap=h.mod.load(false,true);assert.equal(h.calls.length,2);await h.advance(300000);assert.equal(h.calls.length,2);h.setHandler(()=>response(AR));finish(response(AR));await overlap;await flush();assert.equal(h.calls.length,3);assert.equal(h.mod.capture().status,'ready');
 });
 
 test('ordinary refresh failure preserves known snapshot, collection deadline and last success time',async()=>{
  const h=fixture();await h.start();h.setHandler(()=>{throw Error('network unavailable')});await h.advance(300000);assert.match(h.mod.render(),/更新失败：network unavailable/);assert.match(h.mod.render(),/保留上次成功读取的快照/);assert.match(h.mod.render(),/最后成功读取 2026\/10\/09 10:30:00/);assert.equal(exported(h)[0]['快照采集时间'],NOW);assert.equal(h.mod.capture().status,'ready');
  await h.advance(600001);assert.match(h.mod.render(),/超过 15 分钟未更新/);assert.equal(exported(h)[0]['更新状态'],'超过 15 分钟未更新');
- h.setHandler(()=>response(AR));await h.mod.load();assert.equal(h.mod.capture().error,'');assert.equal(h.mod.capture().status,'ready');
+ h.setHandler(()=>response(AR));await h.mod.load(false,true);assert.equal(h.mod.capture().error,'');assert.equal(h.mod.capture().status,'ready');
 });
 
 test('synchronously thrown request can be retried and cannot leave an inflight lock',async()=>{
- const h=fixture({handler:()=>{throw Error('network failure')}});await h.start();assert.equal(h.mod.capture().status,'error');assert.match(h.mod.render(),/点击上方平台重试/);assert.doesNotMatch(h.mod.render(),/点击查询/);h.setHandler(()=>response(AR));await h.mod.load();assert.equal(h.calls.length,2);assert.equal(h.mod.capture().status,'ready');
+ const h=fixture({handler:()=>{throw Error('network failure')}});await h.start();assert.equal(h.mod.capture().status,'error');assert.match(h.mod.render(),/点击上方平台重试/);assert.doesNotMatch(h.mod.render(),/点击查询/);h.setHandler(()=>response(AR));await h.mod.load(false,true);assert.equal(h.calls.length,2);assert.equal(h.mod.capture().status,'ready');
 });
 
 test('authorization failure clears cached facts across all platforms and disables automatic retries',async()=>{
- const p=platform(2),h=fixture({catalog:[AR,p]});await h.start();h.context.liveChannelSelect(1);await flush();assert.equal(Object.keys(h.mod.capture().cache).length,2);h.setHandler(()=>{throw Object.assign(Error('正式数据读取未获授权，或会话已失效'),{status:403})});await h.mod.load();assert.deepEqual(Object.keys(h.mod.capture().cache),[]);assert.equal(h.mod.canExport(),false);assert.doesNotMatch(h.mod.render(),/Display one/);await h.advance(600000);assert.equal(h.calls.length,3);assert.match(h.mod.render(),/点击上方平台重新验证授权/);assert.doesNotMatch(h.mod.render(),/点击查询/);
+ const p=platform(2),h=fixture({catalog:[AR,p]});await h.start();h.context.liveChannelSelect(1);await flush();assert.equal(Object.keys(h.mod.capture().cache).length,2);h.setHandler(()=>{throw Object.assign(Error('正式数据读取未获授权，或会话已失效'),{status:403})});await h.mod.load(false,true);assert.deepEqual(Object.keys(h.mod.capture().cache),[]);assert.equal(h.mod.canExport(),false);assert.doesNotMatch(h.mod.render(),/Display one/);await h.advance(600000);assert.equal(h.calls.length,3);assert.match(h.mod.render(),/点击上方平台重新验证授权/);assert.doesNotMatch(h.mod.render(),/点击查询/);
 });
 
 test('query permission revocation purges cached facts and all direct actions remain permission checked',async()=>{
- const h=fixture();await h.start();h.setPermissions(['view','export']);h.mod.render();assert.equal(h.mod.canExport(),false);assert.equal(Object.keys(h.mod.capture().cache).length,0);assert.match(h.mod.render(),/未获查询权限/);await h.mod.load();assert.equal(h.calls.length,1);
+ const h=fixture();await h.start();h.setPermissions(['view','export']);h.mod.render();assert.equal(h.mod.canExport(),false);assert.equal(Object.keys(h.mod.capture().cache).length,0);assert.match(h.mod.render(),/未获查询权限/);await h.mod.load(false,true);assert.equal(h.calls.length,1);
 });
 
 test('hidden document pauses automatic refresh and rejects a pending response; showing resumes safely',async()=>{
@@ -290,7 +290,7 @@ test('hidden document pauses automatic refresh and rejects a pending response; s
 
 test('platform selection cancels late response and navigation never repaints destination',async()=>{
  let finish;const second=platform(2),h=fixture({catalog:[AR,second],handler:q=>q.platformIds[0]===AR.id?new Promise(resolve=>finish=resolve):response(second,[channel('second')])});await h.start();h.context.liveChannelSelect(1);await flush();finish(response(AR,[channel('late')]));await flush();assert.equal(exported(h)[0]['平台'],second.name);assert.doesNotMatch(h.mod.render(),/Display late/);
- let done;h.setHandler(()=>new Promise(resolve=>done=resolve));const reading=h.mod.load();await flush();h.setPage('overview');h.mod.cancel();const count=h.paints.length;done(response(second,[channel('navigation-late')]));await reading;assert.equal(h.paints.length,count);assert.equal(h.mod.canExport(),false);assert.equal(h.mod.render(),'');
+ let done;h.setHandler(()=>new Promise(resolve=>done=resolve));const reading=h.mod.load(false,true);await flush();h.setPage('overview');h.mod.cancel();const count=h.paints.length;done(response(second,[channel('navigation-late')]));await reading;assert.equal(h.paints.length,count);assert.equal(h.mod.canExport(),false);assert.equal(h.mod.render(),'');
 });
 
 test('catalog revocation and changed source identity discard cache and prevent old-scope exports',async()=>{
@@ -306,21 +306,21 @@ test('source sorting, legacy category fallback and complete escaped metadata are
 });
 
 test('missing snapshot, incomplete snapshot and complete empty snapshot keep separate indicators',async()=>{
- const h=fixture({handler:()=>response(AR,[],{snapshots:[{platformId:AR.id,source:'ar_middle',direction:'charge',observedAt:null,complete:false,sourceCount:null,channels:[]}]})});await h.start();assert.match(h.mod.render(),/尚未收到快照/);assert.match(h.mod.render(),/尚未收到完整通道快照/);h.setHandler(()=>response(AR,[]));await h.mod.load();assert.match(h.mod.render(),/0 个当前通道/);assert.match(h.mod.render(),/已采集，暂无通道/);
+ const h=fixture({handler:()=>response(AR,[],{snapshots:[{platformId:AR.id,source:'ar_middle',direction:'charge',observedAt:null,complete:false,sourceCount:null,channels:[]}]})});await h.start();assert.match(h.mod.render(),/尚未收到快照/);assert.match(h.mod.render(),/尚未收到完整通道快照/);h.setHandler(()=>response(AR,[]));await h.mod.load(false,true);assert.match(h.mod.render(),/0 个当前通道/);assert.match(h.mod.render(),/已采集，暂无通道/);
 });
 
 const navigationPrefix=fs.readFileSync(path.join(__dirname,'admin-navigation-performance.test.cjs'),'utf8').split(/\ntest\(/)[0].replace('vm.runInContext(source,context',"vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-channel-status.js'),'utf8'),context);vm.runInContext(source,context");
 const {harness,settle}=new Function('require','__dirname',navigationPrefix+';return {harness,settle};')(require,__dirname);
 function integrated(options={}){const catalog=options.catalog||[AR],access=options.access||{mode:'owner',canView:true,permissions:[]};return harness({page:'channel_status',roleAccess:access,roleAllowed:()=>true,...options,handler:q=>q.action==='catalog'?{platforms:catalog}:q.action==='channelStatus'?batchResponse(catalog,q,()=>[channel()]):{}});}
 
-test('live host uses unified authorized country/system scope, batches all platforms and restores the tab without IO',async()=>{
+test('live host defaults to one authorized platform and restores the tab without IO',async()=>{
  const scoped=Array.from({length:42},(_,i)=>platform(i+1)),otherCountry=platform(43,{country:'巴基斯坦'}),otherSystem=platform(44,{source:'kb',capabilities:{channelStatusAvailable:true}}),catalog=[...scoped,otherCountry,otherSystem],h=integrated({catalog});await settle();
  const reads=()=>h.calls.filter(q=>q.action==='channelStatus');
- assert.deepEqual(h.calls.map(q=>q.action),['catalog','channelStatus','channelStatus','channelStatus']);assert.deepEqual(reads().map(q=>q.platformIds.length),[20,20,2]);assert.deepEqual(reads().flatMap(q=>q.platformIds),scoped.map(p=>p.id));assert(reads().every(q=>q.direction==='all'));
- assert.equal(h.nodes.get('liveFilters').style.display,'none');assert.doesNotMatch(h.html(),/单平台配置|跨平台查通道/);assert.match(h.html(),/AR 1/);assert.match(h.html(),/AR 42/);assert.equal(h.L.pageQueried,true);assert.equal(h.L.dirty,false);h.c.liveExport();assert.equal(h.blobs.length,1);
- h.c.setPage('overview');h.c.setPage('channel_status');await settle();assert.match(h.html(),/Display one/);assert.equal(reads().length,3,'navigation restores all cached platform snapshots');
- h.c.liveReset();await settle();assert.equal(reads().length,6,'explicit reset reloads the complete current scope in bounded batches');assert.deepEqual(reads().slice(3).flatMap(q=>q.platformIds),scoped.map(p=>p.id));
- h.c.liveClosePage('channel_status');h.c.setPage('channel_status');await settle();assert.equal(reads().length,9,'closing the tab discards its session snapshot');assert.deepEqual(reads().slice(6).flatMap(q=>q.platformIds),scoped.map(p=>p.id));
+ assert.deepEqual(h.calls.map(q=>q.action),['catalog','channelStatus']);assert.deepEqual(reads()[0].platformIds,[scoped[0].id]);assert.equal(reads()[0].direction,'all');
+ assert.equal(h.nodes.get('liveFilters').style.display,'none');assert.match(h.html(),/按平台/);assert.match(h.html(),/按三方/);assert.match(h.html(),/AR 1/);assert.doesNotMatch(h.html(),/channel-browse-group|channel-browse-providers/);assert.equal(h.L.pageQueried,true);assert.equal(h.L.dirty,false);h.c.liveExport();assert.equal(h.blobs.length,1);
+ h.c.setPage('overview');h.c.setPage('channel_status');await settle();assert.match(h.html(),/Display one/);assert.equal(reads().length,1,'navigation restores the selected snapshot');
+ h.c.liveReset();await settle();assert.equal(reads().length,2,'explicit reset reloads only the default platform');assert.deepEqual(reads()[1].platformIds,[scoped[0].id]);
+ h.c.liveClosePage('channel_status');h.c.setPage('channel_status');await settle();assert.equal(reads().length,3);assert.deepEqual(reads()[2].platformIds,[scoped[0].id]);
 });
 
 test('live host view-only role receives authorized directory but no automatic channel facts or export',async()=>{
@@ -337,7 +337,7 @@ function later(){let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;
 test('cross-platform channel mode reads all visible countries and matches source display name or supplier without provider aliases',async()=>{
  const pk=platform(11,{country:'巴基斯坦',timezone:'Asia/Karachi'}),kb=platform(12,{source:'kb',country:'巴西',name:'YASH Brazil',capabilities:{channelStatusAvailable:true}}),off=platform(13,{capabilities:{channelStatusAvailable:false}}),report=platform(14,{reportOnly:true}),catalog=[AR,pk,kb,off,report];
  const h=crossFixture({catalog,handler:q=>batchResponse(catalog,q,p=>[channel('cross',{provider:p.id===kb.id?'wpay':'WPayINR',channel_name:p.id===kb.id?'Another name':'WPAY-QR',success_rate_15m:'0',success_rate_10m:'71'})])});
- assert.match(h.mod.render(),/全部国家/);assert.match(h.mod.render(),/跨平台查通道/);
+ assert.match(h.mod.render(),/全部国家/);assert.match(h.mod.render(),/按三方/);
  await h.context.liveChannelCrossQuery('  wpay-qr  ');assert.equal(h.calls.length,1);assert.deepEqual(h.calls[0],{action:'channelStatus',platformIds:[AR.id,pk.id,kb.id],direction:'all'});
  const html=h.mod.render();assert.match(html,/印度 \/ AR 系统/);assert.match(html,/巴基斯坦 \/ AR 系统/);assert.match(html,/巴西 \/ YASH 系统/);assert.match(html,/WPAY-QR/);assert.match(html,/WPayINR/);assert.match(html,/0\.00%/);assert.match(html,/未接入通道快照/);assert.match(html,/当前快照无匹配通道/);assert.doesNotMatch(html,/<th[^>]*>综合成功率|<th[^>]*>平均成功率|AR 14/);
  assert.equal(h.mod.canExport(),false);await h.context.liveChannelCrossQuery('wpay');assert.equal(h.calls.length,1,'same complete snapshots serve a different exact local name');assert.match(h.mod.render(),/Another name/);

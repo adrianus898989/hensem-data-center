@@ -137,7 +137,7 @@
 .channel-mode-tabs button.active{background:#edf3ff;border-color:#a8bff3;color:#245dda;font-weight:600}
 .channel-cross-filters{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
 .channel-cross-filters label{display:flex;flex-direction:column;gap:5px;color:#718099;font-size:11px;min-width:130px}
-.channel-cross-filters .channel-cross-name{flex:1;min-width:210px}
+.channel-cross-filters .channel-cross-name{flex:0 1 320px;min-width:210px}
 .channel-cross-filters input,.channel-cross-filters select{height:34px;width:100%;max-width:320px}
 .channel-cross-filters button{height:34px}
 .channel-cross-browser .channel-scope-note{margin:9px 0 0;font-size:11px}
