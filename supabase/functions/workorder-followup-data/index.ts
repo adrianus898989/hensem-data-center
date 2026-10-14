@@ -13,6 +13,15 @@ const gateway: Gateway = {
     const raw = await response.text(); if (raw.length > 65536) throw new ApiError(503, 'identity_unavailable'); return JSON.parse(raw);
   },
   async list(account, filters, offset, limit) { const { data, error } = await admin.rpc('workorder_followup_list', { p_account: account, p_filters: filters, p_offset: offset, p_limit: limit }); if (error) throw error; return data; },
+  async export(account, filters) {
+    const { data, error } = await admin.rpc('workorder_followup_export', { p_account: account, p_filters: filters });
+    if (error) {
+      if (error.code === '22023' && error.message === 'export_too_large') throw new ApiError(413, 'too_many_records');
+      if (error.code === '22023' && error.message === 'export_payload_too_large') throw new ApiError(413, 'export_payload_too_large');
+      throw error;
+    }
+    return data;
+  },
   async upi(actor, request) {
     const { data, error } = await admin.rpc('workorder_provider_upi', { p_actor: actor, p_request: request });
     if (error) {

@@ -1,0 +1,6 @@
+const fs=require('node:fs'),path=require('node:path');const{fixture:oldFixture}=require('./workorder-followup-page-receipts-fixture.cjs');const baseline=fs.readFileSync(path.join(__dirname,'workorder-followup-export-baseline.sql'),'utf8'),migration=fs.readFileSync(path.join(__dirname,'../../supabase/migrations/20261013143437_workorder_followup_snapshot_export.sql'),'utf8');
+async function fixture({seed=true}={}){const h=await oldFixture();await h.db.exec(baseline+';');await h.db.exec(migration);
+ if(seed)await h.db.exec("insert into public.admin_deposit_followup_rows(id,source_kind,country,platform,source_row,order_number,work_order_number,utr,upi_id,followup_date,amount,provider,followup_status)select 'EXPORT-SYNTHETIC-'||g,'sheet','印度','PLATFORM-A',g,'000123456789012345678901234567890-'||g,'W000123456789012345678901234567890','000000123456789012345678901234567890','synthetic@bank',date'2026-10-13',123.45,'Pay-X','Success'from generate_series(1,350)g;");
+ const call=async(filters={},account=h.acct)=>(await h.db.query('select public.workorder_followup_export($1,$2)d',[JSON.stringify(account),JSON.stringify(filters)])).rows[0].d;
+ return{...h,export:call};}
+module.exports={fixture};
