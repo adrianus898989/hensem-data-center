@@ -186,7 +186,7 @@ test('late workorder response after filter change cannot render old cohorts and 
 test('partial platform retry preserves known columns, rereads only failures, and tab restore does not read extra data',async()=>{
  const notices=api().render(props({loading:true,progress:'正在读取其余授权平台',error:'仍有平台尚未返回',queryPaused:true}));assert.match(notices,/正在读取其余授权平台/);assert.match(notices,/仍有平台尚未返回/);assert.match(notices,/查询已暂停/);assert.match(notices,/liveRetryFailed\(true\)/);
  const ps=[{...A,timezone:'Asia/Kolkata',currency:'INR'},{...B,timezone:'Asia/Kolkata',currency:'INR'}],h=await ready({platforms:ps,ancillaryHandler:true});let fail=true;
- h.setHandler(q=>{if(q.action==='providerOptions')return {providers:['ATPay']};if(q.action==='workorders')return {startDate:'2026-09-22',endDate:'2026-09-22',byPlatformProvider:[],byProvider:[],byDirection:{}};if(q.platformId===B.id&&fail)throw Error('Synthetic unavailable');return payment(ps.find(p=>p.id===q.platformId),[row('charge',10,q.platformId===A.id?4:3)]);});h.c.liveSuccessDate('2026-09-22');await h.c.liveQuery();assert.equal(h.L.queryFailures.length,1);assert.match(h.html(),/40\.00%/);assert.match(h.html(),/部分平台读取失败/);const n=h.calls.length;fail=false;await h.c.liveRetryFailed();const retry=h.calls.slice(n);assert.equal(retry.filter(q=>q.action==='aggregate').length,1);assert.equal(retry.find(q=>q.action==='aggregate').platformId,B.id);assert(retry.every(q=>q.action==='aggregate'));assert.equal(h.L.queryFailures.length,0);assert.match(h.html(),/30\.00%/);
+ h.setHandler(q=>{if(q.action==='providerOptions')return {providers:['ATPay']};if(q.action==='rates')return {rows:[],total:0};if(q.action==='workorders')return {startDate:'2026-09-22',endDate:'2026-09-22',byPlatformProvider:[],byProvider:[],byDirection:{}};if(q.platformId===B.id&&fail)throw Error('Synthetic unavailable');return payment(ps.find(p=>p.id===q.platformId),[row('charge',10,q.platformId===A.id?4:3)]);});h.c.liveSuccessDate('2026-09-22');await h.c.liveQuery();assert.equal(h.L.queryFailures.length,1);assert.match(h.html(),/40\.00%/);assert.match(h.html(),/部分平台读取失败/);const n=h.calls.length;fail=false;await h.c.liveRetryFailed();const retry=h.calls.slice(n);assert.equal(retry.filter(q=>q.action==='aggregate').length,1);assert.equal(retry.find(q=>q.action==='aggregate').platformId,B.id);assert(retry.every(q=>q.action==='aggregate'));assert.equal(h.L.queryFailures.length,0);assert.match(h.html(),/30\.00%/);
  const frozen=h.L.results,n2=h.calls.length;h.c.setPage('overview');h.c.setPage('success_analysis');assert.strictEqual(h.L.results,frozen);assert.equal(h.calls.length,n2);assert.match(h.html(),/40\.00%/);assert.match(h.html(),/30\.00%/);
 });
 test('Today success query freezes the existing local elapsed-time cutoff and escapes source labels',async()=>{
@@ -196,4 +196,19 @@ test('Today success query freezes the existing local elapsed-time cutoff and esc
 
 test('DUOLI supported updated-time success displays rates and clearly labels the basis in mixed matrices',()=>{
  const p={...A,id:'duoli-current',name:'UANG',source:'duoli',capabilities:{successTimeBasis:'order_updated_at',chargeSuccessTimeAvailable:true,withdrawSuccessTimeAvailable:true,paymentSuccessTimeAvailable:false,latencyAvailable:false}},a=api(),rows=[row('charge',20,12,'ObservedPay'),row('withdraw',10,8,'ObservedPay')],input=props({queryPlatforms:[p,A],results:[payment(p,rows,rows),payment(A,[row('charge',10,3,'ObservedPay')])],workorders:null});const model=a.buildModel(input);assert.equal(model.rows[0].charge[0].value,60);assert.equal(model.rows[0].withdraw[0].value,80);assert.equal(model.rows[0].charge[1].value,30);assert.match(a.render(input),/多利成功按成功状态＋订单更新时间统计/);assert.match(a.render(input),/>80\.00%/);
+});
+
+
+test('retrying a failed platform preserves a terminal fee error until the user explicitly retries fees',async()=>{
+ const ps=[{...A,timezone:'Asia/Kolkata',currency:'INR'},{...B,timezone:'Asia/Kolkata',currency:'INR'}],h=await ready({platforms:ps,ancillaryHandler:true});let fail=true;
+ h.setHandler(q=>{
+  if(q.action==='providerOptions')return {providers:['ATPay']};
+  if(q.action==='rates')throw Error('Synthetic fee directory unavailable');
+  if(q.action==='workorders')return {startDate:'2026-09-22',endDate:'2026-09-22',byPlatformProvider:[],byProvider:[],byDirection:{}};
+  if(q.platformId===B.id&&fail)throw Error('Synthetic platform unavailable');
+  return payment(ps.find(p=>p.id===q.platformId),[row('charge',10,q.platformId===A.id?4:3)]);
+ });
+ h.c.liveSuccessDate('2026-09-22');await h.c.liveQuery();await settle();assert.equal(h.L.queryFailures.length,1);assert.match(h.L.feeLookupError,/Synthetic fee directory unavailable/);assert.equal(h.L.feeLookupRows,null);
+ const before=h.calls.length;fail=false;await h.c.liveRetryFailed();await settle();const retry=h.calls.slice(before);assert.equal(retry.length,1);assert.equal(retry[0].action,'aggregate');assert.equal(retry[0].platformId,B.id);assert.equal(h.L.queryFailures.length,0);assert.match(h.L.feeLookupError,/Synthetic fee directory unavailable/);assert.equal(h.L.feeLookupRows,null);
+ const rateReads=h.calls.filter(q=>q.action==='rates').length;await h.c.liveRetryFeeLookup();assert.equal(h.calls.filter(q=>q.action==='rates').length,rateReads+1,'explicit fee retry remains available');
 });

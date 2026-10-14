@@ -49,12 +49,12 @@ test('analysis summary cards share the current fee estimate and never fall back 
 });
 
 test('a directly queried analysis page loads current rates once and replaces loading with a verified estimate',async()=>{
- const h=await setup(),rates=h.L.feeLookupRows;let resolveRates;
- h.setHandler(q=>{assert.equal(q.action,'rates');return new Promise(resolve=>{resolveRates=resolve})});
- Object.assign(h.L,{feeLookupRows:null,feeLookupLoading:false,feeLookupError:''});h.c.state.page='time';const calls=h.calls.length;
- h.c.render();h.c.render();assert.equal(h.calls.length-calls,1);assert.match(feeCard(h,'charge').html,/费率读取中/);assert.equal(feeCard(h,'charge').value,'—');
- resolveRates({rows:rates,total:rates.length});await settle();
- assert.equal(feeCard(h,'charge').value,'38.00');assert.equal(feeCard(h,'withdraw').value,'9.00');assert.equal(h.calls.length-calls,1);
+ const h=await setup(),rates=h.L.feeLookupRows,results=h.L.results;let resolveRates;
+ h.setHandler(q=>{if(q.action==='aggregate')return results.find(r=>r.platform.id===q.platformId);assert.equal(q.action,'rates');return new Promise(resolve=>{resolveRates=resolve})});
+ h.c.setPage('time');const reading=h.c.liveQuery(false);await settle();
+ const calls=h.calls.length;h.c.render();h.c.render();assert.equal(h.calls.filter(q=>q.action==='rates').length,1);assert.match(feeCard(h,'charge').html,/费率读取中/);assert.equal(feeCard(h,'charge').value,'—');
+ resolveRates({rows:rates,total:rates.length});await reading;await settle();
+ assert.equal(feeCard(h,'charge').value,'38.00');assert.equal(feeCard(h,'withdraw').value,'9.00');assert.equal(h.calls.length,calls,'fee completion and repeated paints do not reread orders or rates');
 });
 
 test('merchant defaults to current reference estimates with native platform exceptions, success-time counts and explicit partial coverage',async()=>{
@@ -92,8 +92,8 @@ test('expanded merchant rows refresh their mode, while an old mode callback cann
 });
 
 test('current reference load completion updates expanded exact rows without another order request',async()=>{
- const h=await setup();connectedInline(h);let resolveRates;h.setHandler(q=>q.action==='rates'?new Promise(resolve=>{resolveRates=resolve}):{rows:[],total:0});h.L.feeLookupRows=null;h.c.render();assert.equal(h.L.feeLookupLoading,true);assert.match(open(h).html,/读取中…/);const calls=h.calls.length;
- resolveRates({rows:[rate({collectFee:'5%'})],total:1});await settle();const t=tables(currentInline(h).html).find(t=>t.headers[0]==='平台'),pay=t.rows.find(r=>plain(r[0]).startsWith('ExamplePay'));
+ const h=await setup();connectedInline(h);let resolveRates;h.setHandler(q=>q.action==='rates'?new Promise(resolve=>{resolveRates=resolve}):{rows:[],total:0});h.L.feeLookupRows=null;const reading=h.c.liveRetryFeeLookup();assert.equal(h.L.feeLookupLoading,true);assert.match(open(h).html,/读取中…/);const calls=h.calls.length;
+ resolveRates({rows:[rate({collectFee:'5%'})],total:1});await reading;await settle();const t=tables(currentInline(h).html).find(t=>t.headers[0]==='平台'),pay=t.rows.find(r=>plain(r[0]).startsWith('ExamplePay'));
  assert.equal(reference(pay,'代收'),'5.00%');assert.equal(amount(cell(t,pay,'代收手续费')),'20.00');assert.equal(plain(cell(t,pay,'代收匹配占比')),'100.00%');assert.match(cell(t,pay,'代收手续费'),/已匹配 4 \/ 4 笔（100\.00%）/);assert.equal(h.calls.length,calls);assert.equal(h.calls.filter(q=>q.action==='rates').length,1);assert.equal(h.drawers.length,0);
 });
 

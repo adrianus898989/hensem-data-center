@@ -181,7 +181,7 @@ test('collected catalog response cannot redraw another menu and is reused on ret
 });
 
 test('lazy fee lookup does not recursively rebuild the page during its first paint',async()=>{
- const h=await ready();await h.c.liveQuery();await settle();const pending=deferred();h.L.feeLookupRows=null;h.L.feeLookupLoading=false;h.L.feeLookupError='';h.c.state.page='providers';h.L.direction='charge';h.L.multi.direction=['charge'];h.setHandler(q=>q.action==='rates'?pending.promise:Promise.resolve(aggregate()));
+ const h=await ready();await h.c.liveQuery();await settle();const pending=deferred();h.L.feeLookupRows=null;h.L.feeLookupLoading=false;h.L.feeLookupError='';h.setHandler(q=>q.action==='rates'?pending.promise:Promise.resolve(aggregate()));
  const before=pageWrites(h);h.c.render();assert.equal(pageWrites(h)-before,1);assert.equal(h.L.feeLookupLoading,true);
  pending.resolve({rows:[],total:0});await settle();assert.equal(pageWrites(h)-before,2,'completion still produces the required final view');assert.equal(h.L.feeLookupLoading,false);
 });
@@ -197,7 +197,7 @@ test('manual fee retry clears a sticky error without duplicating a pending reque
 test('a fee page deadline aborts transport and remains terminal even when the old transport ignores cancellation',async()=>{
  const h=await ready(),old=deferred(),request=h.c.hensemLiveRequest;let signal;
  h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(signal=options.signal,old.promise):request(q,options);
- const retry=h.c.liveRetryFeeLookup(),deadline=h.timers.findLast(timer=>timer.ms===30000);assert(deadline);deadline.fn();await retry;assert.equal(signal.aborted,true);assert.equal(h.L.feeLookupLoading,false);assert.match(h.L.feeLookupError,/费率读取超时/);assert.equal(h.L.feeLookupRows.length,0);
+ const retry=h.c.liveRetryFeeLookup(),deadline=h.timers.findLast(timer=>timer.ms===30000);assert(deadline);deadline.fn();await retry;assert.equal(signal.aborted,true);assert.equal(h.L.feeLookupLoading,false);assert.match(h.L.feeLookupError,/费率读取超时/);assert.equal(h.L.feeLookupRows,null);const calls=h.calls.length;h.c.render();await settle();assert.equal(h.calls.length,calls,'terminal failure never becomes an automatic retry');
  h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?Promise.resolve({rows:[{provider:'Fresh fee'}],total:1}):request(q,options);await h.c.liveRetryFeeLookup();old.resolve({rows:[{provider:'Late old fee'}],total:1});await settle();assert.equal(h.L.feeLookupRows[0].provider,'Fresh fee');assert.equal(h.L.feeLookupError,'');assert.equal(h.L.feeLookupLoading,false);
 });
 
@@ -215,13 +215,13 @@ test('navigation aborts a real framed fee batch without sending the next page un
  }
 });
 
-test('cancelling a later fee page preserves a complete cache and late results cannot replace a newer batch',async()=>{
+test('cancelling a forced later fee page cannot restore the invalidated snapshot or overwrite a newer batch',async()=>{
  const h=await ready(),old=deferred(),fresh=deferred(),request=h.c.hensemLiveRequest,cached=[{id:'cached',provider:'Complete cached fee'}];let count=0,oldSignal;
- h.L.feeLookupRows=cached;
+ h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?Promise.resolve({rows:cached,total:1}):request(q,options);await h.c.liveRetryFeeLookup();assert.equal(h.L.feeLookupRows[0].id,'cached');
  h.c.hensemLiveRequest=(q,options)=>{if(q.action!=='rates')return request(q,options);count++;if(count===1)return Promise.resolve({rows:Array.from({length:500},(_,i)=>({id:'partial-'+i,provider:'Partial fee'})),total:501});if(count===2){oldSignal=options.signal;return old.promise;}return fresh.promise;};
  const reading=h.c.liveRetryFeeLookup();await settle();assert.equal(count,2);h.c.setPage('collection');await reading;
- assert.equal(oldSignal.aborted,true);assert.equal(h.L.feeLookupRows,cached);assert.equal(h.L.feeLookupError,'');assert.equal(h.L.feeLookupLoading,false);
- const replacement=h.c.liveRetryFeeLookup();old.resolve({rows:[{id:'late-old',provider:'Old fee'}],total:501});await settle();assert.equal(h.L.feeLookupRows,cached);assert.equal(h.L.feeLookupLoading,true);assert.equal(h.L.feeLookupError,'');
+ assert.equal(oldSignal.aborted,true);assert.equal(h.L.feeLookupRows,null);assert.equal(h.L.feeLookupError,'');assert.equal(h.L.feeLookupLoading,false);
+ const replacement=h.c.liveRetryFeeLookup();old.resolve({rows:[{id:'late-old',provider:'Old fee'}],total:501});await settle();assert.equal(h.L.feeLookupRows,null);assert.equal(h.L.feeLookupLoading,true);assert.equal(h.L.feeLookupError,'');
  fresh.resolve({rows:[{id:'new',provider:'New fee'}],total:1});await replacement;assert.equal(h.L.feeLookupRows[0].id,'new');assert.equal(h.L.feeLookupLoading,false);
 });
 
@@ -546,4 +546,109 @@ test('split totals keep null and absent capability unknown rather than inventing
  for(const unknown of [null,undefined]){b.total=unknown;const r=h.mergeParts([a,b]);assert.equal(r.total,null);assert.equal(r.summary[0].all_count,6,'known scoped summary facts still merge');}
  delete a.total;delete b.total;assert(!Object.hasOwn(h.mergeParts([a,b]),'total'));
  a.total=0;b.total=0;assert.equal(h.mergeParts([a,b]).total,0,'a source-confirmed empty range remains zero');
+});
+
+
+test('complete fee snapshots expire only on an explicit query; empty snapshots and country changes use the same authorized directory',async()=>{
+ const indonesia={...P,id:'22222222-2222-4222-8222-222222222222',name:'Synthetic Indonesia',country:'印尼',currency:'IDR',scopeGroup:'indonesia',timezone:'Asia/Jakarta'};
+ const h=await ready({page:'providers',platforms:[P,indonesia]});
+ const feeCount=()=>h.calls.filter(q=>q.action==='rates').length;
+ assert.equal(feeCount(),1);assert.deepEqual(Array.from(h.L.feeLookupRows),[]);
+ await h.c.liveQuery(false);await settle();assert.equal(feeCount(),1,'successful empty directory is reusable');
+ h.setNow('2026-09-23T12:04:59Z');h.c.liveSet('country','印尼');await h.c.liveQuery(false);await settle();assert.equal(feeCount(),1,'country selection does not invalidate the actor-wide rates directory');
+ h.setNow('2026-09-23T12:05:00Z');h.c.render();h.c.providerSummarySort('all_count');h.c.livePage(1,'local');h.c.setPage('amount');h.c.setPage('providers');await settle();assert.equal(feeCount(),1,'expiry alone cannot launch reads while painting, paginating or restoring a tab');
+ await h.c.liveQuery(false);await settle();assert.equal(feeCount(),2,'five-minute boundary is checked by the next explicit query');
+ await h.c.liveQuery(true);await settle();assert.equal(feeCount(),3,'force always reads rates again');
+ h.setNow('2026-09-23T12:04:00Z');await h.c.liveQuery(false);await settle();assert.equal(feeCount(),4,'clock rollback cannot make a snapshot fresh');
+ assert(h.calls.filter(q=>q.action==='rates').every(q=>q.scopeType==='all'&&!q.country&&!q.platform&&!q.platformId),'all requests retain the native directory contract');
+});
+
+test('filter edits abort a forced paginated fee read; paints cannot restart it and next query reads once',async()=>{
+ const h=await ready({page:'providers'}),old=deferred(),request=h.c.hensemLiveRequest;let rateCalls=0,oldSignal;
+ h.c.hensemLiveRequest=(q,options)=>{if(q.action!=='rates')return request(q,options);rateCalls++;if(rateCalls===1)return Promise.resolve({rows:Array.from({length:500},(_,i)=>({id:'partial-'+i})),total:501});if(rateCalls===2){oldSignal=options.signal;return old.promise;}return Promise.resolve({rows:[{id:'fresh'}],total:1});};
+ const read=h.c.liveQuery(true);await settle();assert.equal(rateCalls,2);h.c.liveSet('from','2026-09-21T00:00:00');await read;assert.equal(oldSignal.aborted,true);assert.equal(h.L.feeLookupRows,null);assert.equal(h.L.feeLookupLoading,false);
+ h.c.render();h.c.livePage(1,'local');h.c.providerSummarySort('all_count');await settle();assert.equal(rateCalls,2,'unfinished filters, sorting and pagination cannot consume an abandoned fee intent');
+ old.resolve({rows:[{id:'late-old'}],total:501});await settle();assert.equal(h.L.feeLookupRows,null);assert.equal(rateCalls,2);
+ await h.c.liveQuery(false);await settle();assert.equal(rateCalls,3);assert.equal(h.L.feeLookupRows[0].id,'fresh');
+});
+
+test('ordinary cancellation retains a complete authorized fee snapshot; identity change and denial discard it',async()=>{
+ const h=await ready({page:'providers',beforeLive:c=>{c.hensemDataScope={mode:'assigned',identity:'actor-a'};}}),request=h.c.hensemLiveRequest;
+ h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?Promise.resolve({rows:[{id:'actor-a'}],total:1}):request(q,options);await h.c.liveRetryFeeLookup();const saved=h.L.feeLookupRows;
+ h.c.liveSet('from','2026-09-21T00:00:00');assert.equal(h.L.feeLookupRows,saved);h.c.setPage('amount');h.c.setPage('providers');assert.equal(h.L.feeLookupRows,saved);
+ let count=0;h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(count++,Promise.reject(Error('当前账号未获授权，会话已失效'))):request(q,options);
+ h.c.hensemDataScope={mode:'assigned',identity:'actor-b'};h.c.render();await settle();assert.equal(h.L.feeLookupRows,null);assert.equal(count,0,'identity change clears without an implicit query');
+ await h.c.liveQuery(false);await settle();assert.equal(count,1);assert.equal(h.L.feeLookupRows,null);assert.match(h.L.feeLookupError,/未获授权/);
+ h.c.render();h.c.livePage(1,'local');h.c.liveSet('from','2026-09-20T00:00:00');h.c.render();await settle();assert.equal(count,1);assert.equal(h.L.feeLookupRows,null,'denied refresh never resurrects the previous actor snapshot');
+});
+
+test('a permission revision during a fee page rejects old data and prevents further pagination',async()=>{
+ const h=await ready({page:'providers',roleAccess:{mode:'owner',version:1,canView:true}}),old=deferred(),request=h.c.hensemLiveRequest;let calls=0;
+ h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(calls++,old.promise):request(q,options);
+ const read=h.c.liveRetryFeeLookup(),writes=pageWrites(h);h.c.hensemRoleAccess={mode:'owner',version:2,canView:true};old.resolve({rows:Array.from({length:500},(_,i)=>({id:'old-'+i})),total:501});await read;await settle();assert.equal(calls,1);assert.equal(h.L.feeLookupRows,null);assert.match(h.L.feeLookupError,/权限已变化/);assert(pageWrites(h)>writes,'permission rejection immediately removes the displayed old directory');
+ h.c.render();await settle();assert.equal(calls,1);
+});
+
+test('expired-query cancellation cannot restore an old fee snapshot and partial directories stay unknown',async()=>{
+ const h=await ready({page:'providers'}),request=h.c.hensemLiveRequest,old=deferred();let count=0;
+ h.setNow('2026-09-23T12:05:01Z');h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(count++,old.promise):request(q,options);
+ const read=h.c.liveQuery(false);await settle();assert.equal(count,1);h.c.setPage('amount');await read;assert.equal(h.L.feeLookupRows,null);
+ old.resolve({rows:[{id:'stale'}],total:1});await settle();h.c.setPage('providers');h.c.render();assert.equal(count,1);assert.equal(h.L.feeLookupRows,null);
+ h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(count++,Promise.resolve({rows:[],total:1})):request(q,options);await h.c.liveQuery(false);await settle();assert.equal(count,2);assert.equal(h.L.feeLookupRows,null);assert.match(h.L.feeLookupError,/不完整/);
+});
+
+test('daily comparison explicit queries share the same fee TTL and force contract',async()=>{
+ const h=await ready({extraModules:['live-daily-comparison.js'],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});h.c.setPage('daily_comparison');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T23:59:59';
+ const count=()=>h.calls.filter(q=>q.action==='rates').length;
+ await h.c.liveQuery(false);await settle();assert.equal(count(),1);await h.c.liveQuery(false);await settle();assert.equal(count(),1);
+ h.setNow('2026-09-23T12:05:01Z');h.c.render();assert.equal(count(),1);await h.c.liveQuery(false);await settle();assert.equal(count(),2);
+ await h.c.liveQuery(true);await settle();assert.equal(count(),3);
+ await h.c.liveDailyQuery();await settle();assert.equal(count(),4,'inline daily query uses the same force preparation');
+ h.setNow('2026-09-23T12:10:02Z');await h.c.liveDailyContinue();await settle();assert.equal(count(),5,'inline continue expires the fee snapshot on this explicit query');
+ h.c.liveDailyStatisticsDate('2026-09-21');await h.c.liveDailyWorkorderQuery();await settle();assert.equal(count(),6,'inline query from a changed scope shares the same preparation');
+});
+
+
+test('legacy filter edits that only mark dirty revoke an active fee intent before its next page',async()=>{
+ const h=await ready({page:'providers'}),pending=deferred(),request=h.c.hensemLiveRequest;let calls=0,signal;
+ h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(calls++,signal=options.signal,pending.promise):request(q,options);
+ const reading=h.c.liveRetryFeeLookup();h.L.dirty=true;h.L.to='2026-09-21T23:59:59';h.c.render();await reading;assert.equal(signal.aborted,true);assert.equal(h.L.feeLookupRows,null);
+ pending.resolve({rows:Array.from({length:500},(_,i)=>({id:'old-'+i})),total:501});await settle();h.c.render();assert.equal(calls,1);assert.equal(h.L.feeLookupRows,null);assert.equal(h.L.feeLookupError,'');
+});
+
+test('closing all tabs and pagehide clear the fee directory and cancel old requests',async()=>{
+ const listeners=new Map(),h=await ready({page:'providers',beforeLive:c=>{c.addEventListener=(name,fn)=>listeners.set(name,fn)}}),request=h.c.hensemLiveRequest;
+ h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?Promise.resolve({rows:[{id:'cached'}],total:1}):request(q,options);await h.c.liveRetryFeeLookup();assert.equal(h.L.feeLookupRows[0].id,'cached');
+ h.c.liveCloseAllPages();assert.equal(h.L.feeLookupRows,null);await h.c.liveQuery(false);await settle();assert.equal(h.L.feeLookupRows[0].id,'cached');
+ const pending=deferred();let signal;h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(signal=options.signal,pending.promise):request(q,options);
+ const retry=h.c.liveRetryFeeLookup();listeners.get('pagehide')();await retry;assert.equal(signal.aborted,true);assert.equal(h.L.feeLookupRows,null);pending.resolve({rows:[{id:'late'}],total:1});await settle();assert.equal(h.L.feeLookupRows,null);
+});
+
+
+test('unknown fee totals and changing paginated totals are never cached as complete empty directories',async()=>{
+ for(const total of [null,undefined,'',NaN,-1,1.5]){
+  const h=await ready(),request=h.c.hensemLiveRequest;let calls=0;
+  h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(calls++,Promise.resolve({rows:[],total})):request(q,options);
+  await h.c.liveRetryFeeLookup();assert.equal(h.L.feeLookupRows,null);assert.match(h.L.feeLookupError,/不完整/);h.c.render();await settle();assert.equal(calls,1);
+ }
+ const h=await ready(),request=h.c.hensemLiveRequest;let calls=0;
+ h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?Promise.resolve(++calls===1?{rows:[{id:'first'}],total:2}:{rows:[],total:1}):request(q,options);
+ await h.c.liveRetryFeeLookup();assert.equal(calls,2);assert.equal(h.L.feeLookupRows,null);assert.match(h.L.feeLookupError,/不完整/);
+});
+
+test('an inline daily query cancels an older fee batch and starts one replacement directory read',async()=>{
+ const h=await ready({extraModules:['live-daily-comparison.js'],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});h.c.setPage('daily_comparison');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T23:59:59';
+ const request=h.c.hensemLiveRequest,old=deferred();let calls=0,signal;
+ h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(++calls===1?(signal=options.signal,old.promise):Promise.resolve({rows:[{id:'fresh-daily'}],total:1})):request(q,options);
+ await h.c.liveDailyQuery();await settle();assert.equal(calls,1);await h.c.liveDailyQuery();await settle();assert.equal(signal.aborted,true);assert.equal(calls,2);assert.equal(h.L.feeLookupRows[0].id,'fresh-daily');
+ old.resolve({rows:Array.from({length:500},(_,i)=>({id:'old-'+i})),total:501});await settle();assert.equal(calls,2);assert.equal(h.L.feeLookupRows[0].id,'fresh-daily');
+});
+
+
+test('retrying failed platforms retains an expired displayed fee snapshot until the next main query',async()=>{
+ const other={...P,id:'22222222-2222-4222-8222-222222222222',name:'Second platform'},h=await ready({page:'providers',platforms:[P,other]});let fail=true;
+ h.setHandler(q=>{if(q.action==='rates')return {rows:[{id:'complete-directory'}],total:1};if(q.action==='aggregate'&&q.platformId===other.id&&fail)throw Error('Synthetic platform unavailable');return aggregate(q.platformId===other.id?other:P);});
+ await h.c.liveQuery(true);await settle();assert.equal(h.L.queryFailures.length,1);const snapshot=h.L.feeLookupRows,rateCount=h.calls.filter(q=>q.action==='rates').length;
+ h.setNow('2026-09-23T12:05:01Z');fail=false;await h.c.liveRetryFailed();await settle();assert.equal(h.L.queryFailures.length,0);assert.equal(h.L.feeLookupRows,snapshot);assert.equal(h.calls.filter(q=>q.action==='rates').length,rateCount);
+ await h.c.liveQuery(false);await settle();assert.equal(h.calls.filter(q=>q.action==='rates').length,rateCount+1);
 });
