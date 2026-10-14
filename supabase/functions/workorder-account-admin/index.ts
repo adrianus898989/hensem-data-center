@@ -9,6 +9,13 @@ function checked(result: any) { if (result.error) throw result.error; return res
 const gateway: Gateway = {
   async permissionRoles(actor,request) { return checked(await admin.rpc('workorder_permission_role_admin',{p_actor:actor,p_request:request})); },
   async getUser(token) { const r = await admin.auth.getUser(token); if (r.error) return null; return r.data.user; },
+  async meContext(input) {
+    // Only a token already verified by Auth.getUser reaches this method.
+    // Decode session_id for the original registered-session check, never role/scope claims.
+    let sid:string|null=null;
+    try{const part=input.token.split('.')[1],value=JSON.parse(atob(part.replace(/-/g,'+').replace(/_/g,'/'))).session_id;if(typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))sid=value;}catch{}
+    return checked(await admin.rpc('workorder_portal_identity_context',{p_actor:input.actor,p_email:input.email,p_session_id:sid,p_proxy_present:input.proxyPresent,p_client_ip:input.clientIp}));
+  },
   async profile(id) { return checked(await admin.from('dashboard_profiles').select('auth_user_id,username,role,active').eq('auth_user_id', id).maybeSingle()); },
   async account(id) { return checked(await admin.rpc('workorder_portal_account_context',{p_actor:id})); },
   async accounts() { return checked(await admin.from('workorder_portal_accounts').select(ACCOUNT_FIELDS).order('username').limit(1000)) || []; },

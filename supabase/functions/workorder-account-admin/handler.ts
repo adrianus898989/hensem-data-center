@@ -1,7 +1,9 @@
 export type Account = { auth_user_id: string; username: string; display_name: string; role: string; team: string; platforms: string[]; active: boolean; permissions?: Record<string,boolean>|null; custom_role_id?: string|null; custom_role_name?: string|null; custom_role_version?: number|null; created_at?: string; updated_at?: string };
 export type Catalog = { teams: string[]; platforms: string[]; platformTeams: Record<string, string> };
+type MeContext = { profile: { auth_user_id: string; username: string; role: string; active: boolean } | null; account: Account | null; catalogRows: { team: string; platform: string }[] };
 export type Gateway = {
   getUser(token: string): Promise<{ id: string; email?: string } | null>;
+  meContext(input: { actor: string; email: string | null; token: string; proxyPresent: boolean; clientIp: string | null }): Promise<unknown>;
   profile(id: string): Promise<{ auth_user_id: string; username: string; role: string; active: boolean } | null>;
   account(id: string): Promise<Account | null>;
   accounts(): Promise<Account[]>;
@@ -72,6 +74,29 @@ async function trustedClientIp(request:Request,hash:string|undefined):Promise<st
   if(mismatch)throw new ApiError(403,'proxy_denied','登录来源验证失败');
   return ip;
 }
+function readMeContext(value: unknown, deferredProxyError: unknown): MeContext {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid identity response');
+  const v=value as Record<string,unknown>;
+  if (v.version!==1 || typeof v.ok!=='boolean') throw new Error('Invalid identity response');
+  if (!v.ok) {
+    const messages:Record<string,string[]>={session_denied:['会话未通过登录策略，请重新登录'],proxy_denied:['登录来源验证失败'],ip_denied:['当前 IP 不在登录白名单'],account_denied:['此后台账号没有工单所有者权限','工单账号未启用或未授权']};
+    if(v.status!==403||typeof v.code!=='string'||typeof v.message!=='string'||!messages[v.code]?.includes(v.message))throw new Error('Invalid identity response');
+    // A local crypto failure retains the old 503 behavior after the session check.
+    if(v.code==='proxy_denied'&&deferredProxyError&&!(deferredProxyError instanceof ApiError))throw deferredProxyError;
+    throw new ApiError(403,v.code,v.message);
+  }
+  if(v.profile!==null && (!v.profile || typeof v.profile!=='object' || Array.isArray(v.profile)
+    || !uid((v.profile as any).auth_user_id) || typeof (v.profile as any).username!=='string'
+    || typeof (v.profile as any).role!=='string' || typeof (v.profile as any).active!=='boolean'))throw new Error('Invalid identity response');
+  if(v.account!==null && (!v.account || typeof v.account!=='object' || Array.isArray(v.account)
+    || !uid((v.account as any).auth_user_id) || typeof (v.account as any).username!=='string'
+    || typeof (v.account as any).display_name!=='string' || typeof (v.account as any).role!=='string'
+    || typeof (v.account as any).team!=='string' || typeof (v.account as any).active!=='boolean'
+    || !Array.isArray((v.account as any).platforms) || (v.account as any).platforms.some((p:unknown)=>typeof p!=='string')))throw new Error('Invalid identity response');
+  if(!Array.isArray(v.catalogRows)||v.catalogRows.length>2000||v.catalogRows.some(r=>!r||typeof r!=='object'||Array.isArray(r)
+    || ((r as any).team!==null&&typeof (r as any).team!=='string') || ((r as any).platform!==null&&typeof (r as any).platform!=='string')))throw new Error('Invalid identity response');
+  return {profile:v.profile as MeContext['profile'],account:v.account as Account|null,catalogRows:v.catalogRows as MeContext['catalogRows']};
+}
 export function createWorkorderAccountHandler(gateway: Gateway, options: { allowedOrigins: string[]; proxyKeySha256?: string }) {
   return async (request: Request): Promise<Response> => {
     const origin = request.headers.get('origin');
@@ -109,17 +134,26 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
       if (!body! || typeof body! !== 'object' || Array.isArray(body!)) bad('请求格式不正确');
       const action = body!.action;
       if (!['me', 'list-accounts', 'create-account', 'update-account', 'reset-password','list-roles','create-role','update-role'].includes(String(action))) bad('操作不支持');
-      const profile = await gateway.profile(caller.id);
+      let identity:MeContext|null=null;
+      if(action==='me') {
+        const proxyPresent=request.headers.has('x-portal-proxy-key')||request.headers.has('x-portal-client-ip');
+        let clientIp:string|null=null,deferredProxyError:unknown;
+        // Defer invalid proxy proof until SQL has performed the existing session gate.
+        // Whether a proof is required is decided from the fresh profile inside SQL.
+        try{clientIp=await trustedClientIp(request,options.proxyKeySha256);}catch(error){deferredProxyError=error;}
+        identity=readMeContext(await gateway.meContext({actor:caller.id,email:caller.email??null,token,proxyPresent,clientIp}),deferredProxyError);
+      }
+      const profile = identity ? identity.profile : await gateway.profile(caller.id);
       const owner = !!profile && profile.auth_user_id === caller.id && profile.active === true && profile.role === 'owner';
       if (action !== 'me' && !owner) throw new ApiError(403, 'owner_required', '只有后台总管理员可以管理工单账号');
       // Supabase Auth verified the token; SQL rechecks session registration,
       // fresh account state and the canonical login-IP policy.
-      if (!(await gateway.sessionAllowed(token, caller.id, profile ? "dashboard" : "workorder"))) {
+      if (!identity && !(await gateway.sessionAllowed(token, caller.id, profile ? "dashboard" : "workorder"))) {
         throw new ApiError(403, "session_denied", "会话未通过登录策略，请重新登录");
       }
       // Employee identity and service-role business queries are Worker-only.
       // Owner management may still originate from the approved Pages session.
-      if(!profile||request.headers.has('x-portal-proxy-key')||request.headers.has('x-portal-client-ip')) {
+      if(!identity&&(!profile||request.headers.has('x-portal-proxy-key')||request.headers.has('x-portal-client-ip'))) {
         const ip=await trustedClientIp(request,options.proxyKeySha256);
         if(!(await gateway.ipCheck(profile?"dashboard":"workorder",ip,caller.id)))throw new ApiError(403,'ip_denied','当前 IP 不在登录白名单');
       }
@@ -127,7 +161,7 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
       if (!owner) {
         // Portal staff never gain backend permissions from metadata or email.
         if (profile) throw new ApiError(403, 'account_denied', '此后台账号没有工单所有者权限');
-        account = await gateway.account(caller.id);
+        account = identity ? identity.account : await gateway.account(caller.id);
         if (!account || account.auth_user_id !== caller.id || account.active !== true || !roles.has(account.role)
           || caller.email?.toLowerCase() !== `${account.username}@${ACCOUNT_DOMAIN}`) throw new ApiError(403, 'account_denied', '工单账号未启用或未授权');
       }
@@ -135,7 +169,7 @@ export function createWorkorderAccountHandler(gateway: Gateway, options: { allow
         try { return json(await gateway.permissionRoles(caller.id,body!)); }
         catch (error) { const e=error as {code?:string,message?:string};if(e.code==='40001')throw new ApiError(409,'role_changed','角色已被其他操作修改，请刷新后重试');if(e.code==='23505')throw new ApiError(409,'role_exists','角色名称已存在');if(e.code==='22023'||e.code==='22P02'||e.code==='23514')throw new ApiError(400,'invalid_role','角色配置不正确');throw error; }
       }
-      const catalog = buildCatalog(await gateway.catalogRows());
+      const catalog = buildCatalog(identity ? identity.catalogRows : await gateway.catalogRows());
       if (action === 'me') {
         if (owner) account = { auth_user_id: caller.id, username: profile!.username, display_name: profile!.username, role: 'owner', team: '', platforms: catalog.platforms, active: true };
         else {
