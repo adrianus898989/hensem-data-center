@@ -18,7 +18,8 @@ test('AR cutover preserves actual yesterday shares and unchanged automatic, succ
  assert.match(cells[8],/昨日 33\.30%.*-1\.24 pp/);assert.doesNotMatch(cells[8],/分类口径不同/);
  assert.match(cells[9],/昨日 30\.81% · 分类口径不同/);assert.match(cells[9],/无明确操作人的驳回计入人工/);assert.doesNotMatch(cells[9],/37\.13 pp|withdraw-delta| pp/);
  for(const index of [4,5]){assert.match(cells[index],/昨日 .* pp/);assert.doesNotMatch(cells[index],/分类口径不同/);}
- assert.equal((html.match(/分类口径不同/g)||[]).length,1);assert.equal((html.match(/AR 两期完整性尚未核验，汇总暂不比较/g)||[]).length,1);
+ assert.equal((cells.join('').match(/分类口径不同/g)||[]).length,1);assert.equal((html.match(/AR 两期完整性尚未核验，汇总暂不比较/g)||[]).length,1);
+ const manualCard=html.match(/<label>人工处理<\/label>(.*?)<\/div>/s)?.[1];assert.match(manualCard,/昨日 3760 · 分类口径不同/);assert.doesNotMatch(manualCard,/较昨日|withdraw-delta/);
  for(const footer of table.footers)assert.doesNotMatch(footer.join(''),/昨日|分类口径不同|withdraw-delta/);
  assert.deepEqual(current,before);assert.equal(f.page.state.data.rows[0],current);assert.equal(f.calls.length,1);
 });
