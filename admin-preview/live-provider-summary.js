@@ -799,7 +799,14 @@
   const columnWidth=key=>key==='provider'?94:key==='platform_count'?40:key==='type'?62:key==='fee_rate'?88:key===null?54:key==='estimated_fee'?108:kycIssueKeys.some(k=>key==='issue_'+k)?108:key.endsWith('_amount')||key.endsWith('Amount')?98:key.endsWith('_count')||key.endsWith('Count')?70:70;
   const widths=columns.map(([,key])=>columnWidth(key)),tableWidth=widths.reduce((sum,width)=>sum+width,0);
   const rateButton=(value,index)=>{const full=String(value||'未匹配'),long=full.length>24||/[\r\n]/.test(full),label=long?(/以上|以下|分档|阶梯|[≥≤<>]/.test(full)?'分档费率 · 查看':'费率详情 · 查看'):full;return '<button class="link provider-fee-preview" title="'+E(full+' · 点击查看来源及匹配依据')+'" aria-label="'+E('费率：'+full+'，查看来源及匹配依据')+'" onclick="providerSummaryRate('+index+')">'+E(label)+'</button>'};
-  const feeCell=r=>readState.empty?'—':feeMode==='current'&&L.feeLookupLoading?'读取中…':feeMode==='current'&&L.feeLookupError?'读取失败':'<span tabindex="0" title="'+E(feeCoverageText(r))+'">'+N(r.estimated_fee)+(!r.fee_complete&&Number(r.fee_eligible_count)>0?'<small class="provider-partial cell-sub">'+E(r.fee_mode==='current'?(r.fee_matched_count>0?'部分':'待确认'):feeHistoryLabel(r))+'</small>':'')+'</span>';
+  const feeCell=r=>{
+   if(readState.empty)return '—';
+   if(feeMode==='current'&&L.feeLookupLoading)return '读取中…';
+   if(feeMode==='current'&&L.feeLookupError)return '读取失败';
+   const status=!r.fee_complete&&Number(r.fee_eligible_count)>0?(r.fee_mode==='current'?(r.fee_matched_count>0?'部分':'待确认'):feeHistoryLabel(r)):'';
+   const note=feeCoverageText(r),accessible='估算手续费：'+(r.estimated_fee==null?'未确认':N(r.estimated_fee))+(status?'，'+status:'')+'。'+note;
+   return '<span class="provider-fee-value" tabindex="0" title="'+E(note)+'" aria-label="'+E(accessible)+'">'+N(r.estimated_fee)+(status?'<small class="provider-partial cell-sub">'+E(status)+'</small>':'')+'</span>';
+  };
   const issueRate=w=>!w?'—':'<span'+(Number(w.uniqueOrderCount)>0&&Number(w.uniqueSuccessCount)/Number(w.uniqueOrderCount)<0.3?' class="workorder-rate-low"':'')+' title="去重工单金额处理率 '+R(w.uniqueSuccessAmount,w.uniqueOrderAmount)+'；笔数处理率 = 已处理原单 / 提交原单；关联工单状态4不代表原订单已到账">'+R(w.uniqueSuccessCount,w.uniqueOrderCount)+'</span>';
   const uniqueGaps=coverage=>{
    const gaps=workorderGapReasons(coverage).map(i=>C(i.count)+i.unit+i.label);
