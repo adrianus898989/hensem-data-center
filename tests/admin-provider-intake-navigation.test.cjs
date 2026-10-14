@@ -32,12 +32,12 @@ test('filter change during source query never commits evidence under a different
  await h.c.liveQuery();await settle();assert.equal(h.L.providerIntake.status,'ready');assert.equal(h.L.providerIntake.from,'2026-09-20');assert.equal(h.L.providerComparisonIntake.from,'2026-09-17');assert.equal(h.L.providerComparisonIntake.to,'2026-09-19');
 });
 
-test('slow source reconciliation follows prior comparison and defers later workorders and previous intake',async()=>{
- const pending=deferred();let first;const h=await setup(q=>{if(q.action==='intakeCoverage'&&q.operation==='rows'&&q.startAt==='2026-09-22'){first=q;return pending.promise;}return respond(q);});
+test('workorders and prior comparison finish before slow source reconciliation, while previous intake remains serial',async()=>{
+ const pending=deferred();let first;const h=await setup(q=>{if(q.action==='intakeCoverage'&&q.operation==='rows'&&q.startAt==='2026-09-22'){first=q;return pending.promise;}if(q.action==='workorders')return {byProvider:[],byDirection:{}};return respond(q);});
  const query=h.c.liveQuery();await settle();
  assert.equal(h.L.providerIntake.status,'loading');assert.equal(h.L.comparisonStatus,'ready');
- assert(!h.calls.some(q=>q.action==='workorders'),'workorders wait for the active source-day read');
- assert.equal(h.L.workorders,null);assert.equal(h.L.providerComparisonIntake,null);
- assert.match(h.html(),/核对当期采集完整性/);
+ assert(h.calls.some(q=>q.action==='workorders'),'workorders no longer wait behind source-day reconciliation');
+ assert(h.L.workorders);assert.equal(h.L.workordersLoading,false);assert.equal(h.L.providerComparisonIntake,null);
+ assert.match(h.html(),/主表已完成/);
  pending.resolve(intakeRows(first));await query;assert.equal(h.L.providerIntake.status,'ready');assert.equal(h.L.providerComparisonIntake.status,'ready');assert(h.calls.some(q=>q.action==='workorders'));
 });

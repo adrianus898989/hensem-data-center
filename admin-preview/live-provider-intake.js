@@ -31,15 +31,22 @@
   return {id:platform.id,name:platform.name,source:platform.source,days,missingDates:missing.map(d=>d.date),verificationDifferenceDates:differences.map(d=>d.date),received,complete,expected:!beforeLaunch,status:beforeLaunch?'not_expected':missing.length?'missing':complete?(expected.every(d=>d.zeroConfirmed)?'zero_complete':'complete'):received?'received':'unverified',message:beforeLaunch?'所选日期早于已确认开通时间，不计缺失':missing.length?missing.map(d=>d.date+'：'+d.notes).join('；'):differences.length?differences.map(d=>d.date+'：'+d.notes).join('；'):complete?'创建日数据已核对':received?'已收到创建数据，完整性待核验':'创建日采集证据尚未核验'};
  }
  const transient=error=>/超时|timeout|timed out|57014|network|failed to fetch|网络|连接中断/i.test(String(error?.code||'')+' '+String(error?.message||''));
- function create({request,now=()=>Date.now()}){
-  let revision=0,catalog=null,inFlight=0;const waiters=[],controllers=new Set(),cache=new Map(),cacheMs=300000;
-  const cancel=()=>{revision++;for(const controller of controllers)controller?.abort();catalog=null;cache.clear();waiters.splice(0).forEach(wake=>wake());};
-  async function limited(q,check,concurrency){while(inFlight>=concurrency){check();await new Promise(resolve=>waiters.push(resolve));}check();const controller=typeof root.AbortController==='function'?new root.AbortController():null;controllers.add(controller);inFlight++;try{return await request(q,{signal:controller?.signal})}finally{controllers.delete(controller);inFlight--;waiters.splice(0).forEach(wake=>wake());}}
+ function create({request,now=()=>Date.now(),accessContext=()=>''}){
+  let revision=0,cacheRevision=0,catalog=null,inFlight=0,context=null;const waiters=[],controllers=new Set(),cache=new Map(),cacheMs=300000,partialCacheMs=30000,cacheLimit=512;
+  // A new query cancels work, not verified evidence from the same actor/scope.
+  // Pending catalog reads belong to their old generation and are never retained.
+  const cancel=()=>{revision++;for(const controller of controllers)controller?.abort();if(!context||!catalog?.feeds)catalog=null;if(!context)cache.clear();waiters.splice(0).forEach(wake=>wake());};
+  const dropCache=()=>{cacheRevision++;catalog=null;cache.clear();};
+  const clearCache=()=>{cancel();dropCache();};
+  const scopeContext=()=>{const next=String(accessContext()||'');if(next!==context){clearCache();context=next;}return next;};
+  const fresh=(at,ttl)=>Number.isFinite(at)&&now()>=at&&now()-at<ttl;
+  async function limited(q,check,concurrency){while(inFlight>=concurrency){check();await new Promise(resolve=>waiters.push(resolve));}check();const controller=typeof root.AbortController==='function'?new root.AbortController():null;controllers.add(controller);inFlight++;try{return await request(q,{signal:controller?.signal})}catch(error){check();if(/401|403|permission|denied|login_required|session_expired|权限|未获授权|会话(?:已)?失效|登录已失效/i.test(String(error?.code||'')+' '+String(error?.message||'')))dropCache();throw error;}finally{controllers.delete(controller);inFlight--;waiters.splice(0).forEach(wake=>wake());}}
   async function load({platforms,direction,from,to,onProgress,concurrency=2}){
    concurrency=concurrency===1?1:2;
-   const current=revision,check=()=>{if(current!==revision)throw Error('采集核对已暂停');},allDays=dates(from,to);
-   if(!catalog){const candidate=(async()=>{let r,operation='orderCatalog';for(let attempt=0;attempt<2;attempt++){try{r=await limited({action:'intakeCoverage',operation},check,concurrency);break}catch(error){check();if(operation==='orderCatalog'&&/逐日覆盖参数无效|订单采集目录操作暂不支持|invalid_coverage_request|unsupported.*operation/i.test(String(error?.message||''))){operation='catalog';r=await limited({action:'intakeCoverage',operation},check,concurrency);break;}if(attempt||!transient(error))throw error;}}if(r?.version!==1||r.complete!==true||!Array.isArray(r.feeds)||new Set(r.feeds.map(f=>f.id)).size!==r.feeds.length)throw Error('采集目录响应不完整');return r.feeds;})();catalog=candidate;candidate.catch(()=>{if(catalog===candidate)catalog=null;});}
-   const feeds=await catalog;check();
+   const actor=scopeContext(),current=revision,savedRevision=cacheRevision,check=()=>{if(scopeContext()!==actor||current!==revision)throw Error('采集核对已暂停');},allDays=dates(from,to);
+   if(catalog?.feeds&&!fresh(catalog.at,cacheMs))catalog=null;
+   if(!catalog){const entry={feeds:null,at:null,promise:null};entry.promise=(async()=>{let r,operation='orderCatalog';for(let attempt=0;attempt<2;attempt++){try{r=await limited({action:'intakeCoverage',operation},check,concurrency);break}catch(error){check();if(operation==='orderCatalog'&&/逐日覆盖参数无效|订单采集目录操作暂不支持|invalid_coverage_request|unsupported.*operation/i.test(String(error?.message||''))){operation='catalog';r=await limited({action:'intakeCoverage',operation},check,concurrency);break;}if(attempt||!transient(error))throw error;}}check();if(r?.version!==1||r.complete!==true||!Array.isArray(r.feeds)||new Set(r.feeds.map(f=>f.id)).size!==r.feeds.length)throw Error('采集目录响应不完整');entry.feeds=r.feeds;entry.at=now();return r.feeds;})();catalog=entry;entry.promise.catch(()=>{if(catalog===entry)catalog=null;});}
+   const feeds=await catalog.promise;check();
    const scope=[...new Map(platforms.map(p=>[p.id,p])).values()],matched=new Map();
    for(const p of scope){const candidates=feeds.filter(f=>f.dataset==='orders'&&f.direction===direction&&f.platformId===p.id);if(candidates.length===1)matched.set(p.id,candidates[0]);}
    const selected=[...matched.values()],groups=new Map(),errors=new Map(),tasks=[];
@@ -48,17 +55,19 @@
     return item;}),error:errors.size?'部分平台采集核对失败；读取失败不代表缺少数据':''});
    const publish=()=>{check();if(typeof onProgress==='function')onProgress(output('loading'));};
    // Bound both platforms and dates. A slow source cannot discard its neighbours.
-   // Cache only validated fragments from this submitted generation; a new query
-   // calls cancel(), so date/filter changes and explicit refresh never reuse them.
-   const fragmentKey=(f,start,end)=>JSON.stringify([direction,f.id,start,end]);
+   // Cache validated responses, not inferred completeness. Incomplete evidence
+   // and current-day fragments expire in 30s; verified historical days in 5min.
+   // Identity includes native feed metadata, not display names or provider aliases.
+   const fragmentKey=(f,start,end)=>{const p=scope.find(p=>p.id===f.platformId);return JSON.stringify([actor,direction,f.id,f.platformId,f.dataset,f.direction,f.timezone,f.source,f.sourceName,p?.source,p?.sourceName,p?.country,p?.timezone,p?.currency,p?.capabilities,start,end]);};
+   const fragmentTtl=(f,end,rows)=>end<today(now(),f.timezone)&&rows.every(r=>r.complete||r.status==='not_expected'&&r.expected===false&&r.evidence==='before_verified_launch')?cacheMs:partialCacheMs;
    for(let d=0;d<allDays.length;d+=7){const start=allDays[d],end=allDays[Math.min(d+6,allDays.length-1)],work=[];
-    for(const f of selected){const key=fragmentKey(f,start,end),saved=cache.get(key);if(saved&&now()-saved.at<cacheMs)groups.set(f.id,[...(groups.get(f.id)||[]),...saved.rows]);else{cache.delete(key);work.push(f);}}
+    for(const f of selected){const key=fragmentKey(f,start,end),saved=cache.get(key);if(actor&&saved&&fresh(saved.at,saved.ttl))groups.set(f.id,[...(groups.get(f.id)||[]),...saved.rows]);else{cache.delete(key);work.push(f);}}
     for(let i=0;i<work.length;i+=2)tasks.push({batch:work.slice(i,i+2),start,end});
    }
    publish();
    async function read(batch,start,end,retry=true){check();try{
     const response=await limited({action:'intakeCoverage',operation:'rows',feedIds:batch.map(f=>f.id),startAt:start,endAt:end},check,concurrency);check();
-    for(const [id,rows] of validate(response,batch,start,end)){groups.set(id,[...(groups.get(id)||[]),...rows]);cache.set(fragmentKey({id},start,end),{at:now(),rows});}publish();
+    for(const [id,rows] of validate(response,batch,start,end)){groups.set(id,[...(groups.get(id)||[]),...rows]);if(actor&&savedRevision===cacheRevision){const f=batch.find(f=>f.id===id),key=fragmentKey(f,start,end);cache.delete(key);cache.set(key,{at:now(),ttl:fragmentTtl(f,end,rows),rows});while(cache.size>cacheLimit)cache.delete(cache.keys().next().value);}}publish();
    }catch(error){check();if(retry&&transient(error)){
      // Each affected platform gets at most one additional read, separately.
      for(const f of batch)await read([f],start,end,false);
@@ -67,7 +76,7 @@
    let next=0;async function worker(){while(next<tasks.length){check();const task=tasks[next++];await read(task.batch,task.start,task.end);}}
    await Promise.all(Array.from({length:Math.min(concurrency,tasks.length)},()=>worker()));check();return output('ready');
   }
-  return {load,cancel};
+  return {load,cancel,clearCache};
  }
  root.HensemProviderIntake={create,validate,summarize};
 })(typeof window!=='undefined'?window:globalThis);

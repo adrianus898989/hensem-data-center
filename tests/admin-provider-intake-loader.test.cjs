@@ -91,10 +91,10 @@ test('seven-day fragments retain verified missing dates independently of a faile
  const calls=[],loader=api.create({request:async q=>{calls.push(q);if(q.operation==='orderCatalog')return {version:1,complete:true,feeds:[feed]};if(q.startAt==='2026-09-27')throw Error('timeout');return rowsFor(q,{status:'not_received',received:false,complete:false,evidence:'only_success_day_records_received'});}});
  const result=await loader.load({platforms:[p],direction:'charge',from:'2026-09-20',to});assert.equal(result.platforms[0].missingDates.length,7);assert(!result.platforms[0].missingDates.includes('2026-09-27'));assert.equal(result.platforms[0].days.find(d=>d.date==='2026-09-27').status,'unverified');assert.match(result.platforms[0].message,/2026-09-27 至 2026-09-29：timeout/);assert.equal(calls.filter(q=>q.startAt==='2026-09-27').length,2);
 });
-test('only successful exact-scope fragments are reused briefly; expiry and a new query force revalidation',async()=>{
- let time=0,fail=true;const calls=[],feeds=[feed,{...feed,id:'f2',platformId:'p2'}],loader=api.create({now:()=>time,request:async q=>{calls.push(q);if(q.operation==='orderCatalog')return {version:1,complete:true,feeds};if(fail&&q.feedIds.includes('f2'))throw Error('timeout');return rowsFor(q);}}),scope={platforms:[p,{...p,id:'p2'}],direction:'charge',from,to};
+test('only successful exact-scope fragments are reused briefly; expiry and explicit refresh force revalidation',async()=>{
+ const started=Date.parse('2026-09-30T10:00:00Z');let time=started,fail=true;const calls=[],feeds=[feed,{...feed,id:'f2',platformId:'p2'}],loader=api.create({accessContext:()=> 'actor:scope:v1',now:()=>time,request:async q=>{calls.push(q);if(q.operation==='orderCatalog')return {version:1,complete:true,feeds};if(fail&&q.feedIds.includes('f2'))throw Error('timeout');return rowsFor(q);}}),scope={platforms:[p,{...p,id:'p2'}],direction:'charge',from,to};
  await loader.load(scope);fail=false;const before=calls.length;await loader.load(scope);assert.deepEqual(calls.slice(before).map(q=>Array.from(q.feedIds)),[['f2']]);const cached=calls.length;await loader.load(scope);assert.equal(calls.length,cached);
- await loader.load({...scope,from:'2026-09-28',to:'2026-09-28'});assert.equal(calls.at(-1).startAt,'2026-09-28');time=300000;const expired=calls.length;await loader.load(scope);assert.equal(calls.length,expired+1);assert.deepEqual(Array.from(calls.at(-1).feedIds),['f1','f2']);loader.cancel();const reset=calls.length;await loader.load(scope);assert.deepEqual(calls.slice(reset).map(q=>q.operation),['orderCatalog','rows']);
+ await loader.load({...scope,from:'2026-09-28',to:'2026-09-28'});assert.equal(calls.at(-1).startAt,'2026-09-28');time=started+300000;const expired=calls.length;await loader.load(scope);assert.equal(calls.length,expired+2);assert.deepEqual(Array.from(calls.at(-1).feedIds),['f1','f2']);loader.cancel();const retained=calls.length;await loader.load(scope);assert.equal(calls.length,retained);loader.clearCache();await loader.load(scope);assert.deepEqual(calls.slice(retained).map(q=>q.operation),['orderCatalog','rows']);
 });
 test('only an explicit unsupported operation falls back from the lighter order catalog',async()=>{
  const calls=[],loader=api.create({request:async q=>{calls.push(q);if(q.operation==='orderCatalog')throw Error('订单采集目录操作暂不支持');return q.operation==='catalog'?{version:1,complete:true,feeds:[feed]}:rowsFor(q);}});await loader.load({platforms:[p],direction:'charge',from,to});assert.deepEqual(calls.map(q=>q.operation),['orderCatalog','catalog','rows']);
@@ -106,6 +106,50 @@ test('a failed catalog is recoverable on a later explicit retry without keeping 
 test('current and comparison workloads never exceed two simultaneous intake requests',async()=>{
  let active=0,peak=0;const feeds=Array.from({length:8},(_,i)=>({...feed,id:'f'+i,platformId:'p'+i})),platforms=feeds.map(f=>({...p,id:f.platformId})),loader=api.create({request:async q=>{active++;peak=Math.max(peak,active);await new Promise(r=>setImmediate(r));active--;return q.operation==='orderCatalog'?{version:1,complete:true,feeds}:rowsFor(q);}});
  await Promise.all([loader.load({platforms,direction:'charge',from,to}),loader.load({platforms,direction:'charge',from:'2026-09-28',to:'2026-09-28'})]);assert.equal(peak,2);
+});
+
+test('incomplete evidence has a 30-second TTL and never becomes complete through a cache hit',async()=>{
+ const start=Date.parse('2026-09-30T10:00:00Z');let time=start,rows=0;const loader=api.create({accessContext:()=> 'actor:scope:v1',now:()=>time,request:async q=>q.operation==='orderCatalog'?{version:1,complete:true,feeds:[feed]}:(rows++,response([day({})]))}),scope={platforms:[p],direction:'charge',from,to};
+ assert.equal((await loader.load(scope)).platforms[0].complete,false);loader.cancel();time=start+29999;assert.equal((await loader.load(scope)).platforms[0].complete,false);assert.equal(rows,1);
+ time=start+30000;await loader.load(scope);assert.equal(rows,2);
+});
+
+test('current-day evidence expires in 30 seconds and a backward clock never extends reuse',async()=>{
+ const start=Date.parse('2026-09-29T10:00:00Z');let time=start,rows=0;const loader=api.create({accessContext:()=> 'actor:scope:v1',now:()=>time,request:async q=>q.operation==='orderCatalog'?{version:1,complete:true,feeds:[feed]}:(rows++,{...response([]),checkedAt:new Date(time).toISOString()})}),scope={platforms:[p],direction:'charge',from,to};
+ await loader.load(scope);loader.cancel();time=start+29999;assert.equal((await loader.load(scope)).platforms[0].status,'unverified');assert.equal(rows,1);
+ time=start+30000;await loader.load(scope);assert.equal(rows,2);time=start+20000;await loader.load(scope);assert.equal(rows,3);
+});
+
+test('permission, assignment, account, and logout context changes invalidate catalog and fragments',async()=>{
+ let actor='user1:scope1:role1:assignment1',calls=[];const loader=api.create({accessContext:()=>actor,request:async q=>{calls.push(q.operation);return q.operation==='orderCatalog'?{version:1,complete:true,feeds:[feed]}:rowsFor(q);}}),scope={platforms:[p],direction:'charge',from,to};
+ await loader.load(scope);loader.cancel();await loader.load(scope);assert.equal(calls.length,2);
+ for(const next of ['user1:scope2:role1:assignment1','user1:scope2:role2:assignment1','user1:scope2:role2:assignment2','user2:scope2:role2:assignment2','']){actor=next;const before=calls.length;await loader.load(scope);assert.deepEqual(calls.slice(before),['orderCatalog','rows']);}
+ loader.cancel();const before=calls.length;await loader.load(scope);assert.deepEqual(calls.slice(before),['orderCatalog','rows']);
+});
+
+test('cancelled catalog replies cannot overwrite a newer actor catalog or warm its cache',async()=>{
+ let actor='old',release,catalogs=0,rows=0;const loader=api.create({accessContext:()=>actor,request:async q=>{if(q.operation==='orderCatalog'){catalogs++;if(catalogs===1)return new Promise(resolve=>{release=resolve});return {version:1,complete:true,feeds:[feed]};}rows++;return rowsFor(q);}}),scope={platforms:[p],direction:'charge',from,to};
+ const old=loader.load(scope),rejected=assert.rejects(old,/已暂停/);actor='new';await loader.load(scope);release({version:1,complete:true,feeds:[{...feed,id:'obsolete'}]});await rejected;loader.cancel();await loader.load(scope);assert.equal(catalogs,2);assert.equal(rows,1);
+});
+
+test('ordinary cancellation preserves finished fragments but late rows cannot populate the next query',async()=>{
+ let release,rows=0;const loader=api.create({accessContext:()=> 'actor:scope:v1',request:async q=>{if(q.operation==='orderCatalog')return {version:1,complete:true,feeds:[feed]};rows++;if(rows===1)return new Promise(resolve=>{release=()=>resolve(rowsFor(q,{status:'not_received',received:false,complete:false}));});return rowsFor(q);}}),scope={platforms:[p],direction:'charge',from,to};
+ const old=loader.load(scope),rejected=assert.rejects(old,/已暂停/);await new Promise(resolve=>setImmediate(resolve));loader.cancel();assert.equal((await loader.load(scope)).platforms[0].complete,true);release();await rejected;loader.cancel();assert.equal((await loader.load(scope)).platforms[0].complete,true);assert.equal(rows,2);
+});
+
+test('native platform changes and refreshed feed metadata do not reuse another identity fragment',async()=>{
+ const start=Date.parse('2026-09-30T10:00:00Z');let time=start,catalogs=0,rows=0;const loader=api.create({accessContext:()=> 'actor:scope:v1',now:()=>time,request:async q=>{if(q.operation==='orderCatalog'){catalogs++;return {version:1,complete:true,feeds:[{...feed,timezone:catalogs===1?'Asia/Kolkata':'UTC'}]};}rows++;time=start+290000;return rowsFor(q);}}),scope={platforms:[p],direction:'charge',from,to};
+ await loader.load(scope);loader.cancel();await loader.load({...scope,platforms:[{...p,source:'newar'}]});assert.equal(rows,2);time=start+300000;await loader.load(scope);assert.equal(catalogs,2);assert.equal(rows,3);
+});
+
+test('server permission rejection clears cached evidence and a sibling late reply cannot restore it',async()=>{
+ let catalogs=0,rows=0,release;const feeds=[feed,{...feed,id:'f2',platformId:'p2'}],loader=api.create({accessContext:()=> 'actor:scope:v1',request:async q=>{if(q.operation==='orderCatalog'){catalogs++;return {version:1,complete:true,feeds};}rows++;if(q.feedIds.includes('f2'))throw Error('正式数据读取未获授权，或会话已失效');if(rows===1)return new Promise(resolve=>{release=()=>resolve(rowsFor(q));});return rowsFor(q);}}),scope={platforms:[p],direction:'charge',from,to};
+ const first=loader.load(scope);await new Promise(resolve=>setImmediate(resolve));const denied=await loader.load({...scope,platforms:[{...p,id:'p2'}]});assert.match(denied.error,/核对失败/);release();await first;loader.cancel();await loader.load(scope);assert.equal(catalogs,2);assert.equal(rows,3);
+});
+
+test('an old actor permission failure cannot evict a newly authorized actor cache',async()=>{
+ let actor='old',rejectOld,catalogs=0,rows=0;const loader=api.create({accessContext:()=>actor,request:async q=>{if(q.operation==='orderCatalog'){catalogs++;return {version:1,complete:true,feeds:[feed]};}rows++;if(rows===1)return new Promise((resolve,reject)=>{rejectOld=reject;});return rowsFor(q);}}),scope={platforms:[p],direction:'charge',from,to};
+ const old=loader.load(scope),rejected=assert.rejects(old,/已暂停/);await new Promise(resolve=>setImmediate(resolve));actor='new';await loader.load(scope);rejectOld(Error('403 permission denied'));await rejected;loader.cancel();await loader.load(scope);assert.equal(catalogs,2);assert.equal(rows,2);
 });
 
 test('verified pre-launch days remain visible without becoming missing or received platforms',()=>{
