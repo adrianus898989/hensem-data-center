@@ -107,7 +107,7 @@ test('all-team Brazil explicitly requests both authorized original sources',asyn
 });
 
 test('switching between identical platform names clears stale platform selections and retains the correct raw source',async()=>{
- const f=fixture();await f.page.load();f.page.state.platforms=['PH-ONLY'];f.context.withdrawTeam('M8');assert.equal(f.L.country,'巴西');assert.deepEqual(plain(f.L.multi.team),['M8']);assert.equal(f.page.state.data,null);await f.page.load();assert.equal(f.calls.at(-1).country,'巴西');assert.deepEqual(f.calls.at(-1).platforms,['SAME','M8-ONLY']);assert.doesNotMatch(f.page.render(),/PH-ONLY/);f.page.cancel();assert.deepEqual(plain(f.L.multi.team),['M8']);
+ const f=fixture();await f.page.load();f.page.state.platforms=['PH-ONLY'];f.context.withdrawTeam('M8');assert.equal(f.L.country,'巴西');assert.deepEqual(plain(f.L.multi.team),['M8']);assert.equal(f.page.state.data.rawCountry,'胖虎巴西','old result keeps its applied native scope until new Query');await f.page.load();assert.equal(f.calls.at(-1).country,'巴西');assert.deepEqual(f.calls.at(-1).platforms,['SAME','M8-ONLY']);assert.doesNotMatch(f.page.render(),/PH-ONLY/);f.page.cancel();assert.deepEqual(plain(f.L.multi.team),['M8']);
 });
 
 test('legacy country navigation is translated to display country plus an explicit team',async()=>{

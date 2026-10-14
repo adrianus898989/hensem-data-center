@@ -54,12 +54,12 @@ test('same-query refresh is deduplicated, disables query controls and preserves 
  pending.reject(Error('57014 synthetic statement timeout <script>'));await Promise.all([first,joined]);assert.equal(joinedCompleted,true,'every deduplicated caller settles after the actual read');html=f.render();assert.equal(f.page.state.loading,false);assert.match(html,/刷新失败，同一筛选的上次成功结果已保留/);assert.match(html,/RETAINED-SYNTHETIC/);assert.match(html,/57014 synthetic statement timeout &lt;script&gt;/);assert.doesNotMatch(html,/<script>/);assert.match(html,/onclick="withdrawLoad\(\)">重试/);assert.doesNotMatch(html,/disabled aria-disabled="true" onclick="withdrawQueryForm/);
  refreshing=false;await f.root.withdrawLoad();assert.equal(f.requests.length,3);assert.equal(f.page.state.error,'');assert.doesNotMatch(f.render(),/刷新失败/);
 });
-test('editing dates removes old results before a new request and a failure cannot relabel them as the new day',async()=>{
+test('editing dates keeps the applied result before a new request and a failure cannot relabel it as the new day',async()=>{
  const data={startDate:'2026-10-08',endDate:'2026-10-08',rows:[yash({platform:'OLD-DAY-SYNTHETIC'})],total:1,totals:yash()},pending=deferred();let changed=false;
  const f=fixture({},false,()=>changed?pending.promise:data);await f.page.load();assert.match(f.render(),/OLD-DAY-SYNTHETIC/);
- f.root.withdrawDate('from','2026-10-09');f.root.withdrawDate('to','2026-10-09');assert.doesNotMatch(f.render(),/OLD-DAY-SYNTHETIC/);
- changed=true;const next=f.page.load();assert.equal(f.page.state.data,null);assert.doesNotMatch(f.render(),/OLD-DAY-SYNTHETIC|上次成功结果/);assert.equal(f.requests.at(-1).startAt,'2026-10-09T00:00:00.000Z');
- pending.reject(Error('synthetic request timeout'));await next;const html=f.render();assert.match(html,/synthetic request timeout/);assert.doesNotMatch(html,/OLD-DAY-SYNTHETIC|上次成功结果/);assert.equal(f.page.state.data,null);
+ f.root.withdrawDate('from','2026-10-09');f.root.withdrawDate('to','2026-10-09');assert.match(f.render(),/OLD-DAY-SYNTHETIC/);assert.match(f.render(),/筛选条件已修改/);assert.match(f.render(),/2026-10-08 至 2026-10-08/);
+ changed=true;const next=f.page.load();assert.equal(f.page.state.data.startDate,'2026-10-08');assert.match(f.render(),/OLD-DAY-SYNTHETIC|上次成功结果/);assert.equal(f.requests.at(-1).startAt,'2026-10-09T00:00:00.000Z');
+ pending.reject(Error('synthetic request timeout'));await next;const html=f.render();assert.match(html,/synthetic request timeout/);assert.match(html,/OLD-DAY-SYNTHETIC/);assert.match(html,/查询失败，上次成功结果已保留/);assert.match(html,/2026-10-08 至 2026-10-08/);assert.equal(f.page.state.data.startDate,'2026-10-08');
 });
 test('unavailable YASH reasons are explained beside a working daily entry without issuing a reason request',()=>{
  const f=fixture();f.render();const actions=f.stats().rows[0].at(-1);

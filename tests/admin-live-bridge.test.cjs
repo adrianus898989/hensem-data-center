@@ -564,3 +564,11 @@ test('suspending a retained frame cancels active and queued promises once withou
  b.cleanup();b.cleanup();assert.equal(h.listeners.size,0);assert.equal(h.timers.size,0);assert.equal(b.replies.length,6);assert(b.replies.every(r=>r.data.code==='ADMIN_LIVE_CANCELLED'&&!r.data.result));assert(h.calls.every(c=>c.init.signal.aborted));
  waiting.resolve({ok:true,json:async()=>({private:'late'})});await flush();assert.equal(b.replies.length,6);assert.equal(h.calls.length,4);
 });
+
+test('recovery export rechecks exact page plus view/query/detail/export grants in the host before transport',async()=>{
+ const q={action:'depositStatistics',section:'recovery',view:'details',dateMode:'all',offset:0,limit:50,export:true};
+ for(const missing of ['view','query','detail','export','page','context']){
+  const h=load(),permissions=['view','query','detail','export'].filter(k=>k!==missing).map(k=>'deposit_statistics.'+k),b=bridge(h,{roleAccess:()=>missing==='context'?null:{mode:'assigned',canView:true,permissions}}),event=b.event('recovery_denied',q);event.data.page=missing==='page'?'deposit_tracking':'deposit_statistics';h.send(event);await flush();assert.equal(h.calls.length,0);assert.match(b.replies[0].data.error,/权限/);b.cleanup();
+ }
+ const h=load(),b=bridge(h,{roleAccess:()=>({mode:'assigned',canView:true,permissions:['view','query','detail','export'].map(k=>'deposit_statistics.'+k)})}),event=b.event('recovery_allowed',q);event.data.page='deposit_statistics';h.send(event);await flush();assert.equal(h.calls.length,1);assert.match(h.calls[0].url,/dashboard_admin_execute$/);assert.equal(JSON.parse(h.calls[0].init.body).p_request.export,true);b.cleanup();
+});

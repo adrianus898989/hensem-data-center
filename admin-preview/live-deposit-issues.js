@@ -13,6 +13,7 @@
   Object.assign(L,{depositIssuesView:'entries',depositIssuesSection:'details',depositIssuesWorkspace:'sheet',depositIssuesDateMode:'range',depositIssuesDateInitialized:false,depositIssuesMatch:'all',depositIssuesFollowupState:'all',depositIssuesFollowupStatus:'',depositIssuesOrderNumber:'',depositIssuesWorkOrderNumber:'',depositIssuesUtr:'',depositIssuesUpiId:'',depositIssuesKycUpiId:'',depositIssuesReply:'',depositIssuesUtrMatch:'',depositIssuesKycCorrect:'',depositIssuesStaffCode:'',depositIssuesSourceKind:'all',depositIssuesAmountMin:'',depositIssuesAmountMax:''});
   const facets={};
   const kycWorkspace=root.HensemLiveDepositWorkspace?.create(ctx);
+  const recoveryWorkspace=root.HensemDepositRecovery?.create(ctx);
   const money=v=>v==null?'—':N(v);
   const known=v=>v!==null&&v!==undefined&&v!==''&&Number.isFinite(Number(v));
   const share=(value,total)=>known(value)&&known(total)&&Number(total)>0?(Number(value)/Number(total)*100).toFixed(2)+'%':'—';
@@ -29,12 +30,12 @@
    const href=sourceHref(r,fallback),label=(r.sourceTab?String(r.sourceTab)+' · ':'')+(r.sourceRow?('第 '+C(r.sourceRow)+' 行'):'原始表格');
    return href?'<a href="'+E(href)+'" target="_blank" rel="noopener noreferrer">'+E(label)+' ↗</a>':'来源未提供';
   }
-  function workspaceNav(){return isStatistics()?'<nav class="deposit-workspace-nav" aria-label="未到账数据视图"><button class="'+(L.depositIssuesSection==='kyc'?'':'on')+'" onclick="depositIssuesSection(\'summary\')">核对统计</button><button class="'+(L.depositIssuesSection==='kyc'?'on':'')+'" onclick="depositIssuesSection(\'kyc\')">KYC / NON-KYC 原单匹配</button></nav>':'';}
+  function workspaceNav(){return isStatistics()?'<nav class="deposit-workspace-nav" aria-label="未到账数据视图"><button class="'+(L.depositIssuesSection==='recovery'?'on':'')+'" onclick="depositIssuesSection(\'recovery\')">补单对比</button><button class="'+(['kyc','recovery'].includes(L.depositIssuesSection)?'':'on')+'" onclick="depositIssuesSection(\'summary\')">核对统计</button><button class="'+(L.depositIssuesSection==='kyc'?'on':'')+'" onclick="depositIssuesSection(\'kyc\')">KYC / NON-KYC 原单匹配</button></nav>':'';}
   let lastReadAt=0,refreshTimer=null;
   function ensureDateRange(){if(L.depositIssuesDateInitialized||!L.catalogReady)return;const range=root.HensemWorkorderUI.recentSevenDays(L.country,L.catalog);L.from=range.from+'T00:00:00';L.to=range.to+'T23:59:59';L.depositIssuesDateMode='range';L.depositIssuesDateInitialized=true;}
 
   const isStatistics=()=>ctx.page?.()==='deposit_statistics';
-  function syncView(){if(ctx.page){const view=isStatistics()?'results':'entries';if(L.depositIssuesView!==view){L.depositIssuesView=view;L.depositIssuesSection=view==='entries'?'details':'summary';L.depositIssues=null;L.depositIssuesError='';L.depositIssuesLoading=false;}}}
+  function syncView(){if(ctx.page){const view=isStatistics()?'results':'entries';if(L.depositIssuesView!==view){L.depositIssuesView=view;L.depositIssuesSection=view==='entries'?'details':recoveryWorkspace?'recovery':'summary';L.depositIssues=null;L.depositIssuesError='';L.depositIssuesLoading=false;}}}
   const classification=v=>({received:'本订单入款',unreceived:'本订单未入款',other_order:'入其他订单',other_provider:'转其他三方',unclassified:'未分类',conflict:'来源冲突'}[v]||'未分类');
   root.depositIssuesMethod=()=>{const entries=L.depositIssuesView==='entries';ctx.openDrawer?.('统计口径','<p>'+E(entries?'跟进记录与核对结果分别统计；成功到其他平台、账号或订单，不计为本订单入款。原表按同平台、完整订单号及 UTR 关联，重复或金额不一致时保留待核对。':'汇总、三方和每日视图来自同一份核对明细，不重复累计。入其他订单、转其他三方单独统计；未分类保留待核对。表格标记不代表已核实实际到账。')+'</p><p>'+E(entries?'日期按跟进日期筛选；未填写日期的记录可选“全部日期”查看。':'日期按完整 RC 订单号中的凭证日期筛选；无有效日期的记录可选“全部日期”查看。')+'</p>');};
   const currentPager=(total,page,size)=>root.HensemWorkorderUI?root.HensemWorkorderUI.pager(total,page,size,'depositIssues',L.depositIssuesLoading):pager(total,page,size,'deposit-issues');
@@ -131,6 +132,7 @@
   }
   function view(){
    syncView();startRefresh();const nav=workspaceNav();
+   if(isStatistics()&&L.depositIssuesSection==='recovery')return nav+(recoveryWorkspace?recoveryWorkspace.render():'<div class="live-status live-error">补单对比模块尚未加载，请刷新页面。</div>');
    if(isStatistics()&&L.depositIssuesSection==='kyc')return nav+(kycWorkspace?kycWorkspace.render():'<div class="live-status live-error">原单匹配模块尚未加载，请刷新页面。</div>');
    const head=nav+toolbar();
 
@@ -143,7 +145,7 @@
    return head+(L.depositIssuesError?'<div class="live-status live-error">'+E(L.depositIssuesError)+' · 保留上次结果</div>':'')+(L.depositIssuesLoading?'<div class="wo-loading">读取中…</div>':'')+(section==='summary'&&L.depositIssues?summaryCards(result):'')+'<div class="deposit-context"><button type="button" class="deposit-table-link" onclick="depositIssuesMethod()">统计口径</button>'+(entries&&L.depositIssues?'<button type="button" class="deposit-table-link" onclick="depositIssuesRefresh()" '+(L.depositIssuesLoading||L.depositIssuesDirty?'disabled':'')+'>刷新</button><span>每 30 秒更新</span>':'')+'<span>同步于 '+E(result.updatedAt?formatTime(result.updatedAt,'Asia/Kolkata'):'—')+' · 印度时间</span></div>'+tabs+'<div class="deposit-tables">'+content+'</div>';
   }
   async function load(reset=false,background=false){
-   if(!L.catalogReady)return;syncView();if(isStatistics()&&L.depositIssuesSection==='kyc')return kycWorkspace?.load();ensureDateRange();if(reset)L.depositIssuesPage=1;const serial=++L.depositIssuesSerial;
+   if(!L.catalogReady)return;syncView();if(isStatistics()&&L.depositIssuesSection==='recovery')return recoveryWorkspace?.load();if(isStatistics()&&L.depositIssuesSection==='kyc')return kycWorkspace?.load();ensureDateRange();if(reset)L.depositIssuesPage=1;const serial=++L.depositIssuesSerial;
    L.depositIssuesLoading=true;L.depositIssuesError='';L.depositIssuesDirty=false;L.dirty=false;if(!background)render();
    try{
     const q={action:isStatistics()?'depositStatistics':'depositIssues',...(isStatistics()?{section:L.depositIssuesSection}:{view:'entries'}),dateMode:L.depositIssuesDateMode,startAt:L.from.slice(0,10)+'T00:00:00.000Z',endAt:L.to.slice(0,10)+'T23:59:59.000Z',offset:(L.depositIssuesPage-1)*L.depositIssuesSize,limit:L.depositIssuesSize};
@@ -168,7 +170,7 @@
   root.depositIssuesRefresh=()=>refresh(true);
   const onFocus=()=>refresh(),onVisibility=()=>{if(root.document?.visibilityState==='visible')refresh()};
   function startRefresh(){if(refreshTimer!==null||ctx.page?.()!=='deposit_tracking'||!L.depositIssues||L.depositIssuesDirty||!root.document||!root.setInterval)return;refreshTimer=root.setInterval(()=>refresh(),30000);root.addEventListener?.('focus',onFocus);root.document.addEventListener?.('visibilitychange',onVisibility);}
-  function destroy(){kycWorkspace?.destroy();if(refreshTimer!==null)root.clearInterval?.(refreshTimer);refreshTimer=null;root.removeEventListener?.('focus',onFocus);root.document?.removeEventListener?.('visibilitychange',onVisibility);}
+  function destroy(){recoveryWorkspace?.pause();kycWorkspace?.destroy();if(refreshTimer!==null)root.clearInterval?.(refreshTimer);refreshTimer=null;root.removeEventListener?.('focus',onFocus);root.document?.removeEventListener?.('visibilitychange',onVisibility);}
   root.depositIssuesQuery=(form,event)=>readQuery(form,event,()=>{if(!L.depositIssuesLoading)return load(true)});
   function dirty(doRender=true){L.depositIssuesPage=1;L.depositIssuesSerial++;L.depositIssuesDirty=true;L.depositIssuesLoading=false;if(doRender)render()}
   root.depositIssuesSet=function(key,value){
@@ -188,7 +190,7 @@
   };
   root.depositIssuesDate=function(key,value){ensureDateRange();if(!['from','to'].includes(key)||!/^\d{4}-\d{2}-\d{2}$/.test(value))return;L[key]=value+(key==='from'?'T00:00:00':'T23:59:59');L.depositIssuesDateMode='range';dirty()};
   root.depositIssuesSource=function(value){if(!['results','entries'].includes(value))return;if(ctx.page&&root.setPage){root.setPage(value==='entries'?'deposit_tracking':'deposit_statistics');return;}L.depositIssuesView=value;L.depositIssuesSection=value==='entries'?'details':'summary';L.depositIssues=null;dirty()};
-  root.depositIssuesSection=function(value){const valid=isStatistics()?['summary','details','providers','daily','kyc']:['details'];if(valid.includes(value)){const hadResult=!!L.depositIssues||L.depositIssuesSection==='kyc';if(L.depositIssuesSection==='kyc')kycWorkspace?.pause();L.depositIssuesSection=value;L.depositIssuesFollowupState='all';L.depositIssuesExpanded=null;L.depositIssues=null;dirty();if(value==='kyc')return kycWorkspace?.load();if(hadResult)return load(true)}};
+  root.depositIssuesSection=function(value){const valid=isStatistics()?['summary','details','providers','daily','kyc','recovery']:['details'];if(valid.includes(value)){const hadResult=!!L.depositIssues||L.depositIssuesSection==='kyc';if(L.depositIssuesSection==='kyc')kycWorkspace?.pause();if(L.depositIssuesSection==='recovery')recoveryWorkspace?.pause();L.depositIssuesSection=value;L.depositIssuesFollowupState='all';L.depositIssuesExpanded=null;L.depositIssues=null;dirty();if(value==='recovery')return recoveryWorkspace?.load();if(value==='kyc')return kycWorkspace?.load();if(hadResult)return load(true)}};
   root.depositIssuesPending=()=>{if(!isStatistics())return;kycWorkspace?.pause();L.depositIssuesSection='details';L.depositIssuesFollowupState='unresolved';L.depositIssuesExpanded=null;L.depositIssuesStatus='all';L.depositIssuesConfirmation='';L.depositIssues=null;dirty();return load(true);};
   root.depositIssuesMonth=()=>{if(!L.catalogReady)return;const range=root.HensemWorkorderUI.currentMonth(L.country,L.catalog);L.from=range.from+'T00:00:00';L.to=range.to+'T23:59:59';L.depositIssuesDateMode='range';L.depositIssuesDateInitialized=true;dirty();};
   root.depositIssuesToday=()=>{if(!L.catalogReady)return;const range=root.HensemWorkorderUI.today(L.country,L.catalog.filter(p=>!L.depositIssuesPlatform||L.depositIssuesPlatform==='all'||p.name===L.depositIssuesPlatform));L.from=range.from+'T00:00:00';L.to=range.to+'T23:59:59';L.depositIssuesDateMode='range';L.depositIssuesDateInitialized=true;dirty();};
@@ -206,6 +208,6 @@
    else if(kind==='statuses')L.depositIssuesFollowupStatus=row.status;
    L.depositIssuesSection='details';load(true);
   };
-  return {render:view,load,refresh,destroy,pause:()=>{L.depositIssuesSerial++;L.depositIssuesLoading=false;kycWorkspace?.pause();},capture:()=>kycWorkspace?.capture(),restore:value=>kycWorkspace?.restore(value),clear:key=>{if(key==='deposit_statistics')kycWorkspace?.clear();}};
+  return {render:view,load,refresh,destroy,export:()=>L.depositIssuesSection==='recovery'?recoveryWorkspace?.export():false,pause:()=>{L.depositIssuesSerial++;L.depositIssuesLoading=false;kycWorkspace?.pause();recoveryWorkspace?.pause();},capture:()=>({kyc:kycWorkspace?.capture(),recovery:recoveryWorkspace?.capture()}),restore:value=>{kycWorkspace?.restore(value?.kyc??value);if(value?.recovery)recoveryWorkspace?.restore(value.recovery);else recoveryWorkspace?.clear();},clear:key=>{if(key==='deposit_statistics'){kycWorkspace?.clear();recoveryWorkspace?.clear();}}};
  }};
 })(window);

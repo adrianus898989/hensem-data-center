@@ -93,17 +93,37 @@ function filters(value: unknown, account: PortalAccount): Record<string, string>
   return result;
 }
 function pagination(value: unknown, fallback: number, max: number, min = 0) { const n = value ?? fallback; if (!Number.isSafeInteger(n) || (n as number) < min || (n as number) > max) fail('invalid_pagination'); return n as number; }
+function recovery(value: Record<string, any>, now: number) {
+  const kind = value.recoveryKind ?? 'unknown', amount = value.recoveryAmount ?? '', date = value.completedAt ?? '';
+  if (typeof kind !== 'string' || !['unknown','third_party','manual'].includes(kind)) fail('recovery_kind_invalid');
+  if (typeof amount !== 'string' || typeof date !== 'string') fail('invalid_entry');
+  const money = amount.trim(), completed = date.trim();
+  const provided = kind !== 'unknown' || money !== '' || completed !== '';
+  if (provided && value.outcome !== 'success') fail('recovery_status_required');
+  if (provided && (!money || !completed)) fail('recovery_details_required');
+  if (!provided) return { recoveryKind: kind, recoveryAmount: '', completedAt: '' };
+  if (!/^[0-9]{1,10}(?:\.[0-9]{1,2})?$/.test(money)) fail('recovery_amount_invalid');
+  const parts = money.split('.'), cents = BigInt(parts[0]) * 100n + BigInt((parts[1] || '').padEnd(2,'0'));
+  if (cents <= 0n) fail('recovery_amount_invalid');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(completed) || !Number.isFinite(Date.parse(completed + 'T00:00:00Z')) || new Date(completed + 'T00:00:00Z').toISOString().slice(0,10) !== completed || completed > indiaDay(new Date(now).toISOString())) fail('recovery_date_invalid');
+  return { recoveryKind: kind, recoveryAmount: `${cents / 100n}.${String(cents % 100n).padStart(2,'0')}`, completedAt: completed };
+}
 function entry(value: unknown, now: number) {
   let raw: Record<string, any>;
   try { raw = object(typeof value === 'string' ? JSON.parse(value || '{}') : value ?? {}); } catch { fail('invalid_entry'); }
-  const defaults = { upiId: '', kycUpiId: '', utr: '', kycCheck: 'unknown', utrMatch: 'unknown', providerReply: '', outcome: 'unknown', documentType: 'unknown', followedAt: '', orderDate: '' };
+  const defaults = { upiId: '', kycUpiId: '', utr: '', kycCheck: 'unknown', utrMatch: 'unknown', providerReply: '', outcome: 'unknown', documentType: 'unknown', followedAt: '', orderDate: '', recoveryKind: 'unknown', recoveryAmount: '', completedAt: '' };
   if (Object.keys(raw!).some(k => !Object.hasOwn(defaults, k))) fail('invalid_entry');
   const e = { ...defaults, ...raw! };
   if (Object.values(e).some(v => typeof v !== 'string') || !checks.has(e.kycCheck) || !checks.has(e.utrMatch) || !Object.hasOwn(evidence, e.documentType)) fail('invalid_entry');
   e.outcome = outcomeText(e.outcome);
   e.upiId = upi(e.upiId); e.kycUpiId = upi(e.kycUpiId, true); e.utr = identifier(e.utr); e.providerReply = safeNote(e.providerReply, 2000); e.followedAt = instant(e.followedAt); e.orderDate = ''; // Derived from the case order number below, never a client date.
   if (e.followedAt && Date.parse(e.followedAt) > now + 60000 || e.orderDate && e.orderDate > indiaDay(new Date(now).toISOString())) fail('invalid_date');
-  return e;
+  const parsed = { ...e, ...recovery(e, now) };
+  if (!['recoveryKind','recoveryAmount','completedAt'].some(key => Object.hasOwn(raw!,key))) {
+    const { recoveryKind: _kind, recoveryAmount: _amount, completedAt: _date, ...legacy } = parsed;
+    return legacy; // Preserve exact legacy payload for same-version metadata repair/idempotent outbox replay.
+  }
+  return parsed;
 }
 export function mirrorRecord(value: unknown, account: PortalAccount, now: number): Record<string, unknown> {
   if (account.role === 'auditor') throw new ApiError(403, 'read_only');
@@ -132,7 +152,9 @@ function normalizeRow(r: Record<string, any>, account: PortalAccount, now: numbe
   const rawAmount = r.amount, amount = rawAmount === null || rawAmount === undefined || rawAmount === '' ? null : Number(rawAmount);
   if (amount !== null && !Number.isFinite(amount)) throw new ApiError(503, 'invalid_response');
   const receipt = receiptFacts(r.order_number, now);
-  return { id: display(r.id), source: portal ? 'portal' : 'sheet', readOnly: !portal || account.role === 'auditor', portalCaseId: portal ? display(r.portal_case_id) : null, team: account.team, platform, orderNo: display(r.order_number), workorders: portal ? (Array.isArray(payload.workorders) ? payload.workorders.filter((v: unknown) => typeof v === 'string') : []) : r.work_order_number ? [display(r.work_order_number)] : [], utr: display(r.utr), upiId: display(r.upi_id), kycUpiId: display(r.kyc_upi_id), amount, provider: display(r.provider), kyc: checks.has(r.normalized_kyc) ? r.normalized_kyc : 'unknown', utrMatch: checks.has(r.normalized_utr) ? r.normalized_utr : 'unknown', reply: display(r.provider_reply), outcome: typeof r.normalized_outcome === 'string' && r.normalized_outcome.trim() && r.normalized_outcome.length <= 200 && !/[\u0000-\u001f\u007f-\u009f]/.test(r.normalized_outcome) ? r.normalized_outcome : 'unknown', orderDate: receipt.date, daysSinceOrder: receipt.days, followedAt: display(r.followup_at), lastFollowAt: portal ? display(payload.last_follow_at) : '', creator: portal ? display(r.first_actor) : '', follower: portal ? display(r.last_actor) : '', createdAt: portal ? display(payload.created_at) : '', updatedAt: display(r.source_updated_at || r.updated_at), sourceSheet: portal ? null : display(r.source_sheet), sourceTab: portal ? null : display(r.source_tab), sourceRow: portal ? null : r.source_row, rawFields: { staffCode: display(r.staff_code), followupStatus: display(r.followup_status), evidence: display(r.evidence), receiptText: display(r.receipt_text), sourceDateText: display(r.source_date_text) }, ownerId: portal ? display(r.portal_owner_id) : null, version: portal ? r.portal_version : undefined };
+  let recovered = { recoveryKind: 'unknown', recoveryAmount: '', completedAt: '' };
+  if (portal) { try { recovered = recovery(e, now); } catch { /* Invalid historic evidence stays unclassified; never infer a method or amount. */ } }
+  return { id: display(r.id), source: portal ? 'portal' : 'sheet', readOnly: !portal || account.role === 'auditor', portalCaseId: portal ? display(r.portal_case_id) : null, team: account.team, platform, orderNo: display(r.order_number), workorders: portal ? (Array.isArray(payload.workorders) ? payload.workorders.filter((v: unknown) => typeof v === 'string') : []) : r.work_order_number ? [display(r.work_order_number)] : [], utr: display(r.utr), upiId: display(r.upi_id), kycUpiId: display(r.kyc_upi_id), amount, provider: display(r.provider), kyc: checks.has(r.normalized_kyc) ? r.normalized_kyc : 'unknown', utrMatch: checks.has(r.normalized_utr) ? r.normalized_utr : 'unknown', reply: display(r.provider_reply), outcome: typeof r.normalized_outcome === 'string' && r.normalized_outcome.trim() && r.normalized_outcome.length <= 200 && !/[\u0000-\u001f\u007f-\u009f]/.test(r.normalized_outcome) ? r.normalized_outcome : 'unknown', orderDate: receipt.date, daysSinceOrder: receipt.days, followedAt: display(r.followup_at), lastFollowAt: portal ? display(payload.last_follow_at) : '', creator: portal ? display(r.first_actor) : '', follower: portal ? display(r.last_actor) : '', createdAt: portal ? display(payload.created_at) : '', updatedAt: display(r.source_updated_at || r.updated_at), sourceSheet: portal ? null : display(r.source_sheet), sourceTab: portal ? null : display(r.source_tab), sourceRow: portal ? null : r.source_row, rawFields: { staffCode: display(r.staff_code), followupStatus: display(r.followup_status), evidence: display(r.evidence), receiptText: display(r.receipt_text), sourceDateText: display(r.source_date_text) }, ownerId: portal ? display(r.portal_owner_id) : null, version: portal ? r.portal_version : undefined, recoveryKind: recovered.recoveryKind, recoveryAmount: recovered.recoveryAmount || null, completedAt: recovered.completedAt || null };
 }
 export function createWorkorderFollowupHandler(gateway: Gateway, options: { proxyKeySha256: string; now?: () => number }) {
   return async (request: Request): Promise<Response> => {
@@ -180,3 +202,4 @@ export function createWorkorderFollowupHandler(gateway: Gateway, options: { prox
     } catch (error) { return error instanceof ApiError ? json({ ok: false, code: error.code }, error.status) : json({ ok: false, code: 'service_unavailable' }, 503); }
   };
 }
+
