@@ -2,6 +2,7 @@ export type PortalAccount = { auth_user_id: string; role: string; active: boolea
 export type Gateway = {
   identify(headers: Headers): Promise<unknown>;
   list(account: PortalAccount, filters: Record<string, string>, offset: number, limit: number): Promise<any>;
+  export?(account: PortalAccount, filters: Record<string, string>): Promise<any>;
   mirror(record: Record<string, unknown>): Promise<boolean>;
   upi?(actor: string, request: Record<string, unknown>): Promise<any>;
 };
@@ -148,7 +149,7 @@ export function createWorkorderFollowupHandler(gateway: Gateway, options: { prox
       while (true) { const { done, value } = await reader!.read(); if (done) break; count += value.length; if (count > 65536) { await reader!.cancel(); fail('request_too_large'); } raw += decoder.decode(value, { stream: true }); } raw += decoder.decode();
       let body: Record<string, any>; try { body = object(JSON.parse(raw)); } catch { fail(); }
       const upiDirectory = ['upi-catalog', 'upi-list', 'upi-add', 'upi-lookup'].includes(body!.action);
-      if (!['list', 'mirror', 'upi-catalog', 'upi-list', 'upi-add', 'upi-lookup'].includes(body!.action) || Object.keys(body!).some(k => !(upiDirectory ? ['action','platform','provider','upiId','query','offset','limit'] : body!.action === 'list' ? ['action', 'filters', 'offset', 'limit'] : ['action', 'record']).includes(k))) fail();
+      if (!['list', 'export', 'mirror', 'upi-catalog', 'upi-list', 'upi-add', 'upi-lookup'].includes(body!.action) || Object.keys(body!).some(k => !(upiDirectory ? ['action','platform','provider','upiId','query','offset','limit'] : body!.action === 'list' ? ['action', 'filters', 'offset', 'limit'] : body!.action === 'export' ? ['action','filters'] : ['action', 'record']).includes(k))) fail();
       const account = identity(await gateway.identify(authHeaders), upiDirectory);
       if (upiDirectory) {
         if (!gateway.upi) throw new ApiError(503, 'service_unavailable');
@@ -159,6 +160,17 @@ export function createWorkorderFollowupHandler(gateway: Gateway, options: { prox
         return json(result);
       }
       if (body!.action === 'mirror') { const record = mirrorRecord(body!.record, account, (options.now ?? Date.now)()); if (await gateway.mirror(record) !== true) throw new ApiError(503, 'mirror_failed'); return json({ ok: true, id: record.id }); }
+      if (body!.action === 'export') {
+        if (!gateway.export) throw new ApiError(503, 'service_unavailable');
+        const query = filters(body!.filters, account), result = await gateway.export(account, query);
+        if (!result || !Array.isArray(result.rows) || !Number.isSafeInteger(result.total) || result.total < 0) throw new ApiError(503, 'invalid_response');
+        if (result.total > 50000 || result.rows.length > 50000) throw new ApiError(413, 'too_many_records');
+        if (result.rows.length !== result.total) throw new ApiError(503, 'invalid_response');
+        const now = (options.now ?? Date.now)(), rows = result.rows.map((r: unknown) => normalizeRow(object(r), account, now));
+        const encoded = JSON.stringify({ ok: true, rows, total: result.total });
+        if (new TextEncoder().encode(encoded).byteLength > 16 * 1024 * 1024) throw new ApiError(413, 'export_payload_too_large');
+        return new Response(encoded, { status: 200, headers });
+      }
       const query = filters(body!.filters, account), offset = pagination(body!.offset, 0, 1000000), limit = pagination(body!.limit, 50, 100, 1), result = await gateway.list(account, query, offset, limit);
       if (!result || !Array.isArray(result.rows) || result.rows.length > limit || !Number.isSafeInteger(result.total) || result.total < 0) throw new ApiError(503, 'invalid_response');
       const rows = result.rows.map((r: unknown) => normalizeRow(object(r), account, (options.now ?? Date.now)()));
