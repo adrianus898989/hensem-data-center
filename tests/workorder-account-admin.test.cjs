@@ -34,6 +34,17 @@ function fixture(overrides={}) {
     async update(id,expected,patch,actor){calls.push(['update',id,expected,patch,actor]);if(state.conflict)return null;state.account={...state.account,...patch,updated_at:'2026-09-26T00:00:01Z'};return state.account;},
     async resetPassword(id,password){calls.push(['reset',id,password]);},async audit(...args){calls.push(['audit',...args]);},
   };
+  // Explicit service-RPC test adapter. Actual SQL/policy equivalence is covered by
+  // workorder-identity-context-{sql,edge}.test.cjs; no authority is cached here.
+  gateway.meContext=async input=>{
+    const profile=await gateway.profile(input.actor),owner=profile&&profile.auth_user_id===input.actor&&profile.active===true&&profile.role==='owner';
+    const deny=(code,message)=>({version:1,ok:false,status:403,code,message});
+    if(!await gateway.sessionAllowed(input.token,input.actor,profile?'dashboard':'workorder'))return deny('session_denied','会话未通过登录策略，请重新登录');
+    if(!profile||input.proxyPresent){if(input.clientIp===null)return deny('proxy_denied','登录来源验证失败');if(!await gateway.ipCheck(profile?'dashboard':'workorder',input.clientIp,input.actor))return deny('ip_denied','当前 IP 不在登录白名单');}
+    let account=null;
+    if(!owner){if(profile)return deny('account_denied','此后台账号没有工单所有者权限');account=await gateway.account(input.actor);if(!account||account.auth_user_id!==input.actor||account.active!==true||!['agent','supervisor','auditor'].includes(account.role)||input.email?.toLowerCase()!==account.username+'@workorder.hensem.local')return deny('account_denied','工单账号未启用或未授权');}
+    return {version:1,ok:true,profile,account,catalogRows:await gateway.catalogRows()};
+  };
   return {state,calls,handler:createWorkorderAccountHandler(gateway,{allowedOrigins:[origin],proxyKeySha256:proxyHash})};
 }
 function req(body={action:'me'},headers={}){return new Request('https://unit.test/workorder-account-admin',{method:'POST',headers:{authorization:'Bearer user-token','content-type':'application/json','x-portal-proxy-key':proxyKey,'x-portal-client-ip':'203.0.113.7',...headers},body:JSON.stringify(body)});}
