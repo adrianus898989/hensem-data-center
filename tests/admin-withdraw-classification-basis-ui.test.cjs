@@ -9,7 +9,7 @@ async function fixture(current=row({previous:prior()}),extra={},options={}){
  const L={catalogReady:true,catalog:[{id:'synthetic-ar',name:'SYNTHETIC-AR',source:'ar',country:'印度',team:'M8'}],country:'印度',team:'M8',from:options.from||'2026-10-10',to:options.to||'2026-10-10'};
  const data={startDate:'2026-10-10',endDate:'2026-10-10',previousStartDate:'2026-10-09',previousEndDate:'2026-10-09',rows:[current],total:1,totals:current,previousTotals:current.previous,comparison:{complete:false},arCoverage:{coverageBasis:'unverified_source_continuity',currentComplete:false,previousComplete:false},...extra};
  const page=root.HensemLiveWithdrawPages.create({L,page:()=> 'auto_withdraw',E,C:String,N:String,R:(a,b)=>(100*Number(a)/Number(b)).toFixed(2)+'%',box:(_title,body)=>body,table:(headers,rows,cls,footers)=>{tables.push({headers,rows,cls,footers});return rows.flat().join('');},render:()=>{},request:async query=>{calls.push(query);return data;}});
- await page.load();if(options.daily)page.state.daily=true;
+ if(options.daily)page.state.daily=true;await page.load();
  return {page,L,data,calls,draw(){tables.length=0;const html=page.render();return {html,table:tables.find(t=>t.cls?.includes('withdraw-stat-table'))};}};
 }
 test('AR cutover preserves actual yesterday shares and unchanged automatic, success and rejection pp',async()=>{

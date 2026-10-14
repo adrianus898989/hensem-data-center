@@ -1,4 +1,5 @@
 export function validateDepositStatisticsRequest(value:Record<string,unknown>):Record<string,unknown>{
+ if(value.section==='recovery')return validateRecoveryRequest(value);
  if(value.section==='kyc')return validateKycRequest(value);
  const textKeys=['country','platform','provider','status','match','confirmation','orderNumber','utr','upiId','kycUpiId','reply','utrMatch','kycCorrect'];
  const allowed=new Set(['action','section','dateMode','startAt','endAt','offset','limit','amountMin','amountMax','followupState',...textKeys]);
@@ -12,6 +13,26 @@ export function validateDepositStatisticsRequest(value:Record<string,unknown>):R
  if(value.amountMin!==undefined&&value.amountMax!==undefined&&Number(value.amountMin)>Number(value.amountMax))throw Error('金额范围无效');
  if(value.dateMode==='range'){
   for(const key of ['startAt','endAt']){const v=value[key];if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(v)||!Number.isFinite(Date.parse(v))||new Date(v).toISOString().slice(0,10)!==v.slice(0,10))throw Error('日期无效');}
+  const span=Date.parse(String(value.endAt).slice(0,10))-Date.parse(String(value.startAt).slice(0,10));if(span<0||span>366*86400000)throw Error('日期范围最多367天');
+ }
+ return {...value};
+}
+
+function validateRecoveryRequest(value:Record<string,unknown>):Record<string,unknown>{
+ const textKeys=['country','platform','provider','orderNumber'];
+ const allowed=new Set(['action','section','view','dateMode','startAt','endAt','offset','limit','recoveryState','export',...textKeys]);
+ if(Object.keys(value).some(key=>!allowed.has(key)))throw Error('补单统计筛选字段无效');
+ const enums:Record<string,readonly string[]>={view:['summary','details'],dateMode:['all','range'],recoveryState:['all','third_party','manual','received_unknown','unreceived','conflict']};
+ for(const [key,values] of Object.entries(enums))if(value[key]!==undefined&&(typeof value[key]!=='string'||!values.includes(value[key] as string)))throw Error('补单统计视图无效');
+ for(const key of textKeys)if(value[key]!==undefined&&(typeof value[key]!=='string'||value[key].length>200||/[\u0000-\u001f\u007f]/.test(value[key])))throw Error('补单统计筛选内容无效');
+ if(value.country!==undefined&&!['','all','印度','IN'].includes(String(value.country)))throw Error('补单统计目前仅接入印度');
+ if(value.export!==undefined&&typeof value.export!=='boolean')throw Error('导出参数无效');
+ if(value.export===true&&value.view!=='details')throw Error('导出必须使用完整明细视图');
+ if(value.offset!==undefined&&(!Number.isSafeInteger(value.offset)||Number(value.offset)<0||Number(value.offset)>1000000)||value.limit!==undefined&&(typeof value.limit!=='number'||![20,50,100].includes(value.limit)))throw Error('分页参数无效');
+ if(value.export===true&&value.offset!==undefined&&value.offset!==0)throw Error('完整导出必须从第一条开始');
+ for(const key of ['startAt','endAt'])if(value[key]!==undefined){const v=value[key];if(typeof v!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(v)||!Number.isFinite(Date.parse(v))||new Date(v).toISOString().slice(0,10)!==v.slice(0,10))throw Error('日期无效');}
+ if(value.dateMode==='range'){
+  if(value.startAt===undefined||value.endAt===undefined)throw Error('日期无效');
   const span=Date.parse(String(value.endAt).slice(0,10))-Date.parse(String(value.startAt).slice(0,10));if(span<0||span>366*86400000)throw Error('日期范围最多367天');
  }
  return {...value};

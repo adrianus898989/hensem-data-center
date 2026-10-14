@@ -454,6 +454,11 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
    if(Date.now()>=item.deadline){stop(item,true);return;}
    const controller=new AbortController();item.controller=controller;active.set(item.id,item);
    try{
+    if((item.request as {action?:unknown;section?:unknown})?.action==="depositStatistics"&&(item.request as {section?:unknown}).section==="recovery"){
+     const request=validateAdminLiveRequest(item.request),access=options.roleAccess?.();
+     const required=["view","query",...(request.view==="details"?["detail"]:[]),...(request.export===true?["export"]:[])];
+     if(item.page!=="deposit_statistics"||!access?.canView||!(access.mode==="owner"||access.mode==="assigned"&&required.every(key=>access.permissions.includes("deposit_statistics."+key))))throw Error("当前账号没有补单核对或导出权限");
+    }
     if((item.request as {action?:unknown})?.action==="collectorControl"){
      const request=validateAdminLiveRequest(item.request),access=options.roleAccess?.(),permission=request.operation==="overview"?"view":"edit";
      if(item.page!=="collector_control"||!access?.canView||!(access.mode==="owner"||access.mode==="assigned"&&access.permissions.includes("collector_control.view")&&access.permissions.includes("collector_control."+permission)))throw Error("当前账号没有采集管理操作权限");
@@ -527,10 +532,10 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
    // Configuration batches continue while the user browses another page. Keep
    // their original permission context; the server still checks this page and action.
    const page=request?.action==='payoutConfig'?'payout_config':window.hensemCurrentAdminPage?.()||window.hensemAdminInitialPage;
-   const operation=request?.action==='collectorControl'?(request.operation==='overview'?'view':'edit'):request?.action==='withdrawNote'?'edit':request?.action==='configurationWrite'?(request.operation==='grant'?'grant':'edit'):['catalog','providerOptions','configurationAccess'].includes(request?.action)?'view':'query';
+   const operation=request?.action==='depositStatistics'&&request.section==='recovery'&&request.export===true?'export':request?.action==='collectorControl'?(request.operation==='overview'?'view':'edit'):request?.action==='withdrawNote'?'edit':request?.action==='configurationWrite'?(request.operation==='grant'?'grant':'edit'):['catalog','providerOptions','configurationAccess'].includes(request?.action)?'view':'query';
    if(request?.action==='collectorControl'&&page!=='collector_control'){reject(error('采集管理页面无效','ROLE_DENIED'));return;}
    if(!window.hensemRoleAllowed(page,operation)){reject(error('当前角色没有此页面或操作权限','ROLE_DENIED'));return;}
-   const detail=['details','query','analysisOrders','pendingOrders'].includes(request?.action)||['submissionAnalysis','submissionStreak'].includes(request?.action)&&['members','memberOrders'].includes(request.operation)||request?.action==='aggregate'&&request.view==='drilldown'||request?.action==='workorderRecords'&&['detail','orderDetail'].includes(request.operation)||request?.action==='depositStatistics'&&(request.section==='details'||request.section==='kyc'&&request.dimension==='orders')||request?.action==='depositIssues'&&page==='deposit_statistics';
+   const detail=['details','query','analysisOrders','pendingOrders'].includes(request?.action)||['submissionAnalysis','submissionStreak'].includes(request?.action)&&['members','memberOrders'].includes(request.operation)||request?.action==='aggregate'&&request.view==='drilldown'||request?.action==='workorderRecords'&&['detail','orderDetail'].includes(request.operation)||request?.action==='depositStatistics'&&(request.section==='details'||request.section==='kyc'&&request.dimension==='orders'||request.section==='recovery'&&request.view==='details')||request?.action==='depositIssues'&&page==='deposit_statistics';
    if(detail&&!window.hensemRoleAllowed(page,'detail')){reject(error('当前角色没有查看明细权限','ROLE_DENIED'));return;}
 
    const signal=options.signal;if(signal&&signal.aborted){reject(error('查询已取消','ADMIN_LIVE_CANCELLED'));return;}

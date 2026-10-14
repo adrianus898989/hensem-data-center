@@ -47,7 +47,7 @@ test('daily and operator modes keep server pagination; incomplete large lists ar
 
 test('sorting during an active initial read does not overlap it and late/cancelled or changed-scope results are not reused',async()=>{
  const wait=deferred(),h=fixture([row('A')],{handler:()=>wait.promise}),pending=h.page.load();h.c.withdrawSort('success');h.c.withdrawSize(50);assert.equal(h.calls.length,1);wait.resolve({total:1,rows:[row('A')],totals:{total:1},notes:[]});await pending;assert.equal(h.page.state.localSnapshot,true);assert.equal(h.page.state.size,50);assert.equal(h.calls.length,1);
- h.c.withdrawDate('from','2026-10-10');assert.equal(h.page.state.localSnapshot,false);h.c.withdrawSort('total');assert.equal(h.calls.length,1,'dirty scope waits for explicit query');
+ h.c.withdrawDate('from','2026-10-10');assert.equal(h.page.state.localSnapshot,true);h.c.withdrawSort('total');assert.equal(h.calls.length,1,'draft sorting reuses only the old applied snapshot');
  const late=deferred();h.setHandler(()=>late.promise);const read=h.page.load();h.page.cancel();late.resolve({total:1,rows:[row('OLD')],totals:{total:1},notes:[]});await read;assert.equal(h.page.state.data,null);
 });
 
