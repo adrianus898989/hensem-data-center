@@ -35,7 +35,7 @@
   }
   function datePreset(which){
    const today=root.HensemWorkorderUI?.today('印度',L.catalog)?.to||new Date().toISOString().slice(0,10);
-   if(which==='all')filters.dateMode='all';
+   if(which==='all'){filters.dateMode='all';filters.from='';filters.to='';}
    else{const d=new Date(today+'T00:00:00Z');if(which==='previous')d.setUTCMonth(d.getUTCMonth()-1,1);else d.setUTCDate(1);filters.from=d.toISOString().slice(0,10);filters.to=which==='previous'?new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0)).toISOString().slice(0,10):today;filters.dateMode='range';}
    dirty=true;serial++;loading=false;syncBusy();page=1;render();
   }
