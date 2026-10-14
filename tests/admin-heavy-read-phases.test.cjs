@@ -102,7 +102,7 @@ test('fee failure is terminal and does not stop workorders, comparison, reconcil
 test('navigation during supplementary reads aborts both lanes and cannot restore late fees or exclusions',async()=>{
  const h=await setup(),old=h.c.liveQuery();await settle();for(let n=0;n<3;n++)await advance(h);const prior=h.waiting.splice(0);assert.deepEqual(prior.map(e=>e.q.action).sort(),['rates','submissionAnalysis']);h.c.setPage('amount');assert(prior.every(e=>e.signal.aborted));await old;await settle();assert.equal(h.active(),0);assert.equal(h.history.length,5);assert.equal(h.L.feeLookupLoading,false);assert.equal(h.L.feeLookupRows,null);assert.equal(h.L.feeLookupError,'');
  for(const e of prior)e.d.resolve(e.q.action==='rates'?{total:1,rows:[{id:'STALE-FEE'}]}:reply(e.q));await settle();assert.equal(h.L.feeLookupRows,null);h.c.setPage('providers');const fresh=h.c.liveQuery();await finish(h,fresh);assert.equal(h.max(),2);assert.deepEqual(Array.from(h.L.feeLookupRows),[]);assert.equal(h.L.results.length,3);
- const next=h.c.liveQuery(true);await finish(h,next);assert.equal(h.history.filter(q=>q.action==='rates').length,2,'complete fee cache retains its existing refresh semantics');assert.equal(h.max(),2);
+ const next=h.c.liveQuery(true);await finish(h,next);assert.equal(h.history.filter(q=>q.action==='rates').length,3,'explicit force refresh rereads the complete fee directory');assert.equal(h.max(),2);
 });
 test('changed scope aborts both supplementary lanes and old finally cannot release the fresh query phase',async()=>{
  const h=await setup(),old=h.c.liveQuery();await settle();for(let n=0;n<3;n++)await advance(h);const prior=h.waiting.splice(0),count=h.history.length;

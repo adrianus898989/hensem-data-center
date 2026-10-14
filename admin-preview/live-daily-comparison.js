@@ -65,7 +65,7 @@
    const currencies=[...new Set(scope.platforms.map(p=>p.currency).filter(Boolean))];
    if(currencies.length!==1||currencies[0]!==scope.currency){S.error='请选择同一原始币种的平台，金额不能跨币种相加。';S.status='error';paint();return;}
    scope.key=scopeKey(scope);const resume=!force&&S.scope?.key===scope.key&&(['paused','partial'].includes(S.status)||['paused','partial'].includes(S.workStatus));scope.now=resume?S.scope.now:Date.now();const token=++serial,native=new Set(scope.native),querySerial=++L.serial;
-   S.scope=scope;S.status='loading';S.error='';if(!resume){S.payments={};S.comparePayments={};S.workorders={};S.workStatus='idle';S.expanded=null;S.trend=null;}L.pageQueried=true;L.dirty=false;L.loading=false;
+   S.scope=scope;S.status='loading';S.error='';if(!resume){S.payments={};S.comparePayments={};S.workorders={};S.workStatus='idle';S.expanded=null;S.trend=null;}L.pageQueried=true;L.dirty=false;L.loading=false;c.prepareFeeLookupQuery?.(force);
    const dayList=dates(scope);for(const day of dayList){S.payments[day]??={};for(const p of scope.platforms)S.payments[day][p.id]??={status:native.has(p.id)?'pending':'unsupported',note:native.has(p.id)?'尚未读取':'仅目录，未接入订单'};}
    if(S.direction==='workorder'){S.status='idle';await loadWorkorders(!resume);return;}
    paint();Promise.resolve(c.ensureFeeLookup()).catch(()=>{});
