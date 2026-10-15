@@ -95,9 +95,10 @@ test('previous full empty-hour coverage means genuine zeros; incomplete previous
 });
 
 function actualAggregateRead(){
- const live=fs.readFileSync(path.join(root,'admin-preview/live-data.js'),'utf8'),ast=ts.createSourceFile('live-data.js',live,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS),functions=[],variables=[];
- const wantedFunctions=new Set(['query','successDateValid','readAggregate','mergeParts','combine','plus']),wantedVariables=new Set(['countKeys','amountKeys','empty','isSuccessAnalysis']);
- function walk(n){if(ts.isFunctionDeclaration(n)&&wantedFunctions.has(n.name?.text))functions.push(n.getText(ast));if(ts.isVariableDeclaration(n)&&wantedVariables.has(n.name.getText(ast)))variables.push('const '+n.getText(ast)+';');ts.forEachChild(n,walk)}walk(ast);assert.equal(functions.length,6);assert.equal(variables.length,4);
+ const live=fs.readFileSync(path.join(root,'admin-preview/live-data.js'),'utf8'),ast=ts.createSourceFile('live-data.js',live,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS),functions=[],functionNames=[],variables=[];
+ const wantedFunctions=new Set(['query','readAggregate','mergeParts','combine','plus']),wantedVariables=new Set(['countKeys','amountKeys','empty','isSuccessAnalysis']);
+ function walk(n){if(ts.isFunctionDeclaration(n)&&wantedFunctions.has(n.name?.text)){functions.push(n.getText(ast));functionNames.push(n.name.text);}if(ts.isVariableDeclaration(n)&&wantedVariables.has(n.name.getText(ast)))variables.push('const '+n.getText(ast)+';');ts.forEachChild(n,walk)}walk(ast);assert.deepEqual(functionNames.sort(),[...wantedFunctions].sort(),'load every actual query/read/merge dependency exactly once');assert.equal(variables.length,4);
+ // query no longer depends on the retired success-only single-date validator.
  // Include the real document-scoped cache and transport together; readAggregate
  // now verifies permissions, source identity and exact response boundaries.
  const cacheStart=live.indexOf(' const aggregateCache='),cacheEnd=live.indexOf(' async function readAggregate(',cacheStart);assert(cacheStart>=0&&cacheEnd>cacheStart);const cache=live.slice(cacheStart,cacheEnd);
@@ -111,10 +112,11 @@ test('actual previous query and split reads preserve their dimension mode while 
  const c=actualAggregateRead(),p=c.L.catalog[0],request=c.buildQuery(p,'aggregate',true);
  assert.equal(request.view,'providers','the previous period intentionally requests totals without hourly data');
  const provider=await c.read({...request,startAt:'2026-09-27T00:00:00Z',endAt:'2026-09-29T00:00:00Z'},1);
- assert.equal(c.calls.length,2);assert.equal(provider._aggregateView,'providers');assert.equal(provider.groups.hourly.length,0,'split merge creates empty dimension arrays even when not requested');
+ assert.equal(c.calls.length,2);assert(c.calls.every(q=>q.view==='providers'));assert.equal(c.calls[0].startAt,'2026-09-27T00:00:00.000Z');assert.equal(c.calls[0].endAt,c.calls[1].startAt);assert.equal(c.calls[1].endAt,'2026-09-29T00:00:00.000Z');assert.equal(provider._aggregateView,'providers');assert.equal(provider.groups.hourly.length,0,'split merge creates empty dimension arrays even when not requested');
  const current=actualChart({comparisonResults:[provider]}),previous=modelFrom(current.draw(false,'charge')).series[2];assert.equal(previous.complete,false);assert(previous.points.every(v=>v===null));
- const fullRequest={...request,startAt:'2026-09-25T00:00:00Z',endAt:'2026-09-27T00:00:00Z'};delete fullRequest.view;
- const full=await c.read(fullRequest,1);assert.equal(full._aggregateView,'full');const reads=c.calls.length;
+ const currentRequest=c.buildQuery(p,'aggregate');assert.equal(currentRequest.view,undefined,'the actual current query requests all chart dimensions');
+ const fullRequest={...currentRequest,startAt:'2026-09-25T00:00:00Z',endAt:'2026-09-27T00:00:00Z'};
+ const full=await c.read(fullRequest,1);assert.equal(full._aggregateView,'full');assert.equal(c.calls.length,3);assert.equal(c.calls[2].view,undefined);const reads=c.calls.length;
  const cached=await c.read({...fullRequest,view:'providers'},1,true);assert.equal(c.calls.length,reads,'coverage tracking causes no extra request');assert.equal(cached._aggregateView,'full','reusing a full payload does not downgrade its dimension evidence');
  current.L.comparisonResults=[cached];const zero=modelFrom(current.draw(false,'charge')).series[2];assert.equal(zero.complete,true);assert(zero.points.every(v=>v===0));
 });
