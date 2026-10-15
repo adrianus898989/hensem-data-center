@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDashboardAuth } from "./DashboardAuthGate";
 import OwnerAdminPreview from "./OwnerAdminPreview";
-import { ownerPreviewVerificationAttempt } from "@/lib/ownerPreviewVerification";
+import { ownerPreviewRetryable, ownerPreviewVerificationAttempt, retryOwnerPreviewVerification } from "@/lib/ownerPreviewVerification";
 import { readAdminPreviewAccess } from "@/lib/adminPreviewClient";
 import { adminPreviewPageFromHash } from "@/lib/adminLiveBridge";
 import { canOpenAdminCenter } from "@/lib/dashboardAuthClient";
@@ -36,26 +36,37 @@ export default function OfficialDashboard() {
 
   useEffect(() => mountOwnerPreviewHostShell(), []);
   useEffect(() => {
-    let stopped = false, checking = false;
+    let stopped = false, checking = false, finished = false;
     setAccess({ accountId, canView: false, ready: false, error: "" });
     if (!active || owner) return;
     const controller = new AbortController();
     const check = async () => {
-      if (stopped || checking) return;
+      if (stopped || checking || finished) return;
       const current = sessionRef.current;
       if (!current || current.user.id !== accountId) return;
       checking = true;
       try {
-        const result = await ownerPreviewVerificationAttempt(signal => readAdminPreviewAccess(current, signal), controller.signal);
-        if (!stopped) setAccess({ accountId, canView: result.canView === true, ready: true, error: "" });
+        const result = await retryOwnerPreviewVerification(() => ownerPreviewVerificationAttempt(signal => {
+          const activeSession = sessionRef.current;
+          if (!activeSession || activeSession.user.id !== accountId) { const error = new Error("后台验证已取消"); error.name = "AbortError"; throw error; }
+          return readAdminPreviewAccess(activeSession, signal);
+        }, controller.signal), controller.signal, () => {});
+        if (!stopped) { finished = true; setAccess({ accountId, canView: result.canView === true, ready: true, error: "" }); }
       } catch (error) {
-        if (!stopped) setAccess({ accountId, canView: false, ready: true, error: error instanceof Error ? error.message : "查看权限验证失败，请重试。" });
+        if (!stopped) {
+          finished = !ownerPreviewRetryable(error);
+          setAccess({ accountId, canView: false, ready: true, error: finished ? (error instanceof Error ? error.message : "查看权限验证失败，请重试。") : "后台验证连接暂时不可用，恢复连接后会自动重试。" });
+        }
       } finally { checking = false; }
     };
     void check();
-    // The mounted preview owns periodic, bounded permission revalidation.
-    // A second one-shot poll here used to unmount it on a transient failure.
-    return () => { stopped = true; controller.abort(); };
+    // Only recover an unverified initial entry. Once granted or denied, the
+    // mounted preview alone owns periodic authorization; this cannot reset it.
+    const recover = () => { void check(); };
+    const timer = window.setInterval(recover, 60000);
+    window.addEventListener("online", recover);
+    window.addEventListener("focus", recover);
+    return () => { stopped = true; controller.abort(); window.clearInterval(timer); window.removeEventListener("online", recover); window.removeEventListener("focus", recover); };
   }, [active, owner, accountId, retry]);
 
   useEffect(() => {

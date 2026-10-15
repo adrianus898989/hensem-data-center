@@ -468,11 +468,29 @@ export async function ensureDashboardSession(session: DashboardSession, force = 
   const coordinated = async (): Promise<DashboardSession> => {
     const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
     if (!locks?.request) return refresh();
+    const waiting = new AbortController();
+    const waitExpired = () => new DashboardHttpError("登录续期等待超时，已保留登录状态，请稍后重试", 0, "refresh_coordination_timeout");
+    let waitTimer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      waitTimer = setTimeout(() => { waiting.abort(); reject(waitExpired()); }, 15000);
+    });
     try {
-      return await locks.request(`hensem:dashboard-refresh:${publicConfig().url}:${candidate.user.id}`, { mode: "exclusive" }, refresh);
+      return await Promise.race([
+        locks.request(`hensem:dashboard-refresh:${publicConfig().url}:${candidate.user.id}`, { mode: "exclusive", signal: waiting.signal }, () => {
+          // A waiting tab must never steal the lock or refresh after its deadline.
+          // Once granted, the existing HTTP deadline owns the refresh instead.
+          if (waiting.signal.aborted) throw waitExpired();
+          clearTimeout(waitTimer);
+          return refresh();
+        }),
+        deadline,
+      ]);
     } catch (error) {
       if (error instanceof DashboardHttpError) throw error;
+      if (waiting.signal.aborted) throw waitExpired();
       throw new DashboardHttpError("登录续期协调暂时失败，请稍后重试", 0, "refresh_coordination_failed");
+    } finally {
+      clearTimeout(waitTimer);
     }
   };
   let flight: Promise<DashboardSession>;

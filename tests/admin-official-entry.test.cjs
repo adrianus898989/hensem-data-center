@@ -78,8 +78,24 @@ test('old module links and hash changes redirect to safe formal pages without le
  for(const [hash,page] of Object.entries(cases)){const old=h.frame().key;h.location.hash=hash;h.send('hashchange');assert.equal(h.location.hash,'#admin/'+page);assert(h.frame());assert.notEqual(h.frame().key,old)}assert.equal(h.requests.length,0);h.frame().props.onLogout();assert.equal(h.loggedOut(),1);h.dispose();
 });
 
-test('initial access body timeout becomes retryable UI and a late result never mounts an unauthorized frame',async()=>{
- const timers=new Map();let signal,resolve,seq=0;const h=harness({access:(_session,s)=>{signal=s;return new Promise(r=>resolve=r)},setTimeout:(fn,ms)=>{timers.set(++seq,{fn,ms});return seq},clearTimeout:id=>timers.delete(id)});
- await flush();assert.equal(h.frame(),null);assert.equal(timers.size,1);const timer=[...timers.values()][0];assert.equal(timer.ms,15000);timer.fn();await flush();assert.equal(signal.aborted,true);assert.equal(timers.size,0);assert.match(h.text(),/重新验证/);assert.equal(h.frame(),null);
- resolve({canView:true});await flush();assert.equal(h.frame(),null);h.dispose();
+function retryClock(){let seq=0;const timers=new Map();return{timers,setTimeout:(fn,ms)=>{timers.set(++seq,{fn,ms});return seq},clearTimeout:id=>timers.delete(id),fire(ms){const item=[...timers].find(([,timer])=>timer.ms===ms);assert(item,'expected bounded timer '+ms);timers.delete(item[0]);item[1].fn();}};}
+test('initial access body timeouts stay bounded and late responses never mount a frame',async()=>{
+ const clock=retryClock(),pending=[],h=harness({...clock,access:(_session,signal)=>new Promise(resolve=>pending.push({signal,resolve}))});
+ try{for(let i=0;i<3;i++){await flush();assert.equal(h.frame(),null);assert.equal(pending.length,i+1);clock.fire(15000);await flush();assert.equal(pending[i].signal.aborted,true);if(i<2){h.send('online');await flush();assert.equal(pending.length,i+1);clock.fire(i===0?500:1500);}}
+  await flush();assert.equal(clock.timers.size,0);assert.match(h.text(),/自动重试/);assert.match(h.text(),/重新验证/);pending.forEach(p=>p.resolve({canView:true}));await flush();assert.equal(h.frame(),null);
+ }finally{h.dispose()}
+});
+test('initial transient access outage recovers on a later online event without another outer poll after grant',async()=>{
+ const clock=retryClock();let healthy=false;const h=harness({...clock,access:async()=>{if(!healthy)throw Object.assign(Error('synthetic temporary outage'),{status:503,code:'auth_unavailable'});return{canView:true}}});
+ try{await flush();clock.fire(500);await flush();clock.fire(1500);await flush();assert.equal(h.requests.length,3);assert.equal(h.frame(),null);assert.match(h.text(),/自动重试/);healthy=true;h.send('online');await flush();assert.equal(h.requests.length,4);const key=h.frame().key;h.tick();h.send('focus');h.send('online');await flush();assert.equal(h.requests.length,4);assert.equal(h.frame().key,key);}
+ finally{h.dispose()}
+});
+test('explicit initial access denial never automatically retries or mounts a frame',async()=>{
+ for(const outcome of ['denied','false','malformed']){const clock=retryClock(),h=harness({...clock,access:async()=>{if(outcome==='denied')throw Object.assign(Error('synthetic policy denied'),{status:403,code:'preview_denied'});if(outcome==='malformed')throw Error('synthetic invalid permission response');return{canView:false}}});
+  try{await flush();h.send('online');h.send('focus');h.tick();await flush();assert.equal(h.requests.length,1);assert.equal(clock.timers.size,0);assert.equal(h.frame(),null);}
+  finally{h.dispose()}
+ }
+});
+test('unmount during initial retry backoff removes all scheduled recovery and ignores old results',async()=>{
+ const clock=retryClock(),h=harness({...clock,access:async()=>{throw Object.assign(Error('synthetic transport'),{status:503})}});await flush();assert.equal(clock.timers.size,1);h.dispose();await flush();assert.equal(clock.timers.size,0);h.send('online');h.tick();await flush();assert.equal(h.requests.length,1);
 });

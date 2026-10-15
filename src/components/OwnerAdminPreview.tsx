@@ -56,7 +56,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
     const abandon=()=>{const error=new Error("后台验证已取消");error.name="AbortError";return error};
     const fail=(e:unknown)=>{if(cancelled)return;cancelled=true;controller.abort();clearPreview();setVerificationStatus("");setError(e instanceof Error?e.message:"后台加载失败")};
     const request=async(check=false)=>{
-      const mine=++revision;let recovering=false,authorityInput=sessionRef.current,authorityCurrent=authorityInput;
+      checking=true;const mine=++revision;let recovering=false,authorityInput=sessionRef.current,authorityCurrent=authorityInput;
       const observeSession=(current:DashboardSession)=>{authorityCurrent=current};
       const staleAuthority=()=>sessionRef.current.user.id!==authorityCurrent.user.id||(sessionRef.current.access_token!==authorityInput.access_token&&sessionRef.current.access_token!==authorityCurrent.access_token);
       const beginAuthority=()=>{authorityInput=sessionRef.current;authorityCurrent=authorityInput;return authorityInput};
@@ -96,7 +96,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
         if(html!==null){published=true;setDocumentHtml(html)}
       } catch(e) {if(!obsolete(mine)){
         if(staleAuthority()){retrying=false;void request(check);return;}
-        if(published&&ownerPreviewRetryable(e)){suspendPreview();retrying=false;setVerificationStatus("");setError("连接暂时不可用，页面状态已保留，正在等待重新验证。")}else fail(e);
+        if(ownerPreviewRetryable(e)){suspendPreview();retrying=false;setVerificationStatus("");setError(published?"连接暂时不可用，页面状态已保留，正在等待重新验证。":"后台验证连接暂时不可用，恢复连接后会自动重试。")}else fail(e);
       }}finally{if(mine===revision)checking=false}
     };
     accessDeniedRef.current=kind=>{
@@ -105,11 +105,11 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
       clearPreview();channel.current=crypto.randomUUID();
       // A module denial refreshes role/scope once. Repeated denial stays stopped,
       // without logging out or repeatedly querying a forbidden module.
-      if(kind==='permission'&&!accessRechecked){accessRechecked=true;checking=true;retrying=false;setError("");setVerificationStatus("访问权限已改变，正在重新验证后台…");const mine=revision+1;void request(false).finally(()=>{if(revision===mine)checking=false})}
+      if(kind==='permission'&&!accessRechecked){accessRechecked=true;retrying=false;setError("");setVerificationStatus("访问权限已改变，正在重新验证后台…");void request(false)}
       else fail(Error(kind==='session'?"登录会话或账号访问授权已失效，请重新验证。":"当前操作未获授权，请核对角色权限后重新加载。"));
     };
     void request();
-    const verify=()=>{if(checking||cancelled||retrying)return;checking=true;const mine=revision+1;void request(true).finally(()=>{if(revision===mine)checking=false})};
+    const verify=()=>{if(checking||cancelled||retrying)return;void request(true)};
     reconnectRef.current=verify;
     const timer=window.setInterval(verify,60000);
     window.addEventListener("online",verify);

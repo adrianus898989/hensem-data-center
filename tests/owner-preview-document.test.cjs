@@ -252,30 +252,16 @@ test('restoration failure aborts the request, clears stale document state and ne
   } finally {resolveHTML(HTML);h.dispose()}
 });
 
-test('403 permission check aborts an initial HTML load and late success cannot restore the frame', async () => {
-  let resolveHTML;
-  const lateHTML = new Promise(resolve => { resolveHTML = resolve; });
-  const h = componentHarness('offline-revoked-user', { fetch: async url => url.endsWith('?check=1')
-    ? { ok: false, status: 403 }
-    : { ok: true, status: 200, text: () => lateHTML } });
+test('a definitive 403 after an initial timeout clears authorization and late HTML cannot restore it', async () => {
+  let resolveHTML,reads=0;const lateHTML=new Promise(resolve=>{resolveHTML=resolve}),clock=retryClock();
+  const h=componentHarness('offline-revoked-user',{...clock,fetch:async()=>++reads===1?{ok:true,status:200,text:()=>lateHTML}:{ok:false,status:403,json:async()=>({code:'preview_denied'})}});
   try {
-    await flush();
-    assert.equal(h.calls.length, 1, 'initial HTML request has started');
-    const initialSignal = h.calls[0].init.signal;
-    assert.equal(initialSignal.aborted, false);
-    h.checkPermission(); await flush();
-    assert.equal(h.calls.length, 2);
-    assert.equal(h.calls[1].url.endsWith('?check=1'), true);
-    assert.equal(initialSignal.aborted, true, 'revocation must abort the shared initial request');
-    assert.equal(h.states[1], ''); assert(h.states[2], 'revocation remains visible as an error');
-    // Deliberately resolve despite abort: a buffered or non-abortable body must still be ignored.
-    resolveHTML(HTML); await flush();
-    assert.equal(h.states[1], '', 'late initial HTML cannot restore documentHtml after revocation');
-    assert.equal(h.restoreCalls.length,0,'revoked buffered HTML never reaches the transformation');
-    assert.equal(findElement(h.draw(), 'iframe'), undefined);
-    h.checkPermission(); await flush();
-    assert.equal(h.calls.length, 2, 'cancelled effect cannot issue further permission requests');
-  } finally { resolveHTML(HTML); h.dispose(); }
+    await flush();assert.equal(h.calls.length,1);const initialSignal=h.calls[0].init.signal;
+    h.checkPermission();await flush();assert.equal(h.calls.length,1,'an existing initial verification is never duplicated');
+    clock.next();await flush();assert.equal(initialSignal.aborted,true);clock.next();await flush();assert.equal(h.calls.length,2);
+    assert.equal(h.states[1],'');assert(h.states[2]);resolveHTML(HTML);await flush();assert.equal(h.states[1],'');assert.equal(h.restoreCalls.length,0);assert.equal(findElement(h.draw(),'iframe'),undefined);
+    h.checkPermission();await flush();assert.equal(h.calls.length,2,'explicit denial still permanently stops this verification lifecycle');assert.equal(clock.timers.size,0);
+  } finally { resolveHTML(HTML);h.dispose(); }
 });
 
 test('host accepts only its current opaque frame, matching channel and allowed draft key', async () => {
@@ -471,9 +457,9 @@ test('temporary entry 503 automatically rereads role and fresh HTML after short 
  try{await flush();assert.equal(h.calls.length,1);assert.equal(h.states[0],null);assert(!findElement(h.draw(),'iframe'));assert.match(JSON.stringify(h.draw()),/重新验证查看权限.*2\/3/);assert.deepEqual(clock.delays,[15000,500]);assert.equal(clock.timers.size,1,'the completed attempt clears its deadline and leaves only backoff');h.checkPermission();await flush();assert.equal(h.calls.length,1,'focus/timer verification cannot restart the backoff budget');clock.next();await flush();assert.equal(h.calls.length,2);assert.equal(h.roleCalls.length,2);assert(findElement(h.draw(),'iframe'));assert.equal(h.states[2],'');assert.equal(clock.timers.size,0);assert(!findElement(h.draw(),'iframe').props.srcDoc.includes('offline-host-access'));}
  finally{h.dispose()}
 });
-test('three transient failures stop automatic attempts and expose reload and logout controls',async()=>{
+test('three transient failures bound one automatic burst and expose reload and logout controls',async()=>{
  const clock=retryClock(),h=componentHarness('offline-permanent-outage',{...clock,fetch:async()=>({ok:false,status:503,json:async()=>({code:'role_access_unavailable'})})});
- try{await flush();clock.next();await flush();clock.next();await flush();assert.equal(h.calls.length,3);assert.equal(h.roleCalls.length,3);assert.deepEqual(clock.delays,[15000,500,15000,1500,15000]);assert.equal(clock.timers.size,0);assert(!findElement(h.draw(),'iframe'));assert(h.states[2]);const buttons=elements(h.draw()).filter(n=>n.type==='button');assert(buttons.some(n=>n.props.children==='重新加载'));assert(buttons.some(n=>n.props.children==='退出登录'));h.checkPermission();await flush();assert.equal(h.calls.length,3);}
+ try{await flush();clock.next();await flush();clock.next();await flush();assert.equal(h.calls.length,3);assert.equal(h.roleCalls.length,3);assert.deepEqual(clock.delays,[15000,500,15000,1500,15000]);assert.equal(clock.timers.size,0);assert(!findElement(h.draw(),'iframe'));assert(h.states[2]);const buttons=elements(h.draw()).filter(n=>n.type==='button');assert(buttons.some(n=>n.props.children==='重新加载'));assert(buttons.some(n=>n.props.children==='退出登录'));h.checkPermission();await flush();assert.equal(h.calls.length,4,'a later scheduled recovery starts a new bounded burst');}
  finally{h.dispose()}
 });
 test('periodic temporary failure clears old authorization and rebuilds the frame only with a fresh narrower role',async()=>{
@@ -637,4 +623,15 @@ test('a current authority denial after ensure refresh remains terminal even when
  for(const phase of ['live','check']){const old=deferredRead();let renewed=false;const h=componentHarness('offline-actual-authority-'+phase,{commitEffects:true,ensure:input=>renewed?{...input,access_token:'actual-access'}:input,fetch:async url=>url.endsWith('?check=1')?old.promise:protectedResponse(HTML),liveFetch:async()=>old.promise});
   try{await flush();h.commit();renewed=true;if(phase==='live')h.send(liveEnvelope(h,'held'));else h.checkPermission();await flush();h.rerenderSession({...h.session,access_token:'actual-access',refresh_token:'actual-refresh'});old.resolve({ok:false,status:401,json:async()=>({code:'application_session_denied'})});await flush();h.commit();assert(!findElement(h.draw(),'iframe'));assertBridgeCounts(h,0);assert(h.states[2]);}finally{old.resolve(protectedResponse(HTML));h.dispose()}
  }
+});
+
+test('initial verification is single-flight across timer and visibility-triggered checks',async()=>{
+ let resolve;const pending=new Promise(r=>resolve=r),h=componentHarness('offline-initial-single-flight',{fetch:async()=>pending});
+ try{await flush();assert.equal(h.calls.length,1);h.checkPermission();h.checkPermission();await flush();assert.equal(h.roleCalls.length,1);assert.equal(h.calls.length,1);resolve({ok:true,status:200,text:async()=>HTML});await flush();assert(findElement(h.draw(),'iframe'));}
+ finally{resolve({ok:true,status:200,text:async()=>HTML});h.dispose()}
+});
+test('exhausted initial transport retries stay fail-closed but a later periodic check can recover',async()=>{
+ const clock=retryClock();let healthy=false;const h=componentHarness('offline-initial-outage-recovery',{...clock,fetch:async()=>healthy?{ok:true,status:200,text:async()=>HTML}:{ok:false,status:503,json:async()=>({code:'upstream_unavailable'})}});
+ try{await flush();clock.next();await flush();clock.next();await flush();assert.equal(h.calls.length,3);assert(!findElement(h.draw(),'iframe'));assert.equal(h.states[0],null);healthy=true;h.checkPermission();await flush();assert.equal(h.calls.length,4);assert(findElement(h.draw(),'iframe'));assert(h.states[0]);assert.equal(h.states[2],'');}
+ finally{h.dispose()}
 });
