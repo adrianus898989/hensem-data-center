@@ -79,7 +79,12 @@ test('host restores only the authorized HTML body, while authorization checks an
  assert.match(component,/makeAdminLiveDocument\(restoreApprovedAdmin\(result\.html\),channel\.current,result\.policy,\{mode:dataScope\.mode,identity:scopeIdentity\}\)/);
  assert.equal((component.match(/restoreApprovedAdmin\(result\.html\)/g)||[]).length,1);
  assert.match(component,/if\(html!==null\)\{published=true;setDocumentHtml\(html\)\}/);
- assert.match(component,/void request\(\)/);assert.match(component,/void request\(true\)\.finally/);
+ assert.match(component,/void request\(\)/);
+ // The request owns single-flight cleanup for initial loads and later checks;
+ // callers must not reintroduce a separate finally that can clear a newer read.
+ assert.match(component,/const request=async\(check=false\)=>\{\s*checking=true;const mine=\+\+revision/);
+ assert.match(component,/finally\{if\(mine===revision\)checking=false\}/);
+ assert.match(component,/const verify=\(\)=>\{if\(checking\|\|cancelled\|\|retrying\)return;void request\(true\)\}/);
  assert.match(component,/const fail=\(e:unknown\)=>\{[^\n]*controller\.abort\(\);clearPreview\(\)/);
  assert.match(component,/const clearPreview=\(\)=>\{[\s\S]*?setDocumentHtml\(""\);roleAccessRef\.current=null;setRoleAccess\(null\)/);
  assert.match(client,/base\+"\/functions\/v1\/owner-admin-preview"\+query/);
