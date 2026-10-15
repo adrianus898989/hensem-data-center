@@ -26,8 +26,8 @@
  }
  const unknown=note=>fact(null,null,false,note);
  function buildModel({L,scopeMatches,workordersScopeMatches}){
-  const date=day(L.from),sameDay=date&&date===day(L.to);
-  if(!sameDay)return {ready:false,message:'成功率分析每次只查询一个当地日，请重新选择日期。'};
+  const date=day(L.from),endDate=day(L.to);
+  if(!date||!endDate||L.from>L.to||(Date.parse(endDate)-Date.parse(date))/86400000>=31)return {ready:false,message:'请选择有效日期与时间，每次最多31个当地日。'};
   if(!L.pageQueried||L.dirty||!scopeMatches)return {ready:false,message:L.dirty?'筛选条件已修改，点击查询读取对应日期的成功率。':'请选择日期，点击查询。'};
   const seen=new Set(),columns=[],duplicateIds=new Set();
   for(const p of L.queryPlatforms||[]){if(!p?.id)continue;if(seen.has(p.id)){duplicateIds.add(p.id);continue;}seen.add(p.id);columns.push(p);}
@@ -44,8 +44,8 @@
     const entry=payments.get(key)||{rows:[],response,platform:p};entry.rows.push(row);payments.set(key,entry);
    }
   }
-  const w=L.workorders,workordersCurrent=!!workordersScopeMatches&&!L.workordersLoading&&!L.workordersError&&Array.isArray(w?.byPlatformProvider)
-   &&(!w.startDate||w.startDate===date)&&(!w.endDate||w.endDate===date);
+  const w=L.workorders,workordersCurrent=!L.workordersTimeUnsupported&&!!workordersScopeMatches&&!L.workordersLoading&&!L.workordersError&&Array.isArray(w?.byPlatformProvider)
+   &&(!w.startDate||w.startDate===date)&&(!w.endDate||w.endDate===endDate);
   if(workordersCurrent)for(const row of w.byPlatformProvider){
    const p=columns.find(p=>p.id===row.platformId);
    if(!row.platformId||!matches(row,p)||!['charge','withdraw'].includes(row.direction)){ignored++;continue;}
@@ -98,7 +98,7 @@
    }
    const unresolved=work&&['charge','withdraw'].some(direction=>(platformTickets.get(JSON.stringify([p.id,direction]))||[]).some(row=>['providerConflictCount','unresolvedProviderOrderCount'].some(key=>count(row.uniqueCoverage?.[key])>0)));
    const knownTotal=safeSum(counts),partial=footer.partial||!footer.authoritativeTotal||unknownCount||unknownProvider||unresolved||knownTotal===null||footer.volume===null||knownTotal!==footer.volume;
-   return {providerCount:names.size?names.size:!partial&&groupRows.length?0:null,providerCountPartial:partial,providerCountNote:'仅计本矩阵当天有提交记录的支付三方，按统一三方名去重；人工充值、人工确认、提现转充值和无三方不计入。'+(partial?'未完整返回三方分组或存在未归属原单；有数字时为已识别小计，不代表全部运行三方。':'')};
+   return {providerCount:names.size?names.size:!partial&&groupRows.length?0:null,providerCountPartial:partial,providerCountNote:'仅计本矩阵所选时段有提交记录的支付三方，按统一三方名去重；人工充值、人工确认、提现转充值和无三方不计入。'+(partial?'未完整返回三方分组或存在未归属原单；有数字时为已识别小计，不代表全部运行三方。':'')};
   }
   function payment(p,name,direction){
    const entry=payments.get(JSON.stringify([p.id,name,direction]));
@@ -182,7 +182,8 @@
   const {L}=props,model=buildModel(props);
   if(!model.ready)return '<div class="live-status live-query-prompt">'+escape(model.message)+'</div>';
   if(!L.loading&&!L.restoredPage&&L.feeLookupRows===null&&!L.feeLookupLoading&&!L.feeLookupError)props.ensureFeeLookup?.();
-  const notices=[];
+  const windows=L.successWindows||[],windowGroups=[...new Set(windows.map(w=>w.from.replace('T',' ')+' 至 '+w.to.replace('T',' ')+' · '+w.timezone+(w.clamped?'（截至查询时刻）':'')))],notices=[];
+  if(windowGroups.length)notices.push('已查询 '+windowGroups.map(escape).join('；')); 
   if(L.error)notices.push(escape(L.error));
   if(L.loading||L.queryRetrying)notices.push(escape(L.progress||'正在读取平台成功率；当前为部分结果。'));
   if(L.queryPaused)notices.push('查询已暂停，保留已读取结果。<button class="link" onclick="liveRetryFailed(true)">继续查询</button>');
@@ -191,8 +192,9 @@
   const completedBasis=model.columns.some(p=>source(p.source)==='kb'&&p.capabilities?.successTimeBasis==='source_completed_at')||(L.results||[]).some(r=>source(r.platform?.source)==='kb'&&(r.capabilities||r.platform?.capabilities)?.successTimeBasis==='source_completed_at');
   const pandaBasis=model.columns.some(p=>source(p.source)==='panda');
   const updatedBasis=model.columns.some(p=>p.capabilities?.successTimeBasis==='order_updated_at')||(L.results||[]).some(r=>(r.capabilities||r.platform?.capabilities)?.successTimeBasis==='order_updated_at');
-  const sections=[['charge','代收成功率','成功时间内成功笔数 ÷ 创建时间内全部笔数。'],['withdraw','代付成功率','成功时间内成功笔数 ÷ 创建时间内全部笔数；未提供可核验成功时间时显示 —。'],['workorder','工单成功率','已处理原支付单 ÷ 全部提交原支付单；按平台、业务、完整原单号去重，状态 4 计已处理，不代表实际到账。']];
+  const sections=[['charge','代收成功率','成功时间内成功笔数 ÷ 创建时间内全部笔数。'],['withdraw','代付成功率','成功时间内成功笔数 ÷ 创建时间内全部笔数；未提供可核验成功时间时显示 —。'],['workorder','工单成功率','按所选自然日范围：已处理原支付单 ÷ 全部提交原支付单；按平台、业务、完整原单号去重，状态 4 计已处理，不代表实际到账。']];
   return '<div class="live-success-analysis">'+(notices.length?'<div class="live-status">'+notices.join('<br>')+'</div>':'')+sections.map(([key,title,note])=>{
+   if(key==='workorder'&&L.workordersTimeUnsupported)return '<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2></div><p>工单仅支持完整自然日汇总，自定义时段暂不提供。</p></section>'; 
    const visibleRows=rankedRows(model,key),withType=key!=='workorder',indexes=rankedColumnIndexes(model,key),head='<thead><tr><th scope="col">三方</th>'+(withType?'<th scope="col" class="success-provider-type">类型</th>':'')+indexes.map(index=>{const p=model.columns[index],volume=model.footers[key][index].volume;return '<th scope="col" title="'+escape(p.name+' · '+system(p.source)+' · '+p.id+' · 已读取提交笔数 '+(volume===null?'未提供':volume)+(model.footers[key][index].partial?'（部分）':''))+'">'+escape(p.name)+'<small>'+escape(system(p.source))+'</small></th>';}).join('')+'</tr></thead>';
    return '<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2>'+(key==='workorder'&&L.workordersError?'<button type="button" class="link" onclick="liveProviderWorkordersRetry()">重试工单</button>':'')+'</div><p>'+note+(key!=='workorder'&&updatedBasis?' 多利成功按成功状态＋订单更新时间统计，不代表实际到账时间。':'')+(key!=='workorder'&&completedBasis?' KB成功按源订单完成时间统计。':'')+(pandaBasis&&key==='charge'?' 熊猫成功时间窗口尚未完整核验；已采行完成时间不代表该窗口全量。':pandaBasis&&key==='withdraw'?' 熊猫仅含已审核提现；未提供可靠完成时间，成功时间指标显示 —。':'')+'</p><div class="success-analysis-scroll" tabindex="0" role="region" aria-label="'+title+'"><table style="min-width:'+Math.max(400,112+(withType?80:0)+model.columns.length*78)+'px">'+head+'<tbody>'+ (visibleRows.length?visibleRows.map(row=>'<tr><th scope="row">'+escape(row.provider)+'</th>'+(withType?typeCell(row,key,L):'')+indexes.map(index=>cell(row[key][index])).join('')+'</tr>').join(''):'<tr><td colspan="'+(model.columns.length+1+(withType?1:0))+'">'+(L.loading?'正在读取三方汇总…':'当前条件下暂无已确认活动的支付三方')+'</td></tr>')+'</tbody><tfoot class="success-analysis-footer"><tr><th scope="row">汇总成功率</th>'+(withType?'<td class="success-provider-type">—</td>':'')+indexes.map(index=>cell(model.footers[key][index],true)).join('')+'</tr></tfoot></table></div>'+otherRecords(model,key)+'</section>';
   }).join('')+'</div>';

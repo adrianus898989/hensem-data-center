@@ -34,7 +34,7 @@
   return Math.floor(epoch/1000)*1000;
  }
  function unavailable(error){return {valid:false,currentFrom:null,currentTo:null,previousFrom:null,previousTo:null,label:'无法比较',calendarDays:null,clamped:false,error}}
- function windowFor(from,to,timezone,now=Date.now()){
+ function readWindow(from,to,timezone,now,compare){
   try{
    formatter(timezone);
    const requestedFrom=localInput(from),requestedTo=localInput(to),nowEpoch=currentEpoch(now),localNow=localClock(nowEpoch,timezone);
@@ -42,12 +42,16 @@
    if(requestedFrom>localNow)throw Error('起始时间晚于当前时间，暂无可比较数据');
    const days=calendarSpan(requestedFrom,requestedTo),currentTo=requestedTo>localNow?localNow:requestedTo,currentFrom=requestedFrom,clamped=currentTo!==requestedTo;
    // Preserve the selected full calendar-period length even when today's progress is partial.
-   const previousFrom=shiftCalendarDays(currentFrom,-days),previousTo=shiftCalendarDays(currentTo,-days);
-   const start=uniqueInstant(currentFrom,timezone),end=uniqueInstant(currentTo,timezone),priorStart=uniqueInstant(previousFrom,timezone),priorEnd=uniqueInstant(previousTo,timezone);
-   if(start>nowEpoch||start>end||priorStart>priorEnd)throw Error('比较时段无效');
-   return {valid:true,currentFrom,currentTo,previousFrom,previousTo,label:(days===1?'较前一日同一时段':'较前一周期（'+days+'天）')+(clamped?' · 同进度':''),calendarDays:days,clamped,error:null};
+   const previousFrom=compare?shiftCalendarDays(currentFrom,-days):null,previousTo=compare?shiftCalendarDays(currentTo,-days):null;
+   const start=uniqueInstant(currentFrom,timezone),end=uniqueInstant(currentTo,timezone),priorStart=compare?uniqueInstant(previousFrom,timezone):null,priorEnd=compare?uniqueInstant(previousTo,timezone):null;
+   if(start>nowEpoch||start>end||compare&&priorStart>priorEnd)throw Error('比较时段无效');
+   return {valid:true,currentFrom,currentTo,previousFrom,previousTo,label:(compare?(days===1?'较前一日同一时段':'较前一周期（'+days+'天）'):'所选时段')+(clamped?' · 同进度':''),calendarDays:days,clamped,error:null};
   }catch(error){return unavailable(error instanceof Error?error.message:'比较时段无效')}
  }
+ // Success-rate matrices consume only the current window. Do not reject a
+ // valid current boundary because an unused preceding period crosses DST.
+ function windowFor(from,to,timezone,now=Date.now()){return readWindow(from,to,timezone,now,true)}
+ function currentWindowFor(from,to,timezone,now=Date.now()){return readWindow(from,to,timezone,now,false)}
  function number(value){
   if(typeof value==='number')return Number.isFinite(value)?value:null;
   if(typeof value!=='string'||!/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?$/i.test(value.trim()))return null;
@@ -78,5 +82,5 @@
   const [a,n,b,m]=values;if(n===0||m===0)return unknown('percentage_points');
   return rounded((a/n-b/m)*100,' 个百分点','percentage_points');
  }
- root.HensemLiveCompare=Object.freeze({windowFor,delta,rateDelta,ratioDelta});
+ root.HensemLiveCompare=Object.freeze({windowFor,currentWindowFor,delta,rateDelta,ratioDelta});
 })(typeof window==='object'?window:globalThis);

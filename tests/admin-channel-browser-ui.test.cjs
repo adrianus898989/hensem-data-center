@@ -88,7 +88,7 @@ test('AR charge polling weight keeps preset and real-time source values independ
  for(const [real,expected]of [[undefined,'—'],[null,'—'],['0','0'],['82.81','82.81']]){const h=fixture({handler:()=>response(AR,[channel('weights',{weight:'100',real_time_weight:real})])});await h.start();assert.equal(firstTableRow(h.mod.render())['轮询权重'],'预设权重：100实时权重：'+expected);const csv=exported(h)[0];assert.equal(csv['权重'],'100');assert.equal(csv['实时权重'],expected);assert.equal(h.mod.exportRows()[3].length,h.mod.exportRows()[4].length);const labels=headers(h.mod.render()),widths=[...h.mod.render().matchAll(/<col style="width:(\d+)px"/g)].map(m=>Number(m[1]));assert.equal(widths[labels.indexOf('轮询权重')],160);h.context.liveChannelTab('withdraw');assert.equal(firstTableRow(h.mod.render())['自动出款权重'],'100');assert.equal(exported(h)[0]['实时权重'],undefined);}
  const yash=fixture({catalog:[YASH],handler:()=>response(YASH,[channel('yash',{weight:'100',real_time_weight:'82.81'})])});await yash.start();assert(!headers(yash.mod.render()).includes('轮询权重'));assert.equal(exported(yash)[0]['实时权重'],undefined);assert.equal(firstTableRow(yash.mod.render())['权重'],'100');
 });
-test('AR recharge shares use complete same-currency enabled pools independent of display filters',async()=>{
+test('AR recharge shares use complete same-category/currency enabled pools independent of display filters',async()=>{
  const rows=[channel('alpha',{provider:'A',weight:'100',real_time_weight:'82.81'}),channel('beta',{provider:'B',weight:'300',real_time_weight:'17.19',source_position:1}),channel('off',{weight:'9000',real_time_weight:'9000',source_state:'0',enabled:true,source_position:2}),channel('unknown',{weight:'9000',real_time_weight:'9000',source_state:null,enabled:true,source_position:3}),channel('old',{weight:'9000',real_time_weight:'9000',is_present:false,source_position:4}),channel('usd',{weight:'100',real_time_weight:'100',limit_currency:'USD',source_position:5}),channel('no-currency',{weight:'100',real_time_weight:'100',limit_currency:null,source_position:6}),channel('also-no-currency',{weight:'100',real_time_weight:'100',limit_currency:null,source_position:7})];
  const h=fixture({handler:()=>categoryRowsResponse(rows)});await h.start();
  const values=()=>Object.fromEntries(exported(h).map(r=>[r['通道 ID'],[r['预设权重占比'],r['实际权重占比']]]));
@@ -108,10 +108,56 @@ test('AR recharge shares use complete same-currency enabled pools independent of
 test('AR recharge category-channel rows retain independent weight shares and category pools',async()=>{
  const rows=[channel('same',{category_id:'upi',weight:'10',real_time_weight:'30'}),channel('same',{category_id:'qr',category_name:'QR',weight:'20',real_time_weight:'70',source_position:1}),channel('other',{category_id:'upi',weight:'30',real_time_weight:'70',source_position:2})];
  const h=fixture({handler:()=>categoryRowsResponse(rows)});await h.start();
- assert.deepEqual(exported(h).map(r=>r['预设权重占比']),['16.67%','33.33%','50.00%']);
+ assert.deepEqual(exported(h).map(r=>r['预设权重占比']),['25.00%','100.00%','75.00%']);
  h.context.liveChannelCategory('upi');assert.deepEqual(exported(h).map(r=>[r['通道 ID'],r['预设权重占比'],r['实际权重占比']]),[['same','25.00%','30.00%'],['other','75.00%','70.00%']]);
  h.context.liveChannelQuery('same','');assert.deepEqual(exported(h).map(r=>[r['预设权重占比'],r['实际权重占比']]),[['25.00%','30.00%']]);
  assert.equal(h.calls.length,1);assert.equal(h.mod.exportRows()[3].length,h.mod.exportRows()[4].length);
+});
+test('all-category snapshot weights use each native category and currency instead of the global 3490 total',async()=>{
+ const rows=[
+  channel('upi-main',{provider:'Selected',category_id:'upi-qr',category_name:'UPI-QR',weight:'70',real_time_weight:'700'}),
+  channel('upi-peer',{provider:'Other',category_id:'upi-qr',category_name:'UPI-QR',weight:'30',real_time_weight:'300',source_position:1}),
+  channel('innate',{provider:'Selected',category_id:'innate',category_name:'InnateUPIQR',weight:'10',real_time_weight:'30',source_position:2}),
+  channel('innate-peer',{provider:'Other',category_id:'innate',category_name:'InnateUPIQR',weight:'30',real_time_weight:'30',source_position:3}),
+  channel('other-category',{provider:'Other',category_id:'bank',category_name:'BANK',weight:'2430',real_time_weight:'2430',source_position:4}),
+  channel('usd',{provider:'Other',category_id:'upi-qr',category_name:'UPI-QR',weight:'9999',real_time_weight:'9999',limit_currency:'USD',source_position:5}),
+ ];
+ const h=fixture({handler:()=>categoryRowsResponse(rows)});await h.start();
+ const byId=()=>Object.fromEntries(exported(h).map(r=>[r['通道 ID'],[r['预设权重占比'],r['实际权重占比']]]));
+ assert.deepEqual(byId()['upi-main'],['70.00%','70.00%']);assert.deepEqual(byId().innate,['25.00%','50.00%']);
+ assert.match(h.mod.render(),/UPI-QR \[upi-qr\] · INR<\/b> · 已开启 2 行 · 预设合计 100 · 实际合计 1,000/);
+ assert.match(h.mod.render(),/InnateUPIQR \[innate\] · INR<\/b> · 已开启 2 行 · 预设合计 40 · 实际合计 60/);
+ assert.match(h.mod.render(),/全部大类不合并分母/);assert.doesNotMatch(h.mod.render(),/实际合计 3,490/);
+ h.context.liveChannelProvider('Selected');assert.equal(exported(h).length,2);assert.deepEqual(byId()['upi-main'],['70.00%','70.00%']);assert.deepEqual(byId().innate,['25.00%','50.00%']);
+ h.context.liveChannelCurrency('INR');h.context.liveChannelCategory('innate');assert.deepEqual(byId().innate,['25.00%','50.00%']);
+ h.context.liveChannelCategory('');h.context.liveChannelQuery('upi-main','');assert.deepEqual(byId()['upi-main'],['70.00%','70.00%']);
+ assert.equal(firstTableRow(h.mod.render())['实际权重占比'],'70.00%');assert.equal(h.calls.length,1,'denominators reuse the full authorized platform snapshot');
+});
+test('native category IDs isolate equal names, membership metadata, missing categories and field-specific gaps',async()=>{
+ const shared=[{category_id:'a',category_name:'Shared name',sort:0},{category_id:'b',category_name:'Shared name',sort:1}];
+ const rows=[channel('a',{category_id:'a',category_name:'Shared name',channel_categories:shared,weight:'1',real_time_weight:'1'}),channel('a-peer',{category_id:'a',category_name:'Shared name',channel_categories:shared,weight:'3',real_time_weight:'3',source_position:1}),channel('b',{category_id:'b',category_name:'Shared name',channel_categories:shared,weight:null,real_time_weight:'50',source_position:2}),channel('zero',{category_id:'0',category_name:'Zero',channel_categories:[],weight:'5',real_time_weight:'5',source_position:3}),channel('unknown',{category_id:null,category_name:null,channel_categories:[],weight:'9000',real_time_weight:'9000',source_position:4})];
+ const h=fixture({handler:()=>categoryRowsResponse(rows)});await h.start();
+ assert.deepEqual(exported(h).map(r=>[r['通道 ID'],r['预设权重占比'],r['实际权重占比']]),[['a','25.00%','25.00%'],['a-peer','75.00%','75.00%'],['b','—','100.00%'],['zero','100.00%','100.00%'],['unknown','—','—']]);
+ assert.match(h.mod.render(),/Shared name \[a\] · INR/);assert.match(h.mod.render(),/Shared name \[b\] · INR/);assert.match(h.mod.render(),/大类未提供，占比 —/);
+ h.context.liveChannelCategory('b');assert.deepEqual(exported(h).map(r=>r['实际权重占比']),['100.00%']);assert.equal(h.calls.length,1);
+ // Older payloads may list multiple memberships, but the singular native category still owns the weight.
+ const legacy=fixture({handler:()=>response(AR,rows.slice(0,3))});await legacy.start();legacy.context.liveChannelCategory('b');
+ assert.deepEqual(exported(legacy).map(r=>r['实际权重占比']),['25.00%','75.00%','100.00%']);assert.equal(legacy.calls.length,1);
+});
+test('all-category weight totals stay natively collapsed while selected category totals remain compact and complete',async()=>{
+ const rows=Array.from({length:11},(_,i)=>[channel('main',{category_id:'cat-'+i,category_name:'Category '+i,weight:'100',real_time_weight:'30',source_position:i*2}),channel('peer',{category_id:'cat-'+i,category_name:'Category '+i,weight:'300',real_time_weight:'70',source_position:i*2+1})]).flat();
+ rows.push(channel('usd',{category_id:'cat-4',category_name:'Category 4',weight:'500',real_time_weight:'50',limit_currency:'USD',source_position:22}));
+ const h=fixture({handler:()=>categoryRowsResponse(rows)});await h.start();
+ const html=h.mod.render(),details=html.match(/<details class="channel-weight-breakdown"([^>]*)>([\s\S]*?)<\/details>/);
+ assert(details);assert.doesNotMatch(details[1],/\bopen\b/,'native details must be closed by default');assert.match(details[2],/^<summary>查看各类合计<\/summary>/);
+ assert.equal((details[2].match(/data-channel-weight-category=/g)||[]).length,12,'all eleven native categories and their separate currency pools remain available on expansion');
+ for(let i=0;i<11;i++)assert.match(details[2],new RegExp('Category '+i+' \\[cat-'+i+'\\] · INR<\\/b> · 已开启 2 行 · 预设合计 400 · 实际合计 100'));
+ const collapsed=html.replace(details[0],'');assert.doesNotMatch(collapsed,/预设合计|实际合计/);assert.match(collapsed,/权重占比按各大类 \/ 币种分别计算/);
+ assert.match(details[2],/Category 4 \[cat-4\] · USD<\/b> · 已开启 1 行 · 预设合计 500 · 实际合计 50/);
+ h.context.liveChannelCategory('cat-4');h.context.liveChannelCurrency('INR');const selected=h.mod.render();
+ assert.doesNotMatch(selected,/channel-weight-breakdown/);assert.match(selected,/<div class="channel-weight-inline"><span[^>]*title="原生大类 ID：cat-4"[^>]*><b>Category 4 · INR<\/b> · 已开启 2 行 · 预设合计 400 · 实际合计 100/);
+ assert.doesNotMatch(selected.replace(/<[^>]+>/g,''),/\[cat-4\]/,'the selected category ID belongs in its title rather than normal text');assert.deepEqual(exported(h).map(r=>r['实际权重占比']),['30.00%','70.00%']);assert.equal(h.calls.length,1);
+ const css=fs.readFileSync(path.join(__dirname,'../admin-preview/live-channel-status.css'),'utf8');assert.match(css,/\.channel-weight-summary \.channel-weight-breakdown\[open\]\{flex-basis:100%\}/);assert.match(css,/\.channel-weight-summary \.channel-weight-pools\{[^}]*max-height:200px;overflow:auto/);
 });
 test('missing weights, zero totals and incomplete snapshots never become invented shares',async()=>{
  for(const real of [undefined,null,'',-1,'NaN']){
@@ -127,7 +173,7 @@ test('weight sums retain decimal precision and refresh failures retain the prior
  const h=fixture({handler:()=>categoryRowsResponse([channel('big',{weight:'9007199254740993',real_time_weight:'0.00000001'}),channel('small',{weight:'1',real_time_weight:'0.00000003',source_position:1})])});await h.start();
  assert.match(h.mod.render(),/预设合计 9,007,199,254,740,994 · 实际合计 0\.00000004/);
  assert.deepEqual(exported(h).map(r=>r['实际权重占比']),['25.00%','75.00%']);
- h.setHandler(()=>Promise.reject(Error('synthetic network failure')));await h.mod.load(false,true);assert.deepEqual(exported(h).map(r=>r['实际权重占比']),['25.00%','75.00%']);assert.match(h.mod.render(),/保留上次成功读取的快照/);assert.match(h.mod.render(),/快照权重占比/);
+ h.setHandler(()=>Promise.reject(Error('synthetic network failure')));await h.mod.load(false,true);assert.deepEqual(exported(h).map(r=>r['实际权重占比']),['25.00%','75.00%']);assert.match(h.mod.render(),/保留上次成功读取的快照/);assert.match(h.mod.render(),/权重占比按各大类 \/ 币种分别计算/);
  h.context.liveChannelTab('withdraw');assert(!headers(h.mod.render()).includes('预设权重占比'));assert(!headers(h.mod.render()).includes('实际权重占比'));assert.doesNotMatch(h.mod.render(),/channel-weight-summary/);
  const yash=fixture({catalog:[YASH],handler:()=>response(YASH,[channel('a',{weight:'100',real_time_weight:'30'})])});await yash.start();assert(!headers(yash.mod.render()).includes('实际权重占比'));assert.equal(exported(yash)[0]['实际权重占比'],undefined);assert.doesNotMatch(yash.mod.render(),/channel-weight-summary/);
 });
