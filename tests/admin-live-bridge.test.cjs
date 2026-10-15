@@ -684,3 +684,21 @@ test('a delayed old ensure response cannot overwrite a newer verified session au
  const h=load({ensure:async input=>++ensures===1?held.promise:{...input,access_token:'newest-token'},fetch:async()=>h.calls.length===1?{ok:true,json:async()=>({total:12})}:{ok:false,status:401,json:async()=>({code:'application_session_denied'})}}),b=bridge(h,{onAccessDenied:kind=>denied.push(kind)});
  h.send(b.event('old_auth'));await flush();h.send(b.event('current_auth'));await flush();assert.equal(b.replies[0].data.result.total,12);held.resolve({...session,access_token:'obsolete-token'});await flush();assert.deepEqual(denied,[]);assert.equal(b.replies.at(-1).data.code,'ADMIN_LIVE_CANCELLED');b.cleanup();
 });
+
+test('published snapshot validates native ids and local civil input and routes one fresh read',async()=>{
+ const q={action:'providerSnapshot',version:1,platformIds:['AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA'],startAt:'2026-10-14T00:00:00',endAt:'2026-10-14T23:59:59',direction:'charge',status:'all',currency:'INR',components:['orders','submission','intake']};
+ const h=load();await h.api.adminLiveRequest(session,q);assert.equal(h.calls.length,1);assert.equal(h.authCalls.length,1);assert(h.calls[0].url.endsWith('/dashboard_admin_provider_snapshot'));const req=JSON.parse(h.calls[0].init.body).p_request;assert.equal(req.platformIds[0],q.platformIds[0].toLowerCase());assert.equal(req.export,false);assert.equal(req.startAt,q.startAt);assert(!('action'in req));
+ await h.api.adminLiveRequest(session,{...q,export:true},undefined,{assigned:true,page:'providers'});assert(h.calls[1].url.endsWith('/dashboard_admin_execute'));assert.equal(JSON.parse(h.calls[1].init.body).p_page,'providers');assert.equal(JSON.parse(h.calls[1].init.body).p_request.action,'providerSnapshot');assert.equal(h.authCalls.length,2);
+ for(const patch of [{platformIds:[]},{platformIds:[q.platformIds[0],q.platformIds[0].toLowerCase()]},{platformIds:['91CLUB']},{startAt:q.startAt+'Z'},{endAt:'2026-02-30T23:59:59'},{components:['orders','orders']},{components:['workorders']},{components:[]},{version:2},{export:'true'},{providers:['Pay']},{source:'ar'},{startAt:'2026-10-14T00:00:00.1'}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
+});
+test('snapshot host requires providers page and current query/export authority',async()=>{
+ const q={action:'providerSnapshot',version:1,platformIds:['11111111-1111-4111-8111-111111111111'],startAt:'2026-10-14T00:00:00',endAt:'2026-10-14T23:59:59',direction:'charge',status:'all',currency:'INR',components:['orders']};
+ for(const [page,permissions,exportFlag]of [['events',['providers.view','providers.query'],false],['providers',['providers.view'],false],['providers',['providers.view','providers.query'],true]]){
+  const h=load(),b=bridge(h,{roleAccess:()=>({mode:'assigned',canView:true,permissions})}),event=b.event('snapshot', {...q,export:exportFlag});event.data.page=page;h.send(event);await flush();assert.equal(h.calls.length,0);assert.match(b.replies[0].data.error,/快照核验权限/);b.cleanup();
+ }
+ const h=load(),b=bridge(h,{roleAccess:()=>({mode:'owner',canView:true,permissions:[]})}),event=b.event('snapshot',q);event.data.page='providers';h.send(event);await flush();assert.equal(h.calls.length,1);b.cleanup();
+});
+test('snapshot URL switch exposes only a boolean and ordinary URL is inactive',()=>{
+ const h=load();h.target.location={origin:'https://dashboard.invalid',pathname:'/',hash:'#admin/providers'};assert.match(h.api.makeAdminLiveDocument('<!doctype html><html></html>','shadow-nonce'),/HENSEM_PROVIDER_SNAPSHOT_SHADOW=false/);
+ h.target.location.search='?providerSnapshotShadow=1&secret=DO_NOT_INJECT';const html=h.api.makeAdminLiveDocument('<!doctype html><html></html>','shadow-nonce');assert.match(html,/HENSEM_PROVIDER_SNAPSHOT_SHADOW=true/);assert(!html.includes('DO_NOT_INJECT'));
+});
