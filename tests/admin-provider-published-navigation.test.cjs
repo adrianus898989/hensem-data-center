@@ -35,7 +35,7 @@ test('closed day normal query reads one bundle, validates real intake catalog, k
  const n=h.calls.length;h.c.render();h.c.liveLocalSize?.('50');h.c.setPage('time');h.c.setPage('providers');await settle();assert.equal(h.calls.length,n);assert.equal(h.L.results.length,18);
 });
 test('draft filters retain old published table and submission values until next explicit query',async()=>{
- const h=await setup({platforms:[platform,{...platform,id:'22222222-2222-4222-8222-222222222222',country:'巴基斯坦',scopeGroup:'PK',currency:'PKR',timezone:'Asia/Karachi'}]});await h.c.liveQuery();const old=h.L.providerPublished.bundle,n=relevant(h).length;h.c.liveSet('country','巴基斯坦');await settle();assert.equal(h.L.providerPublished.bundle,old);assert.match(h.html(),/筛选已修改，下方保留上次结果/);assert.match(h.html(),/Synthetic provider/);assert.equal(relevant(h).length,n);assert.equal(h.L.country,'巴基斯坦');assert.equal(h.L.providerPublished.view.country,'印度');await h.c.liveExport();assert.equal(h.blobs.length,0);assert.equal(relevant(h).length,n);
+ const h=await setup({platforms:[platform,{...platform,id:'22222222-2222-4222-8222-222222222222',country:'巴基斯坦',scopeGroup:'PK',currency:'PKR',timezone:'Asia/Karachi'}]});await h.c.liveQuery();const old=h.L.providerPublished.bundle,n=relevant(h).length;h.c.liveSet('country','巴基斯坦');await settle();assert.equal(h.L.providerPublished.bundle,old);assert.match(h.html(),/筛选已修改，保留上次结果/);assert.match(h.html(),/Synthetic provider/);assert.equal(relevant(h).length,n);assert.equal(h.L.country,'巴基斯坦');assert.equal(h.L.providerPublished.view.country,'印度');await h.c.liveExport();assert.equal(h.blobs.length,0);assert.equal(relevant(h).length,n);
 });
 test('normal query reuses its complete publication; refresh/retry bypass it without source fanout',async()=>{
  const h=await setup();await h.c.liveQuery();const n=h.calls.length;await h.c.liveQuery();assert.equal(h.calls.length,n);assert.equal(h.calls.filter(q=>q.action==='providerSnapshot').length,1);await h.c.liveQuery(true);assert.equal(h.calls.filter(q=>q.action==='providerSnapshot').length,2);assert.equal(h.calls.filter(q=>q.action==='rates').length,2);await h.c.liveRetryFailed();assert.equal(h.calls.filter(q=>q.action==='providerSnapshot').length,3);await h.c.liveSubmissionRetry();assert.equal(h.calls.filter(q=>q.action==='providerSnapshot').length,4);const before=h.calls.length;h.setNow('2026-09-23T13:00:00Z');h.c.render();assert.equal(h.calls.length,before);assert.equal(forbidden(h).length,0);
@@ -48,7 +48,7 @@ test('complete common partial-day cutoff is not a full-day table or export and n
  h.setCustom(q=>{if(q.action!=='providerSnapshot')return;const b=envelope(q),end='2026-09-22T04:30:00.000000Z',priorEnd='2026-09-21T04:30:00.000000Z';
   Object.assign(b,{publishedCutoff:end,cutoffEpochMs:Date.parse(end)});Object.assign(b.window,{endAt:end,previousEndAt:priorEnd,localCutoff:'2026-09-22T10:00:00',previousLocalCutoff:'2026-09-21T10:00:00'});
   for(const entry of b.platforms){entry.current.orders.endAt=end;entry.current.submission.endAt=end;entry.current.intake.snapshotWindow.endAt=end;entry.previous.orders.endAt=priorEnd;entry.previous.intake.snapshotWindow.endAt=priorEnd;}return b;
- });await h.c.liveQuery(true);assert.equal(h.L.providerPublished.bundle.complete,true);assert.equal(h.L.providerPublished.appliedWindow,null);assert.equal(h.L.results.length,0);assert.equal(h.L.comparisonResults.length,0);assert.equal(h.L.providerIntake,null);assert.equal(h.L.workorders,null);assert.match(h.html(),/整日汇总尚未发布/);assert.match(h.html(),/实际截止 2026-09-22T10:00:00/);assert.doesNotMatch(h.html(),/Synthetic provider/);assert.deepEqual(relevant(h).slice(before).map(q=>q.action),['providerSnapshot']);assert.equal(forbidden(h).length,0);
+ });await h.c.liveQuery(true);assert.equal(h.L.providerPublished.bundle.complete,true);assert.equal(h.L.providerPublished.appliedWindow,null);assert.equal(h.L.results.length,0);assert.equal(h.L.comparisonResults.length,0);assert.equal(h.L.providerIntake,null);assert.equal(h.L.workorders,null);assert.match(h.html(),/整日汇总尚未发布/);assert.match(h.html(),/截至 2026-09-22 10:00:00/);assert.doesNotMatch(h.html(),/Synthetic provider/);assert.deepEqual(relevant(h).slice(before).map(q=>q.action),['providerSnapshot']);assert.equal(forbidden(h).length,0);
  fakeExport(h);await h.c.liveExport();assert.equal(h.blobs.length,0);assert.equal(relevant(h).length,before+1);h.c.render();assert.equal(relevant(h).length,before+1);
  h.setCustom(()=>undefined);await h.c.liveQuery(true);assert.equal(h.L.providerPublished.appliedWindow.fullDay,true);assert.equal(h.L.results.length,1);assert.equal(h.L.comparisonStatus,'ready');assert.equal(forbidden(h).length,0);
 });
@@ -141,4 +141,38 @@ test('midnight plus one microsecond keeps current and previous intake on their o
  const exact=q=>{const b=currentEnvelope(q),end=b.window.startAt.replace('.000000Z','.000001Z'),priorEnd=b.window.previousStartAt.replace('.000000Z','.000001Z');Object.assign(b,{publishedCutoff:end,cutoffEpochMs:Date.parse(end)});Object.assign(b.window,{endAt:end,previousEndAt:priorEnd,localCutoff:q.startAt,previousLocalCutoff:date(q.startAt.slice(0,10),-1)+'T00:00:00'});for(const p of b.platforms){p.current.orders.endAt=end;p.current.submission.endAt=end;p.current.intake.snapshotWindow.endAt=end;p.previous.orders.endAt=priorEnd;p.previous.intake.snapshotWindow.endAt=priorEnd;}return b;};
  const h=await setupCurrent({handler:q=>q.action==='providerSnapshot'?exact(q):q.action==='details'?{total:3,rows:Array.from({length:3},()=>({direction:'charge',currency:'INR',amount:'1',status_group:'success'}))}:undefined});h.setNow('2026-09-22T18:30:10Z');await h.c.liveQuery();assert.equal(h.L.providerPublished.error,'');assert.equal(h.L.results.length,1);assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.L.providerIntake.from,'2026-09-23');assert.equal(h.L.providerIntake.to,'2026-09-23');assert.equal(h.L.providerComparisonIntake.from,'2026-09-22');assert.equal(h.L.providerComparisonIntake.to,'2026-09-22');assert.equal(h.L.providerComparisonIntake.platforms[0].received,true);assert.match(h.html(),/2026-09-22 00:00:00 至 2026-09-22 00:00:00\.000001（不含）/);assert.doesNotMatch(h.html(),/对比 2026-09-21|前期.*2026-09-21/);
  const work=h.calls.find(q=>q.action==='workorders');assert.equal(work.startAt,'2026-09-23T00:00:00.000Z');assert.equal(work.endAt,'2026-09-23T23:59:59.000Z');assert.match(h.html(),/完整自然日独立统计/);await h.c.liveProviderOrders('Synthetic provider','','charge');assert.equal(h.calls.at(-1).startAt,'2026-09-22T18:30:00.000000Z');assert.equal(h.calls.at(-1).endAt,'2026-09-22T18:30:00.000001Z');fakeExport(h);await h.c.liveExport();assert.equal(h.blobs.length,1);const csv=await h.blobs[0].text();assert.match(csv,/2026-09-21T18:30:00\.000001Z/);assert.match(csv,/非全天/);assert.match(csv,/完整自然日，独立读取/);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);
+});
+
+test('publication details are local, escaped and keep applied scope while the draft changes',async()=>{
+ const h=await setupCurrent();await h.c.liveQuery();const n=h.calls.length;
+ h.L.providerPublished.error='<img src=x onerror=alert(1)>';
+ h.c.liveSet('from','2026-09-22T00:00:00');h.c.liveProviderPublishedDetails();
+ const drawer=h.drawers.at(-1);assert.equal(drawer.title,'已发布汇总 · 数据说明');assert.match(drawer.html,/日期 2026-09-23/);assert.match(drawer.html,/2026-09-23 10:00:00/);assert.match(drawer.html,/非全天/);assert.match(drawer.html,/来源完整性以采集回执为准/);assert.match(drawer.html,/&lt;img/);assert.doesNotMatch(drawer.html,/<img/);assert.equal(h.calls.length,n);assert.equal(forbidden(h).length,0);
+ h.c.setPage('time');const opened=h.drawers.length;h.c.liveProviderPublishedDetails();assert.equal(h.drawers.length,opened);assert.equal(h.calls.length,n);
+});
+test('missing publication components stay visibly flagged and are explained without another request',async()=>{
+ const h=await setup({handler:q=>{if(q.action!=='providerSnapshot')return;const b=envelope(q);b.complete=false;b.status='missing';b.platforms[0].previous.orders=null;b.platforms[0].snapshots=b.platforms[0].snapshots.filter(s=>s.period!=='previous'||s.component!=='orders');b.missing=[{platformId:platform.id,component:'orders',period:'previous',state:'missing'}];return b;}});await h.c.liveQuery();const n=h.calls.length;
+ assert.match(h.html(),/汇总尚未齐备/);assert.match(h.html(),/缺 1 项统计/);assert.match(h.html(),/数据说明/);h.c.liveProviderPublishedDetails();assert.match(h.drawers.at(-1).html,/Synthetic platform \/ 前期 \/ 订单：未发布/);assert.equal(h.calls.length,n);assert.equal(forbidden(h).length,0);fakeExport(h);await h.c.liveExport();assert.equal(h.blobs.length,0);
+});
+function publicationDrawerDOM(h){
+ const selector='[data-provider-publication-details]';let visible=null,closed=0;
+ h.c.openDrawer=(title,html)=>{visible={title,html};h.nodes.delete(selector);if(/data-provider-publication-details(?:[ >]|=)/.test(html))h.nodes.set(selector,{innerHTML:html});};
+ // The real drawer can hide while retaining its DOM. Authority loss must also
+ // clear the owned publication fragment, not just make it visually disappear.
+ h.c.closeDrawer=()=>{visible=null;closed++;};
+ return {visible:()=>visible,closed:()=>closed,fragment:()=>h.nodes.get(selector)};
+}
+test('publication details cannot open after actor or role invalidation and an open detail is cleared',async()=>{
+ for(const invalidation of ['role','actor'])for(const transition of ['render','click']){
+  let allowed=true;const h=await setup({roleAllowed:()=>allowed});await h.c.liveQuery();const drawer=publicationDrawerDOM(h);
+  h.c.liveProviderPublishedDetails();assert.ok(drawer.visible());assert.ok(drawer.fragment());const fragment=drawer.fragment(),n=h.calls.length;
+  if(invalidation==='role')allowed=false;else h.c.hensemDataScope={identity:'different-actor',mode:'all'};
+  if(transition==='render')h.c.render();else h.c.liveProviderPublishedDetails();
+  assert.equal(h.L.providerPublished,null);assert.equal(h.L.results.length,0);assert.equal(drawer.visible(),null,'authority loss closes the owned publication drawer');assert.equal(fragment.innerHTML,'','authority loss removes metadata from retained drawer DOM');h.c.liveProviderPublishedDetails();assert.equal(drawer.visible(),null);assert.equal(h.calls.length,n);
+ }
+});
+test('publication authority cleanup leaves a replacement drawer owned by another feature alone',async()=>{
+ const h=await setup();await h.c.liveQuery();const drawer=publicationDrawerDOM(h);h.c.liveProviderPublishedDetails();assert.ok(drawer.fragment());
+ h.c.openDrawer('Other feature','<p>Other feature owns this content</p>');assert.equal(drawer.fragment(),undefined);const before=drawer.closed(),n=h.calls.length;
+ h.c.hensemDataScope={identity:'changed-actor',mode:'all'};h.c.render();assert.equal(h.L.providerPublished,null);assert.equal(drawer.closed(),before);assert.equal(drawer.visible().title,'Other feature');assert.equal(h.calls.length,n);
 });

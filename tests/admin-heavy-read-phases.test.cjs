@@ -27,7 +27,7 @@ test('deposit orders finish on two workers before two bounded serial supplementa
  assert(!h.timers.some(t=>t.ms===30000),'queued exclusions have no execution timer');
  await advance(h);assert.equal(h.history[2].action,'aggregate');assert.equal(h.active(),2);assert.equal(h.L.loading,true);
  await advance(h);assert.equal(h.history.length,3);assert.equal(h.active(),1);assert.equal(h.L.loading,true);
- await advance(h);assert.deepEqual(h.history.slice(3).map(q=>q.action).sort(),['rates','submissionAnalysis']);assert.equal(h.active(),2);assert.equal(h.L.loading,false);assert.equal(h.L.results.length,3);assert.match(h.html(),/剔除已完成 0\/3/);
+ await advance(h);assert.deepEqual(h.history.slice(3).map(q=>q.action).sort(),['rates','submissionAnalysis']);assert.equal(h.active(),2);assert.equal(h.L.loading,false);assert.equal(h.L.results.length,3);assert.match(h.html(),/剔除读取中 0\/3/);
  await finish(h,run);assert.equal(h.max(),2);assert.deepEqual(h.history.slice(0,3).map(q=>q.platformId),platforms.map(p=>p.id));assert.deepEqual(h.history.filter(q=>q.action==='submissionAnalysis').map(q=>q.platformId),platforms.map(p=>p.id));
  const actions=h.history.map(q=>q.action),lastAggregate=actions.lastIndexOf('aggregate'),firstIntake=actions.indexOf('intakeCoverage'),work=actions.indexOf('workorders'),fee=actions.indexOf('rates');assert(fee<work&&work<lastAggregate&&lastAggregate<firstIntake);assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.L.providerIntake.status,'ready');assert.equal(h.L.providerComparisonIntake.status,'ready');assert.equal(h.controls.ready(),true);assert(h.controls.cancels>0);assert(!h.html().includes('live-read-phase'));
 });
@@ -92,7 +92,7 @@ test('slow exclusion cannot block paginated fees, workorders or comparison, and 
  assert.equal(h.history.at(-1).action,'rates');assert.equal(h.history.at(-1).offset,500);assert.equal(h.active(),2);assert(!h.history.some(q=>q.action==='workorders'||q.action==='intakeCoverage'));
  const page=take('rates');page.d.resolve({total:501,rows:[{id:'synthetic-rate-last',provider:'Synthetic provider',collectFee:'4%',scopeType:'all'}]});await settle();
  assert.equal(h.L.feeLookupLoading,false);assert.equal(h.L.feeLookupRows.length,501);assert.equal(h.history.at(-1).action,'workorders');await advanceAction(h,'workorders');assert(h.L.workorders);assert.equal(h.history.at(-1).action,'aggregate');
- for(let n=0;n<3;n++)await advanceAction(h,'aggregate');assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.history.at(-1).action,'intakeCoverage');assert.equal(h.history.filter(q=>q.action==='submissionAnalysis').length,1,'first exclusion can still be pending after every main order, fee and workorder has returned');assert.equal(h.active(),2);assert.match(h.html(),/剔除已完成 0\/3/);
+ for(let n=0;n<3;n++)await advanceAction(h,'aggregate');assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.history.at(-1).action,'intakeCoverage');assert.equal(h.history.filter(q=>q.action==='submissionAnalysis').length,1,'first exclusion can still be pending after every main order, fee and workorder has returned');assert.equal(h.active(),2);assert.match(h.html(),/剔除读取中 0\/3/);
  await finish(h,run);assert.equal(h.max(),2);const initial=h.history.length,repeated=h.c.liveQuery();await finish(h,repeated);assert(!h.history.slice(initial).some(q=>q.action==='rates'));assert(!h.history.slice(initial).some(q=>q.action==='aggregate'));assert.equal(h.max(),2);
 });
 test('fee failure is terminal and does not stop workorders, comparison, reconciliation or the exclusion lane',async()=>{
