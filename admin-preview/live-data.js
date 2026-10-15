@@ -937,7 +937,7 @@
     if(!pandaCoverageMatches(result,request))throw Error('熊猫所选创建窗口完整性尚未确认，请在订单列表查看已入库明细；暂不计入完整汇总');
    }
    return {...result,_aggregateReadAt:Date.now(),_aggregateAccessContext:context};
-  }).catch(error=>{if(/(?:401|403|permission|denied|login_required|session_expired|权限|会话失效)/i.test(String(error?.code||'')+' '+String(error?.message||'')))clearAggregateCache();throw error;})
+  }).catch(error=>{if(serial===L.serial&&!controller?.signal.aborted&&context===aggregateAccessContext()&&['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code))clearAggregateCache();throw error;})
    .finally(()=>{if(aggregateInflight.get(key)===entry)aggregateInflight.delete(key);});
   aggregateInflight.set(key,entry);return entry.promise;
  }

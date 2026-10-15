@@ -3,9 +3,10 @@ import { ownerPreviewTransportRead } from "./ownerPreviewVerification";
 import { dashboardResponseError, ensureDashboardSession, type DashboardSession } from "./dashboardAuthClient";
 export type PreviewAccess = {canView:boolean;canManage:boolean};
 export type PreviewGrant = {auth_user_id:string;username:string;role:string;active:boolean;can_view:boolean};
-export async function adminPreviewRequest(session:DashboardSession,query="",init:RequestInit={}):Promise<Response>{
+export async function adminPreviewRequest(session:DashboardSession,query="",init:RequestInit={},observeSession?:(current:DashboardSession)=>void):Promise<Response>{
   const current=await ensureDashboardSession(session);
   if(current.user.id!==session.user.id)throw new Error("当前登录账号已改变");
+  init.signal?.throwIfAborted();observeSession?.(current);
   const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,"");
   const url=new URL(base);if(url.protocol!=="https:"||url.origin!==base)throw new Error("后台地址配置无效");
   const response=await ownerPreviewTransportRead(()=>fetch(base+"/functions/v1/owner-admin-preview"+query,{...init,cache:"no-store",redirect:"error",headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),...(init.body?{"Content-Type":"application/json"}:{})}}),init.signal||undefined);

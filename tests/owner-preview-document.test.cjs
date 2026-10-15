@@ -102,7 +102,7 @@ test('bootstrap precedes original scripts and requires no eval or network CSP al
 function componentHarness(userId = 'offline-user-a', options = {}) {
   const listeners = new Map(), effects = [], effectDeps = [], refs = [], states = [], cleanups = [], calls = [], roleCalls = [], phases = [], restoreCalls = [];
   const lifecycle=options.commitEffects===true,effectRecords=[],callbackRecords=[],documentListeners=new Map(),intervals=new Map(),bridgeRecords=[],presenceSubscriptions=new Set(),liveCalls=[],posted=[];
-  let renderPending=false,disposed=false,intervalId=0,channelId=0,currentChild=null;
+  let renderPending=false,disposed=false,intervalId=0,channelId=0,currentChild=null,currentFrameKey=null;
   const sameDeps=(a,b)=>Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((value,index)=>Object.is(value,b[index]));
   function addListener(registry,name,callback){if(!registry.has(name))registry.set(name,new Set());registry.get(name).add(callback)}
   function removeListener(registry,name,callback){const set=registry.get(name);set?.delete(callback);if(!set?.size)registry.delete(name)}
@@ -120,7 +120,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     useCallback(callback,deps) { const index = callbackIndex++;if(lifecycle){if(!sameDeps(callbackRecords[index]?.deps,deps))callbackRecords[index]={deps,callback};return callbackRecords[index].callback}return callbacks[index] || (callbacks[index] = callback); },
     useEffect(callback, deps) { const index=effectIndex++;effectDeps[index]=deps;if(lifecycle){effectRecords[index]={...effectRecords[index],callback,nextDeps:deps}}else effects.push(callback); },
   };
-  const jsx = (type, props) => ({ type, props });
+  const jsx = (type, props, key) => ({ type, props, key });
   const currentSession = { user: { id: userId }, access_token: 'offline-host-access', refresh_token: 'offline-host-refresh' };
   const box = { exports: {} };
   const window = {
@@ -139,7 +139,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
     if (name.endsWith('/adminPreviewRestore')) return { restoreApprovedAdmin(html) { phases.push('restore'); restoreCalls.push(html); return options.restore ? options.restore(html) : html+'<!-- synthetic approved restoration -->'; } };
     if (name.endsWith('/ownerPreviewDocument')) return { ...api, makeOwnerPreviewDocument(...args) { phases.push('draft-document'); return api.makeOwnerPreviewDocument(...args); } };
     if (name.endsWith('/ownerPreviewShell')) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/ownerPreviewShell.ts'),'utf8')),{module:helper,exports:helper.exports,document:environment.document});return {...helper.exports,makeOwnerPreviewShellDocument(...args){phases.push('shell-document');return helper.exports.makeOwnerPreviewShellDocument(...args)}}; }
-    if (name.endsWith('/dashboardAuthClient')) return { dashboardResponseError: authErrors.dashboardResponseError, ensureDashboardSession: async candidate => candidate, normalizedManagementPermissions: profile=>({manage_viewers:profile.management_permissions?.manage_viewers!==false}) };
+    if (name.endsWith('/dashboardAuthClient')) return { DashboardHttpError:authErrors.DashboardHttpError, dashboardResponseError: authErrors.dashboardResponseError, ensureDashboardSession: async candidate => options.ensure?options.ensure(candidate):candidate, normalizedManagementPermissions: profile=>({manage_viewers:profile.management_permissions?.manage_viewers!==false}) };
     if (['adminConfigurationRequest','adminWorkorderRecordsRequest','depositStatisticsRequest','portalOperationLogsRequest'].some(helper=>name.endsWith('/'+helper))) { const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/'+name.split('/').pop()+'.ts'),'utf8')),{module:helper,exports:helper.exports});return helper.exports; }
     if (name.endsWith('/adminLiveBridge')) {
       if (!liveClient) { const module={exports:{}};const filename=path.join(repo,'src/lib/adminLiveBridge.ts');vm.runInNewContext(transpile(fs.readFileSync(filename,'utf8')),{...environment,module,exports:module.exports,setTimeout,clearTimeout},{filename});liveClient={...module.exports,...(lifecycle?{installAdminLiveBridge:settings=>trackedBridge('live',module.exports.installAdminLiveBridge,settings)}:{}),makeAdminLiveDocument(...args){phases.push('live-document');return module.exports.makeAdminLiveDocument(...args)}}; }
@@ -189,9 +189,9 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const commit=()=>{
     assert(lifecycle&&!disposed,'committed effects require a live lifecycle fixture');
     for(let attempt=0;attempt<20;attempt++){
-      renderPending=false;const tree=draw(),mounted=!!findElement(tree,'iframe');
-      if(mounted){if(!currentChild)currentChild={postMessage(data,target){posted.push({source:this,data,target})}};refs[0].current={contentWindow:currentChild}}
-      else {currentChild=null;refs[0].current=null}
+      renderPending=false;const tree=draw(),frame=findElement(tree,'iframe'),mounted=!!frame;
+      if(mounted){if(!currentChild||currentFrameKey!==frame.key)currentChild={postMessage(data,target){posted.push({source:this,data,target})}};currentFrameKey=frame.key;refs[0].current={contentWindow:currentChild}}
+      else {currentChild=null;currentFrameKey=null;refs[0].current=null}
       const changed=effectRecords.filter(record=>!record.committed||!sameDeps(record.deps,record.nextDeps));
       // React commits refs, then cleans up changed passive effects before setup.
       for(const record of changed){record.cleanup?.();record.cleanup=null}
@@ -339,7 +339,7 @@ function requestHarness(options = {}) {
   const fresh = { ...session, user: { id: options.freshUser || session.user.id }, access_token: 'offline-fresh-token' };
   vm.runInNewContext(transpile(fs.readFileSync(filename, 'utf8')), {
     module: box, exports: box.exports, URL,
-    require: name => { if(name==='./ownerPreviewVerification')return require('./load-typescript.cjs').loadTs(path.join(repo,'src/lib/ownerPreviewVerification.ts'));assert.equal(name, './dashboardAuthClient'); return { dashboardResponseError: authErrors.dashboardResponseError, ensureDashboardSession: async () => fresh }; },
+    require: name => { if(name==='./ownerPreviewVerification')return require('./load-typescript.cjs').loadTs(path.join(repo,'src/lib/ownerPreviewVerification.ts'));assert.equal(name, './dashboardAuthClient'); return { DashboardHttpError:authErrors.DashboardHttpError, dashboardResponseError: authErrors.dashboardResponseError, ensureDashboardSession: async () => fresh }; },
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: options.base || 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
     fetch: async (url, init) => { calls.push({ url, init }); return { ok: !(options.status >= 400), status: options.status || 200, json: async () => (options.body || { canView: true, canManage: false }) }; },
   }, { filename });
@@ -602,4 +602,39 @@ test('committed account replacement aborts the old recovery body and never reins
   newBody.resolve(HTML+'<!-- account B -->');await flush();const ready=h.commit();assertBridgeCounts(h,1);assert.notEqual(h.child,oldChild);const html=findElement(ready,'iframe').props.srcDoc;assert(html.includes('account B'));assert(!html.includes('obsolete account A'));assert(!html.includes('this-account-draft'));
   const reads=h.liveCalls.length;h.send(liveEnvelope(h,'old-account-source',oldChild,h.channel()));h.send(liveEnvelope(h,'old-account-channel',h.child,oldChannel));await flush();assert.equal(h.liveCalls.length,reads);assert(h.bridgeRecords.filter(x=>x.active).every(x=>x.source===h.child&&x.channel===h.channel()));
  }finally{oldBody.resolve(HTML);newBody.resolve(HTML);h.dispose();assert.equal(h.listenerCount('message'),0);assert.equal(h.presenceSubscribers(),0);assert.equal(clock.timers.size,0)}
+});
+
+test('module denial replaces whole frame tabs once with fresh authorization, without logout or retry storm',async()=>{
+ const fresh=deferredRead(),late=deferredRead();let docs=0,logout=0;
+ const h=componentHarness('offline-live-revocation',{commitEffects:true,onLogout:()=>logout++,fetch:async()=>++docs===1?protectedResponse(HTML):{ok:true,status:200,text:()=>fresh.promise},liveFetch:async(url)=>url.endsWith('/dashboard_admin_live_rates')?{ok:false,status:403,json:async()=>({message:'role_permission_denied'})}:late.promise});
+ try{await flush();h.commit();const oldChild=h.child,oldChannel=h.channel();oldChild.syntheticTabCaches={overview:[{marker:'PRIVATE_OLD_SCOPE'}],providers:[{marker:'PRIVATE_OTHER_TAB'}]};h.send(liveEnvelope(h,'old_tab'));const denied=liveEnvelope(h,'denied_button');denied.data.request={action:'rates'};denied.data.page='providers';h.send(denied);await flush();const waiting=h.commit();assert(!findElement(waiting,'iframe'));assertBridgeCounts(h,0);assert.notEqual(h.channel(),oldChannel);assert(h.liveCalls.every(call=>call.init.signal.aborted));assert.equal(logout,0);assert.equal(h.roleCalls.length,2);assert.equal(h.calls.length,2);assert(!h.calls[1].url.endsWith('?check=1'));
+ fresh.resolve(HTML);await flush();h.commit();assertBridgeCounts(h,1);assert.notEqual(h.child,oldChild);assert.equal(h.child.syntheticTabCaches,undefined);late.resolve({ok:true,json:async()=>({marker:'PRIVATE_LATE_SCOPE'})});await flush();assert(!h.posted.some(reply=>reply.data.result?.marker==='PRIVATE_LATE_SCOPE'));
+ const second=liveEnvelope(h,'second_denial');second.data.request={action:'rates'};second.data.page='providers';h.send(second);await flush();h.commit();assert(!findElement(h.draw(),'iframe'));assertBridgeCounts(h,0);assert.equal(h.roleCalls.length,2);h.checkPermission();h.checkPermission();await flush();assert.equal(h.roleCalls.length,2);assert.equal(logout,0);assert.match(h.states[2],/核对角色权限/);
+ }finally{fresh.resolve(HTML);late.resolve({ok:true,json:async()=>({})});h.dispose()}
+});
+
+test('session and IP denials destroy cached tabs without automatic logout or data retry',async()=>{
+ for(const code of ['application_session_denied','ip_denied','account_disabled']){let logout=0;const h=componentHarness('offline-live-'+code,{commitEffects:true,onLogout:()=>logout++,liveFetch:async()=>({ok:false,status:403,json:async()=>({code,message:'PRIVATE_SERVER'})})});try{await flush();h.commit();h.send(liveEnvelope(h,'denied'));await flush();h.commit();assert(!findElement(h.draw(),'iframe'));assertBridgeCounts(h,0);assert.equal(h.roleCalls.length,1);assert.equal(h.calls.length,1);h.checkPermission();await flush();assert.equal(h.roleCalls.length,1);assert.equal(logout,0);assert.match(h.states[2],/访问授权已失效/);assert.doesNotMatch(h.states[2],/PRIVATE_SERVER/);}finally{h.dispose()}}
+});
+
+test('same-account token replacement ignores an older live denial without rebuilding the current frame',async()=>{
+ const old=deferredRead(),h=componentHarness('offline-same-user-live',{commitEffects:true,liveFetch:async()=>h.liveCalls.length===1?old.promise:{ok:true,status:200,json:async()=>({marker:'fresh'})}});
+ try{await flush();h.commit();const child=h.child,channel=h.channel();h.send(liveEnvelope(h,'old'));await flush();h.rerenderSession({...h.session,access_token:'new-access',refresh_token:'new-refresh'});h.send(liveEnvelope(h,'fresh'));await flush();old.resolve({ok:false,status:401,json:async()=>({code:'application_session_denied'})});await flush();h.commit();assert(findElement(h.draw(),'iframe'));assert.equal(h.child,child);assert.equal(h.channel(),channel);assertBridgeCounts(h,1);assert.equal(h.posted.find(reply=>reply.data.id==='old').data.code,'ADMIN_LIVE_CANCELLED');assert.equal(h.states[2],'');}finally{h.dispose()}
+});
+
+test('old role, preview-check and protected-HTML denials revalidate the new same-account token instead of clearing its frame',async()=>{
+ for(const phase of ['role','check','html']){
+  const old=deferredRead();let roleReads=0,docReads=0,checkReads=0;
+  const role={mode:'owner',roleId:null,roleName:null,version:0,permissions:[],canView:true};
+  const h=componentHarness('offline-old-'+phase,{commitEffects:true,roleFetch:async()=>++roleReads===2&&phase==='role'?old.promise:{ok:true,status:200,json:async()=>role},fetch:async url=>{if(url.endsWith('?check=1'))return ++checkReads===1&&phase==='check'?old.promise:{ok:true,status:200,json:async()=>({ok:true,canView:true,canManage:true})};return ++docReads===1&&phase==='html'?old.promise:protectedResponse(HTML)}});
+  try{await flush();h.commit();if(phase!=='html')h.checkPermission();await flush();const oldChild=h.child;h.rerenderSession({...h.session,access_token:'fresh-access',refresh_token:'fresh-refresh'});if(oldChild){h.send(liveEnvelope(h,'fresh'));await flush();}
+   old.resolve({ok:false,status:403,json:async()=>({code:'application_session_denied'})});await flush();h.commit();assert(findElement(h.draw(),'iframe'),phase);assert.equal(h.states[2],'');assertBridgeCounts(h,1);assert.equal(h.roleCalls.at(-1).init.headers.Authorization,'Bearer fresh-access');if(oldChild)assert.equal(h.child,oldChild,'healthy mounted same-account frame survives obsolete verification denial');
+  }finally{old.resolve(protectedResponse(HTML));h.dispose()}
+ }
+});
+
+test('a current authority denial after ensure refresh remains terminal even when the call began with the old token',async()=>{
+ for(const phase of ['live','check']){const old=deferredRead();let renewed=false;const h=componentHarness('offline-actual-authority-'+phase,{commitEffects:true,ensure:input=>renewed?{...input,access_token:'actual-access'}:input,fetch:async url=>url.endsWith('?check=1')?old.promise:protectedResponse(HTML),liveFetch:async()=>old.promise});
+  try{await flush();h.commit();renewed=true;if(phase==='live')h.send(liveEnvelope(h,'held'));else h.checkPermission();await flush();h.rerenderSession({...h.session,access_token:'actual-access',refresh_token:'actual-refresh'});old.resolve({ok:false,status:401,json:async()=>({code:'application_session_denied'})});await flush();h.commit();assert(!findElement(h.draw(),'iframe'));assertBridgeCounts(h,0);assert(h.states[2]);}finally{old.resolve(protectedResponse(HTML));h.dispose()}
+ }
 });

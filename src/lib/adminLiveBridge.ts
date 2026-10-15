@@ -1,5 +1,5 @@
 "use client";
-import { ensureDashboardSession, type DashboardSession } from "./dashboardAuthClient";
+import { DashboardHttpError, ensureDashboardSession, type DashboardSession } from "./dashboardAuthClient";
 import { validateConfigurationRequest } from "./adminConfigurationRequest";
 import { validateWorkorderRecordsRequest } from "./adminWorkorderRecordsRequest";
 import { validateDepositStatisticsRequest } from "./depositStatisticsRequest";
@@ -375,6 +375,19 @@ function adminLiveTimeoutMessage(action:unknown,mode?:unknown):string {
  if(action==='pendingSnapshot')return mode===undefined?'近7天代付中快照读取超时，请重试；不能据此判断为0':'代付中存量读取超时，请重试；不能据此判断为0';
  return ['syncHealth','intakeCoverage'].includes(String(action))?'同步检查超时，请稍后重试；不能据此判断平台没有数据':action==='withdrawReasons'?'该平台当日原因读取超时，请点击重试':['aggregate','collectedData','reportSummary'].includes(String(action))?'读取超时，不代表没有数据；请重试':'读取超时，请缩短日期或选择单个平台后重试';
 }
+export type AdminLiveAccessDenial = 'session'|'permission';
+const sessionDenial=(status:number,code:unknown,message='')=>status===401||['application_session_denied','ip_denied','account_disabled','session_expired','login_required','preview_denied'].some(value=>code===value||message.trim()===value);
+class AdminLiveAccessError extends Error {
+ readonly code:'ADMIN_LIVE_SESSION_DENIED'|'ADMIN_LIVE_PERMISSION_DENIED';
+ constructor(message:string,readonly kind:AdminLiveAccessDenial){super(message);Object.setPrototypeOf(this,new.target.prototype);this.code=kind==='session'?'ADMIN_LIVE_SESSION_DENIED':'ADMIN_LIVE_PERMISSION_DENIED';}
+}
+const permissionError=(message:string,token:string):Error=>['channel_status_role_denied','assigned_role_required','role_permission_denied','role_permissions_changed','role_gateway_required','role_archived','role_unavailable','role_management_denied','role_creation_denied','role_grant_exceeds_actor','auto_withdraw_permission_denied','original_rate_permission_denied','security_permission_denied','permission_denied','scope_denied','platform_denied','job_denied','configuration_denied','note_denied'].includes(token.trim())?new AdminLiveAccessError(message,'permission'):Error(message);
+async function adminLiveSession(session:DashboardSession):Promise<DashboardSession>{
+ try{return await ensureDashboardSession(session)}catch(error){
+  if(error instanceof DashboardHttpError&&([401,403].includes(error.status)||['refresh_invalid','session_changed','session_logged_out','profile_denied'].includes(error.code)))throw new AdminLiveAccessError('登录会话已失效，或当前账号未获后台访问授权，请重新验证','session');
+  throw error;
+ }
+}
 class AdminLiveReadError extends Error {
  constructor(message:string,readonly code:'57014'|'ADMIN_LIVE_TIMEOUT'|'ADMIN_LIVE_NETWORK'){super(message);Object.setPrototypeOf(this,new.target.prototype);}
 }
@@ -384,28 +397,36 @@ async function adminLiveFetch(url:string,init:RequestInit):Promise<Response>{
   throw new AdminLiveReadError('网络连接失败，请重试；已完成结果保留','ADMIN_LIVE_NETWORK');
  }
 }
-export async function adminLiveRequest(session:DashboardSession,input:unknown,signal?:AbortSignal,roleContext?:{assigned:boolean;page:string}):Promise<unknown>{
+export async function adminLiveRequest(session:DashboardSession,input:unknown,signal?:AbortSignal,roleContext?:{assigned:boolean;page:string},observeSession?:(current:DashboardSession)=>void):Promise<unknown>{
  signal?.throwIfAborted();
  if(roleContext?.assigned&&(typeof roleContext.page!=="string"||!/^[a-z][a-z0-9_]{0,63}$/.test(roleContext.page)))throw Error("当前角色没有此页面或操作权限，请联系管理员");
- const request=validateAdminLiveRequest(input),current=await ensureDashboardSession(session);
+ const request=validateAdminLiveRequest(input),current=await adminLiveSession(session);
  signal?.throwIfAborted();
- if(current.user.id!==session.user.id)throw Error("当前登录账号已改变");
+ if(current.user.id!==session.user.id)throw new AdminLiveAccessError("当前登录账号已改变",'session');
+ observeSession?.(current);
  if(request.action==="portalOperationLogs"){
   if(roleContext?.assigned)throw Error("工单操作日志目前仅总管理员可查看");
   const response=await fetch("https://hensem-india-workorder.workdesk-hub.workers.dev/api/owner-operation-logs",{method:"POST",headers:{Authorization:`Bearer ${current.access_token}`,"Content-Type":"application/json"},body:JSON.stringify(Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))),signal,cache:"no-store",redirect:"error",credentials:"omit"});
-  if(!response.ok){if(response.status===401)throw Error("后台登录已失效，请重新登录");if(response.status===403)throw Error("当前账号没有此范围的操作日志查看权限");throw Error("操作日志读取未完成，请重试；不能据此判断没有日志");}
+  if(!response.ok){
+   if(response.status===401)throw new AdminLiveAccessError("后台登录已失效，请重新登录",'session');
+   if(response.status===403){let code:unknown;try{const body=await response.json();code=body?.code??body?.error_code}catch{}
+    if(sessionDenial(response.status,code))throw new AdminLiveAccessError("后台访问授权已失效，请重新验证",'session');
+    throw new AdminLiveAccessError("当前账号没有此范围的操作日志查看权限",'permission');}
+   throw Error("操作日志读取未完成，请重试；不能据此判断没有日志");
+  }
   return response.json();
  }
  if(request.action==="collectorControl"){
   const {operation,...fields}=request;delete fields.action;
   const response=await fetch("https://data-center.workdesk-hub.workers.dev/hensem-data-center/api/collector-control",{method:"POST",body:JSON.stringify({action:operation,...fields}),headers:{Authorization:`Bearer ${current.access_token}`,"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error",credentials:"omit"});
-  if(response.status===401)throw Error("登录已失效，请重新登录");
-  let data:unknown;try{data=await response.json()}catch{if(response.status===403)throw Error("当前账号没有采集管理操作权限");throw Error("采集管理服务尚未接通，请完成首次部署后刷新")}
+  if(response.status===401)throw new AdminLiveAccessError("登录已失效，请重新登录",'session');
+  let data:unknown;try{data=await response.json()}catch{if(response.status===403)throw new AdminLiveAccessError("当前账号没有采集管理操作权限",'permission');throw Error("采集管理服务尚未接通，请完成首次部署后刷新")}
   if(response.status===403){
    const code=data&&typeof data==="object"?(data as {code?:unknown}).code:null;
-   if(code==="application_session_denied")throw Error("登录已失效，请重新登录");
-   if(code==="ip_denied")throw Error("当前网络未获后台访问授权");
-   throw Error("当前账号没有采集管理操作权限");
+   if(code==="application_session_denied")throw new AdminLiveAccessError("登录已失效，请重新登录",'session');
+   if(code==="ip_denied")throw new AdminLiveAccessError("当前网络未获后台访问授权",'session');
+   if(sessionDenial(response.status,code))throw new AdminLiveAccessError("后台访问授权已失效，请重新验证",'session');
+   throw new AdminLiveAccessError("当前账号没有采集管理操作权限",'permission');
   }
   if(!response.ok||!data||typeof data!=="object"||(data as {ok?:unknown}).ok!==true){
    if(response.status===409)throw Error("任务状态已被修改，请刷新后核对再操作");
@@ -420,24 +441,26 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  const collectedKyc=request.action==="depositStatistics"&&request.section==="kyc";
  const rpc=collectedKyc?"dashboard_admin_deposit_kyc":request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
  const response=await adminLiveFetch(base+"/rest/v1/rpc/"+(roleContext?.assigned&&!collectedKyc?"dashboard_admin_execute":rpc),{method:"POST",body:JSON.stringify(collectedKyc?{p_page:roleContext?.assigned?roleContext.page:null,p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))}:roleContext?.assigned?{p_page:roleContext.page,p_request:request}:{p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
- if(!response.ok){let code="",queryCancelled=false;try{const body=await response.json();code=String(body.message||"");queryCancelled=body.code==='57014'}catch{}
- if(/role_|permission_denied/.test(code))throw Error("当前角色没有此页面或操作权限，请联系管理员");
+ if(!response.ok){let code="",serverCode="",queryCancelled=false;try{const body=await response.json();code=typeof body.message==='string'?body.message:'';serverCode=typeof body.code==='string'?body.code:typeof body.error_code==='string'?body.error_code:'';queryCancelled=body.code==='57014'}catch{}
+ // Only trusted HTTP status and known server tokens revoke access, never arbitrary error text.
+ if(sessionDenial(response.status,serverCode,code))throw new AdminLiveAccessError("正式数据读取未获授权，或会话已失效",'session');
+ if(/role_|permission_denied/.test(code))throw permissionError("当前角色没有此页面或操作权限，请联系管理员",code);
  if(/note_conflict/.test(code))throw Error("该日备注已被修改，请取消后重新打开核对；当前输入已保留");
- if(/note_denied/.test(code))throw Error("当前账号没有自动出款备注编辑权限");
+ if(/note_denied/.test(code))throw permissionError("当前账号没有自动出款备注编辑权限",code);
  if(/note_date_unavailable/.test(code))throw Error("所选日期没有该平台的出款记录，请选择有数据的日期");
  if(/configuration_conflict/.test(code))throw Error("归类已被其他人修改，请刷新后再保存");
- if(request.action==="workorderRecords"&&/scope_denied|preview_denied/.test(code))throw Error("当前账号没有此范围的工单查看权限");
- if(["pendingSnapshot","pendingAnalysis","pendingOrders"].includes(String(request.action))&&/scope_denied|preview_denied|platform_denied/.test(code))throw Error("当前账号没有此范围的代付中查看权限");
+ if(request.action==="workorderRecords"&&/scope_denied|preview_denied/.test(code))throw permissionError("当前账号没有此范围的工单查看权限",code);
+ if(["pendingSnapshot","pendingAnalysis","pendingOrders"].includes(String(request.action))&&/scope_denied|preview_denied|platform_denied/.test(code))throw permissionError("当前账号没有此范围的代付中查看权限",code);
  if(["pendingSnapshot","pendingAnalysis","pendingOrders"].includes(String(request.action))&&/mixed_currency/.test(code))throw Error("请选择同一币种的平台查看代付中快照");
  if(request.action==="submissionStreak"&&/job_expired|streak_expired|analysis_expired/.test(code))throw Error("连续提交分析已过期，请重新查询");
  if(request.action==="submissionStreak"&&/job_busy|streak_busy|analysis_busy|55P03/.test(code))throw Error("连续提交分析正在计算，请稍后继续");
  if(request.action==="submissionStreak"&&/analysis_not_ready/.test(code))throw Error("连续提交分析尚未完成，请继续计算后查看结果");
  if(request.action==="submissionStreak"&&/analysis_nonce_conflict/.test(code))throw Error("连续提交分析筛选已改变，请重新查询");
  if(request.action==="submissionStreak"&&/analysis_job_limit|analysis_day_limit/.test(code))throw Error("连续提交分析任务较多，请稍后继续已开始的查询");
- if(request.action==="submissionStreak"&&/scope_denied|preview_denied|platform_denied|job_denied/.test(code))throw Error("当前账号没有此平台或分析任务的查看权限");
- if(/configuration_denied|scope_denied/.test(code))throw Error("当前账号没有此范围的归类权限");
+ if(request.action==="submissionStreak"&&/scope_denied|preview_denied|platform_denied|job_denied/.test(code))throw permissionError("当前账号没有此平台或分析任务的查看权限",code);
+ if(/configuration_denied|scope_denied/.test(code))throw permissionError("当前账号没有此范围的归类权限",code);
  if(/mapping_not_found|invalid_classification/.test(code))throw Error("归类来源或国家配置已改变，请刷新后重试");
- if([401,403].includes(response.status))throw Error("正式数据读取未获授权，或会话已失效");
+ if([401,403].includes(response.status))throw new AdminLiveAccessError("正式数据读取未获授权，或会话已失效",'session');
  if(request.action==="intakeCoverage"&&request.operation==="orderCatalog"&&code==="invalid_coverage_request")throw Error("订单采集目录操作暂不支持");
  if(request.durationVersion===2&&code==="invalid_request")throw Error("到账时效统计接口尚未更新，请更新后重试");
  if(/unsupported_filter/.test(code))throw Error("此来源未提供该检索字段，请清空该字段后查询");
@@ -448,9 +471,10 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  throw Error("正式数据查询未完成，请重试；不能据此判断没有数据");}
  return response.json();
 }
-export function installAdminLiveBridge(options:{source:()=>Window|null|undefined;channel:()=>string;session:DashboardSession|(()=>DashboardSession);target?:Window;roleAccess?:()=>DashboardRoleAccess|null;cancelPendingOnDispose?:boolean}):()=>void{
+export function installAdminLiveBridge(options:{source:()=>Window|null|undefined;channel:()=>string;session:DashboardSession|(()=>DashboardSession);target?:Window;roleAccess?:()=>DashboardRoleAccess|null;cancelPendingOnDispose?:boolean;onAccessDenied?:(kind:AdminLiveAccessDenial)=>void}):()=>void{
  type Pending={id:string;request:unknown;page:string;source:Window;channel:string;deadline:number;timer?:ReturnType<typeof setTimeout>;controller?:AbortController;settled:boolean};
- const target=options.target||window,active=new Map<string,Pending>(),queued=new Map<string,Pending>();let closed=false;
+ const target=options.target||window,active=new Map<string,Pending>(),queued=new Map<string,Pending>();let closed=false,authoritySequence=0;
+ let latestAuthority:{sequence:number;userId:string;token:string}|null=null;
  const current=(item:Pending)=>!closed&&item.source===options.source()&&item.channel===options.channel();
  const post=(item:Pending,payload:Record<string,unknown>)=>{if(current(item))try{item.source.postMessage({type:LIVE_RESPONSE,id:item.id,channel:item.channel,...payload},"*")}catch{/* The frame may close while a request settles. */}};
  const finish=(item:Pending,payload:Record<string,unknown>)=>{if(item.settled)return;item.settled=true;clearTimeout(item.timer);post(item,payload)};
@@ -465,6 +489,10 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
    if(!current(item)||item.settled){clearTimeout(item.timer);return;}
    if(Date.now()>=item.deadline){stop(item,true);return;}
    const controller=new AbortController();item.controller=controller;active.set(item.id,item);
+   const inputSession=typeof options.session==='function'?options.session():options.session,sequence=++authoritySequence;let verifiedSession=inputSession;
+   const observeSession=(current:DashboardSession)=>{verifiedSession=current;if(!item.settled&&thisDocument()&&(!latestAuthority||sequence>=latestAuthority.sequence))latestAuthority={sequence,userId:current.user.id,token:current.access_token}};
+   const thisDocument=()=>current(item)&&!controller.signal.aborted;
+   const sameAuthority=()=>{const latest=typeof options.session==='function'?options.session():options.session;return latest.user.id===verifiedSession.user.id&&(latest.access_token===inputSession.access_token||latest.access_token===verifiedSession.access_token)&&(!latestAuthority||latestAuthority.userId===verifiedSession.user.id&&latestAuthority.token===verifiedSession.access_token)};
    try{
     if((item.request as {action?:unknown;section?:unknown})?.action==="depositStatistics"&&(item.request as {section?:unknown}).section==="recovery"){
      const request=validateAdminLiveRequest(item.request),access=options.roleAccess?.();
@@ -475,8 +503,13 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
      const request=validateAdminLiveRequest(item.request),access=options.roleAccess?.(),permission=request.operation==="overview"?"view":"edit";
      if(item.page!=="collector_control"||!access?.canView||!(access.mode==="owner"||access.mode==="assigned"&&access.permissions.includes("collector_control.view")&&access.permissions.includes("collector_control."+permission)))throw Error("当前账号没有采集管理操作权限");
     }
-    const result=await adminLiveRequest(typeof options.session==="function"?options.session():options.session,item.request,controller.signal,{assigned:options.roleAccess?.()?.mode==="assigned",page:item.page});if(Date.now()>=item.deadline)stop(item,true);else finish(item,{result})}
-   catch(e){if(Date.now()>=item.deadline)stop(item,true);else finish(item,{error:e instanceof Error?e.message:"读取失败",...(e instanceof AdminLiveReadError?{code:e.code}:{})})}
+    const result=await adminLiveRequest(inputSession,item.request,controller.signal,{assigned:options.roleAccess?.()?.mode==="assigned",page:item.page},observeSession);if(Date.now()>=item.deadline)stop(item,true);else finish(item,{result})}
+   catch(e){if(Date.now()>=item.deadline)stop(item,true);else if(e instanceof AdminLiveAccessError&&current(item)&&!item.settled&&!controller.signal.aborted){
+     if(!sameAuthority()){finish(item,{error:'登录会话已更新，请重新查询',code:'ADMIN_LIVE_CANCELLED'});return;}
+     finish(item,{error:e.message,code:e.code});
+     // Close the entire document epoch before any queued read or denial callback can run.
+     dispose();try{options.onAccessDenied?.(e.kind)}catch{/* The denied bridge stays closed even if its host unmounts. */}
+    }else finish(item,{error:e instanceof Error?e.message:"读取失败",...(e instanceof AdminLiveReadError?{code:e.code}:{})})}
    finally{clearTimeout(item.timer);if(active.get(item.id)===item)active.delete(item.id);drain()}
  };
  const drain=()=>{
@@ -501,8 +534,9 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
    if(active.size>=4){queued.set(id,item);return;}
    void run(item);
  };
+ const dispose=()=>{if(closed)return;if(options.cancelPendingOnDispose)for(const item of [...active.values(),...queued.values()])finish(item,{error:"连接正在重新验证，请稍后重试",code:"ADMIN_LIVE_CANCELLED"});closed=true;target.removeEventListener("message",receive);for(const item of [...active.values(),...queued.values()]){item.settled=true;clearTimeout(item.timer);item.controller?.abort()}active.clear();queued.clear()};
  target.addEventListener("message",receive);
- return ()=>{if(closed)return;if(options.cancelPendingOnDispose)for(const item of [...active.values(),...queued.values()])finish(item,{error:"连接正在重新验证，请稍后重试",code:"ADMIN_LIVE_CANCELLED"});closed=true;target.removeEventListener("message",receive);for(const item of [...active.values(),...queued.values()]){item.settled=true;clearTimeout(item.timer);item.controller?.abort()}active.clear();queued.clear()};
+ return dispose;
 }
 // A hash route only selects presentation. The host's existing active-account
 // and preview-grant checks still run before any document or data is returned.
@@ -528,7 +562,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
  const pageBase=adminPreviewPageUrl("overview",window.location).split("#")[0];
  const initialPage=adminPreviewPageFromHash(window.location.hash)||"overview";
  const script=`<script>(function(){
- const channel=${encode(channel)},hostOrigin=${encode(origin)},requests=new Map();let seq=0;
+ const channel=${encode(channel)},hostOrigin=${encode(origin)},requests=new Map();let seq=0,accessDeniedCode='';
  const error=(message,code)=>{const value=Error(message);value.code=code;if(code==='ADMIN_LIVE_CANCELLED')value.name='AbortError';return value};
  const release=id=>{const q=requests.get(id);if(!q)return null;requests.delete(id);clearTimeout(q.timer);if(q.signal&&q.abort)q.signal.removeEventListener('abort',q.abort);return q};
  const cancel=(id,timeout=false)=>{const q=release(id);if(!q)return;try{parent.postMessage({type:'${LIVE_CANCEL}',channel,id,reason:timeout?'timeout':'cancelled'},hostOrigin)}catch{}q.reject(error(timeout?'正式数据读取超时，请重试':'查询已取消',timeout?'ADMIN_LIVE_TIMEOUT':'ADMIN_LIVE_CANCELLED'))};
@@ -541,6 +575,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
  // frame boundary. The menu independently validates its allowed page IDs.
  window.hensemAdminPageUrl=function(page){return typeof page==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(page)?${encode(pageBase)}+'#admin/'+(page==='channelquality'?'providers':page):''};
  window.hensemLiveRequest=function(request,options={}){return new Promise((resolve,reject)=>{
+   if(accessDeniedCode){reject(error('后台访问权限已改变，请重新验证',accessDeniedCode));return;}
    // Configuration batches continue while the user browses another page. Keep
    // their original permission context; the server still checks this page and action.
    const page=request?.action==='payoutConfig'?'payout_config':window.hensemCurrentAdminPage?.()||window.hensemAdminInitialPage;
@@ -558,7 +593,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
  })};
  // Navigation cancels read requests only; an in-flight edit must keep its outcome.
  window.hensemLiveCancelRequests=function(actions){let count=0;for(const [id,q]of [...requests]){if(['configurationWrite','withdrawNote'].includes(q.request&&q.request.action)||q.request?.action==='collectorControl'&&q.request.operation!=='overview')continue;if(Array.isArray(actions)&&!actions.includes(q.request&&q.request.action))continue;cancel(id);count++;}return count};
- addEventListener('message',event=>{const data=event.data;if(event.source!==parent||event.origin!==hostOrigin||!data||data.type!=='${LIVE_RESPONSE}'||data.channel!==channel||typeof data.id!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(data.id))return;const pending=requests.get(data.id);if(!pending)return;if(Date.now()>=pending.deadline){cancel(data.id,true);return;}const q=release(data.id);data.error?q.reject(error(data.error,data.code)):q.resolve(data.result)});
+ addEventListener('message',event=>{const data=event.data;if(event.source!==parent||event.origin!==hostOrigin||!data||data.type!=='${LIVE_RESPONSE}'||data.channel!==channel||typeof data.id!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(data.id))return;const pending=requests.get(data.id);if(!pending)return;if(Date.now()>=pending.deadline){cancel(data.id,true);return;}const q=release(data.id);if(data.error&&['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED'].includes(data.code)){accessDeniedCode=data.code;window.hensemRoleAccess={mode:'assigned',canView:false,permissions:[]};window.hensemDataScope={mode:'selected',identity:''};}data.error?q.reject(error(data.error,data.code)):q.resolve(data.result)});
 })();</script>`;
  return html.replace(/(<!doctype html>)/i,"$1"+script);
 }

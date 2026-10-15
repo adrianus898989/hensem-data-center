@@ -83,3 +83,12 @@ test('a bounded multi-day failure caches only completed leaves and retry preserv
  h.setHandler(r=>{if(r.startAt===middle&&failed)throw Error('Synthetic source offline');return response(r);});await assert.rejects(h.c.__cacheTest.readAggregate(q,h.L.serial,false,true),/Synthetic source offline/);assert.equal(stats(h).entries,1,'an incomplete overall period is never cached as complete');assert.equal(h.c.__cacheTest.cachedAggregate(q),null);
  failed=false;const r=await h.c.__cacheTest.readAggregate(q,h.L.serial,true,true);assert.equal(queries(h).filter(x=>x.startAt===from).length,1);assert.equal(queries(h).filter(x=>x.startAt===middle).length,2);assert(queries(h).some(x=>x.startAt===last&&x.endAt===end));assert.deepEqual(Array.from(r._parts,p=>[p.startAt,p.endAt]),[[from,middle],[middle,last],[last,end]]);assert.equal(r.total,195);const before=queries(h).length;assert.equal((await read(h,q)).total,195);assert.equal(queries(h).length,before,'only the successful contiguous whole range can be reused on the next query');
 });
+
+test('controlled denial evicts every aggregate scope; message wording alone never discards a valid snapshot',async()=>{
+ for(const code of ['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED']){const h=await ready();await read(h);h.setHandler(()=>{throw Object.assign(Error('正式数据读取未获授权，或会话已失效'),{code})});await assert.rejects(read(h,request({providers:['Other']})));assert.equal(stats(h).entries,0);h.setHandler(q=>response(q));assert.notEqual((await read(h))._aggregateCacheHit,true);assert.equal(queries(h).length,3);}
+ const h=await ready();await read(h);h.setHandler(()=>{throw Error('Synthetic unavailable: permission 403')});await assert.rejects(read(h,request({providers:['Other']})));assert.equal((await read(h))._aggregateCacheHit,true);assert.equal(queries(h).length,2);
+});
+
+test('old aggregate denial cannot evict a newer identity snapshot',async()=>{
+ const h=await ready(),late=deferred();h.setHandler(()=>late.promise);const old=read(h),rejected=assert.rejects(old);await settle();h.c.hensemDataScope.identity='SYNTHETIC-SCOPE-NEW';h.setHandler(q=>response(q));await read(h);late.reject(Object.assign(Error('登录已失效，请重新登录'),{code:'ADMIN_LIVE_SESSION_DENIED'}));await rejected;assert.equal((await read(h))._aggregateCacheHit,true);assert.equal(queries(h).length,2);
+});
