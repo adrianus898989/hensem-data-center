@@ -120,11 +120,14 @@
  function compareBuckets(a,b){return bucketNumber(a.bucket)-bucketNumber(b.bucket)||String(a.bucket).localeCompare(String(b.bucket))}
  async function prepareAmountBands(serial){
   if(!window.HensemAmountBands)return;
-  const currency=L.currency,country=L.country,providers=activeValues('provider',''),platforms=selected();let rates=L.feeLookupRows;
-  if(providers.length&&!Array.isArray(rates)){
-   try{rates=[];let total=0;do{const result=await window.hensemLiveRequest({action:'rates',scopeType:'all',offset:rates.length,limit:500});if(serial!==L.serial)return;const page=result.rows||[];total=Number(result.total||0);if(total>20000||(!page.length&&rates.length<total))throw Error('限额目录不完整');rates.push(...page)}while(rates.length<total)}catch{rates=[]}
-  }
-  if(serial!==L.serial)return;
+  const currency=L.currency,country=L.country,providers=activeValues('provider',''),platforms=selected();
+  // Limits and displayed fees share one validated, cancellable directory. The
+  // same snapshot fixes band edges before querying orders and is reused later.
+  if(providers.length&&feeLookupPages.has(state.page))await ensureFeeLookup(false,true);
+  if(serial!==L.serial||L.dirty)return;
+  // Events has no rates request capability. It may reuse an authorized fresh
+  // snapshot, otherwise keep the established country reference bands.
+  const rates=feeLookupPages.has(state.page)||validFeeSnapshot(feeLookupSnapshot)?L.feeLookupRows:null;
   L.amountBandProfiles=Object.fromEntries(['charge','withdraw'].map(direction=>{
    const fallback=HensemAmountBands.profile({currency,direction}),limits=[];let matched=0;
    const limitRates=(rates||[]).map(r=>({...r,collectFee:r.collectFee||(r.collectLimit?'limit':''),payoutFee:r.payoutFee||(r.payoutLimit?'limit':'')}));
@@ -165,7 +168,7 @@
  function prepareFeeLookupQuery(force=false){if(!feeLookupPages.has(state.page))return;cancelFeeLookup();const context=syncFeeLookupIdentity();if(force||!validFeeSnapshot(feeLookupSnapshot,context))clearFeeLookupCache();feeLookupIntent={context,page:state.page};}
  function readFeeLookupPage(request,signal){const controller=new AbortController();return new Promise((resolve,reject)=>{let settled=false,timer;const finish=(fn,value)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',cancel);fn(value)};const cancel=()=>{const error=Error('查询已取消');error.name='AbortError';finish(reject,error);controller.abort()};if(signal?.aborted){cancel();return;}signal?.addEventListener('abort',cancel,{once:true});timer=setTimeout(()=>{finish(reject,Error('费率读取超时，请点击重试费率；未读取部分保持未知'));controller.abort()},30000);try{Promise.resolve(window.hensemLiveRequest(request,{signal:controller.signal})).then(value=>finish(resolve,value),error=>finish(reject,error))}catch(error){finish(reject,error)}})}
  async function ensureFeeLookup(force=false,inPhase=false){
-  if(localPaginationPaint||L.feeLookupLoading||phasedReadBusy()&&!inPhase)return;if((L.loading||L.restoredPage)&&!force)return;
+  if(localPaginationPaint||L.feeLookupLoading||phasedReadBusy()&&!inPhase)return;if((L.loading&&!inPhase||L.restoredPage)&&!force)return;
   const context=syncFeeLookupIdentity();if(!roleAllowed(state.page,'view')||!roleAllowed(state.page,'query')){clearFeeLookupCache();L.feeLookupError='当前角色没有费率查询权限';return;}
   if(force)prepareFeeLookupQuery(true);else if(L.dirty||!feeLookupIntent||feeLookupIntent.context!==context||feeLookupIntent.page!==state.page)return;
   if(Array.isArray(L.feeLookupRows)||L.feeLookupError)return;
@@ -1106,7 +1109,7 @@
   if(isChannelStatus()){cancelDataReads();L.restoredPage=false;L.error='';if(!channelStatus){L.error='平台通道调整暂不可用';render();return;}await channelStatus.load();return;}
   if(isDailyComparison()){cancelDataReads();L.restoredPage=false;L.error='';L.queryNow=Date.now();if(force)clearAggregateCache();if(!dailyComparison){L.error='每日对比暂不可用';render();return;}await dailyComparison.load(force);return;}
   if(state.page==='stuck'){const serial=++L.serial;cancelDataReads();L.restoredPage=false;L.dirty=false;L.error='';L.loading=true;L.queryNow=Date.now();render();try{if(!pendingAnalysis)throw Error('代付中分析暂不可用');await pendingAnalysis.load(force);}catch(e){if(serial===L.serial)L.error=e.message||'读取失败';}finally{if(serial===L.serial){L.loading=false;render();}}return;}
-  if(state.page==='events'){if(!L.dirty&&(L.loading||phasedReadBusy()))return;const queryNow=!force&&!L.dirty&&(submissionAnalysis?.canReuseWindow?.()||Date.now()>=L.queryNow&&Date.now()-L.queryNow<30000)?L.queryNow:Date.now(),serial=++L.serial;cancelDataReads();L.restoredPage=false;L.dirty=false;L.error='';L.queryNow=queryNow;L.loading=true;beginReadPhases(serial);render();try{if(window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;L.loading=false;setReadPhase(serial,'读取刷单风控统计');await submissionAnalysis?.load(force);}catch(e){if(serial===L.serial)L.error=e.message||'读取失败';}finally{if(serial===L.serial)L.loading=false;endReadPhases(serial);}return;}
+  if(state.page==='events'){if(!L.dirty&&(L.loading||phasedReadBusy()))return;const queryNow=!force&&!L.dirty&&(submissionAnalysis?.canReuseWindow?.()||Date.now()>=L.queryNow&&Date.now()-L.queryNow<30000)?L.queryNow:Date.now(),serial=++L.serial;cancelDataReads();L.restoredPage=false;L.dirty=false;L.error='';L.queryNow=queryNow;L.loading=true;beginReadPhases(serial);render();try{if(window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;if(L.dirty){L.loading=false;return;}L.loading=false;setReadPhase(serial,'读取刷单风控统计');await submissionAnalysis?.load(force);}catch(e){if(serial===L.serial)L.error=e.message||'读取失败';}finally{if(serial===L.serial)L.loading=false;endReadPhases(serial);}return;}
   if(state.page==='orders'&&!orderPlatform()){L.serial++;cancelDataReads();L.queryRetrying=false;L.detailSerial++;L.loading=false;L.detailBusy=false;L.results=[];L.detail=null;L.error='';L.queryWarnings=[];L.queryFailures=[];L.queryPlatforms=[];L.queryScope='';L.comparisonResults=[];L.comparisonStatus='idle';L.dirty=true;providerOrders.cancel();loadProviderOptions();render();return}
   const scope=aggregateQueryScope();
   if(!L.catalogReady||(L.loading||phasedReadBusy())&&!L.dirty&&L.inflightScope===scope)return;L.inflightScope=scope;
@@ -1116,7 +1119,7 @@
   L.restoredPage=false;const platforms=selected();if(force){clearAggregateCache();providerIntake?.clearCache?.();}loadProviderOptions();const serial=++L.serial;cancelDataReads();L.merchantTrend=null;L.overviewIntake=null;L.providerIntake=null;L.providerComparisonIntake=null;L.queryScope=scope;L.queryPaused=false;L.queryPlatforms=platforms.slice();L.queryFailures=[];L.queryRetrying=false;providerOrders.cancel();L.detailSerial++;L.workordersSerial++;L.workorders=null;L.workordersLoading=false;L.workordersError='';L.workordersScope='';L.queryNow=queryNow;L.comparisonResults=[];L.comparisonStatus='idle';L.comparisonError='';L.error='';L.queryWarnings=[];L.dirty=false;L.loading=true;L.progress='正在读取正式订单…';L.detail=null;L.page=1;L.localPage=1;L.tablePages={};L.results=[];L.loadedView=L.status==='all'?aggregateMode():'full';beginReadPhases(serial);prepareFeeLookupQuery(force);memberCounts?.beginQuery?.(force);render();
   let index=0,done=0;const results=[];let submissionBatch=null;
   try{
-   if(!isSuccessAnalysis()&&window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;
+   if(!isSuccessAnalysis()&&window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;if(L.dirty){L.loading=false;return;}
    if(state.page==='providers')submissionBatch=submissionAnalysis?.startWithOrders(force);
    const requests=platforms.map(p=>query(p,'aggregate'));if(state.page==='orders'&&platforms.length===1&&orderSource(platforms[0])==='panda'){L.loading=false;await liveDetails();return;}
    async function worker(){while(index<requests.length&&serial===L.serial){const i=index++;if(phasedReadBusy())setReadPhase(serial,'读取 '+platforms[i].name+' 的当期订单');try{const r=await readAggregate(requests[i],serial,!force);if(serial!==L.serial)return;results[i]=r}catch(e){if(serial!==L.serial)return;L.queryFailures.push({id:platforms[i].id,name:platforms[i].name,message:e.message||'读取失败'});L.queryWarnings=L.queryFailures.map(f=>f.name+'：'+f.message)}if(serial!==L.serial)return;done++;L.results=results.filter(Boolean);L.progress='正式数据读取：完整返回 '+results.filter(Boolean).length+' / '+requests.length+' 个平台'+(L.queryWarnings.length?'，失败 '+L.queryWarnings.length+' 个':'')+'；已处理 '+done+' 个';render()}}

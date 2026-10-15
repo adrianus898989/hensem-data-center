@@ -14,7 +14,7 @@ function reply(q){const p=platforms.find(p=>p.id===q.platformId)||P;
 }
 const heavy=q=>['aggregate','submissionAnalysis','intakeCoverage','workorders','rates','memberDaily'].includes(q.action);
 async function setup(page='providers',extra={}){const controls={ready:null,cancels:0};
- const h=harness({page,platforms,submission:true,extraModules:['live-provider-intake.js','live-member-counts.js'],beforeLive(c){c.HensemLiveSyncHealth={configure(o){controls.ready=o.ready},cancel(){controls.cancels++},schedule(){},badge:()=>''};extra.beforeLive?.(c);}});await settle();h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';h.L.initialReadComplete=true;const waiting=[],history=[];let active=0,max=0;
+ const h=harness({page,platforms,submission:true,extraModules:['live-provider-intake.js','live-member-counts.js',...(extra.extraModules||[])],beforeLive(c){c.HensemLiveSyncHealth={configure(o){controls.ready=o.ready},cancel(){controls.cancels++},schedule(){},badge:()=>''};extra.beforeLive?.(c);}});await settle();h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';h.L.initialReadComplete=true;const waiting=[],history=[];let active=0,max=0;
  h.c.hensemLiveRequest=(q,options={})=>{h.calls.push(q);if(!heavy(q))return Promise.resolve(q.action==='providerOptions'?{providers:[]}:{});const d=deferred(),entry={q,d,signal:options.signal};waiting.push(entry);history.push(q);active++;max=Math.max(max,active);const abort=()=>d.reject(Object.assign(Error('查询已取消'),{name:'AbortError'}));options.signal?.addEventListener('abort',abort,{once:true});return d.promise.finally(()=>{active--;options.signal?.removeEventListener('abort',abort)});};
  return {...h,controls,waiting,history,reply:extra.reply||reply,max:()=>max,active:()=>active};
 }
@@ -133,4 +133,40 @@ test('same-scope normal query reuses exclusion and intake caches, while refresh,
 test('non-provider tail still loads current overview empty-source coverage and requested workorders without a previous-intake no-op',async()=>{
  const h=await setup('overview',{reply(q){const r=reply(q);return q.action==='aggregate'?{...r,total:0,summary:[],groups:{provider:[],daily:[],hourly:[],amount:[],matrix:[]}}:r}});h.L.overviewAnalysis=true;h.L.direction='charge';h.L.multi.direction=['charge'];await finish(h,h.c.liveQuery());
  assert.equal(h.L.results.length,3);assert.equal(h.L.loading,false);assert.equal(h.L.overviewIntake.charge.status,'ready');assert(h.L.workorders);assert.equal(h.history.filter(q=>q.action==='workorders').length,1);const coverage=h.history.filter(q=>q.action==='intakeCoverage'&&q.operation==='rows');assert(coverage.length>0);assert(coverage.every(q=>q.startAt==='2026-09-22'&&q.endAt==='2026-09-22'),'overview evidence uses only the current query dates');assert.equal(h.history.filter(q=>q.action==='submissionAnalysis').length,0);
+});
+
+test('selected-provider bands and fee display share one complete directory on cold, ordinary and forced queries',async()=>{
+ const row={id:'synthetic-band-rate',provider:'Synthetic provider',country:'印度',scopeType:'country',category:'UPI',collectFee:'4%',collectLimit:'250-25000',payoutFee:'2%',payoutLimit:'500-100000'};
+ const h=await setup('providers',{extraModules:['live-amount-bands.js'],reply:q=>q.action==='rates'?{rows:[row],total:1}:reply(q)});
+ h.c.liveSet('provider','Synthetic provider');const run=h.c.liveQuery(false);await settle();
+ assert.deepEqual(h.history.map(q=>q.action),['rates']);assert.equal(h.active(),1);assert.equal(h.L.loading,true);assert.equal(h.L.feeLookupLoading,true);
+ await advance(h);assert.equal(h.L.feeLookupRows[0].id,row.id);assert.equal(h.L.amountBandProfiles.charge.edges[0],250);assert.equal(h.L.amountBandProfiles.charge.edges[10],25000);assert.equal(h.active(),2);
+ await finish(h,run);const band=h.L.amountBandProfiles.charge.edges;
+ assert.equal(h.history.filter(q=>q.action==='rates').length,1,'the later fee phase reuses the exact completed directory');
+ for(const q of h.history.filter(q=>['aggregate','submissionAnalysis'].includes(q.action))){assert.deepEqual(Array.from(q.amountBands.charge),Array.from(band));assert.deepEqual(Array.from(q.providers),['Synthetic provider']);}
+ const before=h.history.filter(q=>['rates','aggregate'].includes(q.action)).length;await finish(h,h.c.liveQuery(false));assert.equal(h.history.filter(q=>['rates','aggregate'].includes(q.action)).length,before,'same scope reuses both the fee snapshot and aggregate windows');
+ await finish(h,h.c.liveQuery(true));assert.equal(h.history.filter(q=>q.action==='rates').length,2,'force replaces the complete directory once, not once per consumer');assert.equal(h.max(),2);
+});
+
+test('selected-provider limit pagination is aborted on a filter edit and cannot start stale orders',async()=>{
+ const h=await setup('providers',{extraModules:['live-amount-bands.js']});h.c.liveSet('provider','Synthetic provider');const run=h.c.liveQuery(true);await settle();
+ const first=h.waiting.shift();first.d.resolve({rows:[{id:'partial',provider:'Synthetic provider',collectLimit:'250-25000'}],total:2});await settle();
+ const pending=h.waiting.shift();assert.equal(pending.q.action,'rates');assert.equal(pending.q.offset,1);h.c.liveSet('provider','Synthetic next provider');await run;await settle();assert.equal(pending.signal.aborted,true);assert.equal(h.L.feeLookupRows,null);assert.equal(h.history.length,2);assert(!h.history.some(q=>q.action==='aggregate'));assert.equal(h.active(),0);
+ pending.d.resolve({rows:[{id:'late'}],total:2});await settle();h.c.render();h.c.providerSummarySort('all_count');h.c.livePage(1,'local');assert.equal(h.history.length,2);assert.equal(h.L.feeLookupRows,null);
+ await finish(h,h.c.liveQuery(false));assert.equal(h.history.filter(q=>q.action==='rates').length,3);assert(h.history.filter(q=>q.action==='aggregate').every(q=>q.providers?.[0]==='Synthetic next provider'));assert.equal(h.max(),2);
+});
+
+test('legacy date and provider edits release owned loading after cancelling selected-provider bands',async()=>{
+ for(const page of ['provider_daily','providers']){
+  const h=await setup(page,{extraModules:['live-amount-bands.js']});h.c.liveSet('provider','Synthetic provider');const run=h.c.liveQuery(true);await settle();const serial=h.L.serial,pending=h.waiting.shift();assert.equal(pending.q.action,'rates');
+  if(page==='provider_daily')h.c.liveReferenceEnd('2026-09-21');else h.c.liveProvider('Synthetic next provider');
+  assert.equal(h.L.serial,serial,'these legacy UI controls mark dirty without replacing the serial');await run;await settle();assert.equal(pending.signal.aborted,true);assert.equal(h.L.loading,false);assert.equal(h.L.feeLookupLoading,false);assert.equal(h.L.dirty,true);assert.equal(h.history.length,1);assert(!h.html().includes('live-read-phase'));assert.equal(h.active(),0);
+  pending.d.resolve({rows:[{id:'late'}],total:1});await settle();h.c.render();assert.equal(h.L.feeLookupRows,null);assert.equal(h.history.length,1);
+ }
+});
+
+test('cancelled legacy band preparation cannot clear the replacement query loading owner',async()=>{
+ const h=await setup('providers',{extraModules:['live-amount-bands.js']});h.c.liveSet('provider','Synthetic provider');const old=h.c.liveQuery(true);await settle();const prior=h.waiting.shift(),serial=h.L.serial;
+ h.c.liveProvider('Synthetic next provider');const replacement=h.c.liveQuery(false);await old;await settle();assert(h.L.serial>serial);assert.equal(prior.signal.aborted,true);assert.equal(h.L.loading,true);assert.equal(h.L.feeLookupLoading,true);assert.equal(h.waiting[0].q.action,'rates');
+ prior.d.resolve({rows:[{id:'late'}],total:1});await settle();assert.equal(h.L.loading,true);assert.equal(h.L.feeLookupRows,null);await finish(h,replacement);assert.equal(h.L.loading,false);assert(h.history.filter(q=>q.action==='aggregate').every(q=>q.providers?.[0]==='Synthetic next provider'));assert.equal(h.max(),2);
 });
