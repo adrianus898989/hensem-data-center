@@ -440,7 +440,28 @@ test('removed risk entries disappear from navigation and old page entry redirect
 
 test('provider main orders, fees, workorders and comparison remain visible while one exclusion lane is pending',async()=>{
  const platforms=[P,{...P,id:'22222222-2222-4222-8222-222222222222'},{...P,id:'33333333-3333-4333-8333-333333333333'}],pending=deferred();
- const h=harness({page:'providers',submission:true,reports:true,handler:q=>{if(q.action==='catalog')return {platforms};if(q.action==='rates')return {rows:[],total:0};if(q.action==='submissionAnalysis')return pending.promise.then(()=>({platform:platforms.find(p=>p.id===q.platformId),startAt:q.startAt,endAt:q.endAt,version:3,exemptCount:0,thresholdComparison:'gt',basis:'platform_local_day_all_providers_zero_success_whole_day_over_threshold',metrics:[10,15,20,30,50,100].map(threshold=>({provider:null,threshold,qualified_member_count:0,qualified_member_days:0,member_count:0,member_days:0,invalid_count:0,invalid_amount:'0',l0_members:0,new_members:0,funded_members:0,unknown_members:0})),coverage:{missingMemberCount:0}}));return flowAggregate(platforms.find(p=>p.id===q.platformId)||P,'charge')}});await settle();const main=h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,6);assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,1);assert.equal(h.L.results.length,3,'all main orders are visible while the first exclusion is pending');assert.equal(h.L.loading,false);assert.equal(h.L.comparisonStatus,'ready');assert(h.calls.some(q=>q.action==='workorders'),'the bounded auxiliary lane completes workorders independently of exclusion');assert.match(h.html(),/剔除已完成 0\/3/);pending.resolve();await main;await settle();assert.equal(h.calls.filter(q=>q.action==='aggregate').length,6);assert(h.calls.some(q=>q.action==='workorders'));assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,3);assert.equal(h.L.loading,false);assert.doesNotMatch(h.html(),/自动出款配置接入|源日报数据|无充值人数 \/ 无效笔数：|成功数据按成功时间；/);assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,0);
+ let submission;
+ const h=harness({page:'providers',submission:true,reports:true,beforeLive:c=>{const create=c.HensemSubmissionAnalysis.create;c.HensemSubmissionAnalysis.create=config=>(submission=create(config))},handler:q=>{if(q.action==='catalog')return {platforms};if(q.action==='rates')return {rows:[],total:0};if(q.action==='submissionAnalysis')return pending.promise.then(()=>({platform:platforms.find(p=>p.id===q.platformId),startAt:q.startAt,endAt:q.endAt,version:3,exemptCount:0,thresholdComparison:'gt',basis:'platform_local_day_all_providers_zero_success_whole_day_over_threshold',metrics:[10,15,20,30,50,100].map(threshold=>({provider:null,threshold,qualified_member_count:0,qualified_member_days:0,member_count:0,member_days:0,invalid_count:0,invalid_amount:'0',l0_members:0,new_members:0,funded_members:0,unknown_members:0})),coverage:{missingMemberCount:0}}));return flowAggregate(platforms.find(p=>p.id===q.platformId)||P,'charge')}});
+ await settle();const main=h.c.liveQuery();await settle();
+ assert.equal(h.calls.filter(q=>q.action==='aggregate').length,6);
+ assert.equal(h.calls.filter(q=>q.action==='submissionAnalysis').length,1);
+ assert.equal(h.L.results.length,3,'all main orders are visible while the first exclusion is pending');
+ assert.match(h.html(),/provider-summary-table/);assert.match(h.html(),/Synthetic provider/);
+ assert.equal(h.L.loading,false);assert.equal(h.L.comparisonStatus,'ready');
+ assert.equal(h.calls.filter(q=>q.action==='rates').length,1);
+ assert.equal(h.calls.filter(q=>q.action==='workorders').length,1,'the bounded auxiliary lane completes workorders independently of exclusion');
+ assert.equal(submission.capture().status,'loading');assert.equal(submission.metric().complete,false);
+ assert.match(h.html(),/剔除读取中 0\/3/);assert.doesNotMatch(h.html(),/剔除已完成 0\/3/);
+ const reads=h.calls.length;h.c.render();await settle();
+ assert.equal(h.calls.length,reads,'rendering the pending supplement never repeats main or auxiliary reads');
+ assert.match(h.html(),/provider-summary-table/);assert.match(h.html(),/剔除读取中 0\/3/);
+ pending.resolve();await main;await settle();
+ assert.equal(h.calls.filter(q=>q.action==='aggregate').length,6);
+ assert.equal(h.calls.filter(q=>q.action==='rates').length,1);assert.equal(h.calls.filter(q=>q.action==='workorders').length,1);
+ assert.deepEqual(h.calls.filter(q=>q.action==='submissionAnalysis').map(q=>q.platformId).sort(),platforms.map(p=>p.id).sort(),'each platform exclusion is read once');
+ assert.equal(submission.capture().status,'ready');assert.equal(submission.metric().complete,true);
+ assert.equal(h.L.loading,false);assert.doesNotMatch(h.html(),/剔除读取中|自动出款配置接入|源日报数据|无充值人数 \/ 无效笔数：|成功数据按成功时间；/);
+ assert.equal(h.calls.filter(q=>q.action==='reportSummary').length,0);
 });
 
 test('collection summary keeps the verified KB completion-time basis in compact help without its old inline notice',async()=>{
