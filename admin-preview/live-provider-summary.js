@@ -885,7 +885,6 @@
   const uniqueCoverageNote=partialOrderRows.length?'<button type="button" class="link provider-order-coverage" onclick="providerSummaryCoverage()" title="工单原单待核对 · '+C(partialOrderRows.length)+' 个三方；仅影响工单列，点击查看原因">工单原单待核对 '+C(partialOrderRows.length)+' 三方</button>':'';
   const workorderReviewCount=workorderGaps.filter(workorderPlatformNeedsReview).length;
   const workorderGapNote=workorderGaps.length?'<button type="button" class="link provider-workorder-coverage-button" title="仅影响工单列；已知口径包括源待处理过滤或类型范围，不代表统计完整。点击查看具体平台、日期和原因" onclick="providerSummaryWorkorderPlatforms()">日报/明细差异 '+C(workorderGaps.length)+' 平台 · 待确认 '+C(workorderReviewCount)+' / 已知口径 '+C(workorderGaps.length-workorderReviewCount)+'</button>':'';
-  const coverageNote='';
   const workNote=L.workordersUnsupported?'<span class="provider-inline-status">工单未接入</span>':L.workordersError?'<span class="provider-inline-status" title="'+E(L.workordersError)+'">工单读取未完成 <button type="button" class="link" onclick="liveProviderWorkordersRetry()">只重试工单</button></span>':
    L.workordersLoading?'<span class="provider-inline-status">工单读取中…</span>':!L.workorders?'<span class="provider-inline-status">'+(L.dirty?'筛选已更改，请查询':L.loading?'工单待载入':'工单未读取 <button type="button" class="link" onclick="liveProviderWorkordersRetry()">加载工单</button>')+'</span>':'';
   const footers=max>1?[sumRow(shown,partial?'当前页已读取合计':'当前页汇总'),sumRow(rows,partial?'已读取合计':'全部汇总',true)]:[sumRow(rows,partial?'已读取合计':'合计',true)];
@@ -922,7 +921,7 @@
    const body=shown.map((r,i)=>'<tr>'+cells(r,providerLabel(r,i),false,i).map(c=>'<td>'+c+'</td>').join('')+'</tr>'+(expanded[rowKey(r)]?breakdown(r,i):'')).join('');
    reportTable=reportTable.replace(/<tbody>[\s\S]*?<\/tbody>/,()=>'<tbody>'+body+'</tbody>');
   }
-  return '<div class="provider-summary-report">'+readNotice(ctx)+intakeNotice(ctx)+(publishedWindow(L)?'':'<div class="provider-summary-heading"><span class="provider-scope-note">'+E(L.country)+' · '+E(L.currency)+' · '+E(publishedWindow(L)?publishedWindow(L).localStartAt.replace('T',' '):L.from.replace('T',' '))+' 至 '+E(publishedWindow(L)?publishedWindow(L).localCutoff.replace('T',' ')+'（不含）'+(publishedWindow(L).intraday?' · 非全天':''):L.to.replace('T',' '))+coverageNote+'</span></div>')+
+  return '<div class="provider-summary-report">'+readNotice(ctx)+intakeNotice(ctx)+(publishedWindow(L)?'':'<div class="provider-summary-heading"><span class="provider-scope-note">'+E(L.country)+' · '+E(L.currency)+' · '+E(L.from.replace('T',' '))+' 至 '+E(L.to.replace('T',' '))+'</span></div>')+
    renderMetrics(ctx,direction,rows)+'<div class="provider-status-actions provider-toolbar">'+feeControls()+workNote+(direction==='charge'?(submissionAnalysis?.note('summary')||''):'')+'</div>'+
    box(name+'三方汇总'+(partial?'（部分结果）':'')+' · '+issueLabel+'工单'+(publishedWindow(L)?.intraday?'（完整自然日独立统计）':''),(uniqueCoverageNote||workorderGapNote||detailOnlyNote?'<div class="provider-workorder-notices">'+uniqueCoverageNote+workorderGapNote+detailOnlyNote+'</div>':'')+reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
     '')+'</div>';

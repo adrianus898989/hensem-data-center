@@ -384,7 +384,7 @@ body.live-admin .provider-summary-report .provider-kpi-change{white-space:nowrap
 body.live-admin .provider-summary-report .provider-status-actions{display:flex;align-items:center;gap:12px;flex-wrap:nowrap;overflow-x:auto;white-space:nowrap;font-size:10px;color:#6a7d9a;margin:0 0 6px}
 body.live-admin .provider-summary-report .provider-status-actions:empty{display:none}
 body.live-admin .provider-summary-report .provider-inline-status{font-size:10px;line-height:18px}
-body.live-admin .provider-summary-report .provider-workorder-notices{display:flex;align-items:center;gap:14px;padding:4px 10px;border-bottom:1px solid #edf1f7}
+body.live-admin .provider-summary-report .provider-workorder-notices{display:flex;align-items:center;gap:14px;padding:4px 10px;border-bottom:1px solid #edf1f7;white-space:nowrap;overflow-x:auto}
 body.live-admin .provider-summary-report .provider-workorder-notices :is(.provider-order-coverage,.provider-workorder-coverage-button){display:inline-block;padding:0;margin:0;border:0;background:none;color:#9b560e;font-size:10px;line-height:16px;text-align:left}
 body.live-admin .provider-summary-report .submission-coverage-compact{display:inline-flex;align-items:center;gap:4px;flex-wrap:nowrap;max-width:none;margin:0;padding:0;border:0;background:none;font-size:10px;line-height:18px;color:#6a7d9a}
 
@@ -458,5 +458,4 @@ body.live-admin .provider-publication-actions{display:flex;align-items:center;ga
 body.live-admin .provider-publication-actions .link{font-size:11px}
 body.live-admin .provider-summary-report .provider-toolbar{min-height:28px;margin:2px 0 8px}
 body.live-admin .provider-summary-report .provider-toolbar>*{flex-shrink:0}
-body.live-admin .provider-summary-report .provider-workorder-notices{white-space:nowrap;overflow-x:auto}
 body.live-admin .provider-summary-report .provider-workorder-notices>*{flex-shrink:0}
