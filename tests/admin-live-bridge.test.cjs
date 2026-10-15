@@ -702,3 +702,22 @@ test('snapshot URL switch exposes only a boolean and ordinary URL is inactive',(
  const h=load();h.target.location={origin:'https://dashboard.invalid',pathname:'/',hash:'#admin/providers'};assert.match(h.api.makeAdminLiveDocument('<!doctype html><html></html>','shadow-nonce'),/HENSEM_PROVIDER_SNAPSHOT_SHADOW=false/);
  h.target.location.search='?providerSnapshotShadow=1&secret=DO_NOT_INJECT';const html=h.api.makeAdminLiveDocument('<!doctype html><html></html>','shadow-nonce');assert.match(html,/HENSEM_PROVIDER_SNAPSHOT_SHADOW=true/);assert(!html.includes('DO_NOT_INJECT'));
 });
+
+test('prepared statistics validate independent clocks and never accept recursive or identity detail batches',()=>{
+ const h=load(),q={...query,action:'aggregate',view:'providers',successStartAt:'2026-09-20T00:00:00Z',successEndAt:'2026-09-21T00:00:00Z',successBasis:'source_updated'},batch={action:'aggregatePrepared',requests:[q]};
+ assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(batch))),batch);
+ for(const patch of [{requests:[]},{requests:Array(51).fill(q)},{requests:[batch]},{requests:[{...q,action:'details'}]},{requests:[{...q,memberId:'x'}]},{requests:[{...q,successBasis:'ingested'}]},{requests:[{...q,successStartAt:undefined}]},{requests:[{...q,successEndAt:q.successStartAt}]},{requests:[{...q,successStartAt:'2026-02-30T00:00:00Z'}]},{requests:[{...q,successEndAt:'2026-12-30T00:00:00Z'}]},{page:'providers'}])assert.throws(()=>h.api.validateAdminLiveRequest({...batch,...patch}));
+ // A valid new clock is never allowed into the unmodified raw endpoint.
+ assert.throws(()=>h.api.validateAdminLiveRequest(q));
+});
+test('prepared statistics keep the originating page in both owner and assigned RPC routes',async()=>{
+ const h=load(),request={action:'aggregatePrepared',requests:[{...query,action:'aggregate',view:'providers'}]};
+ await h.api.adminLiveRequest(session,request,undefined,{assigned:false,page:'overview'});
+ assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_aggregate_prepared');
+ assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_page:'overview',p_request:{requests:request.requests}});
+ await h.api.adminLiveRequest(session,request,undefined,{assigned:true,page:'success_analysis'});
+ assert.equal(h.calls[1].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_execute');
+ assert.deepEqual(JSON.parse(h.calls[1].init.body),{p_page:'success_analysis',p_request:request});
+ await assert.rejects(h.api.adminLiveRequest(session,request,undefined,{assigned:false,page:'access'}),/统计页面无效/);
+ assert.equal(h.calls.length,2);
+});

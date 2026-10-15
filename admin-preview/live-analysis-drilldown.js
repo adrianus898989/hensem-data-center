@@ -14,7 +14,7 @@
   const {L,E,N}=c,C=v=>finite(v)?c.C(v):'—',R=(n,d)=>finite(n)&&finite(d)?c.R(n,d):'—',states=new Map();let scope='',generation=0,active=0,inflight=0;const waiters=[];
   async function requestSlot(q,current){while(inflight>=2){if(!current())throw Error('查看范围已改变');await new Promise(resolve=>waiters.push(resolve))}if(!current())throw Error('查看范围已改变');inflight++;try{return await c.request(q)}finally{inflight--;for(const wake of waiters.splice(0))wake()}}
   const name=d=>d==='withdraw'?'代付':'代收';
-  const signature=()=>JSON.stringify([L.serial,L.queryScope,L.from,L.to,L.currency,L.status,L.direction,L.results.map(r=>r.platform?.id)]);
+  const signature=()=>JSON.stringify([L.serial,L.queryScope,L.from,L.to,L.successFrom,L.successTo,L.successBasis,L.currency,L.status,L.direction,L.results.map(r=>r.platform?.id)]);
   function sync(){const next=signature();if(next!==scope){scope=next;generation++;active++;states.clear();sortRegistry.clear();orderRegistry.clear();cancelOrders()}return scope}
   function state(segment,label){sync();const key=JSON.stringify(segment);if(!states.has(key)){states.set(key,{segment,label,open:false,tab:'platform',platform:'all',daily:new Map()})}const s=states.get(key);if(label)s.label=label;return s}
   const dirs=segment=>segment.direction==='all'?['charge','withdraw']:[segment.direction];
@@ -47,8 +47,23 @@
   function dimensionButton(segment,label,dimension){const s=state(segment,label),platform=dimension==='platform',open=s.open&&(platform?s.tab==='platform':['provider','providerDaily'].includes(s.tab));return '<button class="link analysis-expand" aria-expanded="'+open+'" onclick="'+action(segment,platform?'togglePlatform':'toggleProvider')+'">'+(open?'收起':'')+(platform?'平台':'三方')+(open?'':'展开')+'</button>'}
   function button(segment,label,exclusiveGroup){const s=state(segment,label);if(exclusiveGroup)s.exclusiveGroup=exclusiveGroup;return segment.kind==='provider_daily'?'<button class="link analysis-expand" aria-expanded="'+s.open+'" onclick="'+action(segment,'toggle')+'">'+(s.open?'收起':'展开')+'</button>':dimensionButton(segment,label,'provider')+' '+dimensionButton(segment,label,'platform')}
   function valueButton(segment,label,value,title,exclusiveGroup){const s=state(segment,label);if(exclusiveGroup)s.exclusiveGroup=exclusiveGroup;return '<button class="link analysis-value-button'+(s.open?' is-selected':'')+'" aria-expanded="'+s.open+'" title="'+E(title||label)+'" onclick="'+action(segment,'toggle')+'">'+E(value)+'</button>'}
-  function dates(){const start=L.from.slice(0,10),end=L.to.slice(0,10),out=[];if(!/^\d{4}-\d{2}-\d{2}$/.test(start)||!/^\d{4}-\d{2}-\d{2}$/.test(end))return out;for(let x=Date.parse(start+'T00:00Z');x<=Date.parse(end+'T00:00Z')&&out.length<31;x+=86400000)out.push(new Date(x).toISOString().slice(0,10));return out}
-  const multi=()=>L.from.slice(0,10)!==L.to.slice(0,10);
+  const successWindow=()=>[L.successFrom??L.from,L.successTo??L.to];
+  const localWindows=segment=>segment.kind==='latency'?[successWindow()]:[[L.from,L.to],successWindow()];
+  function dates(segment){
+   const out=new Set();for(const range of localWindows(segment)){const [start,end]=range.map(value=>String(value||'').slice(0,10));
+    const parsed=value=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
+    if(!parsed(start)||!parsed(end)||start>end||(Date.parse(end+'T00:00:00Z')-Date.parse(start+'T00:00:00Z'))/86400000>30)return [];
+    for(let x=Date.parse(start+'T00:00:00Z');x<=Date.parse(end+'T00:00:00Z');x+=86400000)out.add(new Date(x).toISOString().slice(0,10));
+   }return [...out].sort();
+  }
+  const multi=segment=>dates(segment).length>1;
+  function windowLabel(segment){const label=L.successBasis==='source_updated'?'源订单更新':'成功',[from,to]=successWindow();if(segment.kind==='latency')return label+' '+String(from).slice(0,10)+' 至 '+String(to).slice(0,10);const created=L.from.slice(0,10)+' 至 '+L.to.slice(0,10);return from===L.from&&to===L.to&&(L.successBasis??'success')==='success'?created:'创建 '+created+'；'+label+' '+String(from).slice(0,10)+' 至 '+String(to).slice(0,10);}
+  function legacyDrilldownRequest(q){
+   const hasClock=['successStartAt','successEndAt','successBasis'].some(key=>Object.prototype.hasOwnProperty.call(q,key));
+   const same=hasClock?q.successBasis==='success'&&q.successStartAt===q.startAt&&q.successEndAt===q.endAt:(L.successBasis??'success')==='success'&&successWindow()[0]===L.from&&successWindow()[1]===L.to;
+   if(!same)throw Error('当前展开尚未支持独立成功时间或源订单更新时间范围，请使用相同范围与成功时间后查询');
+   for(const key of ['successStartAt','successEndAt','successBasis'])delete q[key];return q;
+  }
   function metricHeaders(latency){return latency?['成功金额','成功笔数','金额占比','笔数占比']:['全部金额','全部笔数','成功金额','成功笔数','处理中金额','处理中笔数','失败金额','失败笔数','成功率'];}
   const share=(value,ratio,label)=>'<span class="analysis-metric-value">'+value+'</span><small class="analysis-metric-share">'+label+' '+ratio+'</small>';
   function metricCells(r,total,latency){if(latency)return [N(r.success_amount),C(r.success_count),R(r.success_amount,total.success_amount),R(r.success_count,total.success_count)];const base=[share(N(r.success_amount),R(r.success_amount,total.success_amount),'金额占比'),share(C(r.success_count),R(r.success_count,total.success_count),'笔数占比')];return [N(r.all_amount),C(r.all_count),...base,N(r.pending_amount),C(r.pending_count),N(r.failed_amount),C(r.failed_count),R(r.success_count,r.all_count)];}
@@ -67,6 +82,7 @@
    if(typeof c.openDrawer!=='function'||!['hourly','amount','amount_range','matrix','matrix_range','latency','custom'].includes(s.segment.kind))return '';
    const latency=s.segment.kind==='latency',links=[];
    for(const basis of latency?['success']:['created','success']){
+    if(basis==='success'&&L.successBasis==='source_updated'){links.push('<span class="muted" title="源订单更新时间的原始明细暂未接入">成功订单暂不可用</span>');continue;}
     const count=row[basis==='created'?'all_count':'success_count'];if(!finite(count)||dimension==='provider'&&Number(count)===0)continue;
     const value={segment:{...s.segment},dimension,platformId:row.platformId,provider:dimension==='provider'?row.provider:undefined,direction:row.direction,currency:row.currency||L.currency,basis,label:s.label};
     const key=enc(value);orderRegistry.set(key,value);
@@ -82,7 +98,7 @@
    const s=orderView;if(!s||s.scope!==signature()||L.dirty)return;
    const p=s.targets[s.target],label=s.basis==='success'?'成功订单 · '+successTimeLabel(p):'全部订单 · 创建时间';
    const select=s.targets.length>1?'<label>平台 <select aria-label="区间订单平台" onchange="liveAnalysisOrderPlatform(Number(this.value))">'+s.targets.map((p,i)=>'<option value="'+i+'" '+(i===s.target?'selected':'')+'>'+E(p.name)+' · '+E(p.source)+'</option>').join('')+'</select></label>':'';
-   const summary='<p class="analysis-note">'+E(s.label||'当前区间')+' · '+E(name(s.direction))+' · '+E(s.currency)+' · '+E(L.from)+' 至 '+E(L.to)+'。'+(s.dimension==='provider'?'当前三方 '+E(s.provider)+'；各平台的原始订单独立读取，可切换平台。':'')+'</p>';
+   const summary='<p class="analysis-note">'+E(s.label||'当前区间')+' · '+E(name(s.direction))+' · '+E(s.currency)+' · '+E(s.basis==='success'?successWindow()[0]:L.from)+' 至 '+E(s.basis==='success'?successWindow()[1]:L.to)+'。'+(s.dimension==='provider'?'当前三方 '+E(s.provider)+'；各平台的原始订单独立读取，可切换平台。':'')+'</p>';
    const error=s.error?'<p class="live-status live-error">'+E(s.error)+' <button class="link" onclick="liveAnalysisOrderPage(0,true)">重试</button></p>':'';
    const rows=s.rows.map((r,i)=>['<button class="link" onclick="liveAnalysisOrder('+i+')">'+E(r.order_number||r.id||'未提供订单号')+'</button>',E(r.provider),E(r.direction==='withdraw'?'代付':'代收'),(root.HensemProviderOrders?.moneyCell(r,{E,N})||N(r.amount)+' '+E(r.currency)),E(r.status||r.status_group),E(orderTime(r.created_at,p)),E(orderTime(r.success_at,p))]);
    const count=s.total===null?'尚未读取':C(s.total)+' 笔',pager='<div class="pager">'+E(p.name)+' · '+E(p.source)+' · '+count+' <button class="btn small" onclick="liveAnalysisOrderPage(-1)" '+(s.loading||!s.offset?'disabled':'')+'>上一页</button> '+(Math.floor(s.offset/20)+1)+' <button class="btn small" onclick="liveAnalysisOrderPage(1)" '+(s.loading||!s.hasMore?'disabled':'')+'>下一页</button></div>';
@@ -92,6 +108,8 @@
    const s=orderView;if(!s||L.loading||L.dirty||s.scope!==signature())return;const p=s.targets[s.target],token=++orderSerial;s.loading=true;s.error='';s.rows=[];s.total=null;s.hasMore=false;showOrders();
    try{
     const q={...c.query(p,'aggregate'),action:'analysisOrders',basis:s.basis,status:'all',direction:s.direction,currency:s.currency,offset:s.offset,limit:20};delete q.view;
+    if(s.basis==='success'){if(q.successBasis==='source_updated'||L.successBasis==='source_updated')throw Error('源订单更新时间的原始明细暂未接入，不能按成功时间替代');if(q.successStartAt!==undefined||q.successEndAt!==undefined){if(!q.successStartAt||!q.successEndAt)throw Error('成功订单时间范围不完整');q.startAt=q.successStartAt;q.endAt=q.successEndAt;}}
+    for(const key of ['successStartAt','successEndAt','successBasis'])delete q[key];
     for(const key of ['kind','hour','bucket','cumulative','hourRange','amountMin','amountMax','amountMaxExclusive','durationVersion','durationRange'])if(s.segment[key]!==undefined)q[key]=s.segment[key];
     if(s.segment.kind!=='latency'){delete q.durationVersion;delete q.durationRange;}
     if(s.dimension==='provider')q.providers=[s.provider];
@@ -129,7 +147,7 @@
    if(s.segment.kind!=='latency')return businessProviderGrid(s);
    const {entry,complete}=providerEntry(s),daily=s.tab==='providerDaily',extra=dirs(s.segment).length>1;
    const label=s.segment.cumulative?'三方超时订单占比':'三方区间内占比',scopeLabel=daily?'该三方当日有效成功笔数':'该三方有效成功笔数';
-   const headers=[daily?'成功日期':'三方',...(extra?['方向']:[]),'本档成功金额','档内金额占比','本档成功笔数','档内笔数占比',scopeLabel,'<span title="'+E('该三方'+(daily?'当日':'')+'区间内成功笔数 ÷ '+scopeLabel+' × 100%；与档内各三方之间的占比不同')+'">'+label+'</span>',...(!daily&&multi()?['每日对比']:[])];
+   const headers=[daily?'成功日期':'三方',...(extra?['方向']:[]),'本档成功金额','档内金额占比','本档成功笔数','档内笔数占比',scopeLabel,'<span title="'+E('该三方'+(daily?'当日':'')+'区间内成功笔数 ÷ '+scopeLabel+' × 100%；与档内各三方之间的占比不同')+'">'+label+'</span>',...(!daily&&multi(s.segment)?['每日对比']:[])];
    const progress=entry?.loading?'<p class="analysis-status">三方分档读取 '+entry.results.size+' / '+entry.total+' 个平台…</p>':'';
    const failures=entry?.failures.length?'<div class="live-status live-error">三方分档尚不完整：'+entry.failures.map(f=>E(f.name+'：'+f.message)).join('；')+' <button class="link" onclick="'+action(s.segment,'retry')+'">重试未完成平台</button></div>':'';
    const selection=daily?'<p class="analysis-status">'+E(s.provider)+' · 按成功日期对比 <button class="link" onclick="'+action(s.segment,'provider')+'">返回全部三方</button></p>':'';
@@ -139,17 +157,17 @@
    const query=s.segment.placement==='duration-groups'?String(L.durationQuery||'').trim().toLowerCase():'',records=providerRows(s,daily).filter(r=>!query||String(r.provider).toLowerCase().includes(query)),bandRows=[...entry.results.values()].flatMap(r=>daily?r.groups?.daily||[]:r.summary||[]).filter(r=>dirs(s.segment).includes(r.direction)&&(!r.currency||r.currency===L.currency));
    const band=(direction,date)=>{const rows=bandRows.filter(r=>r.direction===direction&&(!daily||r.date===date));return {count:sum(rows,'count'),amount:sum(rows,'amount')}};
    const dayComplete=(direction,date)=>complete&&[...entry.results.values()].every(result=>(result.groups?.daily||[]).some(r=>r.date===date&&r.direction===direction&&(!r.currency||r.currency===L.currency)));
-   if(daily)for(const date of dates())for(const direction of dirs(s.segment))if(!records.some(r=>r.date===date&&r.direction===direction)){const value=dayComplete(direction,date)?0:null;records.push({date,direction,provider:s.provider,count:value,amount:value,valid_count:value,valid_amount:value})}
+   if(daily)for(const date of dates(s.segment))for(const direction of dirs(s.segment))if(!records.some(r=>r.date===date&&r.direction===direction)){const value=dayComplete(direction,date)?0:null;records.push({date,direction,provider:s.provider,count:value,amount:value,valid_count:value,valid_amount:value})}
    records.sort((a,b)=>daily?String(a.date).localeCompare(String(b.date))||a.direction.localeCompare(b.direction):Number(b.count||0)-Number(a.count||0)||String(a.provider).localeCompare(String(b.provider))||a.direction.localeCompare(b.direction));
    const visible=(daily?records:records.filter(r=>!finite(r.count)||Number(r.count)>0)).map(r=>({...r,_band:band(r.direction,r.date),_ready:daily?dayComplete(r.direction,r.date):complete}));
-   const columns=[textual(daily?'date':'provider'),...(extra?[textual('direction')]:[]),numeric('amount'),{value:r=>r._ready?fraction(r.amount,r._band.amount):null},numeric('count'),{value:r=>r._ready?fraction(r.count,r._band.count):null},numeric('valid_count'),{value:r=>r._ready?fraction(r.count,r.valid_count):null},...(!daily&&multi()?[null]:[])],sorted=sortGrid(s,daily?'provider-daily:'+s.provider:'provider',headers,visible,columns);
-   const rows=sorted.rows.map(r=>{const total=r._band,ready=r._ready,ratio=(a,b)=>ready?R(a,b):'—';return [E(daily?r.date:r.provider||'未识别三方')+(daily&&!ready?'<small class="analysis-metric-share">当日来源未完整返回</small>':'')+(!daily?orderLinks(s,{...r,success_count:r.count},'provider'):''),...(extra?[name(r.direction)]:[]),N(r.amount),ratio(r.amount,total.amount),C(r.count),ratio(r.count,total.count),C(r.valid_count),ratio(r.count,r.valid_count),...(!daily&&multi()?['<button class="link" onclick="'+action(s.segment,'providerDaily',r.provider)+'">查看每天</button>']:[])]});
+   const columns=[textual(daily?'date':'provider'),...(extra?[textual('direction')]:[]),numeric('amount'),{value:r=>r._ready?fraction(r.amount,r._band.amount):null},numeric('count'),{value:r=>r._ready?fraction(r.count,r._band.count):null},numeric('valid_count'),{value:r=>r._ready?fraction(r.count,r.valid_count):null},...(!daily&&multi(s.segment)?[null]:[])],sorted=sortGrid(s,daily?'provider-daily:'+s.provider:'provider',headers,visible,columns);
+   const rows=sorted.rows.map(r=>{const total=r._band,ready=r._ready,ratio=(a,b)=>ready?R(a,b):'—';return [E(daily?r.date:r.provider||'未识别三方')+(daily&&!ready?'<small class="analysis-metric-share">当日来源未完整返回</small>':'')+(!daily?orderLinks(s,{...r,success_count:r.count},'provider'):''),...(extra?[name(r.direction)]:[]),N(r.amount),ratio(r.amount,total.amount),C(r.count),ratio(r.count,total.count),C(r.valid_count),ratio(r.count,r.valid_count),...(!daily&&multi(s.segment)?['<button class="link" onclick="'+action(s.segment,'providerDaily',r.provider)+'">查看每天</button>']:[])]});
    const note='档内占比 = 该三方'+(daily?'当日':'')+'本档成功金额 / 笔数 ÷ 同方向'+(daily?'当日':'')+'本档合计；'+label+' = 该三方本档笔数 ÷ '+scopeLabel+'。'+(s.segment.cumulative?'当前档为严格超过指定时长；累计档之间不能相加。':'按所选区间计算；区间内占比不等同于慢单率。')+' 多天汇总先合计笔数再计算比例，不能平均每天的比例。'+(daily?' 未返回的日期显示 —，不补成 0。':'')+(!complete?' 本次分档数据未收齐，比例暂不计算。':' 按本次完整分档汇总计算；每日对比复用同次数据。');
    return {before:selection+progress+failures+(complete&&!visible.length?'<p class="muted">'+(query?'当前搜索没有命中的三方。':'当前分档没有命中的三方。')+'</p>':''),headers:sorted.headers,rows,after:'<div class="analysis-note">'+note+'</div>'};
   }
   const pair=(amount,count,extra='')=>'<span class="analysis-pair-amount">'+amount+'</span><span class="analysis-pair-count">'+count+' 笔</span>'+extra;
   function compactBusinessGrid(s,rows,key,id){
-   const extra=dirs(s.segment).length>1,by=Object.fromEntries(dirs(s.segment).map(direction=>[direction,totals(rows.filter(row=>row.direction===direction))])),entity=row=>E(row[key]||'未识别')+(key==='platform'?'<small class="analysis-metric-share">'+E(row.source||'—')+'</small>':''),hasDaily=key==='platform'&&multi(),heads=[key==='platform'?'平台':'三方',...(extra?['方向']:[]),'全部金额 / 笔数','成功金额 / 笔数','处理中金额 / 笔数','失败金额 / 笔数','成功率',...(hasDaily?['每日对比']:[])],columns=[textual(key),...(extra?[textual('direction')]:[]),numeric('all_amount'),numeric('success_amount'),numeric('pending_amount'),numeric('failed_amount'),{value:r=>fraction(r.success_count,r.all_count)},...(hasDaily?[null]:[])],sorted=sortGrid(s,id,heads,rows,columns);
+   const extra=dirs(s.segment).length>1,by=Object.fromEntries(dirs(s.segment).map(direction=>[direction,totals(rows.filter(row=>row.direction===direction))])),entity=row=>E(row[key]||'未识别')+(key==='platform'?'<small class="analysis-metric-share">'+E(row.source||'—')+'</small>':''),hasDaily=key==='platform'&&multi(s.segment),heads=[key==='platform'?'平台':'三方',...(extra?['方向']:[]),'全部金额 / 笔数','成功金额 / 笔数','处理中金额 / 笔数','失败金额 / 笔数','成功率',...(hasDaily?['每日对比']:[])],columns=[textual(key),...(extra?[textual('direction')]:[]),numeric('all_amount'),numeric('success_amount'),numeric('pending_amount'),numeric('failed_amount'),{value:r=>fraction(r.success_count,r.all_count)},...(hasDaily?[null]:[])],sorted=sortGrid(s,id,heads,rows,columns);
    return {headers:sorted.headers,rows:sorted.rows.map(row=>{const total=by[row.direction],ready=row._ready!==false;return [entity(row)+orderLinks(s,row,key),...(extra?[name(row.direction)]:[]),pair(N(row.all_amount),C(row.all_count)),pair(N(row.success_amount),C(row.success_count),'<small class="analysis-metric-share">金额占比 '+(ready?R(row.success_amount,total.success_amount):'—')+' · 笔数占比 '+(ready?R(row.success_count,total.success_count):'—')+'</small>'),pair(N(row.pending_amount),C(row.pending_count)),pair(N(row.failed_amount),C(row.failed_count)),ready?R(row.success_count,row.all_count):'—',...(hasDaily?['<button class="link" onclick="'+action(s.segment,'platformDaily',row.platformId)+'">查看每天</button>']:[])];})};
   }
   function businessProviderGrid(s){
@@ -164,9 +182,9 @@
    let rows=platformRows(s.segment);const latency=s.segment.kind==='latency',by=Object.fromEntries(dirs(s.segment).map(d=>[d,totals(rows.filter(r=>r.direction===d))]));
    if(s.segment.placement==='duration-groups'&&L.durationQuery){const query=String(L.durationQuery).trim().toLowerCase();rows=rows.filter(r=>String(r.platform).toLowerCase().includes(query))}
    rows=root.HensemProviderSummary?.sortedRows?root.HensemProviderSummary.sortedRows(rows,r=>number(r.success_amount)):rows.sort((a,b)=>Number(b.success_amount||0)-Number(a.success_amount||0)||String(a.platform).localeCompare(String(b.platform))||String(a.source).localeCompare(String(b.source)));
-   const extraDirection=dirs(s.segment).length>1,hasAction=multi()||aligned;
+   const extraDirection=dirs(s.segment).length>1,hasAction=multi(s.segment)||aligned;
    const headers=['平台','包网',...(extraDirection?['方向']:[]),...metricHeaders(latency),...(hasAction?['每日对比']:[])],columns=[textual('platform'),textual('source'),...(extraDirection?[textual('direction')]:[]),...metricSortColumns(latency,r=>by[r.direction]),...(hasAction?[null]:[])],sorted=sortGrid(s,'platform',headers,rows,columns);
-   return {headers:sorted.headers,rows:sorted.rows.map(r=>[E(r.platform)+orderLinks(s,r,'platform'),E(r.source),...(extraDirection?[name(r.direction)]:[]),...metricCells(r,by[r.direction],latency),...(hasAction?[multi()?'<button class="link" onclick="'+action(s.segment,'platformDaily',r.platformId)+'">查看每天</button>':'']:[])])};
+   return {headers:sorted.headers,rows:sorted.rows.map(r=>[E(r.platform)+orderLinks(s,r,'platform'),E(r.source),...(extraDirection?[name(r.direction)]:[]),...metricCells(r,by[r.direction],latency),...(hasAction?[multi(s.segment)?'<button class="link" onclick="'+action(s.segment,'platformDaily',r.platformId)+'">查看每天</button>':'']:[])])};
   }
   function platformBody(s){const grid=s.segment.kind==='latency'?platformGrid(s):compactBusinessGrid(s,platformRows(s.segment),'platform','business-platform');return smallTable(grid.headers,grid.rows);}
   function providerDayPanel(s,rateMarkup){
@@ -182,11 +200,12 @@
   }
   const localDate=(value,zone)=>{try{const parts=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(value)),get=k=>parts.find(p=>p.type===k)?.value;return get('year')+'-'+get('month')+'-'+get('day')}catch{return ''}};
   function dailyRows(s,entry){
-   const latency=s.segment.kind==='latency',days=dates(),records=[];
+   const latency=s.segment.kind==='latency',days=dates(s.segment),records=[];
    for(const date of days)for(const direction of dirs(s.segment)){
     const parts=[];let present=0;for(const result of entry.results.values()){
      const zone=result.platform.timezone||L.catalog.find(p=>p.id===result.platform.id)?.timezone;
-     const first=localDate(result.startAt,zone),last=localDate(Date.parse(result.endAt)-1,zone);if(!first||date<first||date>last)continue;
+     const created=[result.startAt,result.endAt],successful=[result.successStartAt??result.startAt,result.successEndAt??result.endAt],windows=latency?[successful]:[created,successful];
+     if(!windows.some(([start,end])=>{const first=localDate(start,zone),last=localDate(Date.parse(end)-1,zone);return first&&date>=first&&date<=last;}))continue;
      const matches=result.groups.daily.filter(r=>r.date===date&&r.direction===direction&&(!r.currency||r.currency===L.currency));
      if(matches.length){present++;parts.push(...matches.map(r=>latency?{...zero(),...r,success_amount:r.amount===undefined?r.success_amount:r.amount,success_count:r.count===undefined?r.success_count:r.count}:r));}
     }
@@ -206,13 +225,13 @@
    return {before:control+progress+failures,headers:sorted.headers,rows:rendered,after:'<div class="analysis-note">按各平台当地日期；占比以当前平台范围、当前段、同方向的已读日期合计为分母。没有返回记录的日期显示 —，不补成 0；平台记录不齐时不比较增减。首尾日期按所选起止时间，可能不足整日。</div>'};
   }
   function dailyBody(s){const grid=dailyGrid(s);return grid.before+(grid.headers.length?smallTable(grid.headers,grid.rows):'')+(grid.after||'');}
-  function panelHead(s){return '<div class="analysis-drilldown-head"><strong>'+E(s.label||'区间明细')+' · '+E(L.from.slice(0,10))+' 至 '+E(L.to.slice(0,10))+'</strong><div class="tabs"><button class="'+(s.tab==='provider'?'on':'')+'" onclick="'+action(s.segment,'provider')+'">各三方占比</button><button class="'+(s.tab==='platform'?'on':'')+'" onclick="'+action(s.segment,'platform')+'">各平台占比</button>'+(multi()?'<button class="'+(s.tab==='daily'?'on':'')+'" onclick="'+action(s.segment,'daily')+'">'+(s.segment.kind==='latency'?'平台':'')+'每日对比</button>':'')+'</div></div>'+(L.queryFailures?.length?'<div class="analysis-status">当前主表有 '+C(L.queryFailures.length)+' 个平台未读取；'+(providerTab(s)?'三方比例暂不计算。':'以下占比仅含已读平台。')+'</div>':'');}
+  function panelHead(s){return '<div class="analysis-drilldown-head"><strong>'+E(s.label||'区间明细')+' · '+E(windowLabel(s.segment))+'</strong><div class="tabs"><button class="'+(s.tab==='provider'?'on':'')+'" onclick="'+action(s.segment,'provider')+'">各三方占比</button><button class="'+(s.tab==='platform'?'on':'')+'" onclick="'+action(s.segment,'platform')+'">各平台占比</button>'+(multi(s.segment)?'<button class="'+(s.tab==='daily'?'on':'')+'" onclick="'+action(s.segment,'daily')+'">'+(s.segment.kind==='latency'?'平台':'')+'每日对比</button>':'')+'</div></div>'+(L.queryFailures?.length?'<div class="analysis-status">当前主表有 '+C(L.queryFailures.length)+' 个平台未读取；'+(providerTab(s)?'三方比例暂不计算。':'以下占比仅含已读平台。')+'</div>':'');}
   function panelNote(segment){return '<div class="analysis-note">'+(segment.kind==='latency'?'成功金额、笔数按成功时间；耗时为成功时间减提交／创建时间。':'全部及处理中按创建时间；成功金额、笔数按成功时间；成功率为本期成功笔数 / 本期创建笔数，含跨日成功时可能超过 100%。')+' 平台占比以此段同方向合计为分母。</div>';}
-  function panel(segment,label,providerDailyRateMarkup){const s=state(segment,label);if(!s.open)return '';if(segment.kind==='provider_daily')return providerDayPanel(s,providerDailyRateMarkup);return '<div class="analysis-drilldown">'+panelHead(s)+(providerTab(s)?providerBody(s):s.tab==='daily'&&multi()?dailyBody(s):platformBody(s))+(providerTab(s)?'':panelNote(segment))+'</div>';}
+  function panel(segment,label,providerDailyRateMarkup){const s=state(segment,label);if(!s.open)return '';if(segment.kind==='provider_daily')return providerDayPanel(s,providerDailyRateMarkup);return '<div class="analysis-drilldown">'+panelHead(s)+(providerTab(s)?providerBody(s):s.tab==='daily'&&multi(s.segment)?dailyBody(s):platformBody(s))+(providerTab(s)?'':panelNote(segment))+'</div>';}
   function alignedPanel(segment,label,columnCount){
    const s=state(segment,label);if(!s.open)return '';
    if(providerTab(s))return '<tr class="analysis-expanded-row"><td colspan="'+columnCount+'">'+panel(segment,label)+'</td></tr>';
-   const grid=s.tab==='daily'&&multi()?dailyGrid(s,true):platformGrid(s,true),full=body=>'<tr class="analysis-expanded-row analysis-aligned-caption"><td colspan="'+columnCount+'"><div class="analysis-drilldown">'+body+'</div></td></tr>';
+   const grid=s.tab==='daily'&&multi(s.segment)?dailyGrid(s,true):platformGrid(s,true),full=body=>'<tr class="analysis-expanded-row analysis-aligned-caption"><td colspan="'+columnCount+'"><div class="analysis-drilldown">'+body+'</div></td></tr>';
    return full(panelHead(s)+(grid.before||''))+(grid.headers.length?'<tr class="analysis-aligned-head">'+grid.headers.map(h=>'<th scope="col">'+h+'</th>').join('')+'</tr>'+grid.rows.map(row=>'<tr class="analysis-aligned-item">'+row.map(v=>'<td>'+v+'</td>').join('')+'</tr>').join(''):'')+full((grid.after||'')+panelNote(segment));
   }
   function table(config){
@@ -230,7 +249,7 @@
    if(!entry){entry={results:new Map(),failures:[],loading:false,total:0};s.daily.set(s.platform,entry)}
    if(needsProviders)for(const [id,result]of entry.results)if(!providerReady(result))entry.results.delete(id);
    if(needsProviders)for(const other of s.daily.values())for(const [id,result]of other.results)if(providerReady(result)&&!entry.results.has(id))entry.results.set(id,result);
-   const candidates=segmentResults(s.segment).map(r=>L.catalog.find(p=>p.id===r.platform?.id)||r.platform).filter(p=>p?.id&&(s.platform==='all'||p.id===s.platform)),pending=candidates.filter(p=>!entry.results.has(p.id)),requests=pending.map(p=>{try{return {p,q:{...c.query(p,'aggregate'),view:'drilldown',kind:s.segment.kind,...(s.segment.kind==='custom'?Object.fromEntries(Object.entries(s.segment).filter(([key])=>['hourRange','amountMin','amountMax','amountMaxExclusive'].includes(key))):{}),...(s.segment.durationVersion===2?{durationVersion:2}:{}),...(s.segment.durationRange?{durationRange:s.segment.durationRange}:{}),...(s.segment.hour===undefined?{}:{hour:s.segment.hour}),...(s.segment.bucket===undefined?{}:{bucket:s.segment.bucket}),...(s.segment.cumulative===undefined?{}:{cumulative:s.segment.cumulative}),direction:s.segment.direction,offset:0}}}catch(error){return {p,error}}});
+   const candidates=segmentResults(s.segment).map(r=>L.catalog.find(p=>p.id===r.platform?.id)||r.platform).filter(p=>p?.id&&(s.platform==='all'||p.id===s.platform)),pending=candidates.filter(p=>!entry.results.has(p.id)),requests=pending.map(p=>{try{return {p,q:legacyDrilldownRequest({...c.query(p,'aggregate'),view:'drilldown',kind:s.segment.kind,...(s.segment.kind==='custom'?Object.fromEntries(Object.entries(s.segment).filter(([key])=>['hourRange','amountMin','amountMax','amountMaxExclusive'].includes(key))):{}),...(s.segment.durationVersion===2?{durationVersion:2}:{}),...(s.segment.durationRange?{durationRange:s.segment.durationRange}:{}),...(s.segment.hour===undefined?{}:{hour:s.segment.hour}),...(s.segment.bucket===undefined?{}:{bucket:s.segment.bucket}),...(s.segment.cumulative===undefined?{}:{cumulative:s.segment.cumulative}),direction:s.segment.direction,offset:0})}}catch(error){return {p,error}}});
    for(const other of states.values())for(const old of other.daily.values())if(old.loading&&old!==entry){old.loading=false;old.failures.push({name:'读取',message:'已切换查看范围，请重试继续读取'})}entry.total=candidates.length;entry.failures=[];entry.loading=true;const gen=generation,token=++active,key=scope;let index=0;c.render();
    async function worker(){while(index<requests.length&&gen===generation&&token===active){const {p,q,error}=requests[index++];try{if(error)throw error;const r=await requestSlot(q,()=>{sync();return gen===generation&&token===active&&key===scope});sync();if(gen!==generation||token!==active||key!==scope)return;if(s.segment.durationVersion===2&&r?.durationVersion!==2)throw Error('时效细分档未就绪，请重新查询');if(r?.complete!==true||r?.hasMore!==false||!Array.isArray(r?.groups?.daily)||!Array.isArray(r?.summary)||(r.platform?.id&&r.platform.id!==p.id))throw Error('每日汇总未完整返回');if(needsProviders&&!providerReady(r))throw Error('三方耗时分档未完整返回');entry.results.set(p.id,{...r,platform:p,startAt:q.startAt,endAt:q.endAt});}catch(e){sync();if(gen!==generation||token!==active||key!==scope)return;entry.failures.push({id:p.id,name:p.name,message:e.message||'读取失败'})}c.render()}}
    await Promise.all(Array.from({length:Math.min(2,requests.length)},worker));if(gen!==generation||token!==active||key!==scope)return;entry.loading=false;c.render();
