@@ -44,9 +44,9 @@ test('JAICLUB duplicate receipt headers keep O original date separate from P age
  assert.equal(r.followup_at,null);assert.equal(r.followup_date,null);assert.equal(r.staff_code,'STAFF-001/STAFF-002');
  assert(!JSON.stringify(r).includes('PRIVATE-'));
 });
-function harness({failUpsert=false,missingTab=false,failEntries=false,failArchive=false,failEntryRead=false,failResultRead=false,failEntryMetadata=false,initialRows=[],envOverrides={},metadataTabs,entryValues={},onRequest,handlerFactory=createDepositIssueSyncHandler}={}){
+function harness({failUpsert=false,missingTab=false,failEntries=false,failArchive=false,failEntryRead=false,failResultRead=false,failEntryMetadata=false,initialRows=[],envOverrides={},metadataTabs,entryValues={},onRequest,onDiagnostic,handlerFactory=createDepositIssueSyncHandler}={}){
  const stored=new Map(initialRows.map(r=>[r.table+":"+r.id,{...r}]));
- const calls=[],writes=[],env={SYNC_SECRET:'synthetic-sync',GOOGLE_SERVICE_ACCOUNT_EMAIL:'example@example.invalid',GOOGLE_PRIVATE_KEY:'-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----',DEPOSIT_ISSUE_SHEET_ID:'synthetic_source_12345',DEPOSIT_FOLLOWUP_SHEET_ID:'synthetic_entries_12345',SUPABASE_URL:'https://synthetic-project.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'synthetic-service-key'};
+ const calls=[],writes=[],events=[],env={SYNC_SECRET:'synthetic-sync',GOOGLE_SERVICE_ACCOUNT_EMAIL:'example@example.invalid',GOOGLE_PRIVATE_KEY:'-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----',DEPOSIT_ISSUE_SHEET_ID:'synthetic_source_12345',DEPOSIT_FOLLOWUP_SHEET_ID:'synthetic_entries_12345',SUPABASE_URL:'https://synthetic-project.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'synthetic-service-key'};
  Object.assign(env,envOverrides);
  let inFlight=0,maxInFlight=0;
  const crypto={subtle:{digest:webcrypto.subtle.digest.bind(webcrypto.subtle),importKey:async()=>({}),sign:async()=>new Uint8Array([1,2,3]).buffer}};
@@ -69,9 +69,9 @@ function harness({failUpsert=false,missingTab=false,failEntries=false,failArchiv
   return new Response(null,{status:204});
   }finally{inFlight--;}
  };
- const handle=handlerFactory({env:key=>env[key],fetch,now:()=>Date.parse('2026-09-24T10:00:00Z'),crypto});
+ const handle=handlerFactory({env:key=>env[key],fetch,now:()=>Date.parse('2026-09-24T10:00:00Z'),crypto,log:event=>{events.push(event);onDiagnostic?.(event);}});
  const call=(secret='synthetic-sync')=>handle(new Request('https://synthetic-project.supabase.co/functions/v1/sync-deposit-issue-sheet',{method:'POST',headers:{'x-sync-secret':secret,'Content-Type':'application/json'},body:JSON.stringify({action:'sync'})}));
- return {calls,writes,call,stored,maxInFlight:()=>maxInFlight};
+ return {calls,writes,events,call,stored,maxInFlight:()=>maxInFlight};
 }
 test('authorized refresh reads both complete sources and only mirrors their safe columns',async()=>{
  const h=harness(),response=await h.call();assert.equal(response.status,200);const body=await response.json();assert.equal(body.rowsWritten,1);assert.equal(body.entryRows,1);assert.equal(body.entryTabs,16);
@@ -207,4 +207,61 @@ test('October MAANWIN uses only verified A:P fields and is required before archi
  assert(h.calls.filter(v=>v.url.pathname.endsWith('/values:batchGet')).flatMap(v=>v.url.searchParams.getAll('ranges')).includes("'MAANWIN'!A1:P40001"));
  const incomplete=harness({envOverrides:{DEPOSIT_FOLLOWUP_SHEET_ID:DEFAULT_ENTRY_SOURCE_ID},metadataTabs:[...CURRENT_ENTRY_TABS].filter(v=>v!=='MAANWIN')});assert.equal((await incomplete.call()).status,502);assert(!incomplete.calls.some(v=>v.init.method==='PATCH'&&v.url.pathname.endsWith('admin_deposit_followup_rows')));
  assert.equal(ENTRY_TABS.has('MAANWIN'),false,'retired/custom 16-tab profile remains unchanged');
+});
+
+// These labels match root's header-only inspection of all18 October tabs.
+// Every cell below the header is synthetic; member A must remain excluded.
+const octoberCompactHeaders=entryHeaders.map(value=>value.replace(/\s+/g,''));
+function octoberValues(tab){
+ const h=octoberCompactHeaders.slice();h[3]='UTRNUMBER';
+ const r=entryRow.slice();r[1]='0000000000000000001';r[2]='RC20261009000000000000000s';
+ if(tab==='JALWA'||tab==='RAJALOTTERY')h[0]='IDNUMBER';
+ if(tab==='55CLUB')h[0]='MEMBERID"';
+ if(tab==='VEERGAME')h[14]='UTR暂未收到';
+ if(tab==='JAICLUB'){h[2]='WORKORDERNUMBER';h[14]='RECEIPTDATE';r[14]='14/10/202611:47:20';r[15]='15';}
+ if(tab==='BIGMUMBAI'){h.splice(11,0,'');r.splice(11,0,'PRIVATE-BLANK-L');}
+ return[h,r];
+}
+test('all18 verified October label profiles mirror complete authorized rows without widening the data projection',async()=>{
+ const entryValues=Object.fromEntries([...CURRENT_ENTRY_TABS].map(tab=>[tab,octoberValues(tab)]));
+ const h=harness({envOverrides:{DEPOSIT_FOLLOWUP_SHEET_ID:DEFAULT_ENTRY_SOURCE_ID},entryValues}),response=await h.call();assert.equal(response.status,200);
+ const body=await response.json();assert.equal(body.sourceResults.entries.ok,true);assert.equal(body.entryTabs,18);assert.equal(body.entryRows,18);
+ const rows=h.writes.flat().filter(r=>r.source_sheet===DEFAULT_ENTRY_SOURCE_ID);assert.equal(rows.length,18);
+ for(const r of rows){assert.equal(r.order_number,'RC20261009000000000000000s');assert.equal(r.work_order_number,'0000000000000000001');assert.equal(r.staff_code,'STAFF-001/STAFF-002');assert.equal(r.amount,1250.5);assert.equal(r.provider,'LKgoPayINR');assert.equal(r.provider_reply,'First line\nSecond line');assert.equal(r.followup_status,'Success To Other Platform');assert.equal(r.upi_id,'synthetic@upi.invalid');assert.equal(r.kyc_upi_id,'***@bank.invalid');assert(!JSON.stringify(r).includes('PRIVATE-'));}
+ const jai=rows.find(r=>r.platform==='JAICLUB');assert.equal(jai.source_date_text,'14/10/202611:47:20');assert.equal(jai.receipt_text,'15');assert.equal(jai.followup_at,null);assert.equal(jai.followup_date,null,'O is original source text, not a new follow-up date basis');
+ const big=rows.find(r=>r.platform==='BIGMUMBAI');assert.equal(big.staff_code,'STAFF-001/STAFF-002');assert.equal(big.receipt_text,'29');assert.equal(big.followup_at,'25/9/2026 13:53:55');assert.equal(big.followup_date,'2026-09-25');
+ const ranges=h.calls.filter(x=>x.url.origin==='https://sheets.googleapis.com').flatMap(x=>x.url.searchParams.getAll('ranges'));assert(ranges.includes("'BIGMUMBAI'!A1:Q40001"));assert(ranges.includes("'MAANWIN'!A1:P40001"));assert(!ranges.some(r=>/!(?:A1:)?[R-Z]/.test(r)));assert.equal(h.maxInFlight(),2);
+ assert.equal(h.events.filter(e=>e.state==='complete').length,2);assert(!/PRIVATE-|synthetic-(?:service|google)|SYNTHETIC-|RC2026|0000000000000000001/.test(JSON.stringify(h.events)));
+});
+test('JAICLUB duplicate order labels are recognized only for the verified current-source template',()=>{
+ const v=octoberValues('JAICLUB');const [r]=entryRowsFromValues(v,DEFAULT_ENTRY_SOURCE_ID,'JAICLUB',1,'2026-10-15T00:00:00Z');assert.equal(r.order_number,v[1][2]);assert.equal(r.work_order_number,v[1][1]);
+ for(const [source,tab]of [[HISTORICAL_ENTRY_SOURCE_ID,'JAICLUB'],['synthetic-other-source','JAICLUB'],[DEFAULT_ENTRY_SOURCE_ID,'SHREEWIN']])assert.throws(()=>entryRowsFromValues(v,source,tab,1,'2026-10-15T00:00:00Z'),/entry_headers_missing/);
+ const bad=v.map(x=>x.slice());bad[0][3]='UNVERIFIED COLUMN';assert.throws(()=>entryRowsFromValues(bad,DEFAULT_ENTRY_SOURCE_ID,'JAICLUB',1,'2026-10-15T00:00:00Z'),/entry_headers_missing/);
+});
+test('unknown shifted or duplicate essential columns fail closed and never archive the old mirror',async()=>{
+ const missing=octoberValues('BIGMUMBAI');missing[0][16]='PRIVATE-UNRECOGNIZED-HEADER';
+ const duplicate=octoberValues('51GAME');duplicate[0][13]='AMOUNT';
+ for(const [tab,values,code]of [['BIGMUMBAI',missing,'entry_headers_missing'],['51GAME',duplicate,'entry_headers_ambiguous']]){
+  const old={table:'admin_deposit_followup_rows',id:'old-current',source_sheet:DEFAULT_ENTRY_SOURCE_ID,source_tab:tab,source_row:2,source_kind:'sheet',updated_at:'2026-10-01T00:00:00Z',stale_at:null};
+  const h=harness({envOverrides:{DEPOSIT_FOLLOWUP_SHEET_ID:DEFAULT_ENTRY_SOURCE_ID},entryValues:{[tab]:values},initialRows:[old]}),response=await h.call(),body=await response.json();assert.equal(response.status,502);assert.equal(body.sourceResults.entries.code,code);assert.equal(body.sourceResults.entries.rowsWritten,0);assert.equal(body.sourceResults.result.ok,true);assert.deepEqual(h.stored.get(old.table+':'+old.id),old);assert(!h.calls.some(x=>x.init.method==='PATCH'&&x.url.pathname.endsWith('admin_deposit_followup_rows')));
+  const failure=h.events.find(e=>e.source==='entries'&&e.state==='failed');assert.equal(failure.stage,'entry_read');assert.equal(failure.tab,tab);assert.equal(failure.code,code);assert(failure.missingHeaders.length);assert(!JSON.stringify(failure).includes('PRIVATE'));
+ }
+});
+test('stage diagnostics expose only fixed source/stage/counter metadata across failures',async()=>{
+ for(const [options,source,stage]of [[{failResultRead:true},'result','result_read'],[{failEntryMetadata:true},'entries','entry_metadata'],[{failEntryRead:true},'entries','entry_read'],[{failEntries:true},'entries','db_upsert'],[{failArchive:true},'result','db_archive']]){
+  const h=harness(options);await h.call();const failed=h.events.find(e=>e.source===source&&e.state==='failed');assert(failed);assert.equal(failed.event,'deposit_sheet_sync');assert.equal(failed.stage,stage);assert(failed.durationMs>=0);assert(failed.stageDurationsMs[stage]>=0);assert(h.events.some(e=>e.source===source&&e.stage===stage&&e.state==='started'));assert(!/PRIVATE|https:|synthetic-(?:service|google)|example@example|SYNTHETIC-ORDER/.test(JSON.stringify(h.events)));
+ }
+});
+
+test('diagnostic logger failure cannot alter authorization, complete mirrors or public receipts',async()=>{
+ const old=harness(),noLog=harness({onDiagnostic:()=>{throw new Error('PRIVATE logger failure');}});
+ const [a,b]=await Promise.all([old.call(),noLog.call()]);assert.equal(a.status,200);assert.equal(b.status,200);assert.deepEqual(await a.json(),await b.json());assert.deepEqual([...old.stored.values()],[...noLog.stored.values()]);
+ const denied=harness();assert.equal((await denied.call('wrong')).status,401);assert.equal(denied.events.length,0);assert.equal(denied.calls.length,0);
+});
+test('whitespace-equivalent labels retain the exact original row DTO and unknown columns remain ignored',()=>{
+ const old=entryRowsFromValues([entryHeaders,entryRow],DEFAULT_ENTRY_SOURCE_ID,'51GAME',1,'2026-10-15T00:00:00Z');
+ const compact=entryHeaders.map(h=>h.replace(/\s+/g,''));
+ assert.deepEqual(entryRowsFromValues([compact,entryRow],DEFAULT_ENTRY_SOURCE_ID,'51GAME',1,'2026-10-15T00:00:00Z'),old);
+ const extraHeaders=[...compact,'PRIVATE-ACCOUNT-NUMBER'],extra=[...entryRow,'PRIVATE-BANK-ACCOUNT'];
+ assert.deepEqual(entryRowsFromValues([extraHeaders,extra],DEFAULT_ENTRY_SOURCE_ID,'51GAME',1,'2026-10-15T00:00:00Z'),old);
 });

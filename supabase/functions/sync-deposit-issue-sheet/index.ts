@@ -13,12 +13,18 @@ const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 120_000;
 const encoder = new TextEncoder();
 
-type Runtime = { env: (name: string) => string | undefined; fetch: typeof fetch; now: () => number; crypto: Crypto };
+type SyncDiagnostic = { event: "deposit_sheet_sync"; source: "result" | "entries" | "both"; stage: SyncStage; state: "started" | "complete" | "failed"; durationMs?: number; stageDurationsMs?: Partial<Record<SyncStage, number>>; rowsRead?: number; rowsWritten?: number; tabsRead?: number; code?: string; tab?: string; missingHeaders?: string[] };
+type Runtime = { env: (name: string) => string | undefined; fetch: typeof fetch; now: () => number; crypto: Crypto; log?: (event: SyncDiagnostic) => void };
 type Settings = { sourceId: string; entrySourceId: string; entrySourceMigrated: boolean; email: string; privateKey: string; supabaseUrl: string; serviceKey: string };
 type SyncStage = "configuration" | "token" | "result_read" | "entry_metadata" | "entry_read" | "db_upsert" | "db_archive" | "complete";
 type MirrorTarget = { table: string; rows: Record<string, unknown>[]; source: string; tabs: string[] };
 type SourceResult = { ok: boolean; stage: SyncStage; code?: string; rowsRead: number; rowsWritten: number; tabsRead: number; syncedAt?: string };
-class SyncError extends Error { constructor(readonly code: string, readonly status = 503) { super(code); } }
+class SyncError extends Error { constructor(readonly code: string, readonly status = 503, readonly headerContext?: { tab: string; missingHeaders: string[] }) { super(code); } }
+function diagnostic(runtime: Runtime, value: SyncDiagnostic) {
+  // Only fixed stage/error names, recognized tab labels, counters and elapsed
+  // time. Never log requests, URLs, credentials, source rows or upstream errors.
+  try { if (runtime.log) runtime.log(value); else console.log(JSON.stringify(value)); } catch { /* observability never changes the sync result */ }
+}
 
 function json(body: Record<string, unknown>, status = 200): Response {
   return Response.json(body, { status, headers: { "Cache-Control": "private, no-store", "Content-Type": "application/json; charset=utf-8" } });
@@ -158,22 +164,44 @@ function rowsFromValues(values: unknown[][], sourceSheet: string, collectedAt: s
 // column A "ID NUMBER", so it must never be resolved by first matching header.
 function entryRowsFromValues(values: unknown[][], sourceSheet: string, tab: string, gid: number, collectedAt: string): Record<string, unknown>[] {
   if (!Array.isArray(values) || !Array.isArray(values[0])) throw new SyncError("entry_rows_missing", 502);
-  const normalize = (v: unknown) => String(v ?? "").trim().replace(/\s+/g, " ").toUpperCase();
-  const headers = new Map<string, number>(); values[0].forEach((value, i) => { const key = normalize(value); if (key && !headers.has(key)) headers.set(key, i); });
-  const upiColumn = normalize(values[0][6]) === "UPI ID" ? 6 : null;
-  const kycUpiColumn = normalize(values[0][7]) === "KYC-UPI ID" ? 7 : null;
-  const staffColumn = normalize(values[0][11]) === "ID NUMBER" ? 11 : null;
+  // The verified October headers have both spaced and unspaced spellings.
+  // Normalize labels only: original cell values and native identities stay exact.
+  const normalize = (v: unknown) => String(v ?? "").trim().replace(/\s+/g, "").toUpperCase();
+  const names = values[0].map(normalize), headers = new Map<string, number>(), positions = new Map<string, number[]>();
+  names.forEach((key, i) => { if (key) { if (!headers.has(key)) headers.set(key, i); positions.set(key, [...(positions.get(key) || []), i]); } });
+  const october = sourceSheet === DEFAULT_ENTRY_SOURCE_ID;
+  // Root verified October JAICLUB B as the work-order ID and C as the RC
+  // payment reference, despite both cells being labelled WORKORDERNUMBER.
+  // No other workbook/tab is allowed this positional exception.
+  const jaiDuplicateOrders = october && tab === "JAICLUB" && names[1] === "WORKORDERNUMBER" && names[2] === "WORKORDERNUMBER"
+    && !headers.has("ORDERNUMBER") && names[3] === "UTRNUMBER" && names[4] === "AMOUNT" && names[5] === "THIRDPARTY"
+    && names[10] === "MAINTHIRDPARTYREPLY" && names[11] === "IDNUMBER" && names[12] === "STATUS"
+    && names[13] === "PDF/VIDEO" && names[14] === "RECEIPTDATE" && names[15] === "RECEIPTDATE";
+  if (jaiDuplicateOrders) headers.set("ORDERNUMBER", 2);
+  // The inserted blank L in October BIGMUMBAI shifts only its authorized tail
+  // to M:Q. A's member ID is never a fallback for the employee field.
+  const bigShifted = october && tab === "BIGMUMBAI" && names[11] === "" && names[12] === "IDNUMBER"
+    && names[13] === "STATUS" && names[14] === "PDF/VIDEO" && names[15] === "MAINTHIRDPARTYFOLLOWUPDATE&TIME" && names[16] === "RECEIPTDATE";
+  if (october && tab === "BIGMUMBAI" && names[11] === "" && !bigShifted)
+    throw new SyncError("entry_headers_missing", 502, { tab, missingHeaders: ["BIGMUMBAI M:Q layout"] });
+  const upiColumn = names[6] === "UPIID" ? 6 : null;
+  const kycUpiColumn = names[7] === "KYC-UPIID" ? 7 : null;
+  const staffColumn = bigShifted ? 12 : names[11] === "IDNUMBER" ? 11 : null;
   // P contains the original sheet's age/text value, despite its RECEIPT DATE
   // title. JAICLUB also gives O this title: preserve O separately, never treat
   // it as a follow-up timestamp or let its first header match replace P.
-  const receiptColumn = normalize(values[0][15]) === "RECEIPT DATE" ? 15 : null;
-  const sourceDateColumn = tab === "JAICLUB" && normalize(values[0][14]) === "RECEIPT DATE" ? 14 : null;
-  for (const key of ["ORDER NUMBER", "AMOUNT", "THIRDPARTY", "STATUS", "MAIN THIRD PARTY REPLY"]) if (!headers.has(key)) throw new SyncError("entry_headers_missing", 502);
+  const receiptColumn = bigShifted ? 16 : names[15] === "RECEIPTDATE" ? 15 : null;
+  const sourceDateColumn = tab === "JAICLUB" && names[14] === "RECEIPTDATE" ? 14 : null;
+  const required = ["ORDER NUMBER", "AMOUNT", "THIRDPARTY", "STATUS", "MAIN THIRD PARTY REPLY"];
+  const missingHeaders = required.filter(key => !headers.has(normalize(key)));
+  if (missingHeaders.length) throw new SyncError("entry_headers_missing", 502, { tab, missingHeaders });
+  const ambiguousHeaders = required.filter(key => (positions.get(normalize(key)) || []).length > 1);
+  if (ambiguousHeaders.length) throw new SyncError("entry_headers_ambiguous", 502, { tab, missingHeaders: ambiguousHeaders });
   if (values.length > MAX_ROWS) throw new SyncError("source_row_limit_reached", 413);
   const rows: Record<string, unknown>[] = [];
   for (let i = 1; i < values.length; i++) {
     const row = Array.isArray(values[i]) ? values[i] : [];
-    const get = (key: string) => rowValue(row, headers, key);
+    const get = (key: string) => rowValue(row, headers, normalize(key));
     const orderNumber = textValue(get("ORDER NUMBER"));
     if (!orderNumber) continue;
     const followupAt = textValue(get("MAIN THIRD PARTY FOLLOW UP DATE & TIME"));
@@ -181,7 +209,7 @@ function entryRowsFromValues(values: unknown[][], sourceSheet: string, tab: stri
     const followupDate = dayFirst ? dateValue(`${dayFirst[3]}-${dayFirst[2]}-${dayFirst[1]}`) : dateValue(followupAt);
     rows.push({ id: `${sourceSheet}:${tab}:${i + 1}`, source_sheet: sourceSheet, source_tab: tab, source_gid: gid, source_row: i + 1,
       country: "印度", platform: tab, order_number: orderNumber, work_order_number: textValue(get("WORK ORDER NUMBER")),
-      utr: textValue(get(headers.has("UTR NUMBER") ? "UTR NUMBER" : "UTR NUMMBER")),
+      utr: textValue(get(headers.has("UTRNUMBER") ? "UTR NUMBER" : "UTR NUMMBER")),
       upi_id: upiColumn === null ? null : upiValue(row[upiColumn]), kyc_upi_id: kycUpiColumn === null ? null : upiValue(row[kycUpiColumn]),
       amount: numberValue(get("AMOUNT")), provider: textValue(get("THIRDPARTY")),
       provider_reply: textValue(get("MAIN THIRD PARTY REPLY"), 4000), followup_status: textValue(get("STATUS")),
@@ -206,7 +234,7 @@ async function readEntrySheets(settings: Settings, runtime: Runtime, headers: Re
   onStage("entry_read");
   for (let at = 0; at < tabs.length; at += 4) {
     const group = tabs.slice(at, at + 4), query = new URLSearchParams({ valueRenderOption: "FORMATTED_VALUE", majorDimension: "ROWS" });
-    group.forEach((t: any) => query.append("ranges", `'${t.title}'!A1:P${MAX_ROWS + 1}`));
+    group.forEach((t: any) => query.append("ranges", `'${t.title}'!A1:${settings.entrySourceId === DEFAULT_ENTRY_SOURCE_ID && t.title === "BIGMUMBAI" ? "Q" : "P"}${MAX_ROWS + 1}`));
     const data = await requestJson(runtime, base + "/values:batchGet?" + query, { method: "GET", headers }, MAX_RESPONSE_BYTES);
     if (!Array.isArray(data?.valueRanges) || data.valueRanges.length !== group.length) throw new SyncError("entry_tabs_incomplete", 502);
     data.valueRanges.forEach((r: any, i: number) => rows.push(...entryRowsFromValues(r.values, settings.entrySourceId, group[i].title, group[i].sheetId, collectedAt)));
@@ -234,18 +262,28 @@ export function createDepositIssueSyncHandler(runtime: Runtime) {
       // source before writing, then archives only that source. One slow/failed
       // workbook cannot stop the other from refreshing. Within each worker all
       // requests remain sequential: at most two requests are in flight, no retries.
-      async function mirror(read: (onStage: (value: SyncStage) => void) => Promise<MirrorTarget>, firstStage: SyncStage) {
+      async function mirror(source: "result" | "entries", read: (onStage: (value: SyncStage) => void) => Promise<MirrorTarget>, firstStage: SyncStage) {
         const result: SourceResult = { ok: false, stage: firstStage, rowsRead: 0, rowsWritten: 0, tabsRead: 0 };
+        const startedAt = runtime.now(), stageDurationsMs: Partial<Record<SyncStage, number>> = {};
+        let stageStartedAt = startedAt;
+        const elapsed = (from: number) => Math.max(0, runtime.now() - from);
+        const finishStage = () => { stageDurationsMs[result.stage] = (stageDurationsMs[result.stage] || 0) + elapsed(stageStartedAt); };
+        const setStage = (value: SyncStage) => {
+          if (result.stage === value) return;
+          finishStage(); result.stage = value; stageStartedAt = runtime.now();
+          diagnostic(runtime, { event: "deposit_sheet_sync", source, stage: value, state: "started" });
+        };
+        diagnostic(runtime, { event: "deposit_sheet_sync", source, stage: firstStage, state: "started" });
         try {
-          const target = await read(value => { result.stage = value; });
+          const target = await read(setStage);
           result.rowsRead = target.rows.length; result.tabsRead = target.tabs.length;
-          result.stage = "db_upsert";
+          setStage("db_upsert");
           for (let at = 0; at < target.rows.length; at += 500) {
             const chunk = target.rows.slice(at, at + 500);
             await requestJson(runtime, settings.supabaseUrl + "/rest/v1/" + target.table + "?on_conflict=source_sheet,source_tab,source_row", { method: "POST", headers: { ...databaseHeaders, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" }, body: JSON.stringify(chunk) }, 128 * 1024);
             result.rowsWritten += chunk.length;
           }
-          result.stage = "db_archive";
+          setStage("db_archive");
           for (const tab of target.tabs) {
             // Historical workbooks are never rescanned or archived. This exact
             // source/tab scope also protects portal rows and newer overlapping runs.
@@ -256,15 +294,18 @@ export function createDepositIssueSyncHandler(runtime: Runtime) {
               { method: "PATCH", headers: { ...databaseHeaders, "Content-Type": "application/json", Prefer: "return=minimal" },
                 body: JSON.stringify({ stale_at: collectedAt }) }, 64 * 1024);
           }
-          result.ok = true; result.stage = "complete"; result.syncedAt = collectedAt;
+          finishStage(); result.ok = true; result.stage = "complete"; result.syncedAt = collectedAt;
+          diagnostic(runtime, { event: "deposit_sheet_sync", source, stage: result.stage, state: "complete", durationMs: elapsed(startedAt), stageDurationsMs, rowsRead: result.rowsRead, rowsWritten: result.rowsWritten, tabsRead: result.tabsRead });
           return { result, status: 200 };
         } catch (error) {
           result.code = error instanceof SyncError ? error.code : "deposit_issue_sync_failed";
+          finishStage();
+          diagnostic(runtime, { event: "deposit_sheet_sync", source, stage: result.stage, state: "failed", durationMs: elapsed(startedAt), stageDurationsMs, rowsRead: result.rowsRead, rowsWritten: result.rowsWritten, tabsRead: result.tabsRead, code: result.code, ...(error instanceof SyncError && error.headerContext ? error.headerContext : {}) });
           return { result, status: error instanceof SyncError ? error.status : 503 };
         }
       }
       const [resultMirror, entryMirror] = await Promise.all([
-        mirror(async () => {
+        mirror("result", async () => {
           // Keep the result columns in one bounded snapshot. AV:BC (including
           // member IDs) remains outside the authorized projection.
           const ranges = [`${SHEET_TAB}!A1:N${MAX_ROWS + 1}`, `${SHEET_TAB}!AB1:AB${MAX_ROWS + 1}`, `${SHEET_TAB}!AS1:AS${MAX_ROWS + 1}`];
@@ -278,7 +319,7 @@ export function createDepositIssueSyncHandler(runtime: Runtime) {
           const derived = source.values.map((_: unknown, index: number) => [batch.valueRanges[1]?.values?.[index]?.[0], batch.valueRanges[2]?.values?.[index]?.[0]]);
           return { table: "admin_deposit_issue_rows", rows: rowsFromValues(source.values, settings.sourceId, collectedAt, derived), source: settings.sourceId, tabs: [SHEET_TAB] };
         }, "result_read"),
-        mirror(async onStage => {
+        mirror("entries", async onStage => {
           const entries = await readEntrySheets(settings, runtime, googleHeaders, collectedAt, onStage);
           return { table: "admin_deposit_followup_rows", rows: entries.rows, source: settings.entrySourceId, tabs: entries.tabs };
         }, "entry_metadata"),
@@ -296,6 +337,7 @@ export function createDepositIssueSyncHandler(runtime: Runtime) {
       const code = error instanceof SyncError ? error.code : "deposit_issue_sync_failed";
       const status = error instanceof SyncError ? error.status : 503;
       const notStarted: SourceResult = { ok: false, stage, code, rowsRead: 0, rowsWritten: 0, tabsRead: 0 };
+      diagnostic(runtime, { event: "deposit_sheet_sync", source: "both", stage, state: "failed", code });
       return json({ ok: false, code, sourceResults: { result: notStarted, entries: notStarted } }, status);
     }
   };
