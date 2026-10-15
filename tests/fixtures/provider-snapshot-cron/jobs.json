@@ -1,0 +1,20 @@
+[
+  {
+    "jobname": "provider-snapshot-worker-v1",
+    "schedule": "1 second",
+    "command": "-- One task per tick; same libpq connection, durable claim before computation.\nBEGIN ISOLATION LEVEL READ COMMITTED;\nSET LOCAL statement_timeout='3s';\nSET LOCAL lock_timeout='500ms';\nSELECT private.provider_snapshot_prepare_claim('product-provider-snapshot-v1');\nCOMMIT;\nBEGIN ISOLATION LEVEL READ COMMITTED;\nSET LOCAL statement_timeout='50s';\nSET LOCAL lock_timeout='500ms';\nSELECT private.provider_snapshot_run_claimed('product-provider-snapshot-v1');\nCOMMIT;",
+    "active": false
+  },
+  {
+    "jobname": "provider-snapshot-dispatch-v1",
+    "schedule": "* * * * *",
+    "command": "BEGIN ISOLATION LEVEL READ COMMITTED;\nSET LOCAL statement_timeout='3s';\nSET LOCAL lock_timeout='500ms';\nSELECT private.provider_snapshot_dispatch(clock_timestamp(),600);\nCOMMIT;",
+    "active": false
+  },
+  {
+    "jobname": "provider-snapshot-maintenance-v1",
+    "schedule": "*/5 * * * *",
+    "command": "-- Only this release's jobs: successful logs 24h, failed logs 7d; at most 1000 per tick.\nBEGIN ISOLATION LEVEL READ COMMITTED;\nSET LOCAL statement_timeout='3s';\nSET LOCAL lock_timeout='500ms';\nWITH expired AS MATERIALIZED (\n SELECT d.runid FROM cron.job_run_details d JOIN cron.job j ON j.jobid=d.jobid\n WHERE j.jobname IN ('provider-snapshot-worker-v1','provider-snapshot-dispatch-v1','provider-snapshot-maintenance-v1')\n AND j.username=current_user AND j.database=current_database()\n AND d.username=current_user AND d.database=current_database()\n AND ((d.status='succeeded' AND d.end_time<clock_timestamp()-interval'1day')\n   OR (d.status='failed' AND d.end_time<clock_timestamp()-interval'7days'))\n ORDER BY d.runid LIMIT 1000\n)\nDELETE FROM cron.job_run_details d USING expired e WHERE d.runid=e.runid;\nCOMMIT;\n-- Keep log cleanup committed if derived-storage maintenance subsequently fails.\nBEGIN ISOLATION LEVEL READ COMMITTED;\nSET LOCAL statement_timeout='5s';\nSET LOCAL lock_timeout='500ms';\nSELECT private.provider_snapshot_maintain(100);\nCOMMIT;",
+    "active": false
+  }
+]

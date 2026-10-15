@@ -32,7 +32,10 @@
    const w=result.window;
    if(!object(w)||w.timezone!=='Asia/Kolkata'||!['startAt','endAt','previousStartAt','previousEndAt'].every(k=>iso(w[k]))||!iso(result.publishedCutoff)||w.endAt!==result.publishedCutoff||!Number.isSafeInteger(result.cutoffEpochMs)||Date.parse(w.endAt)!==result.cutoffEpochMs)invalid();
    const from=Date.parse(request.startAt+'+05:30'),to=Date.parse(request.endAt+'+05:30')+1000;
-   if(Date.parse(w.startAt)!==from||Date.parse(w.endAt)<=from||Date.parse(w.endAt)>to||Date.parse(w.previousStartAt)!==from-86400000||Date.parse(w.previousEndAt)!==Date.parse(w.endAt)-86400000||w.localStartAt!==request.startAt||typeof w.localCutoff!=='string'||typeof w.previousLocalStartAt!=='string'||typeof w.previousLocalCutoff!=='string')invalid();
+   // Preserve sub-millisecond exclusive windows; Date.parse alone can turn a
+   // valid midnight + 1 microsecond cutoff into an empty interval.
+   const precise=value=>value.slice(0,19)+'.'+(value.match(/\.(\d+)/)?.[1]||'').padEnd(6,'0')+'Z',at=value=>precise(new Date(value).toISOString()),priorEnd=new Date(Date.parse(w.endAt.slice(0,19)+'Z')-86400000).toISOString().slice(0,19)+precise(w.endAt).slice(19);
+   if(precise(w.startAt)!==at(from)||precise(w.endAt)<=at(from)||precise(w.endAt)>at(to)||precise(w.previousStartAt)!==at(from-86400000)||precise(w.previousEndAt)!==priorEnd||w.localStartAt!==request.startAt||typeof w.localCutoff!=='string'||typeof w.previousLocalStartAt!=='string'||typeof w.previousLocalCutoff!=='string')invalid();
   }
   for(const p of result.platforms){
    const id=p?.platform?.id;if(!expected.includes(id)||seen.has(id)||!object(p.current)||!object(p.previous)||!Array.isArray(p.snapshots))invalid();seen.add(id);

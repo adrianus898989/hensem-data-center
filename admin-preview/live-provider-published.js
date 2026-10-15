@@ -8,7 +8,7 @@
  const native=p=>p&&!p.reportOnly&&['ar','newar','kb'].includes(p.source)&&p.scopeGroup==='IN'&&p.currency==='INR'&&['Asia/Kolkata','Asia/Calcutta'].includes(p.timezone)&&typeof p.sourceName==='string'&&p.sourceName.length>0&&(p.source!=='kb'||p.sourceName==='YASH.BET');
  function eligible({page,L,platforms,visible,providers,now=Date.now()}){
   return page==='providers'&&L.direction==='charge'&&L.status==='all'&&platforms.length>0&&platforms.length<=50&&visible.length===platforms.length&&platforms.every(native)&&
-   validDay(L.from.slice(0,10))&&/^\d{4}-\d{2}-\d{2}T00:00:00$/.test(L.from)&&L.to===L.from.slice(0,10)+'T23:59:59'&&L.from.slice(0,10)<new Date(now+19800000).toISOString().slice(0,10)&&
+   validDay(L.from.slice(0,10))&&/^\d{4}-\d{2}-\d{2}T00:00:00$/.test(L.from)&&L.to===L.from.slice(0,10)+'T23:59:59'&&L.from.slice(0,10)<=new Date(now+19800000).toISOString().slice(0,10)&&
    !providers.length&&!['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr','amountMin','amountMax','channelType'].some(k=>L[k]);
  }
  function contextKey(access,catalog){return JSON.stringify([access,catalog.map(p=>[p.id,p.source,p.sourceName,p.scopeGroup,p.country,p.team,p.name,p.currency,p.timezone]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))]);}
@@ -19,10 +19,19 @@
   const start=Date.parse(day+'T00:00:00+05:30'),at=offset=>instant(new Date(start+offset*86400000).toISOString());
   return instant(w.startAt)===at(0)&&instant(w.endAt)===at(1)&&instant(w.previousStartAt)===at(-1)&&instant(w.previousEndAt)===at(0);
  }
+ function appliedWindow(bundle,request,now=Date.now()){
+  const w=bundle.window,full=fullDay(bundle,request),today=new Date(now+19800000).toISOString().slice(0,10);
+  if(!w||!full&&request.startAt.slice(0,10)!==today)return null;
+  return {...w,localStartAt:preciseLocal(w.startAt),localCutoff:preciseLocal(w.endAt),previousLocalStartAt:preciseLocal(w.previousStartAt),previousLocalCutoff:preciseLocal(w.previousEndAt),fullDay:full,intraday:!full};
+ }
+ const local=value=>new Date(Date.parse(value)+19800000).toISOString().slice(0,19);
+ const preciseLocal=value=>local(value)+(instant(value).slice(19,26).replace(/0+$/,'').replace(/\.$/,''));
+ const previousDay=value=>{const normalized=instant(value);return new Date(Date.parse(normalized.slice(0,19)+'Z')-86400000).toISOString().slice(0,19)+normalized.slice(19);};
  const invalid=()=>{throw Error('已发布汇总的范围或结构不完整，请重新读取');};
  function validate(bundle,request,platforms){
   root.HensemProviderSnapshotShadow.validate(bundle,request);
   if(bundle.status==='unsupported')return bundle;
+  if(bundle.window){const w=bundle.window;if(instant(w.startAt)!==instant(request.startAt+'+05:30')||instant(w.endAt)<=instant(w.startAt)||instant(w.endAt)>instant(new Date(Date.parse(request.endAt+'+05:30')+1000).toISOString())||instant(w.previousStartAt)!==previousDay(w.startAt)||instant(w.previousEndAt)!==previousDay(w.endAt))invalid();for(const [civil,utc]of [['localStartAt','startAt'],['localCutoff','endAt'],['previousLocalStartAt','previousStartAt'],['previousLocalCutoff','previousEndAt']])if(w[civil]!==local(w[utc]))invalid();}
   for(const entry of bundle.platforms){
    const p=platforms.find(p=>p.id===entry.platform.id);if(!p)invalid();
    for(const k of ['source','sourceName','scopeGroup','currency','timezone'])if(entry.platform[k]!==p[k])invalid();
@@ -54,6 +63,6 @@
   });
   return {status:'ready',from,to,platforms:rows,error:'',published:true};
  }
- const api={eligible,contextKey,requestFor,validate,fullDay,generation,intake,denied};
+ const api={eligible,contextKey,requestFor,validate,fullDay,appliedWindow,generation,intake,denied};
  if(typeof module==='object'&&module.exports)module.exports=api;else root.HensemProviderPublished=api;
 })(typeof window==='object'?window:globalThis);
