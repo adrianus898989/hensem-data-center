@@ -375,6 +375,15 @@ function adminLiveTimeoutMessage(action:unknown,mode?:unknown):string {
  if(action==='pendingSnapshot')return mode===undefined?'近7天代付中快照读取超时，请重试；不能据此判断为0':'代付中存量读取超时，请重试；不能据此判断为0';
  return ['syncHealth','intakeCoverage'].includes(String(action))?'同步检查超时，请稍后重试；不能据此判断平台没有数据':action==='withdrawReasons'?'该平台当日原因读取超时，请点击重试':['aggregate','collectedData','reportSummary'].includes(String(action))?'读取超时，不代表没有数据；请重试':'读取超时，请缩短日期或选择单个平台后重试';
 }
+class AdminLiveReadError extends Error {
+ constructor(message:string,readonly code:'57014'|'ADMIN_LIVE_TIMEOUT'|'ADMIN_LIVE_NETWORK'){super(message);Object.setPrototypeOf(this,new.target.prototype);}
+}
+async function adminLiveFetch(url:string,init:RequestInit):Promise<Response>{
+ try{return await fetch(url,init)}catch{
+  init.signal?.throwIfAborted();
+  throw new AdminLiveReadError('网络连接失败，请重试；已完成结果保留','ADMIN_LIVE_NETWORK');
+ }
+}
 export async function adminLiveRequest(session:DashboardSession,input:unknown,signal?:AbortSignal,roleContext?:{assigned:boolean;page:string}):Promise<unknown>{
  signal?.throwIfAborted();
  if(roleContext?.assigned&&(typeof roleContext.page!=="string"||!/^[a-z][a-z0-9_]{0,63}$/.test(roleContext.page)))throw Error("当前角色没有此页面或操作权限，请联系管理员");
@@ -410,8 +419,8 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  const specialRpc:Record<string,string>={channelStatus:"dashboard_admin_live_channel_status",analysisOrders:"dashboard_admin_live_analysis_orders",submissionAnalysis:"dashboard_admin_live_submission_analysis",submissionStreak:"dashboard_admin_live_submission_streak",memberDaily:"dashboard_admin_live_member_daily",pendingSnapshot:"dashboard_admin_live_pending_snapshot",pendingAnalysis:"dashboard_admin_live_pending_analysis",pendingOrders:"dashboard_admin_live_pending_orders",depositStatistics:"dashboard_admin_deposit_statistics",workorderRecords:"dashboard_admin_live_workorder_records",intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
  const collectedKyc=request.action==="depositStatistics"&&request.section==="kyc";
  const rpc=collectedKyc?"dashboard_admin_deposit_kyc":request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
- const response=await fetch(base+"/rest/v1/rpc/"+(roleContext?.assigned&&!collectedKyc?"dashboard_admin_execute":rpc),{method:"POST",body:JSON.stringify(collectedKyc?{p_page:roleContext?.assigned?roleContext.page:null,p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))}:roleContext?.assigned?{p_page:roleContext.page,p_request:request}:{p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
- if(!response.ok){let code="";try{const body=await response.json();code=String(body.message||"")}catch{}
+ const response=await adminLiveFetch(base+"/rest/v1/rpc/"+(roleContext?.assigned&&!collectedKyc?"dashboard_admin_execute":rpc),{method:"POST",body:JSON.stringify(collectedKyc?{p_page:roleContext?.assigned?roleContext.page:null,p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))}:roleContext?.assigned?{p_page:roleContext.page,p_request:request}:{p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
+ if(!response.ok){let code="",queryCancelled=false;try{const body=await response.json();code=String(body.message||"");queryCancelled=body.code==='57014'}catch{}
  if(/role_|permission_denied/.test(code))throw Error("当前角色没有此页面或操作权限，请联系管理员");
  if(/note_conflict/.test(code))throw Error("该日备注已被修改，请取消后重新打开核对；当前输入已保留");
  if(/note_denied/.test(code))throw Error("当前账号没有自动出款备注编辑权限");
@@ -432,7 +441,10 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if(request.action==="intakeCoverage"&&request.operation==="orderCatalog"&&code==="invalid_coverage_request")throw Error("订单采集目录操作暂不支持");
  if(request.durationVersion===2&&code==="invalid_request")throw Error("到账时效统计接口尚未更新，请更新后重试");
  if(/unsupported_filter/.test(code))throw Error("此来源未提供该检索字段，请清空该字段后查询");
- if(/timeout|57014/i.test(code)||response.status===504)throw Error(adminLiveTimeoutMessage(request.action,request.mode));
+ // Preserve only this explicit SQLSTATE, after all permission mappings. Text
+ // mentioning a timeout is not evidence of a database query cancellation.
+ if(queryCancelled)throw new AdminLiveReadError(adminLiveTimeoutMessage(request.action,request.mode),'57014');
+ if(/timeout|57014/i.test(code)||response.status===504)throw new AdminLiveReadError(adminLiveTimeoutMessage(request.action,request.mode),'ADMIN_LIVE_TIMEOUT');
  throw Error("正式数据查询未完成，请重试；不能据此判断没有数据");}
  return response.json();
 }
@@ -464,7 +476,7 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
      if(item.page!=="collector_control"||!access?.canView||!(access.mode==="owner"||access.mode==="assigned"&&access.permissions.includes("collector_control.view")&&access.permissions.includes("collector_control."+permission)))throw Error("当前账号没有采集管理操作权限");
     }
     const result=await adminLiveRequest(typeof options.session==="function"?options.session():options.session,item.request,controller.signal,{assigned:options.roleAccess?.()?.mode==="assigned",page:item.page});if(Date.now()>=item.deadline)stop(item,true);else finish(item,{result})}
-   catch(e){finish(item,{error:e instanceof Error?e.message:"读取失败"})}
+   catch(e){if(Date.now()>=item.deadline)stop(item,true);else finish(item,{error:e instanceof Error?e.message:"读取失败",...(e instanceof AdminLiveReadError?{code:e.code}:{})})}
    finally{clearTimeout(item.timer);if(active.get(item.id)===item)active.delete(item.id);drain()}
  };
  const drain=()=>{
