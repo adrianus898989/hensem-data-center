@@ -15,7 +15,8 @@ function load(options = {}) {
   let now=options.now??Date.now();class ClockDate extends Date {static now(){return now;}}
   const target = { location:{origin:'https://dashboard.invalid'}, addEventListener: (name,fn) => {assert.equal(name,'message');listeners.add(fn);}, removeEventListener: (name,fn) => listeners.delete(fn) };
   const authCalls = [];
-  vm.runInNewContext(compiled, { module,exports:module.exports,URL,AbortController,Date:ClockDate,window:target,
+  const runtime=options.target===undefined?compiled:ts.transpileModule(sourceText,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:options.target,downlevelIteration:true}}).outputText;
+  vm.runInNewContext(runtime, { module,exports:module.exports,URL,AbortController,Date:ClockDate,window:target,
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: options.base || 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
     require: name => {
       if(['./adminConfigurationRequest','./adminWorkorderRecordsRequest','./depositStatisticsRequest','./portalOperationLogsRequest'].includes(name)) {
@@ -85,6 +86,65 @@ test('errors do not expose raw backend messages or credentials',async()=>{
   await assert.rejects(h.api.adminLiveRequest(session,{action:'catalog'}),error=>/平台目录读取超时/.test(error.message)&&!/缩短日期|选择单个平台/.test(error.message));
   await assert.rejects(h.api.adminLiveRequest(session,{action:'autoWithdraw',country:'印度',startAt:'2026-10-10T00:00:00Z',endAt:'2026-10-10T23:59:59Z'}),error=>/自动出款统计读取超时/.test(error.message)&&!/缩短日期|选择单个平台/.test(error.message));
   await assert.rejects(h.api.adminLiveRequest(session,{action:'withdrawReasons',date:'2026-09-24',country:'印度',platform:'EXAMPLE',kind:'categories'}),error=>/当日原因读取超时/.test(error.message)&&!/缩短日期|选择单个平台/.test(error.message));
+});
+
+test('explicit database cancellation SQLSTATE survives the real host and iframe bridges across shared readers',async()=>{
+ const requests=[
+  {...query,action:'aggregate'},
+  {action:'submissionAnalysis',platformId:query.platformId,startAt:query.startAt,endAt:query.endAt,direction:'charge',operation:'summary',charts:false},
+  {action:'autoWithdraw',country:'印度',startAt:query.startAt,endAt:query.endAt},
+  {action:'withdrawReasons',date:'2026-09-22',country:'印度',platform:'EXAMPLE',kind:'categories'},
+  {action:'rates'}
+ ];
+ for(const assigned of [false,true]){
+  const h=load({fetch:async()=>({ok:false,status:500,json:async()=>({code:'57014',message:'PRIVATE_SQL_SENTINEL',details:'PRIVATE_ROW_SENTINEL',hint:'PRIVATE_TOKEN_SENTINEL'})})});
+  const b=bridge(h,assigned?{roleAccess:()=>({mode:'assigned',canView:true,permissions:['providers.view','providers.query']})}:{});
+  for(const [i,request]of requests.entries()){
+   const event=b.event('state_'+i,request);event.data.page='providers';h.send(event);await flush();
+   const reply=b.replies.at(-1).data;assert.equal(reply.id,'state_'+i);assert.equal(reply.code,'57014');assert.match(reply.error,/超时/);assert.doesNotMatch(JSON.stringify(reply),/PRIVATE_|details|hint/);
+   const x=iframeHarness(),pending=x.ctx.hensemLiveRequest(request);const rejected=assert.rejects(pending,e=>e.code==='57014'&&/超时/.test(e.message)&&!/PRIVATE_/.test(e.message));x.reply(x.messages[0].data,{error:reply.error,code:reply.code});await rejected;assert.equal(x.timers.size,0);
+  }
+  assert.equal(h.calls.length,requests.length);assert.equal(h.authCalls.length,requests.length);assert.equal(b.replies.length,requests.length);assert(h.calls.every(c=>assigned?c.url.endsWith('/dashboard_admin_execute'):!c.url.endsWith('/dashboard_admin_execute')));assert.equal(h.timers.size,0);b.cleanup();
+ }
+});
+
+test('HTTP and textual timeout fallbacks never impersonate an explicit database SQLSTATE',async()=>{
+ for(const [status,body,expected]of [
+  [504,{code:'PRIVATE_CODE_SENTINEL',message:'PRIVATE_SQL_SENTINEL'},'ADMIN_LIVE_TIMEOUT'],
+  [500,{message:'57014 statement timeout PRIVATE_SQL_SENTINEL'},'ADMIN_LIVE_TIMEOUT'],
+  [500,{code:57014,message:'PRIVATE_SQL_SENTINEL'},undefined],
+  [500,{code:'57014 PRIVATE_CODE_SENTINEL',message:'PRIVATE_SQL_SENTINEL'},undefined],
+  [500,{code:'22023',message:'PRIVATE_SQL_SENTINEL'},undefined]
+ ]){
+  const h=load({fetch:async()=>({ok:false,status,json:async()=>body})}),b=bridge(h);h.send(b.event());await flush();assert.equal(b.replies.length,1);const reply=b.replies[0].data;assert.equal(reply.code,expected);assert.notEqual(reply.code,'57014');assert.doesNotMatch(JSON.stringify(reply),/PRIVATE_|22023/);assert.equal(h.calls.length,1);b.cleanup();
+ }
+});
+
+test('controlled error identity survives the repository ES5 compilation target',async()=>{
+ const h=load({target:ts.ScriptTarget.ES5,fetch:async()=>({ok:false,status:500,json:async()=>({code:'57014',message:'PRIVATE_SQL_SENTINEL'})})}),b=bridge(h);h.send(b.event());await flush();assert.equal(b.replies.length,1);assert.equal(b.replies[0].data.code,'57014');assert.doesNotMatch(JSON.stringify(b.replies),/PRIVATE_/);assert.equal(h.calls.length,1);b.cleanup();
+});
+
+test('authorization and mapped permission failures take precedence over misleading timeout payloads',async()=>{
+ for(const [status,message,expected]of [[401,'timeout PRIVATE_SQL_SENTINEL',/未获授权/],[403,'timeout PRIVATE_SQL_SENTINEL',/未获授权/],[403,'role_permission_denied PRIVATE_SQL_SENTINEL',/当前角色/],[400,'scope_denied PRIVATE_SQL_SENTINEL',/此范围/]]){
+  const h=load({fetch:async()=>({ok:false,status,json:async()=>({code:'57014',message})})}),b=bridge(h);h.send(b.event());await flush();assert.equal(b.replies.length,1);assert.match(b.replies[0].data.error,expected);assert.equal(b.replies[0].data.code,undefined);assert.doesNotMatch(JSON.stringify(b.replies),/PRIVATE_|57014|ADMIN_LIVE_TIMEOUT/);assert.equal(h.calls.length,1);b.cleanup();
+ }
+});
+
+test('only a rejected RPC transport becomes a safe network error, with no retry or raw detail leak',async()=>{
+ const h=load({fetch:async()=>{throw Object.assign(new TypeError('Failed to fetch PRIVATE_URL_SENTINEL'),{code:'PRIVATE_CODE_SENTINEL'})}}),b=bridge(h);h.send(b.event());await flush();assert.equal(b.replies.length,1);assert.equal(b.replies[0].data.code,'ADMIN_LIVE_NETWORK');assert.match(b.replies[0].data.error,/网络连接失败/);assert.doesNotMatch(JSON.stringify(b.replies),/PRIVATE_|TypeError/);assert.equal(h.calls.length,1);assert.equal(h.authCalls.length,1);assert.equal(h.timers.size,0);b.cleanup();
+ for(const options of [{ensure:async()=>{throw Object.assign(Error('登录已失效'),{code:'57014'})}},{fetch:async()=>({ok:true,json:async()=>{throw Object.assign(Error('Invalid response JSON'),{code:'57014'})}})}]){
+  const x=load(options),host=bridge(x);x.send(host.event());await flush();assert.equal(host.replies.length,1);assert.equal(host.replies[0].data.code,undefined,'auth/DTO errors are not reclassified from arbitrary error.code');host.cleanup();
+ }
+});
+
+test('cancelled database errors cannot publish over a newer successful request',async()=>{
+ const waits=[],h=load({fetch:()=>{const wait=deferred();waits.push(wait);return wait.promise}}),b=bridge(h);
+ h.send(b.event('old'));await flush();h.send({...b.event('old'),data:{type:h.api.LIVE_CANCEL,id:'old',channel:'offline-channel'}});h.send(b.event('current'));await flush();assert.equal(h.calls.length,2);assert.equal(h.calls[0].init.signal.aborted,true);assert.equal(h.calls[1].init.signal.aborted,false);
+ waits[1].resolve({ok:true,json:async()=>({total:7})});await flush();waits[0].resolve({ok:false,status:500,json:async()=>({code:'57014',message:'PRIVATE_LATE_SQL_SENTINEL'})});await flush();assert.equal(b.replies.length,2);assert.equal(b.replies.find(r=>r.data.id==='old').data.code,'ADMIN_LIVE_CANCELLED');assert.equal(b.replies.find(r=>r.data.id==='current').data.result.total,7);assert.doesNotMatch(JSON.stringify(b.replies),/57014|PRIVATE_/);assert.equal(h.timers.size,0);b.cleanup();
+});
+
+test('an elapsed total deadline wins over a late database error even before the timer callback',async()=>{
+ const waiting=deferred(),h=load({now:1000000,fetch:()=>waiting.promise}),b=bridge(h);h.send(b.event('late_database'));await flush();assert.equal([...h.timers.values()][0].ms,90000);h.advance(90001);waiting.resolve({ok:false,status:500,json:async()=>({code:'57014',message:'PRIVATE_LATE_SQL_SENTINEL'})});await flush();assert.equal(b.replies.length,1);assert.equal(b.replies[0].data.code,'ADMIN_LIVE_TIMEOUT');assert.equal(h.calls[0].init.signal.aborted,true);assert.doesNotMatch(JSON.stringify(b.replies),/57014|PRIVATE_/);assert.equal(h.timers.size,0);b.cleanup();
 });
 
 test('only the current opaque frame and nonce can request data; payloads remain token free',async()=>{

@@ -50,5 +50,6 @@ test('auth, permissions, timeouts and unrelated errors are not misreported as ol
  }
  const h=load({failure:new Error('connection failed')});
  await assert.rejects(h.api.adminLiveRequest({user:{id:'offline-user'},access_token:'old'},
-  {action:'intakeCoverage',operation:'orderCatalog'}),/connection failed/);
+  {action:'intakeCoverage',operation:'orderCatalog'}),error=>error.code==='ADMIN_LIVE_NETWORK'&&/网络连接失败/.test(error.message)&&!/操作暂不支持|connection failed/.test(error.message));
+ assert.equal(h.calls.length,1,'a transport error is not retried through a legacy catalog endpoint');
 });
