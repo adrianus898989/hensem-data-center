@@ -818,7 +818,7 @@ test('provider KPI comparisons use the same direction and distinguish money diff
  const h=await ready(),current=completeAggregate(P,100,60),previous=completeAggregate(P,100,50);
  verifiedFee(current.groups.provider[0],120);verifiedFee(previous.groups.provider[0],100);for(const r of [current,previous])r.groups.provider.push({...r.groups.provider[0],direction:'withdraw',success_count:900,success_amount:90000,created_success_count:90});
  h.L.results=[current];h.L.comparisonResults=[previous];h.L.comparisonStatus='ready';h.L.feeLookupRows=[{scopeType:'country',country:'印度',provider:'Synthetic provider',collectFee:'2%',payoutFee:'1%'}];h.c.state.page='providers';verifiedProviderIntake(h);h.c.render();
- const cards=h.html().split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];
+ const cards=h.html().split('<div class="provider-summary-kpis">')[1].split('<div class="provider-status-actions provider-toolbar">')[0];
  assert.match(cards,/6,000\.00/);assert.match(cards,/昨日 5,000\.00/);assert.match(cards,/\+1,000\.00.*\+20\.00%/);assert.match(cards,/\+10\.00 个百分点/);assert.match(cards,/120\.00/);assert.match(cards,/昨日 100\.00/);assert.doesNotMatch(cards,/90,000/);
  assert.equal((cards.match(/<strong>/g)||[]).length,8,'all eight primary metrics remain visible');
  assert.doesNotMatch(plain(cards),/5,000\.00/,'the previous value stays in hover details');assert.match(plain(cards),/\+1,000\.00（\+20\.00%）/,'absolute amount difference is directly visible');assert.match(plain(cards),/\+10 笔（\+20\.00%）/,'absolute count difference is directly visible');
@@ -826,12 +826,12 @@ test('provider KPI comparisons use the same direction and distinguish money diff
  assert.match(cards,/title="[^"]*昨日 5,000\.00 · 较昨日同期 \+1,000\.00 · \+20\.00%"/);
  assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/业务方向/);
  const table=renderedTables(h.html()).find(t=>t.headers[0]==='统一三方');assert.equal(table.headers[1],'平台');assert(!table.headers.some(h=>/金额 \/ 笔数/.test(h)));assert(table.rows.every(r=>r.length===table.headers.length));
- h.c.state.page='provider_payout';h.c.render();const payoutCards=h.html().split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];assert.match(payoutCards,/90,000\.00/);assert.doesNotMatch(payoutCards,/6,000\.00|\+10\.00 个百分点/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/业务方向/);
+ h.c.state.page='provider_payout';h.c.render();const payoutCards=h.html().split('<div class="provider-summary-kpis">')[1].split('<div class="provider-status-actions provider-toolbar">')[0];assert.match(payoutCards,/90,000\.00/);assert.doesNotMatch(payoutCards,/6,000\.00|\+10\.00 个百分点/);assert.doesNotMatch(h.nodes.get('liveFilters').innerHTML,/业务方向/);
  assert.equal((payoutCards.match(/<strong>/g)||[]).length,8);assert.doesNotMatch(plain(payoutCards),/昨日|同期/,'payout uses the same compact comparison presentation');
  h.c.state.page='overview';h.c.render();assert.match(h.nodes.get('liveFilters').innerHTML,/业务方向/);
 });
 test('provider comparisons suppress incomplete scopes and partial fees while preserving current values and zero-baseline semantics',async()=>{
- const h=await ready(),current=completeAggregate(P,100,60),previous=completeAggregate(P,0,0),cards=()=>h.html().split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];
+ const h=await ready(),current=completeAggregate(P,100,60),previous=completeAggregate(P,0,0),cards=()=>h.html().split('<div class="provider-summary-kpis">')[1].split('<div class="provider-status-actions provider-toolbar">')[0];
  h.L.results=[current];h.L.comparisonResults=[previous];h.L.comparisonStatus='ready';h.L.feeLookupRows=[];h.c.state.page='providers';verifiedProviderIntake(h);h.c.render();
  assert.match(cards(),/新增 \/ 无基数/);assert.match(cards(),/费率未完全匹配/);assert.doesNotMatch(cards(),/Infinity|NaN/);
  h.L.comparisonResults=[{...previous,platform:{...P,id:'different-platform'}}];h.c.render();assert.match(cards(),/6,000\.00/);assert.match(cards(),/没有同范围的两期数据/);assert.doesNotMatch(cards(),/新增 \/ 无基数|\+100\.00%/);

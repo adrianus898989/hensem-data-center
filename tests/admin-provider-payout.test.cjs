@@ -84,12 +84,12 @@ test('missing payout amounts stay unknown in platform shares while valid counts 
 test('partial collection and payout reports identify the returned platform coverage and every subtotal',()=>{
  for(const direction of ['charge','withdraw']){
   const h=fixture([order('platform-a','ar',24680.5,42,{direction})]);h.L.queryPlatforms=Array.from({length:17},(_,i)=>({id:i?'failed-'+i:'platform-a',name:'Platform '+i}));h.L.queryFailures=h.L.queryPlatforms.slice(1).map(p=>({...p,message:'Synthetic timeout'}));h.L.queryWarnings=h.L.queryFailures.map(f=>f.name+': '+f.message);h.root.liveRetryFailed=()=>{};h.render(direction);
-  const html=h.html(),cards=html.split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];assert.match(html,/仅显示已返回平台的部分结果/);assert.match(html,/已返回 1 \/ 17 个平台/);assert.match(cards,/代[收付]成功金额/);assert.match(cards,/24,680\.50/);assert.match(html,/已读取合计/);assert.match(html,/金额占比/);assert.doesNotMatch(html,/已读取(?:金额|笔数|手续费)占比/);assert.match(html,/onclick="providerSummaryPlatformCoverage\(\)">订单 1 \/ 17/);assert.doesNotMatch(html,/provider-query-failures|<details[^>]*open/);assert.match(html,/只重试未完成平台/);assert.doesNotMatch(html,/<strong>合计<\/strong>|<strong>全部汇总<\/strong>/);
+  const html=h.html(),cards=html.split('<div class="provider-summary-kpis">')[1].split('<div class="provider-status-actions provider-toolbar">')[0];assert.match(html,/仅显示已返回平台的部分结果/);assert.match(html,/已返回 1 \/ 17 个平台/);assert.match(cards,/代[收付]成功金额/);assert.match(cards,/24,680\.50/);assert.match(html,/已读取合计/);assert.match(html,/金额占比/);assert.doesNotMatch(html,/已读取(?:金额|笔数|手续费)占比/);assert.match(html,/onclick="providerSummaryPlatformCoverage\(\)">订单 1 \/ 17/);assert.doesNotMatch(html,/provider-query-failures|<details[^>]*open/);assert.match(html,/只重试未完成平台/);assert.doesNotMatch(html,/<strong>合计<\/strong>|<strong>全部汇总<\/strong>/);
   h.L.queryRetrying=true;h.render(direction);assert.match(h.html(),/已返回数据保留/);assert.match(h.html(),/onclick="liveRetryFailed\(\)" disabled/);assert.match(h.html(),/24,680\.50/);
  }
 });
 test('all failed platforms show unavailable amounts and counts rather than false zero totals',()=>{
- const h=fixture([]);h.L.results=[];h.L.queryPlatforms=[{id:'failure',name:'Failed platform'}];h.L.queryFailures=[{id:'failure',name:'Failed platform',message:'timeout'}];h.render();const html=h.html(),cards=html.split('<div class="provider-summary-kpis">')[1].split('<div class="provider-comparison-context">')[0];assert.match(html,/本次尚无平台返回/);assert.match(html,/已返回 0 \/ 1 个平台/);assert.doesNotMatch(cards,/<strong>0(?:\.00)?<\/strong>/);assert.match(cards,/代付成功金额<\/label><strong>—<\/strong>/);const footer=html.match(/<tfoot>([\s\S]*?)<\/tfoot>/)[1];assert.doesNotMatch(footer,/>0\.00</);assert.match(footer,/已读取合计/);
+ const h=fixture([]);h.L.results=[];h.L.queryPlatforms=[{id:'failure',name:'Failed platform'}];h.L.queryFailures=[{id:'failure',name:'Failed platform',message:'timeout'}];h.render();const html=h.html(),cards=html.split('<div class="provider-summary-kpis">')[1].split('<div class="provider-status-actions provider-toolbar">')[0];assert.match(html,/本次尚无平台返回/);assert.match(html,/已返回 0 \/ 1 个平台/);assert.doesNotMatch(cards,/<strong>0(?:\.00)?<\/strong>/);assert.match(cards,/代付成功金额<\/label><strong>—<\/strong>/);const footer=html.match(/<tfoot>([\s\S]*?)<\/tfoot>/)[1];assert.doesNotMatch(footer,/>0\.00</);assert.match(footer,/已读取合计/);
 });
 test('empty collection and payout tables remain loading until selected platform reads finish',()=>{
  for(const direction of ['charge','withdraw']){
@@ -130,7 +130,7 @@ test('source-only workorder provider opens its loaded platform cohorts without i
  }
 });
 
-test('compact provider reports budget short identity columns and align equivalent numeric columns',()=>{
+test('compact provider reports keep complete single-line headings and give longer labels enough width',()=>{
  for(const direction of ['charge','withdraw']){
   const h=fixture([order('platform-a','ar',151093800,267877,{direction})]);h.render(direction);const html=h.html();
   const section=html.match(/<div class="[^"]*\bprovider-summary-table\b[^"]*">([\s\S]*?)<\/table>/)[1];
@@ -138,8 +138,9 @@ test('compact provider reports budget short identity columns and align equivalen
   const widths=[...section.matchAll(/<col style="width:(\d+)px">/g)].map(m=>Number(m[1]));
   assert.equal(widths.length,headers.length);assert.equal(widths.length,direction==='charge'?26:23);
   assert(widths.slice(0,3).reduce((a,b)=>a+b,0)<=200,'identity columns balance readable labels with the numeric report');
-  for(const suffix of ['金额','笔数']){const group=headers.map((header,i)=>header.endsWith(suffix)&&!header.includes('KYC')?widths[i]:null).filter(v=>v!==null);assert(group.length>=4);assert.equal(new Set(group).size,1, suffix+' columns share an aligned width budget');}
-  const ratios=headers.map((header,i)=>/成功率$|占比$/.test(header)?widths[i]:null).filter(v=>v!==null);assert.equal(new Set(ratios).size,1);
+  assert.doesNotMatch(section,/provider-heading-unit|<br\s*\/?\s*>/,'labels are not split into separate lines');
+  headers.forEach((label,i)=>{const textWidth=Array.from(label).reduce((sum,char)=>sum+(/[^\x00-\x7f]/.test(char)?10:6),0);assert(widths[i]>=textWidth+12,label+' retains its complete text and spacing');});
+  assert(widths[headers.indexOf('工单提交笔数')]>widths[headers.indexOf('全部笔数')],'long workorder headings get space without widening every count column');
   assert(widths.reduce((a,b)=>a+b,0)<=(direction==='charge'?2266:2000),'report keeps the compact column budget while narrow screens scroll inside the table');
   assert.match(section,/>151,093,800\.00</,'full-precision amount text is preserved');
   h.root.providerSummaryToggle(0);assert.equal(breakdown(h.html())[0]['成功金额'],'151,093,800.00');

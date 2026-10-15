@@ -151,7 +151,7 @@ test('collection KYC count and amount are separate deduplicated backend columns 
  const alpha=fact('AlphaPay',{direction:'charge',uniqueNotReceivedKycCount:1,uniqueNotReceivedKycAmount:120}),beta=fact('BetaPay',{direction:'charge',uniqueNotReceivedKycCount:2,uniqueNotReceivedKycAmount:450});
  for(const row of [alpha,beta])row.uniqueCoverage={...row.uniqueCoverage,kycUnknownOrderCount:0};
  h.L.workorders={byProvider:[alpha,beta],byDirection:{charge:{...alpha,uniqueNotReceivedKycCount:4,uniqueNotReceivedKycAmount:600}},byPlatformProvider:[{...alpha,country:'印度',platformId:'a',platform:'Alpha',source:'ar'}]};
- h.render('charge');let html=h.html();assert.match(html,/未处理KYC连接<span class="provider-heading-unit">笔数/);assert.match(html,/未处理KYC连接<span class="provider-heading-unit">金额/);
+ h.render('charge');let html=h.html();assert.match(html,/>未处理KYC连接笔数 /);assert.match(html,/>未处理KYC连接金额 /);
  assert.deepEqual(rows(html)[0].slice(-4,-2).map(plain),['1','120.00']);assert.deepEqual(rows(html,'tfoot')[0].slice(-4,-2).map(plain),['4','600.00'],'whole-scope metrics come from server originals, not provider-row sums');
  assert.match(rows(html)[0].at(-4),/同一原单只计一笔/);assert.match(rows(html)[0].at(-4),/源KYC连接明确为是/);
  assert.match(rows(html)[0].at(-4),/这是源KYC连接字段匹配，不代表KYC资料已核验、UTR已匹配或原订单已到账/);

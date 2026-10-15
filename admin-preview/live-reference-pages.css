@@ -220,8 +220,8 @@ body.live-admin .content:has(.provider-summary-report){max-width:none;width:auto
 body.live-admin .main:has(>#page>.provider-summary-report){max-width:none;padding:12px}
 body.live-admin .provider-summary-report .provider-compact-table table{table-layout:auto;width:100%}
 body.live-admin :is(.provider-summary-report .provider-compact-table,.provider-floating-head) :is(th,td){min-width:0;padding:5px 4px!important;font-size:10px;line-height:1.5;box-sizing:border-box}
-body.live-admin :is(.provider-summary-report .provider-compact-table,.provider-floating-head) th{height:34px;white-space:normal;vertical-align:middle}
-body.live-admin :is(.provider-summary-report .provider-compact-table,.provider-floating-head) .provider-sort-heading{min-width:0;width:100%;white-space:normal;line-height:1.35;overflow-wrap:normal;word-break:normal;padding:0}
+body.live-admin :is(.provider-summary-report .provider-compact-table,.provider-floating-head) th{height:34px;white-space:nowrap;vertical-align:middle}
+body.live-admin :is(.provider-summary-report .provider-compact-table,.provider-floating-head) .provider-sort-heading{min-width:0;width:100%;white-space:nowrap;line-height:1.4;overflow-wrap:normal;word-break:normal;padding:0}
 body.live-admin .provider-summary-report .provider-compact-table td{white-space:nowrap;overflow:visible;text-overflow:clip}
 body.live-admin .provider-summary-report .provider-compact-table .provider-business-type{max-width:100%;padding:1px 3px;font-size:9px!important}
 body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-summary-kpis{gap:7px;grid-template-columns:minmax(0,.65fr) minmax(0,.6fr) minmax(0,1.45fr) minmax(0,.95fr) minmax(0,1.45fr) minmax(0,.95fr) minmax(0,1fr) minmax(0,1.35fr)}
@@ -380,13 +380,13 @@ body.live-admin .submission-order-raw-provider{display:block;color:#78869b;font-
 body.live-admin .provider-summary-report .provider-platform-coverage-button{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;line-height:14px;font-size:10px}
 body.live-admin .provider-summary-report .provider-kpi-value label{max-width:100%;overflow:hidden;text-overflow:ellipsis}
 body.live-admin .provider-summary-report .provider-kpi-comparison{min-height:14px;height:auto;max-height:none}
-body.live-admin .provider-summary-report .provider-kpi-change{white-space:normal;overflow-wrap:anywhere;line-height:14px}
-body.live-admin .provider-summary-report .provider-status-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:10px;color:#6a7d9a;margin:0 0 6px}
+body.live-admin .provider-summary-report .provider-kpi-change{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:14px}
+body.live-admin .provider-summary-report .provider-status-actions{display:flex;align-items:center;gap:12px;flex-wrap:nowrap;overflow-x:auto;white-space:nowrap;font-size:10px;color:#6a7d9a;margin:0 0 6px}
 body.live-admin .provider-summary-report .provider-status-actions:empty{display:none}
 body.live-admin .provider-summary-report .provider-inline-status{font-size:10px;line-height:18px}
-body.live-admin .provider-summary-report .provider-workorder-notices{display:flex;align-items:center;gap:14px;padding:4px 10px;border-bottom:1px solid #edf1f7}
+body.live-admin .provider-summary-report .provider-workorder-notices{display:flex;align-items:center;gap:14px;padding:4px 10px;border-bottom:1px solid #edf1f7;white-space:nowrap;overflow-x:auto}
 body.live-admin .provider-summary-report .provider-workorder-notices :is(.provider-order-coverage,.provider-workorder-coverage-button){display:inline-block;padding:0;margin:0;border:0;background:none;color:#9b560e;font-size:10px;line-height:16px;text-align:left}
-body.live-admin .provider-summary-report .submission-coverage-compact{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;max-width:100%;margin:0;padding:0;border:0;background:none;font-size:10px;line-height:18px;color:#6a7d9a}
+body.live-admin .provider-summary-report .submission-coverage-compact{display:inline-flex;align-items:center;gap:4px;flex-wrap:nowrap;max-width:none;margin:0;padding:0;border:0;background:none;font-size:10px;line-height:18px;color:#6a7d9a}
 
 /* Diagnostic cards distinguish known collection scope from issues that need confirmation. */
 body.live-admin :is(.provider-workorder-gap-intro,.provider-workorder-gap-help){padding:10px 14px;border:1px solid #dce5f2;border-radius:7px;background:#f6f8fc;line-height:1.65;font-size:11px}
@@ -447,3 +447,15 @@ body.live-admin .deposit-followup-line .wo-cell-value,body.live-admin .deposit-f
 body.live-admin .deposit-followup-compact :is(th,td):last-child{position:sticky;right:0;width:50px;background:#fff;box-shadow:-3px 0 5px #142c5208}
 body.live-admin .deposit-followup-compact th:last-child{background:#f5f7fc;z-index:2}
 body.live-admin .deposit-followup-guide{margin:0 0 10px;color:#617694;font-size:11px;line-height:1.6}
+
+/* Provider publication metadata stays available without repeated banner rows. */
+body.live-admin .provider-publication-bar{display:flex;align-items:center;gap:12px;min-height:32px;padding:4px 10px;margin:0 0 10px;border:1px solid #e1e8f2;border-radius:6px;background:#f8faff;color:#677d9d;font-size:11px;line-height:20px;white-space:nowrap;overflow-x:auto}
+body.live-admin .provider-publication-bar>*{flex-shrink:0}
+body.live-admin .provider-publication-bar strong{font-weight:600;color:#476999}
+body.live-admin .provider-publication-progress{color:#5872aa}
+body.live-admin .provider-publication-warning{color:#9b560e}
+body.live-admin .provider-publication-actions{display:flex;align-items:center;gap:14px;margin-left:auto}
+body.live-admin .provider-publication-actions .link{font-size:11px}
+body.live-admin .provider-summary-report .provider-toolbar{min-height:28px;margin:2px 0 8px}
+body.live-admin .provider-summary-report .provider-toolbar>*{flex-shrink:0}
+body.live-admin .provider-summary-report .provider-workorder-notices>*{flex-shrink:0}
