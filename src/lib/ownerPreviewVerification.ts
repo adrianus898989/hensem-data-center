@@ -17,7 +17,7 @@ export async function ownerPreviewTransportRead<T>(read: () => Promise<T>, signa
 
 const terminalCodes = new Set(["account_disabled", "application_session_denied", "profile_denied", "role_permission_denied",
   "preview_denied", "invalid_role_response", "invalid_profile", "refresh_invalid", "session_changed", "session_logged_out", "permission_denied", "access_denied", "42501"]);
-const networkCodes = new Set(["owner_preview_network_error", "owner_preview_timeout", "refresh_network_error", "network_error", "auth_network_error", "auth_timeout"]);
+const networkCodes = new Set(["owner_preview_network_error", "owner_preview_timeout", "refresh_network_error", "refresh_coordination_timeout", "refresh_coordination_failed", "network_error", "auth_network_error", "auth_timeout"]);
 export function ownerPreviewRetryable(cause: unknown): boolean {
   if (!cause || typeof cause !== "object") return false;
   const error = cause as {status?: unknown; code?: unknown; name?: unknown};
