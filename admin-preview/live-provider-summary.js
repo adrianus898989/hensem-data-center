@@ -616,14 +616,16 @@
   const detail=(c.empty?'本次尚无平台返回，数据暂不可用。':'仅显示已返回平台的部分结果。')+'已返回 '+c.received+' / '+c.requested+' 个平台；未返回平台不计入下方金额、笔数与占比，不代表零交易或未上传。'+(L.queryRetrying?'正在补读未完成平台，已返回数据保留。':'');
   return '<div class="provider-query-partial provider-status-actions" role="status" title="'+E(detail)+'"><button type="button" class="link" onclick="providerSummaryPlatformCoverage()">订单 '+C(c.received)+' / '+C(c.requested)+' · '+state+'</button>'+(c.failures.length&&typeof root.liveRetryFailed==='function'?'<button class="link" onclick="liveRetryFailed()" '+(L.queryRetrying||L.loading?'disabled':'')+'>'+(L.queryRetrying?'正在重试…':'只重试未完成平台')+'</button>':'')+'</div>';
  }
+ const publishedWindow=L=>L.providerReadMode==='published'?L.publishedWindow:null;
+ const comparisonPeriod=L=>{const w=publishedWindow(L);return w?{valid:true,calendarDays:1,currentFrom:w.localStartAt,currentTo:w.localCutoff,previousFrom:w.previousLocalStartAt,previousTo:w.previousLocalCutoff}:root.HensemLiveCompare.windowFor(L.from,L.to,L.results?.[0]?.platform?.timezone,L.queryNow);};
  function comparisonScope(L,direction){
   const empty=reason=>({reason,current:[],previous:[],count:0,label:'',detail:reason});
   if(L.comparisonStatus==='loading')return empty('昨日数据读取中…');
   if(L.comparisonStatus!=='ready')return empty(L.comparisonError||'昨日数据尚未读取');
-  const period=root.HensemLiveCompare.windowFor(L.from,L.to,L.results?.[0]?.platform?.timezone,L.queryNow);
+  const period=comparisonPeriod(L);
   if(!period.valid)return empty(period.error||'对比时段不可用');
   const query=queryCoverage(L),intake=intakeCoverage(L,direction);
-  const priorIntake=intakeCoverage({...L,results:L.comparisonResults,from:period.previousFrom,to:period.previousTo,providerIntake:L.providerComparisonIntake},direction);
+  const priorIntake=intakeCoverage({...L,results:L.comparisonResults,from:period.previousFrom,to:publishedWindow(L)?period.previousFrom:period.previousTo,providerIntake:L.providerComparisonIntake},direction);
   const blocked=new Set([...intake.missing,...priorIntake.missing,...intake.notExpected,...priorIntake.notExpected].map(p=>String(p.id).trim().toLowerCase()));
   const expected=new Set(query.platforms.filter(p=>!blocked.has(String(p.id).trim().toLowerCase())).map(p=>String(p.id).trim().toLowerCase()));
   const index=results=>{const map=new Map();for(const r of results||[]){const p=r.platform,id=String(p?.id||'').trim().toLowerCase();if(!id||!expected.has(id)||blocked.has(id)||!Array.isArray(r.groups?.provider))continue;map.set(id,map.has(id)?null:r)}return map};
@@ -634,7 +636,7 @@
   const full=current.length===expectedCount&&!query.partial&&intake.complete===intake.requested&&priorIntake.complete===priorIntake.requested;
   const names=current.map(r=>r.platform.name||r.platform.id).join('、');
   const label=full?'':(current.length<expectedCount?'同范围 ':'按已读 ')+current.length+' 平台';
-  return {reason:'',current,previous,count:current.length,label,detail:(full?'全部所选平台':'仅比较两期共同已读取的平台；完整性未确认的记录按已读结果计算')+'：'+names+([...intake.missing,...priorIntake.missing].length?'；两期均剔除已确认缺少创建数据的平台':'')+(intake.notExpected.length||priorIntake.notExpected.length?'；开通前平台不计入两期比较':'')};
+  return {reason:'',current,previous,count:current.length,label,detail:(publishedWindow(L)?'已发布同期：'+period.currentFrom.replace('T',' ')+' 至 '+period.currentTo.replace('T',' ')+'（不含）；对比 '+period.previousFrom.replace('T',' ')+' 至 '+period.previousTo.replace('T',' ')+'（不含）。':'')+(full?'全部所选平台':'仅比较两期共同已读取的平台；完整性未确认的记录按已读结果计算')+'：'+names+([...intake.missing,...priorIntake.missing].length?'；两期均剔除已确认缺少创建数据的平台':'')+(intake.notExpected.length||priorIntake.notExpected.length?'；开通前平台不计入两期比较':'')};
  }
  const scopedTotal=(ctx,rows,direction)=>ctx.successTimeSummary?ctx.successTimeSummary(rows,direction):ctx.plus(rows);
  const scopedFees=(ctx,rows,direction)=>{const fees=feeSummary(rows);return ctx.successTimeUnavailable?.(direction)?{...fees,amount:null,successCount:null,complete:false,fee_unknown:true}:fees;};
@@ -648,7 +650,7 @@
   const comparableOrders=comparison.current.flatMap(x=>(x.groups?.provider||[]).map(r=>({...r,platformId:x.platform.id,platform:x.platform.name,source:x.platform.source,country:x.platform.country})));
   const comparableRows=buildRows({orders:comparableOrders,issues:null,rates:L.feeLookupRows,country:L.country,direction,plus,combine,feeMode:L.feeEstimateMode==='historical'?'historical':'current'});
   const current=snapshot(currentRows),compared=snapshot(comparableRows),previous=snapshot(previousRows);
-  const range=root.HensemLiveCompare.windowFor(L.from,L.to,L.results?.[0]?.platform?.timezone,L.queryNow);
+  const range=comparisonPeriod(L);
   const caption=(L.comparisonLabel||'较前一日同一时段').replace('较前一日同一时段','较昨日同期');
   const priorLabel=range.calendarDays>1?'前期':'昨日',signed=(value,format)=>(value>0?'+':value<0?'−':'')+format(Math.abs(value));
   const changes=(now,before,format,isRate=false,reason='',unit='')=>{
@@ -920,9 +922,9 @@
    const body=shown.map((r,i)=>'<tr>'+cells(r,providerLabel(r,i),false,i).map(c=>'<td>'+c+'</td>').join('')+'</tr>'+(expanded[rowKey(r)]?breakdown(r,i):'')).join('');
    reportTable=reportTable.replace(/<tbody>[\s\S]*?<\/tbody>/,()=>'<tbody>'+body+'</tbody>');
   }
-  return '<div class="provider-summary-report">'+readNotice(ctx)+intakeNotice(ctx)+'<div class="provider-summary-heading"><span class="provider-scope-note">'+E(L.country)+' · '+E(L.currency)+' · '+E(L.from.replace('T',' '))+' 至 '+E(L.to.replace('T',' '))+coverageNote+'</span></div>'+
+  return '<div class="provider-summary-report">'+readNotice(ctx)+intakeNotice(ctx)+'<div class="provider-summary-heading"><span class="provider-scope-note">'+E(L.country)+' · '+E(L.currency)+' · '+E(publishedWindow(L)?publishedWindow(L).localStartAt.replace('T',' '):L.from.replace('T',' '))+' 至 '+E(publishedWindow(L)?publishedWindow(L).localCutoff.replace('T',' ')+'（不含）'+(publishedWindow(L).intraday?' · 非全天':''):L.to.replace('T',' '))+coverageNote+'</span></div>'+
    renderMetrics(ctx,direction,rows)+'<div class="provider-status-actions">'+feeControls()+'</div><div class="provider-status-actions">'+workNote+(direction==='charge'?(submissionAnalysis?.note(true)||''):'')+'</div>'+
-   box(name+'三方汇总'+(partial?'（部分结果）':'')+' · '+issueLabel+'工单',(uniqueCoverageNote||workorderGapNote||detailOnlyNote?'<div class="provider-workorder-notices">'+uniqueCoverageNote+workorderGapNote+detailOnlyNote+'</div>':'')+reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
+   box(name+'三方汇总'+(partial?'（部分结果）':'')+' · '+issueLabel+'工单'+(publishedWindow(L)?.intraday?'（完整自然日独立统计）':''),(uniqueCoverageNote||workorderGapNote||detailOnlyNote?'<div class="provider-workorder-notices">'+uniqueCoverageNote+workorderGapNote+detailOnlyNote+'</div>':'')+reportTable+pager(rows.length,L.localPage,L.localSize,'local'),
     '')+'</div>';
  }
  root.HensemProviderSummary={render,buildRows,parseFee,estimate,estimateFacts,currentReferenceFeeFacts,feeModeRow,tieredFeeRule,feeSummary,feeCoverageText,feeHistoryLabel,feeCandidates,confirmedFeeRule,queryCoverage,intakeCoverage,workorderPlatformGaps,workorderPlatformNeedsReview,rawWorkorderAmountComparison,overviewDimensions,isProviderBusiness,buildPlatformRows,providerType,providerTypeCell,sortedRows,sortableTable,knownNumber,fraction,feeSortValue};

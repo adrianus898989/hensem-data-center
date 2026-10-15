@@ -26,7 +26,7 @@
   ...(r.direction==='charge'&&p.capabilities?.chargeSourceCompletedTimeAvailable===true?[['成功时间（源订单完成时间）',E(formatTime(r.success_at,p.timezone))]]:[]),
   ...(Object.hasOwn(r,'source_updated_at')?[['源更新时间',E(formatTime(r.source_updated_at,p.timezone))]]:[]),['数据同步时间',E(formatTime(r.synced_at,p.timezone))],['时区',E(p.timezone)]
  ];}
- root.HensemProviderOrders={moneyCell,moneyRows,recordedMoneyRows,isPanda,pandaRows,pandaChannel,create:function({L,E,N,C,table,box,formatTime,successTimeLabel=p=>p?.capabilities?.successTimeBasis==='order_updated_at'?'成功统计时间（订单更新时间）':p?.capabilities?.successTimeBasis==='source_completed_at'?'成功时间（源订单完成时间）':'成功时间',query,orderFieldValue=(p,key,value)=>value,request,openDrawer}){
+ root.HensemProviderOrders={moneyCell,moneyRows,recordedMoneyRows,isPanda,pandaRows,pandaChannel,create:function({L,E,N,C,table,box,formatTime,successTimeLabel=p=>p?.capabilities?.successTimeBasis==='order_updated_at'?'成功统计时间（订单更新时间）':p?.capabilities?.successTimeBasis==='source_completed_at'?'成功时间（源订单完成时间）':'成功时间',query,orderFieldValue=(p,key,value)=>value,request,publishedWindow=()=>null,openDrawer}){
   let current=null,serial=0;
   const cancel=()=>{serial++;current=null},previousClose=root.closeDrawer;
   if(typeof previousClose==='function')root.closeDrawer=function(...args){cancel();return previousClose.apply(this,args)};
@@ -48,7 +48,7 @@
    if(!current)return;
    const s=current,total=counts(s.mode),max=Math.max(1,Math.ceil(total/20)),successLabels=[...new Set(targets().map(t=>successTimeLabel(t.platform)))],successLabel=successLabels.length===1?(successLabels[0]==='成功统计时间（订单更新时间）'?'成功统计时间（多利按更新时间）':successLabels[0]):'成功统计时间（'+[successLabels.some(x=>x.includes('更新时间'))?'多利按更新时间':'',successLabels.some(x=>x.includes('完成时间'))?'KB按完成时间':''].filter(Boolean).join('；')+'）';
    const tabs='<div class="tabs">'+(s.status==='success'?[['success',successLabel]]:[...(targets().every(t=>successAvailable(t.platform,s.direction))?[['success',successLabel]]:[]),['created','创建时间']]).map(([mode,label])=>'<button class="'+(s.mode===mode?'on':'')+'" onclick="liveProviderOrderBasis(\''+mode+'\')">'+label+' · '+C(counts(mode))+' 笔</button>').join('')+'</div>';
-   const note='<div class="live-definition">'+E(s.from.replace('T',' ')+' 至 '+s.to.replace('T',' '))+' · '+E(s.currency)+' · '+(s.mode==='success'?'按'+successLabel+'读取，包含此前创建、本期成功的订单。':'按创建时间读取本期全部订单。')+' 各平台当地时间。</div>';
+   const note='<div class="live-definition">'+E(s.from.replace('T',' ')+' 至 '+s.to.replace('T',' ')+(s.publishedWindow?'（不含） · 已发布统计范围，明细按当前记录读取':''))+' · '+E(s.currency)+' · '+(s.mode==='success'?'按'+successLabel+'读取，包含此前创建、本期成功的订单。':'按创建时间读取本期全部订单。')+' 各平台当地时间。</div>';
    const platformFilter='<div class="live-filters"><label>平台<select aria-label="三方订单平台" onchange="liveProviderOrderPlatform(this.value)"><option value="">全部已查询平台</option>'+s.targets.map(t=>'<option value="'+E(t.platform.id)+'" '+(s.platformId===t.platform.id?'selected':'')+'>'+E(t.platform.name+' · '+t.platform.source)+' · '+C(t[s.mode])+' 笔</option>').join('')+'</select></label></div>';
    const usdt=String(s.provider).trim().toUpperCase()==='USDT'?'<div class="live-definition">USDT 是汇总分类，支付商尚未确认。请按原始通道和订单核对。</div>':'';
    const rows=s.rows.map((r,i)=>[E(r.platform.name),E(r.platform.source),'<button class="link mono" onclick="liveProviderOrder('+i+')">'+E(r.order_number||r.order_no||'—')+'</button>',moneyCell(r,{E,N}),E(r.raw_provider===undefined?'接口未提供':r.raw_provider==null||r.raw_provider===''?'（空）':r.raw_provider),E(r.channel_type||'—'),E(r.status||r.status_group||'—'),E(formatTime(r.created_at,r.platform.timezone)),E(formatTime(r.success_at,r.platform.timezone)),E(reason(r))]);
@@ -89,7 +89,8 @@
    }).filter(Boolean).sort((a,b)=>String(a.platform.name).localeCompare(String(b.platform.name))||String(a.platform.id).localeCompare(String(b.platform.id)));
    if(platformId&&!targets.some(t=>t.platform.id===platformId))return;
    if(currencyScoped&&!targets.length){cancel();openDrawer('订单明细','<div class="live-status live-error">当前已查询结果没有该三方与币种的订单明细</div>');return;}
-   current={provider,source,direction,targets,platformId,status:L.status,mode:targets.filter(t=>!platformId||t.platform.id===platformId).every(t=>successAvailable(t.platform,direction))&&(L.status==='success'||targets.some(t=>(!platformId||t.platform.id===platformId)&&t.success))?'success':'created',page:1,rows:[],error:'',loading:true,querySerial:L.serial,from:L.from,to:L.to,currency:currencyScoped?currency:L.currency,currencyScoped};
+   const publication=publishedWindow();
+   current={provider,source,direction,targets,platformId,status:L.status,mode:targets.filter(t=>!platformId||t.platform.id===platformId).every(t=>successAvailable(t.platform,direction))&&(L.status==='success'||targets.some(t=>(!platformId||t.platform.id===platformId)&&t.success))?'success':'created',page:1,rows:[],error:'',loading:true,querySerial:L.serial,from:publication?.localStartAt||L.from,to:publication?.localCutoff||L.to,publishedWindow:publication,currency:currencyScoped?currency:L.currency,currencyScoped};
    await load();
   }
   root.liveProviderOrders=open;
