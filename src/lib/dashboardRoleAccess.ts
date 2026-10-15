@@ -32,9 +32,10 @@ export function dashboardRoleAllows(access: DashboardRoleAccess | null | undefin
   return page !== "channelquality" && !!access && access.canView && (!["success_analysis", "daily_comparison", "channel_status"].includes(page) || access.mode !== "legacy") && (access.mode !== "assigned"
     || access.permissions.includes(page + ".view") && access.permissions.includes(page + "." + action));
 }
-export async function readDashboardRoleAccess(session: DashboardSession, signal?: AbortSignal): Promise<DashboardRoleAccess> {
+export async function readDashboardRoleAccess(session: DashboardSession, signal?: AbortSignal, observeSession?:(current:DashboardSession)=>void): Promise<DashboardRoleAccess> {
   const current = await ensureDashboardSession(session);
   if (current.user.id !== session.user.id) throw Error("当前登录账号已改变");
+  signal?.throwIfAborted();observeSession?.(current);
   const base = String(process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim().replace(/\/$/, "");
   const url = new URL(base);
   if (url.protocol !== "https:" || url.origin !== base) throw Error("后台地址配置无效");

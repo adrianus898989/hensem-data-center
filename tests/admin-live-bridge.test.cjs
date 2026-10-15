@@ -5,6 +5,7 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const ts = require('typescript');
 const filename = path.resolve(__dirname, '../src/lib/adminLiveBridge.ts');
 const sourceText = fs.readFileSync(filename, 'utf8');
+const {DashboardHttpError}=require('./load-typescript.cjs').loadTs(path.resolve(__dirname,'../src/lib/dashboardAuthClient.ts'));
 const compiled = ts.transpileModule(sourceText, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 const session = { user: { id: 'offline-user' }, access_token: 'offline-old-token', refresh_token: 'offline-refresh' };
 const query = { action: 'query', platformId: '11111111-1111-4111-8111-111111111111', startAt: '2026-09-22T00:00:00Z', endAt: '2026-09-23T00:00:00Z', limit: 20, offset: 0 };
@@ -24,7 +25,7 @@ function load(options = {}) {
         vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.resolve(__dirname,'../src/lib/'+name.slice(2)+'.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{module:helper,exports:helper.exports});
         return helper.exports;
       }
-      assert.equal(name,'./dashboardAuthClient');return { ensureDashboardSession: async current => {authCalls.push(current);return options.ensure ? options.ensure(current) : {...current,access_token:'offline-fresh-token'};} };
+      assert.equal(name,'./dashboardAuthClient');return { DashboardHttpError, ensureDashboardSession: async current => {authCalls.push(current);return options.ensure ? options.ensure(current) : {...current,access_token:'offline-fresh-token'};} };
     },
     fetch: async (url,init) => {calls.push({url,init});return options.fetch ? options.fetch(url,init) : {ok:true,json:async()=>({rows:[],total:0})};},
     setTimeout:(callback,ms) => {const id=++timerId;timers.set(id,{callback,ms});return id;},clearTimeout:id=>timers.delete(id)
@@ -125,8 +126,8 @@ test('controlled error identity survives the repository ES5 compilation target',
 });
 
 test('authorization and mapped permission failures take precedence over misleading timeout payloads',async()=>{
- for(const [status,message,expected]of [[401,'timeout PRIVATE_SQL_SENTINEL',/未获授权/],[403,'timeout PRIVATE_SQL_SENTINEL',/未获授权/],[403,'role_permission_denied PRIVATE_SQL_SENTINEL',/当前角色/],[400,'scope_denied PRIVATE_SQL_SENTINEL',/此范围/]]){
-  const h=load({fetch:async()=>({ok:false,status,json:async()=>({code:'57014',message})})}),b=bridge(h);h.send(b.event());await flush();assert.equal(b.replies.length,1);assert.match(b.replies[0].data.error,expected);assert.equal(b.replies[0].data.code,undefined);assert.doesNotMatch(JSON.stringify(b.replies),/PRIVATE_|57014|ADMIN_LIVE_TIMEOUT/);assert.equal(h.calls.length,1);b.cleanup();
+ for(const [status,message,expected]of [[401,'timeout PRIVATE_SQL_SENTINEL',/未获授权/],[403,'timeout PRIVATE_SQL_SENTINEL',/未获授权/],[403,'role_permission_denied',/当前角色/],[400,'scope_denied',/此范围/]]){
+  const h=load({fetch:async()=>({ok:false,status,json:async()=>({code:'57014',message})})}),b=bridge(h);h.send(b.event());await flush();assert.equal(b.replies.length,1);assert.match(b.replies[0].data.error,expected);assert.equal(b.replies[0].data.code,/当前角色|此范围/.test(b.replies[0].data.error)?'ADMIN_LIVE_PERMISSION_DENIED':'ADMIN_LIVE_SESSION_DENIED');assert.doesNotMatch(JSON.stringify(b.replies),/PRIVATE_|57014|ADMIN_LIVE_TIMEOUT/);assert.equal(h.calls.length,1);b.cleanup();
  }
 });
 
@@ -631,4 +632,55 @@ test('recovery export rechecks exact page plus view/query/detail/export grants i
   const h=load(),permissions=['view','query','detail','export'].filter(k=>k!==missing).map(k=>'deposit_statistics.'+k),b=bridge(h,{roleAccess:()=>missing==='context'?null:{mode:'assigned',canView:true,permissions}}),event=b.event('recovery_denied',q);event.data.page=missing==='page'?'deposit_tracking':'deposit_statistics';h.send(event);await flush();assert.equal(h.calls.length,0);assert.match(b.replies[0].data.error,/权限/);b.cleanup();
  }
  const h=load(),b=bridge(h,{roleAccess:()=>({mode:'assigned',canView:true,permissions:['view','query','detail','export'].map(k=>'deposit_statistics.'+k)})}),event=b.event('recovery_allowed',q);event.data.page='deposit_statistics';h.send(event);await flush();assert.equal(h.calls.length,1);assert.match(h.calls[0].url,/dashboard_admin_execute$/);assert.equal(JSON.parse(h.calls[0].init.body).p_request.export,true);b.cleanup();
+});
+
+test('trusted access denials carry safe categories without exposing backend details',async()=>{
+ const cases=[[401,{message:'PRIVATE_SQL role_denied timeout'},'session'],[403,{code:'application_session_denied',message:'PRIVATE_SQL'},'session'],[403,{code:'ip_denied',message:'PRIVATE_SQL'},'session'],[403,{message:'account_disabled'},'session'],[403,{message:'role_permission_denied'},'permission'],[403,{code:'42501',message:'channel_status_role_denied'},'permission'],[403,{code:'42501',message:'assigned_role_required'},'permission'],[400,{message:'scope_denied'},'permission'],[403,{message:'PRIVATE_SQL'},'session']];
+ for(const [status,body,kind]of cases){const denied=[],h=load({fetch:async()=>({ok:false,status,json:async()=>body})}),b=bridge(h,{onAccessDenied:value=>denied.push(value)});h.send(b.event());await flush();assert.deepEqual(denied,[kind]);assert.equal(b.replies[0].data.code,'ADMIN_LIVE_'+(kind==='session'?'SESSION':'PERMISSION')+'_DENIED');assert.doesNotMatch(JSON.stringify(b.replies),/PRIVATE_|role_permission_denied|scope_denied/);assert.equal(h.listeners.size,0);assert.equal(h.calls.length,1);assert.equal(h.timers.size,0);b.cleanup();}
+ for(const error of [new DashboardHttpError('PRIVATE_AUTH',401,'refresh_invalid'),new DashboardHttpError('PRIVATE_AUTH',403,'account_disabled'),new DashboardHttpError('PRIVATE_AUTH',0,'session_logged_out')]){const h=load({ensure:async()=>{throw error}}),b=bridge(h);h.send(b.event());await flush();assert.equal(b.replies[0].data.code,'ADMIN_LIVE_SESSION_DENIED');assert.equal(h.calls.length,0);assert.doesNotMatch(JSON.stringify(b.replies),/PRIVATE_AUTH/);b.cleanup();}
+});
+
+test('current denial stops all document tabs and queued reads once; sibling late results cannot refill the epoch',async()=>{
+ const waits=[],denials=[],h=load({fetch:async()=>{const wait=deferred();waits.push(wait);return wait.promise}}),b=bridge(h,{cancelPendingOnDispose:true,onAccessDenied:kind=>denials.push(kind)});
+ for(let i=0;i<6;i++){const event=b.event('tab_'+i);event.data.page=['overview','providers','time'][i%3];h.send(event);}await flush();assert.equal(waits.length,4);waits[0].resolve({ok:false,status:403,json:async()=>({message:'role_permission_denied'})});await flush();assert.deepEqual(denials,['permission']);assert.equal(h.listeners.size,0);assert.equal(b.replies.length,6);assert.equal(b.replies[0].data.code,'ADMIN_LIVE_PERMISSION_DENIED');assert(b.replies.slice(1).every(reply=>reply.data.code==='ADMIN_LIVE_CANCELLED'));assert(h.calls.every(call=>call.init.signal.aborted));
+ for(const wait of waits.slice(1))wait.resolve({ok:true,json:async()=>({marker:'PRIVATE_LATE_RESULT'})});await flush();h.send(b.event('after_denial'));await flush();assert.equal(h.calls.length,4);assert.equal(b.replies.length,6);assert.equal(denials.length,1);assert.equal(h.timers.size,0);assert.doesNotMatch(JSON.stringify(b.replies),/PRIVATE_LATE_RESULT/);b.cleanup();
+});
+
+test('cancelled or replaced request denials never revoke a newer authorized document',async()=>{
+ for(const replace of [false,true]){const old=deferred(),denials=[],h=load({fetch:async()=>h.calls.length===1?old.promise:{ok:true,json:async()=>({total:9})}}),b=bridge(h,{onAccessDenied:kind=>denials.push(kind)});h.send(b.event('old'));await flush();if(replace)b.replaceSource({});else h.send({...b.event('old'),data:{type:h.api.LIVE_CANCEL,id:'old',channel:'offline-channel'}});old.resolve({ok:false,status:403,json:async()=>({code:'application_session_denied'})});await flush();assert.deepEqual(denials,[]);assert(!b.replies.some(reply=>reply.data.code==='ADMIN_LIVE_SESSION_DENIED'));if(!replace){h.send(b.event('fresh'));await flush();assert.equal(b.replies.at(-1).data.result.total,9);}b.cleanup();}
+});
+
+test('frame fails closed only on controlled host access codes and cannot send a retry storm',async()=>{
+ for(const code of ['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED']){const h=iframeHarness(),pending=h.ctx.hensemLiveRequest(query),rejected=assert.rejects(pending,error=>error.code===code);h.reply(h.messages[0].data,{error:'正式数据读取未获授权，或会话已失效',code});await rejected;assert.equal(h.ctx.hensemRoleAccess.canView,false);assert.equal(h.ctx.hensemDataScope.identity,'');for(let i=0;i<5;i++)await assert.rejects(h.ctx.hensemLiveRequest(query),error=>error.code===code);assert.equal(h.messages.length,1);assert.equal(h.timers.size,0);}
+ const h=iframeHarness(),pending=h.ctx.hensemLiveRequest(query),rejected=assert.rejects(pending);h.reply(h.messages[0].data,{error:'Synthetic 403 permission timeout'});await rejected;const again=h.ctx.hensemLiveRequest(query);assert.equal(h.messages.length,2);h.reply(h.messages[1].data,{result:{total:4}});assert.equal((await again).total,4);
+});
+
+test('shared Edge readers distinguish session/IP/account denial from action permissions',async()=>{
+ const requests=[{action:'portalOperationLogs',country:'印度',filters:{from:'2026-09-01',to:'2026-09-27'},limit:20,offset:0},{action:'collectorControl',operation:'overview'}];
+ for(const request of requests)for(const [status,code,expected]of [[401,'unknown','ADMIN_LIVE_SESSION_DENIED'],[403,'ip_denied','ADMIN_LIVE_SESSION_DENIED'],[403,'account_disabled','ADMIN_LIVE_SESSION_DENIED'],[403,'role_denied','ADMIN_LIVE_PERMISSION_DENIED']]){
+  const h=load({fetch:async()=>({ok:false,status,json:async()=>({code,message:'PRIVATE_EDGE_DETAIL'})})});await assert.rejects(h.api.adminLiveRequest(session,request),error=>error.code===expected&&!error.message.includes('PRIVATE_'));assert.equal(h.calls.length,1);assert.equal(h.authCalls.length,1);
+ }
+});
+
+
+test('ordinary role conflicts and denial-like text do not become access revocations',async()=>{
+ for(const message of ['role_version_conflict','role_changed','Synthetic role_permission_denied detail','Synthetic scope_denied detail']){
+  const denied=[],h=load({fetch:async()=>({ok:false,status:400,json:async()=>({message})})}),b=bridge(h,{onAccessDenied:value=>denied.push(value)});h.send(b.event());await flush();assert.equal(b.replies[0].data.code,undefined);assert.deepEqual(denied,[]);assert.equal(h.listeners.size,1);assert.equal(h.calls.length,1);b.cleanup();
+ }
+});
+
+
+test('a renewed session supersedes an older token denial while the actual refreshed authority still revokes',async()=>{
+ for(const internallyRefreshed of [false,true]){
+  const old=deferred(),denied=[];let current=session;
+  const h=load({ensure:async input=>internallyRefreshed?{...input,access_token:'new-token'}:input,fetch:async()=>h.calls.length===1?old.promise:{ok:true,json:async()=>({total:8})}}),b=bridge(h,{session:()=>current,onAccessDenied:kind=>denied.push(kind)});
+  h.send(b.event('old'));await flush();current={...session,access_token:'new-token',refresh_token:'new-refresh'};h.send(b.event('fresh'));await flush();assert.equal(b.replies.at(-1).data.result.total,8);old.resolve({ok:false,status:401,json:async()=>({code:'application_session_denied'})});await flush();
+  assert.equal(b.replies.find(x=>x.data.id==='old').data.code,internallyRefreshed?'ADMIN_LIVE_SESSION_DENIED':'ADMIN_LIVE_CANCELLED');assert.deepEqual(denied,internallyRefreshed?['session']:[]);b.cleanup();
+ }
+});
+
+test('a delayed old ensure response cannot overwrite a newer verified session authority',async()=>{
+ const held=deferred(),denied=[];let ensures=0;
+ const h=load({ensure:async input=>++ensures===1?held.promise:{...input,access_token:'newest-token'},fetch:async()=>h.calls.length===1?{ok:true,json:async()=>({total:12})}:{ok:false,status:401,json:async()=>({code:'application_session_denied'})}}),b=bridge(h,{onAccessDenied:kind=>denied.push(kind)});
+ h.send(b.event('old_auth'));await flush();h.send(b.event('current_auth'));await flush();assert.equal(b.replies[0].data.result.total,12);held.resolve({...session,access_token:'obsolete-token'});await flush();assert.deepEqual(denied,[]);assert.equal(b.replies.at(-1).data.code,'ADMIN_LIVE_CANCELLED');b.cleanup();
 });

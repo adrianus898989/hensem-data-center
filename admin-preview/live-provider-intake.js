@@ -40,7 +40,7 @@
   const clearCache=()=>{cancel();dropCache();};
   const scopeContext=()=>{const next=String(accessContext()||'');if(next!==context){clearCache();context=next;}return next;};
   const fresh=(at,ttl)=>Number.isFinite(at)&&now()>=at&&now()-at<ttl;
-  async function limited(q,check,concurrency){while(inFlight>=concurrency){check();await new Promise(resolve=>waiters.push(resolve));}check();const controller=typeof root.AbortController==='function'?new root.AbortController():null;controllers.add(controller);inFlight++;try{return await request(q,{signal:controller?.signal})}catch(error){check();if(/401|403|permission|denied|login_required|session_expired|权限|未获授权|会话(?:已)?失效|登录已失效/i.test(String(error?.code||'')+' '+String(error?.message||'')))dropCache();throw error;}finally{controllers.delete(controller);inFlight--;waiters.splice(0).forEach(wake=>wake());}}
+  async function limited(q,check,concurrency){while(inFlight>=concurrency){check();await new Promise(resolve=>waiters.push(resolve));}check();const controller=typeof root.AbortController==='function'?new root.AbortController():null;controllers.add(controller);inFlight++;try{return await request(q,{signal:controller?.signal})}catch(error){check();if(['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code))dropCache();throw error;}finally{controllers.delete(controller);inFlight--;waiters.splice(0).forEach(wake=>wake());}}
   async function load({platforms,direction,from,to,onProgress,concurrency=2}){
    concurrency=concurrency===1?1:2;
    const actor=scopeContext(),current=revision,savedRevision=cacheRevision,check=()=>{if(scopeContext()!==actor||current!==revision)throw Error('采集核对已暂停');},allDays=dates(from,to);

@@ -146,7 +146,7 @@
     const r=await c.request(q.request);if(id!==serial||!sameScope(q)||!canLoad())return;
     const data=validateResponse(r,q);remember(q,data);
     S={...S,status:'ready',data,error:'',cacheHit:false,cachedAt:null};
-   }catch(error){if(/401|403|permission|denied|login_required|session_expired|权限|会话失效/i.test(String(error?.code||'')+' '+String(error?.message||'')))clearCache();if(id!==serial||!sameScope(q)||!canLoad())return;S={...S,status:'error',data:null,error:error?.message||'暂时无法读取'};}
+   }catch(error){if(id!==serial||!sameScope(q)||!canLoad())return;if(['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code))clearCache();S={...S,status:'error',data:null,error:error?.message||'暂时无法读取'};}
    if(id===serial)c.render();
   }
   async function drain(){

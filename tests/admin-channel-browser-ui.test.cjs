@@ -277,7 +277,7 @@ test('synchronously thrown request can be retried and cannot leave an inflight l
 });
 
 test('authorization failure clears cached facts across all platforms and disables automatic retries',async()=>{
- const p=platform(2),h=fixture({catalog:[AR,p]});await h.start();h.context.liveChannelSelect(1);await flush();assert.equal(Object.keys(h.mod.capture().cache).length,2);h.setHandler(()=>{throw Object.assign(Error('正式数据读取未获授权，或会话已失效'),{status:403})});await h.mod.load(false,true);assert.deepEqual(Object.keys(h.mod.capture().cache),[]);assert.equal(h.mod.canExport(),false);assert.doesNotMatch(h.mod.render(),/Display one/);await h.advance(600000);assert.equal(h.calls.length,3);assert.match(h.mod.render(),/点击上方平台重新验证授权/);assert.doesNotMatch(h.mod.render(),/点击查询/);
+ const p=platform(2),h=fixture({catalog:[AR,p]});await h.start();h.context.liveChannelSelect(1);await flush();assert.equal(Object.keys(h.mod.capture().cache).length,2);h.setHandler(()=>{throw Object.assign(Error('正式数据读取未获授权，或会话已失效'),{status:403,code:'ADMIN_LIVE_SESSION_DENIED'})});await h.mod.load(false,true);assert.deepEqual(Object.keys(h.mod.capture().cache),[]);assert.equal(h.mod.canExport(),false);assert.doesNotMatch(h.mod.render(),/Display one/);await h.advance(600000);assert.equal(h.calls.length,3);assert.match(h.mod.render(),/点击上方平台重新验证授权/);assert.doesNotMatch(h.mod.render(),/点击查询/);
 });
 
 test('query permission revocation purges cached facts and all direct actions remain permission checked',async()=>{
@@ -387,7 +387,7 @@ test('cross-platform navigation, scope change and permission denial discard late
  const wait=later(),h=crossFixture({handler:()=>wait.promise}),pending=h.context.liveChannelCrossQuery('WPAY-QR');await flush();h.hide();wait.resolve(batchResponse([AR],h.calls[0]));await pending;assert.equal(h.mod.capture().cache[AR.id]?.response,null);
  await h.show();h.setHandler(q=>batchResponse([AR],q));await h.context.liveChannelCrossQuery('WPAY-QR');assert.match(h.mod.render(),/WPAY-QR/);
  const next=later();h.setHandler(()=>next.promise);const late=h.context.liveChannelCrossRefresh();await flush();h.setCatalog([]);h.mod.render();next.resolve(batchResponse([AR],h.calls.at(-1)));await late;assert.equal(h.mod.capture().cache[AR.id],undefined);
- const denied=crossFixture({handler:()=>{const e=Error('permission_denied');e.status=403;throw e;}});await denied.context.liveChannelCrossQuery('WPAY-QR');assert.deepEqual(JSON.parse(JSON.stringify(denied.mod.capture().cache)),{});assert.match(denied.mod.render(),/permission_denied/);
+ const denied=crossFixture({handler:()=>{const e=Error('permission_denied');e.status=403;e.code='ADMIN_LIVE_PERMISSION_DENIED';throw e;}});await denied.context.liveChannelCrossQuery('WPAY-QR');assert.deepEqual(JSON.parse(JSON.stringify(denied.mod.capture().cache)),{});assert.match(denied.mod.render(),/permission_denied/);
  const view=crossFixture({permissions:['view']});await view.context.liveChannelCrossQuery('WPAY-QR');assert.equal(view.calls.length,0);assert.match(view.mod.render(),/未获查询权限/);
 });
 

@@ -99,13 +99,13 @@ test('authority change during a request prevents old publication and old-context
 });
 
 test('server authorization denial clears all scopes before a prior successful scope can be reused',async()=>{
- for(const code of ['401','403','permission_denied','session_expired']){
+ for(const code of ['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED']){
   const h=harness();h.providers(['Pay A']);await h.ui.load();h.providers(['Pay B']);h.handler(()=>{throw Object.assign(Error('Synthetic access rejected'),{code})});await h.ui.load();assert.equal(h.ui.state.status,'error');h.providers(['Pay A']);await h.ui.load();assert.equal(h.calls.length,3,code);assert.equal(h.ui.state.status,'error');assert.doesNotMatch(h.ui.metric(),/>0(?:.00)?<|123.45/);
  }
 });
 
-test('late cancelled authorization denial still clears cache, but ordinary timeout preserves other scopes',async()=>{
- const h=harness(),denied=deferred();h.providers(['Pay A']);await h.ui.load();h.providers(['Pay B']);h.handler(()=>denied.promise);const old=h.ui.load();await settle();h.ui.cancel();h.providers(['Pay A']);h.handler(()=>{throw Object.assign(Error('Synthetic permission denied'),{code:'403'})});const fresh=h.ui.load();denied.reject(Object.assign(Error('Synthetic permission denied'),{code:'403'}));await Promise.all([old,fresh]);assert.equal(h.calls.length,3);assert.equal(h.ui.state.status,'error');
+test('late cancelled denial cannot evict a current cached scope; ordinary timeout also preserves other scopes',async()=>{
+ const h=harness(),denied=deferred();h.providers(['Pay A']);await h.ui.load();h.providers(['Pay B']);h.handler(()=>denied.promise);const old=h.ui.load();await settle();h.ui.cancel();h.providers(['Pay A']);h.handler(()=>{throw Object.assign(Error('Synthetic permission denied'),{code:'ADMIN_LIVE_PERMISSION_DENIED'})});const fresh=h.ui.load();denied.reject(Object.assign(Error('Synthetic permission denied'),{code:'ADMIN_LIVE_PERMISSION_DENIED'}));await Promise.all([old,fresh]);assert.equal(h.calls.length,2);assert.equal(h.ui.state.status,'ready');assert.equal(h.ui.state.cacheHit,true);h.providers(['Pay B']);await h.ui.load();assert.equal(h.calls.length,3);assert.equal(h.ui.state.status,'error');h.providers(['Pay A']);await h.ui.load();assert.equal(h.calls.length,4,'the current denial still evicts the prior scope');
  const ordinary=harness();ordinary.providers(['Pay A']);await ordinary.ui.load();ordinary.providers(['Pay B']);ordinary.handler(()=>{throw Error('Synthetic timeout')});await ordinary.ui.load();ordinary.providers(['Pay A']);await ordinary.ui.load();assert.equal(ordinary.calls.length,2);assert.equal(ordinary.ui.state.cacheHit,true);
 });
 

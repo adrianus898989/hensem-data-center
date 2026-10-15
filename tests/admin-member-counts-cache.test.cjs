@@ -88,7 +88,7 @@ test('default document role/scope context invalidates on role versions and expli
 });
 
 test('transport permission errors discard previous cached scopes and never become cached failures',async()=>{
- const h=harness();await h.query();h.L.multi.provider=['Other provider'];h.handler(()=>{throw Object.assign(Error('permission_denied'),{code:'403'});});await h.query();assert.equal(h.ui.state.status,'error');h.L.multi.provider=[];h.handler(q=>response(q));await h.query();assert.equal(h.calls.length,3);
+ const h=harness();await h.query();h.L.multi.provider=['Other provider'];h.handler(()=>{throw Object.assign(Error('permission_denied'),{code:'ADMIN_LIVE_PERMISSION_DENIED'});});await h.query();assert.equal(h.ui.state.status,'error');h.L.multi.provider=[];h.handler(q=>response(q));await h.query();assert.equal(h.calls.length,3);
 });
 
 test('clock regression cannot extend a cached result beyond its original TTL',async()=>{
@@ -163,7 +163,7 @@ test('authority revocation or context changes during direction fallback prevent 
 });
 
 test('direction permission error clears successful child cache and is never retried recursively',async()=>{
- const h=harness();h.handler(q=>{if(q.direction==='all')throw timeout();if(q.direction==='withdraw')throw Object.assign(Error('permission denied'),{code:'403'});return response(q);});await h.query();assert.equal(h.calls.length,3);assert.equal(h.ui.state.results.length,0);assert.match(h.ui.state.failures[0].error,/permission denied/);h.L.direction='charge';h.handler(q=>response(q));await h.query();assert.equal(h.calls.length,4,'the earlier successful direction was evicted on permission failure');
+ const h=harness();h.handler(q=>{if(q.direction==='all')throw timeout();if(q.direction==='withdraw')throw Object.assign(Error('permission denied'),{code:'ADMIN_LIVE_PERMISSION_DENIED'});return response(q);});await h.query();assert.equal(h.calls.length,3);assert.equal(h.ui.state.results.length,0);assert.match(h.ui.state.failures[0].error,/permission denied/);h.L.direction='charge';h.handler(q=>response(q));await h.query();assert.equal(h.calls.length,4,'the earlier successful direction was evicted on permission failure');
 });
 
 test('force during a direction read cannot compose late old counts into the refreshed result',async()=>{

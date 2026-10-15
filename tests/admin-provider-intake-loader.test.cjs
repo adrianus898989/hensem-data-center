@@ -143,13 +143,13 @@ test('native platform changes and refreshed feed metadata do not reuse another i
 });
 
 test('server permission rejection clears cached evidence and a sibling late reply cannot restore it',async()=>{
- let catalogs=0,rows=0,release;const feeds=[feed,{...feed,id:'f2',platformId:'p2'}],loader=api.create({accessContext:()=> 'actor:scope:v1',request:async q=>{if(q.operation==='orderCatalog'){catalogs++;return {version:1,complete:true,feeds};}rows++;if(q.feedIds.includes('f2'))throw Error('正式数据读取未获授权，或会话已失效');if(rows===1)return new Promise(resolve=>{release=()=>resolve(rowsFor(q));});return rowsFor(q);}}),scope={platforms:[p],direction:'charge',from,to};
+ let catalogs=0,rows=0,release;const feeds=[feed,{...feed,id:'f2',platformId:'p2'}],loader=api.create({accessContext:()=> 'actor:scope:v1',request:async q=>{if(q.operation==='orderCatalog'){catalogs++;return {version:1,complete:true,feeds};}rows++;if(q.feedIds.includes('f2'))throw Object.assign(Error('正式数据读取未获授权，或会话已失效'),{code:'ADMIN_LIVE_SESSION_DENIED'});if(rows===1)return new Promise(resolve=>{release=()=>resolve(rowsFor(q));});return rowsFor(q);}}),scope={platforms:[p],direction:'charge',from,to};
  const first=loader.load(scope);await new Promise(resolve=>setImmediate(resolve));const denied=await loader.load({...scope,platforms:[{...p,id:'p2'}]});assert.match(denied.error,/核对失败/);release();await first;loader.cancel();await loader.load(scope);assert.equal(catalogs,2);assert.equal(rows,3);
 });
 
 test('an old actor permission failure cannot evict a newly authorized actor cache',async()=>{
  let actor='old',rejectOld,catalogs=0,rows=0;const loader=api.create({accessContext:()=>actor,request:async q=>{if(q.operation==='orderCatalog'){catalogs++;return {version:1,complete:true,feeds:[feed]};}rows++;if(rows===1)return new Promise((resolve,reject)=>{rejectOld=reject;});return rowsFor(q);}}),scope={platforms:[p],direction:'charge',from,to};
- const old=loader.load(scope),rejected=assert.rejects(old,/已暂停/);await new Promise(resolve=>setImmediate(resolve));actor='new';await loader.load(scope);rejectOld(Error('403 permission denied'));await rejected;loader.cancel();await loader.load(scope);assert.equal(catalogs,2);assert.equal(rows,2);
+ const old=loader.load(scope),rejected=assert.rejects(old,/已暂停/);await new Promise(resolve=>setImmediate(resolve));actor='new';await loader.load(scope);rejectOld(Object.assign(Error('403 permission denied'),{code:'ADMIN_LIVE_PERMISSION_DENIED'}));await rejected;loader.cancel();await loader.load(scope);assert.equal(catalogs,2);assert.equal(rows,2);
 });
 
 test('verified pre-launch days remain visible without becoming missing or received platforms',()=>{

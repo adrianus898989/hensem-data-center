@@ -106,7 +106,7 @@
   async function limitedRequest(request,id){while(inFlight>=readConcurrency){if(!valid(id))throw Error('人数查询已替换');await new Promise(resolve=>waiters.push(resolve));}if(!valid(id))throw Error('人数查询已替换');inFlight++;try{return await c.request(request)}finally{inFlight--;waiters.splice(0).forEach(wake=>wake());}}
   async function readExact(item,id,policy){
    if(!valid(id))throw Error('人数查询已替换');const hit=!policy.force&&cached(item,policy.context);if(hit)return hit;
-   let response;try{response=await limitedRequest(item.request,id);}catch(error){if(/401|403|permission|denied|login_required|session_expired|权限|会话失效/i.test(String(error?.code||'')+' '+String(error?.message||'')))clearCache();throw error;}if(!valid(id))throw Error('人数查询已替换');
+   let response;try{response=await limitedRequest(item.request,id);}catch(error){if(valid(id)&&['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code))clearCache();throw error;}if(!valid(id))throw Error('人数查询已替换');
    const result=validate(response,item),at=now(),historical=localDay(Date.parse(item.request.endAt)-1,item.platform.timezone)<localDay(at,item.platform.timezone);
    const value={...result,_memberReadAt:at,_memberExpiresAt:at+(historical?300000:30000),_memberCacheHit:false,_memberCacheable:!(response.partial===true||response.complete===false||response.available===false||response.error||response.meta?.partial===true||response.coverage?.complete===false)};
    remember(item,value,policy);return value;

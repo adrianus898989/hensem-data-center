@@ -42,7 +42,7 @@
   function cancel(keepComposition=false){if(!keepComposition)browseComposing=false;stopTimers();serial++;inflight=null;if(S.cross.status==='loading')S.cross.status='paused';if(S.browse?.status==='loading')S.browse.status='paused';root.hensemLiveCancelRequests?.(['channelStatus']);for(const hit of Object.values(S.cache))if(hit.status==='loading')hit.status=hit.response?'ready':'paused';}
   function clear(){cancel();S=initial();}
   function revoke(error){cancel();S.cache={};S.accessError=error?.message||'当前角色未获查询权限';L.pageQueried=false;paint();}
-  const authFailure=error=>[401,403].includes(Number(error?.status||error?.statusCode))||/401|403|unauthoriz|forbidden|permission_denied|role_denied|没有.*权限|未获.*授权|会话.*失效|登录.*失效/i.test(String(error?.code||'')+' '+String(error?.message||''));
+  const authFailure=error=>['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code);
   function reconcile(){
    const rows=directory(),valid=new Map(rows.map(p=>[p.id,identity(p)]));for(const [id,hit]of Object.entries(S.cache))if(valid.get(id)!==hit.key)delete S.cache[id];
    const previousScope=[S.source,S.country];
