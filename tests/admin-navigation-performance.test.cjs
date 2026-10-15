@@ -652,3 +652,46 @@ test('retrying failed platforms retains an expired displayed fee snapshot until 
  h.setNow('2026-09-23T12:05:01Z');fail=false;await h.c.liveRetryFailed();await settle();assert.equal(h.L.queryFailures.length,0);assert.equal(h.L.feeLookupRows,snapshot);assert.equal(h.calls.filter(q=>q.action==='rates').length,rateCount);
  await h.c.liveQuery(false);await settle();assert.equal(h.calls.filter(q=>q.action==='rates').length,rateCount+1);
 });
+
+test('selected-provider amount and matrix queries use the shared directory for limits, fees and drilldown edges',async()=>{
+ for(const page of ['amount','matrix']){
+  const h=await ready({extraModules:['live-amount-bands.js']});h.c.setPage(page);h.c.liveSet('provider','Synthetic provider');
+  h.setHandler(q=>{if(q.action==='rates')return {rows:[{id:'limits',scopeType:'country',country:'印度',provider:'Synthetic provider',collectFee:'4%',collectLimit:'250-25000',payoutFee:'2%',payoutLimit:'500-100000'}],total:1};return {...completeAggregate(P),startAt:q.startAt,endAt:q.endAt,amountBands:q.amountBands};});
+  const from=h.calls.length;await h.c.liveQuery(false);await settle();const calls=h.calls.slice(from),rates=calls.filter(q=>q.action==='rates'),orders=calls.filter(q=>q.action==='aggregate');
+  assert.equal(rates.length,1);assert.equal(rates[0].scopeType,'all');assert.equal(h.L.amountBandProfiles.charge.source,'所选三方限额');assert.equal(h.L.amountBandProfiles.charge.edges[0],250);assert.equal(h.L.amountBandProfiles.charge.edges[10],25000);assert.equal(h.L.amountBandProfiles.withdraw.edges[0],500);assert.equal(h.L.amountBandProfiles.withdraw.edges[10],100000);
+  assert(orders.length);for(const q of orders){assert.deepEqual(Array.from(q.amountBands.charge),Array.from(h.L.amountBandProfiles.charge.edges));assert.deepEqual(Array.from(q.providers),['Synthetic provider']);}
+  const segment={kind:page==='matrix'?'matrix_range':'amount_range',direction:'charge',bucket:'band:0',...(page==='matrix'?{hour:12}:{})};h.c.liveMatrixSegment(encodeURIComponent(JSON.stringify(segment)));await h.c.liveAnalysisAction(encodeURIComponent(JSON.stringify(segment)),'daily');await settle();
+  const drill=h.calls.findLast(q=>q.view==='drilldown');assert(drill);assert.deepEqual(drill.amountBands,orders[0].amountBands);assert.equal(h.calls.filter(q=>q.action==='rates').length,1);
+ }
+});
+
+test('invalid selected-provider limit directories stay unknown without a second fee read or partial limit adoption',async()=>{
+ for(const payload of [{rows:[],total:null},{rows:[],total:1},Error('当前账号未获授权，会话已失效')]){
+  const h=await ready({extraModules:['live-amount-bands.js']});h.c.setPage('providers');h.c.liveSet('provider','Synthetic provider');
+  h.setHandler(q=>{if(q.action==='rates'){if(payload instanceof Error)throw payload;return payload;}return {...aggregate(P),startAt:q.startAt,endAt:q.endAt};});
+  await h.c.liveQuery(true);await settle();assert.equal(h.calls.filter(q=>q.action==='rates').length,1);assert.equal(h.L.feeLookupRows,null);assert(h.L.feeLookupError);assert.equal(h.L.amountBandProfiles.charge.source,'国家参考范围');assert.equal(h.L.amountBandProfiles.charge.edges[0],100);assert.equal(h.L.amountBandProfiles.charge.edges[10],50000);assert(h.L.results.length,'independent order statistics still complete when reference fees are unknown');
+  h.c.render();h.c.providerSummarySort('all_count');await settle();assert.equal(h.calls.filter(q=>q.action==='rates').length,1,'a terminal fee failure cannot loop through the supplementary fee phase');
+ }
+});
+
+test('selected-provider daily entry points share the directory prepared for bands without duplicate fee requests',async()=>{
+ const h=await ready({extraModules:['live-amount-bands.js','live-daily-comparison.js'],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});
+ h.c.setPage('providers');h.c.liveSet('provider','Synthetic provider');await h.c.liveQuery(false);await settle();const count=()=>h.calls.filter(q=>q.action==='rates').length;assert.equal(count(),1);
+ h.c.setPage('daily_comparison');h.c.liveSet('provider','Synthetic provider');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T23:59:59';
+ await h.c.liveQuery(false);await settle();assert.equal(count(),1,'daily reuses the same actor-wide complete directory');await h.c.liveDailyQuery();await settle();assert.equal(count(),2,'inline force query rereads once');await h.c.liveDailyContinue();await settle();assert.equal(count(),2);await h.c.liveRetryFeeLookup();await settle();assert.equal(count(),3,'explicit fee retry reads one replacement');
+ const before=h.calls.length;h.c.liveDailySort('all_amount');h.c.render();assert.equal(h.calls.length,before);
+});
+
+test('events never sends an unauthorized rates read and uses only a fresh authorized snapshot or country bands',async()=>{
+ for(const cached of [false,true]){
+  const h=await ready({extraModules:['live-amount-bands.js'],submission:true,roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});
+  h.setHandler(q=>q.action==='submissionAnalysis'?{version:3,platform:P,basis:'platform_local_day_all_providers_zero_success_whole_day_over_threshold',startAt:q.startAt,endAt:q.endAt,exemptCount:0,thresholdComparison:'gt',coverage:{missingMemberCount:0,unknownStatusCount:0,orderSequenceUncertainCount:0},metrics:[10,15,20,30,50,100].map(threshold=>({provider:null,threshold,qualified_member_count:1,qualified_member_days:1,member_count:1,member_days:1,invalid_count:20,l0_members:0,new_members:0,funded_members:0,unknown_members:1}))}:aggregate(P));
+  const transport=feeFrame(h,()=>({rows:[{id:'authorized-limits',provider:'Synthetic provider',scopeType:'country',country:'印度',collectFee:'4%',collectLimit:'250-25000'}],total:1}));
+  if(cached){await h.c.liveRetryFeeLookup();assert.equal(h.L.feeLookupRows[0].id,'authorized-limits');}
+  h.c.setPage('events');h.c.liveSet('provider','Synthetic provider');
+  await assert.rejects(h.c.hensemLiveRequest({action:'rates',scopeType:'all',offset:0,limit:500},{signal:new AbortController().signal}),/当前角色没有/,'the real bridge catalog does not authorize events rates');
+  const count=transport.rates().length;await h.c.liveQuery(true);await settle();assert.equal(transport.rates().length,count,'band preparation must not attempt the rejected standalone reader');
+  const request=h.calls.findLast(q=>q.action==='submissionAnalysis');assert(request);assert.equal(request.amountBands.charge[0],cached?250:100);assert.equal(request.amountBands.charge[10],cached?25000:50000);assert.equal(h.L.amountBandProfiles.charge.source,cached?'所选三方限额':'国家参考范围');assert.deepEqual(Array.from(request.providers),['Synthetic provider']);
+  h.setNow('2026-09-23T12:05:01Z');await h.c.liveQuery(true);await settle();assert.equal(transport.rates().length,count);assert.equal(h.L.amountBandProfiles.charge.source,'国家参考范围','an expired directory cannot silently define new event-query limits');
+ }
+});
