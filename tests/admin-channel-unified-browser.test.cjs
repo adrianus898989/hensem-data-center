@@ -182,7 +182,20 @@ test('view-only role cannot query on entry, mode switching, suggestions or refre
  const h=fixture({permissions:['view'],catalog:[platform(1),platform(2)]});await h.start();cross(h);h.context.liveChannelCrossChoose('PayOne');await h.context.liveChannelCrossQuery('PayOne');h.context.liveChannelCrossRefresh();await flush();assert.equal(h.calls.length,0);assert.deepEqual(plain(h.mod.capture().cache),{});
 });
 test('single platform exact provider filter preserves its full enabled weight denominator and row identity',async()=>{
- const h=fixture({rowsFor:(_,direction)=>direction==='withdraw'?[channel('wd')]:[channel('same',{provider:'PayOne',weight:'100'}),channel('same',{provider:'PayOne',category_id:'qr',category_name:'QR',weight:'300',source_position:1}),channel('other',{provider:'PayTwo',weight:'300',source_position:2})]});await h.start();h.context.liveChannelProvider('PayOne');const rows=exported(h);assert.deepEqual(rows.map(r=>[r['通道 ID'],r['通道大类 ID'],r['预设权重占比']]),[['same','upi','14.29%'],['same','qr','42.86%']]);h.context.liveChannelCategory('upi');assert.equal(exported(h)[0]['预设权重占比'],'25.00%');cross(h);await h.context.liveChannelCrossQuery('PayOne');assert.equal(h.mod.canExport(),false);h.context.liveChannelMode('single');assert.equal(exported(h)[0]['预设权重占比'],'25.00%');
+ const h=fixture({rowsFor:(_,direction)=>direction==='withdraw'?[channel('wd')]:[channel('same',{provider:'PayOne',weight:'100'}),channel('same',{provider:'PayOne',category_id:'qr',category_name:'QR',weight:'300',source_position:1}),channel('other',{provider:'PayTwo',weight:'300',source_position:2})]});await h.start();h.context.liveChannelProvider('PayOne');const rows=exported(h);assert.deepEqual(rows.map(r=>[r['通道 ID'],r['通道大类 ID'],r['预设权重占比']]),[['same','upi','25.00%'],['same','qr','100.00%']]);h.context.liveChannelCategory('upi');assert.equal(exported(h)[0]['预设权重占比'],'25.00%');cross(h);await h.context.liveChannelCrossQuery('PayOne');assert.equal(h.mod.canExport(),false);h.context.liveChannelMode('single');assert.equal(exported(h)[0]['预设权重占比'],'25.00%');
+});
+test('cross-platform provider matching keeps full native category pools isolated when returning to either platform',async()=>{
+ const catalog=[platform(1),platform(2)],h=fixture({catalog,rowsFor:(p,direction)=>direction==='withdraw'?[channel('wd')]:[
+  channel('selected',{provider:'PayOne',category_id:'upi',weight:p.id===catalog[0].id?'100':'900',real_time_weight:p.id===catalog[0].id?'20':'60'}),
+  channel('peer',{provider:'PayTwo',category_id:'upi',weight:p.id===catalog[0].id?'300':'100',real_time_weight:p.id===catalog[0].id?'80':'40',source_position:1}),
+  channel('other-category',{provider:'PayOne',category_id:'qr',category_name:'QR',weight:'5000',real_time_weight:'5000',source_position:2}),
+ ]});await h.start();h.context.liveChannelProvider('PayOne');
+ assert.deepEqual(exported(h).map(r=>[r['预设权重占比'],r['实际权重占比']]),[['25.00%','20.00%'],['100.00%','100.00%']]);
+ cross(h);await h.context.liveChannelCrossQuery('PayOne');assert.equal(groups(h.mod.render()).size,2);assert.equal(h.mod.canExport(),false);assert.doesNotMatch(h.mod.render(),/预设权重占比|实际权重占比/);
+ h.context.liveChannelMode('single');assert.deepEqual(exported(h).map(r=>[r['预设权重占比'],r['实际权重占比']]),[['25.00%','20.00%'],['100.00%','100.00%']]);
+ h.context.liveChannelSelect(1);await flush();h.context.liveChannelProvider('PayOne');
+ assert.deepEqual(exported(h).map(r=>[r['预设权重占比'],r['实际权重占比']]),[['90.00%','60.00%'],['100.00%','100.00%']]);
+ const calls=h.calls.length;h.context.liveChannelCategory('upi');h.context.liveChannelQuery('selected');assert.equal(exported(h)[0]['预设权重占比'],'90.00%');assert.equal(h.calls.length,calls);
 });
 test('single export cannot expose detail-only source values and cross mode export remains unavailable',async()=>{
  const h=fixture({permissions:['view','query','export'],rowsFor:()=>[channel('one',{source_channel_name:'PRIVATE',third_pay_merchant_id:'SECRET',notes:'HIDDEN'})]});await h.start();assert.doesNotMatch(JSON.stringify(h.mod.exportRows()),/PRIVATE|SECRET|HIDDEN/);cross(h);await h.context.liveChannelCrossQuery('PayOne');assert.equal(h.mod.canExport(),false);assert.deepEqual(plain(h.mod.exportRows()),[]);
