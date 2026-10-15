@@ -160,7 +160,7 @@ test('legacy date and provider edits release owned loading after cancelling sele
  for(const page of ['provider_daily','providers']){
   const h=await setup(page,{extraModules:['live-amount-bands.js']});h.c.liveSet('provider','Synthetic provider');const run=h.c.liveQuery(true);await settle();const serial=h.L.serial,pending=h.waiting.shift();assert.equal(pending.q.action,'rates');
   if(page==='provider_daily')h.c.liveReferenceEnd('2026-09-21');else h.c.liveProvider('Synthetic next provider');
-  assert.equal(h.L.serial,serial,'these legacy UI controls mark dirty without replacing the serial');await run;await settle();assert.equal(pending.signal.aborted,true);assert.equal(h.L.loading,false);assert.equal(h.L.feeLookupLoading,false);assert.equal(h.L.dirty,true);assert.equal(h.history.length,1);assert(!h.html().includes('live-read-phase'));assert.equal(h.active(),0);
+  assert.equal(h.L.serial,serial+(page==='providers'?1:0),'provider links cancel the owned query; legacy date controls are fenced by dirty scope');await run;await settle();assert.equal(pending.signal.aborted,true);assert.equal(h.L.loading,false);assert.equal(h.L.feeLookupLoading,false);assert.equal(h.L.dirty,true);assert.equal(h.history.length,1);assert(!h.html().includes('live-read-phase'));assert.equal(h.active(),0);
   pending.d.resolve({rows:[{id:'late'}],total:1});await settle();h.c.render();assert.equal(h.L.feeLookupRows,null);assert.equal(h.history.length,1);
  }
 });

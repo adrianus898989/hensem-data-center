@@ -6,10 +6,10 @@
  // Normalize timezone notation without truncating microseconds.
  const instant=value=>{const m=typeof value==='string'&&value.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/);if(!m||!Number.isFinite(Date.parse(m[1]+m[3])))return null;return new Date(m[1]+m[3]).toISOString().slice(0,19)+'.'+(m[2]||'').padEnd(6,'0')+'Z';};
  const native=p=>p&&!p.reportOnly&&['ar','newar','kb'].includes(p.source)&&p.scopeGroup==='IN'&&p.currency==='INR'&&['Asia/Kolkata','Asia/Calcutta'].includes(p.timezone)&&typeof p.sourceName==='string'&&p.sourceName.length>0&&(p.source!=='kb'||p.sourceName==='YASH.BET');
- function eligible({page,L,platforms,visible,providers,now=Date.now()}){
+ function eligible({page,L,platforms,visible,now=Date.now()}){
   return page==='providers'&&L.direction==='charge'&&L.status==='all'&&platforms.length>0&&platforms.length<=50&&visible.length===platforms.length&&platforms.every(native)&&
    validDay(L.from.slice(0,10))&&/^\d{4}-\d{2}-\d{2}T00:00:00$/.test(L.from)&&L.to===L.from.slice(0,10)+'T23:59:59'&&L.from.slice(0,10)<=new Date(now+19800000).toISOString().slice(0,10)&&
-   !providers.length&&!['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr','amountMin','amountMax','channelType'].some(k=>L[k]);
+   !['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr','amountMin','amountMax','channelType'].some(k=>L[k]);
  }
  function contextKey(access,catalog){return JSON.stringify([access,catalog.map(p=>[p.id,p.source,p.sourceName,p.scopeGroup,p.country,p.team,p.name,p.currency,p.timezone]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))]);}
  function requestFor(platforms,day){return {action:'providerSnapshot',version:1,platformIds:platforms.map(p=>p.id),startAt:day+'T00:00:00',endAt:day+'T23:59:59',direction:'charge',status:'all',currency:'INR',components:['orders','submission','intake'],export:false};}
@@ -63,6 +63,78 @@
   });
   return {status:'ready',from,to,platforms:rows,error:'',published:true};
  }
- const api={eligible,contextKey,requestFor,validate,fullDay,appliedWindow,generation,intake,denied};
+ // A provider selection is a projection of the same authorized publication.
+ // Keep the immutable base and its generation separate from the projected view.
+ const orderCounts=['all_count','success_count','pending_count','failed_count','rejected_count','unknown_count','missing_amount_count','negative_amount_count','created_success_count'];
+ const orderAmounts=['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount'];
+ const submissionCounts=['qualified_member_count','qualified_member_days','member_count','member_days','invalid_count','l0_members','new_members','funded_members','unknown_members'];
+ const submissionThresholds=[10,15,20,30,50,100];
+ const copy=value=>typeof structuredClone==='function'?structuredClone(value):JSON.parse(JSON.stringify(value));
+ const canonical=(name,country,resolve)=>String((resolve||root.HensemProviderNames?.canonical)?.(name,country)??name??'').trim();
+ function decimalSum(values){
+  if(values.some(value=>value===null||value===undefined))return null;
+  if(values.length===1)return values[0];
+  let total=0n,scale=0;
+  for(const value of values){
+   const match=String(value).match(/^([+-]?)(\d+)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/);if(!match)return null;
+   const exponent=Number(match[4]||0),digits=match[2]+(match[3]||'');let nextScale=(match[3]||'').length-exponent;
+   if(!Number.isSafeInteger(exponent)||Math.abs(nextScale)>1000)return null;
+   let next=BigInt(digits)*(match[1]==='-'?-1n:1n);if(nextScale<0){next*=10n**BigInt(-nextScale);nextScale=0;}
+   if(nextScale>scale){total*=10n**BigInt(nextScale-scale);scale=nextScale;}else next*=10n**BigInt(scale-nextScale);total+=next;
+  }
+  const sign=total<0n?'-':'';let digits=(total<0n?-total:total).toString().padStart(scale+1,'0');
+  if(scale)digits=(digits.slice(0,-scale)+'.'+digits.slice(-scale)).replace(/\.?0+$/,'');
+  return sign+digits;
+ }
+ function countSum(values){if(values.some(value=>!Number.isSafeInteger(value)||value<0))return null;const sum=values.reduce((n,value)=>n+value,0);return Number.isSafeInteger(sum)?sum:null;}
+ function projectOrders(value,providers,resolve){
+  if(value===null)return null;
+  const country=value.platform?.country||value.platform?.scopeGroup||'IN',wanted=new Set(providers.map(name=>canonical(name,country,resolve))),rows=(value.groups?.provider||[]).filter(row=>wanted.has(canonical(row.provider,country,resolve))),groups=new Map();
+  for(const row of rows){const key=JSON.stringify([row.direction,row.currency]);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
+  const summary=[...groups.values()].map(leaves=>{
+   const row={direction:leaves[0].direction,currency:leaves[0].currency};
+   for(const key of orderCounts)if(leaves.some(leaf=>Object.hasOwn(leaf,key))||(value.summary||[]).some(item=>Object.hasOwn(item,key)))row[key]=countSum(leaves.map(leaf=>leaf[key]));
+   for(const key of orderAmounts)row[key]=decimalSum(leaves.map(leaf=>leaf[key]));
+   const stamps=leaves.map(leaf=>leaf.latest_synced_at).filter(stamp=>typeof stamp==='string'&&Number.isFinite(Date.parse(stamp)));if(stamps.length)row.latest_synced_at=stamps.sort((a,b)=>Date.parse(b)-Date.parse(a))[0];
+   return row;
+  });
+  // Other dimensions in the base are whole-platform aggregates and cannot be
+  // relabelled as provider-specific distributions or duration samples.
+  return {...value,summary,total:countSum(rows.map(row=>row.all_count)),groups:Object.fromEntries(Object.keys(value.groups||{}).map(key=>[key,key==='provider'?rows:[]])),rows:[],...(Object.hasOwn(value,'latencySummary')?{latencySummary:[]}:{}),...(Object.hasOwn(value,'pendingSummary')?{pendingSummary:[]}:{})};
+ }
+ function project(bundle,providers=[],options={}){
+  if(!Array.isArray(providers)||providers.some(name=>typeof name!=='string'||!name.trim()))throw Error('三方筛选无效');
+  const selected=[...new Set(providers.map(name=>canonical(name,'印度',options.canonical)))].sort();
+  if(!selected.length)return {bundle,providers:[],projectionComplete:true,unresolvedSubmissions:[]};
+  const projected=copy(bundle),unresolvedSubmissions=[];
+  for(const entry of projected.platforms||[]){
+   for(const period of ['current','previous'])if(entry[period])entry[period].orders=projectOrders(entry[period].orders,selected,options.canonical);
+   const source=entry.current?.submission;if(!source)continue;
+   const country=entry.platform?.country||entry.platform?.scopeGroup||'IN',nameOf=name=>canonical(name,country,options.canonical),wanted=new Set(selected.map(nameOf)),metrics=source.metrics||[],providerMetrics=metrics.filter(metric=>metric.provider!==null),filtered=[],unavailable=[],reasons=[];
+   const gaps=['missingMemberCount','unknownStatusCount','orderSequenceUncertainCount','coverageUnknownDays'],coverageIncomplete=source.coverage?.calculationComplete===false||gaps.some(key=>Number(source.coverage?.[key])>0),globalComplete=submissionThresholds.every(threshold=>metrics.filter(metric=>metric.provider===null&&metric.threshold===threshold).length===1);
+   const mark=(provider,reason)=>{if(!unavailable.includes(provider)){unavailable.push(provider);reasons.push({provider,reason});}};
+   for(const provider of selected){
+    const matches=providerMetrics.filter(metric=>nameOf(metric.provider)===nameOf(provider)),orderCount=countSum((entry.current.orders?.groups?.provider||[]).filter(row=>nameOf(row.provider)===nameOf(provider)).map(row=>row.all_count));
+    let reason=coverageIncomplete?'provider_coverage_required':!globalComplete?'publication_metrics_incomplete':null;
+    if(!reason&&submissionThresholds.some(threshold=>matches.filter(metric=>metric.threshold===threshold).length>1))reason='provider_alias_union_required';
+    // Every source branch publishes dimensions from all selected orders, then
+    // LEFT JOINs qualified cohorts. A missing dimension with orders is not zero.
+    if(!reason&&submissionThresholds.some(threshold=>!matches.some(metric=>metric.threshold===threshold))&&(orderCount!==0||entry.current.orders===null))reason='provider_metrics_missing';
+    if(reason){mark(provider,reason);continue;}
+    for(const threshold of submissionThresholds){const found=matches.find(metric=>metric.threshold===threshold);filtered.push(found?{...found,provider}:{provider,threshold,...Object.fromEntries(submissionCounts.map(key=>[key,0])),invalid_amount:'0'});}
+   }
+   // Distinct member IDs can overlap between providers. Reuse the stored union
+   // only for one exact provider or when all source dimensions are selected.
+   const allDimensionsSelected=providerMetrics.every(metric=>wanted.has(nameOf(metric.provider)));
+   if(selected.length===1&&!unavailable.includes(selected[0]))filtered.push(...filtered.map(metric=>({...metric,provider:null})));
+   else if(!coverageIncomplete&&globalComplete&&allDimensionsSelected)filtered.push(...metrics.filter(metric=>metric.provider===null).map(metric=>({...metric})));
+   else mark(null,coverageIncomplete?'provider_coverage_required':!globalComplete?'publication_metrics_incomplete':'provider_member_union_required');
+   const projection={version:1,providers:selected.slice(),unavailableProviders:unavailable,reasons};
+   entry.current.submission={...source,metrics:filtered,dashboard:null,publishedProjection:projection,coverage:{...source.coverage,orderCount:entry.current.orders?.total,projectionBasis:'published_provider_metrics',sourceCoverage:copy(source.coverage)}};
+   if(unavailable.length)unresolvedSubmissions.push({platformId:entry.platform.id,reason:reasons[0].reason,unavailableProviders:unavailable.slice()});
+  }
+  return {bundle:projected,providers:selected,projectionComplete:unresolvedSubmissions.length===0,unresolvedSubmissions};
+ }
+ const api={eligible,contextKey,requestFor,validate,fullDay,appliedWindow,generation,intake,denied,project};
  if(typeof module==='object'&&module.exports)module.exports=api;else root.HensemProviderPublished=api;
 })(typeof window==='object'?window:globalThis);
