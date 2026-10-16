@@ -1,0 +1,267 @@
+[
+  {
+    "signature": "private.dashboard_admin_live_withdraw_reasons(jsonb)",
+    "body_md5": "2c8bb2274650a53f8e5fb80b57e00fd2",
+    "metadata": {
+      "oid": "62221",
+      "proacl": [
+        "postgres=X/postgres",
+        "authenticated=X/postgres"
+      ],
+      "procost": 100,
+      "prokind": "f",
+      "prolang": "13619",
+      "proname": "dashboard_admin_live_withdraw_reasons",
+      "prorows": 0,
+      "pronargs": 1,
+      "proowner": "16388",
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "proretset": false,
+      "prosecdef": true,
+      "prorettype": "3802",
+      "prosqlbody": null,
+      "prosupport": "-",
+      "proargmodes": null,
+      "proargnames": [
+        "p_request"
+      ],
+      "proargtypes": [
+        "3802"
+      ],
+      "proisstrict": false,
+      "proparallel": "u",
+      "protrftypes": null,
+      "provariadic": "0",
+      "provolatile": "s",
+      "proleakproof": false,
+      "pronamespace": "30796",
+      "proallargtypes": null,
+      "proargdefaults": null,
+      "pronargdefaults": 0
+    }
+  },
+  {
+    "signature": "private.dashboard_admin_duoli_status(text,text)",
+    "body_md5": "2c6e11c93ba7fc233cedc67378f1196d",
+    "metadata": {
+      "oid": "248951",
+      "proacl": [
+        "postgres=X/postgres"
+      ],
+      "procost": 100,
+      "prokind": "f",
+      "prolang": "14",
+      "proname": "dashboard_admin_duoli_status",
+      "prorows": 0,
+      "pronargs": 2,
+      "proowner": "16388",
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "proretset": false,
+      "prosecdef": false,
+      "prorettype": "25",
+      "prosqlbody": null,
+      "prosupport": "-",
+      "proargmodes": null,
+      "proargnames": [
+        "p_business",
+        "p_status"
+      ],
+      "proargtypes": [
+        "25",
+        "25"
+      ],
+      "proisstrict": false,
+      "proparallel": "u",
+      "protrftypes": null,
+      "provariadic": "0",
+      "provolatile": "i",
+      "proleakproof": false,
+      "pronamespace": "30796",
+      "proallargtypes": null,
+      "proargdefaults": null,
+      "pronargdefaults": 0
+    }
+  },
+  {
+    "signature": "private.dashboard_admin_duoli_amount(text,text,text,text)",
+    "body_md5": "de85673f9c4994b29acfa28606a82fa4",
+    "metadata": {
+      "oid": "248950",
+      "proacl": [
+        "postgres=X/postgres"
+      ],
+      "procost": 100,
+      "prokind": "f",
+      "prolang": "13619",
+      "proname": "dashboard_admin_duoli_amount",
+      "prorows": 0,
+      "pronargs": 4,
+      "proowner": "16388",
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "proretset": false,
+      "prosecdef": false,
+      "prorettype": "1700",
+      "prosqlbody": null,
+      "prosupport": "-",
+      "proargmodes": null,
+      "proargnames": [
+        "p_business",
+        "p_currency",
+        "p_field",
+        "p_raw"
+      ],
+      "proargtypes": [
+        "25",
+        "25",
+        "25",
+        "25"
+      ],
+      "proisstrict": false,
+      "proparallel": "u",
+      "protrftypes": null,
+      "provariadic": "0",
+      "provolatile": "i",
+      "proleakproof": false,
+      "pronamespace": "30796",
+      "proallargtypes": null,
+      "proargdefaults": null,
+      "pronargdefaults": 0
+    }
+  },
+  {
+    "signature": "private.dashboard_admin_order_business_text(text)",
+    "body_md5": "8cd808648f88c489cd7a162082a2b611",
+    "metadata": {
+      "oid": "357411",
+      "proacl": [
+        "postgres=X/postgres"
+      ],
+      "procost": 100,
+      "prokind": "f",
+      "prolang": "14",
+      "proname": "dashboard_admin_order_business_text",
+      "prorows": 0,
+      "pronargs": 1,
+      "proowner": "16388",
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "proretset": false,
+      "prosecdef": false,
+      "prorettype": "25",
+      "prosqlbody": null,
+      "prosupport": "-",
+      "proargmodes": null,
+      "proargnames": [
+        "v"
+      ],
+      "proargtypes": [
+        "25"
+      ],
+      "proisstrict": false,
+      "proparallel": "u",
+      "protrftypes": null,
+      "provariadic": "0",
+      "provolatile": "i",
+      "proleakproof": false,
+      "pronamespace": "30796",
+      "proallargtypes": null,
+      "proargdefaults": null,
+      "pronargdefaults": 0
+    }
+  },
+  {
+    "signature": "private.duoli_business_notes_valid(jsonb)",
+    "body_md5": "a264f22beaac15c3457791b910ac5984",
+    "metadata": {
+      "oid": "425010",
+      "proacl": [
+        "postgres=X/postgres"
+      ],
+      "procost": 100,
+      "prokind": "f",
+      "prolang": "13619",
+      "proname": "duoli_business_notes_valid",
+      "prorows": 0,
+      "pronargs": 1,
+      "proowner": "16388",
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "proretset": false,
+      "prosecdef": false,
+      "prorettype": "16",
+      "prosqlbody": null,
+      "prosupport": "-",
+      "proargmodes": null,
+      "proargnames": [
+        "p_notes"
+      ],
+      "proargtypes": [
+        "3802"
+      ],
+      "proisstrict": false,
+      "proparallel": "u",
+      "protrftypes": null,
+      "provariadic": "0",
+      "provolatile": "i",
+      "proleakproof": false,
+      "pronamespace": "30796",
+      "proallargtypes": null,
+      "proargdefaults": null,
+      "pronargdefaults": 0
+    }
+  },
+  {
+    "signature": "private.duoli_detail_keys(jsonb,text[],boolean)",
+    "body_md5": "c7c13a3e382b8328fc1d466261cfdf11",
+    "metadata": {
+      "oid": "165319",
+      "proacl": [
+        "postgres=X/postgres"
+      ],
+      "procost": 100,
+      "prokind": "f",
+      "prolang": "14",
+      "proname": "duoli_detail_keys",
+      "prorows": 0,
+      "pronargs": 3,
+      "proowner": "16388",
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "proretset": false,
+      "prosecdef": false,
+      "prorettype": "16",
+      "prosqlbody": null,
+      "prosupport": "-",
+      "proargmodes": null,
+      "proargnames": [
+        "p_obj",
+        "p_allowed",
+        "p_exact"
+      ],
+      "proargtypes": [
+        "3802",
+        "1009",
+        "16"
+      ],
+      "proisstrict": false,
+      "proparallel": "u",
+      "protrftypes": null,
+      "provariadic": "0",
+      "provolatile": "i",
+      "proleakproof": false,
+      "pronamespace": "30796",
+      "proallargtypes": null,
+      "proargdefaults": "({CONST :consttype 16 :consttypmod -1 :constcollid 0 :constlen 1 :constbyval true :constisnull false :location -1 :constvalue 1 [ 1 0 0 0 0 0 0 0 ]})",
+      "pronargdefaults": 1
+    }
+  }
+]
