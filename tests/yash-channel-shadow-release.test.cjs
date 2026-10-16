@@ -97,6 +97,16 @@ test('metadata capacity accounting enforces 256 MiB without serializing prior pr
   await assert.rejects(value('select private.yash_channel_shadow_refresh($1)value',[batch]),/yash_shadow_capacity/);
  }finally{await db.exec('rollback');}assert.deepEqual(await heads(),old);
 });
+test('2048 real referenced hot artifacts block promotion and roll back every earlier replacement', {skip:expectedJobs!==90},async()=>{
+ const old=await heads(),body=await value("select prosrc value from pg_proc where oid='private.dashboard_admin_yash_order_source()'::regprocedure");await db.exec('begin');try{
+  await db.exec("set local yash.test_extra_count='2048';set local yash.test_base_date='2020-01-01';set local yash.test_padding='12000';set local yash.test_component='intake';set local yash.test_hot='true'");await db.exec(read('tests/fixtures/yash-channel-scale-heads.sql'));
+  const full=await heads();assert.equal(full.length,2138);assert.equal(await value("select artifacts::int value from private.provider_snapshot_storage_usage where storage_class='hot'"),2048);assert.equal(await value("select count(*)::int value from private.provider_snapshot_heads h join private.provider_snapshot_artifacts a on a.id=h.snapshot_id join private.provider_snapshot_jobs j on j.id=a.job_id where private.provider_snapshot_storage_class(j.target,j.window_from,j.window_to)='hot'"),2048);
+  const r=await value('select private.yash_channel_shadow_refresh($1)value',[batch]);assert.equal(r.items,2138);assert.equal(r.pending,2048);
+  for(let pending=2048;pending>0;){const copied=await value('select private.yash_channel_shadow_copy($1,100)value',[batch]);assert(copied.items>0);pending=copied.remaining;}
+  await db.exec('savepoint full_hot_promote');await assert.rejects(db.exec(promote(batch).replace(/^begin;$/m,'').replace(/^commit;$/m,'')),/snapshot_artifact_capacity/);await db.exec('rollback to full_hot_promote');
+  assert.deepEqual(await heads(),full);assert.equal(await value('select count(*)::int value from private.provider_snapshot_artifacts'),2138);assert.equal(await value("select prosrc value from pg_proc where oid='private.dashboard_admin_yash_order_source()'::regprocedure"),body);assert.equal(await value("select artifacts::int value from private.provider_snapshot_storage_usage where storage_class='hot'"),2048);
+ }finally{await db.exec('rollback');}assert.deepEqual(await heads(),old);
+});
 test('a committed ordinary-worker lease makes shadow recomputation yield without touching the pending item',async()=>{
  await db.exec('begin');try{
   await db.exec("update private.yash_channel_shadow_items set payload=null,provenance=null where job_id=(select job_id from private.yash_channel_shadow_items where mode='recompute_yash'limit 1);update private.provider_snapshot_jobs set status='running',lease_until=clock_timestamp()+interval'1 minute'where id=(select job_id from private.yash_channel_shadow_items where mode='reuse_equivalent'limit 1)");

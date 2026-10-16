@@ -3,11 +3,11 @@
 -- historical heads. No source orders, credentials, production data or network.
 -- The completed-head seed uses the actual tables, immutability and quota triggers.
 with targets as materialized(select target,private.provider_snapshot_dependency_token(target)dep from private.provider_snapshot_targets),
-windows as(select t.*,g,case when coalesce(nullif(current_setting('yash.test_extra_count',true),''),'1494')::integer>=2102
+windows as(select t.*,g,coalesce(nullif(current_setting('yash.test_component',true),''),case when coalesce(nullif(current_setting('yash.test_extra_count',true),''),'1494')::integer>=2102
  then case when g<=46 then'orders'when g<=70 then'submission'else'intake'end
- else case when g<=50 then case when g%2=0 then'orders'else'submission'end else'intake'end end component,
+ else case when g<=50 then case when g%2=0 then'orders'else'submission'end else'intake'end end)component,
  (coalesce(nullif(current_setting('yash.test_base_date',true),''),'2025-01-01')::date+g)::timestamp at time zone'Asia/Kolkata'f,
- (coalesce(nullif(current_setting('yash.test_base_date',true),''),'2025-01-01')::date+g+1)::timestamp at time zone'Asia/Kolkata'e,
+ ((coalesce(nullif(current_setting('yash.test_base_date',true),''),'2025-01-01')::date+g+1)::timestamp at time zone'Asia/Kolkata')-case when current_setting('yash.test_hot',true)='true'then interval'1minute'else interval'0'end e,
  row_number()over(order by g,(t.target->>'source'='kb')desc,t.target->>'id')ordinal from targets t cross join generate_series(1,ceil(coalesce(nullif(current_setting('yash.test_extra_count',true),''),'1494')::numeric/18)::integer)g),
 requests as(select *,jsonb_build_object('action','aggregate','view','providers','platformId',target->'id',
  'startAt',private.provider_snapshot_iso(f),'endAt',private.provider_snapshot_iso(e),'direction','charge','status','all','currency','INR','offset',0,'limit',20)q from windows where ordinal<=coalesce(nullif(current_setting('yash.test_extra_count',true),''),'1494')::integer),
