@@ -44,12 +44,12 @@ function harness(options={}){
  const pages=keys.map(k=>[k,'',k,'',k]),groups=[['analysis','','数据分析',keys.filter(k=>!merchantKeys.includes(k))],['merchant','','商户中心',merchantKeys]];
  class FixedDate extends Date{constructor(...args){super(...(args.length?args:[clock]))}static now(){return clock}}
  class TestURL extends URL{static createObjectURL(blob){blobs.push(blob);return 'blob:synthetic'}static revokeObjectURL(){}}
- const context={console,Intl,AbortController,Date:FixedDate,URL:TestURL,Blob,state:{page:options.page||'overview',navGroup:'analysis'},pages,navGroupsV3:groups,location:{hash:''},
+ const context={console,Intl,AbortController,TextEncoder,Date:FixedDate,URL:TestURL,Blob,state:{page:options.page||'overview',navGroup:'analysis'},pages,navGroupsV3:groups,location:{hash:''},
   document:{title:'',body:{classList:{add(){},remove(){}},appendChild(n){nodes.set(n.id,n)}},getElementById:id=>nodes.get(id)||null,querySelector:selector=>nodes.get(selector)||null,createElement:tag=>node(tag)},
   render(){nodes.get('page').innerHTML='INDEPENDENT_SNAPSHOT'},syncFilters(){},groupForV3:key=>groups.find(g=>g[3].includes(key))||groups[0],toggleCenterV3(){},setPage(){},headerIconV3:()=>'<svg></svg>',openDrawer:(title,html)=>drawers.push({title,html}),toast(){},scrollTo(x,y){context.scrollX=x;context.scrollY=y;scrolled.push([x,y])},
   setInterval:(fn,ms)=>{intervals.push({fn,ms});return intervals.length},clearInterval(){},setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},
   hensemRoleAccess:options.roleAccess,hensemRoleAllowed:options.roleAllowed,HENSEM_PRODUCTION:options.production!==false,hensemAdminInitialPage:options.initialPage,hensemAdminPageUrl:key=>'https://dashboard.example/app/#owner-admin-preview/'+key,scrollX:0,scrollY:0,
-  hensemLiveRequest:async request=>{calls.push(JSON.parse(JSON.stringify(request)));if(!options.ancillaryHandler&&request.action==='providerOptions')return {providers:['Synthetic provider']};if(!options.ancillaryHandler&&request.action==='workorders')return {rows:[],byProvider:[],total:0,summary:{},byDirection:{}};if(handler)return handler(request);if(request.action==='catalog')return {platforms:options.platforms||[P]};if(request.action==='details')return detail((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65,request.offset,request.limit);if(request.action==='rates')return {rows:[],total:0,options:{countries:[],platforms:[],providers:[]}};if(request.action==='payoutConfig')return payoutConfig(request,(options.platforms||[P]).length>0);return aggregate((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65)}
+  hensemLiveRequest:async request=>{calls.push(JSON.parse(JSON.stringify(request)));if(!options.ancillaryHandler&&request.action==='providerOptions')return {providers:['Synthetic provider']};if(!options.ancillaryHandler&&request.action==='workorders')return {rows:[],byProvider:[],total:0,summary:{},byDirection:{}};if(handler)return handler(request);if(request.action==='catalog')return {platforms:options.platforms||[P]};if(request.action==='aggregatePrepared')return {version:1,items:request.requests.map(q=>({request:q,status:'ready',publication:{id:'navigation-fixture',generation:1,computedAt:new Date(clock-60000).toISOString(),expiresAt:new Date(clock+540000).toISOString(),cutoff:new Date(clock-60000).toISOString(),calculationComplete:true,sourceComplete:false},result:{...aggregate((options.platforms||[P]).find(p=>p.id===q.platformId)||P),startAt:q.startAt,endAt:q.endAt,successStartAt:q.successStartAt,successEndAt:q.successEndAt,successBasis:q.successBasis}}))};if(request.action==='details')return detail((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65,request.offset,request.limit);if(request.action==='rates')return {rows:[],total:0,options:{countries:[],platforms:[],providers:[]}};if(request.action==='payoutConfig')return payoutConfig(request,(options.platforms||[P]).length>0);return aggregate((options.platforms||[P]).find(p=>p.id===request.platformId)||P,65)}
  };if(options.observe)context.IntersectionObserver=class{constructor(callback){observations.push(callback)}observe(){}disconnect(){}};context.window=context;vm.createContext(context);vm.runInContext(comparisonSource,context,{filename:'live-comparison.js',timeout:2000});for(const module of layoutSources.filter(m=>m.name!=='live-report-data.js'||options.reports))vm.runInContext(module.source,context,{filename:module.name,timeout:2000});if(options.submission){vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-submission-analysis.js'),'utf8'),context);if(options.onSubmissionQuery){const create=context.HensemSubmissionAnalysis.create;context.HensemSubmissionAnalysis.create=config=>create({...config,query(...args){options.onSubmissionQuery();return config.query(...args)}})}}for(const name of options.extraModules||[])vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8'),context,{filename:name,timeout:2000});options.beforeLive?.(context);vm.runInContext(source,context,{filename:'live-data.js',timeout:2000});
  return {c:context,L:context.adminLive,calls,writes,nodes,drawers,intervals,timers,blobs,scrolled,observations,setHandler:fn=>handler=fn,setNow:value=>clock=Date.parse(value),html:()=>nodes.get('page').innerHTML};
 }
@@ -619,14 +619,14 @@ test('expired-query cancellation cannot restore an old fee snapshot and partial 
 });
 
 test('daily comparison explicit queries share the same fee TTL and force contract',async()=>{
- const h=await ready({extraModules:['live-daily-comparison.js'],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});h.c.setPage('daily_comparison');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T23:59:59';
+ const h=await ready({extraModules:['live-statistic-windows.js','live-prepared-aggregates.js','live-daily-comparison.js'],platforms:[{...P,sourceName:P.name}],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});h.c.setPage('daily_comparison');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T23:59:59';
  const count=()=>h.calls.filter(q=>q.action==='rates').length;
  await h.c.liveQuery(false);await settle();assert.equal(count(),1);await h.c.liveQuery(false);await settle();assert.equal(count(),1);
  h.setNow('2026-09-23T12:05:01Z');h.c.render();assert.equal(count(),1);await h.c.liveQuery(false);await settle();assert.equal(count(),2);
  await h.c.liveQuery(true);await settle();assert.equal(count(),3);
  await h.c.liveDailyQuery();await settle();assert.equal(count(),4,'inline daily query uses the same force preparation');
  h.setNow('2026-09-23T12:10:02Z');await h.c.liveDailyContinue();await settle();assert.equal(count(),5,'inline continue expires the fee snapshot on this explicit query');
- h.c.liveDailyStatisticsDate('2026-09-21');await h.c.liveDailyWorkorderQuery();await settle();assert.equal(count(),6,'inline query from a changed scope shares the same preparation');
+ for(const field of ['from','successFrom'])h.c.liveMetricTimeSet(field,'2026-09-21T00:00:00');for(const field of ['to','successTo'])h.c.liveMetricTimeSet(field,'2026-09-21T23:59:59');await h.c.liveDailyWorkorderQuery();await settle();assert.equal(count(),6,'inline query from a changed scope shares the same preparation');
 });
 
 
@@ -658,7 +658,7 @@ test('unknown fee totals and changing paginated totals are never cached as compl
 });
 
 test('an inline daily query cancels an older fee batch and starts one replacement directory read',async()=>{
- const h=await ready({extraModules:['live-daily-comparison.js'],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});h.c.setPage('daily_comparison');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T23:59:59';
+ const h=await ready({extraModules:['live-statistic-windows.js','live-prepared-aggregates.js','live-daily-comparison.js'],platforms:[{...P,sourceName:P.name}],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});h.c.setPage('daily_comparison');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T23:59:59';
  const request=h.c.hensemLiveRequest,old=deferred();let calls=0,signal;
  h.c.hensemLiveRequest=(q,options)=>q.action==='rates'?(++calls===1?(signal=options.signal,old.promise):Promise.resolve({rows:[{id:'fresh-daily'}],total:1})):request(q,options);
  await h.c.liveDailyQuery();await settle();assert.equal(calls,1);await h.c.liveDailyQuery();await settle();assert.equal(signal.aborted,true);assert.equal(calls,2);assert.equal(h.L.feeLookupRows[0].id,'fresh-daily');
@@ -696,7 +696,7 @@ test('invalid selected-provider limit directories stay unknown without a second 
 });
 
 test('selected-provider daily entry points share the directory prepared for bands without duplicate fee requests',async()=>{
- const h=await ready({extraModules:['live-amount-bands.js','live-daily-comparison.js'],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});
+ const h=await ready({extraModules:['live-amount-bands.js','live-statistic-windows.js','live-prepared-aggregates.js','live-daily-comparison.js'],platforms:[{...P,sourceName:P.name}],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});
  h.c.setPage('providers');h.c.liveSet('provider','Synthetic provider');await h.c.liveQuery(false);await settle();const count=()=>h.calls.filter(q=>q.action==='rates').length;assert.equal(count(),1);
  h.c.setPage('daily_comparison');h.c.liveSet('provider','Synthetic provider');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T23:59:59';
  await h.c.liveQuery(false);await settle();assert.equal(count(),1,'daily reuses the same actor-wide complete directory');await h.c.liveDailyQuery();await settle();assert.equal(count(),2,'inline force query rereads once');await h.c.liveDailyContinue();await settle();assert.equal(count(),2);await h.c.liveRetryFeeLookup();await settle();assert.equal(count(),3,'explicit fee retry reads one replacement');

@@ -42,7 +42,7 @@ test('native DST gaps and repeated hours reject either range instead of picking 
  assert.throws(()=>api.request(state(),{},instant),/时区/);assert.throws(()=>api.request(state(),{timezone:''},instant));
 });
 test('shared controls cover aggregate pages and do not alter daily/native-detail/snapshot domains',()=>{
- for(const page of ['overview','merchants','success_analysis','teamops','teamcountries','teamplatforms','providers','provider_payout','collection','payout','time','amount','matrix','provider_daily','latency','risk'])assert.equal(api.enabled(page),true,page);
- for(const page of ['daily_comparison','orders','stuck','events','auto_withdraw','withdraw_operators','deposit_statistics','workorders'])assert.equal(api.enabled(page),false,page);
+ for(const page of ['overview','merchants','success_analysis','teamops','teamcountries','teamplatforms','daily_comparison','providers','provider_payout','collection','payout','time','amount','matrix','provider_daily','latency','risk'])assert.equal(api.enabled(page),true,page);
+ for(const page of ['orders','stuck','events','auto_withdraw','withdraw_operators','deposit_statistics','workorders'])assert.equal(api.enabled(page),false,page);
  assert.deepEqual(plain(api.fields),['from','to','successFrom','successTo','successBasis']);
 });

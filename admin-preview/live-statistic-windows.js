@@ -2,7 +2,7 @@
 (function(root){
  'use strict';
  const fields=['from','to','successFrom','successTo','successBasis'];
- const aggregatePages=new Set(['overview','collection','payout','merchants','providers','provider_payout','success_analysis','time','amount','matrix','provider_daily','latency','risk','teamops','teamcountries','teamplatforms']);
+ const aggregatePages=new Set(['overview','collection','payout','merchants','providers','provider_payout','success_analysis','time','amount','matrix','provider_daily','latency','risk','teamops','teamcountries','teamplatforms','daily_comparison']);
  function valid(value){
   if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(value))return false;
   const date=new Date(value+'Z');return Number.isFinite(date.getTime())&&date.toISOString().slice(0,19)===value&&value>='2000-01-01T00:00:00';
