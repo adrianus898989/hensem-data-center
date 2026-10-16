@@ -110,7 +110,10 @@ begin
  manifest:=private.yash_channel_shadow_head_manifest();
  -- One INSERT statement observes one MVCC snapshot. Reset only source jobs that drifted.
  insert into private.yash_channel_shadow_items(batch_id,job_id,source_snapshot,source_job,source_artifact,future_token,mode)
- select b.id,j.id,a.id,to_jsonb(j),to_jsonb(a),b.tokens#>>array[j.target->>'id','after'],
+ -- Capture only immutable identity and size here. The full payload/provenance
+ -- is fetched once, in the bounded copy batch, never during manifest refresh.
+ select b.id,j.id,a.id,to_jsonb(j),jsonb_build_object('id',a.id,'job_id',a.job_id,'run_id',a.run_id,'fence',a.fence,'revision',a.revision,
+  'dependency_token',a.dependency_token,'payload_hash',a.payload_hash,'stored_bytes',a.stored_bytes,'computed_at',a.computed_at,'next_due_at',a.next_due_at),b.tokens#>>array[j.target->>'id','after'],
   case when j.target->>'source'='kb'and j.target->>'source_name'='YASH.BET'and j.component in('orders','submission')then'recompute_yash'else'reuse_equivalent'end
  from private.provider_snapshot_jobs j join private.provider_snapshot_heads h on h.job_id=j.id join private.provider_snapshot_artifacts a on a.id=h.snapshot_id
  where j.status='ready'and a.revision=j.revision and a.dependency_token=b.tokens#>>array[j.target->>'id','before']
@@ -124,7 +127,11 @@ begin
   where j.id=i.job_id and h.snapshot_id=i.source_snapshot and j.status='ready'and a.revision=j.revision and a.dependency_token=b.tokens#>>array[j.target->>'id','before']);
  if manifest<>private.yash_channel_shadow_head_manifest()then raise exception 'yash_shadow_refresh_raced';end if;
  select count(*)into total from private.yash_channel_shadow_items where batch_id=b.id;
- if total not between 90 and 2048 then raise exception 'yash_shadow_incomplete_or_oversize';end if;
+ if total not between 90 and 8192 then raise exception 'yash_shadow_incomplete_or_oversize';end if;
+ -- Reserve one prepared payload plus metadata/provenance overhead, not a second
+ -- copy of the source payload. Per-item and actual prepared-size guards remain.
+ if(select coalesce(sum(coalesce((source_artifact->>'prepared_bytes')::bigint,(source_artifact->>'stored_bytes')::bigint)+octet_length(source_job::text)+octet_length(source_artifact::text)+1024),0)
+  from private.yash_channel_shadow_items where batch_id=b.id)>268435456 then raise exception 'yash_shadow_capacity';end if;
  -- Require a full existing 18-platform current/previous orders+intake and current submission cohort.
  select x.id into c from private.provider_snapshot_cohorts x where private.yash_channel_shadow_cohort_valid(b.id,x.id)
  order by x.cutoff desc,x.created_at desc limit 1;
@@ -171,8 +178,9 @@ begin
  if jsonb_typeof(x->'payload')is distinct from'object'or x#>'{provenance,computationComplete}'is distinct from'true'::jsonb
   or octet_length((x->'payload')::text)>4194304 or octet_length((x->'provenance')::text)>64000 then raise exception 'yash_shadow_invalid_computation';end if;
  x:=jsonb_set(x,'{provenance}',(x->'provenance')||jsonb_build_object('semanticMigration',jsonb_build_object('contract','yash-pair-classification-v1','mode',i.mode,'sourceSnapshotId',i.source_snapshot,'sourcePayloadHash',i.source_artifact->>'payload_hash','preparedAt',private.provider_snapshot_iso(clock_timestamp()))));
- if(select coalesce(sum(octet_length(payload::text)+octet_length(provenance::text)),0)from private.yash_channel_shadow_items)+octet_length(x::text)>268435456 then raise exception 'yash_shadow_capacity';end if;
- update private.yash_channel_shadow_items set payload=x->'payload',provenance=x->'provenance',prepared_at=clock_timestamp()where batch_id=b.id and job_id=i.job_id;
+ update private.yash_channel_shadow_items set payload=x->'payload',provenance=x->'provenance',prepared_at=clock_timestamp(),
+  source_artifact=jsonb_set(source_artifact,'{prepared_bytes}',to_jsonb(octet_length((x->'payload')::text)+octet_length((x->'provenance')::text)))where batch_id=b.id and job_id=i.job_id;
+ if(select coalesce(sum(coalesce((source_artifact->>'prepared_bytes')::bigint,(source_artifact->>'stored_bytes')::bigint)+octet_length(source_job::text)+octet_length(source_artifact::text)+1024),0)from private.yash_channel_shadow_items)>268435456 then raise exception 'yash_shadow_capacity';end if;
  return jsonb_build_object('status','staged','jobId',i.job_id,'mode',i.mode,'remaining',(select count(*)from private.yash_channel_shadow_items where batch_id=b.id and payload is null));
 end;$fn$;
 revoke all on function private.yash_channel_shadow_step(uuid)from public,anon,authenticated,service_role;
@@ -200,14 +208,20 @@ begin
   end loop;
   if exists(select 1 from private.yash_channel_shadow_items i where i.batch_id=b.id and i.job_id=any(ids)and not exists(select 1 from private.provider_snapshot_heads h join private.provider_snapshot_jobs j on j.id=h.job_id where j.id=i.job_id and h.snapshot_id=i.source_snapshot and to_jsonb(j)=i.source_job))then raise exception 'yash_shadow_refresh_required';end if;
   if phase=1 then
-   if exists(select 1 from private.yash_channel_shadow_items i where i.batch_id=b.id and i.job_id=any(ids)
-    and(jsonb_typeof(i.source_artifact->'payload')is distinct from'object'or i.source_artifact#>'{provenance,computationComplete}'is distinct from'true'::jsonb
-      or octet_length((i.source_artifact->'payload')::text)>4194304 or octet_length((i.source_artifact->'provenance')::text)>64000))then raise exception 'yash_shadow_invalid_computation';end if;
-   update private.yash_channel_shadow_items i set payload=i.source_artifact->'payload',
-    provenance=(i.source_artifact->'provenance')||jsonb_build_object('semanticMigration',jsonb_build_object('contract','yash-pair-classification-v1','mode',i.mode,'sourceSnapshotId',i.source_snapshot,'sourcePayloadHash',i.source_artifact->>'payload_hash','preparedAt',private.provider_snapshot_iso(clock_timestamp()))),prepared_at=clock_timestamp()
-    where i.batch_id=b.id and i.job_id=any(ids);
+   if exists(select 1 from private.yash_channel_shadow_items i left join private.provider_snapshot_artifacts a on a.id=i.source_snapshot where i.batch_id=b.id and i.job_id=any(ids)
+    and(a.id is null or a.job_id<>i.job_id or a.payload_hash is distinct from i.source_artifact->>'payload_hash'
+      or jsonb_typeof(a.payload)is distinct from'object'or a.provenance->'computationComplete'is distinct from'true'::jsonb
+      or octet_length(a.payload::text)>4194304 or octet_length(a.provenance::text)>64000))then raise exception 'yash_shadow_invalid_computation';end if;
+   -- Serialize only this bounded batch once for size accounting. The global
+   -- budget sums server-computed metadata, never all previously copied payloads.
+   with copies as materialized(select i.job_id,a.payload,
+    a.provenance||jsonb_build_object('semanticMigration',jsonb_build_object('contract','yash-pair-classification-v1','mode',i.mode,'sourceSnapshotId',i.source_snapshot,'sourcePayloadHash',i.source_artifact->>'payload_hash','preparedAt',private.provider_snapshot_iso(clock_timestamp())))provenance
+    from private.yash_channel_shadow_items i join private.provider_snapshot_artifacts a on a.id=i.source_snapshot where i.batch_id=b.id and i.job_id=any(ids))
+   update private.yash_channel_shadow_items i set payload=c.payload,provenance=c.provenance,prepared_at=clock_timestamp(),
+    source_artifact=jsonb_set(i.source_artifact,'{prepared_bytes}',to_jsonb(octet_length(c.payload::text)+octet_length(c.provenance::text)))
+    from copies c where i.batch_id=b.id and i.job_id=c.job_id;
    get diagnostics n=row_count;
-   if(select coalesce(sum(octet_length(payload::text)+octet_length(provenance::text)),0)from private.yash_channel_shadow_items)>268435456 then raise exception 'yash_shadow_capacity';end if;
+   if(select coalesce(sum(coalesce((source_artifact->>'prepared_bytes')::bigint,(source_artifact->>'stored_bytes')::bigint)+octet_length(source_job::text)+octet_length(source_artifact::text)+1024),0)from private.yash_channel_shadow_items)>268435456 then raise exception 'yash_shadow_capacity';end if;
   end if;
  end loop;
  return jsonb_build_object('status','copied','items',n,'remaining',(select count(*)from private.yash_channel_shadow_items where batch_id=b.id and mode='reuse_equivalent'and payload is null));
@@ -259,7 +273,7 @@ begin
  update private.yash_channel_shadow_batches set completion_verified_xid=pg_current_xact_id()::text where id=b.id;
  for i in select *from private.yash_channel_shadow_items where batch_id=b.id order by job_id loop
   if i.payload is null then raise exception 'yash_shadow_incomplete';end if;
-  if i.mode='reuse_equivalent'and i.payload is distinct from i.source_artifact->'payload'then raise exception 'yash_shadow_copy_changed';end if;
+  if i.mode='reuse_equivalent'and i.payload is distinct from(select a.payload from private.provider_snapshot_artifacts a where a.id=i.source_snapshot and a.job_id=i.job_id)then raise exception 'yash_shadow_copy_changed';end if;
   -- The frozen normal completion protocol keeps every per-item scope, payload,
   -- provenance, lease/fence and quota check. Its transaction-only context reuses
   -- the exact target/dependency proof above, rechecked after the complete batch.

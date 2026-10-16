@@ -2,8 +2,10 @@
 const {test,before,after}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const root=path.resolve(__dirname,'..'),read=p=>fs.readFileSync(path.join(root,p),'utf8');
 const {prepare,promote}=require('../scripts/ops/build-yash-channel-release.cjs');
+const {patch}=require('../scripts/ops/build-yash-stage-refresh-patch.cjs');
+const installedHelpers=JSON.parse(read('tests/fixtures/yash-channel-shadow-installed-refresh.json'));
 const production=JSON.parse(read('tests/fixtures/yash-channel-production-functions.json'));
-const scale=process.env.YASH_RELEASE_SCALE==='1584',expectedJobs=scale?1584:90,expectedRecomputed=scale?53:3;
+const scale=Number(process.env.YASH_RELEASE_SCALE||90),expectedJobs=[90,1584,2192].includes(scale)?scale:90,expectedRecomputed=expectedJobs===2192?73:expectedJobs>90?53:3;
 function fn(source,name){const start=source.search(new RegExp('create(?: or replace)? function private\\.'+name+'\\(','i'));assert(start>=0,name);const tail=source.slice(start),m=tail.match(/as\s+(\$[a-z_]*\$)/i);const end=tail.indexOf(m[1]+';',m.index+m[0].length);return tail.slice(0,end+m[1].length+1);}
 let db,batch,targets,cohort;const unchanged=new Map();
 const value=async(q,p=[])=>(await db.query(q,p)).rows[0].value;
@@ -46,19 +48,54 @@ before(async()=>{
  await db.exec("insert into public.ar_config_targets select 'AR','IN','SYNTHETIC_'||g,'INR','印度','Asia/Kolkata'from generate_series(1,16)g;insert into public.newar_detail_platforms values('SYNTHETIC_NEWAR','IN','印度',true,null,'Asia/Kolkata','INR');");
  await db.exec("insert into public.ar_collected_orders(source_system,country_code,platform,order_kind,order_no,member_id,amount,status,applied_at,raw_channel,channel_type)select 'AR','IN','SYNTHETIC_'||p,'recharge','SYNTHETIC-'||n,'synthetic-member',10,'待支付','2026-10-07 01:00','ArbPay','Phonepe_QR'from generate_series(1,16)p cross join generate_series(1,16)n;insert into public.newar_detail_records(platform,dataset,source_id,member_id,order_number,provider,channel_type,currency,amount,status_code,status_group,created_at,raw)select 'SYNTHETIC_NEWAR','charge','SYNTHETIC-'||n,'synthetic-member','SYNTHETIC-'||n,'ArbPay','Phonepe_QR','INR',10,'0','pending','2026-10-07T01:00+05:30','{}'from generate_series(1,16)n;");
  await db.exec("insert into private.yash_orders(source_site,order_type,order_no,uid,status,amount,created_at,completed_at,source_timezone,supplier,channel,currency,raw_fields,received_at) values('yash','deposit','synthetic-phonepe','synthetic-member','充值成功',10,'2026-10-07T01:00+05:30','2026-10-07T02:00+05:30','Asia/Kolkata','ArbPay','Phonepe_QR','INR','{}',now()),('yash','deposit','synthetic-other','synthetic-member','充值成功',20,'2026-10-07T01:00+05:30','2026-10-07T02:00+05:30','Asia/Kolkata','ArbPay','Other-UPI','INR','{}',now())");
- await seedCohort();if(scale)await db.exec(read('tests/fixtures/yash-channel-scale-heads.sql'));await db.exec(prepare());await db.exec("set statement_timeout='10s'");batch=(await value('select private.yash_channel_shadow_begin() value')).batchId;
+ await seedCohort();if(expectedJobs>90){await db.query("select set_config('yash.test_extra_count',$1,false)",[String(expectedJobs-90)]);await db.exec(read('tests/fixtures/yash-channel-scale-heads.sql'));}await db.exec(prepare());
+ // Reproduce the already installed revision before applying the small patch.
+ for(const x of installedHelpers)await db.exec(x.definition.replace(/^create function /,'create or replace function '));
+ const original=await heads(),objects=await value("select jsonb_object_agg(relname,oid::text)value from pg_class where relname in('yash_channel_shadow_batches','yash_channel_shadow_items')"),fingerprint=await value('select private.yash_channel_shadow_fingerprint()value');
+ await db.exec(patch());await db.exec(patch());assert.deepEqual(await heads(),original);assert.deepEqual(await value("select jsonb_object_agg(relname,oid::text)value from pg_class where relname in('yash_channel_shadow_batches','yash_channel_shadow_items')"),objects);assert.equal(await value('select private.yash_channel_shadow_fingerprint()value'),fingerprint);
+ await db.exec("set statement_timeout='10s'");batch=(await value('select private.yash_channel_shadow_begin() value')).batchId;
 });
 after(()=>db?.close());
 test('preparation preserves live heads and stages one real YASH or equivalent copy at a time',async()=>{
  const original=await heads(),tokens=await value('select jsonb_object_agg(platform_id,private.provider_snapshot_dependency_token(target))value from private.provider_snapshot_targets');
+ const captured=await value("select jsonb_build_object('items',count(*),'payloadCopies',count(*)filter(where source_artifact?'payload'or source_artifact?'provenance'),'metadataBytes',sum(octet_length(source_artifact::text)),'sourceBytes',sum((source_artifact->>'stored_bytes')::bigint))value from private.yash_channel_shadow_items where batch_id=$1",[batch]);assert.equal(captured.items,expectedJobs);assert.equal(captured.payloadCopies,0);assert(captured.metadataBytes<expectedJobs*1024);if(expectedJobs>90)console.log('Synthetic manifest-only capture:',captured);
+ if(expectedJobs===2192){const counts=await value("select jsonb_object_agg(component,n)value from(select source_job->>'component'component,count(*)n from private.yash_channel_shadow_items where source_job#>>'{target,source}'='kb'group by 1)counts");assert.deepEqual(counts,{orders:48,submission:25,intake:49});console.log('Synthetic YASH component counts:',counts);}
  let copied=0;while(copied<expectedJobs-expectedRecomputed){const r=await value('select private.yash_channel_shadow_copy($1,100)value',[batch]);assert(r.items>0&&r.items<=100);copied+=r.items;}assert.equal(copied,expectedJobs-expectedRecomputed);
  for(let n=0;n<expectedRecomputed;n++){await db.exec('begin');const r=await value('select private.yash_channel_shadow_step($1)value',[batch]);assert.equal(r.status,'staged');const held=await value("select exists(select 1 from pg_locks where locktype='advisory'and pid=pg_backend_pid()and granted and classid=((hashtextextended('provider_snapshot_shadow_worker_v1',0)>>32)&4294967295)::oid and objid=(hashtextextended('provider_snapshot_shadow_worker_v1',0)&4294967295)::oid)value");assert.equal(held,true);await db.exec('commit');}
  assert.equal((await value('select private.yash_channel_shadow_step($1)value',[batch])).status,'prepared');assert.deepEqual(await heads(),original);
  assert.deepEqual(await value('select jsonb_object_agg(platform_id,private.provider_snapshot_dependency_token(target))value from private.provider_snapshot_targets'),tokens);
- const copies=(await db.query("select payload,provenance,source_artifact from private.yash_channel_shadow_items where batch_id=$1 and mode='reuse_equivalent'",[batch])).rows;assert.equal(copies.length,expectedJobs-expectedRecomputed);
- for(const x of copies){assert.deepEqual(x.payload,x.source_artifact.payload);assert.deepEqual(x.provenance.sourceWatermark,x.source_artifact.provenance.sourceWatermark);assert.equal(x.provenance.sourceReadCompletedAt,x.source_artifact.provenance.sourceReadCompletedAt);assert.equal(x.provenance.upstreamComplete,false);}
+ const copies=(await db.query("select i.payload,i.provenance,i.source_artifact,a.payload original_payload,a.provenance original_provenance from private.yash_channel_shadow_items i join private.provider_snapshot_artifacts a on a.id=i.source_snapshot where i.batch_id=$1 and i.mode='reuse_equivalent'",[batch])).rows;assert.equal(copies.length,expectedJobs-expectedRecomputed);
+ for(const x of copies){assert.deepEqual(x.payload,x.original_payload);assert.deepEqual(x.provenance.sourceWatermark,x.original_provenance.sourceWatermark);assert.equal(x.provenance.sourceReadCompletedAt,x.original_provenance.sourceReadCompletedAt);assert.equal(x.provenance.upstreamComplete,false);assert.equal(Object.hasOwn(x.source_artifact,'payload'),false);}
+ assert.equal(await value('select bool_and((source_artifact->>\'prepared_bytes\')::bigint=octet_length(payload::text)+octet_length(provenance::text))value from private.yash_channel_shadow_items where batch_id=$1',[batch]),true);
  const row=await value("select payload value from private.yash_channel_shadow_items where batch_id=$1 and mode='recompute_yash'and source_job->>'component'='orders'and(source_job->>'window_from')::timestamptz='2026-10-06T18:30Z'",[batch]);
  assert.equal(row.groups.provider.find(x=>x.provider==='UPI-QR').all_count,1);assert.equal(row.groups.provider.find(x=>x.provider==='ArbPay').all_count,1);
+});
+test('helper-only patch refuses live staging and unexpected installed definitions without changing heads',async()=>{
+ const old=await heads();await assert.rejects(db.exec(patch()),/patch_requires_empty_stage/);await db.exec('rollback');assert.deepEqual(await heads(),old);
+ await db.exec('begin');try{
+  await value('select private.yash_channel_shadow_discard($1)value',[batch]);
+  await db.exec("create or replace function private.yash_channel_shadow_copy(p_batch uuid,p_limit integer default 100)returns jsonb language plpgsql volatile security invoker set search_path=''as $$begin return '{}'::jsonb;end;$$");
+  await assert.rejects(db.exec(patch().replace(/^begin;$/m,'').replace(/^commit;$/m,'')),/installed_helper_changed/);
+ }finally{await db.exec('rollback');}assert.deepEqual(await heads(),old);
+});
+test('manifest budgets keep every head through 8192 and reject 8193 atomically', {skip:expectedJobs!==90},async()=>{
+ const old=await heads();await db.exec('begin');try{
+  await value('select private.yash_channel_shadow_discard($1)value',[batch]);
+  await db.exec("set local yash.test_extra_count='8102';set local yash.test_base_date='2022-01-01';set local yash.test_padding='0'");await db.exec(read('tests/fixtures/yash-channel-scale-heads.sql'));
+  const r=await value('select private.yash_channel_shadow_begin()value');assert.equal(r.items,8192);assert.equal(await value('select count(*)::int value from private.provider_snapshot_heads'),8192);
+  await value('select private.yash_channel_shadow_discard($1)value',[r.batchId]);
+  await db.exec("set local yash.test_extra_count='1';set local yash.test_base_date='2020-01-01'");await db.exec(read('tests/fixtures/yash-channel-scale-heads.sql'));
+  await db.exec('savepoint limit_attempt');await assert.rejects(value('select private.yash_channel_shadow_begin()value'),/incomplete_or_oversize/);await db.exec('rollback to limit_attempt');
+  assert.equal(await value('select count(*)::int value from private.provider_snapshot_heads'),8193);assert.equal(await value('select count(*)::int value from private.yash_channel_shadow_batches'),0);assert.equal(await value('select count(*)::int value from private.yash_channel_shadow_items'),0);
+ }finally{await db.exec('rollback');}assert.deepEqual(await heads(),old);
+});
+test('metadata capacity accounting enforces 256 MiB without serializing prior prepared payloads',async()=>{
+ const old=await heads();await db.exec('begin');try{
+  // Corrupted/over-budget accounting is rejected before any publication. The
+  // exact accounting values themselves are asserted against real payloads above.
+  await db.exec("update private.yash_channel_shadow_items set source_artifact=jsonb_set(source_artifact,'{prepared_bytes}','268435456')where job_id=(select job_id from private.yash_channel_shadow_items limit 1)");
+  await assert.rejects(value('select private.yash_channel_shadow_refresh($1)value',[batch]),/yash_shadow_capacity/);
+ }finally{await db.exec('rollback');}assert.deepEqual(await heads(),old);
 });
 test('a committed ordinary-worker lease makes shadow recomputation yield without touching the pending item',async()=>{
  await db.exec('begin');try{
@@ -116,7 +153,7 @@ test('post-patch validation failure rolls back all definitions and heads; comple
  const lateFailure=sql.replace('select private.yash_channel_shadow_promote(',"update private.yash_channel_shadow_items set payload=jsonb_set(payload,'{platform,id}','\"00000000-0000-0000-0000-000000000000\"')where job_id=(select job_id from private.yash_channel_shadow_items where mode='recompute_yash'order by job_id desc limit 1);\nselect private.yash_channel_shadow_promote(");
  await assert.rejects(db.exec(lateFailure),/snapshot_scope_mismatch/);await db.exec('rollback');assert.deepEqual(await heads(),old);assert.equal(await value('select count(*)::int value from private.provider_snapshot_artifacts'),artifactsBefore);assert.equal(await value("select prosrc value from pg_proc where oid='private.dashboard_admin_yash_order_source()'::regprocedure"),body);
  const driftFailure=sql.replace('select private.yash_channel_shadow_promote(',()=>"create function private.synthetic_yash_release_drift() returns trigger language plpgsql as $$begin if not exists(select 1 from private.dashboard_admin_provider_registry where raw_provider='synthetic-release-drift')then insert into private.dashboard_admin_provider_registry(country,platform,raw_provider,canonical_values)select 'IN',j.target->>'source_name','synthetic-release-drift',array['ChangedPay']from private.provider_snapshot_jobs j where j.id=new.job_id;end if;return new;end;$$;create trigger synthetic_yash_release_drift after insert on private.provider_snapshot_artifacts for each row execute function private.synthetic_yash_release_drift();\nselect private.yash_channel_shadow_promote(");await assert.rejects(db.exec(driftFailure),/future_token_mismatch/);await db.exec('rollback');assert.deepEqual(await heads(),old);assert.equal(await value('select count(*)::int value from private.provider_snapshot_artifacts'),artifactsBefore);assert.equal(await value("select count(*)::int value from private.dashboard_admin_provider_registry where raw_provider='synthetic-release-drift'"),0);
- const started=performance.now();await db.exec(sql);if(scale)console.log('Synthetic 1584-head atomic promotion milliseconds:',Math.round(performance.now()-started),'(not a production timing)');const fresh=await heads();assert.equal(fresh.length,expectedJobs);assert(fresh.every((h,i)=>h.job_id===old[i].job_id&&h.snapshot_id!==old[i].snapshot_id));
+ const started=performance.now();await db.exec(sql);if(expectedJobs>90)console.log('Synthetic '+expectedJobs+'-head atomic promotion milliseconds:',Math.round(performance.now()-started),'(not a production timing)');const fresh=await heads();assert.equal(fresh.length,expectedJobs);assert(fresh.every((h,i)=>h.job_id===old[i].job_id&&h.snapshot_id!==old[i].snapshot_id));
  assert.equal(await value("with tokens as materialized(select target,private.provider_snapshot_dependency_token(target)token from private.provider_snapshot_targets) select count(*)::int value from private.provider_snapshot_jobs j join tokens t on t.target=j.target join private.provider_snapshot_heads h on h.job_id=j.id join private.provider_snapshot_artifacts a on a.id=h.snapshot_id join private.yash_channel_shadow_items stage on stage.job_id=j.id where j.status='ready'and j.revision=(stage.source_job->>'revision')::bigint+1 and a.revision=j.revision and a.dependency_token=t.token"),expectedJobs);
  assert.equal(await value('select count(*)::int value from private.provider_snapshot_artifacts'),expectedJobs*2+1,'all original immutable artifacts remain');assert.equal(await value('select status value from private.provider_snapshot_cohorts where id=$1',[cohort]),'ready');
  assert.equal(await value('select private.provider_snapshot_kernel_contract_current()value'),true);await assert.rejects(value('select private.yash_channel_shadow_preflight($1)value',[batch]),/invalid_stage/);
