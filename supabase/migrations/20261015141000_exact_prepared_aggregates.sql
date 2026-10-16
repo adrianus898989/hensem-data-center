@@ -1367,10 +1367,10 @@ create or replace function private.dashboard_prepared_provider_projection(
 ) returns jsonb language plpgsql stable security invoker set search_path='' as $function$
 declare
   selected jsonb; summaries jsonb:='[]'::jsonb; result jsonb; bucket record;
-  summary jsonb; key text; value numeric; invalid boolean; total numeric;
+  summary jsonb; key text; value numeric; invalid boolean; total numeric; evidence jsonb;
   providers text[]; country text; platform text; stamp text;
-  count_keys constant text[]:=array['all_count','success_count','pending_count','failed_count','rejected_count','unknown_count','missing_amount_count','negative_amount_count','created_success_count'];
-  amount_keys constant text[]:=array['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount'];
+  count_keys constant text[]:=array['all_count','success_count','pending_count','failed_count','rejected_count','unknown_count','missing_amount_count','negative_amount_count','created_success_count','reviewed_pending_count'];
+  amount_keys constant text[]:=array['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount','created_success_amount','reviewed_pending_amount'];
 begin
   if jsonb_typeof(p_base_request) is distinct from 'object'
     or jsonb_typeof(p_request) is distinct from 'object'
@@ -1428,6 +1428,7 @@ begin
   loop
     summary:=jsonb_build_object('direction',bucket.direction,'currency',bucket.currency,'provider',null);
     foreach key in array count_keys loop
+      if key='reviewed_pending_count'and not exists(select 1 from jsonb_array_elements(bucket.leaves)r where r?key)then continue;end if;
       if exists(select 1 from jsonb_array_elements(bucket.leaves) r where r ? key)
         or exists(select 1 from jsonb_array_elements(p_payload->'summary') r where r ? key) then
         select bool_or(r->>key is null or coalesce(r->>key,'')!~'^[0-9]+$'),
@@ -1437,10 +1438,17 @@ begin
       end if;
     end loop;
     foreach key in array amount_keys loop
+      if key in('created_success_amount','reviewed_pending_amount')and not exists(select 1 from jsonb_array_elements(bucket.leaves)r where r?key)then continue;end if;
       select bool_or(r->>key is null or coalesce(r->>key,'')!~'^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'),
         sum(case when r->>key~'^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$' then (r->>key)::numeric end)
         into invalid,value from jsonb_array_elements(bucket.leaves) r;
       summary:=summary||jsonb_build_object(key,case when invalid then null else value::text end);
+    end loop;
+    -- Native clock/evidence labels are not numeric metrics. Retain a label only
+    -- when every selected provider leaf contains the identical proven value.
+    foreach key in array array['success_time_available','success_time_basis','success_available','success_unavailable_reason','fee_available','fee_unavailable_reason','pending_count_available']loop
+      select case when count(distinct r->key)=1 and bool_and(r?key)then(jsonb_agg(r->key))->0 end into evidence from jsonb_array_elements(bucket.leaves)r;
+      if evidence is not null then summary:=jsonb_set(summary,array[key],evidence);end if;
     end loop;
     select r->>'latest_synced_at' into stamp from jsonb_array_elements(bucket.leaves) r
       where r->>'latest_synced_at' is not null order by (r->>'latest_synced_at')::timestamptz desc limit 1;
@@ -1518,6 +1526,78 @@ $function$;
 revoke all on function private.dashboard_prepared_direction_projection(jsonb,jsonb,jsonb)from public,anon,authenticated,service_role;
 
 -- END direction
+
+-- BEGIN master
+-- One immutable full-v2 population supplies legacy full and provider views.
+-- No source reads, admission, authorization bypass, or percentile arithmetic.
+create or replace function private.prepared_aggregate_master_projection(
+ p_payload jsonb,p_base jsonb,p_request jsonb
+)returns jsonb language plpgsql stable security invoker set search_path=''as $fn$
+declare r jsonb:=p_payload;b jsonb:=p_base;q jsonb:=p_request;rows jsonb;thresholds jsonb;providers jsonb;summaries jsonb;profile text:=q->>'view';caps jsonb;coverage jsonb;selected_summary jsonb;
+begin
+ if b->>'view'is distinct from'full'or b->>'durationVersion'is distinct from'2'
+ or b?'durationRange'or q?'durationRange'or b->>'direction'is distinct from'all'
+ or profile not in('full','providers')or coalesce(q->>'durationVersion','1')not in('1','2')
+ or r->>'durationVersion'is distinct from'2'
+ then raise exception using errcode='22023',message='prepared_master_projection_contract';end if;
+ caps:=r#>array['_preparedDirectionCapabilities',q->>'direction'];
+ if r?'_preparedDirectionCapabilities'and jsonb_typeof(caps)is distinct from'object'then raise exception using errcode='22023',message='prepared_master_direction_capabilities';end if;
+ if caps is not null then r:=jsonb_set(r||jsonb_build_object('capabilities',caps),'{platform,capabilities}',caps);end if;
+ r:=r-'_preparedDirectionCapabilities';
+ if r?'pandaCoverage'and q->>'direction'<>'all'then
+  select jsonb_build_object('directions',coalesce(jsonb_agg(x order by x->>'direction'),'[]'::jsonb),'complete',coalesce(bool_and((x->>'complete')::boolean),false),'latestCollectedAt',max((x->>'latestCollectedAt')::timestamptz))into coverage
+   from jsonb_array_elements(r#>'{pandaCoverage,directions}')x where x->>'direction'=q->>'direction';
+  r:=jsonb_set(r,'{pandaCoverage}',r->'pandaCoverage'||coverage);
+ end if;
+ if profile='providers'then
+  if coalesce(b->>'status','all')<>'all'or coalesce(b->'providers','[]'::jsonb)<>'[]'::jsonb
+  or(b-array['view','durationVersion','amountBands','direction','providers'])is distinct from(q-array['view','durationVersion','amountBands','direction','providers'])
+  then raise exception using errcode='22023',message='prepared_master_projection_scope';end if;
+  -- Full chart grouping columns are not present in the original providers DTO.
+  select coalesce(jsonb_agg(x-array['date','hour','bucket']order by x->>'provider',x->>'direction',x->>'currency'),'[]'::jsonb)into providers from jsonb_array_elements(r#>'{groups,provider}')x;
+  select coalesce(jsonb_agg(x-array['date','hour','bucket']order by x->>'direction',x->>'currency'),'[]'::jsonb)into summaries from jsonb_array_elements(r->'summary')x;
+  r:=(r-array['durationVersion','durationRange','amountBands','amountBandsVersion','latencySummary','pendingSummary'])||jsonb_build_object('groups',jsonb_build_object('provider',providers),'summary',summaries);
+  b:=(b-array['amountBands','durationVersion'])||jsonb_build_object('view','providers');
+  q:=q-array['amountBands','durationVersion'];
+  selected_summary:=r->'summary';r:=private.dashboard_prepared_provider_projection(r,b,q);
+  if coalesce(q->'providers','[]'::jsonb)='[]'::jsonb then
+   -- Direction-only narrowing has exact existing native summaries. Keep their
+   -- creation-success amount and capability/evidence fields verbatim.
+   select coalesce(jsonb_agg(x order by x->>'direction',x->>'currency'),'[]'::jsonb)into selected_summary from jsonb_array_elements(selected_summary)x where q->>'direction'='all'or x->>'direction'=q->>'direction';
+   r:=jsonb_set(r,'{summary}',selected_summary);
+  end if;
+  return r||case when p_request->>'durationVersion'='2'then jsonb_build_object('durationVersion',2)else'{}'::jsonb end;
+ end if;
+ if(b-array['durationVersion','direction'])is distinct from(q-array['durationVersion','direction'])then raise exception using errcode='22023',message='prepared_master_projection_scope';end if;
+ -- Validate native identity and both exact windows before manipulating bins.
+ perform private.dashboard_prepared_direction_projection(r,b,b);
+ if coalesce(q->>'durationVersion','1')='1'then
+  if jsonb_typeof(r#>'{groups,latency}')is distinct from'array'or jsonb_typeof(r#>'{groups,latency_thresholds}')is distinct from'array'then raise exception using errcode='22023',message='prepared_master_latency_contract';end if;
+  -- The first three v2 bins partition the original <=5 minute bin exactly.
+  -- Any unknown amount remains unknown. All summaries/percentiles are retained
+  -- from the same population, same asOf and same immutable publication.
+  with bins as(select x,case when(x->>'bucket')::integer<3 then 0 else(x->>'bucket')::integer-2 end bucket from jsonb_array_elements(r#>'{groups,latency}')x),
+  merged as(select x->>'direction'direction,x->'currency'currency,bucket,
+   (array_agg(x order by(x->>'bucket')::integer))[1]sample,
+   sum((x->>'count')::numeric)n,case when bool_or(x->>'amount'is null)then null else sum((x->>'amount')::numeric)end amount,
+   max((x->>'max_ms')::numeric)max_ms
+   from bins group by 1,2,3)
+  select coalesce(jsonb_agg(sample||jsonb_build_object('bucket',bucket,'count',n,'amount',amount::text,
+    'min_ms',case when bucket=0 then null else(sample->>'min_ms')::numeric end,
+    'max_ms',case when bucket=0 then 300000 else(sample->>'max_ms')::numeric end,
+    'count_share',n/nullif((sample->>'valid_count')::numeric,0),
+    'amount_share',case when(sample->>'valid_amount')::numeric>0 then amount/(sample->>'valid_amount')::numeric end)
+    order by direction,currency,bucket),'[]'::jsonb)into rows from merged;
+  select coalesce(jsonb_agg(x||jsonb_build_object('bucket',(x->>'bucket')::integer-2)order by x->>'direction',x->>'currency',(x->>'bucket')::integer),'[]'::jsonb)into thresholds
+   from jsonb_array_elements(r#>'{groups,latency_thresholds}')x where(x->>'threshold_ms')::numeric>=300000;
+  r:=jsonb_set(jsonb_set(r-array['durationVersion','durationRange'],'{groups,latency}',rows),'{groups,latency_thresholds}',thresholds);
+ end if;
+ b:=(b-'durationVersion')||case when q?'durationVersion'then jsonb_build_object('durationVersion',q->'durationVersion')else'{}'::jsonb end;
+ return private.dashboard_prepared_direction_projection(r,b,q);
+end;$fn$;
+revoke all on function private.prepared_aggregate_master_projection(jsonb,jsonb,jsonb)from public,anon,authenticated,service_role;
+
+-- END master
 
 -- BEGIN mask
 -- Pure result shaping when a native source has no proven secondary clock.
@@ -1662,8 +1742,28 @@ end;$$;
 create function private.prepared_aggregate_key(q jsonb,t jsonb)returns jsonb language sql immutable set search_path=''as $$
  select jsonb_build_array('exact-prepared-v1',t,private.prepared_aggregate_canonical_request(q,t));
 $$;
+-- Only the currently prewarmed INR provider population is promoted to full.
+-- Closed provider-only days and other native defaults keep their cheaper kernel.
+-- Full views across every native source share v2 when no custom duration range
+-- is requested. Every filtering field and all four time boundaries survive.
+create function private.prepared_aggregate_base_request(q jsonb,t jsonb,p_now timestamptz default now())returns jsonb language plpgsql stable set search_path=''as $$
+declare r jsonb;
+begin
+ -- Custom duration requests stay exact, including direction. Their native
+ -- coverage/capability contract is not inferred from a broader default DTO.
+ if q?'durationRange'then return q;end if;
+ r:=case when coalesce(q->>'view','full')='providers'then(q-array['providers','amountBands'])||jsonb_build_object('direction','all')else q||jsonb_build_object('direction','all')end;
+ if private.prepared_aggregate_request_reason(r,t)is not null then return q;end if;
+ if not(r?'durationRange')and coalesce(r->>'durationVersion','1')in('1','2')then
+  if coalesce(r->>'view','full')='full'then return r||jsonb_build_object('view','full','durationVersion',2);end if;
+  if t->>'scope_group'='IN'and greatest((r->>'endAt')::timestamptz,coalesce(r->>'successEndAt',r->>'endAt')::timestamptz)>p_now-interval'24hours'then
+   return r||jsonb_build_object('view','full','durationVersion',2,'amountBands','{"charge":[100,200,300,400,500,1000,2000,5000,10000,20000,50000],"withdraw":[100,200,300,400,500,1000,2000,5000,10000,20000,50000]}'::jsonb);
+  end if;
+ end if;
+ return r;
+end;$$;
 create function private.prepared_aggregate_echo(payload jsonb,q jsonb,t jsonb)returns jsonb language sql immutable set search_path=''as $$
- select payload||jsonb_build_object('offset',coalesce((q->>'offset')::integer,0),'limit',coalesce((q->>'limit')::integer,20),
+ select (payload-'_preparedDirectionCapabilities')||jsonb_build_object('offset',coalesce((q->>'offset')::integer,0),'limit',coalesce((q->>'limit')::integer,20),
  'hasMore',case when payload->>'total'is null then null else(payload->>'total')::numeric>coalesce((q->>'offset')::integer,0)+coalesce((q->>'limit')::integer,20)end,'startAt',q->>'startAt','endAt',q->>'endAt','successStartAt',coalesce(q->>'successStartAt',q->>'startAt'),
  'successEndAt',coalesce(q->>'successEndAt',q->>'endAt'),'successBasis',coalesce(q->>'successBasis',case when t->>'source'='duoli' then 'source_updated' else 'success' end))
  ||case when q?'amountBands'then jsonb_build_object('amountBands',q->'amountBands','amountBandsVersion',1)else '{}'::jsonb end;
@@ -1680,8 +1780,9 @@ begin
  if found then
   update private.prepared_aggregate_jobs set last_requested_at=clock_timestamp(),priority=greatest(priority,p_priority),
    revision=revision+case when dependency<>dep or target<>t then 1 else 0 end,
-   status=case when dependency<>dep or target<>t then 'queued' when status='failed'and attempts<3 and not_before<=clock_timestamp()then'queued'else status end,
-   attempts=case when dependency<>dep or target<>t then 0 else attempts end,dependency=dep,target=t,not_before=case when dependency<>dep or target<>t then clock_timestamp()else not_before end,
+   status=case when dependency<>dep or target<>t or last_error='superseded_by_full_master' then 'queued' when status='failed'and attempts<3 and not_before<=clock_timestamp()then'queued'else status end,
+   attempts=case when dependency<>dep or target<>t or last_error='superseded_by_full_master' then 0 else attempts end,dependency=dep,target=t,not_before=case when dependency<>dep or target<>t or last_error='superseded_by_full_master' then clock_timestamp()else not_before end,
+   last_error=case when last_error='superseded_by_full_master'then null else last_error end,
    lease_until=case when dependency<>dep or target<>t then null else lease_until end where id=j.id;
   return j.id;
  end if;
@@ -1690,6 +1791,21 @@ begin
  insert into private.prepared_aggregate_jobs(request_key,target,request,dependency,priority)values(k,t,q,dep,p_priority)
  on conflict(request_fingerprint)do update set last_requested_at=excluded.last_requested_at where private.prepared_aggregate_jobs.request_key=excluded.request_key returning id into j.id;
  return j.id;
+end;$$;
+
+-- Retire only an exact redundant prepared job after its replacement has a
+-- valid immutable publication. Never cancel a running lease or touch the
+-- separate provider_snapshot queue: its orders and ancillary consumers remain.
+create function private.prepared_aggregate_retire_replaced(q jsonb,t jsonb,baseq jsonb,dep text)returns boolean language plpgsql volatile set search_path=''as $$
+declare oldkey jsonb:=private.prepared_aggregate_key(q,t);basekey jsonb:=private.prepared_aggregate_key(baseq,t);n integer;
+begin
+ if current_user<>'postgres'then raise exception using errcode='42501',message='prepared_worker_denied';end if;
+ if oldkey=basekey then return false;end if;
+ if not exists(select 1 from private.prepared_aggregate_jobs j join private.prepared_aggregate_heads h on h.job_id=j.id join private.prepared_aggregate_artifacts a on a.id=h.artifact_id
+  where j.request_fingerprint=md5(basekey::text)and j.request_key=basekey and j.target=t and j.dependency=dep and a.dependency=dep and a.revision=j.revision and a.expires_at>clock_timestamp())then return false;end if;
+ update private.prepared_aggregate_jobs set status='failed',attempts=3,last_error='superseded_by_full_master',next_due_at=null,lease_until=null
+ where request_fingerprint=md5(oldkey::text)and request_key=oldkey and target=t and status<>'running'and last_error is distinct from'superseded_by_full_master';
+ get diagnostics n=row_count;return n>0;
 end;$$;
 
 -- All members of a batch are authorized before the first enqueue. This is a
@@ -1720,11 +1836,11 @@ begin
  for q,t in select r.value,x.value from jsonb_array_elements(p_request->'requests')with ordinality r(value,n)join jsonb_array_elements(targets)with ordinality x(value,n)using(n)loop
   reason:=private.prepared_aggregate_request_reason(q,t);
   if reason is not null then items:=items||jsonb_build_array(jsonb_build_object('request',q,'status','unsupported','reason',reason,'publication',null,'result',null));continue;end if;
-  scope:=case when t->>'source'='game66'then'IN'else t->>'scope_group'end;common:=commons->>scope;if common is null then common:=private.prepared_aggregate_dependency_common(scope);commons:=commons||jsonb_build_object(scope,common);end if;dep:=private.prepared_aggregate_dependency(t,common);baseq:=case when coalesce(q->>'view','full')='providers'then(q-array['providers','amountBands'])||jsonb_build_object('direction','all')else q||jsonb_build_object('direction','all')end;if private.prepared_aggregate_request_reason(baseq,t)is not null then baseq:=q;end if;k:=private.prepared_aggregate_key(baseq,t);payload:=null;
+  scope:=case when t->>'source'='game66'then'IN'else t->>'scope_group'end;common:=commons->>scope;if common is null then common:=private.prepared_aggregate_dependency_common(scope);commons:=commons||jsonb_build_object(scope,common);end if;dep:=private.prepared_aggregate_dependency(t,common);baseq:=private.prepared_aggregate_base_request(q,t);k:=private.prepared_aggregate_key(baseq,t);payload:=null;
   select *into j from private.prepared_aggregate_jobs where request_fingerprint=md5(k::text)and request_key=k;
   select a0.*into a from private.prepared_aggregate_heads h join private.prepared_aggregate_artifacts a0 on a0.id=h.artifact_id where h.job_id=j.id;
   if a.id is not null and a.revision=j.revision and a.dependency=dep and j.dependency=dep and j.target=t and a.expires_at>clock_timestamp()then
-   payload:=case when coalesce(q->>'view','full')='providers'then private.dashboard_prepared_provider_projection(a.payload,private.prepared_aggregate_canonical_request(baseq,t),private.prepared_aggregate_canonical_request(q,t))when baseq->>'direction'='all'then private.dashboard_prepared_direction_projection(a.payload,private.prepared_aggregate_canonical_request(baseq,t),private.prepared_aggregate_canonical_request(q,t))else a.payload end;
+   payload:=case when baseq->>'view'='full'and baseq->>'durationVersion'='2'and not(baseq?'durationRange')then private.prepared_aggregate_master_projection(a.payload,private.prepared_aggregate_canonical_request(baseq,t),private.prepared_aggregate_canonical_request(q,t))when coalesce(q->>'view','full')='providers'then private.dashboard_prepared_provider_projection(a.payload,private.prepared_aggregate_canonical_request(baseq,t),private.prepared_aggregate_canonical_request(q,t))when baseq->>'direction'='all'then private.dashboard_prepared_direction_projection(a.payload,private.prepared_aggregate_canonical_request(baseq,t),private.prepared_aggregate_canonical_request(q,t))else a.payload end;
    update private.prepared_aggregate_jobs set last_requested_at=clock_timestamp()where id=j.id and last_requested_at<clock_timestamp()-interval'5minutes';
    items:=items||jsonb_build_array(jsonb_build_object('request',q,'status','ready','publication',jsonb_build_object('id',a.id,'generation',a.revision::text||':'||a.fence::text,'computedAt',a.computed_at,'expiresAt',a.expires_at,'cutoff',a.cutoff,'calculationComplete',true,'sourceComplete',a.source_complete),
     'result',private.prepared_aggregate_echo(coalesce(payload,a.payload),q,t)));
@@ -1890,12 +2006,31 @@ begin
  return jsonb_build_object('published',true,'id',aid,'generation',j.revision::text||':'||j.fence::text);
 end;$$;
 create function private.prepared_aggregate_compute(q jsonb,t jsonb)returns jsonb language plpgsql stable set search_path=''set jit='off'as $$
-declare request jsonb;result jsonb;reason text;secondary text;missing_direction text;
+declare request jsonb;result jsonb;reason text;secondary text;missing_direction text;direction_caps jsonb:='{}';d text;c jsonb;native_old jsonb;native_new jsonb;k text;
 begin
  reason:=private.prepared_aggregate_request_reason(q,t);if reason is not null then raise exception using errcode='22023',message=reason;end if;
  request:=private.prepared_aggregate_expand_provider_filter(q,t);
  result:=private.prepared_aggregate_raw_kernel(request,jsonb_build_array(t));
  result:=private.provider_snapshot_orders_result_kernel(result,request);
+ -- Preserve the exact native directional capability contract inside the
+ -- immutable master. Readers can then narrow an all-direction population
+ -- without consulting source tables or guessing missing-clock metadata.
+ if q->>'view'='full'and q->>'durationVersion'='2'then
+  foreach d in array array['all','charge','withdraw']loop
+   c:=coalesce(result->'capabilities','{}'::jsonb);native_old:='{}';native_new:='{}';
+   if t->>'source'='wg'then native_old:=private.dashboard_admin_wg_capabilities(coalesce(q->>'direction','all'));native_new:=private.dashboard_admin_wg_capabilities(d);
+   elsif t->>'source'='panda'then native_old:=private.dashboard_admin_panda_capabilities(coalesce(q->>'direction','all'));native_new:=private.dashboard_admin_panda_capabilities(d);end if;
+   c:=(c-coalesce((select array_agg(key)from jsonb_object_keys(native_old)key),array[]::text[]))||native_new;
+   foreach k in array array['successTimeBasis','successCohort','independentSuccessWindow']loop if result->'capabilities'?k then c:=jsonb_set(c,array[k],result->'capabilities'->k);end if;end loop;
+   secondary:=private.prepared_aggregate_secondary_reason(q||jsonb_build_object('direction',d),t);
+   if secondary is not null then
+    missing_direction:=case when t->>'source'='wg'and d='all'then'withdraw'when t->>'source'='game66'and q->>'successBasis'='source_updated'and d='all'then'charge'else'all'end;
+    c:=private.prepared_aggregate_mask_secondary(jsonb_build_object('summary','[]'::jsonb,'groups','{}'::jsonb,'capabilities',c),secondary,missing_direction)->'capabilities';
+   end if;
+   direction_caps:=direction_caps||jsonb_build_object(d,c);
+  end loop;
+  result:=result||jsonb_build_object('_preparedDirectionCapabilities',direction_caps);
+ end if;
  secondary:=private.prepared_aggregate_secondary_reason(q,t);
  if secondary is not null then
   missing_direction:=case when t->>'source'='wg'and coalesce(q->>'direction','all')='all'then'withdraw'when t->>'source'='game66'and q->>'successBasis'='source_updated'and coalesce(q->>'direction','all')='all'then'charge'else'all'end;
@@ -1934,7 +2069,7 @@ end;$$;
 -- Full/custom requests are admitted by real authorized use and refreshed while
 -- recently used; they are never multiplied across every source by the planner.
 create function private.prepared_aggregate_prewarm(p_now timestamptz default now())returns jsonb language plpgsql volatile set search_path=''as $$
-declare state private.prepared_aggregate_schedule%rowtype;t jsonb;d date;offset_day integer;q jsonb;dep text;n integer:=0;last_id uuid;last_tier smallint;commons jsonb:='{}';scope text;common text;
+declare state private.prepared_aggregate_schedule%rowtype;t jsonb;d date;offset_day integer;q jsonb;baseq jsonb;dep text;n integer:=0;jobs integer:=0;last_id uuid;last_tier smallint;commons jsonb:='{}';scope text;common text;
 begin
  if current_user<>'postgres'then raise exception using errcode='42501',message='prepared_worker_denied';end if;
  if not pg_try_advisory_xact_lock(hashtextextended('prepared_aggregate_dispatch_v1',0))then return jsonb_build_object('status','busy');end if;
@@ -1945,16 +2080,20 @@ begin
   d:=(p_now at time zone(t->>'timezone'))::date;scope:=case when t->>'source'='game66'then'IN'else t->>'scope_group'end;common:=commons->>scope;if common is null then common:=private.prepared_aggregate_dependency_common(scope);commons:=commons||jsonb_build_object(scope,common);end if;dep:=private.prepared_aggregate_dependency(t,common);
   for offset_day in 0..2 loop
    q:=jsonb_build_object('action','aggregate','view','providers','platformId',t->>'id','startAt',private.provider_snapshot_iso((d-offset_day)::timestamp at time zone(t->>'timezone')),'endAt',private.provider_snapshot_iso((d-offset_day+1)::timestamp at time zone(t->>'timezone')),'successStartAt',private.provider_snapshot_iso((d-offset_day)::timestamp at time zone(t->>'timezone')),'successEndAt',private.provider_snapshot_iso((d-offset_day+1)::timestamp at time zone(t->>'timezone')),'successBasis','success','direction','all','status','all','currency',t->>'currency','offset',0,'limit',20);
-   if private.prepared_aggregate_request_reason(q,t)is null then perform private.prepared_aggregate_enqueue(q,t,dep,(case when t->>'scope_group'='IN'then 10-offset_day else 0 end)::smallint);n:=n+1;end if;
+   if private.prepared_aggregate_request_reason(q,t)is null then
+    baseq:=private.prepared_aggregate_base_request(q,t,p_now);
+    perform private.prepared_aggregate_enqueue(baseq,t,dep,(case when t->>'scope_group'='IN'then 10-offset_day else 0 end)::smallint);n:=n+1;jobs:=jobs+1;
+    perform private.prepared_aggregate_retire_replaced(q,t,baseq,dep);
+   end if;
    if t->>'scope_group'='IN'and offset_day<2 then
     q:=q||jsonb_build_object('view','full','amountBands','{"charge":[100,200,300,400,500,1000,2000,5000,10000,20000,50000],"withdraw":[100,200,300,400,500,1000,2000,5000,10000,20000,50000]}'::jsonb);
-    perform private.prepared_aggregate_enqueue(q,t,dep,(6-offset_day)::smallint);
-    perform private.prepared_aggregate_enqueue(q||jsonb_build_object('durationVersion',2),t,dep,(4-offset_day)::smallint);n:=n+2;
+    -- The master already contains these two views. Do not admit duplicate work.
+    perform private.prepared_aggregate_retire_replaced(q,t,baseq,dep);n:=n+2;
    end if;
   end loop;last_tier:=case when t->>'scope_group'='IN'then 0 else 1 end;last_id:=(t->>'id')::uuid;
  end loop;
  update private.prepared_aggregate_schedule set cursor_id=last_id,cursor_tier=coalesce(last_tier,0)where singleton;
- return jsonb_build_object('status','queued','requests',n);
+ return jsonb_build_object('status','queued','requests',n,'backgroundJobs',jobs);
 end;$$;
 create function private.prepared_aggregate_maintenance()returns jsonb language plpgsql volatile set search_path=''as $$
 declare n integer;

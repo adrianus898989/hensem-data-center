@@ -17,9 +17,9 @@ with targets as materialized(select to_jsonb(p)t from private.prepared_aggregate
  ||case when profile='latency_v2'then jsonb_build_object('durationVersion',2)else'{}'::jsonb end q
  from targets cross join generate_series(0,2)days(offset_day)cross join(values('providers'),('full'),('latency_v2'))v(profile)
  where profile='providers'or days.offset_day<2),
- expected as materialized(select *,private.prepared_aggregate_key(q,t)k from profiles),
+ expected as materialized(select *,private.prepared_aggregate_base_request(q,t)base_request,private.prepared_aggregate_key(private.prepared_aggregate_base_request(q,t),t)k from profiles),
  checked as(select e.t target,e.q request,e.profile,e.offset_day,j.id,j.status,j.last_error,j.last_requested_at,j.next_due_at,j.attempts,
- a.id artifact_id,a.revision artifact_revision,j.revision,a.dependency artifact_dependency,j.dependency,
+ e.k resolved_key,e.base_request,a.id artifact_id,a.revision artifact_revision,j.revision,a.fence,a.dependency artifact_dependency,j.dependency,
  private.prepared_aggregate_dependency(e.t,c.d)expected_dependency,a.expires_at,a.computed_at,a.cutoff,a.source_complete,a.bytes
  from expected e cross join common c
  left join private.prepared_aggregate_jobs j on j.request_fingerprint=md5(e.k::text)and j.request_key=e.k and j.target=e.t
@@ -30,7 +30,9 @@ select count(*)over()expected_profiles,target->>'name'platform,target->>'source'
  profile,request->>'successBasis'secondary_clock,
  coalesce(status,'not_enqueued')status,coalesce(artifact_id is not null and artifact_revision=revision and artifact_dependency=expected_dependency
  and dependency=expected_dependency and expires_at>now(),false)as readable_valid,
- computed_at,cutoff,expires_at,next_due_at,source_complete,bytes,attempts,last_error
+ id resolved_job_id,artifact_id,artifact_revision::text||':'||fence::text generation,base_request->>'view'base_view,base_request->>'durationVersion'base_duration_version,
+ computed_at,cutoff,expires_at,next_due_at,extract(epoch from(computed_at-cutoff))*1000 compute_elapsed_ms,
+ source_complete,bytes,attempts,last_error
  from checked order by local_date desc,profile,platform;
 commit;
 

@@ -72,9 +72,9 @@ test('private worker storage and helper functions are unavailable to external ro
 
  for(const role of ['anon','authenticated','service_role']){for(const name of ['private.prepared_aggregate_claim(text)','private.prepared_aggregate_complete(uuid,uuid,bigint,jsonb)','private.prepared_aggregate_raw_kernel(jsonb,jsonb)','private.dashboard_prepared_provider_projection(jsonb,jsonb,jsonb)'])assert.equal(await val('select has_function_privilege($1,$2,\'EXECUTE\')value',[role,name]),false);assert.equal(await val("select has_table_privilege($1,'private.prepared_aggregate_jobs','SELECT')value",[role]),false);}
 });
-test('prewarm seeds stable whole-local-day providers and actual INR full/latency profiles',async()=>{
+test('prewarm seeds three logical views from one mutable full-v2 master and preserves cheap closed days',async()=>{
  assert.equal((await val('select private.prepared_aggregate_prewarm()value')).status,'disabled');await db.exec('update private.prepared_aggregate_schedule set enabled=true,cursor_id=null,cursor_tier=0');
- try{const r=await val("select private.prepared_aggregate_prewarm('2026-10-15T01:00:00Z')value");assert.equal(r.requests,14);const qs=(await db.query('select request from private.prepared_aggregate_jobs')).rows.map(x=>x.request);assert.equal(qs.filter(x=>x.view==='providers').length,6);assert.equal(qs.filter(x=>x.view==='full').length,8);assert.equal(qs.filter(x=>x.durationVersion===2).length,4);assert.ok(qs.every(x=>new Date(x.startAt).getUTCHours()===18&&new Date(x.startAt).getUTCMinutes()===30&&new Date(x.endAt)-new Date(x.startAt)===86400000&&x.successBasis==='success'));assert.ok(qs.filter(x=>x.view==='full').every(x=>x.amountBands.charge.length===11&&x.amountBands.withdraw.length===11));}
+ try{const r=await val("select private.prepared_aggregate_prewarm('2026-10-15T01:00:00Z')value");assert.equal(r.requests,14);assert.equal(r.backgroundJobs,6);const qs=(await db.query('select request from private.prepared_aggregate_jobs')).rows.map(x=>x.request);assert.equal(qs.filter(x=>x.view==='providers').length,2);assert.equal(qs.filter(x=>x.view==='full').length,4);assert.equal(qs.filter(x=>x.durationVersion===2).length,4);assert.ok(qs.every(x=>new Date(x.startAt).getUTCHours()===18&&new Date(x.startAt).getUTCMinutes()===30&&new Date(x.endAt)-new Date(x.startAt)===86400000&&x.successBasis==='success'));assert.ok(qs.filter(x=>x.view==='full').every(x=>x.amountBands.charge.length===11&&x.amountBands.withdraw.length===11));}
  finally{await db.exec('update private.prepared_aggregate_schedule set enabled=false,cursor_id=null,cursor_tier=0')}
 });
 test('31 local days across DST are accepted while more local days are bounded',async()=>{
@@ -116,4 +116,45 @@ test('readiness starts from every expected profile including tasks never enqueue
  await db.exec('update private.prepared_aggregate_schedule set enabled=true,cursor_id=null,cursor_tier=0');
  try{await val('select private.prepared_aggregate_prewarm()value');rows=(await db.exec(sql)).flatMap(r=>r.rows||[]);assert.equal(rows.length,14);assert.ok(rows.every(r=>r.status==='queued'&&r.readable_valid===false));}
  finally{await db.exec('update private.prepared_aggregate_schedule set enabled=false,cursor_id=null,cursor_tier=0')}
+});
+
+const bands={charge:[100,200,300,400,500,1000,2000,5000,10000,20000,50000],withdraw:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]};
+async function hotRequest(){const dates=await val("select jsonb_build_object('startAt',private.provider_snapshot_iso(date_trunc('day',now())),'endAt',private.provider_snapshot_iso(date_trunc('day',now())+interval'1day'))value");return req(targets[0],{...dates,successStartAt:dates.startAt,successEndAt:dates.endAt,successBasis:'success'});}
+function masterPayload(q){return payload(q,{durationVersion:2,groups:{provider:payload(q).groups.provider,daily:[],hourly:[],amount:[],matrix:[],amount_range:[],matrix_range:[],latency:[],latency_thresholds:[],pending_age:[],pending_age_thresholds:[]},latencySummary:[],pendingSummary:[],amountBands:q.amountBands,amountBandsVersion:1});}
+async function publishMaster(q){await read([q]);const c=await claim();const b=await val('select request value from private.prepared_aggregate_jobs where id=$1',[c.jobId]);assert.equal(b.durationVersion,2);assert.equal((await complete(c,masterPayload(b))).published,true);return{c,b};}
+test('one hot master serves all three views, provider/direction changes and exact frontend envelopes',async()=>{
+ const p=await hotRequest(),full={...p,view:'full',amountBands:bands},v2={...full,durationVersion:2};
+ assert.deepEqual((await read([p,full,v2])).items.map(x=>x.status),['missing','building','building']);assert.equal(await val('select count(*)value from private.prepared_aggregate_jobs'),1);
+ const c=await claim(),base=await val('select request value from private.prepared_aggregate_jobs where id=$1',[c.jobId]);assert.equal(base.durationVersion,2);assert.equal((await complete(c,masterPayload(base))).published,true);
+ const qs=[p,full,v2,{...p,providers:['SelectedPay'],direction:'charge'}],r=await read(qs);assert.ok(r.items.every(x=>x.status==='ready'));assert.equal(new Set(r.items.map(x=>x.publication.id)).size,1);assert.equal(r.items[0].result.durationVersion,undefined);assert.deepEqual(Object.keys(r.items[0].result.groups),['provider']);assert.equal(r.items[1].result.durationVersion,undefined);assert.equal(r.items[2].result.durationVersion,2);assert.equal(r.items[3].result.groups.provider[0].fee_low_amount,'1.123456789');
+ const helper=require('../admin-preview/live-prepared-aggregates.js'),client=helper.create({request:body=>read(body.requests),context:()=> 'synthetic-owner/providers',platform:()=>payload(p).platform});for(const q of qs){const dto=await client.read(q);assert.equal(dto._preparedPublication.status,'ready');}client.clear();
+ await db.query("select set_config('test.session_allowed','false',false)");await assert.rejects(read(qs),e=>e.code==='42501');assert.equal(await val('select count(*)value from private.prepared_aggregate_jobs'),1);
+});
+test('independent second clock, bands, native and filters never borrow another master',async()=>{
+ const p=await hotRequest(),full={...p,view:'full',amountBands:bands};await publishMaster(full);
+ const different=[{...full,successEndAt:new Date(Date.parse(full.successEndAt)+1).toISOString()},{...full,successBasis:'source_updated'},{...full,amountBands:{...bands,charge:[100,201,300,400,500,1000,2000,5000,10000,20000,50000]}},{...full,platformId:targets[1].id},{...full,amountMin:200},{...full,providers:['SelectedPay']}];
+ assert.ok((await read(different)).items.every(x=>x.status==='missing'));assert.equal(await val('select count(*)value from private.prepared_aggregate_jobs'),7);
+ await assert.rejects(read([{...full,platformId:'00000000-0000-4000-8000-000000000000'}]),e=>e.code==='42501');assert.equal(await val('select count(*)value from private.prepared_aggregate_jobs'),7);
+});
+test('old exact defaults retire only after valid master; running leases and separate old snapshots survive',async()=>{
+ const p=await hotRequest(),base=await val('select private.prepared_aggregate_base_request($1,$2)value',[JSON.stringify(p),JSON.stringify(targets[0])]);
+ const dep=await val('select private.prepared_aggregate_dependency($1)value',[JSON.stringify(targets[0])]);
+ const old=await val('select private.prepared_aggregate_enqueue($1,$2,$3)value',[JSON.stringify(p),JSON.stringify(targets[0]),dep]);
+ const retire=()=>val('select private.prepared_aggregate_retire_replaced($1,$2,$3,$4)value',[JSON.stringify(p),JSON.stringify(targets[0]),JSON.stringify(base),dep]);assert.equal(await retire(),false);
+ await db.query("update private.prepared_aggregate_jobs set status='failed',attempts=3 where id=$1",[old]);await publishMaster(p);
+ await db.query("update private.prepared_aggregate_jobs set status='running',lease_until=now()+interval'1minute' where id=$1",[old]);assert.equal(await retire(),false);
+ await db.query("update private.prepared_aggregate_jobs set status='queued',lease_until=null,attempts=0 where id=$1",[old]);const oldQueue=await val('select count(*)value from private.provider_snapshot_jobs');assert.equal(await retire(),true);assert.equal(await val('select last_error value from private.prepared_aggregate_jobs where id=$1',[old]),'superseded_by_full_master');assert.equal(await val('select count(*)value from private.provider_snapshot_jobs'),oldQueue);
+ assert.equal(await claim(),null);assert.equal((await read([p])).items[0].status,'ready');
+ // Once this becomes a cheap closed-day request, admission can revive it safely.
+ await val('select private.prepared_aggregate_enqueue($1,$2,$3)value',[JSON.stringify(p),JSON.stringify(targets[0]),dep]);assert.equal(await val('select attempts value from private.prepared_aggregate_jobs where id=$1',[old]),0);
+});
+test('readiness resolves all logical views to fewer exact jobs including missing defaults',async()=>{
+ await db.exec('update private.prepared_aggregate_schedule set enabled=true,cursor_id=null,cursor_tier=0');try{await val('select private.prepared_aggregate_prewarm()value');const sql=fs.readFileSync(path.join(__dirname,'../supabase/operations/exact_prepared_aggregates_readiness.sql'),'utf8').split('commit;')[0]+'commit;';const rows=(await db.exec(sql)).flatMap(r=>r.rows||[]);assert.equal(rows.length,14);assert.equal(new Set(rows.map(x=>x.resolved_job_id)).size,6);assert.equal(rows.filter(x=>x.base_duration_version==='2').length,12);assert.ok(rows.every(x=>x.readable_valid===false));}
+ finally{await db.exec('update private.prepared_aggregate_schedule set enabled=false,cursor_id=null,cursor_tier=0')}
+});
+test('two simulated refresh generations remain shared while queued/running and expiry never falls back to raw',async()=>{
+ const p=await hotRequest(),qs=[p,{...p,view:'full',amountBands:bands},{...p,view:'full',amountBands:bands,durationVersion:2}];await publishMaster(p);let previous=(await read(qs)).items[0].publication;
+ for(let i=0;i<2;i++){await db.exec("update private.prepared_aggregate_jobs set status='queued',not_before=clock_timestamp()");let ready=await read(qs);assert.ok(ready.items.every(x=>x.status==='ready'&&x.publication.id===previous.id));const c=await claim();ready=await read(qs);assert.ok(ready.items.every(x=>x.status==='ready'&&x.publication.id===previous.id));const b=await val('select request value from private.prepared_aggregate_jobs where id=$1',[c.jobId]);assert.equal((await complete(c,masterPayload(b))).published,true);ready=await read(qs);assert.ok(ready.items.every(x=>x.status==='ready'&&x.publication.id!==previous.id));assert.equal(new Set(ready.items.map(x=>x.publication.generation)).size,1);previous=ready.items[0].publication;}
+ await db.exec("insert into private.prepared_aggregate_artifacts select gen_random_uuid(),job_id,gen_random_uuid(),fence,revision,dependency,payload,computed_at,clock_timestamp()-interval'1second',cutoff,source_complete,bytes from private.prepared_aggregate_artifacts order by computed_at desc limit 1;update private.prepared_aggregate_heads set artifact_id=(select id from private.prepared_aggregate_artifacts order by expires_at limit 1)");
+ assert.ok((await read(qs)).items.every(x=>x.status==='stale'&&x.result===null));assert.equal(await val('select count(*)value from private.prepared_aggregate_jobs'),1);
 });

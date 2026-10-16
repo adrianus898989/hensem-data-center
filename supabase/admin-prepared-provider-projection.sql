@@ -7,10 +7,10 @@ create or replace function private.dashboard_prepared_provider_projection(
 ) returns jsonb language plpgsql stable security invoker set search_path='' as $function$
 declare
   selected jsonb; summaries jsonb:='[]'::jsonb; result jsonb; bucket record;
-  summary jsonb; key text; value numeric; invalid boolean; total numeric;
+  summary jsonb; key text; value numeric; invalid boolean; total numeric; evidence jsonb;
   providers text[]; country text; platform text; stamp text;
-  count_keys constant text[]:=array['all_count','success_count','pending_count','failed_count','rejected_count','unknown_count','missing_amount_count','negative_amount_count','created_success_count'];
-  amount_keys constant text[]:=array['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount'];
+  count_keys constant text[]:=array['all_count','success_count','pending_count','failed_count','rejected_count','unknown_count','missing_amount_count','negative_amount_count','created_success_count','reviewed_pending_count'];
+  amount_keys constant text[]:=array['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount','created_success_amount','reviewed_pending_amount'];
 begin
   if jsonb_typeof(p_base_request) is distinct from 'object'
     or jsonb_typeof(p_request) is distinct from 'object'
@@ -68,6 +68,7 @@ begin
   loop
     summary:=jsonb_build_object('direction',bucket.direction,'currency',bucket.currency,'provider',null);
     foreach key in array count_keys loop
+      if key='reviewed_pending_count'and not exists(select 1 from jsonb_array_elements(bucket.leaves)r where r?key)then continue;end if;
       if exists(select 1 from jsonb_array_elements(bucket.leaves) r where r ? key)
         or exists(select 1 from jsonb_array_elements(p_payload->'summary') r where r ? key) then
         select bool_or(r->>key is null or coalesce(r->>key,'')!~'^[0-9]+$'),
@@ -77,10 +78,17 @@ begin
       end if;
     end loop;
     foreach key in array amount_keys loop
+      if key in('created_success_amount','reviewed_pending_amount')and not exists(select 1 from jsonb_array_elements(bucket.leaves)r where r?key)then continue;end if;
       select bool_or(r->>key is null or coalesce(r->>key,'')!~'^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'),
         sum(case when r->>key~'^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$' then (r->>key)::numeric end)
         into invalid,value from jsonb_array_elements(bucket.leaves) r;
       summary:=summary||jsonb_build_object(key,case when invalid then null else value::text end);
+    end loop;
+    -- Native clock/evidence labels are not numeric metrics. Retain a label only
+    -- when every selected provider leaf contains the identical proven value.
+    foreach key in array array['success_time_available','success_time_basis','success_available','success_unavailable_reason','fee_available','fee_unavailable_reason','pending_count_available']loop
+      select case when count(distinct r->key)=1 and bool_and(r?key)then(jsonb_agg(r->key))->0 end into evidence from jsonb_array_elements(bucket.leaves)r;
+      if evidence is not null then summary:=jsonb_set(summary,array[key],evidence);end if;
     end loop;
     select r->>'latest_synced_at' into stamp from jsonb_array_elements(bucket.leaves) r
       where r->>'latest_synced_at' is not null order by (r->>'latest_synced_at')::timestamptz desc limit 1;
