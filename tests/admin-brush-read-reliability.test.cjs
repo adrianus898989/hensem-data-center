@@ -25,8 +25,8 @@ test('identical in-flight query joins existing work and queued platforms have no
 });
 test('a repeated same-scope query reuses verified results with zero RPC; explicit refresh rereads all',async()=>{
  const h=await setup();await finish(h,h.c.liveQuery());const n=h.history.length,stamp=h.api.capture().results[0]._submissionReadAt;
- await h.c.liveQuery();assert.equal(h.history.length,n);assert(h.api.capture().results.every(r=>r._submissionCacheHit));assert.equal(h.api.capture().results[0]._submissionReadAt,stamp);assert.match(h.html(),/数据读取[^<]*缓存/);assert(h.writes.some(w=>/onclick="liveQuery\(true\)"/.test(w.html)),'the rendered filters provide explicit refresh');
- await finish(h,h.c.liveQuery(true));assert.equal(h.history.length,n+3);assert(h.api.capture().results.every(r=>!r._submissionCacheHit));assert.equal(h.max(),1);
+ await h.c.liveQuery();assert.equal(h.history.length,n);assert(h.api.capture().results.every(r=>r._submissionCacheHit));assert.equal(h.api.capture().results[0]._submissionReadAt,stamp);assert.match(h.html(),/数据读取[^<]*缓存/);assert(h.writes.some(w=>/onclick="liveRefresh\(\)"/.test(w.html)),'the rendered filters provide explicit refresh');
+ await finish(h,h.c.liveRefresh());assert.equal(h.history.length,n+3);assert(h.api.capture().results.every(r=>!r._submissionCacheHit));assert.equal(h.max(),1);
 });
 test('successful cached platforms are retained while failed platforms still retry exactly once and remain visible',async()=>{
  const h=await setup();await finish(h,h.c.liveQuery(),q=>q.platformId===Q.id?Error('读取超时'):undefined);assert.equal(h.api.metric().received,2);assert.equal(h.api.metric().complete,false);assert.equal(h.api.capture().failures[0].attempts,2);assert.match(h.html(),/部分统计待核对/);const n=h.history.length;
