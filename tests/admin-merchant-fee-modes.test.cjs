@@ -121,7 +121,7 @@ test('the fee subtotal remains the complete loaded scope while rows are locally 
 test('merchant top fee cards share the current and historical table facts, while WG missing withdrawal success time remains unknown in both modes',async()=>{
  const h=await setup(),calls=h.calls.length;let a=feeCard(h,'charge'),w=feeCard(h,'withdraw');assert.equal(a.value,'38.00');assert.equal(w.value,'9.00');assert.match(a.html,/当前费率参考估算/);assert.match(a.html,/已匹配 10 \/ 11 笔/);assert.match(a.html,/非历史实际手续费/);
  h.c.liveMerchantFeeMode('historical');a=feeCard(h,'charge');w=feeCard(h,'withdraw');assert.equal(a.value,'90.00');assert.equal(w.value,'15.00');assert.match(a.html,/历史生效手续费/);assert.match(a.html,/按订单创建时间匹配生效版本/);
- h.L.results[0].platform.source='wg';h.L.results[0].withdrawSuccessTimeAvailable=false;for(const mode of ['current','historical']){h.c.liveMerchantFeeMode(mode);a=feeCard(h,'charge');w=feeCard(h,'withdraw');assert.equal(a.value,mode==='current'?'38.00':'90.00');assert.equal(w.value,'—');assert.match(w.html,/匹配范围待确认/);const t=ledger(h);assert.equal(plain(cell(t,t.rows.find(r=>plain(r[0])==='Alpha'),'代付手续费')),'—');assert.doesNotMatch(w.html,/9\.00|15\.00|0\.00|100\.00%/);}
+ h.L.results[0].platform={...h.L.results[0].platform,source:'wg'};h.L.results[0].withdrawSuccessTimeAvailable=false;for(const mode of ['current','historical']){h.c.liveMerchantFeeMode(mode);a=feeCard(h,'charge');w=feeCard(h,'withdraw');assert.equal(a.value,mode==='current'?'38.00':'90.00');assert.equal(w.value,'—');assert.match(w.html,/匹配范围待确认/);const t=ledger(h);assert.equal(plain(cell(t,t.rows.find(r=>plain(r[0])==='Alpha'),'代付手续费')),'—');assert.doesNotMatch(w.html,/9\.00|15\.00|0\.00|100\.00%/);}
  assert.equal(h.calls.length,calls);
 });
 

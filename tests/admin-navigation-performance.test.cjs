@@ -570,18 +570,18 @@ test('split totals keep null and absent capability unknown rather than inventing
 });
 
 
-test('complete fee snapshots expire only on an explicit query; empty snapshots and country changes use the same authorized directory',async()=>{
- const indonesia={...P,id:'22222222-2222-4222-8222-222222222222',name:'Synthetic Indonesia',country:'印尼',currency:'IDR',scopeGroup:'indonesia',timezone:'Asia/Jakarta'};
+test('complete fee snapshots expire only on an explicit query and country changes require the matching scoped directory',async()=>{
+ const indonesia={...P,id:'22222222-2222-4222-8222-222222222222',name:'Synthetic Indonesia',country:'印尼',currency:'IDR',scopeGroup:'ID',timezone:'Asia/Jakarta'};
  const h=await ready({page:'providers',platforms:[P,indonesia]});
  const feeCount=()=>h.calls.filter(q=>q.action==='rates').length;
  assert.equal(feeCount(),1);assert.deepEqual(Array.from(h.L.feeLookupRows),[]);
  await h.c.liveQuery(false);await settle();assert.equal(feeCount(),1,'successful empty directory is reusable');
- h.setNow('2026-09-23T12:04:59Z');h.c.liveSet('country','印尼');await h.c.liveQuery(false);await settle();assert.equal(feeCount(),1,'country selection does not invalidate the actor-wide rates directory');
- h.setNow('2026-09-23T12:05:00Z');h.c.render();h.c.providerSummarySort('all_count');h.c.livePage(1,'local');h.c.setPage('amount');h.c.setPage('providers');await settle();assert.equal(feeCount(),1,'expiry alone cannot launch reads while painting, paginating or restoring a tab');
- await h.c.liveQuery(false);await settle();assert.equal(feeCount(),2,'five-minute boundary is checked by the next explicit query');
+ h.setNow('2026-09-23T12:04:59Z');h.c.liveSet('country','印尼');await h.c.liveQuery(false);await settle();assert.equal(feeCount(),2,'the IN snapshot cannot satisfy a different native ID directory');
+ h.setNow('2026-09-23T12:05:00Z');h.c.render();h.c.providerSummarySort('all_count');h.c.livePage(1,'local');h.c.setPage('amount');h.c.setPage('providers');await settle();assert.equal(feeCount(),2,'expiry alone cannot launch reads while painting, paginating or restoring a tab');
+ await h.c.liveQuery(false);await settle();assert.equal(feeCount(),2,'the new country directory keeps its own original five-minute read time');
  await h.c.liveQuery(true);await settle();assert.equal(feeCount(),3,'force always reads rates again');
  h.setNow('2026-09-23T12:04:00Z');await h.c.liveQuery(false);await settle();assert.equal(feeCount(),4,'clock rollback cannot make a snapshot fresh');
- assert(h.calls.filter(q=>q.action==='rates').every(q=>q.scopeType==='all'&&!q.country&&!q.platform&&!q.platformId),'all requests retain the native directory contract');
+ assert.deepEqual(h.calls.filter(q=>q.action==='rates').map(q=>q.country),['IN','ID','ID','ID']);assert(h.calls.filter(q=>q.action==='rates').every(q=>q.scopeType==='all'&&!q.provider&&!q.platform&&!q.platformId),'country and platform records and raw provider aliases are retained');
 });
 
 test('filter edits abort a forced paginated fee read; paints cannot restart it and next query reads once',async()=>{
@@ -715,4 +715,40 @@ test('events never sends an unauthorized rates read and uses only a fresh author
   const request=h.calls.findLast(q=>q.action==='submissionAnalysis');assert(request);assert.equal(request.amountBands.charge[0],cached?250:100);assert.equal(request.amountBands.charge[10],cached?25000:50000);assert.equal(h.L.amountBandProfiles.charge.source,cached?'所选三方限额':'国家参考范围');assert.deepEqual(Array.from(request.providers),['Synthetic provider']);
   h.setNow('2026-09-23T12:05:01Z');await h.c.liveQuery(true);await settle();assert.equal(transport.rates().length,count);assert.equal(h.L.amountBandProfiles.charge.source,'国家参考范围','an expired directory cannot silently define new event-query limits');
  }
+});
+
+test('native IN/HK/RED fee directories preserve the exact old consumer candidates, types, tiers and unknowns',async()=>{
+ const ps=[{...P,scopeGroup:'IN'},{...P,id:'22222222-2222-4222-8222-222222222222',name:'Synthetic HK',country:'香港',scopeGroup:'HK_TEAM',source:'game66'},{...P,id:'33333333-3333-4333-8333-333333333333',name:'Synthetic RED',country:'红膏蟹',scopeGroup:'RED_CRAB',source:'game66'}],h=await ready({platforms:ps,reports:true});
+ const base={country:'印度',scopeGroup:'IN',scopeType:'country',provider:'3TPay',collectFee:'4%',payoutFee:'2%',sourceType:'BANK',sourceTypeProvider:'3TPay'},directory=[
+  {...base,id:'country'},
+  {...base,id:'status',scopeType:'platform',platform:P.name,configurationRole:'connection_status',collectFee:'',payoutFee:'',sourceType:'UPI'},
+  {...base,id:'tier-a',provider:'AmbiguousPay',collectFee:'2%'},{...base,id:'tier-b',provider:'AmbiguousPay',collectFee:'3%'},
+  {...base,id:'fixed-unknown',provider:'FixedPay',collectSingleFee:'6'},
+  {...base,id:'speed',provider:'Speed2Pay',payoutFee:'2%'},
+  {...base,id:'hk',country:'香港',scopeGroup:'HK_TEAM'}, {...base,id:'red',country:'红膏蟹',scopeGroup:'RED_CRAB'},
+  {...base,id:'other-country',country:'印尼',scopeGroup:'ID'}, {...base,id:'unused-global',country:'',scopeGroup:''},
+  ...Array.from({length:1004},(_,i)=>({...base,id:'synthetic-status-'+i,provider:'Unrelated '+i,scopeType:'platform',platform:'Other '+i,collectFee:'',payoutFee:'',sourceType:'BANK'}))
+ ];
+ const request=h.c.hensemLiveRequest,calls=[];h.c.hensemLiveRequest=(q,options)=>{if(q.action!=='rates')return request(q,options);calls.push(q);const rows=directory.filter(r=>!q.country||r.scopeGroup===q.country);return Promise.resolve({rows:rows.slice(q.offset,q.offset+q.limit),total:rows.length});};
+ await h.c.liveRetryFeeLookup();const narrow=h.L.feeLookupRows,api=h.c.HensemProviderSummary;
+ assert.deepEqual(calls.map(q=>[q.country,q.offset]),[['HK_TEAM',0],['IN',0],['IN',500],['IN',1000],['RED_CRAB',0]]);assert(calls.every(q=>q.scopeType==='all'&&!q.provider&&!q.platform&&!q.currency));
+ assert.equal(narrow.filter(r=>r.id.startsWith('synthetic-status-')).length,1004);assert(narrow.some(r=>r.id==='hk')&&narrow.some(r=>r.id==='red'));assert(!narrow.some(r=>r.id==='unused-global'));
+ const leaf={platformId:P.id,platform:P.name,source:'ar',country:'印度',provider:'3TPayINR',direction:'charge',currency:'INR',success_count:2,success_amount:3000};
+ const cases=[leaf,{...leaf,provider:'AmbiguousPay'},{...leaf,provider:'FixedPay'},{...leaf,provider:'NoConfiguredPay'},{...leaf,provider:'Speed2Pay',direction:'withdraw',fee_low_count:1,fee_low_amount:1000,fee_high_count:1,fee_high_amount:2001,fee_gap_count:0,fee_gap_amount:0,fee_unpriced_count:0}];
+ for(const row of cases){assert.deepEqual(plain(api.feeCandidates(row,narrow,'印度')),plain(api.feeCandidates(row,directory,'印度')),row.provider);assert.deepEqual(plain(api.providerType(row,narrow,'印度')),plain(api.providerType(row,directory,'印度')),row.provider);assert.deepEqual(plain(api.currentReferenceFeeFacts(row,narrow,'印度')),plain(api.currentReferenceFeeFacts(row,directory,'印度')),row.provider);}
+ assert.equal(api.providerType(leaf,narrow,'印度').label,'UPI','blank-fee platform status remains business-type evidence');assert.equal(api.currentReferenceFeeFacts(cases[1],narrow,'印度').amount,null,'conflicting tiers stay unknown');assert.equal(api.currentReferenceFeeFacts(cases[2],narrow,'印度').amount,null,'missing currency proof stays unknown');
+ assert(!api.feeCandidates(leaf,directory,'印度').some(r=>r.id==='unused-global'),'the existing consumer never inherited empty-country rows');
+});
+
+test('unknown native fee group retains the old full-directory request and raw alias candidates',async()=>{
+ const h=await ready({platforms:[{...P,scopeGroup:'UNREVIEWED_NATIVE_GROUP'}]}),request=h.c.hensemLiveRequest,rows=[{id:'in',scopeGroup:'IN',country:'印度',scopeType:'country',provider:'3TPay',collectFee:'3%'},{id:'id',scopeGroup:'ID',country:'印尼',scopeType:'country',provider:'3TPay',collectFee:'9%'}],calls=[];
+ h.c.hensemLiveRequest=(q,o)=>q.action==='rates'?(calls.push(q),Promise.resolve({rows,total:rows.length})):request(q,o);await h.c.liveRetryFeeLookup();assert.equal(calls.length,1);assert.equal(calls[0].country,undefined);assert.deepEqual(plain(h.L.feeLookupRows),rows);
+ const row={provider:'3TPayINR',direction:'charge'};assert.deepEqual(plain(h.c.HensemProviderSummary.feeCandidates(row,h.L.feeLookupRows,'印度')).map(r=>r.id),['in']);
+});
+
+test('narrow fee reads remain serial and navigation cannot publish a partial multi-group directory',async()=>{
+ const ps=[{...P,scopeGroup:'IN'},{...P,id:'22222222-2222-4222-8222-222222222222',country:'香港',scopeGroup:'HK_TEAM',source:'game66'}],h=await ready({platforms:ps,reports:true}),pending=deferred(),request=h.c.hensemLiveRequest,calls=[];let signal,active=0,max=0;
+ h.c.hensemLiveRequest=(q,o)=>{if(q.action!=='rates')return request(q,o);calls.push(q);active++;max=Math.max(max,active);if(q.country==='IN'){signal=o.signal;return pending.promise.finally(()=>active--);}return Promise.resolve({rows:[{id:'hk',scopeGroup:'HK_TEAM',country:'香港'}],total:1}).finally(()=>active--);};
+ const run=h.c.liveRetryFeeLookup();await settle();assert.deepEqual(calls.map(q=>q.country),['HK_TEAM','IN']);assert.equal(h.L.feeLookupRows,null);assert.equal(max,1);h.c.setPage('amount');await run;assert.equal(signal.aborted,true);assert.equal(h.L.feeLookupRows,null);
+ pending.resolve({rows:[{id:'late-in'}],total:1});await settle();h.c.render();assert.equal(calls.length,2);assert.equal(h.L.feeLookupRows,null);
 });

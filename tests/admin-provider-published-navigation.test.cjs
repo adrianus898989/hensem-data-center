@@ -28,6 +28,11 @@ async function setup(options={}){
 }
 const relevant=h=>h.calls.filter(q=>!['catalog','providerOptions'].includes(q.action));
 const forbidden=h=>h.calls.filter(q=>['aggregate','submissionAnalysis'].includes(q.action)||q.action==='intakeCoverage'&&q.operation!=='orderCatalog');
+test('published provider labels also distinguish a future schedule from a due refresh without repricing the publication',async()=>{
+ for(const [nextRefreshAt,label]of [['2026-09-24T00:00:00.000000Z','按计划更新'],['2026-09-23T01:00:00.000000Z','待更新'],[null,'待更新']]){
+  const h=await setup({handler:q=>{if(q.action!=='providerSnapshot')return;const b=clone(envelope(q));Object.assign(b,{freshness:'refresh_due',refreshState:'idle',nextRefreshAt});for(const p of b.platforms)for(const s of p.snapshots)Object.assign(s,{freshness:'refresh_due',refreshState:'idle',nextRefreshAt});return b;}});await h.c.liveQuery();assert.match(h.html(),new RegExp('更新于 2026-09-23 06:30:00 · '+label));assert.equal(h.L.providerPublished.bundle.freshness,'refresh_due');assert.equal(h.L.providerPublished.bundle.computedAt,'2026-09-23T01:00:00.000001Z');assert.equal(forbidden(h).length,0);if(label==='按计划更新')assert.doesNotMatch(h.html(),/ · 待更新/);
+ }
+});
 function fakeExport(h){h.nodes.get('page').querySelectorAll=()=>[{querySelectorAll:()=>[{cells:[{innerText:'三方'},{innerText:'成功金额'}]},{cells:[{innerText:'Synthetic provider'},{innerText:'600.15'}]}]}];}
 test('v2 TTL-only old publication remains usable with original update time, exact comparison, local provider reuse and no refresh computation',async()=>{
  const h=await setup({handler:q=>{if(q.action!=='providerSnapshot')return;const b=clone(envelope(q));b.freshness='refresh_due';b.refreshState='running';b.nextDueAt='2026-09-23T01:02:00.000000Z';b.nextRefreshAt='2026-09-24T00:00:00.000000Z';for(const p of b.platforms)for(const s of p.snapshots)Object.assign(s,{freshness:'refresh_due',refreshState:'running',nextDueAt:b.nextDueAt,nextRefreshAt:b.nextRefreshAt});return b;}});

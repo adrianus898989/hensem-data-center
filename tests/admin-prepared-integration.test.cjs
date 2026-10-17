@@ -45,3 +45,10 @@ test('loading and transient failure retain inert previous-scope content; semanti
  h.setHandler(q=>q.action==='aggregatePrepared'?response(q,'stale'):{});await h.c.liveQuery();await settle();assert.equal(h.L.retainedContent,null);assert.doesNotMatch(h.html(),/live-retained-result/);
  h.setHandler(q=>q.action==='aggregatePrepared'?response(q):{});await h.c.liveQuery();await settle();assert(h.L.retainedContent);h.setHandler(q=>{if(q.action==='aggregatePrepared')throw Object.assign(Error('denied'),{code:'ADMIN_LIVE_PERMISSION_DENIED'});return {};});await h.c.liveQuery();await settle();assert.equal(h.L.retainedContent,null);assert.equal(h.L.results.length,0);assert.doesNotMatch(h.html(),/live-retained-result/);
 });
+
+test('an expired artifact before its scheduled refresh has a planned label without changing freshness or validation',async()=>{
+ for(const [nextRefreshAt,refreshState,label]of [['2026-09-23T14:30:00Z','idle','按计划更新'],['2026-09-23T11:30:00Z','idle','待更新'],[null,'idle','待更新'],['2026-09-23T14:30:00Z','queued','更新中'],['2026-09-23T14:30:00Z','running','更新中'],['2026-09-23T14:30:00Z','failed','更新未完成']]){
+  const h=await ready('time');h.setHandler(q=>{if(q.action!=='aggregatePrepared')return {};const r=response(q);r.items.forEach(x=>Object.assign(x.publication,{expiresAt:'2026-09-23T11:59:30Z',freshness:'fresh',refreshState,nextRefreshAt}));return r;});
+  await h.c.liveQuery();await settle();const p=h.L.results[0]._preparedPublication,html=h.nodes.get('liveFilters').innerHTML;assert.equal(p.freshness,'refresh_due');assert.equal(p.expiresAt,'2026-09-23T11:59:30Z');assert.equal(p.nextRefreshAt,nextRefreshAt);assert.match(html,new RegExp('定时汇总.*更新于.* · '+label));if(label==='按计划更新')assert.doesNotMatch(html,/ · 待更新/);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);
+ }
+});
