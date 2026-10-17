@@ -7,6 +7,23 @@
  const zero=()=>Object.fromEntries(fields.map(key=>[key,0]));
  function create(c){
   const {L,E,N,C,R}=c;let generation=0,inflight=0;const waiters=[];
+  const prefixResult=result=>String(result?.platform?.source||'').toLowerCase()==='panda'&&result.pandaCoverage?.reason==='verified_created_prefix_only';
+  const prefixHours=new WeakMap();
+  function unknownPrefixHours(result){
+   const coverage=result.pandaCoverage,zone=result.platform?.timezone,key=JSON.stringify([result.startAt,result.endAt,coverage.effectiveStartAt,coverage.dataCutoff,zone]);
+   if(prefixHours.get(result)?.key===key)return prefixHours.get(result).hours;
+   const start=Date.parse(result.startAt),end=Date.parse(result.endAt),cutoff=Date.parse(coverage.dataCutoff),hours=new Set();
+   try{
+    if(![start,end,cutoff].every(Number.isFinite)||Date.parse(coverage.effectiveStartAt)!==start||!(start<cutoff&&cutoff<end)||end-start>32*86400000||!zone)throw Error('invalid prefix');
+    const clock=new Intl.DateTimeFormat('en-GB',{timeZone:zone,hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
+    // Check every uncollected local hour, including a partially collected cutoff
+    // hour and later days. A matching hour elsewhere must not turn it into zero.
+    let cursor=cutoff;while(cursor<end){const parts=clock.formatToParts(cursor),get=type=>Number(parts.find(p=>p.type===type)?.value),hour=get('hour'),minute=get('minute'),second=get('second');if(![hour,minute,second].every(Number.isFinite))throw Error('invalid clock');hours.add(hour);cursor+=3600000-(minute*60+second)*1000-(cursor%1000+1000)%1000;}
+   }catch{for(let hour=0;hour<24;hour++)hours.add(hour);}
+   prefixHours.set(result,{key,hours});return hours;
+  }
+  function prefixRangeComplete(result,range){if(!prefixResult(result))return true;const hours=unknownPrefixHours(result);return ![...hours].some(hour=>!range||hour>=range.minHour&&hour<range.maxHour);}
+  function prefixStatus(values){const prefixes=values.filter(prefixResult);if(!prefixes.length)return '';const labels=prefixes.map(result=>{const cutoff=result.pandaCoverage.dataCutoff;let clock=cutoff;try{clock=new Intl.DateTimeFormat('sv-SE',{timeZone:result.platform.timezone,dateStyle:'short',timeStyle:'medium',hourCycle:'h23'}).format(Date.parse(cutoff));}catch{}return (result.platform.name||'熊猫')+' '+clock;});return '<small class="matrix-custom-status" data-panda-prefix-custom>已核验至 '+E(labels.join('；'))+'（不含）；超出范围显示 —。</small>';}
   const blank=()=>({min:'',max:'',hourMin:'0',hourMax:'24',hourApplied:null,editing:null,applied:null,results:new Map(),targets:[],failures:[],loading:false,error:'',scope:''});let S=blank();
   const signature=()=>JSON.stringify([L.serial,L.queryScope,L.queryNow,L.country,L.currency,L.from,L.to,L.direction,L.status,(L.queryPlatforms||[]).map(p=>[p.id,p.currency])]);
   function sync(){const key=signature();if(S.scope!==key){generation++;S={...blank(),min:S.min,max:S.max,scope:key}}return key}
@@ -46,7 +63,7 @@
    const disabled=blocked()||S.loading||currencyIssue()||c.allowed&&!c.allowed();
    return '<form class="matrix-custom-controls" aria-label="自定义金额区间" onsubmit="return false" onkeydown="liveMatrixAmountQuery(this,event)"><strong>自定义金额</strong>'+['min','max'].map(key=>'<label>'+(key==='min'?'最低金额（含）':'最高金额（不含）')+'<input type="number" name="matrix-'+key+'" min="0" step="any" aria-label="自定义'+(key==='min'?'最低':'最高')+'金额" placeholder="不限" value="'+E(S[key])+'" '+(S.loading?'disabled ':'')+'oninput="liveMatrixAmountSet(\''+key+'\',this.value)"></label>').join('')+'<button type="button" class="btn small" onclick="liveMatrixAmountQuery(this.form)" '+(disabled?'disabled':'')+'>'+(S.loading?'读取区间…':S.failures.length||S.error?'重试区间':'查询区间')+'</button><button type="button" class="btn small" onclick="liveMatrixAmountClear()">清空区间</button><small>'+(currencyIssue()?'请先选择同一币种的平台':'下限含，上限不含 · 独立统计')+'</small></form>';
   }
-  function status(){return (S.error?'<div role="alert" class="matrix-custom-status live-error">'+E(S.error)+'</div>':'')+(S.failures.length?'<div role="alert" class="matrix-custom-status live-error">'+S.failures.map(f=>E(f.name+'：'+f.message)).join('；')+'；重新查询区间可重试。</div>':'')}
+  function status(){return (S.error?'<div role="alert" class="matrix-custom-status live-error">'+E(S.error)+'</div>':'')+(S.failures.length?'<div role="alert" class="matrix-custom-status live-error">'+S.failures.map(f=>E(f.name+'：'+f.message)).join('；')+'；重新查询区间可重试。</div>':'')+((c.page()==='time'?S.hourApplied:S.applied)?prefixStatus(c.page()==='time'?L.results:[...S.results.values()]):'')}
   function controls(){
    sync();return editor()+status();
   }
@@ -60,12 +77,12 @@
    sync();const time=!!selectedSegment.hourRange,range=time?S.hourApplied:S.applied;
    if(!range||JSON.stringify(range)!==JSON.stringify(time?selectedSegment.hourRange:Object.fromEntries(Object.entries(selectedSegment).filter(([key])=>['amountMin','amountMax','amountMaxExclusive'].includes(key)))))return null;
    const results=time?L.results:[...S.results.values()],complete=time?!L.queryFailures?.length&&!L.queryWarnings?.length&&!L.queryPaused&&!L.loading&&results.length===(c.selected()||[]).length:!S.loading&&!S.error&&!S.failures.length&&results.length===S.targets.length;
-   return {results,complete};
+   return {results,complete:complete&&results.every(result=>prefixRangeComplete(result,time?selectedSegment.hourRange:null))};
   }
   function detailRows(selectedSegment){
    const entry=customResults(selectedSegment);if(!entry)return [];
    const directions=selectedSegment.direction==='all'?['charge','withdraw']:[selectedSegment.direction];
-   return entry.results.flatMap(result=>directions.map(direction=>{const parts=result._parts||[result],valid=parts.every(part=>part.complete!==false&&Array.isArray(part.groups?.hourly)),rows=parts.flatMap(part=>part.groups?.hourly||[]).filter(row=>row.direction===direction&&(!row.currency||row.currency===L.currency)&&finite(row.hour)&&Number.isInteger(Number(row.hour))&&Number(row.hour)>=0&&Number(row.hour)<24&&(!selectedSegment.hourRange||Number(row.hour)>=selectedSegment.hourRange.minHour&&Number(row.hour)<selectedSegment.hourRange.maxHour)),metric=Object.fromEntries(detailFields.map(key=>[key,!valid||rows.some(row=>!finite(row[key]))?null:rows.reduce((n,row)=>n+Number(row[key]),0)]));if(c.successUnavailable(direction)||direction==='withdraw'&&result.withdrawSuccessTimeAvailable===false){metric.success_count=null;metric.success_amount=null}return {...metric,_ready:entry.complete&&valid,platformId:result.platform?.id,platform:result.platform?.name||'未提供平台',source:result.platform?.source||'—',direction,currency:result.platform?.currency||L.currency};}));
+   return entry.results.flatMap(result=>directions.map(direction=>{const parts=result._parts||[result],valid=prefixRangeComplete(result,selectedSegment.hourRange)&&parts.every(part=>part.complete!==false&&Array.isArray(part.groups?.hourly)),rows=parts.flatMap(part=>part.groups?.hourly||[]).filter(row=>row.direction===direction&&(!row.currency||row.currency===L.currency)&&finite(row.hour)&&Number.isInteger(Number(row.hour))&&Number(row.hour)>=0&&Number(row.hour)<24&&(!selectedSegment.hourRange||Number(row.hour)>=selectedSegment.hourRange.minHour&&Number(row.hour)<selectedSegment.hourRange.maxHour)),metric=Object.fromEntries(detailFields.map(key=>[key,!valid||rows.some(row=>!finite(row[key]))?null:rows.reduce((n,row)=>n+Number(row[key]),0)]));if(c.successUnavailable(direction)||direction==='withdraw'&&result.withdrawSuccessTimeAvailable===false){metric.success_count=null;metric.success_amount=null}if(prefixResult(result)&&direction==='withdraw'){metric.pending_count=null;metric.pending_amount=null}return {...metric,_ready:entry.complete&&valid,platformId:result.platform?.id,platform:result.platform?.name||'未提供平台',source:result.platform?.source||'—',direction,currency:result.platform?.currency||L.currency};}));
   }
   function summary(page){
    sync();if(!(page==='time'?S.hourApplied:S.applied))return '';const directions=L.direction==='all'?['charge','withdraw']:[L.direction],rows=directions.map(direction=>{const selectedSegment=segment(direction),parts=detailRows(selectedSegment),values=Object.fromEntries(detailFields.map(key=>[key,!parts.length||parts.some(row=>!finite(row[key]))?null:parts.reduce((n,row)=>n+Number(row[key]),0)]));return {...values,direction,segment:selectedSegment};}),heading=page==='time'?String(S.hourApplied.minHour).padStart(2,'0')+':00 ≤ 时段 < '+String(S.hourApplied.maxHour).padStart(2,'0')+':00':label(S.applied),headers=['方向','自定义区间','全部金额','全部笔数','成功金额','成功笔数','处理中金额','处理中笔数','失败金额','失败笔数','成功率'],cells=row=>[row.direction==='withdraw'?'代付':'代收',E(heading),N(row.all_amount),C(row.all_count),N(row.success_amount),C(row.success_count),N(row.pending_amount),C(row.pending_count),N(row.failed_amount),C(row.failed_count),customResults(row.segment)?.complete?R(row.success_count,row.all_count):'—'];
@@ -79,8 +96,9 @@
    // Use original parts: merged groups can otherwise conceal a missing metric.
    const rows=values.flatMap(result=>(result._parts||[result]).flatMap(part=>part.groups.hourly)).filter(row=>row.direction===direction&&(!row.currency||row.currency===L.currency)&&finite(row.hour)&&Number.isInteger(Number(row.hour))&&Number(row.hour)>=0&&Number(row.hour)<24&&(hour===undefined||Number(row.hour)===hour));
    const data=zero();for(const key of fields)data[key]=rows.some(row=>!finite(row[key]))?null:rows.reduce((n,row)=>n+Number(row[key]),0);
+   const verified=values.every(result=>prefixRangeComplete(result,hour===undefined?null:{minHour:hour,maxHour:hour+1}));if(!verified)for(const key of fields)data[key]=null;
    if(c.successUnavailable(direction)||values.some(r=>direction==='withdraw'&&(r.withdrawSuccessTimeAvailable===false||(r.capabilities||r.platform?.capabilities)?.withdrawSuccessTimeAvailable===false))){data.success_count=null;data.success_amount=null}
-   return {data,complete};
+   return {data,complete:complete&&verified};
   }
   function row(direction){
    sync();const suffix=S.loading?'读取 '+S.results.size+'/'+S.targets.length+' 平台':S.applied&&S.results.size<S.targets.length?'已读 '+S.results.size+'/'+S.targets.length+' 平台':'独立统计';
