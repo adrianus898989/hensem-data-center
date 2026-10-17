@@ -12,7 +12,7 @@
    !['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr','amountMin','amountMax','channelType'].some(k=>L[k]);
  }
  function contextKey(access,catalog){return JSON.stringify([access,catalog.map(p=>[p.id,p.source,p.sourceName,p.scopeGroup,p.country,p.team,p.name,p.currency,p.timezone]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))]);}
- function requestFor(platforms,day){return {action:'providerSnapshot',version:1,platformIds:platforms.map(p=>p.id),startAt:day+'T00:00:00',endAt:day+'T23:59:59',direction:'charge',status:'all',currency:'INR',components:['orders','submission','intake'],export:false};}
+ function requestFor(platforms,day){return {action:'providerSnapshot',version:2,platformIds:platforms.map(p=>p.id),startAt:day+'T00:00:00',endAt:day+'T23:59:59',direction:'charge',status:'all',currency:'INR',components:['orders','submission','intake'],export:false};}
  // Component completeness does not mean the whole requested day was published.
  function fullDay(bundle,request){
   const day=request.startAt.slice(0,10),w=bundle.window;if(!w||!validDay(day)||request.startAt!==day+'T00:00:00'||request.endAt!==day+'T23:59:59')return false;

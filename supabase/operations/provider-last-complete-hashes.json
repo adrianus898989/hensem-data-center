@@ -1,0 +1,18 @@
+[
+  {
+    "signature": "private.dashboard_admin_live_provider_snapshot(jsonb)",
+    "before": "d9eab72829992b0ee59e75e9845f0681",
+    "after": "66d7a6afd3e1951726da83daa258df22",
+    "definer": true,
+    "acl": "{postgres=X/postgres,authenticated=X/postgres}",
+    "volatility": "s"
+  },
+  {
+    "signature": "private.provider_snapshot_retire_intraday(uuid)",
+    "before": "121c25849b0328e5ed643e4d2b63ee94",
+    "after": "2222dc8768404fa848930bf4a9533f3e",
+    "definer": false,
+    "acl": "{postgres=X/postgres}",
+    "volatility": "v"
+  }
+]

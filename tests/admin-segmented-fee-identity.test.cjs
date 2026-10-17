@@ -11,7 +11,7 @@ const raw=(n=1,amount=100,extra={})=>({provider:'ExamplePay',direction:'charge',
 const rate=(extra={})=>({country:'印度',provider:'ExamplePay',scopeType:'country',collectFee:'4%',...extra});
 const part=(rows,platform=native)=>({platform:{...platform},summary:[{...raw(rows.reduce((n,r)=>n+r.success_count,0),rows.reduce((n,r)=>n+(r.success_amount||0),0)),provider:undefined}],groups:{provider:rows},total:rows.reduce((n,r)=>n+r.all_count,0)});
 function harness(handler,platform=native){
- const c={Date,console,AbortController,structuredClone,L:{serial:1,catalog:platform?[platform]:[],queryRetrying:false},state:{page:'merchants'},roleAllowed:()=>true,isSuccessAnalysis:()=>false,providerDirection:()=>null,isFlowPage:()=>false,orderSource:p=>String(p?.source||'').toLowerCase().replaceAll('_',''),displayIdentity:p=>p};
+ const c={Date,console,AbortController,structuredClone,L:{serial:1,catalog:platform?[platform]:[],queryRetrying:false},state:{page:'merchants'},roleAllowed:()=>true,statisticWindowsEnabled:()=>false,isSuccessAnalysis:()=>false,providerDirection:()=>null,isFlowPage:()=>false,orderSource:p=>String(p?.source||'').toLowerCase().replaceAll('_',''),displayIdentity:p=>p};
  c.visibleCatalog=()=>c.L.catalog;
  c.window=c;const calls=[];c.hensemLiveRequest=async q=>{calls.push({...q});return {startAt:q.startAt,endAt:q.endAt,rows:[],...await handler(q,calls.length)}};
  vm.runInNewContext(counts+read+';globalThis.engine={mergeParts,readAggregate,plus,combine};',c);

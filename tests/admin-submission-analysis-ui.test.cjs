@@ -465,3 +465,43 @@ test('incomplete, malformed-gap and failed summaries are reread while complete n
 test('queued cached results are never reused after access changes and cancelled stale reads cannot overwrite a new query',async()=>{
  const h=supplementaryCacheHarness();h.select([platform(),platform('b')]);await readSupplementaryBatch(h);h.handler(q=>new Promise(resolve=>h.release=()=>resolve(cachedSupplementaryResponse(q))));const batch=h.ui.startWithOrders(true),pending=batch.read('a'),finished=batch.finish();await new Promise(resolve=>setImmediate(resolve));h.ui.cancel();h.access('actor-new');h.handler(cachedSupplementaryResponse);await readSupplementaryBatch(h);h.release();await pending;await finished;assert(h.ui.capture().results.every(r=>!r._submissionCacheHit));assert.equal(h.ui.metric().received,2);assert.equal(h.ui.capture().failures.length,0);
 });
+
+test('returning to an exact provider scope reuses its own distinct union instead of the last selection',async()=>{
+ const h=supplementaryCacheHarness();h.setProviders(['Pay A']);h.handler(q=>cachedSupplementaryResponse(q));await readSupplementaryBatch(h);const first=h.ui.capture().results[0];
+ h.setProviders(['Pay B']);await readSupplementaryBatch(h);assert.equal(h.calls.length,2);
+ h.setProviders(['Pay A']);h.tick(1000);await readSupplementaryBatch(h);assert.equal(h.calls.length,2);assert.equal(h.ui.capture().results[0]._submissionReadAt,first._submissionReadAt);assert.equal(h.ui.metric().member_count,first.metrics.find(x=>x.provider===null&&x.threshold===15).member_count);
+ h.setProviders(['Pay A','Pay B']);await readSupplementaryBatch(h);assert.equal(h.calls.length,3,'a new distinct-member union must still be queried exactly, never added from two cached leaves');
+});
+test('supplementary exact native cache reuses a subset and reads only newly selected platforms',async()=>{
+ const h=supplementaryCacheHarness();h.select([platform(),platform('b')]);await readSupplementaryBatch(h);assert.equal(h.calls.length,2);
+ h.select([platform('b')]);await readSupplementaryBatch(h);assert.equal(h.calls.length,2);
+ h.select([platform(),platform('b'),platform('c')]);await readSupplementaryBatch(h);assert.deepEqual(h.calls.map(x=>x.platformId),['a','b','c']);assert.equal(h.ui.metric().received,3);
+});
+test('force refresh and authority transitions invalidate every saved provider scope',async()=>{
+ const h=supplementaryCacheHarness();h.setProviders(['Pay A']);await readSupplementaryBatch(h);h.setProviders(['Pay B']);await readSupplementaryBatch(h);
+ await readSupplementaryBatch(h,true);h.setProviders(['Pay A']);await readSupplementaryBatch(h);assert.equal(h.calls.length,4,'refresh must not resurrect a different older provider selection');
+ h.access('actor-other');await readSupplementaryBatch(h);h.access('actor-a:role-v1');await readSupplementaryBatch(h);assert.equal(h.calls.length,6,'returning to a previous account cannot resurrect its earlier cache');
+ h.ui.clearCache();await readSupplementaryBatch(h);assert.equal(h.calls.length,7);
+});
+test('a permission denial without local role refresh clears saved results and stops the supplementary queue',async()=>{
+ const h=supplementaryCacheHarness();h.setProviders(['Pay A']);await readSupplementaryBatch(h);h.setProviders(['Pay B']);h.select([platform(),platform('b')]);h.handler(()=>{throw Object.assign(Error('permission denied'),{code:'42501'})});await readSupplementaryBatch(h);
+ assert.equal(h.calls.length,2);assert.equal(h.ui.capture().results.length,0);assert.equal(h.ui.capture().status,'error');assert.equal(h.ui.metric().available,false);
+ h.setProviders(['Pay A']);h.select([platform()]);h.handler(cachedSupplementaryResponse);await readSupplementaryBatch(h);assert.equal(h.calls.length,3,'denial invalidates every prior scope even if local metadata is unchanged');
+});
+test('recent-cache TTL is fixed at read time and cannot expand when its window crosses the historical boundary',async()=>{
+ const h=supplementaryCacheHarness();h.clock(Date.parse('2026-09-30T23:59:50Z'));await readSupplementaryBatch(h);h.tick(30000);await readSupplementaryBatch(h);assert.equal(h.calls.length,2,'the original thirty-second result expires even though its end is now over a day old');
+});
+test('exact summary cache is bounded by entry count and rejects oversized results',async()=>{
+ const h=supplementaryCacheHarness();for(let i=0;i<65;i++){h.select([platform('p'+i)]);await readSupplementaryBatch(h);}assert.equal(h.calls.length,65);
+ h.select([platform('p64')]);await readSupplementaryBatch(h);assert.equal(h.calls.length,65);h.select([platform('p0')]);await readSupplementaryBatch(h);assert.equal(h.calls.length,66,'least-recent entry is evicted');
+ h.select([platform('huge')]);h.handler(q=>({...cachedSupplementaryResponse(q),padding:'x'.repeat(600000)}));await readSupplementaryBatch(h);await readSupplementaryBatch(h);assert.equal(h.calls.length,68,'a result exceeding one MiB in memory is not retained');
+});
+test('an interrupted replacement does not cache a late response for a future return to its scope',async()=>{
+ const h=supplementaryCacheHarness();h.setProviders(['Pay A']);await readSupplementaryBatch(h);h.setProviders(['Pay B']);let resolve;
+ h.handler(q=>new Promise(done=>{resolve=()=>done(cachedSupplementaryResponse(q))}));const batch=h.ui.startWithOrders(),read=batch.read('a'),finish=batch.finish();await settleReads();h.ui.cancel();h.setProviders(['Pay A']);h.handler(cachedSupplementaryResponse);await readSupplementaryBatch(h);resolve();await read;await finish;assert.equal(h.calls.length,2);
+ h.setProviders(['Pay B']);await readSupplementaryBatch(h);assert.equal(h.calls.length,3,'cancelled response cannot seed a later cache hit');
+});
+test('pagehide invalidates exact supplementary entries and aborts owned reads',async()=>{
+ const old=global.addEventListener;let pagehide;global.addEventListener=(type,fn)=>{if(type==='pagehide')pagehide=fn};let h;try{h=supplementaryCacheHarness();}finally{if(old)global.addEventListener=old;else delete global.addEventListener;}
+ await readSupplementaryBatch(h);assert.equal(h.calls.length,1);pagehide();await readSupplementaryBatch(h);assert.equal(h.calls.length,2);
+});

@@ -30,6 +30,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -103,6 +104,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -140,6 +142,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -177,6 +180,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -214,6 +218,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -249,6 +254,7 @@
         "catalog",
         "providerOptions",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "syncHealth",
         "workorders"
@@ -615,6 +621,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -655,6 +662,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -695,6 +703,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -763,6 +772,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -881,6 +891,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -919,6 +930,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -957,6 +969,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -990,6 +1003,7 @@
         "providerOptions",
         "syncHealth",
         "aggregate",
+        "aggregatePrepared",
         "workorders",
         "rates"
       ]
@@ -1023,6 +1037,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -1098,6 +1113,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -1135,6 +1151,7 @@
         "syncHealth",
         "intakeCoverage",
         "aggregate",
+        "aggregatePrepared",
         "rates",
         "reportSummary",
         "collectedData",
@@ -1187,10 +1204,19 @@
       "moduleLabel": "系统管理后台",
       "label": "采集管理",
       "actions": [
-        { "id": "view", "label": "查看电脑与任务" },
-        { "id": "edit", "label": "连接电脑与启停任务", "sensitive": true }
+        {
+          "id": "view",
+          "label": "查看电脑与任务"
+        },
+        {
+          "id": "edit",
+          "label": "连接电脑与启停任务",
+          "sensitive": true
+        }
       ],
-      "requests": ["collectorControl"]
+      "requests": [
+        "collectorControl"
+      ]
     },
     {
       "id": "provider_config",
