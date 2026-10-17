@@ -60,9 +60,12 @@
  root.HensemLiveReportData={normalizeIdentity,displayAllowed,identityKey:keyFor,confirmedAliasKey:row=>confirmedRaja(row)?keyFor(row):null,create({L,E,N,C,R,request,render,nativeCatalog,accessContext=()=>'',displayAllowed=()=>true}){
   const S={catalogRows:[],catalogLoaded:false,catalogBusy:false,catalogError:'',catalogSerial:0,catalogAt:0,loading:false,error:'',result:null,serial:0,scope:null,scopeKey:'',expanded:new Set(),tabs:new Map()};let catalogPending=null,loadPending=null,completed=null;
   const notify=()=>{if(typeof render==='function')render()};
-  let catalogMemo=null,accessKey=null,manualCatalogPending=null;
+  let catalogMemo=null,accessKey=null,manualCatalogPending=null,catalogGeneration=0;
   Object.assign(S,{manualCatalogRows:[],manualCatalogLoaded:false,manualCatalogError:'',manualCatalogAt:0,manualCatalogSerial:0});
-  function syncAccess(){const key=String(accessContext());if(accessKey===null){accessKey=key;return;}if(accessKey===key)return;accessKey=key;S.catalogSerial++;S.manualCatalogSerial++;S.serial++;S.catalogRows=[];S.manualCatalogRows=[];S.manualCatalogLoaded=false;S.manualCatalogError='';S.manualCatalogAt=0;S.catalogLoaded=false;S.catalogBusy=false;S.catalogError='';S.catalogAt=0;S.loading=false;S.error='';S.result=null;S.scope=null;S.scopeKey='';S.expanded.clear();S.tabs.clear();catalogPending=null;manualCatalogPending=null;loadPending=null;completed=null;catalogMemo=null;}
+  // Configuration pages cannot read collected reports. Mark their cached
+  // directory/results obsolete; the next authorized report entry reads them.
+  function invalidateCatalog(){catalogGeneration++;S.catalogSerial++;S.manualCatalogSerial++;S.serial++;S.catalogRows=[];S.manualCatalogRows=[];S.manualCatalogLoaded=false;S.manualCatalogError='';S.manualCatalogAt=0;S.catalogLoaded=false;S.catalogBusy=false;S.catalogError='';S.catalogAt=0;S.loading=false;S.error='';S.result=null;S.scope=null;S.scopeKey='';S.expanded.clear();S.tabs.clear();catalogPending=null;manualCatalogPending=null;loadPending=null;completed=null;catalogMemo=null;}
+  function syncAccess(){const key=String(accessContext());if(accessKey===null){accessKey=key;return;}if(accessKey===key)return;accessKey=key;invalidateCatalog();}
   async function loadManualCatalog(force=false){
    syncAccess();if(manualCatalogPending)return manualCatalogPending;if(S.manualCatalogLoaded&&!S.manualCatalogError&&!force&&Date.now()-S.manualCatalogAt<60000)return catalog();
    const serial=++S.manualCatalogSerial,access=accessKey;S.manualCatalogError='';
@@ -188,8 +191,8 @@
   }
   root.liveReportConfig=id=>{const [dataset,system,country,platform]=JSON.parse(id),match=S.catalogRows.find(f=>f.dataset===dataset&&f.system===system&&(f.rawCountry??f.country)===country&&(f.rawPlatform??f.name)===platform&&f.available!==false&&Number(f.records)!==0);if(!match||!configs.has(dataset)||typeof root.HensemLivePayoutConfig?.openTarget!=='function')return;root.HensemLivePayoutConfig.openTarget({system,country,platform});root.setPage?.('payout_config')};
   root.liveReportToggle=id=>{if(S.expanded.has(id))S.expanded.delete(id);else S.expanded.add(id);notify()};root.liveReportTab=(id,tab)=>{if(!['providers','daily'].includes(tab))return;S.tabs.set(id,tab);notify()};
-  function capture(){syncAccess();return {accessContext:accessKey,result:S.result,scope:S.scope,scopeKey:S.scopeKey,error:S.loading?'日报读取已暂停，点击查询继续':S.error,expanded:new Set(S.expanded),tabs:new Map(S.tabs),completed:S.result?completed:null};}
-  function restore(saved){syncAccess();if(saved&&(saved.accessContext??'')!==accessKey)saved=null;S.serial++;loadPending=null;S.loading=false;S.result=saved?.result||null;S.scope=saved?.scope||null;S.scopeKey=saved?.scopeKey||'';S.error=saved?.error||'';S.expanded=new Set(saved?.expanded||[]);S.tabs=new Map(saved?.tabs||[]);completed=saved?.completed||null;}
-  return {loadManualCatalog,loadCatalog,catalog,selected,load,cancel,capture,restore,providers,render:renderReport,state:S};
+  function capture(){syncAccess();return {accessContext:accessKey,catalogGeneration,result:S.result,scope:S.scope,scopeKey:S.scopeKey,error:S.loading?'日报读取已暂停，点击查询继续':S.error,expanded:new Set(S.expanded),tabs:new Map(S.tabs),completed:S.result?completed:null};}
+  function restore(saved){syncAccess();if(saved&&((saved.accessContext??'')!==accessKey||(saved.catalogGeneration??0)!==catalogGeneration))saved=null;S.serial++;loadPending=null;S.loading=false;S.result=saved?.result||null;S.scope=saved?.scope||null;S.scopeKey=saved?.scopeKey||'';S.error=saved?.error||'';S.expanded=new Set(saved?.expanded||[]);S.tabs=new Map(saved?.tabs||[]);completed=saved?.completed||null;}
+  return {invalidateCatalog,loadManualCatalog,loadCatalog,catalog,selected,load,cancel,capture,restore,providers,render:renderReport,state:S};
  }};
 })(typeof window!=='undefined'?window:globalThis);

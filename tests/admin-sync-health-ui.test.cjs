@@ -62,8 +62,8 @@ test('integration waits for a manual page query and its main loading states',asy
  const evaluate=(page,L,modules={},reportState={},readPhase=null,submissionAnalysis=null)=>vm.runInNewContext(supervisorDeclarations+'\n'+phaseDeclaration+'\n'+ready,{pages:[],state:{page},L,readPhase,submissionAnalysis,window:modules,collectedPage:{state:{busy:false}},reportData:{state:reportState}});
  const L={serial:7,catalogReady:true,initialReadComplete:true,loading:false,overviewQueried:false,pageQueried:true};
  for(const page of ['auto_withdraw','rates','collected_data','payout_config','workorders','deposit_tracking','deposit_statistics','workorder_reconciliation','workorder_workload','workorder_operation_logs'])assert.equal(evaluate(page,L),true,page);
- for(const page of ['workorder_permissions']){
-  assert.equal(evaluate(page,L),false,page+' has no connected employee source and must not start business health reads');
+ for(const page of ['workorder_permissions','channel_status']){
+  assert.equal(evaluate(page,L),false,page+' has no automatic health request contract after a completed query');
   const h=setup();h.setReady(evaluate(page,L));h.api.schedule(page);await h.run();assert.equal(h.calls.length,0,page);
  }
  for(const page of ['workorders','deposit_tracking']){

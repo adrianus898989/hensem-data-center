@@ -119,6 +119,22 @@ test('configuration saving and its refresh prevent page switching or tab deletio
  write.resolve({ok:true});await settle();h.c.setPage('time');h.c.liveCloseAllPages();assert.equal(h.c.state.page,'provider_config','post-write directory refresh cannot race a newly selected report');
  catalog.resolve({platforms:[P]});await saving;await settle();h.c.setPage('time');assert.equal(h.c.state.page,'time');assert.equal(h.calls.filter(q=>q.action==='configurationWrite').length,1);
 });
+test('actual provider and platform saves invalidate reports without unauthorized configuration-page report reads',async()=>{
+ const roleCatalog=JSON.parse(fs.readFileSync(path.join(__dirname,'../src/lib/dashboardRoleCatalog.json'),'utf8'));
+ for(const page of ['teams','provider_config'])for(const refreshFails of [false,true]){
+  let reports;const h=harness({page,reports:true,extraModules:['live-team-sheet-query.js'],beforeLive:c=>{const create=c.HensemLiveReportData.create;c.HensemLiveReportData.create=options=>(reports=create(options));}});await settle();
+  Object.assign(reports.state,{catalogLoaded:true,manualCatalogLoaded:true,catalogAt:1,manualCatalogAt:1,result:{feeds:[]},scopeKey:'old-config-scope'});const oldReport=reports.capture();
+  h.L.providerConfig={canManage:true,rows:[{country:'印度',platform:'Synthetic platform',rawProvider:'RawPay',canonicalProvider:'ConfirmedPay',version:3}],options:{canonicalProviders:['ConfirmedPay']}};
+  h.L.platformAssignments={canManage:true,rows:[{mapped:false,team:'Synthetic team',system:'LG',platform:'Synthetic platform',sourceCountry:'印度',sourcePlatform:'SYNTHETIC',sourceSystem:'LG',countryCode:'IN',version:3}],options:{teams:['Synthetic team'],systems:['LG'],countryChoices:[{country:'印度',code:'IN'}],sourceSystems:['LG']}};
+  h.setHandler(q=>{if(q.action==='configurationWrite')return{ok:true};if(q.action==='catalog'){if(refreshFails)throw Error('Synthetic directory refresh failed');return{platforms:[P]}}if(q.action==='collectedData')return{rows:[]};if(q.action==='platformAssignments')return h.L.platformAssignments;if(q.action==='providerConfig')return h.L.providerConfig;return{rows:[],total:0}});
+  const transport=h.c.hensemLiveRequest;h.c.hensemLiveRequest=(q,...args)=>{const contract=roleCatalog.pages.find(p=>p.id===h.c.state.page);assert(contract.requests.includes(q.action),'unauthorized '+h.c.state.page+'.'+q.action);return transport(q,...args)};
+  if(page==='teams')h.c.configEditPlatform(0);else h.c.configEditProvider(0);const host=h.nodes.get('liveConfigDialog'),query=host.querySelector.bind(host),values={country:'0',team:'Synthetic team',system:'LG',platformName:'Synthetic platform',sourceSystem:'LG',canonicalProvider:'ConfirmedPay'};
+  host.querySelector=key=>key==='form'?{reportValidity:()=>true}:key.startsWith('#config-')?{value:values[key.slice(8)]||''}:query(key);const start=h.calls.length;await h.c.configSave();await settle();const actions=h.calls.slice(start).map(q=>q.action);
+  assert.equal(actions.filter(a=>a==='configurationWrite').length,1);assert(actions.includes('catalog'));assert(!actions.some(a=>['collectedData','reportSummary'].includes(a)));assert.equal(reports.state.catalogLoaded,false);assert.equal(reports.state.manualCatalogLoaded,false);assert.equal(reports.state.result,null);reports.restore(oldReport);assert.equal(reports.state.result,null,'old report tabs cannot restore their pre-save cache');
+  if(refreshFails){assert.match(h.L[page==='teams'?'platformAssignmentsError':'providerConfigError'],/已保存，目录刷新未完成/);continue;}
+  assert(actions.includes(page==='teams'?'platformAssignments':'providerConfig'));h.c.setPage('providers');await settle();const discover=h.calls.slice(start).filter(q=>q.action==='collectedData');assert.equal(discover.length,1);assert.equal(discover[0].dataset,'team_sheet');assert.equal(reports.state.manualCatalogLoaded,true);
+ }
+});
 
 test('opening or closing navigation groups updates only the menu, never recomputes the current report',async()=>{
  const h=await ready(),before=pageWrites(h),filters=filterWrites(h),requests=h.calls.length,html=h.html();
