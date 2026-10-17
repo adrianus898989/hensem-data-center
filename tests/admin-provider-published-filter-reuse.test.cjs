@@ -92,7 +92,7 @@ test('actor, role version and native platform remapping cannot reuse another pub
   if(change==='role')h.c.hensemRoleAccess={...h.c.hensemRoleAccess,version:2};
   if(change==='native'){ps[0].sourceName='SYNTHETIC_REMAPPED';h.L.catalog[0].sourceName=ps[0].sourceName;}
   h.c.render();assert.equal(h.L.providerPublished,null,change);assert.equal(h.L.results.length,0,change);const before=h.calls.length;
-  await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,2,change);assert.notEqual(h.L.providerPublished.bundle,base,change);assert.deepEqual(h.calls.slice(before).map(q=>q.action),change==='native'?['providerSnapshot','intakeCoverage','workorders']:['providerSnapshot','intakeCoverage','rates','workorders'],change);assertSelected(h);noSourceReads(h);
+  await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,2,change);assert.notEqual(h.L.providerPublished.bundle,base,change);assert.deepEqual(h.calls.slice(before).map(q=>q.action),['providerSnapshot','intakeCoverage','rates','workorders'],change);assertSelected(h);noSourceReads(h);
  }
 });
 
