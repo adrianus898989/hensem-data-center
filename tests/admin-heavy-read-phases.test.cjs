@@ -43,7 +43,7 @@ test('navigation cancels both active order signals and prevents queued phases fr
 });
 
 test('provider ordinary query reuses the exact complete aggregate windows; explicit refresh reactivates them',async()=>{
- const h=await setup(),first=h.c.liveQuery();await finish(h,first);const count=h.history.filter(q=>q.action==='aggregate').length;assert.equal(count,6);const repeat=h.c.liveQuery();await finish(h,repeat);assert.equal(h.history.filter(q=>q.action==='aggregate').length,count);assert(h.L.results.every(r=>r._aggregateCacheHit));assert.match(h.nodes.get('liveFilters').innerHTML,/liveQuery\(true\)/);const refresh=h.c.liveQuery(true);await finish(h,refresh);assert.equal(h.history.filter(q=>q.action==='aggregate').length,count+6);assert.equal(h.max(),2);
+ const h=await setup(),first=h.c.liveQuery();await finish(h,first);const count=h.history.filter(q=>q.action==='aggregate').length;assert.equal(count,6);const repeat=h.c.liveQuery();await finish(h,repeat);assert.equal(h.history.filter(q=>q.action==='aggregate').length,count);assert(h.L.results.every(r=>r._aggregateCacheHit));assert.match(h.nodes.get('liveFilters').innerHTML,/onclick="liveRefresh\(\)"/);const refresh=h.c.liveRefresh();await finish(h,refresh);assert.equal(h.history.filter(q=>q.action==='aggregate').length,count+6);assert.equal(h.max(),2);
 });
 
 test('manual workorder, fee and exclusion retries cannot bypass the active page phase',async()=>{
