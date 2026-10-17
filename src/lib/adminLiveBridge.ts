@@ -244,15 +244,15 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       if(!value||typeof value!=="object"||Array.isArray(value))throw Error("日报来源无效");
       const f=value as Record<string,unknown>;
       if(Object.keys(f).some(k=>!["dataset","system","country","platform","direction","sourceKind"].includes(k)))throw Error("日报来源无效");
-      if(!["volume","panda_success","lg_success","collection_success","newar_third_party_volume","auto"].includes(String(f.dataset)))throw Error("日报类型无效");
+      if(!["team_sheet","volume","panda_success","lg_success","collection_success","newar_third_party_volume","auto"].includes(String(f.dataset)))throw Error("日报类型无效");
       for(const key of ["dataset","system","country","platform"])if(typeof f[key]!=="string"||(key!=="country"&&!f[key])||String(f[key]).length>200||/[\u0000-\u001f]/.test(String(f[key])))throw Error("日报来源无效");
       if(!["charge","withdraw"].includes(String(f.direction)))throw Error("日报方向无效");
-      if(typeof f.sourceKind!=="string"||!["direct","google_sheets","unknown"].includes(f.sourceKind))throw Error("日报来源链路无效");
+      if(typeof f.sourceKind!=="string"||!(f.dataset==="team_sheet"?["manual_file"]:["direct","google_sheets","unknown"]).includes(f.sourceKind))throw Error("日报来源链路无效");
     }
     return {...p};
   }
   if(p.action==="collectedData"){
-    const allowed=p.operation==='catalog'?["action","operation"]:["action","operation","dataset","country","platform","startAt","endAt","offset","limit","direction","sourceKind"];
+    const allowed=p.operation==='catalog'?(p.dataset==='team_sheet'?["action","operation","dataset"]:["action","operation"]):["action","operation","dataset","country","platform","startAt","endAt","offset","limit","direction","sourceKind"];
     if(!['catalog','rows'].includes(String(p.operation))||Object.keys(p).some(k=>!allowed.includes(k)))throw Error("采集数据参数无效");
     if(p.operation==='rows'){
       for(const k of ['dataset','country','platform'])if(typeof p[k]!=="string"||String(p[k]).length>200||/[\u0000-\u001f]/.test(String(p[k])))throw Error("采集来源无效");
