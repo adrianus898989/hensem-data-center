@@ -29,8 +29,9 @@
   const nativeAuthorized=()=>!S.scope||S.scope.platforms.every(p=>(c.authorizedPlatforms?.()||c.selected()).some(current=>nativeKey(current)===nativeKey(p)));
   const authorized=()=>nativeAuthorized()&&active()&&allowed('query')&&!!authority()&&(!S.scope||S.scope.access===authority());
   const canonical=(v,country)=>String(root.HensemProviderNames?.canonical(v,country)??v??'').trim()||'未识别通道';
-  function snapshots(){root.HensemStatisticWindows?.ensure(L);return {country:L.country,currency:L.currency,team:L.team,source:L.source,access:authority(),platforms:uniqPlatforms(c.selected()).map(p=>({...p})),native:uniqPlatforms(c.nativePlatforms()).map(p=>p.id),providers:(c.activeValues('provider','')||[]).slice().sort(),date:date(L.from),from:L.from,to:L.to,successFrom:L.successFrom,successTo:L.successTo,successBasis:L.successBasis};}
-  function scopeKey(v){return JSON.stringify([v.country,v.currency,v.team,v.source,v.access,v.platforms.map(p=>[p.id,p.source,p.currency,p.timezone,p.sourceName,p.identityCountry,p.rawCountry]).sort(),v.native.slice().sort(),v.providers,v.from,v.to,v.successFrom,v.successTo,v.successBasis,S.compareDate]);}
+  const queryProviders=(providers,country)=>root.HensemProviderNames?.queryNames?.(providers,country)??providers.slice();
+  function snapshots(){root.HensemStatisticWindows?.ensure(L);return {country:L.country,currency:L.currency,team:L.team,source:L.source,access:authority(),platforms:uniqPlatforms(c.selected()).map(p=>({...p})),native:uniqPlatforms(c.nativePlatforms()).map(p=>p.id),providers:(c.activeValues('provider','')||[]).slice().sort(),queryProviders:queryProviders(c.activeValues('provider','')||[],L.country).slice().sort(),date:date(L.from),from:L.from,to:L.to,successFrom:L.successFrom,successTo:L.successTo,successBasis:L.successBasis};}
+  function scopeKey(v){return JSON.stringify([v.country,v.currency,v.team,v.source,v.access,v.platforms.map(p=>[p.id,p.source,p.currency,p.timezone,p.sourceName,p.identityCountry,p.rawCountry]).sort(),v.native.slice().sort(),v.queryProviders||v.providers,v.from,v.to,v.successFrom,v.successTo,v.successBasis,S.compareDate]);}
   function matches(){return !!S.scope&&!L.dirty&&S.scope.key===scopeKey(snapshots());}
   const current=()=>authorized()&&matches();
   const paint=()=>{if(active())c.render();};
@@ -68,7 +69,7 @@
    const scope=S.scope,native=new Set(scope.native);initializeDays(dayList);
    await runQueue(dayList.flatMap(day=>scope.platforms.filter(p=>native.has(p.id)).map(p=>async()=>{
     const entry=S.payments[day][p.id];if(day===scope.compareDate)S.comparePayments[p.id]=entry;if(fresh(entry))return;entry.status='loading';paint();
-    try{const bounds=period(day,p,scope),q={action:'aggregate',view:'providers',platformId:p.id,startAt:bounds.startAt,endAt:bounds.endAt,successStartAt:bounds.successStartAt,successEndAt:bounds.successEndAt,successBasis:bounds.successBasis,direction:'all',status:'all',currency:p.currency,offset:0,limit:20};if(scope.providers.length)q.providers=scope.providers.slice();
+    try{const bounds=period(day,p,scope),q={action:'aggregate',view:'providers',platformId:p.id,startAt:bounds.startAt,endAt:bounds.endAt,successStartAt:bounds.successStartAt,successEndAt:bounds.successEndAt,successBasis:bounds.successBasis,direction:'all',status:'all',currency:p.currency,offset:0,limit:20};if(scope.providers.length)q.providers=queryProviders(scope.providers,p.country||scope.country);
      const response=await c.readAggregate(q,querySerial,forceRefresh);if(token!==serial||!current())return;
      Object.assign(entry,{status:'ready',response:platformResponse(response,p,q),note:'已读取后台统计',local:bounds.local});
     }catch(error){if(token!==serial||!current())return;if(rejectAuthority(error))return;if(['stale','invalid'].includes(error?.status))retained=null;Object.assign(entry,{status:['missing','stale','building','unsupported'].includes(error?.status)?error.status:'error',note:error?.message||'读取失败'});}paint();
@@ -95,7 +96,7 @@
    const token=++serial,scope=S.scope,key=trend?'workTrendStatus':'workStatus';S[key]='loading';if(force&&!trend)S.workorders={};const dayList=dates(scope,trend);initializeDays(dayList,true);
    paint();await runQueue(dayList.flatMap(day=>scope.platforms.filter(p=>['ar','newar'].includes(src(p.source))).map(p=>async()=>{
     const entry=S.workorders[day][p.id];if(entry.status==='ready'&&!force)return;entry.status='loading';paint();
-    try{const q={action:'workorders',startAt:day+'T00:00:00.000Z',endAt:day+'T23:59:59.000Z',country:scope.country,platforms:[...new Set([p.name,p.sourceName].filter(Boolean))],direction:'all',offset:0,limit:20};if(scope.providers.length)q.providers=scope.providers.slice();
+    try{const q={action:'workorders',startAt:day+'T00:00:00.000Z',endAt:day+'T23:59:59.000Z',country:scope.country,platforms:[...new Set([p.name,p.sourceName].filter(Boolean))],direction:'all',offset:0,limit:20};if(scope.providers.length)q.providers=queryProviders(scope.providers,p.country||scope.country);
      const response=await c.request(q);if(token!==serial||!current())return;
      if(response?.startDate!==day||response?.endDate!==day||!response.summary||!Array.isArray(response.byPlatformProvider))throw Error('工单日期或全量平台三方汇总未完整返回');
      if(response.byPlatformProvider.some(row=>row.platformId!==p.id||row.source&&src(row.source)!==src(p.source)||row.country&&row.country!==p.country))throw Error('工单返回了不同原生平台，不能混入本平台');

@@ -2,6 +2,8 @@ const {test,before,after,beforeEach,afterEach}=require('node:test');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {PGlite}=require('@electric-sql/pglite');
 const read=p=>fs.readFileSync(path.join(__dirname,'..',p),'utf8');
+// Compare this historical role snapshot before the two later auxiliary-member request additions.
+const historicalMemberRequests=p=>({...p,requests:p.requests.filter(action=>action!=='memberDaily'||!['overview','merchants'].includes(p.id))});
 const migration=read('supabase/migrations/20260930180000_dashboard_roles.sql');
 const listFix=read('supabase/migrations/20260930230000_role_management_list_fix.sql');
 const retiredCatalog=read('supabase/migrations/20260930231000_retire_channelquality_role_permission.sql');
@@ -53,7 +55,7 @@ before(async()=>{
 after(async()=>db?.close());beforeEach(async()=>{await db.exec('begin');await as(OWNER);});afterEach(async()=>{await db.exec('rollback');await admin();});
 
 test('catalog exactly matches shared UI permission catalog and HMAC matches independent SHA256',async()=>{
- await admin();const catalog=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(catalog.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.filter(page=>!['success_analysis','daily_comparison','collector_control','channel_status'].includes(page.id)).map(page=>({...page,...(page.id==='stuck'?{label:'代付中与卡单分析',moduleId:'risk',moduleLabel:'智能风控中心'}:{}),actions:page.id==='ip'?page.actions.filter(action=>action.id!=='edit'):page.actions,requests:page.requests.filter(request=>!['analysisOrders','pendingOrders','submissionStreak','aggregatePrepared'].includes(request))})));
+ await admin();const catalog=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(catalog.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.map(historicalMemberRequests).filter(page=>!['success_analysis','daily_comparison','collector_control','channel_status'].includes(page.id)).map(page=>({...page,...(page.id==='stuck'?{label:'代付中与卡单分析',moduleId:'risk',moduleLabel:'智能风控中心'}:{}),actions:page.id==='ip'?page.actions.filter(action=>action.id!=='edit'):page.actions,requests:page.requests.filter(request=>!['analysisOrders','pendingOrders','submissionStreak','aggregatePrepared'].includes(request))})));
  const key=Buffer.alloc(32,11),msg='role-context';assert.equal(await scalar("select private.dashboard_role_hmac($1,decode($2,'hex'))",[msg,key.toString('hex')]),crypto.createHmac('sha256',key).update(msg).digest('hex'));
 });
 test('collector registration preserves current catalog, saved roles, assignments and accounts while enabling explicit grants',async()=>{
@@ -63,7 +65,7 @@ test('collector registration preserves current catalog, saved roles, assignments
  await db.exec(read('tests/fixtures/daily-comparison-role-catalog-baseline.sql'));
  await db.exec(read('supabase/migrations/20261004140008_daily_comparison_role_catalog.sql').replace(/^begin;$/m,'').replace(/^commit;$/m,''));
  await db.exec(collectorRegistration);assert.deepEqual(await saved(),before);
- assert.deepEqual((await scalar('select private.dashboard_role_catalog()')).pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.filter(p=>p.id!=='channel_status').map(p=>({...p,requests:p.requests.filter(r=>r!=='aggregatePrepared')})));
+ assert.deepEqual((await scalar('select private.dashboard_role_catalog()')).pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.map(historicalMemberRequests).filter(p=>p.id!=='channel_status').map(p=>({...p,requests:p.requests.filter(r=>r!=='aggregatePrepared')})));
  await as(ADMIN);assert.deepEqual((await access()).permissions,['providers.view']);
  await as(OWNER);assert((await access()).permissions.includes('collector_control.edit'));
  const collectorRole=await create(['collector_control.view','collector_control.edit']);await assign(VIEWER,collectorRole);await as(VIEWER);

@@ -35,23 +35,43 @@
  }
  root.HensemWorkorderUI={pager,money,statusNames,currentMonth,recentSevenDays,today};
  root.HensemLiveWorkorderOperations={create:function(ctx){
-  const {L,E,C,box,table,request,render,page,openDrawer,formatTime}=ctx,states={};
+  const {L,E,C,box,table,request:sourceRequest,render,page,openDrawer,formatTime}=ctx,states={};
+  async function request(...args){const result=await sourceRequest(...args);let changed=false;for(const value of Object.values(states))changed=syncDisplayState(value)||changed;if(changed)render();return result;}
   const reconciliationBatch=root.HensemWorkorderReconciliationBatch?.create({request});
   const viewFor=p=>({workorders:'records',workorder_reconciliation:'missing',workorder_workload:'workload',workorder_operation_logs:'logs'}[p]);
   const handles=p=>!!viewFor(p);
   function defaultDraft(p){const country=L.country||'印度';return {...Object.fromEntries(keys.map(k=>[k,''])),...(p==='workorders'?{team:''}:{}),country,...(p==='workorders'?recentSevenDays:currentMonth)(country,L.catalog),dateBasis:p==='workorders'||p==='workorder_reconciliation'&&['印度','IN','INDIA'].includes(String(country).toUpperCase())?'submission':'operation',...(p==='workorder_reconciliation'?{issueKind:'deposit',registrationStatus:'missing',successBasis:'processed'}:{})};}
-  function state(){const p=page();if(!states[p])states[p]={draft:defaultDraft(p),initialized:!!L.catalogReady,filters:null,result:null,orderDisplayRows:[],orderSort:{key:'latestSubmittedAt',direction:'desc'},more:false,busy:false,error:'',serial:0,current:1,size:20,portalResult:null,portalError:'',portalBusy:false,portalSerial:0,portalCurrent:1,portalSize:20,mode:p==='workorders'?'orders':'records',analysis:null,analysisKey:'',analysisBusy:false,analysisError:'',analysisSerial:0,expanded:null,batchProgress:null};const s=states[p];if(!s.initialized&&L.catalogReady){s.draft=defaultDraft(p);s.initialized=true;}return s;}
+  function state(){const p=page();if(!states[p])states[p]={draft:defaultDraft(p),initialized:!!L.catalogReady,filters:null,result:null,orderDisplayRows:[],orderSort:{key:'latestSubmittedAt',direction:'desc'},more:false,busy:false,error:'',serial:0,current:1,size:20,portalResult:null,portalError:'',portalBusy:false,portalSerial:0,portalCurrent:1,portalSize:20,mode:p==='workorders'?'orders':'records',analysis:null,analysisKey:'',analysisBusy:false,analysisError:'',analysisSerial:0,expanded:null,batchProgress:null};const s=states[p];if(!s.initialized&&L.catalogReady){s.draft=defaultDraft(p);s.initialized=true;}syncDisplayState(s);return s;}
 
   const isReconciliation=s=>page()==='workorder_reconciliation'&&isIndia((s||state()).draft.country)&&(s||state()).draft.issueKind!=='withdraw';
   const isIndia=country=>['印度','IN','INDIA'].includes(String(country||'').toUpperCase());
   const option=(v,l,selected)=>'<option value="'+E(v)+'" '+(v===selected?'selected':'')+'>'+E(l)+'</option>';
   function select(label,key,items,all=true){const s=state();return '<label class="live-field"><span>'+label+'</span><select aria-label="'+label+'" onchange="workorderOperationsSet(\''+key+'\',this.value)">'+(all?option('','全部',s.draft[key]):'')+items.map(([v,l])=>option(v,l,s.draft[key])).join('')+'</select></label>';}
   function input(label,key,type='search'){const s=state();return '<label class="live-field"><span>'+label+'</span><input aria-label="'+label+'" type="'+type+'" '+(type==='number'?'min="0" step="any"':'maxlength="200"')+' value="'+E(s.draft[key])+'" oninput="workorderOperationsSet(\''+key+'\',this.value,false)"></label>';}
+  const displayAllowed=p=>root.HensemLiveReportData?.displayAllowed?.(p)!==false;
+  const businessCatalog=()=>L.catalog.filter(displayAllowed);
+  const hiddenNative=country=>L.catalog.filter(p=>p.country===country&&!displayAllowed(p));
+  const visiblePlatformName=(name,country)=>!hiddenNative(country).some(p=>p.name===name);
+  function syncDisplayState(s){
+   const hidden=L.catalog.filter(p=>!displayAllowed(p)),key=hidden.length?JSON.stringify(hidden.map(p=>[p.id,p.name,p.country,p.team]).sort()):'';
+   if(s.displayContext===key)return false;if(s.displayContext===undefined&&!key){s.displayContext=key;return false;}
+   const hadData=s.result||s.portalResult||s.analysis||s.busy;
+   s.displayContext=key;s.serial++;s.analysisSerial++;resetPortal(s);reconciliationBatch?.cancel();originalSerial++;originalDrawer=null;
+   Object.assign(s,{result:null,filters:null,analysis:null,analysisKey:'',analysisBusy:false,analysisError:'',orderDisplayRows:[],busy:false,error:'',batchProgress:null});
+   if(s.draft.team&&!displayAllowed({team:s.draft.team}))s.draft.team='';if(s.draft.platform&&!visiblePlatformName(s.draft.platform,s.draft.country))s.draft.platform='';
+   if(hadData)root.closeDrawer?.();return true;
+  }
+  function checkDisplayScope(filters,country,allowTeam=false){
+   if(!hiddenNative(country).length)return;
+   if(allowTeam&&filters.team&&businessCatalog().some(p=>p.country===country&&teamName(p)===filters.team))return;
+   if(filters.platform&&filters.platform!=='all'&&visiblePlatformName(filters.platform,country)&&businessCatalog().some(p=>p.country===country&&p.name===filters.platform))return;
+   throw Error(allowTeam?'请选择当前展示的团队或平台后查询':'请选择当前展示的平台后查询');
+  }
   const teamName=p=>typeof p.team==='string'?p.team.trim():'';
-  const authorizedTeams=()=>[...new Set(L.catalog.map(teamName).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'));
-  const workorderPlatforms=(draft,result,committed)=>[...new Set([...L.catalog.filter(p=>p.country===draft.country&&(!draft.team||teamName(p)===draft.team)).map(p=>p.name),...(!draft.team&&committed?.country===draft.country?result?.platforms||[]:[])].filter(Boolean))];
+  const authorizedTeams=()=>[...new Set(businessCatalog().map(teamName).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'));
+  const workorderPlatforms=(draft,result,committed)=>[...new Set([...businessCatalog().filter(p=>p.country===draft.country&&(!draft.team||teamName(p)===draft.team)).map(p=>p.name),...(!draft.team&&committed?.country===draft.country?result?.platforms||[]:[])].filter(name=>name&&visiblePlatformName(name,draft.country)))];
   function filters(){
-   const s=state(),view=viewFor(page()),countries=[...new Set(L.catalog.map(r=>r.country).filter(Boolean))],platforms=page()==='workorders'?workorderPlatforms(s.draft,s.result,s.filters):[...new Set([...(s.result?.platforms||[]),...(view==='workload'&&s.filters?.country===s.draft.country?s.portalResult?.platforms||[]:[]),...L.catalog.filter(r=>r.country===s.draft.country).map(r=>r.name)].filter(Boolean))];
+   const s=state(),view=viewFor(page()),countries=[...new Set(businessCatalog().map(r=>r.country).filter(Boolean))],platforms=page()==='workorders'?workorderPlatforms(s.draft,s.result,s.filters):[...new Set([...(s.result?.platforms||[]),...(view==='workload'&&s.filters?.country===s.draft.country?s.portalResult?.platforms||[]:[]),...businessCatalog().filter(r=>r.country===s.draft.country).map(r=>r.name)].filter(name=>name&&visiblePlatformName(name,s.draft.country)))];
    const basis=view==='logs'||view==='workload'?'操作':isReconciliation(s)?'提交':s.draft.dateBasis==='operation'?'处理':'提交';
    const common=view==='records'?select('团队','team',authorizedTeams().map(v=>[v,v]))+select('国家 / 地区','country',countries.map(v=>[v,v]),false)+select('平台','platform',platforms.map(v=>[v,v]))+select('工单业务','issueKind',[['deposit','存款'],['withdraw','提款']])+select('工单状态','statusCode',Object.entries(statusNames))+'<div class="wo-filter-dates">'+input(basis+'开始日期','from','date')+input(basis+'结束日期','to','date')+'</div>'+input('工单号','workorderNo')+input('支付订单号','orderNo'):(view==='logs'?select('国家 / 地区','country',countries.map(v=>[v,v]),false)+select('平台','platform',platforms.map(v=>[v,v]))+input('操作员工','operator')+select('操作类型','action',Object.entries(logActions))+input('操作开始日期','from','date')+input('操作结束日期','to','date')+input('支付订单号','orderNo')+input('工单号','workorderNo'):select('国家 / 地区','country',countries.map(v=>[v,v]),false)+select('平台','platform',platforms.map(v=>[v,v]))+(view==='workload'?input('操作员','operator'):input('工单号','workorderNo'))+input('支付订单号','orderNo')+input(basis+'开始日期','from','date')+input(basis+'结束日期','to','date')+(view==='workload'?(isIndia(s.draft.country)?input('UTR','utr'):''):select('登记核对','registrationStatus',isReconciliation(s)?[['missing','未登记未成功'],['matched','已登记未成功'],['review','状态待核对']]:[['missing','疑似漏登'],['matched','已登记'],['review','待核对']]))+(isReconciliation(s)?select('成功排除依据','successBasis',[['processed','工单已处理（状态4，按成功）'],['receipt','本订单入款标记']],false):'')+select('工单业务','issueKind',[['deposit','存款'],['withdraw','提款']]));
    const more=view==='logs'?(isIndia(s.draft.country)?input('UTR','utr'):''):(view==='records'?select('日期依据','dateBasis',[['submission','提交时间'],['operation','处理时间']],false):'')+input('工单ID','workorderId')+input('来源订单号','sourceOrderNo')+(isIndia(s.draft.country)&&view!=='workload'?input('UTR','utr'):'')+input('三方','provider')+(view==='workload'?'':input('操作员','operator'))+input('最低金额','minAmount','number')+input('最高金额','maxAmount','number')+(isIndia(s.draft.country)?select('KYC连接','kyc',[['yes','是'],['no','否'],['unknown','未知']])+select('UTR匹配','utrMatch',[['yes','是'],['no','否'],['unknown','未知']]):'');
@@ -123,6 +143,7 @@
     const unsupported=Object.keys(portalUnsupported).filter(key=>scope[key]);
     if(unsupported.length)throw Error('工作台员工操作不支持 '+unsupported.map(key=>portalUnsupported[key]).join('、')+' 筛选；请清空这些条件后查询');
     if(!scope.from||!scope.to||scope.from>scope.to||Date.parse(scope.to)-Date.parse(scope.from)>92*86400000)throw Error('请选择最多93天的操作日期范围');
+    checkDisplayScope(scope,scope.country);
     const filters=Object.fromEntries(['from','to','platform','operator','orderNo','workorderNo','utr'].map(key=>[key,scope[key]||'']));
     const result=await request({action:'portalOperationLogs',view:'workload',country:scope.country,filters,offset:(s.portalCurrent-1)*s.portalSize,limit:s.portalSize});
     if(serial!==s.portalSerial)return;
@@ -163,7 +184,7 @@
   async function loadAnalysis(s,query,key,force=false){
    const cache=JSON.stringify({country:query.country,filters:query.filters});if(!force&&s.analysisKey===cache&&(s.analysis||s.analysisBusy||s.analysisError))return;
    const serial=++s.analysisSerial;s.analysisKey=cache;s.analysis=null;s.analysisBusy=true;s.analysisError='';if(page()===key)render();
-   try{const data=await request({action:'workorderRecords',view:'records',operation:'summary',country:query.country,filters:query.filters});if(s.analysisSerial!==serial)return;if(!data.current)throw Error('统计数据暂不可用');s.analysis=data;}
+   try{checkDisplayScope(query.filters,query.country,true);const data=await request({action:'workorderRecords',view:'records',operation:'summary',country:query.country,filters:query.filters});if(s.analysisSerial!==serial)return;if(!data.current)throw Error('统计数据暂不可用');s.analysis=data;}
    catch(error){if(s.analysisSerial===serial)s.analysisError=error.message||'请稍后重试';}
    finally{if(s.analysisSerial===serial){s.analysisBusy=false;if(page()===key)render();}}
   }
@@ -242,6 +263,7 @@
     let filters={...s.filters};const country=filters.country;delete filters.country;if(!filters.successBasis)delete filters.successBasis;if(kind==='logs')filters=Object.fromEntries(['from','to','platform','operator','action','orderNo','workorderNo','utr'].map(k=>[k,filters[k]||'']));if(!country||country==='all')throw Error('请选择一个国家 / 地区');
     if((!!filters.from)!=(!!filters.to))throw Error('请同时填写开始和结束日期');if(filters.from&&(filters.from>filters.to||Date.parse(filters.to)-Date.parse(filters.from)>92*86400000))throw Error('日期范围最多93天');
     if(kind!=='records'){if(kind==='missing'&&isIndia(country)&&filters.issueKind!=='withdraw'){filters.dateBasis='submission';filters.successBasis=filters.successBasis||'processed';filters.issueKind='deposit';}else{delete filters.successBasis;if(kind!=='logs')filters.dateBasis='operation';}if(!filters.from||!filters.to)throw Error(kind==='missing'&&filters.dateBasis==='submission'?'请选择提交日期范围':'请选择处理日期范围');}else delete filters.successBasis;
+    checkDisplayScope(filters,country,kind==='records');
     const query=kind==='logs'?{action:'portalOperationLogs',country,filters,offset:(s.current-1)*s.size,limit:s.size}:{action:'workorderRecords',view:kind==='records'&&s.mode==='orders'?'orders':kind,operation:'list',country,filters,offset:(s.current-1)*s.size,limit:s.size};
     const useBatch=kind==='missing'&&isIndia(country)&&filters.issueKind==='deposit'&&filters.dateBasis==='submission'&&(!filters.platform||filters.platform==='all');
     if(useBatch&&root.HENSEM_PRODUCTION&&!reconciliationBatch)throw Error('分平台工单读取组件未加载，请刷新页面');

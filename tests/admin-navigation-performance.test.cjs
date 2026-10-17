@@ -697,7 +697,10 @@ test('invalid selected-provider limit directories stay unknown without a second 
 
 test('selected-provider daily entry points share the directory prepared for bands without duplicate fee requests',async()=>{
  const h=await ready({extraModules:['live-amount-bands.js','live-statistic-windows.js','live-prepared-aggregates.js','live-daily-comparison.js'],platforms:[{...P,sourceName:P.name}],roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true});
- h.c.setPage('providers');h.c.liveSet('provider','Synthetic provider');await h.c.liveQuery(false);await settle();const count=()=>h.calls.filter(q=>q.action==='rates').length;assert.equal(count(),1);
+ // This shared fixture predates publication v2. Supply a valid ready head so
+ // the provider's supplementary fee lane runs after its successful main read.
+ const read=h.c.hensemLiveRequest;h.c.hensemLiveRequest=async(q,...args)=>{const response=await read(q,...args);return q.action==='aggregatePrepared'?{...response,version:2,items:response.items.map(item=>({...item,result:{...item.result,version:1},publication:{...item.publication,freshness:'fresh',refreshState:'idle'}}))}:response;};
+ h.c.setPage('providers');h.c.liveSet('provider','Synthetic provider');await h.c.liveQuery(false);await settle();assert.equal(h.L.results.length,1);const count=()=>h.calls.filter(q=>q.action==='rates').length;assert.equal(count(),1);
  h.c.setPage('daily_comparison');h.c.liveSet('provider','Synthetic provider');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T23:59:59';
  await h.c.liveQuery(false);await settle();assert.equal(count(),1,'daily reuses the same actor-wide complete directory');await h.c.liveDailyQuery();await settle();assert.equal(count(),2,'inline force query rereads once');await h.c.liveDailyContinue();await settle();assert.equal(count(),2);await h.c.liveRetryFeeLookup();await settle();assert.equal(count(),3,'explicit fee retry reads one replacement');
  const before=h.calls.length;h.c.liveDailySort('all_amount');h.c.render();assert.equal(h.calls.length,before);

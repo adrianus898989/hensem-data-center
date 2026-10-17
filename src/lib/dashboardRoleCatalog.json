@@ -39,7 +39,8 @@
         "autoWithdraw",
         "details",
         "query",
-        "analysisOrders"
+        "analysisOrders",
+        "memberDaily"
       ]
     },
     {
@@ -224,7 +225,8 @@
         "collectedData",
         "details",
         "query",
-        "analysisOrders"
+        "analysisOrders",
+        "memberDaily"
       ]
     },
     {

@@ -76,8 +76,8 @@
   function modal(title,body){
    document.getElementById('liveConfigDialog')?.remove();
    const div=document.createElement('div');div.id='liveConfigDialog';div.className='live-config-modal-backdrop';
-   div.innerHTML='<section class="live-config-modal" role="dialog" aria-modal="true" aria-label="'+E(title)+'"><h2>'+E(title)+'</h2><form onsubmit="event.preventDefault();configSave()">'+body+
-    '<div class="config-message" role="status"></div><div class="config-actions"><button type="button" class="btn" onclick="configClose()">取消</button><button class="btn primary" type="submit">保存</button></div></form></section>';
+   div.innerHTML='<section class="live-config-modal" role="dialog" aria-modal="true" aria-label="'+E(title)+'"><h2>'+E(title)+'</h2><form onsubmit="return false">'+body+
+    '<div class="config-message" role="status"></div><div class="config-actions"><button type="button" class="btn" onclick="configClose()">取消</button><button class="btn primary" type="button" onclick="configSave()">保存</button></div></form></section>';
    document.body.appendChild(div);div.querySelector('input,select,button')?.focus();
   }
   const editInput=(key,label,value,list)=>'<label for="config-'+key+'">'+label+'</label><input id="config-'+key+'" name="'+key+'" value="'+E(value||'')+'" maxlength="200" required '+(list?'list="config-list-'+key+'"':'')+'>'+(list?'<datalist id="config-list-'+key+'">'+list.map(v=>'<option value="'+E(v)+'">').join('')+'</datalist>':'');
@@ -112,6 +112,7 @@
   root.configClose=pause;
   root.configSave=async function(){
    if(!active()||saving||!dialog)return;const host=document.getElementById('liveConfigDialog'),d=dialog;if(!host){pause();return}
+   if(host.querySelector('form')?.reportValidity?.()===false)return;
    const token=++generation,page=ctx.page?.();permissionPending=null;let written=false;
    const value=id=>host.querySelector('#config-'+id)?.value.trim()||'';
    saving=true;host.querySelectorAll('button').forEach(b=>b.disabled=true);host.querySelector('.config-message').textContent='正在保存…';

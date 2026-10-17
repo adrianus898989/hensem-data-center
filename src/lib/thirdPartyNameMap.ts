@@ -109,8 +109,33 @@ export const CONFIRMED_INDIA_RAW_PROVIDER_ALIASES = new Map<string, string>([
   ["wypayinr-bank", "WYPay"],
 ]);
 
+// Owner confirmed these exact stored India channels on 2026-10-17.
+// This same list expands read filters while DB/prepared identities stay intact.
+const CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES: readonly (readonly [string, string])[] = [
+  ["NewWinPay2INR-PaytmQR", "NewWinPay"],
+  ["RAPayINR-QR", "RAPay"],
+  ["DiDiPayINR-Wake", "DiDiPay"],
+];
+
+export function confirmedThirdPartyQueryNames(providers: readonly string[], country?: string, observed: readonly string[] | (() => readonly string[]) = []): string[] {
+  if (!Array.isArray(providers) || providers.length > 200) throw Error("三方筛选名称过多，请缩小范围");
+  const valid = (name: unknown): name is string => typeof name === "string" && name.trim().length > 0 && name.length <= 200 && !/[\u0000-\u001f\u007f]/.test(name);
+  if (providers.some(name => !valid(name))) throw Error("三方筛选名称无效");
+  if (!providers.length) return [];
+  const wanted = new Set(providers.map(name => canonicalThirdPartyName(name, country))), affected = new Set(CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES.map(([, canonical]) => canonical).filter(name => wanted.has(name)));
+  if (!affected.size || !/^(?:IN|INDIA|印度(?:线下)?(?:盘口)?|香港|红膏蟹|紅膏蟹|HK_TEAM|HONG_KONG|GAME66_HK|RED_CRAB|GAME66_RED_CRAB)$/i.test(String(country || "").trim())) return [...providers];
+  const observedNames = typeof observed === "function" ? observed() : observed;
+  if (!Array.isArray(observedNames) || observedNames.length > 10000) throw Error("三方原始名称过多，请缩小范围");
+  const names = new Set(providers);for (const name of affected) names.add(name);
+  for (const [raw, canonical] of CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES) if (affected.has(canonical)) names.add(raw);
+  for (const raw of observedNames) if (typeof raw === "string" && raw.trim() && affected.has(canonicalThirdPartyName(raw, country))) names.add(raw);
+  if (names.size > 200 || [...names].some(name => !valid(name))) throw Error("三方筛选名称过多或无效，请缩小范围");
+  return [...names].sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+}
+
 const CONFIRMED_INDIA_CHANNEL_ALIASES = new Map<string, string>([
   ...CONFIRMED_INDIA_RAW_PROVIDER_ALIASES,
+  ...CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES.map(([raw, canonical]) => [raw.toLowerCase(), canonical] as [string, string]),
   // Owner-confirmed 2026-09-26. T3Pay and 3TPay are different providers.
   ["t3pay", "T3Pay"],
   ["rushpay-qr", "RushPay"],
