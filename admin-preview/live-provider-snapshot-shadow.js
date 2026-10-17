@@ -22,10 +22,11 @@
  }
  function validate(result,request){
   const invalid=()=>{throw error('已发布快照响应不完整，请重新核验','SNAPSHOT_INVALID_RESPONSE');};
-  if(!object(result)||result.version!==1||result.mode!=='published_snapshot'||!['ready','missing','stale','building','unsupported'].includes(result.status)||typeof result.complete!=='boolean'||!object(result.requested)||result.requested.startAt!==request.startAt||result.requested.endAt!==request.endAt||!Array.isArray(result.platforms)||!Array.isArray(result.missing)||result.rates?.status!=='not_loaded'||result.workorders?.status!=='not_loaded')invalid();
+  if(!object(result)||![1,2].includes(request.version)||result.version!==request.version||result.mode!=='published_snapshot'||!['ready','missing','stale','building','unsupported'].includes(result.status)||typeof result.complete!=='boolean'||!object(result.requested)||result.requested.startAt!==request.startAt||result.requested.endAt!==request.endAt||!Array.isArray(result.platforms)||!Array.isArray(result.missing)||result.rates?.status!=='not_loaded'||result.workorders?.status!=='not_loaded')invalid();
   if(result.complete!==(result.status==='ready')||result.complete&&result.missing.length||result.computedAt!==null&&!iso(result.computedAt)||result.nextDueAt!==null&&!iso(result.nextDueAt))invalid();
   const seen=new Set(),expected=request.platformIds;
   if(result.status==='unsupported'){if(result.complete||result.platforms.length||result.window!==null||result.publishedCutoff!==null||result.cutoffEpochMs!==null)invalid();return result;}
+  if(result.version===2&&(!['idle','queued','running','failed'].includes(result.refreshState)||(result.complete?!['fresh','refresh_due'].includes(result.freshness):result.freshness!==null)||result.nextRefreshAt!==null&&!iso(result.nextRefreshAt)))invalid();
   if(result.platforms.length!==expected.length)invalid();
   if(result.window===null){if(result.publishedCutoff!==null||result.cutoffEpochMs!==null||result.complete)invalid();}
   else{
@@ -40,10 +41,10 @@
   for(const p of result.platforms){
    const id=p?.platform?.id;if(!expected.includes(id)||seen.has(id)||!object(p.current)||!object(p.previous)||!Array.isArray(p.snapshots))invalid();seen.add(id);
    const meta=new Set();
-   for(const s of p.snapshots){const key=s?.period+':'+s?.component;if(!object(s)||!uuid.test(s.snapshotId)||!components.includes(s.component)||!['current','previous'].includes(s.period)||s.period==='previous'&&s.component==='submission'||meta.has(key)||!iso(s.computedAt)||!iso(s.sourceReadStartedAt)||!iso(s.sourceReadCompletedAt)||Date.parse(s.sourceReadStartedAt)>Date.parse(s.sourceReadCompletedAt)||typeof s.upstreamComplete!=='boolean'||typeof s.stale!=='boolean'||s.nextDueAt!==null&&!iso(s.nextDueAt))invalid();meta.add(key);}
+   for(const s of p.snapshots){const key=s?.period+':'+s?.component;if(!object(s)||!uuid.test(s.snapshotId)||!components.includes(s.component)||!['current','previous'].includes(s.period)||s.period==='previous'&&s.component==='submission'||meta.has(key)||!iso(s.computedAt)||!iso(s.sourceReadStartedAt)||!iso(s.sourceReadCompletedAt)||Date.parse(s.sourceReadStartedAt)>Date.parse(s.sourceReadCompletedAt)||typeof s.upstreamComplete!=='boolean'||typeof s.stale!=='boolean'||s.nextDueAt!==null&&!iso(s.nextDueAt))invalid();if(result.version===2&&(!['idle','queued','running','failed'].includes(s.refreshState)||(s.stale?s.freshness!==null:!['fresh','refresh_due'].includes(s.freshness))||s.nextRefreshAt!==null&&!iso(s.nextRefreshAt)))invalid();meta.add(key);}
    for(const period of ['current','previous'])for(const component of components.filter(c=>period==='current'||c!=='submission')){
     const value=p[period][component];if(value!==null&&!object(value)||value!==null&&!meta.has(period+':'+component)||result.complete&&value===null)invalid();
-    if(value!==null&&value.platform?.id!==id)invalid();
+    if(value!==null&&(value.platform?.id!==id||result.version===2&&p.snapshots.some(s=>s.period===period&&s.component===component&&s.stale)))invalid();
    }
    if(result.complete&&(p.snapshots.length!==5||p.snapshots.some(s=>s.stale)))invalid();
   }

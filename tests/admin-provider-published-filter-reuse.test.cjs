@@ -72,11 +72,11 @@ test('historical publication keeps its original five-minute TTL across provider 
  h.setNow('2026-09-23T12:05:00Z');await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,2);assertSelected(h);noSourceReads(h);
 });
 
-test('today publication expires at 30 seconds, and nextDueAt expires it earlier than the TTL',async()=>{
+test('v2 publication rechecks at 30 seconds; earlier artifact nextDueAt does not evict the still-valid local result',async()=>{
  for(const dueEarly of [false,true]){
   const h=await fixture({today:true,handler:q=>{if(q.action==='providerSnapshot'&&dueEarly){const b=providerEnvelope(q,[platform],true);b.nextDueAt='2026-09-23T04:37:10.000000Z';return b;}}});await h.c.liveQuery();h.c.liveProvider('3TPay');await h.c.liveQuery();const base=h.L.providerPublished.bundle;
   h.setNow(dueEarly?'2026-09-23T04:37:09Z':'2026-09-23T04:37:29Z');await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,1);assert.equal(h.L.providerPublished.bundle,base);
-  h.setNow(dueEarly?'2026-09-23T04:37:10Z':'2026-09-23T04:37:30Z');await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,2);assertSelected(h);assert.equal(h.L.providerPublished.appliedWindow.intraday,true);noSourceReads(h);
+  h.setNow('2026-09-23T04:37:10Z');await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,1);h.setNow('2026-09-23T04:37:30Z');await h.c.liveQuery();assert.equal(requests(h,'providerSnapshot').length,2);assertSelected(h);assert.equal(h.L.providerPublished.appliedWindow.intraday,true);noSourceReads(h);
  }
 });
 

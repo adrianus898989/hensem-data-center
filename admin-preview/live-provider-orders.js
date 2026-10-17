@@ -27,8 +27,8 @@
   ...(Object.hasOwn(r,'source_updated_at')?[['源更新时间',E(formatTime(r.source_updated_at,p.timezone))]]:[]),['数据同步时间',E(formatTime(r.synced_at,p.timezone))],['时区',E(p.timezone)]
  ];}
  root.HensemProviderOrders={moneyCell,moneyRows,recordedMoneyRows,isPanda,pandaRows,pandaChannel,create:function({L,E,N,C,table,box,formatTime,successTimeLabel=p=>p?.capabilities?.successTimeBasis==='order_updated_at'?'成功统计时间（订单更新时间）':p?.capabilities?.successTimeBasis==='source_completed_at'?'成功时间（源订单完成时间）':'成功时间',query,orderFieldValue=(p,key,value)=>value,request,publishedWindow=()=>null,openDrawer}){
-  let current=null,serial=0;
-  const cancel=()=>{serial++;current=null},previousClose=root.closeDrawer;
+  let current=null,serial=0,controller=null;
+  const cancel=()=>{serial++;controller?.abort();controller=null;current=null},previousClose=root.closeDrawer;
   if(typeof previousClose==='function')root.closeDrawer=function(...args){cancel();return previousClose.apply(this,args)};
   const missing=value=>value==null||String(value).trim()===''||['未识别通道','未识别三方','未提供'].includes(String(value).trim());
   function reason(row){
@@ -44,11 +44,13 @@
   }
   function targets(s=current){return (s?.targets||[]).filter(t=>!s.platformId||t.platform.id===s.platformId)}
   function counts(mode){return targets().reduce((n,t)=>n+t[mode],0)}
+  const targetSuccessAvailable=(t,d)=>t.secondaryAvailable!==false&&successAvailable(t.platform,d);
+  function requestFor(target,s){const q={...target.request,status:s.mode==='success'?'success':target.request.status};if(target.windows){q.startAt=target.windows[s.mode==='success'?'successStartAt':'startAt'];q.endAt=target.windows[s.mode==='success'?'successEndAt':'endAt'];if(s.mode==='success'&&!targetSuccessAvailable(target,s.direction))throw Error('所选成功统计时间的订单明细暂不可用');}return q;}
   function show(){
    if(!current)return;
    const s=current,total=counts(s.mode),max=Math.max(1,Math.ceil(total/20)),successLabels=[...new Set(targets().map(t=>successTimeLabel(t.platform)))],successLabel=successLabels.length===1?(successLabels[0]==='成功统计时间（订单更新时间）'?'成功统计时间（多利按更新时间）':successLabels[0]):'成功统计时间（'+[successLabels.some(x=>x.includes('更新时间'))?'多利按更新时间':'',successLabels.some(x=>x.includes('完成时间'))?'KB按完成时间':''].filter(Boolean).join('；')+'）';
-   const tabs='<div class="tabs">'+(s.status==='success'?[['success',successLabel]]:[...(targets().every(t=>successAvailable(t.platform,s.direction))?[['success',successLabel]]:[]),['created','创建时间']]).map(([mode,label])=>'<button class="'+(s.mode===mode?'on':'')+'" onclick="liveProviderOrderBasis(\''+mode+'\')">'+label+' · '+C(counts(mode))+' 笔</button>').join('')+'</div>';
-   const note='<div class="live-definition">'+E(s.from.replace('T',' ')+' 至 '+s.to.replace('T',' ')+(s.publishedWindow?'（不含） · 已发布统计范围，明细按当前记录读取':''))+' · '+E(s.currency)+' · '+(s.mode==='success'?'按'+successLabel+'读取，包含此前创建、本期成功的订单。':'按创建时间读取本期全部订单。')+' 各平台当地时间。</div>';
+   const tabs='<div class="tabs">'+(s.status==='success'?[['success',successLabel]]:[...(targets().every(t=>targetSuccessAvailable(t,s.direction))?[['success',successLabel]]:[]),['created','创建时间']]).map(([mode,label])=>'<button class="'+(s.mode===mode?'on':'')+'" onclick="liveProviderOrderBasis(\''+mode+'\')">'+label+' · '+C(counts(mode))+' 笔</button>').join('')+'</div>';
+   const note=(targets().some(t=>t.secondaryAvailable===false)?'<div class="live-definition">所选成功统计时间的原始明细暂不可用，当前可查看创建订单。</div>':'')+'<div class="live-definition">'+E((s.mode==='success'?s.successFrom:s.from).replace('T',' ')+' 至 '+(s.mode==='success'?s.successTo:s.to).replace('T',' ')+(s.publishedWindow?'（不含） · 已发布统计范围，明细按当前记录读取':''))+' · '+E(s.currency)+' · '+(s.mode==='success'?'按'+successLabel+'读取，包含此前创建、本期成功的订单。':'按创建时间读取本期全部订单。')+' 各平台当地时间。</div>';
    const platformFilter='<div class="live-filters"><label>平台<select aria-label="三方订单平台" onchange="liveProviderOrderPlatform(this.value)"><option value="">全部已查询平台</option>'+s.targets.map(t=>'<option value="'+E(t.platform.id)+'" '+(s.platformId===t.platform.id?'selected':'')+'>'+E(t.platform.name+' · '+t.platform.source)+' · '+C(t[s.mode])+' 笔</option>').join('')+'</select></label></div>';
    const usdt=String(s.provider).trim().toUpperCase()==='USDT'?'<div class="live-definition">USDT 是汇总分类，支付商尚未确认。请按原始通道和订单核对。</div>':'';
    const rows=s.rows.map((r,i)=>[E(r.platform.name),E(r.platform.source),'<button class="link mono" onclick="liveProviderOrder('+i+')">'+E(r.order_number||r.order_no||'—')+'</button>',moneyCell(r,{E,N}),E(r.raw_provider===undefined?'接口未提供':r.raw_provider==null||r.raw_provider===''?'（空）':r.raw_provider),E(r.channel_type||'—'),E(r.status||r.status_group||'—'),E(formatTime(r.created_at,r.platform.timezone)),E(formatTime(r.success_at,r.platform.timezone)),E(reason(r))]);
@@ -59,12 +61,13 @@
    openDrawer(s.provider+' · '+(s.direction==='charge'?'代收':'代付')+'订单',tabs+platformFilter+note+usdt+status+orderPanel);
   }
   async function load(){
-   if(!current)return;const s=current,token=++serial;s.loading=true;s.error='';s.rows=[];show();
+   if(!current)return;controller?.abort();controller=typeof AbortController==='function'?new AbortController():null;const signal=controller?.signal,s=current,token=++serial;s.loading=true;s.error='';s.rows=[];show();
    let offset=(s.page-1)*20,remaining=20;
    try{
+    if(s.mode==='success'&&!targets(s).every(t=>targetSuccessAvailable(t,s.direction)))throw Error('所选成功统计时间的订单明细暂不可用');
     for(const target of targets(s)){
      if(offset>=target[s.mode]){offset-=target[s.mode];continue}
-     const result=await request({...target.request,status:s.mode==='success'?'success':target.request.status,offset,limit:20});
+     const result=await request({...requestFor(target,s),offset,limit:20},{signal});
      if(token!==serial||s!==current||s.querySerial!==L.serial)return;
      if(Number(result.total)!==target[s.mode])throw Error('来源订单已更新，请重新查询汇总后打开明细，避免笔数不一致');
      const take=Math.min(remaining,target[s.mode]-offset),rows=(result.rows||[]).slice(0,take);
@@ -85,17 +88,18 @@
     const rows=(result.groups?.provider||[]).filter(r=>canonical(r.provider)===canonical(provider)&&r.direction===direction&&(!currencyScoped||r.currency===currency));
     const created=rows.reduce((n,r)=>n+Number(r.all_count||0),0),success=rows.reduce((n,r)=>n+Number(r.success_count||0),0);
     if(!(created||success))return null;
-    return {platform:result.platform,created,success,request:{...query(result.platform,'details'),...(currencyScoped?{currency}:{}),providers:[provider],direction,offset:0,limit:20}};
+    const windows=result.successBasis?{startAt:result.startAt,endAt:result.endAt,successStartAt:result.successStartAt,successEndAt:result.successEndAt,successBasis:result.successBasis}:null,updated=String(result.platform?.source||'').toLowerCase()==='duoli'&&(result.capabilities?.successTimeBasis||result.platform?.capabilities?.successTimeBasis)==='order_updated_at',caps=result.capabilities||result.platform?.capabilities||{},secondaryAvailable=!windows||!!(windows.successStartAt&&windows.successEndAt&&(windows.successBasis==='source_updated'?updated:!updated)&&caps.successTimeAvailable!==false&&caps[direction+'SuccessTimeAvailable']!==false&&!rows.some(r=>r.success_count==null));
+    return {platform:result.platform,created,success,windows,secondaryAvailable,request:{...query(result.platform,'details'),...(currencyScoped?{currency}:{}),providers:[provider],direction,offset:0,limit:20}};
    }).filter(Boolean).sort((a,b)=>String(a.platform.name).localeCompare(String(b.platform.name))||String(a.platform.id).localeCompare(String(b.platform.id)));
    if(platformId&&!targets.some(t=>t.platform.id===platformId))return;
    if(currencyScoped&&!targets.length){cancel();openDrawer('订单明细','<div class="live-status live-error">当前已查询结果没有该三方与币种的订单明细</div>');return;}
    const publication=publishedWindow();
-   current={provider,source,direction,targets,platformId,status:L.status,mode:targets.filter(t=>!platformId||t.platform.id===platformId).every(t=>successAvailable(t.platform,direction))&&(L.status==='success'||targets.some(t=>(!platformId||t.platform.id===platformId)&&t.success))?'success':'created',page:1,rows:[],error:'',loading:true,querySerial:L.serial,from:publication?.localStartAt||L.from,to:publication?.localCutoff||L.to,publishedWindow:publication,currency:currencyScoped?currency:L.currency,currencyScoped};
+   current={provider,source,direction,targets,platformId,status:L.status,mode:L.status==='success'||targets.filter(t=>!platformId||t.platform.id===platformId).every(t=>targetSuccessAvailable(t,direction))&&targets.some(t=>(!platformId||t.platform.id===platformId)&&t.success)?'success':'created',page:1,rows:[],error:'',loading:true,querySerial:L.serial,from:publication?.localStartAt||L.from,to:publication?.localCutoff||L.to,successFrom:publication?.localStartAt||L.successFrom||L.from,successTo:publication?.localCutoff||L.successTo||L.to,publishedWindow:publication,currency:currencyScoped?currency:L.currency,currencyScoped};
    await load();
   }
   root.liveProviderOrders=open;
-  root.liveProviderOrderPlatform=async platformId=>{if(!current||platformId&&!current.targets.some(t=>t.platform.id===platformId))return;current.platformId=platformId;current.page=1;await load()};
-  root.liveProviderOrderBasis=async mode=>{if(!current||!['created','success'].includes(mode)||mode==='success'&&!targets().every(t=>successAvailable(t.platform,current.direction))||current.status==='success'&&mode==='created')return;current.mode=mode;current.page=1;await load()};
+  root.liveProviderOrderPlatform=async platformId=>{if(!current||platformId&&!current.targets.some(t=>t.platform.id===platformId))return;current.platformId=platformId;if(current.mode==='success'&&current.status!=='success'&&!targets().every(t=>targetSuccessAvailable(t,current.direction)))current.mode='created';current.page=1;await load()};
+  root.liveProviderOrderBasis=async mode=>{if(!current||!['created','success'].includes(mode)||mode==='success'&&!targets().every(t=>targetSuccessAvailable(t,current.direction))||current.status==='success'&&mode==='created')return;current.mode=mode;current.page=1;await load()};
   root.liveProviderOrderPage=async page=>{if(!current||current.loading||!Number.isInteger(page)||page<1||page>Math.max(1,Math.ceil(counts(current.mode)/20)))return;current.page=page;await load()};
   root.liveProviderOrder=index=>{
    const r=current?.rows[index];if(!r)return;if(isPanda(r.platform)){openDrawer('订单详情 · '+(r.order_number||r.order_no||''),'<button class="btn small" onclick="liveProviderOrdersBack()">← 返回三方订单</button>'+box('订单明细',table(['字段','内容'],pandaRows(r,r.platform,{E,N,formatTime}))));return;}

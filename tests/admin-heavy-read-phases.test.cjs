@@ -126,7 +126,7 @@ test('same-scope normal query reuses exclusion and intake caches, while refresh,
  await finish(h,h.c.liveQuery());assert.deepEqual(count(),initial);
  await finish(h,h.c.liveQuery(true));assert.deepEqual(count(),{submission:6,intake:initial.intake*2});
  const beforeHide=count();for(const callback of listeners.pagehide||[])callback({persisted:false});await finish(h,h.c.liveQuery());assert.equal(count().intake,beforeHide.intake+initial.intake,'pagehide clears coverage catalog and fragments');
- const beforeClose=count();h.c.liveCloseAllPages();h.c.setPage('providers');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';await finish(h,h.c.liveQuery());assert.equal(count().intake,beforeClose.intake+initial.intake,'close-all clears coverage catalog and fragments');assert.equal(h.max(),2);
+ const beforeClose=count();h.c.liveCloseAllPages();h.c.setPage('providers');h.L.from='2026-09-22T00:00:00';h.L.to='2026-09-22T05:59:59';await finish(h,h.c.liveQuery());assert.equal(count().intake,beforeClose.intake+initial.intake,'close-all clears coverage catalog and fragments');assert.equal(count().submission,beforeClose.submission+initial.submission,'close-all clears every saved exclusion scope');assert.equal(h.max(),2);
 });
 
 
@@ -169,4 +169,13 @@ test('cancelled legacy band preparation cannot clear the replacement query loadi
  const h=await setup('providers',{extraModules:['live-amount-bands.js']});h.c.liveSet('provider','Synthetic provider');const old=h.c.liveQuery(true);await settle();const prior=h.waiting.shift(),serial=h.L.serial;
  h.c.liveProvider('Synthetic next provider');const replacement=h.c.liveQuery(false);await old;await settle();assert(h.L.serial>serial);assert.equal(prior.signal.aborted,true);assert.equal(h.L.loading,true);assert.equal(h.L.feeLookupLoading,true);assert.equal(h.waiting[0].q.action,'rates');
  prior.d.resolve({rows:[{id:'late'}],total:1});await settle();assert.equal(h.L.loading,true);assert.equal(h.L.feeLookupRows,null);await finish(h,replacement);assert.equal(h.L.loading,false);assert(h.history.filter(q=>q.action==='aggregate').every(q=>q.providers?.[0]==='Synthetic next provider'));assert.equal(h.max(),2);
+});
+
+test('custom-range provider A to B to A keeps exact cached exclusions while workorders retain their own scoped reads',async()=>{
+ const h=await setup('providers',{reply(q){const value=reply(q);if(q.action==='submissionAnalysis')value.coverage={orderCount:65,missingMemberCount:0,unknownStatusCount:0,orderSequenceUncertainCount:0,sourceCompletenessVerified:false};return value}});
+ h.c.liveProvider('Pay A');await finish(h,h.c.liveQuery());h.c.liveProvider('Pay B');await finish(h,h.c.liveQuery());
+ const before=h.history.length;h.c.liveProvider('Pay A');await finish(h,h.c.liveQuery());const added=h.history.slice(before);
+ assert.equal(added.filter(q=>q.action==='submissionAnalysis').length,0,'the same platform/time/provider union is not recomputed');
+ assert(added.some(q=>q.action==='workorders'),'workorders are not projected from another provider or silently cached by this change');assert.equal(h.max(),2);
+ await finish(h,h.c.liveQuery(true));assert.equal(h.history.filter(q=>q.action==='submissionAnalysis').length,9,'explicit refresh rereads the three native scopes');
 });

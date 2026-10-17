@@ -9,6 +9,7 @@ export const LIVE_REQUEST = "hensem-admin-live-request";
 export const LIVE_RESPONSE = "hensem-admin-live-response";
 export const LIVE_CANCEL = "hensem-admin-live-cancel";
 export const LIVE_REQUEST_TIMEOUT_MS = 90000;
+export const PREPARED_AGGREGATE_PAGES = new Set(["overview","collection","payout","merchants","providers","provider_payout","success_analysis","time","amount","matrix","provider_daily","latency","risk","teamops","teamcountries","teamplatforms","daily_comparison"]);
 const actions = ["memberDaily","catalog","syncHealth","intakeCoverage","reportSummary","pendingSnapshot","collectedData","query","aggregate","details","analysisOrders","rates","ratesSheet","payoutConfig","autoWithdraw","depositIssues","workorders","providerConfig","platformAssignments","providerOptions","configurationAccess","configurationWrite","withdrawReasons","withdrawNote"];
 const keys = new Set(["basis","durationVersion","durationRange","scopeTargets","amountBands","feedIds","feeds","sourceKind","dataset","action","platformId","startAt","endAt","direction","status","orderNumber","thirdPartyOrderNumber","memberId","systemOrderId","utr","providers","channelTypes","currency","amountMin","amountMax","amountMaxExclusive","hourRange","offset","limit","scopeType","country","platform","provider","rawProvider","canonicalProvider","query","sheetId","operation","system","team","view","platforms","platformIds","expectedVersion","mappingId","sourceSystem","countryCode","sourceCountry","sourcePlatform","platformName","userId","canManage","account","date","kind","hour","bucket","cumulative","sort","ascending","daily","reason","category","reasonKey","operatorKey","dateMode","match","followupStatus","workOrderNumber","reply","utrMatch","kycCorrect","staffCode","upiId","kycUpiId"]);
 export function validateCollectorControlRequest(p:Record<string,unknown>):Record<string,unknown>{
@@ -23,10 +24,39 @@ export function validateCollectorControlRequest(p:Record<string,unknown>):Record
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
+  if(p.action==="autoWithdraw"&&["windowVersion","successStartAt","successEndAt","successBasis"].some(key=>p[key]!==undefined)){
+    const {windowVersion,successStartAt,successEndAt,successBasis,...base}=p;
+    if(windowVersion!==2||typeof successBasis!=="string"||!["success","source_updated"].includes(successBasis))throw Error("出款统计时间依据无效");
+    const checked=validateAdminLiveRequest(base);
+    for(const [from,to]of [[p.startAt,p.endAt],[successStartAt,successEndAt]]){
+      for(const value of [from,to])if(typeof value!=="string"||!/^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.000)?Z$/.test(value)||!Number.isFinite(Date.parse(value))||new Date(value).toISOString().slice(0,19)!==value.slice(0,19))throw Error("出款日期或时间无效");
+      if(Date.parse(String(to))<Date.parse(String(from))||(Date.parse(String(to).slice(0,10))-Date.parse(String(from).slice(0,10)))/86400000>30)throw Error("出款查询范围最多31个当地日");
+    }
+    return {...checked,windowVersion,successStartAt,successEndAt,successBasis};
+  }
+  if(p.action==="aggregatePrepared"){
+    if(Object.keys(p).some(key=>!["action","requests","publicationVersion","forceRefresh"].includes(key))||!Array.isArray(p.requests)||p.requests.length<1||p.requests.length>50)throw Error("已准备统计的批量参数无效");
+    if(p.publicationVersion!==undefined&&p.publicationVersion!==2||p.forceRefresh!==undefined&&(typeof p.forceRefresh!=="boolean"||p.publicationVersion!==2))throw Error("已准备统计发布版本无效");
+    const requests=p.requests.map(value=>{
+      if(!value||typeof value!=="object"||Array.isArray(value))throw Error("统计请求无效");
+      const q=value as Record<string,unknown>,{successStartAt,successEndAt,successBasis,...base}=q;
+      if(q.action!=="aggregate"||["orderNumber","thirdPartyOrderNumber","systemOrderId","memberId","utr"].some(key=>q[key]!==undefined))throw Error("已准备统计不读取订单身份明细");
+      const checked=validateAdminLiveRequest(base),clocks=[successStartAt,successEndAt,successBasis];
+      if(clocks.some(v=>v!==undefined)){
+        if(!["success","source_updated"].includes(String(successBasis))||typeof successBasis!=="string")throw Error("成功统计时间依据无效");
+        for(const value of [successStartAt,successEndAt])if(typeof value!=="string"||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)||!Number.isFinite(Date.parse(value))||new Date(value).toISOString().slice(0,19)!==value.slice(0,19))throw Error("成功统计日期或时间无效");
+        const span=Date.parse(String(successEndAt))-Date.parse(String(successStartAt));if(span<=0||span>32*86400000)throw Error("成功统计范围无效，每次最多31个当地日");
+        return {...checked,successStartAt,successEndAt,successBasis};
+      }
+      return checked;
+    });
+    if(JSON.stringify(requests).length>128000)throw Error("统计批量参数过大");
+    return {action:"aggregatePrepared",requests,...(p.publicationVersion===2?{publicationVersion:2,...(p.forceRefresh===undefined?{}:{forceRefresh:p.forceRefresh})}:{})};
+  }
   if(p.action==="providerSnapshot"){
     const allowed=["action","version","platformIds","startAt","endAt","direction","status","currency","components","export"];
     const ids=p.platformIds,components=p.components;
-    if(Object.keys(p).some(k=>!allowed.includes(k))||p.version!==1||!Array.isArray(ids)||ids.length<1||ids.length>50||ids.some(id=>typeof id!=="string"||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id))||new Set(ids.map(id=>String(id).toLowerCase())).size!==ids.length)throw Error("已发布快照平台参数无效");
+    if(Object.keys(p).some(k=>!allowed.includes(k))||![1,2].includes(Number(p.version))||typeof p.version!=="number"||!Array.isArray(ids)||ids.length<1||ids.length>50||ids.some(id=>typeof id!=="string"||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id))||new Set(ids.map(id=>String(id).toLowerCase())).size!==ids.length)throw Error("已发布快照平台参数无效");
     for(const key of ["startAt","endAt"]){const value=p[key];if(typeof value!=="string"||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(value)||!Number.isFinite(Date.parse(value+"Z"))||new Date(value+"Z").toISOString().slice(0,19)!==value)throw Error("已发布快照日期无效");}
     if(String(p.endAt)<String(p.startAt)||!Array.isArray(components)||components.length<1||components.length>3||components.some(v=>!["orders","submission","intake"].includes(String(v))||typeof v!=="string")||new Set(components).size!==components.length||p.export!==undefined&&typeof p.export!=="boolean")throw Error("已发布快照请求无效");
     if(typeof p.direction!=="string"||!["all","charge","withdraw"].includes(p.direction)||typeof p.status!=="string"||!["all","success","failed","pending"].includes(p.status)||typeof p.currency!=="string"||!/^[A-Z]{3,10}$/.test(p.currency))throw Error("已发布快照筛选无效");
@@ -446,10 +476,11 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  }
  const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,""),url=new URL(base);
  if(url.protocol!=="https:"||url.origin!==base)throw Error("后台地址配置无效");
- const specialRpc:Record<string,string>={providerSnapshot:"dashboard_admin_provider_snapshot",channelStatus:"dashboard_admin_live_channel_status",analysisOrders:"dashboard_admin_live_analysis_orders",submissionAnalysis:"dashboard_admin_live_submission_analysis",submissionStreak:"dashboard_admin_live_submission_streak",memberDaily:"dashboard_admin_live_member_daily",pendingSnapshot:"dashboard_admin_live_pending_snapshot",pendingAnalysis:"dashboard_admin_live_pending_analysis",pendingOrders:"dashboard_admin_live_pending_orders",depositStatistics:"dashboard_admin_deposit_statistics",workorderRecords:"dashboard_admin_live_workorder_records",intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
+ const specialRpc:Record<string,string>={aggregatePrepared:"dashboard_admin_aggregate_prepared",providerSnapshot:"dashboard_admin_provider_snapshot",channelStatus:"dashboard_admin_live_channel_status",analysisOrders:"dashboard_admin_live_analysis_orders",submissionAnalysis:"dashboard_admin_live_submission_analysis",submissionStreak:"dashboard_admin_live_submission_streak",memberDaily:"dashboard_admin_live_member_daily",pendingSnapshot:"dashboard_admin_live_pending_snapshot",pendingAnalysis:"dashboard_admin_live_pending_analysis",pendingOrders:"dashboard_admin_live_pending_orders",depositStatistics:"dashboard_admin_deposit_statistics",workorderRecords:"dashboard_admin_live_workorder_records",intakeCoverage:"dashboard_admin_live_intake_coverage",reportSummary:"dashboard_admin_live_report_summary",syncHealth:"dashboard_admin_live_sync_health",collectedData:"dashboard_admin_live_collected_data",rates:"dashboard_admin_live_rates",ratesSheet:"dashboard_admin_live_rate_sheet",payoutConfig:"dashboard_admin_live_payout_config",autoWithdraw:"dashboard_admin_live_auto_withdraw",withdrawReasons:"dashboard_admin_live_withdraw_reasons",withdrawNote:"dashboard_admin_live_withdraw_note",depositIssues:"dashboard_admin_live_deposit_issues",workorders:"dashboard_admin_live_workorders",providerConfig:"dashboard_admin_live_provider_config",platformAssignments:"dashboard_admin_live_platform_assignments",providerOptions:"dashboard_admin_live_provider_options",configurationAccess:"dashboard_admin_live_configuration_access",configurationWrite:"dashboard_admin_live_configuration_write"};
  const collectedKyc=request.action==="depositStatistics"&&request.section==="kyc";
  const rpc=collectedKyc?"dashboard_admin_deposit_kyc":request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
- const response=await adminLiveFetch(base+"/rest/v1/rpc/"+(roleContext?.assigned&&!collectedKyc?"dashboard_admin_execute":rpc),{method:"POST",body:JSON.stringify(collectedKyc?{p_page:roleContext?.assigned?roleContext.page:null,p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))}:roleContext?.assigned?{p_page:roleContext.page,p_request:request}:{p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
+ if(request.action==="aggregatePrepared"&&!PREPARED_AGGREGATE_PAGES.has(roleContext?.page||""))throw Error("统计页面无效");
+ const response=await adminLiveFetch(base+"/rest/v1/rpc/"+(roleContext?.assigned&&!collectedKyc?"dashboard_admin_execute":rpc),{method:"POST",body:JSON.stringify(collectedKyc?{p_page:roleContext?.assigned?roleContext.page:null,p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))}:roleContext?.assigned?{p_page:roleContext.page,p_request:request}:request.action==="aggregatePrepared"?{p_page:roleContext?.page,p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))}:{p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
  if(!response.ok){let code="",serverCode="",queryCancelled=false;try{const body=await response.json();code=typeof body.message==='string'?body.message:'';serverCode=typeof body.code==='string'?body.code:typeof body.error_code==='string'?body.error_code:'';queryCancelled=body.code==='57014'}catch{}
  // Only trusted HTTP status and known server tokens revoke access, never arbitrary error text.
  if(sessionDenial(response.status,serverCode,code))throw new AdminLiveAccessError("正式数据读取未获授权，或会话已失效",'session');
@@ -507,6 +538,11 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
      const request=validateAdminLiveRequest(item.request),access=options.roleAccess?.();
      const required=["view","query",...(request.view==="details"?["detail"]:[]),...(request.export===true?["export"]:[])];
      if(item.page!=="deposit_statistics"||!access?.canView||!(access.mode==="owner"||access.mode==="assigned"&&required.every(key=>access.permissions.includes("deposit_statistics."+key))))throw Error("当前账号没有补单核对或导出权限");
+    }
+    if((item.request as {action?:unknown})?.action==="aggregatePrepared"){
+     const request=validateAdminLiveRequest(item.request),access=options.roleAccess?.();
+     const detail=(request.requests as Record<string,unknown>[]).some(q=>q.view==="drilldown");
+     if(!PREPARED_AGGREGATE_PAGES.has(item.page)||!access?.canView||access.mode==="assigned"&&!["view","query",...(detail?["detail"]:[])].every(key=>access.permissions.includes(item.page+"."+key)))throw permissionError("当前角色没有此页面的统计查询权限","role_denied");
     }
     if((item.request as {action?:unknown})?.action==="providerSnapshot"){
      const request=validateAdminLiveRequest(item.request),access=options.roleAccess?.();
@@ -598,7 +634,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
    if(request?.action==='providerSnapshot'&&page!=='providers'){reject(error('快照核验仅在代收汇总页面可用','ROLE_DENIED'));return;}
    if(request?.action==='collectorControl'&&page!=='collector_control'){reject(error('采集管理页面无效','ROLE_DENIED'));return;}
    if(!window.hensemRoleAllowed(page,operation)){reject(error('当前角色没有此页面或操作权限','ROLE_DENIED'));return;}
-   const detail=['details','query','analysisOrders','pendingOrders'].includes(request?.action)||['submissionAnalysis','submissionStreak'].includes(request?.action)&&['members','memberOrders'].includes(request.operation)||request?.action==='aggregate'&&request.view==='drilldown'||request?.action==='workorderRecords'&&['detail','orderDetail'].includes(request.operation)||request?.action==='depositStatistics'&&(request.section==='details'||request.section==='kyc'&&request.dimension==='orders'||request.section==='recovery'&&request.view==='details')||request?.action==='depositIssues'&&page==='deposit_statistics';
+   const detail=request?.action==='aggregatePrepared'&&request.requests?.some(q=>q.view==='drilldown')||['details','query','analysisOrders','pendingOrders'].includes(request?.action)||['submissionAnalysis','submissionStreak'].includes(request?.action)&&['members','memberOrders'].includes(request.operation)||request?.action==='aggregate'&&request.view==='drilldown'||request?.action==='workorderRecords'&&['detail','orderDetail'].includes(request.operation)||request?.action==='depositStatistics'&&(request.section==='details'||request.section==='kyc'&&request.dimension==='orders'||request.section==='recovery'&&request.view==='details')||request?.action==='depositIssues'&&page==='deposit_statistics';
    if(detail&&!window.hensemRoleAllowed(page,'detail')){reject(error('当前角色没有查看明细权限','ROLE_DENIED'));return;}
 
    const signal=options.signal;if(signal&&signal.aborted){reject(error('查询已取消','ADMIN_LIVE_CANCELLED'));return;}

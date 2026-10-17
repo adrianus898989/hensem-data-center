@@ -1,0 +1,12 @@
+.live-admin .live-business-filters:has(.live-metric-windows){grid-template-columns:minmax(0,1fr) auto auto}
+.live-admin .live-business-filters:has(.live-metric-windows)>.live-filter-fields{grid-column:1/-1}
+.live-admin .live-metric-windows{display:flex;flex-wrap:wrap;align-items:end;gap:10px 16px;min-width:0}
+.live-admin .live-metric-window{display:flex;align-items:end;gap:8px;min-width:0}
+.live-admin .live-metric-endpoint,.live-admin .live-metric-basis{display:flex;flex-direction:column;gap:4px;min-width:0;margin:0}
+.live-admin .live-metric-endpoint>span,.live-admin .live-metric-basis>span{font-size:10px;white-space:nowrap;color:#647a9b}
+.live-admin .live-metric-endpoint input{width:192px;min-width:0;height:32px;box-sizing:border-box;border:1px solid #d5def0;border-radius:5px;padding:4px 7px;color:#284166;background:#fff;font:inherit;font-size:11px}
+.live-admin .live-metric-basis select{height:32px;min-width:124px;border:1px solid #d5def0;border-radius:5px;color:#284166;background:#fff;font:inherit;font-size:11px;padding:4px 7px}
+.live-admin .live-metric-zone{font-size:10px;color:#647a9b;white-space:nowrap;align-self:center}
+.live-admin .live-retained-result{margin:0}
+@media(max-width:1250px){.live-admin .live-business-filters:has(.live-metric-windows){grid-template-columns:minmax(0,1fr) auto}.live-admin .live-business-filters>.live-metric-windows{grid-column:1/-1}}
+@media(max-width:680px){.live-admin .live-metric-window{flex-wrap:wrap}.live-admin .live-metric-endpoint input{width:180px}.live-admin .live-metric-zone{width:100%}}

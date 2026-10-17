@@ -689,7 +689,8 @@ test('published snapshot validates native ids and local civil input and routes o
  const q={action:'providerSnapshot',version:1,platformIds:['AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA'],startAt:'2026-10-14T00:00:00',endAt:'2026-10-14T23:59:59',direction:'charge',status:'all',currency:'INR',components:['orders','submission','intake']};
  const h=load();await h.api.adminLiveRequest(session,q);assert.equal(h.calls.length,1);assert.equal(h.authCalls.length,1);assert(h.calls[0].url.endsWith('/dashboard_admin_provider_snapshot'));const req=JSON.parse(h.calls[0].init.body).p_request;assert.equal(req.platformIds[0],q.platformIds[0].toLowerCase());assert.equal(req.export,false);assert.equal(req.startAt,q.startAt);assert(!('action'in req));
  await h.api.adminLiveRequest(session,{...q,export:true},undefined,{assigned:true,page:'providers'});assert(h.calls[1].url.endsWith('/dashboard_admin_execute'));assert.equal(JSON.parse(h.calls[1].init.body).p_page,'providers');assert.equal(JSON.parse(h.calls[1].init.body).p_request.action,'providerSnapshot');assert.equal(h.authCalls.length,2);
- for(const patch of [{platformIds:[]},{platformIds:[q.platformIds[0],q.platformIds[0].toLowerCase()]},{platformIds:['91CLUB']},{startAt:q.startAt+'Z'},{endAt:'2026-02-30T23:59:59'},{components:['orders','orders']},{components:['workorders']},{components:[]},{version:2},{export:'true'},{providers:['Pay']},{source:'ar'},{startAt:'2026-10-14T00:00:00.1'}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
+ await h.api.adminLiveRequest(session,{...q,version:2});assert.equal(JSON.parse(h.calls[2].init.body).p_request.version,2);await h.api.adminLiveRequest(session,{...q,version:2},undefined,{assigned:true,page:'providers'});assert.equal(JSON.parse(h.calls[3].init.body).p_request.version,2);
+ for(const patch of [{platformIds:[]},{platformIds:[q.platformIds[0],q.platformIds[0].toLowerCase()]},{platformIds:['91CLUB']},{startAt:q.startAt+'Z'},{endAt:'2026-02-30T23:59:59'},{components:['orders','orders']},{components:['workorders']},{components:[]},{version:3},{version:'2'},{export:'true'},{providers:['Pay']},{source:'ar'},{startAt:'2026-10-14T00:00:00.1'}])assert.throws(()=>h.api.validateAdminLiveRequest({...q,...patch}));
 });
 test('snapshot host requires providers page and current query/export authority',async()=>{
  const q={action:'providerSnapshot',version:1,platformIds:['11111111-1111-4111-8111-111111111111'],startAt:'2026-10-14T00:00:00',endAt:'2026-10-14T23:59:59',direction:'charge',status:'all',currency:'INR',components:['orders']};
@@ -701,4 +702,31 @@ test('snapshot host requires providers page and current query/export authority',
 test('snapshot URL switch exposes only a boolean and ordinary URL is inactive',()=>{
  const h=load();h.target.location={origin:'https://dashboard.invalid',pathname:'/',hash:'#admin/providers'};assert.match(h.api.makeAdminLiveDocument('<!doctype html><html></html>','shadow-nonce'),/HENSEM_PROVIDER_SNAPSHOT_SHADOW=false/);
  h.target.location.search='?providerSnapshotShadow=1&secret=DO_NOT_INJECT';const html=h.api.makeAdminLiveDocument('<!doctype html><html></html>','shadow-nonce');assert.match(html,/HENSEM_PROVIDER_SNAPSHOT_SHADOW=true/);assert(!html.includes('DO_NOT_INJECT'));
+});
+
+test('prepared statistics validate independent clocks and never accept recursive or identity detail batches',()=>{
+ const h=load(),q={...query,action:'aggregate',view:'providers',successStartAt:'2026-09-20T00:00:00Z',successEndAt:'2026-09-21T00:00:00Z',successBasis:'source_updated'},batch={action:'aggregatePrepared',requests:[q]};
+ assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(batch))),batch);
+ for(const patch of [{requests:[]},{requests:Array(51).fill(q)},{requests:[batch]},{requests:[{...q,action:'details'}]},{requests:[{...q,memberId:'x'}]},{requests:[{...q,successBasis:'ingested'}]},{requests:[{...q,successStartAt:undefined}]},{requests:[{...q,successEndAt:q.successStartAt}]},{requests:[{...q,successStartAt:'2026-02-30T00:00:00Z'}]},{requests:[{...q,successEndAt:'2026-12-30T00:00:00Z'}]},{page:'providers'}])assert.throws(()=>h.api.validateAdminLiveRequest({...batch,...patch}));
+ // A valid new clock is never allowed into the unmodified raw endpoint.
+ assert.throws(()=>h.api.validateAdminLiveRequest(q));
+});
+test('prepared statistics keep the originating page in both owner and assigned RPC routes',async()=>{
+ const h=load(),request={action:'aggregatePrepared',requests:[{...query,action:'aggregate',view:'providers'}]};
+ await h.api.adminLiveRequest(session,request,undefined,{assigned:false,page:'overview'});
+ assert.equal(h.calls[0].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_aggregate_prepared');
+ assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_page:'overview',p_request:{requests:request.requests}});
+ await h.api.adminLiveRequest(session,request,undefined,{assigned:true,page:'success_analysis'});
+ assert.equal(h.calls[1].url,'https://offline.invalid/rest/v1/rpc/dashboard_admin_execute');
+ assert.deepEqual(JSON.parse(h.calls[1].init.body),{p_page:'success_analysis',p_request:request});
+ await assert.rejects(h.api.adminLiveRequest(session,request,undefined,{assigned:false,page:'access'}),/统计页面无效/);
+ assert.equal(h.calls.length,2);
+});
+
+test('prepared v2 and explicit refresh survive both authorized routes while malformed version controls are rejected',async()=>{
+ const h=load(),request={action:'aggregatePrepared',publicationVersion:2,forceRefresh:true,requests:[{...query,action:'aggregate',view:'providers'}]};
+ assert.deepEqual(JSON.parse(JSON.stringify(h.api.validateAdminLiveRequest(request))),request);
+ for(const patch of [{publicationVersion:1},{publicationVersion:3},{publicationVersion:undefined},{forceRefresh:1},{forceRefresh:'true'}])assert.throws(()=>h.api.validateAdminLiveRequest({...request,...patch}));
+ await h.api.adminLiveRequest(session,request,undefined,{assigned:false,page:'overview'});assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_page:'overview',p_request:{publicationVersion:2,forceRefresh:true,requests:request.requests}});
+ await h.api.adminLiveRequest(session,request,undefined,{assigned:true,page:'success_analysis'});assert.deepEqual(JSON.parse(h.calls[1].init.body),{p_page:'success_analysis',p_request:request});
 });

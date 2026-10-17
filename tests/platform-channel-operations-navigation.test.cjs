@@ -15,7 +15,7 @@ test('channel navigation moves after daily comparison with exact shared catalog,
    create trigger no_changes before insert or update or delete on private.dashboard_role_assignments for each statement execute function private.no_changes();
    create trigger no_changes before insert or update or delete on dashboard_profiles for each statement execute function private.no_changes();`);
   await db.exec(migration);const after=await catalog(db),prior=before.pages.find(p=>p.id==='channel_status'),page=after.pages.find(p=>p.id==='channel_status');
-  assert.deepEqual(after.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages);assert.deepEqual({...page,moduleId:prior.moduleId,moduleLabel:prior.moduleLabel,label:prior.label},prior);
+  assert.deepEqual(after.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.map(p=>({...p,requests:p.requests.filter(request=>request!=='aggregatePrepared')})));assert.deepEqual({...page,moduleId:prior.moduleId,moduleLabel:prior.moduleLabel,label:prior.label},prior);
   assert.equal(page.moduleId,'merchant');assert.equal(page.moduleLabel,'运营中心');assert.equal(page.label,'平台通道调整');assert.deepEqual(page.requests,['catalog','channelStatus']);assert.deepEqual(page.actions.map(x=>x.id),['view','query','detail','export']);
   assert.equal(after.pages.findIndex(p=>p.id==='channel_status'),after.pages.findIndex(p=>p.id==='daily_comparison')+1);
   assert.deepEqual(after.pages.filter(p=>p.id!=='channel_status'),before.pages.filter(p=>p.id!=='channel_status'));assert.deepEqual({...after,pages:[]},{...before,pages:[]});assert.deepEqual(await metadata(db),meta);
