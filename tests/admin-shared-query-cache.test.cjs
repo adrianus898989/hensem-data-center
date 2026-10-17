@@ -22,13 +22,13 @@ for(const page of pages)test(page+': ordinary repeat reuses complete aggregates 
  const h=await ready(page);await h.c.liveQuery();await settle();
  const count=requests(h,'aggregate').length,feeCount=requests(h,'rates').length,detailCount=requests(h,'details').length,readAt=h.L.results[0]._aggregateReadAt;
  assert.equal(count,2,'current and comparison each read once');
- assert.match(h.nodes.get('liveFilters').innerHTML,/liveQuery\(true\)/,'explicit refresh stays available');
+ assert.match(h.nodes.get('liveFilters').innerHTML,/onclick="liveRefresh\(\)"/,'explicit refresh stays available');
  h.setNow('2026-09-23T12:00:10Z');await h.c.liveQuery();await settle();
  assert.equal(requests(h,'aggregate').length,count);assert.equal(requests(h,'rates').length,feeCount);
  assert.equal(h.L.results[0]._aggregateCacheHit,true);assert.equal(h.L.results[0]._aggregateReadAt,readAt);
  assert.equal(requests(h,'details').length,detailCount+(page==='orders'?1:0));
  assert.match(h.nodes.get('liveFilters').innerHTML,/数据读取[^]*缓存/);
- await h.c.liveQuery(true);await settle();assert.equal(requests(h,'aggregate').length,count*2);
+ await h.c.liveRefresh();await settle();assert.equal(requests(h,'aggregate').length,count*2);
  assert.equal(requests(h,'rates').length,feeCount*2);assert.equal(h.L.results[0]._aggregateCacheHit,false);
  assert.equal(requests(h,'details').length,detailCount+(page==='orders'?2:0));
 });
@@ -40,7 +40,7 @@ for(const page of pages)test(page+': current window stays frozen within 30 secon
  h.setNow('2026-09-23T12:00:30Z');await h.c.liveQuery();await settle();
  assert(requests(h,'aggregate').length>count);assert(h.L.queryNow>queryNow);assert(Date.parse(h.L.results[0].endAt)>Date.parse(end));
  const refreshedCount=requests(h,'aggregate').length,advanced=h.L.queryNow;
- h.setNow('2026-09-23T12:00:35Z');await h.c.liveQuery(true);await settle();
+ h.setNow('2026-09-23T12:00:35Z');await h.c.liveRefresh();await settle();
  assert(requests(h,'aggregate').length>refreshedCount);assert(h.L.queryNow>advanced);assert.equal(h.L.results[0]._aggregateCacheHit,false);
 });
 test('new shared-cache pages keep changed filters, authority and native identities isolated',async()=>{
