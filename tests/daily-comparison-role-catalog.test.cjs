@@ -1,6 +1,10 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {PGlite}=require('@electric-sql/pglite');
 const read=p=>fs.readFileSync(path.join(__dirname,'..',p),'utf8');
+// These migrations predate the two auxiliary-member request additions.
+// Project only those exact later requests out; all historical ACL/hash/grant
+// and other page-request assertions below remain unchanged.
+const historicalMemberRequests=p=>({...p,requests:p.requests.filter(action=>action!=='memberDaily'||!['overview','merchants'].includes(p.id))});
 const migration=read('supabase/migrations/20261004140008_daily_comparison_role_catalog.sql');
 const scalar=async(db,q)=>Object.values((await db.query(q)).rows[0])[0];
 const metadata=db=>scalar(db,"select to_jsonb(p)-'prosrc' from pg_proc p where oid='private.dashboard_role_catalog()'::regprocedure");
@@ -29,7 +33,7 @@ test('daily comparison registers exactly one operations entry and four permissio
   const before=await catalog(db),meta=await metadata(db),saved=await grants(db);
   assert.equal(await scalar(db,"select md5(prosrc) from pg_proc where oid='private.dashboard_role_catalog()'::regprocedure"),'b1c7a223fd9d4b5ea488ad0114bba9d4');
   assert.equal(await scalar(db,"select md5(pg_get_functiondef('private.dashboard_role_catalog()'::regprocedure))"),'db24d518ed7aa439aae1c9fa87c33dab');
-  await db.exec(migration);const after=await catalog(db),pages=require('../src/lib/dashboardRoleCatalog.json').pages.filter(p=>!['collector_control','channel_status'].includes(p.id)).map(p=>({...p,requests:p.requests.filter(r=>r!=='aggregatePrepared')}));
+  await db.exec(migration);const after=await catalog(db),pages=require('../src/lib/dashboardRoleCatalog.json').pages.map(historicalMemberRequests).filter(p=>!['collector_control','channel_status'].includes(p.id)).map(p=>({...p,requests:p.requests.filter(r=>r!=='aggregatePrepared')}));
   assert.deepEqual(after.pages,pages);
   const entry=after.pages.find(p=>p.id==='daily_comparison');assert.equal(entry.moduleId,'merchant');assert.equal(entry.moduleLabel,'运营中心');
   assert.deepEqual(entry.actions.map(a=>a.id),['view','query','detail','export']);
