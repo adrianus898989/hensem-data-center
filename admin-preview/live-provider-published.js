@@ -7,8 +7,12 @@
  const instant=value=>{const m=typeof value==='string'&&value.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/);if(!m||!Number.isFinite(Date.parse(m[1]+m[3])))return null;return new Date(m[1]+m[3]).toISOString().slice(0,19)+'.'+(m[2]||'').padEnd(6,'0')+'Z';};
  const native=p=>p&&!p.reportOnly&&['ar','newar','kb'].includes(p.source)&&p.scopeGroup==='IN'&&p.currency==='INR'&&['Asia/Kolkata','Asia/Calcutta'].includes(p.timezone)&&typeof p.sourceName==='string'&&p.sourceName.length>0&&(p.source!=='kb'||p.sourceName==='YASH.BET');
  function eligible({page,L,platforms,visible,now=Date.now()}){
+  const today=new Date(now+19800000).toISOString().slice(0,10),yesterday=new Date(Date.parse(today+'T00:00:00Z')-86400000).toISOString().slice(0,10);
+  // The rolling publication worker maintains today and yesterday. Older exact
+  // windows use the existing prepared reader directly, without reading this
+  // expired store first or falling back to raw orders.
   return page==='providers'&&L.direction==='charge'&&L.status==='all'&&platforms.length>0&&platforms.length<=50&&visible.length===platforms.length&&platforms.every(native)&&
-   validDay(L.from.slice(0,10))&&/^\d{4}-\d{2}-\d{2}T00:00:00$/.test(L.from)&&L.to===L.from.slice(0,10)+'T23:59:59'&&L.from.slice(0,10)<=new Date(now+19800000).toISOString().slice(0,10)&&
+   validDay(L.from.slice(0,10))&&/^\d{4}-\d{2}-\d{2}T00:00:00$/.test(L.from)&&L.to===L.from.slice(0,10)+'T23:59:59'&&L.from.slice(0,10)>=yesterday&&L.from.slice(0,10)<=today&&
    !['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr','amountMin','amountMax','channelType'].some(k=>L[k]);
  }
  function contextKey(access,catalog){return JSON.stringify([access,catalog.map(p=>[p.id,p.source,p.sourceName,p.scopeGroup,p.country,p.team,p.name,p.currency,p.timezone]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))]);}
