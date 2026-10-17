@@ -7,8 +7,11 @@ const WG={...P,id:'77777777-7777-4777-8777-777777777777',name:'26BET',source:'wg
 function wgResult(){const r=aggregate(WG,10),s={...r.summary[0],direction:'withdraw',currency:'BRL',all_count:10,all_amount:100,success_count:null,success_amount:null,created_success_count:4};r.summary=[s];r.capabilities=WG.capabilities;for(const key of ['provider','daily','hourly','amount','matrix'])r.groups[key]=r.groups[key].map(row=>({...row,...s}));return r}
 function scope(h){Object.assign(h.L,{country:'巴西',currency:'BRL',from:'2026-09-22T00:00:00',to:'2026-09-22T23:59:59',direction:'withdraw',platform:WG.id});h.L.multi.platform=[WG.id];h.L.multi.direction=['withdraw'];}
 function emptyWgResult(){const r=wgResult();r.total=0;r.summary=[];for(const key of Object.keys(r.groups))r.groups[key]=[];return r}
-function showResults(h,results,platforms=[WG]){Object.assign(h.L,{results,queryPlatforms:platforms,pageQueried:true,overviewQueried:true,dirty:false,loading:false,comparisonStatus:'idle',loadedView:'full',feeLookupRows:[],feeLookupLoading:false});h.c.render();}
+// Real Query synchronizes the staged fee scope before publishing completed rows.
+// These renderer fixtures inject that completion directly after the same sync.
+function showResults(h,results,platforms=[WG]){h.c.render();Object.assign(h.L,{results,queryPlatforms:platforms,pageQueried:true,overviewQueried:true,dirty:false,loading:false,comparisonStatus:'idle',loadedView:'full',feeLookupRows:[],feeLookupLoading:false,feeLookupError:''});h.c.render();}
 const textCells=row=>[...row.matchAll(/<td[^>]*>([^]*?)<\/td>/g)].map(cell=>cell[1].replace(/<[^>]*>/g,'').trim());
+
 
 test('empty WG summaries keep original overview success-time totals and fee unknown without inventing data',async()=>{
  const h=harness({platforms:[WG]});await settle();scope(h);const empty=emptyWgResult();showResults(h,[empty]);
@@ -100,7 +103,7 @@ test('automatic withdrawal and operator pages label empty WG coverage as histori
 test('WG mixed with a known source keeps combined success facts unknown and does not label them no successes',async()=>{
  const other={...WG,id:'88888888-8888-4888-8888-888888888888',name:'SYNTHETIC-OTHER',source:'ar',capabilities:{}},r=wgResult(),known=wgResult();known.platform=other;known.capabilities={};
  for(const rows of [known.summary,...Object.values(known.groups)])for(const row of rows){row.success_count=6;row.success_amount=60;row.created_success_count=6;}
- const h=harness({platforms:[WG,other]});await settle();scope(h);h.L.platform='all';h.L.multi.platform=[];h.L.results=[r,known];Object.assign(h.L,{pageQueried:true,overviewQueried:true,dirty:false,loading:false,comparisonStatus:'idle',feeLookupRows:[],feeLookupLoading:false});h.c.render();
+ const h=harness({platforms:[WG,other]});await settle();scope(h);h.L.platform='all';h.L.multi.platform=[];showResults(h,[r,known],[WG,other]);
  const payout=h.html().match(/<section class="df-card" id="df-payout">([^]*?)<\/section>/)?.[1];assert(payout);assert.match(payout,/本期成功 — \/ 本期创建 20 笔/);assert.match(payout,/成功时间口径未提供，手续费暂不可统计/);assert.doesNotMatch(payout,/本期无成功订单|本期成功 6 \/ 本期创建 20/);
  assert.match(h.html(),/代付创建单当前成功 4 \/ 10 笔/);
 });
@@ -114,4 +117,12 @@ test('provider fee totals cannot turn unknown WG success-time facts into zero co
  const feePrefix=read('admin-overview-fees.test.cjs').split(/\ntest\(/)[0],{api,plus,combine}=new Function('require','__dirname',feePrefix+';return {api,plus,combine}')(require,__dirname);
  const row=api.buildRows({orders:[{provider:'SyntheticPay',direction:'withdraw',currency:'BRL',success_count:null,success_amount:null}],issues:[],rates:[],country:'巴西',direction:'withdraw',plus,combine})[0];
  assert.equal(row.estimated_fee,null);assert.equal(row.fee_complete,false);const sum=api.feeSummary([{...row,success_count:null,currency:'BRL'}]);assert.equal(sum.amount,null);assert.equal(sum.complete,false);assert.equal(sum.successCount,null);assert.match(api.feeCoverageText(sum),/不能计算手续费/);
+});
+
+for(const mixed of [false,true])test('real WG '+(mixed?'mixed-source':'empty')+' Query retains the completed fee directory across paints and repeats, while force replaces it',async()=>{
+ const other={...WG,id:'88888888-8888-4888-8888-888888888888',name:'Synthetic known AR',source:'ar',capabilities:{}},platforms=mixed?[WG,other]:[WG],h=harness({platforms});await settle();scope(h);if(mixed){h.L.platform='all';h.L.multi.platform=[];}
+ h.setHandler(q=>{if(q.action==='rates')return {rows:[{id:'synthetic-complete-rate',scopeType:'country',country:'巴西',provider:'Synthetic provider',collectFee:'4%',payoutFee:'3%'}],total:1};if(q.action==='aggregate'){const p=platforms.find(p=>p.id===q.platformId),r=mixed?(p.source==='wg'?wgResult():aggregate(p)):emptyWgResult();return {...r,startAt:q.startAt,endAt:q.endAt,successStartAt:q.successStartAt,successEndAt:q.successEndAt};}return {};});
+ const run=h.c.liveQuery();await settle();await run;assert.equal(h.L.feeLookupError,'');assert.equal(h.L.feeLookupRows?.length,1);assert.match(h.html(),/成功时间口径未提供，手续费暂不可统计/);const snapshot=h.L.feeLookupRows,count=()=>h.calls.filter(q=>q.action==='rates').length,n=count();assert.equal(n,1);
+ h.c.render();h.c.livePage(1,'local');assert.equal(h.L.feeLookupRows,snapshot);assert.equal(count(),n);await h.c.liveQuery();await settle();assert.equal(h.L.feeLookupRows,snapshot);assert.equal(count(),n);
+ await h.c.liveRefresh();await settle();assert.equal(count(),n+1);assert.notEqual(h.L.feeLookupRows,snapshot);assert.equal(h.L.feeLookupRows?.length,1);assert.equal(h.L.feeLookupError,'');assert.match(h.html(),/成功时间口径未提供，手续费暂不可统计/);
 });
