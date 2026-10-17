@@ -1,0 +1,71 @@
+YASH channel classification release (local reviewed artifacts; no production execution by this package)
+
+Do not apply 20261015140304_yash_channel_provider_classification.sql alone while published heads exist.
+It now rejects that unsafe order. Apply YASH before any later generic/mask function migration;
+otherwise regenerate/verify this exact-baseline manifest and future-token projection.
+
+1. Build and review prepare SQL:
+   node scripts/ops/build-yash-channel-release.cjs prepare /absolute/path/prepare.sql
+   Apply this postgres-only SQL after review. It creates temporary private deployment objects,
+   not a cron or worker. Live dependency tokens and published heads stay unchanged.
+2. In a bounded transaction:
+   begin; set local statement_timeout='15s'; set local lock_timeout='500ms';
+   select private.yash_channel_shadow_begin(); commit;
+   Save batchId. It captures all currently valid published heads and requires one complete
+   18-target cohort with 90 exact current/previous component windows.
+3. First copy unchanged artifacts in bounded batches (at most 100 / 8 MiB each):
+   begin; set local statement_timeout='15s'; set local lock_timeout='500ms';
+   select private.yash_channel_shadow_copy('BATCH_UUID',100); commit;
+   Repeat until remaining=0. This preserves original source timestamps/watermarks,
+   payload bytes and upstream-completeness flags; it never claims a new source read.
+   Then recompute one pending YASH item per separate bounded transaction:
+   begin; set local statement_timeout='50s'; set local lock_timeout='500ms';
+   select private.yash_channel_shadow_step('BATCH_UUID'); commit;
+   This prepares one heavy item through frozen shadow functions and yields while a normal
+   worker has an active lease. The old per-item copy path has been removed.
+   Continue only after reviewing failures; no infinite retries. On timeout the current step
+   rolls back and previously prepared items remain durable.
+4. Before promotion, refresh the manifest in a short bounded transaction:
+   select private.yash_channel_shadow_refresh('BATCH_UUID');
+   Only changed job/head items lose their prepared payload. Restage the returned pending count.
+   A changed roster/function/config dependency requires discard and a new reviewed batch:
+   select private.yash_channel_shadow_discard('BATCH_UUID');
+   Discard affects deployment staging only, never source or published data.
+5. Build a single atomic promotion transaction:
+   node scripts/ops/build-yash-channel-release.cjs promote /absolute/path/promote.sql BATCH_UUID
+   Review/apply the WHOLE SQL transaction. Preflight acquires existing worker/dispatch/claim
+   transaction locks, rejects active leases, checks all heads, exact roster, future tokens,
+   90-window cohort completeness and the frozen shadow function fingerprints.
+   It then applies the classification migration and calls the existing normal completion
+   protocol for new revisions/artifacts/heads via its exact frozen deployment-only clone.
+   Only repeated semantic checks share a postgres-only, same-transaction proof for the
+   18 exact native targets. All per-item payload/provenance/scope/lease/fence/quota checks
+   stay intact, and every native/dependency proof is rechecked after the whole batch.
+   Quota, scope or dependency validation failure rolls back
+   every function/head/job change. Existing workers are not paused or replaced.
+   If heads changed, refresh/restage only changed items and retry the reviewed transaction.
+   Repeated contention should be reported, not converted to an unbounded retry loop.
+6. Record an aggregate receipt (no payload/order/user details):
+   with tokens as materialized(select target,private.provider_snapshot_dependency_token(target)token
+     from private.provider_snapshot_targets where enabled)
+   select b.id,b.status,b.promoted_at,b.anchor_cohort,count(*) items,
+     count(*)filter(where i.mode='recompute_yash') recomputed,
+     count(*)filter(where i.mode='reuse_equivalent') reused,
+     bool_and(h.snapshot_id=i.new_snapshot and a.revision=j.revision and j.status='ready'
+       and a.dependency_token=t.token) all_current
+   from private.yash_channel_shadow_batches b join private.yash_channel_shadow_items i on i.batch_id=b.id
+   join private.provider_snapshot_jobs j on j.id=i.job_id
+   join tokens t on t.target=j.target
+   join private.provider_snapshot_heads h on h.job_id=j.id
+   join private.provider_snapshot_artifacts a on a.id=h.snapshot_id
+   where b.id='BATCH_UUID' group by b.id;
+   Verify the authorized published reader and application views. Local regression timing is
+   not production timing. Record Supabase migration history using the approved deploy process.
+7. After receipt/verification, apply supabase/operations/yash-channel-shadow-cleanup.sql.
+   It removes only temporary deployment functions/tables. Final helpers, old immutable artifacts,
+   existing cohort links and scheduled worker remain; normal retention manages old artifacts.
+
+Scope: this migration changes exactly deposit/ArbPay/Phonepe_QR and
+withdrawal/ArbPay/Arb-BANK to UPI-QR. Other ArbPay channels/suppliers remain unchanged.
+Provider options reuse the existing supplier directory plus small verified YASH channel catalog.
+No historical channel DISTINCT scan is introduced. Raw supplier and channel rows are untouched.
