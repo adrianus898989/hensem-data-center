@@ -58,6 +58,7 @@
   const publicationVersion=options.publicationVersion===2?2:1;
   const transport=options.request,now=options.now||Date.now,maxBatchSize=Math.max(1,Math.min(50,Math.floor(options.maxBatchSize||50))),maxConcurrent=Math.max(1,Math.min(4,Math.floor(options.maxConcurrent||2))),maxResponseBytes=Math.max(1024,Math.min(32*1024*1024,options.maxResponseBytes||16*1024*1024));
   const completedPolicy=typeof options.completedCacheTtlMs==='function'?options.completedCacheTtlMs:null;
+  const completedByteCap=Number.isFinite(options.completedCacheMaxBytes)?Math.max(1024,Math.min(96*1024*1024,Math.floor(options.completedCacheMaxBytes))):16*1024*1024;
   const completedTtl=Number.isFinite(options.completedCacheTtlMs)?Math.max(0,Math.min(30000,options.completedCacheTtlMs)):0;
   const completionEnabled=!!completedPolicy||completedTtl>0;
   function completionTtl(q,native){
@@ -122,7 +123,7 @@
    let saved,bytes;try{saved=copy(item);bytes=(JSON.stringify(saved).length+job.completedKey.length+job.family.length)*2+64;}catch{return;}
    if(bytes>2*1024*1024&&Object.hasOwn(saved,'providerReuse')){delete saved.providerReuse;bytes=(JSON.stringify(saved).length+job.completedKey.length+job.family.length)*2+64;}
    if(bytes>2*1024*1024)return;forgetCompleted(job.completedKey);completed.set(job.completedKey,{item:saved,readAt,expiresAt,bytes,family:job.family,reuseScope:encode([job.context,job.nativeKey,encode((({providers,...rest})=>rest)(job.q))])});completedBytes+=bytes;
-   while(completed.size>128||completedBytes>16*1024*1024)forgetCompleted(completed.keys().next().value);
+   while(completed.size>128||completedBytes>completedByteCap)forgetCompleted(completed.keys().next().value);
   }
   const authorityDenied=error=>['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(error?.code||''));
   function contextValue(){const value=options.context();if(typeof value!=='string'||!value)throw failure('cancelled');return value;}

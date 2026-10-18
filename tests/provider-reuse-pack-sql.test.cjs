@@ -16,7 +16,7 @@ test.before(async()=>{db=new PGlite();await db.exec('create schema private;creat
  create function private.dashboard_admin_live_confirmed_provider(country text,platform text,raw text)returns text language sql stable as $$select case when raw='ConfirmedRaw'then'ConfirmedPay'end$$;
  create function private.dashboard_admin_live_provider_alias_values(country text,vals text[])returns text[]language sql stable as $$select array_agg(distinct private.dashboard_admin_live_provider_alias(country,x))from unnest(vals)x$$;
  insert into private.dashboard_admin_provider_registry values('印度','SYNTHETIC','native-A',array['native-A']),('印度','SYNTHETIC','BrandB',array['BrandB']),('印度','SYNTHETIC','ShadowPay',array['ShadowPay']);
- insert into private.dashboard_admin_provider_overrides values('印度','SYNTHETIC','native-A','BrandB'),('印度','SYNTHETIC','BrandB','BrandC'),('印度','SYNTHETIC','ShadowPay','BrandC');`);await db.exec(fs.readFileSync(path.join(__dirname,'fixtures/provider-canonical-current.sql'),'utf8'));await db.exec(fs.readFileSync(path.join(__dirname,'../supabase/admin-prepared-provider-projection.sql'),'utf8'));await db.exec(`create function private.prepared_aggregate_echo(payload jsonb,q jsonb,t jsonb)returns jsonb language sql immutable as $$select payload||jsonb_build_object('offset',coalesce((q->>'offset')::integer,0),'limit',coalesce((q->>'limit')::integer,20),'hasMore',case when payload->>'total'is null then null else(payload->>'total')::numeric>coalesce((q->>'offset')::integer,0)+coalesce((q->>'limit')::integer,20)end,'startAt',q->>'startAt','endAt',q->>'endAt','successStartAt',q->>'successStartAt','successEndAt',q->>'successEndAt','successBasis',q->>'successBasis')$$;`);await db.exec(fs.readFileSync(path.join(__dirname,'../supabase/maintenance/daily-provider-reuse-pack.sql'),'utf8').split('-- BEGIN compact projection helper\n')[1].split('-- END compact projection helper')[0]);});
+ insert into private.dashboard_admin_provider_overrides values('印度','SYNTHETIC','native-A','BrandB'),('印度','SYNTHETIC','BrandB','BrandC'),('印度','SYNTHETIC','ShadowPay','BrandC');`);await db.exec(fs.readFileSync(path.join(__dirname,'fixtures/provider-canonical-current.sql'),'utf8'));await db.exec(fs.readFileSync(path.join(__dirname,'../supabase/admin-prepared-provider-projection.sql'),'utf8'));await db.exec(fs.readFileSync(path.join(__dirname,'fixtures/provider-echo-current.sql'),'utf8'));await db.exec(fs.readFileSync(path.join(__dirname,'../supabase/maintenance/daily-provider-reuse-pack.sql'),'utf8').split('-- BEGIN compact projection helper\n')[1].split('-- END compact projection helper')[0]);});
 test.after(async()=>{await db?.close();});
 test('server compact entries reconstruct whole original financial DTO including non-idempotent native alias chains',async()=>{
  const p=payload(),r=await pack(p);assert(r);for(const names of [['native-A'],['BrandB'],['TukPay'],[]])assert.deepEqual(materialize(r,names),await original(p,q({direction:'charge',...(names.length?{providers:names}:{})})),names.join(','));
@@ -80,4 +80,59 @@ test('changed native overrides affect the next bounded package immediately and r
  try{const after=await pack(p);assert(after);assert.notDeepEqual(after.names,before.names);assert.deepEqual(materialize(after,['native-A']),await original(p,q({direction:'charge',providers:['native-A']})));}finally{await db.exec("update private.dashboard_admin_provider_overrides set canonical_provider='BrandB'where raw_provider='native-A'");}
  const definition=(await db.query("select pg_get_functiondef('private.dashboard_admin_live_provider_canonical(text,text,text)'::regprocedure)d")).rows[0].d;
  try{await db.exec(definition.replace(' select case',' -- deliberate source drift\n select case'));assert.equal(await pack(),null);}finally{await db.exec(definition);}
+});
+
+// Compare inside PostgreSQL before JSON numbers pass through JavaScript. Counts
+// beyond Number.MAX_SAFE_INTEGER and NUMERIC string scales stay exact here.
+async function exactSqlEntries(p,names=['native-A','BrandB','TukPay','AbsentPay',null],direction='charge'){
+ const request=q({direction,providers:['native-A'],providerReuseNames:names.filter(n=>n!==null)});
+ const answer=(await db.query(`with pack as materialized(select private.daily_provider_base_reuse_pack($1,$2,$3,$4,$5)p),
+ targets as materialized(select name,case when name is null then($3::jsonb-array['providers','providerReuseNames'])else($3::jsonb-'providerReuseNames')||jsonb_build_object('providers',jsonb_build_array(name))end q from jsonb_array_elements_text($6::jsonb)n(name)),
+ located as materialized(select p,t.name,t.q,case when t.name is null then(p->>'all')::integer else(select(m->>1)::integer from jsonb_array_elements(p->'names')m where m->>0=t.name)end idx from pack cross join targets t),
+ reconstructed as materialized(select name,q,(p->'base')||(p->'entries'->idx->'result')||jsonb_build_object('groups',jsonb_build_object('provider',(select coalesce(jsonb_agg(p->'providers'->(i.value::text)::integer order by i.n),'[]')from jsonb_array_elements(p->'entries'->idx->'indices')with ordinality i(value,n))))v from located),
+ oracle as materialized(select r.name,r.v,private.prepared_aggregate_echo(private.dashboard_prepared_provider_projection($1,$2,r.q),r.q,$4)o from reconstructed r)
+ select(select p is not null from pack)pack_present,bool_and(v=o and v::text=o::text)all_exact,count(*)::integer comparisons from oracle`,[JSON.stringify(p),JSON.stringify(q()),JSON.stringify(request),JSON.stringify(P),JSON.stringify(publication),JSON.stringify(names)])).rows[0];
+ assert.equal(answer.pack_present,true);assert.equal(answer.comparisons,names.length);assert.equal(answer.all_exact,true);
+}
+
+test('batch count field presence and invalid contributors match all original SQL summaries including huge integer totals',async()=>{
+ const keys=['all_count','success_count','pending_count','failed_count','rejected_count','unknown_count','missing_amount_count','negative_amount_count','created_success_count','reviewed_pending_count'];
+ for(const key of keys)for(const value of [null,'00003','2.0','900719925474099312345678901234567890']){const p=payload();p.groups.provider[0][key]=value;await exactSqlEntries(p);}
+ const p=payload();for(const r of p.groups.provider){delete r.all_count;delete r.reviewed_pending_count;}p.summary=[{all_count:null,reviewed_pending_count:99}];await exactSqlEntries(p);
+});
+
+test('batch money fields preserve decimal text scale, exponents, nulls, malformed unknowns and optional presence per original SQL',async()=>{
+ const keys=['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount','created_success_amount','reviewed_pending_amount'];
+ for(const key of keys)for(const value of [null,'-0.0000000000000000000000001','+001.230000','123.','3e-19',{malformed:true}]){const p=payload();p.groups.provider[0][key]=value;p.groups.provider[1][key]='9007199254740993.00000000000000000019';await exactSqlEntries(p);}
+});
+
+test('batch evidence presence and JSON null semantics match original SQL for every retained label',async()=>{
+ const keys=['success_time_available','success_time_basis','success_available','success_unavailable_reason','fee_available','fee_unavailable_reason','pending_count_available'];
+ for(const key of keys)for(const value of [null,false,'known',{proof:'same'}]){const p=payload();p.groups.provider[0][key]=value;p.groups.provider[1][key]=value;await exactSqlEntries(p);p.groups.provider[1][key]='different';await exactSqlEntries(p);delete p.groups.provider[1][key];await exactSqlEntries(p);}
+});
+
+test('batch currency buckets distinguish missing SQL NULL from JSON null and preserve original provider leaf order',async()=>{
+ const p=payload();p.groups.provider=[row('TukPay','charge',{currency:'USD'}),row('TukPay','charge',{currency:null}),row('TukPay','charge'),row('TukPay','charge')];delete p.groups.provider[3].currency;await exactSqlEntries(p,['TukPay',null]);p.groups.provider.reverse();await exactSqlEntries(p,['TukPay',null]);
+});
+
+test('batch latest timestamp keeps exact original text and omits ambiguous equal-instant spellings',async()=>{
+ const p=payload();p.groups.provider=[row('TukPay','charge',{latest_synced_at:'2026-10-10T00:00:00Z'}),row('TukPay','charge',{latest_synced_at:'2026-10-10T00:00:00Z'}),row('TukPay','charge',{latest_synced_at:null}),row('TukPay','withdraw',{latest_synced_at:'2026-10-11T00:00:00Z'})];await exactSqlEntries(p,['TukPay',null]);p.groups.provider.reverse();await exactSqlEntries(p,['TukPay',null]);await exactSqlEntries(p,['TukPay',null],'withdraw');
+ p.groups.provider.find(r=>r.direction==='charge'&&r.latest_synced_at).latest_synced_at='2026-10-10T05:30:00+05:30';assert.equal(await pack(p),null);
+ // Ambiguity below the latest instant cannot affect the selected source text.
+ p.groups.provider.push(row('TukPay','charge',{latest_synced_at:'2026-10-12T00:00:00Z'}));await exactSqlEntries(p,['TukPay',null]);
+});
+
+test('batch hasMore preserves original projection field/cast contract and final echo override',async()=>{
+ const variants=[{}, {hasMore:false}, {hasMore:null,offset:null,limit:null}, {hasMore:true,offset:'4',limit:'1'}, {hasMore:true,offset:'9223372036854775780',limit:'20'}, {hasMore:false,offset:'9223372036854775807',limit:'0'}, {hasMore:false,offset:'-9223372036854775808',limit:'0'}];
+ for(const extra of variants){const p=payload();Object.assign(p,extra);await exactSqlEntries(p);}
+ for(const extra of [{offset:'not-an-integer',limit:'1'},{offset:'9223372036854775808',limit:'1'},{offset:'9223372036854775807',limit:'1'},{offset:'0',limit:'1.5'}]){
+  const p=payload();Object.assign(p,{hasMore:false,...extra});let code;try{await original(p,q({direction:'charge',providers:['native-A']}));}catch(e){code=e.code;}assert(code);await assert.rejects(pack(p),e=>e.code===code);
+  // Without the original hasMore key the intermediate bigint casts never run;
+  // final echo uses the valid request integer fields instead.
+  delete p.hasMore;await exactSqlEntries(p);
+ }
+});
+
+test('batch original projection validation and selected timestamp errors retain original SQLSTATE instead of producing statistics',async()=>{
+ for(const change of [p=>{p.groups.provider[0].direction='bad'},p=>{p.startAt='not-a-date'},p=>{p.summary={}},p=>{p.partial=false},p=>{p.groups.provider[0].latest_synced_at='not-a-date'}]){const p=payload();change(p);let expected;try{await original(p,q({direction:'charge'}));}catch(e){expected=e.code;}assert(expected);await assert.rejects(pack(p),e=>e.code===expected);}
 });
