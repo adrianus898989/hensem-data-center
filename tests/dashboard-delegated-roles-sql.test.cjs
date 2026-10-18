@@ -2,6 +2,8 @@ const {test,before,after,beforeEach,afterEach}=require('node:test');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {PGlite}=require('@electric-sql/pglite');
 const read=p=>fs.readFileSync(path.join(__dirname,'..',p),'utf8');
+// This historical catalog predates the two auxiliary-member request additions.
+const historicalMemberRequests=p=>({...p,requests:p.requests.filter(action=>action!=='memberDaily'||!['overview','merchants'].includes(p.id))});
 const migration=read('supabase/migrations/20260930180000_dashboard_roles.sql');
 const listFix=read('supabase/migrations/20260930230000_role_management_list_fix.sql');
 const delegated=read('supabase/migrations/20261001142722_delegated_role_account_permissions.sql');
@@ -58,7 +60,7 @@ after(async()=>db?.close());beforeEach(async()=>{await db.exec('begin');await as
 
 
 test('new IP edit exists in catalog without implicitly updating existing roles',async()=>{
- await admin();const c=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(c.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.filter(page=>!['success_analysis','daily_comparison','collector_control','channel_status'].includes(page.id)).map(page=>({...page,...(page.id==='stuck'?{label:'代付中与卡单分析',moduleId:'risk',moduleLabel:'智能风控中心'}:{}),requests:page.requests.filter(request=>!['analysisOrders','pendingOrders','submissionStreak','aggregatePrepared'].includes(request))})));assert(c.permissions.some(p=>p.key==='ip.edit'));assert.equal(await scalar('select count(*)::int from private.dashboard_roles'),0);
+ await admin();const c=await scalar('select private.dashboard_role_catalog()');assert.deepEqual(c.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.map(historicalMemberRequests).filter(page=>!['success_analysis','daily_comparison','collector_control','channel_status'].includes(page.id)).map(page=>({...page,...(page.id==='stuck'?{label:'代付中与卡单分析',moduleId:'risk',moduleLabel:'智能风控中心'}:{}),requests:page.requests.filter(request=>!['analysisOrders','pendingOrders','submissionStreak','aggregatePrepared'].includes(request))})));assert(c.permissions.some(p=>p.key==='ip.edit'));assert.equal(await scalar('select count(*)::int from private.dashboard_roles'),0);
 });
 test('owner can assign an empty role while preserving the data scope and removing legacy page authority',async()=>{
  const role=await create([]);await assign(VIEWER,role);

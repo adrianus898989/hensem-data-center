@@ -1,6 +1,8 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {PGlite}=require('@electric-sql/pglite');
 const read=p=>fs.readFileSync(path.join(__dirname,'..',p),'utf8');
+// This historical catalog predates the two auxiliary-member request additions.
+const historicalMemberRequests=p=>({...p,requests:p.requests.filter(action=>action!=='memberDaily'||!['overview','merchants'].includes(p.id))});
 const migration=read('supabase/migrations/20261002115600_pending_analysis_navigation.sql');
 const scalar=async(db,q)=>Object.values((await db.query(q)).rows[0])[0];
 test('role editor relocation preserves permissions, requests, other pages, OID and function metadata',async()=>{
@@ -12,7 +14,7 @@ test('role editor relocation preserves permissions, requests, other pages, OID a
   const after=await scalar(db,'select private.dashboard_role_catalog()');
   const expected=JSON.parse(JSON.stringify(before)),page=expected.pages.find(p=>p.id==='stuck');page.moduleId='analysis';page.moduleLabel='数据分析中心';
   assert.deepEqual(after,expected);
-  assert.deepEqual(after.pages,require('../src/lib/dashboardRoleCatalog.json').pages.filter(page=>!['success_analysis','daily_comparison','collector_control','channel_status'].includes(page.id)).map(p=>({...p,requests:p.requests.filter(r=>!['submissionStreak','aggregatePrepared'].includes(r))})));
+  assert.deepEqual(after.pages,require('../src/lib/dashboardRoleCatalog.json').pages.map(historicalMemberRequests).filter(page=>!['success_analysis','daily_comparison','collector_control','channel_status'].includes(page.id)).map(p=>({...p,requests:p.requests.filter(r=>!['submissionStreak','aggregatePrepared'].includes(r))})));
   assert.deepEqual(await scalar(db,"select to_jsonb(p)-'prosrc' from pg_proc p where oid='private.dashboard_role_catalog()'::regprocedure"),meta);
  }finally{await db.close()}
 });

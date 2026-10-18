@@ -5,6 +5,8 @@ const { webcrypto, createHash } = require('node:crypto');
 const ts = require('typescript');
 const { PGlite } = require('@electric-sql/pglite');
 const root = path.resolve(__dirname, '..');
+// This historical catalog predates the two auxiliary-member request additions.
+const historicalMemberRequests=p=>({...p,requests:p.requests.filter(action=>action!=='memberDaily'||!['overview','merchants'].includes(p.id))});
 const sql = fs.readFileSync(path.join(root, 'supabase/collector-control.sql'), 'utf8');
 const source = fs.readFileSync(path.join(root, 'supabase/functions/collector-control/handler.ts'), 'utf8');
 function evaluate(source, requireModule = () => { throw Error('Unexpected import'); }) {
@@ -260,7 +262,7 @@ test('additive SQL preserves all prior catalog entries and metadata, and replays
   assert.deepEqual(await scalar('select to_jsonb(d) from private.collector_control_devices d'), device);
   assert.deepEqual(await scalar('select to_jsonb(t) from private.collector_control_tasks t'), task);
   const catalog = await scalar('select private.dashboard_role_catalog()');
-  const expectedPages = JSON.parse(fs.readFileSync(path.join(root, 'src/lib/dashboardRoleCatalog.json'), 'utf8')).pages.filter(p=>p.id!=='channel_status').map(p=>({...p,requests:p.requests.filter(request=>request!=='aggregatePrepared')}));
+  const expectedPages = JSON.parse(fs.readFileSync(path.join(root, 'src/lib/dashboardRoleCatalog.json'), 'utf8')).pages.map(historicalMemberRequests).filter(p=>p.id!=='channel_status').map(p=>({...p,requests:p.requests.filter(request=>request!=='aggregatePrepared')}));
   assert.deepEqual(catalog.pages, expectedPages);
   assert.deepEqual(catalog.pages.filter(p => p.id !== 'collector_control'), baselineCatalog.pages);
   assert.deepEqual(catalog.permissions, [...baselineCatalog.permissions, { key: 'collector_control.view' }, { key: 'collector_control.edit' }]);
