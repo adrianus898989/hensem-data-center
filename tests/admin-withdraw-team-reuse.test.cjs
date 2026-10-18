@@ -116,3 +116,18 @@ test('actual prepared SQL India rows with incomplete native day evidence reuse a
   await sql.publish();const unknown=await sql.request();assert.equal(unknown.rows.find(r=>r.platform==='92PKR').total,null);const guarded=fromDto(unknown,'巴基斯坦');await guarded.page.load();guarded.ctx.withdrawTeam('Other');assert.equal(guarded.page.state.dirty,true);assert.equal(guarded.calls.length,1);assert.equal(guarded.page.state.data.rows.find(r=>r.platform==='92PKR').total,null);
  }finally{await db.close();}
 });
+
+
+test('unrelated foreign WG native and withdrawal directory capabilities do not block the selected native scope; raw directory drift still invalidates it',async()=>{
+ const f=fixture({edit:(d,L)=>{const foreign={id:'foreign-wg',name:'FOREIGN',sourceName:'RAW-FOREIGN',country:'巴西',team:'Other',source:'wg',timezone:'America/Sao_Paulo',currency:'BRL',capabilities:{systemOrderId:false,thirdPartyOrderNumber:true,utr:false,historicalFees:false,scopeGroupIsGeographicCountry:true}};L.catalog.push(foreign);const report={...foreign};delete report.capabilities;L.withdrawCatalog.push(report);}});await f.page.load();f.ctx.withdrawTeam('M8');assert.equal(f.page.state.dirty,false);assert.equal(f.calls.length,1);assert.equal(f.page.state.data.rows.length,2);assert.equal(f.page.state.data.totals.total,20);f.L.withdrawCatalog[0].capabilities={withdraw:false};f.page.render();assert.equal(f.page.state.data,null);assert.equal(f.page.state.dirty,true);
+});
+test('the selected native physical target still rejects capabilities disagreement across the two catalog entries',async()=>{
+ const f=fixture({edit:(d,L)=>{L.catalog[0].capabilities={withdraw:true};const peer={...L.catalog[0]};delete peer.capabilities;L.withdrawCatalog.push(peer);}});await f.page.load();f.ctx.withdrawTeam('M8');assert.equal(f.page.state.dirty,true);assert.equal(f.calls.length,1);assert.equal(f.page.state.data.rows.length,3);
+});
+test('a conflicting foreign country record sharing the selected native source and physical ID still refuses reuse',async()=>{
+ const f=fixture({edit:(d,L)=>L.catalog.push({...L.catalog[0],name:'DIFFERENT-FOREIGN-NAME',country:'巴西',team:'Other',timezone:'America/Sao_Paulo',currency:'BRL'})});await f.page.load();f.ctx.withdrawTeam('M8');assert.equal(f.page.state.dirty,true);assert.equal(f.calls.length,1);assert.equal(f.page.state.data.rows.length,3);
+});
+
+test('a selected real native target without a physical ID cannot prove cross-directory identity for team reuse',async()=>{
+ const f=fixture({edit:(d,L)=>{delete L.catalog[0].id;}});await f.page.load();f.ctx.withdrawTeam('M8');assert.equal(f.page.state.dirty,true);assert.equal(f.calls.length,1);
+});
