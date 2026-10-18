@@ -29,7 +29,7 @@ function overviewHarness(options={}){
  const declaration=prefix=>{const line=aggregateSource.split('\n').find(line=>line.startsWith(prefix));assert(line,'missing production declaration '+prefix);return line;};
  const between=(start,end)=>{const from=aggregateSource.indexOf(start),to=aggregateSource.indexOf(end,from);assert(from>=0&&to>from,'missing production wiring '+start);return aggregateSource.slice(from,to);};
  vm.runInContext([
-  'let pendingSnapshot;',declaration(' function activeValues('),declaration(' function matchesFilter('),declaration(' const displayIdentity='),declaration(' const platformTeam='),declaration(' const orderSource='),declaration(' const pandaNativePage='),
+  'let pendingSnapshot;',declaration(' function activeValues('),declaration(' function matchesFilter('),declaration(' const displayIdentity='),declaration(' const displayPlatformAllowed='),declaration(' const platformTeam='),declaration(' const orderSource='),declaration(' const pandaNativePage='),
   between(' function visibleCatalog(){','\n const teamCatalog='),declaration(' const matchesPlatform='),declaration(' const selectedVisible='),
   between(' const reportData=','\n pendingOrders='),
   'globalThis.overview={ui:pendingSnapshot,report:reportData,selected:selectedVisible};'
