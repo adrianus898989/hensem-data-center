@@ -35,7 +35,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     return {...checked,windowVersion,successStartAt,successEndAt,successBasis};
   }
   if(p.action==="aggregatePrepared"){
-    if(Object.keys(p).some(key=>!["action","requests","publicationVersion","forceRefresh"].includes(key))||!Array.isArray(p.requests)||p.requests.length<1||p.requests.length>50)throw Error("已准备统计的批量参数无效");
+    if(Object.keys(p).some(key=>!["action","requests","publicationVersion","forceRefresh","providerReuseNames"].includes(key))||!Array.isArray(p.requests)||p.requests.length<1||p.requests.length>50)throw Error("已准备统计的批量参数无效");
     if(p.publicationVersion!==undefined&&p.publicationVersion!==2||p.forceRefresh!==undefined&&(typeof p.forceRefresh!=="boolean"||p.publicationVersion!==2))throw Error("已准备统计发布版本无效");
     const requests=p.requests.map(value=>{
       if(!value||typeof value!=="object"||Array.isArray(value))throw Error("统计请求无效");
@@ -51,7 +51,15 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       return checked;
     });
     if(JSON.stringify(requests).length>128000)throw Error("统计批量参数过大");
-    return {action:"aggregatePrepared",requests,...(p.publicationVersion===2?{publicationVersion:2,...(p.forceRefresh===undefined?{}:{forceRefresh:p.forceRefresh})}:{})};
+    // Optional names are hints for server-native projections, never filters.
+    // Invalid/oversized hints are omitted without changing a valid main query.
+    const candidate=p.providerReuseNames;
+    let providerReuseNames:string[]|undefined;
+    if(p.publicationVersion===2&&Array.isArray(candidate)&&candidate.length<=200&&candidate.every(name=>typeof name==="string"&&name.trim().length>0&&name.length<=200&&!/[\u0000-\u001f\u007f]/.test(name))){
+      const names=[...new Set(candidate as string[])].sort(),bytes=new TextEncoder().encode(JSON.stringify(names)).length;
+      if(names.length&&bytes<=8192&&new TextEncoder().encode(JSON.stringify({action:"aggregatePrepared",requests,publicationVersion:2,providerReuseNames:names})).length<=128000)providerReuseNames=names;
+    }
+    return {action:"aggregatePrepared",requests,...(providerReuseNames?{providerReuseNames}:{}),...(p.publicationVersion===2?{publicationVersion:2,...(p.forceRefresh===undefined?{}:{forceRefresh:p.forceRefresh})}:{})};
   }
   if(p.action==="providerSnapshot"){
     const allowed=["action","version","platformIds","startAt","endAt","direction","status","currency","components","export"];

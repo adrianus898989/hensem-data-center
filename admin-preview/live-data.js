@@ -773,7 +773,7 @@
   async function platformAssignmentsLoad(reset=false){if(!L.catalogReady)return;const renderIfPage=()=>{if(state.page==='teams'||state.page==='platform_systems')render()};if(reset)L.platformAssignmentsPage=1;const serial=++L.platformAssignmentsSerial;L.platformAssignmentsLoading=true;L.platformAssignmentsError='';render();try{const request={action:'platformAssignments',offset:(L.platformAssignmentsPage-1)*L.platformAssignmentsSize,limit:L.platformAssignmentsSize};for(const [key,name] of [['teamPlatformTeam','team'],['teamPlatformCountry','country'],['teamPlatformSystem','system'],['teamPlatformQuery','platform']])if(L[key]&&L[key]!=='all')request[name]=L[key];if(L.teamPlatformStatus!=='all')request.status=L.teamPlatformStatus;const result=await window.hensemLiveRequest(request);if(serial!==L.platformAssignmentsSerial)return;L.platformAssignments=result;L.platformAssignmentsAppliedRequest={...request};L.platformAssignmentsDirty=false;L.platformAssignmentsLoading=false;renderIfPage()}catch(e){if(serial!==L.platformAssignmentsSerial)return;L.platformAssignmentsLoading=false;L.platformAssignmentsError=e.message||'团队平台归属读取失败';renderIfPage()}}
  window.providerConfigLoad=providerConfigLoad;window.platformAssignmentsLoad=platformAssignmentsLoad;
  const configuration=HensemLiveConfiguration.create({L,E,C,metric,box,table,pager,page:()=>state.page,request:q=>window.hensemLiveRequest(q),render:()=>render(),changed:async type=>{
-   workordersReadCache?.clear();reportData?.invalidateCatalog();const catalog=await window.hensemLiveRequest({action:'catalog'});L.catalog=catalog.platforms||[];L.dirty=true;L.results=[];L.providerOptionsKey='';
+   clearAggregateCache();reportData?.invalidateCatalog();const catalog=await window.hensemLiveRequest({action:'catalog'});L.catalog=catalog.platforms||[];L.dirty=true;L.results=[];L.providerOptionsKey='';
    await loadProviderOptions(true);if(type==='platform')await platformAssignmentsLoad();else if(state.page==='teams')await platformAssignmentsLoad();else await providerConfigLoad();
  }});
  const analysis=window.HensemAnalysisDrilldown?.create({L,E,N,C,R,query,formatTime,successTimeLabel,openDrawer:(title,html)=>openDrawer(title,html),customRows:segment=>matrixCustom?.detailRows(segment),customResults:segment=>matrixCustom?.customResults(segment),request:q=>window.hensemLiveRequest(q),render:()=>render()});
@@ -1107,24 +1107,36 @@
   while(aggregateCache.size>aggregateCacheLimit||aggregateCacheBytes>aggregateCacheByteLimit)deleteAggregateEntry(aggregateCache.keys().next().value);
  }
  function aggregateRead(request,serial){
-  const context=aggregateAccessContext();if(serial!==L.serial||!roleAllowed(state.page,'query')||!aggregateNativeIdentity(request))return Promise.reject(Error('查询权限或范围已变化'));
-  const key=JSON.stringify([serial,context,aggregateNativeIdentity(request),Object.keys(request).sort().map(k=>[k,request[k]])]),existing=aggregateInflight.get(key);
+  const context=aggregateAccessContext(),native=aggregateNativeIdentity(request);if(serial!==L.serial||!roleAllowed(state.page,'query')||!native)return Promise.reject(Error('查询权限或范围已变化'));
+  const key=JSON.stringify([serial,context,native,Object.keys(request).sort().map(k=>[k,request[k]])]),existing=aggregateInflight.get(key);
   if(existing)return existing.promise;
   const controller=typeof AbortController==='function'?new AbortController():null,entry={controller,promise:null};
   entry.promise=Promise.resolve().then(()=>{
-   if(controller?.signal.aborted||serial!==L.serial||context!==aggregateAccessContext())throw Error('查询已替换');
+   if(controller?.signal.aborted||serial!==L.serial||context!==aggregateAccessContext()||native!==aggregateNativeIdentity(request))throw Error('查询已替换');
    return window.hensemLiveRequest(request,{signal:controller?.signal});
   }).then(result=>{
-   if(controller?.signal.aborted||serial!==L.serial||context!==aggregateAccessContext()||!roleAllowed(state.page,'query'))throw Error('查询已替换');
+   if(controller?.signal.aborted||serial!==L.serial||context!==aggregateAccessContext()||native!==aggregateNativeIdentity(request)||!roleAllowed(state.page,'query'))throw Error('查询已替换');
    if(orderSource(L.catalog.find(p=>p.id===request.platformId))==='panda'){
     if(!pandaCoverageMatches(result,request))throw Error('熊猫所选创建窗口完整性尚未确认，请在订单列表查看已入库明细；暂不计入完整汇总');
    }
    return {...result,_aggregateReadAt:Date.now(),_aggregateAccessContext:context};
-  }).catch(error=>{if(serial===L.serial&&!controller?.signal.aborted&&context===aggregateAccessContext()&&['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code)){clearAggregateCache();if(isSuccessAnalysis())clearSuccessAuthority();}throw error;})
+  }).catch(error=>{if(serial===L.serial&&!controller?.signal.aborted&&context===aggregateAccessContext()&&native===aggregateNativeIdentity(request)&&['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code)){clearAggregateCache();if(isSuccessAnalysis())clearSuccessAuthority();}throw error;})
    .finally(()=>{if(aggregateInflight.get(key)===entry)aggregateInflight.delete(key);});
   aggregateInflight.set(key,entry);return entry.promise;
  }
- preparedAggregates=window.HensemPreparedAggregates?.create({request:(q,options)=>window.hensemLiveRequest(q,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?state.page+'|'+aggregateAccessContext():'',platform:id=>visibleCatalog().find(p=>p.id===id),publicationVersion:2,maxConcurrent:2,maxBatchSize:3,completedCacheTtlMs:30000,derivedPollMaxMs:60000,derivedPollIntervalMs:1500,derivedPollMaxAttempts:40});
+ // Retain only the already-authorized exact publication. Historical provider
+ // queries may outlast the short real-time TTL while their independent
+ // supplementary reads finish; revisiting the same native/window must not
+ // discard that completed main result. New providers still use server projection.
+ function preparedCompletionTtl(q,platform){
+  if(!providerDirection(state.page)||q.view!=='providers'||q.status!=='all'||q.successBasis!=='success'||!['ar','newar','kb'].includes(orderSource(platform)))return 30000;
+  const clocks=['startAt','endAt','successStartAt','successEndAt'];
+  if(clocks.some(key=>typeof q[key]!=='string'||!Number.isFinite(Date.parse(q[key]))||/[.]\d*[1-9]\d*(?:Z|[+-]\d\d:\d\d)$/.test(q[key])))return 30000;
+  if(Date.parse(q.startAt)!==Date.parse(q.successStartAt)||Date.parse(q.endAt)!==Date.parse(q.successEndAt)||Date.parse(q.endAt)>Date.now())return 30000;
+  try{if(clocks.some(key=>localClock(Date.parse(q[key]),platform.timezone).slice(11)!=='00:00:00'))return 30000;}catch{return 30000;}
+  return 300000;
+ }
+ preparedAggregates=window.HensemPreparedAggregates?.create({request:(q,options)=>window.hensemLiveRequest(q,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?state.page+'|'+aggregateAccessContext():'',platform:id=>visibleCatalog().find(p=>p.id===id),publicationVersion:2,maxConcurrent:2,maxBatchSize:3,completedCacheTtlMs:preparedCompletionTtl,providerReuseNames:()=>providerDirection(state.page)?providerQueryNames(L.providerOptions):[],derivedPollMaxMs:60000,derivedPollIntervalMs:1500,derivedPollMaxAttempts:40});
  const usesPreparedAggregate=request=>statisticWindowsEnabled()&&request.action==='aggregate'&&request.view!=='drilldown'&&!['orderNumber','thirdPartyOrderNumber','systemOrderId','memberId','utr'].some(key=>request[key]);
  window.addEventListener?.('pagehide',()=>{clearAggregateCache();providerIntake?.clearCache?.();clearFeeLookupCache();});
  async function readAggregate(request,serial,allowCache=false,bounded=false){
@@ -1136,17 +1148,20 @@
    if(orderSource(L.catalog.find(p=>p.id===request.platformId))==='panda'&&!pandaCoverageMatches(result,request,true))throw Error('熊猫所选创建窗口完整性尚未确认；已核验截止范围的证据无效，请重新读取');
    return {...mergeParts([result],L.catalog.find(p=>p.id===request.platformId)),_aggregateReadAt:Date.parse(result._preparedPublication.computedAt),_aggregateAccessContext:context,_aggregateView:request.view||'full'};
   }
-  if(allowCache){const cached=cachedAggregate(request);if(cached)return cached}
+  const context=aggregateAccessContext(),native=aggregateNativeIdentity(request);
+  const current=()=>serial===L.serial&&context===aggregateAccessContext()&&!!native&&native===aggregateNativeIdentity(request)&&roleAllowed(state.page,'query');
+  if(allowCache){const cached=cachedAggregate(request);if(cached){await Promise.resolve();if(!current())throw Error('查询已替换');return cached}}
+  if(serial!==L.serial||!roleAllowed(state.page,'query')||!native)throw Error('查询权限或范围已变化');
   const parts=[],boundedProviderRead=bounded||isSuccessAnalysis()||(state.page==='overview'&&request.view==='providers')||!!providerDirection(state.page)||isFlowPage(state.page),day=86400000;
   // Only a real timeout switches AR overview windows to <= 1 hour. Reads
   // stay sequential within each platform; the two-platform worker limit and
   // exact half-open boundaries are unchanged. A failing <= 1h read stops.
   const hourlyTimeoutFallback=state.page==='overview'&&request.action==='aggregate'&&request.view==='providers'&&orderSource(L.catalog.find(p=>p.id===request.platformId))==='ar';
   async function read(q,depth=0){
-   if(serial!==L.serial)throw Error('查询已替换');
-   try{const cached=(allowCache||L.queryRetrying)&&q!==request?cachedAggregate(q):null;const result=cached||await aggregateRead(q,serial);if(serial!==L.serial)throw Error('查询已替换');const part={...result,_aggregateCacheable:!!cached||aggregateComplete(q,result),startAt:q.startAt,endAt:q.endAt,_aggregateView:cached?cached._aggregateView||aggregateView(q):aggregateView(q)};parts.push(part);if(q!==request)rememberAggregate(q,part)}
+   if(!current())throw Error('查询已替换');
+   try{const cached=(allowCache||L.queryRetrying)&&q!==request?cachedAggregate(q):null;const result=cached||await aggregateRead(q,serial);if(!current())throw Error('查询已替换');const part={...result,_aggregateCacheable:!!cached||aggregateComplete(q,result),startAt:q.startAt,endAt:q.endAt,_aggregateView:cached?cached._aggregateView||aggregateView(q):aggregateView(q)};parts.push(part);if(q!==request)rememberAggregate(q,part)}
    catch(e){
-    if(serial!==L.serial)throw Error('查询已替换');
+    if(!current())throw Error('查询已替换');
     const from=Date.parse(q.startAt),to=Date.parse(q.endAt),width=to-from;
     if(!/超时|timeout/i.test(e.message))throw e;
     if(hourlyTimeoutFallback&&width>3600000){
@@ -1164,7 +1179,7 @@
   // Keep all filters and the independent creation/success clocks unchanged.
   const largeAr=request.action==='aggregate'&&request.platformId==='5e952cbb-e42f-d6b1-a24a-a0d42d165df9'&&orderSource(platform)==='ar'&&['all','charge'].includes(request.direction);
   const initialWidth=largeAr?(request.view==='providers'?4:2)*3600000:boundedProviderRead&&!isSuccessAnalysis()?day:Infinity;
-  if(to-from>initialWidth){for(let cursor=from;cursor<to;cursor+=initialWidth)await read({...request,startAt:new Date(cursor).toISOString(),endAt:new Date(Math.min(cursor+initialWidth,to)).toISOString()})}else await read(request);const merged=mergeParts(parts,platform);merged._aggregateView=parts.every(part=>part._aggregateView==='full')?'full':'providers';merged._aggregateReadAt=Math.min(...parts.map(part=>part._aggregateReadAt||Date.now()));merged._aggregateCacheHit=parts.some(part=>part._aggregateCacheHit===true);if(merged.platform)merged.platform=displayIdentity(merged.platform);if(serial===L.serial)rememberAggregate(request,merged,true);return merged;
+  if(to-from>initialWidth){for(let cursor=from;cursor<to;cursor+=initialWidth)await read({...request,startAt:new Date(cursor).toISOString(),endAt:new Date(Math.min(cursor+initialWidth,to)).toISOString()})}else await read(request);if(!current())throw Error('查询已替换');const merged=mergeParts(parts,platform);merged._aggregateView=parts.every(part=>part._aggregateView==='full')?'full':'providers';merged._aggregateReadAt=Math.min(...parts.map(part=>part._aggregateReadAt||Date.now()));merged._aggregateCacheHit=parts.some(part=>part._aggregateCacheHit===true);if(merged.platform)merged.platform=displayIdentity(merged.platform);rememberAggregate(request,merged,true);return merged;
  }
  // The merchant ledger needs provider totals. Read the chart dimensions only
  // when its trend tab is requested; keep the ledger until every platform ends.
