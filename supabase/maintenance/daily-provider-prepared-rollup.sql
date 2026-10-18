@@ -116,7 +116,7 @@ begin
    end loop;
    foreach key in array amounts||optional_amounts||array['fee_version_estimated_amount']loop
     if(key=any(amounts)or key='fee_version_estimated_amount')and not(current_row?key)then return null;end if;
-    if current_row?key and current_row->>key is not null and current_row->>key!~'^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'then return null;end if;
+    if current_row?key and current_row->>key is not null and current_row->>key!~'^[+-]?[0-9]+([.][0-9]*)?([eE][+-]?[0-9]+)?$'then return null;end if;
    end loop;
    if current_row->>'fee_version_matched_count'is not null and current_row->>'fee_version_unmatched_count'is not null and current_row->>'success_count'is not null
     and(current_row->>'fee_version_matched_count')::numeric+(current_row->>'fee_version_unmatched_count')::numeric<>(current_row->>'success_count')::numeric then return null;end if;
@@ -229,7 +229,7 @@ begin
   select value into t from jsonb_array_elements(catalog)where value->>'id'=q->>'platformId';
   if t is null then return private.prepared_aggregate_read(p_page,p_request);end if;
   if private.prepared_aggregate_request_reason(q,t)is not null or t->>'source'not in('ar','newar','kb')
-   or q-array['action','view','platformId','startAt','endAt','successStartAt','successEndAt','successBasis','direction','status','providers','currency','offset','limit']<>'{}'::jsonb
+   or q-array['action','view','platformId','startAt','endAt','successStartAt','successEndAt','successBasis','direction','status','providers','currency','offset','limit','amountBands']<>'{}'::jsonb
    or q->>'view'is distinct from'providers'or coalesce(q->>'status','all')<>'all'or q->>'successBasis'is distinct from'success'
    or q->>'successStartAt'is null or q->>'successEndAt'is null
    or q?'currency'and q->'currency'<>'null'::jsonb and q->>'currency'is distinct from t->>'currency'
@@ -246,7 +246,9 @@ begin
   dep:=private.prepared_aggregate_dependency(t,common);
   for day in select generate_series(local_a::date,local_b::date-1,interval'1day')::date loop
    day_end:=(day+1)::timestamp at time zone tz;
-   dq:=(q-'providers')||jsonb_build_object('direction','all',
+   -- Provider totals ignore validated chart bands, just like the unchanged
+   -- canonical/base request. Drop them before widening daily direction to all.
+   dq:=(q-array['providers','amountBands'])||jsonb_build_object('direction','all',
     'startAt',to_char(day::timestamp at time zone tz at time zone'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
     'endAt',to_char(day_end at time zone'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
     'successStartAt',to_char(day::timestamp at time zone tz at time zone'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),

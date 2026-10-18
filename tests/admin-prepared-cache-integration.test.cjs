@@ -30,3 +30,8 @@ test('routine directory details collapse, while coverage and real timestamps rem
  const h=await ready('time');let filters=h.nodes.get('liveFilters').innerHTML;const details=filters.match(/<details class="live-scope-description">[\s\S]*?<\/details>/);assert(details);assert.doesNotMatch(details[0],/\bopen(?:[ =>])/);assert.match(details[0],/可选目录/);assert.doesNotMatch(filters.replace(details[0],''),/手动查询更新|订单目录/);
  await h.c.liveQuery();await settle();filters=h.nodes.get('liveFilters').innerHTML.replace(/<details class="live-scope-description">[\s\S]*?<\/details>/,'');assert.match(filters,/所选日期有订单数据 1 平台/);assert.match(filters,/更新于/);
 });
+
+test('provider-only reads discard unused amount-band profiles retained by other pages, while full analysis preserves them',async()=>{
+ const profiles={charge:{edges:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]},withdraw:{edges:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]}};
+ for(const page of ['providers','provider_payout','overview','amount']){const h=await ready(page);h.L.amountBandProfiles=profiles;await h.c.liveQuery();await settle();const requests=h.calls.filter(q=>q.action==='aggregatePrepared').flatMap(q=>q.requests);assert(requests.length>0);for(const q of requests){if(q.view==='providers')assert.equal(Object.hasOwn(q,'amountBands'),false,'provider-only ABI is independent of prior analysis profiles');else assert.deepEqual(JSON.parse(JSON.stringify(q.amountBands)),{charge:profiles.charge.edges,withdraw:profiles.withdraw.edges});}}
+});

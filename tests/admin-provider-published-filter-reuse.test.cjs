@@ -144,7 +144,7 @@ test('selecting every published provider dimension reuses its stored distinct un
 
 test('incomplete published provider metrics stay unknown on repeat and cannot trigger supplemental computation or export',async()=>{
  const h=await fixture({handler:q=>{if(q.action==='providerSnapshot'){const b=providerEnvelope(q);b.platforms[0].current.submission.coverage.calculationComplete=false;b.platforms[0].current.submission.coverage.coverageUnknownDays=1;return b;}}});
- await h.c.liveQuery();h.c.liveProvider('3TPay');await h.c.liveQuery();assertSelected(h);assert.equal(h.L.providerPublished.projectionComplete,false);assert.equal(h.L.providerPublished.attachments.some(x=>x.submission),false);noSourceReads(h);
+ await h.c.liveQuery();h.c.liveProvider('3TPay');await h.c.liveQuery();assertSelected(h);assert.equal(h.L.providerPublished.projectionComplete,false);assert.equal(Object.hasOwn(h.L.providerPublished,'attachments'),false,'published state no longer retains a second attachment cache');noSourceReads(h);
  exportAppliedTable(h);const n=h.calls.length;await h.c.liveExport();assert.equal(h.blobs.length,0);assert.equal(h.calls.length,n);await h.c.liveQuery();assert.equal(h.calls.length,n);assert.equal(h.L.providerPublished.projectionComplete,false);noSourceReads(h);
 });
 

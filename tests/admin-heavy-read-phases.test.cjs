@@ -135,15 +135,15 @@ test('non-provider tail still loads current overview empty-source coverage and r
  assert.equal(h.L.results.length,3);assert.equal(h.L.loading,false);assert.equal(h.L.overviewIntake.charge.status,'ready');assert(h.L.workorders);assert.equal(h.history.filter(q=>q.action==='workorders').length,1);const coverage=h.history.filter(q=>q.action==='intakeCoverage'&&q.operation==='rows');assert(coverage.length>0);assert(coverage.every(q=>q.startAt==='2026-09-22'&&q.endAt==='2026-09-22'),'overview evidence uses only the current query dates');assert.equal(h.history.filter(q=>q.action==='submissionAnalysis').length,0);
 });
 
-test('selected-provider bands and fee display share one complete directory on cold, ordinary and forced queries',async()=>{
+test('selected-provider fees share one complete directory without sending unused provider chart bands',async()=>{
  const row={id:'synthetic-band-rate',provider:'Synthetic provider',country:'印度',scopeType:'country',category:'UPI',collectFee:'4%',collectLimit:'250-25000',payoutFee:'2%',payoutLimit:'500-100000'};
  const h=await setup('providers',{extraModules:['live-amount-bands.js'],reply:q=>q.action==='rates'?{rows:[row],total:1}:reply(q)});
  h.c.liveSet('provider','Synthetic provider');const run=h.c.liveQuery(false);await settle();
  assert.deepEqual(h.history.map(q=>q.action),['rates']);assert.equal(h.active(),1);assert.equal(h.L.loading,true);assert.equal(h.L.feeLookupLoading,true);
  await advance(h);assert.equal(h.L.feeLookupRows[0].id,row.id);assert.equal(h.L.amountBandProfiles.charge.edges[0],250);assert.equal(h.L.amountBandProfiles.charge.edges[10],25000);assert.equal(h.active(),2);
- await finish(h,run);const band=h.L.amountBandProfiles.charge.edges;
+ await finish(h,run);
  assert.equal(h.history.filter(q=>q.action==='rates').length,1,'the later fee phase reuses the exact completed directory');
- for(const q of h.history.filter(q=>['aggregate','submissionAnalysis'].includes(q.action))){assert.deepEqual(Array.from(q.amountBands.charge),Array.from(band));assert.deepEqual(Array.from(q.providers),['Synthetic provider']);}
+ for(const q of h.history.filter(q=>['aggregate','submissionAnalysis'].includes(q.action))){if(q.action==='aggregate')assert.equal(q.amountBands,undefined,'provider totals do not depend on chart bands');assert.deepEqual(Array.from(q.providers),['Synthetic provider']);}
  const before=h.history.filter(q=>['rates','aggregate'].includes(q.action)).length;await finish(h,h.c.liveQuery(false));assert.equal(h.history.filter(q=>['rates','aggregate'].includes(q.action)).length,before,'same scope reuses both the fee snapshot and aggregate windows');
  await finish(h,h.c.liveQuery(true));assert.equal(h.history.filter(q=>q.action==='rates').length,2,'force replaces the complete directory once, not once per consumer');assert.equal(h.max(),2);
 });
@@ -171,11 +171,11 @@ test('cancelled legacy band preparation cannot clear the replacement query loadi
  prior.d.resolve({rows:[{id:'late'}],total:1});await settle();assert.equal(h.L.loading,true);assert.equal(h.L.feeLookupRows,null);await finish(h,replacement);assert.equal(h.L.loading,false);assert(h.history.filter(q=>q.action==='aggregate').every(q=>q.providers?.[0]==='Synthetic next provider'));assert.equal(h.max(),2);
 });
 
-test('custom-range provider A to B to A keeps exact cached exclusions while workorders retain their own scoped reads',async()=>{
- const h=await setup('providers',{reply(q){const value=reply(q);if(q.action==='submissionAnalysis')value.coverage={orderCount:65,missingMemberCount:0,unknownStatusCount:0,orderSequenceUncertainCount:0,sourceCompletenessVerified:false};return value}});
- h.c.liveProvider('Pay A');await finish(h,h.c.liveQuery());h.c.liveProvider('Pay B');await finish(h,h.c.liveQuery());
+test('custom-range provider A to B to A reuses only its exact workorder JSON and exclusions, while force rereads',async()=>{
+ const h=await setup('providers',{reply(q){const value=reply(q);if(q.action==='workorders')value.auditProvider=q.providers?.join('|');if(q.action==='submissionAnalysis')value.coverage={orderCount:65,missingMemberCount:0,unknownStatusCount:0,orderSequenceUncertainCount:0,sourceCompletenessVerified:false};return value}});
+ h.c.liveProvider('Pay A');await finish(h,h.c.liveQuery());assert.equal(h.L.workorders.auditProvider,'Pay A');h.c.liveProvider('Pay B');await finish(h,h.c.liveQuery());assert.equal(h.L.workorders.auditProvider,'Pay B');
  const before=h.history.length;h.c.liveProvider('Pay A');await finish(h,h.c.liveQuery());const added=h.history.slice(before);
  assert.equal(added.filter(q=>q.action==='submissionAnalysis').length,0,'the same platform/time/provider union is not recomputed');
- assert(added.some(q=>q.action==='workorders'),'workorders are not projected from another provider or silently cached by this change');assert.equal(h.max(),2);
- await finish(h,h.c.liveQuery(true));assert.equal(h.history.filter(q=>q.action==='submissionAnalysis').length,9,'explicit refresh rereads the three native scopes');
+ assert.equal(added.filter(q=>q.action==='workorders').length,0,'only the identical earlier A response can be reused');assert.equal(h.L.workorders.auditProvider,'Pay A');assert.equal(h.history.filter(q=>q.action==='workorders').length,2);assert.equal(h.max(),2);
+ await finish(h,h.c.liveQuery(true));assert.equal(h.history.filter(q=>q.action==='submissionAnalysis').length,9,'explicit refresh rereads the three native scopes');assert.equal(h.history.filter(q=>q.action==='workorders').length,3);assert.equal(h.L.workorders.auditProvider,'Pay A');
 });

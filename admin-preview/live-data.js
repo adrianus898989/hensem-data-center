@@ -208,10 +208,10 @@
  function multiSelect(key,label,items,wide=false){const single=state.page==='orders'&&key==='platform';return HensemLiveFilters.multi({key,label:single?'商户（平台，必选一个）':label,single,clearable:!single&&!(key==='direction'&&fixedDirection(state.page)),items:items.filter(([value])=>value!==''&&value!=='all'),values:activeValues(key),open:L.openMulti===key,search:L.multiSearch[key]||'',wide,busy:key==='provider'&&L.providerOptionsBusy,error:key==='provider'?L.providerOptionsError:''})}
  window.liveMultiToggle=function(el){if(!el?.isConnected)return;const key=el.dataset.multi;if(el.open){L.openMulti=key;if(key==='provider')loadProviderOptions();document.querySelectorAll('details[data-multi]').forEach(other=>{if(other!==el)other.open=false})}else if(L.openMulti===key)L.openMulti=''};
  window.liveMultiSearch=function(key,value){L.multiSearch[key]=value;const root=document.querySelector('details[data-multi="'+key+'"]');if(!root)return;let count=0;root.querySelectorAll('.live-multi-option').forEach(row=>{row.hidden=!row.dataset.search.includes(value.toLocaleLowerCase());if(!row.hidden)count++});root.querySelector('.live-multi-empty').hidden=count>0;};
- let pendingSnapshot=null,pendingAnalysis=null,pendingOrders=null,memberCounts=null,submissionAnalysis=null,dailyComparison=null,channelStatus=null;
+ let pendingSnapshot=null,pendingAnalysis=null,pendingOrders=null,memberCounts=null,submissionAnalysis=null,dailyComparison=null,channelStatus=null,workordersReadCache=null;
  const providerIntake=window.HensemProviderIntake?.create({request:(r,options)=>window.hensemLiveRequest(r,options),accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():''});
  let publishedController=null;
- const cancelDataReads=()=>{cancelPublishedRead();cancelFeeLookup();readPhase=null;deferredMerchantTrend=false;cancelAggregateReads();matrixCustom?.cancel();providerIntake?.cancel();memberCounts?.cancel();submissionAnalysis?.cancel();dailyComparison?.cancel();channelStatus?.cancel();pendingSnapshot?.cancel();pendingAnalysis?.cancel();pendingOrders?.cancel();reportData?.cancel();L.workordersSerial++;L.workordersLoading=false;if(L.overviewWorkordersStatus==='loading')L.overviewWorkordersStatus='idle';window.hensemLiveCancelRequests?.(['aggregate','details','analysisOrders','reportSummary','workorders','pendingSnapshot','pendingAnalysis','pendingOrders','memberDaily','submissionAnalysis','intakeCoverage','channelStatus','autoWithdraw','providerSnapshot']);};
+ const cancelDataReads=()=>{cancelPublishedRead();cancelFeeLookup();readPhase=null;deferredMerchantTrend=false;cancelAggregateReads();workordersReadCache?.cancel();matrixCustom?.cancel();providerIntake?.cancel();memberCounts?.cancel();submissionAnalysis?.cancel();dailyComparison?.cancel();channelStatus?.cancel();pendingSnapshot?.cancel();pendingAnalysis?.cancel();pendingOrders?.cancel();reportData?.cancel();L.workordersSerial++;L.workordersLoading=false;if(L.overviewWorkordersStatus==='loading')L.overviewWorkordersStatus='idle';window.hensemLiveCancelRequests?.(['aggregate','details','analysisOrders','reportSummary','workorders','pendingSnapshot','pendingAnalysis','pendingOrders','memberDaily','submissionAnalysis','intakeCoverage','channelStatus','autoWithdraw','providerSnapshot']);};
  window.liveMultiClear=function(key){if(!['team','platform','source','provider','direction'].includes(key)||key==='platform'&&state.page==='orders'||key==='direction'&&(fixedDirection(state.page)||state.page==='latency'))return;L.openMulti='';L.multiSearch[key]='';setMultiValues(key,[])};
  window.liveMultiAll=function(key,all){if(state.page==='orders'&&key==='platform'&&all)return;const root=document.querySelector('details[data-multi="'+key+'"]');if(!root)return;const values=all?[...new Set([...activeValues(key),...Array.from(root.querySelectorAll('.live-multi-option:not([hidden]) input')).map(e=>e.value)])]:[];setMultiValues(key,values)};
  document.addEventListener?.('click',e=>{if(e.target.closest?.('.live-multi'))return;L.openMulti='';document.querySelectorAll('details[data-multi]').forEach(el=>el.open=false)});
@@ -634,7 +634,82 @@
   return cards+box('存款 / 取款未到账工单汇总',table(['方向','提交金额','提交笔数','到账成功金额','到账成功笔数','未到账金额','未到账笔数','笔数到账率'],[directionRow('charge'),directionRow('withdraw')]),'按工单提交日期统计；存款、取款分开展示。提交包含已成功工单，未到账 = 提交 − 已成功。')+box('工单记录',table(['日期','国家','平台','三方','通道','方向','提交金额','提交笔数','到账成功金额','到账成功笔数','未到账金额','未到账笔数','笔数到账率','源更新时间'],detailRows,'workorder-columns-v4')+pager(total,page,size,'workorders'),'当前来源是按日期 / 平台 / 三方 / 通道汇总的正式工单事实；逐笔工单 ID 和提交秒级时间不在这张源表中，不伪造逐笔编号。')
  }
  function workordersScope(){const base=[L.country,L.from,L.to,L.direction,selected().map(p=>p.id).sort()];try{return JSON.stringify([...base,providerQueryNames(activeValues('provider')).slice().sort()])}catch{return JSON.stringify([...base,{invalidProviderNames:activeValues('provider').slice()}])}}
- async function workordersLoad(preserveView=false,inPhase=false){if(!L.catalogReady||phasedReadBusy()&&!inPhase)return;if(isSuccessAnalysis()&&(!roleAllowed(state.page,'query')||!successFullDays()||L.dirty||L.queryScope!==aggregateQueryScope()))return;const originPage=state.page,originNavigation=navigationRevision,originSerial=L.serial,originSuccessContext=isSuccessAnalysis()?successIdentity():null,savedScroll=preserveView?pageScroll():null;const paint=()=>{render();if(savedScroll&&state.page===originPage&&navigationRevision===originNavigation)restorePageScroll(savedScroll)};const renderIfPage=()=>{if(state.page==='workorders'||isSuccessAnalysis()||providerDirection(state.page)||state.page==='overview'&&L.overviewAnalysis)paint()};const serial=++L.workordersSerial;L.workordersLoading=true;L.workordersError='';L.workordersUnsupported=false;L.workorders=null;L.workordersScope=workordersScope();L.dirty=false;paint();try{const current=selected(),list=current.filter(p=>['ar','newar'].includes(orderSource(p)));if(!list.length){L.workordersLoading=false;L.workordersUnsupported=true;L.workordersError='所选平台来源尚未接入工单数据';renderIfPage();return}const request={action:'workorders',startAt:L.from.slice(0,10)+'T00:00:00.000Z',endAt:L.to.slice(0,10)+'T23:59:59.000Z',country:L.country,platforms:[...new Set(list.flatMap(p=>[p.name,p.sourceName].filter(Boolean)))],direction:L.direction,offset:(L.workordersPage-1)*L.workordersSize,limit:L.workordersSize};const providers=providerQueryNames(activeValues('provider'));if(providers.length)request.providers=providers;const result=await window.hensemLiveRequest(request);if(serial!==L.workordersSerial||originSuccessContext&&(originSerial!==L.serial||originSuccessContext!==successIdentity()||L.dirty||state.page!==originPage))return;const providerSummary=providerDirection(state.page)||state.page==='overview'&&L.overviewAnalysis;if(providerSummary&&(!Array.isArray(result?.byProvider)||!result.byDirection||typeof result.byDirection!=='object'||Array.isArray(result.byDirection)))throw Error('工单汇总响应不完整，请单独重试工单');if(isSuccessAnalysis()&&(!Array.isArray(result?.byPlatformProvider)||result.startDate!==L.from.slice(0,10)||result.endDate!==L.to.slice(0,10)))throw Error('工单平台原单汇总或日期响应不完整，请单独重试工单');L.workorders={...result,unsupportedPlatforms:current.filter(p=>!['ar','newar'].includes(orderSource(p))).map(p=>p.name)};L.workordersLoading=false;renderIfPage()}catch(e){if(serial!==L.workordersSerial||originSuccessContext&&(originSerial!==L.serial||originSuccessContext!==successIdentity()||L.dirty||state.page!==originPage))return;if(isSuccessAnalysis()&&['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(e?.code)){clearSuccessAuthority();render();return;}if(state.page==='providers'&&L.providerReadMode==='published'&&window.HensemProviderPublished?.denied(e)){clearPublishedAuthority();render();return;}L.workordersLoading=false;L.workordersError=e.message||'正式工单读取失败';renderIfPage()}}
+ // One document, exact authorized JSON only. No provider or distinct-count projection.
+ function createWorkorderExactCache(options){
+  const completed=new Map(),jobs=new Map(),now=options.now||Date.now,copy=value=>JSON.parse(JSON.stringify(value));
+  let bytes=0,generation=0,context=null;
+  const denied=error=>['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(error?.code||''));
+  const cancelled=()=>Object.assign(Error('工单读取已取消'),{name:'AbortError',code:'ADMIN_LIVE_CANCELLED'});
+  function encode(value){
+   if(value===null||typeof value!=='object')return JSON.stringify(value);
+   return Array.isArray(value)?'['+value.map(encode).join(',')+']':'{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+encode(value[key])).join(',')+'}';
+  }
+  function forget(key){const entry=completed.get(key);if(entry){bytes-=entry.bytes;completed.delete(key);}}
+  function settle(waiter,error,value){if(waiter.done)return;waiter.done=true;waiter.job.waiters.delete(waiter);error?waiter.reject(error):waiter.resolve(copy(value));}
+  function stop(job){job.cancelled=true;for(const waiter of [...job.waiters])settle(waiter,cancelled());job.controller.abort();if(jobs.get(job.key)===job)jobs.delete(job.key);}
+  function cancel(){generation++;for(const job of [...jobs.values()])stop(job);}
+  function clear(){for(const entry of completed.values())entry.invalidated=true;completed.clear();bytes=0;cancel();}
+  function sync(){let value;try{value=options.context();}catch{clear();context=null;throw cancelled();}if(typeof value!=='string'||!value){clear();context=null;throw cancelled();}if(context!==value){clear();context=value;}return value;}
+  function current(snapshot,isCurrent){return snapshot.generation===generation&&snapshot.context===sync()&&snapshot.identity===options.identity()&&(!isCurrent||isCurrent());}
+  function prune(){for(const job of [...jobs.values()]){for(const waiter of [...job.waiters]){try{if(!current(job,waiter.isCurrent))settle(waiter,cancelled());}catch{settle(waiter,cancelled());}}if(!job.waiters.size)stop(job);}}
+  function reusable(value){return value&&typeof value==='object'&&!Array.isArray(value)&&Array.isArray(value.rows)&&Array.isArray(value.byProvider)&&value.byDirection&&typeof value.byDirection==='object'&&!Array.isArray(value.byDirection)&&value.partial!==true&&value.complete!==false&&value.available!==false&&!value.error&&value.meta?.partial!==true;}
+  function hit(key){const entry=completed.get(key),at=now();if(!entry)return null;if(entry.invalidated||at<entry.readAt||at-entry.readAt>=30000){forget(key);return null;}completed.delete(key);completed.set(key,entry);return entry;}
+  function remember(job,value){
+   if(job.cancelled||job.generation!==generation||job.context!==context||!reusable(value))return;
+   const saved=copy(value),size=(JSON.stringify(saved).length+job.key.length)*2+64;if(size>2*1024*1024)return;
+   forget(job.key);completed.set(job.key,{value:saved,readAt:now(),bytes:size});bytes+=size;
+   while(completed.size>8||bytes>8*1024*1024)forget(completed.keys().next().value);
+  }
+  function deliver(job,error,value){let accepted=0;for(const waiter of [...job.waiters]){try{if(!current(job,waiter.isCurrent))throw cancelled();if(error)throw error;waiter.validate?.(value);settle(waiter,null,value);accepted++;}catch(failure){settle(waiter,failure);}}return accepted;}
+  async function run(job){
+   try{prune();if(job.cancelled||!current(job))throw cancelled();const value=await options.request(copy(job.request),{signal:job.controller.signal});if(job.cancelled||job.controller.signal.aborted)return;if(deliver(job,null,value))remember(job,value);}
+   catch(error){if(!job.cancelled){let authority=false;try{authority=denied(error)&&current(job);}catch{}deliver(job,error);if(authority)clear();}}
+   finally{if(jobs.get(job.key)===job)jobs.delete(job.key);for(const waiter of [...job.waiters])settle(waiter,cancelled());}
+  }
+  function read(request,settings={}){
+   try{
+    const scope=sync(),identity=options.identity(),q=copy(request),key=encode([scope,identity,q]),snapshot={generation,context:scope,identity};
+    if(typeof identity!=='string'||!identity||!current(snapshot,settings.isCurrent))throw cancelled();
+    if(settings.force){const entry=completed.get(key);if(entry)entry.invalidated=true;forget(key);const old=jobs.get(key);if(old&&!old.force)stop(old);}
+    else{const entry=hit(key);if(entry){prune();return Promise.resolve().then(()=>{if(!current(snapshot,settings.isCurrent)||entry.invalidated)throw cancelled();const fresh=hit(key);if(!fresh)return read(q,settings);settings.validate?.(fresh.value);return copy(fresh.value);});}}
+    let job=jobs.get(key);
+    if(!job){job={...snapshot,key,request:q,force:settings.force===true,cancelled:false,controller:new AbortController(),waiters:new Set()};jobs.set(key,job);Promise.resolve().then(()=>run(job));}
+    return new Promise((resolve,reject)=>{job.waiters.add({job,resolve,reject,isCurrent:settings.isCurrent,validate:settings.validate,done:false});prune();});
+   }catch(error){return Promise.reject(error);}
+  }
+  return {read,cancel,clear};
+ }
+ workordersReadCache=createWorkorderExactCache({request:(request,options)=>window.hensemLiveRequest(request,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?JSON.stringify([state.page,aggregateAccessContext()]):'',identity:()=>JSON.stringify(selected().map(p=>[p.id,p.source,p.sourceName,p.name,p.country,p.scopeGroup??p.scope_group,p.timezone,p.currency,p.capabilities??null]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))});
+ async function workordersLoad(preserveView=false,inPhase=false,force=false){
+  if(!L.catalogReady||phasedReadBusy()&&!inPhase)return;
+  if(isSuccessAnalysis()&&(!roleAllowed(state.page,'query')||!successFullDays()||L.dirty||L.queryScope!==aggregateQueryScope()))return;
+  const originPage=state.page,originNavigation=navigationRevision,originSerial=L.serial,originSuccessContext=isSuccessAnalysis()?successIdentity():null,savedScroll=preserveView?pageScroll():null;
+  const paint=()=>{render();if(savedScroll&&state.page===originPage&&navigationRevision===originNavigation)restorePageScroll(savedScroll)};
+  const renderIfPage=()=>{if(state.page==='workorders'||isSuccessAnalysis()||providerDirection(state.page)||state.page==='overview'&&L.overviewAnalysis)paint()};
+  const serial=++L.workordersSerial,current=()=>serial===L.workordersSerial&&originSerial===L.serial&&originPage===state.page&&originNavigation===navigationRevision&&!L.dirty;
+  L.workordersLoading=true;L.workordersError='';L.workordersUnsupported=false;L.workorders=null;L.workordersScope=workordersScope();L.dirty=false;paint();
+  try{
+   const selectedPlatforms=selected(),list=selectedPlatforms.filter(p=>['ar','newar'].includes(orderSource(p)));
+   if(!list.length){L.workordersLoading=false;L.workordersUnsupported=true;L.workordersError='所选平台来源尚未接入工单数据';renderIfPage();return;}
+   const request={action:'workorders',startAt:L.from.slice(0,10)+'T00:00:00.000Z',endAt:L.to.slice(0,10)+'T23:59:59.000Z',country:L.country,platforms:[...new Set(list.flatMap(p=>[p.name,p.sourceName].filter(Boolean)))],direction:L.direction,offset:(L.workordersPage-1)*L.workordersSize,limit:L.workordersSize};
+   const providers=providerQueryNames(activeValues('provider'));if(providers.length)request.providers=providers;
+   const providerSummary=providerDirection(originPage)||originPage==='overview'&&L.overviewAnalysis,successAnalysis=isSuccessAnalysis();
+   const validate=result=>{
+    if(!result||result.partial===true||result.complete===false||result.available===false||result.error||result.meta?.partial===true)throw Error('工单汇总返回未完成，请单独重试工单');
+    if(providerSummary&&(!Array.isArray(result.byProvider)||!result.byDirection||typeof result.byDirection!=='object'||Array.isArray(result.byDirection)))throw Error('工单汇总响应不完整，请单独重试工单');
+    if(successAnalysis&&(!Array.isArray(result.byPlatformProvider)||result.startDate!==request.startAt.slice(0,10)||result.endDate!==request.endAt.slice(0,10)))throw Error('工单平台原单汇总或日期响应不完整，请单独重试工单');
+   };
+   const result=await workordersReadCache.read(request,{force,isCurrent:current,validate});
+   if(!current()||originSuccessContext&&originSuccessContext!==successIdentity())return;
+   L.workorders={...result,unsupportedPlatforms:selectedPlatforms.filter(p=>!['ar','newar'].includes(orderSource(p))).map(p=>p.name)};L.workordersLoading=false;renderIfPage();
+  }catch(error){
+   if(!current()||originSuccessContext&&originSuccessContext!==successIdentity())return;
+   if(['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(error?.code||'')))workordersReadCache.clear();
+   if(isSuccessAnalysis()&&['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code)){clearSuccessAuthority();render();return;}
+   if(state.page==='providers'&&L.providerReadMode==='published'&&window.HensemProviderPublished?.denied(error)){clearPublishedAuthority();render();return;}
+   L.workordersLoading=false;L.workordersError=error.message||'正式工单读取失败';renderIfPage();
+  }
+ }
 
  const reportPages=new Set(['overview','collection','payout','merchants','merchantproviders','teamops','teamcountries','teamplatforms']);
  const reportData=window.HensemLiveReportData?.create({L,E,N,C,R,displayAllowed:displayPlatformAllowed,nativeCatalog:()=>L.catalog.filter(p=>orderSource(p)!=='panda'),request:r=>window.hensemLiveRequest(r),render:()=>render(),accessContext:()=>{const s=window.hensemDataScope||{},a=window.hensemRoleAccess||{};return JSON.stringify([s.mode,s.identity,a.mode,a.roleId,a.version,a.assignmentVersion,a.canView,a.permissions]);}});
@@ -698,7 +773,7 @@
   async function platformAssignmentsLoad(reset=false){if(!L.catalogReady)return;const renderIfPage=()=>{if(state.page==='teams'||state.page==='platform_systems')render()};if(reset)L.platformAssignmentsPage=1;const serial=++L.platformAssignmentsSerial;L.platformAssignmentsLoading=true;L.platformAssignmentsError='';render();try{const request={action:'platformAssignments',offset:(L.platformAssignmentsPage-1)*L.platformAssignmentsSize,limit:L.platformAssignmentsSize};for(const [key,name] of [['teamPlatformTeam','team'],['teamPlatformCountry','country'],['teamPlatformSystem','system'],['teamPlatformQuery','platform']])if(L[key]&&L[key]!=='all')request[name]=L[key];if(L.teamPlatformStatus!=='all')request.status=L.teamPlatformStatus;const result=await window.hensemLiveRequest(request);if(serial!==L.platformAssignmentsSerial)return;L.platformAssignments=result;L.platformAssignmentsAppliedRequest={...request};L.platformAssignmentsDirty=false;L.platformAssignmentsLoading=false;renderIfPage()}catch(e){if(serial!==L.platformAssignmentsSerial)return;L.platformAssignmentsLoading=false;L.platformAssignmentsError=e.message||'团队平台归属读取失败';renderIfPage()}}
  window.providerConfigLoad=providerConfigLoad;window.platformAssignmentsLoad=platformAssignmentsLoad;
  const configuration=HensemLiveConfiguration.create({L,E,C,metric,box,table,pager,page:()=>state.page,request:q=>window.hensemLiveRequest(q),render:()=>render(),changed:async type=>{
-   reportData?.invalidateCatalog();const catalog=await window.hensemLiveRequest({action:'catalog'});L.catalog=catalog.platforms||[];L.dirty=true;L.results=[];L.providerOptionsKey='';
+   workordersReadCache?.clear();reportData?.invalidateCatalog();const catalog=await window.hensemLiveRequest({action:'catalog'});L.catalog=catalog.platforms||[];L.dirty=true;L.results=[];L.providerOptionsKey='';
    await loadProviderOptions(true);if(type==='platform')await platformAssignmentsLoad();else if(state.page==='teams')await platformAssignmentsLoad();else await providerConfigLoad();
  }});
  const analysis=window.HensemAnalysisDrilldown?.create({L,E,N,C,R,query,formatTime,successTimeLabel,openDrawer:(title,html)=>openDrawer(title,html),customRows:segment=>matrixCustom?.detailRows(segment),customResults:segment=>matrixCustom?.customResults(segment),request:q=>window.hensemLiveRequest(q),render:()=>render()});
@@ -944,7 +1019,7 @@
  function setPendingDefaultPeriod(){const today=localClock(Date.now(),scopeZone()).slice(0,10),end=new Date(today+'T00:00:00Z');end.setUTCDate(end.getUTCDate()-1);const start=new Date(end);start.setUTCDate(start.getUTCDate()-6);L.from=start.toISOString().slice(0,10)+'T00:00:00';L.to=end.toISOString().slice(0,10)+'T23:59:59'}
  window.livePeriod=function(mode,query=false){reportData?.cancel();const zone=scopeZone(),today=localClock(Date.now(),zone).slice(0,10),date=new Date(today+'T00:00:00Z'),end=new Date(date);if(mode==='yesterday'||mode==='before'){date.setUTCDate(date.getUTCDate()-(mode==='before'?2:1));end.setTime(date.getTime())}if(mode==='week'){date.setUTCDate(date.getUTCDate()-(state.page==='stuck'?7:6));if(state.page==='stuck')end.setUTCDate(end.getUTCDate()-1);}if(mode==='month'){if(state.page==='stuck'){date.setUTCDate(date.getUTCDate()-30);end.setUTCDate(end.getUTCDate()-1);}else date.setUTCDate(1);}L.from=date.toISOString().slice(0,10)+'T00:00:00';L.to=end.toISOString().slice(0,10)+'T23:59:59';window.HensemStatisticWindows?.reset(L);L.serial++;cancelDataReads();L.queryRetrying=false;L.detailSerial++;L.dirty=true;L.loading=false;render();if(query)liveQuery()};
  window.liveReset=function(){if(isChannelStatus())channelStatus?.clear?.();if(isDailyComparison())dailyComparison?.clear?.();L.providerOptionsSerial++;L.providerOptionsBusy=false;L.providerOptionsKey='';L.providerOptions=[];L.providerOptionsError='';window.hensemLiveCancelRequests?.(['providerOptions']);const base=visibleCatalog().find(p=>String(p.name||'').toUpperCase()==='91CLUB')||visibleCatalog()[0]||{};const resetDirection=fixedDirection(state.page)||(['provider_daily','latency'].includes(state.page)?'charge':'all');Object.assign(L,{team:'all',country:base.country||L.country,countryTouched:false,platform:'all',source:'all',provider:'',direction:resetDirection,status:'all',orderNumber:'',thirdPartyOrderNumber:'',memberId:'',systemOrderId:'',utr:'',page:1,localPage:1,multi:{team:[],platform:[],source:[],provider:[],direction:resetDirection==='all'?[]:[resetDirection]}});if(isChannelStatus()){cancelDataReads();L.dirty=true;L.pageQueried=false;L.error='';render();return;}livePeriod(state.page==='stuck'?'week':'yesterday');};
- function query(p,action,previous=false){normalizePageDirection();if(isSuccessAnalysis()&&previous)throw Error('成功率分析不读取前期对比');if(!L.country||L.country==='all')throw Error('请选择国家 / 地区');if(!['all','charge','withdraw'].includes(L.direction))throw Error('请选择代收或代付');if(L.status==='success'&&wgSuccessFilterBlocked(p))throw Error(successFilterNote(p));const published=state.page==='providers'&&L.providerReadMode==='published'&&!L.dirty?L.publishedWindow:null,range=published?{valid:true,calendarDays:1,label:'较前一日同一时段 · 已发布同进度'}:HensemLiveCompare[isSuccessAnalysis()?'currentWindowFor':'windowFor'](L.from,L.to,p.timezone,L.queryNow);if(!range.valid)throw Error(range.error);if(!previous)L.comparisonLabel=range.label;const q={action,...(action==='aggregate'&&(aggregateMode()==='providers'||previous)&&L.status==='all'?{view:'providers'}:{}),platformId:p.id,startAt:published?published[previous?'previousStartAt':'startAt']:instant(previous?range.previousFrom:range.currentFrom,p.timezone),endAt:published?published[previous?'previousEndAt':'endAt']:instant(previous?range.previousTo:range.currentTo,p.timezone,true),direction:L.direction,status:L.status,currency:p.currency||null,offset:(L.page-1)*L.size,limit:L.size};if(range.calendarDays>31)throw Error('每次最多31个当地日');for(const key of ['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'])if(L[key]&&(!['thirdPartyOrderNumber','systemOrderId','utr'].includes(key)||orderCapability(p,key)))q[key]=L[key];const providers=providerQueryNames(activeValues('provider',''),p);if(providers.length)q.providers=providers;if(action==='aggregate'&&state.page==='latency'&&!previous&&q.view!=='providers')q.durationVersion=2;if(action==='aggregate'&&!isSuccessAnalysis()&&L.amountBandProfiles)q.amountBands=Object.fromEntries(Object.entries(L.amountBandProfiles).map(([d,p])=>[d,p.edges]));if(['aggregate','memberDaily'].includes(action)&&statisticWindowsEnabled())Object.assign(q,statisticRequest(p,previous));return q}
+ function query(p,action,previous=false){normalizePageDirection();if(isSuccessAnalysis()&&previous)throw Error('成功率分析不读取前期对比');if(!L.country||L.country==='all')throw Error('请选择国家 / 地区');if(!['all','charge','withdraw'].includes(L.direction))throw Error('请选择代收或代付');if(L.status==='success'&&wgSuccessFilterBlocked(p))throw Error(successFilterNote(p));const published=state.page==='providers'&&L.providerReadMode==='published'&&!L.dirty?L.publishedWindow:null,range=published?{valid:true,calendarDays:1,label:'较前一日同一时段 · 已发布同进度'}:HensemLiveCompare[isSuccessAnalysis()?'currentWindowFor':'windowFor'](L.from,L.to,p.timezone,L.queryNow);if(!range.valid)throw Error(range.error);if(!previous)L.comparisonLabel=range.label;const q={action,...(action==='aggregate'&&(aggregateMode()==='providers'||previous)&&L.status==='all'?{view:'providers'}:{}),platformId:p.id,startAt:published?published[previous?'previousStartAt':'startAt']:instant(previous?range.previousFrom:range.currentFrom,p.timezone),endAt:published?published[previous?'previousEndAt':'endAt']:instant(previous?range.previousTo:range.currentTo,p.timezone,true),direction:L.direction,status:L.status,currency:p.currency||null,offset:(L.page-1)*L.size,limit:L.size};if(range.calendarDays>31)throw Error('每次最多31个当地日');for(const key of ['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'])if(L[key]&&(!['thirdPartyOrderNumber','systemOrderId','utr'].includes(key)||orderCapability(p,key)))q[key]=L[key];const providers=providerQueryNames(activeValues('provider',''),p);if(providers.length)q.providers=providers;if(action==='aggregate'&&state.page==='latency'&&!previous&&q.view!=='providers')q.durationVersion=2;if(action==='aggregate'&&q.view!=='providers'&&!isSuccessAnalysis()&&L.amountBandProfiles)q.amountBands=Object.fromEntries(Object.entries(L.amountBandProfiles).map(([d,p])=>[d,p.edges]));if(['aggregate','memberDaily'].includes(action)&&statisticWindowsEnabled())Object.assign(q,statisticRequest(p,previous));return q}
  function statisticRequest(platform,previous=false){
   HensemStatisticWindows.ensure(L);
   if(!previous)return HensemStatisticWindows.request(L,platform,instant);
@@ -985,7 +1060,7 @@
  let aggregateCacheBytes=0,aggregateCacheContext='';
  const aggregateCacheLimit=128,aggregateCacheByteLimit=16*1024*1024;
  function cancelAggregateReads(){preparedAggregates?.cancel();for(const entry of aggregateInflight.values())entry.controller?.abort();aggregateInflight.clear();}
- function clearAggregateCache(){aggregateCache.clear();aggregateCacheBytes=0;preparedAggregates?.clear();cancelAggregateReads();}
+ function clearAggregateCache(){aggregateCache.clear();aggregateCacheBytes=0;preparedAggregates?.clear();workordersReadCache?.clear();cancelAggregateReads();}
  function aggregateAccessContext(){
   const a=window.hensemRoleAccess||{},s=window.hensemDataScope||{};
   const context=JSON.stringify([s.mode||'document',s.identity||'document',a.mode||'document',a.roleId||'',a.version??null,a.assignmentVersion??null,a.canView??null,Array.isArray(a.permissions)?[...a.permissions].sort():[]]);
@@ -1252,13 +1327,6 @@
   const age=now-previous.readAt,day=request.startAt.slice(0,10),today=new Date(now+19800000).toISOString().slice(0,10),ttl=day<today?300000:30000,due=previous.bundle.nextDueAt;
   return Number.isFinite(age)&&age>=0&&age<ttl&&!(day<today&&previous.appliedWindow.intraday)&&(previous.bundle.version===2||!due||Date.parse(due)>now);
  }
- function publishedAttachment(previous,key,now){
-  const item=previous?.attachments?.find(x=>x.key===key);
-  return item&&now>=item.readAt&&now-item.readAt<30000?item:null;
- }
- function rememberPublishedAttachment(p,key,value){
-  p.attachments=[...(p.attachments||[]).filter(x=>x.key!==key),{key,readAt:Date.now(),...value}].slice(-8);
- }
  async function loadPublishedProviders(force){
   if(!roleAllowed('providers','query')){clearPublishedAuthority();render();return;}
   if(force)submissionAnalysis?.clearCache?.();
@@ -1275,7 +1343,7 @@
    const appliedWindow=api.appliedWindow(bundle,request,L.queryNow);
    if(appliedWindow)submissionAnalysis?.applyPublished(projected,platforms,{providers:projection.providers});else submissionAnalysis?.restore(null);
    Object.assign(L,{publishedWindow:appliedWindow,results:appliedWindow?projected.platforms.map(p=>p.current.orders).filter(Boolean):[],comparisonResults:appliedWindow?projected.platforms.map(p=>p.previous.orders).filter(Boolean):[],comparisonStatus:appliedWindow&&bundle.complete?'ready':'error',comparisonError:appliedWindow&&bundle.complete?'':'发布范围或版本尚未齐备，暂不计算汇总对比',comparisonLabel:appliedWindow?.intraday?'较前一日同一时段 · 已发布同进度':'较前一日同一时段',queryPlatforms:platforms,queryWarnings:[],queryFailures:platforms.filter(p=>!bundle.platforms.find(e=>e.platform.id===p.id)?.current.orders).map(p=>({id:p.id,name:p.name,message:'订单汇总尚未发布'})),queryPaused:false,queryRetrying:false,providerIntake:null,providerComparisonIntake:null,workorders:null,workordersError:'',workordersUnsupported:false,workordersScope:'',workordersLoading:false,loading:false,loadedView:'providers',localPage:1,tablePages:{}});
-   L.providerPublished={context,bundle,request,appliedWindow,readAt:reuse?old.readAt:Date.now(),appliedProviders:projection.providers,projectionComplete:projection.projectionComplete,attachments:reuse?old.attachments||[]:[],loading:true,error:'',view:null};capturePublishedView();render();
+   L.providerPublished={context,bundle,request,appliedWindow,readAt:reuse?old.readAt:Date.now(),appliedProviders:projection.providers,projectionComplete:projection.projectionComplete,loading:true,error:'',view:null};capturePublishedView();render();
    if(bundle.status==='unsupported'||!appliedWindow)return;
    setReadPhase(serial,'核对采集目录与已发布证据');
    try{
@@ -1285,9 +1353,7 @@
    }catch(e){if(!current())return;if(api.denied(e))throw e;L.providerIntake={status:'error',platforms:[],error:e.message||'采集目录核对失败'};L.providerComparisonIntake={...L.providerIntake};}
    capturePublishedView();setReadPhase(serial,'读取当前费率与未到账工单');
    await ensureFeeLookup(false,true);if(!current())return;capturePublishedView();
-   const attachmentKey=JSON.stringify([workordersScope(),L.workordersPage,L.workordersSize]),cached=reuse?publishedAttachment(old,attachmentKey,Date.now()):null;
-   if(cached?.workorders){L.workorders=cached.workorders;L.workordersScope=workordersScope();}
-   else{await workordersLoad(false,true);if(!current())return;if(L.workorders&&!L.workordersError)rememberPublishedAttachment(L.providerPublished,attachmentKey,{workorders:L.workorders});}
+   await workordersLoad(false,true,force);if(!current())return;
    capturePublishedView();
    // Provider unions require published distinct-member evidence. Do not join
    // a newer live computation to an immutable order publication or fan out
@@ -1316,7 +1382,7 @@
   if(isSupervisorPage(state.page)){render();return}
   if(!manual)return;
   const queryPage=state.page,queryNavigation=navigationRevision;
-  if(!L.catalogReady){await initializeLiveData();if(!L.catalogReady||state.page!==queryPage||navigationRevision!==queryNavigation)return;}if(!L.country&&reportData&&state.page!=='stuck'){const catalog=await reportData.loadCatalog();if(state.page!==queryPage||navigationRevision!==queryNavigation)return;if(catalog?.length){L.country=catalog.find(p=>p.country)?.country||'';syncCurrency();livePeriod('yesterday',false);}}L.pageQueried=true;if(state.page==='overview')L.overviewQueried=true;
+  if(!L.catalogReady){await initializeLiveData();if(!L.catalogReady||state.page!==queryPage||navigationRevision!==queryNavigation)return;}if(!L.country&&reportData&&state.page!=='stuck'){const catalog=await reportData.loadCatalog();if(state.page!==queryPage||navigationRevision!==queryNavigation)return;if(catalog?.length){L.country=catalog.find(p=>p.country)?.country||'';syncCurrency();livePeriod('yesterday',false);}}L.pageQueried=true;if(state.page==='overview')L.overviewQueried=true;if(force)workordersReadCache?.clear();
   if(state.page==='collected_data'){await collectedPage.load(true);return}if(state.page==='payout_config'){await HensemLivePayoutConfig.refresh();return}if(isWithdrawPage(state.page)){await autoWithdrawLoad(true);return}if(['deposit_tracking','deposit_statistics'].includes(state.page)){await depositIssuesLoad(true);return}if(state.page==='provider_config'){await providerConfigLoad();return}if(state.page==='teams'||state.page==='platform_systems'){await platformAssignmentsLoad();return}if(isWorkorderOperations(state.page)&&workorderOperations){await workorderOperations.load(true);return}if(state.page==='rates'){await liveRates(true);return}
   if(isChannelStatus()){cancelDataReads();L.restoredPage=false;L.error='';if(!channelStatus){L.error='平台通道调整暂不可用';render();return;}await channelStatus.load();return;}
   if(isDailyComparison()){cancelDataReads();L.restoredPage=false;L.error='';L.queryNow=Date.now();if(force)clearAggregateCache();if(!dailyComparison){L.error='每日对比暂不可用';render();return;}await dailyComparison.load(force,refreshPrepared);return;}
@@ -1403,8 +1469,8 @@
   if(isSuccessAnalysis()&&(!roleAllowed(state.page,'query')||!successFullDays()||L.queryScope!==aggregateQueryScope()))return;
   const sameScope=L.workordersScope===workordersScope();
   if(retry&&L.workordersScope&&!sameScope)return;
-  if(sameScope&&(L.workordersLoading||L.workorders||L.workordersUnsupported||L.workordersError&&!retry))return;
-  return workordersLoad(true,inPhase);
+  if(sameScope&&(L.workordersLoading||L.workorders&&!retry||L.workordersUnsupported||L.workordersError&&!retry))return;
+  return workordersLoad(true,inPhase,retry);
  }
  window.liveProviderWorkordersRetry=async function(){await ensureProviderWorkorders(true);capturePublishedView()};
  // A matching captured scope authorizes retry on every aggregate page, including risk.
