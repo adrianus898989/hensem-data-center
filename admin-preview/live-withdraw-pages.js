@@ -90,6 +90,7 @@
   const clone=value=>JSON.parse(JSON.stringify(value));
   const nativeStamp=()=>JSON.stringify([accessKey(),root.hensemRoleAccess||{},root.hensemDataScope||{},catalog().map(p=>JSON.stringify(p)).sort(),[...(L.catalog||[]),...(L.withdrawCatalog||[])].map(p=>JSON.stringify(p)).sort()]);
   const nativeKey=p=>JSON.stringify([rawTarget(p),platformKey(requestPlatform(p))]);
+  const nativePhysical=p=>JSON.stringify([String(p.source||p.system||'').toLowerCase(),p.id||nativeKey(p)]);
   const rajaFamily=p=>root.HensemLiveReportData?.confirmedAliasKey?.(p)||null;
   const rajaRaw=p=>String(p.sourceName||p.source_name||p.name||'').toUpperCase();
   function chosenWithdrawNative(rows){
@@ -108,7 +109,7 @@
    const index=new Map(),physical=new Map();
    const descriptor=p=>JSON.stringify([rawTarget(p),p.identityCountry??p.country,p.scopeGroup??p.scope_group??'',requestPlatform(p),p.sourceName||p.source_name||p.name,p.timezone||'',p.currency||'',p.capabilities??null]);
    for(const p of list){
-    const source=String(p.source||p.system||'').toLowerCase();if(source!=='withdraw'){const identity=JSON.stringify([source,p.id||nativeKey(p)]),stamp=descriptor(p);if(physical.has(identity)&&physical.get(identity)!==stamp)throw Error('conflicting native metadata');physical.set(identity,stamp);}
+    const source=String(p.source||p.system||'').toLowerCase();if(source!=='withdraw'){const identity=nativePhysical(p),stamp=descriptor(p);if(physical.has(identity)&&physical.get(identity)!==stamp)throw Error('conflicting native metadata');physical.set(identity,stamp);}
     const key=nativeKey(p),old=index.get(key);if(!old){index.set(key,p);continue;}
     if(old.team!==p.team)throw Error('ambiguous ownership');
     const a=String(old.source||old.system||'').toLowerCase(),b=String(p.source||p.system||'').toLowerCase();
@@ -179,7 +180,12 @@
    if(d.version!==2||d.view!=='auto'||!d.windows||d.windows.version!==2||d.prepared&&(d.prepared.status!=='ready'||d.prepared.calculationComplete!==true)||d.complete===false||d.partial===true||d.error)return;
    try{
     const q=S.applied.query,w=d.windows;if(w.creationStartAt!==q.startAt||w.creationEndAt!==q.endAt||w.successStartAt!==q.successStartAt||w.successEndAt!==q.successEndAt||w.successBasis!==q.successBasis)throw Error('window mismatch');
-    nativeIndex(catalog());const index=nativeIndex(S.applied.catalog),seen=new Set();for(const row of d.rows){const key=nativeFor(row,index);if(seen.has(key))throw Error('duplicate native');seen.add(key);}
+    const real=S.applied.catalog.filter(p=>String(p.source||p.system||'').toLowerCase()!=='withdraw');
+    if(real.some(p=>!p.id))throw Error('unknown native physical identity');
+    const scopeKeys=new Set(S.applied.catalog.map(nativeKey)),physical=new Set(real.map(nativePhysical));
+    // Validate this query's exact groups and every physical peer, including other countries.
+    nativeIndex(catalog().filter(p=>scopeKeys.has(nativeKey(p))||physical.has(nativePhysical(p))));
+    const index=nativeIndex(S.applied.catalog),seen=new Set();for(const row of d.rows){const key=nativeFor(row,index);if(seen.has(key))throw Error('duplicate native');seen.add(key);}
     scopeTotals(d.rows,d.totals,true,singleObservedDay(d,q));
     const prior=d.rows.filter(r=>r.previous).map(r=>r.previous);if(d.previousTotals!=null)scopeTotals(prior,d.previousTotals,true,singleObservedDay(d,q,true));else if(prior.length)throw Error('missing prior totals');
     const serialized=JSON.stringify(d);if(serialized.length*2>8*1024*1024)throw Error('snapshot too large');
