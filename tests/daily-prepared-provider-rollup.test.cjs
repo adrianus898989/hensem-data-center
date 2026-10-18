@@ -59,6 +59,9 @@ before(async()=>{
  assert.equal(await scalar("select md5(prosrc)from pg_proc where oid='private.prepared_aggregate_read(text,jsonb)'::regprocedure"),'4a38ca3d9bbfbed3cc94250db95064da');
  await db.exec(fn(lastReader,'private.prepared_aggregate_read').replace(/\nbegin\n/,'\nbegin\n insert into private.fixture_calls(request)values(p_request);\n'));
  await db.exec(candidate);
+ // The V2 oracle is pure function code; enforce its exact historical body.
+ await db.exec(read('tests/fixtures/daily-provider-fold.v2.sql').replace('private.dashboard_admin_daily_provider_fold(', 'private.fixture_daily_provider_fold_v2('));
+ assert.equal(await scalar("select md5(prosrc)from pg_proc where oid='private.fixture_daily_provider_fold_v2(jsonb,jsonb,jsonb)'::regprocedure"),'fd65b0e03aee1a00861cea80666b4ecf');
 });
 beforeEach(async()=>{await db.exec('truncate private.fixture_targets,private.fixture_calls,private.fixture_overrides,private.prepared_aggregate_heads,private.prepared_aggregate_artifacts,private.prepared_aggregate_jobs,private.prepared_aggregate_admissions');for(let i=1;i<=3;i++)await db.query('insert into private.fixture_targets select *from jsonb_populate_record(null::private.fixture_targets,$1)',[JSON.stringify(target(i))]);await auth();await db.exec("select set_config('test.catalog_deny','false',false)");});
 after(()=>db?.close());
@@ -91,3 +94,70 @@ test('validated legacy chart bands remain compatible with providers and are abse
 test('invalid legacy chart bands retain existing validation and never widen provider query permissions',async()=>{const request={...q(),amountBands:{charge:[0,1,2]}};const item=(await call([request])).items[0];assert.equal(item.status,'unsupported');assert.equal((await calls()).length,1);assert.deepEqual((await calls())[0].requests,[request]);});
 test('native integer trailing-point formatting is exact on every required money and fee amount field',async()=>{const keys=['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount','fee_low_amount','fee_high_amount','fee_gap_amount','fee_version_estimated_amount'],extra=Object.fromEntries(keys.map(k=>[k,'123.']));await prepare(q(),target(1),{rows:()=>[row('Brand','charge',extra)]});const item=(await call()).items[0];assert.equal(item.publication.kind,'daily_provider_rollup');for(const k of keys)assert.equal(item.result.groups.provider[0][k],'246',k);assert.equal(item.result.summary[0].success_amount,'246');assert.equal(item.result.groups.provider[0].items[0].success_amount,'123.');});
 for(const bad of ['NaN','Infinity','-Infinity','1,000.','1. ','',' .','.', '1..'])test('invalid nonfinite or formatted money still falls back, never rounds or treats as zero: '+JSON.stringify(bad),async()=>{await prepare(q(),target(1),{rows:()=>[row('Brand','charge',{fee_version_estimated_amount:bad})]});const item=(await call()).items[0];assert.equal(item.status,'missing');assert.equal((await calls()).length,2);assert.deepEqual((await calls())[1].requests,[q()]);});
+
+// Exact V2/V3 equivalence over synthetic current prepared-reader responses.
+async function preparedDailyItems(request=q(),t=target(1),options={}){
+ await prepare(request,t,options);
+ const dates=(await db.query("select to_char(day::timestamp at time zone $3 at time zone'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')a,to_char((day::timestamp+interval'1day')at time zone $3 at time zone'UTC','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')b from generate_series(($1::timestamptz at time zone $3)::date,($2::timestamptz at time zone $3)::date-1,interval'1day')day",[request.startAt,request.endAt,t.timezone])).rows;
+ const requests=dates.map(({a,b})=>{const r={...request,direction:'all',startAt:a,endAt:b,successStartAt:a,successEndAt:b};delete r.providers;delete r.amountBands;return r;});
+ return (await scalar("select private.prepared_aggregate_read('providers',$1)",[JSON.stringify({requests,publicationVersion:2})])).items;
+}
+async function foldOutcome(name,items,request=q(),t=target(1)){
+ try{return {result:await scalar(`select private.${name}($1,$2,$3)`,[JSON.stringify(items),JSON.stringify(request),JSON.stringify(t)])};}
+ catch(error){return {errorCode:error.code,message:error.message};}
+}
+async function assertSameFold(items,request=q(),t=target(1)){
+ try{const paired=(await db.query("with baseline as materialized(select private.fixture_daily_provider_fold_v2($1,$2,$3)v),candidate as materialized(select private.dashboard_admin_daily_provider_fold($1,$2,$3)v)select baseline.v expected,candidate.v actual,baseline.v is not distinct from candidate.v exact from baseline,candidate",[JSON.stringify(items),JSON.stringify(request),JSON.stringify(t)])).rows[0];assert.equal(paired.exact,true,'PostgreSQL JSONB equality must preserve numeric counts beyond JavaScript precision');assert.deepEqual(paired.actual,paired.expected);return {result:paired.actual};}
+ catch(error){if(error.code==='ERR_ASSERTION')throw error;const a=await foldOutcome('fixture_daily_provider_fold_v2',items,request,t),b=await foldOutcome('dashboard_admin_daily_provider_fold',items,request,t);assert.deepEqual(b,a,'V3 must preserve every failure');return b;}
+}
+for(const providers of [undefined,null,[],['Brand'],['Brand','Brand'],['Raw-A','Brand','Raw-B'],['NoMatchingBrand']])for(const direction of ['charge','withdraw','all'])test('V2/V3 exact full JSON: provider '+JSON.stringify(providers)+' / '+direction,async()=>{
+ await db.exec("insert into private.fixture_overrides values('PLATFORM-1','Raw-A','Brand'),('PLATFORM-1','Raw-B','Brand')");
+ const request={...q(),direction};if(providers===undefined)delete request.providers;else request.providers=providers;
+ const items=await preparedDailyItems(request,target(1),{rows:()=>[row('Raw-A'),row('Raw-B'),row('Other'),row('Raw-A','withdraw'),row('Other','withdraw')]});
+ const out=await assertSameFold(items,request);assert.equal(out.result.publication.sourceComplete,false);
+ if(providers?.[0]==='NoMatchingBrand'){assert.deepEqual(out.result.result.groups.provider,[]);assert.deepEqual(out.result.result.summary,[]);assert.equal(out.result.result.total,0);}
+});
+test('V2/V3 optional absence, present null, partial missing and exact decimal sums preserve key presence',async()=>{
+ const items=await preparedDailyItems(q(),target(1),{rows:n=>[row('Brand','charge',n?{reviewed_pending_count:3,created_success_amount:'0.000000000000000001',reviewed_pending_amount:null}:{reviewed_pending_count:null,created_success_amount:'9007199254740993.123456789012345678',fee_exempt_count:0})]});
+ const out=(await assertSameFold(items)).result.result.groups.provider[0];
+ assert.equal(out.reviewed_pending_count,null);assert.equal(out.reviewed_pending_amount,null);assert.equal(out.fee_exempt_count,null);assert.equal(out.created_success_amount,'9007199254740993.123456789012345679');
+ const empty=clone(items);for(const item of empty)for(const r of item.result.groups.provider)for(const key of ['fee_exempt_count','reviewed_pending_count','created_success_amount','reviewed_pending_amount'])delete r[key];
+ const without=(await assertSameFold(empty)).result.result.groups.provider[0];for(const key of ['fee_exempt_count','reviewed_pending_count','created_success_amount','reviewed_pending_amount'])assert.equal(Object.hasOwn(without,key),false);
+});
+test('V2/V3 preserve known matched fee subtotal with unmatched and null mandatory facts',async()=>{
+ const items=await preparedDailyItems(q(),target(1),{rows:n=>[row('Brand','charge',n?{all_amount:null,fee_version_matched_count:0,fee_version_unmatched_count:1,fee_version_estimated_amount:null}:{})]});
+ let r=(await assertSameFold(items)).result.result.groups.provider[0];assert.equal(r.fee_version_state,'partial');assert.equal(r.fee_version_estimated_amount,'0.123456789012345678');assert.equal(r.all_amount,null);
+ const unknown=clone(items);unknown[0].result.groups.provider[0].fee_version_matched_count=null;r=(await assertSameFold(unknown)).result.result.groups.provider[0];assert.equal(r.fee_version_state,'unknown');assert.equal(r.fee_version_estimated_amount,null);
+});
+test('V2/V3 preserve original raw aliases, nested fee evidence and full-v2 master projection',async()=>{
+ await db.exec("insert into private.fixture_overrides values('PLATFORM-1','Raw-A','Brand'),('PLATFORM-1','Raw-B','Brand')");
+ const local=await scalar("select (now()at time zone'Asia/Kolkata')::date::text"),end=new Date(local+'T00:00:00+05:30'),start=new Date(+end-2*86400000),request=q(1,start.toISOString(),end.toISOString());
+ await prepare(request,target(1),{cutoff:new Date().toISOString(),rows:()=>[row('Raw-A','charge',{provider_names:['Raw-A','Additional provenance'],fee_version_basis:'immutable_version'}),row('Raw-B')]});
+ await db.exec("update private.prepared_aggregate_artifacts set payload=payload||'{\"durationVersion\":2,\"capabilities\":{}}'::jsonb");
+ // Reuse the already installed current head; do not prepare/admit another one.
+ const parts=(await db.query("select request from private.prepared_aggregate_jobs order by request->>'startAt'")).rows.map(x=>{const r={...x.request,view:'providers'};delete r.durationVersion;delete r.amountBands;return r;});
+ const items=(await scalar("select private.prepared_aggregate_read('providers',$1)",[JSON.stringify({requests:parts,publicationVersion:2})])).items;
+ const out=(await assertSameFold(items,request)).result.result.groups.provider[0];assert.deepEqual(out.provider_names,['Additional provenance','Raw-A','Raw-B']);assert.equal(out.items.find(r=>r.provider==='Raw-A').fee_version_basis,'immutable_version');assert.deepEqual(out.fee_items,out.items);
+});
+test('V2/V3 empty native days keep exactly the same known-empty result',async()=>{const items=await preparedDailyItems(q(),target(1),{rows:()=>[]});const out=(await assertSameFold(items)).result;assert.equal(out.result.total,0);assert.deepEqual(out.result.groups.provider,[]);});
+test('V2/V3 unrelated non-idempotent native alias chain still invalidates the whole fold',async()=>{await db.exec("insert into private.fixture_overrides values('PLATFORM-1','Unused-A','Unused-B'),('PLATFORM-1','Unused-B','Unused-C')");const items=await preparedDailyItems(q(),target(1),{rows:()=>[row('Brand'),row('Unused-A')]});assert.equal((await assertSameFold(items)).result,null);});
+for(const [label,patch,expected]of [
+ ['unrelated NaN',{success_amount:'NaN'},null],
+ ['unrelated invalid timestamp',{latest_synced_at:'not-a-timestamp'},'22007'],
+ ['unrelated numeric exponent overflow',{all_amount:'1e999999'},'22003']
+])test('V2/V3 preserve fallback/error for '+label,async()=>{const items=await preparedDailyItems(q(),target(1),{rows:()=>[row('Brand'),row('Unused','charge',patch)]});const out=await assertSameFold(items);if(expected)assert.equal(out.errorCode,expected);else assert.equal(out.result,null);});
+test('V2/V3 unrelated missing required field still invalidates the entire fold',async()=>{const items=await preparedDailyItems(q(),target(1),{rows:()=>[row('Brand'),row('Unused')]});delete items[0].result.groups.provider[1].fee_gap_amount;assert.equal((await assertSameFold(items)).result,null);});
+for(const metric of ['fee_exempt_count','reviewed_pending_count','created_success_amount','reviewed_pending_amount'])for(const shape of ['absent','partial-missing','all-null','partial-null','zero','large'])test('V2/V3 exact optional field '+metric+' / '+shape,async()=>{
+ const monetary=metric.endsWith('_amount'),value=monetary?'9007199254740993.123456789012345678':'9007199254740993';
+ const items=await preparedDailyItems(q(),target(1),{rows:n=>[row('Brand','charge',shape==='absent'||shape==='partial-missing'&&n?{}:{[metric]:shape==='all-null'||shape==='partial-null'&&n?null:shape==='zero'?(monetary?'0.00000000':0):value})]});
+ const r=(await assertSameFold(items)).result.result.groups.provider[0];if(shape==='absent')assert.equal(Object.hasOwn(r,metric),false);else if(['partial-missing','all-null','partial-null'].includes(shape))assert.equal(r[metric],null);else assert(Object.hasOwn(r,metric));
+});
+for(const pair of [[1.2,'1.2000'],['-1.2300',1.23],['1.','2.e+2'],['9007199254740993.000000000000000001','-9007199254740993.000000000000000001'],['1e-8','0.00000002'],['+123.','-123.']])test('V2/V3 monetary text scale stays exact for mixed numeric/sign/exponent '+JSON.stringify(pair),async()=>{const items=await preparedDailyItems(q(),target(1),{rows:n=>[row('Brand','charge',{success_amount:pair[n]})]});await assertSameFold(items);});
+test('many unselected brands retain full result equality while additive SPI statements drop from per-key to per-bucket',async()=>{
+ const request=q(1,'2020-01-01T18:30:00Z','2020-01-08T18:30:00Z'),items=await preparedDailyItems(request,target(1),{rows:()=>Array.from({length:32},(_,n)=>['charge','withdraw'].map(direction=>row(n?'Unselected-'+String(n).padStart(2,'0'):'Brand',direction))).flat()});
+ const v2=read('tests/fixtures/daily-provider-fold.v2.sql').replace('private.dashboard_admin_daily_provider_fold(','private.fixture_daily_provider_fold_v2_counted(').replace('   select bool_or(r->>key is null),sum((r->>key)::numeric)',"   perform set_config('test.v2.additive_spi',(coalesce(nullif(current_setting('test.v2.additive_spi',true),''),'0')::integer+1)::text,false);\n   select bool_or(r->>key is null),sum((r->>key)::numeric)");
+ const v3=fn(candidate,'private.dashboard_admin_daily_provider_fold').replace('private.dashboard_admin_daily_provider_fold(','private.fixture_daily_provider_fold_v3_counted(').replace('  with leaves as materialized',"  perform set_config('test.v3.additive_spi',(coalesce(nullif(current_setting('test.v3.additive_spi',true),''),'0')::integer+1)::text,false);\n  with leaves as materialized");
+ await db.exec(v2);await db.exec(v3);await db.exec("select set_config('test.v2.additive_spi','0',false),set_config('test.v3.additive_spi','0',false)");
+ const a=await foldOutcome('fixture_daily_provider_fold_v2_counted',items,request),b=await foldOutcome('fixture_daily_provider_fold_v3_counted',items,request);assert.deepEqual(b,a);assert.equal(a.result.result.groups.provider.length,1);
+ const counts=(await db.query("select current_setting('test.v2.additive_spi')::integer v2,current_setting('test.v3.additive_spi')::integer v3")).rows[0];assert.deepEqual(counts,{v2:1536,v3:64});
+});
