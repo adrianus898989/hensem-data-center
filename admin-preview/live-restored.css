@@ -72,3 +72,6 @@ body.live-admin .live-health-filters .live-field{min-width:0;width:auto}
 body.live-admin .live-health-filters .live-field input,body.live-admin .live-health-filters .live-field select{width:100%;min-width:0}
 body.live-admin .live-health-filters .live-actions{white-space:nowrap}
 @media(max-width:850px){body.live-admin .live-health-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Keep routine query guidance quiet; coverage and failed reads retain their status styles. */
+body.live-admin .live-query-prompt{background:transparent;border:0;padding:4px 1px;margin:0 0 8px;color:#7085a6}body.live-admin .live-scope-description{position:relative}body.live-admin .live-scope-description>summary{cursor:pointer;color:#59739c}body.live-admin .live-scope-description>div{position:absolute;z-index:22;top:22px;left:0;display:flex;flex-wrap:wrap;gap:7px 14px;width:340px;max-width:calc(100vw - 46px);padding:11px;border:1px solid #dce5f4;border-radius:6px;background:#fff;box-shadow:0 5px 14px #243c6514}body.live-admin .live-scope-description>div>span{white-space:normal}

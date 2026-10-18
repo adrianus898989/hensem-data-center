@@ -10,7 +10,7 @@
     "lint": "next lint",
     "test": "node --test tests/*.test.cjs",
     "test:admin-pagination": "node --test tests/admin-local-pagination.test.cjs tests/admin-withdraw-reason-pagination.test.cjs tests/admin-withdraw-reason-scroll.test.cjs tests/admin-withdraw-team-scope.test.cjs tests/admin-workorder-analysis-ui.test.cjs tests/admin-workorder-reconciliation-batch.test.cjs tests/admin-kyc-reconciliation-ui.test.cjs",
-    "test:admin-cache": "node --test tests/admin-aggregate-cache.test.cjs tests/admin-member-counts-cache.test.cjs tests/admin-pending-snapshot-cache.test.cjs tests/admin-brush-read-reliability.test.cjs",
+    "test:admin-cache": "node --test tests/admin-aggregate-cache.test.cjs tests/admin-member-counts-cache.test.cjs tests/admin-pending-snapshot-cache.test.cjs tests/admin-brush-read-reliability.test.cjs && pnpm run test:prepared-read-model",
     "test:panda-native": "node --test tests/panda-native-readers.test.cjs tests/admin-panda-native-ui.test.cjs tests/admin-panda-prepared-prefix-ui.test.cjs tests/admin-panda-prefix-detail-boundaries.test.cjs",
     "test:collector-control": "node --test tests/collector-control-backend.test.cjs tests/collector-control-ui.test.cjs tests/collector-control-worker.test.cjs",
     "test:security-identity": "node --test tests/dashboard-entry-ip-gate.test.cjs tests/collector-exact-identity-sql.test.cjs tests/admin-order-intake-wg-probe.test.cjs tests/dashboard-role-account-create-edge.test.cjs tests/dashboard-role-account-create-sql.test.cjs tests/dashboard-role-account-create-client.test.cjs tests/application-presence-edge.test.cjs tests/application-presence-sql.test.cjs tests/dashboard-presence-client.test.cjs tests/application-auth-refresh-response.test.cjs tests/dashboard-platform-data-scope-sql.test.cjs tests/dashboard-platform-data-scope-edge.test.cjs tests/dashboard-data-scope-client.test.cjs tests/newar-business-read.test.cjs tests/third-party-rate-lightweight.test.cjs tests/dashboard-atomic-platform-scope-edit-sql.test.cjs tests/dashboard-confirmed-platform-scope-aliases-sql.test.cjs tests/workorder-identity-context-sql.test.cjs tests/workorder-identity-context-edge.test.cjs",
@@ -30,7 +30,8 @@
     "test:maan-submission": "node --test tests/maan-submission-typed-facts-sql.test.cjs tests/maan-submission-hourly-proofs-sql.test.cjs tests/maan-submission-proven-chart-reader-sql.test.cjs tests/maan-submission-summary-reader-sql.test.cjs",
     "test:ar-native-submission": "node --test tests/ar-native-submission-compact-summary-sql.test.cjs",
     "test:provider-web-repair": "node --test tests/india-approved-provider-query-union.test.cjs tests/admin-team-display-policy.test.cjs tests/admin-provider-range-unavailable.test.cjs tests/admin-configuration-sandbox-save.test.cjs && pnpm run test:member-page-contract",
-    "test:member-page-contract": "node --test tests/admin-member-page-contract.test.cjs tests/admin-page-action-denial.test.cjs"
+    "test:member-page-contract": "node --test tests/admin-member-page-contract.test.cjs tests/admin-page-action-denial.test.cjs",
+    "test:prepared-read-model": "node --test tests/admin-prepared-completed-cache.test.cjs tests/admin-prepared-cache-integration.test.cjs tests/admin-report-compact-state.test.cjs tests/admin-member-counts-fallback-once.test.cjs"
   },
   "dependencies": {
     "googleapis": "^144.0.0",
