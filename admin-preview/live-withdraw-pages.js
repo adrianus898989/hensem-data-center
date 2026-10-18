@@ -26,7 +26,7 @@
   const sourceNoteStates=row=>{if(!row.sourceNoteStates)return '';const labels={remark:'主备注',front:'前台备注',back:'后台备注'},hidden=new Set(row.hiddenNoteSources||[]);return '<small class="cell-sub">'+Object.entries(labels).map(([key,label])=>{const state=row.sourceNoteStates[key],text=key==='front'&&row.verifiedRejectionNote?.sourceField==='frontRemark'&&row.verifiedRejectionNote?.verificationMethod==='manual_source_ui'?'已在源站核实':state==='empty'?'为空':hidden.has(key)?state==='redacted'?'部分已隐藏':'已隐藏':state==='template'?'已采集业务模板':'未取得可用文本';return E(label+'：'+text)}).join(' · ')+'</small>'};
   const reasonCache=new Map();
   let reasonSnapshot=null,reasonRead=null;
-  function stopReasonRead(){const job=reasonRead;reasonRead=null;S.reasonBusy=false;if(job){job.controller?.abort();job.cancel();}}
+  function stopReasonRead(){const job=reasonRead;reasonRead=null;S.reasonBusy=false;if(job){root.clearTimeout?.(job.pollTimer);root.clearTimeout?.(job.deadlineTimer);job.controller?.abort();job.cancel();}}
   const view=()=>ctx.page()==='withdraw_operators'?'operators':'auto';
   const sumKey=()=>view()==='operators'?'processed':'total';
   function metricWindows(){for(const key of ['from','to']){if(/^\d{4}-\d{2}-\d{2}$/.test(L[key]||''))L[key]+=key==='from'?'T00:00:00':'T23:59:59';else if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(L[key]||''))L[key]+=':00';}if(L.successFrom==null)L.successFrom=L.from;if(L.successTo==null)L.successTo=L.to;for(const key of ['successFrom','successTo']){if(/^\d{4}-\d{2}-\d{2}$/.test(L[key]||''))L[key]+=key==='successFrom'?'T00:00:00':'T23:59:59';else if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(L[key]||''))L[key]+=':00';}if(!L.successBasis)L.successBasis='success';return L;}
@@ -578,6 +578,30 @@
    const total=data?.total;
    if(data?.available===true&&!data.error&&data.hasMore!==true&&data.partial!==true&&data.complete!==false&&query.offset===0&&total!==null&&total!==undefined&&total!==''&&typeof total!=='boolean'&&Number.isSafeInteger(Number(total))&&Number(total)>=0&&Array.isArray(data.rows)&&data.rows.length===Number(total))reasonSnapshot={scope,data};
   }
+  // Preparation is an explicit server state, never an empty reason result.
+  // Only this contract may poll; source failures and unknown envelopes stop.
+  function reasonPreparation(data){
+   if(data?.prepared?.contract!=='withdraw-reasons-blocking-v1')return '';
+   if(data.prepared.status==='ready'&&data.available===true&&Array.isArray(data.rows)&&Number.isSafeInteger(data.total)&&data.total>=0)return '';
+   if(data.prepared.status==='building'&&data.prepared.reason==='withdraw_reasons_preparing'&&data.available===false&&data.rows===null&&data.total===null&&data.summary===null)return 'building';
+   throw Error('原因统计暂未准备完成，请稍后重试。');
+  }
+  async function readPreparedReason(job,query,cancelled){
+   const read=()=>request(query,job.controller?{signal:job.controller.signal}:undefined);
+   let data=await Promise.race([read(),cancelled]);if(!currentReasonRead(job)||reasonPreparation(data)!=='building')return data;
+   const expired={},deadline=Date.now()+60000,deadlineReached=new Promise(resolve=>{job.deadlineTimer=root.setTimeout(()=>resolve(expired),60000);});
+   try{
+    for(let attempt=1;attempt<40&&Date.now()<deadline;attempt++){
+     const wait=new Promise(resolve=>{job.pollTimer=root.setTimeout(resolve,1500);});
+     const wake=await Promise.race([wait,cancelled,deadlineReached]);root.clearTimeout(job.pollTimer);job.pollTimer=null;
+     if(!currentReasonRead(job))return null;if(wake===expired)break;
+     data=await Promise.race([read(),cancelled,deadlineReached]);
+     if(!currentReasonRead(job))return null;if(data===expired)break;
+     if(reasonPreparation(data)!=='building')return data;
+    }
+    job.preparationExpired=true;throw Error('原因统计仍在后台更新，请稍后重试。');
+   }finally{root.clearTimeout(job.pollTimer);root.clearTimeout(job.deadlineTimer);job.pollTimer=job.deadlineTimer=null;}
+  }
   async function reasonsLoad(force=false,presentationOnly=false){
    if(!resultAllowed()||!S.reason)return;
    if(typeof root.hensemRoleAllowed==='function'&&!root.hensemRoleAllowed(ctx.page(),'query')){clearResult();render();return;}
@@ -596,9 +620,9 @@
    const job={key,serial,context,force,controller};const cancelled=new Promise(resolve=>{job.cancel=()=>resolve(null);});reasonRead=job;
    S.reasonBusy=true;S.reasonData=null;renderReason();reasonFocus();
    job.promise=(async()=>{
-    try{const data=await Promise.race([request(query,controller?{signal:controller.signal}:undefined),cancelled]);if(!currentReasonRead(job))return;const max=Math.max(1,Math.ceil(Number(data.total||0)/S.reasonSize));if(S.reasonPage>max){S.reasonPage=max;return reasonsLoad(force)}if(data?.available===true&&!data.error&&data.partial!==true&&data.complete!==false){reasonCache.set(key,{data,scope,time:Date.now()});if(reasonCache.size>30)reasonCache.delete(reasonCache.keys().next().value);}rememberReasonSnapshot(scope,query,data);S.reasonData=data;S.reasonBusy=false;renderReason();reasonFocus()}
+    try{const data=await readPreparedReason(job,query,cancelled);if(!currentReasonRead(job))return;const max=Math.max(1,Math.ceil(Number(data.total||0)/S.reasonSize));if(S.reasonPage>max){S.reasonPage=max;return reasonsLoad(force)}if(data?.available===true&&!data.error&&data.partial!==true&&data.complete!==false){reasonCache.set(key,{data,scope,time:Date.now()});if(reasonCache.size>30)reasonCache.delete(reasonCache.keys().next().value);}rememberReasonSnapshot(scope,query,data);S.reasonData=data;S.reasonBusy=false;renderReason();reasonFocus()}
     catch(e){if(!currentReasonRead(job))return;if(['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(e?.code||''))||/^(preview_denied|synthetic_session_denied|assigned_role_required|page_action_denied|role_permission_denied|session_denied)$/.test(String(e?.message||''))){clearResult();S.error='登录或查询权限已变化，请重新验证后查询。';render();return;}S.reasonError=e.message;S.reasonBusy=false;S.reasonData=null;renderReason();reasonFocus()}
-    finally{if(reasonRead===job)reasonRead=null;}
+    finally{if(job.preparationExpired)job.controller?.abort();if(reasonRead===job)reasonRead=null;}
    })();return job.promise;
   }
   const reasonContext=()=>JSON.stringify([ctx.page(),nativeStamp(),L.from,L.to,L.successFrom,L.successTo,L.successBasis,S.applied?.query||null]);
