@@ -2,6 +2,8 @@
 const {test,before,after}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),{createRequire}=require('node:module');
 const filename=path.join(__dirname,'dashboard-roles-sql.test.cjs'),req=createRequire(filename);
 const read=p=>fs.readFileSync(path.join(__dirname,'..',p),'utf8');
+// This historical catalog predates the two auxiliary-member request additions.
+const historicalMemberRequests=p=>({...p,requests:p.requests.filter(action=>action!=='memberDaily'||!['overview','merchants'].includes(p.id))});
 const baseline=JSON.parse(read('tests/fixtures/yash-channel-reader-production-functions.json'));
 const migration=read('supabase/migrations/20261009050532_yash_channel_status_reader.sql');
 let f,id,metadata;
@@ -68,7 +70,7 @@ test('strict server validation rejects malformed or injected requests before dat
 }));
 test('catalog matches UI, existing ACL/metadata are unchanged, and helpers/tables remain inaccessible',async()=>transaction(async()=>{
  await f.admin();const after=await f.scalar("select jsonb_object_agg(oid::regprocedure::text,to_jsonb(p)-'prosrc') from pg_proc p where oid=any($1::regprocedure[])",[baseline.map(x=>x.signature)]);assert.deepEqual(after,metadata);
- const catalog=await f.scalar('select private.dashboard_role_catalog()');assert.deepEqual(catalog.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.map(p=>({...p,requests:p.requests.filter(request=>request!=='aggregatePrepared')})));assert(!catalog.pages.some(x=>x.id==='channelquality'));
+ const catalog=await f.scalar('select private.dashboard_role_catalog()');assert.deepEqual(catalog.pages,JSON.parse(read('src/lib/dashboardRoleCatalog.json')).pages.map(historicalMemberRequests).map(p=>({...p,requests:p.requests.filter(request=>request!=='aggregatePrepared')})));assert(!catalog.pages.some(x=>x.id==='channelquality'));
  for(const r of ['anon','authenticated','service_role'])assert.equal(await f.scalar("select has_function_privilege($1,'private.dashboard_admin_live_channel_status(jsonb)','execute')",[r]),false);
  for(const r of ['anon','service_role'])assert.equal(await f.scalar("select has_function_privilege($1,'public.dashboard_admin_live_channel_status(jsonb)','execute')",[r]),false);
  for(const r of ['anon','authenticated'])assert.equal(await f.scalar("select has_table_privilege($1,'private.yash_channels','select')",[r]),false);
