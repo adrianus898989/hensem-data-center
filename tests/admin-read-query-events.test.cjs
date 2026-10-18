@@ -37,7 +37,7 @@ for(const kind of ['deposit','provider','platform','payout','empty'])test(kind+'
 test('deposit amount validation still rejects an inverted range after the native checks pass',async()=>{
  const h=await fixture('deposit'),wire=handlers(h.html);h.changeAmount('100','10');invoke(h.c,wire.click,{form:{reportValidity:()=>true}});await settle();assert.equal(h.calls.length,0);assert.match(h.state.depositIssuesError,/最低金额不能大于最高金额/);
 });
-test('configuration write dialog remains unchanged and no iframe permission is broadened',()=>{
- const s=source('live-configuration.js');assert.match(s,/onsubmit="event.preventDefault\(\);configSave\(\)"/);assert.match(s,/<button class="btn primary" type="submit">保存/);
+test('configuration write dialog uses a non-submit save and no iframe permission is broadened',()=>{
+ const s=source('live-configuration.js');assert.match(s,/<form onsubmit="return false">/);assert.match(s,/<button class="btn primary" type="button" onclick="configSave\(\)">保存/);assert.doesNotMatch(s,/<button[^>]*type="submit"|onsubmit="[^"]*configSave/);
  const host=fs.readFileSync(path.join(__dirname,'../src/components/OwnerAdminPreview.tsx'),'utf8');assert.match(host,/sandbox="allow-scripts allow-downloads"/);assert.doesNotMatch(host,/allow-forms/);
 });
