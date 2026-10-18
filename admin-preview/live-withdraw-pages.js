@@ -25,7 +25,8 @@
   const rejectionSourceNote=(value,row={})=>{if(row.rejectionNoteState==='withheld'){const labels={remark:'主备注',front:'前台备注',back:'后台备注'},sources=(row.hiddenNoteSources||[]).map(key=>labels[key]).filter(Boolean);return sourceNote(null,'（'+(sources.length?sources.join('、'):'源业务备注')+'已隐藏，驳回备注待核对）','备注来源状态','',true)}if(row.rejectionNoteState==='missing')return sourceNote(null,'（未采集到明确驳回备注）','备注来源状态','',true);if(row.rejectionNoteState==='empty')return sourceNote(null,'（源备注为空）','备注来源状态','',true);return sourceNote(value,'（源备注为空）','驳回原文','',true)};
   const sourceNoteStates=row=>{if(!row.sourceNoteStates)return '';const labels={remark:'主备注',front:'前台备注',back:'后台备注'},hidden=new Set(row.hiddenNoteSources||[]);return '<small class="cell-sub">'+Object.entries(labels).map(([key,label])=>{const state=row.sourceNoteStates[key],text=key==='front'&&row.verifiedRejectionNote?.sourceField==='frontRemark'&&row.verifiedRejectionNote?.verificationMethod==='manual_source_ui'?'已在源站核实':state==='empty'?'为空':hidden.has(key)?state==='redacted'?'部分已隐藏':'已隐藏':state==='template'?'已采集业务模板':'未取得可用文本';return E(label+'：'+text)}).join(' · ')+'</small>'};
   const reasonCache=new Map();
-  let reasonSnapshot=null;
+  let reasonSnapshot=null,reasonRead=null;
+  function stopReasonRead(){const job=reasonRead;reasonRead=null;S.reasonBusy=false;if(job){job.controller?.abort();job.cancel();}}
   const view=()=>ctx.page()==='withdraw_operators'?'operators':'auto';
   const sumKey=()=>view()==='operators'?'processed':'total';
   function metricWindows(){for(const key of ['from','to']){if(/^\d{4}-\d{2}-\d{2}$/.test(L[key]||''))L[key]+=key==='from'?'T00:00:00':'T23:59:59';else if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(L[key]||''))L[key]+=':00';}if(L.successFrom==null)L.successFrom=L.from;if(L.successTo==null)L.successTo=L.to;for(const key of ['successFrom','successTo']){if(/^\d{4}-\d{2}-\d{2}$/.test(L[key]||''))L[key]+=key==='successFrom'?'T00:00:00':'T23:59:59';else if(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(L[key]||''))L[key]+=':00';}if(!L.successBasis)L.successBasis='success';return L;}
@@ -35,7 +36,7 @@
   const resultDaily=()=>S.applied?.query.daily??S.daily;
   const displayAllowed=p=>root.HensemLiveReportData?.displayAllowed?.(p)!==false;
   const accessKey=()=>{const a=root.hensemRoleAccess||{},s=root.hensemDataScope||{},entries=[...(L.catalog||[]),...(L.withdrawCatalog||[])].map(p=>JSON.stringify([p.id||'',p.source||p.system||'',p.identityCountry??p.country,p.sourceName||p.source_name||p.name,p.team||'',p.scopeGroup||p.scope_group||'',displayAllowed(p)])).sort();return JSON.stringify([s.mode||'document',s.identity||'document',a.mode||'document',a.roleId||'',a.version??null,a.assignmentVersion??null,a.canView??null,Array.isArray(a.permissions)?a.permissions.slice().sort():[],entries]);};
-  function clearResult(){loadedBase=null;reasonSnapshot=null;reasonCache.clear();S.serial++;stopRead();S.reasonSerial++;setLoading(false);Object.assign(S,{applied:null,data:null,dataKey:'',loadingKey:'',localSnapshot:false,serverPaging:false,reason:null,reasonData:null,reasonBusy:false,reasonError:'',reasonLabel:'',reasonQuery:'',originalNote:'',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false,prepared:null,error:'',dirty:true});}
+  function clearResult(){loadedBase=null;reasonSnapshot=null;reasonCache.clear();S.serial++;stopRead();stopReasonRead();S.reasonSerial++;setLoading(false);Object.assign(S,{applied:null,data:null,dataKey:'',loadingKey:'',localSnapshot:false,serverPaging:false,reason:null,reasonData:null,reasonBusy:false,reasonError:'',reasonLabel:'',reasonQuery:'',originalNote:'',note:null,noteDraft:'',noteError:'',noteSaving:false,noteSample:false,prepared:null,error:'',dirty:true});}
   function resultAllowed(){if(root.hensemRoleAccess?.canView===false||S.applied&&(S.applied.accessKey!==accessKey()||S.applied.nativeStamp&&S.applied.nativeStamp!==nativeStamp()||S.applied.query.view!==view())){clearResult();return false;}return true;}
   const filterKey=(scope,q)=>JSON.stringify([scope,q.country,q.startAt,q.endAt,q.successStartAt,q.successEndAt,q.successBasis,q.platforms,q.scopeTargets||null,q.view,q.daily,q.account||'']);
   function draftChanged(){if(!S.applied||!S.data)return S.dirty;try{return filterKey(selectionKey(),query())!==filterKey(S.applied.scopeKey,S.applied.query);}catch{return true;}}
@@ -70,9 +71,9 @@
    }
    return base;
   }
-  function invalidate(keepBase=false){if(!keepBase)loadedBase=null;reasonSnapshot=null;S.serial++;stopRead();setLoading(false);S.loadingKey='';S.error='';S.prepared=null;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;}
+  function invalidate(keepBase=false){if(!keepBase)loadedBase=null;reasonSnapshot=null;S.serial++;stopRead();stopReasonRead();setLoading(false);S.loadingKey='';S.error='';S.prepared=null;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;}
   async function load(reset=false,override=null){
-   resultAllowed();loadedBase=null;
+   resultAllowed();loadedBase=null;stopReasonRead();reasonSnapshot=null;S.reasonSerial++;S.reason=null;S.reasonData=null;
    if(!L.catalogReady)return;if(reset){S.page=1;reasonCache.clear();reasonSnapshot=null}
    if(root.hensemRoleAccess?.canView===false)return;
    const scope=override?.applied.scopeKey||selectionKey();if(!override)S.scopeKey=scope;
@@ -578,7 +579,11 @@
    if(data?.available===true&&!data.error&&data.hasMore!==true&&data.partial!==true&&data.complete!==false&&query.offset===0&&total!==null&&total!==undefined&&total!==''&&typeof total!=='boolean'&&Number.isSafeInteger(Number(total))&&Number(total)>=0&&Array.isArray(data.rows)&&data.rows.length===Number(total))reasonSnapshot={scope,data};
   }
   async function reasonsLoad(force=false,presentationOnly=false){
-   if(!resultAllowed()||!S.reason)return;const base={action:'withdrawReasons',...S.reason,platform:rowPlatform(S.reason)},scope=JSON.stringify(base),query={...base,offset:(S.reasonPage-1)*S.reasonSize,limit:S.reasonSize},key=JSON.stringify(query),cached=reasonCache.get(key),serial=++S.reasonSerial;
+   if(!resultAllowed()||!S.reason)return;
+   if(typeof root.hensemRoleAllowed==='function'&&!root.hensemRoleAllowed(ctx.page(),'query')){clearResult();render();return;}
+   const context=reasonContext(),base={action:'withdrawReasons',...S.reason,platform:rowPlatform(S.reason)},scope=JSON.stringify([context,base]),query={...base,offset:(S.reasonPage-1)*S.reasonSize,limit:S.reasonSize},key=JSON.stringify([context,query]),cached=reasonCache.get(key);
+   if(reasonRead?.key===key&&(!force||reasonRead.force)){S.reasonBusy=true;renderReason();return reasonRead.promise;}
+   stopReasonRead();const serial=++S.reasonSerial;
    S.reasonError='';
    // Changing page size is a presentation change, not a refresh. Keep the
    // displayed snapshot even past its request-cache TTL; explicit retry still
@@ -587,10 +592,17 @@
    reasonSnapshot=null;
    if(force)for(const [cacheKey,value] of reasonCache)if(value.scope===scope)reasonCache.delete(cacheKey);
    if(!force&&cached&&Date.now()-cached.time<60000){S.reasonData=cached.data;rememberReasonSnapshot(scope,query,cached.data);S.reasonBusy=false;renderReason();reasonFocus();return}
-   S.reasonBusy=true;renderReason();reasonFocus();
-   try{const data=await request(query);if(serial!==S.reasonSerial||!resultAllowed())return;const max=Math.max(1,Math.ceil(Number(data.total||0)/S.reasonSize));if(S.reasonPage>max){S.reasonPage=max;return reasonsLoad(force)}reasonCache.set(key,{data,scope,time:Date.now()});if(reasonCache.size>30)reasonCache.delete(reasonCache.keys().next().value);rememberReasonSnapshot(scope,query,data);S.reasonData=data;S.reasonBusy=false;renderReason();reasonFocus()}
-   catch(e){if(serial!==S.reasonSerial)return;S.reasonError=e.message;S.reasonBusy=false;S.reasonData=null;renderReason();reasonFocus()}
+   const controller=typeof root.AbortController==='function'?new root.AbortController():null;
+   const job={key,serial,context,force,controller};const cancelled=new Promise(resolve=>{job.cancel=()=>resolve(null);});reasonRead=job;
+   S.reasonBusy=true;S.reasonData=null;renderReason();reasonFocus();
+   job.promise=(async()=>{
+    try{const data=await Promise.race([request(query,controller?{signal:controller.signal}:undefined),cancelled]);if(!currentReasonRead(job))return;const max=Math.max(1,Math.ceil(Number(data.total||0)/S.reasonSize));if(S.reasonPage>max){S.reasonPage=max;return reasonsLoad(force)}if(data?.available===true&&!data.error&&data.partial!==true&&data.complete!==false){reasonCache.set(key,{data,scope,time:Date.now()});if(reasonCache.size>30)reasonCache.delete(reasonCache.keys().next().value);}rememberReasonSnapshot(scope,query,data);S.reasonData=data;S.reasonBusy=false;renderReason();reasonFocus()}
+    catch(e){if(!currentReasonRead(job))return;if(['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(e?.code||''))||/^(preview_denied|synthetic_session_denied|assigned_role_required|page_action_denied|role_permission_denied|session_denied)$/.test(String(e?.message||''))){clearResult();S.error='登录或查询权限已变化，请重新验证后查询。';render();return;}S.reasonError=e.message;S.reasonBusy=false;S.reasonData=null;renderReason();reasonFocus()}
+    finally{if(reasonRead===job)reasonRead=null;}
+   })();return job.promise;
   }
+  const reasonContext=()=>JSON.stringify([ctx.page(),nativeStamp(),L.from,L.to,L.successFrom,L.successTo,L.successBasis,S.applied?.query||null]);
+  function currentReasonRead(job){if(reasonRead!==job||job.serial!==S.reasonSerial||job.controller?.signal.aborted)return false;if(job.context!==reasonContext()||typeof root.hensemRoleAllowed==='function'&&!root.hensemRoleAllowed(ctx.page(),'query')){clearResult();render();return false;}return resultAllowed();}
   // The host iframe intentionally omits allow-forms. Direct actions must not
   // depend on native submit; Enter in text/date inputs follows the same path.
   const queryEnter=event=>event.key==='Enter'&&!event.repeat&&!event.defaultPrevented&&!event.ctrlKey&&!event.metaKey&&!event.altKey&&!event.shiftKey&&!event.isComposing&&event.keyCode!==229&&event.target?.tagName==='INPUT'&&!['checkbox','radio','button','submit'].includes(event.target.type);
@@ -638,7 +650,7 @@
   root.withdrawReasonJump=value=>{if(/^\d+$/.test(String(value)))root.withdrawReasonPage(Number(value))};
   root.withdrawReasonOriginal=(value,title='驳回原文',exact=false)=>{S.originalNote=exact?String(value??''):cleanNote(value);S.originalNoteTitle=String(title||'驳回原文');renderReason(true);document.querySelector?.('.withdraw-original-dialog')?.querySelector('button')?.focus?.({preventScroll:true})};
   root.withdrawReasonOriginalClose=()=>{S.originalNote='';renderReason(true);reasonFocus()};
-  root.withdrawReasonClose=()=>{const trigger=S.reasonTrigger;reasonSnapshot=null;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';renderReason();if(trigger)document.querySelector?.('[data-withdraw-reason="'+trigger.index+'-'+trigger.kind+'"]')?.focus?.({preventScroll:true})};root.withdrawReasonRetry=()=>reasonsLoad(true);
+  root.withdrawReasonClose=()=>{const trigger=S.reasonTrigger;reasonSnapshot=null;stopReasonRead();S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';renderReason();if(trigger)document.querySelector?.('[data-withdraw-reason="'+trigger.index+'-'+trigger.kind+'"]')?.focus?.({preventScroll:true})};root.withdrawReasonRetry=()=>reasonsLoad(true);
   root.withdrawReasonKey=event=>{if(event.key==='Escape'){event.preventDefault();root.withdrawReasonClose();return}if(event.key!=='Tab')return;const panel=document.getElementById('withdraw-reasons'),items=[...(panel?.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex="0"]')||[])].filter(e=>e.getClientRects().length);const first=items[0],last=items[items.length-1];if(!first)return;if(event.shiftKey&&(document.activeElement===first||document.activeElement===panel)){event.preventDefault();last.focus()}else if(!event.shiftKey&&(document.activeElement===last||document.activeElement===panel)){event.preventDefault();first.focus()}};
   function setNote(row,date){const previous=noteFor(row,date);S.note={country:row.country,platform:row.platform,date,storageCountry:previous?.country||row.country,storagePlatform:previous?.platform||row.platform,expectedVersion:previous?.version||'',original:previous?.reason||''};S.noteDraft=S.note.original;S.noteError='';S.noteSaving=false;render()}
   root.withdrawNoteOpen=index=>{if(!resultAllowed())return;const row=S.data?.rows?.[index];if(row&&S.data?.canWriteNotes)setNote(row,resultDaily()?row.dataDate:resultDates().to)};
@@ -648,7 +660,8 @@
   root.withdrawNoteClose=()=>{if(S.noteSaving)return;S.note=null;S.noteSample=false;S.noteError='';render()};
   root.withdrawNoteSave=async()=>{if(!resultAllowed()||!S.note||S.noteSaving||!S.data?.canWriteNotes)return;loadedBase=null;const target=S.note;S.noteSaving=true;S.noteError='';render();try{const saved=await request({action:'withdrawNote',date:target.date,country:target.storageCountry||target.country,platform:target.storagePlatform,reason:S.noteDraft,expectedVersion:target.expectedVersion});if(!resultAllowed()||S.note!==target)return;loadedBase=null;S.data.notes=[...(S.data.notes||[]).filter(n=>!(n.date===saved.date&&n.country===saved.country&&n.platform===saved.platform)),{...saved,sourceCountry:target.country}];S.noteSaving=false;S.note=null;render()}catch(e){if(!resultAllowed()||S.note!==target)return;S.noteSaving=false;S.noteError=e.message||'备注保存失败，输入已保留';render()}};
   function capture(){return {...S,platforms:S.platforms.slice(),reasonTrigger:null,loading:false,reasonBusy:false,error:S.loading?'读取已暂停，点击查询继续':S.error,reasonError:S.reasonBusy?'明细读取已暂停，点击重试继续':S.reasonError};}
-  function pause(){loadedBase=null;reasonSnapshot=null;S.serial++;stopRead();S.reasonSerial++;setLoading(false);S.reasonBusy=false;reasonCache.clear();}
+  function pause(){loadedBase=null;reasonSnapshot=null;S.serial++;stopRead();stopReasonRead();S.reasonSerial++;setLoading(false);reasonCache.clear();}
+  root.addEventListener?.('pagehide',pause);
   function restore(saved){pause();const serial=S.serial,reasonSerial=S.reasonSerial;for(const key of Object.keys(S))delete S[key];Object.assign(S,saved||initialState,{serial,reasonSerial,platforms:(saved?.platforms||[]).slice(),reasonTrigger:null,loading:false,reasonBusy:false});}
   const canExport=()=>resultAllowed()&&!!S.applied&&!!S.data&&!S.loading&&!S.error&&!S.prepared&&!draftChanged()&&(S.metricView!=='secondary'||!!S.data.secondary);
   function exportMeta(){if(!canExport())return null;const q=S.applied.query;return [['统计口径',S.metricView==='secondary'?'独立时间窗成功记录；不与创建窗取交集':'创建订单当前状态；保持来源原成功状态口径'],['创建时间（平台当地，含起止秒）',q.startAt.slice(0,19),q.endAt.slice(0,19)],[q.successBasis==='source_updated'?'源订单更新时间（平台当地，含起止秒）':'源订单成功时间（平台当地，含起止秒）',q.successStartAt.slice(0,19),q.successEndAt.slice(0,19)],['说明','源更新时间不代表成功发生时间；未提供可信时间字段显示未知'],['统计生成时间',S.data.prepared?.computedAt||''],['来源完整性','以各来源采集回执为准']];}

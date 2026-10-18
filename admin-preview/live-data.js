@@ -1136,7 +1136,7 @@
   try{if(clocks.some(key=>localClock(Date.parse(q[key]),platform.timezone).slice(11)!=='00:00:00'))return 30000;}catch{return 30000;}
   return 300000;
  }
- preparedAggregates=window.HensemPreparedAggregates?.create({request:(q,options)=>window.hensemLiveRequest(q,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?state.page+'|'+aggregateAccessContext():'',platform:id=>visibleCatalog().find(p=>p.id===id),publicationVersion:2,maxConcurrent:2,maxBatchSize:3,completedCacheTtlMs:preparedCompletionTtl,providerReuseNames:()=>providerDirection(state.page)?providerQueryNames(L.providerOptions):[],derivedPollMaxMs:60000,derivedPollIntervalMs:1500,derivedPollMaxAttempts:40});
+ preparedAggregates=window.HensemPreparedAggregates?.create({request:(q,options)=>window.hensemLiveRequest(q,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?state.page+'|'+aggregateAccessContext():'',platform:id=>visibleCatalog().find(p=>p.id===id),publicationVersion:2,maxConcurrent:2,maxBatchSize:3,completedCacheTtlMs:preparedCompletionTtl,completedCacheMaxBytes:96*1024*1024,providerReuseNames:()=>providerDirection(state.page)?providerQueryNames(L.providerOptions):[],derivedPollMaxMs:60000,derivedPollIntervalMs:1500,derivedPollMaxAttempts:40});
  const usesPreparedAggregate=request=>statisticWindowsEnabled()&&request.action==='aggregate'&&request.view!=='drilldown'&&!['orderNumber','thirdPartyOrderNumber','systemOrderId','memberId','utr'].some(key=>request[key]);
  window.addEventListener?.('pagehide',()=>{clearAggregateCache();providerIntake?.clearCache?.();clearFeeLookupCache();});
  async function readAggregate(request,serial,allowCache=false,bounded=false){

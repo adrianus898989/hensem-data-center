@@ -18,10 +18,12 @@ create temporary table provider_reuse_guard on commit drop as select oid::regpro
 create function private.daily_provider_base_reuse_pack(p_payload jsonb,p_base jsonb,p_request jsonb,p_target jsonb,p_publication jsonb)returns jsonb
 language plpgsql stable set search_path=''as $function$
 declare started timestamptz:=clock_timestamp();deadline timestamptz:=started+interval'250milliseconds';
- rows jsonb;resolved jsonb;names jsonb;name_map jsonb:='[]';entries jsonb:='[]';common jsonb;scope jsonb;piece jsonb;skinny jsonb;projection jsonb;packed jsonb;
- reuse_names jsonb;canonical_map jsonb;g record;n record;resolved_key text;native_country text;native_platform text;entry_index integer;empty_index integer;all_index integer;indices jsonb;
+ rows jsonb;resolved jsonb;names jsonb;name_map jsonb:='[]';entries jsonb:='[]';common jsonb;scope jsonb;packed jsonb;
+ reuse_names jsonb;canonical_map jsonb;n record;resolved_key text;native_country text;native_platform text;entry_index integer;empty_index integer;all_index integer;timestamp_ambiguous boolean;
 begin
  if current_user<>'postgres'then return null;end if;
+ if not exists(select 1 from pg_proc where oid='private.dashboard_prepared_provider_projection(jsonb,jsonb,jsonb)'::regprocedure and md5(prosrc)='58fee45de05fe5567a62e69b297cee88')
+  or not exists(select 1 from pg_proc where oid='private.prepared_aggregate_echo(jsonb,jsonb,jsonb)'::regprocedure and md5(prosrc)='f72bd9afabd7c74de273f02f5e46499d')then return null;end if;
  reuse_names:=p_request->'providerReuseNames';p_request:=p_request-'providerReuseNames';
  if reuse_names is null or jsonb_typeof(reuse_names)is distinct from'array'then reuse_names:='[]';end if;
  if jsonb_array_length(reuse_names)>200 or octet_length(reuse_names::text)>8192 or exists(select 1 from jsonb_array_elements(reuse_names)hint(value)where jsonb_typeof(hint.value)is distinct from'string'or length(btrim(hint.value#>>'{}'))not between 1 and 200 or(hint.value#>>'{}')~'[[:cntrl:]]')then reuse_names:='[]';end if;
@@ -84,24 +86,94 @@ begin
  if(select count(distinct r->>'key')from jsonb_array_elements(resolved)r)>128 or clock_timestamp()>deadline then return null;end if;
  scope:=p_request-'providers';
  common:=private.prepared_aggregate_echo(p_payload,p_request,p_target)-array['summary','groups','total','hasMore','latencySummary','pendingSummary'];
- for g in select r->>'key'key,jsonb_agg((r->>'ordinal')::integer order by(r->>'ordinal')::integer)indices
-  from jsonb_array_elements(resolved)r where r->>'key'is not null group by r->>'key'order by r->>'key'
- loop
-  if clock_timestamp()>deadline then return null;end if;
-  select coalesce(jsonb_agg(rows->(i.value::text)::integer order by i.ordinality),'[]')into piece from jsonb_array_elements(g.indices)with ordinality i(value,ordinality);
-  skinny:=jsonb_set(p_payload,'{groups}',jsonb_build_object('provider',piece));
-  projection:=private.prepared_aggregate_echo(private.dashboard_prepared_provider_projection(skinny,p_base,p_base||jsonb_build_object('direction',p_request->>'direction')),p_request,p_target);
-  select coalesce(jsonb_agg((r->>'ordinal')::integer order by(r->>'ordinal')::integer),'[]')into indices from jsonb_array_elements(resolved)r where r->>'key'=g.key and rows->(r->>'ordinal')::integer->>'direction'=p_request->>'direction';
-  entries:=entries||jsonb_build_array(jsonb_build_object('key',g.key,'indices',indices,'result',projection-array(select jsonb_object_keys(common))-'groups'));
-  if clock_timestamp()>deadline then return null;end if;
- end loop;
- empty_index:=jsonb_array_length(entries);
- projection:=private.prepared_aggregate_echo(private.dashboard_prepared_provider_projection(jsonb_set(p_payload,'{groups}',jsonb_build_object('provider','[]'::jsonb)),p_base,p_base||jsonb_build_object('direction',p_request->>'direction')),p_request,p_target);
- entries:=entries||jsonb_build_array(jsonb_build_object('key',null,'indices','[]'::jsonb,'result',projection-array(select jsonb_object_keys(common))-'groups'));
- all_index:=jsonb_array_length(entries);
- projection:=private.prepared_aggregate_echo(private.dashboard_prepared_provider_projection(p_payload,p_base,p_base||jsonb_build_object('direction',p_request->>'direction')),p_request,p_target);
- select coalesce(jsonb_agg(ordinal-1 order by ordinal),'[]')into indices from jsonb_array_elements(rows)with ordinality a(r,ordinal)where r->>'direction'=p_request->>'direction';
- entries:=entries||jsonb_build_array(jsonb_build_object('key',null,'indices',indices,'result',projection-array(select jsonb_object_keys(common))-'groups'));
+ -- Retain the original function's complete ABI/date/native/row validation.
+ -- Direction all and an empty provider selector return the validated payload
+ -- before its per-bucket numeric loops. No canonical label is resolved twice.
+ perform private.dashboard_prepared_provider_projection(p_payload,p_base,p_base);
+ if clock_timestamp()>deadline then return null;end if;
+ -- Exact original 58fee count/amount/evidence formulas, evaluated together for
+ -- every already-resolved selection. Common provenance is never cloned into
+ -- each temporary projection. Monetary arithmetic stays PostgreSQL NUMERIC.
+ with canonical_groups as materialized (
+  select r->>'key'key,(row_number()over(order by r->>'key')-1)::integer selection
+   from jsonb_array_elements(resolved)r where r->>'key'is not null group by r->>'key'
+ ), selections as materialized (
+  select selection,key from canonical_groups
+  union all select count(*)::integer,null::text from canonical_groups
+  union all select count(*)::integer+1,null::text from canonical_groups
+ ), chosen as materialized (
+  select g.selection,(r->>'ordinal')::integer ordinal,rows->(r->>'ordinal')::integer leaf
+   from canonical_groups g join jsonb_array_elements(resolved)r on r->>'key'=g.key
+   where rows->(r->>'ordinal')::integer->>'direction'=p_request->>'direction'
+  union all
+  select (select count(*)::integer+1 from canonical_groups),ordinal::integer-1,leaf
+   from jsonb_array_elements(rows)with ordinality a(leaf,ordinal)where leaf->>'direction'=p_request->>'direction'
+ ), buckets as materialized (
+  select selection,leaf->'direction'direction,leaf->'currency'currency from chosen
+   group by selection,leaf->'direction',leaf->'currency'
+ ), metric_keys(key,kind,optional)as (values
+  ('all_count','count',false),('success_count','count',false),('pending_count','count',false),('failed_count','count',false),('rejected_count','count',false),('unknown_count','count',false),('missing_amount_count','count',false),('negative_amount_count','count',false),('created_success_count','count',false),('reviewed_pending_count','count',true),
+  ('all_amount','amount',false),('success_amount','amount',false),('pending_amount','amount',false),('failed_amount','amount',false),('rejected_amount','amount',false),('unknown_amount','amount',false),('created_success_amount','amount',true),('reviewed_pending_amount','amount',true)
+ ), numeric_fields as materialized (
+  select c.selection,c.leaf->'direction'direction,c.leaf->'currency'currency,k.key,k.kind,k.optional,
+   bool_or(c.leaf?k.key)leaf_has,
+   bool_or(c.leaf->>k.key is null or coalesce(c.leaf->>k.key,'')!~case when k.kind='count'then'^[0-9]+$'else'^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'end)invalid,
+   sum(case when c.leaf->>k.key~case when k.kind='count'then'^[0-9]+$'else'^[+-]?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'end then(c.leaf->>k.key)::numeric end)value
+   from chosen c cross join metric_keys k group by c.selection,c.leaf->'direction',c.leaf->'currency',k.key,k.kind,k.optional
+ ), numeric_objects as materialized (
+  select f.selection,f.direction,f.currency,jsonb_object_agg(f.key,
+   case when f.kind='count'then to_jsonb(case when f.invalid then null else f.value end)
+    else to_jsonb(case when f.invalid then null else f.value::text end)end)
+   filter(where case when f.optional then f.leaf_has when f.kind='amount'then true
+    else f.leaf_has or exists(select 1 from jsonb_array_elements(p_payload->'summary')summary_row where summary_row?f.key)end)fields
+   from numeric_fields f group by f.selection,f.direction,f.currency
+ ), evidence_keys(key)as(values('success_time_available'),('success_time_basis'),('success_available'),('success_unavailable_reason'),('fee_available'),('fee_unavailable_reason'),('pending_count_available')),
+ evidence_fields as materialized (
+  select c.selection,c.leaf->'direction'direction,c.leaf->'currency'currency,k.key,
+   case when count(distinct c.leaf->k.key)=1 and bool_and(c.leaf?k.key)then(jsonb_agg(c.leaf->k.key order by c.ordinal))->0 end value
+   from chosen c cross join evidence_keys k group by c.selection,c.leaf->'direction',c.leaf->'currency',k.key
+ ), evidence_objects as materialized (
+  select selection,direction,currency,jsonb_object_agg(key,value)filter(where value is not null)fields
+   from evidence_fields group by selection,direction,currency
+ ), stamp_values as materialized (
+  select c.selection,c.leaf->'direction'direction,c.leaf->'currency'currency,c.ordinal,c.leaf->>'latest_synced_at'stamp,(c.leaf->>'latest_synced_at')::timestamptz instant
+   from chosen c where c.leaf->>'latest_synced_at'is not null
+ ), stamp_maxima as materialized (
+  select selection,direction,currency,max(instant)instant from stamp_values group by selection,direction,currency
+ ), stamps as materialized (
+  select v.selection,v.direction,v.currency,(array_agg(v.stamp order by v.ordinal))[1]stamp,count(distinct v.stamp)>1 ambiguous
+   from stamp_values v join stamp_maxima m on m.selection=v.selection and m.direction is not distinct from v.direction and m.currency is not distinct from v.currency and m.instant=v.instant
+   group by v.selection,v.direction,v.currency
+ ), summaries as materialized (
+  select bk.selection,jsonb_agg(jsonb_build_object('direction',bk.direction,'currency',bk.currency,'provider',null,'latest_synced_at',st.stamp)||coalesce(nf.fields,'{}')||coalesce(ef.fields,'{}')order by bk.direction,bk.currency)summary
+   from buckets bk left join numeric_objects nf on nf.selection=bk.selection and nf.direction is not distinct from bk.direction and nf.currency is not distinct from bk.currency
+   left join evidence_objects ef on ef.selection=bk.selection and ef.direction is not distinct from bk.direction and ef.currency is not distinct from bk.currency
+   left join stamps st on st.selection=bk.selection and st.direction is not distinct from bk.direction and st.currency is not distinct from bk.currency
+   group by bk.selection
+ ), totals as materialized (
+  select selection,bool_or(leaf->>'all_count'is null or coalesce(leaf->>'all_count','')!~'^[0-9]+$')invalid,
+   coalesce(sum(case when leaf->>'all_count'~'^[0-9]+$'then(leaf->>'all_count')::numeric end),0)value,
+   jsonb_agg(ordinal order by ordinal)indices from chosen group by selection
+ ), assembled as materialized (
+  select sel.selection,sel.key,coalesce(tot.indices,'[]')indices,
+   case when tot.invalid then null else coalesce(tot.value,0)end total,coalesce(su.summary,'[]')summary
+   from selections sel left join totals tot using(selection)left join summaries su using(selection)
+ )
+ , projected as materialized (
+  select a.selection,a.key,a.indices,jsonb_build_object('summary',a.summary,'total',a.total)
+   ||case when p_payload?'hasMore'then jsonb_build_object('hasMore',case when a.total is null then null else a.total>coalesce((p_payload->>'offset')::bigint,0)+coalesce((p_payload->>'limit')::bigint,20)end)else'{}'::jsonb end
+   ||case when p_payload?'latencySummary'then jsonb_build_object('latencySummary','[]'::jsonb)else'{}'::jsonb end
+   ||case when p_payload?'pendingSummary'then jsonb_build_object('pendingSummary','[]'::jsonb)else'{}'::jsonb end result
+   from assembled a
+ )
+ select jsonb_agg(jsonb_build_object('key',a.key,'indices',a.indices,'result',
+   private.prepared_aggregate_echo(a.result,p_request,p_target)-array['offset','limit','startAt','endAt','successStartAt','successEndAt','successBasis','amountBands','amountBandsVersion'])order by a.selection),
+   (select count(*)::integer from canonical_groups),(select count(*)::integer+1 from canonical_groups),coalesce((select bool_or(ambiguous)from stamps),false)
+  into entries,empty_index,all_index,timestamp_ambiguous from projected a;
+ -- The original stamp query has no text tie-break. Never substitute a chosen
+ -- text when equal latest instants have different source spellings.
+ if timestamp_ambiguous then return null;end if;
+ if clock_timestamp()>deadline then return null;end if;
  for n in select name from jsonb_array_elements_text(names)x(name)loop
   if clock_timestamp()>deadline then return null;end if;
   select m->>'key'into resolved_key from jsonb_array_elements(canonical_map)m where m->>'raw'=n.name;
@@ -353,6 +425,6 @@ do $verify$begin
  if not exists(select 1 from pg_proc p where oid='private.daily_provider_base_exact_read(jsonb,jsonb,jsonb,jsonb)'::regprocedure and md5(prosrc)='086664aa0861925c5dcdfd3040279055'and md5(pg_get_functiondef(oid))='39b8eecf4a25e9af632a6a6bb4b56edc'and to_jsonb(p)-'prosrc'=(select value from provider_reuse_guard where key='private.daily_provider_base_exact_read(jsonb,jsonb,jsonb,jsonb)'))then raise exception'provider_reuse_metadata_changed';end if;
  if not exists(select 1 from pg_proc p where oid='private.dashboard_admin_daily_provider_prepared_read(text,jsonb)'::regprocedure and md5(prosrc)='988291994779d7d25919e57db8715a82'and md5(pg_get_functiondef(oid))='e671aa71833ba75dc5f3812897ed4307'and to_jsonb(p)-'prosrc'=(select value from provider_reuse_guard where key='private.dashboard_admin_daily_provider_prepared_read(text,jsonb)'))then raise exception'provider_reuse_metadata_changed';end if;
  if(select value from provider_reuse_guard where key='other')is distinct from(select coalesce(jsonb_agg(to_jsonb(p)order by oid),'[]')from pg_proc p where oid not in('private.daily_provider_base_exact_read(jsonb,jsonb,jsonb,jsonb)'::regprocedure,'private.dashboard_admin_daily_provider_prepared_read(text,jsonb)'::regprocedure)and oid is distinct from to_regprocedure('private.daily_provider_base_reuse_pack(jsonb,jsonb,jsonb,jsonb,jsonb)'))then raise exception'provider_reuse_other_function_changed';end if;
- if not exists(select 1 from pg_proc where oid='private.daily_provider_base_reuse_pack(jsonb,jsonb,jsonb,jsonb,jsonb)'::regprocedure and md5(prosrc)='57cf6392c75e11a1df05c93e0463a637'and md5(pg_get_functiondef(oid))='429e28fe9bd9a1f480e32ce298a7931f'and not prosecdef and provolatile='s'and proacl::text='{postgres=X/postgres}')then raise exception'provider_reuse_pack_metadata_changed';end if;
+ if not exists(select 1 from pg_proc where oid='private.daily_provider_base_reuse_pack(jsonb,jsonb,jsonb,jsonb,jsonb)'::regprocedure and md5(prosrc)='4f5e7484f1c81cc81bf622566aac620c'and md5(pg_get_functiondef(oid))='db01b9719a8b3b1355250488f85bd76c'and not prosecdef and provolatile='s'and proacl::text='{postgres=X/postgres}')then raise exception'provider_reuse_pack_metadata_changed';end if;
 end;$verify$;
 commit;
