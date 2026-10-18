@@ -48,9 +48,12 @@ union all select 'snapshot_functions',to_jsonb((select md5(coalesce(jsonb_agg(to
 -- BEGIN daily provider read hooks. Closed native days, current prepared heads, no order scan.
 -- New names and the two existing wrappers are outside the financial dependency
 -- selectors. The existing reader remains the sole admission/authorization path.
-create or replace function private.dashboard_admin_daily_provider_fold(
- p_items jsonb,p_request jsonb,p_target jsonb
-) returns jsonb language plpgsql stable security invoker set search_path='' as $function$
+CREATE OR REPLACE FUNCTION private.dashboard_admin_daily_provider_fold(p_items jsonb, p_request jsonb, p_target jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ STABLE
+ SET search_path TO ''
+AS $function$
 declare
  item jsonb;current_row jsonb;leaf jsonb;bucket record;key text;n numeric;bad boolean;
  all_rows jsonb:='[]';providers jsonb:='[]';summaries jsonb:='[]';row_value jsonb;
@@ -121,8 +124,9 @@ begin
    if current_row->>'fee_version_matched_count'is not null and current_row->>'fee_version_unmatched_count'is not null and current_row->>'success_count'is not null
     and(current_row->>'fee_version_matched_count')::numeric+(current_row->>'fee_version_unmatched_count')::numeric<>(current_row->>'success_count')::numeric then return null;end if;
    if(current_row->>'fee_version_matched_count')::numeric>0 and current_row->>'fee_version_estimated_amount'is null then return null;end if;
-   all_rows:=all_rows||jsonb_build_array(current_row);
   end loop;
+  -- Preserve native day/row order while copying the full array once per day.
+  all_rows:=all_rows||(payload->'groups'->'provider');
  end loop;
  -- Resolve every original label in the native platform context. No frontend
  -- dictionary, prefix inference, cross-platform override, or rate averaging.
