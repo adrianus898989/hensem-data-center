@@ -10,6 +10,15 @@ function fixture({catalog=[],withdrawCatalog=[],feeds=[feed()],respond,onCatalog
  const page=context.HensemLiveReportData.create({L,E:escape,N:n=>Number(n).toFixed(2),C:n=>String(n),R:(n,d)=>(n/d*100).toFixed(2)+'%',render:()=>renders++,request:async q=>{calls.push(plain(q));return q.action==='collectedData'?(onCatalog?onCatalog(q):{rows:feeds}):respond?respond(q):{feeds:q.feeds.map(f=>summary(f))}}});return {page,L,calls,context,navigation,renders:()=>renders,advance:ms=>{clock+=ms}};
 }
 const scope={country:'胖虎巴西',direction:'all',from:'2026-09-24T00:00:00',to:'2026-09-25T23:59:59'};
+test('configuration invalidation sends no request and rejects old completed report snapshots until an authorized query reloads',async()=>{
+ const f=fixture();await f.page.load(scope);const saved=f.page.capture(),count=f.calls.length,renders=f.renders();assert(saved.result);assert(saved.completed);f.page.invalidateCatalog();assert.equal(f.calls.length,count);assert.equal(f.renders(),renders);assert.equal(f.page.state.catalogLoaded,false);assert.equal(f.page.state.manualCatalogLoaded,false);assert.equal(f.page.state.result,null);assert.equal(f.page.state.loading,false);assert.equal(f.page.state.scopeKey,'');f.page.restore(saved);f.page.cancel();assert.equal(f.page.state.result,null);await f.page.load(scope);assert(f.calls.length>count);assert(f.page.state.result);const reloaded=f.calls.length;await f.page.load(scope);assert.equal(f.calls.length,reloaded,'a fresh post-invalidation result retains ordinary exact-scope reuse');
+});
+test('late full and manual directories cannot repopulate an invalidated cache or leave loading stuck',async()=>{
+ for(const manual of [false,true]){let resolve;const f=fixture({onCatalog:()=>new Promise(r=>resolve=r)}),pending=manual?f.page.loadManualCatalog():f.page.loadCatalog();f.page.invalidateCatalog();resolve({rows:[feed(manual?{dataset:'team_sheet',provenance:{kind:'manual_file'}}:{})]});await pending;assert.equal(f.calls.length,1);assert.equal(f.page.state.catalogLoaded,false);assert.equal(f.page.state.manualCatalogLoaded,false);assert.equal(f.page.state.catalogBusy,false);assert.equal(f.page.state.catalogRows.length,0);assert.equal(f.page.state.manualCatalogRows.length,0);assert.equal(f.page.catalog().length,0);}
+});
+test('a late report result after configuration invalidation remains cancelled rather than becoming a new completed cache',async()=>{
+ let resolve;const f=fixture({respond:q=>new Promise(r=>resolve=()=>r({feeds:q.feeds.map(item=>summary(item))}))}),pending=f.page.load(scope);await new Promise(setImmediate);assert(resolve);f.page.invalidateCatalog();resolve();await pending;assert.equal(f.page.state.result,null);assert.equal(f.page.state.loading,false);assert.equal(f.page.state.scopeKey,'');assert.equal(f.page.capture().completed,null);f.page.cancel();assert.equal(f.page.state.result,null);
+});
 
 test('DUOLI and legacy DOLI retain raw report queries but one exact authorized platform identity',async()=>{
  const native={id:'duoli-id',name:'UANG',sourceName:'UANG',source:'duoli',country:'印尼',team:'M8',currency:'IDR',timezone:'Asia/Jakarta'};

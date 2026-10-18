@@ -344,9 +344,9 @@
   return (unknown!==0||coverage.complete!==true)&&!(matched>0)?null:knownNumber(facts[key]);
  }
  function buildRows({orders,issues,rates,country,direction,plus,combine,coverage,feeMode='historical'}){
-  const flow=(orders||[]).filter(r=>r.direction===direction).map(r=>({...r,provider:providerName(canonical(r.provider,country))}));
+  const flow=(orders||[]).filter(r=>r.direction===direction).map(r=>({...r,sourceProvider:r.sourceProvider??r.provider,provider:providerName(canonical(r.provider,country))}));
   const byIssue=new Map(),uniqueByIssue=new Map();for(const row of issues||[]){if(row.direction!==direction)continue;const name=providerName(canonical(row.provider,country)),item=byIssue.get(name)||Object.fromEntries(issueKeys.map(k=>[k,0]));for(const key of issueKeys)item[key]+=Number(row[key]||0);byIssue.set(name,item);if(!uniqueByIssue.has(name))uniqueByIssue.set(name,[]);uniqueByIssue.get(name).push(row)}
-  const rows=combine(flow,['provider','currency']).map(row=>({...row,direction,sources:[...new Set(row.items.map(r=>r.source))],platforms:[...new Set(row.items.map(r=>r.platform))]}));
+  const rows=combine(flow,['provider','currency']).map(row=>({...row,direction,provider_names:[...new Set(row.items.flatMap(r=>r.provider_names||[r.sourceProvider??r.provider]))],sources:[...new Set(row.items.map(r=>r.source))],platforms:[...new Set(row.items.map(r=>r.platform))]}));
   for(const [provider] of byIssue)if(!rows.some(row=>row.provider===provider))rows.push({...plus([]),provider,direction,sources:[],platforms:[],items:[],created_success_count:0});
   for(const row of rows){
    const observed=(coverage?.platforms||[]).filter(p=>row.platforms.includes(p.platform)||row.platforms.includes(p.sourcePlatform));
@@ -418,7 +418,7 @@
   if(!['team','country','platform','provider'].includes(key))return [];
   const identity=r=>r.platformId?'id:'+r.platformId:JSON.stringify([r.source,r.country,r.platform]);
   const metadata=new Map((summaries||[]).map(r=>[identity(r),r]));
-  const leaves=(orders||[]).map(r=>{const scope=metadata.get(identity(r))||{};return {...scope,...r,country:r.country||scope.country||country,team:r.team||scope.team||'未绑定团队',provider:providerName(canonical(r.provider,r.country||scope.country||country))}});
+  const leaves=(orders||[]).map(r=>{const scope=metadata.get(identity(r))||{};return {...scope,...r,country:r.country||scope.country||country,team:r.team||scope.team||'未绑定团队',sourceProvider:r.sourceProvider??r.provider,provider:providerName(canonical(r.provider,r.country||scope.country||country))}});
   const enrich=r=>({...r,_platformIdentity:identity(r)}),dimensions=key==='platform'?['_platformIdentity','platform','direction','currency']:[key,'direction','currency'];
   const base=key==='provider'?leaves:(summaries||[]),groups=combine(base.map(enrich),dimensions);
   const groupKey=r=>JSON.stringify(dimensions.map(k=>r[k]??'')),feesByGroup=new Map();

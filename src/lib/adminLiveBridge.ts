@@ -420,7 +420,7 @@ class AdminLiveAccessError extends Error {
  readonly code:'ADMIN_LIVE_SESSION_DENIED'|'ADMIN_LIVE_PERMISSION_DENIED';
  constructor(message:string,readonly kind:AdminLiveAccessDenial){super(message);Object.setPrototypeOf(this,new.target.prototype);this.code=kind==='session'?'ADMIN_LIVE_SESSION_DENIED':'ADMIN_LIVE_PERMISSION_DENIED';}
 }
-const permissionError=(message:string,token:string):Error=>['channel_status_role_denied','assigned_role_required','role_permission_denied','role_permissions_changed','role_gateway_required','role_archived','role_unavailable','role_management_denied','role_creation_denied','role_grant_exceeds_actor','auto_withdraw_permission_denied','original_rate_permission_denied','security_permission_denied','permission_denied','scope_denied','platform_denied','job_denied','configuration_denied','note_denied'].includes(token.trim())?new AdminLiveAccessError(message,'permission'):Error(message);
+const permissionError=(message:string,token:string):Error=>['page_action_denied','channel_status_role_denied','assigned_role_required','role_permission_denied','role_permissions_changed','role_gateway_required','role_archived','role_unavailable','role_management_denied','role_creation_denied','role_grant_exceeds_actor','auto_withdraw_permission_denied','original_rate_permission_denied','security_permission_denied','permission_denied','scope_denied','platform_denied','job_denied','configuration_denied','note_denied'].includes(token.trim())?new AdminLiveAccessError(message,'permission'):Error(message);
 async function adminLiveSession(session:DashboardSession):Promise<DashboardSession>{
  try{return await ensureDashboardSession(session)}catch(error){
   if(error instanceof DashboardHttpError&&([401,403].includes(error.status)||['refresh_invalid','session_changed','session_logged_out','profile_denied'].includes(error.code)))throw new AdminLiveAccessError('登录会话已失效，或当前账号未获后台访问授权，请重新验证','session');
@@ -484,6 +484,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if(!response.ok){let code="",serverCode="",queryCancelled=false;try{const body=await response.json();code=typeof body.message==='string'?body.message:'';serverCode=typeof body.code==='string'?body.code:typeof body.error_code==='string'?body.error_code:'';queryCancelled=body.code==='57014'}catch{}
  // Only trusted HTTP status and known server tokens revoke access, never arbitrary error text.
  if(sessionDenial(response.status,serverCode,code))throw new AdminLiveAccessError("正式数据读取未获授权，或会话已失效",'session');
+ if(code==='page_action_denied'||serverCode==='page_action_denied')throw permissionError("当前页面不支持此查询，请重新加载后重试",'page_action_denied');
  if(/role_|permission_denied/.test(code))throw permissionError("当前角色没有此页面或操作权限，请联系管理员",code);
  if(/note_conflict/.test(code))throw Error("该日备注已被修改，请取消后重新打开核对；当前输入已保留");
  if(/note_denied/.test(code))throw permissionError("当前账号没有自动出款备注编辑权限",code);
