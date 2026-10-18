@@ -88,8 +88,22 @@
    })();pendingRead=run;return run;
   }
   const clone=value=>JSON.parse(JSON.stringify(value));
-  const nativeStamp=()=>JSON.stringify([accessKey(),root.hensemRoleAccess||{},root.hensemDataScope||{},catalog().map(p=>JSON.stringify(p)).sort()]);
+  const nativeStamp=()=>JSON.stringify([accessKey(),root.hensemRoleAccess||{},root.hensemDataScope||{},catalog().map(p=>JSON.stringify(p)).sort(),[...(L.catalog||[]),...(L.withdrawCatalog||[])].map(p=>JSON.stringify(p)).sort()]);
   const nativeKey=p=>JSON.stringify([rawTarget(p),platformKey(requestPlatform(p))]);
+  const rajaFamily=p=>root.HensemLiveReportData?.confirmedAliasKey?.(p)||null;
+  const rajaRaw=p=>String(p.sourceName||p.source_name||p.name||'').toUpperCase();
+  function chosenWithdrawNative(rows){
+   const groups=new Map();for(const p of rows){const key=rajaFamily(p);if(key){if(!groups.has(key))groups.set(key,[]);groups.get(key).push(p);}}
+   return rows.filter(p=>{
+    const key=rajaFamily(p);if(!key)return true;const peers=groups.get(key),preferred=peers.filter(x=>String(x.source||x.system||'').toLowerCase()==='ar'&&rajaRaw(x)==='RAJA');
+    // Match the shared chosenNative RAJA representative, retaining physical ambiguity checks.
+    if(!preferred.length||new Set(preferred.map(x=>x.id).filter(Boolean)).size!==1||preferred.some(x=>!x.id))return true;
+    const first=preferred[0],stamp=x=>JSON.stringify([x.team,rawTarget(x),x.scopeGroup??x.scope_group??'',x.timezone||'',x.currency||'']);
+    if(peers.some(x=>String(x.source||x.system||'').toLowerCase()!=='ar'||!['RAJA','RAJALOTTERY'].includes(rajaRaw(x))||stamp(x)!==stamp(first)))return true;
+    return rajaRaw(p)==='RAJA';
+   });
+  }
+
   function nativeIndex(list){
    const index=new Map(),physical=new Map();
    const descriptor=p=>JSON.stringify([rawTarget(p),p.identityCountry??p.country,p.scopeGroup??p.scope_group??'',requestPlatform(p),p.sourceName||p.source_name||p.name,p.timezone||'',p.currency||'',p.capabilities??null]);
@@ -106,11 +120,30 @@
    return index;
   }
   function nativeFor(row,index){
-   const key=JSON.stringify([rawTarget({...row,country:row.sourceCountry||row.country}),platformKey(row.platform)]),direct=index.get(key);
-   const matches=direct?[direct]:[...index.values()].filter(p=>rawTarget(p)===rawTarget({...row,country:row.sourceCountry||row.country})&&platformKey(p.name)===platformKey(row.platform));
+   const country=rawTarget({...row,country:row.sourceCountry||row.country}),raw=JSON.stringify([country,platformKey(row.platform)]),normalized=identity({...row,country:row.sourceCountry||row.country,name:row.platform});
+   let direct=index.get(raw);if(!direct&&rajaFamily(normalized)){const candidate=index.get(JSON.stringify([country,platformKey(normalized.name)]));if(candidate&&rajaFamily(candidate)&&String(candidate.source||candidate.system||'').toLowerCase()==='ar'&&rajaRaw(candidate)==='RAJA')direct=candidate;}
+   const matches=direct?[direct]:[...index.values()].filter(p=>rawTarget(p)===country&&platformKey(p.name)===platformKey(row.platform));
    if(matches.length!==1)throw Error('unknown native');const p=matches[0];
    if(row.source&&String(row.source).toLowerCase()!==String(p.source||p.system||'').toLowerCase())throw Error('source mismatch');
    return nativeKey(p);
+  }
+  function nativeMetadata(rows,index,kind){
+   const stable=value=>value&&typeof value==='object'?Array.isArray(value)?value.map(stable):Object.fromEntries(Object.keys(value).sort().map(k=>[k,stable(value[k])])):value;
+   const comparable=row=>{const value={...row};delete value.platform;return JSON.stringify(stable(value));};
+   const unavailable=row=>kind==='availability'?row.available===false&&Object.keys(row).every(k=>['platform','country','available','reason'].includes(k)):row.capability?.available===false&&row.state==='timestamp_unavailable'&&row.complete!==true&&row.coverageVerified!==true&&['count','amount','observedCount'].every(k=>row[k]==null)&&Array.isArray(row.operatorRows)&&row.operatorRows.length===0&&Object.keys(row).every(k=>['platform','country','source','timezone','currency','capability','count','amount','observedCount','complete','coverageVerified','state','operatorAttributionAvailable','operatorRows'].includes(k));
+   const groups=new Map();for(const row of rows){const key=nativeFor(row,index);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
+   return [...groups].map(([key,group])=>{
+    if(group.length===1)return group[0];const target=index.get(key);
+    if(!target||!rajaFamily(target)||String(target.source||target.system||'').toLowerCase()!=='ar'||rajaRaw(target)!=='RAJA')throw Error('duplicate native metadata');
+    const representative=group.find(row=>String(row.platform).toUpperCase()==='RAJA')||group[0],expected=comparable(representative);
+    if(group.some(row=>row!==representative&&comparable(row)!==expected&&!unavailable(row)))throw Error('conflicting RAJA metadata');
+    return representative;
+   });
+  }
+  function singleObservedDay(data,q,previous=false){
+   const day=q.startAt.slice(0,10);if(q.startAt!==day+'T00:00:00.000Z'||q.endAt!==day+'T23:59:59.000Z'||data.startDate!==day||data.endDate!==day)return null;
+   const actual=previous?addDay(day,-1):day;if(previous&&(data.previousStartDate!==actual||data.previousEndDate!==actual))return null;
+   return {day:actual,previous};
   }
   function exactSum(values){
    let n=0n,d=1n,any=false;
@@ -122,9 +155,10 @@
   const remainder=row=>{if(Object.hasOwn(row,'unclassifiedCount'))return row.unclassifiedCount;const values=['total','autoCount','manualCount'].map(k=>observedCount(row[k]));if(values.some(n=>n===null))throw Error('unknown classification');return String(values[0]>values[1]+values[2]?values[0]-values[1]-values[2]:0n);};
   // Reconcile every additive field against the original server total before permitting a subset.
   // Equal per-native day cardinality and union cardinality prove the date sets coincide.
-  function scopeTotals(rows,original,verify=false){
+  function scopeTotals(rows,original,verify=false,observedDay=null){
    if(!rows.length){if(verify&&original!=null&&Object.keys(original).length)throw Error('unrepresented totals');return {};}
-   if(!original||!Number.isSafeInteger(original.coveredDays)||original.coveredDays<1||rows.some(r=>r.coveredDays!==original.coveredDays))throw Error('unproven day union');
+   const observedPartial=r=>observedDay&&original?.coveredDays===1&&r.coveredDays===0&&r.expectedDays===1&&r.complete===false&&['KB','NEWAR'].includes(String(r.source||'').toUpperCase())&&observedCount(r.total)>0n&&(observedDay.previous?r.dataDate==null||r.dataDate===observedDay.day:r.dataDate===observedDay.day);
+   if(!original||!Number.isSafeInteger(original.coveredDays)||original.coveredDays<1||rows.some(r=>r.coveredDays!==original.coveredDays&&!observedPartial(r)))throw Error('unproven day union');
    const result={},fields=['total','success','rejected','autoCount','manualCount','unclassifiedCount','durationSampleCount','durationTotalSeconds'];
    const allowed=new Set([...fields,'avgSeconds','durationBasis','platforms','coveredDays','classificationAvailable','classificationPartial','classificationComparable','reasonAvailable','comparisonComparable','comparisonBasis']);
    if(Object.keys(original).some(k=>!allowed.has(k)))throw Error('unknown total contract');
@@ -146,8 +180,8 @@
    try{
     const q=S.applied.query,w=d.windows;if(w.creationStartAt!==q.startAt||w.creationEndAt!==q.endAt||w.successStartAt!==q.successStartAt||w.successEndAt!==q.successEndAt||w.successBasis!==q.successBasis)throw Error('window mismatch');
     nativeIndex(catalog());const index=nativeIndex(S.applied.catalog),seen=new Set();for(const row of d.rows){const key=nativeFor(row,index);if(seen.has(key))throw Error('duplicate native');seen.add(key);}
-    scopeTotals(d.rows,d.totals,true);
-    const prior=d.rows.filter(r=>r.previous).map(r=>r.previous);if(d.previousTotals!=null)scopeTotals(prior,d.previousTotals,true);else if(prior.length)throw Error('missing prior totals');
+    scopeTotals(d.rows,d.totals,true,singleObservedDay(d,q));
+    const prior=d.rows.filter(r=>r.previous).map(r=>r.previous);if(d.previousTotals!=null)scopeTotals(prior,d.previousTotals,true,singleObservedDay(d,q,true));else if(prior.length)throw Error('missing prior totals');
     const serialized=JSON.stringify(d);if(serialized.length*2>8*1024*1024)throw Error('snapshot too large');
     loadedBase={data:JSON.parse(serialized),applied:clone(S.applied),stamp:nativeStamp(),index};
    }catch{loadedBase=null;}
@@ -161,9 +195,10 @@
     const keep=row=>chosen.has(nativeFor(row,base.index)),d=clone(base.data),rows=d.rows.filter(keep),prior=rows.filter(r=>r.previous).map(r=>r.previous);
     const knownTop=new Set(['version','view','source','startDate','endDate','previousStartDate','previousEndDate','total','offset','limit','rows','totals','previousTotals','comparison','platformCoverage','canWriteNotes','platforms','notes','windows','secondary','creationAvailability','prepared','wgCoverage','yashCoverage','newarCoverage','arCoverage','duoliCoverage','country','rawCountry','scopeTargets','scopeKey']);
     if(Object.keys(d).some(k=>!knownTop.has(k)))throw Error('unknown response contract');
-    d.rows=rows;d.total=rows.length;d.offset=0;d.limit=500;d.totals=scopeTotals(rows,base.data.totals);d.previousTotals=base.data.previousTotals==null?null:prior.length?scopeTotals(prior,base.data.previousTotals):null;
-    if(d.secondary){if(!Array.isArray(d.secondary.rows)||d.secondary.createdIntersection!==false)throw Error('unknown secondary');const keys=d.secondary.rows.map(r=>nativeFor(r,base.index));if(new Set(keys).size!==keys.length||[...chosen.keys()].some(k=>!keys.includes(k)))throw Error('incomplete native secondary');d.secondary.rows=d.secondary.rows.filter(keep);}
-    if(d.creationAvailability){if(!Array.isArray(d.creationAvailability))throw Error('unknown availability');const keys=d.creationAvailability.map(r=>nativeFor(r,base.index));if(new Set(keys).size!==keys.length||[...chosen.keys()].some(k=>!keys.includes(k)))throw Error('incomplete native availability');d.creationAvailability=d.creationAvailability.filter(keep);}
+    d.rows=rows;d.total=rows.length;d.offset=0;d.limit=500;d.totals=scopeTotals(rows,base.data.totals,false,singleObservedDay(base.data,old));d.previousTotals=base.data.previousTotals==null?null:prior.length?scopeTotals(prior,base.data.previousTotals,false,singleObservedDay(base.data,old,true)):null;
+    const requiredNative=[...chosen].filter(([,p])=>String(p.source||p.system||'').toLowerCase()!=='withdraw').map(([key])=>key);
+    if(d.secondary){if(!Array.isArray(d.secondary.rows)||d.secondary.createdIntersection!==false)throw Error('unknown secondary');d.secondary.rows=nativeMetadata(d.secondary.rows,base.index,'secondary');const keys=d.secondary.rows.map(r=>nativeFor(r,base.index));if(requiredNative.some(k=>!keys.includes(k)))throw Error('incomplete native secondary');d.secondary.rows=d.secondary.rows.filter(keep);}
+    if(d.creationAvailability){if(!Array.isArray(d.creationAvailability))throw Error('unknown availability');d.creationAvailability=nativeMetadata(d.creationAvailability,base.index,'availability');const keys=d.creationAvailability.map(r=>nativeFor(r,base.index));if(requiredNative.some(k=>!keys.includes(k)))throw Error('incomplete native availability');d.creationAvailability=d.creationAvailability.filter(keep);}
     if(d.notes){if(!Array.isArray(d.notes))throw Error('unknown notes');d.notes=d.notes.filter(keep);}
     // Platform options are directory-derived. Never retain another team's prior-only names.
     d.platforms=[...new Set([...chosen.values()].map(requestPlatform))];
@@ -306,7 +341,7 @@
    return '<small class="cell-sub">较前一日 '+absoluteComparison(current,previous,numerator,numerator==='operators'?' 人':numerator==='avgSeconds'?' 秒':' 笔',numerator==='avgSeconds'?v=>Number(v).toFixed(2):C,!['rejected','manualCount','avgSeconds'].includes(numerator))+'</small>';
   }
   function pagebar(total,page,size,reason=false){if(reason&&root.HensemWorkorderUI)return root.HensemWorkorderUI.pager(total,page,size,'withdrawReason',S.reasonBusy);const max=Math.max(1,Math.ceil(total/size)),fn=reason?'withdrawReasonPage':'withdrawPage';return '<div class="withdraw-pager"><span>共 '+C(total)+' 条'+(total?' · '+C((page-1)*size+1)+'–'+C(Math.min(page*size,total)):'')+'</span>'+(reason?'':'<select aria-label="每页行数" onchange="withdrawSize(this.value)">'+[20,30,50,100,500].map(n=>'<option value="'+n+'" '+(n===size?'selected':'')+'>'+n+' 条 / 页</option>').join('')+'</select>')+'<button class="btn small" '+(page<=1?'disabled':'')+' onclick="'+fn+'('+(page-1)+')">上一页</button><span>'+page+' / '+max+'</span><button class="btn small" '+(page>=max?'disabled':'')+' onclick="'+fn+'('+(page+1)+')">下一页</button></div>'}
-  const catalog=()=>{const native=(L.catalog||[]).filter(p=>displayAllowed(p)&&!(String(p.source||'').toLowerCase()==='panda')).map(identity);return [...native,...(L.withdrawCatalog||[]).filter(displayAllowed).map(p=>{const row=identity(p),matches=isWg(row)?native.filter(n=>isWg(n)&&rawTarget(n)===rawTarget(row)&&requestPlatform(n)===requestPlatform(row)):[];if(matches.length===1){row.name=matches[0].name;row.sourceName=requestPlatform(matches[0]);if(['__unassigned__','__team_pending__'].includes(row.team))row.team=matches[0].team;}if(!['__unassigned__','__team_pending__'].includes(row.team))return row;const teams=[...new Set(native.filter(n=>rawTarget(n)===rawTarget(row)&&n.name===row.name).map(n=>n.team).filter(t=>!['__unassigned__','__team_pending__','__team_conflict__','归属待核对'].includes(t)))];return teams.length===1?{...row,team:teams[0]}:row})].filter(displayAllowed)};
+  const catalog=()=>{const native=chosenWithdrawNative((L.catalog||[]).filter(p=>displayAllowed(p)&&!(String(p.source||'').toLowerCase()==='panda')).map(identity));return [...native,...(L.withdrawCatalog||[]).filter(displayAllowed).map(p=>{const row=identity(p),matches=isWg(row)?native.filter(n=>isWg(n)&&rawTarget(n)===rawTarget(row)&&requestPlatform(n)===requestPlatform(row)):[];if(matches.length===1){row.name=matches[0].name;row.sourceName=requestPlatform(matches[0]);if(['__unassigned__','__team_pending__'].includes(row.team))row.team=matches[0].team;}if(!['__unassigned__','__team_pending__'].includes(row.team))return row;const teams=[...new Set(native.filter(n=>rawTarget(n)===rawTarget(row)&&n.name===row.name).map(n=>n.team).filter(t=>!['__unassigned__','__team_pending__','__team_conflict__','归属待核对'].includes(t)))];return teams.length===1?{...row,team:teams[0]}:row})].filter(displayAllowed)};
   function windowControls(){metricWindows();const input=(key,label)=>'<label class="live-metric-endpoint"><span>'+label+'</span><input name="'+key+'" required aria-label="'+label+'" type="datetime-local" step="1" value="'+E(L[key])+'" onchange="withdrawMetricTimeSet(\''+key+'\',this.value)"></label>';return '<div class="live-metric-windows" role="group" aria-label="统计时间范围"><div class="live-metric-window">'+input('from','创建开始时间')+input('to','创建结束时间')+'</div><div class="live-metric-window"><label class="live-metric-basis"><span>成功统计依据</span><select onchange="withdrawMetricTimeSet(\'successBasis\',this.value)"><option value="success" '+(L.successBasis==='success'?'selected':'')+'>成功时间</option><option value="source_updated" '+(L.successBasis==='source_updated'?'selected':'')+'>源订单更新时间</option></select></label>'+input('successFrom',L.successBasis==='source_updated'?'更新开始时间':'成功开始时间')+input('successTo',L.successBasis==='source_updated'?'更新结束时间':'成功结束时间')+'</div><span class="live-metric-zone">各平台当地时间</span></div>';}
   function toolbar(){const all=catalog(),teams=[...new Set(all.map(p=>p.team))].filter(t=>!['__team_pending__','__team_conflict__','归属待核对'].includes(t)).sort(),chosen=activeTeams(),countries=[...new Set(all.filter(p=>!chosen.length||chosen.includes(p.team)).map(p=>p.country).filter(Boolean))].sort();const list=scopeCatalog(),catalogPlatforms=list.map(p=>p.name),platforms=[...new Set([...(S.data?.scopeKey===selectionKey()?(S.data.platforms||[]).map(name=>{const names=[...new Set(list.filter(p=>isWg(p)&&requestPlatform(p)===name||!isWg(p)&&rawTarget(p)==='印度'&&platformKey(name)==='MAANWIN'&&platformKey(p.name)==='MAANWIN').map(p=>p.name))];return names.length===1?names[0]:name;}):[]),...catalogPlatforms,...S.platforms])].sort();
    const multi=root.HensemLiveFilters.multi({key:'withdrawPlatform',label:'盘口 / 平台',values:S.platforms,items:platforms.map(p=>[p,p]),open:S.open,search:S.search}).replaceAll('liveMulti','withdrawMulti').replaceAll('liveSetMultiOption','withdrawSetMultiOption');
