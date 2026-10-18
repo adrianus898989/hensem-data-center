@@ -1,4 +1,4 @@
-/* Exact prepared aggregates. No result cache, raw-order fallback, or implicit retries. */
+/* Exact prepared aggregates. Optional document-only completion reuse; no raw-order fallback or implicit retries. */
 (function(root){
  'use strict';
  const statuses=new Set(['ready','missing','stale','unsupported','building']);
@@ -57,21 +57,51 @@
   if(typeof options?.request!=='function'||typeof options.context!=='function'||typeof options.platform!=='function')throw TypeError('Prepared aggregates require request, context and platform callbacks');
   const publicationVersion=options.publicationVersion===2?2:1;
   const transport=options.request,now=options.now||Date.now,maxBatchSize=Math.max(1,Math.min(50,Math.floor(options.maxBatchSize||50))),maxConcurrent=Math.max(1,Math.min(4,Math.floor(options.maxConcurrent||2))),maxResponseBytes=Math.max(1024,Math.min(32*1024*1024,options.maxResponseBytes||16*1024*1024));
+  const completedTtl=Number.isFinite(options.completedCacheTtlMs)?Math.max(0,Math.min(30000,options.completedCacheTtlMs)):0;
+  const completed=new Map();let completedBytes=0,completedGeneration=0;
   const jobs=new Map(),queue=[],batches=new Set();let generation=0,context=null,scheduled=false;
+  const nativeKey=platform=>encode([identity(platform),platform.capabilities??null]);
+  const completedKey=(scope,native,q)=>encode([scope,native,q]);
+  function completedFamily(scope,native,q){const {providers,direction,view,offset,limit,...scopeQuery}=q;return encode([scope,native,scopeQuery]);}
+  function forgetCompleted(key){const entry=completed.get(key);if(entry){completedBytes-=entry.bytes;completed.delete(key);}}
+  function clearCompleted(){completed.clear();completedBytes=0;completedGeneration++;}
+  function invalidateCompleted(family,keepKey){
+   for(const [key,entry]of completed)if(entry.family===family){entry.invalidated=true;forgetCompleted(key);}
+   for(const job of jobs.values())if(job.family===family&&job.key!==keepKey)job.completedInvalidated=true;
+  }
+  function cachedCompleted(key,q,native){
+   if(!completedTtl)return null;const entry=completed.get(key),stamp=now();if(!entry)return null;
+   if(stamp<entry.readAt||stamp>=entry.expiresAt){forgetCompleted(key);return null;}
+   try{
+    // Revalidate the immutable source envelope, including current v1 expiry.
+    // V2 expiry is a refresh hint; retain its original clock and refresh state.
+    const result=validateResult(entry.item,q,native,stamp,publicationVersion);
+    completed.delete(key);completed.set(key,entry);return {result,entry};
+   }catch{forgetCompleted(key);return null;}
+  }
+  function rememberCompleted(job,item){
+   if(!completedTtl||job.completedInvalidated||job.generation!==generation||job.completedGeneration!==completedGeneration||job.context!==context)return;
+   const readAt=now(),expiresAt=Math.min(readAt+completedTtl,publicationVersion===1?Date.parse(item.publication.expiresAt):Infinity);if(!Number.isFinite(readAt)||expiresAt<=readAt)return;
+   let saved,bytes;try{saved=copy(item);bytes=(JSON.stringify(saved).length+job.completedKey.length+job.family.length)*2+64;}catch{return;}
+   if(bytes>2*1024*1024)return;forgetCompleted(job.completedKey);completed.set(job.completedKey,{item:saved,readAt,expiresAt,bytes,family:job.family});completedBytes+=bytes;
+   while(completed.size>128||completedBytes>16*1024*1024)forgetCompleted(completed.keys().next().value);
+  }
+  const authorityDenied=error=>['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(error?.code||''));
   function contextValue(){const value=options.context();if(typeof value!=='string'||!value)throw failure('cancelled');return value;}
   function settle(waiter,error,result){if(waiter.done)return;waiter.done=true;waiter.signal?.removeEventListener('abort',waiter.abort);waiter.job.waiters.delete(waiter);if(error)waiter.reject(error);else waiter.resolve(copy(result));}
   function release(job){if(jobs.get(job.key)===job)jobs.delete(job.key);}
-  function clear(){generation++;for(const job of jobs.values())for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));jobs.clear();queue.length=0;for(const batch of batches)batch.controller.abort();batches.clear();}
+  function cancel(){generation++;for(const job of jobs.values())for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));jobs.clear();queue.length=0;for(const batch of batches)batch.controller.abort();batches.clear();}
+  function clear(){clearCompleted();cancel();}
   function syncContext(){let current;try{current=contextValue();}catch(error){clear();context=null;throw error;}if(context!==current){clear();context=current;}return current;}
   function active(waiter){
    if(waiter.done)return false;
-   try{if(waiter.signal?.aborted||waiter.job.generation!==generation||waiter.job.context!==syncContext()||waiter.isCurrent&&!waiter.isCurrent()||encode(identity(options.platform(waiter.job.q.platformId)))!==encode(waiter.job.native))throw failure('cancelled');return true;}
+   try{if(waiter.signal?.aborted||waiter.job.generation!==generation||waiter.job.context!==syncContext()||waiter.isCurrent&&!waiter.isCurrent()||nativeKey(options.platform(waiter.job.q.platformId))!==waiter.job.nativeKey)throw failure('cancelled');return true;}
    catch(error){settle(waiter,failure('cancelled'));return false;}
   }
   function prune(job){for(const waiter of [...job.waiters])active(waiter);if(!job.waiters.size)release(job);return job.waiters.size>0;}
   function abandon(job){if(job.waiters.size)return;release(job);if(job.batch&&job.batch.jobs.every(item=>!item.waiters.size)){job.batch.controller.abort();batches.delete(job.batch);}schedule();}
   function schedule(){if(scheduled)return;scheduled=true;Promise.resolve().then(()=>{scheduled=false;drain();});}
-  function deliver(job,error,result){for(const waiter of [...job.waiters])if(active(waiter))settle(waiter,error,result);release(job);}
+  function deliver(job,error,result){let delivered=0;for(const waiter of [...job.waiters])if(active(waiter)){settle(waiter,error,result);delivered++;}release(job);return delivered;}
   async function run(batch){
    try{
     const response=await transport({action:'aggregatePrepared',requests:batch.jobs.map(job=>copy(job.q)),...(publicationVersion===2?{publicationVersion:2,...(batch.jobs[0].forceRefresh?{forceRefresh:true}:{})}:{})},{signal:batch.controller.signal});
@@ -81,8 +111,8 @@
     const serialized=JSON.stringify(response);if(!serialized||serialized.length>maxResponseBytes||new TextEncoder().encode(serialized).length>maxResponseBytes||response.version!==publicationVersion||!Array.isArray(response.items)||response.items.length!==batch.jobs.length)throw failure('invalid');
     const expected=new Map(batch.jobs.map(job=>[job.requestKey,job])),matched=new Map();
     for(const item of response.items){const key=encode(item?.request);if(!expected.has(key)||matched.has(key))throw failure('invalid');matched.set(key,item);}
-    for(const job of batch.jobs){if(!prune(job))continue;try{deliver(job,null,validateResult(matched.get(job.requestKey),job.q,job.native,now(),publicationVersion));}catch(error){deliver(job,error);}}
-   }catch(error){for(const job of batch.jobs)deliver(job,error);}
+    for(const job of batch.jobs){if(!prune(job))continue;try{const item=matched.get(job.requestKey),result=validateResult(item,job.q,job.native,now(),publicationVersion);if(deliver(job,null,result))rememberCompleted(job,item);}catch(error){deliver(job,error);}}
+   }catch(error){if(authorityDenied(error))clearCompleted();for(const job of batch.jobs)deliver(job,error);}
    finally{batches.delete(batch);for(const job of batch.jobs){if(job.waiters.size)deliver(job,failure('cancelled'));release(job);}schedule();}
   }
   function drain(){
@@ -94,15 +124,18 @@
   }
   function read(request,readOptions={}){
    try{
-    const scope=syncContext(),requestKey=queryKey(request),q=JSON.parse(requestKey),native=identity(options.platform(q.platformId));if(native.id!==q.platformId)throw failure('unsupported');
+    const scope=syncContext(),requestKey=queryKey(request),q=JSON.parse(requestKey),platform=options.platform(q.platformId),native=identity(platform),nativeIdentity=nativeKey(platform);if(native.id!==q.platformId)throw failure('unsupported');
     if(readOptions.signal?.aborted||readOptions.isCurrent&&!readOptions.isCurrent())throw failure('cancelled');
     if(readOptions.forceRefresh!==undefined&&typeof readOptions.forceRefresh!=='boolean'||readOptions.forceRefresh&&publicationVersion!==2)throw failure('invalid');
-    const forceRefresh=readOptions.forceRefresh===true,key=encode([scope,native,q,forceRefresh]);let job=jobs.get(key);
-    if(!job){job={key,requestKey,q,native,forceRefresh,context:scope,generation,waiters:new Set(),batch:null};jobs.set(key,job);queue.push(job);}
+    const forceRefresh=readOptions.forceRefresh===true,cacheKey=completedKey(scope,nativeIdentity,q),family=completedFamily(scope,nativeIdentity,q),key=encode([scope,nativeIdentity,q,forceRefresh]);
+    if(forceRefresh)invalidateCompleted(family,key);
+    else{const cached=cachedCompleted(cacheKey,q,native);if(cached){const mine=generation,cacheGeneration=completedGeneration;return Promise.resolve().then(()=>{if(mine!==generation||cacheGeneration!==completedGeneration||cached.entry.invalidated||readOptions.signal?.aborted||scope!==syncContext()||readOptions.isCurrent&&!readOptions.isCurrent()||nativeKey(options.platform(q.platformId))!==nativeIdentity)throw failure('cancelled');const current=cachedCompleted(cacheKey,q,native);return current?copy(current.result):read(q,readOptions);});}}
+    let job=jobs.get(key);if(job?.completedInvalidated){for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));abandon(job);job=null;}
+    if(!job){job={key,requestKey,q,native,nativeKey:nativeIdentity,forceRefresh,context:scope,generation,completedGeneration,completedKey:cacheKey,family,waiters:new Set(),batch:null};jobs.set(key,job);queue.push(job);}
     const promise=new Promise((resolve,reject)=>{const waiter={job,resolve,reject,signal:readOptions.signal,isCurrent:readOptions.isCurrent,done:false,abort:null};waiter.abort=()=>{settle(waiter,failure('cancelled'));abandon(job);};job.waiters.add(waiter);waiter.signal?.addEventListener('abort',waiter.abort,{once:true});});schedule();return promise;
    }catch(error){return Promise.reject(error);}
   }
-  return {read,clear};
+  return {read,cancel,clear};
  }
  const api={create};if(typeof module==='object'&&module.exports)module.exports=api;else root.HensemPreparedAggregates=api;
 })(typeof window==='object'?window:globalThis);

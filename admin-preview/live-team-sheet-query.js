@@ -26,7 +26,7 @@
    }
    return result;
   }
-  function render(){if(!hasReports())return'';if(note)return'<section class="live-report-data"><div class="report-note">'+note+'</div></section>';return reportData.render({page:page()});}
+  function render(){if(!hasReports())return'';if(note)return'<section class="live-report-data"><div class="report-note">'+note+'</div></section>';return reportData.render({page:page(),showIdle:onlyReports()});}
   return{hasReports,onlyReports,discover,load,render};
  }};
 })(typeof window==='undefined'?globalThis:window);

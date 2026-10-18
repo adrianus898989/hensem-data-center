@@ -535,7 +535,7 @@ test('date caches preserve invalid calendar and both DST boundary rejections',()
 // facts without using order rows or member-day counts as an aggregate oracle.
 const largeAr={...P,id:'5e952cbb-e42f-d6b1-a24a-a0d42d165df9',name:'91CLUB',source:'ar',scopeGroup:'IN'};
 function aggregateReadHarness(handler,platform=largeAr){
- const context={Date,console,AbortController,structuredClone,statisticWindowsEnabled:()=>false,L:{serial:1,catalog:[platform],queryRetrying:false},state:{page:'overview'},roleAllowed:()=>true,visibleCatalog:()=>context.L.catalog,localClock:epoch=>new Date(epoch).toISOString(),isSuccessAnalysis:()=>context.state.page==='success_analysis',providerDirection:()=>null,isFlowPage:()=>false,orderSource:p=>String(p?.source||'').toLowerCase().replaceAll('_',''),displayIdentity:p=>p};
+ const context={Date,console,AbortController,structuredClone,workordersReadCache:null,statisticWindowsEnabled:()=>false,L:{serial:1,catalog:[platform],queryRetrying:false},state:{page:'overview'},roleAllowed:()=>true,visibleCatalog:()=>context.L.catalog,localClock:epoch=>new Date(epoch).toISOString(),isSuccessAnalysis:()=>context.state.page==='success_analysis',providerDirection:()=>null,isFlowPage:()=>false,orderSource:p=>String(p?.source||'').toLowerCase().replaceAll('_',''),displayIdentity:p=>p};
  const calls=[];let active=0,maxActive=0;context.window=context;context.hensemLiveRequest=async q=>{calls.push(JSON.parse(JSON.stringify(q)));active++;maxActive=Math.max(active,maxActive);try{return await handler(q,calls.length)}finally{active--}};
  const counts=source.slice(source.indexOf(' const countKeys='),source.indexOf(' const amountBands='));
  const read=source.slice(source.indexOf(' function mergeParts('),source.indexOf(' // Read deeper overview sections',source.indexOf(' function mergeParts(')));
@@ -696,9 +696,9 @@ test('selected-provider amount and matrix queries use the shared directory for l
   h.setHandler(q=>{if(q.action==='rates')return {rows:[{id:'limits',scopeType:'country',country:'印度',provider:'Synthetic provider',collectFee:'4%',collectLimit:'250-25000',payoutFee:'2%',payoutLimit:'500-100000'}],total:1};return {...completeAggregate(P),startAt:q.startAt,endAt:q.endAt,amountBands:q.amountBands};});
   const from=h.calls.length;await h.c.liveQuery(false);await settle();const calls=h.calls.slice(from),rates=calls.filter(q=>q.action==='rates'),orders=calls.filter(q=>q.action==='aggregate');
   assert.equal(rates.length,1);assert.equal(rates[0].scopeType,'all');assert.equal(h.L.amountBandProfiles.charge.source,'所选三方限额');assert.equal(h.L.amountBandProfiles.charge.edges[0],250);assert.equal(h.L.amountBandProfiles.charge.edges[10],25000);assert.equal(h.L.amountBandProfiles.withdraw.edges[0],500);assert.equal(h.L.amountBandProfiles.withdraw.edges[10],100000);
-  assert(orders.length);for(const q of orders){assert.deepEqual(Array.from(q.amountBands.charge),Array.from(h.L.amountBandProfiles.charge.edges));assert.deepEqual(Array.from(q.providers),['Synthetic provider']);}
+  const chartOrders=orders.filter(q=>q.view!=='providers');assert(chartOrders.length);for(const q of orders){if(q.view==='providers')assert.equal(q.amountBands,undefined,'provider-only comparison does not carry unused chart bands');else assert.deepEqual(Array.from(q.amountBands.charge),Array.from(h.L.amountBandProfiles.charge.edges));assert.deepEqual(Array.from(q.providers),['Synthetic provider']);}
   const segment={kind:page==='matrix'?'matrix_range':'amount_range',direction:'charge',bucket:'band:0',...(page==='matrix'?{hour:12}:{})};h.c.liveMatrixSegment(encodeURIComponent(JSON.stringify(segment)));await h.c.liveAnalysisAction(encodeURIComponent(JSON.stringify(segment)),'daily');await settle();
-  const drill=h.calls.findLast(q=>q.view==='drilldown');assert(drill);assert.deepEqual(drill.amountBands,orders[0].amountBands);assert.equal(h.calls.filter(q=>q.action==='rates').length,1);
+  const drill=h.calls.findLast(q=>q.view==='drilldown');assert(drill);assert.deepEqual(drill.amountBands,chartOrders[0].amountBands);assert.equal(h.calls.filter(q=>q.action==='rates').length,1);
  }
 });
 

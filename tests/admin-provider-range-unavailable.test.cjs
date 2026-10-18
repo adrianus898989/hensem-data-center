@@ -27,3 +27,8 @@ test('same exact live scope preserves its last complete table on forced transien
  const h=await fixture();h.setDay('2026-10-14');await h.c.liveQuery();await settle();assert(h.L.retainedContent);const old=h.L.retainedContent,scope=old.queryScope;assert.equal(old.providerReadMode,'live');assert.equal(scope,h.L.queryScope);assert.match(old.html,/Synthetic provider/);
  h.override(q=>main(q)?prepared(q,'building'):undefined);await h.c.liveQuery(true);await settle();assert.equal(h.L.retainedContent,old);assert.equal(h.L.results.length,0);assert.equal(h.L.queryFailures.length,18);assert.match(h.html(),/本次读取未完成，以下保留上次查询结果/);assert.match(h.html(),/live-retained-result/);assert.match(h.html(),/Synthetic provider/);assert.doesNotMatch(h.html(),/data-provider-published|缺 54 项|主表已完成/);assert.equal(h.L.retainedContent.queryScope,scope);
 });
+
+test('prepared yesterday comparison completes before an independent slow workorder read, without starting another attachment lane',async()=>{
+ const h=await fixture(),wait=deferred();h.setNow('2026-10-18T12:00:00Z');range(h);let work=0;h.override(q=>q.action==='workorders'?(work++,wait.promise):main(q)?prepared(q):undefined);const run=h.c.liveQuery();await settle();assert.equal(h.L.results.length,18);assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.L.comparisonResults.length,18);assert.equal(work,1);assert.equal(h.L.workordersLoading,true);assert.equal(h.L.providerIntake,null);assert.equal(h.L.providerComparisonIntake,null);
+ wait.resolve({rows:[],total:0,byProvider:[],byDirection:{charge:{submittedCount:0}}});await run;await settle();assert.equal(h.L.workordersLoading,false);assert.equal(work,1);assert.equal(h.L.comparisonStatus,'ready');
+});
