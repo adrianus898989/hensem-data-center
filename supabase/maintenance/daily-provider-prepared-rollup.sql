@@ -48,19 +48,16 @@ union all select 'snapshot_functions',to_jsonb((select md5(coalesce(jsonb_agg(to
 -- BEGIN daily provider read hooks. Closed native days, current prepared heads, no order scan.
 -- New names and the two existing wrappers are outside the financial dependency
 -- selectors. The existing reader remains the sole admission/authorization path.
-CREATE OR REPLACE FUNCTION private.dashboard_admin_daily_provider_fold(p_items jsonb, p_request jsonb, p_target jsonb)
- RETURNS jsonb
- LANGUAGE plpgsql
- STABLE
- SET search_path TO ''
-AS $function$
+create or replace function private.dashboard_admin_daily_provider_fold(
+ p_items jsonb,p_request jsonb,p_target jsonb
+) returns jsonb language plpgsql stable security invoker set search_path='' as $function$
 declare
- item jsonb;current_row jsonb;leaf jsonb;bucket record;key text;bad boolean;
+ item jsonb;current_row jsonb;leaf jsonb;bucket record;key text;n numeric;bad boolean;
  all_rows jsonb:='[]';providers jsonb:='[]';summaries jsonb:='[]';row_value jsonb;
  payload jsonb;first_payload jsonb;pub jsonb;components jsonb:='[]';baseq jsonb;canonicalq jsonb;
  computed timestamptz;expires timestamptz;cutoff timestamptz;maxcutoff timestamptz;
  next_refresh timestamptz;refresh_known boolean:=true;identity_token text;fresh boolean:=true;complete boolean:=true;refresh_state text:='idle';
- evidence jsonb;additive_values jsonb;stamp text;total numeric;matched numeric;unmatched numeric;fee numeric;
+ evidence jsonb;stamp text;total numeric;matched numeric;unmatched numeric;fee numeric;
  counts constant text[]:=array['all_count','success_count','created_success_count','pending_count','failed_count','rejected_count','unknown_count','missing_amount_count','negative_amount_count','fee_low_count','fee_high_count','fee_gap_count','fee_unpriced_count','fee_version_matched_count','fee_version_unmatched_count'];
  amounts constant text[]:=array['all_amount','success_amount','pending_amount','failed_amount','rejected_amount','unknown_amount','fee_low_amount','fee_high_amount','fee_gap_amount'];
  optional_counts constant text[]:=array['fee_exempt_count','reviewed_pending_count'];
@@ -143,21 +140,11 @@ begin
    'items',bucket.leaves,'fee_items',bucket.leaves,'provider_names',(select jsonb_agg(name order by name)from(
     select distinct name from jsonb_array_elements(bucket.leaves)r cross join lateral jsonb_array_elements_text(
      jsonb_build_array(r->>'provider')||case when jsonb_typeof(r->'provider_names')='array'then r->'provider_names'else'[]'::jsonb end)n(name)where name is not null)a));
-  -- Decode each bucket once and aggregate the exact same finite additive ABI.
-  -- Optional fields absent from every leaf stay absent; any missing/null leaf
-  -- still makes a present metric unknown. Monetary sums remain numeric text.
-  with leaves as materialized(select value fact from jsonb_array_elements(bucket.leaves)),
-  metrics as(
-   select metric,bool_or(fact->>metric is null)metric_unknown,
-    sum((fact->>metric)::numeric)metric_sum,bool_or(fact?metric)metric_present
-   from leaves cross join unnest(counts||optional_counts||amounts||optional_amounts)keys(metric)
-   group by metric
-  )
-  select coalesce(jsonb_object_agg(metric,case when metric_unknown then'null'::jsonb
-   when metric=any(counts||optional_counts)then to_jsonb(metric_sum)
-   else to_jsonb(metric_sum::text)end),'{}'::jsonb)into additive_values
-  from metrics where not(metric=any(optional_counts||optional_amounts))or metric_present;
-  row_value:=row_value||additive_values;
+  foreach key in array counts||optional_counts||amounts||optional_amounts loop
+   if(key=any(optional_counts)or key=any(optional_amounts))and not exists(select 1 from jsonb_array_elements(bucket.leaves)r where r?key)then continue;end if;
+   select bool_or(r->>key is null),sum((r->>key)::numeric)into bad,n from jsonb_array_elements(bucket.leaves)r;
+   row_value:=row_value||jsonb_build_object(key,case when bad then'null'::jsonb when key=any(counts||optional_counts)then to_jsonb(n)else to_jsonb(n::text)end);
+  end loop;
   matched:=(row_value->>'fee_version_matched_count')::numeric;unmatched:=(row_value->>'fee_version_unmatched_count')::numeric;
   if matched is null or unmatched is null then fee:=null;
   elsif matched>0 then
