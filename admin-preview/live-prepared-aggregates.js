@@ -1,4 +1,4 @@
-/* Exact prepared aggregates. Optional document-only completion reuse; no raw-order fallback or implicit retries. */
+/* Exact prepared aggregates. Optional completion reuse and bounded derived-base polling; no raw-order fallback. */
 (function(root){
  'use strict';
  const statuses=new Set(['ready','missing','stale','unsupported','building']);
@@ -58,6 +58,9 @@
   const publicationVersion=options.publicationVersion===2?2:1;
   const transport=options.request,now=options.now||Date.now,maxBatchSize=Math.max(1,Math.min(50,Math.floor(options.maxBatchSize||50))),maxConcurrent=Math.max(1,Math.min(4,Math.floor(options.maxConcurrent||2))),maxResponseBytes=Math.max(1024,Math.min(32*1024*1024,options.maxResponseBytes||16*1024*1024));
   const completedTtl=Number.isFinite(options.completedCacheTtlMs)?Math.max(0,Math.min(30000,options.completedCacheTtlMs)):0;
+  const pollMaxMs=Number.isFinite(options.derivedPollMaxMs)?Math.max(0,Math.min(60000,options.derivedPollMaxMs)):0;
+  const pollInterval=Number.isFinite(options.derivedPollIntervalMs)?Math.max(250,Math.min(60000,options.derivedPollIntervalMs)):1500;
+  const pollMaxAttempts=Number.isFinite(options.derivedPollMaxAttempts)?Math.max(1,Math.min(40,Math.floor(options.derivedPollMaxAttempts))):40;
   const completed=new Map();let completedBytes=0,completedGeneration=0;
   const jobs=new Map(),queue=[],batches=new Set();let generation=0,context=null,scheduled=false;
   const nativeKey=platform=>encode([identity(platform),platform.capabilities??null]);
@@ -67,7 +70,7 @@
   function clearCompleted(){completed.clear();completedBytes=0;completedGeneration++;}
   function invalidateCompleted(family,keepKey){
    for(const [key,entry]of completed)if(entry.family===family){entry.invalidated=true;forgetCompleted(key);}
-   for(const job of jobs.values())if(job.family===family&&job.key!==keepKey)job.completedInvalidated=true;
+   for(const job of [...jobs.values()])if(job.family===family&&job.key!==keepKey){job.completedInvalidated=true;if(job.polling){for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));abandon(job);}}
   }
   function cachedCompleted(key,q,native){
    if(!completedTtl)return null;const entry=completed.get(key),stamp=now();if(!entry)return null;
@@ -89,8 +92,9 @@
   const authorityDenied=error=>['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(error?.code||''));
   function contextValue(){const value=options.context();if(typeof value!=='string'||!value)throw failure('cancelled');return value;}
   function settle(waiter,error,result){if(waiter.done)return;waiter.done=true;waiter.signal?.removeEventListener('abort',waiter.abort);waiter.job.waiters.delete(waiter);if(error)waiter.reject(error);else waiter.resolve(copy(result));}
-  function release(job){if(jobs.get(job.key)===job)jobs.delete(job.key);}
-  function cancel(){generation++;for(const job of jobs.values())for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));jobs.clear();queue.length=0;for(const batch of batches)batch.controller.abort();batches.clear();}
+  function stopTimers(job){if(job.pollTimer!==null)clearTimeout(job.pollTimer);if(job.deadlineTimer!==null)clearTimeout(job.deadlineTimer);job.pollTimer=job.deadlineTimer=null;}
+  function release(job){stopTimers(job);job.phase='finished';if(jobs.get(job.key)===job)jobs.delete(job.key);}
+  function cancel(){generation++;for(const job of jobs.values()){stopTimers(job);for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));}jobs.clear();queue.length=0;for(const batch of batches)batch.controller.abort();batches.clear();}
   function clear(){clearCompleted();cancel();}
   function syncContext(){let current;try{current=contextValue();}catch(error){clear();context=null;throw error;}if(context!==current){clear();context=current;}return current;}
   function active(waiter){
@@ -102,24 +106,35 @@
   function abandon(job){if(job.waiters.size)return;release(job);if(job.batch&&job.batch.jobs.every(item=>!item.waiters.size)){job.batch.controller.abort();batches.delete(job.batch);}schedule();}
   function schedule(){if(scheduled)return;scheduled=true;Promise.resolve().then(()=>{scheduled=false;drain();});}
   function deliver(job,error,result){let delivered=0;for(const waiter of [...job.waiters])if(active(waiter)){settle(waiter,error,result);delivered++;}release(job);return delivered;}
+  function pollable(item,job){return pollMaxMs>0&&publicationVersion===2&&job.q.view==='providers'&&item?.status==='building'&&item.reason==='daily_provider_base_preparing'&&item.result===null&&item.publication===null;}
+  function endPoll(job){if(!prune(job)){abandon(job);return;}deliver(job,failure('building'));abandon(job);}
+  function waitForBase(job){
+   if(job.completedInvalidated){deliver(job,failure('cancelled'));abandon(job);return;}
+   if(!job.polling){job.polling=true;job.deadlineAt=now()+pollMaxMs;job.deadlineTimer=setTimeout(()=>{job.deadlineTimer=null;endPoll(job);},pollMaxMs);}
+   if(now()>=job.deadlineAt||job.attempts>=pollMaxAttempts){endPoll(job);return;}
+   // Only the exact still-building native job waits. Its HTTP batch has ended;
+   // ready peers are released and never re-read. Force is sent only initially.
+   job.phase='waiting';job.batch=null;
+   job.pollTimer=setTimeout(()=>{job.pollTimer=null;if(!prune(job)){abandon(job);return;}if(now()>=job.deadlineAt){endPoll(job);return;}job.phase='queued';queue.push(job);schedule();},Math.min(pollInterval,job.deadlineAt-now()));
+  }
   async function run(batch){
    try{
-    const response=await transport({action:'aggregatePrepared',requests:batch.jobs.map(job=>copy(job.q)),...(publicationVersion===2?{publicationVersion:2,...(batch.jobs[0].forceRefresh?{forceRefresh:true}:{})}:{})},{signal:batch.controller.signal});
+    const response=await transport({action:'aggregatePrepared',requests:batch.jobs.map(job=>copy(job.q)),...(publicationVersion===2?{publicationVersion:2,...(batch.forceRefresh?{forceRefresh:true}:{})}:{})},{signal:batch.controller.signal});
     if(batch.controller.signal.aborted)return;
     // Size checking precedes recursive structural validation. The transport also
     // bounds HTTP bodies; this guards unexpectedly expanded decoded payloads.
     const serialized=JSON.stringify(response);if(!serialized||serialized.length>maxResponseBytes||new TextEncoder().encode(serialized).length>maxResponseBytes||response.version!==publicationVersion||!Array.isArray(response.items)||response.items.length!==batch.jobs.length)throw failure('invalid');
     const expected=new Map(batch.jobs.map(job=>[job.requestKey,job])),matched=new Map();
     for(const item of response.items){const key=encode(item?.request);if(!expected.has(key)||matched.has(key))throw failure('invalid');matched.set(key,item);}
-    for(const job of batch.jobs){if(!prune(job))continue;try{const item=matched.get(job.requestKey),result=validateResult(item,job.q,job.native,now(),publicationVersion);if(deliver(job,null,result))rememberCompleted(job,item);}catch(error){deliver(job,error);}}
-   }catch(error){if(authorityDenied(error))clearCompleted();for(const job of batch.jobs)deliver(job,error);}
-   finally{batches.delete(batch);for(const job of batch.jobs){if(job.waiters.size)deliver(job,failure('cancelled'));release(job);}schedule();}
+    for(const job of batch.jobs){if(!prune(job))continue;if(job.polling&&now()>=job.deadlineAt){endPoll(job);continue;}try{const item=matched.get(job.requestKey);if(pollable(item,job)){waitForBase(job);continue;}const result=validateResult(item,job.q,job.native,now(),publicationVersion);if(deliver(job,null,result))rememberCompleted(job,item);}catch(error){deliver(job,error);}}
+   }catch(error){if(authorityDenied(error)){clearCompleted();if(pollMaxMs>0){for(const job of [...jobs.values()])deliver(job,error);cancel();}}for(const job of batch.jobs)deliver(job,error);}
+   finally{batches.delete(batch);for(const job of batch.jobs){if(job.phase==='waiting')continue;if(job.waiters.size)deliver(job,failure('cancelled'));release(job);}schedule();}
   }
   function drain(){
    while(batches.size<maxConcurrent&&queue.length){
-    const selected=[];while(queue.length&&selected.length<maxBatchSize){if(selected.length&&queue[0].forceRefresh!==selected[0].forceRefresh)break;const job=queue.shift();if(jobs.get(job.key)===job&&prune(job))selected.push(job);}
+    const selected=[];while(queue.length&&selected.length<maxBatchSize){if(selected.length&&(queue[0].forceRefresh&&!queue[0].polling)!==(selected[0].forceRefresh&&!selected[0].polling))break;const job=queue.shift();if(jobs.get(job.key)!==job||!prune(job))continue;if(job.polling&&(now()>=job.deadlineAt||job.attempts>=pollMaxAttempts)){endPoll(job);continue;}selected.push(job);}
     if(!selected.length)continue;
-    const batch={jobs:selected,controller:new AbortController()};for(const job of selected)job.batch=batch;batches.add(batch);void run(batch);
+    const batch={jobs:selected,forceRefresh:selected[0].forceRefresh&&!selected[0].polling,controller:new AbortController()};for(const job of selected){job.batch=batch;job.phase='active';job.attempts++;}batches.add(batch);void run(batch);
    }
   }
   function read(request,readOptions={}){
@@ -131,7 +146,8 @@
     if(forceRefresh)invalidateCompleted(family,key);
     else{const cached=cachedCompleted(cacheKey,q,native);if(cached){const mine=generation,cacheGeneration=completedGeneration;return Promise.resolve().then(()=>{if(mine!==generation||cacheGeneration!==completedGeneration||cached.entry.invalidated||readOptions.signal?.aborted||scope!==syncContext()||readOptions.isCurrent&&!readOptions.isCurrent()||nativeKey(options.platform(q.platformId))!==nativeIdentity)throw failure('cancelled');const current=cachedCompleted(cacheKey,q,native);return current?copy(current.result):read(q,readOptions);});}}
     let job=jobs.get(key);if(job?.completedInvalidated){for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));abandon(job);job=null;}
-    if(!job){job={key,requestKey,q,native,nativeKey:nativeIdentity,forceRefresh,context:scope,generation,completedGeneration,completedKey:cacheKey,family,waiters:new Set(),batch:null};jobs.set(key,job);queue.push(job);}
+    if(!job&&!forceRefresh&&pollMaxMs>0)job=[...jobs.values()].find(other=>other.polling&&!other.completedInvalidated&&other.context===scope&&other.nativeKey===nativeIdentity&&other.requestKey===requestKey);
+    if(!job){job={key,requestKey,q,native,nativeKey:nativeIdentity,forceRefresh,context:scope,generation,completedGeneration,completedKey:cacheKey,family,waiters:new Set(),batch:null,phase:'queued',polling:false,pollTimer:null,deadlineTimer:null,deadlineAt:null,attempts:0};jobs.set(key,job);queue.push(job);}
     const promise=new Promise((resolve,reject)=>{const waiter={job,resolve,reject,signal:readOptions.signal,isCurrent:readOptions.isCurrent,done:false,abort:null};waiter.abort=()=>{settle(waiter,failure('cancelled'));abandon(job);};job.waiters.add(waiter);waiter.signal?.addEventListener('abort',waiter.abort,{once:true});});schedule();return promise;
    }catch(error){return Promise.reject(error);}
   }
