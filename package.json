@@ -31,7 +31,7 @@
     "test:ar-native-submission": "node --test tests/ar-native-submission-compact-summary-sql.test.cjs",
     "test:provider-web-repair": "node --test tests/india-approved-provider-query-union.test.cjs tests/admin-team-display-policy.test.cjs tests/admin-provider-range-unavailable.test.cjs tests/admin-configuration-sandbox-save.test.cjs && pnpm run test:member-page-contract",
     "test:member-page-contract": "node --test tests/admin-member-page-contract.test.cjs tests/admin-page-action-denial.test.cjs",
-    "test:prepared-read-model": "node --test tests/admin-prepared-completed-cache.test.cjs tests/admin-prepared-cache-integration.test.cjs tests/admin-report-compact-state.test.cjs tests/admin-member-counts-fallback-once.test.cjs tests/daily-prepared-provider-rollup.test.cjs tests/admin-workorder-exact-cache.test.cjs tests/admin-workorder-cache-integration.test.cjs"
+    "test:prepared-read-model": "node --test tests/admin-prepared-completed-cache.test.cjs tests/admin-prepared-cache-integration.test.cjs tests/admin-report-compact-state.test.cjs tests/admin-member-counts-fallback-once.test.cjs tests/daily-prepared-provider-rollup.test.cjs tests/admin-workorder-exact-cache.test.cjs tests/admin-workorder-cache-integration.test.cjs tests/daily-provider-base-cache.test.cjs tests/daily-provider-base-cache-projection.test.cjs"
   },
   "dependencies": {
     "googleapis": "^144.0.0",
