@@ -163,12 +163,33 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
   const exactEqual=(a,b)=>{if(a==null||b==null)return a==null&&b==null;const x=decimalSort(a),y=decimalSort(b);return !!x&&!!y&&x.n*y.d===y.n*x.d;};
   const numericValue=value=>{if(value==null)return null;const x=decimalSort(value);if(!x||x.n%x.d!==0n)return value;const n=x.n/x.d;return n>=-9007199254740991n&&n<=9007199254740991n?Number(n):value;};
   const remainder=row=>{if(Object.hasOwn(row,'unclassifiedCount'))return row.unclassifiedCount;const values=['total','autoCount','manualCount'].map(k=>observedCount(row[k]));if(values.some(n=>n===null))throw Error('unknown classification');return String(values[0]>values[1]+values[2]?values[0]-values[1]-values[2]:0n);};
+  // A single-day source placeholder proves no observed counts, not a zero day.
+  // It may not contradict another observed native's exact day union; its NULLs stay intact.
+  const unobservedDayPlaceholder=(r,day)=>!!day&&r.source==='NEWAR'&&r.statisticBasis==='created_at_current_status'&&r.complete===false&&r.coveredDays===0&&r.expectedDays===1&&r.dataDate===day.day&&r.durationSampleCount===0&&['total','success','rejected','autoCount','manualCount','unclassifiedCount','durationTotalSeconds','avgSeconds'].every(k=>Object.hasOwn(r,k)&&r[k]===null);
+  const durationText=value=>value===null||typeof value==='string'&&value.length<=512&&/^(0|[1-9]\d*)(\.\d+)?$/.test(value);
+  const durationLanding=(text,value)=>durationText(text)&&(text===null?value===null:typeof value==='number'?Number.isFinite(value)&&Number(text)===value:typeof value==='string'&&exactEqual(text,value));
+  function projectionDuration(data,index){
+   if(!Object.hasOwn(data,'teamDurationExact'))return {rows:data.rows,totals:data.totals,previousTotals:data.previousTotals};
+   const e=data.teamDurationExact,exactKeys=(x,keys)=>x&&typeof x==='object'&&!Array.isArray(x)&&Object.keys(x).length===keys.length&&keys.every(k=>Object.hasOwn(x,k));
+   if(!exactKeys(e,['contract','direction','window','current','previous'])||e.contract!=='auto-team-duration-v1'||e.direction!=='withdraw'||JSON.stringify(e.window)!==JSON.stringify([data.windows?.creationStartAt,data.windows?.creationEndAt,data.previousStartDate])||!exactKeys(e.current,['rows','total'])||!exactKeys(e.previous,['total'])||!Array.isArray(e.current.rows)||e.current.rows.length!==data.rows.length||data.previousRowsContract!=='auto-team-previous-v1')throw Error('unknown duration evidence');
+   const rows=data.rows.map((row,i)=>{const value=e.current.rows[i];if(!exactKeys(value,['index','country','platform','value'])||value.index!==i||value.country!==row.country||value.platform!==row.platform||nativeFor(value,index)!==nativeFor(row,index)||!Object.hasOwn(row,'durationTotalSeconds')||!durationLanding(value.value,row.durationTotalSeconds))throw Error('duration row evidence mismatch');return {...row,durationTotalSeconds:value.value};});
+   if(!Object.hasOwn(data.totals,'durationTotalSeconds')||!durationLanding(e.current.total,data.totals.durationTotalSeconds)||data.previousTotals!=null&&(!Object.hasOwn(data.previousTotals,'durationTotalSeconds')||!durationLanding(e.previous.total,data.previousTotals.durationTotalSeconds))||data.previousTotals==null&&e.previous.total!==null)throw Error('duration total evidence mismatch');
+   return {rows,totals:{...data.totals,durationTotalSeconds:e.current.total},previousTotals:data.previousTotals==null?null:{...data.previousTotals,durationTotalSeconds:e.previous.total}};
+  }
+  function completePreviousRows(data,index){
+   if(!Object.hasOwn(data,'previousRows')&&!Object.hasOwn(data,'previousRowsContract'))return null;
+   if(data.previousRowsContract!=='auto-team-previous-v1'||!Array.isArray(data.previousRows)||data.previousRows.length>500||data.previousStartDate!==data.previousEndDate)throw Error('unknown previous rows contract');
+   const rows=data.previousRows,keys=new Map();for(const row of rows){if(!row||row.dataDate!==data.previousStartDate||data.teamDurationExact&&!durationText(row.durationTotalSeconds))throw Error('unknown previous row date');const key=nativeFor(row,index);if(keys.has(key))throw Error('duplicate previous native');keys.set(key,row);}
+   for(const row of data.rows){const other=keys.get(nativeFor(row,index));if(!!row.previous!==!!other)throw Error('previous native join mismatch');if(row.previous)for(const k of ['total','success','rejected','autoCount','manualCount','unclassifiedCount','durationSampleCount','durationTotalSeconds'])if(Object.hasOwn(row.previous,k)&&!(k==='durationTotalSeconds'&&data.teamDurationExact?durationLanding(other[k],row.previous[k]):exactEqual(row.previous[k],other[k])))throw Error('previous row differs from original');}
+   return rows;
+  }
   // Reconcile every additive field against the original server total before permitting a subset.
   // Equal per-native day cardinality and union cardinality prove the date sets coincide.
   function scopeTotals(rows,original,verify=false,observedDay=null){
+   if(!verify&&(!rows.length||rows.every(r=>r.total==null)))throw Error('no observed selected rows');
    if(!rows.length){if(verify&&original!=null&&Object.keys(original).length)throw Error('unrepresented totals');return {};}
    const observedPartial=r=>observedDay&&original?.coveredDays===1&&r.coveredDays===0&&r.expectedDays===1&&r.complete===false&&['KB','NEWAR'].includes(String(r.source||'').toUpperCase())&&observedCount(r.total)>0n&&(observedDay.previous?r.dataDate==null||r.dataDate===observedDay.day:r.dataDate===observedDay.day);
-   if(!original||!Number.isSafeInteger(original.coveredDays)||original.coveredDays<1||rows.some(r=>r.coveredDays!==original.coveredDays&&!observedPartial(r)))throw Error('unproven day union');
+   if(!original||!Number.isSafeInteger(original.coveredDays)||original.coveredDays<1||rows.every(r=>unobservedDayPlaceholder(r,observedDay))||rows.some(r=>r.coveredDays!==original.coveredDays&&!observedPartial(r)&&!(original.coveredDays===1&&unobservedDayPlaceholder(r,observedDay))))throw Error('unproven day union');
    const result={},fields=['total','success','rejected','autoCount','manualCount','unclassifiedCount','durationSampleCount','durationTotalSeconds'];
    const allowed=new Set([...fields,'avgSeconds','durationBasis','platforms','coveredDays','classificationAvailable','classificationPartial','classificationComparable','reasonAvailable','comparisonComparable','comparisonBasis']);
    if(Object.keys(original).some(k=>!allowed.has(k)))throw Error('unknown total contract');
@@ -195,8 +216,8 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
     // Validate this query's exact groups and every physical peer, including other countries.
     nativeIndex(catalog().filter(p=>scopeKeys.has(nativeKey(p))||physical.has(nativePhysical(p))));
     const index=nativeIndex(S.applied.catalog),seen=new Set();for(const row of d.rows){const key=nativeFor(row,index);if(seen.has(key))throw Error('duplicate native');seen.add(key);}
-    scopeTotals(d.rows,d.totals,true,singleObservedDay(d,q));
-    const prior=d.rows.filter(r=>r.previous).map(r=>r.previous);if(d.previousTotals!=null)scopeTotals(prior,d.previousTotals,true,singleObservedDay(d,q,true));else if(prior.length)throw Error('missing prior totals');
+    const durationData=projectionDuration(d,index);scopeTotals(durationData.rows,durationData.totals,true,singleObservedDay(d,q));
+    const prior=completePreviousRows(d,index)??d.rows.filter(r=>r.previous).map(r=>r.previous);if(d.previousTotals!=null)scopeTotals(prior,durationData.previousTotals,true,singleObservedDay(d,q,true));else if(prior.length)throw Error('missing prior totals');
     const serialized=JSON.stringify(d);if(serialized.length*2>8*1024*1024)throw Error('snapshot too large');
     loadedBase={data:JSON.parse(serialized),applied:clone(S.applied),stamp:nativeStamp(),index};
    }catch{loadedBase=null;}
@@ -207,10 +228,11 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
     const q=query(),old=base.applied.query;
     if(['startAt','endAt','successStartAt','successEndAt','successBasis','windowVersion','view','daily'].some(k=>q[k]!==old[k])||displayCountry()!==base.applied.country||S.historical||S.platforms.length||S.rowCountry)return false;
     const chosen=nativeIndex(scopeCatalog());if([...chosen.keys()].some(k=>!base.index.has(k)))return false;
-    const keep=row=>chosen.has(nativeFor(row,base.index)),d=clone(base.data),rows=d.rows.filter(keep),prior=rows.filter(r=>r.previous).map(r=>r.previous);
-    const knownTop=new Set(['version','view','source','startDate','endDate','previousStartDate','previousEndDate','total','offset','limit','rows','totals','previousTotals','comparison','platformCoverage','canWriteNotes','platforms','notes','windows','secondary','creationAvailability','prepared','wgCoverage','yashCoverage','newarCoverage','arCoverage','duoliCoverage','country','rawCountry','scopeTargets','scopeKey']);
+    const keep=row=>chosen.has(nativeFor(row,base.index)),d=clone(base.data),durationData=projectionDuration(d,base.index),rows=d.rows.filter(keep),calculationRows=durationData.rows.filter(keep),matched=rows.filter(r=>r.previous),prior=d.previousRows?d.previousRows.filter(keep):matched.map(r=>r.previous);
+    const knownTop=new Set(['version','view','source','startDate','endDate','previousStartDate','previousEndDate','total','offset','limit','rows','totals','previousTotals','previousRows','previousRowsContract','teamDurationExact','comparison','platformCoverage','canWriteNotes','platforms','notes','windows','secondary','creationAvailability','prepared','wgCoverage','yashCoverage','newarCoverage','arCoverage','duoliCoverage','country','rawCountry','scopeTargets','scopeKey']);
     if(Object.keys(d).some(k=>!knownTop.has(k)))throw Error('unknown response contract');
-    d.rows=rows;d.total=rows.length;d.offset=0;d.limit=500;d.totals=scopeTotals(rows,base.data.totals,false,singleObservedDay(base.data,old));d.previousTotals=base.data.previousTotals==null?null:prior.length?scopeTotals(prior,base.data.previousTotals,false,singleObservedDay(base.data,old,true)):null;
+    d.rows=rows;if(d.previousRows)d.previousRows=prior;d.total=rows.length;d.offset=0;d.limit=500;d.totals=scopeTotals(calculationRows,durationData.totals,false,singleObservedDay(base.data,old));d.previousTotals=durationData.previousTotals==null?null:prior.length?scopeTotals(prior,durationData.previousTotals,false,singleObservedDay(base.data,old,true)):null;
+    if(d.teamDurationExact){d.teamDurationExact.current.rows=d.teamDurationExact.current.rows.filter(keep).map((r,i)=>({...r,index:i}));d.teamDurationExact.current.total=d.totals.durationTotalSeconds==null?null:String(d.totals.durationTotalSeconds);d.teamDurationExact.previous.total=d.previousTotals?.durationTotalSeconds==null?null:String(d.previousTotals.durationTotalSeconds);}
     const requiredNative=[...chosen].filter(([,p])=>String(p.source||p.system||'').toLowerCase()!=='withdraw').map(([key])=>key);
     if(d.secondary){if(!Array.isArray(d.secondary.rows)||d.secondary.createdIntersection!==false)throw Error('unknown secondary');d.secondary.rows=nativeMetadata(d.secondary.rows,base.index,'secondary');const keys=d.secondary.rows.map(r=>nativeFor(r,base.index));if(requiredNative.some(k=>!keys.includes(k)))throw Error('incomplete native secondary');d.secondary.rows=d.secondary.rows.filter(keep);}
     if(d.creationAvailability){if(!Array.isArray(d.creationAvailability))throw Error('unknown availability');d.creationAvailability=nativeMetadata(d.creationAvailability,base.index,'availability');const keys=d.creationAvailability.map(r=>nativeFor(r,base.index));if(requiredNative.some(k=>!keys.includes(k)))throw Error('incomplete native availability');d.creationAvailability=d.creationAvailability.filter(keep);}
@@ -228,7 +250,7 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
      if(c.complete===true)c.complete=c.days.every(x=>x.complete===true);
      if(Object.hasOwn(c,'latestCollectedAt'))c.latestCollectedAt=current.map(x=>x.latestCollectedAt).filter(Boolean).sort().at(-1)||null;
     }
-    d.comparison={...d.comparison,matchedRows:prior.length,totalRows:rows.length,complete:d.comparison?.complete===true&&rows.length>0&&rows.every(r=>r.previous&&r.previous.coveredDays===r.coveredDays)};
+    d.comparison={...d.comparison,matchedRows:matched.length,totalRows:rows.length,complete:d.comparison?.complete===true&&rows.length>0&&rows.every(r=>r.previous&&r.previous.coveredDays===r.coveredDays)};
     const applied={query:q,scopeKey:selectionKey(),country:displayCountry(),teams:activeTeams().slice(),catalog:scopeCatalog().map(p=>({...p})),platforms:[],rowCountry:'',historical:false,accessKey:accessKey(),nativeStamp:nativeStamp()};
     Object.assign(d,{country:applied.country,rawCountry:q.country,scopeTargets:q.scopeTargets||null,scopeKey:applied.scopeKey});
     S.applied=applied;S.data=d;S.dataKey=JSON.stringify([applied.scopeKey,q]);S.localSnapshot=true;S.serverPaging=false;S.dirty=false;S.page=1;S.secondaryPage=1;L.dirty=false;return true;
