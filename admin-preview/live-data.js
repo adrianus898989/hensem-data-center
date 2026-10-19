@@ -1039,13 +1039,15 @@
    if(!Array.isArray(part?.groups?.provider))return part;
    const p=part.platform,verified=nativeKnown&&text(p?.id)===nativeId&&text(p?.country)===nativeCountry&&source(p?.source)===nativeSource&&!!text(p?.name);
    const identity={platformId:p?.id,platform:p?.name,source:p?.source,country:p?.country};
+   const enrichedArrays=new WeakMap();
+   function enrichChildren(children,usable){let states=enrichedArrays.get(children);if(!states){states=new Map();enrichedArrays.set(children,states)}if(states.has(usable))return states.get(usable);const result=children.map(child=>enrich(child,usable));states.set(usable,result);return result;}
    function enrich(row,parentVerified){
     if(!row||typeof row!=='object'||Array.isArray(row))return row;
     const missing=value=>value===undefined||value===null||typeof value==='string'&&!value.trim();
     const conflicts=Object.entries(identity).some(([key,value])=>!missing(row[key])&&(typeof row[key]!=='string'||(key==='source'?source(row[key])!==source(value):text(row[key])!==text(value))));
     const usable=!!parentVerified&&!conflicts&&row.nativeFeeIdentityVerified!==false,copy={...row,nativeFeeIdentityVerified:usable};
     if(usable)for(const [key,value]of Object.entries(identity))if(missing(row[key]))copy[key]=value;
-    for(const key of ['items','fee_items'])if(Array.isArray(row[key]))copy[key]=row[key].map(child=>enrich(child,usable));
+    for(const key of ['items','fee_items'])if(Array.isArray(row[key]))copy[key]=enrichChildren(row[key],usable);
     return copy;
    }
    return {...part,groups:{...part.groups,provider:part.groups.provider.map(row=>enrich(row,verified))}};
@@ -1138,7 +1140,7 @@
  }
  // Read the selected summary first. Unseen provider filters use the same
  // server-prepared base on demand instead of downloading every filter result.
- preparedAggregates=window.HensemPreparedAggregates?.create({request:(q,options)=>window.hensemLiveRequest(q,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?state.page+'|'+aggregateAccessContext():'',platform:id=>visibleCatalog().find(p=>p.id===id),publicationVersion:2,maxConcurrent:2,maxBatchSize:3,completedCacheTtlMs:preparedCompletionTtl,completedCacheMaxBytes:96*1024*1024,derivedPollMaxMs:60000,derivedPollIntervalMs:1500,derivedPollMaxAttempts:40});
+ preparedAggregates=window.HensemPreparedAggregates?.create({request:(q,options)=>window.hensemLiveRequest(q,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?state.page+'|'+aggregateAccessContext():'',platform:id=>visibleCatalog().find(p=>p.id===id),publicationVersion:2,providerLeafAliases:true,maxConcurrent:2,maxBatchSize:3,completedCacheTtlMs:preparedCompletionTtl,completedCacheMaxBytes:96*1024*1024,derivedPollMaxMs:60000,derivedPollIntervalMs:1500,derivedPollMaxAttempts:40});
  const usesPreparedAggregate=request=>statisticWindowsEnabled()&&request.action==='aggregate'&&request.view!=='drilldown'&&!['orderNumber','thirdPartyOrderNumber','systemOrderId','memberId','utr'].some(key=>request[key]);
  window.addEventListener?.('pagehide',()=>{clearAggregateCache();providerIntake?.clearCache?.();clearFeeLookupCache();});
  async function readAggregate(request,serial,allowCache=false,bounded=false){
