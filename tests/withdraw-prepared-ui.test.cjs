@@ -72,3 +72,10 @@ test('a late cancelled response cannot clear the newer selection deadline',async
 test('a submitted dirty filter does not ask the user to query again while its request is active',async()=>{
  const f=fixture();let run=f.page.load();f.pending.shift().resolve(data(3));await run;f.context.withdrawDate('from','2026-10-14');assert.match(f.page.render(),/筛选条件已修改/);run=f.page.load();assert.doesNotMatch(f.page.render(),/筛选条件已修改，点击查询更新/);assert.match(f.page.render(),/正在读取自动出款统计/);f.pending.shift().resolve(data(7));await run;
 });
+
+test('the final prepared wait is clamped to the remaining whole-read budget',async()=>{
+ const f=fixture(),clock=budgetClock(f),run=f.page.load();clock.set(59500);f.pending.shift().resolve({prepared:{status:'building'}});await run;assert.equal([...clock.timers.values()][0].ms,500);clock.set(60000);clock.fire();await new Promise(resolve=>setImmediate(resolve));assert.equal(f.calls.length,1);assert.equal(f.page.state.prepared.status,'paused');assert.equal(clock.timers.size,0);
+});
+test('a ready response past the deadline cannot bypass an event-loop-delayed timeout callback',async()=>{
+ const f=fixture(),clock=budgetClock(f),run=f.page.load();clock.set(60001);f.pending.shift().resolve(data(99));await run;assert.equal(f.page.state.data,null);assert.equal(f.page.state.applied,null);assert.equal(f.page.state.prepared.status,'paused');assert.equal(clock.timers.size,0);
+});
