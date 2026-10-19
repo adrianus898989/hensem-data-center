@@ -41,9 +41,9 @@
   const scopeContext=()=>{const next=String(accessContext()||'');if(next!==context){clearCache();context=next;}return next;};
   const fresh=(at,ttl)=>Number.isFinite(at)&&now()>=at&&now()-at<ttl;
   async function limited(q,check,concurrency){while(inFlight>=concurrency){check();await new Promise(resolve=>waiters.push(resolve));}check();const controller=typeof root.AbortController==='function'?new root.AbortController():null;controllers.add(controller);inFlight++;try{return await request(q,{signal:controller?.signal})}catch(error){check();if(['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code))dropCache();throw error;}finally{controllers.delete(controller);inFlight--;waiters.splice(0).forEach(wake=>wake());}}
-  async function load({platforms,direction,from,to,onProgress,concurrency=2}){
+  async function load({platforms,direction,from,to,onProgress,concurrency=2,isCurrent=()=>true}){
    concurrency=concurrency===1?1:2;
-   const actor=scopeContext(),current=revision,savedRevision=cacheRevision,check=()=>{if(scopeContext()!==actor||current!==revision)throw Error('采集核对已暂停');},allDays=dates(from,to);
+   const actor=scopeContext(),current=revision,savedRevision=cacheRevision,check=()=>{if(!isCurrent()||scopeContext()!==actor||current!==revision)throw Error('采集核对已暂停');},allDays=dates(from,to);
    if(catalog?.feeds&&!fresh(catalog.at,cacheMs))catalog=null;
    if(!catalog){const entry={feeds:null,at:null,promise:null};entry.promise=(async()=>{let r,operation='orderCatalog';for(let attempt=0;attempt<2;attempt++){try{r=await limited({action:'intakeCoverage',operation},check,concurrency);break}catch(error){check();if(operation==='orderCatalog'&&/逐日覆盖参数无效|订单采集目录操作暂不支持|invalid_coverage_request|unsupported.*operation/i.test(String(error?.message||''))){operation='catalog';r=await limited({action:'intakeCoverage',operation},check,concurrency);break;}if(attempt||!transient(error))throw error;}}check();if(r?.version!==1||r.complete!==true||!Array.isArray(r.feeds)||new Set(r.feeds.map(f=>f.id)).size!==r.feeds.length)throw Error('采集目录响应不完整');entry.feeds=r.feeds;entry.at=now();return r.feeds;})();catalog=entry;entry.promise.catch(()=>{if(catalog===entry)catalog=null;});}
    const feeds=await catalog.promise;check();
@@ -67,7 +67,7 @@
    publish();
    async function read(batch,start,end,retry=true){check();try{
     const response=await limited({action:'intakeCoverage',operation:'rows',feedIds:batch.map(f=>f.id),startAt:start,endAt:end},check,concurrency);check();
-    for(const [id,rows] of validate(response,batch,start,end)){groups.set(id,[...(groups.get(id)||[]),...rows]);if(actor&&savedRevision===cacheRevision){const f=batch.find(f=>f.id===id),key=fragmentKey(f,start,end);cache.delete(key);cache.set(key,{at:now(),ttl:fragmentTtl(f,end,rows),rows});while(cache.size>cacheLimit)cache.delete(cache.keys().next().value);}}publish();
+    for(const [id,rows] of validate(response,batch,start,end)){check();groups.set(id,[...(groups.get(id)||[]),...rows]);if(actor&&savedRevision===cacheRevision){const f=batch.find(f=>f.id===id),key=fragmentKey(f,start,end);cache.delete(key);cache.set(key,{at:now(),ttl:fragmentTtl(f,end,rows),rows});while(cache.size>cacheLimit)cache.delete(cache.keys().next().value);}}publish();
    }catch(error){check();if(retry&&transient(error)){
      // Each affected platform gets at most one additional read, separately.
      for(const f of batch)await read([f],start,end,false);

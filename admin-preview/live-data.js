@@ -95,7 +95,7 @@
  const phasedReadBusy=()=>!!readPhase&&readPhase.serial===L.serial&&readPhase.page===state.page;
  function beginReadPhases(serial){if(!usesReadPhases(state.page)&&state.page!=='events')return;readPhase={serial,page:state.page,label:statisticWindowsEnabled()?'读取已准备统计':'读取当期订单'};cancelFeeLookup();window.HensemLiveSyncHealth?.cancel?.();window.hensemLiveCancelRequests?.(['syncHealth']);}
  function setReadPhase(serial,label){if(readPhase?.serial!==serial||serial!==L.serial)return false;readPhase.label=label;render();return true;}
- function endReadPhases(serial){if(readPhase?.serial!==serial)return;readPhase=null;if(serial!==L.serial)return;const resumeTrend=deferredMerchantTrend;deferredMerchantTrend=false;render();if(resumeTrend&&state.page==='merchants'&&L.view==='trend')void loadMerchantTrend();}
+ function endReadPhases(serial){if(readPhase?.serial!==serial)return;const phase=readPhase;readPhase=null;phase.cancelSupplementary?.();if(serial!==L.serial)return;const resumeTrend=deferredMerchantTrend;deferredMerchantTrend=false;render();if(resumeTrend&&state.page==='merchants'&&L.view==='trend')void loadMerchantTrend();}
  window.HensemLiveSyncHealth?.configure({request:q=>window.hensemLiveRequest(q),ready:()=>state.page!=='channel_status'&&!isSupervisorPage(state.page)&&L.pageQueried&&L.catalogReady&&L.initialReadComplete&&!L.loading&&!phasedReadBusy()&&!L.feeLookupLoading&&!submissionAnalysis?.isLoading?.()&&!reportData?.state.loading&&!reportData?.state.catalogBusy&&!L.queryRetrying&&L.comparisonStatus!=='loading'&&L.overviewSections?.status!=='loading'&&!['workordersLoading','autoWithdrawLoading','depositIssuesLoading','depositKycLoading','depositRecoveryLoading','providerConfigLoading','platformAssignmentsLoading','feeLoading'].some(key=>L[key])&&!(state.page==='collected_data'&&collectedPage.state.busy)&&!(state.page==='rates'&&window.HensemLiveRatesRestored?.snapshot().loading)&&!(state.page==='payout_config'&&['indexStatus','snapshotStatus'].some(key=>window.HensemLivePayoutConfig?.state()[key]==='loading')),onChange:()=>window.liveHeader?.()});
  L.feeView='original';if(window.HensemLiveRatesRestored)HensemLiveRatesRestored.configure({request:request=>window.hensemLiveRequest(request),isActive:()=>state.page==='rates',isRestrictedScope:()=>window.hensemDataScope?.mode!=='all',scopeKey:()=>window.hensemDataScope?.identity||'unverified'});
  if(['collection','providers','provider_daily','latency','events'].includes(state.page))L.direction='charge';if(['payout','stuck','provider_payout'].includes(state.page))L.direction='withdraw';window.adminLive=L;
@@ -182,13 +182,13 @@
  // tabs keep their displayed snapshot and never turn expiry into background IO.
  function prepareFeeLookupQuery(force=false){if(!feeLookupPages.has(state.page))return;cancelFeeLookup();const context=syncFeeLookupIdentity();if(force||!validFeeSnapshot(feeLookupSnapshot,context))clearFeeLookupCache();feeLookupIntent={context,page:state.page};}
  function readFeeLookupPage(request,signal){const controller=new AbortController();return new Promise((resolve,reject)=>{let settled=false,timer;const finish=(fn,value)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',cancel);fn(value)};const cancel=()=>{const error=Error('查询已取消');error.name='AbortError';finish(reject,error);controller.abort()};if(signal?.aborted){cancel();return;}signal?.addEventListener('abort',cancel,{once:true});timer=setTimeout(()=>{finish(reject,Error('费率读取超时，请点击重试费率；未读取部分保持未知'));controller.abort()},30000);try{Promise.resolve(window.hensemLiveRequest(request,{signal:controller.signal})).then(value=>finish(resolve,value),error=>finish(reject,error))}catch(error){finish(reject,error)}})}
- async function ensureFeeLookup(force=false,inPhase=false){
+ async function ensureFeeLookup(force=false,inPhase=false,isCurrent=()=>true){
   if(localPaginationPaint||L.feeLookupLoading||phasedReadBusy()&&!inPhase)return;if((L.loading&&!inPhase||L.restoredPage)&&!force)return;
   const context=syncFeeLookupIdentity();if(!roleAllowed(state.page,'view')||!roleAllowed(state.page,'query')){clearFeeLookupCache();L.feeLookupError='当前角色没有费率查询权限';return;}
   if(force)prepareFeeLookupQuery(true);else if(L.dirty||!feeLookupIntent||feeLookupIntent.context!==context||feeLookupIntent.page!==state.page)return;
   if(Array.isArray(L.feeLookupRows)||L.feeLookupError)return;
   const serial=++L.feeLookupSerial,batch={controller:new AbortController(),cachedSnapshot:validFeeSnapshot(feeLookupSnapshot,context)?feeLookupSnapshot:null,context,countries:feeLookupCountries(),page:state.page,intent:feeLookupIntent,querySerial:L.serial,dirtyScope:force&&L.dirty?aggregateQueryScope():null};feeLookupBatch=batch;L.feeLookupLoading=true;L.feeLookupError='';render();
-  const owned=()=>serial===L.feeLookupSerial&&feeLookupBatch===batch;
+  const owned=()=>serial===L.feeLookupSerial&&feeLookupBatch===batch&&isCurrent();
   const authorized=()=>context===feeLookupContext()&&roleAllowed(state.page,'view')&&roleAllowed(state.page,'query');
   try{const rows=[];for(const country of batch.countries||[null]){let total=null,offset=0;do{
    const result=await readFeeLookupPage({action:'rates',scopeType:'all',...(country?{country}:{}),offset,limit:500},batch.controller.signal);if(!owned())return;
@@ -211,7 +211,7 @@
  let pendingSnapshot=null,pendingAnalysis=null,pendingOrders=null,memberCounts=null,submissionAnalysis=null,dailyComparison=null,channelStatus=null,workordersReadCache=null;
  const providerIntake=window.HensemProviderIntake?.create({request:(r,options)=>window.hensemLiveRequest(r,options),accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():''});
  let publishedController=null;
- const cancelDataReads=()=>{cancelPublishedRead();cancelFeeLookup();readPhase=null;deferredMerchantTrend=false;cancelAggregateReads();workordersReadCache?.cancel();matrixCustom?.cancel();providerIntake?.cancel();memberCounts?.cancel();submissionAnalysis?.cancel();dailyComparison?.cancel();channelStatus?.cancel();pendingSnapshot?.cancel();pendingAnalysis?.cancel();pendingOrders?.cancel();reportData?.cancel();L.workordersSerial++;L.workordersLoading=false;if(L.overviewWorkordersStatus==='loading')L.overviewWorkordersStatus='idle';window.hensemLiveCancelRequests?.(['aggregate','details','analysisOrders','reportSummary','workorders','pendingSnapshot','pendingAnalysis','pendingOrders','memberDaily','submissionAnalysis','intakeCoverage','channelStatus','autoWithdraw','providerSnapshot']);};
+ const cancelDataReads=()=>{cancelPublishedRead();cancelFeeLookup();readPhase?.cancelSupplementary?.();readPhase=null;deferredMerchantTrend=false;cancelAggregateReads();workordersReadCache?.cancel();matrixCustom?.cancel();providerIntake?.cancel();memberCounts?.cancel();submissionAnalysis?.cancel();dailyComparison?.cancel();channelStatus?.cancel();pendingSnapshot?.cancel();pendingAnalysis?.cancel();pendingOrders?.cancel();reportData?.cancel();L.workordersSerial++;L.workordersLoading=false;if(L.overviewWorkordersStatus==='loading')L.overviewWorkordersStatus='idle';window.hensemLiveCancelRequests?.(['aggregate','details','analysisOrders','reportSummary','workorders','pendingSnapshot','pendingAnalysis','pendingOrders','memberDaily','submissionAnalysis','intakeCoverage','channelStatus','autoWithdraw','providerSnapshot']);};
  window.liveMultiClear=function(key){if(!['team','platform','source','provider','direction'].includes(key)||key==='platform'&&state.page==='orders'||key==='direction'&&(fixedDirection(state.page)||state.page==='latency'))return;L.openMulti='';L.multiSearch[key]='';setMultiValues(key,[])};
  window.liveMultiAll=function(key,all){if(state.page==='orders'&&key==='platform'&&all)return;const root=document.querySelector('details[data-multi="'+key+'"]');if(!root)return;const values=all?[...new Set([...activeValues(key),...Array.from(root.querySelectorAll('.live-multi-option:not([hidden]) input')).map(e=>e.value)])]:[];setMultiValues(key,values)};
  document.addEventListener?.('click',e=>{if(e.target.closest?.('.live-multi'))return;L.openMulti='';document.querySelectorAll('details[data-multi]').forEach(el=>el.open=false)});
@@ -680,13 +680,13 @@
   return {read,cancel,clear};
  }
  workordersReadCache=createWorkorderExactCache({request:(request,options)=>window.hensemLiveRequest(request,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?JSON.stringify([state.page,aggregateAccessContext()]):'',identity:()=>JSON.stringify(selected().map(p=>[p.id,p.source,p.sourceName,p.name,p.country,p.scopeGroup??p.scope_group,p.timezone,p.currency,p.capabilities??null]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))});
- async function workordersLoad(preserveView=false,inPhase=false,force=false){
+ async function workordersLoad(preserveView=false,inPhase=false,force=false,isCurrent=()=>true){
   if(!L.catalogReady||phasedReadBusy()&&!inPhase)return;
   if(isSuccessAnalysis()&&(!roleAllowed(state.page,'query')||!successFullDays()||L.dirty||L.queryScope!==aggregateQueryScope()))return;
   const originPage=state.page,originNavigation=navigationRevision,originSerial=L.serial,originSuccessContext=isSuccessAnalysis()?successIdentity():null,savedScroll=preserveView?pageScroll():null;
   const paint=()=>{render();if(savedScroll&&state.page===originPage&&navigationRevision===originNavigation)restorePageScroll(savedScroll)};
   const renderIfPage=()=>{if(state.page==='workorders'||isSuccessAnalysis()||providerDirection(state.page)||state.page==='overview'&&L.overviewAnalysis)paint()};
-  const serial=++L.workordersSerial,current=()=>serial===L.workordersSerial&&originSerial===L.serial&&originPage===state.page&&originNavigation===navigationRevision&&!L.dirty;
+  const serial=++L.workordersSerial,current=()=>serial===L.workordersSerial&&originSerial===L.serial&&originPage===state.page&&originNavigation===navigationRevision&&!L.dirty&&isCurrent();
   L.workordersLoading=true;L.workordersError='';L.workordersUnsupported=false;L.workorders=null;L.workordersScope=workordersScope();L.dirty=false;paint();
   try{
    const selectedPlatforms=selected(),list=selectedPlatforms.filter(p=>['ar','newar'].includes(orderSource(p)));
@@ -1143,17 +1143,18 @@
  preparedAggregates=window.HensemPreparedAggregates?.create({request:(q,options)=>window.hensemLiveRequest(q,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?state.page+'|'+aggregateAccessContext():'',platform:id=>visibleCatalog().find(p=>p.id===id),publicationVersion:2,providerLeafAliases:true,maxConcurrent:2,maxBatchSize:3,completedCacheTtlMs:preparedCompletionTtl,completedCacheMaxBytes:96*1024*1024,derivedPollMaxMs:60000,derivedPollIntervalMs:1500,derivedPollMaxAttempts:40});
  const usesPreparedAggregate=request=>statisticWindowsEnabled()&&request.action==='aggregate'&&request.view!=='drilldown'&&!['orderNumber','thirdPartyOrderNumber','systemOrderId','memberId','utr'].some(key=>request[key]);
  window.addEventListener?.('pagehide',()=>{clearAggregateCache();providerIntake?.clearCache?.();clearFeeLookupCache();});
- async function readAggregate(request,serial,allowCache=false,bounded=false){
+ async function readAggregate(request,serial,allowCache=false,bounded=false,isCurrent=()=>true){
+  if(!isCurrent())throw Error('查询已替换');
   if(usesPreparedAggregate(request)){
    if(!preparedAggregates)throw Error('统计读取组件未载入，请重新加载页面');
    const context=aggregateAccessContext(),page=state.page;let result;
-   try{result=await preparedAggregates.read(request,{forceRefresh:preparedRefreshScope?.serial===serial&&preparedRefreshScope.page===page&&preparedRefreshScope.context===context,isCurrent:()=>serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&roleAllowed(page,'view')&&roleAllowed(page,'query')});}
+   try{result=await preparedAggregates.read(request,{forceRefresh:preparedRefreshScope?.serial===serial&&preparedRefreshScope.page===page&&preparedRefreshScope.context===context,isCurrent:()=>isCurrent()&&serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&roleAllowed(page,'view')&&roleAllowed(page,'query')});}
    catch(error){if(['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code))clearAggregateCache();throw error;}
    if(orderSource(L.catalog.find(p=>p.id===request.platformId))==='panda'&&!pandaCoverageMatches(result,request,true))throw Error('熊猫所选创建窗口完整性尚未确认；已核验截止范围的证据无效，请重新读取');
    return {...mergeParts([result],L.catalog.find(p=>p.id===request.platformId)),_aggregateReadAt:Date.parse(result._preparedPublication.computedAt),_aggregateAccessContext:context,_aggregateView:request.view||'full'};
   }
   const context=aggregateAccessContext(),native=aggregateNativeIdentity(request);
-  const current=()=>serial===L.serial&&context===aggregateAccessContext()&&!!native&&native===aggregateNativeIdentity(request)&&roleAllowed(state.page,'query');
+  const current=()=>isCurrent()&&serial===L.serial&&context===aggregateAccessContext()&&!!native&&native===aggregateNativeIdentity(request)&&roleAllowed(state.page,'query');
   if(allowCache){const cached=cachedAggregate(request);if(cached){await Promise.resolve();if(!current())throw Error('查询已替换');return cached}}
   if(serial!==L.serial||!roleAllowed(state.page,'query')||!native)throw Error('查询权限或范围已变化');
   const parts=[],boundedProviderRead=bounded||isSuccessAnalysis()||(state.page==='overview'&&request.view==='providers')||!!providerDirection(state.page)||isFlowPage(state.page),day=86400000;
@@ -1297,15 +1298,15 @@
    catch(e){publish({status:'error',from,to,platforms:[],error:e.message||'采集核对失败'});}
   }
  }
- async function loadProviderIntake(serial,previous=false,concurrency=2){
+ async function loadProviderIntake(serial,previous=false,concurrency=2,isCurrent=()=>serial===L.serial){
   if(state.page==='overview')return previous?undefined:loadOverviewIntake(serial);
   if(!providerDirection(state.page)||state.page==='providers'&&L.providerReadMode==='published')return;
   const key=previous?'providerComparisonIntake':'providerIntake',range=HensemLiveCompare.windowFor(L.from,L.to,scopeZone(),L.queryNow);
   const from=(previous?range.previousFrom:L.from)?.slice(0,10),to=(previous?range.previousTo:L.to)?.slice(0,10);
   L[key]={status:'loading',from,to,platforms:[],error:''};render();
-  try{if(!providerIntake)throw Error('采集核对暂不可用');const result=await providerIntake.load({platforms:L.queryPlatforms.slice(),direction:providerDirection(state.page),from,to,concurrency,onProgress:progress=>{if(serial===L.serial){L[key]=progress;render();}}});if(serial===L.serial)L[key]=result;}
-  catch(e){if(serial===L.serial)L[key]={status:'error',from,to,platforms:[],error:e.message||'采集核对失败'};}
-  finally{if(serial===L.serial)render();}
+  try{if(!providerIntake)throw Error('采集核对暂不可用');const result=await providerIntake.load({platforms:L.queryPlatforms.slice(),direction:providerDirection(state.page),from,to,concurrency,isCurrent,onProgress:progress=>{if(isCurrent()){L[key]=progress;render();}}});if(isCurrent())L[key]=result;}
+  catch(e){if(isCurrent())L[key]={status:'error',from,to,platforms:[],error:e.message||'采集核对失败'};}
+  finally{if(isCurrent())render();}
  }
 
 
@@ -1450,23 +1451,40 @@
     submissionAnalysis?.cancel();L.comparisonStatus='error';L.comparisonError='当前订单统计未准备，暂不读取前期对比';render();return;
    }
    if(state.page==='providers'&&phasedReadBusy()){
-    // Keep both supplementary lanes behind completed main orders. A slow
-    // exclusion must not block fees/workorders, and each lane remains serial.
+    // One query-owned budget covers both supplementary lanes, starting only
+    // after the main table settles. Completed statistics remain available.
     setReadPhase(serial,L.queryFailures.length?'主表读取未完成，正在补充已返回范围的统计':'主表已完成，正在补充统计');
-    const exclusions=(async()=>{try{if(!submissionBatch)return;for(const platform of platforms){if(serial!==L.serial)return;await submissionBatch.read(platform.id);}if(serial===L.serial)await submissionBatch.finish();}catch(e){if(serial===L.serial){submissionAnalysis?.cancel();toast('剔除统计未完成，请重试未完成平台');}}})();
+    const phase=readPhase,deadlineAt=Date.now()+60000;let stopped=false,timer,release;
+    const deadline=new Promise(resolve=>{release=resolve;});
+    const owned=()=>serial===L.serial&&readPhase===phase&&!L.dirty;
+    const current=()=>!stopped&&owned()&&Date.now()<deadlineAt;
+    const close=()=>{if(stopped)return;stopped=true;clearTimeout(timer);release();};
+    phase.cancelSupplementary=close;
+    const pauseAtDeadline=()=>{
+     if(stopped||!owned()){close();return;}close();
+     const message='补充统计已达 60 秒，未完成部分已暂停；已完成结果保留，可单独重试';
+     const feePending=L.feeLookupLoading;cancelFeeLookup();if(feePending||L.feeLookupRows===null)L.feeLookupError=message;
+     submissionAnalysis?.pauseSupplementary();
+     if(L.comparisonStatus==='loading'){cancelAggregateReads();L.comparisonStatus='error';L.comparisonError=message;}
+     else if(L.comparisonStatus==='idle'){L.comparisonStatus='error';L.comparisonError=message;}
+     workordersReadCache?.cancel();L.workordersSerial++;L.workordersLoading=false;if(!L.workorders&&!L.workordersUnsupported)L.workordersError=message;
+     providerIntake?.cancel();for(const key of ['providerIntake','providerComparisonIntake'])if(L[key]?.status==='loading')L[key]={...L[key],status:'error',error:message};
+     L.progress=message;render();
+    };
+    timer=setTimeout(pauseAtDeadline,60000);
+    const exclusions=(async()=>{try{if(!submissionBatch)return;for(const platform of platforms){if(!current())return;await submissionBatch.read(platform.id);}if(current())await submissionBatch.finish();}catch(e){if(current()){submissionAnalysis?.cancel();toast('剔除统计未完成，请重试未完成平台');}}})();
     const attachments=(async()=>{
-     await ensureFeeLookup(false,true);if(serial!==L.serial)return;
-     // Prepared previous-period totals are independent of workorder evidence.
-     // Keep the same serial lane, and do not hold comparison behind a slow workorder read.
-     if(!statisticWindowsEnabled()&&platforms.length)await workordersLoad(false,true);if(serial!==L.serial)return;
+     await ensureFeeLookup(false,true,current);if(!current())return;
+     // Prepared comparison does not wait for independent workorder evidence.
+     if(!statisticWindowsEnabled()&&platforms.length)await workordersLoad(false,true,false,current);if(!current())return;
      if(L.queryWarnings.length){L.comparisonStatus='error';L.comparisonError='当前平台数据未完整，暂不比较昨日';}
-     else await liveComparison(serial,!force,1);if(serial!==L.serial)return;
-     if(statisticWindowsEnabled()&&platforms.length)await workordersLoad(false,true);if(serial!==L.serial)return;
-     await loadProviderIntake(serial,false,1);if(serial!==L.serial)return;
-     if(!L.queryWarnings.length)await loadProviderIntake(serial,true,1);
+     else await liveComparison(serial,!force,1,current);if(!current())return;
+     if(statisticWindowsEnabled()&&platforms.length)await workordersLoad(false,true,false,current);if(!current())return;
+     await loadProviderIntake(serial,false,1,current);if(!current())return;
+     if(!L.queryWarnings.length)await loadProviderIntake(serial,true,1,current);
     })();
-    const settled=await Promise.allSettled([exclusions,attachments]);
-    if(serial===L.serial&&settled[1].status==='rejected')toast('补充统计未完成，请重试；已完成数据保留');
+    try{const settled=await Promise.race([Promise.allSettled([exclusions,attachments]),deadline]);if(current()&&settled?.[1].status==='rejected')toast('补充统计未完成，请重试；已完成数据保留');}
+    finally{if(!stopped&&owned()&&Date.now()>=deadlineAt)pauseAtDeadline();else close();}
     return;
    }
    // Source-day reconciliation is supplementary evidence. A slow check must
@@ -1525,7 +1543,7 @@
   }finally{if(serial===L.serial)L.queryRetrying=false;endReadPhases(serial);}
 
  };
- async function liveComparison(serial,allowCache=false,concurrency=2){if(state.page==='providers'&&L.providerReadMode==='published')return;if(serial!==L.serial||isSuccessAnalysis()||isDailyComparison())return;if(L.results.some(r=>r.pandaCoverage?.reason==='verified_created_prefix_only')){L.comparisonStatus='error';L.comparisonError='本期仅有已核验截止范围，暂不与前期整日统计比较';L.comparisonResults=[];return;}if(statisticWindowsEnabled()&&selected().some(p=>{const q=statisticRequest(p);return Date.parse(q.endAt)>L.queryNow||Date.parse(q.successEndAt)>L.queryNow})){L.comparisonStatus='error';L.comparisonError='当前时间段尚未结束，待同口径前期汇总准备完成后比较';L.comparisonResults=[];return;}L.comparisonStatus='loading';render();let index=0,failed=false;const results=[];try{const requests=selected().map(p=>query(p,'aggregate',true));async function worker(){while(index<requests.length&&!failed&&serial===L.serial){const i=index++;try{const r=await readAggregate(requests[i],serial,allowCache);if(serial!==L.serial||failed)return;results[i]=r}catch(e){failed=true;throw e}}}const workers=Math.min(statisticWindowsEnabled()?50:concurrency,requests.length);await Promise.all(Array.from({length:workers},()=>worker()));if(serial!==L.serial)return;L.comparisonResults=results;L.comparisonStatus='ready';render()}catch(e){if(serial!==L.serial)return;L.comparisonResults=[];L.comparisonStatus='error';L.comparisonError='前期数据读取未完成：'+(e.message||'请重试');render()}}
+ async function liveComparison(serial,allowCache=false,concurrency=2,isCurrent=()=>serial===L.serial){if(state.page==='providers'&&L.providerReadMode==='published')return;if(!isCurrent()||isSuccessAnalysis()||isDailyComparison())return;if(L.results.some(r=>r.pandaCoverage?.reason==='verified_created_prefix_only')){L.comparisonStatus='error';L.comparisonError='本期仅有已核验截止范围，暂不与前期整日统计比较';L.comparisonResults=[];return;}if(statisticWindowsEnabled()&&selected().some(p=>{const q=statisticRequest(p);return Date.parse(q.endAt)>L.queryNow||Date.parse(q.successEndAt)>L.queryNow})){L.comparisonStatus='error';L.comparisonError='当前时间段尚未结束，待同口径前期汇总准备完成后比较';L.comparisonResults=[];return;}L.comparisonStatus='loading';render();let index=0,failed=false;const results=[];try{const requests=selected().map(p=>query(p,'aggregate',true));async function worker(){while(index<requests.length&&!failed&&isCurrent()){const i=index++;try{const r=await readAggregate(requests[i],serial,allowCache,false,isCurrent);if(!isCurrent()||failed)return;results[i]=r}catch(e){failed=true;throw e}}}const workers=Math.min(statisticWindowsEnabled()?50:concurrency,requests.length);await Promise.all(Array.from({length:workers},()=>worker()));if(!isCurrent())return;L.comparisonResults=results;L.comparisonStatus='ready';render()}catch(e){if(!isCurrent())return;L.comparisonResults=[];L.comparisonStatus='error';L.comparisonError='前期数据读取未完成：'+(e.message||'请重试');render()}}
  async function readDetails(p,serial){const cached=L.results.find(r=>r.platform?.id===p.id),parts=cached?._parts;if(!parts||parts.length<2)return window.hensemLiveRequest(query(p,'details'));const ordered=[...parts].sort((a,b)=>Date.parse(b.startAt)-Date.parse(a.startAt)),total=ordered.reduce((n,r)=>n+Number(r.total||0),0),rows=[];let skip=(L.page-1)*L.size;for(const part of ordered){if(serial!==L.detailSerial)throw Error('查询已替换');const n=Number(part.total||0);if(skip>=n){skip-=n;continue}const request={...query(p,'details'),startAt:part.startAt,endAt:part.endAt,offset:skip};const response=await window.hensemLiveRequest(request);if(serial!==L.detailSerial)throw Error('查询已替换');if(Number(response.total)!==n)throw Error('源订单已更新，请重新查询以同步总数与分页');rows.push(...(response.rows||[]).slice(0,L.size-rows.length));skip=0;if(rows.length>=L.size)break;}return {platform:p,total,rows,limit:L.size,offset:(L.page-1)*L.size,hasMore:L.page*L.size<total};}
  window.liveDetails=async function(){if(!L.catalogReady)return;const p=orderPlatform();if(!p)return;const serial=++L.detailSerial;L.error='';L.detailBusy=true;L.detail=null;render();try{const r=await readDetails(p,serial);if(serial!==L.detailSerial)return;const max=Math.max(1,Math.ceil(Number(r.total||0)/L.size));if(L.page>max){L.page=max;L.detailBusy=false;return liveDetails()}L.detail=r;L.detailBusy=false;render()}catch(e){if(serial!==L.detailSerial)return;L.detailBusy=false;L.error=e.message;render()}};
  L.detailSerial=0;
