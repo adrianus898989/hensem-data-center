@@ -42,9 +42,9 @@
   function dates(scope,trend=false){return trend?Array.from({length:S.trendDays+1},(_,i)=>shift(scope.date,-i)):[scope.date,S.scope?.compareDate||S.compareDate];}
   function period(day,p,scope){
    const delta=(Date.parse(day+'T00:00:00Z')-Date.parse(scope.date+'T00:00:00Z'))/86400000,window={successBasis:scope.successBasis};
-   for(const key of ['from','to','successFrom','successTo'])window[key]=shift(scope[key].slice(0,10),delta)+scope[key].slice(10);
+   for(const key of ['from','to','successFrom','successTo'])window[key]=scope[key]?shift(scope[key].slice(0,10),delta)+scope[key].slice(10):'';
    const today=c.localClock(scope.now,p.timezone).slice(0,10);
-   if(window.to.slice(0,10)>today||window.successTo.slice(0,10)>today)throw Error('结束日期晚于平台当地今天');
+   if(window.to.slice(0,10)>today||window.successTo&&window.successTo.slice(0,10)>today)throw Error('结束日期晚于平台当地今天');
    return {...root.HensemStatisticWindows.request(window,p,c.instant),local:window};
   }
   const published=p=>!!p&&p.calculationComplete===true&&Number.isFinite(Date.parse(p.expiresAt))&&(p.publicationVersion===2?['fresh','refresh_due'].includes(p.freshness)&&['idle','queued','running','failed'].includes(p.refreshState):Date.parse(p.expiresAt)>Date.now());
@@ -57,10 +57,10 @@
    }
    verify(response);const publication=response._preparedPublication;
    if(!published(publication))throw Error('已准备统计已过期或计算未完成');
-   for(const key of ['startAt','endAt','successStartAt','successEndAt'])if(Date.parse(response[key])!==Date.parse(q[key]))throw Error('已准备统计时间范围不匹配');
-   if(response.successBasis!==q.successBasis)throw Error('已准备统计时间依据不匹配');
+   for(const key of ['startAt','endAt',...(q.successStartAt?['successStartAt','successEndAt']:[])])if(Date.parse(response[key])!==Date.parse(q[key]))throw Error('已准备统计时间范围不匹配');
+   if(q.successBasis&&response.successBasis!==q.successBasis)throw Error('已准备统计时间依据不匹配');
    if(response._parts!==undefined){if(!Array.isArray(response._parts)||response._parts.length!==1)throw Error('已准备统计不接受现场分段查询');verify(response._parts[0]);}
-   return {platform:response.platform,summary:response.summary,groups:{provider:response.groups.provider},capabilities:response.capabilities,withdrawSuccessTimeAvailable:response.withdrawSuccessTimeAvailable,chargeSuccessTimeAvailable:response.chargeSuccessTimeAvailable,successTimeAvailable:response.successTimeAvailable,_preparedPublication:publication,startAt:q.startAt,endAt:q.endAt,successStartAt:q.successStartAt,successEndAt:q.successEndAt,successBasis:q.successBasis};
+   return {platform:response.platform,summary:response.summary,groups:{provider:response.groups.provider},capabilities:response.capabilities,withdrawSuccessTimeAvailable:response.withdrawSuccessTimeAvailable,chargeSuccessTimeAvailable:response.chargeSuccessTimeAvailable,successTimeAvailable:response.successTimeAvailable,_preparedPublication:publication,startAt:q.startAt,endAt:q.endAt,successStartAt:response.successStartAt,successEndAt:response.successEndAt,successBasis:response.successBasis};
   }
   async function runQueue(tasks,token,limit=6){let next=0;await Promise.all(Array.from({length:Math.min(limit,tasks.length)},async()=>{while(next<tasks.length&&token===serial&&current()){await tasks[next++]();}}));}
   function rejectAuthority(error){if(!['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code))return false;clear();S.status='error';S.error='查询权限或登录状态已变化，请重新验证';paint();return true;}
@@ -69,7 +69,7 @@
    const scope=S.scope,native=new Set(scope.native);initializeDays(dayList);
    await runQueue(dayList.flatMap(day=>scope.platforms.filter(p=>native.has(p.id)).map(p=>async()=>{
     const entry=S.payments[day][p.id];if(day===scope.compareDate)S.comparePayments[p.id]=entry;if(fresh(entry))return;entry.status='loading';paint();
-    try{const bounds=period(day,p,scope),q={action:'aggregate',view:'providers',platformId:p.id,startAt:bounds.startAt,endAt:bounds.endAt,successStartAt:bounds.successStartAt,successEndAt:bounds.successEndAt,successBasis:bounds.successBasis,direction:'all',status:'all',currency:p.currency,offset:0,limit:20};if(scope.providers.length)q.providers=queryProviders(scope.providers,p.country||scope.country);
+    try{const bounds=period(day,p,scope),q={action:'aggregate',view:'providers',platformId:p.id,startAt:bounds.startAt,endAt:bounds.endAt,...(bounds.successStartAt?{successStartAt:bounds.successStartAt,successEndAt:bounds.successEndAt,successBasis:bounds.successBasis}:{}),direction:'all',status:'all',currency:p.currency,offset:0,limit:20};if(scope.providers.length)q.providers=queryProviders(scope.providers,p.country||scope.country);
      const response=await c.readAggregate(q,querySerial,forceRefresh);if(token!==serial||!current())return;
      Object.assign(entry,{status:'ready',response:platformResponse(response,p,q),note:'已读取后台统计',local:bounds.local});
     }catch(error){if(token!==serial||!current())return;if(rejectAuthority(error))return;if(['stale','invalid'].includes(error?.status))retained=null;Object.assign(entry,{status:['missing','stale','building','unsupported'].includes(error?.status)?error.status:'error',note:error?.message||'读取失败'});}paint();
@@ -89,7 +89,7 @@
    paint();Promise.resolve(c.ensureFeeLookup()).catch(()=>{});await readPaymentDays(dates(scope),token,querySerial,forceRefresh);
    if(token!==serial||!current())return;S.status=paymentStatus(dates(scope));paint();
   }
-  const workorderWindow=()=>S.scope&&S.scope.from===S.scope.date+'T00:00:00'&&S.scope.to===S.scope.date+'T23:59:59'&&S.scope.successFrom===S.scope.from&&S.scope.successTo===S.scope.to&&S.scope.successBasis==='success';
+  const workorderWindow=()=>S.scope&&S.scope.from===S.scope.date+'T00:00:00'&&S.scope.to===S.scope.date+'T23:59:59'&&(!S.scope.successFrom&&!S.scope.successTo||S.scope.successFrom===S.scope.from&&S.scope.successTo===S.scope.to)&&S.scope.successBasis==='success';
   async function loadWorkorders(force=false,trend=false){
    if(!current()||S.status==='loading'||S.workStatus==='loading'||S.workTrendStatus==='loading')return;
    if(!workorderWindow()){S.workStatus='unsupported';paint();return;}
@@ -130,7 +130,7 @@
    }else metrics=raw.length?total(raw):allLeaves.length?total(allLeaves):zero();
    const timeKey=d+'SuccessTimeAvailable',caps=response.capabilities||response.platform?.capabilities||p.capabilities||{},unavailable=caps[d+'SecondaryTimeAvailable']===false||caps.secondaryTimeAvailable===false||response.successTimeAvailable===false||caps.successTimeAvailable===false||response[timeKey]===false||caps[timeKey]===false;
    if(unavailable){metrics.success_count=null;metrics.success_amount=null;}
-   return {...metrics,ready:true,finished:Math.max(Date.parse(response.endAt),Date.parse(response.successEndAt))<=S.scope.now,partial:!complete||fields.some(k=>metrics[k]===null)||!raw.length&&allLeaves.length>0,note:unavailable?'该来源未提供可核验'+(d==='charge'?'代收':'代付')+(S.scope.successBasis==='source_updated'?'源订单更新时间':'成功时间'):!raw.length&&allLeaves.length?'仅返回三方分组小计':!complete?'平台汇总已返回；三方分组未完整':'已读取订单记录',leaves:subset};
+   return {...metrics,ready:true,finished:Math.max(Date.parse(response.endAt),Date.parse(response.successEndAt||response.endAt))<=S.scope.now,partial:!complete||fields.some(k=>metrics[k]===null)||!raw.length&&allLeaves.length>0,note:unavailable?'该来源未提供可核验'+(d==='charge'?'代收':'代付')+(S.scope.successBasis==='source_updated'?'源订单更新时间':'成功时间'):!raw.length&&allLeaves.length?'仅返回三方分组小计':!complete?'平台汇总已返回；三方分组未完整':'已读取订单记录',leaves:subset};
   }
   function tickets(day,p,providerName){
    const entry=S.workorders[day]?.[p.id];if(entry?.status!=='ready')return unknown(entry?.note||'工单尚未查询');
@@ -251,7 +251,7 @@
    const footer={name:'已读汇总',kind:'—',now:m.now,prior:m.prior,comparison:pair};
    const name=(r,i,click)=>'<span title="'+(r.now.partial?'含未读取平台或待确认指标，仅已读小计':'已读范围')+'">'+(r.now.partial?'<em>*</em>':'')+'</span><span class="daily-rank">'+(i+1)+'</span>'+(click&&allowed('detail')?'<button class="daily-name" onclick="liveDailyExpand('+i+')" aria-expanded="'+(S.expanded===r.key)+'">'+E(r.name)+(S.expanded===r.key?' −':' +')+'</button>':E(r.name));
    const tables='<section class="daily-panel"><div class="daily-panel-title"><h2>'+(S.dimension==='platform'?'平台':'三方')+'每日明细</h2><span>按全部'+(S.sort==='all_count'?'笔数':'金额')+'从多到少 · 点击原位展开</span></div>'+detailTable(detailColumns(),m.rows.map((r,i)=>'<tr>'+entityCells(r,m.now,name(r,i,true))+'</tr>'+(S.expanded===r.key&&allowed('detail')?inline(r):'')),'<tr>'+entityCells(footer,m.now,'已读汇总')+'</tr>')+'</section>';
-   const secondLabel=S.scope.successBasis==='source_updated'?'源订单更新时间':'成功时间',windowNote='创建 '+S.scope.from.replace('T',' ')+' 至 '+S.scope.to.replace('T',' ')+' · '+secondLabel+' '+S.scope.successFrom.replace('T',' ')+' 至 '+S.scope.successTo.replace('T',' '),comparisonNote='对比创建开始 '+S.scope.compareDate+'，两组时间区间平移相同天数';
+   const secondLabel=S.scope.successBasis==='source_updated'?'源订单更新时间':'成功时间',windowNote='创建 '+S.scope.from.replace('T',' ')+' 至 '+S.scope.to.replace('T',' ')+(S.scope.successFrom?' · 独立'+secondLabel+' '+S.scope.successFrom.replace('T',' ')+' 至 '+S.scope.successTo.replace('T',' '):' · 成功日期默认沿查询日期'),comparisonNote='对比创建开始 '+S.scope.compareDate+'，两组时间区间平移相同天数';
    const publications=Object.values(S.payments[S.scope.date]||{}).filter(readable).map(entry=>entry.response._preparedPublication),updated=publications.length?Math.min(...publications.map(p=>Date.parse(p.computedAt))):null,updatedNote=S.direction!=='workorder'&&Number.isFinite(updated)?' · 汇总更新 '+c.localClock(updated,S.scope.platforms[0].timezone)+(publications.some(p=>['queued','running'].includes(p.refreshState))?' · 更新中':publications.some(p=>p.refreshState==='failed')?' · 更新未完成':publications.some(p=>p.freshness==='refresh_due')?' · 待更新':''):'';
    const unfinished=S.scope.platforms.some(p=>{try{const w=period(S.scope.date,p,S.scope);return Math.max(Date.parse(w.endAt),Date.parse(w.successEndAt))>S.scope.now;}catch{return true;}});
    return '<div class="daily-comparison">'+controls+(draft?'<div class="live-status">筛选条件已修改，当前保留上次查询结果；点击查询后更新。</div>':'')+'<div class="daily-note">'+E(S.scope.country)+' · '+E(S.scope.currency)+' · '+E(windowNote)+' · '+E(comparisonNote)+E(updatedNote)+' · 可比 '+pair.count+' 个相同原生平台'+(unfinished?' · 所选时间尚未结束，暂不计算与历史完整区间的涨跌':'')+'。占比以当前已读范围为分母；缺失保留 —。</div>'+status+coverage(m)+top+tables+trend(m)+'<div class="daily-note">'+(S.direction==='workorder'?'原始工单不去重：已处理工单（源状态4）÷全部提交工单；不代表已核实到账。':'全部按创建区间，成功按独立'+secondLabel+'区间；跨日成功可能使成功率超过100%。参考手续费按当前费率估算，非历史实际费用。')+' '+updatedBasisNote()+' 已准备统计不代表来源采集完整；未知日期在图中留空。</div></div>';

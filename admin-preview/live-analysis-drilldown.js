@@ -51,7 +51,7 @@
   function dimensionButton(segment,label,dimension){if(prefixBlocked(segment))return prefixNotice(segment);const s=state(segment,label),platform=dimension==='platform',open=s.open&&(platform?s.tab==='platform':['provider','providerDaily'].includes(s.tab));return '<button class="link analysis-expand" aria-expanded="'+open+'" onclick="'+action(segment,platform?'togglePlatform':'toggleProvider')+'">'+(open?'收起':'')+(platform?'平台':'三方')+(open?'':'展开')+'</button>'}
   function button(segment,label,exclusiveGroup){if(prefixBlocked(segment))return prefixNotice(segment);const s=state(segment,label);if(exclusiveGroup)s.exclusiveGroup=exclusiveGroup;return segment.kind==='provider_daily'?'<button class="link analysis-expand" aria-expanded="'+s.open+'" onclick="'+action(segment,'toggle')+'">'+(s.open?'收起':'展开')+'</button>':dimensionButton(segment,label,'provider')+' '+dimensionButton(segment,label,'platform')}
   function valueButton(segment,label,value,title,exclusiveGroup){if(prefixBlocked(segment))return E(value)+' '+prefixNotice(segment);const s=state(segment,label);if(exclusiveGroup)s.exclusiveGroup=exclusiveGroup;return '<button class="link analysis-value-button'+(s.open?' is-selected':'')+'" aria-expanded="'+s.open+'" title="'+E(title||label)+'" onclick="'+action(segment,'toggle')+'">'+E(value)+'</button>'}
-  const successWindow=()=>[L.successFrom??L.from,L.successTo??L.to];
+  const successWindow=()=>[L.successFrom||L.from,L.successTo||L.to];
   const localWindows=segment=>segment.kind==='latency'?[successWindow()]:[[L.from,L.to],successWindow()];
   function dates(segment){
    const out=new Set();for(const range of localWindows(segment)){const [start,end]=range.map(value=>String(value||'').slice(0,10));

@@ -28,17 +28,17 @@ test('server permission denial clears previously applied data even before local 
 
 test('pending polling only rereads the same exact prepared scope, is bounded and stops after draft/cancel',async()=>{
  const f=fixture(),timers=new Map();let id=0;f.context.setTimeout=fn=>{timers.set(++id,fn);return id};f.context.clearTimeout=key=>timers.delete(key);let run=f.page.load();f.pending.shift().resolve({prepared:{status:'building'}});await run;
- for(let n=0;n<8;n++){assert.equal(timers.size,1);const[k,fn]=timers.entries().next().value;timers.delete(k);fn();f.pending.shift().resolve({prepared:{status:'building'}});await new Promise(resolve=>setImmediate(resolve));}
- assert.equal(timers.size,0);assert.equal(f.calls.length,9);for(const call of f.calls)assert.equal(JSON.stringify(call.q),JSON.stringify(f.calls[0].q));
+ for(let n=0;n<20;n++){assert.equal(timers.size,1);const[k,fn]=timers.entries().next().value;timers.delete(k);fn();f.pending.shift().resolve({prepared:{status:'building'}});await new Promise(resolve=>setImmediate(resolve));}
+ assert.equal(timers.size,0);assert.equal(f.calls.length,21);assert.equal(f.page.state.prepared.status,'paused');for(const call of f.calls)assert.equal(JSON.stringify(call.q),JSON.stringify(f.calls[0].q));
  run=f.page.load();f.pending.shift().resolve({prepared:{status:'building'}});await run;assert.equal(timers.size,1);f.context.withdrawDate('from','2026-10-12');assert.equal(timers.size,0);
  run=f.page.load();f.pending.shift().resolve({prepared:{status:'building'}});await run;assert.equal(timers.size,1);f.page.pause();assert.equal(timers.size,0);
 });
 test('an operator page that becomes ready after pending applies its requested offset atomically',async()=>{
- const f=fixture('withdraw_operators'),timers=[];f.context.setTimeout=fn=>{timers.push(fn);return timers.length};f.context.clearTimeout=()=>{};
+ const f=fixture('withdraw_operators'),timers=new Map();let timerId=0;f.context.setTimeout=fn=>{timers.set(++timerId,fn);return timerId};f.context.clearTimeout=id=>timers.delete(id);
  let run=f.page.load();f.pending.shift().resolve({...data(5),total:60});await run;
  f.page.state.page=2;run=f.page.load();assert.equal(f.calls[1].q.offset,20);f.pending.shift().resolve({prepared:{status:'building'}});await run;
  assert.equal(f.page.state.page,1);assert.equal(f.page.state.applied.query.offset,0);
- timers.shift()();f.pending.shift().resolve({...data(8),total:60});await new Promise(resolve=>setImmediate(resolve));
+ const[timerKey,poll]=timers.entries().next().value;timers.delete(timerKey);poll();f.pending.shift().resolve({...data(8),total:60});await new Promise(resolve=>setImmediate(resolve));
  assert.equal(f.page.state.page,2);assert.equal(f.page.state.applied.query.offset,20);assert.equal(f.page.state.data.totals.processed,8);
 });
 
@@ -47,4 +47,35 @@ test('ready expired withdrawal results retain real generation time and explicit 
   const f=fixture(),run=f.page.load();const value=data(3);Object.assign(value.prepared,{computedAt:'2026-10-15T05:10:00Z',expiresAt:'2026-10-15T05:20:00Z',freshness:'refresh_due',refreshState});f.pending.shift().resolve(value);await run;
   assert.equal(f.page.state.data.totals.total,3);assert.equal(f.page.state.data.prepared.computedAt,'2026-10-15T05:10:00Z');assert.equal(f.page.state.prepared,null);assert.match(f.page.render(),/更新于 2026-10-15 10:40:00/);assert.match(f.page.render(),new RegExp(refreshState==='failed'?'更新未完成':['queued','running'].includes(refreshState)?'更新中':'待更新'));assert.equal(f.calls.length,1);
  }
+});
+
+function budgetClock(f){
+ let now=0,id=0;const timers=new Map();f.context.Date=class extends Date{static now(){return now}};
+ f.context.setTimeout=(fn,ms)=>{timers.set(++id,{fn,ms});return id};f.context.clearTimeout=key=>timers.delete(key);
+ return {timers,set(value){now=value},fire(){const[key,timer]=timers.entries().next().value;timers.delete(key);timer.fn();return timer.ms}};
+}
+test('one deadline stops a stalled withdrawal request, preserves the last result and permits explicit resume',async()=>{
+ const f=fixture(),clock=budgetClock(f);let run=f.page.load();f.pending.shift().resolve(data(3));await run;
+ run=f.page.load();const stalled=f.pending.shift();assert.equal([...clock.timers.values()][0].ms,60000);
+ clock.set(60000);clock.fire();await run;assert.equal(f.calls.at(-1).o.signal.aborted,true);assert.equal(f.page.state.loading,false);assert.equal(f.page.state.prepared.status,'paused');assert.equal(f.page.state.data.totals.total,3);assert.match(f.page.render(),/继续读取/);assert.equal(clock.timers.size,0);
+ run=f.page.load();assert.equal([...clock.timers.values()][0].ms,60000);stalled.resolve(data(99));await new Promise(resolve=>setImmediate(resolve));assert.equal(f.page.state.data.totals.total,3);f.pending.shift().resolve(data(8));await run;assert.equal(f.page.state.data.totals.total,8);assert.equal(clock.timers.size,0);
+});
+test('RPC waiting and later prepared polls consume the same whole-query budget',async()=>{
+ const f=fixture(),clock=budgetClock(f);let run=f.page.load();clock.set(55000);f.pending.shift().resolve({prepared:{status:'building'}});await run;
+ assert.equal(clock.fire(),3000);clock.set(58000); // The first poll was dispatched at55s before this clock advances.
+ assert.equal([...clock.timers.values()][0].ms,5000);clock.set(60000);clock.fire();await new Promise(resolve=>setImmediate(resolve));assert.equal(f.page.state.prepared.status,'paused');assert.equal(f.page.state.loading,false);assert.equal(clock.timers.size,0);assert.equal(f.calls.length,2);
+});
+test('a late cancelled response cannot clear the newer selection deadline',async()=>{
+ const f=fixture(),clock=budgetClock(f),old=f.page.load();f.context.withdrawDate('from','2026-10-13');const fresh=f.page.load();assert.equal(clock.timers.size,1);f.pending[0].resolve(data(99));await old;assert.equal(clock.timers.size,1);clock.set(60000);clock.fire();await fresh;assert.equal(f.page.state.prepared.status,'paused');assert.equal(f.page.state.data,null);assert.equal(clock.timers.size,0);
+});
+
+test('a submitted dirty filter does not ask the user to query again while its request is active',async()=>{
+ const f=fixture();let run=f.page.load();f.pending.shift().resolve(data(3));await run;f.context.withdrawDate('from','2026-10-14');assert.match(f.page.render(),/筛选条件已修改/);run=f.page.load();assert.doesNotMatch(f.page.render(),/筛选条件已修改，点击查询更新/);assert.match(f.page.render(),/正在读取自动出款统计/);f.pending.shift().resolve(data(7));await run;
+});
+
+test('the final prepared wait is clamped to the remaining whole-read budget',async()=>{
+ const f=fixture(),clock=budgetClock(f),run=f.page.load();clock.set(59500);f.pending.shift().resolve({prepared:{status:'building'}});await run;assert.equal([...clock.timers.values()][0].ms,500);clock.set(60000);clock.fire();await new Promise(resolve=>setImmediate(resolve));assert.equal(f.calls.length,1);assert.equal(f.page.state.prepared.status,'paused');assert.equal(clock.timers.size,0);
+});
+test('a ready response past the deadline cannot bypass an event-loop-delayed timeout callback',async()=>{
+ const f=fixture(),clock=budgetClock(f),run=f.page.load();clock.set(60001);f.pending.shift().resolve(data(99));await run;assert.equal(f.page.state.data,null);assert.equal(f.page.state.applied,null);assert.equal(f.page.state.prepared.status,'paused');assert.equal(clock.timers.size,0);
 });

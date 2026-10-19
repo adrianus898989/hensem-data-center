@@ -70,8 +70,8 @@ test('unified merchant-provider amount and count sorting use cross-source facts 
 });
 
 test('daily matrix sorting stays on its selected date/source/currency and keeps inline expansion beside its provider',async()=>{
- const h=await setup('provider_daily');h.L.localSize=2;h.L.localPage=2;h.L.results[1].groups.daily[0].success_count=90;h.L.results[1].groups.daily.push({...h.L.results[1].groups.daily[0],currency:'BRL',success_count:0});h.c.render();const calls=h.calls.length;
- refSort(h,'daily-matrix',34);assert.equal(h.L.localPage,1);const grid=()=>tableFor(h,'daily-matrix');assert.deepEqual(rows(grid()).map(r=>r[0]),['LargePay','SmallPay']);
+ const h=await setup('provider_daily');Object.assign(h.L,{from:'2026-09-21T00:00:00',to:'2026-09-22T23:59:59',successFrom:'',successTo:''});h.L.localSize=2;h.L.localPage=2;h.L.results[1].groups.daily[0].success_count=90;h.L.results[1].groups.daily.push({...h.L.results[1].groups.daily[0],currency:'BRL',success_count:0});h.c.render();const calls=h.calls.length;
+ refSort(h,'daily-matrix',5);assert.equal(h.L.localPage,1);const grid=()=>tableFor(h,'daily-matrix');assert.deepEqual(rows(grid()).map(r=>r[0]),['LargePay','SmallPay']);
  const s={kind:'provider_daily',provider:'LargePay',source:'newar',direction:'charge',date:'2026-09-22',currency:'INR'};h.c.liveAnalysisAction(encodeURIComponent(JSON.stringify(s)),'toggle');assert.match(h.html(),/provider-daily-detail-row/);refSort(h,'daily-matrix',0);assert.match(h.html(),/provider-daily-detail-row/);assert.equal(h.calls.length,calls);
  h.L.dailyView='all';h.L.tableSizes['daily-details']=20;h.c.render();refSort(h,'daily-details',7);const details=allTables(h.html()).find(t=>t.includes('daily-details'));assert.deepEqual(rows(details).map(r=>r[1]),['LargePay','SmallPay','UnknownPay']);assert.equal(rows(details)[0][9],'90.00%');assert.equal(h.calls.length,calls);
 });

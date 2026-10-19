@@ -12,7 +12,7 @@
   const fullDay=(from,to)=>/^\d{4}-\d{2}-\d{2}T00:00:00$/.test(from||'')&&/^\d{4}-\d{2}-\d{2}T23:59:59$/.test(to||'');
   async function load({force=false}={}){
    const picked=candidates();if(!picked.length)return null;
-   if(!fullDay(L.from,L.to)||(L.successFrom!=null&&L.successFrom!==L.from)||(L.successTo!=null&&L.successTo!==L.to)||L.successBasis==='source_updated'){
+   if(!fullDay(L.from,L.to)||(!!L.successFrom&&L.successFrom!==L.from)||(!!L.successTo&&L.successTo!==L.to)||L.successBasis==='source_updated'){
     note='团队表格只有整日报；当前小时或独立订单时间筛选无法应用。';reportData.cancel();reportData.restore(null);return null;
    }
    note='';
