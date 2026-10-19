@@ -30,14 +30,17 @@ test('intraday and unequal dual windows keep the original short retention',async
 });
 
 function packed(payload){const response=prepared(payload);for(const item of response.items){const native=item.result.platform,scope={...item.request};delete scope.providers;const newwin={...item.result.groups.provider[0],provider:'NewWinPay'},tuk={...newwin,provider:'TukPay',all_amount:'9007199254740993.0000000000009',success_amount:null};const base={...item.result};delete base.groups;delete base.summary;delete base.total;item.publication.kind='daily_provider_rollup';item.providerReuse={version:1,scope,base,providers:[newwin,tuk],names:[['NewWinPay',0],['NewWinPay2INR-PaytmQR',0],['TukPay',1]],entries:[{indices:[0],result:{summary:[{...newwin,provider:null}],total:newwin.all_count}},{indices:[1],result:{summary:[{...tuk,provider:null}],total:tuk.all_count}},{indices:[0,1],result:{summary:item.result.summary,total:item.result.total}}],all:2};}return response;}
-test('actual 18-platform UI changes to a first-unseen single provider with zero new prepared HTTPs',async()=>{
+test('compatible admitted optional packets still provide exact single-provider results with zero new HTTPs',async()=>{
  const h=await ready();h.override(q=>q.action==='aggregatePrepared'?packed(q):undefined);await provider(h,'NewWinPay');const first=count(h);assert.equal(first,12);const clocks=JSON.stringify(h.L.results.map(r=>r._preparedPublication));h.setNow('2026-10-18T12:00:45Z');await provider(h,'TukPay');assert.equal(count(h),first);assert.equal(h.L.results.length,18);assert(h.L.results.every(r=>r.groups.provider[0].provider==='TukPay'));assert(h.L.results.every(r=>r.groups.provider[0].success_amount===null));assert.equal(JSON.stringify(h.L.results.map(r=>r._preparedPublication)),clocks);
  h.c.liveSet('platform',platforms[0].id);await h.c.liveQuery();assert.equal(count(h),first);assert.equal(h.L.results.length,1);await h.c.liveRefresh();assert(count(h)>first);
 });
 
-test('already loaded visible zero-order options reach each native only as bounded top-level metadata',async()=>{
- const h=await ready();h.L.providerOptions=['NewWinPay','TukPay'];h.L.providerOptionsKey=JSON.stringify([platforms.map(p=>p.id).sort(),'charge']);h.override(q=>{if(q.action!=='aggregatePrepared')return;const r=packed(q);for(const item of r.items){item.providerReuse.providers=item.providerReuse.providers.slice(0,1);item.providerReuse.entries[1]={indices:[],result:{summary:[],total:0}};item.providerReuse.names=item.providerReuse.names.filter(([name])=>name!=='TukPay');if(q.providerReuseNames?.includes('TukPay'))item.providerReuse.names.push(['TukPay',1]);}return r;});
- await provider(h,'NewWinPay');const first=count(h);const transport=h.calls.filter(q=>q.action==='aggregatePrepared');assert(transport.every(q=>q.providerReuseNames.includes('TukPay')));assert(transport.every(q=>q.requests.every(r=>r.providerReuseNames===undefined)));await provider(h,'TukPay');assert.equal(count(h),first);assert.equal(h.L.results.length,18);assert(h.L.results.every(r=>r.groups.provider.length===0&&r.total===0));
+test('loaded zero-order options never request speculative packs and use authoritative exact zero once',async()=>{
+ const h=await ready();h.L.providerOptions=['NewWinPay','TukPay'];h.L.providerOptionsKey=JSON.stringify([platforms.map(p=>p.id).sort(),'charge']);
+ h.override(q=>{if(q.action!=='aggregatePrepared')return;const r=prepared(q);for(const item of r.items){item.publication.kind='daily_provider_rollup';if(item.request.providers?.includes('TukPay'))item.result={...item.result,summary:[],total:0,groups:{...item.result.groups,provider:[]}};}return r;});
+ await provider(h,'NewWinPay');const first=count(h);const transport=h.calls.filter(q=>q.action==='aggregatePrepared');assert(transport.every(q=>q.providerReuseNames===undefined));assert(transport.every(q=>q.requests.every(r=>r.providerReuseNames===undefined)));
+ await provider(h,'TukPay');assert.equal(count(h),first+12);assert.equal(h.L.results.length,18);assert(h.L.results.every(r=>r.groups.provider.length===0&&r.total===0));
+ await provider(h,'NewWinPay');await provider(h,'TukPay');assert.equal(count(h),first+12);
 });
 
 test('successful native-provider configuration invalidates prepared packets before catalog refresh, even if refresh fails',async()=>{
