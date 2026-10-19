@@ -1,0 +1,7 @@
+The daily provider reader now passes its already authorized, request-local common dependency token to the exact reader. The exact reader retains every native target, day manifest and dependency check, then recomputes the original common token once per scope before returning. A changed token rejects the entire shortcut and uses the existing fallback.
+
+The paired SQL files require exact current function bodies and metadata. Installation and rollback preserve all other routine metadata, financial dependencies, queues and immutable publications. Their 15-second statement budget applies only to guarded metadata DDL; financial query limits are unchanged. No token enters the public request, stored artifact identity, GUC or shared cache.
+
+Run `node --test tests/daily-provider-common-memo.test.cjs` with the existing repository dependencies. The portable test uses synthetic publications and compares complete PostgreSQL JSONB and text responses. It also verifies bounded common-token calls, mid-request configuration drift and authorization boundaries. Synthetic timing is not production performance evidence.
+
+Production acceptance after installation observed the full main table within a 12.011-second observation bound, followed by a first unseen provider response in 2.096 seconds, with the original financial controls unchanged. Cold main-table and supplementary latency remain separate unfinished performance work; these observations are not universal latency guarantees.
