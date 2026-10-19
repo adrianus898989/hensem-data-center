@@ -20,7 +20,21 @@
   }
   return visit(value,0);
  }
- const copy=value=>JSON.parse(JSON.stringify(value));
+ // Preserve only already-proven provider-array aliases across the existing JSON
+ // clone boundary. Ordinary equal-looking arrays retain independent identities.
+ const copy=value=>{const cloned=JSON.parse(JSON.stringify(value));for(const [source,target]of [[value,cloned],[value?.result,cloned?.result]]){
+  const rows=source?.groups?.provider,out=target?.groups?.provider;if(!Array.isArray(rows)||!Array.isArray(out)||rows.length!==out.length)continue;
+  rows.forEach((row,i)=>{if(Array.isArray(row?.items)&&row.items===row.fee_items&&Array.isArray(out[i]?.fee_items))out[i].items=out[i].fee_items;});
+ }return cloned;};
+ function restoreLeafAliases(item,enabled,q){
+  if(!Object.hasOwn(item||{},'providerLeafAliasTransport'))return item;
+  const marker=item.providerLeafAliasTransport,rows=item.result?.groups?.provider;
+  if(!enabled||item.status!=='ready'||q.view!=='providers'||!marker||Object.prototype.toString.call(marker)!=='[object Object]'||Object.keys(marker).sort().join(',')!=='contract,providerItemsFromFeeItems'||marker.contract!=='provider-leaf-alias-v1'||!Array.isArray(marker.providerItemsFromFeeItems)||!marker.providerItemsFromFeeItems.length||!Array.isArray(rows)||marker.providerItemsFromFeeItems.length>rows.length)throw failure('invalid');
+  const indices=marker.providerItemsFromFeeItems;let previous=-1;const selected=new Set();
+  for(const index of indices){if(!Number.isSafeInteger(index)||index<=previous||index<0||index>=rows.length)throw failure('invalid');previous=index;const row=rows[index];if(!row||typeof row!=='object'||Array.isArray(row)||Object.hasOwn(row,'items')||!Array.isArray(row.fee_items))throw failure('invalid');selected.add(index);}
+  const {providerLeafAliasTransport,...rest}=item;return {...rest,result:{...item.result,groups:{...item.result.groups,provider:rows.map((row,i)=>selected.has(i)?{...row,items:row.fee_items}:row)}}};
+ }
+
  const identityKeys=['id','source','sourceName','country','timezone','currency'];
  function identity(platform){
   if(!platform||platform.reportOnly||identityKeys.some(key=>typeof platform[key]!=='string'||!platform[key]))throw failure('unsupported');
@@ -164,13 +178,17 @@
   async function run(batch){
    try{
     const names=reuseNames(batch);
-    const response=await transport({action:'aggregatePrepared',requests:batch.jobs.map(job=>copy(job.q)),...(names?{providerReuseNames:names}:{}),...(publicationVersion===2?{publicationVersion:2,...(batch.forceRefresh?{forceRefresh:true}:{})}:{})},{signal:batch.controller.signal});
+    const leafAliases=publicationVersion===2&&options.providerLeafAliases===true&&batch.jobs.every(job=>job.q.view==='providers');
+    const response=await transport({action:'aggregatePrepared',requests:batch.jobs.map(job=>copy(job.q)),...(names?{providerReuseNames:names}:{}),...(leafAliases?{providerLeafAliases:'items-fee-items-v1'}:{}),...(publicationVersion===2?{publicationVersion:2,...(batch.forceRefresh?{forceRefresh:true}:{})}:{})},{signal:batch.controller.signal});
     if(batch.controller.signal.aborted)return;
     // Size checking precedes recursive structural validation. The transport also
     // bounds HTTP bodies; this guards unexpectedly expanded decoded payloads.
     const serialized=JSON.stringify(response);if(!serialized||serialized.length>maxResponseBytes||new TextEncoder().encode(serialized).length>maxResponseBytes||response.version!==publicationVersion||!Array.isArray(response.items)||response.items.length!==batch.jobs.length)throw failure('invalid');
     const expected=new Map(batch.jobs.map(job=>[job.requestKey,job])),matched=new Map();
-    for(const item of response.items){const key=encode(item?.request);if(!expected.has(key)||matched.has(key))throw failure('invalid');matched.set(key,item);}
+    for(const item of response.items){const key=encode(item?.request);if(!expected.has(key)||matched.has(key))throw failure('invalid');matched.set(key,restoreLeafAliases(item,leafAliases,expected.get(key).q));}
+    // Expanded originals obey the same old complete-response bound. A compact
+    // body cannot admit a larger unvalidated or oversized financial result.
+    if(leafAliases){const expanded=JSON.stringify({...response,items:[...matched.values()]});if(expanded.length>maxResponseBytes||new TextEncoder().encode(expanded).length>maxResponseBytes)throw failure('invalid');}
     for(const job of batch.jobs){if(!prune(job))continue;if(job.polling&&now()>=job.deadlineAt){endPoll(job);continue;}try{const item=matched.get(job.requestKey);if(pollable(item,job)){waitForBase(job);continue;}const result=validateResult(item,job.q,job.native,now(),publicationVersion);if(deliver(job,null,result))rememberCompleted(job,item);}catch(error){deliver(job,error);}}
    }catch(error){if(authorityDenied(error)&&!batch.controller.signal.aborted&&batch.jobs.some(job=>prune(job))){clearCompleted();if(pollMaxMs>0){for(const job of [...jobs.values()])deliver(job,error);cancel();}}for(const job of batch.jobs)deliver(job,error);}
    finally{batches.delete(batch);for(const job of batch.jobs){if(job.phase==='waiting')continue;if(job.waiters.size)deliver(job,failure('cancelled'));release(job);}schedule();}

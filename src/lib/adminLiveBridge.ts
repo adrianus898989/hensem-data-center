@@ -35,7 +35,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     return {...checked,windowVersion,successStartAt,successEndAt,successBasis};
   }
   if(p.action==="aggregatePrepared"){
-    if(Object.keys(p).some(key=>!["action","requests","publicationVersion","forceRefresh","providerReuseNames"].includes(key))||!Array.isArray(p.requests)||p.requests.length<1||p.requests.length>50)throw Error("已准备统计的批量参数无效");
+    if(Object.keys(p).some(key=>!["action","requests","publicationVersion","forceRefresh","providerReuseNames","providerLeafAliases"].includes(key))||!Array.isArray(p.requests)||p.requests.length<1||p.requests.length>50)throw Error("已准备统计的批量参数无效");
     if(p.publicationVersion!==undefined&&p.publicationVersion!==2||p.forceRefresh!==undefined&&(typeof p.forceRefresh!=="boolean"||p.publicationVersion!==2))throw Error("已准备统计发布版本无效");
     const requests=p.requests.map(value=>{
       if(!value||typeof value!=="object"||Array.isArray(value))throw Error("统计请求无效");
@@ -59,7 +59,8 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       const names=[...new Set(candidate as string[])].sort(),bytes=new TextEncoder().encode(JSON.stringify(names)).length;
       if(names.length&&bytes<=8192&&new TextEncoder().encode(JSON.stringify({action:"aggregatePrepared",requests,publicationVersion:2,providerReuseNames:names})).length<=128000)providerReuseNames=names;
     }
-    return {action:"aggregatePrepared",requests,...(providerReuseNames?{providerReuseNames}:{}),...(p.publicationVersion===2?{publicationVersion:2,...(p.forceRefresh===undefined?{}:{forceRefresh:p.forceRefresh})}:{})};
+    const providerLeafAliases=p.publicationVersion===2&&p.providerLeafAliases==="items-fee-items-v1"&&requests.every(request=>request.view==="providers");
+    return {action:"aggregatePrepared",requests,...(providerLeafAliases?{providerLeafAliases:"items-fee-items-v1"}:{}),...(providerReuseNames?{providerReuseNames}:{}),...(p.publicationVersion===2?{publicationVersion:2,...(p.forceRefresh===undefined?{}:{forceRefresh:p.forceRefresh})}:{})};
   }
   if(p.action==="providerSnapshot"){
     const allowed=["action","version","platformIds","startAt","endAt","direction","status","currency","components","export"];
