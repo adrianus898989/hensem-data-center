@@ -41,3 +41,55 @@ test('forty requests is a hard limit even if clocks do not advance',async()=>{
  const h=load();h.open();for(let n=0;n<40;n++){assert.equal(h.calls.length,n+1);h.reply(n,preparing());await settle();if(n<39){const entry=[...h.timers].find(([,t])=>t.ms===1500);assert(entry);h.timers.delete(entry[0]);entry[1].fn();await settle();}}
  assert.equal(h.calls.length,40);assert.equal(h.timers.size,0);assert.equal(h.api.state.reasonData,null);assert.match(h.api.state.reasonError,/仍在后台更新/);
 });
+
+const lastComplete=(patch={},publication={})=>response('previous complete',{
+ updatedAt:'2026-10-17T12:00:00.123456+05:30',summary:{operatorCounts:{manual:1,manualWithReason:1}},
+ publication:{contract:'withdraw-reasons-last-complete-v1',status:'ready',servedLastComplete:true,freshness:'refresh_due',computedAt:'2026-10-17T06:31:00.123456Z',updatedAt:'2026-10-17T12:00:00.123456+05:30',refreshState:'queued',...publication},...patch
+});
+test('last-complete immediately shows original statistics and timestamps without preparation polling',async()=>{
+ for(const refreshState of ['queued','running','failed']){
+  const h=load(),data=lastComplete({}, {refreshState,...(refreshState==='failed'?{refreshError:'compute_failed'}:{})});
+  h.open();h.reply(0,data);await settle();
+  assert.equal(h.api.state.reasonBusy,false);assert.equal(h.api.state.reasonData,data);assert.equal(h.api.state.reasonData.coverage.complete,false);
+  assert.equal(h.timers.size,0);assert.equal(h.calls.length,1);assert.match(h.html(),/data-withdraw-reason-publication="last-complete"/);
+  assert.match(h.html(),refreshState==='failed'?/更新失败/:/更新中/);assert.match(h.html(),/上次完整统计/);
+  assert(h.html().includes(data.updatedAt.replace('T',' ')));assert.equal(h.api.state.reasonData.publication.computedAt,data.publication.computedAt);
+ }
+ const h=load();h.open();h.reply(0,lastComplete({updatedAt:null},{updatedAt:null}));await settle();assert.match(h.html(),/统计时间 2026-10-17 06:31:00.123456Z/);assert.doesNotMatch(h.html(),/数据时间/);assert.equal(h.api.state.reasonData.updatedAt,null);
+});
+test('last-complete never populates the exact reason cache or the complete local pagination snapshot',async()=>{
+ const h=load();h.open();h.reply(0,lastComplete());await settle();
+ h.ctx.withdrawReasonSize(50);assert.equal(h.calls.length,2);assert.equal(h.calls[1].q.limit,50);h.reply(1,lastComplete());await settle();
+ h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,3);h.reply(2,response('current'));await settle();
+ h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,3);assert.equal(h.api.state.reasonData.rows[0].reason,'current');assert.doesNotMatch(h.html(),/data-withdraw-reason-publication/);
+});
+test('invalid last-complete envelopes fail closed without caching, polling or replacing source uncertainty',async()=>{
+ const invalid=[
+  lastComplete({}, {contract:'unknown'}),lastComplete({}, {status:'building'}),lastComplete({}, {servedLastComplete:false}),
+  lastComplete({}, {freshness:'fresh'}),lastComplete({}, {computedAt:'2026-02-30T00:00:00Z'}),lastComplete({}, {computedAt:'not-a-date'}),
+  lastComplete({}, {updatedAt:'2026-10-18T00:00:00Z'}),lastComplete({}, {refreshState:'idle'}),lastComplete({}, {refreshError:'unsafe error text'}),
+  lastComplete({}, {unknown:true}),lastComplete({prepared:preparing().prepared}),lastComplete({available:false}),lastComplete({summary:null}),
+  lastComplete({coverage:null}),lastComplete({rows:[null]}),lastComplete({total:'1'}),lastComplete({partial:true}),lastComplete({complete:false}),
+  lastComplete({error:'source failure'}),lastComplete({publication:null})
+ ];
+ for(const data of invalid){
+  const h=load();h.open();h.reply(0,data);await settle();assert.equal(h.api.state.reasonData,null);assert.equal(h.timers.size,0);assert.match(h.api.state.reasonError,/旧结果信息无效/);
+  assert.doesNotMatch(h.html(),/data-withdraw-reason-publication/);h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,2);
+ }
+});
+test('cancelled or obsolete actor, native and window reads cannot display or cache last-complete results',async()=>{
+ for(const stop of [h=>h.ctx.withdrawReasonClose(),h=>h.api.pause(),h=>h.ctx.hensemDataScope={identity:'other'},h=>h.L.catalog[0].source='newar',h=>h.L.successTo='2026-10-12T23:59:59']){
+  const h=load();h.open();stop(h);h.reply(0,lastComplete());await settle();assert.equal(h.api.state.reasonData,null);assert.doesNotMatch(h.html(),/data-withdraw-reason-publication/);
+  h.ctx.withdrawReasonClose();if(h.api.state.data){h.open();assert.equal(h.calls.length,2);}else assert.equal(h.calls.length,1); // Scope drift requires a fresh main query before reopening.
+ }
+});
+test('a preparation can finish with a last-complete result, stop polling and retain the original time',async()=>{
+ const h=load();h.open();h.reply(0,preparing());await settle();await h.tick(1500);assert.equal(h.calls.length,2);
+ const data=lastComplete();h.reply(1,data);await settle();assert.equal(h.api.state.reasonData,data);assert.equal(h.timers.size,0);assert.equal(h.api.state.reasonBusy,false);
+ h.ctx.withdrawReasonClose();h.open();assert.equal(h.calls.length,3);
+});
+test('restored invalid publication cannot render ordinary complete counts',async()=>{
+ const h=load();h.open();h.reply(0,lastComplete());await settle();const saved=h.api.capture();
+ saved.reasonData={...saved.reasonData,publication:{...saved.reasonData.publication,computedAt:'invalid'}};h.api.restore(saved);h.ctx.withdrawReasonOriginalClose();
+ assert.match(h.html(),/旧结果信息无效/);assert.doesNotMatch(h.html(),/withdraw-reason-summary|data-withdraw-reason-publication/);
+});
