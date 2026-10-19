@@ -29,7 +29,7 @@ test('one date-cell click opens platform rates directly under that provider row 
  const initial=h.render();assert.match(initial,/>63\.33%<\/button>/);h.action(h.segment());const html=h.render(),detail=panel(html),rows=cells(detail);
  assert.deepEqual(rows,[['Same Platform','ar','2000.00','20','700.00','7','35.00%'],['Same Platform','ar','1000.00','10','1200.00','12','120.00%']]);
  const rates=rawCells(detail).map(row=>row[6]);assert.match(rates[0],/provider-daily-rate-low/);assert.match(rates[1],/class="provider-daily-rate"/);assert.doesNotMatch(rates[1],/provider-daily-rate-low/);
- assert.match(html,/<\/tr><tr class="analysis-expanded-row provider-daily-detail-row"><td colspan="35">/);assert.match(detail,/2026-09-24 · ExamplePay · ar · 代收/);assert.doesNotMatch(detail,/newar|OtherPay|90000|80000|70000|60000|各平台占比|每日对比/);assert.equal(h.calls.length,0);
+ assert.match(html,/<\/tr><tr class="analysis-expanded-row provider-daily-detail-row"><td colspan="6">/);assert.match(detail,/2026-09-24 · ExamplePay · ar · 代收/);assert.doesNotMatch(detail,/newar|OtherPay|90000|80000|70000|60000|各平台占比|每日对比/);assert.equal(h.calls.length,0);
  const expansion=html.indexOf('provider-daily-detail-row'),nextSourceRow=html.indexOf('<td>newar</td>');assert(expansion>0&&expansion<nextSourceRow,'selected row detail is above the next provider/source row');
 });
 test('opening a second day replaces the old row detail and a changed query clears expansion state',()=>{

@@ -182,7 +182,7 @@
   const {L}=props,model=buildModel(props);
   if(!model.ready)return '<div class="live-status live-query-prompt">'+escape(model.message)+'</div>';
   if(!L.loading&&!L.restoredPage&&L.feeLookupRows===null&&!L.feeLookupLoading&&!L.feeLookupError)props.ensureFeeLookup?.();
-  const windows=L.successWindows||[],windowGroups=[...new Set(windows.map(w=>(w.successStartAt?'创建 ':'')+w.from.replace('T',' ')+' 至 '+w.to.replace('T',' ')+(w.successStartAt?'；'+(w.successBasis==='source_updated'?'源订单更新 ':'成功 ')+w.successFrom.replace('T',' ')+' 至 '+w.successTo.replace('T',' '):'')+' · '+w.timezone+(w.clamped?'（截至查询时刻）':'')))],notices=[];
+  const windows=L.successWindows||[],windowGroups=[...new Set(windows.map(w=>(w.successFrom&&w.successTo?'创建 ':'')+w.from.replace('T',' ')+' 至 '+w.to.replace('T',' ')+(w.successFrom&&w.successTo?'；'+(w.successBasis==='source_updated'?'源订单更新 ':'成功 ')+w.successFrom.replace('T',' ')+' 至 '+w.successTo.replace('T',' '):'；成功日期默认沿查询日期')+' · '+w.timezone+(w.clamped?'（截至查询时刻）':'')))],notices=[];
   if(windowGroups.length)notices.push('已查询 '+windowGroups.map(escape).join('；')); 
   if(L.error)notices.push(escape(L.error));
   if(L.loading||L.queryRetrying)notices.push(escape(L.progress||'正在读取平台成功率；当前为部分结果。'));
