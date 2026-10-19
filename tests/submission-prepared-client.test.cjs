@@ -22,3 +22,14 @@ test('a slow initial admission uses the remaining60s budget, pauses never-admitt
  const calls=h.calls.length;await h.ui.ensure();await h.advance(60000);await h.ui.ensure();assert.equal(h.calls.length,calls);assert.equal(h.ui.capture().preparedBudgetEnded,true);late();await flush();assert.equal(h.ui.capture().results.length,2);
  h.handler(q=>h.ready(q));await h.ui.resume();assert.equal(h.calls.length,calls+3);assert.equal(h.calls.filter(q=>q.platformId==='native-1').length,1);assert.equal(h.calls.filter(q=>q.platformId==='native-2').length,1);assert.equal(h.ui.metric().received,5);assert.equal(h.ui.capture().status,'ready');assert.equal(h.timers.size,0);
 });
+test('legacy summaries share the60s budget from first dispatch, excluding the wait for main orders',async()=>{
+ const h=harness(5),batch=h.ui.startWithOrders();await h.advance(120000);assert.equal(h.calls.length,0);assert.equal(h.timers.size,0);const start=h.time();let marker=0,late;
+ const legacy=q=>{const r=h.ready(q);delete r.publication;return r;};
+ h.handler(q=>q.platformId==='native-2'?new Promise(resolve=>late=()=>resolve(legacy(q))):new Promise(resolve=>h.timers.set('legacy-'+(++marker),{at:h.time()+29000,fn:()=>resolve(legacy(q))})));
+ const opening=(async()=>{for(const p of h.platforms)await batch.read(p.id);await batch.finish();})();await flush();await h.advance(29000);await h.advance(29000);assert.equal(h.calls.length,3);await h.advance(2000);await opening;
+ const s=h.ui.capture();assert.equal(h.time()-start,60000);assert.equal(s.status,'paused');assert.equal(s.results.length,2);assert(s.results.every(r=>r.publication===undefined));assert.equal(s.reads['native-2'].status,'paused');assert.equal(s.reads['native-3'].attempts,0);assert.equal(s.reads['native-4'].attempts,0);assert.equal(h.ui.metric().complete,false);assert.equal(h.timers.size,0);const n=h.calls.length;await h.ui.ensure();await h.advance(60000);assert.equal(h.calls.length,n);late();await flush();assert.equal(h.ui.capture().results.length,2);
+});
+test('legacy fallback timeouts stop the whole18-platform round by60s without claiming prepared jobs or zero statistics',async()=>{
+ const h=harness(18),start=h.time();h.handler(()=>new Promise(()=>{}));const opening=initial(h);await flush();await h.advance(30000);assert.equal(h.calls.length,2);await h.advance(30000);const b=await opening;await b.finish();const s=h.ui.capture();
+ assert.equal(h.time()-start,60000);assert.equal(h.calls.length,2);assert.equal(s.status,'paused');assert.equal(s.results.length,0);assert.equal(s.windowCompletedAt,null);assert.equal(s.reads['native-0'].status,'failed');assert.equal(s.reads['native-1'].status,'paused');assert.equal(s.reads['native-2'].attempts,0);assert(!Object.values(s.reads).some(r=>r.status==='preparing'));assert.equal(h.ui.metric().available,false);assert.equal(h.ui.metric().complete,false);assert.equal(h.timers.size,0);await h.ui.ensure();await h.advance(60000);assert.equal(h.calls.length,2);
+});

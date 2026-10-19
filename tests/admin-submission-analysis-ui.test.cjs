@@ -76,7 +76,7 @@ test('network retries remain bounded and serial, diagnostics escape platform/err
  const calls=h.calls.length;global.liveSubmissionCoverage();assert.equal(h.calls.length,calls);const progress=h.tables.findLast(t=>t.classes==='submission-read-progress');assert.match(progress.rows[0][0],/&lt;Platform a&gt;/);assert.match(progress.rows[0][3],/网络连接失败：network failed &lt;unsafe&gt;/);assert.doesNotMatch(h.drawers.at(-1).body,/<unsafe>|<Platform a>/);await h.ui.ensure();assert.equal(h.calls.length,calls);
 });
 test('unrequested shared-lane platforms stay inspectable and explicit retry preserves completed facts',async()=>{
- const h=harness();h.select([platform(),platform('b')]);const batch=h.ui.startWithOrders();await batch.read('a');await batch.finish();assert.equal(h.ui.metric().received,1);assert.equal(h.ui.metric().complete,false);assert.match(h.ui.note(true),/未完成 Synthetic b/);assert.match(h.ui.note(),/重试未完成/);
+ const h=harness();h.select([platform(),platform('b')]);const batch=h.ui.startWithOrders();await batch.read('a');await batch.finish();assert.equal(h.ui.metric().received,1);assert.equal(h.ui.metric().complete,false);assert.match(h.ui.note(true),/未完成 Synthetic b/);assert.equal(h.ui.capture().status,'paused');assert.match(h.ui.note(),/继续读取/);
  global.liveSubmissionCoverage();const progress=h.tables.findLast(t=>t.classes==='submission-read-progress');assert.deepEqual(progress.rows[1].slice(0,3),['Synthetic b','尚未读取','0']);const requests=h.calls.length;await global.liveSubmissionRetry();assert.deepEqual(h.calls.slice(requests).map(q=>q.platformId),['b']);assert.equal(h.ui.metric().received,2);
 });
 test('captured active reads restore as paused and resume only unfinished platforms with legacy snapshot compatibility',async()=>{

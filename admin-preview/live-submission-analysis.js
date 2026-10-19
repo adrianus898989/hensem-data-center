@@ -140,11 +140,15 @@
    const pauseAtDeadline=()=>{S.reads={...S.reads,[platformId]:{status:wasPreparing?'preparing':'paused',attempts:S.reads?.[platformId]?.attempts||0}};if(valid(id))c.render();};
    if(poll){if(poll.dispatched>=40||poll.startedAt!==null&&now()>=poll.startedAt+60000){pauseAtDeadline();return;}poll.dispatched++;}
    S.reads={...S.reads,[platformId]:{status:retry?'retrying':'reading',attempts}};c.render();try{
-    const request=options.forceRefresh&&item.request.preparedVersion===1?{...item.request,forceRefresh:true}:item.request,remaining=poll&&poll.startedAt!==null?Math.max(0,poll.startedAt+60000-now()):null;
+    const request=options.forceRefresh&&item.request.preparedVersion===1?{...item.request,forceRefresh:true}:item.request;
+    // One supplementary window has one budget, including legacy responses.
+    // Start only at its first actual dispatch, never while waiting for orders.
+    if(poll&&poll.startedAt===null)poll.startedAt=now();
+    const remaining=poll?Math.max(0,poll.startedAt+60000-now()):null;
     if(remaining===0){pauseAtDeadline();return;}
     const raw=await readSummary(request,remaining===null?options.timeoutMs:Math.min(options.timeoutMs??summaryReadTimeoutMs,remaining));if(!valid(id))return;
     if(poll&&poll.startedAt!==null&&now()>=poll.startedAt+60000){pauseAtDeadline();return;}
-    const preparing=preparedState(raw,item);if(preparing){if(preparing.status==='failed')throw Object.assign(Error('剔除统计暂未生成：'+preparing.reason),{code:'SUBMISSION_PREPARED_FAILED'});if(poll&&poll.startedAt===null)poll.startedAt=now();S.reads[platformId]={status:'preparing',attempts};c.render();return;}
+    const preparing=preparedState(raw,item);if(preparing){if(preparing.status==='failed')throw Object.assign(Error('剔除统计暂未生成：'+preparing.reason),{code:'SUBMISSION_PREPARED_FAILED'});S.reads[platformId]={status:'preparing',attempts};c.render();return;}
     const value=validate(raw,item);if(!valid(id))return;S.results=S.results.filter(r=>r.platform.id!==platformId);const result={...value,_submissionReadAt:now(),_submissionCacheHit:false};S.results.push(result);if(S.supplementary)rememberSummary(item,result,cacheGeneration);S.failures=S.failures.filter(r=>r.id!==platformId);S.reads[platformId]={status:'ready',attempts};
    }catch(error){if(!valid(id))return;if(['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(error?.code||''))){clearCache();S={...S,results:[],status:'error',error:'登录或查询权限已变化，请重新验证后查询。'};c.render();return;}if(poll&&poll.startedAt!==null&&now()>=poll.startedAt+60000){pauseAtDeadline();return;}const retryable=transient(error);S.failures=S.failures.filter(r=>r.id!==platformId);S.failures.push({id:platformId,name:item.platform.name,error:error?.message||'读取失败',retryable,kind:failureKind(error),attempts});S.reads[platformId]={status:retryable&&!retry&&options.autoRetry!==false?'waiting_retry':'failed',attempts};}if(valid(id))c.render();}
 
@@ -166,7 +170,7 @@
     await Promise.all(Array.from({length:Math.min(1,work.length)},()=>worker()));if(valid(id)&&supplementary)await finishPrepared(work,id,preparedPoll);if(valid(id)&&!supplementary)await retryTransient(work,id);if(valid(id)){const unfinished=S.items.some(item=>['queued','preparing','paused'].includes(S.reads?.[item.platform.id]?.status));S.status=unfinished?'paused':S.failures.length&&!S.results.length?'error':'ready';S.preparedBudgetEnded=unfinished;if(unfinished)S.windowCompletedAt=null;else if(S.windowCompletedAt==null)S.windowCompletedAt=now();c.render()}})();pending=run;run.finally(()=>{if(id===serial)pending=null});return run;
   }
   // The caller owns the page schedule. Supplementary starts stay serial,
-  // and each execution deadline starts only when that read is activated.
+  // and the shared execution deadline starts at the first actual dispatch.
   function startWithOrders(force=false){if(c.isPublished?.())return null;let q;try{q=scope()}catch{return null}
    if(force)dropSummaryCache();const old=S,retained=force?[]:q.items.map(cachedSummary).filter(Boolean);
    const id=++serial;cancelSummaryReads();streakSerial++;streakDetailSerial++;closeMembers();S={...initial(),...q,supplementary:true,results:retained,reads:initialReads(q.items,retained),expanded:retained.length?old.expanded:initial().expanded,status:'loading'};const requested=new Map(),preparedPoll={startedAt:null,dispatched:0};let tail=Promise.resolve();
