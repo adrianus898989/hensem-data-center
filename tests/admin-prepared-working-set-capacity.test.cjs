@@ -24,12 +24,30 @@ test('the2MiB per-entry optional stripping rule and absent or unknown provider f
  for(const mode of['large','absent','unknown']){const h=cached({completedCacheMaxBytes:96*1024*1024,handler:p=>packed(p,mode==='large'?600000:1000,mode!=='absent')});await h.adapter.read(query(0));const before=h.calls.length;await h.adapter.read(query(0));assert.equal(h.calls.length,before);await h.adapter.read({...query(0),providers:[mode==='unknown'?'UnresolvedPay':'TukPay']});assert.equal(h.calls.length,before+1);}
 });
 
-// The host must opt in; changing only the default manager would hide a wiring bug.
-test('actual host explicitly retains its18+18 large envelopes for the first unseen provider',async()=>{
+// The real host must not request every optional provider result on first read.
+test('production host reads main results first and fetches an unseen exact provider once',async()=>{
  const uiPrefix=fs.readFileSync(path.join(__dirname,'admin-provider-historical-routing.test.cjs'),'utf8').split(/\ntest\(/)[0];
  const {fixture,prepared}=new Function('require','__dirname',uiPrefix+';return{fixture,prepared};')(require,__dirname);
- const h=await fixture({handler:p=>p.action==='aggregatePrepared'?packed(p,350000,true,prepared,false):undefined});h.setNow('2026-10-18T12:00:00Z');
+ const h=await fixture({handler:p=>{
+  if(p.action!=='aggregatePrepared')return;
+  assert.equal(p.providerReuseNames,undefined);
+  const result=prepared(p);
+  for(const item of result.items){
+   if(item.request.providers?.includes('TukPay')){
+    const row={...item.result.groups.provider[0],provider:'TukPay',all_amount:'0.000000000000000000019',success_amount:null};
+    item.result.groups.provider=[row];item.result.summary=[row];
+   }
+   assert.equal(item.providerReuse,undefined);
+  }
+  return result;
+ }});h.setNow('2026-10-18T12:00:00Z');
  for(const[k,v]of Object.entries({from:'2026-10-11T00:00:00',to:'2026-10-17T23:59:59',successFrom:'2026-10-11T00:00:00',successTo:'2026-10-17T23:59:59'}))h.c.liveMetricTimeSet(k,v);
- h.c.liveProvider('');await h.c.liveQuery();const count=()=>h.calls.filter(p=>p.action==='aggregatePrepared').length;assert.equal(count(),12);assert.equal(h.L.results.length,18);assert.equal(h.L.comparisonResults.length,18);
- h.c.liveProvider('TukPay');await h.c.liveQuery();assert.equal(count(),12);assert.equal(h.L.results.length,18);assert.equal(h.L.comparisonResults.length,18);assert(h.L.results.every(r=>r.summary[0].all_amount==='0.000000000000000000019'&&r.summary[0].success_amount===null));
+ const count=()=>h.calls.filter(p=>p.action==='aggregatePrepared').length;
+ h.c.liveProvider('');await h.c.liveQuery();assert.equal(count(),12);assert.equal(h.L.results.length,18);assert.equal(h.L.comparisonResults.length,18);
+ h.c.liveProvider('TukPay');await h.c.liveQuery();assert.equal(count(),24);assert.equal(h.L.results.length,18);assert.equal(h.L.comparisonResults.length,18);
+ assert(h.L.results.every(r=>r.summary[0].all_amount==='0.000000000000000000019'&&r.summary[0].success_amount===null));
+ h.c.liveProvider('');await h.c.liveQuery();assert.equal(count(),24);
+ h.c.liveProvider('TukPay');await h.c.liveQuery();assert.equal(count(),24);
+ assert(h.L.results.every(r=>r._preparedPublication.sourceComplete===false));
+ assert.equal(h.calls.filter(p=>p.action==='aggregate').length,0);
 });
