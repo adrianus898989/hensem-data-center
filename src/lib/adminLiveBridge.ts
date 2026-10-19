@@ -105,7 +105,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     return {...p};
   }
   if(p.action==="submissionAnalysis"){
-    const allowed=["action","platformId","startAt","endAt","direction","currency","providers","operation","threshold","level","memberId","day","offset","limit","amountBands","charts"];
+    const allowed=["action","platformId","startAt","endAt","direction","currency","providers","operation","threshold","level","memberId","day","offset","limit","amountBands","charts","preparedVersion","forceRefresh"];
     if(Object.keys(p).some(k=>!allowed.includes(k)))throw Error("刷单分析参数无效");
     if(typeof p.platformId!=="string"||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(p.platformId))throw Error("刷单分析平台无效");
     for(const k of ["startAt","endAt"])if(typeof p[k]!=="string"||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(String(p[k]))||!Number.isFinite(Date.parse(String(p[k]))))throw Error("刷单分析日期无效");
@@ -116,6 +116,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       if(typeof p.day!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(p.day)||!Number.isFinite(Date.parse(p.day+"T00:00:00Z"))||new Date(p.day+"T00:00:00Z").toISOString().slice(0,10)!==p.day)throw Error("无效订单日期无效");
     }else if(p.day!==undefined)throw Error("刷单分析日期参数无效");
     if(p.charts!==undefined&&typeof p.charts!=="boolean")throw Error("刷单图表参数无效");
+    if(p.preparedVersion!==undefined&&(p.preparedVersion!==1||p.operation!=="summary"||p.charts!==false||p.threshold!==15)||p.forceRefresh!==undefined&&(p.preparedVersion!==1||typeof p.forceRefresh!=="boolean"))throw Error("剔除预计算参数无效");
     if(p.amountBands!==undefined){
       const bands=p.amountBands as Record<string,unknown>;
       if(!bands||typeof bands!=="object"||Array.isArray(bands)||Object.keys(bands).length!==1||!Array.isArray(bands.charge))throw Error("刷单金额档位无效");
