@@ -29,14 +29,18 @@
   validate(state);
   if(typeof platform?.timezone!=='string'||!platform.timezone.trim())throw Error('平台时区未提供');
   new Intl.DateTimeFormat('en',{timeZone:platform.timezone});
-  const independent=hasSuccessWindow(state),basis=String(platform.source||'').toLowerCase().replaceAll('_','')==='duoli'?'source_updated':independent?state.successBasis:'success';
+  const independent=hasSuccessWindow(state),source=String(platform.source||'').toLowerCase().replaceAll('_','');
+  // An explicit NEW_AR withdrawal choice remains explicit when its optional
+  // window is blank: use the creation dates, not a different clock.
+  const basis=source==='duoli'?'source_updated':source==='newar'&&state.direction==='withdraw'?state.successBasis:independent?state.successBasis:'success';
   return {startAt:instant(state.from,platform.timezone),endAt:instant(state.to,platform.timezone,true),successStartAt:instant(independent?state.successFrom:state.from,platform.timezone),successEndAt:instant(independent?state.successTo:state.to,platform.timezone,true),successBasis:basis};
  }
  function same(state){ensure(state);return state.successBasis==='success'&&(!state.successFrom&&!state.successTo||state.from===state.successFrom&&state.to===state.successTo);}
- function render(state,escape,zone){
+ function render(state,escape,zone,{allowSourceUpdated=false}={}){
   ensure(state);
   const endpoint=(key,label)=>'<label class="live-metric-endpoint" for="liveMetric-'+key+'"><span>'+label+'</span><input id="liveMetric-'+key+'" aria-label="'+label+'" type="datetime-local" step="1" value="'+escape(state[key]||'')+'" onchange="liveMetricTimeSet(\''+key+'\',this.value)"></label>';
-  return '<div class="live-metric-windows" role="group" aria-label="统计时间范围"><div class="live-metric-window">'+endpoint('from','创建开始时间')+endpoint('to','创建结束时间')+'</div><div class="live-metric-window">'+endpoint('successFrom','成功开始时间（可选）')+endpoint('successTo','成功结束时间（可选）')+'</div><span class="live-metric-zone">'+escape(zone)+'</span></div>';
+  const updated=allowSourceUpdated&&state.successBasis==='source_updated',basis=allowSourceUpdated?'<label class="live-metric-basis" for="liveMetricBasis"><span>新中台出款成功统计依据</span><select id="liveMetricBasis" onchange="liveMetricTimeSet(\'successBasis\',this.value)"><option value="success"'+(!updated?' selected':'')+'>成功时间</option><option value="source_updated"'+(updated?' selected':'')+'>源订单更新时间</option></select></label>':'';
+  return '<div class="live-metric-windows" role="group" aria-label="统计时间范围"><div class="live-metric-window">'+endpoint('from','创建开始时间')+endpoint('to','创建结束时间')+'</div><div class="live-metric-window">'+basis+endpoint('successFrom',updated?'更新开始时间（可选）':'成功开始时间（可选）')+endpoint('successTo',updated?'更新结束时间（可选）':'成功结束时间（可选）')+'</div><span class="live-metric-zone">'+escape(zone)+(updated?' · 成功状态＋源订单更新时间；不代表实际到账时间，留空沿用创建日期范围':'')+'</span></div>';
  }
  root.HensemStatisticWindows={fields,enabled:page=>aggregatePages.has(page),valid,ensure,reset,validate,hasSuccessWindow,request,same,render};
 })(typeof window==='undefined'?globalThis:window);
