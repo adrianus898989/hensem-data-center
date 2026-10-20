@@ -24,7 +24,7 @@ export function installDashboardReleaseCheck({
     nextAttemptAt = Date.now() + INTERVAL_MS;
     const ownController = new AbortController();
     controller = ownController;
-    let timeout: ReturnType<typeof window.setTimeout> | undefined;
+    let timeout: number | undefined;
     try {
       const deadline = new Promise<null>(resolve => {
         cancelRead = () => resolve(null);
