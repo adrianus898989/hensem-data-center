@@ -254,7 +254,7 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
      if(Object.hasOwn(c,'latestCollectedAt'))c.latestCollectedAt=current.map(x=>x.latestCollectedAt).filter(Boolean).sort().at(-1)||null;
     }
     d.comparison={...d.comparison,matchedRows:matched.length,totalRows:rows.length,complete:d.comparison?.complete===true&&rows.length>0&&rows.every(r=>r.previous&&r.previous.coveredDays===r.coveredDays)};
-    const applied={query:q,scopeKey:selectionKey(),country:displayCountry(),teams:activeTeams().slice(),catalog:scopeCatalog().map(p=>({...p})),platforms:[],rowCountry:'',historical:false,accessKey:accessKey(),nativeStamp:nativeStamp()};
+    const applied={query:q,scopeKey:selectionKey(),country:displayCountry(),teams:activeTeams().slice(),catalog:scopeCatalog().map(p=>({...p})),platforms:[],rowCountry:'',historical:false,successWindowExplicit:base.applied.successWindowExplicit===true,accessKey:accessKey(),nativeStamp:nativeStamp()};
     Object.assign(d,{country:applied.country,rawCountry:q.country,scopeTargets:q.scopeTargets||null,scopeKey:applied.scopeKey});
     S.applied=applied;S.data=d;S.dataKey=JSON.stringify([applied.scopeKey,q]);S.localSnapshot=true;S.serverPaging=false;S.dirty=false;S.page=1;S.secondaryPage=1;L.dirty=false;return true;
    }catch{return false;}

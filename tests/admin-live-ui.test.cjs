@@ -1653,7 +1653,14 @@ test('pending analysis queries sixteen authorized scoped identities without the 
 test('pending analysis never falls back to reports or an unscoped query when its core directory is unavailable or empty',async()=>{
  for(const kind of ['failed','empty']){
   const h=harness({page:'stuck',reports:true,handler:q=>{if(q.action==='catalog'){if(kind==='failed')throw Error('Synthetic core directory unavailable');return {platforms:[],withdrawPlatforms:[]};}if(q.action==='collectedData')throw Error('Must not read report inventory');throw Error('Unexpected request: '+q.action);}});
-  await settle();setScope(h);await h.c.liveQuery();await settle();
+  await settle();
+  if(kind==='empty'){
+   assert.equal(h.L.country,'');const before=h.calls.length;await h.c.liveQuery();await settle();
+   assert.equal(h.calls.length,before,'an empty directory cannot silently select a country or start a fallback read');assert.match(h.html(),/请选择具体国家后查询/);
+  }
+  // A retained concrete country must still reach the directory guard, with no
+  // report fallback or unscoped snapshot request when the directory is empty.
+  setScope(h,{country:'印度'});await h.c.liveQuery();await settle();
   assert.equal(h.calls.filter(q=>q.action==='pendingAnalysis').length,0);assert.equal(h.calls.filter(q=>q.action==='collectedData').length,0);
   assert.match(h.html(),kind==='failed'?/Synthetic core directory unavailable/:/当前范围没有可查询的代付中快照平台/);
  }

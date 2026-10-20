@@ -96,8 +96,8 @@ test('previous full empty-hour coverage means genuine zeros; incomplete previous
 
 function actualAggregateRead(){
  const live=fs.readFileSync(path.join(root,'admin-preview/live-data.js'),'utf8'),ast=ts.createSourceFile('live-data.js',live,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS),functions=[],functionNames=[],variables=[];
- const wantedFunctions=new Set(['query','providerQueryNames','readAggregate','mergeParts','combine','plus']),wantedVariables=new Set(['countKeys','amountKeys','empty','isSuccessAnalysis']);
- function walk(n){if(ts.isFunctionDeclaration(n)&&wantedFunctions.has(n.name?.text)){functions.push(n.getText(ast));functionNames.push(n.name.text);}if(ts.isVariableDeclaration(n)&&wantedVariables.has(n.name.getText(ast)))variables.push('const '+n.getText(ast)+';');ts.forEachChild(n,walk)}walk(ast);assert.deepEqual(functionNames.sort(),[...wantedFunctions].sort(),'load every actual query/read/merge dependency exactly once');assert.equal(variables.length,4);
+ const wantedFunctions=new Set(['query','providerQueryNames','readAggregate','mergeParts','combine','plus']),wantedVariables=new Set(['countKeys','amountKeys','empty','isSuccessAnalysis','countrySelectable']);
+ function walk(n){if(ts.isFunctionDeclaration(n)&&wantedFunctions.has(n.name?.text)){functions.push(n.getText(ast));functionNames.push(n.name.text);}if(ts.isVariableDeclaration(n)&&wantedVariables.has(n.name.getText(ast)))variables.push('const '+n.getText(ast)+';');ts.forEachChild(n,walk)}walk(ast);assert.deepEqual(functionNames.sort(),[...wantedFunctions].sort(),'load every actual query/read/merge dependency exactly once');assert.equal(variables.length,5);
  // query no longer depends on the retired success-only single-date validator.
  // Include the real document-scoped cache and transport together; readAggregate
  // now verifies permissions, source identity and exact response boundaries.
@@ -106,6 +106,7 @@ function actualAggregateRead(){
  const c={L,state:{page:'overview'},calls,AbortController,structuredClone,roleAllowed:()=>true,visibleCatalog:()=>L.catalog,localClock:ms=>new Date(ms).toISOString().slice(0,19),normalizePageDirection(){},statisticWindowsEnabled:()=>false,aggregateMode:()=> 'full',providerDirection:()=>null,isFlowPage:()=>false,orderSource:()=> 'ar',displayIdentity:p=>p,activeValues:()=>[],instant:v=>v+'Z',HensemLiveCompare:{windowFor:()=>({valid:true,calendarDays:2,currentFrom:'2026-09-29T00:00:00',currentTo:'2026-09-30T23:59:59',previousFrom:'2026-09-27T00:00:00',previousTo:'2026-09-28T23:59:59'})}};
  c.workordersReadCache=null;c.window=c;c.hensemLiveRequest=async q=>{calls.push({...q});return {platform:p,startAt:q.startAt,endAt:q.endAt,total:0,summary:[],rows:[],groups:q.view==='providers'?{provider:[]}:{provider:[],hourly:[]}}};
  vm.runInNewContext(fs.readFileSync(path.join(root,'admin-preview/live-provider-aliases.js'),'utf8'),c);
+ vm.runInNewContext(fs.readFileSync(path.join(root,'admin-preview/live-report-data.js'),'utf8'),c);
  vm.runInNewContext(variables.join('\n')+'\n'+cache+'\n'+functions.join('\n')+'\nwindow.buildQuery=query;window.read=readAggregate;',c);return c;
 }
 
