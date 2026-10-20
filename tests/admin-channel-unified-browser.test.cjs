@@ -99,8 +99,8 @@ function exported(h) {
   return rows.slice(4).map(row => Object.fromEntries(header.map((name, index) => [name, row[index]])));
 }
 
-// The old all-platform/chip workspace is retired. These use the real single /
-// cross modes and the same authorized full-snapshot transport and cache.
+// The old automatic all-platform workspace stays retired. Single, explicit grouped
+// and cross modes share the authorized full-snapshot transport and cache.
 const cross=h=>{h.context.liveChannelMode('cross');};
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{promise,resolve,reject};};
 const matchedRows=(id='same',extra={})=>[channel(id,{provider:'WPayINR',channel_name:'WPay-QR',...extra})];
@@ -217,4 +217,64 @@ test('directory pause settles loading cache and leaves a retryable provider quer
 });
 test('generated compact selector remains sandbox-safe and uses exact native suggestion values',async()=>{
  const h=fixture({rowsFor:()=>matchedRows()});await h.start();cross(h);const html=h.mod.render();assert.match(html,/list="channel-cross-names"/);assert.match(html,/onchange="liveChannelCrossChoose\(this.value\)"/);assert.match(html,/type="button" onclick="liveChannelCrossQuery/);assert.doesNotMatch(html,/type="submit"|channel-browse-providers/);await h.context.liveChannelCrossChoose('WPay-QR');assert.equal(h.mod.capture().cross.query.label,'WPay-QR');assert.equal(h.calls.length,1,'a known cached platform needs no repeat read');
+});
+
+const grouped=h=>h.context.liveChannelMode('grouped');
+
+test('platform grouping starts with the current platform and reuses its validated snapshot',async()=>{
+ const catalog=Array.from({length:15},(_,i)=>platform(i+1)),h=fixture({catalog});await h.start();h.context.liveChannelSelect(2);await flush();const before=h.calls.length;grouped(h);await flush();
+ assert.equal(h.mod.capture().mode,'grouped');assert.deepEqual(plain(h.mod.capture().browse.platformIds),[catalog[2].id]);assert.equal(h.calls.length,before);
+ const html=h.mod.render();assert.match(html,/平台分组/);assert.match(html,/选择平台 · 已选 1 个平台/);assert.equal(groups(html).size,1);assert(groups(html).has(catalog[2].id));assert.match(html,/liveChannelBrowseCollapse/);
+});
+test('explicit multi-selection reads only uncached platforms and keeps per-platform channels and rates independent',async()=>{
+ const catalog=[platform(1),platform(2),platform(3)],h=fixture({catalog,rowsFor:p=>[channel('same',{success_rate_30m:p.id===catalog[0].id?'20':'90'})]});await h.start();grouped(h);await flush();selectPlatforms(h,catalog,catalog.slice(0,2));await flush();
+ assert.deepEqual(h.calls.map(q=>q.platformIds),[[catalog[0].id],[catalog[1].id]]);const result=groups(h.mod.render());assert.equal(result.size,2);assert.match(result.get(catalog[0].id),/20\.00%/);assert.match(result.get(catalog[1].id),/90\.00%/);assert.doesNotMatch(h.mod.render(),/55\.00%/);
+ const rows=exported(h);assert.equal(rows.length,2);assert.deepEqual(rows.map(r=>r['平台']),catalog.slice(0,2).map(p=>p.name));assert(rows.every(r=>r['通道 ID']==='same'));
+});
+test('explicit all-platform selection is a fixed authorized set and never silently includes new catalog entries',async()=>{
+ const catalog=[platform(1),platform(2)],h=fixture({catalog});await h.start();grouped(h);h.context.liveChannelBrowseAllPlatforms();h.context.liveChannelBrowseApplyPlatforms();await flush();
+ assert.deepEqual(plain(h.mod.capture().browse.platformIds),catalog.map(p=>p.id));h.setCatalog([...catalog,platform(3)]);h.mod.render();await flush();assert.equal(h.calls.length,2);assert.equal(groups(h.mod.render()).size,2);assert(!h.mod.capture().browse.platformIds.includes(platform(3).id));
+});
+test('grouped batch transport stays sequential at twenty and coalesces identical pending loads',async()=>{
+ const catalog=Array.from({length:42},(_,i)=>platform(i+1)),h=fixture({catalog});await h.start();grouped(h);await flush();const pending=[];h.setHandler(q=>new Promise(resolve=>pending.push({q,resolve})));h.context.liveChannelBrowseAllPlatforms();h.context.liveChannelBrowseApplyPlatforms();await flush();const joined=h.mod.load();await flush();
+ assert.equal(pending.length,1);assert.equal(pending[0].q.platformIds.length,20);pending[0].resolve(response(catalog.slice(1,21)));await flush();assert.equal(pending.length,2);pending[1].resolve(response(catalog.slice(21,41)));await flush();assert.equal(pending.length,3);pending[2].resolve(response(catalog.slice(41)));await joined;await flush();
+ assert.deepEqual(h.calls.map(q=>q.platformIds.length),[1,20,20,1]);assert.equal(groups(h.mod.render()).size,42);
+});
+test('grouped scope changes show only the first platform in the newly selected country and reject old late batches',async()=>{
+ const first=platform(1),second=platform(2),foreign=platform(3,{country:'巴西'}),foreign2=platform(4,{country:'巴西'}),catalog=[first,second,foreign,foreign2],h=fixture({catalog});await h.start();grouped(h);await flush();const wait=deferred();h.setHandler(q=>q.platformIds.includes(second.id)?wait.promise:response(catalog.filter(p=>q.platformIds.includes(p.id))));selectPlatforms(h,catalog,[first,second]);await flush();h.context.liveChannelBrowseCountry(1);await flush();wait.resolve(response([second]));await flush();
+ assert.equal(h.mod.capture().country,'巴西');assert.deepEqual(plain(h.mod.capture().browse.platformIds),[foreign.id]);assert.deepEqual(h.calls.at(-1).platformIds,[foreign.id]);assert.equal(groups(h.mod.render()).size,1);assert(groups(h.mod.render()).has(foreign.id));assert(!h.mod.capture().cache[second.id]?.response);assert.deepEqual(exported(h).map(r=>r['平台']),[foreign.name]);
+});
+test('removed selected platforms stay empty rather than broadening to all remaining platforms',async()=>{
+ const first=platform(1),second=platform(2),h=fixture({catalog:[first,second]});await h.start();grouped(h);await flush();h.setCatalog([second]);h.mod.render();await flush();
+ assert.deepEqual(plain(h.mod.capture().browse.platformIds),[]);assert.equal(h.calls.length,1);assert.equal(groups(h.mod.render()).size,0);assert.equal(h.mod.canExport(),false);assert.match(h.mod.render(),/当前没有已选可见平台/);assert(!h.mod.capture().cache[first.id]);
+});
+test('grouped permission revocation clears cached facts and rejects a late response and export',async()=>{
+ const catalog=[platform(1),platform(2)],h=fixture({catalog});await h.start();grouped(h);await flush();const wait=deferred();h.setHandler(()=>wait.promise);selectPlatforms(h,catalog,catalog);await flush();h.setPermissions(['view']);wait.resolve(response([catalog[1]]));await flush();
+ assert.deepEqual(plain(h.mod.capture().cache),{});assert.equal(h.mod.canExport(),false);assert.deepEqual(plain(h.mod.exportRows()),[]);assert.doesNotMatch(h.mod.render(),/Display same/);assert.match(h.mod.render(),/未获查询权限/);
+});
+test('grouped navigation and account clear prevent a late response from reviving the prior selection',async()=>{
+ const catalog=[platform(1),platform(2)],h=fixture({catalog});await h.start();grouped(h);await flush();const wait=deferred();h.setHandler(()=>wait.promise);selectPlatforms(h,catalog,catalog);await flush();h.setPage('overview');h.mod.cancel();h.mod.clear();const paints=h.paints.length;wait.resolve(response([catalog[1]]));await flush();
+ assert.equal(h.paints.length,paints);assert.deepEqual(plain(h.mod.capture().cache),{});assert.equal(h.mod.capture().mode,'single');assert.equal(h.mod.canExport(),false);
+});
+test('grouped refresh retains prior snapshots and separately labels missing and incomplete platforms without false zero',async()=>{
+ const catalog=[platform(1),platform(2)],h=fixture({catalog,handler:q=>{const result=response(catalog.filter(p=>q.platformIds.includes(p.id)));for(const s of result.snapshots)if(s.platformId===catalog[1].id){s.observedAt=null;s.receivedAt=null;s.complete=false;s.channels=[];s.sourceCount=null;}return result;}});await h.start();grouped(h);selectPlatforms(h,catalog,catalog);await flush();
+ let result=groups(h.mod.render());assert.match(result.get(catalog[1].id),/尚未收到快照|尚未收到完整通道快照/);assert.doesNotMatch(result.get(catalog[1].id),/0 个当前通道|已采集，暂无通道/);
+ const wait=deferred();h.setHandler(()=>wait.promise);const refresh=h.context.liveChannelBrowseRefresh();await flush();assert.match(groups(h.mod.render()).get(catalog[0].id),/正在刷新，显示上次快照/);wait.reject(Error('service unavailable'));await refresh;assert.match(groups(h.mod.render()).get(catalog[0].id),/保留上次成功读取的快照/);assert.equal(exported(h).length,1);assert.equal(exported(h)[0]['平台'],catalog[0].name);
+});
+test('grouped detail permission applies to every platform and CSV, while note expansion uses the exact platform identity',async()=>{
+ const catalog=[platform(1,{source:'kb',capabilities:{channelStatusAvailable:true}}),platform(2,{source:'kb',capabilities:{channelStatusAvailable:true}})],h=fixture({catalog,rowsFor:p=>[channel('same',{notes:p.id+' '+ 'long note '.repeat(10)})]});await h.start();grouped(h);selectPlatforms(h,catalog,catalog);await flush();h.context.liveChannelBrowseToggle(catalog[1].id,0);
+ const result=groups(h.mod.render());assert.match(result.get(catalog[0].id),/channel-notes-text collapsed/);assert.doesNotMatch(result.get(catalog[1].id),/channel-notes-text collapsed/);assert.match(result.get(catalog[1].id),/收起备注/);
+ h.setPermissions(['view','query','export']);h.context.liveChannelBrowseToggle(catalog[0].id,0);assert.doesNotMatch(h.mod.render(),/liveChannelBrowseToggle|long note/);assert(exported(h).every(row=>row['第三方商户 ID']==='—'&&row['备注']==='—'));
+});
+test('grouped local filters, collapse, direction and revisit use existing snapshots without changing native weight pools',async()=>{
+ const catalog=[platform(1),platform(2)],h=fixture({catalog,rowsFor:()=>[channel('one',{provider:'PayOne',weight:'20',real_time_weight:'40'}),channel('two',{provider:'PayTwo',weight:'80',real_time_weight:'60'})]});await h.start();grouped(h);selectPlatforms(h,catalog,catalog);await flush();const calls=h.calls.length;
+ h.context.liveChannelBrowseProvider('PayOne');let rows=exported(h);assert.equal(rows.length,2);assert(rows.every(row=>row['预设权重占比']==='20.00%'&&row['实际权重占比']==='40.00%'));h.context.liveChannelBrowseCollapse(catalog[1].id);assert.equal(tableRows(groups(h.mod.render()).get(catalog[1].id)).length,0);assert.equal(exported(h).length,2,'folding is presentation-only');h.context.liveChannelBrowseTab('withdraw');assert.equal(h.calls.length,calls);assert(exported(h).every(row=>row['方向']==='提现'));
+ const saved=plain(h.mod.capture());h.mod.clear();h.mod.restore(saved);await h.start();assert.equal(h.mod.capture().mode,'grouped');assert.equal(h.calls.length,calls);assert.deepEqual(plain(h.mod.capture().browse.collapsed),[catalog[1].id]);
+});
+test('single platform and grouped views restore their independent scope and local filters across cross-provider mode',async()=>{
+ const a=platform(1),b=platform(2,{country:'巴西'}),h=fixture({catalog:[a,b],rowsFor:()=>matchedRows()});await h.start();h.context.liveChannelProvider('WPayINR');h.context.liveChannelQuery('WPay');const single=plain(h.mod.capture());grouped(h);h.context.liveChannelBrowseCountry(1);await flush();h.context.liveChannelBrowseTab('withdraw');h.context.liveChannelBrowseFilter('status','on');cross(h);await h.context.liveChannelCrossQuery('WPay');h.context.liveChannelMode('single');await flush();
+ for(const key of ['source','country','platformId','tab','provider','channelQuery'])assert.equal(h.mod.capture()[key],single[key],key);grouped(h);await flush();assert.equal(h.mod.capture().country,'巴西');assert.equal(h.mod.capture().tab,'withdraw');assert.equal(h.mod.capture().filterStatus,'on');assert.deepEqual(plain(h.mod.capture().browse.platformIds),[b.id]);
+});
+test('grouped automatic refresh is bound to the explicit selection and pauses while hidden',async()=>{
+ const catalog=[platform(1),platform(2)],h=fixture({catalog});await h.start();grouped(h);await flush();await h.advance(300001);assert.deepEqual(h.calls.map(q=>q.platformIds),[[catalog[0].id],[catalog[0].id]]);h.hide();await h.advance(300001);assert.equal(h.calls.length,2);await h.show();assert.deepEqual(h.calls.at(-1).platformIds,[catalog[0].id]);assert.equal(h.calls.length,3);
 });
