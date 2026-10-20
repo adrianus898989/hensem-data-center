@@ -60,10 +60,10 @@ test('one deadline stops a stalled withdrawal request, preserves the last result
  clock.set(60000);clock.fire();await run;assert.equal(f.calls.at(-1).o.signal.aborted,true);assert.equal(f.page.state.loading,false);assert.equal(f.page.state.prepared.status,'paused');assert.equal(f.page.state.data.totals.total,3);assert.match(f.page.render(),/继续读取/);assert.equal(clock.timers.size,0);
  run=f.page.load();assert.equal([...clock.timers.values()][0].ms,60000);stalled.resolve(data(99));await new Promise(resolve=>setImmediate(resolve));assert.equal(f.page.state.data.totals.total,3);f.pending.shift().resolve(data(8));await run;assert.equal(f.page.state.data.totals.total,8);assert.equal(clock.timers.size,0);
 });
-test('RPC waiting and later prepared polls consume the same whole-query budget',async()=>{
+test('prepared polling stops at one minute while the final in-flight transfer has a bounded grace',async()=>{
  const f=fixture(),clock=budgetClock(f);let run=f.page.load();clock.set(55000);f.pending.shift().resolve({prepared:{status:'building'}});await run;
  assert.equal(clock.fire(),3000);clock.set(58000); // The first poll was dispatched at55s before this clock advances.
- assert.equal([...clock.timers.values()][0].ms,5000);clock.set(60000);clock.fire();await new Promise(resolve=>setImmediate(resolve));assert.equal(f.page.state.prepared.status,'paused');assert.equal(f.page.state.loading,false);assert.equal(clock.timers.size,0);assert.equal(f.calls.length,2);
+ assert.equal([...clock.timers.values()][0].ms,10000);clock.set(65000);clock.fire();await new Promise(resolve=>setImmediate(resolve));assert.equal(f.page.state.prepared.status,'paused');assert.equal(f.page.state.loading,false);assert.equal(clock.timers.size,0);assert.equal(f.calls.length,2);
 });
 test('a late cancelled response cannot clear the newer selection deadline',async()=>{
  const f=fixture(),clock=budgetClock(f),old=f.page.load();f.context.withdrawDate('from','2026-10-13');const fresh=f.page.load();assert.equal(clock.timers.size,1);f.pending[0].resolve(data(99));await old;assert.equal(clock.timers.size,1);clock.set(60000);clock.fire();await fresh;assert.equal(f.page.state.prepared.status,'paused');assert.equal(f.page.state.data,null);assert.equal(clock.timers.size,0);
@@ -114,4 +114,28 @@ test('changing a prepared polling scope cancels it and a late preparation cannot
  old.resolve({prepared:{status:'stale'}});await new Promise(resolve=>setImmediate(resolve));
  assert.equal(f.page.state.prepared,null);assert.equal(f.page.state.loading,true);assert.equal(clock.timers.size,1);
  f.pending.shift().resolve({...data(8),startDate:'2026-10-14'});await next;assert.equal(f.page.state.data.totals.total,8);assert.equal(clock.timers.size,0);
+});
+
+for(const view of ['auto_withdraw','withdraw_operators'])test(view+' accepts a ready final poll within transfer grace without another query',async()=>{
+ const f=fixture(view),clock=budgetClock(f),first=f.page.load();
+ clock.set(55000);f.pending.shift().resolve({prepared:{status:'building'}});await first;
+ clock.set(58000);clock.fire();assert.equal(f.calls.length,2);assert.equal([...clock.timers.values()][0].ms,10000);
+ clock.set(62000);f.pending.shift().resolve(data(17));await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(f.page.state.data.totals.total,17);assert.equal(f.page.state.prepared,null);assert.equal(f.page.state.loading,false);assert.equal(clock.timers.size,0);assert.equal(f.calls.length,2);
+});
+test('final poll still pending in transfer grace pauses without scheduling another poll',async()=>{
+ const f=fixture(),clock=budgetClock(f),first=f.page.load();clock.set(55000);f.pending.shift().resolve({prepared:{status:'building'}});await first;
+ clock.set(58000);clock.fire();clock.set(62000);f.pending.shift().resolve({prepared:{status:'building'}});await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(f.calls.length,2);assert.equal(f.page.state.data,null);assert.equal(f.page.state.prepared.status,'paused');assert.equal(clock.timers.size,0);
+});
+test('transfer grace cannot accept a ready response after its own deadline',async()=>{
+ const f=fixture(),clock=budgetClock(f),first=f.page.load();clock.set(55000);f.pending.shift().resolve({prepared:{status:'building'}});await first;
+ clock.set(58000);clock.fire();clock.set(68001);f.pending.shift().resolve(data(99));await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(f.page.state.data,null);assert.equal(f.page.state.prepared.status,'paused');assert.equal(clock.timers.size,0);
+});
+for(const action of ['date','pause','permission'])test('final transfer grace rejects late data after '+action,async()=>{
+ const f=fixture(),clock=budgetClock(f),first=f.page.load();clock.set(55000);f.pending.shift().resolve({prepared:{status:'building'}});await first;
+ clock.set(58000);clock.fire();const late=f.pending.shift();clock.set(61000);
+ if(action==='date')f.context.withdrawDate('from','2026-10-14');else if(action==='pause')f.page.pause();else f.context.hensemRoleAccess={canView:false};
+ late.resolve(data(99));await new Promise(resolve=>setImmediate(resolve));assert.equal(f.page.state.data,null);assert.equal(f.page.state.applied,null);assert.equal(clock.timers.size,0);
 });
