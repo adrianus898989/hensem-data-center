@@ -3,3 +3,6 @@ node_modules
 out/
 supabase/.temp/
 supabase/functions/owner-admin-preview/payload.generated.ts
+
+# Generated with the client bundle; never reuse a previous release marker.
+public/dashboard-release.json

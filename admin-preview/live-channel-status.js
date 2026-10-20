@@ -30,7 +30,8 @@
   const ready=()=>L.catalogReady!==false;
   const directory=()=>[...new Map((c.catalog?.()||c.selected?.()||[]).filter(p=>p&&typeof p.id==='string'&&!p.reportOnly&&system(p)).map(p=>[p.id,p])).values()];
   const systems=()=>[...new Set(directory().map(system))].sort((a,b)=>a==='AR'?-1:b==='AR'?1:a.localeCompare(b));
-  const countries=()=>[...new Set(directory().filter(p=>system(p)===S.source).map(p=>p.country).filter(Boolean))];
+  const countrySelectable=value=>root.HensemLiveReportData?.countrySelectable?.(value)!==false;
+  const countries=()=>[...new Set(directory().filter(p=>system(p)===S.source).map(p=>p.country).filter(value=>value&&countrySelectable(value)))];
   const bucket=()=>directory().filter(p=>system(p)===S.source&&p.country===S.country);
   const platforms=()=>bucket().filter(p=>!S.search.trim()||(String(p.name)+' '+p.id+' '+String(p.sourceName||'')).toLowerCase().includes(S.search.trim().toLowerCase()));
   const selected=()=>bucket().find(p=>p.id===S.platformId)||null;
@@ -47,7 +48,7 @@
    const rows=directory(),valid=new Map(rows.map(p=>[p.id,identity(p)]));for(const [id,hit]of Object.entries(S.cache))if(valid.get(id)!==hit.key)delete S.cache[id];
    const previousScope=[S.source,S.country];
    const sourceList=systems();if(!sourceList.includes(S.source))S.source=sourceList[0]||'';
-   const countryList=countries();if(!countryList.includes(S.country))S.country=countryList.includes(L.country)?L.country:countryList[0]||'';
+   const countryList=countries();if(!countrySelectable(S.country)){S.country='';S.countryRequired=true;}if(!countryList.includes(S.country)&&!S.countryRequired)S.country=countryList.includes(L.country)?L.country:countryList[0]||'';
    if(S.mode==='browse'&&S.browse?.query&&(previousScope[0]!==S.source||previousScope[1]!==S.country)){S.browse.scopeEmpty=true;S.browse.platformIds=[];S.browse.draftPlatformIds=[];S.browse.draftAll=false;}
    if(!selected()){S.platformId=bucket()[0]?.id||'';resetLocalFilters();}
    if(S.browse){const ids=new Set(bucket().map(p=>p.id)),hadSelection=S.browse.platformIds.length>0;S.browse.platformIds=S.browse.platformIds.filter(id=>ids.has(id));if(hadSelection&&!S.browse.platformIds.length)S.browse.scopeEmpty=true;S.browse.draftPlatformIds=S.browse.draftPlatformIds.filter(id=>ids.has(id));}
@@ -307,7 +308,7 @@
   root.liveChannelBrowseApplyPlatforms=()=>{if(!active()||S.mode!=='browse'||!allowed('query'))return;const ids=S.browse.draftPlatformIds.filter(id=>bucket().some(p=>p.id===id));if(!S.browse.draftAll&&!ids.length)return;const before=browseKey();S.browse.platformIds=S.browse.draftAll?[]:ids;S.browse.scopeEmpty=false;S.browse.pickerOpen=false;if(before===browseKey()){paint();return;}cancel();S.expanded=null;return loadBrowse();};
   root.liveChannelBrowseProvider=value=>{if(!browseCurrent()||typeof value!=='string'||!browseProviders().includes(value)&&!S.browse.providers.includes(value))return;S.browse.providers=S.browse.providers.includes(value)?S.browse.providers.filter(x=>x!==value):[...S.browse.providers,value];S.expanded=null;paint();};
   root.liveChannelBrowseAllProviders=()=>{if(!browseCurrent())return;S.browse.providers=[];S.expanded=null;paint();};
-  function browseScopeChange(kind,index){if(!active()||S.mode!=='browse'||!Number.isSafeInteger(index))return;const values=kind==='source'?systems():countries(),value=values[index];if(!value||S[kind]===value)return;cancel();S[kind]=value;if(kind==='source')S.country='';S.platformId='';S.browse=browseInitial();resetLocalFilters();S.includeAbsent=false;L.dirty=false;reconcile();return loadBrowse();}
+  function browseScopeChange(kind,index){if(!active()||S.mode!=='browse'||!Number.isSafeInteger(index))return;const values=kind==='source'?systems():countries(),value=values[index];if(!value||S[kind]===value)return;cancel();S[kind]=value;S.countryRequired=false;if(kind==='source')S.country='';S.platformId='';S.browse=browseInitial();resetLocalFilters();S.includeAbsent=false;L.dirty=false;reconcile();return loadBrowse();}
   root.liveChannelBrowseSource=index=>browseScopeChange('source',index);
   root.liveChannelBrowseCountry=index=>browseScopeChange('country',index);
   root.liveChannelBrowseTab=direction=>{if(!active()||S.mode!=='browse'||!['charge','withdraw'].includes(direction)||S.tab===direction)return;const status=S.filterStatus;S.tab=direction;resetLocalFilters();S.filterStatus=status;paint();};
@@ -399,7 +400,7 @@
   root.liveChannelCrossAbsent=value=>{if(!active()||S.mode!=='cross'||typeof value!=='boolean')return;S.includeAbsent=value;paint();};
   function choose(p){if(!active()||!p)return;if(inflight?.key===identity(p))return;cancel();S.platformId=p.id;resetLocalFilters();L.dirty=false;L.pageQueried=!!entryFor(p)?.response;if(allowed('query')&&supported(p)&&visible())load(false,true);else paint();}
   root.liveChannelSource=index=>{if(!active()||!Number.isSafeInteger(index)||!systems()[index])return;cancel();S.source=systems()[index];S.country='';S.platformId='';S.search='';S.page=1;reconcile();choose(selected());};
-  root.liveChannelCountry=index=>{if(!active()||!Number.isSafeInteger(index)||!countries()[index])return;cancel();S.country=countries()[index];S.platformId='';S.search='';S.page=1;reconcile();choose(selected());};
+  root.liveChannelCountry=index=>{if(!active()||!Number.isSafeInteger(index)||!countries()[index])return;cancel();S.country=countries()[index];S.countryRequired=false;S.platformId='';S.search='';S.page=1;reconcile();choose(selected());};
   root.liveChannelSelect=index=>{if(!active()||!Number.isSafeInteger(index))return;choose(platforms()[index]);};
   root.liveChannelSearch=(value,keepFocus=false,composing=false)=>{if(!active())return;if(composing){S.search=String(value??'').slice(0,200);return;}const field=keepFocus?root.document?.activeElement:null,start=field?.selectionStart,end=field?.selectionEnd;S.search=(keepFocus?String(value??''):String(value??'').trim()).slice(0,200);S.page=1;paint();if(keepFocus){const input=root.document?.querySelector?.('.live-channel-status input[name="platform"]');input?.focus?.();if(Number.isInteger(start)&&Number.isInteger(end))input?.setSelectionRange?.(start,end);}};
   root.liveChannelSubmit=form=>{const channel=form?.elements?.namedItem?.('channel'),merchant=form?.elements?.namedItem?.('merchant');if(!channel)return;root.liveChannelQuery(channel.value,merchant?.value||'');};

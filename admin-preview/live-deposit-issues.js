@@ -44,7 +44,7 @@
   const status=(value,prefix='')=>'<span class="live-badge '+(value==='已入款'?'success':value==='未入款'?'pending':'')+'" title="原表公式或标记，不代表已核实实际到账">'+E(prefix)+E(value||'待核对')+'</span>';
   const linkState=r=>r.sourceKind==='portal'?'<span class="deposit-muted" title="前端记录独立保存，不参与旧表自动关联">独立前端记录</span>':'<span class="live-badge '+(r.linkStatus==='matched'?'success':'pending')+'">'+(r.linkStatus==='matched'?'已关联':r.linkStatus==='review'?'关联待核对':L.depositIssuesView==='entries'?'未关联表格':'未找到录入记录')+'</span>';
   const option=(value,label,selected)=>'<option value="'+E(value)+'" '+(String(value)===String(selected)?'selected':'')+'>'+E(label)+'</option>';
-  function field(label,key,values,value){return '<label class="live-field"><span>'+E(label)+'</span><select onchange="depositIssuesSet(\''+key+'\',this.value)">'+values.map(([v,l])=>option(v,l,value)).join('')+'</select></label>'}
+  function field(label,key,values,value){if(key==='country'){values=values.filter(([country])=>root.HensemLiveReportData?.countrySelectable?.(country)!==false);if(!values.some(([country])=>country===value))values=[['','请选择国家'],...values];}return '<label class="live-field"><span>'+E(label)+'</span><select onchange="depositIssuesSet(\''+key+'\',this.value)">'+values.map(([v,l])=>option(v,l,value)).join('')+'</select></label>'}
   function input(label,key,value,numeric=false){const hint={orderNumber:'按订单号',workOrderNumber:'按工单号',utr:'按 UTR',upiId:'按 UPI ID',kycUpiId:'按 KYC-UPI ID',reply:'按回复关键词',staffCode:'按员工编号',amountMin:'不限',amountMax:'不限'}[key]||'';return '<label class="live-field"><span>'+E(label)+'</span><input '+(numeric?'type="number" min="0" step="0.01"':'type="search" maxlength="200"')+' placeholder="'+E(hint)+'" value="'+E(value)+'" oninput="depositIssuesSet(\''+key+'\',this.value)"></label>'}
   function toolbar(){
    ensureDateRange();const f=facets[L.depositIssuesView]||{},entries=L.depositIssuesView==='entries';
@@ -148,6 +148,7 @@
    if(!L.catalogReady)return;syncView();if(isStatistics()&&L.depositIssuesSection==='recovery')return recoveryWorkspace?.load();if(isStatistics()&&L.depositIssuesSection==='kyc')return kycWorkspace?.load();ensureDateRange();if(reset)L.depositIssuesPage=1;const serial=++L.depositIssuesSerial;
    L.depositIssuesLoading=true;L.depositIssuesError='';L.depositIssuesDirty=false;L.dirty=false;if(!background)render();
    try{
+    if(!L.country||root.HensemLiveReportData?.countrySelectable?.(L.country)===false)throw Error('请选择具体国家后查询。');
     const q={action:isStatistics()?'depositStatistics':'depositIssues',...(isStatistics()?{section:L.depositIssuesSection}:{view:'entries'}),dateMode:L.depositIssuesDateMode,startAt:L.from.slice(0,10)+'T00:00:00.000Z',endAt:L.to.slice(0,10)+'T23:59:59.000Z',offset:(L.depositIssuesPage-1)*L.depositIssuesSize,limit:L.depositIssuesSize};
     if(L.country!=='all')q.country=L.country;if(L.depositIssuesPlatform&&L.depositIssuesPlatform!=='all')q.platform=L.depositIssuesPlatform;
     if(L.depositIssuesProvider)q.provider=L.depositIssuesProvider;if(!isStatistics()&&L.depositIssuesQuery)q.query=L.depositIssuesQuery;
@@ -175,7 +176,7 @@
   function dirty(doRender=true){L.depositIssuesPage=1;L.depositIssuesSerial++;L.depositIssuesDirty=true;L.depositIssuesLoading=false;if(doRender)render()}
   root.depositIssuesSet=function(key,value){
    ensureDateRange();
-   if(key==='country'){if(!L.catalog.some(p=>p.country===value))return;L.country=value;L.depositIssuesPlatform='all';L.depositIssuesProvider='';delete facets[L.depositIssuesView]}
+   if(key==='country'){if(root.HensemLiveReportData?.countrySelectable?.(value)===false)return;if(!L.catalog.some(p=>p.country===value))return;L.country=value;L.depositIssuesPlatform='all';L.depositIssuesProvider='';delete facets[L.depositIssuesView]}
    else if(key==='platformName')L.depositIssuesPlatform=String(value).slice(0,200);
    else if(key==='provider')L.depositIssuesProvider=String(value).slice(0,200);
    else if(key==='status'){if(!['all','未入款','已入款','待核对'].includes(value))return;L.depositIssuesStatus=value}

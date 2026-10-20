@@ -13,6 +13,9 @@
  const legacyPanghu=new Set(['胖虎巴西','BR_PANGHU','PANGHU BRAZIL','PANDA PANGHU']);
  const legacyTeams={'香港':'香港',HK_TEAM:'香港',HONG_KONG:'香港',GAME66_HK:'香港','红膏蟹':'红膏蟹','紅膏蟹':'红膏蟹',RED_CRAB:'红膏蟹',GAME66_RED_CRAB:'红膏蟹'};
  const token=value=>String(value??'').trim().toUpperCase();
+ // Country pickers omit the retired regional bucket; native source identities stay untouched.
+ const retiredCountryBuckets=new Set(['南美','南美盘口','其他南美','SA','SOUTH AMERICA','SOUTH_AMERICA','SOUTH-AMERICA']);
+ const countrySelectable=value=>!retiredCountryBuckets.has(token(value));
  const countryNames={IN:'印度',INDIA:'印度',BR:'巴西',BRAZIL:'巴西',PK:'巴基斯坦',ID:'印尼',VN:'越南',PH:'菲律宾',MY:'马来',MM:'缅甸',NG:'尼日利亚',CO:'哥伦比亚',MX:'墨西哥',CL:'智利'};
  // Owner-confirmed assignments, also persisted in dashboard_platform_team_map.
  // These fill authorized report seeds before the mapped feed directory arrives.
@@ -57,7 +60,7 @@
  const feedSource=feed=>['GAME66_HK','GAME66_RED_CRAB'].includes(token(feed.system))&&legacyTeams[token(feed.system)]===sourceIdentity(feed).group?'game66':feed.system;
  const feedMatchesSources=(feed,sources)=>!values(sources).length||!feed.system||['REPORT','SHEET','RECHARGE_REVIEW','WITHDRAW_REVIEW'].includes(String(feed.system).toUpperCase())||values(sources).some(value=>sameSource(value,feedSource(feed)));
  const sourceLabel=kind=>({direct:'直接写入 Supabase',google_sheets:'Google 表格 → Supabase',manual_file:'团队表格已录入',google_sheets_live:'Google 表格',mixed:'混合来源，待核对',unknown:'来源链路待核对'})[kind]||'来源链路待核对';
- root.HensemLiveReportData={normalizeIdentity,displayAllowed,identityKey:keyFor,confirmedAliasKey:row=>confirmedRaja(row)?keyFor(row):null,create({L,E,N,C,R,request,render,nativeCatalog,accessContext=()=>'',displayAllowed=()=>true}){
+ root.HensemLiveReportData={normalizeIdentity,displayAllowed,countrySelectable,identityKey:keyFor,confirmedAliasKey:row=>confirmedRaja(row)?keyFor(row):null,create({L,E,N,C,R,request,render,nativeCatalog,accessContext=()=>'',displayAllowed=()=>true}){
   const S={catalogRows:[],catalogLoaded:false,catalogBusy:false,catalogError:'',catalogSerial:0,catalogAt:0,loading:false,error:'',result:null,serial:0,scope:null,scopeKey:'',expanded:new Set(),tabs:new Map()};let catalogPending=null,loadPending=null,completed=null;
   const notify=()=>{if(typeof render==='function')render()};
   let catalogMemo=null,accessKey=null,manualCatalogPending=null,catalogGeneration=0;
