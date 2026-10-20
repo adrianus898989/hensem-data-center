@@ -139,3 +139,14 @@ for(const action of ['date','pause','permission'])test('final transfer grace rej
  if(action==='date')f.context.withdrawDate('from','2026-10-14');else if(action==='pause')f.page.pause();else f.context.hensemRoleAccess={canView:false};
  late.resolve(data(99));await new Promise(resolve=>setImmediate(resolve));assert.equal(f.page.state.data,null);assert.equal(f.page.state.applied,null);assert.equal(clock.timers.size,0);
 });
+
+for(const view of ['auto_withdraw','withdraw_operators'])test(view+' quick dates and day shifts leave optional success inputs entirely manual',()=>{
+ const f=fixture(view);
+ for(const manual of [false,true]){
+  f.L.successFrom=manual?'2026-10-09T08:00:00':'';f.L.successTo=manual?'2026-10-10T09:00:00':'';
+  const expected=[f.L.successFrom,f.L.successTo];
+  for(const key of ['today','yesterday','before','week','lastweek','month','lastmonth']){f.context.withdrawPeriod(key);assert.deepEqual([f.L.successFrom,f.L.successTo],expected,key);}
+  for(const n of [-1,1]){const before=f.L.from;f.context.withdrawShift(n);assert.notEqual(f.L.from,before);assert.deepEqual([f.L.successFrom,f.L.successTo],expected);}
+ }
+ f.context.withdrawReset();assert.equal(f.L.successFrom,'');assert.equal(f.L.successTo,'');assert.equal(f.calls.length,0);
+});

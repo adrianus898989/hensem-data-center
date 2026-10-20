@@ -5,10 +5,13 @@ const withdrawalFile=path.join(__dirname,'withdraw-prepared-ui.test.cjs'),withdr
 vm.runInContext(fs.readFileSync(withdrawalFile,'utf8').split('for(const view of')[0]+';globalThis.h={fixture,data};',withdrawalContext);
 const withdraw=withdrawalContext.h.fixture,data=withdrawalContext.h.data;
 const preparedCalls=h=>h.calls.filter(q=>q.action==='aggregatePrepared').length;
-async function historical(){const h=await fixture();h.setNow('2026-10-18T12:00:00Z');h.c.livePeriod('week');h.c.liveMetricTimeSet('from','2026-10-11T00:00:00');h.c.liveMetricTimeSet('to','2026-10-17T23:59:59');return h;}
+async function historical(){const h=await fixture();h.setNow('2026-10-18T12:00:00Z');h.c.livePeriod('week');h.c.liveMetricTimeSet('from','2026-10-11T00:00:00');h.c.liveMetricTimeSet('to','2026-10-17T23:59:59');
+ // The historical-routing fixture deliberately seeds an explicit success pair.
+ // Blank-default tests clear it explicitly; shortcuts preserve manual input.
+ h.c.liveMetricTimeSet('successFrom','');h.c.liveMetricTimeSet('successTo','');return h;}
 
-test('actual shared quick periods and reset leave only creation inputs populated',async()=>{
- const h=await fixture();for(const page of ['providers','merchants','amount','time']){h.c.setPage(page);await settle();for(const mode of ['today','yesterday','before','week','month']){h.c.liveMetricTimeSet('successFrom','2026-10-10T01:02:03');h.c.liveMetricTimeSet('successTo','2026-10-10T04:05:06');const before=preparedCalls(h);h.c.livePeriod(mode);assert.equal(h.L.successFrom,'',page+'/'+mode);assert.equal(h.L.successTo,'');assert.match(h.L.from,/T00:00:00$/);assert.match(h.L.to,/T23:59:59$/);assert.equal(preparedCalls(h),before);assert.doesNotMatch(h.nodes.get('liveFilters')?.innerHTML||'',/成功统计依据|liveMetricBasis/);}}
+test('actual shared quick periods retain manual success dates and reset clears them',async()=>{
+ const h=await fixture();for(const page of ['providers','merchants','amount','time']){h.c.setPage(page);await settle();for(const mode of ['today','yesterday','before','week','month']){h.c.liveMetricTimeSet('successFrom','2026-10-10T01:02:03');h.c.liveMetricTimeSet('successTo','2026-10-10T04:05:06');const before=preparedCalls(h);h.c.livePeriod(mode);assert.equal(h.L.successFrom,'2026-10-10T01:02:03',page+'/'+mode);assert.equal(h.L.successTo,'2026-10-10T04:05:06');assert.match(h.L.from,/T00:00:00$/);assert.match(h.L.to,/T23:59:59$/);assert.equal(preparedCalls(h),before);assert.doesNotMatch(h.nodes.get('liveFilters')?.innerHTML||'',/成功统计依据|liveMetricBasis/);}}
  h.c.liveReset();assert.equal(h.L.successFrom,'');assert.equal(h.L.successTo,'');
 });
 test('blank defaults keep prepared wire semantics and manual pair changes remain independent across tabs',async()=>{
