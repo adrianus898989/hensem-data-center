@@ -79,3 +79,39 @@ test('the final prepared wait is clamped to the remaining whole-read budget',asy
 test('a ready response past the deadline cannot bypass an event-loop-delayed timeout callback',async()=>{
  const f=fixture(),clock=budgetClock(f),run=f.page.load();clock.set(60001);f.pending.shift().resolve(data(99));await run;assert.equal(f.page.state.data,null);assert.equal(f.page.state.applied,null);assert.equal(f.page.state.prepared.status,'paused');assert.equal(clock.timers.size,0);
 });
+
+for(const view of ['auto_withdraw','withdraw_operators'])for(const status of ['missing','building','stale'])test(view+' '+status+' preparation remains visible throughout a same-scope background poll',async()=>{
+ const f=fixture(view),clock=budgetClock(f),run=f.page.load();
+ assert.match(f.page.render(),/正在读取/);f.pending.shift().resolve({prepared:{status}});await run;
+ const prepared=f.page.state.prepared,query=JSON.stringify(f.calls[0].q),waiting=f.page.render();
+ assert.match(waiting,/后台正在准备/);assert.match(waiting,/>准备中…<\/button>/);
+ clock.set(3000);assert.equal(clock.fire(),3000);assert.equal(f.calls.length,2);
+ assert.equal(f.page.state.loading,true);assert.equal(f.page.state.prepared,prepared);assert.equal(JSON.stringify(f.calls[1].q),query);
+ const polling=f.page.render();assert.match(polling,/后台正在准备/);assert.match(polling,/>准备中…<\/button>/);
+ assert.doesNotMatch(polling,/正在读取|筛选条件已修改/);assert.equal(f.page.state.data,null);
+ assert.equal([...clock.timers.values()][0].ms,57000,'poll keeps the original deadline');
+ f.pending.shift().resolve(data(9));await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(f.page.state.loading,false);assert.equal(f.page.state.prepared,null);assert.equal(f.page.state.data.totals.total,9);assert.equal(clock.timers.size,0);
+});
+test('manual retry clears the preparation message and starts one normal read',async()=>{
+ const f=fixture(),clock=budgetClock(f),first=f.page.load();f.pending.shift().resolve({prepared:{status:'building'}});await first;
+ const retry=f.page.load();assert.equal(f.calls.length,2);assert.equal(f.page.state.prepared,null);assert.match(f.page.render(),/正在读取/);assert.doesNotMatch(f.page.render(),/后台正在准备/);
+ f.pending.shift().resolve(data(5));await retry;assert.equal(f.page.state.data.totals.total,5);assert.equal(clock.timers.size,0);
+});
+test('a background poll failure replaces preparation with the real error while retaining applied results',async()=>{
+ const f=fixture(),clock=budgetClock(f);let run=f.page.load();f.pending.shift().resolve(data(4));await run;const previous=f.page.state.data;
+ run=f.page.load();f.pending.shift().resolve({prepared:{status:'building'}});await run;clock.set(3000);clock.fire();
+ assert.equal(f.page.state.data,previous);assert.match(f.page.render(),/上次成功结果已保留/);
+ f.pending.shift().reject(Error('synthetic transport failure'));await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(f.page.state.loading,false);assert.equal(f.page.state.prepared,null);assert.equal(f.page.state.data,previous);
+ assert.match(f.page.render(),/synthetic transport failure/);assert.doesNotMatch(f.page.render(),/后台正在准备|正在读取/);assert.equal(clock.timers.size,0);
+});
+test('changing a prepared polling scope cancels it and a late preparation cannot restore the old message',async()=>{
+ const f=fixture(),clock=budgetClock(f),first=f.page.load();f.pending.shift().resolve({prepared:{status:'building'}});await first;clock.set(3000);clock.fire();
+ const old=f.pending.shift(),signal=f.calls[1].o.signal;f.context.withdrawDate('from','2026-10-14');
+ assert.equal(signal.aborted,true);assert.equal(f.page.state.prepared,null);assert.equal(clock.timers.size,0);
+ const next=f.page.load();assert.match(f.page.render(),/正在读取/);assert.doesNotMatch(f.page.render(),/后台正在准备/);
+ old.resolve({prepared:{status:'stale'}});await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(f.page.state.prepared,null);assert.equal(f.page.state.loading,true);assert.equal(clock.timers.size,1);
+ f.pending.shift().resolve({...data(8),startDate:'2026-10-14'});await next;assert.equal(f.page.state.data.totals.total,8);assert.equal(clock.timers.size,0);
+});

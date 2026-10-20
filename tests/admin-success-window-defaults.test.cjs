@@ -35,3 +35,20 @@ test('fresh iframe defaults never import old mirrored dates, while a newly expli
  const first=make();await settle();assert.equal(first.L.successFrom,'');assert.equal(first.L.successTo,'');first.c.liveMetricTimeSet('successFrom',first.L.from);first.c.liveMetricTimeSet('successTo',first.L.to);const saved=[first.L.successFrom,first.L.successTo];first.c.setPage('amount');first.c.setPage('providers');assert.deepEqual([first.L.successFrom,first.L.successTo],saved);
  const reloaded=make();await settle();assert.equal(reloaded.L.successFrom,'');assert.equal(reloaded.L.successTo,'');assert.equal(reads,0);
 });
+
+test('first opening each statistics page clears another page’s manual success window and preserves the original tab',async()=>{
+ const targets=['overview','collection','payout','merchants','provider_payout','success_analysis','time','amount','matrix','provider_daily','latency','risk','teamops','teamcountries','teamplatforms','daily_comparison','auto_withdraw','withdraw_operators'];
+ for(const target of targets){
+  const h=await fixture();
+  h.c.liveMetricTimeSet('successFrom','2026-10-09T01:02:03');
+  h.c.liveMetricTimeSet('successTo','2026-10-10T04:05:06');
+  h.c.setPage(target);await settle();
+  assert.equal(h.L.successFrom,'',target+' must start without an inherited success start');
+  assert.equal(h.L.successTo,'',target+' must start without an inherited success end');
+  assert.match(h.L.from,/^\d{4}-\d{2}-\d{2}T/);
+  assert.match(h.L.to,/^\d{4}-\d{2}-\d{2}T/);
+  h.c.setPage('providers');
+  assert.equal(h.L.successFrom,'2026-10-09T01:02:03','returning to the original tab keeps its manual entry');
+  assert.equal(h.L.successTo,'2026-10-10T04:05:06');
+ }
+});

@@ -17,6 +17,7 @@ import { OWNER_PREVIEW_HOST_CSS, ownerPreviewActivityTime, ownerPreviewAccountCo
 
 import { recordDashboardActivity } from "@/lib/dashboardIdle";
 import { dashboardScopeIdentity, effectiveDashboardDataScope } from "@/lib/dashboardDataScope";
+import { installDashboardReleaseCheck } from "@/lib/dashboardRelease";
 
 type Props = { canView:boolean; session: DashboardSession; profile: DashboardProfile; onLogout: () => void };
 export default function OwnerAdminPreview({session,profile,onLogout,canView}: Props) {
@@ -37,6 +38,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   const activeAccountView=accountView||(owner?"workorder":"accounts");
   const [verificationStatus,setVerificationStatus]=useState("");
   const [suspended,setSuspended]=useState(false);
+  const [releaseAvailable,setReleaseAvailable]=useState(false);
   const suspendedRef=useRef(false),reconnectRef=useRef<(()=>void)|null>(null);
   const accessDeniedRef=useRef<((kind:AdminLiveAccessDenial)=>void)|null>(null);
 
@@ -118,10 +120,22 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   },[allowed,accountId,reload,readDrafts,owner,scopeIdentity]);
   useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{if(suspendedRef.current||!roleAccessRef.current)return;const data=event.data;const activity=ownerPreviewActivityTime(event,frame.current?.contentWindow,channel.current);if(activity!==null){recordDashboardActivity(activity);return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){setAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);return}const securityPage=ownerPreviewSecurityPage(event,frame.current?.contentWindow,channel.current);if(securityPage){setSecurityBounds(securityPage.active?securityPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,canManageAccounts,owner]);
   const hasDocument=Boolean(documentHtml);
+  useEffect(()=>{
+    setReleaseAvailable(false);
+    if(!allowed||!hasDocument||suspended)return;
+    return installDashboardReleaseCheck({
+      currentRevision:process.env.NEXT_PUBLIC_DASHBOARD_RELEASE||"",
+      basePath:process.env.NEXT_PUBLIC_DASHBOARD_BASE_PATH||"",
+      onUpdate:()=>setReleaseAvailable(true)
+    });
+  },[allowed,hasDocument,suspended,accountId]);
   useEffect(()=>{if(!allowed||!hasDocument||suspended)return;const stop=installAdminLiveBridge({source:()=>frame.current?.contentWindow,channel:()=>channel.current,session:()=>sessionRef.current,roleAccess:()=>roleAccessRef.current,cancelPendingOnDispose:true,onAccessDenied:kind=>accessDeniedRef.current?.(kind)});liveStopRef.current=stop;return()=>{if(liveStopRef.current===stop)liveStopRef.current=null;stop()}},[allowed,documentHtml,accountId,suspended]);
   useEffect(()=>{if(!allowed||!hasDocument||suspended)return;const stop=installDashboardPresenceBridge({source:()=>frame.current?.contentWindow,channel:()=>channel.current,accountId:()=>sessionRef.current.user.id,canViewAccounts:()=>!!roleAccessRef.current&&(roleAccessRef.current.mode!=="assigned"||dashboardRoleAllows(roleAccessRef.current,"access"))});presenceStopRef.current=stop;return()=>{if(presenceStopRef.current===stop)presenceStopRef.current=null;stop()}},[allowed,documentHtml,accountId,suspended]);
   return <section className="owner-preview-shell" aria-label="数据中控后台">
     <style>{OWNER_PREVIEW_HOST_CSS}</style>
+    {allowed&&hasDocument&&!suspended&&releaseAvailable&&<div role="status" style={{position:"fixed",right:16,bottom:16,zIndex:10000,display:"flex",gap:12,alignItems:"center",padding:"10px 14px",border:"1px solid #cbd7ff",borderRadius:8,background:"#fff",boxShadow:"0 4px 18px #182d4c20",color:"#24365c",fontSize:13}}>
+      <span>页面已更新</span><button type="button" className="owner-preview-shell-return" onClick={()=>window.location.reload()}>重新加载</button>
+    </div>}
     {allowed&&documentHtml&&<iframe key={channel.current} ref={frame} title="数据中控后台" sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" srcDoc={documentHtml} style={suspended?{display:"none"}:undefined} aria-hidden={suspended||undefined} className="owner-preview-shell-frame"/>}
     {(!allowed||!documentHtml||suspended)&&<div role={error?"alert":"status"} className="owner-preview-shell-status">{!allowed?"当前账号没有后台查看权限":error||verificationStatus||"正在验证查看权限并加载后台…"}<div className="owner-preview-shell-status-actions"><button type="button" className="owner-preview-shell-return" onClick={onLogout}>退出登录</button>{error&&<button type="button" className="owner-preview-shell-return" onClick={()=>suspended&&documentHtml?reconnectRef.current?.():setReload(x=>x+1)}>{suspended&&documentHtml?"重新连接":"重新加载"}</button>}</div></div>}
     {allowed&&hasDocument&&!suspended&&accountBounds&&dashboardRoleAllows(roleAccess,"access")&&<section aria-label="账号与角色权限" className="owner-preview-account-page" style={{top:Math.max(48,accountBounds.top),left:accountBounds.left,width:accountBounds.width}}>

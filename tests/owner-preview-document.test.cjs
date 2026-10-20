@@ -124,10 +124,11 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   const currentSession = { user: { id: userId }, access_token: 'offline-host-access', refresh_token: 'offline-host-refresh' };
   const box = { exports: {} };
   const window = {
-    location: { origin: 'https://app.offline.invalid', href: 'https://app.offline.invalid/#owner-admin-preview', search: '', ...options.location },
+    location: { origin: 'https://app.offline.invalid', href: 'https://app.offline.invalid/#owner-admin-preview', search: '', reload:options.onReload||(()=>{}), ...options.location },
     history: {replaceState(_state,_title,url){window.location.href=String(url);window.location.search=new URL(url).search;}},
     addEventListener: (name, callback) => lifecycle?addListener(listeners,name,callback):listeners.set(name, callback), removeEventListener: (name,callback) => lifecycle?removeListener(listeners,name,callback):listeners.delete(name),
-    setInterval: callback => { intervalCheck = callback;if(lifecycle){intervals.set(++intervalId,callback);return intervalId}return 1; }, clearInterval: id => {if(lifecycle){const callback=intervals.get(id);intervals.delete(id);if(intervalCheck===callback)intervalCheck=null}},
+    setInterval: (callback,ms) => { if(ms===60000)intervalCheck = callback;if(lifecycle){intervals.set(++intervalId,callback);return intervalId}return 1; }, clearInterval: id => {if(lifecycle){const callback=intervals.get(id);intervals.delete(id);if(intervalCheck===callback)intervalCheck=null}},
+    setTimeout:options.setTimeout||setTimeout,clearTimeout:options.clearTimeout||clearTimeout,
   };
   const localStorage = { getItem: key => values.get(key) ?? null,
     setItem(key, value) { if (throwOnWrite) throw Error('Synthetic quota failure'); values.set(key, value); },
@@ -173,13 +174,14 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
       return helper.exports;
     }
     if (name.endsWith('/dashboardIdle')) return {recordDashboardActivity:()=>true};
+    if (name.endsWith('/dashboardRelease')) {const helper={exports:{}};vm.runInNewContext(transpile(fs.readFileSync(path.join(repo,'src/lib/dashboardRelease.ts'),'utf8')),{...environment,module:helper,exports:helper.exports});return helper.exports;}
     throw Error('Unexpected component test import: ' + name);
   };
   environment = {
     module: box, exports: box.exports, require: requireStub, window, localStorage, URL, AbortController, Error, setTimeout:options.setTimeout||setTimeout,clearTimeout:options.clearTimeout||clearTimeout,
     crypto: { randomUUID: () => lifecycle?'offline-frame-channel-'+(++channelId):'offline-frame-channel' },
     document: { visibilityState: 'visible', addEventListener(name,callback) {if(lifecycle)addListener(documentListeners,name,callback)}, removeEventListener(name,callback) {if(lifecycle)removeListener(documentListeners,name,callback)} },
-    process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key' } },
+    process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key',NEXT_PUBLIC_DASHBOARD_RELEASE:options.releaseRevision||'',NEXT_PUBLIC_DASHBOARD_BASE_PATH:'/hensem-data-center' } },
     fetch: async (url, init) => { if(url.endsWith('/rest/v1/rpc/dashboard_role_access')){roleCalls.push({url,init});if(options.roleFetch)return options.roleFetch(url,init);return {ok:true,status:200,json:async()=>({mode:(options.role||'owner')==='owner'?'owner':'legacy',roleId:null,roleName:null,version:0,permissions:[],canView:true})};}if(lifecycle&&url.includes('/rest/v1/rpc/')){liveCalls.push({url,init});return options.liveFetch?options.liveFetch(url,init):{ok:true,status:200,json:async()=>({platforms:[]})}} phases.push('fetch'); calls.push({ url, init }); const response=options.fetch ? await options.fetch(url, init) : url.endsWith('?check=1')?{ok:true,status:200,json:async()=>({ok:true,canView:true,canManage:(options.role||'owner')==='owner'})}:{ ok: true, status: 200, text: async () => HTML }; return typeof response.text==='function'?{...response,text:async()=>{phases.push('response:text');return response.text()}}:response; },
   };
   vm.runInNewContext(transpile(fs.readFileSync(componentPath, 'utf8')), environment, { filename: componentPath });
@@ -634,4 +636,26 @@ test('exhausted initial transport retries stay fail-closed but a later periodic 
  const clock=retryClock();let healthy=false;const h=componentHarness('offline-initial-outage-recovery',{...clock,fetch:async()=>healthy?{ok:true,status:200,text:async()=>HTML}:{ok:false,status:503,json:async()=>({code:'upstream_unavailable'})}});
  try{await flush();clock.next();await flush();clock.next();await flush();assert.equal(h.calls.length,3);assert(!findElement(h.draw(),'iframe'));assert.equal(h.states[0],null);healthy=true;h.checkPermission();await flush();assert.equal(h.calls.length,4);assert(findElement(h.draw(),'iframe'));assert(h.states[0]);assert.equal(h.states[2],'');}
  finally{h.dispose()}
+});
+
+test('release notification starts only after authorization and keeps the mounted frame until the user reloads',async()=>{
+ let reloads=0,resolveRelease;
+ const h=componentHarness('offline-release',{commitEffects:true,releaseRevision:'a'.repeat(64),onReload:()=>reloads++,
+  fetch:async url=>url.endsWith('/dashboard-release.json')?new Promise(resolve=>resolveRelease=resolve):url.endsWith('?check=1')?{ok:true,status:200,json:async()=>({ok:true,canView:true,canManage:true})}:{ok:true,status:200,text:async()=>HTML}});
+ try{
+  assert(!h.calls.some(call=>call.url.endsWith('/dashboard-release.json')));
+  await flush();h.commit();await flush();
+  const frame=findElement(h.draw(),'iframe'),source=frame.props.srcDoc,child=h.child;
+  const calls=h.calls.filter(call=>call.url.endsWith('/dashboard-release.json'));assert.equal(calls.length,1);
+  assert.equal(calls[0].init.credentials,'omit');assert.equal(calls[0].init.headers,undefined);
+  resolveRelease({ok:true,headers:{get:()=> 'application/json'},json:async()=>({version:1,revision:'b'.repeat(64)})});await flush();h.commit();
+  assert.equal(h.child,child);assert.equal(findElement(h.draw(),'iframe').props.srcDoc,source);assert.equal(reloads,0);
+  const buttons=elements(h.draw()).filter(node=>node.type==='button'&&node.props.children==='重新加载');assert.equal(buttons.length,1);buttons[0].props.onClick();assert.equal(reloads,1);
+  h.checkPermission();await flush();h.commit();assert.equal(h.calls.filter(call=>call.url.endsWith('/dashboard-release.json')).length,1);
+  assert.equal(h.child,child);assert.match(JSON.stringify(h.draw()),/页面已更新/);
+ }finally{h.dispose()}
+ for(const options of [{canView:false},{active:false}]){
+  const denied=componentHarness('offline-release-denied',{...options,commitEffects:true,releaseRevision:'a'.repeat(64)});
+  try{await flush();denied.commit();assert.equal(denied.calls.length,0);assert.doesNotMatch(JSON.stringify(denied.draw()),/页面已更新/)}finally{denied.dispose()}
+ }
 });
