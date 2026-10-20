@@ -156,13 +156,22 @@
   function abandon(job){if(job.waiters.size)return;release(job);if(job.batch&&job.batch.jobs.every(item=>!item.waiters.size)){job.batch.controller.abort();batches.delete(job.batch);}schedule();}
   function schedule(){if(scheduled)return;scheduled=true;Promise.resolve().then(()=>{scheduled=false;drain();});}
   function deliver(job,error,result){let delivered=0;for(const waiter of [...job.waiters])if(active(waiter)){settle(waiter,error,result);delivered++;}release(job);return delivered;}
-  function pollable(item,job){return pollMaxMs>0&&publicationVersion===2&&job.q.view==='providers'&&item?.status==='building'&&item.reason==='daily_provider_base_preparing'&&item.result===null&&item.publication===null;}
+  function pollable(item,job){
+   if(!pollMaxMs||publicationVersion!==2||item?.result!==null||item.publication!==null)return false;
+   // A pending status alone does not prove a worker accepted this exact query.
+   // The reader supplies bounded, current job evidence after successful admit.
+   if(Object.hasOwn(item,'preparation')){
+    const p=item.preparation;
+    return ['providers','full'].includes(job.q.view||'full')&&['missing','stale','building'].includes(item.status)&&p&&Object.prototype.toString.call(p)==='[object Object]'&&Object.keys(p).sort().join(',')==='retryable,state'&&p.retryable===true&&['queued','running'].includes(p.state);
+   }
+   return job.q.view==='providers'&&item.status==='building'&&item.reason==='daily_provider_base_preparing';
+  }
   function endPoll(job){if(!prune(job)){abandon(job);return;}deliver(job,failure('building'));abandon(job);}
   function waitForBase(job){
    if(job.completedInvalidated){deliver(job,failure('cancelled'));abandon(job);return;}
    if(!job.polling){job.polling=true;job.deadlineAt=now()+pollMaxMs;job.deadlineTimer=setTimeout(()=>{job.deadlineTimer=null;endPoll(job);},pollMaxMs);}
    if(now()>=job.deadlineAt||job.attempts>=pollMaxAttempts){endPoll(job);return;}
-   // Only the exact still-building native job waits. Its HTTP batch has ended;
+   // Only the exact admitted native job waits. Its HTTP batch has ended;
    // ready peers are released and never re-read. Force is sent only initially.
    job.phase='waiting';job.batch=null;
    job.pollTimer=setTimeout(()=>{job.pollTimer=null;if(!prune(job)){abandon(job);return;}if(now()>=job.deadlineAt){endPoll(job);return;}job.phase='queued';queue.push(job);schedule();},Math.min(pollInterval,job.deadlineAt-now()));
