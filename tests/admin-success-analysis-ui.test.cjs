@@ -17,7 +17,7 @@ test('canonical provider rows keep native platform identity and three vertical r
  const html=a.render(p);assert.equal((html.match(/<table /g)||[]).length,3);assert.equal((html.match(/<th scope="row">ATPay<\/th>/g)||[]).length,2);assert.match(html,/新AR/);assert.match(html,/状态 4/);assert.match(html,/不代表实际到账/);assert.match(html,/完整原单号去重/);assert.doesNotMatch(html,/全部金额|手续费|到账成功金额/);assert.doesNotMatch(html,/按一个当地日展示|已选择 2026-10-03 全天|success-analysis-context|success-analysis-method|统计口径|平台当地日期 · 提交笔数从多到少/);assert.equal(JSON.stringify(p),before);
 });
 test('strict below-40 color applies to all matrices, unknown neutral and above-100 rates are preserved',()=>{
- const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',100,39),row('withdraw',10,4)])],workorders:{byPlatformProvider:[ticket(A,'charge',100,39),ticket(A,'withdraw',0,0)]}});let html=a.render(p);assert.equal((html.match(/<tbody>.*?<\/tbody>/g).join('').match(/class="success-rate-low"/g)||[]).length,2);assert.equal((html.match(/<tfoot.*?<\/tfoot>/g).join('').match(/class="success-rate-low"/g)||[]).length,1);assert.match(html,/>40\.00%<\/span>/);assert.match(html,/>39\.00%/);
+ const a=api(),p=props({queryPlatforms:[A],results:[payment(A,[row('charge',100,39),row('withdraw',10,4)])],workorders:{byPlatformProvider:[ticket(A,'charge',100,39),ticket(A,'withdraw',0,0)]}});let html=a.render(p);assert.equal((html.match(/<tbody>.*?<\/tbody>/g).join('').match(/class="success-rate-low"/g)||[]).length,4);assert.equal((html.match(/<tfoot.*?<\/tfoot>/g).join('').match(/class="success-rate-low"/g)||[]).length,2);assert.match(html,/>40\.00%<\/span>/);assert.match(html,/>39\.00%/);
  p.L.results=[payment(A,[row('charge',10,12),row('withdraw',10,null)])];p.L.workorders.byPlatformProvider=[ticket(A,'charge',0,0)];html=a.render(p);assert.match(html,/>120\.00%<\/span>/);assert.doesNotMatch(html,/success-rate-low/);assert.match(html,/>—<\/span>/);
 });
 test('workorder combined rate uses dedup original counts and preserves absent, unknown and duplicate cohort evidence',()=>{
@@ -105,7 +105,7 @@ test('workorder platform footers preserve partial direction/source evidence and 
 });
 test('platform footer rates keep strict red threshold, above-100 payment rates, zero denominators and WG withdrawal unknown',()=>{
  const a=api(),p=props({queryPlatforms:[A,W],results:[payment(A,[row()],[row('charge',10,12),row('withdraw',10,4)]),payment(W,[row('withdraw',99,98)],[row('charge',100,39),row('withdraw',99,98)])],workorders:{byPlatformProvider:[],byPlatformDirection:[ticket(A,'charge',100,39),ticket(A,'withdraw',0,0),ticket(W,'charge',0,0)]}}),m=a.buildModel(p);assert.equal(m.footers.charge[0].value,120);assert.equal(m.footers.withdraw[0].value,40);assert.equal(m.footers.withdraw[1].value,null);assert.equal(m.footers.withdraw[1].volume,99);assert.equal(m.footers.workorder[0].value,39);assert.equal(m.footers.workorder[1].value,null);
- const footerHtml=a.render(p).match(/<tfoot.*?<\/tfoot>/g).join('');assert.match(footerHtml,/>120\.00%<\/span>/);assert.match(footerHtml,/>40\.00%<\/span>/);assert.equal((footerHtml.match(/class="success-rate-low"/g)||[]).length,2);
+ const footerHtml=a.render(p).match(/<tfoot.*?<\/tfoot>/g).join('');assert.match(footerHtml,/>120\.00%<\/span>/);assert.match(footerHtml,/>40\.00%<\/span>/);assert.equal((footerHtml.match(/class="success-rate-low"/g)||[]).length,3);
 });
 test('footer provider counts use positive same-section submissions and canonical identity, excluding non-payment labels',()=>{
  const a=api(),p=props({queryPlatforms:[A,B],results:[payment(A,[row('charge',10,4),row('charge',5,2,'ATPay-QR'),row('charge',20,5,'OtherPay'),row('withdraw',0,5,'ATPay'),row('withdraw',2,1,'PayoutPay'),row('withdraw',5,2,'人工确认')],[row('charge',35,11),row('withdraw',7,8)]),payment(B,[],[row('charge',9,4),row('withdraw',0,0)])],workorders:null}),m=a.buildModel(p);
@@ -152,8 +152,42 @@ test('type lookup loads only for a current queried scope, then renders loading, 
 });
 test('type column width, empty colspan and footer cell preserve the native payment and workorder matrix alignment',()=>{
  const C={...A,id:'third-native'},D={...A,id:'fourth-native'},a=api(),tables=a.render(props({queryPlatforms:[A,B,C,D],results:[],workorders:null})).match(/<table[^>]*>.*?<\/table>/g);
- for(const table of tables.slice(0,2)){assert.match(table,/min-width:504px/);assert.match(table,/<tbody><tr><td colspan="6">/);assert.equal((table.match(/class="success-provider-type"/g)||[]).length,2);}
- assert.match(tables[2],/min-width:424px/);assert.match(tables[2],/<tbody><tr><td colspan="5">/);assert.doesNotMatch(tables[2],/success-provider-type/);
+ for(const table of tables.slice(0,2)){assert.match(table,/min-width:600px/);assert.match(table,/<tbody><tr><td colspan="7">/);assert.equal((table.match(/class="success-provider-type"/g)||[]).length,2);}
+ assert.match(tables[2],/min-width:520px/);assert.match(tables[2],/<tbody><tr><td colspan="6">/);assert.doesNotMatch(tables[2],/success-provider-type/);
+});
+
+test('total success rates weight canonical providers across native systems using counts and keep native platform columns',()=>{
+ const a=api(),p=props({results:[payment(A,[row('charge',1,1),row('withdraw',4,5)]),payment(B,[row('charge',99,0,'ATPay-QR'),row('withdraw',6,7,'ATPay-QR')])],workorders:{byPlatformProvider:[ticket(A,'charge',1,1),ticket(A,'withdraw',0,0),ticket(B,'charge',99,0,'ATPay-QR'),ticket(B,'withdraw',0,0,'ATPay-QR')]}}),before=JSON.stringify(p),m=a.buildModel(p),r=m.rows[0];
+ assert.equal(m.rows.length,1);assert.equal(m.columns.length,2);assert.deepEqual(Array.from(r.charge,x=>x.value),[100,0]);
+ assert.equal(r.totals.charge.success,1);assert.equal(r.totals.charge.total,100);assert.equal(r.totals.charge.value,1);assert.equal(r.totals.charge.partial,false);
+ assert.equal(r.totals.withdraw.value,120,'cross-day success must not be clamped');assert.equal(r.totals.workorder.value,1);assert.equal(r.totals.workorder.partial,false);
+ const tables=a.render(p).match(/<table[^>]*>.*?<\/table>/g);for(const table of tables){assert.match(table,/<th scope="col" class="success-total-rate">总成功率<\/th><\/tr><\/thead>/);assert.equal((table.match(/Same platform<small>/g)||[]).length,2);}
+ assert.match(tables[0],/success-total-rate"><span[^>]*>1\.00%<\/span>/);assert.doesNotMatch(tables[0],/>50\.00%/);assert.equal(JSON.stringify(p),before);
+});
+
+test('total rates preserve paired known counts, explicit zero, partial sources, unavailable clocks and safe integer limits',()=>{
+ const a=api(),p=props({results:[payment(A,[row('charge',10,0),row('withdraw',10,6)]),payment(B,[row('charge',90,null),row('withdraw',20,5)])],workorders:null}),total=key=>a.buildModel(p).rows[0].totals[key];
+ assert.equal(total('charge').value,0);assert.equal(total('charge').total,10,'missing success cannot inflate the paired denominator');assert.equal(total('charge').partial,true);assert.match(a.render(p),/>0\.00%<sup aria-label="部分来源">\*<\/sup><\/span><small class="success-total-partial">已读小计/);
+ p.L.results[1].groups.provider[0].success_count=45;p.L.results[0].coverage={sourceComplete:false};assert.equal(total('charge').value,45);assert.equal(total('charge').partial,true);
+ p.L.results=[payment(A,[row('charge',0,0)])];p.L.queryPlatforms=[A];assert.equal(total('charge').value,null);assert.equal(total('charge').total,0);
+ p.L.queryPlatforms=[A,W];p.L.results=[payment(A,[row('withdraw',10,6)]),payment(W,[row('withdraw',1000,900)])];assert.equal(total('withdraw').value,60);assert.equal(total('withdraw').total,10);assert.equal(total('withdraw').partial,true);
+ p.L.results=[payment(A,[row('charge',Number.MAX_SAFE_INTEGER,1)]),payment(W,[row('charge',1,1)])];assert.equal(total('charge').value,null,'unsafe summed counts must not yield a rounded rate');
+ p.L.results=[];assert.equal(a.buildModel(p).totals.charge.value,null);
+});
+
+test('total footers use native platform totals and workorder original cohorts without summing provider ratios or duplicate originals',()=>{
+ const a=api(),p=props({results:[payment(A,[row('charge',1,1)],[row('charge',100,40)]),payment(B,[row('charge',99,0,'ATPay-QR')],[row('charge',900,450)])],workorders:{byPlatformProvider:[ticket(A,'charge',1,1),ticket(A,'withdraw',0,0),ticket(B,'charge',99,0,'ATPay-QR'),ticket(B,'withdraw',0,0,'ATPay-QR')],byPlatformDirection:[ticket(A,'charge',100,40),ticket(A,'withdraw',0,0),ticket(B,'charge',900,450),ticket(B,'withdraw',0,0)]}}),m=a.buildModel(p);
+ assert.equal(m.rows[0].totals.charge.value,1);assert.equal(m.totals.charge.value,49);assert.equal(m.totals.charge.partial,false);
+ assert.equal(m.rows[0].totals.workorder.value,1);assert.equal(m.totals.workorder.value,49);assert.equal(m.totals.workorder.partial,false);
+ p.L.workorders.byPlatformProvider.push(ticket(B,'charge',99,0,'ATPay'));const r=a.buildModel(p).rows[0].totals.workorder;assert.equal(r.value,100);assert.equal(r.partial,true);assert.equal(r.total,1);
+ p.L.results[1].groups.provider[0].currency='USD';assert.equal(a.buildModel(p).rows[0].totals.charge.value,null,'mixed currency native scope cannot create a combined rate');
+});
+
+test('total rates tolerate malformed provider groups while preserving verified native summaries and unresolved notices',()=>{
+ const a=api();for(const malformed of [{unexpected:'shape'},'not-a-group']){
+  const p=props({queryPlatforms:[A],results:[payment(A,malformed,[row('charge',10,4)])],workorders:null,queryFailures:[{id:B.id,name:'Native <B>',status:'building',message:'后台正在准备 <source>'}]}),m=a.buildModel(p),html=a.render(p);
+  assert.equal(m.rows.length,0);assert.equal(m.totals.charge.value,40);assert.match(html,/success-total-rate"><span[^>]*>40\.00%/);assert.match(html,/部分平台尚未完成.*Native &lt;B&gt;：后台正在准备 &lt;source&gt;/);assert.doesNotMatch(html,/部分平台读取失败|<source>/);
+ }
 });
 
 // Reuse the established synthetic DOM fixture without registering its tests.
@@ -187,7 +221,7 @@ test('late workorder response after filter change cannot render old cohorts and 
 test('partial platform retry preserves known columns, rereads only failures, and tab restore does not read extra data',async()=>{
  const notices=api().render(props({loading:true,progress:'正在读取其余授权平台',error:'仍有平台尚未返回',queryPaused:true}));assert.match(notices,/正在读取其余授权平台/);assert.match(notices,/仍有平台尚未返回/);assert.match(notices,/查询已暂停/);assert.match(notices,/liveRetryFailed\(true\)/);
  const ps=[{...A,timezone:'Asia/Kolkata',currency:'INR'},{...B,timezone:'Asia/Kolkata',currency:'INR'}],h=await ready({platforms:ps,ancillaryHandler:true});let fail=true;
- h.setHandler(q=>{if(q.action==='providerOptions')return {providers:['ATPay']};if(q.action==='rates')return {rows:[],total:0};if(q.action==='workorders')return {startDate:'2026-09-22',endDate:'2026-09-22',byPlatformProvider:[],byProvider:[],byDirection:{}};if(q.platformId===B.id&&fail)throw Error('Synthetic unavailable');return payment(ps.find(p=>p.id===q.platformId),[row('charge',10,q.platformId===A.id?4:3)]);});setDate(h,'2026-09-22');await h.c.liveQuery();assert.equal(h.L.queryFailures.length,1);assert.match(h.html(),/40\.00%/);assert.match(h.html(),/部分平台读取失败/);const n=h.calls.length;fail=false;await h.c.liveRetryFailed();const retry=h.calls.slice(n);assert.equal(retry.filter(q=>q.action==='aggregate').length,1);assert.equal(retry.find(q=>q.action==='aggregate').platformId,B.id);assert(retry.every(q=>q.action==='aggregate'));assert.equal(h.L.queryFailures.length,0);assert.match(h.html(),/30\.00%/);
+ h.setHandler(q=>{if(q.action==='providerOptions')return {providers:['ATPay']};if(q.action==='rates')return {rows:[],total:0};if(q.action==='workorders')return {startDate:'2026-09-22',endDate:'2026-09-22',byPlatformProvider:[],byProvider:[],byDirection:{}};if(q.platformId===B.id&&fail)throw Error('Synthetic unavailable');return payment(ps.find(p=>p.id===q.platformId),[row('charge',10,q.platformId===A.id?4:3)]);});setDate(h,'2026-09-22');await h.c.liveQuery();assert.equal(h.L.queryFailures.length,1);assert.match(h.html(),/40\.00%/);assert.match(h.html(),/部分平台尚未完成.*Synthetic unavailable/);const n=h.calls.length;fail=false;await h.c.liveRetryFailed();const retry=h.calls.slice(n);assert.equal(retry.filter(q=>q.action==='aggregate').length,1);assert.equal(retry.find(q=>q.action==='aggregate').platformId,B.id);assert(retry.every(q=>q.action==='aggregate'));assert.equal(h.L.queryFailures.length,0);assert.match(h.html(),/30\.00%/);
  const frozen=h.L.results,n2=h.calls.length;h.c.setPage('overview');h.c.setPage('success_analysis');assert.strictEqual(h.L.results,frozen);assert.equal(h.calls.length,n2);assert.match(h.html(),/40\.00%/);assert.match(h.html(),/30\.00%/);
 });
 test('Today success query freezes the existing local elapsed-time cutoff and escapes source labels',async()=>{
@@ -262,4 +296,21 @@ test('permission revocation and catalog removal discard saved matrices, while a 
 test('current-only success range accepts unique DST boundaries even when its unused preceding period is ambiguous',async()=>{
  const p={...A,timezone:'America/New_York',currency:'INR'},h=await ready({platforms:[p],ancillaryHandler:true});h.setNow('2026-11-03T12:00:00Z');h.setHandler(rangeHandler(h,{work:false}));setRange(h,'2026-11-02T01:30:00','2026-11-02T03:00:00');await h.c.liveQuery();await settle();const qs=h.calls.filter(q=>q.action==='aggregate');assert.equal(qs.length,1);assert.equal(qs[0].startAt,'2026-11-02T06:30:00.000Z');assert.equal(qs[0].endAt,'2026-11-02T08:00:01.000Z');assert.match(h.html(),/46\.00%/);assert.equal(h.c.HensemLiveCompare.windowFor(h.L.from,h.L.to,p.timezone,h.L.queryNow).valid,false,'comparison pages still validate both periods');assert.equal(h.c.HensemLiveCompare.currentWindowFor(h.L.from,h.L.to,p.timezone,h.L.queryNow).previousFrom,null);
  const n=h.calls.length;setRange(h,'2026-11-01T01:30:00','2026-11-01T03:00:00');await h.c.liveQuery();assert.equal(h.calls.length,n);assert.match(h.L.error,/重复钟点/);setRange(h,'2026-03-08T02:30:00','2026-03-08T03:30:00');await h.c.liveQuery();assert.equal(h.calls.length,n);assert.match(h.L.error,/跳时/);
+});
+
+test('total-rate header toggles weighted row order locally with unknown last, fixed native columns and independent sections',async()=>{
+ const ps=[{...A,timezone:'Asia/Kolkata',currency:'INR'},{...B,timezone:'Asia/Kolkata',currency:'INR'}],h=await ready({platforms:ps,ancillaryHandler:true});
+ const facts=p=>p.id===A.id?[row('charge',100,30,'BigPay'),row('charge',1,1,'MixedPay'),row('charge',2,0,'ZeroPay'),row('charge',10,null,'UnknownPay')]:[row('charge',100,70,'BigPay'),row('charge',99,0,'MixedPay'),row('charge',100,0,'ZeroPay'),row('charge',50,null,'UnknownPay')];
+ h.setHandler(q=>q.action==='providerOptions'?{providers:[]}:q.action==='rates'?{rows:[],total:0}:q.action==='workorders'?{startDate:'2026-09-22',endDate:'2026-09-22',byPlatformProvider:[],byPlatformDirection:[],byProvider:[],byDirection:{}}:payment(ps.find(p=>p.id===q.platformId),facts(ps.find(p=>p.id===q.platformId))));
+ setDate(h,'2026-09-22');await h.c.liveQuery();await settle();
+ const tables=()=>h.html().match(/<table[^>]*>.*?<\/table>/g),names=table=>[...table.match(/<tbody>.*?<\/tbody>/)[0].matchAll(/<th scope="row">(.*?)<\/th>/g)].map(x=>x[1]),nativeHeaders=table=>table.match(/<thead>.*?<\/thead>/)[0].replace(/<th scope="col" class="success-total-rate">.*?<\/th>/,'');
+ const before=JSON.stringify(h.L.results),calls=h.calls.length,foot=tables()[0].match(/<tfoot.*?<\/tfoot>/)[0],columns=nativeHeaders(tables()[0]),other=tables().slice(1);
+ assert.deepEqual(names(tables()[0]),['BigPay','ZeroPay','MixedPay','UnknownPay']);
+ assert.match(tables()[0],/liveLoadedTableSort.*总成功率/);
+ const sort=()=>h.c.liveLoadedTableSort(encodeURIComponent('success_analysis|success-analysis-charge'),0);
+ sort();assert.deepEqual(names(tables()[0]),['BigPay','MixedPay','ZeroPay','UnknownPay']);assert.match(tables()[0],/总成功率 <span aria-hidden="true">↓/);
+ sort();assert.deepEqual(names(tables()[0]),['ZeroPay','MixedPay','BigPay','UnknownPay']);assert.match(tables()[0],/总成功率 <span aria-hidden="true">↑/);
+ assert.equal(nativeHeaders(tables()[0]),columns);assert.equal(tables()[0].match(/<tfoot.*?<\/tfoot>/)[0],foot);assert.deepEqual(tables().slice(1),other);assert.equal(JSON.stringify(h.L.results),before);assert.equal(h.calls.length,calls);
+ const saved=JSON.stringify(h.L.tablePages['sort:live-success-analysis-charge']);h.c.setPage('overview');sort();h.c.setPage('success_analysis');assert.equal(JSON.stringify(h.L.tablePages['sort:live-success-analysis-charge']),saved);assert.deepEqual(names(tables()[0]),['ZeroPay','MixedPay','BigPay','UnknownPay']);assert.equal(h.calls.length,calls);
+ h.c.liveDateSet('from','date','2026-09-21');const draft=JSON.stringify(h.L.tablePages);sort();assert.equal(JSON.stringify(h.L.tablePages),draft);assert.doesNotMatch(tables()[0],/liveLoadedTableSort/);assert.equal(h.calls.length,calls);
 });

@@ -139,7 +139,18 @@
   });
   const footers={charge:columns.map(p=>paymentPlatform(p,'charge')),withdraw:columns.map(p=>paymentPlatform(p,'withdraw')),workorder:columns.map(workorderPlatform)};
   for(const key of ['charge','withdraw','workorder'])footers[key]=footers[key].map((footer,index)=>({...footer,...providerActivity(columns[index],key,footer)}));
-  return {ready:true,date,columns,rows,footers,ignored,workordersCurrent};
+  const countries=new Set(columns.map(p=>p.country).filter(Boolean)),currencies=new Set(columns.flatMap(p=>{const response=platformResponses.get(p.id),groups=response?.groups?.provider,summary=response?.summary;return [p.currency,...(Array.isArray(groups)?groups:[]).map(row=>row?.currency),...(Array.isArray(summary)?summary:[]).map(row=>row?.currency)];}).filter(Boolean));
+  function totalRate(values,key){
+   if(countries.size>1||currencies.size>1)return unknown('所选平台的国家或币种不一致，不能合并总成功率。');
+   const known=values.filter(value=>count(value.success)!==null&&count(value.total)!==null),success=safeSum(known.map(value=>value.success)),total=safeSum(known.map(value=>value.total));
+   const sourcePartial=key!=='workorder'&&columns.some(p=>{const response=platformResponses.get(p.id);return response?.complete===false||response?.coverage?.calculationComplete===false||response?.coverage?.sourceComplete===false||response?._preparedPublication?.sourceComplete===false;});
+   const partial=known.length!==values.length||values.some(value=>value.partial)||sourcePartial||success===null||total===null;
+   const note=(key==='workorder'?'跨平台已处理原单合计 ÷ 提交原单合计；沿用平台、业务、完整原支付单号去重口径，不代表实际到账。':'跨平台成功笔数合计 ÷ 创建笔数合计；沿用所选成功时间口径，含跨日成功，不平均平台百分比。')+(partial?'仅为可核验成功与提交笔数的已读小计，缺失或未读平台不按 0 计算。':'');
+   return {...fact(success,total,partial,note),...(key==='workorder'?{basis:'workorder'}:{})};
+  }
+  for(const row of rows)row.totals=Object.fromEntries(['charge','withdraw','workorder'].map(key=>[key,totalRate(row[key],key)]));
+  const totals=Object.fromEntries(['charge','withdraw','workorder'].map(key=>[key,totalRate(footers[key],key)]));
+  return {ready:true,date,columns,rows,footers,totals,ignored,workordersCurrent};
  }
  function rankedColumnIndexes(model,key){
   return model.columns.map((p,index)=>({index,id:String(p.id),volume:model.footers[key][index].volume})).sort((a,b)=>a.volume===null?(b.volume===null?a.id.localeCompare(b.id):1):b.volume===null?-1:b.volume-a.volume||a.id.localeCompare(b.id)).map(item=>item.index);
@@ -157,11 +168,11 @@
   if(!other.length&&!unavailable.length)return '';
   return '<details class="success-analysis-other"><summary>其他记录与未完整提供的分组'+(other.length?' · '+other.length+' 类非三方 / 未归属记录':'')+(unavailable.length?' · '+unavailable.length+' 个分组活动未确认':'')+'</summary>'+(other.length?'<p>以下是人工操作、无三方业务或三方归属待确认的记录，不列为支付三方：'+other.map(row=>escape(row.provider)+'（已读提交 '+(row.volumes[key]===null?'未提供':row.volumes[key]+' 笔')+'）').join('；')+'。底部汇总仍按来源原汇总计算，不因收起这些记录而扣减。</p>':'')+(unavailable.length?'<p>以下分组未提供可确认的活动笔数或金额，未按零处理：'+unavailable.map(row=>escape(row.provider)).join('、')+'。</p>':'')+'</details>';
  }
- function cell(value,footer=false){
+ function cell(value,footer=false,total=false){
   const known=value.value!==null&&Number.isFinite(value.value),label=known?value.value.toFixed(2)+'%':'—';
   const title=value.note+(known?(value.basis==='workorder'?' 合计已处理 '+value.success+' / 提交 '+value.total:' 成功 '+value.success+' / 创建 '+value.total)+' 笔。':'');
   const providers=footer?'<small class="success-analysis-provider-count" title="'+escape(value.providerCountNote)+'">'+(value.providerCount===null?'三方数未提供':value.providerCount+' 三方')+(value.providerCount!==null&&value.providerCountPartial?'<sup aria-label="已识别三方小计">*</sup>':'')+'</small>':'';
-  return '<td class="success-rate-cell"><span'+(known&&value.value<40?' class="success-rate-low"':'')+' tabindex="0" title="'+escape(title)+'">'+label+(known&&value.partial?'<sup aria-label="部分来源">*</sup>':'')+'</span>'+providers+'</td>';
+  return '<td class="success-rate-cell'+(total?' success-total-rate':'')+'"><span'+(known&&value.value<40?' class="success-rate-low"':'')+' tabindex="0" title="'+escape(title)+'">'+label+(known&&value.partial?'<sup aria-label="部分来源">*</sup>':'')+'</span>'+providers+(total&&known&&value.partial?'<small class="success-total-partial">已读小计</small>':'')+'</td>';
  }
  function typeCell(row,key,L){
   const items=row.typeItems[key];let value;
@@ -187,7 +198,7 @@
   if(L.error)notices.push(escape(L.error));
   if(L.loading||L.queryRetrying)notices.push(escape(L.progress||'正在读取平台成功率；当前为部分结果。'));
   if(L.queryPaused)notices.push('查询已暂停，保留已读取结果。<button class="link" onclick="liveRetryFailed(true)">继续查询</button>');
-  if(L.queryFailures?.length)notices.push('部分平台读取失败：'+escape(L.queryFailures.map(p=>p.name).join('、'))+'。<button class="link" onclick="liveRetryFailed()">重试未完成平台</button>');
+  if(L.queryFailures?.length)notices.push('部分平台尚未完成：'+escape(L.queryFailures.map(p=>p.name+(p.message?'：'+p.message:'')).join('；'))+'。<button class="link" onclick="liveRetryFailed()">重试未完成平台</button>');
   if(model.ignored)notices.push('有 '+model.ignored+' 条工单汇总无法匹配已授权平台身份，未分摊到平台。');
   const completedBasis=model.columns.some(p=>source(p.source)==='kb'&&p.capabilities?.successTimeBasis==='source_completed_at')||(L.results||[]).some(r=>source(r.platform?.source)==='kb'&&(r.capabilities||r.platform?.capabilities)?.successTimeBasis==='source_completed_at');
   const pandaBasis=model.columns.some(p=>source(p.source)==='panda');
@@ -195,8 +206,9 @@
   const secondaryLabel=L.successBasis==='source_updated'?'源订单更新时间':'成功时间',sections=[['charge','代收成功率',secondaryLabel+'内成功笔数 ÷ 创建时间内全部笔数。'],['withdraw','代付成功率',secondaryLabel+'内成功笔数 ÷ 创建时间内全部笔数；未提供可核验时间时显示 —。'],['workorder','工单成功率','按所选自然日范围：已处理原支付单 ÷ 全部提交原支付单；按平台、业务、完整原单号去重，状态 4 计已处理，不代表实际到账。']];
   return '<div class="live-success-analysis">'+(notices.length?'<div class="live-status">'+notices.join('<br>')+'</div>':'')+sections.map(([key,title,note])=>{
    if(key==='workorder'&&L.workordersTimeUnsupported)return '<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2></div><p>工单仅支持完整自然日汇总，自定义时段暂不提供。</p></section>'; 
-   const visibleRows=rankedRows(model,key),withType=key!=='workorder',indexes=rankedColumnIndexes(model,key),head='<thead><tr><th scope="col">三方</th>'+(withType?'<th scope="col" class="success-provider-type">类型</th>':'')+indexes.map(index=>{const p=model.columns[index],volume=model.footers[key][index].volume;return '<th scope="col" title="'+escape(p.name+' · '+system(p.source)+' · '+p.id+' · 已读取提交笔数 '+(volume===null?'未提供':volume)+(model.footers[key][index].partial?'（部分）':''))+'">'+escape(p.name)+'<small>'+escape(system(p.source))+'</small></th>';}).join('')+'</tr></thead>';
-   return '<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2>'+(key==='workorder'&&L.workordersError?'<button type="button" class="link" onclick="liveProviderWorkordersRetry()">重试工单</button>':'')+'</div><p>'+note+(key!=='workorder'&&updatedBasis&&(!L.successBasis||L.successBasis==='source_updated')?' 多利成功按成功状态＋订单更新时间统计，不代表实际到账时间。':'')+(key!=='workorder'&&completedBasis?' KB成功按源订单完成时间统计。':'')+(pandaBasis&&key==='charge'?' 熊猫成功时间窗口尚未完整核验；已采行完成时间不代表该窗口全量。':pandaBasis&&key==='withdraw'?' 熊猫仅含已审核提现；未提供可靠完成时间，成功时间指标显示 —。':'')+'</p><div class="success-analysis-scroll" tabindex="0" role="region" aria-label="'+title+'"><table style="min-width:'+Math.max(400,112+(withType?80:0)+model.columns.length*78)+'px">'+head+'<tbody>'+ (visibleRows.length?visibleRows.map(row=>'<tr><th scope="row">'+escape(row.provider)+'</th>'+(withType?typeCell(row,key,L):'')+indexes.map(index=>cell(row[key][index])).join('')+'</tr>').join(''):'<tr><td colspan="'+(model.columns.length+1+(withType?1:0))+'">'+(L.loading?'正在读取三方汇总…':'当前条件下暂无已确认活动的支付三方')+'</td></tr>')+'</tbody><tfoot class="success-analysis-footer"><tr><th scope="row">汇总成功率</th>'+(withType?'<td class="success-provider-type">—</td>':'')+indexes.map(index=>cell(model.footers[key][index],true)).join('')+'</tr></tfoot></table></div>'+otherRecords(model,key)+'</section>';
+   const ranked=rankedRows(model,key),sorted=props.sortTable?.('success-analysis-'+key,['总成功率'],ranked,[{value:row=>row.totals[key].value}])||{rows:ranked,headers:['总成功率']};
+   const visibleRows=sorted.rows,withType=key!=='workorder',indexes=rankedColumnIndexes(model,key),head='<thead><tr><th scope="col">三方</th>'+(withType?'<th scope="col" class="success-provider-type">类型</th>':'')+indexes.map(index=>{const p=model.columns[index],volume=model.footers[key][index].volume;return '<th scope="col" title="'+escape(p.name+' · '+system(p.source)+' · '+p.id+' · 已读取提交笔数 '+(volume===null?'未提供':volume)+(model.footers[key][index].partial?'（部分）':''))+'">'+escape(p.name)+'<small>'+escape(system(p.source))+'</small></th>';}).join('')+'<th scope="col" class="success-total-rate">'+sorted.headers[0]+'</th></tr></thead>';
+   return '<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2>'+(key==='workorder'&&L.workordersError?'<button type="button" class="link" onclick="liveProviderWorkordersRetry()">重试工单</button>':'')+'</div><p>'+note+(key!=='workorder'&&updatedBasis&&(!L.successBasis||L.successBasis==='source_updated')?' 多利成功按成功状态＋订单更新时间统计，不代表实际到账时间。':'')+(key!=='workorder'&&completedBasis?' KB成功按源订单完成时间统计。':'')+(pandaBasis&&key==='charge'?' 熊猫成功时间窗口尚未完整核验；已采行完成时间不代表该窗口全量。':pandaBasis&&key==='withdraw'?' 熊猫仅含已审核提现；未提供可靠完成时间，成功时间指标显示 —。':'')+'</p><div class="success-analysis-scroll" tabindex="0" role="region" aria-label="'+title+'"><table style="min-width:'+Math.max(400,112+(withType?80:0)+model.columns.length*78+96)+'px">'+head+'<tbody>'+ (visibleRows.length?visibleRows.map(row=>'<tr><th scope="row">'+escape(row.provider)+'</th>'+(withType?typeCell(row,key,L):'')+indexes.map(index=>cell(row[key][index])).join('')+cell(row.totals[key],false,true)+'</tr>').join(''):'<tr><td colspan="'+(model.columns.length+2+(withType?1:0))+'">'+(L.loading?'正在读取三方汇总…':'当前条件下暂无已确认活动的支付三方')+'</td></tr>')+'</tbody><tfoot class="success-analysis-footer"><tr><th scope="row">汇总成功率</th>'+(withType?'<td class="success-provider-type">—</td>':'')+indexes.map(index=>cell(model.footers[key][index],true)).join('')+cell(model.totals[key],false,true)+'</tr></tfoot></table></div>'+otherRecords(model,key)+'</section>';
   }).join('')+'</div>';
  }
  window.HensemLiveSuccessAnalysis=Object.freeze({render,buildModel,fact,rankedRows,rankedColumnIndexes});
