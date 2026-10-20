@@ -74,6 +74,14 @@
    return base;
   }
   function invalidate(keepBase=false){if(!keepBase)loadedBase=null;reasonSnapshot=null;S.serial++;stopRead();stopReasonRead();setLoading(false);S.loadingKey='';S.error='';S.prepared=null;S.dirty=true;S.reasonSerial++;S.reason=null;S.reasonData=null;S.originalNote='';S.note=null;}
+  function preparedProgress(prepared){
+   const p=prepared.progress;if(p==null)return null;
+   if(prepared.contract!=='withdraw-independent-windows-v2'||prepared.status!=='building'||p.contract!=='withdraw-stages-v1'||typeof p.generation!=='string'||!/^[a-f0-9]{32}$/.test(p.generation)
+    ||!Number.isSafeInteger(p.doneParts)||p.doneParts<0||!Number.isSafeInteger(p.pendingParts)||p.pendingParts<0
+    ||p.doneParts+p.pendingParts<1||p.doneParts+p.pendingParts>2048||typeof p.running!=='boolean'
+    ||typeof p.lastProgressAt!=='string'||!Number.isFinite(Date.parse(p.lastProgressAt)))throw Error('统计准备进度无效，请重试。');
+   return {generation:p.generation,done:p.doneParts,at:Date.parse(p.lastProgressAt),running:p.running};
+  }
   async function load(reset=false,override=null){
    resultAllowed();loadedBase=null;stopReasonRead();reasonSnapshot=null;S.reasonSerial++;S.reason=null;S.reasonData=null;
    if(!L.catalogReady)return;if(reset){S.page=1;reasonCache.clear();reasonSnapshot=null}
@@ -84,19 +92,50 @@
    const applied=override?{...override.applied,query:targetQuery,accessKey:accessKey(),nativeStamp:nativeStamp()}:{query:targetQuery,scopeKey:scope,country:displayCountry(),teams:activeTeams().slice(),catalog:scopeCatalog().map(p=>({...p})),platforms:S.platforms.slice(),rowCountry:S.rowCountry,historical:S.historical,successWindowExplicit:!!(L.successFrom&&L.successTo),accessKey:accessKey(),nativeStamp:nativeStamp()};
    if(S.loading&&S.loadingKey===key)return pendingRead;
    const keepPrepared=override?.preparedPoll>0&&S.prepared?.queryKey===key&&['missing','building','stale'].includes(S.prepared.status);
-   const serial=++S.serial;stopRead();const controller=typeof root.AbortController==='function'?new root.AbortController():null;readController=controller;S.loadingKey=key;setLoading(true);if(!keepPrepared)S.prepared=null;S.error='';render();
-   const startedAt=override?.preparedStartedAt??Date.now(),remaining=60000-(Date.now()-startedAt);
-   // Stop starting polls after one minute; a poll already sent may finish its bounded transfer.
-   const requestBudget=override?.preparedPoll>0?Math.max(remaining,10000):remaining,requestExpiresAt=Date.now()+requestBudget;let deadlineExpired=false;
+   const serial=++S.serial;stopRead();const controller=typeof root.AbortController==='function'?new root.AbortController():null;readController=controller;S.loadingKey=key;setLoading(true);if(!keepPrepared)S.prepared=null;S.error='';if(!keepPrepared)render();
+   const wait=override?.preparedWait||{startedAt:Date.now(),reads:0,progress:null,extended:false,invalidated:false};
+   const startedAt=wait.startedAt,remaining=(wait.extended?180000:60000)-(Date.now()-startedAt);
+   // Only verified progress on one generation extends the total wait. Every
+   // request and the whole three-minute cycle remain independently bounded.
+   const requestBudget=override?.preparedPoll>0?(wait.extended?Math.min(10000,remaining):Math.max(remaining,10000)):remaining,requestExpiresAt=Date.now()+requestBudget;let deadlineExpired=false;
    const budgetError=()=>Object.assign(new Error('统计读取已暂停，请点击继续读取。'),{code:'WITHDRAW_READ_BUDGET'});
    const run=(async()=>{
     try{
-     if(remaining<=0)throw budgetError();
+     if(remaining<=0||wait.invalidated||wait.reads>=(wait.extended?40:21))throw budgetError();
+     wait.reads++;
      const response=request(targetQuery,controller?{signal:controller.signal}:undefined);
      const data=await(typeof root.setTimeout==='function'?Promise.race([response,new Promise((_,reject)=>{readDeadlineTimer=root.setTimeout(()=>{readDeadlineTimer=null;deadlineExpired=true;reject(budgetError());controller?.abort();},requestBudget);})]):response);
      if(serial!==S.serial)return;
      if(readDeadlineTimer!==null){root.clearTimeout?.(readDeadlineTimer);readDeadlineTimer=null;}
-if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeStamp!==nativeStamp()||root.hensemRoleAccess?.canView===false){clearResult();render();return;}if(Date.now()>=requestExpiresAt)throw budgetError();if(data?.prepared&&data.prepared.status!=='ready'){if(!['missing','building','stale','failed'].includes(data.prepared.status))throw Error('统计准备状态无效，请重试。');S.prepared={...data.prepared,...(data.prepared.status!=='failed'&&((override?.preparedPoll||0)>=20||Date.now()-startedAt>=60000)?{status:'paused'}:{}),queryKey:key};S.dirty=true;setLoading(false);S.loadingKey='';if(S.applied&&!S.localSnapshot)S.page=Math.floor((S.applied.query.offset||0)/S.size)+1;render();if(data.prepared.status!=='failed'&&typeof root.setTimeout==='function'&&(override?.preparedPoll||0)<20&&Date.now()-startedAt<60000){preparedTimer=root.setTimeout(()=>{preparedTimer=null;if(serial!==S.serial||applied.accessKey!==accessKey()||applied.nativeStamp!==nativeStamp()||root.hensemRoleAccess?.canView===false)return;try{if(filterKey(selectionKey(),query())!==filterKey(scope,targetQuery))return;}catch{return;}void load(false,{applied,query:targetQuery,preparedPoll:(override?.preparedPoll||0)+1,preparedStartedAt:startedAt});},Math.min(3000,Math.max(0,60000-(Date.now()-startedAt))));}return;}S.prepared=null;S.secondaryPage=1;S.applied=applied;S.data={...data,country:applied.country,rawCountry:targetQuery.country,scopeTargets:targetQuery.scopeTargets||null,scopeKey:scope};S.dataKey=key;S.dirty=false;S.localSnapshot=target==='auto'&&!targetQuery.daily&&targetQuery.offset===0&&targetQuery.limit===500&&Array.isArray(data.rows)&&data.total!==null&&data.total!==undefined&&data.total!==''&&typeof data.total!=='boolean'&&Number.isSafeInteger(Number(data.total))&&Number(data.total)>=0&&Number(data.total)<=500&&data.rows.length===Number(data.total);S.serverPaging=target==='auto'&&!targetQuery.daily&&!S.localSnapshot;if(!S.localSnapshot&&targetQuery.limit!==500)S.page=Math.floor((targetQuery.offset||0)/S.size)+1;if(S.serverPaging){if(targetQuery.limit===500){S.sort=targetQuery.sort;S.asc=targetQuery.ascending;S.page=1;}if(Array.isArray(S.data.rows)&&S.data.rows.length>S.size)S.data.rows=S.data.rows.slice(0,S.size);}S.page=Math.min(S.page,Math.max(1,Math.ceil(Number(data.total||0)/S.size)));setLoading(false);S.loadingKey='';rememberLoadedBase();render()}
+if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeStamp!==nativeStamp()||root.hensemRoleAccess?.canView===false){clearResult();render();return;}if(Date.now()>=requestExpiresAt)throw budgetError();if(data?.prepared&&data.prepared.status!=='ready'){
+      if(!['missing','building','stale','failed'].includes(data.prepared.status))throw Error('统计准备状态无效，请重试。');
+      if(data.prepared.status!=='failed'){
+       const progress=preparedProgress(data.prepared),previous=wait.progress;
+       if(previous&&(!progress||previous.generation!==progress.generation||progress.done<previous.done||progress.at<previous.at))wait.invalidated=true;
+       if(progress&&!wait.invalidated){
+        if(previous&&(progress.done>previous.done||progress.at>previous.at||progress.running))wait.extended=true;
+        wait.progress=progress;
+       }
+      }
+      const elapsed=Date.now()-startedAt,budget=wait.extended?180000:60000;
+      const canPoll=data.prepared.status!=='failed'&&!wait.invalidated&&wait.reads<(wait.extended?40:21)&&elapsed<budget;
+      const previousStatus=S.prepared?.status;
+      S.prepared={...data.prepared,...(data.prepared.status!=='failed'&&!canPoll?{status:'paused'}:{}),queryKey:key};
+      S.dirty=false;setLoading(false);S.loadingKey='';
+      if(S.applied&&!S.localSnapshot)S.page=Math.floor((S.applied.query.offset||0)/S.size)+1;
+      if(!keepPrepared||previousStatus!==S.prepared.status)render();
+      if(canPoll&&typeof root.setTimeout==='function'){
+       const delay=wait.extended?(elapsed<90000?5000:10000):3000;
+       preparedTimer=root.setTimeout(()=>{
+        preparedTimer=null;
+        if(serial!==S.serial)return;
+        if(applied.accessKey!==accessKey()||applied.nativeStamp!==nativeStamp()||root.hensemRoleAccess?.canView===false){clearResult();render();return;}
+        try{if(filterKey(selectionKey(),query())!==filterKey(scope,targetQuery)){invalidate();render();return;}}catch{invalidate();render();return;}
+        void load(false,{applied,query:targetQuery,preparedPoll:(override?.preparedPoll||0)+1,preparedWait:wait});
+       },Math.min(delay,Math.max(0,budget-elapsed)));
+      }
+      return;
+     }S.prepared=null;S.secondaryPage=1;S.applied=applied;S.data={...data,country:applied.country,rawCountry:targetQuery.country,scopeTargets:targetQuery.scopeTargets||null,scopeKey:scope};S.dataKey=key;S.dirty=false;S.localSnapshot=target==='auto'&&!targetQuery.daily&&targetQuery.offset===0&&targetQuery.limit===500&&Array.isArray(data.rows)&&data.total!==null&&data.total!==undefined&&data.total!==''&&typeof data.total!=='boolean'&&Number.isSafeInteger(Number(data.total))&&Number(data.total)>=0&&Number(data.total)<=500&&data.rows.length===Number(data.total);S.serverPaging=target==='auto'&&!targetQuery.daily&&!S.localSnapshot;if(!S.localSnapshot&&targetQuery.limit!==500)S.page=Math.floor((targetQuery.offset||0)/S.size)+1;if(S.serverPaging){if(targetQuery.limit===500){S.sort=targetQuery.sort;S.asc=targetQuery.ascending;S.page=1;}if(Array.isArray(S.data.rows)&&S.data.rows.length>S.size)S.data.rows=S.data.rows.slice(0,S.size);}S.page=Math.min(S.page,Math.max(1,Math.ceil(Number(data.total||0)/S.size)));setLoading(false);S.loadingKey='';rememberLoadedBase();render()}
     catch(e){if(serial!==S.serial)return;if(deadlineExpired||e?.code==='WITHDRAW_READ_BUDGET'){S.prepared={status:'paused',queryKey:key,reason:'read_budget_elapsed'};S.dirty=true;setLoading(false);S.loadingKey='';render();return;}if(['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(e?.code||''))||/^(preview_denied|synthetic_session_denied|assigned_role_required|page_action_denied|role_permission_denied|session_denied)$/.test(String(e?.message||''))){clearResult();S.error='登录或查询权限已变化，请重新验证后查询。';render();return;}setLoading(false);S.loadingKey='';S.prepared=null;S.error=e.message||'读取失败';render()}
     finally{if(serial===S.serial){if(readDeadlineTimer!==null){root.clearTimeout?.(readDeadlineTimer);readDeadlineTimer=null;}readController=null;pendingRead=null;}}
    })();pendingRead=run;return run;
@@ -547,7 +586,7 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
    const controls=toolbar();let body='';if(changed&&!S.prepared&&!S.loading)body+='<div class="live-status withdraw-draft-notice" role="status">筛选条件已修改，点击查询更新。'+(S.data?'以下仍为上次成功查询结果。':'')+'</div>';
    if(S.loading&&!S.prepared){body+='<div class="live-status" role="status">正在读取'+(operators?'操作人统计':'自动出款统计')+'…'+(S.data?(changed?'上次成功结果仍显示，尚未刷新。':'同一筛选的上次成功结果仍显示，尚未刷新。'):'')+'</div>';if(!S.data)return controls+body}
    if(S.error){body+='<div class="live-status live-error" role="alert">'+(S.data?(changed?'查询失败，上次成功结果已保留。':'刷新失败，同一筛选的上次成功结果已保留。'):'')+E(S.error)+' <button class="link" onclick="withdrawLoad()">重试</button></div>';if(!S.data)return controls+body}
-   if(S.prepared){body+='<div class="live-status" role="status" data-withdraw-prepared="'+E(S.prepared.status)+'">'+(S.prepared.status==='paused'?'本次读取已暂停。':S.prepared.status==='failed'?'统计准备暂未完成，请稍后重试。':'后台正在准备所选范围的统计，完成后可直接读取。')+(S.data?' 上次成功结果已保留。':'')+' <button class="link" onclick="withdrawLoad()">'+(S.prepared.status==='paused'?'继续读取':'查看结果')+'</button></div>';if(!S.data)return controls+body;}
+   if(S.prepared){body+='<div class="live-status" role="status" data-withdraw-prepared="'+E(S.prepared.status)+'">'+(S.prepared.status==='paused'?'本次读取已暂停。':S.prepared.status==='failed'?'统计准备暂未完成，请稍后重试。':'后台正在准备所选范围的统计，完成后自动显示。')+(S.data?' 上次成功结果已保留。':'')+(['paused','failed'].includes(S.prepared.status)?' <button class="link" onclick="withdrawLoad()">'+(S.prepared.status==='paused'?'继续读取':'重试')+'</button>':'')+'</div>';if(!S.data)return controls+body;}
    if(!S.data)return controls+'<div class="live-status">请选择筛选条件，点击查询。</div>';
    if(d.prepared?.status==='ready'&&Number.isFinite(Date.parse(d.prepared.computedAt))){const p=d.prepared,zone=S.applied?.catalog?.[0]?.timezone||'UTC',updated=new Intl.DateTimeFormat('sv-SE',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(p.computedAt));body+='<span class="live-panel-note" data-withdraw-publication role="status">更新于 '+E(updated)+(['queued','running'].includes(p.refreshState)?' · 更新中':p.refreshState==='failed'?' · 更新未完成':p.freshness==='refresh_due'?' · 待更新':'')+'</span>';}
    if(S.metricView==='secondary')return controls+body+secondaryView(d,operators);
@@ -738,9 +777,9 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
   root.withdrawNoteClose=()=>{if(S.noteSaving)return;S.note=null;S.noteSample=false;S.noteError='';render()};
   root.withdrawNoteSave=async()=>{if(!resultAllowed()||!S.note||S.noteSaving||!S.data?.canWriteNotes)return;loadedBase=null;const target=S.note;S.noteSaving=true;S.noteError='';render();try{const saved=await request({action:'withdrawNote',date:target.date,country:target.storageCountry||target.country,platform:target.storagePlatform,reason:S.noteDraft,expectedVersion:target.expectedVersion});if(!resultAllowed()||S.note!==target)return;loadedBase=null;S.data.notes=[...(S.data.notes||[]).filter(n=>!(n.date===saved.date&&n.country===saved.country&&n.platform===saved.platform)),{...saved,sourceCountry:target.country}];S.noteSaving=false;S.note=null;render()}catch(e){if(!resultAllowed()||S.note!==target)return;S.noteSaving=false;S.noteError=e.message||'备注保存失败，输入已保留';render()}};
   function capture(){return {...S,platforms:S.platforms.slice(),reasonTrigger:null,loading:false,reasonBusy:false,error:S.loading?'读取已暂停，点击查询继续':S.error,reasonError:S.reasonBusy?'明细读取已暂停，点击重试继续':S.reasonError};}
-  function pause(){loadedBase=null;reasonSnapshot=null;S.serial++;stopRead();stopReasonRead();S.reasonSerial++;setLoading(false);reasonCache.clear();}
+  function pause(){loadedBase=null;reasonSnapshot=null;S.serial++;stopRead();stopReasonRead();S.reasonSerial++;setLoading(false);reasonCache.clear();if(S.prepared&&['missing','building','stale'].includes(S.prepared.status))S.prepared={...S.prepared,status:'paused',reason:'page_left'};}
   root.addEventListener?.('pagehide',pause);
-  function restore(saved){pause();const serial=S.serial,reasonSerial=S.reasonSerial;for(const key of Object.keys(S))delete S[key];Object.assign(S,saved||initialState,{serial,reasonSerial,platforms:(saved?.platforms||[]).slice(),reasonTrigger:null,loading:false,reasonBusy:false});}
+  function restore(saved){pause();const serial=S.serial,reasonSerial=S.reasonSerial;for(const key of Object.keys(S))delete S[key];Object.assign(S,saved||initialState,{serial,reasonSerial,platforms:(saved?.platforms||[]).slice(),reasonTrigger:null,loading:false,reasonBusy:false});if(S.prepared&&['missing','building','stale'].includes(S.prepared.status))S.prepared={...S.prepared,status:'paused',reason:'page_restored'};}
   const canExport=()=>resultAllowed()&&!!S.applied&&!!S.data&&!S.loading&&!S.error&&!S.prepared&&!draftChanged()&&(S.metricView!=='secondary'||!!S.data.secondary);
   function exportMeta(){if(!canExport())return null;const q=S.applied.query,explicit=S.applied.successWindowExplicit===true;return [['统计口径',S.metricView==='secondary'?(explicit?'独立时间窗成功记录；不与创建窗取交集':'默认成功日期沿查询日期；保持来源原成功/更新时间口径'):'创建订单当前状态；保持来源原成功状态口径'],['创建时间（平台当地，含起止秒）',q.startAt.slice(0,19),q.endAt.slice(0,19)],[explicit?(q.successBasis==='source_updated'?'独立源订单更新时间（平台当地，含起止秒）':'独立源订单成功时间（平台当地，含起止秒）'):'默认成功日期（沿查询日期；未手填独立时间）',q.successStartAt.slice(0,19),q.successEndAt.slice(0,19)],['说明','源更新时间不代表成功发生时间；未提供可信时间字段显示未知'],['统计生成时间',S.data.prepared?.computedAt||''],['来源完整性','以各来源采集回执为准']];}
   return {capture,pause,restore,render:draw,load,state:S,query,cancel:clearResult,canExport,exportMeta};
