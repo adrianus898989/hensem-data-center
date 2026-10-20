@@ -3,6 +3,23 @@ const copy=x=>JSON.parse(JSON.stringify(x));
 const read=name=>fs.readFileSync(path.join(__dirname,'../admin-preview',name),'utf8');
 const E=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const counts=['total','success','rejected','autoCount','manualCount','unclassifiedCount','durationSampleCount','durationTotalSeconds'];
+test('verified NPG coverage follows the exact loaded team subset without another read or upgrading completeness',async()=>{
+ const f=fixture({edit:d=>{d.npgCoverage={source:'NPG',timeBasis:'created_at',successBasis:'source_legacy_non_rejected',currentComplete:false,previousComplete:false,latestCollectedAt:'2026-10-18T05:00:00Z',days:[
+  {country:'印度',platform:'M0',date:'2026-10-17',complete:true,collected:10,latestCollectedAt:'2026-10-18T01:00:00Z'},
+  {country:'印度',platform:'M0',date:'2026-10-16',complete:false,collected:null,latestCollectedAt:null},
+  {country:'香港',platform:'HK',date:'2026-10-17',complete:false,collected:null,latestCollectedAt:'2026-10-18T05:00:00Z'}
+ ]};}});
+ await f.page.load();f.ctx.withdrawTeam('M8');
+ assert.equal(f.calls.length,1);assert.equal(f.page.state.dirty,false);
+ const c=f.page.state.data.npgCoverage;assert.equal(c.days.length,2);assert(c.days.every(d=>d.platform==='M0'));
+ assert.equal(c.currentComplete,false);assert.equal(c.previousComplete,false);assert.equal(c.days[1].collected,null);
+ assert.equal(c.latestCollectedAt,'2026-10-18T01:00:00Z');
+ f.ctx.withdrawTeam('香港');assert.equal(f.calls.length,1);assert.equal(f.page.state.data.npgCoverage.days.length,1);
+});
+test('an unknown NPG coverage field keeps the original scoped-read requirement',async()=>{
+ const f=fixture({edit:d=>{d.npgCoverage={source:'NPG',days:[],unscopedTotal:999};}});
+ await f.page.load();f.ctx.withdrawTeam('M8');assert.equal(f.page.state.dirty,true);assert.equal(f.calls.length,1);
+});
 function totals(rows){return {...Object.fromEntries(counts.map(k=>[k,rows.reduce((n,r)=>n+(r[k]??(k==='unclassifiedCount'?Math.max(r.total-r.autoCount-r.manualCount,0):0)),0)])),avgSeconds:10,durationBasis:'source_reported_processing',platforms:rows.length,coveredDays:1};}
 function fixture({edit=()=>{},respond,view='auto_withdraw',count=2}={}){
  const native=[...Array.from({length:count},(_,i)=>({id:'m'+i,name:'M'+i,country:'印度',team:'M8',source:'game66',timezone:'Asia/Kolkata',currency:'INR'})),{id:'hk',name:'HK',country:'香港',team:'香港',source:'game66',timezone:'Asia/Kolkata',currency:'INR'},{id:'empty',name:'MISSING',country:'印度',team:'M8',source:'game66',timezone:'Asia/Kolkata',currency:'INR'}];
