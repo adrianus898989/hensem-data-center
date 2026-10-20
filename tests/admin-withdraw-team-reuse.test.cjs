@@ -17,6 +17,13 @@ test('all teams → M8 uses exact loaded native snapshot and preserves both wind
  f.ctx.withdrawTeam('香港');assert.equal(f.calls.length,1);assert.equal(f.page.state.data.totals.total,10);assert.deepEqual(copy(f.page.state.data.rows.map(r=>r.platform)),['HK']);f.ctx.withdrawTeam('all');assert.equal(f.calls.length,1);assert.equal(f.page.state.data.totals.total,30);assert.equal(f.page.state.data.prepared.computedAt,original.prepared.computedAt);
 });
 test('projected paging/sorting is local; explicit query always refreshes on server',async()=>{const f=fixture({count:25});await f.page.load();f.ctx.withdrawTeam('M8');f.ctx.withdrawPage(2);f.ctx.withdrawSort('platform');f.ctx.withdrawSize(30);assert.equal(f.calls.length,1);assert.equal(f.page.state.data.total,25);await f.page.load(true);assert.equal(f.calls.length,2);assert.equal(f.calls[1].q.platforms.includes('HK'),false);});
+for(const explicit of [true,false])test('team projection preserves '+(explicit?'manually entered':'blank default')+' success-window export meaning',async()=>{
+ const f=fixture({edit:(d,L)=>{if(!explicit){L.successFrom='';L.successTo='';d.windows.successStartAt=d.windows.creationStartAt;d.windows.successEndAt=d.windows.creationEndAt;d.secondary.startAt=d.windows.successStartAt;d.secondary.endAt=d.windows.successEndAt;}}});
+ await f.page.load();f.ctx.withdrawMetricView('secondary');const metadata=copy(f.page.exportMeta());
+ assert.match(metadata[0][1],explicit?/独立时间窗成功记录/:/默认成功日期沿查询日期/);
+ for(const team of ['M8','香港','all']){f.ctx.withdrawTeam(team);assert.equal(f.page.state.dirty,false);assert.equal(f.page.state.applied.successWindowExplicit,explicit);assert.deepEqual(copy(f.page.exportMeta()),metadata);}
+ assert.equal(f.calls.length,1,'team filtering does not fetch or reinterpret the original successful window');
+});
 for(const [name,edit] of [
  ['wrong response windows',(d)=>{d.windows.successStartAt='2026-10-10T00:00:00.000Z';}],
  ['unknown source summary',(d)=>{d.arCoverage={days:[],uniqueOperators:10};}],
