@@ -10,7 +10,7 @@
  const duoli=p=>String(p?.source||'').toLowerCase()==='duoli';
  const duoliBasis='多利成功人数按成功状态＋订单更新时间统计，不代表实际到账；提现创建覆盖尚未核验，仅统计已采集订单。';
  const count=v=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0;
- const unavailableReason=(row,basis)=>({source_member_id_unavailable:'WG 充值明细未提供会员 ID，人数不可统计',source_success_time_unavailable:'WG 提现未提供已核实成功时间，成功人数不可统计',source_updated_member_time_unavailable:'此来源未接入按源订单更新时间统计成功人数',duoli_paid_member_time_unavailable:'多利未提供已核实成功时间，不能用订单更新时间替代',member_window_read_failed:'该时间范围人数读取失败',outside_member_window:'不在此项统计时间范围'})[row?.[basis+'_unavailable_reason']]||'此方向的人数口径不可统计';
+ const unavailableReason=(row,basis)=>({source_member_id_unavailable:'WG 充值明细未提供会员 ID，人数不可统计',source_success_time_unavailable:'WG 提现未提供已核实成功时间，成功人数不可统计',newar_success_time_missing:'新中台出款缺少付款成功时间，无法确认该窗口成功人数；不是 0',source_updated_member_time_unavailable:'此来源未接入按源订单更新时间统计成功人数',duoli_paid_member_time_unavailable:'多利未提供已核实成功时间，不能用订单更新时间替代',member_window_read_failed:'该时间范围人数读取失败',outside_member_window:'不在此项统计时间范围'})[row?.[basis+'_unavailable_reason']]||'此方向的人数口径不可统计';
  function localDay(value,zone){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(value));return ['year','month','day'].map(k=>parts.find(p=>p.type===k).value).join('-');}
  function daysFor(q,p){const start=Date.parse(q.startAt),end=Date.parse(q.endAt);if(!Number.isFinite(start)||!Number.isFinite(end)||end<=start)throw Error('人数统计日期范围无效');const first=localDay(start,p.timezone),last=localDay(end-1,p.timezone),days=[];for(let d=Date.parse(first+'T00:00:00Z');d<=Date.parse(last+'T00:00:00Z');d+=86400000){days.push(new Date(d).toISOString().slice(0,10));if(days.length>31)throw Error('人数统计每次最多31个当地日');}return days;}
  // Split only at local calendar-day boundaries. A UTC +24h step is wrong on DST days.
@@ -105,7 +105,14 @@
   }
   function scope(){const context=accessContext(),selected=[...new Map((c.selected()||[]).map(p=>[p.id,p])).values()].sort((a,b)=>String(a.id).localeCompare(String(b.id))),items=[],unsupported=[];for(const p of selected){if(native(p))items.push(requestFor(p,c.query));else unsupported.push({id:p.id,name:p.name||'未提供平台名',reason:'此来源尚未接入会员明细'});}return {context,items,unsupported,key:encode([context,L.country,L.from,L.to,L.direction,L.status,L.multi,items.map(i=>[i.request,i.successWindow,identity(i.platform)]),unsupported.map(p=>[p.id,p.name])])};}
   const currentKey=()=>{try{return scope().key}catch{return ''}};
-  const view=()=>L.dirty||S.key!==currentKey()?initial():S;
+  const view=()=>{
+   if(L.dirty||S.key!==currentKey())return initial();
+   // Aggregate clock coverage is authoritative for this displayed query. Keep
+   // cached member identities and creation counts intact, but do not turn a
+   // paid-clock gap into zero successful members or a sortable known value.
+   if(typeof c.successClockUnavailable!=='function')return S;
+   return {...S,results:S.results.map(result=>String(result.platform?.source||'').toLowerCase().replaceAll('_','')!=='newar'||!c.successClockUnavailable(result.platform,'withdraw')?result:{...result,rows:result.rows.map(row=>row.direction!=='withdraw'?row:{...row,success_available:false,success_unavailable_reason:'newar_success_time_missing',...Object.fromEntries(fields.filter(field=>field.startsWith('success_')).map(field=>[field,null])),...Object.fromEntries(thresholds.map(n=>['success_members_ge'+n,null]))})})};
+  };
   const valid=id=>id===serial&&!L.dirty&&S.key===currentKey();
   const retry=s=>s.status==='error'||s.status==='paused'||s.failures.length?' <button type="button" class="link" onclick="liveMemberCountsRetry()">重试</button>':'';
   function cancel(){serial++;pending=null;nextForce=false;waiters.splice(0).forEach(wake=>wake());if(S.status==='loading')S={...S,status:'paused',results:[],error:'人数读取已暂停'};}
