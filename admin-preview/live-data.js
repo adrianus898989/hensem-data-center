@@ -1142,7 +1142,13 @@
  }
  // Read the selected summary first. Unseen provider filters use the same
  // server-prepared base on demand instead of downloading every filter result.
- preparedAggregates=window.HensemPreparedAggregates?.create({request:(q,options)=>window.hensemLiveRequest(q,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?state.page+'|'+aggregateAccessContext():'',platform:id=>visibleCatalog().find(p=>p.id===id),publicationVersion:2,providerLeafAliases:true,maxConcurrent:2,maxBatchSize:3,completedCacheTtlMs:preparedCompletionTtl,completedCacheMaxBytes:96*1024*1024,derivedPollMaxMs:60000,derivedPollIntervalMs:1500,derivedPollMaxAttempts:40});
+ function preparedNativePlatform(id){
+  // Display country/team aliases never replace the exact authorized source
+  // identity echoed by a publication. Keep the visible-directory gate too.
+  if(!visibleCatalog().some(p=>p.id===id&&!p.reportOnly))return null;
+  return L.catalog.find(p=>p.id===id)||null;
+ }
+ preparedAggregates=window.HensemPreparedAggregates?.create({request:(q,options)=>window.hensemLiveRequest(q,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?state.page+'|'+aggregateAccessContext():'',platform:preparedNativePlatform,publicationVersion:2,providerLeafAliases:true,maxConcurrent:2,maxBatchSize:3,completedCacheTtlMs:preparedCompletionTtl,completedCacheMaxBytes:96*1024*1024,derivedPollMaxMs:60000,derivedPollIntervalMs:1500,derivedPollMaxAttempts:40});
  const usesPreparedAggregate=request=>statisticWindowsEnabled()&&request.action==='aggregate'&&request.view!=='drilldown'&&!['orderNumber','thirdPartyOrderNumber','systemOrderId','memberId','utr'].some(key=>request[key]);
  window.addEventListener?.('pagehide',()=>{clearAggregateCache();providerIntake?.clearCache?.();clearFeeLookupCache();});
  async function readAggregate(request,serial,allowCache=false,bounded=false,isCurrent=()=>true){
