@@ -49,8 +49,54 @@ test('dirty filters or a mismatched saved query scope never show stale platform 
 test('failed, paused and unread results stay separate from successfully read empty results',async()=>{
  const h=await fixture();h.L.results=h.L.results.filter(r=>![platforms[0].id,platforms[1].id].includes(r.platform.id));h.L.queryFailures=[{id:platforms[0].id,name:platforms[0].name,message:'synthetic failure'}];h.L.queryPaused=true;h.c.render();let html=section(h);
  assert.match(html,/3 \/ 8/);assert.match(row(html,platforms[0].id),/data-coverage-status="failed"/);assert.match(row(html,platforms[1].id),/data-coverage-status="paused"/);assert.match(row(html,platforms[6].id),/data-coverage-status="empty"/);
+ assert.match(row(html,platforms[0].id),/>synthetic failure<\/td>/,'the original failure reason stays visible');
  h.L.queryPaused=false;h.c.render();html=section(h);assert.match(row(html,platforms[1].id),/data-coverage-status="unread"/);
  h.L.queryRetrying=true;h.c.render();assert.match(row(section(h),platforms[1].id),/data-coverage-status="loading"/);
+});
+
+test('prepared coverage keeps every unavailable state distinct, preserves reasons and never converts failed reads into zeros',async()=>{
+ const h=await fixture(),statuses=['missing','building','stale','unsupported','invalid','failed','future-status'];
+ // Even if a prior response remains in memory, its unresolved read takes
+ // precedence and cannot contribute its old counts to the current display.
+ h.L.queryFailures=statuses.map((status,i)=>({id:platforms[i].id,name:platforms[i].name,status,message:'Original '+status+' <native>'}));
+ const before=JSON.stringify(h.L.results),reads=h.calls.length;h.c.render();
+ for(const direction of ['charge','withdraw']){
+  const html=section(h,direction);assert.match(html,/0 \/ 8/);assert.match(html,/已读取无订单记录 1 · 待读取 \/ 待确认 7/);
+  for(const [i,status]of statuses.entries()){
+   const rendered=row(html,platforms[i].id);assert.match(rendered,new RegExp('data-coverage-status="'+(status==='future-status'?'failed':status)+'"'));
+   assert.match(rendered,new RegExp('Original '+status+' &lt;native&gt;'));assert.match(rendered,/<td>—<\/td><td>—<\/td>/);assert.doesNotMatch(rendered,/<native>|已读取无订单记录/);
+   if(status==='invalid')assert.match(rendered,/<td class="live-error">/);
+  }
+ }
+ assert.equal(JSON.stringify(h.L.results),before);await settle();assert.equal(h.calls.length,reads,'status rendering never retries or requests data');
+ const css=fs.readFileSync(path.join(__dirname,'../admin-preview/live-platform-coverage.css'),'utf8');assert.match(css,/\[data-coverage-status="failed"\] td:nth-child\(3\)\{color:#b34a43\}/,'ordinary failure keeps the existing red treatment');
+});
+
+test('time, amount and matrix share non-failing prepared states after waiting ends, including status fallbacks without a message',async()=>{
+ const expected={missing:'统计尚未准备',building:'统计正在准备',stale:'统计已过期'};
+ for(const page of ['time','amount','matrix']){
+  const h=await fixture({page}),reads=h.calls.length;
+  h.L.results=h.L.results.slice(1);h.L.loading=false;h.L.queryRetrying=false;
+  for(const [status,label]of Object.entries(expected)){
+   h.L.queryFailures=[{id:platforms[0].id,name:platforms[0].name,status}];h.c.render();
+   const html=section(h),rendered=row(html,platforms[0].id);assert.match(html,/4 \/ 8/);assert.match(rendered,new RegExp('data-coverage-status="'+status+'"'));assert.match(rendered,new RegExp('>'+label+'</td>'));
+   assert.doesNotMatch(rendered,/读取失败|live-error|data-coverage-status="failed"/);assert.match(rendered,/<td>—<\/td><td>—<\/td>/);
+   if(page!=='matrix')assert.match(h.html(),/class="live-status" data-aggregate-read-status/,'the reference-page notice also treats this state as pending');
+  }
+  await settle();assert.equal(h.calls.length,reads);
+ }
+});
+
+test('an actual platform error keeps its status through the shared query controller without changing successful sibling results',async()=>{
+ const h=await fixture(),missing=platforms[0].id;
+ h.setHandler(q=>{
+  if(q.action==='aggregate'){if(q.platformId===missing)throw Object.assign(Error('该筛选的统计正在准备'),{status:'building'});const i=platforms.findIndex(p=>p.id===q.platformId);return {...sample(platforms[i],i<5?100+i:0,i<2?10+i:0),startAt:q.startAt,endAt:q.endAt};}
+  return {rows:[],total:0};
+ });
+ await h.c.liveQuery(true);await settle();h.L.retainedContent=null;h.c.render();
+ assert.equal(h.L.loading,false);assert.equal(h.L.queryFailures.length,1);assert.equal(h.L.queryFailures[0].status,'building');
+ assert.match(section(h),/4 \/ 8/);assert.match(row(section(h),missing),/data-coverage-status="building"/);assert.match(row(section(h),missing),/该筛选的统计正在准备/);assert.doesNotMatch(row(section(h),missing),/读取失败/);
+ assert.match(row(section(h),platforms[1].id),/<td>101<\/td><td>50<\/td>/);assert.match(row(section(h),platforms[6].id),/data-coverage-status="empty"/);
 });
 
 test('unsupported selected directory entries remain in the denominator without masquerading as queried zeros',async()=>{

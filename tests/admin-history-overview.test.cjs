@@ -35,7 +35,7 @@ test('failed platform is listed by name and retry preserves successful results w
  await h.c.liveQuery();
  assert.match(h.html(),/Large &lt;unread&gt; platform：Synthetic offline/);
  assert.match(h.html(),/onclick="liveRetryFailed\(false\)">重试未完成平台/);
- assert.match(h.L.progress,/完整返回 1 \/ 2 个平台，失败 1 个；已处理 2 个/);
+ assert.match(h.L.progress,/完整返回 1 \/ 2 个平台，未完成 1 个；已处理 2 个/);
  const calls=queries(h).length,kept=h.L.results[0];
  h.setHandler(q=>response(q,Q,20));await h.c.liveRetryFailed();
  assert.equal(queries(h).length,calls+1);assert.equal(queries(h).at(-1).platformId,Q.id);
