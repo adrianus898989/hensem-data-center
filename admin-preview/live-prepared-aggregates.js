@@ -101,7 +101,7 @@
   const pollInterval=Number.isFinite(options.derivedPollIntervalMs)?Math.max(250,Math.min(60000,options.derivedPollIntervalMs)):1500;
   const pollMaxAttempts=Number.isFinite(options.derivedPollMaxAttempts)?Math.max(1,Math.min(40,Math.floor(options.derivedPollMaxAttempts))):40;
   const completed=new Map();let completedBytes=0,completedGeneration=0;
-  const jobs=new Map(),queue=[],batches=new Set();let generation=0,context=null,completedContext=null,scheduled=false;
+  const jobs=new Map(),queue=[],batches=new Set();let generation=0,context=null,completedContext=null,scheduled=false,probedGeneration=-1;
   const nativeKey=platform=>encode([identity(platform),platform.capabilities??null]);
   const completedKey=(scope,native,q,profile)=>encode([scope,native,q,profile??null]);
   function completedFamily(scope,native,q){const {providers,direction,view,offset,limit,...scopeQuery}=q;return encode([scope,native,scopeQuery]);}
@@ -109,7 +109,7 @@
   function clearCompleted(){completed.clear();completedBytes=0;completedGeneration++;}
   function invalidateCompleted(family,keepKey){
    for(const [key,entry]of completed)if(entry.family===family){entry.invalidated=true;forgetCompleted(key);}
-   for(const job of [...jobs.values()])if(job.family===family&&job.key!==keepKey){job.completedInvalidated=true;if(job.polling){for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));abandon(job);}}
+   for(const job of [...jobs.values()])if(job.family===family&&job.key!==keepKey){job.completedInvalidated=true;if(job.polling||job.refreshOnly){for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));abandon(job);}}
   }
   function cachedCompleted(key,q,native){
    if(!completionEnabled)return null;const entry=completed.get(key),stamp=now();if(!entry)return null;
@@ -146,14 +146,19 @@
    return null;
   }
   function completedResult(key,scope,nativeIdentity,q,native){return cachedCompleted(key,q,native)||reusableCompleted(scope,nativeIdentity,q,native);}
+  const publicationIdentity=item=>encode(['id','generation','computedAt','expiresAt','cutoff'].map(key=>item.publication[key]));
   function rememberCompleted(job,item){
    if(!completionEnabled||job.completedInvalidated||job.generation!==generation||job.completedGeneration!==completedGeneration||job.context!==context||job.completedContext!==completedContext)return;
    const ttl=completionTtl(job.q,job.native);if(!ttl)return;
-   const readAt=now(),expiresAt=Math.min(readAt+ttl,publicationVersion===1?Date.parse(item.publication.expiresAt):Infinity);if(!Number.isFinite(readAt)||expiresAt<=readAt)return;
+   let readAt=now(),expiresAt=Math.min(readAt+ttl,publicationVersion===1?Date.parse(item.publication.expiresAt):Infinity);const identity=publicationIdentity(item);
+   // A same-head background read retains its original clock even if LRU
+   // eviction removed the completed entry while the request was in flight.
+   if(job.refreshOnly&&job.refreshClock?.identity===identity){readAt=job.refreshClock.readAt;expiresAt=job.refreshClock.expiresAt;}if(!Number.isFinite(readAt)||expiresAt<=now())return;
    let saved,bytes;try{saved=copy(item);bytes=(JSON.stringify(saved).length+job.completedKey.length+job.family.length)*2+64;}catch{return;}
    if(bytes>2*1024*1024&&Object.hasOwn(saved,'providerReuse')){delete saved.providerReuse;bytes=(JSON.stringify(saved).length+job.completedKey.length+job.family.length)*2+64;}
    if(bytes>2*1024*1024)return;forgetCompleted(job.completedKey);completed.set(job.completedKey,{item:saved,readAt,expiresAt,bytes,responseProfile:job.responseProfile,family:job.family,reuseScope:encode([job.completedContext,job.nativeKey,encode((({providers,...rest})=>rest)(job.q))])});completedBytes+=bytes;
    while(completed.size>128||completedBytes>completedByteCap)forgetCompleted(completed.keys().next().value);
+   return {identity,readAt,expiresAt};
   }
   const authorityDenied=error=>['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(error?.code||''));
   function contextValue(){const value=options.context();if(typeof value!=='string'||!value)throw failure('cancelled');return value;}
@@ -181,6 +186,23 @@
   function abandon(job){if(job.waiters.size)return;release(job);if(job.batch&&job.batch.jobs.every(item=>!item.waiters.size)){job.batch.controller.abort();batches.delete(job.batch);}schedule();}
   function schedule(){if(scheduled)return;scheduled=true;Promise.resolve().then(()=>{scheduled=false;drain();});}
   function deliver(job,error,result){let delivered=0;for(const waiter of [...job.waiters])if(active(waiter)){settle(waiter,error,result);delivered++;}release(job);return delivered;}
+  // Ready-only delivery owns the same query as its deferred, one-shot refresh.
+  // Refresh waiters never re-deliver page results and are released only after
+  // the caller's foreground/comparison phase. No separate worker or timer.
+  function queueRefresh(job,owners,refreshClock){
+   if(!owners.length||job.completedInvalidated||job.generation!==generation||job.context!==context||jobs.has(job.key))return;
+   const refresh={...job,waiters:new Set(),batch:null,phase:'queued',refreshOnly:true,refreshClock,refreshReleased:false,readyOnlyProbe:false,polling:false,pollTimer:null,deadlineTimer:null,deadlineAt:null,attempts:0};
+   for(const owner of owners){
+    const waiter={job:refresh,signal:owner.signal,isCurrent:owner.isCurrent,done:false,abort:null,resolve(){},reject(error){
+     if(!authorityDenied(error)&&error?.code!=='ADMIN_LIVE_CANCELLED'||owner.signal?.aborted||typeof owner.onRefreshError!=='function')return;
+     try{if(options.context()!==refresh.context||typeof options.completedReuseContext==='function'&&options.completedReuseContext()!==refresh.completedContext||nativeKey(options.platform(refresh.q.platformId))!==refresh.nativeKey||owner.isCurrent&&!owner.isCurrent())return;owner.onRefreshError(error);}catch{}
+    }};
+    waiter.abort=()=>{settle(waiter,failure('cancelled'));abandon(refresh);};refresh.waiters.add(waiter);waiter.signal?.addEventListener('abort',waiter.abort,{once:true});
+   }
+   jobs.set(refresh.key,refresh);queue.push(refresh);
+  }
+  function releaseRefresh(){for(const job of jobs.values())if(job.refreshOnly&&job.generation===generation)job.refreshReleased=true;schedule();}
+  function readyMiss(item){return item?.status==='miss'&&item.result===null&&item.publication===null&&['ready_head_missing','ready_query_not_supported'].includes(item.reason)&&Object.keys(item).sort().join(',')==='publication,reason,request,result,status';}
   function pollable(item,job){
    if(!pollMaxMs||publicationVersion!==2||item?.result!==null||item.publication!==null||Object.hasOwn(item,'resultGroups'))return false;
    // A pending status alone does not prove a worker accepted this exact query.
@@ -211,19 +233,28 @@
   }
   async function run(batch){
    try{
-    const names=reuseNames(batch);
-    const leafAliases=publicationVersion===2&&options.providerLeafAliases===true&&batch.jobs.every(job=>job.q.view==='providers');
-    const response=await transport({action:'aggregatePrepared',requests:batch.jobs.map(job=>copy(job.q)),...(batch.responseProfile?{responseProfile:batch.responseProfile}:{}),...(names?{providerReuseNames:names}:{}),...(leafAliases?{providerLeafAliases:'items-fee-items-v1'}:{}),...(publicationVersion===2?{publicationVersion:2,...(batch.forceRefresh?{forceRefresh:true}:{})}:{})},{signal:batch.controller.signal});
+    const names=batch.readyOnlyProbe?null:reuseNames(batch);
+    const leafAliases=!batch.readyOnlyProbe&&publicationVersion===2&&options.providerLeafAliases===true&&batch.jobs.every(job=>job.q.view==='providers');
+    const response=await transport({action:'aggregatePrepared',requests:batch.jobs.map(job=>copy(job.q)),...(batch.readyOnlyProbe?{readMode:'ready-only-v1'}:{}),...(batch.responseProfile?{responseProfile:batch.responseProfile}:{}),...(names?{providerReuseNames:names}:{}),...(leafAliases?{providerLeafAliases:'items-fee-items-v1'}:{}),...(publicationVersion===2?{publicationVersion:2,...(batch.forceRefresh?{forceRefresh:true}:{})}:{})},{signal:batch.controller.signal});
     if(batch.controller.signal.aborted)return;
     // Size checking precedes recursive structural validation. The transport also
     // bounds HTTP bodies; this guards unexpectedly expanded decoded payloads.
-    const serialized=JSON.stringify(response);if(!serialized||serialized.length>maxResponseBytes||new TextEncoder().encode(serialized).length>maxResponseBytes||response.version!==publicationVersion||!Array.isArray(response.items)||response.items.length!==batch.jobs.length)throw failure('invalid');
+    const serialized=JSON.stringify(response);if(!serialized||serialized.length>maxResponseBytes||new TextEncoder().encode(serialized).length>maxResponseBytes||response.version!==publicationVersion||!Array.isArray(response.items)||response.items.length!==batch.jobs.length||(batch.readyOnlyProbe?response.readMode!=='ready-only-v1':Object.hasOwn(response,'readMode')))throw failure('invalid');
     const expected=new Map(batch.jobs.map(job=>[job.requestKey,job])),matched=new Map();
     for(const item of response.items){const key=encode(item?.request);if(!expected.has(key)||matched.has(key))throw failure('invalid');matched.set(key,restoreLeafAliases(item,leafAliases,expected.get(key).q));}
     // Expanded originals obey the same old complete-response bound. A compact
     // body cannot admit a larger unvalidated or oversized financial result.
     if(leafAliases){const expanded=JSON.stringify({...response,items:[...matched.values()]});if(expanded.length>maxResponseBytes||new TextEncoder().encode(expanded).length>maxResponseBytes)throw failure('invalid');}
-    for(const job of batch.jobs){if(!prune(job))continue;if(job.polling&&now()>=job.deadlineAt){endPoll(job);continue;}try{const item=matched.get(job.requestKey);if(pollable(item,job)){waitForBase(job);continue;}const result=validateResult(item,job.q,job.native,now(),publicationVersion,job.responseProfile);if(deliver(job,null,result))rememberCompleted(job,item);}catch(error){deliver(job,error);}}
+    for(const job of batch.jobs){if(!prune(job))continue;if(job.polling&&now()>=job.deadlineAt){endPoll(job);continue;}try{
+     const item=matched.get(job.requestKey);
+     if(batch.readyOnlyProbe){
+      if(item?.status==='miss'){if(!readyMiss(item))throw failure('invalid');job.readyOnlyProbe=false;job.attempts=0;job.batch=null;job.phase='queued';queue.push(job);continue;}
+      if(item?.status!=='ready')throw failure('invalid');
+     }
+     if(!job.refreshOnly&&pollable(item,job)){waitForBase(job);continue;}
+     const result=validateResult(item,job.q,job.native,now(),publicationVersion,job.responseProfile),owners=batch.readyOnlyProbe&&result._preparedPublication.freshness==='refresh_due'?[...job.waiters].map(({signal,isCurrent,refreshIsCurrent,onRefreshError})=>({signal,isCurrent:refreshIsCurrent||isCurrent,onRefreshError})):[];
+     if(deliver(job,null,result)){const clock=rememberCompleted(job,item);if(owners.length)queueRefresh(job,owners,clock);}
+    }catch(error){deliver(job,error);}}
    }catch(error){
     // A retained frame's host may temporarily close its bridge during access
     // verification. Stop this entire queue before finally can dispatch another
@@ -232,13 +263,22 @@
     if(error?.code==='ADMIN_LIVE_CANCELLED'&&!batch.controller.signal.aborted&&batch.jobs.some(job=>prune(job)))cancel(error);
     if(authorityDenied(error)&&!batch.controller.signal.aborted&&batch.jobs.some(job=>prune(job))){clearCompleted();if(pollMaxMs>0){for(const job of [...jobs.values()])deliver(job,error);cancel();}}for(const job of batch.jobs)deliver(job,error);
    }
-   finally{batches.delete(batch);for(const job of batch.jobs){if(job.phase==='waiting')continue;if(job.waiters.size)deliver(job,failure('cancelled'));release(job);}schedule();}
+   finally{batches.delete(batch);for(const job of batch.jobs){if(job.phase==='waiting'||job.phase==='queued'&&jobs.get(job.key)===job)continue;if(job.waiters.size)deliver(job,failure('cancelled'));release(job);}schedule();}
   }
   function drain(){
    while(batches.size<maxConcurrent&&queue.length){
-    const selected=[];while(queue.length&&selected.length<maxBatchSize){if(selected.length&&((queue[0].forceRefresh&&!queue[0].polling)!==(selected[0].forceRefresh&&!selected[0].polling)||queue[0].responseProfile!==selected[0].responseProfile||selected[0].responseProfile&&selected.length>=3))break;const job=queue.shift();if(jobs.get(job.key)!==job||!prune(job))continue;if(job.polling&&(now()>=job.deadlineAt||job.attempts>=pollMaxAttempts)){endPoll(job);continue;}selected.push(job);}
-    if(!selected.length)continue;
-    const batch={jobs:selected,responseProfile:selected[0].responseProfile,forceRefresh:selected[0].forceRefresh&&!selected[0].polling,controller:new AbortController()};for(const job of selected){job.batch=batch;job.phase='active';job.attempts++;}batches.add(batch);void run(batch);
+    queue.sort((a,b)=>Number(!!a.refreshOnly)-Number(!!b.refreshOnly));
+    const selected=[];let readyOnlyProbe=false;
+    while(queue.length){
+     const index=queue.findIndex(job=>!job.refreshOnly||job.refreshReleased);if(index<0)break;
+     const job=queue[index];if(job.refreshOnly&&[...batches].some(batch=>batch.jobs.some(item=>!item.refreshOnly)))break;if(jobs.get(job.key)!==job||!prune(job)){queue.splice(index,1);continue;}
+     const probe=!!job.readyOnlyProbe&&probedGeneration!==generation;
+     if(selected.length&&(selected.length>=(readyOnlyProbe?50:maxBatchSize)||probe!==readyOnlyProbe||!!job.refreshOnly!==!!selected[0].refreshOnly||(job.forceRefresh&&!job.polling)!==(selected[0].forceRefresh&&!selected[0].polling)||job.responseProfile!==selected[0].responseProfile||selected[0].responseProfile&&selected.length>=3))break;
+     queue.splice(index,1);if(job.polling&&(now()>=job.deadlineAt||job.attempts>=pollMaxAttempts)){endPoll(job);continue;}if(!selected.length)readyOnlyProbe=probe;selected.push(job);
+    }
+    if(!selected.length)break;
+    if(readyOnlyProbe)probedGeneration=generation;
+    const batch={jobs:selected,readyOnlyProbe,responseProfile:selected[0].responseProfile,forceRefresh:selected[0].forceRefresh&&!selected[0].polling,controller:new AbortController()};for(const job of selected){job.batch=batch;job.phase='active';job.attempts++;}batches.add(batch);void run(batch);
    }
   }
   function read(request,readOptions={}){
@@ -248,16 +288,19 @@
     if(readOptions.forceRefresh!==undefined&&typeof readOptions.forceRefresh!=='boolean'||readOptions.forceRefresh&&publicationVersion!==2)throw failure('invalid');
     const responseProfile=readOptions.responseProfile;
     if(responseProfile!==undefined){if(publicationVersion!==2)throw failure('invalid');profileGroups(responseProfile,q);}
+    if(readOptions.readyOnlyProbe!==undefined&&typeof readOptions.readyOnlyProbe!=='boolean'||readOptions.readyOnlyProbe&&(publicationVersion!==2||q.view!=='providers'||readOptions.forceRefresh||responseProfile!==undefined))throw failure('invalid');
     const forceRefresh=readOptions.forceRefresh===true,reuseScope=completedContext,cacheKey=completedKey(reuseScope,nativeIdentity,q,responseProfile),family=completedFamily(reuseScope,nativeIdentity,q),key=encode([scope,nativeIdentity,q,forceRefresh,responseProfile??null]);
     if(forceRefresh)invalidateCompleted(family,key);
     else{const cached=completedResult(cacheKey,reuseScope,nativeIdentity,q,native);if(cached){const mine=generation,cacheGeneration=completedGeneration;return Promise.resolve().then(()=>{if(mine!==generation||cacheGeneration!==completedGeneration||cached.entry.invalidated||readOptions.signal?.aborted||scope!==syncContext()||readOptions.isCurrent&&!readOptions.isCurrent()||nativeKey(options.platform(q.platformId))!==nativeIdentity)throw failure('cancelled');const current=completedResult(cacheKey,reuseScope,nativeIdentity,q,native);return current?copy(current.result):read(q,readOptions);});}}
     let job=jobs.get(key);if(job?.completedInvalidated){for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));abandon(job);job=null;}
     if(!job&&!forceRefresh&&pollMaxMs>0)job=[...jobs.values()].find(other=>other.polling&&!other.completedInvalidated&&other.context===scope&&other.nativeKey===nativeIdentity&&other.requestKey===requestKey&&other.responseProfile===responseProfile);
-    if(!job){job={key,requestKey,q,responseProfile,native,nativeKey:nativeIdentity,forceRefresh,context:scope,completedContext:reuseScope,generation,completedGeneration,completedKey:cacheKey,family,waiters:new Set(),batch:null,phase:'queued',polling:false,pollTimer:null,deadlineTimer:null,deadlineAt:null,attempts:0};jobs.set(key,job);queue.push(job);}
-    const promise=new Promise((resolve,reject)=>{const waiter={job,resolve,reject,signal:readOptions.signal,isCurrent:readOptions.isCurrent,done:false,abort:null};waiter.abort=()=>{settle(waiter,failure('cancelled'));abandon(job);};job.waiters.add(waiter);waiter.signal?.addEventListener('abort',waiter.abort,{once:true});});schedule();return promise;
+    // An explicit reader must not wait for a deferred refresh-release hook.
+    if(job?.refreshOnly){job.refreshOnly=false;job.refreshReleased=true;}
+    if(!job){job={key,requestKey,q,responseProfile,readyOnlyProbe:readOptions.readyOnlyProbe===true,native,nativeKey:nativeIdentity,forceRefresh,context:scope,completedContext:reuseScope,generation,completedGeneration,completedKey:cacheKey,family,waiters:new Set(),batch:null,phase:'queued',polling:false,pollTimer:null,deadlineTimer:null,deadlineAt:null,attempts:0};jobs.set(key,job);queue.push(job);}
+    const promise=new Promise((resolve,reject)=>{const waiter={job,resolve,reject,signal:readOptions.signal,isCurrent:readOptions.isCurrent,refreshIsCurrent:readOptions.refreshIsCurrent,onRefreshError:readOptions.onRefreshError,done:false,abort:null};waiter.abort=()=>{settle(waiter,failure('cancelled'));abandon(job);};job.waiters.add(waiter);waiter.signal?.addEventListener('abort',waiter.abort,{once:true});});schedule();return promise;
    }catch(error){return Promise.reject(error);}
   }
-  return {read,cancel,clear};
+  return {read,cancel,clear,releaseRefresh};
  }
  const api={create};if(typeof module==='object'&&module.exports)module.exports=api;else root.HensemPreparedAggregates=api;
 })(typeof window==='object'?window:globalThis);

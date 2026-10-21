@@ -2,7 +2,7 @@
 (function(){
  'use strict';
  const merchantProviderExpansions=new WeakMap();let merchantInlineSerial=0;
- window.HensemLivePages={create:function(c){
+ window.HensemLivePages={usesComparison:page=>page!=='risk',create:function(c){
  const {L,E,N,C,R,plus,combine,groupRows,empty,table,box,pager,totals,comparisonRows,compareMetric,chart,matrixBody,latencyView,detailsView,providersView,platformsView,pagedTable,feeForRow,ensureFeeLookup,providerCell}=c;
  if(window.hensemCurrentAdminPage?.()!=='merchants'||L.view!=='business')merchantProviderExpansions.delete(L);
  const dirs=()=>L.direction==='all'?['charge','withdraw']:[L.direction];

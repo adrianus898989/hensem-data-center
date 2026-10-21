@@ -35,7 +35,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     return {...checked,windowVersion,successStartAt,successEndAt,successBasis};
   }
   if(p.action==="aggregatePrepared"){
-    if(Object.keys(p).some(key=>!["action","requests","publicationVersion","forceRefresh","providerReuseNames","providerLeafAliases","responseProfile"].includes(key))||!Array.isArray(p.requests)||p.requests.length<1||p.requests.length>50)throw Error("已准备统计的批量参数无效");
+    if(Object.keys(p).some(key=>!["action","requests","publicationVersion","forceRefresh","providerReuseNames","providerLeafAliases","responseProfile","readMode"].includes(key))||!Array.isArray(p.requests)||p.requests.length<1||p.requests.length>50)throw Error("已准备统计的批量参数无效");
     if(p.publicationVersion!==undefined&&p.publicationVersion!==2||p.forceRefresh!==undefined&&(typeof p.forceRefresh!=="boolean"||p.publicationVersion!==2))throw Error("已准备统计发布版本无效");
     const requests=p.requests.map(value=>{
       if(!value||typeof value!=="object"||Array.isArray(value))throw Error("统计请求无效");
@@ -50,6 +50,8 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       }
       return checked;
     });
+    const readMode=p.readMode;
+    if(readMode!==undefined&&(readMode!=="ready-only-v1"||p.publicationVersion!==2||Object.hasOwn(p,"forceRefresh")||Object.hasOwn(p,"responseProfile")||Object.hasOwn(p,"providerReuseNames")||Object.hasOwn(p,"providerLeafAliases")||requests.some(q=>q.view!=="providers")))throw Error("只读统计探测参数无效");
     const responseProfile=p.responseProfile;
     if(responseProfile!==undefined&&(p.publicationVersion!==2||requests.length>3||Object.hasOwn(p,"providerReuseNames")||Object.hasOwn(p,"providerLeafAliases")||typeof responseProfile!=="string"||!["time-v1","amount-v1","latency-v1"].includes(responseProfile)||requests.some(q=>(q.view||"full")!=="full"||Object.hasOwn(q,"durationRange")||responseProfile==="latency-v1"&&q.durationVersion!==2)))throw Error("统计响应范围无效");
     if(JSON.stringify(requests).length>128000)throw Error("统计批量参数过大");
@@ -62,7 +64,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       if(names.length&&bytes<=8192&&new TextEncoder().encode(JSON.stringify({action:"aggregatePrepared",requests,publicationVersion:2,providerReuseNames:names})).length<=128000)providerReuseNames=names;
     }
     const providerLeafAliases=p.publicationVersion===2&&p.providerLeafAliases==="items-fee-items-v1"&&requests.every(request=>request.view==="providers");
-    return {action:"aggregatePrepared",requests,...(responseProfile?{responseProfile}:{}),...(providerLeafAliases?{providerLeafAliases:"items-fee-items-v1"}:{}),...(providerReuseNames?{providerReuseNames}:{}),...(p.publicationVersion===2?{publicationVersion:2,...(p.forceRefresh===undefined?{}:{forceRefresh:p.forceRefresh})}:{})};
+    return {action:"aggregatePrepared",requests,...(readMode?{readMode}:{}),...(responseProfile?{responseProfile}:{}),...(providerLeafAliases?{providerLeafAliases:"items-fee-items-v1"}:{}),...(providerReuseNames?{providerReuseNames}:{}),...(p.publicationVersion===2?{publicationVersion:2,...(p.forceRefresh===undefined?{}:{forceRefresh:p.forceRefresh})}:{})};
   }
   if(p.action==="providerSnapshot"){
     const allowed=["action","version","platformIds","startAt","endAt","direction","status","currency","components","export"];
@@ -492,6 +494,7 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  const collectedKyc=request.action==="depositStatistics"&&request.section==="kyc";
  const rpc=collectedKyc?"dashboard_admin_deposit_kyc":request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
  if(request.action==="aggregatePrepared"&&!PREPARED_AGGREGATE_PAGES.has(roleContext?.page||""))throw Error("统计页面无效");
+ if(request.action==="aggregatePrepared"&&request.readMode!==undefined&&roleContext?.page!=="providers")throw Error("只读统计探测页面无效");
  if(request.action==="aggregatePrepared"&&request.responseProfile!==undefined&&({"time-v1":"time","amount-v1":"amount","latency-v1":"latency"} as Record<string,string>)[String(request.responseProfile)]!==roleContext?.page)throw Error("统计响应范围与页面不符");
  const response=await adminLiveFetch(base+"/rest/v1/rpc/"+(roleContext?.assigned&&!collectedKyc?"dashboard_admin_execute":rpc),{method:"POST",body:JSON.stringify(collectedKyc?{p_page:roleContext?.assigned?roleContext.page:null,p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))}:roleContext?.assigned?{p_page:roleContext.page,p_request:request}:request.action==="aggregatePrepared"?{p_page:roleContext?.page,p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))}:{p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
  if(!response.ok){let code="",serverCode="",queryCancelled=false;try{const body=await response.json();code=typeof body.message==='string'?body.message:'';serverCode=typeof body.code==='string'?body.code:typeof body.error_code==='string'?body.error_code:'';queryCancelled=body.code==='57014'}catch{}
@@ -631,6 +634,7 @@ export function makeAdminLiveDocument(html:string,channel:string,roleAccess?:Das
  const release=id=>{const q=requests.get(id);if(!q)return null;requests.delete(id);clearTimeout(q.timer);if(q.signal&&q.abort)q.signal.removeEventListener('abort',q.abort);return q};
  const cancel=(id,timeout=false)=>{const q=release(id);if(!q)return;try{parent.postMessage({type:'${LIVE_CANCEL}',channel,id,reason:timeout?'timeout':'cancelled'},hostOrigin)}catch{}q.reject(error(timeout?'正式数据读取超时，请重试':'查询已取消',timeout?'ADMIN_LIVE_TIMEOUT':'ADMIN_LIVE_CANCELLED'))};
  window.HENSEM_PRODUCTION=true;
+ window.HENSEM_PREPARED_READY_ONLY=true;
  window.HENSEM_PROVIDER_SNAPSHOT_SHADOW=${providerSnapshotShadow};
  window.hensemRoleAccess=${JSON.stringify(roleAccess||{mode:"legacy",permissions:[],canView:true}).replace(/</g,"\\u003c")};
  window.hensemDataScope=${JSON.stringify({mode:dataScope?.mode==="all"?"all":"selected",identity:typeof dataScope?.identity==="string"?dataScope.identity.slice(0,1000):"unverified"}).replace(/</g,"\\u003c").replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029")};
