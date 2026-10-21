@@ -96,6 +96,16 @@
  function beginReadPhases(serial){if(!usesReadPhases(state.page)&&state.page!=='events')return;readPhase={serial,page:state.page,label:statisticWindowsEnabled()?'读取已准备统计':'读取当期订单'};cancelFeeLookup();window.HensemLiveSyncHealth?.cancel?.();window.hensemLiveCancelRequests?.(['syncHealth']);}
  function setReadPhase(serial,label){if(readPhase?.serial!==serial||serial!==L.serial)return false;readPhase.label=label;render();return true;}
  function endReadPhases(serial){if(readPhase?.serial!==serial)return;const phase=readPhase;readPhase=null;phase.cancelSupplementary?.();if(serial!==L.serial)return;const resumeTrend=deferredMerchantTrend;deferredMerchantTrend=false;render();if(resumeTrend&&state.page==='merchants'&&L.view==='trend')void loadMerchantTrend();}
+ async function querySupplementRequest(request,options={}){
+  const phase=phasedReadBusy()?readPhase:null,serial=L.serial,page=state.page,context=aggregateAccessContext();
+  try{return await window.hensemLiveRequest(request,options);}
+  catch(error){
+   // A local abort belongs to its own reader. Only a live query owner's
+   // host suspension/denial may stop the other supplementary lane.
+   if(phase&&phase===readPhase&&serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&!options.signal?.aborted&&!(page==='providers'&&L.providerReadMode==='published'))stopInterruptedAggregate(serial,error);
+   throw error;
+  }
+ }
  window.HensemLiveSyncHealth?.configure({request:q=>window.hensemLiveRequest(q),ready:()=>state.page!=='channel_status'&&!isSupervisorPage(state.page)&&L.pageQueried&&L.catalogReady&&L.initialReadComplete&&!L.loading&&!phasedReadBusy()&&!L.feeLookupLoading&&!submissionAnalysis?.isLoading?.()&&!reportData?.state.loading&&!reportData?.state.catalogBusy&&!L.queryRetrying&&L.comparisonStatus!=='loading'&&L.overviewSections?.status!=='loading'&&!['workordersLoading','autoWithdrawLoading','depositIssuesLoading','depositKycLoading','depositRecoveryLoading','providerConfigLoading','platformAssignmentsLoading','feeLoading'].some(key=>L[key])&&!(state.page==='collected_data'&&collectedPage.state.busy)&&!(state.page==='rates'&&window.HensemLiveRatesRestored?.snapshot().loading)&&!(state.page==='payout_config'&&['indexStatus','snapshotStatus'].some(key=>window.HensemLivePayoutConfig?.state()[key]==='loading')),onChange:()=>window.liveHeader?.()});
  L.feeView='original';if(window.HensemLiveRatesRestored)HensemLiveRatesRestored.configure({request:request=>window.hensemLiveRequest(request),isActive:()=>state.page==='rates',isRestrictedScope:()=>window.hensemDataScope?.mode!=='all',scopeKey:()=>window.hensemDataScope?.identity||'unverified'});
  if(['collection','providers','provider_daily','latency','events'].includes(state.page))L.direction='charge';if(['payout','stuck','provider_payout'].includes(state.page))L.direction='withdraw';window.adminLive=L;
@@ -181,7 +191,7 @@
  // TTL is checked only for an explicit query. Sorting, pagination and restored
  // tabs keep their displayed snapshot and never turn expiry into background IO.
  function prepareFeeLookupQuery(force=false){if(!feeLookupPages.has(state.page))return;cancelFeeLookup();const context=syncFeeLookupIdentity();if(force||!validFeeSnapshot(feeLookupSnapshot,context))clearFeeLookupCache();feeLookupIntent={context,page:state.page};}
- function readFeeLookupPage(request,signal){const controller=new AbortController();return new Promise((resolve,reject)=>{let settled=false,timer;const finish=(fn,value)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',cancel);fn(value)};const cancel=()=>{const error=Error('查询已取消');error.name='AbortError';finish(reject,error);controller.abort()};if(signal?.aborted){cancel();return;}signal?.addEventListener('abort',cancel,{once:true});timer=setTimeout(()=>{finish(reject,Error('费率读取超时，请点击重试费率；未读取部分保持未知'));controller.abort()},30000);try{Promise.resolve(window.hensemLiveRequest(request,{signal:controller.signal})).then(value=>finish(resolve,value),error=>finish(reject,error))}catch(error){finish(reject,error)}})}
+ function readFeeLookupPage(request,signal){const controller=new AbortController();return new Promise((resolve,reject)=>{let settled=false,timer;const finish=(fn,value)=>{if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',cancel);fn(value)};const cancel=()=>{const error=Error('查询已取消');error.name='AbortError';finish(reject,error);controller.abort()};if(signal?.aborted){cancel();return;}signal?.addEventListener('abort',cancel,{once:true});timer=setTimeout(()=>{finish(reject,Error('费率读取超时，请点击重试费率；未读取部分保持未知'));controller.abort()},30000);try{Promise.resolve(querySupplementRequest(request,{signal:controller.signal})).then(value=>finish(resolve,value),error=>finish(reject,error))}catch(error){finish(reject,error)}})}
  async function ensureFeeLookup(force=false,inPhase=false,isCurrent=()=>true){
   if(localPaginationPaint||L.feeLookupLoading||phasedReadBusy()&&!inPhase)return;if((L.loading&&!inPhase||L.restoredPage)&&!force)return;
   const context=syncFeeLookupIdentity();if(!roleAllowed(state.page,'view')||!roleAllowed(state.page,'query')){clearFeeLookupCache();L.feeLookupError='当前角色没有费率查询权限';return;}
@@ -209,7 +219,7 @@
  window.liveMultiToggle=function(el){if(!el?.isConnected)return;const key=el.dataset.multi;if(el.open){L.openMulti=key;if(key==='provider')loadProviderOptions();document.querySelectorAll('details[data-multi]').forEach(other=>{if(other!==el)other.open=false})}else if(L.openMulti===key)L.openMulti=''};
  window.liveMultiSearch=function(key,value){L.multiSearch[key]=value;const root=document.querySelector('details[data-multi="'+key+'"]');if(!root)return;let count=0;root.querySelectorAll('.live-multi-option').forEach(row=>{row.hidden=!row.dataset.search.includes(value.toLocaleLowerCase());if(!row.hidden)count++});root.querySelector('.live-multi-empty').hidden=count>0;};
  let pendingSnapshot=null,pendingAnalysis=null,pendingOrders=null,memberCounts=null,submissionAnalysis=null,dailyComparison=null,channelStatus=null,workordersReadCache=null;
- const providerIntake=window.HensemProviderIntake?.create({request:(r,options)=>window.hensemLiveRequest(r,options),accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():''});
+ const providerIntake=window.HensemProviderIntake?.create({request:querySupplementRequest,accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():''});
  let publishedController=null;
  const cancelDataReads=()=>{cancelPublishedRead();cancelFeeLookup();readPhase?.cancelSupplementary?.();readPhase=null;deferredMerchantTrend=false;cancelAggregateReads();workordersReadCache?.cancel();matrixCustom?.cancel();providerIntake?.cancel();memberCounts?.cancel();submissionAnalysis?.cancel();dailyComparison?.cancel();channelStatus?.cancel();pendingSnapshot?.cancel();pendingAnalysis?.cancel();pendingOrders?.cancel();reportData?.cancel();L.workordersSerial++;L.workordersLoading=false;if(L.overviewWorkordersStatus==='loading')L.overviewWorkordersStatus='idle';window.hensemLiveCancelRequests?.(['aggregate','details','analysisOrders','reportSummary','workorders','pendingSnapshot','pendingAnalysis','pendingOrders','memberDaily','submissionAnalysis','intakeCoverage','channelStatus','autoWithdraw','providerSnapshot']);};
  window.liveMultiClear=function(key){if(!['team','platform','source','provider','direction'].includes(key)||key==='platform'&&state.page==='orders'||key==='direction'&&(fixedDirection(state.page)||state.page==='latency'))return;L.openMulti='';L.multiSearch[key]='';setMultiValues(key,[])};
@@ -711,7 +721,7 @@
   }
   return {read,cancel,clear};
  }
- workordersReadCache=createWorkorderExactCache({request:(request,options)=>window.hensemLiveRequest(request,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?JSON.stringify([state.page,aggregateAccessContext()]):'',identity:()=>JSON.stringify(selected().map(p=>[p.id,p.source,p.sourceName,p.name,p.country,p.scopeGroup??p.scope_group,p.timezone,p.currency,p.capabilities??null]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))});
+ workordersReadCache=createWorkorderExactCache({request:querySupplementRequest,context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?JSON.stringify([state.page,aggregateAccessContext()]):'',identity:()=>JSON.stringify(selected().map(p=>[p.id,p.source,p.sourceName,p.name,p.country,p.scopeGroup??p.scope_group,p.timezone,p.currency,p.capabilities??null]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))});
  async function workordersLoad(preserveView=false,inPhase=false,force=false,isCurrent=()=>true){
   if(!L.catalogReady||phasedReadBusy()&&!inPhase)return;
   if(isSuccessAnalysis()&&(!roleAllowed(state.page,'query')||!successFullDays()||L.dirty||L.queryScope!==aggregateQueryScope()))return;
@@ -777,7 +787,7 @@
  window.livePendingSnapshotDetails=()=>pendingSnapshot?.details();
  channelStatus=window.HensemLiveChannelStatus?.create({L,getPage:()=>state.page,catalog:visibleCatalog,selected:selectedVisible,activeValues,roleAllowed:action=>roleAllowed('channel_status',action),request:r=>window.hensemLiveRequest(r),render:()=>{if(isChannelStatus())render()}})||null;
  dailyComparison=window.HensemLiveDailyComparison?.create({L,E,N,C,R,getPage:()=>state.page,selected:selectedVisible,nativePlatforms:selected,authorizedPlatforms:visibleCatalog,accessContext:aggregateAccessContext,cancelReads:()=>{cancelAggregateReads();window.hensemLiveCancelRequests?.(['aggregatePrepared','workorders'])},readAggregate:(q,serial,refresh=false)=>{if(refresh)preparedRefreshScope={serial:serial??L.serial,page:state.page,context:aggregateAccessContext()};return readAggregate(q,serial??L.serial,false,true)},instant,localClock,activeValues,ensureFeeLookup,prepareFeeLookupQuery,scopeZone,render:()=>{if(isDailyComparison())render()},roleAllowed:action=>roleAllowed('daily_comparison',action),allowed:action=>roleAllowed('daily_comparison',action),request:r=>window.hensemLiveRequest(r)})||null;
- submissionAnalysis=window.HensemSubmissionAnalysis?.create({L,E,N,C,dashboard:()=>state.page==='events',isPublished:()=>state.page==='providers'&&L.providerReadMode==='published',retryPublished:()=>window.liveQuery(true),accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():'',readTime:stamp=>formatTime(new Date(stamp).toISOString(),scopeZone()),beforeRead:()=>{if(state.page==='events'){window.HensemLiveSyncHealth?.cancel?.();window.hensemLiveCancelRequests?.(['syncHealth']);}},selected:selectedVisible,query,request:(r,options)=>window.hensemLiveRequest(r,options),canStart:()=>roleAllowed(state.page,'query')&&(!phasedReadBusy()||state.page==='events'),render:()=>render(),open:(title,html)=>openDrawer(title,html),box,table})||null;
+ submissionAnalysis=window.HensemSubmissionAnalysis?.create({L,E,N,C,dashboard:()=>state.page==='events',isPublished:()=>state.page==='providers'&&L.providerReadMode==='published',retryPublished:()=>window.liveQuery(true),accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():'',readTime:stamp=>formatTime(new Date(stamp).toISOString(),scopeZone()),beforeRead:()=>{if(state.page==='events'){window.HensemLiveSyncHealth?.cancel?.();window.hensemLiveCancelRequests?.(['syncHealth']);}},selected:selectedVisible,query,request:querySupplementRequest,canStart:()=>roleAllowed(state.page,'query')&&(!phasedReadBusy()||state.page==='events'),render:()=>render(),open:(title,html)=>openDrawer(title,html),box,table})||null;
  memberCounts=window.HensemLiveMemberCounts?.create({L,E,N,C,accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():'',selected:selectedVisible,query,successClockUnavailable:(platform,direction)=>orderSource(platform)==='newar'&&direction==='withdraw'&&sourceSuccessTimeUnavailable(platform,L.results.find(result=>result.platform?.id===platform.id),direction),request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
  window.liveMemberCountsDetails=(tab,basis)=>memberCounts?.details(tab,basis);
  window.liveMemberCountsRetry=async()=>{
@@ -1199,12 +1209,19 @@
   // Host revalidation preserves this document but cancels its transport. End
   // the query owner now; remaining platforms resume only by an explicit click.
   // Existing access checks still apply, and late responses retain the old serial.
-  const scope=aggregateQueryScope(),overview=L.overviewSections?.scope===serial+'|'+scope?L.overviewSections:null;
+  const scope=aggregateQueryScope(),overview=L.overviewSections?.scope===serial+'|'+scope?L.overviewSections:null,supplementary=phasedReadBusy()&&!L.loading,feePending=L.feeLookupLoading,workordersPending=L.workordersLoading;
   const unfinished=!denied&&!L.dirty&&L.queryScope===scope&&L.queryPlatforms.some(p=>!L.results.some(r=>r.platform?.id===p.id));
+  if(supplementary)submissionAnalysis?.pauseSupplementary();
   L.serial++;cancelDataReads();L.loading=false;L.queryRetrying=false;L.queryPaused=unfinished;L.restoredPage=true;
-  if(denied){clearAggregateCache();L.retainedContent=null;L.results=[];L.comparisonResults=[];L.error='登录或查询权限已变化，请重新验证';}
-  L.progress='查询已暂停，保留已读取结果。';
-  if(L.comparisonStatus==='loading'){L.comparisonStatus='error';L.comparisonError='查询已暂停，请重新查询后读取前期对比';}
+  const message=supplementary?'补充统计已暂停，已完成结果保留；请点击查询或单独重试。':'查询已暂停，保留已读取结果。';
+  if(denied){clearAggregateCache();clearFeeLookupCache();workordersReadCache?.clear();providerIntake?.clearCache?.();submissionAnalysis?.clearCache?.();submissionAnalysis?.restore(null);L.retainedContent=null;L.results=[];L.comparisonResults=[];L.workorders=null;L.workordersError='';L.providerIntake=null;L.providerComparisonIntake=null;L.error='登录或查询权限已变化，请重新验证';}
+  else if(supplementary){
+   if(feePending||L.feeLookupRows===null)L.feeLookupError=message;
+   if(workordersPending||!L.workorders&&!L.workordersUnsupported)L.workordersError=message;
+   for(const key of ['providerIntake','providerComparisonIntake'])if(L[key]?.status==='loading')L[key]={...L[key],status:'error',error:message};
+  }
+  L.progress=message;
+  if(L.comparisonStatus==='loading'||supplementary&&L.comparisonStatus==='idle'){L.comparisonStatus='error';L.comparisonError='查询已暂停，请重新查询后读取前期对比';}
   if(!denied&&overview){overview.scope=L.serial+'|'+scope;if(overview.status==='loading')overview.status='partial';}
   if(L.merchantTrend?.status==='loading')L.merchantTrend.status='paused';
   render();
@@ -1213,14 +1230,15 @@
   if(!isCurrent())throw Error('查询已替换');
   if(usesPreparedAggregate(request)){
    if(!preparedAggregates)throw Error('统计读取组件未载入，请重新加载页面');
-   const context=aggregateAccessContext(),page=state.page;let result;
-   try{result=await preparedAggregates.read(request,{...((request.view||'full')==='full'&&['time','amount','latency'].includes(page)?{responseProfile:page+'-v1'}:{}),forceRefresh:preparedRefreshScope?.serial===serial&&preparedRefreshScope.page===page&&preparedRefreshScope.context===context,isCurrent:()=>isCurrent()&&serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&roleAllowed(page,'view')&&roleAllowed(page,'query')});}
-   catch(error){stopInterruptedAggregate(serial,error);throw error;}
+   const context=aggregateAccessContext(),page=state.page,native=aggregateNativeIdentity(request),ownerCurrent=()=>isCurrent()&&serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&!!native&&native===aggregateNativeIdentity(request);let result;
+   try{result=await preparedAggregates.read(request,{...((request.view||'full')==='full'&&['time','amount','latency'].includes(page)?{responseProfile:page+'-v1'}:{}),forceRefresh:preparedRefreshScope?.serial===serial&&preparedRefreshScope.page===page&&preparedRefreshScope.context===context,isCurrent:()=>ownerCurrent()&&roleAllowed(page,'view')&&roleAllowed(page,'query')});}
+   catch(error){if(ownerCurrent())stopInterruptedAggregate(serial,error);throw error;}
    if(orderSource(L.catalog.find(p=>p.id===request.platformId))==='panda'&&!pandaCoverageMatches(result,request,true))throw Error('熊猫所选创建窗口完整性尚未确认；已核验截止范围的证据无效，请重新读取');
    return {...mergeParts([result],L.catalog.find(p=>p.id===request.platformId)),_aggregateReadAt:Date.parse(result._preparedPublication.computedAt),_aggregateAccessContext:context,_aggregateView:request.view||'full'};
   }
-  const context=aggregateAccessContext(),native=aggregateNativeIdentity(request);
-  const current=()=>isCurrent()&&serial===L.serial&&context===aggregateAccessContext()&&!!native&&native===aggregateNativeIdentity(request)&&roleAllowed(state.page,'query');
+  const context=aggregateAccessContext(),native=aggregateNativeIdentity(request),page=state.page;
+  const ownerCurrent=()=>isCurrent()&&serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&!!native&&native===aggregateNativeIdentity(request);
+  const current=()=>ownerCurrent()&&roleAllowed(page,'query');
   if(allowCache){const cached=cachedAggregate(request);if(cached){await Promise.resolve();if(!current())throw Error('查询已替换');return cached}}
   if(serial!==L.serial||!roleAllowed(state.page,'query')||!native)throw Error('查询权限或范围已变化');
   const parts=[],boundedProviderRead=bounded||isSuccessAnalysis()||(state.page==='overview'&&request.view==='providers')||!!providerDirection(state.page)||isFlowPage(state.page),day=86400000;
@@ -1232,7 +1250,7 @@
    if(!current())throw Error('查询已替换');
    try{const cached=(allowCache||L.queryRetrying)&&q!==request?cachedAggregate(q):null;const result=cached||await aggregateRead(q,serial);if(!current())throw Error('查询已替换');const part={...result,_aggregateCacheable:!!cached||aggregateComplete(q,result),startAt:q.startAt,endAt:q.endAt,_aggregateView:cached?cached._aggregateView||aggregateView(q):aggregateView(q)};parts.push(part);if(q!==request)rememberAggregate(q,part)}
    catch(e){
-    stopInterruptedAggregate(serial,e);
+    if(ownerCurrent())stopInterruptedAggregate(serial,e);
     if(!current())throw Error('查询已替换');
     const from=Date.parse(q.startAt),to=Date.parse(q.endAt),width=to-from;
     if(!/超时|timeout/i.test(e.message))throw e;
@@ -1485,9 +1503,12 @@
   if(state.page==='events'){if(!L.dirty&&(L.loading||phasedReadBusy()))return;const queryNow=!force&&!L.dirty&&(submissionAnalysis?.canReuseWindow?.()||Date.now()>=L.queryNow&&Date.now()-L.queryNow<30000)?L.queryNow:Date.now(),serial=++L.serial;cancelDataReads();L.restoredPage=false;L.dirty=false;L.error='';L.queryNow=queryNow;L.loading=true;beginReadPhases(serial);render();try{if(window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;if(L.dirty){L.loading=false;return;}L.loading=false;setReadPhase(serial,'读取刷单风控统计');await submissionAnalysis?.load(force);}catch(e){if(serial===L.serial)L.error=e.message||'读取失败';}finally{if(serial===L.serial)L.loading=false;endReadPhases(serial);}return;}
   if(state.page==='orders'&&!orderPlatform()){L.serial++;cancelDataReads();L.queryRetrying=false;L.detailSerial++;L.loading=false;L.detailBusy=false;L.results=[];L.detail=null;L.error='';L.queryWarnings=[];L.queryFailures=[];L.queryPlatforms=[];L.queryScope='';L.comparisonResults=[];L.comparisonStatus='idle';L.dirty=true;providerOrders.cancel();loadProviderOptions();render();return}
   if(teamSheetReports?.onlyReports()){const reportSerial=++L.serial;cancelDataReads();L.providerReadMode='live';L.providerPublished=null;L.publishedWindow=null;L.restoredPage=false;L.dirty=false;L.loading=true;L.error='';L.results=[];L.queryPlatforms=[];L.queryFailures=[];render();try{await teamSheetReports.load({force:refreshPrepared});}finally{if(reportSerial===L.serial){L.loading=false;render();}}return;}
-  // The published and prepared paths own one active query together; clicking
-  // Query during a prepared continuation cannot start another snapshot read.
-  if(state.page==='providers'&&(L.loading||phasedReadBusy())&&!L.dirty&&L.inflightScope===aggregateQueryScope())return;
+  // Main reads remain deduplicated. Once the table is ready, an explicit Query
+  // replaces its supplementary owner rather than silently ignoring the click.
+  if(!L.dirty&&L.inflightScope===aggregateQueryScope()){
+   if(L.loading&&(state.page==='providers'||usesReadPhases(state.page)))return;
+   if(usesReadPhases(state.page)&&phasedReadBusy()){L.serial++;cancelDataReads();L.queryRetrying=false;}
+  }
   if(!realtime&&state.page==='providers'&&(!window.HensemStatisticWindows||HensemStatisticWindows.same(L))&&window.HensemProviderPublished?.eligible({page:state.page,L,platforms:selected(),visible:selectedVisible(),providers:activeValues('provider'),now:Date.now()})){
    const continuation=await loadPublishedProviders(force);
    if(!continuation||continuation.serial!==L.serial||state.page!=='providers'||queryNavigation!==navigationRevision||L.dirty||continuation.scope!==aggregateQueryScope()||continuation.context!==publishedIdentity()||!roleAllowed('providers','view')||!roleAllowed('providers','query'))return;

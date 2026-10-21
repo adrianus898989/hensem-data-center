@@ -92,3 +92,16 @@ test('controlled denial evicts every aggregate scope; message wording alone neve
 test('old aggregate denial cannot evict a newer identity snapshot',async()=>{
  const h=await ready(),late=deferred();h.setHandler(()=>late.promise);const old=read(h),rejected=assert.rejects(old);await settle();h.c.hensemDataScope.identity='SYNTHETIC-SCOPE-NEW';h.setHandler(q=>response(q));await read(h);late.reject(Object.assign(Error('登录已失效，请重新登录'),{code:'ADMIN_LIVE_SESSION_DENIED'}));await rejected;assert.equal((await read(h))._aggregateCacheHit,true);assert.equal(queries(h).length,2);
 });
+
+test('late aggregate denial or cancellation belongs to its original authority and native identity',async()=>{
+ for(const code of ['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_CANCELLED'])for(const change of [
+  h=>{h.c.hensemDataScope.identity='SYNTHETIC-SCOPE-NEW';},
+  h=>{h.c.hensemRoleAccess.assignmentVersion++;},
+  h=>{h.L.catalog=[{...P,sourceName:'SYNTHETIC-NEW-NATIVE'}];}
+ ]){
+  const h=await ready(),late=deferred();h.setHandler(()=>late.promise);const old=read(h),rejected=assert.rejects(old);await settle();change(h);h.setHandler(q=>response(q));await read(h);
+  const serial=h.L.serial,results=h.L.results,error=h.L.error;late.reject(Object.assign(Error('Synthetic old transport stopped'),{code}));await rejected;
+  assert.equal(h.L.serial,serial,'an obsolete request cannot stop the current query owner');assert.equal(h.L.results,results);assert.equal(h.L.error,error);
+  assert.equal((await read(h))._aggregateCacheHit,true,'the newer authorized snapshot remains reusable');assert.equal(queries(h).length,2);
+ }
+});
