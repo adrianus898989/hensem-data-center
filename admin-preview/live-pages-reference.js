@@ -19,9 +19,9 @@
  const successTotal=(rows,d)=>c.successTimeSummary?c.successTimeSummary(rows,d):plus(rows);
  const scopedFeeSummary=(rows,d)=>{const fees=window.HensemProviderSummary.feeSummary(rows);return c.successTimeUnavailable?.(d,rows)?{...fees,amount:null,successCount:null,fee_unknown:true,complete:false}:fees;};
  const stat=d=>successTotal(raw().filter(r=>r.direction===d),d);
- const overviewReadState=()=>window.hensemCurrentAdminPage?.()==='overview'&&c.aggregateReadStatus?c.aggregateReadStatus():{incomplete:false};
+ const aggregateReadState=()=>c.aggregateReadStatus?c.aggregateReadStatus():{incomplete:false};
  function overviewReadNotice(){
-  const status=overviewReadState();if(!status.incomplete)return '';
+  const status=aggregateReadState();if(!status.incomplete)return '';
   const active=L.loading||L.queryRetrying,canRetry=!active&&(L.queryFailures?.length||L.queryPaused);
   return '<div class="live-status" role="status"><strong>非完整总计：当前仅为已读小计</strong> · 完整返回 '+C(status.done)+' / '+C(status.total)+' 个平台。未完成平台不按 0 计入；以下数值不能作为全部平台总额。'+(status.missing.length?'<details><summary>查看未完成平台（'+C(status.missing.length)+'）</summary>'+status.missing.map(p=>'<div>'+E(p.name)+'：'+E(p.error|| (active?'等待或正在读取':'尚未完成'))+'</div>').join('')+'</details>':'')+(canRetry?'<button type="button" class="link" onclick="liveRetryFailed('+!!L.queryPaused+')">重试未完成平台</button>':'')+'</div>';
  }
@@ -48,11 +48,11 @@
  const providerSummaryTable=(headers,rows,footerRows=[])=>{
   const columns=['provider','business-type','total-amount','total-count','success-amount','amount-share','success-count','count-share','success-rate','fee-rate','fee-amount','fee-share'];
   const renderRows=list=>list.map(row=>'<tr>'+row.map(cell=>'<td>'+cell+'</td>').join('')+'</tr>').join('');
-  return '<div class="df-provider-table-scroll" tabindex="0" role="region" aria-label="三方经营明细，可横向滚动"><table class="df-provider-business-table"><colgroup>'+columns.map(key=>'<col class="'+key+'">').join('')+'</colgroup><thead><tr>'+headers.map(label=>'<th scope="col">'+label+'</th>').join('')+'</tr></thead><tbody>'+renderRows(rows)+'</tbody>'+(footerRows.length?'<tfoot>'+renderRows(footerRows)+'</tfoot>':'')+'</table>'+(rows.length?'':'<div class="live-empty">'+(overviewReadState().incomplete?'尚有平台未读完，暂无已读结果':'当前方向没有已入库记录')+'</div>')+'</div>';
+  return '<div class="df-provider-table-scroll" tabindex="0" role="region" aria-label="三方经营明细，可横向滚动"><table class="df-provider-business-table"><colgroup>'+columns.map(key=>'<col class="'+key+'">').join('')+'</colgroup><thead><tr>'+headers.map(label=>'<th scope="col">'+label+'</th>').join('')+'</tr></thead><tbody>'+renderRows(rows)+'</tbody>'+(footerRows.length?'<tfoot>'+renderRows(footerRows)+'</tfoot>':'')+'</table>'+(rows.length?'':'<div class="live-empty">'+(aggregateReadState().incomplete?'尚有平台未读完，暂无已读结果':'当前方向没有已入库记录')+'</div>')+'</div>';
  };
  const platformSummaryTable=(headers,rows,footerRows=[])=>{
   const widths=[70,122,64,122,64,58,112,90],total=widths.reduce((a,b)=>a+b,0),renderRows=list=>list.map(row=>'<tr>'+row.map(cell=>'<td>'+cell+'</td>').join('')+'</tr>').join('');
-  return '<div class="df-platform-table-scroll"><table class="df-platform-business-table"><colgroup>'+widths.map(width=>'<col style="width:'+(width/total*100).toFixed(4)+'%">').join('')+'</colgroup><thead><tr>'+headers.map(label=>'<th scope="col">'+label+'</th>').join('')+'</tr></thead><tbody>'+renderRows(rows)+'</tbody>'+(footerRows.length?'<tfoot>'+renderRows(footerRows)+'</tfoot>':'')+'</table>'+(rows.length?'':'<div class="live-empty">'+(overviewReadState().incomplete?'尚有平台未读完，暂无已读结果':'当前方向没有已入库记录')+'</div>')+'</div>';
+  return '<div class="df-platform-table-scroll"><table class="df-platform-business-table"><colgroup>'+widths.map(width=>'<col style="width:'+(width/total*100).toFixed(4)+'%">').join('')+'</colgroup><thead><tr>'+headers.map(label=>'<th scope="col">'+label+'</th>').join('')+'</tr></thead><tbody>'+renderRows(rows)+'</tbody>'+(footerRows.length?'<tfoot>'+renderRows(footerRows)+'</tfoot>':'')+'</table>'+(rows.length?'':'<div class="live-empty">'+(aggregateReadState().incomplete?'尚有平台未读完，暂无已读结果':'当前方向没有已入库记录')+'</div>')+'</div>';
  };
  function feeCell(r){
   if(r.fee_rate_label==='不适用')return '<span class="muted" title="人工及未分配三方记录不估算三方手续费">不适用</span>';
@@ -97,7 +97,7 @@
    const headers=isPlatform?[...head,'<span title="'+E(memberTitle)+'">'+E(c.memberCounts?.platformLabel?.(d)||('实际'+(d==='charge'?'充值':'取款')+(String(L.from||'').slice(0,10)!==String(L.to||'').slice(0,10)?'人次':'人数')))+'</span>']:head;
    const memberFacts=new Map(),memberFact=ids=>{const key=JSON.stringify(ids??null);if(!memberFacts.has(key))memberFacts.set(key,c.memberCounts?.platformMetric?.(ids,d));return memberFacts.get(key)};
    const memberCell=ids=>memberFact(ids)?.html||'<span class="muted" title="人数统计尚未读取">—</span>';
-   const subset=rows.filter(r=>r.direction===d),fees=scopedFeeSummary(subset,d),total={...successTotal(subset,d),direction:d,estimated_fee:fees.amount,fee_matched_count:fees.matchedCount,fee_eligible_count:fees.successCount,fee_excluded_count:fees.excludedCount,fee_issues:fees.issues,fee_exclusions:fees.exclusions,fee_complete:fees.complete,fee_unknown:fees.fee_unknown,fee_mode:fees.fee_mode};
+   const subset=rows.filter(r=>r.direction===d),unknown=aggregateReadState().incomplete&&!subset.length,feeFacts=scopedFeeSummary(subset,d),fees=unknown?{...feeFacts,amount:null,matchedCount:null,successCount:null,complete:false,fee_unknown:true}:feeFacts,knownTotal=successTotal(subset,d),total={...(unknown?Object.fromEntries(Object.keys(knownTotal).map(key=>[key,null])):knownTotal),direction:d,estimated_fee:fees.amount,fee_matched_count:fees.matchedCount,fee_eligible_count:fees.successCount,fee_excluded_count:fees.excludedCount,fee_issues:fees.issues,fee_exclusions:fees.exclusions,fee_complete:fees.complete,fee_unknown:fees.fee_unknown,fee_mode:fees.fee_mode};
    const rateCell=r=>{const value=r.fee_rate_label==='不适用'?'不适用':L.feeLookupLoading?'匹配中…':L.feeLookupError?'读取失败':feeMode()==='current'?r.fee_reference_label:r.fee_rate_label;return '<span class="df-fee-rate" title="'+E(value)+'">'+E(value)+'</span>'};
    const successRateCell=r=>{const value=R(r.success_count,r.all_count),low=isPlatform&&d==='charge'&&Number.parseFloat(value)<=49.99;return '<span'+(low?' class="df-collection-rate-low"':'')+' title="成功时间内成功笔数 ÷ 创建时间内全部笔数；含跨日成功，可超过100%">'+value+'</span>'};
    const cells=(r,summary=false)=>[N(r.all_amount),C(r.all_count),N(r.success_amount),...(isProvider?[summary?(Number(total.success_amount)>0?'100.00%':'—'):share(r.success_amount_share)]:[]),C(r.success_count),...(isProvider?[summary?(Number(total.success_count)>0?'100.00%':'—'):share(r.success_count_share)]:[]),
@@ -108,10 +108,10 @@
    const columns=[textual(key),...(isProvider?[typeSort]:[]),numeric('all_amount'),numeric('all_count'),numeric('success_amount'),...(isProvider?[numeric('success_amount_share')]:[]),numeric('success_count'),...(isProvider?[numeric('success_count_share')]:[]),{value:r=>isProvider&&!sorting.isProviderBusiness(r.provider)?null:sorting.fraction(r.success_count,r.all_count)},...(isProvider?[{value:r=>L.feeLookupLoading||L.feeLookupError?null:sorting.feeSortValue(r)}]:[]),{value:r=>L.feeLookupLoading||L.feeLookupError?null:sorting.knownNumber(r.estimated_fee)},...(isProvider?[{value:r=>L.feeLookupLoading||L.feeLookupError?null:sorting.knownNumber(r.fee_share)}]:[])];
    if(isPlatform)columns.push({value:r=>memberFact(r.platformId)?.value??null});
    const rowCells=r=>{if(r._emptyCells)return r._emptyCells;return [isProvider?overviewProviderCell(r):E(r[key]||'未提供'),...(isProvider?[typeCell(r)]:[]),...cells(r),...(isPlatform?[memberCell(r.platformId)]:[])];};
-   const body=sortedPageTable(id+'-'+d,headers,displayRows,columns,rowCells,[['<strong>'+E(name(d)+(overviewReadState().incomplete?'已读小计（非完整总计）':'汇总'))+'</strong>',...(isProvider?['—']:[]),...cells(total,true),...(isPlatform?[memberCell([...new Set(displayRows.map(r=>r.platformId))])]:[])]],isProvider?providerSummaryTable:isPlatform?platformSummaryTable:refTable);
+   const body=sortedPageTable(id+'-'+d,headers,displayRows,columns,rowCells,[['<strong>'+E(name(d)+(aggregateReadState().incomplete?'已读小计（非完整总计）':'汇总'))+'</strong>',...(isProvider?['—']:[]),...cells(total,true),...(isPlatform?[memberCell([...new Set(displayRows.map(r=>r.platformId))])]:[])]],isProvider?providerSummaryTable:isPlatform?platformSummaryTable:refTable);
    const feeStatus=L.feeLookupLoading?'手续费匹配中…':L.feeLookupError?'费率读取失败':'手续费已匹配 '+C(fees.matchedCount)+' / '+C(fees.successCount)+' 笔'+(fees.complete?'':' · 部分费率未匹配');
    const intake=isPlatform?overviewIntakeCoverage(d):null,coverage=intake?.notExpected.length?' · 应采 '+C(intake.requested)+' 平台 · 所选日期尚未上线 '+C(intake.notExpected.length)+' 平台（不计缺口）':'';
-   return dblock(id+'-'+d,title+' · '+name(d)+(overviewReadState().incomplete?' · 已读平台':''),'<div class="df-business-summary'+(isProvider?' df-provider-business-summary':isPlatform?' df-platform-business-summary':'')+'">'+body+'</div>',E(L.currency)+' · <span tabindex="0" title="'+E(L.feeLookupLoading?'正在读取费率':L.feeLookupError?'费率读取失败':window.HensemProviderSummary.feeCoverageText(fees))+'">'+(subset.length?feeStatus:overviewReadState().incomplete?'该方向暂无已读结果':'当前方向无数据')+'</span>'+coverage);
+   return dblock(id+'-'+d,title+' · '+name(d)+(aggregateReadState().incomplete?' · 已读平台':''),'<div class="df-business-summary'+(isProvider?' df-provider-business-summary':isPlatform?' df-platform-business-summary':'')+'">'+body+'</div>',E(L.currency)+' · <span tabindex="0" title="'+E(L.feeLookupLoading?'正在读取费率':L.feeLookupError?'费率读取失败':window.HensemProviderSummary.feeCoverageText(fees))+'">'+(subset.length?feeStatus:aggregateReadState().incomplete?'该方向暂无已读结果':'当前方向无数据')+'</span>'+coverage);
 
   };
   return dblock(id,title,'<div class="df-grid df-two">'+dirs().map(renderDirection).join('')+'</div>',(isProvider?'同名三方合并；占比按本方向成功数据；手续费占比按已匹配费用。人工不参与三方成功率比较。':'手续费逐平台、逐三方匹配后汇总。')+' '+feeBasis()+'。成功率＝成功时间内成功笔数 ÷ 创建时间内全部笔数，含跨日成功。');
@@ -132,7 +132,7 @@
  }
  function flow(d){
   if(!L.loading&&L.feeLookupRows===null&&!L.feeLookupLoading&&!L.feeLookupError)ensureFeeLookup();
-  const a=stat(d),partial=overviewReadState().incomplete,tone=d==='charge'?'collect':'payout',fees=scopedFeeSummary(feeRows(d),d);
+  const a=stat(d),partial=aggregateReadState().incomplete,tone=d==='charge'?'collect':'payout',fees=scopedFeeSummary(feeRows(d),d);
   const directionRows=raw().filter(r=>r.direction===d),currencies=new Set(directionRows.map(r=>r.currency).filter(Boolean)),multiCurrency=currencies.size>1;
   // No returned facts in this direction is still unknown while another
   // platform is pending; do not format an empty reduction as a full-scope 0.

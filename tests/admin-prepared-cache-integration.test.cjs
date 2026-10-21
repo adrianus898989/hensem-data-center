@@ -31,7 +31,13 @@ test('routine directory details collapse, while coverage and real timestamps rem
  await h.c.liveQuery();await settle();filters=h.nodes.get('liveFilters').innerHTML.replace(/<details class="live-scope-description">[\s\S]*?<\/details>/,'');assert.match(filters,/所选日期有订单数据 1 平台/);assert.match(filters,/更新于/);
 });
 
-test('provider-only reads discard unused amount-band profiles retained by other pages, while full analysis preserves them',async()=>{
+test('provider/time/latency reads discard unused amount bands, while amount/matrix analysis preserves them',async()=>{
  const profiles={charge:{edges:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]},withdraw:{edges:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]}};
- for(const page of ['providers','provider_payout','overview','amount']){const h=await ready(page);h.L.amountBandProfiles=profiles;await h.c.liveQuery();await settle();const requests=h.calls.filter(q=>q.action==='aggregatePrepared').flatMap(q=>q.requests);assert(requests.length>0);for(const q of requests){if(q.view==='providers')assert.equal(Object.hasOwn(q,'amountBands'),false,'provider-only ABI is independent of prior analysis profiles');else assert.deepEqual(JSON.parse(JSON.stringify(q.amountBands)),{charge:profiles.charge.edges,withdraw:profiles.withdraw.edges});}}
+ for(const page of ['providers','provider_payout','overview','time','latency','amount','matrix']){const h=await ready(page);h.L.amountBandProfiles=profiles;await h.c.liveQuery();await settle();const requests=h.calls.filter(q=>q.action==='aggregatePrepared').flatMap(q=>q.requests);assert(requests.length>0);for(const q of requests){if(q.view==='providers'||['time','latency'].includes(page))assert.equal(Object.hasOwn(q,'amountBands'),false,'unused ranges must not fragment this prepared query');else assert.deepEqual(JSON.parse(JSON.stringify(q.amountBands)),{charge:profiles.charge.edges,withdraw:profiles.withdraw.edges});}}
+});
+test('authorized shared pages reuse the exact completed publication while preserving page-owned reads',async()=>{
+ const h=await ready('teamops'),filters=Object.fromEntries(['from','to','successFrom','successTo','successBasis','direction','status'].map(key=>[key,h.L[key]]));
+ await h.c.liveQuery();await settle();const reads=h.calls.filter(q=>q.action==='aggregatePrepared').length,receipt=JSON.stringify(h.L.results[0]._preparedPublication);
+ h.c.setPage('teamcountries');Object.assign(h.L,filters);await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregatePrepared').length,reads);assert.equal(JSON.stringify(h.L.results[0]._preparedPublication),receipt);
+ await h.c.liveRefresh();await settle();assert(h.calls.filter(q=>q.action==='aggregatePrepared').length>reads);
 });
