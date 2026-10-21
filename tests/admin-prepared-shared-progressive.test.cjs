@@ -5,6 +5,33 @@ const prefix=fs.readFileSync(path.join(__dirname,'admin-provider-daily-progressi
 const {setup:dailySetup,ready,queued,reads,platforms,settle,deferred}=new Function('require','__dirname',prefix+';return {setup,ready,queued,reads,platforms,settle,deferred};')(require,__dirname);
 async function setup(page){const h=await dailySetup();h.c.setPage(page);await settle();Object.assign(h.L,{from:'2026-10-17T00:00:00',to:'2026-10-17T23:59:59',successFrom:'',successTo:''});return h;}
 const pages=['overview','collection','payout','providers','provider_payout','time','amount','matrix','latency','risk','teamops','teamcountries','teamplatforms','merchants','provider_daily'];
+for(const page of pages)test(page+': host suspension unlocks a partial query; explicit continuation reads only the missing platform',async()=>{
+ const h=await setup(page),run=h.c.liveQuery();await settle();assert.equal(h.L.results.length,1);const retained=h.L.results[0];
+ h.setPrepared(()=>{throw Object.assign(Error('Synthetic host revalidation'),{code:'ADMIN_LIVE_CANCELLED'});});
+ await h.time.advance(1500);await run;await settle();
+ assert.equal(h.L.loading,false);assert.equal(h.L.queryRetrying,false);assert.equal(h.L.queryPaused,true);assert.equal(h.L.restoredPage,true);assert.equal(h.L.results[0],retained);assert.equal(h.L.queryFailures.length,0);
+ assert.match(h.html(),/onclick="liveRetryFailed\(true\)"/);assert.doesNotMatch(h.html(),/live-read-phase/);
+ const count=reads(h).length;await h.time.advance(120000);assert.equal(reads(h).length,count,'reverification never starts automatic business retry');
+ h.setPrepared(request=>ready(request,20,16));await h.c.liveRetryFailed();await settle();
+ assert.equal(h.L.loading,false);assert.equal(h.L.queryRetrying,false);assert.equal(h.L.queryPaused,false);assert.equal(h.L.results.length,2);assert.equal(h.L.results.find(r=>r.platform.id===platforms[0].id),retained);
+ assert.deepEqual(reads(h).slice(count).flatMap(q=>q.requests.map(r=>r.platformId)),[platforms[1].id]);
+});
+test('a denied explicit continuation clears the retained facts and cannot reopen a paused query',async()=>{
+ const h=await setup('providers'),run=h.c.liveQuery();await settle();
+ h.setPrepared(()=>{throw Object.assign(Error('Synthetic host revalidation'),{code:'ADMIN_LIVE_CANCELLED'});});await h.time.advance(1500);await run;assert.equal(h.L.queryPaused,true);
+ h.setPrepared(()=>{throw Object.assign(Error('Synthetic current permission denied'),{code:'ADMIN_LIVE_PERMISSION_DENIED'});});await h.c.liveRetryFailed(true);await settle();
+ assert.equal(h.L.results.length,0);assert.equal(h.L.loading,false);assert.equal(h.L.queryRetrying,false);assert.equal(h.L.queryPaused,false);assert.match(h.L.error,/权限/);assert.doesNotMatch(h.html(),/继续查询|1,000\.00/);
+ const count=reads(h).length;await h.c.liveRetryFailed(true);assert.equal(reads(h).length,count);
+});
+for(const page of ['overview','merchants'])test(page+': cancellation of an optional aggregate releases its own loading guard and permits an explicit retry',async()=>{
+ const h=await setup(page);h.setPrepared(request=>ready(request));await h.c.liveQuery();await settle();
+ const main=h.L.results.slice(),load=()=>page==='overview'?h.c.liveOverviewAnalysis():h.c.liveView('trend');
+ h.setPrepared(()=>{throw Object.assign(Error('Synthetic optional read suspension'),{code:'ADMIN_LIVE_CANCELLED'});});await load();await settle();
+ assert.equal(h.L.loading,false);assert.equal(h.L.queryPaused,false);assert.deepEqual(h.L.results,main);
+ assert.equal(page==='overview'?h.L.overviewSections.status:h.L.merchantTrend.status,page==='overview'?'partial':'paused');
+ const count=reads(h).length;await h.time.advance(120000);assert.equal(reads(h).length,count);
+ h.setPrepared(request=>ready(request));await load();await settle();assert.equal(page==='overview'?h.L.overviewSections.status:h.L.merchantTrend.status,'ready');
+});
 for(const page of pages)test(page+': render ready platform facts while an exact peer is preparing',async()=>{
  const h=await setup(page),run=h.c.liveQuery();await settle();
  assert.equal(h.L.results.length,1);assert.equal(h.L.loading,true);

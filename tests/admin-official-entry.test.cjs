@@ -16,14 +16,13 @@ function harness(options={}){
   useState(value){const i=cursor++;if(!slots[i])slots[i]={value:typeof value==='function'?value():value};return[slots[i].value,next=>{const value=typeof next==='function'?next(slots[i].value):next;if(!Object.is(value,slots[i].value)){slots[i].value=value;dirty=true}}]},
   useEffect(fn,deps){const i=cursor++,old=slots[i];if(!old||deps.some((v,j)=>!Object.is(v,old.deps[j]))){slots[i]={deps,cleanup:old?.cleanup};pending.push(()=>{slots[i].cleanup?.();slots[i].cleanup=fn()})}},
  };
- const readAccess=async (session,signal)=>{requests.push(session);return options.access?options.access(session,signal):{canView:options.canView!==false}};
+ const readAccess=async()=>{requests.push(true);throw Error('duplicate outer access preflight')};
  const module={exports:{}};vm.runInNewContext(source,{module,exports:module.exports,AbortController,window:{location,history:{replaceState(_state,_title,url){replacements.push(url);location.hash=url.slice(url.indexOf('#'))}},setInterval(fn,ms){assert.equal(ms,60000);const id=timers.size+1;timers.set(id,fn);return id},clearInterval:id=>timers.delete(id),addEventListener(name,fn){if(!listeners.has(name))listeners.set(name,new Set());listeners.get(name).add(fn)},removeEventListener(name,fn){listeners.get(name)?.delete(fn)}},require(name){
   if(name==='react')return react;
   if(name==='react/jsx-runtime')return{jsx:(type,props,key)=>({type,props,key}),jsxs:(type,props,key)=>({type,props,key})};
   if(name==='./DashboardAuthGate')return{useDashboardAuth:()=>auth};
   if(name==='./OwnerAdminPreview')return{default:shell};
   if(name.endsWith('/adminPreviewClient'))return{readAdminPreviewAccess:readAccess};
-  if(name.endsWith('/ownerPreviewVerification')){const m={exports:{}};vm.runInNewContext(compile('src/lib/ownerPreviewVerification.ts'),{module:m,exports:m.exports,AbortController,Error,setTimeout:options.setTimeout||setTimeout,clearTimeout:options.clearTimeout||clearTimeout});return m.exports;}
   if(name.endsWith('/adminLiveBridge'))return bridge.exports;
   if(name.endsWith('/dashboardAuthClient'))return{canOpenAdminCenter:p=>p?.role==='owner'||p?.role==='admin'};
   if(name.endsWith('/ownerPreviewShell'))return{OWNER_PREVIEW_HOST_CSS:'',mountOwnerPreviewHostShell:()=>()=>{}};
@@ -42,35 +41,25 @@ test('only the formal component is exported; legacy sidebar and reader hooks are
  const entry=fs.readFileSync(path.join(repo,'src/app/page.tsx'),'utf8');assert.match(entry,/import OfficialDashboard from "@\/components\/OfficialDashboard"/);assert.doesNotMatch(entry,/components\/Dashboard"/);
  const h=harness({role:'owner'});assert(h.frame());assert.equal(h.location.hash,'#admin/overview');assert.equal(h.requests.length,0);assert.equal(h.frame().props.canView,true);h.dispose();
 });
-test('an active granted viewer enters only after access validation and retains a legacy bookmarked page',async()=>{
- const h=harness({hash:'#owner-admin-preview/provider_payout'});assert.equal(h.frame(),null);assert.match(h.text(),/验证后台查看权限/);assert.equal(h.replacements.length,0);
- await flush();assert(h.frame());assert.equal(h.location.hash,'#admin/provider_payout');assert.equal(h.requests.length,1);assert.equal(h.frame().props.profile.role,'viewer');h.dispose();
+test('an active viewer delegates one initial authorization chain to the preview and retains its bookmarked page',()=>{
+ const h=harness({hash:'#owner-admin-preview/provider_payout'});assert(h.frame());assert.equal(h.location.hash,'#admin/provider_payout');assert.equal(h.requests.length,0);assert.equal(h.frame().props.profile.role,'viewer');assert.equal(h.frame().props.canView,true);h.dispose();
 });
-test('denied or failed access never falls back to legacy modules and provides logout and retry',async()=>{
- for(const options of [{canView:false},{access:async()=>{throw Error('synthetic unavailable')}}]){
-  const h=harness({...options,hash:'#auto'});await flush();assert.equal(h.frame(),null);assert.equal(h.location.hash,'#auto');assert(h.logoutButton());h.logoutButton().props.onClick();assert.equal(h.loggedOut(),1);assert.match(h.text(),/重新验证/);assert(!h.text().includes('返回现有后台'));h.dispose();
- }
+test('inactive or mismatched sessions cannot mount or request the backend',()=>{
+ for(const role of ['owner','admin','viewer']){const h=harness({role,profile:{active:false}});assert.equal(h.frame(),null);assert.equal(h.requests.length,0);assert(h.logoutButton());h.logoutButton().props.onClick();assert.equal(h.loggedOut(),1);h.dispose();}
+ const h=harness({role:'owner'});h.setAuth({session:{user:{id:'different-account'}}});assert.equal(h.frame(),null);h.dispose();
 });
-test('inactive or mismatched owner sessions cannot mount or request the backend',()=>{
- const h=harness({role:'owner',profile:{active:false}});assert.equal(h.frame(),null);assert.equal(h.requests.length,0);assert(h.logoutButton());h.dispose();
- const other=harness({role:'owner'});other.setAuth({session:{user:{id:'different-account'}}});assert.equal(other.frame(),null);other.dispose();
+test('account switches remount the authorization owner with the current account only',()=>{
+ const h=harness();const first=h.frame().key;
+ h.setAuth({profile:{active:true,role:'viewer',auth_user_id:'account-b'},session:{user:{id:'account-b'},access_token:'synthetic-new-account'}});
+ assert(h.frame());assert.notEqual(h.frame().key,first);assert.equal(h.frame().props.profile.auth_user_id,'account-b');assert.equal(h.frame().props.session.user.id,'account-b');assert.equal(h.requests.length,0);h.dispose();
 });
-test('account switches and late permission responses cannot reuse a prior grant',async()=>{
- const resolves=[];const h=harness({access:()=>new Promise(resolve=>resolves.push(resolve))});await flush();
- h.setAuth({profile:{active:true,role:'viewer',auth_user_id:'account-b'},session:{user:{id:'account-b'}}});await flush();
- resolves[0]({canView:true});await flush();assert.equal(h.frame(),null);resolves[1]({canView:false});await flush();assert.equal(h.frame(),null);assert.match(h.text(),/没有后台查看权限/);h.dispose();
+test('the preview alone owns periodic validation and receives refreshed tokens without remounting',()=>{
+ const h=harness();const key=h.frame().key;h.setAuth({session:{user:{id:'account-a'},access_token:'synthetic-refreshed'}});
+ assert.equal(h.frame().key,key);assert.equal(h.frame().props.session.access_token,'synthetic-refreshed');h.tick();h.send('focus');h.send('online');assert.equal(h.requests.length,0);assert.equal(h.frame().key,key);h.dispose();
 });
-test('the mounted preview owns periodic authorization without a duplicate outer poll resetting the frame',async()=>{
- let fail=false;const h=harness({access:async()=>{if(fail)throw Error('synthetic transport failure');return{canView:true}}});await flush();const key=h.frame().key;
- fail=true;for(let i=0;i<3;i++)h.tick();await flush();assert.equal(h.requests.length,1);assert.equal(h.frame().key,key);h.dispose();
-});
-test('session token refresh keeps the page and passes the fresh session to its authorization owner',async()=>{
- const h=harness();await flush();const key=h.frame().key;h.setAuth({session:{user:{id:'account-a'},access_token:'synthetic-refreshed'}});assert.equal(h.frame().key,key);assert.equal(h.frame().props.session.access_token,'synthetic-refreshed');h.tick();await flush();assert.equal(h.requests.length,1);assert.equal(h.frame().key,key);h.dispose();
-});
-test('authorized account-menu navigation mounts the current access page even on repeated requests',async()=>{
- const h=harness({role:'admin'});await flush();const first=h.frame().key;h.send('hensem:open-admin');assert.equal(h.location.hash,'#admin/access');assert.notEqual(h.frame().key,first);const second=h.frame().key;h.send('hensem:open-admin');assert.notEqual(h.frame().key,second);assert.equal(h.requests.length,1,'navigation starts no business or additional permission query');h.dispose();
- const viewer=harness({role:'viewer'});await flush();const old=viewer.frame().key;viewer.send('hensem:open-admin');assert.equal(viewer.frame().key,old);viewer.dispose();
- const denied=harness({role:'admin',canView:false});await flush();denied.send('hensem:open-admin');assert.equal(denied.frame(),null);denied.dispose();
+test('account-menu navigation remounts the current page without an extra access preflight',()=>{
+ const h=harness({role:'admin'});const first=h.frame().key;h.send('hensem:open-admin');assert.equal(h.location.hash,'#admin/access');assert.notEqual(h.frame().key,first);const second=h.frame().key;h.send('hensem:open-admin');assert.notEqual(h.frame().key,second);assert.equal(h.requests.length,0);h.dispose();
+ const viewer=harness();const old=viewer.frame().key;viewer.send('hensem:open-admin');assert.equal(viewer.frame().key,old);viewer.dispose();
 });
 test('old module links and hash changes redirect to safe formal pages without legacy rendering',()=>{
  const h=harness({role:'owner'});
@@ -78,24 +67,50 @@ test('old module links and hash changes redirect to safe formal pages without le
  for(const [hash,page] of Object.entries(cases)){const old=h.frame().key;h.location.hash=hash;h.send('hashchange');assert.equal(h.location.hash,'#admin/'+page);assert(h.frame());assert.notEqual(h.frame().key,old)}assert.equal(h.requests.length,0);h.frame().props.onLogout();assert.equal(h.loggedOut(),1);h.dispose();
 });
 
-function retryClock(){let seq=0;const timers=new Map();return{timers,setTimeout:(fn,ms)=>{timers.set(++seq,{fn,ms});return seq},clearTimeout:id=>timers.delete(id),fire(ms){const item=[...timers].find(([,timer])=>timer.ms===ms);assert(item,'expected bounded timer '+ms);timers.delete(item[0]);item[1].fn();}};}
-test('initial access body timeouts stay bounded and late responses never mount a frame',async()=>{
- const clock=retryClock(),pending=[],h=harness({...clock,access:(_session,signal)=>new Promise(resolve=>pending.push({signal,resolve}))});
- try{for(let i=0;i<3;i++){await flush();assert.equal(h.frame(),null);assert.equal(pending.length,i+1);clock.fire(15000);await flush();assert.equal(pending[i].signal.aborted,true);if(i<2){h.send('online');await flush();assert.equal(pending.length,i+1);clock.fire(i===0?500:1500);}}
-  await flush();assert.equal(clock.timers.size,0);assert.match(h.text(),/自动重试/);assert.match(h.text(),/重新验证/);pending.forEach(p=>p.resolve({canView:true}));await flush();assert.equal(h.frame(),null);
- }finally{h.dispose()}
+// Execute the actual authorization owner: the outer component delegates here,
+// but no HTML may mount until both role and protected-document checks succeed.
+function previewHarness(options={}){
+ let slots=[],cursor=0,pending=[],dirty=true,tree,disposed=false,seq=0;const timers=new Map(),intervals=new Map(),warnings=[],calls=[],bridgeStops=[];
+ let props={canView:true,session:{user:{id:'account-a'},access_token:'synthetic'},profile:{active:true,role:'viewer',auth_user_id:'account-a'},onLogout(){}};
+ const react={useRef(value){const i=cursor++;return slots[i]||(slots[i]={current:value})},useState(value){const i=cursor++;if(!slots[i])slots[i]={value};return[slots[i].value,next=>{const value=typeof next==='function'?next(slots[i].value):next;if(!Object.is(value,slots[i].value)){slots[i].value=value;dirty=true}}]},useCallback(fn,deps){const i=cursor++,old=slots[i];if(!old||deps.some((v,j)=>!Object.is(v,old.deps[j])))slots[i]={deps,fn};return slots[i].fn},useEffect(fn,deps){const i=cursor++,old=slots[i];if(!old||deps.some((v,j)=>!Object.is(v,old.deps[j]))){slots[i]={deps,cleanup:old?.cleanup};pending.push(()=>{slots[i].cleanup?.();slots[i].cleanup=fn()})}}};
+ const timer=(fn,ms)=>{timers.set(++seq,{fn,ms});return seq};
+ const verification={exports:{}};vm.runInNewContext(compile('src/lib/ownerPreviewVerification.ts'),{module:verification,exports:verification.exports,AbortController,Error,setTimeout:timer,clearTimeout:id=>timers.delete(id)});
+ const policy={canView:true,mode:'all'},identity=x=>x,stop=()=>()=>bridgeStops.push(true);
+ const box={exports:{}};vm.runInNewContext(compile('src/components/OwnerAdminPreview.tsx'),{module:box,exports:box.exports,AbortController,Error,Date,crypto:{randomUUID:()=>String(++seq)},localStorage:{getItem:()=>null,setItem(){},removeItem(){}},process:{env:{}},console:{warn:(...args)=>warnings.push(args)},window:{location:{origin:'https://fixture.invalid'},setInterval(fn,ms){intervals.set(++seq,{fn,ms});return seq},clearInterval:id=>intervals.delete(id),addEventListener(){},removeEventListener(){}},document:{visibilityState:'visible',addEventListener(){},removeEventListener(){}},require(name){
+  if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props,key)=>({type,props,key}),jsxs:(type,props,key)=>({type,props,key})};
+  if(name.endsWith('/dashboardAuthClient'))return{normalizedManagementPermissions:()=>({})};
+  if(name.endsWith('/ownerPreviewVerification'))return verification.exports;
+  if(name.endsWith('/ownerPreviewDocument'))return{makeOwnerPreviewDocument:identity,OWNER_PREVIEW_DRAFT_KEYS:[],ownerPreviewDraftAllowed:()=>false};
+  if(name.endsWith('/adminPreviewRestore'))return{restoreApprovedAdmin:identity};
+  if(name.endsWith('/adminPreviewClient'))return{adminPreviewRequest:async(s,q,o)=>{calls.push({stage:'preview-request',signal:o.signal,q});return options.preview?options.preview(s,q,o):{text:async()=>'<html>verified</html>',json:async()=>({ok:true,canView:true,canManage:false})}}};
+  if(name.endsWith('/dashboardRoleAccess'))return{dashboardRoleAllows:()=>false,readDashboardRoleAccess:async(s,signal)=>{calls.push({stage:'role',signal});return options.role?options.role(s,signal):policy}};
+  if(name.endsWith('/adminLiveBridge'))return{makeAdminLiveDocument:identity,installAdminLiveBridge:stop};
+  if(name.endsWith('/dashboardPresenceBridge'))return{makeDashboardPresenceDocument:identity,installDashboardPresenceBridge:stop};
+  if(name.endsWith('/ownerPreviewShell'))return{OWNER_PREVIEW_HOST_CSS:'',mountOwnerPreviewHostShell:()=>()=>{},makeOwnerPreviewShellDocument:identity};
+  if(name.endsWith('/dashboardDataScope'))return{dashboardScopeIdentity:p=>JSON.stringify([p.auth_user_id,p.scope]),effectiveDashboardDataScope:()=>({mode:'all'})};
+  if(name.endsWith('/dashboardIdle'))return{recordDashboardActivity(){}};if(name.endsWith('/dashboardRelease'))return{installDashboardReleaseCheck:()=>()=>{}};
+  if(name.startsWith('./'))return{default:function Unused(){}};throw Error(name);
+ }});
+ const render=()=>{if(disposed)return tree;let guard=0;do{dirty=false;cursor=0;tree=box.exports.default(props);pending.splice(0).forEach(fn=>fn());assert(++guard<20)}while(dirty);return tree};render();
+ return{calls,warnings,timers,bridgeStops,render,frame:()=>nodes(render()).find(n=>n.type==='iframe'),text:()=>JSON.stringify(render()),tick:()=>{for(const t of intervals.values())t.fn()},fire(ms){const found=[...timers].find(([,t])=>t.ms===ms);assert(found,'expected timer '+ms);timers.delete(found[0]);found[1].fn()},setProps(next){props={...props,...next};return render()},dispose(){disposed=true;for(const slot of slots)slot?.cleanup?.()}};
+}
+const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{resolve,reject,promise}};
+test('real preview mounts no HTML until both role and protected document have passed exactly once',async()=>{
+ const role=deferred(),body=deferred(),h=previewHarness({role:()=>role.promise,preview:async()=>({text:()=>body.promise})});
+ try{await flush();assert.equal(h.frame(),undefined);assert.equal(h.calls.length,1);role.resolve({canView:true,mode:'all'});await flush();assert.equal(h.frame(),undefined);assert.deepEqual(h.calls.map(c=>c.stage),['role','preview-request']);body.resolve('<html>authorized</html>');await flush();assert.equal(h.frame().props.srcDoc,'<html>authorized</html>');assert.equal(h.calls.length,2);assert.equal(h.warnings.length,0);}finally{h.dispose()}
 });
-test('initial transient access outage recovers on a later online event without another outer poll after grant',async()=>{
- const clock=retryClock();let healthy=false;const h=harness({...clock,access:async()=>{if(!healthy)throw Object.assign(Error('synthetic temporary outage'),{status:503,code:'auth_unavailable'});return{canView:true}}});
- try{await flush();clock.fire(500);await flush();clock.fire(1500);await flush();assert.equal(h.requests.length,3);assert.equal(h.frame(),null);assert.match(h.text(),/自动重试/);healthy=true;h.send('online');await flush();assert.equal(h.requests.length,4);const key=h.frame().key;h.tick();h.send('focus');h.send('online');await flush();assert.equal(h.requests.length,4);assert.equal(h.frame().key,key);}
- finally{h.dispose()}
+test('real preview rejects role denial, protected-document denial and malformed periodic access responses',async()=>{
+ for(const stage of ['role','preview']){const h=previewHarness(stage==='role'?{role:async()=>({canView:false})}:{preview:async()=>{throw Object.assign(Error('secret response not for log'),{status:403,code:'preview_denied'})}});try{await flush();assert.equal(h.frame(),undefined);assert.equal(h.timers.size,0);h.tick();await flush();assert.equal(h.calls.length,stage==='role'?1:2);assert.doesNotMatch(JSON.stringify(h.warnings),/secret/);}finally{h.dispose()}}
+ const h=previewHarness({preview:async(_s,q)=>q?{json:async()=>({ok:true,canView:false,canManage:false})}:{text:async()=>'<html>ok</html>'}});try{await flush();assert(h.frame());h.tick();await flush();assert.equal(h.frame(),undefined);assert.equal(h.timers.size,0)}finally{h.dispose()}
 });
-test('explicit initial access denial never automatically retries or mounts a frame',async()=>{
- for(const outcome of ['denied','false','malformed']){const clock=retryClock(),h=harness({...clock,access:async()=>{if(outcome==='denied')throw Object.assign(Error('synthetic policy denied'),{status:403,code:'preview_denied'});if(outcome==='malformed')throw Error('synthetic invalid permission response');return{canView:false}}});
-  try{await flush();h.send('online');h.send('focus');h.tick();await flush();assert.equal(h.requests.length,1);assert.equal(clock.timers.size,0);assert.equal(h.frame(),null);}
-  finally{h.dispose()}
- }
+test('periodic transport failure still hides the frame and stops bridges until full verified recovery',async()=>{
+ let failure=false;const h=previewHarness({preview:async(_s,q)=>{if(failure)throw Object.assign(Error('hidden response'),{status:503});return{text:async()=>'<html>same</html>',json:async()=>({ok:true,canView:true,canManage:false})}}});
+ try{await flush();const original=h.frame();assert(original);failure=true;h.tick();await flush();assert.equal(h.frame().props['aria-hidden'],true);assert.equal(h.frame().props.style.display,'none');assert(h.bridgeStops.length>=2);assert.equal(h.warnings[0][1].stage,'preview-request');assert.equal(h.warnings[0][1].code,'http_503');failure=false;h.fire(500);await flush();assert.equal(h.frame().props['aria-hidden'],undefined);assert.equal(h.frame().key,original.key);assert.equal(h.calls.at(-1).q,'','recovery reads protected HTML, not only quick access');}finally{h.dispose()}
 });
-test('unmount during initial retry backoff removes all scheduled recovery and ignores old results',async()=>{
- const clock=retryClock(),h=harness({...clock,access:async()=>{throw Object.assign(Error('synthetic transport'),{status:503})}});await flush();assert.equal(clock.timers.size,1);h.dispose();await flush();assert.equal(clock.timers.size,0);h.send('online');h.tick();await flush();assert.equal(h.requests.length,1);
+test('body deadline diagnoses its phase and cancellation ignores late private HTML',async()=>{
+ const body=deferred(),h=previewHarness({preview:async()=>({text:()=>body.promise})});try{await flush();h.fire(15000);await flush();assert.equal(h.frame(),undefined);assert.equal(h.warnings[0][1].stage,'preview-body');assert.equal(h.warnings[0][1].code,'owner_preview_timeout');h.dispose();body.resolve('<html>late</html>');await flush();assert.equal(h.frame(),undefined);assert.equal(h.timers.size,0);assert.equal(h.warnings.length,1);}finally{h.dispose()}
+});
+test('changing accounts while protected HTML is pending never mounts the old document',async()=>{
+ const old=deferred();const h=previewHarness({preview:async s=>({text:()=>s.user.id==='account-a'?old.promise:Promise.resolve('<html>account-b</html>')})});
+ try{await flush();const oldSignal=h.calls.at(-1).signal;h.setProps({session:{user:{id:'account-b'},access_token:'new'},profile:{active:true,role:'viewer',auth_user_id:'account-b'}});await flush();assert(oldSignal.aborted);assert.equal(h.frame().props.srcDoc,'<html>account-b</html>');old.resolve('<html>old-account</html>');await flush();assert.equal(h.frame().props.srcDoc,'<html>account-b</html>');assert.equal(h.warnings.length,0);}finally{h.dispose()}
 });

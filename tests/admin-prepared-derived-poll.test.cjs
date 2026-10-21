@@ -11,6 +11,30 @@ const flush=async()=>{for(let i=0;i<24;i++)await Promise.resolve();};
 function clock(){let stamp=NOW,id=0;const timers=new Map();return{get now(){return stamp},timers,setTimeout(fn,ms){const key=++id;timers.set(key,{fn,at:stamp+ms});return key},clearTimeout(key){timers.delete(key)},async advance(ms){const end=stamp+ms;let count=0;while(true){const next=[...timers].filter(([,t])=>t.at<=end).sort((a,b)=>a[1].at-b[1].at||a[0]-b[0])[0];if(!next)break;assert(++count<2000,'bounded timer callbacks');stamp=next[1].at;timers.delete(next[0]);next[1].fn();await flush();}stamp=end;await flush();}};}
 function harness(options={}){const time=clock(),calls=[];let context='actor-a|role1|providers|queryA',nativeChange={},handler=options.handler||((payload)=>envelope(payload.requests));const box={module:{exports:{}},TextEncoder,AbortController,setTimeout:time.setTimeout,clearTimeout:time.clearTimeout};vm.runInNewContext(source,box);const manager=box.module.exports.create({publicationVersion:2,maxBatchSize:3,maxConcurrent:2,completedCacheTtlMs:30000,derivedPollMaxMs:60000,derivedPollIntervalMs:1500,derivedPollMaxAttempts:40,now:()=>time.now,context:()=>context,platform:id=>({...P,id,sourceName:'Native'+id.split('-').at(-1),...nativeChange}),request:(payload,control)=>{calls.push({payload:clone(payload),control});return handler(payload,control,calls.length);},...options});return{manager,time,calls,setContext:x=>context=x,setNative:x=>nativeChange=x,setHandler:x=>handler=x};}
 const check=status=>error=>error.code==='PREPARED_AGGREGATE_'+status.toUpperCase();
+test('host suspension settles every queued waiter before another batch can reach the closed bridge, retaining exact completed receipts',async()=>{
+ const h=harness({completedCacheTtlMs:()=>300000});await h.manager.read(q({platformId:'native-50'}));
+ const pending=[];h.setHandler(payload=>{const wait=deferred();pending.push({payload,wait});return wait.promise;});
+ const requests=Array.from({length:19},(_,i)=>q({platformId:'native-'+(i+1)}));
+ const results=Promise.allSettled(requests.map(request=>h.manager.read(request)));await flush();assert.equal(pending.length,2);
+ for(let i=0;i<2;i++){pending[i].wait.resolve(envelope(pending[i].payload.requests));await flush();}
+ assert.equal(pending.length,4);const before=h.calls.length;
+ const stopped=Object.assign(Error('Synthetic retained-frame revalidation'),{code:'ADMIN_LIVE_CANCELLED'});
+ pending[2].wait.reject(stopped);await flush();
+ const settled=await results;assert.equal(settled.filter(r=>r.status==='fulfilled').length,6);assert.equal(settled.filter(r=>r.status==='rejected'&&r.reason===stopped).length,13);
+ assert.equal(h.calls.length,before,'the last seven queued platforms are not sent to an absent host');
+ assert(h.calls.slice(-2).every(c=>c.control.signal.aborted));assert.equal(h.time.timers.size,0);
+ pending[3].wait.resolve(envelope(pending[3].payload.requests));await h.time.advance(120000);assert.equal(h.calls.length,before,'late responses and time passing do not restart work');
+ await h.manager.read(q({platformId:'native-50'}));assert.equal(h.calls.length,before,'suspension does not evict a verified same-authority receipt');
+ h.setHandler(p=>envelope(p.requests));await Promise.all(requests.slice(6).map(request=>h.manager.read(request)));
+ assert.deepEqual(h.calls.slice(before).flatMap(c=>c.payload.requests.map(r=>r.platformId)),requests.slice(6).map(r=>r.platformId));
+});
+test('an old batch host cancellation cannot cancel a replacement query or its cached completion',async()=>{
+ const old=deferred(),fresh=deferred(),h=harness({handler:()=>old.promise});
+ const cancelled=assert.rejects(h.manager.read(q()),check('cancelled'));await flush();h.manager.cancel();await cancelled;
+ h.setHandler(()=>fresh.promise);let done=false;const read=h.manager.read(q()).finally(()=>{done=true;});await flush();
+ old.reject(Object.assign(Error('Synthetic late host cancellation'),{code:'ADMIN_LIVE_CANCELLED'}));await flush();assert.equal(done,false);
+ fresh.resolve(envelope(h.calls[1].payload.requests));await read;await h.manager.read(q());assert.equal(h.calls.length,2);
+});
 test('default disabled and exact noneligible states retain one-read/no-retry behavior',async()=>{
  for(const [patch,options,expected]of [[{}, {derivedPollMaxMs:0},'building'],[{reason:'ordinary_building'}, {},'building'],[{reason:undefined},{},'building'],[{publication:{}},{},'building'],[{result:{}},{},'invalid'],[{status:'missing'},{},'missing'],[{status:'stale'},{},'stale'],[{status:'unsupported'},{},'unsupported'],[{status:'failed'},{},'invalid']]){const h=harness({...options,handler:p=>envelope(p.requests,r=>({...building(r),...patch}))});await assert.rejects(h.manager.read(q()),check(expected));await h.time.advance(120000);assert.equal(h.calls.length,1);assert.equal(h.time.timers.size,0);}
  const old=harness({publicationVersion:1,handler:p=>envelope(p.requests,building,1)});await assert.rejects(old.manager.read(q()),check('building'));assert.equal(old.time.timers.size,0);
