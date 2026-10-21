@@ -1400,14 +1400,18 @@
   if(!roleAllowed('providers','query')){clearPublishedAuthority();render();return;}
   if(force)submissionAnalysis?.clearCache?.();
   const api=window.HensemProviderPublished,scope=aggregateQueryScope(),context=publishedIdentity();
-  if(L.providerPublished?.loading&&!L.dirty)return;
   const platforms=selected().slice(),providers=activeValues('provider').slice(),request=api.requestFor(platforms,L.from.slice(0,10)),old=L.providerPublished?.context===context?L.providerPublished:null,serial=++L.serial;
   const reuse=!force&&reusablePublication(old,request,Date.now());
   cancelDataReads();const controller=new AbortController();publishedController=controller;
   const current=()=>serial===L.serial&&state.page==='providers'&&!L.dirty&&scope===aggregateQueryScope()&&!controller.signal.aborted&&context===publishedIdentity()&&roleAllowed('providers','query');
   L.providerReadMode='published';L.providerPublished={...old,context,loading:true,error:''};L.pageQueried=true;L.restoredPage=false;L.dirty=false;L.loading=true;L.error='';L.queryScope=scope;L.inflightScope=scope;L.queryNow=Date.now();beginReadPhases(serial);prepareFeeLookupQuery(force);setReadPhase(serial,'读取已发布代收汇总');
+  let preparedContinuation=null;
   try{
    const bundle=reuse?old.bundle:api.validate(await window.hensemLiveRequest(request,{signal:controller.signal}),request,platforms);if(!current())return;
+   // A valid unsupported rolling scope is a routing decision, not an empty
+   // report. Continue this same Query through the shared prepared reader.
+   // Errors, denied access and incomplete publications never trigger fallback.
+   if(bundle.status==='unsupported'&&statisticWindowsEnabled()&&preparedAggregates){preparedContinuation={serial,scope,context};return preparedContinuation;}
    const projection=api.project(bundle,providers),projected=projection.bundle;
    const appliedWindow=api.appliedWindow(bundle,request,L.queryNow);
    if(appliedWindow)submissionAnalysis?.applyPublished(projected,platforms,{providers:projection.providers});else submissionAnalysis?.restore(null);
@@ -1430,7 +1434,10 @@
    if(!projection.projectionComplete)L.providerPublished.projectionError='所选三方去重合计尚未发布；订单结果已筛选，可用实时明细查询核对去重统计';
 
   }catch(e){if(!current())return;if(api.denied(e)){clearPublishedAuthority();}else{L.providerPublished={...L.providerPublished,loading:false,error:e.message||'已发布汇总读取失败'};if(L.providerPublished.view&&L.providerPublished.view.queryScope!==aggregateQueryScope())L.dirty=true;}}
-  finally{if(serial===L.serial){publishedController=null;L.loading=false;if(L.providerPublished)L.providerPublished.loading=false;endReadPhases(serial);render();}}
+  finally{if(serial===L.serial){publishedController=null;L.loading=false;if(L.providerPublished)L.providerPublished.loading=false;
+   if(preparedContinuation){cancelDataReads();Object.assign(L,{providerReadMode:'live',providerPublished:null,publishedWindow:null,retainedContent:null,results:[],comparisonResults:[],providerIntake:null,providerComparisonIntake:null,workorders:null});submissionAnalysis?.restore(null);}
+   else{endReadPhases(serial);render();}
+  }}
  }
  async function exportPublishedOrCurrent(){
   if(state.page!=='providers'||L.providerReadMode!=='published')return exportCurrentTable();
@@ -1460,7 +1467,13 @@
   if(state.page==='events'){if(!L.dirty&&(L.loading||phasedReadBusy()))return;const queryNow=!force&&!L.dirty&&(submissionAnalysis?.canReuseWindow?.()||Date.now()>=L.queryNow&&Date.now()-L.queryNow<30000)?L.queryNow:Date.now(),serial=++L.serial;cancelDataReads();L.restoredPage=false;L.dirty=false;L.error='';L.queryNow=queryNow;L.loading=true;beginReadPhases(serial);render();try{if(window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;if(L.dirty){L.loading=false;return;}L.loading=false;setReadPhase(serial,'读取刷单风控统计');await submissionAnalysis?.load(force);}catch(e){if(serial===L.serial)L.error=e.message||'读取失败';}finally{if(serial===L.serial)L.loading=false;endReadPhases(serial);}return;}
   if(state.page==='orders'&&!orderPlatform()){L.serial++;cancelDataReads();L.queryRetrying=false;L.detailSerial++;L.loading=false;L.detailBusy=false;L.results=[];L.detail=null;L.error='';L.queryWarnings=[];L.queryFailures=[];L.queryPlatforms=[];L.queryScope='';L.comparisonResults=[];L.comparisonStatus='idle';L.dirty=true;providerOrders.cancel();loadProviderOptions();render();return}
   if(teamSheetReports?.onlyReports()){const reportSerial=++L.serial;cancelDataReads();L.providerReadMode='live';L.providerPublished=null;L.publishedWindow=null;L.restoredPage=false;L.dirty=false;L.loading=true;L.error='';L.results=[];L.queryPlatforms=[];L.queryFailures=[];render();try{await teamSheetReports.load({force:refreshPrepared});}finally{if(reportSerial===L.serial){L.loading=false;render();}}return;}
-  if(!realtime&&state.page==='providers'&&(!window.HensemStatisticWindows||HensemStatisticWindows.same(L))&&window.HensemProviderPublished?.eligible({page:state.page,L,platforms:selected(),visible:selectedVisible(),providers:activeValues('provider'),now:Date.now()}))return loadPublishedProviders(force);
+  // The published and prepared paths own one active query together; clicking
+  // Query during a prepared continuation cannot start another snapshot read.
+  if(state.page==='providers'&&(L.loading||phasedReadBusy())&&!L.dirty&&L.inflightScope===aggregateQueryScope())return;
+  if(!realtime&&state.page==='providers'&&(!window.HensemStatisticWindows||HensemStatisticWindows.same(L))&&window.HensemProviderPublished?.eligible({page:state.page,L,platforms:selected(),visible:selectedVisible(),providers:activeValues('provider'),now:Date.now()})){
+   const continuation=await loadPublishedProviders(force);
+   if(!continuation||continuation.serial!==L.serial||state.page!=='providers'||queryNavigation!==navigationRevision||L.dirty||continuation.scope!==aggregateQueryScope()||continuation.context!==publishedIdentity()||!roleAllowed('providers','view')||!roleAllowed('providers','query'))return;
+  }
   L.providerReadMode='live';L.providerPublished=null;L.publishedWindow=null;
   try{if(statisticWindowsEnabled())HensemStatisticWindows.validate(L)}catch(e){L.error=e.message;L.dirty=true;render();return;}
   const scope=aggregateQueryScope();
