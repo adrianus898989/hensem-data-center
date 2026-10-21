@@ -117,5 +117,5 @@
   function render(page){if(page==='latency'&&unsupportedLatency())return '<div class="latency-v3 live-duration-reference" data-duration-page="latency"><div class="grid equal">'+directions().map(summaryCard).join('')+'</div>'+latencyDistribution()+'</div>';if(page==='latency')return '<div class="latency-v3 live-duration-reference" data-duration-page="latency"><div class="grid equal">'+directions().map(summaryCard).join('')+'</div>'+latencyDistribution()+(ctx.analysis?.customRange?ctx.analysis.customRange():'')+quality()+'<div class="pending-basis">'+rangeNote(false)+'</div>'+detailSection(false)+'</div>';if(page==='stuck'){const s=stat('withdraw',true),late=s.bucket(6,true);return '<div class="pending-v3 live-duration-reference" data-duration-page="stuck">'+pendingStock(s)+'<div class="pending-secondary"><span>超过 1 天：'+money(late.amount)+' '+E(L.currency)+'　'+count(late.count)+' 笔</span><span>平均等待 '+duration(s.mean)+'　·　P95 '+duration(s.p95)+'</span><span>时间待核对 '+count(s.excludedCount)+' 笔</span></div>'+pendingDistribution(s)+detailSection(true)+'</div>'}return null}
   return Object.freeze({render});
  }
- root.HensemLiveDuration=Object.freeze({create});
+ root.HensemLiveDuration=Object.freeze({create,usesComparison:page=>page!=='latency'});
 })(typeof window==='object'?window:globalThis);
