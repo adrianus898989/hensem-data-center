@@ -21,15 +21,24 @@ async function ready(page){
 for(const page of pages)test(page+': ordinary repeat reuses complete aggregates and fees; explicit refresh rereads; details remain live',async()=>{
  const h=await ready(page);await h.c.liveQuery();await settle();
  const count=requests(h,'aggregate').length,feeCount=requests(h,'rates').length,detailCount=requests(h,'details').length,readAt=h.L.results[0]._aggregateReadAt;
- assert.equal(count,2,'current and comparison each read once');
+ const usesComparison=!['latency','risk'].includes(page),shape=q=>({platformId:q.platformId,view:q.view||'full',startAt:q.startAt,endAt:q.endAt,status:q.status,durationVersion:q.durationVersion??null});
+ const current={platformId:P.id,view:page==='orders'?'providers':'full',startAt:'2026-09-21T18:30:00.000Z',endAt:'2026-09-22T00:30:00.000Z',status:'all',durationVersion:page==='latency'?2:null};
+ const expected=[current,...(usesComparison?[{...current,view:'providers',startAt:'2026-09-20T18:30:00.000Z',endAt:'2026-09-21T00:30:00.000Z',durationVersion:null}]:[])];
+ assert.deepEqual(requests(h,'aggregate').map(shape),expected,'only rendered periods are read, once per exact window');
+ assert.equal(h.L.comparisonStatus,usesComparison?'ready':'idle');assert.equal(h.L.comparisonResults.length,usesComparison?1:0);
+ const facts=JSON.stringify({total:h.L.results[0].total,summary:h.L.results[0].summary,groups:h.L.results[0].groups});assert.equal(h.L.results[0].total,65);
  assert.match(h.nodes.get('liveFilters').innerHTML,/onclick="liveRefresh\(\)"/,'explicit refresh stays available');
  h.setNow('2026-09-23T12:00:10Z');await h.c.liveQuery();await settle();
  assert.equal(requests(h,'aggregate').length,count);assert.equal(requests(h,'rates').length,feeCount);
  assert.equal(h.L.results[0]._aggregateCacheHit,true);assert.equal(h.L.results[0]._aggregateReadAt,readAt);
+ if(!usesComparison)assert.equal(JSON.stringify({total:h.L.results[0].total,summary:h.L.results[0].summary,groups:h.L.results[0].groups}),facts,'current-only renderers retain all current facts on cache reuse');
+ assert.equal(h.L.comparisonStatus,usesComparison?'ready':'idle');assert.equal(h.L.comparisonResults.length,usesComparison?1:0);
  assert.equal(requests(h,'details').length,detailCount+(page==='orders'?1:0));
  assert.match(h.nodes.get('liveFilters').innerHTML,/数据读取[^]*缓存/);
- await h.c.liveRefresh();await settle();assert.equal(requests(h,'aggregate').length,count*2);
+ await h.c.liveRefresh();await settle();assert.deepEqual(requests(h,'aggregate').map(shape),[...expected,...expected],'refresh rereads exactly the consumed windows without an unused comparison');
  assert.equal(requests(h,'rates').length,feeCount*2);assert.equal(h.L.results[0]._aggregateCacheHit,false);
+ if(!usesComparison)assert.equal(JSON.stringify({total:h.L.results[0].total,summary:h.L.results[0].summary,groups:h.L.results[0].groups}),facts,'current-only renderers retain all current facts after refresh');
+ assert.equal(h.L.comparisonStatus,usesComparison?'ready':'idle');assert.equal(h.L.comparisonResults.length,usesComparison?1:0);
  assert.equal(requests(h,'details').length,detailCount+(page==='orders'?2:0));
 });
 for(const page of pages)test(page+': current window stays frozen within 30 seconds then advances on expiry or explicit refresh',async()=>{
