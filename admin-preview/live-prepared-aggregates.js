@@ -160,7 +160,7 @@
   function settle(waiter,error,result){if(waiter.done)return;waiter.done=true;waiter.signal?.removeEventListener('abort',waiter.abort);waiter.job.waiters.delete(waiter);if(error)waiter.reject(error);else waiter.resolve(copy(result));}
   function stopTimers(job){if(job.pollTimer!==null)clearTimeout(job.pollTimer);if(job.deadlineTimer!==null)clearTimeout(job.deadlineTimer);job.pollTimer=job.deadlineTimer=null;}
   function release(job){stopTimers(job);job.phase='finished';if(jobs.get(job.key)===job)jobs.delete(job.key);}
-  function cancel(){generation++;for(const job of jobs.values()){stopTimers(job);for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));}jobs.clear();queue.length=0;for(const batch of batches)batch.controller.abort();batches.clear();}
+  function cancel(error=failure('cancelled')){generation++;for(const job of jobs.values()){stopTimers(job);for(const waiter of [...job.waiters])settle(waiter,error);}jobs.clear();queue.length=0;for(const batch of batches)batch.controller.abort();batches.clear();}
   function clear(){clearCompleted();cancel();}
   function syncContext(){
    let current,reuse;try{current=contextValue();reuse=typeof options.completedReuseContext==='function'?options.completedReuseContext():current;if(typeof reuse!=='string'||!reuse)throw failure('cancelled');}
@@ -224,7 +224,14 @@
     // body cannot admit a larger unvalidated or oversized financial result.
     if(leafAliases){const expanded=JSON.stringify({...response,items:[...matched.values()]});if(expanded.length>maxResponseBytes||new TextEncoder().encode(expanded).length>maxResponseBytes)throw failure('invalid');}
     for(const job of batch.jobs){if(!prune(job))continue;if(job.polling&&now()>=job.deadlineAt){endPoll(job);continue;}try{const item=matched.get(job.requestKey);if(pollable(item,job)){waitForBase(job);continue;}const result=validateResult(item,job.q,job.native,now(),publicationVersion,job.responseProfile);if(deliver(job,null,result))rememberCompleted(job,item);}catch(error){deliver(job,error);}}
-   }catch(error){if(authorityDenied(error)&&!batch.controller.signal.aborted&&batch.jobs.some(job=>prune(job))){clearCompleted();if(pollMaxMs>0){for(const job of [...jobs.values()])deliver(job,error);cancel();}}for(const job of batch.jobs)deliver(job,error);}
+   }catch(error){
+    // A retained frame's host may temporarily close its bridge during access
+    // verification. Stop this entire queue before finally can dispatch another
+    // batch to the absent listener. A late cancellation from an old batch must
+    // never interrupt the new query, and completed receipts remain reusable.
+    if(error?.code==='ADMIN_LIVE_CANCELLED'&&!batch.controller.signal.aborted&&batch.jobs.some(job=>prune(job)))cancel(error);
+    if(authorityDenied(error)&&!batch.controller.signal.aborted&&batch.jobs.some(job=>prune(job))){clearCompleted();if(pollMaxMs>0){for(const job of [...jobs.values()])deliver(job,error);cancel();}}for(const job of batch.jobs)deliver(job,error);
+   }
    finally{batches.delete(batch);for(const job of batch.jobs){if(job.phase==='waiting')continue;if(job.waiters.size)deliver(job,failure('cancelled'));release(job);}schedule();}
   }
   function drain(){

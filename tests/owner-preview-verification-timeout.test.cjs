@@ -58,3 +58,13 @@ test('coordination errors have bounded recovery while authorization and cancella
  }
  const h=setup();assert.equal(h.api.ownerPreviewRetryable({status:0,code:'session_changed'}),false);assert.equal(h.api.ownerPreviewRetryable({status:0,code:'session_logged_out'}),false);
 });
+test('verification diagnostics expose only safe phase, code and elapsed time without changing error identity or retry policy',()=>{
+ const h=setup();
+ for(const stage of ['role','preview-request','preview-body']){
+  const error=Object.assign(Error('Bearer synthetic-secret user@example.invalid'),{status:503,code:'https://private.invalid/?token=secret'}),before=h.api.ownerPreviewRetryable(error);
+  const diagnostic=h.api.ownerPreviewVerificationDiagnostic(error,stage,12.8);
+  assert.deepEqual(JSON.parse(JSON.stringify(diagnostic)),{stage,code:'http_503',elapsedMs:13});assert.equal(error.verificationStage,stage);assert.equal(h.api.ownerPreviewRetryable(error),before);
+ }
+ assert.equal(h.api.ownerPreviewVerificationDiagnostic({status:0,code:'owner_preview_timeout'},'role',NaN).code,'owner_preview_timeout');
+ const diagnostic=h.api.ownerPreviewVerificationDiagnostic(Object.freeze({status:'private',code:'unsafe-secret'}),'role',-1);assert.deepEqual(JSON.parse(JSON.stringify(diagnostic)),{stage:'role',code:'unknown',elapsedMs:0});
+});

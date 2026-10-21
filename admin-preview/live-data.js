@@ -1192,13 +1192,30 @@
  preparedAggregates=window.HensemPreparedAggregates?.create({request:(q,options)=>window.hensemLiveRequest(q,options),context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?state.page+'|'+aggregateAccessContext():'',completedReuseContext:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?aggregateAccessContext():'',platform:preparedNativePlatform,publicationVersion:2,providerLeafAliases:true,maxConcurrent:2,maxBatchSize:3,completedCacheTtlMs:preparedCompletionTtl,completedCacheMaxBytes:96*1024*1024,derivedPollMaxMs:60000,derivedPollIntervalMs:1500,derivedPollMaxAttempts:40});
  const usesPreparedAggregate=request=>statisticWindowsEnabled()&&request.action==='aggregate'&&request.view!=='drilldown'&&!['orderNumber','thirdPartyOrderNumber','systemOrderId','memberId','utr'].some(key=>request[key]);
  window.addEventListener?.('pagehide',()=>{clearAggregateCache();providerIntake?.clearCache?.();clearFeeLookupCache();});
+ function stopInterruptedAggregate(serial,error){
+  if(serial!==L.serial)return;
+  const denied=['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code);
+  if(!denied&&error?.code!=='ADMIN_LIVE_CANCELLED')return;
+  // Host revalidation preserves this document but cancels its transport. End
+  // the query owner now; remaining platforms resume only by an explicit click.
+  // Existing access checks still apply, and late responses retain the old serial.
+  const scope=aggregateQueryScope(),overview=L.overviewSections?.scope===serial+'|'+scope?L.overviewSections:null;
+  const unfinished=!denied&&!L.dirty&&L.queryScope===scope&&L.queryPlatforms.some(p=>!L.results.some(r=>r.platform?.id===p.id));
+  L.serial++;cancelDataReads();L.loading=false;L.queryRetrying=false;L.queryPaused=unfinished;L.restoredPage=true;
+  if(denied){clearAggregateCache();L.retainedContent=null;L.results=[];L.comparisonResults=[];L.error='登录或查询权限已变化，请重新验证';}
+  L.progress='查询已暂停，保留已读取结果。';
+  if(L.comparisonStatus==='loading'){L.comparisonStatus='error';L.comparisonError='查询已暂停，请重新查询后读取前期对比';}
+  if(!denied&&overview){overview.scope=L.serial+'|'+scope;if(overview.status==='loading')overview.status='partial';}
+  if(L.merchantTrend?.status==='loading')L.merchantTrend.status='paused';
+  render();
+ }
  async function readAggregate(request,serial,allowCache=false,bounded=false,isCurrent=()=>true){
   if(!isCurrent())throw Error('查询已替换');
   if(usesPreparedAggregate(request)){
    if(!preparedAggregates)throw Error('统计读取组件未载入，请重新加载页面');
    const context=aggregateAccessContext(),page=state.page;let result;
    try{result=await preparedAggregates.read(request,{...((request.view||'full')==='full'&&['time','amount','latency'].includes(page)?{responseProfile:page+'-v1'}:{}),forceRefresh:preparedRefreshScope?.serial===serial&&preparedRefreshScope.page===page&&preparedRefreshScope.context===context,isCurrent:()=>isCurrent()&&serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&roleAllowed(page,'view')&&roleAllowed(page,'query')});}
-   catch(error){if(['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code))clearAggregateCache();throw error;}
+   catch(error){stopInterruptedAggregate(serial,error);throw error;}
    if(orderSource(L.catalog.find(p=>p.id===request.platformId))==='panda'&&!pandaCoverageMatches(result,request,true))throw Error('熊猫所选创建窗口完整性尚未确认；已核验截止范围的证据无效，请重新读取');
    return {...mergeParts([result],L.catalog.find(p=>p.id===request.platformId)),_aggregateReadAt:Date.parse(result._preparedPublication.computedAt),_aggregateAccessContext:context,_aggregateView:request.view||'full'};
   }
@@ -1215,6 +1232,7 @@
    if(!current())throw Error('查询已替换');
    try{const cached=(allowCache||L.queryRetrying)&&q!==request?cachedAggregate(q):null;const result=cached||await aggregateRead(q,serial);if(!current())throw Error('查询已替换');const part={...result,_aggregateCacheable:!!cached||aggregateComplete(q,result),startAt:q.startAt,endAt:q.endAt,_aggregateView:cached?cached._aggregateView||aggregateView(q):aggregateView(q)};parts.push(part);if(q!==request)rememberAggregate(q,part)}
    catch(e){
+    stopInterruptedAggregate(serial,e);
     if(!current())throw Error('查询已替换');
     const from=Date.parse(q.startAt),to=Date.parse(q.endAt),width=to-from;
     if(!/超时|timeout/i.test(e.message))throw e;
@@ -1497,7 +1515,7 @@
    function paintProgress(){progressPending=false;progressFrame=null;if(progressClosed||serial!==L.serial||state.page!==progressPage||!L.loading||L.dirty||scope!==aggregateQueryScope()||progressContext!==aggregateAccessContext()||progressNatives!==JSON.stringify(requests.map(aggregateNativeIdentity))||!roleAllowed(progressPage,'view')||!roleAllowed(progressPage,'query'))return;render();}
    function scheduleProgressPaint(){if(progressClosed||progressPending)return;progressPending=true;if(typeof window.requestAnimationFrame==='function')progressFrame=window.requestAnimationFrame(paintProgress);else Promise.resolve().then(paintProgress);}
    cancelProgressPaint=()=>{progressClosed=true;if(progressFrame!==null&&typeof window.cancelAnimationFrame==='function')window.cancelAnimationFrame(progressFrame);progressFrame=null;progressPending=false;};
-   async function worker(){while(index<requests.length&&serial===L.serial){const i=index++;if(phasedReadBusy()&&!statisticWindowsEnabled())setReadPhase(serial,'读取 '+platforms[i].name+' 的当期订单');try{const r=await readAggregate(requests[i],serial,!force);if(serial!==L.serial)return;results[i]=r}catch(e){if(serial!==L.serial)return;if(['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(e?.code||''))){L.retainedContent=null;L.results=[];L.comparisonResults=[];L.serial++;cancelDataReads();L.loading=false;L.error='登录或查询权限已变化，请重新验证';render();return;}if(['stale','invalid'].includes(e?.status))L.retainedContent=null;L.queryFailures.push({id:platforms[i].id,name:platforms[i].name,message:e.message||'读取失败',status:e.status||'failed'});L.queryWarnings=L.queryFailures.map(f=>f.name+'：'+f.message)}if(serial!==L.serial)return;done++;L.results=results.filter(Boolean);L.progress='正式数据读取：完整返回 '+results.filter(Boolean).length+' / '+requests.length+' 个平台'+(L.queryWarnings.length?'，未完成 '+L.queryWarnings.length+' 个':'')+'；已处理 '+done+' 个';if(preparedProgress)scheduleProgressPaint();else render()}}
+   async function worker(){while(index<requests.length&&serial===L.serial){const i=index++;if(phasedReadBusy()&&!statisticWindowsEnabled())setReadPhase(serial,'读取 '+platforms[i].name+' 的当期订单');try{const r=await readAggregate(requests[i],serial,!force);if(serial!==L.serial)return;results[i]=r}catch(e){if(serial!==L.serial)return;if(['stale','invalid'].includes(e?.status))L.retainedContent=null;L.queryFailures.push({id:platforms[i].id,name:platforms[i].name,message:e.message||'读取失败',status:e.status||'failed'});L.queryWarnings=L.queryFailures.map(f=>f.name+'：'+f.message)}if(serial!==L.serial)return;done++;L.results=results.filter(Boolean);L.progress='正式数据读取：完整返回 '+results.filter(Boolean).length+' / '+requests.length+' 个平台'+(L.queryWarnings.length?'，未完成 '+L.queryWarnings.length+' 个':'')+'；已处理 '+done+' 个';if(preparedProgress)scheduleProgressPaint();else render()}}
    // Main deposit orders get two bounded workers. Supplementary exclusions
    // start only after every order worker settles, then keep their single lane.
    await Promise.all(Array.from({length:Math.min(statisticWindowsEnabled()?50:state.page==='providers'?2:phasedReadBusy()?1:2,requests.length)},()=>worker()));cancelProgressPaint();if(serial!==L.serial)return;
@@ -1583,7 +1601,7 @@
  window.liveProviderWorkordersRetry=async function(){await ensureProviderWorkorders(true);capturePublishedView()};
  // A matching captured scope authorizes retry on every aggregate page, including risk.
  // Keep completed results; navigation resumes only missing or failed platforms.
- window.liveRetryFailed=async function(resume=false){
+ window.liveRetryFailed=async function(resume=L.queryPaused){
   if(state.page==='providers'&&L.providerReadMode==='published'){if(!L.dirty)return window.liveQuery(true);return;}
   if((isTeamWorkspace(state.page)||isSuccessAnalysis()||isDailyComparison()||isChannelStatus())&&!roleAllowed(state.page,'query')){toast('当前角色没有此视图查询权限');return;}
   

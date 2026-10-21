@@ -18,6 +18,17 @@ export async function ownerPreviewTransportRead<T>(read: () => Promise<T>, signa
 const terminalCodes = new Set(["account_disabled", "application_session_denied", "profile_denied", "role_permission_denied",
   "preview_denied", "invalid_role_response", "invalid_profile", "refresh_invalid", "session_changed", "session_logged_out", "permission_denied", "access_denied", "42501"]);
 const networkCodes = new Set(["owner_preview_network_error", "owner_preview_timeout", "refresh_network_error", "refresh_coordination_timeout", "refresh_coordination_failed", "network_error", "auth_network_error", "auth_timeout"]);
+export type OwnerPreviewVerificationStage = "role" | "preview-request" | "preview-body";
+// Deliberately exclude messages, account/session data and raw response codes.
+export function ownerPreviewVerificationDiagnostic(cause: unknown, stage: OwnerPreviewVerificationStage, elapsedMs: number) {
+  const error = cause && typeof cause === "object" ? cause as {code?: unknown; status?: unknown} : {};
+  const known = typeof error.code === "string" && (terminalCodes.has(error.code) || networkCodes.has(error.code));
+  const status = typeof error.status === "number" && Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? error.status : null;
+  const code = known ? error.code as string : status !== null ? "http_" + status : "unknown";
+  if (cause && typeof cause === "object") { try { Object.assign(cause, {verificationStage: stage}); } catch {} }
+  return {stage, code, elapsedMs: Number.isFinite(elapsedMs) ? Math.max(0, Math.round(elapsedMs)) : 0};
+}
+
 export function ownerPreviewRetryable(cause: unknown): boolean {
   if (!cause || typeof cause !== "object") return false;
   const error = cause as {status?: unknown; code?: unknown; name?: unknown};

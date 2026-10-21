@@ -61,12 +61,16 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
   const [passwordMessage, setPasswordMessage] = useState("");
   const menuRef = useRef<HTMLDivElement | null>(null);
   const operationRef = useRef(0);
+  const accessVerifiedRef = useRef<{accountId:string;token:string;checkedAt:number}|null>(null);
   const sessionRef = useRef(session);
   sessionRef.current = session;
 
-  function applyAuthenticated(nextSession: DashboardSession, nextProfile: DashboardProfile) {
+  function applyAuthenticated(nextSession: DashboardSession, nextProfile: DashboardProfile, accessVerified = false) {
     // A slower older profile response must not restore a revoked wider scope.
     if(!setDashboardDataViewer(nextProfile))return;
+    // Only a full profile + application-access check may seed the periodic monitor.
+    // A profile-only data event must never postpone the access check.
+    if(accessVerified)accessVerifiedRef.current={accountId:nextSession.user.id,token:nextSession.access_token,checkedAt:Date.now()};
     const saved = readSavedDashboardSession();
     if (saved?.access_token !== nextSession.access_token || saved?.refresh_token !== nextSession.refresh_token) saveDashboardSession(nextSession);
     setDashboardPresenceSession(nextSession, dashboardScopeIdentity(nextProfile));
@@ -80,6 +84,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
 
   function clearAuthenticatedView() {
     operationRef.current += 1;
+    accessVerifiedRef.current = null;
     stopDashboardPresence();
     clearLastActivity();
     clearDashboardDataCaches();
@@ -152,7 +157,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
         }
         await verifyDashboardAccess(active);
         const current = readSavedDashboardSession();
-        if (!cancelled && current?.access_token === active.access_token && current.user.id === active.user.id) applyAuthenticated(active, nextProfile);
+        if (!cancelled && current?.access_token === active.access_token && current.user.id === active.user.id) applyAuthenticated(active, nextProfile, true);
       } catch (cause) {
         if (cancelled) return;
         const current = readSavedDashboardSession();
@@ -193,6 +198,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       }
       if (previous.user.id !== saved.user.id) {
         operationRef.current += 1;
+        accessVerifiedRef.current = null;
         stopDashboardPresence();
         setDashboardDataViewer(null);
         clearDashboardDataCaches();
@@ -216,7 +222,9 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
 
   useEffect(() => {
     if (!enabled || !session?.user.id) return;
-    let disposed = false, checking = false, checkedToken = "", checkedAt = 0;
+    const verified = accessVerifiedRef.current;
+    const sameSession = verified?.accountId === session.user.id && verified.token === session.access_token;
+    let disposed = false, checking = false, checkedToken = sameSession ? verified.token : "", checkedAt = sameSession ? verified.checkedAt : 0;
     const check = async () => {
       if (disposed || checking) return;
       const previous = sessionRef.current;
@@ -239,7 +247,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
           await verifyDashboardAccess(active);
           const current = readSavedDashboardSession();
           if (!disposed && current?.access_token === active.access_token && current.user.id === active.user.id) {
-            applyAuthenticated(active, nextProfile);
+            applyAuthenticated(active, nextProfile, true);
             checkedToken = active.access_token; checkedAt = Date.now();
           }
         } else setAuthWarning("");
@@ -289,7 +297,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       await verifyDashboardAccess(nextSession);
       if (operation !== operationRef.current) return;
       writeLastActivity();
-      applyAuthenticated(nextSession, nextProfile);
+      applyAuthenticated(nextSession, nextProfile, true);
       setPassword("");
     } catch (err) {
       if (operation === operationRef.current) setError(err instanceof Error ? err.message : "登录失败");
@@ -322,7 +330,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
       await verifyDashboardAccess(nextSession);
       if (operation !== operationRef.current) return;
       writeLastActivity();
-      applyAuthenticated(nextSession, nextProfile);
+      applyAuthenticated(nextSession, nextProfile, true);
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");

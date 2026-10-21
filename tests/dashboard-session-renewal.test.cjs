@@ -457,7 +457,7 @@ test('access-check distinguishes expired application session, disabled account a
 });
 
 // Render the real gate with minimal hooks to verify terminal-error presentation and stale-request isolation.
-function gateHarness(profileRead) {
+function gateHarness(profileRead, accessRead=async()=>({})) {
   const h=harness(),old=session();h.api.saveDashboardSession(old);
   const intervals=new Map(),listeners=new Map();let timerId=0;
   h.window.setInterval=(fn,ms)=>{intervals.set(++timerId,{fn,ms});return timerId;};
@@ -472,10 +472,10 @@ function gateHarness(profileRead) {
     useEffect:(fn,values)=>{const i=eindex++;if(!deps[i]||values.some((v,k)=>v!==deps[i][k])){deps[i]=values;pending.push(()=>{cleanups[i]?.();cleanups[i]=fn();});}}};
   const box={exports:{}},filename=path.join(repo,'src/components/DashboardAuthGate.tsx');
   const text=ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
-  vm.runInNewContext(text,{module:box,exports:box.exports,Error,window:h.window,document:{addEventListener(){},removeEventListener(){}},StorageEvent:class extends Event{},Date,
+  vm.runInNewContext(text,{module:box,exports:box.exports,Error,window:h.window,document:{addEventListener(){},removeEventListener(){}},StorageEvent:class extends Event{},Date:class extends Date {static now(){return h.now();}},
     require:name=>{
       if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
-      if(name.endsWith('/dashboardAuthClient'))return{...h.api,dashboardAuthEnabled:()=>true,fetchDashboardProfile:profileRead,verifyDashboardAccess:async()=>({}),signOutDashboard:async()=>({})};
+      if(name.endsWith('/dashboardAuthClient'))return{...h.api,dashboardAuthEnabled:()=>true,fetchDashboardProfile:profileRead,verifyDashboardAccess:accessRead,signOutDashboard:async()=>({})};
       if(name.endsWith('/dashboardDataScope'))return{effectiveDashboardDataScope:()=>({mode:'all',countries:[]}),dashboardScopeLabel:()=>'',dashboardScopeIdentity:profile=>JSON.stringify([profile.auth_user_id,profile.data_scope,profile.updated_at])};
       if(name.endsWith('/dashboardPresenceClient'))return{setDashboardPresenceSession:(active,identity)=>presence.push({action:'set',active,identity}),stopDashboardPresence:()=>presence.push({action:'stop'})};
       if(name.endsWith('/dashboardDataClient'))return{clearDashboardDataCaches(){},setDashboardDataViewer:()=>true,DASHBOARD_PROFILE_EVENT:'fixture-profile'};
@@ -510,6 +510,7 @@ test('a verified gate keeps its authenticated children through a temporary perio
   const profile={auth_user_id:A,username:'fixture',role:'viewer',active:true};let reads=0;
   const g=gateHarness(async()=>{if(++reads===1)return profile;throw Error('synthetic network interruption');});
   await tick();assert.equal(g.render().type,'provider');await tick();
+  g.h.advance(30000);for(const timer of g.intervals.values())if(timer.ms===30000)timer.fn();await tick();
   const after=g.render();assert.equal(after.type,'provider');assert.equal(after.props.value.profile.auth_user_id,A);
   assert.match(g.text(),/已保留会话，正在自动重试/);assert(g.h.saved());
   g.dispose();assert.equal(g.intervals.size,0);assert.equal([...g.listeners.values()].some(set=>set.size),false);
@@ -517,12 +518,30 @@ test('a verified gate keeps its authenticated children through a temporary perio
 test('a delayed same-account old-token denial cannot remove a freshly renewed verified gate',async()=>{
   const profile={auth_user_id:A,username:'fixture',role:'viewer',active:true},wait=deferred();let reads=0;
   const g=gateHarness(()=>++reads===2?wait.promise:Promise.resolve(profile));
-  await tick();g.render();await tick();assert.equal(reads,2);
+  await tick();g.render();await tick();assert.equal(reads,1);
+  g.h.advance(30000);for(const timer of g.intervals.values())if(timer.ms===30000)timer.fn();await tick();assert.equal(reads,2);
   const fresh=session('renewed-before-old-denial');g.h.api.saveDashboardSession(fresh);g.render();await tick();
   wait.reject(new g.h.api.DashboardHttpError('登录会话已失效',401,'application_session_denied'));await tick();
   const after=g.render();assert.equal(after.type,'provider');assert.equal(after.props.value.session.access_token,fresh.access_token);
   assert.equal(g.h.saved().access_token,fresh.access_token);assert.doesNotMatch(g.text(),/登录会话已失效/);g.dispose();
   assert.equal(g.intervals.size,0);
+});
+
+test('full successful initialization seeds only the matching session and does not repeat profile/access immediately',async()=>{
+ const profile={auth_user_id:A,username:'fixture',role:'viewer',active:true};let reads=0,access=0;
+ const g=gateHarness(async()=>{reads++;return profile},async()=>{access++;});
+ await tick();g.render();await tick();assert.equal(reads,1);assert.equal(access,1);
+ g.h.window.dispatchEvent(new Event('focus'));g.h.window.dispatchEvent(new Event('online'));await tick();assert.equal(reads,1);assert.equal(access,1);
+ g.h.advance(29999);g.h.window.dispatchEvent(new Event('focus'));await tick();assert.equal(reads,1);
+ g.h.advance(1);g.h.window.dispatchEvent(new Event('focus'));await tick();assert.equal(reads,2);assert.equal(access,2);
+ g.h.api.saveDashboardSession(session('fresh-token'));g.render();await tick();assert.equal(reads,3);assert.equal(access,3);g.dispose();
+});
+test('a profile-only update cannot postpone the full periodic access check or protect a revoked session',async()=>{
+ const profile={auth_user_id:A,username:'fixture',role:'viewer',active:true};let reads=0,access=0,deny=false;
+ const g=gateHarness(async()=>{reads++;return profile},async()=>{access++;if(deny)throw new g.h.api.DashboardHttpError('synthetic revoked',403,'application_session_denied')});
+ await tick();g.render();await tick();g.h.advance(29999);
+ const event=new Event('fixture-profile');event.detail={session:g.h.saved(),profile:{...profile,updated_at:'changed'}};g.h.window.dispatchEvent(event);g.render();await tick();assert.equal(reads,1);
+ deny=true;g.h.advance(1);g.h.window.dispatchEvent(new Event('focus'));await tick();g.render();assert.equal(access,2);assert.equal(g.h.saved(),null);assert.doesNotMatch(g.text(),/authorized-child/);g.dispose();
 });
 
 (async()=>{

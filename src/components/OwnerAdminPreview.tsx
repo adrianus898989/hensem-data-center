@@ -4,7 +4,7 @@ import { normalizedManagementPermissions, type DashboardProfile, type DashboardS
 import { makeOwnerPreviewDocument, OWNER_PREVIEW_DRAFT_KEYS, ownerPreviewDraftAllowed } from "@/lib/ownerPreviewDocument";
 
 import { restoreApprovedAdmin } from "@/lib/adminPreviewRestore";
-import { ownerPreviewRetryable, ownerPreviewTransportRead, ownerPreviewVerificationAttempt, retryOwnerPreviewVerification } from "@/lib/ownerPreviewVerification";
+import { ownerPreviewVerificationDiagnostic, type OwnerPreviewVerificationStage, ownerPreviewRetryable, ownerPreviewTransportRead, ownerPreviewVerificationAttempt, retryOwnerPreviewVerification } from "@/lib/ownerPreviewVerification";
 import { adminPreviewRequest } from "@/lib/adminPreviewClient";
 import AdminControlCenter from "./AdminControlCenter";
 import WorkOrderAccountAdmin from "./WorkOrderAccountAdmin";
@@ -64,7 +64,9 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
       const beginAuthority=()=>{authorityInput=sessionRef.current;authorityCurrent=authorityInput;return authorityInput};
       const stale=()=>obsolete(mine)||staleAuthority();
       try {
-        const result=await retryOwnerPreviewVerification(()=>ownerPreviewVerificationAttempt(async attemptSignal=>{
+        const result=await retryOwnerPreviewVerification(async()=>{
+          let stage:OwnerPreviewVerificationStage="role";const started=Date.now();
+          try{return await ownerPreviewVerificationAttempt(async attemptSignal=>{
           if(stale()||attemptSignal.aborted)throw abandon();
           const policy=await readDashboardRoleAccess(beginAuthority(),attemptSignal,observeSession);
           if(stale()||attemptSignal.aborted)throw abandon();
@@ -72,18 +74,23 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
           const changed=check&&published&&JSON.stringify(policy)!==publishedPolicy;
           if(changed){published=false;clearPreview();setVerificationStatus("角色权限已更新，正在重新验证后台…")}
           const quick=check&&!recovering&&!suspendedRef.current;
-          let response=await adminPreviewRequest(beginAuthority(),quick?"?check=1":"",{signal:attemptSignal},observeSession);
+          stage="preview-request";let response=await adminPreviewRequest(beginAuthority(),quick?"?check=1":"",{signal:attemptSignal},observeSession);
           if(stale()||attemptSignal.aborted)throw abandon();
-          if(quick){const access=await ownerPreviewTransportRead(()=>response.json(),attemptSignal);
+          if(quick){stage="preview-body";const access=await ownerPreviewTransportRead(()=>response.json(),attemptSignal);
             if(!access||typeof access!=="object"||Array.isArray(access)||access.ok!==true||access.canView!==true||typeof access.canManage!=="boolean")throw Error("后台查看权限响应不完整，请重新验证。");
             if(stale()||attemptSignal.aborted)throw abandon();}
           // Recovery always rechecks permissions and reads fresh protected HTML.
           // Reuse the mounted frame only when both still exactly match.
-          if(quick&&(!published||changed))response=await adminPreviewRequest(beginAuthority(),"",{signal:attemptSignal},observeSession);
-          const html=quick&&published&&!changed?null:await ownerPreviewTransportRead(()=>response.text(),attemptSignal);
+          if(quick&&(!published||changed)){stage="preview-request";response=await adminPreviewRequest(beginAuthority(),"",{signal:attemptSignal},observeSession);}
+          stage="preview-body";const html=quick&&published&&!changed?null:await ownerPreviewTransportRead(()=>response.text(),attemptSignal);
           if(stale()||attemptSignal.aborted)throw abandon();
           return {policy,html};
-        },controller.signal),controller.signal,nextAttempt=>{
+          },controller.signal)}catch(cause){
+            if(!controller.signal.aborted&&!(cause&&typeof cause==="object"&&"name" in cause&&cause.name==="AbortError"))
+              console.warn("后台验证读取失败",ownerPreviewVerificationDiagnostic(cause,stage,Date.now()-started));
+            throw cause;
+          }
+        },controller.signal,nextAttempt=>{
           if(stale())throw abandon();recovering=true;retrying=true;suspendPreview();
           setVerificationStatus(`连接暂时不可用，正在重新验证查看权限（${nextAttempt}/3）…`);
         });
