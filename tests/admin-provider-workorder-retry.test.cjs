@@ -50,13 +50,17 @@ test('changed filters or scope and a still loading main query cannot invoke atta
 
 for(const previousPage of ['collection','latency','provider_daily'])test('opening providers from '+previousPage+' waits for manual query before loading workorders',async()=>{
  const h=harness({page:previousPage,ancillaryHandler:true});await settle();setupHandler(h);await h.c.liveQuery();await settle();
- const orders=h.L.results,before=h.calls.length;
+ const orders=h.L.results,before=h.calls.length,originalOrderData=JSON.stringify(orders[0]);
  assert.equal(h.L.direction,'charge');assert.equal(h.L.dirty,false);assert.equal(h.L.loadedView,'full');assert(orders.length);
+ if(previousPage==='latency'){assert.equal(h.L.comparisonStatus,'idle');assert.equal(h.L.comparisonResults.length,0);}
  h.c.setPage('providers');await settle();assert.equal(h.calls.length,before,'navigation waits');await h.c.liveQuery(false);await settle();
- const requests=h.calls.slice(before);
- assert.equal(requests.filter(q=>q.action==='aggregate').length,0,'navigation must retain the completed order query');
+ const requests=h.calls.slice(before),aggregates=requests.filter(q=>q.action==='aggregate');
+ if(previousPage==='latency'){
+  assert.deepEqual(aggregates,[{action:'aggregate',view:'providers',platformId:P.id,startAt:'2026-09-20T18:30:00.000Z',endAt:'2026-09-21T18:30:00.000Z',direction:'charge',status:'all',currency:'INR',offset:0,limit:20}],'providers needs only its previously unused comparison, never a second current read');
+ }else assert.equal(aggregates.length,0,'navigation must retain completed current and comparison queries');
  assert.equal(requests.filter(q=>q.action==='workorders').length,1,'the workorder attachment has never been queried for this scope');
- assert.equal(h.L.results[0].total,orders[0].total);assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);
+ assert.equal(h.L.results.length,1);const current=h.L.results[0];assert.equal(current._aggregateCacheHit,true);assert.equal(current.platform.id,orders[0].platform.id);assert.equal(current.startAt,orders[0].startAt);assert.equal(current.endAt,orders[0].endAt);assert.equal(current.total,orders[0].total);assert.equal(JSON.stringify(current.summary),JSON.stringify(orders[0].summary));assert.equal(JSON.stringify(current.groups),JSON.stringify(orders[0].groups));assert.equal(JSON.stringify(orders[0]),originalOrderData,'the cached source result is not mutated');
+ assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.L.comparisonResults.length,1);assert.equal(h.L.comparisonResults[0].startAt,'2026-09-20T18:30:00.000Z');assert.equal(h.L.comparisonResults[0].endAt,'2026-09-21T18:30:00.000Z');assert.equal(h.L.workorders?.byDirection.charge.submittedCount,12);
  assert.equal(h.L.workordersLoading,false);assert.equal(h.L.workordersError,'');
 });
 

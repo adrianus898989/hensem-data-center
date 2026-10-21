@@ -1683,11 +1683,14 @@ test('new successful-duration queries use v2 without changing other pages or reu
 });
 
 
-test('fresh latency comparisons keep provider requests on the legacy contract and only the current full query uses v2',async()=>{
+test('fresh latency queries read only the exact current full v2 window and leave unused comparisons idle',async()=>{
  for(const status of ['all','pending']){
   const h=await ready({manualOverview:true}),calls=[];h.c.setPage('latency');await settle();setScope(h,{status,platform:P.id});
   h.setHandler(q=>{if(q.action!=='aggregate')return aggregate();calls.push(q);if(q.view==='providers'&&q.durationVersion)throw Error('invalid_duration_view');const r=completeAggregate(P);if(q.durationVersion===2)r.durationVersion=2;return r});
-  await h.c.liveQuery();await settle();assert.equal(calls.length,2,status);const [current,previous]=calls;assert.equal(current.durationVersion,2);assert.notEqual(current.view,'providers');assert(!('durationVersion'in previous));assert.equal(previous.view,status==='all'?'providers':undefined);assert(Date.parse(previous.endAt)<=Date.parse(current.startAt));assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.L.comparisonError,'');assert.equal(h.L.results[0].durationVersion,2);
+  await h.c.liveQuery();await settle();
+  assert.deepEqual(calls.map(q=>({action:q.action,platformId:q.platformId,startAt:q.startAt,endAt:q.endAt,view:q.view||'full',durationVersion:q.durationVersion,status:q.status})),[{action:'aggregate',platformId:P.id,startAt:'2026-09-21T18:30:00.000Z',endAt:'2026-09-22T00:30:00.000Z',view:'full',durationVersion:2,status}],status+' must not read a previous window');
+  assert.equal(h.L.comparisonStatus,'idle');assert.equal(h.L.comparisonError,'');assert.equal(h.L.comparisonResults.length,0);
+  assert.equal(h.L.results.length,1);const result=h.L.results[0];assert.equal(result.platform.id,P.id);assert.equal(result.startAt,calls[0].startAt);assert.equal(result.endAt,calls[0].endAt);assert.equal(result.durationVersion,2);assert.equal(result.total,10);assert.equal(result.summary[0].all_count,10);assert.equal(result.summary[0].success_count,5);
  }
 });
 
