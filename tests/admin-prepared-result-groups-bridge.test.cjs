@@ -1,0 +1,32 @@
+// Real bridge and shared host; synthetic publications only.
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const prefix=fs.readFileSync(path.join(__dirname,'admin-live-bridge.test.cjs'),'utf8').split(/\ntest\(/)[0];
+const {load,session}=new Function('require','__dirname',prefix+';return {load,session};')(require,__dirname);
+const hostPrefix=fs.readFileSync(path.join(__dirname,'admin-prepared-integration.test.cjs'),'utf8').split(/\nfor\(const page/)[0];
+const {ready,response,settle}=new Function('require','__dirname',hostPrefix+';return {ready,response,settle};')(require,__dirname);
+const request={action:'aggregate',platformId:'10000000-0000-4000-8000-000000000001',startAt:'2026-10-10T18:30:00.000Z',endAt:'2026-10-11T18:30:00.000Z',successStartAt:'2026-10-10T18:30:00.000Z',successEndAt:'2026-10-11T18:30:00.000Z',successBasis:'success',direction:'charge',status:'all',currency:'INR',durationVersion:2,offset:0,limit:20};
+const base={action:'aggregatePrepared',publicationVersion:2,requests:[request]},clone=x=>JSON.parse(JSON.stringify(x));
+const names=(profile,q)=>profile==='time-v1'?['hourly','provider']:profile==='amount-v1'?(q.amountBands?['amount','amount_range','provider']:['amount','provider']):['latency','latency_thresholds'];
+function compact(q){const r=response(q);for(const item of r.items){const groups=names(q.responseProfile,item.request);item.result.groups=Object.fromEntries(groups.map(key=>[key,item.result.groups[key]||[]]));item.resultGroups={contract:'prepared-result-groups-v1',profile:q.responseProfile,groups};}return r;}
+test('bridge whitelist forwards only exact V2 full response profiles without changing native request',()=>{
+ const check=load().api.validateAdminLiveRequest;for(const responseProfile of ['time-v1','amount-v1','latency-v1']){const r=check({...base,responseProfile});assert.equal(r.responseProfile,responseProfile);assert.deepEqual(clone(r.requests),base.requests);}
+ for(const patch of [{responseProfile:null},{responseProfile:true},{responseProfile:{}},{responseProfile:'unknown'},{responseProfile:'time-v1',providerReuseNames:[]},{responseProfile:'time-v1',providerLeafAliases:'items-fee-items-v1'},{responseProfile:'time-v1',requests:[request,request,request,request]},{responseProfile:'time-v1',publicationVersion:undefined},{responseProfile:'time-v1',requests:[{...request,view:'providers'}]},{responseProfile:'latency-v1',requests:[{...request,durationVersion:undefined}]},{responseProfile:'time-v1',requests:[{...request,responseProfile:'time-v1'}]}])assert.throws(()=>check({...base,...patch}));
+});
+test('owner and assigned routes require the matching actual page before any HTTP request',async()=>{
+ for(const assigned of [false,true])for(const page of ['time','amount','latency']){const h=load(),q={...base,responseProfile:page+'-v1'};await h.api.adminLiveRequest(session,q,undefined,{assigned,page});assert.equal(h.calls.length,1);const body=JSON.parse(h.calls[0].init.body);assert.equal(body.p_page,page);assert.equal(body.p_request.responseProfile,page+'-v1');assert.deepEqual(body.p_request.requests,base.requests);for(const other of ['matrix','overview',page==='time'?'amount':'time'])await assert.rejects(h.api.adminLiveRequest(session,q,undefined,{assigned,page:other}),/响应范围与页面不符/);assert.equal(h.calls.length,1);}
+});
+for(const page of ['time','amount','latency'])test(page+' real host negotiates compact groups through bridge and renders without omitted dimension zeros',async()=>{
+ const h=await ready(page),check=load().api.validateAdminLiveRequest;let compactCalls=0,providerCalls=0;
+ h.setHandler(raw=>{if(raw.action!=='aggregatePrepared')return {};const q=check(raw);if(q.requests.every(r=>(r.view||'full')==='full')){assert.equal(q.responseProfile,page+'-v1');compactCalls++;return compact(q);}assert.equal(q.responseProfile,undefined);providerCalls++;return response(q);});
+ await h.c.liveQuery();await settle();assert(compactCalls>0);assert.equal(h.L.queryFailures.length,0);assert.equal(h.L.results.length,1);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);const r=h.L.results[0],profile=page+'-v1',original=h.calls.find(q=>q.responseProfile===profile).requests[0];assert.deepEqual(Object.keys(r.groups).sort(),names(profile,original));assert.equal(r.groups.matrix,undefined);assert.equal(r._parts[0].groups.matrix,undefined);assert.equal(r._preparedPublication.sourceComplete,false);if(page==='latency')assert.equal(r.groups.provider,undefined);
+ const n=compactCalls;await h.c.liveQuery();await settle();assert.equal(compactCalls,n,'repeat reuses this profile only');await h.c.liveRefresh();await settle();assert(compactCalls>n);
+});
+test('host time-to-amount-to-matrix navigation reads distinct response coverage; full old server fallback remains valid',async()=>{
+ const h=await ready('time'),filters=Object.fromEntries(['from','to','successFrom','successTo','successBasis','direction','status'].map(k=>[k,h.L[k]]));h.setHandler(q=>q.action==='aggregatePrepared'?(q.responseProfile?compact(q):response(q)):{});
+ await h.c.liveQuery();await settle();const before=h.calls.filter(q=>q.action==='aggregatePrepared').length;h.c.setPage('amount');Object.assign(h.L,filters);await h.c.liveQuery();await settle();assert(h.calls.filter(q=>q.action==='aggregatePrepared').length>before);assert.equal(h.L.results[0].groups.hourly,undefined);assert(h.L.results[0].groups.amount);
+ h.c.setPage('matrix');Object.assign(h.L,filters);await h.c.liveQuery();await settle();assert.equal(h.L.queryFailures.length,0);assert(h.L.results[0].groups.matrix);assert.equal(h.L.results[0]._preparedResultGroups,undefined);assert(h.calls.filter(q=>q.action==='aggregatePrepared').some(q=>!q.responseProfile&&q.requests.some(r=>(r.view||'full')==='full')));
+ const old=await ready('time');await old.c.liveQuery();await settle();assert.equal(old.L.queryFailures.length,0);assert(old.L.results[0].groups.matrix);assert.equal(old.L.results[0]._preparedResultGroups,undefined);
+});
+test('a malformed host compact reply never falls back to raw queries or publishes a complete result',async()=>{
+ const h=await ready('time');h.setHandler(q=>{if(q.action!=='aggregatePrepared')return {};const r=compact(q);delete r.items[0].result.groups.hourly;return r;});await h.c.liveQuery();await settle();assert.equal(h.L.results.length,0);assert.equal(h.L.queryFailures.length,1);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);
+});

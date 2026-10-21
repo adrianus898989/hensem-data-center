@@ -53,19 +53,35 @@
   if(['successStartAt','successEndAt','successBasis'].some(key=>Object.hasOwn(q,key))){const successStart=instant(q.successStartAt),successEnd=instant(q.successEndAt);if(!successStart||!successEnd||successStart>=successEnd||!['success','source_updated'].includes(q.successBasis))throw failure('invalid');}
   const key=encode(q);if(key.length>32768)throw failure('invalid');return key;
  }
- function validateResult(item,q,expected,now,publicationVersion){
+ // Transport profiles never alter the server's exact native query identity.
+ function profileGroups(profile,q){
+  if(profile===undefined)return null;
+  if((q.view||'full')!=='full'||Object.hasOwn(q,'durationRange'))throw failure('invalid');
+  if(profile==='time-v1')return ['hourly','provider'];
+  if(profile==='amount-v1')return Object.hasOwn(q,'amountBands')?['amount','amount_range','provider']:['amount','provider'];
+  if(profile==='latency-v1'&&q.durationVersion===2)return ['latency','latency_thresholds'];
+  throw failure('invalid');
+ }
+ function validateResult(item,q,expected,now,publicationVersion,responseProfile){
   if(!item||!statuses.has(item.status))throw failure('invalid');
-  if(item.status!=='ready'){if(item.result!==null)throw failure('invalid');throw failure(item.status);}
+  if(item.status!=='ready'){if(item.result!==null||Object.hasOwn(item,'resultGroups'))throw failure('invalid');throw failure(item.status);}
   const p=item.publication,r=item.result;
   if(!p||typeof p.id!=='string'||!p.id||!['string','number'].includes(typeof p.generation)||String(p.generation)===''||typeof p.generation==='number'&&!Number.isSafeInteger(p.generation)||p.calculationComplete!==true||typeof p.sourceComplete!=='boolean'||!instant(p.computedAt)||!instant(p.expiresAt)||!instant(p.cutoff)||Date.parse(p.expiresAt)<=Date.parse(p.computedAt))throw failure('invalid');
   if(publicationVersion===2){
    if(!['fresh','refresh_due'].includes(p.freshness)||!['idle','queued','running','failed'].includes(p.refreshState)||p.nextRefreshAt!=null&&!instant(p.nextRefreshAt))throw failure('invalid');
   }else if(Date.parse(p.expiresAt)<=now)throw failure('stale');
-  if(!r||r.version!==1||!r.platform||Object.keys(expected).some(key=>r.platform[key]!==expected[key])||instant(r.startAt)!==instant(q.startAt)||instant(r.endAt)!==instant(q.endAt)||!Array.isArray(r.summary)||!Array.isArray(r.rows)||r.rows.length||!r.groups||r.partial===true||r.complete===false||r.available===false||r.error||r.meta?.partial===true||r.coverage?.calculationComplete===false||Object.hasOwn(r,'_parts')||Object.hasOwn(r,'_preparedPublication'))throw failure('invalid');
+  if(!r||r.version!==1||!r.platform||Object.keys(expected).some(key=>r.platform[key]!==expected[key])||instant(r.startAt)!==instant(q.startAt)||instant(r.endAt)!==instant(q.endAt)||!Array.isArray(r.summary)||!Array.isArray(r.rows)||r.rows.length||!r.groups||r.partial===true||r.complete===false||r.available===false||r.error||r.meta?.partial===true||r.coverage?.calculationComplete===false||Object.hasOwn(r,'_parts')||Object.hasOwn(r,'_preparedPublication')||Object.hasOwn(r,'_preparedResultGroups'))throw failure('invalid');
   if(Object.hasOwn(q,'successStartAt')&&(instant(r.successStartAt)!==instant(q.successStartAt)||instant(r.successEndAt)!==instant(q.successEndAt)||r.successBasis!==q.successBasis))throw failure('invalid');
-  const view=q.view||'full',dimensions=view==='providers'?['provider']:view==='drilldown'?['daily',...(q.kind==='latency'||q.durationRange?['provider','provider_daily']:[])]:['provider','daily','hourly','amount','matrix','latency','pending_age',...(q.amountBands?['amount_range','matrix_range']:[])];
+  let resultGroups=null;
+  if(Object.hasOwn(item,'resultGroups')){
+   const marker=item.resultGroups,groups=profileGroups(responseProfile,q);
+   if(publicationVersion!==2||!groups||!marker||Object.prototype.toString.call(marker)!=='[object Object]'||Object.keys(marker).sort().join(',')!=='contract,groups,profile'||marker.contract!=='prepared-result-groups-v1'||marker.profile!==responseProfile||encode(marker.groups)!==encode(groups)||encode(Object.keys(r.groups).sort())!==encode(groups))throw failure('invalid');
+   resultGroups={contract:marker.contract,profile:responseProfile,groups};
+  }
+  // A server without profile support must still return its full legacy DTO.
+  const view=q.view||'full',dimensions=resultGroups?resultGroups.groups:view==='providers'?['provider']:view==='drilldown'?['daily',...(q.kind==='latency'||q.durationRange?['provider','provider_daily']:[])]:['provider','daily','hourly','amount','matrix','latency','pending_age',...(q.amountBands?['amount_range','matrix_range']:[])];
   if(dimensions.some(key=>!Array.isArray(r.groups[key]))||Object.values(r.groups).some(rows=>!Array.isArray(rows))||view==='drilldown'&&(r.complete!==true||r.hasMore!==false)||q.durationVersion===2&&r.durationVersion!==2)throw failure('invalid');
-  return {...r,_preparedPublication:{...p,status:'ready',...(publicationVersion===2?{publicationVersion:2,freshness:Date.parse(p.expiresAt)<=now?'refresh_due':p.freshness}:{})}};
+  return {...r,...(resultGroups?{_preparedResultGroups:copy(resultGroups)}:{}),_preparedPublication:{...p,status:'ready',...(publicationVersion===2?{publicationVersion:2,freshness:Date.parse(p.expiresAt)<=now?'refresh_due':p.freshness}:{})}};
  }
  function create(options){
   if(typeof options?.request!=='function'||typeof options.context!=='function'||typeof options.platform!=='function')throw TypeError('Prepared aggregates require request, context and platform callbacks');
@@ -85,9 +101,9 @@
   const pollInterval=Number.isFinite(options.derivedPollIntervalMs)?Math.max(250,Math.min(60000,options.derivedPollIntervalMs)):1500;
   const pollMaxAttempts=Number.isFinite(options.derivedPollMaxAttempts)?Math.max(1,Math.min(40,Math.floor(options.derivedPollMaxAttempts))):40;
   const completed=new Map();let completedBytes=0,completedGeneration=0;
-  const jobs=new Map(),queue=[],batches=new Set();let generation=0,context=null,scheduled=false;
+  const jobs=new Map(),queue=[],batches=new Set();let generation=0,context=null,completedContext=null,scheduled=false;
   const nativeKey=platform=>encode([identity(platform),platform.capabilities??null]);
-  const completedKey=(scope,native,q)=>encode([scope,native,q]);
+  const completedKey=(scope,native,q,profile)=>encode([scope,native,q,profile??null]);
   function completedFamily(scope,native,q){const {providers,direction,view,offset,limit,...scopeQuery}=q;return encode([scope,native,scopeQuery]);}
   function forgetCompleted(key){const entry=completed.get(key);if(entry){completedBytes-=entry.bytes;completed.delete(key);}}
   function clearCompleted(){completed.clear();completedBytes=0;completedGeneration++;}
@@ -101,7 +117,7 @@
    try{
     // Revalidate the immutable source envelope, including current v1 expiry.
     // V2 expiry is a refresh hint; retain its original clock and refresh state.
-    const result=validateResult(entry.item,q,native,stamp,publicationVersion);
+    const result=validateResult(entry.item,q,native,stamp,publicationVersion,entry.responseProfile);
     completed.delete(key);completed.set(key,entry);return {result,entry};
    }catch{forgetCompleted(key);return null;}
   }
@@ -131,12 +147,12 @@
   }
   function completedResult(key,scope,nativeIdentity,q,native){return cachedCompleted(key,q,native)||reusableCompleted(scope,nativeIdentity,q,native);}
   function rememberCompleted(job,item){
-   if(!completionEnabled||job.completedInvalidated||job.generation!==generation||job.completedGeneration!==completedGeneration||job.context!==context)return;
+   if(!completionEnabled||job.completedInvalidated||job.generation!==generation||job.completedGeneration!==completedGeneration||job.context!==context||job.completedContext!==completedContext)return;
    const ttl=completionTtl(job.q,job.native);if(!ttl)return;
    const readAt=now(),expiresAt=Math.min(readAt+ttl,publicationVersion===1?Date.parse(item.publication.expiresAt):Infinity);if(!Number.isFinite(readAt)||expiresAt<=readAt)return;
    let saved,bytes;try{saved=copy(item);bytes=(JSON.stringify(saved).length+job.completedKey.length+job.family.length)*2+64;}catch{return;}
    if(bytes>2*1024*1024&&Object.hasOwn(saved,'providerReuse')){delete saved.providerReuse;bytes=(JSON.stringify(saved).length+job.completedKey.length+job.family.length)*2+64;}
-   if(bytes>2*1024*1024)return;forgetCompleted(job.completedKey);completed.set(job.completedKey,{item:saved,readAt,expiresAt,bytes,family:job.family,reuseScope:encode([job.context,job.nativeKey,encode((({providers,...rest})=>rest)(job.q))])});completedBytes+=bytes;
+   if(bytes>2*1024*1024)return;forgetCompleted(job.completedKey);completed.set(job.completedKey,{item:saved,readAt,expiresAt,bytes,responseProfile:job.responseProfile,family:job.family,reuseScope:encode([job.completedContext,job.nativeKey,encode((({providers,...rest})=>rest)(job.q))])});completedBytes+=bytes;
    while(completed.size>128||completedBytes>completedByteCap)forgetCompleted(completed.keys().next().value);
   }
   const authorityDenied=error=>['42501','ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(String(error?.code||''));
@@ -146,7 +162,16 @@
   function release(job){stopTimers(job);job.phase='finished';if(jobs.get(job.key)===job)jobs.delete(job.key);}
   function cancel(){generation++;for(const job of jobs.values()){stopTimers(job);for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));}jobs.clear();queue.length=0;for(const batch of batches)batch.controller.abort();batches.clear();}
   function clear(){clearCompleted();cancel();}
-  function syncContext(){let current;try{current=contextValue();}catch(error){clear();context=null;throw error;}if(context!==current){clear();context=current;}return current;}
+  function syncContext(){
+   let current,reuse;try{current=contextValue();reuse=typeof options.completedReuseContext==='function'?options.completedReuseContext():current;if(typeof reuse!=='string'||!reuse)throw failure('cancelled');}
+   catch(error){clear();context=completedContext=null;throw error;}
+   // Only completed, exact DTOs may share an explicitly supplied authority
+   // scope across pages. Active work remains page-owned and is cancelled.
+   // Existing callers without this option retain context-wide invalidation.
+   if(completedContext!==reuse){clear();completedContext=reuse;}
+   else if(context!==current)cancel();
+   context=current;return current;
+  }
   function active(waiter){
    if(waiter.done)return false;
    try{if(waiter.signal?.aborted||waiter.job.generation!==generation||waiter.job.context!==syncContext()||waiter.isCurrent&&!waiter.isCurrent()||nativeKey(options.platform(waiter.job.q.platformId))!==waiter.job.nativeKey)throw failure('cancelled');return true;}
@@ -157,7 +182,7 @@
   function schedule(){if(scheduled)return;scheduled=true;Promise.resolve().then(()=>{scheduled=false;drain();});}
   function deliver(job,error,result){let delivered=0;for(const waiter of [...job.waiters])if(active(waiter)){settle(waiter,error,result);delivered++;}release(job);return delivered;}
   function pollable(item,job){
-   if(!pollMaxMs||publicationVersion!==2||item?.result!==null||item.publication!==null)return false;
+   if(!pollMaxMs||publicationVersion!==2||item?.result!==null||item.publication!==null||Object.hasOwn(item,'resultGroups'))return false;
    // A pending status alone does not prove a worker accepted this exact query.
    // The reader supplies bounded, current job evidence after successful admit.
    if(Object.hasOwn(item,'preparation')){
@@ -188,7 +213,7 @@
    try{
     const names=reuseNames(batch);
     const leafAliases=publicationVersion===2&&options.providerLeafAliases===true&&batch.jobs.every(job=>job.q.view==='providers');
-    const response=await transport({action:'aggregatePrepared',requests:batch.jobs.map(job=>copy(job.q)),...(names?{providerReuseNames:names}:{}),...(leafAliases?{providerLeafAliases:'items-fee-items-v1'}:{}),...(publicationVersion===2?{publicationVersion:2,...(batch.forceRefresh?{forceRefresh:true}:{})}:{})},{signal:batch.controller.signal});
+    const response=await transport({action:'aggregatePrepared',requests:batch.jobs.map(job=>copy(job.q)),...(batch.responseProfile?{responseProfile:batch.responseProfile}:{}),...(names?{providerReuseNames:names}:{}),...(leafAliases?{providerLeafAliases:'items-fee-items-v1'}:{}),...(publicationVersion===2?{publicationVersion:2,...(batch.forceRefresh?{forceRefresh:true}:{})}:{})},{signal:batch.controller.signal});
     if(batch.controller.signal.aborted)return;
     // Size checking precedes recursive structural validation. The transport also
     // bounds HTTP bodies; this guards unexpectedly expanded decoded payloads.
@@ -198,15 +223,15 @@
     // Expanded originals obey the same old complete-response bound. A compact
     // body cannot admit a larger unvalidated or oversized financial result.
     if(leafAliases){const expanded=JSON.stringify({...response,items:[...matched.values()]});if(expanded.length>maxResponseBytes||new TextEncoder().encode(expanded).length>maxResponseBytes)throw failure('invalid');}
-    for(const job of batch.jobs){if(!prune(job))continue;if(job.polling&&now()>=job.deadlineAt){endPoll(job);continue;}try{const item=matched.get(job.requestKey);if(pollable(item,job)){waitForBase(job);continue;}const result=validateResult(item,job.q,job.native,now(),publicationVersion);if(deliver(job,null,result))rememberCompleted(job,item);}catch(error){deliver(job,error);}}
+    for(const job of batch.jobs){if(!prune(job))continue;if(job.polling&&now()>=job.deadlineAt){endPoll(job);continue;}try{const item=matched.get(job.requestKey);if(pollable(item,job)){waitForBase(job);continue;}const result=validateResult(item,job.q,job.native,now(),publicationVersion,job.responseProfile);if(deliver(job,null,result))rememberCompleted(job,item);}catch(error){deliver(job,error);}}
    }catch(error){if(authorityDenied(error)&&!batch.controller.signal.aborted&&batch.jobs.some(job=>prune(job))){clearCompleted();if(pollMaxMs>0){for(const job of [...jobs.values()])deliver(job,error);cancel();}}for(const job of batch.jobs)deliver(job,error);}
    finally{batches.delete(batch);for(const job of batch.jobs){if(job.phase==='waiting')continue;if(job.waiters.size)deliver(job,failure('cancelled'));release(job);}schedule();}
   }
   function drain(){
    while(batches.size<maxConcurrent&&queue.length){
-    const selected=[];while(queue.length&&selected.length<maxBatchSize){if(selected.length&&(queue[0].forceRefresh&&!queue[0].polling)!==(selected[0].forceRefresh&&!selected[0].polling))break;const job=queue.shift();if(jobs.get(job.key)!==job||!prune(job))continue;if(job.polling&&(now()>=job.deadlineAt||job.attempts>=pollMaxAttempts)){endPoll(job);continue;}selected.push(job);}
+    const selected=[];while(queue.length&&selected.length<maxBatchSize){if(selected.length&&((queue[0].forceRefresh&&!queue[0].polling)!==(selected[0].forceRefresh&&!selected[0].polling)||queue[0].responseProfile!==selected[0].responseProfile||selected[0].responseProfile&&selected.length>=3))break;const job=queue.shift();if(jobs.get(job.key)!==job||!prune(job))continue;if(job.polling&&(now()>=job.deadlineAt||job.attempts>=pollMaxAttempts)){endPoll(job);continue;}selected.push(job);}
     if(!selected.length)continue;
-    const batch={jobs:selected,forceRefresh:selected[0].forceRefresh&&!selected[0].polling,controller:new AbortController()};for(const job of selected){job.batch=batch;job.phase='active';job.attempts++;}batches.add(batch);void run(batch);
+    const batch={jobs:selected,responseProfile:selected[0].responseProfile,forceRefresh:selected[0].forceRefresh&&!selected[0].polling,controller:new AbortController()};for(const job of selected){job.batch=batch;job.phase='active';job.attempts++;}batches.add(batch);void run(batch);
    }
   }
   function read(request,readOptions={}){
@@ -214,12 +239,14 @@
     const scope=syncContext(),requestKey=queryKey(request),q=JSON.parse(requestKey),platform=options.platform(q.platformId),native=identity(platform),nativeIdentity=nativeKey(platform);if(native.id!==q.platformId)throw failure('unsupported');
     if(readOptions.signal?.aborted||readOptions.isCurrent&&!readOptions.isCurrent())throw failure('cancelled');
     if(readOptions.forceRefresh!==undefined&&typeof readOptions.forceRefresh!=='boolean'||readOptions.forceRefresh&&publicationVersion!==2)throw failure('invalid');
-    const forceRefresh=readOptions.forceRefresh===true,cacheKey=completedKey(scope,nativeIdentity,q),family=completedFamily(scope,nativeIdentity,q),key=encode([scope,nativeIdentity,q,forceRefresh]);
+    const responseProfile=readOptions.responseProfile;
+    if(responseProfile!==undefined){if(publicationVersion!==2)throw failure('invalid');profileGroups(responseProfile,q);}
+    const forceRefresh=readOptions.forceRefresh===true,reuseScope=completedContext,cacheKey=completedKey(reuseScope,nativeIdentity,q,responseProfile),family=completedFamily(reuseScope,nativeIdentity,q),key=encode([scope,nativeIdentity,q,forceRefresh,responseProfile??null]);
     if(forceRefresh)invalidateCompleted(family,key);
-    else{const cached=completedResult(cacheKey,scope,nativeIdentity,q,native);if(cached){const mine=generation,cacheGeneration=completedGeneration;return Promise.resolve().then(()=>{if(mine!==generation||cacheGeneration!==completedGeneration||cached.entry.invalidated||readOptions.signal?.aborted||scope!==syncContext()||readOptions.isCurrent&&!readOptions.isCurrent()||nativeKey(options.platform(q.platformId))!==nativeIdentity)throw failure('cancelled');const current=completedResult(cacheKey,scope,nativeIdentity,q,native);return current?copy(current.result):read(q,readOptions);});}}
+    else{const cached=completedResult(cacheKey,reuseScope,nativeIdentity,q,native);if(cached){const mine=generation,cacheGeneration=completedGeneration;return Promise.resolve().then(()=>{if(mine!==generation||cacheGeneration!==completedGeneration||cached.entry.invalidated||readOptions.signal?.aborted||scope!==syncContext()||readOptions.isCurrent&&!readOptions.isCurrent()||nativeKey(options.platform(q.platformId))!==nativeIdentity)throw failure('cancelled');const current=completedResult(cacheKey,reuseScope,nativeIdentity,q,native);return current?copy(current.result):read(q,readOptions);});}}
     let job=jobs.get(key);if(job?.completedInvalidated){for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));abandon(job);job=null;}
-    if(!job&&!forceRefresh&&pollMaxMs>0)job=[...jobs.values()].find(other=>other.polling&&!other.completedInvalidated&&other.context===scope&&other.nativeKey===nativeIdentity&&other.requestKey===requestKey);
-    if(!job){job={key,requestKey,q,native,nativeKey:nativeIdentity,forceRefresh,context:scope,generation,completedGeneration,completedKey:cacheKey,family,waiters:new Set(),batch:null,phase:'queued',polling:false,pollTimer:null,deadlineTimer:null,deadlineAt:null,attempts:0};jobs.set(key,job);queue.push(job);}
+    if(!job&&!forceRefresh&&pollMaxMs>0)job=[...jobs.values()].find(other=>other.polling&&!other.completedInvalidated&&other.context===scope&&other.nativeKey===nativeIdentity&&other.requestKey===requestKey&&other.responseProfile===responseProfile);
+    if(!job){job={key,requestKey,q,responseProfile,native,nativeKey:nativeIdentity,forceRefresh,context:scope,completedContext:reuseScope,generation,completedGeneration,completedKey:cacheKey,family,waiters:new Set(),batch:null,phase:'queued',polling:false,pollTimer:null,deadlineTimer:null,deadlineAt:null,attempts:0};jobs.set(key,job);queue.push(job);}
     const promise=new Promise((resolve,reject)=>{const waiter={job,resolve,reject,signal:readOptions.signal,isCurrent:readOptions.isCurrent,done:false,abort:null};waiter.abort=()=>{settle(waiter,failure('cancelled'));abandon(job);};job.waiters.add(waiter);waiter.signal?.addEventListener('abort',waiter.abort,{once:true});});schedule();return promise;
    }catch(error){return Promise.reject(error);}
   }
