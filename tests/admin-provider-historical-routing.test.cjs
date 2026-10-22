@@ -76,3 +76,58 @@ test('unsupported recent scope with unprepared exact heads stays unknown without
 test('explicit refresh preserves force intent through unsupported published routing; normal repeats reuse exact prepared results',async()=>{
  const h=await fixture({handler:q=>q.action==='providerSnapshot'?unsupported(q):undefined});await h.c.liveQuery();await settle();const count=()=>h.calls.filter(q=>q.action==='aggregatePrepared').length,n=count();await h.c.liveQuery();await settle();assert.equal(count(),n);await h.c.liveRefresh();await settle();assert(count()>n);assert(h.calls.filter(q=>q.action==='aggregatePrepared').slice(n).some(q=>q.forceRefresh===true));assert.equal(h.L.providerReadMode,'live');assert.equal(h.L.queryFailures.length,0);
 });
+
+// V2 stale means a semantic/revision/publication mismatch. TTL-only heads are
+// still status ready + freshness refresh_due and must keep their existing path.
+function stalePublication(q,{payload=true}={}){
+ const b=copy(envelope(q,platforms.filter(p=>q.platformIds.includes(p.id))));
+ Object.assign(b,{status:'stale',complete:false,freshness:null,missing:[]});
+ for(const entry of b.platforms)for(const s of entry.snapshots){
+  if(payload&&!(s.period==='current'&&s.component==='orders'))continue;
+  entry[s.period][s.component]=null;Object.assign(s,{stale:true,freshness:null});
+  b.missing.push({platformId:entry.platform.id,period:s.period,component:s.component,state:'stale',errorCode:null});
+ }
+ return b;
+}
+function assertManualReads(h){
+ const counts=new Map();for(const call of h.calls.filter(q=>q.action==='aggregatePrepared'))for(const q of call.requests){
+  assert.equal(q.view,'providers');assert.equal(q.direction,'charge');assert.equal(q.currency,'INR');assert.equal(q.successBasis,'success');assert.equal(q.successStartAt,q.startAt);assert.equal(q.successEndAt,q.endAt);
+  assert(['2026-10-15T18:30:00.000Z','2026-10-14T18:30:00.000Z'].includes(q.startAt));const key=JSON.stringify(q);counts.set(key,(counts.get(key)||0)+1);
+ }
+ assert.equal(counts.size,36);assert([...counts.values()].every(n=>n===1));assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);
+}
+test('semantic stale publications with remaining payload or all null automatically use exact manual prepared data once',async()=>{
+ for(const payload of [true,false]){
+  const h=await fixture({handler:q=>q.action==='providerSnapshot'?stalePublication(q,{payload}):undefined});await h.c.liveQuery();await settle();
+  assert.equal(h.calls.filter(q=>q.action==='providerSnapshot').length,1);assert.equal(h.L.providerReadMode,'live');assert.equal(h.L.providerPublished,null);assert.equal(h.L.publishedWindow,null);assert.equal(h.L.results.length,18);assert.equal(h.L.comparisonResults.length,18);assert.equal(h.L.queryFailures.length,0);assert.equal(h.L.comparisonStatus,'ready');assertManualReads(h);
+  assert(h.L.results.every(r=>r.startAt==='2026-10-15T18:30:00.000Z'&&r.successStartAt===r.startAt&&r._preparedPublication.sourceComplete===false&&r._preparedPublication.freshness==='refresh_due'));assert.doesNotMatch(h.html(),/发布版本需更新|读取统一汇总/);
+ }
+});
+test('semantic stale continuation clears former publication and deduplicates Query while prepared transport is pending',async()=>{
+ const h=await fixture();await h.c.liveQuery();assert.equal(h.L.results.length,18);const waits=[],held=[];
+ h.override(q=>{if(q.action==='providerSnapshot')return stalePublication(q);if(q.action==='aggregatePrepared'){const wait=deferred();waits.push(wait);held.push(copy(q));return wait.promise;}});
+ const run=h.c.liveQuery(true);await settle();assert(held.length);assert.equal(h.L.providerPublished,null);assert.equal(h.L.retainedContent,null);assert.equal(h.L.results.length,0);assert.equal(h.L.comparisonResults.length,0);const before=h.calls.length;await h.c.liveQuery();await settle();assert.equal(h.calls.length,before);
+ h.c.setPage('amount');for(let i=0;i<waits.length;i++)waits[i].resolve(prepared(held[i]));await run;await settle();assert.equal(h.c.state.page,'amount');assert.equal(h.L.results.length,0);assert.equal(h.L.providerPublished,null);
+});
+test('semantic stale late responses cannot continue after page, filter, cancellation, authority or native changes',async()=>{
+ for(const change of ['page','filter','cancel','permission','account','catalog']){
+  const wait=deferred();let allowed=true,held;const h=await fixture({roleAllowed:()=>allowed,handler:q=>{if(q.action==='providerSnapshot'){held=copy(q);return wait.promise;}}});const run=h.c.liveQuery();await settle();
+  if(change==='page')h.c.setPage('amount');if(change==='filter')h.c.liveMetricTimeSet('from','2026-10-15T00:00:00');if(change==='cancel')h.c.liveReset();if(change==='permission')allowed=false;if(change==='account')h.c.hensemDataScope={identity:'other',mode:'all'};if(change==='catalog')h.L.catalog=[];
+  wait.resolve(stalePublication(held));await run;await settle();assert.equal(h.calls.filter(q=>q.action==='aggregatePrepared').length,0,change);assert.equal(h.L.results.length,0,change);
+ }
+});
+test('semantic stale prepared failures remain explicit and never recurse or restore stale publication',async()=>{
+ for(const failure of ['missing','network','denied']){
+  const h=await fixture({handler:q=>{if(q.action==='providerSnapshot')return stalePublication(q);if(q.action!=='aggregatePrepared')return;if(failure==='missing')return prepared(q,'missing');throw Object.assign(Error(failure==='denied'?'safe denied':'safe network failure'),failure==='denied'?{code:'ADMIN_LIVE_PERMISSION_DENIED'}:{});}});await h.c.liveQuery();await settle();
+  assert.equal(h.calls.filter(q=>q.action==='providerSnapshot').length,1,failure);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0,failure);assert.equal(h.L.providerPublished,null,failure);assert.equal(h.L.results.length,0,failure);assert.equal(h.L.comparisonResults.length,0,failure);if(failure==='denied')assert.match(h.L.error,/权限/);else assert.equal(h.L.queryFailures.length,18,failure);
+ }
+});
+test('semantic stale must pass native and payload validation before routing; published denial is never a route',async()=>{
+ for(const failure of ['denied','malformed','native']){
+  const h=await fixture({handler:q=>{if(q.action!=='providerSnapshot')return;if(failure==='denied')throw Object.assign(Error('safe denied'),{code:'ADMIN_LIVE_PERMISSION_DENIED'});const b=stalePublication(q);if(failure==='malformed')b.complete=true;else b.platforms[0].platform.sourceName='DIFFERENT_NATIVE';return b;}});await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregatePrepared').length,0,failure);assert.equal(h.L.results.length,0,failure);
+ }
+});
+test('semantic stale routing preserves force and completed-cache reuse while TTL-only last complete stays published',async()=>{
+ const h=await fixture({handler:q=>q.action==='providerSnapshot'?stalePublication(q):undefined});await h.c.liveQuery();await settle();const n=h.calls.filter(q=>q.action==='aggregatePrepared').length;await h.c.liveQuery();await settle();assert.equal(h.calls.filter(q=>q.action==='aggregatePrepared').length,n);await h.c.liveRefresh();await settle();assert(h.calls.filter(q=>q.action==='aggregatePrepared').slice(n).some(q=>q.forceRefresh===true));
+ const ttl=await fixture({handler:q=>{if(q.action!=='providerSnapshot')return;const b=copy(envelope(q,platforms));b.freshness='refresh_due';b.refreshState='failed';for(const p of b.platforms)for(const s of p.snapshots)Object.assign(s,{freshness:'refresh_due',refreshState:'failed'});return b;}});await ttl.c.liveQuery();await settle();assert.equal(ttl.L.providerReadMode,'published');assert.equal(ttl.L.results.length,18);assert.equal(ttl.calls.filter(q=>q.action==='aggregatePrepared').length,0);assert.equal(ttl.L.providerPublished.bundle.freshness,'refresh_due');assert.match(ttl.html(),/更新未完成/);
+});
