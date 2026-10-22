@@ -1452,10 +1452,11 @@
   let preparedContinuation=null;
   try{
    const bundle=reuse?old.bundle:api.validate(await window.hensemLiveRequest(request,{signal:controller.signal}),request,platforms);if(!current())return;
-   // A valid unsupported rolling scope is a routing decision, not an empty
-   // report. Continue this same Query through the shared prepared reader.
-   // Errors, denied access and incomplete publications never trigger fallback.
-   if(bundle.status==='unsupported'&&statisticWindowsEnabled()&&preparedAggregates){preparedContinuation={serial,scope,context};return preparedContinuation;}
+   // Unsupported scopes and semantic-stale publications cannot serve this
+   // Query. Continue once with its unchanged filters through the prepared reader.
+   // V2 TTL-only last-complete heads remain ready + refresh_due and stay here;
+   // errors, denied access and missing/building publications do not switch paths.
+   if(['unsupported','stale'].includes(bundle.status)&&statisticWindowsEnabled()&&preparedAggregates){preparedContinuation={serial,scope,context};return preparedContinuation;}
    const projection=api.project(bundle,providers),projected=projection.bundle;
    const appliedWindow=api.appliedWindow(bundle,request,L.queryNow);
    if(appliedWindow)submissionAnalysis?.applyPublished(projected,platforms,{providers:projection.providers});else submissionAnalysis?.restore(null);
