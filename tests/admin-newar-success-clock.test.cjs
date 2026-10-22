@@ -17,19 +17,19 @@ function result(platform=newar,{direction='withdraw',missing=true,basis='success
 async function view(options={}){
  const platforms=options.platforms||[newar],h=await ready({platforms,manualOverview:true});
  vm.runInContext(windows,h.c);
- Object.assign(h.L,state({successBasis:options.basis||'success',direction:options.direction||'withdraw'}),{country:'印度',pageQueried:true,overviewQueried:true,dirty:false,loading:false,queryPlatforms:platforms,results:options.results||[result(platforms[0],options)],comparisonStatus:'idle'});
+ Object.assign(h.L,state({successBasis:options.basis||'success',direction:options.direction||'withdraw',successFrom:'2026-10-19T00:00:00',successTo:'2026-10-19T23:59:59'}),{country:'印度',pageQueried:true,overviewQueried:true,dirty:false,loading:false,queryPlatforms:platforms,results:options.results||[result(platforms[0],options)],comparisonStatus:'idle'});
  h.c.render();return h;
 }
 function businessTable(h){return renderedTables(h.html()).find(t=>t.headers.includes('成功笔数')&&t.rows.length);}
 
-test('explicit NEW_AR update basis uses each platform local day even when optional success inputs are blank',()=>{
+test('blank success inputs use the created cohort in each platform timezone despite a remembered update selector',()=>{
  for(const [zone,start,end]of [
   ['Asia/Kolkata','2026-10-18T18:30:00.000Z','2026-10-19T18:30:00.000Z'],
   ['Asia/Karachi','2026-10-18T19:00:00.000Z','2026-10-19T19:00:00.000Z'],
   ['America/Mexico_City','2026-10-19T06:00:00.000Z','2026-10-20T06:00:00.000Z']
  ]){
   const s=state(),before=JSON.stringify(s),q=ctx.HensemStatisticWindows.request(s,{source:'NEW_AR',timezone:zone},ctx.nativeInstant);
-  assert.equal(q.successBasis,'source_updated');assert.equal(q.startAt,start);assert.equal(q.endAt,end);assert.equal(q.successStartAt,start);assert.equal(q.successEndAt,end);assert.equal(JSON.stringify(s),before);
+  assert.equal(q.successBasis,'created');assert.equal(q.startAt,start);assert.equal(q.endAt,end);assert.equal(Object.hasOwn(q,'successStartAt'),false);assert.equal(Object.hasOwn(q,'successEndAt'),false);assert.equal(JSON.stringify(s),before);
  }
 });
 test('the existing single-country UI changes country without borrowing another platform timezone',async()=>{
@@ -42,7 +42,7 @@ test('the existing single-country UI changes country without borrowing another p
   h.c.liveSet('country',country);h.c.liveSet('direction','withdraw');Object.assign(h.L,state());
   const before=h.c.__preparedRequests.length;await h.c.liveQuery();const requests=h.c.__preparedRequests.slice(before);
   assert.equal(requests.length,2,country);assert.deepEqual(Array.from(requests,q=>q.platformId).sort(),platforms.filter(p=>p.country===country).map(p=>p.id).sort());
-  for(const q of requests){assert.equal(q.startAt,start);assert.equal(q.endAt,end);assert.equal(q.successStartAt,start);assert.equal(q.successEndAt,end);assert.equal(q.successBasis,'source_updated');assert.equal(platforms.find(p=>p.id===q.platformId).timezone,timezone);}
+  for(const q of requests){assert.equal(q.startAt,start);assert.equal(q.endAt,end);assert.equal(Object.hasOwn(q,'successStartAt'),false);assert.equal(Object.hasOwn(q,'successEndAt'),false);assert.equal(q.successBasis,'created');assert.equal(platforms.find(p=>p.id===q.platformId).timezone,timezone);}
  }
  h.c.liveSet('country','all');assert.equal(h.L.country,'墨西哥','the original UI requires one concrete country');
 });
@@ -51,11 +51,11 @@ test('explicit update window stays independent and a partial pair is rejected',(
  assert.equal(q.successBasis,'source_updated');assert.equal(q.successStartAt,'2026-10-19T19:32:03.000Z');assert.equal(q.successEndAt,'2026-10-19T19:32:04.000Z');assert.notEqual(q.successStartAt,q.startAt);
  assert.throws(()=>ctx.HensemStatisticWindows.request(state({successFrom:s.successFrom}),{source:'newar',timezone:'Asia/Kolkata'},ctx.nativeInstant),/同时填写/);
 });
-test('other sources and NEW_AR charge retain original blank-window defaults',()=>{
+test('all native sources use the created cohort while optional success inputs are blank',()=>{
  for(const source of ['newar','ar','wg','kb','panda','lg','game66']){
-  const q=ctx.HensemStatisticWindows.request(state({direction:'charge'}),{source,timezone:'Asia/Kolkata'},ctx.nativeInstant);assert.equal(q.successBasis,'success',source);
+  const q=ctx.HensemStatisticWindows.request(state({direction:'charge'}),{source,timezone:'Asia/Kolkata'},ctx.nativeInstant);assert.equal(q.successBasis,'created',source);assert.equal(Object.hasOwn(q,'successStartAt'),false);assert.equal(Object.hasOwn(q,'successEndAt'),false);
  }
- assert.equal(ctx.HensemStatisticWindows.request(state(),{source:'duoli',timezone:'Asia/Jakarta'},ctx.nativeInstant).successBasis,'source_updated');
+ assert.equal(ctx.HensemStatisticWindows.request(state(),{source:'duoli',timezone:'Asia/Jakarta'},ctx.nativeInstant).successBasis,'created');
 });
 test('selector is opt-in and explains its clock without filling optional ranges',()=>{
  const s=state(),html=ctx.HensemStatisticWindows.render(s,String,'Asia/Kolkata',{allowSourceUpdated:true});
@@ -220,10 +220,10 @@ test('row clock scope accepts both arrays and sets, while empty or missing IDs c
  for(const row of [{},{platformIds:new Set()},{platformIds:[]},{platformIds:[null]}])assert.equal(c.unavailable([row],'withdraw'),true);
  assert.equal(c.unavailable([{platformId:'known'}],'withdraw'),false);
 });
-test('daily provider explanation keeps the explicit update clock when optional success dates are blank',async()=>{
+test('daily provider explanation preserves an explicitly supplied update clock window',async()=>{
  const h=await view({basis:'source_updated'});h.c.state.page='provider_daily';assert.doesNotThrow(()=>h.c.render());
- assert.match(h.html(),/成功按各平台当地源订单更新日期/);assert.doesNotMatch(h.html(),/成功按各平台当地成功日期/);
- assert.equal(h.L.successFrom,'');assert.equal(h.L.successTo,'');
+ assert.match(h.html(),/源订单更新时间 · 2026-10-19 00:00:00 至 2026-10-19 23:59:59/);assert.doesNotMatch(h.html(),/成功按各平台当地成功日期/);
+ assert.equal(h.L.successFrom,'2026-10-19T00:00:00');assert.equal(h.L.successTo,'2026-10-19T23:59:59');
 });
 test('explicitly unknown cohort currency is not replaced by the platform default or merged with confirmed currency',async()=>{
  const r=result();r.summary=[{...r.summary[0],currency:'INR',created_success_amount:'100',created_success_count:1},{...r.summary[0],currency:null,created_success_amount:'200',created_success_count:2}];

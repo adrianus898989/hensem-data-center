@@ -50,7 +50,8 @@
   if(!q||q.action!=='aggregate'||!['providers','full','drilldown'].includes(q.view||'full')||typeof q.platformId!=='string')throw failure('unsupported');
   if(['orderNumber','thirdPartyOrderNumber','systemOrderId','memberId','utr'].some(key=>q[key]))throw failure('unsupported');
   const start=instant(q.startAt),end=instant(q.endAt);if(!start||!end||start>=end)throw failure('invalid');
-  if(['successStartAt','successEndAt','successBasis'].some(key=>Object.hasOwn(q,key))){const successStart=instant(q.successStartAt),successEnd=instant(q.successEndAt);if(!successStart||!successEnd||successStart>=successEnd||!['success','source_updated'].includes(q.successBasis))throw failure('invalid');}
+  if(q.successBasis==='created'){if(Object.hasOwn(q,'successStartAt')||Object.hasOwn(q,'successEndAt'))throw failure('invalid');}
+  else if(['successStartAt','successEndAt','successBasis'].some(key=>Object.hasOwn(q,key))){const successStart=instant(q.successStartAt),successEnd=instant(q.successEndAt);if(!successStart||!successEnd||successStart>=successEnd||!['success','source_updated'].includes(q.successBasis))throw failure('invalid');}
   const key=encode(q);if(key.length>32768)throw failure('invalid');return key;
  }
  // Transport profiles never alter the server's exact native query identity.
@@ -70,7 +71,9 @@
   if(publicationVersion===2){
    if(!['fresh','refresh_due'].includes(p.freshness)||!['idle','queued','running','failed'].includes(p.refreshState)||p.nextRefreshAt!=null&&!instant(p.nextRefreshAt))throw failure('invalid');
   }else if(Date.parse(p.expiresAt)<=now)throw failure('stale');
+  if(Object.hasOwn(p,'semanticTransition')&&(p.semanticTransition!=='manual_previous_dependency'||publicationVersion!==2||!['success','source_updated'].includes(q.successBasis)||!Object.hasOwn(q,'successStartAt')||p.freshness!=='refresh_due'||!instant(p.transitionExpiresAt)||Date.parse(p.transitionExpiresAt)<=now))throw failure('invalid');
   if(!r||r.version!==1||!r.platform||Object.keys(expected).some(key=>r.platform[key]!==expected[key])||instant(r.startAt)!==instant(q.startAt)||instant(r.endAt)!==instant(q.endAt)||!Array.isArray(r.summary)||!Array.isArray(r.rows)||r.rows.length||!r.groups||r.partial===true||r.complete===false||r.available===false||r.error||r.meta?.partial===true||r.coverage?.calculationComplete===false||Object.hasOwn(r,'_parts')||Object.hasOwn(r,'_preparedPublication')||Object.hasOwn(r,'_preparedResultGroups'))throw failure('invalid');
+  if(q.successBasis==='created'&&(r.successBasis!=='created'||Object.hasOwn(r,'successStartAt')||Object.hasOwn(r,'successEndAt')||r.capabilities?.successCohort!=='created_at_current_stored_status'||r.capabilities?.independentSuccessWindow!==false))throw failure('invalid');
   if(Object.hasOwn(q,'successStartAt')&&(instant(r.successStartAt)!==instant(q.successStartAt)||instant(r.successEndAt)!==instant(q.successEndAt)||r.successBasis!==q.successBasis))throw failure('invalid');
   let resultGroups=null;
   if(Object.hasOwn(item,'resultGroups')){
@@ -150,7 +153,7 @@
   function rememberCompleted(job,item){
    if(!completionEnabled||job.completedInvalidated||job.generation!==generation||job.completedGeneration!==completedGeneration||job.context!==context||job.completedContext!==completedContext)return;
    const ttl=completionTtl(job.q,job.native);if(!ttl)return;
-   let readAt=now(),expiresAt=Math.min(readAt+ttl,publicationVersion===1?Date.parse(item.publication.expiresAt):Infinity);const identity=publicationIdentity(item);
+   let readAt=now(),expiresAt=Math.min(readAt+ttl,publicationVersion===1?Date.parse(item.publication.expiresAt):Infinity,item.publication.semanticTransition==='manual_previous_dependency'?Date.parse(item.publication.transitionExpiresAt):Infinity);const identity=publicationIdentity(item);
    // A same-head background read retains its original clock even if LRU
    // eviction removed the completed entry while the request was in flight.
    if(job.refreshOnly&&job.refreshClock?.identity===identity){readAt=job.refreshClock.readAt;expiresAt=job.refreshClock.expiresAt;}if(!Number.isFinite(readAt)||expiresAt<=now())return;

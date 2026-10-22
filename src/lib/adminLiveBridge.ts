@@ -24,6 +24,10 @@ export function validateCollectorControlRequest(p:Record<string,unknown>):Record
 export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
   if(!input||typeof input!=="object"||Array.isArray(input))throw Error("查询参数无效");
   const p=input as Record<string,unknown>;
+  if(p.successBasis!==undefined&&p.action!=="autoWithdraw"){
+    if(p.successBasis!=="created"||!["details","memberDaily","analysisOrders"].includes(String(p.action))&&!(p.action==="aggregate"&&p.view==="drilldown")||Object.hasOwn(p,"successStartAt")||Object.hasOwn(p,"successEndAt"))throw Error("创建订单状态统计参数无效");
+    const {successBasis,...base}=p;return {...validateAdminLiveRequest(base),successBasis};
+  }
   if(p.action==="autoWithdraw"&&["windowVersion","successStartAt","successEndAt","successBasis"].some(key=>p[key]!==undefined)){
     const {windowVersion,successStartAt,successEndAt,successBasis,...base}=p;
     if(windowVersion!==2||typeof successBasis!=="string"||!["success","source_updated"].includes(successBasis))throw Error("出款统计时间依据无效");
@@ -42,6 +46,7 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       const q=value as Record<string,unknown>,{successStartAt,successEndAt,successBasis,...base}=q;
       if(q.action!=="aggregate"||["orderNumber","thirdPartyOrderNumber","systemOrderId","memberId","utr"].some(key=>q[key]!==undefined))throw Error("已准备统计不读取订单身份明细");
       const checked=validateAdminLiveRequest(base),clocks=[successStartAt,successEndAt,successBasis];
+      if(successBasis==="created"){if(successStartAt!==undefined||successEndAt!==undefined)throw Error("创建订单状态统计不接受独立成功时间");return {...checked,successBasis};}
       if(clocks.some(v=>v!==undefined)){
         if(!["success","source_updated"].includes(String(successBasis))||typeof successBasis!=="string")throw Error("成功统计时间依据无效");
         for(const value of [successStartAt,successEndAt])if(typeof value!=="string"||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)||!Number.isFinite(Date.parse(value))||new Date(value).toISOString().slice(0,19)!==value.slice(0,19))throw Error("成功统计日期或时间无效");

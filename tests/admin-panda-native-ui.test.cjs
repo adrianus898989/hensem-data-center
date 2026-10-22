@@ -57,7 +57,7 @@ test('Panda native identities cannot activate automatic/operator statistics whil
 
 test('Panda success and daily comparison keep source-specific basis and null withdrawal success',async()=>{
  const {api,props}=helpers('admin-success-analysis-ui.test.cjs','api,props'),a=api(),input=props({queryPlatforms:[PANDA],results:[result()],workorders:null});const m=a.buildModel(input);assert.equal(m.rows[0].charge[0].value,null);assert.equal(m.rows[0].withdraw[0].value,null);let html=a.render(input);assert.match(html,/熊猫成功时间窗口尚未完整核验/);assert.match(html,/仅含已审核提现/);assert.doesNotMatch(html,/KB成功/);
- const {harness:daily}=helpers('admin-daily-comparison-ui.test.cjs','harness'),h=daily({platforms:[PANDA]});Object.assign(h.L,{country:'巴西',currency:'BRL'});await h.module.load();h.c.liveDailyDirection('withdraw');await h.module.load();assert.equal(h.module.model().now.success_count,null);html=h.module.render();assert.match(html,/提现仅已审核范围/);assert.doesNotMatch(html,/KB成功/);
+ const {harness:daily}=helpers('admin-daily-comparison-ui.test.cjs','harness'),h=daily({platforms:[PANDA]});Object.assign(h.L,{country:'巴西',currency:'BRL',successFrom:h.L.from,successTo:h.L.to});await h.module.load();h.c.liveDailyDirection('withdraw');await h.module.load();assert.equal(h.module.model().now.success_count,null);html=h.module.render();assert.match(html,/提现仅已审核范围/);assert.doesNotMatch(html,/KB成功/);
 });
 
 test('Panda explicitly unsupported amount/fee columns are omitted instead of shown as zero',async()=>{

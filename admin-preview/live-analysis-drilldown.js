@@ -51,6 +51,7 @@
   function dimensionButton(segment,label,dimension){if(prefixBlocked(segment))return prefixNotice(segment);const s=state(segment,label),platform=dimension==='platform',open=s.open&&(platform?s.tab==='platform':['provider','providerDaily'].includes(s.tab));return '<button class="link analysis-expand" aria-expanded="'+open+'" onclick="'+action(segment,platform?'togglePlatform':'toggleProvider')+'">'+(open?'收起':'')+(platform?'平台':'三方')+(open?'':'展开')+'</button>'}
   function button(segment,label,exclusiveGroup){if(prefixBlocked(segment))return prefixNotice(segment);const s=state(segment,label);if(exclusiveGroup)s.exclusiveGroup=exclusiveGroup;return segment.kind==='provider_daily'?'<button class="link analysis-expand" aria-expanded="'+s.open+'" onclick="'+action(segment,'toggle')+'">'+(s.open?'收起':'展开')+'</button>':dimensionButton(segment,label,'provider')+' '+dimensionButton(segment,label,'platform')}
   function valueButton(segment,label,value,title,exclusiveGroup){if(prefixBlocked(segment))return E(value)+' '+prefixNotice(segment);const s=state(segment,label);if(exclusiveGroup)s.exclusiveGroup=exclusiveGroup;return '<button class="link analysis-value-button'+(s.open?' is-selected':'')+'" aria-expanded="'+s.open+'" title="'+E(title||label)+'" onclick="'+action(segment,'toggle')+'">'+E(value)+'</button>'}
+  const createdMode=()=>!L.successFrom&&!L.successTo;
   const successWindow=()=>[L.successFrom||L.from,L.successTo||L.to];
   const localWindows=segment=>segment.kind==='latency'?[successWindow()]:[[L.from,L.to],successWindow()];
   function dates(segment){
@@ -61,8 +62,9 @@
    }return [...out].sort();
   }
   const multi=segment=>dates(segment).length>1;
-  function windowLabel(segment){const label=L.successBasis==='source_updated'?'源订单更新':'成功',[from,to]=successWindow();if(segment.kind==='latency')return label+' '+String(from).slice(0,10)+' 至 '+String(to).slice(0,10);const created=L.from.slice(0,10)+' 至 '+L.to.slice(0,10);return from===L.from&&to===L.to&&(L.successBasis??'success')==='success'?created:'创建 '+created+'；'+label+' '+String(from).slice(0,10)+' 至 '+String(to).slice(0,10);}
+  function windowLabel(segment){if(createdMode())return '创建 '+L.from.slice(0,10)+' 至 '+L.to.slice(0,10)+' · 当前成功状态';const label=L.successBasis==='source_updated'?'源订单更新':'成功',[from,to]=successWindow();if(segment.kind==='latency')return label+' '+String(from).slice(0,10)+' 至 '+String(to).slice(0,10);const created=L.from.slice(0,10)+' 至 '+L.to.slice(0,10);return from===L.from&&to===L.to&&(L.successBasis??'success')==='success'?created:'创建 '+created+'；'+label+' '+String(from).slice(0,10)+' 至 '+String(to).slice(0,10);}
   function legacyDrilldownRequest(q){
+   if(q.successBasis==='created'){if(Object.hasOwn(q,'successStartAt')||Object.hasOwn(q,'successEndAt'))throw Error('创建口径不可混入独立成功窗口');return q;}
    const hasClock=['successStartAt','successEndAt','successBasis'].some(key=>Object.prototype.hasOwnProperty.call(q,key));
    const same=hasClock?q.successBasis==='success'&&q.successStartAt===q.startAt&&q.successEndAt===q.endAt:(L.successBasis??'success')==='success'&&successWindow()[0]===L.from&&successWindow()[1]===L.to;
    if(!same)throw Error('当前展开尚未支持独立成功时间或源订单更新时间范围，请使用相同范围与成功时间后查询');
@@ -87,11 +89,11 @@
    if(typeof c.openDrawer!=='function'||!['hourly','amount','amount_range','matrix','matrix_range','latency','custom'].includes(s.segment.kind))return '';
    const latency=s.segment.kind==='latency',links=[];
    for(const basis of latency?['success']:['created','success']){
-    if(basis==='success'&&L.successBasis==='source_updated'){links.push('<span class="muted" title="源订单更新时间的原始明细暂未接入">成功订单暂不可用</span>');continue;}
+    if(basis==='success'&&!createdMode()&&L.successBasis==='source_updated'){links.push('<span class="muted" title="源订单更新时间的原始明细暂未接入">成功订单暂不可用</span>');continue;}
     const count=row[basis==='created'?'all_count':'success_count'];if(!finite(count)||dimension==='provider'&&Number(count)===0)continue;
     const value={segment:{...s.segment},dimension,platformId:row.platformId,provider:dimension==='provider'?row.provider:undefined,direction:row.direction,currency:row.currency||L.currency,basis,label:s.label};
     const key=enc(value);orderRegistry.set(key,value);
-    links.push('<button class="link" title="'+(basis==='created'?'按创建时间查看全部订单':'按成功时间查看成功订单（含跨日）')+'" onclick="liveAnalysisOrders(\''+key+'\')">'+(basis==='created'?'全部订单':'成功订单')+'</button>');
+    links.push('<button class="link" title="'+(basis==='created'?'按创建时间查看全部订单':createdMode()?'按创建日期查看当前成功订单':'按成功时间查看成功订单（含跨日）')+'" onclick="liveAnalysisOrders(\''+key+'\')">'+(basis==='created'?'全部订单':'成功订单')+'</button>');
    }
    return links.length?'<small class="analysis-metric-share analysis-order-actions">'+links.join(' · ')+'</small>':'';
   }
@@ -101,7 +103,7 @@
   const orderTime=(v,p)=>c.formatTime?c.formatTime(v,p.timezone):v||'—';
   function showOrders(){
    const s=orderView;if(!s||s.scope!==signature()||L.dirty||prefixBlocked(s.segment))return;
-   const p=s.targets[s.target],label=s.basis==='success'?'成功订单 · '+successTimeLabel(p):'全部订单 · 创建时间';
+   const p=s.targets[s.target],label=s.basis==='success'?'成功订单 · '+(createdMode()?'创建日期 / 当前成功状态':successTimeLabel(p)):'全部订单 · 创建时间';
    const select=s.targets.length>1?'<label>平台 <select aria-label="区间订单平台" onchange="liveAnalysisOrderPlatform(Number(this.value))">'+s.targets.map((p,i)=>'<option value="'+i+'" '+(i===s.target?'selected':'')+'>'+E(p.name)+' · '+E(p.source)+'</option>').join('')+'</select></label>':'';
    const summary='<p class="analysis-note">'+E(s.label||'当前区间')+' · '+E(name(s.direction))+' · '+E(s.currency)+' · '+E(s.basis==='success'?successWindow()[0]:L.from)+' 至 '+E(s.basis==='success'?successWindow()[1]:L.to)+'。'+(s.dimension==='provider'?'当前三方 '+E(s.provider)+'；各平台的原始订单独立读取，可切换平台。':'')+'</p>';
    const error=s.error?'<p class="live-status live-error">'+E(s.error)+' <button class="link" onclick="liveAnalysisOrderPage(0,true)">重试</button></p>':'';
@@ -113,14 +115,15 @@
    const s=orderView;if(!s||L.loading||L.dirty||s.scope!==signature()||prefixBlocked(s.segment))return;const p=s.targets[s.target],token=++orderSerial;s.loading=true;s.error='';s.rows=[];s.total=null;s.hasMore=false;showOrders();
    try{
     const q={...c.query(p,'aggregate'),action:'analysisOrders',basis:s.basis,status:'all',direction:s.direction,currency:s.currency,offset:s.offset,limit:20};delete q.view;
-    if(s.basis==='success'){if(q.successBasis==='source_updated'||L.successBasis==='source_updated')throw Error('源订单更新时间的原始明细暂未接入，不能按成功时间替代');if(q.successStartAt!==undefined||q.successEndAt!==undefined){if(!q.successStartAt||!q.successEndAt)throw Error('成功订单时间范围不完整');q.startAt=q.successStartAt;q.endAt=q.successEndAt;}}
-    for(const key of ['successStartAt','successEndAt','successBasis'])delete q[key];
+    if(s.basis==='success'&&q.successBasis!=='created'){if(q.successBasis==='source_updated'||L.successBasis==='source_updated')throw Error('源订单更新时间的原始明细暂未接入，不能按成功时间替代');if(q.successStartAt!==undefined||q.successEndAt!==undefined){if(!q.successStartAt||!q.successEndAt)throw Error('成功订单时间范围不完整');q.startAt=q.successStartAt;q.endAt=q.successEndAt;}}
+    for(const key of ['successStartAt','successEndAt',...(q.successBasis==='created'?[]:['successBasis'])])delete q[key];
     for(const key of ['kind','hour','bucket','cumulative','hourRange','amountMin','amountMax','amountMaxExclusive','durationVersion','durationRange'])if(s.segment[key]!==undefined)q[key]=s.segment[key];
     if(s.segment.kind!=='latency'){delete q.durationVersion;delete q.durationRange;}
     if(s.dimension==='provider')q.providers=[s.provider];
     const result=await requestSlot(q,()=>orderView===s&&token===orderSerial&&s.scope===signature()&&!L.dirty);
     if(orderView!==s||token!==orderSerial||s.scope!==signature()||L.dirty)return;
     const rows=result?.rows,total=result?.total,mismatch=['hour','bucket','hourRange','amountMin','amountMax','amountMaxExclusive','durationVersion','durationRange','cumulative'].some(key=>s.segment[key]!==undefined&&!sameValue(result?.segment?.[key],s.segment[key]));
+    if(q.successBasis==='created'&&(result.successBasis!=='created'||result.capabilities?.successCohort!=='created_at_current_stored_status'||result.capabilities?.independentSuccessWindow!==false))throw Error('区间订单统计口径不一致');
     if(result?.platform?.id!==p.id||result?.basis!==s.basis||result?.complete!==true||result?.segment?.kind!==s.segment.kind||mismatch||!Array.isArray(rows)||rows.length>20||!Number.isSafeInteger(total)||total<0||typeof result.hasMore!=='boolean'||result.hasMore!==(total>s.offset+20)||rows.length!==Math.min(20,Math.max(0,total-s.offset))||rows.some(r=>!r.id||r.direction!==s.direction||r.currency!==s.currency||s.dimension==='provider'&&r.provider!==s.provider))throw Error('区间订单响应不完整，请重新读取；不能据此判断没有订单');
     s.rows=rows;s.total=total;s.hasMore=result.hasMore;
    }catch(error){if(orderView!==s||token!==orderSerial||s.scope!==signature())return;s.error=error.message||'区间订单读取未完成，请重试';s.total=null;s.hasMore=false;}
