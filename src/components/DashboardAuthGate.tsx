@@ -155,7 +155,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
           active = await ensureDashboardSession(active, true);
           nextProfile = await fetchDashboardProfile(active);
         }
-        await verifyDashboardAccess(active);
+        await verifyDashboardAccess(active, current => { active = current; });
         const current = readSavedDashboardSession();
         if (!cancelled && current?.access_token === active.access_token && current.user.id === active.user.id) applyAuthenticated(active, nextProfile, true);
       } catch (cause) {
@@ -244,7 +244,7 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
             active = await ensureDashboardSession(active, true);
             nextProfile = await fetchDashboardProfile(active);
           }
-          await verifyDashboardAccess(active);
+          await verifyDashboardAccess(active, current => { active = current; });
           const current = readSavedDashboardSession();
           if (!disposed && current?.access_token === active.access_token && current.user.id === active.user.id) {
             applyAuthenticated(active, nextProfile, true);
@@ -292,9 +292,9 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     setBusy(true);
     setError("");
     try {
-      const nextSession = await signInDashboard(username, password);
+      let nextSession = await signInDashboard(username, password);
       const nextProfile = await fetchDashboardProfile(nextSession);
-      await verifyDashboardAccess(nextSession);
+      await verifyDashboardAccess(nextSession, current => { nextSession = current; });
       if (operation !== operationRef.current) return;
       writeLastActivity();
       applyAuthenticated(nextSession, nextProfile, true);
@@ -325,9 +325,9 @@ export default function DashboardAuthGate({ children }: { children: ReactNode })
     setPasswordBusy(true);
     const operation = ++operationRef.current;
     try {
-      const nextSession = await changeOwnDashboardPassword(profile.username, currentPassword, newPassword);
+      let nextSession = await changeOwnDashboardPassword(profile.username, currentPassword, newPassword);
       const nextProfile = await fetchDashboardProfile(nextSession);
-      await verifyDashboardAccess(nextSession);
+      await verifyDashboardAccess(nextSession, current => { nextSession = current; });
       if (operation !== operationRef.current) return;
       writeLastActivity();
       applyAuthenticated(nextSession, nextProfile, true);

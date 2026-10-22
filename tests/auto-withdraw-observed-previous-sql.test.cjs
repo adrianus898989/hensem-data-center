@@ -85,24 +85,25 @@ test('country/platform scope, denied session, aliases and unknown accounts remai
   await db.query("select set_config('test.scope',$1,false)",[JSON.stringify({targets:[]})]);assert.deepEqual((await call(db)).rows,[]);await db.exec("set test.denied='yes'");await assert.rejects(()=>call(db),/synthetic_session_denied/);
  }finally{await db.close();}
 });
-test('production UI compares observed shares and same-basis time samples with completeness qualifiers while preserving unknown YASH methods',async()=>{
+test('production UI retains unverified current and prior shares without growth while keeping same-basis time samples and unknown YASH methods',async()=>{
  const file=path.join(repo,'tests/admin-withdraw-processing-duration-ui.test.cjs');
  const c=vm.createContext({__dirname:path.dirname(file),require:n=>n==='node:test'?()=>{}:createRequire(file)(n)});
  vm.runInContext(fs.readFileSync(file,'utf8').split("test('WG")[0]+';globalThis.setup=setup;',c);
  for(const source of ['NEWAR','KB']){
   const row={source,country:'印度',platform:'Synthetic',total:100,success:70,rejected:10,autoCount:source==='KB'?null:40,manualCount:source==='KB'?null:50,unclassifiedCount:source==='KB'?100:10,avgSeconds:24,durationBasis:source==='KB'?'created_to_completed':'source_submitted_to_handled',classificationAvailable:source!=='KB',comparisonComparable:false,comparisonBasis:'source_coverage_not_aligned',previous:{total:200,success:120,rejected:10,autoCount:source==='KB'?null:60,manualCount:source==='KB'?null:120,unclassifiedCount:source==='KB'?200:20,avgSeconds:12,durationBasis:source==='KB'?'created_to_completed':'source_submitted_to_handled',classificationAvailable:source!=='KB'}};
   const before=structuredClone(row),f=c.setup({rows:[row],total:1,totals:row,comparison:{complete:false}});f.page.render();const cells=f.tables.find(t=>t.headers.some(h=>h.includes('昨日处理用时'))).rows[0];
-  const observedShares=source==='KB'?[[4,'60.00%','+10.00 pp'],[5,'5.00%','+5.00 pp']]:[[4,'60.00%','+10.00 pp'],[5,'5.00%','+5.00 pp'],[8,'30.00%','+10.00 pp'],[9,'60.00%','-10.00 pp']];
-  for(const [index,prior,change]of observedShares){
-   assert(cells[index].includes('昨日 '+prior),source+' retained prior share '+index);
-   assert(cells[index].includes(change),source+' exact observed share delta '+index);
-   assert.match(cells[index],/title="按已入库数据计算；两期完整性尚未核验"/);
+  const observedShares=source==='KB'?[[4,'70.00%','60.00%'],[5,'10.00%','5.00%']]:[[4,'70.00%','60.00%'],[5,'10.00%','5.00%'],[8,'40.00%','30.00%'],[9,'50.00%','60.00%']];
+  for(const [index,current,prior]of observedShares){
+   assert(cells[index].includes(current),source+' current stored share '+index);
+   assert(cells[index].includes('昨日已入库 '+prior),source+' retained prior share '+index);
+   assert.doesNotMatch(cells[index],/withdraw-delta| pp/,source+' incomplete coverage must not imply growth '+index);
+   assert.match(cells[index],/暂不计算涨跌/);
   }
   assert.match(cells[10],/24秒/);assert.match(cells[11],/12秒/);assert.match(cells[12],/\+12\.00 秒（\+100\.00%）/);
   assert.match(cells[12],/仅比较同口径有效时间样本，两期完整性尚未核验/);assert.doesNotMatch(cells[12],/ pp/,'time changes use seconds and percent, independently of count shares');
   if(source==='KB'){
    for(const index of [6,7])assert.equal(cells[index],'—','unknown YASH method count remains unknown');
-   for(const index of [8,9]){assert.match(cells[index],/对比值未提供/);assert.doesNotMatch(cells[index],/withdraw-delta| pp|昨日|0\.00%|NaN|Infinity/);}
+   for(const index of [8,9]){assert.match(cells[index],/^—/);assert.match(cells[index],/昨日已入库 — · 暂不计算涨跌/);assert.doesNotMatch(cells[index],/withdraw-delta| pp|0\.00%|NaN|Infinity/);}
    assert.equal(row.autoCount,null);assert.equal(row.manualCount,null);assert.equal(row.previous.autoCount,null);assert.equal(row.previous.manualCount,null);
   }
   assert.deepEqual(row,before,'rendering does not infer or change source facts');

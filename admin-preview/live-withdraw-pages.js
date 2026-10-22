@@ -344,8 +344,25 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
    if(typeof value==='string'&&/^[0-9]+$/.test(value.trim()))return BigInt(value.trim());
    return null;
   }
+  // Calculation completion is not proof that source collection covers the day.
+  // Keep the last usable values, but never compare a stale/unknown subtotal to
+  // a prior full day as though it were a change in business volume.
+  function readEvidence(data){
+   const p=data?.prepared,coverage=['wgCoverage','yashCoverage','newarCoverage','arCoverage','duoliCoverage','npgCoverage'].map(key=>data?.[key]).filter(Boolean);
+   const failed=p?.refreshState==='failed',computedAt=Date.parse(p?.computedAt),expiresAt=Date.parse(p?.expiresAt),stale=failed||p?.freshness==='refresh_due'||p?.servedLastComplete===true||Number.isFinite(expiresAt)&&expiresAt<=Date.now(),fresh=p?.status==='ready'&&p?.freshness==='fresh'&&p?.calculationComplete===true&&Number.isFinite(computedAt)&&Number.isFinite(expiresAt)&&expiresAt>computedAt&&!stale;
+   const verified=p?.sourceComplete!==false&&data?.sourceComplete!==false&&(p?.sourceComplete===true||data?.sourceComplete===true)&&data?.partial!==true&&data?.complete!==false&&!coverage.some(c=>c.currentComplete===false||c.complete===false)&&!(Array.isArray(data?.rows)?data.rows:[]).some(r=>r.complete===false);
+   const issue=stale?(failed?'更新失败，当前仍为旧统计':'统计待更新'):!verified?'来源完整性尚未核验':!fresh?'统计更新状态尚未核验':data?.comparison?.complete!==true||coverage.some(c=>c.previousComplete===false)||(Array.isArray(data?.rows)?data.rows:[]).some(r=>r.previous?.complete===false)?'两期范围或完整性未核验':'';
+   return {failed,stale,partial:!fresh||!verified,issue};
+  }
+  function publicationNotice(data,changed){
+   const evidence=readEvidence(data),p=data.prepared,zone=S.applied?.catalog?.[0]?.timezone||'UTC';
+   let time='统计生成时间未提供';if(Number.isFinite(Date.parse(p?.computedAt)))time='统计生成于 '+new Intl.DateTimeFormat('sv-SE',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(p.computedAt))+'（'+zone+'）';
+   if(!evidence.partial)return '<span class="live-panel-note" data-withdraw-publication role="status">'+E(time)+'</span>';
+   const state=evidence.failed?'更新失败':evidence.stale?(['queued','running'].includes(p?.refreshState)?'更新中':'待更新'):'完整性未核验';
+   return '<div class="live-status'+(evidence.failed?' live-error':'')+'" data-withdraw-publication="subtotal" role="status"><strong>'+state+' · 已入库小计</strong> · '+E(time)+'。当前保留已读取的数据，不能作为全天完整总计；昨日数量与比例仅供核对，暂不计算涨跌。 <button class="link" '+(S.loading||changed?'disabled ':'')+'onclick="withdrawLoad()">重新查询</button></div>';
+  }
   function matchedSummary(data){
-   if(!localReady()||!singleDay()||resultDaily()||view()!=='auto')return null;
+   if(readEvidence(data).issue||!localReady()||!singleDay()||resultDaily()||view()!=='auto')return null;
    const current=data.startDate,previous=data.previousStartDate;
    if(!/^\d{4}-\d{2}-\d{2}$/.test(current||'')||current!==resultDates().from||data.endDate!==current||data.previousEndDate!==previous)return null;
    const parsed=new Date(current+'T00:00:00Z');if(!Number.isFinite(parsed.getTime())||parsed.toISOString().slice(0,10)!==current||previous!==addDay(current,-1))return null;
@@ -370,7 +387,7 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
      if(side==='current')current+=value;else previous+=value;
     }
    }
-   const basis='同 '+matched.platforms+' 平台已入库数据；当期 '+C(current.toString())+' 笔，昨日 '+C(previous.toString())+' 笔。两期完整性尚未核验。';
+   const basis='同 '+matched.platforms+' 平台已入库数据；当期 '+C(current.toString())+' 笔，昨日 '+C(previous.toString())+' 笔。两期来源完整性已核验。';
    if(key==='manualCount'&&matched.pairs.some(pair=>manualClassificationBasisChanged(pair.current)))return '<small class="cell-sub" title="'+E(basis+'人工分类口径不同，保留原值，不计算涨跌。')+'">昨日 '+C(previous.toString())+' · 分类口径不同</small>';
    const diff=current-previous,absolute=diff<0n?-diff:diff,rounded=previous===0n?0n:(absolute*10000n+previous/2n)/previous;
    const percent=previous===0n?(current===0n?'持平':'无基数'):(diff>0n?'+':diff<0n?'-':'')+(rounded/100n).toString()+'.'+(rounded%100n).toString().padStart(2,'0')+'%';
@@ -378,12 +395,15 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
    return '<small class="cell-sub withdraw-observed-comparison" data-comparison-baseline="matched-platforms" title="'+E(basis)+'">较昨日 <span class="withdraw-delta '+tone+'">'+percent+'</span><span class="withdraw-comparison-scope"> · 同 '+matched.platforms+' 平台</span></small>';
   }
   function summaryComparisonIssue(data){
-   if(data.comparison?.complete!==false)return '';
-   const currentPlatforms=data.totals?.platforms,previousPlatforms=data.previousTotals?.platforms;
-   if(Number.isSafeInteger(currentPlatforms)&&Number.isSafeInteger(previousPlatforms)&&currentPlatforms>=0&&previousPlatforms>=0&&currentPlatforms!==previousPlatforms)return '两期平台范围不一致（当期'+C(currentPlatforms)+'/前期'+C(previousPlatforms)+'），汇总暂不比较';
-   if(data.arCoverage?.coverageBasis==='unverified_source_continuity'&&(data.arCoverage.currentComplete===false||data.arCoverage.previousComplete===false))return 'AR 两期完整性尚未核验，汇总暂不比较';
-   const coverage=[data.wgCoverage,data.yashCoverage,data.newarCoverage,data.arCoverage,data.duoliCoverage,data.npgCoverage].filter(Boolean),current=coverage.some(value=>value.currentComplete===false),previous=coverage.some(value=>value.previousComplete===false);
-   return current&&previous?'两期覆盖不完整，汇总暂不比较':current?'当期覆盖不完整，汇总暂不比较':previous?'前期覆盖不完整，汇总暂不比较':'两期范围或覆盖未对齐，汇总暂不比较';
+   const evidence=readEvidence(data);if(evidence.stale)return evidence.issue;
+   if(data.comparison?.complete===false){
+    const current=data.totals?.platforms,previous=data.previousTotals?.platforms;
+    if(Number.isSafeInteger(current)&&Number.isSafeInteger(previous)&&current>=0&&previous>=0&&current!==previous)return '两期平台范围不一致（当期'+C(current)+'/前期'+C(previous)+'），汇总暂不比较';
+    if(data.arCoverage?.coverageBasis==='unverified_source_continuity'&&(data.arCoverage.currentComplete===false||data.arCoverage.previousComplete===false))return 'AR 两期完整性尚未核验，汇总暂不比较';
+    const coverage=['wgCoverage','yashCoverage','newarCoverage','arCoverage','duoliCoverage','npgCoverage'].map(key=>data[key]).filter(Boolean),a=coverage.some(c=>c.currentComplete===false),b=coverage.some(c=>c.previousComplete===false);
+    return a&&b?'两期覆盖不完整，汇总暂不比较':a?'当期覆盖不完整，汇总暂不比较':b?'前期覆盖不完整，汇总暂不比较':'两期范围或覆盖未对齐，汇总暂不比较';
+   }
+   return evidence.issue;
   }
   function manualClassificationBasisChanged(row){
    // The Oct10 rule changes unknown rejected orders to manual; system auto is unchanged.
@@ -397,12 +417,13 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
   }
   function comparison(current,previous,numerator,denominator,issue=''){
    if(!singleDay()&&!resultDaily())return '';
+   if(numerator!=='avgSeconds')issue=issue||readEvidence(S.data).issue;
    if(issue){
     // Incomplete comparison coverage forbids a growth claim, not displaying
     // the previous period's actual stored value. Never fill missing values as 0.
     const valid=previous&&processingValueKnown(previous[numerator])&&(numerator==='avgSeconds'||countKnown(previous,numerator));
     const value=valid?(numerator==='avgSeconds'?duration(previous.avgSeconds):denominator?(shareKnown(previous,numerator,denominator)?R(previous[numerator],previous[denominator]):'—'):C(previous[numerator])):'—';
-    return '<small class="cell-sub" data-comparison-baseline="observed" title="仅展示前一日已入库值；两期范围或完整性未核验，不计算汇总涨跌。">昨日已入库 '+value+(valid&&!denominator&&numerator!=='avgSeconds'?(numerator==='operators'?' 人':' 笔'):'')+' · 暂不计算涨跌</small>';
+    return '<small class="cell-sub" data-comparison-baseline="observed" title="仅展示前一日已入库值；'+E(issue)+'，不计算汇总涨跌。">昨日已入库 '+value+(valid&&!denominator&&numerator!=='avgSeconds'?(numerator==='operators'?' 人':' 笔'):'')+' · 暂不计算涨跌</small>';
    }
    if(current.comparisonComparable===false&&!(denominator&&previous)){
     const prior=previous&&countKnown(previous,numerator)&&(denominator?known(previous[denominator])&&Number(previous[denominator])>0:true)?denominator?R(previous[numerator],previous[denominator]):C(previous[numerator]):'—';
@@ -588,7 +609,7 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
    if(S.error){body+='<div class="live-status live-error" role="alert">'+(S.data?(changed?'查询失败，上次成功结果已保留。':'刷新失败，同一筛选的上次成功结果已保留。'):'')+E(S.error)+' <button class="link" onclick="withdrawLoad()">重试</button></div>';if(!S.data)return controls+body}
    if(S.prepared){body+='<div class="live-status" role="status" data-withdraw-prepared="'+E(S.prepared.status)+'">'+(S.prepared.status==='paused'?'本次读取已暂停。':S.prepared.status==='failed'?'统计准备暂未完成，请稍后重试。':'后台正在准备所选范围的统计，完成后自动显示。')+(S.data?' 上次成功结果已保留。':'')+(['paused','failed'].includes(S.prepared.status)?' <button class="link" onclick="withdrawLoad()">'+(S.prepared.status==='paused'?'继续读取':'重试')+'</button>':'')+'</div>';if(!S.data)return controls+body;}
    if(!S.data)return controls+'<div class="live-status">请选择筛选条件，点击查询。</div>';
-   if(d.prepared?.status==='ready'&&Number.isFinite(Date.parse(d.prepared.computedAt))){const p=d.prepared,zone=S.applied?.catalog?.[0]?.timezone||'UTC',updated=new Intl.DateTimeFormat('sv-SE',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(p.computedAt));body+='<span class="live-panel-note" data-withdraw-publication role="status">更新于 '+E(updated)+(['queued','running'].includes(p.refreshState)?' · 更新中':p.refreshState==='failed'?' · 更新未完成':p.freshness==='refresh_due'?' · 待更新':'')+'</span>';}
+   const evidence=readEvidence(d);body+=publicationNotice(d,changed);
    if(S.metricView==='secondary')return controls+body+secondaryView(d,operators);
    const unavailable=(d.creationAvailability||[]).filter(x=>x.available===false);if(unavailable.length)body+='<div class="live-panel-note">'+E(unavailable.map(x=>x.platform).join('、'))+' 仅有整日日报，暂不能按创建时段统计；相应数值保持未知。</div>';
    const coverage=d.wgCoverage;let coverageNotes='';
@@ -596,17 +617,15 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
    if(selectedWg&&(!Array.isArray(coverage?.days)||!coverage.days.length))coverageNotes+='<div class="live-panel-note" data-wg-coverage="historical">WG 新明细尚未接入所选日期，当前沿用历史日报；不是本次实时采集结果。</div>';
    if(coverage&&Array.isArray(coverage.days)&&coverage.days.length){const currentDays=coverage.days.filter(day=>day.date>=(d.startDate||resultDates().from)&&day.date<=(d.endDate||resultDates().to)),complete=(typeof coverage.currentComplete==='boolean'?coverage.currentComplete:coverage.complete)===true&&currentDays.length>0&&currentDays.every(day=>day.complete===true);coverageNotes+='<div class="live-panel-note" data-wg-coverage="'+(complete?'complete':'partial')+'">WG 实时提现明细：'+(complete?'当期所选创建日已完整采集。':'<strong>当期所选创建日尚未完整采集，以下为已入库部分，不是完整总计。</strong>')+(coverage.previousComplete===false?' 前期覆盖不完整，跨期汇总暂不可比。':'')+(coverage.timeBasis==='created_at'?' 按各平台当地创建日期统计。':'')+(coverage.operatorBasis==='current_latest_operator'?' 操作人按订单当前最后操作者统计，不代表历史操作次数。':'')+' 不与旧 WG 日报重复累加。</div>'}
    coverageNotes+=yashCoveragePanel(d,operators)+newarCoveragePanel(d,operators)+(d.duoliCoverage?'<div class="live-panel-note" data-duoli-coverage="partial">多利按已入库创建日明细统计，完整性尚未确认；用时为源订单审核用时，不代表支付到账时长。</div>':'');
-   const sourcePartial=selectedWg&&(!Array.isArray(coverage?.days)||!coverage.days.length)||[d.wgCoverage,d.yashCoverage,d.newarCoverage,d.arCoverage,d.duoliCoverage].some(c=>c&&(c.currentComplete!==true||c.previousComplete===false));
-   if(sourcePartial)body+='<div class="live-panel-note" data-withdraw-source-status role="status">部分来源未完整核验 · 已入库统计</div>';
    body+='<details class="withdraw-coverage-details"><summary>数据说明</summary><div class="withdraw-coverage-content"><div class="live-panel-note">创建窗统计创建订单当前状态；独立成功窗不与创建窗取交集。按各来源当地日期读取，与后台日统计口径一致。新AR直传覆盖同平台同日副本，不重复累加。平均用时按有效时间样本加权，不代表支付到账时长；缺少前期记录时不显示涨跌。</div>'+coverageNotes+'</div></details>';
    if(!operators&&(t.classificationPartial===true||t.classificationAvailable===false||rows.some(row=>row.classificationAvailable===false)))body+='<div class="live-panel-note" data-withdraw-classification="'+(t.classificationPartial===true?'partial':'unavailable')+'">'+(t.classificationPartial===true?'自动／人工显示已确认笔数，占比按已入库总笔数计算；未分类单独列出。':'自动／人工未提供时显示「—」；未分类单独列出，不推定为人工。')+'</div>';
    const metrics=operators?[['processed','处理笔数'],['success','创建订单成功笔数'],['rejected','驳回笔数'],['operators','操作人数量'],['avgSeconds','平均处理用时']]:[['total','总笔数'],['autoCount','自动出款'],['manualCount','人工处理'],['success','创建订单成功'],['rejected','驳回']];
-   body+='<section class="panel"><div class="panel-head"><h2>'+(operators?'操作人统计':'自动出款日报')+'</h2><span>'+E([...(S.applied?.teams||[]),S.applied?.country||d.country||''].filter(Boolean).join(' · '))+' · '+E(d.startDate||'')+' 至 '+E(d.endDate||'')+' · 对比 '+E(d.previousStartDate||'—')+' 至 '+E(d.previousEndDate||'—')+'</span>'+(!operators?'<div class="withdraw-header-actions"><button class="btn small" '+(S.loading||changed?'disabled aria-disabled="true" ':'')+'onclick="withdrawLoad()">刷新备注</button><button class="btn small" onclick="withdrawNoteSample()">备注样本</button></div>':'')+'</div><div class="withdraw-kpis">'+metrics.map(([key,label])=>'<div class="withdraw-kpi"><label>'+label+'</label><strong>'+ (key==='avgSeconds'?durationCell(t):countCell(t,key))+'</strong>'+(key===den&&!operators?'<small>日均 '+(known(t.total)?C(Number(t.total)/Math.max(1,Number(t.coveredDays||1))):'—')+'</small>':'')+(key!==den&&['autoCount','manualCount','success','rejected'].includes(key)?'<span class="withdraw-ratio">'+ratio(t,key)+'</span>':'')+(t.classificationPartial===true&&['autoCount','manualCount'].includes(key)?'<small>已确认笔数 · 占已入库总笔数</small>':'')+(key==='avgSeconds'?'<small>按有效时间样本加权</small>':'')+(summaryCountComparison(matched,key)??comparison(t,prior,key,undefined,comparisonIssue))+'</div>').join('')+'</div>'+
-    (!operators?'<details class="withdraw-scope-details"><summary>统计口径</summary><div class="live-panel-note">未分处理方式 '+(observedCount(t.unclassifiedCount)!==null?C(t.unclassifiedCount):'—')+' 笔 · '+ratio(t,'unclassifiedCount')+' · 当前 '+(observedCount(t.platforms)!==null?C(t.platforms):'—')+' 平台'+(matched?' · 同平台对比 '+matched.platforms:'')+'。 '+(singleDay()&&Number.isSafeInteger(d.comparison?.matchedRows)&&Number.isSafeInteger(d.comparison?.totalRows)&&d.comparison.matchedRows>=0&&d.comparison.totalRows>=d.comparison.matchedRows?'前期有记录 '+C(d.comparison.matchedRows)+' / '+C(d.comparison.totalRows)+' 平台。':'')+(singleDay()&&comparisonIssue?E(comparisonIssue)+'。':'')+'汇总主值保留当前所选范围；较昨日仅按两期都有记录的同平台已入库笔数计算，采集完整性尚未核验。未分处理方式保留原值，不按零补齐。</div></details>':comparisonIssue?'<div class="live-panel-note">'+E(comparisonIssue)+'</div>':'')+'</section>';
+   body+='<section class="panel"><div class="panel-head"><h2>'+(operators?'操作人统计':'自动出款日报')+'</h2><span>'+E([...(S.applied?.teams||[]),S.applied?.country||d.country||''].filter(Boolean).join(' · '))+' · '+E(d.startDate||'')+' 至 '+E(d.endDate||'')+' · 对比 '+E(d.previousStartDate||'—')+' 至 '+E(d.previousEndDate||'—')+'</span>'+(!operators?'<div class="withdraw-header-actions"><button class="btn small" '+(S.loading||changed?'disabled aria-disabled="true" ':'')+'onclick="withdrawLoad()">刷新备注</button><button class="btn small" onclick="withdrawNoteSample()">备注样本</button></div>':'')+'</div><div class="withdraw-kpis">'+metrics.map(([key,label])=>'<div class="withdraw-kpi"><label>'+label+(evidence.partial&&key===den?'（已入库小计）':'')+'</label><strong>'+ (key==='avgSeconds'?durationCell(t):countCell(t,key))+'</strong>'+(key===den&&!operators?'<small>日均 '+(known(t.total)?C(Number(t.total)/Math.max(1,Number(t.coveredDays||1))):'—')+'</small>':'')+(key!==den&&['autoCount','manualCount','success','rejected'].includes(key)?'<span class="withdraw-ratio">'+ratio(t,key)+'</span>':'')+(t.classificationPartial===true&&['autoCount','manualCount'].includes(key)?'<small>已确认笔数 · 占已入库总笔数</small>':'')+(key==='avgSeconds'?'<small>按有效时间样本加权</small>':'')+(summaryCountComparison(matched,key)??comparison(t,prior,key,undefined,comparisonIssue))+'</div>').join('')+'</div>'+
+    (!operators?'<details class="withdraw-scope-details"><summary>统计口径</summary><div class="live-panel-note">未分处理方式 '+(observedCount(t.unclassifiedCount)!==null?C(t.unclassifiedCount):'—')+' 笔 · '+ratio(t,'unclassifiedCount')+' · 当前 '+(observedCount(t.platforms)!==null?C(t.platforms):'—')+' 平台'+(matched?' · 同平台对比 '+matched.platforms:'')+'。 '+(singleDay()&&Number.isSafeInteger(d.comparison?.matchedRows)&&Number.isSafeInteger(d.comparison?.totalRows)&&d.comparison.matchedRows>=0&&d.comparison.totalRows>=d.comparison.matchedRows?'前期有记录 '+C(d.comparison.matchedRows)+' / '+C(d.comparison.totalRows)+' 平台。':'')+(singleDay()&&comparisonIssue?E(comparisonIssue)+'。':'')+'汇总主值保留当前所选范围；统计待更新或来源完整性未核验时仅显示昨日已入库值，不计算涨跌。未分处理方式保留原值，不按零补齐。</div></details>':comparisonIssue?'<div class="live-panel-note">'+E(comparisonIssue)+'</div>':'')+'</section>';
    const sort=(label,key)=>'<button class="link" onclick="withdrawSort(\''+key+'\')">'+label+' '+(S.sort===key?(S.asc?'↑':'↓'):'↕')+'</button>';
    const comparisonRow=r=>r.source==='AR'&&d.arCoverage?.coverageBasis==='unverified_source_continuity'&&(d.arCoverage.currentComplete===false||d.arCoverage.previousComplete===false)?{...r,comparisonComparable:false}:r;
    const rate=(r,key)=>ratio(r,key)+(r.country?comparison(comparisonRow(r),r.previous,key,den):'');
-   const headers=[...(daily?['日期']:[]),'<span class="withdraw-platform-heading">'+sort('盘口 / 平台','platform')+sort('国家','country')+'</span>',...(operators?['操作人',sort('处理笔数','processed'),sort('成功','success'),sort('驳回','rejected'),sort('创建订单成功率','successRate'),sort('驳回占比','rejectRate')]:[sort('总提现笔数','total'),sort('成功','success'),sort('驳回','rejected'),sort('创建订单成功率','successRate'),sort('驳回占比','rejectRate'),sort('自动出款','autoCount'),sort('人工处理','manualCount'),sort('自动占比','autoRate'),sort('人工占比','manualRate')]),sort('平均处理用时','avgSeconds'),sort('昨日处理用时','previousAvgSeconds'),sort('用时增减 / %','durationChange'),...(!operators?['原因 / 每日备注','详情']:[])];
+   const headers=[...(daily?['日期']:[]),'<span class="withdraw-platform-heading">'+sort('盘口 / 平台','platform')+sort('国家','country')+'</span>',...(operators?['操作人',sort(evidence.partial?'处理笔数（已入库小计）':'处理笔数','processed'),sort('成功','success'),sort('驳回','rejected'),sort('创建订单成功率','successRate'),sort('驳回占比','rejectRate')]:[sort(evidence.partial?'总提现笔数（已入库小计）':'总提现笔数','total'),sort('成功','success'),sort('驳回','rejected'),sort('创建订单成功率','successRate'),sort('驳回占比','rejectRate'),sort('自动出款','autoCount'),sort('人工处理','manualCount'),sort('自动占比','autoRate'),sort('人工占比','manualRate')]),sort('平均处理用时','avgSeconds'),sort('昨日处理用时','previousAvgSeconds'),sort('用时增减 / %','durationChange'),...(!operators?['原因 / 每日备注','详情']:[])];
    const totalCell=r=>countCell(r,'total')+(r.country&&r.classificationAvailable!==false&&known(r.unclassifiedCount)&&Number(r.unclassifiedCount)>0&&Number(r.unclassifiedCount)<=Number(r.total)?'<small class="cell-sub" title="自动、人工及未分类相加为总笔数；占比均按总笔数计算">未分类 '+C(r.unclassifiedCount)+' 笔</small>':'');
    const cells=(r,i)=>[...(daily?[E(r.dataDate)]:[]),identityCell(r),...(operators?[E(r.account),countCell(r,'processed'),countCell(r,'success'),countCell(r,'rejected'),rate(r,'success'),rate(r,'rejected')]:[totalCell(r),countCell(r,'success'),countCell(r,'rejected'),rate(r,'success'),rate(r,'rejected'),countCell(r,'autoCount'),countCell(r,'manualCount'),rate(r,'autoCount'),rate(r,'manualCount')]),
     durationCell(r),singleDay()||daily?durationCell(r.previous):'仅单日对比',(singleDay()||daily)?absoluteComparison(comparisonRow(r),r.previous,'avgSeconds',' 秒',v=>Number(v).toFixed(2),false):'—',
@@ -781,7 +800,7 @@ if(serial!==S.serial)return;if(applied.accessKey!==accessKey()||applied.nativeSt
   root.addEventListener?.('pagehide',pause);
   function restore(saved){pause();const serial=S.serial,reasonSerial=S.reasonSerial;for(const key of Object.keys(S))delete S[key];Object.assign(S,saved||initialState,{serial,reasonSerial,platforms:(saved?.platforms||[]).slice(),reasonTrigger:null,loading:false,reasonBusy:false});if(S.prepared&&['missing','building','stale'].includes(S.prepared.status))S.prepared={...S.prepared,status:'paused',reason:'page_restored'};}
   const canExport=()=>resultAllowed()&&!!S.applied&&!!S.data&&!S.loading&&!S.error&&!S.prepared&&!draftChanged()&&(S.metricView!=='secondary'||!!S.data.secondary);
-  function exportMeta(){if(!canExport())return null;const q=S.applied.query,explicit=S.applied.successWindowExplicit===true;return [['统计口径',S.metricView==='secondary'?(explicit?'独立时间窗成功记录；不与创建窗取交集':'默认成功日期沿查询日期；保持来源原成功/更新时间口径'):'创建订单当前状态；保持来源原成功状态口径'],['创建时间（平台当地，含起止秒）',q.startAt.slice(0,19),q.endAt.slice(0,19)],[explicit?(q.successBasis==='source_updated'?'独立源订单更新时间（平台当地，含起止秒）':'独立源订单成功时间（平台当地，含起止秒）'):'默认成功日期（沿查询日期；未手填独立时间）',q.successStartAt.slice(0,19),q.successEndAt.slice(0,19)],['说明','源更新时间不代表成功发生时间；未提供可信时间字段显示未知'],['统计生成时间',S.data.prepared?.computedAt||''],['来源完整性','以各来源采集回执为准']];}
+  function exportMeta(){if(!canExport())return null;const q=S.applied.query,explicit=S.applied.successWindowExplicit===true;return [['统计口径',S.metricView==='secondary'?(explicit?'独立时间窗成功记录；不与创建窗取交集':'默认成功日期沿查询日期；保持来源原成功/更新时间口径'):'创建订单当前状态；保持来源原成功状态口径'],['创建时间（平台当地，含起止秒）',q.startAt.slice(0,19),q.endAt.slice(0,19)],[explicit?(q.successBasis==='source_updated'?'独立源订单更新时间（平台当地，含起止秒）':'独立源订单成功时间（平台当地，含起止秒）'):'默认成功日期（沿查询日期；未手填独立时间）',q.successStartAt.slice(0,19),q.successEndAt.slice(0,19)],['说明','源更新时间不代表成功发生时间；未提供可信时间字段显示未知'],['统计生成时间',S.data.prepared?.computedAt||''],['来源完整性',readEvidence(S.data).partial?'已入库小计，不能作为全天完整总计':'来源完整性已确认'],['统计更新状态',readEvidence(S.data).issue||'已核验'],['前期比较',readEvidence(S.data).issue?'仅保留昨日已入库值，不计算涨跌':'按已核验范围比较']];}
   return {capture,pause,restore,render:draw,load,state:S,query,cancel:clearResult,canExport,exportMeta};
  }};
  if(typeof module!=='undefined')module.exports={addDay,duration,cleanNote,decodeNote};

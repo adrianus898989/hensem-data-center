@@ -38,7 +38,7 @@ async function edge(action, patch={}, options={}) {
     }
     return {data:name==="application_session_check"?{allowed:options.sessionAllowed!==false}:null,error:options.sessionFailure&&name==="application_session_check"?{message:"PRIVATE_SESSION_FAILURE"}:options.revokeFailure&&name==="application_revoke_user_sessions"?{message:"PRIVATE_REVOKE_FAILURE"}:null};
   },auth:{
-    getUser:async()=>({data:{user:options.invalidToken?null:{id:caller.auth_user_id,user_metadata:{dashboard_role:'owner',data_scope:ALL}}}}),
+    getUser:async()=>{if(options.authThrows)throw options.authError;if(options.malformed!==undefined)return options.malformed;return {data:{user:options.invalidToken?null:{id:caller.auth_user_id,user_metadata:{dashboard_role:'owner',data_scope:ALL}}},error:options.authError||(options.invalidToken?{name:'AuthApiError',status:401,code:'bad_jwt'}:null)};},
     admin:{
       createUser:async data=>{authCalls.push({action:'create',data});return {data:{user:{id:'fixture-created'}}};},
       updateUserById:async(id,data)=>{authCalls.push({action:'reset',id,data});return {};},

@@ -7,7 +7,7 @@ const prior=(extra={})=>({total:100,success:50,rejected:50,autoCount:30,manualCo
 async function fixture(current=row({previous:prior()}),extra={},options={}){
  const tables=[],calls=[],root={Date,Intl,HensemLiveFilters:{multi:()=>''}};root.window=root;vm.runInNewContext(source,root);
  const L={catalogReady:true,catalog:[{id:'synthetic-ar',name:'SYNTHETIC-AR',source:'ar',country:'印度',team:'M8'}],country:'印度',team:'M8',from:options.from||'2026-10-10',to:options.to||'2026-10-10'};
- const data={startDate:'2026-10-10',endDate:'2026-10-10',previousStartDate:'2026-10-09',previousEndDate:'2026-10-09',rows:[current],total:1,totals:current,previousTotals:current.previous,comparison:{complete:false},arCoverage:{coverageBasis:'unverified_source_continuity',currentComplete:false,previousComplete:false},...extra};
+ const data={startDate:'2026-10-10',endDate:'2026-10-10',previousStartDate:'2026-10-09',previousEndDate:'2026-10-09',rows:[current],total:1,totals:current,previousTotals:current.previous,prepared:{status:'ready',freshness:'fresh',calculationComplete:true,computedAt:'2026-10-13T00:00:00Z',expiresAt:'2099-01-01T00:00:00Z',sourceComplete:true},sourceComplete:true,comparison:{complete:true},arCoverage:{coverageBasis:'verified_source_continuity',currentComplete:true,previousComplete:true},...extra};
  const page=root.HensemLiveWithdrawPages.create({L,page:()=> 'auto_withdraw',E,C:String,N:String,R:(a,b)=>(100*Number(a)/Number(b)).toFixed(2)+'%',box:(_title,body)=>body,table:(headers,rows,cls,footers)=>{tables.push({headers,rows,cls,footers});return rows.flat().join('');},render:()=>{},request:async query=>{calls.push(query);return data;}});
  if(options.daily)page.state.daily=true;await page.load();
  return {page,L,data,calls,draw(){tables.length=0;const html=page.render();return {html,table:tables.find(t=>t.cls?.includes('withdraw-stat-table'))};}};
@@ -18,7 +18,7 @@ test('AR cutover preserves actual yesterday shares and unchanged automatic, succ
  assert.match(cells[8],/昨日 33\.30%.*-1\.24 pp/);assert.doesNotMatch(cells[8],/分类口径不同/);
  assert.match(cells[9],/昨日 30\.81% · 分类口径不同/);assert.match(cells[9],/无明确操作人的驳回计入人工/);assert.doesNotMatch(cells[9],/37\.13 pp|withdraw-delta| pp/);
  for(const index of [4,5]){assert.match(cells[index],/昨日 .* pp/);assert.doesNotMatch(cells[index],/分类口径不同/);}
- assert.equal((cells.join('').match(/分类口径不同/g)||[]).length,1);assert.equal((html.match(/AR 两期完整性尚未核验，汇总暂不比较/g)||[]).length,1);
+ assert.equal((cells.join('').match(/分类口径不同/g)||[]).length,1);assert.doesNotMatch(html,/已入库小计/,'explicit source proof keeps this classification-basis test comparable');
  const manualCard=html.match(/<label>人工处理<\/label>(.*?)<\/div>/s)?.[1];assert.match(manualCard,/昨日 3760 · 分类口径不同/);assert.doesNotMatch(manualCard,/较昨日|withdraw-delta/);
  for(const footer of table.footers)assert.doesNotMatch(footer.join(''),/昨日|分类口径不同|withdraw-delta/);
  assert.deepEqual(current,before);assert.equal(f.page.state.data.rows[0],current);assert.equal(f.calls.length,1);

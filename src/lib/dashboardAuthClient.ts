@@ -808,8 +808,18 @@ export type DashboardIpSettings = {
   rows: DashboardIpWhitelistRow[];
 };
 
-export async function verifyDashboardAccess(session: DashboardSession) {
-  return await callAdminFunction(session, { action: "check-access" });
+export async function verifyDashboardAccess(session: DashboardSession, observeSession?: (current: DashboardSession) => void) {
+  let active = await ensureDashboardSession(session);
+  observeSession?.(active);
+  try { return await callAdminFunction(active, { action: "check-access" }); }
+  catch (error) {
+    // Only this read may replay once after a verified invalid-token response.
+    // Policy 403s, transient failures and account management writes never replay.
+    if (!(error instanceof DashboardHttpError) || error.status !== 401 || error.code !== "auth_token_invalid") throw error;
+    active = await ensureDashboardSession(active, true);
+    observeSession?.(active);
+    return await callAdminFunction(active, { action: "check-access" });
+  }
 }
 
 export async function getDashboardIpSettings(session: DashboardSession): Promise<DashboardIpSettings> {

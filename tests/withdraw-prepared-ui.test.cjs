@@ -46,7 +46,7 @@ test('an operator page that becomes ready after pending applies its requested of
 test('ready expired withdrawal results retain real generation time and explicit background refresh status',async()=>{
  for(const refreshState of ['idle','queued','running','failed']){
   const f=fixture(),run=f.page.load();const value=data(3);Object.assign(value.prepared,{computedAt:'2026-10-15T05:10:00Z',expiresAt:'2026-10-15T05:20:00Z',freshness:'refresh_due',refreshState});f.pending.shift().resolve(value);await run;
-  assert.equal(f.page.state.data.totals.total,3);assert.equal(f.page.state.data.prepared.computedAt,'2026-10-15T05:10:00Z');assert.equal(f.page.state.prepared,null);assert.match(f.page.render(),/更新于 2026-10-15 10:40:00/);assert.match(f.page.render(),new RegExp(refreshState==='failed'?'更新未完成':['queued','running'].includes(refreshState)?'更新中':'待更新'));assert.equal(f.calls.length,1);
+  assert.equal(f.page.state.data.totals.total,3);assert.equal(f.page.state.data.prepared.computedAt,'2026-10-15T05:10:00Z');assert.equal(f.page.state.prepared,null);assert.match(f.page.render(),/统计生成于 2026-10-15 10:40:00/);assert.match(f.page.render(),new RegExp(refreshState==='failed'?'更新失败':['queued','running'].includes(refreshState)?'更新中':'待更新'));assert.equal(f.calls.length,1);
  }
 });
 
