@@ -67,7 +67,7 @@
  }
  function create(c){
   const {L,E,C}=c;
-  const initial=()=>({status:'idle',key:'',items:[],unsupported:[],results:[],failures:[],error:''});
+  const initial=()=>({status:'idle',key:'',items:[],unsupported:[],notOperating:[],results:[],failures:[],error:''});
   let S=initial(),serial=0,pending=null,inFlight=0,nextForce=false;const waiters=[];
   // Only validated counts live here, for this document; no credentials or
   // results enter browser storage. The host still authorizes every source read.
@@ -109,7 +109,7 @@
    const ranges=related.map(item=>({family:family(item),start:Date.parse(item.request.startAt),end:Date.parse(item.request.endAt)}));
    for(const [key,entry]of cache)if(ranges.some(range=>entry.family===range.family&&entry.startAt<range.end&&entry.endAt>range.start))removeEntry(key);
   }
-  function scope(){const context=accessContext(),selected=[...new Map((c.selected()||[]).map(p=>[p.id,p])).values()].sort((a,b)=>String(a.id).localeCompare(String(b.id))),items=[],unsupported=[];for(const p of selected){if(native(p))items.push(requestFor(p,c.query));else unsupported.push({id:p.id,name:p.name||'未提供平台名',reason:'此来源尚未接入会员明细'});}return {context,items,unsupported,key:encode([context,L.country,L.from,L.to,L.direction,L.status,L.multi,items.map(i=>[i.request,i.successWindow,identity(i.platform)]),unsupported.map(p=>[p.id,p.name])])};}
+  function scope(){const context=accessContext(),selected=[...new Map((c.selected()||[]).map(p=>[p.id,p])).values()].sort((a,b)=>String(a.id).localeCompare(String(b.id))),items=[],unsupported=[],notOperating=[];for(const p of selected){if(native(p)){const item=requestFor(p,c.query),e=c.lifecycle?.(p,L);if(e?.notOperating===true)notOperating.push({id:p.id,name:p.name,note:e.note});else items.push(item);}else unsupported.push({id:p.id,name:p.name||'未提供平台名',reason:'此来源尚未接入会员明细'});}return {context,items,unsupported,notOperating,key:encode([context,c.lifecycleRevision?.()||'',notOperating,L.country,L.from,L.to,L.direction,L.status,L.multi,items.map(i=>[i.request,i.successWindow,identity(i.platform)]),unsupported.map(p=>[p.id,p.name])])};}
   const currentKey=()=>{try{return scope().key}catch{return ''}};
   const view=()=>{
    if(L.dirty||S.key!==currentKey())return initial();
@@ -203,7 +203,7 @@
    let q;try{q=scope()}catch(error){S={...initial(),status:'error',error:error.message||'人数统计筛选无效'};c.render();return Promise.resolve();}
    force=force===true||nextForce;if(!force&&q.key===S.key&&S.status!=='idle')return pending||Promise.resolve();
    nextForce=false;if(force)invalidate(q.items);const policy={force,context:q.context,generation:cacheGeneration};
-   readConcurrency=concurrency===1?1:2;const id=++serial;S={...initial(),status:'loading',key:q.key,items:q.items,unsupported:q.unsupported};c.render();
+   readConcurrency=concurrency===1?1:2;const id=++serial;S={...initial(),status:'loading',key:q.key,items:q.items,unsupported:q.unsupported,notOperating:q.notOperating};c.render();
    const run=(async()=>{
     if(!q.items.length){S={...S,status:'ready'};c.render();return;}
     let index=0;const timedOutItems=[];
@@ -219,7 +219,7 @@
   }
   function aggregate(s,direction,basis){const all=s.results.flatMap(r=>r.rows.filter(row=>row.direction===direction&&row[basis+'_in_window']!==false)),unavailable=all.filter(row=>row[basis+'_available']===false),rows=all.filter(row=>row[basis+'_available']!==false),members=rows.reduce((n,r)=>n+r[basis+'_member_count'],0),orders=rows.reduce((n,r)=>n+r[basis+'_order_count'],0),missing=rows.reduce((n,r)=>n+r[basis+'_missing_member_count'],0),received=s.results.filter(r=>r.rows.some(row=>row.direction===direction&&row[basis+'_in_window']!==false&&row[basis+'_available']!==false)).length,expected=s.items.length+s.unsupported.length,partial=received<expected||missing>0;return {members,orders,missing,received,expected,partial,unavailable:[...new Set(unavailable.map(row=>unavailableReason(row,basis)))],display:received===0||members===0&&partial?'—':C(members)};}
   const multiple=s=>s.items.some(i=>i.successWindow?.days.length>1)||new Set(s.items.flatMap(i=>i.days)).size>1||String(L.from||'').slice(0,10)!==String(L.to||'').slice(0,10);
-  const status=s=>s.status==='loading'?'人数读取中':s.status==='paused'?s.error:s.status==='error'?s.error:s.status==='idle'?'查询后显示人数':!s.items.length?'所选来源尚未接入会员明细':'';
+  const status=s=>s.status==='loading'?'人数读取中':s.status==='paused'?s.error:s.status==='error'?s.error:s.status==='idle'?'查询后显示人数':!s.items.length?(s.notOperating?.length&&!s.unsupported.length?'所选平台在此范围未营业；人数不填零':'所选来源尚未接入会员明细'):'';
   function readNotice(s){
    const values=s.results.filter(result=>Number.isFinite(result._memberReadAt));if(!values.length)return '';
    const at=Math.min(...values.map(result=>result._memberReadAt)),zones=[...new Set(values.map(result=>result.platform?.timezone).filter(Boolean))],zone=zones.length===1?zones[0]:'UTC';
@@ -234,21 +234,22 @@
   }
   function metric(direction){
    if(!directions.includes(direction))return '';
-   const s=view(),created=aggregate(s,direction,'created'),success=aggregate(s,direction,'success'),name=direction==='charge'?'充值':'提款',partial=created.partial||success.partial,label=multiple(s)?'每日去重人次 · '+name+' / 成功'+name:name+'人数 / 成功'+name+'人数',message=status(s)||('读取 '+C(created.received)+' / '+C(created.expected)+' 平台'+(partial?' · 部分数据':' · 已采集订单'))+([...new Set([...created.unavailable,...success.unavailable])].length?' · '+[...new Set([...created.unavailable,...success.unavailable])].join('；'):''),notice=readNotice(s);
-   return '<div class="df-flow-metric df-member-counts"><span>'+label+'</span><strong><button type="button" class="link metric-link" onclick="liveMemberCountsDetails()">'+created.display+' / '+success.display+'</button></strong><small class="cell-sub">'+(partial&&(created.members||success.members)?'已知人数 · ':'')+(multiple(s)?'各日、各平台分别去重后相加':'同平台跨三方去重')+'</small><small class="df-coverage">'+E(message)+retry(s)+'</small>'+(notice?'<small class="cell-basis">'+E(notice)+'</small>':'')+(windowNotice(s)?'<small class="cell-basis">'+E(windowNotice(s))+'</small>':'')+'</div>';
+   const s=view(),created=aggregate(s,direction,'created'),success=aggregate(s,direction,'success'),name=direction==='charge'?'充值':'提款',partial=created.partial||success.partial,label=multiple(s)?'每日去重人次 · '+name+' / 成功'+name:name+'人数 / 成功'+name+'人数',message=status(s)||('读取 '+C(created.received)+' / '+C(created.expected)+' 平台'+(partial?' · 部分数据':' · 已采集订单'))+([...new Set([...created.unavailable,...success.unavailable])].length?' · '+[...new Set([...created.unavailable,...success.unavailable])].join('；'):''),notice=readNotice(s),inactive=s.notOperating?.length?' · 未营业 '+C(s.notOperating.length)+' 平台':'';
+   return '<div class="df-flow-metric df-member-counts"><span>'+label+'</span><strong><button type="button" class="link metric-link" onclick="liveMemberCountsDetails()">'+created.display+' / '+success.display+'</button></strong><small class="cell-sub">'+(partial&&(created.members||success.members)?'已知人数 · ':'')+(multiple(s)?'各日、各平台分别去重后相加':'同平台跨三方去重')+'</small><small class="df-coverage">'+E(message+inactive)+retry(s)+'</small>'+(notice?'<small class="cell-basis">'+E(notice)+'</small>':'')+(windowNotice(s)?'<small class="cell-basis">'+E(windowNotice(s))+'</small>':'')+'</div>';
   }
   // Platform ledger cells reuse the exact current member query; rendering and
   // sorting never request more data or infer identities from a display name.
   function platformLabel(direction){return '实际'+(direction==='charge'?'充值':'取款')+(multiple(view())?'人次':'人数');}
   function platformMetric(platformIds,direction){
-   const s=view(),inputs=Array.isArray(platformIds)?platformIds:[platformIds],ids=[...new Set(inputs.filter(id=>typeof id==='string'&&id))],unknown=inputs.filter(id=>typeof id!=='string'||!id).length,expected=ids.length+unknown;
+   const s=view(),inputs=Array.isArray(platformIds)?platformIds:[platformIds],selectedIds=[...new Set(inputs.filter(id=>typeof id==='string'&&id))],notOperating=(s.notOperating||[]).filter(p=>selectedIds.includes(p.id)),ids=selectedIds.filter(id=>!notOperating.some(p=>p.id===id)),unknown=inputs.filter(id=>typeof id!=='string'||!id).length,expected=ids.length+unknown;
+   if(notOperating.length&&!expected){const title=notOperating.map(p=>p.name+'：'+p.note).join('；');return {value:null,display:'未营业',html:'<span class="df-platform-member-count" title="'+E(title)+'">未营业</span>',partial:false,label:platformLabel(direction),title,coverage:{complete:false,receivedPlatforms:0,expectedPlatforms:0,notOperatingPlatforms:notOperating.length,successOrderCount:null,missingMemberOrderCount:null,sourceCompletenessVerified:false}};}
    const observed=directions.includes(direction)?s.results.filter(r=>ids.includes(r.platform.id)&&r.rows.some(row=>row.direction===direction)):[],unavailable=observed.flatMap(r=>r.rows.filter(row=>row.direction===direction&&row.success_in_window!==false&&row.success_available===false)),matched=observed.filter(r=>r.rows.some(row=>row.direction===direction&&row.success_in_window!==false&&row.success_available!==false));
    const rows=matched.flatMap(r=>r.rows.filter(row=>row.direction===direction&&row.success_in_window!==false&&row.success_available!==false));
    const members=rows.reduce((n,r)=>n+r.success_member_count,0),orders=rows.reduce((n,r)=>n+r.success_order_count,0),missing=rows.reduce((n,r)=>n+r.success_missing_member_count,0);
    const partial=!expected||matched.length<expected||missing>0,value=!matched.length||members===0&&partial?null:members;
    const reasons=[...unavailable.map(row=>unavailableReason(row,'success')),...ids.filter(id=>!observed.some(r=>r.platform.id===id)).map(id=>s.failures.find(p=>p.id===id)?.error||s.unsupported.find(p=>p.id===id)?.reason||status(s)||'该平台当前方向人数尚未读取')];
    const title=(createdBasis(s)?'按创建订单当前成功状态统计；':'按成功时间统计；')+'同平台当地日按会员 ID 去重，跨三方只计一次。'+(multiple(s)?'多日为每日去重人次之和，不是整个期间去重人数。':'同日各平台分别去重，平台之间不合并会员。')+
-    '已读取 '+C(matched.length)+' / '+C(expected)+' 平台；'+(unavailable.length?'部分成功订单会员 ID 覆盖不可统计。':'成功订单会员 ID 覆盖 '+C(orders-missing)+' / '+C(orders)+' 笔。')+(missing?C(missing)+' 笔未提供会员 ID，未计入人数。':'')+
+    '已读取 '+C(matched.length)+' / '+C(expected)+' 平台；'+(notOperating.length?'已确认未营业 '+C(notOperating.length)+' 平台；':'')+(unavailable.length?'部分成功订单会员 ID 覆盖不可统计。':'成功订单会员 ID 覆盖 '+C(orders-missing)+' / '+C(orders)+' 笔。')+(missing?C(missing)+' 笔未提供会员 ID，未计入人数。':'')+
     (partial?'当前仅显示已知人数，* 表示部分数据。':'')+(reasons.length?[...new Set(reasons)].join('；')+'。':'')+'仅统计已采集订单，源系统完整性尚未核验。'+(observed.some(result=>duoli(result.platform))?(createdBasis(s)?duoliCreatedBasis:duoliBasis):'');
    const display=value===null?'—':C(value),html='<span class="df-platform-member-count" tabindex="0" title="'+E(title)+'">'+display+(value!==null&&partial?'<sup aria-label="部分数据">*</sup>':'')+'</span>';
    return {value,display,html,partial,label:platformLabel(direction),title,coverage:{complete:!partial,receivedPlatforms:matched.length,expectedPlatforms:expected,successOrderCount:unavailable.length?null:orders,missingMemberOrderCount:unavailable.length?null:missing,sourceCompletenessVerified:matched.length>0&&matched.every(r=>r.sourceCompletenessVerified)}};
@@ -273,7 +274,7 @@
    const click=(target,mode=basis)=>"liveMemberCountsDetails('"+target+"','"+mode+"')";
    const tabs='<div class="live-tabs"><button type="button" class="'+(tab==='members'?'on':'')+'" onclick="'+click('members')+'">每日人数</button><button type="button" class="'+(tab==='frequency'?'on':'')+'" onclick="'+click('frequency')+'">提款频次</button></div>';
    const coverage=(tab==='frequency'?['withdraw']:directions).map(d=>{const a=aggregate(s,d,'created'),b=aggregate(s,d,'success');if(!a.received&&!a.unavailable.length&&!b.unavailable.length)return '';return '<div class="live-definition">'+(d==='charge'?'充值':'提款')+'：已读取 '+C(a.received)+' / '+C(a.expected)+' 平台；'+(a.unavailable.length?E(a.unavailable.join('；'))+'；':'创建订单会员 ID 覆盖 '+C(a.orders-a.missing)+' / '+C(a.orders)+' 笔；')+(b.unavailable.length?E(b.unavailable.join('；'))+'。':'成功订单会员 ID 覆盖 '+C(b.orders-b.missing)+' / '+C(b.orders)+' 笔。')+'</div>';}).join('');
-   const problems=[...s.unsupported.map(p=>[p.name,p.reason]),...s.failures.map(p=>[p.name,'读取失败：'+p.error])].map(([name,reason])=>'<div class="live-definition">'+E(name)+'：'+E(reason)+'</div>').join('');
+   const problems=[...(s.notOperating||[]).map(p=>[p.name,p.note]),...s.unsupported.map(p=>[p.name,p.reason]),...s.failures.map(p=>[p.name,'读取失败：'+p.error])].map(([name,reason])=>'<div class="live-definition">'+E(name)+'：'+E(reason)+'</div>').join('');
    let definition,table;
    if(tab==='frequency'){
     const relevant=sorted.filter(r=>r.withdraw&&r.withdraw[basis+'_in_window']!==false),basisLabel=basis==='created'?'创建提款':'成功提款';
