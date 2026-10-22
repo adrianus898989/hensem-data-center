@@ -203,8 +203,9 @@ test('role-account creation requires an exact explicit data scope before creatin
 
 test('role-account creation checks verified Auth, registered session, active profile and a fresh assigned role', async () => {
   const cases = [
-    [{noToken:true},401], [{authResult:{data:{user:null},error:null}},401],
-    [{authResult:{data:{user:{id:ACTOR}},error:{message:'PRIVATE_AUTH_FAILURE'}}},401],
+    [{noToken:true},401], [{authResult:{data:{user:null},error:null}},503],
+    [{authResult:{data:{user:{id:ACTOR}},error:{message:'PRIVATE_AUTH_FAILURE'}}},503],
+    [{authResult:{data:{user:null},error:{name:'AuthApiError',status:401,code:'bad_jwt'}}},401],
     [{token:tokenFor('wrong-session')},403], [{sessionResult:{data:{allowed:false},error:null}},403],
     [{sessionResult:{data:{allowed:'true'},error:null}},403], [{sessionResult:{data:{allowed:true},error:{message:'PRIVATE_SESSION_FAILURE'}}},503],
     [{profileResult:{data:null,error:null}},403], [{profile:{active:false}},403],

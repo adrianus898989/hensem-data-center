@@ -4,7 +4,7 @@ function setup(data,view='auto_withdraw'){
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-withdraw-pages.js'),'utf8'),root);
  const p={id:'77777777-7777-4777-8777-777777777777',name:'POPMIU',sourceName:'POPMIU',source:'wg',country:'巴西',team:'M8',timezone:'America/Sao_Paulo'};
  const page=root.HensemLiveWithdrawPages.create({L:{catalogReady:true,catalog:[p],country:'巴西',from:'2026-10-06',to:'2026-10-06'},page:()=>view,E:v=>String(v??'').replaceAll('"','&quot;'),C:String,N:String,R:(a,b)=>(a/b*100).toFixed(2)+'%',box:(_title,body)=>body,table:(headers,rows,cls,footers)=>{tables.push({headers,rows,footers});return '';},render:()=>{},request:async()=>({})});
- page.state.data=data;return {page,tables};
+ page.state.data={prepared:{status:'ready',freshness:'fresh',calculationComplete:true,computedAt:'2026-10-13T00:00:00Z',expiresAt:'2099-01-01T00:00:00Z',sourceComplete:true},sourceComplete:true,comparison:{complete:true},...data};return {page,tables};
 }
 const row=(more={})=>({country:'巴西',platform:'POPMIU',total:1026,success:996,rejected:7,autoCount:8,manualCount:1018,avgSeconds:445.702729,durationSampleCount:1026,durationTotalSeconds:457291,durationBasis:'created_to_operated',...more});
 test('WG processing average and previous comparison are visible with their actual time basis',()=>{
@@ -22,17 +22,17 @@ test('absent time samples remain unknown without a fabricated zero duration or c
  const current=row({avgSeconds:null,durationSampleCount:0,durationTotalSeconds:null,previous:row()}),f=setup({rows:[current],total:1,totals:current});f.page.render();
  const t=f.tables.find(t=>t.headers.some(h=>h.includes('平均处理用时')));assert.equal(t.rows[0][10],'—');assert.equal(t.rows[0][12],'—');
 });
-test('AR historical rates compare observed counts while different duration bases stay explicitly incomparable',()=>{
+test('AR unverified rates retain prior values without growth while different duration bases stay incomparable',()=>{
  const previous=row({total:200,autoCount:120,manualCount:80,avgSeconds:1567.860932,durationBasis:'source_reported_processing'});
  const current=row({source:'AR',total:100,autoCount:40,manualCount:50,unclassifiedCount:10,avgSeconds:3351,durationBasis:'applied_to_completed',comparisonComparable:false,previous});
  const f=setup({rows:[current],total:1,totals:current,comparison:{complete:false},arCoverage:{coverageBasis:'unverified_source_continuity',currentComplete:false,previousComplete:false}}),html=f.page.render();
  const t=f.tables.find(t=>t.headers.some(h=>h.includes('昨日处理用时')));
  assert.match(t.rows[0][1],/未分类 10 笔/);assert.match(t.rows[0][11],/26分8秒/);assert.match(t.rows[0][11],/原日报提供的处理用时/);
- assert.match(t.rows[0][8],/昨日 60\.00%/);assert.match(t.rows[0][9],/昨日 40\.00%/);
- assert.match(t.rows[0][8],/-20\.00 pp/);assert.match(t.rows[0][9],/\+10\.00 pp/);
- for(const i of [8,9])assert.match(t.rows[0][i],/title="按已入库数据计算；两期完整性尚未核验"/);
+ assert.match(t.rows[0][8],/昨日已入库 60\.00%/);assert.match(t.rows[0][9],/昨日已入库 40\.00%/);
+ assert.doesNotMatch(t.rows[0][8],/ pp|withdraw-delta/);assert.doesNotMatch(t.rows[0][9],/ pp|withdraw-delta/);
+ for(const i of [8,9])assert.match(t.rows[0][i],/暂不计算涨跌/);
  assert.doesNotMatch(t.rows[0][12],/withdraw-delta| pp/);assert.doesNotMatch(t.rows[0].join(''),/AR 两期完整性/);
- assert.match(t.rows[0][12],/口径不同.*口径不同|不计算涨跌.*口径不同/);assert.equal((html.match(/AR 两期完整性尚未核验，汇总暂不比较/g)||[]).length,1);
+ assert.match(t.rows[0][12],/口径不同.*口径不同|不计算涨跌.*口径不同/);assert.match(html,/已入库小计/);
  assert.equal(current.previous,previous);assert.equal(current.total,100);
 });
 test('different duration bases independently suppress misleading time deltas',()=>{

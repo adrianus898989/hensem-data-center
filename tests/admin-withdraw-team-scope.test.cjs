@@ -7,7 +7,7 @@ const m8=[{id:'m8-same',name:'SAME',country:'巴西',team:'M8',source:'ar',timez
 const ph=[{id:'ph-same',name:'SAME',country:'胖虎巴西',team:'胖虎',scopeGroup:'BR_PANGHU',source:'withdraw',timezone:'America/Sao_Paulo'},{id:'ph-only',name:'PH-ONLY',country:'胖虎巴西',team:'胖虎',scopeGroup:'BR_PANGHU',source:'withdraw'}];
 function fixture({catalog=m8,withdrawCatalog=ph,country='巴西',team='胖虎',view='auto_withdraw',respond}={}){
  const calls=[],L={catalogReady:true,catalog,withdrawCatalog,country,team,multi:{team:team==='all'?[]:[team]},from:'2026-09-24T00:00:00',to:'2026-09-25T23:59:59'},context={Date,Intl,document:{getElementById:()=>null,querySelector:()=>null},HensemLiveFilters:{multi:({items})=>'<div class="test-platforms">'+items.map(x=>E(x[0])).join('|')+'</div>'}};context.window=context;vm.createContext(context);vm.runInContext(source('live-report-data.js'),context);vm.runInContext(source('live-withdraw-pages.js'),context);
- const page=context.HensemLiveWithdrawPages.create({L,E,C:String,N:String,R:(n,d)=>d?String(n/d*100)+'%':'—',box:(_,body)=>body,table:(headers,rows)=>'<table>'+rows.map(row=>'<tr>'+row.map(cell=>'<td>'+cell+'</td>').join('')+'</tr>').join('')+'</table>',render:()=>{},page:()=>view,request:async q=>{calls.push(plain(q));if(respond)return respond(q);if(q.action==='withdrawReasons')return {available:false};if(q.action==='withdrawNote')return {...q,version:'saved'};return {rows:[{country:q.country,platform:'SAME',total:4,success:3,rejected:1}],totals:{total:4},notes:[],canWriteNotes:true}}});return {L,context,page,calls};
+ const page=context.HensemLiveWithdrawPages.create({L,E,C:String,N:String,R:(n,d)=>d?String(n/d*100)+'%':'—',box:(_,body)=>body,table:(headers,rows)=>'<table>'+rows.map(row=>'<tr>'+row.map(cell=>'<td>'+cell+'</td>').join('')+'</tr>').join('')+'</table>',render:()=>{},page:()=>view,request:async q=>{calls.push(plain(q));if(respond)return respond(q);if(q.action==='withdrawReasons')return {available:false};if(q.action==='withdrawNote')return {...q,version:'saved'};return {prepared:{status:'ready',freshness:'fresh',calculationComplete:true,computedAt:'2026-10-13T00:00:00Z',expiresAt:'2099-01-01T00:00:00Z',sourceComplete:true},sourceComplete:true,comparison:{complete:true},rows:[{country:q.country,platform:'SAME',total:4,success:3,rejected:1}],totals:{total:4},notes:[],canWriteNotes:true}}});return {L,context,page,calls};
 }
 test('withdraw and operator cards show count differences rather than confusing share changes with count growth',async()=>{
  for(const view of ['auto_withdraw','withdraw_operators']){
@@ -50,7 +50,7 @@ test('incomplete aggregate coverage does not erase existing previous totals or t
    delete f.page.state.data.newarCoverage;delete f.page.state.data.yashCoverage;delete f.page.state.data.wgCoverage;Object.assign(f.page.state.data,metadata);
    const html=f.page.render(),cards=html.split('withdraw-kpis')[1].split('</section>')[0];
    assert.match(cards,new RegExp(message));assert.doesNotMatch(cards,/对比日期暂无数据|withdraw-delta|NaN|Infinity/);
-   assert.match(html,/-5\.00 pp/,'a platform with a previous row retains its own share comparison');
+   assert.doesNotMatch(html,/-5\.00 pp/,'a previous row alone does not prove complete collection');assert.match(html,/昨日已入库 80%/);
    assert.equal(f.page.state.data.previousTotals,previous,'rendering keeps the provided previous-period values');
    if(view==='auto_withdraw'){assert.match(html,/前期有记录 17 \/ 17 平台/);assert.doesNotMatch(html,/昨日覆盖 17/);}
   }
@@ -60,7 +60,7 @@ test('comparison messages distinguish unavailable coverage from genuinely absent
  const f=fixture();f.L.from='2026-09-25T00:00:00';await f.page.load();
  Object.assign(f.page.state.data,{totals:{total:10},previousTotals:null,comparison:{complete:false},newarCoverage:{currentComplete:true,previousComplete:false}});
  let cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/前期覆盖不完整，汇总暂不比较/);assert.doesNotMatch(cards,/对比日期暂无数据|undefined|NaN/);
- f.page.state.data.comparison={complete:true};cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/对比日期暂无数据/);assert.doesNotMatch(cards,/withdraw-delta/);
+ f.page.state.data.comparison={complete:true};f.page.state.data.newarCoverage.previousComplete=true;cards=f.page.render().split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/对比日期暂无数据/);assert.doesNotMatch(cards,/withdraw-delta/);
 });
 test('all current platforms can have prior records while the previous scope contains an extra platform',async()=>{
  const f=fixture();f.L.from='2026-09-25T00:00:00';await f.page.load();
@@ -201,5 +201,5 @@ test('reason search shares the keyboard guard and submits only one plain Enter',
 
 test('AR withheld previous rows show unverified coverage while trustworthy source comparisons still work',async()=>{
  const f=fixture();f.L.from='2026-09-25T00:00:00';await f.page.load();Object.assign(f.page.state.data,{arCoverage:{coverageBasis:'unverified_source_continuity',currentComplete:false,previousComplete:false},comparison:{complete:false},rows:[{country:'巴西',platform:'RAW-AR',source:'AR',total:100,success:70,rejected:30,autoCount:50,manualCount:50,previous:null},{country:'胖虎巴西',platform:'VALID-PREVIOUS',source:'PANDA',total:100,success:70,rejected:30,previous:{total:100,success:80,rejected:20}},{country:'巴西',platform:'AR-WITH-PREVIOUS',source:'AR',total:100,success:70,rejected:30,previous:{total:100,success:80,rejected:20}}]});
- const html=f.page.render(),raw=html.match(/<tr><td>[^]*?RAW-AR[^]*?<\/tr>/)[0];assert.match(raw,/昨日 —/);assert.doesNotMatch(raw,/AR 两期完整性尚未核验/);assert.doesNotMatch(raw,/对比日期暂无数据/);assert.match(html,/昨日 80%/);assert.match(html,/-10\.00 pp/);
+ const html=f.page.render(),raw=html.match(/<tr><td>[^]*?RAW-AR[^]*?<\/tr>/)[0];assert.match(raw,/昨日已入库 —/);assert.doesNotMatch(raw,/AR 两期完整性尚未核验/);assert.doesNotMatch(raw,/对比日期暂无数据/);assert.match(html,/昨日已入库 80%/);assert.doesNotMatch(html,/-10\.00 pp/,'aggregate coverage is unverified; preserve prior shares without implying volume growth');
 });

@@ -7,7 +7,7 @@ function fixture(data,operators=false,respond){
  vm.runInNewContext(source,root);
  const L={catalogReady:true,catalog:[{id:'yash',country:'印度',name:'YASH.BET',source:'kb',timezone:'Asia/Kolkata'}],country:'印度',from:'2026-10-08',to:'2026-10-08'};
  const page=root.HensemLiveWithdrawPages.create({L,page:()=>operators?'withdraw_operators':'auto_withdraw',E,C:v=>v===null?'—':Number(v||0).toLocaleString('en-US'),N:String,R:(n,d)=>d?(100*n/d).toFixed(2)+'%':'—',box:(_title,body)=>body,table:(headers,rows,cls,footers)=>{tables.push({headers,rows:Array.from(rows,row=>Array.from(row)),cls,footers:footers&&Array.from(footers,row=>Array.from(row))});return rows.flat().join('')},render:()=>{},request:async q=>{requests.push(q);return respond?respond(q):{available:false,rows:[]}}});
- page.state.data={startDate:'2026-10-08',endDate:'2026-10-08',rows:[yash()],total:1,totals:yash(),...data};
+ page.state.data={prepared:{status:'ready',freshness:'fresh',calculationComplete:true,computedAt:'2026-10-13T00:00:00Z',expiresAt:'2099-01-01T00:00:00Z',sourceComplete:true},sourceComplete:true,comparison:{complete:true},startDate:'2026-10-08',endDate:'2026-10-08',rows:[yash()],total:1,totals:yash(),...data};
  return {root,page,L,tables,requests,render:()=>page.render(),stats:()=>tables.findLast(t=>t.cls?.includes('withdraw-stat-table'))};
 }
 test('YASH shows real withdrawal counts while missing classification remains unknown in rows and KPI totals',()=>{

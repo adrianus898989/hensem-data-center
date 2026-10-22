@@ -29,6 +29,15 @@ const DATA_GROUPS = new Set(["BR_PANGHU", "BR", "IN", "PK", "ID", "VN", "PH", "M
 class DataScopeError extends Error {
   constructor(message: string, readonly status: number, readonly code = "request_denied") { super(message); }
 }
+// Match the existing application-auth getUser contract. HTTP status alone is
+// not evidence that a user/session is invalid; upstream outages fail closed.
+function isTerminalAuthUserError(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const error = value as Record<string, unknown>;
+  if (![400, 401, 403].includes(error.status as number)) return false;
+  if (typeof error.code === "string") return ["bad_jwt", "session_expired", "session_not_found", "user_not_found", "user_banned"].includes(error.code);
+  return error.name === "AuthSessionMissingError" && error.status === 400 && error.code === undefined;
+}
 // Country-scoped, already-confirmed aliases. No punctuation or suffix guessing.
 function scopePlatformIdentity(country:string,value:string):string {
   const platform=value.trim().toUpperCase();
@@ -215,6 +224,22 @@ Deno.serve(async (request) => {
       }
     }
 
+    async function verifiedAuthUser(token: string) {
+      let result: Awaited<ReturnType<typeof admin.auth.getUser>>;
+      try { result = await admin.auth.getUser(token); }
+      catch (error) {
+        if (isTerminalAuthUserError(error)) throw new DataScopeError("登录状态无效", 401, "auth_token_invalid");
+        throw new DataScopeError("登录验证暂时不可用", 503, "auth_unavailable");
+      }
+      if (result?.error) {
+        if (isTerminalAuthUserError(result.error)) throw new DataScopeError("登录状态无效", 401, "auth_token_invalid");
+        throw new DataScopeError("登录验证暂时不可用", 503, "auth_unavailable");
+      }
+      const user = result?.data?.user;
+      if (!user || typeof user.id !== "string" || !user.id) throw new DataScopeError("登录验证响应不完整", 503, "auth_unavailable");
+      return user;
+    }
+
     async function requireApprovedSession(token: string, userId: string) {
       // Called only after getUser verifies this exact token.
       let sessionId = "";
@@ -271,9 +296,7 @@ Deno.serve(async (request) => {
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
       if (!token) throw new DataScopeError("未登录", 401);
 
-      const { data: userData, error: userError } = await admin.auth.getUser(token);
-      const caller = userData?.user;
-      if (userError || !caller) throw new DataScopeError("登录状态无效", 401);
+      const caller = await verifiedAuthUser(token);
       const sessionId = await requireApprovedSession(token, caller.id);
 
       const { data: callerProfile, error: profileError } = await admin
@@ -324,9 +347,7 @@ Deno.serve(async (request) => {
       const authHeader = String(request.headers.get("authorization") || "");
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
       if (!token) throw new DataScopeError("未登录", 401);
-      const { data: userData, error: userError } = await admin.auth.getUser(token);
-      const caller = userData?.user;
-      if (userError || !caller) throw new DataScopeError("登录状态无效", 401);
+      const caller = await verifiedAuthUser(token);
       await requireApprovedSession(token, caller.id);
       const { data: callerProfile, error: profileError } = await admin
         .from("dashboard_profiles")
