@@ -37,7 +37,7 @@ test('projected paging/sorting is local; explicit query always refreshes on serv
 for(const explicit of [true,false])test('team projection preserves '+(explicit?'manually entered':'blank default')+' success-window export meaning',async()=>{
  const f=fixture({edit:(d,L)=>{if(!explicit){L.successFrom='';L.successTo='';d.windows.successStartAt=d.windows.creationStartAt;d.windows.successEndAt=d.windows.creationEndAt;d.secondary.startAt=d.windows.successStartAt;d.secondary.endAt=d.windows.successEndAt;}}});
  await f.page.load();f.ctx.withdrawMetricView('secondary');const metadata=copy(f.page.exportMeta());
- assert.match(metadata[0][1],explicit?/独立时间窗成功记录/:/默认成功日期沿查询日期/);
+ assert.match(metadata[0][1],explicit?/独立时间窗成功记录/:/创建订单当前状态/);
  for(const team of ['M8','香港','all']){f.ctx.withdrawTeam(team);assert.equal(f.page.state.dirty,false);assert.equal(f.page.state.applied.successWindowExplicit,explicit);assert.deepEqual(copy(f.page.exportMeta()),metadata);}
  assert.equal(f.calls.length,1,'team filtering does not fetch or reinterpret the original successful window');
 });

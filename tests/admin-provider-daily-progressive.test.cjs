@@ -9,7 +9,7 @@ const platforms=[{...P,sourceName:'Synthetic A'},{...P,id:'22222222-2222-4222-82
 const localDay=request=>new Date(Date.parse(request.startAt)+330*60000).toISOString().slice(0,10);
 function ready(request,count=10,success=4,provider='Synthetic provider'){
  const platform=platforms.find(p=>p.id===request.platformId),result=completeAggregate(platform,count,success);
- Object.assign(result,{version:1,startAt:request.startAt,endAt:request.endAt,successStartAt:request.successStartAt,successEndAt:request.successEndAt,successBasis:request.successBasis,...(request.durationVersion?{durationVersion:request.durationVersion}:{})});
+ Object.assign(result,{version:1,startAt:request.startAt,endAt:request.endAt,...(request.successBasis==='created'?{successBasis:'created',capabilities:{successCohort:'created_at_current_stored_status',successMetricBasis:'created',independentSuccessWindow:false}}:{successStartAt:request.successStartAt,successEndAt:request.successEndAt,successBasis:request.successBasis}),...(request.durationVersion?{durationVersion:request.durationVersion}:{})});
  result.groups.provider[0].provider=provider;Object.assign(result.groups.daily[0],{date:localDay(request),provider});
  return {request,status:'ready',publication:{id:'synthetic-'+request.platformId,generation:1,computedAt:'2026-10-18T11:00:00Z',expiresAt:'2026-10-18T11:10:00Z',cutoff:'2026-10-18T11:00:00Z',calculationComplete:true,sourceComplete:false,freshness:'refresh_due',refreshState:'queued'},result};
 }

@@ -7,6 +7,7 @@ const HK={id:'11111111-1111-4111-8111-111111111111',name:'Synthetic HK',source:'
 const RED={...HK,id:'22222222-2222-4222-8222-222222222222',name:'Synthetic Red',sourceName:'Synthetic Red',country:'红膏蟹',scopeGroup:'RED_CRAB',team:'红膏蟹'};
 function item(request,platform){
  const result={...aggregate(clone(platform),123),version:1,startAt:request.startAt,endAt:request.endAt,successStartAt:request.successStartAt,successEndAt:request.successEndAt,successBasis:request.successBasis,...(request.durationVersion?{durationVersion:request.durationVersion}:{})};
+ if(request.successBasis==='created'){delete result.successStartAt;delete result.successEndAt;result.capabilities={...result.capabilities,successCohort:'created_at_current_stored_status',successMetricBasis:'created',independentSuccessWindow:false};}
  if(request.amountBands)Object.assign(result.groups,{amount_range:[],matrix_range:[]});
  return {request:clone(request),status:'ready',publication:{id:'synthetic-native-'+platform.id,generation:1,computedAt:'2026-09-23T11:59:00Z',expiresAt:'2026-09-23T12:09:00Z',cutoff:'2026-09-23T11:59:00Z',calculationComplete:true,sourceComplete:false,freshness:'fresh',refreshState:'idle'},result};
 }
