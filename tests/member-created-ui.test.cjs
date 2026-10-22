@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
-const here=path.resolve(__dirname,'..'),repo=fs.existsSync(path.join(here,'supabase'))?here:path.resolve(here,'../../withdraw-count-fix-oct22/release'),baseline=path.join(repo,'tests/admin-member-counts-cache.test.cjs'),prefix=fs.readFileSync(baseline,'utf8').split(/\ntest\(/)[0];
+const repo=path.resolve(__dirname,'..'),baseline=path.join(repo,'tests/admin-member-counts-cache.test.cjs'),prefix=fs.readFileSync(baseline,'utf8').split(/\ntest\(/)[0];
 const {harness,platform,response,row,deferred,settle,A}=new Function('require',prefix+';return {harness,platform,response,row,deferred,settle,A};')(require);
 const {requestFor,validate}=require('../admin-preview/live-member-counts.js');
 const createdResponse=(q,p=platform(q.platformId))=>{const r=response(q,p);if(q.successBasis==='created'){r.successBasis='created';Object.assign(r.capabilities,{successBasis:'created_at_current_stored_status',successCohort:'created_at_current_stored_status',independentSuccessWindow:false});}return r;};
