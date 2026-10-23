@@ -5,6 +5,8 @@
  const source=value=>String(value||'').toLowerCase().replaceAll('_','');
  const system=value=>({ar:'AR',newar:'新AR',wg:'WG',lg:'LG',game66:'AA',duoli:'多利',doli:'多利',kb:'KB',panda:'熊猫'}[source(value)]||String(value||'来源未提供'));
  const count=value=>(typeof value==='number'||typeof value==='string')&&String(value).trim()!==''&&Number.isSafeInteger(Number(value))&&Number(value)>=0?Number(value):null;
+ const createdMode=L=>!L.successFrom&&!L.successTo&&((L.results||[]).some(r=>r?.successBasis==='created')||(L.successWindows||[]).some(w=>w.successBasis==='created'));
+ const createdSuccessReadable=(response,L)=>createdMode(L)&&response?.successBasis==='created'&&response.capabilities?.successCohort==='created_at_current_stored_status'&&response.capabilities?.successMetricBasis==='created'&&response.capabilities?.independentSuccessWindow===false&&!Object.prototype.hasOwnProperty.call(response,'successStartAt')&&!Object.prototype.hasOwnProperty.call(response,'successEndAt');
  const day=value=>{const text=String(value||'').slice(0,10),parsed=new Date(text+'T00:00:00Z');return /^\d{4}-\d{2}-\d{2}$/.test(text)&&Number.isFinite(parsed.getTime())&&parsed.toISOString().slice(0,10)===text?text:null;};
  const provider=(name,country)=>String(window.HensemProviderNames?.canonical(name,country)??name??'').trim()||'（三方未提供）';
  const unknownProviderNames=new Set(['（三方未提供）','未识别通道','未识别三方','未提供','未标记三方','USDT']);
@@ -25,7 +27,7 @@
   return {value:n!==null&&d!==null&&d>0?n/d*100:null,success:n,total:d,partial,note};
  }
  const unknown=note=>fact(null,null,false,note);
- function buildModel({L,scopeMatches,workordersScopeMatches}){
+ function buildModel({L,scopeMatches,workordersScopeMatches,lifecycle}){
   const date=day(L.from),endDate=day(L.to);
   if(!date||!endDate||L.from>L.to||(Date.parse(endDate)-Date.parse(date))/86400000>=31)return {ready:false,message:'请选择有效日期与时间，每次最多31个当地日。'};
   if(!L.pageQueried||L.dirty||!scopeMatches)return {ready:false,message:L.dirty?'筛选条件已修改，点击查询读取对应日期的成功率。':'请选择日期，点击查询。'};
@@ -59,19 +61,22 @@
    const key=JSON.stringify([p.id,row.direction]),entries=platformTickets.get(key)||[];entries.push(row);platformTickets.set(key,entries);
   }
   const safeSum=values=>{if(!values.length||values.includes(null))return null;const sum=values.reduce((n,v)=>n+v,0);return Number.isSafeInteger(sum)?sum:null;};
-  const successTimeUnavailable=(p,response,direction)=>{const key=direction+'SuccessTimeAvailable';if(source(p.source)==='panda')return (response?.capabilities||response?.platform?.capabilities||p.capabilities)?.successCoverageAvailable!==true||(response?.capabilities||response?.platform?.capabilities||p.capabilities)?.[key]!==true||p.capabilities?.[key]===false;return direction==='withdraw'&&source(p.source)==='wg'||response?.successTimeAvailable===false||(response?.capabilities||response?.platform?.capabilities)?.successTimeAvailable===false||p.capabilities?.successTimeAvailable===false||response?.[key]===false||(response?.capabilities||response?.platform?.capabilities)?.[key]===false||p.capabilities?.[key]===false};
+  const successMetricUnavailable=(p,response,direction)=>{if(response?.successBasis==='created')return !createdSuccessReadable(response,L);const key=direction+'SuccessTimeAvailable';if(source(p.source)==='panda')return (response?.capabilities||response?.platform?.capabilities||p.capabilities)?.successCoverageAvailable!==true||(response?.capabilities||response?.platform?.capabilities||p.capabilities)?.[key]!==true||p.capabilities?.[key]===false;return direction==='withdraw'&&source(p.source)==='wg'||response?.successTimeAvailable===false||(response?.capabilities||response?.platform?.capabilities)?.successTimeAvailable===false||p.capabilities?.successTimeAvailable===false||response?.[key]===false||(response?.capabilities||response?.platform?.capabilities)?.[key]===false||p.capabilities?.[key]===false};
+  const inactive=p=>lifecycle?.(p)?.notOperating===true?{...unknown(lifecycle(p).note),notOperating:true,volume:null,providerCount:null}:null;
   function paymentPlatform(p,direction){
+   if(inactive(p))return inactive(p);
    const response=platformResponses.get(p.id);if(!response)return {...unknown('该平台尚未返回当前日期的汇总。'),volume:null};
    const native=Array.isArray(response.summary)?response.summary.filter(row=>row?.direction===direction):[],groups=Array.isArray(response.groups?.provider)?response.groups.provider:[],rows=native.length?native:groups.filter(row=>row?.direction===direction),partial=!native.length;
    if(!Array.isArray(rows)||!rows.length)return {...unknown('该业务方向未返回平台汇总；不按零处理。'),volume:null};
    if(native.length&&new Set(native.map(row=>String(row.currency??''))).size!==native.length)return {...unknown('平台方向汇总存在重复币种，不能重复相加。'),volume:null};
    const totals=rows.map(row=>count(row.all_count)),successes=rows.map(row=>count(row.success_count)),knownTotals=totals.filter(n=>n!==null),volume=safeSum(partial?knownTotals:totals);
-   if(successTimeUnavailable(p,response,direction))return {...fact(null,volume,partial,'该来源未提供可核验的'+(direction==='charge'?'代收':'代付')+'成功时间；提交笔数仅用于平台列排序。'),volume,authoritativeTotal:!!native.length};
-   if(native.length)return {...fact(safeSum(successes),safeSum(totals),false,'按平台原生方向汇总：总成功笔数 ÷ 总创建笔数；不平均三方百分比，含跨日成功。'),volume,authoritativeTotal:true};
+   if(successMetricUnavailable(p,response,direction))return {...fact(null,volume,partial,response?.successBasis==='created'?'创建订单当前成功统计依据未完整提供；提交笔数仅用于平台列排序。':'该来源未提供可核验的'+(direction==='charge'?'代收':'代付')+'成功时间；提交笔数仅用于平台列排序。'),volume,authoritativeTotal:!!native.length};
+   if(native.length)return {...fact(safeSum(successes),safeSum(totals),false,createdSuccessReadable(response,L)?'按平台创建日期订单的当前成功笔数 ÷ 这些订单的创建笔数；不平均三方百分比，不代表期间实际到账。':'按平台原生方向汇总：总成功笔数 ÷ 总创建笔数；不平均三方百分比，含跨日成功。'),volume,authoritativeTotal:true};
    const known=rows.filter((row,i)=>totals[i]!==null&&successes[i]!==null),total=safeSum(known.map(row=>count(row.all_count))),success=safeSum(known.map(row=>count(row.success_count)));
    return {...fact(success,total,true,'未返回平台原生方向汇总；仅按同时提供成功、创建笔数的三方分组计算已读小计；列排序使用已知创建笔数，未提供的分组不按零填补。'),volume};
   }
   function workorderPlatform(p){
+   if(inactive(p))return {...inactive(p),basis:'workorder'};
    if(!workordersCurrent)return {...unknown(L.workordersLoading?'工单读取中。':L.workordersError||'当前日期的工单汇总尚未读取。'),volume:null,basis:'workorder'};
    if(!Array.isArray(w.byPlatformDirection))return {...unknown('未返回平台级跨三方去重原单汇总；不能将三方原单笔数相加代替。'),volume:null,basis:'workorder'};
    let total=0,success=0,present=0,partial=false;const notes=[];
@@ -101,15 +106,17 @@
    return {providerCount:names.size?names.size:!partial&&groupRows.length?0:null,providerCountPartial:partial,providerCountNote:'仅计本矩阵所选时段有提交记录的支付三方，按统一三方名去重；人工充值、人工确认、提现转充值和无三方不计入。'+(partial?'未完整返回三方分组或存在未归属原单；有数字时为已识别小计，不代表全部运行三方。':'')};
   }
   function payment(p,name,direction){
+   if(inactive(p))return inactive(p);
    const entry=payments.get(JSON.stringify([p.id,name,direction]));
    if(!entry)return unknown('未返回该平台、三方与业务方向的数据；不按零处理。');
-   if(successTimeUnavailable(p,entry.response,direction))return unknown('该来源未提供可核验的'+(direction==='charge'?'代收':'代付')+'成功时间。');
+   if(successMetricUnavailable(p,entry.response,direction))return unknown(entry.response?.successBasis==='created'?'创建订单当前成功统计依据未完整提供；不按零处理。':'该来源未提供可核验的'+(direction==='charge'?'代收':'代付')+'成功时间。');
    const totals=entry.rows.map(r=>count(r.all_count)),successes=entry.rows.map(r=>count(r.success_count));
    if(totals.includes(null)||successes.includes(null))return unknown('成功笔数或创建笔数未提供。');
    const total=totals.reduce((n,v)=>n+v,0),success=successes.reduce((n,v)=>n+v,0);
-   return fact(success,total,false,'成功时间内成功笔数 ÷ 创建时间内全部笔数；含跨日成功，可能超过 100%。');
+   return fact(success,total,false,createdSuccessReadable(entry.response,L)?'创建日期订单的当前成功笔数 ÷ 这些订单的全部笔数；不代表期间实际到账。':'成功时间内成功笔数 ÷ 创建时间内全部笔数；含跨日成功，可能超过 100%。');
   }
   function workorder(p,name){
+   if(inactive(p))return {...inactive(p),basis:'workorder'};
    if(!workordersCurrent)return unknown(L.workordersLoading?'工单读取中。':L.workordersError||'当前日期的工单汇总尚未读取。');
    let total=0,success=0,partial=false,present=0;const notes=[];
    for(const direction of ['charge','withdraw']){
@@ -141,11 +148,12 @@
   for(const key of ['charge','withdraw','workorder'])footers[key]=footers[key].map((footer,index)=>({...footer,...providerActivity(columns[index],key,footer)}));
   const countries=new Set(columns.map(p=>p.country).filter(Boolean)),currencies=new Set(columns.flatMap(p=>{const response=platformResponses.get(p.id),groups=response?.groups?.provider,summary=response?.summary;return [p.currency,...(Array.isArray(groups)?groups:[]).map(row=>row?.currency),...(Array.isArray(summary)?summary:[]).map(row=>row?.currency)];}).filter(Boolean));
   function totalRate(values,key){
+   values=values.filter(value=>!value.notOperating);
    if(countries.size>1||currencies.size>1)return unknown('所选平台的国家或币种不一致，不能合并总成功率。');
    const known=values.filter(value=>count(value.success)!==null&&count(value.total)!==null),success=safeSum(known.map(value=>value.success)),total=safeSum(known.map(value=>value.total));
    const sourcePartial=key!=='workorder'&&columns.some(p=>{const response=platformResponses.get(p.id);return response?.complete===false||response?.coverage?.calculationComplete===false||response?.coverage?.sourceComplete===false||response?._preparedPublication?.sourceComplete===false;});
    const partial=known.length!==values.length||values.some(value=>value.partial)||sourcePartial||success===null||total===null;
-   const note=(key==='workorder'?'跨平台已处理原单合计 ÷ 提交原单合计；沿用平台、业务、完整原支付单号去重口径，不代表实际到账。':'跨平台成功笔数合计 ÷ 创建笔数合计；沿用所选成功时间口径，含跨日成功，不平均平台百分比。')+(partial?'仅为可核验成功与提交笔数的已读小计，缺失或未读平台不按 0 计算。':'');
+   const note=(key==='workorder'?'跨平台已处理原单合计 ÷ 提交原单合计；沿用平台、业务、完整原支付单号去重口径，不代表实际到账。':createdMode(L)?'跨平台创建日期订单的当前成功笔数合计 ÷ 这些订单的创建笔数合计；不平均平台百分比，不代表期间实际到账。':'跨平台成功笔数合计 ÷ 创建笔数合计；沿用所选成功时间口径，含跨日成功，不平均平台百分比。')+(partial?'仅为可核验成功与提交笔数的已读小计，缺失或未读平台不按 0 计算。':'');
    return {...fact(success,total,partial,note),...(key==='workorder'?{basis:'workorder'}:{})};
   }
   for(const row of rows)row.totals=Object.fromEntries(['charge','withdraw','workorder'].map(key=>[key,totalRate(row[key],key)]));
@@ -169,9 +177,9 @@
   return '<details class="success-analysis-other"><summary>其他记录与未完整提供的分组'+(other.length?' · '+other.length+' 类非三方 / 未归属记录':'')+(unavailable.length?' · '+unavailable.length+' 个分组活动未确认':'')+'</summary>'+(other.length?'<p>以下是人工操作、无三方业务或三方归属待确认的记录，不列为支付三方：'+other.map(row=>escape(row.provider)+'（已读提交 '+(row.volumes[key]===null?'未提供':row.volumes[key]+' 笔')+'）').join('；')+'。底部汇总仍按来源原汇总计算，不因收起这些记录而扣减。</p>':'')+(unavailable.length?'<p>以下分组未提供可确认的活动笔数或金额，未按零处理：'+unavailable.map(row=>escape(row.provider)).join('、')+'。</p>':'')+'</details>';
  }
  function cell(value,footer=false,total=false){
-  const known=value.value!==null&&Number.isFinite(value.value),label=known?value.value.toFixed(2)+'%':'—';
+  const known=value.value!==null&&Number.isFinite(value.value),label=value.notOperating?'未营业':known?value.value.toFixed(2)+'%':'—';
   const title=value.note+(known?(value.basis==='workorder'?' 合计已处理 '+value.success+' / 提交 '+value.total:' 成功 '+value.success+' / 创建 '+value.total)+' 笔。':'');
-  const providers=footer?'<small class="success-analysis-provider-count" title="'+escape(value.providerCountNote)+'">'+(value.providerCount===null?'三方数未提供':value.providerCount+' 三方')+(value.providerCount!==null&&value.providerCountPartial?'<sup aria-label="已识别三方小计">*</sup>':'')+'</small>':'';
+  const providers=footer&&!value.notOperating?'<small class="success-analysis-provider-count" title="'+escape(value.providerCountNote)+'">'+(value.providerCount===null?'三方数未提供':value.providerCount+' 三方')+(value.providerCount!==null&&value.providerCountPartial?'<sup aria-label="已识别三方小计">*</sup>':'')+'</small>':'';
   return '<td class="success-rate-cell'+(total?' success-total-rate':'')+'"><span'+(known&&value.value<40?' class="success-rate-low"':'')+' tabindex="0" title="'+escape(title)+'">'+label+(known&&value.partial?'<sup aria-label="部分来源">*</sup>':'')+'</span>'+providers+(total&&known&&value.partial?'<small class="success-total-partial">已读小计</small>':'')+'</td>';
  }
  function typeCell(row,key,L){
@@ -193,7 +201,7 @@
   const {L}=props,model=buildModel(props);
   if(!model.ready)return '<div class="live-status live-query-prompt">'+escape(model.message)+'</div>';
   if(!L.loading&&!L.restoredPage&&L.feeLookupRows===null&&!L.feeLookupLoading&&!L.feeLookupError)props.ensureFeeLookup?.();
-  const windows=L.successWindows||[],windowGroups=[...new Set(windows.map(w=>(w.successFrom&&w.successTo?'创建 ':'')+w.from.replace('T',' ')+' 至 '+w.to.replace('T',' ')+(w.successFrom&&w.successTo?'；'+(w.successBasis==='source_updated'?'源订单更新 ':'成功 ')+w.successFrom.replace('T',' ')+' 至 '+w.successTo.replace('T',' '):'；成功日期默认沿查询日期')+' · '+w.timezone+(w.clamped?'（截至查询时刻）':'')))],notices=[];
+  const windows=L.successWindows||[],windowGroups=[...new Set(windows.map(w=>(w.successFrom&&w.successTo?'创建 ':'')+w.from.replace('T',' ')+' 至 '+w.to.replace('T',' ')+(w.successFrom&&w.successTo?'；'+(w.successBasis==='source_updated'?'源订单更新 ':'成功 ')+w.successFrom.replace('T',' ')+' 至 '+w.successTo.replace('T',' '):'；按创建订单当前成功状态统计')+' · '+w.timezone+(w.clamped?'（截至查询时刻）':'')))],notices=[];
   if(windowGroups.length)notices.push('已查询 '+windowGroups.map(escape).join('；')); 
   if(L.error)notices.push(escape(L.error));
   if(L.loading||L.queryRetrying)notices.push(escape(L.progress||'正在读取平台成功率；当前为部分结果。'));
@@ -203,12 +211,12 @@
   const completedBasis=model.columns.some(p=>source(p.source)==='kb'&&p.capabilities?.successTimeBasis==='source_completed_at')||(L.results||[]).some(r=>source(r.platform?.source)==='kb'&&(r.capabilities||r.platform?.capabilities)?.successTimeBasis==='source_completed_at');
   const pandaBasis=model.columns.some(p=>source(p.source)==='panda');
   const updatedBasis=model.columns.some(p=>p.capabilities?.successTimeBasis==='order_updated_at')||(L.results||[]).some(r=>(r.capabilities||r.platform?.capabilities)?.successTimeBasis==='order_updated_at');
-  const secondaryLabel=L.successBasis==='source_updated'?'源订单更新时间':'成功时间',sections=[['charge','代收成功率',secondaryLabel+'内成功笔数 ÷ 创建时间内全部笔数。'],['withdraw','代付成功率',secondaryLabel+'内成功笔数 ÷ 创建时间内全部笔数；未提供可核验时间时显示 —。'],['workorder','工单成功率','按所选自然日范围：已处理原支付单 ÷ 全部提交原支付单；按平台、业务、完整原单号去重，状态 4 计已处理，不代表实际到账。']];
+  const created=createdMode(L),secondaryLabel=L.successBasis==='source_updated'?'源订单更新时间':'成功时间',sections=[['charge','代收成功率',created?'创建日期订单的当前成功笔数 ÷ 这些订单的全部笔数；不代表期间实际到账。':secondaryLabel+'内成功笔数 ÷ 创建时间内全部笔数。'],['withdraw','代付成功率',created?'创建日期订单的当前成功笔数 ÷ 这些订单的全部笔数；未提供统计依据时显示 —。':secondaryLabel+'内成功笔数 ÷ 创建时间内全部笔数；未提供可核验时间时显示 —。'],['workorder','工单成功率','按所选自然日范围：已处理原支付单 ÷ 全部提交原支付单；按平台、业务、完整原单号去重，状态 4 计已处理，不代表实际到账。']];
   return '<div class="live-success-analysis">'+(notices.length?'<div class="live-status">'+notices.join('<br>')+'</div>':'')+sections.map(([key,title,note])=>{
    if(key==='workorder'&&L.workordersTimeUnsupported)return '<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2></div><p>工单仅支持完整自然日汇总，自定义时段暂不提供。</p></section>'; 
    const ranked=rankedRows(model,key),sorted=props.sortTable?.('success-analysis-'+key,['总成功率'],ranked,[{value:row=>row.totals[key].value}])||{rows:ranked,headers:['总成功率']};
    const visibleRows=sorted.rows,withType=key!=='workorder',indexes=rankedColumnIndexes(model,key),head='<thead><tr><th scope="col">三方</th>'+(withType?'<th scope="col" class="success-provider-type">类型</th>':'')+indexes.map(index=>{const p=model.columns[index],volume=model.footers[key][index].volume;return '<th scope="col" title="'+escape(p.name+' · '+system(p.source)+' · '+p.id+' · 已读取提交笔数 '+(volume===null?'未提供':volume)+(model.footers[key][index].partial?'（部分）':''))+'">'+escape(p.name)+'<small>'+escape(system(p.source))+'</small></th>';}).join('')+'<th scope="col" class="success-total-rate">'+sorted.headers[0]+'</th></tr></thead>';
-   return '<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2>'+(key==='workorder'&&L.workordersError?'<button type="button" class="link" onclick="liveProviderWorkordersRetry()">重试工单</button>':'')+'</div><p>'+note+(key!=='workorder'&&updatedBasis&&(!L.successBasis||L.successBasis==='source_updated')?' 多利成功按成功状态＋订单更新时间统计，不代表实际到账时间。':'')+(key!=='workorder'&&completedBasis?' KB成功按源订单完成时间统计。':'')+(pandaBasis&&key==='charge'?' 熊猫成功时间窗口尚未完整核验；已采行完成时间不代表该窗口全量。':pandaBasis&&key==='withdraw'?' 熊猫仅含已审核提现；未提供可靠完成时间，成功时间指标显示 —。':'')+'</p><div class="success-analysis-scroll" tabindex="0" role="region" aria-label="'+title+'"><table style="min-width:'+Math.max(400,112+(withType?80:0)+model.columns.length*78+96)+'px">'+head+'<tbody>'+ (visibleRows.length?visibleRows.map(row=>'<tr><th scope="row">'+escape(row.provider)+'</th>'+(withType?typeCell(row,key,L):'')+indexes.map(index=>cell(row[key][index])).join('')+cell(row.totals[key],false,true)+'</tr>').join(''):'<tr><td colspan="'+(model.columns.length+2+(withType?1:0))+'">'+(L.loading?'正在读取三方汇总…':'当前条件下暂无已确认活动的支付三方')+'</td></tr>')+'</tbody><tfoot class="success-analysis-footer"><tr><th scope="row">汇总成功率</th>'+(withType?'<td class="success-provider-type">—</td>':'')+indexes.map(index=>cell(model.footers[key][index],true)).join('')+cell(model.totals[key],false,true)+'</tr></tfoot></table></div>'+otherRecords(model,key)+'</section>';
+   return '<section class="success-analysis-panel"><div class="success-analysis-heading"><h2>'+title+'</h2>'+(key==='workorder'&&L.workordersError?'<button type="button" class="link" onclick="liveProviderWorkordersRetry()">重试工单</button>':'')+'</div><p>'+note+(key!=='workorder'&&!created&&updatedBasis&&(!L.successBasis||L.successBasis==='source_updated')?' 多利成功按成功状态＋订单更新时间统计，不代表实际到账时间。':'')+(key!=='workorder'&&!created&&completedBasis?' KB成功按源订单完成时间统计。':'')+(pandaBasis&&key==='charge'?(created?' 熊猫仅含已核验创建范围的已入库订单，不代表源全量。':' 熊猫成功时间窗口尚未完整核验；已采行完成时间不代表该窗口全量。'):pandaBasis&&key==='withdraw'?(created?' 熊猫仅含已审核提现；当前成功状态不代表已核验到账时间。':' 熊猫仅含已审核提现；未提供可靠完成时间，成功时间指标显示 —。'):'')+'</p><div class="success-analysis-scroll" tabindex="0" role="region" aria-label="'+title+'"><table style="min-width:'+Math.max(400,112+(withType?80:0)+model.columns.length*78+96)+'px">'+head+'<tbody>'+ (visibleRows.length?visibleRows.map(row=>'<tr><th scope="row">'+escape(row.provider)+'</th>'+(withType?typeCell(row,key,L):'')+indexes.map(index=>cell(row[key][index])).join('')+cell(row.totals[key],false,true)+'</tr>').join(''):'<tr><td colspan="'+(model.columns.length+2+(withType?1:0))+'">'+(L.loading?'正在读取三方汇总…':'当前条件下暂无已确认活动的支付三方')+'</td></tr>')+'</tbody><tfoot class="success-analysis-footer"><tr><th scope="row">汇总成功率</th>'+(withType?'<td class="success-provider-type">—</td>':'')+indexes.map(index=>cell(model.footers[key][index],true)).join('')+cell(model.totals[key],false,true)+'</tr></tfoot></table></div>'+otherRecords(model,key)+'</section>';
   }).join('')+'</div>';
  }
  window.HensemLiveSuccessAnalysis=Object.freeze({render,buildModel,fact,rankedRows,rankedColumnIndexes});

@@ -79,6 +79,7 @@
   for(const platform of L.queryPlatforms||[]){
    const key=aliasKey(platform),identity=key||platform.id;
    if(!platform.id||platform.reportOnly||failed.has(platform.id)||seen.has(identity)||key&&populatedAliases.has(key))continue;
+   if(L.platformLifecycleFor?.(platform,L)?.notOperating){seen.add(identity);const name=displayPlatform(platform).name||platform.name;cells.push({platform:name,platformId:platform.id,_emptyCells:[E(name)+'<small class="muted">未营业</small>',...Array.from({length:columnCount-1},()=>'<span class="muted" title="用户已确认未营业，不填零">—</span>')]});continue;}
    const result=received.get(platform.id);if(!result||!Array.isArray(result.summary)||result.summary.some(row=>row.direction===direction))continue;
    if(!result.summary.length&&(result.total==null||!Number.isFinite(Number(result.total))||Number(result.total)!==0))continue;
    if(Object.values(result.groups||{}).some(rows=>Array.isArray(rows)&&rows.some(row=>row.direction===direction)))continue;

@@ -487,14 +487,14 @@
    if(expected.has(id)&&!returned.has(id))failed.set(id,f);
   }
   const platforms=[...expected].map(([id,p])=>{
-   const result=returned.get(id),failure=failed.get(id),status=result?'received':failure?'failed':L.queryPaused?'paused':L.loading||L.queryRetrying?'loading':'not_read';
-   const label={received:'已读取',failed:'读取失败',paused:'已暂停',loading:'读取中',not_read:'未读取'}[status];
-   const message=result?'本次查询已返回':failure?(failure.message||'读取失败'):L.queryPaused?'切换页面后暂停，尚未完成读取':L.loading||L.queryRetrying?'正在读取，尚未返回':'本次查询尚未返回该平台';
+   const result=returned.get(id),failure=failed.get(id),inactive=L.platformLifecycleFor?.(p,L)?.notOperating===true,status=inactive?'not_operating':result?'received':failure?'failed':L.queryPaused?'paused':L.loading||L.queryRetrying?'loading':'not_read';
+   const label={not_operating:'未营业',received:'已读取',failed:'读取失败',paused:'已暂停',loading:'读取中',not_read:'未读取'}[status];
+   const message=inactive?'用户已确认此日期未营业，不计缺失且不填零':result?'本次查询已返回':failure?(failure.message||'读取失败'):L.queryPaused?'切换页面后暂停，尚未完成读取':L.loading||L.queryRetrying?'正在读取，尚未返回':'本次查询尚未返回该平台';
    return {id:p.id||'',name:p.name||result?.platform?.name||p.id||'平台名称未提供',source:p.source||result?.platform?.source||'',status,label,message};
   });
-  const missing=platforms.filter(p=>p.status!=='received'),received=platforms.length-missing.length;
-  return {platforms,missing,failures:missing.filter(p=>p.status==='failed'),received,requested:platforms.length,
-   partial:missing.length>0,empty:received===0&&platforms.length>0,pending:missing.filter(p=>p.status!=='failed').length};
+  const missing=platforms.filter(p=>!['received','not_operating'].includes(p.status)),notOperating=platforms.filter(p=>p.status==='not_operating'),received=platforms.filter(p=>p.status==='received').length;
+  return {platforms,missing,failures:missing.filter(p=>p.status==='failed'),received,notOperating,requested:platforms.length-notOperating.length,
+   partial:missing.length>0,empty:received===0&&platforms.length>notOperating.length,pending:missing.filter(p=>p.status!=='failed').length};
  }
  const intakeStatusLabels={not_expected:'开通前 · 不计缺失',complete:'已核验完整',zero_complete:'零笔已确认',received:'已收到 · 完整性待核验',difference:'已收到 · 核验有差异',missing:'缺少创建数据',unverified:'待核验'};
  const intakeDifference=day=>day.expected!==false&&!['only_success_day_records_received','duoli_updated_stream_only','duoli_created_windows_status_unverified'].includes(day.evidence)&&day.received===true&&day.complete!==true&&(['partial','failed'].includes(day.status)||['source_count_mismatch','source_created_count_mismatch','source_created_channel_mismatch','source_snapshot_invalid','completed_zero_conflicts_with_records'].includes(day.evidence));
@@ -512,6 +512,7 @@
   // empty result. The source-day facts must belong to this submitted scope.
   const returned=new Map((L.results||[]).map(result=>[String(result.platform?.id||'').trim().toLowerCase(),result]));
   const platforms=query.platforms.map(platform=>{
+   if(platform.status==='not_operating')return {...platform,readStatus:platform.status,readLabel:platform.label,readMessage:platform.message,status:'not_expected',label:'未营业（用户已确认）',expected:false,received:false,complete:false,difference:false,observedOnly:false,observedCreated:false,days:[],missingDates:[],message:platform.message};
    const result=returned.get(String(platform.id).trim().toLowerCase());
    const observedRows=(result?.groups?.provider||[]).filter(row=>!direction||row.direction===direction);
    const observedCreated=observedRows.some(row=>knownNumber(row.all_count)>0);
@@ -559,7 +560,7 @@
  function workorderPlatformGaps(L,direction){
   if(!L.workorders)return [];
   const scope=Array.isArray(L.queryPlatforms)&&L.queryPlatforms.length?L.queryPlatforms:(L.results||[]).map(r=>r.platform).filter(Boolean);
-  const platforms=[...new Map(scope.map(p=>[p.id||JSON.stringify([p.country,p.source,p.name]),p])).values()],gaps=new Map();
+  const platforms=[...new Map(scope.filter(p=>L.platformLifecycleFor?.(p,L)?.notOperating!==true).map(p=>[p.id||JSON.stringify([p.country,p.source,p.name]),p])).values()],gaps=new Map();
   const names=p=>[p.name,p.platform,p.sourceName,p.source_name,p.sourcePlatform].filter(Boolean).map(name=>platformKey(name,p,L.country));
   const country=p=>normalized(root.HensemLiveReportData?.normalizeIdentity(p)?.country||p.country||L.country);
   const match=row=>{

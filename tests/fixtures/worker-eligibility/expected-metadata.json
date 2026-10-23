@@ -1,0 +1,291 @@
+{
+  "baseline": [
+    {
+      "identity": "private.prepared_aggregate_claim(text)",
+      "body_md5": "f217fa74665373642403b2217c3132aa",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "p_worker text",
+      "result": "jsonb",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.prepared_aggregate_prepare_claim(text)",
+      "body_md5": "4e7d5d7f00b006d2fd5bb5e7c37b59c8",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "p_worker text",
+      "result": "jsonb",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.provider_snapshot_claim(text,integer)",
+      "body_md5": "4c8aef6bac0f4ff6a8f3ef8c92e6d6c7",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "p_worker text, p_lease_seconds integer DEFAULT 120",
+      "result": "jsonb",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.prepared_aggregate_take_turn(text)",
+      "body_md5": "caa20e37e580b5a206c12ce8ed0b883b",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "p_kind text",
+      "result": "boolean",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.withdraw_prepared_claim()",
+      "body_md5": "1a40e27e0b93bdb2de8185752e92b2a3",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "",
+      "result": "jsonb",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.daily_provider_base_claim()",
+      "body_md5": "c0bd5fd60a5b4d2bb35cfec5c1ae8dea",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "",
+      "result": "jsonb",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.withdraw_prepared_prepare_claim(text)",
+      "body_md5": "49b05909f92c7e45ae497f64cd8bc9ef",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "p_worker text",
+      "result": "jsonb",
+      "language": "plpgsql"
+    }
+  ],
+  "installed": [
+    {
+      "identity": "private.prepared_aggregate_claim(text)",
+      "body_md5": "f217fa74665373642403b2217c3132aa",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "p_worker text",
+      "result": "jsonb",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.prepared_aggregate_prepare_claim(text)",
+      "body_md5": "4e7d5d7f00b006d2fd5bb5e7c37b59c8",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "p_worker text",
+      "result": "jsonb",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.provider_snapshot_claim(text,integer)",
+      "body_md5": "4c8aef6bac0f4ff6a8f3ef8c92e6d6c7",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "p_worker text, p_lease_seconds integer DEFAULT 120",
+      "result": "jsonb",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.prepared_aggregate_take_turn(text)",
+      "body_md5": "caa20e37e580b5a206c12ce8ed0b883b",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "p_kind text",
+      "result": "boolean",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.withdraw_prepared_claim()",
+      "body_md5": "1a40e27e0b93bdb2de8185752e92b2a3",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "",
+      "result": "jsonb",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.daily_provider_base_claim()",
+      "body_md5": "c0bd5fd60a5b4d2bb35cfec5c1ae8dea",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "",
+      "result": "jsonb",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.withdraw_prepared_prepare_claim(text)",
+      "body_md5": "418ab35dd4ac8938b66efb507a3b7b76",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "p_worker text",
+      "result": "jsonb",
+      "language": "plpgsql"
+    },
+    {
+      "identity": "private.withdraw_prepared_family_claim(text,text)",
+      "body_md5": "d8eb230852bd578896132ffed5fad3d1",
+      "owner": "postgres",
+      "acl": "{postgres=X/postgres}",
+      "config": [
+        "search_path=\"\""
+      ],
+      "security_definer": false,
+      "volatility": "v",
+      "parallel": "u",
+      "strict": false,
+      "leakproof": false,
+      "cost": 100,
+      "rows": 0,
+      "args": "p_family text, p_worker text",
+      "result": "jsonb",
+      "language": "plpgsql"
+    }
+  ]
+}

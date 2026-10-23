@@ -25,13 +25,14 @@
   const allowed=action=>!c.roleAllowed||c.roleAllowed(action);
   const active=()=>c.getPage()===PAGE&&allowed('view');
   const authority=()=>String(c.accessContext?.()??'local-document');
+  const lifecycleRevision=()=>String(c.lifecycleRevision?.()??'');
   const nativeKey=p=>JSON.stringify([p.id,p.source,p.sourceName,p.country,p.identityCountry,p.rawCountry,p.timezone,p.currency,p.capabilities]);
   const nativeAuthorized=()=>!S.scope||S.scope.platforms.every(p=>(c.authorizedPlatforms?.()||c.selected()).some(current=>nativeKey(current)===nativeKey(p)));
-  const authorized=()=>nativeAuthorized()&&active()&&allowed('query')&&!!authority()&&(!S.scope||S.scope.access===authority());
+  const authorized=()=>nativeAuthorized()&&active()&&allowed('query')&&!!authority()&&(!S.scope||S.scope.access===authority()&&String(S.scope.lifecycleRevision??'')===lifecycleRevision());
   const canonical=(v,country)=>String(root.HensemProviderNames?.canonical(v,country)??v??'').trim()||'未识别通道';
   const queryProviders=(providers,country)=>root.HensemProviderNames?.queryNames?.(providers,country)??providers.slice();
-  function snapshots(){root.HensemStatisticWindows?.ensure(L);return {country:L.country,currency:L.currency,team:L.team,source:L.source,access:authority(),platforms:uniqPlatforms(c.selected()).map(p=>({...p})),native:uniqPlatforms(c.nativePlatforms()).map(p=>p.id),providers:(c.activeValues('provider','')||[]).slice().sort(),queryProviders:queryProviders(c.activeValues('provider','')||[],L.country).slice().sort(),date:date(L.from),from:L.from,to:L.to,successFrom:L.successFrom,successTo:L.successTo,successBasis:L.successBasis};}
-  function scopeKey(v){return JSON.stringify([v.country,v.currency,v.team,v.source,v.access,v.platforms.map(p=>[p.id,p.source,p.currency,p.timezone,p.sourceName,p.identityCountry,p.rawCountry]).sort(),v.native.slice().sort(),v.queryProviders||v.providers,v.from,v.to,v.successFrom,v.successTo,v.successBasis,S.compareDate]);}
+  function snapshots(){root.HensemStatisticWindows?.ensure(L);return {country:L.country,currency:L.currency,team:L.team,source:L.source,access:authority(),lifecycleRevision:lifecycleRevision(),platforms:uniqPlatforms(c.selected()).map(p=>({...p})),native:uniqPlatforms(c.nativePlatforms()).map(p=>p.id),providers:(c.activeValues('provider','')||[]).slice().sort(),queryProviders:queryProviders(c.activeValues('provider','')||[],L.country).slice().sort(),date:date(L.from),from:L.from,to:L.to,successFrom:L.successFrom,successTo:L.successTo,successBasis:L.successBasis};}
+  function scopeKey(v){return JSON.stringify([v.country,v.currency,v.team,v.source,v.access,v.lifecycleRevision||'',v.platforms.map(p=>[p.id,p.source,p.currency,p.timezone,p.sourceName,p.identityCountry,p.rawCountry]).sort(),v.native.slice().sort(),v.queryProviders||v.providers,v.from,v.to,v.successFrom,v.successTo,v.successBasis,S.compareDate]);}
   function matches(){return !!S.scope&&!L.dirty&&S.scope.key===scopeKey(snapshots());}
   const current=()=>authorized()&&matches();
   const paint=()=>{if(active())c.render();};
@@ -47,6 +48,8 @@
    if(window.to.slice(0,10)>today||window.successTo&&window.successTo.slice(0,10)>today)throw Error('结束日期晚于平台当地今天');
    return {...root.HensemStatisticWindows.request(window,p,c.instant),local:window};
   }
+  function notOperating(day,p,work=false){try{const view=work?{from:day+'T00:00:00',to:day+'T23:59:59',successFrom:'',successTo:''}:period(day,p,S.scope).local,e=c.lifecycle?.(p,view);return e?.notOperating===true?e:null;}catch{return null;}}
+  const inactiveFact=e=>({...unknown(e.note),notOperating:true,partial:false,finished:true});
   const published=p=>!!p&&p.calculationComplete===true&&Number.isFinite(Date.parse(p.expiresAt))&&(p.publicationVersion===2?['fresh','refresh_due'].includes(p.freshness)&&['idle','queued','running','failed'].includes(p.refreshState):Date.parse(p.expiresAt)>Date.now());
   const readable=entry=>entry?.status==='ready'&&published(entry.response?._preparedPublication);
   const fresh=entry=>readable(entry)&&Date.parse(entry.response._preparedPublication.expiresAt)>Date.now()&&entry.response._preparedPublication.freshness!=='refresh_due';
@@ -65,18 +68,18 @@
   }
   async function runQueue(tasks,token,limit=6){let next=0;await Promise.all(Array.from({length:Math.min(limit,tasks.length)},async()=>{while(next<tasks.length&&token===serial&&current()){await tasks[next++]();}}));}
   function rejectAuthority(error){if(!['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code))return false;clear();S.status='error';S.error='查询权限或登录状态已变化，请重新验证';paint();return true;}
-  function initializeDays(dayList,work=false){const target=work?S.workorders:S.payments,native=new Set(S.scope.native);for(const day of dayList){target[day]??={};for(const p of S.scope.platforms)target[day][p.id]??={status:(work?['ar','newar'].includes(src(p.source)):native.has(p.id))?'pending':'unsupported',note:work?'该来源尚未接入工单':native.has(p.id)?'统计尚未读取':'仅目录，未接入订单'};}}
+  function initializeDays(dayList,work=false){const target=work?S.workorders:S.payments,native=new Set(S.scope.native);for(const day of dayList){target[day]??={};for(const p of S.scope.platforms){const inactive=notOperating(day,p,work);if(inactive){target[day][p.id]={status:'not_operating',note:inactive.note};continue;}target[day][p.id]??={status:(work?['ar','newar'].includes(src(p.source)):native.has(p.id))?'pending':'unsupported',note:work?'该来源尚未接入工单':native.has(p.id)?'统计尚未读取':'仅目录，未接入订单'};}}}
   async function readPaymentDays(dayList,token,querySerial,forceRefresh=false){
    const scope=S.scope,native=new Set(scope.native);initializeDays(dayList);
    await runQueue(dayList.flatMap(day=>scope.platforms.filter(p=>native.has(p.id)).map(p=>async()=>{
-    const entry=S.payments[day][p.id];if(day===scope.compareDate)S.comparePayments[p.id]=entry;if(fresh(entry))return;entry.status='loading';paint();
+    const entry=S.payments[day][p.id];if(day===scope.compareDate)S.comparePayments[p.id]=entry;if(entry.status==='not_operating'||fresh(entry))return;entry.status='loading';paint();
     try{const bounds=period(day,p,scope),q={action:'aggregate',view:'providers',platformId:p.id,startAt:bounds.startAt,endAt:bounds.endAt,successBasis:bounds.successBasis,...(bounds.successStartAt?{successStartAt:bounds.successStartAt,successEndAt:bounds.successEndAt}:{}),direction:'all',status:'all',currency:p.currency,offset:0,limit:20};if(scope.providers.length)q.providers=queryProviders(scope.providers,p.country||scope.country);
      const response=await c.readAggregate(q,querySerial,forceRefresh);if(token!==serial||!current())return;
      Object.assign(entry,{status:'ready',response:platformResponse(response,p,q),note:'已读取后台统计',local:bounds.local});
     }catch(error){if(token!==serial||!current())return;if(rejectAuthority(error))return;if(['stale','invalid'].includes(error?.status))retained=null;Object.assign(entry,{status:['missing','stale','building','unsupported'].includes(error?.status)?error.status:'error',note:error?.message||'读取失败'});}paint();
    })),token);
   }
-  function paymentStatus(days){return days.some(day=>S.scope.platforms.some(p=>S.scope.native.includes(p.id)&&!readable(S.payments[day]?.[p.id])))?'partial':'ready';}
+  function paymentStatus(days){return days.some(day=>S.scope.platforms.some(p=>S.scope.native.includes(p.id)&&!notOperating(day,p)&&!readable(S.payments[day]?.[p.id])))?'partial':'ready';}
   async function load(force=false,forceRefresh=false){
    if(!active()||!allowed('query'))return;cancel();let scope;
    try{if(!root.HensemStatisticWindows)throw Error('统计时间组件未载入');root.HensemStatisticWindows.validate(L);scope=snapshots();if(!scope.country||scope.country==='all')throw Error('请选择一个国家。');
@@ -96,7 +99,7 @@
    if(!workorderWindow()){S.workStatus='unsupported';paint();return;}
    const token=++serial,scope=S.scope,key=trend?'workTrendStatus':'workStatus';S[key]='loading';if(force&&!trend)S.workorders={};const dayList=dates(scope,trend);initializeDays(dayList,true);
    paint();await runQueue(dayList.flatMap(day=>scope.platforms.filter(p=>['ar','newar'].includes(src(p.source))).map(p=>async()=>{
-    const entry=S.workorders[day][p.id];if(entry.status==='ready'&&!force)return;entry.status='loading';paint();
+    const entry=S.workorders[day][p.id];if(entry.status==='not_operating'||entry.status==='ready'&&!force)return;entry.status='loading';paint();
     try{const q={action:'workorders',startAt:day+'T00:00:00.000Z',endAt:day+'T23:59:59.000Z',country:scope.country,platforms:[...new Set([p.name,p.sourceName].filter(Boolean))],direction:'all',offset:0,limit:20};if(scope.providers.length)q.providers=queryProviders(scope.providers,p.country||scope.country);
      const response=await c.request(q);if(token!==serial||!current())return;
      if(response?.startDate!==day||response?.endDate!==day||!response.summary||!Array.isArray(response.byPlatformProvider))throw Error('工单日期或全量平台三方汇总未完整返回');
@@ -119,6 +122,7 @@
    return out;
   }
   function payment(day,p,providerName,comparison=false){
+   const inactive=notOperating(day,p);if(inactive)return inactiveFact(inactive);
    const entry=comparison?S.comparePayments[p.id]:S.payments[day]?.[p.id];if(!readable(entry))return unknown(entry?.status==='ready'?'已准备统计已过期，请重新读取':entry?.note||'统计尚未读取');
    const response=entry.response,d=S.direction,raw=response.summary.filter(row=>row.direction===d),allLeaves=response.groups.provider.filter(row=>row.direction===d);
    if([...raw,...allLeaves].some(row=>row.currency!==p.currency))return unknown('返回币种缺失或不一致，未合并');
@@ -134,6 +138,7 @@
    return {...metrics,ready:true,finished:Math.max(Date.parse(response.endAt),Date.parse(response.successEndAt||response.endAt))<=S.scope.now,partial:!complete||fields.some(k=>metrics[k]===null)||!raw.length&&allLeaves.length>0,note:unavailable?'该来源未提供可核验'+(d==='charge'?'代收':'代付')+(S.scope.successBasis==='source_updated'?'源订单更新时间':'成功时间'):!raw.length&&allLeaves.length?'仅返回三方分组小计':!complete?'平台汇总已返回；三方分组未完整':'已读取订单记录',leaves:subset};
   }
   function tickets(day,p,providerName){
+   const inactive=notOperating(day,p,true);if(inactive)return inactiveFact(inactive);
    const entry=S.workorders[day]?.[p.id];if(entry?.status!=='ready')return unknown(entry?.note||'工单尚未查询');
    const response=entry.response,rows=response.byPlatformProvider.filter(row=>!providerName||canonical(row.provider,p.country)===providerName),coverage=(response.coverage?.platforms||[]).filter(row=>row.platformId===p.id),nativeCoverage=coverage.length===1?coverage[0]:null,covered=nativeCoverage?.complete===true&&count(nativeCoverage.days)===1&&count(nativeCoverage.expectedDays)===1&&!(count(nativeCoverage.detailOnlyDays)>0);
    if(!nativeCoverage)return unknown('工单平台采集覆盖未提供或身份未确认');
@@ -152,7 +157,7 @@
    const leaves=fact.leaves||[],row={...fact,direction:S.direction,currency:S.scope.currency,fee_items:leaves};
    return root.HensemProviderSummary?.currentReferenceFeeFacts(row,L.feeLookupRows,S.scope.country)||{amount:null,matchedCount:null,eligibleCount:null,complete:false};
   }
-  function join(parts){const rows=parts.map(p=>p.fact),ready=rows.filter(r=>r.ready);return {...total(ready),ready:ready.length>0,partial:ready.length!==rows.length||ready.some(r=>r.partial),leaves:ready.flatMap(r=>r.leaves||[]),parts};}
+  function join(parts){const rows=parts.map(p=>p.fact).filter(r=>!r.notOperating),ready=rows.filter(r=>r.ready);return {...total(ready),notOperating:parts.length>0&&!rows.length,ready:ready.length>0,partial:ready.length!==rows.length||ready.some(r=>r.partial),leaves:ready.flatMap(r=>r.leaves||[]),parts};}
   function entity(day,key,dimension=S.dimension,platformScope,comparison=false){
    const platforms=platformScope||S.scope.platforms,chosen=dimension==='platform'?platforms.filter(p=>p.id===key):platforms;
    return join(chosen.map(p=>({id:p.id,fact:facts(day,p,dimension==='provider'?key:null,comparison)})));
@@ -161,7 +166,7 @@
    if(suppressToday&&S.direction==='workorder'&&S.scope.platforms.some(p=>c.localClock(S.scope.now,p.timezone).slice(0,10)===S.scope.date))return {current:join([]),previous:join([]),count:0,partial:true};
    const eligible=p=>p.fact.ready&&p.fact.finished!==false&&(S.direction!=='workorder'||!p.fact.partial),keys=new Set(a.parts.filter(eligible).map(p=>p.id)),prior=new Map(b.parts.filter(eligible).map(p=>[p.id,p.fact]));
    const ids=[...keys].filter(id=>prior.has(id)),current=join(a.parts.filter(p=>ids.includes(p.id))),previous=join(ids.map(id=>({id,fact:prior.get(id)})));
-   return {current,previous,count:ids.length,partial:ids.length!==S.scope.platforms.length};
+   const expected=S.scope.platforms.filter(p=>!a.parts.some(x=>x.id===p.id&&x.fact.notOperating)&&!b.parts.some(x=>x.id===p.id&&x.fact.notOperating)).length;return {current,previous,count:ids.length,partial:ids.length!==expected};
   }
   function providerNames(){const values=[];for(const group of Object.values(S.direction==='workorder'?S.workorders:S.payments))for(const item of Object.values(group)){if(item.status!=='ready')continue;const rows=S.direction==='workorder'?item.response.byPlatformProvider:item.response.groups.provider.filter(row=>row.direction===S.direction);for(const row of rows)values.push(canonical(row.provider,S.scope.country));}return [...new Set(values)];}
   function model(applied=false){
@@ -206,6 +211,7 @@
   }
   const detailCells=(values,cols)=>values.map((v,i)=>'<td class="daily-col-'+cols[i].kind+'" data-label="'+E(cols[i].label)+'">'+v+'</td>').join('');
   function detailValues(fact,denominator,pair,first,kind){
+   if(fact.notOperating)first+=' · 未营业';
    const values=kind===undefined?[first]:[first,E(kind)],empty='<span class="daily-unknown">—</span>';
    for(const prefix of ['all','success'])for(const suffix of ['amount','count']){const key=prefix+'_'+suffix;values.push((suffix==='amount'?money:integer)(fact[key]),percent(fraction(fact[key],denominator[key])),pair?'<span title="'+pair.count+' 个相同原生平台可比较">'+delta(pair.current,pair.previous,key)+'</span>':empty);}
    const f=fee(fact);values.push(rate(fact),pair?rateChange(pair.current,pair.previous):empty,'<span title="按当前费率估算；'+(f.complete?'匹配完整':'仅已匹配部分，未匹配不计零')+'">'+money(f.amount)+(f.amount!==null&&!f.complete?'<em>*</em>':'')+'</span>',percent(fraction(f.matchedCount,f.eligibleCount)));
@@ -237,7 +243,7 @@
   function trend(m){const status=S.direction==='workorder'?S.workTrendStatus:S.trendStatus,button='<button type="button" class="btn" onclick="liveDailyLoadTrend()" '+(status==='loading'||S.status==='loading'?'disabled':'')+'>'+(status==='idle'?'读取 '+S.trendDays+' 天趋势':'重试 / 更新趋势')+'</button>',note='<div class="daily-note">'+(S.direction==='workorder'?'工单趋势按需读取原始记录。':'后台按需准备；每个点将创建和第二时间区间同时平移相同天数，主结果不等待趋势。')+button+'</div>';const data=historyRows(m);if(!data)return '<section class="daily-panel"><h2>趋势</h2>'+note+'</section>';const {selected,values,cols,rows,footer}=data;
    return '<section class="daily-panel"><div class="daily-panel-title"><h2>'+E(selected.name)+' · '+S.trendDays+(S.scope.from.slice(0,10)!==S.scope.to.slice(0,10)||S.scope.successFrom.slice(0,10)!==S.scope.successTo.slice(0,10)?' 天区间趋势':' 天趋势')+'</h2><span><i class="daily-legend-submit"></i>全部　<i class="daily-legend-success"></i>'+successful()+'</span></div><div class="daily-trend-buttons"><button class="'+(selected.key==='__all__'?'on':'')+'" onclick="liveDailyTrend(-1)">全部所选平台</button>'+m.rows.map((r,i)=>'<button type="button" class="'+(r.key===selected.key?'on':'')+'" onclick="liveDailyTrend('+i+')">'+E(r.name)+'</button>').join('')+'</div><div class="daily-charts">'+chart(values,'all_amount','金额')+chart(values,'all_count','笔数')+'</div>'+note+(status==='loading'?'<div class="daily-progress">正在读取已准备趋势；缺失点保留 —</div>':'')+detailTable(cols,rows.map(values=>'<tr>'+detailCells(values,cols)+'</tr>'),'<tr>'+detailCells(footer,cols)+'</tr>','daily-history')+'</section>';
   }
-  function coverage(m){const data=m.now.parts.filter(p=>p.fact.ready&&(p.fact.all_count>0||p.fact.success_count>0)),empty=m.now.parts.filter(p=>p.fact.ready&&p.fact.all_count===0&&p.fact.success_count===0),status=p=>!p.fact.ready?p.fact.note:p.fact.all_count===0&&p.fact.success_count===0?'已读取无订单记录':p.fact.partial?'已返回，含待确认指标':'有数据';return '<details class="daily-coverage"><summary>有数据平台 <strong>'+data.length+' / '+S.scope.platforms.length+'</strong>　已读取 '+m.now.parts.filter(p=>p.fact.ready).length+'　无订单记录 '+empty.length+'　<span>展开平台</span></summary>'+table(['平台','系统','读取状态','全部笔数',successful()+'笔数'],m.now.parts.map(v=>{const p=S.scope.platforms.find(p=>p.id===v.id);return '<tr>'+cells([E(p.name),E(system(p.source)),E(status(v)),integer(v.fact.all_count),integer(v.fact.success_count)],['平台','系统','读取状态','全部笔数',successful()+'笔数'])+'</tr>';}),'','daily-coverage-table')+'</details>';}
+  function coverage(m){const inactive=m.now.parts.filter(p=>p.fact.notOperating).length;const data=m.now.parts.filter(p=>p.fact.ready&&(p.fact.all_count>0||p.fact.success_count>0)),empty=m.now.parts.filter(p=>p.fact.ready&&p.fact.all_count===0&&p.fact.success_count===0),status=p=>p.fact.notOperating?'未营业（用户已确认）':!p.fact.ready?p.fact.note:p.fact.all_count===0&&p.fact.success_count===0?'已读取无订单记录':p.fact.partial?'已返回，含待确认指标':'有数据';return '<details class="daily-coverage"><summary>有数据平台 <strong>'+data.length+' / '+(S.scope.platforms.length-inactive)+'</strong>'+ (inactive?'　未营业 '+inactive:'')+'　已读取 '+m.now.parts.filter(p=>p.fact.ready).length+'　无订单记录 '+empty.length+'　<span>展开平台</span></summary>'+table(['平台','系统','读取状态','全部笔数',successful()+'笔数'],m.now.parts.map(v=>{const p=S.scope.platforms.find(p=>p.id===v.id);return '<tr>'+cells([E(p.name),E(system(p.source)),E(status(v)),integer(v.fact.all_count),integer(v.fact.success_count)],['平台','系统','读取状态','全部笔数',successful()+'笔数'])+'</tr>';}),'','daily-coverage-table')+'</details>';}
   function draw(){
    const controls='<div class="daily-toolbar"><div>'+[['charge','代收'],['withdraw','代付'],['workorder','工单']].map(([k,label])=>'<button class="'+(S.direction===k?'on':'')+'" onclick="liveDailyDirection(\''+k+'\')">'+label+'</button>').join('')+'</div><div>'+[['platform','平台'],['provider','三方']].map(([k,label])=>'<button class="'+(S.dimension===k?'on':'')+'" onclick="liveDailyDimension(\''+k+'\')">'+label+'</button>').join('')+'<select aria-label="每日对比排序" onchange="liveDailySort(this.value)"><option value="all_count" '+(S.sort==='all_count'?'selected':'')+'>全部笔数 ↓</option><option value="all_amount" '+(S.sort==='all_amount'?'selected':'')+'>全部金额 ↓</option></select></div></div>';
    if(S.error)return '<div class="daily-comparison">'+controls+'<div class="live-status live-error">'+E(S.error)+'</div></div>';
@@ -259,9 +265,9 @@
   }
 
   function render(){
-   const html=draw(),catalog=c.authorizedPlatforms?.()||c.selected(),canRetain=retained&&active()&&allowed('query')&&retained.access===authority()&&retained.direction===S.direction&&retained.platforms.every(p=>catalog.some(current=>nativeKey(current)===nativeKey(p)));
+   const html=draw(),catalog=c.authorizedPlatforms?.()||c.selected(),canRetain=retained&&active()&&allowed('query')&&retained.access===authority()&&retained.lifecycleRevision===lifecycleRevision()&&retained.direction===S.direction&&retained.platforms.every(p=>catalog.some(current=>nativeKey(current)===nativeKey(p)));
    if(canRetain&&S.direction!=='workorder'&&['loading','partial','error'].includes(S.status))return '<div class="live-panel-note" role="status">'+(S.status==='loading'?'正在读取所选范围':'本次读取未完成')+'，以下保留上次查询结果。</div><section class="live-retained-result" inert aria-label="上次查询结果">'+retained.html+'</section>';
-   if(authorized()&&matches()&&S.direction!=='workorder'&&S.status==='ready'&&html.length<2000000)retained={access:authority(),direction:S.direction,platforms:S.scope.platforms.map(p=>({...p})),html};
+   if(authorized()&&matches()&&S.direction!=='workorder'&&S.status==='ready'&&html.length<2000000)retained={access:authority(),lifecycleRevision:lifecycleRevision(),direction:S.direction,platforms:S.scope.platforms.map(p=>({...p})),html};
    return html;
   }
 
