@@ -1,0 +1,3 @@
+-- Read-only metadata; capture outputs privately before and after installation.
+begin;set local statement_timeout='8s';set local lock_timeout='500ms';
+select jsonb_build_object('function',(select jsonb_build_object('bodyMd5',md5(p.prosrc),'owner',pg_get_userbyid(p.proowner),'acl',p.proacl::text,'securityDefiner',p.prosecdef,'config',p.proconfig,'volatility',p.provolatile)from pg_proc p where oid='private.withdraw_prepared_prewarm()'::regprocedure),'withdrawDependency',private.withdraw_prepared_dependency(),'sourceContract',private.withdraw_prepared_source_contract_current(),'scopeDependencies',(select jsonb_object_agg(s,private.prepared_aggregate_dependency_common(s))from unnest(array['IN','BR','BR_PANGHU','PK','PH','ID'])s))result;commit;

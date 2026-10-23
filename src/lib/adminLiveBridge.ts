@@ -28,15 +28,16 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
     if(p.successBasis!=="created"||!["details","memberDaily","analysisOrders"].includes(String(p.action))&&!(p.action==="aggregate"&&p.view==="drilldown")||Object.hasOwn(p,"successStartAt")||Object.hasOwn(p,"successEndAt"))throw Error("创建订单状态统计参数无效");
     const {successBasis,...base}=p;return {...validateAdminLiveRequest(base),successBasis};
   }
-  if(p.action==="autoWithdraw"&&["windowVersion","successStartAt","successEndAt","successBasis"].some(key=>p[key]!==undefined)){
-    const {windowVersion,successStartAt,successEndAt,successBasis,...base}=p;
+  if(p.action==="autoWithdraw"&&["windowVersion","successStartAt","successEndAt","successBasis","includeSecondary"].some(key=>p[key]!==undefined)){
+    const {windowVersion,successStartAt,successEndAt,successBasis,includeSecondary,...base}=p;
     if(windowVersion!==2||typeof successBasis!=="string"||!["success","source_updated"].includes(successBasis))throw Error("出款统计时间依据无效");
+    if(Object.hasOwn(p,"includeSecondary")&&typeof includeSecondary!=="boolean")throw Error("出款成功窗准备参数无效");
     const checked=validateAdminLiveRequest(base);
     for(const [from,to]of [[p.startAt,p.endAt],[successStartAt,successEndAt]]){
       for(const value of [from,to])if(typeof value!=="string"||!/^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.000)?Z$/.test(value)||!Number.isFinite(Date.parse(value))||new Date(value).toISOString().slice(0,19)!==value.slice(0,19))throw Error("出款日期或时间无效");
       if(Date.parse(String(to))<Date.parse(String(from))||(Date.parse(String(to).slice(0,10))-Date.parse(String(from).slice(0,10)))/86400000>30)throw Error("出款查询范围最多31个当地日");
     }
-    return {...checked,windowVersion,successStartAt,successEndAt,successBasis};
+    return {...checked,windowVersion,successStartAt,successEndAt,successBasis,...(includeSecondary===undefined?{}:{includeSecondary})};
   }
   if(p.action==="aggregatePrepared"){
     if(Object.keys(p).some(key=>!["action","requests","publicationVersion","forceRefresh","providerReuseNames","providerLeafAliases","responseProfile","readMode"].includes(key))||!Array.isArray(p.requests)||p.requests.length<1||p.requests.length>50)throw Error("已准备统计的批量参数无效");

@@ -1,0 +1,186 @@
+{
+  "before": {
+    "private.withdraw_prepared_canonical(jsonb)": {
+      "acl": "{postgres=X/postgres}",
+      "args": "q jsonb",
+      "cost": 100,
+      "rows": 0,
+      "owner": "postgres",
+      "config": [
+        "search_path=\"\""
+      ],
+      "result": "jsonb",
+      "strict": false,
+      "bodyMd5": "ce0c3372519f8534cd8222a6c5d9c985",
+      "language": "plpgsql",
+      "parallel": "u",
+      "leakproof": false,
+      "volatility": "i",
+      "securityDefiner": false
+    },
+    "private.withdraw_window_legacy(jsonb)": {
+      "acl": "{postgres=X/postgres}",
+      "args": "q jsonb",
+      "cost": 100,
+      "rows": 0,
+      "owner": "postgres",
+      "config": [
+        "search_path=\"\""
+      ],
+      "result": "jsonb",
+      "strict": false,
+      "bodyMd5": "e70d03bdcae6260ac16a525c93629864",
+      "language": "sql",
+      "parallel": "u",
+      "leakproof": false,
+      "volatility": "i",
+      "securityDefiner": false
+    },
+    "private.withdraw_window_secondary(jsonb,jsonb,jsonb)": {
+      "acl": "{postgres=X/postgres}",
+      "args": "q jsonb, s jsonb, c jsonb",
+      "cost": 100,
+      "rows": 0,
+      "owner": "postgres",
+      "config": [
+        "search_path=\"\""
+      ],
+      "result": "jsonb",
+      "strict": false,
+      "bodyMd5": "e5a24a3bb6b9efe020a06d32f76f2975",
+      "language": "plpgsql",
+      "parallel": "u",
+      "leakproof": false,
+      "volatility": "s",
+      "securityDefiner": false
+    },
+    "private.withdraw_window_result(jsonb,jsonb,jsonb)": {
+      "acl": "{postgres=X/postgres}",
+      "args": "q jsonb, v jsonb, b jsonb",
+      "cost": 100,
+      "rows": 0,
+      "owner": "postgres",
+      "config": [
+        "search_path=\"\""
+      ],
+      "result": "jsonb",
+      "strict": false,
+      "bodyMd5": "5399e6d1730498e5ab35099ed0e369ea",
+      "language": "plpgsql",
+      "parallel": "u",
+      "leakproof": false,
+      "volatility": "s",
+      "securityDefiner": false
+    },
+    "private.withdraw_prepared_dependency()": {
+      "acl": "{postgres=X/postgres}",
+      "args": "",
+      "cost": 100,
+      "rows": 0,
+      "owner": "postgres",
+      "config": [
+        "search_path=\"\""
+      ],
+      "result": "text",
+      "strict": false,
+      "bodyMd5": "eb081445441cf09b9abac29548ef9092",
+      "language": "sql",
+      "parallel": "u",
+      "leakproof": false,
+      "volatility": "s",
+      "securityDefiner": false
+    }
+  },
+  "after": {
+    "private.withdraw_prepared_canonical(jsonb)": {
+      "acl": "{postgres=X/postgres}",
+      "args": "q jsonb",
+      "cost": 100,
+      "rows": 0,
+      "owner": "postgres",
+      "config": [
+        "search_path=\"\""
+      ],
+      "result": "jsonb",
+      "strict": false,
+      "bodyMd5": "10d7041b097c97ef64012904d33cb627",
+      "language": "plpgsql",
+      "parallel": "u",
+      "leakproof": false,
+      "volatility": "i",
+      "securityDefiner": false
+    },
+    "private.withdraw_window_legacy(jsonb)": {
+      "acl": "{postgres=X/postgres}",
+      "args": "q jsonb",
+      "cost": 100,
+      "rows": 0,
+      "owner": "postgres",
+      "config": [
+        "search_path=\"\""
+      ],
+      "result": "jsonb",
+      "strict": false,
+      "bodyMd5": "dc68f18087ff76da7545036688a0efae",
+      "language": "sql",
+      "parallel": "u",
+      "leakproof": false,
+      "volatility": "i",
+      "securityDefiner": false
+    },
+    "private.withdraw_window_secondary(jsonb,jsonb,jsonb)": {
+      "acl": "{postgres=X/postgres}",
+      "args": "q jsonb, s jsonb, c jsonb",
+      "cost": 100,
+      "rows": 0,
+      "owner": "postgres",
+      "config": [
+        "search_path=\"\""
+      ],
+      "result": "jsonb",
+      "strict": false,
+      "bodyMd5": "bf772d6317517c293f365a77a2946b24",
+      "language": "plpgsql",
+      "parallel": "u",
+      "leakproof": false,
+      "volatility": "s",
+      "securityDefiner": false
+    },
+    "private.withdraw_window_result(jsonb,jsonb,jsonb)": {
+      "acl": "{postgres=X/postgres}",
+      "args": "q jsonb, v jsonb, b jsonb",
+      "cost": 100,
+      "rows": 0,
+      "owner": "postgres",
+      "config": [
+        "search_path=\"\""
+      ],
+      "result": "jsonb",
+      "strict": false,
+      "bodyMd5": "f5097173ef6236c708c1199d7507fd27",
+      "language": "plpgsql",
+      "parallel": "u",
+      "leakproof": false,
+      "volatility": "s",
+      "securityDefiner": false
+    },
+    "private.withdraw_prepared_dependency()": {
+      "acl": "{postgres=X/postgres}",
+      "args": "",
+      "cost": 100,
+      "rows": 0,
+      "owner": "postgres",
+      "config": [
+        "search_path=\"\""
+      ],
+      "result": "text",
+      "strict": false,
+      "bodyMd5": "e339a7838ee2782a91efc72d69d6eb47",
+      "language": "sql",
+      "parallel": "u",
+      "leakproof": false,
+      "volatility": "s",
+      "securityDefiner": false
+    }
+  }
+}

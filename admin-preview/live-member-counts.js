@@ -289,7 +289,7 @@
    }
    const notice=readNotice(s);c.open('每日充值 / 提款人数','<div class="live-member-counts-detail">'+tabs+definition+(windowNotice(s)?'<div class="live-definition">'+E(windowNotice(s))+'</div>':'')+coverage+(notice?'<div class="live-definition">'+E(notice)+'</div>':'')+(status(s)?'<div class="live-status">'+E(status(s))+retry(s)+'</div>':retry(s))+problems+table+'</div>');
   }
-  return {ensure,beginQuery,load:(force=true)=>ensure(force),cancel,metric,platformLabel,platformMetric,platformCount,details,capture:()=>({...S,status:S.status==='loading'?'paused':S.status,results:[...S.results],failures:[...S.failures],error:S.status==='loading'?'人数读取已暂停':S.error}),restore:value=>{serial++;pending=null;nextForce=false;waiters.splice(0).forEach(wake=>wake());S=value?{...value,results:[...value.results],failures:[...value.failures]}:initial();},get state(){return S}};
+  return {ensure,beginQuery,load:(force=true)=>ensure(force),cancel,clearCache,metric,platformLabel,platformMetric,platformCount,details,capture:()=>({...S,status:S.status==='loading'?'paused':S.status,results:[...S.results],failures:[...S.failures],error:S.status==='loading'?'人数读取已暂停':S.error}),restore:value=>{serial++;pending=null;nextForce=false;waiters.splice(0).forEach(wake=>wake());S=value?{...value,results:[...value.results],failures:[...value.failures]}:initial();},get state(){return S}};
  }
  root.HensemLiveMemberCounts={create};
  if(typeof module!=='undefined')module.exports={create,requestFor,validate,dailySlices};
