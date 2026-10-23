@@ -1,7 +1,7 @@
 // Real provider controller and exact prepared DTOs; synthetic IO, no online timing.
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const prefix=fs.readFileSync(path.join(__dirname,'admin-provider-historical-routing.test.cjs'),'utf8').split(/\ntest\(/)[0];
-const {fixture,prepared,settle,deferred,platforms}=new Function('require','__dirname',prefix+';return {fixture,prepared,settle,deferred,platforms};')(require,__dirname);
+const {fixture,prepared,settle,deferred,platforms,feed}=new Function('require','__dirname',prefix+';return {fixture,prepared,settle,deferred,platforms,feed};')(require,__dirname);
 function range(h){for(const [key,value]of Object.entries({from:'2026-10-11T00:00:00',to:'2026-10-17T23:59:59',successFrom:'2026-10-11T00:00:00',successTo:'2026-10-17T23:59:59'}))h.c.liveMetricTimeSet(key,value);h.c.liveSet('provider','TukPay');}
 const main=q=>q.action==='aggregatePrepared';
 const attachments=q=>['rates','workorders','submissionAnalysis','intakeCoverage'].includes(q.action);
@@ -28,8 +28,27 @@ test('same exact live scope preserves its last complete table on forced transien
  h.override(q=>main(q)?prepared(q,'building'):undefined);await h.c.liveQuery(true);await settle();assert.equal(h.L.retainedContent,old);assert.equal(h.L.results.length,0);assert.equal(h.L.queryFailures.length,18);assert.match(h.html(),/本次读取未完成，以下保留上次查询结果/);assert.match(h.html(),/live-retained-result/);assert.match(h.html(),/Synthetic provider/);assert.doesNotMatch(h.html(),/data-provider-published|缺 54 项|主表已完成/);assert.equal(h.L.retainedContent.queryScope,scope);
 });
 
-test('prepared yesterday comparison completes before an independent slow workorder read, without starting another attachment lane',async()=>{
- const h=await fixture(),wait=deferred();h.setNow('2026-10-18T12:00:00Z');range(h);let work=0;h.override(q=>q.action==='workorders'?(work++,wait.promise):main(q)?prepared(q):undefined);const run=h.c.liveQuery();await settle();assert.equal(h.L.results.length,18);assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.L.comparisonResults.length,18);assert.equal(work,1);assert.equal(h.L.workordersLoading,true);assert.equal(h.L.providerIntake,null);assert.equal(h.L.providerComparisonIntake,null);
- wait.resolve({rows:[],total:0,byProvider:[],byDirection:{charge:{submittedCount:0}}});await run;await settle();assert.equal(h.L.workordersLoading,false);assert.equal(work,1);assert.equal(h.L.comparisonStatus,'ready');
+test('prepared comparison and exact-period intake finish while the independent workorder stays held, without duplicate reads',async()=>{
+ const h=await fixture(),wait=deferred();h.setNow('2026-10-18T12:00:00Z');range(h);let work=0,active=0,maxActive=0,intakeActive=0,maxIntakeActive=0;
+ h.override(q=>q.action==='workorders'?(work++,wait.promise):main(q)?prepared(q):undefined);
+ const request=h.c.hensemLiveRequest;h.c.hensemLiveRequest=async(q,options)=>{
+  const tracked=main(q)||attachments(q),intake=q.action==='intakeCoverage';
+  if(tracked){active++;maxActive=Math.max(maxActive,active);}if(intake){intakeActive++;maxIntakeActive=Math.max(maxIntakeActive,intakeActive);}
+  try{return await request(q,options);}finally{if(tracked)active--;if(intake)intakeActive--;}
+ };
+ const run=h.c.liveQuery();await settle();
+ assert.equal(h.L.results.length,18);assert.equal(h.L.comparisonStatus,'ready');assert.equal(h.L.comparisonResults.length,18);assert.equal(work,1);assert.equal(h.L.workordersLoading,true);assert.equal(h.L.workorders,null);
+ const windows=[['providerIntake','2026-10-11','2026-10-17'],['providerComparisonIntake','2026-10-04','2026-10-10']];
+ const intake=h.calls.filter(q=>q.action==='intakeCoverage'),catalog=intake.filter(q=>q.operation==='orderCatalog'),rows=intake.filter(q=>q.operation==='rows');
+ assert.equal(catalog.length,1,'both periods share the existing catalog request');assert.equal(rows.length,18,'two-platform batches run once for each of the two 18-platform periods');
+ for(const [key,from,to]of windows){
+  const state=h.L[key];assert.equal(state.status,'ready');assert.equal(state.from,from);assert.equal(state.to,to);assert.equal(state.platforms.length,18);assert(state.platforms.every(p=>p.complete===false),'received evidence must not become proven source completeness');
+  const period=rows.filter(q=>q.startAt===from&&q.endAt===to);assert.equal(period.length,9);assert(period.every(q=>q.feedIds.length===2));
+  const ids=period.flatMap(q=>q.feedIds);assert.equal(ids.length,18);assert.equal(new Set(ids).size,18,'each native feed is requested once per period');assert.deepEqual(ids.slice().sort(),platforms.map(p=>feed(p).id).sort(),'only the exact authorized native feed set is read');
+ }
+ assert.deepEqual([...new Set(rows.map(q=>q.startAt+'|'+q.endAt))].sort(),windows.map(([,from,to])=>from+'|'+to).sort());
+ assert.equal(maxIntakeActive,1,'the existing shared intake transport remains serial');assert(maxActive<=4,'prepared and supplementary readers retain the host physical request bound');assert.equal(active,1,'only the intentionally held workorder remains');
+ const before=h.calls.length,comparison=JSON.stringify(h.L.comparisonResults),current=JSON.stringify(h.L.providerIntake),previous=JSON.stringify(h.L.providerComparisonIntake);
+ wait.resolve({rows:[],total:0,byProvider:[],byDirection:{charge:{submittedCount:0}}});await run;await settle();
+ assert.equal(h.L.workordersLoading,false);assert(h.L.workorders);assert.equal(work,1);assert.equal(active,0);assert.equal(h.calls.length,before,'settling the workorder does not start a duplicate attachment round');assert.equal(h.L.comparisonStatus,'ready');assert.equal(JSON.stringify(h.L.comparisonResults),comparison);assert.equal(JSON.stringify(h.L.providerIntake),current);assert.equal(JSON.stringify(h.L.providerComparisonIntake),previous);
 });
-
