@@ -1,0 +1,101 @@
+[
+  {
+    "acl": "{postgres=X/postgres,authenticated=X/postgres}",
+    "cost": 100,
+    "rows": 0,
+    "owner": "postgres",
+    "config": [
+      "search_path=\"\"",
+      "jit=off"
+    ],
+    "result": "jsonb",
+    "strict": false,
+    "bodyMd5": "50a18718e3725388cd1ec1c167a23897",
+    "language": "plpgsql",
+    "parallel": "u",
+    "arguments": "p_request jsonb DEFAULT '{}'::jsonb",
+    "leakproof": false,
+    "signature": "private.dashboard_admin_live_collected_data(jsonb)",
+    "volatility": "s",
+    "securityDefiner": true
+  },
+  {
+    "acl": "{postgres=X/postgres}",
+    "cost": 100,
+    "rows": 0,
+    "owner": "postgres",
+    "config": [
+      "search_path=\"\"",
+      "jit=off"
+    ],
+    "result": "jsonb",
+    "strict": false,
+    "bodyMd5": "ce2d86eca4db321e06d68dc394ae7d78",
+    "language": "plpgsql",
+    "parallel": "u",
+    "arguments": "p_request jsonb DEFAULT '{}'::jsonb",
+    "leakproof": false,
+    "signature": "private.dashboard_admin_live_native_collected_data(jsonb)",
+    "volatility": "s",
+    "securityDefiner": true
+  },
+  {
+    "acl": "{postgres=X/postgres}",
+    "cost": 100,
+    "rows": 1000,
+    "owner": "postgres",
+    "config": [
+      "search_path=\"\"",
+      "jit=off"
+    ],
+    "result": "TABLE(country text, team text, platform text, platform_id uuid, source_system text, source_kind text, dataset text, direction text, data_date date, timezone text, status text, received boolean, evidence text, last_received_at timestamp with time zone)",
+    "strict": false,
+    "bodyMd5": "a3463e9ff2d11889308f2ba94b51849d",
+    "language": "plpgsql",
+    "parallel": "u",
+    "arguments": "p_asof timestamp with time zone",
+    "leakproof": false,
+    "signature": "private.dashboard_admin_live_sync_health_rows(timestamp with time zone)",
+    "volatility": "s",
+    "securityDefiner": true
+  },
+  {
+    "acl": "{postgres=X/postgres}",
+    "cost": 100,
+    "rows": 0,
+    "owner": "postgres",
+    "config": [
+      "search_path=\"\""
+    ],
+    "result": "jsonb",
+    "strict": false,
+    "bodyMd5": "e6ca485b832b5420a2dc1785cabb2fd4",
+    "language": "sql",
+    "parallel": "u",
+    "arguments": "p_feeds jsonb",
+    "leakproof": false,
+    "signature": "private.dashboard_admin_wg_current_feeds(jsonb)",
+    "volatility": "s",
+    "securityDefiner": true
+  },
+  {
+    "acl": "{postgres=X/postgres}",
+    "cost": 100,
+    "rows": 0,
+    "owner": "postgres",
+    "config": [
+      "search_path=\"\"",
+      "jit=off"
+    ],
+    "result": "jsonb",
+    "strict": false,
+    "bodyMd5": "08445a99399a2086159c0587e2de3958",
+    "language": "plpgsql",
+    "parallel": "u",
+    "arguments": "p_request jsonb, p_include_order_intake boolean",
+    "leakproof": false,
+    "signature": "private.dashboard_collected_data_core(jsonb,boolean)",
+    "volatility": "s",
+    "securityDefiner": false
+  }
+]
