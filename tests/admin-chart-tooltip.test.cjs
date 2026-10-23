@@ -44,12 +44,38 @@ test('tooltip markup escapes source labels and has an accessible keyboard entry 
 });
 function actualChart(options={}){
  const live=fs.readFileSync(path.join(root,'admin-preview/live-data.js'),'utf8'),ast=ts.createSourceFile('live-data.js',live,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS),functions=[],variables=[];
- const wantedFunctions=new Set(['plus','groupRows','chartCoverage','inspectChart','overviewChart','chart']),wantedVariables=new Set(['countKeys','amountKeys','empty','E','C']);
- function walk(n){if(ts.isFunctionDeclaration(n)&&wantedFunctions.has(n.name?.text))functions.push(n.getText(ast));if(ts.isVariableDeclaration(n)&&wantedVariables.has(n.name.getText(ast)))variables.push('const '+n.getText(ast)+';');ts.forEachChild(n,walk)}walk(ast);assert.equal(functions.length,6);assert.equal(variables.length,5);
+ const wantedFunctions=new Set(['plus','groupRows','chartCoverage','inspectChart','overviewChart','chart']),wantedVariables=new Set(['countKeys','amountKeys','empty','E','C','lifecycleForQuery']);
+ function walk(n){if(ts.isFunctionDeclaration(n)&&wantedFunctions.has(n.name?.text))functions.push(n.getText(ast));if(ts.isVariableDeclaration(n)&&wantedVariables.has(n.name.getText(ast)))variables.push('const '+n.getText(ast)+';');ts.forEachChild(n,walk)}walk(ast);assert.equal(functions.length,6);assert.equal(variables.length,6);
  const p={id:'synthetic-platform'},L={queryPlatforms:[p],results:[{platform:p,groups:{hourly:[row()]}}],comparisonResults:[{platform:p,_aggregateView:'full',groups:{hourly:[row({all_count:80,all_amount:'400.25'})]}}],comparisonStatus:'ready',loadedView:'full',currency:'INR',direction:'charge',from:'2026-09-30T00:00:00',to:'2026-09-30T23:59:59',...options};
- const c={L,selected:()=>L.queryPlatforms,directionName:d=>d==='withdraw'?'代付':'代收',successTimeUnavailable:()=>!!options.successUnavailable};c.window=c;vm.runInNewContext(helperSource,c);vm.runInNewContext(variables.join('\n')+'\n'+functions.join('\n')+'\nwindow.draw=overviewChart;window.drawTime=chart;',c);return c;
+ const c={L,selected:()=>L.queryPlatforms,directionName:d=>d==='withdraw'?'代付':'代收',successTimeUnavailable:()=>!!options.successUnavailable};c.window=c;
+ // chartCoverage consumes the real lifecycle closure and native/date evidence.
+ // Keep this isolated renderer harness wired to that module, not a no-op stub.
+ c.authority='synthetic-authority';
+ c.query=(platform,action,previous)=>options.chartRequest?.(platform,previous)||({platformId:platform.id,startAt:previous?'2026-09-29T00:00:00Z':'2026-09-30T00:00:00Z',endAt:previous?'2026-09-30T00:00:00Z':'2026-10-01T00:00:00Z',successBasis:'created'});
+ vm.runInNewContext(fs.readFileSync(path.join(root,'admin-preview/live-platform-lifecycle.js'),'utf8'),c);
+ c.platformLifecycle=c.HensemPlatformLifecycle.create({authority:()=>c.authority});
+ c.platformLifecycle.replace({platforms:L.queryPlatforms,platformLifecycle:options.lifecycle});
+ vm.runInNewContext(helperSource,c);vm.runInNewContext(variables.join('\n')+'\n'+functions.join('\n')+'\nwindow.draw=overviewChart;window.drawTime=chart;',c);return c;
 }
 function modelFrom(html){const encoded=html.match(/data-chart-model="([^]*?)" onpointermove=/)?.[1];assert(encoded);return JSON.parse(encoded.replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&'));}
+function lifecycleChart(options={}){
+ const active={id:'synthetic-platform',source:'ar',sourceName:'synthetic-active',scopeGroup:'synthetic-scope',country:'IN',currency:'INR',timezone:'UTC'},inactive={...active,id:'synthetic-inactive',sourceName:'synthetic-inactive'};
+ const lifecycle={version:1,revision:'1'.repeat(32),items:[{...inactive,targetId:inactive.id,evidenceKind:'user_confirmed_not_operating',confirmedFrom:'2026-09-01',confirmedThrough:'2026-09-30',operatingFrom:'2026-10-01'}]};
+ return actualChart({queryPlatforms:[active,inactive],results:[{platform:active,groups:{hourly:[row()]}}],comparisonResults:[{platform:active,_aggregateView:'full',groups:{hourly:[]}}],lifecycle,...options});
+}
+test('actual chart coverage excludes only exact authorized non-operating dates and preserves active values',()=>{
+ const c=lifecycleChart(),model=modelFrom(c.draw(false,'charge'));
+ assert.equal(model.series[0].coverage,'本期已读 1 / 1 平台');assert.equal(model.series[0].points[5],120);assert.equal(model.series[1].points[5],180);
+ assert.equal(model.series[2].coverage,'前期已读 1 / 1 平台');assert(model.series[2].points.every(value=>value===0));
+ c.authority='different-account';const revoked=modelFrom(c.draw(false,'charge')).series[0];assert.match(revoked.coverage,/1 \/ 2 平台.*来源不完整/);assert.equal(revoked.points[6],null);
+ const drifted=lifecycleChart();drifted.L.queryPlatforms[1]={...drifted.L.queryPlatforms[1],sourceName:'different-native'};
+ const unknown=modelFrom(drifted.draw(false,'charge')).series[0];assert.match(unknown.coverage,/1 \/ 2 平台.*来源不完整/);assert.equal(unknown.points[6],null);
+});
+test('manual success window outside non-operating evidence keeps the unread platform in chart coverage',()=>{
+ const c=lifecycleChart({chartRequest:(p,previous)=>({platformId:p.id,startAt:previous?'2026-09-29T00:00:00Z':'2026-09-30T00:00:00Z',endAt:previous?'2026-09-30T00:00:00Z':'2026-10-01T00:00:00Z',successBasis:'success',successStartAt:previous?'2026-09-29T00:00:00Z':'2026-10-01T00:00:00Z',successEndAt:previous?'2026-09-30T00:00:00Z':'2026-10-02T00:00:00Z'})});
+ const model=modelFrom(c.draw(false,'charge'));assert.match(model.series[0].coverage,/1 \/ 2 平台.*来源不完整/);assert.equal(model.series[0].points[6],null);
+ assert.equal(model.series[2].coverage,'前期已读 1 / 1 平台');assert(model.series[2].points.every(value=>value===0));
+});
 test('actual overview renderer includes every displayed series, preserves paths and reports source coverage',()=>{
  const c=actualChart(),before=JSON.stringify(c.L),html=c.draw(false,'charge'),model=modelFrom(html);
  assert.deepEqual(model.series.map(s=>s.name),['本期全部','本期成功','前期全部']);assert.deepEqual(model.series.map(s=>s.points[5]),[120,180,80]);assert.equal(model.series[0].coverage,'本期已读 1 / 1 平台');assert.match(html,/stroke-dasharray="5 4"/);assert.match(html,/195\.17391304347825,66\.66666666666667/,'created series keeps its existing coordinates');assert.equal(JSON.stringify(c.L),before);
