@@ -730,3 +730,30 @@ test('prepared v2 and explicit refresh survive both authorized routes while malf
  await h.api.adminLiveRequest(session,request,undefined,{assigned:false,page:'overview'});assert.deepEqual(JSON.parse(h.calls[0].init.body),{p_page:'overview',p_request:{publicationVersion:2,forceRefresh:true,requests:request.requests}});
  await h.api.adminLiveRequest(session,request,undefined,{assigned:true,page:'success_analysis'});assert.deepEqual(JSON.parse(h.calls[1].init.body),{p_page:'success_analysis',p_request:request});
 });
+
+
+for(const freshRequest of [false,true])test('late successful previous-account read cannot reach the current frame '+(freshRequest?'after new-account query':'before new-account query'),async()=>{
+ const old=deferred(),denied=[];let current=session;
+ const h=load({ensure:async input=>input,fetch:async()=>h.calls.length===1?old.promise:{ok:true,json:async()=>({total:8})}}),b=bridge(h,{session:()=>current,onAccessDenied:kind=>denied.push(kind)});
+ h.send(b.event('old'));await flush();current={...session,user:{id:'another-offline-user'},access_token:'new-token',refresh_token:'new-refresh'};
+ if(freshRequest){h.send(b.event('fresh'));await flush();assert.equal(b.replies.at(-1).data.result.total,8);}
+ old.resolve({ok:true,json:async()=>({private:'obsolete-account-result'})});await flush();
+ const reply=b.replies.find(x=>x.data.id==='old');assert.equal(reply.data.code,'ADMIN_LIVE_CANCELLED');assert.equal(reply.data.result,undefined);assert(!JSON.stringify(b.replies).includes('obsolete-account-result'));assert.deepEqual(denied,[]);
+ h.send(b.event('still-current'));await flush();assert.equal(b.replies.at(-1).data.result.total,8);assert.equal(b.replies.filter(x=>x.data.id==='old').length,1);assert.equal(h.timers.size,0);b.cleanup();
+});
+for(const propagated of [false,true])test('concurrent same-account successful read survives another verified refresh '+(propagated?'after session event':'before session event'),async()=>{
+ const old=deferred(),denied=[];let current=session,ensures=0;
+ const h=load({ensure:async input=>++ensures===1?input:{...input,access_token:'new-token',refresh_token:'new-refresh'},fetch:async()=>h.calls.length===1?old.promise:{ok:true,json:async()=>({total:8})}}),b=bridge(h,{session:()=>current,onAccessDenied:kind=>denied.push(kind)});
+ h.send(b.event('older-read'));await flush();if(propagated)current={...session,access_token:'new-token',refresh_token:'new-refresh'};h.send(b.event('refreshed-read'));await flush();assert.equal(b.replies.at(-1).data.result.total,8);
+ old.resolve({ok:true,json:async()=>({total:7})});await flush();assert.equal(b.replies.find(x=>x.data.id==='older-read').data.result.total,7);assert.deepEqual(denied,[]);assert.equal(h.calls.length,2);assert.equal(h.timers.size,0);b.cleanup();
+});
+test('successful token refresh owned by the same request is deliverable after its session propagates',async()=>{
+ const pending=deferred();let current=session;
+ const h=load({ensure:async input=>({...input,access_token:'renewed-token'}),fetch:()=>pending.promise}),b=bridge(h,{session:()=>current});
+ h.send(b.event('owned-refresh'));await flush();current={...session,access_token:'renewed-token'};pending.resolve({ok:true,json:async()=>({total:7})});await flush();assert.equal(b.replies[0].data.result.total,7);assert.equal(b.replies[0].data.code,undefined);b.cleanup();
+});
+for(const [status,code]of[[500,'XX000'],[500,'57014'],[504,'57014']])test('HTTP '+status+' '+code+' is a retryable read failure without revoking the document session',async()=>{
+ const denied=[],h=load({ensure:async input=>input,fetch:async()=>h.calls.length===1?{ok:false,status,json:async()=>({code,message:'PRIVATE_DIAGNOSTIC'})}:{ok:true,json:async()=>({total:13})}}),b=bridge(h,{onAccessDenied:kind=>denied.push(kind)});
+ h.send(b.event('failed'));await flush();const first=b.replies[0].data;assert(first.error);assert(!['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED'].includes(first.code));assert.equal(first.result,undefined);assert.deepEqual(denied,[]);assert.doesNotMatch(JSON.stringify(first),/PRIVATE_DIAGNOSTIC/);
+ h.send(b.event('retry'));await flush();assert.equal(b.replies.at(-1).data.result.total,13);assert.equal(h.calls.length,2);assert.equal(h.timers.size,0);b.cleanup();
+});

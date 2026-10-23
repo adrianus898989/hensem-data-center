@@ -574,7 +574,12 @@ export function installAdminLiveBridge(options:{source:()=>Window|null|undefined
      const request=validateAdminLiveRequest(item.request),access=options.roleAccess?.(),permission=request.operation==="overview"?"view":"edit";
      if(item.page!=="collector_control"||!access?.canView||!(access.mode==="owner"||access.mode==="assigned"&&access.permissions.includes("collector_control.view")&&access.permissions.includes("collector_control."+permission)))throw Error("当前账号没有采集管理操作权限");
     }
-    const result=await adminLiveRequest(inputSession,item.request,controller.signal,{assigned:options.roleAccess?.()?.mode==="assigned",page:item.page},observeSession);if(Date.now()>=item.deadline)stop(item,true);else finish(item,{result})}
+    const result=await adminLiveRequest(inputSession,item.request,controller.signal,{assigned:options.roleAccess?.()?.mode==="assigned",page:item.page},observeSession);
+    if(Date.now()>=item.deadline)stop(item,true);
+    // Token rotation within one account does not invalidate a successful read.
+    // An old account must never deliver its data into the current document.
+    else if((typeof options.session==='function'?options.session():options.session).user.id!==verifiedSession.user.id)finish(item,{error:'登录账号已更新，请重新查询',code:'ADMIN_LIVE_CANCELLED'});
+    else finish(item,{result})}
    catch(e){if(Date.now()>=item.deadline)stop(item,true);else if(e instanceof AdminLiveAccessError&&current(item)&&!item.settled&&!controller.signal.aborted){
      if(!sameAuthority()){finish(item,{error:'登录会话已更新，请重新查询',code:'ADMIN_LIVE_CANCELLED'});return;}
      finish(item,{error:e.message,code:e.code});
