@@ -61,6 +61,8 @@ function fixture(options = {}) {
     request: q => { calls.push(plain(q)); return handler(q); },
     render: () => paints.push(mod.render()),
   });
+  // Explicit legacy-view fixtures retain single-view behavior; the new default is tested separately.
+  if(options.initialMode!=='default')mod.restore({...mod.capture(),mode:'single'});
   return {
     context, L, mod, calls, paints,
     start: async () => { mod.render(); await flush(); },
@@ -99,16 +101,16 @@ function exported(h) {
   return rows.slice(4).map(row => Object.fromEntries(header.map((name, index) => [name, row[index]])));
 }
 
-// The old automatic all-platform workspace stays retired. Single, explicit grouped
+// The old automatic all-platform workspace stays retired. Single, grouped
 // and cross modes share the authorized full-snapshot transport and cache.
 const cross=h=>{h.context.liveChannelMode('cross');};
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{promise,resolve,reject};};
 const matchedRows=(id='same',extra={})=>[channel(id,{provider:'WPayINR',channel_name:'WPay-QR',...extra})];
 
-test('default fifteen-platform catalog reads only one platform with original buttons and no chips or stacked groups',async()=>{
- const catalog=Array.from({length:15},(_,i)=>platform(i+1)),h=fixture({catalog});await h.start();
- assert.equal(h.mod.capture().version,4);assert.equal(h.mod.capture().mode,'single');assert.deepEqual(h.calls,[{action:'channelStatus',platformIds:[catalog[0].id],direction:'all'}]);
- const html=h.mod.render();assert.match(html,/channel-platforms/);assert.match(html,/liveChannelSelect\(14\)/);assert.match(html,/按平台/);assert.match(html,/按三方/);assert.doesNotMatch(html,/channel-browse-providers|channel-browse-group|channel-cross-group/);assert.equal((html.match(/<tbody>/g)||[]).length,1);
+test('default grouped catalog reads only one authorized platform and leaves larger selection explicit',async()=>{
+ const catalog=Array.from({length:15},(_,i)=>platform(i+1)),h=fixture({catalog,initialMode:'default'});await h.start();
+ assert.equal(h.mod.capture().version,4);assert.equal(h.mod.capture().mode,'grouped');assert.deepEqual(h.calls,[{action:'channelStatus',platformIds:[catalog[0].id],direction:'all'}]);
+ const html=h.mod.render();assert.match(html,/channel-browse-platform-picker/);assert.match(html,new RegExp(catalog[14].id));assert.match(html,/平台分组 · 推荐/);assert.match(html,/按平台/);assert.match(html,/按三方/);assert.match(html,/channel-browse-provider-picker/);assert.equal(groups(html).size,1);assert.doesNotMatch(html,/channel-cross-group/);assert.equal((html.match(/<tbody>/g)||[]).length,1);
 });
 test('version3 default all-platform state migrates to one platform without discarding its validated cache',async()=>{
  const catalog=[platform(1),platform(2),platform(3)],h=fixture({catalog});await h.start();const old={...plain(h.mod.capture()),version:3,mode:'browse'};old.browse={...old.browse,platformIds:[],providers:[]};h.mod.clear();h.mod.restore(old);await h.start();
@@ -254,7 +256,7 @@ test('grouped permission revocation clears cached facts and rejects a late respo
 });
 test('grouped navigation and account clear prevent a late response from reviving the prior selection',async()=>{
  const catalog=[platform(1),platform(2)],h=fixture({catalog});await h.start();grouped(h);await flush();const wait=deferred();h.setHandler(()=>wait.promise);selectPlatforms(h,catalog,catalog);await flush();h.setPage('overview');h.mod.cancel();h.mod.clear();const paints=h.paints.length;wait.resolve(response([catalog[1]]));await flush();
- assert.equal(h.paints.length,paints);assert.deepEqual(plain(h.mod.capture().cache),{});assert.equal(h.mod.capture().mode,'single');assert.equal(h.mod.canExport(),false);
+ assert.equal(h.paints.length,paints);assert.deepEqual(plain(h.mod.capture().cache),{});assert.equal(h.mod.capture().mode,'grouped');assert.equal(h.mod.canExport(),false);
 });
 test('grouped refresh retains prior snapshots and separately labels missing and incomplete platforms without false zero',async()=>{
  const catalog=[platform(1),platform(2)],h=fixture({catalog,handler:q=>{const result=response(catalog.filter(p=>q.platformIds.includes(p.id)));for(const s of result.snapshots)if(s.platformId===catalog[1].id){s.observedAt=null;s.receivedAt=null;s.complete=false;s.channels=[];s.sourceCount=null;}return result;}});await h.start();grouped(h);selectPlatforms(h,catalog,catalog);await flush();
@@ -277,4 +279,36 @@ test('single platform and grouped views restore their independent scope and loca
 });
 test('grouped automatic refresh is bound to the explicit selection and pauses while hidden',async()=>{
  const catalog=[platform(1),platform(2)],h=fixture({catalog});await h.start();grouped(h);await flush();await h.advance(300001);assert.deepEqual(h.calls.map(q=>q.platformIds),[[catalog[0].id],[catalog[0].id]]);h.hide();await h.advance(300001);assert.equal(h.calls.length,2);await h.show();assert.deepEqual(h.calls.at(-1).platformIds,[catalog[0].id]);assert.equal(h.calls.length,3);
+});
+
+test('recommended grouped charge card reorders native fields without losing values, rows, or export facts',async()=>{
+ const rows=[channel('one',{notes:'long <safe> note',success_rate_15m:'0',success_rate_30m:null}),channel('two',{category_id:'bank',category_name:'BANK',channel_categories:[{category_id:'bank',category_name:'BANK'}],source_position:1,provider:'PayTwo'})];
+ const h=fixture({rowsFor:()=>rows});await h.start();const original=tableRows(h.mod.render()),facts=exported(h);h.context.liveChannelMode('grouped');await flush();const html=h.mod.render(),shown=tableRows(html);
+ assert.deepEqual(shown,original);assert.deepEqual(exported(h),facts);assert.equal(h.calls.length,1);assert.match(html,/<thead><tr><th class="channel-display-name" scope="col">前台显示名称<\/th><th class="channel-provider" scope="col">支付供应商<\/th><th class="channel-limits" scope="col">限额<\/th>/);assert.match(html,/channel-grouped-table/);assert.match(html,/首列固定 · 左右滚动查看全部字段/);assert.match(html,/0.00%/);assert.match(html,/&lt;safe&gt;/);
+});
+test('recommended grouped withdrawal retains native counters, precision, and detail denial instead of inventing rates',async()=>{
+ for(const permissions of [['view','query','detail','export'],['view','query','export']]){
+  const h=fixture({permissions,rowsFor:()=>[channel('one',{balance:'23466414.830001',min_amount:'100.01',max_amount:'20000.99',withdrawal_details:{today_submit_count:123,recent_1h_success_count:0,merchant_name:'Private Alias',merchant_code:'M001'}})]});await h.start();h.context.liveChannelTab('withdraw');const original=tableRows(h.mod.render()),facts=exported(h);h.context.liveChannelMode('grouped');await flush();const html=h.mod.render();assert.deepEqual(tableRows(html),original);assert.deepEqual(exported(h),facts);assert.equal(h.calls.length,1);assert.match(html,/<thead><tr><th class="channel-withdraw-name" scope="col">通道名称<\/th>/);assert.match(html,/23466414\.830001/);assert.doesNotMatch(html,/class="channel-rate/);if(!permissions.includes('detail'))assert.doesNotMatch(html,/Private Alias|M001|>123</);
+ }
+});
+test('compact provider picker preserves open search and exact local multi-selection without additional reads',async()=>{
+ const h=fixture({initialMode:'default',rowsFor:()=>[channel('one'),channel('two',{provider:'PayTwo',source_position:1})]});await h.start();h.context.liveChannelBrowseProviderPicker(true);h.context.liveChannelBrowseSearch('provider','Pay');h.context.liveChannelBrowseProvider('PayOne');let html=h.mod.render();assert.match(html,/<details class="channel-browse-provider-picker" open /);assert.match(html,/<summary>支付三方 · PayOne<\/summary>/);assert.equal(tableRows(html).length,1);h.context.liveChannelBrowseProvider('PayTwo');assert.equal(tableRows(h.mod.render()).length,2);h.context.liveChannelBrowseProviderPicker(false);h.context.liveChannelBrowseAllProviders();assert.doesNotMatch(h.mod.render(),/<details class="channel-browse-provider-picker" open /);assert.equal(h.calls.length,1);assert.equal(h.mod.capture().browse.providers.length,0);
+});
+test('card expand and horizontal affordance remain local and cannot act outside the active authorized view',async()=>{
+ const a=platform(1),b=platform(2),h=fixture({initialMode:'default',catalog:[a,b]});await h.start();selectPlatforms(h,[a,b],[a,b]);await flush();const calls=h.calls.length;h.context.liveChannelBrowseCollapse(a.id);h.context.liveChannelBrowseCollapse(b.id);assert.equal((h.mod.render().match(/<tbody>/g)||[]).length,0);h.context.liveChannelBrowseExpand();assert.equal((h.mod.render().match(/<tbody>/g)||[]).length,2);const moves=[],button={closest:selector=>{assert.equal(selector,'.channel-browse-group');return {querySelector:selector=>{assert.equal(selector,'.channel-scroll');return {clientWidth:800,scrollBy:value=>moves.push(plain(value))};}}}};h.context.liveChannelBrowseScroll(button);assert.deepEqual(moves,[{left:640,behavior:'smooth'}]);h.setPage('overview');h.context.liveChannelBrowseScroll(button);h.context.liveChannelBrowseExpand();assert.equal(moves.length,1);assert.equal(h.calls.length,calls);
+});
+test('default grouped restore closes popovers and retains exact saved scope, filters, and snapshots',async()=>{
+ const h=fixture({initialMode:'default',catalog:[platform(1),platform(2)]});await h.start();h.context.liveChannelBrowseProvider('PayOne');h.context.liveChannelBrowseProviderPicker(true);const before=plain(h.mod.capture());h.mod.clear();h.mod.restore(before);await h.start();const after=plain(h.mod.capture());assert.equal(after.mode,'grouped');assert.deepEqual(after.browse.platformIds,before.browse.platformIds);assert.deepEqual(after.browse.providers,['PayOne']);assert.equal(after.browse.providerPickerOpen,false);assert.equal(h.calls.length,1);
+});
+test('recommended default also handles an immediate host query before its first render without expanding scope',async()=>{
+ const a=platform(1),b=platform(2),h=fixture({initialMode:'default',catalog:[a,b]});await h.mod.load();await flush();assert.deepEqual(h.calls,[{action:'channelStatus',platformIds:[a.id],direction:'all'}]);assert.equal(groups(h.mod.render()).size,1);
+});
+test('grouped YASH retains all source rate windows and distinct balance and limit currencies',async()=>{
+ const p=platform(1,{source:'kb',capabilities:{channelStatusAvailable:true}}),h=fixture({catalog:[p],rowsFor:()=>[channel('one',{balance:'12.34',balance_currency:'USDT',limit_currency:'INR',success_rate_10m:'0',success_rate_30m:null,success_rate_4h:'15',success_rate_8h:'60',success_rate_today:'70',success_rate_total:'80'})]});await h.start();const rows=tableRows(h.mod.render()),facts=exported(h);h.context.liveChannelMode('grouped');await flush();assert.deepEqual(tableRows(h.mod.render()),rows);assert.deepEqual(exported(h),facts);assert.equal(Object.keys(rows[0]).filter(x=>x.includes('成功率')).length,8);assert.equal(rows[0]['余额币种'],'USDT');assert.equal(h.calls.length,1);
+});
+test('single-line headers cover native, grouped, and cross tables while body values keep their original wrapping',()=>{
+ const css=fs.readFileSync(path.join(__dirname,'../admin-preview/live-channel-status.css'),'utf8');assert.match(css,/\.live-channel-status \.channel-table thead th\{white-space:nowrap;overflow-wrap:normal;word-break:normal\}/);assert.match(css,/\.channel-scroll\{[^}]*overflow:auto/);assert.match(css,/\.channel-grouped-table tr>:first-child\{[^}]*position:sticky;left:0/);assert.match(css,/\.channel-grouped-table thead tr>:first-child\{z-index:5/);assert.match(css,/\.channel-browse-providers\{[^}]*flex-direction:column/);assert.doesNotMatch(css,/\/\* One workspace:/);
+});
+test('a default grouped view with an initially empty directory seeds one platform when the authorized catalog arrives',async()=>{
+ const h=fixture({initialMode:'default',catalog:[]});await h.start();assert.equal(h.calls.length,0);h.setCatalog([platform(1),platform(2)]);await h.start();assert.deepEqual(h.calls,[{action:'channelStatus',platformIds:[platform(1).id],direction:'all'}]);assert.equal(groups(h.mod.render()).size,1);
 });
