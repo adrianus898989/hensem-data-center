@@ -102,13 +102,33 @@
  function beginReadPhases(serial){if(!usesReadPhases(state.page)&&state.page!=='events')return;readPhase={serial,page:state.page,label:statisticWindowsEnabled()?'读取已准备统计':'读取当期订单'};cancelFeeLookup();window.HensemLiveSyncHealth?.cancel?.();window.hensemLiveCancelRequests?.(['syncHealth']);}
  function setReadPhase(serial,label){if(readPhase?.serial!==serial||serial!==L.serial)return false;readPhase.label=label;render();return true;}
  function endReadPhases(serial){if(readPhase?.serial!==serial)return;const phase=readPhase;readPhase=null;phase.cancelSupplementary?.();if(serial!==L.serial)return;const resumeTrend=deferredMerchantTrend;deferredMerchantTrend=false;render();if(resumeTrend&&state.page==='merchants'&&L.view==='trend')void loadMerchantTrend();preparedAggregates?.releaseRefresh?.();}
+ // Three bounded module workers share the existing host transport limit of
+ // four physical requests. Each module retains its existing reader bounds;
+ // waiting modules start only while this query still owns the phase.
+ async function runSupplementaryTasks(tasks,current){
+  let next=0;const failures=[];
+  async function worker(){while(current()&&next<tasks.length){const task=tasks[next++];try{await task();}catch(error){if(current())failures.push(error);}}}
+  await Promise.all(Array.from({length:Math.min(3,tasks.length)},worker));
+  return failures;
+ }
+ const supplementaryNativeContext=()=>JSON.stringify(selected().map(p=>[p.id,p.source,p.sourceName,p.name,p.country,p.scopeGroup??p.scope_group,p.timezone,p.currency,p.capabilities??null]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))));
+ function closeChangedSupplementaryPhase(serial,phase,owned){
+  if(serial!==L.serial||readPhase!==phase||owned())return;
+  // A directory/authority replacement invalidates this owner, not its already
+  // visible main facts. Stop its readers and leave an explicit query boundary.
+  cancelDataReads();L.dirty=true;L.restoredPage=true;
+  const message='查询范围已变化，补充统计已暂停；请重新查询';
+  if(L.comparisonStatus==='loading'){L.comparisonStatus='error';L.comparisonError=message;}
+  for(const key of ['providerIntake','providerComparisonIntake'])if(L[key]?.status==='loading')L[key]={...L[key],status:'error',error:message};
+  L.progress=message;render();
+ }
  async function querySupplementRequest(request,options={}){
-  const phase=phasedReadBusy()?readPhase:null,serial=L.serial,page=state.page,context=aggregateAccessContext();
+  const phase=phasedReadBusy()?readPhase:null,serial=L.serial,page=state.page,context=aggregateAccessContext(),scope=aggregateQueryScope(),native=supplementaryNativeContext();
   try{return await window.hensemLiveRequest(request,options);}
   catch(error){
    // A local abort belongs to its own reader. Only a live query owner's
-   // host suspension/denial may stop the other supplementary lane.
-   if(phase&&phase===readPhase&&serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&!options.signal?.aborted&&!(page==='providers'&&L.providerReadMode==='published'))stopInterruptedAggregate(serial,error);
+   // host suspension/denial may stop the other supplementary workers.
+   if(phase&&phase===readPhase&&serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&!L.dirty&&scope===aggregateQueryScope()&&native===supplementaryNativeContext()&&!options.signal?.aborted&&!(page==='providers'&&L.providerReadMode==='published'))stopInterruptedAggregate(serial,error);
    throw error;
   }
  }
@@ -731,7 +751,7 @@
   }
   return {read,cancel,clear};
  }
- workordersReadCache=createWorkorderExactCache({request:querySupplementRequest,context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?JSON.stringify([state.page,aggregateAccessContext()]):'',identity:()=>JSON.stringify(selected().map(p=>[p.id,p.source,p.sourceName,p.name,p.country,p.scopeGroup??p.scope_group,p.timezone,p.currency,p.capabilities??null]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))))});
+ workordersReadCache=createWorkorderExactCache({request:querySupplementRequest,context:()=>roleAllowed(state.page,'view')&&roleAllowed(state.page,'query')?JSON.stringify([state.page,aggregateAccessContext()]):'',identity:supplementaryNativeContext});
  async function workordersLoad(preserveView=false,inPhase=false,force=false,isCurrent=()=>true){
   if(!L.catalogReady||phasedReadBusy()&&!inPhase)return;
   if(isSuccessAnalysis()&&(!roleAllowed(state.page,'query')||!successFullDays()||L.dirty||L.queryScope!==aggregateQueryScope()))return;
@@ -798,7 +818,7 @@
  channelStatus=window.HensemLiveChannelStatus?.create({L,getPage:()=>state.page,catalog:visibleCatalog,selected:selectedVisible,activeValues,roleAllowed:action=>roleAllowed('channel_status',action),request:r=>window.hensemLiveRequest(r),render:()=>{if(isChannelStatus())render()}})||null;
  dailyComparison=window.HensemLiveDailyComparison?.create({L,E,N,C,R,lifecycle:(p,view)=>L.platformLifecycleFor(p,view),lifecycleRevision:()=>platformLifecycle?.revision()||'',getPage:()=>state.page,selected:selectedVisible,nativePlatforms:selected,authorizedPlatforms:visibleCatalog,accessContext:aggregateAccessContext,cancelReads:()=>{cancelAggregateReads();window.hensemLiveCancelRequests?.(['aggregatePrepared','workorders'])},readAggregate:(q,serial,refresh=false)=>{if(refresh)preparedRefreshScope={serial:serial??L.serial,page:state.page,context:aggregateAccessContext()};return readAggregate(q,serial??L.serial,false,true)},instant,localClock,activeValues,ensureFeeLookup,prepareFeeLookupQuery,scopeZone,render:()=>{if(isDailyComparison())render()},roleAllowed:action=>roleAllowed('daily_comparison',action),allowed:action=>roleAllowed('daily_comparison',action),request:r=>window.hensemLiveRequest(r)})||null;
  submissionAnalysis=window.HensemSubmissionAnalysis?.create({L,E,N,C,dashboard:()=>state.page==='events',isPublished:()=>state.page==='providers'&&L.providerReadMode==='published',retryPublished:()=>window.liveQuery(true),accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():'',readTime:stamp=>formatTime(new Date(stamp).toISOString(),scopeZone()),beforeRead:()=>{if(state.page==='events'){window.HensemLiveSyncHealth?.cancel?.();window.hensemLiveCancelRequests?.(['syncHealth']);}},selected:selectedVisible,query,request:querySupplementRequest,canStart:()=>roleAllowed(state.page,'query')&&(!phasedReadBusy()||state.page==='events'),render:()=>render(),open:(title,html)=>openDrawer(title,html),box,table})||null;
- memberCounts=window.HensemLiveMemberCounts?.create({L,E,N,C,lifecycle:(p,view)=>L.platformLifecycleFor(p,view),lifecycleRevision:()=>platformLifecycle?.revision()||'',accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():'',selected:selectedVisible,query,successClockUnavailable:(platform,direction)=>orderSource(platform)==='newar'&&direction==='withdraw'&&sourceSuccessTimeUnavailable(platform,L.results.find(result=>result.platform?.id===platform.id),direction),request:r=>window.hensemLiveRequest(r),render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
+ memberCounts=window.HensemLiveMemberCounts?.create({L,E,N,C,lifecycle:(p,view)=>L.platformLifecycleFor(p,view),lifecycleRevision:()=>platformLifecycle?.revision()||'',accessContext:()=>roleAllowed(state.page,'query')?aggregateAccessContext():'',selected:selectedVisible,query,successClockUnavailable:(platform,direction)=>orderSource(platform)==='newar'&&direction==='withdraw'&&sourceSuccessTimeUnavailable(platform,L.results.find(result=>result.platform?.id===platform.id),direction),request:querySupplementRequest,render:()=>render(),open:(title,html)=>openDrawer(title,html)})||null;
  window.liveMemberCountsDetails=(tab,basis)=>memberCounts?.details(tab,basis);
  window.liveMemberCountsRetry=async()=>{
   if(state.page==='overview'&&!L.dirty)return memberCounts?.load();
@@ -1224,7 +1244,7 @@
   if(supplementary)submissionAnalysis?.pauseSupplementary();
   L.serial++;cancelDataReads();L.loading=false;L.queryRetrying=false;L.queryPaused=unfinished;L.restoredPage=true;
   const message=supplementary?'补充统计已暂停，已完成结果保留；请点击查询或单独重试。':'查询已暂停，保留已读取结果。';
-  if(denied){clearAggregateCache();clearFeeLookupCache();workordersReadCache?.clear();providerIntake?.clearCache?.();submissionAnalysis?.clearCache?.();submissionAnalysis?.restore(null);L.retainedContent=null;L.results=[];L.comparisonResults=[];L.workorders=null;L.workordersError='';L.providerIntake=null;L.providerComparisonIntake=null;L.error='登录或查询权限已变化，请重新验证';}
+  if(denied){clearAggregateCache();clearFeeLookupCache();workordersReadCache?.clear();providerIntake?.clearCache?.();memberCounts?.clearCache?.();memberCounts?.restore(null);submissionAnalysis?.clearCache?.();submissionAnalysis?.restore(null);L.retainedContent=null;L.results=[];L.comparisonResults=[];L.workorders=null;L.workordersError='';L.providerIntake=null;L.providerComparisonIntake=null;L.error='登录或查询权限已变化，请重新验证';}
   else if(supplementary){
    if(feePending||L.feeLookupRows===null)L.feeLookupError=message;
    if(workordersPending||!L.workorders&&!L.workordersUnsupported)L.workordersError=message;
@@ -1569,12 +1589,13 @@
     submissionAnalysis?.cancel();L.comparisonStatus='error';L.comparisonError='当前订单统计未准备，暂不读取前期对比';render();return;
    }
    if(state.page==='providers'&&phasedReadBusy()){
-    // One query-owned budget covers both supplementary lanes, starting only
+    // One query-owned budget covers the supplementary workers, starting only
     // after the main table settles. Completed statistics remain available.
     setReadPhase(serial,L.queryFailures.length?'主表读取未完成，正在补充已返回范围的统计':'主表已完成，正在补充统计');
     const phase=readPhase,deadlineAt=Date.now()+60000;let stopped=false,timer,release;
     const deadline=new Promise(resolve=>{release=resolve;});
-    const owned=()=>serial===L.serial&&readPhase===phase&&!L.dirty;
+    const phaseContext=aggregateAccessContext(),phaseScope=aggregateQueryScope(),phaseNative=supplementaryNativeContext();
+    const owned=()=>serial===L.serial&&readPhase===phase&&!L.dirty&&phaseContext===aggregateAccessContext()&&phaseScope===aggregateQueryScope()&&phaseNative===supplementaryNativeContext();
     const current=()=>!stopped&&owned()&&Date.now()<deadlineAt;
     const close=()=>{if(stopped)return;stopped=true;clearTimeout(timer);release();};
     phase.cancelSupplementary=close;
@@ -1590,33 +1611,35 @@
      L.progress=message;render();
     };
     timer=setTimeout(pauseAtDeadline,60000);
-    const exclusions=(async()=>{try{if(!submissionBatch)return;for(const platform of platforms){if(!current())return;await submissionBatch.read(platform.id);}if(current())await submissionBatch.finish();}catch(e){if(current()){submissionAnalysis?.cancel();toast('剔除统计未完成，请重试未完成平台');}}})();
-    const attachments=(async()=>{
-     await ensureFeeLookup(false,true,current);if(!current())return;
-     // Prepared comparison does not wait for independent workorder evidence.
-     if(!statisticWindowsEnabled()&&platforms.length)await workordersLoad(false,true,false,current);if(!current())return;
-     if(L.queryWarnings.length){L.comparisonStatus='error';L.comparisonError='当前平台数据未完整，暂不比较昨日';}
-     else await liveComparison(serial,!force,1,current);if(!current())return;
-     if(statisticWindowsEnabled()&&platforms.length)await workordersLoad(false,true,false,current);if(!current())return;
-     await loadProviderIntake(serial,false,1,current);if(!current())return;
-     if(!L.queryWarnings.length)await loadProviderIntake(serial,true,1,current);
-    })();
-    try{const settled=await Promise.race([Promise.allSettled([exclusions,attachments]),deadline]);if(current()&&settled?.[1].status==='rejected')toast('补充统计未完成，请重试；已完成数据保留');}
-    finally{if(!stopped&&owned()&&Date.now()>=deadlineAt)pauseAtDeadline();else close();}
+    const exclusions=async()=>{try{if(!submissionBatch)return;for(const platform of platforms){if(!current())return;await submissionBatch.read(platform.id);}if(current())await submissionBatch.finish();}catch(e){if(current()){submissionAnalysis?.cancel();toast('剔除统计未完成，请重试未完成平台');}}};
+    const tasks=[
+     ...(platforms.length?[()=>workordersLoad(false,true,false,current)]:[]),
+     exclusions,
+     ()=>ensureFeeLookup(false,true,current),
+     async()=>{if(L.queryWarnings.length){L.comparisonStatus='error';L.comparisonError='当前平台数据未完整，暂不比较昨日';}else await liveComparison(serial,!force,1,current);},
+     ()=>loadProviderIntake(serial,false,1,current),
+     ...(!L.queryWarnings.length?[()=>loadProviderIntake(serial,true,1,current)]:[])
+    ];
+    try{const failures=await Promise.race([runSupplementaryTasks(tasks,current),deadline]);if(current()&&failures?.length)toast('补充统计未完成，请重试；已完成数据保留');}
+    finally{if(!stopped&&owned()&&Date.now()>=deadlineAt)pauseAtDeadline();else close();closeChangedSupplementaryPhase(serial,phase,owned);}
     return;
    }
    // Source-day reconciliation is supplementary evidence. A slow check must
    // not hold the previous-period figures or workorder attachment behind it.
    if(isSuccessAnalysis()){render();if(platforms.length)await workordersLoad();return;}
    if(phasedReadBusy()){
-    setReadPhase(serial,'读取费率目录');await ensureFeeLookup(false,true);
-    if(serial!==L.serial)return;
-    if(L.queryWarnings.length){L.comparisonStatus='error';L.comparisonError='当前平台数据未完整，暂不比较昨日';}
-    else{setReadPhase(serial,'读取昨日对比');await liveComparison(serial,!force,1);}
-    if(serial!==L.serial)return;setReadPhase(serial,'核对当期采集完整性');await loadProviderIntake(serial,false,1);
-    if(serial!==L.serial)return;if(!L.queryWarnings.length){setReadPhase(serial,'核对前期采集完整性');await loadProviderIntake(serial,true,1);}
-    if(serial!==L.serial)return;if(providerDirection(state.page)&&platforms.length){setReadPhase(serial,'读取未到账工单');await workordersLoad(false,true);}
-    if(serial!==L.serial)return;if(state.page==='merchants'&&L.status==='all'&&!['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'].some(key=>L[key])){setReadPhase(serial,'读取会员人数');await memberCounts?.ensure(false,1);}
+    setReadPhase(serial,'主表已完成，正在补充统计');
+    const phase=readPhase,context=aggregateAccessContext(),scope=aggregateQueryScope(),native=supplementaryNativeContext();
+    const current=()=>serial===L.serial&&readPhase===phase&&!L.dirty&&context===aggregateAccessContext()&&scope===aggregateQueryScope()&&native===supplementaryNativeContext();
+    const tasks=[
+     ...(providerDirection(state.page)&&platforms.length?[()=>workordersLoad(false,true,false,current)]:[]),
+     ...(state.page==='merchants'&&L.status==='all'&&!['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'].some(key=>L[key])?[()=>memberCounts?.ensure(false,1)]:[]),
+     ()=>ensureFeeLookup(false,true,current),
+     async()=>{if(L.queryWarnings.length){L.comparisonStatus='error';L.comparisonError='当前平台数据未完整，暂不比较昨日';}else await liveComparison(serial,!force,1,current);},
+     ()=>loadProviderIntake(serial,false,1,current),
+     ...(!L.queryWarnings.length?[()=>loadProviderIntake(serial,true,1,current)]:[])
+    ];
+    try{const failures=await runSupplementaryTasks(tasks,current);if(current()&&failures.length)toast('补充统计未完成，请重试；已完成数据保留');}finally{closeChangedSupplementaryPhase(serial,phase,current);}
     return;
    }
    const intakeRead=loadProviderIntake(serial);if(serial!==L.serial)return;
