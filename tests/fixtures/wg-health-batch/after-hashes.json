@@ -1,0 +1,10 @@
+{
+  "prepared_aggregate_dependency_common": "cfee7ea2785d396387dddd2007fa5bf8",
+  "dashboard_health_wg_evidence_batch": "940523afd7eccfb09a11b27eadd11b54",
+  "dashboard_admin_wg_day_evidence": "5f29e7114787442db7c502c16f07cd93",
+  "dashboard_withdraw_status_dependency_md5": "87123b179991627c7d56b66e48f67f1e",
+  "provider_snapshot_dependency_batch": "5290b2fd082795cb5805aea66536cd8c",
+  "dashboard_admin_live_sync_health_rows": "4663607462d2f1461b90785bec7c88fa",
+  "dashboard_health_wg_evidence_format": "98d86e2c8aee47aca8b6d9e2d0170112",
+  "provider_snapshot_dependency_token": "7063c3a30384df10b399a7e20ad3612c"
+}

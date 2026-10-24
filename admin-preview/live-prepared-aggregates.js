@@ -69,7 +69,7 @@
   const p=item.publication,r=item.result;
   if(!p||typeof p.id!=='string'||!p.id||!['string','number'].includes(typeof p.generation)||String(p.generation)===''||typeof p.generation==='number'&&!Number.isSafeInteger(p.generation)||p.calculationComplete!==true||typeof p.sourceComplete!=='boolean'||!instant(p.computedAt)||!instant(p.expiresAt)||!instant(p.cutoff)||Date.parse(p.expiresAt)<=Date.parse(p.computedAt))throw failure('invalid');
   if(publicationVersion===2){
-   if(!['fresh','refresh_due'].includes(p.freshness)||!['idle','queued','running','failed'].includes(p.refreshState)||p.nextRefreshAt!=null&&!instant(p.nextRefreshAt))throw failure('invalid');
+   if(!['fresh','refresh_due'].includes(p.freshness)||!['idle','queued','running','failed'].includes(p.refreshState)||p.nextRefreshAt!=null&&!instant(p.nextRefreshAt)||p.interactiveRefreshAt!=null&&(!instant(p.interactiveRefreshAt)||Date.parse(p.interactiveRefreshAt)<=Date.parse(p.computedAt)))throw failure('invalid');
   }else if(Date.parse(p.expiresAt)<=now)throw failure('stale');
   if(Object.hasOwn(p,'semanticTransition')&&(p.semanticTransition!=='manual_previous_dependency'||publicationVersion!==2||!['success','source_updated'].includes(q.successBasis)||!Object.hasOwn(q,'successStartAt')||p.freshness!=='refresh_due'||!instant(p.transitionExpiresAt)||Date.parse(p.transitionExpiresAt)<=now))throw failure('invalid');
   if(!r||r.version!==1||!r.platform||Object.keys(expected).some(key=>r.platform[key]!==expected[key])||instant(r.startAt)!==instant(q.startAt)||instant(r.endAt)!==instant(q.endAt)||!Array.isArray(r.summary)||!Array.isArray(r.rows)||r.rows.length||!r.groups||r.partial===true||r.complete===false||r.available===false||r.error||r.meta?.partial===true||r.coverage?.calculationComplete===false||Object.hasOwn(r,'_parts')||Object.hasOwn(r,'_preparedPublication')||Object.hasOwn(r,'_preparedResultGroups'))throw failure('invalid');
@@ -84,7 +84,7 @@
   // A server without profile support must still return its full legacy DTO.
   const view=q.view||'full',dimensions=resultGroups?resultGroups.groups:view==='providers'?['provider']:view==='drilldown'?['daily',...(q.kind==='latency'||q.durationRange?['provider','provider_daily']:[])]:['provider','daily','hourly','amount','matrix','latency','pending_age',...(q.amountBands?['amount_range','matrix_range']:[])];
   if(dimensions.some(key=>!Array.isArray(r.groups[key]))||Object.values(r.groups).some(rows=>!Array.isArray(rows))||view==='drilldown'&&(r.complete!==true||r.hasMore!==false)||q.durationVersion===2&&r.durationVersion!==2)throw failure('invalid');
-  return {...r,...(resultGroups?{_preparedResultGroups:copy(resultGroups)}:{}),_preparedPublication:{...p,status:'ready',...(publicationVersion===2?{publicationVersion:2,freshness:Date.parse(p.expiresAt)<=now?'refresh_due':p.freshness}:{})}};
+  return {...r,...(resultGroups?{_preparedResultGroups:copy(resultGroups)}:{}),_preparedPublication:{...p,status:'ready',...(publicationVersion===2?{publicationVersion:2,freshness:Date.parse(p.expiresAt)<=now||p.interactiveRefreshAt!=null&&Date.parse(p.interactiveRefreshAt)<=now?'refresh_due':p.freshness}:{})}};
  }
  function create(options){
   if(typeof options?.request!=='function'||typeof options.context!=='function'||typeof options.platform!=='function')throw TypeError('Prepared aggregates require request, context and platform callbacks');
@@ -121,6 +121,9 @@
     // Revalidate the immutable source envelope, including current v1 expiry.
     // V2 expiry is a refresh hint; retain its original clock and refresh state.
     const result=validateResult(entry.item,q,native,stamp,publicationVersion,entry.responseProfile);
+    // A retained idle head crossing the server's native-day refresh boundary
+    // must reach the original reader. Busy/failed budgets remain server-owned.
+    if(publicationVersion===2&&result._preparedPublication.interactiveRefreshAt!=null&&Date.parse(result._preparedPublication.interactiveRefreshAt)<=stamp&&result._preparedPublication.refreshState==='idle')return null;
     completed.delete(key);completed.set(key,entry);return {result,entry};
    }catch{forgetCompleted(key);return null;}
   }
@@ -154,6 +157,8 @@
    if(!completionEnabled||job.completedInvalidated||job.generation!==generation||job.completedGeneration!==completedGeneration||job.context!==context||job.completedContext!==completedContext)return;
    const ttl=completionTtl(job.q,job.native);if(!ttl)return;
    let readAt=now(),expiresAt=Math.min(readAt+ttl,publicationVersion===1?Date.parse(item.publication.expiresAt):Infinity,item.publication.semanticTransition==='manual_previous_dependency'?Date.parse(item.publication.transitionExpiresAt):Infinity);const identity=publicationIdentity(item);
+   const recentAt=publicationVersion===2&&item.publication.interactiveRefreshAt!=null?Date.parse(item.publication.interactiveRefreshAt):null;
+   if(recentAt!==null)expiresAt=Math.min(expiresAt,recentAt>readAt?recentAt:readAt+30000);
    // A same-head background read retains its original clock even if LRU
    // eviction removed the completed entry while the request was in flight.
    if(job.refreshOnly&&job.refreshClock?.identity===identity){readAt=job.refreshClock.readAt;expiresAt=job.refreshClock.expiresAt;}if(!Number.isFinite(readAt)||expiresAt<=now())return;
@@ -189,14 +194,15 @@
   function abandon(job){if(job.waiters.size)return;release(job);if(job.batch&&job.batch.jobs.every(item=>!item.waiters.size)){job.batch.controller.abort();batches.delete(job.batch);}schedule();}
   function schedule(){if(scheduled)return;scheduled=true;Promise.resolve().then(()=>{scheduled=false;drain();});}
   function deliver(job,error,result){let delivered=0;for(const waiter of [...job.waiters])if(active(waiter)){settle(waiter,error,result);delivered++;}release(job);return delivered;}
-  // Ready-only delivery owns the same query as its deferred, one-shot refresh.
-  // Refresh waiters never re-deliver page results and are released only after
-  // the caller's foreground/comparison phase. No separate worker or timer.
+  // A delivered receipt can keep its exact owner subscribed to the original
+  // bounded queue. Callers without onRefresh retain the one-shot cache path.
+  // Release waits for foreground/comparison completion; no second pipeline.
   function queueRefresh(job,owners,refreshClock){
-   if(!owners.length||job.completedInvalidated||job.generation!==generation||job.context!==context||jobs.has(job.key))return;
-   const refresh={...job,waiters:new Set(),batch:null,phase:'queued',refreshOnly:true,refreshClock,refreshReleased:false,readyOnlyProbe:false,polling:false,pollTimer:null,deadlineTimer:null,deadlineAt:null,attempts:0};
+   const key=encode([job.context,job.nativeKey,job.q,false,job.responseProfile??null]);
+   if(!owners.length||job.completedInvalidated||job.generation!==generation||job.context!==context||jobs.has(key))return;
+   const refresh={...job,key,forceRefresh:false,waiters:new Set(),batch:null,phase:'queued',refreshOnly:true,refreshClock,refreshReleased:false,readyOnlyProbe:false,polling:false,pollTimer:null,deadlineTimer:null,deadlineAt:null,attempts:0};
    for(const owner of owners){
-    const waiter={job:refresh,signal:owner.signal,isCurrent:owner.isCurrent,done:false,abort:null,resolve(){},reject(error){
+    const waiter={job:refresh,signal:owner.signal,isCurrent:owner.isCurrent,done:false,abort:null,onRefresh:owner.onRefresh,resolve(result){if(typeof owner.onRefresh==='function')try{owner.onRefresh(result);}catch{}},reject(error){
      if(!authorityDenied(error)&&error?.code!=='ADMIN_LIVE_CANCELLED'||owner.signal?.aborted||typeof owner.onRefreshError!=='function')return;
      try{if(options.context()!==refresh.context||typeof options.completedReuseContext==='function'&&options.completedReuseContext()!==refresh.completedContext||nativeKey(options.platform(refresh.q.platformId))!==refresh.nativeKey||owner.isCurrent&&!owner.isCurrent())return;owner.onRefreshError(error);}catch{}
     }};
@@ -255,7 +261,15 @@
       if(item?.status!=='ready')throw failure('invalid');
      }
      if(!job.refreshOnly&&pollable(item,job)){waitForBase(job);continue;}
-     const result=validateResult(item,job.q,job.native,now(),publicationVersion,job.responseProfile),owners=batch.readyOnlyProbe&&result._preparedPublication.freshness==='refresh_due'?[...job.waiters].map(({signal,isCurrent,refreshIsCurrent,onRefreshError})=>({signal,isCurrent:refreshIsCurrent||isCurrent,onRefreshError})):[];
+     const result=validateResult(item,job.q,job.native,now(),publicationVersion,job.responseProfile),publication=result._preparedPublication;
+     const pending=publicationVersion===2&&['queued','running'].includes(publication.refreshState);
+     // Reuse the existing waitForBase deadline/attempt/slot budget only for
+     // explicitly subscribed owners. A failed head is terminal, never retried.
+     if(job.refreshOnly&&pending&&pollMaxMs&&[...job.waiters].some(w=>typeof w.onRefresh==='function')){
+      for(const waiter of [...job.waiters])if(active(waiter)&&typeof waiter.onRefresh==='function')try{waiter.onRefresh(copy(result));}catch{}
+      rememberCompleted(job,item);waitForBase(job);continue;
+     }
+     const owners=!job.refreshOnly&&(publication.freshness==='refresh_due'||pending)?[...job.waiters].filter(w=>batch.readyOnlyProbe||publication.interactiveRefreshAt!=null&&typeof w.onRefresh==='function').map(({signal,isCurrent,refreshIsCurrent,onRefreshError,onRefresh})=>({signal,isCurrent:refreshIsCurrent||isCurrent,onRefreshError,onRefresh:publication.interactiveRefreshAt!=null?onRefresh:undefined})):[];
      if(deliver(job,null,result)){const clock=rememberCompleted(job,item);if(owners.length)queueRefresh(job,owners,clock);}
     }catch(error){deliver(job,error);}}
    }catch(error){
@@ -294,13 +308,13 @@
     if(readOptions.readyOnlyProbe!==undefined&&typeof readOptions.readyOnlyProbe!=='boolean'||readOptions.readyOnlyProbe&&(publicationVersion!==2||q.view!=='providers'||readOptions.forceRefresh||responseProfile!==undefined))throw failure('invalid');
     const forceRefresh=readOptions.forceRefresh===true,reuseScope=completedContext,cacheKey=completedKey(reuseScope,nativeIdentity,q,responseProfile),family=completedFamily(reuseScope,nativeIdentity,q),key=encode([scope,nativeIdentity,q,forceRefresh,responseProfile??null]);
     if(forceRefresh)invalidateCompleted(family,key);
-    else{const cached=completedResult(cacheKey,reuseScope,nativeIdentity,q,native);if(cached){const mine=generation,cacheGeneration=completedGeneration;return Promise.resolve().then(()=>{if(mine!==generation||cacheGeneration!==completedGeneration||cached.entry.invalidated||readOptions.signal?.aborted||scope!==syncContext()||readOptions.isCurrent&&!readOptions.isCurrent()||nativeKey(options.platform(q.platformId))!==nativeIdentity)throw failure('cancelled');const current=completedResult(cacheKey,reuseScope,nativeIdentity,q,native);return current?copy(current.result):read(q,readOptions);});}}
+    else{const cached=completedResult(cacheKey,reuseScope,nativeIdentity,q,native);if(cached&&!(typeof readOptions.onRefresh==='function'&&cached.result._preparedPublication.interactiveRefreshAt!=null&&(cached.result._preparedPublication.freshness==='refresh_due'||['queued','running'].includes(cached.result._preparedPublication.refreshState)))){const mine=generation,cacheGeneration=completedGeneration;return Promise.resolve().then(()=>{if(mine!==generation||cacheGeneration!==completedGeneration||cached.entry.invalidated||readOptions.signal?.aborted||scope!==syncContext()||readOptions.isCurrent&&!readOptions.isCurrent()||nativeKey(options.platform(q.platformId))!==nativeIdentity)throw failure('cancelled');const current=completedResult(cacheKey,reuseScope,nativeIdentity,q,native);return current?copy(current.result):read(q,readOptions);});}}
     let job=jobs.get(key);if(job?.completedInvalidated){for(const waiter of [...job.waiters])settle(waiter,failure('cancelled'));abandon(job);job=null;}
     if(!job&&!forceRefresh&&pollMaxMs>0)job=[...jobs.values()].find(other=>other.polling&&!other.completedInvalidated&&other.context===scope&&other.nativeKey===nativeIdentity&&other.requestKey===requestKey&&other.responseProfile===responseProfile);
     // An explicit reader must not wait for a deferred refresh-release hook.
     if(job?.refreshOnly){job.refreshOnly=false;job.refreshReleased=true;}
     if(!job){job={key,requestKey,q,responseProfile,readyOnlyProbe:readOptions.readyOnlyProbe===true,native,nativeKey:nativeIdentity,forceRefresh,context:scope,completedContext:reuseScope,generation,completedGeneration,completedKey:cacheKey,family,waiters:new Set(),batch:null,phase:'queued',polling:false,pollTimer:null,deadlineTimer:null,deadlineAt:null,attempts:0};jobs.set(key,job);queue.push(job);}
-    const promise=new Promise((resolve,reject)=>{const waiter={job,resolve,reject,signal:readOptions.signal,isCurrent:readOptions.isCurrent,refreshIsCurrent:readOptions.refreshIsCurrent,onRefreshError:readOptions.onRefreshError,done:false,abort:null};waiter.abort=()=>{settle(waiter,failure('cancelled'));abandon(job);};job.waiters.add(waiter);waiter.signal?.addEventListener('abort',waiter.abort,{once:true});});schedule();return promise;
+    const promise=new Promise((resolve,reject)=>{const waiter={job,resolve,reject,signal:readOptions.signal,isCurrent:readOptions.isCurrent,refreshIsCurrent:readOptions.refreshIsCurrent,onRefreshError:readOptions.onRefreshError,onRefresh:readOptions.onRefresh,done:false,abort:null};waiter.abort=()=>{settle(waiter,failure('cancelled'));abandon(job);};job.waiters.add(waiter);waiter.signal?.addEventListener('abort',waiter.abort,{once:true});});schedule();return promise;
    }catch(error){return Promise.reject(error);}
   }
   return {read,cancel,clear,releaseRefresh};
