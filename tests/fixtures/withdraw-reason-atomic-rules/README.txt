@@ -1,0 +1,9 @@
+Atomic blocking-rule grouping contract
+
+Supported order readers count each selected manual order once per distinct proven rule; multiple rule groups may overlap. Original noteCount, operator counts, creation-date range, rejection reads, and completeness remain unchanged. Snapshot sources use weighted source-group counts rather than claiming order-ID deduplication. Unrecognized source text stays opaque; punctuation alone is never a rule boundary.
+
+One shared parser core supplies both the unchanged four-field legacy classifier and atomic memberships. The NEWAR v2 prepared index preserves original source labels with sparse measurement metadata. Its digest detects corruption; existing owner privileges and artifact CAS remain the trust boundary. All available atomic payloads, including zero-row results, carry the overlap contract. Legacy combination artifacts cannot be reused through current or last-complete paths after switching semantics.
+
+Run node --test tests/withdraw-reason-atomic-rules.test.cjs with the repository PGlite dependency. The fixture reuses existing synthetic reader setup. The 110-observation classifier corpus covers historical parser families. Capacity cases use synthetic labels and the unchanged 4,000,000-byte cap; local runtimes do not measure production query latency.
+
+Install and rollback scripts preserve existing exact function metadata and require exact before/after definitions. New helpers are private invoker functions without public/anon/authenticated/service_role execution grants. Existing financial dependency tokens must stay unchanged while reason semantics invalidate. No source records, queue states, schedulers, or persisted aggregates are written by the migration. Preflight and postflight scripts read function metadata only.

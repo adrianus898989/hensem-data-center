@@ -1,0 +1,992 @@
+[
+  {
+    "note": "累计提款次数0小于配置1次",
+    "expected": {
+      "reason": "累计提款次数小于配置次数",
+      "threshold": "1",
+      "actualField": "累计提款次数",
+      "actualValue": "0"
+    }
+  },
+  {
+    "note": "累计提款次数2小于配置3次",
+    "expected": {
+      "reason": "累计提款次数小于配置次数",
+      "threshold": "3",
+      "actualField": "累计提款次数",
+      "actualValue": "2"
+    }
+  },
+  {
+    "note": "累计提款次数11小于配置20次",
+    "expected": {
+      "reason": "累计提款次数小于配置次数",
+      "threshold": "20",
+      "actualField": "累计提款次数",
+      "actualValue": "11"
+    }
+  },
+  {
+    "note": "总打码倍数1.3720(有效投注137.2/总充值100)小于配置4",
+    "expected": {
+      "reason": "总打码倍数小于配置倍数",
+      "threshold": "4",
+      "actualField": "总打码倍数",
+      "actualValue": "1.3720"
+    }
+  },
+  {
+    "note": "总打码倍数1.4700(有效投注147/总充值100)小于配置4",
+    "expected": {
+      "reason": "总打码倍数小于配置倍数",
+      "threshold": "4",
+      "actualField": "总打码倍数",
+      "actualValue": "1.4700"
+    }
+  },
+  {
+    "note": "总打码倍数2.5000(有效投注250/总充值100)小于配置8",
+    "expected": {
+      "reason": "总打码倍数小于配置倍数",
+      "threshold": "8",
+      "actualField": "总打码倍数",
+      "actualValue": "2.5000"
+    }
+  },
+  {
+    "note": "同浏览器指纹人数54大于配置50",
+    "expected": {
+      "reason": "同浏览器指纹人数大于配置人数",
+      "threshold": "50",
+      "actualField": "同浏览器指纹人数",
+      "actualValue": "54"
+    }
+  },
+  {
+    "note": "同浏览器指纹人数61大于配置50",
+    "expected": {
+      "reason": "同浏览器指纹人数大于配置人数",
+      "threshold": "50",
+      "actualField": "同浏览器指纹人数",
+      "actualValue": "61"
+    }
+  },
+  {
+    "note": "同浏览器指纹人数81大于配置50",
+    "expected": {
+      "reason": "同浏览器指纹人数大于配置人数",
+      "threshold": "50",
+      "actualField": "同浏览器指纹人数",
+      "actualValue": "81"
+    }
+  },
+  {
+    "note": "提款金额12000大于自动出款最大金额9999",
+    "expected": {
+      "reason": "提款金额大于自动出款最大金额",
+      "threshold": "9999",
+      "actualField": "提款金额",
+      "actualValue": "12000"
+    }
+  },
+  {
+    "note": "提款金额20000大于自动出款最大金额10000",
+    "expected": {
+      "reason": "提款金额大于自动出款最大金额",
+      "threshold": "10000",
+      "actualField": "提款金额",
+      "actualValue": "20000"
+    }
+  },
+  {
+    "note": "1.累计提款次数0小于配置1次;2.总打码倍数1.3720(有效投注137.2/总充值100)小于配置4",
+    "expected": {
+      "reason": "总打码倍数小于配置倍数；累计提款次数小于配置次数",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "1.累计提款次数0小于配置2次;2.总打码倍数1.4700(有效投注147/总充值100)小于配置4",
+    "expected": {
+      "reason": "总打码倍数小于配置倍数；累计提款次数小于配置次数",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "1.总打码倍数1.3720(有效投注137.2/总充值100)小于配置4;2.累计提款次数0小于配置1次",
+    "expected": {
+      "reason": "总打码倍数小于配置倍数；累计提款次数小于配置次数",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "1.累计提款次数0小于配置1次；2.总打码倍数1.3720(有效投注137.2/总充值100)小于配置4；3.累计提款次数0小于配置1次",
+    "expected": {
+      "reason": "总打码倍数小于配置倍数；累计提款次数小于配置次数",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "1. 累计提款次数0小于配置1次 ; 2. 总打码倍数1.3720（有效投注137.2/总充值100）小于配置4",
+    "expected": {
+      "reason": "总打码倍数小于配置倍数；累计提款次数小于配置次数",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "1.同浏览器指纹人数54大于配置50;2.提款金额12000大于自动出款最大金额9999",
+    "expected": {
+      "reason": "同浏览器指纹人数大于配置人数；提款金额大于自动出款最大金额",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "1.累计提款次数0小于配置1次;2.累计提款次数2小于配置3次",
+    "expected": {
+      "reason": "累计提款次数小于配置次数",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数0小于等于配置1次",
+    "expected": {
+      "reason": "累计提款次数小于等于配置次数",
+      "threshold": "1",
+      "actualField": "累计提款次数",
+      "actualValue": "0"
+    }
+  },
+  {
+    "note": "累计提款次数0大于配置1次",
+    "expected": {
+      "reason": "累计提款次数大于配置次数",
+      "threshold": "1",
+      "actualField": "累计提款次数",
+      "actualValue": "0"
+    }
+  },
+  {
+    "note": "累计提款次数0大于等于配置1次",
+    "expected": {
+      "reason": "累计提款次数大于等于配置次数",
+      "threshold": "1",
+      "actualField": "累计提款次数",
+      "actualValue": "0"
+    }
+  },
+  {
+    "note": "总打码倍数1(有效投注100/总充值100)小于配置4",
+    "expected": {
+      "reason": "总打码倍数小于配置倍数",
+      "threshold": "4",
+      "actualField": "总打码倍数",
+      "actualValue": "1"
+    }
+  },
+  {
+    "note": "总打码倍数1(有效投注100/总充值100)小于等于配置4",
+    "expected": {
+      "reason": "总打码倍数小于等于配置倍数",
+      "threshold": "4",
+      "actualField": "总打码倍数",
+      "actualValue": "1"
+    }
+  },
+  {
+    "note": "总打码倍数1(有效投注100/总充值100)大于配置4",
+    "expected": {
+      "reason": "总打码倍数大于配置倍数",
+      "threshold": "4",
+      "actualField": "总打码倍数",
+      "actualValue": "1"
+    }
+  },
+  {
+    "note": "总打码倍数1(有效投注100/总充值100)大于等于配置4",
+    "expected": {
+      "reason": "总打码倍数大于等于配置倍数",
+      "threshold": "4",
+      "actualField": "总打码倍数",
+      "actualValue": "1"
+    }
+  },
+  {
+    "note": "同浏览器指纹人数54小于配置50",
+    "expected": {
+      "reason": "同浏览器指纹人数小于配置人数",
+      "threshold": "50",
+      "actualField": "同浏览器指纹人数",
+      "actualValue": "54"
+    }
+  },
+  {
+    "note": "同浏览器指纹人数54小于等于配置50",
+    "expected": {
+      "reason": "同浏览器指纹人数小于等于配置人数",
+      "threshold": "50",
+      "actualField": "同浏览器指纹人数",
+      "actualValue": "54"
+    }
+  },
+  {
+    "note": "同浏览器指纹人数54大于等于配置50",
+    "expected": {
+      "reason": "同浏览器指纹人数大于等于配置人数",
+      "threshold": "50",
+      "actualField": "同浏览器指纹人数",
+      "actualValue": "54"
+    }
+  },
+  {
+    "note": "提款金额12000小于自动出款最大金额9999",
+    "expected": {
+      "reason": "提款金额小于自动出款最大金额",
+      "threshold": "9999",
+      "actualField": "提款金额",
+      "actualValue": "12000"
+    }
+  },
+  {
+    "note": "提款金额12000小于等于自动出款最大金额9999",
+    "expected": {
+      "reason": "提款金额小于等于自动出款最大金额",
+      "threshold": "9999",
+      "actualField": "提款金额",
+      "actualValue": "12000"
+    }
+  },
+  {
+    "note": "提款金额12000大于等于自动出款最大金额9999",
+    "expected": {
+      "reason": "提款金额大于等于自动出款最大金额",
+      "threshold": "9999",
+      "actualField": "提款金额",
+      "actualValue": "12000"
+    }
+  },
+  {
+    "note": "提款金额12000大于自动出款最小金额9999",
+    "expected": {
+      "reason": "提款金额12000大于自动出款最小金额9999",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数0小于配置1次;银行失败501",
+    "expected": {
+      "reason": "累计提款次数小于配置次数；银行失败501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数0小于配置1次;银行失败503",
+    "expected": {
+      "reason": "累计提款次数小于配置次数；银行失败503",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数0小于配置1次;失败信息:No Available Channels",
+    "expected": {
+      "reason": "无可用代付通道；累计提款次数小于配置次数",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数0小于配置1次;代付异常:Insufficient balance",
+    "expected": {
+      "reason": "代付余额不足；累计提款次数小于配置次数",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数0小于配置1次;会员123存在额外规则",
+    "expected": {
+      "reason": "会员123存在额外规则；累计提款次数小于配置次数",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": null,
+    "expected": {
+      "reason": null,
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "",
+    "expected": {
+      "reason": null,
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "银行失败501",
+    "expected": {
+      "reason": "银行失败501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数0小于配置1",
+    "expected": {
+      "reason": "累计提款次数0小于配置1",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数-1小于配置1次",
+    "expected": {
+      "reason": "累计提款次数-1小于配置1次",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "总打码倍数NaN(有效投注137.2/总充值100)小于配置4",
+    "expected": {
+      "reason": "总打码倍数NaN(有效投注137.2/总充值100)小于配置4",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "总打码倍数1e3(有效投注137.2/总充值100)小于配置4",
+    "expected": {
+      "reason": "总打码倍数1e3(有效投注137.2/总充值100)小于配置4",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "总打码倍数1.0(有效投注137.2+总充值100)小于配置4",
+    "expected": {
+      "reason": "总打码倍数1.0(有效投注137.2+总充值100)小于配置4",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "同浏览器指纹人数54不大于配置50",
+    "expected": {
+      "reason": "同浏览器指纹人数54不大于配置50",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "提款金额12,000大于自动出款最大金额9999",
+    "expected": {
+      "reason": "提款金额12,000大于自动出款最大金额9999",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "提款金额12000大于自动出款最大金额9999并且银行失败501",
+    "expected": {
+      "reason": "提款金额12000大于自动出款最大金额9999并且银行失败501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数9999999999999999999小于配置1次",
+    "expected": {
+      "reason": "累计提款次数9999999999999999999小于配置1次",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "总打码倍数9999999999999999999999999(有效投注137.2/总充值100)小于配置4",
+    "expected": {
+      "reason": "总打码倍数9999999999999999999999999(有效投注137.2/总充值100)小于配置4",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "总打码倍数1.22222222222222222222222222222222222222222(有效投注137.2/总充值100)小于配置4",
+    "expected": {
+      "reason": "总打码倍数1.22222222222222222222222222222222222222222(有效投注137.2/总充值100)小于配置4",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数0小于配置1次XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "expected": {
+      "reason": "累计提款次数0小于配置1次XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "首存金额大于19999.00,首存金额:25000",
+    "expected": {
+      "reason": "首存金额大于19999",
+      "threshold": "19999",
+      "actualField": "首存金额",
+      "actualValue": "25000"
+    }
+  },
+  {
+    "note": "首存金额大于29999.00,首存金额:35000",
+    "expected": {
+      "reason": "首存金额大于29999",
+      "threshold": "29999",
+      "actualField": "首存金额",
+      "actualValue": "35000"
+    }
+  },
+  {
+    "note": "棋牌 有效投注 100 > 阈值 0",
+    "expected": {
+      "reason": "棋牌有效投注超限",
+      "threshold": "0",
+      "actualField": "棋牌有效投注",
+      "actualValue": "100"
+    }
+  },
+  {
+    "note": "真人视讯 有效投注 200 > 阈值 300",
+    "expected": {
+      "reason": "真人视讯有效投注超限",
+      "threshold": "300",
+      "actualField": "真人视讯有效投注",
+      "actualValue": "200"
+    }
+  },
+  {
+    "note": "体育 有效投注 100 >= 阈值 300",
+    "expected": {
+      "reason": "体育 有效投注 100 >= 阈值 300",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数不能小于1次,当前累计提现次数:0次",
+    "expected": {
+      "reason": "累计提款次数不能小于1次",
+      "threshold": "1",
+      "actualField": "当前累计提现次数",
+      "actualValue": "0"
+    }
+  },
+  {
+    "note": "总打码倍数1.3(有效投注[已移除号码]/总充值100)小于配置4",
+    "expected": {
+      "reason": "总打码倍数小于配置倍数",
+      "threshold": "4",
+      "actualField": "总打码倍数",
+      "actualValue": "1.3"
+    }
+  },
+  {
+    "note": "总打码倍数2.4(有效投注{标识}.001/总充值[已移除号码])小于配置4",
+    "expected": {
+      "reason": "总打码倍数小于配置倍数",
+      "threshold": "4",
+      "actualField": "总打码倍数",
+      "actualValue": "2.4"
+    }
+  },
+  {
+    "note": "总打码倍数1.3(有效投注[已移除号码]/总充值100)小于配置4额外未知501",
+    "expected": {
+      "reason": "总打码倍数1.3(有效投注[已移除号码]/总充值100)小于配置4额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "总打码倍数0(总充值为0)小于配置4",
+    "expected": {
+      "reason": "总打码倍数（总充值为零）小于配置倍数",
+      "threshold": "4",
+      "actualField": "总打码倍数",
+      "actualValue": "0"
+    }
+  },
+  {
+    "note": "总打码倍数0.0(总充值为0.00)小于配置8",
+    "expected": {
+      "reason": "总打码倍数（总充值为零）小于配置倍数",
+      "threshold": "8",
+      "actualField": "总打码倍数",
+      "actualValue": "0.0"
+    }
+  },
+  {
+    "note": "总打码倍数0(总充值为0)小于配置4额外未知501",
+    "expected": {
+      "reason": "总打码倍数0(总充值为0)小于配置4额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "未完成充值,当前充值次数0",
+    "expected": {
+      "reason": "未完成充值",
+      "threshold": null,
+      "actualField": "当前充值次数",
+      "actualValue": "0"
+    }
+  },
+  {
+    "note": "未完成充值,当前充值次数1",
+    "expected": {
+      "reason": "未完成充值",
+      "threshold": null,
+      "actualField": "当前充值次数",
+      "actualValue": "1"
+    }
+  },
+  {
+    "note": "未完成充值,当前充值次数0额外未知501",
+    "expected": {
+      "reason": "未完成充值,当前充值次数0额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "从未充值,本次为第8次提款,大于等于无充值连续提款配置2次",
+    "expected": {
+      "reason": "从未充值，连续提款次数大于等于配置次数",
+      "threshold": "2",
+      "actualField": "本次提款次数",
+      "actualValue": "8"
+    }
+  },
+  {
+    "note": "从未充值,本次为第12次提款,大于等于无充值连续提款配置4次",
+    "expected": {
+      "reason": "从未充值，连续提款次数大于等于配置次数",
+      "threshold": "4",
+      "actualField": "本次提款次数",
+      "actualValue": "12"
+    }
+  },
+  {
+    "note": "从未充值,本次为第8次提款,大于等于无充值连续提款配置2次额外未知501",
+    "expected": {
+      "reason": "从未充值,本次为第8次提款,大于等于无充值连续提款配置2次额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "上次充值后提款4次(成功3+处理中1),大于等于无充值连续提款配置2次",
+    "expected": {
+      "reason": "上次充值后连续提款次数大于等于配置次数",
+      "threshold": "2",
+      "actualField": "上次充值后提款次数",
+      "actualValue": "4"
+    }
+  },
+  {
+    "note": "上次充值后提款6次(成功4+处理中2),大于等于无充值连续提款配置4次",
+    "expected": {
+      "reason": "上次充值后连续提款次数大于等于配置次数",
+      "threshold": "4",
+      "actualField": "上次充值后提款次数",
+      "actualValue": "6"
+    }
+  },
+  {
+    "note": "上次充值后提款4次(成功3+处理中1),大于等于无充值连续提款配置2次额外未知501",
+    "expected": {
+      "reason": "上次充值后提款4次(成功3+处理中1),大于等于无充值连续提款配置2次额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "总充值0小于等于配置下限1",
+    "expected": {
+      "reason": "总充值小于等于配置下限",
+      "threshold": "1",
+      "actualField": "总充值",
+      "actualValue": "0"
+    }
+  },
+  {
+    "note": "总充值20小于等于配置下限100",
+    "expected": {
+      "reason": "总充值小于等于配置下限",
+      "threshold": "100",
+      "actualField": "总充值",
+      "actualValue": "20"
+    }
+  },
+  {
+    "note": "总充值0小于等于配置下限1额外未知501",
+    "expected": {
+      "reason": "总充值0小于等于配置下限1额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "配置不允许非法定货币自动出款,本单U数量1",
+    "expected": {
+      "reason": "配置不允许非法定货币自动出款",
+      "threshold": null,
+      "actualField": "本单U数量",
+      "actualValue": "1"
+    }
+  },
+  {
+    "note": "配置不允许非法定货币自动出款,本单U数量[已移除号码]",
+    "expected": {
+      "reason": "配置不允许非法定货币自动出款",
+      "threshold": null,
+      "actualField": "本单U数量",
+      "actualValue": null
+    }
+  },
+  {
+    "note": "配置不允许非法定货币自动出款,本单U数量1额外未知501",
+    "expected": {
+      "reason": "配置不允许非法定货币自动出款,本单U数量1额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "没有可用提现通道,本单出款金额2U",
+    "expected": {
+      "reason": "没有可用提现通道",
+      "threshold": null,
+      "actualField": "本单出款金额（U）",
+      "actualValue": "2"
+    }
+  },
+  {
+    "note": "没有可用提现通道,本单出款金额[已移除号码]U",
+    "expected": {
+      "reason": "没有可用提现通道",
+      "threshold": null,
+      "actualField": "本单出款金额（U）",
+      "actualValue": null
+    }
+  },
+  {
+    "note": "没有可用提现通道,本单出款金额2U额外未知501",
+    "expected": {
+      "reason": "没有可用提现通道,本单出款金额2U额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "首存金额20000大于等于配置10000",
+    "expected": {
+      "reason": "首存金额大于等于配置金额",
+      "threshold": "10000",
+      "actualField": "首存金额",
+      "actualValue": "20000"
+    }
+  },
+  {
+    "note": "首存金额[已移除号码]大于等于配置20000",
+    "expected": {
+      "reason": "首存金额大于等于配置金额",
+      "threshold": "20000",
+      "actualField": "首存金额",
+      "actualValue": null
+    }
+  },
+  {
+    "note": "首存金额20000大于等于配置10000额外未知501",
+    "expected": {
+      "reason": "首存金额20000大于等于配置10000额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "今日未通过自动出款3次,大于等于配置2次",
+    "expected": {
+      "reason": "今日未通过自动出款次数大于等于配置次数",
+      "threshold": "2",
+      "actualField": "今日未通过自动出款次数",
+      "actualValue": "3"
+    }
+  },
+  {
+    "note": "今日未通过自动出款6次,大于等于配置5次",
+    "expected": {
+      "reason": "今日未通过自动出款次数大于等于配置次数",
+      "threshold": "5",
+      "actualField": "今日未通过自动出款次数",
+      "actualValue": "6"
+    }
+  },
+  {
+    "note": "今日未通过自动出款3次,大于等于配置2次额外未知501",
+    "expected": {
+      "reason": "今日未通过自动出款3次,大于等于配置2次额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "同银行账户关联3次,大于等于配置2次",
+    "expected": {
+      "reason": "同银行账户关联次数大于等于配置次数",
+      "threshold": "2",
+      "actualField": "同银行账户关联次数",
+      "actualValue": "3"
+    }
+  },
+  {
+    "note": "同银行账户关联6次,大于等于配置4次",
+    "expected": {
+      "reason": "同银行账户关联次数大于等于配置次数",
+      "threshold": "4",
+      "actualField": "同银行账户关联次数",
+      "actualValue": "6"
+    }
+  },
+  {
+    "note": "同银行账户关联3次,大于等于配置2次额外未知501",
+    "expected": {
+      "reason": "同银行账户关联3次,大于等于配置2次额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "总提现/总充值2((总提现200+处理中0)/总充值100)大于配置1",
+    "expected": {
+      "reason": "总提现／总充值比例大于配置比例",
+      "threshold": "1",
+      "actualField": "总提现／总充值比例",
+      "actualValue": "2"
+    }
+  },
+  {
+    "note": "总提现/总充值[已移除号码]((总提现300+处理中100)/总充值100)大于配置2",
+    "expected": {
+      "reason": "总提现／总充值比例大于配置比例",
+      "threshold": "2",
+      "actualField": "总提现／总充值比例",
+      "actualValue": null
+    }
+  },
+  {
+    "note": "总提现/总充值2((总提现200+处理中0)/总充值100)大于配置1额外未知501",
+    "expected": {
+      "reason": "总提现/总充值2((总提现200+处理中0)/总充值100)大于配置1额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "账户余额1000大于等于配置500",
+    "expected": {
+      "reason": "账户余额大于等于配置金额",
+      "threshold": "500",
+      "actualField": "账户余额",
+      "actualValue": "1000"
+    }
+  },
+  {
+    "note": "账户余额[已移除号码]大于等于配置2000",
+    "expected": {
+      "reason": "账户余额大于等于配置金额",
+      "threshold": "2000",
+      "actualField": "账户余额",
+      "actualValue": null
+    }
+  },
+  {
+    "note": "账户余额1000大于等于配置500额外未知501",
+    "expected": {
+      "reason": "账户余额1000大于等于配置500额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "总盈利1000大于等于配置500",
+    "expected": {
+      "reason": "总盈利大于等于配置金额",
+      "threshold": "500",
+      "actualField": "总盈利",
+      "actualValue": "1000"
+    }
+  },
+  {
+    "note": "总盈利[已移除号码]大于等于配置2000",
+    "expected": {
+      "reason": "总盈利大于等于配置金额",
+      "threshold": "2000",
+      "actualField": "总盈利",
+      "actualValue": null
+    }
+  },
+  {
+    "note": "总盈利1000大于等于配置500额外未知501",
+    "expected": {
+      "reason": "总盈利1000大于等于配置500额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "3日内彩金充值100大于配置50",
+    "expected": {
+      "reason": "3日内彩金充值大于配置金额",
+      "threshold": "50",
+      "actualField": "3日内彩金充值",
+      "actualValue": "100"
+    }
+  },
+  {
+    "note": "3日内彩金充值200大于配置100",
+    "expected": {
+      "reason": "3日内彩金充值大于配置金额",
+      "threshold": "100",
+      "actualField": "3日内彩金充值",
+      "actualValue": "200"
+    }
+  },
+  {
+    "note": "3日内彩金充值100大于配置50额外未知501",
+    "expected": {
+      "reason": "3日内彩金充值100大于配置50额外未知501",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "7日内彩金充值200大于配置100",
+    "expected": {
+      "reason": "7日内彩金充值大于配置金额",
+      "threshold": "100",
+      "actualField": "7日内彩金充值",
+      "actualValue": "200"
+    }
+  },
+  {
+    "note": "1.累计提款次数0小于配置1次;2.首存金额大于19999.00,首存金额:25000;3.银行失败501;4.未完成充值,当前充值次数0",
+    "expected": {
+      "reason": "未完成充值；累计提款次数小于配置次数；银行失败501；首存金额大于19999",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "9.银行失败501；4.未完成充值,当前充值次数0；6.首存金额大于19999.00,首存金额:25000；1.累计提款次数2小于配置3次",
+    "expected": {
+      "reason": "未完成充值；累计提款次数小于配置次数；银行失败501；首存金额大于19999",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数0小于配置1次;1.5倍未知规则501",
+    "expected": {
+      "reason": "1.5倍未知规则501；累计提款次数小于配置次数",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "累计提款次数0小于配置1次;2.75未知规则503",
+    "expected": {
+      "reason": "2.75未知规则503；累计提款次数小于配置次数",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "1.累计提款次数0小于配置1次;9.3日内彩金充值30000大于配置10000",
+    "expected": {
+      "reason": "3日内彩金充值大于配置金额；累计提款次数小于配置次数",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  },
+  {
+    "note": "1.首存金额大于19999.00,首存金额:25000;2.累计提款次数0小于配置1次;3.首存金额大于19999.00,首存金额:25000;4.累计提款次数0小于配置1次;5.首存金额大于19999.00,首存金额:25000;6.累计提款次数0小于配置1次;7.首存金额大于19999.00,首存金额:25000;8.累计提款次数0小于配置1次;9.首存金额大于19999.00,首存金额:25000;10.累计提款次数0小于配置1次;11.首存金额大于19999.00,首存金额:25000;12.累计提款次数0小于配置1次;13.首存金额大于19999.00,首存金额:25000;14.累计提款次数0小于配置1次;15.首存金额大于19999.00,首存金额:25000;16.累计提款次数0小于配置1次;17.首存金额大于19999.00,首存金额:25000;18.累计提款次数0小于配置1次;19.首存金额大于19999.00,首存金额:25000;20.累计提款次数0小于配置1次;21.首存金额大于19999.00,首存金额:25000;22.累计提款次数0小于配置1次;23.首存金额大于19999.00,首存金额:25000;24.累计提款次数0小于配置1次;25.首存金额大于19999.00,首存金额:25000;26.累计提款次数0小于配置1次;27.首存金额大于19999.00,首存金额:25000;28.累计提款次数0小于配置1次;29.首存金额大于19999.00,首存金额:25000;30.累计提款次数0小于配置1次;31.首存金额大于19999.00,首存金额:25000;32.累计提款次数0小于配置1次;33.首存金额大于19999.00,首存金额:25000;34.累计提款次数0小于配置1次;35.首存金额大于19999.00,首存金额:25000;36.累计提款次数0小于配置1次;37.首存金额大于19999.00,首存金额:25000;38.累计提款次数0小于配置1次;39.首存金额大于19999.00,首存金额:25000;40.累计提款次数0小于配置1次;41.首存金额大于19999.00,首存金额:25000;42.累计提款次数0小于配置1次;43.首存金额大于19999.00,首存金额:25000;44.累计提款次数0小于配置1次;45.首存金额大于19999.00,首存金额:25000;46.累计提款次数0小于配置1次;47.首存金额大于19999.00,首存金额:25000;48.累计提款次数0小于配置1次;49.首存金额大于19999.00,首存金额:25000;50.累计提款次数0小于配置1次;51.首存金额大于19999.00,首存金额:25000;52.累计提款次数0小于配置1次;53.首存金额大于19999.00,首存金额:25000;54.累计提款次数0小于配置1次;55.首存金额大于19999.00,首存金额:25000;56.累计提款次数0小于配置1次;57.首存金额大于19999.00,首存金额:25000;58.累计提款次数0小于配置1次;59.首存金额大于19999.00,首存金额:25000;60.累计提款次数0小于配置1次;61.首存金额大于19999.00,首存金额:25000;62.累计提款次数0小于配置1次;63.首存金额大于19999.00,首存金额:25000;64.累计提款次数0小于配置1次;65.首存金额大于19999.00,首存金额:25000;66.累计提款次数0小于配置1次;67.首存金额大于19999.00,首存金额:25000;68.累计提款次数0小于配置1次;69.首存金额大于19999.00,首存金额:25000;70.累计提款次数0小于配置1次;71.首存金额大于19999.00,首存金额:25000;72.累计提款次数0小于配置1次;73.首存金额大于19999.00,首存金额:25000;74.累计提款次数0小于配置1次;75.首存金额大于19999.00,首存金额:25000;76.累计提款次数0小于配置1次;77.首存金额大于19999.00,首存金额:25000;78.累计提款次数0小于配置1次;79.首存金额大于19999.00,首存金额:25000;80.累计提款次数0小于配置1次",
+    "expected": {
+      "reason": "累计提款次数小于配置次数；首存金额大于19999",
+      "threshold": null,
+      "actualField": null,
+      "actualValue": null
+    }
+  }
+]
