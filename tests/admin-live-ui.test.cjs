@@ -498,6 +498,36 @@ test('matrix 24-hour totals preserve direction, currency, missing fields and dai
  h.L.direction='withdraw';r.withdrawSuccessTimeAvailable=false;h.c.render();assert.equal(totals()['成功笔数'],'— 笔');assert.equal(totals()['成功金额'],'—');
 });
 
+test('standard matrix totals show the known partial subset ratio without changing facts, requests or completeness',async()=>{
+ const peer={...P,id:'matrix-unreturned-peer',name:'Unreturned synthetic platform'},h=await ready({adaptive:true,statisticWindows:true,platforms:[P,peer]}),r=completeAggregate(P,95249,51519);
+ r.complete=true;r._preparedPublication={computedAt:'2026-09-23T11:00:00Z',sourceComplete:false};r.groups.matrix_range=[{...r.summary[0],bucket:'band:0',hour:12}];h.L.results=[r];h.L.queryPlatforms=[P,peer];h.L.direction='charge';h.L.matrixMode='range';h.L.amountBandProfiles={charge:{edges:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]}};h.L.loadedView='full';
+ const partials=[{loading:true},{queryPaused:true},{queryWarnings:['Synthetic missing platform']},{queryFailures:[{platform:peer,error:'Synthetic unavailable platform'}]}];
+ for(const page of ['matrix','overview']){h.c.state.page=page;Object.assign(h.L,{loading:false,queryPaused:false,queryWarnings:[],queryFailures:[]});h.c.render();await settle();for(const partial of partials){
+  h.c.state.page=page;Object.assign(h.L,{loading:false,queryPaused:false,queryWarnings:[],queryFailures:[],...partial});const before=JSON.stringify(h.L.results),requests=JSON.stringify(h.calls);h.c.render();
+  const matrix=renderedTables(h.html()).find(t=>t.headers[0]==='金额 / 时');assert(matrix,page+' '+Object.keys(partial)[0]+' renders a matrix');const row=matrix.rows.find(row=>/100 ≤ 金额 &lt; 200/.test(row[0]));assert(row,page+' '+Object.keys(partial)[0]+' band '+matrix.rows.map(row=>plain(row[0])).join('|'));const cell=row[25],totals=Object.fromEntries([...cell.matchAll(/<small>([^<]+)<\/small><b>([^<]+)<\/b>/g)].map(m=>[m[1],m[2]]));
+  assert.deepEqual(totals,{'全部笔数':'95,249 笔','全部金额':'9,524,900.00','成功笔数':'51,519 笔','成功金额':'5,151,900.00','成功率':'54.09%'},page+' '+Object.keys(partial)[0]);assert.match(row[13],/>54\.09%<\/span>/);assert.match(cell,/部分已读/);assert.match(cell,/部分平台已读取/);assert.match(cell,/全部按创建时间，成功按成功时间/);
+  assert.equal(JSON.stringify(h.L.results),before);assert.equal(JSON.stringify(h.calls),requests,'render uses the same result subset without rereading');assert.equal(r._preparedPublication.sourceComplete,false);
+ }}
+});
+
+test('partial matrix ratios retain unknown partition, success-time, count and zero-denominator protections',async()=>{
+ const h=await ready({adaptive:true}),r=completeAggregate(P,10,4);r.complete=true;h.L.results=[r];h.L.direction='charge';h.L.matrixMode='range';h.L.amountBandProfiles={charge:{edges:[100,200,300,400,500,1000,2000,5000,10000,20000,50000]}};h.L.queryWarnings=['Synthetic missing peer'];h.c.state.page='matrix';
+ const row=extra=>({...r.summary[0],bucket:'band:0',hour:0,...extra}),read=()=>{h.c.render();const t=renderedTables(h.html()).find(t=>t.headers[0]==='金额 / 时'),cell=t.rows[0][25];assert.match(cell,/部分已读/);return Object.fromEntries([...cell.matchAll(/<small>([^<]+)<\/small><b>([^<]+)<\/b>/g)].map(m=>[m[1],m[2]]));};
+ r.groups.matrix_range=[row({all_count:1,success_count:1}),row({hour:23,all_count:99,success_count:9})];assert.equal(read()['成功率'],'10.00%','sum successful counts divided by sum all counts, never average hourly percentages');
+ r.groups.matrix_range=[row({success_count:0})];assert.equal(read()['成功率'],'0.00%');
+ r.groups.matrix_range=[row({all_count:0,success_count:0})];assert.equal(read()['成功率'],'—');
+ r.groups.matrix_range=[row({all_count:10,success_count:12})];assert.equal(read()['成功率'],'120.00%','independent success/creation date windows retain their original ratio');
+ r.groups.matrix_range=[row({success_count:null})];assert.equal(read()['成功率'],'—');
+ r.groups.matrix_range=[row({all_count:null})];assert.equal(read()['成功率'],'—');
+ r.groups.matrix_range=[row()];delete r.groups.matrix_range[0].success_count;assert.equal(read()['成功率'],'—');
+ r.groups.matrix_range=[];assert.equal(read()['成功率'],'—');
+ h.L.results=[];assert.equal(read()['成功率'],'—');h.L.results=[r];
+ r.groups.matrix_range=[row()];r.complete=false;assert.equal(read()['成功率'],'—');r.complete=true;
+ r._parts=[{complete:true,groups:{matrix_range:[row()]}},{complete:true,groups:{}}];assert.equal(read()['成功率'],'—');delete r._parts;
+ r.groups.matrix_range=[row({currency:'USD'})];assert.equal(read()['成功率'],'40.00%');assert.equal(read()['成功金额'],'—');assert.equal(read()['全部金额'],'—');
+ h.L.direction='withdraw';r.withdrawSuccessTimeAvailable=false;r.groups.matrix_range=[row({direction:'withdraw'})];assert.equal(read()['成功笔数'],'— 笔');assert.equal(read()['成功率'],'—');
+});
+
 test('matrix custom interval queries independently and restores its footer without changing primary totals or bands',async()=>{
  const h=await ready({page:'matrix'}),main=completeAggregate(P,10,3),custom=completeAggregate(P,4,3);
  custom.groups.hourly=[{...custom.summary[0],hour:12,all_amount:'935.50',success_amount:'731.25'}];

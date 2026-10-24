@@ -634,7 +634,7 @@
   const incomplete=r=>r.complete===false||!Array.isArray(r.groups?.[field])||(Array.isArray(r._parts)&&(!r._parts.length||r._parts.some(incomplete)));
   if(!L.results.length||L.results.some(incomplete)||!bandRows.length&&aggregateReadStatus().incomplete)for(const key of keys)sum[key]=null;
   const partial=L.loading||L.queryPaused||L.queryWarnings.length>0||L.queryFailures?.length>0,title=(partial?'部分平台已读取；':'')+'所选日期范围内 00–23 时合计；全部按创建时间，成功按成功时间；金额单位 '+L.currency;
-  return '<div class="matrix-row-total" title="'+E(title)+'">'+(partial?'<small class="matrix-total-partial">部分已读</small>':'')+[['全部笔数',C(sum.all_count)+' 笔'],['全部金额',N(sum.all_amount)],['成功笔数',C(sum.success_count)+' 笔'],['成功金额',N(sum.success_amount)],['成功率',partial?'—':R(sum.success_count,sum.all_count)]].map(([label,value])=>'<span><small>'+label+'</small><b>'+value+'</b></span>').join('')+'</div>';
+  return '<div class="matrix-row-total" title="'+E(title)+'">'+(partial?'<small class="matrix-total-partial">部分已读</small>':'')+[['全部笔数',C(sum.all_count)+' 笔'],['全部金额',N(sum.all_amount)],['成功笔数',C(sum.success_count)+' 笔'],['成功金额',N(sum.success_amount)],['成功率',R(sum.success_count,sum.all_count)]].map(([label,value])=>'<span><small>'+label+'</small><b>'+value+'</b></span>').join('')+'</div>';
  }
  function matrixBody(direction){
   const field=L.matrixMode==='range'?'matrix_range':'matrix',rawRows=groupRows(field).filter(r=>r.direction===direction),rows=combine(rawRows,['bucket','hour']),exact=['100','200','300','400','500','750','1000','1500','2000','5000'],ranges=amountBandKeys(direction);

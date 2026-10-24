@@ -67,6 +67,22 @@ test('DUOLI source notes remain available without changing its independently kno
  const other=fixture([row('OTHER-SOURCE',{source:'YASH',reasonAvailable:false})]);await other.page.load();assert.match(other.tables.at(-1).rows[0].at(-1),/当前采集未提供原因/);assert.doesNotMatch(other.tables.at(-1).rows[0].at(-1),/原因字段未入库/);
 });
 
+test('DUOLI operator source description distinguishes verified daily-report provenance without changing facts or requests',async()=>{
+ const native='多利按已入库创建日明细统计，完整性尚未确认；用时为源订单审核用时，不代表支付到账时长。',report='多利按已入库来源统计，完整性尚未确认；用时口径以表内说明为准，不代表支付到账时长。';
+ for(const marker of ['source_daily_report','mixed_native_and_daily_report'])for(const period of ['current','previous']){
+  const r=row('DUOLI-SYNTHETIC',{source:'DUOLI',account:'SYNTHETIC',processed:110,previous:prior({source:'DUOLI'})}),h=fixture([r],{view:'withdraw_operators',data:{sourceComplete:false,duoliCoverage:{classificationAvailable:true,complete:false}}});await h.page.load();assert.match(h.html(),new RegExp(native));const beforeTables=clone(h.tables.at(-1)),beforeExport=clone(h.page.exportMeta()),beforeCalls=clone(h.calls);(period==='current'?r:r.previous).countSource=marker;const facts=clone(h.data);h.draw();
+  assert.match(h.html(),new RegExp(report),period+' '+marker);assert.doesNotMatch(h.html(),new RegExp(native));assert.match(h.html(),/<details class="withdraw-coverage-details"><summary>数据说明<\/summary>/);assert.deepEqual(clone(h.tables.at(-1)),beforeTables);assert.deepEqual(clone(h.page.exportMeta()),beforeExport);assert.deepEqual(h.calls,beforeCalls);assert.deepEqual(h.data,facts);assert.equal(h.data.sourceComplete,false);assert.equal(h.data.duoliCoverage.complete,false);
+ }
+});
+
+test('DUOLI source-description change excludes other sources and automatic-report chrome',async()=>{
+ const native=/多利按已入库创建日明细统计，完整性尚未确认；用时为源订单审核用时/,report=/多利按已入库来源统计/;
+ const pure=row('DUOLI-NATIVE',{source:'DUOLI',account:'SYNTHETIC',processed:110}),other=row('OTHER-DAILY',{source:'AR',countSource:'source_daily_report',previous:prior({source:'AR',countSource:'mixed_native_and_daily_report'})});
+ const h=fixture([pure,other],{view:'withdraw_operators',data:{duoliCoverage:{complete:false}}});await h.page.load();assert.match(h.html(),native);assert.doesNotMatch(h.html(),report);
+ const missing=fixture([row('DUOLI-DAILY',{source:'DUOLI',countSource:'source_daily_report'})],{view:'withdraw_operators'});await missing.page.load();assert.doesNotMatch(missing.html(),/data-duoli-coverage/);
+ const auto=fixture([row('DUOLI-DAILY',{source:'DUOLI',countSource:'source_daily_report'})],{data:{duoliCoverage:{complete:false}}}),facts=clone(auto.data);await auto.page.load();assert.doesNotMatch(auto.html(),/data-duoli-coverage|<summary>数据说明<\/summary>/);assert.deepEqual(auto.data,facts);assert.equal(auto.calls.length,1);assert.match(auto.card('total'),/<strong>110<\/strong>/);assert.match(auto.tables.at(-1).rows[0][1],/未分类 1 笔/);
+});
+
 test('Vietnam automatic report keeps unclassified facts and native scope while clearing only redundant report chrome',async()=>{
  const h=fixture([row('SYNTHETIC-VN',{country:'越南',unclassifiedCount:7,autoCount:40,manualCount:63})],{country:'越南',timezone:'Asia/Ho_Chi_Minh',data:{sourceComplete:false}});await h.page.load();
  assert.equal(h.calls.length,1);assert.equal(h.calls[0].country,'越南');assert.equal(h.calls[0].view,'auto');assert.equal(h.calls[0].startAt,'2026-10-13T00:00:00.000Z');assert.equal(h.calls[0].endAt,'2026-10-13T23:59:59.000Z');
