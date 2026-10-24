@@ -1,0 +1,52 @@
+LG v8.3 candidate: one-file historical business-data refresh
+
+Build the original private source using build_delivery.py --with-refresh.
+The default builder remains the byte-identical v8.2 build. Neither original
+private configuration nor a generated delivery belongs in Git.
+
+Candidate command after the user installs this same named single Python file:
+python3 lgwithdraw_to_sheet.py --mode refresh --start 2026-10-01 --end 2026-10-11
+
+Only complete local dates are accepted. --end must precede the current local
+date in EVERY selected platform timezone. The present day remains with the
+running realtime process. No refresh --then-realtime combination is accepted.
+Normal realtime command and collection/scheduling code are retained.
+
+State: <existing --state-dir>/refresh_v1/<hash of range/platforms/kinds/endpoint>/
+The refresh root has its own sync.lock. It does not acquire the realtime root,
+legacy detail/hourly locks, or a cloud window lease. The job manifest stores
+its initial second-resolution cutoff; retries keep the same source query
+ceiling. Each day/platform/kind is collected sequentially. The original full
+pagination/completeness/target-date selection and privacy sanitizer are reused.
+Completed tasks skip source reads. Cached unconfirmed snapshots take priority
+even if a local completion marker was saved just before a crash.
+
+The uploader sends ONLY check and begin/chunk/finish with explicit sync_mode
+live. It has no pending_dates/window/midnight/callback actions. It includes no
+source_audit or original rows in outbound payloads. Cached snapshot UUID,
+observed_at, order data and chunk boundaries remain byte-for-byte equivalent
+across retries. Every response is checked for source, exact integer fields,
+snapshot identity, timestamps and statuses. Only live/unchanged with matching
+order_count/source_count and valid changed_count permits local acknowledgement.
+published/superseded, malformed or lost ACKs do not acknowledge or delete cache.
+
+Legacy live semantics, verified against the existing receiver in local PGlite:
+- Updates notes/member IDs on existing records and refreshes the four reports.
+- Does not delete absent records; a whole-day source-count conflict rolls back
+  the entire finish, retains local payload and remains an explicit failure.
+- Does not change window cursors/leases/runs/coverage or midnight records.
+- Does not overwrite a newer window observation or create a full-snapshot
+  published watermark. It uses the existing short global report transaction
+  lock, so concurrent realtime commits can briefly wait.
+- Source requests still share the same source browser/server. The second
+  process adds load; isolated locks do not mean zero resource contention.
+
+The only existing pure helper changed beyond the new CLI branch is ack_time:
+after its original strict UTC/1-6-fraction regex passes, fractional seconds
+are right-padded to 6 digits for Python 3.9. Its existing whole-second and
+timestamp equality checks remain. General order/source parsers are unchanged.
+
+Offline tests: test_refresh.py, test_ack_time_py39.py, the existing privacy
+tests, run_legacy_runtime.py, and tests/lg-refresh-live.test.cjs. No collector
+main, browser collection, live network request, deployment or realtime process
+was started by this implementation work. The v8.2 delivery remains unchanged.
