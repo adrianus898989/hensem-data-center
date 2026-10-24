@@ -159,7 +159,7 @@
  const amountNote=direction=>L.matrixMode==='exact'?'精确金额档位；其他金额及缺失单列。':L.amountBandProfiles?.[direction]?L.amountBandProfiles[direction].source+' · 10档；下限含、上限不含，最后一档含上限；超限和金额缺失单列。':'金额区间不重叠；超限和金额缺失单列。';
  const bucketNumber=value=>{if(String(value).startsWith('band:')||['below','above','unknown','other'].includes(value))return window.HensemAmountBands?.rank(value)??Infinity;const text=String(value??'').replaceAll(',',''),match=text.match(/-?\d+(?:\.\d+)?/);return match?Number(match[0]):Infinity};
  function compareBuckets(a,b){return bucketNumber(a.bucket)-bucketNumber(b.bucket)||String(a.bucket).localeCompare(String(b.bucket))}
- async function prepareAmountBands(serial){
+ async function prepareAmountBands(serial,verifiedRatesOnly=false,isCurrent=()=>true){
   if(!window.HensemAmountBands)return;
   // Provider-only summaries do not consume amount distributions.
   // Keep rate lookup in its supplementary lane instead of gating main reads.
@@ -167,8 +167,11 @@
   const currency=L.currency,country=L.country,providers=activeValues('provider',''),platforms=selected();
   // Limits and displayed fees share one validated, cancellable directory. The
   // same snapshot fixes band edges before querying orders and is reused later.
-  if(providers.length&&feeLookupPages.has(state.page))await ensureFeeLookup(false,true);
-  if(serial!==L.serial||L.dirty)return;
+  if(providers.length&&feeLookupPages.has(state.page)&&!verifiedRatesOnly)await ensureFeeLookup(false,true,isCurrent);
+  if(serial!==L.serial||L.dirty||!isCurrent())return;
+  // A deferred merchant trend may reuse only the original validated directory;
+  // a failed lookup must not silently become country-reference band edges.
+  if(verifiedRatesOnly&&providers.length&&(!Array.isArray(L.feeLookupRows)||!validFeeSnapshot(feeLookupSnapshot)))throw Error(L.feeLookupError||'费率尚未读取完成，请重试费率后读取订单趋势');
   // Events has no rates request capability. It may reuse an authorized fresh
   // snapshot, otherwise keep the established country reference bands.
   const rates=feeLookupPages.has(state.page)||validFeeSnapshot(feeLookupSnapshot)?L.feeLookupRows:null;
@@ -238,7 +241,7 @@
    const page=Array.isArray(result?.rows)?result.rows:null,nextTotal=result?.total;if(!page||typeof nextTotal!=='number'||!Number.isSafeInteger(nextTotal)||nextTotal<0||nextTotal>20000||(total!==null&&nextTotal!==total)||(!page.length&&offset<nextTotal)||offset+page.length>nextTotal||rows.length+page.length>20000)throw Error('费率目录不完整，请重试');total=nextTotal;offset+=page.length;rows.push(...page);
   }while(offset<total);}feeLookupSnapshot={rows,context,readAt:Date.now()};L.feeLookupRows=rows;
   }catch(e){if(!owned())return;if(state.page==='providers'&&L.providerReadMode==='published'&&window.HensemProviderPublished?.denied(e)){clearFeeLookupCache();clearPublishedAuthority();render();return;}feeLookupSnapshot=null;L.feeLookupError=e.message||'费率读取失败';L.feeLookupRows=null;
-  }finally{if(feeLookupBatch===batch)feeLookupBatch=null;if(serial===L.feeLookupSerial){L.feeLookupLoading=false;render();window.liveMerchantFeeRefresh?.()}}
+  }finally{const resumeTrend=owned()&&currentFeeIntent(batch)&&authorized()&&!phasedReadBusy()&&deferredMerchantTrend&&state.page==='merchants'&&L.view==='trend';if(feeLookupBatch===batch)feeLookupBatch=null;if(serial===L.feeLookupSerial){L.feeLookupLoading=false;render();window.liveMerchantFeeRefresh?.();if(resumeTrend){deferredMerchantTrend=false;void loadMerchantTrend();}}}
  }
  window.liveRetryFeeLookup=async()=>{if(!feeLookupPages.has(state.page)||!roleAllowed(state.page,'view')||L.feeLookupLoading)return Promise.resolve();await ensureFeeLookup(true);capturePublishedView();render()};
  const summary=()=>plus(L.results.flatMap(x=>x.summary||[]));
@@ -1104,7 +1107,7 @@
  function setPendingDefaultPeriod(){const today=localClock(Date.now(),scopeZone()).slice(0,10),end=new Date(today+'T00:00:00Z');end.setUTCDate(end.getUTCDate()-1);const start=new Date(end);start.setUTCDate(start.getUTCDate()-6);L.from=start.toISOString().slice(0,10)+'T00:00:00';L.to=end.toISOString().slice(0,10)+'T23:59:59'}
  window.livePeriod=function(mode,query=false){reportData?.cancel();const zone=scopeZone(),today=localClock(Date.now(),zone).slice(0,10),date=new Date(today+'T00:00:00Z'),end=new Date(date);if(mode==='yesterday'||mode==='before'){date.setUTCDate(date.getUTCDate()-(mode==='before'?2:1));end.setTime(date.getTime())}if(mode==='week'){date.setUTCDate(date.getUTCDate()-(state.page==='stuck'?7:6));if(state.page==='stuck')end.setUTCDate(end.getUTCDate()-1);}if(mode==='month'){if(state.page==='stuck'){date.setUTCDate(date.getUTCDate()-30);end.setUTCDate(end.getUTCDate()-1);}else date.setUTCDate(1);}L.from=date.toISOString().slice(0,10)+'T00:00:00';L.to=end.toISOString().slice(0,10)+'T23:59:59';L.serial++;cancelDataReads();L.queryRetrying=false;L.detailSerial++;L.dirty=true;L.loading=false;render();if(query)liveQuery()};
  window.liveReset=function(){window.HensemStatisticWindows?.reset(L);if(isChannelStatus())channelStatus?.clear?.();if(isDailyComparison())dailyComparison?.clear?.();L.providerOptionsSerial++;L.providerOptionsBusy=false;L.providerOptionsKey='';L.providerOptions=[];L.providerOptionsError='';window.hensemLiveCancelRequests?.(['providerOptions']);const selectable=visibleCatalog().filter(p=>countrySelectable(p.country)),base=selectable.find(p=>String(p.name||'').toUpperCase()==='91CLUB')||selectable[0]||{};const resetDirection=fixedDirection(state.page)||(['provider_daily','latency'].includes(state.page)?'charge':'all');Object.assign(L,{team:'all',country:base.country||'',countryTouched:false,platform:'all',source:'all',provider:'',direction:resetDirection,status:'all',orderNumber:'',thirdPartyOrderNumber:'',memberId:'',systemOrderId:'',utr:'',page:1,localPage:1,multi:{team:[],platform:[],source:[],provider:[],direction:resetDirection==='all'?[]:[resetDirection]}});if(isChannelStatus()){cancelDataReads();L.dirty=true;L.pageQueried=false;L.error='';render();return;}livePeriod(state.page==='stuck'?'week':'yesterday');};
- function query(p,action,previous=false){normalizePageDirection();if(isSuccessAnalysis()&&previous)throw Error('成功率分析不读取前期对比');if(!L.country||L.country==='all'||!countrySelectable(L.country))throw Error('请选择具体国家后查询。');if(!['all','charge','withdraw'].includes(L.direction))throw Error('请选择代收或代付');if(L.status==='success'&&wgSuccessFilterBlocked(p))throw Error(successFilterNote(p));const published=state.page==='providers'&&L.providerReadMode==='published'&&!L.dirty?L.publishedWindow:null,range=published?{valid:true,calendarDays:1,label:'较前一日同一时段 · 已发布同进度'}:HensemLiveCompare[isSuccessAnalysis()?'currentWindowFor':'windowFor'](L.from,L.to,p.timezone,L.queryNow);if(!range.valid)throw Error(range.error);if(!previous)L.comparisonLabel=range.label;const q={action,...(action==='aggregate'&&(aggregateMode()==='providers'||previous)&&L.status==='all'?{view:'providers'}:{}),platformId:p.id,startAt:published?published[previous?'previousStartAt':'startAt']:instant(previous?range.previousFrom:range.currentFrom,p.timezone),endAt:published?published[previous?'previousEndAt':'endAt']:instant(previous?range.previousTo:range.currentTo,p.timezone,true),direction:L.direction,status:L.status,currency:p.currency||null,offset:(L.page-1)*L.size,limit:L.size};if(range.calendarDays>31)throw Error('每次最多31个当地日');for(const key of ['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'])if(L[key]&&(!['thirdPartyOrderNumber','systemOrderId','utr'].includes(key)||orderCapability(p,key)))q[key]=L[key];const providers=providerQueryNames(activeValues('provider',''),p);if(providers.length)q.providers=providers;if(action==='aggregate'&&state.page==='latency'&&!previous&&q.view!=='providers')q.durationVersion=2;if(action==='aggregate'&&q.view!=='providers'&&!isSuccessAnalysis()&&!['time','latency'].includes(state.page)&&L.amountBandProfiles)q.amountBands=Object.fromEntries(Object.entries(L.amountBandProfiles).map(([d,p])=>[d,p.edges]));if(['aggregate','memberDaily'].includes(action)&&statisticWindowsEnabled())Object.assign(q,statisticRequest(p,previous));if(action==='details'&&statisticWindowsEnabled()&&!HensemStatisticWindows.hasSuccessWindow(L))q.successBasis='created';return q}
+ function query(p,action,previous=false,aggregateView=aggregateMode()){normalizePageDirection();if(isSuccessAnalysis()&&previous)throw Error('成功率分析不读取前期对比');if(!L.country||L.country==='all'||!countrySelectable(L.country))throw Error('请选择具体国家后查询。');if(!['all','charge','withdraw'].includes(L.direction))throw Error('请选择代收或代付');if(L.status==='success'&&wgSuccessFilterBlocked(p))throw Error(successFilterNote(p));const published=state.page==='providers'&&L.providerReadMode==='published'&&!L.dirty?L.publishedWindow:null,range=published?{valid:true,calendarDays:1,label:'较前一日同一时段 · 已发布同进度'}:HensemLiveCompare[isSuccessAnalysis()?'currentWindowFor':'windowFor'](L.from,L.to,p.timezone,L.queryNow);if(!range.valid)throw Error(range.error);if(!previous)L.comparisonLabel=range.label;const q={action,...(action==='aggregate'&&(aggregateView==='providers'||previous)&&L.status==='all'?{view:'providers'}:{}),platformId:p.id,startAt:published?published[previous?'previousStartAt':'startAt']:instant(previous?range.previousFrom:range.currentFrom,p.timezone),endAt:published?published[previous?'previousEndAt':'endAt']:instant(previous?range.previousTo:range.currentTo,p.timezone,true),direction:L.direction,status:L.status,currency:p.currency||null,offset:(L.page-1)*L.size,limit:L.size};if(range.calendarDays>31)throw Error('每次最多31个当地日');for(const key of ['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'])if(L[key]&&(!['thirdPartyOrderNumber','systemOrderId','utr'].includes(key)||orderCapability(p,key)))q[key]=L[key];const providers=providerQueryNames(activeValues('provider',''),p);if(providers.length)q.providers=providers;if(action==='aggregate'&&state.page==='latency'&&!previous&&q.view!=='providers')q.durationVersion=2;if(action==='aggregate'&&q.view!=='providers'&&!isSuccessAnalysis()&&!['time','latency'].includes(state.page)&&L.amountBandProfiles)q.amountBands=Object.fromEntries(Object.entries(L.amountBandProfiles).map(([d,p])=>[d,p.edges]));if(['aggregate','memberDaily'].includes(action)&&statisticWindowsEnabled())Object.assign(q,statisticRequest(p,previous));if(action==='details'&&statisticWindowsEnabled()&&!HensemStatisticWindows.hasSuccessWindow(L))q.successBasis='created';return q}
  function statisticRequest(platform,previous=false){
   HensemStatisticWindows.ensure(L);
   if(!previous)return HensemStatisticWindows.request(L,platform,instant);
@@ -1345,12 +1348,17 @@
  async function loadMerchantTrend(){
   if(state.page==='merchants'&&L.view==='trend'&&phasedReadBusy()){deferredMerchantTrend=true;return;}
   if(state.page!=='merchants'||L.view!=='trend'||!L.pageQueried||L.loading||L.dirty||!L.catalogReady||L.error||!roleAllowed('merchants','query')||L.loadedView==='full')return;
-  const scope=aggregateQueryScope(),serial=L.serial;
+  const scope=aggregateQueryScope(),serial=L.serial,context=aggregateAccessContext(),native=supplementaryNativeContext();
   if(L.queryScope!==scope||L.merchantTrend?.scope===scope&&L.merchantTrend.status==='loading')return;
+  // An explicit retry retains ownership of the original rate request. Resume
+  // this trend from that request's completion instead of aborting or duplicating it.
+  if(!L.amountBandProfiles&&L.feeLookupLoading){deferredMerchantTrend=true;return;}
   const platforms=L.queryPlatforms.filter(p=>!notOperating(p)),prior=L.merchantTrend?.scope===scope?L.merchantTrend:null,completed=new Map((prior?.results||[]).map(r=>[r.platform?.id,r]));
   const trend={scope,status:'loading',results:[...completed.values()],done:completed.size,total:platforms.length,error:''};L.merchantTrend=trend;beginReadPhases(serial);setReadPhase(serial,'按需读取订单趋势');render();
-  const current=()=>serial===L.serial&&L.merchantTrend===trend&&state.page==='merchants'&&L.view==='trend'&&!L.dirty&&L.queryScope===scope&&roleAllowed('merchants','query');
-  try{for(const platform of platforms){
+  const current=()=>serial===L.serial&&L.merchantTrend===trend&&state.page==='merchants'&&L.view==='trend'&&!L.dirty&&L.queryScope===scope&&context===aggregateAccessContext()&&native===supplementaryNativeContext()&&roleAllowed('merchants','view')&&roleAllowed('merchants','query');
+  try{
+   if(window.HensemAmountBands&&!L.amountBandProfiles){try{await prepareAmountBands(serial,true,current);}catch(error){if(current()){trend.status='error';trend.error=error.message||'费率读取失败';render();}return;}}
+   for(const platform of platforms){
    if(!current())return;if(completed.has(platform.id))continue;
    try{const request=query(platform,'aggregate');delete request.view;const result=await readAggregate(request,serial,true,true);if(!current())return;completed.set(platform.id,result);}
    catch(error){if(!current())return;trend.status='error';trend.error=error.message||'读取失败';render();return;}
@@ -1426,7 +1434,7 @@
   // One platform at a time; a slow analysis cannot consume the initial summary queue.
   for(const platform of pending){
    if(serial!==L.serial||analysis!==L.overviewSections||state.page!=='overview'||L.dirty)return;
-   try{const request=query(platform,'aggregate');delete request.view;const result=await readAggregate(request,serial,true,true);
+   try{const request=query(platform,'aggregate',false,'full');const result=await readAggregate(request,serial,true,true);
     if(serial!==L.serial||analysis!==L.overviewSections||state.page!=='overview'||L.dirty)return;
     completed.set(platform.id,result);failures.delete(platform.id);
    }catch(error){if(serial!==L.serial||analysis!==L.overviewSections||state.page!=='overview'||L.dirty)return;failures.set(platform.id,{id:platform.id,name:platform.name,message:error.message||'读取失败'})}
@@ -1594,8 +1602,10 @@
   let successRange=null;if(isSuccessAnalysis()){syncSuccessIdentity();try{successRange=successWindows(selected(),queryNow);}catch(e){L.error=e.message;L.dirty=true;render();return;}}L.restoredPage=false;const allPlatforms=selected(),platforms=allPlatforms.filter(p=>!notOperating(p));if(force){clearAggregateCache();providerIntake?.clearCache?.();}loadProviderOptions();const serial=++L.serial;cancelDataReads();preparedRefreshScope=refreshPrepared?{serial,page:state.page,context:aggregateAccessContext()}:null;L.merchantTrend=null;L.overviewIntake=null;L.providerIntake=null;L.providerComparisonIntake=null;L.queryScope=scope;L.queryPaused=false;L.queryPlatforms=allPlatforms.slice();L.queryFailures=[];L.queryRetrying=false;providerOrders.cancel();L.detailSerial++;L.workordersSerial++;L.workorders=null;L.workordersLoading=false;L.workordersError='';L.workordersScope='';if(isSuccessAnalysis()){L.pageQueried=true;L.successContext=successIdentity();L.successWindows=successRange;L.successApplied=null;}L.queryNow=queryNow;L.comparisonResults=[];L.comparisonStatus='idle';L.comparisonError='';L.error='';L.queryWarnings=[];L.dirty=false;L.loading=true;L.progress=statisticWindowsEnabled()?'正在读取已准备统计…':'正在读取正式订单…';L.detail=null;L.page=1;L.localPage=1;L.tablePages={};L.results=[];L.loadedView=L.status==='all'?aggregateMode():'full';beginReadPhases(serial);prepareFeeLookupQuery(force);memberCounts?.beginQuery?.(force);render();
   if(teamSheetReports?.hasReports())void teamSheetReports.load({force:refreshPrepared});
   let index=0,done=0;const results=[];let submissionBatch=null,cancelProgressPaint=()=>{};
+  const deferMerchantBands=state.page==='merchants'&&L.status==='all'&&L.view!=='trend'&&activeValues('provider','').length>0;
+  if(deferMerchantBands)L.amountBandProfiles=null;
   try{
-   if(!isSuccessAnalysis()&&window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;if(L.dirty){L.loading=false;return;}
+   if(!deferMerchantBands&&!isSuccessAnalysis()&&window.HensemAmountBands)await prepareAmountBands(serial);if(serial!==L.serial)return;if(L.dirty){L.loading=false;return;}
    if(state.page==='providers')submissionBatch=submissionAnalysis?.startWithOrders(force);
    const requests=platforms.map(p=>query(p,'aggregate'));if(state.page==='orders'&&platforms.length===1&&orderSource(platforms[0])==='panda'){L.loading=false;await liveDetails();return;}
    // Paint completed prepared platforms while other platforms are pending. One
@@ -1668,7 +1678,7 @@
     const tasks=[
      ...(providerDirection(state.page)&&platforms.length?[()=>workordersLoad(false,true,false,current)]:[]),
      ...(state.page==='merchants'&&L.status==='all'&&!['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'].some(key=>L[key])?[()=>memberCounts?.ensure(false,1)]:[]),
-     ()=>ensureFeeLookup(false,true,current),
+     async()=>{await ensureFeeLookup(false,true,current);if(deferMerchantBands&&current())await prepareAmountBands(serial,true,current);},
      async()=>{if(L.queryWarnings.length){L.comparisonStatus='error';L.comparisonError='当前平台数据未完整，暂不比较昨日';}else await liveComparison(serial,!force,1,current);},
      ()=>loadProviderIntake(serial,false,1,current),
      ...(!L.queryWarnings.length?[()=>loadProviderIntake(serial,true,1,current)]:[])
