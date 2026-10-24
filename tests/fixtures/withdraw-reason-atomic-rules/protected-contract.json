@@ -1,0 +1,44 @@
+[
+  {
+    "signature": "private.dashboard_admin_wg_withdraw_reasons(jsonb,jsonb)",
+    "body_md5": "bcd4383775c2d02894bcfa64d3a31a3b",
+    "metadata": {
+      "proacl": [
+        "postgres=X/postgres"
+      ],
+      "probin": null,
+      "procost": 100,
+      "prokind": "f",
+      "proname": "dashboard_admin_wg_withdraw_reasons",
+      "prorows": 0,
+      "pronargs": 2,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "proretset": false,
+      "prosecdef": true,
+      "prorettype": "3802",
+      "prosqlbody": null,
+      "prosupport": "-",
+      "proargmodes": null,
+      "proargnames": [
+        "p_request",
+        "p_scope"
+      ],
+      "proargtypes": [
+        "3802",
+        "3802"
+      ],
+      "proisstrict": false,
+      "proparallel": "u",
+      "protrftypes": null,
+      "provariadic": "0",
+      "provolatile": "s",
+      "proleakproof": false,
+      "proallargtypes": null,
+      "proargdefaults": null,
+      "pronargdefaults": 0
+    },
+    "language": "plpgsql"
+  }
+]
