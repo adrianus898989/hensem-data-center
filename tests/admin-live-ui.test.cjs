@@ -734,7 +734,7 @@ function withdrawalHandler(q){if(q.action==='catalog')return {platforms:[P]};if(
 test('automatic payout and operator pages use separate requests, local dates and tables',async()=>{
  const h=await ready({page:'auto_withdraw',handler:withdrawalHandler});assert(h.calls.some(q=>q.action==='autoWithdraw'));assert(!h.calls.some(q=>q.action==='aggregate'));assert.match(h.html(),/自动出款日报/);assert.doesNotMatch(h.html(),/SYNTHETIC-OPERATOR/);assert.match(h.html(),/>自动出款原因<\/button>/);assert.match(h.html(),/>驳回原因<\/button>/);
  h.c.withdrawDate('from','2026-09-23');h.c.withdrawDate('to','2026-09-23');await h.c.withdrawLoad();const q=h.calls.at(-1);assert.equal(q.startAt,'2026-09-23T00:00:00.000Z');assert.equal(q.endAt,'2026-09-23T23:59:59.000Z');assert.equal(q.view,'auto');assert.equal(q.country,'印度');
- const auto=renderedTables(h.html()).find(t=>t.headers.includes('总提现笔数（已入库小计） ↓'));assert(auto);assert(!auto.headers.includes('操作人'));assert.match(auto.html,/>合计</);assert.doesNotMatch(auto.html,/当前页汇总|全部汇总/);
+ const auto=renderedTables(h.html()).find(t=>t.headers.includes('总提现笔数 ↓'));assert(auto);assert(!auto.headers.includes('操作人'));assert.match(auto.html,/>合计</);assert.doesNotMatch(auto.html,/当前页汇总|全部汇总/);assert.match(h.html(),/data-withdraw-publication="subtotal"/,'source completeness remains explicit outside the column title');
  h.c.setPage('withdraw_operators');await settle();await h.c.liveQuery();await settle();assert.equal(h.calls.at(-1).view,'operators');assert.equal(h.calls.at(-1).sort,'processed');assert.match(h.html(),/SYNTHETIC-OPERATOR/);assert.doesNotMatch(h.html(),/自动出款日报|>自动出款原因<|>驳回原因<|>日明细<|>原因 \/ 每日备注</);const op=renderedTables(h.html()).find(t=>t.headers.includes('操作人'));assert(op);assert(!op.headers.some(x=>x.startsWith('总提现笔数')));for(const t of [auto,op])for(const row of t.rows)assert.equal(row.length,t.headers.length);assert.doesNotMatch(h.html(),/NaN|Infinity/);
  h.c.withdrawAccount('specific');await h.c.withdrawLoad();assert.equal(h.calls.at(-1).account,'specific');h.c.withdrawSort('avgSeconds');await settle();assert.equal(h.calls.at(-1).sort,'avgSeconds');assert.equal(h.calls.at(-1).ascending,false);h.c.withdrawSize('50');await settle();assert.equal(h.calls.at(-1).limit,50);
 });
@@ -762,9 +762,10 @@ test('daily operational notes retain failed input and use an independent version
  h.setHandler(withdrawalHandler);await h.c.withdrawNoteSave();const saved=h.calls.at(-1);assert.equal(saved.action,'withdrawNote');assert.equal(saved.reason,'SYNTHETIC NOTE <script>');assert.equal(saved.expectedVersion,'');assert.doesNotMatch(h.html(),/aria-label="每日备注"/);
  h.c.withdrawNoteOpen(0);h.c.withdrawNoteInput('UPDATED NOTE');await h.c.withdrawNoteSave();assert.equal(h.calls.at(-1).expectedVersion,'a'.repeat(32));
 });
-test('incomplete previous platform coverage suppresses total growth without hiding actual daily counts',async()=>{
- const h=await ready({page:'auto_withdraw',handler:q=>q.action==='autoWithdraw'?{...withdrawalData(q),comparison:{complete:false,matchedRows:0,totalRows:1}}:withdrawalHandler(q)});
- const kpis=h.html().split('withdraw-kpis')[1].split('</section>')[0];assert.match(kpis,/两期范围或覆盖未对齐，汇总暂不比较/);assert.match(kpis,/100/);assert.doesNotMatch(kpis,/25\.00%/);
+test('missing previous platform pairs suppress total growth without hiding actual daily counts',async()=>{
+ const h=await ready({page:'auto_withdraw',handler:q=>{if(q.action!=='autoWithdraw')return withdrawalHandler(q);const data=withdrawalData(q);data.rows[0].previous=null;data.comparison={complete:false,matchedRows:0,totalRows:1};return data;}});
+ h.c.withdrawDate('from','2026-09-23');h.c.withdrawDate('to','2026-09-23');await h.c.withdrawLoad();
+ const kpis=h.html().split('withdraw-kpis')[1].split('</section>')[0];assert.match(kpis,/无同平台、同口径的昨日对比值/);assert.match(kpis,/100/);assert.doesNotMatch(kpis,/25\.00%/);
 });
 
 test('late payout results cannot replace an edited scope or another subpage',async()=>{
