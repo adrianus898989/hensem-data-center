@@ -122,7 +122,7 @@ test('previous full empty-hour coverage means genuine zeros; incomplete previous
 
 function actualAggregateRead(){
  const live=fs.readFileSync(path.join(root,'admin-preview/live-data.js'),'utf8'),ast=ts.createSourceFile('live-data.js',live,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS),functions=[],functionNames=[],variables=[];
- const wantedFunctions=new Set(['query','providerQueryNames','readAggregate','mergeParts','combine','plus']),wantedVariables=new Set(['countKeys','amountKeys','empty','isSuccessAnalysis','countrySelectable']);
+ const wantedFunctions=new Set(['query','providerQueryNames','readAggregate','mergeParts','combine','plus','foregroundRequest','preemptSyncHealth']),wantedVariables=new Set(['countKeys','amountKeys','empty','isSuccessAnalysis','countrySelectable']);
  function walk(n){if(ts.isFunctionDeclaration(n)&&wantedFunctions.has(n.name?.text)){functions.push(n.getText(ast));functionNames.push(n.name.text);}if(ts.isVariableDeclaration(n)&&wantedVariables.has(n.name.getText(ast)))variables.push('const '+n.getText(ast)+';');ts.forEachChild(n,walk)}walk(ast);assert.deepEqual(functionNames.sort(),[...wantedFunctions].sort(),'load every actual query/read/merge dependency exactly once');assert.equal(variables.length,5);
  // query no longer depends on the retired success-only single-date validator.
  // Include the real document-scoped cache and transport together; readAggregate
