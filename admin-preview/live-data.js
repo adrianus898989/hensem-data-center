@@ -163,7 +163,7 @@
   if(!window.HensemAmountBands)return;
   // Provider-only prepared publications do not consume amount distributions.
   // Keep rate lookup in its supplementary lane instead of gating main reads.
-  if(statisticWindowsEnabled()&&state.page==='providers'){L.amountBandProfiles=null;return;}
+  if(statisticWindowsEnabled()&&(state.page==='providers'||state.page==='provider_payout'&&L.status==='all')){L.amountBandProfiles=null;return;}
   const currency=L.currency,country=L.country,providers=activeValues('provider',''),platforms=selected();
   // Limits and displayed fees share one validated, cancellable directory. The
   // same snapshot fixes band edges before querying orders and is reused later.
