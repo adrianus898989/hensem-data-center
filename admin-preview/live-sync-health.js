@@ -3,7 +3,7 @@
  const E=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const TTL=300000,SIZE=100,MAX=5000,statusNames={not_received:'未收到当日数据',failed:'采集任务失败',pending:'采集任务未结束',unverified:'尚未核实'};
  const notes={yash_created_windows_complete:'创建日采集窗口已全部核验',yash_created_windows_zero_confirmed:'创建日完整采集，已确认零订单',yash_created_windows_incomplete:'已收到创建订单，完整采集窗口待核验',duoli_updated_stream_only:'提现仅收到更新时间流，创建日完整性未确认',duoli_created_windows_status_unverified:'充值已收到实时创建订单，源状态覆盖尚未核验',no_created_orders_received:'未收到该创建日期的订单；不能据此判断电脑掉线',only_success_day_records_received:'仅收到当日成功、其他日期创建的订单；当日创建订单尚未收到',no_daily_report_received:'未收到该平台当日日报',no_daily_configuration_snapshot:'未收到当日配置快照；不表示原有配置已删除',source_collection_failed:'来源任务记录失败；已有数据仍保留',source_task_not_finished:'来源任务尚无完成记录；当前在线状态未知',source_timezone_unknown:'来源时区未明确，暂不能判断当地日期',configuration_history_unavailable:'来源仅保留最新配置，无法逐日核查历史配置快照',source_full_day_not_published:'来源只有实时增量记录，尚无当日完整发布记录',source_snapshot_superseded:'该日来源快照已被替代，尚需核对最终发布记录',source_direction_unknown:'来源记录的业务方向未明确，暂不能逐日核对',unsupported_source:'该来源暂不能逐日核实'};
- let options=null,scope='',serial=0,timer=null,loading=false,error='',data=null,page=0,attemptedAt=0,readAt=0,opened=false;
+ let options=null,scope='',serial=0,timer=null,loading=false,error='',data=null,page=0,attemptedAt=0,readAt=0,opened=false,controller=null;
  const ready=()=>!!options&&options.ready();
  function business(row){if(!['charge','withdraw','config'].includes(row.direction))return '业务方向待核实';if(row.direction==='config')return '自动出款配置';const d=row.direction==='withdraw'?'代付':'代收';if(row.dataset==='auto_report')return '自动出款日报';return d+(['orders','lg_orders'].includes(row.dataset)?'订单（创建日）':['panda_success','lg_success','collection_success'].includes(row.dataset)?'成功率日报':'金额日报')}
  function source(row){return (row.sourceKind==='google_sheets'?'Google 表格 → Supabase':row.sourceKind==='direct'?'采集器 → Supabase':'来源待核对')+' · '+String(row.source||'')}
@@ -22,24 +22,26 @@
   return head+state+action+counters+table+pager;
  }
  function paint(){let node=document.getElementById('live-sync-health-panel');if(!node){node=document.createElement('section');node.id='live-sync-health-panel';node.className='live-sync-health-pop';node.setAttribute('role','dialog');node.setAttribute('aria-label','平台数据同步检查');document.body.appendChild(node)}node.innerHTML=panel()}
- function reset(next){if(scope===next)return;scope=next;serial++;if(timer!==null){clearTimeout(timer);timer=null}loading=false;error='';data=null;page=0;attemptedAt=0;readAt=0;update()}
+ function stopRequest(){const current=controller;controller=null;current?.abort();}
+ function ensureScope(){if(options?.context)reset(String(options.context()||''));}
+ function reset(next){if(scope===next)return;scope=next;serial++;stopRequest();if(timer!==null){clearTimeout(timer);timer=null}loading=false;error='';data=null;page=0;attemptedAt=0;readAt=0;update()}
  async function load(force=false){
-  if(!ready()||loading)return;if(timer!==null){clearTimeout(timer);timer=null}
+  ensureScope();if(!ready()||loading)return;if(timer!==null){clearTimeout(timer);timer=null}
   const now=Date.now();if(!force&&data&&now-readAt<TTL)return;
-  const token=++serial,key=scope;loading=true;error='';attemptedAt=now;update();
-  try{const result=await options.request({action:'syncHealth',offset:0,limit:MAX});if(token!==serial||key!==scope)return;if(!valid(result))throw Error('同步检查结果格式不完整');page=0;data=result;readAt=Date.now()}
-  catch(e){if(token!==serial||key!==scope)return;error=e?.message||'连接失败，请重试'}
-  finally{if(token===serial&&key===scope){loading=false;update()}}
+  const token=++serial,key=scope,active=new AbortController();controller=active;loading=true;error='';attemptedAt=now;update();
+  try{const result=await options.request({action:'syncHealth',offset:0,limit:MAX},{signal:active.signal});ensureScope();if(token!==serial||key!==scope||active.signal.aborted)return;if(!valid(result))throw Error('同步检查结果格式不完整');page=0;data=result;readAt=Date.now()}
+  catch(e){ensureScope();if(token!==serial||key!==scope||active.signal.aborted||e?.name==='AbortError'||e?.code==='ADMIN_LIVE_CANCELLED')return;if(['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED','42501'].includes(e?.code)){data=null;page=0;readAt=0;}error=e?.message||'连接失败，请重试'}
+  finally{if(controller===active)controller=null;if(token===serial&&key===scope){loading=false;update()}}
  }
  const api={
   configure(value){options=value},
   schedule(nextScope){reset(String(nextScope||''));if(timer!==null){clearTimeout(timer);timer=null}if(!ready()||loading||(attemptedAt>0&&Date.now()-attemptedAt<TTL)||(data&&Date.now()-readAt<TTL))return;timer=setTimeout(()=>{timer=null;if(ready())void load(false)},250)},
-  badge(){const count=data?.total||0;return error?'<span class="sync-health-badge sync-health-unknown" title="同步检查未完成">!</span>':count?'<span class="sync-health-badge" title="'+count+' 项平台日期需要核对">'+(count>99?'99+':count)+'</span>':''},
-  open(){opened=true;paint();if(!loading&&ready())void load()},
+  badge(){ensureScope();const count=data?.total||0;return error?'<span class="sync-health-badge sync-health-unknown" title="同步检查未完成">!</span>':count?'<span class="sync-health-badge" title="'+count+' 项平台日期需要核对">'+(count>99?'99+':count)+'</span>':''},
+  open(){ensureScope();opened=true;paint();if(!loading&&ready())void load()},
   close(){opened=false;document.getElementById('live-sync-health-panel')?.remove()},
   refresh(){return load(true)},
-  page(value){if(!Number.isInteger(value)||value<0||loading||!data||value>=Math.max(1,Math.ceil(data.rows.length/SIZE)))return;page=value;update()},
-  cancel(){serial++;if(timer!==null)clearTimeout(timer);timer=null;loading=false;api.close()},
+  page(value){ensureScope();if(!Number.isInteger(value)||value<0||loading||!data||value>=Math.max(1,Math.ceil(data.rows.length/SIZE)))return;page=value;update()},
+  cancel({preservePanel=false}={}){serial++;stopRequest();if(timer!==null)clearTimeout(timer);timer=null;loading=false;if(preservePanel){if(opened)paint()}else api.close()},
  };
  document.addEventListener?.('keydown',event=>{if(event.key==='Escape')api.close()});
  window.HensemLiveSyncHealth=api;

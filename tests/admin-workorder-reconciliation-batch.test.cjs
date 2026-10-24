@@ -94,7 +94,7 @@ test('production UI filter edits stop remaining platform work and suppress stale
 test('UI all-failed response says unknown rather than no orders, and bundled production includes loader',async()=>{
  const h=uiHarness(q=>q.operation==='reconciliationPlatforms'?Promise.resolve(directory(['A'])):Promise.reject(Error('timeout')));await h.api.load(true);assert.match(h.html(),/订单笔数和金额未知/);assert.doesNotMatch(h.html(),/当前条件下没有未登记|共 <b>0/);assert.equal(h.api.state().result.summary.missingCount,null);
  assert.match(fs.readFileSync(path.join(__dirname,'../admin-preview/build-restoration.py'),'utf8'),/'live-workorder-reconciliation-batch.js',\s*'live-workorder-operations.js'/);
- assert.match(read('live-data.js'),/request:\(q,options\)=>window.hensemLiveRequest\(q,options\)/);
+ assert.match(read('live-data.js'),/HensemLiveWorkorderOperations\?\.create\(\{[^\n]+request:\(q,options\)=>foregroundRequest\(q,options\)/);
 });
 
 test('UI never presents page errors or incomplete zero results as no orders in the entire scope',async()=>{

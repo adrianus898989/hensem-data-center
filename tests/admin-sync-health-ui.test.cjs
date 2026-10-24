@@ -5,12 +5,12 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {resolve,reject,promise}};
 const issue=(platform='PLATFORM',status='not_received')=>({platform,country:'印度',team:'M8',dataset:'orders',direction:'charge',sourceKind:'direct',source:'ar',date:'2026-09-25',status,received:false,evidence:'no_created_orders_received'});
 const response=(rows=[issue()],checked=rows.length)=>({checkedAt:'2026-09-26T01:00:00Z',days:7,total:rows.length,summary:{checked,received:checked-rows.length,notReceived:rows.filter(x=>x.status==='not_received').length,failed:rows.filter(x=>x.status==='failed').length,pending:rows.filter(x=>x.status==='pending').length,unverified:rows.filter(x=>x.status==='unverified').length},rows});
-function setup(request=async()=>response()){
+function setup(request=async()=>response(),context){
  let now=1000000,ready=false,seq=0,changes=0;const timers=new Map(),nodes=new Map(),listeners={},calls=[];
  class Clock extends Date{static now(){return now}}
  const document={getElementById:id=>nodes.get(id),createElement:()=>({innerHTML:'',setAttribute(){},remove(){nodes.delete(this.id)}}),body:{appendChild:node=>nodes.set(node.id,node)},addEventListener:(name,fn)=>listeners[name]=fn};
- const ctx=vm.createContext({Date:Clock,document,setTimeout:(fn,ms)=>{const id=++seq;timers.set(id,{fn,ms});return id},clearTimeout:id=>timers.delete(id)});vm.runInContext('window=globalThis',ctx);vm.runInContext(source,ctx);
- const api=ctx.HensemLiveSyncHealth;api.configure({request:async q=>{calls.push(JSON.parse(JSON.stringify(q)));return request(q)},ready:()=>ready,onChange:()=>changes++});
+ const ctx=vm.createContext({Date:Clock,AbortController,document,setTimeout:(fn,ms)=>{const id=++seq;timers.set(id,{fn,ms});return id},clearTimeout:id=>timers.delete(id)});vm.runInContext('window=globalThis',ctx);vm.runInContext(source,ctx);
+ const api=ctx.HensemLiveSyncHealth;api.configure({request:async(q,options)=>{calls.push(JSON.parse(JSON.stringify(q)));return request(q,options)},ready:()=>ready,context,onChange:()=>changes++});
  return {api,calls,timers,listeners,setReady:value=>ready=value,tick:value=>now+=value,html:()=>nodes.get('live-sync-health-panel')?.innerHTML||'',changes:()=>changes,run:async()=>{for(const [id,timer]of [...timers]){timers.delete(id);timer.fn()}await flush()}};
 }
 
@@ -53,13 +53,13 @@ test('health bridge only accepts bounded read parameters, fresh auth and fixed R
  const err=bridge(()=>({ok:false,status:504,json:async()=>({message:'statement timeout sensitive-private-data'})}));await assert.rejects(err.api.adminLiveRequest({user:{id:'test'},access_token:'old'},req),error=>/同步检查超时/.test(error.message)&&!/敏感|sensitive|缩短日期|选择单个平台/.test(error.message));
 });
 test('integration waits for a manual page query and its main loading states',async()=>{
- const live=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8'),ready=live.match(/configure\(\{request:q=>window\.hensemLiveRequest\(q\),ready:\(\)=>(.*?),onChange:/)[1];
+ const live=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8'),ready=live.match(/configure\(\{request:\(q,options\)=>window\.hensemLiveRequest\(q,options\),context:syncHealthContext,ready:\(\)=>(.*?),onChange:/)[1];
  const supervisorDeclarations=live.slice(live.indexOf(' const supervisorPages='),live.indexOf('\n for(const [id,page]of Object.entries(supervisorPages))'));
  assert.match(supervisorDeclarations,/const isSupervisorPage=/,'use the real page classifier in the extracted readiness expression');
  const phaseDeclaration=live.match(/ const phasedReadBusy=\(\)=>[^\n]+;/)?.[0];
  assert(phaseDeclaration,'use the real query-owned phase classifier in the extracted readiness expression');
  assert(live.indexOf(phaseDeclaration)<live.indexOf(' window.HensemLiveSyncHealth?.configure('),'the production declaration exists before readiness is configured');
- const evaluate=(page,L,modules={},reportState={},readPhase=null,submissionAnalysis=null)=>vm.runInNewContext(supervisorDeclarations+'\n'+phaseDeclaration+'\n'+ready,{pages:[],state:{page},L,readPhase,submissionAnalysis,window:modules,collectedPage:{state:{busy:false}},reportData:{state:reportState}});
+ const evaluate=(page,L,modules={},reportState={},readPhase=null,submissionAnalysis=null)=>vm.runInNewContext(supervisorDeclarations+'\n'+phaseDeclaration+'\n'+ready,{pages:[],state:{page},roleAllowed:()=>true,L,readPhase,submissionAnalysis,window:modules,collectedPage:{state:{busy:false}},reportData:{state:reportState}});
  const L={serial:7,catalogReady:true,initialReadComplete:true,loading:false,overviewQueried:false,pageQueried:true};
  for(const page of ['auto_withdraw','rates','collected_data','payout_config','workorders','deposit_tracking','deposit_statistics','workorder_reconciliation','workorder_workload','workorder_operation_logs'])assert.equal(evaluate(page,L),true,page);
  for(const page of ['workorder_permissions','channel_status']){
@@ -96,3 +96,79 @@ test('integration waits for a manual page query and its main loading states',asy
 
 test('an empty authorized source inventory is unverified, never all received',async()=>{const h=setup(async()=>response([],0));h.setReady(true);await h.api.refresh();h.api.open();assert.match(h.html(),/当前授权范围没有可核查来源/);assert.doesNotMatch(h.html(),/均已收到数据/)});
 
+
+// The existing script includes this file in test:admin-preview; these checks use
+// the production health module and transport, with no live accounts or network.
+test('business preemption aborts health transport, preserves its open snapshot and keeps cooldown',async()=>{
+ let next,signal;const h=setup((_q,o)=>{signal=o.signal;return next?next.promise:Promise.resolve(response([issue('KEPT')]))});
+ h.setReady(true);h.api.schedule('scope');await h.run();h.api.open();next=deferred();const read=h.api.refresh();
+ assert.equal(signal.aborted,false);assert.match(h.html(),/正在检查/);h.api.cancel({preservePanel:true});assert.equal(signal.aborted,true);
+ assert.match(h.html(),/>KEPT</);assert.doesNotMatch(h.html(),/正在检查|本次检查未完成/);
+ for(let i=0;i<10;i++)h.api.schedule('scope');assert.equal(h.timers.size,0);assert.equal(h.calls.length,2);
+ next.reject(Object.assign(Error('cancelled'),{name:'AbortError',code:'ADMIN_LIVE_CANCELLED'}));await read;
+ assert.match(h.html(),/>KEPT</);assert.doesNotMatch(h.api.badge(),/unknown/);
+ h.tick(300001);next=null;h.api.schedule('scope');await h.run();assert.equal(h.calls.length,3);
+});
+
+test('authority replacement aborts transport and evicts old health data before a header or panel can expose it',async()=>{
+ let identity='account-a',next,signal;const h=setup((_q,o)=>{signal=o.signal;return next?next.promise:Promise.resolve(response([issue('PRIVATE-A')]))},()=>identity);
+ h.setReady(true);await h.api.refresh();h.api.open();next=deferred();const old=h.api.refresh();identity='account-b';
+ assert.equal(h.api.badge(),'');assert.equal(signal.aborted,true);assert.doesNotMatch(h.html(),/PRIVATE-A/);
+ next.resolve(response([issue('LATE-A')]));await old;assert.doesNotMatch(h.html(),/PRIVATE-A|LATE-A/);
+ next=null;await h.api.refresh();assert.equal(h.calls.length,3);
+});
+
+for(const code of ['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED','42501'])test(code+' evicts cached health evidence instead of displaying the previous authorized snapshot',async()=>{
+ let fail=false;const h=setup(async()=>{if(fail)throw Object.assign(Error('access denied'),{code});return response([issue('PRIVATE')])});
+ h.setReady(true);await h.api.refresh();h.api.open();fail=true;await h.api.refresh();assert.doesNotMatch(h.html(),/PRIVATE|以下保留上次/);assert.match(h.html(),/本次检查未完成/);
+});
+
+test('the single business adapter forwards request/options/result identity and does not own a queue',async()=>{
+ const live=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8');
+ const declaration=live.slice(live.indexOf(' function preemptSyncHealth'),live.indexOf(' const previousRender'));
+ const cancellations=[],transport=[],result={kept:true},ctx={window:{HensemLiveSyncHealth:{cancel:o=>cancellations.push(o)},hensemLiveCancelRequests:actions=>cancellations.push(actions),hensemLiveRequest:(q,o)=>{transport.push([q,o]);return result}},L:{catalog:[],withdrawCatalog:[]}};
+ vm.runInNewContext(declaration+';globalThis.request=foregroundRequest;globalThis.context=syncHealthContext',ctx);
+ const q={action:'aggregatePrepared',requests:[{successStartAt:'manual',successEndAt:'manual',direction:'withdraw'}]},options={signal:new AbortController().signal};
+ assert.equal(ctx.request(q,options),result);assert.equal(transport[0][0],q);assert.equal(transport[0][1],options);assert.equal(cancellations[0].preservePanel,true);assert.deepEqual(Array.from(cancellations[1]),['syncHealth']);
+ const ast=ts.createSourceFile('live-data.js',live,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS),direct=[];function visit(n){if(ts.isCallExpression(n)&&n.expression.getText(ast)==='window.hensemLiveRequest')direct.push(n.getText(ast));ts.forEachChild(n,visit)}visit(ast);
+ assert.deepEqual(direct,['window.hensemLiveRequest(request,options)','window.hensemLiveRequest(q,options)'],'only adapter and health itself directly call the bridge');
+ assert(!/setTimeout|Promise|queue|await/.test(declaration.slice(0,declaration.indexOf(' function syncHealthContext'))));
+});
+
+test('health context changes on account, role, permission and native identity but not catalogue ordering',()=>{
+ const live=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8'),declaration=live.match(/ function syncHealthContext\(\)[^\n]+/)[0];
+ const c={window:{hensemDataScope:{mode:'restricted',identity:'account-a'},hensemRoleAccess:{mode:'assigned',roleId:'role-a',version:1,assignmentVersion:1,canView:true,permissions:['b','a']}},L:{catalog:[{id:'p1',country:'印度',scopeGroup:'india',source:'ar',name:'P',timezone:'Asia/Kolkata',currency:'INR'},{id:'p2',source:'newar'}],withdrawCatalog:[]}};
+ vm.runInNewContext(declaration+';globalThis.context=syncHealthContext',c);const before=c.context();c.L.catalog.reverse();c.window.hensemRoleAccess.permissions.reverse();assert.equal(c.context(),before);
+ for(const [obj,key,value]of [[c.window.hensemDataScope,'identity','account-b'],[c.window.hensemRoleAccess,'roleId','role-b'],[c.window.hensemRoleAccess,'version',2],[c.window.hensemRoleAccess,'assignmentVersion',2],[c.window.hensemRoleAccess,'canView',false],[c.window.hensemRoleAccess,'permissions',['a']],[c.L.catalog[0],'source','wg'],[c.L.catalog[0],'timezone','Asia/Jakarta'],[c.L.catalog[0],'currency','IDR']]){const previous=obj[key];obj[key]=value;assert.notEqual(c.context(),before,key);obj[key]=previous}
+});
+
+test('real health-to-iframe-to-host cancellation frees its occupied transport slot after fetch settles',async()=>{
+ const bridgeFile=fs.readFileSync(path.join(__dirname,'admin-live-bridge.test.cjs'),'utf8');
+ const prefix=bridgeFile.split(/\ntest\(/)[0],iframeDefinition=bridgeFile.slice(bridgeFile.indexOf('function iframeHarness(){'),bridgeFile.indexOf("\ntest('iframe cancellation"));
+ const {load,bridge,iframeHarness,query}=new Function('require','__dirname',prefix+'\n'+iframeDefinition+';return {load,bridge,iframeHarness,query};')(require,__dirname);
+ const waits=[],host=load({fetch:(_url,init)=>new Promise((resolve,reject)=>{
+  waits.push({resolve,init});init.signal.addEventListener('abort',()=>reject(Object.assign(Error('aborted'),{name:'AbortError'})));
+ })}),b=bridge(host),x=iframeHarness();b.replaceChannel('test-channel');
+ let cursor=0,reply=0;const send=()=>{while(cursor<x.messages.length)host.send({source:b.child,origin:'null',data:x.messages[cursor++].data})};
+ const nodes=new Map();x.ctx.Date=Date;x.ctx.document={getElementById:id=>nodes.get(id),createElement:()=>({setAttribute(){},remove(){nodes.delete(this.id)}}),body:{appendChild:n=>nodes.set(n.id,n)}};
+ vm.runInContext(source,x.ctx);const api=x.ctx.HensemLiveSyncHealth;api.configure({request:(q,o)=>x.ctx.hensemLiveRequest(q,o),ready:()=>true,onChange(){}});
+ const health=api.refresh(),reads=[];for(let i=0;i<3;i++)reads.push(x.ctx.hensemLiveRequest(query).catch(e=>e));send();await flush();assert.equal(host.calls.length,4);
+ reads.push(x.ctx.hensemLiveRequest(query).catch(e=>e));send();await flush();assert.equal(host.calls.length,4,'foreground initially queued at the original transport limit');
+ api.cancel({preservePanel:true});send();await flush();assert.equal(waits[0].init.signal.aborted,true);assert.equal(host.calls.length,5,'original FIFO drains after the cancelled fetch settles');assert(waits.slice(1).every(w=>!w.init.signal.aborted));
+ for(const w of waits.slice(1))w.resolve({ok:true,json:async()=>({rows:[],total:0})});await flush();while(reply<b.replies.length){const data=b.replies[reply++].data;x.reply(data,data)}await Promise.all([health,...reads]);assert.equal(api.badge(),'');b.cleanup();assert.equal(host.timers.size,0);
+});
+
+test('real shared-page modules use the central adapter; render and local sorting do not preempt health',async()=>{
+ const prefix=fs.readFileSync(path.join(__dirname,'admin-navigation-performance.test.cjs'),'utf8').split(/\ntest\(/)[0];
+ const {harness,settle}=new Function('require','__dirname',prefix+';return {harness,settle};')(require,__dirname),configs=new Map(),cancelled=[];
+ const names=['HensemLiveReportData','HensemLiveCollectedData','HensemLiveWithdrawPages','HensemLiveDepositIssues','HensemLiveWorkorderOperations','HensemLiveConfiguration','HensemAnalysisDrilldown','HensemProviderOrders','HensemLiveDailyComparison','HensemLiveChannelStatus','HensemPreparedAggregates'];
+ const h=harness({reports:true,roleAccess:{mode:'owner',canView:true},roleAllowed:()=>true,extraModules:['live-statistic-windows.js','live-prepared-aggregates.js','live-daily-comparison.js','live-channel-status.js'],beforeLive(c){
+  c.HensemLiveSyncHealth={configure(){},cancel:o=>cancelled.push(o),badge:()=>'',schedule(){}};
+  for(const name of names){const object=c[name];assert(object,name);const method=object.configure?'configure':'create',original=object[method];object[method]=function(options){configs.set(name,options);return original.call(this,options)}}
+ }});await settle();assert.equal(configs.size,names.length,names.filter(n=>!configs.has(n)).join(','));
+ const calls=[],answer={identity:'same'},q={action:'details',startAt:'unchanged',successStartAt:'manual',direction:'withdraw'};
+ h.c.hensemLiveRequest=(request,options)=>{calls.push({request,options});return answer};cancelled.length=0;
+ for(const [name,config]of configs){assert.equal(config.request(q),answer,name);assert.equal(calls.at(-1).request,q,name);assert.equal(cancelled.at(-1).preservePanel,true,name)}
+ const count=cancelled.length;h.c.render();h.c.render();assert.equal(cancelled.length,count,'render does not cancel or request');assert.equal(calls.length,names.length);
+ h.c.setPage('amount');assert(cancelled.some(x=>x.preservePanel===false),'navigation closes health through existing cancellation lifecycle');
+});

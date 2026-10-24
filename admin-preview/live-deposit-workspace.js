@@ -43,7 +43,7 @@
   ];
   panel=root.HensemLiveKycReconciliation.create({id:'deposit-source-kyc',source:'collected-workorders',queryLabel:'工单号 / 原支付单号',getDefaultFilters:()=>root.HensemWorkorderUI.today('印度',L.catalog),getPlatformOptions:platformOptions,
    onRender:render,
-   onLoading:loading=>{L.depositKycLoading=loading;if(loading){root.HensemLiveSyncHealth?.cancel?.();root.hensemLiveCancelRequests?.(['syncHealth']);}},
+   onLoading:loading=>{L.depositKycLoading=loading;},
    onQuery:async f=>{
     if(L.catalogReady===false)throw Error('平台目录尚未读取，请稍后重试');
     const q={action:'depositStatistics',section:'kyc',country:'印度',dimension:enumValue(f.dimension,['platform','provider','date','orders']),kycStatus:enumValue(f.kycStatus,['all','connected','disconnected','unknown']),processing:f.processing,matchStatus:f.matchStatus,offset:f.offset,limit:f.limit,dateMode:f.from||f.to?'range':'all'};

@@ -539,7 +539,8 @@ function aggregateReadHarness(handler,platform=largeAr){
  const calls=[];let active=0,maxActive=0;context.window=context;context.hensemLiveRequest=async q=>{calls.push(JSON.parse(JSON.stringify(q)));active++;maxActive=Math.max(active,maxActive);try{return await handler(q,calls.length)}finally{active--}};
  const counts=source.slice(source.indexOf(' const countKeys='),source.indexOf(' const amountBands='));
  const read=source.slice(source.indexOf(' function mergeParts('),source.indexOf(' // Read deeper overview sections',source.indexOf(' function mergeParts(')));
- vm.runInNewContext(counts+read+';globalThis.engine={readAggregate,mergeParts,cachedAggregate};',context);
+ const foreground=source.slice(source.indexOf(' function preemptSyncHealth'),source.indexOf(' function syncHealthContext'));
+ vm.runInNewContext(foreground+counts+read+';globalThis.engine={readAggregate,mergeParts,cachedAggregate};',context);
  return {c:context,...context.engine,calls,maxActive:()=>maxActive};
 }
 const largeRequest=extra=>({action:'aggregate',platformId:largeAr.id,startAt:'2026-09-29T18:45:00.000Z',endAt:'2026-09-30T01:10:00.000Z',direction:'charge',status:'all',currency:'INR',offset:0,limit:20,...extra});
