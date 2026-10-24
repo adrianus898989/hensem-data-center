@@ -83,9 +83,9 @@ test('withdrawal coverage distinguishes current and previous completeness and cu
  const source=read('../admin-preview/live-withdraw-pages.js'),root={window:null,HensemLiveFilters:{multi:()=>''}};root.window=root;vm.runInNewContext(source,root);
  for(const pageName of ['auto_withdraw','withdraw_operators']){const module=root.HensemLiveWithdrawPages.create({L:{catalogReady:true,catalog:[WG],country:'巴西',from:'2026-09-22',to:'2026-09-22'},page:()=>pageName,E:String,C:String,N:String,R:()=> '—',box:(title,body)=>body,table:()=>'',render:()=>{},request:async()=>({})});
   module.state.data={rows:[],totals:{},wgCoverage:{days:[{date:'2026-09-21',complete:true,collected:20},{date:'2026-09-22',complete:false,collected:10}],complete:false,currentComplete:false,previousComplete:true,timeBasis:'created_at',operatorBasis:'current_latest_operator'}};
-  let html=module.render();assert.match(html,/data-wg-coverage="partial"/);assert.match(html,/当期所选创建日尚未完整采集/);assert.match(html,/不是完整总计/);assert.match(html,/当前最后操作者/);assert.match(html,/不代表历史操作次数/);assert.doesNotMatch(html,/当期所选创建日已完整采集|前期覆盖不完整/);
+  let html=module.render();assert.match(html,/data-wg-coverage="partial"/);assert.match(html,/当期所选创建日尚未完整采集/);assert.match(html,/不是完整总计/);assert.match(html,/当前最后操作者/);assert.match(html,/不代表历史操作次数/);assert.doesNotMatch(html,/当期所选创建日已完整采集|前期完整性未核验/);
   module.state.data.wgCoverage={...module.state.data.wgCoverage,currentComplete:true,previousComplete:false,days:[{date:'2026-09-21',complete:false,collected:10},{date:'2026-09-22',complete:true,collected:20}]};
-  html=module.render();assert.match(html,/data-wg-coverage="complete"/);assert.match(html,/当期所选创建日已完整采集/);assert.match(html,/前期覆盖不完整，跨期汇总暂不可比/);assert.doesNotMatch(html,/当期所选创建日尚未完整采集/);
+  const before=JSON.stringify(module.state.data.wgCoverage);html=module.render();assert.match(html,/data-wg-coverage="complete"/);assert.match(html,/当期所选创建日已完整采集/);assert.match(html,/前期完整性未核验，对比仅代表已入库记录/);assert.doesNotMatch(html,/当期所选创建日尚未完整采集/);assert.equal(JSON.stringify(module.state.data.wgCoverage),before);assert.equal(module.state.data.wgCoverage.complete,false);assert.equal(module.state.data.wgCoverage.previousComplete,false);
  }
 });
 test('automatic withdrawal and operator pages label empty WG coverage as historical fallback only in the selected scope',()=>{
