@@ -101,7 +101,7 @@
  const phasedReadBusy=()=>!!readPhase&&readPhase.serial===L.serial&&readPhase.page===state.page;
  function beginReadPhases(serial){if(!usesReadPhases(state.page)&&state.page!=='events')return;readPhase={serial,page:state.page,label:statisticWindowsEnabled()?'读取已准备统计':'读取当期订单'};cancelFeeLookup();window.HensemLiveSyncHealth?.cancel?.();window.hensemLiveCancelRequests?.(['syncHealth']);}
  function setReadPhase(serial,label){if(readPhase?.serial!==serial||serial!==L.serial)return false;readPhase.label=label;render();return true;}
- function endReadPhases(serial){if(readPhase?.serial!==serial)return;const phase=readPhase;readPhase=null;phase.cancelSupplementary?.();if(serial!==L.serial)return;const resumeTrend=deferredMerchantTrend;deferredMerchantTrend=false;render();if(resumeTrend&&state.page==='merchants'&&L.view==='trend')void loadMerchantTrend();preparedAggregates?.releaseRefresh?.();}
+ function endReadPhases(serial){if(readPhase?.serial!==serial){if(serial===L.serial)preparedAggregates?.releaseRefresh?.();return;}const phase=readPhase;readPhase=null;phase.cancelSupplementary?.();if(serial!==L.serial)return;const resumeTrend=deferredMerchantTrend;deferredMerchantTrend=false;render();if(resumeTrend&&state.page==='merchants'&&L.view==='trend')void loadMerchantTrend();preparedAggregates?.releaseRefresh?.();}
  // Three bounded module workers share the existing host transport limit of
  // four physical requests. Each module retains its existing reader bounds;
  // waiting modules start only while this query still owns the phase.
@@ -1261,15 +1261,44 @@
   const platform=L.catalog.find(p=>p.id===request.platformId);if(!platform)return false;
   const current=statisticRequest(platform);return ['startAt','endAt','successStartAt','successEndAt','successBasis'].every(key=>request[key]===current[key]);
  }
+ const preparedRefreshPaintOwners=new Set();let preparedRefreshPaintPending=false;
+ function schedulePreparedRefreshPaint(owner){
+  preparedRefreshPaintOwners.add(owner);if(preparedRefreshPaintPending)return;preparedRefreshPaintPending=true;
+  const paint=()=>{preparedRefreshPaintPending=false;const owners=[...preparedRefreshPaintOwners];preparedRefreshPaintOwners.clear();if(owners.some(owned=>owned()))render();};
+  if(typeof window.requestAnimationFrame==='function')window.requestAnimationFrame(paint);else Promise.resolve().then(paint);
+ }
+ function preparedReceiptIdentity(value){const p=value?._preparedPublication;return p?JSON.stringify([p.id,p.generation,p.computedAt,p.expiresAt,p.cutoff]):null;}
+ function preparedResultAttached(result){return [L.results,L.comparisonResults,L.overviewSections?.results,L.merchantTrend?.results].some(rows=>Array.isArray(rows)&&rows.includes(result));}
+ function preparedResultReceiver({request,serial,page,context,native,scope,wrap}){
+  let returned=null,receipt=null,fields=[];const requestKey=JSON.stringify(request);
+  const owned=()=>!!returned&&serial===L.serial&&page===state.page&&!L.dirty&&!L.queryPaused&&scope===aggregateQueryScope()&&context===aggregateAccessContext()&&native===aggregateNativeIdentity(request)&&requestKey===JSON.stringify(request)&&roleAllowed(page,'view')&&roleAllowed(page,'query')&&preparedResultAttached(returned);
+  return {owned,attach(value){returned=value;receipt=preparedReceiptIdentity(value);fields=Object.keys(value);return value;},receive(value){
+   if(!owned()||receipt!==preparedReceiptIdentity(returned))return;
+   const old=returned._preparedPublication,next=value._preparedPublication,key=preparedReceiptIdentity(value);
+   if(!key)return;
+   if(key===receipt){
+    // Same immutable financial head: only queue state may advance in place.
+    if(old.refreshState===next.refreshState&&old.freshness===next.freshness&&old.nextRefreshAt===next.nextRefreshAt)return;
+    returned._preparedPublication={...old,refreshState:next.refreshState,freshness:next.freshness,nextRefreshAt:next.nextRefreshAt};schedulePreparedRefreshPaint(owned);return;
+   }
+   if(next.id===old.id||next.generation===old.generation||!(Date.parse(next.computedAt)>=Date.parse(old.computedAt)))return;
+   const replacement=wrap(value);if(!owned()||receipt!==preparedReceiptIdentity(returned))return;
+   // Keep the exact returned object referenced by foreground maps/arrays.
+   // Independent workorder/exclusion attachments are outside its original keys.
+   for(const field of fields)if(!Object.hasOwn(replacement,field))delete returned[field];
+   Object.assign(returned,replacement);fields=Object.keys(replacement);receipt=key;schedulePreparedRefreshPaint(owned);
+  }};
+ }
  async function readAggregate(request,serial,allowCache=false,bounded=false,isCurrent=()=>true){
   if(!isCurrent())throw Error('查询已替换');
   if(usesPreparedAggregate(request)){
    if(!preparedAggregates)throw Error('统计读取组件未载入，请重新加载页面');
-   const context=aggregateAccessContext(),page=state.page,native=aggregateNativeIdentity(request),ownerCurrent=()=>isCurrent()&&serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&!!native&&native===aggregateNativeIdentity(request);let result;
-   try{result=await preparedAggregates.read(request,{...((request.view||'full')==='full'&&['time','amount','latency'].includes(page)?{responseProfile:page+'-v1'}:{}),forceRefresh:preparedRefreshScope?.serial===serial&&preparedRefreshScope.page===page&&preparedRefreshScope.context===context,...(allowCache&&preparedRefreshScope?.serial!==serial&&readyOnlyProviderProbe(request)?{readyOnlyProbe:true,refreshIsCurrent:ownerCurrent,onRefreshError:error=>{if(ownerCurrent())stopInterruptedAggregate(serial,error);}}:{}),isCurrent:()=>ownerCurrent()&&roleAllowed(page,'view')&&roleAllowed(page,'query')});}
+   const context=aggregateAccessContext(),page=state.page,native=aggregateNativeIdentity(request),scope=aggregateQueryScope(),ownerCurrent=()=>isCurrent()&&serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&!!native&&native===aggregateNativeIdentity(request);let result;
+   const wrap=value=>{if(orderSource(L.catalog.find(p=>p.id===request.platformId))==='panda'&&!pandaCoverageMatches(value,request,true))throw Error('熊猫所选创建窗口完整性尚未确认；已核验截止范围的证据无效，请重新读取');return {...mergeParts([value],L.catalog.find(p=>p.id===request.platformId)),_aggregateReadAt:Date.parse(value._preparedPublication.computedAt),_aggregateAccessContext:context,_aggregateView:request.view||'full'};};
+   const receiver=preparedResultReceiver({request,serial,page,context,native,scope,wrap});
+   try{result=await preparedAggregates.read(request,{...((request.view||'full')==='full'&&['time','amount','latency'].includes(page)?{responseProfile:page+'-v1'}:{}),forceRefresh:preparedRefreshScope?.serial===serial&&preparedRefreshScope.page===page&&preparedRefreshScope.context===context,...(allowCache&&preparedRefreshScope?.serial!==serial&&readyOnlyProviderProbe(request)?{readyOnlyProbe:true}:{}),refreshIsCurrent:receiver.owned,onRefresh:receiver.receive,onRefreshError:error=>{if(receiver.owned())stopInterruptedAggregate(serial,error);},isCurrent:()=>ownerCurrent()&&roleAllowed(page,'view')&&roleAllowed(page,'query')});}
    catch(error){if(ownerCurrent())stopInterruptedAggregate(serial,error);throw error;}
-   if(orderSource(L.catalog.find(p=>p.id===request.platformId))==='panda'&&!pandaCoverageMatches(result,request,true))throw Error('熊猫所选创建窗口完整性尚未确认；已核验截止范围的证据无效，请重新读取');
-   return {...mergeParts([result],L.catalog.find(p=>p.id===request.platformId)),_aggregateReadAt:Date.parse(result._preparedPublication.computedAt),_aggregateAccessContext:context,_aggregateView:request.view||'full'};
+   return receiver.attach(wrap(result));
   }
   const context=aggregateAccessContext(),native=aggregateNativeIdentity(request),page=state.page;
   const ownerCurrent=()=>isCurrent()&&serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&!!native&&native===aggregateNativeIdentity(request);
@@ -1399,7 +1428,7 @@
    analysis.results=platforms.map(p=>completed.get(p.id)).filter(Boolean);analysis.done=analysis.results.length;analysis.failures=[...failures.values()];analysis.attempted=analysis.done+analysis.failures.length;render();
   }
   if(serial!==L.serial||analysis!==L.overviewSections)return;
-  analysis.status=analysis.failures.length?(analysis.done?'partial':'error'):'ready';render();
+  analysis.status=analysis.failures.length?(analysis.done?'partial':'error'):'ready';render();preparedAggregates?.releaseRefresh?.();
  };
  function aggregateQueryScope(){return JSON.stringify([isTeamWorkspace(state.page)?'teamops':state.page,selected().map(p=>p.id),L.from,L.to,L.successFrom,L.successTo,L.successBasis,L.direction,L.status,activeValues('provider'),L.orderNumber,L.memberId,L.systemOrderId,L.thirdPartyOrderNumber,L.overviewAnalysis,platformLifecycle?.revision()||''])}
 

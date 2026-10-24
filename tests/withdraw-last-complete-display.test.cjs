@@ -11,37 +11,37 @@ function fixture(data,view='auto_withdraw'){
 }
 function complete(data){data.sourceComplete=true;data.prepared={...data.prepared,sourceComplete:true,freshness:'fresh',refreshState:'idle',expiresAt:'2099-01-01T00:00:00Z'};data.arCoverage={currentComplete:true,previousComplete:true,complete:true};data.rows.forEach(r=>{r.complete=true;r.previous.complete=true;});data.comparison.complete=true;return data;}
 for(const view of ['auto_withdraw','withdraw_operators']){
- test(view+' failed last-complete remains visible as a dated subtotal without false day-over-day decline',async()=>{
-  const data=payload(),before=clone(data),h=fixture(data,view);await h.page.load();const html=h.html();
-  assert.match(html,/更新失败 · 已入库小计/);assert.match(html,/统计生成于 2026-10-21 15:53:03（Asia\/Kolkata）/);assert.match(html,/不能作为全天完整总计/);assert.match(html,/重新查询/);assert.match(html,view==='auto_withdraw'?/总笔数（已入库小计）<\/label><strong>22000/:/处理笔数（已入库小计）<\/label><strong>22000/);assert.match(html,/昨日已入库 40000 笔/);assert.match(html,/暂不计算涨跌/);assert.doesNotMatch(html,/withdraw-delta|data-comparison-baseline="matched-platforms"/);assert.equal(h.page.state.data.totals.total,22000);assert.equal(h.page.state.data.previousTotals.total,40000);assert.deepEqual(data,before);assert.equal(h.calls.length,1);h.draw();assert.equal(h.calls.length,1,'display never retries automatically');assert.equal(h.calls[0].successStartAt,h.calls[0].startAt);assert.equal(h.calls[0].successEndAt,h.calls[0].endAt);assert.equal(h.L.successFrom,'');assert.equal(h.L.successTo,'');const table=h.tables.at(-1);assert.match(table.headers.join(''),/已入库小计/);assert.doesNotMatch(JSON.stringify(table.rows.map(r=>r.slice(0,view==='auto_withdraw'?10:8))),/withdraw-delta| pp/,'volume/share comparisons cannot use stale subtotals');assert.match(JSON.stringify(table.rows),/−400\.00 秒/,'same-basis processing samples retain their separate observed duration comparison');assert.match(JSON.stringify(table.rows),/昨日已入库/);assert.match(JSON.stringify(h.page.exportMeta()),/已入库小计/);
+ test(view+' keeps the old snapshot and timestamp while restoring observed platform comparisons',async()=>{
+  const data=payload(),before=clone(data),h=fixture(data,view);await h.page.load();const html=h.html(),table=h.tables.at(-1);
+  assert.match(html,/更新失败 · 已入库小计/);assert.match(html,/统计生成于 2026-10-21 15:53:03（Asia\/Kolkata）/);assert.match(html,/按同平台、同口径的已入库记录计算，不代表全天完整数据/);
+  assert.match(html,view==='auto_withdraw'?/总笔数<\/label><strong>22000/:/处理笔数<\/label><strong>22000/);
+  assert.doesNotMatch(html,/暂不计算涨跌/);assert.doesNotMatch(table.headers.join(''),/已入库小计/);assert.match(JSON.stringify(table.rows),/ pp/);assert.match(JSON.stringify(table.rows),/−400\.00 秒/);
+  if(view==='auto_withdraw')assert.match(html,/-45\.00%.*同 1 平台/);
+  assert.equal(h.page.state.data.totals.total,22000);assert.equal(h.page.state.data.previousTotals.total,40000);assert.deepEqual(data,before);h.draw();assert.equal(h.calls.length,1,'render never re-queries');
+  assert.equal(h.L.successFrom,'');assert.equal(h.L.successTo,'');assert.match(JSON.stringify(h.page.exportMeta()),/已入库小计/);assert.match(JSON.stringify(h.page.exportMeta()),/同平台、同口径/);
  });
- test(view+' no publication/source metadata stays unknown and does not resurrect the old observed-percent path',async()=>{
-  const data=payload();delete data.prepared;delete data.arCoverage;delete data.comparison;data.rows.forEach(r=>{delete r.complete;delete r.previous.complete;});const h=fixture(data,view);await h.page.load();assert.match(h.html(),/完整性未核验 · 已入库小计/);assert.match(h.html(),/统计生成时间未提供/);assert.match(h.html(),/昨日已入库 40000 笔/);assert.doesNotMatch(h.html(),/withdraw-delta|matched-platforms/);
+ test(view+' false or missing source proof remains unknown without blocking observed arithmetic',async()=>{
+  for(const change of [d=>{delete d.prepared;delete d.arCoverage;delete d.comparison;},d=>{d.prepared.sourceComplete=false;delete d.sourceComplete;},d=>{d.prepared.expiresAt='2026-10-21T10:33:03Z';},d=>{d.comparison.complete=false;}]){
+   const data=complete(payload());change(data);const before=clone(data),h=fixture(data,view);await h.page.load();assert.match(JSON.stringify(h.tables.at(-1).rows),/ pp/);assert.doesNotMatch(h.html(),/暂不计算涨跌/);assert.deepEqual(data,before);
+  }
  });
- test(view+' fresh calculation with false collection proof is still a subtotal',async()=>{
-  const data=complete(payload());data.prepared.sourceComplete=false;delete data.sourceComplete;const h=fixture(data,view);await h.page.load();assert.match(h.html(),/完整性未核验 · 已入库小计/);assert.doesNotMatch(h.html(),/withdraw-delta|matched-platforms/);assert.equal(h.page.state.data.rows[0].success,21000);if(view==='auto_withdraw')assert.match(h.html(),/95\.45%/,'current success share keeps the existing stored denominator');
- });
- test(view+' a contradictory fresh label cannot make an expired snapshot current',async()=>{
-  const data=complete(payload());data.prepared.expiresAt='2026-10-21T10:33:03.093697Z';const h=fixture(data,view);await h.page.load();assert.match(h.html(),/待更新 · 已入库小计/);assert.doesNotMatch(h.html(),/withdraw-delta|matched-platforms/);
- });
- test(view+' explicit fresh complete sources and comparable windows retain valid comparisons',async()=>{
-  const h=fixture(complete(payload()),view);await h.page.load();assert.doesNotMatch(h.html(),/已入库小计/);assert.match(h.html(),/withdraw-delta/);assert.equal(h.page.state.data.totals.total,22000);assert.equal(h.page.state.data.previousTotals.total,40000);
- });
- test(view+' fresh verified current source with an unverified prior keeps prior values without growth',async()=>{
-  const data=complete(payload());data.comparison.complete=false;const h=fixture(data,view);await h.page.load();assert.match(h.html(),/昨日已入库 40000 笔/);assert.doesNotMatch(h.html(),/withdraw-delta|matched-platforms/);
+ test(view+' explicit fresh complete sources retain comparisons and do not gain an unknown label',async()=>{
+  const h=fixture(complete(payload()),view);await h.page.load();assert.doesNotMatch(h.html(),/已入库小计/);assert.match(h.html(),/withdraw-delta/);assert.equal(h.page.state.data.previousTotals.total,40000);
  });
 }
-test('unavailable previous metric is never replaced with zero while actual zero remains visible',async()=>{
- const data=payload();data.previousTotals.total=null;data.rows[0].previous.total=null;data.totals.total=0;data.rows[0].total=0;const h=fixture(data);await h.page.load();assert.match(h.html(),/总笔数（已入库小计）<\/label><strong>0/);assert.match(h.html(),/昨日已入库 —/);assert.doesNotMatch(h.html(),/昨日已入库 0 笔|NaN|Infinity/);
+test('unavailable previous metric is not zero and no valid matched platform cannot fall back to global totals',async()=>{
+ const data=payload();data.rows[0].previous.total=null;data.previousTotals.total=90000;data.totals.total=0;data.rows[0].total=0;const h=fixture(data);await h.page.load();assert.match(h.html(),/总笔数<\/label><strong>0/);assert.match(h.html(),/无同平台、同口径的昨日对比值/);assert.doesNotMatch(h.html(),/NaN|Infinity|-100\.00%/);
 });
-test('all source coverage families including NPG can veto a contradictory complete publication',async()=>{
- for(const name of ['wgCoverage','yashCoverage','newarCoverage','arCoverage','duoliCoverage','npgCoverage']){const data=complete(payload());data[name]={currentComplete:false,previousComplete:true,complete:false};const h=fixture(data);await h.page.load();assert.match(h.html(),/已入库小计/,name);assert.doesNotMatch(h.html(),/withdraw-delta|matched-platforms/,name);}
+test('all coverage families keep false source proof while permitting matched observed growth',async()=>{
+ for(const name of ['wgCoverage','yashCoverage','newarCoverage','arCoverage','duoliCoverage','npgCoverage']){const data=complete(payload());data[name]={currentComplete:false,previousComplete:true,complete:false};const before=clone(data),h=fixture(data);await h.page.load();assert.match(h.html(),/已入库小计/,name);assert.match(h.html(),/-45\.00%/,name);assert.deepEqual(data,before);}
 });
-
-test('explicit contradictory false collection proof and prior row proof veto growth',async()=>{
- for(const change of [d=>{d.prepared.sourceComplete=false;},d=>{d.sourceComplete=false;},d=>{d.rows[0].previous.complete=false;}]){const data=complete(payload());change(data);const h=fixture(data);await h.page.load();assert.doesNotMatch(h.html(),/withdraw-delta|matched-platforms/);assert.match(h.html(),/昨日已入库 40000 笔/);}
+test('cross-platform, country, source, account or explicit statistic basis never enters row or summary deltas',async()=>{
+ for(const [key,value]of Object.entries({platform:'OTHER',country:'其他',source:'NEWAR',statisticBasis:'success_date',account:'other'})){
+  const data=complete(payload());data.rows[0].statisticBasis='applied_at_current_status';data.rows[0].account='same';data.rows[0].previous[key]=value;data.previousTotals.total=20000;
+  const h=fixture(data);await h.page.load();assert.match(h.html(),/无同平台、同口径的昨日对比值/);assert.doesNotMatch(h.html(),/data-comparison-baseline="matched-platforms"/);
+  assert.doesNotMatch(JSON.stringify(h.tables.at(-1).rows),/withdraw-delta| pp/);assert.equal(h.page.state.data.previousTotals.total,20000);
+ }
 });
-
-test('fresh labels with missing or invalid publication proof remain unverified',async()=>{
- for(const change of [d=>{delete d.prepared.computedAt;},d=>{d.prepared.computedAt='invalid';},d=>{delete d.prepared.expiresAt;},d=>{d.prepared.expiresAt='invalid';},d=>{d.prepared.expiresAt=d.prepared.computedAt;},d=>{d.prepared.calculationComplete=false;},d=>{delete d.prepared.calculationComplete;}]){const data=complete(payload());change(data);const h=fixture(data);await h.page.load();assert.match(h.html(),/已入库小计/);assert.match(h.html(),/昨日已入库 40000 笔/);assert.doesNotMatch(h.html(),/withdraw-delta|matched-platforms/);}
+test('unfinished calculation is distinct from missing source proof and does not enter comparisons',async()=>{
+ for(const v of [false,undefined]){const data=complete(payload());if(v===undefined)delete data.prepared.calculationComplete;else data.prepared.calculationComplete=v;const h=fixture(data);await h.page.load();assert.match(h.html(),/统计尚未完成/);assert.doesNotMatch(h.html(),/withdraw-delta|matched-platforms/);assert.doesNotMatch(JSON.stringify(h.tables.at(-1).rows),/withdraw-delta| pp/);}
 });

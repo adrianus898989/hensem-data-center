@@ -1,0 +1,21 @@
+{
+  "private.dashboard_admin_live_sync_health_rows(timestamp with time zone)": {
+    "acl": "{postgres=X/postgres}",
+    "args": "p_asof timestamp with time zone",
+    "cost": 100,
+    "rows": 1000,
+    "owner": "postgres",
+    "config": [
+      "search_path=\"\"",
+      "jit=off"
+    ],
+    "result": "TABLE(country text, team text, platform text, platform_id uuid, source_system text, source_kind text, dataset text, direction text, data_date date, timezone text, status text, received boolean, evidence text, last_received_at timestamp with time zone)",
+    "strict": false,
+    "bodyMd5": "4663607462d2f1461b90785bec7c88fa",
+    "language": "plpgsql",
+    "parallel": "u",
+    "leakproof": false,
+    "volatility": "s",
+    "securityDefiner": true
+  }
+}

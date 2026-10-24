@@ -43,8 +43,11 @@ test('classification annotation requires explicit AR statistic basis and does no
  const f=await fixture(row({durationBasis:'created_to_completed',previous:prior({durationBasis:'created_to_completed'})})),cells=f.draw().table.rows[0];assert.match(cells[9],/分类口径不同/);assert.match(cells[12],/已观察用时差/);
 });
 test('absent, invalid, mismatched and multi-day server dates do not fabricate a classification-basis claim',async()=>{
+ for(const key of ['startDate','previousStartDate']){
+  const f=await fixture(row({previous:prior()}));delete f.page.state.data[key];const cells=f.draw().table.rows[0];assert.match(cells[9],/\+20\.00 pp/);assert.doesNotMatch(cells[9],/分类口径不同/);
+ }
  for(const dates of [{startDate:undefined},{previousStartDate:undefined},{endDate:'2026-10-11'},{previousEndDate:'2026-10-08'},{previousStartDate:'2026-10-08',previousEndDate:'2026-10-08'},{startDate:'2026-02-30',endDate:'2026-02-30',previousStartDate:'2026-02-28',previousEndDate:'2026-02-28'},{startDate:'2026-10-10T00:00:00Z'},{previousEndDate:null}]){
-  const f=await fixture(row({previous:prior()}),dates),cells=f.draw().table.rows[0];assert.match(cells[9],/\+20\.00 pp/);assert.doesNotMatch(cells[9],/分类口径不同/);
+  const f=await fixture(row({previous:prior()}),dates),cells=f.draw().table.rows[0];assert.match(cells[9],/两期日期范围不一致/);assert.doesNotMatch(cells[9],/分类口径不同|withdraw-delta| pp/);
  }
  for(const dataDate of [undefined,'2026-02-30','2026-10-10T00:00:00Z']){const f=await fixture(row({dataDate,previous:prior()}),{},{daily:true});assert.doesNotMatch(f.draw().table.rows[0][10],/分类口径不同/);}
  const f=await fixture(row({previous:prior()}));f.L.from=f.L.to='2026-10-11';assert.match(f.draw().table.rows[0][9],/分类口径不同/,'read response dates determine basis rather than edited query inputs');

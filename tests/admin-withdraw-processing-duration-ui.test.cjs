@@ -22,15 +22,15 @@ test('absent time samples remain unknown without a fabricated zero duration or c
  const current=row({avgSeconds:null,durationSampleCount:0,durationTotalSeconds:null,previous:row()}),f=setup({rows:[current],total:1,totals:current});f.page.render();
  const t=f.tables.find(t=>t.headers.some(h=>h.includes('平均处理用时')));assert.equal(t.rows[0][10],'—');assert.equal(t.rows[0][12],'—');
 });
-test('AR unverified rates retain prior values without growth while different duration bases stay incomparable',()=>{
+test('AR observed rates restore percentage-point differences while different duration bases stay incomparable',()=>{
  const previous=row({total:200,autoCount:120,manualCount:80,avgSeconds:1567.860932,durationBasis:'source_reported_processing'});
  const current=row({source:'AR',total:100,autoCount:40,manualCount:50,unclassifiedCount:10,avgSeconds:3351,durationBasis:'applied_to_completed',comparisonComparable:false,previous});
  const f=setup({rows:[current],total:1,totals:current,comparison:{complete:false},arCoverage:{coverageBasis:'unverified_source_continuity',currentComplete:false,previousComplete:false}}),html=f.page.render();
  const t=f.tables.find(t=>t.headers.some(h=>h.includes('昨日处理用时')));
  assert.match(t.rows[0][1],/未分类 10 笔/);assert.match(t.rows[0][11],/26分8秒/);assert.match(t.rows[0][11],/原日报提供的处理用时/);
- assert.match(t.rows[0][8],/昨日已入库 60\.00%/);assert.match(t.rows[0][9],/昨日已入库 40\.00%/);
- assert.doesNotMatch(t.rows[0][8],/ pp|withdraw-delta/);assert.doesNotMatch(t.rows[0][9],/ pp|withdraw-delta/);
- for(const i of [8,9])assert.match(t.rows[0][i],/暂不计算涨跌/);
+ assert.match(t.rows[0][8],/昨日 60\.00%/);assert.match(t.rows[0][9],/昨日 40\.00%/);
+ assert.match(t.rows[0][8],/-20\.00 pp/);assert.match(t.rows[0][9],/\+10\.00 pp/);
+ for(const i of [8,9])assert.doesNotMatch(t.rows[0][i],/暂不计算涨跌/);
  assert.doesNotMatch(t.rows[0][12],/withdraw-delta| pp/);assert.doesNotMatch(t.rows[0].join(''),/AR 两期完整性/);
  assert.match(t.rows[0][12],/口径不同.*口径不同|不计算涨跌.*口径不同/);assert.match(html,/已入库小计/);
  assert.equal(current.previous,previous);assert.equal(current.total,100);
