@@ -466,7 +466,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   }
 
   async function loadAudit() {
-    if (!canViewAudit) return;
+    if (accountsOnlyLoading || !canViewAudit) return;
     try { setLogs(await listDashboardAudit(session, 300)); }
     catch (error) { setMessage(error instanceof Error ? error.message : "读取操作记录失败"); }
   }

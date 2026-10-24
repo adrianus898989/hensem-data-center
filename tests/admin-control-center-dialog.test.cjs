@@ -24,13 +24,13 @@ function ui(options={}){
   if(name==='./AccountAssignedRoleDialog')return{default:function AccountAssignedRoleDialog(){}};
   if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};
   if(name==='./AccountPermissionDialog')return{default:function AccountPermissionDialog(){}};
-  if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async()=>{calls.push({action:'list'});return options.list?options.list():options.users||[owner,brazil,india]},listDashboardAudit:async()=>{calls.push({action:'audit'});return[]},createDashboardRoleAccount:async(...args)=>{calls.push({action:'create',args:plain(args)});return options.create?options.create(...args):{account:{username:args[1],role_name:EMPTY_ROLE.name}}},updateDashboardAccount:async(...args)=>{calls.push({action:'update',args:plain(args)});if(options.update)return options.update(...args)},resetDashboardUserPassword:async(...args)=>calls.push({action:'password',args:plain(args)})};
+  if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async()=>{calls.push({action:'list'});return options.list?options.list():options.users||[owner,brazil,india]},listDashboardAudit:async(...args)=>{calls.push({action:'audit'});return options.audit?options.audit(...args):[]},createDashboardRoleAccount:async(...args)=>{calls.push({action:'create',args:plain(args)});return options.create?options.create(...args):{account:{username:args[1],role_name:EMPTY_ROLE.name}}},updateDashboardAccount:async(...args)=>{calls.push({action:'update',args:plain(args)});if(options.update)return options.update(...args)},resetDashboardUserPassword:async(...args)=>calls.push({action:'password',args:plain(args)})};
   if(name.endsWith('/dashboardRoleDisplay'))return require('./load-role-display.cjs');
   if(name.endsWith('/dashboardRoleClient'))return{dashboardRolePages:require('../src/lib/dashboardRoleCatalog.json').pages,dashboardRoleRequest:async(...args)=>{roleCalls.push(plain(args));return options.roles?options.roles():{roles:[EMPTY_ROLE,VIP_ROLE],accounts:(options.users||[owner,brazil,india]).map(account=>({...account,role_id:null,assignment_version:0}))}}};
   if(name.startsWith('@/lib/'))return loadTs(path.join(root,'src/lib',name.slice(6)+'.ts'));
   throw Error('Unexpected module: '+name);
  }});
- const draw=()=>{cursor=ecursor=0;return mod.exports.default({open:true,session:currentSession,profile:actor,onClose(){},section:options.section||'accounts',embedded:true,accountsOnlyLoading:true,manualQuery:options.manualQuery,roleAccess})};
+ const draw=()=>{cursor=ecursor=0;return mod.exports.default({open:true,session:currentSession,profile:actor,onClose(){},section:options.section||'accounts',embedded:true,accountsOnlyLoading:options.accountsOnlyLoading!==false,manualQuery:options.manualQuery,roleAccess})};
  const all=()=>nodes(draw());
  const button=(label,within)=>{const node=nodes(within||draw()).find(n=>n.type==='button'&&text(n)===label);assert(node,'button '+label);return node};
  const field=(label)=>{const wrap=all().find(n=>n.type==='div'&&n.props.className?.includes('admin-search-field')&&nodes(n).some(c=>c.type==='label'&&text(c)===label));assert(wrap,'filter '+label);return nodes(wrap).find(n=>['select','input'].includes(n.type))};
@@ -110,6 +110,40 @@ test('account or scope changes invalidate old directory responses and require an
 
 test('a late older query cannot replace a newer successful directory',async()=>{
  const resolves=[];const h=ui({manualQuery:true,list:()=>new Promise(r=>resolves.push(r))});const query=h.button('查询账号').props.onClick;query();query();resolves[1]([india]);await flush();resolves[0]([brazil]);await flush();assert.match(text(h.rows()),/india-fixture/);assert.doesNotMatch(text(h.rows()),/brazil-fixture/);
+});
+
+test('accounts-only save keeps success feedback and never reads unused audit records',async()=>{
+ const h=ui({manualQuery:true,audit:()=>Promise.reject(Error('unused audit failure'))});
+ await h.button('查询账号').props.onClick();await flush();h.button('账号设置',h.rows().find(row=>text(row).includes(brazil.username))).props.onClick();
+ const saved=await h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave({data_scope:BR});await flush();
+ assert.equal(saved,true);assert.equal(h.calls.filter(c=>c.action==='update').length,1);assert.equal(h.calls.filter(c=>c.action==='audit').length,0);
+ assert.match(text(h.draw()),/brazil-fixture 已更新/);assert.doesNotMatch(text(h.draw()),/unused audit failure/);h.dispose();
+});
+
+test('full account management keeps its authorized post-save audit read and error feedback',async()=>{
+ const h=ui({manualQuery:true,accountsOnlyLoading:false,audit:()=>Promise.reject(Error('actual audit failure'))});
+ await h.button('查询账号').props.onClick();await flush();h.button('账号设置',h.rows().find(row=>text(row).includes(brazil.username))).props.onClick();
+ await h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave({data_scope:BR});await flush();
+ assert.equal(h.calls.filter(c=>c.action==='audit').length,1);assert.match(text(h.draw()),/actual audit failure/);h.dispose();
+});
+
+test('full audit surface still reads records explicitly and retains its permission guard',async()=>{
+ const log={id:1,created_at:'2026-10-24T01:00:00Z',actor_username:'synthetic-auditor',target_username:'synthetic-target',action:'synthetic-action',details:{}};
+ const h=ui({actor:{...owner,role:'admin',management_permissions:{manage_viewers:true}},roleAccess:{mode:'assigned',roleId:'synthetic-role',canView:true,permissions:['access.view','operation_logs.view']},manualQuery:true,accountsOnlyLoading:false,section:'audit',audit:async()=>[log]});
+ await h.button('刷新记录').props.onClick();await flush();assert.equal(h.calls.filter(c=>c.action==='audit').length,1);assert.match(text(h.draw()),/synthetic-auditor/);
+ h.role({mode:'assigned',roleId:'synthetic-role',canView:true,permissions:['access.view']});
+ assert(!h.all().some(n=>n.type==='button'&&text(n)==='刷新记录'));assert.equal(h.calls.filter(c=>c.action==='audit').length,1);
+ h.dispose();
+});
+
+for(const replacement of ['account','permissions'])test('accounts-only pending save cannot restore old feedback after '+replacement+' replacement',async()=>{
+ let complete;const h=ui({manualQuery:true,update:()=>new Promise(resolve=>complete=resolve),audit:()=>Promise.reject(Error('unused audit failure'))});
+ await h.button('查询账号').props.onClick();await flush();h.button('账号设置',h.rows().find(row=>text(row).includes(brazil.username))).props.onClick();
+ const saving=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave({data_scope:BR});
+ if(replacement==='account')h.actor({...owner,auth_user_id:'synthetic-new-account',username:'new-account'});
+ else h.role({mode:'assigned',roleId:'synthetic-narrow-role',canView:true,permissions:['access.view']});
+ complete();assert.equal(await saving,false);await flush();assert.equal(h.calls.filter(c=>c.action==='audit').length,0);
+ assert.doesNotMatch(text(h.draw()),/brazil-fixture 已更新|unused audit failure/);assert.match(text(h.draw()),/尚未查询账号/);h.dispose();
 });
 
 
