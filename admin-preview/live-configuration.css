@@ -89,6 +89,8 @@ body.live-admin .withdraw-delta.flat{background:#f0f3f8;color:#7788a5}
 body.live-admin .withdraw-row-actions{display:flex;gap:5px;align-items:center;flex-wrap:nowrap;width:max-content;min-width:0;max-width:none}
 body.live-admin .withdraw-row-actions .withdraw-reject-button{border-color:#e8c6ca;color:#b24d58}
 body.live-admin .withdraw-header-actions{display:flex;gap:6px;margin-left:auto}
+body.live-admin .withdraw-auto-kpi-panel>.withdraw-header-actions{justify-content:flex-end;padding:8px 12px 0}
+body.live-admin .withdraw-auto-kpi-panel>.withdraw-kpis{padding-top:0}
 body.live-admin .withdraw-source-note{display:block;max-width:620px;padding:0;border:0;background:transparent;color:#315cd3;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font:inherit;cursor:pointer}
 body.live-admin .withdraw-source-note:hover{text-decoration:underline}
 body.live-admin .withdraw-original-backdrop{position:fixed;inset:0;z-index:320;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(16,31,62,.38)}
@@ -549,11 +551,9 @@ body.live-admin .deposit-group-compact.deposit-summary-preview small{font-size:1
 
 /* Withdrawal source notes stay available without displacing the report. */
 body.live-admin .withdraw-coverage-details{margin:8px 0 10px;border:1px solid #e3eaf5;border-radius:7px;background:#fff}
-body.live-admin :is(.withdraw-coverage-details,.withdraw-scope-details)>summary{padding:8px 12px;color:#647b9c;font-size:11px;line-height:1.5;cursor:pointer;overflow-wrap:anywhere}
+body.live-admin .withdraw-coverage-details>summary{padding:8px 12px;color:#647b9c;font-size:11px;line-height:1.5;cursor:pointer;overflow-wrap:anywhere}
 body.live-admin .withdraw-coverage-details>summary span{margin-left:8px;color:#8395af}
 body.live-admin .withdraw-coverage-content{border-top:1px solid #edf1f8}
 body.live-admin .withdraw-coverage-content .live-panel-note{margin:0;padding:8px 12px;line-height:1.65}
-body.live-admin .withdraw-scope-details{border-top:1px solid #edf1f8}
-body.live-admin .withdraw-scope-details .live-panel-note{margin:0;padding:0 12px 10px;line-height:1.65}
 body.live-admin .withdraw-observed-comparison .withdraw-delta{font-variant-numeric:tabular-nums}
 body.live-admin .withdraw-comparison-scope{color:#8294ad;font-size:10px}

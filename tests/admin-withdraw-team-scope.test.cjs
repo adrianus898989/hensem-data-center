@@ -52,7 +52,7 @@ test('incomplete aggregate coverage does not erase existing previous totals or t
    assert.match(cards,new RegExp(message));assert.doesNotMatch(cards,/对比日期暂无数据|withdraw-delta|NaN|Infinity/);
    assert.match(html,/-5\.00 pp/,'observed same-platform rate difference does not assert complete collection');assert.match(html,/昨日 80%/);
    assert.equal(f.page.state.data.previousTotals,previous,'rendering keeps the provided previous-period values');
-   if(view==='auto_withdraw'){assert.match(html,/前期有记录 17 \/ 17 平台/);assert.doesNotMatch(html,/昨日覆盖 17/);}
+   if(view==='auto_withdraw'){assert.equal(f.page.state.data.comparison.matchedRows,17);assert.equal(f.page.state.data.comparison.totalRows,17);assert.doesNotMatch(html,/withdraw-scope-details/);assert.doesNotMatch(html,/昨日覆盖 17/);}
   }
  }
 });
@@ -65,7 +65,7 @@ test('comparison messages distinguish unavailable coverage from genuinely absent
 test('all current platforms can have prior records while the previous scope contains an extra platform',async()=>{
  const f=fixture();f.L.from='2026-09-25T00:00:00';await f.page.load();
  Object.assign(f.page.state.data,{totals:{total:126571,platforms:17,unclassifiedCount:7835},previousTotals:{total:140000,platforms:18},comparison:{complete:false,matchedRows:17,totalRows:17},newarCoverage:{currentComplete:true,previousComplete:true},yashCoverage:{currentComplete:true,previousComplete:true}});
- const html=f.page.render(),cards=html.split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/两期平台范围不一致（当期17\/前期18），汇总暂不比较/);assert.doesNotMatch(cards,/对比日期暂无数据|withdraw-delta/);assert.match(html,/前期有记录 17 \/ 17 平台/);assert.match(html,/未分处理方式 7835 笔/);
+ const html=f.page.render(),cards=html.split('withdraw-kpis')[1].split('</section>')[0];assert.match(cards,/两期平台范围不一致（当期17\/前期18），汇总暂不比较/);assert.doesNotMatch(cards,/对比日期暂无数据|withdraw-delta/);assert.equal(f.page.state.data.comparison.matchedRows,17);assert.equal(f.page.state.data.comparison.totalRows,17);assert.doesNotMatch(html,/withdraw-scope-details/);assert.match(html,/未分处理方式 7835 笔/);
 });
 test('unverified AR raw continuity is not mistaken for an absent previous day or certified completeness',async()=>{
  const f=fixture();f.L.from='2026-09-25T00:00:00';await f.page.load();
