@@ -137,7 +137,7 @@
     "name": "dashboard_admin_live_withdraw_reasons",
     "signature": "private.dashboard_admin_live_withdraw_reasons(jsonb)",
     "old_hash": "ca80e97796cd780b93e77f6e5dcb02dd",
-    "new_hash": "4084247b43b1a5034697c028fd7c7743",
+    "new_hash": "7aebd2364163db75318c3fe60744ca70",
     "metadata": {
       "proacl": [
         "postgres=X/postgres",
@@ -209,50 +209,6 @@
       ],
       "proargtypes": [
         "3802",
-        "3802",
-        "3802"
-      ],
-      "proisstrict": false,
-      "proparallel": "u",
-      "protrftypes": null,
-      "provariadic": "0",
-      "provolatile": "s",
-      "proleakproof": false,
-      "proallargtypes": null,
-      "proargdefaults": null,
-      "pronargdefaults": 0
-    },
-    "language": "plpgsql"
-  },
-  {
-    "name": "dashboard_admin_wg_withdraw_reasons",
-    "signature": "private.dashboard_admin_wg_withdraw_reasons(jsonb,jsonb)",
-    "old_hash": "bcd4383775c2d02894bcfa64d3a31a3b",
-    "new_hash": "32ea21f45f1e1c8bf940dd5c3878baef",
-    "metadata": {
-      "proacl": [
-        "postgres=X/postgres"
-      ],
-      "probin": null,
-      "procost": 100,
-      "prokind": "f",
-      "proname": "dashboard_admin_wg_withdraw_reasons",
-      "prorows": 0,
-      "pronargs": 2,
-      "proconfig": [
-        "search_path=\"\""
-      ],
-      "proretset": false,
-      "prosecdef": true,
-      "prorettype": "3802",
-      "prosqlbody": null,
-      "prosupport": "-",
-      "proargmodes": null,
-      "proargnames": [
-        "p_request",
-        "p_scope"
-      ],
-      "proargtypes": [
         "3802",
         "3802"
       ],
@@ -646,10 +602,56 @@
     "language": "plpgsql"
   },
   {
+    "name": "withdraw_reason_wg_atomic",
+    "signature": "private.withdraw_reason_wg_atomic(jsonb,jsonb)",
+    "old_hash": null,
+    "new_hash": "1ed5c62aab4fbf6c04e7c6f1b63a9564",
+    "metadata": null,
+    "language": null,
+    "helper_metadata": {
+      "proacl": [
+        "postgres=X/postgres"
+      ],
+      "probin": null,
+      "procost": 100,
+      "prokind": "f",
+      "proname": "withdraw_reason_wg_atomic",
+      "prorows": 0,
+      "pronargs": 2,
+      "proconfig": [
+        "search_path=\"\""
+      ],
+      "proretset": false,
+      "prosecdef": false,
+      "prorettype": "3802",
+      "prosqlbody": null,
+      "prosupport": "-",
+      "proargmodes": null,
+      "proargnames": [
+        "p_request",
+        "p_scope"
+      ],
+      "proargtypes": [
+        "3802",
+        "3802"
+      ],
+      "proisstrict": false,
+      "proparallel": "u",
+      "protrftypes": null,
+      "provariadic": "0",
+      "provolatile": "s",
+      "proleakproof": false,
+      "proallargtypes": null,
+      "proargdefaults": null,
+      "pronargdefaults": 0
+    },
+    "helper_language": "plpgsql"
+  },
+  {
     "name": "withdraw_reason_parent_current",
     "signature": "private.withdraw_reason_parent_current()",
     "old_hash": "e14416a8be1955d4c6ef143aec73ab64",
-    "new_hash": "b14e97abe66e56716b0093122de29ce1",
+    "new_hash": "81bf799268f67dfbc7fc352729432739",
     "metadata": {
       "proacl": [
         "postgres=X/postgres"

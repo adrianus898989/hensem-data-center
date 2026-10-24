@@ -34,7 +34,11 @@ begin
   or v_offset>1000000 or v_limit not in(20,30,50,100,500) then raise exception using errcode='22023',message='invalid_filter';end if;
  if not private.dashboard_scope_allows(v_scope,v_country,v_platform) then raise exception using errcode='42501',message='scope_denied';end if;
  -- wg_existing_reasons_v1: existing request validation and scope checks ran above.
- v_rows:=private.dashboard_admin_wg_withdraw_reasons(p_request,v_scope);
+ if v_kind in('blocking','blockingOrders','blockingVariants')then
+  v_rows:=private.withdraw_reason_wg_atomic(p_request,v_scope);
+ else
+  v_rows:=private.dashboard_admin_wg_withdraw_reasons(p_request,v_scope);
+ end if;
  if v_rows is not null then return v_rows;end if;
  select * into v_meta from private.dashboard_admin_live_platforms() p where p.country=v_country
    and (private.dashboard_admin_live_withdraw_key(p.name)=private.dashboard_admin_live_withdraw_key(v_platform)
