@@ -17,9 +17,15 @@ test('complete NewAR coverage is shown without changing current order statistics
 });
 test('partial, absent, duplicate and previous-only day lists cannot claim completion',()=>{
  for(const days of [[],[day('MAANWIN','2026-10-09',false)],[day(),day()],[day('MAANWIN','2026-10-08')]]){
-  const html=fixture({newarCoverage:{currentComplete:true,previousComplete:false,days}}).render();
-  assert.match(html,/data-newar-coverage="partial"/);assert.match(html,/显示已入库部分，不能作为完整总计/);assert.match(html,/前期覆盖不完整/);assert.doesNotMatch(html,/所选创建日已完整采集。/);
+  const f=fixture({newarCoverage:{currentComplete:true,previousComplete:false,days}}),html=f.render();
+  assert.match(html,/data-newar-coverage="partial"/);assert.match(html,/显示已入库部分，不能作为完整总计/);assert.match(html,/前期完整性未核验，对比仅代表已入库记录/);assert.doesNotMatch(html,/所选创建日已完整采集。/);assert.equal(f.page.state.data.newarCoverage.previousComplete,false);
  }
+});
+test('incomplete NewAR source coverage preserves observed same-platform deltas and explicit proof flags',()=>{
+ const previous={...row,total:8,success:2,rejected:1,autoCount:2,manualCount:3,unclassifiedCount:3,complete:false},current={...row,complete:false,previous};
+ const f=fixture({rows:[current],totals:current,previousTotals:previous,previousStartDate:'2026-10-08',previousEndDate:'2026-10-08',sourceComplete:false,comparison:{complete:false},newarCoverage:{currentComplete:false,previousComplete:false,days:[day('MAANWIN','2026-10-09',false)]}}),before=JSON.stringify(f.page.state.data),html=f.render();
+ assert.match(f.table().rows[0][4],/50\.00%.*昨日 25\.00%.*\+25\.00 pp/);assert.match(f.table().rows[0][8],/30\.00%.*昨日 25\.00%.*\+5\.00 pp/);
+ assert.match(html,/data-withdraw-publication="subtotal"/);assert.match(html,/数值与涨跌按同平台、同口径的已入库记录计算，不代表全天完整数据/);assert.match(html,/data-newar-coverage="partial"/);assert.match(html,/前期完整性未核验，对比仅代表已入库记录/);assert.doesNotMatch(html,/所选创建日已完整采集/);assert.equal(JSON.stringify(f.page.state.data),before);
 });
 test('every platform must cover all selected creation dates',()=>{
  const days=[day('MAANWIN','2026-10-08'),day(),day('DhaniWin')];
