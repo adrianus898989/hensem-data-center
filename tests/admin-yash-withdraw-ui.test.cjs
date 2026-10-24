@@ -57,9 +57,9 @@ test('same-query refresh is deduplicated, disables query controls and preserves 
 test('editing dates keeps the applied result before a new request and a failure cannot relabel it as the new day',async()=>{
  const data={startDate:'2026-10-08',endDate:'2026-10-08',rows:[yash({platform:'OLD-DAY-SYNTHETIC'})],total:1,totals:yash()},pending=deferred();let changed=false;
  const f=fixture({},false,()=>changed?pending.promise:data);await f.page.load();assert.match(f.render(),/OLD-DAY-SYNTHETIC/);
- f.root.withdrawDate('from','2026-10-09');f.root.withdrawDate('to','2026-10-09');assert.match(f.render(),/OLD-DAY-SYNTHETIC/);assert.match(f.render(),/筛选条件已修改/);assert.match(f.render(),/2026-10-08 至 2026-10-08/);
+ f.root.withdrawDate('from','2026-10-09');f.root.withdrawDate('to','2026-10-09');assert.match(f.render(),/OLD-DAY-SYNTHETIC/);assert.match(f.render(),/筛选条件已修改/);assert.equal(f.page.state.data.startDate,'2026-10-08');assert.equal(f.page.state.applied.query.startAt,'2026-10-08T00:00:00.000Z');
  changed=true;const next=f.page.load();assert.equal(f.page.state.data.startDate,'2026-10-08');assert.match(f.render(),/OLD-DAY-SYNTHETIC|上次成功结果/);assert.equal(f.requests.at(-1).startAt,'2026-10-09T00:00:00.000Z');
- pending.reject(Error('synthetic request timeout'));await next;const html=f.render();assert.match(html,/synthetic request timeout/);assert.match(html,/OLD-DAY-SYNTHETIC/);assert.match(html,/查询失败，上次成功结果已保留/);assert.match(html,/2026-10-08 至 2026-10-08/);assert.equal(f.page.state.data.startDate,'2026-10-08');
+ pending.reject(Error('synthetic request timeout'));await next;const html=f.render();assert.match(html,/synthetic request timeout/);assert.match(html,/OLD-DAY-SYNTHETIC/);assert.match(html,/查询失败，上次成功结果已保留/);assert.doesNotMatch(html,/自动出款日报/);assert.equal(f.page.state.applied.query.startAt,'2026-10-08T00:00:00.000Z');assert.equal(f.page.state.data.startDate,'2026-10-08');
 });
 test('unavailable YASH reasons are explained beside a working daily entry without issuing a reason request',()=>{
  const f=fixture();f.render();const actions=f.stats().rows[0].at(-1);
@@ -71,19 +71,19 @@ test('an unavailable reason response does not inherit AR manual or system classi
  const html=f.render();assert.match(html,/不能推定为无原因/);assert.doesNotMatch(html,/排除 system|人工操作均计入|当前条件下没有人工拦截订单/);
 });
 test('YASH coverage reports complete creation days and formats latest collection in India time',()=>{
- const f=fixture({yashCoverage:{days:[{date:'2026-10-08',complete:true,total:100}],currentComplete:true,previousComplete:true,latestCollectedAt:'2026-10-09T00:00:00Z'}}),html=f.render();
+ const f=fixture({yashCoverage:{days:[{date:'2026-10-08',complete:true,total:100}],currentComplete:true,previousComplete:true,latestCollectedAt:'2026-10-09T00:00:00Z'}},true),html=f.render();
  assert.match(html,/data-yash-coverage="complete"/);assert.match(html,/所选创建日已完整采集/);assert.match(html,/5:30:00（印度时间）/);assert.match(html,/按印度当地创建日期统计/);
 });
 test('partial, missing and duplicate coverage days never claim a complete total',()=>{
  for(const days of [[],[{date:'2026-10-08',complete:false}],[{date:'2026-10-07',complete:true}],[{date:'2026-10-08',complete:true},{date:'2026-10-08',complete:true}]]){
-  const f=fixture({yashCoverage:{days,currentComplete:true,previousComplete:false,latestCollectedAt:null}}),html=f.render();assert.match(html,/data-yash-coverage="partial"/);assert.match(html,/不能作为完整总计/);assert.match(html,/前期完整性未核验，对比仅代表已入库记录/);assert.match(html,/最新采集：尚未取得/);assert.doesNotMatch(html,/所选创建日已完整采集/);assert.equal(f.page.state.data.yashCoverage.previousComplete,false);
+  const f=fixture({yashCoverage:{days,currentComplete:true,previousComplete:false,latestCollectedAt:null}},true),html=f.render();assert.match(html,/data-yash-coverage="partial"/);assert.match(html,/不能作为完整总计/);assert.match(html,/前期完整性未核验，对比仅代表已入库记录/);assert.match(html,/最新采集：尚未取得/);assert.doesNotMatch(html,/所选创建日已完整采集/);assert.equal(f.page.state.data.yashCoverage.previousComplete,false);
  }
 });
 test('incomplete YASH source coverage permits observed success-rate deltas without inventing classification or completeness',()=>{
  const previous=yash({dataDate:'2026-10-07',total:80,success:60,complete:false}),current=yash({complete:false,previous});
  const f=fixture({rows:[current],totals:current,previousTotals:previous,previousStartDate:'2026-10-07',previousEndDate:'2026-10-07',sourceComplete:false,comparison:{complete:false},prepared:{status:'ready',freshness:'fresh',calculationComplete:true,computedAt:'2026-10-13T00:00:00Z',expiresAt:'2099-01-01T00:00:00Z',sourceComplete:false},yashCoverage:{days:[{date:'2026-10-08',complete:false}],currentComplete:false,previousComplete:false}}),before=JSON.stringify(f.page.state.data),html=f.render(),row=f.stats().rows[0];
  assert.match(row[4],/80\.00%.*昨日 75\.00%.*\+5\.00 pp/);assert.deepEqual(row.slice(6,8),['—','—']);assert.match(row[8],/对比值未提供/);
- assert.match(html,/data-withdraw-publication="subtotal"/);assert.match(html,/数值与涨跌按同平台、同口径的已入库记录计算，不代表全天完整数据/);assert.match(html,/data-yash-coverage="partial"/);assert.match(html,/前期完整性未核验，对比仅代表已入库记录/);assert.doesNotMatch(html,/所选创建日已完整采集/);assert.equal(JSON.stringify(f.page.state.data),before);
+ assert.match(html,/data-withdraw-publication="subtotal"/);assert.match(html,/数值与涨跌按同平台、同口径的已入库记录计算，不代表全天完整数据/);assert.doesNotMatch(html,/data-yash-coverage|<summary>数据说明/);assert.doesNotMatch(html,/所选创建日已完整采集/);assert.equal(JSON.stringify(f.page.state.data),before);
 });
 test('YASH processing duration uses valid completion samples and does not claim bank arrival',()=>{
  const rows=[yash({durationSampleCount:1,durationTotalSeconds:60}),yash({platform:'YASH-SYNTHETIC',avgSeconds:120,durationSampleCount:3,durationTotalSeconds:360})],f=fixture({rows,total:21});f.render();const t=f.stats();
