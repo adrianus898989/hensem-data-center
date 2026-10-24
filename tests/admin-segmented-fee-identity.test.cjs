@@ -14,7 +14,8 @@ function harness(handler,platform=native){
  const c={Date,console,AbortController,structuredClone,L:{serial:1,catalog:platform?[platform]:[],queryRetrying:false},state:{page:'merchants'},roleAllowed:()=>true,statisticWindowsEnabled:()=>false,isSuccessAnalysis:()=>false,providerDirection:()=>null,isFlowPage:()=>false,orderSource:p=>String(p?.source||'').toLowerCase().replaceAll('_',''),displayIdentity:p=>p};
  c.workordersReadCache=null;c.visibleCatalog=()=>c.L.catalog;
  c.window=c;const calls=[];c.hensemLiveRequest=async q=>{calls.push({...q});return {startAt:q.startAt,endAt:q.endAt,rows:[],...await handler(q,calls.length)}};
- vm.runInNewContext(counts+read+';globalThis.engine={mergeParts,readAggregate,plus,combine};',c);
+ const foreground=source.slice(source.indexOf(' function preemptSyncHealth'),source.indexOf(' function syncHealthContext'));
+ vm.runInNewContext(foreground+counts+read+';globalThis.engine={mergeParts,readAggregate,plus,combine};',c);
  return {...c.engine,c,calls};
 }
 const request={action:'aggregate',view:'providers',platformId:native.id,startAt:'2026-10-02T18:30:00.000Z',endAt:'2026-10-03T18:30:00.000Z',direction:'charge',status:'all',currency:'INR',offset:0,limit:20};

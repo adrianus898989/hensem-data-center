@@ -5,7 +5,8 @@ function harness(){
  root.HensemWorkorderUI.today=()=>({from:'2026-10-04',to:'2026-10-04'});
  const E=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  let html='',handler=q=>({source:'collected-workorders',dimension:q.dimension,summary:{rawRecords:2,duplicateSourceRows:0,uniqueWorkorders:2},kycSummary:{connected:{count:1},disconnected:{count:1},unknown:{count:0}},rows:[{key:'SYNTHETIC',platform:'SYNTHETIC',workOrderId:'000TICKET',paymentOrderId:'RC20260901FIXTURE',amount:'0.00',kycStatus:'connected',manualKyc:'NO',receiptState:'unknown',sourceSystem:'AR',rawRecords:1,sourceCount:2,relatedWorkorderCount:2,sources:[{sourceSystem:'AR',sourcePlatform:'SYNTHETIC-RAW',paymentOrderReferences:['RC20260901FIXTURE','RC-CONFLICT<&'],referenceConflict:true,submittedDate:'2026-10-04',workOrderId:'000TICKET',submittedAt:'2026-10-03T18:30:00Z',observedAt:'2026-10-04T06:00:00Z',amount:'0.00',currency:'INR'}],providerReply:'<img src=x onerror=alert(1)>'}],total:1,coverage:{complete:false,label:'仅含已采集工单，来源覆盖未确认'},sourceManifest:{platforms:[{platform:'SYNTHETIC',system:'AR',selectedWorkorders:2,latestSubmittedDate:'2026-10-04',lastObservedAt:'2026-10-04T06:00:00Z'}]}});
- const panel=root.HensemLiveDepositWorkspace.create({L,E,C:v=>String(v??'—'),N:v=>Number(v).toFixed(2),formatTime:v=>v,table:(h,rows)=>rows.map(r=>r.join('|')).join('\n'),render:()=>{html=panel.render()},request:async q=>{calls.push(JSON.parse(JSON.stringify(q)));return handler(q)},openDrawer:(title,body)=>drawers.push({title,body})});
+ const live=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8'),adapter={window:root};vm.runInNewContext(live.slice(live.indexOf(' function preemptSyncHealth'),live.indexOf(' const previousRender'))+';globalThis.request=foregroundRequest',adapter);root.hensemLiveRequest=async q=>{calls.push(JSON.parse(JSON.stringify(q)));return handler(q)};
+ const panel=root.HensemLiveDepositWorkspace.create({L,E,C:v=>String(v??'—'),N:v=>Number(v).toFixed(2),formatTime:v=>v,table:(h,rows)=>rows.map(r=>r.join('|')).join('\n'),render:()=>{html=panel.render()},request:adapter.request,openDrawer:(title,body)=>drawers.push({title,body})});
  return {root,panel,calls,drawers,L,html:()=>html,dispatch:(m,...a)=>root.HensemLiveKycReconciliation.dispatch('deposit-source-kyc',m,...a),setHandler:v=>handler=v};
 }
 
@@ -56,7 +57,7 @@ function setup(request=async()=>response()){
  let now=1000000,ready=false,seq=0,changes=0;const timers=new Map(),nodes=new Map(),listeners={},calls=[];
  class Clock extends Date{static now(){return now}}
  const document={getElementById:id=>nodes.get(id),createElement:()=>({innerHTML:'',setAttribute(){},remove(){nodes.delete(this.id)}}),body:{appendChild:node=>nodes.set(node.id,node)},addEventListener:(name,fn)=>listeners[name]=fn};
- const ctx=vm.createContext({Date:Clock,document,setTimeout:(fn,ms)=>{const id=++seq;timers.set(id,{fn,ms});return id},clearTimeout:id=>timers.delete(id)});vm.runInContext('window=globalThis',ctx);vm.runInContext(source,ctx);
+ const ctx=vm.createContext({Date:Clock,AbortController,document,setTimeout:(fn,ms)=>{const id=++seq;timers.set(id,{fn,ms});return id},clearTimeout:id=>timers.delete(id)});vm.runInContext('window=globalThis',ctx);vm.runInContext(source,ctx);
  const api=ctx.HensemLiveSyncHealth;api.configure({request:async q=>{calls.push(JSON.parse(JSON.stringify(q)));return request(q)},ready:()=>ready,onChange:()=>changes++});
  return {ctx,api,calls,timers,listeners,setReady:value=>ready=value,tick:value=>now+=value,html:()=>nodes.get('live-sync-health-panel')?.innerHTML||'',changes:()=>changes,run:async()=>{for(const [id,timer]of [...timers]){timers.delete(id);timer.fn()}await flush()}};
 }
@@ -64,7 +65,7 @@ function setup(request=async()=>response()){
 
 test('real collected KYC loading defers scheduled health and cancels an older in-flight health read',async()=>{
  const live=fs.readFileSync(path.join(__dirname,'../admin-preview/live-data.js'),'utf8');
- const ready=live.match(/configure\(\{request:q=>window\.hensemLiveRequest\(q\),ready:\(\)=>(.*?),onChange:/)[1];
+ const ready=live.match(/configure\(\{request:\(q,options\)=>window\.hensemLiveRequest\(q,options\),context:syncHealthContext,ready:\(\)=>(.*?),onChange:/)[1];
  const declarations=live.slice(live.indexOf(' const supervisorPages='),live.indexOf('\n for(const [id,page]of Object.entries(supervisorPages))'));
  const phase=live.match(/ const phasedReadBusy=\(\)=>[^\n]+;/)[0];
  const L={serial:1,catalogReady:true,initialReadComplete:true,pageQueried:true,loading:false,catalog:[{country:'印度',name:'SYNTHETIC',source:'ar',timezone:'Asia/Kolkata'}]},hostState={page:'deposit_statistics'};
@@ -72,11 +73,12 @@ test('real collected KYC loading defers scheduled health and cancels an older in
  for(const file of ['live-workorder-operations.js','live-kyc-reconciliation.js','live-deposit-workspace.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview',file),'utf8'),root);
  root.HensemWorkorderUI.today=()=>({from:'2026-10-12',to:'2026-10-12'});
  root.hensemLiveCancelRequests=actions=>canceled.push([...actions]);
- const actualReady=()=>vm.runInNewContext(declarations+'\n'+phase+'\n'+ready,{pages:[],state:hostState,L,readPhase:null,submissionAnalysis:null,window:root,collectedPage:{state:{busy:false}},reportData:{state:{}}});
+ const actualReady=()=>vm.runInNewContext(declarations+'\n'+phase+'\n'+ready,{pages:[],roleAllowed:()=>true,state:hostState,L,readPhase:null,submissionAnalysis:null,window:root,collectedPage:{state:{busy:false}},reportData:{state:{}}});
  h.api.configure({ready:actualReady,onChange:()=>{},request:()=>++healthReads===1?healthOld.promise:Promise.resolve(response([]))});
  // A prior idle health request is already pending when the user starts KYC.
  h.api.schedule('current-authorized-catalog');await h.run();assert.equal(healthReads,1);
- let panel;panel=root.HensemLiveDepositWorkspace.create({L,E:String,C:String,N:String,formatTime:String,table:()=>'',render:()=>{panel.render();h.api.schedule('current-authorized-catalog')},request:()=>{kycReads++;return kycOld.promise}});
+ root.hensemLiveRequest=()=>{kycReads++;return kycOld.promise};vm.runInContext(live.slice(live.indexOf(' function preemptSyncHealth'),live.indexOf(' const previousRender')),root);
+ let panel;panel=root.HensemLiveDepositWorkspace.create({L,E:String,C:String,N:String,formatTime:String,table:()=>'',render:()=>{panel.render();h.api.schedule('current-authorized-catalog')},request:(q,o)=>root.foregroundRequest(q,o)});
  const pending=panel.load();assert.equal(L.depositKycLoading,true);assert.equal(actualReady(),false);assert.deepEqual(canceled,[['syncHealth']]);
  await h.run();assert.equal(healthReads,1);assert.equal(kycReads,1);
  healthOld.resolve(response([issue('OBSOLETE-HEALTH')]));await flush();assert.equal(h.api.badge(),'','canceled health result stays obsolete');

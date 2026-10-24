@@ -7,7 +7,7 @@
  function create(ctx){
   const {L,E,C,N,table,box,render,request}=ctx;
   let filters={dateMode:'all',from:'',to:'',platform:'all',provider:'',orderNumber:'',recoveryState:'all'},view='daily',snapshot=null,applied=null,loading=false,exporting=false,error='',dirty=false,serial=0,page=1,limit=50,expanded=null,exportSerial=0;
-  function syncBusy(start=false){L.depositRecoveryLoading=loading||exporting;if(start){root.HensemLiveSyncHealth?.cancel?.();root.hensemLiveCancelRequests?.(['syncHealth']);}}
+  function syncBusy(){L.depositRecoveryLoading=loading||exporting;}
   const amount=v=>v==null?'—':N(v),count=v=>v==null?'—':C(v);
   const esc=v=>E(String(v??''));
   const can=action=>typeof root.hensemRoleAllowed==='function'&&root.hensemRoleAllowed('deposit_statistics',action);
@@ -41,7 +41,7 @@
   }
   async function load(reset=true){
    if(reset)page=1;let q;try{q=query();}catch(e){error=e.message;render();return;}
-   const id=++serial,identity=accessIdentity();loading=true;syncBusy(true);error='';expanded=null;render();
+   const id=++serial,identity=accessIdentity();loading=true;syncBusy();error='';expanded=null;render();
    try{const data=await request(q);if(id!==serial)return;if(identity!==accessIdentity()||!can('view')||!can('query')||q.view==='details'&&!can('detail'))throw Error('账号或数据权限已变化，请重新查询');if(!data||data.section!=='recovery'||!data.summary)throw Error('补单统计返回内容不完整，请重试');snapshot=data;applied=JSON.parse(JSON.stringify(q));dirty=false;loading=false;syncBusy();render();}
    catch(e){if(id!==serial)return;loading=false;syncBusy();page=snapshot?.view==='details'?Math.floor(Number(snapshot.offset||0)/limit)+1:1;error=e.message||'补单核对读取失败';render();}
   }
@@ -92,7 +92,7 @@
    if(!snapshot||!applied||loading||exporting)return;
    if(dirty){error='筛选已修改，请先查询后再导出';render();return;}
    if(!can('export')||!can('detail')||!can('query')){error='当前账号没有完整明细导出权限';render();return;}
-   exporting=true;syncBusy(true);error='';const id=serial,exportId=++exportSerial,scope=JSON.stringify(filters),identity=accessIdentity();render();
+   exporting=true;syncBusy();error='';const id=serial,exportId=++exportSerial,scope=JSON.stringify(filters),identity=accessIdentity();render();
    try{const data=await request({...applied,view:'details',offset:0,export:true});if(serial!==id||scope!==JSON.stringify(filters)||dirty||identity!==accessIdentity()||!ready()||!['view','query','export','detail'].every(can))return;
     if(!data||data.section!=='recovery'||data.exportComplete!==true||!Array.isArray(data.rows)||data.rows.length!==Number(data.total))throw Error('导出未读取完整结果，未生成文件，请缩小范围后重试');
     if(!root.HensemXlsx?.encodeWorkbook)throw Error('Excel 导出模块未加载，请刷新页面');
