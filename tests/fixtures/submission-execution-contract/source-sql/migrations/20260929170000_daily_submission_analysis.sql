@@ -1,0 +1,179 @@
+-- Daily repeated charge submissions. Eligibility spans all providers on one
+-- authorized platform/local day, then display filters are applied. Read only.
+begin;
+create or replace function private.dashboard_admin_live_submission_analysis(p_request jsonb)
+returns jsonb language plpgsql stable security definer set search_path='' set jit='off' as $$
+declare
+ v_platform record;v_id uuid;v_start timestamptz;v_end timestamptz;v_from timestamptz;v_to timestamptz;
+ v_direction text;v_currency text;v_key text;v_providers text[];v_source text;v_success text;v_sql text;v_result jsonb;
+ v_confirmations jsonb:='{}'::jsonb;
+ v_operation text:=coalesce(p_request->>'operation','summary');v_threshold integer:=30;
+ v_level text:=coalesce(p_request->>'level','all');v_offset integer:=0;v_limit integer:=50;
+ v_member text:=nullif(btrim(p_request->>'memberId'),'');
+begin
+  perform private.dashboard_admin_live_scope();
+  if p_request is null or jsonb_typeof(p_request)<>'object' or octet_length(p_request::text)>16384
+    or exists(select 1 from jsonb_object_keys(p_request) k where k<>all(array[
+      'platformId','startAt','endAt','direction','providers','currency','operation','threshold','level','offset','limit','memberId'])) then
+    raise exception using errcode='22023',message='invalid_request';
+  end if;
+  foreach v_key in array array['platformId','startAt','endAt','direction','currency'] loop
+    if p_request ? v_key and p_request->v_key<>'null'::jsonb and
+      (jsonb_typeof(p_request->v_key)<>'string' or length(p_request->>v_key)>200 or p_request->>v_key ~ '[[:cntrl:]]') then
+      raise exception using errcode='22023',message='invalid_filter';
+    end if;
+  end loop;
+  begin
+    v_id:=(p_request->>'platformId')::uuid;
+    if coalesce(p_request->>'startAt','') !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}([.][0-9]{1,6})?(Z|[+-]\d{2}:\d{2})$'
+      or coalesce(p_request->>'endAt','') !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}([.][0-9]{1,6})?(Z|[+-]\d{2}:\d{2})$' then
+      raise exception using errcode='22023',message='invalid_time';
+    end if;
+    v_start:=(p_request->>'startAt')::timestamptz;v_end:=(p_request->>'endAt')::timestamptz;
+  exception when invalid_text_representation or invalid_datetime_format or datetime_field_overflow then
+    raise exception using errcode='22023',message='invalid_filter';
+  end;
+  select * into v_platform from private.dashboard_admin_live_platforms() p where p.id=v_id;
+  if not found then raise exception using errcode='42501',message='platform_denied';end if;
+  if v_start is null or v_end is null or not isfinite(v_start) or not isfinite(v_end) or v_start>=v_end
+    or (v_end at time zone v_platform.timezone)-(v_start at time zone v_platform.timezone)>interval '31 days' then
+    raise exception using errcode='22023',message='invalid_range';
+  end if;
+  v_direction:=coalesce(p_request->>'direction','charge');v_currency:=nullif(btrim(p_request->>'currency'),'');
+  if v_direction <> 'charge' then raise exception using errcode='22023',message='invalid_direction';end if;
+  if p_request ? 'providers' and p_request->'providers'<>'null'::jsonb then
+    if jsonb_typeof(p_request->'providers')<>'array' or jsonb_array_length(p_request->'providers')>200
+      or exists(select 1 from jsonb_array_elements(p_request->'providers') a where jsonb_typeof(a)<>'string'
+        or length(a#>>'{}') not between 1 and 200 or (a#>>'{}') ~ '[[:cntrl:]]') then
+      raise exception using errcode='22023',message='invalid_filter';
+    end if;
+  end if;
+
+ if v_operation not in ('summary','members') or v_level not in ('all','new','funded','unknown','l0')
+  or v_member is not null and (length(v_member)>200 or v_member ~ '[[:cntrl:]]') then
+  raise exception using errcode='22023',message='invalid_filter';end if;
+ if p_request ? 'threshold' then
+  if jsonb_typeof(p_request->'threshold')<>'number' or p_request->>'threshold' not in ('10','20','30','50','100') then raise exception using errcode='22023',message='invalid_threshold';end if;
+  v_threshold:=(p_request->>'threshold')::int;
+ end if;
+ if p_request ? 'offset' then
+  if jsonb_typeof(p_request->'offset')<>'number' or p_request->>'offset' !~ '^[0-9]{1,7}$' then raise exception using errcode='22023',message='invalid_offset';end if;
+  v_offset:=(p_request->>'offset')::int;
+ end if;
+ if p_request ? 'limit' then
+  if jsonb_typeof(p_request->'limit')<>'number' or p_request->>'limit' not in ('20','50','100') then raise exception using errcode='22023',message='invalid_limit';end if;
+  v_limit:=(p_request->>'limit')::int;
+ end if;
+ select array_agg(value) into v_providers from jsonb_array_elements_text(coalesce(nullif(p_request->'providers','null'::jsonb),'[]'::jsonb));
+ -- Always evaluate whole local days, even if the dashboard clock range is shorter.
+ v_from:=date_trunc('day',v_start at time zone v_platform.timezone) at time zone v_platform.timezone;
+ v_to:=(date_trunc('day',(v_end-interval '1 microsecond') at time zone v_platform.timezone)+interval '1 day') at time zone v_platform.timezone;
+ if v_platform.source='ar' then
+  if to_regclass('private.dashboard_admin_order_provider_confirmations') is not null then
+   execute 'select coalesce(jsonb_object_agg(order_no,confirmed_provider),''{}''::jsonb) from private.dashboard_admin_order_provider_confirmations where source_system=''AR'' and country_code=$1 and platform=$2 and order_kind=''recharge'' and active'
+    into v_confirmations using v_platform.scope_group,v_platform.source_name;
+  end if;
+  v_source:=$q$select a.order_no order_id,nullif(btrim(a.member_id),'') member_id,
+   a.applied_at at time zone $4 created_at,a.amount,$17::text currency,coalesce(nullif(btrim(a.raw_channel),''),$18->>a.order_no,'未识别通道') raw_provider,
+   a.status='已支付' paid,coalesce(a.status in ('已支付','待支付','支付失败','已取消'),false) status_known,$ar_level$ level_text,$ar_count$ count_text
+   from public.ar_collected_orders a where a.source_system='AR' and a.country_code=$2 and a.platform=$3 and a.order_kind='recharge'
+   and a.applied_at>=($5 at time zone $4) and a.applied_at<($6 at time zone $4)$q$;
+  v_source:=replace(v_source,'$ar_level$',case when exists(select 1 from pg_catalog.pg_attribute where attrelid='public.ar_collected_orders'::regclass and attname='member_level' and not attisdropped) then 'a.member_level::text' else 'null::text' end);
+  v_source:=replace(v_source,'$ar_count$',case when exists(select 1 from pg_catalog.pg_attribute where attrelid='public.ar_collected_orders'::regclass and attname='recharge_count' and not attisdropped) then 'a.recharge_count::text' else 'null::text' end);
+  v_success:=$q$select nullif(btrim(a.member_id),'') member_id,a.completed_at::date as day
+   from public.ar_collected_orders a where a.source_system='AR' and a.country_code=$2 and a.platform=$3 and a.order_kind='recharge'
+   and a.status='已支付' and a.completed_at>=($5 at time zone $4) and a.completed_at<($6 at time zone $4)$q$;
+ elsif v_platform.source='newar' then
+  v_source:=$q$select coalesce(nullif(n.order_number,''),n.source_id) order_id,nullif(btrim(n.member_id),'') member_id,n.created_at,n.amount,n.currency,
+   case when coalesce(btrim(n.provider),'')='' and n.channel_type='ManualRecharge' then '人工充值' else coalesce(nullif(btrim(n.provider),''),'未识别通道') end raw_provider,
+   n.status_group='success' paid,coalesce(n.status_group in ('success','pending','failed','rejected'),false) status_known,coalesce(to_jsonb(n)->>'member_level',to_jsonb(n)->>'recharge_level',n.raw->>'rechargeLevel',n.raw->>'memberLevel') level_text,coalesce(to_jsonb(n)->>'recharge_count',n.raw->>'rechargeCount') count_text
+   from public.newar_detail_records n join public.newar_detail_platforms t on t.platform=n.platform
+   where n.platform=$3 and n.dataset='charge' and n.created_at>=$5 and n.created_at<$6
+   and (t.launch_at is null or n.created_at>=t.launch_at)$q$;
+  v_success:=$q$select nullif(btrim(n.member_id),'') member_id,(n.success_at at time zone $4)::date as day
+   from public.newar_detail_records n join public.newar_detail_platforms t on t.platform=n.platform
+   where n.platform=$3 and n.dataset='charge' and n.status_group='success' and n.success_at>=$5 and n.success_at<$6
+   and (t.launch_at is null or n.created_at>=t.launch_at)$q$;
+ elsif v_platform.source='lg' then
+  v_source:=$q$select l.order_no order_id,nullif(btrim(l.member_id),'') member_id,l.created_at,l.metric_amount amount,$17::text currency,
+   coalesce(nullif(btrim(l.third_party),''),nullif(btrim(l.raw_channel),''),'未识别通道') raw_provider,
+   l.status_class='success' paid,coalesce(l.status_class in ('success','pending','rejected'),false) status_known,null::text level_text,null::text count_text
+   from public.lg_orders l where l.country_code=$2 and l.platform=$3 and l.source_system='LG' and l.order_kind='recharge' and l.created_at>=$5 and l.created_at<$6$q$;
+  v_success:=$q$select nullif(btrim(l.member_id),'') member_id,(l.paid_at at time zone $4)::date as day from public.lg_orders l
+   where l.country_code=$2 and l.platform=$3 and l.source_system='LG' and l.order_kind='recharge' and l.status_class='success' and l.paid_at>=$5 and l.paid_at<$6$q$;
+ elsif v_platform.source='game66' then
+  v_source:=$q$select c.order_num order_id,nullif(btrim(c.uid),'') member_id,c.create_time created_at,coalesce(c.amount_display,c.amount_minor/100.0) amount,'INR'::text currency,
+   coalesce(nullif(btrim(c.pay_method_name),''),'未识别通道') raw_provider,c.status_code='1' paid,coalesce(c.status_code in ('1','0'),false) status_known,null::text level_text,null::text count_text
+   from public.game66_charge_orders c where c.platform_id=$1 and c.create_time>=$5 and c.create_time<$6$q$;
+  v_success:=$q$select nullif(btrim(c.uid),'') member_id,(c.pay_time at time zone $4)::date as day from public.game66_charge_orders c
+   where c.platform_id=$1 and c.status_code='1' and c.pay_time>=$5 and c.pay_time<$6$q$;
+ else
+  raise exception using errcode='22023',message='submission_source_unavailable';
+ end if;
+ if v_currency is not null and v_currency<>v_platform.currency then raise exception using errcode='22023',message='invalid_currency';end if;
+ v_sql:='with source_rows as materialized ('||v_source||'), successes as materialized ('||v_success||$q$),
+ canonical as materialized (
+  select raw_provider,private.dashboard_admin_live_provider_canonical($7,$3,raw_provider) provider from (select distinct raw_provider from source_rows) names
+ ), orders as materialized (
+  select s.*,(created_at at time zone $4)::date as day,c.provider,
+   case when upper(btrim(level_text)) ~ '^L(V)?[0-9]{1,4}$' then regexp_replace(upper(btrim(level_text)),'^LV?','')::int
+    when btrim(level_text) ~ '^[0-9]{1,4}$' then btrim(level_text)::int end member_level,
+   case when btrim(count_text) ~ '^[0-9]{1,9}$' then btrim(count_text)::int end recharge_count
+  from source_rows s join canonical c using(raw_provider)
+ ), member_days as materialized (
+  select day,member_id,count(*) submitted_count,count(*) filter(where paid) cohort_success_count,bool_and(status_known) statuses_known,
+   case when max(recharge_count)>0 then 'funded' when count(recharge_count)=count(*) and max(recharge_count)=0 and count(member_level)=count(*) and max(member_level)=0 then 'new' else 'unknown' end member_class,
+   max(recharge_count) recharge_count, bool_or(member_level=0) has_l0,
+   case when count(member_level)>0 then 'L'||max(member_level)::text end member_level,
+   min(created_at) first_at,max(created_at) last_at
+  from orders where member_id is not null group by day,member_id
+ ), eligible as materialized (
+  select m.* from member_days m where submitted_count>=10 and cohort_success_count=0 and statuses_known
+   and not exists(select 1 from successes s where s.member_id=m.member_id and s.day=m.day)
+ ), selected_orders as materialized (
+  select o.* from orders o where ($8::text[] is null or provider=any($8)) and created_at>=$15 and created_at<$16 and currency=$17
+ ), qualified as materialized (
+  select o.*,m.submitted_count,m.member_class,m.member_level known_level,m.recharge_count known_recharge_count,m.has_l0,m.first_at,m.last_at
+  from selected_orders o join eligible m using(day,member_id)
+ ), dimensions as (
+  select null::text provider union all select distinct provider from selected_orders
+ ), metrics as (
+  select d.provider,t.threshold,count(distinct q.member_id) member_count,count(distinct (q.day,q.member_id)) filter(where q.member_id is not null) member_days,
+   count(q.member_id) invalid_count,case when count(q.member_id) filter(where q.amount is null)>0 then null else coalesce(sum(q.amount),0)::text end invalid_amount,
+   count(distinct q.member_id) filter(where q.has_l0) l0_members,
+   count(distinct q.member_id) filter(where q.member_class='new') new_members,
+   count(distinct q.member_id) filter(where q.member_class='funded') funded_members,
+   count(distinct q.member_id) filter(where q.member_class='unknown') unknown_members
+  from dimensions d cross join unnest(array[10,20,30,50,100]) t(threshold)
+  left join qualified q on (d.provider is null or q.provider=d.provider) and q.submitted_count>=t.threshold
+  group by d.provider,t.threshold
+ ), details as (
+  select q.day,q.member_id,q.member_class,max(q.known_level) member_level,max(q.submitted_count) submitted_count,max(q.known_recharge_count) recharge_count,
+   count(*) selected_count,sum(q.amount)::text submitted_amount,array_agg(distinct q.provider order by q.provider) providers,
+   min(q.first_at) first_at,max(q.last_at) last_at
+  from qualified q where q.submitted_count >= $9 and ($10='all' or q.member_class=$10 or $10='l0' and q.has_l0) and ($13::text is null or q.member_id=$13)
+  group by q.day,q.member_id,q.member_class
+ ), detail_page as (select * from details order by day desc,submitted_count desc,member_id limit $12 offset $11)
+ select jsonb_build_object(
+  'metrics',case when $14='summary' then (select coalesce(jsonb_agg(to_jsonb(m) order by provider nulls first,threshold),'[]'::jsonb) from metrics m) end,
+  'coverage',jsonb_build_object('orderCount',(select count(*) from selected_orders),'missingMemberCount',(select count(*) from selected_orders where member_id is null),
+   'missingLevelCount',(select count(*) from selected_orders where member_level is null),'missingRechargeCount',(select count(*) from selected_orders where recharge_count is null),'unknownStatusCount',(select count(*) from selected_orders where not status_known),'sourceCompletenessVerified',false),
+  'total',case when $14='members' then (select count(*) from details) end,
+  'members',case when $14='members' then (select count(distinct member_id) from details) end,
+  'rows',case when $14='members' then (select coalesce(jsonb_agg(to_jsonb(d)),'[]'::jsonb) from detail_page d) end)
+ $q$;
+ execute v_sql into v_result using v_id,v_platform.scope_group,v_platform.source_name,v_platform.timezone,v_from,v_to,v_platform.country,
+  v_providers,v_threshold,v_level,v_offset,v_limit,v_member,v_operation,v_start,v_end,coalesce(v_currency,v_platform.currency),v_confirmations;
+ return v_result||jsonb_build_object('version',1,'asOf',statement_timestamp(),'startAt',v_start,'endAt',v_end,'dayStart',v_from,'dayEnd',v_to,
+  'platform',jsonb_build_object('id',v_platform.id,'name',v_platform.name,'source',v_platform.source,'country',v_platform.country,'currency',v_platform.currency,'timezone',v_platform.timezone),
+  'basis','platform_local_day_all_providers_zero_success','thresholds',jsonb_build_array(10,20,30,50,100),'operation',v_operation);
+end;
+$$;
+revoke all on function private.dashboard_admin_live_submission_analysis(jsonb) from public,anon;
+grant execute on function private.dashboard_admin_live_submission_analysis(jsonb) to authenticated;
+create or replace function public.dashboard_admin_live_submission_analysis(p_request jsonb)
+returns jsonb language sql stable security invoker set search_path='' as $$select private.dashboard_admin_live_submission_analysis(p_request);$$;
+revoke all on function public.dashboard_admin_live_submission_analysis(jsonb) from public,anon;
+grant execute on function public.dashboard_admin_live_submission_analysis(jsonb) to authenticated;
+notify pgrst,'reload schema';
+commit;
