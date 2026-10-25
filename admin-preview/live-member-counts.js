@@ -21,7 +21,9 @@
   for(const date of item.days.slice(1)){let low=bounds.at(-1),high=end;while(low<high){const middle=low+Math.floor((high-low)/2);if(at(middle)<date)low=middle+1;else high=middle;}if(low<=bounds.at(-1)||low>=end||at(low)!==date)throw Error('人数统计当地日期边界无法拆分');bounds.push(low);}
   bounds.push(end);return item.days.map((date,i)=>({...item,days:[date],request:{...q,startAt:new Date(bounds[i]).toISOString(),endAt:new Date(bounds[i+1]).toISOString()}}));
  }
- const timedOut=error=>/超时|timeout|timed out|57014/i.test(String(error?.code||'')+' '+String(error?.message||''));
+ // Only a trusted database query cancellation supports a smaller exact read.
+ // Transport deadlines and arbitrary error text do not prove a retry can finish.
+ const queryCancelled=error=>error?.code==='57014';
  function requestFor(p,query){
   const q=query(p,'memberDaily');
   if(q.status&&q.status!=='all'||['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'].some(k=>q[k]))throw Error('人数统计请使用全部状态，并清空单笔订单筛选');
@@ -149,7 +151,7 @@
   async function readPlatform(item,id,policy){
    try{return await readExact(item,id,policy);}
    catch(error){
-    if(!valid(id)||!timedOut(error)||item.days.length<2)throw error;
+    if(!valid(id)||!queryCancelled(error)||item.days.length<2)throw error;
     const slices=dailySlices(item),parts=[];
     for(const slice of slices){if(!valid(id))throw Error('人数查询已替换');try{parts.push(await readExact(slice,id,policy));}catch(failure){if(!valid(id))throw failure;throw Object.assign(Error(slice.days[0]+'：'+(failure?.message||'人数读取失败')+'（'+parts.length+'/'+slices.length+' 天已读取，平台未计入合计）'),{code:failure?.code,memberDailyFallbackFailed:true});}}
     // Publish only a complete platform. Distinct counts within a day are never added.
@@ -157,7 +159,7 @@
     remember(item,result,policy);return result;
    }
   }
-  async function retryTimedOut(item,id,policy){
+  async function retryCancelled(item,id,policy){
    // A one-day all-direction scan can exceed the statement budget even though
    // either direction fits. Keep the exact full window and provider union;
    // append separately deduplicated direction rows, never hourly distincts.
@@ -219,14 +221,14 @@
    readConcurrency=concurrency===1?1:2;const id=++serial;S={...initial(),status:'loading',key:q.key,items:q.items,unsupported:q.unsupported,notOperating:q.notOperating};c.render();
    const run=(async()=>{
     if(!q.items.length){S={...S,status:'ready'};c.render();return;}
-    let index=0;const timedOutItems=[];
+    let index=0;const cancelledItems=[];
     const failure=(item,error)=>({id:item.platform.id,name:item.platform.name,error:error?.message||'人数读取失败'});
-    async function worker(){while(index<q.items.length&&valid(id)){const item=q.items[index++];try{const result=await readWindows(item,id,policy);if(!valid(id))return;S.results.push(result);if(result._memberAxisErrors?.length)S.failures.push(failure(item,Error(result._memberAxisErrors.map(x=>(x.basis==='created'?'创建':'成功')+'：'+x.error).join('；'))));}catch(error){if(!valid(id))return;S.failures.push(failure(item,error));if(timedOut(error)&&!error?.memberDailyFallbackFailed&&sameMemberWindow(item))timedOutItems.push(item);}if(valid(id))c.render();}}
+    async function worker(){while(index<q.items.length&&valid(id)){const item=q.items[index++];try{const result=await readWindows(item,id,policy);if(!valid(id))return;S.results.push(result);if(result._memberAxisErrors?.length)S.failures.push(failure(item,Error(result._memberAxisErrors.map(x=>(x.basis==='created'?'创建':'成功')+'：'+x.error).join('；'))));}catch(error){if(!valid(id))return;S.failures.push(failure(item,error));if(queryCancelled(error)&&!error?.memberDailyFallbackFailed&&sameMemberWindow(item))cancelledItems.push(item);}if(valid(id))c.render();}}
     await Promise.all(Array.from({length:Math.min(readConcurrency,q.items.length)},()=>worker()));if(!valid(id))return;
-    // Finish the initial cohort before one serial retry of failed timeout scopes.
-    // Only one-day all-direction timeouts use two exact direction reads.
+    // Finish the initial cohort before one serial retry of SQL-cancelled scopes.
+    // Only one-day all-direction cancellations use two exact direction reads.
     // A failed daily fallback never restarts the original wide request.
-    for(const item of timedOutItems){if(!valid(id))return;try{const result=await retryTimedOut(item,id,policy);if(!valid(id))return;S.results.push(result);S.failures=S.failures.filter(row=>row.id!==item.platform.id);}catch(error){if(!valid(id))return;const message=error?.message||'人数读取失败';S.failures=S.failures.map(row=>row.id===item.platform.id?{...row,error:row.error===message?message:row.error+'；重试失败：'+message}:row);}if(valid(id))c.render();}
+    for(const item of cancelledItems){if(!valid(id))return;try{const result=await retryCancelled(item,id,policy);if(!valid(id))return;S.results.push(result);S.failures=S.failures.filter(row=>row.id!==item.platform.id);}catch(error){if(!valid(id))return;const message=error?.message||'人数读取失败';S.failures=S.failures.map(row=>row.id===item.platform.id?{...row,error:row.error===message?message:row.error+'；重试失败：'+message}:row);}if(valid(id))c.render();}
     if(!valid(id))return;S={...S,status:S.failures.length&&!S.results.length?'error':'ready',error:S.failures.length&&!S.results.length?'所选平台人数读取失败':''};c.render();
    })();pending=run;run.finally(()=>{if(id===serial)pending=null});return run;
   }
