@@ -10,7 +10,7 @@ test('ready-only negotiation preserves exact inner query and requires explicit m
 });
 for(const assigned of [false,true])test('ready-only page binding precedes HTTP for '+(assigned?'assigned':'owner')+' route',async()=>{
  const h=load();await h.api.adminLiveRequest(session,probe,undefined,{assigned,page:'providers'});assert.equal(h.calls.length,1);const body=JSON.parse(h.calls[0].init.body);assert.equal(body.p_page,'providers');assert.equal(body.p_request.readMode,'ready-only-v1');assert.deepEqual(body.p_request.requests,[request]);
- for(const page of ['overview','provider_payout','time',undefined])await assert.rejects(h.api.adminLiveRequest(session,probe,undefined,{assigned,page}),/页面无效|没有此页面/);assert.equal(h.calls.length,1);
+ for(const page of ['collection','time',undefined])await assert.rejects(h.api.adminLiveRequest(session,probe,undefined,{assigned,page}),/页面无效|没有此页面/);assert.equal(h.calls.length,1);
 });
 test('new live documents explicitly opt in; transport failures remain failures',async()=>{
  const h=load(),html=h.api.makeAdminLiveDocument('<!doctype html><html><head></head><body></body></html>','test');assert.match(html,/window\.HENSEM_PREPARED_READY_ONLY=true/);

@@ -68,7 +68,7 @@
  function create(c){
   const {L,E,C}=c;
   const initial=()=>({status:'idle',key:'',items:[],unsupported:[],notOperating:[],results:[],failures:[],error:''});
-  let S=initial(),serial=0,pending=null,inFlight=0,nextForce=false;const waiters=[];
+  let S=initial(),serial=0,pending=null,inFlight=0,nextForce=false,readController=null,readOwner=()=>true;const waiters=[];
   // Only validated counts live here, for this document; no credentials or
   // results enter browser storage. The host still authorizes every source read.
   const cache=new Map(),now=()=>typeof c.now==='function'?c.now():Date.now();
@@ -119,16 +119,29 @@
    if(typeof c.successClockUnavailable!=='function')return S;
    return {...S,results:S.results.map(result=>S.items.find(item=>item.platform.id===result.platform?.id)?.request.successBasis==='created'||String(result.platform?.source||'').toLowerCase().replaceAll('_','')!=='newar'||!c.successClockUnavailable(result.platform,'withdraw')?result:{...result,rows:result.rows.map(row=>row.direction!=='withdraw'?row:{...row,success_available:false,success_unavailable_reason:'newar_success_time_missing',...Object.fromEntries(fields.filter(field=>field.startsWith('success_')).map(field=>[field,null])),...Object.fromEntries(thresholds.map(n=>['success_members_ge'+n,null]))})})};
   };
-  const valid=id=>id===serial&&!L.dirty&&S.key===currentKey();
+  const valid=id=>id===serial&&!L.dirty&&readOwner()&&S.key===currentKey();
   const retry=s=>s.status==='error'||s.status==='paused'||s.failures.length?' <button type="button" class="link" onclick="liveMemberCountsRetry()">重试</button>':'';
-  function cancel(){serial++;pending=null;nextForce=false;waiters.splice(0).forEach(wake=>wake());if(S.status==='loading')S={...S,status:'paused',results:[],error:'人数读取已暂停'};}
+  function stopRead(){serial++;readController?.abort();readController=null;readOwner=()=>true;pending=null;nextForce=false;waiters.splice(0).forEach(wake=>wake());}
+  function cancel(){stopRead();if(S.status==='loading')S={...S,status:'paused',results:[],error:'人数读取已暂停'};}
+  // A report deadline stops unfinished work but preserves already validated
+  // native windows. Their missing peers remain explicit, never zero-filled.
+  function pauseSupplementary(message='人数读取已暂停'){stopRead();if(S.status==='loading')S={...S,status:'paused',error:message};}
   // A deliberate query reevaluates freshness. Render-time ensure never retries
   // merely because a timer expired, so slow/partial reads cannot create a loop.
   function beginQuery(force=false){cancel();nextForce=force===true;S=initial();if(nextForce){try{invalidate(scope().items);}catch{clearCache();}}}
-  async function limitedRequest(request,id){while(inFlight>=readConcurrency){if(!valid(id))throw Error('人数查询已替换');await new Promise(resolve=>waiters.push(resolve));}if(!valid(id))throw Error('人数查询已替换');inFlight++;try{return await c.request(request)}finally{inFlight--;waiters.splice(0).forEach(wake=>wake());}}
+  async function limitedRequest(request,id,signal){
+   while(inFlight>=readConcurrency){if(!valid(id))throw Error('人数查询已替换');await new Promise(resolve=>waiters.push(resolve));}if(!valid(id))throw Error('人数查询已替换');inFlight++;
+   // The owner may settle on abort immediately; a transport that ignores abort
+   // still occupies its physical slot until it actually settles.
+   let released=false;const release=()=>{if(released)return;released=true;inFlight--;waiters.splice(0).forEach(wake=>wake());};
+   return new Promise((resolve,reject)=>{let settled=false;const finish=(fn,value)=>{if(settled)return;settled=true;signal?.removeEventListener('abort',abort);fn(value)},abort=()=>finish(reject,Object.assign(Error('人数查询已暂停'),{name:'AbortError'}));
+    if(signal?.aborted){release();abort();return;}signal?.addEventListener('abort',abort,{once:true});
+    try{if(!valid(id)||signal?.aborted)throw Error('人数查询已替换');Promise.resolve(c.request(request,{signal})).then(value=>{release();finish(resolve,value)},error=>{release();finish(reject,error)});}catch(error){release();finish(reject,error);}
+   });
+  }
   async function readExact(item,id,policy){
    if(!valid(id))throw Error('人数查询已替换');const hit=!policy.force&&cached(item,policy.context);if(hit)return hit;
-   let response;try{response=await limitedRequest(item.request,id);}catch(error){if(valid(id)&&['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code))clearCache();throw error;}if(!valid(id))throw Error('人数查询已替换');
+   let response;try{response=await limitedRequest(item.request,id,policy.signal);}catch(error){if(valid(id)&&['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED'].includes(error?.code))clearCache();throw error;}if(!valid(id))throw Error('人数查询已替换');
    const result=validate(response,item),at=now(),historical=localDay(Date.parse(item.request.endAt)-1,item.platform.timezone)<localDay(at,item.platform.timezone);
    const value={...result,_memberReadAt:at,_memberExpiresAt:at+(historical?300000:30000),_memberCacheHit:false,_memberCacheable:!(response.partial===true||response.complete===false||response.available===false||response.error||response.meta?.partial===true||response.coverage?.complete===false)};
    remember(item,value,policy);return value;
@@ -198,11 +211,11 @@
    return {platform:values[0].platform,rows:[...rows.values()],sourceCompletenessVerified:values.every(part=>part.sourceCompletenessVerified),frequencySupported:values.every(part=>part.frequencySupported),_memberReadAt:Math.min(...values.map(part=>part._memberReadAt)),_memberExpiresAt:Math.min(...values.map(part=>part._memberExpiresAt)),_memberCacheHit:values.some(part=>part._memberCacheHit),_memberCacheable:false,_memberWindows:windows,_memberAxisErrors:errors};
   }
   let readConcurrency=2;
-  function ensure(force=false,concurrency=2){
-   if(L.dirty)return Promise.resolve();
+  function ensure(force=false,concurrency=2,isCurrent=()=>true){
+   if(L.dirty||!isCurrent())return Promise.resolve();
    let q;try{q=scope()}catch(error){S={...initial(),status:'error',error:error.message||'人数统计筛选无效'};c.render();return Promise.resolve();}
    force=force===true||nextForce;if(!force&&q.key===S.key&&S.status!=='idle')return pending||Promise.resolve();
-   nextForce=false;if(force)invalidate(q.items);const policy={force,context:q.context,generation:cacheGeneration};
+   nextForce=false;readController?.abort();readController=new AbortController();readOwner=isCurrent;if(force)invalidate(q.items);const policy={force,context:q.context,generation:cacheGeneration,signal:readController.signal};
    readConcurrency=concurrency===1?1:2;const id=++serial;S={...initial(),status:'loading',key:q.key,items:q.items,unsupported:q.unsupported,notOperating:q.notOperating};c.render();
    const run=(async()=>{
     if(!q.items.length){S={...S,status:'ready'};c.render();return;}
@@ -289,7 +302,7 @@
    }
    const notice=readNotice(s);c.open('每日充值 / 提款人数','<div class="live-member-counts-detail">'+tabs+definition+(windowNotice(s)?'<div class="live-definition">'+E(windowNotice(s))+'</div>':'')+coverage+(notice?'<div class="live-definition">'+E(notice)+'</div>':'')+(status(s)?'<div class="live-status">'+E(status(s))+retry(s)+'</div>':retry(s))+problems+table+'</div>');
   }
-  return {ensure,beginQuery,load:(force=true)=>ensure(force),cancel,clearCache,metric,platformLabel,platformMetric,platformCount,details,capture:()=>({...S,status:S.status==='loading'?'paused':S.status,results:[...S.results],failures:[...S.failures],error:S.status==='loading'?'人数读取已暂停':S.error}),restore:value=>{serial++;pending=null;nextForce=false;waiters.splice(0).forEach(wake=>wake());S=value?{...value,results:[...value.results],failures:[...value.failures]}:initial();},get state(){return S}};
+  return {ensure,beginQuery,load:(force=true)=>ensure(force),cancel,pauseSupplementary,clearCache,metric,platformLabel,platformMetric,platformCount,details,capture:()=>({...S,status:S.status==='loading'?'paused':S.status,results:[...S.results],failures:[...S.failures],error:S.status==='loading'?'人数读取已暂停':S.error}),restore:value=>{stopRead();S=value?{...value,results:[...value.results],failures:[...value.failures]}:initial();},get state(){return S}};
  }
  root.HensemLiveMemberCounts={create};
  if(typeof module!=='undefined')module.exports={create,requestFor,validate,dailySlices};

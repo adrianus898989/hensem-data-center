@@ -1,0 +1,36 @@
+[
+  {
+    "identity": "private.dashboard_serving_compact_read(text,jsonb)",
+    "body_md5": "a075072ddcfdf1132798f8d63faf39ee",
+    "definition_md5": "ac85fc32654644b51e18dc85812678ac",
+    "owner": "postgres",
+    "acl": "{postgres=X/postgres}",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "prosecdef": false,
+    "provolatile": "v",
+    "proparallel": "u",
+    "procost": 100,
+    "prorows": 0,
+    "proisstrict": false,
+    "proleakproof": false
+  },
+  {
+    "identity": "private.dashboard_serving_ready_read(text,jsonb)",
+    "body_md5": "42178aad7635d27511812fdba662ea78",
+    "definition_md5": "cb5ed7d1ca82195e2f24208f37ab46b5",
+    "owner": "postgres",
+    "acl": "{postgres=X/postgres}",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "prosecdef": false,
+    "provolatile": "s",
+    "proparallel": "u",
+    "procost": 100,
+    "prorows": 0,
+    "proisstrict": false,
+    "proleakproof": false
+  }
+]
