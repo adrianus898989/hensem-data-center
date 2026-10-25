@@ -915,7 +915,7 @@ test('amount ranges are sorted numerically in each direction with missing and ot
  assert.equal(tables.length,2);for(const table of tables)assert.deepEqual(table.rows.map(r=>plain(r[0])).slice(0,9),['100–200','201–300','301–400','401–500','501–750','751–1,000','1,001–2,000','2,001–5,000','≥5,001']);
 });
 test('overview uses success-time ratios including cross-day completions and matches fees independently',async()=>{
- const h=await ready(),r=completeAggregate(P,4000,4800);Object.assign(r.summary[0],{created_success_count:2400,all_amount:'40000',success_amount:'48000'});r.summary.push({...r.summary[0],direction:'withdraw'});
+ const h=await ready(),r=completeAggregate(P,4000,4800);r.successBasis='success';Object.assign(r.summary[0],{created_success_count:2400,all_amount:'40000',success_amount:'48000'});r.summary.push({...r.summary[0],direction:'withdraw'});
  r.groups.provider=['charge','withdraw'].flatMap(direction=>[900,750,500,250].map((success,i)=>({...stats(1000,'10000'),direction,provider:'TestPay'+i,success_count:1200,success_amount:'12000',created_success_count:success})));
  for(const row of r.groups.provider.filter(x=>x.provider==='TestPay0'))verifiedFee(row,row.direction==='charge'?240:120);h.L.results=[r];h.L.direction='all';h.L.feeLookupRows=[{scopeType:'country',country:'印度',provider:'TestPay0',collectFee:'2%',payoutFee:'1%'}];h.c.render();
  for(const [id,fee] of [['df-collect','240.00'],['df-payout','120.00']]){
