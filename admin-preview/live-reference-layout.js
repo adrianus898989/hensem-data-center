@@ -23,6 +23,21 @@
  function card(label,value,foot,key,icon='▥',title=''){
   return '<div class="kpi" data-metric="'+esc(key)+'"'+(title?' title="'+esc(title)+'"':'')+'><div class="kpi-label">'+esc(label)+'<span class="kpi-icon" aria-hidden="true">'+icon+'</span></div><div class="kpi-value">'+esc(value)+'</div><div class="kpi-foot">'+foot+'</div></div>';
  }
+ // Read returned query facts rather than mutable filter inputs. Missing legacy
+ // metadata uses a neutral description instead of guessing its original clock.
+ function successBasisDescription(view={}){
+  const results=Array.isArray(view.results)?view.results:[],facts=results.flatMap(result=>Array.isArray(result?._parts)&&result._parts.length?result._parts.map(part=>({...result,...part})):[result]);
+  const bases=facts.map(result=>result?.successBasis),known=facts.length>0&&bases.every(basis=>['created','success','source_updated'].includes(basis));
+  if(known&&bases.every(basis=>basis==='created'))return {created:true,metricLabel:'创建时间（当前成功状态）',title:'创建区间订单当前成功笔数 ÷ 同一创建区间全部笔数',suffix:'；按创建订单当前状态统计',note:'按创建日期选取已入库订单；成功金额和笔数按这些订单的当前成功状态统计。'};
+  if(known&&bases.every(basis=>basis!=='created')){
+   const updatedFacts=facts.filter(result=>result.successBasis==='source_updated'||[result.successTimeBasis,result.capabilities?.successTimeBasis,result.platform?.capabilities?.successTimeBasis].includes('order_updated_at')),updated=updatedFacts.length;
+   const updatedLabels=[...new Set(updatedFacts.map(result=>{const source=String(result.platform?.source||'').toLowerCase().replaceAll('_','');return source==='newar'?'新中台按源订单更新时间':source==='duoli'?'多利按更新时间':'按源订单更新时间';}))];
+   const completed=facts.filter(result=>[result.successTimeBasis,result.capabilities?.successTimeBasis,result.platform?.capabilities?.successTimeBasis].includes('source_completed_at')).length;
+   const metricLabel=updated===facts.length?'源订单更新时间':completed===facts.length?'源订单完成时间':updated||completed?'成功统计时间（'+[...updatedLabels,completed?'含源订单完成时间':''].filter(Boolean).join('；')+'）':'成功时间';
+   return {created:false,metricLabel,title:'独立'+metricLabel+'区间成功笔数 ÷ 创建区间全部笔数；含跨日成功，可超过100%'+(updated?'；源订单更新时间不代表实际到账时间':''),suffix:'；含跨日成功',note:'全部按创建区间；成功按独立'+metricLabel+'区间统计。'+(updated?'源订单更新时间不代表实际到账时间。':'')};
+  }
+  return {created:null,metricLabel:'已返回的成功统计口径',title:'当前已读范围的成功笔数 ÷ 全部笔数；日期依据以已返回统计口径为准',suffix:'',note:'按已返回的统计口径展示成功金额和笔数。'};
+ }
  function renderMetrics(summary,options={}){
   const current=summary||{},previous=options.previous||{},label=options.label||'订单',money=options.money||defaultMoney,count=options.count||defaultCount,rate=options.rate||defaultRate;
   const groups=[['all','全部'+label+'金额','▤'],['success','成功金额','✓'],['pending',label==='代付'?'本期代付中金额':'处理中金额','◷'],['failed','失败金额','◇']];
@@ -31,7 +46,7 @@
    const countText=count(current[key+'_count'])+' 笔',foot='<span class="live-reference-count">'+esc(countText)+'</span><span class="metric-comparisons"><span data-change="amount">'+compareHtml(amountCompare)+'</span><span data-change="count">'+compareHtml(countCompare)+'</span></span>';
    return card(name,money(current[key+'_amount']),foot,key,icon,name+'；'+countText+'；金额'+amountCompare.text+'；笔数'+countCompare.text);
   });
-  cards.push(card('成功率',rate(current.success_count,current.all_count),compareHtml(comparison([current.success_count,current.all_count],[previous.success_count,previous.all_count],options,true)),'success_rate','▥','成功笔数按成功时间；全部订单笔数按创建时间；含跨日成功，可超过100%'));
+  cards.push(card('成功率',rate(current.success_count,current.all_count),compareHtml(comparison([current.success_count,current.all_count],[previous.success_count,previous.all_count],options,true)),'success_rate','▥',successBasisDescription(options.queryState).title));
   if(options.fee){
    const fee=options.fee,label=fee.label||'估算手续费',matched=known(fee.matchedCount),eligible=known(fee.eligibleCount),excluded=known(fee.excludedCount),loading=fee.status==='loading',failed=fee.status==='error';
    const basis=fee.mode==='historical'?'按订单创建时间匹配生效版本':'按当前参考费率估算，非历史实际手续费';
@@ -49,5 +64,5 @@
    return '<section class="live-reference-direction" data-direction="'+esc(direction.key||'')+'"><div class="live-reference-heading"><h3>'+esc(label)+'</h3>'+(settings.currency?'<span>'+esc(settings.currency)+'</span>':'')+(direction.coverageHtml||'')+'</div>'+renderMetrics(direction.summary,{...settings,label})+'</section>';
   }).join('')+'</div>';
  }
- root.HensemLiveLayout=Object.freeze({renderMetrics,totals,comparison});
+ root.HensemLiveLayout=Object.freeze({renderMetrics,totals,comparison,successBasisDescription});
 })(typeof window==='object'?window:globalThis);

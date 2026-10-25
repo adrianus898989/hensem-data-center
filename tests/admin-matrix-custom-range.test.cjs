@@ -118,9 +118,9 @@ test('empty or malformed split parts and top-level incomplete aggregates explici
  }
 });
 
-test('only two platform requests run concurrently and partial results never expose a complete success rate',async()=>{
+test('only two platform requests run concurrently and known partial rates stay marked as subtotals',async()=>{
  const pending=new Map(),h=setup({platforms:['A','B','C','D','E'].map(id=>platform(id)),handler:q=>{const task=deferred();pending.set(q.platformId,task);return task.promise}});h.set('0','');const task=h.query();await settle();assert.equal(h.calls.length,2);assert.equal(h.active,2);
- pending.get('A').resolve(result('A'));await settle();assert.equal(h.calls.length,3);assert.equal(h.active,2);assert.equal(plain(h.row('charge')[2]),'4笔 800 —');assert.match(h.row('charge')[0],/读取 1\/5 平台/);
+ pending.get('A').resolve(result('A'));await settle();assert.equal(h.calls.length,3);assert.equal(h.active,2);assert.equal(plain(h.row('charge')[2]),'4笔 800 50.00%*');assert.match(h.row('charge')[2],/data-partial-rate="true"/);assert.match(h.row('charge')[0],/读取 1\/5 平台/);
  pending.get('B').resolve(result('B'));await settle();pending.get('C').resolve(result('C'));await settle();pending.get('D').resolve(result('D'));pending.get('E').resolve(result('E'));await task;
  assert.equal(h.maxActive,2);assert.equal(plain(h.row('charge').at(-1)),'全部笔数 20 笔 全部金额 4000.00 成功笔数 10 笔 成功金额 2000.00 成功率 50.00%');assert.equal(plain(h.row('charge')[2]),'20笔 4000 50.00%');
 });
@@ -153,7 +153,28 @@ test('time custom controls include their lower hour and exclude the upper hour w
  const saved=h.api.capture();h.api.restore(saved);assert.match(h.api.pageControls('time'),/hour summary/);assert.equal(h.calls.length,0);h.root.liveAnalysisHourClear();assert.doesNotMatch(h.api.pageControls('time'),/hour summary/);
 });
 
-test('invalid or unauthorized time queries cannot apply a range and partial scopes suppress the rate',()=>{
+test('invalid or unauthorized time queries cannot apply a range and known partial scopes retain observed rates',()=>{
  for(const [min,max]of [['','3'],['-1','3'],['3','3'],['4','2'],['0','25'],['1.5','3'],['bad','3']]){const h=setup();h.setPage('time');h.root.liveAnalysisHourSet('hourMin',min);h.root.liveAnalysisHourSet('hourMax',max);h.root.liveAnalysisHourQuery();assert.match(h.api.pageControls('time'),/请选择有效时段/);assert.equal(h.calls.length,0)}
- const configs=[],h=setup({L:{queryFailures:[{id:'B'}],results:[{...result(),platform:platform()}]},analysis:{table:config=>{configs.push(config);return 'partial';}}});h.setPage('time');h.setAllowed(false);h.root.liveAnalysisHourQuery();h.api.pageControls('time');assert.equal(configs.length,0);h.setAllowed(true);h.root.liveAnalysisHourQuery();h.api.pageControls('time');const config=configs.at(-1),row=config.rows[0];assert.equal(config.cells(row).at(-1),'—');assert.equal(h.api.customResults(config.segment(row)).complete,false);
+ const configs=[],h=setup({L:{queryFailures:[{id:'B'}],results:[{...result(),platform:platform()}]},analysis:{table:config=>{configs.push(config);return 'partial';}}});h.setPage('time');h.setAllowed(false);h.root.liveAnalysisHourQuery();h.api.pageControls('time');assert.equal(configs.length,0);h.setAllowed(true);h.root.liveAnalysisHourQuery();h.api.pageControls('time');const config=configs.at(-1),row=config.rows[0];assert.equal(plain(config.cells(row).at(-1)),'50.00%*');assert.match(config.cells(row).at(-1),/已读小计/);assert.equal(h.api.customResults(config.segment(row)).complete,false);
+});
+
+
+test('time, amount and matrix partial success rates retain zero while unknown and zero denominators stay unknown',async()=>{
+ const cases=[{all_count:4,success_count:2,rate:'50.00%'},{all_count:4,success_count:0,rate:'0.00%'},{all_count:4,success_count:null,rate:'—'},{all_count:null,success_count:2,rate:'—'},{all_count:0,success_count:0,rate:'—'}];
+ for(const partial of [false,true])for(const values of cases)for(const page of ['time','amount','matrix']){
+  const configs=[],platforms=partial?[platform('A'),platform('B')]:[platform('A')],rows=[hour(values)],data={...result('A',rows),platform:platform('A')};
+  const h=setup({platforms,L:{results:[data],queryFailures:partial?[{id:'B'}]:[]},handler:q=>{if(q.platformId==='B')throw Error('synthetic missing platform');return data;},analysis:{table:config=>{configs.push(config);return 'summary';}}});h.setPage(page);
+  if(page==='time'){h.root.liveAnalysisHourSet('hourMin','1');h.root.liveAnalysisHourSet('hourMax','2');h.root.liveAnalysisHourQuery();}else{h.set('0','1000');await h.query();}
+  const expected=values.rate+(partial&&values.rate!=='—'?'*':'');
+  if(page==='matrix'){
+   assert.equal(plain(h.row('charge')[2]).split(' ').at(-1),expected);assert.equal(plain(h.row('charge').at(-1)).split(' ').at(-1),expected);
+  }else{h.api.pageControls(page);const config=configs.at(-1),row=config.rows.find(row=>row.direction==='charge');assert.equal(plain(config.cells(row).at(-1)),expected);assert.equal(h.api.customResults(config.segment(row)).complete,!partial);}
+  assert.equal(h.calls.length,page==='time'?0:platforms.length,'rendering observed ratio never schedules extra requests');assert.equal(h.L.results[0].summary.length,0,'source facts unchanged');
+ }
+});
+
+test('custom amount rates weight returned platform counts and preserve an explicit success clock',async()=>{
+ const configs=[],h=setup({platforms:[platform('A'),platform('B'),platform('C')],baseRequest:{successBasis:'source_updated',successStartAt:'2026-09-29T18:30:00Z',successEndAt:'2026-09-30T18:30:00Z'},handler:q=>{if(q.platformId==='C')throw Error('synthetic missing platform');return result(q.platformId,[hour({all_count:q.platformId==='A'?10:90,success_count:q.platformId==='A'?9:1})]);},analysis:{table:config=>{configs.push(config);return 'summary';}}});
+ h.setPage('amount');h.set('100','1000');await h.query();h.api.pageControls('amount');const config=configs.at(-1),row=config.rows.find(row=>row.direction==='charge');assert.equal(plain(config.cells(row).at(-1)),'10.00%*');
+ for(const {q}of h.calls){assert.equal(q.successBasis,'source_updated');assert.equal(q.successStartAt,'2026-09-29T18:30:00Z');assert.equal(q.successEndAt,'2026-09-30T18:30:00Z');}assert.equal(h.api.customResults(config.segment(row)).complete,false);
 });

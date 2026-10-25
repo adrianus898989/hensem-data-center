@@ -3,9 +3,9 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const harnessSource=fs.readFileSync(path.join(__dirname,'admin-navigation-performance.test.cjs'),'utf8').split(/\ntest\(/)[0];
 const {ready,completeAggregate,P}=new Function('require','__dirname',harnessSource+';return {ready,completeAggregate,P};')(require,__dirname);
 const keys=['all','success','pending','failed','rejected','unknown'];
-async function overview(summaries){
+async function overview(summaries,{successBasis='created'}={}){
  const platforms=summaries.map((_,i)=>({...P,id:String(i+1).repeat(8)+'-1111-4111-8111-111111111111',name:'Synthetic '+i})),h=await ready({platforms});
- h.L.results=platforms.map((p,i)=>{const r=completeAggregate(p,1500,20);r.summary=[{...r.summary[0],...summaries[i]}];r.groups.provider=[{...r.summary[0],provider:'SyntheticPay'}];return r});
+ h.L.results=platforms.map((p,i)=>{const r=completeAggregate(p,1500,20);r.successBasis=successBasis;r.summary=[{...r.summary[0],...summaries[i]}];r.groups.provider=[{...r.summary[0],provider:'SyntheticPay'}];return r});
  Object.assign(h.L,{country:'印度',currency:'INR',direction:'charge',queryPlatforms:platforms,dirty:false,loading:false,catalogReady:true,pageQueried:true,overviewQueried:true,feeLookupRows:[],feeLookupLoading:false,comparisonStatus:'idle'});
  const original=JSON.stringify(h.L.results);h.c.render();assert.equal(JSON.stringify(h.L.results),original,'display caveats never rewrite source financial facts');return h;
 }
@@ -14,7 +14,7 @@ function tail(h,label){const found=h.html().match(new RegExp('<span>'+label+'金
 const unknownFields=Object.fromEntries(keys.flatMap(k=>[[k+'_amount',null],[k+'_count',5]]));
 
 test('creation missing count is never relabelled as the successful cohort missing count',async()=>{
- const h=await overview([{all_amount:null,success_amount:null,success_count:2,missing_amount_count:1195}]);
+ const h=await overview([{all_amount:null,success_amount:null,success_count:2,missing_amount_count:1195}],{successBasis:'success'});
  assert.match(card(h,'全部'),/>—</);assert.match(card(h,'全部'),/创建订单 1,195 笔缺少金额/);
  assert.match(card(h,'成功'),/>—</);assert.match(card(h,'成功'),/2 笔/);assert.match(card(h,'成功'),/按成功时间/);assert.match(card(h,'成功'),/该指标金额未确认/);
  assert.doesNotMatch(card(h,'成功'),/1,195|1195|笔缺少金额/);
@@ -66,3 +66,5 @@ test('mixed currencies remain unadded with a currency caveat rather than any mis
  }
  assert.equal(h.L.results[0].summary[0].currency,'INR');assert.equal(h.L.results[1].summary[0].currency,'BRL');
 });
+
+test('creation-cohort amount caveat retains its explicit returned basis and original missing-count separation',async()=>{const h=await overview([{all_amount:null,success_amount:null,success_count:2,missing_amount_count:1195}]);assert.match(card(h,'成功'),/按创建时间（当前成功状态）/);assert.match(card(h,'成功'),/2 笔|该指标金额未确认/);assert.doesNotMatch(card(h,'成功'),/1,195|1195|笔缺少金额|按成功时间/);});

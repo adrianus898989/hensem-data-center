@@ -203,7 +203,7 @@ test('custom range controls validate integer seconds and stage changes until exp
 });
 test('custom range failed platforms remain visible as partial, with safe ratios and retry only missing platforms',async()=>{
  let fail=true;const h=setup(q=>q.platformId==='b'&&fail?Promise.reject(Error('synthetic timeout')):Promise.resolve({...durationResponse(q),durationVersion:2}));h.instance.customRange();h.action(customForm,'rangeQuery');await flush();let html=h.instance.customRange();
- assert.match(html,/区间已读取 1 \/ 2/);assert.match(html,/比例待完整后计算/);assert.match(html,/synthetic timeout/);assert.equal(cellsOf(html)[0][3],'—');
+ assert.match(html,/区间已读取 1 \/ 2/);assert.match(html,/数值与比例仅含已返回平台，未返回平台不计入/);assert.match(html,/synthetic timeout/);assert.deepEqual(cellsOf(html)[0].slice(1,5),['1000.00','10','1.00%','1.00%']);
  const segment=h.instance.snapshot().states.get(JSON.stringify(customForm)).rangeSegment;fail=false;h.action(segment,'retry');await flush();assert.equal(h.calls.length,3);assert.equal(h.calls[2].platformId,'b');html=h.instance.customRange();assert.doesNotMatch(html,/区间已读取 1 \/ 2|synthetic timeout/);assert.equal(cellsOf(html)[0][3],'3.57%');
 });
 test('new version drilldowns reject legacy responses instead of silently using the old five-minute band',async()=>{
@@ -222,4 +222,33 @@ test('custom range requests are invalidated by a changed query scope without rep
  const waiting=[],h=setup(q=>new Promise(resolve=>waiting.push({q,resolve})));h.instance.customRange();h.action(customForm,'rangeQuery');assert.equal(h.calls.length,2);
  const before=JSON.stringify(h.L.results);h.L.from='2026-09-21T00:00:00';h.instance.customRange();waiting.forEach(({q,resolve})=>resolve({...durationResponse(q),durationVersion:2}));await flush();
  const html=h.instance.customRange();assert.doesNotMatch(html,/已查区间|14000.00/);assert.equal(JSON.stringify(h.L.results),before);
+});
+
+// The custom range is one cohort: selected duration orders / all valid duration orders
+// from exactly the same accepted platform responses. Missing source rows are never added.
+test('partial custom range preserves independent count and money unknown guards',async()=>{
+ for(const [patch,expected]of [
+  [{amount:null},['—','10','1.00%','—']],
+  [{valid_amount:null},['1000.00','10','1.00%','—']],
+  [{count:null},['1000.00','—','—','1.00%']],
+  [{valid_count:null},['1000.00','10','—','1.00%']],
+  [{count:0,amount:0,valid_count:0,valid_amount:0},['0.00','0','—','—']],
+  [{count:0,amount:0},['0.00','0','0.00%','0.00%']],
+ ]){
+  const h=setup(q=>{if(q.platformId==='b')return Promise.reject(Error('unavailable'));const r={...durationResponse(q),durationVersion:2};Object.assign(r.summary[0],patch);return Promise.resolve(r)});
+  h.instance.customRange();h.action(customForm,'rangeQuery');await flush();const row=cellsOf(h.instance.customRange())[0];assert.deepEqual(row.slice(1,5),expected);assert.deepEqual(row.slice(5,9),['—','—','—','—'],'an absent direction in a partial response is unknown');assert.equal(h.calls.length,2);
+ }
+});
+test('custom range ratios aggregate numerators and valid denominators over the same returned platform set',async()=>{
+ const h=setup(q=>Promise.resolve({...durationResponse(q),durationVersion:2}));h.L.queryFailures=[{id:'missing-main'}];h.instance.customRange();h.action(customForm,'rangeQuery');await flush();
+ const html=h.instance.customRange(),row=cellsOf(html)[0];assert.deepEqual(row.slice(1,5),['14000.00','50','3.57%','10.00%']);assert.match(html,/仅含已返回平台/);assert.equal(h.calls.length,2);
+ const segment=h.instance.snapshot().states.get(JSON.stringify(customForm)).rangeSegment;h.action(segment,'toggleProvider');await flush();assert.match(h.instance.panel(segment),/比例暂不计算/,'this fix does not relax provider distribution gates');assert.equal(h.calls.length,2);
+});
+test('custom range streams known ratios while remaining platform is loading and rejects incomplete payloads',async()=>{
+ let resolveB;const h=setup(q=>q.platformId==='b'?new Promise(resolve=>{resolveB=resolve}):Promise.resolve({...durationResponse(q),durationVersion:2}));h.instance.customRange();h.action(customForm,'rangeQuery');await flush();let html=h.instance.customRange();assert.match(html,/区间读取 1 \/ 2/);assert.equal(cellsOf(html)[0][3],'1.00%');
+ resolveB({...durationResponse({platformId:'b'}),durationVersion:2,complete:false,hasMore:true});await flush();html=h.instance.customRange();assert.match(html,/每日汇总未完整返回/);assert.equal(cellsOf(html)[0][3],'1.00%');assert.equal(h.calls.length,2);
+});
+test('custom range keeps the chosen creation basis and rejects mixed success clocks before transport',async()=>{
+ const h=setup(q=>Promise.resolve({...durationResponse(q),durationVersion:2,successBasis:'created'}));h.L.successBasis='created';h.L.successQuery={successBasis:'created'};h.instance.customRange();h.action(customForm,'rangeQuery');await flush();assert(h.calls.every(q=>q.successBasis==='created'&&!Object.hasOwn(q,'successStartAt')&&!Object.hasOwn(q,'successEndAt')));
+ const blocked=setup();blocked.L.successQuery={successBasis:'created',successStartAt:'2026-09-19T18:30:00Z'};blocked.instance.customRange();blocked.action(customForm,'rangeQuery');await flush();assert.equal(blocked.calls.length,0);assert.match(blocked.instance.customRange(),/创建口径不可混入独立成功窗口/);assert.deepEqual(cellsOf(blocked.instance.customRange())[0].slice(1,9),Array(8).fill('—'));
 });
