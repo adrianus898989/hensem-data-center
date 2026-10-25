@@ -1,0 +1,40 @@
+const {test,before,after}=require('node:test');
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+// All records below are synthetic. No source orders or production facts are fixtures.
+const {PGlite}=require(process.env.PGLITE_MODULE||'@electric-sql/pglite');
+const root=path.resolve(__dirname,'..');
+const fixtureRoot=path.join(__dirname,'fixtures/newar-9k-final-processing-clock');
+const fixture=JSON.parse(fs.readFileSync(path.join(fixtureRoot,'baseline-functions.json'),'utf8'));
+const fingerprints=JSON.parse(fs.readFileSync(path.join(fixtureRoot,'candidate-fingerprints.json'),'utf8'));
+function projection(name){
+ const sql=fs.readFileSync(path.join(root,'supabase/maintenance',name),'utf8');
+ const match=sql.match(/execute \$nine_k_projection\$\s*([\s\S]*?)\s*\$nine_k_projection\$;/);
+ assert.ok(match,'exact guarded maintenance projection is present');return match[1];
+}
+const file=n=>n==='newar_withdraw_fact.candidate.sql'?projection('newar-9k-final-processing-clock.sql'):n==='newar_withdraw_fact.before.sql'?projection('newar-9k-final-processing-clock.rollback.sql'):fixture[n];
+let db;
+const id='22222222-2222-4222-8222-222222222222',updated='2026-10-24T12:00:00.123Z',submitted='2026-10-24T11:59:00.000Z';
+before(async()=>{db=new PGlite();await db.exec(`create schema private;
+create table public.newar_detail_records(id uuid,platform text,dataset text,source_id text,status_code text,status_group text,currency text,created_at timestamptz,captured_at timestamptz,received_at timestamptz,source_updated_at timestamptz,success_at timestamptz,processed_at timestamptz,raw jsonb);
+create table public.newar_detail_platforms(platform text,country_code text,timezone text,currency text,enabled boolean);
+insert into public.newar_detail_platforms values('9KCLUB','IN','Asia/Kolkata','INR',true),('MAANWIN','IN','Asia/Kolkata','INR',true);
+create table private.newar_withdraw_method_verifications(record_id uuid,platform text,dataset text,source_id text,confirmed_method text);`);await db.exec(file('newar_stats_time.before.sql'));await db.exec(file('newar_withdraw_fact.before.sql').replace('private.newar_withdraw_fact(','private.fact_baseline('));await db.exec(file('newar_withdraw_fact.candidate.sql'));});
+after(async()=>db?.close());
+const tx=async f=>{await db.exec('begin');try{await f();}finally{await db.exec('rollback');}};
+function record(fields={},raw={}){return{id,platform:'9KCLUB',dataset:'withdraw',source_id:'synthetic-order',status_code:'3',status_group:'success',currency:'INR',created_at:'2026-10-24T11:00:00Z',captured_at:'2026-10-24T12:01:00Z',received_at:'2026-10-25T01:00:00Z',source_updated_at:updated,success_at:null,processed_at:null,...fields,raw:{businessSchemaVersion:2,sourceSubmittedSourceField:'submittedTime',sourceSubmittedAt:submitted,operatorType:'auto',operatorName:'system',operatorSourceField:'operator',lastUpdateTime:Date.parse(updated),...raw}};}
+async function inspect(r){const out=(await db.query(`with p as (select jsonb_populate_record(null::public.newar_detail_records,$1) r)
+select (select to_jsonb(f)from private.fact_baseline(p.r)f) old,(select to_jsonb(f)from private.newar_withdraw_fact(p.r)f) new from p`,[r])).rows[0];if(out.new){assert.deepEqual({...out.new,handled_at:null},{...out.old,handled_at:null});assert.equal(out.new.submitted_at,out.old.submitted_at);}return out;}
+for(const [code,status]of [['3','success'],['2','failed']])test(`final ${code}/${status} uses source timestamp as handled, every old field preserved`,()=>tx(async()=>{const o=await inspect(record({status_code:code,status_group:status}));assert.equal(o.old.handled_at,null);assert.equal(Date.parse(o.new.handled_at),Date.parse(updated));assert.equal(Date.parse(o.new.handled_at)-Date.parse(o.new.submitted_at),60123);}));
+for(const [label,fields,raw]of[
+ ['pending',{status_code:'5',status_group:'pending'},{}],['unknown',{status_code:'0',status_group:'unknown'},{}],['mismatched success status',{status_code:'3',status_group:'pending'},{}],['mismatched failed status',{status_code:'2',status_group:'success'},{}],['other platform',{platform:'MAANWIN'},{}],['source clock absent',{source_updated_at:null},{}],['source clock mismatched',{source_updated_at:'2026-10-24T12:00:00.124Z'},{}],['source clock before creation',{created_at:'2026-10-24T12:01:00Z'},{}],['source clock after capture',{captured_at:'2026-10-24T11:59:59Z'},{}],['raw clock absent',{}, {lastUpdateTime:null}],['raw clock string',{}, {lastUpdateTime:String(Date.parse(updated))}],['raw clock seconds',{}, {lastUpdateTime:Math.floor(Date.parse(updated)/1000)}],['raw clock nonintegral',{}, {lastUpdateTime:Date.parse(updated)+0.5}],['raw clock boolean',{}, {lastUpdateTime:true}],['raw clock object',{}, {lastUpdateTime:{test:'value'}}],['old schema',{}, {businessSchemaVersion:1}],['schema absent',{}, {businessSchemaVersion:null}],['source clock infinity',{source_updated_at:'infinity'},{}]
+])test(label+' retains old unknown handling time',()=>tx(async()=>{const o=await inspect(record(fields,raw));assert.deepEqual(o.new,o.old);assert.equal(o.new.handled_at,null);}));
+for(const [label,sql]of [['disabled',"update public.newar_detail_platforms set enabled=false"],['wrong native country',"update public.newar_detail_platforms set country_code='PK'"],['wrong native timezone',"update public.newar_detail_platforms set timezone='Asia/Calcutta'"],['wrong native currency',"update public.newar_detail_platforms set currency='USD'"],['catalog absent','truncate public.newar_detail_platforms']])test(label+' cannot gain a new event interpretation',()=>tx(async()=>{await db.exec(sql);const o=await inspect(record());assert.deepEqual(o.new,o.old);}));
+test('explicit true handled clock has priority over derived source update',()=>tx(async()=>{const handled='2026-10-24T11:59:45Z';const o=await inspect(record({}, {sourceHandledSourceField:'handledTime',sourceHandledAt:handled}));assert.deepEqual(o.new,o.old);assert.equal(Date.parse(o.new.handled_at),Date.parse(handled));}));
+test('explicit source handling without field proof is not used; verified 9K fallback still works',()=>tx(async()=>{const o=await inspect(record({}, {sourceHandledAt:'2026-10-24T11:59:45Z'}));assert.equal(Date.parse(o.new.handled_at),Date.parse(updated));}));
+test('collector observation and database receipt clocks never become handling events',()=>tx(async()=>{const o=await inspect(record({source_updated_at:null,processed_at:'2026-10-24T13:00Z',success_at:'2026-10-24T14:00Z'}, {lastUpdateTime:null}));assert.deepEqual(o.new,o.old);assert.equal(o.new.handled_at,null);}));
+test('only withdrawal is projected; no recharge cross-use',()=>tx(async()=>{const o=await inspect(record({dataset:'charge'}));assert.equal(o.old,null);assert.equal(o.new,null);}));
+test('negative submitted-to-handled is not fabricated into valid processing seconds',()=>tx(async()=>{const o=await inspect(record({}, {sourceSubmittedAt:'2026-10-24T12:01:00Z'}));assert(Date.parse(o.new.handled_at)<Date.parse(o.new.submitted_at));const days=file('dashboard_admin_newar_withdraw_days.before.sql');assert.match(days,/handled_at\s*>=\s*[^\s]+submitted_at|handled_at\s*>\s*[^\s]+submitted_at|seconds\s*>\s*0/);}));
+test('method verification still overrides original operator class',()=>tx(async()=>{await db.query('insert into private.newar_withdraw_method_verifications values($1,$2,$3,$4,$5)',[id,'9KCLUB','withdraw','synthetic-order','manual']);const o=await inspect(record());assert.equal(o.new.method,'manual');assert.equal(o.old.method,'manual');}));
+
+test('archived install is the verified projector body',async()=>{const rows=(await db.query("select md5(prosrc) hash from pg_proc where oid='private.newar_withdraw_fact(public.newar_detail_records)'::regprocedure")).rows;assert.equal(rows[0].hash,fingerprints.after.body_md5);});
+test('archived rollback is the original projector body',async()=>{const rows=(await db.query("select md5(prosrc) hash from pg_proc where oid='private.fact_baseline(public.newar_detail_records)'::regprocedure")).rows;assert.equal(rows[0].hash,fingerprints.before.body_md5);});

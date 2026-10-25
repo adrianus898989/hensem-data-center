@@ -8,6 +8,7 @@ const row=(date,direction='charge',values={})=>({date,direction,created_member_c
 const zero=()=>({created_member_count:0,success_member_count:0,created_order_count:0,success_order_count:0,created_missing_member_count:0,success_missing_member_count:0});
 function response(q,rows=[row('2026-09-26'),row('2026-09-26','withdraw')].filter(r=>q.direction==='all'||r.direction===q.direction),extra={}){return {version:1,platform:p(q.platformId),startAt:q.startAt,endAt:q.endAt,rows,capabilities:{memberIdentity:true,createdBasis:'created_at',successBasis:'success_at',dedupe:'platform_local_date_direction_member',sourceCompletenessVerified:false,periodTotal:'sum_daily_unique_member_visits'},...extra};}
 function harness(){const L={country:'印度',from:'2026-09-26T00:00:00',to:'2026-09-26T23:59:59',direction:'all',status:'all',dirty:false,multi:{team:[],provider:[]}},calls=[],drawers=[];let selected=[p()],handler=q=>response(q),extraQuery={};const ui=create({L,E:escape,C:v=>Number(v).toLocaleString('en-US'),N:v=>String(v),selected:()=>selected,query:(platform,action)=>({action,platformId:platform.id,startAt:'2026-09-25T18:30:00Z',endAt:'2026-09-26T18:30:00Z',direction:L.direction,status:L.status,currency:platform.currency,providers:L.multi.provider,offset:200,limit:50,view:'providers',...extraQuery}),request:q=>{calls.push(q);return Promise.resolve(handler(q))},render(){},open:(title,body)=>drawers.push({title,body})});return {L,ui,calls,drawers,select:v=>selected=v,handler:v=>handler=v,query:v=>extraQuery=v};}
+const cancelledQuery=(message='Synthetic database statement limit')=>Object.assign(Error(message),{code:'57014'});
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {resolve,promise};};
 function wgResponse(q){
  const caps={memberIdentity:false,memberIdentityByDirection:{charge:false,withdraw:true},availability:{charge:{created:false,success:false},withdraw:{created:true,success:false}},createdBasis:'created_at',successBasis:'success_at',dedupe:'platform_local_date_direction_member',frequencyBasis:'per_platform_local_day_order_count',frequencyThresholds:[2,3,4,5],sourceCompletenessVerified:false};
@@ -125,26 +126,26 @@ test('16-platform cohort finishes before the serial direction retry, retaining t
 
 test('multiple timeout platforms retry each direction sequentially once after all initial reads, never duplicating successful platform counts',async()=>{
  const h=harness(),third='33333333-3333-4333-8333-333333333333',attempts=new Map(),initialSettled=new Set();h.select([p(),p(B),p(third)]);let active=0,retryActive=0,maxRetryActive=0,maximum=0;
- h.handler(async q=>{const attempt=(attempts.get(q.platformId)||0)+1;attempts.set(q.platformId,attempt);active++;maximum=Math.max(maximum,active);if(attempt>=2){assert.equal(initialSettled.size,3);retryActive++;maxRetryActive=Math.max(maxRetryActive,retryActive);}try{await tick();if(attempt===1){initialSettled.add(q.platformId);if(q.platformId!==third)throw Error('Synthetic timed out');}return response(q);}finally{active--;if(attempt>=2)retryActive--;}});
+ h.handler(async q=>{const attempt=(attempts.get(q.platformId)||0)+1;attempts.set(q.platformId,attempt);active++;maximum=Math.max(maximum,active);if(attempt>=2){assert.equal(initialSettled.size,3);retryActive++;maxRetryActive=Math.max(maxRetryActive,retryActive);}try{await tick();if(attempt===1){initialSettled.add(q.platformId);if(q.platformId!==third)throw cancelledQuery('Synthetic database statement limit');}return response(q);}finally{active--;if(attempt>=2)retryActive--;}});
  await h.ui.ensure();assert.equal(maximum,2);assert.equal(maxRetryActive,1);assert.equal(h.calls.length,7);assert.deepEqual(h.calls.slice(3).map(q=>[q.platformId,q.direction]),[[A,'charge'],[A,'withdraw'],[B,'charge'],[B,'withdraw']]);assert.equal(attempts.get(third),1);assert.equal(h.ui.state.results.length,3);assert.equal(h.ui.state.failures.length,0);assert.match(h.ui.metric('charge'),/36 \/ 27/);assert.match(h.ui.metric('withdraw'),/36 \/ 27/);
 });
 
 test('serial retry is bounded and timeout-only: permission, network, rate limit and invalid response errors are not retried',async()=>{
  for(const error of [Object.assign(Error('permission denied'),{code:'42501'}),Error('Failed to fetch'),Object.assign(Error('Too many requests'),{code:'429'}),Object.assign(Error('query replaced'),{name:'AbortError'})]){const h=harness();h.handler(()=>{throw error});await h.ui.ensure();assert.equal(h.calls.length,1);assert.equal(h.ui.state.results.length,0);assert.equal(h.ui.state.status,'error');}
  const h=harness();h.handler(()=>{throw Object.assign(Error('statement limit'),{code:'57014'})});await h.ui.ensure();assert.equal(h.calls.length,2);assert.equal(h.ui.state.failures.length,1);assert.equal(h.ui.state.results.length,0);assert.match(h.ui.metric('charge'),/— \/ —/);await h.ui.ensure();assert.equal(h.calls.length,2,'render/ensure does not start another retry loop');
- const invalid=harness();invalid.handler(q=>{if(invalid.calls.length===1)throw Error('读取超时');return response(q,undefined,{platform:p(B)})});await invalid.ui.ensure();assert.equal(invalid.calls.length,2);assert.equal(invalid.ui.state.results.length,0);assert.equal(invalid.ui.state.status,'error');assert.match(invalid.ui.state.failures[0].error,/响应范围或口径不一致/);
+ const invalid=harness();invalid.handler(q=>{if(invalid.calls.length===1)throw cancelledQuery('读取超时');return response(q,undefined,{platform:p(B)})});await invalid.ui.ensure();assert.equal(invalid.calls.length,2);assert.equal(invalid.ui.state.results.length,0);assert.equal(invalid.ui.state.status,'error');assert.match(invalid.ui.state.failures[0].error,/响应范围或口径不一致/);
 });
 
 test('cancellation before the initial cohort finishes prevents the retry phase entirely',async()=>{
- const h=harness(),late=deferred();h.select([p(),p(B)]);h.handler(q=>{if(q.platformId===A)throw Error('Synthetic timeout');return late.promise});const loading=h.ui.ensure();await tick();assert.equal(h.calls.length,2);h.ui.cancel();late.resolve(response(h.calls[1]));await loading;assert.equal(h.calls.length,2);assert.equal(h.ui.state.status,'paused');assert.equal(h.ui.state.results.length,0);
+ const h=harness(),late=deferred();h.select([p(),p(B)]);h.handler(q=>{if(q.platformId===A)throw cancelledQuery();return late.promise});const loading=h.ui.ensure();await tick();assert.equal(h.calls.length,2);h.ui.cancel();late.resolve(response(h.calls[1]));await loading;assert.equal(h.calls.length,2);assert.equal(h.ui.state.status,'paused');assert.equal(h.ui.state.results.length,0);
 });
 
 test('cancel or restored tabs during serial retry reject late results and prevent queued timeout retries',async()=>{
- for(const action of ['cancel','restore']){const h=harness(),late=deferred();h.select([p(),p(B)]);h.handler(q=>{if(h.calls.length<=2)throw Error('Synthetic timeout');return late.promise});const loading=h.ui.ensure();await tick();assert.equal(h.calls.length,3);if(action==='cancel')h.ui.cancel();else h.ui.restore(null);late.resolve(response(h.calls[2]));await loading;assert.equal(h.calls.length,3);assert.equal(h.ui.state.results.length,0);assert.equal(h.ui.state.status,action==='cancel'?'paused':'idle');assert.match(h.ui.metric('charge'),/— \/ —/);}
+ for(const action of ['cancel','restore']){const h=harness(),late=deferred();h.select([p(),p(B)]);h.handler(q=>{if(h.calls.length<=2)throw cancelledQuery();return late.promise});const loading=h.ui.ensure();await tick();assert.equal(h.calls.length,3);if(action==='cancel')h.ui.cancel();else h.ui.restore(null);late.resolve(response(h.calls[2]));await loading;assert.equal(h.calls.length,3);assert.equal(h.ui.state.results.length,0);assert.equal(h.ui.state.status,action==='cancel'?'paused':'idle');assert.match(h.ui.metric('charge'),/— \/ —/);}
 });
 
 test('changed scope during serial retry does not retry old queued platforms or overwrite newer scope results',async()=>{
- const h=harness(),late=deferred();h.select([p(),p(B)]);h.handler(()=>{if(h.calls.length<=2)throw Error('Synthetic timeout');return late.promise});const first=h.ui.ensure();await tick();assert.equal(h.calls.length,3);const staleRequest=h.calls[2];h.L.multi.provider=['New Scope'];h.handler(q=>response(q,[row('2026-09-26','charge',{success_member_count:2}),row('2026-09-26','withdraw',{success_member_count:3})]));await h.ui.ensure();late.resolve(response(staleRequest));await first;
+ const h=harness(),late=deferred();h.select([p(),p(B)]);h.handler(()=>{if(h.calls.length<=2)throw cancelledQuery();return late.promise});const first=h.ui.ensure();await tick();assert.equal(h.calls.length,3);const staleRequest=h.calls[2];h.L.multi.provider=['New Scope'];h.handler(q=>response(q,[row('2026-09-26','charge',{success_member_count:2}),row('2026-09-26','withdraw',{success_member_count:3})]));await h.ui.ensure();late.resolve(response(staleRequest));await first;
  assert.equal(h.calls.length,5);assert(h.calls.slice(3).every(q=>q.providers[0]==='New Scope'));assert.equal(h.calls.filter(q=>q.platformId===B&&!q.providers?.length).length,1);assert.equal(h.ui.state.results.length,2);assert.equal(h.ui.platformMetric([A,B],'charge').value,4);assert.equal(h.ui.platformMetric([A,B],'withdraw').value,6);assert.equal(h.ui.state.failures.length,0);
 });
 
@@ -164,18 +165,18 @@ test('daily fallback boundaries use calendar days across DST, with no UTC 24-hou
 
 test('a failed fallback day excludes that entire platform, keeps other complete platforms as partial, and never splits into hours',async()=>{
  const h=harness();h.select([p(),p(B)]);h.L.to='2026-09-28T23:59:59';h.query({endAt:'2026-09-28T18:30:00Z'});
- h.handler(q=>{if(q.platformId===A&&Date.parse(q.endAt)-Date.parse(q.startAt)>86400000)throw Error('读取超时');if(q.platformId===A&&q.startAt==='2026-09-26T18:30:00.000Z')throw Error('Synthetic day timeout');return dailyResponse(q)});
+ h.handler(q=>{if(q.platformId===A&&Date.parse(q.endAt)-Date.parse(q.startAt)>86400000)throw cancelledQuery('读取超时');if(q.platformId===A&&q.startAt==='2026-09-26T18:30:00.000Z')throw Error('Synthetic day timeout');return dailyResponse(q)});
  await h.ui.ensure();assert.equal(h.ui.state.status,'ready');assert.equal(h.ui.state.results.length,1);assert.equal(h.ui.state.results[0].platform.id,B);assert.equal(h.calls.filter(q=>q.platformId===A).length,3);assert.equal(h.calls.filter(q=>q.platformId===A&&Date.parse(q.endAt)-Date.parse(q.startAt)>86400000).length,1,'a failed daily fallback never restarts the original wide request');assert.match(h.ui.metric('charge'),/36 \/ 27/);assert.match(h.ui.metric('charge'),/读取 1 \/ 2 平台.*部分数据/);h.ui.details();assert.match(h.drawers[0].body,/1\/3 天已读取，平台未计入合计/);
 });
 
 test('daily fallback is only for multi-day timeouts; single-day timeout has just one serial retry, while invalid responses do not',async()=>{
- for(const [multiple,message,calls]of [[false,'Synthetic timeout',2],[true,'permission denied',1]]){const h=harness();if(multiple){h.L.to='2026-09-27T23:59:59';h.query({endAt:'2026-09-27T18:30:00Z'});}h.handler(()=>{throw Error(message)});await h.ui.ensure();assert.equal(h.calls.length,calls);assert.equal(h.ui.state.status,'error');}
+ for(const [multiple,message,calls]of [[false,'57014',2],[true,'permission denied',1]]){const h=harness();if(multiple){h.L.to='2026-09-27T23:59:59';h.query({endAt:'2026-09-27T18:30:00Z'});}h.handler(()=>{throw message==='57014'?cancelledQuery():Error(message)});await h.ui.ensure();assert.equal(h.calls.length,calls);assert.equal(h.ui.state.status,'error');}
  const h=harness();h.L.to='2026-09-27T23:59:59';h.query({endAt:'2026-09-27T18:30:00Z'});h.handler(q=>response(q));await h.ui.ensure();assert.equal(h.calls.length,1);assert.equal(h.ui.state.status,'error');
 });
 
 test('all platforms and fallback days share a maximum of two active requests',async()=>{
  const h=harness(),C='33333333-3333-4333-8333-333333333333';h.select([p(),p(B),p(C)]);h.L.to='2026-09-28T23:59:59';h.query({endAt:'2026-09-28T18:30:00Z'});let active=0,maximum=0;
- h.handler(async q=>{active++;maximum=Math.max(maximum,active);try{await tick();if(Date.parse(q.endAt)-Date.parse(q.startAt)>86400000)throw Error('Synthetic timeout');return dailyResponse(q)}finally{active--;}});
+ h.handler(async q=>{active++;maximum=Math.max(maximum,active);try{await tick();if(Date.parse(q.endAt)-Date.parse(q.startAt)>86400000)throw cancelledQuery();return dailyResponse(q)}finally{active--;}});
  await h.ui.ensure();assert.equal(maximum,2);assert.equal(h.calls.length,12);assert.equal(h.ui.state.results.length,3);assert.match(h.ui.metric('charge'),/108 \/ 81/);
 });
 
@@ -207,7 +208,7 @@ test('frequency coverage excludes missing IDs and never treats all-unidentified 
 });
 
 test('whole-day timeout fallback preserves frequency fields but never sums different days into a daily row',async()=>{
- const h=harness();h.L.to='2026-09-27T23:59:59';h.query({endAt:'2026-09-27T18:30:00Z'});h.handler(q=>{if(Date.parse(q.endAt)-Date.parse(q.startAt)>86400000)throw Error('Synthetic timeout');const date=requestFor(p(),()=>q).days[0];return frequencyResponse(q,[row(date),frequencyRow(date)])});await h.ui.ensure();assert.equal(h.ui.state.results[0].frequencySupported,true);h.ui.details('frequency');const body=h.drawers.at(-1).body;assert.match(body,/频次已提供 2 \/ 2 个平台日/);assert.equal((body.match(/<td>6<\/td><td>4<\/td><td>2<\/td><td>1<\/td>/g)||[]).length,2);assert.doesNotMatch(body,/<td>12<\/td><td>8<\/td><td>4<\/td><td>2<\/td>/);
+ const h=harness();h.L.to='2026-09-27T23:59:59';h.query({endAt:'2026-09-27T18:30:00Z'});h.handler(q=>{if(Date.parse(q.endAt)-Date.parse(q.startAt)>86400000)throw cancelledQuery();const date=requestFor(p(),()=>q).days[0];return frequencyResponse(q,[row(date),frequencyRow(date)])});await h.ui.ensure();assert.equal(h.ui.state.results[0].frequencySupported,true);h.ui.details('frequency');const body=h.drawers.at(-1).body;assert.match(body,/频次已提供 2 \/ 2 个平台日/);assert.equal((body.match(/<td>6<\/td><td>4<\/td><td>2<\/td><td>1<\/td>/g)||[]).length,2);assert.doesNotMatch(body,/<td>12<\/td><td>8<\/td><td>4<\/td><td>2<\/td>/);
 });
 
 

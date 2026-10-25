@@ -1,0 +1,36 @@
+{
+  "before": {
+    "acl": "{postgres=X/postgres}",
+    "owner": "postgres",
+    "procost": 100,
+    "prorows": 1000,
+    "body_md5": "244fe0b21d3b785a40c6409807b358bc",
+    "identity": "private.newar_withdraw_fact(newar_detail_records)",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "prosecdef": false,
+    "proisstrict": false,
+    "proparallel": "u",
+    "provolatile": "v",
+    "proleakproof": false,
+    "definition_md5": "22a130f5c77e555ee339a64405b5df00"
+  },
+  "after": {
+    "acl": "{postgres=X/postgres}",
+    "owner": "postgres",
+    "procost": 100,
+    "prorows": 1000,
+    "body_md5": "c21dce3fbfb259e500691b4d94efe26c",
+    "identity": "private.newar_withdraw_fact(newar_detail_records)",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "prosecdef": false,
+    "proisstrict": false,
+    "proparallel": "u",
+    "provolatile": "v",
+    "proleakproof": false,
+    "definition_md5": "c195abdfd4e03976e9fe9b1c1d4ee533"
+  }
+}
