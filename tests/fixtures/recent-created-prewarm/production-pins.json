@@ -1,0 +1,128 @@
+[
+  {
+    "signature": "private.prepared_aggregate_dependency_common(text)",
+    "owner": "postgres",
+    "acl": "{postgres=X/postgres}",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "prosecdef": false,
+    "provolatile": "s",
+    "proparallel": "u",
+    "proisstrict": false,
+    "proleakproof": false,
+    "procost": 100,
+    "prorows": 0,
+    "body_md5": "9cba93eff52a872313d36e040b8e494d",
+    "definition_md5": "6a05db0a38d9808a024b2c238b6c5257",
+    "definition": "CREATE OR REPLACE FUNCTION private.prepared_aggregate_dependency_common(p_scope text)\n RETURNS text\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n select md5(jsonb_build_object(\n  'contract','exact-prepared-dual-clock-v1',\n  'functions',(select jsonb_agg(jsonb_build_array(n.nspname,p.proname,pg_get_function_identity_arguments(p.oid),CASE WHEN EXISTS(SELECT 1 FROM pg_proc h WHERE h.oid=to_regprocedure('private.dashboard_withdraw_status_dependency_md5(pg_catalog.pg_proc)') AND md5(h.prosrc)='1cfe700c87c0fa33bee5d0586cb78853' AND pg_get_userbyid(h.proowner)='postgres' AND h.proacl::text='{postgres=X/postgres}' AND h.proconfig=ARRAY['search_path=\"\"'] AND NOT h.prosecdef AND h.provolatile='s' AND NOT h.proisstrict AND NOT h.proleakproof AND h.proparallel='u' AND h.procost=100 AND h.prorows=0 AND NOT h.proretset AND h.prorettype='text'::regtype AND h.prolang=(SELECT oid FROM pg_language WHERE lanname='plpgsql') AND pg_get_function_arguments(h.oid)='p pg_proc') THEN private.dashboard_withdraw_status_dependency_md5(p) ELSE md5(p.prosrc) END,p.proconfig,p.prosecdef,p.provolatile,pg_get_userbyid(p.proowner),p.proacl::text,(select l.lanname from pg_language l where l.oid=p.prolang),p.proparallel,p.proisstrict,p.proleakproof,pg_get_function_arguments(p.oid),pg_get_function_result(p.oid),p.procost,p.prorows)order by n.nspname,p.proname,p.oid)\n   from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='private'and(p.proname=any(array[\n    'dashboard_admin_live_query_raw','dashboard_admin_live_query','dashboard_admin_live_submission_analysis','dashboard_admin_live_intake_coverage',\n    'dashboard_admin_live_remap_groups','dashboard_admin_live_expand_provider_filter','dashboard_admin_live_intake_order_feeds',\n    'dashboard_admin_live_provider_canonical','dashboard_admin_wg_provider_aliases','dashboard_admin_live_provider_alias','dashboard_admin_live_provider_alias_values','dashboard_admin_live_confirmed_provider',\n    'dashboard_data_group','dashboard_admin_fee_intervals','dashboard_admin_fee_category','dashboard_admin_ar_local_amount','provider_snapshot_dependency_token',\n    'provider_snapshot_orders_raw_kernel','provider_snapshot_orders_result_kernel','provider_snapshot_submission_kernel',\n    'provider_snapshot_order_feeds_kernel','provider_snapshot_intake_rows_kernel','provider_snapshot_compute_payload',\n    'provider_snapshot_native_catalog','provider_snapshot_target_current','provider_snapshot_kernel_contract_current','dashboard_admin_live_platforms'])\n    or p.proname like 'dashboard_prepared_%' or p.proname like 'prepared_aggregate_%' or p.proname like 'dashboard_admin_duoli_%' or p.proname like 'dashboard_admin_panda_%' or p.proname like 'dashboard_admin_wg_%' or p.proname like 'dashboard_admin_yash_%'or p.proname like 'ar_91club_submission_%'or p.proname like 'ar_submission_fact_%'or p.proname like 'maan_submission_%'\n    or p.proname like 'dashboard_admin_fee_%'or p.proname like 'dashboard_admin_ar_%'or p.proname like 'dashboard_admin_order_business_%')),\n  -- Fee outputs consume immutable versions, category presence and evidence eligibility,\n  -- not the sheet publisher's observation/generation identity. Keep all IN directions.\n  'feeSemantics',jsonb_build_object(\n   'versions',(select coalesce(jsonb_agg(to_jsonb(v)order by v.id),'[]'::jsonb)\n    from private.fee_rate_versions v where v.country=p_scope),\n   'openIntervalEvidence',(select coalesce(jsonb_agg(jsonb_build_array(v.id,\n    exists(select 1 from private.fee_rate_current_evidence e\n     join private.fee_rate_generations g on g.id=e.generation_id\n     join public.third_party_rates r on r.id=e.source_id\n     where e.rule_key=v.rule_key and e.version_id=v.id and e.state='ready'\n      and r.updated_at=g.published_at))order by v.id),'[]'::jsonb)\n    from private.fee_rate_versions v where v.country=p_scope),\n   'sourceCategories',(select coalesce(jsonb_agg(category order by category),'[]'::jsonb)\n    from(select distinct upper(btrim(r.category)) category from public.third_party_rates r\n     where private.dashboard_data_group(r.country,'')=p_scope) categories),\n   'blockingEvidence',(select coalesce(jsonb_agg(jsonb_build_array(direction,category,provider)\n    order by direction,category,provider),'[]'::jsonb)\n    from(select distinct bad.direction,upper(btrim(r.category)) category,r.third_party provider\n     from private.fee_rate_current_evidence bad\n     join public.third_party_rates r on r.id=bad.source_id\n     join private.fee_rate_generations generation on generation.id=bad.generation_id\n     where (bad.version_id is null or bad.state<>'ready'\n       or r.updated_at is distinct from generation.published_at)\n      and private.dashboard_data_group(r.country,'')=p_scope) blockers)\n  )\n )::text);\n$function$\n"
+  },
+  {
+    "signature": "private.prepared_aggregate_base_request(jsonb,jsonb,timestamp with time zone)",
+    "owner": "postgres",
+    "acl": "{postgres=X/postgres}",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "prosecdef": false,
+    "provolatile": "s",
+    "proparallel": "u",
+    "proisstrict": false,
+    "proleakproof": false,
+    "procost": 100,
+    "prorows": 0,
+    "body_md5": "e05bf399932d1441b3425a548e0af7ed",
+    "definition_md5": "9aa161e7cc2ace98b3fac2fca1d292df",
+    "definition": "CREATE OR REPLACE FUNCTION private.prepared_aggregate_base_request(q jsonb, t jsonb, p_now timestamp with time zone DEFAULT now())\n RETURNS jsonb\n LANGUAGE plpgsql\n STABLE\n SET search_path TO ''\nAS $function$\ndeclare r jsonb;\nbegin\n -- Custom duration requests stay exact, including direction. Their native\n -- coverage/capability contract is not inferred from a broader default DTO.\n if q?'durationRange'then return q;end if;\n r:=case when coalesce(q->>'view','full')='providers'then(q-array['providers','amountBands'])||jsonb_build_object('direction','all')else q||jsonb_build_object('direction','all')end;\n if private.prepared_aggregate_request_reason(r,t)is not null then return q;end if;\n if not(r?'durationRange')and coalesce(r->>'durationVersion','1')in('1','2')then\n  if coalesce(r->>'view','full')='full'then return r||jsonb_build_object('view','full','durationVersion',2);end if;\n  if greatest((r->>'endAt')::timestamptz,coalesce(r->>'successEndAt',r->>'endAt')::timestamptz)>p_now-interval'24hours'then\n   return r||jsonb_build_object('view','full','durationVersion',2,'amountBands','{\"charge\":[100,200,300,400,500,1000,2000,5000,10000,20000,50000],\"withdraw\":[100,200,300,400,500,1000,2000,5000,10000,20000,50000]}'::jsonb);\n  end if;\n end if;\n return r;\nend;$function$\n"
+  },
+  {
+    "signature": "private.prepared_aggregate_enqueue(jsonb,jsonb,text,smallint)",
+    "owner": "postgres",
+    "acl": "{postgres=X/postgres}",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "prosecdef": false,
+    "provolatile": "v",
+    "proparallel": "u",
+    "proisstrict": false,
+    "proleakproof": false,
+    "procost": 100,
+    "prorows": 0,
+    "body_md5": "a4e4e1a403bf0aa2dc70c7bb7ad4e6c9",
+    "definition_md5": "51ab15b2eaedf6e682e9c5fbde1e3da4",
+    "definition": "CREATE OR REPLACE FUNCTION private.prepared_aggregate_enqueue(q jsonb, t jsonb, dep text, p_priority smallint DEFAULT 0)\n RETURNS uuid\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\ndeclare k jsonb:=private.prepared_aggregate_key(q,t);j private.prepared_aggregate_jobs%rowtype;\nbegin\n if private.prepared_aggregate_request_reason(q,t)is not null then raise exception using errcode='22023',message='prepared_request_unsupported';end if;\n select *into j from private.prepared_aggregate_jobs where request_fingerprint=md5(k::text)and request_key=k for update;\n if found then\n  update private.prepared_aggregate_jobs set last_requested_at=clock_timestamp(),priority=greatest(priority,p_priority),\n   revision=revision+case when dependency<>dep or target<>t then 1 else 0 end,\n   status=case when dependency<>dep or target<>t or last_error='superseded_by_full_master' then 'queued' when status='failed'and attempts<3 and not_before<=clock_timestamp()then'queued'else status end,\n   attempts=case when dependency<>dep or target<>t or last_error='superseded_by_full_master' then 0 else attempts end,dependency=dep,target=t,not_before=case when dependency<>dep or target<>t or last_error='superseded_by_full_master' then clock_timestamp()else not_before end,\n   last_error=case when last_error='superseded_by_full_master'then null else last_error end,\n   lease_until=case when dependency<>dep or target<>t then null else lease_until end where id=j.id;\n  return j.id;\n end if;\n if not pg_try_advisory_xact_lock(hashtextextended('prepared_aggregate_admission_v1',0))then return null;end if;\n if (select count(*)from(select 1 from private.prepared_aggregate_jobs limit 10000)s)>=10000 then return null;end if;\n insert into private.prepared_aggregate_jobs(request_key,target,request,dependency,priority)values(k,t,q,dep,p_priority)\n on conflict(request_fingerprint)do update set last_requested_at=excluded.last_requested_at where private.prepared_aggregate_jobs.request_key=excluded.request_key returning id into j.id;\n return j.id;\nend;$function$\n"
+  },
+  {
+    "signature": "private.prepared_aggregate_retire_replaced(jsonb,jsonb,jsonb,text)",
+    "owner": "postgres",
+    "acl": "{postgres=X/postgres}",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "prosecdef": false,
+    "provolatile": "v",
+    "proparallel": "u",
+    "proisstrict": false,
+    "proleakproof": false,
+    "procost": 100,
+    "prorows": 0,
+    "body_md5": "5727bfa57092d8711769fcc81a060e3d",
+    "definition_md5": "ef2b556d6cf01503747dcbc7a04856fd",
+    "definition": "CREATE OR REPLACE FUNCTION private.prepared_aggregate_retire_replaced(q jsonb, t jsonb, baseq jsonb, dep text)\n RETURNS boolean\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\ndeclare oldkey jsonb:=private.prepared_aggregate_key(q,t);basekey jsonb:=private.prepared_aggregate_key(baseq,t);n integer;\nbegin\n if current_user<>'postgres'then raise exception using errcode='42501',message='prepared_worker_denied';end if;\n if oldkey=basekey then return false;end if;\n if not exists(select 1 from private.prepared_aggregate_jobs j join private.prepared_aggregate_heads h on h.job_id=j.id join private.prepared_aggregate_artifacts a on a.id=h.artifact_id\n  where j.request_fingerprint=md5(basekey::text)and j.request_key=basekey and j.target=t and j.dependency=dep and a.dependency=dep and a.revision=j.revision and a.expires_at>clock_timestamp())then return false;end if;\n update private.prepared_aggregate_jobs set status='failed',attempts=3,last_error='superseded_by_full_master',next_due_at=null,lease_until=null\n where request_fingerprint=md5(oldkey::text)and request_key=oldkey and target=t and status<>'running'and last_error is distinct from'superseded_by_full_master';\n get diagnostics n=row_count;return n>0;\nend;$function$\n"
+  },
+  {
+    "signature": "private.prepared_aggregate_scheduled_due(jsonb,jsonb,timestamp with time zone,timestamp with time zone)",
+    "owner": "postgres",
+    "acl": "{postgres=X/postgres}",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "prosecdef": false,
+    "provolatile": "s",
+    "proparallel": "u",
+    "proisstrict": false,
+    "proleakproof": false,
+    "procost": 100,
+    "prorows": 0,
+    "body_md5": "c56ba8f6e92aecaa4595c68f1e128eff",
+    "definition_md5": "b2908f767799ab1bc5717dbe28b58e88",
+    "definition": "CREATE OR REPLACE FUNCTION private.prepared_aggregate_scheduled_due(q jsonb, t jsonb, p_computed timestamp with time zone, p_now timestamp with time zone DEFAULT now())\n RETURNS timestamp with time zone\n LANGUAGE plpgsql\n STABLE\n SET search_path TO ''\nAS $function$\ndeclare state private.prepared_aggregate_schedule%rowtype;local_computed timestamp;local_day date;window_day date;\nbegin\n select *into state from private.prepared_aggregate_schedule where singleton;\n if not state.enabled or not exists(select 1 from jsonb_array_elements(state.approved_targets)x where x=t)then return null;end if;\n local_computed:=p_computed at time zone(t->>'timezone');local_day:=(p_now at time zone(t->>'timezone'))::date;\n window_day:=((greatest((q->>'endAt')::timestamptz,coalesce(q->>'successEndAt',q->>'endAt')::timestamptz)-interval'1microsecond')at time zone(t->>'timezone'))::date;\n if window_day>=local_day then return p_computed+make_interval(secs=>state.current_interval_seconds);end if;\n return(case when local_computed::time<time'08:00'then local_computed::date+time'08:00'\n  when local_computed::time<time'20:00'then local_computed::date+time'20:00'\n  else local_computed::date+1+time'08:00'end)at time zone(t->>'timezone');\nend;$function$\n"
+  },
+  {
+    "signature": "private.dashboard_serving_country_prewarm(timestamp with time zone)",
+    "owner": "postgres",
+    "acl": "{postgres=X/postgres}",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "prosecdef": false,
+    "provolatile": "v",
+    "proparallel": "u",
+    "proisstrict": false,
+    "proleakproof": false,
+    "procost": 100,
+    "prorows": 0,
+    "body_md5": "7e09e38e4476ceed2593bfffa1c3b3de",
+    "definition_md5": "70f366e413f0545982242d207f09b9f7",
+    "definition": "CREATE OR REPLACE FUNCTION private.dashboard_serving_country_prewarm(p_now timestamp with time zone DEFAULT now())\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\ndeclare state private.prepared_aggregate_schedule%rowtype;native jsonb;t jsonb;d date;offset_day integer;q jsonb;baseq jsonb;k jsonb;dep text;n integer:=0;jobs integer:=0;last_id uuid;\n commons jsonb:='{}';scope text;common text;job private.prepared_aggregate_jobs%rowtype;head private.prepared_aggregate_artifacts%rowtype;due timestamptz;admitted uuid;refreshed integer:=0;unsupported integer:=0;budget interval:=current_setting('statement_timeout')::interval;\nbegin\n if current_user<>'postgres'then raise exception using errcode='42501',message='prepared_worker_denied';end if;\n if p_now is null or not isfinite(p_now)then raise exception using errcode='22023',message='invalid_schedule_time';end if;\n if budget<=interval'0'or budget>interval'3seconds'then raise exception using errcode='22023',message='prepared_schedule_deadline_required';end if;\n if not pg_try_advisory_xact_lock(hashtextextended('prepared_aggregate_dispatch_v1',0))then return jsonb_build_object('status','busy');end if;\n select *into state from private.prepared_aggregate_schedule where singleton for update;\n if not state.enabled then return jsonb_build_object('status','disabled');end if;\n if jsonb_array_length(state.approved_targets)=0 then return jsonb_build_object('status','no_approved_targets');end if;\n select coalesce(jsonb_agg(to_jsonb(p)),'[]'::jsonb)into native from private.prepared_aggregate_native_catalog()p;\n if exists(select 1 from jsonb_array_elements(state.approved_targets)x where not exists(select 1 from jsonb_array_elements(native)y where x=y))\n or(select count(distinct x->>'id')from jsonb_array_elements(state.approved_targets)x)<>jsonb_array_length(state.approved_targets)\n then raise exception using errcode='55000',message='prepared_approved_manifest_drift';end if;\n -- Bound each tick to six reviewed targets. UUID order and persisted cursor\n -- rotate across all countries, without an automatic whole-directory expansion.\n for t in select x from jsonb_array_elements(state.approved_targets)x where state.cursor_id is null or(x->>'id')::uuid>state.cursor_id order by(x->>'id')::uuid limit 6 loop\n  d:=(p_now at time zone(t->>'timezone'))::date;scope:=case when t->>'source'='game66'then'IN'else t->>'scope_group'end;common:=commons->>scope;if common is null then common:=private.prepared_aggregate_dependency_common(scope);commons:=commons||jsonb_build_object(scope,common);end if;dep:=private.prepared_aggregate_dependency(t,common);\n  for offset_day in 0..2 loop\n   q:=jsonb_build_object('action','aggregate','view','providers','platformId',t->>'id','startAt',private.provider_snapshot_iso((d-offset_day)::timestamp at time zone(t->>'timezone')),'endAt',private.provider_snapshot_iso((d-offset_day+1)::timestamp at time zone(t->>'timezone')),'successBasis','created','direction','all','status','all','currency',t->>'currency','offset',0,'limit',20);\n   if private.prepared_aggregate_request_reason(q,t)is not null then unsupported:=unsupported+1;continue;end if;\n   baseq:=private.prepared_aggregate_base_request(q,t,p_now);\n   -- The single created default uses the same currency bands as the page.\n   -- Explicit/custom manual requests below keep their exact original keys.\n   if baseq->>'view'='full'and baseq->>'durationVersion'='2'then\n    baseq:=baseq||jsonb_build_object('amountBands',private.dashboard_serving_default_amount_bands(t->>'currency'));\n   end if;\n   k:=private.prepared_aggregate_key(baseq,t);\n   select *into job from private.prepared_aggregate_jobs where request_fingerprint=md5(k::text)and request_key=k;\n   -- Do not change an already claimed job, even if a rollout changes dependency.\n   if job.status='running'and job.lease_until>clock_timestamp()then continue;end if;\n   admitted:=private.prepared_aggregate_enqueue(baseq,t,dep,(10-offset_day)::smallint);\n   if admitted is not null then jobs:=jobs+1;end if;\n   perform private.prepared_aggregate_retire_replaced(q,t,baseq,dep);n:=n+1;\n  end loop;last_id:=(t->>'id')::uuid;\n end loop;\n -- Only the created mode is an automatic default. Retain explicit/custom manual\n -- requests and recently interactive manual jobs, not former scheduled same-day\n -- success defaults. No existing head, budget, or running job is reset.\n -- Recently used exact/custom windows retain their own keys and do not borrow a\n -- default day. Refresh only approved native identities; running/failed states\n -- are never reset here. Stable computedAt determines the next planned slot.\n for job in select j.*from private.prepared_aggregate_jobs j where j.status='ready'and j.last_requested_at>p_now-interval'24hours'\n  and (j.request->>'successBasis'='created' or j.interactive_requested_at>p_now-interval'24hours'\n   or j.request->>'successStartAt'is distinct from j.request->>'startAt' or j.request->>'successEndAt'is distinct from j.request->>'endAt'\n   or j.request?|array['durationRange','amountMin','amountMax','amountMaxExclusive','channelTypes']\n   or coalesce(j.request->>'direction','all')<>'all' or coalesce(j.request->>'status','all')<>'all'\n   or coalesce(j.request->'providers','[]'::jsonb)not in('[]'::jsonb,'null'::jsonb)\n   or j.request?'amountBands'and j.request->'amountBands'<>private.dashboard_serving_default_amount_bands(j.target->>'currency')\n    and not(j.priority between 8 and 10 and j.interactive_requested_at is null\n     and j.request->'amountBands'=private.dashboard_serving_default_amount_bands('INR'))\n   or ((j.request->>'startAt')::timestamptz at time zone(j.target->>'timezone'))<>date_trunc('day',(j.request->>'startAt')::timestamptz at time zone(j.target->>'timezone'))\n   or ((j.request->>'endAt')::timestamptz at time zone(j.target->>'timezone'))<>((j.request->>'startAt')::timestamptz at time zone(j.target->>'timezone'))+interval'1day')\n  and exists(select 1 from jsonb_array_elements(state.approved_targets)x where x=j.target)\n  order by j.next_due_at nulls first,j.id limit 50 for update skip locked loop\n  t:=job.target;scope:=case when t->>'source'='game66'then'IN'else t->>'scope_group'end;common:=commons->>scope;if common is null then common:=private.prepared_aggregate_dependency_common(scope);commons:=commons||jsonb_build_object(scope,common);end if;dep:=private.prepared_aggregate_dependency(t,common);\n  if job.dependency<>dep then perform private.prepared_aggregate_enqueue(job.request,t,dep,job.priority);continue;end if;\n  select a.*into head from private.prepared_aggregate_heads h join private.prepared_aggregate_artifacts a on a.id=h.artifact_id where h.job_id=job.id;\n  if head.id is null or head.revision<>job.revision or head.dependency<>dep then\n   update private.prepared_aggregate_jobs set status='queued',not_before=clock_timestamp()where id=job.id and status='ready';continue;\n  end if;\n  due:=private.prepared_aggregate_scheduled_due(job.request,t,head.computed_at,p_now);\n  update private.prepared_aggregate_jobs set next_due_at=due where id=job.id and status='ready'and next_due_at is distinct from due;\n  if due<=p_now then update private.prepared_aggregate_jobs set status='queued',not_before=clock_timestamp(),attempts=0 where id=job.id and status='ready';refreshed:=refreshed+1;end if;\n end loop;\n update private.prepared_aggregate_schedule set cursor_id=last_id,cursor_tier=0 where singleton;\n return jsonb_build_object('status','queued','requests',n,'backgroundJobs',jobs,'refreshed',refreshed,'unsupported',unsupported,'approvedTargets',jsonb_array_length(state.approved_targets),'currentIntervalSeconds',state.current_interval_seconds,'historicalLocalTimes',jsonb_build_array('08:00','20:00'));\nend;$function$\n"
+  },
+  {
+    "signature": "private.dashboard_serving_recent_refresh_at(jsonb,jsonb,timestamp with time zone,timestamp with time zone)",
+    "owner": "postgres",
+    "acl": "{postgres=X/postgres}",
+    "proconfig": [
+      "search_path=\"\""
+    ],
+    "prosecdef": false,
+    "provolatile": "s",
+    "proparallel": "u",
+    "proisstrict": false,
+    "proleakproof": false,
+    "procost": 100,
+    "prorows": 0,
+    "body_md5": "422aa5d2532a6b8780f11aa3d5898e36",
+    "definition_md5": "c770739c1aac368032d0a756ad14e9bd",
+    "definition": "CREATE OR REPLACE FUNCTION private.dashboard_serving_recent_refresh_at(q jsonb, t jsonb, p_computed timestamp with time zone, p_now timestamp with time zone)\n RETURNS timestamp with time zone\n LANGUAGE plpgsql\n STABLE\n SET search_path TO ''\nAS $function$\nDECLARE a timestamptz;b timestamptz;la timestamp;lb timestamp;today date;seconds integer;\nBEGIN\n -- Query-only policy. The scheduled 08:00/20:00 historical policy is unchanged.\n -- Caller has already authorized the exact native identity and validated q.\n IF q->>'successBasis' IS DISTINCT FROM 'created' OR q?|ARRAY['successStartAt','successEndAt']\n  OR coalesce(q->>'view','full')NOT IN('providers','full') OR p_computed IS NULL OR p_now IS NULL\n  OR NOT isfinite(p_computed)OR NOT isfinite(p_now)OR p_computed>p_now THEN RETURN NULL;END IF;\n a:=(q->>'startAt')::timestamptz;b:=(q->>'endAt')::timestamptz;\n IF a IS NULL OR b IS NULL OR NOT isfinite(a)OR NOT isfinite(b)OR a>=b THEN RETURN NULL;END IF;\n la:=a AT TIME ZONE(t->>'timezone');lb:=b AT TIME ZONE(t->>'timezone');today:=(p_now AT TIME ZONE(t->>'timezone'))::date;\n IF la<>date_trunc('day',la)OR lb<>date_trunc('day',lb)OR lb::date<>la::date+1\n  OR la::date NOT BETWEEN today-2 AND today THEN RETURN NULL;END IF;\n SELECT current_interval_seconds INTO seconds FROM private.prepared_aggregate_schedule WHERE singleton;\n IF seconds IS NULL OR seconds<=0 THEN RETURN NULL;END IF;\n RETURN p_computed+make_interval(secs=>seconds);\nEND;$function$\n"
+  }
+]
