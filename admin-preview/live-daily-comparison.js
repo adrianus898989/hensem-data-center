@@ -54,7 +54,9 @@
   const readable=entry=>entry?.status==='ready'&&published(entry.response?._preparedPublication);
   const fresh=entry=>readable(entry)&&Date.parse(entry.response._preparedPublication.expiresAt)>Date.now()&&entry.response._preparedPublication.freshness!=='refresh_due';
   function platformResponse(response,p,q){
-   function verify(part){const actual=part?.platform,expectedCountry=part===response?p.country:p.identityCountry??p.rawCountry??p.country;
+   // Both the merged prepared response and its leaves retain native identity.
+   // Display country is a catalog presentation rule, not the source identity.
+   function verify(part){const actual=part?.platform,expectedCountry=p.identityCountry??p.rawCountry??p.country;
     if(!actual||actual.id!==p.id||actual.source&&src(actual.source)!==src(p.source)||actual.country&&actual.country!==expectedCountry||actual.currency&&actual.currency!==p.currency)throw Error('平台身份或币种响应不匹配');
     if(!Array.isArray(part.summary)||!Array.isArray(part.groups?.provider))throw Error('平台汇总或三方分组未完整返回');
    }

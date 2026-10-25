@@ -116,6 +116,29 @@
   await Promise.all(Array.from({length:Math.min(3,tasks.length)},worker));
   return failures;
  }
+ async function boundedSupplementaryPhase(serial,tasksFor,pauseExtra=()=>{}){
+  const phase=readPhase,deadlineAt=Date.now()+60000;let stopped=false,timer,release;
+  const deadline=new Promise(resolve=>{release=resolve;});
+  const phaseContext=aggregateAccessContext(),phaseScope=aggregateQueryScope(),phaseNative=supplementaryNativeContext();
+  const owned=()=>serial===L.serial&&readPhase===phase&&!L.dirty&&phaseContext===aggregateAccessContext()&&phaseScope===aggregateQueryScope()&&phaseNative===supplementaryNativeContext();
+  const current=()=>!stopped&&owned()&&Date.now()<deadlineAt;
+  const close=()=>{if(stopped)return;stopped=true;clearTimeout(timer);release();};
+  phase.cancelSupplementary=close;
+  const pauseAtDeadline=()=>{
+   if(stopped||!owned()){close();return;}close();
+   const message='补充统计已达 60 秒，未完成部分已暂停；已完成结果保留，可单独重试';
+   const feePending=L.feeLookupLoading;cancelFeeLookup();if(feePending||L.feeLookupRows===null)L.feeLookupError=message;
+   pauseExtra(message);
+   if(L.comparisonStatus==='loading'){cancelAggregateReads();L.comparisonStatus='error';L.comparisonError=message;}
+   else if(L.comparisonStatus==='idle'){L.comparisonStatus='error';L.comparisonError=message;}
+   workordersReadCache?.cancel();L.workordersSerial++;L.workordersLoading=false;if(!L.workorders&&!L.workordersUnsupported&&providerDirection(state.page))L.workordersError=message;
+   providerIntake?.cancel();for(const key of ['providerIntake','providerComparisonIntake'])if(L[key]?.status==='loading')L[key]={...L[key],status:'error',error:message};
+   L.progress=message;render();
+  };
+  timer=setTimeout(pauseAtDeadline,60000);
+  try{const failures=await Promise.race([runSupplementaryTasks(tasksFor(current),current),deadline]);if(current()&&failures?.length)toast('补充统计未完成，请重试；已完成数据保留');}
+  finally{if(!stopped&&owned()&&Date.now()>=deadlineAt)pauseAtDeadline();else close();closeChangedSupplementaryPhase(serial,phase,owned);}
+ }
  const supplementaryNativeContext=()=>JSON.stringify(selected().map(p=>[p.id,p.source,p.sourceName,p.name,p.country,p.scopeGroup??p.scope_group,p.timezone,p.currency,p.capabilities??null]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))));
  function closeChangedSupplementaryPhase(serial,phase,owned){
   if(serial!==L.serial||readPhase!==phase||owned())return;
@@ -1263,10 +1286,28 @@
   if(L.merchantTrend?.status==='loading')L.merchantTrend.status='paused';
   render();
  }
- function readyOnlyProviderProbe(request){
-  if(window.HENSEM_PREPARED_READY_ONLY!==true||state.page!=='providers'||request.view!=='providers'||L.from.slice(0,10)!==L.to.slice(0,10)||L.status!=='all'||(request.successBasis==='created'?window.HensemStatisticWindows?.hasSuccessWindow(L)!==false:!window.HensemStatisticWindows?.same(L))||!L.from.endsWith('T00:00:00')||!L.to.endsWith('T23:59:59')||Date.parse(request.endAt)>L.queryNow)return false;
-  const platform=L.catalog.find(p=>p.id===request.platformId);if(!platform)return false;
-  const current=statisticRequest(platform);return ['startAt','endAt','successStartAt','successEndAt','successBasis'].every(key=>request[key]===current[key]);
+ const compactBusinessPages=new Set(['teamops','teamcountries','teamplatforms']);
+ const readyCompactPages=new Set([...compactBusinessPages,'time']);
+ function aggregateResponseProfile(request,page=state.page){
+  if((request.view||'full')!=='full'||request.durationRange!==undefined)return undefined;
+  if(compactBusinessPages.has(page))return 'time-v1';
+  return ['time','amount','latency'].includes(page)&&!(page==='amount'&&(request.amountMin!==undefined||request.amountMax!==undefined))?page+'-v1':undefined;
+ }
+ function readyOnlyProbeOptions(request,responseProfile){
+  if(window.HENSEM_PREPARED_READY_ONLY!==true||!['providers','provider_payout','overview','merchants','teamops','teamcountries','teamplatforms','time'].includes(state.page)||request.status!=='all'||L.status!=='all'||Date.parse(request.endAt)>L.queryNow)return null;
+  if(!(request.view==='providers'&&responseProfile===undefined&&['providers','provider_payout','overview','merchants','teamops','teamcountries','teamplatforms'].includes(state.page)||(request.view||'full')==='full'&&responseProfile==='time-v1'&&readyCompactPages.has(state.page)))return null;
+  const platform=L.catalog.find(p=>p.id===request.platformId);if(!platform)return null;
+  try{
+   const start=Date.parse(request.startAt),end=Date.parse(request.endAt),a=localClock(start,platform.timezone),b=localClock(end,platform.timezone);
+   if(!Number.isFinite(start)||!Number.isFinite(end)||!a.endsWith('T00:00:00')||!b.endsWith('T00:00:00')||Date.parse(b.slice(0,10)+'T00:00:00Z')-Date.parse(a.slice(0,10)+'T00:00:00Z')!==86400000)return null;
+   if(request.successBasis==='created'?Object.hasOwn(request,'successStartAt')||Object.hasOwn(request,'successEndAt'):request.successBasis!=='success'||request.successStartAt!==request.startAt||request.successEndAt!==request.endAt)return null;
+   const clocks=['startAt','endAt','successStartAt','successEndAt','successBasis'];
+   for(const previous of state.page==='providers'?[false]:[false,true]){
+    const expected=statisticRequest(platform,previous);
+    if(clocks.every(key=>request[key]===expected[key]))return {readyOnlyProbe:true,...(previous?{readyOnlyProbePhase:'comparison'}:{})};
+   }
+  }catch{}
+  return null;
  }
  const preparedRefreshPaintOwners=new Set();let preparedRefreshPaintPending=false;
  function schedulePreparedRefreshPaint(owner){
@@ -1303,7 +1344,8 @@
    const context=aggregateAccessContext(),page=state.page,native=aggregateNativeIdentity(request),scope=aggregateQueryScope(),ownerCurrent=()=>isCurrent()&&serial===L.serial&&page===state.page&&context===aggregateAccessContext()&&!!native&&native===aggregateNativeIdentity(request);let result;
    const wrap=value=>{if(orderSource(L.catalog.find(p=>p.id===request.platformId))==='panda'&&!pandaCoverageMatches(value,request,true))throw Error('熊猫所选创建窗口完整性尚未确认；已核验截止范围的证据无效，请重新读取');return {...mergeParts([value],L.catalog.find(p=>p.id===request.platformId)),_aggregateReadAt:Date.parse(value._preparedPublication.computedAt),_aggregateAccessContext:context,_aggregateView:request.view||'full'};};
    const receiver=preparedResultReceiver({request,serial,page,context,native,scope,wrap});
-   try{result=await preparedAggregates.read(request,{...((request.view||'full')==='full'&&['time','amount','latency'].includes(page)&&!(page==='amount'&&(request.amountMin!==undefined||request.amountMax!==undefined))?{responseProfile:page+'-v1'}:{}),forceRefresh:preparedRefreshScope?.serial===serial&&preparedRefreshScope.page===page&&preparedRefreshScope.context===context,...(allowCache&&preparedRefreshScope?.serial!==serial&&readyOnlyProviderProbe(request)?{readyOnlyProbe:true}:{}),refreshIsCurrent:receiver.owned,onRefresh:receiver.receive,onRefreshError:error=>{if(receiver.owned())stopInterruptedAggregate(serial,error);},isCurrent:()=>ownerCurrent()&&roleAllowed(page,'view')&&roleAllowed(page,'query')});}
+   const responseProfile=aggregateResponseProfile(request,page);
+   try{result=await preparedAggregates.read(request,{...(responseProfile?{responseProfile}:{}),forceRefresh:preparedRefreshScope?.serial===serial&&preparedRefreshScope.page===page&&preparedRefreshScope.context===context,...(allowCache&&preparedRefreshScope?.serial!==serial?readyOnlyProbeOptions(request,responseProfile)||{}:{}),refreshIsCurrent:receiver.owned,onRefresh:receiver.receive,onRefreshError:error=>{if(receiver.owned())stopInterruptedAggregate(serial,error);},isCurrent:()=>ownerCurrent()&&roleAllowed(page,'view')&&roleAllowed(page,'query')});}
    catch(error){if(ownerCurrent())stopInterruptedAggregate(serial,error);throw error;}
    return receiver.attach(wrap(result));
   }
@@ -1635,27 +1677,9 @@
     // One query-owned budget covers the supplementary workers, starting only
     // after the main table settles. Completed statistics remain available.
     setReadPhase(serial,L.queryFailures.length?'主表读取未完成，正在补充已返回范围的统计':'主表已完成，正在补充统计');
-    const phase=readPhase,deadlineAt=Date.now()+60000;let stopped=false,timer,release;
-    const deadline=new Promise(resolve=>{release=resolve;});
-    const phaseContext=aggregateAccessContext(),phaseScope=aggregateQueryScope(),phaseNative=supplementaryNativeContext();
-    const owned=()=>serial===L.serial&&readPhase===phase&&!L.dirty&&phaseContext===aggregateAccessContext()&&phaseScope===aggregateQueryScope()&&phaseNative===supplementaryNativeContext();
-    const current=()=>!stopped&&owned()&&Date.now()<deadlineAt;
-    const close=()=>{if(stopped)return;stopped=true;clearTimeout(timer);release();};
-    phase.cancelSupplementary=close;
-    const pauseAtDeadline=()=>{
-     if(stopped||!owned()){close();return;}close();
-     const message='补充统计已达 60 秒，未完成部分已暂停；已完成结果保留，可单独重试';
-     const feePending=L.feeLookupLoading;cancelFeeLookup();if(feePending||L.feeLookupRows===null)L.feeLookupError=message;
-     submissionAnalysis?.pauseSupplementary();
-     if(L.comparisonStatus==='loading'){cancelAggregateReads();L.comparisonStatus='error';L.comparisonError=message;}
-     else if(L.comparisonStatus==='idle'){L.comparisonStatus='error';L.comparisonError=message;}
-     workordersReadCache?.cancel();L.workordersSerial++;L.workordersLoading=false;if(!L.workorders&&!L.workordersUnsupported)L.workordersError=message;
-     providerIntake?.cancel();for(const key of ['providerIntake','providerComparisonIntake'])if(L[key]?.status==='loading')L[key]={...L[key],status:'error',error:message};
-     L.progress=message;render();
-    };
-    timer=setTimeout(pauseAtDeadline,60000);
+    await boundedSupplementaryPhase(serial,current=>{
     const exclusions=async()=>{try{if(!submissionBatch)return;for(const platform of platforms){if(!current())return;await submissionBatch.read(platform.id);}if(current())await submissionBatch.finish();}catch(e){if(current()){submissionAnalysis?.cancel();toast('剔除统计未完成，请重试未完成平台');}}};
-    const tasks=[
+    return [
      ...(platforms.length?[()=>workordersLoad(false,true,false,current)]:[]),
      exclusions,
      ()=>ensureFeeLookup(false,true,current),
@@ -1663,8 +1687,7 @@
      ()=>loadProviderIntake(serial,false,1,current),
      ...(!L.queryWarnings.length?[()=>loadProviderIntake(serial,true,1,current)]:[])
     ];
-    try{const failures=await Promise.race([runSupplementaryTasks(tasks,current),deadline]);if(current()&&failures?.length)toast('补充统计未完成，请重试；已完成数据保留');}
-    finally{if(!stopped&&owned()&&Date.now()>=deadlineAt)pauseAtDeadline();else close();closeChangedSupplementaryPhase(serial,phase,owned);}
+    },()=>submissionAnalysis?.pauseSupplementary());
     return;
    }
    // Source-day reconciliation is supplementary evidence. A slow check must
@@ -1672,17 +1695,14 @@
    if(isSuccessAnalysis()){render();if(platforms.length)await workordersLoad();return;}
    if(phasedReadBusy()){
     setReadPhase(serial,'主表已完成，正在补充统计');
-    const phase=readPhase,context=aggregateAccessContext(),scope=aggregateQueryScope(),native=supplementaryNativeContext();
-    const current=()=>serial===L.serial&&readPhase===phase&&!L.dirty&&context===aggregateAccessContext()&&scope===aggregateQueryScope()&&native===supplementaryNativeContext();
-    const tasks=[
+    await boundedSupplementaryPhase(serial,current=>[
      ...(providerDirection(state.page)&&platforms.length?[()=>workordersLoad(false,true,false,current)]:[]),
-     ...(state.page==='merchants'&&L.status==='all'&&!['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'].some(key=>L[key])?[()=>memberCounts?.ensure(false,1)]:[]),
+     ...(state.page==='merchants'&&L.status==='all'&&!['orderNumber','thirdPartyOrderNumber','memberId','systemOrderId','utr'].some(key=>L[key])?[()=>memberCounts?.ensure(false,1,current)]:[]),
      async()=>{await ensureFeeLookup(false,true,current);if(deferMerchantBands&&current())await prepareAmountBands(serial,true,current);},
      async()=>{if(L.queryWarnings.length){L.comparisonStatus='error';L.comparisonError='当前平台数据未完整，暂不比较昨日';}else await liveComparison(serial,!force,1,current);},
      ()=>loadProviderIntake(serial,false,1,current),
      ...(!L.queryWarnings.length?[()=>loadProviderIntake(serial,true,1,current)]:[])
-    ];
-    try{const failures=await runSupplementaryTasks(tasks,current);if(current()&&failures.length)toast('补充统计未完成，请重试；已完成数据保留');}finally{closeChangedSupplementaryPhase(serial,phase,current);}
+    ],message=>memberCounts?.pauseSupplementary(message));
     return;
    }
    const intakeRead=loadProviderIntake(serial);if(serial!==L.serial)return;

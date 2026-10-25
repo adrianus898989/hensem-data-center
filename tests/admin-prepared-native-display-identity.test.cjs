@@ -14,13 +14,26 @@ function item(request,platform){
 function response(q,platforms=[HK,RED]){return {version:2,items:q.requests.map(request=>item(request,platforms.find(p=>p.id===request.platformId)))}}
 function request(platform=HK){return {action:'aggregate',view:'providers',platformId:platform.id,startAt:'2026-09-21T18:30:00.000Z',endAt:'2026-09-22T00:30:00.000Z',successStartAt:'2026-09-21T18:30:00.000Z',successEndAt:'2026-09-22T00:30:00.000Z',successBasis:'success',direction:'all',status:'all',currency:'INR',offset:0,limit:20}}
 async function ready(page='overview'){
- const h=harness({reports:true,platforms:[clone(HK),clone(RED)],roleAccess:{mode:'owner',canView:true,permissions:[]},roleAllowed:()=>true,extraModules:['live-statistic-windows.js','live-prepared-aggregates.js','live-success-analysis.js'],beforeLive:c=>{c.TextEncoder=TextEncoder;}});
+ const h=harness({reports:true,platforms:[clone(HK),clone(RED)],roleAccess:{mode:'owner',canView:true,permissions:[]},roleAllowed:()=>true,extraModules:['live-statistic-windows.js','live-prepared-aggregates.js','live-success-analysis.js','live-daily-comparison.js'],beforeLive:c=>{c.TextEncoder=TextEncoder;const create=c.HensemLiveDailyComparison.create;c.HensemLiveDailyComparison.create=options=>(c.__dailyIdentityTest=create(options));}});
  await settle();h.c.setPage(page);await settle();
  Object.assign(h.L,{from:'2026-09-22T00:00:00',to:'2026-09-22T05:59:59',successFrom:'',successTo:'',successBasis:'success'});
  h.setHandler(q=>q.action==='aggregatePrepared'?response(q):q.action==='rates'?{rows:[],total:0}:q.action==='providerOptions'?{providers:[]}:{});return h;
 }
 const preparedCalls=h=>h.calls.filter(q=>q.action==='aggregatePrepared');
 const read=(h,q=request())=>h.c.__cacheTest.readAggregate(q,h.L.serial);
+
+test('daily comparison accepts native team identities through the real shared prepared controller',async()=>{
+ const h=await ready('daily_comparison');await h.c.liveQuery();await settle();
+ const daily=h.c.__dailyIdentityTest,saved=daily.capture();
+ assert.equal(saved.status,'ready');assert.equal(daily.model().now.all_count,246);
+ assert.equal(daily.model().comparison.count,2);
+ assert(preparedCalls(h).length>0);assert.equal(h.calls.filter(q=>q.action==='aggregate').length,0);
+ for(const entries of Object.values(saved.payments))for(const [id,entry]of Object.entries(entries)){
+  assert.equal(entry.status,'ready');assert.equal(entry.response.platform.country,id===HK.id?'香港':'红膏蟹');
+  assert.equal(entry.response._preparedPublication.sourceComplete,false);
+ }
+ assert.doesNotMatch(daily.render(),/平台身份或币种响应不匹配/);
+});
 
 for(const page of ['overview','collection','payout','merchants','providers','provider_payout','success_analysis','time','amount','matrix','provider_daily','latency','risk','teamops','teamcountries','teamplatforms'])test(page+': India display accepts exact Hong Kong and Red Crab native publications',async()=>{
  const h=await ready(page);assert.equal(h.L.country,'印度');await h.c.liveQuery();await settle();

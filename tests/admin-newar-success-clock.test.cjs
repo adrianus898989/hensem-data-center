@@ -136,7 +136,7 @@ test('provider drawer shows an unknown paid-clock count and never queries unsupp
 });
 
 test('member counts mask only NEW_AR withdrawal success, retaining creation counts and other platforms',async()=>{
- const c=vm.createContext({Date,Intl,console});c.window=c;vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-member-counts.js'),'utf8'),c);
+ const c=vm.createContext({Date,Intl,console,AbortController});c.window=c;vm.runInContext(fs.readFileSync(path.join(__dirname,'../admin-preview/live-member-counts.js'),'utf8'),c);
  const other={...P,id:'22222222-2222-4222-8222-222222222222'},platforms=[newar,other],L={country:'印度',from:'2026-10-19T00:00:00',to:'2026-10-19T23:59:59',direction:'all',status:'all',dirty:false,multi:{}};
  const query=p=>({platformId:p.id,startAt:'2026-10-18T18:30:00Z',endAt:'2026-10-19T18:30:00Z',direction:'all',status:'all'});
  const page=c.HensemLiveMemberCounts.create({L,E:String,C:n=>n===null?'—':String(n),selected:()=>platforms,query,accessContext:()=>['synthetic'],successClockUnavailable:p=>p.id===newar.id,render(){},open(){},request:async q=>({platform:platforms.find(p=>p.id===q.platformId),startAt:q.startAt,endAt:q.endAt,capabilities:{memberIdentity:true,createdBasis:'created_at',successBasis:'success_at',dedupe:'platform_local_date_direction_member'},rows:['charge','withdraw'].map(direction=>({date:'2026-10-19',direction,created_member_count:4,created_order_count:10,created_missing_member_count:0,success_member_count:3,success_order_count:7,success_missing_member_count:0}))})});

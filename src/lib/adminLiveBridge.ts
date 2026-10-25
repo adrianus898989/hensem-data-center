@@ -56,10 +56,9 @@ export function validateAdminLiveRequest(input:unknown):Record<string,unknown> {
       }
       return checked;
     });
-    const readMode=p.readMode;
-    if(readMode!==undefined&&(readMode!=="ready-only-v1"||p.publicationVersion!==2||Object.hasOwn(p,"forceRefresh")||Object.hasOwn(p,"responseProfile")||Object.hasOwn(p,"providerReuseNames")||Object.hasOwn(p,"providerLeafAliases")||requests.some(q=>q.view!=="providers")))throw Error("只读统计探测参数无效");
-    const responseProfile=p.responseProfile;
-    if(responseProfile!==undefined&&(p.publicationVersion!==2||requests.length>3||Object.hasOwn(p,"providerReuseNames")||Object.hasOwn(p,"providerLeafAliases")||typeof responseProfile!=="string"||!["time-v1","amount-v1","latency-v1"].includes(responseProfile)||requests.some(q=>(q.view||"full")!=="full"||Object.hasOwn(q,"durationRange")||responseProfile==="latency-v1"&&q.durationVersion!==2)))throw Error("统计响应范围无效");
+    const readMode=p.readMode,responseProfile=p.responseProfile;
+    if(readMode!==undefined&&(readMode!=="ready-only-v1"||p.publicationVersion!==2||Object.hasOwn(p,"forceRefresh")||Object.hasOwn(p,"providerReuseNames")||Object.hasOwn(p,"providerLeafAliases")||requests.some(q=>!(q.view==="providers"&&responseProfile===undefined||(q.view||"full")==="full"&&responseProfile==="time-v1"))))throw Error("只读统计探测参数无效");
+    if(responseProfile!==undefined&&(p.publicationVersion!==2||requests.length>(readMode==="ready-only-v1"?50:3)||Object.hasOwn(p,"providerReuseNames")||Object.hasOwn(p,"providerLeafAliases")||typeof responseProfile!=="string"||!["time-v1","amount-v1","latency-v1"].includes(responseProfile)||requests.some(q=>(q.view||"full")!=="full"||Object.hasOwn(q,"durationRange")||responseProfile==="latency-v1"&&q.durationVersion!==2)))throw Error("统计响应范围无效");
     if(JSON.stringify(requests).length>128000)throw Error("统计批量参数过大");
     // Optional names are hints for server-native projections, never filters.
     // Invalid/oversized hints are omitted without changing a valid main query.
@@ -448,7 +447,7 @@ async function adminLiveSession(session:DashboardSession):Promise<DashboardSessi
  }
 }
 class AdminLiveReadError extends Error {
- constructor(message:string,readonly code:'57014'|'ADMIN_LIVE_TIMEOUT'|'ADMIN_LIVE_NETWORK'){super(message);Object.setPrototypeOf(this,new.target.prototype);}
+ constructor(message:string,readonly code:'57014'|'ADMIN_LIVE_TIMEOUT'|'ADMIN_LIVE_NETWORK'|'PREPARED_READY_RESPONSE_CAPACITY'){super(message);Object.setPrototypeOf(this,new.target.prototype);}
 }
 async function adminLiveFetch(url:string,init:RequestInit):Promise<Response>{
  try{return await fetch(url,init)}catch{
@@ -500,10 +499,16 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  const collectedKyc=request.action==="depositStatistics"&&request.section==="kyc";
  const rpc=collectedKyc?"dashboard_admin_deposit_kyc":request.action==="aggregate"&&request.view==="drilldown"?"dashboard_admin_live_drilldown":specialRpc[String(request.action)]||"dashboard_admin_live_query";
  if(request.action==="aggregatePrepared"&&!PREPARED_AGGREGATE_PAGES.has(roleContext?.page||""))throw Error("统计页面无效");
- if(request.action==="aggregatePrepared"&&request.readMode!==undefined&&roleContext?.page!=="providers")throw Error("只读统计探测页面无效");
- if(request.action==="aggregatePrepared"&&request.responseProfile!==undefined&&({"time-v1":"time","amount-v1":"amount","latency-v1":"latency"} as Record<string,string>)[String(request.responseProfile)]!==roleContext?.page)throw Error("统计响应范围与页面不符");
+ if(request.action==="aggregatePrepared"&&request.readMode!==undefined){
+  const page=roleContext?.page||"",full=(request.requests as Record<string,unknown>[]).some(q=>(q.view||"full")==="full");
+  if(!(full?["teamops","teamcountries","teamplatforms","time"].includes(page):["providers","provider_payout","overview","merchants","teamops","teamcountries","teamplatforms"].includes(page)))throw Error("只读统计探测页面无效");
+ }
+ if(request.action==="aggregatePrepared"&&request.responseProfile!==undefined&&!(request.responseProfile==="time-v1"&&["teamops","teamcountries","teamplatforms"].includes(roleContext?.page||""))&&({"time-v1":"time","amount-v1":"amount","latency-v1":"latency"} as Record<string,string>)[String(request.responseProfile)]!==roleContext?.page)throw Error("统计响应范围与页面不符");
  const response=await adminLiveFetch(base+"/rest/v1/rpc/"+(roleContext?.assigned&&!collectedKyc?"dashboard_admin_execute":rpc),{method:"POST",body:JSON.stringify(collectedKyc?{p_page:roleContext?.assigned?roleContext.page:null,p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))}:roleContext?.assigned?{p_page:roleContext.page,p_request:request}:request.action==="aggregatePrepared"?{p_page:roleContext?.page,p_request:Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action"))}:{p_request:specialRpc[String(request.action)]?Object.fromEntries(Object.entries(request).filter(([key])=>key!=="action")):request}),headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),"Content-Type":"application/json"},signal,cache:"no-store",redirect:"error"});
  if(!response.ok){let code="",serverCode="",queryCancelled=false;try{const body=await response.json();code=typeof body.message==='string'?body.message:'';serverCode=typeof body.code==='string'?body.code:typeof body.error_code==='string'?body.error_code:'';queryCancelled=body.code==='57014'}catch{}
+ // The exact ready-only response limit is a bounded transport miss; other
+ // capacity, permission and query errors must never be downgraded.
+ if([400,500].includes(response.status)&&request.action==="aggregatePrepared"&&request.readMode==="ready-only-v1"&&serverCode==="54000"&&code==="prepared_ready_response_capacity")throw new AdminLiveReadError("已准备统计响应较大，改为分批读取","PREPARED_READY_RESPONSE_CAPACITY");
  // Only trusted HTTP status and known server tokens revoke access, never arbitrary error text.
  if(sessionDenial(response.status,serverCode,code))throw new AdminLiveAccessError("正式数据读取未获授权，或会话已失效",'session');
  if(code==='page_action_denied'||serverCode==='page_action_denied')throw permissionError("当前页面不支持此查询，请重新加载后重试",'page_action_denied');
