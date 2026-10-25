@@ -28,6 +28,13 @@ for(const page of ['overview','collection','payout','merchants','teamops','teamc
 
 test('source completion-time metadata keeps its own clock description',()=>{const d=api.successBasisDescription({results:[{successBasis:'success',capabilities:{successTimeBasis:'source_completed_at'}}]});assert.equal(d.metricLabel,'源订单完成时间');assert.match(d.title,/独立源订单完成时间区间/);});
 
+test('DUOLI keeps its returned update-clock wording but never infers a window from platform capabilities alone',()=>{
+ const platform={source:'duoli',capabilities:{successTimeBasis:'order_updated_at'}};
+ const updated=api.successBasisDescription({results:[{platform,successBasis:'source_updated'}],successFrom:'',successTo:'',dirty:true});assert.equal(updated.metricLabel,'订单更新时间');assert.match(updated.title,/独立订单更新时间区间成功笔数/);assert.match(updated.title,/不代表实际到账时间/);
+ const missing=api.successBasisDescription({results:[{platform}],successFrom:'2026-10-01T00:00:00',successTo:'2026-10-02T23:59:59'});assert.equal(missing.created,null);assert.equal(missing.metricLabel,'已返回的成功统计口径');
+ const created=api.successBasisDescription({results:[{platform,successBasis:'created'}],successFrom:'2026-10-01T00:00:00',successTo:'2026-10-02T23:59:59'});assert.equal(created.created,true);assert.doesNotMatch(created.title,/更新时间|跨日/);
+});
+
 test('mixed applied update clocks retain exact source-specific labels regardless of draft selection',()=>{
  for(const [source,expected,forbidden]of [['NEW_AR','新中台按源订单更新时间','多利按更新时间'],['duoli','多利按更新时间','新中台按源订单更新时间']]){
   const queryState={results:[{successBasis:'source_updated',platform:{source}},{successBasis:'success',platform:{source:'ar'}}],successBasis:'success',successFrom:'',successTo:'',dirty:true},d=api.successBasisDescription(queryState);assert(d.metricLabel.includes(expected));assert(!d.metricLabel.includes(forbidden));assert(d.title.includes(expected));assert.match(d.title,/不代表实际到账时间/);

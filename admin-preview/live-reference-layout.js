@@ -33,7 +33,7 @@
    const updatedFacts=facts.filter(result=>result.successBasis==='source_updated'||[result.successTimeBasis,result.capabilities?.successTimeBasis,result.platform?.capabilities?.successTimeBasis].includes('order_updated_at')),updated=updatedFacts.length;
    const updatedLabels=[...new Set(updatedFacts.map(result=>{const source=String(result.platform?.source||'').toLowerCase().replaceAll('_','');return source==='newar'?'新中台按源订单更新时间':source==='duoli'?'多利按更新时间':'按源订单更新时间';}))];
    const completed=facts.filter(result=>[result.successTimeBasis,result.capabilities?.successTimeBasis,result.platform?.capabilities?.successTimeBasis].includes('source_completed_at')).length;
-   const metricLabel=updated===facts.length?'源订单更新时间':completed===facts.length?'源订单完成时间':updated||completed?'成功统计时间（'+[...updatedLabels,completed?'含源订单完成时间':''].filter(Boolean).join('；')+'）':'成功时间';
+   const metricLabel=updated===facts.length?(updatedFacts.every(result=>String(result.platform?.source||'').toLowerCase()==='duoli')?'订单更新时间':'源订单更新时间'):completed===facts.length?'源订单完成时间':updated||completed?'成功统计时间（'+[...updatedLabels,completed?'含源订单完成时间':''].filter(Boolean).join('；')+'）':'成功时间';
    return {created:false,metricLabel,title:'独立'+metricLabel+'区间成功笔数 ÷ 创建区间全部笔数；含跨日成功，可超过100%'+(updated?'；源订单更新时间不代表实际到账时间':''),suffix:'；含跨日成功',note:'全部按创建区间；成功按独立'+metricLabel+'区间统计。'+(updated?'源订单更新时间不代表实际到账时间。':'')};
   }
   return {created:null,metricLabel:'已返回的成功统计口径',title:'当前已读范围的成功笔数 ÷ 全部笔数；日期依据以已返回统计口径为准',suffix:'',note:'按已返回的统计口径展示成功金额和笔数。'};
