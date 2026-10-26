@@ -1,0 +1,170 @@
+# Explicit maintenance path. It owns only refresh_v1/* and never acquires a
+# window lease, advances a cursor, runs midnight, or sends a full snapshot.
+class lgd_RefreshIngest(lgd_Ingest):
+    @staticmethod
+    def exact_count(value, expected):
+        return type(value) is int and value == expected
+
+    def call(self, action, fields=None):
+        if action not in ('check', 'begin', 'chunk', 'finish'):
+            raise lgd_SyncError('LG_REFRESH_ACTION_REJECTED')
+        if STOP.is_set():
+            raise lgd_SyncError('LG_STOPPED')
+        payload = {'action': action, 'source_system': 'LG', **(fields or {})}
+        if action != 'check':
+            payload['sync_mode'] = 'live'
+        response = self.transport(self.endpoint, payload, {'x-lg-sync-token': self.token})
+        if not isinstance(response, dict) or response.get('ok') is not True or response.get('source_system') != 'LG':
+            raise lgd_SyncError('LG_REFRESH_ACK_INVALID')
+        count = self.exact_count
+        if action == 'check':
+            valid = (count(response.get('protocol_version'), 1) and count(response.get('live_protocol_version'), 1)
+                     and type(response.get('scope_count')) is int and response['scope_count'] > 0)
+        else:
+            valid = response.get('snapshot_id') == payload['snapshot_id']
+            if response.get('status') == 'superseded':
+                raise lgd_SyncError('LG_REFRESH_SUPERSEDED_CACHE_PRESERVED')
+            if action == 'begin':
+                valid = (valid and response.get('status') in ('collecting', 'live')
+                         and count(response.get('expected_count'), payload['expected_count'])
+                         and count(response.get('expected_chunks'), payload['expected_chunks']))
+            elif action == 'chunk':
+                valid = (valid and response.get('status') in ('accepted', 'unchanged')
+                         and count(response.get('chunk_index'), payload['chunk_index'])
+                         and count(response.get('order_count'), len(payload['orders'])))
+            else:
+                valid = (valid and response.get('status') in ('live', 'unchanged')
+                         and type(response.get('order_count')) is int
+                         and type(response.get('source_count')) is int
+                         and type(response.get('changed_count')) is int
+                         and type(response.get('partial_day')) is bool)
+            if action in ('begin', 'finish'):
+                observed = ack_time(response.get('observed_at'), whole=False)
+                valid = valid and observed == ack_time(payload['observed_at'], whole=False)
+        if not valid:
+            raise lgd_SyncError('LG_REFRESH_ACK_INVALID')
+        return response
+
+    def upload(self, snapshot):
+        lgd_validate_business_snapshot(snapshot)
+        chunks = snapshot['chunks']
+        count = sum(len(chunk) for chunk in chunks)
+        if (snapshot.get('source_system') != 'LG' or snapshot.get('order_kind') not in lgd_KINDS
+                or 'capture_date' in snapshot or any(not chunk or len(chunk) > 500 for chunk in chunks)
+                or any(not self.exact_count(snapshot.get(key), count)
+                       for key in ('expected_count', 'source_total', 'fetched_count'))
+                or not self.exact_count(snapshot.get('expected_chunks'), len(chunks))):
+            raise lgd_SyncError('LG_REFRESH_CACHE_INVALID')
+        try:
+            uuid.UUID(snapshot['snapshot_id'])
+            date.fromisoformat(snapshot['stat_date'])
+        except (ValueError, TypeError, KeyError, AttributeError):
+            raise lgd_SyncError('LG_REFRESH_CACHE_INVALID') from None
+        common = {key: snapshot[key] for key in ('source_system', 'platform', 'country_code', 'stat_date',
+                                                'order_kind', 'snapshot_id', 'observed_at')}
+        self.call('begin', {**common, **{key: snapshot[key] for key in
+                  ('expected_count', 'expected_chunks', 'source_total', 'fetched_count')}})
+        for index, chunk in enumerate(chunks):
+            self.call('chunk', {**common, 'chunk_index': index, 'orders': chunk})
+        receipt = self.call('finish', common)
+        if (receipt['order_count'] != count or receipt['source_count'] != count
+                or not 0 <= receipt['changed_count'] <= count):
+            raise lgd_SyncError('LG_REFRESH_ACK_COUNTS_INVALID')
+        return receipt
+
+
+class lgd_RefreshAPI:
+    def __init__(self, api, cutoff, platform):
+        self.api, self.cutoff, self.platform = api, cutoff, platform
+
+    def __call__(self, kind, payload):
+        if STOP.is_set():
+            raise lgd_SyncError('LG_STOPPED')
+        query = dict(payload)
+        query['endAt'] = min(query['endAt'], int(self.cutoff.timestamp()) - 1)
+        if query['endAt'] < query['startAt']:
+            raise lgd_SyncError('LG_REFRESH_EMPTY_TIME_RANGE')
+        response = self.api(kind, query)
+        rows, _, _ = lgd_extract_page(response, query['pageSize'])
+        zone = ZoneInfo(lgd_COUNTRY_ZONES[self.platform['country_code']])
+        for row in rows:
+            created = lgd_row_time(row, lgd_CREATE_FIELDS, zone)
+            if created is None or not query['startAt'] <= created.timestamp() < query['endAt'] + 1:
+                raise lgd_SyncError('LG_REFRESH_SOURCE_OUTSIDE_FROZEN_RANGE')
+        return response
+
+
+def lgd_refresh_manifest(root, config, args):
+    spec = {'version': 1, 'endpoint': config['endpoint'], 'start': args.start, 'end': args.end,
+            'platforms': sorted([{'platform': p['platform'], 'country_code': p['country_code']}
+                                 for p in config['platforms']], key=lambda p: p['platform']),
+            'kinds': sorted(args.kinds)}
+    job_id = hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    job_root = root / job_id
+    path = job_root / 'job.json'
+    if path.exists():
+        try:
+            manifest = json.loads(path.read_text(encoding='utf-8'))
+            frozen = instant(manifest['frozen_at'])
+            if manifest['spec'] != spec or frozen.microsecond or frozen > lgd_utc_now():
+                raise ValueError()
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise lgd_SyncError('LG_REFRESH_JOB_INVALID_CACHE_PRESERVED') from None
+    else:
+        frozen = lgd_utc_now().replace(microsecond=0)
+        manifest = {'spec': spec, 'frozen_at': second_iso(frozen)}
+        lgd_atomic_json(path, manifest)
+    for p in config['platforms']:
+        if date.fromisoformat(args.end) >= frozen.astimezone(ZoneInfo(lgd_COUNTRY_ZONES[p['country_code']])).date():
+            raise lgd_SyncError('LG_REFRESH_REQUIRES_COMPLETE_LOCAL_DAYS')
+    return job_root, frozen
+
+
+def run_refresh(config, args, api_factory=SourceAPI, cloud_factory=lgd_RefreshIngest):
+    root = Path(config['state_dir']) / 'refresh_v1'
+    with lgd_single_process(root):
+        cloud = cloud_factory(config)
+        cloud.call('check')
+        job_root, frozen = lgd_refresh_manifest(root, config, args)
+        state = lgd_State(job_root)
+        lgd_log(VERSION + '；独立补采至 ' + second_iso(frozen) + '；单线程live，不写实时游标/租约。')
+        failed = 0
+        day = date.fromisoformat(args.start)
+        last = date.fromisoformat(args.end)
+        while day <= last:
+            stat_date = day.isoformat()
+            for platform in config['platforms']:
+                for kind in args.kinds:
+                    if STOP.is_set():
+                        return 130
+                    key = lgd_task_key(platform['platform'], stat_date, kind)
+                    try:
+                        cached = state.cached(key)
+                        if key in state.entries and cached is None:
+                            continue
+                        if cached is None:
+                            api = api_factory(config, platform)
+                            try:
+                                snapshot = lgd_collect_snapshot(platform, kind, stat_date,
+                                    lgd_RefreshAPI(api, frozen, platform), page_size=config['page_size'],
+                                    max_pages=config['max_pages'], chunk_size=config['chunk_size'])
+                            finally:
+                                api.close()
+                            state.save_snapshot(snapshot, config['endpoint'])
+                            cached = {'endpoint': config['endpoint'], 'snapshot': snapshot}
+                        snapshot = cached['snapshot']
+                        if (cached['endpoint'] != config['endpoint'] or lgd_snapshot_key(snapshot) != key
+                                or snapshot.get('country_code') != platform['country_code']):
+                            raise lgd_SyncError('LG_REFRESH_SCOPE_MISMATCH_CACHE_PRESERVED')
+                        # Never alter an already hashed cached snapshot on retries.
+                        cloud.upload(snapshot)
+                        state.acknowledge(snapshot)
+                        lgd_log(f"{platform['platform']} {stat_date} {kind} 补采{snapshot['expected_count']}笔已确认")
+                    except Exception as exc:
+                        if STOP.is_set():
+                            return 130
+                        failed += 1
+                        lgd_log(f"{platform['platform']} {stat_date} {kind} 补采未确认：{safe_error(exc)}；缓存保留，下次原样续传", file=sys.stderr)
+            day += timedelta(days=1)
+        lgd_log('补采范围已全部确认。' if not failed else f'补采有{failed}个任务未确认；未标完成，脱敏缓存保留。')
+        return 1 if failed else 0
