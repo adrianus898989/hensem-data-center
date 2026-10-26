@@ -3,6 +3,18 @@
 Public entry: `https://data-center.workdesk-hub.workers.dev/hensem-data-center/`.
 The root redirects to this path to preserve the existing Next.js base path.
 
+The official entry's role verification and protected HTML use two fixed read
+routes: POST `/hensem-data-center/api/dashboard-role-access` with only `{}`, and
+GET `/hensem-data-center/api/dashboard-preview` with no query, `check=1`, or
+`action=access`. Both pass the existing IP entry gate and forward only the caller's
+bearer and the fixed public API key to their original Supabase authorizers.
+They do not cache access, retry upstream reads, follow redirects, or accept grant
+management actions. Original gzip streams retain their encoding headers; client
+disconnects require the configured `enable_request_signal` compatibility flag.
+Deploy these compatible Worker routes before publishing clients that use them.
+Other client deployments and the separate grant-management API retain their
+original endpoints. A failed same-origin read never falls back to direct access.
+
 The fixed same-origin POST route `/hensem-data-center/api/collector-control` proxies
 only the four registered human control actions to the `collector-control` Edge
 Function. It still passes the entry gate first. The Worker replaces client-supplied

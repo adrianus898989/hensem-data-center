@@ -8,6 +8,10 @@ const GATE_RETRY_DELAY_MS = 150;
 const COLLECTOR_PATH = BASE + '/api/collector-control';
 const COLLECTOR_ENDPOINT = 'https://gmfyfzsxpxmaqtuuwgxb.supabase.co/functions/v1/collector-control';
 const COLLECTOR_ACTIONS = new Set(['overview', 'createPairing', 'revokeDevice', 'setDesired']);
+const ROLE_PATH = BASE + '/api/dashboard-role-access';
+const PREVIEW_PATH = BASE + '/api/dashboard-preview';
+const ROLE_ENDPOINT = 'https://gmfyfzsxpxmaqtuuwgxb.supabase.co/rest/v1/rpc/dashboard_role_access';
+const PREVIEW_ENDPOINT = 'https://gmfyfzsxpxmaqtuuwgxb.supabase.co/functions/v1/owner-admin-preview';
 // This dedicated HTTPS entry can emit real anti-framing headers. Restrict only
 // ancestors here: the authorized internal srcdoc preview needs its inline code.
 const SECURITY_HEADERS = {
@@ -270,6 +274,54 @@ async function serveCollectorControl(request, env, fetchRemote) {
   finally { clearTimeout(timer); }
 }
 
+// Same-origin transport for the two existing protected reads. The original RPC
+// and Edge still authorize the caller's session and role independently.
+async function serveDashboardRead(request, fetchRemote) {
+  const json = (code, status) => reply(JSON.stringify({ ok: false, code }), status,
+    { 'Content-Type': 'application/json; charset=utf-8' });
+  const incoming = new URL(request.url), role = incoming.pathname === ROLE_PATH;
+  if (request.method !== (role ? 'POST' : 'GET')) return json('method_not_allowed', 405);
+  if (role ? incoming.search !== '' : !['', '?check=1', '?action=access'].includes(incoming.search)) return json('invalid_request', 400);
+  const origin = request.headers.get('origin');
+  if (origin && origin !== incoming.origin) return json('origin_denied', 403);
+  const authorization = request.headers.get('authorization') || '';
+  if (!/^Bearer [^\s,]{1,4096}$/.test(authorization)) return json('login_required', 401);
+  // Covers fetch AND the unread response stream, and propagates client cancel.
+  // No internal business retry; the caller owns the existing attempt budget.
+  const signal = AbortSignal.any([request.signal, AbortSignal.timeout(12000)]);
+  if (role) {
+    if (!/^application\/json(?:;|$)/i.test(request.headers.get('content-type') || '')) return json('json_required', 415);
+    if (Number(request.headers.get('content-length') || 0) > 64) return json('request_too_large', 413);
+    try {
+      const body = await boundedJson(request.body, 64, signal);
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length) return json('invalid_request', 400);
+    } catch { return json('invalid_request', 400); }
+  }
+  try {
+    signal.throwIfAborted();
+    const response = await fetchRemote(role ? ROLE_ENDPOINT : PREVIEW_ENDPOINT + incoming.search, {
+      method: role ? 'POST' : 'GET',
+      headers: { Authorization: authorization, apikey: PUBLISHABLE_KEY,
+        ...(role ? { 'Content-Type': 'application/json' } : {}), 'Accept-Encoding': 'gzip' },
+      ...(role ? { body: '{}' } : {}), signal, redirect: 'manual', cache: 'no-store',
+    });
+    const contentType = response.headers.get('content-type') || '';
+    const expected = !role && incoming.search === '' && response.ok ? /^text\/html(?:;|$)/i : /^application\/json(?:;|$)/i;
+    if (REDIRECTS.has(response.status) || !expected.test(contentType)) {
+      response.body?.cancel().catch(() => {});
+      // A rejection must never become a retriable connection failure.
+      return json([401, 403].includes(response.status) ? 'preview_denied' : 'service_unavailable',
+        [401, 403].includes(response.status) ? response.status : 502);
+    }
+    const headers = new Headers({ ...SECURITY_HEADERS, 'Cache-Control': 'private, no-store', 'Content-Type': contentType });
+    // Keep the original compressed stream intact. No cookies, redirects, CORS,
+    // forwarding headers or private response metadata cross this boundary.
+    const encoding = response.headers.get('content-encoding');
+    if (encoding) headers.set('Content-Encoding', encoding);
+    return new Response(response.body, { status: response.status, headers });
+  } catch { return json('service_unavailable', 503); }
+}
+
 // The production handler checks every route before redirects, files or method
 // errors. Decisions are not cached: a revoked rule affects the next request.
 export async function serve(request, env = {}, fetchRemote = fetch) {
@@ -280,7 +332,10 @@ export async function serve(request, env = {}, fetchRemote = fetch) {
   if (decision.status !== 'allowed') {
     return reply(request.method === 'HEAD' ? null : 'Access denied', 403);
   }
-  const response = new URL(request.url).pathname === COLLECTOR_PATH
+  const path = new URL(request.url).pathname;
+  const response = path === ROLE_PATH || path === PREVIEW_PATH
+    ? await serveDashboardRead(request, fetchRemote)
+    : path === COLLECTOR_PATH
     ? await serveCollectorControl(request, env, fetchRemote)
     : await servePublicStatic(request, fetchRemote);
   const headers = new Headers(response.headers);
