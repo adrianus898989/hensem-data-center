@@ -98,7 +98,7 @@ test('backend settings show actual roles and route assigned/unassigned accounts 
  const states=[],effects=[],calls=[];let cursor=0,assigned=true,embeddedOnly=true;
  const react={Fragment:'fragment',useRef(initial){const k=cursor++;return states[k]||(states[k]={current:initial})},useState(initial){const k=cursor++;if(!(k in states))states[k]=typeof initial==='function'?initial():initial;return[states[k],value=>states[k]=typeof value==='function'?value(states[k]):value]},useMemo:fn=>fn(),useEffect:fn=>effects.push(fn)};
  const mod={exports:{}};
- vm.runInNewContext(compile('src/components/AdminControlCenter.tsx'),{module:mod,exports:mod.exports,console,require:name=>{
+ vm.runInNewContext(compile('src/components/AdminControlCenter.tsx'),{module:mod,exports:mod.exports,console,AbortController,require:name=>{
   if(name==='react')return react;
   if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
   if(name.endsWith('.css'))return{};
@@ -117,16 +117,16 @@ test('backend settings show actual roles and route assigned/unassigned accounts 
   throw Error(name);
  }});
  const draw=()=>{cursor=0;return mod.exports.default({open:true,session:{...session,user:{id:actor.auth_user_id}},profile:actor,onClose(){},section:'accounts',embedded:true,accountsOnlyLoading:embeddedOnly})};
- draw();effects.splice(0).forEach(fn=>fn());await flush();assert.deepEqual(calls,['list','roles'],'only account and owner-authorized role directories are read');
+ draw();effects.splice(0).forEach(fn=>fn());await flush();assert.deepEqual([...calls].sort(),['list','roles'],'only account and owner-authorized role directories are read');
  let all=nodes(draw());assert.match(text(draw()),/viewer-fixture/);assert.match(text(draw()),/VIP/);assert.match(text(draw()),/系统身份：VIEWER · 角色授权/);assert.doesNotMatch(text(draw()),/账号独立授权/);assert.equal(target.role,'viewer','displaying a custom role never promotes the account system identity');assert(!all.some(n=>n.props?.className==='admin-inline-header'),'no secondary management page heading');assert(all.some(n=>n.type==='button'&&text(n)==='+ 新建账号'));
  all.find(n=>n.type==='button'&&text(n)==='账号设置').props.onClick();all=nodes(draw());
  const settings=all.find(n=>n.type?.name==='AccountEditorDialog'&&n.props.title==='后台账号设置 · viewer-fixture');assert(settings);assert.match(text(settings),/当前角色VIP/);assert(!all.some(n=>n.type?.name==='AccountRoleEditor'),'settings must not offer old system-role promotion');
  all.find(n=>n.type==='button'&&text(n)==='重置密码').props.onClick();nodes(draw()).find(n=>n.type==='input'&&n.props.type==='password').props.onChange({target:{value:'synthetic-unsaved-password'}});
  all.find(n=>n.type==='button'&&text(n)==='配置权限 / 选择角色').props.onClick();all=nodes(draw());assert(!all.some(n=>n.type?.name==='AccountEditorDialog'&&n.props.title==='后台账号设置 · viewer-fixture'),'settings closes before role dialog opens');const dialog=all.find(n=>n.type?.name==='AccountAssignedRoleDialog');assert(dialog,'assigned directory roles use the current role editor from the backend list');assert.equal(dialog.props.account.auth_user_id,target.auth_user_id);assert.equal(dialog.props.account.role_id,'33333333-3333-4333-8333-333333333333');assert.equal(dialog.props.account.assignment_version,2);assert.equal(dialog.props.roles[0].name,'VIP');assert.equal(dialog.props.isOwner,true);assert.equal(dialog.props.editable,true);assert(!all.some(n=>n.type?.name==='AccountPermissionDialog'),'assigned roles do not open legacy independent permissions');assert(!JSON.stringify(states).includes('synthetic-unsaved-password'),'switching to role dialog clears password draft');
- assert.equal(all.filter(n=>n.props?.className?.includes('admin-account-management-table')).length,1);assert.deepEqual(calls,['list','roles'],'opening existing permission controls does not save or expand grants');
+ assert.equal(all.filter(n=>n.props?.className?.includes('admin-account-management-table')).length,1);assert.deepEqual([...calls].sort(),['list','roles'],'opening existing permission controls does not save or expand grants');
  dialog.props.onClose();assigned=false;embeddedOnly=false;nodes(draw()).find(n=>n.type==='button'&&text(n)==='刷新列表').props.onClick();await flush();all=nodes(draw());
  all.find(n=>n.type==='button'&&text(n)==='账号设置').props.onClick();all=nodes(draw());assert.match(text(all.find(n=>n.type?.name==='AccountEditorDialog')),/未分配角色/);
- all.find(n=>n.type==='button'&&text(n)==='配置权限 / 选择角色').props.onClick();all=nodes(draw());const unassigned=all.find(n=>n.type?.name==='AccountAssignedRoleDialog');assert(unassigned,'normal accounts section also opens the current role dialog');assert.equal(unassigned.props.account.role_id,null);assert.equal(unassigned.props.editable,true);assert(!all.some(n=>['AccountPermissionDialog','AccountRoleEditor'].includes(n.type?.name)));assert.deepEqual(calls,['list','roles','list','roles'],'viewing an unassigned account never automatically assigns a role or changes scope');
+ all.find(n=>n.type==='button'&&text(n)==='配置权限 / 选择角色').props.onClick();all=nodes(draw());const unassigned=all.find(n=>n.type?.name==='AccountAssignedRoleDialog');assert(unassigned,'normal accounts section also opens the current role dialog');assert.equal(unassigned.props.account.role_id,null);assert.equal(unassigned.props.editable,true);assert(!all.some(n=>['AccountPermissionDialog','AccountRoleEditor'].includes(n.type?.name)));assert.deepEqual([...calls].sort(),['list','list','roles','roles'],'viewing an unassigned account never automatically assigns a role or changes scope');
 
 });
 

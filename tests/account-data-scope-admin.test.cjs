@@ -222,16 +222,19 @@ test('actual create handler refuses empty/outside draft and submits Panghu only 
   const component=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='AdminControlCenter');
   const handler=component.body.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='submitCreate');
   const selection=source.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='scopeSelectionPresent');
-  const output=ts.transpileModule(selection.getText(source)+'\n'+handler.getText(source),{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS}}).outputText;
+  const lifecycleHelpers=['claimMutation','mutationCurrent','releaseMutation','directoryDenied'].map(name=>component.body.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text===name).getText(source));
+  const output=ts.transpileModule([selection.getText(source),...lifecycleHelpers,handler.getText(source)].join('\n'),{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS}}).outputText;
   const scope=loadTs(path.join(root,'src/lib/dashboardDataScope.ts'));
   for(const [newDataScope,expected] of [[{mode:'selected',countries:[]},0],[VN,0],[PANGHU,1]]){
-    const calls=[],messages=[];const actor=profile('manager','admin',{data_scope:PANGHU});
-    const context={canCreateRoleAccount:true,creationRoles:[{id:'role-id',version:7}],newRoleId:'role-id',directoryScope:'fixture',directoryRequest:{current:{scope:'fixture'}},createBusy:false,profile:actor,newDataScope,session:{},newUsername:'newuser',newPassword:'fixture-password',newRole:'viewer',newPermissions:full,newManagement:management,canViewAudit:false,
-      setCreateBusy:()=>{},setMessage:text=>messages.push(text),setNewUsername:()=>{},setNewPassword:()=>{},setNewRoleId:()=>{},setCreateOpen:()=>{},setNewDataScope:()=>{},loadUsers:async()=>{},loadAudit:async()=>{},roleLabel:()=> '查看账号',
+    const calls=[],messages=[],refreshes=[];const actor=profile('manager','admin',{data_scope:PANGHU});
+    const lifecycle={mounted:true,active:null};
+    const context={canCreateRoleAccount:true,creationRoles:[{id:'role-id',version:7}],newRoleId:'role-id',open:true,directoryReady:true,loading:false,directory:{error:''},lifecycle,mutation:{current:lifecycle},newScopeCatalogValid:true,createBusy:false,profile:actor,newDataScope,session:{},newUsername:'newuser',newPassword:'fixture-password',newRole:'viewer',newPermissions:full,newManagement:management,canViewAudit:false,
+      setCreateBusy:()=>{},setMessage:text=>messages.push(text),setNewUsername:()=>{},setNewPassword:()=>{},setNewRoleId:()=>{},setCreateOpen:()=>{},setNewDataScope:()=>{},setNewScopeCatalogValid:()=>{},loadUsers:async force=>refreshes.push(force),loadAudit:async()=>{},denyDirectory:()=>assert.fail('unexpected authorization denial'),roleLabel:()=> '查看账号',
       ...scope,createDashboardRoleAccount:async(...args)=>{calls.push(args);return {account:{username:'newuser',role_name:'Empty role'}};}};
     const submit=Function(...Object.keys(context),output+'\nreturn submitCreate;')(...Object.values(context));
     assert.deepEqual(calls,[]);await submit({preventDefault:()=>{}});assert.equal(calls.length,expected);
-    if(expected){assert.deepEqual(calls[0][4],PANGHU);assert.deepEqual(calls[0][3],{id:'role-id',version:7});}else assert(messages.length);
+    if(expected){assert.deepEqual(calls[0][4],PANGHU);assert.deepEqual(calls[0][3],{id:'role-id',version:7});assert.deepEqual(refreshes,[true],'confirmed create forces one authorized directory recheck');}else{assert(messages.length);assert.deepEqual(refreshes,[]);}
+    assert.equal(lifecycle.active,null,'handler releases the original mutation claim');
   }
 });
 
