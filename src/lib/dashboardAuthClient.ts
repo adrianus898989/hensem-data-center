@@ -284,7 +284,10 @@ async function dashboardNetworkFetch(
 ): Promise<DashboardJsonResponse> {
   const attempts = options.retryReadOnce ? 2 : 1;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    init.signal?.throwIfAborted();
     const abort = new AbortController();
+    const cancel = () => abort.abort(init.signal?.reason);
+    init.signal?.addEventListener("abort", cancel, { once: true });
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; abort.abort(); }, options.timeoutMs ?? 15000);
     try {
@@ -293,6 +296,7 @@ async function dashboardNetworkFetch(
       const text = await response.text();
       return { ok: response.ok, status: response.status, text: async () => text };
     } catch (error) {
+      init.signal?.throwIfAborted();
       if (attempt + 1 < attempts) continue;
       throw new DashboardHttpError(
         timedOut ? options.timeoutMessage : options.networkMessage,
@@ -301,6 +305,7 @@ async function dashboardNetworkFetch(
       );
     } finally {
       clearTimeout(timer);
+      init.signal?.removeEventListener("abort", cancel);
     }
   }
   throw new DashboardHttpError(options.networkMessage, 0, options.networkCode);
@@ -616,7 +621,7 @@ export function readSavedDashboardSession(): DashboardSession | null {
   } catch { return memorySession; }
 }
 
-async function callAdminFunction(session: DashboardSession, body: Record<string, unknown>) {
+async function callAdminFunction(session: DashboardSession, body: Record<string, unknown>, signal?: AbortSignal) {
   const { url, anonKey } = publicConfig();
   const functionName = String(process.env.NEXT_PUBLIC_DASHBOARD_USER_FUNCTION || "dashboard-user-admin").trim() || "dashboard-user-admin";
   const isAccessCheck = body.action === "check-access";
@@ -627,7 +632,7 @@ async function callAdminFunction(session: DashboardSession, body: Record<string,
       Authorization: `Bearer ${session.access_token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body), redirect: "error", credentials: "omit", cache: "no-store",
+    body: JSON.stringify(body), redirect: "error", credentials: "omit", cache: "no-store", signal,
   }, {
     timeoutMessage: isAccessCheck
       ? "账号密码和权限已验证，但登录安全检查超时，请稍后重试"
@@ -707,8 +712,9 @@ export async function createViewerAccount(session: DashboardSession, usernameInp
   return await createDashboardAccount(session, usernameInput, password, "viewer", permissions);
 }
 
-export async function listDashboardUsers(session: DashboardSession): Promise<DashboardProfile[]> {
-  const result = await callAdminFunction(session, { action: "list-users" });
+export async function listDashboardUsers(session: DashboardSession, signal?: AbortSignal): Promise<DashboardProfile[]> {
+  const result = await callAdminFunction(session, { action: "list-users" }, signal);
+  signal?.throwIfAborted();
   if (result?.ok !== true || !Array.isArray(result.users)) throw new Error("账号列表返回不完整，请重新查询。");
   const seen = new Set<string>();
   for (const user of result.users) {

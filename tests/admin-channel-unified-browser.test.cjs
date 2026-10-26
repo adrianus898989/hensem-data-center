@@ -171,11 +171,11 @@ test('different raw names and countries never silently apply country-specific su
 test('different name searches reuse full snapshots without changing cached source inventory',async()=>{
  const h=fixture({catalog:[platform(1),platform(2)],rowsFor:()=>[...matchedRows(),channel('other',{provider:'Other',source_position:1})]});cross(h);await h.context.liveChannelCrossQuery('WPay');const before=plain(h.mod.capture().cache);await h.context.liveChannelCrossQuery('Other');assert.equal(h.calls.length,1);assert.deepEqual(plain(h.mod.capture().cache),before);assert.match(h.mod.render(),/Other/);
 });
-test('single ordinary query reuses fresh snapshot while explicit platform selection refreshes it',async()=>{
- const h=fixture();await h.start();await h.mod.load();assert.equal(h.calls.length,1);h.context.liveChannelSelect(0);await flush();assert.equal(h.calls.length,2);await h.mod.load();assert.equal(h.calls.length,2);
+test('single query and platform selection reuse fresh snapshots while the explicit refresh reads once',async()=>{
+ const h=fixture();await h.start();await h.mod.load();assert.equal(h.calls.length,1);h.context.liveChannelSelect(0);await flush();assert.equal(h.calls.length,1);await h.context.liveChannelRefresh();assert.equal(h.calls.length,2);await h.mod.load();assert.equal(h.calls.length,2);
 });
 test('a failed explicit refresh retains its last successful source snapshot and original collection time',async()=>{
- const h=fixture();await h.start();const old=plain(h.mod.capture().response);h.setHandler(()=>{throw Error('temporary failure')});h.context.liveChannelSelect(0);await flush();assert.deepEqual(plain(h.mod.capture().response),old);assert.match(h.mod.render(),/temporary failure/);assert.match(h.mod.render(),/保留上次成功读取/);
+ const h=fixture();await h.start();const old=plain(h.mod.capture().response);h.setHandler(()=>{throw Error('temporary failure')});await h.context.liveChannelRefresh();assert.deepEqual(plain(h.mod.capture().response),old);assert.match(h.mod.render(),/temporary failure/);assert.match(h.mod.render(),/保留上次成功读取/);
 });
 test('malformed batch source/identity cannot replace a previously validated snapshot',async()=>{
  const first=platform(1),h=fixture({rowsFor:()=>matchedRows()});await h.start();const before=plain(h.mod.capture().cache[first.id].response);cross(h);await h.context.liveChannelCrossQuery('WPay');h.setHandler(()=>{const r=response([first]);r.snapshots[0].source='wrong-source';return r;});await h.context.liveChannelCrossRefresh();assert.deepEqual(plain(h.mod.capture().cache[first.id].response),before);assert.match(h.mod.render(),/通道快照来源不匹配/);

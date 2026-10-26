@@ -12,10 +12,10 @@ const plain=x=>JSON.parse(JSON.stringify(x)),flush=()=>new Promise(r=>setImmedia
 const nodes=x=>Array.isArray(x)?x.flatMap(nodes):x&&typeof x==='object'?[x,...nodes(x.props?.children)]:[];
 const text=x=>Array.isArray(x)?x.map(text).join(''):x&&typeof x==='object'?text(x.props?.children):x==null||typeof x==='boolean'?'':String(x);
 function ui(options={}){
- let cursor=0,ecursor=0;const states=[],deps=[],effects=[],cleanups=[],calls=[],roleCalls=[],mod={exports:{}};let actor=options.actor||owner,currentSession={...session,user:{id:actor.auth_user_id}},roleAccess=options.roleAccess;
+ let cursor=0,ecursor=0;const states=[],deps=[],effects=[],cleanups=[],calls=[],roleCalls=[],listArgs=[],rawRoleArgs=[],mod={exports:{}};let actor=options.actor||owner,currentSession={...session,user:{id:actor.auth_user_id}},roleAccess=options.roleAccess,opened=true,currentSection=options.section||'accounts';
  const react={Fragment:'fragment',useMemo:fn=>fn(),useRef(initial){const i=cursor++;return states[i]||(states[i]={current:initial})},useState(initial){const i=cursor++;if(!(i in states))states[i]=typeof initial==='function'?initial():initial;return[states[i],v=>{states[i]=typeof v==='function'?v(states[i]):v}]},useEffect(fn,values){const i=ecursor++;if(!deps[i]||values.some((v,k)=>v!==deps[i][k])){deps[i]=values;effects.push(()=>{cleanups[i]?.();cleanups[i]=fn()})}}};
  const output=ts.transpileModule(fs.readFileSync(path.join(root,'src/components/AdminControlCenter.tsx'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
- vm.runInNewContext(output,{module:mod,exports:mod.exports,console,Error,window:{confirm:()=>true},require:name=>{
+ vm.runInNewContext(output,{module:mod,exports:mod.exports,console,Error,AbortController,AbortSignal,DOMException,window:{confirm:()=>true},require:name=>{
   if(name==='react')return react;
   if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
   if(name.endsWith('.css'))return{};
@@ -24,20 +24,20 @@ function ui(options={}){
   if(name==='./AccountAssignedRoleDialog')return{default:function AccountAssignedRoleDialog(){}};
   if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};
   if(name==='./AccountPermissionDialog')return{default:function AccountPermissionDialog(){}};
-  if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async()=>{calls.push({action:'list'});return options.list?options.list():options.users||[owner,brazil,india]},listDashboardAudit:async(...args)=>{calls.push({action:'audit'});return options.audit?options.audit(...args):[]},createDashboardRoleAccount:async(...args)=>{calls.push({action:'create',args:plain(args)});return options.create?options.create(...args):{account:{username:args[1],role_name:EMPTY_ROLE.name}}},updateDashboardAccount:async(...args)=>{calls.push({action:'update',args:plain(args)});if(options.update)return options.update(...args)},resetDashboardUserPassword:async(...args)=>calls.push({action:'password',args:plain(args)})};
+  if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async(...args)=>{calls.push({action:'list'});listArgs.push(args);return options.list?options.list(...args):options.users||[owner,brazil,india]},listDashboardAudit:async(...args)=>{calls.push({action:'audit'});return options.audit?options.audit(...args):[]},createDashboardRoleAccount:async(...args)=>{calls.push({action:'create',args:plain(args)});return options.create?options.create(...args):{account:{username:args[1],role_name:EMPTY_ROLE.name}}},updateDashboardAccount:async(...args)=>{calls.push({action:'update',args:plain(args)});if(options.update)return options.update(...args)},resetDashboardUserPassword:async(...args)=>calls.push({action:'password',args:plain(args)})};
   if(name.endsWith('/dashboardRoleDisplay'))return require('./load-role-display.cjs');
-  if(name.endsWith('/dashboardRoleClient'))return{dashboardRolePages:require('../src/lib/dashboardRoleCatalog.json').pages,dashboardRoleRequest:async(...args)=>{roleCalls.push(plain(args));return options.roles?options.roles():{roles:[EMPTY_ROLE,VIP_ROLE],accounts:(options.users||[owner,brazil,india]).map(account=>({...account,role_id:null,assignment_version:0}))}}};
+  if(name.endsWith('/dashboardRoleClient'))return{dashboardRolePages:require('../src/lib/dashboardRoleCatalog.json').pages,dashboardRoleRequest:async(...args)=>{rawRoleArgs.push(args);roleCalls.push(plain(args.slice(0,2)));return options.roles?options.roles(...args):{roles:[EMPTY_ROLE,VIP_ROLE],accounts:(options.users||[owner,brazil,india]).map(account=>({...account,role_id:null,assignment_version:0}))}}};
   if(name.startsWith('@/lib/'))return loadTs(path.join(root,'src/lib',name.slice(6)+'.ts'));
   throw Error('Unexpected module: '+name);
  }});
- const draw=()=>{cursor=ecursor=0;return mod.exports.default({open:true,session:currentSession,profile:actor,onClose(){},section:options.section||'accounts',embedded:true,accountsOnlyLoading:options.accountsOnlyLoading!==false,manualQuery:options.manualQuery,roleAccess})};
+ const draw=()=>{cursor=ecursor=0;return mod.exports.default({open:opened,session:currentSession,profile:actor,onClose(){},section:currentSection,embedded:true,accountsOnlyLoading:options.accountsOnlyLoading!==false,manualQuery:options.manualQuery,roleAccess})};
  const all=()=>nodes(draw());
  const button=(label,within)=>{const node=nodes(within||draw()).find(n=>n.type==='button'&&text(n)===label);assert(node,'button '+label);return node};
  const field=(label)=>{const wrap=all().find(n=>n.type==='div'&&n.props.className?.includes('admin-search-field')&&nodes(n).some(c=>c.type==='label'&&text(c)===label));assert(wrap,'filter '+label);return nodes(wrap).find(n=>['select','input'].includes(n.type))};
  const dialog=()=>all().find(n=>n.type?.name==='AccountEditorDialog');
  const rows=()=>all().filter(n=>n.type==='tr'&&nodes(n).some(c=>c.type==='th'&&c.props.scope==='row'));
  draw();effects.splice(0).forEach(fn=>fn());
- return{draw,all,button,field,dialog,rows,calls,roleCalls,states,dispose:()=>cleanups.forEach(fn=>fn?.()),role(next){roleAccess=next;draw();effects.splice(0).forEach(fn=>fn())},actor(next){actor=next;currentSession={...session,user:{id:next.auth_user_id}};draw();effects.splice(0).forEach(fn=>fn())}};
+ return{draw,all,button,field,dialog,rows,calls,roleCalls,listArgs,rawRoleArgs,states,setOpen(next){opened=next;draw();effects.splice(0).forEach(fn=>fn())},section(next){currentSection=next;draw();effects.splice(0).forEach(fn=>fn())},dispose:()=>cleanups.forEach(fn=>fn?.()),role(next){roleAccess=next;draw();effects.splice(0).forEach(fn=>fn())},actor(next){actor=next;currentSession={...session,user:{id:next.auth_user_id}};draw();effects.splice(0).forEach(fn=>fn())}};
 }
 
 test('data scope, role, status and text filters intersect locally; reset restores the authorized directory without IO',async()=>{
@@ -94,11 +94,11 @@ test('manual directory distinguishes pending reads, confirmed zero, and filtered
  h.button('刷新列表').props.onClick();resolve([brazil]);await flush();h.field('搜索账号').props.onChange({target:{value:'other'}});assert.match(text(h.draw()),/显示 0 \/ 1 个账号/);assert.match(text(h.draw()),/没有符合当前搜索条件/);
 });
 
-test('directory read failures show an error, clear stale rows and never report them as zero',async()=>{
+test('temporary refresh failure preserves the last roster and blocks writes until a successful recheck',async()=>{
  let fail=false;const h=ui({manualQuery:true,list:async()=>{if(fail)throw Error('fixture read failure');return[brazil]}});
  h.button('查询账号').props.onClick();await flush();assert.equal(h.rows().length,1);
- fail=true;h.button('刷新列表').props.onClick();await flush();assert.equal(h.rows().length,0);assert.match(text(h.draw()),/账号读取失败/);assert.match(text(h.draw()),/fixture read failure/);assert.doesNotMatch(text(h.draw()),/显示 0|brazil-fixture|没有符合当前搜索|当前可管理范围内没有/);
- fail=false;h.button('查询账号').props.onClick();await flush();assert.equal(h.rows().length,1);assert.doesNotMatch(text(h.draw()),/fixture read failure/);
+ fail=true;h.button('刷新列表').props.onClick();await flush();assert.equal(h.rows().length,1);assert.match(text(h.draw()),/fixture read failure/);assert.match(text(h.draw()),/保留上次列表/);assert.equal(h.button('账号设置',h.rows()[0]).props.disabled,true);
+ fail=false;h.button('刷新列表').props.onClick();await flush();assert.equal(h.rows().length,1);assert.doesNotMatch(text(h.draw()),/fixture read failure/);assert.equal(h.button('账号设置',h.rows()[0]).props.disabled,false);
 });
 
 test('account or scope changes invalidate old directory responses and require another manual query',async()=>{
@@ -108,8 +108,10 @@ test('account or scope changes invalidate old directory responses and require an
  h.actor({...owner,role:'admin',auth_user_id:'fixture-second',username:'second',data_scope:IN});assert.equal(h.rows().length,0);assert.match(text(h.draw()),/尚未查询账号/);assert.equal(h.calls.length,2);
 });
 
-test('a late older query cannot replace a newer successful directory',async()=>{
- const resolves=[];const h=ui({manualQuery:true,list:()=>new Promise(r=>resolves.push(r))});const query=h.button('查询账号').props.onClick;query();query();resolves[1]([india]);await flush();resolves[0]([brazil]);await flush();assert.match(text(h.rows()),/india-fixture/);assert.doesNotMatch(text(h.rows()),/brazil-fixture/);
+test('duplicate pending queries share one request and a warm refresh never unmounts the account rows',async()=>{
+ const resolves=[];const h=ui({manualQuery:true,list:()=>new Promise(r=>resolves.push(r))});const query=h.button('查询账号').props.onClick;query();query();assert.equal(resolves.length,1);resolves[0]([brazil]);await flush();
+ const refresh=h.button('刷新列表').props.onClick;refresh();refresh();assert.equal(resolves.length,2);assert.equal(h.rows().length,1);assert.match(text(h.rows()),/brazil-fixture/);assert.doesNotMatch(text(h.draw()),/请稍候，账号与授权目录正在读取/);
+ assert(h.all().some(n=>n.type?.name==='AccountLoginPolicy'),'security component stays mounted while refreshing');resolves[1]([india]);await flush();assert.match(text(h.rows()),/india-fixture/);assert.doesNotMatch(text(h.rows()),/brazil-fixture/);h.dispose();
 });
 
 test('accounts-only save keeps success feedback and never reads unused audit records',async()=>{
@@ -315,4 +317,64 @@ test('module permission view retains its permission matrix rather than receiving
  const h=ui({section:'permissions'});await flush();const table=h.all().find(n=>n.type==='table'&&n.props.className.includes('admin-permission-matrix'));
  assert.deepEqual(nodes(table).filter(n=>n.type==='th'&&n.props.scope==='col').map(text),['账号 / 角色','模块权限 · 已开 / 权限总数','操作']);
  assert(h.all().some(n=>n.type==='section'&&n.props.className.includes('admin-permission-directory')));assert(h.calls.every(c=>c.action==='list'));h.dispose();
+});
+
+test('refreshing the role selector does not reread or remove the account directory',async()=>{
+ const h=ui();await flush();h.button('+ 新建账号').props.onClick();const reads=h.calls.filter(c=>c.action==='list').length,roles=h.roleCalls.length;
+ await h.button('刷新角色',h.dialog()).props.onClick();await flush();assert.equal(h.calls.filter(c=>c.action==='list').length,reads);assert.equal(h.roleCalls.length,roles+1);assert.equal(h.rows().length,3);h.dispose();
+});
+
+test('account rows become visible before a slower independent role directory',async()=>{
+ let finish;const h=ui({roles:()=>new Promise(r=>finish=r)});await flush();assert.equal(h.rows().length,3);assert.equal(h.calls.filter(c=>c.action==='list').length,1);
+ finish({roles:[],accounts:[owner,brazil,india].map(a=>({...a,role_id:null,assignment_version:0}))});await flush();assert.equal(h.rows().length,3);assert.equal(h.calls.filter(c=>c.action==='list').length,1);h.dispose();
+});
+
+for(const denied of [{status:401},{status:403},{code:'unauthorized'},{code:'forbidden'},{code:'actor_changed'}])test('directory denial clears both reads and cannot be undone by a late sibling '+JSON.stringify(denied),async()=>{
+ let reject,late,phase=false;const roleDenial=!!denied.code;
+ const h=ui({list:()=>!phase?[brazil]:roleDenial?new Promise(r=>late=r):new Promise((_,r)=>reject=r),roles:()=>!phase?{roles:[],accounts:[{...brazil,role_id:null,assignment_version:0}]}:roleDenial?new Promise((_,r)=>reject=r):new Promise(r=>late=r)});await flush();assert.equal(h.rows().length,1);
+ phase=true;h.button('刷新列表').props.onClick();reject(Object.assign(Error('permission revoked'),denied));await flush();assert.equal(h.rows().length,0);
+ assert(h.listArgs.at(-1)[1].aborted);assert(h.rawRoleArgs.at(-1)[2].aborted);
+ late(roleDenial?[brazil]:{roles:[],accounts:[{...brazil,role_id:null,assignment_version:0}]});await flush();assert.equal(h.rows().length,0);assert.match(text(h.draw()),/permission revoked/);h.dispose();
+});
+
+test('disposal physically cancels roster and roles and ignores transports that still resolve',async()=>{
+ let rows,roles;const h=ui({list:()=>new Promise(r=>rows=r),roles:()=>new Promise(r=>roles=r)});h.dispose();assert(h.listArgs[0][1].aborted);assert(h.rawRoleArgs[0][2].aborted);
+ rows([brazil]);roles({roles:[],accounts:[]});await flush();assert.equal(h.rows().length,0);
+});
+
+test('write confirmation replaces a pre-write pending read and ignores its late older rows',async()=>{
+ const requests=[];let phase=false;const h=ui({users:[brazil],list:()=>!phase?[brazil]:new Promise(r=>requests.push(r))});await flush();h.button('账号设置').props.onClick();const save=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave;
+ phase=true;h.button('刷新列表').props.onClick();const old=h.listArgs.at(-1)[1];const saving=save({active:false});await flush();assert.equal(requests.length,2);assert(old.aborted);assert.match(text(h.rows()),/正常/);
+ requests[1]([{...brazil,active:false}]);assert.equal(await saving,true);await flush();assert.match(text(h.rows()),/停用/);
+ requests[0]([brazil]);await flush();assert.match(text(h.rows()),/停用/);assert.doesNotMatch(text(h.rows()),/正常/);h.dispose();
+});
+
+test('password reset does not reload the account or role directories',async()=>{
+ const h=ui({users:[brazil]});await flush();h.button('账号设置').props.onClick();h.button('重置密码',h.dialog()).props.onClick();const form=h.all().find(n=>n.type==='form'&&n.props.className==='admin-inline-reset');
+ nodes(form).find(n=>n.type==='input').props.onChange({target:{value:'synthetic-only-password'}});const lists=h.calls.filter(c=>c.action==='list').length,roles=h.roleCalls.length;
+ await h.all().find(n=>n.type==='form'&&n.props.className==='admin-inline-reset').props.onSubmit({preventDefault(){}});await flush();assert.equal(h.calls.filter(c=>c.action==='password').length,1);assert.equal(h.calls.filter(c=>c.action==='list').length,lists);assert.equal(h.roleCalls.length,roles);assert.match(text(h.draw()),/密码已重置/);h.dispose();
+});
+
+test('a synchronous mutation claim rejects a second save before React rerenders',async()=>{
+ let finish;const h=ui({users:[brazil],update:()=>new Promise(r=>finish=r)});await flush();h.button('账号设置').props.onClick();const save=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave;
+ const first=save({active:false}),second=save({active:false});assert.equal(await second,false);assert.equal(h.calls.filter(c=>c.action==='update').length,1);finish();assert.equal(await first,true);h.dispose();
+});
+
+for(const boundary of ['close','section','denial','dispose'])test('a late completed save cannot reopen or reread after '+boundary,async()=>{
+ let finish,fail=false;const h=ui({users:[brazil],list:()=>{if(fail)throw Object.assign(Error('revoked'),{status:403});return[brazil]},update:()=>new Promise(r=>finish=r)});await flush();h.button('账号设置').props.onClick();const save=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave,request=save({active:false});
+ if(boundary==='close')h.setOpen(false);else if(boundary==='section')h.section('permissions');else if(boundary==='dispose')h.dispose();else{fail=true;h.button('刷新列表').props.onClick();await flush();assert.equal(h.rows().length,0);}
+ const count=h.calls.filter(c=>c.action==='list').length;finish();assert.equal(await request,false);await flush();assert.equal(h.calls.filter(c=>c.action==='list').length,count);assert.doesNotMatch(text(h.draw()),/brazil-fixture 已更新/);if(boundary==='denial'){assert.equal(h.rows().length,0);assert.match(text(h.draw()),/revoked/);}h.dispose();
+});
+
+for(const boundary of ['close','section'])test('cancelled cold directory becomes retryable after '+boundary,async()=>{
+ const finish=[];const h=ui({manualQuery:true,list:()=>new Promise(r=>finish.push(r))});h.button('查询账号').props.onClick();const signal=h.listArgs[0][1];if(boundary==='close'){h.setOpen(false);h.setOpen(true);}else h.section('permissions');assert(signal.aborted);assert.equal(h.button('查询账号').props.disabled,false);
+ h.button('查询账号').props.onClick();finish[1]([india]);await flush();finish[0]([brazil]);await flush();assert.match(text(h.rows()),/india-fixture/);assert.doesNotMatch(text(h.rows()),/brazil-fixture/);h.dispose();
+});
+
+test('opening create before a manual query also verifies the roster and never leaves an enabled inert submit',async()=>{
+ let finish;const h=ui({manualQuery:true,list:()=>new Promise(r=>finish=r)});h.button('+ 新建账号').props.onClick();await flush();assert.equal(h.calls.filter(c=>c.action==='list').length,1);assert.equal(h.button('建立后台账号',h.dialog()).props.disabled,true);finish([brazil]);await flush();assert.equal(h.rows().length,1);assert(h.dialog());h.dispose();
+});
+test('a denied account mutation clears the preserved directory and cannot report success',async()=>{
+ const h=ui({users:[brazil],update:()=>Promise.reject(Object.assign(Error('write revoked'),{status:403}))});await flush();h.button('账号设置').props.onClick();const save=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave;
+ assert.equal(await save({active:false}),false);await flush();assert.equal(h.rows().length,0);assert.equal(h.dialog(),undefined);assert.match(text(h.draw()),/write revoked/);assert.equal(h.calls.filter(c=>c.action==='list').length,1);h.dispose();
 });
