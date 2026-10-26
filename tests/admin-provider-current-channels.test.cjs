@@ -1,7 +1,7 @@
 const {test,before,after}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const legacy=require('./fixtures/wg-provider-options-harness.cjs');
 const read=p=>fs.readFileSync(path.join(__dirname,'..',p),'utf8');
-const migration=read('supabase/admin-provider-current-channels.sql');
+const migration=read('supabase/migrations/20261026144904_provider_options_current_ar_channels.sql');
 const baseline=read('tests/fixtures/provider-options-current-channels-before.sql');
 let db,originalMetadata,prior;
 const id=legacy.ids.ar,other='10000000-0000-0000-0000-000000000099';
