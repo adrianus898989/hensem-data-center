@@ -39,6 +39,7 @@ jobs:
       - run: pnpm test:collector-control
       - run: pnpm test:admin-preview
       - run: pnpm test:admin-pagination
+      - run: node --test tests/admin-provider-current-channels.test.cjs
       - run: pnpm test:admin-cache
       - run: pnpm test:panda-native
       - run: pnpm test:wg-realtime
