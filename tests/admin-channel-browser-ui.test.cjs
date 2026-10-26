@@ -221,8 +221,8 @@ test('directory distinguishes an unread platform, a read without a snapshot, and
 
 test('source and country tabs come only from directory and keep different source caches and exports isolated',async()=>{
  const BR=platform(3,{country:'巴西'}),h=fixture({catalog:[AR,BR,YASH]});await h.start();assert.match(h.mod.render(),/AR 系统/);assert.match(h.mod.render(),/YASH 系统/);assert.match(h.mod.render(),/巴西/);
- h.context.liveChannelCountry(1);await flush();assert.equal(h.calls[1].platformIds[0],BR.id);h.context.liveChannelCountry(0);await flush();assert.equal(h.calls.length,3);assert.equal(h.calls[2].platformIds[0],AR.id);
- h.context.liveChannelSource(1);await flush();assert.equal(h.calls[3].platformIds[0],YASH.id);assert.equal(exported(h)[0]['平台'],YASH.name);h.context.liveChannelSource(0);await flush();assert.equal(h.calls.length,5);assert.equal(h.calls[4].platformIds[0],AR.id);assert.equal(exported(h)[0]['平台'],AR.name);
+ h.context.liveChannelCountry(1);await flush();assert.equal(h.calls[1].platformIds[0],BR.id);assert.equal(exported(h)[0]['平台'],BR.name);h.context.liveChannelCountry(0);await flush();assert.equal(h.calls.length,2);assert.equal(exported(h)[0]['平台'],AR.name);
+ h.context.liveChannelSource(1);await flush();assert.equal(h.calls[2].platformIds[0],YASH.id);assert.equal(exported(h)[0]['平台'],YASH.name);h.context.liveChannelSource(0);await flush();assert.equal(h.calls.length,3);assert.equal(exported(h)[0]['平台'],AR.name);assert.deepEqual(h.calls.map(q=>q.platformIds[0]),[AR.id,BR.id,YASH.id]);
 });
 
 test('AR wide source table keeps the requested display fields visible without source-name or expandable details',async()=>{
@@ -286,11 +286,9 @@ test('direct source columns and private source-name or merchant searches retain 
  h.setPermissions(['view','query','export','detail']);h.mod.render();assert(!headers(h.mod.render()).includes('源通道名称'));assert.equal(exported(h)[0]['源通道名称'],'Private native name');h.context.liveChannelQuery('Private native name','77991');assert.equal(exported(h).length,1);h.setPermissions(['view','query','export']);h.mod.render();assert.equal(exported(h).length,0);assert.doesNotMatch(h.mod.render(),/channel-source-name|name="merchant"/);h.context.liveChannelClearFilters();assert.equal(exported(h).length,2);assert.equal(h.calls.length,1);
 });
 
-test('every platform click requests once even with a fresh cache, while an identical inflight click never overlaps',async()=>{
- const second=platform(2),h=fixture({catalog:[AR,second]});await h.start();
- h.context.liveChannelSelect(1);await flush();h.context.liveChannelSelect(0);await flush();h.context.liveChannelSelect(0);await flush();assert.deepEqual(h.calls.map(q=>q.platformIds[0]),[AR.id,second.id,AR.id,AR.id]);
- let finish;h.setHandler(()=>new Promise(resolve=>finish=resolve));h.context.liveChannelSelect(0);await flush();assert.equal(h.calls.length,5);h.context.liveChannelSelect(0);await flush();assert.equal(h.calls.length,5);finish(response(AR));await flush();assert.equal(h.mod.capture().status,'ready');assert.equal(h.calls.length,5);
- assert(h.calls.every(q=>q.action==='channelStatus'&&q.direction==='all'&&q.platformIds.length===1));
+test('platform navigation reuses fresh validated snapshots while explicit refresh coalesces identical inflight clicks',async()=>{
+ const second=platform(2),h=fixture({catalog:[AR,second]});await h.start();h.context.liveChannelSelect(1);await flush();h.context.liveChannelSelect(0);await flush();h.context.liveChannelSelect(0);await flush();assert.deepEqual(h.calls.map(q=>q.platformIds[0]),[AR.id,second.id]);assert.equal(exported(h)[0]['平台'],AR.name);assert.match(h.mod.render(),/onclick="liveChannelRefresh\(\)"[^>]*>刷新快照/);
+ let finish;h.setHandler(()=>new Promise(resolve=>finish=resolve));const reading=h.context.liveChannelRefresh();await flush();assert.equal(h.calls.length,3);h.context.liveChannelRefresh();h.context.liveChannelSelect(0);await flush();assert.equal(h.calls.length,3);finish(response(AR,[channel('new')]));await reading;await flush();assert.equal(h.mod.capture().status,'ready');assert.match(h.mod.render(),/Display new/);assert.equal(h.calls.length,3);assert(h.calls.every(q=>q.action==='channelStatus'&&q.direction==='all'&&q.platformIds.length===1));
 });
 
 test('AR native switch and availability stay independent; unknown codes never manufacture disabled states',async()=>{
@@ -482,4 +480,20 @@ test('cross-platform AR status uses compact native switches and availability whi
  const missing=crossFixture({handler:q=>batchResponse([AR],q,()=>[channel('old',{provider:'WPayINR',channel_name:'WPAY-QR',status_text:raw,is_present:false})])});await missing.context.liveChannelCrossQuery('WPAY-QR');missing.context.liveChannelCrossAbsent(true);let html=missing.mod.render(),body=html.match(/<tbody>([\s\S]*?)<\/tbody>/)[1];assert.match(body,/>本次未出现<\/span>/);assert.doesNotMatch(body,/可用状态：/);
  const yash=crossFixture({catalog:[YASH],handler:q=>batchResponse([YASH],q,()=>[channel('yash',{provider:'WPayINR',channel_name:'WPAY-QR',status_text:'源站开启'})])});await yash.context.liveChannelCrossQuery('WPAY-QR');body=yash.mod.render().match(/<tbody>([\s\S]*?)<\/tbody>/)[1];assert.match(body,/>源站开启<\/span>/);assert.doesNotMatch(body,/可用状态：/);
  const single=fixture({handler:()=>response(AR,[channel('single',{status_text:raw})])});await single.start();assert.equal(firstTableRow(single.mod.render())['状态'],'通道状态开启可用状态总控通道关闭');assert.deepEqual(exported(single)[0]['源站状态'],raw);
+});
+
+test('reselecting the same platform retains direction and local filters without changing the full snapshot',async()=>{
+ const h=fixture();await h.start();h.context.liveChannelTab('withdraw');h.context.liveChannelProvider('Provider one');h.context.liveChannelStatus('on');h.context.liveChannelCategory('qr');h.context.liveChannelCurrency('INR');h.context.liveChannelQuery('one','merchant-22');h.context.liveChannelAbsent(true);const before=h.mod.capture(),facts=JSON.stringify(h.mod.exportRows());h.context.liveChannelSelect(0);await flush();const after=h.mod.capture();for(const key of ['tab','provider','filterStatus','category','currency','channelQuery','merchantQuery','channelDraft','merchantDraft','includeAbsent'])assert.equal(after[key],before[key],key);assert.equal(JSON.stringify(h.mod.exportRows()),facts);assert.equal(h.calls.length,1);
+});
+test('reselection at the original five-minute deadline refreshes once and fresh clicks never extend it',async()=>{
+ const h=fixture();await h.start();const firstAttempt=h.mod.capture().cache[AR.id].attemptAt;h.setNow('2026-10-09T05:04:59Z');h.context.liveChannelSelect(0);await flush();assert.equal(h.calls.length,1);assert.equal(h.mod.capture().cache[AR.id].attemptAt,firstAttempt);h.setNow('2026-10-09T05:05:00Z');h.context.liveChannelSelect(0);await flush();assert.equal(h.calls.length,2);assert.equal(h.mod.capture().status,'ready');
+});
+test('same dashboard id with changed native binding cannot reuse or export the previous binding snapshot',async()=>{
+ const bound={...AR,sourceName:'native-one',scopeGroup:'IN'};for(const changed of [{sourceName:'native-two'},{source_name:'native-two',sourceName:undefined},{scopeGroup:'PK'},{scope_group:'PK',scopeGroup:undefined}]){const h=fixture({catalog:[bound],handler:()=>response(bound,[channel('old-binding')])});await h.start();let finish;h.setHandler(()=>new Promise(resolve=>finish=resolve));const next={...bound,...changed};h.setCatalog([next]);h.mod.render();await flush();assert.equal(h.calls.length,2);assert.equal(h.mod.canExport(),false);assert.doesNotMatch(h.mod.render(),/Display old-binding/);finish(response(next,[channel('new-binding')]));await flush();assert.equal(h.mod.canExport(),true);assert.match(h.mod.render(),/Display new-binding/);}
+});
+test('explicit single refresh respects permission, visibility and page lifecycle guards',async()=>{
+ const h=fixture();await h.start();h.hide();await h.context.liveChannelRefresh();assert.equal(h.calls.length,1);await h.show();h.setPermissions(['view','export']);await h.context.liveChannelRefresh();h.mod.render();assert.equal(h.calls.length,1);assert.equal(h.mod.canExport(),false);assert.deepEqual(Object.keys(h.mod.capture().cache),[]);h.setPermissions(['view','query','export','detail']);await h.start();assert.equal(h.calls.length,2);h.setPage('overview');await h.context.liveChannelRefresh();assert.equal(h.calls.length,2);
+});
+test('reusing an incomplete source snapshot never upgrades its completeness and explicit refresh can complete it',async()=>{
+ const partial=response(AR,[channel('partial')]);partial.snapshots[0].complete=false;const h=fixture({handler:()=>partial});await h.start();h.context.liveChannelSelect(0);await flush();assert.equal(h.calls.length,1);assert.match(h.mod.render(),/采集未完整/);assert.equal(exported(h)[0]['快照完整'],'否');h.setHandler(()=>response(AR,[channel('complete')]));await h.context.liveChannelRefresh();assert.equal(h.calls.length,2);assert.equal(exported(h)[0]['快照完整'],'是');assert.match(h.mod.render(),/Display complete/);
 });
