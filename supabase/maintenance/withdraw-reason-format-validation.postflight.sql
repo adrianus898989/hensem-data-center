@@ -1,0 +1,11 @@
+-- Read-only inspection. Installation and rollback enforce the complete pack CAS.
+WITH specs AS(SELECT value s FROM jsonb_array_elements($specs$[{"signature":"private.dashboard_admin_live_blocking_core(text)","old_hash":"d686cc6046014e8ba1bf45ba7607e922","new_hash":"7497726e16327c8acbb4e33183a327c0","metadata":{"proacl":["postgres=X/postgres"],"probin":null,"procost":100,"prokind":"f","proname":"dashboard_admin_live_blocking_core","prorows":0,"pronargs":1,"proconfig":["search_path=\"\""],"proretset":false,"prosecdef":false,"prorettype":"3802","prosqlbody":null,"prosupport":"-","proargmodes":null,"proargnames":["p_note"],"proargtypes":["25"],"proisstrict":false,"proparallel":"s","protrftypes":null,"provariadic":"0","provolatile":"i","proleakproof":false,"proallargtypes":null,"proargdefaults":null,"pronargdefaults":0},"owner":"postgres","language":"plpgsql"},{"signature":"private.withdraw_reason_newar_index_valid(jsonb)","old_hash":"0b144e19012114e91bd07ed149ecd9b5","new_hash":"b676aa851cd4552ac193d8d635d97f5b","metadata":{"proacl":["postgres=X/postgres"],"probin":null,"procost":100,"prokind":"f","proname":"withdraw_reason_newar_index_valid","prorows":0,"pronargs":1,"proconfig":["search_path=\"\""],"proretset":false,"prosecdef":false,"prorettype":"16","prosqlbody":null,"prosupport":"-","proargmodes":null,"proargnames":["payload"],"proargtypes":["3802"],"proisstrict":false,"proparallel":"u","protrftypes":null,"provariadic":"0","provolatile":"i","proleakproof":false,"proallargtypes":null,"proargdefaults":null,"pronargdefaults":0},"owner":"postgres","language":"plpgsql"}]$specs$::jsonb))
+SELECT s->>'signature' signature,
+ CASE WHEN p.oid IS NULL THEN 'missing'
+  WHEN md5(p.prosrc)=s->>'old_hash' THEN 'before'
+  WHEN md5(p.prosrc)=s->>'new_hash' THEN 'installed' ELSE 'definition_drift' END state,
+ p.oid IS NOT NULL AND p.proowner='postgres'::regrole
+  AND to_jsonb(p)-ARRAY['oid','pronamespace','proowner','prosrc','prolang']=s->'metadata'
+  AND p.prolang=(SELECT oid FROM pg_language WHERE lanname=s->>'language') metadata_matches,
+ md5(p.prosrc) body_md5, s->>'old_hash' expected_before, s->>'new_hash' expected_installed
+FROM specs LEFT JOIN pg_proc p ON p.oid=to_regprocedure(s->>'signature') ORDER BY 1;
