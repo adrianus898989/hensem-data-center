@@ -164,7 +164,7 @@
    // either direction fits. Keep the exact full window and provider union;
    // append separately deduplicated direction rows, never hourly distincts.
    if(item.days.length!==1||item.request.direction!=='all')return readExact(item,id,policy);
-   const parts=[];
+   const parts=[],errors=[];
    for(const direction of directions){
     if(!valid(id))throw Error('人数查询已替换');
     try{
@@ -172,12 +172,20 @@
      if(!valid(id))throw Error('人数查询已替换');
      if(part._memberCacheable===false)throw Error('人数统计响应未完整');
      parts.push(part);
-    }catch(error){if(!valid(id))throw error;throw Object.assign(Error((direction==='charge'?'充值':'提款')+'：'+(error?.message||'人数读取失败')+'（'+parts.length+'/2 方向已读取，平台未计入合计）'),{code:error?.code});}
+    }catch(error){
+     if(!valid(id))throw error;
+     if(['ADMIN_LIVE_SESSION_DENIED','ADMIN_LIVE_PERMISSION_DENIED','ROLE_DENIED','42501'].includes(error?.code)){clearCache();throw error;}
+     const failure={direction,error:(direction==='charge'?'充值':'提款')+'：'+(error?.message||'人数读取失败')+'（'+parts.length+'/2 方向已读取'+(parts.length?'，已完成方向保留':'，平台未计入合计')+'）'};
+     if(!parts.length)throw Object.assign(Error(failure.error),{code:error?.code});
+     errors.push(failure);break;
+    }
    }
-   const rows=parts.flatMap(part=>part.rows);
-   if(rows.length!==2||directions.some(direction=>rows.filter(row=>row.direction===direction&&row.date===item.days[0]).length!==1))throw Error('人数统计方向明细不完整');
-   const result={platform:parts[0].platform,rows,sourceCompletenessVerified:parts.every(part=>part.sourceCompletenessVerified),frequencySupported:parts.every(part=>part.frequencySupported),_memberReadAt:Math.min(...parts.map(part=>part._memberReadAt)),_memberExpiresAt:Math.min(...parts.map(part=>part._memberExpiresAt)),_memberCacheHit:parts.some(part=>part._memberCacheHit),_memberCacheable:true};
-   remember(item,result,policy);return result;
+   const rows=parts.flatMap(part=>part.rows),expected=directions.slice(0,parts.length);
+   if(rows.length!==expected.length||expected.some(direction=>rows.filter(row=>row.direction===direction&&row.date===item.days[0]).length!==1))throw Error('人数统计方向明细不完整');
+   // A validated direction is an independent exact native result. A failed peer
+   // stays absent and visible in failures; never cache this as an all result.
+   const result={platform:parts[0].platform,rows,sourceCompletenessVerified:!errors.length&&parts.every(part=>part.sourceCompletenessVerified),frequencySupported:parts.every(part=>part.frequencySupported),_memberReadAt:Math.min(...parts.map(part=>part._memberReadAt)),_memberExpiresAt:Math.min(...parts.map(part=>part._memberExpiresAt)),_memberCacheHit:parts.some(part=>part._memberCacheHit),_memberCacheable:!errors.length,...(errors.length?{_memberDirectionErrors:errors}:{})};
+   if(!errors.length)remember(item,result,policy);return result;
   }
   async function readWindows(item,id,policy){
    const success=item.successWindow;
@@ -228,7 +236,7 @@
     // Finish the initial cohort before one serial retry of SQL-cancelled scopes.
     // Only one-day all-direction cancellations use two exact direction reads.
     // A failed daily fallback never restarts the original wide request.
-    for(const item of cancelledItems){if(!valid(id))return;try{const result=await retryCancelled(item,id,policy);if(!valid(id))return;S.results.push(result);S.failures=S.failures.filter(row=>row.id!==item.platform.id);}catch(error){if(!valid(id))return;const message=error?.message||'人数读取失败';S.failures=S.failures.map(row=>row.id===item.platform.id?{...row,error:row.error===message?message:row.error+'；重试失败：'+message}:row);}if(valid(id))c.render();}
+    for(const item of cancelledItems){if(!valid(id))return;try{const result=await retryCancelled(item,id,policy);if(!valid(id))return;S.results.push(result);S.failures=S.failures.filter(row=>row.id!==item.platform.id);if(result._memberDirectionErrors?.length)S.failures.push(failure(item,Error(result._memberDirectionErrors.map(x=>x.error).join('；'))));}catch(error){if(!valid(id))return;const message=error?.message||'人数读取失败';S.failures=S.failures.map(row=>row.id===item.platform.id?{...row,error:row.error===message?message:row.error+'；重试失败：'+message}:row);}if(valid(id))c.render();}
     if(!valid(id))return;S={...S,status:S.failures.length&&!S.results.length?'error':'ready',error:S.failures.length&&!S.results.length?'所选平台人数读取失败':''};c.render();
    })();pending=run;run.finally(()=>{if(id===serial)pending=null});return run;
   }

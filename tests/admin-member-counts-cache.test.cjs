@@ -124,16 +124,19 @@ test('direction retry preserves missing identities and ANDs source and frequency
  }
 });
 
-test('one failed direction excludes the whole platform, retains successful peers and has no recursive retries',async()=>{
+test('a failed direction retains only previously validated direction results and has no recursive retries',async()=>{
  for(const failedDirection of ['charge','withdraw']){
   const h=harness();h.select([platform(),platform(B)]);h.handler(q=>{if(q.platformId===A&&(q.direction==='all'||q.direction===failedDirection))throw timeout();return response(q);});await h.query();
-  assert.deepEqual(h.calls.filter(q=>q.platformId===A).map(q=>q.direction),failedDirection==='charge'?['all','charge']:['all','charge','withdraw']);assert.equal(h.ui.state.results.length,1);assert.equal(h.ui.state.results[0].platform.id,B);assert.equal(h.ui.state.failures.length,1);assert.match(h.ui.state.failures[0].error,new RegExp((failedDirection==='charge'?'0':'1')+'/2 方向已读取，平台未计入合计'));assert.match(h.ui.metric('charge'),/12 \/ 9/);assert.match(h.ui.metric('charge'),/读取 1 \/ 2 平台.*部分数据/);const n=h.calls.length;await h.ui.ensure();assert.equal(h.calls.length,n);
+  assert.deepEqual(h.calls.filter(q=>q.platformId===A).map(q=>q.direction),failedDirection==='charge'?['all','charge']:['all','charge','withdraw']);assert.equal(h.ui.state.results.length,failedDirection==='charge'?1:2);assert.equal(h.ui.state.results[0].platform.id,B);assert.equal(h.ui.state.failures.length,1);
+  assert.equal(h.ui.platformMetric(A,'charge').value,failedDirection==='charge'?null:9);assert.equal(h.ui.platformMetric(A,'withdraw').value,null);
+  assert.match(h.ui.state.failures[0].error,new RegExp(failedDirection==='charge'?'0/2 方向已读取，平台未计入合计':'1/2 方向已读取，已完成方向保留'));
+  assert.match(h.ui.metric('charge'),failedDirection==='charge'?/读取 1 \/ 2 平台.*部分数据/:/读取 2 \/ 2 平台/);assert.match(h.ui.metric('withdraw'),/读取 1 \/ 2 平台.*部分数据/);const n=h.calls.length;await h.ui.ensure();assert.equal(h.calls.length,n);
  }
 });
 
-test('partial or invalid direction payload never creates a complete all result or caches that result',async()=>{
+test('partial or invalid direction payload preserves the validated peer without caching an all result',async()=>{
  for(const alter of [r=>({...r,partial:true}),r=>({...r,complete:false}),r=>({...r,available:false}),r=>({...r,error:'incomplete'}),r=>({...r,meta:{partial:true}}),r=>({...r,coverage:{complete:false}}),r=>({...r,rows:[]}),r=>({...r,rows:[{...r.rows[0],direction:'charge'}]}),r=>({...r,endAt:r.startAt}),r=>({...r,platform:{...r.platform,timezone:'UTC'}})]){
-  const h=harness();h.handler(q=>{if(q.direction==='all')throw timeout();const r=response(q);return q.direction==='withdraw'?alter(r):r;});await h.query();assert.equal(h.ui.state.status,'error');assert.equal(h.ui.state.results.length,0);assert.equal(h.ui.state.failures.length,1);assert.match(h.ui.metric('withdraw'),/— \/ —/);await h.query();assert.equal(h.calls.filter(q=>q.direction==='all').length,2,'failed parent is not cached');assert.equal(h.calls.filter(q=>q.direction==='withdraw').length,2,'invalid child is not cached');assert.equal(h.calls.filter(q=>q.direction==='charge').length,1,'validated child cache may be reused without publishing a partial parent');
+  const h=harness();h.handler(q=>{if(q.direction==='all')throw timeout();const r=response(q);return q.direction==='withdraw'?alter(r):r;});await h.query();assert.equal(h.ui.state.status,'ready');assert.equal(h.ui.state.results.length,1);assert.equal(h.ui.state.results[0]._memberCacheable,false);assert.equal(h.ui.state.failures.length,1);assert.equal(h.ui.platformMetric(A,'charge').value,9);assert.match(h.ui.metric('withdraw'),/— \/ —/);await h.query();assert.equal(h.calls.filter(q=>q.direction==='all').length,2,'failed parent is not cached');assert.equal(h.calls.filter(q=>q.direction==='withdraw').length,2,'invalid child is not cached');assert.equal(h.calls.filter(q=>q.direction==='charge').length,1,'validated child cache remains reusable');
  }
 });
 
