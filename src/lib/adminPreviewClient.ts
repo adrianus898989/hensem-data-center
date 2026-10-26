@@ -1,5 +1,6 @@
 "use client";
 import { ownerPreviewTransportRead } from "./ownerPreviewVerification";
+import { dashboardEntryReadUrl } from "./dashboardEntryTransport";
 import { dashboardResponseError, ensureDashboardSession, type DashboardSession } from "./dashboardAuthClient";
 export type PreviewAccess = {canView:boolean;canManage:boolean};
 export type PreviewGrant = {auth_user_id:string;username:string;role:string;active:boolean;can_view:boolean};
@@ -9,7 +10,8 @@ export async function adminPreviewRequest(session:DashboardSession,query="",init
   init.signal?.throwIfAborted();observeSession?.(current);
   const base=String(process.env.NEXT_PUBLIC_SUPABASE_URL||"").trim().replace(/\/$/,"");
   const url=new URL(base);if(url.protocol!=="https:"||url.origin!==base)throw new Error("后台地址配置无效");
-  const response=await ownerPreviewTransportRead(()=>fetch(base+"/functions/v1/owner-admin-preview"+query,{...init,cache:"no-store",redirect:"error",headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),...(init.body?{"Content-Type":"application/json"}:{})}}),init.signal||undefined);
+  const endpoint=dashboardEntryReadUrl("preview",base+"/functions/v1/owner-admin-preview"+query,query,init.method||"GET");
+  const response=await ownerPreviewTransportRead(()=>fetch(endpoint,{...init,cache:"no-store",redirect:"error",credentials:"omit",headers:{Authorization:`Bearer ${current.access_token}`,apikey:String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY||""),...(init.body?{"Content-Type":"application/json"}:{})}}),init.signal||undefined);
   if(!response.ok){
     let payload:unknown;try{payload=await response.json();}catch{payload=null;}
     const fallback=[401,403].includes(response.status)?"当前账号没有后台查看权限，请重新登录或联系管理员。":"后台服务暂时不可用，请重试";
