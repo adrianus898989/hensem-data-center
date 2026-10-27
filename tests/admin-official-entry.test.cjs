@@ -95,6 +95,11 @@ function previewHarness(options={}){
  return{calls,warnings,timers,bridgeStops,render,frame:()=>nodes(render()).find(n=>n.type==='iframe'),text:()=>JSON.stringify(render()),tick:()=>{for(const t of intervals.values())t.fn()},fire(ms){const found=[...timers].find(([,t])=>t.ms===ms);assert(found,'expected timer '+ms);timers.delete(found[0]);found[1].fn()},setProps(next){props={...props,...next};return render()},dispose(){disposed=true;for(const slot of slots)slot?.cleanup?.()}};
 }
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{resolve,reject,promise}};
+function warningDiagnostic(args){
+ assert.equal(args.length,1);assert.equal(typeof args[0],'string');assert(args[0].startsWith('后台验证读取失败 '));
+ const diagnostic=JSON.parse(args[0].slice('后台验证读取失败 '.length));assert.deepEqual(Object.keys(diagnostic).sort(),['code','elapsedMs','stage']);
+ assert(Number.isInteger(diagnostic.elapsedMs)&&diagnostic.elapsedMs>=0);assert.doesNotMatch(args[0],/hidden response|secret response|access_token|synthetic/);return diagnostic;
+}
 test('real preview mounts no HTML until both role and protected document have passed exactly once',async()=>{
  const role=deferred(),body=deferred(),h=previewHarness({role:()=>role.promise,preview:async()=>({text:()=>body.promise})});
  try{await flush();assert.equal(h.frame(),undefined);assert.equal(h.calls.length,1);role.resolve({canView:true,mode:'all'});await flush();assert.equal(h.frame(),undefined);assert.deepEqual(h.calls.map(c=>c.stage),['role','preview-request']);body.resolve('<html>authorized</html>');await flush();assert.equal(h.frame().props.srcDoc,'<html>authorized</html>');assert.equal(h.calls.length,2);assert.equal(h.warnings.length,0);}finally{h.dispose()}
@@ -105,10 +110,10 @@ test('real preview rejects role denial, protected-document denial and malformed 
 });
 test('periodic transport failure still hides the frame and stops bridges until full verified recovery',async()=>{
  let failure=false;const h=previewHarness({preview:async(_s,q)=>{if(failure)throw Object.assign(Error('hidden response'),{status:503});return{text:async()=>'<html>same</html>',json:async()=>({ok:true,canView:true,canManage:false})}}});
- try{await flush();const original=h.frame();assert(original);failure=true;h.tick();await flush();assert.equal(h.frame().props['aria-hidden'],true);assert.equal(h.frame().props.style.display,'none');assert(h.bridgeStops.length>=2);assert.equal(h.warnings[0][1].stage,'preview-request');assert.equal(h.warnings[0][1].code,'http_503');failure=false;h.fire(500);await flush();assert.equal(h.frame().props['aria-hidden'],undefined);assert.equal(h.frame().key,original.key);assert.equal(h.calls.at(-1).q,'','recovery reads protected HTML, not only quick access');}finally{h.dispose()}
+ try{await flush();const original=h.frame();assert(original);failure=true;h.tick();await flush();assert.equal(h.frame().props['aria-hidden'],true);assert.equal(h.frame().props.style.display,'none');assert(h.bridgeStops.length>=2);const diagnostic=warningDiagnostic(h.warnings[0]);assert.equal(diagnostic.stage,'preview-request');assert.equal(diagnostic.code,'http_503');failure=false;h.fire(500);await flush();assert.equal(h.frame().props['aria-hidden'],undefined);assert.equal(h.frame().key,original.key);assert.equal(h.calls.at(-1).q,'','recovery reads protected HTML, not only quick access');}finally{h.dispose()}
 });
 test('body deadline diagnoses its phase and cancellation ignores late private HTML',async()=>{
- const body=deferred(),h=previewHarness({preview:async()=>({text:()=>body.promise})});try{await flush();h.fire(15000);await flush();assert.equal(h.frame(),undefined);assert.equal(h.warnings[0][1].stage,'preview-body');assert.equal(h.warnings[0][1].code,'owner_preview_timeout');h.dispose();body.resolve('<html>late</html>');await flush();assert.equal(h.frame(),undefined);assert.equal(h.timers.size,0);assert.equal(h.warnings.length,1);}finally{h.dispose()}
+ const body=deferred(),h=previewHarness({preview:async()=>({text:()=>body.promise})});try{await flush();h.fire(15000);await flush();assert.equal(h.frame(),undefined);const diagnostic=warningDiagnostic(h.warnings[0]);assert.equal(diagnostic.stage,'preview-body');assert.equal(diagnostic.code,'owner_preview_timeout');h.dispose();body.resolve('<html>late</html>');await flush();assert.equal(h.frame(),undefined);assert.equal(h.timers.size,0);assert.equal(h.warnings.length,1);}finally{h.dispose()}
 });
 test('changing accounts while protected HTML is pending never mounts the old document',async()=>{
  const old=deferred();const h=previewHarness({preview:async s=>({text:()=>s.user.id==='account-a'?old.promise:Promise.resolve('<html>account-b</html>')})});
