@@ -54,7 +54,7 @@ function ui(handler, options={}) {
       throw Error('Unexpected import ' + name);
     },
   });
-  const draw = () => {stateIndex = refIndex = effectIndex = 0; return mod.exports.default({session,manualQuery:options.manualQuery});};
+  const draw = () => {stateIndex = refIndex = effectIndex = 0; return mod.exports.default({session,manualQuery:options.manualQuery,active:options.active,refreshVersion:options.refreshVersion,onDirectoryChanged:options.onDirectoryChanged});};
   function dialog() {return nodes(draw()).find(node => node.type === AccountEditorDialog);}
   function form() {return nodes(dialog()).find(node => node.type === 'form');}
   function filterRoot() {return nodes(draw()).find(node => node.props?.className === 'wo-account-filters');}
@@ -267,4 +267,34 @@ test('workorder login security waits for the account query and filters confirmed
  let security=nodes(h.draw()).find(n=>n.type?.name==='AccountLoginPolicy');assert(security);assert.equal(security.props.surface,'workorder');
  security.props.onSnapshot({status:'ready',states:{a:{failed_count:5,failure_limit:null,locked:true,locked_at:'2026-10-01',version:3}},failureLimit:5});h.filterField('状态','select').props.onChange({target:{value:'locked'}});assert.match(text(h.draw()),/当前显示 1 个/);assert.match(text(h.draw()),/自动锁定 · 失败 5 \/ 5/);
  h.button('登录安全').props.onClick();security=nodes(h.draw()).find(n=>n.type?.name==='AccountLoginPolicy');assert.equal(security.props.target.id,'a');assert.equal(h.calls.length,1);
+});
+
+test('retained workorder tab keeps filters, closes secrets, and reopens without another list read', async()=>{
+ const options={active:true};const h=ui(null,options);await flush();
+ h.filter('账号','ali');h.button('重设密码').props.onClick();h.change('新密码','private-fixture-only');
+ options.active=false;h.draw();h.effect();assert(!h.dialog());
+ options.active=true;h.draw();h.effect();await flush();assert.equal(h.calls.length,1);assert.deepEqual(h.visibleUsers(),['alice']);
+ h.button('重设密码').props.onClick();assert.equal(h.editorField('新密码').props.value,'');
+});
+test('background workorder refresh retains visible authorized rows on a temporary error and refreshes once on dirty activation', async()=>{
+ let fail=false;const options={active:true,refreshVersion:0};
+ const h=ui(()=>{if(fail)throw Error('服务暂时不可用');return {ok:true,accounts,catalog}},options);await flush();
+ h.filter('账号','ali');options.active=false;h.draw();h.effect();options.refreshVersion=1;h.draw();h.effect();assert.equal(h.calls.length,1);
+ options.active=true;h.draw();h.effect();assert.deepEqual(h.visibleUsers(),['alice']);await flush();assert.equal(h.calls.length,2);
+ fail=true;h.button('刷新列表').props.onClick();h.draw();h.effect();await flush();assert.deepEqual(h.visibleUsers(),['alice']);assert.equal(h.button('编辑范围 / 角色').props.disabled,true);
+ fail=false;h.button('刷新列表').props.onClick();h.draw();h.effect();await flush();assert.equal(h.button('编辑范围 / 角色').props.disabled,false);assert.equal(h.calls.length,4);
+});
+test('save ACK updates one workorder row without rereading and notifies other directories only once', async()=>{
+ let changed=0;const options={active:true,onDirectoryChanged:()=>changed++};
+ const h=ui(q=>q.action==='list-accounts'?{ok:true,accounts,catalog}:{ok:true,account:{...accounts[0],display_name:q.patch.display_name,updated_at:'next'}},options);await flush();
+ h.filter('账号','ali');h.button('编辑范围 / 角色').props.onClick();h.change('显示名称','Alice updated');await h.form().props.onSubmit({preventDefault(){}});
+ assert.equal(h.calls.length,2);assert.equal(h.calls.filter(c=>c.body.action==='list-accounts').length,1);assert.equal(changed,1);assert.match(text(h.draw()),/Alice updated/);assert(!h.dialog());
+});
+test('switching away during a workorder write suppresses late data and reconciles before another write', async()=>{
+ let resolve;const pending=new Promise(r=>resolve=r),options={active:true};let lists=0;
+ const h=ui(q=>q.action==='list-accounts'?{ok:true,accounts:++lists===1?accounts:[{...accounts[0],display_name:'verified'}],catalog}:pending,options);await flush();
+ h.button('编辑范围 / 角色').props.onClick();h.change('显示名称','draft');const writing=h.form().props.onSubmit({preventDefault(){}});
+ options.active=false;h.draw();h.effect();options.active=true;h.draw();h.effect();assert(!h.dialog());assert.equal(h.calls.length,2);
+ resolve({ok:true,account:{...accounts[0],display_name:'late-response'}});await writing;h.draw();h.effect();await flush();
+ assert.doesNotMatch(text(h.draw()),/late-response/);assert.match(text(h.draw()),/verified/);assert.equal(h.calls.length,3);
 });

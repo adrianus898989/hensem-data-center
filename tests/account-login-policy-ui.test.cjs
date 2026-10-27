@@ -154,3 +154,48 @@ test('a standalone mode draft with no enabled rules is explained and cannot issu
   h.button('保存 IP 模式').props.onClick();await flush();assert.match(text(h.draw()),/单独白名单需要至少一条已开启的账号 IP 规则/);assert.equal(h.calls.length,3);assert.equal(h.select('账号 IP 模式').props.value,'allowlist');assert.equal(h.snapshots.at(-1).states[target.id].ip_mode,'inherit');assert.equal(h.snapshots.at(-1).states[target.id].version,3);
  }
 });
+
+async function settleSecurity(h){await flush();h.draw();h.runEffects();await flush();h.draw();h.runEffects();await flush();}
+function securityRead(q,limit=5,states=[{user_id:target.id,...security}]){return q.action==='policy'?{ok:true,policy:{failure_limit:limit,version:1}}:q.action==='list-account-security'?{ok:true,states}:{ok:true,security};}
+test('retained security reuses its verified batch and consumes one hidden invalidation',async()=>{
+ const h=ui(null,{active:true,target,refreshVersion:0});await settleSecurity(h);assert.equal(h.calls.length,3);const before=plain(h.snapshots.at(-1));
+ h.setProps({active:false});assert(!nodes(h.draw()).some(n=>n.type?.name==='AccountEditorDialog'));assert.deepEqual(h.snapshots.at(-1),before);
+ h.setProps({target:null,active:true});await settleSecurity(h);assert.equal(h.calls.length,3);
+ h.setProps({active:false,refreshVersion:1});await settleSecurity(h);assert.equal(h.calls.length,3);
+ h.setProps({active:true});await settleSecurity(h);assert.equal(h.calls.length,5);
+ h.setProps({active:false});h.setProps({active:true});await settleSecurity(h);assert.equal(h.calls.length,5);h.unmount();
+});
+test('hiding a pending security batch aborts both reads and starts only one replacement on return',async()=>{
+ const pending=[];const h=ui((q,signal)=>new Promise(resolve=>pending.push({q,signal,resolve})),{active:true});assert.equal(pending.length,2);
+ h.setProps({active:false});assert(pending.every(p=>p.signal.aborted));h.setProps({active:true});assert.equal(pending.length,4);
+ pending.slice(2).forEach(p=>p.resolve(securityRead(p.q)));await settleSecurity(h);
+ pending.slice(0,2).forEach(p=>p.resolve(securityRead(p.q,19,[{user_id:target.id,...security,failed_count:99}])));await settleSecurity(h);
+ assert.equal(h.snapshots.at(-1).failureLimit,5);assert.equal(h.snapshots.at(-1).states[target.id].failed_count,5);assert.equal(h.calls.length,4);h.unmount();
+});
+test('hidden pending security write settles before one confirmation batch and never replays',async()=>{
+ let resolveWrite,confirmedLimit=5;const h=ui(q=>q.action==='policy'&&q.patch?new Promise(resolve=>resolveWrite=resolve):securityRead(q,confirmedLimit),{active:true});await settleSecurity(h);
+ h.select('默认阈值').props.onChange({target:{value:'7'}});const writing=h.form().props.onSubmit({preventDefault(){}});assert.equal(h.calls.length,3);
+ h.setProps({active:false});h.setProps({active:true});await settleSecurity(h);assert.equal(h.calls.length,3);
+ confirmedLimit=9;resolveWrite({ok:true,policy:{failure_limit:7,version:2}});await writing;await settleSecurity(h);
+ assert.equal(h.calls.filter(c=>c.request.patch).length,1);assert.equal(h.calls.length,5);assert.equal(h.snapshots.at(-1).failureLimit,9);
+ h.setProps({active:false});h.setProps({active:true});await settleSecurity(h);assert.equal(h.calls.length,5);h.unmount();
+});
+test('normal security write ACK does not trigger policy or target rereads after effects commit',async()=>{
+ const h=ui(q=>q.patch?{ok:true,policy:{failure_limit:q.patch.failure_limit,version:2}}:securityRead(q),{target});await settleSecurity(h);
+ h.select('默认阈值').props.onChange({target:{value:'7'}});await h.form().props.onSubmit({preventDefault(){}});await settleSecurity(h);
+ assert.equal(h.calls.length,4);assert.equal(h.snapshots.at(-1).failureLimit,7);
+});
+
+test('explicit security denial clears verified state while a conflict retains its draft',async()=>{
+ let deny=false,denials=0;const h=ui(q=>{if(deny)throw Object.assign(Error('会话已失效，请重新登录'),{status:401,code:'application_session_denied'});return securityRead(q);},{onAccessDenied:()=>denials++});await settleSecurity(h);
+ deny=true;h.setProps({refreshVersion:1});await settleSecurity(h);assert.equal(denials,1);assert.equal(h.snapshots.at(-1).status,'error');assert.deepEqual(h.snapshots.at(-1).states,{});assert.equal(h.button('保存阈值').props.disabled,true);h.unmount();
+ let rejected=0;const c=ui(q=>{if(q.patch)throw Error('设置已被其他管理员修改，请重新读取');return securityRead(q);},{onAccessDenied:()=>rejected++});await settleSecurity(c);
+ c.select('默认阈值').props.onChange({target:{value:'7'}});await c.form().props.onSubmit({preventDefault(){}});await settleSecurity(c);assert.equal(rejected,0);assert.equal(c.snapshots.at(-1).failureLimit,5);assert.equal(c.select('默认阈值').props.value,'7');assert.equal(c.calls.length,3);
+});
+test('new security actor clears prior snapshot and an old write cannot release its new read owner',async()=>{
+ let nextActor=false,resolveWrite;const pending=[];const h=ui(q=>{if(q.patch)return new Promise(r=>resolveWrite=r);if(nextActor)return new Promise(resolve=>pending.push({q,resolve}));return securityRead(q);});await settleSecurity(h);
+ h.select('默认阈值').props.onChange({target:{value:'7'}});const writing=h.form().props.onSubmit({preventDefault(){}});nextActor=true;
+ h.setProps({session:{user:{id:'new-owner'},access_token:'synthetic-new'}});await settleSecurity(h);assert.equal(pending.length,2);assert.deepEqual(h.snapshots.at(-1).states,{});
+ resolveWrite({ok:true,policy:{failure_limit:17,version:2}});await writing;await settleSecurity(h);assert.equal(h.calls.length,5);assert.notEqual(h.snapshots.at(-1).status,'ready');
+ pending.forEach(p=>p.resolve(securityRead(p.q,3,[{user_id:'new-staff',...security,failed_count:1}])));await settleSecurity(h);assert.equal(h.snapshots.at(-1).failureLimit,3);assert.deepEqual(Object.keys(h.snapshots.at(-1).states),['new-staff']);
+});

@@ -18,6 +18,18 @@ test('one 48px sticky iframe bar reserves the real account space equally for own
  for(const width of [1280,1024]){const frameRight=width-184,accountLeft=width-12-160;assert(accountLeft-frameRight>=12)}
  for(const width of [800,480]){const frameRight=width-60,accountLeft=width-12-36;assert(accountLeft-frameRight>=12)}
 });
+test('account workspace removes nested page spacing and gives every retained panel its own bounded scroll area without changing IP controls',()=>{
+ const css=api.OWNER_PREVIEW_HOST_CSS;
+ assert.match(css,/\.owner-preview-account-workspace\[hidden\],\.owner-preview-account-workspace>\.owner-preview-account-body\[hidden\]\{display:none\}/);
+ assert.match(css,/\.owner-preview-account-workspace \.admin-inline-page\{min-height:0;padding:0\}/);
+ assert.match(css,/\.owner-preview-account-workspace>\.owner-preview-account-body\{[^}]*scrollbar-gutter:stable/);
+ assert.match(css,/\.owner-preview-account-body\{[^}]*overflow:auto;min-height:0;flex:1/);
+ assert(!/\.owner-preview-account-page \.admin-inline-page\{/.test(css),'the shared IP page is not assigned account-specific layout');
+ const accountCss=fs.readFileSync(path.join(repo,'src/components/AdminControlCenter.css'),'utf8');
+ assert.match(accountCss,/\.admin-account-management-table > tbody > tr > td\s*\{\s*padding:8px 12px; vertical-align:middle;/);
+ assert(!/\.admin-account-management-table > tbody > tr > td\s*\{[^}]*height:74px/.test(accountCss));
+ assert.match(accountCss,/\.admin-account-role-cell > small\s*\{\s*display:inline;/);
+});
 test('host body marker restores the prior state on unmount',()=>{
  const names=new Set(['existing-module']);const body={classList:{contains:x=>names.has(x),add:x=>names.add(x),remove:x=>names.delete(x)}};const scoped=load({body});
  const dispose=scoped.mountOwnerPreviewHostShell();assert(names.has(api.OWNER_PREVIEW_BODY_CLASS));dispose();assert.deepEqual([...names],['existing-module']);
