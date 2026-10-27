@@ -116,7 +116,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
           return {policy,html};
           },controller.signal)}catch(cause){
             if(!controller.signal.aborted&&!(cause&&typeof cause==="object"&&"name" in cause&&cause.name==="AbortError"))
-              console.warn("后台验证读取失败",ownerPreviewVerificationDiagnostic(cause,stage,Date.now()-started));
+              console.warn("后台验证读取失败 "+JSON.stringify(ownerPreviewVerificationDiagnostic(cause,stage,Date.now()-started)));
             throw cause;
           }
         },controller.signal,nextAttempt=>{
