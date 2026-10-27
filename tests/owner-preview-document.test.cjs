@@ -179,6 +179,7 @@ function componentHarness(userId = 'offline-user-a', options = {}) {
   };
   environment = {
     module: box, exports: box.exports, require: requireStub, window, localStorage, URL, AbortController, Error, setTimeout:options.setTimeout||setTimeout,clearTimeout:options.clearTimeout||clearTimeout,
+    ...(options.console?{console:options.console}:{}),
     crypto: { randomUUID: () => lifecycle?'offline-frame-channel-'+(++channelId):'offline-frame-channel' },
     document: { visibilityState: 'visible', addEventListener(name,callback) {if(lifecycle)addListener(documentListeners,name,callback)}, removeEventListener(name,callback) {if(lifecycle)removeListener(documentListeners,name,callback)} },
     process: { env: { NEXT_PUBLIC_SUPABASE_URL: 'https://offline.invalid', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'offline-public-key',NEXT_PUBLIC_DASHBOARD_RELEASE:options.releaseRevision||'',NEXT_PUBLIC_DASHBOARD_BASE_PATH:'/hensem-data-center' } },
@@ -502,6 +503,28 @@ test('preview request retains the structured session denial and distinguishes mi
 });
 
 function retryClock(){let id=0;const timers=new Map(),delays=[];return{setTimeout(fn,ms){delays.push(ms);timers.set(++id,fn);return id},clearTimeout(id){timers.delete(id)},delays,timers,next(){const item=timers.entries().next().value;assert(item,'a short retry is scheduled');timers.delete(item[0]);item[1]();}}}
+test('verification warnings preserve safe phase diagnostics as one browser-readable string',async()=>{
+ const secret='synthetic-token user@example.invalid https://private.invalid/?token=secret';
+ const cases=[
+  {stage:'role',code:'http_503',options:{roleFetch:async()=>({ok:false,status:503,json:async()=>({code:secret,message:secret,access_token:secret})})}},
+  {stage:'preview-request',code:'owner_preview_network_error',options:{fetch:async()=>{throw new TypeError(secret)}}},
+  {stage:'preview-body',code:'owner_preview_timeout',deadline:true,options:{fetch:async()=>({ok:true,status:200,text:async()=>new Promise(()=>{})})}},
+ ];
+ for(const scenario of cases){
+  const clock=retryClock(),warnings=[];
+  const h=componentHarness('offline-safe-diagnostic',{...clock,...scenario.options,console:{warn:(...args)=>warnings.push(args)}});
+  try{
+   await flush();if(scenario.deadline){assert.equal(warnings.length,0);clock.next();await flush()}
+   assert.equal(warnings.length,1);assert.equal(warnings[0].length,1,'object arguments are not readable in browser log captures');
+   const message=warnings[0][0];assert.equal(typeof message,'string');assert(message.startsWith('后台验证读取失败 '));
+   const diagnostic=JSON.parse(message.slice('后台验证读取失败 '.length));
+   assert.deepEqual(Object.keys(diagnostic).sort(),['code','elapsedMs','stage']);assert.equal(diagnostic.stage,scenario.stage);assert.equal(diagnostic.code,scenario.code);
+   assert(Number.isInteger(diagnostic.elapsedMs)&&diagnostic.elapsedMs>=0);
+   for(const forbidden of ['synthetic-token','user@example.invalid','private.invalid','access_token','offline-host-access','offline-host-refresh','Object'])assert(!message.includes(forbidden),forbidden+' is not logged');
+   assert.equal(clock.timers.size,1,'the existing bounded retry still waits for backoff');
+  }finally{h.dispose()}
+ }
+});
 test('temporary entry 503 automatically rereads role and fresh HTML after short backoff, without publishing stale permissions',async()=>{
  const clock=retryClock();let n=0;const h=componentHarness('offline-recovery',{...clock,fetch:async()=>++n===1?{ok:false,status:503,json:async()=>({code:'profile_unavailable'})}:{ok:true,status:200,text:async()=>HTML}});
  try{await flush();assert.equal(h.calls.length,1);assert.equal(h.states[0],null);assert(!findElement(h.draw(),'iframe'));assert.match(JSON.stringify(h.draw()),/重新验证查看权限.*2\/3/);assert.deepEqual(clock.delays,[15000,500]);assert.equal(clock.timers.size,1,'the completed attempt clears its deadline and leaves only backoff');h.checkPermission();await flush();assert.equal(h.calls.length,1,'focus/timer verification cannot restart the backoff budget');clock.next();await flush();assert.equal(h.calls.length,2);assert.equal(h.roleCalls.length,2);assert(findElement(h.draw(),'iframe'));assert.equal(h.states[2],'');assert.equal(clock.timers.size,0);assert(!findElement(h.draw(),'iframe').props.srcDoc.includes('offline-host-access'));}
