@@ -23,7 +23,7 @@ async function request(patch, options = {}) {
   let handler;
   const client = {
     rpc: async name => ({data:name==="application_session_check"?{allowed:options.sessionAllowed!==false}:null,error:options.revokeFailure&&name==="application_revoke_user_sessions"?{message:"PRIVATE_REVOKE_FAILURE"}:null}),
-    auth: { getUser: async () => ({ data: { user: options.invalidToken ? null : { id: "fixture-manager", user_metadata: { dashboard_role: "owner" } } } }) },
+    auth: { getUser: async () => ({ data: { user: options.invalidToken || options.authUnavailable || options.malformedAuth ? null : { id: "fixture-manager", user_metadata: { dashboard_role: "owner" } } }, error: options.invalidToken ? {status:401,code:"bad_jwt"} : options.authUnavailable ? {status:503,code:"unexpected_failure"} : null }) },
     from(table) {
       let values, filters = [];
       const query = {
@@ -38,7 +38,7 @@ async function request(patch, options = {}) {
             if (options.race || !filters.every(([key, value]) => target[key] === value)) return { data: null };
             writes.push({ ...values });
             Object.assign(target, values);
-            return { data: { role: target.role } };
+            return { data: {...target} };
           }
           if (filters.some(([key, value]) => key === "auth_user_id" && value === "fixture-manager")) return { data: caller };
           return { data: options.missing ? null : { ...target } };
@@ -176,3 +176,5 @@ test("role control stages changes, cancellation does not save, promotion starts 
   assert(ui.all(ui.render(true)).find(e => e.type === "select").props.disabled);
   assert.equal(roleUi({ role: "owner" }).render(), null);
 });
+
+test("transient or malformed Auth responses preserve retryable unavailability and never perform account writes",async()=>{for(const options of [{authUnavailable:true},{malformedAuth:true}]){const result=await request(promotion,options);assert.equal(result.status,503);assert.equal(result.body.code,"auth_unavailable");assert.deepEqual(result.writes,[]);}});

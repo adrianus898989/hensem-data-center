@@ -29,7 +29,7 @@ export async function securityRequest(session: DashboardSession, request: Record
       headers: {Authorization: `Bearer ${current.access_token}`, "Content-Type": "application/json"}, body: JSON.stringify(request),
     });
     const data = await response.json();
-    if (!response.ok || data.ok !== true) throw Error(response.status === 401 ? "登录已失效，请重新登录" : data.message || "安全设置服务暂时不可用");
+    if (!response.ok || data.ok !== true) throw Object.assign(Error(response.status === 401 ? "登录已失效，请重新登录" : data.message || "安全设置服务暂时不可用"), { status: response.status, code: response.status === 401 ? "unauthorized" : response.status === 403 ? "forbidden" : "security_request_failed" });
     return data;
   } catch (error) {
     if (timedOut) throw Error("请求超时；请刷新确认结果后再操作");

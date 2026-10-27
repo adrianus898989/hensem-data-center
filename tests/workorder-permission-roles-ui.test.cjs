@@ -11,11 +11,11 @@ const owner={user:{id:'synthetic-owner'},access_token:'synthetic-session'},accou
 const platformCatalog={teams:['M8'],platforms:['A','B'],platformTeams:{A:'M8',B:'M8'}};
 function nodes(n){return Array.isArray(n)?n.flatMap(nodes):n&&typeof n==='object'?[n,...nodes(n.props?.children)]:[]}
 function text(n){return Array.isArray(n)?n.map(text).join(''):n&&typeof n==='object'?text(n.props?.children):n==null||typeof n==='boolean'?'':String(n)}
-function ui(file,handler){let session=owner,si=0,ri=0,ei=0;const states=[],refs=[],deps=[],effects=[],cleanups=[],calls=[];
+function ui(file,handler,options={}){let session=owner,si=0,ri=0,ei=0;const states=[],refs=[],deps=[],effects=[],cleanups=[],calls=[];
  const react={useState(initial){const k=si++;if(!(k in states))states[k]=typeof initial==='function'?initial():initial;return[states[k],v=>states[k]=typeof v==='function'?v(states[k]):v]},useRef(initial){const k=ri++;return refs[k]||(refs[k]={current:initial})},useEffect(fn,values){const k=ei++;if(!deps[k]||values.some((v,i)=>v!==deps[k][i])){deps[k]=values;effects.push(()=>{cleanups[k]?.();cleanups[k]=fn()})}}};
  function AccountEditorDialog(){}function WorkOrderRoleManager(){}
  const m=moduleOf(file,name=>{if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};if(name.endsWith('/workOrderPermissionCatalog'))return policy;if(name.endsWith('/workOrderAccountClient'))return{workOrderAccountRequest:async(s,q,signal)=>{calls.push({session:plain(s),body:plain(q),signal});return handler(q,signal,s)}};if(name==='./AccountEditorDialog')return{default:AccountEditorDialog};if(name==='./AccountLoginPolicy')return{default:function AccountLoginPolicy(){}};if(name==='./WorkOrderRoleManager')return{default:WorkOrderRoleManager};if(name.endsWith('.css'))return{};throw Error(name)});
- const draw=next=>{if(next)session=next;si=ri=ei=0;return m.default({session})};
+ const draw=next=>{if(next)session=next;si=ri=ei=0;return m.default({session,...options})};
  const api={calls,states,draw,effect(){effects.splice(0).forEach(fn=>fn())},unmount(){cleanups.forEach(fn=>fn?.())},button(label){const n=nodes(draw()).find(n=>n.type==='button'&&text(n)===label);assert(n,'button '+label);return n},field(label,type='input'){const tree=draw(),root=nodes(tree).find(n=>n.type==='form')||tree;const n=nodes(root).find(n=>n.props?.['aria-label']===label&&n.type===type)||nodes(root).filter(n=>n.type==='label'&&text(n).startsWith(label)).flatMap(nodes).find(n=>n.type===type);assert(n,'field '+label);return n},change(label,value,type='input'){this.field(label,type).props.onChange({target:{value}})},check(label,checked){this.field(label).props.onChange({target:{checked}})},form(){return nodes(draw()).find(n=>n.type==='form')},dialog(){return nodes(draw()).find(n=>n.type===AccountEditorDialog)}};
  draw();api.effect();return api;
 }
@@ -77,8 +77,8 @@ test('employee assignment double-submit shares the mutation owner and late old a
  pending.resolve({ok:true,account:{...account,username:'OLD ACTOR LEAK',custom_role_id:roleId}});await Promise.all([first,second]);assert.doesNotMatch(text(h.draw()),/OLD ACTOR LEAK|工单账号已保存/);assert.match(text(h.draw()),/new-actor-staff/);assert.equal(h.calls.length,3);
 });
 
-test('account-role navigation only reads on return and never saves a draft or assigns a role implicitly',async()=>{
- const h=ui('src/components/WorkOrderAccountAdmin.tsx',()=>({ok:true,accounts:[account],catalog:platformCatalog,roles:[role]}));await flush();h.button('编辑范围 / 角色').props.onClick();h.change('工单权限角色',roleId,'select');h.button('工单权限角色').props.onClick();assert(!h.form());assert.equal(h.calls.length,1);h.button('员工账号').props.onClick();h.draw();h.effect();await flush();assert.equal(h.calls.length,2);assert(h.calls.every(c=>c.body.action==='list-accounts'));h.button('编辑范围 / 角色').props.onClick();assert.equal(h.field('工单权限角色','select').props.value,'');
+test('account-role navigation retains the directory and never saves a draft or assigns a role implicitly',async()=>{
+ const h=ui('src/components/WorkOrderAccountAdmin.tsx',()=>({ok:true,accounts:[account],catalog:platformCatalog,roles:[role]}));await flush();h.button('编辑范围 / 角色').props.onClick();h.change('工单权限角色',roleId,'select');h.button('工单权限角色').props.onClick();assert(!h.form());assert.equal(h.calls.length,1);h.button('员工账号').props.onClick();h.draw();h.effect();await flush();assert.equal(h.calls.length,1);assert(h.calls.every(c=>c.body.action==='list-accounts'));h.button('编辑范围 / 角色').props.onClick();assert.equal(h.field('工单权限角色','select').props.value,'');
 });
 
 
@@ -86,4 +86,14 @@ test('valid 81 to 100 character role names load without rejecting the whole dire
  for(const length of [81,100]){const name='R'.repeat(length),h=roleClient({value:roleResult([{...role,name}])});const result=await h.api.workOrderAccountRequest(owner,{action:'list-roles'});assert.equal(result.roles[0].name,name);assert.equal(h.calls.length,1);}
  const h=await loaded();h.button('新建工单角色').props.onClick();assert.equal(h.field('工单角色名称').props.maxLength,100);
  const invalid=roleClient();await assert.rejects(invalid.api.workOrderAccountRequest(owner,{action:'create-role',name:'R'.repeat(101),base_role:'agent',permissions:{}}));assert.equal(invalid.calls.length,0);assert.equal(invalid.authCalls.length,0);
+});
+
+test('hidden workorder role write finishes before one confirmation read and never resumes with stale role data',async()=>{
+ const pending=deferred(),options={active:true};let reads=0;
+ const h=ui('src/components/WorkOrderRoleManager.tsx',q=>q.action==='list-roles'?roleResult([{...role,name:++reads===1?'original':'confirmed',version:reads===1?4:5}]):pending.promise,options);
+ h.button('查询工单角色').props.onClick();await flush();h.button('配置权限').props.onClick();h.change('工单角色名称','draft');
+ const write=h.form().props.onSubmit({preventDefault(){}});options.active=false;h.draw();h.effect();assert(!h.form());assert.equal(h.calls[1].signal.aborted,false,'already dispatched write stays bounded by its client timeout');
+ options.active=true;h.draw();h.effect();assert.equal(h.calls.length,2,'do not read old server data while mutation is pending');
+ pending.resolve({ok:true,role:{...role,name:'late',version:5}});await write;await flush();assert.equal(h.calls.length,3);assert.match(text(h.draw()),/confirmed/);assert.doesNotMatch(text(h.draw()),/late/);
+ options.active=false;h.draw();h.effect();options.active=true;h.draw();h.effect();assert.equal(h.calls.length,3,'unchanged tab activation reuses verified result');
 });

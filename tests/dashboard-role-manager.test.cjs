@@ -94,8 +94,8 @@ test('Owner is excluded from assignment and roles still assigned to accounts can
 test('switching actor cancels pending reads and does not restore stale accounts',async()=>{
  let resolve;const h=ui(()=>new Promise(r=>resolve=r));h.button('查询角色').props.onClick();await flush();h.setProps({session:{...session,user:{id:otherId}},profile:{...profile,auth_user_id:otherId}});assert.doesNotMatch(text(h.draw()),/existing-staff|运营查看/);h.effects();resolve(listing());await flush();assert.doesNotMatch(text(h.draw()),/existing-staff|运营查看/);assert.match(text(h.draw()),/点击「查询角色」/);assert.equal(h.calls.length,1);
 });
-test('refresh error clears stale rows and cannot present failed read as zero accounts',async()=>{
- let fail=false;const h=ui(async()=>{if(fail)throw Error('读取失败');return listing()});await h.load();fail=true;await h.load();assert.match(text(h.draw()),/读取失败/);assert.doesNotMatch(text(h.draw()),/existing-staff|运营查看|尚未创建自定义角色/);assert.equal(h.button('新建角色').props.disabled,true);
+test('temporary refresh error retains authorized rows and locks writes until confirmation',async()=>{
+ let fail=false;const h=ui(async()=>{if(fail)throw Error('读取失败');return listing()});await h.load();fail=true;await h.load();assert.match(text(h.draw()),/读取失败/);assert.match(text(h.draw()),/运营查看/);assert.doesNotMatch(text(h.draw()),/尚未创建自定义角色/);assert.equal(h.button('新建角色').props.disabled,true);assert.equal(h.button('刷新列表').props.disabled,false);fail=false;await h.load();assert.equal(h.button('新建角色').props.disabled,false);
 });
 
 test('list only exposes safe role/account fields and rejects absent or mismatched role references',()=>{
@@ -170,9 +170,9 @@ test('delegated assignment offers only roles contained in actual permissions and
 
 function assignedDialog(overrides={},handler){
  const mod={exports:{}},states=[],calls=[];let cursor=0;
- const props={session,account:{...account,role_id:roleId,assignment_version:2},roles:[role,{...role,id:otherId,name:'Limited',permissions:['overview.view']}],isOwner:true,editable:true,onSaved:async()=>calls.push({operation:'reload'}),onClose:()=>calls.push({operation:'close'}),...overrides};
- vm.runInNewContext(compile('src/components/AccountAssignedRoleDialog.tsx'),{module:mod,exports:mod.exports,Error,require(name){
-  if(name==='react')return{useState(initial){const k=cursor++;if(!(k in states))states[k]=initial;return[states[k],value=>states[k]=value]}};
+ const props={session,account:{...account,role_id:roleId,assignment_version:2},roles:[role,{...role,id:otherId,name:'Limited',permissions:['overview.view']}],isOwner:true,editable:true,onSaved:confirmed=>calls.push({operation:'confirmed',account:plain(confirmed)}),onClose:()=>calls.push({operation:'close'}),...overrides};
+ vm.runInNewContext(compile('src/components/AccountAssignedRoleDialog.tsx'),{module:mod,exports:mod.exports,Error,AbortController,require(name){
+  if(name==='react')return{useRef(initial){const k=cursor++;return states[k]||(states[k]={current:initial})},useEffect(){},useState(initial){const k=cursor++;if(!(k in states))states[k]=initial;return[states[k],value=>states[k]=value]}};
   if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};
   if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};
   if(name.includes('dashboardRoleDisplay'))return display;if(name.includes('dashboardRoleClient'))return{dashboardRolePages:catalog.pages,dashboardRoleRequest:async(s,q)=>{calls.push(plain(q));if(handler)return handler(q);return{account:{...account,role_id:q.roleId,assignment_version:3}}}};
@@ -182,7 +182,7 @@ function assignedDialog(overrides={},handler){
 }
 test('account assigned-role editor uses explicit assignment CAS and preserves legacy profile and scope',async()=>{
  const h=assignedDialog();assert.match(text(h.draw()),/运营查看/);assert.match(text(h.draw()),/在「角色管理」维护/);h.select().props.onChange({target:{value:otherId}});await h.form().props.onSubmit({preventDefault(){}});
- assert.deepEqual(h.calls,[{operation:'assign',accountId:staffId,roleId:otherId,expectedVersion:2},{operation:'reload'},{operation:'close'}]);
+ assert.deepEqual(h.calls,[{operation:'assign',accountId:staffId,roleId:otherId,expectedVersion:2},{operation:'confirmed',account:{...account,role_id:otherId,assignment_version:3}},{operation:'close'}]);
 });
 test('account assigned-role editor independently rejects missing action, self and fixed-owner changes',()=>{
  const rights={mode:'assigned',canView:true,permissions:['access.view','access.edit','overview.view']};
@@ -240,4 +240,26 @@ test('team views migrate to operations presentation while preserving every origi
  const h=ui(async q=>q.operation==='list'?{roles:[saved],accounts:[account,owner]}:{role:{...saved,permissions:q.permissions,version:3}});await h.load();h.button('配置权限').props.onClick();
  const modules=nodes(h.findLabel('角色权限模块')).filter(node=>node.type==='button');assert.equal(modules.filter(node=>text(node).startsWith('运营中心')).length,1);assert(!modules.some(node=>/团队运营中心|商户运营中心/.test(text(node))));
  modules.find(node=>text(node).startsWith('运营中心')).props.onClick();assert(h.findLabel('团队经营 · 国家表现 · 查看目录与页面'));await h.form().props.onSubmit({preventDefault(){}});assert.deepEqual(h.calls[1].permissions,[...saved.permissions].sort());
+});
+
+test('retained role tab keeps its filter without another query and consumes one sibling invalidation',async()=>{
+ const h=ui();await h.load();h.findLabel('搜索角色名称或说明').props.onChange({target:{value:'运营'}});
+ h.setProps({active:false});h.draw();h.effects();h.setProps({active:true});h.draw();h.effects();await flush();
+ assert.equal(h.calls.length,1);assert.equal(h.findLabel('搜索角色名称或说明').props.value,'运营');
+ h.setProps({refreshVersion:1});h.draw();h.effects();await flush();assert.equal(h.calls.length,2);assert.match(text(h.draw()),/运营查看/);
+});
+test('hidden role write waits for ACK, notifies sibling, then confirms once without opening old dialog',async()=>{
+ let resolve,notifications=0;const h=ui(q=>q.operation==='list'?listing():new Promise(r=>resolve=r),{onDirectoryChanged:()=>notifications++});
+ await h.load();const oldEdit=h.button('配置权限');oldEdit.props.onClick();const save=h.form().props.onSubmit({preventDefault(){}});await flush();
+ h.setProps({active:false});h.draw();h.effects();oldEdit.props.onClick();h.setProps({active:true});h.draw();h.effects();
+ assert.equal(h.calls.filter(q=>q.operation==='list').length,1);assert.equal(h.form(),undefined);
+ resolve({role:{...role,version:3}});await save;await flush();assert.equal(notifications,1);assert.equal(h.calls.filter(q=>q.operation==='list').length,2);assert.equal(h.form(),undefined);assert.doesNotMatch(text(h.draw()),/角色已保存/);
+});
+test('role denial clears warm rows and invalidates other account tabs',async()=>{
+ let fail=false,denied=0;const h=ui(()=>{if(fail)throw Object.assign(Error('当前角色没有权限'),{code:'forbidden',status:403});return listing()},{onAccessDenied:()=>denied++});
+ await h.load();fail=true;await h.load();assert.doesNotMatch(text(h.draw()),/运营查看/);assert.equal(denied,1);assert.equal(h.button('新建角色').props.disabled,true);
+});
+test('unconfirmed role write retains draft but requires explicit confirmation read before another write',async()=>{
+ const h=ui(q=>{if(q.operation==='list')return listing();throw Object.assign(Error('操作超时，结果尚未确认'),{code:'timeout'});});await h.load();h.button('配置权限').props.onClick();
+ await h.form().props.onSubmit({preventDefault(){}});assert.equal(h.button('保存角色').props.disabled,true);assert.match(text(h.draw()),/操作超时/);assert.equal(h.calls.length,2);assert.equal(h.button('取消').props.disabled,false);h.button('取消').props.onClick();assert.equal(h.form(),undefined);await h.load();assert.equal(h.button('新建角色').props.disabled,false);
 });

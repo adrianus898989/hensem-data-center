@@ -29,6 +29,14 @@ const DATA_GROUPS = new Set(["BR_PANGHU", "BR", "IN", "PK", "ID", "VN", "PH", "M
 class DataScopeError extends Error {
   constructor(message: string, readonly status: number, readonly code = "request_denied") { super(message); }
 }
+function isTerminalAuthUserError(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const error = value as Record<string, unknown>;
+  if (![400, 401, 403].includes(error.status as number)) return false;
+  if (typeof error.code === "string") return ["bad_jwt", "session_expired", "session_not_found", "user_not_found", "user_banned"].includes(error.code);
+  return error.name === "AuthSessionMissingError" && error.status === 400 && error.code === undefined;
+}
+
 // Country-scoped, already-confirmed aliases. No punctuation or suffix guessing.
 function scopePlatformIdentity(country:string,value:string):string {
   const platform=value.trim().toUpperCase();
@@ -215,6 +223,22 @@ Deno.serve(async (request) => {
       }
     }
 
+    async function verifiedAuthUser(token: string) {
+      let result: Awaited<ReturnType<typeof admin.auth.getUser>>;
+      try { result = await admin.auth.getUser(token); }
+      catch (error) {
+        if (isTerminalAuthUserError(error)) throw new DataScopeError("登录状态无效", 401, "auth_token_invalid");
+        throw new DataScopeError("登录验证暂时不可用", 503, "auth_unavailable");
+      }
+      if (result?.error) {
+        if (isTerminalAuthUserError(result.error)) throw new DataScopeError("登录状态无效", 401, "auth_token_invalid");
+        throw new DataScopeError("登录验证暂时不可用", 503, "auth_unavailable");
+      }
+      const user = result?.data?.user;
+      if (!user || typeof user.id !== "string" || !user.id) throw new DataScopeError("登录验证响应不完整", 503, "auth_unavailable");
+      return user;
+    }
+
     async function requireApprovedSession(token: string, userId: string) {
       // Called only after getUser verifies this exact token.
       let sessionId = "";
@@ -271,9 +295,7 @@ Deno.serve(async (request) => {
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
       if (!token) throw new DataScopeError("未登录", 401);
 
-      const { data: userData, error: userError } = await admin.auth.getUser(token);
-      const caller = userData?.user;
-      if (userError || !caller) throw new DataScopeError("登录状态无效", 401);
+      const caller = await verifiedAuthUser(token);
       const sessionId = await requireApprovedSession(token, caller.id);
 
       const { data: callerProfile, error: profileError } = await admin
@@ -301,6 +323,12 @@ Deno.serve(async (request) => {
       } catch (error) { if (error instanceof DataScopeError) throw error; throw new DataScopeError("目标账号权限验证暂时不可用", 503); }
     }
 
+    // Only the same profile fields exposed by list-users may leave this handler.
+    function accountProfile(value: any) {
+      const keys = ["auth_user_id","username","role","active","permissions","management_permissions","data_scope","created_at","updated_at"];
+      return Object.fromEntries(keys.filter(key => Object.prototype.hasOwnProperty.call(value,key)).map(key => [key,value[key]]));
+    }
+
     async function saveAccountDataScope(ctx: Awaited<ReturnType<typeof requireManager>>, target: any, scope: DataScope) {
       if(typeof target.updated_at!=="string"||!Number.isFinite(Date.parse(target.updated_at)))throw new DataScopeError("账号信息已变更，请刷新列表后重试",409,"account_scope_version_conflict");
       let reply: any;
@@ -315,18 +343,16 @@ Deno.serve(async (request) => {
       }
       const value=reply.data;
       let sameScope=false;try {sameScope=JSON.stringify(parseDataScope(value?.data_scope))===JSON.stringify(scope);}catch {/* fail closed */}
-      if(!value||value.ok!==true||value.auth_user_id!==target.auth_user_id||value.username!==target.username||value.role!==target.role||!sameScope)
+      if(!value||value.ok!==true||value.auth_user_id!==target.auth_user_id||value.username!==target.username||value.role!==target.role||!sameScope||typeof value.updated_at!=="string"||!Number.isFinite(Date.parse(value.updated_at)))
         throw new DataScopeError("数据范围保存结果待核对，请刷新账号列表确认。",503,"account_scope_result_unknown");
-      return json(request,{ok:true,username:target.username,role:value.role,message:"账号数据范围已更新"});
+      return json(request,{ok:true,username:target.username,role:value.role,account:accountProfile({...target,data_scope:value.data_scope,updated_at:value.updated_at}),message:"账号数据范围已更新"});
     }
 
     async function requireAuthenticated() {
       const authHeader = String(request.headers.get("authorization") || "");
       const token = authHeader.replace(/^Bearer\s+/i, "").trim();
       if (!token) throw new DataScopeError("未登录", 401);
-      const { data: userData, error: userError } = await admin.auth.getUser(token);
-      const caller = userData?.user;
-      if (userError || !caller) throw new DataScopeError("登录状态无效", 401);
+      const caller = await verifiedAuthUser(token);
       await requireApprovedSession(token, caller.id);
       const { data: callerProfile, error: profileError } = await admin
         .from("dashboard_profiles")
@@ -476,7 +502,7 @@ Deno.serve(async (request) => {
       const username = normalizeUsername(body?.username);
       const { data: target, error: targetError } = await admin
         .from("dashboard_profiles")
-        .select("auth_user_id,username,role,active,permissions,management_permissions,data_scope,updated_at")
+        .select("auth_user_id,username,role,active,permissions,management_permissions,data_scope,created_at,updated_at")
         .eq("username", username)
         .maybeSingle();
       if (targetError) throw new Error(`读取目标账号失败：${targetError.message}`);
@@ -532,11 +558,11 @@ Deno.serve(async (request) => {
       if (patch.active === false) await revokeSessions(target.auth_user_id);
       let update = admin.from("dashboard_profiles").update(patch).eq("auth_user_id", target.auth_user_id).eq("role", target.role);
       if (target.updated_at) update = update.eq("updated_at", target.updated_at);
-      const { data: updated, error } = await update.select("role").maybeSingle();
+      const { data: updated, error } = await update.select("auth_user_id,username,role,active,permissions,management_permissions,data_scope,created_at,updated_at").maybeSingle();
       if (error) throw new Error(`更新账号失败：${error.message}`);
       if (!updated) return json(request, { ok: false, message: "账号信息已变更，请刷新列表后重试" }, 409);
       await audit(ctx.actor, "update_account", username, { previous_role: target.role, ...patch, role: updated.role });
-      return json(request, { ok: true, username, role: updated.role, message: hasRole ? "账号角色已更新" : "账号权限已更新" });
+      return json(request, { ok: true, username, role: updated.role, account: accountProfile(updated), message: hasRole ? "账号角色已更新" : "账号权限已更新" });
     }
 
     if (action === "update-viewer") {
@@ -621,7 +647,7 @@ Deno.serve(async (request) => {
       const { error } = await admin.auth.admin.deleteUser(target.auth_user_id);
       if (error) throw new Error(`删除账号失败：${error.message}`);
       await audit(ctx.actor, "delete_account", username, { role: target.role });
-      return json(request, { ok: true, username, role: target.role, message: "账号已删除" });
+      return json(request, { ok: true, username, auth_user_id: target.auth_user_id, role: target.role, message: "账号已删除" });
     }
 
     if (action === "list-audit") {

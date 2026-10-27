@@ -12,7 +12,7 @@ const plain=x=>JSON.parse(JSON.stringify(x)),flush=()=>new Promise(r=>setImmedia
 const nodes=x=>Array.isArray(x)?x.flatMap(nodes):x&&typeof x==='object'?[x,...nodes(x.props?.children)]:[];
 const text=x=>Array.isArray(x)?x.map(text).join(''):x&&typeof x==='object'?text(x.props?.children):x==null||typeof x==='boolean'?'':String(x);
 function ui(options={}){
- let cursor=0,ecursor=0;const states=[],deps=[],effects=[],cleanups=[],calls=[],roleCalls=[],listArgs=[],rawRoleArgs=[],mod={exports:{}};let actor=options.actor||owner,currentSession={...session,user:{id:actor.auth_user_id}},roleAccess=options.roleAccess,opened=true,currentSection=options.section||'accounts';
+ let cursor=0,ecursor=0;const states=[],deps=[],effects=[],cleanups=[],calls=[],roleCalls=[],listArgs=[],rawRoleArgs=[],mod={exports:{}};let actor=options.actor||owner,currentSession={...session,user:{id:actor.auth_user_id}},roleAccess=options.roleAccess,opened=true,currentSection=options.section||'accounts',active=true,refreshVersion=0,changes=0,denials=0;
  const react={Fragment:'fragment',useMemo:fn=>fn(),useRef(initial){const i=cursor++;return states[i]||(states[i]={current:initial})},useState(initial){const i=cursor++;if(!(i in states))states[i]=typeof initial==='function'?initial():initial;return[states[i],v=>{states[i]=typeof v==='function'?v(states[i]):v}]},useEffect(fn,values){const i=ecursor++;if(!deps[i]||values.some((v,k)=>v!==deps[i][k])){deps[i]=values;effects.push(()=>{cleanups[i]?.();cleanups[i]=fn()})}}};
  const output=ts.transpileModule(fs.readFileSync(path.join(root,'src/components/AdminControlCenter.tsx'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText;
  vm.runInNewContext(output,{module:mod,exports:mod.exports,console,Error,AbortController,AbortSignal,DOMException,window:{confirm:()=>true},require:name=>{
@@ -24,20 +24,20 @@ function ui(options={}){
   if(name==='./AccountAssignedRoleDialog')return{default:function AccountAssignedRoleDialog(){}};
   if(name.includes('dashboardRoleAccess'))return{dashboardRoleAllows:(a,p,k='view')=>!!a&&a.canView&&(a.mode!=='assigned'||a.permissions.includes(p+'.view')&&a.permissions.includes(p+'.'+k))};
   if(name==='./AccountPermissionDialog')return{default:function AccountPermissionDialog(){}};
-  if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async(...args)=>{calls.push({action:'list'});listArgs.push(args);return options.list?options.list(...args):options.users||[owner,brazil,india]},listDashboardAudit:async(...args)=>{calls.push({action:'audit'});return options.audit?options.audit(...args):[]},createDashboardRoleAccount:async(...args)=>{calls.push({action:'create',args:plain(args)});return options.create?options.create(...args):{account:{username:args[1],role_name:EMPTY_ROLE.name}}},updateDashboardAccount:async(...args)=>{calls.push({action:'update',args:plain(args)});if(options.update)return options.update(...args)},resetDashboardUserPassword:async(...args)=>calls.push({action:'password',args:plain(args)})};
+  if(name.endsWith('/dashboardAuthClient'))return{...auth,listDashboardUsers:async(...args)=>{calls.push({action:'list'});listArgs.push(args);return options.list?options.list(...args):options.users||[owner,brazil,india]},listDashboardAudit:async(...args)=>{calls.push({action:'audit'});return options.audit?options.audit(...args):[]},createDashboardRoleAccount:async(...args)=>{calls.push({action:'create',args:plain(args)});return options.create?options.create(...args):{account:{auth_user_id:'fixture-new',username:args[1],role:'viewer',active:true,data_scope:args[4],role_id:args[3].id,role_version:args[3].version,assignment_version:1,role_name:EMPTY_ROLE.name}}},updateDashboardAccount:async(...args)=>{calls.push({action:'update',args:plain(args)});if(options.update)return options.update(...args);return {ok:true,account:{...args[3],...args[2],updated_at:'2026-10-27T06:00:00Z'}}},deleteDashboardAccount:async(...args)=>{calls.push({action:'delete',args:plain(args)});return options.remove?options.remove(...args):{ok:true,username:args[1],auth_user_id:args[2]}},resetDashboardUserPassword:async(...args)=>calls.push({action:'password',args:plain(args)})};
   if(name.endsWith('/dashboardRoleDisplay'))return require('./load-role-display.cjs');
   if(name.endsWith('/dashboardRoleClient'))return{dashboardRolePages:require('../src/lib/dashboardRoleCatalog.json').pages,dashboardRoleRequest:async(...args)=>{rawRoleArgs.push(args);roleCalls.push(plain(args.slice(0,2)));return options.roles?options.roles(...args):{roles:[EMPTY_ROLE,VIP_ROLE],accounts:(options.users||[owner,brazil,india]).map(account=>({...account,role_id:null,assignment_version:0}))}}};
   if(name.startsWith('@/lib/'))return loadTs(path.join(root,'src/lib',name.slice(6)+'.ts'));
   throw Error('Unexpected module: '+name);
  }});
- const draw=()=>{cursor=ecursor=0;return mod.exports.default({open:opened,session:currentSession,profile:actor,onClose(){},section:currentSection,embedded:true,accountsOnlyLoading:options.accountsOnlyLoading!==false,manualQuery:options.manualQuery,roleAccess})};
+ const draw=()=>{cursor=ecursor=0;return mod.exports.default({open:opened,session:currentSession,profile:actor,onClose(){},section:currentSection,embedded:true,accountsOnlyLoading:options.accountsOnlyLoading!==false,manualQuery:options.manualQuery,roleAccess,active,refreshVersion,onDirectoryChanged:()=>changes++,onAccessDenied:()=>denials++})};
  const all=()=>nodes(draw());
  const button=(label,within)=>{const node=nodes(within||draw()).find(n=>n.type==='button'&&text(n)===label);assert(node,'button '+label);return node};
  const field=(label)=>{const wrap=all().find(n=>n.type==='div'&&n.props.className?.includes('admin-search-field')&&nodes(n).some(c=>c.type==='label'&&text(c)===label));assert(wrap,'filter '+label);return nodes(wrap).find(n=>['select','input'].includes(n.type))};
  const dialog=()=>all().find(n=>n.type?.name==='AccountEditorDialog');
  const rows=()=>all().filter(n=>n.type==='tr'&&nodes(n).some(c=>c.type==='th'&&c.props.scope==='row'));
  draw();effects.splice(0).forEach(fn=>fn());
- return{draw,all,button,field,dialog,rows,calls,roleCalls,listArgs,rawRoleArgs,states,setOpen(next){opened=next;draw();effects.splice(0).forEach(fn=>fn())},section(next){currentSection=next;draw();effects.splice(0).forEach(fn=>fn())},dispose:()=>cleanups.forEach(fn=>fn?.()),role(next){roleAccess=next;draw();effects.splice(0).forEach(fn=>fn())},actor(next){actor=next;currentSession={...session,user:{id:next.auth_user_id}};draw();effects.splice(0).forEach(fn=>fn())}};
+ return{draw,all,button,field,dialog,rows,calls,roleCalls,runEffects(){draw();effects.splice(0).forEach(fn=>fn())},get changes(){return changes},get denials(){return denials},active(next){active=next;draw();effects.splice(0).forEach(fn=>fn())},refresh(next){refreshVersion=next;draw();effects.splice(0).forEach(fn=>fn())},listArgs,rawRoleArgs,states,setOpen(next){opened=next;draw();effects.splice(0).forEach(fn=>fn())},section(next){currentSection=next;draw();effects.splice(0).forEach(fn=>fn())},dispose:()=>cleanups.forEach(fn=>fn?.()),role(next){roleAccess=next;draw();effects.splice(0).forEach(fn=>fn())},actor(next){actor=next;currentSession={...session,user:{id:next.auth_user_id}};draw();effects.splice(0).forEach(fn=>fn())}};
 }
 
 test('data scope, role, status and text filters intersect locally; reset restores the authorized directory without IO',async()=>{
@@ -65,7 +65,7 @@ test('create uses explicit new role/version/scope and blocks dismissal or duplic
  assert.equal(h.dialog().props.busy,true);assert(h.all().some(n=>n.type==='fieldset'&&n.props.disabled));h.dialog().props.onClose();assert(h.dialog());
  await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});assert.equal(h.calls.filter(c=>c.action==='create').length,1);
  const args=h.calls.find(c=>c.action==='create').args;assert.equal(args.length,5);assert.deepEqual(args.slice(0,4),[session,'new-fixture','fixture-password',{id:EMPTY_ROLE.id,version:EMPTY_ROLE.version}]);assert.deepEqual(args[4],BR);
- resolve({account:{username:'new-fixture',role_name:EMPTY_ROLE.name}});await pending;assert(!h.dialog());assert(!JSON.stringify(h.states).includes('fixture-password'));
+ resolve({account:{auth_user_id:'fixture-new',username:'new-fixture',role:'viewer',active:true,data_scope:BR,role_id:EMPTY_ROLE.id,role_version:3,assignment_version:1,role_name:EMPTY_ROLE.name}});await pending;assert(!h.dialog());assert(!JSON.stringify(h.states).includes('fixture-password'));
 });
 
 test('creation error is visible inside the dialog and preserves the draft for correction',async()=>{
@@ -75,7 +75,7 @@ test('creation error is visible inside the dialog and preserves the draft for co
 
 test('existing editable account opens the same modal without an inline table row or implicit mutation',async()=>{
  const h=ui();await flush();const row=h.rows().find(n=>text(n).includes('brazil-fixture'));h.button('账号设置',row).props.onClick();assert.equal(h.dialog().props.title,'后台账号设置 · brazil-fixture');assert.equal(h.all().filter(n=>n.props?.className==='admin-account-editor-row').length,0);assert(!h.calls.some(c=>['create','update','password'].includes(c.action)));
- const editor=h.all().find(n=>n.type?.name==='AccountDataScopeEditor');await editor.props.onSave({data_scope:BR});assert.deepEqual(h.calls.find(c=>c.action==='update').args,[session,'brazil-fixture',{data_scope:BR}]);assert.match(text(h.dialog()),/已更新/);h.dialog().props.onClose();assert(!h.dialog());
+ const editor=h.all().find(n=>n.type?.name==='AccountDataScopeEditor');await editor.props.onSave({data_scope:BR});assert.deepEqual(h.calls.find(c=>c.action==='update').args,[session,'brazil-fixture',{data_scope:BR},brazil]);assert.match(text(h.dialog()),/已更新/);h.dialog().props.onClose();assert(!h.dialog());
  const ownerRow=h.rows().find(n=>text(n).includes('owner-fixture'));assert(!nodes(ownerRow).some(n=>n.type==='button'&&text(n)==='账号设置'),'owner fixed-account protection remains');
 });
 
@@ -342,10 +342,9 @@ test('disposal physically cancels roster and roles and ignores transports that s
  rows([brazil]);roles({roles:[],accounts:[]});await flush();assert.equal(h.rows().length,0);
 });
 
-test('write confirmation replaces a pre-write pending read and ignores its late older rows',async()=>{
+test('write confirmation updates only its row and cancels a pre-write read without starting another directory read',async()=>{
  const requests=[];let phase=false;const h=ui({users:[brazil],list:()=>!phase?[brazil]:new Promise(r=>requests.push(r))});await flush();h.button('账号设置').props.onClick();const save=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave;
- phase=true;h.button('刷新列表').props.onClick();const old=h.listArgs.at(-1)[1];const saving=save({active:false});await flush();assert.equal(requests.length,2);assert(old.aborted);assert.match(text(h.rows()),/正常/);
- requests[1]([{...brazil,active:false}]);assert.equal(await saving,true);await flush();assert.match(text(h.rows()),/停用/);
+ phase=true;h.button('刷新列表').props.onClick();const old=h.listArgs.at(-1)[1];const saving=save({active:false});await flush();assert.equal(requests.length,1);assert(old.aborted);assert.equal(await saving,true);await flush();assert.match(text(h.rows()),/停用/);
  requests[0]([brazil]);await flush();assert.match(text(h.rows()),/停用/);assert.doesNotMatch(text(h.rows()),/正常/);h.dispose();
 });
 
@@ -357,7 +356,7 @@ test('password reset does not reload the account or role directories',async()=>{
 
 test('a synchronous mutation claim rejects a second save before React rerenders',async()=>{
  let finish;const h=ui({users:[brazil],update:()=>new Promise(r=>finish=r)});await flush();h.button('账号设置').props.onClick();const save=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave;
- const first=save({active:false}),second=save({active:false});assert.equal(await second,false);assert.equal(h.calls.filter(c=>c.action==='update').length,1);finish();assert.equal(await first,true);h.dispose();
+ const first=save({active:false}),second=save({active:false});assert.equal(await second,false);assert.equal(h.calls.filter(c=>c.action==='update').length,1);finish({ok:true,account:{...brazil,active:false}});assert.equal(await first,true);h.dispose();
 });
 
 for(const boundary of ['close','section','denial','dispose'])test('a late completed save cannot reopen or reread after '+boundary,async()=>{
@@ -377,4 +376,99 @@ test('opening create before a manual query also verifies the roster and never le
 test('a denied account mutation clears the preserved directory and cannot report success',async()=>{
  const h=ui({users:[brazil],update:()=>Promise.reject(Object.assign(Error('write revoked'),{status:403}))});await flush();h.button('账号设置').props.onClick();const save=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave;
  assert.equal(await save({active:false}),false);await flush();assert.equal(h.rows().length,0);assert.equal(h.dialog(),undefined);assert.match(text(h.draw()),/write revoked/);assert.equal(h.calls.filter(c=>c.action==='list').length,1);h.dispose();
+});
+
+test('confirmed account update is local, preserves unrelated rows/filter/editor, and finishes before any directory reread',async()=>{
+ const h=ui();await flush();h.field('搜索账号').props.onChange({target:{value:'brazil'}});h.button('账号设置',h.rows()[0]).props.onClick();
+ const before=h.calls.filter(c=>c.action==='list').length,roleReads=h.roleCalls.length;
+ assert.equal(await h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave({active:false}),true);
+ assert.equal(h.changes,1);assert.equal(h.calls.filter(c=>c.action==='list').length,before);assert.equal(h.roleCalls.length,roleReads);
+ assert.equal(h.field('搜索账号').props.value,'brazil');assert.match(text(h.rows()),/停用/);assert.equal(h.dialog().props.busy,false);
+ h.field('搜索账号').props.onChange({target:{value:''}});assert.equal(h.rows().length,3);assert.match(text(h.rows()),/india-fixture/);h.dispose();
+});
+
+test('confirmed create and delete merge exact identities without a directory reread',async()=>{
+ const h=ui();await flush();h.button('+ 新建账号').props.onClick();
+ h.all().find(n=>n.props.id==='admin-new-username').props.onChange({target:{value:'new-local'}});
+ h.all().find(n=>n.props.id==='admin-new-password').props.onChange({target:{value:'fixture-password'}});
+ h.all().find(n=>n.props.id==='admin-new-role').props.onChange({target:{value:EMPTY_ROLE.id}});
+ h.all().find(n=>n.type?.name==='DataScopePicker').props.onChange(BR);
+ await nodes(h.dialog()).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});
+ assert.equal(h.rows().length,4);assert.match(text(h.rows().find(row=>text(row).includes('new-local'))),/出款组长/);
+ assert.equal(h.calls.filter(c=>c.action==='list').length,1);assert.equal(h.roleCalls.length,1);assert.equal(h.changes,1);
+ h.button('账号设置',h.rows().find(row=>text(row).includes('new-local'))).props.onClick();
+ await h.button('删除账号',h.dialog()).props.onClick();await flush();
+ assert.equal(h.rows().length,3);assert.doesNotMatch(text(h.rows()),/new-local/);assert.equal(h.calls.filter(c=>c.action==='list').length,1);assert.equal(h.roleCalls.length,1);assert.equal(h.changes,2);h.dispose();
+});
+
+test('hidden account tab keeps its list and filters, clears credentials/portals and refuses stale handlers',async()=>{
+ const h=ui();await flush();h.field('搜索账号').props.onChange({target:{value:'brazil'}});h.button('账号设置',h.rows()[0]).props.onClick();
+ const save=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave,query=h.button('刷新列表').props.onClick;
+ h.button('重置密码',h.dialog()).props.onClick();h.all().find(n=>n.type==='input'&&n.props.type==='password').props.onChange({target:{value:'must-not-survive-hidden'}});
+ const readCount=h.calls.length,roles=h.roleCalls.length;h.active(false);assert.equal(h.draw().props.hidden,true);assert(!JSON.stringify(h.states).includes('must-not-survive-hidden'));
+ assert.equal(await save({active:false}),false);query();await flush();assert.equal(h.calls.length,readCount);
+ h.active(true);await flush();assert.equal(h.rows().length,1);assert.equal(h.field('搜索账号').props.value,'brazil');assert(!h.dialog());assert.equal(h.calls.length,readCount);assert.equal(h.roleCalls.length,roles);h.dispose();
+});
+
+test('hidden refresh cancellation drops late results, and a sibling role change rereads only roles when activated',async()=>{
+ let finish,phase=false;const h=ui({list:()=>phase?new Promise(r=>finish=r):[brazil]});await flush();
+ phase=true;h.button('刷新列表').props.onClick();const signal=h.listArgs.at(-1)[1];h.active(false);assert(signal.aborted);h.refresh(1);
+ const reads=h.calls.filter(c=>c.action==='list').length,roles=h.roleCalls.length;finish([india]);await flush();assert.equal(h.draw()?.props.hidden,true);
+ h.active(true);await flush();assert.match(text(h.rows()),/brazil-fixture/);assert.doesNotMatch(text(h.rows()),/india-fixture/);
+ assert.equal(h.calls.filter(c=>c.action==='list').length,reads);assert.equal(h.roleCalls.length,roles+1);h.dispose();
+});
+
+test('confirmed assignment updates the target role without a roster or role-directory reread',async()=>{
+ const h=ui({users:[brazil],roles:()=>({roles:[EMPTY_ROLE,VIP_ROLE],accounts:[{...brazil,role_id:null,assignment_version:0}]})});await flush();
+ h.button('配置权限',h.rows()[0]).props.onClick();const dialog=h.all().find(n=>n.type?.name==='AccountAssignedRoleDialog');
+ dialog.props.onSaved({...brazil,role_id:VIP_ROLE.id,assignment_version:1});dialog.props.onClose();
+ assert.match(text(h.rows()),/VIP/);assert.equal(h.roleCalls.length,1);assert.equal(h.calls.filter(c=>c.action==='list').length,1);assert.equal(h.changes,1);h.dispose();
+});
+
+test('hidden update waits for its single acknowledgement before refreshing the original directory',async()=>{
+ let finish,latest={...brazil};const h=ui({users:[brazil],list:()=>[latest],update:()=>new Promise(r=>finish=r)});await flush();
+ h.button('账号设置').props.onClick();const request=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave({active:false});
+ h.active(false);h.active(true);await flush();assert.equal(h.calls.filter(c=>c.action==='list').length,1);
+ latest={...brazil,active:false};finish({ok:true,account:latest});assert.equal(await request,false);h.runEffects();await flush();
+ assert.equal(h.calls.filter(c=>c.action==='list').length,2);assert.match(text(h.rows()),/停用/);assert(!h.dialog());h.dispose();
+});
+test('hidden role assignment waits for settlement then rechecks only the role directory',async()=>{
+ let latest={...brazil,role_id:null,assignment_version:0};const h=ui({users:[brazil],roles:()=>({roles:[EMPTY_ROLE,VIP_ROLE],accounts:[latest]})});await flush();
+ h.button('配置权限').props.onClick();const dialog=h.all().find(n=>n.type?.name==='AccountAssignedRoleDialog'),release=dialog.props.onMutationStart();
+ assert.equal(typeof release,'function');h.active(false);h.active(true);await flush();assert.equal(h.calls.filter(c=>c.action==='list').length,1);assert.equal(h.roleCalls.length,1);
+ latest={...latest,role_id:VIP_ROLE.id,assignment_version:1};release();dialog.props.onUnconfirmed();h.runEffects();await flush();
+ assert.equal(h.calls.filter(c=>c.action==='list').length,1);assert.equal(h.roleCalls.length,2);assert.match(text(h.rows()),/VIP/);assert(!h.dialog());h.dispose();
+});
+test('a sibling role change supersedes an older in-flight directory response',async()=>{
+ const pending=[];let phase=false;const h=ui({users:[brazil],roles:()=>!phase?{roles:[VIP_ROLE],accounts:[{...brazil,role_id:VIP_ROLE.id,assignment_version:1}]}:new Promise(r=>pending.push(r))});await flush();
+ phase=true;h.refresh(1);const oldSignal=h.rawRoleArgs.at(-1)[2];h.refresh(2);assert(oldSignal.aborted);assert.equal(pending.length,2);
+ pending[1]({roles:[{...VIP_ROLE,name:'Current role'}],accounts:[{...brazil,role_id:VIP_ROLE.id,assignment_version:1}]});await flush();
+ pending[0]({roles:[{...VIP_ROLE,name:'Obsolete role'}],accounts:[{...brazil,role_id:VIP_ROLE.id,assignment_version:1}]});await flush();
+ assert.match(text(h.rows()),/Current role/);assert.doesNotMatch(text(h.rows()),/Obsolete role/);assert.equal(h.calls.filter(c=>c.action==='list').length,1);h.dispose();
+});
+test('login policy remains mounted while hidden and a security denial clears every cached directory',async()=>{
+ const h=ui({users:[brazil]});await flush();const policy=()=>h.all().find(n=>n.type?.name==='AccountLoginPolicy');assert(policy());assert.equal(policy().props.active,true);
+ h.active(false);assert(policy());assert.equal(policy().props.active,false);assert.equal(policy().props.target,null);h.active(true);assert.equal(h.calls.filter(c=>c.action==='list').length,1);
+ policy().props.onAccessDenied();h.runEffects();await flush();assert.equal(h.rows().length,0);assert(!policy());assert.equal(h.calls.filter(c=>c.action==='list').length,1);h.dispose();
+});
+
+test('same-actor write denial still clears the workspace when its tab was hidden',async()=>{
+ let reject;const h=ui({users:[brazil],update:()=>new Promise((_,r)=>reject=r)});await flush();h.button('账号设置').props.onClick();
+ const request=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave({active:false});h.active(false);
+ reject(Object.assign(Error('permission revoked'),{status:403}));assert.equal(await request,false);assert.equal(h.denials,1);assert.equal(h.rows().length,0);
+ h.active(true);h.runEffects();await flush();assert.equal(h.calls.filter(c=>c.action==='list').length,1);h.dispose();
+});
+test('an old-actor denied write cannot clear the replacement actor workspace',async()=>{
+ let reject;const h=ui({users:[brazil],update:()=>new Promise((_,r)=>reject=r)});await flush();h.button('账号设置').props.onClick();
+ const request=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave({active:false});h.actor({...owner,auth_user_id:'new-owner'});await flush();
+ reject(Object.assign(Error('old permission revoked'),{status:403}));assert.equal(await request,false);assert.equal(h.denials,0);h.dispose();
+});
+
+test('a confirmed save cannot swallow a sibling role invalidation that arrived while it was pending',async()=>{
+ let finish,phase=false;const pending=[],h=ui({users:[brazil],update:()=>new Promise(r=>finish=r),roles:()=>!phase?{roles:[VIP_ROLE],accounts:[{...brazil,role_id:VIP_ROLE.id,assignment_version:1}]}:new Promise(r=>pending.push(r))});await flush();
+ h.button('账号设置').props.onClick();const request=h.all().find(n=>n.type?.name==='AccountDataScopeEditor').props.onSave({active:false});phase=true;h.refresh(1);assert.equal(pending.length,1);
+ finish({ok:true,account:{...brazil,active:false}});assert.equal(await request,true);h.runEffects();assert.equal(pending.length,2);
+ pending[1]({roles:[{...VIP_ROLE,name:'New role name'}],accounts:[{...brazil,active:false,role_id:VIP_ROLE.id,assignment_version:1}]});await flush();
+ pending[0]({roles:[VIP_ROLE],accounts:[{...brazil,role_id:VIP_ROLE.id,assignment_version:1}]});await flush();
+ assert.match(text(h.rows()),/New role name/);assert.match(text(h.rows()),/停用/);assert.equal(h.calls.filter(c=>c.action==='list').length,1);h.dispose();
 });

@@ -737,8 +737,50 @@ export type DashboardAccountPatch = {
   expected_role?: "admin" | "viewer";
 };
 
-export async function updateDashboardAccount(session: DashboardSession, username: string, patch: DashboardAccountPatch) {
-  return await callAdminFunction(session, { action: "update-account", username, ...patch });
+export function validateDashboardAccountUpdate(result: unknown, username: string, patch: DashboardAccountPatch, expected?: DashboardProfile): DashboardProfile {
+  const invalid = (): never => { throw new DashboardHttpError("账号保存结果待核对，请刷新账号列表确认；请勿重复提交。",503,"account_update_response_invalid"); };
+  if (!result || typeof result !== "object" || Array.isArray(result)) return invalid();
+  const reply = result as Record<string,unknown>, account = reply.account as DashboardProfile | undefined;
+  const mapValid = (value:unknown, keys:string[]) => value === null || !!value && typeof value === "object" && !Array.isArray(value)
+    && Object.entries(value).every(([key,item]) => keys.includes(key) && typeof item === "boolean");
+  if (reply.ok !== true || !account || typeof account !== "object" || Array.isArray(account)
+    || typeof account.auth_user_id !== "string" || !account.auth_user_id.trim() || account.username !== username
+    || !["admin","viewer"].includes(account.role) || typeof account.active !== "boolean"
+    || !mapValid(account.permissions, ["home","third_party","auto_withdraw","work_orders","customer_service"])
+    || !mapValid(account.management_permissions, ["manage_viewers","refresh_data","view_audit"])
+    || !(account.data_scope === null || isDashboardDataScopeValid(account.data_scope))
+    || typeof account.updated_at !== "string" || !Number.isFinite(Date.parse(account.updated_at))
+    || account.created_at !== undefined && (typeof account.created_at !== "string" || !Number.isFinite(Date.parse(account.created_at)))
+    || expected && (account.auth_user_id !== expected.auth_user_id || account.username !== expected.username
+      || !patch.role && account.role !== expected.role
+      || expected.updated_at && Number.isFinite(Date.parse(expected.updated_at)) && Date.parse(account.updated_at) < Date.parse(expected.updated_at))
+    || patch.role && account.role !== patch.role
+    || !patch.role && patch.active !== undefined && account.active !== patch.active
+    || patch.data_scope && JSON.stringify(normalizeDashboardDataScope(account.data_scope)) !== JSON.stringify(normalizeDashboardDataScope(patch.data_scope))
+    || !patch.role && patch.permissions && Object.entries(patch.permissions).some(([key,value]) => account.permissions?.[key as DashboardPermissionKey] !== (key === "home" ? true : value))
+    || patch.management_permissions && (patch.role === "admin" || !patch.role && account.role === "admin")
+      && Object.entries(patch.management_permissions).some(([key,value]) => account.management_permissions?.[key as keyof DashboardManagementPermissions] !== value)) return invalid();
+  // Never carry server extras (or authority claims) into the account directory.
+  return {auth_user_id:account.auth_user_id,username:account.username,role:account.role,active:account.active,
+    permissions:account.permissions === null ? null : {...account.permissions},management_permissions:account.management_permissions === null ? null : {...account.management_permissions},
+    data_scope:account.data_scope === null ? null : normalizeDashboardDataScope(account.data_scope),
+    ...(account.created_at === undefined ? {} : {created_at:account.created_at}),updated_at:account.updated_at};
+}
+
+function accountMutationActorGuard(session: DashboardSession) {
+  const actor = session.user.id, started = readSavedDashboardSession();
+  return () => {
+    const saved = readSavedDashboardSession();
+    if (saved && saved.user.id !== actor || started && !saved)
+      throw new DashboardHttpError("当前登录账号已改变，请重新打开账号管理。",403,"session_changed");
+  };
+}
+
+export async function updateDashboardAccount(session: DashboardSession, username: string, patch: DashboardAccountPatch, expected?: DashboardProfile): Promise<{ok:true;account:DashboardProfile}> {
+  const guard = accountMutationActorGuard(session); guard();
+  const result = await callAdminFunction(session, { action: "update-account", username, ...patch });
+  guard();
+  return {ok:true,account:validateDashboardAccountUpdate(result,username,patch,expected)};
 }
 
 export async function updateViewerAccount(session: DashboardSession, username: string, patch: { active?: boolean; permissions?: DashboardPermissions }) {
@@ -754,8 +796,14 @@ export async function resetViewerPassword(session: DashboardSession, username: s
   return await resetDashboardUserPassword(session, username, password);
 }
 
-export async function deleteDashboardAccount(session: DashboardSession, username: string) {
-  return await callAdminFunction(session, { action: "delete-account", username });
+export async function deleteDashboardAccount(session: DashboardSession, username: string, expectedId?: string): Promise<{ok:true;auth_user_id:string;username:string}> {
+  const guard = accountMutationActorGuard(session); guard();
+  const result = await callAdminFunction(session, { action: "delete-account", username });
+  guard();
+  if (result?.ok !== true || result.username !== username || typeof result.auth_user_id !== "string" || !result.auth_user_id.trim()
+    || expectedId !== undefined && result.auth_user_id !== expectedId)
+    throw new DashboardHttpError("账号删除结果待核对，请刷新账号列表确认；请勿重复提交。",503,"account_delete_response_invalid");
+  return {ok:true,auth_user_id:result.auth_user_id,username:result.username};
 }
 
 export async function changeOwnDashboardPassword(username: string, currentPassword: string, newPassword: string): Promise<DashboardSession> {

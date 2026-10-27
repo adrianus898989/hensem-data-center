@@ -18,53 +18,78 @@ export function changeRolePermission(current:string[],code:string,checked:boolea
  if(checked){next.add(code);next.add(page+".view");}else{next.delete(code);if(code.endsWith(".view"))for(const entry of next)if(entry.startsWith(page+"."))next.delete(entry);}
  return [...next].sort();
 }
-export default function DashboardRoleManager({session,profile,manualQuery=true,roleAccess}:{session:DashboardSession;profile:DashboardProfile;manualQuery?:boolean;roleAccess?:DashboardRoleAccess|null}){
+export default function DashboardRoleManager({session,profile,manualQuery=true,roleAccess,active=true,refreshVersion=0,onDirectoryChanged,onAccessDenied}:{session:DashboardSession;profile:DashboardProfile;manualQuery?:boolean;roleAccess?:DashboardRoleAccess|null;active?:boolean;refreshVersion?:number;onDirectoryChanged?:()=>void;onAccessDenied?:()=>void}){
  const owner=profile.role==="owner",delegated=roleAccess?.mode==="assigned"&&dashboardRoleAllows(roleAccess,"access");
  const allowed=profile.active===true&&(owner||delegated)&&profile.auth_user_id===session.user.id;
  const canAssign=owner||delegated&&dashboardRoleAllows(roleAccess,"access","edit");
  const grantable=(role:DashboardCustomRole)=>owner||!!roleAccess&&role.permissions.every(code=>roleAccess.permissions.includes(code));
- const identity=session.user.id+":"+profile.auth_user_id+":"+profile.role+":"+profile.active+":"+JSON.stringify(roleAccess||null);
+ const identity=session.user.id+":"+profile.auth_user_id+":"+profile.role+":"+profile.active+":"+JSON.stringify(roleAccess||null)+":"+JSON.stringify(profile.data_scope||null);
+ const activeRef=useRef(active);activeRef.current=active;const versionRef=useRef(refreshVersion);versionRef.current=refreshVersion;
+ const readyRef=useRef(false),accessRevoked=useRef(false);
+ const mounted=useRef(true),dirty=useRef(false),readVersion=useRef(refreshVersion),writeControllers=useRef(new Set<AbortController>());
  const sessionRef=useRef(session);sessionRef.current=session;
  const actor=useRef({identity,epoch:0});if(actor.current.identity!==identity)actor.current={identity,epoch:actor.current.epoch+1};
  const controllers=useRef(new Set<AbortController>()),busyRef=useRef(false);
  const [roles,setRoles]=useState<DashboardCustomRole[]>([]),[accounts,setAccounts]=useState<DashboardRoleAccount[]>([]);
  const [dataIdentity,setDataIdentity]=useState(identity);
+ const [readReady,setReadReady]=useState(false);
  const [loaded,setLoaded]=useState(false),[loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(""),[message,setMessage]=useState("");
  const [editor,setEditor]=useState<Editor|null>(null),[moduleId,setModuleId]=useState(modules[0]?.id||""),[search,setSearch]=useState("");
  const [assignment,setAssignment]=useState<{accountId:string;roleId:string}|null>(null),[archive,setArchive]=useState<DashboardCustomRole|null>(null);
  const [roleSearch,setRoleSearch]=useState(""),[roleStatus,setRoleStatus]=useState("all");
  useEffect(()=>{
-  setDataIdentity(identity);setRoles([]);setAccounts([]);setLoaded(false);setError("");setMessage("");setEditor(null);setAssignment(null);setArchive(null);setLoading(false);setBusy(false);setRoleSearch("");setRoleStatus("all");busyRef.current=false;
-  if(allowed&&!manualQuery)void load();
-  return()=>{actor.current.epoch++;for(const controller of controllers.current)controller.abort();controllers.current.clear();};
+  mounted.current=true;accessRevoked.current=false;writeControllers.current.clear();dirty.current=false;readVersion.current=refreshVersion;setDataIdentity(identity);setRoles([]);setAccounts([]);setLoaded(false);setWritable(false);setError("");setMessage("");setEditor(null);setAssignment(null);setArchive(null);setLoading(false);setBusy(false);setRoleSearch("");setRoleStatus("all");busyRef.current=false;
+  if(active&&allowed&&!manualQuery)void load();
+  return()=>{mounted.current=false;actor.current.epoch++;for(const controller of controllers.current)controller.abort();controllers.current.clear();};
  // The actor key invalidates every result even if the new account later switches back.
  // eslint-disable-next-line react-hooks/exhaustive-deps
  },[identity,allowed,manualQuery]);
+ useEffect(()=>{
+  if(readVersion.current!==refreshVersion)dirty.current=true;
+  if(active){if(dirty.current&&!busyRef.current)void load();return;}
+  if(controllers.current.size)dirty.current=true;
+  actor.current.epoch++;
+  for(const controller of controllers.current)if(!writeControllers.current.has(controller))controller.abort();
+  busyRef.current=writeControllers.current.size>0;setBusy(busyRef.current);setLoading(false);setEditor(null);setAssignment(null);setArchive(null);setError("");setMessage("");
+ },[active,refreshVersion]);
+ function setWritable(value:boolean){readyRef.current=value;setReadReady(value);}
+ function continueRead(){if(dirty.current&&activeRef.current&&mounted.current&&!busyRef.current)void load();}
  async function request(input:DashboardRoleRequest):Promise<DashboardRoleResponse|null>{
-  if(!allowed||actor.current.identity!==identity)return null;
-  const epoch=actor.current.epoch,who=identity,controller=new AbortController();controllers.current.add(controller);
-  try{const result=await dashboardRoleRequest(sessionRef.current,input,controller.signal);return !controller.signal.aborted&&actor.current.identity===who&&actor.current.epoch===epoch?result:null;}
-  catch(cause){if(!controller.signal.aborted&&actor.current.identity===who&&actor.current.epoch===epoch)setError(cause instanceof Error?cause.message:"角色操作失败");return null;}
-  finally{controllers.current.delete(controller);}
+  if(!mounted.current||accessRevoked.current||!activeRef.current||!allowed||actor.current.identity!==identity)return null;
+  const epoch=actor.current.epoch,who=identity,controller=new AbortController();controllers.current.add(controller);if(input.operation!=="list")writeControllers.current.add(controller);
+  try{const result=await dashboardRoleRequest(sessionRef.current,input,controller.signal);return !controller.signal.aborted&&mounted.current&&actor.current.identity===who&&(input.operation!=="list"||activeRef.current&&actor.current.epoch===epoch)?result:null;}
+  catch(cause){
+   if(!controller.signal.aborted&&mounted.current&&actor.current.identity===who){
+    const note=cause instanceof Error?cause.message:"角色操作失败",failure=cause as {status?:number;code?:string};
+    const denied=[401,403].includes(failure?.status||0)||["unauthorized","forbidden","session_changed","actor_changed"].includes(failure?.code||"")||/无权|权限不足|登录已失效/.test(note);
+    if(denied){accessRevoked.current=true;dirty.current=false;setRoles([]);setAccounts([]);setLoaded(false);setWritable(false);setEditor(null);setAssignment(null);setArchive(null);onAccessDenied?.();}
+    else if(input.operation!=="list"&&failure?.code!=="conflict")setWritable(false);
+    if(activeRef.current&&actor.current.epoch===epoch)setError(note);
+   }
+   return null;
+  }
+  finally{controllers.current.delete(controller);writeControllers.current.delete(controller);}
  }
  async function load(){
-  if(!allowed||actor.current.identity!==identity||busyRef.current)return;
-  const epoch=actor.current.epoch;busyRef.current=true;setLoading(true);setError("");setMessage("");
+  if(!mounted.current||accessRevoked.current||!activeRef.current||!allowed||actor.current.identity!==identity||busyRef.current)return;
+  const epoch=actor.current.epoch;dirty.current=false;readVersion.current=versionRef.current;busyRef.current=true;setWritable(false);setLoading(true);setError("");setMessage("");
   const result=await request({operation:"list"});
-  if(actor.current.epoch!==epoch)return;
-  if(result){setDataIdentity(identity);setRoles(result.roles!);setAccounts(result.accounts!);setLoaded(true);}else{setRoles([]);setAccounts([]);setLoaded(false);}
-  busyRef.current=false;setLoading(false);
+  if(!mounted.current||!activeRef.current||actor.current.epoch!==epoch){if(mounted.current&&!activeRef.current&&actor.current.identity===identity&&!accessRevoked.current)dirty.current=true;return;}
+  if(result){setDataIdentity(identity);setRoles(result.roles!);setAccounts(result.accounts!);setLoaded(true);setWritable(true);}
+  busyRef.current=false;setLoading(false);continueRead();
  }
  async function mutate(input:DashboardRoleRequest):Promise<DashboardRoleResponse|null>{
-  if(!allowed||actor.current.identity!==identity||busyRef.current||!canAssign||input.operation!=="assign"&&!owner)return null;
+  if(!mounted.current||accessRevoked.current||!activeRef.current||!allowed||actor.current.identity!==identity||busyRef.current||!readyRef.current||dirty.current||readVersion.current!==versionRef.current||!canAssign||input.operation!=="assign"&&!owner)return null;
   const epoch=actor.current.epoch;busyRef.current=true;setBusy(true);setError("");setMessage("");
   const result=await request(input);
-  if(actor.current.epoch!==epoch)return null;
+  if(!mounted.current)return null;
+  if(result&&actor.current.identity===identity)onDirectoryChanged?.();
+  if(!activeRef.current||actor.current.epoch!==epoch){if(actor.current.identity===identity&&!accessRevoked.current)dirty.current=true;if(actor.current.identity===identity&&writeControllers.current.size===0){busyRef.current=false;setBusy(false);continueRead();}return null;}
   if(result?.role)setRoles(previous=>previous.some(role=>role.id===result.role!.id)?previous.map(role=>role.id===result.role!.id?result.role!:role):[...previous,result.role!]);
   if(result?.account)setAccounts(previous=>previous.map(account=>account.auth_user_id===result.account!.auth_user_id?result.account!:account));
-  busyRef.current=false;setBusy(false);return result;
+  busyRef.current=false;setBusy(false);continueRead();return result;
  }
- function edit(role:DashboardCustomRole|null){if(!owner)return;setError("");setMessage("");setSearch("");setModuleId(modules[0]?.id||"");setEditor({role,draft:draftOf(role)});}
+ function edit(role:DashboardCustomRole|null){if(!owner||!activeRef.current||!readyRef.current||dirty.current||readVersion.current!==versionRef.current||busyRef.current||actor.current.identity!==identity)return;setError("");setMessage("");setSearch("");setModuleId(modules[0]?.id||"");setEditor({role,draft:draftOf(role)});}
  function closeEditor(){
   if(busyRef.current)return;
   if(editor&&JSON.stringify(editor.draft)!==JSON.stringify(draftOf(editor.role))&&!window.confirm("角色权限尚未保存，确定放弃这些修改吗？"))return;
@@ -86,7 +111,7 @@ export default function DashboardRoleManager({session,profile,manualQuery=true,r
  const filteredRoles=roles.filter(role=>(roleStatus==="all"||(roleStatus==="active"&&role.active)||(roleStatus==="inactive"&&!role.active))&&[role.name,role.description].join(" ").toLowerCase().includes(roleQuery));
  function toggle(code:string,checked:boolean){setEditor(previous=>previous?{...previous,draft:{...previous.draft,permissions:changeRolePermission(previous.draft.permissions,code,checked)}}:null);}
  function selectVisible(checked:boolean){setEditor(previous=>{if(!previous)return null;let next=[...previous.draft.permissions];for(const page of visiblePages){if(checked){for(const action of page.actions)next=changeRolePermission(next,page.id+"."+action.id,true);}else next=changeRolePermission(next,page.id+".view",false);}return {...previous,draft:{...previous.draft,permissions:next}};});}
- function assign(accountId="",roleId=""){if(!canAssign||roleId&&!activeRoles.some(role=>role.id===roleId))return;setError("");setMessage("");setAssignment({accountId,roleId});}
+ function assign(accountId="",roleId=""){if(!activeRef.current||!readyRef.current||dirty.current||readVersion.current!==versionRef.current||busyRef.current||actor.current.identity!==identity||!canAssign||roleId&&!activeRoles.some(role=>role.id===roleId))return;setError("");setMessage("");setAssignment({accountId,roleId});}
  async function saveAssignment(event:React.FormEvent){
   event.preventDefault();if(!canAssign||!assignment||!selectedAccount||!manageable(selectedAccount)||!activeRoles.some(role=>role.id===assignment.roleId))return;
   const result=await mutate({operation:"assign",accountId:selectedAccount.auth_user_id,roleId:assignment.roleId,expectedVersion:selectedAccount.assignment_version});
@@ -94,19 +119,19 @@ export default function DashboardRoleManager({session,profile,manualQuery=true,r
  }
  if(!allowed)return <p role="alert" className="dashboard-role-manager">当前账号没有角色查看权限；仅总管理员可创建或修改共享角色。</p>;
  if(dataIdentity!==identity)return <p role="status" className="dashboard-role-manager">账号已切换，请重新查询角色。</p>;
- const locked=busy||loading;
+ const locked=!active||busy||loading||!readReady;
  return <div className="dashboard-role-manager">
-  <div className="drm-toolbar"><div><h3>角色管理</h3><p className="drm-subtitle">配置后台页面与操作权限，统一分配给账号</p></div><div className="drm-actions"><button type="button" disabled={locked} onClick={()=>void load()}>{loaded?"刷新列表":"查询角色"}</button><button type="button" className="primary" disabled={locked||!loaded||!owner} onClick={()=>edit(null)}>新建角色</button></div></div>
+  <div className="drm-toolbar"><div><h3>角色管理</h3><p className="drm-subtitle">配置后台页面与操作权限，统一分配给账号</p></div><div className="drm-actions"><button type="button" disabled={!active||busy||loading} onClick={()=>void load()}>{loaded?"刷新列表":"查询角色"}</button><button type="button" className="primary" disabled={locked||!loaded||!owner} onClick={()=>edit(null)}>新建角色</button></div></div>
   {!editor&&!assignment&&!archive&&error&&<p role="alert" className="drm-error">{error}</p>}{message&&<p role="status" className="drm-success">{message}</p>}
   {loading&&<p role="status" className="drm-loading">正在读取角色…</p>}{!loaded&&!loading&&!error&&<p className="drm-empty">点击「查询角色」查看现有配置。</p>}
   <div className="drm-list-filters" aria-label="角色列表筛选"><input aria-label="搜索角色名称或说明" placeholder="搜索角色名称或说明" value={roleSearch} onChange={event=>setRoleSearch(event.target.value)}/><select aria-label="角色状态筛选" value={roleStatus} onChange={event=>setRoleStatus(event.target.value)}><option value="all">全部状态</option><option value="active">启用</option><option value="inactive">已停用</option><option value="fixed">固定角色</option></select><button type="button" disabled={!roleSearch&&roleStatus==="all"} onClick={()=>{setRoleSearch("");setRoleStatus("all")}}>重置角色筛选</button>{loaded&&<span className="drm-filter-count" role="status">显示 {filteredRoles.length+Number(showOwner)} / {roles.length+Number(owner)} 个角色</span>}</div>
   {loaded&&<><div className="drm-table"><table aria-label="角色目录权限矩阵"><thead><tr><th>角色</th>{modules.map(module=><th key={module.id}>{module.label}<small>启用 / 全部权限</small></th>)}<th>账号数</th><th>状态</th><th>操作</th></tr></thead><tbody>
    {showOwner&&<tr className="drm-owner"><td><b>总管理员（Owner）</b><small>固定全部权限</small></td>{modules.map(module=><td key={module.id}>{moduleCodes(module.id).length} / {moduleCodes(module.id).length}</td>)}<td>{accounts.filter(account=>account.role==="owner").length}</td><td>固定</td><td>无需分配</td></tr>}
-   {filteredRoles.map(role=><tr key={role.id}><td><b>{role.name}</b><small>{role.description||"—"}</small></td>{modules.map(module=>{const codes=moduleCodes(module.id);return <td key={module.id}>{codes.filter(code=>role.permissions.includes(code)).length} / {codes.length}</td>;})}<td>{accounts.filter(account=>account.role_id===role.id).length}</td><td>{role.active?"启用":"已停用"}</td><td><div className="drm-actions"><button type="button" disabled={locked||!role.active||!owner} onClick={()=>edit(role)}>配置权限</button><button type="button" disabled={locked||!role.active||!editableAccounts.length||!canAssign||!grantable(role)} onClick={()=>assign("",role.id)}>分配账号</button><button type="button" disabled={locked||!role.active||!owner||accounts.some(account=>account.role_id===role.id)} title={accounts.some(account=>account.role_id===role.id)?"请先将使用此角色的账号分配到其他角色":undefined} onClick={()=>{setError("");setArchive(role)}}>停用角色</button></div></td></tr>)}
+   {filteredRoles.map(role=><tr key={role.id}><td><b>{role.name}</b><small>{role.description||"—"}</small></td>{modules.map(module=>{const codes=moduleCodes(module.id);return <td key={module.id}>{codes.filter(code=>role.permissions.includes(code)).length} / {codes.length}</td>;})}<td>{accounts.filter(account=>account.role_id===role.id).length}</td><td>{role.active?"启用":"已停用"}</td><td><div className="drm-actions"><button type="button" disabled={locked||!role.active||!owner} onClick={()=>edit(role)}>配置权限</button><button type="button" disabled={locked||!role.active||!editableAccounts.length||!canAssign||!grantable(role)} onClick={()=>assign("",role.id)}>分配账号</button><button type="button" disabled={locked||!role.active||!owner||accounts.some(account=>account.role_id===role.id)} title={accounts.some(account=>account.role_id===role.id)?"请先将使用此角色的账号分配到其他角色":undefined} onClick={()=>{if(!activeRef.current||!readyRef.current||dirty.current||readVersion.current!==versionRef.current||busyRef.current||actor.current.identity!==identity)return;setError("");setArchive(role)}}>停用角色</button></div></td></tr>)}
    {!showOwner&&!filteredRoles.length&&<tr><td colSpan={modules.length+4} className="drm-no-results">没有符合筛选条件的角色。</td></tr>}
   </tbody></table></div>{!roles.length&&!roleSearch&&roleStatus==="all"&&<p className="drm-empty">尚未创建自定义角色。</p>}
   </>}
-  {editor&&<AccountEditorDialog title={editor.role?"配置角色 · "+editor.role.name:"新建角色"} busy={locked} onClose={closeEditor} bodyClassName="dashboard-role-editor"><form onSubmit={save}>
+  {active&&editor&&<AccountEditorDialog title={editor.role?"配置角色 · "+editor.role.name:"新建角色"} busy={busy||loading} onClose={closeEditor} bodyClassName="dashboard-role-editor"><form onSubmit={save}>
    <div className="drm-role-fields"><label>角色名称<input aria-label="角色名称" required maxLength={80} disabled={locked} value={editor.draft.name} onChange={event=>setEditor({...editor,draft:{...editor.draft,name:event.target.value}})}/></label><label>角色说明<input aria-label="角色说明" maxLength={500} disabled={locked} value={editor.draft.description} onChange={event=>setEditor({...editor,draft:{...editor.draft,description:event.target.value}})}/></label></div>
    {error&&<p role="alert" className="drm-error">{error}</p>}
    <div className="drm-permission-layout"><nav aria-label="角色权限模块" className="drm-modules">{modules.map(module=>{const codes=moduleCodes(module.id);return <button type="button" key={module.id} aria-pressed={moduleId===module.id} onClick={()=>setModuleId(module.id)}>{module.label}<small>{selectedPermissions.filter(code=>codes.includes(code)).length} / {codes.length}</small></button>;})}</nav>
@@ -114,14 +139,14 @@ export default function DashboardRoleManager({session,profile,manualQuery=true,r
     <p className="drm-help">勾选「查看」后开放对应目录；导出、编辑等操作单独授权。数据范围沿用账号设置，后台账号管理和 IP 白名单按角色单独授权；只能向范围内账号分配自身已有权限的角色。</p>
     <div className="drm-permission-pages">{visiblePages.map(page=><section key={page.id} className="drm-permission-page"><h4>{page.label}</h4><div>{page.actions.map(action=>{const code=page.id+"."+action.id;return <label key={code} className={action.sensitive?"drm-sensitive":""}><input type="checkbox" aria-label={page.label+" · "+action.label} disabled={locked} checked={selectedPermissions.includes(code)} onChange={event=>toggle(code,event.target.checked)}/>{action.label}{action.sensitive&&<small>敏感操作</small>}</label>;})}</div></section>)}{!visiblePages.length&&<p className="drm-empty">当前模块没有匹配的目录。</p>}</div>
     </div></div>
-   <footer className="drm-editor-footer"><span>已启用 {dashboardRoleDisplayPermissionCount(selectedPermissions)} 项权限 · {dashboardRoleDisplayPageCount(selectedPermissions)} 个目录</span><div className="drm-actions"><button type="button" disabled={locked} onClick={closeEditor}>取消</button><button type="submit" className="primary" disabled={locked||!editor.draft.name.trim()}>{busy?"保存中…":"保存角色"}</button></div></footer>
+   <footer className="drm-editor-footer"><span>已启用 {dashboardRoleDisplayPermissionCount(selectedPermissions)} 项权限 · {dashboardRoleDisplayPageCount(selectedPermissions)} 个目录</span><div className="drm-actions"><button type="button" disabled={busy||loading} onClick={closeEditor}>取消</button><button type="submit" className="primary" disabled={locked||!editor.draft.name.trim()}>{busy?"保存中…":"保存角色"}</button></div></footer>
   </form></AccountEditorDialog>}
-  {assignment&&<AccountEditorDialog title="分配角色给现有账号" busy={locked} onClose={()=>{setAssignment(null);setError("")}} bodyClassName="dashboard-role-assignment"><form onSubmit={saveAssignment}>
+  {active&&assignment&&<AccountEditorDialog title="分配角色给现有账号" busy={busy||loading} onClose={()=>{setAssignment(null);setError("")}} bodyClassName="dashboard-role-assignment"><form onSubmit={saveAssignment}>
    {error&&<p role="alert" className="drm-error">{error}</p>}<label>现有账号<select aria-label="选择现有账号" required disabled={locked} value={assignment.accountId} onChange={event=>setAssignment({...assignment,accountId:event.target.value})}><option value="">请选择账号</option>{editableAccounts.map(account=><option key={account.auth_user_id} value={account.auth_user_id}>{account.username}{account.active?"":"（已停用）"}</option>)}</select></label>
    <label>分配角色<select aria-label="选择自定义角色" required disabled={locked} value={assignment.roleId} onChange={event=>setAssignment({...assignment,roleId:event.target.value})}><option value="">请选择角色</option>{activeRoles.map(role=><option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
    {selectedAccount&&<p className="drm-help">当前角色：{roleName(selectedAccount.role_id)} · 数据范围：{dashboardScopeLabel(selectedAccount.data_scope)}<br/>账号状态：{selectedAccount.active?"启用":"停用"}。分配角色后继续使用原来的账号和密码，数据范围沿用账号设置；后台账号管理和 IP 白名单按角色单独授权；只能向范围内账号分配自身已有权限的角色。</p>}
-   <footer className="drm-editor-footer"><span>不能修改本人、总管理员或授予超出自己的权限。</span><div className="drm-actions"><button type="button" disabled={locked} onClick={()=>{setAssignment(null);setError("")}}>取消</button><button type="submit" className="primary" disabled={locked||!selectedAccount||!assignment.roleId||selectedAccount.role_id===assignment.roleId}>{busy?"保存中…":"确认分配"}</button></div></footer>
+   <footer className="drm-editor-footer"><span>不能修改本人、总管理员或授予超出自己的权限。</span><div className="drm-actions"><button type="button" disabled={busy||loading} onClick={()=>{setAssignment(null);setError("")}}>取消</button><button type="submit" className="primary" disabled={locked||!selectedAccount||!assignment.roleId||selectedAccount.role_id===assignment.roleId}>{busy?"保存中…":"确认分配"}</button></div></footer>
   </form></AccountEditorDialog>}
-  {archive&&<AccountEditorDialog title="停用角色" busy={locked} onClose={()=>{setArchive(null);setError("")}} bodyClassName="dashboard-role-assignment">{error&&<p role="alert" className="drm-error">{error}</p>}<p>停用「{archive.name}」后，将不能再分配此角色。现有账号和密码不受影响。</p><div className="drm-actions"><button type="button" disabled={locked} onClick={()=>{setArchive(null);setError("")}}>取消</button><button type="button" disabled={locked} onClick={async()=>{const result=await mutate({operation:"archive",roleId:archive.id,expectedVersion:archive.version});if(result){setArchive(null);setMessage("角色已停用")}}}>{busy?"保存中…":"确认停用角色"}</button></div></AccountEditorDialog>}
+  {active&&archive&&<AccountEditorDialog title="停用角色" busy={busy||loading} onClose={()=>{setArchive(null);setError("")}} bodyClassName="dashboard-role-assignment">{error&&<p role="alert" className="drm-error">{error}</p>}<p>停用「{archive.name}」后，将不能再分配此角色。现有账号和密码不受影响。</p><div className="drm-actions"><button type="button" disabled={busy||loading} onClick={()=>{setArchive(null);setError("")}}>取消</button><button type="button" disabled={locked} onClick={async()=>{const result=await mutate({operation:"archive",roleId:archive.id,expectedVersion:archive.version});if(result){setArchive(null);setMessage("角色已停用")}}}>{busy?"保存中…":"确认停用角色"}</button></div></AccountEditorDialog>}
  </div>;
 }

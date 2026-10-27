@@ -419,19 +419,67 @@ test('account page opens a real list with permitted account and role tabs, keeps
   assert.equal(all.some(n=>n.type?.name==='WorkOrderAccountAdmin'),options.workorder);assert.equal(all.some(n=>n.type?.name==='AdminControlCenter'),!options.workorder&&options.accounts);
   assert(!all.some(n=>n.props?.role==='dialog'||n.props?.['aria-modal']),'page is inline, not another dialog');
   assert(!all.some(n=>n.type==='button'&&/^(关闭|管理后台账号|管理工单账号)$/.test(n.props.children)));
-  const page=all.find(n=>n.props?.className==='owner-preview-account-page');assert.deepEqual(JSON.parse(JSON.stringify(page.props.style)),{top:143,left:242,width:1200});
+  const page=all.find(n=>n.props?.className?.includes('owner-preview-account-workspace'));assert.deepEqual(JSON.parse(JSON.stringify(page.props.style)),{top:143,left:242,width:1200});
   if(options.accounts){tabs[1].props.onClick();tree=h.draw();all=elements(tree);const component=all.find(n=>n.type?.name==='AdminControlCenter');assert(component);assert.equal(component.props.accountsOnlyLoading,true);assert.equal(component.props.section,'accounts');assert.equal(component.props.session,h.session)}else assert(all.some(n=>n.props?.role==='alert'));
   // Old allowlisted commands cannot override the host's current permission gate.
   send({command:'open-workorder-accounts'});assert.equal(elements(h.draw()).some(n=>n.type?.name==='WorkOrderAccountAdmin'),options.workorder);
   send({command:'open-accounts'});assert.equal(elements(h.draw()).some(n=>n.type?.name==='AdminControlCenter'),options.accounts);
   assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);assert.equal(h.calls.length,reads,'switching account tabs does not reload preview');
-  send({command:'account-page',active:false});assert(!elements(h.draw()).some(n=>n.props?.className==='owner-preview-account-page'));assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);
+  send({command:'account-page',active:false});assert.equal(elements(h.draw()).find(n=>n.props?.className?.includes('owner-preview-account-workspace')).props.hidden,true);assert(elements(h.draw()).filter(n=>['AdminControlCenter','WorkOrderAccountAdmin'].includes(n.type?.name)).every(n=>n.props.active===false));assert.equal(findElement(h.draw(),'iframe').props.srcDoc,before);
   send({command:'account-page',active:true,bounds:{top:158,left:242,width:980}});assert.equal(elements(h.draw()).some(n=>n.type?.name==='AdminControlCenter'),options.accounts,'return keeps chosen backend tab');assert.equal(h.calls.length,reads);h.dispose();
  }
 });
 test('wrong-origin, stale-channel and malformed layout messages cannot open host account controls',async()=>{
  const h=componentHarness();await flush();const base={source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command:'account-page',active:true,bounds:{top:120,left:230,width:1100}}};
- for(const event of [{...base,source:{}},{...base,origin:'https://spoof.invalid'},{...base,data:{...base.data,channel:'old'}},{...base,data:{...base.data,bounds:{top:0,left:-1,width:900}}},{...base,data:{...base.data,bounds:{top:0,left:0,width:'100%'}}}]){h.send(event);assert(!elements(h.draw()).some(n=>n.props?.className==='owner-preview-account-page'))}h.dispose();
+ for(const event of [{...base,source:{}},{...base,origin:'https://spoof.invalid'},{...base,data:{...base.data,channel:'old'}},{...base,data:{...base.data,bounds:{top:0,left:-1,width:900}}},{...base,data:{...base.data,bounds:{top:0,left:0,width:'100%'}}}]){h.send(event);assert(!elements(h.draw()).some(n=>n.props?.className?.includes('owner-preview-account-workspace')))}h.dispose();
+});
+
+test('visited account tabs retain separate panels, defer sibling invalidation and leave no account cache in browser storage',async()=>{
+ const h=componentHarness('account-workspace',{commitEffects:true});
+ const send=data=>{h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),...data}});return h.commit()};
+ const component=name=>elements(h.draw()).find(n=>n.type?.name===name);
+ const tab=id=>elements(h.draw()).find(n=>n.props?.id===id);
+ try{
+  await flush();h.commit();const reads=h.calls.length,storage=[...h.values];
+  send({command:'account-page',active:true,bounds:{top:143,left:242,width:1200}});
+  assert(component('WorkOrderAccountAdmin'));assert(!component('AdminControlCenter'));assert(!component('DashboardRoleManager'),'unvisited tabs are not mounted');
+  tab('owner-workorder-panel').props.onScroll({currentTarget:{scrollTop:420}});
+  const workspace=elements(h.draw()).find(n=>n.props?.className?.includes('owner-preview-account-workspace')),key=workspace.key;
+  tab('owner-backend-tab').props.onClick();h.commit();
+  assert.equal(component('WorkOrderAccountAdmin').props.active,false);assert.equal(component('AdminControlCenter').props.active,true);
+  assert.equal(tab('owner-workorder-panel').props.hidden,true);assert.equal(tab('owner-backend-panel').props.hidden,false);
+  tab('owner-workorder-panel').props.onScroll({currentTarget:{scrollTop:0}});tab('owner-backend-panel').props.onScroll({currentTarget:{scrollTop:860}});
+  tab('owner-roles-tab').props.onClick();h.commit();
+  assert.equal(component('AdminControlCenter').props.active,false);assert.equal(component('DashboardRoleManager').props.active,true);
+  assert.equal(elements(h.draw()).filter(n=>n.props?.role==='tabpanel').length,3,'one stable scroll panel per visited tab');
+  component('DashboardRoleManager').props.onDirectoryChanged();h.commit();
+  assert.equal(component('DashboardRoleManager').props.refreshVersion,0);assert.equal(component('AdminControlCenter').props.refreshVersion,1);assert.equal(component('WorkOrderAccountAdmin').props.refreshVersion,0,'backend roles do not invalidate workorder identities');
+  component('WorkOrderAccountAdmin').props.onDirectoryChanged();h.commit();assert.equal(component('AdminControlCenter').props.refreshVersion,1);assert.equal(component('DashboardRoleManager').props.refreshVersion,0,'workorder saves do not invalidate backend directories');
+  tab('owner-backend-tab').props.onClick();h.commit();assert.equal(component('AdminControlCenter').props.active,true);assert.equal(component('AdminControlCenter').props.refreshVersion,1);
+  const backendScroll={scrollTop:0};tab('owner-backend-panel').props.ref(backendScroll);assert.equal(backendScroll.scrollTop,860);
+  const stableRef=tab('owner-backend-panel').props.ref;backendScroll.scrollTop=905;h.commit();assert.equal(tab('owner-backend-panel').props.ref,stableRef,'ordinary authorization rerenders do not reattach the scroll ref');assert.equal(backendScroll.scrollTop,905,'ordinary rerenders do not interrupt scrolling');
+  component('AdminControlCenter').props.onDirectoryChanged();h.commit();assert.equal(component('DashboardRoleManager').props.refreshVersion,1);assert.equal(component('WorkOrderAccountAdmin').props.refreshVersion,0);
+  tab('owner-roles-tab').props.onClick();h.commit();tab('owner-backend-tab').props.onClick();h.commit();assert.equal(component('AdminControlCenter').props.refreshVersion,1,'unchanged navigation does not mark another read');
+  send({command:'account-page',active:false});assert(['AdminControlCenter','WorkOrderAccountAdmin','DashboardRoleManager'].every(name=>component(name).props.active===false));
+  send({command:'account-page',active:true,bounds:{top:158,left:242,width:980}});assert.equal(component('AdminControlCenter').props.active,true);assert.equal(elements(h.draw()).find(n=>n.props?.className?.includes('owner-preview-account-workspace')).key,key);
+  tab('owner-workorder-tab').props.onClick();h.commit();const workorderScroll={scrollTop:0};tab('owner-workorder-panel').props.ref(workorderScroll);assert.equal(workorderScroll.scrollTop,420,'each tab keeps its own scroll position while hidden scroll events are ignored');
+  assert.equal(h.calls.length,reads);assert.deepEqual([...h.values],storage);
+ }finally{h.dispose()}
+});
+
+test('account directory cache is destroyed on actor, scope, management permission and view-access changes',async()=>{
+ for(const change of ['actor','scope','management','view']){
+  const h=componentHarness('account-isolation-'+change,{commitEffects:true,...(['scope','management'].includes(change)?{role:'admin',profile:{data_scope:{mode:'selected',countries:['IN']}}}:{})});
+  try{
+   await flush();h.commit();h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command:'account-page',active:true,bounds:{top:143,left:242,width:1200}}});h.commit();
+   const tab=elements(h.draw()).find(n=>n.props?.id==='owner-backend-tab');tab.props.onClick();h.commit();assert(elements(h.draw()).some(n=>n.type?.name==='AdminControlCenter'));
+   if(change==='actor')h.rerenderSession({...h.session,user:{id:'different-account'}});
+   else if(change==='scope')h.rerenderProps({profile:{...h.profile(),data_scope:{mode:'selected',countries:['VN']}}});
+   else if(change==='management')h.rerenderProps({profile:{...h.profile(),management_permissions:{manage_viewers:false}}});
+   else h.rerenderProps({canView:false});
+   assert(!elements(h.draw()).some(n=>n.type?.name==='AdminControlCenter'),change+' cannot retain the previous directory');
+  }finally{h.dispose()}
+ }
 });
 test('WG data stays in the existing formal iframe with no separate workspace or entry',async()=>{
  for(const options of [{role:'owner'},{role:'viewer',permissions:{auto_withdraw:true}},{role:'admin'}]){
@@ -537,6 +585,26 @@ test('an extended outage retains hidden state and reconnects with fresh HTML; de
 
 const deferredRead=()=>{let resolve;const promise=new Promise(r=>{resolve=r});return {promise,resolve}};
 const protectedResponse=html=>({ok:true,status:200,text:async()=>html,json:async()=>({ok:true,canView:true,canManage:true})});
+test('suspended account workspace discards all directories and reopens only its current tab after unchanged-frame verification',async()=>{
+ const clock=retryClock();let failNext=false;
+ const h=componentHarness('account-reverification',{commitEffects:true,...clock,fetch:async()=>{if(failNext){failNext=false;return{ok:false,status:503,json:async()=>({code:'profile_unavailable'})}}return protectedResponse(HTML)}});
+ const send=data=>{h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),...data}});return h.commit()};
+ try{
+  await flush();h.commit();const source=h.child;
+  send({command:'account-page',active:true,bounds:{top:143,left:242,width:1200}});
+  elements(h.draw()).find(n=>n.props?.id==='owner-backend-tab').props.onClick();h.commit();
+  elements(h.draw()).find(n=>n.props?.id==='owner-backend-panel').props.onScroll({currentTarget:{scrollTop:720}});
+  assert.equal(elements(h.draw()).filter(n=>n.props?.role==='tabpanel').length,2);
+  failNext=true;h.checkPermission();await flush();h.commit();
+  assert(!elements(h.draw()).some(n=>n.props?.className?.includes('owner-preview-account-workspace')));
+  clock.next();await flush();h.commit();
+  assert.equal(h.child,source,'frame geometry did not change and need not be sent again');
+  const panels=elements(h.draw()).filter(n=>n.props?.role==='tabpanel');assert.equal(panels.length,1);assert.equal(panels[0].props.id,'owner-backend-panel');
+  const scroll={scrollTop:720};panels[0].props.ref(scroll);assert.equal(scroll.scrollTop,0,'reverification does not revive old directory scroll state');
+  assert.equal(elements(h.draw()).find(n=>n.type?.name==='AdminControlCenter').props.active,true);
+  assert(!elements(h.draw()).some(n=>n.type?.name==='WorkOrderAccountAdmin'),'the inactive pre-verification directory is not revived');
+ }finally{h.dispose()}
+});
 const liveEnvelope=(h,id,source=h.child,channel=h.channel())=>({source,origin:'null',data:{type:'hensem-admin-live-request',id,channel,request:{action:'catalog'},page:'overview'}});
 function assertBridgeCounts(h,count){
  assert.equal(h.activeBridges('live'),count);assert.equal(h.activeBridges('presence'),count);assert.equal(h.presenceSubscribers(),count);

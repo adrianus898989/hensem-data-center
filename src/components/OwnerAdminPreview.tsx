@@ -20,6 +20,9 @@ import { dashboardScopeIdentity, effectiveDashboardDataScope } from "@/lib/dashb
 import { installDashboardReleaseCheck } from "@/lib/dashboardRelease";
 
 type Props = { canView:boolean; session: DashboardSession; profile: DashboardProfile; onLogout: () => void };
+type AccountView = "accounts" | "workorder" | "roles";
+type AccountBounds = {top:number;left:number;width:number};
+type AccountWorkspace = {identity:string;bounds:AccountBounds;visited:AccountView[];versions:Record<AccountView,number>};
 export default function OwnerAdminPreview({session,profile,onLogout,canView}: Props) {
   const frame=useRef<HTMLIFrameElement>(null),channel=useRef("");
   const sessionRef=useRef(session);sessionRef.current=session;
@@ -30,12 +33,37 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   const [roleAccess,setRoleAccess]=useState<DashboardRoleAccess|null>(null);
   const [documentHtml,setDocumentHtml]=useState(""),[error,setError]=useState(""),[reload,setReload]=useState(0);
   const allowed=profile.active===true&&canView&&session.user.id===accountId,owner=profile.active===true&&profile.role==="owner";
-  const [accountView,setAccountView]=useState<"accounts"|"workorder"|"roles"|null>(null);
+  const [accountView,setAccountView]=useState<AccountView|null>(null);
   const [securityBounds,setSecurityBounds]=useState<{top:number;left:number;width:number}|null>(null);
   const [accountBounds,setAccountBounds]=useState<{top:number;left:number;width:number}|null>(null);
   const canManageAccounts=profile.active===true&&(owner||(roleAccess?.mode==="assigned"?dashboardRoleAllows(roleAccess,"access"):profile.role==="admin"&&normalizedManagementPermissions(profile).manage_viewers));
   const canViewRoles=owner||roleAccess?.mode==="assigned"&&dashboardRoleAllows(roleAccess,"access");
   const activeAccountView=accountView||(owner?"workorder":"accounts");
+  const [accountWorkspace,setAccountWorkspace]=useState<AccountWorkspace|null>(null);
+  const directoryIdentity=JSON.stringify([accountId,scopeIdentity,profile.role,normalizedManagementPermissions(profile),roleAccess]);
+  const accountScrollRef=useRef<{identity:string;positions:Partial<Record<AccountView,number>>}>({identity:directoryIdentity,positions:{}});
+  if(accountScrollRef.current.identity!==directoryIdentity)accountScrollRef.current={identity:directoryIdentity,positions:{}};
+  const accountViewRef=useRef(activeAccountView);accountViewRef.current=activeAccountView;
+  const directoryIdentityRef=useRef(directoryIdentity);directoryIdentityRef.current=directoryIdentity;
+  const visitAccountView=(view:AccountView)=>{setAccountView(view);setAccountWorkspace(current=>current?.identity===directoryIdentityRef.current&&!current.visited.includes(view)?{...current,visited:[...current.visited,view]}:current)};
+  const rememberAccountPage=(bounds:AccountBounds)=>setAccountWorkspace(current=>{
+    const identity=directoryIdentityRef.current,view=accountViewRef.current;
+    if(current?.identity===identity&&current.bounds===bounds&&current.visited.includes(view))return current;
+    return current?.identity===identity?{...current,bounds,visited:current.visited.includes(view)?current.visited:[...current.visited,view]}:{identity,bounds,visited:[view],versions:{accounts:0,workorder:0,roles:0}};
+  });
+  const directoryChanged=(source:AccountView)=>setAccountWorkspace(current=>{
+    if(source==="workorder"||!current||current.identity!==directoryIdentity)return current;
+    // Backend role assignment/counts share a directory; workorder identities do not.
+    const sibling=source==="accounts"?"roles":"accounts";
+    return {...current,versions:{...current.versions,[sibling]:current.versions[sibling]+1}};
+  });
+  const accountPanels=useRef<Partial<Record<AccountView,HTMLDivElement>>>({});
+  const workorderPanelRef=useCallback((node:HTMLDivElement|null)=>{accountPanels.current.workorder=node;if(node)node.scrollTop=accountScrollRef.current.positions.workorder||0},[]);
+  const backendPanelRef=useCallback((node:HTMLDivElement|null)=>{accountPanels.current.accounts=node;if(node)node.scrollTop=accountScrollRef.current.positions.accounts||0},[]);
+  const rolesPanelRef=useCallback((node:HTMLDivElement|null)=>{accountPanels.current.roles=node;if(node)node.scrollTop=accountScrollRef.current.positions.roles||0},[]);
+  const accountPageVisible=!!accountBounds;
+  useEffect(()=>{const node=accountPanels.current[activeAccountView];if(accountPageVisible&&node)node.scrollTop=accountScrollRef.current.positions[activeAccountView]||0},[accountPageVisible,activeAccountView,directoryIdentity]);
+  const rememberAccountScroll=(view:AccountView,top:number)=>{if(accountBounds&&activeAccountView===view&&accountScrollRef.current.identity===directoryIdentity)accountScrollRef.current.positions[view]=top};
   const [verificationStatus,setVerificationStatus]=useState("");
   const [suspended,setSuspended]=useState(false);
   const [releaseAvailable,setReleaseAvailable]=useState(false);
@@ -43,13 +71,14 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
   const accessDeniedRef=useRef<((kind:AdminLiveAccessDenial)=>void)|null>(null);
 
   useEffect(()=>mountOwnerPreviewHostShell(),[]);
+  useEffect(()=>{setAccountWorkspace(current=>current&&current.identity!==directoryIdentity?null:current)},[directoryIdentity]);
   const storagePrefix=`hensem:owner-preview:${profile.auth_user_id}:`;
   const readDrafts=useCallback(()=>{const values:Record<string,string>={};for(const key of OWNER_PREVIEW_DRAFT_KEYS){try{const value=localStorage.getItem(storagePrefix+key);if(value!==null&&ownerPreviewDraftAllowed(key,value))values[key]=value}catch{}}return values},[storagePrefix]);
   useEffect(()=>{
     const stopBridges=()=>{liveStopRef.current?.();liveStopRef.current=null;presenceStopRef.current?.();presenceStopRef.current=null};
-    const suspendPreview=()=>{suspendedRef.current=true;setSuspended(true);stopBridges();roleAccessRef.current=null;setRoleAccess(null)};
+    const suspendPreview=()=>{suspendedRef.current=true;setSuspended(true);stopBridges();roleAccessRef.current=null;setRoleAccess(null);setAccountWorkspace(null);accountScrollRef.current.positions={}};
     const clearPreview=()=>{stopBridges();suspendedRef.current=false;setSuspended(false);
-      setDocumentHtml("");roleAccessRef.current=null;setRoleAccess(null);setAccountBounds(null);setSecurityBounds(null);setAccountView(null)};
+      setDocumentHtml("");roleAccessRef.current=null;setRoleAccess(null);setAccountBounds(null);setSecurityBounds(null);setAccountView(null);setAccountWorkspace(null);accountScrollRef.current.positions={}};
     clearPreview();setError("");setVerificationStatus("");if(!allowed)return;
     let cancelled=false,checking=false,retrying=false,revision=0,published=false,accessRechecked=false;
     let publishedPolicy="",publishedSource="";const controller=new AbortController();
@@ -125,8 +154,11 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
     const focused=()=>{if(document.visibilityState==="visible")verify()};document.addEventListener("visibilitychange",focused);
     return()=>{cancelled=true;accessDeniedRef.current=null;reconnectRef.current=null;stopBridges();controller.abort();window.clearInterval(timer);window.removeEventListener("online",verify);document.removeEventListener("visibilitychange",focused)};
   },[allowed,accountId,reload,readDrafts,owner,scopeIdentity]);
-  useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{if(suspendedRef.current||!roleAccessRef.current)return;const data=event.data;const activity=ownerPreviewActivityTime(event,frame.current?.contentWindow,channel.current);if(activity!==null){recordDashboardActivity(activity);return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){setAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);return}const securityPage=ownerPreviewSecurityPage(event,frame.current?.contentWindow,channel.current);if(securityPage){setSecurityBounds(securityPage.active?securityPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,canManageAccounts,owner]);
+  useEffect(()=>{if(!allowed)return;const receive=(event:MessageEvent)=>{if(suspendedRef.current||!roleAccessRef.current)return;const data=event.data;const activity=ownerPreviewActivityTime(event,frame.current?.contentWindow,channel.current);if(activity!==null){recordDashboardActivity(activity);return}const accountCommand=ownerPreviewAccountCommand(event,frame.current?.contentWindow,channel.current);if(accountCommand){visitAccountView(accountCommand==="open-accounts"?"accounts":"workorder");return}const accountPage=ownerPreviewAccountPage(event,frame.current?.contentWindow,channel.current);if(accountPage){setAccountBounds(accountPage.active?accountPage.bounds:null);if(accountPage.active)rememberAccountPage(accountPage.bounds);return}const securityPage=ownerPreviewSecurityPage(event,frame.current?.contentWindow,channel.current);if(securityPage){setSecurityBounds(securityPage.active?securityPage.bounds:null);return}if(event.source!==frame.current?.contentWindow||event.origin!=="null"||data?.type!=="hensem-owner-preview-draft"||data.channel!==channel.current||!ownerPreviewDraftAllowed(data.key,data.value))return;try{if(data.value===null)localStorage.removeItem(storagePrefix+data.key);else localStorage.setItem(storagePrefix+data.key,data.value)}catch{setError("当前浏览器无法保存草稿；页面内可继续查看，请导出后备份。")}};window.addEventListener("message",receive);return()=>window.removeEventListener("message",receive)},[allowed,storagePrefix,canManageAccounts,owner]);
   const hasDocument=Boolean(documentHtml);
+  // Reverification clears directories even when the iframe is reused. Its layout
+  // bridge may have no new geometry to send, so reopen only the currently visible tab.
+  useEffect(()=>{if(allowed&&hasDocument&&!suspended&&accountBounds&&dashboardRoleAllows(roleAccess,"access"))rememberAccountPage(accountBounds)},[allowed,hasDocument,suspended,accountBounds,directoryIdentity]);
   useEffect(()=>{
     setReleaseAvailable(false);
     if(!allowed||!hasDocument||suspended)return;
@@ -145,15 +177,16 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
     </div>}
     {allowed&&documentHtml&&<iframe key={channel.current} ref={frame} title="数据中控后台" sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" srcDoc={documentHtml} style={suspended?{display:"none"}:undefined} aria-hidden={suspended||undefined} className="owner-preview-shell-frame"/>}
     {(!allowed||!documentHtml||suspended)&&<div role={error?"alert":"status"} className="owner-preview-shell-status">{!allowed?"当前账号没有后台查看权限":error||verificationStatus||"正在验证查看权限并加载后台…"}<div className="owner-preview-shell-status-actions"><button type="button" className="owner-preview-shell-return" onClick={onLogout}>退出登录</button>{error&&<button type="button" className="owner-preview-shell-return" onClick={()=>suspended&&documentHtml?reconnectRef.current?.():setReload(x=>x+1)}>{suspended&&documentHtml?"重新连接":"重新加载"}</button>}</div></div>}
-    {allowed&&hasDocument&&!suspended&&accountBounds&&dashboardRoleAllows(roleAccess,"access")&&<section aria-label="账号与角色权限" className="owner-preview-account-page" style={{top:Math.max(48,accountBounds.top),left:accountBounds.left,width:accountBounds.width}}>
+    {allowed&&hasDocument&&!suspended&&accountWorkspace&&accountWorkspace.identity===directoryIdentity&&dashboardRoleAllows(roleAccess,"access")&&<section key={accountWorkspace.identity} aria-label="账号与角色权限" className="owner-preview-account-page owner-preview-account-workspace" hidden={!accountBounds} style={{top:Math.max(48,accountWorkspace.bounds.top),left:accountWorkspace.bounds.left,width:accountWorkspace.bounds.width}}>
       <div role="tablist" aria-label="账号类型" className="owner-preview-account-tabs">
-        <button type="button" role="tab" id="owner-workorder-tab" aria-controls="owner-workorder-panel" aria-selected={activeAccountView==="workorder"} disabled={!owner} title={owner?undefined:"仅总管理员可管理前端工单账号"} onClick={()=>setAccountView("workorder")}>前端工单账号</button>
-        <button type="button" role="tab" id="owner-backend-tab" aria-controls="owner-backend-panel" aria-selected={activeAccountView==="accounts"} disabled={!canManageAccounts} onClick={()=>setAccountView("accounts")}>后台账号</button>
-        {canViewRoles&&<button type="button" role="tab" id="owner-roles-tab" aria-controls="owner-roles-panel" aria-selected={activeAccountView==="roles"} onClick={()=>setAccountView("roles")}>角色管理</button>}
+        <button type="button" role="tab" id="owner-workorder-tab" aria-controls="owner-workorder-panel" aria-selected={activeAccountView==="workorder"} disabled={!owner} title={owner?undefined:"仅总管理员可管理前端工单账号"} onClick={()=>visitAccountView("workorder")}>前端工单账号</button>
+        <button type="button" role="tab" id="owner-backend-tab" aria-controls="owner-backend-panel" aria-selected={activeAccountView==="accounts"} disabled={!canManageAccounts} onClick={()=>visitAccountView("accounts")}>后台账号</button>
+        {canViewRoles&&<button type="button" role="tab" id="owner-roles-tab" aria-controls="owner-roles-panel" aria-selected={activeAccountView==="roles"} onClick={()=>visitAccountView("roles")}>角色管理</button>}
       </div>
-      <div role="tabpanel" id={activeAccountView==="workorder"?"owner-workorder-panel":activeAccountView==="roles"?"owner-roles-panel":"owner-backend-panel"} aria-labelledby={activeAccountView==="workorder"?"owner-workorder-tab":activeAccountView==="roles"?"owner-roles-tab":"owner-backend-tab"} className="owner-preview-account-body">
-        {activeAccountView==="roles"&&canViewRoles?<DashboardRoleManager key={accountId} session={session} profile={profile} roleAccess={roleAccess}/>:activeAccountView==="accounts"&&canManageAccounts?<AdminControlCenter key={accountId} open session={session} profile={profile} roleAccess={roleAccess} section="accounts" embedded accountsOnlyLoading manualQuery onClose={()=>{}}/>:activeAccountView==="workorder"&&owner?<WorkOrderAccountAdmin key={accountId} session={session} manualQuery/>:<p role="alert" className="owner-preview-account-denied">当前账号没有此项账号管理权限。</p>}
-      </div>
+      {accountWorkspace.visited.includes("workorder")&&owner&&<div role="tabpanel" id="owner-workorder-panel" aria-labelledby="owner-workorder-tab" hidden={!accountBounds||activeAccountView!=="workorder"} className="owner-preview-account-body" ref={workorderPanelRef} onScroll={event=>rememberAccountScroll("workorder",event.currentTarget.scrollTop)}><WorkOrderAccountAdmin session={session} onAccessDenied={()=>accessDeniedRef.current?.("permission")} manualQuery active={!!accountBounds&&activeAccountView==="workorder"} refreshVersion={accountWorkspace.versions.workorder} onDirectoryChanged={()=>directoryChanged("workorder")}/></div>}
+      {accountWorkspace.visited.includes("accounts")&&canManageAccounts&&<div role="tabpanel" id="owner-backend-panel" aria-labelledby="owner-backend-tab" hidden={!accountBounds||activeAccountView!=="accounts"} className="owner-preview-account-body" ref={backendPanelRef} onScroll={event=>rememberAccountScroll("accounts",event.currentTarget.scrollTop)}><AdminControlCenter open session={session} onAccessDenied={()=>accessDeniedRef.current?.("permission")} profile={profile} roleAccess={roleAccess} section="accounts" embedded accountsOnlyLoading manualQuery active={!!accountBounds&&activeAccountView==="accounts"} refreshVersion={accountWorkspace.versions.accounts} onDirectoryChanged={()=>directoryChanged("accounts")} onClose={()=>{}}/></div>}
+      {accountWorkspace.visited.includes("roles")&&canViewRoles&&<div role="tabpanel" id="owner-roles-panel" aria-labelledby="owner-roles-tab" hidden={!accountBounds||activeAccountView!=="roles"} className="owner-preview-account-body" ref={rolesPanelRef} onScroll={event=>rememberAccountScroll("roles",event.currentTarget.scrollTop)}><DashboardRoleManager session={session} onAccessDenied={()=>accessDeniedRef.current?.("permission")} profile={profile} roleAccess={roleAccess} active={!!accountBounds&&activeAccountView==="roles"} refreshVersion={accountWorkspace.versions.roles} onDirectoryChanged={()=>directoryChanged("roles")}/></div>}
+      {((activeAccountView==="workorder"&&!owner)||(activeAccountView==="accounts"&&!canManageAccounts)||(activeAccountView==="roles"&&!canViewRoles))&&<p role="alert" className="owner-preview-account-denied">当前账号没有此项账号管理权限。</p>}
     </section>}
 
     {allowed&&hasDocument&&!suspended&&securityBounds&&dashboardRoleAllows(roleAccess,"ip")&&<section aria-label="IP 白名单" className="owner-preview-account-page" style={{top:Math.max(48,securityBounds.top),left:securityBounds.left,width:securityBounds.width}}><div className="owner-preview-account-body"><AccountIpAdmin key={accountId} session={session}/></div></section>}

@@ -44,6 +44,10 @@ type Props = {
   embedded?: boolean;
   accountsOnlyLoading?: boolean;
   manualQuery?: boolean;
+  active?: boolean;
+  refreshVersion?: number;
+  onDirectoryChanged?: () => void;
+  onAccessDenied?: () => void;
   roleAccess?: DashboardRoleAccess | null;
 };
 
@@ -295,7 +299,7 @@ function localDateKey(value: string): string {
   return `${y}-${m}-${d}`;
 }
 
-export default function AdminControlCenter({ open, session, profile, onClose, section = "accounts", embedded = false, accountsOnlyLoading = false, manualQuery = false, roleAccess }: Props) {
+export default function AdminControlCenter({ open, session, profile, onClose, section = "accounts", embedded = false, accountsOnlyLoading = false, manualQuery = false, roleAccess, active = true, refreshVersion = 0, onDirectoryChanged, onAccessDenied }: Props) {
   const management = normalizedManagementPermissions(profile);
   const isOwner = profile.role === "owner";
   const hasAllData = effectiveDashboardDataScope(profile).mode === "all";
@@ -317,9 +321,17 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   const [userRows, setUsers] = useState<DashboardProfile[]>([]);
   const [logs, setLogs] = useState<DashboardAuditLog[]>([]);
   const directoryScope = JSON.stringify([session.user.id, profile.auth_user_id, profile.active, profile.role, actorDataScopeKey, management.manage_viewers, roleAccess]);
-  const mutation = useRef({scope: directoryScope, open, section, mounted: true, active: null as object | null});
-  if (mutation.current.scope !== directoryScope || mutation.current.open !== open || mutation.current.section !== section) {
-    mutation.current = {scope: directoryScope, open, section, mounted: true, active: null};
+  const dirty = useRef({scope:directoryScope,users:false,roles:false,version:refreshVersion});
+  if (dirty.current.scope !== directoryScope) dirty.current = {scope:directoryScope,users:false,roles:false,version:refreshVersion};
+  const rolesVersionChanged = dirty.current.version !== refreshVersion;
+  if (rolesVersionChanged) { dirty.current.version = refreshVersion; dirty.current.roles = true; }
+  const pendingWrites = useRef({scope:directoryScope,tokens:new Set<object>()});
+  if (pendingWrites.current.scope !== directoryScope) pendingWrites.current = {scope:directoryScope,tokens:new Set<object>()};
+  const deniedScope = useRef<string | null>(null);
+  const mutation = useRef({scope: directoryScope, open, section, viewActive:active, mounted: true, active: null as object | null});
+  if (mutation.current.scope !== directoryScope || mutation.current.open !== open || mutation.current.section !== section || mutation.current.viewActive !== active) {
+    if (mutation.current.scope === directoryScope && mutation.current.active) { if (!(mutation.current.active as {rolesOnly?:boolean}).rolesOnly) dirty.current.users = true; dirty.current.roles = true; }
+    mutation.current = {scope: directoryScope, open, section, viewActive:active, mounted: true, active: null};
   }
   const lifecycle = mutation.current;
   const [directory, setDirectory] = useState<{ scope: string; status: "idle" | "loading" | "refreshing" | "ready" | "error"; error: string }>({ scope: "", status: "idle", error: "" });
@@ -330,25 +342,27 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     request.current.controller?.abort();
     request.current = { scope: directoryScope, serial: request.current.serial + 1, pending: null, controller: null };
   }
+  if (rolesVersionChanged) { roleRequest.current.serial += 1; roleRequest.current.controller?.abort(); roleRequest.current.pending = null; }
   const directoryStatus = directory.scope === directoryScope ? directory.status : "idle";
   const directoryReady = directoryStatus === "ready" || directoryStatus === "refreshing";
   const loading = directoryStatus === "loading" || directoryStatus === "refreshing";
   const users = directoryReady ? userRows : [];
-  const accountWritesReady = directoryReady && !loading && !directory.error && roleDirectory.scope === directoryScope && roleDirectory.status === "ready";
+  const accountWritesReady = active && pendingWrites.current.tokens.size === 0 && directoryReady && !loading && !directory.error && roleDirectory.scope === directoryScope && roleDirectory.status === "ready";
   useEffect(() => {
     const owned = [directoryRequest.current, roleRequest.current];
-    const matching = () => mutation.current.scope === directoryScope && mutation.current.open === open && mutation.current.section === section;
+    const matching = () => mutation.current.scope === directoryScope && mutation.current.open === open && mutation.current.section === section && mutation.current.viewActive === active;
     if (matching()) mutation.current.mounted = true;
-    if (!open || owned.some(request => request.controller?.signal.aborted)) {
+    if (!open || !active || owned.some(request => request.controller?.signal.aborted)) {
       setDirectory(previous => previous.scope !== directoryScope || !["loading", "refreshing"].includes(previous.status) ? previous
-        : {...previous, status: previous.status === "refreshing" ? "ready" : "idle", error: previous.status === "refreshing" ? "读取已取消，请刷新确认。" : ""});
-      setRoleDirectory(previous => previous.scope === directoryScope && ["loading", "refreshing"].includes(previous.status) ? {scope: directoryScope, status: "error"} : previous);
+        : {...previous, status: previous.status === "refreshing" ? "ready" : "idle", error: ""});
+      setRoleDirectory(previous => previous.scope === directoryScope && ["loading", "refreshing"].includes(previous.status) ? {...previous,status:previous.data ? "ready" : "error"} : previous);
     }
     return () => {
       if (matching()) { mutation.current.mounted = false; mutation.current.active = null; }
       owned.forEach(request => { request.serial += 1; request.controller?.abort(); request.pending = null; });
     };
-  }, [directoryScope, open, section]);
+  }, [directoryScope, open, section, active]);
+  const [recoveryRevision,setRecoveryRevision] = useState(0);
   const [message, setMessage] = useState("");
   const [newRoleId, setNewRoleId] = useState("");
   const [newUsername, setNewUsername] = useState("");
@@ -401,11 +415,11 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   }
 
   function accountRoleEntry(user: DashboardProfile) {
-    const data=roleDirectory.scope===directoryScope&&roleDirectory.status==="ready"?roleDirectory.data:undefined;
+    const data=roleDirectory.scope===directoryScope&&["ready","refreshing"].includes(roleDirectory.status)?roleDirectory.data:undefined;
     return data?.accounts?.find(account=>account.auth_user_id===user.auth_user_id&&account.username===user.username&&account.role===user.role);
   }
   function accountAssignedRole(user: DashboardProfile): DashboardCustomRole | undefined {
-    const data=roleDirectory.scope===directoryScope&&roleDirectory.status==="ready"?roleDirectory.data:undefined;
+    const data=roleDirectory.scope===directoryScope&&["ready","refreshing"].includes(roleDirectory.status)?roleDirectory.data:undefined;
     const account=accountRoleEntry(user);
     return account?.role_id?data?.roles?.find(role=>role.id===account.role_id):undefined;
   }
@@ -470,20 +484,69 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     return [401, 403].includes(detail?.status || 0) || ["unauthorized", "forbidden", "actor_changed", "session_changed", "session_logged_out", "application_session_denied"].includes(detail?.code || "");
   }
 
-  function claimMutation() {
-    if (!open || !lifecycle.mounted || mutation.current !== lifecycle || mutation.current.active) return null;
-    const token = {};
+  function claimMutation(rolesOnly = false) {
+    if (!active || !open || !lifecycle.mounted || mutation.current !== lifecycle || mutation.current.active || pendingWrites.current.tokens.size) return null;
+    const token = {rolesOnly};
     mutation.current.active = token;
+    pendingWrites.current.tokens.add(token);
     return token;
   }
-  function mutationCurrent(token: object) { return lifecycle.mounted && mutation.current === lifecycle && lifecycle.active === token; }
+  function mutationCurrent(token: object) { return active && lifecycle.mounted && mutation.current === lifecycle && lifecycle.active === token; }
   function releaseMutation(token: object) {
+    if (pendingWrites.current.scope === directoryScope) pendingWrites.current.tokens.delete(token);
     if (!mutationCurrent(token)) return false;
     lifecycle.active = null;
+    if (dirty.current.users || dirty.current.roles) setRecoveryRevision(value => value + 1);
     return true;
   }
 
+  function supersedeDirectoryReads() {
+    for (const request of [directoryRequest.current,roleRequest.current]) {
+      request.serial += 1;request.controller?.abort();request.pending=null;
+    }
+    setDirectory(previous => previous.scope === directoryScope && previous.status === "refreshing" ? {...previous,status:"ready"} : previous);
+    setRoleDirectory(previous => previous.scope === directoryScope && previous.data && previous.status === "refreshing" ? {...previous,status:"ready"} : previous);
+  }
+
+  function unobservedMutation(rolesOnly = false) {
+    if (deniedScope.current === directoryScope || !mutation.current.mounted || mutation.current.scope !== directoryScope || mutation.current.section !== section) return;
+    if (!rolesOnly) dirty.current.users = true;
+    dirty.current.roles = true;setRecoveryRevision(value => value + 1);
+  }
+
+  function notifyConfirmedDirectoryChange() {
+    if (mutation.current.mounted && mutation.current.scope === directoryScope) onDirectoryChanged?.();
+  }
+
+  function beginAssignedRoleMutation() {
+    const token = claimMutation(true);
+    return token ? () => { releaseMutation(token); } : null;
+  }
+
+  function acceptProfile(account: DashboardProfile) {
+    setUsers(previous => previous.some(row => row.auth_user_id === account.auth_user_id)
+      ? previous.map(row => row.auth_user_id === account.auth_user_id ? account : row) : [...previous,account]);
+    setRoleDirectory(previous => previous.scope !== directoryScope || !previous.data ? previous : {...previous,data:{...previous.data,
+      accounts:previous.data.accounts?.map(row => row.auth_user_id === account.auth_user_id
+        ? {...row,username:account.username,role:account.role,active:account.active,data_scope:account.data_scope} : row)}});
+  }
+
+  function savedAssignedRole(account: DashboardRoleAccount) {
+    if (!active || !lifecycle.mounted || mutation.current !== lifecycle) return;
+    const previous = roleDirectory.data?.accounts?.find(row => row.auth_user_id === account.auth_user_id);
+    if (!previous || account.username !== previous.username || account.assignment_version <= previous.assignment_version)
+      throw new Error("角色分配结果待核对，请刷新角色目录确认。");
+    supersedeDirectoryReads();
+    setRoleDirectory(current => current.scope !== directoryScope || !current.data ? current : {...current,data:{...current.data,
+      accounts:current.data.accounts?.map(row => row.auth_user_id === account.auth_user_id ? account : row)}});
+    setUsers(rows => rows.map(row => row.auth_user_id === account.auth_user_id ? {...row,role:account.role,active:account.active,data_scope:normalizeDashboardDataScope(account.data_scope)} : row));
+    onDirectoryChanged?.();
+  }
+
   function denyDirectory(error: unknown) {
+    if (!mutation.current.mounted || mutation.current.scope !== directoryScope) return;
+    deniedScope.current = directoryScope;
+    dirty.current.users = false; dirty.current.roles = false;
     mutation.current = {...mutation.current, active: null};
     for (const request of [directoryRequest.current, roleRequest.current]) {
       request.serial += 1; request.controller?.abort(); request.pending = null;
@@ -493,12 +556,13 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     setRoleDirectory({scope: directoryScope, status: "error"});
     setCreateBusy(false); setSavingUser("");
     setCreateOpen(false); setNewPassword(""); setResetPassword(""); setEditingUsername(""); setSecurityTarget(null);
+    onAccessDenied?.();
   }
 
-  function loadRoles(afterWrite = false): Promise<void> {
-    if (!canManageUsers || !canUseAccountAction("view") || !open || !lifecycle.mounted || mutation.current !== lifecycle || !profile.active || profile.auth_user_id !== session.user.id || !canEnterAdmin || roleRequest.current.scope !== directoryScope) return Promise.resolve();
+  function loadRoles(): Promise<void> {
+    if (!canManageUsers || !canUseAccountAction("view") || !active || !open || !lifecycle.mounted || mutation.current !== lifecycle || pendingWrites.current.tokens.size > 0 && !mutation.current.active || !profile.active || profile.auth_user_id !== session.user.id || !canEnterAdmin || roleRequest.current.scope !== directoryScope) return Promise.resolve();
     const request = roleRequest.current;
-    if (request.pending && !afterWrite) return request.pending;
+    if (request.pending) return request.pending;
     request.controller?.abort();
     const serial = ++request.serial, controller = new AbortController();
     request.controller = controller;
@@ -507,7 +571,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     const pending = (async () => {
       try {
         const data = await dashboardRoleRequest(session, {operation: "list"}, controller.signal);
-        if (current()) setRoleDirectory({scope: directoryScope, status: "ready", data});
+        if (current()) { dirty.current.roles = false; setRoleDirectory({scope: directoryScope, status: "ready", data}); }
       } catch (error) {
         if (!current()) return;
         if (directoryDenied(error)) { denyDirectory(error); return; }
@@ -518,22 +582,22 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     return pending;
   }
 
-  function loadUsers(afterWrite = false): Promise<void> {
-    if (!canUseAccountAction("view") || !open || !lifecycle.mounted || mutation.current !== lifecycle || !profile.active || profile.auth_user_id !== session.user.id || !canEnterAdmin || directoryRequest.current.scope !== directoryScope) return Promise.resolve();
+  function loadUsers(): Promise<void> {
+    if (!canUseAccountAction("view") || !active || !open || !lifecycle.mounted || mutation.current !== lifecycle || pendingWrites.current.tokens.size > 0 && !mutation.current.active || !profile.active || profile.auth_user_id !== session.user.id || !canEnterAdmin || directoryRequest.current.scope !== directoryScope) return Promise.resolve();
     const request = directoryRequest.current;
-    if (request.pending && !afterWrite) return request.pending;
+    if (request.pending) return request.pending;
     request.controller?.abort();
     const serial = ++request.serial, controller = new AbortController();
     request.controller = controller;
     const current = () => lifecycle.mounted && mutation.current === lifecycle && directoryRequest.current === request && request.serial === serial && !controller.signal.aborted;
     const retain = directoryReady;
     setDirectory({scope: directoryScope, status: retain ? "refreshing" : "loading", error: ""});
-    void loadRoles(afterWrite);
+    void loadRoles();
     const pending = (async () => {
       try {
         const rows = await listDashboardUsers(session, controller.signal);
         if (!current()) return;
-        setUsers(rows); setDirectory({scope: directoryScope, status: "ready", error: ""});
+        deniedScope.current = null; dirty.current.users = false; setUsers(rows); setDirectory({scope: directoryScope, status: "ready", error: ""});
       } catch (error) {
         if (!current()) return;
         if (directoryDenied(error)) { denyDirectory(error); return; }
@@ -546,13 +610,14 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   }
 
   async function loadAudit() {
-    if (accountsOnlyLoading || !canViewAudit) return;
-    try { setLogs(await listDashboardAudit(session, 300)); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "读取操作记录失败"); }
+    if (!active || !open || !lifecycle.mounted || mutation.current !== lifecycle || accountsOnlyLoading || !canViewAudit) return;
+    const current=()=>lifecycle.mounted&&mutation.current===lifecycle;
+    try { const rows=await listDashboardAudit(session, 300);if(current())setLogs(rows); }
+    catch (error) { if(current())setMessage(error instanceof Error ? error.message : "读取操作记录失败"); }
   }
 
   async function loadHistoryStatus() {
-    if (!canRefreshData) return;
+    if (!active || !open || !lifecycle.mounted || mutation.current !== lifecycle || !canRefreshData) return;
     setHistoryLoading(true);
     try { setHistoryStatus(await getDashboardHistoryStatus(session)); }
     catch { setHistoryStatus(null); }
@@ -560,7 +625,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   }
 
   async function loadAutoHistoryStatus() {
-    if (!canRefreshData) return;
+    if (!active || !open || !lifecycle.mounted || mutation.current !== lifecycle || !canRefreshData) return;
     setAutoHistoryLoading(true);
     try {
       const { getDashboardAutoWithdrawHistoryStatus } = await import("@/lib/dashboardAuthClient");
@@ -570,13 +635,30 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   }
 
   useEffect(() => {
-    if (!open || manualQuery || !canEnterAdmin) return;
+    if (!active || !open || manualQuery || !canEnterAdmin || directoryReady || deniedScope.current === directoryScope) return;
     setMessage("");
     void loadUsers();
     if (!accountsOnlyLoading && canViewAudit) void loadAudit();
     if (!accountsOnlyLoading && canRefreshData) { void loadHistoryStatus(); void loadAutoHistoryStatus(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, profile.role, manualQuery, directoryScope]);
+  }, [open, active, profile.role, manualQuery, directoryScope]);
+
+  useEffect(() => {
+    if (!active || !open || !directoryReady) return;
+    if (dirty.current.users) void loadUsers();
+    else if (dirty.current.roles) void loadRoles();
+    // A sibling's confirmed role mutation invalidates only its shared directory.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, open, refreshVersion, directoryScope, recoveryRevision]);
+
+  useEffect(() => {
+    if (active) return;
+    if (permissionTarget && pendingWrites.current.tokens.size) dirty.current.roles = true;
+    setCreateOpen(false);setNewPassword("");setResetPassword("");setResetTarget("");
+    setEditingUsername("");setPermissionTarget(null);setSecurityTarget(null);setSavingUser("");setCreateBusy(false);
+    // Hidden kept-alive tabs must not leave credential fields or portals mounted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 
   useEffect(() => { setNewRoleId(""); setNewUsername(""); setNewPassword(""); setResetPassword(""); setCreateOpen(false); setCreateBusy(false); setNewScopeCatalogValid(false); setEditingUsername(""); setPermissionTarget(null); setSecurityTarget(null); setSavingUser(""); setMessage(""); }, [directoryScope, open, section]);
 
@@ -622,19 +704,27 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     setMessage("");
     try {
       const result = await createDashboardRoleAccount(session, newUsername, newPassword, {id:selectedRole.id,version:selectedRole.version}, newDataScope);
-      if (!mutationCurrent(token)) return;
+      if (!mutationCurrent(token)) { notifyConfirmedDirectoryChange(); return; }
+      supersedeDirectoryReads();
       setMessage(`${result.account.username} 已建立，角色：${result.account.role_name}。`);
       setNewUsername("");
       setNewPassword("");
       setNewRoleId("");
       setNewDataScope({mode:"selected",countries:[],platforms:[]});setNewScopeCatalogValid(false);
       setCreateOpen(false);
-      await Promise.all([loadUsers(true), canViewAudit ? loadAudit() : Promise.resolve()]);
+      const account = result.account;
+      acceptProfile({auth_user_id:account.auth_user_id,username:account.username,role:account.role,active:account.active,data_scope:account.data_scope});
+      setRoleDirectory(previous => previous.scope !== directoryScope || !previous.data ? previous : {...previous,data:{...previous.data,
+        accounts:[...(previous.data.accounts||[]).filter(row => row.auth_user_id !== account.auth_user_id),{
+          auth_user_id:account.auth_user_id,username:account.username,role:account.role,active:account.active,data_scope:account.data_scope,role_id:account.role_id,assignment_version:account.assignment_version
+        }]}});
+      onDirectoryChanged?.();
+      if (canViewAudit) void loadAudit();
     } catch (error) {
-      if (!mutationCurrent(token)) return;
       if (directoryDenied(error)) { denyDirectory(error); return; }
+      if (!mutationCurrent(token)) return;
       setMessage(error instanceof Error ? error.message : "建立账号失败");
-    } finally { if(releaseMutation(token))setCreateBusy(false); }
+    } finally { if(releaseMutation(token))setCreateBusy(false); else unobservedMutation(); }
   }
 
   function canEditTarget(user: DashboardProfile) {
@@ -655,18 +745,21 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     setSavingUser(user.username);
     setMessage("");
     try {
-      await updateDashboardAccount(session, user.username, patch);
-      if(!mutationCurrent(token))return false;
+      const result = await updateDashboardAccount(session, user.username, patch, user);
+      if(!mutationCurrent(token)){ notifyConfirmedDirectoryChange(); return false; }
+      supersedeDirectoryReads();
+      acceptProfile(result.account);
+      onDirectoryChanged?.();
       setMessage(patch.role ? `${user.username} 已改为${roleLabel(patch.role)}。该账号刷新页面或重新登录后可看到新权限。` : `${user.username} 已更新。`);
-      await Promise.all([loadUsers(true), canViewAudit ? loadAudit() : Promise.resolve()]);
+      if (canViewAudit) void loadAudit();
       return mutationCurrent(token);
     } catch (error) {
+      if (directoryDenied(error)) { denyDirectory(error); return false; }
       if (!mutationCurrent(token)) return false;
-      if (directoryDenied(error)) denyDirectory(error);
-      else setMessage(error instanceof Error ? error.message : "更新失败");
+      setMessage(error instanceof Error ? error.message : "更新失败");
       return false;
     }
-    finally { if(releaseMutation(token))setSavingUser(""); }
+    finally { if(releaseMutation(token))setSavingUser(""); else unobservedMutation(); }
   }
 
   async function submitResetPassword(event: React.FormEvent) {
@@ -688,10 +781,10 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
       setAccountFeedback((current) => ({ ...current, [username]: { tone: "success", text: "密码已重置成功。请让该账号使用新密码重新登录。" } }));
       setResetTarget("");
       setResetPassword("");
-      if (canViewAudit) await loadAudit();
+      if (canViewAudit) void loadAudit();
     } catch (error) {
-      if (!mutationCurrent(token)) return;
       if (directoryDenied(error)) { denyDirectory(error); return; }
+      if (!mutationCurrent(token)) return;
       const text = error instanceof Error ? error.message : "重置密码失败";
       setMessage(text);
       setAccountFeedback((current) => ({ ...current, [username]: { tone: "error", text: `密码重置失败：${text}` } }));
@@ -706,22 +799,27 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
     setSavingUser(user.username);
     setMessage("");
     try {
-      await deleteDashboardAccount(session, user.username);
-      if (!mutationCurrent(token)) return;
+      const result = await deleteDashboardAccount(session, user.username, user.auth_user_id);
+      if (!mutationCurrent(token)) { notifyConfirmedDirectoryChange(); return; }
+      supersedeDirectoryReads();
+      setUsers(rows => rows.filter(row => row.auth_user_id !== result.auth_user_id));
+      setRoleDirectory(previous => previous.scope !== directoryScope || !previous.data ? previous : {...previous,data:{...previous.data,
+        accounts:previous.data.accounts?.filter(row => row.auth_user_id !== result.auth_user_id)}});
+      onDirectoryChanged?.();
       setMessage(`${user.username} 已删除。`);
       if (editingUsername === user.username) setEditingUsername("");
       if (resetTarget === user.username) { setResetTarget(""); setResetPassword(""); }
-      await Promise.all([loadUsers(true), canViewAudit ? loadAudit() : Promise.resolve()]);
+      if (canViewAudit) void loadAudit();
     } catch (error) {
+      if (directoryDenied(error)) { denyDirectory(error); return; }
       if (!mutationCurrent(token)) return;
-      if (directoryDenied(error)) denyDirectory(error);
-      else setMessage(error instanceof Error ? error.message : "删除失败");
+      setMessage(error instanceof Error ? error.message : "删除失败");
     }
-    finally { if (releaseMutation(token)) setSavingUser(""); }
+    finally { if (releaseMutation(token)) setSavingUser(""); else unobservedMutation(); }
   }
 
   async function runJob(job: ManualSyncJob) {
-    if (!canRefreshData) return;
+    if (!active || !open || !lifecycle.mounted || mutation.current !== lifecycle || !canRefreshData) return;
     setSyncRunning(job);
     setSyncProgress([`正在刷新：${ALL_LATEST_SYNC_JOBS.find((item) => item.key === job)?.label || job}`]);
     setMessage("");
@@ -736,14 +834,14 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
             ? `，自动出款 ${written.autoWithdraw} 行 / 操作人 ${written.operator || 0} 行`
             : "";
       setSyncProgress([`${ALL_LATEST_SYNC_JOBS.find((item) => item.key === job)?.label || job}：完成${suffix}`]);
-      if (canViewAudit) await loadAudit();
+      if (canViewAudit) void loadAudit();
     } catch (error) {
       setSyncProgress([`${ALL_LATEST_SYNC_JOBS.find((item) => item.key === job)?.label || job}：${error instanceof Error ? error.message : "失败"}`]);
     } finally { setSyncRunning(""); }
   }
 
   async function runAllLatest() {
-    if (!canRefreshData) return;
+    if (!active || !open || !lifecycle.mounted || mutation.current !== lifecycle || !canRefreshData) return;
     setSyncRunning("all");
     const lines: string[] = [];
     setSyncProgress([]);
@@ -763,12 +861,12 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
       } catch (error) { lines.push(`✕ ${job.label}：${error instanceof Error ? error.message : "失败"}`); }
       setSyncProgress([...lines]);
     }
-    if (canViewAudit) await loadAudit();
+    if (canViewAudit) void loadAudit();
     setSyncRunning("");
   }
 
   async function runHistoryNext() {
-    if (!canRefreshData) return;
+    if (!active || !open || !lifecycle.mounted || mutation.current !== lifecycle || !canRefreshData) return;
     setSyncRunning("history_next");
     try {
       const result = await triggerDashboardSync(session, "history_next");
@@ -778,14 +876,14 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
         ? `历史补齐：${requested.start}${requested.end && requested.end !== requested.start ? ` ~ ${requested.end}` : ""} ${requested.direction || ""} 完成${written?.volume ? `（${written.volume} 行）` : ""}`
         : (result?.result?.message || "历史补齐任务已执行")]);
       await loadHistoryStatus();
-      if (canViewAudit) await loadAudit();
+      if (canViewAudit) void loadAudit();
     } catch (error) {
       setSyncProgress([`历史补齐：${error instanceof Error ? error.message : "失败"}`]);
     } finally { setSyncRunning(""); }
   }
 
   async function runAutoHistoryNext() {
-    if (!canRefreshData) return;
+    if (!active || !open || !lifecycle.mounted || mutation.current !== lifecycle || !canRefreshData) return;
     setSyncRunning("auto_history_next");
     try {
       const result = await triggerDashboardSync(session, "auto_history_next");
@@ -793,7 +891,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
       const date = result?.result?.date || "";
       setSyncProgress([`自动出款历史补齐${date ? ` ${date}` : ""}：${result?.result?.status || "已执行"}${written ? `（自动出款 ${written.autoWithdraw || 0} / 操作人 ${written.operator || 0}）` : ""}`]);
       await loadAutoHistoryStatus();
-      if (canViewAudit) await loadAudit();
+      if (canViewAudit) void loadAudit();
     } catch (error) {
       setSyncProgress([`自动出款历史补齐：${error instanceof Error ? error.message : "失败"}`]);
     } finally { setSyncRunning(""); }
@@ -831,7 +929,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
               <div className="admin-account-toolbar-actions"><button type="button" className="admin-light-btn" disabled={loading || !canUseAccountAction("view")} onClick={() => void loadUsers()}>{loading ? "读取中…" : manualQuery && !directoryReady ? "查询账号" : "刷新列表"}</button>{tab === "accounts" && <button type="button" className="admin-account-create-toggle" aria-haspopup="dialog" disabled={loading || Boolean(directory.error) || Boolean(savingUser) || !canCreateRoleAccount} onClick={() => { if (!canCreateRoleAccount) return; setMessage(""); setNewRoleId(""); setNewDataScope({mode:"selected",countries:[],platforms:[]}); setNewScopeCatalogValid(false); setCreateOpen(true); if (!directoryReady) void loadUsers(); else if (!creationRolesReady) void loadRoles(); }}>+ 新建账号</button>}</div>
             </div>
             {tab === "permissions" ? <div className="admin-permission-overview"><div><b>{directoryReady ? users.length : "—"}</b> 当前账号</div><div><b>{new Set(dashboardRoleDisplayPages.map(page => page.moduleId)).size}</b> 权限模块</div><div><b>{dashboardRoleDisplayPages.reduce((sum, page) => sum + page.actions.length, 0)}</b> 权限项</div><div><b>{dashboardRoleDisplayPages.filter(page => page.moduleId === "system").reduce((sum, page) => sum + page.actions.length, 0)}</b> 后台权限</div><span>权限项与现有系统一致，不新增授权范围</span></div> : <div className="admin-permission-overview admin-account-overview"><div><b>{directoryReady ? users.length : "—"}</b> 全部账号</div><div><b>{directoryReady ? stats.owners : "—"}</b> 总管理员</div><div><b>{directoryReady ? stats.admins : "—"}</b> 管理员</div><div><b>{directoryReady ? stats.viewers : "—"}</b> 查看账号</div><div><b>{directoryReady ? stats.disabled : "—"}</b> 已停用</div></div>}
-          {tab === "accounts" && createOpen && canCreateRoleAccount && <AccountEditorDialog title="新建后台账号" busy={createBusy} onClose={closeCreate} bodyClassName="admin-users-compact"><section id="admin-create-account" className="admin-create-card-v249 admin-account-create-panel">
+          {active && tab === "accounts" && createOpen && canCreateRoleAccount && <AccountEditorDialog title="新建后台账号" busy={createBusy} onClose={closeCreate} bodyClassName="admin-users-compact"><section id="admin-create-account" className="admin-create-card-v249 admin-account-create-panel">
             {message && <p role="alert" className="admin-account-feedback error">{message}</p>}
             <fieldset disabled={createBusy}>
             <form onSubmit={submitCreate}>
@@ -853,7 +951,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
             </form></fieldset>
           </section></AccountEditorDialog>}
 
-            {tab === "accounts" && canViewLoginSecurity && directoryReady && <AccountLoginPolicy session={session} surface="dashboard" target={securityTarget?{id:securityTarget.auth_user_id,username:securityTarget.username,active:securityTarget.active}:null} onClose={()=>setSecurityTarget(null)} onSnapshot={setLoginSnapshot}/>}
+            {tab === "accounts" && canViewLoginSecurity && directoryReady && <AccountLoginPolicy session={session} surface="dashboard" active={active && open && directoryReady} onAccessDenied={()=>denyDirectory(new Error("登录安全目录的查看权限已改变，请重新查询。"))} target={active && securityTarget ? {id:securityTarget.auth_user_id,username:securityTarget.username,active:securityTarget.active}:null} onClose={()=>setSecurityTarget(null)} onSnapshot={setLoginSnapshot}/>}
             <div className="admin-search-toolbar admin-user-search-toolbar">
               <div className="admin-search-field wide"><label>{tab === "accounts" ? "搜索账号" : "搜索账号 / 权限"}</label><input aria-label="后台账号搜索" value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder={tab === "accounts" ? "输入账号、角色、系统身份或数据范围" : "输入账号、角色、模块或后台权限"} /></div>
               <div className="admin-search-field"><label>系统身份</label><select aria-label="后台账号系统身份筛选" value={userRoleFilter} onChange={(e) => setUserRoleFilter(e.target.value as any)}><option value="all">全部身份</option><option value="owner">总管理员</option><option value="admin">管理员</option><option value="viewer">查看账号</option></select></div>
@@ -874,7 +972,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
                 const enabled = user.role === "owner" ? permissionTotal : customRole?.active ? dashboardRoleDisplayPermissionCount(customRole.permissions) : 0;
                 const editable = canEditTarget(user);
                 const canConfigureTargetRole = editable && (!customRole || isOwner || assignedActor);
-                const expanded = tab === "accounts" && editable && canOpenAccountSettings && editingUsername === user.username;
+                const expanded = active && tab === "accounts" && editable && canOpenAccountSettings && editingUsername === user.username;
                 const editId = `admin-account-edit-${user.auth_user_id}`;
                 return <Fragment key={user.auth_user_id}><tr className={expanded ? "is-editing" : ""}>
                   <th scope="row"><div className="admin-matrix-identity"><div><strong>{user.username}</strong>{user.role === "owner" && <span className="admin-matrix-protected">锁定</span>}</div>{tab === "permissions" && <><div className="admin-matrix-identity-meta"><span className={`admin-user-role ${user.role}`}>{accountRoleDisplay(user).label}</span><span className={user.active ? "admin-user-state active" : "admin-user-state off"}>{user.active ? "正常" : "停用"}</span></div><small>{accountRoleDisplay(user).detail}</small></>}</div></th>
@@ -894,7 +992,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
                     {message && <p role="status" className="admin-account-feedback">{message}</p>}
                     <div className="admin-account-edit-hint"><strong>{user.username} · 账号设置</strong><span>{savingUser === user.username ? "正在保存…" : "管理角色、数据范围、账号状态与密码"}</span></div>
                     <section className="admin-account-current-role"><div><small>当前角色</small><strong>{roleUnverified ? "角色尚未读取" : accountRoleDisplay(user).label}</strong><p>{accountRoleDisplay(user).summary}</p></div><button type="button" className="admin-matrix-configure" aria-haspopup="dialog" disabled={Boolean(savingUser) || !canConfigureAccount} onClick={() => { if (savingUser || !canConfigureAccount) return; setEditingUsername(""); setResetTarget(""); setResetPassword(""); setPermissionTarget({username: user.username, module: "home"}); }}>配置权限 / 选择角色</button></section>
-                    {canConfigureAccount && <AccountDataScopeEditor key={`scope-${user.auth_user_id}:${user.updated_at || "legacy"}`} user={user} actor={profile} session={session} busy={Boolean(savingUser) || !accountWritesReady} onSave={(patch) => saveAccount(user, patch)} />}
+                    {canConfigureAccount && <AccountDataScopeEditor key={`scope-${user.auth_user_id}`} user={user} actor={profile} session={session} busy={Boolean(savingUser) || !accountWritesReady} onSave={(patch) => saveAccount(user, patch)} />}
                     <div className="admin-user-buttons-v249"><button type="button" disabled={!accountWritesReady || savingUser === user.username || !canConfigureAccount || !canUseAccountAction("status")} onClick={() => void saveAccount(user, { active: !user.active })}>{user.active ? "停用" : "启用"}</button><button type="button" disabled={!accountWritesReady || savingUser === user.username || !canUseAccountAction("reset_password")} onClick={() => { if (!canUseAccountAction("reset_password")) return; setResetTarget(resetTarget === user.username ? "" : user.username); setResetPassword(""); }}>重置密码</button><button className="danger" type="button" disabled={!accountWritesReady || savingUser === user.username || !canUseAccountAction("delete")} onClick={() => void removeAccount(user)}>删除账号</button></div>
                     {canUseAccountAction("reset_password") && resetTarget === user.username && <form className="admin-inline-reset" onSubmit={submitResetPassword}><input type="password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} placeholder="输入新的临时密码（至少 8 位）" autoFocus /><button type="submit" disabled={!accountWritesReady || savingUser === user.username}>保存新密码</button><button type="button" onClick={() => setResetTarget("")}>取消</button></form>}
                     {accountFeedback[user.username] && <p className={`admin-account-feedback ${accountFeedback[user.username].tone}`} role={accountFeedback[user.username].tone === "error" ? "alert" : "status"}>{accountFeedback[user.username].text}</p>}
@@ -904,11 +1002,11 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
               {!filteredUsers.length && <tr><td colSpan={tab === "permissions" ? 3 : 5}><div className="admin-empty admin-filter-empty">{users.length ? "没有符合当前搜索条件的账号。" : "当前可管理范围内没有后台账号。"}</div></td></tr>}
             </tbody></table></div>}
           </section>
-          {(tab === "permissions" || tab === "accounts") && canConfigureAccount && permissionTarget && users.filter((user) => user.username === permissionTarget.username).map((user) => {
+          {active && (tab === "permissions" || tab === "accounts") && canConfigureAccount && permissionTarget && users.filter((user) => user.username === permissionTarget.username).map((user) => {
             const account=accountRoleEntry(user);
             if (canManageUsers && user.role!=="owner" && !accountRoleVerified(user)) return <AccountEditorDialog title={"目录权限 · "+user.username} onClose={()=>setPermissionTarget(null)}><p role="alert">角色读取尚未完成，请刷新列表后再配置。</p></AccountEditorDialog>;
             if (user.role === "owner") return <AccountEditorDialog title={"目录权限 · "+user.username} onClose={()=>setPermissionTarget(null)}><p>总管理员拥有全部目录与操作权限，不能通过角色分配修改。</p></AccountEditorDialog>;
-            return account ? <AccountAssignedRoleDialog key={account.auth_user_id+":"+account.assignment_version} session={session} account={account} roles={roleDirectory.data?.roles||[]} roleAccess={roleAccess} isOwner={isOwner} editable={accountWritesReady&&canEditTarget(user)&&(isOwner||assignedActor)} onSaved={()=>loadRoles(true)} onClose={()=>setPermissionTarget(null)}/> : <AccountEditorDialog title={"目录权限 · "+user.username} onClose={()=>setPermissionTarget(null)}><p role="alert">角色读取尚未完成，请刷新列表后再配置。</p></AccountEditorDialog>;
+            return account ? <AccountAssignedRoleDialog key={account.auth_user_id+":"+account.assignment_version} session={session} account={account} roles={roleDirectory.data?.roles||[]} roleAccess={roleAccess} isOwner={isOwner} editable={accountWritesReady&&canEditTarget(user)&&(isOwner||assignedActor)} onSaved={savedAssignedRole} onMutationStart={beginAssignedRoleMutation} onDenied={denyDirectory} onUnconfirmed={confirmed=>{if(confirmed)notifyConfirmedDirectoryChange();unobservedMutation(true)}} onClose={()=>setPermissionTarget(null)}/> : <AccountEditorDialog title={"目录权限 · "+user.username} onClose={()=>setPermissionTarget(null)}><p role="alert">角色读取尚未完成，请刷新列表后再配置。</p></AccountEditorDialog>;
           })}
         </div>
       )}
@@ -961,7 +1059,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
 
   if (embedded) {
     return (
-      <div className="admin-inline-page">
+      <div className="admin-inline-page" hidden={!active}>
         {!accountsOnlyLoading && <div className="admin-inline-header">
           <div><span>HENSEM CONTROL</span><h1>{sectionTitle}</h1><p>{sectionSubtitle}</p></div>
           <div className="admin-inline-role"><b>{profile.username}</b><small>{roleEnglish(profile.role)} · {roleLabel(profile.role)}</small></div>
@@ -973,7 +1071,7 @@ export default function AdminControlCenter({ open, session, profile, onClose, se
   }
 
   return (
-    <div className="admin-inline-page standalone">
+    <div className="admin-inline-page standalone" hidden={!active}>
       <div className="admin-inline-header"><div><span>HENSEM CONTROL</span><h1>{sectionTitle}</h1><p>{sectionSubtitle}</p></div><button className="admin-light-btn" type="button" onClick={onClose}>返回业务后台</button></div>
       {message && <div className="admin-center-message">{message}</div>}
       <div className="admin-inline-content">{content}</div>

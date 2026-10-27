@@ -62,7 +62,7 @@ async function edge(action, patch={}, options={}) {
         assert.equal(table,'dashboard_profiles','out-of-scope global table must not be read');
         if(patchValue){
           if(options.race||!filters.every(([key,value])=>target[key]===value))return {data:null};
-          writes.push(clone(patchValue));Object.assign(target,patchValue);return {data:{role:target.role}};
+          writes.push(clone(patchValue));Object.assign(target,patchValue);return {data:{...target}};
         }
         if(filters.some(([key,value])=>key==='auth_user_id'&&value===caller.auth_user_id))return {data:options.callerMissing?null:clone(caller)};
         if(filters.some(([key,value])=>key==='username'&&value==='newuser'))return {data:null};
@@ -199,7 +199,7 @@ test('actual client profile select includes scope; create/update send only the s
   const oldFetch=global.fetch, oldUrl=process.env.NEXT_PUBLIC_SUPABASE_URL, oldKey=process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const calls=[];const expectedProfile=profile('viewer','viewer',{data_scope:PANGHU});
   process.env.NEXT_PUBLIC_SUPABASE_URL='https://fixture.supabase.co';process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY='fixture-public';
-  global.fetch=async(url,init)=>{calls.push({url:String(url),init});return new Response(JSON.stringify(String(url).includes('/rest/')?[expectedProfile]:{ok:true}),{status:200});};
+  global.fetch=async(url,init)=>{calls.push({url:String(url),init});return new Response(JSON.stringify(String(url).includes('/rest/')?[expectedProfile]:{ok:true,account:expectedProfile}),{status:200});};
   const session={access_token:'fixture-access',refresh_token:'fixture-refresh',user:{id:'fixture-viewer'}};
   try{
     assert.deepEqual((await auth.fetchDashboardProfile(session)).data_scope,PANGHU);
@@ -228,12 +228,12 @@ test('actual create handler refuses empty/outside draft and submits Panghu only 
   for(const [newDataScope,expected] of [[{mode:'selected',countries:[]},0],[VN,0],[PANGHU,1]]){
     const calls=[],messages=[],refreshes=[];const actor=profile('manager','admin',{data_scope:PANGHU});
     const lifecycle={mounted:true,active:null};
-    const context={canCreateRoleAccount:true,creationRoles:[{id:'role-id',version:7}],newRoleId:'role-id',open:true,directoryReady:true,loading:false,directory:{error:''},lifecycle,mutation:{current:lifecycle},newScopeCatalogValid:true,createBusy:false,profile:actor,newDataScope,session:{},newUsername:'newuser',newPassword:'fixture-password',newRole:'viewer',newPermissions:full,newManagement:management,canViewAudit:false,
-      setCreateBusy:()=>{},setMessage:text=>messages.push(text),setNewUsername:()=>{},setNewPassword:()=>{},setNewRoleId:()=>{},setCreateOpen:()=>{},setNewDataScope:()=>{},setNewScopeCatalogValid:()=>{},loadUsers:async force=>refreshes.push(force),loadAudit:async()=>{},denyDirectory:()=>assert.fail('unexpected authorization denial'),roleLabel:()=> '查看账号',
+    const context={dirty:{current:{users:false,roles:false}},setRecoveryRevision:()=>{},directoryScope:'test-scope',pendingWrites:{current:{scope:'test-scope',tokens:new Set()}},notifyConfirmedDirectoryChange:()=>{},active:true,canCreateRoleAccount:true,creationRoles:[{id:'role-id',version:7}],newRoleId:'role-id',open:true,directoryReady:true,loading:false,directory:{error:''},lifecycle,mutation:{current:lifecycle},newScopeCatalogValid:true,createBusy:false,profile:actor,newDataScope,session:{},newUsername:'newuser',newPassword:'fixture-password',newRole:'viewer',newPermissions:full,newManagement:management,canViewAudit:false,
+      supersedeDirectoryReads:()=>{},acceptProfile:()=>{},setRoleDirectory:()=>{},onDirectoryChanged:()=>{},setCreateBusy:()=>{},setMessage:text=>messages.push(text),setNewUsername:()=>{},setNewPassword:()=>{},setNewRoleId:()=>{},setCreateOpen:()=>{},setNewDataScope:()=>{},setNewScopeCatalogValid:()=>{},loadUsers:async force=>refreshes.push(force),loadAudit:async()=>{},denyDirectory:()=>assert.fail('unexpected authorization denial'),roleLabel:()=> '查看账号',
       ...scope,createDashboardRoleAccount:async(...args)=>{calls.push(args);return {account:{username:'newuser',role_name:'Empty role'}};}};
     const submit=Function(...Object.keys(context),output+'\nreturn submitCreate;')(...Object.values(context));
     assert.deepEqual(calls,[]);await submit({preventDefault:()=>{}});assert.equal(calls.length,expected);
-    if(expected){assert.deepEqual(calls[0][4],PANGHU);assert.deepEqual(calls[0][3],{id:'role-id',version:7});assert.deepEqual(refreshes,[true],'confirmed create forces one authorized directory recheck');}else{assert(messages.length);assert.deepEqual(refreshes,[]);}
+    if(expected){assert.deepEqual(calls[0][4],PANGHU);assert.deepEqual(calls[0][3],{id:'role-id',version:7});assert.deepEqual(refreshes,[],'confirmed create merges the returned account without a full directory recheck');}else{assert(messages.length);assert.deepEqual(refreshes,[]);}
     assert.equal(lifecycle.active,null,'handler releases the original mutation claim');
   }
 });
@@ -377,4 +377,16 @@ test('platform scope editor refuses saving unverified catalog selections and ena
  picker().props.onValidityChange(false);assert.equal(save().props.disabled,true);
  picker().props.onValidityChange(true);picker().props.onChange({...selected,platforms:[{country:'IN',platform:'6CLUB'}]});assert.equal(save().props.disabled,true);
  picker().props.onValidityChange(true);save().props.onClick();await new Promise(r=>setImmediate(r));assert.deepEqual(calls,[{data_scope:{mode:'selected',countries:[],platforms:[{country:'IN',platform:'6CLUB'}]}}]);
+});
+
+test('scope, status and deletion acknowledgements expose only the confirmed list identity and profile',async()=>{
+ const target={created_at:'2026-09-01T00:00:00Z',data_scope:PANGHU,private_fixture:'not-a-list-field'};
+ for(const patch of [{active:false},{data_scope:BOTH}]){
+  const result=await edge('update-account',patch,{role:'owner',target});assert.equal(result.status,200);
+  assert.deepEqual(result.body.account,Object.fromEntries(['auth_user_id','username','role','active','permissions','management_permissions','data_scope','created_at','updated_at'].map(k=>[k,result.target[k]])));
+  assert.equal(Object.hasOwn(result.body.account,'private_fixture'),false);
+  assert.equal(result.body.account.active,patch.active??true);assert.deepEqual(result.body.account.data_scope,patch.data_scope||PANGHU);
+  if(patch.data_scope)assert(result.reads.some(read=>read.rpc==="dashboard_update_account_data_scope"));else assert(result.audits.length);
+ }
+ const deleted=await edge('delete-account',{}, {role:'owner',target});assert.equal(deleted.status,200);assert.equal(deleted.body.auth_user_id,'fixture-target');assert.equal(deleted.body.username,'target');assert.equal(deleted.body.account,undefined);assert.equal(deleted.authCalls.length,1);
 });

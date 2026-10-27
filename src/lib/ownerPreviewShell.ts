@@ -18,6 +18,16 @@ export const OWNER_PREVIEW_HOST_CSS = `
 .owner-preview-account-tabs button[aria-selected=true]{background:#fff;border-color:#dce5f1;color:#315fc4;box-shadow:0 1px 3px #294c7810}.owner-preview-account-tabs button:disabled{opacity:.5;cursor:default}.owner-preview-account-tabs button:focus-visible{outline:2px solid #5475df;outline-offset:2px}
 .owner-preview-account-body{padding:0 0 18px;overflow:auto;min-height:0;flex:1}.owner-preview-account-denied{padding:20px}
 .owner-preview-account-body .admin-inline-content{max-width:none;margin-inline:0;width:100%;min-width:0}
+.owner-preview-account-workspace[hidden],.owner-preview-account-workspace>.owner-preview-account-body[hidden]{display:none}
+.owner-preview-account-workspace>.owner-preview-account-tabs{padding:3px;margin-bottom:8px}
+.owner-preview-account-workspace>.owner-preview-account-tabs button{min-height:32px;padding:6px 14px}
+.owner-preview-account-workspace>.owner-preview-account-body{padding:0 2px 12px 0;scrollbar-gutter:stable}
+.owner-preview-account-workspace .admin-inline-page{min-height:0;padding:0}
+.owner-preview-account-workspace .admin-center-message{margin:0 0 8px;padding:8px 12px}
+.owner-preview-account-workspace .admin-inline-content{gap:10px}
+.owner-preview-account-workspace .wo-account-card,.owner-preview-account-workspace div.dashboard-role-manager{padding:12px}
+.owner-preview-account-workspace .wo-account-toolbar,.owner-preview-account-workspace .dashboard-role-manager>.drm-toolbar{margin-bottom:10px;padding-bottom:10px}
+.owner-preview-account-workspace .wo-account-filters,.owner-preview-account-workspace .dashboard-role-manager>.drm-list-filters{padding:10px;margin-bottom:10px}
 body.owner-preview-shell-active .auth-user-menu-wrap{top:8px!important;right:12px!important;bottom:auto!important;z-index:1400!important}
 body.owner-preview-shell-active .auth-user-trigger{min-width:160px!important;width:160px!important;height:32px!important;padding:3px 7px 3px 4px!important;gap:6px;border-radius:6px!important;box-shadow:0 2px 6px #1b355008!important;transform:none!important}
 body.owner-preview-shell-active .auth-user-trigger>.auth-user-avatar{width:24px;height:24px;border-radius:5px;font-size:10px;box-shadow:none}
