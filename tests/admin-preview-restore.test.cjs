@@ -71,11 +71,11 @@ test('host restores only the authorized HTML body, while authorization checks an
  assert.match(component,/\},controller\.signal,nextAttempt=>/);
  assert.match(component,/const policy=await readDashboardRoleAccess\(beginAuthority\(\),attemptSignal,observeSession\)/);
  assert.match(component,/if\(!policy\.canView\)throw Error/);
- assert.match(component,/const quick=check&&!recovering/);
+ assert.match(component,/const quick=check&&published&&!changed&&!recovering&&!suspendedRef\.current/);
  assert.match(component,/await adminPreviewRequest\(beginAuthority\(\),quick\?"\?check=1":"",\{signal:attemptSignal\},observeSession\)/);
  assert.match(component,/access\.ok!==true\|\|access\.canView!==true\|\|typeof access\.canManage!=="boolean"\)throw Error/);
- assert.match(component,/if\(quick&&\(!published\|\|changed\)\)\{stage="preview-request";response=await adminPreviewRequest\(beginAuthority\(\),"",\{signal:attemptSignal\},observeSession\)/);
- assert.match(component,/const html=quick&&published&&!changed\?null:await ownerPreviewTransportRead\(\(\)=>response\.text\(\),attemptSignal\)/);
+ assert.doesNotMatch(component,/if\(quick&&\(!published\|\|changed\)\)/);
+ assert.match(component,/const html=quick\?null:await ownerPreviewTransportRead\(\(\)=>response\.text\(\),attemptSignal\)/);
  assert.match(component,/makeAdminLiveDocument\(restoreApprovedAdmin\(result\.html\),channel\.current,result\.policy,\{mode:dataScope\.mode,identity:scopeIdentity\}\)/);
  assert.equal((component.match(/restoreApprovedAdmin\(result\.html\)/g)||[]).length,1);
  assert.match(component,/if\(html!==null\)\{published=true;setDocumentHtml\(html\)\}/);
