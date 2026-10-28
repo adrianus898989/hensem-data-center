@@ -447,7 +447,7 @@ async function adminLiveSession(session:DashboardSession):Promise<DashboardSessi
  }
 }
 class AdminLiveReadError extends Error {
- constructor(message:string,readonly code:'57014'|'ADMIN_LIVE_TIMEOUT'|'ADMIN_LIVE_NETWORK'|'PREPARED_READY_RESPONSE_CAPACITY'){super(message);Object.setPrototypeOf(this,new.target.prototype);}
+ constructor(message:string,readonly code:'57014'|'ADMIN_LIVE_TIMEOUT'|'ADMIN_LIVE_NETWORK'|'PREPARED_READY_RESPONSE_CAPACITY'|'WITHDRAW_REASON_SELECTION_CHANGED'){super(message);Object.setPrototypeOf(this,new.target.prototype);}
 }
 async function adminLiveFetch(url:string,init:RequestInit):Promise<Response>{
  try{return await fetch(url,init)}catch{
@@ -531,6 +531,8 @@ export async function adminLiveRequest(session:DashboardSession,input:unknown,si
  if([401,403].includes(response.status))throw new AdminLiveAccessError("正式数据读取未获授权，或会话已失效",'session');
  if(request.action==="intakeCoverage"&&request.operation==="orderCatalog"&&code==="invalid_coverage_request")throw Error("订单采集目录操作暂不支持");
  if(request.durationVersion===2&&code==="invalid_request")throw Error("到账时效统计接口尚未更新，请更新后重试");
+ // A retired reason selection is recoverable within the current drawer, never an empty result.
+ if(response.status===400&&serverCode==='22023'&&code==='withdraw_reason_selection_changed'&&request.action==='withdrawReasons'&&['blockingVariants','blockingOrders'].includes(String(request.kind)))throw new AdminLiveReadError('原因分类已更新，请返回原因列表重新选择。','WITHDRAW_REASON_SELECTION_CHANGED');
  if(/unsupported_filter/.test(code))throw Error("此来源未提供该检索字段，请清空该字段后查询");
  // Preserve only this explicit SQLSTATE, after all permission mappings. Text
  // mentioning a timeout is not evidence of a database query cancellation.
