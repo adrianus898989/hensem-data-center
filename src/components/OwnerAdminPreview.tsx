@@ -102,16 +102,15 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
           if(!policy.canView)throw Error("当前角色没有可用目录，请联系管理员分配角色。");
           const changed=check&&published&&JSON.stringify(policy)!==publishedPolicy;
           if(changed){published=false;clearPreview();setVerificationStatus("角色权限已更新，正在重新验证后台…")}
-          const quick=check&&!recovering&&!suspendedRef.current;
-          stage="preview-request";let response=await adminPreviewRequest(beginAuthority(),quick?"?check=1":"",{signal:attemptSignal},observeSession);
+          const quick=check&&published&&!changed&&!recovering&&!suspendedRef.current;
+          stage="preview-request";const response=await adminPreviewRequest(beginAuthority(),quick?"?check=1":"",{signal:attemptSignal},observeSession);
           if(stale()||attemptSignal.aborted)throw abandon();
           if(quick){stage="preview-body";const access=await ownerPreviewTransportRead(()=>response.json(),attemptSignal);
             if(!access||typeof access!=="object"||Array.isArray(access)||access.ok!==true||access.canView!==true||typeof access.canManage!=="boolean")throw Error("后台查看权限响应不完整，请重新验证。");
             if(stale()||attemptSignal.aborted)throw abandon();}
           // Recovery always rechecks permissions and reads fresh protected HTML.
           // Reuse the mounted frame only when both still exactly match.
-          if(quick&&(!published||changed)){stage="preview-request";response=await adminPreviewRequest(beginAuthority(),"",{signal:attemptSignal},observeSession);}
-          stage="preview-body";const html=quick&&published&&!changed?null:await ownerPreviewTransportRead(()=>response.text(),attemptSignal);
+          stage="preview-body";const html=quick?null:await ownerPreviewTransportRead(()=>response.text(),attemptSignal);
           if(stale()||attemptSignal.aborted)throw abandon();
           return {policy,html};
           },controller.signal,dashboardBootstrapReadUrl("preview")!==null)}catch(cause){
