@@ -18,6 +18,15 @@ export async function ownerPreviewTransportRead<T>(read: () => Promise<T>, signa
 const terminalCodes = new Set(["account_disabled", "application_session_denied", "profile_denied", "role_permission_denied",
   "preview_denied", "invalid_role_response", "invalid_profile", "refresh_invalid", "session_changed", "session_logged_out", "permission_denied", "access_denied", "42501"]);
 const networkCodes = new Set(["owner_preview_network_error", "owner_preview_timeout", "refresh_network_error", "refresh_coordination_timeout", "refresh_coordination_failed", "network_error", "auth_network_error", "auth_timeout"]);
+// Only an expired/invalid bearer on these fixed reads gets one refresh.
+// Application-session, account and permission denials remain terminal.
+export function ownerPreviewRefreshable(cause: unknown): boolean {
+  if (!cause || typeof cause !== "object") return false;
+  const error = cause as {status?: unknown; code?: unknown; name?: unknown};
+  return error.name !== "AbortError" && error.status === 401
+    && ["login_required", "PGRST301", "PGRST303", "invalid_jwt", "jwt_expired", "token_expired"].includes(String(error.code));
+}
+
 export type OwnerPreviewVerificationStage = "role" | "preview-request" | "preview-body";
 // Deliberately exclude messages, account/session data and raw response codes.
 export function ownerPreviewVerificationDiagnostic(cause: unknown, stage: OwnerPreviewVerificationStage, elapsedMs: number) {
@@ -68,7 +77,7 @@ export async function retryOwnerPreviewVerification<T>(read: () => Promise<T>, s
 
 // Bound the whole permission/HTML attempt, including a stalled body or auth
 // refresh. Aborting the parent or the deadline invalidates any late response.
-export async function ownerPreviewVerificationAttempt<T>(read: (signal: AbortSignal) => Promise<T>, parent: AbortSignal): Promise<T> {
+export async function ownerPreviewVerificationAttempt<T>(read: (signal: AbortSignal) => Promise<T>, parent: AbortSignal, bootstrap = false): Promise<T> {
   if (parent.aborted) throw cancelled();
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -80,7 +89,11 @@ export async function ownerPreviewVerificationAttempt<T>(read: (signal: AbortSig
       const error = new Error("后台验证连接超时，请重试。");
       Object.assign(error, {status: 0, code: "owner_preview_timeout"});
       reject(error);controller.abort();
-    }, 15000);
+    // The same-origin bridge performs an entry gate (up to 10.15s) and
+    // a bounded upstream read (10s) for each of role and protected HTML.
+    // One shared 45s deadline includes auth renewal and both response bodies;
+    // a refresh/replay never starts another attempt deadline.
+    }, bootstrap ? 45000 : 15000);
   });
   try { return await Promise.race([Promise.resolve().then(() => {
     if (controller.signal.aborted) throw cancelled();
