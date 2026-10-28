@@ -78,7 +78,7 @@ function previewHarness(options={}){
  const policy={canView:true,mode:'all'},identity=x=>x,stop=()=>()=>bridgeStops.push(true);
  const box={exports:{}};vm.runInNewContext(compile('src/components/OwnerAdminPreview.tsx'),{module:box,exports:box.exports,AbortController,Error,Date,crypto:{randomUUID:()=>String(++seq)},localStorage:{getItem:()=>null,setItem(){},removeItem(){}},process:{env:{}},console:{warn:(...args)=>warnings.push(args)},window:{location:{origin:'https://fixture.invalid'},setInterval(fn,ms){intervals.set(++seq,{fn,ms});return seq},clearInterval:id=>intervals.delete(id),addEventListener(){},removeEventListener(){}},document:{visibilityState:'visible',addEventListener(){},removeEventListener(){}},require(name){
   if(name==='react')return react;if(name==='react/jsx-runtime')return{jsx:(type,props,key)=>({type,props,key}),jsxs:(type,props,key)=>({type,props,key})};
-  if(name.endsWith('/dashboardAuthClient'))return{normalizedManagementPermissions:()=>({})};
+  if(name.endsWith('/dashboardAuthClient'))return{normalizedManagementPermissions:()=>({}),dashboardBootstrapReadUrl:kind=>options.bootstrap?'/api/dashboard-'+kind:null};
   if(name.endsWith('/ownerPreviewVerification'))return verification.exports;
   if(name.endsWith('/ownerPreviewDocument'))return{makeOwnerPreviewDocument:identity,OWNER_PREVIEW_DRAFT_KEYS:[],ownerPreviewDraftAllowed:()=>false};
   if(name.endsWith('/adminPreviewRestore'))return{restoreApprovedAdmin:identity};
@@ -113,7 +113,10 @@ test('periodic transport failure still hides the frame and stops bridges until f
  try{await flush();const original=h.frame();assert(original);failure=true;h.tick();await flush();assert.equal(h.frame().props['aria-hidden'],true);assert.equal(h.frame().props.style.display,'none');assert(h.bridgeStops.length>=2);const diagnostic=warningDiagnostic(h.warnings[0]);assert.equal(diagnostic.stage,'preview-request');assert.equal(diagnostic.code,'http_503');failure=false;h.fire(500);await flush();assert.equal(h.frame().props['aria-hidden'],undefined);assert.equal(h.frame().key,original.key);assert.equal(h.calls.at(-1).q,'','recovery reads protected HTML, not only quick access');}finally{h.dispose()}
 });
 test('body deadline diagnoses its phase and cancellation ignores late private HTML',async()=>{
- const body=deferred(),h=previewHarness({preview:async()=>({text:()=>body.promise})});try{await flush();h.fire(15000);await flush();assert.equal(h.frame(),undefined);const diagnostic=warningDiagnostic(h.warnings[0]);assert.equal(diagnostic.stage,'preview-body');assert.equal(diagnostic.code,'owner_preview_timeout');h.dispose();body.resolve('<html>late</html>');await flush();assert.equal(h.frame(),undefined);assert.equal(h.timers.size,0);assert.equal(h.warnings.length,1);}finally{h.dispose()}
+ for(const bootstrap of [false,true]){
+  const deadline=bootstrap?45000:15000,body=deferred(),h=previewHarness({bootstrap,preview:async()=>({text:()=>body.promise})});
+  try{await flush();assert.deepEqual(h.calls.map(c=>c.stage),['role','preview-request']);assert.equal(h.calls[0].signal,h.calls[1].signal);assert.equal(h.calls[0].signal.aborted,false);assert.equal(h.frame(),undefined);assert.equal([...h.timers.values()].filter(t=>t.ms===deadline).length,1);assert.equal([...h.timers.values()].filter(t=>t.ms===(bootstrap?15000:45000)).length,0);h.fire(deadline);await flush();assert.equal(h.calls[0].signal.aborted,true);assert.equal(h.frame(),undefined);const diagnostic=warningDiagnostic(h.warnings[0]);assert.equal(diagnostic.stage,'preview-body');assert.equal(diagnostic.code,'owner_preview_timeout');h.dispose();body.resolve('<html>late</html>');await flush();assert.equal(h.frame(),undefined);assert.equal(h.timers.size,0);assert.equal(h.warnings.length,1);}finally{h.dispose()}
+ }
 });
 test('changing accounts while protected HTML is pending never mounts the old document',async()=>{
  const old=deferred();const h=previewHarness({preview:async s=>({text:()=>s.user.id==='account-a'?old.promise:Promise.resolve('<html>account-b</html>')})});
