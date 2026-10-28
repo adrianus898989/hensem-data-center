@@ -12,7 +12,7 @@ function client(name,h){
  vm.runInNewContext(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{
   module:m,exports:m.exports,window:h.window,URL,URLSearchParams,AbortController,AbortSignal,Response,Request,Headers,TextEncoder,TextDecoder,setTimeout,clearTimeout,
   process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://supabase.offline.invalid',NEXT_PUBLIC_SUPABASE_ANON_KEY:'offline-public-key'}},
-  require:id=>id==='./dashboardAuthClient'?h.api:id==='./dashboardRoleCatalog.json'?{default:JSON.parse(fs.readFileSync(path.join(root,'src/lib/dashboardRoleCatalog.json'),'utf8'))}:id==='./ownerPreviewVerification'?{ownerPreviewTransportRead:async fn=>fn()}:assert.fail(id),
+  require:id=>id==='./dashboardAuthClient'?h.api:id==='./dashboardRoleCatalog.json'?{default:JSON.parse(fs.readFileSync(path.join(root,'src/lib/dashboardRoleCatalog.json'),'utf8'))}:id==='./ownerPreviewVerification'?require('./load-typescript.cjs').loadTs(path.join(root,'src/lib/ownerPreviewVerification.ts')):assert.fail(id),
   fetch:async(url,init={})=>{h.calls.push({url:String(url),method:init.method||'GET',headers:new Headers(init.headers),body:init.body,signal:init.signal});return h.respond(String(url),init);},
  },{filename:file});return m.exports;
 }

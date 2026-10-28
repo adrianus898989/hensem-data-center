@@ -37,7 +37,7 @@ jobs:
       - run: pnpm test:comparisons
       - run: pnpm test:security-identity
       - run: node tests/dashboard-fresh-login-proof.test.cjs
-      - run: node --test tests/dashboard-bootstrap-worker.test.cjs tests/dashboard-bootstrap-client.test.cjs
+      - run: node --test tests/dashboard-bootstrap-worker.test.cjs tests/dashboard-bootstrap-client.test.cjs tests/dashboard-bootstrap-recovery-independent.test.cjs
       - run: pnpm test:collector-control
       - run: pnpm test:admin-preview
       - run: pnpm test:admin-pagination
