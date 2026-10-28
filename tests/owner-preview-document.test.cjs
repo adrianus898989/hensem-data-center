@@ -750,3 +750,32 @@ test('release notification starts only after authorization and keeps the mounted
   try{await flush();denied.commit();assert.equal(denied.calls.length,0);assert.doesNotMatch(JSON.stringify(denied.draw()),/页面已更新/)}finally{denied.dispose()}
  }
 });
+
+test('changed role policy skips redundant quick read and discards the old account workspace before protected HTML returns',async()=>{
+ const nextBody=deferredRead();let version=0,docReads=0;
+ const h=componentHarness('policy-budget',{commitEffects:true,
+  roleFetch:async()=>({ok:true,status:200,json:async()=>({mode:'owner',roleId:null,roleName:null,version,permissions:[],canView:true})}),
+  fetch:async url=>{
+   assert(!url.endsWith('?check=1'),'known changed policy must read the protected HTML directly');
+   return ++docReads===1?protectedResponse(HTML):{ok:true,status:200,text:()=>nextBody.promise};
+  }});
+ try{
+  await flush();h.commit();const previousFrame=h.child;
+  h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command:'account-page',active:true,bounds:{top:143,left:242,width:1200}}});h.commit();
+  elements(h.draw()).find(n=>n.props?.id==='owner-backend-tab').props.onClick();h.commit();
+  elements(h.draw()).find(n=>n.props?.id==='owner-backend-panel').props.onScroll({currentTarget:{scrollTop:720}});
+  assert(elements(h.draw()).some(n=>n.type?.name==='AdminControlCenter'));assertBridgeCounts(h,1);
+  version=1;h.checkPermission();await flush();h.commit();
+  assert.equal(h.roleCalls.length,2);assert.equal(h.calls.length,2,'one initial and one changed-policy HTML read, no quick check');
+  assert(!findElement(h.draw(),'iframe'),'old protected frame is not shown while new policy is being verified');
+  assert(!elements(h.draw()).some(n=>n.props?.className?.includes('owner-preview-account-workspace')),'old role directory is destroyed before new HTML');
+  assert.equal(h.states[0],null);assertBridgeCounts(h,0);
+  nextBody.resolve(HTML+'<!-- policy version 1 -->');await flush();h.commit();
+  assert.equal(h.states[0].version,1);assert(h.child&&h.child!==previousFrame);assertBridgeCounts(h,1);
+  assert(!elements(h.draw()).some(n=>n.type?.name==='AdminControlCenter'),'old cached account directory is not restored');
+  h.send({source:h.child,origin:'null',data:{type:'hensem-owner-preview-shell',channel:h.channel(),command:'account-page',active:true,bounds:{top:143,left:242,width:1200}}});h.commit();
+  const panels=elements(h.draw()).filter(n=>n.props?.role==='tabpanel');assert.equal(panels.length,1);
+  assert.equal(panels[0].props.id,'owner-workorder-panel');const scroll={scrollTop:720};panels[0].props.ref(scroll);assert.equal(scroll.scrollTop,0);
+  assert.equal(h.calls.length,2);assert.equal(h.roleCalls.length,2);
+ }finally{h.dispose()}
+});
