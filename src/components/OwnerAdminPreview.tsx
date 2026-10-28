@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { normalizedManagementPermissions, type DashboardProfile, type DashboardSession } from "@/lib/dashboardAuthClient";
+import { dashboardBootstrapReadUrl, normalizedManagementPermissions, type DashboardProfile, type DashboardSession } from "@/lib/dashboardAuthClient";
 import { makeOwnerPreviewDocument, OWNER_PREVIEW_DRAFT_KEYS, ownerPreviewDraftAllowed } from "@/lib/ownerPreviewDocument";
 
 import { restoreApprovedAdmin } from "@/lib/adminPreviewRestore";
@@ -114,7 +114,7 @@ export default function OwnerAdminPreview({session,profile,onLogout,canView}: Pr
           stage="preview-body";const html=quick&&published&&!changed?null:await ownerPreviewTransportRead(()=>response.text(),attemptSignal);
           if(stale()||attemptSignal.aborted)throw abandon();
           return {policy,html};
-          },controller.signal)}catch(cause){
+          },controller.signal,dashboardBootstrapReadUrl("preview")!==null)}catch(cause){
             if(!controller.signal.aborted&&!(cause&&typeof cause==="object"&&"name" in cause&&cause.name==="AbortError"))
               console.warn("后台验证读取失败 "+JSON.stringify(ownerPreviewVerificationDiagnostic(cause,stage,Date.now()-started)));
             throw cause;
