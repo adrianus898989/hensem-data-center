@@ -4,6 +4,20 @@ import { isDashboardDataScopeValid, normalizeDashboardDataScope, type DashboardD
 
 export const APPLICATION_GATEWAY = "https://hensem-india-workorder.workdesk-hub.workers.dev";
 
+const DASHBOARD_BOOTSTRAP_ORIGIN = "https://data-center.workdesk-hub.workers.dev";
+export type DashboardBootstrapRead = "profile" | "role-access" | "preview" | "access-check";
+// Choose once; transport failure never switches the selected origin.
+export function dashboardBootstrapReadUrl(read: DashboardBootstrapRead): string | null {
+  if (typeof window === "undefined" || window.location?.origin !== DASHBOARD_BOOTSTRAP_ORIGIN) return null;
+  const paths: Record<DashboardBootstrapRead, string> = {
+    profile: "dashboard-profile", "role-access": "dashboard-role-access",
+    preview: "dashboard-preview", "access-check": "dashboard-access-check",
+  };
+  return Object.prototype.hasOwnProperty.call(paths, read)
+    ? DASHBOARD_BOOTSTRAP_ORIGIN + "/hensem-data-center/api/" + paths[read] : null;
+}
+
+
 export type DashboardRole = "owner" | "admin" | "viewer";
 export type DashboardPermissionKey = "home" | "third_party" | "auto_withdraw" | "work_orders" | "customer_service";
 export type DashboardPermissions = Record<DashboardPermissionKey, boolean>;
@@ -121,7 +135,10 @@ let sessionGeneration = 0;
 let memorySession: DashboardSession | null = null;
 let observedStoredSession = false;
 let explicitlyLoggedOut = false;
-const freshSignIns = new WeakMap<DashboardSession, number>();
+type SavedTokenSnapshot = { userId: string; accessToken: string; refreshToken: string };
+type FreshSignInProof = { generation: number; attemptSerial: number; savedTokenSnapshot: SavedTokenSnapshot | null };
+let loginAttemptSerial = 0;
+const freshSignIns = new WeakMap<DashboardSession, FreshSignInProof>();
 const refreshFlights = new Map<string, Promise<DashboardSession>>();
 
 function publicConfig() {
@@ -183,13 +200,38 @@ function sessionChanged(loggedOut = false): DashboardHttpError {
     loggedOut ? "session_logged_out" : "session_changed");
 }
 
+function savedTokenSnapshot(session: DashboardSession | null): SavedTokenSnapshot | null {
+  return session ? { userId: session.user.id, accessToken: session.access_token, refreshToken: session.refresh_token } : null;
+}
+
+function sameSavedTokenSnapshot(session: DashboardSession | null, snapshot: SavedTokenSnapshot | null): boolean {
+  return snapshot === null ? session === null : session !== null
+    && session.user.id === snapshot.userId && session.access_token === snapshot.accessToken
+    && session.refresh_token === snapshot.refreshToken;
+}
+
+// A password response may replace only the exact authority present when that
+// latest interactive attempt began. Storage events are not required for this check.
+function currentFreshSignIn(candidate: DashboardSession, saved: DashboardSession | null): boolean {
+  const proof = freshSignIns.get(candidate);
+  if (!proof) return false;
+  if (proof.generation !== sessionGeneration || proof.attemptSerial !== loginAttemptSerial
+      || !sameSavedTokenSnapshot(saved, proof.savedTokenSnapshot)) {
+    const loggedOut = saved === null && (proof.savedTokenSnapshot !== null
+      || proof.generation !== sessionGeneration && explicitlyLoggedOut);
+    throw sessionChanged(loggedOut);
+  }
+  return true;
+}
+
 function currentSession(candidate: DashboardSession): DashboardSession {
   const saved = readSavedDashboardSession();
+  const fresh = currentFreshSignIn(candidate, saved);
   if (saved) {
     if (saved.user.id !== candidate.user.id) throw sessionChanged();
-    return saved;
+    return fresh ? candidate : saved;
   }
-  if (explicitlyLoggedOut && freshSignIns.get(candidate) !== sessionGeneration) throw sessionChanged(true);
+  if (explicitlyLoggedOut && !fresh) throw sessionChanged(true);
   return candidate;
 }
 
@@ -312,7 +354,10 @@ async function dashboardNetworkFetch(
 }
 
 export async function signInDashboard(usernameInput: string, password: string): Promise<DashboardSession> {
-  const startedGeneration = sessionGeneration;
+  const savedAtStart = savedTokenSnapshot(readSavedDashboardSession());
+  const startedProof: FreshSignInProof = {
+    generation: sessionGeneration, attemptSerial: ++loginAttemptSerial, savedTokenSnapshot: savedAtStart,
+  };
   const username = validateDashboardUsername(usernameInput);
   const response = await dashboardNetworkFetch(`${APPLICATION_GATEWAY}/api/dashboard-auth`, {
     method: "POST",
@@ -361,7 +406,8 @@ export async function signInDashboard(usernameInput: string, password: string): 
     throw error;
   }
   const session = receivedSession(payload);
-  freshSignIns.set(session, startedGeneration);
+  freshSignIns.set(session, startedProof);
+  currentFreshSignIn(session, readSavedDashboardSession());
   return session;
 }
 
@@ -440,28 +486,33 @@ export async function ensureDashboardSession(session: DashboardSession, force = 
 
   const refresh = async (): Promise<DashboardSession> => {
     const before = readSavedDashboardSession();
+    const freshBefore = currentFreshSignIn(candidate, before);
     if (generation !== sessionGeneration) throw sessionChanged(!before);
-    if ((startedStored && !before) || (!before && explicitlyLoggedOut && freshSignIns.get(candidate) !== sessionGeneration)) throw sessionChanged(true);
+    if ((startedStored && !before) || (!before && explicitlyLoggedOut && !freshBefore)) throw sessionChanged(true);
     if (before && before.user.id !== candidate.user.id) throw sessionChanged();
-    const active = before || candidate;
+    const active = currentSession(candidate);
     if (!sameTokens(active, candidate) && !isDashboardSessionExpired(active)) return active;
 
     try {
       const next = await requestRefreshedSession(active.refresh_token);
       const latest = readSavedDashboardSession();
+      const freshAfter = currentFreshSignIn(candidate, latest);
       if (generation !== sessionGeneration) throw sessionChanged(!latest);
-      if ((startedStored && !latest) || (!latest && explicitlyLoggedOut && freshSignIns.get(candidate) !== sessionGeneration)) throw sessionChanged(true);
+      if ((startedStored && !latest) || (!latest && explicitlyLoggedOut && !freshAfter)) throw sessionChanged(true);
       if (latest && latest.user.id !== active.user.id) throw sessionChanged();
       if (next.user.id !== active.user.id) throw new DashboardHttpError("登录续期返回了不一致的账号，请稍后重试", 502, "auth_response_invalid");
       // A cross-tab refresh/sign-in may have won while this request was in flight.
-      if (latest && !sameTokens(latest, active)) return latest;
+      if (latest && (!before || !sameTokens(latest, before))) return latest;
+      // Consume the accepted proof before the synchronous session-change event.
+      freshSignIns.delete(candidate); freshSignIns.delete(active);
       saveDashboardSession(next); // Persist rotated refresh token before profile/IP checks.
       return next;
     } catch (error) {
       const latest = readSavedDashboardSession();
+      currentFreshSignIn(candidate, latest);
       if (generation !== sessionGeneration) throw sessionChanged(!latest);
       if (latest && latest.user.id !== active.user.id) throw sessionChanged();
-      if (latest && !sameTokens(latest, active)) return latest;
+      if (latest && (!before || !sameTokens(latest, before))) return latest;
       if (isInvalidDashboardRefreshError(error)) {
         // Never clear another account or a newer token published in another tab.
         if (!latest || sameTokens(latest, active)) saveDashboardSession(null);
@@ -551,7 +602,7 @@ export async function fetchDashboardProfile(session: DashboardSession): Promise<
   params.set("select", "auth_user_id,username,role,active,permissions,management_permissions,data_scope,created_at,updated_at");
   params.set("auth_user_id", `eq.${userId}`);
   params.set("limit", "1");
-  const response = await dashboardNetworkFetch(`${url}/rest/v1/dashboard_profiles?${params.toString()}`, {
+  const response = await dashboardNetworkFetch(dashboardBootstrapReadUrl("profile") ?? `${url}/rest/v1/dashboard_profiles?${params.toString()}`, {
     headers: { apikey: anonKey, Authorization: `Bearer ${session.access_token}`, Accept: "application/json" },
     cache: "no-store",
   }, {
@@ -575,6 +626,7 @@ export async function fetchDashboardProfile(session: DashboardSession): Promise<
 
 export function saveDashboardSession(session: DashboardSession | null) {
   if (session && !isSession(session)) throw new DashboardHttpError("登录状态不完整，请重新登录", 401, "refresh_invalid");
+  if (session && freshSignIns.has(session)) currentFreshSignIn(session, readSavedDashboardSession());
   const previous = memorySession;
   let previousText = previous ? JSON.stringify(previous) : null;
   if (typeof window !== "undefined") {
@@ -625,14 +677,16 @@ async function callAdminFunction(session: DashboardSession, body: Record<string,
   const { url, anonKey } = publicConfig();
   const functionName = String(process.env.NEXT_PUBLIC_DASHBOARD_USER_FUNCTION || "dashboard-user-admin").trim() || "dashboard-user-admin";
   const isAccessCheck = body.action === "check-access";
-  const response = await dashboardNetworkFetch(`${url}/functions/v1/${functionName}`, {
+  const accessProxy = isAccessCheck && functionName === "dashboard-user-admin" && Object.keys(body).length === 1
+    ? dashboardBootstrapReadUrl("access-check") : null;
+  const response = await dashboardNetworkFetch(accessProxy ?? `${url}/functions/v1/${functionName}`, {
     method: "POST",
     headers: {
       apikey: anonKey,
       Authorization: `Bearer ${session.access_token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(body), redirect: "error", credentials: "omit", cache: "no-store", signal,
+    body: JSON.stringify(accessProxy ? {} : body), redirect: "error", credentials: "omit", cache: "no-store", signal,
   }, {
     timeoutMessage: isAccessCheck
       ? "账号密码和权限已验证，但登录安全检查超时，请稍后重试"
@@ -865,14 +919,19 @@ export type DashboardIpSettings = {
 export async function verifyDashboardAccess(session: DashboardSession, observeSession?: (current: DashboardSession) => void) {
   let active = await ensureDashboardSession(session);
   observeSession?.(active);
-  try { return await callAdminFunction(active, { action: "check-access" }); }
+  const check = async (current: DashboardSession) => {
+    const result = await callAdminFunction(current, { action: "check-access" });
+    currentFreshSignIn(current, readSavedDashboardSession());
+    return result;
+  };
+  try { return await check(active); }
   catch (error) {
     // Only this read may replay once after a verified invalid-token response.
     // Policy 403s, transient failures and account management writes never replay.
     if (!(error instanceof DashboardHttpError) || error.status !== 401 || error.code !== "auth_token_invalid") throw error;
     active = await ensureDashboardSession(active, true);
     observeSession?.(active);
-    return await callAdminFunction(active, { action: "check-access" });
+    return await check(active);
   }
 }
 
