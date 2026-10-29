@@ -228,7 +228,6 @@ body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-
 body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-kpi{min-height:76px;padding:8px 10px 7px}
 body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-kpi-value{gap:4px}
 body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-kpi-value strong{font-size:clamp(17px,1.05vw,20px);line-height:23px}
-body.live-admin .provider-summary-report>.panel>.panel-head{min-height:40px;padding:10px 12px}
 @media(max-width:1500px){body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-summary-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:900px){body.live-admin .provider-summary-report:has(.provider-compact-table) .provider-summary-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 

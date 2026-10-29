@@ -107,6 +107,11 @@ export const CONFIRMED_INDIA_RAW_PROVIDER_ALIASES = new Map<string, string>([
   // Owner-confirmed 2026-10-05: exact INR channels belong to the same provider.
   ["wypayinr-paytmqr", "WYPay"],
   ["wypayinr-bank", "WYPay"],
+  // Owner-confirmed 2026-10-29: exact identities; canonical MoneyPay must stay stable.
+  ["moneypay", "MoneyPay"],
+  ["moneypay-qr", "MoneyPay"],
+  ["rapay2inr", "RAPay"],
+  ["rapay", "RAPay"],
 ]);
 
 // Owner confirmed these exact stored India channels on 2026-10-17.
@@ -115,6 +120,8 @@ const CONFIRMED_INDIA_QUERY_PROVIDER_ALIASES: readonly (readonly [string, string
   ["NewWinPay2INR-PaytmQR", "NewWinPay"],
   ["RAPayINR-QR", "RAPay"],
   ["DiDiPayINR-Wake", "DiDiPay"],
+  ["MoneyPay-QR", "MoneyPay"],
+  ["RAPay2INR", "RAPay"],
 ];
 
 export function confirmedThirdPartyQueryNames(providers: readonly string[], country?: string, observed: readonly string[] | (() => readonly string[]) = []): string[] {
