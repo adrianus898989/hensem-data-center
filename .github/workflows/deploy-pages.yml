@@ -39,6 +39,7 @@ jobs:
       - run: node tests/dashboard-fresh-login-proof.test.cjs
       - run: node --test tests/dashboard-bootstrap-worker.test.cjs tests/dashboard-bootstrap-client.test.cjs tests/dashboard-bootstrap-recovery-independent.test.cjs
       - run: pnpm test:collector-control
+      - run: pnpm test:provider-summary-repair
       - run: pnpm test:admin-preview
       - run: pnpm test:admin-pagination
       - run: node --test tests/admin-provider-current-channels.test.cjs

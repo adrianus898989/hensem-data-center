@@ -146,9 +146,19 @@ body.live-admin .withdraw-drawer-foot{flex:none;border-top:1px solid #e5ebf6;pad
 @media(max-width:700px){body.live-admin .withdraw-drawer{width:100vw}body.live-admin .withdraw-drawer-head{padding:16px;gap:8px;flex-wrap:wrap}body.live-admin .withdraw-drawer-body{padding:14px}body.live-admin .withdraw-drawer .withdraw-reason-tabs{padding:12px 14px}body.live-admin .withdraw-reason-summary{grid-template-columns:repeat(2,minmax(0,1fr))}body.live-admin .withdraw-pager{flex-wrap:wrap;gap:6px}}
 @media(max-width:1000px){body.live-admin .withdraw-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
 /* Direction-specific provider reports: separate numeric columns and comparable KPI cards. */
-body.live-admin .provider-summary-heading{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:0 0 8px}
-body.live-admin .provider-summary-heading .provider-direction-tabs{margin:0;gap:5px}
-body.live-admin .provider-summary-heading .provider-scope-note{margin:0;font-size:11px;line-height:1.5;color:#7083a0}
+/* Provider controls share the existing table header; scope details stay beside Query. */
+body.live-admin .provider-summary-report .provider-report-panel>.panel{display:grid;grid-template-columns:minmax(180px,1fr) auto;align-items:center}
+body.live-admin .provider-summary-report .provider-report-panel>.panel>.panel-head{grid-column:1;grid-row:1;min-width:0;margin:0;min-height:40px;padding:10px 12px}
+body.live-admin .provider-summary-report .provider-report-panel>.panel>.provider-toolbar{grid-column:2;grid-row:1;justify-content:flex-end;min-height:32px;margin:0;padding:5px 0;gap:10px;overflow:visible;flex-wrap:wrap;white-space:normal}
+body.live-admin .provider-summary-report .provider-report-panel>.panel>:not(.panel-head):not(.provider-toolbar){grid-column:1/-1;min-width:0}
+body.live-admin .provider-summary-report .provider-report-panel .provider-toolbar label{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+body.live-admin .provider-summary-report .provider-report-panel .provider-toolbar select{height:26px;min-height:26px;font-size:10px;padding-top:2px;padding-bottom:2px}
+body.live-admin .live-business-filters .live-query-actions .provider-filter-scope{display:inline-flex;align-items:center;flex-wrap:nowrap;gap:7px;margin:0 0 0 4px;font-size:10px;white-space:nowrap}
+body.live-admin .live-business-filters .provider-scope-details>summary{padding:7px 0}
+body.live-admin .live-business-filters .provider-scope-details>div{left:auto;right:0;top:31px;white-space:normal;line-height:1.7}
+body.live-admin .live-business-filters .provider-scope-alert{color:#a96523}
+@media(max-width:1100px){body.live-admin .provider-summary-report .provider-report-panel>.panel{grid-template-columns:minmax(0,1fr)}body.live-admin .provider-summary-report .provider-report-panel>.panel>.provider-toolbar{grid-column:1;grid-row:2;justify-content:flex-start}}
+@media(max-width:650px){body.live-admin .live-business-filters .live-query-actions:has(.provider-filter-scope){flex-wrap:wrap;height:auto}body.live-admin .live-business-filters .provider-filter-scope{flex-wrap:wrap;white-space:normal}}
 body.live-admin .provider-summary-kpis{grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-bottom:7px}
 body.live-admin .provider-kpi{--kpi-accent:#b5c4dd;position:relative;overflow:hidden;background:#fff;border:1px solid #dce6f7;border-radius:8px;padding:11px 12px 10px}
 body.live-admin .provider-kpi:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--kpi-accent)}
